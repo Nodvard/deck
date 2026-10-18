@@ -2,44 +2,44 @@
 
 Ein Volume, im Helfer unter `/channel`, im Dashboard unter `/app/updater`::
 
-    /channel/            root 0755   Wurzel: gehoert root, fuer Gruppe/Welt nicht beschreibbar (sonst channel_unsafe)
+    /channel/            root 0755   Wurzel: gehört root, für Gruppe/Welt nicht beschreibbar (sonst channel_unsafe)
       status.json        root 0644   schreibt nur der Helfer (atomar, Zufallsname + O_CREAT|O_EXCL|O_NOFOLLOW)
       requests/          root 1777   legt der Helfer an (sticky: das Dashboard kann anlegen, aber nichts ersetzen)
-        <uuid4>.json     1000 0644   Anforderungen des Dashboards (hoechstens 4096 Byte)
+        <uuid4>.json     1000 0644   Anforderungen des Dashboards (höchstens 4096 Byte)
 
-Das Dashboard gilt als nicht vertrauenswuerdig. Darum:
+Das Dashboard gilt als nicht vertrauenswürdig. Darum:
 
-* **Wurzel und `requests/` werden ueber Deskriptoren angesprochen** (`O_DIRECTORY|O_NOFOLLOW`, danach nur noch
+* **Wurzel und `requests/` werden über Deskriptoren angesprochen** (`O_DIRECTORY|O_NOFOLLOW`, danach nur noch
   `dir_fd`). `O_NOFOLLOW` wirkt nur auf die letzte Pfadkomponente -- deshalb nie ein Pfad wie
-  `/channel/requests/x.json`, sondern immer `openat` relativ zum geprueften Ordner.
+  `/channel/requests/x.json`, sondern immer `openat` relativ zum geprüften Ordner.
 * **`requests/` muss bleiben, was es beim Start war:** `(st_dev, st_ino)` wird bei jeder Runde mit dem Startwert
   verglichen (ein ausgetauschter Ordner -> `channel_unsafe`).
-* **Je Runde hoechstens 1000 Dateien ansehen und 32 Anforderungen bearbeiten** -- ein voller Ordner haelt den
-  Helfer nicht auf. **Ordner zaehlen dabei nicht** (sie werden schon beim Durchlesen an `d_type` erkannt) und
-  verdraengen so nie eine echte Anforderung; fuer das reine Durchlesen gilt eine eigene, hohe Obergrenze
-  (`MAX_READ`). `handled` zaehlt erst, wenn wirklich gelesen oder geloescht wurde.
+* **Je Runde höchstens 1000 Dateien ansehen und 32 Anforderungen bearbeiten** -- ein voller Ordner hält den
+  Helfer nicht auf. **Ordner zählen dabei nicht** (sie werden schon beim Durchlesen an `d_type` erkannt) und
+  verdrängen so nie eine echte Anforderung; für das reine Durchlesen gilt eine eigene, hohe Obergrenze
+  (`MAX_READ`). `handled` zählt erst, wenn wirklich gelesen oder gelöscht wurde.
 * **Ordner in `requests/`:** das Dashboard legt dort nie welche an. Leere Ordner entfernt der Helfer mit
-  `rmdir` (nur dieser eine Name, nie rekursiv -- in einem Baum, den das Dashboard kontrolliert, waere das
+  `rmdir` (nur dieser eine Name, nie rekursiv -- in einem Baum, den das Dashboard kontrolliert, wäre das
   ein Wettlauf um Symlinks). Bleiben welche stehen (nicht leer), meldet `Poll.directories` sie, und der
-  Status zeigt den festen Code `channel_cluttered`. **Je Runde hoechstens `MAX_RMDIR` `rmdir`-Versuche**
+  Status zeigt den festen Code `channel_cluttered`. **Je Runde höchstens `MAX_RMDIR` `rmdir`-Versuche**
   (jeder ist ein Systemaufruf, und ein Angreifer kann viele volle Ordner anlegen); der Rest wird ohne Aufruf
-  als "uebrig" gezaehlt, `directories` und `cluttered` stimmen also trotzdem, und leere Ordner verschwinden
-  ueber mehrere Runden. Mehr als `MAX_READ` Eintraege je Runde werden nicht durchgelesen; wer den Ordner so
-  fuellt, bekommt `channel_cluttered` und von Hand aufzuraeumen.
-* **Anforderungen lesen:** nur Namen `<uuid4>.json`; erst `lstat` (nur regulaere Dateien werden ueberhaupt
-  geoeffnet), dann `openat(O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC|O_NOCTTY)` und `fstat` am Deskriptor:
-  regulaere Datei, dieselbe wie beim `lstat`, genau ein Link, hoechstens 4096 Byte; gelesen werden hoechstens
-  4097 Byte. Ein FIFO blockiert so nie (sonst fiele auch der automatische Rueckweg aus), ein Symlink oder
+  als "übrig" gezählt, `directories` und `cluttered` stimmen also trotzdem, und leere Ordner verschwinden
+  über mehrere Runden. Mehr als `MAX_READ` Einträge je Runde werden nicht durchgelesen; wer den Ordner so
+  füllt, bekommt `channel_cluttered` und von Hand aufzuräumen.
+* **Anforderungen lesen:** nur Namen `<uuid4>.json`; erst `lstat` (nur reguläre Dateien werden überhaupt
+  geöffnet), dann `openat(O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC|O_NOCTTY)` und `fstat` am Deskriptor:
+  reguläre Datei, dieselbe wie beim `lstat`, genau ein Link, höchstens 4096 Byte; gelesen werden höchstens
+  4097 Byte. Ein FIFO blockiert so nie (sonst fiele auch der automatische Rückweg aus), ein Symlink oder
   Hardlink auf eine fremde Datei wird nie gelesen.
-* **Nie in Anforderungen schreiben.** Erledigtes und Fremdes (ausser Ordnern, siehe oben) wird per `unlinkat` geloescht.
+* **Nie in Anforderungen schreiben.** Erledigtes und Fremdes (außer Ordnern, siehe oben) wird per `unlinkat` gelöscht.
   Halb geschriebene Anforderungen des Dashboards (`.<uuid4>.tmp`) bleiben 10 Minuten liegen.
-* **Status:** nur feste Codes, strenges Schema (`validate_status`), hoechstens 16 KiB, atomar geschrieben.
+* **Status:** nur feste Codes, strenges Schema (`validate_status`), höchstens 16 KiB, atomar geschrieben.
 
 Ist die Wurzel unsicher, bleibt der Deskriptor trotzdem offen: `write_status()` kann dann noch `channel_unsafe`
 melden (neue Datei mit `O_EXCL|O_NOFOLLOW`, `rename` ersetzt nur den Eintrag), `poll()` verweigert aber jede
 Anforderung.
 
-Fuer Tests ohne root nimmt der Konstruktor die erwartete uid (`expected_uid`, Vorgabe 0). Nie aus der Umgebung.
+Für Tests ohne root nimmt der Konstruktor die erwartete uid (`expected_uid`, Vorgabe 0). Nie aus der Umgebung.
 """
 
 from __future__ import annotations
@@ -96,9 +96,9 @@ class ChannelUnsafe(Refusal):
 
 @dataclass(frozen=True)
 class Incoming:
-    """Eine Anforderung aus `requests/`. Entweder `raw` (der Inhalt, hoechstens 4096 Byte, noch ungeprueft --
+    """Eine Anforderung aus `requests/`. Entweder `raw` (der Inhalt, höchstens 4096 Byte, noch ungeprüft --
     weiter mit `policy.parse_request(raw, now=..., file_id=id)`) oder `code` (`bad_request`, die Datei war
-    keine lesbare regulaere Datei). `id` stammt aus dem Dateinamen."""
+    keine lesbare reguläre Datei). `id` stammt aus dem Dateinamen."""
 
     id: str
     raw: bytes | None
@@ -107,7 +107,7 @@ class Incoming:
 
 @dataclass(frozen=True)
 class Poll:
-    """Ergebnis einer Runde: die Anforderungen, wie viele Eintraege angesehen bzw. geloescht wurden (leere Ordner
+    """Ergebnis einer Runde: die Anforderungen, wie viele Einträge angesehen bzw. gelöscht wurden (leere Ordner
     eingeschlossen) und wie viele Ordner stehen geblieben sind (`directories`: nicht leer, vom Dashboard in
     `requests/` angelegt; der Ablauf meldet dann `channel_cluttered` im Status)."""
 
@@ -124,7 +124,7 @@ class Poll:
 
 class Channel:
     """Zugriff auf den Kanal. Erst `setup()`, dann je Runde `poll()`; `write_status()` jederzeit nach `setup()`
-    (auch wenn es `ChannelUnsafe` geworfen hat, solange die Wurzel geoeffnet werden konnte)."""
+    (auch wenn es `ChannelUnsafe` geworfen hat, solange die Wurzel geöffnet werden konnte)."""
 
     def __init__(self, root: str | os.PathLike[str] = "/channel", *, expected_uid: int = 0) -> None:
         if type(expected_uid) is not int or expected_uid < 0:
@@ -136,14 +136,14 @@ class Channel:
 
     @property
     def ready(self) -> bool:
-        """`setup()` war erfolgreich: Anforderungen duerfen gelesen werden."""
+        """`setup()` war erfolgreich: Anforderungen dürfen gelesen werden."""
         return self._requests_id is not None
 
     # --- Einrichten ---------------------------------------------------------
 
     def setup(self) -> None:
-        """Wurzel pruefen, `requests/` anlegen bzw. pruefen (1777, Besitzer), Startwert merken, Reste alter
-        Status-Schreibvorgaenge entfernen. Wirft `ChannelUnsafe`."""
+        """Wurzel prüfen, `requests/` anlegen bzw. prüfen (1777, Besitzer), Startwert merken, Reste alter
+        Status-Schreibvorgänge entfernen. Wirft `ChannelUnsafe`."""
         self.close()
         try:
             self._root_fd = os.open(self._root, DIR_FLAGS)
@@ -180,7 +180,7 @@ class Channel:
     def _setup_requests(self) -> tuple[int, int]:
         assert self._root_fd is not None
         try:
-            # Erst 0700 anlegen, dann am Deskriptor auf 1777: kein Moment, in dem ein ungepruefter Ordner offen ist.
+            # Erst 0700 anlegen, dann am Deskriptor auf 1777: kein Moment, in dem ein ungeprüfter Ordner offen ist.
             os.mkdir(REQUESTS_DIR, 0o700, dir_fd=self._root_fd)
         except FileExistsError:
             pass
@@ -201,7 +201,7 @@ class Channel:
             os.close(dfd)
 
     def _open_requests(self, expected: tuple[int, int] | None) -> int:
-        """`requests/` relativ zur Wurzel oeffnen und am Deskriptor pruefen."""
+        """`requests/` relativ zur Wurzel öffnen und am Deskriptor prüfen."""
         assert self._root_fd is not None
         try:
             dfd = os.open(REQUESTS_DIR, DIR_FLAGS, dir_fd=self._root_fd)
@@ -224,8 +224,8 @@ class Channel:
     # --- Anforderungen lesen ------------------------------------------------
 
     def poll(self, *, now: float | None = None) -> Poll:
-        """Eine Runde: Ordner erkennen (leere entfernen, hoechstens `MAX_RMDIR` Versuche), hoechstens `MAX_SCAN`
-        Dateien ansehen, hoechstens `MAX_HANDLE` Anforderungen lesen (und loeschen), Fremdes loeschen. Wirft
+        """Eine Runde: Ordner erkennen (leere entfernen, höchstens `MAX_RMDIR` Versuche), höchstens `MAX_SCAN`
+        Dateien ansehen, höchstens `MAX_HANDLE` Anforderungen lesen (und löschen), Fremdes löschen. Wirft
         `ChannelUnsafe`, wenn Wurzel oder `requests/` nicht mehr stimmen; jeder Fehler an **einem** Eintrag betrifft
         nur diesen."""
         if not self.ready or self._root_fd is None:
@@ -251,7 +251,7 @@ class Channel:
             handled = removed = left = 0
             for tried, name in enumerate(folders):
                 if tried >= MAX_RMDIR:
-                    left += len(folders) - tried  # Budget der Runde verbraucht: ohne Systemaufruf als uebrig gezaehlt
+                    left += len(folders) - tried  # Budget der Runde verbraucht: ohne Systemaufruf als übrig gezählt
                     break
                 try:
                     os.rmdir(name, dir_fd=dfd)  # `unlinkat(AT_REMOVEDIR)`: nur dieser Name, nur leer, nie rekursiv
@@ -267,7 +267,7 @@ class Channel:
                     removed += self._remove_foreign(dfd, name, now)
                 elif handled < MAX_HANDLE:
                     item = self._take(dfd, name, match[1])
-                    if item is not None:  # nur was wirklich gelesen oder geloescht wurde zaehlt
+                    if item is not None:  # nur was wirklich gelesen oder gelöscht wurde zählt
                         handled += 1
                         items.append(item)
             return Poll(items=tuple(items), scanned=len(names) + len(folders), removed=removed, directories=left)
@@ -275,14 +275,14 @@ class Channel:
             os.close(dfd)
 
     def _take(self, dfd: int, name: str, request_id: str) -> Incoming | None:
-        """Liest eine Anforderung und loescht sie. `None`, wenn sie verschwunden ist oder ein Ordner ist."""
+        """Liest eine Anforderung und löscht sie. `None`, wenn sie verschwunden ist oder ein Ordner ist."""
         try:
             try:
                 before = os.stat(name, dir_fd=dfd, follow_symlinks=False)
             except FileNotFoundError:
                 return None
             if stat.S_ISDIR(before.st_mode):
-                return None  # kurz nach dem Durchlesen zu einem Ordner geworden: nicht gelesen, nicht geloescht
+                return None  # kurz nach dem Durchlesen zu einem Ordner geworden: nicht gelesen, nicht gelöscht
             raw: bytes | None = None
             if stat.S_ISREG(before.st_mode):
                 try:
@@ -291,7 +291,7 @@ class Channel:
                 except FileNotFoundError:
                     return None
                 except (UnsafeFile, ReadFailed, OSError):
-                    raw = None  # ungueltig oder gerade nicht lesbar: `bad_request`, das Dashboard schickt neu
+                    raw = None  # ungültig oder gerade nicht lesbar: `bad_request`, das Dashboard schickt neu
             _unlink(dfd, name)
         except Exception:  # noqa: BLE001 - ein Fehler an diesem Eintrag betrifft nur ihn
             _unlink(dfd, name)
@@ -306,7 +306,7 @@ class Channel:
         except OSError:
             return 0
         if stat.S_ISDIR(st.st_mode):
-            return 0  # erst nach dem Durchlesen zu einem Ordner geworden: die naechste Runde raeumt ihn auf
+            return 0  # erst nach dem Durchlesen zu einem Ordner geworden: die nächste Runde räumt ihn auf
         if DASHBOARD_TMP_RE.fullmatch(name) and abs(now - st.st_mtime) <= TMP_GRACE_S:
             return 0  # das Dashboard schreibt gerade
         return _unlink(dfd, name)
@@ -315,7 +315,7 @@ class Channel:
 
     def write_status(self, doc: dict[str, Any], *, durable: bool = True) -> None:
         """Schreibt `status.json` (0644) atomar. `doc` muss `validate_status` bestehen, sonst `ValueError` und
-        nichts wird geschrieben. `durable=False` (ohne fsync) ist fuer den reinen Heartbeat gedacht."""
+        nichts wird geschrieben. `durable=False` (ohne fsync) ist für den reinen Heartbeat gedacht."""
         if self._root_fd is None:
             raise ChannelUnsafe("not_open")
         write_atomic(self._root_fd, STATUS_NAME, encode_status(doc), mode=STATUS_MODE, tmp_prefix=".status-",
@@ -411,7 +411,7 @@ def validate_status(doc: object) -> None:
 
 
 def encode_status(doc: object) -> bytes:
-    """Prueft und kodiert den Status (kompaktes ASCII-JSON, hoechstens `policy.STATUS_MAX_BYTES`)."""
+    """Prüft und kodiert den Status (kompaktes ASCII-JSON, höchstens `policy.STATUS_MAX_BYTES`)."""
     validate_status(doc)
     data = policy.dumps(doc)
     if len(data) > policy.STATUS_MAX_BYTES:

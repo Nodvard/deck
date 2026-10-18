@@ -11,7 +11,7 @@ import { renderInShell } from "../../../_shared/frontend/src/testShell";
 vi.mock("../../../../frontend/src/lib/catalog", () => ({
   usePages: () => ({ data: [{ ext_id: "backups", path: "/backups", component: "BackupsPage" }], isLoading: false }),
 }));
-// ExtensionPage laedt das Bundle per import(url) -- hier durch die echte Seite aus den Quellen ersetzt.
+// ExtensionPage lädt das Bundle per import(url); hier wird es durch die echte Seite aus den Quellen ersetzt.
 vi.mock("/api/v1/extensions/backups/frontend/index.js?v=dev", async () => ({ BackupsPage: (await import("./BackupsPage")).BackupsPage }));
 
 const JOB = { connection: "pve2", node: "pve2", storage: "backup-pve1", schedule: "0 2 * * *", enabled: true, last_status: "ok", last_run_at: 1700000000 };

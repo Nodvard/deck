@@ -16,7 +16,7 @@ from . import updates as up
 from .defender import DEFAULT_CRONS, Defender, _describe, max_filesize_mb, watch_interval_min
 from . import intrusion as ix
 from . import realtime as rt
-from .guard import Guard, guard_interval_min
+from .guard import Guard, GuardUnavailable, guard_interval_min
 from .ids import (
     ACTION_BAN,
     ACTION_DELETE,
@@ -309,10 +309,13 @@ class DefenderExecutor:
         )
 
     async def _finish_realtime(self, host_id: str, enable: bool, result: Any, stdout: str) -> ActionResult:
-        """Gemerkt wird der neue Stand nur, wenn der Server die Marke des Umstellens gemeldet hat."""
+        """Gemerkt wird der neue Stand nur, wenn der Server die Marke des Umstellens gemeldet hat. Startete clamonacc nicht,
+        hat der Server schon wieder aufgeräumt (wie beim Ausschalten): dann gilt „aus“."""
         ok = result.exit_code == 0 and rt.switched(stdout, enable)
-        if ok:
-            await save_baseline(self._ctx, host_id, rt.STATE_KIND, {"enabled": enable, "changed_at": datetime.now(UTC).isoformat()})
+        undone = enable and not ok and av.REALTIME_NOT_STARTED in stdout
+        if ok or undone:
+            state = {"enabled": enable and ok, "changed_at": datetime.now(UTC).isoformat()}
+            await save_baseline(self._ctx, host_id, rt.STATE_KIND, state)
         # Die Sätze des Befehls (etwa das fehlende Paket) stehen auf stdout, nicht auf stderr.
         error = None if ok else (result.stderr or stdout).strip()[-2000:] or "Das Umstellen ist fehlgeschlagen."
         return ActionResult(success=ok, exit_code=result.exit_code, output=stdout, error=error, duration_ms=result.duration_ms)
@@ -435,6 +438,23 @@ def _already_open_reason(action: Any) -> str:
     return f"„{label}“ ist schon freigegeben und läuft."
 
 
+def _realtime_state(state: dict[str, Any], down: dict[str, Any], readiness: dict[str, Any]) -> dict[str, Any]:
+    """Wie der Wächter auf einem Server läuft. `realtime_requested`: eingeschaltet. `realtime_on`: läuft auch wirklich in
+    Echtzeit, also weder meldet der Server clamonacc als gestoppt, noch hat der Wächter-Lauf auf den Minuten-Takt
+    zurückgeschaltet (`realtime_down_since`, Zeitpunkt des Rückfalls). Ein Rückfall zählt nur für das aktuelle Einschalten
+    (`down`: Zeile `rt.DOWN_KIND`)."""
+    requested = bool(state.get("enabled", False))
+    since = down.get("since")
+    current = down.get("changed_at") == state.get("changed_at")
+    down_since = since if requested and current and isinstance(since, str) else None
+    running = readiness.get("clamonacc_active")
+    return {
+        "realtime_on": requested and running is not False and down_since is None,
+        "realtime_requested": requested,
+        "realtime_down_since": down_since,
+    }
+
+
 def _threats(n: int) -> str:
     """"1 Bedrohung", "3 Bedrohungen" statt "Bedrohung(en)"."""
     return "1 Bedrohung" if n == 1 else f"{n} Bedrohungen"
@@ -513,10 +533,12 @@ def build_routers(
         """Je Server: Könnte der Viren-Wächter dort in Echtzeit laufen, und läuft er schon so? Nur eine Abfrage."""
         hosts = await defender.target_hosts()
         rows = await asyncio.gather(*(defender.realtime_readiness(h, refresh=refresh) for h in hosts))
-        states = await load_baselines(ctx, rt.STATE_KIND)
+        states, downs = await load_baselines(ctx, rt.STATE_KIND), await load_baselines(ctx, rt.DOWN_KIND)
         return {"hosts": [
-            {"host_id": h.id, "host_name": h.display_name or h.name, **row,
-             "realtime_on": bool(states.get(h.id, {}).get("enabled", False))}
+            {
+                "host_id": h.id, "host_name": h.display_name or h.name, **row,
+                **_realtime_state(states.get(h.id) or {}, downs.get(h.id) or {}, row),
+            }
             for h, row in zip(hosts, rows, strict=True)
         ]}
 
@@ -652,12 +674,17 @@ def build_routers(
     @manage.post("/events/acknowledge-all")
     async def acknowledge_all(actor: Actor = Depends(ctx.api.current_actor)) -> dict:
         assert guard is not None
-        return {"acknowledged": await guard.acknowledge_all(actor)}
+        done, kept = await guard.acknowledge_all(actor)
+        return {"acknowledged": done, "kept_open": kept}
 
     @manage.post("/events/{event_id}/acknowledge")
     async def acknowledge(event_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
         assert guard is not None
-        if not await guard.acknowledge(event_id, actor):
+        try:
+            done = await guard.acknowledge(event_id, actor)
+        except GuardUnavailable as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        if not done:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ereignis unbekannt oder schon erledigt.")
         return {"ok": True}
 

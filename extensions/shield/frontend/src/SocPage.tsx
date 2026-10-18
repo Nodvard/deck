@@ -1,9 +1,6 @@
 /**
- * Nodvard Shield (Erweiterung `shield`, siehe `ids.ts`) -- PageSpec `component="SocPage"` (siehe nodvard_deck_ext_shield/__init__.py).
- *
- * Virenschutz plus die bestehende KI-Container-Wache:
- * Uebersicht mit Schutzstatus je Server, Scans (ClamAV), Quarantaene, Haertung (Lynis)
- * und Container-Wache. Alles laeuft ueber `/ext/shield/defender/...`.
+ * Nodvard Shield (Erweiterung `shield`, PageSpec `component="SocPage"`): Schutzstatus je Server, Scans (ClamAV), Quarantäne,
+ * Härtung (Lynis) und Container-Wache, alles über `/ext/shield/defender/...`.
  */
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
@@ -287,7 +284,7 @@ function ScanCell({ host: h }: { host: HostRow }): JSX.Element {
     <>
       <Badge tone={badge.tone}>{badge.label}</Badge>
       <p className="mt-0.5 text-xs text-white/45">
-        {/* Offene Funde koennen vom Waechter stammen: dann nicht so tun, als kaemen sie aus dem letzten Scan. */}
+        {/* Offene Funde können vom Wächter stammen: dann nicht so tun, als kämen sie aus dem letzten Scan. */}
         {(h.open_findings ?? 0) > 0 ? "Details unter „Quarantäne“" : h.last_scan ? `${h.last_scan.kind_label} · ${ago(h.last_scan.started_at)}` : ""}
       </p>
     </>
@@ -333,8 +330,8 @@ function HardeningCell({ host: h }: { host: HostRow }) {
   );
 }
 
-/** Hinweis oben auf der Seite. Neben "ok"/"error" gibt es "warn" (erledigt, aber mit Einschraenkung) und
- * "info" (laeuft gerade); `links` fuehren zur Stelle, an der man es richtet. */
+/** Hinweis oben auf der Seite. Neben „ok“/„error“ gibt es „warn“ (erledigt, aber mit Einschränkung) und „info“
+ * (läuft gerade); `links` führen zur Stelle, an der man es richtet. */
 interface PageNotice {
   kind: "ok" | "error" | "warn" | "info";
   text: string;
@@ -370,8 +367,8 @@ interface BriefingResult {
   push?: "sent" | "suppressed" | "skipped" | "not_delivered" | "unknown";
 }
 
-/** Ein Reiter, dessen Liste nicht geladen werden konnte: nie den leeren Zustand zeigen ("keine Funde" waere eine falsche
- * Entwarnung), sondern sagen, was los ist, mit "Erneut versuchen". */
+/** Ein Reiter, dessen Liste nicht geladen werden konnte: nie den leeren Zustand zeigen („keine Funde“ wäre eine falsche
+ * Entwarnung), sondern sagen, was los ist, mit „Erneut versuchen“. */
 function LoadError({ what, error, onRetry }: { what: string; error: string; onRetry: () => void }) {
   return (
     <div role="alert" data-testid="load-error" className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm">
@@ -450,9 +447,9 @@ function ScoreRing({ score, reasons = [] }: { score: number; reasons?: string[] 
 
 export function SocPage(): JSX.Element {
   const unmountSignal = useUnmountSignal();
-  // Reiter und Server-Filter kommen aus der Adresszeile (`?tab=`, `?host=`) und folgen ihr:
-  // ein Link auf die schon offene Seite wechselt sie, ein Klick im Reiterstreifen schreibt sie
-  // zurueck (replaceState) -- Neuladen und Lesezeichen behalten den Stand.
+  // Reiter und Server-Filter kommen aus der Adresszeile (`?tab=`, `?host=`) und folgen ihr: ein Link auf die schon offene
+  // Seite wechselt sie, ein Klick im Reiterstreifen schreibt sie zurück (replaceState), Neuladen und Lesezeichen behalten
+  // den Stand.
   const [urlParams, updateUrl] = useUrlParams();
   const tabParam = urlParams.get("tab");
   const tab: Tab = TABS.find((x) => x.id === tabParam)?.id ?? "overview";
@@ -474,12 +471,12 @@ export function SocPage(): JSX.Element {
 
   useEffect(() => { loadOverview(); }, [loadOverview]);
 
-  // Am Handy liegt der aktive Reiter sonst ausserhalb des sichtbaren Streifens.
+  // Am Handy liegt der aktive Reiter sonst außerhalb des sichtbaren Streifens.
   useEffect(() => {
     document.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.scrollIntoView?.({ block: "nearest", inline: "center" });
   }, [tab]);
 
-  // Kurzlage aus Update-Zentrale und Einbruchschutz fuer Reiter-Zaehler und Uebersicht.
+  // Kurzlage aus Update-Zentrale und Einbruchschutz für Reiter-Zähler und Übersicht.
   const [side, setSide] = useState<SideSummary>({ updates: null, guard: null });
   useEffect(() => {
     call<{ summary: SideSummary["updates"] }>(`${API}/updates`).then((u) => setSide((p) => ({ ...p, updates: u.summary }))).catch(() => undefined);
@@ -553,7 +550,7 @@ export function SocPage(): JSX.Element {
     }
   }
 
-  // Die Knoepfe oben starten auf ALLEN Servern: ein Fehlklick wuerde alle stundenlang auslasten, deshalb erst fragen.
+  // Die Knöpfe oben starten auf ALLEN Servern: ein Fehlklick würde alle stundenlang auslasten, deshalb erst fragen.
   async function confirmAll(kind: "deep" | "audit") {
     const n = overview?.hosts.length ?? 0;
     const where = n === 1 ? "dem Server" : n > 1 ? `allen ${n} Servern` : "allen Servern";
@@ -680,7 +677,7 @@ function SideLink({ title, text, tone, onClick }: { title: string; text: string;
   );
 }
 
-/** Was als Erstes zu tun ist -- fuer jemanden, der die Begriffe noch nicht kennt. `null`: nichts Dringendes. */
+/** Was als Erstes zu tun ist, für jemanden, der die Begriffe noch nicht kennt. `null`: nichts Dringendes. */
 interface NextStep {
   text: string;
   action?: { label: string; run: () => void };
@@ -723,8 +720,8 @@ function nextStep(
   return null;
 }
 
-/** Abzeichen "Echtzeit-Waechter" und "Automatische Quarantaene": gruen nur, wenn es auch wirkt --
- * ohne ClamAV auf einem Server gibt es dort nichts, was waechst oder wegsperrt. */
+/** Abzeichen „Echtzeit-Wächter“ und „Automatische Quarantäne“: grün nur, wenn es auch wirkt; ohne ClamAV auf einem Server
+ * gibt es dort nichts, was wacht oder wegsperrt. */
 function coverageBadge(on: boolean, name: string, onWord: string, covered: number, total: number, interval?: string): { tone: Tone; text: string } {
   if (!on) return { tone: "warn", text: `${name} aus` };
   if (covered === 0) return { tone: "warn", text: `${name}: an, aber noch auf keinem Server aktiv` };
@@ -819,7 +816,7 @@ function OverviewTab({
           <button type="button" onClick={onOpenThreats} className="text-left [&>div]:h-full">
             <Stat label="Offene Bedrohungen" value={s.open_threats} hint={s.open_threats ? "Jetzt prüfen →" : "keine"} tone={s.open_threats ? "bad" : "good"} />
           </button>
-          {/* Eine Zahl je Kachel: früher stand hier „Neutralisiert“ als Summe aus Quarantäne und Gelöschtem. */}
+          {/* Eine Zahl je Kachel: Quarantäne und Gelöschtes werden nicht zusammengezählt. */}
           <Stat label="In Quarantäne" value={s.quarantined} hint={findingsLast30Days(s.findings_30d)} />
           <Stat label="Härtung (Ø)" value={s.avg_hardening ?? "–"} hint="von 100 · wie sicher die Server eingestellt sind (Lynis)" tone={s.avg_hardening == null ? undefined : s.avg_hardening >= 70 ? "good" : "warn"} />
         </div>
@@ -961,8 +958,8 @@ function OverviewTab({
   );
 }
 
-/** Blendet die technischen Marker-Zeilen aus der Scan-Ausgabe aus: den Rückgabecode `@@scan-rc-…=0`
- *  und die Reste der früheren festen Marke in bereits gespeicherten Läufen. */
+/** Blendet die technischen Marker-Zeilen aus der Scan-Ausgabe aus: den Rückgabecode `@@scan-rc-…=0` und die feste Marke
+ *  aus bereits gespeicherten Läufen. */
 function visibleScanOutput(tail: string): string {
   return tail.split("\n").filter((line) => !line.startsWith("@@")).join("\n").trim();
 }
@@ -1131,7 +1128,7 @@ function QuarantineTab({ canManage, onChanged }: { canManage: boolean; onChanged
   const failed = loadError ? <LoadError what="Die Liste der Funde" error={loadError} onRetry={load} /> : null;
   if (!items) return failed ?? <p className="text-sm text-white/50">Lade …</p>;
   if (failed) {
-    // Eine aeltere Liste bleibt sichtbar, aber mit dem Hinweis davor: sie kann veraltet sein.
+    // Eine ältere Liste bleibt sichtbar, aber mit dem Hinweis davor: sie kann veraltet sein.
     return <>{failed}{items.length > 0 && <p className="text-xs text-white/45">Zuletzt geladener Stand: {count(items.length, "Eintrag", "Einträge")}.</p>}</>;
   }
   if (items.length === 0) {

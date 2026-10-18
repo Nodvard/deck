@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { errorMessage, fetchJson, LoadError } from "../../../_shared/frontend/src/loadError";
-import { SettingsLink } from "../../../_shared/frontend/src/links";
+import { SettingsLink, safeHref } from "../../../_shared/frontend/src/links";
 import { useDeckTimezone } from "../../../_shared/frontend/src/timezone";
 import { Badge, Button, Card, EmptyState, Page, SearchInput, Stat, buttonClass, type Tone } from "../../../_shared/frontend/src/ui";
 import { deck } from "../../../_shared/frontend/src/deck";
@@ -187,10 +187,11 @@ function ConnectionCard({ connection, onRetry }: { connection: Connection; onRet
   const s = connection.summary;
   const problem = connection.state !== "ok" && connection.state !== "not_configured";
   const canManage = deck().hasPermission("extensions.manage");
+  const openHref = safeHref(connection.url);
   return (
     <Card
       title={connection.name}
-      description={connection.url ? <a href={connection.url} target="_blank" rel="noreferrer" className="break-all hover:text-white hover:underline">Uptime Kuma öffnen</a> : undefined}
+      description={openHref ? <a href={openHref} target="_blank" rel="noreferrer" className="break-all hover:text-white hover:underline">Uptime Kuma öffnen</a> : undefined}
       actions={<Badge tone={head.tone}>{head.label}</Badge>}
     >
       <div data-testid={`connection-${connection.name}`} className="space-y-4">

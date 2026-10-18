@@ -340,8 +340,8 @@ permission-geprüft und schreibt bei Bedarf ins Audit-Log.
 | `ctx.connectors` | `register_type(ConnectorType)` | — |
 | `ctx.capabilities` | `provide(protokoll_instanz)` | je Protokoll |
 | `ctx.actions` | `register(ActionSpec)`, `propose(ActionRequest)` (optional mit `standing_approval`, siehe §3), `check_standing_approval(granted_by_user_id, risk=…)` (gälte eine Dauerfreigabe dieser Person heute noch? `None` = ja, sonst der Grund), `waiting_count()` (wie viele Vorschläge aller Module auf eine Freigabe warten, nur die Zahl) | `hosts.execute` u. a.; Dauerfreigabe: `actions.standing_approval`; `waiting_count()`: `hosts.read` |
-| `ctx.hosts` | `list()`, `get()`, `upsert_discovered()` | `hosts.read` / `hosts.write` |
-| `ctx.exec` | `run(host, command)`, `stream(host, command)` (laufende Ausgabe, z. B. Live-Logs), `open_shell(host)`, `sftp(host)` | `hosts.execute` |
+| `ctx.hosts` | `list()`, `get()`, `upsert_discovered()`, `mark_gone(provider_refs)`: markiert eigene Server (nur die dieser Erweiterung) als beim Anbieter nicht mehr vorhanden, etwa einen in Proxmox gelöschten Gast; die Oberfläche zeigt sie grau und bietet „Entfernen“ an. Ein schon markierter Server behält den ersten Zeitpunkt (`gone_since`), ein späteres `upsert_discovered()` mit derselben Kennung hebt die Markierung auf. Nur für Bereiche aufrufen, die gerade vollständig gelesen wurden, nie für eine nicht erreichbare Verbindung. Gibt zurück, wie viele Server neu markiert wurden. Ältere Kerne haben die Methode nicht | `hosts.read` / `hosts.write` (`mark_gone()` und `upsert_discovered()` brauchen `hosts.write`) |
+| `ctx.exec` | `run(host, command)`, `stream(host, command)` (laufende Ausgabe, z. B. Live-Logs), `open_shell(host)`, `sftp(host)`. Dazu `run_argv(host, argv, stdin=None)` und `stream_argv(host, argv)`: Die Erweiterung gibt eine Liste von Wörtern (`["docker", "compose", "-f", pfad, "config"]`), der Kern setzt daraus mit POSIX-Quoting (`shlex.join`) die Kommandozeile zusammen. Ein Wert aus einer Eingabe wird so nie zu Shell-Syntax; für alles, was nicht feststeht, ist das der empfohlene Weg. Vor Optionen schützt das Quoting nicht: Ein Wert mit führendem `-` liest das Programm als Option, darum Eingabewerte, die als Argument dienen, mit `--` vom Rest trennen. Eine Zeichenkette statt einer Liste, ein leeres `argv`, ein leeres erstes Wort, ein erstes Wort wie `NAME=wert` (die Shell setzte es als Variable), ein Wort, das keine Zeichenkette ist, oder ein NUL-Zeichen: `TypeError`/`ValueError`, bevor eine Verbindung aufgebaut wird. Sperrliste und Recht wie bei `run()`, geprüft wird die zusammengesetzte Zeile. `stdin` (Text als UTF-8 oder Bytes) geht nur in die Standardeingabe, nie auf die Kommandozeile und nie ins Protokoll; danach bekommt der Prozess EOF, auch bei leeren Daten (etwa um eine Datei zu prüfen, ohne sie zu schreiben). Die Login-Shell des Servers muss eine POSIX-Shell sein (sh, bash, dash, zsh), wie bei `run()`. Ältere Kerne haben beide Methoden nicht | `hosts.execute` |
 | `ctx.secrets` | `get_handle(label)`, `create()`, `delete(label)` (löscht das Geheimnis; `True`, wenn es eines gab, sonst `False`; Protokoll `extension.secret_removed`; ältere Kerne haben es nicht), `replace(label=, value=)` (neuer Wert in einem Schritt, scheitert es, bleibt der alte; `SecretUnavailable`, wenn es keines gibt; Protokoll `extension.secret_set`; ältere Kerne haben es nicht). Ersetzen und löschen darf eine Erweiterung nur ihre **eigenen** Geheimnisse (angelegt unter ihrer Kennung oder einer früheren, über `create()` oder ihre Einstellungsseite); sonst `SecretNotOwned` (eine Art `PermissionDenied`), und das Geheimnis bleibt unverändert. Lesen geht weiter nach dem Recht. Ein Geheimnis der Zwei-Faktor-Anmeldung eines Kontos bekommt keine Erweiterung, auch nicht zum Lesen | `secrets.read:<label>` |
 | `ctx.vault_use` | Context-Manager, der einen Wert nur im Speicher materialisiert | dito |
 | `ctx.db` | AsyncSession-Factory, **nur** auf `ext_<id>_*`-Tabellen (nach einer Umbenennung auch auf die Präfixe der alten Kennungen, siehe §1 „Erweiterung umbenennen“) | — |
@@ -729,6 +729,14 @@ einem expliziten `tone`-Feld.
 `{"data": …, "meta": {…}}`, geformt passend zum View-Typ. Der Kern validiert die Form
 gegen den View-Typ und meldet Abweichungen als Extension-Fehler statt als kaputtes UI.
 
+**Noch nicht eingerichtet: `meta.state = "not_configured"`.** Hat ein Modul noch gar keine Verbindung (nichts
+eingetragen, oder keine einzige mit Zugangsdaten), setzt es in `meta` `"state": "not_configured"`; die Übersicht blendet
+das Widget dann aus und zeigt es unter „Widgets verwalten“ als „nicht eingerichtet“ mit einem Link zu den Einstellungen
+des Moduls. Das Feld ist optional und rein additiv (andere `meta`-Felder bleiben, Module dürfen dort weiter eigene
+Zustände wie `ok` oder `unreachable` melden), und `not_configured` kommt nicht, sobald mindestens eine Verbindung
+eingetragen ist, auch nicht bei einem Fehler oder wenn der Dienst nicht antwortet. Module liefern zusätzlich weiter ihre
+bisherige Textzeile („… nicht eingerichtet“) in `data`, damit ältere Oberflächen etwas Lesbares zeigen.
+
 **Mehr Felder, als die Kachel zeigt:** Die Daten eines Widgets dürfen mehr Felder enthalten, als der View braucht;
 die Kachel ignoriert sie, die Seite der eigenen Erweiterung kann sie lesen. Neue Felder kommen nur hinzu, nichts fällt
 weg. Beispiel: „Server-Zustand“ der `system`-Extension (`GET /api/v1/ext/system/widgets/health`, ein SSH-Aufruf je
@@ -875,6 +883,13 @@ nur auf Docker-Hosts). Aktionen mit `host_bound=False` erscheinen dort nie und l
 sich auch nicht per `POST /hosts/{id}/actions/{typ}` auslösen (404) — nur die Extension
 selbst schlägt sie über `ctx.actions.propose` vor. Pflichtfelder vom Typ Objekt/Liste bekommen dort kein Formular;
 solche Aktionen brauchen ein eigenes in der Extension (Beispiel: `vm.config_set`).
+
+Löst jemand eine Aktion mit `params_schema` per `POST /hosts/{id}/actions/{typ}` aus, prüft der Kern `payload` vorab
+gegen dieses Schema und antwortet bei einem unpassenden Wert gleich mit `422` und einem deutschen Satz (Feld und
+Fehler); es entsteht dann keine Aktion. Die Prüfung ist bewusst schmal (`core/schema_check.py`: `type`, `enum`,
+`pattern`, `minLength`/`maxLength`, `minimum`/`maximum`, `properties`, `required`, `additionalProperties`, `items`,
+`minItems`/`maxItems`); andere Schlüsselwörter lässt sie durch. Der Executor prüft deshalb weiter selbst, das ist die
+verbindliche Prüfung.
 
 ### Frontend-Bundle laden
 

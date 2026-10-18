@@ -112,6 +112,34 @@ def test_normalize_url_adds_scheme_and_strips_the_api_suffix():
         normalize_url("ftp://pi.hole")
 
 
+@pytest.mark.parametrize(("raw", "expected"), [
+    ("http://npm.example:81/nginx/proxy", "http://npm.example:81"),
+    ("http://npm.example:81/nginx/proxy/", "http://npm.example:81"),
+    ("http://npm.example:81/nginx/certificates", "http://npm.example:81"),
+    ("http://npm.example:81/certificates", "http://npm.example:81"),
+    ("http://npm.example:81/access", "http://npm.example:81"),
+    ("http://npm.example:81/logs", "http://npm.example:81"),
+    ("https://example.org/npm/certificates/", "https://example.org/npm"),
+    ("http://npm.example:81/nginx/redirection", "http://npm.example:81"),
+    ("http://npm.example:81/Nginx/Stream", "http://npm.example:81"),
+    ("192.0.2.2:81/users", "http://192.0.2.2:81"),
+    ("http://npm.example:81/audit-log", "http://npm.example:81"),
+    ("http://npm.example:81/settings", "http://npm.example:81"),
+    ("http://npm.example:81/login?next=%2F#x", "http://npm.example:81"),
+    ("https://example.org/npm/nginx/proxy", "https://example.org/npm"),
+    ("https://example.org/npm/users", "https://example.org/npm"),
+    ("http://host/npm", "http://host/npm"),
+    ("http://host/npm/", "http://host/npm"),
+    ("http://host/nginx", "http://host/nginx"),
+    ("http://host/nginx/", "http://host/nginx"),
+    ("http://host/nginx/api", "http://host/nginx"),
+    ("http://host/users-verwaltung", "http://host/users-verwaltung"),
+])
+def test_a_page_copied_from_the_browser_becomes_the_base_address(raw, expected):
+    assert normalize_url(raw, strip_suffixes=("/api",)) == expected
+    assert npm_config({"url": raw, "identity": "admin@example.com"}).url == expected
+
+
 def test_config_reports_missing_parts_as_friendly_not_configured():
     with pytest.raises(NotConfigured, match="noch nicht eingerichtet"):
         npm_config({})

@@ -211,6 +211,8 @@ class RemoteResult:
     flags: frozenset[str] = frozenset()
     """Namen der Prüfungen aus `flags` (siehe `run_once`), die auf der unveränderten Ausgabe zutrafen, nie Servertext.
     So zerstört das Unkenntlichmachen keine Marke, wenn das Passwort zufällig darin vorkommt."""
+    extracted: Any = None
+    """Ergebnis von `extract` (siehe `run_once`) auf der unveränderten Standardausgabe, sonst `None`."""
 
 
 def _decode(data: bytes | str | None) -> str:
@@ -246,10 +248,13 @@ async def run_once(
     connect_timeout_s: float | None = None,
     command_timeout_s: float | None = None,
     flags: Mapping[str, Callable[[str, str], bool]] | None = None,
+    extract: Callable[[str], Any] | None = None,
 ) -> RemoteResult:
     """Meldet sich einmal mit `login_user`/`password` an `host.address:port` an, führt `command` aus, schließt wieder.
 
-    `flags` ist eine feste Tabelle `{Name: Prüfung(stdout, stderr)}`; zurück kommen nur die Namen der zutreffenden."""
+    `flags` ist eine feste Tabelle `{Name: Prüfung(stdout, stderr)}`; zurück kommen nur die Namen der zutreffenden.
+    `extract` liest feste Formen aus der unveränderten Standardausgabe (etwa Prüfsummen); es darf keinen Servertext
+    durchreichen."""
     connect_timeout_s = CONNECT_TIMEOUT_S if connect_timeout_s is None else connect_timeout_s
     command_timeout_s = COMMAND_TIMEOUT_S if command_timeout_s is None else command_timeout_s
     # Reihenfolge: grobe Drossel, ein Lauf je Server, Passwort sendbar, Server-Schlüssel bekannt (kostet keinen
@@ -330,8 +335,15 @@ async def run_once(
             except Exception as exc:  # noqa: BLE001 - wie oben
                 log.warning("Einmal-Passwort fuer Server %s: Auswertung gescheitert (%s)", host.id, type(exc).__name__)
                 found = frozenset()
+            extracted: Any = None
+            if extract is not None:
+                try:
+                    extracted = extract(stdout)
+                except Exception as exc:  # noqa: BLE001 - wie oben
+                    log.warning("Einmal-Passwort fuer Server %s: Auswertung gescheitert (%s)", host.id, type(exc).__name__)
             return RemoteResult(
-                exit_status=result.exit_status, stdout=_mask(stdout, secret), stderr=_mask(stderr, secret), flags=found
+                exit_status=result.exit_status, stdout=_mask(stdout, secret), stderr=_mask(stderr, secret), flags=found,
+                extracted=extracted,
             )
         except PasswordUseError as exc:
             log.info("Einmal-Passwort fuer Server %s: %s", host.id, exc.code)

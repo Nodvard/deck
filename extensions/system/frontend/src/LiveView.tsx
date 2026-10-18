@@ -1,10 +1,7 @@
 /**
- * Live-Ansicht eines Linux-Servers wie Task-Manager/HWiNFO, moeglichst vollstaendig
- * und genau: pro Kern mit Takt, CPU-Aufschluesselung, RAM-Aufteilung,
- * Temperaturen/Luefter, jede Platte und jede Netzwerkkarte einzeln, Dateisysteme,
- * Prozesse. Fragt `GET /ext/system/hosts/{id}/live` alle 3 s ab, solange die Seite
- * sichtbar ist, und fuehrt je Kennzahl einen kleinen Verlauf der letzten 3 Minuten
- * (nur im Browser, der gespeicherte Verlauf steht auf der Server-Seite).
+ * Live-Ansicht eines Linux-Servers wie Task-Manager/HWiNFO: Kerne mit Takt, RAM, Temperaturen, Lüfter, Platten,
+ * Netzwerkkarten, Dateisysteme, Prozesse. Fragt `GET /ext/system/hosts/{id}/live` alle 3 s ab, solange die Seite
+ * sichtbar ist; der Verlauf der letzten 3 Minuten liegt nur im Browser (der gespeicherte steht auf der Server-Seite).
  */
 import { useEffect, useRef, useState } from "react";
 

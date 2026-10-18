@@ -912,7 +912,11 @@ function GuardTab({ canManage }) {
     );
     if (!ok) return "abgebrochen.";
     const r = await call(`${API}/events/acknowledge-all`, { method: "POST" });
-    return `${r.acknowledged} abgehakt.`;
+    const kept = r.kept_open ?? 0;
+    if (!kept) return `${r.acknowledged} abgehakt.`;
+    throw new Error(
+      `${r.acknowledged} abgehakt, ${kept} ${kept === 1 ? "bleibt" : "bleiben"} offen, weil ein Server den Stand seiner Dateien gerade nicht geliefert hat. Bitte gleich noch einmal versuchen.`
+    );
   });
   const ban = (hostId, hostName, ip, unban = false) => run(`${ip} ${unban ? "entsperren" : "sperren"}`, async () => {
     const ok = await deck().confirmDialog(
@@ -1645,7 +1649,7 @@ function UpdatesTab({ canManage }) {
             /* @__PURE__ */ jsx7("span", { className: "text-white/60", children: r.mode_label }),
             r.trigger === "schedule" && /* @__PURE__ */ jsx7(Badge, { children: "automatisch" }),
             /* @__PURE__ */ jsx7("span", { className: "text-xs text-white/40", children: when(r.started_at) }),
-            /* @__PURE__ */ jsx7("span", { className: "min-w-0 flex-1 truncate text-xs text-white/55", children: r.summary }),
+            /* @__PURE__ */ jsx7("span", { className: "min-w-0 flex-1 break-words text-xs text-white/55", children: r.summary }),
             r.output_tail && /* @__PURE__ */ jsx7("button", { type: "button", onClick: () => setOpenRun(openRun === r.id ? null : r.id), className: "text-xs text-white/50 hover:text-white", children: openRun === r.id ? "Ausgabe ausblenden" : "Ausgabe" })
           ] }),
           openRun === r.id && r.output_tail && /* @__PURE__ */ jsx7("pre", { className: "mt-2 max-h-72 overflow-auto rounded-lg bg-black/40 p-3 font-mono text-[11px] text-white/70", children: r.output_tail })

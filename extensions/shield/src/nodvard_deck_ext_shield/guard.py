@@ -4,6 +4,7 @@ gegen den bestätigten Stand und speichert und meldet Auffälligkeiten als Siche
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from nodvard_sdk import Notification, Severity
@@ -14,7 +15,7 @@ from . import intrusion as ix
 from .hostscope import host_scope
 from .ids import EXT_ID, SOC_PATH
 from .models import SecurityEventRecord
-from .patching import load_baseline, load_baselines, save_baseline
+from .patching import load_baseline, load_baselines, save_baseline, schedule_zone
 from .steps import minute_step
 
 if TYPE_CHECKING:
@@ -33,6 +34,17 @@ EVENT_LABEL = {
     "file_changed": "Datei geändert",
     "fail2ban_down": "Fail2ban läuft nicht",
 }
+
+
+ACK_RETRY = (
+    "Das Ereignis bleibt offen, damit nichts verloren geht. Bitte gleich noch einmal versuchen. Ist der Server "
+    "dauerhaft abgeschaltet, nimm ihn aus Deck heraus; dann lässt sich das Ereignis abhaken."
+)
+GUARD_INCOMPLETE = "Die Antwort des Servers kam nicht vollständig an. Verglichen wird wieder mit der nächsten ganzen Antwort."
+
+
+class GuardUnavailable(Exception):
+    """Der Server hat den Stand seiner Dateien nicht geliefert; ein Ereignis zu geänderten Dateien bleibt dann offen."""
 
 
 def guard_as_root(watch_files: list[str] | None) -> str:
@@ -75,9 +87,15 @@ class Guard:
         self._ctx = ctx
         self._defender = defender
         self._running: set[str] = set()
+        # Je Server: Prüfung und Bestätigen lesen und schreiben dieselben Grundlagen, keiner darf den Stand des anderen
+        # mit einem älteren überschreiben.
+        self._locks: dict[str, asyncio.Lock] = {}
 
     async def _settings(self) -> dict[str, Any]:
         return await self._ctx.settings.get()
+
+    def _lock(self, host_id: str) -> asyncio.Lock:
+        return self._locks.setdefault(host_id, asyncio.Lock())
 
     # --- Prüfen ---
 
@@ -92,15 +110,23 @@ class Guard:
             files = settings.get("guard_watch_files") or ix.DEFAULT_WATCH_FILES
             try:
                 res = await self._ctx.exec.run(host, guard_as_root(files), timeout_s=GUARD_TIMEOUT)
-                snap = ix.parse_guard(res.stdout or "", settings.get("guard_dynamic_processes"))
+                output = res.stdout or ""
+                # Abgeschnitten sähen die fehlenden Dateien wie gelöscht aus.
+                error = None if ix.guard_complete(output) else GUARD_INCOMPLETE
+                snap = ix.parse_guard(output, settings.get("guard_dynamic_processes"))
             except Exception as exc:  # noqa: BLE001
-                await save_baseline(self._ctx, host.id, "guard", {"error": _describe(exc), "checked_at": _now().timestamp()})
-                return {"error": _describe(exc)}
-            events = await self._compare(host, snap, settings)
-            view = self._view(snap, await load_baseline(self._ctx, host.id, "ports") or {},
-                              await load_baseline(self._ctx, host.id, "logins") or {}, await load_baseline(self._ctx, host.id, "files") or {})
-            view["checked_at"] = _now().timestamp()
-            await save_baseline(self._ctx, host.id, "guard", view)
+                error = _describe(exc)
+            if error is not None:
+                async with self._lock(host.id):
+                    await save_baseline(self._ctx, host.id, "guard", {"error": error, "checked_at": _now().timestamp()})
+                return {"error": error}
+            async with self._lock(host.id):
+                events = await self._compare(host, snap, settings)
+                view = self._view(snap, await load_baseline(self._ctx, host.id, "ports") or {},
+                                  await load_baseline(self._ctx, host.id, "logins") or {},
+                                  await load_baseline(self._ctx, host.id, "files") or {})
+                view["checked_at"] = _now().timestamp()
+                await save_baseline(self._ctx, host.id, "guard", view)
             if events and notify:
                 await self._notify(host, events)
             return {"events": len(events)}
@@ -202,6 +228,7 @@ class Guard:
 
         # Datei-Wächter
         files = await load_baseline(self._ctx, host.id, "files")
+        run = ix.setup_run(getattr(host, "metadata", None))
         if settings.get("file_watch_enabled", True) and snap.files:
             if files is None:
                 files = {"accepted": {p: ix.file_entry_dict(e) for p, e in snap.files.items()}, "alerted": {}}
@@ -210,12 +237,28 @@ class Guard:
                 alerted: dict[str, str] = files.get("alerted", {})
                 changes = ix.diff_files(accepted, snap.files)
                 report = []
+                # Die eigene Einrichtung ist kein Einbruch: genau das, was sie gemeldet hat, still übernehmen und nur fürs
+                # Protokoll festhalten. Nur bei der ersten Prüfung nach dem Lauf (die vorige lag davor), jeder Lauf einmal.
+                last_check = files.get("checked_at")
+                usable = (
+                    run is not None and isinstance(last_check, (int, float)) and last_check <= run.end
+                    and files.get("setup_seen") != run.key
+                )
+                by_setup = []
                 for ch in changes:
                     entry = snap.files.get(ch.path)
                     marker = entry.sha256 + entry.mode + entry.owner if entry else "removed"
                     if ch.auto_accept and entry is not None:
                         accepted[ch.path] = ix.file_entry_dict(entry)
                         alerted.pop(ch.path, None)
+                        continue
+                    if usable and ix.adopted_by_setup(ch, entry, accepted.get(ch.path), run):
+                        if entry is None:
+                            accepted.pop(ch.path, None)
+                        else:
+                            accepted[ch.path] = ix.file_entry_dict(entry)
+                        alerted.pop(ch.path, None)
+                        by_setup.append(ch)
                         continue
                     if alerted.get(ch.path) == marker:
                         continue
@@ -229,7 +272,22 @@ class Guard:
                         + ", ".join(c.path for c in report[:3]),
                         "detail": {"changes": [{"path": c.path, "change": c.change, "severity": c.severity, "note": c.note} for c in report]},
                     })
-                files = {"accepted": accepted, "alerted": alerted}
+                if by_setup and run is not None:
+                    at = datetime.fromtimestamp(run.start, await schedule_zone(self._ctx)).strftime("%H:%M")
+                    note = f"durch die Einrichtung von Nodvard Deck um {at}"
+                    # Gleich als erledigt ablegen: steht im Verlauf, zählt aber nicht als offen und löst keine Meldung aus.
+                    events.append({
+                        "kind": "file_changed", "severity": "info", "acknowledged": True,
+                        "title": f"Nach der Einrichtung durch Nodvard Deck um {at} übernommen: "
+                        + ", ".join(c.path for c in by_setup[:3]) + (" …" if len(by_setup) > 3 else ""),
+                        "detail": {"by_setup": True, "changes": [
+                            {"path": c.path, "change": c.change, "severity": "info", "note": f"{c.note}, {note}"} for c in by_setup
+                        ]},
+                    })
+                files = {**files, "accepted": accepted, "alerted": alerted}
+            if run is not None and now >= run.end:
+                files["setup_seen"] = run.key
+            files["checked_at"] = now
             await save_baseline(self._ctx, host.id, "files", files)
 
         if events:
@@ -240,7 +298,8 @@ class Guard:
                     ev["id"] = _new_id("ev")
                     session.add(SecurityEventRecord(
                         id=ev["id"], host_id=host.id, host_name=host.display_name or host.name, kind=ev["kind"],
-                        severity=ev["severity"], title=ev["title"][:255], detail=ev["detail"], acknowledged=False, created_at=_now(),
+                        severity=ev["severity"], title=ev["title"][:255], detail=ev["detail"],
+                        acknowledged=bool(ev.get("acknowledged")), created_at=_now(),
                     ))
             for ev in events:
                 await self._ctx.audit.log(
@@ -279,6 +338,10 @@ class Guard:
         }
 
     async def _notify(self, host: Host, events: list[dict[str, Any]]) -> None:
+        # Schon Erledigtes (die übernommene eigene Einrichtung) steht nur im Verlauf, nie in der Meldung.
+        events = [e for e in events if not e.get("acknowledged")]
+        if not events:
+            return
         worst = "critical" if any(e["severity"] == "critical" for e in events) else ("warning" if any(e["severity"] == "warning" for e in events) else "info")
         if worst == "info":
             return
@@ -343,59 +406,87 @@ class Guard:
             return [event_out(r) for r in (await session.execute(stmt)).scalars()]
 
     async def acknowledge(self, event_id: str, actor: Actor | None = None) -> bool:
-        """Erledigt ein Ereignis und übernimmt je nach Art den neuen Stand als bekannt."""
+        """Erledigt ein Ereignis und übernimmt je nach Art den neuen Stand als bekannt.
+
+        Liefert der Server bei geänderten Dateien seinen Stand nicht, bleibt das Ereignis offen (`GuardUnavailable`)."""
         async with self._ctx.db.session() as session:
             row = await session.get(SecurityEventRecord, event_id)
             if row is None or row.acknowledged:
                 return False
-            row.acknowledged = True
             host_id, kind, detail = row.host_id, row.kind, dict(row.detail or {})
-        if kind == "new_port":
-            ports = await load_baseline(self._ctx, host_id, "ports") or {"known": [], "alerted": []}
-            keys = {p["key"] for p in detail.get("ports", [])}
-            ports["known"] = sorted(set(ports.get("known", [])) | keys)
-            ports["alerted"] = sorted(set(ports.get("alerted", [])) - keys)
-            await save_baseline(self._ctx, host_id, "ports", ports)
-        elif kind == "file_changed":
-            files = await load_baseline(self._ctx, host_id, "files")
-            view = await load_baseline(self._ctx, host_id, "guard") or {}
-            if files is not None:
-                paths = {c["path"] for c in detail.get("changes", [])}
-                current = await self._current_files(host_id)
-                for p in paths:
-                    if p in current:
-                        files["accepted"][p] = current[p]
-                    else:
-                        files["accepted"].pop(p, None)
-                    files["alerted"].pop(p, None)
-                await save_baseline(self._ctx, host_id, "files", files)
-                view["files_pending"] = [p for p in view.get("files_pending", []) if p not in paths]
-                await save_baseline(self._ctx, host_id, "guard", view)
+        current = None
+        if kind == "file_changed" and await load_baseline(self._ctx, host_id, "files") is not None:
+            current = await self._current_files(host_id)
+        async with self._lock(host_id):
+            async with self._ctx.db.session() as session:
+                row = await session.get(SecurityEventRecord, event_id)
+                if row is None or row.acknowledged:
+                    return False
+            if kind == "new_port":
+                ports = await load_baseline(self._ctx, host_id, "ports") or {"known": [], "alerted": []}
+                keys = {p["key"] for p in detail.get("ports", [])}
+                ports["known"] = sorted(set(ports.get("known", [])) | keys)
+                ports["alerted"] = sorted(set(ports.get("alerted", [])) - keys)
+                await save_baseline(self._ctx, host_id, "ports", ports)
+            elif current is not None:
+                files = await load_baseline(self._ctx, host_id, "files")
+                view = await load_baseline(self._ctx, host_id, "guard") or {}
+                if files is not None:
+                    paths = {c["path"] for c in detail.get("changes", [])}
+                    for p in paths:
+                        if p in current:
+                            files["accepted"][p] = current[p]
+                        else:
+                            files["accepted"].pop(p, None)
+                        files["alerted"].pop(p, None)
+                    await save_baseline(self._ctx, host_id, "files", files)
+                    view["files_pending"] = [p for p in view.get("files_pending", []) if p not in paths]
+                    await save_baseline(self._ctx, host_id, "guard", view)
+            # Erst jetzt abhaken: Scheitert das Speichern davor, bleibt das Ereignis offen und lässt sich wiederholen.
+            async with self._ctx.db.session() as session:
+                row = await session.get(SecurityEventRecord, event_id)
+                if row is None:
+                    return False
+                row.acknowledged = True
         await self._ctx.audit.log(
             action=f"{EXT_ID}.guard_acknowledged", outcome="success", target_type="host", target_id=host_id,
             reason=f"{EVENT_LABEL.get(kind, kind)} bestätigt", correlation_id=event_id, **({"actor": actor} if actor is not None else {}),
         )
         return True
 
-    async def acknowledge_all(self, actor: Actor | None = None) -> int:
-        ids = [e["id"] for e in await self.list_events(limit=1000)]
-        done = 0
-        for event_id in ids:
-            done += int(await self.acknowledge(event_id, actor))
-        return done
+    async def acknowledge_all(self, actor: Actor | None = None) -> tuple[int, int]:
+        """Erledigt alle offenen Ereignisse; zählt die erledigten und die, die offen bleiben, weil ein Server nicht antwortet."""
+        done = kept = 0
+        silent: set[str] = set()  # nach dem ersten Fehlschlag nicht für jedes Ereignis erneut auf den Server warten
+        for event in await self.list_events(limit=1000):
+            if event["kind"] == "file_changed" and event["host_id"] in silent:
+                kept += 1
+                continue
+            try:
+                done += int(await self.acknowledge(event["id"], actor))
+            except GuardUnavailable:
+                kept += 1
+                silent.add(event["host_id"])
+        return done, kept
 
-    async def _current_files(self, host_id: str) -> dict[str, Any]:
-        """Holt den aktuellen Datei-Stand frisch, zum Übernehmen beim Bestätigen."""
+    async def _current_files(self, host_id: str) -> dict[str, Any] | None:
+        """Holt den aktuellen Datei-Stand frisch, zum Übernehmen beim Bestätigen; `None`, wenn es den Server nicht mehr gibt."""
+        from .defender import _describe
+
         host = await self._ctx.hosts.get(host_id)
         if host is None:
-            return {}
+            return None
+        name = host.display_name or host.name
         settings = await self._settings()
         try:
             res = await self._ctx.exec.run(host, guard_as_root(settings.get("guard_watch_files") or None),
                                            timeout_s=GUARD_TIMEOUT)
-        except Exception:  # noqa: BLE001
-            return {}
-        return {p: ix.file_entry_dict(e) for p, e in ix.parse_guard(res.stdout or "").files.items()}
+        except Exception as exc:
+            raise GuardUnavailable(f"{name} ist gerade nicht erreichbar ({_describe(exc)}). {ACK_RETRY}") from exc
+        output = res.stdout or ""
+        if not ix.guard_complete(output):
+            raise GuardUnavailable(f"{name} hat den Stand seiner Dateien nicht vollständig geliefert. {ACK_RETRY}")
+        return {p: ix.file_entry_dict(e) for p, e in ix.parse_guard(output).files.items()}
 
     async def summary_line(self) -> tuple[str | None, list[str]]:
         """Zeile und Aufgaben für das Morgen-Briefing."""

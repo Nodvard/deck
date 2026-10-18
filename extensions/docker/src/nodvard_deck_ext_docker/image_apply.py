@@ -17,6 +17,7 @@ from typing import Any
 from nodvard_sdk.types import Risk
 
 from .capabilities import CONTAINER_NAME_RE
+from .compose_errors import UNSET_VAR_RE, scrub_compose_output
 from .detached import busy_check_command
 from .image_updates import _IMAGE_ID_RE, canonical_repo, classify_registry_error, is_valid_ref, split_ref
 
@@ -43,8 +44,8 @@ MAX_FILES = 8
 PORTAINER_PREFIX = "/data/compose/"
 
 RC_PULL, RC_UP = 10, 20
+_WARNING_RE = re.compile(r"(?:WARN\b|time=\S+ level=warning\b)")
 
-_MISSING_VAR_RE = re.compile(r'The "(\w+)" variable is not set')
 _DB_WORDS = (
     "postgres", "postgis", "pgvecto", "mariadb", "mysql", "mongo", "influxdb", "timescale", "couchdb",
     "elasticsearch", "clickhouse", "cassandra", "neo4j",
@@ -471,7 +472,7 @@ def normalize_image(ref: str) -> str:
 def _first_line(text: str, limit: int = 200) -> str:
     for line in text.splitlines():
         line = line.strip()
-        if line and not line.startswith("WARN"):
+        if line and not _WARNING_RE.match(line):
             # Fehlermeldungen von Compose zitieren gern den Wert einer Variablen ("geheim$123"): Angaben in
             # Anführungszeichen kommen nie bis zur Anzeige.
             line = re.sub(r"\"[^\"]*\"|'[^']*'", "\"…\"", line)
@@ -484,11 +485,18 @@ def check_config(stdout: str, stderr: str, exit_code: int, t: ComposeTarget) -> 
 
     Die Ausgabe enthält aufgelöste Umgebungswerte (Passwörter!): sie wird nur gelesen, nie zurückgegeben oder gespeichert.
     """
-    missing = sorted(set(_MISSING_VAR_RE.findall(stderr or "")))
-    if missing:
-        return _why("env_missing", f"In der Compose-Datei fehlen Variablen ({', '.join(missing[:8])}) – sie kamen beim ersten Start wohl aus der Shell. Update von Hand.")
     if exit_code != 0:
-        return _why("config", f"docker compose config meldet einen Fehler: {_first_line(stderr) or f'Exit-Code {exit_code}'}")
+        return _why("config", f"docker compose config meldet einen Fehler: {_first_line(scrub_compose_output(stderr)) or f'Exit-Code {exit_code}'}")
+    missing = len(set(UNSET_VAR_RE.findall(stderr or "")))
+    if missing:
+        count = "eine Variable" if missing == 1 else f"{missing} Variablen"
+        return _why(
+            "env_missing",
+            f"Compose meldet {count} ohne Wert; ein Update würde den Dienst ohne sie neu erstellen. Meist kamen sie beim ersten "
+            "Start aus der Shell: in die .env eintragen oder mit ${NAME:-} ausdrücklich leer lassen. Ein einzelnes $ in einem "
+            "Wert der .env als $$ schreiben. Welche es sind, zeigt `docker compose config` auf dem Server; Nodvard Deck nennt "
+            "die Namen nicht, sie können ein Stück eines Passworts sein. Bis dahin Update von Hand.",
+        )
     try:
         data = json.loads(stdout)
     except ValueError:

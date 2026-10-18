@@ -1,36 +1,36 @@
-"""Das Ziel finden und vorpruefen.
+"""Das Ziel finden und vorprüfen.
 
-Die Vorpruefung laeuft beim Start, danach regelmaessig und vor jeder Aktion. Sie **liest nur** (nur `GET` an die
+Die Vorprüfung läuft beim Start, danach regelmäßig und vor jeder Aktion. Sie **liest nur** (nur `GET` an die
 Engine, keine Registry) und meldet `ready` bzw. den ersten Ablehnungsgrund als festen Code. So sieht der Nutzer
 eine Fehlkonfiguration, bevor er klickt.
 
 * **Eigene ID** aus `/proc/self/mountinfo`: Docker bindet `hostname`, `hosts` und `resolv.conf` aus
-  `.../containers/<64 hex>/` ein. Nicht `HOSTNAME` (das ist nur die Kurz-ID und per `hostname:` frei waehlbar).
+  `.../containers/<64 hex>/` ein. Nicht `HOSTNAME` (das ist nur die Kurz-ID und per `hostname:` frei wählbar).
 * **Projekt** aus den eigenen Labels (Self-Inspect). Ohne Compose-Labels: `not_compose`.
-* **Ziel:** Filter `project=P`, `service=S`, `oneoff=False` (lokal nachgeprueft, eine Engine, die Filter
-  ignoriert, fuehrt nicht zum falschen Ziel), ohne die eigene ID. **Genau ein** Treffer, der laeuft, nicht neu startet
+* **Ziel:** Filter `project=P`, `service=S`, `oneoff=False` (lokal nachgeprüft, eine Engine, die Filter
+  ignoriert, führt nicht zum falschen Ziel), ohne die eigene ID. **Genau ein** Treffer, der läuft, nicht neu startet
   und `healthy` ist. Swarm-Labels -> `swarm`. Ab hier gilt nur die volle ID.
 * **Mit Journal** (`exclude` nicht leer: der alte und der neue Container eines laufenden Vorgangs) gibt es **nie ein
-  Ziel**: Ein Container mit den Ziel-Labels, der nicht im Journal steht, gilt als von aussen dazugekommen
+  Ziel**: Ein Container mit den Ziel-Labels, der nicht im Journal steht, gilt als von außen dazugekommen
   (`external_change`), und ohne weiteren bleibt es bei `no_target`. `Preflight.target` darf dann nicht benutzt
-  werden; der Ablauf prueft Container ueber ihre IDs aus dem Journal.
+  werden; der Ablauf prüft Container über ihre IDs aus dem Journal.
   **Ausnahme Schritt `creating`:** Die ID des neuen Containers steht erst nach `created` im Journal. Ein Container
-  `<name>` im Zustand `created`, nie gestartet, mit dem neuen Image und den gleichen Compose-Labels gehoert dem
+  `<name>` im Zustand `created`, nie gestartet, mit dem neuen Image und den gleichen Compose-Labels gehört dem
   Helfer und erscheint hier trotzdem als `external_change`. Mit Journal sagt `reason` darum **nichts**
-  ueber fremde Container aus: Wer ein Journal wiederaufnimmt, listet die Container mit den Ziel-Labels selbst und
+  über fremde Container aus: Wer ein Journal wiederaufnimmt, listet die Container mit den Ziel-Labels selbst und
   gleicht sie mit den Journal-IDs (und in `creating` mit dem Zustand des Containers) ab.
 * **Zustand und Socket:** das Ziel bindet weder den Engine-Socket noch das `/state`-Volume des Helfers ein
-  (auch nicht ueber einen Elternordner wie `/var/run` oder `/`), sonst `unsafe_target`. Es hat den Kanal des Helfers
+  (auch nicht über einen Elternordner wie `/var/run` oder `/`), sonst `unsafe_target`. Es hat den Kanal des Helfers
   unter `/app/updater` (`channel_missing_in_target`).
-* **Image und Tag:** `Config.Image` ist das Repository mit beweglichem Tag; die Engine nennt fuer das laufende Image
-  einen Digest im Repository (`RepoDigests`, fuer den Rueckweg-Slot), es traegt das Versions-Label und ist mindestens
+* **Image und Tag:** `Config.Image` ist das Repository mit beweglichem Tag; die Engine nennt für das laufende Image
+  einen Digest im Repository (`RepoDigests`, für den Rückweg-Slot), es trägt das Versions-Label und ist mindestens
   `MIN_VERSION`. Die Herkunft beweist der Digest nur beim alten Store der Engine: Beim containerd-Store (Standard ab
   Docker 29) leitet die Engine ihn aus den Namen ab, dann besteht auch ein selbst gebautes, als ghcr getaggtes Image
-  diese Pruefung. Unterscheiden koennte das die Registry, die wertet die Vorpruefung aber nicht aus (Folgen siehe
+  diese Prüfung. Unterscheiden könnte das die Registry, die wertet die Vorprüfung aber nicht aus (Folgen siehe
   `policy.require_registry_digest`).
 * **Klonbarkeit:** der `create`-Body wird schon hier probeweise gebaut (`clone.build`), damit
   `custom_entrypoint`, `unknown_field`, `network_unclear`, `macvlan` und `auto_remove` vor dem Klick auffallen.
-* **Umgebung:** kein anderer Container haengt per `NetworkMode`, `PidMode` oder `IpcMode` = `container:<ziel>` am Ziel
+* **Umgebung:** kein anderer Container hängt per `NetworkMode`, `PidMode` oder `IpcMode` = `container:<ziel>` am Ziel
   (`dependent_containers`; die Liste der Container zeigt nur `NetworkMode`, darum wird jeder andere Container
   gelesen), `<name>-previous` ist frei (`name_taken`).
 """
@@ -75,8 +75,8 @@ _DOCKER_TIME_RE = re.compile(
 def parse_mountinfo(data: bytes) -> str:
     """Eigene volle Container-ID aus dem Inhalt von `/proc/self/mountinfo` (reine Funktion).
 
-    Gesucht werden die Eintraege mit Einhaengepunkt `/etc/hostname`, `/etc/hosts` oder `/etc/resolv.conf`, deren
-    Wurzel (Feld 4) auf `containers/<64 hex>/<datei>` endet. Alle muessen dieselbe ID nennen; keine oder mehrere
+    Gesucht werden die Einträge mit Einhängepunkt `/etc/hostname`, `/etc/hosts` oder `/etc/resolv.conf`, deren
+    Wurzel (Feld 4) auf `containers/<64 hex>/<datei>` endet. Alle müssen dieselbe ID nennen; keine oder mehrere
     verschiedene -> `self_unknown`."""
     if not isinstance(data, (bytes, bytearray)) or len(data) > MOUNTINFO_MAX_BYTES:
         raise Refusal(policy.SELF_UNKNOWN)
@@ -94,7 +94,7 @@ def parse_mountinfo(data: bytes) -> str:
 
 
 def read_mountinfo() -> bytes:
-    """Liest `/proc/self/mountinfo` (hoechstens `MOUNTINFO_MAX_BYTES`). Fehler -> `self_unknown`."""
+    """Liest `/proc/self/mountinfo` (höchstens `MOUNTINFO_MAX_BYTES`). Fehler -> `self_unknown`."""
     try:
         fd = os.open("/proc/self/mountinfo", os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NOCTTY)
     except OSError:
@@ -128,7 +128,7 @@ def own_container_id() -> str:
 
 def docker_time(value: object) -> float | None:
     """Ein Zeitpunkt des Docker-Dienstes (RFC 3339, bis zu neun Nachkommastellen, etwa `State.StartedAt`) als
-    Sekunden seit 1970 (UTC). `None` fuer alles andere, auch fuer den Nullwert eines nie gestarteten Containers."""
+    Sekunden seit 1970 (UTC). `None` für alles andere, auch für den Nullwert eines nie gestarteten Containers."""
     if not isinstance(value, str) or value == NEVER_STARTED:
         return None
     match = _DOCKER_TIME_RE.fullmatch(value)
@@ -145,7 +145,7 @@ def docker_time(value: object) -> float | None:
 
 
 def _days_since_1970(year: int, month: int, day: int) -> int:
-    """Tage seit dem 1. 1. 1970 im gregorianischen Kalender (Jahre ab Maerz gezaehlt, dann faellt der Schalttag ans
+    """Tage seit dem 1. 1. 1970 im gregorianischen Kalender (Jahre ab März gezählt, dann fällt der Schalttag ans
     Ende)."""
     year -= month <= 2
     era = year // 400
@@ -156,7 +156,7 @@ def _days_since_1970(year: int, month: int, day: int) -> int:
 
 
 def started_at(container: Mapping[str, Any]) -> float | None:
-    """`State.StartedAt` eines Inspects als Sekunden seit 1970; `None`, wenn er fehlt, ungueltig ist oder der Container
+    """`State.StartedAt` eines Inspects als Sekunden seit 1970; `None`, wenn er fehlt, ungültig ist oder der Container
     nie gestartet wurde."""
     state = container.get("State")
     return docker_time(state.get("StartedAt")) if isinstance(state, dict) else None
@@ -183,7 +183,7 @@ class MountRef:
         return bool(self.source) and mount.get("Source") == self.source
 
     def origin(self) -> tuple[str, str | None]:
-        """`(Type, Name bzw. Source)` wie in `clone.mount_map` -- fuer `clone.verify(..., channel=...)`."""
+        """`(Type, Name bzw. Source)` wie in `clone.mount_map` -- für `clone.verify(..., channel=...)`."""
         return self.kind, self.name if self.kind == "volume" else self.source
 
 
@@ -203,7 +203,7 @@ class SelfInfo:
 
 @dataclass(frozen=True)
 class Target:
-    """Das gepruefte Ziel. `container`/`image` sind die Inspects (Ziel und **laufendes** Image), `plan` der
+    """Das geprüfte Ziel. `container`/`image` sind die Inspects (Ziel und **laufendes** Image), `plan` der
     probeweise gebaute `create`-Body (mit dem alten Image als "neuem")."""
 
     id: str
@@ -222,9 +222,9 @@ class Target:
 
 @dataclass(frozen=True)
 class Preflight:
-    """Ergebnis der Vorpruefung. `reason` ist ein Code aus `policy.CODES` (oder `None`, wenn `ready`), `detail`
-    ein fester Bezeichner nur fuers Log. `current_version`, `floating_tag` und `pinned` sind auch bei einer
-    Ablehnung gefuellt, soweit sie bekannt sind (fuer `status.target`)."""
+    """Ergebnis der Vorprüfung. `reason` ist ein Code aus `policy.CODES` (oder `None`, wenn `ready`), `detail`
+    ein fester Bezeichner nur fürs Log. `current_version`, `floating_tag` und `pinned` sind auch bei einer
+    Ablehnung gefüllt, soweit sie bekannt sind (für `status.target`)."""
 
     ready: bool
     reason: str | None
@@ -251,7 +251,7 @@ class _Info:
 
 
 # ---------------------------------------------------------------------------
-# Vorpruefung
+# Vorprüfung
 # ---------------------------------------------------------------------------
 
 
@@ -263,15 +263,15 @@ def preflight(
     exclude: Iterable[str] = (),
     repository: str = policy.REPOSITORY,
 ) -> Preflight:
-    """Die ganze Vorpruefung. Wirft nie eine `Refusal` oder `EngineError`, sondern gibt sie als
-    `Preflight(ready=False, reason=...)` zurueck. `self_id` ist die eigene ID (`None`: unbekannt), `exclude` die IDs
+    """Die ganze Vorprüfung. Wirft nie eine `Refusal` oder `EngineError`, sondern gibt sie als
+    `Preflight(ready=False, reason=...)` zurück. `self_id` ist die eigene ID (`None`: unbekannt), `exclude` die IDs
     im Journal (der alte bzw. neue Container eines laufenden Vorgangs). Ist `exclude` nicht leer, gibt es nie ein
     Ziel (`target` ist `None`): ein weiterer Container mit den Ziel-Labels ist `external_change`, sonst `no_target`.
-    Das gilt auch fuer den eigenen, gerade angelegten Container im Schritt `creating` (seine ID steht noch nicht im
-    Journal); `reason` ist mit Journal deshalb keine Pruefung auf fremde Container.
+    Das gilt auch für den eigenen, gerade angelegten Container im Schritt `creating` (seine ID steht noch nicht im
+    Journal); `reason` ist mit Journal deshalb keine Prüfung auf fremde Container.
 
     Auch jede andere Ausnahme beim Auswerten der Antworten wird zu "nicht bereit" (`engine_unsupported`, Detail
-    `unexpected`): sonst bliebe das letzte, womoeglich bereite Ergebnis stehen (fail-closed). Nur ein ungueltiger
+    `unexpected`): sonst bliebe das letzte, womöglich bereite Ergebnis stehen (fail-closed). Nur ein ungültiger
     Dienstname ist ein Programmierfehler (`ValueError`)."""
     if not policy.SERVICE_RE.fullmatch(service):
         raise ValueError("service")
@@ -313,9 +313,9 @@ def _check(engine: Engine, info: _Info, *, self_id: str | None, service: str, ex
             raise Refusal(policy.SWARM)
         matching.append(item_id)
     if exclude:
-        # Mit Journal steht jeder Container mit den Ziel-Labels in `exclude`, ausser dem eigenen, im Schritt
+        # Mit Journal steht jeder Container mit den Ziel-Labels in `exclude`, außer dem eigenen, im Schritt
         # `creating` gerade angelegten (seine ID ist noch nicht im Journal; der Ablauf erkennt ihn am Zustand). Ein
-        # weiterer ist nicht "das Ziel" -- ohne Journal hiesse dieselbe Lage `multiple_targets`.
+        # weiterer ist nicht "das Ziel" -- ohne Journal hieße dieselbe Lage `multiple_targets`.
         raise Refusal(policy.EXTERNAL_CHANGE if matching else policy.NO_TARGET)
     if not matching:
         raise Refusal(policy.NO_TARGET)
@@ -378,7 +378,7 @@ def _inspect(call: Any, ref: str, not_found_code: str) -> dict[str, Any]:
 
 
 def inspect_self(engine: Engine, self_id: str | None) -> SelfInfo:
-    """Self-Inspect: Projekt aus den eigenen Labels, eigene Mounts fuer Kanal, Zustand und Socket."""
+    """Self-Inspect: Projekt aus den eigenen Labels, eigene Mounts für Kanal, Zustand und Socket."""
     if not policy.is_container_id(self_id):
         raise Refusal(policy.SELF_UNKNOWN)
     me = _inspect(engine.inspect_container, self_id, policy.SELF_UNKNOWN)  # type: ignore[arg-type]
@@ -413,7 +413,7 @@ def _mount_at(mounts: list[dict[str, Any]], destination: str) -> MountRef | None
 
 
 def host_path(mounts: list[dict[str, Any]], path: str) -> str | None:
-    """Pfad auf dem Rechner zu `path` im Helfer (laengster passender Mount), sonst `None`."""
+    """Pfad auf dem Rechner zu `path` im Helfer (längster passender Mount), sonst `None`."""
     best: tuple[int, str] | None = None
     for mount in mounts:
         destination, source = _clean(mount.get("Destination")), mount.get("Source")
@@ -433,7 +433,7 @@ def _clean(path: object) -> str:
 
 
 def _canon(path: str) -> str:
-    """`/var/run` ist auf ueblichen Systemen ein Link auf `/run`: beide Schreibweisen gelten als gleich."""
+    """`/var/run` ist auf üblichen Systemen ein Link auf `/run`: beide Schreibweisen gelten als gleich."""
     path = _clean(path)
     if path == "/var/run" or path.startswith("/var/run/"):
         path = "/run" + path[len("/var/run"):]
@@ -450,7 +450,7 @@ def check_mounts(container: Mapping[str, Any], me: SelfInfo) -> None:
     """Kein Engine-Socket und kein `/state` im Ziel (`unsafe_target`), der Kanal des Helfers unter
     `/app/updater` (`channel_missing_in_target`)."""
     if me.socket_source is None:
-        raise Refusal(policy.UNSAFE_TARGET, "socket_unknown")  # ohne den Pfad laesst sich das nicht pruefen
+        raise Refusal(policy.UNSAFE_TARGET, "socket_unknown")  # ohne den Pfad lässt sich das nicht prüfen
     sensitive = [me.socket_source]
     if me.state is not None and me.state.source:
         sensitive.append(me.state.source)
@@ -480,7 +480,7 @@ def check_mounts(container: Mapping[str, Any], me: SelfInfo) -> None:
 
 
 def _floating_tag(engine: Engine, info: _Info, tag_text: Any, image_id: Any, repository: str) -> str:
-    """Bei `pinned_version` wird die laufende Version noch gelesen (fuer den Status), dann abgelehnt."""
+    """Bei `pinned_version` wird die laufende Version noch gelesen (für den Status), dann abgelehnt."""
     if not policy.is_image_id(image_id):
         raise Refusal(policy.IMAGE_CONFIG_MISSING)
     try:
@@ -512,7 +512,7 @@ def _restart_policy(host: Mapping[str, Any]) -> tuple[str, int]:
 
 
 def network_drivers(engine: Engine, container: Mapping[str, Any]) -> dict[str, str]:
-    """`NetworkID -> Driver` fuer jedes Netz des Ziels (`GET /networks/{id}`; 404 -> `network_unclear`)."""
+    """`NetworkID -> Driver` für jedes Netz des Ziels (`GET /networks/{id}`; 404 -> `network_unclear`)."""
     host = container.get("HostConfig") or {}
     if not clone.has_own_network(clone.network_mode(host)):
         return {}
@@ -538,11 +538,11 @@ _HEX_RE = re.compile(r"[0-9a-f]+", re.ASCII)
 
 
 def points_at(ref: str, *, target_id: str, name: str, other_names: frozenset[str] = frozenset()) -> bool:
-    """Meint `container:<ref>` das Ziel? Der Docker-Dienst loest `<ref>` in dieser Reihenfolge auf: volle ID, Name
-    (auch mit fuehrendem `/`), erst dann ein beliebig kurzes, eindeutiges ID-Praefix. Ein hexadezimaler `ref`, mit
-    dem die ID des Ziels beginnt, gilt darum als Verweis -- auch wenn er nicht eindeutig waere (fail-closed ist hier
-    billig) --, ausser er ist der Name eines **anderen** Containers (`other_names`, ohne fuehrendes `/`): Dann
-    loest der Docker-Dienst ihn als diesen Namen auf, und der Verweis zielt nicht aufs Ziel."""
+    """Meint `container:<ref>` das Ziel? Der Docker-Dienst löst `<ref>` in dieser Reihenfolge auf: volle ID, Name
+    (auch mit führendem `/`), erst dann ein beliebig kurzes, eindeutiges ID-Präfix. Ein hexadezimaler `ref`, mit
+    dem die ID des Ziels beginnt, gilt darum als Verweis -- auch wenn er nicht eindeutig wäre (fail-closed ist hier
+    billig) --, außer er ist der Name eines **anderen** Containers (`other_names`, ohne führendes `/`): Dann
+    löst der Docker-Dienst ihn als diesen Namen auf, und der Verweis zielt nicht aufs Ziel."""
     if ref in (target_id, name, "/" + name):
         return True
     if ref.lstrip("/") in other_names:
@@ -551,8 +551,8 @@ def points_at(ref: str, *, target_id: str, name: str, other_names: frozenset[str
 
 
 def _other_names(containers: list[dict[str, Any]], target_id: str) -> frozenset[str]:
-    """Die Namen aller Container ausser dem Ziel (auch der eigene Helfer: Docker loest dessen Namen genauso vor einem
-    ID-Praefix auf). Nur echte Namen (`/name`), keine Link-Aliase der Form `/a/b`."""
+    """Die Namen aller Container außer dem Ziel (auch der eigene Helfer: Docker löst dessen Namen genauso vor einem
+    ID-Präfix auf). Nur echte Namen (`/name`), keine Link-Aliase der Form `/a/b`."""
     names: set[str] = set()
     for item in containers:
         if item.get("Id") == target_id:
@@ -567,13 +567,13 @@ def _other_names(containers: list[dict[str, Any]], target_id: str) -> frozenset[
 def check_neighbours(engine: Engine, containers: list[dict[str, Any]], *, target_id: str, name: str) -> None:
     """`dependent_containers`: ein anderer Container teilt Netz, PID- oder IPC-Namensraum des Ziels
     (`NetworkMode`/`PidMode`/`IpcMode` = `container:<ziel>`). Stoppt oder entfernt der Ablauf das Ziel, verlieren sie
-    ihn mit. Die Liste der Container zeigt nur `NetworkMode`, darum wird jeder andere Container gelesen (ausser dem
-    Ziel); ein inzwischen verschwundener (404) wird uebersprungen, jeder andere Fehler fuehrt zur Ablehnung (kein
-    "bereit" ohne die Pruefung).
+    ihn mit. Die Liste der Container zeigt nur `NetworkMode`, darum wird jeder andere Container gelesen (außer dem
+    Ziel); ein inzwischen verschwundener (404) wird übersprungen, jeder andere Fehler führt zur Ablehnung (kein
+    "bereit" ohne die Prüfung).
 
-    Auch der **Helfer selbst** wird geprueft: zeigt er auf das Ziel (falsch konfiguriert, z. B. `PidMode`), stuerbe er
-    beim Stoppen des Ziels mit und liesse sich nicht wieder starten. Das ist ein Konfigurationsfehler und darf die
-    Vorpruefung fail-closed ablehnen.
+    Auch der **Helfer selbst** wird geprüft: zeigt er auf das Ziel (falsch konfiguriert, z. B. `PidMode`), stürbe er
+    beim Stoppen des Ziels mit und ließe sich nicht wieder starten. Das ist ein Konfigurationsfehler und darf die
+    Vorprüfung fail-closed ablehnen.
     `name_taken`: `<name>-previous` ist schon vergeben (oder zu lang)."""
     previous = name + PREVIOUS_SUFFIX
     if not CONTAINER_NAME_RE.fullmatch(previous):
@@ -607,8 +607,8 @@ def check_neighbours(engine: Engine, containers: list[dict[str, Any]], *, target
 
 
 def check_running(container: Mapping[str, Any]) -> None:
-    """Healthcheck vorhanden (`no_healthcheck`), Ziel laeuft (`target_not_running`) und ist gesund
-    (`target_unhealthy`: ein jetzt ungesundes Ziel fiele nach 15 min unnoetig zurueck)."""
+    """Healthcheck vorhanden (`no_healthcheck`), Ziel läuft (`target_not_running`) und ist gesund
+    (`target_unhealthy`: ein jetzt ungesundes Ziel fiele nach 15 min unnötig zurück)."""
     config = container.get("Config") or {}
     health_config = config.get("Healthcheck") if isinstance(config, dict) else None
     test = health_config.get("Test") if isinstance(health_config, dict) else None

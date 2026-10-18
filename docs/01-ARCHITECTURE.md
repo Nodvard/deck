@@ -227,6 +227,10 @@ Kein Rebuild, kein Neustart, keine Umgebungsvariable. Logo und Favicon liegen al
 Daten-Volume (`branding/`); andere Adressen nimmt `PUT /branding` dafür nur als eigenen Pfad oder
 `data:image/…` an. Die App-Seite soll Bilder nur vom eigenen Server laden (`img-src 'self' data: blob:`); vorerst
 meldet der Browser andere Bilder nur (`Content-Security-Policy-Report-Only`), gesperrt wird später.
+Ebenso nur gemeldet wird `script-src 'self'` plus die Prüfsumme der eingebetteten Import-Map aus `index.html`
+(beim Start berechnet): Damit liefe kein `javascript:`-Link und kein eingeschleustes Skript. Links aus Daten von
+Erweiterungen (App-Kacheln, Befehlspalette, Widgets, Erweiterungsseiten) nimmt die Oberfläche nur mit `http:` oder
+`https:`, Ziele von Meldungen nur als Pfad im Dashboard (`/…`, nicht `//…`).
 Ein SVG wird beim Hochladen geprüft (keine Skripte, keine Verweise aus der Datei hinaus), jedes
 hochgeladene Bild wird mit einer Sandbox-CSP ausgeliefert;
 der Support-Link nimmt nur `http:`, `https:` und `mailto:` an ([04-API](04-API.md)).

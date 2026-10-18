@@ -9,7 +9,7 @@ import { formatBytes } from "./format";
 let token: string | null;
 /** `refreshAccessTokenResult` des Kerns. */
 let refresh: ReturnType<typeof vi.fn>;
-/** `refreshAccessToken` (alte Schnittstelle, auch aeltere Kerne): darf neben dem neuen nicht laufen. */
+/** `refreshAccessToken` (alte Schnittstelle, auch ältere Kerne): darf neben dem neuen nicht laufen. */
 let legacyRefresh: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -210,7 +210,7 @@ describe("authedFetch", () => {
 
 /**
  * Die Kern-Shell hat zwei Namen (`window.__nodvardDeck`, alt `window.__lattice`): das Kit findet
- * sie unter beiden -- auch ein neues Bundle in einem Tab mit aelterem Kern (nur `__lattice`) und
+ * sie unter beiden -- auch ein neues Bundle in einem Tab mit älterem Kern (nur `__lattice`) und
  * ein Fremd-Kern, der nur den neuen Namen setzt.
  */
 describe("authedFetch findet die Kern-Shell unter beiden Namen", () => {

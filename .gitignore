@@ -9,8 +9,8 @@ build/
 .mypy_cache/
 .ruff_cache/
 
-# Node
-node_modules/
+# Node (ohne Schrägstrich, damit auch ein Symlink namens node_modules ignoriert wird)
+node_modules
 dist/
 .vite/
 *.tsbuildinfo

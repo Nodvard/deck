@@ -108,13 +108,14 @@ def test_helpers_are_installed_with_their_own_rule_next_to_the_full_one(tmp_path
     assert "Hilfsskript system-root (Version 2) eingerichtet, mit eigener sudo-Regel." in lines
     assert lines[-1].startswith("Fertig.") and "Hinweis" not in done.stdout
     assert host_setup.setup_messages(done.stdout) == [
+        host_setup.KEY_ADDED,
         "Hilfsskript shield-root (Version 1) eingerichtet, mit eigener sudo-Regel.",
         "Hilfsskript system-root (Version 2) eingerichtet, mit eigener sudo-Regel.",
     ]
 
-    # Ein zweiter Lauf ändert nichts und meldet dasselbe.
+    # Ein zweiter Lauf ändert nichts und meldet dasselbe, nur der Schlüssel steht schon da.
     again = _run(_script(helper_dir, SYSTEM, SHIELD), bin_dir)
-    assert again.returncode == 0 and again.stdout == done.stdout
+    assert again.returncode == 0 and again.stdout == done.stdout.replace(f"{host_setup.KEY_ADDED}\n", "")
 
 
 @needs_sh
@@ -123,7 +124,10 @@ def test_a_damaged_helper_is_not_installed_and_gets_no_rule(tmp_path):
     broken = RootHelperFile(**{**SHIELD.__dict__, "sha256": "0" * 64})
     done = _run(_script(helper_dir, broken, SYSTEM), bin_dir)
     assert done.returncode == 0, "ein Hilfsskript ist bisher nicht nötig, der Rest der Einrichtung gilt"
-    assert "Hinweis: Das Hilfsskript shield-root wurde nicht eingerichtet." in done.stdout
+    assert (
+        "Hinweis: Das Hilfsskript shield-root wurde nicht eingerichtet: Die Datei ließ sich nicht prüfen oder nicht sicher "
+        "ablegen." in done.stdout
+    )
     assert not (helper_dir / "shield-root").exists() and not (captured / "nodvard_shield_deck").exists()
     assert (helper_dir / "system-root").exists() and (captured / "nodvard_system_deck").exists()
     assert (captured / "nodvard-deck").exists() and "Fertig." in done.stdout
@@ -197,12 +201,31 @@ def test_without_visudo_the_helpers_are_skipped_quietly(tmp_path):
 
 @needs_sh
 def test_a_helper_rule_is_taken_back_when_the_whole_config_breaks(tmp_path):
-    # Erste Gesamtprüfung (volle Regel) klappt, die zweite (nach der Regel für shield-root) nicht.
-    bin_dir, log, helper_dir, _ = _helper_sandbox(tmp_path, visudo_whole_fails_on_call=2)
+    # Die Gesamtprüfungen vorher und nach der vollen Regel klappen, die dritte (nach der Regel für shield-root) nicht.
+    bin_dir, log, helper_dir, _ = _helper_sandbox(tmp_path, visudo_whole_fails_on_call=3)
     done = _run(_script(helper_dir, SHIELD), bin_dir)
     assert done.returncode == 0, done.stdout
     assert "rm -f /etc/sudoers.d/nodvard_shield_deck" in log.read_text()
-    assert "Hinweis: Das Hilfsskript shield-root wurde nicht eingerichtet." in done.stdout
+    assert (
+        "Hinweis: Das Hilfsskript shield-root wurde nicht eingerichtet: Seine sudo-Regel hat die Prüfung mit visudo nicht "
+        "bestanden." in done.stdout
+    )
+
+
+@needs_sh
+def test_helpers_are_installed_when_another_file_already_breaks_visudo(tmp_path):
+    """Scheitert `visudo -c` an einer fremden Datei, werden die Hilfsskripte trotzdem eingerichtet: Es zählt die Prüfung
+    der eigenen Datei."""
+    bin_dir, log, helper_dir, captured = _helper_sandbox(tmp_path, visudo_whole_fails=True)
+    done = _run(_script(helper_dir, SHIELD, SYSTEM), bin_dir)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (captured / "nodvard_shield_deck").exists() and (captured / "nodvard_system_deck").exists()
+    assert "Hilfsskript shield-root (Version 1) eingerichtet, mit eigener sudo-Regel." in done.stdout
+    assert "Hilfsskript system-root (Version 2) eingerichtet, mit eigener sudo-Regel." in done.stdout
+    assert "wurde nicht eingerichtet" not in done.stdout
+    calls = log.read_text()
+    assert "visudo -c -q -f /etc/sudoers.d/nodvard_shield_deck" in calls
+    assert "rm -f /etc/sudoers.d/" not in calls
 
 
 @needs_sh
@@ -268,7 +291,8 @@ def test_a_command_that_would_be_too_long_is_refused():
 
 def test_notes_name_the_helpers():
     notes = host_setup.setup_notes(USER, groups=[], sudo=True, helpers=["shield-root", "system-root"])
-    assert any("shield-root, system-root" in n and "Die Module nutzen sie schon" in n for n in notes)
-    assert not any("nutzt sie noch nicht" in n for n in notes)
+    assert any("shield-root, system-root" in n and "Die Module rufen ein Skript nur auf" in n for n in notes)
+    # Die Hinweise beschreiben den heutigen Stand, keine Vorgeschichte und keine Pläne.
+    assert not any(word in n for n in notes for word in ("noch nicht", "schon", "Später", "weiter über"))
     assert not any("Hilfsskripte" in n for n in host_setup.setup_notes(USER, groups=[], sudo=True))
     assert not any("Hilfsskripte" in n for n in host_setup.setup_notes(USER, groups=[], sudo=False, helpers=["x-root"]))

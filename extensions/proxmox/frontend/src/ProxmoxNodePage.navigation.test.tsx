@@ -11,7 +11,7 @@ import { renderInShell } from "../../../_shared/frontend/src/testShell";
 vi.mock("../../../../frontend/src/lib/catalog", () => ({
   usePages: () => ({ data: [{ ext_id: "proxmox", path: "/nodes", component: "ProxmoxNodePage" }], isLoading: false }),
 }));
-// ExtensionPage laedt das Bundle per import(url) -- hier durch die echte Seite aus den Quellen ersetzt.
+// ExtensionPage lädt das Bundle per import(url); hier wird es durch die echte Seite aus den Quellen ersetzt.
 vi.mock("/api/v1/extensions/proxmox/frontend/index.js?v=dev", async () => ({ ProxmoxNodePage: (await import("./ProxmoxNodePage")).ProxmoxNodePage }));
 
 const HOSTS = [
@@ -85,13 +85,13 @@ describe("Proxmox-Knoten in der echten Kern-Shell", () => {
     expect(screen.getByRole("tab", { name: "Aufgabenverlauf" })).toHaveAttribute("aria-selected", "true");
     click("Menü Proxmox");
     await tasksShown(2);
-    expect(screen.getByRole("tab", { name: "VMs & Container" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "VMs & LXC" })).toHaveAttribute("aria-selected", "true");
 
     act(() => window.history.back());
     await tasksShown(1);
     expect(screen.getByRole("tab", { name: "Aufgabenverlauf" })).toHaveAttribute("aria-selected", "true");
     act(() => window.history.forward());
     await tasksShown(2);
-    expect(screen.getByRole("tab", { name: "VMs & Container" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "VMs & LXC" })).toHaveAttribute("aria-selected", "true");
   });
 });

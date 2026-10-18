@@ -17,10 +17,11 @@ import { confirmDialog } from "../../state/dialogs";
 import { renderTemplate } from "../template";
 import type { WidgetAction } from "../types";
 
+/** Schlicht (ghost), Farbe erst beim Darüberfahren: Akzent bei `primary`, Rot bei `danger`. */
 const STYLE_CLASS: Record<WidgetAction["style"], string> = {
-  primary: "accent-gradient text-on-accent",
-  secondary: "bg-white/10 text-current hover:bg-white/15",
-  danger: "bg-red-500/20 text-red-200 hover:bg-red-500/30",
+  primary: "hover:border-transparent hover:bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] hover:text-[var(--color-accent-text)]",
+  secondary: "hover:border-transparent hover:bg-white/10 hover:text-white",
+  danger: "hover:border-transparent hover:bg-red-500/15 hover:text-red-300",
 };
 
 /**
@@ -155,7 +156,7 @@ export function ActionButton({ action, row, extId, onDone }: { action: WidgetAct
         type="button"
         disabled={pending}
         onClick={() => void run()}
-        className={`rounded-md px-2 py-0.5 text-[11px] font-medium disabled:opacity-50 ${STYLE_CLASS[action.style]}`}
+        className={`rounded-md border border-white/10 px-2 py-0.5 text-[11px] font-medium text-white/70 transition-colors disabled:opacity-50 ${STYLE_CLASS[action.style]}`}
       >
         {pending ? "…" : action.label}
       </button>

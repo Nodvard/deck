@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 import time
@@ -30,7 +31,15 @@ from .models import (
     ScanRecord,
     SecurityEventRecord,
 )
-from .patching import load_baseline, load_baselines, save_baseline
+from .patching import (
+    auto_update_hosts,
+    last_run_status,
+    load_baseline,
+    load_baselines,
+    no_auto_reboot,
+    save_baseline,
+    schedule_zone,
+)
 from .steps import minute_step
 
 if TYPE_CHECKING:
@@ -56,6 +65,11 @@ _AUDIT_ID_RE = re.compile(r"^audit_[0-9a-f]{16}$")
 # Das Hilfsskript prüft die Datei vorher selbst; ohne clamd lädt clamscan dafür die ganze Datenbank (auf einem
 # kleinen Rechner gut eine Minute).
 QUARANTINE_TIMEOUT = 300
+# Nach einer Zeitüberschreitung kann das Verschieben auf dem Server weiterlaufen (ClamAV prüft die Datei zweimal):
+# so lange und so oft nachsehen, ob sie in der Quarantäne ankommt.
+QUARANTINE_FOLLOW_S = 20 * 60
+QUARANTINE_FOLLOW_INTERVAL_S = 30
+QUARANTINE_STATE_TIMEOUT = 60
 MAX_PARALLEL = 3
 # So lange wartet ein Scan (nicht der Wächter) auf die Sperre des Servers (`av.guard_command`): etwas länger, als ein
 # Wächter-Lauf höchstens dauert.
@@ -98,6 +112,30 @@ REALTIME_UNREADABLE = (
 REALTIME_OUTSIDE = (
     "Der Echtzeit-Wächter meldet einen Fund außerhalb der eingestellten Ordner oder in einer Ausnahme. Es wurde nichts "
     "automatisch verschoben – bitte auf dem Server nachsehen."
+)
+
+QUARANTINE_NO_ANSWER = "Nach {duration} kam keine Rückmeldung vom Server."
+QUARANTINE_FOLLOWING = (
+    "Die Datei kann trotzdem noch in die Quarantäne kommen, das Verschieben läuft auf dem Server womöglich weiter. "
+    "Deck sieht bis {until} Uhr nach und trägt das Ergebnis hier ein."
+)
+QUARANTINE_FOLLOWING_MARK = QUARANTINE_FOLLOWING.split("{until}")[1]
+QUARANTINE_STILL_FOLLOWING = (
+    "Deck sieht noch bis {until} Uhr nach, ob die Datei vom letzten Versuch in die Quarantäne kam – erst danach ist ein "
+    "neuer Versuch möglich."
+)
+QUARANTINE_STILL_RUNNING = "Für diesen Fund läuft gerade schon ein Versuch – bitte warten, bis er fertig ist."
+QUARANTINE_LATE_ABSENT = (
+    "Quarantäne fehlgeschlagen: Der Server hat nicht rechtzeitig geantwortet, und die Datei ist auch danach nicht in "
+    "der Quarantäne angekommen. Bitte erneut versuchen."
+)
+QUARANTINE_LATE_CHECKING = (
+    f"Die Datei liegt noch im Prüfordner der Quarantäne ({av.QUARANTINE_DIR}/{av.CHECK_DIR_NAME}). Bitte auf dem Server "
+    "nachsehen."
+)
+QUARANTINE_LATE_UNKNOWN = (
+    f"Ob die Datei in die Quarantäne kam, ließ sich nicht feststellen. Bitte auf dem Server unter {av.QUARANTINE_DIR} "
+    "und am ursprünglichen Ort nachsehen."
 )
 
 KIND_LABEL = {"quick": "Schnellscan", "deep": "Tiefenscan", "watch": "Echtzeit-Wächter", "custom": "Scan"}
@@ -220,6 +258,9 @@ class Defender:
         # Höchstens so viele Audits starten gleichzeitig (Server auf derselben Hardware, z. B. VMs eines Proxmox).
         self._audit_slots = asyncio.Semaphore(MAX_PARALLEL)
         self._audit_tasks: set[asyncio.Future[Any]] = set()
+        # Funde, bei denen nach einer Zeitüberschreitung noch nachgesehen wird, ob sie in die Quarantäne kamen.
+        self._quarantine_follow: dict[str, tuple[asyncio.Future[Any], str]] = {}
+        self._quarantining: set[str] = set()  # Funde, deren Verschieben gerade läuft: ein zweiter Klick wartet
         # Beim Start aus der Datenbank geholte Audits, die `resume_audits` weiter abfragt.
         self._audits_to_resume: list[tuple[str, dict[str, Any]]] = []
 
@@ -354,7 +395,8 @@ class Defender:
         """Holt neue Funde aus dem Protokoll des Echtzeit-Wächters und prüft jeden noch einmal über clamd.
 
         `None`, wenn der Wächter dort nicht in Echtzeit läuft: Dann prüft dieser Lauf wie bisher im Minuten-Takt."""
-        if not ((await load_baseline(self._ctx, host.id, rt.STATE_KIND)) or {}).get("enabled"):
+        state = (await load_baseline(self._ctx, host.id, rt.STATE_KIND)) or {}
+        if not state.get("enabled"):
             return None
         line = ((await load_baseline(self._ctx, host.id, rt.POSITION_KIND)) or {}).get("line")
         if isinstance(line, bool) or not isinstance(line, int) or not 0 <= line <= rt.MAX_LINE:
@@ -366,14 +408,23 @@ class Defender:
             return av.ScanResult(status="error", error=_describe(exc, timeout_s=STATUS_TIMEOUT)), ""
         stdout = res.stdout or ""
         if av.NO_ROOT in stdout:
-            return av.ScanResult(status="error", error=av.NO_ROOT_MESSAGE), ""
+            return av.ScanResult(status="error", error=av.no_root_message(stdout)), ""
         chunk = rt.parse_log(stdout)
         if chunk is None:
             return av.ScanResult(status="error", error=REALTIME_LOG_BROKEN), stdout[-4000:]
+        # Der Rückfall steht in einer eigenen Zeile (`DOWN_KIND`), nicht im Schalter: Schaltet jemand während des Laufs aus,
+        # schriebe der Lauf sonst „eingeschaltet“ zurück. `changed_at` bindet ihn an genau dieses Einschalten.
+        down = (await load_baseline(self._ctx, host.id, rt.DOWN_KIND)) or {}
         if not chunk.active and not chunk.lines:
-            # clamonacc läuft nicht (etwa nach einem Absturz), und das Protokoll ist abgeholt: Minuten-Takt wie bisher.
+            # clamonacc läuft nicht (etwa nach einem Absturz), und das Protokoll ist abgeholt: Minuten-Takt. Das zeigt
+            # `/realtime/readiness`, eingeschaltet bleibt der Wächter (läuft clamonacc wieder, gilt Echtzeit).
             _log.warning("shield_realtime_inactive host=%s", host.id)
+            if not down.get("since") or down.get("changed_at") != state.get("changed_at"):
+                marker = {"since": _now().isoformat(), "changed_at": state.get("changed_at")}
+                await save_baseline(self._ctx, host.id, rt.DOWN_KIND, marker)
             return None
+        if chunk.active and down:
+            await save_baseline(self._ctx, host.id, rt.DOWN_KIND, {})
         candidates = rt.found_lines(chunk.lines)
         confirmed = await self._confirm_realtime(host, [path for path, _ in candidates]) if candidates else {}
         if confirmed is None:
@@ -590,10 +641,25 @@ class Defender:
             return False, "Unbekannter Fund."
         if finding.status != "detected":
             return False, "Dieser Fund ist nicht (mehr) offen."
+        if finding_id in self._quarantine_follow:
+            return False, QUARANTINE_STILL_FOLLOWING.format(until=self._quarantine_follow[finding_id][1])
+        if finding_id in self._quarantining:
+            return False, QUARANTINE_STILL_RUNNING
+        # Ohne await zwischen Prüfung und Eintrag: Zwei gleichzeitige Klicks starten nie zwei Läufe. Frei wird der Fund erst,
+        # wenn eine Nachschau eingetragen ist.
+        self._quarantining.add(finding_id)
+        try:
+            return await self._move_to_quarantine(finding, actor)
+        finally:
+            self._quarantining.discard(finding_id)
+
+    async def _move_to_quarantine(self, finding: FindingRecord, actor: Actor | None) -> tuple[bool, str]:
+        finding_id = finding.id
         host = await self._ctx.hosts.get(finding.host_id)
         if host is None:
             return False, "Server nicht mehr bekannt."
         qname = av.quarantine_name(finding.id, finding.path)
+        unanswered = False
         try:
             command = av.via_helper(
                 av.quarantine_args(finding.path, qname), av.quarantine_command(finding.path, qname),
@@ -606,6 +672,15 @@ class Defender:
                 message = av.no_root_message(result.stdout)
         except Exception as exc:  # noqa: BLE001
             ok, message = False, _describe(exc, timeout_s=QUARANTINE_TIMEOUT)
+            # Nur wenn der Befehl losgeschickt war und die Antwort ausblieb, kann das Verschieben weiterlaufen; eine
+            # abgelehnte Anmeldung, ein fremder Schlüssel oder ein nicht erreichbarer Server kommen nie bis dahin.
+            unanswered = _lost_in_flight(exc)
+            if unanswered and isinstance(exc, TimeoutError):
+                message = QUARANTINE_NO_ANSWER.format(duration=av.duration_text(QUARANTINE_TIMEOUT))
+        until = ""
+        if unanswered:
+            until = (_now() + timedelta(seconds=QUARANTINE_FOLLOW_S)).astimezone(await schedule_zone(self._ctx)).strftime("%H:%M")
+            message = f"{message} {QUARANTINE_FOLLOWING.format(until=until)}"
         async with self._ctx.db.session() as session:
             row = await session.get(FindingRecord, finding_id)
             if row is not None:
@@ -615,14 +690,105 @@ class Defender:
                     row.original_mode = av.parse_mode(message)
                     row.note = None
                 else:
-                    row.note = f"Quarantäne fehlgeschlagen: {message[-300:]}"
+                    row.note = message if unanswered else f"Quarantäne fehlgeschlagen: {message[-300:]}"
                 row.status_changed_at = _now()
         await self._ctx.audit.log(
             action=f"{EXT_ID}.quarantine", outcome="success" if ok else "failure", target_type="host", target_id=finding.host_id,
             reason=finding.path, detail={"finding_id": finding_id, "signature": finding.signature, "automatic": actor is None},
             correlation_id=finding.scan_id, **({"actor": actor} if actor is not None else {}),
         )
+        if unanswered:
+            task = asyncio.ensure_future(self._follow_quarantine(host, finding, qname, actor))
+            self._quarantine_follow[finding_id] = (task, until)
+            task.add_done_callback(lambda _t: self._quarantine_follow.pop(finding_id, None))
         return ok, "In Quarantäne verschoben." if ok else message
+
+    async def _follow_quarantine(self, host: Host, finding: FindingRecord, qname: str, actor: Actor | None) -> None:
+        """Sieht nach einer Zeitüberschreitung nach, ob die Datei doch in der Quarantäne ankam, und trägt das am Fund ein."""
+        command = av.via_helper(
+            av.quarantine_state_args(qname), av.quarantine_state_command(qname), version=av.HELPER_QUARANTINE_STATE_VERSION,
+        )
+        deadline = time.monotonic() + QUARANTINE_FOLLOW_S
+        state, output, written = None, "", False
+        try:
+            # „Nicht da“ zählt erst am Ende: Vorher kann ClamAV die Datei noch an ihrem Ort prüfen.
+            while time.monotonic() < deadline:
+                await asyncio.sleep(QUARANTINE_FOLLOW_INTERVAL_S)
+                try:
+                    res = await self._ctx.exec.run(host, command, timeout_s=QUARANTINE_STATE_TIMEOUT)
+                except Exception:  # noqa: BLE001 - Server noch nicht wieder erreichbar: weiter nachsehen
+                    _log.debug("shield_quarantine_follow_unreachable host=%s finding=%s", host.id, finding.id)
+                    # Was eine frühere Abfrage sah, gilt ohne neue Antwort nicht mehr.
+                    state, output = None, ""
+                    continue
+                output = res.stdout or ""
+                if av.NO_ROOT in output:
+                    # Ohne root antwortet jede weitere Abfrage genauso.
+                    state = None
+                    break
+                state = av.parse_quarantine_state(output)
+                if state == "quarantined":
+                    break
+            written = await self._settle_quarantine(finding, qname, state, output)
+            if written and state == "quarantined":
+                await self._ctx.audit.log(
+                    action=f"{EXT_ID}.quarantine", outcome="success", target_type="host", target_id=finding.host_id,
+                    reason=finding.path,
+                    detail={"finding_id": finding.id, "signature": finding.signature, "automatic": actor is None, "late": True},
+                    correlation_id=finding.scan_id, **({"actor": actor} if actor is not None else {}),
+                )
+            await self._ctx.ws.broadcast("defender", {"finding": finding.id})
+        except BaseException:
+            # Abgebrochen (Neustart, Erweiterung aus) oder gescheitert: das Versprechen am Fund nicht stehen lassen.
+            if not written:
+                _log.warning("shield_quarantine_follow_stopped host=%s finding=%s", host.id, finding.id, exc_info=True)
+                with contextlib.suppress(Exception):
+                    await asyncio.shield(self._note_unfinished(finding.id))
+            raise
+
+    async def _settle_quarantine(self, finding: FindingRecord, qname: str, state: str | None, output: str) -> bool:
+        """Trägt das Ergebnis der Nachschau am Fund ein; `False`, wenn der Fund inzwischen anders erledigt ist."""
+        async with self._ctx.db.session() as session:
+            row = await session.get(FindingRecord, finding.id)
+            # Wer den Fund inzwischen ignoriert hat, bekommt trotzdem die Wahrheit: Die Datei liegt in der Quarantäne.
+            if row is None or row.status not in (("detected", "ignored") if state == "quarantined" else ("detected",)):
+                return False
+            if state == "quarantined":
+                row.status = "quarantined"
+                row.quarantine_path = f"{av.QUARANTINE_DIR}/{qname}"
+                row.original_mode = av.parse_mode(output)
+                row.note = None
+            elif state == "absent":
+                row.note = QUARANTINE_LATE_ABSENT
+            elif state == "checking":
+                row.note = QUARANTINE_LATE_CHECKING
+            else:
+                row.note = QUARANTINE_LATE_UNKNOWN
+            row.status_changed_at = _now()
+        return True
+
+    async def _note_unfinished(self, finding_id: str) -> None:
+        async with self._ctx.db.session() as session:
+            row = await session.get(FindingRecord, finding_id)
+            if row is not None and row.status == "detected":
+                row.note = QUARANTINE_LATE_UNKNOWN
+                row.status_changed_at = _now()
+
+    async def drop_stale_follow_notes(self) -> int:
+        """Beim Start: Eine Nachschau aus der Zeit vor dem Neustart läuft nicht mehr; ihr Versprechen am Fund wird ersetzt."""
+        async with self._ctx.db.session() as session:
+            rows = (await session.execute(
+                select(FindingRecord).where(FindingRecord.status == "detected", FindingRecord.note.contains(QUARANTINE_FOLLOWING_MARK))
+            )).scalars().all()
+            for row in rows:
+                row.note = QUARANTINE_LATE_UNKNOWN
+                row.status_changed_at = _now()
+            return len(rows)
+
+    def cancel_quarantine_follow(self) -> None:
+        """Beim Beenden der Erweiterung: nicht weiter nachsehen; der Fund bekommt den Hinweis, selbst nachzusehen."""
+        for task, _until in list(self._quarantine_follow.values()):
+            task.cancel()
 
     async def apply_action_result(self, finding_id: str, action: str, ok: bool, message: str) -> None:
         """Zieht den Fund nach Wiederherstellen oder Löschen (über das Gate) nach."""
@@ -1068,11 +1234,19 @@ class Defender:
         protected = sum(1 for r in rows if r.get("clamav_installed"))
         indices = [r["last_ok_audit"]["hardening_index"] for r in rows if r.get("last_ok_audit")]
         settings = await self._settings()
+        updates_state = await load_baselines(self._ctx, "updates")
         # Der Schutzwert zählt auch Updates, Einbruchschutz und SSH-Einstellungen (protection.posture_penalty).
         penalty, reasons = protection.posture_penalty(
-            [r["host_id"] for r in rows], await load_baselines(self._ctx, "updates"), await load_baselines(self._ctx, "guard"),
-            int(critical_events),
+            [r["host_id"] for r in rows], updates_state, await load_baselines(self._ctx, "guard"), int(critical_events),
         )
+        held_reboots: set[str] = set()
+        if settings.get("auto_updates_enabled", False) and settings.get("auto_reboot", False):
+            for h in auto_update_hosts(hosts, settings):
+                st = updates_state.get(h.id) or {}
+                # Nur ein gescheiterter Lauf hält den Neustart auf; ein laufender ist noch kein Grund zur Sorge.
+                if (st.get("reboot_required") and not st.get("reboot_pending_since") and not no_auto_reboot(h, settings)
+                        and await last_run_status(self._ctx, h.id) == "error"):
+                    held_reboots.add(h.id)
         reasons = protection.signature_reasons(rows) + _scan_reasons(rows) + reasons
         return {
             "hosts": rows,
@@ -1090,7 +1264,7 @@ class Defender:
                 "score_reasons": ([f"{'1 offene Bedrohung' if open_threats == 1 else f'{open_threats} offene Bedrohungen'} (−{min(40, open_threats * 20)})"] if open_threats else [])
                 + reasons,
             },
-            "attention": protection.attention_items(rows),
+            "attention": protection.attention_items(rows, frozenset(held_reboots)),
             "config": {
                 "auto_quarantine": settings.get("auto_quarantine", True),
                 "realtime_enabled": settings.get("realtime_enabled", True),
@@ -1335,6 +1509,15 @@ def _score(rows: list[dict[str, Any]], open_threats: int, indices: list[int]) ->
     score -= min(40, open_threats * 20)
     score -= protection.signature_penalty(rows)
     return max(0, min(100, round(score)))
+
+
+def _lost_in_flight(exc: BaseException) -> bool:
+    """Riss die Verbindung ab oder blieb die Antwort aus, nachdem der Befehl losgeschickt war?"""
+    if getattr(exc, "readable", False):
+        return False  # Fehler beim Verbindungsaufbau aus dem Kern: Der Befehl ging nie hinaus.
+    if isinstance(exc, TimeoutError | ConnectionError):
+        return True
+    return any(cls.__module__.split(".")[0] == "asyncssh" for cls in type(exc).__mro__)
 
 
 def _describe(exc: BaseException, *, timeout_s: float | None = None) -> str:

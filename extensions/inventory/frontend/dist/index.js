@@ -1,5 +1,5 @@
 // src/InventoryPage.tsx
-import { useCallback, useEffect as useEffect3, useState as useState3 } from "react";
+import { useCallback, useEffect as useEffect4, useState as useState4 } from "react";
 
 // ../../../frontend/src/lib/deckGlobal.ts
 function findDeck() {
@@ -327,9 +327,23 @@ function LoadError({ what, error, onRetry, hint, compact = false }) {
   ] });
 }
 
+// ../../_shared/frontend/src/links.tsx
+import { useEffect as useEffect2, useState as useState2 } from "react";
+import { jsx as jsx4 } from "react/jsx-runtime";
+function safeHref(url) {
+  const text = url?.trim();
+  if (!text || !/^https?:\/\//i.test(text)) return void 0;
+  try {
+    const parsed = new URL(text);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? text : void 0;
+  } catch {
+    return void 0;
+  }
+}
+
 // ../../_shared/frontend/src/menu.tsx
-import { useEffect as useEffect2, useRef, useState as useState2 } from "react";
-import { jsx as jsx4, jsxs as jsxs3 } from "react/jsx-runtime";
+import { useEffect as useEffect3, useRef, useState as useState3 } from "react";
+import { jsx as jsx5, jsxs as jsxs3 } from "react/jsx-runtime";
 function MoreMenu({
   items,
   label = "Mehr",
@@ -339,14 +353,14 @@ function MoreMenu({
   testId
 }) {
   const ref = useRef(null);
-  const [open, setOpen] = useState2(false);
+  const [open, setOpen] = useState3(false);
   const close = (refocus) => {
     const details = ref.current;
     if (!details) return;
     if (refocus) details.querySelector("summary")?.focus();
     details.open = false;
   };
-  useEffect2(() => {
+  useEffect3(() => {
     if (!open) return;
     const outside = (e) => {
       if (ref.current && !ref.current.contains(e.target)) close(false);
@@ -377,13 +391,13 @@ function MoreMenu({
         /* @__PURE__ */ jsxs3("summary", { title, "aria-label": `${label}: ${title}`, className: `${buttonClass("secondary", small)} cursor-pointer list-none [&::-webkit-details-marker]:hidden`, children: [
           label,
           " ",
-          /* @__PURE__ */ jsx4(Icon, { name: "chevron-down", size: small ? 12 : 14 })
+          /* @__PURE__ */ jsx5(Icon, { name: "chevron-down", size: small ? 12 : 14 })
         ] }),
-        /* @__PURE__ */ jsx4(
+        /* @__PURE__ */ jsx5(
           "div",
           {
             className: `absolute ${align === "right" ? "right-0" : "left-0"} z-20 mt-1 flex w-56 max-w-[calc(100vw-2rem)] flex-col rounded-xl border border-white/10 bg-[var(--color-surface)] p-1 shadow-xl`,
-            children: items.map((item) => /* @__PURE__ */ jsx4(
+            children: items.map((item) => /* @__PURE__ */ jsx5(
               "button",
               {
                 type: "button",
@@ -709,7 +723,7 @@ function rowsFromCsv(text) {
 }
 
 // src/InventoryPage.tsx
-import { Fragment as Fragment2, jsx as jsx5, jsxs as jsxs4 } from "react/jsx-runtime";
+import { Fragment as Fragment2, jsx as jsx6, jsxs as jsxs4 } from "react/jsx-runtime";
 function itemPayload(item, changes = {}) {
   const i = { ...item, ...changes };
   return {
@@ -840,9 +854,9 @@ function TaxonomyPanel({
   locations,
   onChanged
 }) {
-  const [newCategory, setNewCategory] = useState3("");
-  const [newLocation, setNewLocation] = useState3("");
-  const [message, setMessage] = useState3(null);
+  const [newCategory, setNewCategory] = useState4("");
+  const [newLocation, setNewLocation] = useState4("");
+  const [message, setMessage] = useState4(null);
   async function add(kind, name, reset) {
     if (!name.trim()) return;
     const res = await authedFetch(`/ext/inventory/${kind}`, { method: "POST", body: JSON.stringify({ name: name.trim() }) });
@@ -862,27 +876,27 @@ function TaxonomyPanel({
   }
   const column = (title, icon, entries, kind, value, setValue, placeholder, what) => /* @__PURE__ */ jsxs4("div", { children: [
     /* @__PURE__ */ jsxs4("p", { className: "mb-2 flex items-center gap-1.5 text-xs font-medium text-white/45", children: [
-      /* @__PURE__ */ jsx5(Icon, { name: icon, size: 13 }),
+      /* @__PURE__ */ jsx6(Icon, { name: icon, size: 13 }),
       " ",
       title
     ] }),
     /* @__PURE__ */ jsxs4("div", { className: "mb-3 flex flex-wrap gap-1.5", children: [
       entries.map((e) => /* @__PURE__ */ jsxs4("span", { className: "inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] py-1 pl-2.5 pr-1.5 text-sm", children: [
         e.name,
-        /* @__PURE__ */ jsx5("button", { type: "button", "aria-label": `${e.name} entfernen`, onClick: () => void remove(kind, e.id, what), className: "rounded p-0.5 text-white/40 hover:bg-white/10 hover:text-white", children: /* @__PURE__ */ jsx5(Icon, { name: "x", size: 12 }) })
+        /* @__PURE__ */ jsx6("button", { type: "button", "aria-label": `${e.name} entfernen`, onClick: () => void remove(kind, e.id, what), className: "rounded p-0.5 text-white/40 hover:bg-white/10 hover:text-white", children: /* @__PURE__ */ jsx6(Icon, { name: "x", size: 12 }) })
       ] }, e.id)),
-      entries.length === 0 && /* @__PURE__ */ jsx5("span", { className: "text-sm text-white/40", children: "Noch keine." })
+      entries.length === 0 && /* @__PURE__ */ jsx6("span", { className: "text-sm text-white/40", children: "Noch keine." })
     ] }),
     /* @__PURE__ */ jsxs4("form", { onSubmit: (e) => {
       e.preventDefault();
       void add(kind, value, () => setValue(""));
     }, className: "flex gap-2", children: [
-      /* @__PURE__ */ jsx5("input", { value, onChange: (e) => setValue(e.target.value), placeholder, className: inputClass }),
-      /* @__PURE__ */ jsx5(Button, { type: "submit", ariaLabel: `${what} hinzuf\xFCgen`, children: /* @__PURE__ */ jsx5(Icon, { name: "plus", size: 14 }) })
+      /* @__PURE__ */ jsx6("input", { value, onChange: (e) => setValue(e.target.value), placeholder, className: inputClass }),
+      /* @__PURE__ */ jsx6(Button, { type: "submit", ariaLabel: `${what} hinzuf\xFCgen`, children: /* @__PURE__ */ jsx6(Icon, { name: "plus", size: 14 }) })
     ] })
   ] });
   return /* @__PURE__ */ jsxs4(Card, { title: "Kategorien & Standorte", description: "Zum Ordnen und Filtern. Entfernen l\xE4sst die Gegenst\xE4nde selbst unver\xE4ndert.", className: "mb-5", children: [
-    message && /* @__PURE__ */ jsx5(Notice, { text: message, onClose: () => setMessage(null) }),
+    message && /* @__PURE__ */ jsx6(Notice, { text: message, onClose: () => setMessage(null) }),
     /* @__PURE__ */ jsxs4("div", { className: "grid gap-6 sm:grid-cols-2", children: [
       column("Kategorien", "tag", categories, "categories", newCategory, setNewCategory, "Neue Kategorie", "Kategorie"),
       column("Standorte", "map-pin", locations, "locations", newLocation, setNewLocation, "Neuer Standort", "Standort")
@@ -895,9 +909,9 @@ function ProjectsPanel({
   onShowItems,
   activeId
 }) {
-  const [name, setName] = useState3("");
-  const [budget, setBudget] = useState3("");
-  const [message, setMessage] = useState3(null);
+  const [name, setName] = useState4("");
+  const [budget, setBudget] = useState4("");
+  const [message, setMessage] = useState4(null);
   async function send(path, method, body) {
     const res = await authedFetch(path, { method, ...body === void 0 ? {} : { body: JSON.stringify(body) } });
     if (!res.ok && res.status !== 204) {
@@ -926,13 +940,13 @@ function ProjectsPanel({
     if (ok) await send(`/ext/inventory/projects/${project.id}`, "DELETE");
   }
   return /* @__PURE__ */ jsxs4(Card, { title: "Bauprojekte", description: "Plane, was du bauen willst, und sieh, welche Teile daf\xFCr da sind und was es kostet.", className: "mb-5", children: [
-    message && /* @__PURE__ */ jsx5(Notice, { text: message, onClose: () => setMessage(null) }),
-    projects.length === 0 && /* @__PURE__ */ jsx5("p", { className: "mb-3 text-sm text-white/45", children: "Noch kein Bauprojekt." }),
-    /* @__PURE__ */ jsx5("ul", { className: "mb-4 divide-y divide-white/[0.06]", "data-testid": "projects", children: projects.map((p) => {
+    message && /* @__PURE__ */ jsx6(Notice, { text: message, onClose: () => setMessage(null) }),
+    projects.length === 0 && /* @__PURE__ */ jsx6("p", { className: "mb-3 text-sm text-white/45", children: "Noch kein Bauprojekt." }),
+    /* @__PURE__ */ jsx6("ul", { className: "mb-4 divide-y divide-white/[0.06]", "data-testid": "projects", children: projects.map((p) => {
       const over = p.budget_cents != null && p.spent_cents > p.budget_cents;
       return /* @__PURE__ */ jsxs4("li", { className: "flex flex-wrap items-center gap-2 py-2 text-sm", "data-testid": `project-${p.id}`, children: [
-        /* @__PURE__ */ jsx5("span", { className: "font-medium", children: p.name }),
-        /* @__PURE__ */ jsx5(Badge, { tone: PROJECT_STATUS[p.status]?.tone ?? "neutral", children: PROJECT_STATUS[p.status]?.label ?? p.status }),
+        /* @__PURE__ */ jsx6("span", { className: "font-medium", children: p.name }),
+        /* @__PURE__ */ jsx6(Badge, { tone: PROJECT_STATUS[p.status]?.tone ?? "neutral", children: PROJECT_STATUS[p.status]?.label ?? p.status }),
         /* @__PURE__ */ jsxs4("span", { className: "text-white/55", children: [
           p.item_count === 1 ? "1 Teil" : `${p.item_count} Teile`,
           " \xB7 ",
@@ -947,9 +961,9 @@ function ProjectsPanel({
             p.unpriced_count === 1 ? "1 Teil ohne Preis" : `${p.unpriced_count} Teile ohne Preis`
           ] })
         ] }),
-        over && /* @__PURE__ */ jsx5(Badge, { tone: "bad", children: "\xFCber Budget" }),
-        /* @__PURE__ */ jsx5("span", { className: "flex-1" }),
-        /* @__PURE__ */ jsx5(
+        over && /* @__PURE__ */ jsx6(Badge, { tone: "bad", children: "\xFCber Budget" }),
+        /* @__PURE__ */ jsx6("span", { className: "flex-1" }),
+        /* @__PURE__ */ jsx6(
           "select",
           {
             value: p.status,
@@ -961,34 +975,34 @@ function ProjectsPanel({
               description: p.description,
               budget_cents: p.budget_cents
             }),
-            children: Object.keys(PROJECT_STATUS).map((st) => /* @__PURE__ */ jsx5("option", { value: st, children: PROJECT_STATUS[st].label }, st))
+            children: Object.keys(PROJECT_STATUS).map((st) => /* @__PURE__ */ jsx6("option", { value: st, children: PROJECT_STATUS[st].label }, st))
           }
         ),
-        /* @__PURE__ */ jsx5(Button, { small: true, pressed: activeId === p.id, onClick: () => onShowItems(p.id), children: "Teile zeigen" }),
-        /* @__PURE__ */ jsx5(Button, { small: true, variant: "danger", ariaLabel: `${p.name} entfernen`, onClick: () => void remove(p), children: /* @__PURE__ */ jsx5(Icon, { name: "trash", size: 13 }) })
+        /* @__PURE__ */ jsx6(Button, { small: true, pressed: activeId === p.id, onClick: () => onShowItems(p.id), children: "Teile zeigen" }),
+        /* @__PURE__ */ jsx6(Button, { small: true, variant: "danger", ariaLabel: `${p.name} entfernen`, onClick: () => void remove(p), children: /* @__PURE__ */ jsx6(Icon, { name: "trash", size: 13 }) })
       ] }, p.id);
     }) }),
     /* @__PURE__ */ jsxs4("form", { onSubmit: (e) => void create(e), className: "flex flex-wrap gap-2", children: [
-      /* @__PURE__ */ jsx5("input", { value: name, onChange: (e) => setName(e.target.value), placeholder: "Neues Bauprojekt, z. B. NAS bauen", "aria-label": "Name des Bauprojekts", className: `${inlineInput} min-w-[12rem] flex-1` }),
-      /* @__PURE__ */ jsx5("input", { value: budget, onChange: (e) => setBudget(e.target.value), type: "number", min: "0", max: "10000000", step: "0.01", placeholder: "Budget (\u20AC, optional)", "aria-label": "Budget in Euro", className: `${inlineInput} w-44` }),
+      /* @__PURE__ */ jsx6("input", { value: name, onChange: (e) => setName(e.target.value), placeholder: "Neues Bauprojekt, z. B. NAS bauen", "aria-label": "Name des Bauprojekts", className: `${inlineInput} min-w-[12rem] flex-1` }),
+      /* @__PURE__ */ jsx6("input", { value: budget, onChange: (e) => setBudget(e.target.value), type: "number", min: "0", max: "10000000", step: "0.01", placeholder: "Budget (\u20AC, optional)", "aria-label": "Budget in Euro", className: `${inlineInput} w-44` }),
       /* @__PURE__ */ jsxs4(Button, { type: "submit", variant: "primary", disabled: !name.trim(), children: [
-        /* @__PURE__ */ jsx5(Icon, { name: "plus", size: 14 }),
+        /* @__PURE__ */ jsx6(Icon, { name: "plus", size: 14 }),
         " Anlegen"
       ] })
     ] })
   ] });
 }
 function RacksPanel({ items, onChanged }) {
-  const [racks, setRacks] = useState3(null);
-  const [loadError, setLoadError] = useState3(null);
-  const [selected, setSelected] = useState3("");
-  const [message, setMessage] = useState3(null);
-  const [name, setName] = useState3("");
-  const [height, setHeight] = useState3("42");
-  const [placing, setPlacing] = useState3(null);
-  const [placeItem, setPlaceItem] = useState3("");
-  const [placeUnits, setPlaceUnits] = useState3("1");
-  const [rackItems, setRackItems] = useState3(null);
+  const [racks, setRacks] = useState4(null);
+  const [loadError, setLoadError] = useState4(null);
+  const [selected, setSelected] = useState4("");
+  const [message, setMessage] = useState4(null);
+  const [name, setName] = useState4("");
+  const [height, setHeight] = useState4("42");
+  const [placing, setPlacing] = useState4(null);
+  const [placeItem, setPlaceItem] = useState4("");
+  const [placeUnits, setPlaceUnits] = useState4("1");
+  const [rackItems, setRackItems] = useState4(null);
   const loadRackItems = useCallback((rackId) => {
     if (!rackId) {
       setRackItems([]);
@@ -996,7 +1010,7 @@ function RacksPanel({ items, onChanged }) {
     }
     fetchJson(`/ext/inventory/items?rack_id=${encodeURIComponent(rackId)}`).then(setRackItems).catch((err) => setMessage(`Fehler: ${errorMessage(err)}`));
   }, []);
-  useEffect3(() => {
+  useEffect4(() => {
     loadRackItems(selected);
   }, [selected, loadRackItems, items]);
   const loadRacks = useCallback(() => {
@@ -1006,7 +1020,7 @@ function RacksPanel({ items, onChanged }) {
       setSelected((current) => data.some((r) => r.id === current) ? current : data[0]?.id ?? "");
     }).catch((err) => setLoadError(errorMessage(err)));
   }, []);
-  useEffect3(() => {
+  useEffect4(() => {
     loadRacks();
   }, [loadRacks]);
   async function send(path, method, body) {
@@ -1070,14 +1084,14 @@ function RacksPanel({ items, onChanged }) {
       onChanged();
     }
   }
-  if (loadError) return /* @__PURE__ */ jsx5(LoadError, { what: "Die Liste der Racks", error: loadError, onRetry: loadRacks });
-  if (!racks) return /* @__PURE__ */ jsx5(Card, { title: "Racks", className: "mb-5", children: /* @__PURE__ */ jsx5(Loading, {}) });
+  if (loadError) return /* @__PURE__ */ jsx6(LoadError, { what: "Die Liste der Racks", error: loadError, onRetry: loadRacks });
+  if (!racks) return /* @__PURE__ */ jsx6(Card, { title: "Racks", className: "mb-5", children: /* @__PURE__ */ jsx6(Loading, {}) });
   const rack = racks.find((r) => r.id === selected) ?? null;
   const inRack = rack ? (rackItems ?? []).filter((i) => i.rack_id === rack.id) : [];
   const unplaced = inRack.filter((i) => i.rack_position == null);
   const candidates = items.filter((i) => i.rack_id !== rack?.id);
   return /* @__PURE__ */ jsxs4(Card, { title: "Racks", description: "Wo welches Ger\xE4t im Serverschrank steckt. H\xF6heneinheiten (HE) von oben nach unten.", className: "mb-5", children: [
-    message && /* @__PURE__ */ jsx5(Notice, { text: message, onClose: () => setMessage(null) }),
+    message && /* @__PURE__ */ jsx6(Notice, { text: message, onClose: () => setMessage(null) }),
     /* @__PURE__ */ jsxs4("div", { className: "mb-4 flex flex-wrap items-center gap-2", children: [
       racks.map((r) => /* @__PURE__ */ jsxs4(Button, { small: true, pressed: r.id === selected, onClick: () => setSelected(r.id), children: [
         r.name,
@@ -1085,15 +1099,15 @@ function RacksPanel({ items, onChanged }) {
         r.height_units,
         " HE"
       ] }, r.id)),
-      racks.length === 0 && /* @__PURE__ */ jsx5("span", { className: "text-sm text-white/45", children: "Noch kein Rack." })
+      racks.length === 0 && /* @__PURE__ */ jsx6("span", { className: "text-sm text-white/45", children: "Noch kein Rack." })
     ] }),
     rack && /* @__PURE__ */ jsxs4("div", { className: "mb-4", children: [
       /* @__PURE__ */ jsxs4("div", { className: "mb-2 flex items-center gap-2", children: [
-        /* @__PURE__ */ jsx5("span", { className: "text-sm font-medium", children: rack.name }),
-        /* @__PURE__ */ jsx5("span", { className: "flex-1" }),
-        /* @__PURE__ */ jsx5(Button, { small: true, variant: "danger", ariaLabel: `Rack ${rack.name} entfernen`, onClick: () => void removeRack(rack), children: /* @__PURE__ */ jsx5(Icon, { name: "trash", size: 13 }) })
+        /* @__PURE__ */ jsx6("span", { className: "text-sm font-medium", children: rack.name }),
+        /* @__PURE__ */ jsx6("span", { className: "flex-1" }),
+        /* @__PURE__ */ jsx6(Button, { small: true, variant: "danger", ariaLabel: `Rack ${rack.name} entfernen`, onClick: () => void removeRack(rack), children: /* @__PURE__ */ jsx6(Icon, { name: "trash", size: 13 }) })
       ] }),
-      /* @__PURE__ */ jsx5("ol", { className: "max-w-xl overflow-hidden rounded-lg border border-white/15 bg-black/25", "data-testid": `rack-${rack.id}`, children: rackRows(rack.height_units, inRack).map(
+      /* @__PURE__ */ jsx6("ol", { className: "max-w-xl overflow-hidden rounded-lg border border-white/15 bg-black/25", "data-testid": `rack-${rack.id}`, children: rackRows(rack.height_units, inRack).map(
         (row) => row.kind === "device" ? /* @__PURE__ */ jsxs4(
           "li",
           {
@@ -1101,9 +1115,9 @@ function RacksPanel({ items, onChanged }) {
             style: { minHeight: `${(row.top - row.bottom + 1) * 1.75}rem` },
             "data-testid": `rack-device-${row.item.id}`,
             children: [
-              /* @__PURE__ */ jsx5("span", { className: "w-14 flex-none tabular-nums text-white/45", children: row.top === row.bottom ? `HE ${row.top}` : `HE ${row.bottom}\u2013${row.top}` }),
-              /* @__PURE__ */ jsx5("span", { className: "min-w-0 flex-1 truncate font-medium", children: row.item.name }),
-              /* @__PURE__ */ jsx5(Button, { small: true, variant: "ghost", onClick: () => void takeOut(row.item), children: "Herausnehmen" })
+              /* @__PURE__ */ jsx6("span", { className: "w-14 flex-none tabular-nums text-white/45", children: row.top === row.bottom ? `HE ${row.top}` : `HE ${row.bottom}\u2013${row.top}` }),
+              /* @__PURE__ */ jsx6("span", { className: "min-w-0 flex-1 truncate font-medium", children: row.item.name }),
+              /* @__PURE__ */ jsx6(Button, { small: true, variant: "ghost", onClick: () => void takeOut(row.item), children: "Herausnehmen" })
             ]
           },
           `d-${row.item.id}`
@@ -1117,23 +1131,23 @@ function RacksPanel({ items, onChanged }) {
             void place(rack, row.unit);
           }, className: "flex flex-1 flex-wrap items-center gap-1.5 py-1 text-white", children: [
             /* @__PURE__ */ jsxs4("select", { value: placeItem, onChange: (e) => setPlaceItem(e.target.value), "aria-label": "Ger\xE4t", className: `${inlineInput} w-auto flex-1 py-1 text-xs`, children: [
-              /* @__PURE__ */ jsx5("option", { value: "", children: "Ger\xE4t w\xE4hlen \u2026" }),
-              candidates.map((i) => /* @__PURE__ */ jsx5("option", { value: i.id, children: i.name }, i.id))
+              /* @__PURE__ */ jsx6("option", { value: "", children: "Ger\xE4t w\xE4hlen \u2026" }),
+              candidates.map((i) => /* @__PURE__ */ jsx6("option", { value: i.id, children: i.name }, i.id))
             ] }),
             /* @__PURE__ */ jsxs4("label", { className: "flex items-center gap-1 text-white/60", children: [
               "H\xF6he",
-              /* @__PURE__ */ jsx5("input", { value: placeUnits, onChange: (e) => setPlaceUnits(e.target.value), type: "number", min: "1", max: rack.height_units, "aria-label": "H\xF6he in HE", className: `${inlineInput} w-16 py-1 text-xs` }),
+              /* @__PURE__ */ jsx6("input", { value: placeUnits, onChange: (e) => setPlaceUnits(e.target.value), type: "number", min: "1", max: rack.height_units, "aria-label": "H\xF6he in HE", className: `${inlineInput} w-16 py-1 text-xs` }),
               "HE"
             ] }),
-            /* @__PURE__ */ jsx5(Button, { small: true, type: "submit", variant: "primary", disabled: !placeItem, children: "Einsetzen" }),
-            /* @__PURE__ */ jsx5(Button, { small: true, variant: "ghost", onClick: () => setPlacing(null), children: "Abbrechen" })
+            /* @__PURE__ */ jsx6(Button, { small: true, type: "submit", variant: "primary", disabled: !placeItem, children: "Einsetzen" }),
+            /* @__PURE__ */ jsx6(Button, { small: true, variant: "ghost", onClick: () => setPlacing(null), children: "Abbrechen" })
           ] }) : /* @__PURE__ */ jsxs4(Fragment2, { children: [
-            /* @__PURE__ */ jsx5("span", { className: "flex-1", children: "frei" }),
-            /* @__PURE__ */ jsx5("button", { type: "button", onClick: () => {
+            /* @__PURE__ */ jsx6("span", { className: "flex-1", children: "frei" }),
+            /* @__PURE__ */ jsx6("button", { type: "button", onClick: () => {
               setPlacing(row.unit);
               setPlaceItem("");
               setPlaceUnits("1");
-            }, className: "rounded px-1.5 py-0.5 text-white/50 hover:bg-white/[0.06] hover:text-white", "aria-label": `Ger\xE4t in HE ${row.unit} einsetzen`, title: "Ger\xE4t hier einsetzen", children: /* @__PURE__ */ jsx5(Icon, { name: "plus", size: 12 }) })
+            }, className: "rounded px-1.5 py-0.5 text-white/50 hover:bg-white/[0.06] hover:text-white", "aria-label": `Ger\xE4t in HE ${row.unit} einsetzen`, title: "Ger\xE4t hier einsetzen", children: /* @__PURE__ */ jsx6(Icon, { name: "plus", size: 12 }) })
           ] })
         ] }, `f-${row.unit}`)
       ) }),
@@ -1143,13 +1157,13 @@ function RacksPanel({ items, onChanged }) {
       ] })
     ] }),
     /* @__PURE__ */ jsxs4("form", { onSubmit: (e) => void createRack(e), className: "flex flex-wrap gap-2", children: [
-      /* @__PURE__ */ jsx5("input", { value: name, onChange: (e) => setName(e.target.value), placeholder: "Neues Rack, z. B. Keller", "aria-label": "Name des Racks", className: `${inlineInput} min-w-[12rem] flex-1` }),
-      /* @__PURE__ */ jsx5("select", { value: height, onChange: (e) => setHeight(e.target.value), "aria-label": "H\xF6he des Racks", className: `${inlineInput} w-auto`, children: ["6", "9", "12", "15", "18", "22", "27", "32", "42", "47"].map((h) => /* @__PURE__ */ jsxs4("option", { value: h, children: [
+      /* @__PURE__ */ jsx6("input", { value: name, onChange: (e) => setName(e.target.value), placeholder: "Neues Rack, z. B. Keller", "aria-label": "Name des Racks", className: `${inlineInput} min-w-[12rem] flex-1` }),
+      /* @__PURE__ */ jsx6("select", { value: height, onChange: (e) => setHeight(e.target.value), "aria-label": "H\xF6he des Racks", className: `${inlineInput} w-auto`, children: ["6", "9", "12", "15", "18", "22", "27", "32", "42", "47"].map((h) => /* @__PURE__ */ jsxs4("option", { value: h, children: [
         h,
         " HE"
       ] }, h)) }),
       /* @__PURE__ */ jsxs4(Button, { type: "submit", variant: "primary", disabled: !name.trim(), children: [
-        /* @__PURE__ */ jsx5(Icon, { name: "plus", size: 14 }),
+        /* @__PURE__ */ jsx6(Icon, { name: "plus", size: 14 }),
         " Anlegen"
       ] })
     ] })
@@ -1196,7 +1210,7 @@ function FailureList({ outcome, what, onClose }) {
         outcome.stopped ? ` \u2013 nach mehreren Fehlern in Folge abgebrochen, ${outcome.untried} nicht versucht` : "",
         ". Diese bleiben angekreuzt, du kannst es noch einmal versuchen."
       ] }),
-      /* @__PURE__ */ jsx5("button", { type: "button", "aria-label": "Hinweis schlie\xDFen", onClick: onClose, className: "opacity-60 hover:opacity-100", children: /* @__PURE__ */ jsx5(Icon, { name: "x", size: 14 }) })
+      /* @__PURE__ */ jsx6("button", { type: "button", "aria-label": "Hinweis schlie\xDFen", onClick: onClose, className: "opacity-60 hover:opacity-100", children: /* @__PURE__ */ jsx6(Icon, { name: "x", size: 14 }) })
     ] }),
     /* @__PURE__ */ jsxs4("ul", { className: "mt-1 list-disc pl-5", children: [
       outcome.failed.slice(0, 8).map((f, i) => /* @__PURE__ */ jsxs4("li", { children: [
@@ -1226,18 +1240,18 @@ function ScanPanel({
   onDone
 }) {
   const usable = (h) => (h.os_family ?? "linux") === "linux" && h.credential !== null;
-  const [hostId, setHostId] = useState3(() => hosts.find(usable)?.id ?? "");
-  const [busy, setBusy] = useState3(false);
-  const [error, setError] = useState3(null);
-  const [result, setResult] = useState3(null);
-  const [known, setKnown] = useState3(null);
-  const [chosen, setChosen] = useState3(() => /* @__PURE__ */ new Set());
-  const [taken, setTaken] = useState3(() => /* @__PURE__ */ new Set());
-  const [categoryId, setCategoryId] = useState3("");
-  const [locationId, setLocationId] = useState3("");
-  const [projectId, setProjectId] = useState3("");
-  const [progress, setProgress] = useState3(null);
-  const [outcome, setOutcome] = useState3(null);
+  const [hostId, setHostId] = useState4(() => hosts.find(usable)?.id ?? "");
+  const [busy, setBusy] = useState4(false);
+  const [error, setError] = useState4(null);
+  const [result, setResult] = useState4(null);
+  const [known, setKnown] = useState4(null);
+  const [chosen, setChosen] = useState4(() => /* @__PURE__ */ new Set());
+  const [taken, setTaken] = useState4(() => /* @__PURE__ */ new Set());
+  const [categoryId, setCategoryId] = useState4("");
+  const [locationId, setLocationId] = useState4("");
+  const [projectId, setProjectId] = useState4("");
+  const [progress, setProgress] = useState4(null);
+  const [outcome, setOutcome] = useState4(null);
   const norm = (value) => (value ?? "").trim().toLowerCase();
   const isKnownIn = (k, hostId2, sg) => !!k && (sg.serial_number ? k.serials.has(norm(sg.serial_number)) : k.hostNames.has(`${hostId2}
 ${norm(sg.name)}`));
@@ -1317,7 +1331,7 @@ ${norm(i.name)}`))
       description: "Nodvard Deck fragt den Server per SSH, was drinsteckt: Prozessor, Arbeitsspeicher, Datentr\xE4ger, Mainboard, Netzwerk- und Grafikkarten. Es liest nur, es \xE4ndert nichts.",
       className: "mb-5",
       children: [
-        hosts.length === 0 ? /* @__PURE__ */ jsx5("p", { className: "text-sm text-white/55", children: "Noch kein Server in Nodvard Deck. F\xFCge zuerst unter Einstellungen \u2192 Server & Zug\xE4nge einen hinzu." }) : /* @__PURE__ */ jsxs4("div", { className: "mb-3 flex flex-wrap gap-2", children: [
+        hosts.length === 0 ? /* @__PURE__ */ jsx6("p", { className: "text-sm text-white/55", children: "Noch kein Server in Nodvard Deck. F\xFCge zuerst unter Einstellungen \u2192 Server & Zug\xE4nge einen hinzu." }) : /* @__PURE__ */ jsxs4("div", { className: "mb-3 flex flex-wrap gap-2", children: [
           /* @__PURE__ */ jsxs4(
             "select",
             {
@@ -1331,7 +1345,7 @@ ${norm(i.name)}`))
               "aria-label": "Server zum Auslesen",
               className: `${inlineInput} min-w-[12rem]`,
               children: [
-                /* @__PURE__ */ jsx5("option", { value: "", children: "Server w\xE4hlen \u2026" }),
+                /* @__PURE__ */ jsx6("option", { value: "", children: "Server w\xE4hlen \u2026" }),
                 hosts.map((h) => /* @__PURE__ */ jsxs4("option", { value: h.id, disabled: !usable(h), children: [
                   h.display_name,
                   (h.os_family ?? "linux") !== "linux" ? " (nur Linux)" : h.credential === null ? " (ohne SSH-Zugang)" : ""
@@ -1339,25 +1353,25 @@ ${norm(i.name)}`))
               ]
             }
           ),
-          /* @__PURE__ */ jsx5(Button, { variant: "primary", onClick: () => void scan(), disabled: !hostId || busy || saving, children: busy ? "Lese aus \u2026 (bis zu 30 Sekunden)" : "Auslesen" })
+          /* @__PURE__ */ jsx6(Button, { variant: "primary", onClick: () => void scan(), disabled: !hostId || busy || saving, children: busy ? "Lese aus \u2026 (bis zu 30 Sekunden)" : "Auslesen" })
         ] }),
-        /* @__PURE__ */ jsx5("p", { className: "sr-only", role: "status", children: busy ? "Lese den Server aus \u2026" : progressText(progress) }),
-        error && /* @__PURE__ */ jsx5(Notice, { text: `Fehler: ${error}`, onClose: () => setError(null) }),
+        /* @__PURE__ */ jsx6("p", { className: "sr-only", role: "status", children: busy ? "Lese den Server aus \u2026" : progressText(progress) }),
+        error && /* @__PURE__ */ jsx6(Notice, { text: `Fehler: ${error}`, onClose: () => setError(null) }),
         result && /* @__PURE__ */ jsxs4("div", { "data-testid": "scan-result", children: [
           result.virtual && /* @__PURE__ */ jsxs4("p", { className: "mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200", children: [
             "\u201E",
             result.host_name,
             "\u201C ist eine virtuelle Maschine oder ein Container: Die Teile geh\xF6ren dem Wirt (etwa dem Proxmox-Knoten) oder sind nur nachgebildet. Darum ist nichts vorab angekreuzt. Lies am besten den Wirt aus."
           ] }),
-          !known && /* @__PURE__ */ jsx5("p", { className: "mb-3 text-sm text-amber-200", children: "Konnte nicht pr\xFCfen, was schon im Inventar steht. Darum ist nichts vorab angekreuzt \u2013 sieh die Liste durch." }),
-          (result.missing ?? []).filter((tool) => MISSING_TOOLS[tool]).map((tool) => /* @__PURE__ */ jsx5("p", { className: "mb-3 text-sm text-white/55", children: MISSING_TOOLS[tool] }, tool)),
-          outcome && /* @__PURE__ */ jsx5(FailureList, { outcome, what: ["Teil", "Teile"], onClose: () => setOutcome(null) }),
-          result.suggestions.length === 0 ? /* @__PURE__ */ jsx5("p", { className: "text-sm text-white/55", children: "Nichts gefunden, was sich als Teil anbietet." }) : /* @__PURE__ */ jsxs4(Fragment2, { children: [
-            /* @__PURE__ */ jsx5("ul", { className: "mb-3 divide-y divide-white/[0.06]", children: result.suggestions.map((sg) => {
+          !known && /* @__PURE__ */ jsx6("p", { className: "mb-3 text-sm text-amber-200", children: "Konnte nicht pr\xFCfen, was schon im Inventar steht. Darum ist nichts vorab angekreuzt \u2013 sieh die Liste durch." }),
+          (result.missing ?? []).filter((tool) => MISSING_TOOLS[tool]).map((tool) => /* @__PURE__ */ jsx6("p", { className: "mb-3 text-sm text-white/55", children: MISSING_TOOLS[tool] }, tool)),
+          outcome && /* @__PURE__ */ jsx6(FailureList, { outcome, what: ["Teil", "Teile"], onClose: () => setOutcome(null) }),
+          result.suggestions.length === 0 ? /* @__PURE__ */ jsx6("p", { className: "text-sm text-white/55", children: "Nichts gefunden, was sich als Teil anbietet." }) : /* @__PURE__ */ jsxs4(Fragment2, { children: [
+            /* @__PURE__ */ jsx6("ul", { className: "mb-3 divide-y divide-white/[0.06]", children: result.suggestions.map((sg) => {
               const known2 = isKnown(sg);
               const done = taken.has(sg.key);
-              return /* @__PURE__ */ jsx5("li", { children: /* @__PURE__ */ jsxs4("label", { className: "flex cursor-pointer flex-wrap items-start gap-2 py-2 text-sm", children: [
-                /* @__PURE__ */ jsx5(
+              return /* @__PURE__ */ jsx6("li", { children: /* @__PURE__ */ jsxs4("label", { className: "flex cursor-pointer flex-wrap items-start gap-2 py-2 text-sm", children: [
+                /* @__PURE__ */ jsx6(
                   "input",
                   {
                     type: "checkbox",
@@ -1373,25 +1387,25 @@ ${norm(i.name)}`))
                     sg.name,
                     sg.quantity > 1 ? ` \xD7 ${sg.quantity}` : ""
                   ] }),
-                  /* @__PURE__ */ jsx5("span", { className: "block text-xs text-white/45", children: [sg.kind, sg.manufacturer, sg.serial_number ? `Seriennummer ${sg.serial_number}` : null, sg.detail, sg.hint].filter(Boolean).join(" \xB7 ") })
+                  /* @__PURE__ */ jsx6("span", { className: "block text-xs text-white/45", children: [sg.kind, sg.manufacturer, sg.serial_number ? `Seriennummer ${sg.serial_number}` : null, sg.detail, sg.hint].filter(Boolean).join(" \xB7 ") })
                 ] }),
-                done ? /* @__PURE__ */ jsx5(Badge, { tone: "good", children: "\xFCbernommen" }) : known2 && /* @__PURE__ */ jsx5(Badge, { tone: "info", children: "schon im Inventar" })
+                done ? /* @__PURE__ */ jsx6(Badge, { tone: "good", children: "\xFCbernommen" }) : known2 && /* @__PURE__ */ jsx6(Badge, { tone: "info", children: "schon im Inventar" })
               ] }) }, sg.key);
             }) }),
             /* @__PURE__ */ jsxs4("div", { className: "flex flex-wrap items-center gap-2", children: [
               categories.length > 0 && /* @__PURE__ */ jsxs4("select", { value: categoryId, onChange: (e) => setCategoryId(e.target.value), "aria-label": "Kategorie f\xFCr die neuen Teile", className: `${inlineInput} w-auto`, children: [
-                /* @__PURE__ */ jsx5("option", { value: "", children: "Kategorie: \u2013" }),
-                categories.map((c) => /* @__PURE__ */ jsx5("option", { value: c.id, children: c.name }, c.id))
+                /* @__PURE__ */ jsx6("option", { value: "", children: "Kategorie: \u2013" }),
+                categories.map((c) => /* @__PURE__ */ jsx6("option", { value: c.id, children: c.name }, c.id))
               ] }),
               /* @__PURE__ */ jsxs4("select", { value: locationId, onChange: (e) => setLocationId(e.target.value), "aria-label": "Standort f\xFCr die neuen Teile", className: `${inlineInput} w-auto`, children: [
-                /* @__PURE__ */ jsx5("option", { value: "", children: "Standort: \u2013" }),
-                locations.map((l) => /* @__PURE__ */ jsx5("option", { value: l.id, children: l.name }, l.id))
+                /* @__PURE__ */ jsx6("option", { value: "", children: "Standort: \u2013" }),
+                locations.map((l) => /* @__PURE__ */ jsx6("option", { value: l.id, children: l.name }, l.id))
               ] }),
               projects.length > 0 && /* @__PURE__ */ jsxs4("select", { value: projectId, onChange: (e) => setProjectId(e.target.value), "aria-label": "Bauprojekt f\xFCr die neuen Teile", className: `${inlineInput} w-auto`, children: [
-                /* @__PURE__ */ jsx5("option", { value: "", children: "Bauprojekt: \u2013" }),
-                projects.map((pr) => /* @__PURE__ */ jsx5("option", { value: pr.id, children: pr.name }, pr.id))
+                /* @__PURE__ */ jsx6("option", { value: "", children: "Bauprojekt: \u2013" }),
+                projects.map((pr) => /* @__PURE__ */ jsx6("option", { value: pr.id, children: pr.name }, pr.id))
               ] }),
-              /* @__PURE__ */ jsx5(Button, { variant: "primary", onClick: () => void take(), disabled: open === 0 || saving, children: progress ? `\xDCbernehme \u2026 ${progress[0]} von ${progress[1]}` : open === 1 ? "1 Teil \xFCbernehmen" : `${open} Teile \xFCbernehmen` })
+              /* @__PURE__ */ jsx6(Button, { variant: "primary", onClick: () => void take(), disabled: open === 0 || saving, children: progress ? `\xDCbernehme \u2026 ${progress[0]} von ${progress[1]}` : open === 1 ? "1 Teil \xFCbernehmen" : `${open} Teile \xFCbernehmen` })
             ] })
           ] })
         ] })
@@ -1404,15 +1418,15 @@ function ImportPanel({
   locations,
   onDone
 }) {
-  const [result, setResult] = useState3(null);
-  const [existing, setExisting] = useState3([]);
-  const [chosen, setChosen] = useState3(() => /* @__PURE__ */ new Set());
-  const [taken, setTaken] = useState3(() => /* @__PURE__ */ new Set());
-  const [filter, setFilter] = useState3("");
-  const [locationId, setLocationId] = useState3("");
-  const [error, setError] = useState3(null);
-  const [progress, setProgress] = useState3(null);
-  const [outcome, setOutcome] = useState3(null);
+  const [result, setResult] = useState4(null);
+  const [existing, setExisting] = useState4([]);
+  const [chosen, setChosen] = useState4(() => /* @__PURE__ */ new Set());
+  const [taken, setTaken] = useState4(() => /* @__PURE__ */ new Set());
+  const [filter, setFilter] = useState4("");
+  const [locationId, setLocationId] = useState4("");
+  const [error, setError] = useState4(null);
+  const [progress, setProgress] = useState4(null);
+  const [outcome, setOutcome] = useState4(null);
   const norm = (value) => (value ?? "").trim().toLowerCase();
   const byName = (list, name) => (name ? list.find((x) => norm(x.name) === norm(name))?.id : void 0) ?? null;
   const known = {
@@ -1509,9 +1523,9 @@ function ImportPanel({
       className: "mb-5",
       children: [
         /* @__PURE__ */ jsxs4("label", { className: `${buttonClass("secondary")} cursor-pointer focus-within:ring-2 focus-within:ring-[var(--color-accent)]`, children: [
-          /* @__PURE__ */ jsx5(Icon, { name: "upload", size: 14 }),
+          /* @__PURE__ */ jsx6(Icon, { name: "upload", size: 14 }),
           " CSV-Datei w\xE4hlen",
-          /* @__PURE__ */ jsx5(
+          /* @__PURE__ */ jsx6(
             "input",
             {
               type: "file",
@@ -1527,8 +1541,8 @@ function ImportPanel({
             }
           )
         ] }),
-        /* @__PURE__ */ jsx5("p", { className: "sr-only", role: "status", children: progressText(progress) }),
-        error && /* @__PURE__ */ jsx5("div", { className: "mt-3", children: /* @__PURE__ */ jsx5(Notice, { text: `Fehler: ${error}`, onClose: () => setError(null) }) }),
+        /* @__PURE__ */ jsx6("p", { className: "sr-only", role: "status", children: progressText(progress) }),
+        error && /* @__PURE__ */ jsx6("div", { className: "mt-3", children: /* @__PURE__ */ jsx6(Notice, { text: `Fehler: ${error}`, onClose: () => setError(null) }) }),
         result && /* @__PURE__ */ jsxs4("div", { className: "mt-4", "data-testid": "import-result", children: [
           /* @__PURE__ */ jsxs4("p", { className: "mb-2 text-sm text-white/60", children: [
             "Erkannt: ",
@@ -1544,11 +1558,11 @@ function ImportPanel({
             ...result.notes,
             ...unknownCategories.length ? [`Diese Kategorien gibt es hier nicht, die Gegenst\xE4nde bleiben ohne Kategorie: ${unknownCategories.slice(0, 5).join(", ")}${unknownCategories.length > 5 ? " \u2026" : ""}.`] : [],
             ...unknownLocations.length ? [`Diese Standorte gibt es hier nicht, es gilt der Standort unten: ${unknownLocations.slice(0, 5).join(", ")}${unknownLocations.length > 5 ? " \u2026" : ""}.`] : []
-          ].map((note) => /* @__PURE__ */ jsx5("p", { className: "mb-2 text-sm text-amber-200", children: note }, note)),
-          !existing && /* @__PURE__ */ jsx5("p", { className: "mb-2 text-sm text-amber-200", children: "Konnte nicht pr\xFCfen, was schon im Inventar steht. Darum ist nichts vorab angekreuzt \u2013 sieh die Liste durch." }),
-          outcome && /* @__PURE__ */ jsx5(FailureList, { outcome, what: ["Gegenstand", "Gegenst\xE4nde"], onClose: () => setOutcome(null) }),
+          ].map((note) => /* @__PURE__ */ jsx6("p", { className: "mb-2 text-sm text-amber-200", children: note }, note)),
+          !existing && /* @__PURE__ */ jsx6("p", { className: "mb-2 text-sm text-amber-200", children: "Konnte nicht pr\xFCfen, was schon im Inventar steht. Darum ist nichts vorab angekreuzt \u2013 sieh die Liste durch." }),
+          outcome && /* @__PURE__ */ jsx6(FailureList, { outcome, what: ["Gegenstand", "Gegenst\xE4nde"], onClose: () => setOutcome(null) }),
           /* @__PURE__ */ jsxs4("div", { className: "mb-2 flex flex-wrap items-center gap-2", children: [
-            result.rows.length > 8 && /* @__PURE__ */ jsx5(
+            result.rows.length > 8 && /* @__PURE__ */ jsx6(
               "input",
               {
                 type: "search",
@@ -1559,15 +1573,15 @@ function ImportPanel({
                 className: `${inlineInput} min-w-[12rem] flex-1`
               }
             ),
-            /* @__PURE__ */ jsx5(Button, { small: true, onClick: () => setAll(true), disabled: saving, children: filter.trim() ? "Alle gefundenen ankreuzen" : "Alle ankreuzen" }),
-            /* @__PURE__ */ jsx5(Button, { small: true, onClick: () => setAll(false), disabled: saving, children: filter.trim() ? "Gefundene abw\xE4hlen" : "Keine" })
+            /* @__PURE__ */ jsx6(Button, { small: true, onClick: () => setAll(true), disabled: saving, children: filter.trim() ? "Alle gefundenen ankreuzen" : "Alle ankreuzen" }),
+            /* @__PURE__ */ jsx6(Button, { small: true, onClick: () => setAll(false), disabled: saving, children: filter.trim() ? "Gefundene abw\xE4hlen" : "Keine" })
           ] }),
           /* @__PURE__ */ jsxs4("ul", { className: "mb-3 max-h-96 divide-y divide-white/[0.06] overflow-y-auto", children: [
             shown.slice(0, 500).map(([i, row]) => {
               const dupe = isKnown(row);
               const done = taken.has(i);
-              return /* @__PURE__ */ jsx5("li", { children: /* @__PURE__ */ jsxs4("label", { className: "flex cursor-pointer flex-wrap items-start gap-2 py-2 text-sm", children: [
-                /* @__PURE__ */ jsx5(
+              return /* @__PURE__ */ jsx6("li", { children: /* @__PURE__ */ jsxs4("label", { className: "flex cursor-pointer flex-wrap items-start gap-2 py-2 text-sm", children: [
+                /* @__PURE__ */ jsx6(
                   "input",
                   {
                     type: "checkbox",
@@ -1583,9 +1597,9 @@ function ImportPanel({
                     row.name,
                     row.quantity > 1 ? ` \xD7 ${row.quantity}` : ""
                   ] }),
-                  /* @__PURE__ */ jsx5("span", { className: "block text-xs text-white/45", children: [formatDate(row.purchase_date), row.purchase_price_cents != null ? formatPrice(row.purchase_price_cents) : null].filter((v) => v && v !== "\u2013").join(" \xB7 ") })
+                  /* @__PURE__ */ jsx6("span", { className: "block text-xs text-white/45", children: [formatDate(row.purchase_date), row.purchase_price_cents != null ? formatPrice(row.purchase_price_cents) : null].filter((v) => v && v !== "\u2013").join(" \xB7 ") })
                 ] }),
-                done ? /* @__PURE__ */ jsx5(Badge, { tone: "good", children: "\xFCbernommen" }) : dupe && /* @__PURE__ */ jsx5(Badge, { tone: "info", children: "schon im Inventar?" })
+                done ? /* @__PURE__ */ jsx6(Badge, { tone: "good", children: "\xFCbernommen" }) : dupe && /* @__PURE__ */ jsx6(Badge, { tone: "info", children: "schon im Inventar?" })
               ] }) }, i);
             }),
             shown.length > 500 && /* @__PURE__ */ jsxs4("li", { className: "py-2 text-xs text-white/45", children: [
@@ -1598,10 +1612,10 @@ function ImportPanel({
           ] }),
           /* @__PURE__ */ jsxs4("div", { className: "flex flex-wrap items-center gap-2", children: [
             /* @__PURE__ */ jsxs4("select", { value: locationId, onChange: (e) => setLocationId(e.target.value), "aria-label": "Standort f\xFCr die neuen Gegenst\xE4nde", className: `${inlineInput} w-auto`, children: [
-              /* @__PURE__ */ jsx5("option", { value: "", children: "Standort: \u2013" }),
-              locations.map((l) => /* @__PURE__ */ jsx5("option", { value: l.id, children: l.name }, l.id))
+              /* @__PURE__ */ jsx6("option", { value: "", children: "Standort: \u2013" }),
+              locations.map((l) => /* @__PURE__ */ jsx6("option", { value: l.id, children: l.name }, l.id))
             ] }),
-            /* @__PURE__ */ jsx5(Button, { variant: "primary", onClick: () => void take(), disabled: open === 0 || saving, children: progress ? `\xDCbernehme \u2026 ${progress[0]} von ${progress[1]}` : open === 1 ? "1 Gegenstand \xFCbernehmen" : `${open} Gegenst\xE4nde \xFCbernehmen` })
+            /* @__PURE__ */ jsx6(Button, { variant: "primary", onClick: () => void take(), disabled: open === 0 || saving, children: progress ? `\xDCbernehme \u2026 ${progress[0]} von ${progress[1]}` : open === 1 ? "1 Gegenstand \xFCbernehmen" : `${open} Gegenst\xE4nde \xFCbernehmen` })
           ] })
         ] })
       ]
@@ -1611,11 +1625,11 @@ function ImportPanel({
 function ItemDocuments({ item }) {
   const canRead = deck().hasPermission("documents.read");
   const canWrite = deck().hasPermission("documents.write");
-  const [docs, setDocs] = useState3(null);
-  const [hidden, setHidden] = useState3(false);
-  const [error, setError] = useState3(null);
-  const [actionError, setActionError] = useState3(null);
-  const [busy, setBusy] = useState3(false);
+  const [docs, setDocs] = useState4(null);
+  const [hidden, setHidden] = useState4(false);
+  const [error, setError] = useState4(null);
+  const [actionError, setActionError] = useState4(null);
+  const [busy, setBusy] = useState4(false);
   const load = useCallback(async () => {
     setError(null);
     try {
@@ -1631,7 +1645,7 @@ function ItemDocuments({ item }) {
       setError(errorMessage(err));
     }
   }, [item.id]);
-  useEffect3(() => {
+  useEffect4(() => {
     if (canRead) void load();
   }, [canRead, load]);
   async function upload(file) {
@@ -1677,20 +1691,20 @@ function ItemDocuments({ item }) {
   }
   if (!canRead || hidden) return null;
   return /* @__PURE__ */ jsxs4("div", { className: "mb-4", "data-testid": `documents-${item.id}`, children: [
-    /* @__PURE__ */ jsx5("p", { className: "mb-2 text-xs text-white/45", children: "Dokumente (Rechnung, Handbuch \u2026)" }),
-    error && /* @__PURE__ */ jsx5(LoadError, { compact: true, what: "Die Liste der Dokumente", error, onRetry: () => void load() }),
-    actionError && /* @__PURE__ */ jsx5(Notice, { text: `Fehler: ${actionError}`, onClose: () => setActionError(null) }),
-    docs && docs.length === 0 && /* @__PURE__ */ jsx5("p", { className: "mb-2 text-xs text-white/45", children: "Noch keine. Lade die Rechnung oder das Handbuch hier hoch." }),
-    docs && docs.length > 0 && /* @__PURE__ */ jsx5("ul", { className: "mb-2 space-y-1", children: docs.map((doc) => /* @__PURE__ */ jsxs4("li", { className: "flex flex-wrap items-center gap-2", children: [
+    /* @__PURE__ */ jsx6("p", { className: "mb-2 text-xs text-white/45", children: "Dokumente (Rechnung, Handbuch \u2026)" }),
+    error && /* @__PURE__ */ jsx6(LoadError, { compact: true, what: "Die Liste der Dokumente", error, onRetry: () => void load() }),
+    actionError && /* @__PURE__ */ jsx6(Notice, { text: `Fehler: ${actionError}`, onClose: () => setActionError(null) }),
+    docs && docs.length === 0 && /* @__PURE__ */ jsx6("p", { className: "mb-2 text-xs text-white/45", children: "Noch keine. Lade die Rechnung oder das Handbuch hier hoch." }),
+    docs && docs.length > 0 && /* @__PURE__ */ jsx6("ul", { className: "mb-2 space-y-1", children: docs.map((doc) => /* @__PURE__ */ jsxs4("li", { className: "flex flex-wrap items-center gap-2", children: [
       /* @__PURE__ */ jsxs4("span", { className: "flex min-w-0 basis-full items-center gap-2 sm:flex-1 sm:basis-0", children: [
-        /* @__PURE__ */ jsx5(Icon, { name: "file", size: 13, className: "flex-none text-[var(--color-accent)]" }),
-        /* @__PURE__ */ jsx5("span", { className: "truncate", children: doc.original_filename })
+        /* @__PURE__ */ jsx6(Icon, { name: "file", size: 13, className: "flex-none text-[var(--color-accent)]" }),
+        /* @__PURE__ */ jsx6("span", { className: "truncate", children: doc.original_filename })
       ] }),
       /* @__PURE__ */ jsxs4(Button, { small: true, onClick: () => void open(doc), ariaLabel: `${doc.original_filename} herunterladen`, children: [
-        /* @__PURE__ */ jsx5(Icon, { name: "download", size: 12 }),
+        /* @__PURE__ */ jsx6(Icon, { name: "download", size: 12 }),
         " Herunterladen"
       ] }),
-      canWrite && /* @__PURE__ */ jsx5(
+      canWrite && /* @__PURE__ */ jsx6(
         Button,
         {
           small: true,
@@ -1703,10 +1717,10 @@ function ItemDocuments({ item }) {
       )
     ] }, doc.id)) }),
     canWrite && /* @__PURE__ */ jsxs4("label", { className: `${buttonClass("secondary", true)} cursor-pointer focus-within:ring-2 focus-within:ring-[var(--color-accent)]`, children: [
-      /* @__PURE__ */ jsx5(Icon, { name: "upload", size: 12 }),
+      /* @__PURE__ */ jsx6(Icon, { name: "upload", size: 12 }),
       " ",
       busy ? "L\xE4dt hoch \u2026" : "Dokument hochladen",
-      /* @__PURE__ */ jsx5(
+      /* @__PURE__ */ jsx6(
         "input",
         {
           type: "file",
@@ -1725,31 +1739,31 @@ function ItemDocuments({ item }) {
   ] });
 }
 function InventoryPage() {
-  const [items, setItems] = useState3(null);
-  const [categories, setCategories] = useState3([]);
-  const [locations, setLocations] = useState3([]);
-  const [projects, setProjects] = useState3([]);
-  const [hosts, setHosts] = useState3(null);
-  const [projectsError, setProjectsError] = useState3(null);
-  const [projectFilter, setProjectFilter] = useState3("");
-  const [showProjects, setShowProjects] = useState3(false);
-  const [showRacks, setShowRacks] = useState3(false);
-  const [showScan, setShowScan] = useState3(false);
-  const [showImport, setShowImport] = useState3(false);
-  const [info, setInfo] = useState3(null);
-  const [error, setError] = useState3(null);
-  const [message, setMessage] = useState3(null);
-  const [search, setSearch] = useState3("");
-  const [categoryFilter, setCategoryFilter] = useState3("");
-  const [locationFilter, setLocationFilter] = useState3("");
-  const [warrantyFilter, setWarrantyFilter] = useState3("");
-  const [showForm, setShowForm] = useState3(false);
-  const [showTaxonomy, setShowTaxonomy] = useState3(false);
-  const [editingId, setEditingId] = useState3(null);
-  const [form, setForm] = useState3(EMPTY_FORM);
-  const [techOpen, setTechOpen] = useState3(false);
-  const [expanded, setExpanded] = useState3(null);
-  const [uploading, setUploading] = useState3(null);
+  const [items, setItems] = useState4(null);
+  const [categories, setCategories] = useState4([]);
+  const [locations, setLocations] = useState4([]);
+  const [projects, setProjects] = useState4([]);
+  const [hosts, setHosts] = useState4(null);
+  const [projectsError, setProjectsError] = useState4(null);
+  const [projectFilter, setProjectFilter] = useState4("");
+  const [showProjects, setShowProjects] = useState4(false);
+  const [showRacks, setShowRacks] = useState4(false);
+  const [showScan, setShowScan] = useState4(false);
+  const [showImport, setShowImport] = useState4(false);
+  const [info, setInfo] = useState4(null);
+  const [error, setError] = useState4(null);
+  const [message, setMessage] = useState4(null);
+  const [search, setSearch] = useState4("");
+  const [categoryFilter, setCategoryFilter] = useState4("");
+  const [locationFilter, setLocationFilter] = useState4("");
+  const [warrantyFilter, setWarrantyFilter] = useState4("");
+  const [showForm, setShowForm] = useState4(false);
+  const [showTaxonomy, setShowTaxonomy] = useState4(false);
+  const [editingId, setEditingId] = useState4(null);
+  const [form, setForm] = useState4(EMPTY_FORM);
+  const [techOpen, setTechOpen] = useState4(false);
+  const [expanded, setExpanded] = useState4(null);
+  const [uploading, setUploading] = useState4(null);
   const load = useCallback(() => {
     setError(null);
     const params = search ? `?q=${encodeURIComponent(search)}` : "";
@@ -1768,13 +1782,13 @@ function InventoryPage() {
       setProjectsError(null);
     }).catch((err) => setProjectsError(errorMessage(err)));
   }, [search]);
-  useEffect3(() => {
+  useEffect4(() => {
     load();
   }, [load]);
-  useEffect3(() => {
+  useEffect4(() => {
     if (projectFilter && !projects.some((p) => p.id === projectFilter)) setProjectFilter("");
   }, [projects, projectFilter]);
-  useEffect3(() => {
+  useEffect4(() => {
     fetchJson("/hosts").then(setHosts).catch(() => setHosts(null));
   }, []);
   function startCreate() {
@@ -1894,9 +1908,9 @@ function InventoryPage() {
     a.click();
     URL.revokeObjectURL(url);
   }
-  if (!items && !error) return /* @__PURE__ */ jsx5(Loading, {});
-  if (error && !items) return /* @__PURE__ */ jsx5(Page, { title: "Inventar", children: /* @__PURE__ */ jsx5(LoadError, { what: "Das Inventar", error, onRetry: load }) });
-  const input = (key, props = {}) => /* @__PURE__ */ jsx5("input", { value: form[key], onChange: (e) => setForm({ ...form, [key]: e.target.value }), className: inputClass, ...props });
+  if (!items && !error) return /* @__PURE__ */ jsx6(Loading, {});
+  if (error && !items) return /* @__PURE__ */ jsx6(Page, { title: "Inventar", children: /* @__PURE__ */ jsx6(LoadError, { what: "Das Inventar", error, onRetry: load }) });
+  const input = (key, props = {}) => /* @__PURE__ */ jsx6("input", { value: form[key], onChange: (e) => setForm({ ...form, [key]: e.target.value }), className: inputClass, ...props });
   return /* @__PURE__ */ jsxs4(
     Page,
     {
@@ -1904,14 +1918,14 @@ function InventoryPage() {
       description: "Ger\xE4te und Gegenst\xE4nde mit Standort, Kaufpreis und Garantie.",
       actions: /* @__PURE__ */ jsxs4(Fragment2, { children: [
         /* @__PURE__ */ jsxs4(Button, { onClick: () => setShowProjects((v) => !v), pressed: showProjects, children: [
-          /* @__PURE__ */ jsx5(Icon, { name: "package", size: 14 }),
+          /* @__PURE__ */ jsx6(Icon, { name: "package", size: 14 }),
           " Bauprojekte"
         ] }),
         /* @__PURE__ */ jsxs4(Button, { onClick: () => setShowRacks((v) => !v), pressed: showRacks, children: [
-          /* @__PURE__ */ jsx5(Icon, { name: "folder", size: 14 }),
+          /* @__PURE__ */ jsx6(Icon, { name: "folder", size: 14 }),
           " Racks"
         ] }),
-        /* @__PURE__ */ jsx5(
+        /* @__PURE__ */ jsx6(
           MoreMenu,
           {
             testId: "inventory-more",
@@ -1927,13 +1941,13 @@ function InventoryPage() {
           }
         ),
         /* @__PURE__ */ jsxs4(Button, { variant: "primary", onClick: startCreate, children: [
-          /* @__PURE__ */ jsx5(Icon, { name: "plus", size: 14 }),
+          /* @__PURE__ */ jsx6(Icon, { name: "plus", size: 14 }),
           " Neuer Gegenstand"
         ] })
       ] }),
       children: [
-        showProjects && projectsError && /* @__PURE__ */ jsx5(LoadError, { what: "Die Liste der Bauprojekte", error: projectsError, onRetry: load }),
-        showProjects && !projectsError && /* @__PURE__ */ jsx5(
+        showProjects && projectsError && /* @__PURE__ */ jsx6(LoadError, { what: "Die Liste der Bauprojekte", error: projectsError, onRetry: load }),
+        showProjects && !projectsError && /* @__PURE__ */ jsx6(
           ProjectsPanel,
           {
             projects,
@@ -1942,7 +1956,7 @@ function InventoryPage() {
             onShowItems: (id) => setProjectFilter((current) => current === id ? "" : id)
           }
         ),
-        showScan && hosts && deck().hasPermission("hosts.execute") && /* @__PURE__ */ jsx5(
+        showScan && hosts && deck().hasPermission("hosts.execute") && /* @__PURE__ */ jsx6(
           ScanPanel,
           {
             hosts,
@@ -1955,43 +1969,43 @@ function InventoryPage() {
             }
           }
         ),
-        showImport && /* @__PURE__ */ jsx5(ImportPanel, { categories, locations, onDone: (text) => {
+        showImport && /* @__PURE__ */ jsx6(ImportPanel, { categories, locations, onDone: (text) => {
           setInfo(text);
           load();
         } }),
-        showRacks && /* @__PURE__ */ jsx5(RacksPanel, { items: items ?? [], onChanged: load }),
-        showTaxonomy && /* @__PURE__ */ jsx5(TaxonomyPanel, { categories, locations, onChanged: load }),
-        error && /* @__PURE__ */ jsx5(LoadError, { what: "Das Inventar", error, onRetry: load, hint: "Angezeigt wird der letzte geladene Stand." }),
-        info && /* @__PURE__ */ jsx5(Notice, { kind: "ok", text: info, onClose: () => setInfo(null) }),
-        message && /* @__PURE__ */ jsx5(Notice, { text: message, onClose: () => setMessage(null) }),
+        showRacks && /* @__PURE__ */ jsx6(RacksPanel, { items: items ?? [], onChanged: load }),
+        showTaxonomy && /* @__PURE__ */ jsx6(TaxonomyPanel, { categories, locations, onChanged: load }),
+        error && /* @__PURE__ */ jsx6(LoadError, { what: "Das Inventar", error, onRetry: load, hint: "Angezeigt wird der letzte geladene Stand." }),
+        info && /* @__PURE__ */ jsx6(Notice, { kind: "ok", text: info, onClose: () => setInfo(null) }),
+        message && /* @__PURE__ */ jsx6(Notice, { text: message, onClose: () => setMessage(null) }),
         items && items.length > 0 && /* @__PURE__ */ jsxs4("div", { className: "mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4", "data-testid": "inventory-summary", children: [
-          /* @__PURE__ */ jsx5(Stat, { label: "Gegenst\xE4nde", value: visible.length, hint: `${visible.length} Gegenstand/Gegenst\xE4nde angezeigt` }),
-          /* @__PURE__ */ jsx5(Stat, { label: "Gesamtwert", value: (totalCents / 100).toLocaleString("de-DE", { style: "currency", currency: "EUR" }) }),
-          /* @__PURE__ */ jsx5(Stat, { label: "Garantie endet bald", value: soonCount, hint: "in den n\xE4chsten 90 Tagen", tone: soonCount ? "warn" : void 0 }),
-          /* @__PURE__ */ jsx5(Stat, { label: "Garantie abgelaufen", value: expiredCount, hint: `${expiredCount} abgelaufen`, tone: expiredCount ? "bad" : void 0 })
+          /* @__PURE__ */ jsx6(Stat, { label: "Gegenst\xE4nde", value: visible.length, hint: `${visible.length} Gegenstand/Gegenst\xE4nde angezeigt` }),
+          /* @__PURE__ */ jsx6(Stat, { label: "Gesamtwert", value: (totalCents / 100).toLocaleString("de-DE", { style: "currency", currency: "EUR" }) }),
+          /* @__PURE__ */ jsx6(Stat, { label: "Garantie endet bald", value: soonCount, hint: "in den n\xE4chsten 90 Tagen", tone: soonCount ? "warn" : void 0 }),
+          /* @__PURE__ */ jsx6(Stat, { label: "Garantie abgelaufen", value: expiredCount, hint: `${expiredCount} abgelaufen`, tone: expiredCount ? "bad" : void 0 })
         ] }),
-        showForm && /* @__PURE__ */ jsx5("form", { onSubmit: (e) => void submitForm(e), className: "mb-5", children: /* @__PURE__ */ jsxs4(
+        showForm && /* @__PURE__ */ jsx6("form", { onSubmit: (e) => void submitForm(e), className: "mb-5", children: /* @__PURE__ */ jsxs4(
           Card,
           {
             title: editingId ? "Gegenstand bearbeiten" : "Neuer Gegenstand",
-            actions: /* @__PURE__ */ jsx5(Button, { variant: "ghost", ariaLabel: "Formular schlie\xDFen", onClick: () => setShowForm(false), children: /* @__PURE__ */ jsx5(Icon, { name: "x", size: 14 }) }),
+            actions: /* @__PURE__ */ jsx6(Button, { variant: "ghost", ariaLabel: "Formular schlie\xDFen", onClick: () => setShowForm(false), children: /* @__PURE__ */ jsx6(Icon, { name: "x", size: 14 }) }),
             children: [
               /* @__PURE__ */ jsxs4("div", { className: "grid gap-4 sm:grid-cols-2 lg:grid-cols-4", children: [
-                /* @__PURE__ */ jsx5(Field, { label: "Name", className: "sm:col-span-2", children: input("name", { required: true }) }),
-                /* @__PURE__ */ jsx5(Field, { label: "Menge", children: input("quantity", { type: "number", min: "0", max: "100000" }) }),
-                /* @__PURE__ */ jsx5(Field, { label: "Preis (\u20AC)", children: input("purchase_price", { type: "number", step: "0.01", min: "0", max: "10000000" }) }),
-                /* @__PURE__ */ jsx5(Field, { label: "Kategorie", children: /* @__PURE__ */ jsxs4("select", { value: form.category_id, onChange: (e) => setForm({ ...form, category_id: e.target.value }), className: inputClass, children: [
-                  /* @__PURE__ */ jsx5("option", { value: "", children: "\u2013" }),
-                  categories.map((c) => /* @__PURE__ */ jsx5("option", { value: c.id, children: c.name }, c.id))
+                /* @__PURE__ */ jsx6(Field, { label: "Name", className: "sm:col-span-2", children: input("name", { required: true }) }),
+                /* @__PURE__ */ jsx6(Field, { label: "Menge", children: input("quantity", { type: "number", min: "0", max: "100000" }) }),
+                /* @__PURE__ */ jsx6(Field, { label: "Preis (\u20AC)", children: input("purchase_price", { type: "number", step: "0.01", min: "0", max: "10000000" }) }),
+                /* @__PURE__ */ jsx6(Field, { label: "Kategorie", children: /* @__PURE__ */ jsxs4("select", { value: form.category_id, onChange: (e) => setForm({ ...form, category_id: e.target.value }), className: inputClass, children: [
+                  /* @__PURE__ */ jsx6("option", { value: "", children: "\u2013" }),
+                  categories.map((c) => /* @__PURE__ */ jsx6("option", { value: c.id, children: c.name }, c.id))
                 ] }) }),
-                /* @__PURE__ */ jsx5(Field, { label: "Standort", children: /* @__PURE__ */ jsxs4("select", { value: form.location_id, onChange: (e) => setForm({ ...form, location_id: e.target.value }), className: inputClass, children: [
-                  /* @__PURE__ */ jsx5("option", { value: "", children: "\u2013" }),
-                  locations.map((l) => /* @__PURE__ */ jsx5("option", { value: l.id, children: l.name }, l.id))
+                /* @__PURE__ */ jsx6(Field, { label: "Standort", children: /* @__PURE__ */ jsxs4("select", { value: form.location_id, onChange: (e) => setForm({ ...form, location_id: e.target.value }), className: inputClass, children: [
+                  /* @__PURE__ */ jsx6("option", { value: "", children: "\u2013" }),
+                  locations.map((l) => /* @__PURE__ */ jsx6("option", { value: l.id, children: l.name }, l.id))
                 ] }) }),
-                /* @__PURE__ */ jsx5(Field, { label: "Kaufdatum", children: input("purchase_date", { type: "date" }) }),
-                /* @__PURE__ */ jsx5(Field, { label: "Garantie bis", children: input("warranty_until", { type: "date" }) }),
-                /* @__PURE__ */ jsx5(Field, { label: "Beschreibung", className: "sm:col-span-2", children: /* @__PURE__ */ jsx5("textarea", { value: form.description, onChange: (e) => setForm({ ...form, description: e.target.value }), className: inputClass, rows: 3 }) }),
-                /* @__PURE__ */ jsx5(Field, { label: "Notizen", className: "sm:col-span-2", children: /* @__PURE__ */ jsx5("textarea", { value: form.notes, onChange: (e) => setForm({ ...form, notes: e.target.value }), className: inputClass, rows: 3 }) })
+                /* @__PURE__ */ jsx6(Field, { label: "Kaufdatum", children: input("purchase_date", { type: "date" }) }),
+                /* @__PURE__ */ jsx6(Field, { label: "Garantie bis", children: input("warranty_until", { type: "date" }) }),
+                /* @__PURE__ */ jsx6(Field, { label: "Beschreibung", className: "sm:col-span-2", children: /* @__PURE__ */ jsx6("textarea", { value: form.description, onChange: (e) => setForm({ ...form, description: e.target.value }), className: inputClass, rows: 3 }) }),
+                /* @__PURE__ */ jsx6(Field, { label: "Notizen", className: "sm:col-span-2", children: /* @__PURE__ */ jsx6("textarea", { value: form.notes, onChange: (e) => setForm({ ...form, notes: e.target.value }), className: inputClass, rows: 3 }) })
               ] }),
               /* @__PURE__ */ jsxs4(
                 "details",
@@ -2001,74 +2015,74 @@ function InventoryPage() {
                   onToggle: (e) => setTechOpen(e.currentTarget.open),
                   "data-testid": "tech-fields",
                   children: [
-                    /* @__PURE__ */ jsx5("summary", { className: "cursor-pointer text-sm text-white/70", children: "Technik: Hersteller, Modell, Server, Bauprojekt" }),
+                    /* @__PURE__ */ jsx6("summary", { className: "cursor-pointer text-sm text-white/70", children: "Technik: Hersteller, Modell, Server, Bauprojekt" }),
                     /* @__PURE__ */ jsxs4("div", { className: "mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-4", children: [
-                      /* @__PURE__ */ jsx5(Field, { label: "Hersteller", children: input("manufacturer", { maxLength: 200 }) }),
-                      /* @__PURE__ */ jsx5(Field, { label: "Modell", children: input("model", { maxLength: 200 }) }),
-                      /* @__PURE__ */ jsx5(Field, { label: "Seriennummer", children: input("serial_number", { maxLength: 200 }) }),
-                      /* @__PURE__ */ jsx5(Field, { label: "Produktlink", children: input("product_url", { type: "url", placeholder: "https://\u2026", maxLength: 2e3 }) }),
-                      hosts && /* @__PURE__ */ jsx5(Field, { label: "Geh\xF6rt zu Server", children: /* @__PURE__ */ jsxs4("select", { value: form.host_id, onChange: (e) => setForm({ ...form, host_id: e.target.value }), className: inputClass, children: [
-                        /* @__PURE__ */ jsx5("option", { value: "", children: "\u2013" }),
-                        form.host_id && !hosts.some((h) => h.id === form.host_id) && /* @__PURE__ */ jsx5("option", { value: form.host_id, children: form.host_id }),
-                        hosts.map((h) => /* @__PURE__ */ jsx5("option", { value: h.id, children: h.display_name || h.name }, h.id))
+                      /* @__PURE__ */ jsx6(Field, { label: "Hersteller", children: input("manufacturer", { maxLength: 200 }) }),
+                      /* @__PURE__ */ jsx6(Field, { label: "Modell", children: input("model", { maxLength: 200 }) }),
+                      /* @__PURE__ */ jsx6(Field, { label: "Seriennummer", children: input("serial_number", { maxLength: 200 }) }),
+                      /* @__PURE__ */ jsx6(Field, { label: "Produktlink", children: input("product_url", { type: "url", placeholder: "https://\u2026", maxLength: 2e3 }) }),
+                      hosts && /* @__PURE__ */ jsx6(Field, { label: "Geh\xF6rt zu Server", children: /* @__PURE__ */ jsxs4("select", { value: form.host_id, onChange: (e) => setForm({ ...form, host_id: e.target.value }), className: inputClass, children: [
+                        /* @__PURE__ */ jsx6("option", { value: "", children: "\u2013" }),
+                        form.host_id && !hosts.some((h) => h.id === form.host_id) && /* @__PURE__ */ jsx6("option", { value: form.host_id, children: form.host_id }),
+                        hosts.map((h) => /* @__PURE__ */ jsx6("option", { value: h.id, children: h.display_name || h.name }, h.id))
                       ] }) }),
-                      /* @__PURE__ */ jsx5(Field, { label: "Bauprojekt", children: /* @__PURE__ */ jsxs4("select", { value: form.project_id, onChange: (e) => setForm({ ...form, project_id: e.target.value }), className: inputClass, children: [
-                        /* @__PURE__ */ jsx5("option", { value: "", children: "\u2013" }),
-                        projects.map((p) => /* @__PURE__ */ jsx5("option", { value: p.id, children: p.name }, p.id))
+                      /* @__PURE__ */ jsx6(Field, { label: "Bauprojekt", children: /* @__PURE__ */ jsxs4("select", { value: form.project_id, onChange: (e) => setForm({ ...form, project_id: e.target.value }), className: inputClass, children: [
+                        /* @__PURE__ */ jsx6("option", { value: "", children: "\u2013" }),
+                        projects.map((p) => /* @__PURE__ */ jsx6("option", { value: p.id, children: p.name }, p.id))
                       ] }) })
                     ] })
                   ]
                 }
               ),
               /* @__PURE__ */ jsxs4("div", { className: "mt-4 flex justify-end gap-2", children: [
-                /* @__PURE__ */ jsx5(Button, { variant: "ghost", onClick: () => setShowForm(false), children: "Abbrechen" }),
-                /* @__PURE__ */ jsx5(Button, { type: "submit", variant: "primary", children: editingId ? "Speichern" : "Anlegen" })
+                /* @__PURE__ */ jsx6(Button, { variant: "ghost", onClick: () => setShowForm(false), children: "Abbrechen" }),
+                /* @__PURE__ */ jsx6(Button, { type: "submit", variant: "primary", children: editingId ? "Speichern" : "Anlegen" })
               ] })
             ]
           }
         ) }),
-        items && items.length === 0 ? /* @__PURE__ */ jsx5(
+        items && items.length === 0 ? /* @__PURE__ */ jsx6(
           EmptyState,
           {
             icon: "package",
             title: "Noch keine Gegenst\xE4nde erfasst.",
             text: "Erfasse Ger\xE4te, Werkzeug oder Ersatzteile mit Standort, Kaufpreis und Garantie \u2013 dann warnt das Dashboard rechtzeitig, bevor eine Garantie abl\xE4uft.",
             action: !showForm && /* @__PURE__ */ jsxs4(Button, { variant: "primary", onClick: startCreate, children: [
-              /* @__PURE__ */ jsx5(Icon, { name: "plus", size: 14 }),
+              /* @__PURE__ */ jsx6(Icon, { name: "plus", size: 14 }),
               " Ersten Gegenstand anlegen"
             ] })
           }
         ) : /* @__PURE__ */ jsxs4(Fragment2, { children: [
           /* @__PURE__ */ jsxs4("div", { className: "mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5", children: [
-            /* @__PURE__ */ jsx5(SearchInput, { value: search, onChange: setSearch, placeholder: "Suchen \u2026", label: "Suchen" }),
+            /* @__PURE__ */ jsx6(SearchInput, { value: search, onChange: setSearch, placeholder: "Suchen \u2026", label: "Suchen" }),
             /* @__PURE__ */ jsxs4("select", { value: categoryFilter, onChange: (e) => setCategoryFilter(e.target.value), "aria-label": "Nach Kategorie filtern", className: `${inputClass} w-auto`, children: [
-              /* @__PURE__ */ jsx5("option", { value: "", children: "Alle Kategorien" }),
-              categories.map((c) => /* @__PURE__ */ jsx5("option", { value: c.id, children: c.name }, c.id))
+              /* @__PURE__ */ jsx6("option", { value: "", children: "Alle Kategorien" }),
+              categories.map((c) => /* @__PURE__ */ jsx6("option", { value: c.id, children: c.name }, c.id))
             ] }),
             /* @__PURE__ */ jsxs4("select", { value: locationFilter, onChange: (e) => setLocationFilter(e.target.value), "aria-label": "Nach Standort filtern", className: `${inputClass} w-auto`, children: [
-              /* @__PURE__ */ jsx5("option", { value: "", children: "Alle Standorte" }),
-              locations.map((l) => /* @__PURE__ */ jsx5("option", { value: l.id, children: l.name }, l.id))
+              /* @__PURE__ */ jsx6("option", { value: "", children: "Alle Standorte" }),
+              locations.map((l) => /* @__PURE__ */ jsx6("option", { value: l.id, children: l.name }, l.id))
             ] }),
             projects.length > 0 && /* @__PURE__ */ jsxs4("select", { value: projectFilter, onChange: (e) => setProjectFilter(e.target.value), "aria-label": "Nach Bauprojekt filtern", className: `${inputClass} w-auto`, children: [
-              /* @__PURE__ */ jsx5("option", { value: "", children: "Alle Bauprojekte" }),
-              projects.map((p) => /* @__PURE__ */ jsx5("option", { value: p.id, children: p.name }, p.id))
+              /* @__PURE__ */ jsx6("option", { value: "", children: "Alle Bauprojekte" }),
+              projects.map((p) => /* @__PURE__ */ jsx6("option", { value: p.id, children: p.name }, p.id))
             ] }),
             /* @__PURE__ */ jsxs4("select", { value: warrantyFilter, onChange: (e) => setWarrantyFilter(e.target.value), "aria-label": "Nach Garantie filtern", className: `${inputClass} w-auto`, children: [
-              /* @__PURE__ */ jsx5("option", { value: "", children: "Garantie: alle" }),
-              /* @__PURE__ */ jsx5("option", { value: "active", children: "l\xE4uft noch" }),
-              /* @__PURE__ */ jsx5("option", { value: "soon", children: "l\xE4uft in 90 Tagen ab" }),
-              /* @__PURE__ */ jsx5("option", { value: "expired", children: "abgelaufen" }),
-              /* @__PURE__ */ jsx5("option", { value: "none", children: "keine Angabe" })
+              /* @__PURE__ */ jsx6("option", { value: "", children: "Garantie: alle" }),
+              /* @__PURE__ */ jsx6("option", { value: "active", children: "l\xE4uft noch" }),
+              /* @__PURE__ */ jsx6("option", { value: "soon", children: "l\xE4uft in 90 Tagen ab" }),
+              /* @__PURE__ */ jsx6("option", { value: "expired", children: "abgelaufen" }),
+              /* @__PURE__ */ jsx6("option", { value: "none", children: "keine Angabe" })
             ] })
           ] }),
           /* @__PURE__ */ jsxs4("ul", { className: "panel divide-y divide-white/[0.06]", children: [
-            visible.length === 0 && /* @__PURE__ */ jsx5("li", { className: "px-5 py-8 text-center text-sm text-white/45", children: "Nichts gefunden \u2013 Filter anpassen." }),
+            visible.length === 0 && /* @__PURE__ */ jsx6("li", { className: "px-5 py-8 text-center text-sm text-white/45", children: "Nichts gefunden \u2013 Filter anpassen." }),
             visible.map((item) => {
               const isExpanded = expanded === item.id;
               const ws = warrantyState(item.warranty_until);
               return /* @__PURE__ */ jsxs4("li", { className: "px-4 py-3", children: [
                 /* @__PURE__ */ jsxs4("div", { className: "flex items-center gap-3", children: [
-                  /* @__PURE__ */ jsx5(
+                  /* @__PURE__ */ jsx6(
                     "button",
                     {
                       type: "button",
@@ -2076,12 +2090,12 @@ function InventoryPage() {
                       "aria-label": isExpanded ? "Details ausblenden" : "Details anzeigen",
                       "aria-expanded": isExpanded,
                       className: "rounded p-1 text-white/40 hover:bg-white/[0.06] hover:text-white",
-                      children: /* @__PURE__ */ jsx5(Icon, { name: isExpanded ? "chevron-down" : "chevron-right", size: 15 })
+                      children: /* @__PURE__ */ jsx6(Icon, { name: isExpanded ? "chevron-down" : "chevron-right", size: 15 })
                     }
                   ),
-                  item.images[0] ? /* @__PURE__ */ jsx5(AuthImage, { src: item.images[0].url, alt: "", className: "h-11 w-11 flex-none rounded-lg object-cover" }) : /* @__PURE__ */ jsx5("span", { className: "grid h-11 w-11 flex-none place-items-center rounded-lg bg-white/[0.05] text-white/35", children: /* @__PURE__ */ jsx5(Icon, { name: "package", size: 18 }) }),
+                  item.images[0] ? /* @__PURE__ */ jsx6(AuthImage, { src: item.images[0].url, alt: "", className: "h-11 w-11 flex-none rounded-lg object-cover" }) : /* @__PURE__ */ jsx6("span", { className: "grid h-11 w-11 flex-none place-items-center rounded-lg bg-white/[0.05] text-white/35", children: /* @__PURE__ */ jsx6(Icon, { name: "package", size: 18 }) }),
                   /* @__PURE__ */ jsxs4("div", { className: "min-w-0 flex-1", children: [
-                    /* @__PURE__ */ jsx5("p", { className: "truncate text-sm font-medium", children: item.name }),
+                    /* @__PURE__ */ jsx6("p", { className: "truncate text-sm font-medium", children: item.name }),
                     /* @__PURE__ */ jsxs4("p", { className: "truncate text-xs text-white/50", children: [
                       [item.manufacturer, item.model].filter(Boolean).join(" ") || categoryName(item.category_id),
                       " \xB7 ",
@@ -2095,90 +2109,90 @@ function InventoryPage() {
                     ] })
                   ] }),
                   /* @__PURE__ */ jsxs4("div", { className: "hidden flex-none text-right sm:block", children: [
-                    /* @__PURE__ */ jsx5("p", { className: "text-sm tabular-nums", children: formatPrice(item.purchase_price_cents) }),
-                    item.warranty_until && /* @__PURE__ */ jsx5(Badge, { tone: WARRANTY_BADGE[ws].tone, children: WARRANTY_BADGE[ws].label(item.warranty_until) })
+                    /* @__PURE__ */ jsx6("p", { className: "text-sm tabular-nums", children: formatPrice(item.purchase_price_cents) }),
+                    item.warranty_until && /* @__PURE__ */ jsx6(Badge, { tone: WARRANTY_BADGE[ws].tone, children: WARRANTY_BADGE[ws].label(item.warranty_until) })
                   ] }),
                   /* @__PURE__ */ jsxs4("div", { className: "flex flex-none items-center gap-1", children: [
                     /* @__PURE__ */ jsxs4(Button, { small: true, onClick: () => startEdit(item), title: "Bearbeiten", children: [
-                      /* @__PURE__ */ jsx5(Icon, { name: "edit", size: 13 }),
-                      /* @__PURE__ */ jsx5("span", { className: "sr-only sm:not-sr-only", children: " Bearbeiten" })
+                      /* @__PURE__ */ jsx6(Icon, { name: "edit", size: 13 }),
+                      /* @__PURE__ */ jsx6("span", { className: "sr-only sm:not-sr-only", children: " Bearbeiten" })
                     ] }),
                     /* @__PURE__ */ jsxs4(Button, { small: true, variant: "danger", onClick: () => void removeItem(item), title: "L\xF6schen", children: [
-                      /* @__PURE__ */ jsx5(Icon, { name: "trash", size: 13 }),
-                      /* @__PURE__ */ jsx5("span", { className: "sr-only sm:not-sr-only", children: " L\xF6schen" })
+                      /* @__PURE__ */ jsx6(Icon, { name: "trash", size: 13 }),
+                      /* @__PURE__ */ jsx6("span", { className: "sr-only sm:not-sr-only", children: " L\xF6schen" })
                     ] })
                   ] })
                 ] }),
                 isExpanded && /* @__PURE__ */ jsxs4("div", { className: "ml-10 mt-3 rounded-lg border border-white/[0.06] bg-black/15 p-4 text-sm", children: [
-                  item.description && /* @__PURE__ */ jsx5("p", { className: "mb-3 text-white/80", children: item.description }),
+                  item.description && /* @__PURE__ */ jsx6("p", { className: "mb-3 text-white/80", children: item.description }),
                   /* @__PURE__ */ jsxs4("dl", { className: "mb-4 grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4", children: [
                     /* @__PURE__ */ jsxs4("div", { children: [
-                      /* @__PURE__ */ jsx5("dt", { className: "text-xs text-white/45", children: "Kaufdatum" }),
-                      /* @__PURE__ */ jsx5("dd", { children: formatDate(item.purchase_date) })
+                      /* @__PURE__ */ jsx6("dt", { className: "text-xs text-white/45", children: "Kaufdatum" }),
+                      /* @__PURE__ */ jsx6("dd", { children: formatDate(item.purchase_date) })
                     ] }),
                     /* @__PURE__ */ jsxs4("div", { children: [
-                      /* @__PURE__ */ jsx5("dt", { className: "text-xs text-white/45", children: "Preis" }),
-                      /* @__PURE__ */ jsx5("dd", { children: formatPrice(item.purchase_price_cents) })
+                      /* @__PURE__ */ jsx6("dt", { className: "text-xs text-white/45", children: "Preis" }),
+                      /* @__PURE__ */ jsx6("dd", { children: formatPrice(item.purchase_price_cents) })
                     ] }),
                     /* @__PURE__ */ jsxs4("div", { children: [
-                      /* @__PURE__ */ jsx5("dt", { className: "text-xs text-white/45", children: "Garantie bis" }),
-                      /* @__PURE__ */ jsx5("dd", { children: formatDate(item.warranty_until) })
+                      /* @__PURE__ */ jsx6("dt", { className: "text-xs text-white/45", children: "Garantie bis" }),
+                      /* @__PURE__ */ jsx6("dd", { children: formatDate(item.warranty_until) })
                     ] }),
                     /* @__PURE__ */ jsxs4("div", { children: [
-                      /* @__PURE__ */ jsx5("dt", { className: "text-xs text-white/45", children: "Notizen" }),
-                      /* @__PURE__ */ jsx5("dd", { children: item.notes ?? "\u2013" })
+                      /* @__PURE__ */ jsx6("dt", { className: "text-xs text-white/45", children: "Notizen" }),
+                      /* @__PURE__ */ jsx6("dd", { children: item.notes ?? "\u2013" })
                     ] }),
                     item.manufacturer && /* @__PURE__ */ jsxs4("div", { children: [
-                      /* @__PURE__ */ jsx5("dt", { className: "text-xs text-white/45", children: "Hersteller" }),
-                      /* @__PURE__ */ jsx5("dd", { children: item.manufacturer })
+                      /* @__PURE__ */ jsx6("dt", { className: "text-xs text-white/45", children: "Hersteller" }),
+                      /* @__PURE__ */ jsx6("dd", { children: item.manufacturer })
                     ] }),
                     item.model && /* @__PURE__ */ jsxs4("div", { children: [
-                      /* @__PURE__ */ jsx5("dt", { className: "text-xs text-white/45", children: "Modell" }),
-                      /* @__PURE__ */ jsx5("dd", { children: item.model })
+                      /* @__PURE__ */ jsx6("dt", { className: "text-xs text-white/45", children: "Modell" }),
+                      /* @__PURE__ */ jsx6("dd", { children: item.model })
                     ] }),
                     item.serial_number && /* @__PURE__ */ jsxs4("div", { children: [
-                      /* @__PURE__ */ jsx5("dt", { className: "text-xs text-white/45", children: "Seriennummer" }),
-                      /* @__PURE__ */ jsx5("dd", { className: "font-mono text-xs", children: item.serial_number })
+                      /* @__PURE__ */ jsx6("dt", { className: "text-xs text-white/45", children: "Seriennummer" }),
+                      /* @__PURE__ */ jsx6("dd", { className: "font-mono text-xs", children: item.serial_number })
                     ] }),
                     hostName(item.host_id) && /* @__PURE__ */ jsxs4("div", { children: [
-                      /* @__PURE__ */ jsx5("dt", { className: "text-xs text-white/45", children: "Server" }),
-                      /* @__PURE__ */ jsx5("dd", { children: hostName(item.host_id) })
+                      /* @__PURE__ */ jsx6("dt", { className: "text-xs text-white/45", children: "Server" }),
+                      /* @__PURE__ */ jsx6("dd", { children: hostName(item.host_id) })
                     ] }),
                     projectName(item.project_id) && /* @__PURE__ */ jsxs4("div", { children: [
-                      /* @__PURE__ */ jsx5("dt", { className: "text-xs text-white/45", children: "Bauprojekt" }),
-                      /* @__PURE__ */ jsx5("dd", { children: projectName(item.project_id) })
+                      /* @__PURE__ */ jsx6("dt", { className: "text-xs text-white/45", children: "Bauprojekt" }),
+                      /* @__PURE__ */ jsx6("dd", { children: projectName(item.project_id) })
                     ] }),
                     item.rack_id && /* @__PURE__ */ jsxs4("div", { children: [
-                      /* @__PURE__ */ jsx5("dt", { className: "text-xs text-white/45", children: "Im Rack" }),
-                      /* @__PURE__ */ jsx5("dd", { children: item.rack_position == null ? "ohne festen Platz" : (item.rack_units ?? 1) > 1 ? `HE ${item.rack_position}\u2013${item.rack_position + (item.rack_units ?? 1) - 1}` : `HE ${item.rack_position}` })
+                      /* @__PURE__ */ jsx6("dt", { className: "text-xs text-white/45", children: "Im Rack" }),
+                      /* @__PURE__ */ jsx6("dd", { children: item.rack_position == null ? "ohne festen Platz" : (item.rack_units ?? 1) > 1 ? `HE ${item.rack_position}\u2013${item.rack_position + (item.rack_units ?? 1) - 1}` : `HE ${item.rack_position}` })
                     ] })
                   ] }),
                   /* @__PURE__ */ jsxs4("div", { className: "mb-4 flex flex-wrap items-center gap-2 text-xs", "data-testid": `links-${item.id}`, children: [
-                    item.product_url && /* @__PURE__ */ jsx5("a", { href: item.product_url, target: "_blank", rel: "noopener noreferrer", className: "accent-soft rounded-lg px-2.5 py-1 hover:brightness-125", children: "Zum Produkt" }),
-                    /* @__PURE__ */ jsx5("span", { className: "text-white/45", children: "Preise vergleichen:" }),
-                    priceLinks(item).map((link) => /* @__PURE__ */ jsx5("a", { href: link.href, target: "_blank", rel: "noopener noreferrer", className: "rounded-lg border border-white/10 bg-white/[0.06] px-2.5 py-1 hover:bg-white/[0.12]", children: link.label }, link.label))
+                    safeHref(item.product_url) && /* @__PURE__ */ jsx6("a", { href: safeHref(item.product_url), target: "_blank", rel: "noopener noreferrer", className: "accent-soft rounded-lg px-2.5 py-1 hover:brightness-125", children: "Zum Produkt" }),
+                    /* @__PURE__ */ jsx6("span", { className: "text-white/45", children: "Preise vergleichen:" }),
+                    priceLinks(item).map((link) => /* @__PURE__ */ jsx6("a", { href: link.href, target: "_blank", rel: "noopener noreferrer", className: "rounded-lg border border-white/10 bg-white/[0.06] px-2.5 py-1 hover:bg-white/[0.12]", children: link.label }, link.label))
                   ] }),
-                  /* @__PURE__ */ jsx5("p", { className: "mb-2 text-xs text-white/45", children: "Fotos" }),
+                  /* @__PURE__ */ jsx6("p", { className: "mb-2 text-xs text-white/45", children: "Fotos" }),
                   /* @__PURE__ */ jsxs4("div", { className: "flex flex-wrap items-center gap-2", children: [
                     item.images.map((img) => /* @__PURE__ */ jsxs4("div", { className: "group relative", children: [
-                      /* @__PURE__ */ jsx5(AuthImage, { src: img.url, alt: "", className: "h-20 w-20 rounded-lg object-cover" }),
-                      /* @__PURE__ */ jsx5(
+                      /* @__PURE__ */ jsx6(AuthImage, { src: img.url, alt: "", className: "h-20 w-20 rounded-lg object-cover" }),
+                      /* @__PURE__ */ jsx6(
                         "button",
                         {
                           type: "button",
                           "aria-label": "Foto entfernen",
                           onClick: () => void removeImage(item, img),
                           className: "absolute right-1 top-1 rounded-full bg-black/70 p-1 text-white opacity-0 transition group-hover:opacity-100",
-                          children: /* @__PURE__ */ jsx5(Icon, { name: "x", size: 11 })
+                          children: /* @__PURE__ */ jsx6(Icon, { name: "x", size: 11 })
                         }
                       )
                     ] }, img.id)),
                     /* @__PURE__ */ jsxs4("label", { className: "flex h-20 w-20 cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-white/20 text-[11px] text-white/50 hover:border-white/40 hover:text-white", children: [
                       uploading === item.id ? "L\xE4dt \u2026" : /* @__PURE__ */ jsxs4(Fragment2, { children: [
-                        /* @__PURE__ */ jsx5(Icon, { name: "upload", size: 16 }),
+                        /* @__PURE__ */ jsx6(Icon, { name: "upload", size: 16 }),
                         " Foto"
                       ] }),
-                      /* @__PURE__ */ jsx5(
+                      /* @__PURE__ */ jsx6(
                         "input",
                         {
                           type: "file",
@@ -2194,7 +2208,7 @@ function InventoryPage() {
                       )
                     ] })
                   ] }),
-                  /* @__PURE__ */ jsx5("div", { className: "mt-4", children: /* @__PURE__ */ jsx5(ItemDocuments, { item }) })
+                  /* @__PURE__ */ jsx6("div", { className: "mt-4", children: /* @__PURE__ */ jsx6(ItemDocuments, { item }) })
                 ] })
               ] }, item.id);
             })

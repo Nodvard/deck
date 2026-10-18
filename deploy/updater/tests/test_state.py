@@ -1,7 +1,7 @@
 """`state.py`: eigener Zustand des Helfers in `/state`.
 
 Echtes Dateisystem unter `tmp_path`: Rechte, Sperre (zweite Instanz), atomares Schreiben mit fsync, kaputte
-Dateien -> definierter sicherer Zustand, Journal (Write-ahead, Schritte nur vorwaerts), Grenzen ueber Neustarts.
+Dateien -> definierter sicherer Zustand, Journal (Write-ahead, Schritte nur vorwärts), Grenzen über Neustarts.
 """
 
 from __future__ import annotations
@@ -190,7 +190,7 @@ def test_lock_as_symlink_or_hardlink_is_unsafe(state_dir, tmp_path, uid):
 
 
 def test_production_defaults_are_the_strict_ones():
-    # Testbarkeit ohne root nur ueber den Konstruktor (nie ueber die Umgebung); im Betrieb gelten die Vorgaben.
+    # Testbarkeit ohne root nur über den Konstruktor (nie über die Umgebung); im Betrieb gelten die Vorgaben.
     params = inspect.signature(StateStore.__init__).parameters
     assert params["path"].default == "/state"
     assert params["expected_uid"].default == 0 and params["expected_uid"].kind is inspect.Parameter.KEYWORD_ONLY
@@ -308,11 +308,11 @@ def test_corrupt_state_becomes_a_defined_safe_state(store, state_dir, raw):
     assert loaded == State(hold_until=NOW + 24 * 3600), "kein Slot, keine Aktionen fuer 24 h"
     assert (state_dir / "state.json.broken").read_bytes() == raw, "der kaputte Inhalt bleibt zur Ansicht"
     assert mode(state_dir / "state.json.broken") == 0o600
-    # Der sichere Zustand ist sofort gespeichert: ein Neustart setzt die Sperre nicht zurueck.
+    # Der sichere Zustand ist sofort gespeichert: ein Neustart setzt die Sperre nicht zurück.
     store.close()
     store.open()
     assert store.load_state(NOW + 60) == State(hold_until=NOW + 24 * 3600) and store.problem is None
-    # Bis dahin wird jede Anforderung abgelehnt, danach geht es normal weiter (ohne Rueckweg).
+    # Bis dahin wird jede Anforderung abgelehnt, danach geht es normal weiter (ohne Rückweg).
     with pytest.raises(Refusal) as info:
         store.check(loaded, make_request(), NOW + 24 * 3600 - 1)
     assert info.value.code == "state_unsafe"
@@ -327,7 +327,7 @@ def test_unsafe_state_files_are_corrupt_too(store, state_dir, tmp_path):
         lambda p: os.link(victim, p),                          # Hardlink
         lambda p: p.mkdir(),                                   # Ordner
         lambda p: os.mkfifo(p),                                # FIFO (blockiert nicht)
-        lambda p: p.write_bytes(b" " * (256 * 1024 + 1)),      # zu gross
+        lambda p: p.write_bytes(b" " * (256 * 1024 + 1)),      # zu groß
     ):
         target = state_dir / "state.json"
         make(target)
@@ -345,7 +345,7 @@ def test_unsafe_state_files_are_corrupt_too(store, state_dir, tmp_path):
 
 def test_sparse_state_file_is_not_read(store, state_dir):
     with open(state_dir / "state.json", "wb") as fh:
-        fh.truncate(1024**3)  # 1 GiB, duenn belegt
+        fh.truncate(1024**3)  # 1 GiB, dünn belegt
     assert store.load_state(NOW).hold_until == NOW + 24 * 3600
     assert not (state_dir / "state.json.broken").exists(), "zu grosse Dateien werden nicht kopiert"
 
@@ -365,14 +365,14 @@ def test_hold_is_extended_not_shortened(store):
 
 
 # ---------------------------------------------------------------------------
-# Lesefehler sind keine kaputten Dateien, der Notweg laesst es gesperrt, die Sperre geht nicht verloren
+# Lesefehler sind keine kaputten Dateien, der Notweg lässt es gesperrt, die Sperre geht nicht verloren
 # ---------------------------------------------------------------------------
 
 TRANSIENT = [errno.EMFILE, errno.ENFILE, errno.ENOMEM, errno.EIO, errno.ESTALE, errno.EAGAIN]
 
 
 def fail_reads(monkeypatch, name, err, *, times=1):
-    """`times`-mal scheitert das Oeffnen von `name` (zum Lesen) mit `err`; danach geht es wieder."""
+    """`times`-mal scheitert das Öffnen von `name` (zum Lesen) mit `err`; danach geht es wieder."""
     real_open = os.open
     left = [times]
 
@@ -386,7 +386,7 @@ def fail_reads(monkeypatch, name, err, *, times=1):
 
 
 def fail_once(monkeypatch, target, err):
-    """Der naechste Aufruf von `os.<target>` scheitert mit `err`; danach geht es wieder."""
+    """Der nächste Aufruf von `os.<target>` scheitert mit `err`; danach geht es wieder."""
     real = getattr(os, target)
     left = [1]
 
@@ -456,8 +456,8 @@ def test_transient_fstat_or_read_error_does_not_replace_a_valid_state(store, sta
 
 
 def test_read_and_write_errors_together_never_move_a_valid_state_aside(store, state_dir, monkeypatch):
-    # Probe EMFILE: der Deskriptor-Vorrat ist leer, Lesen *und* Schreiben scheitern. Frueher wurde dabei sogar der
-    # gueltige Zustand nach state.json.broken geschoben und nie ersetzt.
+    # Probe EMFILE: der Deskriptor-Vorrat ist leer, Lesen *und* Schreiben scheitern. Früher wurde dabei sogar der
+    # gültige Zustand nach state.json.broken geschoben und nie ersetzt.
     valid = State(slot=make_slot())
     store.save_state(valid)
     real_open = os.open
@@ -477,7 +477,7 @@ def test_read_and_write_errors_together_never_move_a_valid_state_aside(store, st
 @pytest.mark.parametrize("name", ["state.json", "journal.json"])
 @pytest.mark.parametrize("err", [errno.EACCES, errno.EPERM, errno.ENXIO, errno.ENODEV, errno.EINVAL])
 def test_open_errors_about_the_file_itself_still_count_as_invalid(store, state_dir, monkeypatch, name, err):
-    # Keine Rechte, kein Datei-Typ (Socket, Geraet): daran aendert ein zweiter Versuch nichts -> kaputt.
+    # Keine Rechte, kein Datei-Typ (Socket, Gerät): daran ändert ein zweiter Versuch nichts -> kaputt.
     if name == "state.json":
         store.save_state(State(slot=make_slot()))
     else:
@@ -502,8 +502,8 @@ def refuse_creating_files(monkeypatch, err=errno.ENOSPC):
 
 @pytest.mark.parametrize("err", [errno.ENOSPC, errno.EMFILE, errno.EIO, errno.EROFS], ids=errno.errorcode.get)
 def test_failed_safe_state_write_keeps_the_hold_after_a_restart(store, state_dir, monkeypatch, err):
-    # Kaputtes state.json, und das Schreiben des sicheren Zustands scheitert. Frueher wurde die Datei
-    # trotzdem nach .broken geschoben -> beim naechsten Start gab es `State()` ohne Sperre.
+    # Kaputtes state.json, und das Schreiben des sicheren Zustands scheitert. Früher wurde die Datei
+    # trotzdem nach .broken geschoben -> beim nächsten Start gab es `State()` ohne Sperre.
     (state_dir / "state.json").write_bytes(b"kaputt")
     refuse_creating_files(monkeypatch, err)
     assert unsafe_detail(store.load_state, NOW) == "state_write"
@@ -537,7 +537,7 @@ def test_failed_dir_fsync_after_the_safe_state_was_written_does_not_move_it_asid
 
 def test_state_json_as_directory_and_failing_second_write_still_ends_up_held(store, state_dir, monkeypatch):
     # Der gedachte Notweg: state.json ist ein Ordner. Scheitert danach auch das zweite Speichern, fehlt state.json --
-    # `state.json.broken` verraet, dass der Zustand schon kaputt war: beim naechsten Laden gilt der sichere Zustand.
+    # `state.json.broken` verrät, dass der Zustand schon kaputt war: beim nächsten Laden gilt der sichere Zustand.
     (state_dir / "state.json").mkdir()
     refuse_creating_files(monkeypatch)
     assert unsafe_detail(store.load_state, NOW) == "state_write"
@@ -562,7 +562,7 @@ def corrupt_journal_file(state_dir):
 
 
 def test_hold_from_a_corrupt_journal_survives_saving_an_older_state(store, state_dir):
-    # Die Schleife haelt einen frueher geladenen State; load_journal findet ein kaputtes Journal und setzt die
+    # Die Schleife hält einen früher geladenen State; load_journal findet ein kaputtes Journal und setzt die
     # Sperre. Speichert die Schleife danach ihren alten State, darf die Sperre nicht verschwinden.
     mem = store.load_state(NOW)
     corrupt_journal_file(state_dir)
@@ -587,7 +587,7 @@ def test_hold_floor_never_lowers_what_is_saved_and_ends_with_the_hold(store):
     assert store.load_state(NOW).hold_until == NOW + 24 * 3600 + 30, "was mehr sperrt, bleibt"
     later = NOW + 24 * 3600 + 1
     fresh = store.load_state(later)
-    fresh.prune(later + 100)  # die Sperre ist abgelaufen und wird beim Aufraeumen entfernt
+    fresh.prune(later + 100)  # die Sperre ist abgelaufen und wird beim Aufräumen entfernt
     store.save_state(fresh)
     assert store.load_state(later + 100).hold_until is None, "danach haelt der Store sie nicht mehr fest"
 
@@ -604,8 +604,8 @@ def test_floor_does_not_outlive_the_store_session(state_dir, uid):
 
 
 def test_check_with_a_state_loaded_before_the_journal_broke_still_sees_the_hold(store, state_dir):
-    # Gegenpruefung: die Schleife laedt den State, danach erkennt `load_journal` ein kaputtes Journal und setzt die
-    # Sperre. `check` am alten State (frueher `State.check`) sah sie nicht und nahm die Anforderung an.
+    # Gegenprüfung: die Schleife lädt den State, danach erkennt `load_journal` ein kaputtes Journal und setzt die
+    # Sperre. `check` am alten State (früher `State.check`) sah sie nicht und nahm die Anforderung an.
     mem = store.load_state(NOW)
     corrupt_journal_file(state_dir)
     with pytest.raises(Refusal) as info:
@@ -641,7 +641,7 @@ def count_state_writes(monkeypatch) -> list[str]:
 
 
 def test_clock_set_back_caps_the_hold_floor_too_and_loading_stops_writing(store, state_dir, monkeypatch):
-    # Kaputtes state.json -> Sperre bis NOW + 24 h; die Uhr wird um drei Tage zurueckgestellt. Die Sperre des
+    # Kaputtes state.json -> Sperre bis NOW + 24 h; die Uhr wird um drei Tage zurückgestellt. Die Sperre des
     # Speichers (`_hold_floor`) hob die Kappung von `hold_until` immer wieder auf: 96 h statt 24 h, und jedes
     # `load_state` schrieb die Datei neu.
     (state_dir / "state.json").write_bytes(b"kaputt")
@@ -678,14 +678,14 @@ def test_load_state_writes_only_when_something_changed(store, monkeypatch):
     for i in range(1, 4):
         assert store.load_state(NOW + i).hold_until == NOW + 24 * 3600
     assert writes == [], "nichts geaendert, nichts geschrieben"
-    # Eine kleine Rueckstellung (innerhalb der Toleranz) kappt nichts und schreibt nichts.
+    # Eine kleine Rückstellung (innerhalb der Toleranz) kappt nichts und schreibt nichts.
     assert store.load_state(NOW - 30).hold_until == NOW + 24 * 3600
     assert writes == []
 
 
 def test_load_state_brings_the_hold_floor_into_the_returned_state_and_saves_it_once(store, state_dir, monkeypatch):
     store.hold(NOW)
-    (state_dir / "state.json").write_text(json.dumps({**GOOD, "hold_until": NOW + 5}))  # von aussen ueberschrieben
+    (state_dir / "state.json").write_text(json.dumps({**GOOD, "hold_until": NOW + 5}))  # von außen überschrieben
     writes = count_state_writes(monkeypatch)
     assert store.load_state(NOW + 1).hold_until == NOW + 24 * 3600, "die Sperre des Speichers gilt im State"
     assert len(writes) == 1
@@ -695,7 +695,7 @@ def test_load_state_brings_the_hold_floor_into_the_returned_state_and_saves_it_o
 
 
 # ---------------------------------------------------------------------------
-# Zustand: Grenzen, Slot, Aufraeumen
+# Zustand: Grenzen, Slot, Aufräumen
 # ---------------------------------------------------------------------------
 
 
@@ -719,8 +719,8 @@ def test_limits_survive_a_restart(store):
 
 
 def test_refused_requests_do_not_count_against_the_rate_limit(store):
-    # Abgelehnte Anforderungen zaehlen nicht: Abgelehntes wird nur als gesehen gemerkt (Replay), nur eine
-    # angenommene Aktion (`record_action`) sperrt die naechsten 10 Minuten.
+    # Abgelehnte Anforderungen zählen nicht: Abgelehntes wird nur als gesehen gemerkt (Replay), nur eine
+    # angenommene Aktion (`record_action`) sperrt die nächsten 10 Minuten.
     s = State()
     s.mark_seen(RID, NOW)
     store.check(s, make_request(rid=RID2), NOW + 1)  # keine rate_limited
@@ -779,7 +779,7 @@ def test_caps_keep_the_newest_entries(store):
 
 
 # ---------------------------------------------------------------------------
-# Zeitstempel in der Zukunft: sperren, aber hoechstens bis zur Hoechstfrist
+# Zeitstempel in der Zukunft: sperren, aber höchstens bis zur Höchstfrist
 # ---------------------------------------------------------------------------
 
 FAR = NOW + 10 * 365 * 86400
@@ -811,8 +811,8 @@ def refused(store, s, request, now) -> str | None:
 
 
 def test_after_a_clock_jump_the_block_ends_with_the_maximum_period_not_in_years(store):
-    # Die Uhr sprang vor, eine Aktion wurde angenommen, die Uhr wurde zurueckgestellt: frueher sperrte das bis
-    # `FAR`. Jetzt: 10 Minuten ab dem ersten Pruefen bei richtiger Uhr, 24 h bzw. 1 h fuer die anderen Sperren.
+    # Die Uhr sprang vor, eine Aktion wurde angenommen, die Uhr wurde zurückgestellt: früher sperrte das bis
+    # `FAR`. Jetzt: 10 Minuten ab dem ersten Prüfen bei richtiger Uhr, 24 h bzw. 1 h für die anderen Sperren.
     request = make_request(rid=RID2)
     rate = State(actions=[FAR])
     assert refused(store, rate, request, NOW) == "rate_limited"
@@ -836,7 +836,7 @@ def test_load_state_caps_the_future_and_keeps_the_capped_state(store, state_dir)
     store.save_state(State(actions=[FAR], blocked={"0.7.1": FAR}, seen={RID: FAR}))
     first = store.load_state(NOW)
     assert first.actions == [NOW] and first.blocked == {"0.7.1": NOW + 24 * 3600} and first.seen == {RID: NOW}
-    # Gespeichert: ein Neustart bei spaeterer Uhrzeit rechnet vom ersten Mal an, nicht erneut von "jetzt".
+    # Gespeichert: ein Neustart bei späterer Uhrzeit rechnet vom ersten Mal an, nicht erneut von "jetzt".
     store.close()
     store.open()
     later = store.load_state(NOW + 601)
@@ -955,8 +955,8 @@ def test_journal_consistency_rules():
     ("-deck", False), ("a" * 129, False), ("", False),
 ])
 def test_container_names_in_the_journal_upper_case_yes_other_scripts_no(name, valid):
-    # Der Docker-Dienst erlaubt Grossbuchstaben im Namen, aber nur ASCII; Ziffern und Buchstaben aus anderen Schriften
-    # (auch das Kelvin-Zeichen, das ohne `re.ASCII` wie ein `k` passen koennte) gehen nie durch.
+    # Der Docker-Dienst erlaubt Großbuchstaben im Namen, aber nur ASCII; Ziffern und Buchstaben aus anderen Schriften
+    # (auch das Kelvin-Zeichen, das ohne `re.ASCII` wie ein `k` passen könnte) gehen nie durch.
     begin = make_journal("begin")
     old = dataclasses.replace(begin.old, name=name)
     if valid:
@@ -970,16 +970,16 @@ def test_announced_undo_keeps_its_reason_and_never_goes_forward_again():
     started = make_journal("started")
     undo = started.start_undo(policy.TIMEOUT)
     assert (undo.undo, undo.code, undo.step) == (True, policy.TIMEOUT, "started")
-    assert not started.undo and started.code is None  # unveraenderlich: der alte Stand bleibt, wie er war
-    assert undo.start_undo(policy.EXITED) is undo  # schon angekuendigt: der erste Grund bleibt
+    assert not started.undo and started.code is None  # unveränderlich: der alte Stand bleibt, wie er war
+    assert undo.start_undo(policy.EXITED) is undo  # schon angekündigt: der erste Grund bleibt
     assert make_journal("old_stopped").start_undo(None).code is None  # Wiederaufnahme ohne Fehler
     with pytest.raises(ValueError):
-        undo.advance("committed")  # nach der Ankuendigung geht es nicht mehr vorwaerts
+        undo.advance("committed")  # nach der Ankündigung geht es nicht mehr vorwärts
     with pytest.raises(ValueError):
-        make_journal("committed").start_undo(policy.TIMEOUT)  # nach dem Commit gibt es keinen Rueckbau
+        make_journal("committed").start_undo(policy.TIMEOUT)  # nach dem Commit gibt es keinen Rückbau
     with pytest.raises(ValueError):
-        started.advance("committed", undo=True)  # ankuendigen nur ueber start_undo
-    # Einzige Ausnahme: im Rueckbau den eigenen, schon angelegten Container eintragen (creating -> created).
+        started.advance("committed", undo=True)  # ankündigen nur über start_undo
+    # Einzige Ausnahme: im Rückbau den eigenen, schon angelegten Container eintragen (creating -> created).
     creating = make_journal("creating").start_undo(policy.CREATE_FAILED)
     created = creating.advance("created", new=NewImage(image_id=IMG_NEW, digest=DIGEST, version="0.7.1", id=CID_NEW))
     assert (created.step, created.undo, created.code) == ("created", True, policy.CREATE_FAILED)
@@ -989,7 +989,7 @@ def test_announced_undo_keeps_its_reason_and_never_goes_forward_again():
 
 @pytest.mark.parametrize("changes", [
     {"undo": 1},                                   # kein Wahrheitswert
-    {"undo": False, "code": policy.TIMEOUT},       # Grund ohne Rueckbau
+    {"undo": False, "code": policy.TIMEOUT},       # Grund ohne Rückbau
     {"undo": True, "code": "kaputt"},              # kein fester Code
     {"undo": True, "code": "Docker antwortet nicht"},
 ])
@@ -1082,7 +1082,7 @@ def make_test_repo_journal(step="begin") -> Journal:
 
 
 def test_journal_floating_tag_and_advance_respect_the_repository(store):
-    # Frueher pruefte `validate(repository=...)` gegen das Test-Repository, `floating_tag` und `advance()` immer
+    # Früher prüfte `validate(repository=...)` gegen das Test-Repository, `floating_tag` und `advance()` immer
     # gegen die Konstante -- mit einem Test-Repository (lokale Registry in der CI) scheiterten beide.
     journal = make_test_repo_journal()
     assert journal.floating_tag == "0.9"

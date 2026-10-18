@@ -12,6 +12,7 @@
  * Auto-Platzierungs-Effekt nicht an eine UI-Komponente zu koppeln.
  */
 import * as Dialog from "@radix-ui/react-dialog";
+import { Link } from "react-router-dom";
 
 import { ButtonLink, EmptyState } from "../components/EmptyState";
 import { useAuthStore } from "../state/auth";
@@ -33,9 +34,11 @@ interface Props {
   /** Optional von aussen gesteuert (der Leerzustand der Startseite oeffnet den Dialog). */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Platzierte Widgets, deren Modul `meta.state = "not_configured"` meldet; die Startseite blendet sie aus. */
+  notConfigured?: ReadonlySet<string>;
 }
 
-export function WidgetPickerDialog({ widgets, items, onChange, open, onOpenChange }: Props) {
+export function WidgetPickerDialog({ widgets, items, onChange, open, onOpenChange, notConfigured }: Props) {
   const canManageExtensions = useAuthStore((s) => s.hasPermission("extensions.manage"));
   const placedKeys = new Set(items.filter((i) => !isHiddenItem(i)).map(itemKey));
 
@@ -80,6 +83,7 @@ export function WidgetPickerDialog({ widgets, items, onChange, open, onOpenChang
             {widgets.map((w) => {
               const key = itemKey({ ext_id: w.ext_id, widget_id: w.id });
               const placed = placedKeys.has(key);
+              const waiting = placed && notConfigured?.has(key);
               return (
                 <li key={key}>
                   <label className="flex cursor-pointer items-center justify-between rounded px-2 py-1.5 hover:bg-white/5">
@@ -89,6 +93,22 @@ export function WidgetPickerDialog({ widgets, items, onChange, open, onOpenChang
                     </span>
                     <input type="checkbox" checked={placed} onChange={() => toggle(w, placed)} />
                   </label>
+                  {waiting && (
+                    <p className="px-2 pb-1.5 text-xs text-white/50" data-testid={`widget-not-configured-${key}`}>
+                      Nicht eingerichtet, deshalb nicht auf der Startseite.{" "}
+                      {canManageExtensions ? (
+                        <Link
+                          to={`/settings/extensions/${encodeURIComponent(w.ext_id)}`}
+                          onClick={() => onOpenChange?.(false)}
+                          className="underline underline-offset-2 hover:text-white"
+                        >
+                          Einrichten
+                        </Link>
+                      ) : (
+                        "Ein Administrator kann das Modul einrichten."
+                      )}
+                    </p>
+                  )}
                 </li>
               );
             })}

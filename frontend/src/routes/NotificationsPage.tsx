@@ -10,6 +10,7 @@ import { Link } from "react-router-dom";
 
 import { LoadError } from "../components/LoadError";
 import { ApiError, api } from "../lib/api";
+import { internalPath } from "../lib/apps";
 import { useExtensionLabel } from "../lib/extensionNames";
 import { useWsSubscription } from "../lib/ws";
 import { useAuthStore } from "../state/auth";
@@ -72,6 +73,7 @@ function NotificationItem({
   const [open, setOpen] = useState(false);
   const sourceLabel = useExtensionLabel(Boolean(n.source_ext_id));
   const long = n.body.length > 240 || n.body.split("\n").length > 4;
+  const path = internalPath(n.payload?.path);
   return (
     <li className={`rounded border p-3 text-sm ${n.read_at ? "border-white/5 opacity-70" : "border-white/15"}`} data-testid={`notification-${n.id}`}>
       <div className="flex flex-wrap items-start gap-2">
@@ -83,8 +85,8 @@ function NotificationItem({
           {new Date(n.ts).toLocaleString()}
           {n.source_ext_id ? ` · ${sourceLabel(n.source_ext_id)}` : ""}
         </span>
-        {typeof n.payload?.path === "string" && n.payload.path.startsWith("/") && (
-          <Link to={n.payload.path} onClick={() => { if (!n.read_at && canWrite) onRead(n.id); }} className="rounded bg-white/10 px-2 py-0.5 text-xs hover:bg-white/20">
+        {path && (
+          <Link to={path} onClick={() => { if (!n.read_at && canWrite) onRead(n.id); }} className="rounded bg-white/10 px-2 py-0.5 text-xs hover:bg-white/20">
             Öffnen →
           </Link>
         )}

@@ -157,6 +157,25 @@ def test_config_is_flat_and_strips_admin_and_api():
         config.pihole_config({"pihole": {"url": "http://pi.hole"}})
 
 
+@pytest.mark.parametrize(("raw", "expected"), [
+    ("http://pi.hole/admin/queries", "http://pi.hole"),
+    ("http://pi.hole/admin/settings/dns/", "http://pi.hole"),
+    ("http://pi.hole/Admin/groups", "http://pi.hole"),
+    ("http://pi.hole/admin/login?redirect=%2Fqueries#x", "http://pi.hole"),
+    ("192.0.2.2:8080/admin/queries", "http://192.0.2.2:8080"),
+    ("http://pi.hole/api/docs", "http://pi.hole"),
+    ("https://example.org/pihole/admin/queries", "https://example.org/pihole"),
+    ("https://example.org/pihole/admin", "https://example.org/pihole"),
+    ("http://host/pihole", "http://host/pihole"),
+    ("http://host/pihole/", "http://host/pihole"),
+    ("http://host/administration", "http://host/administration"),
+    ("http://host/pihole/api", "http://host/pihole"),
+    ("http://host/api/pihole", "http://host/api/pihole"),
+])
+def test_a_page_copied_from_the_browser_becomes_the_base_address(raw, expected):
+    assert _config_mod().pihole_config({"url": raw}).url == expected
+
+
 @pytest.mark.parametrize(("raw", "domain"), [
     ("werbung.example.com", "werbung.example.com"),
     ("  Werbung.Example.COM. ", "werbung.example.com"),

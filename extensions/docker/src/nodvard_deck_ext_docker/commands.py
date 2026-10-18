@@ -28,6 +28,8 @@ steht ganz hinten, nach den Ports: so verschiebt ein `|` im Ordnernamen nichts d
 STATS_FORMAT = "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}"
 PORTS_FORMAT = "{{.Id}}|{{json .HostConfig.PortBindings}}"
 MAX_LOG_TAIL = 5000
+LOG_SINCE_RE = re.compile(r"^[1-9][0-9]{0,3}[mh]\Z")
+"""Zeitraum für `docker logs --since` in Minuten oder Stunden, etwa `10m` oder `168h`."""
 
 VERBS = frozenset({"start", "stop", "restart", "rm"})
 PRUNE = {
@@ -141,10 +143,31 @@ def container_verb(verb: str, target: str) -> str:
     return _docker(verb, _name(target))
 
 
-def logs(name: str, tail: int, *, follow: bool) -> str:
+def logs(name: str, tail: int, *, follow: bool, since: str | None = None) -> str:
     if isinstance(tail, bool) or not isinstance(tail, int) or not 0 <= tail <= MAX_LOG_TAIL:
         raise ValueError(f"Ungültige Zeilenzahl: {tail!r}")
-    return _docker("logs", "--tail", str(tail), "--timestamps", *(["--follow"] if follow else []), _name(name))
+    if since is not None and not (isinstance(since, str) and LOG_SINCE_RE.match(since)):
+        raise ValueError(f"Ungültiger Zeitraum: {since!r}")
+    return _docker(
+        "logs", "--tail", str(tail), "--timestamps", *(["--since", since] if since else []),
+        *(["--follow"] if follow else []), _name(name),
+    )
+
+
+def restart_counts() -> str:
+    """Wie oft Docker jeden Container nach seinem Ende von selbst wieder gestartet hat (`RestartCount`), in einem Aufruf."""
+    inspect = _docker("inspect", "--type", "container", "--format", "{{.Name}}|{{.RestartCount}}")
+    return shlex.join(["sh", "-c", f'ids=$({_docker("ps", "-aq")}) && [ -n "$ids" ] && {inspect} $ids'])
+
+
+def info() -> str:
+    """Was der Docker-Dienst sieht, unter anderem CPU-Zahl und Arbeitsspeicher; im LXC-Container dessen Grenzen."""
+    return _docker("info", "--format", "{{json .}}")
+
+
+def virtualization() -> str:
+    """`lxc`, `kvm`, `none` usw.; ohne systemd fehlt das Programm, dann bleibt die Umgebung unbekannt."""
+    return shlex.join(["systemd-detect-virt"])
 
 
 def compose_restart(project: str) -> str:

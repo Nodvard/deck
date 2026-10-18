@@ -10,6 +10,35 @@ shown inside Nodvard Deck under *Settings → About Nodvard Deck*. This file is 
 
 ## [Unreleased]
 
+## [0.10.0] – 2026-10-18
+
+Docker stacks, Synology DSM (beta) and servers grouped by type.
+
+- **New:** a "Stacks" tab in the Docker module. Stacks can be adopted, applied, stopped, taken down, edited as text or
+  as a form (validated by Compose, with a diff, approval and the last 20 versions), created from a template, updated as
+  a whole with an automatic rollback (except for databases) and an optional volume backup, and deleted. Stacks from
+  Portainer move into their own folder under the same name, and a container started without Compose can be turned
+  into a stack.
+- **New:** container logs with a time range, search and download; the container list filters by server, stack and
+  state and counts how often Docker restarted a container on its own.
+- **New:** Synology DSM module (beta, read-only) with model, DSM version, load, volumes, storage pools, disks, updates
+  and Hyper Backup tasks, three widgets and alerts when a pool, a disk, the temperature or a backup is not okay.
+- **New:** servers are grouped into physical servers, VMs and LXC containers; a guest deleted in Proxmox is marked and
+  can be removed with one click, and the overview points out servers that should be set up again for narrow
+  permissions. "About Nodvard Deck" has a "Community and credits" section.
+- **Security:** app tiles, search, widgets and module pages only open real web addresses. Errors from a broken .env
+  file no longer quote its content, which can contain a password.
+- **Improved:** widgets are as tall as their content, hide when their module isn't set up yet and look calmer. Docker
+  shows when it runs in an LXC or VM and allows one change per stack at a time. Synology DSM works with older and newer
+  DSM versions and can be pinned to its certificate. The installation guide covers many more platforms.
+- **Fixed:** guests switched off in Proxmox no longer count as faults; pages fit at half screen width; detected apps no
+  longer show twice and app addresses with a sub-page work. Nodvard Shield no longer reboots a server after a failed
+  update, keeps file-watcher confirmations, keeps checking a slow quarantine move and handles a real-time watcher that
+  fails to start. Helper script messages are no longer cut off, charts with many or invalid values work, and new
+  database IDs are real UUIDs.
+- **Note:** no database migration in this release. The ready-made Nodvard Dock image (`ghcr.io/nodvard/dock`) is only
+  published from 0.11.0 on; until then it can be built from `deploy/nodvard-dock/`.
+
 ## [0.9.0] – 2026-10-16
 
 A new look, Docker as its own module, a vault page and new integrations.

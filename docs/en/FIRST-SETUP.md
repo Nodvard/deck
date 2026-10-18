@@ -28,7 +28,55 @@ Deck still has a gap, the guide says so. Without the web interface (using only t
 If you only have Docker and do not know the repository, you need a single file:
 [`deploy/compose.standalone.yml`](../../deploy/compose.standalone.yml). The ready-made image comes from the
 GitHub Container Registry (`ghcr.io/nodvard/deck`, for x86 machines and the Raspberry Pi); nothing is built.
-Pick one way and expand it:
+The ways below are grouped by kind: in a terminal, with a web interface, on a NAS and on particular
+machines. Pick one and expand it.
+
+#### Good to know, whichever way you pick
+
+- **First start:** The image (just under 400 MB) is downloaded, then the container creates its database.
+  Interfaces such as Portainer or the container section of a NAS show it as "starting" during that time, or
+  not yet as "healthy". Up to five minutes of this is normal. If it says "unhealthy" after that, the log
+  tells you why.
+- **Port:** Inside the container Nodvard Deck answers on port 8080. If 8080 is already taken on the machine,
+  change only the number **left** of the colon (`"8081:8080"`); the right-hand side always stays `8080`. Some
+  NAS systems use 8080 out of the box; the ways below say which.
+- **Data:** Everything lives in the Docker volume `nodvard-deck-data`. That is the recommended way on a NAS
+  too, because it needs no permission settings. Prefer a folder (`<folder>:/app/data`)? Then the container
+  makes the user with the number **1000** the owner of that folder at startup and runs as that user
+  afterwards. The number does not have to belong to a user of the NAS. On a normal disk this works without
+  any help from you. On NAS shares with their own access rules (ACLs) or on a network drive it can fail: the
+  log then says "Die Besitzrechte an /app/data liessen sich nicht setzen" (the ownership of /app/data could
+  not be set), and user 1000 needs write access to the folder (hints per NAS below). If it works, only user
+  1000 and root can read the folder afterwards; file managers or backup tools running as a different user
+  can no longer read the files. So back up Nodvard Deck with its built-in backup
+  ([section 10](#10-back-up-the-dashboard-itself)).
+- **Setup code:** It is in the container's log, inside a frame of `=` characters. The log line is in German
+  and starts with "Einrichtungscode" (setup code). Each way says where to find the log.
+
+#### Short version for web interfaces
+
+`compose.standalone.yml` reads the port from a variable (`${NODVARD_DECK_PORT:-${LATTICE_PORT:-8080}}`). Not
+every interface understands this nested form. For the NAS ways there is this version without variables;
+change the port directly in the line under `ports:`:
+
+```yaml
+services:
+  nodvard-deck:
+    image: ghcr.io/nodvard/deck:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - nodvard_deck_data:/app/data
+
+volumes:
+  nodvard_deck_data:
+    name: nodvard-deck-data
+```
+
+The health check is built into the image, so nothing is missing here.
+
+#### In a terminal
 
 <details>
 <summary><b>Docker Compose in a terminal</b></summary>
@@ -59,6 +107,76 @@ curl -s http://localhost:8080/api/v1/health      # expected: "status":"ok"
 - **Updating:** in the same folder, `docker compose pull && docker compose up -d`. Your data is kept.
 
 </details>
+
+<details>
+<summary><b>A single <code>docker run</code> command (no Compose)</b></summary>
+
+```bash
+docker run -d --name nodvard-deck --restart unless-stopped \
+  -p 8080:8080 \
+  -v nodvard-deck-data:/app/data \
+  --log-opt max-size=10m --log-opt max-file=3 \
+  ghcr.io/nodvard/deck:latest
+```
+
+The volume has the same name as in the Compose way, `nodvard-deck-data`; the health check is built into the image.
+
+- **Open:** `http://<address-of-the-machine>:8080`. Check on the same machine:
+  `curl -s http://localhost:8080/api/v1/health` shows `"status":"ok"`.
+- **Port already in use?** Write `-p 8081:8080` in the command. If the container is already running, first
+  `docker stop nodvard-deck && docker rm nodvard-deck`, then run the command again; the data stays in the volume.
+- **Setup code:** `docker logs nodvard-deck 2>&1 | grep -A1 Einrichtungscode`
+- **Update:**
+
+  ```bash
+  docker pull ghcr.io/nodvard/deck:latest
+  docker stop nodvard-deck && docker rm nodvard-deck
+  ```
+
+  and then the same `docker run` command as above. Your data is kept.
+- **Commands in this guide:** Where it says `docker compose logs nodvard-deck`, use `docker logs nodvard-deck`;
+  `docker compose exec nodvard-deck …` becomes `docker exec nodvard-deck …`.
+
+</details>
+
+<details>
+<summary><b>Podman</b></summary>
+
+Podman does not need Compose. The command is the same as with Docker:
+
+```bash
+podman run -d --name nodvard-deck --restart always \
+  -p 8080:8080 \
+  -v nodvard-deck-data:/app/data \
+  ghcr.io/nodvard/deck:latest
+```
+
+- **Without root (rootless):** works. A normal user may not open ports below 1024, so 8080 is fine.
+- **After the machine reboots:** Podman does not restart containers by itself; the `podman-restart.service` unit
+  does, and reliably only for containers with `--restart always` (that is why it says so above instead of
+  `unless-stopped`). Enable it once, as root:
+  `sudo systemctl enable --now podman-restart.service`; rootless, as your user:
+  `systemctl --user enable --now podman-restart.service` plus `loginctl enable-linger $USER`, so the unit also
+  starts without a login.
+- **With Compose:** `podman compose up -d` in the folder with the `compose.yml` from the terminal way. This only
+  works if a Compose program is installed (`docker-compose` or `podman-compose`); `podman compose` just calls it.
+  In the `compose.yml`, set `restart: always` instead of `restart: unless-stopped`, otherwise the container does
+  not come back after the machine reboots. If it reports an error in the `ports` line, use the
+  [short version](#short-version-for-web-interfaces).
+- **A folder instead of a volume** on a system with SELinux (Fedora, RHEL and relatives): append `:Z` to the
+  line, e.g. `-v ./data:/app/data:Z`.
+- **Open:** `http://<address-of-the-machine>:8080`
+- **Port already in use?** Write `-p 8081:8080` in the command (remove an existing container first with
+  `podman stop nodvard-deck && podman rm nodvard-deck`; the data stays).
+- **Setup code:** `podman logs nodvard-deck 2>&1 | grep -A1 Einrichtungscode`
+- **Update:** `podman pull ghcr.io/nodvard/deck:latest`, then `podman stop nodvard-deck && podman rm nodvard-deck`
+  and the `podman run` command from above once more.
+- **Commands in this guide:** replace `docker` with `podman`; `docker compose exec nodvard-deck …` becomes
+  `podman exec nodvard-deck …`.
+
+</details>
+
+#### With a web interface
 
 <details>
 <summary><b>Portainer, way 1: from the repository</b></summary>
@@ -112,6 +230,208 @@ They are shell commands, not a Compose file; Portainer then reports "top-level o
 </details>
 
 <details>
+<summary><b>Dockge</b></summary>
+
+1. At the top, **+ Compose**.
+2. Under **Stack Name** enter e.g. `nodvard-deck` (lowercase only).
+3. Paste the whole content of [`deploy/compose.standalone.yml`](../../deploy/compose.standalone.yml)
+   ([as plain text](https://raw.githubusercontent.com/nodvard/deck/main/deploy/compose.standalone.yml)) into the
+   editor.
+4. **Deploy**.
+
+Dockge stores the file as `compose.yaml` in its stacks folder (default `/opt/stacks/nodvard-deck/`); you can also
+use `docker compose` there.
+
+- **Open:** `http://<address-of-the-machine>:8080`
+- **Port already in use?** In the stack choose **Edit**, enter the line `NODVARD_DECK_PORT=8081` in the **.env**
+  field, then **Deploy**. The address is then `…:8081`.
+- **Setup code:** On the stack's page the log runs under **Terminal**; the line starts with "Einrichtungscode".
+- **Update:** On the stack's page, **Update**. Dockge pulls the new image and restarts the stack; your data is kept.
+
+</details>
+
+#### On a NAS
+
+Menu names are given as they appear in the vendor's English interface and documentation.
+
+<details>
+<summary><b>Synology (Container Manager, DSM 7.2 or newer)</b></summary>
+
+1. Install the **Container Manager** package (from DSM 7.2; there it replaces the old "Docker" package).
+2. In Container Manager, **Project** → **Create**.
+3. **Project Name** e.g. `nodvard-deck`; for **Path** pick or create an empty folder.
+4. For **Source**, create a new `docker-compose.yml` and paste the
+   [short version](#short-version-for-web-interfaces).
+5. Continue to **Done** (you can skip the web portal step).
+
+- **Open:** `http://<address-of-the-NAS>:8080`. DSM itself uses 5000 and 5001, so 8080 is normally free.
+- **Port already in use?** Select the project → **YAML Configurations**, change the left number under
+  `ports:` and start the project with the new settings.
+- **Setup code:** **Container** → select the Nodvard Deck container → **Action** → **Details** → **Log**.
+- **Update:** **Image** → select `ghcr.io/nodvard/deck` → **Action** → **Update**. Settings → About
+  Nodvard Deck („Einstellungen → Über Nodvard Deck“) then shows whether the new version is running.
+- **Careful with "Clean":** According to Synology this project action also removes the project's volumes,
+  i.e. Nodvard Deck's data. Back up first ([section 10](#10-back-up-the-dashboard-itself)).
+- **Data:** in the volume `nodvard-deck-data`. Prefer a folder, e.g. `/volume1/docker/nodvard-deck:/app/data`?
+  If the container reports "Die Besitzrechte an /app/data liessen sich nicht setzen", give **Everyone** the
+  **Read & Write** permission on just that folder in File Station. That is Synology's advice for containers
+  that cannot write to their folder. But then every user of the NAS can reach the folder, and it also holds
+  keys; the volume is the better way.
+
+</details>
+
+<details>
+<summary><b>UGREEN (UGOS Pro, "Docker" app)</b></summary>
+
+1. Install the **Docker** app from the **App Center**.
+2. In the app, **Project** → **Create**.
+3. Project name e.g. `nodvard-deck`; keep the suggested storage path.
+4. Paste the [short version](#short-version-for-web-interfaces) → **Deploy**.
+
+- **Open:** `http://<address-of-the-NAS>:8080`
+- **Port already in use?** Change the left number in the project (not on the container; containers that
+  belong to a project cannot be edited there) and **Deploy** again.
+- **Setup code:** **Container** → select the Nodvard Deck container → **Log**.
+- **Update:** When there is a newer version of the image, UGOS shows it in the project list; update the
+  project from there. Your data stays in the volume.
+- **Data:** in the volume `nodvard-deck-data`. Prefer a folder? It must exist before **Deploy**, otherwise
+  UGOS aborts. A relative path such as `./data:/app/data` ends up in the project's storage path.
+
+</details>
+
+<details>
+<summary><b>QNAP (Container Station 3)</b></summary>
+
+Container Station 3 needs QTS 5.1.0 or QuTS hero h5.1.0 or newer and is installed from the **App Center**.
+
+**Important:** The QTS web interface itself uses port **8080**. So pick another, free port, e.g.
+`"8090:8080"` instead of `"8080:8080"` in the short version.
+
+1. In Container Station, **Applications** → **Create**.
+2. Name e.g. `nodvard-deck` (only `a`–`z`, `0`–`9`, `-` and `_`, at most 32 characters).
+3. Paste the [short version](#short-version-for-web-interfaces) with the changed port, optionally
+   **Validate**, then **Create**.
+
+- **Open:** `http://<address-of-the-NAS>:8090` (i.e. with the port you entered on the left).
+- **Change the port:** **Applications** → the application → menu next to **Edit** → **Recreate**, change the
+  left number, **Update**. Recreating keeps only what is in volumes or folders; Nodvard Deck's data is in
+  the volume, so it stays.
+- **Setup code:** **Containers** → open the Nodvard Deck container → **Logs** tab (not "Event Logs", which is
+  Container Station's own log).
+- **Update:** **Images** → **Pull**, enter `ghcr.io/nodvard/deck:latest`. Then, as for the port:
+  **Recreate** → **Update**.
+- **Data:** in the volume `nodvard-deck-data`. Prefer a folder (`/share/<share>/…`)? According to QNAP the
+  **Advanced Folder Permissions** (under **Shared Folders**) can interfere with containers. If the warning
+  about the ownership appears, check there.
+
+</details>
+
+<details>
+<summary><b>Unraid</b></summary>
+
+Unraid ships Docker but not Docker Compose. The easiest way is a template of your own:
+
+1. **Docker** tab → at the very bottom, **Add Container**.
+2. **Name** `nodvard-deck`, **Repository** `ghcr.io/nodvard/deck:latest`, **Network Type** `Bridge`.
+3. **Add another Path, Port, Variable, Label or Device** → **Config Type** `Port`, **Container Port** `8080`,
+   **Host Port** `8080` → **Add**.
+4. Again **Add another Path, Port, Variable, Label or Device** → **Config Type** `Path`, **Container Path**
+   `/app/data`, **Host Path** `/mnt/user/appdata/nodvard-deck` → **Add**.
+5. **Apply**.
+
+- **Open:** `http://<address-of-the-server>:8080`
+- **Port already in use?** Click the container's icon → **Edit**, change only the **Host Port** (the
+  Container Port stays 8080) → **Apply**.
+- **Setup code:** the container's icon → **Logs**.
+- **Update:** switch to **Advanced View** at the top right, then **force update** on the container.
+- **Data:** in the folder `/mnt/user/appdata/nodvard-deck`. At startup the container makes user 1000 the
+  owner. If one of Unraid's permission tools resets the owners later, the container sets them again at the
+  next start.
+- **Prefer Compose?** The **Compose Manager Plus** plugin (search for it in the **Apps** tab) brings Docker
+  Compose. There, under **Docker** → **Compose**, create a stack with **Add Stack**, paste the
+  [short version](#short-version-for-web-interfaces) and choose **Compose Up** in the stack's menu; the log is
+  under **View Logs**. **Update** updates it; the button only shows when there is a newer version, otherwise it
+  is called **Force Update**.
+
+</details>
+
+<details>
+<summary><b>TrueNAS SCALE (24.10 or newer)</b></summary>
+
+1. **Apps** → **Discover Apps** → ⋮ menu → **Install via YAML**.
+2. **Name** `nodvard-deck` (lowercase letters, digits and `-`, starting with a letter).
+3. Paste the [short version](#short-version-for-web-interfaces) into **Custom Config** → **Save**.
+
+TrueNAS only checks the YAML syntax, not the content. Use the short version here, not the file with
+variables.
+
+- **Open:** `http://<address-of-the-NAS>:8080`. TrueNAS itself uses 80 and 443.
+- **Port already in use?** **Apps** → **Installed** → the app → **Edit**, change the left number, save.
+- **Setup code:** **Apps** → **Installed** → the app → **View Logs** on the **Workloads** card.
+- **Update:** When the app shows **Update available**, choose **Update** in the ⋮ menu of the **Application
+  Info** card.
+- **Data:** in the volume `nodvard-deck-data`, which lives in the hidden `ix-apps` dataset of the apps pool.
+  TrueNAS recommends separate datasets for app data; for that, use the line
+  `- /mnt/<pool>/<dataset>:/app/data` instead of `- nodvard_deck_data:/app/data`. If the warning about the
+  ownership then appears, give the user with the number 1000 write access under **Datasets** → the dataset →
+  **Permissions** card → **Edit**.
+
+</details>
+
+<details>
+<summary><b>OpenMediaVault ("compose" plugin)</b></summary>
+
+The plugin comes from **omv-extras**. Set up omv-extras, the `openmediavault-compose` plugin and Docker
+following the [omv-extras guide](https://wiki.omv-extras.org/). Then:
+
+1. **Services** → **Compose** → **Settings**: under **Compose Files** pick a **Shared folder** (the plugin
+   stores its files there) and save.
+2. **Services** → **Compose** → **Files** → **Add** → **Add**: **Name** `nodvard-deck`, paste the
+   [short version](#short-version-for-web-interfaces) into **File**, **Save**.
+3. Select the file in the list → **up**.
+
+- **Open:** `http://<address-of-the-NAS>:8080`
+- **Port already in use?** Select the file → **Edit**, change the left number, **Save**, then **up**.
+- **Setup code:** Select the file → **Tools** (cog) → **logs**.
+- **Update:** Select the file → **pull**, then **up**.
+- **Data:** in the volume `nodvard-deck-data`, i.e. in the NAS's Docker storage (default `/var/lib/docker`,
+  configurable under **Settings** → **Docker storage**).
+
+</details>
+
+<details>
+<summary><b>ZimaOS and CasaOS</b></summary>
+
+On import, the interface turns a named volume into a folder mapping and cannot handle the entry under
+`volumes:`. So use this version with a fixed folder here:
+
+```yaml
+name: nodvard-deck
+services:
+  nodvard-deck:
+    image: ghcr.io/nodvard/deck:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - /DATA/AppData/nodvard-deck:/app/data
+```
+
+1. In the **Apps** area, **+** → **Install a customized app**.
+2. At the top, **Import**, tab **Docker Compose**, paste the version above → **Submit**.
+3. Check the values it took over → **Install**.
+
+- **Open:** `http://<address-of-the-device>:8080`
+- **Port already in use?** In the app's menu, **Settings**, change the left port number, **Save**.
+- **Setup code:** In the app's menu, **Settings** → **Terminal and Logs** at the top → **Logs** tab.
+- **Update:** In the app's menu, **Check then update**.
+- **Data:** in the folder `/DATA/AppData/nodvard-deck`. At startup the container makes user 1000 the owner.
+
+</details>
+
+#### Raspberry Pi, Proxmox and Docker Desktop
+
+<details>
 <summary><b>Raspberry Pi</b></summary>
 
 - A Raspberry Pi 4 or 5 with 4 GB RAM and a **64-bit system** (`uname -m` shows `aarch64`); the image is
@@ -140,21 +460,63 @@ has to be downloaded first.
 
 </details>
 
+<details>
+<summary><b>Proxmox (VM or LXC container)</b></summary>
+
+Docker does not run directly on the Proxmox host but in a VM or an LXC container. Install Docker there
+([Docker's guide for Debian](https://docs.docker.com/engine/install/debian/)) and then follow **Docker Compose in a
+terminal** above.
+
+- **VM (the safe way):** Proxmox itself recommends a VM for application containers such as Docker when isolation
+  and live migration matter. A small Debian VM is enough; Nodvard Deck itself needs about 100 MB of RAM when idle.
+- **LXC container:** leaner, but needs two switches. Docker runs in an **unprivileged** container (the default
+  when creating one) only with **Nesting** and **keyctl**:
+  - **Nesting** is already ticked when you create the container with **Create CT**.
+  - Enable **keyctl** afterwards: select the container → **Options** → **Features** → tick **keyctl**.
+  - Or in the shell of the Proxmox host: `pct set <CT-ID> --features nesting=1,keyctl=1`
+  - Then restart the container.
+- **Open, port, setup code, update:** as in the terminal way, inside the VM or container (in the container's
+  **Console** or via SSH). The address is that of the VM or container, not that of the Proxmox host.
+
+</details>
+
+<details>
+<summary><b>Docker Desktop (Windows, macOS) for trying it out</b></summary>
+
+For a test on your own computer. For continuous use a machine that is always on (NAS, Raspberry Pi, small server)
+is better.
+
+1. Install and start [Docker Desktop](https://docs.docker.com/desktop/).
+2. Open a terminal (Windows: PowerShell, macOS: Terminal) and run:
+
+   ```bash
+   mkdir nodvard-deck
+   cd nodvard-deck
+   curl -fsSL -o compose.yml https://raw.githubusercontent.com/nodvard/deck/main/deploy/compose.standalone.yml
+   docker compose up -d
+   ```
+
+   In PowerShell write `curl.exe` instead of `curl`.
+
+- **Open:** **http://localhost:8080**
+- **Port already in use?** As in the terminal way: a file `.env` with `NODVARD_DECK_PORT=8081` next to
+  `compose.yml`, then `docker compose up -d` again.
+- **Setup code:** In Docker Desktop, **Containers** on the left → select the Nodvard Deck container → **Logs** tab.
+- **Update:** in the same folder `docker compose pull` and `docker compose up -d`.
+
+</details>
+
 The database is created or updated automatically when the container starts; there is nothing to do for
-that. The data lives in its own Docker storage (volume `nodvard-deck-data`). If you would rather use a
-folder on the NAS (`./daten:/app/data`), you do not need to set any permissions: when it starts, the
-container sets the ownership of that folder itself. Afterwards only the user with the number 1000 and root
-can read it (if the storage supports permissions); backup tools or file managers that run as another user
-need `sudo` for it.
-The setup code (next section) is shown by the wizard together with instructions on where to find it
-(command line, Docker Desktop, Portainer, Synology, Unraid). The log line is in German and starts with
-"Einrichtungscode" (setup code).
+that. The setup code (next section) is shown by the wizard together with instructions on where to find it
+(command line, Docker Desktop, Portainer, Synology, Unraid).
 
 **All further commands in this guide** (setup code, log, emergency commands, restore) are run in the
 folder that contains `compose.yml`, so here after `cd ~/nodvard-deck`. The examples use `sudo docker …`;
-if your user is in the `docker` group (or you use Docker Desktop), leave out `sudo`. **With Portainer**
-there is no such folder: you find the log and the restart for the container in Portainer, and you enter
-commands such as the emergency commands in its console ([section 12](#12-locked-out-emergency-commands)).
+if your user is in the `docker` group (or you use Docker Desktop), leave out `sudo`. **With Portainer or a
+NAS interface** there is no such folder: you find the log and the restart for the container in the
+interface, and you enter commands such as the emergency commands in its console
+([section 12](#12-locked-out-emergency-commands)). For `docker run` and Podman, each way says what the
+commands look like there.
 
 ### 1.2 Building from the repository (developers)
 
@@ -406,6 +768,47 @@ on for this, it knows the containers. A target that matches no container (e.g. t
 is not an error. Not detected: containers in host network mode (they show no ports), network aliases and additional
 locations of a proxy host.
 
+**Synology DSM (Beta, read-only):** The "Synology DSM" page shows model, DSM version, load, temperature, storage pools,
+volumes, drives (with SMART), the Hyper Backup tasks and whether a DSM update is available. Nodvard Deck only reads and
+changes nothing on the Synology. It asks DSM which version of each interface to use, so DSM 7.1 to 7.4 work. So far this
+has been tried against recreated DSM answers; feedback from real devices helps.
+
+- **Account:** Create a separate DSM account just for Nodvard Deck (Control Panel → User & Group) and enter it in the
+  module's settings; the password goes into the vault. To be honest: DSM only hands out storage, load, updates and
+  Hyper Backup to accounts in the **"administrators"** group. An account outside that group works, but the page then
+  only shows what it may read and says for each part that rights are missing. Since the account is an administrator,
+  give it a long password of its own that you use nowhere else.
+- **Two-factor does not work:** Nodvard Deck cannot use an account with two-factor sign-in, it does not have the code from
+  the app; the page then says „Dieses Konto verlangt Zwei-Faktor“ (this account requires two-factor). So use the separate
+  account without two-factor. If DSM enforces two-factor for all administrators, that includes this account; then limit
+  the requirement to specific accounts in DSM's security settings.
+- **Wrong password:** DSM blocks addresses automatically after several failed attempts. After a rejected sign-in Nodvard
+  Deck therefore does not ask again for 30 minutes, unless you press "Test connection" („Verbindung testen“).
+- **Certificate:** DSM often has a self-signed certificate. Then, in your own network, switch on „Selbstsigniertes
+  Zertifikat erlauben“ (allow self-signed certificate), or better enter the certificate's fingerprint under "Advanced"
+  (only with https://): Nodvard Deck then only talks to exactly that certificate.
+- **Notifications:** Every five minutes Nodvard Deck checks and reports when a storage pool or volume is not okay (e.g.
+  „Eingeschränkt“, degraded, after a drive failure), a drive warns (SMART, bad sectors, remaining life), the device or a
+  drive gets too hot, or Hyper Backup fails or is overdue. The message shows under "Needs attention" („Braucht
+  Aufmerksamkeit“) and reaches your phone through the configured channels; once everything is fine again, an all-clear
+  follows. Only changes are reported, not every check, and once more when it gets worse (e.g. from „Eingeschränkt“ to
+  „Ausgefallen“, crashed). A temperature only after it lasts 10 to 15 minutes (drive limit
+  under "Advanced", default 55 °C for hard drives, 65 °C for SSDs, 70 °C for NVMe). Repairing, expanding or scrubbing a
+  pool or volume does not count as a problem, nor does a state Nodvard Deck does not know; if it was reported before,
+  the all-clear only comes once it is „Normal“ again. While a pool is not „Normal“, its volumes report nothing of their
+  own unless one has crashed. A new DSM update arrives once per version as a quiet hint (level "info", not under
+  "Needs attention"). Both can be switched off in the module's settings. If the Synology cannot be reached or the
+  sign-in is rejected, the watch reports nothing new; the page and the tile show that.
+- **Hyper Backup:** Each task shows its result, last and next run, in the Synology's local time. Overdue means: a
+  scheduled run has been missing for more than six hours, or there has been no successful run for two intervals between
+  runs plus six hours (54 hours for a daily backup). This is measured with the Synology's clock; if DSM does not provide
+  it, 14 extra hours allow for a different time zone. A backup that is running is not overdue. If Hyper Backup is not
+  installed, a quiet hint says so and the rest of the page stays. Nodvard Deck reads up to 64 tasks; if Hyper Backup has
+  more, the page says so. If not all states have arrived after 25 seconds, the remaining tasks show „Stand unbekannt“
+  (state unknown), with neither a message nor an all-clear; the rest of the page stays. Not yet confirmed on real
+  devices (beta): that DSM reports a task that is not backing up with the state `status: none`. If a task keeps
+  showing „Läuft gerade“ (running) although nothing runs, please let us know.
+
 **Credentials belong to their address.** In an extension's settings, first enter the address and click "Save"
 („Speichern“), then store the token or password in the "Connection" card („Verbindung“) – Nodvard Deck does not
 accept them before that. If you change the address later (for example the ntfy server or a Proxmox address),
@@ -473,9 +876,12 @@ different then:
 - **"Apps" page** (in the menu on the left): all tiles in one place, your own apps in **folders** (their group) that
   you can collapse. With `apps.write` you drag a tile onto another one (sorted in before it) or onto a folder heading
   (to the end of that folder); without a mouse via the menu (⋮). Under **"Suggestions"** („Vorschläge“) you find
-  addresses your modules already know – for example the proxy hosts from Nginx Proxy Manager or detected containers
-  with a web interface – that are not an app yet; **"Take over"** („Übernehmen“) pre-fills the dialog, the app is only
-  created with "Save".
+  addresses your modules already know – for example the proxy hosts from Nginx Proxy Manager – that are not an app
+  yet; **"Take over"** („Übernehmen“) pre-fills the dialog, the app is only created with "Save". Detected containers
+  with a web interface are not listed there but under **"Detected services"** („Erkannte Dienste“); there, **"Add as
+  app"** („Als App übernehmen“, only for running containers) turns one into a tile of its own. Both lists come from
+  the same read of the Docker servers. Only while the tile of a container is not visible (for example because the page
+  has not loaded it yet) does it show up briefly under "Suggestions".
 - **Updates, antivirus, intrusion protection:** Nodvard Shield, for all Linux servers with an SSH login. The AI container
   watch in it is optional; without an AI server it still shows crashed containers, with the cause determined by the
   system (for example out of memory or killed from outside) and two fixed sentences: what it means and what you can
@@ -789,23 +1195,34 @@ Terminal, Files and Scripts.
 
 **What the "Root rights" tick box does exactly:** It creates `/etc/sudoers.d/nodvard-<user>` with the line
 `<user> ALL=(root) NOPASSWD: ALL`. The line is first written to a trial file and checked with `visudo -c`; only then
-does it move into place with permissions `0440` (root), afterwards `visudo -c` checks everything once more, and on an
-error the file is removed again immediately ("sudo-Regel zurückgenommen" – sudo rule withdrawn). The command deletes an
+does it move into place with permissions `0440` (root). Afterwards `visudo` checks the installed file and the whole
+configuration once more. On an error the file is removed again immediately ("sudo-Regel zurückgenommen" – sudo rule
+withdrawn), followed by what `visudo` reports. If `visudo -c` already reports an error in someone else's file
+**before** the setup (e.g. "bad permissions, should be mode 0440" because a file in `/etc/sudoers.d` has permissions
+`0644`), only the check of the command's own files counts. The command then names that file in a hint;
+`sudo chmod 0440 <file>` and `sudo chown root:root <file>` fix it. The command deletes an
 older rule `lattice-<user>` only after this check and only if it consists of exactly the line above; otherwise it
 stays in place and you get a hint. If `sudo` is not
 installed at all, the command says so (as root `apt install sudo`; on Proxmox best log in as `root` right away).
 
 **This is practically root – and the page tells you so too:** Anyone who is in the `docker` group or may use sudo
-without a password can do practically anything on the server. A more narrowly limited sudo rule alone is not yet enough
-for Nodvard Deck: it still starts some root commands as `sudo -n sh -c '…'`, and anyone who may start `sh` as root may
-do anything. The security comes instead from the fact that **only** this one user gets the rights, can log in **only
-with the key**, and the key is stored encrypted in Nodvard Deck.
+without a password can do practically anything on the server. Nodvard Deck starts some root commands as
+`sudo -n sh -c '…'`, so it needs the full sudo rule, and anyone who may start `sh` as root may do anything. The
+security comes from the fact that **only** this one user gets the rights, can log in **only with the key**, and the key
+is stored encrypted in Nodvard Deck.
 
 **Helper scripts:** With the "root rights" tick box the command also puts the modules' helper scripts (Nodvard Shield
-and Server status) into `/usr/local/lib/nodvard-deck` and allows each one with its own narrow sudo rule. The modules
-already use them, but only if the script on the server is byte for byte the one that ships with Nodvard Deck;
-otherwise they use the full rule. "Verbindung prüfen" (check connection) shows for each script whether it matches.
+and Server status) into `/usr/local/lib/nodvard-deck` and allows each one with its own narrow sudo rule. If that fails
+for a script, the command names the reason (file could not be stored safely, or `visudo` rejected the rule). If a
+script is missing although the full rule is set, "Verbindung prüfen" shows a yellow hint "Fehlt auf dem Server"
+(missing on the server). The modules
+call a script only if the one on the server is byte for byte the one that ships with Nodvard Deck; otherwise they use
+the full rule. "Verbindung prüfen" (check connection) shows for each script whether it matches.
 After an update that brings a new script it says "Veraltet" (outdated): then run the setup command once more.
+You do not have to spot this yourself: if a script is missing or outdated while the full rule is set, the overview
+shows a quiet hint under "Braucht Aufmerksamkeit" (needs attention) with a link to the setup. Nodvard Deck checks this
+every 6 hours and on every "Verbindung prüfen". The × hides the hint for that server until an update brings newer
+scripts.
 
 **Proxmox nodes:** There, Nodvard Deck is easiest to log in directly as `root` (enter user `root` when generating).
 Then it needs neither sudo nor tick boxes. The key ends up in `/root/.ssh/authorized_keys`, which on Proxmox is a link
@@ -995,6 +1412,13 @@ starten", i.e. restart needed, but switched off for this server – please resta
 yourself. The update center names the exemptions on its badge ("Neustart danach: automatisch, außer …", i.e. restart
 afterwards: automatic, except …). If the server Nodvard Deck itself runs on is in the list, it does not restart
 either.
+If the last update on a server failed, was cut off or has not finished yet, Deck does not restart it either, not in the
+following nights as well: half-configured packages and a restart do not go well together. The summary then says
+„Neustart nötig, aber ausgelassen“ (restart needed, but skipped) and comes as a warning, so it shows up in the cockpit
+under "Needs attention" („Braucht Aufmerksamkeit“). If the run failed, the Nodvard Shield overview also shows „Neustart
+wartet auf ein sauberes Update“ (restart waits for a clean update) there until a run works again. Check in the update
+center what went wrong; after the next clean run, Deck restarts the server by itself again. If nothing is left to
+install, restart the server yourself.
 
 **Propose all updates at once:** in the update center, "Propose all security updates" („Alle Sicherheitsupdates
 vorschlagen“) or "Propose all updates" („Alle Updates vorschlagen“) creates a proposal for every matching server;

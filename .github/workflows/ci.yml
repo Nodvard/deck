@@ -76,6 +76,88 @@ jobs:
             exit 1
           fi
 
+  # Nodvard Dock: dasselbe Dockerfile, nur mit dem Modul docker. Unter dem Namen aus deploy/nodvard-dock/compose.yml
+  # gebaut, damit die Compose-Datei genau dieses Image startet und nichts zieht.
+  dock-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Image bauen
+        run: docker build -f deploy/Dockerfile --build-arg NODVARD_DECK_EXTENSIONS=docker -t ghcr.io/nodvard/dock:latest .
+      - name: Nur das Modul docker im Image
+        run: |
+          found="$(docker run --rm --entrypoint sh ghcr.io/nodvard/dock:latest -c 'cd /app/extensions && ls -d */ | tr -d / | tr "\n" " "')"
+          if [ "$found" != "_shared docker " ]; then
+            echo "Im Image liegen andere Module: $found" >&2
+            exit 1
+          fi
+          if docker run --rm --entrypoint sh ghcr.io/nodvard/dock:latest -c 'command -v tesseract'; then
+            echo "Tesseract gehört nur zum Modul documents." >&2
+            exit 1
+          fi
+      - name: Start mit der Compose-Datei
+        working-directory: deploy/nodvard-dock
+        run: |
+          docker compose up -d
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8080/api/v1/health 2>/dev/null | grep -q '"status":"ok"' && break
+            if [ "$i" = 60 ]; then
+              docker compose logs
+              echo "Nodvard Dock meldet nach 5 Minuten nicht ok." >&2
+              exit 1
+            fi
+            sleep 5
+          done
+      # Eine frische Installation startet ohne eingeschaltetes Modul; erst das Einschalten zeigt, ob docker im Image lädt.
+      - name: Einrichten und Docker einschalten
+        working-directory: deploy/nodvard-dock
+        run: |
+          api=http://127.0.0.1:8080/api/v1
+          code="$(docker compose logs --no-color nodvard-dock | grep -o 'Einrichtungscode: [A-Z0-9-]*' | tail -n 1 | cut -d' ' -f2)"
+          password="$(openssl rand -hex 16)"
+          curl -fsS -H 'Content-Type: application/json' -d "{\"username\":\"ci-owner\",\"password\":\"$password\",\"setup_code\":\"$code\"}" "$api/auth/bootstrap" >/dev/null
+          token="$(curl -fsS -H 'Content-Type: application/json' -d "{\"username\":\"ci-owner\",\"password\":\"$password\"}" "$api/auth/login" | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')"
+          known="$(curl -fsS -H "Authorization: Bearer $token" "$api/extensions" | python3 -c 'import json, sys; print(" ".join(sorted(e["id"] for e in json.load(sys.stdin))))')"
+          if [ "$known" != "docker" ]; then
+            echo "Erwartet war nur das Modul docker, gefunden: $known" >&2
+            exit 1
+          fi
+          curl -fsS -X POST -H "Authorization: Bearer $token" "$api/extensions/docker/enable" >/dev/null
+          for i in $(seq 1 10); do
+            loaded="$(docker compose logs --no-color nodvard-dock | grep -o 'Erweiterungen geladen: .*' | tail -n 1)"
+            [ "$loaded" = "Erweiterungen geladen: docker" ] && break
+            sleep 1
+          done
+          if [ "$loaded" != "Erweiterungen geladen: docker" ]; then
+            echo "Erwartet war nur das Modul docker, geladen ist: ${loaded:-nichts}" >&2
+            exit 1
+          fi
+          # Bundle und eine Route des Moduls: ohne Server leer, aber erreichbar.
+          curl -fsS -o /dev/null -H "Authorization: Bearer $token" "$api/extensions/docker/frontend/index.js"
+          curl -fsS -H "Authorization: Bearer $token" "$api/ext/docker/widgets/matrix" | python3 -c 'import json, sys; json.load(sys.stdin)["data"]'
+          if docker compose logs --no-color nodvard-dock | grep -q Traceback; then
+            exit 1
+          fi
+      # Gemessen wie beim Update-Helfer: alle Dateien entpackt, mit du im Container. Der Speicher nach dem Start steht
+      # nur in der Zusammenfassung; er schwankt mit dem Runner und taugt nicht als Grenze.
+      - name: Größe unter 350 MB, Speicher nach dem Start
+        run: |
+          out="$(docker run --rm --network none --cap-drop ALL --cap-add DAC_READ_SEARCH --entrypoint du ghcr.io/nodvard/dock:latest -sxb /)"
+          size="${out%%[[:space:]]*}"
+          case "$size" in
+            ''|*[!0-9]*) echo "Größe des Images nicht messbar: $out" >&2; exit 1 ;;
+          esac
+          memory="$(docker stats --no-stream --format '{{.MemUsage}}' "$(docker compose -f deploy/nodvard-dock/compose.yml ps -q nodvard-dock)")"
+          echo "Nodvard Dock: $((size / 1000000)) MB (alle Dateien, entpackt), Speicher nach dem Start: $memory" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$size" -ge 350000000 ]; then
+            echo "Das Image von Nodvard Dock ist größer als 350 MB." >&2
+            exit 1
+          fi
+      - name: Protokoll bei einem Fehler
+        if: failure()
+        working-directory: deploy/nodvard-dock
+        run: docker compose logs --no-color
+
   frontend:
     runs-on: ubuntu-latest
     steps:

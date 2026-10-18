@@ -255,6 +255,7 @@ describe("SystemPage", () => {
     expect(tileState({ host_id: "a", summary: "Debian – alles in Ordnung", tone: "good" })).toEqual({ extra: "Debian – alles in Ordnung", hint: null });
     expect(tileState({ host_id: "a", summary: "Swap knapp", tone: "warn", cpu_percent: null, mem_percent: 71 })).toEqual({ extra: "RAM 71 %", hint: "Swap knapp" });
     expect(tileState({ host_id: "a", summary: "nicht erreichbar: timeout", tone: "danger" })).toEqual({ extra: null, hint: "nicht erreichbar: timeout" });
+    expect(tileState({ host_id: "a", summary: "ausgeschaltet", tone: "neutral" })).toEqual({ extra: null, hint: null });
   });
 
   it("ein Server ohne SSH-Zugang steht in der Auswahl mit dem Hinweis dazu", async () => {
@@ -395,7 +396,6 @@ describe("Dienst neu starten", () => {
       expect(restart?.method).toBe("POST");
       expect(restart?.body).toEqual({ unit: "nginx.service" });
       expect(calls.some((c) => c.url.endsWith("/actions/a1/approve") && c.method === "POST")).toBe(true);
-      // Danach wird der Zustand neu geladen.
       await waitFor(() => expect(calls.filter((c) => c.url.includes("/info")).length).toBe(2));
     } finally {
       window.history.replaceState({}, "", "/");

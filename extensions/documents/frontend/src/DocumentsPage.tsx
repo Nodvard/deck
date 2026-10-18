@@ -1,11 +1,7 @@
 /**
- * Dokumente-Seite (Dokumentenarchiv im Stil von Paperless-ngx) --
- * PageSpec `component="DocumentsPage"` (siehe nodvard_deck_ext_documents/__init__.py).
- * Ruft die eigenen `/ext/documents/...`-Endpunkte auf, dazu (nur lesend, falls das Inventar an ist und das Recht
- * da ist) `GET /ext/inventory/items` für die Namen der verknüpften Gegenstände.
- *
- * Authentifizierung wie jede andere Extension-Seite: `window.__nodvardDeck.
- * getAccessToken()` (kein Zugriff auf state/auth.ts ueber den Import-Map-Shim).
+ * Dokumente-Seite (Dokumentenarchiv im Stil von Paperless-ngx, PageSpec `component="DocumentsPage"`) über die
+ * `/ext/documents/...`-Endpunkte; dazu `GET /ext/inventory/items` für die Namen verknüpfter Gegenstände, nur lesend und
+ * nur mit Recht.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
@@ -359,8 +355,8 @@ export function DocumentsPage(): JSX.Element {
     return res.blob();
   }
 
-  /** Vorschau im Browser (PDF/Bild) statt erst herunterladen -- ueber eine Blob-URL,
-   * weil der Download-Endpunkt den Bearer-Token braucht (kein Cookie-Login). */
+  /** Vorschau im Browser (PDF/Bild) statt Download, über eine Blob-URL, weil der Download-Endpunkt den Bearer-Token
+   * braucht. */
   async function togglePreview(doc: Doc) {
     if (preview?.id === doc.id) {
       URL.revokeObjectURL(preview.url);

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -25,11 +27,12 @@ class Base(DeclarativeBase):
 
 
 def new_id() -> str:
-    """UUIDv7-artig: zeitsortierter Präfix plus Zufall, als String(36) dialektneutral und in Logs lesbar."""
-    # TODO: auf uuid.uuid7() umstellen, sobald die Standardbibliothek es hat.
-    ts = int(datetime.now(UTC).timestamp() * 1000)
-    rand = uuid.uuid4().hex
-    return f"{ts:012x}-{rand[0:4]}-{rand[4:8]}-{rand[8:12]}-{rand[12:24]}"
+    """UUIDv7 nach RFC 9562 (48 Bit Millisekunden, dann Zufall) als String mit 36 Zeichen, passend zu `String(36)`."""
+    # uuid.uuid7() gibt es erst ab Python 3.14.
+    value = (time.time_ns() // 1_000_000 & (1 << 48) - 1) << 80 | int.from_bytes(os.urandom(10), "big")
+    value = value & ~(0xF << 76) | 0x7 << 76  # Version 7
+    value = value & ~(0x3 << 62) | 0x2 << 62  # Variante RFC 9562
+    return str(uuid.UUID(int=value))
 
 
 def utcnow() -> datetime:

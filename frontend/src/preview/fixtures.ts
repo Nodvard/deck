@@ -31,6 +31,10 @@ const host = (
   is_managed: true, enabled: true, status, last_seen_at: null,
   login_ok_at: extra.credential && (status === "up" || status === "running") ? "2026-10-01T10:00:00Z" : null,
   provider_ext_id: extra.provider_ext_id === undefined ? "proxmox" : extra.provider_ext_id, provider_ref: null, created_at: "", updated_at: "",
+  // Wie `HostOut.category`/`parent_label`/`power_state`; Elternhost und An/Aus setzt die Schleife unten für Gäste.
+  category: kind === "vm" || kind === "lxc" ? kind : "server",
+  parent_label: null as string | null,
+  power_state: null as string | null,
 });
 
 const KEY_ROOT: PreviewCredential = { kind: "ssh_key", username: "root", port: 22 };
@@ -60,6 +64,10 @@ const PROVIDER_REF: Record<string, string> = {
 };
 for (const h of HOSTS) {
   (h as { provider_ref: string | null }).provider_ref = PROVIDER_REF[h.id] ?? null;
+  if (h.category !== "server" && PROVIDER_REF[h.id]) {
+    h.parent_label = PROVIDER_REF[h.id].split("/")[2];
+    h.power_state = h.status === "running" ? "running" : "stopped";
+  }
   if (!h.provider_ext_id) continue;
   h.managed_tags = ["proxmox", h.kind ?? "proxmox"].filter((t, i, a) => a.indexOf(t) === i);
   h.tags = [...new Set([...h.managed_tags, ...h.tags])] as never[];
@@ -226,9 +234,26 @@ const WIDGETS = [
   w("docker", "matrix", "Container", "layout-grid", "widgets/matrix", {
     kind: "status_grid", tile_title: "{{ name }}", tile_subtitle: "{{ host }}", tile_tone: "{{ tone }}", tile_link: null,
   }),
+  // Höhe nach Inhalt: eine lange Liste („+ x weitere“), eine leere (kleinste Stufe), ein nicht eingerichtetes Modul
+  // (ausgeblendet, `meta.state`).
+  w("npm", "certificates", "Zertifikate", "lock", "widgets/certificates", {
+    kind: "list", empty_text: "Keine Zertifikate", max_items: null,
+    item: listItem("{{ domain }}", "läuft ab am {{ expires }}", { text: "{{ label }}", tone: "{{ tone }}" }),
+  }),
+  w("documents", "untagged", "Dokumente ohne Tag", "file-text", "widgets/untagged", {
+    kind: "list", empty_text: "Alle Dokumente haben Tags.", max_items: 5, item: listItem("{{ title }}", null, null),
+  }),
+  w("uptime-kuma", "monitors", "Uptime Kuma", "activity", "widgets/monitors", {
+    kind: "list", empty_text: "Keine Monitore", max_items: null, item: listItem("{{ name }}", "{{ detail }}", { text: "{{ label }}", tone: "{{ tone }}" }),
+  }),
 ];
 
 let layoutItems: unknown[] = WIDGETS.map((widget, i) => ({ widget_id: widget.id, ext_id: widget.ext_id, x: (i * 2) % 12, y: Math.floor(i / 6) * 2, w: 2, h: 2, config: {} }));
+
+/** `meta` der Widget-Antworten; „nicht eingerichtet“ blendet die Startseite aus. */
+const WIDGET_META: Record<string, Record<string, unknown>> = {
+  "/ext/uptime-kuma/widgets/monitors": { state: "not_configured" },
+};
 
 const WIDGET_DATA: Record<string, unknown> = {
   "/ext/backups/widgets/summary": [
@@ -262,7 +287,18 @@ const WIDGET_DATA: Record<string, unknown> = {
   "/ext/shield/widgets/incidents": [
     { title: "Container 'clamav' beendet (Exit 137)", host: "docker", status_label: "Vorschlag", tone: "warn" },
   ],
-  "/ext/docker/widgets/matrix": OVERVIEW.services.map((sv) => ({ name: sv.name, host: sv.host, tone: sv.tone })),
+  "/ext/npm/widgets/certificates": Array.from({ length: 14 }, (_, i) => ({
+    domain: `dienst-${i + 1}.heim.example`,
+    expires: `${String((i % 27) + 1).padStart(2, "0")}.11.2026`,
+    label: i < 2 ? "läuft bald ab" : "gültig",
+    tone: i < 2 ? "warn" : "good",
+  })),
+  "/ext/documents/widgets/untagged": [],
+  "/ext/uptime-kuma/widgets/monitors": [
+    { name: "Uptime Kuma nicht eingerichtet", detail: "Adresse und Zugang fehlen", label: "nicht eingerichtet", tone: "neutral" },
+  ],
+  // Felder wie im Modul Docker (`list_services`), damit auch die Container-Seite in der Vorschau läuft.
+  "/ext/docker/widgets/matrix": OVERVIEW.services.map((sv) => ({ ...sv, container: sv.name, status: sv.state === "running" ? "Up 3 days" : "Exited (0) 2 hours ago" })),
 };
 
 const GAMESERVER = {
@@ -479,6 +515,8 @@ export const previewState: {
   noApps: boolean;
   /** Eigene Apps („+ App hinzufuegen“), die Anlegen/Aendern/Loeschen in der Vorschau und in Tests veraendern; `null` = Ausgangsstand (siehe `customApps()`). */
   customApps: PreviewApp[] | null;
+  /** ?scenario=lange-namen: sehr lange Namen und Adressen ohne Leerzeichen (Apps, Vorschläge). */
+  longNames?: boolean;
   /** Update-Helfer (Einstellungen -> System): `?scenario=helfer-<zustand>`, siehe `HELPER_SCENARIOS`; leer = kein Helfer erwähnt (wie bisher). */
   helper: HelperScenario | "";
   /** `?theme=classic|simple|pro|original`: Theme der Vorschau. */
@@ -508,6 +546,9 @@ function initialCustomApps(): PreviewApp[] {
     previewApp("ca4", "Home Assistant", "http://192.168.2.60:8123", "🏠", "Smart Home", { color: "#14b8a6" }),
     previewApp("ca5", "Monitoring", "http://192.168.2.22/monitoring", "activity", "Überwachung", { host_id: "g-monitoring" }),
     previewApp("ca6", "Drucker", "http://192.168.2.40", "printer", null),
+    ...(previewState.longNames
+      ? [previewApp("ca7", "Eine-App-mit-einem-sehr-langen-Namen-ohne-Leerzeichen-zum-Testen", "http://192.168.2.31:30001/ein/sehr/langer/pfad/ohne/leerzeichen", null, "Überwachung")]
+      : []),
   ].map((a, i) => ({ ...a, sort_order: i }));
 }
 
@@ -1494,6 +1535,20 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   if (p === "/hosts/metrics/latest") return { hosts: previewState.noHosts || previewState.start ? {} : LATEST, stale_after_s: 120 };
   const apps = appRoutes(p, method, body);
   if (apps.handled) return apps.value;
+  // Vorschläge der Seite „Apps“; ?scenario=lange-namen hängt einen sehr langen Namen und eine lange Adresse an
+  // (Prüfung, dass bei halber Fensterbreite nichts rechts herausläuft).
+  if (p === "/apps/suggestions") {
+    const suggestions: { name: string; url: string; source: string; host: string | null }[] = [
+      { name: "wiki.example.org", url: "https://wiki.example.org", source: "Nginx Proxy Manager", host: null },
+      { name: "Pi-hole", url: "http://192.168.2.31/admin/", source: "Pi-hole", host: null },
+    ];
+    if (previewState.longNames) suggestions.push({
+      name: "ein-sehr-langer-container-name-ohne-leerzeichen-der-nicht-umbricht",
+      url: "http://192.168.2.31:30001/ein/sehr/langer/pfad/ohne/leerzeichen/der/nirgends/umbricht",
+      source: "Docker", host: "Raspberry Pi",
+    });
+    return { suggestions, errors: [] };
+  }
   if (p === "/overview") return withApps(previewState.noHosts ? EMPTY_OVERVIEW : OVERVIEW, customApps().map(appTile));
   // Echtes Backend-Format: nur die IDs (api/v1/terminal.py list_terminal_hosts -> list[str]).
   if (p === "/terminal/hosts") return previewState.start || previewState.noHosts ? [] : HOSTS.filter((h) => h.kind !== "hypervisor").map((h) => h.id);
@@ -1510,7 +1565,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   if (p.startsWith("/notifications")) return [];
   if (p === "/dashboard/layouts") return [{ id: "l1", name: "Standard", is_default: true, items: previewState.noHosts ? [] : layoutItems, created_at: "", updated_at: "" }];
   if (p === "/dashboard/layouts/l1" && method === "PUT") return { id: "l1", name: "Standard", is_default: true, items: layoutItems, created_at: "", updated_at: "" };
-  if (p in WIDGET_DATA) return { data: WIDGET_DATA[p], meta: {} };
+  if (p in WIDGET_DATA) return { data: WIDGET_DATA[p], meta: WIDGET_META[p] ?? {} };
   layoutItems = layoutItems.slice();
   return undefined;
 }
@@ -1658,7 +1713,7 @@ export function applyOhneProxmox(min: boolean, many = false): void {
       { name: "Debian-VM", summary: "Debian 12 · CPU 2 % · RAM 31 % · Platte 52 %", badge: "gut", tone: "good" },
       { name: "NAS", summary: "Debian 12 · CPU 1 % · RAM 18 % · Platte 78 %", badge: "gut", tone: "good" },
     ],
-    "/ext/docker/widgets/matrix": services.map((sv) => ({ name: sv.name, host: sv.host, tone: sv.tone })),
+    "/ext/docker/widgets/matrix": services.map((sv) => ({ ...sv, container: sv.name, status: sv.state === "running" ? "Up 3 days" : "Exited (0) 2 hours ago" })),
     "/ext/shield/widgets/incidents": [],
   });
   for (const key of Object.keys(LATEST)) delete LATEST[key];

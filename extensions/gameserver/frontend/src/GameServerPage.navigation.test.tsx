@@ -11,7 +11,7 @@ import { renderInShell } from "../../../_shared/frontend/src/testShell";
 vi.mock("../../../../frontend/src/lib/catalog", () => ({
   usePages: () => ({ data: [{ ext_id: "gameserver", path: "/gameservers", component: "GameServerPage" }], isLoading: false }),
 }));
-// ExtensionPage laedt das Bundle per import(url) -- hier durch die echte Seite aus den Quellen ersetzt.
+// ExtensionPage lädt das Bundle per import(url); hier wird es durch die echte Seite aus den Quellen ersetzt.
 vi.mock("/api/v1/extensions/gameserver/frontend/index.js?v=dev", async () => ({ GameServerPage: (await import("./GameServerPage")).GameServerPage }));
 
 const SERVER = { status: "up", service_label: "läuft", tone: "good", running: true, players_online: 0, version: "1.0", error: null,

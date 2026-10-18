@@ -1,0 +1,38 @@
+#0123456789abcdef hashes media
+app 9cfc71fe1768947a2b691a875b45da6bc4b9833bf5e6122bd4347347b17a359b
+#0123456789abcdef rc 0
+#0123456789abcdef services media
+app
+#0123456789abcdef rc 0
+#0123456789abcdef hashes prof
+app 200efdf757fd9a97a6be9386755f66ba84980a7f7bad64bf777b18e01a5ceda7
+debug 9cfc71fe1768947a2b691a875b45da6bc4b9833bf5e6122bd4347347b17a359b
+extra 9cfc71fe1768947a2b691a875b45da6bc4b9833bf5e6122bd4347347b17a359b
+#0123456789abcdef rc 0
+#0123456789abcdef services prof
+app
+#0123456789abcdef rc 0
+#0123456789abcdef hashes shop
+cache 9cfc71fe1768947a2b691a875b45da6bc4b9833bf5e6122bd4347347b17a359b
+web 95d482f16cc347908187c2848debe9b70021db338360fb0d508c164eb842ac43
+worker 9cfc71fe1768947a2b691a875b45da6bc4b9833bf5e6122bd4347347b17a359b
+#0123456789abcdef rc 0
+#0123456789abcdef services shop
+worker
+cache
+web
+#0123456789abcdef rc 0
+#0123456789abcdef hashes warn
+time="2026-10-15T22:53:19Z" level=warning msg="The \"TAG\" variable is not set. Defaulting to a blank string."
+service "app" refers to undefined volume fehlt: invalid compose project
+#0123456789abcdef rc 1
+#0123456789abcdef services warn
+time="2026-10-15T22:53:19Z" level=warning msg="The \"TAG\" variable is not set. Defaulting to a blank string."
+service "app" refers to undefined volume fehlt: invalid compose project
+#0123456789abcdef rc 1
+#0123456789abcdef hashes weg
+compose file "/opt/stacks/weg/docker-compose.yml" is invalid: open /opt/stacks/weg/docker-compose.yml: no such file or directory
+#0123456789abcdef rc 1
+#0123456789abcdef services weg
+compose file "/opt/stacks/weg/docker-compose.yml" is invalid: open /opt/stacks/weg/docker-compose.yml: no such file or directory
+#0123456789abcdef rc 1

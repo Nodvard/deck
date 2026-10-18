@@ -1,17 +1,7 @@
 /**
- * "Alle Updates vorschlagen (N)": ein Knopf je Docker-Host, sobald mindestens zwei Container
- * dort ein Image-Update einspielbar haben (dieselben Bedingungen wie der Knopf "Einspielen"
- * in der Zeile, siehe `ImageUpdateAction`).
- *
- * Ablauf: fuer jeden Container erst die Uebersicht holen (`GET .../image-update/plan`, nur
- * lesend), dann EINE Bestaetigung mit allen Containern (und der Datenbank-Warnung, falls einer
- * dabei ist), dann je Container `POST .../image-update` mit der `plan_id` seiner Uebersicht.
- * Bewusst OHNE Selbst-Freigabe: das sind Vorschlaege; freigegeben wird gesammelt unter
- * "Aktionen" (Sammel-Freigabe). Darum wird hier `authedFetch` direkt benutzt und nie
- * `settleAction` oder `/actions/<id>/approve`.
- *
- * Alle Anfragen laufen nacheinander -- SSH zum Host und die Registries sollen nicht
- * gleichzeitig beschossen werden.
+ * „Alle Updates vorschlagen (N)“: ein Knopf je Docker-Host mit mindestens zwei einspielbaren Image-Updates (wie
+ * „Einspielen“ in der Zeile, siehe `ImageUpdateAction`). Je Container erst die Übersicht (`GET .../image-update/plan`),
+ * dann eine gemeinsame Bestätigung und `POST .../image-update`. Bewusst ohne Selbst-Freigabe (gesammelt unter „Aktionen“).
  */
 import { useState } from "react";
 
@@ -68,7 +58,8 @@ export function BulkProposeButton({
     const ready: { candidate: BulkCandidate; plan: UpdatePlan }[] = [];
     const skipped: Skipped[] = [];
     try {
-      // 1. Uebersichten holen (nur lesend).
+      // Übersichten holen (nur lesend). Alles läuft nacheinander, damit SSH zum Host und die Registries nicht überrollt
+      // werden.
       for (const [i, c] of candidates.entries()) {
         if (signal.aborted) return;
         setProgress(`Prüfe ${i + 1}/${n} …`);
@@ -84,7 +75,7 @@ export function BulkProposeButton({
         }
       }
 
-      // 2. Eine Bestaetigung fuer alle.
+      // Eine Bestätigung für alle.
       if (ready.length > 0) {
         const databases = ready.filter((r) => r.plan.risk === "high" || r.plan.warnings.some(isDatabaseWarning)).map((r) => r.candidate.name);
         const parts = [
@@ -99,7 +90,6 @@ export function BulkProposeButton({
         if (!ok || signal.aborted) return;
       }
 
-      // 3. Vorschlaege anlegen, einer nach dem anderen.
       let created = 0;
       for (const [i, { candidate, plan }] of ready.entries()) {
         if (signal.aborted) return;

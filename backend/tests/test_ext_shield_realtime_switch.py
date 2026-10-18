@@ -106,7 +106,8 @@ def test_switched_needs_the_mark_on_its_own_line():
 
 # systemctl als Attrappe: Zustände als Dateien `<units>/active.<unit>` und `<units>/enabled.<unit>`, jeder Aufruf im Log.
 # Mit `<units>/never.<unit>` wird die Unit nach einem Neustart nie aktiv. `show -p MainPID --value` nennt 4242, solange sie
-# läuft; mit `dies.<unit>` ist sie beim zweiten Nachsehen weg (PID 0), mit `loops.<unit>` hat sie dann eine neue PID.
+# läuft; mit `dies.<unit>` ist sie beim zweiten Nachsehen weg (PID 0), mit `loops.<unit>` hat sie dann eine neue PID, mit
+# `slow.<unit>` ist sie erst ab zwei echten Sekunden nach dem Neustart weg.
 SYSTEMCTL = """
 echo "$*" >> {log}
 D={units}
@@ -117,10 +118,14 @@ case $1 in
         if [ "$2" = --now ]; then touch "$D/enabled.$3" "$D/active.$3"; else touch "$D/enabled.$2"; fi ;;
     disable)
         if [ "$2" = --now ]; then rm -f "$D/enabled.$3" "$D/active.$3" "$D/shown.$3"; else rm -f "$D/enabled.$2"; fi ;;
-    restart) rm -f "$D/shown.$2"; [ -e "$D/never.$2" ] || touch "$D/active.$2" ;;
+    restart)
+        rm -f "$D/shown.$2"; [ ! -e "$D/slow.$2" ] || date +%s > "$D/started.$2"
+        [ -e "$D/never.$2" ] || touch "$D/active.$2" ;;
     show)
         if [ ! -e "$D/active.$5" ]; then echo 0
         elif [ ! -e "$D/shown.$5" ]; then touch "$D/shown.$5"; echo 4242
+        elif [ -e "$D/slow.$5" ] && [ $(( $(date +%s) - $(cat "$D/started.$5") )) -ge 2 ]; then rm -f "$D/active.$5"; echo 0
+        elif [ -e "$D/slow.$5" ]; then echo 4242
         elif [ -e "$D/dies.$5" ]; then rm -f "$D/active.$5"; echo 0
         elif [ -e "$D/loops.$5" ]; then echo 4243
         else echo 4242; fi ;;
@@ -131,7 +136,7 @@ esac
 """
 
 
-def _side(base: Path, *, clamonacc: bool = True, systemd: bool = True, units: tuple[str, ...] = ()):
+def _side(base: Path, *, clamonacc: bool = True, systemd: bool = True, units: tuple[str, ...] = (), settle: int = 0):
     """Ordner einer Seite: Attrappen, Zustand der Units, ein /etc mit der Konfiguration des Pakets."""
     log, unit_dir = base / "systemctl.log", base / "units"
     unit_dir.mkdir(parents=True)
@@ -151,7 +156,7 @@ def _side(base: Path, *, clamonacc: bool = True, systemd: bool = True, units: tu
     if systemd:
         sdmark.mkdir()
     return SimpleNamespace(base=base, log=log, units=unit_dir, path=f"{bin_dir}:/usr/bin:/bin", sdmark=sdmark,
-                           helper=helper_copy(base, path=f"{bin_dir}:/usr/bin:/bin", sdmark=sdmark))
+                           helper=helper_copy(base, path=f"{bin_dir}:/usr/bin:/bin", sdmark=sdmark, rt_settle=settle))
 
 
 def _run_module(side, command: str) -> tuple[int, str]:
@@ -183,7 +188,8 @@ def _state(side) -> dict:
 
 
 def _both(tmp_path, steps, **side_kwargs):
-    """Führt dieselben Schritte (`("on", watch, exclude, mb)` oder `("off",)`) auf beiden Seiten aus und vergleicht."""
+    """Führt dieselben Schritte (`("on", watch, exclude, mb)` oder `("off",)`) auf beiden Seiten aus und vergleicht.
+    `settle=<s>` wartet nach dem Start echt so viele Sekunden (sonst sofort)."""
     rt = _rt()
     module, helper = _side(tmp_path / "modul", **side_kwargs), _side(tmp_path / "skript", **side_kwargs)
     results = []
@@ -191,7 +197,7 @@ def _both(tmp_path, steps, **side_kwargs):
         if step[0] == "on":
             _, watch, exclude, mb = step
             command = rt.enable_command(watch, exclude, max_filesize_mb=mb, etc=str(module.base / "etc"),
-                                        systemd_dir=str(module.sdmark), wait_s=4, settle_s=0,
+                                        systemd_dir=str(module.sdmark), wait_s=4, settle_s=side_kwargs.get("settle", 0),
                                         log_path=str(module.base / "onaccess.log"))
             args = rt.helper_args(True, watch, exclude, max_filesize_mb=mb)
         else:
@@ -284,10 +290,30 @@ def test_without_the_package_or_systemd_nothing_is_written(tmp_path, kwargs, mes
 def test_a_clamonacc_that_does_not_keep_running_ends_with_the_journal(tmp_path, unit):
     """„active“ direkt nach dem Start reicht nicht: Stirbt clamonacc kurz danach oder läuft es mit neuer PID, ist der
     Wächter nicht an (sonst merkte sich Deck „an“, obwohl nichts läuft)."""
-    rc, out, _state_after = _both(tmp_path, [("on", ["/home"], [], 50)], units=(f"{unit}.clamav-clamonacc",))[0]
+    rc, out, after = _both(tmp_path, [("on", ["/home"], [], 50)], units=(f"{unit}.clamav-clamonacc",))[0]
     assert rc == 4
     assert out == "clamonacc startet nicht:\nclamonacc[1]: ERROR: Could not connect to clamd\n"
     assert "@@realtime-on" not in out
+    # Danach aufgeräumt wie beim Ausschalten: kein Drop-in, keine Konfiguration, clamonacc aus, clamd wie vorher (aus).
+    assert list(after["files"]) == ["<B>/etc/clamav/clamd.conf"]
+    assert not any(d.endswith("clamav-clamonacc.service.d") for d in after["dirs"])
+    assert [u for u in after["units"] if u.startswith(("active.", "enabled."))] == []
+    tail = after["calls"][after["calls"].index("restart clamav-clamonacc"):]
+    assert ["disable --now clamav-clamonacc", "stop clamav-daemon", "disable clamav-daemon"] == [
+        c for c in tail if c.startswith(("disable", "stop"))
+    ]
+
+
+@needs_sh
+def test_the_check_after_the_start_really_waits(tmp_path):
+    """clamonacc stirbt erst zwei Sekunden nach dem Start: Nur wer wirklich wartet, merkt es. Sofort nachgesehen (0 s)
+    liefe er noch, und der Wächter stünde fälschlich auf „an“."""
+    units = ("slow.clamav-clamonacc",)
+    rc, out, _ = _both(tmp_path / "sofort", [("on", ["/home"], [], 50)], units=units, settle=0)[0]
+    assert rc == 0 and "@@realtime-on" in out
+    rc, out, after = _both(tmp_path / "gewartet", [("on", ["/home"], [], 50)], units=units, settle=3)[0]
+    assert rc == 4 and out.startswith("clamonacc startet nicht:")
+    assert [u for u in after["units"] if u.startswith(("active.", "enabled."))] == []
 
 
 @needs_sh
@@ -314,9 +340,10 @@ def test_the_helper_refuses_bad_arguments_before_doing_anything(tmp_path, args):
 # --- Route und Ausführung -----------------------------------------------------------------------------------------
 
 
-def _readiness(*, virt="none", clamd="/usr/sbin/clamd", root="helper") -> str:
+def _readiness(*, virt="none", clamd="/usr/sbin/clamd", root="helper", onacc="inactive") -> str:
     return (f"@@virt\n{virt}\n@@mem\nMemTotal: 8388608 kB\nMemAvailable: 4194304 kB\n@@fanotify\nyes\n@@clamd\n{clamd}\n"
-            f"@@clamonacc\n/usr/sbin/clamonacc\n@@clamd_state\ninactive\n@@root\n{root}\n@@apt\nyes\n@@end\n")
+            f"@@clamonacc\n/usr/sbin/clamonacc\n@@clamd_state\ninactive\n@@clamonacc_state\n{onacc}\n"
+            f"@@root\n{root}\n@@apt\nyes\n@@end\n")
 
 
 class _Ctx:
@@ -472,7 +499,8 @@ async def test_after_approval_it_runs_over_the_helper_and_remembers_the_state(so
     assert res.success, res.error
     args = rt.helper_args(True, req.payload["watch"], [], max_filesize_mb=50)
     assert soc.ctx.commands[-1] == av.via_helper(args, req.payload["command"], version=av.HELPER_REALTIME_VERSION)
-    # Die gemerkte Eignung ist verworfen: Die Liste fragt den Server neu.
+    # Die gemerkte Eignung ist verworfen: Die Liste fragt den Server neu (und der meldet clamonacc jetzt als laufend).
+    soc.ctx.readiness = _readiness(onacc="active")
     runs = len(soc.ctx.commands)
     assert await _realtime_on(soc) is True
     assert len(soc.ctx.commands) == runs + 1
@@ -498,6 +526,59 @@ async def test_a_failed_switch_remembers_nothing(soc, answer, error):
     assert not res.success
     assert res.error == (error if error is not None else _av().NO_ROOT_MESSAGE)
     assert await _realtime_on(soc) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("answer", "still_on"), [
+    # clamonacc startete nicht: Der Server hat wie beim Ausschalten aufgeräumt, also gilt „aus“.
+    (SimpleNamespace(exit_code=4, stdout="@@msg=realtime_not_started\njournal\n", stderr="", duration_ms=5), False),
+    # Etwas anderes schlug fehl, bevor der Server etwas umstellte: Der alte Stand bleibt.
+    (SimpleNamespace(exit_code=3, stdout="@@msg=realtime_no_package\n", stderr="", duration_ms=5), True),
+])
+async def test_a_failed_switch_on_after_it_was_on(soc, answer, still_on):
+    soc.ctx.readiness = _readiness(onacc="active")
+    _, req = await _switch(soc, True)
+    assert (await soc.executor.execute(req)).success and await _realtime_on(soc) is True
+    _, req = await _switch(soc, True)
+    soc.ctx.answer = answer
+    assert not (await soc.executor.execute(req)).success
+    row = (await soc.client.get("/defender/realtime/readiness")).json()["hosts"][0]
+    assert (row["realtime_on"], row["realtime_requested"]) == (still_on, still_on)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("onacc", "down_since", "on"), [
+    ("active", None, True),
+    ("inactive", None, False),  # der Server meldet clamonacc als gestoppt
+    ("activating", None, False),  # Neustart in Schleife
+    ("", None, True),  # unbekannt: der gemerkte Stand zählt
+    ("active", "2026-10-16T08:00:00+00:00", False),  # der Wächter-Lauf ist auf den Minuten-Takt zurück
+])
+async def test_the_readiness_shows_whether_realtime_really_runs(soc, onacc, down_since, on):
+    from nodvard_deck_ext_shield.patching import save_baseline
+
+    soc.ctx.readiness = _readiness(onacc=onacc)
+    changed_at = "2026-10-16T07:00:00+00:00"
+    await save_baseline(soc.ctx, "h1", _rt().STATE_KIND, {"enabled": True, "changed_at": changed_at})
+    if down_since:
+        await save_baseline(soc.ctx, "h1", _rt().DOWN_KIND, {"since": down_since, "changed_at": changed_at})
+    row = (await soc.client.get("/defender/realtime/readiness?refresh=true")).json()["hosts"][0]
+    assert row["realtime_on"] is on and row["realtime_requested"] is True
+    assert row["realtime_down_since"] == down_since
+    assert row["clamonacc_active"] == {"active": True, "": None}.get(onacc, False)
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_from_an_earlier_switch_on_does_not_count(soc):
+    """Der Rückfall gehört zu einem Einschalten (`changed_at`): Nach Aus und wieder Ein zählt ein alter nicht mehr."""
+    from nodvard_deck_ext_shield.patching import save_baseline
+
+    soc.ctx.readiness = _readiness(onacc="active")
+    await save_baseline(soc.ctx, "h1", _rt().STATE_KIND, {"enabled": True, "changed_at": "2026-10-16T09:00:00+00:00"})
+    await save_baseline(soc.ctx, "h1", _rt().DOWN_KIND, {"since": "2026-10-16T08:00:00+00:00",
+                                                          "changed_at": "2026-10-16T07:00:00+00:00"})
+    row = (await soc.client.get("/defender/realtime/readiness?refresh=true")).json()["hosts"][0]
+    assert row["realtime_on"] is True and row["realtime_down_since"] is None
 
 
 @pytest.mark.asyncio

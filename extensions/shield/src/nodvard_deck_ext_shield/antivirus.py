@@ -49,6 +49,9 @@ _RC_MARK_RE = re.compile(r"@@scan-rc-[0-9a-f]{16}=")
 NO_ROOT = "@@noroot"
 NO_ROOT_HELPER = "@@noroot-helper"
 """Zusätzlich zu NO_ROOT: Auf dem Server liegt ein Hilfsskript, das nicht das mitgelieferte ist (`no_root_message`)."""
+NO_ROOT_HELPER_UNREADABLE = "@@noroot-helper-unreadable"
+"""Statt NO_ROOT_HELPER: Das Hilfsskript liegt da, der angemeldete Benutzer kann es aber nicht lesen, also weder seine
+Prüfsumme noch seine Version prüfen."""
 NO_ROOT_MESSAGE = (
     "Keine root-Rechte: Das Dashboard ist auf diesem Server nicht als root angemeldet und "
     "darf sudo nicht ohne Passwort nutzen."
@@ -97,13 +100,15 @@ HELPER_SCAN_VERSION = 6
 """Ab dieser Version kennt das Hilfsskript `scan` und `watch`."""
 HELPER_QUARANTINE_VERSION = 8
 """Ab dieser Version verschiebt das Hilfsskript nur, was ClamAV selbst findet (zuerst am Ort, dann im Prüfordner), und
-legt nur an den Ort zurück, den es dabei hinterlegt hat (`restore <name>`). Version 7 tat das schon, verlor aber bei zwei
-gleichzeitigen Aufrufen mit demselben Namen die Herkunft und setzte die Falle erst nach dem Verschieben."""
-HELPER_REALTIME_VERSION = 11
-"""Ab dieser Version kennt das Hilfsskript `realtime-on` und `realtime-off` und meldet „an“ erst, wenn clamonacc nach dem
-Start weiterläuft."""
+legt nur an den Ort zurück, den es dabei hinterlegt hat (`restore <name>`), auch bei zwei gleichzeitigen Aufrufen mit
+demselben Namen."""
+HELPER_REALTIME_VERSION = 13
+"""Ab dieser Version kennt das Hilfsskript `realtime-on` und `realtime-off`, meldet „an“ erst, wenn clamonacc nach dem
+Start weiterläuft, und räumt sonst wie `realtime-off` auf."""
 HELPER_REALTIME_LOG_VERSION = 12
 """Ab dieser Version kennt das Hilfsskript `realtime-log` und `realtime-confirm`."""
+HELPER_QUARANTINE_STATE_VERSION = 14
+"""Ab dieser Version kennt das Hilfsskript `quarantine-state`."""
 
 REALTIME_NO_PACKAGE = "Auf dem Server fehlt das Paket clamav-daemon."
 REALTIME_NO_SYSTEMD = "Ohne systemd lässt sich Echtzeit nicht einrichten."
@@ -122,13 +127,15 @@ def helper_matches() -> str | None:
 
 def _no_root(required: bool, inner: str, matches: str) -> str:
     """Letzter Zweig ohne root: als normaler Benutzer oder NO_ROOT; liegt ein Hilfsskript da, das nicht das mitgelieferte
-    ist, dazu `@@noroot-helper <Version aus seinem Text>` für `no_root_message`."""
+    ist, dazu `@@noroot-helper <Version aus seinem Text>` für `no_root_message`, bei einem unlesbaren
+    `@@noroot-helper-unreadable`."""
     if not required:
         return f"sh -c {inner}"
     helper = shlex.quote(HELPER)
     return (
-        f"echo '{NO_ROOT}'; if [ -e {helper} ] && ! {{ {matches}; }}; then "
-        f"echo \"{NO_ROOT_HELPER} $(sed -n 's/^HELPER_VERSION=//p' {helper} 2>/dev/null | head -n 1)\"; fi; exit 126"
+        f"echo '{NO_ROOT}'; if [ -e {helper} ] && ! {{ {matches}; }}; then if [ -r {helper} ]; then "
+        f"echo \"{NO_ROOT_HELPER} $(sed -n 's/^HELPER_VERSION=//p' {helper} 2>/dev/null | head -n 1)\"; "
+        f"else echo '{NO_ROOT_HELPER_UNREADABLE}'; fi; fi; exit 126"
     )
 
 
@@ -158,26 +165,30 @@ def via_helper(args: Sequence[str], command: str, *, version: int, required: boo
 _NO_ROOT_HELPER_RE = re.compile(rf"^{NO_ROOT_HELPER}(?: (.*))?$", re.MULTILINE)
 
 
+HELPER_RERUN = "Bitte den Server neu einrichten (Einrichtungsbefehl mit „Root-Rechte ohne Passwort“)."
+
+
 def no_root_message(output: str | None) -> str:
-    """Die Meldung zu NO_ROOT: Liegt ein Hilfsskript auf dem Server, das nicht das mitgelieferte ist, sagt sie das und
-    verlangt „neu einrichten“. Sonst `NO_ROOT_MESSAGE`."""
-    match = _NO_ROOT_HELPER_RE.search(output or "")
-    if match is None or HELPER_BUNDLED is None:
-        return NO_ROOT_MESSAGE
-    # Die Zahl kommt aus dem Text des Skripts auf dem Server: nur eine schlichte Zahl zählt.
-    text, bundled = (match.group(1) or "").strip(), HELPER_BUNDLED[0]
-    found = text if re.fullmatch(r"[0-9]{1,4}", text) else None
-    if found is not None and int(found) < bundled:
-        what = f"veraltet (Version {int(found)}, dieses Dashboard bringt Version {bundled} mit)"
-    elif found is not None and int(found) == bundled:
-        what = f"verändert (Version {bundled}, aber mit anderem Inhalt)"
+    """Die Meldung zu NO_ROOT: Liegt ein Hilfsskript auf dem Server, das nicht das mitgelieferte ist oder sich nicht lesen
+    lässt, sagt sie das und verlangt „neu einrichten“. Sonst `NO_ROOT_MESSAGE`. Höchstens 200 Zeichen: Anzeigen mit
+    einer Zeile schneiden sonst den Teil mit „neu einrichten“ ab."""
+    text = output or ""
+    if HELPER_BUNDLED is not None and NO_ROOT_HELPER_UNREADABLE in text.splitlines():
+        what = "lässt sich nicht lesen"
     else:
-        what = "verändert oder neuer als dieses Dashboard"
-    return (
-        f"Das Hilfsskript auf diesem Server ist {what}, darum ruft Nodvard Deck es nicht auf, und ohne das Skript "
-        "erlaubt sudo hier nichts. Bitte den Server neu einrichten: Einrichtungsbefehl mit „Root-Rechte ohne Passwort“ "
-        "erneut ausführen."
-    )
+        match = _NO_ROOT_HELPER_RE.search(text)
+        if match is None or HELPER_BUNDLED is None:
+            return NO_ROOT_MESSAGE
+        # Die Zahl kommt aus dem Text des Skripts auf dem Server: nur eine schlichte Zahl zählt.
+        version, bundled = (match.group(1) or "").strip(), HELPER_BUNDLED[0]
+        found = int(version) if re.fullmatch(r"[0-9]{1,4}", version) else None
+        if found is not None and found < bundled:
+            what = f"ist veraltet (Version {found}, Dashboard hat {bundled})"
+        elif found == bundled:
+            what = f"ist verändert (Version {bundled}, anderer Inhalt)"
+        else:
+            what = "ist verändert oder neuer als dieses Dashboard"
+    return f"Das Hilfsskript auf dem Server {what}, darum fehlen die root-Rechte. {HELPER_RERUN}"
 
 
 def new_rc_mark() -> str:
@@ -1120,6 +1131,37 @@ def restore_command(quarantine_path: str, original_path: str, mode: str | None) 
         f"echo {_q(RESTORE_STUCK)} \"$(pwd -P)\"; exit 4; fi; "
         f"{leave}; rm -f {origin}; echo ok"
     )
+
+
+QUARANTINE_STATES = ("quarantined", "checking", "absent")
+
+
+def quarantine_state_command(quarantine_name: str) -> str:
+    """Nur lesend: liegt die Datei `quarantine_name` in der Quarantäne (`@@state=quarantined`, dazu `@@mode=` aus der
+    Ablage), noch im Prüfordner (`checking`) oder nicht dort (`absent`)?"""
+    if not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]*", quarantine_name):
+        raise ValueError("Ungültiger Name in der Quarantäne.")
+    target = _q(f"{QUARANTINE_DIR}/{quarantine_name}")
+    check = _q(f"{QUARANTINE_DIR}/{CHECK_DIR_NAME}/{quarantine_name}")
+    origin = _q(origin_record(f"{QUARANTINE_DIR}/{quarantine_name}"))
+    return (
+        f"if [ -f {target} ] && [ ! -L {target} ]; then echo '@@state=quarantined'; "
+        f"M=; if [ -f {origin} ] && [ ! -L {origin} ]; then M=$(sed -n 1p {origin} 2>/dev/null); fi; "
+        "case $M in [0-7][0-7][0-7] | [0-7][0-7][0-7][0-7]) echo \"@@mode=$M\" ;; esac; "
+        f"elif [ -e {check} ] || [ -L {check} ]; then echo '@@state=checking'; "
+        "else echo '@@state=absent'; fi"
+    )
+
+
+def quarantine_state_args(quarantine_name: str) -> list[str]:
+    """Aufruf des Hilfsskripts für dasselbe wie `quarantine_state_command` (prüft den Namen wie dort)."""
+    quarantine_state_command(quarantine_name)
+    return ["quarantine-state", quarantine_name]
+
+
+def parse_quarantine_state(output: str) -> str | None:
+    match = re.search(r"^@@state=([a-z]+)$", output, re.MULTILINE)
+    return match.group(1) if match and match.group(1) in QUARANTINE_STATES else None
 
 
 def delete_command(quarantine_path: str) -> str:

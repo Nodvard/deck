@@ -5,10 +5,12 @@ Reine Funktionen ohne I/O; mit Passwort führt das Dashboard das Skript selbst a
 from __future__ import annotations
 
 import base64
+import hashlib
 import re
 import shlex
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import asyncssh
 from nodvard_sdk import ROOT_HELPER_DIR
@@ -38,9 +40,27 @@ _FORBIDDEN_IN_DOUBLE_QUOTES = set("\"'$`\\!")
 
 _HELPER_ID_RE = re.compile(r"[a-z][a-z0-9-]{1,63}")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
+KEY_ADDED = "Schlüssel für Nodvard Deck eingetragen."
+"""Meldung des Skripts, wenn es den Schlüssel neu in `authorized_keys` schreibt (steht er schon dort, kommt sie nicht)."""
+
+SETUP_ACCOUNT_FILES = ("/etc/passwd", "/etc/shadow", "/etc/group", "/etc/gshadow")
+"""Konto-Dateien, die das Skript beim Anlegen des Benutzers und beim Eintragen in Gruppen ändern kann."""
+
+STATE_MARK = "@@nodvard-stand"
+# `ST before|after DATEI`: Prüfsumme, Rechte und Besitzer genau wie der Datei-Wächter von Nodvard Shield sie erfasst
+# (`sha256sum`, `stat -c "%a %U"`), „- - -“ für eine fehlende Datei. Fehlt ein Werkzeug oder ist die Datei nicht lesbar,
+# meldet es nichts; dann übernimmt der Wächter auch nichts still.
+_STATE_FUNCTION = (
+    'ST() { if ! command -v sha256sum >/dev/null 2>&1 || ! command -v stat >/dev/null 2>&1; then :; '
+    f'elif [ ! -e "$2" ]; then echo "{STATE_MARK} $1 - - - $2"; '
+    f'elif [ -f "$2" ] && [ -r "$2" ]; then echo "{STATE_MARK} $1 $(sha256sum < "$2" | cut -d" " -f1) '
+    '$(stat -c "%a %U" "$2") $2"; fi; }'
+)
 _HELPER_DIR_RE = re.compile(r"/[A-Za-z0-9_./-]{1,200}")
-MAX_ONE_LINER = 100_000
-"""Obergrenze für den ganzen Befehl. Er geht als ein Argument an `sh -c`, Linux erlaubt 128 KiB je Argument."""
+MAX_ONE_LINER = 120_000
+"""Obergrenze für den ganzen Befehl. Er geht als ein Argument an `sh -c`, Linux erlaubt 128 KiB (131 072 Byte) je
+Argument; der Rest bleibt Abstand."""
 
 
 class SetupError(ValueError):
@@ -143,7 +163,7 @@ def _helper_lines(helpers: Sequence[RootHelperFile], helper_dir: str) -> list[st
         ),
         (
             'HR() { Z=$(mktemp) || return 1; echo "$U ALL=(root) NOPASSWD: $D/$1" > "$Z"; '
-            'if visudo -c -q -f "$Z" && install -m 0440 -o root -g root "$Z" "$2"; then rm -f "$Z"; visudo -c -q && return 0; rm -f "$2"; return 1; fi; '
+            'if visudo -c -q -f "$Z" && install -m 0440 -o root -g root "$Z" "$2"; then rm -f "$Z"; VC "$2" && return 0; rm -f "$2"; return 1; fi; '
             'rm -f "$Z"; return 1; }'
         ),
         (
@@ -159,20 +179,24 @@ def _helper_lines(helpers: Sequence[RootHelperFile], helper_dir: str) -> list[st
         name = f"{helper.ext_id}-root"
         blob = base64.b64encode(helper.text.encode("ascii")).decode("ascii")
         lines.append(
-            f'if [ -z "$HX" ]; then if HS {name} {helper.sha256} "{blob}" && HR {name} "{helper_sudoers_file(helper.ext_id)}"; '
-            f'then echo "Hilfsskript {name} (Version {helper.version}) eingerichtet, mit eigener sudo-Regel."; '
-            f'else echo "Hinweis: Das Hilfsskript {name} wurde nicht eingerichtet."; fi; fi'
+            f'if [ -z "$HX" ]; then if ! HS {name} {helper.sha256} "{blob}"; '
+            f'then echo "Hinweis: Das Hilfsskript {name} wurde nicht eingerichtet: Die Datei ließ sich nicht prüfen oder nicht sicher ablegen."; '
+            f'elif ! HR {name} "{helper_sudoers_file(helper.ext_id)}"; '
+            f'then echo "Hinweis: Das Hilfsskript {name} wurde nicht eingerichtet: Seine sudo-Regel hat die Prüfung mit visudo nicht bestanden."; '
+            f'else echo "Hilfsskript {name} (Version {helper.version}) eingerichtet, mit eigener sudo-Regel."; fi; fi'
         )
     return lines
 
 
 def build_setup_script(
     user: str, public_key: str, *, groups: Iterable[str] = (), sudo: bool = False,
-    helpers: Sequence[RootHelperFile] = (), helper_dir: str = ROOT_HELPER_DIR,
+    helpers: Sequence[RootHelperFile] = (), helper_dir: str = ROOT_HELPER_DIR, report_state: bool = False,
 ) -> tuple[str, str]:
     """`(skript, einzeiler)`: `skript` zum Lesen (eine Anweisung je Zeile), `einzeiler` zum Einfügen (als root direkt, sonst
     über `sudo`, als ein Argument für `sh -c`). `groups`, `sudo` und `helpers` gelten nur für Benutzer außer root,
-    `helpers` nur zusammen mit `sudo` (`helper_dir` ändern nur Tests); ein ungültiger Wert ergibt `SetupError`."""
+    `helpers` nur zusammen mit `sudo` (`helper_dir` ändern nur Tests); ein ungültiger Wert ergibt `SetupError`.
+    `report_state` (nur wenn Nodvard Deck das Skript selbst ausführt): Es meldet den Stand der Konto-Dateien und der
+    Schlüsseldatei vorher und nachher, für `setup_report`."""
     user = _check_user(user)
     key = _check_public_key(public_key)
     wanted: list[str] = []
@@ -185,16 +209,26 @@ def build_setup_script(
     # `B` = Art und Schlüsseltext ohne Kommentar: Ein schon eingetragener Schlüssel wird auch dann erkannt, wenn er mit
     # einem anderen Kommentar (z. B. `lattice@...`) auf dem Server steht.
     lines = ["set -e", f"U={shlex.quote(user)}", f'K="{_dq(key)}"', 'B=$(echo "$K" | cut -d" " -f1,2)']
+    if report_state:
+        lines += [_STATE_FUNCTION, f'for f in {" ".join(SETUP_ACCOUNT_FILES)}; do ST before "$f"; done']
     if not is_root:
         # "*" statt "!": sshd mit `UsePAM no` behandelt ein mit "!" gesperrtes Konto als gesperrt.
+        # Q: Befehl ohne die Warnungen „configuration error - unknown item“. useradd und usermod geben sie aus, wenn
+        # /etc/login.defs Einträge enthält, die sie nicht kennen (auf Raspberry Pi OS gesehen). Nodvard Deck schreibt dort
+        # nichts; alle anderen Meldungen und der Rückgabewert bleiben.
         lines.append(
-            'id "$U" >/dev/null 2>&1 || { useradd -m -s /bin/bash -c "Nodvard Deck" "$U"; usermod -p "*" "$U"; '
+            'Q() { E=$("$@" 2>&1) && C=0 || C=$?; [ -z "$E" ] || printf "%s\\n" "$E" | grep -v "configuration error - unknown item" || true; return $C; }'
+        )
+        lines.append(
+            'id "$U" >/dev/null 2>&1 || { Q useradd -m -s /bin/bash -c "Nodvard Deck" "$U"; Q usermod -p "*" "$U"; '
             'echo "Benutzer $U angelegt."; }'
         )
     lines += [
         'H=$(getent passwd "$U" | cut -d: -f6); G=$(id -gn "$U")',
         '[ -d "$H" ] || { echo "FEHLER: Das Home-Verzeichnis $H gibt es nicht."; exit 1; }',
     ]
+    if report_state:
+        lines.append('ST before "$H/.ssh/authorized_keys"')
     if is_root:
         lines += [
             # root: das Home ist /root. Proxmox: authorized_keys ist ein Link ins Cluster-Dateisystem,
@@ -204,7 +238,7 @@ def build_setup_script(
             '[ ! -s "$A" ] || [ -z "$(tail -c1 "$A")" ] || echo >> "$A"',
             # `restrict,pty`: kein Weiterleiten, kein Agent; ein Terminal (Terminal, `docker logs -f`),
             # Befehle und SFTP gehen weiter.
-            'grep -qF -- "$B" "$A" || echo "restrict,pty $K" >> "$A"',
+            f'grep -qF -- "$B" "$A" || {{ echo "restrict,pty $K" >> "$A"; echo "{KEY_ADDED}"; }}',
             '[ -L "$A" ] || { chown "$U:$G" "$A"; chmod 600 "$A"; }',
         ]
     else:
@@ -222,38 +256,50 @@ def build_setup_script(
             '[ -z "$(R tail -c1 "$A" 2>/dev/null)" ] || printf "\\n" | R tee -a "$A" >/dev/null',
             # `restrict,pty`: kein Weiterleiten, kein Agent; ein Terminal (Terminal, `docker logs -f`),
             # Befehle und SFTP gehen weiter.
-            'R grep -qF -- "$B" "$A" 2>/dev/null || printf "%s\\n" "restrict,pty $K" | R tee -a "$A" >/dev/null',
+            f'R grep -qF -- "$B" "$A" 2>/dev/null || {{ printf "%s\\n" "restrict,pty $K" | R tee -a "$A" >/dev/null; echo "{KEY_ADDED}"; }}',
             'R chmod 600 "$A"',
         ]
     if not is_root:
         for group in wanted:
             g = shlex.quote(group)
             lines.append(
-                f'if getent group {g} >/dev/null; then usermod -aG {g} "$U"; echo "Zur Gruppe {group} hinzugefügt."; '
+                f'if getent group {g} >/dev/null; then Q usermod -aG {g} "$U"; echo "Zur Gruppe {group} hinzugefügt."; '
                 f'else echo "Hinweis: Gruppe {group} gibt es hier nicht – übersprungen."; fi'
             )
         if sudo:
             # Neue Regel: /etc/sudoers.d/nodvard-<Benutzer>. Eine alte Regel lattice-<Benutzer> wird erst nach
             # erfolgreicher Prüfung der neuen entfernt, und nur, wenn sie Byte für Byte die Regel ist, die dieser Befehl
-            # selbst angelegt hat (`cmp` gegen die neue Datei); alles andere bleibt stehen (Hinweis). `visudo -c -q`
-            # muss am Ende gelten.
+            # selbst angelegt hat (`cmp` gegen die neue Datei); alles andere bleibt stehen (Hinweis).
+            # Geprüft wird jede eigene Datei für sich (VC). Die ganze Konfiguration (`visudo -c`) muss danach nur dann
+            # gelten, wenn sie es vorher schon tat (VP): Eine fremde Datei mit falschen Rechten (z. B. Modus 0644) lässt
+            # `visudo -c` scheitern, obwohl sudo läuft und die Regel von Nodvard Deck in Ordnung ist. visudo nennt die
+            # Datei dann im Hinweis (VO).
+            lines.append(
+                'VO() { visudo -c 2>&1 | grep -v "parsed OK" | head -n 5 | sed "s/^/visudo: /"; }; '
+                'VG() { [ -z "$VP" ] || visudo -c -q; }; VC() { visudo -c -q -f "$1" && VG; }'
+            )
             lines.append(
                 'if command -v visudo >/dev/null; then T=$(mktemp); trap "rm -f \\"\\$T\\"" EXIT; N="/etc/sudoers.d/nodvard-$U"; O="/etc/sudoers.d/lattice-$U"; '
+                'VP=; visudo -c -q >/dev/null 2>&1 && VP=1; '
+                '[ -n "$VP" ] || { echo "Hinweis: visudo meldet schon vor der Einrichtung einen Fehler, der nicht von Nodvard Deck kommt:"; VO; '
+                'echo "Hinweis: Die Regeln von Nodvard Deck werden deshalb einzeln geprüft. Steht oben „bad permissions“, hilft für die genannte Datei: chmod 0440 und chown root:root."; }; '
                 'echo "$U ALL=(root) NOPASSWD: ALL" > "$T"; '
                 'if visudo -c -q -f "$T"; then install -m 0440 -o root -g root "$T" "$N"; '
-                'if visudo -c -q; then '
+                'if VC "$N"; then '
                 'if [ -L "$O" ]; then echo "Hinweis: $O ist ein Link und bleibt stehen. Bitte selbst prüfen, ob die Regel noch gebraucht wird."; '
                 'elif [ -e "$O" ]; then '
                 'if cmp -s "$T" "$O"; then rm -f "$O"; echo "Die alte sudo-Regel lattice-$U wurde durch nodvard-$U ersetzt."; '
-                'visudo -c -q || { install -m 0440 -o root -g root "$T" "$O"; echo "FEHLER: Die alte sudo-Regel wurde wiederhergestellt."; F=1; }; '
+                'VG || { install -m 0440 -o root -g root "$T" "$O"; echo "FEHLER: Die alte sudo-Regel wurde wiederhergestellt."; F=1; }; '
                 'else echo "Hinweis: $O ist eine andere Regel als die von Nodvard Deck und bleibt stehen. Bitte selbst prüfen, ob sie noch gebraucht wird."; fi; '
                 'fi; '
-                'else rm -f "$N"; echo "FEHLER: sudo-Regel zurückgenommen."; F=1; fi; '
+                'else echo "FEHLER: sudo-Regel zurückgenommen. visudo meldet:"; VO; rm -f "$N"; F=1; fi; '
                 'else echo "FEHLER: visudo hat die sudo-Regel abgelehnt, sie wurde nicht eingetragen."; F=1; fi; '
                 'else echo "Hinweis: sudo ist nicht installiert (als root: apt install sudo)."; fi'
             )
     if sudo and not is_root and helpers:
         lines += _helper_lines(helpers, helper_dir)
+    if report_state:
+        lines.append(f'for f in {" ".join(SETUP_ACCOUNT_FILES)} "$H/.ssh/authorized_keys"; do ST after "$f"; done')
     if sudo and not is_root:
         lines.append('[ -z "$F" ] || { echo "Nicht alles hat geklappt – bitte die Meldungen oben lesen."; exit 1; }')
     lines.append('echo "Fertig. Jetzt im Dashboard „Verbindung prüfen“ drücken."')
@@ -292,16 +338,14 @@ def setup_notes(user: str, *, groups: Iterable[str], sudo: bool, helpers: Sequen
         notes.append(f"Wer {' oder '.join(who)}, kann auf dem Server praktisch alles.")
     if sudo:
         notes.append(
-            "Eine enger begrenzte sudo-Regel allein reicht Nodvard Deck noch nicht: Einige root-Befehle startet es "
-            "weiter über „sudo sh -c“. Darum bekommt nur dieser eine Benutzer die Rechte, und er kann sich "
-            "nur mit dem Schlüssel anmelden."
+            "Nodvard Deck startet einige root-Befehle über „sudo sh -c“, darum braucht es die volle sudo-Regel. "
+            "Deshalb bekommt nur dieser eine Benutzer die Rechte, und er kann sich nur mit dem Schlüssel anmelden."
         )
     if sudo and helpers:
         notes.append(
             f"Der Befehl legt außerdem die Hilfsskripte {', '.join(helpers)} nach /usr/local/lib/nodvard-deck "
-            "und erlaubt jedes mit einer eigenen sudo-Regel nur für sich. Die Module nutzen sie schon, solange das "
-            "Skript auf dem Server genau das mitgelieferte ist; sonst nehmen sie die volle Regel. Später reichen die "
-            "Skripte statt der vollen Regel."
+            "und erlaubt jedes mit einer eigenen sudo-Regel nur für sich. Die Module rufen ein Skript nur auf, wenn "
+            "es auf dem Server genau das mitgelieferte ist; sonst nehmen sie die volle Regel."
         )
     if groups:
         notes.append(
@@ -321,9 +365,12 @@ Start der Shell) gescheitert, nicht das Skript."""
 
 _MESSAGE_PREFIXES = (
     "Benutzer ", "Zur Gruppe ", "Hinweis:", "FEHLER:", "Die alte sudo-Regel", "Nicht alles hat geklappt", "Hilfsskript ",
+    KEY_ADDED,
+    "visudo: ",
 )
 """Zeilen, die das Skript selbst ausgibt (`echo` in `build_setup_script`). Nur sie gehen an die Oberfläche;
-`Fertig. ...` nicht, denn danach prüft das Dashboard die Verbindung selbst."""
+`Fertig. ...` nicht, denn danach prüft das Dashboard die Verbindung selbst. `visudo: ` sind höchstens fünf Zeilen der
+Prüfung `visudo -c`, damit man sieht, welche Datei auf dem Server das Problem ist."""
 _MAX_MESSAGES = 20
 _MAX_MESSAGE_LENGTH = 300
 
@@ -445,3 +492,74 @@ def evaluate_setup_run(
         "Der Einrichtungsbefehl ist auf dem Server fehlgeschlagen. Die Meldungen unten sagen, woran es lag.",
         messages,
     )
+
+
+# ---------------------------------------------------------------------------
+# Was der Lauf getan hat, für den Datei-Wächter von Nodvard Shield
+# ---------------------------------------------------------------------------
+
+_NAME = r"[a-z_][a-z0-9_-]{0,31}"
+_STATE_LINE_RE = re.compile(
+    rf"{re.escape(STATE_MARK)} (before|after) (?:([0-9a-f]{{64}}) ([0-7]{{3,4}}) ([A-Za-z0-9_][A-Za-z0-9_.-]{{0,31}})|- - -) (/.+)"
+)
+_KEYS_PATH_RE = re.compile(r"(?:/[A-Za-z0-9_][A-Za-z0-9_.-]*)+/\.ssh/authorized_keys")
+_HELPER_DONE_RE = re.compile(r"Hilfsskript ([a-z][a-z0-9-]{1,63})-root \(Version \d{1,4}\) eingerichtet, mit eigener sudo-Regel\.")
+
+
+def setup_report(stdout: str, *, user: str) -> dict[str, Any]:
+    """Was der Lauf von `build_setup_script(report_state=True)` für `user` laut seiner Ausgabe getan hat: Aktionen,
+    eingerichtete Hilfsskripte und der Stand der Dateien vorher und nachher. Nur feste Formen zählen, kein Servertext;
+    gedacht für die unveränderte Ausgabe (`run_once(extract=...)`), weil das Unkenntlichmachen des Passworts Prüfsummen
+    zerstören kann."""
+    actions: set[str] = set()
+    helpers: set[str] = set()
+    files: dict[str, dict[str, Any]] = {}
+    for raw in stdout.splitlines():
+        line = raw.strip()
+        if line == KEY_ADDED:
+            actions.add("key_added")
+        elif line == f"Benutzer {user} angelegt.":
+            actions.add("user_created")
+        elif re.fullmatch(rf"Zur Gruppe {_NAME} hinzugefügt\.", line):
+            actions.add("groups_added")
+        elif line == f"Die alte sudo-Regel lattice-{user} wurde durch nodvard-{user} ersetzt.":
+            actions.add("legacy_rule_removed")
+        elif m := _HELPER_DONE_RE.fullmatch(line):
+            helpers.add(m.group(1))
+        elif (m := _STATE_LINE_RE.fullmatch(line)) and _reported_path(m.group(5)):
+            state = None if m.group(2) is None else {"sha256": m.group(2), "mode": m.group(3), "owner": m.group(4)}
+            files.setdefault(m.group(5), {})[m.group(1)] = state
+    return {"actions": sorted(actions), "helpers": sorted(helpers), "files": files}
+
+
+def _reported_path(path: str) -> bool:
+    return path in SETUP_ACCOUNT_FILES or (_KEYS_PATH_RE.fullmatch(path) is not None and "/../" not in path and "/./" not in path)
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def setup_record(
+    user: str, report: dict[str, Any], *, sudo: bool, helpers: Sequence[RootHelperFile] = (),
+    helper_dir: str = ROOT_HELPER_DIR,
+) -> dict[str, Any]:
+    """Was der Datei-Wächter als eigene Einrichtung erkennen darf (`Host.metadata["setup_run"]`, ohne Zeitfenster):
+    der Bericht aus `setup_report` und die Prüfsummen der sudo-Regeln, die dieses Skript schreibt (`sudoers`) oder als
+    alte Regel löscht (`legacy_sudoers`), berechnet aus genau dem Inhalt, den es schreibt."""
+    sudoers: dict[str, str] = {}
+    legacy: dict[str, str] = {}
+    if sudo and user != "root":
+        # Wie im Skript: `echo "$U ALL=(root) NOPASSWD: ALL"` und für ein Hilfsskript `... NOPASSWD: $D/<name>`.
+        full_rule = _sha256(f"{user} ALL=(root) NOPASSWD: ALL\n")
+        sudoers[f"/etc/sudoers.d/nodvard-{user}"] = full_rule
+        legacy[f"/etc/sudoers.d/lattice-{user}"] = full_rule
+        offered = {helper.ext_id for helper in helpers}
+        for ext_id in report.get("helpers", []):
+            if ext_id in offered:
+                path = helper_sudoers_file(ext_id).replace("$U", user)
+                sudoers[path] = _sha256(f"{user} ALL=(root) NOPASSWD: {helper_dir}/{ext_id}-root\n")
+    return {
+        "user": user, "actions": list(report.get("actions", [])), "files": dict(report.get("files", {})),
+        "sudoers": sudoers, "legacy_sudoers": legacy,
+    }

@@ -4,7 +4,7 @@
     "base_url": {
       "type": "string",
       "title": "Nextcloud-Adresse",
-      "description": "z. B. https://cloud.example.com (ohne /remote.php …)",
+      "description": "z. B. https://cloud.example.com. Eine aus dem Browser kopierte Seite wie /index.php/apps/files schneidet Nodvard Deck ab.",
       "pattern": "^https?://\\S+$",
       "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten."
     },

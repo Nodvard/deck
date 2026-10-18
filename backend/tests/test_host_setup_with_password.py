@@ -12,15 +12,17 @@ nicht in einer Antwort (auch nicht in einer 422).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
+import shlex
 import socket
 from dataclasses import dataclass, field
 
 import asyncssh
 import pytest
 from nodvard_deck.core import rate_limit, ssh
-from nodvard_deck.models import AuditEntry, Base, HostCredential, KnownHostKey
+from nodvard_deck.models import AuditEntry, Base, Host, HostCredential, KnownHostKey
 from nodvard_deck.services import host_check, host_setup, one_time_password
 from sqlalchemy import select, text
 
@@ -144,7 +146,17 @@ async def _run_setup(state: ServerState, command: str, stdin: bytes) -> tuple[st
     assert key and user, "das Skript traegt Benutzer und Schluessel"
     fingerprint = asyncssh.import_public_key(key.group(1)).get_fingerprint()
     state.authorized.setdefault(user.group(1), set()).add(fingerprint)
-    return started + f"Benutzer {user.group(1)} angelegt.\nFertig. Jetzt im Dashboard „Verbindung prüfen“ drücken.\n", "", 0
+    name = user.group(1)
+    report = ""
+    if "ST before" in command:
+        # Wie `ST` im Skript: Stand vorher und nachher, hier mit festen Prüfsummen.
+        keys = "/root/.ssh/authorized_keys" if name == "root" else f"/home/{name}/.ssh/authorized_keys"
+        mark = host_setup.STATE_MARK
+        report = (
+            f"{mark} before {'a' * 64} 644 root /etc/passwd\n{mark} before - - - {keys}\n"
+            f"{host_setup.KEY_ADDED}\n{mark} after {'b' * 64} 644 root /etc/passwd\n{mark} after {'c' * 64} 600 {name} {keys}\n"
+        )
+    return started + f"Benutzer {name} angelegt.\n" + report + "Fertig. Jetzt im Dashboard „Verbindung prüfen“ drücken.\n", "", 0
 
 
 @pytest.fixture
@@ -269,6 +281,11 @@ def _closed_port() -> int:
 # ---------------------------------------------------------------------------
 
 
+async def _setup_run(db_session, host_id: str) -> dict | None:
+    db_session.expire_all()
+    return ((await db_session.get(Host, host_id)).host_metadata or {}).get("setup_run")
+
+
 @pytest.mark.asyncio
 async def test_as_root_runs_exactly_the_setup_command_once_and_deck_then_logs_in_with_the_key(client, db_session, setup_server):
     port, state, server_fp = setup_server
@@ -293,7 +310,7 @@ async def test_as_root_runs_exactly_the_setup_command_once_and_deck_then_logs_in
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["ok"] is True and out["made_default"] is False, "der erzeugte Schluessel war schon Standard"
-    assert out["messages"] == ["Benutzer nodvard angelegt."], "nur die eigenen Zeilen des Skripts, ohne „Fertig.“"
+    assert out["messages"] == ["Benutzer nodvard angelegt.", host_setup.KEY_ADDED], "nur die eigenen Zeilen des Skripts, ohne „Fertig.“"
     items = {i["id"]: i for i in out["check"]["items"]}
     assert items["login"]["status"] == "ok" and items["login"]["detail"] == "Mit Schlüssel angemeldet."
     assert out["check"]["credential_id"] == gen["credential"]["id"]
@@ -304,9 +321,12 @@ async def test_as_root_runs_exactly_the_setup_command_once_and_deck_then_logs_in
     assert state.runs[0]["stdin"] == b"", "als root bekommt der Befehl keine Eingabe"
     assert state.key_logins and set(state.key_logins) == {"nodvard"}, "die Pruefung lief mit dem neuen Schluessel"
 
-    # Genau der Befehl von GET .../setup, nur verpackt (als root: sh -c).
+    # Genau der Befehl von GET .../setup, nur verpackt (als root: sh -c) und mit den Zeilen, die den Stand der Dateien
+    # vorher und nachher melden.
     script = (await client.get(SETUP.format(host["id"], gen["credential"]["id"]), params={"sudo": "true"}, headers=_auth(token))).json()["script"]
-    assert state.runs[0]["command"] == host_setup.remote_setup_command(script, as_root=True, sudo_with_password=False)
+    expected = host_setup.remote_setup_command(script, as_root=True, sudo_with_password=False)
+    assert _without_state_report(state.runs[0]["command"]) == shlex.split(expected)[-1]
+    assert "ST before" not in script, "der Befehl zum Selbst-Einfügen meldet keinen Stand"
     assert state.runs[0]["command"].startswith("sh -c ")
 
     rows = await _audit(db_session)
@@ -316,6 +336,22 @@ async def test_as_root_runs_exactly_the_setup_command_once_and_deck_then_logs_in
     ]
     assert rows[-1].detail["check_ok"] is True and rows[-1].detail["credential_id"] == gen["credential"]["id"]
     assert len(await _audit(db_session, "host.connection_checked")) == 1
+    # Was die eigene Einrichtung getan hat, für den Datei-Wächter von Nodvard Shield (nur der eine echte Lauf).
+    run = await _setup_run(db_session, host["id"])
+    assert run is not None and run["from"] <= run["to"]
+    assert run["user"] == "nodvard" and run["actions"] == ["key_added", "user_created"]
+    assert run["files"] == {
+        "/etc/passwd": {"before": {"sha256": "a" * 64, "mode": "644", "owner": "root"}, "after": {"sha256": "b" * 64, "mode": "644", "owner": "root"}},
+        "/home/nodvard/.ssh/authorized_keys": {"before": None, "after": {"sha256": "c" * 64, "mode": "600", "owner": "nodvard"}},
+    }
+    full_rule = hashlib.sha256(b"nodvard ALL=(root) NOPASSWD: ALL\n").hexdigest()
+    assert run["sudoers"] == {"/etc/sudoers.d/nodvard-nodvard": full_rule}
+    assert run["legacy_sudoers"] == {"/etc/sudoers.d/lattice-nodvard": full_rule}
+
+
+def _without_state_report(command: str) -> str:
+    inner = shlex.split(command)[-1]
+    return "\n".join(line for line in inner.split("\n") if not line.startswith("ST()") and "ST before" not in line and "ST after" not in line)
 
 
 @pytest.mark.asyncio
@@ -405,6 +441,7 @@ async def test_unconfirmed_host_key_sends_no_password_stores_nothing_and_costs_n
     assert state.password_tries == [] and state.runs == []
     db_session.expire_all()
     assert (await db_session.execute(select(KnownHostKey))).scalars().all() == [], "nichts still gemerkt"
+    assert await _setup_run(db_session, host["id"]) is None, "nichts gelaufen, kein Einrichtungsfenster"
 
 
 @pytest.mark.asyncio
@@ -540,6 +577,7 @@ async def test_failed_setup_returns_only_the_scripts_own_lines_and_masks_the_pas
     assert body["code"] == "setup_failed"
     assert body["messages"] == [f"FEHLER: {one_time_password.MASK}", "FEHLER: Das Home-Verzeichnis fehlt."]
     assert "irgendwas" not in r.text and "sudo:" not in r.text, "keine fremden Zeilen, kein stderr"
+    assert await _setup_run(db_session, host["id"]) is not None, "gelaufen ist er trotzdem: das Fenster zählt"
 
 
 @pytest.mark.asyncio
@@ -616,6 +654,52 @@ async def test_an_error_after_the_login_is_lost_only_when_the_command_may_have_s
     assert exc.value.code == code and exc.value.status == 502
     assert PASSWORD not in str(exc.value) and exc.value.__cause__ is None
     assert conn.closed, "die Verbindung wird in jedem Fall geschlossen"
+
+
+@pytest.mark.asyncio
+async def test_extract_reads_the_unmasked_output_and_hands_back_only_its_result(monkeypatch):
+    """Das Passwort wird in der Ausgabe unkenntlich gemacht; eine Prüfsumme, in der es zufällig vorkommt, ginge dabei
+    kaputt. `extract` sieht deshalb die unveränderte Ausgabe, zurück kommt nur sein Ergebnis."""
+    import types
+
+    from pydantic import SecretStr
+
+    secret = "beef42"
+    line = f"{host_setup.STATE_MARK} after {'0' * 10}{secret}{'0' * 48} 644 root /etc/passwd"
+
+    class Conn:
+        async def run(self, *_args, **_kwargs):
+            return types.SimpleNamespace(exit_status=0, stdout=f"{host_setup.SETUP_STARTED}\n{line}\n".encode(), stderr=b"")
+
+        def close(self) -> None:
+            return None
+
+        async def wait_closed(self) -> None:
+            return None
+
+    async def known(_session, _host_id):
+        return {"ssh-ed25519": "SHA256:bekannt"}
+
+    async def connect(*_args, **_kwargs):
+        return Conn()
+
+    monkeypatch.setattr(one_time_password.ssh, "load_known_fingerprints", known)
+    monkeypatch.setattr(one_time_password.ssh, "connect", connect)
+    host = types.SimpleNamespace(id="host-2", address="192.168.2.11")
+    result = await one_time_password.run_once(
+        None, host=host, port=22, user_id="u2", login_user="root", password=SecretStr(secret), command="true",
+        extract=lambda out: host_setup.setup_report(out, user="nodvard"),
+    )
+    assert secret not in result.stdout
+    assert result.extracted["files"]["/etc/passwd"]["after"]["sha256"] == f"{'0' * 10}{secret}{'0' * 48}"
+
+    def broken(_out: str):
+        raise ValueError("kaputt")
+
+    result = await one_time_password.run_once(
+        None, host=host, port=22, user_id="u2", login_user="root", password=SecretStr(secret), command="true", extract=broken,
+    )
+    assert result.extracted is None and result.exit_status == 0
 
 
 @pytest.mark.asyncio

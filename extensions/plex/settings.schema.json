@@ -19,7 +19,7 @@
           "base_url": {
             "type": "string",
             "title": "Adresse",
-            "description": "Adresse des Plex-Servers, z. B. http://plex.example.com:32400 (Plex nutzt Port 32400).",
+            "description": "Grundadresse des Plex-Servers, z. B. http://plex.example.com:32400 (Plex nutzt Port 32400). Eine aus dem Browser kopierte Seite ab /web schneidet Nodvard Deck ab.",
             "pattern": "^https?://\\S+$",
             "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten."
           },

@@ -313,6 +313,7 @@ POST   /hosts/{id}/credentials/{cid}/make-default     → Standard-Zugang umstel
                                                         Bestätigung im Body, siehe „Tresor“)
 GET    /hosts/{id}/requirements      → was Erweiterungen auf dem Server brauchen
 POST   /hosts/{id}/check             → Verbindung prüfen (erreichbar, Server-Schlüssel, Anmeldung, Root, Erweiterungen, OS)
+POST   /hosts/{id}/helper-hint/dismiss → 204, Hinweis „Server neu einrichten“ in der Übersicht ausblenden (hosts.write)
 GET    /hosts/{id}/known-hosts       POST /hosts/{id}/known-hosts (Schlüssel bestätigen)
 DELETE /hosts/{id}/known-hosts/{key_type}
 GET    /host-groups   POST /host-groups   PATCH/DELETE /host-groups/{id}
@@ -504,6 +505,18 @@ Protokoll):
   Standard-Zugang abgelehnt bzw. einen anderen Server-Schlüssel gezeigt hat oder seit einer neuen Adresse oder einem
   neuen Standard-Zugang, jeweils bis zur nächsten gelungenen Anmeldung (Ausnahme: `make-default` nach frischer
   Prüfung, siehe unten).
+- Für Gruppen und Plaketten („LXC auf pve1“) hat `HostOut` außerdem `category` (`server`, `vm` oder `lxc`, aus
+  `kind`; ein Hypervisor-Knoten und ein von Hand angelegter Server ohne Art sind `server`), `parent_label` (bei einem
+  Gast der Host, auf dem er läuft, wie der Anbieter ihn nennt, sonst `null`) und `power_state` (`running`, `stopped`,
+  `paused` oder `null`, wenn der Anbieter es nicht meldet). Ein gestoppter Gast hat weiter `status: "down"`; die
+  Oberfläche zeigt ihn grau als „aus“ und zählt ihn nicht als Störung. Gemeldet werden die drei Angaben über die
+  gleichnamigen Felder von `DiscoveredHost` im SDK (`parent_ref`, `parent_label`, `power_state`); der Kern legt sie bei
+  jedem Abgleich neu in den Metadaten des Hosts ab.
+- `gone_since` in `HostOut`: seit wann der Anbieter den Server nicht mehr kennt (etwa ein in Proxmox gelöschter Gast),
+  sonst `null`. Gesetzt über `ctx.hosts.mark_gone(provider_refs)` im SDK, das eine Erweiterung nur für Bereiche aufruft,
+  die sie gerade vollständig gelesen hat (Proxmox: je Verbindung die Knotenliste, je Knoten die Gäste; eine nicht
+  erreichbare Verbindung markiert nichts). Meldet ein späterer Abgleich den Server wieder, verschwindet die Markierung.
+  Die Oberfläche zählt solche Server nicht mit, zeigt sie grau und bietet „Entfernen“ an (`DELETE /hosts/{id}`).
 - `DELETE /hosts/{id}` `{current_password, totp_code}` löscht auch die gespeicherten Zugangsdaten samt ihren
   Geheimnissen im Tresor und schließt offene SSH-Verbindungen. Hat der Server gespeicherte Zugänge, sind Passwort und,
   wenn Zwei-Faktor an ist, der Code im Body nötig (sonst `403 confirm_required`, Antworten wie unter „Tresor“); ohne
@@ -556,7 +569,10 @@ Protokoll):
   (z. B. Proxmox, wo `authorized_keys` ein Link ins Cluster-Dateisystem ist) bleibt der Link unangetastet. Eine ältere
   Regel `/etc/sudoers.d/lattice-<benutzer>` entfernt der Befehl erst, wenn die neue eingetragen und die ganze
   Konfiguration geprüft ist, und nur, wenn sie Byte für Byte der Regel entspricht, die er früher selbst angelegt hat;
-  sonst (auch als Link) bleibt sie mit Hinweis stehen. Lehnt `visudo` die sudo-Regel ab oder wird sie zurückgenommen,
+  sonst (auch als Link) bleibt sie mit Hinweis stehen. Jede eigene Datei prüft `visudo -c -f` für sich; die ganze
+  Konfiguration (`visudo -c`) muss nur dann auch danach gelten, wenn sie es vorher schon tat (eine fremde Datei mit
+  falschen Rechten lässt sonst die Einrichtung scheitern). `messages` enthält dann bis zu fünf Zeilen `visudo: …` mit
+  der Meldung von `visudo`. Lehnt `visudo` die sudo-Regel ab oder wird sie zurückgenommen,
   endet der Befehl mit Fehler statt „Fertig“, ebenso, wenn er die alte Regel wiederherstellen muss. Jeder Wert im Befehl wird streng
   geprüft bzw. mit `shlex.quote` gequotet. `422` für Passwort-Zugänge, nicht-Linux-Server, einen Benutzernamen, der kein
   üblicher Linux-Name ist (`^[a-z_][a-z0-9_-]{0,31}$`), und einen nicht lesbaren Schlüssel. Ändert nichts (kein
@@ -1069,6 +1085,12 @@ Ein `POST` auf eine zustandsverändernde Ressource antwortet:
 - `202` — **als Vorschlag angelegt**, Body enthält die `action`-Ressource
 - `403` — vom Gate abgelehnt, Body nennt die greifende Regel
 - `409` — Vorschlag abgelaufen
+- `422` — nur bei `POST /hosts/{id}/actions/{action}`: Die Angaben in `payload` passen nicht zum `params_schema` der
+  Aktion (falscher Typ, Pflichtfeld fehlt, Wert außerhalb von `enum`, Muster oder Grenzen). `detail` ist ein deutscher
+  Satz, der das Feld nennt und sagt, was nicht stimmt. Es entsteht dann keine Aktion und nichts geht ans Gate. Die
+  Prüfung deckt `type`, `enum`, `pattern`, `minLength`/`maxLength`, `minimum`/`maximum`, `properties`, `required`,
+  `additionalProperties`, `items` und `minItems`/`maxItems` ab; andere Schlüsselwörter werden nicht geprüft (nicht
+  abgelehnt). Verbindlich prüft weiterhin der Ausführer der Aktion.
 
 Dass `202` der Normalfall ist, folgt aus dem Aktions-Gate
 ([01 §4](01-ARCHITECTURE.md#4-das-aktions-gate)): Vorschlagen und Ausführen sind getrennte
@@ -1419,6 +1441,45 @@ außerhalb von Docker sein. Zusätzliche Orte (`locations`) eines Proxy-Hosts we
 den Aktionsweg des Servers: `POST /hosts/{docker_host_id}/actions/container.start` mit `{"payload": {"container": …},
 "reason": …}`, wie jede Aktion durch das Gate.
 
+### Viren-Wächter in Echtzeit (Erweiterung `shield`)
+
+```
+GET  /ext/shield/defender/realtime/readiness?refresh=   → 200 {hosts[]}                       Recht: soc.read
+POST /ext/shield/defender/realtime/{host_id}            → 200 {action_id, status, risk}      Recht: soc.manage
+```
+
+Ohne Echtzeit prüft der Viren-Wächter im Minuten-Takt die zuletzt geänderten Dateien. In Echtzeit meldet clamonacc
+(fanotify) jede neue Datei sofort an clamd; der Wächter-Lauf holt dann nur noch dessen Protokoll ab und prüft jeden Fund
+noch einmal über clamd. Eine Oberfläche dafür gibt es noch nicht, nur diese Schnittstelle.
+
+**`realtime/readiness`** ändert nichts. Je Server liest es, ob Echtzeit dort möglich wäre (zehn Minuten gemerkt,
+`refresh=true` fragt neu). Felder je Eintrag in `hosts[]`:
+
+- `host_id`, `host_name`, `reachable` und `possible`.
+- `reasons[]`: warum nicht möglich, deutsche Sätze.
+- `notes[]`: Hinweise.
+- `container`: Art der Virtualisierung, wenn der Server ein Container ist. Dann geht Echtzeit nicht.
+- `mem_total_mb` und `mem_available_mb`.
+- `fanotify`.
+- `clamd_installed`, `clamonacc_installed`, `clamd_active` und `clamonacc_active`. `false` auch bei einem Neustart in Schleife, `null` heißt unbekannt.
+- `root`: `root`, `helper`, `sudo` oder `none`.
+- `apt`.
+- `error`, wenn der Server nicht erreichbar ist.
+
+Dazu der gemerkte Stand:
+
+- `realtime_requested`: eingeschaltet.
+- `realtime_down_since`: Zeitpunkt (ISO 8601), seit dem der Wächter-Lauf wieder im Minuten-Takt prüft, weil clamonacc dort nicht läuft. Sonst `null`. Eingeschaltet bleibt er dabei, und läuft clamonacc wieder, gilt wieder Echtzeit.
+- `realtime_on`: eingeschaltet, `clamonacc_active` ist nicht `false`, und es gibt keinen Rückfall.
+
+**`realtime/{host_id}`** mit Body `{"enable": true|false}` legt einen Vorschlag „Viren-Wächter in Echtzeit“ (Risiko mittel) an.
+Freigegeben wird unter „Aktionen“. Vorher prüft die Route:
+
+- Beim Einschalten verlangt sie `possible` und ein installiertes clamd, sonst `409` mit dem Grund. Nodvard Deck installiert clamd nicht selbst.
+- Die Ordner kommen aus den Einstellungen `watch_paths` und `exclude_paths`.
+
+Gemerkt wird der neue Stand erst, wenn der Server das Umstellen bestätigt. Startet clamonacc nicht, räumt der Server wieder auf, und der Wächter gilt als ausgeschaltet. `404` gibt es bei einem unbekannten Server.
+
 ### Wächter-Vorlagen für den Echtzeit-Wächter (Erweiterung `shield`)
 
 ```
@@ -1539,16 +1600,21 @@ PATCH  /apps/{id}                    → App       nur die genannten Felder; ico
 DELETE /apps/{id}                    → 204
 PUT    /apps/order                   → [App]     {ids: [...]}: diese zuerst, in dieser Reihenfolge; Rest dahinter
                                                  (bis 50 mehr als die Obergrenze, denn das Cockpit schickt immer alle)
-GET    /apps/suggestions             → {suggestions: [{name, url, source, host}], errors: [str]} (apps.write)
+GET    /apps/suggestions             → {suggestions: [{name, url, source, host, service_id}], errors: [str]} (apps.write)
 ```
 
 `GET /apps/suggestions` (ergänzt) sammelt Vorschläge für neue Kacheln (Seite „Apps“): von jeder Erweiterung mit
 `AppSuggestionProvider` (z. B. Nginx Proxy Manager: eingeschaltete Proxy-Hosts, `https://`, wenn ein
 Zertifikat dran ist) und aus erkannten Diensten (`ServiceCatalog`) mit Adresse, die gerade laufen (`source` ist dann
-der Name der Erweiterung). Jeder Vorschlag wird wie eine von Hand angelegte App geprüft (Name auf 60 Zeichen gekürzt;
+der Name der Erweiterung). Die erkannten Dienste kommen aus demselben Zwischenspeicher wie `GET /overview` (kein
+eigener Abruf) und tragen `service_id` (ergänzt), die Kennung ihrer Kachel (`apps[].id` mit `source="detected"`); die
+Apps-Seite zeigt sie an dieser Kachel („Als App übernehmen“) statt noch einmal unter „Vorschläge“. Nennt eine
+Erweiterung dieselbe Adresse wie ein erkannter Dienst, bleibt der Vorschlag am Dienst. Jeder Vorschlag wird wie eine von Hand angelegte App geprüft (Name auf 60 Zeichen gekürzt;
 unbrauchbare Adressen fallen still weg); Adressen, die es als App schon gibt (gleiche Adresse, Groß-/Kleinschreibung
 von Schema und Rechner und ein abschließender `/` zählen nicht), und doppelte kommen nicht vor; höchstens 200. Jede
 Quelle hat 12 s; antwortet eine nicht, steht ein Satz in `errors` (ohne Text aus der Quelle), die anderen bleiben.
+Ließen sich die erkannten Dienste nicht lesen, steht dafür ein Satz in `errors` (ohne Text aus der Quelle); die
+ausführlichere Meldung steht in `errors` von `GET /overview`.
 Der Server ruft keine der Adressen auf; angelegt wird erst mit `POST /apps`.
 
 App = `{id, name, url, icon, color, group, sort_order, open_in_new_tab, host_id, host, created_at, updated_at}`
@@ -1579,6 +1645,17 @@ Felder: `id, source, name, url, host, host_id, state, tone, image, icon, color, 
 Ebenfalls neu: `services[].unreachable` (`true` bei der Platzhalterkachel eines Servers, dessen Container nicht gelesen werden
 konnten – sie ist kein Dienst und zählt nicht als „läuft nicht“) und `services_unreachable_hosts` (Namen dieser Server, sonst leer).
 Der Platzhalter kommt auch, wenn der Server antwortet, Docker aber nicht (Dienst aus, keine Rechte).
+`services[].url` (und damit `url` der erkannten Apps) prüft der Server nach derselben Regel wie die Adresse einer eigenen
+App: nur `http://` oder `https://` mit Rechnername oder IP-Adresse, sonst `null` (kein `javascript:`, `data:` oder `//…`).
+
+Ebenfalls additiv: `helper_hints` – Server, die neu eingerichtet werden sollten, damit die Module mit engen Rechten
+laufen: `[{host_id, host_name, modules: [Anzeigename], checked_at}]`. Ein Eintrag kommt nur, wenn auf einem
+Linux-Server die volle sudo-Regel (`NOPASSWD: ALL`, auch mit weiteren Angaben wie `NOPASSWD: SETENV: ALL`) gesetzt ist und mindestens ein Hilfsskript eines eingeschalteten
+Moduls fehlt oder nicht das mitgelieferte ist (älter, verändert, unlesbar); nie für root und nie für Windows. Der Stand
+stammt aus „Verbindung prüfen“ (nur mit dem Standard-Zugang) und dem Kern-Job `helper-hints` (alle 6 Stunden ein
+lesender Befehl je Server, derselbe wie bei der Prüfung); `GET /overview` selbst fragt keinen Server ab.
+`POST /hosts/{id}/helper-hint/dismiss` (`hosts.write`, 204, 404 ohne Server) blendet den Hinweis für diesen Server aus,
+bis sich die fehlenden Skripte oder ihre mitgelieferten Versionen ändern (etwa durch ein Update).
 
 ### Beispieldaten
 

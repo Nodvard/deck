@@ -919,12 +919,71 @@ async def test_incidents_widget_badge_is_german_and_colour_comes_from_an_explici
     rows = (await client.get("/api/v1/ext/shield/widgets/incidents", headers=_auth_header(token))).json()["data"]
     by_target = {r["target"]: r for r in rows}
     assert (by_target["nginx-proxy"]["status_label"], by_target["nginx-proxy"]["tone"]) == ("Aktion vorgeschlagen", "warn")
-    assert (by_target["pihole"]["status_label"], by_target["pihole"]["tone"]) == ("Geprüft", "good")
+    # "Geprüft" steht nicht mehr im Widget (nur offen/vorgeschlagen), sondern nur noch auf der Shield-Seite.
+    assert "pihole" not in by_target
+    page = {r["target"]: r for r in await _incident_rows(client, token)}
+    assert (page["pihole"]["status_label"], page["pihole"]["tone"]) == ("Geprüft", "good")
 
     widgets = (await client.get("/api/v1/widgets", headers=_auth_header(token))).json()
     spec = next(w for w in widgets if w["ext_id"] == "shield" and w["id"] == "incidents")
     badge = spec["view"]["item"]["badge"]
     assert badge == {"text": "{{ status_label }}", "tone": "{{ tone }}"}
+
+
+@pytest.mark.asyncio
+async def test_incidents_widget_shows_only_open_and_proposed(client, db_session, test_settings, mock_ollama):
+    """Das Widget bleibt ruhig: geprüfte, erledigte und verworfene Vorfälle stehen nur auf der Shield-Seite.
+    Jede Zeile liefert den Status maschinenlesbar mit (`status`), dazu `can_confirm` für den Knopf "Bestätigen"."""
+    ollama_url, state = mock_ollama
+    token = await _setup_shield(client, db_session, test_settings, ollama_url)
+    ids: dict[str, str] = {}
+    for target in ("proposed-c", "open-c", "reviewed-c", "resolved-c", "dismissed-c"):
+        # Der Neustart-Vorschlag muss zum abgestürzten Container des Vorfalls passen, sonst wird er nicht vorgeschlagen
+        # und der Vorfall gilt gleich als geprüft; "reviewed-c" bekommt absichtlich keine Aktion.
+        reply = _NONE_REPLY if target == "reviewed-c" else _CRASH_REPLY.replace("nginx-proxy", target)
+        ids[target] = await _record_incident(
+            client, token, state, host_name="docker", target=target, message="Container CRASH (Exited (1))", reply=reply
+        )
+    for target, verb in (("open-c", "reopen"), ("resolved-c", "resolve"), ("dismissed-c", "dismiss")):
+        r = await client.post(f"/api/v1/ext/shield/incidents/{ids[target]}/{verb}", headers=_auth_header(token))
+        assert r.status_code == 200, r.text
+
+    # Ausgangslage auf der Seite: alle fünf Stufen sind da.
+    page = {r["target"]: r["status"] for r in await _incident_rows(client, token)}
+    assert page == {
+        "proposed-c": "proposed", "open-c": "open", "reviewed-c": "reviewed",
+        "resolved-c": "resolved", "dismissed-c": "dismissed",
+    }
+
+    rows = (await client.get("/api/v1/ext/shield/widgets/incidents", headers=_auth_header(token))).json()["data"]
+    assert {r["target"]: r["status"] for r in rows} == {"proposed-c": "proposed", "open-c": "open"}
+    assert {r["target"]: r["can_confirm"] for r in rows} == {"proposed-c": False, "open-c": True}
+
+
+@pytest.mark.asyncio
+async def test_incidents_widget_offers_confirm_only_for_open_incidents(client, db_session, test_settings, mock_ollama):
+    """`show_if` der Aktion "Bestätigen" greift nur bei `open`; "Verwerfen" gilt für alles, was das Widget zeigt.
+    Die Template-Sprache hat keine Vergleiche, deshalb das Flag `can_confirm` statt `{{ status }}`."""
+    ollama_url, state = mock_ollama
+    token = await _setup_shield(client, db_session, test_settings, ollama_url)
+    widgets = (await client.get("/api/v1/widgets", headers=_auth_header(token))).json()
+    spec = next(w for w in widgets if w["ext_id"] == "shield" and w["id"] == "incidents")
+    actions = {a["id"]: a for a in spec["view"]["item"]["actions"]}
+    assert actions["confirm"]["show_if"] == "{{ can_confirm }}"
+    assert actions["dismiss"]["show_if"] is None
+    assert spec["view"]["empty_text"] == "Keine offenen Vorfälle"
+
+    # Das Flag, das `show_if` auswertet, hängt am Status: Vorschlag -> nicht bestätigen, offen -> bestätigen.
+    proposed = await _record_incident(
+        client, token, state, host_name="docker", target="nginx-proxy",
+        message="Container CRASH (Exited (1))", reply=_CRASH_REPLY,
+    )
+    rows = (await client.get("/api/v1/ext/shield/widgets/incidents", headers=_auth_header(token))).json()["data"]
+    assert [(r["status"], r["can_confirm"]) for r in rows] == [("proposed", False)]
+    reopened = await client.post(f"/api/v1/ext/shield/incidents/{proposed}/reopen", headers=_auth_header(token))
+    assert reopened.status_code == 200, reopened.text
+    rows = (await client.get("/api/v1/ext/shield/widgets/incidents", headers=_auth_header(token))).json()["data"]
+    assert [(r["status"], r["can_confirm"]) for r in rows] == [("open", True)]
 
 
 @pytest.mark.asyncio
@@ -2193,7 +2252,7 @@ async def test_old_titles_with_frozen_docker_time_are_cleaned_on_output(client, 
         await db_session.execute(
             text(
                 "INSERT INTO ext_nexus_soc_incidents (id, host_id, host_name, target, message, is_crash, details, status, created_at)"
-                " VALUES (:i, 'h', 'docker', :t, :m, 1, '{}', 'reviewed', :c)"
+                " VALUES (:i, 'h', 'docker', :t, :m, 1, '{}', 'open', :c)"
             ),
             {"i": ident, "t": ident, "m": message, "c": now},
         )
@@ -2205,6 +2264,7 @@ async def test_old_titles_with_frozen_docker_time_are_cleaned_on_output(client, 
         "alt3": "Container abgestürzt (Absturzschleife: 3x neu gestartet seit der letzten Prüfung)",
     }
     widget = (await client.get("/api/v1/ext/shield/widgets/incidents", headers=_auth_header(token))).json()["data"]
+    assert len(widget) == 3  # sonst wäre die Prüfung darunter leer
     assert all("ago" not in row["title"] for row in widget)
 
 

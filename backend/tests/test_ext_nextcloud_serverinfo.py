@@ -229,6 +229,28 @@ def test_base_url_is_normalized_and_credentials_are_refused():
     assert read_serverinfo_config({"base_url": BASE, "username": "alice", "tls_insecure_skip_verify": "ja"}).insecure_tls is False
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("https://cloud.example.com/index.php/apps/files/", "https://cloud.example.com"),
+        ("https://cloud.example.com/apps/files/?dir=/Docs", "https://cloud.example.com"),
+        ("https://cloud.example.com/apps/dashboard", "https://cloud.example.com"),
+        ("https://cloud.example.com/settings/user", "https://cloud.example.com"),
+        ("https://cloud.example.com/Settings/admin/overview", "https://cloud.example.com"),
+        ("https://cloud.example.com/login", "https://cloud.example.com"),
+        ("https://cloud.example.com:8443/remote.php/dav/files/alice/", "https://cloud.example.com:8443"),
+        ("https://example.org/nextcloud/index.php/apps/files/", "https://example.org/nextcloud"),
+        ("https://example.org/nextcloud/settings/user", "https://example.org/nextcloud"),
+        ("https://example.org/nextcloud", "https://example.org/nextcloud"),
+        ("https://example.org/nextcloud/", "https://example.org/nextcloud"),
+        ("https://example.org/cloud/appstore", "https://example.org/cloud/appstore"),
+    ],
+)
+def test_a_page_copied_from_the_browser_becomes_the_base_address(raw, expected):
+    assert normalize_base_url(raw) == expected
+    assert read_serverinfo_config({"base_url": raw, "username": "alice"}).base_url == expected
+
+
 class _Http:
     def __init__(self, handler: Callable[[httpx.Request], Any]) -> None:
         self.requests: list[httpx.Request] = []
@@ -671,6 +693,29 @@ async def test_address_without_any_credentials_is_not_configured(client, db_sess
     res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": "nextcloud-app-password", "value": PASSWORD}, headers=headers)
     assert res.status_code == 204
     assert (await _serverinfo(client, headers))["state"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_widget_meta_says_not_configured_only_without_usable_credentials(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    # Nichts eingetragen und Adresse ohne Zugangsdaten: die Übersicht darf die Kachel ausblenden.
+    assert (await _widget(client, headers))["meta"]["state"] == "not_configured"
+    await _configure(client, headers, password=None)
+    widget = await _widget(client, headers)
+    assert widget["meta"]["state"] == "not_configured" and widget["data"][0]["label"] == "nicht eingerichtet"
+
+    # Eine eingetragene, aber unbrauchbare Adresse ist ein Fehler und bleibt sichtbar.
+    await _configure(client, headers, token=TOKEN, url="https://alice:geheim@cloud.example.com")
+    widget = await _widget(client, headers)
+    assert widget["meta"]["state"] == "error" and widget["data"][0]["label"] == "Fehler"
+
+    # Mit Zugangsdaten gilt Nextcloud als eingerichtet, auch wenn der Server nicht antwortet.
+    await _configure(client, headers, token=TOKEN)
+    fake.error = httpx.ConnectError("refused")
+    assert (await _widget(client, headers))["meta"]["state"] == "unreachable"
+    fake.error = None
+    _service().clear()  # sonst gilt das Ergebnis noch 20 Sekunden
+    assert (await _widget(client, headers))["meta"]["state"] == "ok"
 
 
 @pytest.mark.asyncio

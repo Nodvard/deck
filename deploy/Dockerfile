@@ -5,6 +5,10 @@
 #
 #   docker buildx build -f deploy/Dockerfile --platform linux/amd64,linux/arm64 -t nodvard-deck:latest .
 #
+# Nur einige Module (z. B. fuer ein Einzelprodukt), durch Kommas getrennt; ohne Angabe kommen alle mit:
+#
+#   docker buildx build -f deploy/Dockerfile --build-arg NODVARD_DECK_EXTENSIONS=docker -t nodvard-docker:test .
+#
 # Multi-Arch ohne Sonderfaelle im Code: `python:3.12-slim` und `node:22-slim` liefern
 # beide Ziel-Architekturen (linux/arm64 fuer den Pi, linux/amd64 fuer x86-Rechner, D-10), und
 # keine Backend-Abhaengigkeit (siehe backend/pyproject.toml) braucht eine Kompilierung
@@ -29,6 +33,10 @@ COPY frontend/ frontend/
 # in tailwind.config.js `content`, lagen hier aber erst NACH `npm run build` vor. Ihre
 # eigenen Klassen (farbige Badges, Abstaende ...) fehlten deshalb im ausgelieferten CSS.
 COPY extensions/ extensions/
+ARG NODVARD_DECK_EXTENSIONS=""
+# --chmod: Die Rechte im Build-Kontext schwanken (Windows, Kopien), der Standard-Build darf daran nicht scheitern.
+COPY --chmod=755 deploy/select_extensions.sh /usr/local/bin/select_extensions.sh
+RUN select_extensions.sh "$NODVARD_DECK_EXTENSIONS" extensions
 # `tsc -b` prueft auch die Tests mit; frontend/src/lib/targetAddress.test.ts liest dieselben
 # Beispiele wie das SDK (sdk/python/tests/vectors/same_target.json). Ohne sie scheitert der Build.
 COPY sdk/python/tests/vectors/ sdk/python/tests/vectors/
@@ -70,9 +78,14 @@ ENV PYTHONUNBUFFERED=1 \
 # bleibt trotzdem nutzbar, siehe ocr.py/__init__.py::_run_ocr()s Fehler-Isolation,
 # nur eben ohne erkannten Text). `-deu` zusaetzlich zu `-eng`, Homelab-Kontext ist
 # deutschsprachig (siehe ocr.py::_OCR_LANGS_PRIMARY).
-RUN apt-get update && apt-get install --no-install-recommends -y \
-      tesseract-ocr tesseract-ocr-deu \
-    && rm -rf /var/lib/apt/lists/*
+# Nur, wenn das Modul documents mitkommt (ohne Angabe kommen alle Module mit). Vor den
+# pip-Schritten, damit eine Aenderung am Backend apt nicht jedes Mal neu laufen laesst.
+ARG NODVARD_DECK_EXTENSIONS=""
+RUN case ",${NODVARD_DECK_EXTENSIONS:-documents}," in \
+      *,documents,*) apt-get update && apt-get install --no-install-recommends -y \
+          tesseract-ocr tesseract-ocr-deu \
+        && rm -rf /var/lib/apt/lists/* ;; \
+    esac
 
 # nodvard-sdk zuerst installieren (backend haengt via pyproject.toml `dependencies =
 # ["nodvard-sdk", ...]` davon ab, siehe dortige Datei) -- pip aufloest das zwar auch

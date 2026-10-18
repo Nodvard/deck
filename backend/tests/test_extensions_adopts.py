@@ -246,7 +246,8 @@ async def test_vault_entries_change_owner_only_where_readable_and_owned(tmp_path
     owners = {s.label: s.owner_ext_id for s in (await db_session.execute(select(Secret))).scalars()}
     assert owners == {"old-teil-pw": "new-mod", "old-fremd-pw": "fremd", "old-geheim": "old-src"}
     assert (await _adopted_entries(db_session))[0]["secrets"] == 1
-    assert "darf 'old-geheim' nicht lesen" in caplog.text
+    assert "übernimmt Tresor-Einträge von 'old-src' nicht" in caplog.text and "Anzahl: 2," in caplog.text
+    assert "old-geheim" not in caplog.text
 
 
 @pytest.mark.asyncio

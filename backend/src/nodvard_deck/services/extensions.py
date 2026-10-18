@@ -207,15 +207,21 @@ async def _adopt_widgets(session: AsyncSession, source: str, target: str, widget
 
 async def _adopt_secrets(session: AsyncSession, manifest: ExtensionManifest, source: str, labels: list[str]) -> int:
     """Macht die Tresor-Einträge `labels` von `source` zu eigenen, soweit das Modul sie lesen darf. Zurück: ihre Zahl."""
-    moved = 0
+    moved = unreadable = 0
     for label in labels:
         if not rbac.has_permission(manifest.permissions, f"secrets.read:{label}"):
-            log.warning("Erweiterung '%s' darf '%s' nicht lesen und übernimmt den Eintrag nicht.", manifest.id, label)
+            unreadable += 1
             continue
         secret = (await session.execute(select(Secret).where(Secret.label == label))).scalar_one_or_none()
         if secret is not None and secret.owner_ext_id == source:
             secret.owner_ext_id = manifest.id
             moved += 1
+    if unreadable:
+        # Ohne Bezeichnung: Was im Protokoll steht, soll nichts aus dem Tresor nennen.
+        log.warning(
+            "Erweiterung '%s' übernimmt Tresor-Einträge von '%s' nicht, weil ihr das Recht secrets.read dafür fehlt "
+            "(Anzahl: %d, siehe adopts im Manifest).", manifest.id, source, unreadable,
+        )
     return moved
 
 

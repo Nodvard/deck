@@ -19,7 +19,7 @@
           "base_url": {
             "type": "string",
             "title": "Adresse",
-            "description": "Adresse von Jellyfin, z. B. http://jellyfin.example.com:8096 (Jellyfin nutzt meist Port 8096 für http und 8920 für https).",
+            "description": "Grundadresse von Jellyfin, z. B. http://jellyfin.example.com:8096 (Jellyfin nutzt meist Port 8096 für http und 8920 für https). Eine aus dem Browser kopierte Seite ab /web schneidet Nodvard Deck ab.",
             "pattern": "^https?://\\S+$",
             "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten."
           },

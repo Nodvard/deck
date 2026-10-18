@@ -35,8 +35,29 @@ class ConnectionConfig:
     problem: str | None = None  # fester Hinweis; dann gibt es keine Anfrage
 
 
+UI_PATHS = (
+    "lovelace", "config", "history", "logbook", "map", "energy", "profile", "developer-tools", "media-browser", "todo",
+    "calendar", "hassio", "auth", "onboarding.html",
+)
+"""Erste Pfadteile von Seiten der Oberfläche von Home Assistant, dazu jedes eigene Dashboard (`dashboard-…`). Wer die
+Adresse aus dem Browser kopiert, hat oft eine davon dabei (`/lovelace/0`, `/config/integrations`); die API liegt aber
+unter `/api` der Grundadresse."""
+
+
+def strip_ui_path(path: str) -> str:
+    """Schneidet den Pfad ab der ersten Seite der Oberfläche ab, ohne Schrägstrich am Ende. Ein Pfad davor bleibt."""
+    parts = path.split("/")
+    for index, part in enumerate(parts):
+        lowered = part.lower()
+        if lowered in UI_PATHS or lowered.startswith("dashboard-"):
+            parts = parts[:index]
+            break
+    return "/".join(parts).rstrip("/")
+
+
 def normalize_base_url(raw: Any) -> str:
-    """Entfernt den Schrägstrich am Ende; `ValueError`, wenn die Adresse unbrauchbar ist."""
+    """Entfernt den Schrägstrich am Ende und eine Seite der Oberfläche (`strip_ui_path`); `ValueError`, wenn die
+    Adresse unbrauchbar ist."""
     text = str(raw or "").strip()
     parts = urlsplit(text)
     if parts.scheme not in ("http", "https") or not parts.hostname:
@@ -45,7 +66,7 @@ def normalize_base_url(raw: Any) -> str:
     if "@" in parts.netloc:
         raise ValueError(text)
     _ = parts.port  # wirft ValueError bei einem Port außerhalb von 0-65535
-    return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
+    return urlunsplit((parts.scheme, parts.netloc, strip_ui_path(parts.path), "", ""))
 
 
 def normalize_fingerprint(value: Any) -> str | None:

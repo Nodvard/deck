@@ -44,8 +44,7 @@ describe("ContainersPage", () => {
 
     await screen.findByText("nginx");
     const headings = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
-    // "docker" und "docker-lxc" jeweils EINMAL -- nicht die Fehlermeldung als
-    // eigene, dritte Gruppe (das war der eigentliche Fund im Backend).
+    // „docker“ und „docker-lxc“ jeweils einmal, nicht die Fehlermeldung als eigene dritte Gruppe.
     expect(headings).toEqual(["docker", "docker-lxc"]);
   });
 
@@ -56,6 +55,20 @@ describe("ContainersPage", () => {
     await screen.findByText("nginx");
     expect(screen.getByText("Läuft seit 2 Stunden")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Öffnen" })).toHaveAttribute("href", "http://10.0.0.5:8080");
+  });
+
+  it("macht aus einer Adresse ohne http oder https keinen Link", async () => {
+    const odd = [{ ...SERVICES[0], url: "javascript:alert(1)" }];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/ext/docker/widgets/matrix")) {
+        return new Response(JSON.stringify({ data: odd, meta: {} }), { status: 200 });
+      }
+      throw new Error(`Unerwarteter Fetch in diesem Test: ${String(input)}`);
+    }));
+    render(<ContainersPage />);
+
+    await screen.findByText("nginx");
+    expect(screen.queryByRole("link", { name: "Öffnen" })).not.toBeInTheDocument();
   });
 
   it("zeigt die Fehlermeldung einer nicht erreichbaren Quelle als Statustext", async () => {
@@ -339,7 +352,7 @@ describe("ContainersPage -- Container-Verwaltung", () => {
     push("2026-09-24T07:00:02Z worker crashed\n");
     await waitFor(() => expect(panel.querySelector("pre")?.textContent).toContain("worker crashed"));
 
-    fireEvent.change(screen.getByLabelText("Logs filtern"), { target: { value: "health" } });
+    fireEvent.change(screen.getByLabelText("In den Logs suchen"), { target: { value: "health" } });
     expect(panel.querySelector("pre")?.textContent).toBe("2026-09-24T07:00:01Z GET /health 200");
 
     fireEvent.click(screen.getByRole("button", { name: "Schließen" }));
@@ -391,7 +404,7 @@ describe("ContainersPage -- Container-Verwaltung", () => {
 
     release(new Response(JSON.stringify({ data: { "h1:nginx": { cpu_percent: 2, mem_used: null, mem_limit: null } } })));
     await waitFor(() => expect(screen.getByTestId("cpu-h1:nginx").textContent).toBe("2.0 %"));
-    // Gestoppter Container ohne Messwert: jetzt "–", nicht mehr "…".
+    // Gestoppter Container ohne Messwert: „–“ statt „…“.
     expect(screen.getByTestId("cpu-h1:worker").textContent).toBe("–");
   });
 
@@ -402,7 +415,7 @@ describe("ContainersPage -- Container-Verwaltung", () => {
       render(<ContainersPage />);
       await screen.findByText("nginx");
       expect(screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent)).toEqual(["docker"]);
-      expect(screen.getByTestId("host-filter").textContent).toContain("Nur docker");
+      expect(screen.getByLabelText("Server")).toHaveValue("h1");
       fireEvent.click(screen.getByRole("button", { name: "Filter entfernen" }));
       expect(screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent)).toEqual(["docker", "docker-lxc"]);
     } finally {
@@ -483,6 +496,7 @@ describe("ContainersPage -- Container-Verwaltung", () => {
     expect(panel.textContent).toContain("außer manuell gestoppt · 2× neu gestartet");
     expect(panel.textContent).toContain("web / nginx · /opt/web");
     expect(panel.textContent).toContain("Umgebungsvariablen (2)API_TOKEN, TZ");
+    expect(within(panel).queryByRole("button", { name: "In Stack umwandeln" })).toBeNull();
   });
 
   it("Docker-Speicher: Belegung, frei machbar, Aufräumen über das Gate mit Rückfrage", async () => {
@@ -523,7 +537,7 @@ describe("ContainersPage -- Image-Updates", () => {
   };
   const CHECKED = { h1: { checking: false, checked_at: "2026-09-30T06:30:00+00:00", error: null } };
 
-  /** Der Server merkt sich den Stand; `respond` darf ihn je Aufruf aendern. */
+  /** Der Server merkt sich den Stand; `respond` darf ihn je Aufruf ändern. */
   function imageFetch(calls: { url: string; method: string }[], state: { data: Record<string, ImageResult>; hosts: Record<string, unknown> }, onPost?: () => void) {
     return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
@@ -923,7 +937,7 @@ describe("ContainersPage -- Image-Update einspielen", () => {
     expect(screen.getByText(/docker tag lattice-rollback\/nginx:previous nginx:1.27/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Jetzt einspielen" })).toBeInTheDocument();
     expect(calls.filter((c) => c.method === "POST")).toEqual([]);
-    // Abbrechen schliesst die Übersicht wieder.
+    // Abbrechen schließt die Übersicht wieder.
     fireEvent.click(screen.getByRole("button", { name: "Abbrechen" }));
     expect(screen.queryByText("Update für „nginx“ einspielen")).toBeNull();
   });

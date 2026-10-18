@@ -13,6 +13,8 @@ import hmac
 import http.cookiejar
 import ipaddress
 import logging
+import re
+import shlex
 import ssl
 import unicodedata
 from collections import OrderedDict
@@ -53,7 +55,7 @@ from sqlalchemy import select
 
 from ..core import rbac, ssh, vault
 from ..core.events import get_event_bus
-from ..db.base import refresh_relationships
+from ..db.base import refresh_relationships, utcnow
 from ..db.session import session_scope
 from ..models import Action, Host, HostTag, NotificationDelivery, Secret, Setting, User
 from ..services import audit as audit_service
@@ -296,7 +298,7 @@ class HostsHandle:
                         status=dh.status.value,
                         provider_ext_id=self._ext_id,
                         provider_ref=dh.provider_ref,
-                        host_metadata=dh.metadata,
+                        host_metadata={**dh.metadata, **_placement(dh)},
                     )
                     session.add(host)
                     await session.flush()
@@ -332,9 +334,11 @@ class HostsHandle:
                                 )
                         host.address = dh.address
                     host.status = dh.status.value
-                    # Den Beleg der letzten SSH-Anmeldung (vom Kern, nicht vom Anbieter) behalten.
-                    kept = {k: v for k, v in (host.host_metadata or {}).items() if k == "login_ok"}
-                    host.host_metadata = {**dh.metadata, **kept}
+                    # Was dem Kern gehört (Beleg der letzten SSH-Anmeldung, letzte eigene Einrichtung) behalten.
+                    from ..services.hosts import CORE_METADATA_KEYS
+
+                    kept = {k: v for k, v in (host.host_metadata or {}).items() if k in CORE_METADATA_KEYS}
+                    host.host_metadata = {**dh.metadata, **kept, **_placement(dh)}
                     # Nur übernehmen, wenn der Anbieter es ausdrücklich meldet,
                     # sonst bliebe eine manuelle Korrektur nicht stehen.
                     if "os_family" in dh.model_fields_set:
@@ -353,6 +357,59 @@ class HostsHandle:
                     await session.flush()
                 out.append(_host_to_sdk(host))
         return out
+
+    async def mark_gone(self, provider_refs: list[str]) -> int:
+        self._perm.require("hosts.write")
+        if not provider_refs:
+            return 0
+        marked = 0
+        async with session_scope() as session:
+            rows = (await session.execute(
+                select(Host).where(Host.provider_ext_id == self._ext_id, Host.provider_ref.in_(list(provider_refs)))
+            )).scalars().all()
+            for host in rows:
+                if (host.host_metadata or {}).get(GONE_KEY):
+                    continue
+                host.host_metadata = {**(host.host_metadata or {}), GONE_KEY: utcnow().isoformat()}
+                marked += 1
+        return marked
+
+
+# Schlüssel in `Host.host_metadata`, die der Kern aus den gleichnamigen Feldern von `DiscoveredHost` füllt (bei jedem
+# Abgleich neu, ein weggefallenes Feld verschwindet mit). `api/v1/hosts.py` liest sie für `HostOut`.
+PLACEMENT_KEYS = ("parent_ref", "parent_label", "power_state")
+# Seit wann der Anbieter den Host nicht mehr kennt (ISO-Zeit, `HostsHandle.mark_gone`); der nächste Abgleich, der ihn
+# wieder meldet, ersetzt die Metadaten und nimmt die Markierung damit weg.
+GONE_KEY = "gone_since"
+
+
+def _placement(dh: DiscoveredHost) -> dict[str, str]:
+    return {key: value for key in PLACEMENT_KEYS if isinstance(value := getattr(dh, key), str) and value}
+
+
+_ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+?=")
+
+
+def _join_argv(argv: Sequence[str]) -> str:
+    """Kommandozeile aus einer Wortliste für `run_argv()`/`stream_argv()`: Der Kern quotet, nicht die Extension.
+
+    `shlex.join` setzt jedes Wort, das nicht nur aus sicheren Zeichen besteht, in einfache Anführungszeichen; eine
+    POSIX-Shell (sh, bash, dash, zsh) macht daraus wieder genau diese Wörter. Eine Zeichenkette statt einer Liste wäre
+    auch eine `Sequence[str]` (Zeichen für Zeichen) und wird deshalb abgewiesen, ebenso NUL, das kein Programmargument
+    tragen kann, und ein erstes Wort wie `x=y`: `shlex.join` lässt es unquotiert, die Shell setzt es als Variable."""
+    if isinstance(argv, (str, bytes)) or not isinstance(argv, Sequence):
+        raise TypeError("argv muss eine Liste von Wörtern sein, keine Zeichenkette.")
+    words = list(argv)
+    for word in words:
+        if not isinstance(word, str):
+            raise TypeError(f"argv darf nur Zeichenketten enthalten, nicht {type(word).__name__}.")
+        if "\x00" in word:
+            raise ValueError("argv darf kein NUL-Zeichen enthalten.")
+    if not words or not words[0]:
+        raise ValueError("argv braucht als erstes Wort das Programm.")
+    if _ASSIGNMENT_RE.match(words[0]):
+        raise ValueError("Das erste Wort von argv darf keine Variablenzuweisung (NAME=wert) sein.")
+    return shlex.join(words)
 
 
 class ExecHandle:
@@ -421,13 +478,35 @@ class ExecHandle:
         # lesende Kommandos beschränkt. Deshalb läuft jedes Kommando vor der Verbindung durch die Sperrliste: ohne
         # Action-Zeile (niemand könnte bestätigen), aber mit Audit-Zeile.
         self._perm.require("hosts.execute")
+        return await self._run(host, command, timeout_s=timeout_s, log_command=log_command, stdin=None)
+
+    async def run_argv(
+        self, host: SdkHost, argv: Sequence[str], *, stdin: str | bytes | None = None, timeout_s: int = 60,
+        log_command: str | None = None,
+    ) -> ExecResult:
+        """Wie `run()`, aber die Kommandozeile setzt der Kern aus `argv` zusammen (`_join_argv`, docs/02 §2).
+
+        `stdin` geht nur in die Standardeingabe, nie auf die Kommandozeile und nie in die Audit-Zeile."""
+        self._perm.require("hosts.execute")
+        command = _join_argv(argv)
+        if stdin is None or isinstance(stdin, bytes):
+            data = stdin
+        elif isinstance(stdin, str):
+            data = stdin.encode("utf-8")
+        else:
+            raise TypeError(f"stdin muss str oder bytes sein, nicht {type(stdin).__name__}.")
+        return await self._run(host, command, timeout_s=timeout_s, log_command=log_command, stdin=data)
+
+    async def _run(
+        self, host: SdkHost, command: str, *, timeout_s: int, log_command: str | None, stdin: bytes | None,
+    ) -> ExecResult:
         await self._reject_denied(command, log_command=log_command)
 
         import time
 
         conn = await self._connection(host)
         started = time.monotonic()
-        exit_code, stdout, stderr = await ssh.run(conn, command, timeout_s=timeout_s)
+        exit_code, stdout, stderr = await ssh.run(conn, command, timeout_s=timeout_s, stdin=stdin)
         return ExecResult(
             exit_code=exit_code, stdout=stdout, stderr=stderr,
             duration_ms=int((time.monotonic() - started) * 1000),
@@ -478,6 +557,11 @@ class ExecHandle:
                 yield _chunks()
 
         return _cm()
+
+    def stream_argv(self, host: SdkHost, argv: Sequence[str]) -> Any:
+        """Wie `stream()`, die Kommandozeile setzt der Kern aus `argv` zusammen (wie `run_argv()`)."""
+        self._perm.require("hosts.execute")
+        return self.stream(host, _join_argv(argv))
 
     def open_shell(self, host: SdkHost, *, cols: int, rows: int, command: str | None = None) -> Any:
         self._perm.require("hosts.execute")

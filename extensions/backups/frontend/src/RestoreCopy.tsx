@@ -1,14 +1,7 @@
 /**
- * "Als Kopie wiederherstellen": aus einer Proxmox-Sicherung einen NEUEN Gast anlegen, das Original bleibt
- * unberuehrt (nodvard_deck_ext_backups/restore.py).
- *
- * Ablauf: Sicherungen des Gastes laden (`GET .../restore/backups`), fuer die gewaehlte Sicherung die Vorschlaege
- * (`GET .../restore/options`: Knoten, passende Speicher mit Platz, freie Nummer, Name, Hinweise, und ob etwas die
- * Kopie von vornherein verhindert: zu alter Proxmox, Pool oder Rechte fehlen). "Weiter" zeigt eine Zusammenfassung
- * (Nummer, Name, Knoten, Speicher, Pool, Netzwerk); erst "Kopie anlegen" legt die Gate-Aktion `backup.restore_copy`
- * an (`POST .../restore`, hohes Risiko). Wer `actions.approve:high` hat, gibt selbst frei, alle anderen schlagen nur
- * vor. Der Server prueft beim Vorschlagen und beim Ausfuehren alles noch einmal selbst (Nummer, Platz, Speicher,
- * Rechte, Version).
+ * „Als Kopie wiederherstellen“: aus einer Proxmox-Sicherung einen neuen Gast anlegen, das Original bleibt unberührt
+ * (nodvard_deck_ext_backups/restore.py). Erst „Kopie anlegen“ legt die Gate-Aktion `backup.restore_copy` an (hohes Risiko);
+ * wer `actions.approve:high` hat, gibt selbst frei. Der Server prüft beim Vorschlagen und beim Ausführen alles noch einmal.
  */
 import { useEffect, useState } from "react";
 
@@ -88,7 +81,7 @@ async function getJson<T>(path: string): Promise<T> {
   return body as T;
 }
 
-/** Die festen Regeln, so wie Nodvard Deck sie umsetzt -- ehrlich, auch was es NICHT tut. */
+/** Die festen Regeln, wie Nodvard Deck sie umsetzt, auch was es nicht tut. */
 export function RestoreRules({ kind, linkDown, pool, keepHint }: { kind: string; linkDown: boolean; pool: string; keepHint: string }): JSX.Element {
   const container = kind === "lxc";
   return (
@@ -189,7 +182,7 @@ export function RestoreCopyPanel({ target, onDone }: { target: RestoreTarget; on
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        // Nummer inzwischen vergeben, zu wenig Platz ...: der Dialog bleibt offen, damit man es aendern kann.
+        // Nummer inzwischen vergeben, zu wenig Platz ...: der Dialog bleibt offen, damit man es ändern kann.
         setError(errorFromBody(body, res.status));
         setConfirming(false);
         return;

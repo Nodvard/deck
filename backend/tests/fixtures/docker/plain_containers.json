@@ -1,0 +1,425 @@
+{
+ "busybox_image_config": {
+  "Cmd": [
+   "sh"
+  ],
+  "Env": [
+   "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  ]
+ },
+ "plain": {
+  "Config": {
+   "AttachStderr": false,
+   "AttachStdin": false,
+   "AttachStdout": false,
+   "Cmd": [
+    "sleep",
+    "3600"
+   ],
+   "Domainname": "",
+   "Entrypoint": null,
+   "Env": [
+    "FOO=bar",
+    "TZ=Europe/Berlin",
+    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+   ],
+   "ExposedPorts": {
+    "443/tcp": {},
+    "80/tcp": {}
+   },
+   "Hostname": "meinhost",
+   "Image": "busybox:1.37",
+   "Labels": {
+    "meine.marke": "1"
+   },
+   "OpenStdin": false,
+   "StdinOnce": false,
+   "Tty": false,
+   "User": "",
+   "Volumes": null,
+   "WorkingDir": ""
+  },
+  "HostConfig": {
+   "AutoRemove": false,
+   "Binds": [
+    "plaindaten:/data",
+    "/srv/daten:/host:ro"
+   ],
+   "BlkioDeviceReadBps": [],
+   "BlkioDeviceReadIOps": [],
+   "BlkioDeviceWriteBps": [],
+   "BlkioDeviceWriteIOps": [],
+   "BlkioWeight": 0,
+   "BlkioWeightDevice": [],
+   "CapAdd": null,
+   "CapDrop": null,
+   "Cgroup": "",
+   "CgroupParent": "",
+   "CgroupnsMode": "host",
+   "ConsoleSize": [
+    0,
+    0
+   ],
+   "ContainerIDFile": "",
+   "CpuCount": 0,
+   "CpuPercent": 0,
+   "CpuPeriod": 0,
+   "CpuQuota": 0,
+   "CpuRealtimePeriod": 0,
+   "CpuRealtimeRuntime": 0,
+   "CpuShares": 0,
+   "CpusetCpus": "",
+   "CpusetMems": "",
+   "DeviceCgroupRules": null,
+   "DeviceRequests": null,
+   "Devices": [],
+   "Dns": null,
+   "DnsOptions": [],
+   "DnsSearch": [],
+   "ExtraHosts": null,
+   "GroupAdd": null,
+   "IOMaximumBandwidth": 0,
+   "IOMaximumIOps": 0,
+   "IpcMode": "private",
+   "Isolation": "",
+   "Links": null,
+   "LogConfig": {
+    "Config": {},
+    "Type": "json-file"
+   },
+   "MaskedPaths": [
+    "/proc/acpi",
+    "/proc/asound",
+    "/proc/interrupts",
+    "/proc/kcore",
+    "/proc/keys",
+    "/proc/latency_stats",
+    "/proc/sched_debug",
+    "/proc/scsi",
+    "/proc/timer_list",
+    "/proc/timer_stats",
+    "/sys/devices/virtual/powercap",
+    "/sys/firmware"
+   ],
+   "Memory": 0,
+   "MemoryReservation": 0,
+   "MemorySwap": 0,
+   "MemorySwappiness": null,
+   "NanoCpus": 0,
+   "NetworkMode": "bridge",
+   "OomKillDisable": false,
+   "OomScoreAdj": 0,
+   "PidMode": "",
+   "PidsLimit": null,
+   "PortBindings": {
+    "443/tcp": [
+     {
+      "HostIp": "127.0.0.1",
+      "HostPort": "8443"
+     }
+    ],
+    "80/tcp": [
+     {
+      "HostIp": "",
+      "HostPort": "8099"
+     }
+    ]
+   },
+   "Privileged": false,
+   "PublishAllPorts": false,
+   "ReadonlyPaths": [
+    "/proc/bus",
+    "/proc/fs",
+    "/proc/irq",
+    "/proc/sys",
+    "/proc/sysrq-trigger"
+   ],
+   "ReadonlyRootfs": false,
+   "RestartPolicy": {
+    "MaximumRetryCount": 0,
+    "Name": "unless-stopped"
+   },
+   "Runtime": "runc",
+   "SecurityOpt": null,
+   "ShmSize": 67108864,
+   "UTSMode": "",
+   "Ulimits": null,
+   "UsernsMode": "",
+   "VolumeDriver": "",
+   "VolumesFrom": null
+  },
+  "Id": "d04bdf7785e35817e5569da540f42152d03240fd793e5248a7281ea02564e072",
+  "Image": "sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e",
+  "Mounts": [
+   {
+    "Destination": "/data",
+    "Driver": "local",
+    "Mode": "z",
+    "Name": "plaindaten",
+    "Propagation": "",
+    "RW": true,
+    "Source": "/var/lib/docker/volumes/plaindaten/_data",
+    "Type": "volume"
+   },
+   {
+    "Destination": "/host",
+    "Mode": "ro",
+    "Propagation": "rprivate",
+    "RW": false,
+    "Source": "/srv/daten",
+    "Type": "bind"
+   }
+  ],
+  "Name": "/plaintest",
+  "NetworkSettings": {
+   "Networks": {
+    "bridge": {
+     "Aliases": null,
+     "DNSNames": null,
+     "DriverOpts": null,
+     "EndpointID": "abd21c8a91ab7168fefa3c46b0e27f58d27f1103e4d2b5c794ab29b8a3173c69",
+     "Gateway": "172.17.0.2",
+     "GlobalIPv6Address": "",
+     "GlobalIPv6PrefixLen": 0,
+     "GwPriority": 0,
+     "IPAMConfig": null,
+     "IPAddress": "172.17.0.2",
+     "IPPrefixLen": 16,
+     "IPv6Gateway": "",
+     "Links": null,
+     "MacAddress": "02:42:ac:11:00:02",
+     "NetworkID": "ddd794076c99ef13cbec718908d8bf11b25dca013b99b82b11883dbfbd730bdd"
+    }
+   },
+   "Ports": {
+    "443/tcp": [
+     {
+      "HostIp": "127.0.0.1",
+      "HostPort": "8443"
+     }
+    ],
+    "80/tcp": [
+     {
+      "HostIp": "0.0.0.0",
+      "HostPort": "8099"
+     }
+    ]
+   },
+   "SandboxID": "46c4d36fdb27ce05eb2ab130049dc5f8ee98bdffe3fefac8206b059279ce99b9",
+   "SandboxKey": "/run/dkexec/netns/46c4d36fdb27"
+  },
+  "RestartCount": 0,
+  "State": {
+   "Dead": false,
+   "Error": "",
+   "ExitCode": 0,
+   "FinishedAt": "0001-01-01T00:00:00Z",
+   "OOMKilled": false,
+   "Paused": false,
+   "Pid": 10092,
+   "Restarting": false,
+   "Running": true,
+   "StartedAt": "2026-10-16T05:16:35.679654699Z",
+   "Status": "running"
+  }
+ },
+ "plain2": {
+  "Config": {
+   "AttachStderr": false,
+   "AttachStdin": false,
+   "AttachStdout": false,
+   "Cmd": [
+    "-c",
+    "sleep 3600"
+   ],
+   "Domainname": "",
+   "Entrypoint": [
+    "sh"
+   ],
+   "Env": [
+    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+   ],
+   "Healthcheck": {
+    "Interval": 30000000000,
+    "Test": [
+     "CMD-SHELL",
+     "true"
+    ]
+   },
+   "Hostname": "335555ff68ef",
+   "Image": "busybox:1.37",
+   "Labels": {},
+   "OpenStdin": false,
+   "StdinOnce": false,
+   "StopSignal": "SIGTERM",
+   "StopTimeout": 20,
+   "Tty": false,
+   "User": "1000:1000",
+   "Volumes": null,
+   "WorkingDir": "/tmp"
+  },
+  "HostConfig": {
+   "AutoRemove": false,
+   "Binds": null,
+   "BlkioDeviceReadBps": [],
+   "BlkioDeviceReadIOps": [],
+   "BlkioDeviceWriteBps": [],
+   "BlkioDeviceWriteIOps": [],
+   "BlkioWeight": 0,
+   "BlkioWeightDevice": [],
+   "CapAdd": [
+    "CAP_NET_ADMIN"
+   ],
+   "CapDrop": null,
+   "Cgroup": "",
+   "CgroupParent": "",
+   "CgroupnsMode": "host",
+   "ConsoleSize": [
+    0,
+    0
+   ],
+   "ContainerIDFile": "",
+   "CpuCount": 0,
+   "CpuPercent": 0,
+   "CpuPeriod": 0,
+   "CpuQuota": 0,
+   "CpuRealtimePeriod": 0,
+   "CpuRealtimeRuntime": 0,
+   "CpuShares": 0,
+   "CpusetCpus": "",
+   "CpusetMems": "",
+   "DeviceCgroupRules": null,
+   "DeviceRequests": null,
+   "Devices": [],
+   "Dns": [
+    "9.9.9.9"
+   ],
+   "DnsOptions": [],
+   "DnsSearch": [],
+   "ExtraHosts": [
+    "meinhost:10.0.0.5"
+   ],
+   "GroupAdd": null,
+   "IOMaximumBandwidth": 0,
+   "IOMaximumIOps": 0,
+   "Init": true,
+   "IpcMode": "private",
+   "Isolation": "",
+   "Links": null,
+   "LogConfig": {
+    "Config": {},
+    "Type": "json-file"
+   },
+   "MaskedPaths": [
+    "/proc/acpi",
+    "/proc/asound",
+    "/proc/interrupts",
+    "/proc/kcore",
+    "/proc/keys",
+    "/proc/latency_stats",
+    "/proc/sched_debug",
+    "/proc/scsi",
+    "/proc/timer_list",
+    "/proc/timer_stats",
+    "/sys/devices/virtual/powercap",
+    "/sys/firmware"
+   ],
+   "Memory": 268435456,
+   "MemoryReservation": 0,
+   "MemorySwap": 536870912,
+   "MemorySwappiness": null,
+   "NanoCpus": 500000000,
+   "NetworkMode": "plainnetz",
+   "OomKillDisable": false,
+   "OomScoreAdj": 0,
+   "PidMode": "",
+   "PidsLimit": null,
+   "PortBindings": {},
+   "Privileged": false,
+   "PublishAllPorts": false,
+   "ReadonlyPaths": [
+    "/proc/bus",
+    "/proc/fs",
+    "/proc/irq",
+    "/proc/sys",
+    "/proc/sysrq-trigger"
+   ],
+   "ReadonlyRootfs": false,
+   "RestartPolicy": {
+    "MaximumRetryCount": 0,
+    "Name": "no"
+   },
+   "Runtime": "runc",
+   "SecurityOpt": null,
+   "ShmSize": 67108864,
+   "Tmpfs": {
+    "/run": "size=10m"
+   },
+   "UTSMode": "",
+   "Ulimits": null,
+   "UsernsMode": "",
+   "VolumeDriver": "",
+   "VolumesFrom": null
+  },
+  "Id": "335555ff68ef2f3e72bfa1bdf6e7d0a621e6a76dc4e0355049919f81e184e0e3",
+  "Image": "sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e",
+  "Mounts": [],
+  "Name": "/plain2",
+  "NetworkSettings": {
+   "Networks": {
+    "plainnetz": {
+     "Aliases": [
+      "alias2"
+     ],
+     "DNSNames": [
+      "plain2",
+      "alias2",
+      "335555ff68ef"
+     ],
+     "DriverOpts": null,
+     "EndpointID": "feb2e0f981df3e4c21c8f41298dfcf2cb38cbb7662a56a281cd1ea7734f84bb5",
+     "Gateway": "172.17.0.2",
+     "GlobalIPv6Address": "",
+     "GlobalIPv6PrefixLen": 0,
+     "GwPriority": 0,
+     "IPAMConfig": null,
+     "IPAddress": "172.17.0.2",
+     "IPPrefixLen": 16,
+     "IPv6Gateway": "",
+     "Links": null,
+     "MacAddress": "02:42:ac:11:00:02",
+     "NetworkID": "a76cc70e26ed159a4980a6cbf0b87e0d11a191dd7cb29795df8146add9b06dc1"
+    }
+   },
+   "Ports": {},
+   "SandboxID": "0095bab475b7613bdca9bae6980111888db70c2243a01ba8c9adf4ae3ef515b7",
+   "SandboxKey": "/run/dkexec/netns/0095bab475b7"
+  },
+  "RestartCount": 0,
+  "State": {
+   "Dead": false,
+   "Error": "",
+   "ExitCode": 0,
+   "FinishedAt": "0001-01-01T00:00:00Z",
+   "Health": {
+    "FailingStreak": 0,
+    "Log": [
+     {
+      "End": "2026-10-16T05:17:46.203929799Z",
+      "ExitCode": 0,
+      "Output": "",
+      "Start": "2026-10-16T05:17:46.146661914Z"
+     }
+    ],
+    "Status": "healthy"
+   },
+   "OOMKilled": false,
+   "Paused": false,
+   "Pid": 19799,
+   "Restarting": false,
+   "Running": true,
+   "StartedAt": "2026-10-16T05:17:16.030515787Z",
+   "Status": "running"
+  }
+ }
+}

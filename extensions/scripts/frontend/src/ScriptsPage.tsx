@@ -1,19 +1,7 @@
 /**
- * Die Skript-Seite -- PageSpec `component=
- * "ScriptsPage"` (siehe nodvard_deck_ext_scripts/__init__.py).
- *
- * **Ehrlich abgegrenzt:** ein einfaches `<textarea>` statt CodeMirror 6 (docs/02
- * Paragraph 6 nennt woertlich CodeMirror) -- ein Extension-Bundle importiert nur
- * React/ReactDOM ueber den bestehenden Import-Map-Shim (siehe ProxmoxNodePage.tsx),
- * ein Editor-Paket dafuer haette das Kern-Frontend-`package.json` erweitert, nur fuer
- * diese eine Seite. Dieselbe Abwaegung wie die hand-gerollte SVG-`ChartView` statt
- * einer Charting-Bibliothek.
- *
- * Lauf-Historie/"Jetzt ausfuehren ueber den Zeitplan" laeuft bewusst NICHT ueber einen
- * eigenen Endpunkt dieser Extension, sondern direkt ueber die bestehenden Kern-
- * Endpunkte `GET /jobs?ext_id=scripts` und `GET /jobs/{id}/runs`, verknuepft ueber
- * `ext_job_key` (== `job_id`-Feld, das diese Extension pro Skript zurueckgibt) -- siehe
- * `__init__.py`s Modul-Docstring fuer die Begruendung.
+ * Skript-Seite (PageSpec `component="ScriptsPage"`): bewusst ein einfaches `<textarea>` statt CodeMirror, damit das
+ * Bundle nur React über den Import-Map-Shim braucht. Läufe und Zeitplan-Läufe kommen über die Kern-Endpunkte
+ * `GET /jobs?ext_id=scripts` und `GET /jobs/{id}/runs`, verknüpft über `ext_job_key` (== `job_id` des Skripts).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -119,8 +107,7 @@ function triggeredBy(e: ExecutionOut): string {
   return e.proposed_by.startsWith("extension/") ? `Zeitplan · ${name}` : name;
 }
 
-/** Die Laeufe eines Skripts mit echter Ausgabe (`GET /scripts/{id}/runs`) -- vorher
- * sah man nach "Jetzt ausführen" nie, was das Skript ausgegeben hat. */
+/** Die Läufe eines Skripts mit der echten Ausgabe (`GET /scripts/{id}/runs`). */
 export function Executions({ items }: { items: ExecutionOut[] }): JSX.Element {
   if (items.length === 0) return <p className="text-sm text-white/45">Noch nicht ausgeführt.</p>;
   return (
@@ -190,22 +177,18 @@ interface RunVerdict {
   reason?: string;
 }
 
-/** Kurzer Grund fuer die Meldung: Exit-Code und die erste Zeile der Fehlerausgabe --
- * die ganze Ausgabe steht darunter unter „Ausführungen“. */
+/** Kurzer Grund für die Meldung: Exit-Code und erste Zeile der Fehlerausgabe (die ganze steht unter „Ausführungen“). */
 function failureReason(result: { exit_code?: number | null; error?: string | null } | undefined): string | undefined {
   const line = (result?.error ?? "").split("\n").map((l) => l.trim()).find(Boolean);
   const short = line && line.length > 80 ? `${line.slice(0, 79)}…` : line;
   return [result?.exit_code != null ? `Exit ${result.exit_code}` : "", short ?? ""].filter(Boolean).join(": ") || undefined;
 }
 
-/** Gibt einen Vorschlag frei und liefert, wie der Lauf ausgegangen ist. Die Freigabe
- * wartet hoechstens etwa 20 s; laeuft das Skript laenger, kommt 202 mit 'executing'
- * zurueck (zaehlt als "laeuft noch", danach fragt `finishRun` nach). Bei mehreren Zielen
- * gilt `?wait=0`: die Freigabe startet den Lauf und kommt sofort zurueck, auch kurze
- * Laeufe melden sich dann erst nach etwa 3 s. Sonst hinge der Knopf bei "Alle Server"
- * N x 20 s, und das Skript startete auf dem letzten Server erst Minuten nach dem ersten.
- * Bei einem einzigen Ziel bleibt es bei der Wartezeit: ein kurzes Skript liefert sein
- * Ergebnis gleich mit. */
+/**
+ * Gibt einen Vorschlag frei und liefert, wie der Lauf ausgegangen ist. Die Freigabe wartet höchstens etwa 20 s, danach
+ * kommt 202 („läuft noch“, `finishRun` fragt nach). Bei mehreren Zielen gilt `?wait=0`, sonst hinge der Knopf bei „Alle
+ * Server“ N x 20 s; bei einem Ziel bleibt es bei der Wartezeit, damit ein kurzes Skript sein Ergebnis gleich mitliefert.
+ */
 async function approveRun(actionId: string, immediate: boolean): Promise<RunVerdict> {
   try {
     const res = await authedFetch(`/actions/${actionId}/approve${immediate ? "?wait=0" : ""}`, { method: "POST" });
@@ -219,10 +202,11 @@ async function approveRun(actionId: string, immediate: boolean): Promise<RunVerd
   }
 }
 
-/** Fragt einen noch laufenden Lauf ab, bis er fertig ist (alle 3 s, hoechstens eine
- * Stunde). Bleibt er so lange oder verlaesst man die Seite, gilt er weiter als laufend;
- * kann der Stand nicht abgerufen werden (Aktion weg, keine Rechte), ist das ein
- * eigener Fehler statt eines "laeuft noch", das nie endet. */
+/**
+ * Fragt einen noch laufenden Lauf ab, bis er fertig ist (alle 3 s, höchstens eine Stunde); danach oder beim Verlassen
+ * der Seite gilt er weiter als laufend. Ist der Stand nicht abrufbar (Aktion weg, keine Rechte), ist das ein eigener
+ * Fehler statt eines endlosen „läuft noch“.
+ */
 async function finishRun(actionId: string, signal?: AbortSignal): Promise<RunVerdict> {
   try {
     const state = await waitForAction(actionId, {}, { signal });
@@ -271,8 +255,8 @@ function emptyDraft(hostId: string | null = null): ScriptOut {
   };
 }
 
-/** „Einer Gruppe“ ohne Auswahl wuerde sonst auf allen Servern laufen -- ohne
- * Auswahl wird nicht gespeichert (das Backend lehnt es ebenso mit 422 ab). */
+/** „Einer Gruppe“ ohne Auswahl würde sonst auf allen Servern laufen, deshalb wird dann nicht gespeichert (das Backend
+ * lehnt es ebenso mit 422 ab). */
 function targetHint(target: ScriptOut["target"]): string | null {
   if (target.kind === "group" && !target.group_id) return "Bitte zuerst eine Gruppe wählen.";
   if ((target.kind ?? "host") === "host" && !target.host_id) return "Bitte zuerst einen Server wählen.";
@@ -413,8 +397,8 @@ function targetLabel(target: ScriptOut["target"], hosts: HostRow[], groups: { id
 
 type HistoryEntry = { sha: string; message: string; commit_time: number };
 
-/** Eine Liste unter dem gewaehlten Skript: Eintraege (`null`: wird noch geladen), oder warum sie sich nicht laden
- * liess. Nie "Noch keine Läufe", solange das nicht feststeht -- das waere eine falsche Auskunft. */
+/** Eine Liste unter dem gewählten Skript: Einträge (`null`: wird noch geladen) oder warum sie sich nicht laden ließ.
+ * Nie „Noch keine Läufe“, solange das nicht feststeht, das wäre eine falsche Auskunft. */
 type Listed<T> = { items: T[] | null; error: string | null };
 const NOTHING: Listed<never> = { items: [], error: null };
 const LOADING: Listed<never> = { items: null, error: null };
@@ -441,8 +425,8 @@ export function ScriptsPage(): JSX.Element {
   const [isNew, setIsNew] = useState(true);
   const [idTouched, setIdTouched] = useState(false);
   const [busy, setBusy] = useState(false);
-  // Zaehlt die Laeufe hoch: ein spaetes Ergebnis eines laengst abgeloesten Laufs (oder
-  // nach Verlassen der Seite) ueberschreibt keine neuere Meldung.
+  // Zählt die Läufe hoch: ein spätes Ergebnis eines längst abgelösten Laufs (oder nach Verlassen der Seite) überschreibt
+  // keine neuere Meldung.
   const runSeq = useRef(0);
   useEffect(() => () => { runSeq.current += 1; }, []);
   const unmountSignal = useUnmountSignal();
@@ -551,8 +535,8 @@ export function ScriptsPage(): JSX.Element {
       setMessage({ kind: "error", text: "Bitte einen Namen bzw. eine Kennung vergeben." });
       return;
     }
-    // Ein neues Skript darf kein bestehendes still ueberschreiben. Vorab
-    // pruefen, und ?create=true laesst das Backend zusaetzlich mit 409 ablehnen.
+    // Ein neues Skript darf kein bestehendes still überschreiben. Vorab prüfen, und ?create=true lässt das Backend
+    // zusätzlich mit 409 ablehnen.
     if (isNew && scripts?.some((s) => s.id === draft.id)) {
       setMessage({ kind: "error", text: `Ein Skript mit der Kennung „${draft.id}“ gibt es schon – bitte eine andere Kennung wählen.` });
       return;
@@ -560,7 +544,7 @@ export function ScriptsPage(): JSX.Element {
     setBusy(true);
     setMessage(null);
     runSeq.current += 1;
-    // Waehrend des Speicherns ein anderes Skript gewaehlt: danach nichts mehr an Auswahl und Entwurf aendern.
+    // Während des Speicherns ein anderes Skript gewählt: danach nichts mehr an Auswahl und Entwurf ändern.
     const seq = runSeq.current;
     try {
       const res = await authedFetch(`/ext/scripts/scripts/${draft.id}${isNew ? "?create=true" : ""}`, {
@@ -701,15 +685,15 @@ export function ScriptsPage(): JSX.Element {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(errorFromBody(body, res.status));
-      // Wie auf der Backups-Seite: wer freigeben darf, bestaetigt gleich mit -- der
-      // Klick auf "Ausführen" samt Rueckfrage IST die Bestaetigung.
+      // Wie auf der Backups-Seite: wer freigeben darf, bestätigt gleich mit; der Klick auf „Ausführen“ samt Rückfrage
+      // IST die Bestätigung.
       const results: RunResult[] = body.results ?? [];
       const outcome: RunOutcome = { succeeded: 0, running: 0, waiting: 0, failed: [] };
       const canApprove = deck().hasPermission("actions.approve:high");
-      // Mehrere Freigaben nacheinander duerfen nicht jeweils bis zu 20 s warten.
+      // Mehrere Freigaben nacheinander dürfen nicht jeweils bis zu 20 s warten.
       const immediate = results.filter((r) => !r.skipped && !r.error && r.action_id && r.status === "proposed").length > 1;
-      // Laeufe, die nach der Freigabe noch weiterlaufen: die Seite fragt danach im
-      // Hintergrund nach, statt den Knopf bis zum Ende zu sperren.
+      // Läufe, die nach der Freigabe noch weiterlaufen: die Seite fragt danach im Hintergrund nach, statt den Knopf bis zum
+      // Ende zu sperren.
       const running: { host: string; actionId: string }[] = [];
       const record = (host: string, actionId: string, verdict: RunVerdict) => {
         countOutcome(outcome, host, verdict);
@@ -721,8 +705,8 @@ export function ScriptsPage(): JSX.Element {
         if (r.error) {
           outcome.failed.push(`${host} (${r.error})`);
         } else if (r.action_id && r.status === "proposed" && canApprove) {
-          // Nicht jede Freigabe zaehlt als "ausgeführt" -- eine abgelaufene (409) oder
-          // ein Lauf, der auf dem Server gescheitert ist, wird als solcher gemeldet.
+          // Nicht jede Freigabe zählt als „ausgeführt“: eine abgelaufene (409) oder ein auf dem Server gescheiterter
+          // Lauf wird als solcher gemeldet.
           record(host, r.action_id, await approveRun(r.action_id, immediate));
         } else if (r.status === "proposed") {
           outcome.waiting += 1;
@@ -731,16 +715,16 @@ export function ScriptsPage(): JSX.Element {
           record(host, r.action_id, { status: r.status ?? "" });
         }
       }
-      // Bei „Allen Servern“/„Gruppe“ laesst das Backend Server ohne SSH-Zugang,
-      // Windows und nicht verwaltete aus -- mit Grund, damit niemand danach sucht.
+      // Bei „Allen Servern“/„Gruppe“ lässt das Backend Server ohne SSH-Zugang, Windows und nicht verwaltete aus, mit Grund,
+      // damit niemand danach sucht.
       const skipped = results.filter((r) => r.skipped).map((r) => `${r.host_name ?? "?"} (${r.skipped})`);
       setMessage({ kind: outcome.failed.length ? "error" : "ok", text: describeRun(outcome, skipped) });
       loadExecutions(selectedId);
       if (running.length > 0) {
         const scriptId = selectedId;
-        // Jedes Ziel meldet sich einzeln, sobald es fertig ist -- das schnelle wartet
-        // nicht auf das langsamste. Eine spaetere Meldung (Speichern, anderes Skript,
-        // neuer Lauf, Seite verlassen) zaehlt runSeq hoch; dann bleibt die Anzeige stehen.
+        // Jedes Ziel meldet sich einzeln, sobald es fertig ist, das schnelle wartet nicht auf das langsamste. Eine
+        // spätere Meldung (Speichern, anderes Skript, neuer Lauf, Seite verlassen) zählt runSeq hoch; dann bleibt die
+        // Anzeige stehen.
         const signal = unmountSignal();
         for (const r of running) {
           void finishRun(r.actionId, signal).then((verdict) => {
@@ -821,7 +805,7 @@ export function ScriptsPage(): JSX.Element {
 
         <div className="min-w-0 flex-1 space-y-5">
           {!showEditor ? (
-            // Erst nach dem Laden: vorher (oder bei einem Ladefehler) waere "Noch keine Skripte" falsch.
+            // Erst nach dem Laden: vorher (oder bei einem Ladefehler) wäre „Noch keine Skripte“ falsch.
             scripts && <EmptyState
               icon="code"
               title="Noch keine Skripte"
@@ -907,8 +891,8 @@ export function ScriptsPage(): JSX.Element {
                       value={draft.schedule}
                       onChange={(cron) => setDraft({ ...draft, schedule: cron || null })}
                     />
-                    {/* Ein geplanter Lauf ist nur ein Vorschlag (Risiko „hoch“
-                        ueber das Gate) -- ohne Hinweis sah der Zeitplan nach Automatik aus. */}
+                    {/* Ein geplanter Lauf ist nur ein Vorschlag (Risiko „hoch“ über das Gate), ohne Hinweis sähe
+                        der Zeitplan nach Automatik aus. */}
                     {draft.schedule && (
                       <p className="mt-2 flex items-start gap-1.5 text-xs text-white/55" data-testid="schedule-hint">
                         <Icon name="clock" size={12} className="mt-0.5 flex-none" />

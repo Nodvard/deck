@@ -7,6 +7,9 @@ import { Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
+import {
+  CATEGORY_SHORT, groupHosts, GroupHeading, hostCategory, isSwitchedOff, KindBadge, kindLabel, type HostCategory,
+} from "../../../../extensions/_shared/frontend/src/hostKind";
 import { DemoSeedButton } from "../../components/DemoSeedButton";
 import { GuideLink } from "../../components/GuideLink";
 import { LoadError } from "../../components/LoadError";
@@ -15,8 +18,9 @@ import { api, ApiError } from "../../lib/api";
 import { useExtensions } from "../../lib/firstSteps";
 import { hostProvider } from "../../lib/hostProvider";
 import { checkSummary, loginOutcome, refreshHosts, type ConnectionCheck, type HostOut } from "../../lib/hosts";
-import { hostHealth, useHosts } from "../../lib/overview";
+import { hostHealthOf, useHosts } from "../../lib/overview";
 import { AccessBadge } from "./hosts/AccessBadge";
+import { DeleteHostButton } from "./hosts/deleteHost";
 import { GroupsCard } from "./hosts/GroupsCard";
 import { HostForm } from "./hosts/HostForm";
 import { HostKeysCard } from "./hosts/HostKeysCard";
@@ -48,8 +52,10 @@ function CheckLine({ check, hostId }: { check: RowCheck; hostId: string }) {
 function HostRow({ host }: { host: HostOut }) {
   const queryClient = useQueryClient();
   const [check, setCheck] = useState<RowCheck | null>(null);
-  const health = hostHealth(host.status);
+  const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const health = hostHealthOf(host);
   const { data: extensions } = useExtensions(Boolean(host.provider_ext_id));
+  const provider = hostProvider(host, extensions);
 
   async function runCheck() {
     setCheck({ state: "busy" });
@@ -69,15 +75,21 @@ function HostRow({ host }: { host: HostOut }) {
           <span className={`status-dot ${health}`} aria-hidden />
           <span className="break-words">{host.display_name}</span>
         </p>
-        <p className="mt-0.5 break-all text-xs text-white/50">{host.name} · {host.address}</p>
+        <p className="mt-0.5 break-all text-xs text-white/50">{host.name} · {host.address}{isSwitchedOff(host) ? " · aus" : ""}</p>
         <div className="mt-2 flex flex-wrap gap-1.5">
+          <KindBadge host={host} />
+          {host.gone_since && (
+            <Badge tone="warn">{provider ? `In ${provider.name}` : "Beim Anbieter"} nicht mehr vorhanden</Badge>
+          )}
           <AccessBadge host={host} login={check?.state === "done" ? loginOutcome(check.result) : null} />
           {host.provider_ext_id && <Badge>Automatisch eingelesen</Badge>}
-          <ProviderBadge provider={hostProvider(host, extensions)} testId={`host-${host.id}-provider-off`} />
+          <ProviderBadge provider={provider} testId={`host-${host.id}-provider-off`} />
         </div>
         {check && <div className="mt-2"><CheckLine check={check} hostId={host.id} /></div>}
+        {message && <p role={message.kind === "error" ? "alert" : "status"} className={`mt-2 text-xs ${message.kind === "error" ? "text-red-300" : "text-emerald-300"}`}>{message.text}</p>}
       </div>
       <div className="flex flex-none flex-wrap gap-2">
+        {host.gone_since && <DeleteHostButton host={host} label="Entfernen" onDeleted={() => {}} onMessage={setMessage} />}
         <Link
           to={`/settings/hosts/${host.id}`}
           className="inline-flex items-center justify-center rounded-lg border border-white/10 bg-white/[0.06] px-3 py-1.5 text-sm font-medium hover:bg-white/[0.12]"
@@ -105,15 +117,21 @@ export function HostsSettings() {
     }
   };
   const [query, setQuery] = useState("");
+  // Filter nach Art; nur sichtbar, wenn es mehr als eine Art gibt.
+  const [only, setOnly] = useState<HostCategory | null>(null);
 
   const sorted = useMemo(
     () => [...(hosts.data ?? [])].sort((a, b) => a.display_name.localeCompare(b.display_name, "de")),
     [hosts.data],
   );
   const needle = query.trim().toLowerCase();
-  const shown = needle
-    ? sorted.filter((h) => [h.display_name, h.name, h.address].some((v) => v.toLowerCase().includes(needle)))
-    : sorted;
+  const allGroups = useMemo(() => groupHosts(sorted), [sorted]);
+  const filter = allGroups.length > 1 && allGroups.some((g) => g.category === only) ? only : null;
+  const shown = sorted.filter((h) =>
+    (!filter || hostCategory(h) === filter)
+    && (!needle || [h.display_name, h.name, h.address, kindLabel(h)].some((v) => v.toLowerCase().includes(needle))));
+  // Gruppen mit Überschrift und Anzahl erst ab zwei Arten; leere Gruppen fallen weg.
+  const groups = groupHosts(shown);
 
   const addButton = (
     <Button variant="primary" onClick={() => setAdding(true)}>
@@ -174,7 +192,38 @@ export function HostsSettings() {
         </div>
       )}
 
-      {shown.length > 0 && (
+      {allGroups.length > 1 && (
+        <div className="mb-3 flex flex-wrap gap-1.5" role="group" aria-label="Nach Art filtern" data-testid="host-kind-filter">
+          {[null, ...allGroups.map((g) => g.category)].map((category) => {
+            const active = filter === category;
+            const count = category ? allGroups.find((g) => g.category === category)!.hosts.length : sorted.length;
+            return (
+              <button
+                key={category ?? "alle"}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setOnly(category)}
+                className={`rounded-full border px-3 py-1 text-xs transition ${
+                  active ? "border-sky-400/60 bg-sky-400/10 text-white" : "border-white/10 text-white/60 hover:border-white/25 hover:text-white"
+                }`}
+              >
+                {category ? CATEGORY_SHORT[category] : "Alle"} <span className="text-white/40">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {groups.length > 1 || (groups.length === 1 && allGroups.length > 1) ? (
+        groups.map((group) => (
+          <section key={group.category} className="mb-5" aria-label={group.title}>
+            <GroupHeading group={group} className="mb-2" />
+            <ul className="space-y-3">
+              {group.hosts.map((h) => <HostRow key={h.id} host={h} />)}
+            </ul>
+          </section>
+        ))
+      ) : shown.length > 0 && (
         <ul className="mb-5 space-y-3">
           {shown.map((h) => <HostRow key={h.id} host={h} />)}
         </ul>

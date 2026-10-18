@@ -6,12 +6,13 @@ Die Eingaben prüft `services/custom_apps.py`. Der Server ruft die Adressen nie 
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from nodvard_sdk import AppSuggestionProvider, ServiceCatalog
+from nodvard_sdk import AppSuggestionProvider
 from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +25,7 @@ from ..deps import CurrentUser, SessionDep, require_permission
 # Startseite ist für jeden Nutzer ein Klick-Ziel, das passt weder zu `hosts.write` (viel mehr Macht) noch zu
 # `settings.write` (ganze Installation). Eingebaut hat es nur der Administrator und der Inhaber.
 router = APIRouter(prefix="/apps", tags=["apps"])
+logger = logging.getLogger("nodvard_deck.apps")
 
 _NOT_EMPTY = "Dieses Feld darf nicht leer sein."
 _SORT_ERROR = f"Die Position muss eine ganze Zahl zwischen 0 und {apps_service.SORT_MAX} sein."
@@ -221,6 +223,9 @@ class AppSuggestionOut(BaseModel):
     source: str
     """Woher der Vorschlag stammt (Name der Quelle oder der Erweiterung, z. B. "Nginx Proxy Manager")."""
     host: str | None = None
+    service_id: str | None = None
+    """Bei einem erkannten Dienst seine Kennung, wie `apps[].id` mit `source="detected"` in `GET /overview`. Die
+    Apps-Seite zeigt ihn dann nicht als eigenen Vorschlag, sondern an seiner Kachel unter „Erkannte Dienste“."""
 
 
 class AppSuggestionsOut(BaseModel):
@@ -242,7 +247,7 @@ def url_key(url: str) -> str:
     return f"{parts.scheme.lower()}://{host}{f':{port}' if port else ''}{path}{query}"
 
 
-def _suggestion(name: Any, url: Any, source: str, host: Any) -> AppSuggestionOut | None:
+def _suggestion(name: Any, url: Any, source: str, host: Any, service_id: str | None = None) -> AppSuggestionOut | None:
     """Prüft einen Vorschlag wie eine von Hand angelegte App; ein unbrauchbarer fällt still weg."""
     if not isinstance(name, str) or not isinstance(url, str):
         return None
@@ -252,7 +257,7 @@ def _suggestion(name: Any, url: Any, source: str, host: Any) -> AppSuggestionOut
     except apps_service.CustomAppError:
         return None
     host_text = host.strip()[:120] if isinstance(host, str) and host.strip() else None
-    return AppSuggestionOut(name=clean_name, url=clean_url, source=source[:60], host=host_text)
+    return AppSuggestionOut(name=clean_name, url=clean_url, source=source[:60], host=host_text, service_id=service_id)
 
 
 def _source_name(ext_id: str) -> str:
@@ -276,32 +281,40 @@ async def _from_provider(ext_id: str, provider: Any) -> tuple[list[AppSuggestion
     return out, None
 
 
-async def _from_catalog(ext_id: str, catalog: Any) -> tuple[list[AppSuggestionOut], str | None]:
-    """Erkannte Dienste (`ServiceCatalog`) mit Adresse, die gerade laufen; Quelle ist der Name der Erweiterung."""
+async def _from_services() -> tuple[list[AppSuggestionOut], str | None]:
+    """Laufende erkannte Dienste mit Adresse aus dem Stand der Übersicht, Quelle ist der Name der Erweiterung."""
+    from .overview import service_snapshot
+
     try:
-        rows = await asyncio.wait_for(catalog.list_services(), timeout=SUGGESTION_TIMEOUT_S)
-    except Exception:  # noqa: BLE001
-        return [], f"Dienste von „{_source_name(ext_id)}“ ließen sich gerade nicht lesen."
-    out: list[AppSuggestionOut] = []
-    for row in rows or []:
-        if not isinstance(row, dict) or row.get("unreachable") is True or row.get("state") not in (None, "running"):
-            continue
-        item = _suggestion(row.get("name"), row.get("url"), _source_name(ext_id), row.get("host"))
-        if item is not None:
-            out.append(item)
+        services, sources, failed = await service_snapshot()
+        out: list[AppSuggestionOut] = []
+        for s in services:
+            if s.unreachable or s.state not in (None, "running"):
+                continue
+            source = _source_name(sources[s.id]) if s.id in sources else "Erkannte Dienste"
+            item = _suggestion(s.name, s.url, source, s.host, service_id=s.id)
+            if item is not None:
+                out.append(item)
+    except Exception as exc:  # noqa: BLE001 - Fehler in dieser Quelle dürfen die anderen nicht verdecken; nie ihr Text
+        logger.warning("Apps: erkannte Dienste ließen sich nicht aufbereiten (%s)", type(exc).__name__)
+        return [], "Die erkannten Dienste ließen sich gerade nicht lesen."
+    if failed:
+        names = ", ".join(f"„{_source_name(ext_id)}“" for ext_id in failed)
+        return out, f"Dienste von {names} ließen sich gerade nicht lesen."
     return out, None
 
 
 @router.get("/suggestions", dependencies=[Depends(require_permission("apps.write"))])
 async def app_suggestions(session: SessionDep) -> AppSuggestionsOut:
-    """Vorschläge für neue App-Kacheln: Proxy-Hosts, erkannte Dienste und alles, was eine Erweiterung als
-    `AppSuggestionProvider` nennt. Geprüft wie eine von Hand angelegte App; Adressen, die es schon gibt, fallen weg.
-    Ruft selbst keine der Adressen ab."""
+    """Vorschläge für neue App-Kacheln: Proxy-Hosts, erkannte Dienste (mit `service_id`) und alles, was eine
+    Erweiterung als `AppSuggestionProvider` nennt. Geprüft wie eine von Hand angelegte App; Adressen, die es schon gibt,
+    fallen weg. Ruft selbst keine der Adressen ab."""
     from ...ext.runtime import get_extension_runtime
 
     registry = get_extension_runtime().capabilities
-    tasks = [_from_provider(ext_id, p) for ext_id, p in registry.query_named(AppSuggestionProvider)]
-    tasks += [_from_catalog(ext_id, c) for ext_id, c in registry.query_named(ServiceCatalog)]
+    # Erkannte Dienste zuerst: Nennt eine Erweiterung dieselbe Adresse, bleibt der Vorschlag am Dienst (`service_id`).
+    tasks = [_from_services()]
+    tasks += [_from_provider(ext_id, p) for ext_id, p in registry.query_named(AppSuggestionProvider)]
     results = await asyncio.gather(*tasks)
     taken = {url_key(a.url) for a in await apps_service.list_apps(session) if a.url}
     suggestions: list[AppSuggestionOut] = []

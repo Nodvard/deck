@@ -7,9 +7,10 @@
  *   anderen Ordner) oder auf die Überschrift eines Ordners (ans Ende dieses Ordners). Ohne Maus geht dasselbe über
  *   das Menü der Kachel (Nach vorn/hinten, Bearbeiten → Gruppe).
  * - **Vorschläge** (`GET /apps/suggestions`): Adressen, die Erweiterungen schon kennen (z. B. Proxy-Hosts im Nginx
- *   Proxy Manager, erkannte Dienste mit Web-Oberfläche) und die es als App noch nicht gibt. „Übernehmen“ öffnet den
- *   Dialog vorbelegt; erst „Speichern“ legt die App an.
- * - Erkannte Dienste stehen darunter wie im Cockpit.
+ *   Proxy Manager) und die es als App noch nicht gibt. „Übernehmen“ öffnet den Dialog vorbelegt; erst „Speichern“ legt
+ *   die App an.
+ * - **Erkannte Dienste** (Container mit Web-Oberfläche) stehen darunter wie im Cockpit. Ihr Vorschlag (`service_id`)
+ *   steht nicht noch einmal unter „Vorschläge“, sondern als „Als App übernehmen“ an der Kachel.
  *
  * Noch ohne Logos und ohne Erreichbarkeits-Punkt (eigene Schritte). Nodvard Deck ruft keine der Adressen selbst auf.
  */
@@ -93,7 +94,18 @@ export function AppsPage() {
   const groups = useMemo(() => existingGroups(apps), [apps]);
   const folders = useMemo(() => foldersOf(custom.filter((a) => matches(a, query))), [custom, query]);
   const shownDetected = detected.filter((a) => matches(a, query));
-  const shownSuggestions = (suggestions.data?.suggestions ?? []).filter((s) => matches(s, query));
+  // Vorschläge, die zu einer Kachel unter „Erkannte Dienste“ gehören, stehen an der Kachel, nicht noch einmal unten.
+  const adoptable = useMemo(() => {
+    const ids = new Set(detected.map((a) => a.id));
+    const byService = new Map<string, AppSuggestionOut>();
+    for (const s of suggestions.data?.suggestions ?? []) {
+      if (s.service_id && ids.has(s.service_id)) byService.set(s.service_id, s);
+    }
+    return byService;
+  }, [detected, suggestions.data]);
+  const shownSuggestions = (suggestions.data?.suggestions ?? []).filter(
+    (s) => !(s.service_id && adoptable.has(s.service_id)) && matches(s, query),
+  );
   const searching = query.trim() !== "";
 
   function open(app: AppTileOut | null, initial?: Partial<AppFormValues>) {
@@ -207,7 +219,7 @@ export function AppsPage() {
   }
 
   return (
-    <div className="space-y-6" data-testid="apps-page">
+    <div className="space-y-6 p-4 sm:p-6" data-testid="apps-page">
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-white/60"><Boxes size={18} aria-hidden /></span>
         <h1 className="text-xl font-semibold">Apps</h1>
@@ -291,14 +303,32 @@ export function AppsPage() {
 
       {shownDetected.length > 0 && (
         <section aria-label="Erkannte Dienste" data-testid="detected">
-          <h2 className="mb-2 text-sm font-semibold">Erkannte Dienste</h2>
+          <h2 className="mb-1 text-sm font-semibold">Erkannte Dienste</h2>
+          <p className="mb-2 text-xs text-white/45">
+            Container mit Web-Oberfläche, die Nodvard Deck auf deinen Docker-Servern gefunden hat.
+            {canWrite && adoptable.size > 0 && " „Als App übernehmen“ macht daraus eine eigene Kachel mit Namen, Symbol und Ordner."}
+          </p>
           <div className={GRID}>
-            {shownDetected.map((tile) => (
-              <AppTile
-                key={tile.id}
-                service={{ id: tile.id, name: tile.name, host: tile.host, host_id: tile.host_id, state: tile.state, tone: tile.tone, url: tile.url, image: tile.image }}
-              />
-            ))}
+            {shownDetected.map((tile) => {
+              const suggestion = canWrite ? adoptable.get(tile.id) : undefined;
+              return (
+                <div key={tile.id} className="flex min-w-0 flex-col gap-1">
+                  <AppTile
+                    service={{ id: tile.id, name: tile.name, host: tile.host, host_id: tile.host_id, state: tile.state, tone: tile.tone, url: tile.url, image: tile.image }}
+                  />
+                  {suggestion && (
+                    <button
+                      type="button"
+                      onClick={() => open(null, { name: suggestion.name, url: suggestion.url })}
+                      className="self-start rounded-md px-1.5 py-0.5 text-[11px] text-white/50 hover:bg-white/[0.06] hover:text-white"
+                      aria-label={`${tile.name} als App übernehmen`}
+                    >
+                      Als App übernehmen
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </section>
       )}

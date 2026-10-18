@@ -4,7 +4,7 @@
     "url": {
       "type": "string",
       "title": "Adresse",
-      "description": "Die Adresse, unter der deine Bitwarden-Apps Vaultwarden erreichen, z. B. https://vault.example.org oder http://192.168.2.20:8222."
+      "description": "Die Adresse, unter der deine Bitwarden-Apps Vaultwarden erreichen, z. B. https://vault.example.org oder http://192.168.2.20:8222. Eine aus dem Browser kopierte Seite wie /admin/diagnostics schneidet Nodvard Deck ab."
     },
     "tls_insecure_skip_verify": {
       "type": "boolean",

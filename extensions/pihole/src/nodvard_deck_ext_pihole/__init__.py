@@ -38,7 +38,7 @@ from .actions import (
 from .config import normalize_domain
 from .service import PiholeService
 from .suggestions import PiholeAppSuggestions
-from .widgets import status_rows
+from .widgets import status_rows, widget_state
 
 _WIDGET_ITEM = ListItem(title="{{ title }}", subtitle="{{ subtitle }}", badge=Badge(text="{{ label }}", tone="{{ tone }}"))
 _CORRELATION = "pihole"
@@ -77,7 +77,7 @@ class Extension(NodvardExtension):
         @read_router.get("/widgets/status")
         async def status_widget() -> dict[str, Any]:
             state = await service.status()
-            return {"data": status_rows(state), "meta": {"state": state["state"]}}
+            return {"data": status_rows(state), "meta": {"state": widget_state(state)}}
 
         async def _propose(action_type: str, payload: dict[str, Any], risk: Risk, reason: str, actor: Actor) -> dict[str, Any]:
             decision = await ctx.actions.propose(ActionRequest(

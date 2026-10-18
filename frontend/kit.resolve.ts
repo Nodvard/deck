@@ -15,6 +15,7 @@ export const kitDedupe = [
   "react-router-dom",
   "@testing-library/react",
   "@testing-library/jest-dom",
+  "yaml",
 ];
 
 /** Vites Dev-Server und vite-node liefern sonst keine Dateien ausserhalb von frontend/ aus (relativ zu frontend/). */

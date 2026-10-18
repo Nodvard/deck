@@ -250,6 +250,32 @@ describe("Einbruchschutz", () => {
     await waitFor(() => expect(screen.getByText("Ereignisse: 2 abgehakt.")).toBeInTheDocument());
   });
 
+  it("sagt, wenn beim Abhaken Ereignisse offen bleiben", async () => {
+    const base = mockFetch([]);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/events/acknowledge-all")) return new Response(JSON.stringify({ acknowledged: 1, kept_open: 1 }), { status: 200 });
+      return base(input, init);
+    }));
+    render(<GuardTab canManage />);
+    await screen.findByTestId("guard-h-pve2");
+    fireEvent.click(screen.getByRole("button", { name: "Alle abhaken" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Ereignisse: 1 abgehakt, 1 bleibt offen, weil ein Server/);
+  });
+
+  it("zeigt den Grund, wenn ein Server beim Bestätigen nicht antwortet", async () => {
+    const reason = "pve2 ist gerade nicht erreichbar (timeout). Das Ereignis bleibt offen, damit nichts verloren geht.";
+    const base = mockFetch([]);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/events/ev2/acknowledge")) return new Response(JSON.stringify({ detail: reason }), { status: 503 });
+      return base(input, init);
+    }));
+    render(<GuardTab canManage />);
+    fireEvent.click(within(await screen.findByTestId("event-ev2")).getByRole("button", { name: "Ist in Ordnung" }));
+    expect(await screen.findByText(/Datei geändert: pve2 ist gerade nicht erreichbar \(timeout\)\. Das Ereignis bleibt offen/)).toBeInTheDocument();
+  });
+
   it("ohne Verwaltungsrecht nur lesen", async () => {
     vi.stubGlobal("fetch", mockFetch([]));
     render(<GuardTab canManage={false} />);

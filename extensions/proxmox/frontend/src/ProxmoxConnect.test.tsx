@@ -223,7 +223,7 @@ describe("ProxmoxConnect", () => {
     await screen.findByTestId("proxmox-connect-done");
     expect(calls[1].body).toMatchObject({ backups: true, access: "full" });
     expect(screen.getByTestId("proxmox-connect-backups")).toHaveTextContent("Proxmox-Backups ist als „pve1“ verbunden");
-    expect(screen.getByText(/liest Knoten, VMs und Container jetzt ein/)).toBeInTheDocument();
+    expect(screen.getByText(/liest Knoten, VMs und LXC jetzt ein/)).toBeInTheDocument();
     expect(screen.getByLabelText("Befehle zum Löschen")).toHaveTextContent("pveum user token remove nodvard@pve deck-2");
   });
 

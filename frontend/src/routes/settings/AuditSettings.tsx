@@ -163,6 +163,9 @@ const ACTION_LABELS: Record<string, string> = {
   "shield.watch_path_added": "Ordner zum Echtzeit-Wächter hinzugefügt",
   "inventory.hardware_scan": "Inventar: Teile vom Server ausgelesen",
   "service_matrix.tile_url": "Docker: eigene Kachel-Adresse gespeichert",
+  "docker.stack_adopt": "Docker: Stack übernommen",
+  "docker.stack_release": "Docker: Übernahme eines Stacks aufgehoben",
+  "docker.stack_root": "Docker: Ordner für neue Stacks geändert",
   "app.created": "App angelegt",
   "app.updated": "App geändert",
   "app.deleted": "App gelöscht",
@@ -196,7 +199,7 @@ const TARGET_LABELS: Record<string, string> = {
   user: "Benutzer", host: "Server", host_group: "Servergruppe", action: "Aktion", extension: "Erweiterung", backup: "Sicherung",
   file_source: "Dateiquelle", script: "Skript",
   restore: "Wiederherstellung", system: "System", setting: "Einstellung", secret: "Zugangsdaten", container: "Container", app: "App",
-  notification: "Meldung",
+  notification: "Meldung", stack: "Stack",
 };
 
 const UUID_START = /^[0-9a-f]{8}-[0-9a-f]{4}-/i;

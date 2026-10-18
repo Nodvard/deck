@@ -1,5 +1,5 @@
 // src/VaultwardenPage.tsx
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect as useEffect2, useState as useState2 } from "react";
 
 // ../../../frontend/src/lib/deckGlobal.ts
 function findDeck() {
@@ -217,8 +217,22 @@ function Notice({ text, kind = "error", onClose }) {
   ] });
 }
 
+// ../../_shared/frontend/src/links.tsx
+import { useEffect, useState } from "react";
+import { jsx as jsx2 } from "react/jsx-runtime";
+function safeHref(url) {
+  const text = url?.trim();
+  if (!text || !/^https?:\/\//i.test(text)) return void 0;
+  try {
+    const parsed = new URL(text);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? text : void 0;
+  } catch {
+    return void 0;
+  }
+}
+
 // src/VaultwardenPage.tsx
-import { Fragment as Fragment2, jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
+import { Fragment as Fragment2, jsx as jsx3, jsxs as jsxs2 } from "react/jsx-runtime";
 var API = "/ext/vaultwarden";
 var SETTINGS_PATH = "/settings/extensions/vaultwarden";
 async function loadStatus() {
@@ -229,9 +243,9 @@ async function loadStatus() {
 }
 function SettingsHint() {
   if (deck().hasPermission("extensions.manage")) {
-    return /* @__PURE__ */ jsx2("a", { href: SETTINGS_PATH, className: buttonClass("primary", true), children: "Jetzt einrichten" });
+    return /* @__PURE__ */ jsx3("a", { href: SETTINGS_PATH, className: buttonClass("primary", true), children: "Jetzt einrichten" });
   }
-  return /* @__PURE__ */ jsx2("p", { className: "text-xs text-white/45", children: "Ein Administrator kann das unter Einstellungen \u2192 Erweiterungen \u2192 Vaultwarden einrichten." });
+  return /* @__PURE__ */ jsx3("p", { className: "text-xs text-white/45", children: "Ein Administrator kann das unter Einstellungen \u2192 Erweiterungen \u2192 Vaultwarden einrichten." });
 }
 function Hints({ data }) {
   const hints = [];
@@ -260,75 +274,76 @@ function Hints({ data }) {
     });
   }
   if (hints.length === 0) return null;
-  return /* @__PURE__ */ jsx2(Card, { title: "Hinweise", children: /* @__PURE__ */ jsx2("ul", { "data-testid": "hints", className: "space-y-3", children: hints.map((h) => /* @__PURE__ */ jsxs2("li", { className: "flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-3", children: [
-    /* @__PURE__ */ jsx2(Badge, { tone: h.tone, children: h.label }),
-    /* @__PURE__ */ jsx2("span", { className: "text-sm text-white/70", children: h.text })
+  return /* @__PURE__ */ jsx3(Card, { title: "Hinweise", children: /* @__PURE__ */ jsx3("ul", { "data-testid": "hints", className: "space-y-3", children: hints.map((h) => /* @__PURE__ */ jsxs2("li", { className: "flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-3", children: [
+    /* @__PURE__ */ jsx3(Badge, { tone: h.tone, children: h.label }),
+    /* @__PURE__ */ jsx3("span", { className: "text-sm text-white/70", children: h.text })
   ] }, h.key)) }) });
 }
 function AppsCard({ url }) {
-  return /* @__PURE__ */ jsx2(Card, { title: "Bitwarden-Apps verbinden", description: "Handy, Windows, Browser-Erweiterung: \xFCberall dieselben Schritte.", children: /* @__PURE__ */ jsxs2("ol", { "data-testid": "apps-howto", className: "list-decimal space-y-1 pl-5 text-sm text-white/70", children: [
+  return /* @__PURE__ */ jsx3(Card, { title: "Bitwarden-Apps verbinden", description: "Handy, Windows, Browser-Erweiterung: \xFCberall dieselben Schritte.", children: /* @__PURE__ */ jsxs2("ol", { "data-testid": "apps-howto", className: "list-decimal space-y-1 pl-5 text-sm text-white/70", children: [
     /* @__PURE__ */ jsxs2("li", { children: [
       "Bitwarden-App \xF6ffnen, vor dem Anmelden bei \u201EAnmelden bei\u201C ",
-      /* @__PURE__ */ jsx2("strong", { children: "Selbst gehostet" }),
+      /* @__PURE__ */ jsx3("strong", { children: "Selbst gehostet" }),
       " w\xE4hlen."
     ] }),
     /* @__PURE__ */ jsxs2("li", { children: [
       "Als Server-Adresse ",
-      /* @__PURE__ */ jsx2("code", { className: "rounded bg-white/[0.06] px-1", children: url }),
+      /* @__PURE__ */ jsx3("code", { className: "rounded bg-white/[0.06] px-1", children: url }),
       " eintragen."
     ] }),
-    /* @__PURE__ */ jsx2("li", { children: "Mit E-Mail und Master-Passwort anmelden. Das Master-Passwort kennt nur die App, nie Nodvard Deck." })
+    /* @__PURE__ */ jsx3("li", { children: "Mit E-Mail und Master-Passwort anmelden. Das Master-Passwort kennt nur die App, nie Nodvard Deck." })
   ] }) });
 }
 function VaultwardenPage() {
-  const [data, setData] = useState(null);
-  const [loadError, setLoadError] = useState(null);
+  const [data, setData] = useState2(null);
+  const [loadError, setLoadError] = useState2(null);
   const load = useCallback(() => {
     setLoadError(null);
     loadStatus().then(setData).catch((err) => setLoadError(err instanceof Error ? err.message : String(err)));
   }, []);
-  useEffect(() => {
+  useEffect2(() => {
     load();
   }, [load]);
   let body = null;
   if (data?.state === "not_configured") {
-    body = /* @__PURE__ */ jsx2(Card, { title: "Vaultwarden", children: /* @__PURE__ */ jsxs2("div", { "data-testid": "not-configured", className: "flex flex-col items-start gap-3", children: [
-      /* @__PURE__ */ jsx2(Badge, { children: "nicht eingerichtet" }),
-      /* @__PURE__ */ jsx2("p", { className: "text-sm text-white/60", children: data.message }),
-      /* @__PURE__ */ jsx2(SettingsHint, {})
+    body = /* @__PURE__ */ jsx3(Card, { title: "Vaultwarden", children: /* @__PURE__ */ jsxs2("div", { "data-testid": "not-configured", className: "flex flex-col items-start gap-3", children: [
+      /* @__PURE__ */ jsx3(Badge, { children: "nicht eingerichtet" }),
+      /* @__PURE__ */ jsx3("p", { className: "text-sm text-white/60", children: data.message }),
+      /* @__PURE__ */ jsx3(SettingsHint, {})
     ] }) });
   } else if (data && data.state !== "ok") {
-    body = /* @__PURE__ */ jsx2(Card, { title: "Vaultwarden", actions: /* @__PURE__ */ jsx2(Badge, { tone: "bad", children: "nicht erreichbar" }), children: /* @__PURE__ */ jsxs2("div", { "data-testid": "problem", className: "flex flex-col items-start gap-3", children: [
-      /* @__PURE__ */ jsx2("p", { className: "text-sm text-white/70", children: data.message }),
-      /* @__PURE__ */ jsx2(Button, { small: true, onClick: load, children: "Erneut versuchen" })
+    body = /* @__PURE__ */ jsx3(Card, { title: "Vaultwarden", actions: /* @__PURE__ */ jsx3(Badge, { tone: "bad", children: "nicht erreichbar" }), children: /* @__PURE__ */ jsxs2("div", { "data-testid": "problem", className: "flex flex-col items-start gap-3", children: [
+      /* @__PURE__ */ jsx3("p", { className: "text-sm text-white/70", children: data.message }),
+      /* @__PURE__ */ jsx3(Button, { small: true, onClick: load, children: "Erneut versuchen" })
     ] }) });
   } else if (data) {
     const signups = data.signups_open === true ? "offen" : data.signups_open === false ? "zu" : "unbekannt";
     body = /* @__PURE__ */ jsxs2("div", { className: "space-y-4", children: [
       /* @__PURE__ */ jsxs2("div", { "data-testid": "stats", className: "grid grid-cols-2 gap-3 lg:grid-cols-4", children: [
-        /* @__PURE__ */ jsx2(Stat, { label: "Zustand", value: "l\xE4uft" }),
-        /* @__PURE__ */ jsx2(Stat, { label: "Version", value: data.version ?? "unbekannt", hint: data.server_name ?? void 0 }),
-        /* @__PURE__ */ jsx2(Stat, { label: "Verbindung", value: data.https ? "HTTPS" : "ohne HTTPS" }),
-        /* @__PURE__ */ jsx2(Stat, { label: "Registrierung", value: signups })
+        /* @__PURE__ */ jsx3(Stat, { label: "Zustand", value: "l\xE4uft" }),
+        /* @__PURE__ */ jsx3(Stat, { label: "Version", value: data.version ?? "unbekannt", hint: data.server_name ?? void 0 }),
+        /* @__PURE__ */ jsx3(Stat, { label: "Verbindung", value: data.https ? "HTTPS" : "ohne HTTPS" }),
+        /* @__PURE__ */ jsx3(Stat, { label: "Registrierung", value: signups })
       ] }),
-      /* @__PURE__ */ jsx2(Hints, { data }),
-      data.url && /* @__PURE__ */ jsx2(AppsCard, { url: data.url })
+      /* @__PURE__ */ jsx3(Hints, { data }),
+      data.url && /* @__PURE__ */ jsx3(AppsCard, { url: data.url })
     ] });
   } else if (!loadError) {
-    body = /* @__PURE__ */ jsx2(Card, { title: "Vaultwarden", children: /* @__PURE__ */ jsx2("p", { className: "text-sm text-white/50", children: "Lade \u2026" }) });
+    body = /* @__PURE__ */ jsx3(Card, { title: "Vaultwarden", children: /* @__PURE__ */ jsx3("p", { className: "text-sm text-white/50", children: "Lade \u2026" }) });
   }
+  const webVault = safeHref(data?.url);
   return /* @__PURE__ */ jsxs2(
     Page,
     {
       title: "Vaultwarden",
       description: "Dein Passwort-Manager. Die Bitwarden-Apps sprechen direkt mit Vaultwarden.",
       actions: /* @__PURE__ */ jsxs2(Fragment2, { children: [
-        data?.url && /* @__PURE__ */ jsx2("a", { href: `${data.url}/`, target: "_blank", rel: "noreferrer", className: buttonClass("ghost"), children: "Web-Tresor \xF6ffnen" }),
-        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx2("a", { href: SETTINGS_PATH, className: buttonClass("ghost"), children: "Einstellungen" }),
-        /* @__PURE__ */ jsx2(Button, { onClick: load, children: "Aktualisieren" })
+        webVault && /* @__PURE__ */ jsx3("a", { href: `${webVault}/`, target: "_blank", rel: "noreferrer", className: buttonClass("ghost"), children: "Web-Tresor \xF6ffnen" }),
+        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx3("a", { href: SETTINGS_PATH, className: buttonClass("ghost"), children: "Einstellungen" }),
+        /* @__PURE__ */ jsx3(Button, { onClick: load, children: "Aktualisieren" })
       ] }),
       children: [
-        loadError && /* @__PURE__ */ jsx2(Notice, { text: loadError, onClose: () => setLoadError(null) }),
+        loadError && /* @__PURE__ */ jsx3(Notice, { text: loadError, onClose: () => setLoadError(null) }),
         body
       ]
     }

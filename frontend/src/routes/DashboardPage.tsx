@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type Ref } from "react";
+import { useQueries } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from "react";
 import { GridLayout, useContainerWidth, type Layout } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 
@@ -7,32 +8,25 @@ import { useWidgets } from "../lib/catalog";
 import { isHiddenItem, useDashboardLayout, type DashboardLayoutItem } from "../lib/dashboard";
 import type { WidgetOut } from "../widgets/types";
 import { useAuthStore } from "../state/auth";
+import { MAX_ROWS, MIN_ROWS, ROW_GAP, ROW_HEIGHT, rowsToPx } from "../widgets/fit";
+import { isNotConfigured, widgetDataQuery } from "../widgets/query";
 import { WidgetCard } from "../widgets/WidgetCard";
 import { WidgetPickerDialog } from "./WidgetPickerDialog";
 import { Cockpit } from "./Cockpit";
 
 const COLS = 12;
-const ROW_HEIGHT = 90;
-// Das Raster fuellt die Containerbreite, wird aber nie schmaler als das: bei 12
-// Spalten und 12px Abstand ist eine w=2-Karte 2*(W-156)/12+12 breit -- unter ~960px
-// wuerden die Standard-Karten (w=2) unter ~146px schrumpfen und ihren Inhalt kaum
-// noch fassen. Darunter scrollt <main> (overflow-auto) waagerecht, statt die Karten
-// zu quetschen. Bewusst keine responsive Spaltenzahl: das Layout wird pro Nutzer in
-// 12er-Koordinaten gespeichert, und react-grid-layout wuerde bei weniger Spalten
-// umsortieren und diese Umsortierung per onLayoutChange zurueckspeichern -- ein
-// kurzer Blick vom Handy haette dann das Desktop-Layout ueberschrieben.
+// Bei 12 Spalten und 12 px Abstand ist eine w=2-Karte 2*(W-156)/12+12 breit, unter 960 px würde sie unter ~146 px
+// schrumpfen. Darunter gibt es kein Raster, sondern die gestapelte Ansicht (STACK_BELOW).
+// Bewusst keine responsive Spaltenzahl: Das Layout liegt pro Nutzer in 12er-Koordinaten, react-grid-layout würde bei
+// weniger Spalten umsortieren, und ein Zug dort speicherte das umsortierte Layout über das vom Desktop.
 const MIN_GRID_WIDTH = 960;
-// Handy: statt des (gespeicherten) 12er-Rasters eine einfache Spalte in derselben
-// Reihenfolge -- ohne react-grid-layout, also ohne Ziehen und ohne Zurueckspeichern.
-// So bleibt das Desktop-Layout unberuehrt (siehe oben).
-const STACK_BELOW = 768;
+// Schmaler: dieselbe Reihenfolge, ab 640 px in zwei Spalten, ohne Ziehen und ohne Zurückspeichern.
+const STACK_BELOW = MIN_GRID_WIDTH;
 
 /**
- * Mindestgroesse je View-Typ, damit schmale Widgets ihren Inhalt nicht quetschen: fast
- * alle Widgets waren 2 von 12 Spalten breit (~170 px) -- Listen mit Knoepfen wurden gequetscht und bekamen
- * Scrollbalken. Gilt auch fuer bereits gespeicherte Layouts: react-grid-layout bekommt
- * die angehobene Groesse (und schiebt Kollisionen nach unten), onLayoutChange speichert
- * das dann mit.
+ * Mindestgröße je View-Typ, damit schmale Widgets ihren Inhalt nicht quetschen (Listen mit Knöpfen brauchen Platz).
+ * Gilt auch für gespeicherte Layouts: react-grid-layout bekommt die angehobene Breite und schiebt Kollisionen nach
+ * unten. Die Höhe ist nur die Vorgabe, bis die Karte ihren Inhalt gemessen hat (`rowsFor`, src/widgets/fit.ts).
  */
 export const MIN_SIZE: Record<string, { w: number; h: number }> = {
   list: { w: 4, h: 3 },
@@ -53,9 +47,9 @@ export function sizeFor(kind: string | undefined, w: number, h: number): { w: nu
 
 /**
  * Dicht packen (erste freie Stelle, zeilenweise, in der bisherigen Reihenfolge) --
- * gebraucht, wenn alte, zu kleine Karten auf ihre Mindestgroesse wachsen: an ihren alten
- * x-Positionen wuerden sie kollidieren und react-grid-layout schoebe sie treppenartig
- * nach unten (live in der Vorschau gesehen: grosse Luecken).
+ * gebraucht, wenn alte, zu kleine Karten auf ihre Mindestgröße wachsen: an ihren alten
+ * x-Positionen würden sie kollidieren und react-grid-layout schöbe sie treppenartig
+ * nach unten (live in der Vorschau gesehen: große Lücken).
  */
 export function packLayout(entries: { i: string; w: number; h: number }[]): Map<string, { x: number; y: number }> {
   const occupied: boolean[][] = [];
@@ -86,7 +80,30 @@ function itemKey(item: { ext_id: string; widget_id: string }): string {
 }
 
 /**
- * Der Eintrag, den dieses Widget unter einer frueheren Kennung seiner Erweiterung hatte (`legacy_ext_ids`,
+ * Rasterzeilen einer Karte: gemessen (WidgetCard meldet die Stufe), bis zur Messung die Mindesthöhe (Zahl und Tacho:
+ * S). Die gespeicherte Höhe zählt nicht mehr, gespeichert werden nur Lage und Breite.
+ */
+export function rowsFor(kind: string | undefined, measured: number | undefined, fallback: number): number {
+  return measured || (kind && MIN_ROWS[kind]) || Math.min(MAX_ROWS, fallback);
+}
+
+/**
+ * Lage und Breite aus dem Raster übernehmen, die Höhe bleibt wie gespeichert (sie ergibt sich aus dem Inhalt).
+ * Dieselben Einträge zurück, wenn sich nichts geändert hat, dann gibt es kein PUT.
+ */
+export function placeItems(items: DashboardLayoutItem[], layout: Layout): DashboardLayoutItem[] {
+  let changed = false;
+  const next = items.map((item) => {
+    const match = layout.find((l) => l.i === itemKey(item));
+    if (!match || (match.x === item.x && match.y === item.y && match.w === item.w)) return item;
+    changed = true;
+    return { ...item, x: match.x, y: match.y, w: match.w };
+  });
+  return changed ? next : items;
+}
+
+/**
+ * Der Eintrag, den dieses Widget unter einer früheren Kennung seiner Erweiterung hatte (`legacy_ext_ids`,
  * nach einer Umbenennung): gleiche `widget_id`, `ext_id` aus der Liste. Bei mehreren gilt die Reihenfolge der
  * Liste. Ohne Umbenennung gibt es nie einen.
  */
@@ -104,10 +121,10 @@ function legacyItemFor(items: DashboardLayoutItem[], widget: WidgetOut): Dashboa
  * auf dem Dashboard, statt dass ein Nutzer sie erst manuell aus dem Widget-Picker
  * holen muss.
  *
- * Steht das Widget unter der frueheren Kennung seiner (umbenannten) Erweiterung im Layout, wird es nicht
- * neu platziert, sondern der Eintrag uebernommen (`{...alt, ext_id: neu}`): Position, Groesse und ein
+ * Steht das Widget unter der früheren Kennung seiner (umbenannten) Erweiterung im Layout, wird es nicht
+ * neu platziert, sondern der Eintrag übernommen (`{...alt, ext_id: neu}`): Position, Größe und ein
  * entferntes Widget (`config.hidden`) bleiben so, wie die Person sie eingerichtet hat. Der alte Eintrag
- * bleibt in den Daten stehen -- wer auf die alte Version zurueckgeht, findet sein Dashboard unveraendert --,
+ * bleibt in den Daten stehen -- wer auf die alte Version zurückgeht, findet sein Dashboard unverändert --,
  * wird aber nicht gezeigt: der Katalog kennt ihn nicht (`widgetByKey`).
  */
 function appendMissingWidgets(items: DashboardLayoutItem[], widgets: WidgetOut[]): DashboardLayoutItem[] {
@@ -147,9 +164,9 @@ export function DashboardPage() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const canManageExtensions = useAuthStore((s) => s.hasPermission("extensions.manage"));
   // Ref statt State: der Guard muss INNERHALB desselben Effekt-Laufs wirken, bevor der
-  // naechste Render committet -- React 18 StrictMode fuehrt Mount-Effekte im Dev-Betrieb
-  // zweimal aus (ein State-Guard kam beim zweiten Lauf noch zu spaet und
-  // loeste ein doppeltes PUT /dashboard/layouts/{id} aus).
+  // nächste Render committet -- React 18 StrictMode führt Mount-Effekte im Dev-Betrieb
+  // zweimal aus (ein State-Guard kam beim zweiten Lauf noch zu spät und
+  // löste ein doppeltes PUT /dashboard/layouts/{id} aus).
   const autoPlacedForRef = useRef<string | null>(null);
 
   const items = pendingItems ?? layout?.items ?? [];
@@ -160,7 +177,7 @@ export function DashboardPage() {
     return map;
   }, [widgets]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- laeuft bewusst nur, wenn sich Katalog oder Layout-ID aendern.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- läuft bewusst nur, wenn sich Katalog oder Layout-ID ändern.
   useEffect(() => {
     if (!widgets || !layout || autoPlacedForRef.current === layout.id) return;
     autoPlacedForRef.current = layout.id;
@@ -171,13 +188,33 @@ export function DashboardPage() {
     }
   }, [widgets, layout?.id]);
 
-  const visibleItems = items.filter((item) => widgetByKey.has(itemKey(item)) && !isHiddenItem(item));
+  const placedItems = items.filter((item) => widgetByKey.has(itemKey(item)) && !isHiddenItem(item));
+
+  // Dieselben Abfragen wie in den Karten (ein Schlüssel, eine Anfrage): Wer `meta.state = "not_configured"` meldet,
+  // steht nicht auf der Startseite; „Widgets verwalten“ zeigt den Hinweis. Die Abfrage läuft weiter, nach dem
+  // Einrichten erscheint das Widget von selbst.
+  const placedWidgets = placedItems.map((item) => widgetByKey.get(itemKey(item))!);
+  const dataQueries = useQueries({ queries: placedWidgets.map(widgetDataQuery) });
+  const notConfigured = new Set(
+    placedWidgets.filter((_, idx) => isNotConfigured(dataQueries[idx]?.data)).map((w) => itemKey({ ext_id: w.ext_id, widget_id: w.id })),
+  );
+  const visibleItems = placedItems.filter((item) => !notConfigured.has(itemKey(item)));
+
+  // Von den Karten gemessene Rasterzeilen; nur im Speicher, nie im Layout gespeichert.
+  const [measuredRows, setMeasuredRows] = useState<Record<string, number>>({});
+  const reportRows = useCallback((key: string, rows: number) => {
+    setMeasuredRows((prev) => (prev[key] === rows ? prev : { ...prev, [key]: rows }));
+  }, []);
+
   const sized = visibleItems.map((item) => {
-    const kind = widgetByKey.get(itemKey(item))?.view.kind;
+    const key = itemKey(item);
+    const kind = widgetByKey.get(key)?.view.kind;
     const min = (kind && MIN_SIZE[kind]) || { w: 2, h: 2 };
-    return { item, size: sizeFor(kind, item.w, item.h), min };
+    const grown = sizeFor(kind, item.w, item.h);
+    return { item, size: { w: grown.w, h: rowsFor(kind, measuredRows[key], grown.h) }, min };
   });
-  const grew = sized.some(({ item, size }) => size.w !== item.w || size.h !== item.h);
+  // Nur gewachsene Breiten packen neu; unterschiedliche Höhen gleicht das Raster selbst aus (es schiebt nach oben).
+  const grew = sized.some(({ item, size }) => size.w !== item.w);
   const packed = grew
     ? packLayout(
         [...sized]
@@ -187,14 +224,14 @@ export function DashboardPage() {
     : null;
   const rglLayout: Layout = sized.map(({ item, size, min }) => {
     const pos = packed?.get(itemKey(item)) ?? { x: item.x, y: item.y };
-    return { i: itemKey(item), x: pos.x, y: pos.y, w: size.w, h: size.h, minW: min.w, minH: min.h };
+    return { i: itemKey(item), x: pos.x, y: pos.y, w: size.w, h: size.h, minW: min.w };
   });
 
-  function handleLayoutChange(newLayout: Layout) {
-    const merged = items.map((item) => {
-      const match = newLayout.find((l) => l.i === itemKey(item));
-      return match ? { ...item, x: match.x, y: match.y, w: match.w, h: match.h } : item;
-    });
+  // Gespeichert wird nur, was die Person selbst tut (Ziehen, Breite ändern), nicht jede Höhenänderung durch neue
+  // Daten, sonst löste jede neue Zeile in einer Liste ein PUT aus.
+  function handleUserLayout(newLayout: Layout) {
+    const merged = placeItems(items, newLayout);
+    if (merged === items) return;
     setPendingItems(merged);
     void saveItems(merged);
   }
@@ -205,8 +242,8 @@ export function DashboardPage() {
   }
 
   // Das gemessene <div> (containerRef) MUSS ab dem allerersten Render existieren:
-  // `useContainerWidth` misst und haengt seinen ResizeObserver nur EINMAL beim Mount
-  // an. Stand es erst nach einem Early-Return fuer den Ladezustand im DOM, fand der
+  // `useContainerWidth` misst und hängt seinen ResizeObserver nur EINMAL beim Mount
+  // an. Stand es erst nach einem Early-Return für den Ladezustand im DOM, fand der
   // Mount-Effekt kein Element -- das Raster blieb dauerhaft beim 1280px-Default und
   // schnitt auf schmaleren Bildschirmen die rechten Karten ab. Lade-
   // und Fehlerzustand deshalb INNERHALB des gemessenen Containers.
@@ -220,11 +257,18 @@ export function DashboardPage() {
         <h2 className="text-sm font-semibold">Widgets</h2>
         {!widgetsLoading && !layoutLoading && layout && (
           <div className="ml-auto">
-            <WidgetPickerDialog widgets={widgets ?? []} items={items} onChange={handlePickerChange} open={pickerOpen} onOpenChange={setPickerOpen} />
+            <WidgetPickerDialog
+              widgets={widgets ?? []}
+              items={items}
+              onChange={handlePickerChange}
+              open={pickerOpen}
+              onOpenChange={setPickerOpen}
+              notConfigured={notConfigured}
+            />
           </div>
         )}
       </div>
-      {/* react-grid-layout buendelt eigene React-Typen (leicht abweichend von unserem
+      {/* react-grid-layout bündelt eigene React-Typen (leicht abweichend von unserem
           installierten @types/react) -- strukturell dasselbe Ref-Objekt, daher der Cast. */}
       <div ref={containerRef as Ref<HTMLDivElement>}>
         {loading && <p className="text-sm opacity-60">Lade Dashboard …</p>}
@@ -232,11 +276,11 @@ export function DashboardPage() {
         {!loading && layout && (
           <>
             {/* Der Picker steht bewusst AUSSERHALB des `visibleItems.length === 0`-Zweigs
-                (jetzt in der Ueberschriftenzeile oben) -- sonst gaebe es keinen Weg
-                zurueck, sobald alle Widgets manuell entfernt wurden (siehe
+                (in der Überschriftenzeile oben) -- sonst gäbe es keinen Weg
+                zurück, sobald alle Widgets manuell entfernt wurden (siehe
                 Modul-Docstring von WidgetPickerDialog.tsx). */}
 
-            {visibleItems.length === 0 && (widgets ?? []).length === 0 && (
+            {placedItems.length === 0 && (widgets ?? []).length === 0 && (
               <EmptyState
                 icon="layout-dashboard"
                 testId="dashboard-no-widgets"
@@ -249,7 +293,24 @@ export function DashboardPage() {
                 action={canManageExtensions ? <ButtonLink to="/settings/extensions">Module ansehen</ButtonLink> : undefined}
               />
             )}
-            {visibleItems.length === 0 && (widgets ?? []).length > 0 && (
+            {visibleItems.length === 0 && placedItems.length > 0 && (
+              <EmptyState
+                icon="layout-dashboard"
+                testId="dashboard-all-not-configured"
+                title="Noch nichts eingerichtet"
+                text="Die Module deiner Widgets brauchen noch ihre Einstellungen. Unter „Widgets verwalten“ siehst du, welche, mit Link dorthin."
+                action={
+                  <button
+                    type="button"
+                    onClick={() => setPickerOpen(true)}
+                    className="accent-gradient inline-flex items-center justify-center rounded-lg px-3 py-1.5 text-sm font-medium text-on-accent transition hover:bg-accent-strong"
+                  >
+                    Widgets verwalten
+                  </button>
+                }
+              />
+            )}
+            {placedItems.length === 0 && (widgets ?? []).length > 0 && (
               <EmptyState
                 icon="layout-dashboard"
                 testId="dashboard-no-visible-widgets"
@@ -268,12 +329,12 @@ export function DashboardPage() {
             )}
 
             {mounted && visibleItems.length > 0 && width < STACK_BELOW && (
-              <div className="flex flex-col gap-3" data-testid="widget-stack">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" data-testid="widget-stack">
                 {[...sized]
                   .sort((a, b) => a.item.y - b.item.y || a.item.x - b.item.x)
                   .map(({ item, size }) => (
-                    <div key={itemKey(item)} style={{ height: Math.max(2, Math.min(size.h, 5)) * ROW_HEIGHT }}>
-                      <WidgetCard widget={widgetByKey.get(itemKey(item))!} />
+                    <div key={itemKey(item)} style={{ height: rowsToPx(size.h) }}>
+                      <WidgetCard widget={widgetByKey.get(itemKey(item))!} onRows={(rows) => reportRows(itemKey(item), rows)} />
                     </div>
                   ))}
               </div>
@@ -281,14 +342,19 @@ export function DashboardPage() {
 
             {mounted && visibleItems.length > 0 && width >= STACK_BELOW && (
               <GridLayout
-                width={Math.max(width, MIN_GRID_WIDTH)}
-                gridConfig={{ cols: COLS, rowHeight: ROW_HEIGHT, margin: [12, 12], containerPadding: null, maxRows: Infinity }}
+                width={width}
+                gridConfig={{ cols: COLS, rowHeight: ROW_HEIGHT, margin: [ROW_GAP, ROW_GAP], containerPadding: null, maxRows: Infinity }}
                 layout={rglLayout}
-                onLayoutChange={handleLayoutChange}
+                // Ziehen nur am Griff im Kopf (nicht ein Verrutscher in einer Liste); der Kopf selbst ist der Link zur Modulseite.
+                // Die Höhe folgt dem Inhalt, deshalb nur die Breite zum Ziehen.
+                dragConfig={{ handle: ".widget-drag-handle", cancel: "a,button" }}
+                resizeConfig={{ handles: ["e"] }}
+                onDragStop={handleUserLayout}
+                onResizeStop={handleUserLayout}
               >
                 {visibleItems.map((item) => (
                   <div key={itemKey(item)}>
-                    <WidgetCard widget={widgetByKey.get(itemKey(item))!} />
+                    <WidgetCard widget={widgetByKey.get(itemKey(item))!} onRows={(rows) => reportRows(itemKey(item), rows)} draggable />
                   </div>
                 ))}
               </GridLayout>

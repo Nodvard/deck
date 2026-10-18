@@ -289,6 +289,14 @@ describe("Jellyfin-Seite", () => {
     expect(within(screen.getByTestId("connection-eins")).getAllByTestId("playback")[0].querySelector(".flex-wrap")).not.toBeNull();
   });
 
+  it("verlinkt nur eine Webadresse, kein `javascript:` aus der Antwort", async () => {
+    answer = () => ok(overviewOf(connection({ name: "gut" }), connection({ name: "schlecht", url: "javascript:alert(1)" })));
+    render(<JellyfinPage />);
+    expect(await screen.findByTestId("connection-schlecht")).toBeInTheDocument();
+    const links = screen.getAllByRole("link", { name: "Jellyfin öffnen" });
+    expect(links.map((a) => a.getAttribute("href"))).toEqual(["http://jellyfin.example.com:8096"]);
+  });
+
   it("ohne extensions.manage gibt es keinen Link zu den Einstellungen", async () => {
     permissions.delete("extensions.manage");
     answer = () => ok(overviewOf(failed({ state: "error", message: "Unter dieser Adresse läuft kein Jellyfin." })));

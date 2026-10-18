@@ -1,18 +1,7 @@
 /**
- * Container-Wache (Reiter auf der Nodvard-Shield-Seite, siehe SocPage.tsx).
- *
- * Bewusst kein Chat-UI -- das ist NICHT der Fokus dieser Seite. Der Chat-Endpunkt
- * (`POST /chat`) bleibt im Backend bestehen (wird z. B. weiterhin fuer jede
- * Vorfalls-Zusammenfassung intern genutzt, siehe `_propose_from_response()`),
- * hat aber absichtlich KEINE UI mehr hier. Diese Seite zeigt stattdessen
- * echtes SOC-Monitoring: Status/Statistiken, der Live-Vorfall-Feed, und was
- * die KI je Vorfall erkannt/vorgeschlagen hat (`ai_summary`).
- *
- * **Historie:** die Liste ist die durchsuchbare, dauerhafte Historie
- * (`GET .../history`, ueberlebt Neustarts): Freitext (trifft auch die
- * KI-Zusammenfassung), Status, Host, Zeitraum, seitenweise. Je Vorfall klappt der
- * Verlauf aus dem Kern-Audit-Log auf (`GET /audit?correlation_id=<id>`: erfasst,
- * KI-Vorschlag, Gate-Entscheidung, jeder Statuswechsel) -- nur mit `audit.read`.
+ * Container-Wache (Reiter der Nodvard-Shield-Seite, siehe SocPage.tsx): Status, Statistiken, Vorfall-Feed und was die KI je
+ * Vorfall erkannt hat (`ai_summary`), bewusst ohne Chat-UI. Die Liste ist die dauerhafte, durchsuchbare Historie
+ * (`GET .../history`); der Verlauf je Vorfall kommt aus dem Kern-Audit-Log (`GET /audit?correlation_id=<id>`, `audit.read`).
  */
 import { useCallback, useEffect, useState } from "react";
 
@@ -90,8 +79,8 @@ const LABEL_INCIDENT = "Vorfall erfasst und von Nodvard KI bewertet";
 const LABEL_STATUS = "Status geändert";
 const LABEL_REJECTED = "Vorschlag von Nodvard KI abgelehnt (Sperrliste)";
 
-/** Neue Einträge heißen `shield.<Vorgang>`. Ältere (bis 0.6) tragen `nexus_soc.<Vorgang>` und bleiben in der Datenbank
- * stehen, bis die Aufbewahrungsfrist des Protokolls sie entfernt; beide Schreibweisen bekommen dieselbe Beschriftung. */
+/** Einträge heißen `shield.<Vorgang>`, alte tragen `nexus_soc.<Vorgang>` und bleiben stehen, bis die Aufbewahrungsfrist des
+ * Protokolls sie entfernt; beide Schreibweisen bekommen dieselbe Beschriftung. */
 const AUDIT_ACTION_LABELS: Record<string, string> = {
   [`${EXT_ID}.incident`]: LABEL_INCIDENT,
   [`${EXT_ID}.incident_status`]: LABEL_STATUS,
@@ -119,8 +108,8 @@ function formatTimestamp(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toLocaleString();
 }
 
-/** `<input type="date">` liefert "YYYY-MM-DD" (lokaler Tag) -> ISO-Zeitpunkt am
- * Tagesanfang bzw. -ende in LOKALER Zeit, damit "bis 24.09." den ganzen Tag einschliesst. */
+/** `<input type="date">` liefert „YYYY-MM-DD“ (lokaler Tag) -> ISO-Zeitpunkt am Tagesanfang bzw. -ende in lokaler Zeit,
+ * damit „bis 24.09.“ den ganzen Tag einschließt. */
 function dayBoundary(day: string, end: boolean): string {
   const d = new Date(`${day}T${end ? "23:59:59.999" : "00:00:00"}`);
   return d.toISOString();

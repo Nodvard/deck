@@ -96,6 +96,9 @@ WAITING_RESTART_NOTE = "Der vorgeschlagene Neustart unter „Aktionen“ ist nic
 """Nur solange die Aktion noch auf Freigabe wartet (`proposed`): danach lässt sie sich nicht mehr ablehnen."""
 
 _SEVERITY_BY_STATUS = {"open": "critical", "proposed": "warning", "reviewed": "warning", "resolved": "info", "dismissed": "info"}
+# Das Übersichts-Widget zeigt nur offene und vorgeschlagene Vorfälle; alles andere steht nur auf der Shield-Seite.
+_WIDGET_STATUSES = ("open", "proposed")
+_WIDGET_HIDDEN_STATUSES = tuple(s for s in STATUSES if s not in _WIDGET_STATUSES)
 
 
 def recovery_note(since: str) -> str:
@@ -218,7 +221,10 @@ class Extension(NodvardExtension):
 
         @router.get("/widgets/incidents")
         async def incidents_widget_data() -> dict:
-            items, _total = await self._history.search(exclude_status=("dismissed",), limit=50)
+            # Das Widget soll ruhig bleiben: nur, was noch Aufmerksamkeit braucht (offen oder mit Vorschlag). Geprüfte und
+            # erledigte Vorfälle stehen auf der Shield-Seite. `search()` kennt nur einen einzelnen `status=`, deshalb
+            # der Ausschluss der übrigen Stufen aus `STATUSES` (eine neue Stufe taucht so nicht unbemerkt im Widget auf).
+            items, _total = await self._history.search(exclude_status=_WIDGET_HIDDEN_STATUSES, limit=50)
             rows = [
                 {
                     "id": r["id"],
@@ -226,6 +232,10 @@ class Extension(NodvardExtension):
                     "host": r["host_name"],
                     "target": r["target"],
                     "ts": r["created_at"],
+                    # Maschinenlesbarer Status plus Flag für `show_if`: die Template-Sprache hat keine Vergleiche, ein
+                    # `{{ status }}` wäre für "proposed" genauso "wahr" wie für "open".
+                    "status": r["status"],
+                    "can_confirm": r["status"] == "open",
                     # `severity` bleibt maschinenlesbar; angezeigt wird `status_label`, gefärbt über `tone`
                     # (`history.STATUS_TONE`). Badge-Text und Farbe sind entkoppelt.
                     "severity": _SEVERITY_BY_STATUS.get(r["status"], "warning"),
@@ -381,7 +391,8 @@ class Extension(NodvardExtension):
                         # Deutsches Wort statt "critical/warning/info"; die Farbe kommt aus dem expliziten `tone`-Feld.
                         badge=Badge(text="{{ status_label }}", tone="{{ tone }}"),
                         actions=[
-                            WidgetAction(id="confirm", label="Bestätigen", endpoint="incidents/{{ id }}/confirm", method="POST", style="primary"),
+                            # Nur bei `open`; bei `proposed` bleibt im Widget nur "Verwerfen".
+                            WidgetAction(id="confirm", label="Bestätigen", endpoint="incidents/{{ id }}/confirm", method="POST", style="primary", show_if="{{ can_confirm }}"),
                             WidgetAction(id="dismiss", label="Verwerfen", endpoint="incidents/{{ id }}/dismiss", method="POST"),
                         ],
                     ),
@@ -451,6 +462,10 @@ class Extension(NodvardExtension):
         except Exception:
             logging.getLogger(LOGGER).exception("shield_audit_load_failed")
         ctx.spawn(self._defender.resume_audits(), name=f"{EXT_ID}-audit-resume")
+        try:
+            await self._defender.drop_stale_follow_notes()
+        except Exception:
+            logging.getLogger(LOGGER).exception("shield_quarantine_notes_failed")
         # Vorfälle, die beim letzten Stopp noch im Sammelfenster lagen, wieder aufnehmen.
         await self._resume_open_incidents()
         ctx.spawn(self._watcher.run_forever(), name=f"{EXT_ID}-docker-watcher")
@@ -461,6 +476,7 @@ class Extension(NodvardExtension):
             self._updates.cancel_catch_up()
         if self._defender is not None:
             self._defender.cancel_audit_tasks()
+            self._defender.cancel_quarantine_follow()
         for task in list(self._retry_tasks):
             task.cancel()
         self._retry_tasks.clear()

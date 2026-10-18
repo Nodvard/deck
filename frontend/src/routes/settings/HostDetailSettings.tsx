@@ -7,10 +7,11 @@ import { ArrowLeft } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
+import { kindLabel } from "../../../../extensions/_shared/frontend/src/hostKind";
 import { useExtensions } from "../../lib/firstSteps";
 import { hostProvider } from "../../lib/hostProvider";
 import { useCredentials, useHost, type HostOut } from "../../lib/hosts";
-import { hostHealth } from "../../lib/overview";
+import { hostHealthOf } from "../../lib/overview";
 import { AccessPanel } from "./hosts/AccessPanel";
 import { ConnectionCheck } from "./hosts/ConnectionCheck";
 import { DeleteHostButton } from "./hosts/deleteHost";
@@ -18,8 +19,6 @@ import { GroupMembership } from "./hosts/GroupMembership";
 import { HostForm } from "./hosts/HostForm";
 import { KnownKeys } from "./hosts/KnownKeys";
 import { Badge, Button, Card, NoticeLine, PageHeader, type Notice } from "./ui";
-
-const KIND_LABEL: Record<string, string> = { vm: "Virtuelle Maschine", lxc: "Container", hypervisor: "Proxmox-Knoten", node: "Knoten" };
 
 function Summary({ host }: { host: HostOut }) {
   const { data: extensions } = useExtensions(Boolean(host.provider_ext_id));
@@ -48,8 +47,8 @@ function Summary({ host }: { host: HostOut }) {
       {host.provider_ext_id && (
         <p className="text-xs text-white/45 sm:col-span-2">
           {provider?.problem
-            ? <>Dieser Server wurde von der Erweiterung „{provider.name}“ eingelesen{host.kind ? ` (${KIND_LABEL[host.kind] ?? host.kind})` : ""}. Die Erweiterung läuft nicht mehr, darum wird sein Zustand nicht mehr aktualisiert.</>
-            : <>Dieser Server wird automatisch von der Erweiterung „{provider?.name ?? host.provider_ext_id}“ eingelesen{host.kind ? ` (${KIND_LABEL[host.kind] ?? host.kind})` : ""}.</>}
+            ? <>Dieser Server wurde von der Erweiterung „{provider.name}“ eingelesen{host.kind ? ` (${kindLabel(host)})` : ""}. Die Erweiterung läuft nicht mehr, darum wird sein Zustand nicht mehr aktualisiert.</>
+            : <>Dieser Server wird automatisch von der Erweiterung „{provider?.name ?? host.provider_ext_id}“ eingelesen{host.kind ? ` (${kindLabel(host)})` : ""}.</>}
         </p>
       )}
     </dl>
@@ -74,7 +73,7 @@ function HostDetail({ hostId }: { hostId: string }) {
     );
   }
   const h = host.data;
-  const health = hostHealth(h.status);
+  const health = hostHealthOf(h);
 
   return (
     <>

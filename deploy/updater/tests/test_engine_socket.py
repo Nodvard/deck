@@ -1,10 +1,10 @@
 """Engine-Client gegen einen echten HTTP-Server auf einem Unix-Socket.
 
-Geprueft wird der echte Client (`nodvard_deck_updater.engine`): Aushandlung der API-Version (1.41 bis 1.54, Podman,
+Geprüft wird der echte Client (`nodvard_deck_updater.engine`): Aushandlung der API-Version (1.41 bis 1.54, Podman,
 fehlender Kopf), die Allowlist (Endpunkte, Pfadteile, Abfragen, Bodies), Antworten (304, 404, 409, 500, Fehler im
-200-Strom, kaputtes JSON, falscher Inhaltstyp, doppelte Schluessel, zu gross, abgebrochen) und Transportfehler
-(Socket fehlt, keiner hoert zu, keine Rechte, Zeitlimit). Aendernde Aufrufe laufen hier mit einer passenden Bindung
-(`binding_support.bound`); die Regeln der Bindung selbst prueft `test_engine_binding.py`.
+200-Strom, kaputtes JSON, falscher Inhaltstyp, doppelte Schlüssel, zu groß, abgebrochen) und Transportfehler
+(Socket fehlt, keiner hört zu, keine Rechte, Zeitlimit). Ändernde Aufrufe laufen hier mit einer passenden Bindung
+(`binding_support.bound`); die Regeln der Bindung selbst prüft `test_engine_binding.py`.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def client(fake):
 
 
 def resolve_and_bind(fake, client):
-    """Wie der Ablauf vor dem Pull: das bewegliche Tag aufloesen (die Fake-Engine merkt sich den Digest), dann an
+    """Wie der Ablauf vor dem Pull: das bewegliche Tag auflösen (die Fake-Engine merkt sich den Digest), dann an
     genau diesen Digest binden."""
     fake.route("GET", r"/distribution/.+/json", Response(body={"Descriptor": {"digest": DIGEST}}))
     client.distribution("latest")
@@ -88,7 +88,7 @@ def test_negotiation_takes_the_lower_of_server_and_helper(server, minimum, expec
 @pytest.mark.parametrize(("server", "minimum", "code"), [
     ("1.40", "1.12", policy.API_TOO_OLD),   # Engine zu alt
     ("1.24", "1.12", policy.API_TOO_OLD),
-    ("1.43", "1.44", policy.API_TOO_OLD),   # MinAPIVersion ueber der eigenen Version
+    ("1.43", "1.44", policy.API_TOO_OLD),   # MinAPIVersion über der eigenen Version
     ("1.60", "1.55", policy.ENGINE_UNSUPPORTED),  # Engine kennt die Versionen des Helfers nicht mehr
 ])
 def test_negotiation_refuses_versions_out_of_range(server, minimum, code):
@@ -153,7 +153,7 @@ def test_nothing_goes_out_before_the_first_negotiation(fake):
     Response(body=b"OK", content_type="text/plain", delay=0.0, drop=True),
 ])
 def test_failed_renegotiation_is_an_engine_error_and_the_old_version_stays(fake, client, failure):
-    # Der Docker-Dienst startet kurz neu: die erneute Aushandlung scheitert am Transport. Danach muessen Aufrufe
+    # Der Docker-Dienst startet kurz neu: die erneute Aushandlung scheitert am Transport. Danach müssen Aufrufe
     # `EngineError` (nicht `NotAllowed`) werfen bzw. mit der bisherigen Version weiterlaufen.
     assert client.api_version == (1, 54)
     fake.route("GET", "/_ping", failure)
@@ -242,7 +242,7 @@ def test_regular_file_instead_of_socket_is_unreachable(tmp_path):
 def test_socket_without_permission_is_unreachable(fake):
     os.chmod(fake.path, 0o600)
     os.chmod(os.path.dirname(fake.path), 0o700)
-    # Ein anderer Nutzer kaeme nicht heran; als Besitzer simulieren wir es ueber einen nicht lesbaren Ordner.
+    # Ein anderer Nutzer käme nicht heran; als Besitzer simulieren wir es über einen nicht lesbaren Ordner.
     os.chmod(os.path.dirname(fake.path), 0o000)
     try:
         with pytest.raises(E.EngineError) as exc:
@@ -370,7 +370,7 @@ def test_not_found_and_conflict(fake, client):
     with pytest.raises(E.EngineError) as exc:
         client.rename_container(CID, NAME + "-previous", binding=bound(fake, client, journal_at("renamed")))
     assert exc.value.status == 409 and not exc.value.not_found
-    assert "\x1b" not in exc.value.message and "\\x1b" in exc.value.message  # ANSI escaped, nur fuers Log
+    assert "\x1b" not in exc.value.message and "\\x1b" in exc.value.message  # ANSI escaped, nur fürs Log
 
 
 def test_error_message_is_sanitized_and_truncated(fake, client):
@@ -497,7 +497,7 @@ def test_pull_error_before_the_stream(fake, client):
     [b'{"status": "a"}\r\n{"status": '],          # abgeschnitten
     [b'{"status": "a"}\r\nnot json\r\n'],         # kaputte Zeile
     [b'["list"]\r\n'],                            # kein Objekt
-    [b'{"a": 1, "a": 2}\r\n'],                    # doppelter Schluessel
+    [b'{"a": 1, "a": 2}\r\n'],                    # doppelter Schlüssel
 ])
 def test_pull_broken_stream(fake, client, chunks):
     fake.route("POST", "/images/create", Response(chunks=chunks))
@@ -548,7 +548,7 @@ def test_every_endpoint_of_the_table_reaches_the_engine_as_expected(fake, client
     client.inspect_network(NID)
     client.distribution("latest")
     client.distribution("0.7")
-    # Die aendernden Aufrufe in der Reihenfolge eines Updates, jeder mit der Bindung an den Schritt, in dem er laeuft.
+    # Die ändernden Aufrufe in der Reihenfolge eines Updates, jeder mit der Bindung an den Schritt, in dem er läuft.
     client.pull(DIGEST, binding=bound(fake, client, journal_at("begin"), pull_digest=DIGEST))
     client.tag_image(IMAGE_ID, E.PREVIOUS_REPOSITORY, "0.7.0", binding=bound(fake, client, journal_at("protected")))
     client.rename_container(CID, NAME + "-previous", binding=bound(fake, client, journal_at("renamed")))
@@ -560,7 +560,7 @@ def test_every_endpoint_of_the_table_reaches_the_engine_as_expected(fake, client
     client.set_restart_policy(CID, "no", binding=old_stopped)
     client.stop_container(CID, 30, binding=old_stopped)
     client.start_container(NEW, binding=bound(fake, client, journal_at("started")))
-    # Rueckbau: vor dem Commit nur der neue Container, und das Schutz-Tag dieses Vorgangs.
+    # Rückbau: vor dem Commit nur der neue Container, und das Schutz-Tag dieses Vorgangs.
     undo = bound(fake, client, journal_at("started"), undo=True)
     client.remove_container(NEW, binding=undo)
     client.remove_protect_tag("0.7.0", binding=undo)
@@ -614,7 +614,7 @@ def test_container_and_network_ids_are_checked(fake, client, bad):
                  lambda ref: client.remove_container(ref, binding=binding)):
         with pytest.raises(E.NotAllowed) as exc:
             call(bad)
-        assert type(exc.value) is E.NotAllowed  # die Form faellt durch, nicht erst die Bindung
+        assert type(exc.value) is E.NotAllowed  # die Form fällt durch, nicht erst die Bindung
     assert len(fake.requests) == 2
 
 
@@ -661,7 +661,7 @@ def test_repository_comes_from_the_constructor_only(fake):
     ("set_restart_policy", (CID, "no", True)),
 ])
 def test_query_rules(fake, client, call, args):
-    # Die Form wird vor der Bindung geprueft: auch mit einer Bindung, die vieles erlaubt, bleibt es die Form.
+    # Die Form wird vor der Bindung geprüft: auch mit einer Bindung, die vieles erlaubt, bleibt es die Form.
     binding = client.bind(journal_at("creating"), OWN)
     with pytest.raises(E.NotAllowed) as exc:
         getattr(client, call)(*args, binding=binding)
@@ -725,7 +725,7 @@ def test_create_body_rules(fake, client, body):
 
 
 def _create_body(**changes):
-    """Ein Body, wie `clone.build` ihn liefert (so klein wie moeglich); `changes` ersetzen oder (`_DEL`) entfernen."""
+    """Ein Body, wie `clone.build` ihn liefert (so klein wie möglich); `changes` ersetzen oder (`_DEL`) entfernen."""
     body = {"Image": policy.REPOSITORY + ":latest", "Cmd": ["serve"], "Env": ["A=1"], "Labels": {"x": "y"},
             "HostConfig": {"Binds": ["data:/app/data"], "RestartPolicy": {"Name": "no", "MaximumRetryCount": 0}},
             "NetworkingConfig": {"EndpointsConfig": {"net": {"Aliases": ["deck"]}}}}
@@ -750,8 +750,8 @@ def test_the_create_body_of_the_clone_passes(fake, client):
 
 
 @pytest.mark.parametrize("body", [
-    # andere Schreibweisen: der Docker-Dienst ordnet JSON-Schluessel ohne Beachtung der Gross-/Kleinschreibung zu,
-    # bei Doppelten gewinnt der letzte (`policy.dumps` sortiert Grossbuchstaben vor Kleinbuchstaben)
+    # andere Schreibweisen: der Docker-Dienst ordnet JSON-Schlüssel ohne Beachtung der Groß-/Kleinschreibung zu,
+    # bei Doppelten gewinnt der letzte (`policy.dumps` sortiert Großbuchstaben vor Kleinbuchstaben)
     _create_body(entrypoint=["/bin/sh", "-c", "id"]),
     _create_body(ENTRYPOINT=["/bin/sh"]),
     _create_body(EntryPoint=[]),
@@ -765,7 +765,7 @@ def test_the_create_body_of_the_clone_passes(fake, client):
     _create_body(networkingconfig={"EndpointsConfig": {}}),
     _create_body(NetworkingConfig={"endpointsconfig": {}}),
     _create_body(Healthcheck={"Test": ["CMD", "x"], "test": ["NONE"]}),
-    # Schluessel, die `clone.build` nie sendet
+    # Schlüssel, die `clone.build` nie sendet
     _create_body(AutoRemove=False),
     _create_body(Entrypoint=None),
     _create_body(MacAddress="02:42:ac:11:00:02"),

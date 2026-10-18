@@ -671,6 +671,26 @@ async def test_proxmox_discovery_creates_node_and_vm_hosts_with_tags(client, db_
 
 
 @pytest.mark.asyncio
+async def test_discovery_reports_the_node_and_whether_a_guest_is_switched_off(client, db_session, test_settings, mock_proxmox):
+    """Gäste kennen ihren Knoten („LXC auf pve1“) und ob sie aus sind: Ein gestoppter Gast ist ausgeschaltet, nicht
+    gestört, und eine pausierte VM meldet `status: running` mit `qmpstatus: paused`."""
+    base_url, state = mock_proxmox
+    state["containers"]["201"]["status"] = "stopped"
+    state["vms"]["100"]["qmpstatus"] = "paused"
+    token = await _setup_proxmox(client, db_session, test_settings, base_url)
+
+    await _run_discovery()
+
+    listed = (await client.get("/api/v1/hosts", headers=_auth_header(token))).json()
+    rows = {h["kind"]: h for h in listed if h["provider_ext_id"] == "proxmox"}
+    assert rows["lxc"]["category"] == "lxc" and rows["lxc"]["parent_label"] == "pve1"
+    assert rows["lxc"]["power_state"] == "stopped" and rows["lxc"]["status"] == "down"
+    assert rows["vm"]["category"] == "vm" and rows["vm"]["power_state"] == "paused"
+    assert rows["hypervisor"]["category"] == "server"
+    assert rows["hypervisor"]["parent_label"] is None and rows["hypervisor"]["power_state"] is None
+
+
+@pytest.mark.asyncio
 async def test_proxmox_discovers_and_dispatches_actions_across_two_simultaneous_connections(
     client, db_session, test_settings, mock_proxmox
 ):
@@ -751,6 +771,35 @@ def _dead_url() -> str:
 
 
 @pytest.mark.asyncio
+async def test_discovery_marks_a_guest_deleted_in_proxmox_and_clears_the_mark_when_it_returns(
+    client, db_session, test_settings, mock_proxmox
+):
+    """Ein in Proxmox gelöschter Gast (z. B. eine längst abgebaute VM) bleibt nicht stumm in der Liste stehen: Er bekommt
+    `gone_since`, die Oberfläche bietet „Entfernen“ an. Taucht er wieder auf, verschwindet die Markierung."""
+    base_url, state = mock_proxmox
+    token = await _setup_proxmox(client, db_session, test_settings, base_url)
+    await _run_discovery()
+    lxc = state["containers"].pop("201")
+
+    await _run_discovery()
+    listed = (await client.get("/api/v1/hosts", headers=_auth_header(token))).json()
+    by_ref = {h["provider_ref"]: h for h in listed}
+    assert by_ref["primary/lxc/pve1/201"]["gone_since"] is not None
+    assert by_ref["primary/qemu/pve1/100"]["gone_since"] is None
+    assert by_ref["primary/node/pve1"]["gone_since"] is None
+    first_mark = by_ref["primary/lxc/pve1/201"]["gone_since"]
+
+    await _run_discovery()  # die Markierung bleibt beim ersten Zeitpunkt
+    listed = (await client.get("/api/v1/hosts", headers=_auth_header(token))).json()
+    assert {h["provider_ref"]: h for h in listed}["primary/lxc/pve1/201"]["gone_since"] == first_mark
+
+    state["containers"]["201"] = lxc
+    await _run_discovery()
+    listed = (await client.get("/api/v1/hosts", headers=_auth_header(token))).json()
+    assert {h["provider_ref"]: h for h in listed}["primary/lxc/pve1/201"]["gone_since"] is None
+
+
+@pytest.mark.asyncio
 async def test_discovery_keeps_going_when_one_connection_or_one_node_is_unreachable(
     client, db_session, test_settings, mock_proxmox
 ):
@@ -784,6 +833,8 @@ async def test_discovery_keeps_going_when_one_connection_or_one_node_is_unreacha
     assert hosts["pve2/qemu/pve1/100"].status == "up"
     await db_session.refresh(known_mini)
     assert (known_mini.status, known_mini.display_name) == ("up", "Teleport")
+    # Nicht erreichbar heißt nicht gelöscht: keine Markierung „nicht mehr vorhanden“.
+    assert "gone_since" not in known_mini.host_metadata
 
     # Auch die Statusauffrischung nach einer Aktion darf an pve1 nicht scheitern.
     vm = hosts["pve2/qemu/pve1/100"]

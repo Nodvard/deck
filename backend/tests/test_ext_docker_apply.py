@@ -383,7 +383,9 @@ def test_config_check(stdout, stderr, code, kind):
 
 def test_missing_variables_are_listed_and_config_errors_show_the_first_line():
     why = ia.check_config("", 'WARN The "DB_PASS" variable is not set.\nWARN The "TAG" variable is not set.', 0, target()).why
-    assert "(DB_PASS, TAG)" in why and "von Hand" in why
+    assert "2 Variablen ohne Wert" in why and "von Hand" in why and "DB_PASS" not in why
+    current = 'time="2026-10-17T07:00:00Z" level=warning msg="The \\"TAG\\" variable is not set. Defaulting to a blank string."'
+    assert "eine Variable ohne Wert" in ia.check_config("", current, 0, target()).why
     assert ia.check_config("", "WARN irgendwas\nFehler eins\nFehler zwei", 1, target()).why.endswith(": Fehler eins")
 
 
@@ -912,7 +914,7 @@ async def test_the_own_container_and_stale_or_missing_checks_block_the_plan(tmp_
         (lambda d: d.files.update({"/opt/nextcloud/docker-compose.yml": "missing"}), "files", "fehlt auf dem Host"),
         (lambda d: d.files.update({"/opt/nextcloud/docker-compose.yml": "noread"}), "files", "nicht lesbar"),
         (lambda d: setattr(d, "env_noread", True), "files", ".env-Datei"),
-        (lambda d: setattr(d, "config_stderr", 'WARN The "DB_PASS" variable is not set.'), "env_missing", "DB_PASS"),
+        (lambda d: setattr(d, "config_stderr", 'WARN The "DB_PASS" variable is not set.'), "env_missing", "ohne Wert"),
         (lambda d: setattr(d, "config_stdout", json.dumps({"services": {"app": {"image": "nextcloud:31"}}})), "image_mismatch", "anderes Image"),
         (lambda d: setattr(d, "config_stdout", json.dumps({"services": {"other": {"image": "x"}}})), "service_missing", "steht nicht"),
         (lambda d: (setattr(d, "config_rc", 1), setattr(d, "config_stdout", ""), setattr(d, "config_stderr", "yaml: line 3: mapping values")), "config", "yaml: line 3"),
@@ -950,13 +952,34 @@ async def test_warnings_for_replicas_stopped_members_drift_and_databases(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_a_stack_change_that_starts_during_the_plan_blocks_the_apply(tmp_path, fast):
+    docker, service, applier, ctx, plan = await flow(tmp_path)
+    real_plan = applier.plan
+
+    async def plan_then_busy(host, container):
+        result = await real_plan(host, container)
+        applier.stack_busy = lambda host_id, project: "Update"
+        return result
+
+    applier.plan = plan_then_busy
+    result = await applier.apply(request_for(plan))
+    assert result.success is False and result.error.endswith("läuft gerade schon etwas (Update). Versuch es danach noch einmal.")
+    no_launch(docker)
+
+
+@pytest.mark.asyncio
 async def test_a_running_update_of_the_same_project_blocks_the_plan_and_ssh_errors_come_out(tmp_path):
     docker = FakeApplyDocker()
     service, applier, ctx = await checked(tmp_path, docker)
     applier._busy["h1:nextcloud"] = "nextcloud-db"
     busy = await applier.plan(ctx.host, "nextcloud-app")
     assert busy.kind == "busy" and "schon ein Update" in busy.why
+    assert applier.project_busy("h1", "nextcloud") == "Image-Update eines Containers" and applier.project_busy("h1", "shop") is None
     applier._busy.clear()
+    applier.stack_busy = lambda host_id, project: "Update" if project == "nextcloud" else None
+    stack = await applier.plan(ctx.host, "nextcloud-app")
+    assert stack.kind == "busy" and stack.why == "Am Stack „nextcloud“ läuft gerade schon etwas (Update). Versuch es danach noch einmal."
+    applier.stack_busy = None
     docker.down = OSError("Connection refused")
     with pytest.raises(OSError):
         await applier.plan(ctx.host, "nextcloud-app")
@@ -1176,6 +1199,17 @@ async def test_a_pull_error_line_stays_in_the_action_output_but_not_in_log_summa
 
 
 @pytest.mark.asyncio
+async def test_a_broken_env_file_is_never_quoted(tmp_path, fast):
+    docker, service, applier, ctx, plan = await flow(tmp_path)
+    secret = "Geh31m-Wert-42"
+    docker.polls = [f'@@rc=10\n@@step=pull\n@@tail\nfailed to read /opt/nextcloud/.env: line 2: unterminated quoted value "{secret}\nNOCH=1\n']
+    result = await applier.apply(request_for(plan))
+    assert result.success is False and "nicht geschlossen" in result.output
+    assert secret not in (result.error or "") + (result.output or "")
+    assert_no_host_text(ctx, applier, secret)
+
+
+@pytest.mark.asyncio
 async def test_a_start_error_line_stays_in_the_action_output_but_not_in_log_summary_or_push(tmp_path, fast):
     docker, service, applier, ctx, plan = await flow(tmp_path)
     secret = "mkdir: cannot create directory '/home/x/.local': Permission denied"
@@ -1319,7 +1353,7 @@ async def test_the_executor_rebuilds_the_command_and_ignores_what_the_payload_wo
         (lambda d: d.files.update({"/opt/nextcloud/docker-compose.yml": "noread"}), "nicht lesbar"),
         (lambda d: setattr(d, "env_noread", True), ".env-Datei"),
         (lambda d: setattr(d, "config_stdout", json.dumps({"services": {"app": {"image": "nextcloud:31"}}})), "anderes Image"),
-        (lambda d: setattr(d, "config_stderr", 'WARN The "TAG" variable is not set.'), "TAG"),
+        (lambda d: setattr(d, "config_stderr", 'WARN The "TAG" variable is not set.'), "ohne Wert"),
     ],
 )
 async def test_what_is_wrong_on_the_host_is_named_and_nothing_starts(tmp_path, fast, mutate, fragment):

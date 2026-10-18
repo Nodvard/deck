@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { minMax } from "../../lib/minMax";
 import { resolvePath } from "../template";
 import type { ChartView as ChartViewSpec, Tone } from "../types";
 
@@ -15,6 +16,28 @@ const WIDTH = 480;
 const HEIGHT = 160;
 const PADDING = 8;
 
+type Point = [number, number];
+
+function numberAt(row: unknown, field: string): number {
+  return Number(resolvePath(row, field) ?? 0);
+}
+
+/** Zerlegt die Punkte an ungültigen Werten (`null`) in zusammenhängende Abschnitte, damit dort eine Lücke bleibt. */
+function segments(points: (Point | null)[]): Point[][] {
+  const out: Point[][] = [];
+  let current: Point[] = [];
+  for (const point of points) {
+    if (point) {
+      current.push(point);
+    } else if (current.length) {
+      out.push(current);
+      current = [];
+    }
+  }
+  if (current.length) out.push(current);
+  return out;
+}
+
 /**
  * Winziges handgerolltes SVG für line/bar/area statt eines Chart-Pakets, um keine neue Abhängigkeit einzuführen.
  * Y-Achsen-Beschriftung (min/max) und ein Hover-Tooltip (senkrechte Linie, Werte aller Serien am nächsten Index) machen
@@ -27,25 +50,23 @@ export function ChartView({ view, data }: { view: ChartViewSpec; data: unknown }
     return <p className="text-sm opacity-60">Keine Daten</p>;
   }
 
-  const allValues = view.series.flatMap((series) => rows.map((row) => Number(resolvePath(row, series.field) ?? 0)));
-  const min = Math.min(0, ...allValues);
-  const max = view.y_max ?? Math.max(1, ...allValues);
+  const range = minMax(view.series.flatMap((series) => rows.map((row) => numberAt(row, series.field))));
+  const min = Math.min(0, range?.min ?? 0);
+  const max = view.y_max ?? Math.max(1, range?.max ?? 1);
   const xStep = rows.length > 1 ? (WIDTH - 2 * PADDING) / (rows.length - 1) : 0;
 
-  function pointsFor(field: string): [number, number][] {
+  function pointsFor(field: string): (Point | null)[] {
     return rows.map((row, idx) => {
-      const raw = Number(resolvePath(row, field) ?? 0);
+      const raw = numberAt(row, field);
+      if (!Number.isFinite(raw)) return null;
       const x = PADDING + idx * xStep;
       const y = HEIGHT - PADDING - ((raw - min) / (max - min || 1)) * (HEIGHT - 2 * PADDING);
       return [x, y];
     });
   }
 
-  function rawValueAt(field: string, idx: number): number {
-    return Number(resolvePath(rows[idx], field) ?? 0);
-  }
-
   function formatValue(n: number): string {
+    if (!Number.isFinite(n)) return "–";
     return Number.isInteger(n) ? String(n) : n.toFixed(1);
   }
 
@@ -62,15 +83,22 @@ export function ChartView({ view, data }: { view: ChartViewSpec; data: unknown }
               const barWidth = xStep > 0 ? Math.max(2, xStep * 0.6) : 8;
               return (
                 <g key={series.field}>
-                  {points.map(([x, y], idx) => (
-                    <rect key={idx} x={x - barWidth / 2} y={y} width={barWidth} height={HEIGHT - PADDING - y} fill={stroke} opacity={0.8} />
-                  ))}
+                  {points.map(
+                    (point, idx) =>
+                      point && (
+                        <rect key={idx} x={point[0] - barWidth / 2} y={point[1]} width={barWidth} height={HEIGHT - PADDING - point[1]} fill={stroke} opacity={0.8} />
+                      ),
+                  )}
                 </g>
               );
             }
-            const path = points.map(([x, y], idx) => `${idx === 0 ? "M" : "L"}${x},${y}`).join(" ");
+            const parts = segments(points);
+            const lines = parts.map((part) => part.map(([x, y], idx) => `${idx === 0 ? "M" : "L"}${x},${y}`).join(" "));
+            const path = lines.join(" ");
             if (view.chart === "area") {
-              const areaPath = `${path} L${points[points.length - 1][0]},${HEIGHT - PADDING} L${points[0][0]},${HEIGHT - PADDING} Z`;
+              const areaPath = parts
+                .map((part, i) => `${lines[i]} L${part[part.length - 1][0]},${HEIGHT - PADDING} L${part[0][0]},${HEIGHT - PADDING} Z`)
+                .join(" ");
               return (
                 <g key={series.field}>
                   <path d={areaPath} fill={stroke} opacity={0.2} />
@@ -116,7 +144,7 @@ export function ChartView({ view, data }: { view: ChartViewSpec; data: unknown }
           >
             {view.series.map((series) => (
               <div key={series.field} className="whitespace-nowrap">
-                <span style={{ color: TONE_STROKE[series.tone] }}>{series.label}</span>: {formatValue(rawValueAt(series.field, hoverIdx))}
+                <span style={{ color: TONE_STROKE[series.tone] }}>{series.label}</span>: {formatValue(numberAt(rows[hoverIdx], series.field))}
               </div>
             ))}
           </div>

@@ -1,20 +1,20 @@
 """Politik des Update-Helfers: reine Funktionen, keine Ein-/Ausgabe.
 
-Hier steht alles, was der Helfer *entscheidet*, bevor er etwas veraendert:
+Hier steht alles, was der Helfer *entscheidet*, bevor er etwas verändert:
 
 * **Feste Codes** (`CODES`): jede Ablehnung und jeder Grund im Status ist einer davon, nie Freitext
   (`^[a-z_]{1,40}$`). Abgelehnt wird mit `Refusal(code)`.
 * **Image-Referenz und Tag:** nur `ghcr.io/nodvard/deck` mit beweglichem Tag (`latest`, `X.Y`, ohne Tag
-  = `latest`). `X.Y.Z` oder `@sha256:` -> `pinned_version` ("dort aendern"), alles andere -> `foreign_image`.
-* **Versionen:** `X.Y.Z` nur aus ASCII-Ziffern, ohne fuehrende Nullen, je Teil hoechstens 9 Stellen,
-  ohne Vorabversion. So gibt es fuer jede Version genau eine Schreibweise, und `"0.6.\\u0661"` (arabische
+  = `latest`). `X.Y.Z` oder `@sha256:` -> `pinned_version` ("dort ändern"), alles andere -> `foreign_image`.
+* **Versionen:** `X.Y.Z` nur aus ASCII-Ziffern, ohne führende Nullen, je Teil höchstens 9 Stellen,
+  ohne Vorabversion. So gibt es für jede Version genau eine Schreibweise, und `"0.6.\\u0661"` (arabische
   Ziffer) ist keine.
-* **Anforderung:** genau die fuenf Schluessel, doppelte Schluessel abgelehnt, `v == 1`, `id` als UUID4,
+* **Anforderung:** genau die fünf Schlüssel, doppelte Schlüssel abgelehnt, `v == 1`, `id` als UUID4,
   Zeitfenster 600 s alt / 60 s Zukunft. Jede Ausnahme beim Lesen (auch `RecursionError`) betrifft nur diese
   eine Anforderung.
 * **Grenzen:** eine angenommene Aktion je 10 min, 24 h kein Update auf eine Version, von der aus
-  zurueckgegangen wurde, verarbeitete IDs 1 h gesperrt, Mindestversion `MIN_VERSION`.
-* **Rueckweg-Slot:** genau ein Slot, nur fuer genau den installierten Container und genau die Version
+  zurückgegangen wurde, verarbeitete IDs 1 h gesperrt, Mindestversion `MIN_VERSION`.
+* **Rückweg-Slot:** genau ein Slot, nur für genau den installierten Container und genau die Version
   davor, 7 Tage, einmal benutzbar, nie verkettet.
 
 Die Funktionen bekommen die Uhrzeit (`now`) immer als Parameter; nichts hier liest Uhr, Umgebung oder Dateien.
@@ -228,7 +228,7 @@ def is_container_id(value: object) -> bool:
 
 
 def is_digest(value: object) -> bool:
-    """`sha256:<64 hex>` -- gilt fuer Digests und Image-IDs."""
+    """`sha256:<64 hex>` -- gilt für Digests und Image-IDs."""
     return isinstance(value, str) and DIGEST_RE.fullmatch(value) is not None
 
 
@@ -248,7 +248,7 @@ RESULT_KEYS = ("id", "action", "from", "to", "outcome", "code", "finished_at")
 
 
 def is_result(entry: object) -> bool:
-    """Ein gueltiger Eintrag fuer `status.results`: genau die sieben Schluessel, nur feste Werte (dieselben Regeln wie
+    """Ein gültiger Eintrag für `status.results`: genau die sieben Schlüssel, nur feste Werte (dieselben Regeln wie
     `channel.validate_status`)."""
     if not isinstance(entry, dict) or set(entry) != set(RESULT_KEYS):
         return False
@@ -266,7 +266,7 @@ def is_result(entry: object) -> bool:
 
 
 def parse_version(text: object) -> tuple[int, int, int] | None:
-    """`(X, Y, Z)` oder `None`, wenn `text` keine Version im Sinne dieses Moduls ist (auch fuer Nicht-Texte)."""
+    """`(X, Y, Z)` oder `None`, wenn `text` keine Version im Sinne dieses Moduls ist (auch für Nicht-Texte)."""
     if not isinstance(text, str) or len(text) > _MAX_VERSION_LENGTH:
         return None
     match = VERSION_RE.fullmatch(text)
@@ -280,7 +280,7 @@ def is_version(text: object) -> bool:
 
 
 def is_newer(candidate: object, current: object) -> bool:
-    """`candidate` ist groesser als `current`. Ist eins von beiden keine Version: nie neuer."""
+    """`candidate` ist größer als `current`. Ist eins von beiden keine Version: nie neuer."""
     a, b = parse_version(candidate), parse_version(current)
     return a is not None and b is not None and a > b
 
@@ -313,7 +313,7 @@ def check_newer(requested: str, current: str) -> None:
 
 def check_label(label_version: str, requested: str) -> None:
     """Nach dem Pull: das Label im gezogenen Image ist **genau** die angeforderte Version. Sonst zeigt das
-    bewegliche Tag auf etwas anderes (umgehaengt, Backport, zu frueh gefragt) -> `tag_not_on_version`."""
+    bewegliche Tag auf etwas anderes (umgehängt, Backport, zu früh gefragt) -> `tag_not_on_version`."""
     if not is_version(label_version) or label_version != requested:
         raise Refusal(TAG_NOT_ON_VERSION)
 
@@ -329,7 +329,7 @@ def floating_tag(image: object, *, repository: str = REPOSITORY) -> str:
     * genau `repository` ohne Tag -> `latest`
     * `repository:latest` / `repository:X.Y` -> das Tag
     * `repository:X.Y.Z`, `repository@sha256:...`, `repository:<tag>@sha256:...` -> `pinned_version`
-    * alles andere (anderes Repository, Grossschreibung, `ghcr.io:443/...`, `docker.io/...`, `deck-evil`,
+    * alles andere (anderes Repository, Großschreibung, `ghcr.io:443/...`, `docker.io/...`, `deck-evil`,
       `deck/sub`, Vorabversion, Leerzeichen, Steuerzeichen, Nicht-Text) -> `foreign_image`
 
     Der Text wird nie normalisiert (kein `strip`, kein `lower`): was nicht exakt passt, ist fremd (fail-closed).
@@ -358,7 +358,7 @@ def floating_tag(image: object, *, repository: str = REPOSITORY) -> str:
 
 
 def tag_fits_version(tag: str, version: str) -> bool:
-    """Kann das bewegliche Tag ueberhaupt auf `version` zeigen? `latest` immer, `X.Y` nur bei `X.Y.*`."""
+    """Kann das bewegliche Tag überhaupt auf `version` zeigen? `latest` immer, `X.Y` nur bei `X.Y.*`."""
     parsed = parse_version(version)
     if parsed is None:
         return False
@@ -375,8 +375,8 @@ def check_tag_fits(tag: str, version: str) -> None:
 
 
 def registry_digests(repo_digests: object, *, repository: str = REPOSITORY) -> list[str]:
-    """Die Eintraege `repository@sha256:<hex>` aus `RepoDigests` eines Images (sortiert, ohne Doppelte).
-    Andere Repositories und kaputte Eintraege fallen weg."""
+    """Die Einträge `repository@sha256:<hex>` aus `RepoDigests` eines Images (sortiert, ohne Doppelte).
+    Andere Repositories und kaputte Einträge fallen weg."""
     if not isinstance(repo_digests, list):
         return []
     prefix = repository + "@"
@@ -388,26 +388,26 @@ def registry_digests(repo_digests: object, *, repository: str = REPOSITORY) -> l
 
 
 def require_registry_digest(repo_digests: object, *, repository: str = REPOSITORY) -> list[str]:
-    """Die Engine nennt fuer das laufende Image einen Digest im Repository: mindestens ein `RepoDigests`-Eintrag
-    `repository@sha256:...`, sonst `not_from_registry`. Den braucht der Rueckweg-Slot (`Slot.repo_digest`).
+    """Die Engine nennt für das laufende Image einen Digest im Repository: mindestens ein `RepoDigests`-Eintrag
+    `repository@sha256:...`, sonst `not_from_registry`. Den braucht der Rückweg-Slot (`Slot.repo_digest`).
 
-    Ob das Image damit aus der Registry stammt, haengt vom Image-Store des Docker-Dienstes ab:
+    Ob das Image damit aus der Registry stammt, hängt vom Image-Store des Docker-Dienstes ab:
 
     * **Alter Store** (Graphdriver, etwa overlay2): `RepoDigests` schreibt nur ein Pull (oder Push). Ein selbst gebautes
       und nur als `repository` getaggtes Image hat keinen Eintrag -> `not_from_registry`.
     * **containerd-Store** (Standard einer neuen Installation ab Docker 29): `RepoDigests` wird aus den Namen des Images
       abgeleitet, je Name `<repository>@<Digest des Images>`. Auch ein selbst gebautes oder aus einem anderen Repository
-      umgetaggtes Image hat dann einen Eintrag, nur kennt die Registry diesen Digest nicht. Das erkennt die Pruefung
-      **nicht**: Unterscheiden koennte es die Registry, die wertet die Vorpruefung aber nicht aus (sie fragt sie
+      umgetaggtes Image hat dann einen Eintrag, nur kennt die Registry diesen Digest nicht. Das erkennt die Prüfung
+      **nicht**: Unterscheiden könnte es die Registry, die wertet die Vorprüfung aber nicht aus (sie fragt sie
       nie).
-      `not_from_registry` heisst hier nur: das Image hat keinen Namen im Repository (mehr), etwa weil
+      `not_from_registry` heißt hier nur: das Image hat keinen Namen im Repository (mehr), etwa weil
       `docker compose pull` das bewegliche Tag schon auf ein neueres Image gelegt hat.
 
     Was beim containerd-Store daraus folgt, ist abgesichert: Ein Update zieht das offizielle Image nach dem Digest, den
-    die Registry fuer das bewegliche Tag nennt, prueft es wie immer und ersetzt das selbst gebaute. Der Rueckweg-Slot
-    traegt danach einen Digest, den nur dieser Rechner kennt. Solange das alte Image noch da ist (Schutz-Tag), braucht
-    der Rueckweg die Registry nicht; nach `docker image prune -a` scheitert das Ziehen nach diesem Digest
-    (`pull_failed`, nichts veraendert, der Slot bleibt)."""
+    die Registry für das bewegliche Tag nennt, prüft es wie immer und ersetzt das selbst gebaute. Der Rückweg-Slot
+    trägt danach einen Digest, den nur dieser Rechner kennt. Solange das alte Image noch da ist (Schutz-Tag), braucht
+    der Rückweg die Registry nicht; nach `docker image prune -a` scheitert das Ziehen nach diesem Digest
+    (`pull_failed`, nichts verändert, der Slot bleibt)."""
     found = registry_digests(repo_digests, repository=repository)
     if not found:
         raise Refusal(NOT_FROM_REGISTRY)
@@ -442,12 +442,12 @@ def _finite_float(text: str) -> float:
 
 
 def loads_strict(data: bytes, *, max_bytes: int) -> Any:
-    """JSON aus `data` (UTF-8, hoechstens `max_bytes`): doppelte Schluessel, `NaN`/`Infinity`/`-Infinity` und Zahlen,
-    die beim Lesen zu Unendlich ueberlaufen (`1e999`), werden abgelehnt. (Die Leser verlangen ohnehin Ganzzahlen;
+    """JSON aus `data` (UTF-8, höchstens `max_bytes`): doppelte Schlüssel, `NaN`/`Infinity`/`-Infinity` und Zahlen,
+    die beim Lesen zu Unendlich überlaufen (`1e999`), werden abgelehnt. (Die Leser verlangen ohnehin Ganzzahlen;
     der Parser selbst liefert aber nie `inf` oder `nan`.)
 
-    Wirft **nur** `ValueError` mit festem Text -- auch fuer `RecursionError` (tiefe Verschachtelung),
-    `MemoryError` und alles andere. Der Inhalt landet nie in der Meldung (ein `JSONDecodeError` traegt das
+    Wirft **nur** `ValueError` mit festem Text -- auch für `RecursionError` (tiefe Verschachtelung),
+    `MemoryError` und alles andere. Der Inhalt landet nie in der Meldung (ein `JSONDecodeError` trägt das
     ganze Dokument mit sich, darum `from None`).
     """
     if not isinstance(data, (bytes, bytearray)) or len(data) > max_bytes:
@@ -461,7 +461,7 @@ def loads_strict(data: bytes, *, max_bytes: int) -> Any:
 
 
 def dumps(obj: Any) -> bytes:
-    """Kompaktes, sortiertes ASCII-JSON (fuer Status und Zustand)."""
+    """Kompaktes, sortiertes ASCII-JSON (für Status und Zustand)."""
     return json.dumps(obj, ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("ascii")
 
 
@@ -474,7 +474,7 @@ REQUEST_KEYS = frozenset({"v", "id", "action", "version", "created_at"})
 
 @dataclass(frozen=True)
 class Request:
-    """Eine gepruefte Anforderung aus `requests/<id>.json`."""
+    """Eine geprüfte Anforderung aus `requests/<id>.json`."""
 
     v: int
     id: str
@@ -502,15 +502,15 @@ def _request_from(raw: bytes, file_id: str | None) -> Request:
 
 
 def parse_request(raw: object, *, now: float, file_id: str | None = None) -> Request:
-    """Prueft eine Anforderung streng und gibt sie zurueck, sonst `Refusal`.
+    """Prüft eine Anforderung streng und gibt sie zurück, sonst `Refusal`.
 
-    * `bad_request`: kein UTF-8-JSON-Objekt bis 4096 Byte, nicht genau die fuenf Schluessel, doppelter
-      Schluessel, falscher Typ (`true` ist keine Zahl, `1.0` auch nicht), `v != 1`, `id` keine UUID4 (oder nicht
-      gleich dem Dateinamen `file_id`), unbekannte `action`, ungueltige `version`, `created_at` mehr als 60 s in
+    * `bad_request`: kein UTF-8-JSON-Objekt bis 4096 Byte, nicht genau die fünf Schlüssel, doppelter
+      Schlüssel, falscher Typ (`true` ist keine Zahl, `1.0` auch nicht), `v != 1`, `id` keine UUID4 (oder nicht
+      gleich dem Dateinamen `file_id`), unbekannte `action`, ungültige `version`, `created_at` mehr als 60 s in
       der Zukunft -- und **jede** andere Ausnahme beim Lesen (auch `RecursionError`).
     * `expired`: `created_at` mehr als 600 s alt.
 
-    Die Ausnahme gilt nur fuer diese eine Anforderung; der Aufrufer macht mit der naechsten weiter.
+    Die Ausnahme gilt nur für diese eine Anforderung; der Aufrufer macht mit der nächsten weiter.
     """
     try:
         request = _request_from(raw, file_id)  # type: ignore[arg-type]
@@ -545,11 +545,11 @@ def check_limits(
     1. `replay`: die ID wurde in der letzten Stunde schon verarbeitet.
     2. `state_unsafe`: der Zustand war kaputt und ist noch gesperrt (`hold_until`, siehe `state.py`).
     3. `rate_limited`: in den letzten 10 Minuten wurde schon eine Aktion angenommen.
-    4. `blocked_version`: Update auf eine Version, von der aus in den letzten 24 h zurueckgegangen wurde.
+    4. `blocked_version`: Update auf eine Version, von der aus in den letzten 24 h zurückgegangen wurde.
 
-    Zeitstempel in der Zukunft (Uhr zurueckgesprungen) zaehlen als "gerade eben" -- also sperrend. Hier werden sie
-    nur so gewertet, nicht verkuerzt: `state.State.prune()` (von `StateStore.check` und `StateStore.load_state` aufgerufen)
-    kappt sie vorher auf die Hoechstfrist, damit ein Uhrsprung nicht fuer Jahre sperrt.
+    Zeitstempel in der Zukunft (Uhr zurückgesprungen) zählen als "gerade eben" -- also sperrend. Hier werden sie
+    nur so gewertet, nicht verkürzt: `state.State.prune()` (von `StateStore.check` und `StateStore.load_state` aufgerufen)
+    kappt sie vorher auf die Höchstfrist, damit ein Uhrsprung nicht für Jahre sperrt.
     """
     now_s = int(now)
     seen_at = seen.get(request.id)
@@ -564,7 +564,7 @@ def check_limits(
 
 
 # ---------------------------------------------------------------------------
-# Rueckweg-Slot
+# Rückweg-Slot
 # ---------------------------------------------------------------------------
 
 SLOT_KEYS = ("from_version", "image_id", "repo_digest", "installed_container_id", "installed_image_id", "until")
@@ -572,11 +572,11 @@ SLOT_KEYS = ("from_version", "image_id", "repo_digest", "installed_container_id"
 
 @dataclass(frozen=True)
 class Slot:
-    """Der eine Rueckweg nach einem gelungenen Update.
+    """Der eine Rückweg nach einem gelungenen Update.
 
     * `from_version`, `image_id`, `repo_digest`: die Version davor, ihr Image und dessen Digest im Repository, wie die
       Engine ihn vor dem Update nannte (zum erneuten Ziehen nach `image prune -a`). Beim containerd-Store kennt die
-      Registry ihn nicht, wenn das Image selbst gebaut war; dann geht der Rueckweg nur, solange es noch da ist (siehe
+      Registry ihn nicht, wenn das Image selbst gebaut war; dann geht der Rückweg nur, solange es noch da ist (siehe
       `require_registry_digest`).
     * `installed_container_id`, `installed_image_id`: der Container, den der Helfer dabei angelegt hat.
     * `until`: bis dahin gilt der Slot (7 Tage).
@@ -594,7 +594,7 @@ class Slot:
 
     @classmethod
     def from_json(cls, obj: object, *, repository: str = REPOSITORY) -> Slot:
-        """Streng: genau die sechs Schluessel mit gueltigen Werten, sonst `ValueError`."""
+        """Streng: genau die sechs Schlüssel mit gültigen Werten, sonst `ValueError`."""
         if not isinstance(obj, dict) or set(obj) != set(SLOT_KEYS):
             raise ValueError("slot: Schluessel")
         slot = cls(**obj)
@@ -624,7 +624,7 @@ def new_slot(
     now: float,
     repository: str = REPOSITORY,
 ) -> Slot:
-    """Slot nach dem Abschluss eines **Updates**. Ein Rueckweg legt nie einen an (nie verkettet,
+    """Slot nach dem Abschluss eines **Updates**. Ein Rückweg legt nie einen an (nie verkettet,
     siehe `state.State.commit_rollback`)."""
     slot = Slot(
         from_version=from_version,
@@ -646,12 +646,12 @@ def check_rollback(
     target_image_id: str,
     now: float,
 ) -> Slot:
-    """Darf diese Anforderung `rollback` den Slot benutzen? Gibt den Slot zurueck, sonst `Refusal`:
+    """Darf diese Anforderung `rollback` den Slot benutzen? Gibt den Slot zurück, sonst `Refusal`:
 
     * `no_previous`: kein Slot, abgelaufen, oder `until` unplausibel weit in der Zukunft.
     * `previous_mismatch`: das Ziel ist nicht **genau** der installierte Container mit dem installierten Image,
       oder die Anforderung nennt nicht genau `from_version`.
-    * `version_too_old`: der Vorgaenger liegt unter `MIN_VERSION`.
+    * `version_too_old`: der Vorgänger liegt unter `MIN_VERSION`.
     """
     if request.action != "rollback":
         raise ValueError("check_rollback nur fuer rollback")
@@ -674,7 +674,7 @@ def check_rollback(
 
 def service_name(value: object) -> str:
     """Name des Compose-Dienstes aus dem Wert von `NODVARD_DECK_UPDATER_SERVICE` (leer/fehlend = Vorgabe).
-    Ungueltig -> `ValueError` (der Helfer startet dann nicht)."""
+    Ungültig -> `ValueError` (der Helfer startet dann nicht)."""
     if value is None or value == "":
         return DEFAULT_SERVICE
     if not isinstance(value, str) or not SERVICE_RE.fullmatch(value):

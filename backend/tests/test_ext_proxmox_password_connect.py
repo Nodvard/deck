@@ -561,7 +561,7 @@ async def test_certificate_step_shows_the_fingerprint_without_sending_anything(c
     assert body["base_url"] == fake_pve["base_url"]
     assert body["certificate"]["sha256"] == fake_pve["fingerprint"]
     assert body["certificate"]["trusted"] is False
-    assert "pve1.example" in body["certificate"]["subject"]
+    assert "CN=pve1.example" in body["certificate"]["subject"].split(",")
     assert fake_pve["state"]["requests"] == []
 
 

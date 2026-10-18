@@ -1,10 +1,7 @@
 /**
- * Bestellliste oder Inventar als CSV einlesen -- ganz im Browser, nichts geht an fremde Dienste.
- *
- * Erkannt werden die Spalten am Kopf: der Bestellverlauf aus dem Datenexport von Amazon („Product Name“,
- * „Order Date“, „Unit Price“, „Quantity“, „ASIN“ …, ältere Exporte mit „Title“, „ASIN/ISBN“, „Purchase Price Per
- * Unit“), der CSV-Export dieses Inventars („Name“, „Kaufdatum“, „Preis (EUR)“ …) und ähnlich benannte Spalten
- * anderer Shops. Trennzeichen Semikolon, Komma oder Tabulator; Excel-Dateien in Windows-Zeichensatz gehen auch.
+ * Bestellliste oder Inventar als CSV einlesen, ganz im Browser (nichts geht an fremde Dienste). Die Spalten werden am
+ * Kopf erkannt: Amazon-Bestellverlauf, CSV-Export dieses Inventars und ähnlich benannte Spalten anderer Shops.
+ * Trennzeichen Semikolon, Komma oder Tabulator; Excel-Dateien in Windows-Zeichensatz gehen auch.
  */
 
 export interface ImportRow {

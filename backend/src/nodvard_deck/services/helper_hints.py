@@ -1,0 +1,244 @@
+"""Hinweis in der Übersicht, wenn auf einem Server die Hilfsskripte der Module fehlen oder veraltet sind.
+
+Nach einem Update bringt Nodvard Deck neue Hilfsskripte mit, auf den Server kommen sie aber erst mit dem
+Einrichtungsbefehl. Bis dahin laufen Shield und Server-Zustand dort über die volle sudo-Regel. Das soll man sehen, ohne
+„Verbindung prüfen“ zu drücken. Gemeldet wird nur, wenn die volle Regel (`NOPASSWD: ALL`) gesetzt ist und mindestens
+ein Skript nicht Byte für Byte das mitgelieferte ist; nie für root (braucht kein Skript) und nie für Windows.
+
+Der Stand je Server liegt in einem internen Merker (`KEY_STATE`). Ihn schreiben „Verbindung prüfen“ und der Kern-Job
+`helper-hints` (alle 6 Stunden ein lesender Befehl je Server, derselbe wie bei der Prüfung). Die Übersicht liest nur
+den Merker, also keine SSH-Abfrage beim Seitenaufruf. Wegklicken gilt je Server für genau die Skripte und Versionen, die
+gerade fehlen: Bringt ein Update neuere mit, erscheint der Hinweis wieder."""
+
+from __future__ import annotations
+
+import logging
+import re
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from ..core import ssh
+from ..db import utcnow
+from ..db.session import session_scope
+from ..ext.root_helpers import RootHelperFile
+from ..models import Host
+from . import hosts as hosts_service
+from . import settings as settings_service
+
+logger = logging.getLogger("nodvard_deck.helper_hints")
+
+JOB_KEY = "helper-hints"
+JOB_NAME = "Hilfsskripte auf den Servern prüfen"
+SCHEDULE = "41 */6 * * *"
+
+KEY_STATE = "hosts.helper_hints.state"
+"""Interner Merker (Host-ID -> {"stale": {ext_id: Version}, "checked_at": ISO, "dismissed": {ext_id: Version}}); nicht
+über die Einstellungs-API sichtbar."""
+
+COMMAND_TIMEOUT_S = 20.0
+
+_RUNAS_RE = re.compile(r"\(([^()]*)\)")
+_TAG_RE = re.compile(r"([A-Z_]+):")
+
+
+def _is_full_rule(line: str) -> bool:
+    """`(root) NOPASSWD: ALL`, `(ALL : ALL) NOPASSWD: ALL`, auch mit weiteren Angaben (`NOPASSWD: SETENV: ALL`,
+    `SETENV: NOPASSWD: ALL`). Zählt nur, wenn sie für root gilt und die Befehlsliste genau `ALL` ist."""
+    text = line.strip()
+    runas = _RUNAS_RE.match(text)
+    if runas is None or runas.group(1).split(":")[0].strip() not in ("root", "ALL"):
+        return False
+    rest = text[runas.end():].lstrip()
+    tags: list[str] = []
+    while (tag := _TAG_RE.match(rest)) is not None:
+        tags.append(tag.group(1))
+        rest = rest[tag.end():].lstrip()
+    return "NOPASSWD" in tags and rest == "ALL"
+
+
+def has_full_rule(sudo_lines: Sequence[str]) -> bool:
+    """Ob `sudo -n -l` die volle Regel ohne Passwort zeigt. Dieselbe Prüfung nutzen „Verbindung prüfen“ und der Job,
+    damit der Hinweis nicht zwischen beiden hin und her springt."""
+    return any(_is_full_rule(line) for line in sudo_lines)
+
+
+def stale_helpers(helpers: Sequence[RootHelperFile], seen: Mapping[str, Any]) -> dict[str, int]:
+    """Die Skripte, die nicht das mitgelieferte sind (fehlen, älter, verändert, unlesbar), als {ext_id: Version des
+    mitgelieferten}. `seen` kommt aus `host_check.parse_helper_check` (je Ort auf dem Server)."""
+    stale: dict[str, int] = {}
+    for helper in helpers:
+        item = seen.get(helper.install_path)
+        if item is None or not item.present or item.sha256 != helper.sha256:
+            stale[helper.ext_id] = helper.version
+    return stale
+
+
+def _entry(state: Mapping[str, Any], host_id: str) -> dict[str, Any] | None:
+    entry = state.get(host_id)
+    return dict(entry) if isinstance(entry, dict) else None
+
+
+async def record(session: AsyncSession, host_id: str, stale: Mapping[str, int] | None) -> None:
+    """Merkt das Ergebnis einer Prüfung. `None` oder leer: nichts zu melden (Merker weg, auch das Wegklicken)."""
+    state: dict[str, Any] = dict(await settings_service.get_global(session, KEY_STATE, {}) or {})
+    before = _entry(state, host_id)
+    if not stale:
+        if before is None:
+            return
+        state.pop(host_id, None)
+    else:
+        entry = before or {}
+        entry["stale"] = dict(stale)
+        entry["checked_at"] = utcnow().isoformat()
+        state[host_id] = entry
+    await settings_service.set_global(session, KEY_STATE, state)
+
+
+async def dismiss(session: AsyncSession, host_id: str) -> bool:
+    """Blendet den Hinweis für diesen Server aus, bis sich die fehlenden Skripte ändern. False: es gab keinen."""
+    state: dict[str, Any] = dict(await settings_service.get_global(session, KEY_STATE, {}) or {})
+    entry = _entry(state, host_id)
+    if entry is None or not entry.get("stale"):
+        return False
+    entry["dismissed"] = dict(entry["stale"])
+    state[host_id] = entry
+    await settings_service.set_global(session, KEY_STATE, state)
+    return True
+
+
+@dataclass(frozen=True)
+class Hint:
+    host_id: str
+    host_name: str
+    modules: list[str]
+    """Anzeigenamen der Module, deren Skript fehlt oder veraltet ist."""
+    checked_at: datetime
+
+
+async def current_hints(
+    session: AsyncSession, helpers_for: Callable[[Host], Sequence[RootHelperFile]]
+) -> list[Hint]:
+    """Die offenen Hinweise, nur aus dem Merker. Ein Modul, das inzwischen aus ist, zählt nicht mehr mit."""
+    state: dict[str, Any] = dict(await settings_service.get_global(session, KEY_STATE, {}) or {})
+    if not state:
+        return []
+    hosts = (
+        await session.execute(select(Host).where(Host.id.in_(list(state))).options(selectinload(Host.tags)))
+    ).scalars().all()
+    hints: list[Hint] = []
+    for host in sorted(hosts, key=lambda h: (h.display_name or h.name).lower()):
+        entry = _entry(state, host.id) or {}
+        stale = entry.get("stale") or {}
+        if not host.enabled or host.os_family != "linux" or not isinstance(stale, dict) or not stale:
+            continue
+        if entry.get("dismissed") == stale:
+            continue
+        names = [h.ext_name for h in helpers_for(host) if h.ext_id in stale]
+        if not names:
+            continue
+        try:
+            checked_at = datetime.fromisoformat(str(entry.get("checked_at")))
+        except ValueError:
+            checked_at = utcnow()
+        hints.append(Hint(host_id=host.id, host_name=host.display_name or host.name, modules=names, checked_at=checked_at))
+    return hints
+
+
+async def _check_host(
+    host_id: str, helpers_for: Callable[[Host], Sequence[RootHelperFile]]
+) -> str:
+    """Prüft einen Server (lesend, ein Befehl über die Verbindung aus dem Pool) und merkt das Ergebnis."""
+    from ..config import get_settings
+    from .host_check import helper_check_command, parse_helper_check, split_sudo_lines
+
+    settings = get_settings()
+    async with session_scope() as session:
+        host = (
+            await session.execute(select(Host).where(Host.id == host_id).options(selectinload(Host.tags)))
+        ).scalars().first()
+        if host is None:
+            return "gone"
+        credential = await hosts_service.default_credential(session, host.id)
+        helpers = list(helpers_for(host))
+        if (
+            not host.enabled or host.os_family != "linux" or credential is None
+            or not credential.kind.startswith("ssh") or credential.username == "root" or not helpers
+        ):
+            await record(session, host.id, None)
+            return "skipped"
+        target = await hosts_service.resolve_connection_target(session, settings, host, credential)
+        conn = await ssh.get_ssh_pool().get(
+            session, target, credential_id=credential.id, connect_timeout_s=settings.ssh_connect_timeout_s
+        )
+        _code, out, _err = await ssh.run(conn, helper_check_command(helpers), timeout_s=COMMAND_TIMEOUT_S)
+        stale = stale_helpers(helpers, parse_helper_check(out, helpers)) if has_full_rule(split_sudo_lines(out)) else {}
+        await record(session, host.id, stale)
+        return "hint" if stale else "ok"
+
+
+async def run_once(helpers_for: Callable[[Host], Sequence[RootHelperFile]] | None = None) -> dict[str, int]:
+    """Der Kern-Job: alle Linux-Server nacheinander. Ein nicht erreichbarer Server behält seinen letzten Stand."""
+    if helpers_for is None:
+        # Erst hier: Der Dienst soll beim Import nicht von der API-Schicht abhängen.
+        from ..api.v1.host_access import root_helpers_for as helpers_for
+    async with session_scope() as session:
+        ids = list((await session.execute(
+            select(Host.id).where(Host.enabled.is_(True), Host.os_family == "linux").order_by(Host.name)
+        )).scalars().all())
+        # Gelöschte, abgeschaltete und Nicht-Linux-Server fallen aus dem Merker (angezeigt würden sie ohnehin nicht).
+        state: dict[str, Any] = dict(await settings_service.get_global(session, KEY_STATE, {}) or {})
+        kept = {host_id: entry for host_id, entry in state.items() if host_id in ids}
+        if kept != state:
+            await settings_service.set_global(session, KEY_STATE, kept)
+    counts = {"checked": 0, "hint": 0, "ok": 0, "skipped": 0, "failed": 0}
+    for host_id in ids:
+        try:
+            outcome = await _check_host(host_id, helpers_for)
+        except Exception as exc:  # noqa: BLE001 - ein Server hält die anderen nicht auf, der Stand bleibt
+            counts["failed"] += 1
+            logger.info("helper_hints_check_failed host_id=%s error=%s", host_id, type(exc).__name__)
+            continue
+        counts["checked"] += 1
+        if outcome in counts:
+            counts[outcome] += 1
+    return counts
+
+
+async def _job_handler(**_: Any) -> dict[str, int]:
+    return await run_once()
+
+
+async def sync_job() -> None:
+    """Legt den Job an oder aktualisiert ihn und plant ihn ein."""
+    from ..core.scheduler import CORE_SCHEDULER_EXT_ID, get_scheduler_service
+    from ..ext.runtime import get_extension_runtime
+    from . import jobs as jobs_service
+
+    async with session_scope() as session:
+        job = await jobs_service.upsert_job(
+            session, ext_id=None, ext_job_key=JOB_KEY, name=JOB_NAME,
+            kind="core", schedule=SCHEDULE, params={}, enabled=True,
+        )
+    get_extension_runtime().scheduler.register(CORE_SCHEDULER_EXT_ID, JOB_KEY, _job_handler)
+    await get_scheduler_service().schedule(job, _job_handler)
+
+
+__all__ = [
+    "JOB_KEY",
+    "KEY_STATE",
+    "SCHEDULE",
+    "Hint",
+    "current_hints",
+    "dismiss",
+    "has_full_rule",
+    "record",
+    "run_once",
+    "stale_helpers",
+    "sync_job",
+]

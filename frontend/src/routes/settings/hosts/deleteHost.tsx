@@ -11,7 +11,7 @@ import { CANCELLED, withConfirmation } from "../../../lib/confirmation";
 import { useExtensions } from "../../../lib/firstSteps";
 import { hostProvider, providerDeleteNote, type HostProvider } from "../../../lib/hostProvider";
 import type { HostOut } from "../../../lib/hosts";
-import { promptDialog } from "../../../state/dialogs";
+import { confirmDialog, promptDialog } from "../../../state/dialogs";
 import { Button } from "../ui";
 
 export type DeleteOutcome = { status: "deleted" } | { status: "cancelled" } | { status: "mismatch" } | { status: "error"; text: string };
@@ -33,10 +33,22 @@ export function deletePrompt(host: HostOut, provider?: HostProvider): string {
   );
 }
 
+/** Ein Server, den der Anbieter nicht mehr kennt (`gone_since`), geht mit einer einfachen Rückfrage weg: Er kommt beim
+ * nächsten Abgleich nicht wieder, und den Kurznamen abzutippen schützt hier vor nichts. */
+export function goneDeletePrompt(host: HostOut, provider?: HostProvider): string {
+  const where = provider ? `in ${provider.name}` : "beim Anbieter";
+  return `„${host.display_name}“ gibt es ${where} nicht mehr. Aus Nodvard Deck entfernen? Gespeicherte Zugänge und der gemerkte Server-Schlüssel verschwinden mit.`;
+}
+
 export async function deleteHost(host: HostOut, provider?: HostProvider): Promise<DeleteOutcome> {
-  const typed = await promptDialog(deletePrompt(host, provider));
-  if (typed === null) return { status: "cancelled" };
-  if (typed !== host.name) return { status: "mismatch" };
+  if (host.gone_since) {
+    const ok = await confirmDialog(goneDeletePrompt(host, provider), { title: "Server entfernen", danger: true, confirmLabel: "Entfernen" });
+    if (!ok) return { status: "cancelled" };
+  } else {
+    const typed = await promptDialog(deletePrompt(host, provider));
+    if (typed === null) return { status: "cancelled" };
+    if (typed !== host.name) return { status: "mismatch" };
+  }
   try {
     // Mit dem Server verschwinden seine gespeicherten Zugänge: hat er welche, fragt der Server nach Passwort und Code.
     const done = await withConfirmation((confirmation) => api.delete(`/hosts/${host.id}`, confirmation));

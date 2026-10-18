@@ -1,20 +1,7 @@
 /**
- * Die Backups-Seite -- PageSpec `component=
- * "BackupsPage"` (siehe nodvard_deck_ext_backups/__init__.py). Zeigt jeden konfigurierten
- * VZDump-Job PRO VM als eigene Zeile mit strukturiertem Status, nicht als Freitext --
- * ein fehlschlagender Job soll nicht wochenlang unbemerkt bleiben, nur weil der
- * Bericht als Prosa daherkommt.
- *
- * `retry()`s Rueckfrage laeuft nicht ueber `window.confirm()`, sondern ueber
- * `window.__nodvardDeck.confirmDialog()` (main.tsx),
- * derselbe Grund/dieselbe Loesung wie proxmox' Node-Seite (kein direkter Zugriff auf
- * state/dialogs.ts ueber den Import-Map-Shim).
- *
- * `retry()` legt ueber das Gate einen Vorschlag an. Hat der Nutzer
- * `actions.approve:<risk>`, bestaetigt die Seite den eigenen Vorschlag automatisch --
- * derselbe Ansatz wie proxmox' Node-Seite; sonst bleibt er auf der Aktionen-Seite
- * (ActionsPage.tsx im Kern) zur Freigabe stehen. `POST .../retry` liefert dafuer
- * zusaetzlich `risk` mit (siehe __init__.py).
+ * Backups-Seite (PageSpec `component="BackupsPage"`): jeder konfigurierte VZDump-Job pro VM als eigene Zeile mit
+ * strukturiertem Status, damit ein fehlschlagender Job nicht unbemerkt bleibt. `retry()` legt über das Gate einen
+ * Vorschlag an und bestätigt ihn selbst, wenn der Nutzer `actions.approve:<risk>` hat.
  */
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
@@ -82,8 +69,8 @@ function formatSize(bytes: number): string {
   return `${Math.round(bytes / 1e6)} MB`;
 }
 
-/** Was tatsaechlich auf den Backup-Speichern liegt -- einmal laden, je Gast nachschlagen. Scheitert das Lesen, bleibt
- * `inventory` leer (`null`) und `error` nennt den Grund: sonst stuende bei jedem Gast "keine Sicherung vorhanden". */
+/** Was tatsächlich auf den Backup-Speichern liegt, einmal laden und je Gast nachschlagen. Scheitert das Lesen, bleibt
+ * `inventory` leer (`null`) und `error` nennt den Grund: sonst stünde bei jedem Gast „keine Sicherung vorhanden“. */
 function useInventory(): { inventory: Inventory | null; orphans: OrphanEntry[]; error: string | null; reload: () => void } {
   const [inventory, setInventory] = useState<Inventory | null>(null);
   const [orphans, setOrphans] = useState<OrphanEntry[]>([]);
@@ -109,6 +96,7 @@ function inventoryText(entry: InventoryEntry | undefined): string {
   return `${entry.count}× · neueste ${newest} · ${formatSize(entry.total_size)} (${entry.storages.join(", ")})`;
 }
 
+/** Gast, den kein Backup-Job erfasst (Proxmox' eigene Auswertung). */
 interface UnprotectedGuest {
   connection: string;
   vmid: string;
@@ -119,11 +107,7 @@ interface UnprotectedGuest {
   note?: string | null;
 }
 
-/**
- * Gaeste, die KEIN Backup-Job erfasst (Proxmox' eigene Auswertung). Live beim Bau:
- * 4 von 6 -- die Seite zeigte bis dahin nur, was gesichert wird, nie, was fehlt.
- */
-/** Neuer Backup-Job fuer EINEN ungesicherten Gast -- ueber das Gate, niedriges Risiko. */
+/** Neuer Backup-Job für einen ungesicherten Gast, über das Gate mit niedrigem Risiko. */
 function NewJobForm({ guest, defaultStorage, onDone }: { guest: UnprotectedGuest; defaultStorage: string; onDone: (message: string | null) => void }): JSX.Element {
   const unmountSignal = useUnmountSignal();
   const [schedule, setSchedule] = useState("sun 02:00");
@@ -173,7 +157,7 @@ function NewJobForm({ guest, defaultStorage, onDone }: { guest: UnprotectedGuest
   );
 }
 
-/** "Als Kopie wiederherstellen" nur, wenn es eine Sicherung gibt und der Nutzer Aktionen ausloesen darf. */
+/** „Als Kopie wiederherstellen“ nur, wenn es eine Sicherung gibt und der Nutzer Aktionen auslösen darf. */
 function canRestore(entry: InventoryEntry | undefined): boolean {
   return !!entry && entry.count > 0 && deck().hasPermission("hosts.execute");
 }
@@ -191,7 +175,7 @@ function UnprotectedSection({ inventory, defaultStorage = "", onChanged }: { inv
   const [restoring, setRestoring] = useState<string | null>(null);
   const [data, setData] = useState<{ guests: UnprotectedGuest[]; errors: { connection: string; error: string }[] } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  // Nicht ladbar: sagen statt den Abschnitt still wegzulassen -- das saehe aus wie "alle Gaeste haben einen Backup-Job".
+  // Nicht ladbar: sagen statt den Abschnitt still wegzulassen, das sähe aus wie „alle Gäste haben einen Backup-Job“.
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -353,10 +337,9 @@ function formatEpoch(seconds: number | null): string {
 }
 
 /**
- * POST mit Platz-Pruefung (space.py): passt der Gast nicht auf den Backup-Speicher,
- * antwortet der Server mit 409 + `space_warning` -- dann nachfragen und bei "trotzdem"
- * dieselbe Anfrage mit `ignore_space: true` wiederholen. `null` = abgebrochen.
- * Schutz davor, dass ein einzelnes grosses Backup den Zielspeicher vollschreibt.
+ * POST mit Platz-Prüfung (space.py): passt der Gast nicht auf den Backup-Speicher, antwortet der Server mit 409 +
+ * `space_warning`; dann nachfragen und bei „trotzdem“ dieselbe Anfrage mit `ignore_space: true` wiederholen. `null` =
+ * abgebrochen.
  */
 async function postWithSpaceCheck(path: string, payload: Record<string, unknown>): Promise<Response | null> {
   const send = (extra: Record<string, unknown>) =>
@@ -373,10 +356,8 @@ async function postWithSpaceCheck(path: string, payload: Record<string, unknown>
 }
 
 /**
- * Verbindungsverwaltung: identisches Muster wie proxmox' `ConnectionsPanel` in
- * `ProxmoxNodePage.tsx` -- backups haelt eine EIGENE, unabhaengige
- * Verbindungsliste (siehe connector.py-Docstring), deshalb hier dupliziert statt
- * geteilt (kein Code-Sharing zwischen Extension-Frontends, siehe SDK-Doku).
+ * Verbindungsverwaltung wie `ConnectionsPanel` in `ProxmoxNodePage.tsx`; backups hält eine eigene, unabhängige
+ * Verbindungsliste und dupliziert das Panel deshalb (kein Code-Sharing zwischen Extension-Frontends).
  */
 function ConnectionsPanel(): JSX.Element {
   const [connections, setConnections] = useState<ConnectionOut[] | null>(null);
@@ -440,9 +421,8 @@ function ConnectionsPanel(): JSX.Element {
     setPending(`token:${name}`);
     setMessage(null);
     try {
-      // Legt an ODER ersetzt. Der alte Weg (`POST /ext/backups/connections/{name}/token`) legt nur
-      // an und meldete beim zweiten Mal 409.
-      // Ein gespeichertes Token ersetzt der Kern nur mit Passwort und gegebenenfalls Code (Dialog des Kerns).
+      // Legt an oder ersetzt; ein gespeichertes Token ersetzt der Kern nur mit Passwort und gegebenenfalls Code (Dialog
+      // des Kerns).
       const res = await authedFetchConfirmed(`/extensions/backups/secrets`, (confirmation) => ({
         method: "PUT", body: JSON.stringify({ label: `backups-token:${name}`, value, ...confirmation }),
       }));
@@ -634,7 +614,7 @@ const JOB_LABEL: Record<string, string> = {
 type JobConfig = Record<string, string | number | boolean>;
 const NEW_RULE_WARNING = "Bisher galt die Aufbewahrung des Speichers. Mit einer eigenen Regel löscht Proxmox beim nächsten Lauf, was über der neuen Grenze liegt.";
 
-/** Nur was sich geaendert hat -- der Server prueft Whitelist, Grenzen und digest. */
+/** Nur was sich geändert hat; der Server prüft Whitelist, Grenzen und digest. */
 export function jobChanges(before: JobConfig, after: JobConfig): JobConfig {
   const changes: JobConfig = {};
   for (const key of ["schedule", "enabled", "storage", "mode", ...KEEPS]) {
@@ -643,10 +623,8 @@ export function jobChanges(before: JobConfig, after: JobConfig): JobConfig {
   return changes;
 }
 
-/**
- * Backup-Job bearbeiten (Roadmap Punkt 1) -- ueber das Gate. Gilt fuer ALLE Gaeste
- * des Jobs; weniger Aufbewahrung loescht beim naechsten Lauf (hohes Risiko).
- */
+/** Backup-Job über das Gate bearbeiten: gilt für alle Gäste des Jobs, weniger Aufbewahrung löscht beim nächsten Lauf
+ * (hohes Risiko). */
 function JobEditForm({ job, guests, onDone }: { job: JobOut; guests: string[]; onDone: (message: string | null) => void }): JSX.Element {
   const unmountSignal = useUnmountSignal();
   const [initial, setInitial] = useState<JobConfig | null>(null);
@@ -671,7 +649,7 @@ function JobEditForm({ job, guests, onDone }: { job: JobOut; guests: string[]; o
   const changed = Object.keys(changes);
   const keepAll = initial["keep-all"] === true;
   const shrinks = KEEPS.some((k) => Number(initial[k]) > 0 && Number(values[k]) < Number(initial[k])) || (initial.enabled === true && values.enabled === false);
-  // Ohne eigene Regel galt die des Speichers (oft "alle behalten") -- eine eigene kann weniger behalten.
+  // Ohne eigene Regel gilt die des Speichers (oft „alle behalten“); eine eigene kann weniger behalten.
   const newRule = !keepAll && KEEPS.every((k) => !Number(initial[k])) && KEEPS.some((k) => Number(values[k]) > 0);
 
   async function save() {
@@ -814,7 +792,7 @@ export function BackupsPage(): JSX.Element {
       const entries = await fetchJson<HistoryEntry[]>(`/ext/backups/jobs/${encodeURIComponent(jobRef)}/history`);
       if (expandedRef.current === jobRef) setHistory(entries);
     } catch (err) {
-      // Inzwischen einen anderen Job aufgeklappt: diese Antwort gehoert nicht mehr zur Anzeige.
+      // Inzwischen einen anderen Job aufgeklappt: diese Antwort gehört nicht mehr zur Anzeige.
       if (expandedRef.current === jobRef) {
         setHistory([]);
         setHistoryError(errorMessage(err));
@@ -873,7 +851,7 @@ export function BackupsPage(): JSX.Element {
       )}
       <UnprotectedSection
         inventory={inventory}
-        // Vorschlag: der Speicher, den die bestehenden Jobs am haeufigsten nutzen.
+        // Vorschlag: der Speicher, den die bestehenden Jobs am häufigsten nutzen.
         defaultStorage={Object.entries((jobs ?? []).reduce<Record<string, number>>((acc, j) => (j.storage ? { ...acc, [j.storage]: (acc[j.storage] ?? 0) + 1 } : acc), {})).sort((a, b) => b[1] - a[1])[0]?.[0] ?? ""}
         onChanged={load}
       />
@@ -942,8 +920,8 @@ export function BackupsPage(): JSX.Element {
                       <button type="button" onClick={() => void toggleHistory(job)} className="px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
                         {expanded === job.job_ref ? "Verlauf ausblenden" : "Verlauf"}
                       </button>
-                      {/* Der Knopf startet immer ein volles Backup jetzt; "Erneut versuchen"
-                          passt nur nach einem Fehlschlag, waehrend eines Laufs gibt es keinen. */}
+                      {/* Der Knopf startet immer ein volles Backup jetzt; „Erneut versuchen“ passt nur nach einem
+                          Fehlschlag, während eines Laufs gibt es keinen. */}
                       {job.last_status !== "running" && (
                         <button
                           type="button" disabled={busy === job.job_ref} onClick={() => void retry(job)}

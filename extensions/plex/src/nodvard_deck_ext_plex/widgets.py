@@ -102,6 +102,12 @@ def _summary_row(connection: Connection) -> dict[str, Any]:
     return _row(title, subtitle, "nichts läuft", "neutral")
 
 
+def nothing_set_up(overview: Overview) -> bool:
+    """Wahr, wenn keine einzige Verbindung eingerichtet ist (keine eingetragen oder alle ohne Zugangsdaten).
+    Eine Verbindung mit Fehler oder ohne Antwort zählt als eingerichtet; dann bleibt die Kachel mit dem Fehler sichtbar."""
+    return all(c.state == "not_configured" for c in overview.connections)
+
+
 def status_rows(overview: Overview) -> list[dict[str, Any]]:
     if not overview.connections:
         return [_row("Plex nicht eingerichtet", SETTINGS_HINT, "nicht eingerichtet", "neutral")]

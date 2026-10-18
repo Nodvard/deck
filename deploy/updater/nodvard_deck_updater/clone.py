@@ -1,34 +1,34 @@
-"""Klonen des Ziels: Inspect -> Body fuer `create` + Liste fuer `connect`, und die Nachkontrolle. Nur reine
-Funktionen: keine Ein-/Ausgabe, die Eingaben werden nie veraendert.
+"""Klonen des Ziels: Inspect -> Body für `create` + Liste für `connect`, und die Nachkontrolle. Nur reine
+Funktionen: keine Ein-/Ausgabe, die Eingaben werden nie verändert.
 
 Das Inspect eines Containers ist eine Mischung aus Nutzerangaben (Compose-Datei) und Standards des **alten**
-Images, denn der Docker-Dienst fuehrt beides beim Anlegen zusammen (Container-Werte gewinnen). Ein naiver Klon
+Images, denn der Docker-Dienst führt beides beim Anlegen zusammen (Container-Werte gewinnen). Ein naiver Klon
 schriebe die alten Standards fest (`PYTHON_VERSION`, das Versions-Label, der alte Healthcheck ...). Darum:
 
-* **Config nur ueber eine Allowlist**: Image-Werte werden "herausgerechnet" (weggelassen, wenn gleich dem Wert
+* **Config nur über eine Allowlist**: Image-Werte werden "herausgerechnet" (weggelassen, wenn gleich dem Wert
   in `IC`, der Config des alten Images); dann gilt beim Anlegen der Standard des **neuen** Images.
   `Entrypoint` wird **nie** gesendet: gleich `IC.Entrypoint` (und nicht leer) -> weglassen, sonst
   `custom_entrypoint` (ein `[]` schaltete `/entrypoint.sh` und damit `boot` samt Vorher-Kopie ab).
-* **HostConfig** wird unveraendert uebernommen, bis auf wenige bereinigte Felder; `AutoRemove` -> Ablehnung.
-  `MaskedPaths`/`ReadonlyPaths` bleiben weg, damit der Docker-Dienst seine (neueste) Standardliste setzt -- ausser sie
-  sind beim alten Container ausdruecklich leer (`[]`, so sendet es `systempaths=unconfined`): dann geht das `[]`
-  mit, sonst bekaeme der Klon stillschweigend Masken, die der alte nicht hatte. Die Nachkontrolle verlangt, dass der
+* **HostConfig** wird unverändert übernommen, bis auf wenige bereinigte Felder; `AutoRemove` -> Ablehnung.
+  `MaskedPaths`/`ReadonlyPaths` bleiben weg, damit der Docker-Dienst seine (neueste) Standardliste setzt -- außer sie
+  sind beim alten Container ausdrücklich leer (`[]`, so sendet es `systempaths=unconfined`): dann geht das `[]`
+  mit, sonst bekäme der Klon stillschweigend Masken, die der alte nicht hatte. Die Nachkontrolle verlangt, dass der
   Klon mindestens die Pfade des alten maskiert.
-* **Veroeffentlichte Ports** (`HostConfig.PortBindings`) bleiben in `Config.ExposedPorts`, auch wenn das alte Image sie
-  schon mit `EXPOSE` erklaert (so schickt es auch Compose). Der Docker-Dienst veroeffentlicht einen Port nur, wenn er
-  dort steht; liesse der Klon ihn weg, haengt der Zugang davon ab, ob das **neue** Image ihn noch erklaert.
+* **Veröffentlichte Ports** (`HostConfig.PortBindings`) bleiben in `Config.ExposedPorts`, auch wenn das alte Image sie
+  schon mit `EXPOSE` erklärt (so schickt es auch Compose). Der Docker-Dienst veröffentlicht einen Port nur, wenn er
+  dort steht; ließe der Klon ihn weg, hängt der Zugang davon ab, ob das **neue** Image ihn noch erklärt.
   **Anonyme Volumes** (nur in `.Mounts`, etwa `VOLUME /app/data` ohne eigenes Volume) werden als `Mounts`
-  angehaengt, und anonyme Eintraege in `HostConfig.Mounts` (Compose: `volumes: [/pfad]`, ohne `Source`) bekommen den
-  Namen des alten Volumes -- sonst bekaeme der Klon ein neues, leeres Volume.
-* **Netze**: genau ein Endpunkt beim `create` (das Primaernetz aus `NetworkMode`), alle weiteren per
-  `connect` vor dem Start -- ein Codepfad fuer API 1.41 bis 1.54. Aliases ohne die Kurz-ID des alten Containers.
+  angehängt, und anonyme Einträge in `HostConfig.Mounts` (Compose: `volumes: [/pfad]`, ohne `Source`) bekommen den
+  Namen des alten Volumes -- sonst bekäme der Klon ein neues, leeres Volume.
+* **Netze**: genau ein Endpunkt beim `create` (das Primärnetz aus `NetworkMode`), alle weiteren per
+  `connect` vor dem Start -- ein Codepfad für API 1.41 bis 1.54. Aliases ohne die Kurz-ID des alten Containers.
 * **Unbekanntes Feld mit Nicht-Standardwert -> `unknown_field`** (fail-closed: eine neuere Engine-Version mit einem
-  neuen Feld fuehrt zu einer Ablehnung, nie zu einem stillen Verlust).
-* **Nachkontrolle** (`verify`): der neue Container wird gegen den alten gehalten; jede nicht erklaerte
+  neuen Feld führt zu einer Ablehnung, nie zu einem stillen Verlust).
+* **Nachkontrolle** (`verify`): der neue Container wird gegen den alten gehalten; jede nicht erklärte
   Abweichung ist `clone_mismatch`.
 
-"Standardwert" heisst: `null`, `false`, `0`, `""`, `[]`, `{}` (oberste Ebene; ein Dict mit Eintraegen ist nie
-Standard, `Tmpfs: {"/tmp": ""}` traegt die Bedeutung im Schluessel).
+"Standardwert" heißt: `null`, `false`, `0`, `""`, `[]`, `{}` (oberste Ebene; ein Dict mit Einträgen ist nie
+Standard, `Tmpfs: {"/tmp": ""}` trägt die Bedeutung im Schlüssel).
 """
 
 from __future__ import annotations
@@ -66,10 +66,10 @@ HOST_COPY = (
     "RestartPolicy", "LogConfig", "Init", "Runtime", "ConsoleSize", "Annotations",
     # Rechte
     "CapAdd", "CapDrop", "SecurityOpt", "Privileged", "ReadonlyRootfs", "GroupAdd",
-    # Geraete
+    # Geräte
     "Devices", "DeviceRequests", "DeviceCgroupRules", "Ulimits", "Sysctls", "ShmSize", "PidsLimit", "OomScoreAdj",
     "OomKillDisable",
-    # Namensraeume und cgroups
+    # Namensräume und cgroups
     "IpcMode", "PidMode", "UTSMode", "UsernsMode", "CgroupnsMode", "Cgroup", "CgroupParent", "Isolation",
     # Ressourcen
     "Memory", "MemoryReservation", "MemorySwap", "MemorySwappiness",
@@ -111,10 +111,10 @@ _DETAIL_RE = re.compile(r"(?<!^)(?=[A-Z])")
 
 @dataclass(frozen=True)
 class Plan:
-    """Ergebnis von `build`: Name, `create`-Body (`Config` + `HostConfig` + `NetworkingConfig` mit hoechstens einem
-    Endpunkt) und die weiteren Netze fuer `connect` (`(NetworkID, EndpointConfig)`, vor dem Start).
+    """Ergebnis von `build`: Name, `create`-Body (`Config` + `HostConfig` + `NetworkingConfig` mit höchstens einem
+    Endpunkt) und die weiteren Netze für `connect` (`(NetworkID, EndpointConfig)`, vor dem Start).
 
-    `body` und `connects` stehen **nicht** in `repr`: der Body enthaelt die Umgebungswerte des Containers (also
+    `body` und `connects` stehen **nicht** in `repr`: der Body enthält die Umgebungswerte des Containers (also
     Geheimnisse) im Klartext, und ein `Plan` in einer Fehlermeldung oder einer Protokollzeile soll sie nicht
     weitergeben."""
 
@@ -130,21 +130,21 @@ class Plan:
 
 def is_default(value: Any) -> bool:
     """Standardwert (siehe Kopf der Datei): `null`, `false`, `0`, `""`, `[]`, `{}` -- nur auf oberster Ebene. Ein Dict
-    mit Eintraegen ist nie Standard, auch wenn die Werte leer sind (`Tmpfs: {"/tmp": ""}`, `ExposedPorts`)."""
+    mit Einträgen ist nie Standard, auch wenn die Werte leer sind (`Tmpfs: {"/tmp": ""}`, `ExposedPorts`)."""
     if value is None or value is False or (type(value) in (int, float) and value == 0):
         return True
     return value == "" or value == [] or value == {}
 
 
 def norm(value: Any) -> Any:
-    """Fuer Vergleiche: ein Standardwert (siehe `is_default`) wird `None`, alles andere bleibt, wie es ist."""
+    """Für Vergleiche: ein Standardwert (siehe `is_default`) wird `None`, alles andere bleibt, wie es ist."""
     return None if is_default(value) else value
 
 
 def struct_norm(value: Any) -> Any:
-    """Fuer Strukturen mit festen Feldern (`IPAMConfig`, Mount-Eintraege): Felder mit Standardwert fallen weg (auch
+    """Für Strukturen mit festen Feldern (`IPAMConfig`, Mount-Einträge): Felder mit Standardwert fallen weg (auch
     verschachtelt), so dass `{"IPv4Address": "1.2.3.4", "LinkLocalIPs": null}` gleich `{"IPv4Address": "1.2.3.4"}`
-    ist. Nicht fuer Maps mit frei gewaehlten Schluesseln benutzen (dort traegt schon der Schluessel die Bedeutung)."""
+    ist. Nicht für Maps mit frei gewählten Schlüsseln benutzen (dort trägt schon der Schlüssel die Bedeutung)."""
     if isinstance(value, dict):
         out = {key: struct_norm(item) for key, item in value.items()}
         out = {key: item for key, item in out.items() if not is_default(item)}
@@ -155,12 +155,12 @@ def struct_norm(value: Any) -> Any:
 
 
 def _copy(value: Any) -> Any:
-    """Tiefe Kopie ueber JSON (die Werte stammen aus JSON; so teilt der Body nie Objekte mit der Eingabe)."""
+    """Tiefe Kopie über JSON (die Werte stammen aus JSON; so teilt der Body nie Objekte mit der Eingabe)."""
     return json.loads(json.dumps(value))
 
 
 def _detail(field: str) -> str:
-    """Feldname als fester Bezeichner (`CODE_RE`) fuer das Log: `NetworkDisabled` -> `network_disabled`."""
+    """Feldname als fester Bezeichner (`CODE_RE`) für das Log: `NetworkDisabled` -> `network_disabled`."""
     text = _DETAIL_RE.sub("_", field).lower()
     return re.sub(r"[^a-z_]", "", text)[:40] or "field"
 
@@ -178,7 +178,7 @@ def _as_dict(value: Any, field: str) -> dict[str, Any]:
 
 
 def _map_keys(value: Any) -> set[str]:
-    """Die Schluessel einer Map (`PortBindings`, `ExposedPorts`); alles andere ist leer (die Felder selbst prueft
+    """Die Schlüssel einer Map (`PortBindings`, `ExposedPorts`); alles andere ist leer (die Felder selbst prüft
     `build` bzw. die Vergleiche der Nachkontrolle)."""
     return {key for key in value if isinstance(key, str)} if isinstance(value, dict) else set()
 
@@ -216,7 +216,7 @@ def network_mode(host: Mapping[str, Any]) -> str:
 
 
 def has_own_network(mode: str) -> bool:
-    """`False` fuer `host`, `none` und `container:*` (dann keine `NetworkingConfig`, kein `connect`)."""
+    """`False` für `host`, `none` und `container:*` (dann keine `NetworkingConfig`, kein `connect`)."""
     return mode not in NO_NETWORK_MODES and not mode.startswith("container:")
 
 
@@ -241,13 +241,13 @@ def build(
     api_version: tuple[int, int],
     network_drivers: Mapping[str, str],
 ) -> Plan:
-    """Body fuer `POST /containers/create?name=<name>` und die Liste fuer `connect`.
+    """Body für `POST /containers/create?name=<name>` und die Liste für `connect`.
 
     * `container`: Inspect des alten Containers (`A`).
     * `old_image`: Inspect des **alten** Images (`GET /images/{A.Image}/json`); daraus `IC`.
-    * `new_image_id`: Image-ID des neuen Images (fuer `com.docker.compose.image`).
+    * `new_image_id`: Image-ID des neuen Images (für `com.docker.compose.image`).
     * `api_version`: die ausgehandelte API-Version (`GwPriority` erst ab 1.48).
-    * `network_drivers`: `NetworkID -> Driver` fuer jedes Netz des Containers (aus `GET /networks/{id}`).
+    * `network_drivers`: `NetworkID -> Driver` für jedes Netz des Containers (aus `GET /networks/{id}`).
 
     Wirft `Refusal`: `custom_entrypoint`, `auto_remove`, `unknown_field`, `network_unclear`, `macvlan`,
     `image_config_missing`.
@@ -280,7 +280,7 @@ def _build_config(config: dict[str, Any], ic: dict[str, Any], *, container_id: s
     image_text = config.get("Image")
     if not isinstance(image_text, str) or not image_text:
         raise _unknown("Image")
-    body["Image"] = image_text  # unveraenderter Tag-Text
+    body["Image"] = image_text  # unveränderter Tag-Text
 
     # Entrypoint und Cmd: Entrypoint wird nie gesendet.
     entrypoint = _str_list(config.get("Entrypoint"), "Entrypoint")
@@ -291,7 +291,7 @@ def _build_config(config: dict[str, Any], ic: dict[str, Any], *, container_id: s
     cmd = _str_list(config.get("Cmd"), "Cmd")
     image_cmd = _str_list(ic.get("Cmd"), "Cmd")
     if not cmd and image_cmd:
-        # Leeres Cmd neben einem Cmd im Image: nur mit eigenem Entrypoint moeglich -- laesst sich ohne Entrypoint
+        # Leeres Cmd neben einem Cmd im Image: nur mit eigenem Entrypoint möglich -- lässt sich ohne Entrypoint
         # nicht nachbauen (ein leeres Cmd erbt wieder das des Images).
         raise Refusal(policy.CUSTOM_ENTRYPOINT)
     if cmd != image_cmd:
@@ -324,8 +324,8 @@ def _build_config(config: dict[str, Any], ic: dict[str, Any], *, container_id: s
     if health:
         body["Healthcheck"] = health
 
-    # Veroeffentlichte Ports bleiben in `ExposedPorts`, auch wenn das alte Image sie schon erklaert: der Daemon
-    # veroeffentlicht einen Eintrag aus `PortBindings` nur, wenn der Port dort steht (Docker vor 29), und das
+    # Veröffentlichte Ports bleiben in `ExposedPorts`, auch wenn das alte Image sie schon erklärt: der Daemon
+    # veröffentlicht einen Eintrag aus `PortBindings` nur, wenn der Port dort steht (Docker vor 29), und das
     # Einsetzen aus dem Image geschieht erst beim Anlegen -- aus dem **neuen** Image.
     published = _map_keys(host.get("PortBindings"))
     for field in ("ExposedPorts", "Volumes"):
@@ -351,7 +351,7 @@ def _build_config(config: dict[str, Any], ic: dict[str, Any], *, container_id: s
 
 
 def _build_healthcheck(health: Any, image_health: Any) -> dict[str, Any]:
-    """Je Feld herausrechnen; der Daemon ergaenzt fehlende Felder aus dem neuen Image."""
+    """Je Feld herausrechnen; der Daemon ergänzt fehlende Felder aus dem neuen Image."""
     health = _as_dict(health, "Healthcheck")
     image_health = _as_dict(image_health, "Healthcheck")
     out: dict[str, Any] = {}
@@ -395,7 +395,7 @@ def _build_host(host: dict[str, Any], mounts: Any) -> dict[str, Any]:
         elif field in HOST_DROP:
             continue
         elif field in HOST_PATHS:
-            # Nur ein ausdruecklich leeres Feld (`systempaths=unconfined`) geht mit; sonst setzt der Daemon seine Liste.
+            # Nur ein ausdrücklich leeres Feld (`systempaths=unconfined`) geht mit; sonst setzt der Daemon seine Liste.
             if value == [] and host.get("Privileged") is not True:
                 out[field] = []
         elif field == "Links":
@@ -412,8 +412,8 @@ def _build_host(host: dict[str, Any], mounts: Any) -> dict[str, Any]:
         out["Mounts"] = _keep_anonymous_sources(out["Mounts"], mounts)
     if anonymous:
         if not is_default(host.get("VolumesFrom")):
-            # Volumes aus `VolumesFrom` stehen ebenfalls nur in `.Mounts`: sie liessen sich von anonymen nicht
-            # unterscheiden, und doppelt eingehaengt scheitert `create`.
+            # Volumes aus `VolumesFrom` stehen ebenfalls nur in `.Mounts`: sie ließen sich von anonymen nicht
+            # unterscheiden, und doppelt eingehängt scheitert `create`.
             raise _unknown("VolumesFrom")
         out["Mounts"] = list(out.get("Mounts") or []) + anonymous
     return out
@@ -434,10 +434,10 @@ def _links(value: Any) -> list[str]:
 
 
 def _keep_anonymous_sources(host_mounts: list[Any], mounts: Any) -> list[Any]:
-    """`HostConfig.Mounts`-Eintraege `Type=volume` **ohne** `Source` sind anonyme Volumes (Compose legt so ein
-    `volumes: [/pfad]` an, live geprueft mit Compose 5.1 und Docker 29.3). Unveraendert gesendet bekaeme der Klon ein
+    """`HostConfig.Mounts`-Einträge `Type=volume` **ohne** `Source` sind anonyme Volumes (Compose legt so ein
+    `volumes: [/pfad]` an, live geprüft mit Compose 5.1 und Docker 29.3). Unverändert gesendet bekäme der Klon ein
     neues, leeres Volume. Darum bekommt der Eintrag als `Source` den Namen des Volumes, das der alte Container dort
-    eingehaengt hat (`.Mounts`); alle anderen Angaben (etwa `VolumeOptions.Subpath`) bleiben. Fehlt es dort:
+    eingehängt hat (`.Mounts`); alle anderen Angaben (etwa `VolumeOptions.Subpath`) bleiben. Fehlt es dort:
     `unknown_field`."""
     names: dict[str, str] = {}
     for mount in mounts if isinstance(mounts, list) else []:
@@ -459,8 +459,8 @@ def anonymous_volumes(host: Mapping[str, Any], mounts: Any) -> list[dict[str, An
     """Volumes, die nur in `.Mounts` stehen (weder in `Binds` noch in `HostConfig.Mounts`): als
     `{"Type": "volume", "Source": Name, "Target": Destination, "ReadOnly": !RW}`.
 
-    Ein `Binds`-Eintrag nur mit Zielpfad (`/pfad`) ist ebenfalls ein anonymes Volume (live geprueft); er liesse sich nur
-    mit einem anderen `Binds`-Text nachbauen, den die Nachkontrolle nicht vom alten unterscheiden koennte -- darum
+    Ein `Binds`-Eintrag nur mit Zielpfad (`/pfad`) ist ebenfalls ein anonymes Volume (live geprüft); er ließe sich nur
+    mit einem anderen `Binds`-Text nachbauen, den die Nachkontrolle nicht vom alten unterscheiden könnte -- darum
     `unknown_field` (vorher, statt erst nach `create` als `clone_mismatch`)."""
     covered = set()
     for bind in _str_list(host.get("Binds"), "Binds"):
@@ -498,7 +498,7 @@ def anonymous_volumes(host: Mapping[str, Any], mounts: Any) -> list[dict[str, An
 
 def _build_networks(container: Mapping[str, Any], mode: str, container_id: str, api_version: tuple[int, int],
                     drivers: Mapping[str, str]) -> tuple[str, dict[str, tuple[str, dict[str, Any]]]]:
-    """Gibt den Schluessel fuer `EndpointsConfig` beim `create` zurueck und je Netz `(NetworkID, EndpointConfig)`."""
+    """Gibt den Schlüssel für `EndpointsConfig` beim `create` zurück und je Netz `(NetworkID, EndpointConfig)`."""
     settings = _as_dict(container.get("NetworkSettings"), "NetworkSettings")
     networks = settings.get("Networks")
     if not isinstance(networks, dict) or not networks:
@@ -568,13 +568,13 @@ def verify(
     new_image_id: str,
     channel: tuple[str, str | None] | None = None,
 ) -> None:
-    """Haelt den neuen Container (Inspect nach `create` und `connect`) gegen den alten. Erlaubt sind nur die
+    """Hält den neuen Container (Inspect nach `create` und `connect`) gegen den alten. Erlaubt sind nur die
     erwarteten Unterschiede: Image-ID, Werte aus dem neuen Image, `com.docker.compose.image`, Hostname (Kurz-ID)
-    und die Kurz-IDs in den Aliases. Sonst `Refusal(clone_mismatch, <feld>)`. Dazu gehoert: der neue Container
+    und die Kurz-IDs in den Aliases. Sonst `Refusal(clone_mismatch, <feld>)`. Dazu gehört: der neue Container
     maskiert mindestens die Pfade des alten (`MaskedPaths`/`ReadonlyPaths`, nicht privilegierte Container), und jeder
-    Port, den der alte erklaert und veroeffentlicht hat, ist auch beim neuen erklaert (`ExposedPorts`).
+    Port, den der alte erklärt und veröffentlicht hat, ist auch beim neuen erklärt (`ExposedPorts`).
 
-    `/app/data` und `/app/updater` muessen eingehaengt sein (beim alten und damit gleich beim neuen); mit `channel`
+    `/app/data` und `/app/updater` müssen eingehängt sein (beim alten und damit gleich beim neuen); mit `channel`
     (`(Type, Name bzw. Source)` des Kanals beim Helfer unter `/channel`, siehe `target.MountRef.origin`) muss
     `/app/updater` genau dieser Kanal sein."""
     def mismatch(field: str) -> Refusal:
@@ -616,8 +616,8 @@ def verify(
             if not _paths_kept(old_host.get(field), new_host.get(field)):
                 raise mismatch(field)
     old_config, new_config = _as_dict(old.get("Config"), "Config"), _as_dict(new.get("Config"), "Config")
-    # Ein Port, den der alte erklaert **und** veroeffentlicht hat, muss auch beim neuen erklaert sein: der Daemon
-    # (vor Version 29) veroeffentlicht ihn sonst nicht, und das Dashboard waere von aussen nicht mehr erreichbar.
+    # Ein Port, den der alte erklärt **und** veröffentlicht hat, muss auch beim neuen erklärt sein: der Daemon
+    # (vor Version 29) veröffentlicht ihn sonst nicht, und das Dashboard wäre von außen nicht mehr erreichbar.
     published = _map_keys(old_host.get("PortBindings")) & _map_keys(old_config.get("ExposedPorts"))
     if not published <= _map_keys(new_config.get("ExposedPorts")):
         raise mismatch("ExposedPorts")
@@ -627,11 +627,11 @@ def verify(
 def _paths_kept(old: Any, new: Any) -> bool:
     """`MaskedPaths`/`ReadonlyPaths`: der neue Container maskiert mindestens, was der alte maskiert.
 
-    * alt eine Liste: neu eine Liste, die alle Eintraege des alten enthaelt (eine laengere Standardliste eines
-      neueren Daemons ist in Ordnung). War sie beim alten ausdruecklich leer (`[]`, `systempaths=unconfined`), muss
-      sie auch beim neuen genau `[]` sein: `null` hiesse beim neuen die Standardliste (stillschweigend strenger).
+    * alt eine Liste: neu eine Liste, die alle Einträge des alten enthält (eine längere Standardliste eines
+      neueren Daemons ist in Ordnung). War sie beim alten ausdrücklich leer (`[]`, `systempaths=unconfined`), muss
+      sie auch beim neuen genau `[]` sein: `null` hieße beim neuen die Standardliste (stillschweigend strenger).
     * alt `null`: der Daemon setzt zur Laufzeit seine Standardliste (nicht "keine Masken"). Neu darf `null` oder eine
-      nicht leere Liste sein, ein `[]` waere ein Klon ohne Masken.
+      nicht leere Liste sein, ein `[]` wäre ein Klon ohne Masken.
     * alles andere als `null` oder Liste von Strings wird abgelehnt."""
     def as_list(value: Any) -> list[str] | None:
         if isinstance(value, list) and all(isinstance(item, str) for item in value):
@@ -690,7 +690,7 @@ def _verify_config(old: dict[str, Any], new: dict[str, Any], body: dict[str, Any
 
 
 def merged_env(user: list[str], image: list[str]) -> list[str]:
-    """Wie der Docker-Dienst Env zusammenfuehrt: die Nutzereintraege, dazu die des Images, deren Schluessel der
+    """Wie der Docker-Dienst Env zusammenführt: die Nutzereinträge, dazu die des Images, deren Schlüssel der
     Nutzer nicht setzt."""
     keys = {entry.split("=", 1)[0] for entry in user}
     return list(user) + [entry for entry in image if entry.split("=", 1)[0] not in keys]
@@ -710,8 +710,8 @@ def mount_map(container: Mapping[str, Any]) -> dict[str, tuple[Any, ...]]:
 
 
 def same_mounts(old: Mapping[str, Any], new: Mapping[str, Any], nic: Mapping[str, Any]) -> bool:
-    """Jeder Mount des alten Containers ist im neuen genau so da (Ziel -> Typ, Name bzw. Quelle, RW). Zusaetzlich
-    erlaubt sind nur neue anonyme Volumes an Pfaden, die das **neue** Image als `VOLUME` erklaert (ein Wert aus dem
+    """Jeder Mount des alten Containers ist im neuen genau so da (Ziel -> Typ, Name bzw. Quelle, RW). Zusätzlich
+    erlaubt sind nur neue anonyme Volumes an Pfaden, die das **neue** Image als `VOLUME` erklärt (ein Wert aus dem
     neuen Image)."""
     old_map, new_map = mount_map(old), mount_map(new)
     image_volumes = {_clean_path(path) for path in _as_dict(nic.get("Volumes"), "Volumes")}
@@ -726,7 +726,7 @@ def network_map(container: Mapping[str, Any], ids: set[str]) -> dict[str, tuple[
     """`Netzname -> (NetworkID oder None, IPAMConfig, Aliases ohne die IDs)` aus `NetworkSettings.Networks`.
 
     Nach Name, nicht nach `NetworkID`: ein angelegter, noch nicht gestarteter Container meldet `NetworkID: ""` (die
-    Engine loest das Netz erst beim Start auf; live geprueft mit Docker 29.3, API 1.43 und 1.54). Die ID wird
+    Engine löst das Netz erst beim Start auf; live geprüft mit Docker 29.3, API 1.43 und 1.54). Die ID wird
     verglichen, wo beide Seiten eine haben (`same_networks`)."""
     out: dict[str, tuple[Any, ...]] = {}
     settings = container.get("NetworkSettings")

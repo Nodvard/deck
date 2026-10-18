@@ -5,6 +5,7 @@
  */
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
+import { groupHosts, GroupHeading, isGone, isSwitchedOff, KindBadge, kindLabel, type HostCategory, type KindSource } from "./hostKind";
 import { SearchInput } from "./ui";
 
 export interface HostTile {
@@ -19,6 +20,21 @@ export interface HostTile {
   extra?: string | null;
   /** Kurzer Zusatz, z. B. "ohne SSH-Zugang". */
   hint?: string | null;
+  /** Art aus `HostOut` (siehe `hostKind.tsx`): Plakette und Gruppe. Ohne diese Angaben gibt es beides nicht. */
+  kind?: string | null;
+  category?: HostCategory | string | null;
+  parent_label?: string | null;
+  power_state?: string | null;
+  gone_since?: string | null;
+}
+
+/** Kachel aus einem `HostOut` (oder einem Ausschnitt davon). */
+export function tileFromHost(host: KindSource & { id: string; name: string; display_name?: string | null; address?: string | null; os_family?: string | null; status?: string | null }): HostTile {
+  return {
+    id: host.id, name: host.display_name || host.name, address: host.address, os: host.os_family, status: host.status,
+    kind: host.kind, category: host.category, parent_label: host.parent_label, power_state: host.power_state,
+    gone_since: host.gone_since, ...(host.gone_since ? { hint: "nicht mehr vorhanden" } : {}),
+  };
 }
 
 const STORAGE_PREFIX = "nodvard.host-picker.";
@@ -49,20 +65,23 @@ export function osLabel(os?: string | null): string {
   return OS_LABELS[os.toLowerCase()] ?? os.charAt(0).toUpperCase() + os.slice(1);
 }
 
-type StatusTone = "ok" | "bad" | "unknown";
+type StatusTone = "ok" | "bad" | "unknown" | "off";
 
-/** Status des Kerns als Ampel: erreichbar, nicht erreichbar, unbekannt. */
-export function statusTone(status?: string | null): { tone: StatusTone; label: string } {
+/** Status des Kerns als Ampel: erreichbar, nicht erreichbar, unbekannt; ein laut Anbieter ausgeschalteter Gast
+ * (`powerState` `stopped`/`paused`) ist „aus“, nicht gestört. */
+export function statusTone(status?: string | null, powerState?: string | null, goneSince?: string | null): { tone: StatusTone; label: string } {
+  if (isGone({ gone_since: goneSince })) return { tone: "off", label: "nicht mehr vorhanden" };
+  if (isSwitchedOff({ power_state: powerState })) return { tone: "off", label: "aus" };
   const s = (status ?? "").toLowerCase();
   if (["up", "online", "running", "ok", "reachable"].includes(s)) return { tone: "ok", label: "erreichbar" };
   if (["down", "offline", "stopped", "unreachable", "error"].includes(s)) return { tone: "bad", label: "nicht erreichbar" };
   return { tone: "unknown", label: "Status unbekannt" };
 }
 
-const DOT: Record<StatusTone, string> = { ok: "bg-emerald-400", bad: "bg-red-400", unknown: "bg-white/30" };
+const DOT: Record<StatusTone, string> = { ok: "bg-emerald-400", bad: "bg-red-400", unknown: "bg-white/30", off: "bg-white/20" };
 
-export function StatusDot({ status }: { status?: string | null }) {
-  const { tone, label } = statusTone(status);
+export function StatusDot({ status, powerState, goneSince }: { status?: string | null; powerState?: string | null; goneSince?: string | null }) {
+  const { tone, label } = statusTone(status, powerState, goneSince);
   return <span className={`inline-block h-2 w-2 flex-none rounded-full ${DOT[tone]}`} title={label} aria-label={label} role="img" />;
 }
 
@@ -70,11 +89,13 @@ function TileBody({ host, active }: { host: HostTile; active: boolean }) {
   return (
     <>
       <span className="flex items-center gap-2">
-        <StatusDot status={host.status} />
+        <StatusDot status={host.status} powerState={host.power_state} goneSince={host.gone_since} />
         <span className="truncate font-medium">{host.name}</span>
         {active && <span className="ml-auto flex-none text-xs text-sky-300" aria-hidden="true">✓</span>}
       </span>
-      <span className="flex flex-wrap gap-x-3 text-xs text-white/50">
+      <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-white/50">
+        {hasKind(host) && <KindBadge host={host} />}
+        {isSwitchedOff(host) && !isGone(host) && <span>aus</span>}
         {host.address && <span>{host.address}</span>}
         {host.os && <span>{osLabel(host.os)}</span>}
         {host.extra && <span>{host.extra}</span>}
@@ -84,10 +105,15 @@ function TileBody({ host, active }: { host: HostTile; active: boolean }) {
   );
 }
 
+function hasKind(host: HostTile): boolean {
+  return host.category != null || host.kind != null;
+}
+
 function matches(host: HostTile, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
-  return [host.name, host.address, osLabel(host.os), host.hint].some((v) => (v ?? "").toLowerCase().includes(q));
+  const kind = hasKind(host) ? kindLabel(host) : "";
+  return [host.name, host.address, osLabel(host.os), host.hint, kind].some((v) => (v ?? "").toLowerCase().includes(q));
 }
 
 export function HostPicker({ hosts, value, onChange, storageKey, label = "Server wählen", searchFrom = DEFAULT_SEARCH_FROM, actions, gridClass }: {
@@ -120,6 +146,7 @@ export function HostPicker({ hosts, value, onChange, storageKey, label = "Server
 
   const selected = useMemo(() => (hosts ?? []).find((h) => h.id === value) ?? null, [hosts, value]);
   const shown = useMemo(() => (hosts ?? []).filter((h) => matches(h, query)), [hosts, query]);
+  const groups = useMemo(() => groupHosts(shown), [shown]);
 
   function choose(id: string) {
     rememberHost(storageKey, id);
@@ -134,8 +161,9 @@ export function HostPicker({ hosts, value, onChange, storageKey, label = "Server
   if (selected && !open && !actions) {
     return (
       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm" aria-label={label} data-testid="host-picker-selected">
-        <StatusDot status={selected.status} />
+        <StatusDot status={selected.status} powerState={selected.power_state} goneSince={selected.gone_since} />
         <span className="font-medium">{selected.name}</span>
+        {hasKind(selected) && <KindBadge host={selected} />}
         {selected.address && <span className="text-white/50">{selected.address}</span>}
         {selected.os && <span className="text-white/50">{osLabel(selected.os)}</span>}
         {selected.extra && <span className="text-white/50">{selected.extra}</span>}
@@ -157,32 +185,38 @@ export function HostPicker({ hosts, value, onChange, storageKey, label = "Server
         </div>
       )}
       {shown.length === 0 && <p className="text-sm text-white/50">Kein Server passt zu „{query.trim()}“.</p>}
-      <div className={`grid gap-2 ${gridClass ?? "sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"}`}>
-        {shown.map((h) => {
-          if (actions) {
-            return (
-              <div key={h.id} role="group" aria-label={h.name} className="flex flex-col gap-1 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm">
-                <TileBody host={h} active={false} />
-                <div className="mt-1 flex flex-wrap gap-1.5">{actions(h)}</div>
-              </div>
-            );
-          }
-          const active = h.id === value;
-          return (
-            <button
-              key={h.id}
-              type="button"
-              aria-pressed={active}
-              onClick={() => choose(h.id)}
-              className={`flex flex-col gap-1 rounded-lg border px-3 py-2 text-left text-sm transition ${
-                active ? "border-sky-400/60 bg-sky-400/10" : "border-white/10 bg-white/[0.04] hover:border-white/25 hover:bg-white/[0.07]"
-              }`}
-            >
-              <TileBody host={h} active={active} />
-            </button>
-          );
-        })}
-      </div>
+      {/* Gruppen (physisch, VMs, LXC) erst ab zwei Arten; sonst eine Liste ohne Überschrift wie bisher. */}
+      {(groups.length > 1 ? groups : [{ category: "server" as const, title: "", hosts: shown }]).map((group) => (
+        <div key={group.category} className={groups.length > 1 ? "mb-3 last:mb-0" : undefined}>
+          {groups.length > 1 && <GroupHeading group={group} className="mb-1.5" />}
+          <div className={`grid gap-2 ${gridClass ?? "sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"}`}>
+            {group.hosts.map((h) => {
+              if (actions) {
+                return (
+                  <div key={h.id} role="group" aria-label={h.name} className="flex flex-col gap-1 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm">
+                    <TileBody host={h} active={false} />
+                    <div className="mt-1 flex flex-wrap gap-1.5">{actions(h)}</div>
+                  </div>
+                );
+              }
+              const active = h.id === value;
+              return (
+                <button
+                  key={h.id}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => choose(h.id)}
+                  className={`flex flex-col gap-1 rounded-lg border px-3 py-2 text-left text-sm transition ${
+                    active ? "border-sky-400/60 bg-sky-400/10" : "border-white/10 bg-white/[0.04] hover:border-white/25 hover:bg-white/[0.07]"
+                  }`}
+                >
+                  <TileBody host={h} active={active} />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
       {selected && !actions && (
         <button type="button" onClick={() => { setOpen(false); setQuery(""); }} className="mt-2 text-xs text-white/50 hover:text-white/80">
           Abbrechen, bei „{selected.name}“ bleiben

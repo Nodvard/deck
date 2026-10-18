@@ -2,7 +2,7 @@
  * Daten für die Startseite: Hosts und Live-Metriken aus dem Kern, Dienste/Backups/Freigaben/Warnungen aus GET /overview
  * (herstellerneutral, backend api/v1/overview.py).
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "./api";
 
@@ -37,6 +37,14 @@ export interface HostOut {
   /** Wann sich Nodvard Deck zuletzt wirklich mit dem Standard-Zugang angemeldet hat; `null`: noch nie belegt. */
   login_ok_at?: string | null;
   provider_ext_id: string | null;
+  /** `server`, `vm` oder `lxc` (Gruppen und Plaketten, `hostKind.tsx`); fehlt bei älteren Servern. */
+  category?: string;
+  /** Bei einem Gast: auf welchem Host er läuft (Name beim Anbieter). */
+  parent_label?: string | null;
+  /** Vom Anbieter: `running`, `stopped`, `paused`; `null`, wenn unbekannt. */
+  power_state?: string | null;
+  /** Seit wann der Anbieter den Server nicht mehr kennt (etwa in Proxmox gelöscht); `null`: er ist da. */
+  gone_since?: string | null;
 }
 
 export interface MetricsOut {
@@ -122,8 +130,36 @@ export interface OverviewOut {
   pending_actions: number;
   unread_notifications: number;
   attention: { id: string; ts: string; severity: string; title: string; source_ext_id: string | null }[];
+  /** Server, die neu eingerichtet werden sollten: volle sudo-Regel, aber Hilfsskripte fehlen oder sind veraltet. */
+  helper_hints?: HelperHint[];
   errors: string[];
   generated_at: number;
+}
+
+export interface HelperHint {
+  host_id: string;
+  host_name: string;
+  /** Anzeigenamen der Module, die dort noch über die volle sudo-Regel laufen. */
+  modules: string[];
+  checked_at: string;
+}
+
+/** Blendet den Hinweis für einen Server aus, bis sich die fehlenden Skripte ändern. */
+export function useDismissHelperHint() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (hostId: string) => api.post<void>(`/hosts/${encodeURIComponent(hostId)}/helper-hint/dismiss`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["overview"] }),
+  });
+}
+
+/** „Nodvard Shield und Server-Zustand mit engen Rechten laufen“ (Einzahl: „läuft“). */
+export function helperHintText(hint: HelperHint): string {
+  const names = hint.modules.length > 1
+    ? `${hint.modules.slice(0, -1).join(", ")} und ${hint.modules[hint.modules.length - 1]}`
+    : hint.modules[0] ?? "die Module";
+  const verb = hint.modules.length === 1 ? "läuft" : "laufen";
+  return `${hint.host_name}: Server neu einrichten, damit ${names} mit engen Rechten ${verb}`;
 }
 
 export function useOverview(enabled = true) {
@@ -180,7 +216,10 @@ const PROBLEM = new Set(["down", "error", "unreachable", "offline", "failed"]);
 
 export type HostHealth = "online" | "stopped" | "problem" | "unknown";
 
-export function hostHealth(status: string): HostHealth {
+/** Zustand aus `status`; ein laut Anbieter ausgeschalteter Gast (`powerState` `stopped`/`paused`) ist „gestoppt“
+ * (grau, „aus“), keine Störung, auch wenn `status` dann `down` ist. */
+export function hostHealth(status: string, powerState?: string | null): HostHealth {
+  if (powerState === "stopped" || powerState === "paused") return "stopped";
   const s = status.toLowerCase();
   if (ONLINE.has(s)) return "online";
   if (PROBLEM.has(s)) return "problem";
@@ -188,12 +227,18 @@ export function hostHealth(status: string): HostHealth {
   return "unknown";
 }
 
-const STATUS_TEXT: Record<HostHealth, string> = { online: "läuft", stopped: "gestoppt", problem: "nicht erreichbar", unknown: "unbekannt" };
+/** Zustand eines Servers samt An/Aus und „beim Anbieter nicht mehr vorhanden“ (beides grau, keine Störung). */
+export function hostHealthOf(host: Pick<HostOut, "status" | "power_state" | "gone_since">): HostHealth {
+  return host.gone_since ? "stopped" : hostHealth(host.status, host.power_state);
+}
+
+const STATUS_TEXT: Record<HostHealth, string> = { online: "läuft", stopped: "aus", problem: "nicht erreichbar", unknown: "unbekannt" };
 
 /** Zustand eines Servers in Worten. Ein von Hand angelegter Server hat ohne „Verbindung prüfen“ nie
  * einen Zustand (nichts hat ihn je gesehen): das heißt „noch nicht geprüft“, nicht „unbekannt“. */
-export function hostStatusText(host: Pick<HostOut, "status" | "last_seen_at">): string {
-  const health = hostHealth(host.status);
+export function hostStatusText(host: Pick<HostOut, "status" | "last_seen_at" | "power_state" | "gone_since">): string {
+  if (host.gone_since) return "nicht mehr vorhanden";
+  const health = hostHealth(host.status, host.power_state);
   return health === "unknown" && !host.last_seen_at ? "noch nicht geprüft" : STATUS_TEXT[health];
 }
 

@@ -1,0 +1,61 @@
+{
+  "type": "object",
+  "properties": {
+    "base_url": {
+      "type": "string",
+      "title": "Adresse",
+      "description": "Adresse der Weboberfläche von DSM, z. B. https://nas.example:5001 (DSM nutzt Port 5000 für http und 5001 für https). Ein Pfad wie /webman/index.cgi darf dahinter stehen, er wird abgeschnitten. Mit http:// läuft das Passwort unverschlüsselt durchs Netz; nimm besser https://.",
+      "pattern": "^https?://\\S+$",
+      "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten."
+    },
+    "username": {
+      "type": "string",
+      "title": "Benutzername",
+      "description": "Am besten ein eigenes DSM-Konto nur für Nodvard Deck, ohne Zwei-Faktor-Anmeldung. Für Speicher, Auslastung, Updates und Hyper Backup verlangt DSM in der Regel ein Konto in der Gruppe „administrators“; fehlen Rechte, zeigt Nodvard Deck die übrigen Teile und sagt, was fehlt."
+    },
+    "tls_insecure_skip_verify": {
+      "type": "boolean",
+      "default": false,
+      "title": "Selbstsigniertes Zertifikat erlauben",
+      "description": "Nur im eigenen Netz aktivieren. DSM hat oft ein eigenes, selbst erstelltes Zertifikat; dann schlägt die Prüfung fehl. Dieser Schalter schaltet jede Prüfung des Zertifikats ab."
+    },
+    "tls_fingerprint_sha256": {
+      "type": "string",
+      "title": "Fingerabdruck des Zertifikats (SHA-256)",
+      "description": "Nur bei https:// mit einem selbst erstellten Zertifikat. Nodvard Deck spricht dann nur mit der Synology, die genau dieses Zertifikat zeigt. Steht er hier, braucht es „Selbstsigniertes Zertifikat erlauben“ nicht. Du bekommst ihn z. B. im Browser aus den Zertifikatsdetails der Anmeldeseite von DSM.",
+      "pattern": "^\\s*([0-9A-Fa-f]{2}[:\\t -]?){31}[0-9A-Fa-f]{2}\\s*$|^\\s*$",
+      "x-pattern-message": "64 Zeichen aus 0–9 und A–F, gern mit Doppelpunkten (z. B. AB:CD:…).",
+      "x-advanced": true
+    },
+    "notify": {
+      "type": "boolean",
+      "default": true,
+      "title": "Bei Problemen melden",
+      "description": "Eine Meldung (auch aufs Handy, wenn Push eingerichtet ist), wenn ein Speicherpool oder Volume nicht in Ordnung ist, eine Festplatte warnt, das Gerät oder ein Laufwerk zu warm wird oder Hyper Backup fehlschlägt oder überfällig ist. Und eine, wenn es wieder in Ordnung ist."
+    },
+    "notify_update": {
+      "type": "boolean",
+      "default": true,
+      "title": "Über DSM-Updates informieren",
+      "description": "Eine ruhige Meldung (Stufe „Info“, ohne Eintrag unter „Braucht Aufmerksamkeit“), sobald ein neues DSM-Update bereitsteht; je Version einmal."
+    },
+    "disk_temp_warn_c": {
+      "type": "integer",
+      "minimum": 40,
+      "maximum": 95,
+      "title": "Laufwerke: Warnung ab Temperatur (°C)",
+      "description": "Leer lassen für die Vorgabe: Festplatten ab 55 °C, SSD ab 65 °C, NVMe ab 70 °C. Gemeldet wird erst, wenn ein Laufwerk 10 bis 15 Minuten so warm bleibt; wieder normal gilt es 5 Grad darunter.",
+      "x-advanced": true
+    }
+  },
+  "x-secrets": [
+    {
+      "label": "synology-password",
+      "x-secret-bound-to": [
+        "base_url"
+      ],
+      "title": "Passwort",
+      "description": "Das Passwort des DSM-Kontos. Ein falsches Passwort zählt in DSM als Fehlversuch: DSM sperrt Adressen nach mehreren davon automatisch. Darum fragt Nodvard Deck nach einer abgelehnten Anmeldung 30 Minuten lang nicht erneut."
+    }
+  ]
+}

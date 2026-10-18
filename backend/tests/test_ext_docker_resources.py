@@ -465,13 +465,38 @@ async def test_removing_a_volume_waits_for_approval_and_then_runs(client, docker
 
 
 @pytest.mark.asyncio
-async def test_a_bad_volume_name_never_reaches_the_server_even_when_approved(client, docker_on):
-    # Die Kern-Route prüft `params_schema` nicht; der Ausführer lehnt den Wert ab, bevor etwas läuft.
-    proposed = await client.post(
+async def test_a_bad_volume_name_is_refused_when_proposed(client, db_session, docker_on):
+    # Die Kern-Route prüft `params_schema` schon beim Vorschlag: 422, keine Aktion, nichts geht ans Gate.
+    from sqlalchemy import func, select
+
+    from nodvard_deck.models import Action
+
+    refused = await client.post(
         f"/api/v1/hosts/{docker_on.host}/actions/docker.volume_remove",
         json={"payload": {"volume": "x; rm -rf /"}, "reason": "Test"}, headers=docker_on.headers,
     )
-    approved = await client.post(f"/api/v1/actions/{proposed.json()['id']}/approve", headers=docker_on.headers)
+    assert refused.status_code == 422, refused.text
+    assert "„volume“" in refused.json()["detail"]
+    assert (await db_session.execute(select(func.count()).select_from(Action))).scalar_one() == 0
+    assert docker_on.exec.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_bad_volume_name_never_reaches_the_server_even_when_approved(client, db_session, docker_on):
+    # Die Prüfung des Ausführers gilt weiter, auch wenn ein Vorschlag nicht über die Route kommt (verbindlich).
+    from nodvard_sdk import ActionRequest, Actor, ActorType, Risk
+
+    from nodvard_deck.core import gate
+
+    decision = await gate.propose(
+        db_session, ext_id="core", command_field=None,
+        request=ActionRequest(
+            action_type="docker.volume_remove", payload={"volume": "x; rm -rf /"}, host_ref=docker_on.host,
+            risk=Risk.HIGH, proposed_by=Actor(type=ActorType.AI, id="test-model"), reason="Test",
+        ),
+    )
+    await db_session.commit()
+    approved = await client.post(f"/api/v1/actions/{decision.action_id}/approve", headers=docker_on.headers)
     assert approved.json()["status"] == "failed", approved.text
     assert docker_on.exec.calls == []
 

@@ -629,6 +629,181 @@ async def test_trigger_host_action_rejects_specs_that_are_not_host_bound(client,
     assert ok.json()["status"] == "proposed"
 
 
+_PARAMS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "container": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+        "mode": {"type": "string", "enum": ["soft", "hard"]},
+        "retries": {"type": "integer", "minimum": 1, "maximum": 5},
+    },
+    "required": ["container"],
+}
+
+
+def _register_params_spec(schema=_PARAMS_SCHEMA) -> None:
+    get_extension_runtime().actions.register(
+        "demo-ext",
+        ActionSpec(
+            action_type="demo.restart", label="Dienst neu starten", host_bound=True, default_risk=Risk.LOW,
+            permissions=["hosts.execute"], params_schema=schema,
+        ),
+    )
+
+
+async def _action_count(db_session) -> int:
+    from sqlalchemy import func, select
+
+    from nodvard_deck.models import Action
+
+    return (await db_session.execute(select(func.count()).select_from(Action))).scalar_one()
+
+
+async def _params_host(client):
+    token = await _bootstrap_owner(client)
+    host = (
+        await client.post("/api/v1/hosts", json={"name": "a", "address": "1.1.1.1"}, headers=_auth_header(token))
+    ).json()
+    return token, host["id"]
+
+
+async def _trigger_demo(client, token, host_id, payload):
+    return await client.post(
+        f"/api/v1/hosts/{host_id}/actions/demo.restart",
+        json={"payload": payload, "reason": "Test"}, headers=_auth_header(token),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"container": 7}, "„container“ hat den falschen Typ (erwartet: Text, erhalten: ganze Zahl)"),
+        ({"container": None}, "„container“ fehlt"),
+        ({}, "„container“ fehlt"),
+        ({"container": "web", "mode": "sanft"}, "„mode“ muss einer dieser Werte sein: soft, hard"),
+        ({"container": "Web Server!"}, "„container“: Das Format stimmt nicht"),
+        ({"container": "web", "retries": 9}, "„retries“: Erlaubt sind Werte von 1 bis 5. Angegeben ist 9"),
+        ({"container": "web", "retries": "3"}, "„retries“ hat den falschen Typ (erwartet: ganze Zahl, erhalten: Text)"),
+    ],
+    ids=["falscher-typ", "null", "pflichtfeld-fehlt", "ausserhalb-enum", "muster", "ueber-maximum", "zahl-als-text"],
+)
+async def test_trigger_host_action_rejects_params_that_violate_the_schema(client, db_session, payload, expected):
+    """Passt ein Wert nicht zum `params_schema`, antwortet die Route gleich mit 422 und einem deutschen Text:
+    keine Action-Zeile, nichts geht ans Gate (vorher fiel das erst im Ausführer durch)."""
+    token, host_id = await _params_host(client)
+    _register_params_spec()
+
+    r = await _trigger_demo(client, token, host_id, payload)
+
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert detail.startswith("Ungültige Angaben für „Dienst neu starten“: "), detail
+    assert expected in detail, detail
+    assert await _action_count(db_session) == 0
+
+
+@pytest.mark.asyncio
+async def test_trigger_host_action_huge_integer_is_422_not_500(client, db_session):
+    """Der JSON-Leser macht aus `1000…0` (400 Stellen) eine Python-`int`, die sich nicht in ein `float` wandeln lässt:
+    der Prüfer meldet den Fehler wie bei jeder anderen Zahl, statt mit 500 abzubrechen."""
+    token, host_id = await _params_host(client)
+    _register_params_spec()
+    url = f"/api/v1/hosts/{host_id}/actions/demo.restart"
+    headers = {**_auth_header(token), "Content-Type": "application/json"}
+    huge = "1" + "0" * 400
+
+    for sign in ("", "-"):
+        body = '{"payload": {"container": "web", "retries": ' + sign + huge + '}, "reason": "Test"}'
+        r = await client.post(url, content=body, headers=headers)
+        assert r.status_code == 422, r.text
+        assert "„retries“: Erlaubt sind Werte von 1 bis 5. Angegeben ist " in r.json()["detail"]
+        assert "× 10^400" in r.json()["detail"]
+    assert await _action_count(db_session) == 0
+
+    # Ohne Grenzwert im Schema ist die Zahl kein Fehler des Prüfers; die Route darf nur nicht abbrechen.
+    _register_params_spec({"type": "object", "properties": {"menge": {"type": "integer"}}, "required": ["menge"]})
+    body = '{"payload": {"menge": ' + huge + '}, "reason": "Test"}'
+    r = await client.post(url, content=body, headers=headers)
+    assert r.status_code == 202, r.text
+
+
+@pytest.mark.asyncio
+async def test_trigger_host_action_accepts_params_that_match_the_schema(client, db_session):
+    token, host_id = await _params_host(client)
+    _register_params_spec()
+
+    for payload in ({"container": "web"}, {"container": "web-2", "mode": "hard", "retries": 5}, {"container": "web", "extra": 1}):
+        r = await _trigger_demo(client, token, host_id, payload)
+        assert r.status_code == 202, r.text
+        assert r.json()["status"] == "proposed"
+        assert r.json()["payload"] == payload
+    assert await _action_count(db_session) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("schema", [None, {}])
+async def test_trigger_host_action_without_params_schema_takes_any_payload(client, db_session, schema):
+    token, host_id = await _params_host(client)
+    _register_params_spec(schema)
+
+    r = await _trigger_demo(client, token, host_id, {"container": 7, "irgendwas": [1, 2]})
+
+    assert r.status_code == 202, r.text
+    assert await _action_count(db_session) == 1
+
+
+@pytest.mark.asyncio
+async def test_trigger_host_action_checks_params_of_provider_specific_specs(client, db_session):
+    """Auch eine Aktion, die der HostProvider genau für diesen Host anbietet (`host_actions`), wird geprüft."""
+
+    class _SnapshotProvider(_FakeHostProvider):
+        provider_id = "snap-provider"
+
+        async def host_actions(self, provider_ref):
+            return [ActionSpec(
+                action_type="vm.snapshot_delete", label="Snapshot löschen", host_bound=True, default_risk=Risk.MEDIUM,
+                params_schema={"type": "object", "properties": {"snapname": {"type": "string"}}, "required": ["snapname"]},
+            )]
+
+    from nodvard_deck.models import Host as HostModel
+
+    token, host_id = await _params_host(client)
+    db_host = await db_session.get(HostModel, host_id)
+    db_host.provider_ext_id = "snap-provider"
+    await db_session.flush()
+    get_extension_runtime().capabilities.provide("snap-provider", HostProvider, _SnapshotProvider())
+    url = f"/api/v1/hosts/{host_id}/actions/vm.snapshot_delete"
+
+    bad = await client.post(url, json={"payload": {}, "reason": "Test"}, headers=_auth_header(token))
+    assert bad.status_code == 422, bad.text
+    assert "„snapname“ fehlt" in bad.json()["detail"]
+    assert await _action_count(db_session) == 0
+
+    ok = await client.post(url, json={"payload": {"snapname": "vor-update"}, "reason": "Test"}, headers=_auth_header(token))
+    assert ok.status_code == 202, ok.text
+
+
+@pytest.mark.asyncio
+async def test_trigger_host_action_checks_permission_before_params(client, db_session):
+    """Wer die Aktion gar nicht auslösen darf, bekommt 403 und erfährt nichts über die Felder."""
+    from nodvard_deck.core import security
+    from nodvard_deck.models import User
+    from nodvard_deck.services import auth as auth_service
+
+    _, host_id = await _params_host(client)
+    _register_params_spec()
+    roles = await auth_service.ensure_builtin_roles(db_session)
+    user = User(username="viewer3", password_hash=security.hash_password("whatever123"), is_active=True)
+    user.roles.append(roles["viewer"])
+    db_session.add(user)
+    await db_session.flush()
+    viewer = (await client.post("/api/v1/auth/login", json={"username": "viewer3", "password": "whatever123"})).json()["access_token"]
+
+    r = await _trigger_demo(client, viewer, host_id, {})
+
+    assert r.status_code == 403, r.text
+
+
 async def _discovered_host(tmp_path, tags):
     from nodvard_sdk import DiscoveredHost
 

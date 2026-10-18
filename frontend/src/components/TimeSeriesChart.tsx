@@ -10,6 +10,8 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { minMax } from "../lib/minMax";
+
 export interface ChartSeries {
   key: string;
   label: string;
@@ -30,6 +32,8 @@ interface Props {
 
 const PAD = { top: 10, right: 12, bottom: 22, left: 58 };
 
+const isValue = (v: number | null | undefined): v is number => typeof v === "number" && Number.isFinite(v);
+
 function niceMax(value: number): number {
   if (value <= 0) return 1;
   const exp = Math.pow(10, Math.floor(Math.log10(value)));
@@ -45,20 +49,14 @@ function timeLabel(ts: number, rangeSeconds: number): string {
 }
 
 export function stats(values: (number | null)[]): { current: number | null; min: number | null; avg: number | null; max: number | null } {
-  const present = values.filter((v): v is number => v !== null);
-  if (!present.length) return { current: null, min: null, avg: null, max: null };
-  let current: number | null = null;
-  for (let i = values.length - 1; i >= 0; i--) {
-    if (values[i] !== null) {
-      current = values[i];
-      break;
-    }
-  }
+  const present = values.filter(isValue);
+  const range = minMax(present);
+  if (!range) return { current: null, min: null, avg: null, max: null };
   return {
-    current,
-    min: Math.min(...present),
+    current: present[present.length - 1],
+    min: range.min,
     avg: present.reduce((a, b) => a + b, 0) / present.length,
-    max: Math.max(...present),
+    max: range.max,
   };
 }
 
@@ -79,7 +77,7 @@ export function TimeSeriesChart({ title, timestamps, series, format, yMax, heigh
   const plotH = height - PAD.top - PAD.bottom;
   const t0 = timestamps[0] ?? 0;
   const t1 = timestamps[timestamps.length - 1] ?? 1;
-  const dataMax = Math.max(0, ...series.flatMap((s) => s.values.filter((v): v is number => v !== null)));
+  const dataMax = Math.max(0, minMax(series.flatMap((s) => s.values))?.max ?? 0);
   const top = yMax ?? niceMax(dataMax * 1.1);
   const x = (ts: number) => PAD.left + (t1 === t0 ? 0 : ((ts - t0) / (t1 - t0)) * plotW);
   const y = (v: number) => PAD.top + plotH - (Math.min(v, top) / top) * plotH;
@@ -93,7 +91,7 @@ export function TimeSeriesChart({ title, timestamps, series, format, yMax, heigh
         let prevX = 0;
         s.values.forEach((v, i) => {
           const px = x(timestamps[i]);
-          if (v === null) {
+          if (!isValue(v)) {
             if (segStart !== null) area += `L${prevX},${PAD.top + plotH}L${segStart},${PAD.top + plotH}Z`;
             segStart = null;
             return;
@@ -135,7 +133,7 @@ export function TimeSeriesChart({ title, timestamps, series, format, yMax, heigh
     setHover(best);
   }
 
-  const hasData = series.some((s) => s.values.some((v) => v !== null));
+  const hasData = series.some((s) => s.values.some(isValue));
   const hoverX = hover !== null ? x(timestamps[hover]) : 0;
 
   return (
@@ -164,7 +162,7 @@ export function TimeSeriesChart({ title, timestamps, series, format, yMax, heigh
                 <line x1={hoverX} x2={hoverX} y1={PAD.top} y2={PAD.top + plotH} stroke="rgb(var(--ink) / 0.35)" />
                 {series.map((s) => {
                   const v = s.values[hover];
-                  return v === null ? null : <circle key={s.key} cx={hoverX} cy={y(v)} r={4} fill={s.color} stroke="var(--color-surface)" strokeWidth={2} />;
+                  return isValue(v) ? <circle key={s.key} cx={hoverX} cy={y(v)} r={4} fill={s.color} stroke="var(--color-surface)" strokeWidth={2} /> : null;
                 })}
               </g>
             )}
@@ -180,7 +178,7 @@ export function TimeSeriesChart({ title, timestamps, series, format, yMax, heigh
             {series.map((s) => (
               <p key={s.key} className="flex items-center gap-2">
                 <span className="inline-block h-0.5 w-3 rounded" style={{ background: s.color }} />
-                <span className="font-semibold tabular-nums text-white">{s.values[hover] === null ? "–" : format(s.values[hover] as number)}</span>
+                <span className="font-semibold tabular-nums text-white">{isValue(s.values[hover]) ? format(s.values[hover]) : "–"}</span>
                 <span className="text-white/55">{s.label}</span>
               </p>
             ))}

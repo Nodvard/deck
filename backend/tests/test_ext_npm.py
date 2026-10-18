@@ -195,6 +195,36 @@ async def test_npm_with_address_but_without_password_says_what_is_missing(client
 
 
 @pytest.mark.asyncio
+async def test_widget_meta_says_not_configured_only_when_nothing_usable_is_entered(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+
+    async def widget() -> dict:
+        res = await client.get("/api/v1/ext/npm/widgets/certificates", headers=headers)
+        assert res.status_code == 200, res.text
+        return res.json()
+
+    async def save(values: dict) -> None:
+        res = await client.put("/api/v1/extensions/npm/settings", json={"current_password": "correct-horse-battery", "values": values}, headers=headers)
+        assert res.status_code == 200, res.text
+
+    # Nichts eingetragen: die Übersicht darf die Kachel ausblenden; die Textzeile bleibt für ältere Oberflächen.
+    body = await widget()
+    assert body["meta"] == {"state": "not_configured"} and body["data"][0]["label"] == "nicht eingerichtet"
+
+    # Eine eingetragene, aber unbrauchbare Adresse ist ein Fehler und bleibt sichtbar.
+    await save({"url": "ftp://npm.test", "identity": "admin@home.example"})
+    body = await widget()
+    assert body["meta"] == {"state": "error"} and "ist ungültig" in body["data"][0]["subtitle"]
+
+    # Eine gültige Adresse gilt als eingerichtet, auch wenn der Nginx Proxy Manager nicht antwortet.
+    await _configure(client, headers)
+    fake.down.add("npm.test")
+    assert (await widget())["meta"] == {"state": "unreachable"}
+    fake.down.clear()
+    assert (await widget())["meta"] == {"state": "ok"}
+
+
+@pytest.mark.asyncio
 async def test_routes_reject_anonymous_and_viewers_cannot_propose(client, db_session, test_settings):
     headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers)

@@ -50,7 +50,7 @@ from .warnung import (
 # Das Lesende läuft über `ctx.exec.run()` und braucht deshalb `hosts.execute`; schreibend ist nur „Dienst neu starten“
 # (`actions.py`), als Vorschlag ans Aktions-Gate.
 _WIDGET_CACHE_S = 300
-_TONE_ORDER = {"danger": 0, "warn": 1, "good": 2}
+_TONE_ORDER = {"danger": 0, "warn": 1, "good": 2, "neutral": 3}
 
 
 class WidgetCache:
@@ -71,9 +71,9 @@ class WidgetCache:
         self._entry = (now, key, rows)
 
 
-def hosts_key(hosts: list[Any]) -> tuple[tuple[str, str, str], ...]:
-    """Woran das Widget erkennt, dass sich die Serverliste geändert hat: Kennung, Adresse und Name."""
-    return tuple(sorted((str(h.id), str(h.address), str(h.display_name or h.name)) for h in hosts))
+def hosts_key(hosts: list[Any]) -> tuple[tuple[str, str, str, bool], ...]:
+    """Woran das Widget erkennt, dass sich die Serverliste geändert hat: Kennung, Adresse, Name und An/Aus."""
+    return tuple(sorted((str(h.id), str(h.address), str(h.display_name or h.name), switched_off(h)) for h in hosts))
 
 
 def error_text(exc: BaseException) -> str:
@@ -85,11 +85,50 @@ def error_text(exc: BaseException) -> str:
     return str(exc).strip() or "Verbindung fehlgeschlagen"
 
 
+_KIND_WORDS = {"vm": "VM", "lxc": "LXC"}
+_KIND_ORDER = {"Knoten": 0, "Server": 0, "VM": 1, "LXC": 2}
+
+
+def kind_label(host: Any) -> str:
+    """„Knoten“, „Server“, „VM“ oder „LXC“, bei Gästen mit dem Host dahinter („LXC auf pve1“); dieselben Wörter wie
+    `kindLabel` in `extensions/_shared/frontend/src/hostKind.tsx`."""
+    kind = getattr(host, "kind", None)
+    word = _KIND_WORDS.get(kind or "")
+    if word is None:
+        return "Knoten" if kind in ("hypervisor", "node") else "Server"
+    parent = (getattr(host, "metadata", None) or {}).get("parent_label")
+    return f"{word} auf {parent}" if isinstance(parent, str) and parent else word
+
+
+def _gone(host: Any) -> bool:
+    return bool((getattr(host, "metadata", None) or {}).get("gone_since"))
+
+
+def switched_off(host: Any) -> bool:
+    """Laut Anbieter ausgeschaltet (gestoppt oder pausiert) oder dort nicht mehr vorhanden: dann gibt es nichts per SSH
+    zu fragen."""
+    return (getattr(host, "metadata", None) or {}).get("power_state") in ("stopped", "paused") or _gone(host)
+
+
+def off_row(host: Any) -> dict[str, Any]:
+    """Zeile für einen ausgeschalteten oder gelöschten Gast: neutral statt „nicht erreichbar“."""
+    gone = _gone(host)
+    return {
+        "name": host.display_name or host.name, "host_id": host.id, "kind": kind_label(host),
+        "summary": "beim Anbieter nicht mehr vorhanden" if gone else "ausgeschaltet",
+        "badge": "nicht mehr vorhanden" if gone else "aus", "tone": "neutral",
+    }
+
+
 def widget_row(host: Any, info: dict[str, Any] | None, error: str | None) -> dict[str, Any]:
     """Eine Zeile des Widgets "Server-Zustand": schlimmster Befund zuerst."""
     name = host.display_name or host.name
+    kind = kind_label(host)
     if info is None:
-        return {"name": name, "host_id": host.id, "summary": error or "nicht erreichbar", "badge": "nicht erreichbar", "tone": "danger"}
+        return {
+            "name": name, "host_id": host.id, "kind": kind, "summary": error or "nicht erreichbar",
+            "badge": "nicht erreichbar", "tone": "danger",
+        }
     # Nach Schwere sortiert, damit Text und Ton vom selben (schlimmsten) Eintrag kommen.
     findings = sorted(info["findings"], key=lambda f: _TONE_ORDER.get(f["tone"], 2))
     tone = findings[0]["tone"] if findings else "good"
@@ -97,6 +136,7 @@ def widget_row(host: Any, info: dict[str, Any] | None, error: str | None) -> dic
     return {
         "name": name,
         "host_id": host.id,
+        "kind": kind,
         "summary": findings[0]["text"] if findings else f"{info.get('os') or 'Linux'} – alles in Ordnung",
         "badge": "OK" if not findings else f"{len(findings)} Befund{'e' if len(findings) > 1 else ''}",
         "tone": tone,
@@ -230,6 +270,8 @@ class Extension(NodvardExtension):
         widget_cache = WidgetCache(_WIDGET_CACHE_S)
 
         async def _query(host: Any) -> dict[str, Any]:
+            if switched_off(host):
+                return off_row(host)
             try:
                 # Das äußere Zeitlimit (25 s) liegt über dem des SSH-Aufrufs (20 s), damit auch ein hängender
                 # Verbindungsaufbau endet.
@@ -254,7 +296,10 @@ class Extension(NodvardExtension):
             if cached is not None:
                 return {"data": cached, "meta": {"cached": True}}
             rows = list(await asyncio.gather(*(_query(h) for h in hosts)))
-            rows.sort(key=lambda r: (_TONE_ORDER.get(r["tone"], 2), r["name"].lower()))
+            # Schlimmster zuerst, bei gleichem Zustand nach Art (Server, VM, LXC) wie die anderen Server-Listen.
+            rows.sort(key=lambda r: (
+                _TONE_ORDER.get(r["tone"], 2), _KIND_ORDER.get(r["kind"].split(" ", 1)[0], 0), r["name"].lower(),
+            ))
             widget_cache.put(key, now, rows)
             return {"data": rows, "meta": {"cached": False}}
 
@@ -373,7 +418,7 @@ class Extension(NodvardExtension):
                 view=ListView(
                     item=ListItem(
                         title="{{ name }}",
-                        subtitle="{{ summary }}",
+                        subtitle="{{ kind }} · {{ summary }}",
                         badge=Badge(text="{{ badge }}", tone="{{ tone }}"),
                     ),
                     empty_text="Keine Linux-Server mit SSH-Zugang",

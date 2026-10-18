@@ -140,7 +140,7 @@ class ItemIn(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     serial_number: str | None = Field(default=None, max_length=200)
     product_url: str | None = Field(default=None, max_length=2000)
-    # Kennungen sind 40 Zeichen lang (`new_id()`), obwohl die Spalten String(36) heißen: hier nur eine Obergrenze.
+    # Kennungen aus älteren Versionen sind 40 Zeichen lang, obwohl die Spalten String(36) heißen: hier nur eine Obergrenze.
     host_id: str | None = Field(default=None, max_length=64)
     project_id: str | None = Field(default=None, max_length=64)
     rack_id: str | None = Field(default=None, max_length=64)

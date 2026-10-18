@@ -1,35 +1,35 @@
 """Eine kleine Engine zum Durchspielen: Container, Images und Registry im Speicher, mit eigener Uhr.
 
-`LiveWorld` erweitert die Welt der Fake-Engine (`fake_engine.World`) um die aendernden Aufrufe, so wie der
-Docker-Dienst sie beantwortet: `create` fuehrt den Body mit der Config des Images zusammen (Env, Labels, Healthcheck,
-Ports, Volumes, Cmd, Entrypoint, Standardmasken) und haengt Volumes und Binds ein, `connect` haengt Netze an, `start`
-und `stop` aendern den Zustand, `rename`, `update`, `remove`, Tags, Pull nach Digest und die Aufloesung des beweglichen
-Tags in der Registry (`/distribution`). Wie sich ein gestarteter Container verhaelt, bestimmt sein Image (`Behavior`):
+`LiveWorld` erweitert die Welt der Fake-Engine (`fake_engine.World`) um die ändernden Aufrufe, so wie der
+Docker-Dienst sie beantwortet: `create` führt den Body mit der Config des Images zusammen (Env, Labels, Healthcheck,
+Ports, Volumes, Cmd, Entrypoint, Standardmasken) und hängt Volumes und Binds ein, `connect` hängt Netze an, `start`
+und `stop` ändern den Zustand, `rename`, `update`, `remove`, Tags, Pull nach Digest und die Auflösung des beweglichen
+Tags in der Registry (`/distribution`). Wie sich ein gestarteter Container verhält, bestimmt sein Image (`Behavior`):
 gesund nach einer Weile, erst lange `unhealthy`, beendet, in einer Neustart-Schleife, mit der Notseite (503) oder nie
-gesund -- jeweils abhaengig von der monotonen Zeit auf der Uhr der Tests (`Clock`), die auch der Ablauf benutzt.
+gesund -- jeweils abhängig von der monotonen Zeit auf der Uhr der Tests (`Clock`), die auch der Ablauf benutzt.
 
 Images verwaltet sie wie einer der beiden Stores des Docker-Dienstes (`image_store`): wie der alte Graphdriver-Store
 (`RepoDigests` bleiben stehen) oder wie der containerd-Store, Standard einer neuen Installation von Docker 29
 (`RepoDigests` aus den Namen abgeleitet, `derive_repo_digests`). `restart_daemon` spielt einen Neustart des
 Docker-Dienstes nach (Restart-Policies, von Hand gestoppte Container; auch der Helfer startet dabei neu),
 `restart_container` den Neustart eines einzelnen Containers (etwa des Helfers nach einem Absturz), `end_later` einen
-Stopp, der nach einer Fehlerantwort weiterlaeuft.
+Stopp, der nach einer Fehlerantwort weiterläuft.
 
-**Invarianten bei jedem Aufruf** (Verstoesse in `violations`, die Tests verlangen eine leere Liste):
+**Invarianten bei jedem Aufruf** (Verstöße in `violations`, die Tests verlangen eine leere Liste):
 
-* nie zwei laufende Container an derselben Quelle von `/app/data` (One-off-Container wie `docker compose run` fuer eine
-  Sicherung zaehlen nicht: die startet der Nutzer, nicht der Helfer);
+* nie zwei laufende Container an derselben Quelle von `/app/data` (One-off-Container wie `docker compose run` für eine
+  Sicherung zählen nicht: die startet der Nutzer, nicht der Helfer);
 * jeder Container, der startet, hat unter `/app/data` dieselbe Quelle wie das Ziel am Anfang (ein Klon mit einem
-  neuen, leeren Volume faellt so auf);
-* kein Volume wird je entfernt (`DELETE /containers/{id}` laesst Volumes stehen; `v=1` lehnt schon die Fake-Engine ab).
+  neuen, leeren Volume fällt so auf);
+* kein Volume wird je entfernt (`DELETE /containers/{id}` lässt Volumes stehen; `v=1` lehnt schon die Fake-Engine ab).
 
-Endpunkte ausserhalb der Allowlist, die Form der aendernden Aufrufe (nie `v=1`, nie `force`, `/update` nur mit der
-Restart-Policy) und die Bindung an das Journal auf der Platte prueft die Fake-Engine selbst (`form_problem`,
+Endpunkte außerhalb der Allowlist, die Form der ändernden Aufrufe (nie `v=1`, nie `force`, `/update` nur mit der
+Restart-Policy) und die Bindung an das Journal auf der Platte prüft die Fake-Engine selbst (`form_problem`,
 `JournalGuard.from_state_dir`).
 
 `Lab` setzt das zusammen: die Welt einer Aufnahme als durchgespielte Engine, ein echtes `/state` und den Ablauf mit
-der Uhr der Tests. Fuer die Wiederaufnahme kann der Ablauf an einer gezaehlten Stelle "abstuerzen" (`Points`, `Crash`:
-vor und nach jedem Schreiben in `/state` ueber den `checkpoint` des Ablaufs, nach jedem aendernden Engine-Aufruf ueber
+der Uhr der Tests. Für die Wiederaufnahme kann der Ablauf an einer gezählten Stelle "abstürzen" (`Points`, `Crash`:
+vor und nach jedem Schreiben in `/state` über den `checkpoint` des Ablaufs, nach jedem ändernden Engine-Aufruf über
 `CrashingEngine`), und `Lab.restart_helper` startet den Helfer neu: neue Sperre, neuer Client ohne ausgehandelte
 Version, neuer Ablauf -- die Engine und `/state` bleiben, wie sie sind.
 """
@@ -74,10 +74,10 @@ CHECK_INTERVAL_S = 10.0
 
 
 class Clock:
-    """Uhr der Tests: `time()` ist die Wanduhr, `monotonic()` die monotone Uhr (fuer Fristen und Warten im Ablauf und
-    fuer die Laufzeit der Container in der Welt). `sleep()` stellt beide nur weiter.
+    """Uhr der Tests: `time()` ist die Wanduhr, `monotonic()` die monotone Uhr (für Fristen und Warten im Ablauf und
+    für die Laufzeit der Container in der Welt). `sleep()` stellt beide nur weiter.
 
-    `t` vorstellen heisst: so viel Zeit vergeht (beide Uhren laufen weiter). `t` zurueckstellen und `jump()` aendern nur
+    `t` vorstellen heißt: so viel Zeit vergeht (beide Uhren laufen weiter). `t` zurückstellen und `jump()` ändern nur
     die Wanduhr -- so wie NTP sie stellt, etwa kurz nach dem Hochfahren eines Raspberry Pi ohne Echtzeituhr."""
 
     def __init__(self, start: float = NOW) -> None:
@@ -115,7 +115,7 @@ class Clock:
 
 @dataclass
 class Behavior:
-    """Wie sich ein Container dieses Images nach dem Start verhaelt (Sekunden seit dem Start).
+    """Wie sich ein Container dieses Images nach dem Start verhält (Sekunden seit dem Start).
 
     * `healthy_after`: ab dann `healthy` (`None`: nie).
     * `unhealthy_from`: ab dann `unhealthy` (bis `healthy_after`); vorher `starting`.
@@ -219,7 +219,7 @@ def _merge_env(user: list[str], image: list[str]) -> list[str]:
 
 
 class LiveWorld(World):
-    """Die Welt einer Fixture plus Registry, Uhr und die aendernden Aufrufe (siehe Kopf des Moduls)."""
+    """Die Welt einer Fixture plus Registry, Uhr und die ändernden Aufrufe (siehe Kopf des Moduls)."""
 
     def __init__(self, base: World, clock: Clock, *, image_store: str = "graphdriver") -> None:
         super().__init__(api=base.api, version=base.version, containers=base.containers, images=base.images,
@@ -254,13 +254,13 @@ class LiveWorld(World):
         self.data_origin: tuple[Any, Any] | None = None
         self._counter = 0
 
-    # --- Aufbau fuer Tests ---------------------------------------------------
+    # --- Aufbau für Tests ---------------------------------------------------
 
     def remember_data_origin(self, container: dict[str, Any]) -> None:
         self.data_origin = self.mount_origin(container, DATA_PATH)
 
     def publish(self, digest: str, image: dict[str, Any], *, tag: str | None = "latest") -> None:
-        """Legt ein Image in die Registry (unter `digest`) und laesst das bewegliche Tag `tag` darauf zeigen."""
+        """Legt ein Image in die Registry (unter `digest`) und lässt das bewegliche Tag `tag` darauf zeigen."""
         self.registry[digest] = image
         if tag is not None:
             self.tags[tag] = digest
@@ -291,14 +291,14 @@ class LiveWorld(World):
         return None
 
     def end_later(self, container_id: str, after: float) -> None:
-        """Der laufende Container endet erst `after` Sekunden spaeter -- so wie der Docker-Dienst einen Container nach
+        """Der laufende Container endet erst `after` Sekunden später -- so wie der Docker-Dienst einen Container nach
         einer Fehlerantwort auf `stop` (oder einer verlorenen Antwort) weiter stoppt. Er gilt dann als von Hand
         gestoppt."""
         self.ends_at[container_id] = self.clock.m + after
         self.stopped_by_hand.add(container_id)
 
     def restart_container(self, container_id: str) -> None:
-        """Nur dieser Container startet neu, jetzt (etwa der Helfer nach einem Absturz ueber seine Restart-Policy):
+        """Nur dieser Container startet neu, jetzt (etwa der Helfer nach einem Absturz über seine Restart-Policy):
         `State.StartedAt` ist die Wanduhr in diesem Moment, `RestartCount` beginnt bei 0."""
         self.refresh()
         self.ends_at.pop(container_id, None)
@@ -447,7 +447,7 @@ class LiveWorld(World):
 
     @staticmethod
     def _config(body: dict[str, Any], image: dict[str, Any], container_id: str) -> dict[str, Any]:
-        """So fuehrt der Docker-Dienst Body und Image-Config zusammen."""
+        """So führt der Docker-Dienst Body und Image-Config zusammen."""
         config = {key: copy.deepcopy(value) for key, value in body.items()
                   if key not in ("HostConfig", "NetworkingConfig")}
         config.setdefault("Hostname", container_id[:12])
@@ -569,7 +569,7 @@ class LiveWorld(World):
             return Response(status=404, body={"message": "No such container"})
         wanted = "/" + query["name"]
         if container.get("Name") == wanted:
-            # Wie der Docker-Dienst: ein Umbenennen auf den aktuellen Namen ist ein ungueltiger Parameter.
+            # Wie der Docker-Dienst: ein Umbenennen auf den aktuellen Namen ist ein ungültiger Parameter.
             return Response(status=400, body={"message": "Renaming a container with the same name as its current name"})
         if any(c.get("Name") == wanted for cid, c in self.containers.items() if cid != container_id):
             return Response(status=409, body={"message": "Conflict. The name is already in use"})
@@ -642,8 +642,8 @@ class LiveWorld(World):
 
     def derive_repo_digests(self) -> None:
         """containerd-Store (Standard bei einer neuen Installation von Docker 29): `RepoDigests` sind keine eigenen
-        Eintraege, sondern werden aus den Namen eines Images abgeleitet -- je Name `<repository>@<Digest des Ziels>`.
-        Haengt das bewegliche Tag auf ein anderes Image um, verliert das alte so seinen Digest im Repository, wenn es
+        Einträge, sondern werden aus den Namen eines Images abgeleitet -- je Name `<repository>@<Digest des Ziels>`.
+        Hängt das bewegliche Tag auf ein anderes Image um, verliert das alte so seinen Digest im Repository, wenn es
         keinen anderen Namen dort hat. Im alten Store (Graphdriver) bleibt `RepoDigests` stehen: dann nichts tun."""
         if self.image_store != "containerd":
             return
@@ -663,7 +663,7 @@ class LiveWorld(World):
 
 
 # ---------------------------------------------------------------------------
-# Absturz an einer gezaehlten Stelle
+# Absturz an einer gezählten Stelle
 # ---------------------------------------------------------------------------
 
 SECRET = "GEHEIM-FLOW-123"
@@ -676,13 +676,13 @@ ausgefuehrt, nur die Antwort kommt beim Helfer nicht mehr an)."""
 
 class Crash(BaseException):
     """Der Helfer endet genau hier (wie bei `kill -9` oder einem Stromausfall). Eine `BaseException`, damit kein
-    `except Exception` im Ablauf sie auffaengt."""
+    `except Exception` im Ablauf sie auffängt."""
 
 
 class Points:
-    """Zaehlt die Stellen, an denen der Helfer abstuerzen kann (`seen`, in der Reihenfolge), und stuerzt an der Stelle
+    """Zählt die Stellen, an denen der Helfer abstürzen kann (`seen`, in der Reihenfolge), und stürzt an der Stelle
     mit der Nummer `crash_at` ab. Stellen: `before:<was>`/`after:<was>` um jedes Schreiben in `/state` (`checkpoint`
-    des Ablaufs) und `call:<Methode>` nach jedem aendernden Engine-Aufruf."""
+    des Ablaufs) und `call:<Methode>` nach jedem ändernden Engine-Aufruf."""
 
     def __init__(self, crash_at: int | None = None, *, crash_on: str | None = None) -> None:
         self.crash_at = crash_at
@@ -713,7 +713,7 @@ def _after_call(name: str):
 
 
 class CrashingEngine(Engine):
-    """Der echte Client, der nach jedem aendernden Aufruf an `points` meldet (und dort abstuerzen kann)."""
+    """Der echte Client, der nach jedem ändernden Aufruf an `points` meldet (und dort abstürzen kann)."""
 
     def __init__(self, socket_path: str, points: Points) -> None:
         super().__init__(socket_path)
@@ -786,7 +786,7 @@ class Lab:
                          checkpoint=None if points is None else points.checkpoint)
 
     def uptime(self) -> float | None:
-        """Wie lange der Rechner schon laeuft (wie `flow.boot_uptime`, auf der monotonen Uhr der Tests)."""
+        """Wie lange der Rechner schon läuft (wie `flow.boot_uptime`, auf der monotonen Uhr der Tests)."""
         return None if self.booted is None else self.clock.m - self.booted
 
     def boot(self) -> None:
@@ -794,7 +794,7 @@ class Lab:
         self.booted = self.clock.m
 
     def restart_helper(self, points: Points | None = None) -> None:
-        """Der Helfer startet neu (nach einem Absturz): die Sperre von `/state` faellt mit dem Prozess, der neue nimmt
+        """Der Helfer startet neu (nach einem Absturz): die Sperre von `/state` fällt mit dem Prozess, der neue nimmt
         sie, mit einem neuen Client (noch nichts ausgehandelt) und einem neuen Ablauf. Engine und `/state` bleiben."""
         self.store.close()
         self.store = StateStore(self.state_dir, expected_uid=self.uid)
@@ -804,7 +804,7 @@ class Lab:
     def _on_step(self, journal: Journal | None) -> None:
         step = None if journal is None else journal.step
         if journal is not None and journal.undo:
-            step = "undo"  # der angekuendigte Rueckbau steht im selben Schritt, nur mit `undo`
+            step = "undo"  # der angekündigte Rückbau steht im selben Schritt, nur mit `undo`
         if not self.steps or self.steps[-1] != step:
             self.steps.append(step)
         self.step_at.setdefault(step, self.clock.t)
@@ -825,7 +825,7 @@ class Lab:
 
     def release(self, version: str, *, behavior: Behavior | None = None, tag: str | None = "latest",
                 label: str | None = None, **changes) -> tuple[str, str]:
-        """Eine neue Version in der Registry: Image-ID und Digest. `label` ueberschreibt das Versions-Label (`""`: ohne
+        """Eine neue Version in der Registry: Image-ID und Digest. `label` überschreibt das Versions-Label (`""`: ohne
         Label), `changes` weitere Felder des Image-Inspects."""
         self._releases += 1
         image = copy.deepcopy(self.world.images[self.old_image])
@@ -885,7 +885,7 @@ class Lab:
         assert judge(container, 0) == HEALTHY, container["State"]
 
     def assert_back_to_old(self) -> None:
-        """Der alte Container laeuft wieder unter seinem Namen, mit seiner Restart-Policy, gesund; der neue ist weg,
+        """Der alte Container läuft wieder unter seinem Namen, mit seiner Restart-Policy, gesund; der neue ist weg,
         das bewegliche Tag zeigt wieder auf das alte Image, das Schutz-Tag dieses Vorgangs ist entfernt."""
         deck = self.only_deck()
         assert deck["Id"] == self.old_id and deck["Name"] == "/" + self.name
@@ -897,7 +897,7 @@ class Lab:
 
 
 def status_with(results: list[dict[str, Any]]) -> dict[str, Any]:
-    """Ein Status mit diesen Ergebnissen, geprueft wie `status.json` (nur feste Codes, die auch das Dashboard kennt)."""
+    """Ein Status mit diesen Ergebnissen, geprüft wie `status.json` (nur feste Codes, die auch das Dashboard kennt)."""
     doc = {"proto": 1, "helper_version": "0.7.0", "request_versions": [1], "seq": 1, "heartbeat_at": 1,
            "state": "idle", "ready": False, "reason": None, "target": None, "busy": None, "previous": None,
            "results": results}

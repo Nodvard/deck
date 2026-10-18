@@ -1075,7 +1075,7 @@ function ProxmoxConnect({
         result.connection.token_id,
         ").",
         " ",
-        result.discovery === "started" ? "Nodvard Deck liest Knoten, VMs und Container jetzt ein \u2013 das dauert meist nur einen Moment." : "Nodvard Deck liest Knoten, VMs und Container in den n\xE4chsten Minuten ein."
+        result.discovery === "started" ? "Nodvard Deck liest Knoten, VMs und LXC jetzt ein \u2013 das dauert meist nur einen Moment." : "Nodvard Deck liest Knoten, VMs und LXC in den n\xE4chsten Minuten ein."
       ] }),
       result.backups && /* @__PURE__ */ jsxs7("p", { className: "text-emerald-300", "data-testid": "proxmox-connect-backups", children: [
         "Proxmox-Backups ist als \u201E",
@@ -1411,7 +1411,7 @@ function toEditValues(d) {
     cores: String(d.cores),
     sockets: String(d.sockets ?? 1),
     memory: String(d.memory_mb ?? ""),
-    // Kein Ballon-Wert heisst in Proxmox: Minimum = RAM.
+    // Kein Ballon-Wert heißt in Proxmox: Minimum = RAM.
     balloon: String(d.balloon_mb ?? d.memory_mb ?? ""),
     swap: String(d.swap_mb ?? 0),
     onboot: d.onboot,
@@ -2256,7 +2256,7 @@ function ProxmoxNodePage() {
   const ownPools = (storage ?? []).filter((p) => connections.includes(p.connection));
   return /* @__PURE__ */ jsxs8("div", { className: "mx-auto w-full max-w-7xl p-4 sm:p-6", children: [
     /* @__PURE__ */ jsx8("h2", { className: "font-semibold text-xl tracking-tight", children: "Proxmox" }),
-    /* @__PURE__ */ jsx8("p", { className: "mb-4 text-sm opacity-60", children: "Deine Proxmox-Server mit allen VMs und Containern: starten, herunterfahren, Snapshots, Speicher und Updates." }),
+    /* @__PURE__ */ jsx8("p", { className: "mb-4 text-sm opacity-60", children: "Deine Proxmox-Server mit allen VMs und LXC: starten, herunterfahren, Snapshots, Speicher und Updates." }),
     empty && /* @__PURE__ */ jsx8(ConnectionsPanel, { onConnectWithPassword: canConnect ? () => setConnectOpen(true) : void 0, version: connectionsVersion }),
     empty && connectOpen && /* @__PURE__ */ jsx8(
       ProxmoxConnect,
@@ -2274,7 +2274,7 @@ function ProxmoxNodePage() {
       {
         icon: "refresh",
         title: "Noch keine Proxmox-Server gefunden",
-        text: canConnect ? "Am einfachsten: \u201EMit Passwort verbinden\u201C \u2013 Adresse und Passwort deines Proxmox-Servers eingeben, Nodvard Deck legt dort einen eigenen Zugang an. Oder trag einen API-Token von Hand ein (oben unter \u201EVerbindungen verwalten\u201C oder in den Moduleinstellungen). Danach liest Nodvard Deck alle 5 Minuten alle Knoten, VMs und Container von selbst ein." : "Trag daf\xFCr die Adresse deines Proxmox-Servers und einen API-Token ein (oben unter \u201EVerbindungen verwalten\u201C oder in den Moduleinstellungen). Danach liest Nodvard Deck alle 5 Minuten alle Knoten, VMs und Container von selbst ein.",
+        text: canConnect ? "Am einfachsten: \u201EMit Passwort verbinden\u201C \u2013 Adresse und Passwort deines Proxmox-Servers eingeben, Nodvard Deck legt dort einen eigenen Zugang an. Oder trag einen API-Token von Hand ein (oben unter \u201EVerbindungen verwalten\u201C oder in den Moduleinstellungen). Danach liest Nodvard Deck alle 5 Minuten alle Knoten, VMs und LXC von selbst ein." : "Trag daf\xFCr die Adresse deines Proxmox-Servers und einen API-Token ein (oben unter \u201EVerbindungen verwalten\u201C oder in den Moduleinstellungen). Danach liest Nodvard Deck alle 5 Minuten alle Knoten, VMs und LXC von selbst ein.",
         action: /* @__PURE__ */ jsxs8("div", { className: "flex flex-wrap items-center justify-center gap-2", children: [
           canConnect && /* @__PURE__ */ jsx8(Button, { variant: "primary", onClick: () => setConnectOpen(true), children: "Mit Passwort verbinden" }),
           /* @__PURE__ */ jsx8(SettingsLink, { to: "/settings/extensions/proxmox", permission: "extensions.manage", children: "Proxmox einrichten" })
@@ -2368,7 +2368,7 @@ function ProxmoxNodePage() {
                   ) : /* @__PURE__ */ jsx8(
                     "span",
                     {
-                      title: "Nur f\xFCr laufende VMs/Container verf\xFCgbar.",
+                      title: "Nur f\xFCr laufende VMs/LXC verf\xFCgbar.",
                       className: "cursor-not-allowed rounded-lg bg-white/5 px-2.5 py-1 text-xs opacity-40",
                       children: "Konsole"
                     }
@@ -2508,7 +2508,7 @@ function ProxmoxNodePage() {
   ] });
 }
 var TABS = [
-  { id: "guests", label: "VMs & Container" },
+  { id: "guests", label: "VMs & LXC" },
   { id: "storage", label: "Speicher" },
   { id: "updates", label: "Updates" },
   { id: "tasks", label: "Aufgabenverlauf" },
@@ -2631,7 +2631,7 @@ function Summary({ nodes, guests, connections, updates, pools, updatesIncomplete
       Tile,
       {
         testId: "tile-guests",
-        label: "VMs & Container",
+        label: "VMs & LXC",
         value: `${guestsUp}/${guests.length}`,
         hint: guestsDown > 0 ? `laufen \xB7 ${guestsDown} gestoppt` : "laufen",
         onClick: () => onOpen("guests")

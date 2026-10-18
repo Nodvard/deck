@@ -175,6 +175,32 @@ async def test_nothing_configured_is_reported_cleanly_everywhere(client, db_sess
 
 
 @pytest.mark.asyncio
+async def test_widget_meta_says_not_configured_only_when_no_address_is_entered(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+
+    async def widget() -> dict:
+        res = await client.get("/api/v1/ext/pihole/widgets/status", headers=headers)
+        assert res.status_code == 200, res.text
+        return res.json()
+
+    # Nichts eingetragen: die Übersicht darf die Kachel ausblenden; die Textzeile bleibt für ältere Oberflächen.
+    body = await widget()
+    assert body["meta"] == {"state": "not_configured"} and body["data"][0]["label"] == "nicht eingerichtet"
+
+    # Eine eingetragene, aber unbrauchbare Adresse ist ein Fehler und bleibt sichtbar.
+    await _configure(client, headers, "ftp://pihole.test")
+    body = await widget()
+    assert body["meta"] == {"state": "error"} and "ist ungültig" in body["data"][0]["subtitle"]
+
+    # Eine gültige Adresse gilt als eingerichtet, auch wenn Pi-hole nicht antwortet.
+    await _configure(client, headers)
+    fake.down = True
+    assert (await widget())["meta"] == {"state": "unreachable"}
+    fake.down = False
+    assert (await widget())["meta"] == {"state": "ok"}
+
+
+@pytest.mark.asyncio
 async def test_routes_reject_anonymous_and_viewers_cannot_propose(client, db_session, test_settings):
     headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers)
@@ -222,7 +248,7 @@ async def test_status_widget_and_suggestion_without_leaking_the_password(client,
 
     suggestions = (await client.get("/api/v1/apps/suggestions", headers=headers)).json()
     assert [s for s in suggestions["suggestions"] if s["source"] == "Pi-hole"] == [
-        {"name": "Pi-hole", "url": "http://pihole.test/admin/", "source": "Pi-hole", "host": None},
+        {"name": "Pi-hole", "url": "http://pihole.test/admin/", "source": "Pi-hole", "host": None, "service_id": None},
     ]
 
     assert sum(1 for r in fake.requests if r.url.path == "/api/auth") == 1, "eine Sitzung für alle Aufrufe"
@@ -292,7 +318,7 @@ async def test_domains_are_allowed_or_denied_through_the_gate(client, db_session
     approved = await _approve(client, headers, proposed["action_id"])
     assert (approved["action_type"], approved["payload"]) == ("pihole.domain_deny", {"domain": "werbung.example.com"})
     assert approved["result"]["output"] == "„werbung.example.com“ ist jetzt in Pi-hole gesperrt."
-    assert "werbung.example.com" in approved["reason"]
+    assert approved["reason"] == "„werbung.example.com“ über Nodvard Deck in Pi-hole gesperrt."
 
     again = (await client.post("/api/v1/ext/pihole/domains", json={"list": "deny", "domain": "werbung.example.com"}, headers=headers)).json()
     approved = await _approve(client, headers, again["action_id"])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from nodvard_sdk import Host as SdkHost
 from nodvard_sdk import HostStatus
@@ -45,6 +46,24 @@ LOGIN_OK_KEY = "login_ok"
 """Schlüssel in `Host.host_metadata`: die letzte erfolgreiche SSH-Anmeldung. Der Erreichbarkeits-Job
 setzt `status`/`last_seen_at` schon, wenn nur der Port antwortet -- belegt ist eine Anmeldung erst
 hiermit."""
+
+
+SETUP_RUN_KEY = "setup_run"
+"""Schlüssel in `Host.host_metadata`: der letzte Lauf des Einrichtungsbefehls durch Nodvard Deck („Mit Passwort
+einrichten“), egal mit welchem Ergebnis: `from`/`to` (ISO) und was er laut seiner Ausgabe getan hat
+(`host_setup.setup_record`: Benutzer, Aktionen, Stand der Dateien vorher und nachher, Prüfsummen der sudo-Regeln).
+Erweiterungen sehen es über `Host.metadata`; der Datei-Wächter von Nodvard Shield übernimmt damit genau diese Änderungen
+still. Bleibt beim Abgleich der Anbieter-Erweiterungen stehen (`CORE_METADATA_KEYS`)."""
+
+CORE_METADATA_KEYS = (LOGIN_OK_KEY, SETUP_RUN_KEY)
+"""Was dem Kern gehört und beim Abgleich (`upsert_discovered`) nicht mit den Angaben des Anbieters überschrieben wird."""
+
+
+def record_setup_run(
+    host: Host, started: datetime, finished: datetime | None = None, *, record: dict[str, Any] | None = None
+) -> None:
+    run = {**(record or {}), "from": started.isoformat(), "to": (finished or utcnow()).isoformat()}
+    host.host_metadata = {**(host.host_metadata or {}), SETUP_RUN_KEY: run}
 
 
 def record_login_ok(host: Host, credential: HostCredential, at: datetime | None = None) -> None:

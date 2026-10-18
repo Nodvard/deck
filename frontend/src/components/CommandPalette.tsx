@@ -11,6 +11,7 @@ import { ArrowRight, BookOpen, ExternalLink, Monitor, Search, Server, SquareTerm
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { safeHref } from "../lib/apps";
 import { usePages } from "../lib/catalog";
 import { guideUrl } from "../lib/docs";
 import { hasConsole, useHosts, useOverview, useTerminalHosts } from "../lib/overview";
@@ -126,8 +127,8 @@ function usePaletteItems(open: boolean): PaletteItem[] {
       }
     }
     for (const service of overview?.services ?? []) {
-      if (!service.url) continue;
-      const url = service.url;
+      const url = safeHref(service.url);
+      if (!url) continue;
       items.push({
         id: `app:${service.id}`, group: "Apps", title: service.name, subtitle: service.host ?? undefined,
         keywords: `${service.image ?? ""} app oeffnen`, icon: <ExternalLink size={16} strokeWidth={1.8} />,

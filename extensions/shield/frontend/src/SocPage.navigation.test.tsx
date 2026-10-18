@@ -1,8 +1,7 @@
 /**
- * Ende-zu-Ende durch die echte Kette: Router (Browser-Verlauf) -> ExtensionPage (Kern, feuert
- * `nodvard-deck:navigate` und `lattice:navigate`) -> useUrlParams -> SocPage. Die Einzelteile haben eigene Tests
- * (ExtensionPage.test.tsx, location.test.tsx, SocPage.test.tsx); hier wird geprüft, dass sie
- * zusammen halten -- Links aus Menü und Benachrichtigungen, Klicks im Reiterstreifen, Zurück/Vor.
+ * Ende-zu-Ende durch die echte Kette: Router (Browser-Verlauf) -> ExtensionPage (Kern, feuert `nodvard-deck:navigate` und
+ * `lattice:navigate`) -> useUrlParams -> SocPage. Die Einzelteile haben eigene Tests; hier wird geprüft, dass sie zusammen
+ * halten: Links aus Menü und Benachrichtigungen, Klicks im Reiterstreifen, Zurück/Vor.
  */
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Link, RouterProvider, createBrowserRouter } from "react-router-dom";
@@ -13,7 +12,7 @@ import { ExtensionPage } from "../../../../frontend/src/routes/ExtensionPage";
 vi.mock("../../../../frontend/src/lib/catalog", () => ({
   usePages: () => ({ data: [{ ext_id: "shield", path: "/soc", component: "SocPage" }], isLoading: false }),
 }));
-// ExtensionPage laedt das Bundle per import(url) -- hier durch die echte Seite aus den Quellen ersetzt.
+// ExtensionPage lädt das Bundle per import(url); hier wird es durch die echte Seite aus den Quellen ersetzt.
 vi.mock("/api/v1/extensions/shield/frontend/index.js?v=dev", async () => ({ SocPage: (await import("./SocPage")).SocPage }));
 
 const HOST = { clamav_installed: false, lynis_installed: false, last_scan: null, last_audit: null, scanning: false, auditing: false, host_status: "up", reachable: true };

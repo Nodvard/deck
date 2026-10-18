@@ -486,14 +486,21 @@ async def reset_ssh_pool() -> None:
 
 
 async def run(
-    conn: asyncssh.SSHClientConnection, command: str, *, timeout_s: float = 60.0
+    conn: asyncssh.SSHClientConnection, command: str, *, timeout_s: float = 60.0, stdin: bytes | None = None,
 ) -> tuple[int, str, str]:
-    """Führt ein *lesendes* Kommando ohne Nebenwirkung aus und liefert `(exit_code, stdout, stderr)`."""
+    """Führt ein *lesendes* Kommando ohne Nebenwirkung aus und liefert `(exit_code, stdout, stderr)`.
+
+    `stdin`: Daten für die Standardeingabe, danach EOF. Ohne (None) bleibt die Standardeingabe wie bisher offen."""
     # `encoding=None`: bei abweichenden Standard-Kodierungen von Client und Server wirft der Server einen unbehandelten
     # `TypeError`, und die ganze Verbindung fällt mit "Connection lost", nicht nur der Kanal. Rohe Bytes und
     # explizites Dekodieren sind robuster als auf übereinstimmende Kodierungen fremder Server zu bauen.
+    # asyncssh schreibt `input` samt EOF nur, wenn es nicht leer ist; leere Daten bekommen deshalb `DEVNULL` (sofort
+    # EOF), sonst wartet ein lesender Prozess bis zur Zeitgrenze.
+    redirect: dict[str, Any] = {}
+    if stdin is not None:
+        redirect = {"input": stdin} if stdin else {"stdin": asyncssh.DEVNULL}
     result = await asyncio.wait_for(
-        conn.run(command, check=False, encoding=None), timeout=timeout_s
+        conn.run(command, check=False, encoding=None, **redirect), timeout=timeout_s
     )
     return (
         result.exit_status if result.exit_status is not None else -1,

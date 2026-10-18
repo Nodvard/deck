@@ -11,10 +11,14 @@ Produktivstart in deploy/.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import hashlib
 import logging
+import re
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import asyncssh
 from fastapi import FastAPI, Request
@@ -73,7 +77,25 @@ keine Plugins, kein fremdes `<base>`, Formulare nur an Deck selbst."""
 SPA_CSP_REPORT_ONLY = "img-src 'self' data: blob:"
 """Bilder nur vom eigenen Server (`blob:` für Vorschauen, Inventar-Fotos und Dokumente), vorerst nur gemeldet: Der Browser
 schreibt einen Verstoß in die Konsole, lädt das Bild aber noch. Logo und Favicon nimmt `PUT /branding` schon nur noch als
-eigenen Pfad oder `data:image/…` an. Bleibt die Konsole im Alltag still, wandert die Angabe in `SPA_CSP`."""
+eigenen Pfad oder `data:image/…` an. Bleibt die Konsole im Alltag still, wandert die Angabe in `SPA_CSP`. Dazu kommt je
+App-Seite `spa_script_policy()`."""
+
+_INLINE_SCRIPT_RE = re.compile(r"<script\b(?![^>]*\bsrc\s*=)[^>]*>(.*?)</script\s*>", re.IGNORECASE | re.DOTALL)
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def spa_script_policy(index_html: Path) -> str:
+    """`script-src` der App-Seite: nur eigene Dateien und die eingebetteten Skripte der `index.html` (die Import-Map)
+    über ihre Prüfsumme. Damit läuft kein `javascript:`-Link; vorerst nur gemeldet (`Content-Security-Policy-Report-Only`)."""
+    try:
+        text = _HTML_COMMENT_RE.sub("", index_html.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        text = ""
+    hashes = {
+        f"'sha256-{base64.b64encode(hashlib.sha256(m.group(1).encode()).digest()).decode()}'"
+        for m in _INLINE_SCRIPT_RE.finditer(text)
+    }
+    return " ".join(["script-src", "'self'", *sorted(hashes)])
 
 
 class _SpaStaticFiles(StaticFiles):
@@ -91,6 +113,11 @@ class _SpaStaticFiles(StaticFiles):
     Route einer deaktivierten Extension), und das bleibt ein ehrlicher 404 (siehe
     `_is_api_path()`). Alles andere ist weder API noch vorhandene Datei im Build;
     React Router uebernimmt danach clientseitig."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        index = Path(self.directory) / "index.html" if self.directory is not None else Path("/nonexistent")
+        self._report_only = f"{SPA_CSP_REPORT_ONLY}; {spa_script_policy(index)}"
 
     async def get_response(self, path: str, scope: Scope):
         try:
@@ -113,7 +140,7 @@ class _SpaStaticFiles(StaticFiles):
         response.headers["Cache-Control"] = _cache_policy_for(path)
         if response.headers.get("content-type", "").startswith("text/html"):
             response.headers["Content-Security-Policy"] = SPA_CSP
-            response.headers["Content-Security-Policy-Report-Only"] = SPA_CSP_REPORT_ONLY
+            response.headers["Content-Security-Policy-Report-Only"] = self._report_only
         return response
 
 

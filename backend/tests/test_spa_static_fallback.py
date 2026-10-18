@@ -105,6 +105,8 @@ def test_html_gets_a_csp_for_styles_and_fonts_and_reports_images_assets_do_not(s
             assert directive in directives, directive
         # Bilder vorerst nur gemeldet, nicht gesperrt.
         assert "img-src" not in SPA_CSP
-        assert headers["content-security-policy-report-only"] == SPA_CSP_REPORT_ONLY == "img-src 'self' data: blob:"
+        assert SPA_CSP_REPORT_ONLY == "img-src 'self' data: blob:"
+        # Ohne eingebettete Skripte bleibt für Skripte nur der eigene Server.
+        assert headers["content-security-policy-report-only"] == f"{SPA_CSP_REPORT_ONLY}; script-src 'self'"
     asset = spa_client.get("/assets/app.js").headers
     assert "content-security-policy" not in asset and "content-security-policy-report-only" not in asset

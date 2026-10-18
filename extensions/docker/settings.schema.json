@@ -35,6 +35,15 @@
       "title": "Bei Fehlstart automatisch zurück",
       "description": "Stürzt ein Container nach dem Einspielen eines Image-Updates beim Start ab (oder lässt er sich nicht neu erstellen), stellt Nodvard Deck sofort die alte Version wieder her. Nicht bei bloß „ungesund“ (die App kann gerade ihre Daten umstellen) und nie bei Datenbanken und anderen Datenspeichern wie Redis oder MinIO: Die neue Version kann ihre Dateien schon umgestellt haben."
     },
+    "stack_root": {
+      "type": "string",
+      "default": "/opt/stacks",
+      "title": "Ordner für neue Stacks",
+      "description": "Darin bekommt jeder neue Stack einen eigenen Ordner. Je Server lässt er sich auf der Docker-Seite ändern.",
+      "x-advanced": true,
+      "pattern": "^(/[A-Za-z0-9._+@= -]+)+/?$",
+      "x-pattern-message": "Ein absoluter Ordner wie /opt/stacks: Buchstaben ohne Umlaute, Ziffern, Leerzeichen und . _ + @ = -."
+    },
     "url_overrides": {
       "type": "object",
       "additionalProperties": {
@@ -44,6 +53,16 @@
       "x-hidden": true,
       "title": "Eigene Kachel-Adressen",
       "description": "Wird auf der Docker-Seite je Container gesetzt."
+    },
+    "stack_roots": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "x-hidden": true,
+      "title": "Ordner für neue Stacks je Server",
+      "description": "Wird auf der Docker-Seite je Server gesetzt."
     }
   }
 }

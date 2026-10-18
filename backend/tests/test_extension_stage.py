@@ -79,6 +79,7 @@ def test_bundled_extensions_have_a_known_stage_and_only_the_expected_ones_are_be
         "jellyfin",
         "plex",
         "qbittorrent",
+        "synology",
     }
 
 

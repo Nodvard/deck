@@ -186,7 +186,8 @@ def test_environment_variable_is_read_leniently(monkeypatch, caplog):
     monkeypatch.setenv("NODVARD_DECK_TRUSTED_PROXIES", " 172.18.0.5, proxy.local, 0.0.0.0/0,,192.168.2.0/24 ")
     with caplog.at_level(logging.WARNING, logger="nodvard_deck.trusted_proxies"):
         assert trusted_proxies.env_entries(Settings()) == ["172.18.0.5", "192.168.2.0/24"]
-    assert "proxy.local" in caplog.text and "0.0.0.0/0" in caplog.text
+    reasons = [r.getMessage().split("reason=", 1)[1] for r in caplog.records if "trusted_proxies_entry_ignored" in r.getMessage()]
+    assert [reason.split("“", 1)[0] for reason in reasons] == ["„proxy.local", "„0.0.0.0/0"]
     monkeypatch.delenv("NODVARD_DECK_TRUSTED_PROXIES")
     monkeypatch.setenv("LATTICE_TRUSTED_PROXIES", "172.18.0.7")
     assert trusted_proxies.env_entries(Settings()) == ["172.18.0.7"], "der alte Name gilt weiter"

@@ -33,8 +33,25 @@ class ConnectionConfig:
     problem: str | None = None  # fester Hinweis; dann gibt es keine Anfrage
 
 
+UI_PATHS = ("index.html",)
+"""Erste Pfadteile von Seiten der Weboberfläche von qBittorrent. Wer die Adresse aus dem Browser kopiert, hat oft
+eine davon dabei (`/index.html`); die Anfragen des Moduls gehören aber an die Grundadresse."""
+
+
+def strip_ui_path(path: str) -> str:
+    """Schneidet den Pfad ab dem ersten Teil aus `UI_PATHS` ab, ohne Schrägstrich am Ende. Ein Pfad davor bleibt (z. B.
+    `/qbittorrent` hinter einem Reverse Proxy)."""
+    parts = path.split("/")
+    for index, part in enumerate(parts):
+        if part.lower() in UI_PATHS:
+            parts = parts[:index]
+            break
+    return "/".join(parts).rstrip("/")
+
+
 def normalize_base_url(raw: Any) -> str:
-    """Entfernt den Schrägstrich am Ende; `ValueError`, wenn die Adresse unbrauchbar ist."""
+    """Entfernt den Schrägstrich am Ende und eine Unterseite der Weboberfläche (`strip_ui_path`); `ValueError`, wenn
+    die Adresse unbrauchbar ist."""
     text = str(raw or "").strip()
     parts = urlsplit(text)
     if parts.scheme not in ("http", "https") or not parts.hostname:
@@ -43,7 +60,7 @@ def normalize_base_url(raw: Any) -> str:
     if "@" in parts.netloc:
         raise ValueError(text)
     _ = parts.port  # wirft ValueError bei einem Port außerhalb von 0-65535
-    return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
+    return urlunsplit((parts.scheme, parts.netloc, strip_ui_path(parts.path), "", ""))
 
 
 def normalize_fingerprint(value: Any) -> str | None:

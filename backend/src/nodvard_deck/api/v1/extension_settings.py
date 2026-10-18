@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import math
-import re
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
@@ -15,6 +14,11 @@ from sqlalchemy import select
 from ...branding import load_branding
 from ...core import rate_limit, vault
 from ...core.cron import cron_trigger
+from ...core.schema_check import PATTERN_MAX_LENGTH as _PATTERN_MAX_LENGTH
+from ...core.schema_check import bound as _bound
+from ...core.schema_check import number_text as _number_text
+from ...core.schema_check import pattern_matches as _pattern_matches
+from ...core.schema_check import range_text as _range_text
 from ...ext.runtime import get_extension_runtime
 from ...models import ExtensionRecord, Secret
 from ...services import audit as audit_service
@@ -107,42 +111,6 @@ def schema_for(ext_id: str) -> dict[str, Any] | None:
 _secret_slots_spec = extension_setup.secret_slots_spec
 
 
-_PATTERN_MAX_LENGTH = 2000
-"""Längere Werte werden vor der Musterprüfung abgelehnt (die Prüfung läuft synchron)."""
-
-
-def _js_anchors(pattern: str) -> str:
-    """`$` heißt in JavaScript „Ende des Textes“, in Python auch „vor einem `\\n` am Ende“.
-    Damit Oberfläche und Backend gleich urteilen, wird ein `$` außerhalb von Zeichenklassen zu `\\Z`."""
-    out: list[str] = []
-    in_class = False
-    i = 0
-    while i < len(pattern):
-        ch = pattern[i]
-        if ch == "\\" and i + 1 < len(pattern):
-            out.append(pattern[i : i + 2])
-            i += 2
-            continue
-        if in_class:
-            in_class = ch != "]"
-        elif ch == "[":
-            in_class = True
-        elif ch == "$":
-            out.append("\\Z")
-            i += 1
-            continue
-        out.append(ch)
-        i += 1
-    return "".join(out)
-
-
-def _pattern_matches(pattern: str, value: str) -> bool:
-    try:
-        return re.search(_js_anchors(pattern), value) is not None
-    except re.error:
-        return True  # ein kaputtes Muster im Schema darf das Speichern nie verhindern
-
-
 _SCHEDULE_HINT = (
     "Erlaubt sind fünf Angaben: Minute (0–59), Stunde (0–23), Tag (1–31), Monat (1–12) und Wochentag (0–7), "
     "zum Beispiel „0 2 * * *“ für täglich um 2 Uhr."
@@ -167,31 +135,12 @@ def _field_name(schema: dict[str, Any], path: str) -> str:
     return title if isinstance(title, str) and title else path
 
 
-def _bound(schema: dict[str, Any], key: str) -> float | None:
-    value = schema.get(key)
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else None
-
-
-def _number_text(value: float) -> str:
-    """Zahl für eine Meldung: ganze Zahlen ohne Nachkommastellen, sonst mit deutschem Komma (wie die Oberfläche)."""
-    if isinstance(value, float) and value.is_integer():
-        value = int(value)
-    return str(value).replace(".", ",")
-
-
-def _range_text(low: float | None, high: float | None) -> str:
-    if low is not None and high is not None:
-        return f"Erlaubt sind Werte von {_number_text(low)} bis {_number_text(high)}."
-    if low is not None:
-        return f"Erlaubt sind Werte ab {_number_text(low)}."
-    return f"Erlaubt sind Werte bis {_number_text(high)}."
-
-
 def _check_number(value: float, schema: dict[str, Any], path: str) -> None:
     """Zahlenfelder: `minimum` und `maximum` gelten einschließlich der Grenzen (wie `rangeError` in der Oberfläche)."""
     # NaN und unendlich nimmt der JSON-Leser von Python an, gespeichert wären sie kein gültiges JSON mehr
-    # und die Seite ließe sich nicht mehr laden.
-    if not math.isfinite(value):
+    # und die Seite ließe sich nicht mehr laden. Nur ein `float` kann das sein: `math.isfinite` auf einer riesigen ganzen
+    # Zahl (`10**400`) würfe `OverflowError`.
+    if isinstance(value, float) and not math.isfinite(value):
         raise HTTPException(status_code=422, detail=f"„{_field_name(schema, path)}“: Bitte eine Zahl eintragen.")
     low, high = _bound(schema, "minimum"), _bound(schema, "maximum")
     if (low is not None and value < low) or (high is not None and value > high):

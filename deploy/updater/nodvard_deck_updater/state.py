@@ -1,66 +1,66 @@
 """Eigener Zustand des Helfers in `/state`.
 
 `/state` ist ein eigenes Volume, das das Dashboard nie sieht. Der Helfer trifft Entscheidungen **nur** auf
-Grundlage dieses Ordners und der Engine -- nie aus `status.json`, dem Kanal (ausser den Anforderungen) oder
+Grundlage dieses Ordners und der Engine -- nie aus `status.json`, dem Kanal (außer den Anforderungen) oder
 `/app/data`.
 
-* Ordner: root, Modus 0700 (wird beim Oeffnen gesetzt); Dateien 0600.
-* `lock` -- `flock`: hoechstens ein Helfer arbeitet. Ein zweiter bekommt `second_instance` und tut nichts.
-  Die Sperre gilt je geoeffneter Datei und endet mit dem Prozess, auch bei einem Absturz.
-* `state.json` -- `slot` (Rueckweg, `policy.Slot`), `actions` (Zeitpunkte angenommener Aktionen),
-  `blocked` (`{version: bis}`, 24 h nach einem Rueckweg), `seen` (`{id: zeit}`, 1 h), `hold_until` und `results` (die
-  letzten Ergebnisse fuer `status.results`: der Ablauf haelt ein Ergebnis hier fest, bevor er das Journal loescht, so
+* Ordner: root, Modus 0700 (wird beim Öffnen gesetzt); Dateien 0600.
+* `lock` -- `flock`: höchstens ein Helfer arbeitet. Ein zweiter bekommt `second_instance` und tut nichts.
+  Die Sperre gilt je geöffneter Datei und endet mit dem Prozess, auch bei einem Absturz.
+* `state.json` -- `slot` (Rückweg, `policy.Slot`), `actions` (Zeitpunkte angenommener Aktionen),
+  `blocked` (`{version: bis}`, 24 h nach einem Rückweg), `seen` (`{id: zeit}`, 1 h), `hold_until` und `results` (die
+  letzten Ergebnisse für `status.results`: der Ablauf hält ein Ergebnis hier fest, bevor er das Journal löscht, so
   geht es auch bei einem Absturz dazwischen nicht verloren).
-* `journal.json` -- der laufende Vorgang. **Write-ahead:** der Ablauf schreibt den naechsten Schritt,
-  *bevor* er ihn ausfuehrt; jedes Schreiben endet mit fsync auf Datei **und** Ordner. Ebenso kuendigt er einen
-  Rueckbau an (`undo`, mit dem Grund in `code`), bevor er den ersten Teil davon ausfuehrt: So weiss die
-  Wiederaufnahme nach einem Absturz, ob ein halb zurueckgebauter Stand von ihm selbst stammt oder von aussen.
+* `journal.json` -- der laufende Vorgang. **Write-ahead:** der Ablauf schreibt den nächsten Schritt,
+  *bevor* er ihn ausführt; jedes Schreiben endet mit fsync auf Datei **und** Ordner. Ebenso kündigt er einen
+  Rückbau an (`undo`, mit dem Grund in `code`), bevor er den ersten Teil davon ausführt: So weiß die
+  Wiederaufnahme nach einem Absturz, ob ein halb zurückgebauter Stand von ihm selbst stammt oder von außen.
 
 Geschrieben wird immer atomar: Zufallsname mit `O_CREAT|O_EXCL|O_NOFOLLOW`, fsync, `os.replace`, fsync des
-Ordners. Gelesen wird ueber den Ordner-Deskriptor mit `O_NOFOLLOW|O_NONBLOCK`, danach `fstat`: regulaere Datei,
-ein Link, richtiger Besitzer, Groessengrenze.
+Ordners. Gelesen wird über den Ordner-Deskriptor mit `O_NOFOLLOW|O_NONBLOCK`, danach `fstat`: reguläre Datei,
+ein Link, richtiger Besitzer, Größengrenze.
 
 **Zwei Arten von Fehlern beim Lesen -- nie verwechseln:**
 
-* *Die Datei ist ungueltig* (`UnsafeFile`, kein JSON, falsches Schema, Symlink, falscher Besitzer, zu gross, ...):
-  der Inhalt ist kaputt, ein zweiter Versuch aendert nichts. Dann gilt der sichere Zustand (unten).
+* *Die Datei ist ungültig* (`UnsafeFile`, kein JSON, falsches Schema, Symlink, falscher Besitzer, zu groß, ...):
+  der Inhalt ist kaputt, ein zweiter Versuch ändert nichts. Dann gilt der sichere Zustand (unten).
 * *Die Datei ist gerade nicht lesbar* (`ReadFailed`: `EMFILE`, `ENFILE`, `ENOMEM`, `EIO`, `ESTALE`, ... beim
-  Oeffnen, `fstat` oder `read`): ein voruebergehender Fehler sagt nichts ueber den Inhalt. Der Helfer fasst dann
-  **nichts** an -- nichts umbenannt, nichts ueberschrieben, keine Sperre gesetzt --, wirft `StateUnsafe`
-  (`state_read` bzw. `journal_read`), tut diese Runde nichts und liest spaeter erneut. So wird aus einem
-  einzelnen Lesefehler nie ein verlorener Rueckweg oder ein liegen gelassener halber Vorgang.
+  Öffnen, `fstat` oder `read`): ein vorübergehender Fehler sagt nichts über den Inhalt. Der Helfer fasst dann
+  **nichts** an -- nichts umbenannt, nichts überschrieben, keine Sperre gesetzt --, wirft `StateUnsafe`
+  (`state_read` bzw. `journal_read`), tut diese Runde nichts und liest später erneut. So wird aus einem
+  einzelnen Lesefehler nie ein verlorener Rückweg oder ein liegen gelassener halber Vorgang.
 
 **Kaputter Zustand -> definierter sicherer Zustand (keine Aktionen):**
 
-* `state.json` ungueltig (kein JSON, falsches Schema, Symlink, falscher Besitzer, zu gross, ...): Der Helfer
-  ersetzt sie durch einen leeren Zustand **ohne Rueckweg-Slot** mit `hold_until = jetzt + 24 h` und schreibt
-  ihn sofort (ein Neustart setzt die Sperre also nicht zurueck). Bis dahin lehnt er jede Anforderung mit
+* `state.json` ungültig (kein JSON, falsches Schema, Symlink, falscher Besitzer, zu groß, ...): Der Helfer
+  ersetzt sie durch einen leeren Zustand **ohne Rückweg-Slot** mit `hold_until = jetzt + 24 h` und schreibt
+  ihn sofort (ein Neustart setzt die Sperre also nicht zurück). Bis dahin lehnt er jede Anforderung mit
   `state_unsafe` ab (`policy.check_limits`). 24 h decken alle zeitlichen Grenzen ab (10 min Aktionen, 24 h
-  Sperre nach Rueckweg, 1 h IDs); der verlorene Slot heisst nur: kein Rueckweg auf Knopfdruck (fail-closed).
+  Sperre nach Rückweg, 1 h IDs); der verlorene Slot heißt nur: kein Rückweg auf Knopfdruck (fail-closed).
   Lesbarer Inhalt bleibt zur Ansicht als `state.json.broken` liegen. **Im Zweifel bleibt es gesperrt:** scheitert
-  das Schreiben des sicheren Zustands, bleibt die ungueltige Datei liegen (sie wird nur beiseitegeschoben, wenn
-  `state.json` ein Ordner ist), und beim naechsten Start gilt wieder der sichere Zustand. Fehlt `state.json`, aber
+  das Schreiben des sicheren Zustands, bleibt die ungültige Datei liegen (sie wird nur beiseitegeschoben, wenn
+  `state.json` ein Ordner ist), und beim nächsten Start gilt wieder der sichere Zustand. Fehlt `state.json`, aber
   `state.json.broken` liegt da, war der Zustand schon einmal kaputt -- auch das gilt als sicherer Zustand.
-* `journal.json` ungueltig: Der Helfer setzt dieselbe 24-h-Sperre im Zustand, legt das Journal als
+* `journal.json` ungültig: Der Helfer setzt dieselbe 24-h-Sperre im Zustand, legt das Journal als
   `journal.json.broken` beiseite und meldet `JournalCorrupt` (mit dem gesperrten Zustand in `.state`). Der Ablauf
-  handelt dann **nicht** automatisch, denn er weiss nicht, was schon geschehen ist (nie gegen den Nutzer).
-  **Die Sperre gehoert dem Speicher:** der Store merkt sich die gesetzte Sperre (`_hold_floor`) und
-  `save_state` schreibt nie weniger -- ein vorher geladener `State` kann sie nicht mehr ueberschreiben, in welcher
-  Reihenfolge der Ablauf auch laedt und speichert. **Geprueft wird deshalb ueber den Store:** `StateStore.check`
-  wendet die Sperre vor den Grenzen auf den uebergebenen `State` an (ein `State`, der vor dem Erkennen des kaputten
+  handelt dann **nicht** automatisch, denn er weiß nicht, was schon geschehen ist (nie gegen den Nutzer).
+  **Die Sperre gehört dem Speicher:** der Store merkt sich die gesetzte Sperre (`_hold_floor`) und
+  `save_state` schreibt nie weniger -- ein vorher geladener `State` kann sie nicht mehr überschreiben, in welcher
+  Reihenfolge der Ablauf auch lädt und speichert. **Geprüft wird deshalb über den Store:** `StateStore.check`
+  wendet die Sperre vor den Grenzen auf den übergebenen `State` an (ein `State`, der vor dem Erkennen des kaputten
   Journals geladen wurde, kennt sie sonst nicht). Es gibt bewusst kein `State.check`.
-* **Zeitstempel in der Zukunft** (die Uhr war vorgesprungen und wurde zurueckgestellt) sperren weiter, aber nur
-  bis zur Hoechstfrist: `State.prune()` (das auch `StateStore.check()` zuerst aufruft) kappt Eintraege, die weiter als
-  `CLOCK_SLACK_S` in der Zukunft liegen, auf "jetzt" bzw. "jetzt + Hoechstfrist" (Aktionen und IDs: gerade eben,
-  Sperre nach Rueckweg und `hold_until`: 24 h). Ein einzelner Uhrsprung sperrt so nie laenger als die Frist selbst.
-  Das gilt auch fuer die Sperre des Speichers (`_hold_floor`): sie wird mitgekappt, sonst hobe sie die Kappung von
+* **Zeitstempel in der Zukunft** (die Uhr war vorgesprungen und wurde zurückgestellt) sperren weiter, aber nur
+  bis zur Höchstfrist: `State.prune()` (das auch `StateStore.check()` zuerst aufruft) kappt Einträge, die weiter als
+  `CLOCK_SLACK_S` in der Zukunft liegen, auf "jetzt" bzw. "jetzt + Höchstfrist" (Aktionen und IDs: gerade eben,
+  Sperre nach Rückweg und `hold_until`: 24 h). Ein einzelner Uhrsprung sperrt so nie länger als die Frist selbst.
+  Das gilt auch für die Sperre des Speichers (`_hold_floor`): sie wird mitgekappt, sonst hobe sie die Kappung von
   `hold_until` bei jedem Laden wieder auf. Gespeichert wird beim Laden nur, wenn sich am Zustand wirklich etwas
-  geaendert hat.
+  geändert hat.
 * Der Ordner selbst unsicher (Symlink, kein Ordner, falscher Besitzer) -> `state_unsafe`, der Helfer arbeitet
   nicht. Die Automatik zur Wiederherstellung (Journal) wird von den Grenzen nie gedrosselt; das regelt der
   Ablauf.
 
-Fuer Tests ohne root nimmt der Konstruktor die erwartete uid (`expected_uid`, Vorgabe 0). Nie aus der Umgebung.
+Für Tests ohne root nimmt der Konstruktor die erwartete uid (`expected_uid`, Vorgabe 0). Nie aus der Umgebung.
 """
 
 from __future__ import annotations
@@ -103,18 +103,18 @@ _TMP_RE = re.compile(r"\.(?:state|journal|broken)-[0-9a-f]{16}\.tmp", re.ASCII)
 
 
 class UnsafeFile(Exception):
-    """Eine Datei ist nicht das, was sie sein soll (keine regulaere Datei, mehrere Links, falscher Besitzer,
-    zu gross, ausgetauscht). Der Text ist ein fester Bezeichner."""
+    """Eine Datei ist nicht das, was sie sein soll (keine reguläre Datei, mehrere Links, falscher Besitzer,
+    zu groß, ausgetauscht). Der Text ist ein fester Bezeichner."""
 
 
 class ReadFailed(Exception):
-    """Die Datei liess sich gerade nicht lesen (voruebergehender Fehler beim Oeffnen, `fstat` oder `read`:
-    `EMFILE`, `ENFILE`, `ENOMEM`, `EIO`, `ESTALE`, ...). Das sagt nichts ueber ihren Inhalt: der Aufrufer fasst
-    nichts an und versucht es spaeter erneut -- anders als bei `UnsafeFile`, wo der Inhalt ungueltig ist."""
+    """Die Datei ließ sich gerade nicht lesen (vorübergehender Fehler beim Öffnen, `fstat` oder `read`:
+    `EMFILE`, `ENFILE`, `ENOMEM`, `EIO`, `ESTALE`, ...). Das sagt nichts über ihren Inhalt: der Aufrufer fasst
+    nichts an und versucht es später erneut -- anders als bei `UnsafeFile`, wo der Inhalt ungültig ist."""
 
 
-# Fehler beim Oeffnen, die etwas ueber die *Datei* sagen (Symlink, keine Rechte, kein Datei-Typ, ...) -- nicht
-# ueber den Zustand des Rechners. Jeder andere Fehler gilt als voruebergehend (`ReadFailed`).
+# Fehler beim Öffnen, die etwas über die *Datei* sagen (Symlink, keine Rechte, kein Datei-Typ, ...) -- nicht
+# über den Zustand des Rechners. Jeder andere Fehler gilt als vorübergehend (`ReadFailed`).
 _CONTENT_ERRNOS = frozenset({
     errno.ELOOP, errno.EACCES, errno.EPERM, errno.ENXIO, errno.ENODEV, errno.EISDIR, errno.ENOTDIR, errno.EINVAL,
     errno.ENAMETOOLONG, errno.EOPNOTSUPP, errno.EOVERFLOW, errno.EFBIG,
@@ -132,11 +132,11 @@ class SecondInstance(Refusal):
 
 
 class JournalCorrupt(Refusal):
-    """Das Journal war ungueltig. Es liegt jetzt als `journal.json.broken` daneben, die 24-h-Sperre ist gesetzt.
+    """Das Journal war ungültig. Es liegt jetzt als `journal.json.broken` daneben, die 24-h-Sperre ist gesetzt.
 
     `state` ist der gesperrte Zustand, wie er jetzt auf der Platte steht. **Ein vorher geladener `State` ist
-    damit veraltet:** `state` uebernehmen oder neu laden (`save_state` faellt ohnehin nie hinter die Sperre
-    zurueck, siehe `StateStore.hold`, und `StateStore.check` wendet sie auch auf einen alten `State` an)."""
+    damit veraltet:** `state` übernehmen oder neu laden (`save_state` fällt ohnehin nie hinter die Sperre
+    zurück, siehe `StateStore.hold`, und `StateStore.check` wendet sie auch auf einen alten `State` an)."""
 
     def __init__(self, state: State | None = None) -> None:
         super().__init__(policy.STATE_UNSAFE, "journal_corrupt")
@@ -144,7 +144,7 @@ class JournalCorrupt(Refusal):
 
 
 # ---------------------------------------------------------------------------
-# Sichere Datei-Helfer (auch fuer den Kanal)
+# Sichere Datei-Helfer (auch für den Kanal)
 # ---------------------------------------------------------------------------
 
 
@@ -156,16 +156,16 @@ def read_regular(
     owner: int | None = None,
     identity: tuple[int, int] | None = None,
 ) -> bytes:
-    """Liest eine kleine regulaere Datei `name` relativ zu `dir_fd`.
+    """Liest eine kleine reguläre Datei `name` relativ zu `dir_fd`.
 
-    Oeffnet mit `O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC|O_NOCTTY` (ein Symlink scheitert, ein FIFO blockiert
-    nicht, ein Terminal wird nie Kontrollterminal) und prueft dann am **Deskriptor**: regulaere Datei, genau ein
-    Link, hoechstens `max_bytes`, ggf. Besitzer `owner` und `(st_dev, st_ino) == identity`. Gelesen werden
-    hoechstens `max_bytes + 1` Byte; ist es mehr, war die Datei gewachsen -> `UnsafeFile`.
+    Öffnet mit `O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC|O_NOCTTY` (ein Symlink scheitert, ein FIFO blockiert
+    nicht, ein Terminal wird nie Kontrollterminal) und prüft dann am **Deskriptor**: reguläre Datei, genau ein
+    Link, höchstens `max_bytes`, ggf. Besitzer `owner` und `(st_dev, st_ino) == identity`. Gelesen werden
+    höchstens `max_bytes + 1` Byte; ist es mehr, war die Datei gewachsen -> `UnsafeFile`.
 
-    `FileNotFoundError` bleibt `FileNotFoundError`. Eine ungueltige Datei (Symlink, falscher Typ, Besitzer,
-    Groesse, ... und Oeffnen-Fehler aus `_CONTENT_ERRNOS`) ist `UnsafeFile`. Ein voruebergehender Fehler (anderer
-    Fehler beim Oeffnen, jeder Fehler bei `fstat`/`read`) ist `ReadFailed` -- der Inhalt ist damit nicht bewertet.
+    `FileNotFoundError` bleibt `FileNotFoundError`. Eine ungültige Datei (Symlink, falscher Typ, Besitzer,
+    Größe, ... und Öffnen-Fehler aus `_CONTENT_ERRNOS`) ist `UnsafeFile`. Ein vorübergehender Fehler (anderer
+    Fehler beim Öffnen, jeder Fehler bei `fstat`/`read`) ist `ReadFailed` -- der Inhalt ist damit nicht bewertet.
     """
     try:
         fd = os.open(name, READ_FLAGS, dir_fd=dir_fd)
@@ -222,8 +222,8 @@ def write_atomic(dir_fd: int, name: str, data: bytes, *, mode: int, tmp_prefix: 
     O_NOFOLLOW`, ein vorab hingelegter Symlink wird also nie verfolgt), `fchmod(mode)`, fsync, `os.replace`
     (ersetzt auch einen Symlink an `name` selbst, nie sein Ziel), fsync des Ordners.
 
-    `durable=False` spart die beiden fsync (nur fuer den Heartbeat des Status gedacht).
-    Bei einem Fehler bleibt die alte Datei unveraendert und der Zufallsname wird entfernt.
+    `durable=False` spart die beiden fsync (nur für den Heartbeat des Status gedacht).
+    Bei einem Fehler bleibt die alte Datei unverändert und der Zufallsname wird entfernt.
     """
     fd = -1
     tmp = ""
@@ -254,7 +254,7 @@ def write_atomic(dir_fd: int, name: str, data: bytes, *, mode: int, tmp_prefix: 
 
 
 def remove_stale_tmp(dir_fd: int, pattern: re.Pattern[str]) -> int:
-    """Entfernt Reste abgebrochener Schreibvorgaenge (Namen nach `pattern`, nur regulaere Dateien)."""
+    """Entfernt Reste abgebrochener Schreibvorgänge (Namen nach `pattern`, nur reguläre Dateien)."""
     removed = 0
     with os.scandir(dir_fd) as entries:
         names = [entry.name for entry in entries if pattern.fullmatch(entry.name)]
@@ -293,7 +293,7 @@ class State:
     results: list[dict[str, Any]] = field(default_factory=list)
     """Die letzten Ergebnisse (`policy.is_result`), hoechstens `policy.RESULTS_MAX`, eins je Anforderungs-ID."""
 
-    # --- Aenderungen --------------------------------------------------------
+    # --- Änderungen --------------------------------------------------------
 
     def mark_seen(self, request_id: str, now: float) -> None:
         """Merkt eine verarbeitete ID (angenommen **oder** abgelehnt)."""
@@ -305,13 +305,13 @@ class State:
             self.seen = dict(newest)
 
     def record_action(self, now: float) -> None:
-        """Zaehlt eine **angenommene** Aktion. Gedacht fuer den Moment der Annahme, nicht erst den Commit:
+        """Zählt eine **angenommene** Aktion. Gedacht für den Moment der Annahme, nicht erst den Commit:
         auch ein gescheitertes Update kostet einen Neustart."""
         self.actions.append(int(now))
         self.actions = sorted(self.actions)[-MAX_ACTIONS:]
 
     def block_version(self, version: str, now: float) -> None:
-        """24 h kein Update auf `version` (nach einem Rueckweg von dort)."""
+        """24 h kein Update auf `version` (nach einem Rückweg von dort)."""
         if not policy.is_version(version):
             raise ValueError("keine Version")
         self.blocked[version] = max(self.blocked.get(version, 0), int(now) + policy.BLOCK_AFTER_ROLLBACK_S)
@@ -320,7 +320,7 @@ class State:
             self.blocked = dict(latest)
 
     def record_result(self, entry: dict[str, Any]) -> bool:
-        """Merkt das Ergebnis eines Vorgangs (ein Eintrag je ID, die letzten `policy.RESULTS_MAX`). `False`, wenn fuer
+        """Merkt das Ergebnis eines Vorgangs (ein Eintrag je ID, die letzten `policy.RESULTS_MAX`). `False`, wenn für
         diese ID schon dasselbe Ergebnis mit demselben Code dasteht (eine Wiederaufnahme schreibt es nicht noch einmal,
         der erste Zeitpunkt bleibt)."""
         if not policy.is_result(entry):
@@ -337,13 +337,13 @@ class State:
         self.slot = slot
 
     def commit_rollback(self, reverted_from: str, now: float) -> None:
-        """Commit eines Rueckwegs: der Slot ist verbraucht (einmal benutzbar) und es entsteht **kein** neuer
+        """Commit eines Rückwegs: der Slot ist verbraucht (einmal benutzbar) und es entsteht **kein** neuer
         (nie verkettet); `reverted_from` ist 24 h gesperrt."""
         self.slot = None
         self.block_version(reverted_from, now)
 
     def cap_future(self, now: float) -> bool:
-        """Kappt Zeitstempel in der Zukunft (siehe `prune`); `True`, wenn etwas geaendert wurde."""
+        """Kappt Zeitstempel in der Zukunft (siehe `prune`); `True`, wenn etwas geändert wurde."""
         now_s = int(now)
         late = now_s + policy.CLOCK_SLACK_S
         actions = [min(at, now_s) if at > late else at for at in self.actions]
@@ -361,14 +361,14 @@ class State:
 
     def prune(self, now: float) -> None:
         """Kappt Zeitstempel in der Zukunft und wirft Abgelaufenes weg. Der Slot bleibt stehen, auch abgelaufen:
-        das Aufraeumen des Schutz-Tags gehoert dem Ablauf.
+        das Aufräumen des Schutz-Tags gehört dem Ablauf.
 
         **Zukunft:** ein Zeitstempel, der weiter als `CLOCK_SLACK_S` nach `now` liegt (die Uhr war vorgesprungen und
-        wurde zurueckgestellt, oder die Datei ist falsch), sperrt weiter (fail-closed), aber nur bis zur Hoechstfrist:
-        Aktionen und IDs zaehlen dann als "gerade eben" (`now`), `blocked` und `hold_until` laufen hoechstens
+        wurde zurückgestellt, oder die Datei ist falsch), sperrt weiter (fail-closed), aber nur bis zur Höchstfrist:
+        Aktionen und IDs zählen dann als "gerade eben" (`now`), `blocked` und `hold_until` laufen höchstens
         `BLOCK_AFTER_ROLLBACK_S` bzw. `HOLD_AFTER_CORRUPT_S` ab jetzt. Ohne diese Kappung sperrte ein einziger
-        Uhrsprung fuer Jahre (nur `/state` von Hand loeschen half). `StateStore.load_state` ruft das beim Laden auf
-        und schreibt den gekappten Zustand zurueck."""
+        Uhrsprung für Jahre (nur `/state` von Hand löschen half). `StateStore.load_state` ruft das beim Laden auf
+        und schreibt den gekappten Zustand zurück."""
         self.cap_future(now)
         now_s = int(now)
         self.actions = sorted(at for at in self.actions if now_s - at < policy.ACTION_INTERVAL_S)[-MAX_ACTIONS:]
@@ -447,10 +447,10 @@ RESTART_KEYS = ("Name", "MaximumRetryCount")
 
 @dataclass(frozen=True)
 class OldContainer:
-    """Das Ziel vor dem Vorgang. `tag_text` ist `Config.Image` unveraendert.
+    """Das Ziel vor dem Vorgang. `tag_text` ist `Config.Image` unverändert.
 
-    `repo_digest` ist `<repository>@sha256:...` des alten Images aus der Vorpruefung, fuer den Rueckweg-Slot nach dem
-    Update. Er steht im Journal, bevor sich etwas aendert: Mit dem containerd-Image-Store (Standard einer neuen
+    `repo_digest` ist `<repository>@sha256:...` des alten Images aus der Vorprüfung, für den Rückweg-Slot nach dem
+    Update. Er steht im Journal, bevor sich etwas ändert: Mit dem containerd-Image-Store (Standard einer neuen
     Installation von Docker 29) leitet der Docker-Dienst `RepoDigests` aus den Namen eines Images ab -- zeigt das
     bewegliche Tag schon auf das neue Image, nennt er den Digest des alten oft nicht mehr, und ein Commit, den erst die
     Wiederaufnahme macht, fragte vergeblich."""
@@ -467,7 +467,7 @@ class OldContainer:
 @dataclass(frozen=True)
 class NewImage:
     """Das Image, auf das gewechselt wird, und ab `created` der neue Container (`id`).
-    Beim Rueckweg ist es der Vorgaenger aus dem Slot; `digest` darf dann fehlen."""
+    Beim Rückweg ist es der Vorgänger aus dem Slot; `digest` darf dann fehlen."""
 
     image_id: str
     digest: str | None
@@ -477,17 +477,17 @@ class NewImage:
 
 @dataclass(frozen=True)
 class Journal:
-    """Der laufende Vorgang. Unveraenderlich; der naechste Stand entsteht mit `advance()`.
+    """Der laufende Vorgang. Unveränderlich; der nächste Stand entsteht mit `advance()`.
 
-    `undo`: der Rueckbau ist angekuendigt (vor dem Commit, nie danach). Ab dann geht es nicht mehr vorwaerts
+    `undo`: der Rückbau ist angekündigt (vor dem Commit, nie danach). Ab dann geht es nicht mehr vorwärts
     (`advance` erlaubt nur noch das Eintragen des eigenen, schon angelegten Containers von `creating` nach
-    `created`), und `Engine.bind` laesst nur noch Aufrufe des Rueckbaus zu. `code` ist der Grund dafuer (ein Code aus
-    `policy.CODES`, oder `None`, wenn die Wiederaufnahme nach einem Absturz zurueckbaut); ohne `undo` immer `None`.
+    `created`), und `Engine.bind` lässt nur noch Aufrufe des Rückbaus zu. `code` ist der Grund dafür (ein Code aus
+    `policy.CODES`, oder `None`, wenn die Wiederaufnahme nach einem Absturz zurückbaut); ohne `undo` immer `None`.
 
-    `repository` ist das Repository, gegen das `old.tag_text` geprueft wird (Vorgabe: die Konstante
+    `repository` ist das Repository, gegen das `old.tag_text` geprüft wird (Vorgabe: die Konstante
     `policy.REPOSITORY`; nur Tests geben ein anderes mit, nie die Umgebung). Es steht nicht in der Datei
-    (`to_json`) und zaehlt nicht beim Vergleich; `from_json` und `StateStore` setzen es, damit `validate`,
-    `advance` und `floating_tag` immer dasselbe pruefen."""
+    (`to_json`) und zählt nicht beim Vergleich; `from_json` und `StateStore` setzen es, damit `validate`,
+    `advance` und `floating_tag` immer dasselbe prüfen."""
 
     request_id: str
     action: str
@@ -506,8 +506,8 @@ class Journal:
         return policy.floating_tag(self.old.tag_text, repository=self.repository)
 
     def advance(self, step: str, **changes: Any) -> Journal:
-        """Naechster Stand (geprueft). Schritte gehen nur vorwaerts, im Rueckbau gar nicht mehr (ausser `creating` ->
-        `created`: der Rueckbau traegt den eigenen, schon angelegten Container ein, um ihn entfernen zu duerfen)."""
+        """Nächster Stand (geprüft). Schritte gehen nur vorwärts, im Rückbau gar nicht mehr (außer `creating` ->
+        `created`: der Rückbau trägt den eigenen, schon angelegten Container ein, um ihn entfernen zu dürfen)."""
         if step not in policy.STEPS or policy.STEPS.index(step) < policy.STEPS.index(self.step):
             raise ValueError("journal: Schritt rueckwaerts")
         if self.undo and (self.step, step) != ("creating", "created"):
@@ -519,8 +519,8 @@ class Journal:
         return journal
 
     def start_undo(self, code: str | None) -> Journal:
-        """Der Stand mit angekuendigtem Rueckbau (`undo`) und seinem Grund (`code`). Ist er schon angekuendigt, bleibt
-        es beim ersten Grund. Nach dem Commit gibt es keinen Rueckbau (`ValueError`)."""
+        """Der Stand mit angekündigtem Rückbau (`undo`) und seinem Grund (`code`). Ist er schon angekündigt, bleibt
+        es beim ersten Grund. Nach dem Commit gibt es keinen Rückbau (`ValueError`)."""
         if self.undo:
             return self
         journal = dataclasses.replace(self, undo=True, code=code)
@@ -648,9 +648,9 @@ class Journal:
 
 
 class StateStore:
-    """Zugriff auf `/state`: erst `open()` (Ordner pruefen, Sperre nehmen), dann laden und speichern.
+    """Zugriff auf `/state`: erst `open()` (Ordner prüfen, Sperre nehmen), dann laden und speichern.
 
-    `expected_uid` ist der erwartete Besitzer von Ordner und Dateien (im Betrieb root = 0). Nur fuer Tests
+    `expected_uid` ist der erwartete Besitzer von Ordner und Dateien (im Betrieb root = 0). Nur für Tests
     ohne root anders -- als Parameter, nie aus der Umgebung.
     """
 
@@ -668,11 +668,11 @@ class StateStore:
         self.problem: str | None = None
         """Fester Bezeichner, wenn seit `open()` beim Laden etwas kaputt war (`state_corrupt`, `journal_corrupt`)."""
 
-    # --- Oeffnen und Sperre -------------------------------------------------
+    # --- Öffnen und Sperre -------------------------------------------------
 
     def open(self) -> None:
-        """Prueft den Ordner (kein Symlink, Ordner, Besitzer), setzt 0700, nimmt die Sperre und raeumt Reste
-        abgebrochener Schreibvorgaenge weg. Wirft `StateUnsafe` oder `SecondInstance`."""
+        """Prüft den Ordner (kein Symlink, Ordner, Besitzer), setzt 0700, nimmt die Sperre und räumt Reste
+        abgebrochener Schreibvorgänge weg. Wirft `StateUnsafe` oder `SecondInstance`."""
         if self._dir_fd is not None:
             return
         self.problem = None
@@ -748,16 +748,16 @@ class StateStore:
     # --- state.json ---------------------------------------------------------
 
     def load_state(self, now: float) -> State:
-        """Laedt `state.json`. Fehlt sie: leerer Zustand (war sie schon einmal kaputt, d. h. liegt
-        `state.json.broken` daneben: sicherer Zustand). Ist sie ungueltig: sicherer Zustand mit 24-h-Sperre (siehe
+        """Lädt `state.json`. Fehlt sie: leerer Zustand (war sie schon einmal kaputt, d. h. liegt
+        `state.json.broken` daneben: sicherer Zustand). Ist sie ungültig: sicherer Zustand mit 24-h-Sperre (siehe
         Modul-Doku), sofort geschrieben; `self.problem = "state_corrupt"`.
 
         Zeitstempel weit in der Zukunft (Uhrsprung) werden gekappt (`State.cap_future`, dazu die Sperre des Speichers,
-        siehe `_expire_floor`) und der Stand zurueckgeschrieben -- aber nur, wenn sich dabei wirklich etwas geaendert
-        hat (nicht bei jedem Laden). Der zurueckgegebene `State` enthaelt die Sperre des Speichers (`_apply_floor`).
+        siehe `_expire_floor`) und der Stand zurückgeschrieben -- aber nur, wenn sich dabei wirklich etwas geändert
+        hat (nicht bei jedem Laden). Der zurückgegebene `State` enthält die Sperre des Speichers (`_apply_floor`).
 
         Wirft `StateUnsafe`, wenn auch das Schreiben des sicheren Zustands scheitert (`state_write`) oder die Datei
-        gerade nicht lesbar ist (`state_read`; dann bleibt **alles** unveraendert, spaeter erneut versuchen)."""
+        gerade nicht lesbar ist (`state_read`; dann bleibt **alles** unverändert, später erneut versuchen)."""
         dir_fd = self._fd()
         self._expire_floor(now)
         raw: bytes | None = None
@@ -778,7 +778,7 @@ class StateStore:
         before = state.to_json()
         state.cap_future(now)  # Uhrsprung: Zeitstempel in der Zukunft kappen ...
         self._apply_floor(state)  # ... aber nie unter die Sperre dieses Prozesses (die ist oben schon gekappt)
-        if state.to_json() != before:  # den Stand nur festhalten, wenn er sich geaendert hat (best effort)
+        if state.to_json() != before:  # den Stand nur festhalten, wenn er sich geändert hat (best effort)
             with contextlib.suppress(OSError):
                 self.save_state(state)
         return state
@@ -793,10 +793,10 @@ class StateStore:
         return True
 
     def _expire_floor(self, now: float) -> None:
-        """Die Sperre des Speichers (`_hold_floor`) laesst man ablaufen und kappt sie wie `hold_until` (siehe
+        """Die Sperre des Speichers (`_hold_floor`) lässt man ablaufen und kappt sie wie `hold_until` (siehe
         `State.prune`): lag sie weiter als `HOLD_AFTER_CORRUPT_S + CLOCK_SLACK_S` in der Zukunft (die Uhr wurde
-        zurueckgestellt), gilt `jetzt + HOLD_AFTER_CORRUPT_S`. Sonst finge sie die Kappung von `hold_until` bei jedem
-        Laden wieder ein und erzwaenge jedes Mal einen Schreibvorgang."""
+        zurückgestellt), gilt `jetzt + HOLD_AFTER_CORRUPT_S`. Sonst finge sie die Kappung von `hold_until` bei jedem
+        Laden wieder ein und erzwänge jedes Mal einen Schreibvorgang."""
         now_s = int(now)
         if self._hold_floor and self._hold_floor <= now_s:
             self._hold_floor = 0
@@ -804,7 +804,7 @@ class StateStore:
             self._hold_floor = now_s + HOLD_AFTER_CORRUPT_S
 
     def _apply_floor(self, state: State) -> None:
-        """Hebt `state.hold_until` auf mindestens die Sperre des Speichers an (auch im uebergebenen Objekt)."""
+        """Hebt `state.hold_until` auf mindestens die Sperre des Speichers an (auch im übergebenen Objekt)."""
         if self._hold_floor:
             state.hold_until = max(state.hold_until or 0, self._hold_floor)
 
@@ -819,9 +819,9 @@ class StateStore:
         try:
             self.save_state(held)
         except OSError:
-            # Der Notweg ist nur fuer *einen* Fall gedacht: `state.json` ist ein Ordner (das Ersetzen scheitert dann
-            # an dem Namen). Bei jedem anderen Fehler (voller Datentraeger, zu viele offene Dateien, ...) bleibt die
-            # Datei, wie sie ist: beim naechsten Start gilt wieder der sichere Zustand, nie ein leerer.
+            # Der Notweg ist nur für *einen* Fall gedacht: `state.json` ist ein Ordner (das Ersetzen scheitert dann
+            # an dem Namen). Bei jedem anderen Fehler (voller Datenträger, zu viele offene Dateien, ...) bleibt die
+            # Datei, wie sie ist: beim nächsten Start gilt wieder der sichere Zustand, nie ein leerer.
             if not self._is_directory(STATE_NAME):
                 raise StateUnsafe("state_write") from None
             try:
@@ -839,12 +839,12 @@ class StateStore:
             return False
 
     def save_state(self, state: State) -> None:
-        """Schreibt `state.json` atomar mit fsync (Datei und Ordner). Prueft vorher, dass sich das Geschriebene
-        wieder laden laesst -- nie eine Datei, die beim naechsten Start als kaputt gaelte.
+        """Schreibt `state.json` atomar mit fsync (Datei und Ordner). Prüft vorher, dass sich das Geschriebene
+        wieder laden lässt -- nie eine Datei, die beim nächsten Start als kaputt gälte.
 
         Eine in diesem Prozess gesetzte Sperre (`hold`, kaputtes `state.json` bzw. Journal) geht nie verloren:
-        `state.hold_until` wird auf mindestens diese Sperre angehoben (auch im uebergebenen Objekt), ein vorher
-        geladener alter `State` kann sie also nicht mehr ueberschreiben."""
+        `state.hold_until` wird auf mindestens diese Sperre angehoben (auch im übergebenen Objekt), ein vorher
+        geladener alter `State` kann sie also nicht mehr überschreiben."""
         self._apply_floor(state)
         doc = state.to_json()
         State.from_json(doc, repository=self._repository)
@@ -855,7 +855,7 @@ class StateStore:
 
     def hold(self, now: float) -> State:
         """Setzt die 24-h-Sperre im gespeicherten Zustand (z. B. nach einem kaputten Journal) und merkt sie sich:
-        spaeteres `save_state` (auch mit einem frueher geladenen `State`) schreibt nie weniger."""
+        späteres `save_state` (auch mit einem früher geladenen `State`) schreibt nie weniger."""
         state = self.load_state(now)
         until = int(now) + HOLD_AFTER_CORRUPT_S
         self._hold_floor = max(self._hold_floor, until)
@@ -864,10 +864,10 @@ class StateStore:
         return state
 
     def check(self, state: State, request: policy.Request, now: float) -> None:
-        """Grenzen fuer diese Anforderung (`policy.check_limits`) -- **der Weg fuer den Ablauf**. Wendet vorher die
+        """Grenzen für diese Anforderung (`policy.check_limits`) -- **der Weg für den Ablauf**. Wendet vorher die
         Sperre des Speichers auf `state` an: ein `State`, der vor dem Erkennen eines kaputten Journals geladen wurde,
-        kennt sie sonst nicht und liesse die Anforderung durch. Raeumt dann auf (`State.prune`): Zeitstempel weit in
-        der Zukunft (Uhrsprung) werden dabei gekappt und bleiben so im Speicher -- gespeichert wird beim naechsten
+        kennt sie sonst nicht und ließe die Anforderung durch. Räumt dann auf (`State.prune`): Zeitstempel weit in
+        der Zukunft (Uhrsprung) werden dabei gekappt und bleiben so im Speicher -- gespeichert wird beim nächsten
         `save_state`. Wirft `Refusal` (`state_unsafe`, `replay`, `rate_limited`, `blocked_version`, ...)."""
         self._expire_floor(now)
         self._apply_floor(state)
@@ -880,10 +880,10 @@ class StateStore:
     # --- journal.json -------------------------------------------------------
 
     def load_journal(self, now: float) -> Journal | None:
-        """Laedt den laufenden Vorgang oder `None`. Ungueltig: 24-h-Sperre setzen, Journal als
+        """Lädt den laufenden Vorgang oder `None`. Ungültig: 24-h-Sperre setzen, Journal als
         `journal.json.broken` beiseitelegen, `JournalCorrupt` werfen (siehe Modul-Doku). Gerade nicht lesbar:
-        `StateUnsafe("journal_read")`, **nichts** wird veraendert -- der Ablauf liest in der naechsten Runde (bzw. in
-        `recover()` beim naechsten Versuch) erneut."""
+        `StateUnsafe("journal_read")`, **nichts** wird verändert -- der Ablauf liest in der nächsten Runde (bzw. in
+        `recover()` beim nächsten Versuch) erneut."""
         dir_fd = self._fd()
         try:
             raw = read_regular(dir_fd, JOURNAL_NAME, max_bytes=MAX_JOURNAL_BYTES, owner=self._uid)
@@ -900,8 +900,8 @@ class StateStore:
             raise self._quarantine_journal(now) from None
 
     def _quarantine_journal(self, now: float) -> JournalCorrupt:
-        """Sperre setzen und das Journal beiseitelegen; gibt die zu werfende Ausnahme zurueck. Die Sperre kommt
-        zuerst: scheitert schon das (z. B. `state_read`), bleibt das Journal liegen und wird spaeter erneut gelesen."""
+        """Sperre setzen und das Journal beiseitelegen; gibt die zu werfende Ausnahme zurück. Die Sperre kommt
+        zuerst: scheitert schon das (z. B. `state_read`), bleibt das Journal liegen und wird später erneut gelesen."""
         dir_fd = self._fd()
         try:
             held = self.hold(now)
@@ -921,7 +921,7 @@ class StateStore:
         write_atomic(self._fd(), JOURNAL_NAME, data, mode=FILE_MODE, tmp_prefix=".journal-")
 
     def clear_journal(self) -> None:
-        """Vorgang abgeschlossen: Journal loeschen, fsync des Ordners. Fehlt es schon, ist das kein Fehler."""
+        """Vorgang abgeschlossen: Journal löschen, fsync des Ordners. Fehlt es schon, ist das kein Fehler."""
         dir_fd = self._fd()
         with contextlib.suppress(FileNotFoundError):
             os.unlink(JOURNAL_NAME, dir_fd=dir_fd)

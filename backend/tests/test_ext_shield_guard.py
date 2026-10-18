@@ -460,6 +460,270 @@ async def test_first_look_only_learns_then_changes_raise_events_once():
     await engine.dispose()
 
 
+FILES_BEFORE = f"{SHA_A} 644 root 1 10 - /etc/passwd\n{SHA_A} 640 root 1 10 - /etc/shadow"
+PASSWD_CHANGED = f"{SHA_B} 644 root 2 11 - /etc/passwd\n{SHA_A} 640 root 1 10 - /etc/shadow"
+BOTH_CHANGED = f"{SHA_B} 644 root 2 11 - /etc/passwd\n{SHA_B} 640 root 2 11 - /etc/shadow"
+
+
+async def _two_file_events(ctx):
+    """Zwei offene Ereignisse zu geänderten Dateien auf demselben Server."""
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.guard import Guard
+
+    ctx.outputs[:] = [_output(files=FILES_BEFORE), _output(files=PASSWD_CHANGED), _output(files=BOTH_CHANGED)]
+    guard = Guard(ctx, Defender(ctx))
+    for _ in range(3):
+        await guard.inspect(ctx._host)
+    events = sorted(await guard.list_events(), key=lambda e: e["title"])
+    assert [e["title"] for e in events] == ["Wichtige Datei geändert: /etc/passwd", "Wichtige Datei geändert: /etc/shadow"]
+    return guard, events
+
+
+async def _files(ctx):
+    from nodvard_deck_ext_shield.patching import load_baseline
+
+    return await load_baseline(ctx, "h1", "files"), await load_baseline(ctx, "h1", "guard")
+
+
+@pytest.mark.asyncio
+async def test_a_cut_off_answer_raises_no_file_alarm():
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.guard import GUARD_INCOMPLETE, Guard
+
+    whole = _output(files=FILES_BEFORE)
+    cut = whole[: whole.index("/etc/passwd\n") + len("/etc/passwd\n")]
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, [whole, cut])
+    guard = Guard(ctx, Defender(ctx))
+
+    await guard.inspect(ctx._host)
+    assert await guard.inspect(ctx._host) == {"error": GUARD_INCOMPLETE}
+    files, view = await _files(ctx)
+    assert await guard.list_events() == [] and not ctx.notes
+    assert set(files["accepted"]) == {"/etc/passwd", "/etc/shadow"} and view["error"] == GUARD_INCOMPLETE
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", [OSError("timeout"), "@@uid\n0\n@@ssh\n"], ids=["nicht-erreichbar", "abgebrochen"])
+async def test_acknowledging_a_file_change_keeps_it_open_when_the_server_does_not_deliver(reply):
+    from nodvard_deck_ext_shield.guard import GuardUnavailable
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, [])
+    guard, events = await _two_file_events(ctx)
+    before = await _files(ctx)
+
+    async def run(host, command, timeout_s=60):
+        if isinstance(reply, Exception):
+            raise reply
+        return SimpleNamespace(exit_code=0, stdout=reply, stderr="", duration_ms=5)
+
+    ctx.exec.run = run
+    with pytest.raises(GuardUnavailable, match="Das Ereignis bleibt offen"):
+        await guard.acknowledge(events[0]["id"])
+    assert len(await guard.list_events()) == 2
+    assert await _files(ctx) == before  # nichts aus dem bestätigten Stand entfernt
+    calls = []
+    ctx.exec.run = lambda host, command, timeout_s=60: calls.append(command) or run(host, command, timeout_s)
+    assert await guard.acknowledge_all() == (0, 2)
+    assert len(calls) == 1  # einmal warten reicht
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_acknowledging_a_file_change_of_a_removed_server_still_works():
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, [])
+    guard, events = await _two_file_events(ctx)
+    ctx.hosts.get = lambda host_id: _none()
+    assert await guard.acknowledge(events[0]["id"])
+    await engine.dispose()
+
+
+async def _none():
+    return None
+
+
+@pytest.mark.asyncio
+async def test_two_acknowledgements_at_once_both_stick():
+    import asyncio
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, [])
+    guard, events = await _two_file_events(ctx)
+    arrived, both = [], asyncio.Event()
+
+    async def run(host, command, timeout_s=60):
+        # Beide Bestätigungen warten gleichzeitig auf den Server.
+        arrived.append(command)
+        if len(arrived) == 2:
+            both.set()
+        await asyncio.wait_for(both.wait(), 2)
+        return SimpleNamespace(exit_code=0, stdout=_output(files=BOTH_CHANGED), stderr="", duration_ms=5)
+
+    ctx.exec.run = run
+    assert await asyncio.gather(*(guard.acknowledge(e["id"]) for e in events)) == [True, True]
+    files, view = await _files(ctx)
+    assert files["alerted"] == {} and view["files_pending"] == []
+    assert {p: e["sha256"] for p, e in files["accepted"].items()} == {"/etc/passwd": SHA_B, "/etc/shadow": SHA_B}
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_check_during_an_acknowledgement_keeps_what_it_found():
+    import asyncio
+
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.guard import Guard
+
+    group_changed = f"{SHA_B} 644 root 2 11 - /etc/passwd\n{SHA_B} 644 root 2 11 - /etc/group"
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, [_output(files=f"{SHA_A} 644 root 1 10 - /etc/passwd\n{SHA_A} 644 root 1 10 - /etc/group"),
+                    _output(files=f"{SHA_B} 644 root 2 11 - /etc/passwd\n{SHA_A} 644 root 1 10 - /etc/group")])
+    guard = Guard(ctx, Defender(ctx))
+    await guard.inspect(ctx._host)
+    await guard.inspect(ctx._host)
+    [passwd] = await guard.list_events()
+    in_ack, release = asyncio.Event(), asyncio.Event()
+
+    async def run(host, command, timeout_s=60):
+        if not in_ack.is_set():
+            in_ack.set()
+            await asyncio.wait_for(release.wait(), 2)
+        return SimpleNamespace(exit_code=0, stdout=_output(files=group_changed), stderr="", duration_ms=5)
+
+    ctx.exec.run = run
+    ack = asyncio.ensure_future(guard.acknowledge(passwd["id"]))
+    await in_ack.wait()
+    assert (await guard.inspect(ctx._host))["events"] == 1  # /etc/group geändert, während der Server antwortet
+    release.set()
+    assert await ack
+    files, view = await _files(ctx)
+    assert files["accepted"]["/etc/passwd"]["sha256"] == SHA_B
+    assert files["alerted"] == {"/etc/group": f"{SHA_B}644root"} and view["files_pending"] == ["/etc/group"]
+    assert (await guard.inspect(ctx._host))["events"] == 0  # nicht noch einmal gemeldet
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_check_waits_while_an_acknowledgement_writes():
+    import asyncio
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, [])
+    guard, _events = await _two_file_events(ctx)
+    before = await _files(ctx)
+    lock = guard._lock("h1")
+    await lock.acquire()
+    check = asyncio.ensure_future(guard.inspect(ctx._host))
+    done, _ = await asyncio.wait({check}, timeout=0.3)
+    assert not done and await _files(ctx) == before
+    lock.release()
+    await check
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_if_saving_fails_the_event_stays_open():
+    from nodvard_deck_ext_shield import guard as guard_mod
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, [])
+    guard, events = await _two_file_events(ctx)
+    ctx.outputs[:] = [_output(files=BOTH_CHANGED)]
+    save = guard_mod.save_baseline
+
+    async def broken(ctx_, host_id, kind, data):
+        if kind == "files":
+            raise OSError("Platte voll")
+        await save(ctx_, host_id, kind, data)
+
+    guard_mod.save_baseline = broken
+    try:
+        with pytest.raises(OSError):
+            await guard.acknowledge(events[0]["id"])
+    finally:
+        guard_mod.save_baseline = save
+    assert len(await guard.list_events()) == 2
+    assert await guard.acknowledge(events[0]["id"])  # ein zweiter Versuch geht
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ports_and_a_double_click_need_no_answer_from_the_server():
+    import asyncio
+
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.guard import Guard
+
+    base_ports = 'tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=1,fd=3))'
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, [_output(ports=base_ports, files=FILES_BEFORE),
+                    _output(ports=base_ports + '\ntcp LISTEN 0 128 0.0.0.0:4444 0.0.0.0:* users:(("nc",pid=66,fd=3))',
+                            files=PASSWD_CHANGED)])
+    guard = Guard(ctx, Defender(ctx))
+    await guard.inspect(ctx._host)
+    await guard.inspect(ctx._host)
+    kinds = {e["kind"]: e["id"] for e in await guard.list_events()}
+
+    async def unreachable(host, command, timeout_s=60):
+        raise OSError("timeout")
+
+    ctx.exec.run = unreachable
+    assert await asyncio.gather(guard.acknowledge(kinds["new_port"]), guard.acknowledge(kinds["new_port"])) in (
+        [True, False], [False, True])
+    assert [a["action"] for a in ctx.audits].count("shield.guard_acknowledged") == 1
+    assert [e["kind"] for e in await guard.list_events()] == ["file_changed"]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_acknowledge_all_reports_what_it_did_and_what_stays_open():
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.guard import Guard
+
+    base_ports = 'tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=1,fd=3))'
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, [_output(ports=base_ports, files=FILES_BEFORE),
+                    _output(ports=base_ports + '\ntcp LISTEN 0 128 0.0.0.0:4444 0.0.0.0:* users:(("nc",pid=66,fd=3))',
+                            files=PASSWD_CHANGED)])
+    guard = Guard(ctx, Defender(ctx))
+    await guard.inspect(ctx._host)
+    await guard.inspect(ctx._host)
+
+    async def unreachable(host, command, timeout_s=60):
+        raise OSError("timeout")
+
+    ctx.exec.run = unreachable
+    assert await guard.acknowledge_all() == (1, 1)
+    await engine.dispose()
+
+
+def test_acknowledge_routes_say_what_stays_open():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from nodvard_deck_ext_shield.defender_api import build_routers
+    from nodvard_deck_ext_shield.guard import GuardUnavailable
+    from nodvard_sdk import Actor
+
+    async def acknowledge(event_id, actor=None):
+        raise GuardUnavailable("pve2 ist gerade nicht erreichbar (timeout). Das Ereignis bleibt offen.")
+
+    async def acknowledge_all(actor=None):
+        return 3, 1
+
+    ctx = SimpleNamespace(api=SimpleNamespace(current_actor=lambda: Actor.user("u1", "anna")))
+    guard = SimpleNamespace(acknowledge=acknowledge, acknowledge_all=acknowledge_all)
+    _, manage = build_routers(ctx, SimpleNamespace(), guard=guard)
+    app = FastAPI()
+    app.include_router(manage)
+    client = TestClient(app)
+    one = client.post("/defender/events/ev1/acknowledge")
+    assert one.status_code == 503 and one.json()["detail"].startswith("pve2 ist gerade nicht erreichbar")
+    assert client.post("/defender/events/acknowledge-all").json() == {"acknowledged": 3, "kept_open": 1}
+
+
 @pytest.mark.asyncio
 async def test_package_updates_to_binaries_are_accepted_silently():
     from nodvard_deck_ext_shield.defender import Defender
@@ -917,3 +1181,256 @@ async def test_a_push_names_the_kind_of_each_event_only_once():
         "- Wichtige Datei geändert: /etc/passwd",
     ]
     await engine.dispose()
+
+
+SHA_C = "c" * 64
+
+
+def _full_rule(user: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(f"{user} ALL=(root) NOPASSWD: ALL\n".encode()).hexdigest()
+
+
+def _state(sha: str, mode: str, owner: str) -> dict:
+    return {"sha256": sha, "mode": mode, "owner": owner}
+
+
+def _setup_run(**over):
+    """Ein Lauf von „Mit Passwort einrichten“ für den Benutzer `nodvard`, wie der Kern ihn festhält: Benutzer angelegt,
+    Schlüssel eingetragen, sudo-Regel und Hilfsskript-Regel geschrieben, die alte Regel ersetzt."""
+    from nodvard_deck_ext_shield import intrusion as ix
+
+    run = {
+        "from": "2026-10-16T08:00:00+00:00", "to": "2026-10-16T08:00:40+00:00", "user": "nodvard",
+        "actions": ["key_added", "legacy_rule_removed", "user_created"],
+        "files": {
+            "/etc/passwd": {"before": _state(SHA_A, "644", "root"), "after": _state(SHA_B, "644", "root")},
+            "/etc/shadow": {"before": _state(SHA_A, "640", "root"), "after": _state(SHA_B, "640", "root")},
+            "/home/nodvard/.ssh/authorized_keys": {"before": None, "after": _state(SHA_B, "600", "nodvard")},
+        },
+        "sudoers": {"/etc/sudoers.d/nodvard-nodvard": _full_rule("nodvard"), "/etc/sudoers.d/nodvard_shield_nodvard": SHA_C},
+        "legacy_sudoers": {"/etc/sudoers.d/lattice-nodvard": _full_rule("nodvard")},
+    }
+    run.update(over)
+    return ix.setup_run({"setup_run": run})
+
+
+def _entry(path: str, sha: str, mode: str, owner: str):
+    from nodvard_deck_ext_shield import intrusion as ix
+
+    return ix.FileEntry(path=path, sha256=sha, mode=mode, owner=owner, mtime=0.0, size=1, verify="-")
+
+
+def _adopted(run, path, old, new) -> bool:
+    from nodvard_deck_ext_shield import intrusion as ix
+
+    change = ix.diff_files({path: old} if old else {}, {path: new} if new else {})
+    assert len(change) == 1
+    return ix.adopted_by_setup(change[0], new, old, run)
+
+
+def test_setup_run_is_read_from_the_host_metadata():
+    from nodvard_deck_ext_shield import intrusion as ix
+
+    assert ix.setup_run(None) is None
+    assert ix.setup_run({"setup_run": {"from": "kaputt", "to": "2026-10-16T08:00:00+00:00"}}) is None
+    run = _setup_run()
+    assert run.end - run.start == 40 and run.user == "nodvard" and "user_created" in run.actions
+    # Ohne Zeitzone gilt UTC (wie `utcnow()` im Kern).
+    naive = ix.setup_run({"setup_run": {"from": "2026-10-16T08:00:00", "to": "2026-10-16T08:00:40"}})
+    assert naive.start == run.start and naive.actions == frozenset() and naive.files == {}
+
+
+def test_own_setup_is_adopted_only_exactly_as_reported():
+    run = _setup_run()
+    old_pw, new_pw = _state(SHA_A, "644", "root"), _entry("/etc/passwd", SHA_B, "644", "root")
+    assert _adopted(run, "/etc/passwd", old_pw, new_pw)
+    assert _adopted(run, "/etc/shadow", _state(SHA_A, "640", "root"), _entry("/etc/shadow", SHA_B, "640", "root"))
+    assert _adopted(run, "/home/nodvard/.ssh/authorized_keys", None, _entry("/home/nodvard/.ssh/authorized_keys", SHA_B, "600", "nodvard"))
+    rule = _entry("/etc/sudoers.d/nodvard-nodvard", _full_rule("nodvard"), "440", "root")
+    assert _adopted(run, rule.path, None, rule)
+    assert _adopted(run, "/etc/sudoers.d/nodvard_shield_nodvard", None, _entry("/etc/sudoers.d/nodvard_shield_nodvard", SHA_C, "440", "root"))
+    assert _adopted(run, "/etc/sudoers.d/lattice-nodvard", _state(_full_rule("nodvard"), "440", "root"), None)
+
+
+def test_foreign_changes_are_never_adopted_even_right_after_the_setup():
+    """Gegenproben: alles, was der Befehl nicht genau so gemeldet hat, meldet der Wächter weiter."""
+    run = _setup_run()
+    # Nur Rechte geändert (chmod 666 /etc/shadow), auch mit passender Aktion.
+    assert not _adopted(run, "/etc/shadow", _state(SHA_A, "640", "root"), _entry("/etc/shadow", SHA_A, "666", "root"))
+    # Inhalt wie gemeldet, aber zusätzlich andere Rechte.
+    assert not _adopted(run, "/etc/shadow", _state(SHA_A, "640", "root"), _entry("/etc/shadow", SHA_B, "666", "root"))
+    # Beliebiger Inhalt in /etc/passwd (nicht der gemeldete Stand danach), und ein anderer Stand davor.
+    assert not _adopted(run, "/etc/passwd", _state(SHA_A, "644", "root"), _entry("/etc/passwd", SHA_C, "644", "root"))
+    assert not _adopted(run, "/etc/passwd", _state(SHA_C, "644", "root"), _entry("/etc/passwd", SHA_B, "644", "root"))
+    # Ein fremder Schlüssel (anderer Inhalt als gemeldet), egal welche Änderungszeit die Datei trägt.
+    keys = "/home/nodvard/.ssh/authorized_keys"
+    assert not _adopted(run, keys, None, _entry(keys, SHA_C, "600", "nodvard"))
+    assert not _adopted(run, keys, None, _entry(keys, SHA_B, "644", "nodvard"))
+    assert not _adopted(run, "/home/anna/.ssh/authorized_keys", None, _entry("/home/anna/.ssh/authorized_keys", SHA_B, "600", "anna"))
+    # Neue fremde sudo-Regeln, auch mit Namen, die nach Nodvard Deck klingen.
+    for path in ("/etc/sudoers.d/nodvard-evil", "/etc/sudoers.d/lattice-evil", "/etc/sudoers.d/nodvard_shield_evil", "/etc/sudoers.d/backdoor"):
+        assert not _adopted(run, path, None, _entry(path, _full_rule("nodvard"), "440", "root")), path
+    # Die eigene Regel mit anderem Inhalt oder anderen Rechten.
+    own = "/etc/sudoers.d/nodvard-nodvard"
+    assert not _adopted(run, own, None, _entry(own, _full_rule("evil"), "440", "root"))
+    assert not _adopted(run, own, None, _entry(own, _full_rule("nodvard"), "644", "root"))
+    # Die alte Regel nur gelöscht und nur, wenn sie genau die ersetzte war; angelegt wird sie nie still.
+    legacy = "/etc/sudoers.d/lattice-nodvard"
+    assert not _adopted(run, legacy, _state(SHA_C, "440", "root"), None)
+    assert not _adopted(run, legacy, None, _entry(legacy, _full_rule("nodvard"), "440", "root"))
+
+
+def test_without_the_matching_action_nothing_is_adopted():
+    run = _setup_run(actions=["groups_added"])
+    assert not _adopted(run, "/etc/passwd", _state(SHA_A, "644", "root"), _entry("/etc/passwd", SHA_B, "644", "root"))
+    assert not _adopted(
+        run, "/home/nodvard/.ssh/authorized_keys", None, _entry("/home/nodvard/.ssh/authorized_keys", SHA_B, "600", "nodvard")
+    )
+    assert not _adopted(run, "/etc/sudoers.d/lattice-nodvard", _state(_full_rule("nodvard"), "440", "root"), None)
+    # Ohne Stand vorher/nachher (Bericht fehlt, etwa ohne sha256sum auf dem Server) auch nicht.
+    bare = _setup_run(files={})
+    assert not _adopted(bare, "/etc/passwd", _state(SHA_A, "644", "root"), _entry("/etc/passwd", SHA_B, "644", "root"))
+
+
+@pytest.mark.asyncio
+async def test_own_setup_is_taken_over_quietly_but_other_changes_still_alert():
+    """Nach „Mit Passwort einrichten“ übernimmt der Wächter genau das, was der Befehl gemeldet hat, still (im Verlauf,
+    schon erledigt, keine Meldung). Eine fremde Datei, ein abweichender Stand und alles nach der ersten Prüfung melden
+    weiter."""
+    import time
+    from datetime import UTC, datetime
+
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.guard import Guard
+    from nodvard_deck_ext_shield.patching import schedule_zone
+    from nodvard_sdk import Host
+
+    t = float(int(time.time())) - 100  # der Lauf ist vorbei, die nächste Prüfung verbraucht ihn
+    rule = _full_rule("nodvard")
+    record = {
+        "from": datetime.fromtimestamp(t, UTC).isoformat(), "to": datetime.fromtimestamp(t + 40, UTC).isoformat(),
+        "user": "nodvard", "actions": ["user_created", "key_added", "legacy_rule_removed"],
+        "files": {
+            "/etc/passwd": {"before": _state(SHA_A, "644", "root"), "after": _state(SHA_B, "644", "root")},
+            # gemeldet, aber danach noch einmal geändert: nicht mehr von der Einrichtung
+            "/etc/shadow": {"before": _state(SHA_A, "640", "root"), "after": _state(SHA_B, "640", "root")},
+            "/home/nodvard/.ssh/authorized_keys": {"before": _state(SHA_A, "600", "nodvard"), "after": _state(SHA_B, "600", "nodvard")},
+        },
+        "sudoers": {"/etc/sudoers.d/nodvard-nodvard": rule},
+        "legacy_sudoers": {"/etc/sudoers.d/lattice-nodvard": rule},
+    }
+    before = "\n".join([
+        f"{SHA_A} 644 root 1 10 - /etc/passwd",
+        f"{SHA_A} 640 root 1 10 - /etc/shadow",
+        f"{SHA_A} 600 nodvard 1 10 - /home/nodvard/.ssh/authorized_keys",
+        f"{SHA_A} 644 root 1 10 - /etc/crontab",
+        f"{rule} 440 root 1 10 - /etc/sudoers.d/lattice-nodvard",
+    ])
+    after = "\n".join([
+        f"{SHA_B} 644 root {t + 5} 11 - /etc/passwd",
+        f"{SHA_C} 640 root {t + 6} 11 - /etc/shadow",
+        f"{SHA_B} 600 nodvard {t + 20} 11 - /home/nodvard/.ssh/authorized_keys",
+        f"{SHA_B} 644 root {t + 10} 11 - /etc/crontab",  # im Zeitfenster, aber nicht von der Einrichtung
+        f"{rule} 440 root {t + 30} 11 - /etc/sudoers.d/nodvard-nodvard",
+        f"{rule} 440 root {t + 30} 11 - /etc/sudoers.d/nodvard-evil",
+    ])
+    later = after.replace(f"{SHA_B} 644 root {t + 5} 11 - /etc/passwd", f"{SHA_C} 644 root {t + 5} 11 - /etc/passwd")
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, [_output(files=before), _output(files=after), _output(files=later)])
+    ctx._host = Host(id="h1", name="pve2", display_name="pve2", address="10.0.0.2", credential_username="nodvard",
+                     metadata={"setup_run": record})
+    guard = Guard(ctx, Defender(ctx))
+
+    # Erster Blick vor der Einrichtung: nur merken. Im Test läuft er erst danach, darum zurückdatiert.
+    await guard.inspect(ctx._host)
+    files = await load_files(ctx)
+    files["checked_at"] = t - 100
+    files.pop("setup_seen", None)
+    await save_files(ctx, files)
+    assert (await guard.inspect(ctx._host))["events"] == 2
+
+    at = datetime.fromtimestamp(t, await schedule_zone(ctx)).strftime("%H:%M")
+    events = await guard.list_events(include_acknowledged=True)
+    quiet = next(e for e in events if e["detail"].get("by_setup"))
+    loud = next(e for e in events if not e["detail"].get("by_setup"))
+    assert quiet["severity"] == "info" and quiet["acknowledged"] is True
+    assert quiet["title"].startswith(f"Nach der Einrichtung durch Nodvard Deck um {at} übernommen: ")
+    assert {c["path"] for c in quiet["detail"]["changes"]} == {
+        "/etc/passwd", "/home/nodvard/.ssh/authorized_keys", "/etc/sudoers.d/nodvard-nodvard", "/etc/sudoers.d/lattice-nodvard",
+    }
+    assert all(f"durch die Einrichtung von Nodvard Deck um {at}" in c["note"] for c in quiet["detail"]["changes"])
+    assert {c["path"] for c in loud["detail"]["changes"]} == {"/etc/shadow", "/etc/crontab", "/etc/sudoers.d/nodvard-evil"}
+    assert len(ctx.notes) == 1 and "/etc/passwd" not in ctx.notes[0].body and "/etc/crontab" in ctx.notes[0].body
+
+    # Der Lauf ist verbraucht: Eine spätere Änderung an derselben Datei meldet der Wächter, auch wenn sie noch so aussähe.
+    assert (await load_files(ctx))["setup_seen"] == record["to"]
+    assert (await guard.inspect(ctx._host))["events"] == 1
+    events = await guard.list_events(include_acknowledged=True)
+    newest = max(events, key=lambda e: e["created_at"])
+    assert not newest["detail"].get("by_setup") and {c["path"] for c in newest["detail"]["changes"]} == {"/etc/passwd"}
+
+    o = await guard.overview()
+    assert o["hosts"][0]["open_events"] == 2, "die übernommene Einrichtung zählt nicht als offen"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_own_setup_is_not_adopted_when_a_check_ran_after_it():
+    """Lag die vorige Prüfung schon nach dem Lauf, hätte sie seine Änderungen gesehen: Was jetzt neu ist, stammt nicht
+    von ihm, auch wenn es zum gemeldeten Stand passt."""
+    import time
+    from datetime import UTC, datetime
+
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.guard import Guard
+    from nodvard_sdk import Host
+
+    t = float(int(time.time())) - 600
+    record = {
+        "from": datetime.fromtimestamp(t, UTC).isoformat(), "to": datetime.fromtimestamp(t + 40, UTC).isoformat(),
+        "user": "nodvard", "actions": ["user_created"],
+        "files": {"/etc/passwd": {"before": _state(SHA_A, "644", "root"), "after": _state(SHA_B, "644", "root")}},
+    }
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, [_output(files=f"{SHA_A} 644 root 1 10 - /etc/passwd"), _output(files=f"{SHA_B} 644 root 2 11 - /etc/passwd")])
+    ctx._host = Host(id="h1", name="pve2", display_name="pve2", address="10.0.0.2", credential_username="nodvard",
+                     metadata={"setup_run": record})
+    guard = Guard(ctx, Defender(ctx))
+    await guard.inspect(ctx._host)  # erster Blick: nach dem Lauf, verbraucht ihn
+    assert (await guard.inspect(ctx._host))["events"] == 1
+    events = await guard.list_events(include_acknowledged=True)
+    assert len(events) == 1 and not events[0]["detail"].get("by_setup")
+    await engine.dispose()
+
+
+async def load_files(ctx):
+    from nodvard_deck_ext_shield.patching import load_baseline
+
+    return await load_baseline(ctx, "h1", "files")
+
+
+async def save_files(ctx, files):
+    from nodvard_deck_ext_shield.patching import save_baseline
+
+    await save_baseline(ctx, "h1", "files", files)
+
+
+def test_the_core_record_is_what_the_guard_reads():
+    """Der Kern schreibt `setup_run`, der Wächter liest ihn: dasselbe Format, dieselbe Prüfsumme der sudo-Regel."""
+    from nodvard_deck.services import host_setup
+
+    mark = host_setup.STATE_MARK
+    out = "\n".join([
+        "Benutzer nodvard angelegt.",
+        "Die alte sudo-Regel lattice-nodvard wurde durch nodvard-nodvard ersetzt.",
+        f"{mark} before {SHA_A} 644 root /etc/passwd",
+        f"{mark} after {SHA_B} 644 root /etc/passwd",
+    ])
+    record = host_setup.setup_record("nodvard", host_setup.setup_report(out, user="nodvard"), sudo=True)
+    run = _setup_run(**record)
+    assert _adopted(run, "/etc/passwd", _state(SHA_A, "644", "root"), _entry("/etc/passwd", SHA_B, "644", "root"))
+    rule = _entry("/etc/sudoers.d/nodvard-nodvard", _full_rule("nodvard"), "440", "root")
+    assert _adopted(run, rule.path, None, rule)
+    assert _adopted(run, "/etc/sudoers.d/lattice-nodvard", _state(_full_rule("nodvard"), "440", "root"), None)

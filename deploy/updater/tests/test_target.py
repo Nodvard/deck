@@ -1,8 +1,8 @@
-"""Vorpruefung und Zielauswahl.
+"""Vorprüfung und Zielauswahl.
 
 Grundlage ist eine an der echten Engine aufgezeichnete Welt (Compose-Projekt mit Dashboard und Helfer, siehe
-`fixtures/engines/`), die die Fake-Engine ueber einen Unix-Socket ausliefert. Jeder Test veraendert genau eine Sache
-und erwartet genau einen Ablehnungscode. Die Vorpruefung liest nur: jede Anfrage ist `GET`.
+`fixtures/engines/`), die die Fake-Engine über einen Unix-Socket ausliefert. Jeder Test verändert genau eine Sache
+und erwartet genau einen Ablehnungscode. Die Vorprüfung liest nur: jede Anfrage ist `GET`.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ RECORDED = ["docker29-api154", "docker29-api143", "docker29-api141", "docker29-a
 
 
 class Lab:
-    """Eine Welt aus der Aufzeichnung plus bequeme Zugriffe; `run()` startet die Vorpruefung."""
+    """Eine Welt aus der Aufzeichnung plus bequeme Zugriffe; `run()` startet die Vorprüfung."""
 
     def __init__(self, name: str = "docker29-api154") -> None:
         self.world = World.from_fixture(name)
@@ -39,7 +39,7 @@ class Lab:
                                       self_id=self.helper["Id"] if self_id is ... else self_id,
                                       service=service, exclude=exclude)
         assert fake.violations == []
-        assert fake.methods <= {"GET"}, fake.methods  # die Vorpruefung liest nur
+        assert fake.methods <= {"GET"}, fake.methods  # die Vorprüfung liest nur
         assert not fake.calls("GET", r"/distribution/.*"), "die Vorpruefung fragt nie die Registry"
         return result
 
@@ -208,27 +208,27 @@ def test_engine_ignoring_the_filter_does_not_lead_to_a_wrong_target(lab):
 
 @pytest.mark.parametrize("state", [{}, {"Status": "exited", "Running": False}, {"Status": "created", "Running": False}])
 def test_doppelgaenger_means_multiple_targets(lab, state):
-    lab.duplicate(**state)  # auch ein gestoppter Doppelgaenger (z. B. ein liegen gebliebener `-previous`)
+    lab.duplicate(**state)  # auch ein gestoppter Doppelgänger (z. B. ein liegen gebliebener `-previous`)
     assert code(lab.run()) == policy.MULTIPLE_TARGETS
 
 
 def test_with_a_journal_the_containers_of_the_journal_are_no_target(lab):
-    # Journal-Stand `created`: der alte (laeuft) und der neue Container stehen im Journal, beide tragen die Labels.
-    # Es gibt dann kein Ziel mehr (`no_target`); der Ablauf arbeitet ueber die IDs aus dem Journal.
+    # Journal-Stand `created`: der alte (läuft) und der neue Container stehen im Journal, beide tragen die Labels.
+    # Es gibt dann kein Ziel mehr (`no_target`); der Ablauf arbeitet über die IDs aus dem Journal.
     new = lab.duplicate(Status="created", Running=False)
     result = lab.run(exclude=[lab.target["Id"], new["Id"]])
     assert code(result) == policy.NO_TARGET
 
 
 def test_a_stranger_with_the_target_labels_is_never_the_target_with_a_journal(lab):
-    # Das echte Dashboard steht im Journal; ein Fremder mit gefaelschten Compose-Labels (healthy, gleiches Image und
-    # Kanal-Volume) darf nicht das "bereite" Ziel werden. Ohne Journal hiesse dieselbe Lage `multiple_targets`.
+    # Das echte Dashboard steht im Journal; ein Fremder mit gefälschten Compose-Labels (healthy, gleiches Image und
+    # Kanal-Volume) darf nicht das "bereite" Ziel werden. Ohne Journal hieße dieselbe Lage `multiple_targets`.
     stranger = lab.duplicate()
     assert code(lab.run()) == policy.MULTIPLE_TARGETS
     result = lab.run(exclude=[lab.target["Id"]])
     assert code(result) == policy.EXTERNAL_CHANGE
     assert not result.known and result.status_target() is None
-    # Auch wenn nur der Fremde uebrig ist (das echte Ziel ist verschwunden), wird er kein Ziel.
+    # Auch wenn nur der Fremde übrig ist (das echte Ziel ist verschwunden), wird er kein Ziel.
     lab.world.containers.pop(lab.target["Id"])
     assert code(lab.run(exclude=[lab.target["Id"]])) == policy.EXTERNAL_CHANGE
     assert stranger["Id"] in lab.world.containers
@@ -344,10 +344,10 @@ def test_not_from_registry(lab, digests):
 
 def test_containerd_store_names_a_digest_even_for_a_self_built_image():
     # Aufnahme einer echten Engine mit containerd-Store: Das Image des Dashboards ist dort selbst gebaut
-    # (`u2live/deck-old:0.7.0`) und nur zusaetzlich als ghcr getaggt; die Registry kennt seinen Digest nicht. Die Engine
-    # leitet `RepoDigests` trotzdem aus den Namen ab: je Name derselbe Digest, der Digest des Images selbst. Fuer die
-    # Vorpruefung sieht es darum aus wie ein gezogenes Image, und sie ist bereit -- unterscheiden koennte es die
-    # Registry, die wertet die Vorpruefung aber nicht aus (siehe `policy.require_registry_digest`).
+    # (`u2live/deck-old:0.7.0`) und nur zusätzlich als ghcr getaggt; die Registry kennt seinen Digest nicht. Die Engine
+    # leitet `RepoDigests` trotzdem aus den Namen ab: je Name derselbe Digest, der Digest des Images selbst. Für die
+    # Vorprüfung sieht es darum aus wie ein gezogenes Image, und sie ist bereit -- unterscheiden könnte es die
+    # Registry, die wertet die Vorprüfung aber nicht aus (siehe `policy.require_registry_digest`).
     lab = Lab("docker29-api154-anon")
     digest = lab.image["Descriptor"]["digest"]
     assert lab.image["Id"] == digest
@@ -368,7 +368,7 @@ def test_no_version_label(lab, version):
 
 
 def test_version_label_on_the_container_does_not_count(lab):
-    # Nur das Label des Images zaehlt, nie das (eingefrorene) Container-Label.
+    # Nur das Label des Images zählt, nie das (eingefrorene) Container-Label.
     del lab.image["Config"]["Labels"][policy.VERSION_LABEL]
     lab.target["Config"]["Labels"][policy.VERSION_LABEL] = "0.7.0"
     assert code(lab.run()) == policy.NO_VERSION_LABEL
@@ -402,7 +402,7 @@ def _bind(source, destination, rw=True):
 
 @pytest.mark.parametrize(("mount", "detail"), [
     (_bind("/var/run/docker.sock", "/var/run/docker.sock"), "host_path"),
-    (_bind("/var/run/docker.sock", "/tmp/engine", rw=False), "host_path"),  # `:ro` schuetzt an einem Socket nicht
+    (_bind("/var/run/docker.sock", "/tmp/engine", rw=False), "host_path"),  # `:ro` schützt an einem Socket nicht
     (_bind("/run/docker.sock", "/x"), "host_path"),                         # /var/run ist ein Link auf /run
     (_bind("/var/run", "/hostrun"), "host_path"),                           # Elternordner
     (_bind("/run", "/hostrun"), "host_path"),
@@ -536,8 +536,8 @@ def refs(lab):
 @pytest.mark.parametrize("field", ["NetworkMode", "PidMode", "IpcMode"])
 @pytest.mark.parametrize("ref", ["full", "name", "slash_name", "short12", "short8", "short4", "short1"])
 def test_dependent_containers(lab, field, ref):
-    # Der Docker-Dienst loest `container:<ref>` ueber die volle ID, den Namen oder ein kurzes, eindeutiges
-    # ID-Praefix auf; Netz, PID- und IPC-Namensraum haengen am Ziel.
+    # Der Docker-Dienst löst `container:<ref>` über die volle ID, den Namen oder ein kurzes, eindeutiges
+    # ID-Präfix auf; Netz, PID- und IPC-Namensraum hängen am Ziel.
     sidecar_of(lab, **{field: "container:" + refs(lab)[ref]})
     result = lab.run()
     assert code(result) == policy.DEPENDENT_CONTAINERS
@@ -578,8 +578,8 @@ def test_other_container_mode_of_the_helper_is_no_dependency(lab):
 @pytest.mark.parametrize("field", ["NetworkMode", "PidMode", "IpcMode"])
 @pytest.mark.parametrize("ref", ["full", "name", "short12"])
 def test_helper_pointing_at_the_target_is_a_dependency(lab, field, ref):
-    # Der Helfer wird nicht uebersprungen: Mit `PidMode=container:<ziel>` stuerbe er beim Stoppen des Ziels mit und
-    # liesse sich nicht neu starten, solange das Ziel steht. Konfigurationsfehler, fail-closed.
+    # Der Helfer wird nicht übersprungen: Mit `PidMode=container:<ziel>` stürbe er beim Stoppen des Ziels mit und
+    # ließe sich nicht neu starten, solange das Ziel steht. Konfigurationsfehler, fail-closed.
     lab.helper["HostConfig"][field] = "container:" + refs(lab)[ref]
     result = lab.run()
     assert code(result) == policy.DEPENDENT_CONTAINERS
@@ -597,8 +597,8 @@ def container_named(lab, name, container_id="e" * 64):
 @pytest.mark.parametrize("field", ["NetworkMode", "PidMode", "IpcMode"])
 @pytest.mark.parametrize("length", [1, 2, 4])
 def test_hex_name_of_another_container_is_no_prefix_of_the_target(lab, field, length):
-    # `container:db` meint den Container NAMENS `db`: der Docker-Dienst loest erst volle ID, dann Namen, erst dann ein
-    # ID-Praefix auf. Beginnt die ID des Ziels zufaellig mit `db`, darf das den Sidecar nicht zum Nachbarn machen.
+    # `container:db` meint den Container NAMENS `db`: der Docker-Dienst löst erst volle ID, dann Namen, erst dann ein
+    # ID-Präfix auf. Beginnt die ID des Ziels zufällig mit `db`, darf das den Sidecar nicht zum Nachbarn machen.
     short = lab.target["Id"][:length]
     container_named(lab, short)
     sidecar_of(lab, **{field: "container:" + short})
@@ -613,14 +613,14 @@ def test_hex_ref_without_a_container_of_that_name_is_still_a_prefix(lab, field):
 
 
 def test_name_of_another_container_does_not_hide_the_real_reference(lab):
-    # Ein Container namens wie ein ANDERES Praefix aendert nichts: der Verweis auf die volle ID bleibt ein Verweis.
+    # Ein Container namens wie ein ANDERES Präfix ändert nichts: der Verweis auf die volle ID bleibt ein Verweis.
     container_named(lab, lab.target["Id"][:2])
     sidecar_of(lab, PidMode="container:" + lab.target["Id"])
     assert code(lab.run()) == policy.DEPENDENT_CONTAINERS
 
 
 def test_link_alias_is_no_name_of_another_container():
-    # Link-Aliase (`/a/b`) in `Names` sind keine Containernamen und verdraengen kein Praefix.
+    # Link-Aliase (`/a/b`) in `Names` sind keine Containernamen und verdrängen kein Präfix.
     target_id = "db" + "0" * 62
     containers = [{"Id": target_id, "Names": ["/deck"]},
                   {"Id": "e" * 64, "Names": ["/other", "/other/db", "/third/ab", "nodb", 5]}]
@@ -642,7 +642,7 @@ def test_container_that_vanishes_before_the_inspect_is_skipped(lab):
                                     Response(body={"Id": "e" * 64, "HostConfig": {}}),
                                     Response(body={"Id": "d" * 64, "HostConfig": None})])
 def test_unreadable_neighbour_means_not_ready(lab, answer):
-    # Ohne die Pruefung gibt es kein "bereit" (fail-closed).
+    # Ohne die Prüfung gibt es kein "bereit" (fail-closed).
     sidecar_of(lab, PidMode="container:" + lab.target["Id"])
     lab.routes.append(("GET", "/containers/" + "d" * 64 + "/json", answer))
     result = lab.run()
@@ -766,7 +766,7 @@ def test_read_mountinfo_of_this_process():
     try:
         found = target.own_container_id()
     except Refusal as exc:
-        assert exc.code == policy.SELF_UNKNOWN  # ausserhalb eines Docker-Containers
+        assert exc.code == policy.SELF_UNKNOWN  # außerhalb eines Docker-Containers
     else:
         assert policy.is_container_id(found)
 

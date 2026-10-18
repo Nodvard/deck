@@ -14,6 +14,11 @@ class NotConfigured(Exception):
     """Vaultwarden nicht (gültig) eingetragen; `str(exc)` sagt auf Deutsch, was fehlt."""
 
 
+class InvalidSetting(NotConfigured):
+    """Etwas ist eingetragen, aber unbrauchbar (z. B. eine ungültige Adresse). Die Übersicht zählt das als
+    eingerichtet, damit die Kachel den Fehler zeigt, statt zu verschwinden."""
+
+
 class CredentialsInUrl(ValueError):
     """Benutzername oder Passwort stehen in der Adresse (`name:passwort@`)."""
 
@@ -28,9 +33,21 @@ class VaultwardenConfig:
         return self.url.startswith("https://")
 
 
+def strip_admin_path(path: str) -> str:
+    """Schneidet den Pfad ab dem ersten Teil `admin` ab (`/admin/diagnostics`), ohne Schrägstrich am Ende. Ein Pfad davor
+    bleibt, ein Teil wie `administration` zählt nicht."""
+    parts = path.split("/")
+    for index, part in enumerate(parts):
+        if part.lower() == "admin":
+            parts = parts[:index]
+            break
+    return "/".join(parts).rstrip("/")
+
+
 def normalize_url(raw: Any) -> str | None:
-    """`192.0.2.20:8222` wird `http://192.0.2.20:8222`, `https://vault.example.org/#/login` wird
-    `https://vault.example.org`. `None` bei leer, `CredentialsInUrl` bei `name:passwort@`, sonst `ValueError` bei
+    """`192.0.2.20:8222` wird `http://192.0.2.20:8222`, `https://vault.example.org/#/login` und
+    `https://vault.example.org/admin/diagnostics` werden `https://vault.example.org` (ein Pfad davor bleibt, Vaultwarden
+    kann unter einem Unterpfad laufen). `None` bei leer, `CredentialsInUrl` bei `name:passwort@`, sonst `ValueError` bei
     offensichtlich unbrauchbar. Die Ausnahmen tragen den Eingabetext nicht, er könnte ein Passwort enthalten."""
     text = str(raw or "").strip()
     if not text:
@@ -48,19 +65,19 @@ def normalize_url(raw: Any) -> str | None:
         raise CredentialsInUrl("Benutzername oder Passwort in der Adresse")
     if parts.scheme not in ("http", "https") or not hostname:
         raise ValueError("unbrauchbare Adresse")
-    return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
+    return urlunsplit((parts.scheme, parts.netloc, strip_admin_path(parts.path), "", ""))
 
 
 def vaultwarden_config(settings: dict[str, Any]) -> VaultwardenConfig:
     try:
         url = normalize_url(settings.get("url"))
     except CredentialsInUrl:
-        raise NotConfigured(
+        raise InvalidSetting(
             "Die Adresse enthält einen Benutzernamen oder ein Passwort. Bitte nur die Adresse eintragen, "
             "ohne „name:passwort@“."
         ) from None
     except ValueError:
-        raise NotConfigured(
+        raise InvalidSetting(
             "Die Adresse ist ungültig (erwartet http:// oder https:// mit Rechnername) – "
             "bitte in den Einstellungen prüfen."
         ) from None

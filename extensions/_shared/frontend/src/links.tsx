@@ -17,6 +17,19 @@ export function SettingsLink({
   return <a href={to} className={buttonClass(variant)}>{children}</a>;
 }
 
+/** Für `href` mit einer Adresse aus Einstellungen oder Antworten eines Dienstes: nur http/https, sonst `undefined`
+ * (kein Link). Gleiche Regel wie `safeHref` im Kern: Ein `javascript:`-Link kommt nie auf die Seite. */
+export function safeHref(url: string | null | undefined): string | undefined {
+  const text = url?.trim();
+  if (!text || !/^https?:\/\//i.test(text)) return undefined;
+  try {
+    const parsed = new URL(text);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Ein Text aus den Einstellungen der Erweiterung (`GET /extensions/<id>/settings`), solange er
  * nicht ankommt oder leer ist: `fallback`. Nie ein Fehler -- der Hinweis soll immer lesbar bleiben. */
 export function useSettingText(extId: string, key: string, fallback: string): string {

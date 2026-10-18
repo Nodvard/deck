@@ -31,20 +31,20 @@ def lynis_pid_files(base: Path) -> tuple[str, str]:
     return str(base / "run-lynis.pid"), str(base / "var-run-lynis.pid")
 
 
-def helper_copy(base: Path, *, path: str, sdmark: Path) -> Path:
+def helper_copy(base: Path, *, path: str, sdmark: Path, rt_settle: int = 0) -> Path:
     """Kopie des echten Skripts unter `base`: fester PATH auf `path`, alle Orte unter `base`, `SELF` auf die Kopie.
 
     Lauf-Ordner `base/jobs` (Updates) und `base/audit` (Lynis), Quarantäne `base/q`, Lynis-Bericht
     `base/lynis-report.dat`, Lynis-PID-Dateien `lynis_pid_files(base)`, Sperre der Scans `base/lock`, Hilfsdateien des
     Wächters `base/run` (wird angelegt), `/etc` des Echtzeit-Wächters `base/etc`, dessen Wartezeit 4 Sekunden, Nachschau
-    nach dem Start sofort (0 Sekunden), sein Protokoll `base/onaccess.log` und 3 Zeilen je Abruf."""
+    nach dem Start nach `rt_settle` Sekunden (sonst sofort), sein Protokoll `base/onaccess.log` und 3 Zeilen je Abruf."""
     helper = base / "shield-root"
     (base / "run").mkdir(parents=True, exist_ok=True)
     text = SCRIPT.read_text(encoding="ascii").replace("PATH=/usr/sbin:/usr/bin:/sbin:/bin", f"PATH={path}")
     values = {
         "JOBDIR": base / "jobs", "SELF": helper, "SDMARK": sdmark, "QDIR": base / "q", "AUDITDIR": base / "audit",
         "LYNIS_REPORT": base / "lynis-report.dat", "LYNIS_PIDS": "'" + " ".join(lynis_pid_files(base)) + "'",
-        "LOCKDIR": base / "lock", "TMPRUN": base / "run", "ETCDIR": base / "etc", "RT_WAIT": 4, "RT_SETTLE": 0,
+        "LOCKDIR": base / "lock", "TMPRUN": base / "run", "ETCDIR": base / "etc", "RT_WAIT": 4, "RT_SETTLE": rt_settle,
         "RT_LOG": base / "onaccess.log", "RT_BATCH": 3,
     }
     for name, value in values.items():

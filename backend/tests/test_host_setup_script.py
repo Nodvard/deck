@@ -125,11 +125,14 @@ def test_groups_are_added_only_if_the_group_exists():
 
 def test_sudo_rule_is_checked_with_visudo_before_install_and_rolled_back():
     script = _script(sudo=True)
+    before = script.index("visudo -c -q >/dev/null 2>&1 && VP=1")
     check = script.index('visudo -c -q -f "$T"')
     install = script.index('install -m 0440 -o root -g root "$T" "$N"')
-    whole = script.index("if visudo -c -q; then", install)
-    rollback = script.index('else rm -f "$N"', whole)
-    assert check < install < whole < rollback
+    whole = script.index('if VC "$N"; then', install)
+    rollback = script.index('rm -f "$N"; F=1', whole)
+    assert before < check < install < whole < rollback
+    # VC prüft die eigene Datei, die ganze Konfiguration nur, wenn sie schon vorher in Ordnung war.
+    assert 'VG() { [ -z "$VP" ] || visudo -c -q; }; VC() { visudo -c -q -f "$1" && VG; }' in script
     assert 'N="/etc/sudoers.d/nodvard-$U"' in script and 'O="/etc/sudoers.d/lattice-$U"' in script
     # Die alte Regel wird erst nach der Pruefung der ganzen Konfiguration angefasst und nur nach Vergleich.
     assert whole < script.index('cmp -s "$T" "$O"') < script.index('rm -f "$O"') < rollback
@@ -175,6 +178,7 @@ def test_notes_are_honest_about_the_rights():
     assert any("Gruppe docker ist oder sudo ohne Passwort darf" in n and "praktisch alles" in n for n in full)
     assert any("Wer sudo ohne Passwort darf, kann" in n for n in host_setup.setup_notes("lattice", groups=(), sudo=True))
     assert any("Wer in der Gruppe docker ist, kann" in n for n in host_setup.setup_notes("lattice", groups=("docker",), sudo=False))
+    # Die Einrichtungsseite (SetupCommand.tsx) erkennt diesen Satz an „sudo sh -c“ und zeigt ihn nur einmal.
     assert any("sudo sh -c" in n for n in full), "kein Schein von einer engen sudo-Regel"
     root = host_setup.setup_notes("root", groups=(), sudo=False)
     assert any("Cluster" in n and "alle Knoten" in n for n in root)
@@ -372,7 +376,12 @@ exit 0
                 f'case "$*" in *-f*) exit 0;; esac\nn=$(cat "{counter}" 2>/dev/null || echo 0); n=$((n + 1)); '
                 f'echo $n > "{counter}"\n[ "$n" != {visudo_whole_fails_on_call} ]'
             )
-        _stub(bin_dir / "visudo", f'echo "visudo $*" >> "{log}"\n{whole}\n')
+        # Ohne -q (Bericht für die Meldung): wie auf einem Raspberry Pi mit einer fremden Datei im Modus 0644.
+        report = (
+            'case "$*" in *-q*) ;; *) echo "/etc/sudoers: parsed OK"; '
+            'echo "/etc/sudoers.d/010_nopasswd: bad permissions, should be mode 0440" >&2; exit 1;; esac'
+        )
+        _stub(bin_dir / "visudo", f'echo "visudo $*" >> "{log}"\n{report}\n{whole}\n')
     # Unter /etc wird nur protokolliert: ohne root (z. B. auf einem CI-Runner) scheitert ein echtes
     # `rm -f /etc/sudoers.d/...` schon am fehlenden Leserecht des Ordners. Alles andere (mktemp-Dateien) wirklich loeschen.
     _stub(bin_dir / "rm", f'echo "rm $*" >> "{log}"\ncase " $* " in *" /etc/"*) exit 0;; esac\nexec /bin/rm "$@"\n')
@@ -406,6 +415,42 @@ def test_run_creates_user_once_and_adds_the_key_once(tmp_path):
     assert done.returncode == 0, done.stderr
     assert authorized.read_text() == f"restrict,pty {KEY}\n"
     assert "useradd" not in log.read_text()
+
+
+LOGIN_DEFS_WARNING = "configuration error - unknown item 'minlen' (notify administrator)"
+
+
+@needs_sh
+def test_run_hides_login_defs_warnings_of_useradd_and_usermod(tmp_path):
+    """Raspberry Pi OS: useradd und usermod beschweren sich über Einträge in /etc/login.defs, die Nodvard Deck nicht
+    geschrieben hat. Diese Zeilen fallen weg, andere Meldungen bleiben."""
+    bin_dir, _, log = _sandbox(tmp_path, existing_user=False)
+    created = tmp_path / "created"
+    _stub(bin_dir / "useradd", f'''echo "useradd $*" >> "{log}"; touch "{created}"
+echo "useradd: {LOGIN_DEFS_WARNING}" >&2
+echo "useradd: Warnung: noch etwas anderes" >&2
+''')
+    _stub(bin_dir / "usermod", f'''echo "usermod $*" >> "{log}"
+echo "usermod: {LOGIN_DEFS_WARNING}" >&2
+''')
+    done = _run(_script(groups=("docker",)), bin_dir)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "unknown item" not in done.stdout + done.stderr
+    assert "useradd: Warnung: noch etwas anderes" in done.stdout
+    calls = log.read_text()
+    assert "useradd -m -s /bin/bash -c Nodvard Deck lattice" in calls
+    assert "usermod -p * lattice" in calls and "usermod -aG docker lattice" in calls
+    assert "Benutzer lattice angelegt." in done.stdout and "Zur Gruppe docker hinzugefügt." in done.stdout
+
+
+@needs_sh
+def test_run_still_stops_when_useradd_fails(tmp_path):
+    bin_dir, _, _ = _sandbox(tmp_path, existing_user=False)
+    _stub(bin_dir / "useradd", f'echo "useradd: {LOGIN_DEFS_WARNING}" >&2; echo "useradd: user lattice exists" >&2; exit 9\n')
+    done = _run(_script(), bin_dir)
+    assert done.returncode == 9
+    assert "useradd: user lattice exists" in done.stdout and "unknown item" not in done.stdout
+    assert "angelegt" not in done.stdout and "Fertig." not in done.stdout
 
 
 @needs_sh
@@ -453,18 +498,44 @@ def test_run_installs_sudo_rule_after_successful_check(tmp_path):
     install = [c for c in calls if c.startswith("install -m 0440 -o root -g root ")]
     assert len(install) == 1 and install[0].endswith(" /etc/sudoers.d/nodvard-lattice")
     assert any(c.startswith("visudo -c -q -f ") for c in calls)
-    assert "visudo -c -q" in calls, "danach wird die ganze Konfiguration nochmals geprueft"
-    assert "FEHLER" not in done.stdout
+    assert "visudo -c -q -f /etc/sudoers.d/nodvard-lattice" in calls, "die installierte Datei selbst"
+    assert calls.count("visudo -c -q") == 2, "die ganze Konfiguration vorher und danach"
+    assert "FEHLER" not in done.stdout and "Hinweis" not in done.stdout
 
 
 @needs_sh
-def test_run_rolls_back_the_sudo_rule_when_the_whole_config_is_broken(tmp_path):
-    bin_dir, _, log = _sandbox(tmp_path, visudo_whole_fails=True)
+def test_run_rolls_back_the_sudo_rule_when_it_breaks_the_whole_config(tmp_path):
+    # Vorher in Ordnung (1. Gesamtprüfung), nach dem Eintragen nicht mehr (2.).
+    bin_dir, _, log = _sandbox(tmp_path, visudo_whole_fails_on_call=2)
     done = _run(_script(sudo=True), bin_dir)
     assert done.returncode != 0, "eine zurueckgenommene sudo-Regel ist kein Erfolg"
     assert "rm -f /etc/sudoers.d/nodvard-lattice" in log.read_text()
-    assert "FEHLER: sudo-Regel zurückgenommen." in done.stdout
+    assert "FEHLER: sudo-Regel zurückgenommen. visudo meldet:" in done.stdout
+    assert "visudo: /etc/sudoers.d/010_nopasswd: bad permissions, should be mode 0440" in done.stdout
     assert "Fertig." not in done.stdout and "Nicht alles hat geklappt" in done.stdout
+
+
+@needs_sh
+def test_run_keeps_the_rule_when_another_file_already_breaks_visudo(tmp_path):
+    """Eine fremde Datei mit Modus 0644 lässt `visudo -c` scheitern, schon bevor der Befehl etwas ändert. Die eigene
+    Regel ist in Ordnung und bleibt; visudo nennt die Datei."""
+    bin_dir, _, log = _sandbox(tmp_path, visudo_whole_fails=True)
+    done = _run(_script(sudo=True), bin_dir)
+    assert done.returncode == 0, done.stdout + done.stderr
+    calls = log.read_text().splitlines()
+    assert "visudo -c -q -f /etc/sudoers.d/nodvard-lattice" in calls
+    assert not any(c.startswith("rm -f /etc/sudoers.d/") for c in calls), "nichts zurückgenommen"
+    assert "FEHLER" not in done.stdout and "Fertig." in done.stdout
+    messages = host_setup.setup_messages(done.stdout)
+    assert messages == [
+        host_setup.KEY_ADDED,
+        "Hinweis: visudo meldet schon vor der Einrichtung einen Fehler, der nicht von Nodvard Deck kommt:",
+        "visudo: /etc/sudoers.d/010_nopasswd: bad permissions, should be mode 0440",
+        (
+            "Hinweis: Die Regeln von Nodvard Deck werden deshalb einzeln geprüft. Steht oben „bad permissions“, hilft für "
+            "die genannte Datei: chmod 0440 und chown root:root."
+        ),
+    ]
 
 
 @needs_sh
@@ -623,7 +694,7 @@ def test_run_replaces_the_identical_old_sudo_rule(tmp_path):
     # Erst die neue Datei pruefen und installieren, dann die ganze Konfiguration pruefen, erst dann die alte entfernen.
     first_check = next(i for i, c in enumerate(calls) if c.startswith("visudo -c -q -f "))
     install = next(i for i, c in enumerate(calls) if c.startswith("install -m 0440"))
-    whole = next(i for i, c in enumerate(calls) if c == "visudo -c -q")
+    whole = next(i for i, c in enumerate(calls) if c == "visudo -c -q" and i > install)
     removal = next(i for i, c in enumerate(calls) if c.startswith("rm -f ") and c.endswith("/lattice-lattice"))
     assert first_check < install < whole < removal
     visudo_calls = [c for c in calls if c.startswith("visudo")]
@@ -666,7 +737,7 @@ def test_run_removes_nothing_when_visudo_rejects_the_new_rule(tmp_path):
 
 @needs_sh
 def test_run_removes_nothing_when_the_whole_config_is_broken_after_install(tmp_path):
-    done, sudoers, _ = _sudoers_run(tmp_path, SUDO_RULE, visudo_whole_fails=True)
+    done, sudoers, _ = _sudoers_run(tmp_path, SUDO_RULE, visudo_whole_fails_on_call=2)
     assert done.returncode != 0
     # Die neue Regel wird zurueckgenommen, die alte bleibt: der Server hat danach genau den Stand von vorher.
     assert sorted(p.name for p in sudoers.iterdir()) == ["lattice-lattice"]
@@ -676,8 +747,8 @@ def test_run_removes_nothing_when_the_whole_config_is_broken_after_install(tmp_p
 
 @needs_sh
 def test_run_restores_the_old_rule_when_the_config_breaks_after_removing_it(tmp_path):
-    # Zweiter Aufruf der ganzen Pruefung (nach dem Entfernen) scheitert.
-    done, sudoers, _ = _sudoers_run(tmp_path, SUDO_RULE, visudo_whole_fails_on_call=2)
+    # Dritter Aufruf der ganzen Pruefung (vorher, nach dem Eintragen, nach dem Entfernen) scheitert.
+    done, sudoers, _ = _sudoers_run(tmp_path, SUDO_RULE, visudo_whole_fails_on_call=3)
     assert done.returncode != 0
     assert (sudoers / "lattice-lattice").read_text() == SUDO_RULE, "alte Regel wiederhergestellt"
     assert "Die alte sudo-Regel wurde wiederhergestellt" in done.stdout and "Fertig." not in done.stdout
@@ -784,7 +855,7 @@ def test_remote_run_via_sudo_reads_the_password_from_stdin_and_the_script_never_
     assert seen.read_text() == "", "das Skript bekommt das Passwort nie zu lesen, auch wenn sudo es nicht braucht"
     assert "sudo -S -p  sh -c" in log.read_text() and SECRET not in log.read_text()
     run = host_setup.evaluate_setup_run(done.returncode, done.stdout, done.stderr, via_sudo=True, sudo_with_password=True)
-    assert run.outcome == "ok" and run.messages == ["Benutzer lattice angelegt."]
+    assert run.outcome == "ok" and run.messages == ["Benutzer lattice angelegt.", host_setup.KEY_ADDED]
 
 
 @needs_sh
@@ -809,7 +880,7 @@ def test_remote_run_as_root_runs_the_script_directly(tmp_path):
     assert done.returncode == 0, done.stderr
     assert (home / ".ssh" / "authorized_keys").read_text() == f"restrict,pty {KEY}\n"
     run = host_setup.evaluate_setup_run(done.returncode, done.stdout, done.stderr, via_sudo=False, sudo_with_password=False)
-    assert run.outcome == "ok" and run.messages == []
+    assert run.outcome == "ok" and run.messages == [host_setup.KEY_ADDED]
 
 
 @needs_sh
@@ -878,3 +949,121 @@ def test_setup_messages_keep_only_the_scripts_own_lines():
         "FEHLER: " + "y" * 292,
     ]
     assert len(host_setup.setup_messages("\n".join(f"FEHLER: {i}" for i in range(100)))) == 20
+
+
+# ---------------------------------------------------------------------------
+# Bericht für den Datei-Wächter (nur wenn Nodvard Deck das Skript selbst ausführt)
+# ---------------------------------------------------------------------------
+
+
+def test_state_report_is_only_in_the_script_deck_runs_itself():
+    for user, sudo in (("lattice", True), ("root", False)):
+        plain, _ = build_setup_script(user, KEY, sudo=sudo)
+        reported, one_liner = build_setup_script(user, KEY, sudo=sudo, report_state=True)
+        assert "ST before" not in plain and host_setup.STATE_MARK not in plain
+        assert "'" not in reported and one_liner.count("'") == 2
+        lines = reported.split("\n")
+        first_change = next(i for i, line in enumerate(lines) if "useradd" in line or "authorized_keys" in line and "ST " not in line)
+        assert lines.index(next(line for line in lines if line.startswith("for f in") and "ST before" in line)) < first_change
+        assert any("ST after" in line for line in lines[-4:]), "der Stand danach steht am Ende, vor der Abschlussprüfung"
+
+
+@needs_sh
+@pytest.mark.parametrize("user,sudo", [("lattice", True), ("root", False)])
+def test_state_report_script_is_valid_shell_syntax(user, sudo):
+    script, one_liner = build_setup_script(user, KEY, sudo=sudo, report_state=True)
+    for args in (["sh", "-n", "-c", script], ["sh", "-n", "-c", one_liner]):
+        done = subprocess.run(args, capture_output=True, text=True, timeout=20, check=False)
+        assert done.returncode == 0, done.stderr
+
+
+@needs_sh
+def test_run_reports_the_state_before_and_after_exactly_like_the_file_guard(tmp_path):
+    """Der Bericht nennt Prüfsumme, Rechte und Besitzer in genau der Form, in der der Datei-Wächter sie erfasst."""
+    import hashlib
+    import pwd
+
+    bin_dir, home, _ = _sandbox(tmp_path, existing_user=False)
+    done = _run(_script(report_state=True), bin_dir)
+    assert done.returncode == 0, done.stderr
+    report = host_setup.setup_report(done.stdout, user="lattice")
+    assert report["actions"] == ["key_added", "user_created"]
+    keys = str(home / ".ssh" / "authorized_keys")
+    owner = pwd.getpwuid(os.getuid()).pw_name
+    assert report["files"][keys] == {
+        "before": None,
+        "after": {"sha256": hashlib.sha256(f"restrict,pty {KEY}\n".encode()).hexdigest(), "mode": "600", "owner": owner},
+    }
+    passwd = Path("/etc/passwd")
+    if os.access(passwd, os.R_OK):
+        mode = format(stat.S_IMODE(passwd.stat().st_mode), "o")
+        state = {"sha256": hashlib.sha256(passwd.read_bytes()).hexdigest(), "mode": mode, "owner": pwd.getpwuid(passwd.stat().st_uid).pw_name}
+        assert report["files"]["/etc/passwd"] == {"before": state, "after": state}
+    assert host_setup.STATE_MARK not in "\n".join(host_setup.setup_messages(done.stdout)), "keine Zeile für die Oberfläche"
+
+    # Zweiter Lauf: Der Schlüssel steht schon da, also keine Meldung, und vorher = nachher.
+    done = _run(_script(report_state=True), bin_dir)
+    report = host_setup.setup_report(done.stdout, user="lattice")
+    assert "key_added" not in report["actions"] and host_setup.KEY_ADDED not in done.stdout
+    assert report["files"][keys]["before"] == report["files"][keys]["after"]
+
+
+@needs_sh
+def test_setup_record_knows_the_exact_sudo_rules_the_script_writes(tmp_path):
+    import hashlib
+
+    done, sudoers, _ = _sudoers_run(tmp_path, SUDO_RULE)
+    assert done.returncode == 0, done.stderr
+    report = host_setup.setup_report(done.stdout, user="lattice")
+    assert "legacy_rule_removed" in report["actions"]
+    record = host_setup.setup_record("lattice", report, sudo=True)
+    written = hashlib.sha256((sudoers / "nodvard-lattice").read_bytes()).hexdigest()
+    assert record["sudoers"] == {"/etc/sudoers.d/nodvard-lattice": written}
+    assert record["legacy_sudoers"] == {"/etc/sudoers.d/lattice-lattice": hashlib.sha256(SUDO_RULE.encode()).hexdigest()}
+    assert host_setup.setup_record("root", report, sudo=True)["sudoers"] == {}
+
+
+def test_setup_record_counts_only_installed_helpers_that_were_offered():
+    import hashlib
+
+    from nodvard_deck.ext.root_helpers import RootHelperFile
+    from nodvard_sdk import ROOT_HELPER_DIR
+
+    helper = RootHelperFile(
+        ext_id="shield", ext_name="Nodvard Shield", version=3, install_path=f"{ROOT_HELPER_DIR}/shield-root",
+        text="#!/bin/sh\n", sha256="0" * 64,
+    )
+    out = (
+        "Hilfsskript shield-root (Version 3) eingerichtet, mit eigener sudo-Regel.\n"
+        "Hilfsskript fremd-root (Version 1) eingerichtet, mit eigener sudo-Regel.\n"
+        "Hinweis: Das Hilfsskript docker-root wurde nicht eingerichtet.\n"
+    )
+    record = host_setup.setup_record("deck", host_setup.setup_report(out, user="deck"), sudo=True, helpers=[helper])
+    expected = hashlib.sha256(f"deck ALL=(root) NOPASSWD: {ROOT_HELPER_DIR}/shield-root\n".encode()).hexdigest()
+    assert record["sudoers"]["/etc/sudoers.d/nodvard_shield_deck"] == expected
+    assert set(record["sudoers"]) == {"/etc/sudoers.d/nodvard-deck", "/etc/sudoers.d/nodvard_shield_deck"}
+
+
+def test_setup_report_takes_only_fixed_forms():
+    mark = host_setup.STATE_MARK
+    sha = "a" * 64
+    out = "\n".join([
+        "Benutzer anderer angelegt.",
+        "Benutzer lattice angelegt. und mehr",
+        "Die alte sudo-Regel lattice-anderer wurde durch nodvard-anderer ersetzt.",
+        f"{mark} before {sha} 644 root /etc/sudoers",
+        f"{mark} before {sha} 644 root /etc/../etc/passwd",
+        f"{mark} before {sha} 644 root /home/x/../root/.ssh/authorized_keys",
+        f"{mark} before {sha[:-1]} 644 root /etc/passwd",
+        f"{mark} before {sha} 9999 root /etc/group",
+        f"{mark} before {sha} 644 ro;ot /etc/gshadow",
+        f"{mark} sometime {sha} 644 root /etc/shadow",
+        f"{mark} after - - - /home/lattice/.ssh/authorized_keys",
+        f"  {mark} after {sha} 640 root /etc/shadow  ",
+    ])
+    report = host_setup.setup_report(out, user="lattice")
+    assert report["actions"] == [] and report["helpers"] == []
+    assert report["files"] == {
+        "/home/lattice/.ssh/authorized_keys": {"after": None},
+        "/etc/shadow": {"after": {"sha256": sha, "mode": "640", "owner": "root"}},
+    }

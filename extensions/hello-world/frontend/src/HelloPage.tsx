@@ -1,21 +1,7 @@
 /**
- * Beispielseite der Erweiterung hello-world (docs/02-EXTENSION-API.md §4/§5): der PageSpec
- * `component="HelloPage"` (siehe nodvard_deck_ext_hello_world/__init__.py) verweist auf genau
- * diesen Export.
- *
- * Die Seite geht denselben Weg wie die mitgelieferten Erweiterungen und zeigt ihn als
- * Vorlage:
- * - Daten holt `authedFetch` aus dem gemeinsamen Kit (`extensions/_shared/frontend/src/`): es
- *   hängt `/api/v1` an, schickt das Token mit und erneuert es bei einem 401 einmal über den Kern.
- *   Antwortet der Server gar nicht, wirft es `ServerUnavailableError` mit der Standardmeldung.
- * - Fehlertexte einer Antwort liefert `errorText`.
- * - Aussehen aus dem Kit (`Page`, `Card`, `Loading`, `Notice`, `Button`).
- * - Das Laden bricht ab, sobald die Seite verlassen wird.
- *
- * Bewusst ECHTES React (useState/useEffect) über den Import-Map-Shim
- * (window.__nodvardDeck.React), nicht nur ein statischer String -- sonst wäre der ESM-Loader
- * nie wirklich bewiesen. Gebaut mit esbuild über `extensions/hello-world/frontend/build.mjs`:
- * `react`/`react-dom` bleiben extern, das Kit wird in das Bundle gebaut.
+ * Beispielseite von hello-world (docs/02-EXTENSION-API.md §4/§5) und Vorlage für eigene Seiten: Daten über `authedFetch`
+ * (Token, Erneuerung bei 401, `ServerUnavailableError`), Fehlertexte über `errorText`, Aussehen aus dem Kit, Abbruch beim
+ * Verlassen der Seite; echtes React über den Import-Map-Shim, damit der ESM-Loader wirklich geprüft wird.
  */
 import { useEffect, useState } from "react";
 
@@ -33,7 +19,7 @@ type LoadState =
 
 export function HelloPage() {
   const [state, setState] = useState<LoadState>({ status: "loading" });
-  // Zähler statt Funktion: "Neu laden" startet den Effekt samt Abbruch des alten Aufrufs neu.
+  // Zähler statt Funktion: „Neu laden“ startet den Effekt samt Abbruch des alten Aufrufs neu.
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {

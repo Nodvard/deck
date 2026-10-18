@@ -117,6 +117,22 @@ export function safeHref(url: string | null | undefined): string | undefined {
   }
 }
 
+/** Für Links innerhalb des Dashboards: nur `/pfad`, kein `//host`, kein `\\` und keine Steuerzeichen. Browser lesen
+ * `/\\host` wie `//host` und entfernen Tabulator und Zeilenumbruch vorher, aus `/\t/host` wird also auch `//host`. */
+export function internalPath(path: unknown): string | undefined {
+  if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//") || path.includes("\\")) return undefined;
+  for (let i = 0; i < path.length; i += 1) {
+    const code = path.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return undefined;
+  }
+  return path;
+}
+
+/** Link aus Daten einer Erweiterung: eine Webadresse (`safeHref`) oder ein Pfad im Dashboard, sonst `undefined`. */
+export function dataLink(value: string | null | undefined): string | undefined {
+  return safeHref(value) ?? internalPath(value);
+}
+
 /** `192.168.2.1:8080` aus einer Adresse, als Untertitel der Kachel. */
 export function urlHost(url: string | null | undefined): string {
   if (!url) return "";
@@ -394,6 +410,9 @@ export interface AppSuggestionOut {
   /** Woher er stammt (Name der Quelle oder der Erweiterung, z. B. „Nginx Proxy Manager“). */
   source: string;
   host?: string | null;
+  /** Bei einem erkannten Dienst die Kennung seiner Kachel (`apps[].id` in der Übersicht). Fehlt bei einem älteren
+   * Backend. */
+  service_id?: string | null;
 }
 
 export interface AppSuggestionsOut {

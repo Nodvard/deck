@@ -249,7 +249,8 @@ def test_widget_row_worst_first_and_unreachable_is_danger():
     info = parse_system_info(PI)
     info["findings"] = summary_findings(info)
     assert widget_row(host, info, None) == {
-        "name": "Raspberry Pi", "host_id": "h1", "summary": "Swap zu 71 % belegt – RAM knapp", "badge": "2 Befunde", "tone": "warn",
+        "name": "Raspberry Pi", "host_id": "h1", "kind": "Server", "summary": "Swap zu 71 % belegt – RAM knapp",
+        "badge": "2 Befunde", "tone": "warn",
         "cpu_percent": 3.0, "mem_percent": 44,  # fuer die Server-Kacheln der System-Seite
     }
     ok = {**info, "findings": []}
@@ -259,6 +260,100 @@ def test_widget_row_worst_first_and_unreachable_is_danger():
     # Ohne Speicherangaben (oder mit 0) keine Prozentzahl statt einer Division durch null.
     assert widget_row(host, {**ok, "mem_total": 0, "mem_available": 0}, None)["mem_percent"] is None
     assert widget_row(host, {**ok, "mem_total": None}, None)["mem_percent"] is None
+
+
+def test_widget_row_names_the_kind_and_the_host_a_guest_runs_on():
+    from types import SimpleNamespace
+
+    from nodvard_deck_ext_system import kind_label, widget_row
+
+    lxc = SimpleNamespace(id="h2", name="dns", display_name="DNS", kind="lxc", metadata={"parent_label": "pve1"})
+    assert widget_row(lxc, None, "nicht erreichbar: timeout")["kind"] == "LXC auf pve1"
+    assert kind_label(SimpleNamespace(kind="vm", metadata={})) == "VM"
+    # Wie `kindLabel` der Oberfläche: ein Hypervisor-Knoten heißt „Knoten“, auch mit einem (fremden) Elternhost.
+    assert kind_label(SimpleNamespace(kind="hypervisor", metadata={"parent_label": "x"})) == "Knoten"
+    assert kind_label(SimpleNamespace(kind="node", metadata=None)) == "Knoten"
+    # Ein von Hand angelegter Server bleibt ein Server.
+    assert kind_label(SimpleNamespace(kind=None, metadata=None)) == "Server"
+    assert kind_label(SimpleNamespace(kind="server", metadata={"parent_label": "x"})) == "Server"
+
+
+def test_switched_off_guest_gets_a_neutral_row_and_changes_the_cache_key():
+    from types import SimpleNamespace
+
+    from nodvard_deck_ext_system import hosts_key, off_row, switched_off
+
+    def host(power_state: str | None) -> SimpleNamespace:
+        meta = {"parent_label": "pve1", **({"power_state": power_state} if power_state else {})}
+        return SimpleNamespace(id="h3", name="dns", display_name="DNS", address="192.168.2.20", kind="lxc", metadata=meta)
+
+    assert [switched_off(host(state)) for state in ("stopped", "paused", "running", None)] == [True, True, False, False]
+    assert switched_off(SimpleNamespace(metadata=None)) is False
+    assert off_row(host("stopped")) == {
+        "name": "DNS", "host_id": "h3", "kind": "LXC auf pve1", "summary": "ausgeschaltet", "badge": "aus", "tone": "neutral",
+    }
+    # Schaltet der Anbieter einen Gast an oder aus, gilt der Zwischenspeicher nicht mehr.
+    assert hosts_key([host("running")]) != hosts_key([host("stopped")])
+
+    # Beim Anbieter nicht mehr vorhanden: auch nicht fragen, neutral mit eigenem Text.
+    gone = SimpleNamespace(
+        id="h4", name="alt", display_name=None, address="192.168.2.21", kind="vm",
+        metadata={"parent_label": "pve1", "power_state": "running", "gone_since": "2026-10-16T08:00:00+00:00"},
+    )
+    assert switched_off(gone) is True
+    assert off_row(gone) == {
+        "name": "alt", "host_id": "h4", "kind": "VM auf pve1", "summary": "beim Anbieter nicht mehr vorhanden",
+        "badge": "nicht mehr vorhanden", "tone": "neutral",
+    }
+
+
+@pytest.mark.asyncio
+async def test_health_widget_skips_switched_off_guests_and_lists_them_last(client, db_session, test_settings, monkeypatch):
+    from types import SimpleNamespace
+
+    from nodvard_deck.ext.runtime import get_extension_runtime
+
+    await client.post("/api/v1/auth/bootstrap", json={"username": "owner1", "password": "correct-horse-battery", "setup_code": "TEST-CODE-2345"})
+    token = (await client.post("/api/v1/auth/login", json={"username": "owner1", "password": "correct-horse-battery"})).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    test_settings.extensions_dir = REPO_EXTENSIONS_DIR
+    await extensions_service.discover_and_sync(db_session, test_settings)
+    assert (await client.post("/api/v1/extensions/system/enable", headers=headers)).status_code == 200
+
+    def host(hid: str, name: str, kind: str | None, **metadata: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            id=hid, name=name, display_name=name, address=f"192.168.2.{len(hid) + 10}", os_family="linux", has_credential=True,
+            kind=kind, metadata=metadata,
+        )
+
+    hosts = [
+        host("h-off", "aus-lxc", "lxc", parent_label="pve1", power_state="stopped"),
+        host("h-pause", "pause-vm", "vm", parent_label="pve1", power_state="paused"),
+        host("h-node", "pve1", "hypervisor"),
+        host("h-on", "an-lxc", "lxc", parent_label="pve1", power_state="running"),
+    ]
+    ctx = get_extension_runtime().loaded["system"].ctx
+    asked: list[str] = []
+
+    async def fake_list(*_args, **_kwargs):
+        return hosts
+
+    async def fake_run(host, command, timeout_s=60):
+        asked.append(host.id)
+        return SimpleNamespace(exit_code=0, stdout="@@os\nDebian\n@@end\n", stderr="", duration_ms=1)
+
+    monkeypatch.setattr(ctx.hosts, "list", fake_list)
+    monkeypatch.setattr(ctx.exec, "run", fake_run)
+    res = await client.get("/api/v1/ext/system/widgets/health", headers=headers)
+    assert res.status_code == 200, res.text
+    rows = res.json()["data"]
+
+    assert sorted(asked) == ["h-node", "h-on"], "ausgeschaltete Gäste werden nicht per SSH gefragt"
+    assert [(r["name"], r["kind"], r["tone"]) for r in rows] == [
+        ("pve1", "Knoten", "good"), ("an-lxc", "LXC auf pve1", "good"),
+        ("pause-vm", "VM auf pve1", "neutral"), ("aus-lxc", "LXC auf pve1", "neutral"),
+    ]
+    assert {r["badge"] for r in rows if r["tone"] == "neutral"} == {"aus"}
 
 
 def test_widget_row_text_is_the_worst_finding_not_the_first():

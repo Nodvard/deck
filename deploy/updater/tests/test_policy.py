@@ -1,8 +1,8 @@
 """`policy.py`: reine Regeln des Update-Helfers.
 
-Referenzen und Tags, Versionen, Anforderungen, Grenzen, Rueckweg-Slot und die
-festen Codes. Viele Faelle kommen aus den gemeinsamen Vektoren (`vectors/*.json`), die spaeter auch das Dashboard
-prueft.
+Referenzen und Tags, Versionen, Anforderungen, Grenzen, Rückweg-Slot und die
+festen Codes. Viele Fälle kommen aus den gemeinsamen Vektoren (`vectors/*.json`), die später auch das Dashboard
+prüft.
 """
 
 from __future__ import annotations
@@ -159,7 +159,7 @@ def test_only_forward_and_label_must_match_exactly():
     assert code_of(policy.check_newer, "0.7.0", "0.7.0") == "not_newer"
     assert code_of(policy.check_newer, "0.6.9", "0.7.0") == "not_newer"
     assert code_of(policy.check_label, "0.7.1", "0.7.1") is None
-    assert code_of(policy.check_label, "0.7.0", "0.7.1") == "tag_not_on_version"  # Tag umgehaengt (Downgrade)
+    assert code_of(policy.check_label, "0.7.0", "0.7.1") == "tag_not_on_version"  # Tag umgehängt (Downgrade)
     assert code_of(policy.check_label, "0.8.0", "0.7.1") == "tag_not_on_version"
     assert code_of(policy.check_label, "0.07.1", "0.07.1") == "tag_not_on_version"
 
@@ -261,7 +261,7 @@ def test_deep_nesting_is_only_this_requests_problem():
     deep_obj = b'{"a":' * 50_000 + b"1" + b"}" * 50_000
     with pytest.raises(ValueError):
         policy.loads_strict(deep_obj, max_bytes=len(deep_obj))
-    # ... und danach geht die naechste Anforderung ganz normal.
+    # ... und danach geht die nächste Anforderung ganz normal.
     assert code_of(policy.parse_request, b"[" * 2048 + b"]" * 2048, now=NOW) == "bad_request"
     assert make_request().id == RID
 
@@ -291,7 +291,7 @@ def test_huge_integers_do_not_break_the_parser():
     assert len(raw) <= 4096
     assert code_of(policy.parse_request, raw, now=NOW) == "bad_request"
     assert code_of(policy.parse_request, request_bytes(created_at=10**30), now=NOW) == "bad_request"
-    # Ueber der Ziffern-Grenze von Python (4300) wirft int() -- auch das bleibt ein ValueError.
+    # Über der Ziffern-Grenze von Python (4300) wirft int() -- auch das bleibt ein ValueError.
     with pytest.raises(ValueError):
         policy.loads_strict(b"9" * 5000, max_bytes=10_000)
 
@@ -303,7 +303,7 @@ def test_loads_strict_rejects_duplicates_at_every_level():
     for constant in (b"NaN", b"Infinity", b"-Infinity"):
         with pytest.raises(ValueError):
             policy.loads_strict(b'{"a": ' + constant + b"}", max_bytes=100)
-    # Zahlen, die beim Lesen zu +-Unendlich ueberlaufen, sind dasselbe wie `Infinity`.
+    # Zahlen, die beim Lesen zu +-Unendlich überlaufen, sind dasselbe wie `Infinity`.
     for number in (b"1e999", b"-1e999", b"1E+400", b"1" + b"0" * 400 + b".0"):
         for document in (b'{"a": %s}', b"[%s]", b'{"a": {"b": [%s]}}'):
             with pytest.raises(ValueError):
@@ -359,7 +359,7 @@ def test_hold_after_broken_state_blocks_everything():
 
 
 # ---------------------------------------------------------------------------
-# Rueckweg-Slot
+# Rückweg-Slot
 # ---------------------------------------------------------------------------
 
 

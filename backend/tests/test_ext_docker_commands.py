@@ -107,6 +107,12 @@ _BUILDER_NAME = re.compile(r"^(?:cmd_\w+|\w+_command)$")
 selbst; ihre eigenen Tests decken das ab."""
 _CHANGING = {"container_verb", "compose_restart", "prune", "image_remove", "volume_remove", "network_remove"}
 """Bauer für ändernde Befehle: nur in den Ausführern der Gate-Aktionen."""
+_CHANGING_ELSEWHERE = {
+    "cmd_verb", "cmd_take_down", "cmd_remove_folder", "cmd_stack_pull", "cmd_stack_up", "cmd_tag", "cmd_untag", "cmd_archive", "cmd_stop_services",
+    "cmd_start_services", "cmd_pull_backup_image", "cmd_stop_archive", "cmd_read", "cmd_move_up", "cmd_stop_old", "cmd_rename_old",
+    "cmd_start_old", "cmd_remove_old",
+}
+"""Dasselbe für ändernde Bauer außerhalb von `commands.py` (Stack-Aktionen, Löschen und Update von Stacks)."""
 _PASS_THROUGH = {"_exec"}
 """Hüllen, die ihren Befehl nur weiterreichen; ihre Aufrufer prüft der Wächter selbst."""
 
@@ -146,12 +152,12 @@ def _command_arg(call: ast.Call) -> ast.AST | None:
     if not isinstance(func, ast.Attribute):
         return None
     on_exec = isinstance(func.value, ast.Attribute) and func.value.attr == "exec"
-    if (on_exec and func.attr in ("run", "stream")) or func.attr == "_exec":
+    if (on_exec and func.attr in ("run", "stream", "run_argv", "stream_argv")) or func.attr == "_exec":
         if any(isinstance(a, ast.Starred) for a in call.args) or any(k.arg is None for k in call.keywords):
             return call  # `*args`/`**kwargs`: der Befehl ist nicht zu sehen
         if len(call.args) >= 2:
             return call.args[1]
-        return next((k.value for k in call.keywords if k.arg == "command"), None)
+        return next((k.value for k in call.keywords if k.arg in ("command", "argv")), call)
     if on_exec and func.attr == "open_shell":
         return next((k.value for k in call.keywords if k.arg == "command"), None)
     return None
@@ -199,7 +205,7 @@ def _violations(tree: ast.Module) -> list[str]:
     }
     for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
         owner, name = _callee(call)
-        if owner == "commands" and name in _CHANGING and id(call) not in executors:
+        if ((owner == "commands" and name in _CHANGING) or name in _CHANGING_ELSEWHERE) and id(call) not in executors:
             found.append(f"Zeile {call.lineno}: ändernder Befehl {name} außerhalb eines Ausführers")
     return found
 
@@ -222,6 +228,8 @@ async def f(ctx, host, name, tail):
     await ctx.exec.open_shell(host, cols=80, rows=24, command=f"docker exec -it {name} sh")
     await self._exec(host, f"docker inspect {name}", 20)
     await ctx.exec.run(host, commands.container_verb("stop", name))
+    await ctx.exec.run_argv(host, ["docker", "rm", name])
+    await ctx.exec.run_argv(host, sa.cmd_verb(stack, "docker.stack_down"))
 
 async def run_it(ctx, host, command):
     await ctx.exec.run(host, command)
@@ -236,11 +244,14 @@ async def tricks(self, ctx, host, name, params):
     command += f" {name}"
     await ctx.exec.run(host, command)
     await ctx.exec.run(**params)
+    await ctx.exec.run_argv(host, argv=["docker", "rm", name])
 '''
     found = _violations(ast.parse(bad))
-    assert len(found) == 14, found
-    assert "Zeile 18: Alias auf exec" in found
-    assert "Zeile 15: command" in found
+    assert len(found) == 17, found
+    assert "Zeile 29: ['docker', 'rm', name]" in found
+    assert any("ändernder Befehl cmd_verb" in f for f in found)
+    assert "Zeile 20: Alias auf exec" in found
+    assert "Zeile 17: command" in found
     assert "Zeile 12: ändernder Befehl container_verb außerhalb eines Ausführers" in found
 
 
@@ -256,8 +267,139 @@ class DockerContainerExecutor:
         await ctx.exec.run(host, command)
         await self._exec(host, CMD_LIST, 20)
         await self._exec(host, cmd_inspect_containers(ids), 20)
+        await ctx.exec.run_argv(host, sa.cmd_verb(stack, "docker.stack_up"))
+        await ctx.exec.run_argv(host, argv=sa.cmd_services(stack))
 
     async def _exec(self, host, command, timeout_s):
         return await self._ctx.exec.run(host, command, timeout_s=timeout_s)
 '''
     assert _violations(ast.parse(good)) == []
+
+
+# --- Wächter: Schreiben per SFTP nur in den Ausführern ----------------------------------------------------------------
+
+_SFTP_READING = {
+    "stat", "lstat", "listdir", "readdir", "scandir", "exists", "lexists", "isdir", "isfile", "islink", "realpath", "readlink",
+    "getcwd", "glob", "statvfs", "getsize", "getatime", "getmtime",
+}
+"""Erlaubnisliste: alles andere auf einem SFTP-Zugang zählt als Schreiben, auch Methoden, die es heute noch nicht gibt."""
+
+
+def _sftp_names(tree: ast.AST) -> set[str]:
+    """`sftp` und jeder Name aus `async with ….sftp(…) as <Name>`."""
+    names = {"sftp"}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                call = item.context_expr
+                if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == "sftp"
+                        and isinstance(item.optional_vars, ast.Name)):
+                    names.add(item.optional_vars.id)
+    return names
+
+
+def _sftp_writes(node: ast.AST, names: set[str] | None = None) -> list[ast.Call]:
+    """Aufrufe auf einem SFTP-Zugang, die nicht nur lesen; `open` nur mit `r`/`b` im Modus gilt als lesend."""
+    names = names if names is not None else _sftp_names(node)
+    found = []
+    for call in (n for n in ast.walk(node) if isinstance(n, ast.Call)):
+        func = call.func
+        if not (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id in names):
+            continue
+        if func.attr == "open":
+            mode = call.args[1] if len(call.args) > 1 else next((k.value for k in call.keywords if k.arg in ("pflags_or_mode", "mode")), None)
+            if not (isinstance(mode, ast.Constant) and isinstance(mode.value, str) and set(mode.value) <= {"r", "b"}):
+                found.append(call)
+        elif func.attr not in _SFTP_READING:
+            found.append(call)
+    return found
+
+
+def _sftp_violations(trees: dict[str, ast.Module]) -> list[str]:
+    """Ein schreibender SFTP-Aufruf steht in einem Ausführer oder in einer Funktion des Moduls, die nur Ausführer (oder
+    andere solche Funktionen) aufrufen."""
+    executors: set[int] = set()
+    writers: dict[tuple[str, str], ast.AST] = {}
+    for name, tree in trees.items():
+        for cls in (n for n in tree.body if isinstance(n, ast.ClassDef) and n.name.endswith("Executor")):
+            executors.update(id(n) for n in ast.walk(cls))
+        names = _sftp_names(tree)
+        for fn in (n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
+            if _sftp_writes(fn, names):
+                writers[(name, fn.name)] = fn
+    allowed = set(executors)
+    for fn in writers.values():
+        allowed.update(id(n) for n in ast.walk(fn))
+    found: list[str] = []
+    for name, tree in trees.items():
+        found += [f"{name} Zeile {call.lineno}: sftp.{call.func.attr} außerhalb eines Ausführers" for call in _sftp_writes(tree) if id(call) not in allowed]
+    # Jede schreibende Hilfsfunktion wird nur aufgerufen, und zwar aus Ausführern oder anderen schreibenden Hilfsfunktionen:
+    # nicht dekoriert (etwa als Route), nicht als Wert weitergereicht und nicht ungenutzt.
+    calls: dict[tuple[str, str], int] = {key: 0 for key in writers}
+    for name, tree in trees.items():
+        called = {id(c.func) for c in ast.walk(tree) if isinstance(c, ast.Call)}
+        for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
+            owner, callee = _callee(call)
+            key = (f"{owner}.py" if owner else name, callee)
+            if key in writers:
+                calls[key] += 1
+                if id(call) not in allowed:
+                    found.append(f"{name} Zeile {call.lineno}: {callee} schreibt per SFTP und wird außerhalb eines Ausführers aufgerufen")
+        for ref in ast.walk(tree):
+            target = (name, ref.id) if isinstance(ref, ast.Name) else (f"{ref.value.id}.py", ref.attr) if (
+                isinstance(ref, ast.Attribute) and isinstance(ref.value, ast.Name)) else None
+            if target in writers and id(ref) not in called and isinstance(getattr(ref, "ctx", None), ast.Load):
+                found.append(f"{name} Zeile {ref.lineno}: {target[1]} schreibt per SFTP und wird als Wert weitergereicht")
+    for (name, fn_name), fn in writers.items():
+        if fn.decorator_list:
+            found.append(f"{name} Zeile {fn.lineno}: {fn_name} schreibt per SFTP und ist dekoriert")
+        elif not calls[(name, fn_name)]:
+            found.append(f"{name} Zeile {fn.lineno}: {fn_name} schreibt per SFTP und wird von keinem Ausführer aufgerufen")
+    return found
+
+
+def test_sftp_writes_only_in_executors():
+    trees = {path.name: ast.parse(path.read_text(encoding="utf-8")) for path in sorted(SRC.glob("*.py"))}
+    assert _sftp_violations(trees) == []
+
+
+def test_the_sftp_guard_finds_writes_elsewhere():
+    bad = ast.parse('''
+async def helper(sftp, path):
+    await sftp.posix_rename(path, path + ".x")
+
+class Routes:
+    async def save(self, sftp, path):
+        await helper(sftp, path)
+        async with sftp.open(path, "wb") as f:
+            pass
+        await sftp.chmod(path, 0o777)
+
+class SaveExecutor:
+    async def execute(self, sftp, path):
+        await helper(sftp, path)
+        async with sftp.open(path, "rb") as f:
+            pass
+        await sftp.lstat(path)
+
+async def sneaky(ctx, host, path):
+    async with ctx.exec.sftp(host) as conn:
+        await conn.unlink(path)
+        await conn.put("lokal", path)
+        await conn.stat(path)
+
+@router.post("/x")
+async def route(sftp, path):
+    await sftp.remove(path)
+
+callbacks = [helper]
+''')
+    found = _sftp_violations({"bad.py": bad})
+    assert found == [
+        "bad.py Zeile 8: sftp.open außerhalb eines Ausführers",
+        "bad.py Zeile 10: sftp.chmod außerhalb eines Ausführers",
+        "bad.py Zeile 7: helper schreibt per SFTP und wird außerhalb eines Ausführers aufgerufen",
+        "bad.py Zeile 29: helper schreibt per SFTP und wird als Wert weitergereicht",
+        "bad.py Zeile 19: sneaky schreibt per SFTP und wird von keinem Ausführer aufgerufen",
+        "bad.py Zeile 26: route schreibt per SFTP und ist dekoriert",
+    ], found

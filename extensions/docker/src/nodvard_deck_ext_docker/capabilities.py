@@ -20,6 +20,8 @@ from nodvard_sdk.types import Risk
 
 from . import commands
 from .commands import COMPOSE_PROJECT_RE, CONTAINER_NAME_RE, DOCKER_ID_RE
+from .compose_errors import scrub_compose_output
+from .locks import StackLocks, busy_text
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
@@ -87,6 +89,55 @@ def parse_stats_line(line: str) -> tuple[str, dict[str, Any]] | None:
     if not mem_limit:
         mem_used = mem_limit = None
     return parts[0].strip(), {"cpu_percent": cpu, "mem_used": mem_used, "mem_limit": mem_limit}
+
+
+ENVIRONMENT_TTL_S = 600.0
+"""So lange gilt, was `docker info` über CPU und Arbeitsspeicher eines Hosts gesagt hat."""
+_LXC = frozenset({"lxc", "lxc-libvirt"})
+_CONTAINERS = frozenset({"openvz", "systemd-nspawn", "docker", "podman", "rkt", "wsl", "proot", "pouch"})
+_VIRT_WORD_RE = re.compile(r"^[a-z0-9-]{1,32}\Z")
+_VERSION_RE = re.compile(r"^[0-9A-Za-z.+~-]{1,40}\Z")
+
+
+def parse_environment(info: str, virt: str | None) -> dict[str, Any] | None:
+    """CPU-Zahl, Arbeitsspeicher und Version aus `docker info` und die Umgebung (`lxc`, `container`, `vm`, `none`, unbekannt
+    `None`); `None` insgesamt, wenn der Docker-Dienst nicht antwortet und `docker info` deshalb 0 CPUs meldet."""
+    try:
+        raw = json.loads(info or "")
+    except ValueError:
+        return None
+    cpus, memory = (raw.get("NCPU"), raw.get("MemTotal")) if isinstance(raw, dict) else (None, None)
+    if not isinstance(cpus, int) or isinstance(cpus, bool) or not 0 < cpus <= 4096:
+        return None
+    version = raw.get("ServerVersion")
+    word = (virt or "").strip()
+    if not _VIRT_WORD_RE.match(word):
+        kind = None
+    elif word == "none":
+        kind = "none"
+    elif word in _LXC:
+        kind = "lxc"
+    elif word in _CONTAINERS:
+        kind = "container"
+    else:
+        kind = "vm"
+    return {
+        "virtualization": kind,
+        "cpus": cpus,
+        "mem_total": memory if isinstance(memory, int) and not isinstance(memory, bool) and memory > 0 else None,
+        "docker_version": version if isinstance(version, str) and _VERSION_RE.match(version) else None,
+    }
+
+
+def parse_restart_counts(text: str) -> dict[str, int]:
+    """Zeilen `/<name>|<Anzahl>` aus `commands.restart_counts()` -> Name -> Anzahl; nur Container, die neu gestartet wurden."""
+    counts: dict[str, int] = {}
+    for line in (text or "").splitlines():
+        name, sep, count = line.strip().partition("|")
+        name = name.removeprefix("/")
+        if sep and CONTAINER_NAME_RE.match(name) and re.fullmatch(r"[0-9]{1,9}", count) and int(count) > 0:
+            counts[name] = int(count)
+    return counts
 
 
 def _own_container_id() -> str:
@@ -399,6 +450,8 @@ class DockerServiceCatalog:
         self._ctx = ctx
         self._compose_dirs: dict[str, tuple[float, dict[str, str]]] = {}
         """Host-ID -> (Zeitpunkt, Projekt -> Ordner): der Stand aus dem letzten `docker ps`, das `list_services()` ohnehin liest."""
+        self._environments: dict[str, tuple[float, dict[str, Any]]] = {}
+        """Host-ID -> (Zeitpunkt, `parse_environment`)."""
         self._stopped_ports: dict[str, dict[str, list[int]]] = {}
         """Host-ID -> kurze Container-ID -> Ports gestoppter Container. Ein gestoppter Container ändert seine Zuordnung nicht
         (ein neu angelegter bekommt eine neue ID), deshalb fragt `list_services()` je Container nur einmal nach."""
@@ -518,13 +571,15 @@ class DockerServiceCatalog:
             if short_id in known and not row.get("published_ports"):
                 row["published_ports"] = known[short_id]
 
-    async def container_stats(self) -> dict[str, dict[str, Any]]:
-        """CPU/RAM je laufendem Container (`docker stats --no-stream`), mit den Schlüsseln von `list_services()`.
-        Ein eigener Aufruf, nicht Teil der Liste: Docker wartet eine Messperiode ab, das dauert je Host ~2-3 s.
-        Ein Host, der nicht antwortet, fehlt einfach (die Liste zeigt seinen Fehler schon)."""
+    async def measure(self) -> dict[str, Any]:
+        """CPU/RAM je laufendem Container (`data`, Schlüssel wie in `list_services()`), Neustarts je Container (`restarts`)
+        und je Host, was Docker dort an CPU und Arbeitsspeicher sieht (`hosts`). Docker wartet eine Messperiode ab, das
+        dauert je Host 2 bis 3 s; ein Host, der nicht antwortet, fehlt einfach (die Liste zeigt seinen Fehler schon)."""
         settings = await self._ctx.settings.get()
         tag = settings.get("docker_host_tag") or "docker"
         stats: dict[str, dict[str, Any]] = {}
+        restarts: dict[str, int] = {}
+        environments: dict[str, dict[str, Any]] = {}
         for host in await self._ctx.hosts.list(tag=tag):
             try:
                 result = await self._ctx.exec.run(host, commands.stats(), timeout_s=20)
@@ -537,7 +592,37 @@ class DockerServiceCatalog:
                 if parsed is not None:
                     name, values = parsed
                     stats[f"{host.id}:{name}"] = values
-        return stats
+            try:
+                counted = await self._ctx.exec.run(host, commands.restart_counts(), timeout_s=15)
+            except Exception:  # noqa: BLE001 - ohne Zähler bleibt die Liste brauchbar
+                counted = None
+            # Auch bei Exit != 0 (ein Container verschwand zwischen `ps` und `inspect`) gelten die lesbaren Zeilen.
+            if counted is not None:
+                restarts.update({f"{host.id}:{name}": n for name, n in parse_restart_counts(counted.stdout).items()})
+            environment = await self._environment(host)
+            if environment is not None:
+                environments[host.id] = environment
+        return {"data": stats, "restarts": restarts, "hosts": environments}
+
+    async def _environment(self, host: Any) -> dict[str, Any] | None:
+        remembered = self._environments.get(host.id)
+        if remembered is not None and time.monotonic() - remembered[0] < ENVIRONMENT_TTL_S:
+            return remembered[1]
+        try:
+            info = await self._ctx.exec.run(host, commands.info(), timeout_s=15)
+        except Exception:  # noqa: BLE001 - die Messwerte sind wichtiger als ihre Einordnung
+            return remembered[1] if remembered else None
+        if info.exit_code != 0:
+            return remembered[1] if remembered else None
+        try:
+            virt = await self._ctx.exec.run(host, commands.virtualization(), timeout_s=5)
+        except Exception:  # noqa: BLE001
+            virt = None
+        environment = parse_environment(info.stdout, virt.stdout if virt is not None else None)
+        if environment is None:
+            return remembered[1] if remembered else None
+        self._environments[host.id] = (time.monotonic(), environment)
+        return environment
 
 
 _VERBS = {"container.start": "start", "container.stop": "stop", "container.restart": "restart", "container.remove": "rm"}
@@ -635,8 +720,9 @@ class DockerMaintenanceExecutor:
 
     action_types = frozenset(commands.PRUNE) | {"docker.stack_restart"}
 
-    def __init__(self, ctx: "ExtensionContext") -> None:
+    def __init__(self, ctx: "ExtensionContext", locks: StackLocks | None = None) -> None:
         self._ctx = ctx
+        self._locks = locks or StackLocks()
 
     async def execute(self, req: ActionRequest) -> ActionResult:
         if req.action_type == "docker.stack_restart":
@@ -646,25 +732,10 @@ class DockerMaintenanceExecutor:
             host = await self._ctx.hosts.get(req.host_ref) if req.host_ref else None
             if host is None:
                 return ActionResult(success=False, error="Host nicht gefunden.")
-            from . import after_check as ac  # spät: after_check braucht dieses Modul
-
-            # Welche Container liefen vorher? Nur die müssen danach wieder laufen: ein Container für einmalige Aufgaben
-            # (Migration, Init) endet auch nach dem Neustart wieder, das ist kein Fehler.
-            before = await self._ctx.exec.run(host, ac.cmd_stack_running(project), timeout_s=ac.CHECK_CALL_TIMEOUT_S)
-            running = [line.strip() for line in before.stdout.splitlines() if _CONTAINER_ID_RE.match(line.strip())]
-            # Ohne Compose-Datei: Compose v2+ findet die Container über ihre Labels (geprüft mit Compose 5.5.1).
-            result = await self._ctx.exec.run(host, commands.compose_restart(project), timeout_s=300)
-            if result.exit_code == 0 and running and before.exit_code == 0:
-                return await _checked(self._ctx, host, running, result.duration_ms, f"Stack '{project}' neu gestartet.")
-            skipped = (
-                "Prüfung danach übersprungen: vorher lief kein Container des Stacks." if before.exit_code == 0
-                else "Prüfung danach nicht möglich: die laufenden Container ließen sich vorher nicht lesen."
-            )
-            return ActionResult(
-                success=result.exit_code == 0, exit_code=result.exit_code,
-                output=f"Stack '{project}' neu gestartet.\n{skipped}" if result.exit_code == 0 else None,
-                error=result.stderr.strip() or None, duration_ms=result.duration_ms,
-            )
+            with self._locks.hold(host.id, project, "Neustart") as busy:
+                if busy is not None:
+                    return ActionResult(success=False, error=busy_text(busy))
+                return await self._restart(host, project)
         command = commands.prune(req.action_type)
         if command is None:
             return ActionResult(success=False, error=f"Unbekannte Aktion '{req.action_type}'.")
@@ -682,6 +753,27 @@ class DockerMaintenanceExecutor:
             output=(f"Freigegeben: {reclaimed.split(':', 1)[1].strip()}" if reclaimed and ":" in reclaimed else result.stdout.strip() or None),
             error=result.stderr.strip() or None,
             duration_ms=result.duration_ms,
+        )
+
+    async def _restart(self, host: Any, project: str) -> ActionResult:
+        from . import after_check as ac  # spät: after_check braucht dieses Modul
+
+        # Welche Container liefen vorher? Nur die müssen danach wieder laufen: ein Container für einmalige Aufgaben
+        # (Migration, Init) endet auch nach dem Neustart wieder, das ist kein Fehler.
+        before = await self._ctx.exec.run(host, ac.cmd_stack_running(project), timeout_s=ac.CHECK_CALL_TIMEOUT_S)
+        running = [line.strip() for line in before.stdout.splitlines() if _CONTAINER_ID_RE.match(line.strip())]
+        # Ohne Compose-Datei: Compose v2+ findet die Container über ihre Labels (geprüft mit Compose 5.5.1).
+        result = await self._ctx.exec.run(host, commands.compose_restart(project), timeout_s=300)
+        if result.exit_code == 0 and running and before.exit_code == 0:
+            return await _checked(self._ctx, host, running, result.duration_ms, f"Stack '{project}' neu gestartet.")
+        skipped = (
+            "Prüfung danach übersprungen: vorher lief kein Container des Stacks." if before.exit_code == 0
+            else "Prüfung danach nicht möglich: die laufenden Container ließen sich vorher nicht lesen."
+        )
+        return ActionResult(
+            success=result.exit_code == 0, exit_code=result.exit_code,
+            output=f"Stack '{project}' neu gestartet.\n{skipped}" if result.exit_code == 0 else None,
+            error=scrub_compose_output(result.stderr).strip() or None, duration_ms=result.duration_ms,
         )
 
     async def dry_run(self, req: ActionRequest) -> DryRunReport | None:

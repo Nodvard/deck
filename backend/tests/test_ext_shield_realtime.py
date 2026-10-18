@@ -40,10 +40,10 @@ rt = _Realtime()
 
 def _out(*, virt="none", total_kb: int | None = 8 * GB_KB, avail_kb: int | None = 4 * GB_KB,
          fanotify="yes\nCONFIG_FANOTIFY=y", clamd="/usr/sbin/clamd", clamonacc="/usr/sbin/clamonacc",
-         state="inactive", root="sudo", apt="yes", end=True) -> str:
+         state="inactive", onacc_state="inactive", root="sudo", apt="yes", end=True) -> str:
     mem = "".join(f"{name}:  {kb} kB\n" for name, kb in (("MemTotal", total_kb), ("MemAvailable", avail_kb)) if kb)
     text = (f"@@virt\n{virt}\n@@mem\n{mem}@@fanotify\n{fanotify}\n@@clamd\n{clamd}\n@@clamonacc\n{clamonacc}\n"
-            f"@@clamd_state\n{state}\n@@root\n{root}\n@@apt\n{apt}\n")
+            f"@@clamd_state\n{state}\n@@clamonacc_state\n{onacc_state}\n@@root\n{root}\n@@apt\n{apt}\n")
     return text + "@@end\n" if end else text
 
 
@@ -145,8 +145,15 @@ def test_readiness_dict_carries_every_field():
     data = rt.readiness_dict(rt.parse_readiness(_out()))
     assert set(data) == {
         "possible", "reasons", "notes", "container", "mem_total_mb", "mem_available_mb", "fanotify", "clamd_installed",
-        "clamonacc_installed", "clamd_active", "root", "apt",
+        "clamonacc_installed", "clamd_active", "clamonacc_active", "root", "apt",
     }
+
+
+@pytest.mark.parametrize(("state", "active"), [
+    ("active", True), ("inactive", False), ("failed", False), ("activating", False), ("", None), ("reloading", None),
+])
+def test_readiness_says_whether_clamonacc_runs(state, active):
+    assert rt.parse_readiness(_out(onacc_state=state)).clamonacc_active is active
 
 
 def test_the_command_passes_the_deny_list():
@@ -178,6 +185,7 @@ def test_the_command_in_a_real_shell(tmp_path):
     r = rt.parse_readiness(out.stdout)
     assert r.container == "lxc" and r.root == "none"
     assert r.clamd_active is False and r.clamd_installed and not r.clamonacc_installed
+    assert r.clamonacc_active is False
     assert not r.possible and r.mem_total_mb, out.stdout
 
 
@@ -247,7 +255,7 @@ async def test_the_route_lists_every_target_host_and_caches_the_answer(monkeypat
     from nodvard_deck_ext_shield.defender_api import build_routers
 
     async def no_baselines(ctx, kind):
-        assert kind == "realtime"
+        assert kind in ("realtime", "realtime_down")
         return {}
 
     monkeypatch.setattr(defender_api, "load_baselines", no_baselines)

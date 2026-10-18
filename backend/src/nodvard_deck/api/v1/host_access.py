@@ -16,11 +16,13 @@ from sqlalchemy import select
 from ...config import Settings
 from ...core import rate_limit, vault
 from ...core.vault import VaultError
+from ...db.base import utcnow
 from ...ext.root_helpers import RootHelperFile
 from ...ext.runtime import get_extension_runtime
 from ...models import Host, HostCredential, KnownHostKey, User
 from ...services import audit as audit_service
 from ...services import extensions as extensions_service
+from ...services import helper_hints as helper_hints_service
 from ...services import host_check, host_setup, one_time_password
 from ...services import hosts as hosts_service
 from ...services.host_check import ConnectionCheckOut
@@ -254,7 +256,8 @@ class _PreparedSetup:
 
 
 async def _prepare_setup(
-    session: SessionDep, settings: Settings, host_id: str, credential_id: str, *, sudo: bool, groups: list[str] | None
+    session: SessionDep, settings: Settings, host_id: str, credential_id: str, *, sudo: bool, groups: list[str] | None,
+    report_state: bool = False,
 ) -> _PreparedSetup:
     """Gemeinsame Vorbedingungen und das Skript für `GET .../setup` und `POST .../setup-with-password`. Nur Linux, nur
     Zugänge mit SSH-Schlüssel, nur übliche Linux-Benutzernamen; Gruppen nur, wenn Erweiterungen sie für diesen Server
@@ -297,7 +300,7 @@ async def _prepare_setup(
         info = host_setup.derive_public_key(private_key, comment=host_setup.key_comment(host.name))
         del private_key
         script, one_liner = host_setup.build_setup_script(
-            credential.username, info.public_key, groups=wanted, sudo=use_sudo, helpers=helpers
+            credential.username, info.public_key, groups=wanted, sudo=use_sudo, helpers=helpers, report_state=report_state
         )
     except (SetupError, VaultError) as exc:
         detail = str(exc) if isinstance(exc, SetupError) else "Der gespeicherte Schlüssel lässt sich nicht lesen."
@@ -423,7 +426,9 @@ async def credential_setup_with_password(
     #
     # Das Passwort geht nur an die gespeicherte Adresse und nur bei schon gemerktem Server-Schlüssel (sonst
     # `host_key_unconfirmed`). Grenzen: `services/one_time_password.py`.
-    prepared = await _prepare_setup(session, settings, host_id, credential_id, sudo=payload.sudo, groups=payload.groups)
+    prepared = await _prepare_setup(
+        session, settings, host_id, credential_id, sudo=payload.sudo, groups=payload.groups, report_state=True
+    )
     host, credential = prepared.host, prepared.credential
     as_root = payload.login_user == "root"
     sudo_with_password = not as_root and payload.sudo_password_same
@@ -448,12 +453,14 @@ async def credential_setup_with_password(
         headers = {"Retry-After": str(retry_after)} if retry_after else None
         return CodedHTTPException(status_code, text, code, headers=headers, extra=extra)
 
+    started = utcnow()
     try:
         remote = await one_time_password.run_once(
             session, host=host, port=credential.port, user_id=user.id, login_user=payload.login_user,
             password=payload.password, command=command, password_on_stdin=sudo_with_password,
             connect_timeout_s=min(settings.ssh_connect_timeout_s, one_time_password.CONNECT_TIMEOUT_S),
             flags=host_setup.SETUP_FLAGS,
+            extract=lambda stdout: host_setup.setup_report(stdout, user=credential.username),
         )
     except one_time_password.PasswordUseError as exc:
         extra = {"host_key": exc.host_key} if exc.host_key is not None else {}
@@ -461,6 +468,12 @@ async def credential_setup_with_password(
             exc.code, str(exc), exc.status, retry_after=exc.retry_after, audit=exc.audit, **extra
         ) from None
 
+    # Der Befehl ist gelaufen (auch wenn er gleich als gescheitert gilt): für den Datei-Wächter festhalten, was er getan
+    # hat. Fehlt der Bericht, merkt der Wächter nur das Zeitfenster und übernimmt nichts still.
+    record = host_setup.setup_record(
+        credential.username, remote.extracted or {}, sudo=prepared.sudo, helpers=prepared.helpers
+    )
+    hosts_service.record_setup_run(host, started, record=record)
     run = host_setup.evaluate_setup_run(
         remote.exit_status, remote.stdout, remote.stderr, via_sudo=not as_root, sudo_with_password=sudo_with_password,
         flags=remote.flags,
@@ -642,6 +655,18 @@ class PinKeyIn(BaseModel):
     credential_id: str | None = None
     """Der Zugang, mit dem die Prüfung den Schlüssel gesehen hat (sein Port zählt); ohne Angabe der Standard-Zugang.
     Nötig, wenn ein weiterer Zugang einen anderen Port hat."""
+
+
+@router.post(
+    "/hosts/{host_id}/helper-hint/dismiss",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("hosts.write"))],
+)
+async def dismiss_helper_hint(host_id: str, session: SessionDep) -> None:
+    """Blendet den Hinweis „Server neu einrichten“ in der Übersicht für diesen Server aus, bis sich die fehlenden oder
+    veralteten Hilfsskripte ändern (z. B. ein Update bringt neuere mit). 404 ohne Server, ohne offenen Hinweis 204."""
+    await _load_host(session, host_id)
+    await helper_hints_service.dismiss(session, host_id)
 
 
 @router.post("/hosts/{host_id}/known-hosts", status_code=status.HTTP_201_CREATED)

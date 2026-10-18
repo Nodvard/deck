@@ -109,6 +109,14 @@ class DiscoveredHost(BaseModel):
     """`True`, wenn der Anbieter die Adresse vom Gast selbst kennt (Gast-Agent, Container-Schnittstellen): Dann
     übernimmt der Kern sie auch für einen schon bekannten VM-/Container-Host. `False` (Vorgabe): möglicherweise nur
     ein Platzhalter, eine vorhandene, ggf. von Hand korrigierte Adresse bleibt stehen."""
+    parent_ref: str | None = None
+    """`provider_ref` des Hosts beim selben Anbieter, auf dem dieser läuft (bei einer VM oder einem LXC der
+    Hypervisor-Knoten); `None` für eigenständige Maschinen."""
+    parent_label: str | None = None
+    """Kurzer Name dieses Elternhosts für die Anzeige („LXC auf pve1“), etwa der Knotenname."""
+    power_state: str | None = None
+    """Ob der Gast beim Anbieter läuft: `running`, `stopped` oder `paused`; `None`, wenn der Anbieter das nicht
+    kennt. Ein gestoppter Gast ist ausgeschaltet, nicht gestört: Die Oberfläche zeigt ihn grau und meldet nichts."""
 
 
 class FileEntry(BaseModel):

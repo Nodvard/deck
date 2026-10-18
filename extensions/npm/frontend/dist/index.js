@@ -1,5 +1,5 @@
 // src/NpmPage.tsx
-import { useCallback, useEffect as useEffect2, useMemo, useRef as useRef2, useState } from "react";
+import { useCallback, useEffect as useEffect3, useMemo, useRef as useRef2, useState as useState2 } from "react";
 
 // ../../../frontend/src/lib/deckGlobal.ts
 function findDeck() {
@@ -356,8 +356,22 @@ function SearchInput({ value, onChange, placeholder, label }) {
   ] });
 }
 
+// ../../_shared/frontend/src/links.tsx
+import { useEffect as useEffect2, useState } from "react";
+import { jsx as jsx2 } from "react/jsx-runtime";
+function safeHref(url) {
+  const text = url?.trim();
+  if (!text || !/^https?:\/\//i.test(text)) return void 0;
+  try {
+    const parsed = new URL(text);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? text : void 0;
+  } catch {
+    return void 0;
+  }
+}
+
 // src/NpmPage.tsx
-import { Fragment as Fragment2, jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
+import { Fragment as Fragment2, jsx as jsx3, jsxs as jsxs2 } from "react/jsx-runtime";
 var API = "/ext/npm";
 var SETTINGS_PATH = "/settings/extensions/npm";
 var CHECK_TEXT_CLASS = {
@@ -400,35 +414,35 @@ var PROBLEM = {
 };
 function SettingsHint() {
   if (deck().hasPermission("extensions.manage")) {
-    return /* @__PURE__ */ jsx2("a", { href: SETTINGS_PATH, className: buttonClass("primary", true), children: "Jetzt einrichten" });
+    return /* @__PURE__ */ jsx3("a", { href: SETTINGS_PATH, className: buttonClass("primary", true), children: "Jetzt einrichten" });
   }
-  return /* @__PURE__ */ jsx2("p", { className: "text-xs text-white/45", children: "Ein Administrator kann das unter Einstellungen \u2192 Erweiterungen \u2192 Nginx Proxy Manager einrichten." });
+  return /* @__PURE__ */ jsx3("p", { className: "text-xs text-white/45", children: "Ein Administrator kann das unter Einstellungen \u2192 Erweiterungen \u2192 Nginx Proxy Manager einrichten." });
 }
 function NotSetUp({ title, message, testId }) {
-  return /* @__PURE__ */ jsx2(Card, { title, children: /* @__PURE__ */ jsxs2("div", { "data-testid": testId, className: "flex flex-col items-start gap-3", children: [
-    /* @__PURE__ */ jsx2(Badge, { children: "nicht eingerichtet" }),
-    /* @__PURE__ */ jsx2("p", { className: "text-sm text-white/60", children: message }),
-    /* @__PURE__ */ jsx2(SettingsHint, {})
+  return /* @__PURE__ */ jsx3(Card, { title, children: /* @__PURE__ */ jsxs2("div", { "data-testid": testId, className: "flex flex-col items-start gap-3", children: [
+    /* @__PURE__ */ jsx3(Badge, { children: "nicht eingerichtet" }),
+    /* @__PURE__ */ jsx3("p", { className: "text-sm text-white/60", children: message }),
+    /* @__PURE__ */ jsx3(SettingsHint, {})
   ] }) });
 }
 function Problem({ title, state, message, onRetry, testId }) {
   const problem = PROBLEM[state] ?? PROBLEM.unreachable;
-  return /* @__PURE__ */ jsx2(Card, { title, actions: /* @__PURE__ */ jsx2(Badge, { tone: problem.tone, children: problem.label }), children: /* @__PURE__ */ jsxs2("div", { "data-testid": testId, className: "flex flex-col items-start gap-3", children: [
-    /* @__PURE__ */ jsx2("p", { className: "text-sm text-white/70", children: message }),
+  return /* @__PURE__ */ jsx3(Card, { title, actions: /* @__PURE__ */ jsx3(Badge, { tone: problem.tone, children: problem.label }), children: /* @__PURE__ */ jsxs2("div", { "data-testid": testId, className: "flex flex-col items-start gap-3", children: [
+    /* @__PURE__ */ jsx3("p", { className: "text-sm text-white/70", children: message }),
     /* @__PURE__ */ jsxs2("div", { className: "flex flex-wrap items-center gap-2", children: [
-      /* @__PURE__ */ jsx2(Button, { small: true, onClick: onRetry, children: "Erneut versuchen" }),
-      (state === "auth_failed" || state === "unsupported") && deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx2("a", { href: SETTINGS_PATH, className: buttonClass("ghost", true), children: "Einstellungen" })
+      /* @__PURE__ */ jsx3(Button, { small: true, onClick: onRetry, children: "Erneut versuchen" }),
+      (state === "auth_failed" || state === "unsupported") && deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx3("a", { href: SETTINGS_PATH, className: buttonClass("ghost", true), children: "Einstellungen" })
     ] })
   ] }) });
 }
 function CertBadge({ cert }) {
-  if (!cert) return /* @__PURE__ */ jsx2(Badge, { children: "ohne Zertifikat" });
-  return /* @__PURE__ */ jsx2(Badge, { tone: CERT_TONE[cert.status], children: cert.status === "ok" ? `g\xFCltig bis ${date(cert.expires_at)}` : `${cert.status_label} \xB7 ${cert.days_text}` });
+  if (!cert) return /* @__PURE__ */ jsx3(Badge, { children: "ohne Zertifikat" });
+  return /* @__PURE__ */ jsx3(Badge, { tone: CERT_TONE[cert.status], children: cert.status === "ok" ? `g\xFCltig bis ${date(cert.expires_at)}` : `${cert.status_label} \xB7 ${cert.days_text}` });
 }
 function hostUrl(host) {
   const domain = host.domains[0];
   if (!domain || domain.includes("*")) return null;
-  return `${host.certificate_id ? "https" : "http"}://${domain}`;
+  return safeHref(`${host.certificate_id ? "https" : "http"}://${domain}`) ?? null;
 }
 function addressSummary(result, loading) {
   if (loading && !result) return { text: "Adress-Check l\xE4uft \u2026", className: "text-white/45" };
@@ -457,37 +471,38 @@ function addressSummary(result, loading) {
   };
 }
 function NpmSection({ data, canAct, busy, onToggle, onRetry, checks, checking, onStart }) {
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState2("");
   const byProxy = useMemo(() => new Map((checks?.checks ?? []).map((c) => [c.proxy_id, c])), [checks]);
   const hosts = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return data.hosts;
     return data.hosts.filter((h) => h.domains.some((d) => d.toLowerCase().includes(q)) || (h.target ?? "").toLowerCase().includes(q) || (byProxy.get(h.id)?.container ?? "").toLowerCase().includes(q));
   }, [data.hosts, search, byProxy]);
-  if (data.state === "not_configured") return /* @__PURE__ */ jsx2(NotSetUp, { title: "Nginx Proxy Manager", message: data.message, testId: "npm-not-configured" });
+  if (data.state === "not_configured") return /* @__PURE__ */ jsx3(NotSetUp, { title: "Nginx Proxy Manager", message: data.message, testId: "npm-not-configured" });
   if (data.state !== "ok" || !data.summary) {
-    return /* @__PURE__ */ jsx2(Problem, { title: "Nginx Proxy Manager", state: data.state, message: data.message, onRetry, testId: "npm-problem" });
+    return /* @__PURE__ */ jsx3(Problem, { title: "Nginx Proxy Manager", state: data.state, message: data.message, onRetry, testId: "npm-problem" });
   }
   const s = data.summary;
   const urgent = data.certificates.filter((c) => c.status === "warn" || c.status === "expired");
   const summary = addressSummary(checks, checking);
+  const adminHref = safeHref(data.url);
   return /* @__PURE__ */ jsxs2("div", { className: "space-y-4", children: [
-    /* @__PURE__ */ jsx2(
+    /* @__PURE__ */ jsx3(
       Card,
       {
         title: "Nginx Proxy Manager",
-        description: data.url ? /* @__PURE__ */ jsx2("a", { href: data.url, target: "_blank", rel: "noreferrer", className: "hover:text-white hover:underline", children: "Verwaltung \xF6ffnen" }) : void 0,
+        description: adminHref ? /* @__PURE__ */ jsx3("a", { href: adminHref, target: "_blank", rel: "noreferrer", className: "hover:text-white hover:underline", children: "Verwaltung \xF6ffnen" }) : void 0,
         children: /* @__PURE__ */ jsxs2("div", { className: "grid grid-cols-2 gap-3 lg:grid-cols-4", children: [
-          /* @__PURE__ */ jsx2(Stat, { label: "Proxy-Hosts", value: `${s.hosts_enabled} / ${s.hosts}`, hint: "eingeschaltet / gesamt" }),
-          /* @__PURE__ */ jsx2(Stat, { label: "Zertifikate", value: s.certificates }),
-          /* @__PURE__ */ jsx2(Stat, { label: "Laufen bald ab", value: s.certificates_warn, hint: "in den n\xE4chsten 14 Tagen", tone: s.certificates_warn > 0 ? "warn" : void 0 }),
-          /* @__PURE__ */ jsx2(Stat, { label: "Abgelaufen", value: s.certificates_expired, tone: s.certificates_expired > 0 ? "bad" : void 0 })
+          /* @__PURE__ */ jsx3(Stat, { label: "Proxy-Hosts", value: `${s.hosts_enabled} / ${s.hosts}`, hint: "eingeschaltet / gesamt" }),
+          /* @__PURE__ */ jsx3(Stat, { label: "Zertifikate", value: s.certificates }),
+          /* @__PURE__ */ jsx3(Stat, { label: "Laufen bald ab", value: s.certificates_warn, hint: "in den n\xE4chsten 14 Tagen", tone: s.certificates_warn > 0 ? "warn" : void 0 }),
+          /* @__PURE__ */ jsx3(Stat, { label: "Abgelaufen", value: s.certificates_expired, tone: s.certificates_expired > 0 ? "bad" : void 0 })
         ] })
       }
     ),
-    urgent.length > 0 ? /* @__PURE__ */ jsx2(Card, { title: "Zertifikate, die Aufmerksamkeit brauchen", description: "Nginx Proxy Manager erneuert Let's-Encrypt-Zertifikate normalerweise selbst. Steht eins hier, klemmt meist die Erneuerung.", children: /* @__PURE__ */ jsx2("ul", { "data-testid": "urgent-certificates", className: "divide-y divide-white/[0.06]", children: urgent.map((c) => /* @__PURE__ */ jsxs2("li", { "data-testid": `cert-${c.id}`, className: "flex flex-wrap items-center justify-between gap-2 py-2 first:pt-0 last:pb-0", children: [
+    urgent.length > 0 ? /* @__PURE__ */ jsx3(Card, { title: "Zertifikate, die Aufmerksamkeit brauchen", description: "Nginx Proxy Manager erneuert Let's-Encrypt-Zertifikate normalerweise selbst. Steht eins hier, klemmt meist die Erneuerung.", children: /* @__PURE__ */ jsx3("ul", { "data-testid": "urgent-certificates", className: "divide-y divide-white/[0.06]", children: urgent.map((c) => /* @__PURE__ */ jsxs2("li", { "data-testid": `cert-${c.id}`, className: "flex flex-wrap items-center justify-between gap-2 py-2 first:pt-0 last:pb-0", children: [
       /* @__PURE__ */ jsxs2("div", { className: "min-w-0", children: [
-        /* @__PURE__ */ jsx2("p", { className: "break-words text-sm font-medium", children: c.name }),
+        /* @__PURE__ */ jsx3("p", { className: "break-words text-sm font-medium", children: c.name }),
         /* @__PURE__ */ jsxs2("p", { className: "break-words text-xs text-white/50", children: [
           c.domains.join(", "),
           " \xB7 ",
@@ -503,15 +518,15 @@ function NpmSection({ data, canAct, busy, onToggle, onRetry, checks, checking, o
         " \xB7 ",
         c.days_text
       ] })
-    ] }, c.id)) }) }) : data.certificates.length > 0 && /* @__PURE__ */ jsx2("p", { className: "text-sm text-emerald-300", children: "Alle Zertifikate sind noch mindestens 14 Tage g\xFCltig." }),
-    /* @__PURE__ */ jsx2(
+    ] }, c.id)) }) }) : data.certificates.length > 0 && /* @__PURE__ */ jsx3("p", { className: "text-sm text-emerald-300", children: "Alle Zertifikate sind noch mindestens 14 Tage g\xFCltig." }),
+    /* @__PURE__ */ jsx3(
       Card,
       {
         title: "Proxy-Hosts",
         padded: false,
-        description: summary ? /* @__PURE__ */ jsx2("span", { "data-testid": "address-summary", className: summary.className, children: summary.text }) : void 0,
-        actions: data.hosts.length > 5 ? /* @__PURE__ */ jsx2(SearchInput, { value: search, onChange: setSearch, placeholder: "Domain, Ziel oder Container suchen", label: "Proxy-Hosts durchsuchen" }) : void 0,
-        children: hosts.length === 0 ? /* @__PURE__ */ jsx2("p", { className: "px-5 py-6 text-center text-sm text-white/45", children: data.hosts.length === 0 ? "Noch keine Proxy-Hosts angelegt." : "Kein Proxy-Host passt zur Suche." }) : /* @__PURE__ */ jsx2("ul", { className: "divide-y divide-white/[0.06]", children: hosts.map((h) => {
+        description: summary ? /* @__PURE__ */ jsx3("span", { "data-testid": "address-summary", className: summary.className, children: summary.text }) : void 0,
+        actions: data.hosts.length > 5 ? /* @__PURE__ */ jsx3(SearchInput, { value: search, onChange: setSearch, placeholder: "Domain, Ziel oder Container suchen", label: "Proxy-Hosts durchsuchen" }) : void 0,
+        children: hosts.length === 0 ? /* @__PURE__ */ jsx3("p", { className: "px-5 py-6 text-center text-sm text-white/45", children: data.hosts.length === 0 ? "Noch keine Proxy-Hosts angelegt." : "Kein Proxy-Host passt zur Suche." }) : /* @__PURE__ */ jsx3("ul", { className: "divide-y divide-white/[0.06]", children: hosts.map((h) => {
           const warn = h.certificate && (h.certificate.status === "warn" || h.certificate.status === "expired");
           const url = hostUrl(h);
           const check = byProxy.get(h.id);
@@ -522,19 +537,19 @@ function NpmSection({ data, canAct, busy, onToggle, onRetry, checks, checking, o
               className: `flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3 ${warn ? h.certificate?.status === "expired" ? "bg-red-500/[0.06]" : "bg-amber-500/[0.06]" : ""}`,
               children: [
                 /* @__PURE__ */ jsxs2("div", { className: "min-w-0 flex-1 basis-60", children: [
-                  /* @__PURE__ */ jsx2("p", { className: "break-words text-sm font-medium", children: url ? /* @__PURE__ */ jsx2("a", { href: url, target: "_blank", rel: "noreferrer", className: "hover:underline", children: h.domains.join(", ") }) : h.domains.join(", ") }),
+                  /* @__PURE__ */ jsx3("p", { className: "break-words text-sm font-medium", children: url ? /* @__PURE__ */ jsx3("a", { href: url, target: "_blank", rel: "noreferrer", className: "hover:underline", children: h.domains.join(", ") }) : h.domains.join(", ") }),
                   /* @__PURE__ */ jsxs2("p", { className: "break-words text-xs text-white/50", children: [
                     "\u2192 ",
                     h.target ?? "kein Ziel",
                     h.nginx_online === false ? " \xB7 Nginx meldet einen Fehler" : ""
                   ] }),
-                  check && /* @__PURE__ */ jsx2("p", { "data-testid": `address-${h.id}`, className: `break-words text-xs ${CHECK_TEXT_CLASS[check.tone]}`, children: check.text })
+                  check && /* @__PURE__ */ jsx3("p", { "data-testid": `address-${h.id}`, className: `break-words text-xs ${CHECK_TEXT_CLASS[check.tone]}`, children: check.text })
                 ] }),
                 /* @__PURE__ */ jsxs2("div", { className: "flex flex-wrap items-center gap-1.5", children: [
-                  canAct && check?.can_start && check.docker_host_id && /* @__PURE__ */ jsx2(Button, { small: true, variant: "primary", disabled: busy !== null, onClick: () => onStart(h, check), children: "Container starten" }),
-                  /* @__PURE__ */ jsx2(CertBadge, { cert: h.certificate }),
-                  h.enabled ? /* @__PURE__ */ jsx2(Badge, { tone: "good", children: "an" }) : /* @__PURE__ */ jsx2(Badge, { tone: "neutral", children: "aus" }),
-                  canAct && /* @__PURE__ */ jsx2(Button, { small: true, variant: h.enabled ? "danger" : "secondary", disabled: busy !== null, onClick: () => onToggle(h), children: h.enabled ? "Ausschalten" : "Einschalten" })
+                  canAct && check?.can_start && check.docker_host_id && /* @__PURE__ */ jsx3(Button, { small: true, variant: "primary", disabled: busy !== null, onClick: () => onStart(h, check), children: "Container starten" }),
+                  /* @__PURE__ */ jsx3(CertBadge, { cert: h.certificate }),
+                  h.enabled ? /* @__PURE__ */ jsx3(Badge, { tone: "good", children: "an" }) : /* @__PURE__ */ jsx3(Badge, { tone: "neutral", children: "aus" }),
+                  canAct && /* @__PURE__ */ jsx3(Button, { small: true, variant: h.enabled ? "danger" : "secondary", disabled: busy !== null, onClick: () => onToggle(h), children: h.enabled ? "Ausschalten" : "Einschalten" })
                 ] })
               ]
             },
@@ -547,13 +562,13 @@ function NpmSection({ data, canAct, busy, onToggle, onRetry, checks, checking, o
 }
 function NpmPage() {
   const unmountSignal = useUnmountSignal();
-  const [npm, setNpm] = useState(null);
-  const [loadError, setLoadError] = useState(null);
-  const [message, setMessage] = useState(null);
-  const [busy, setBusy] = useState(null);
+  const [npm, setNpm] = useState2(null);
+  const [loadError, setLoadError] = useState2(null);
+  const [message, setMessage] = useState2(null);
+  const [busy, setBusy] = useState2(null);
   const canAct = deck().hasPermission("hosts.execute");
-  const [checks, setChecks] = useState(null);
-  const [checking, setChecking] = useState(false);
+  const [checks, setChecks] = useState2(null);
+  const [checking, setChecking] = useState2(false);
   const checkSeq = useRef2(0);
   const loadChecks = useCallback(() => {
     const seq = ++checkSeq.current;
@@ -576,7 +591,7 @@ function NpmPage() {
     setLoadError(null);
     loadNpm();
   }, [loadNpm]);
-  useEffect2(() => {
+  useEffect3(() => {
     loadAll();
   }, [loadAll]);
   async function run(key, path, body, after) {
@@ -620,13 +635,13 @@ function NpmPage() {
       title: "Nginx Proxy Manager",
       description: "Proxy-Hosts, Zertifikate und wohin die Adressen f\xFChren.",
       actions: /* @__PURE__ */ jsxs2(Fragment2, { children: [
-        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx2("a", { href: SETTINGS_PATH, className: buttonClass("ghost"), children: "Einstellungen" }),
-        /* @__PURE__ */ jsx2(Button, { onClick: loadAll, children: "Aktualisieren" })
+        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx3("a", { href: SETTINGS_PATH, className: buttonClass("ghost"), children: "Einstellungen" }),
+        /* @__PURE__ */ jsx3(Button, { onClick: loadAll, children: "Aktualisieren" })
       ] }),
       children: [
-        loadError && /* @__PURE__ */ jsx2(Notice, { text: loadError, onClose: () => setLoadError(null) }),
-        message && /* @__PURE__ */ jsx2(Notice, { text: message.text, kind: message.kind, onClose: () => setMessage(null) }),
-        /* @__PURE__ */ jsx2("div", { className: "space-y-6", children: npm ? /* @__PURE__ */ jsx2(
+        loadError && /* @__PURE__ */ jsx3(Notice, { text: loadError, onClose: () => setLoadError(null) }),
+        message && /* @__PURE__ */ jsx3(Notice, { text: message.text, kind: message.kind, onClose: () => setMessage(null) }),
+        /* @__PURE__ */ jsx3("div", { className: "space-y-6", children: npm ? /* @__PURE__ */ jsx3(
           NpmSection,
           {
             data: npm,
@@ -638,7 +653,7 @@ function NpmPage() {
             checking,
             onStart: (h, c) => void startContainer(h, c)
           }
-        ) : !loadError && /* @__PURE__ */ jsx2(Card, { title: "Nginx Proxy Manager", children: /* @__PURE__ */ jsx2("p", { className: "text-sm text-white/50", children: "Lade \u2026" }) }) })
+        ) : !loadError && /* @__PURE__ */ jsx3(Card, { title: "Nginx Proxy Manager", children: /* @__PURE__ */ jsx3("p", { className: "text-sm text-white/50", children: "Lade \u2026" }) }) })
       ]
     }
   );

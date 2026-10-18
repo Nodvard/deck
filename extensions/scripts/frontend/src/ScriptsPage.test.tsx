@@ -100,7 +100,7 @@ describe("ScriptsPage Ausführungen", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Jetzt ausführen" }));
     await screen.findByText("1 Ziel(e) ausgeführt");
     expect(confirmDialog).toHaveBeenCalledWith(expect.stringContaining("Uptime"), expect.objectContaining({ danger: true }));
-    // Ein einziges Ziel: die Freigabe wartet wie bisher, ein kurzes Skript meldet sich gleich mit Ergebnis.
+    // Ein einziges Ziel: die Freigabe wartet, ein kurzes Skript meldet sich gleich mit Ergebnis.
     expect(calls.some((c) => c.url.endsWith("/actions/a1/approve"))).toBe(true);
     await waitFor(() => expect(calls.filter((c) => c.url.endsWith("/uptime/runs")).length).toBe(2));
   });

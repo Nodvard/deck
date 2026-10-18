@@ -8,6 +8,7 @@ import ipaddress
 import re
 import shlex
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 DEFAULT_WATCH_FILES = [
@@ -488,6 +489,12 @@ class Change:
 _CRITICAL_FILES = ("/etc/ld.so.preload", "authorized_keys", "/etc/sudoers", "/etc/passwd", "/etc/shadow")
 
 
+def guard_complete(output: str) -> bool:
+    """Ob die Abfrage bis zum Ende kam; fehlt der Datei-Abschnitt, hieße jede Datei fälschlich „gelöscht“."""
+    sections = _sections(output)
+    return "files" in sections and "end" in sections
+
+
 def diff_files(accepted: dict[str, dict[str, Any]], current: dict[str, FileEntry]) -> list[Change]:
     changes: list[Change] = []
     for path, entry in current.items():
@@ -524,6 +531,110 @@ def diff_files(accepted: dict[str, dict[str, Any]], current: dict[str, FileEntry
             changes.append(Change(path=path, change="removed", severity="warning" if any(k in path for k in _CRITICAL_FILES) else "info",
                                   note="gelöscht"))
     return changes
+
+
+# --- Eigene Einrichtung durch Nodvard Deck ---
+
+# Welche Aktion des Einrichtungsbefehls (laut seiner Ausgabe) eine Konto-Datei ändern darf.
+_SETUP_ACCOUNT_ACTIONS = {
+    "/etc/passwd": {"user_created"}, "/etc/shadow": {"user_created"},
+    "/etc/group": {"user_created", "groups_added"}, "/etc/gshadow": {"user_created", "groups_added"},
+}
+_SETUP_USER_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
+
+
+@dataclass(frozen=True)
+class SetupRun:
+    """Der letzte Lauf des Einrichtungsbefehls durch Nodvard Deck (`Host.metadata["setup_run"]`, vom Kern)."""
+
+    start: float
+    end: float
+    key: str
+    user: str
+    actions: frozenset[str]
+    files: dict[str, Any]
+    sudoers: dict[str, Any]
+    legacy_sudoers: dict[str, Any]
+
+
+def _timestamp(value: Any) -> float:
+    moment = datetime.fromisoformat(value)
+    return (moment if moment.tzinfo else moment.replace(tzinfo=UTC)).timestamp()
+
+
+def setup_run(metadata: dict[str, Any] | None) -> SetupRun | None:
+    run = (metadata or {}).get("setup_run")
+    if not isinstance(run, dict):
+        return None
+    try:
+        start, end = _timestamp(run["from"]), _timestamp(run["to"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    user, actions = run.get("user"), run.get("actions")
+
+    def mapping(key: str) -> dict[str, Any]:
+        value = run.get(key)
+        return value if isinstance(value, dict) else {}
+
+    return SetupRun(
+        start=start, end=end, key=str(run["to"]), user=user if isinstance(user, str) else "",
+        actions=frozenset(a for a in actions if isinstance(a, str)) if isinstance(actions, list) else frozenset(),
+        files=mapping("files"), sudoers=mapping("sudoers"), legacy_sudoers=mapping("legacy_sudoers"),
+    )
+
+
+def _keys_file(user: str) -> str:
+    return "/root/.ssh/authorized_keys" if user == "root" else f"/home/{user}/.ssh/authorized_keys"
+
+
+def _same(entry: FileEntry | dict[str, Any] | None, state: Any) -> bool:
+    """Gleicher Stand wie gemeldet (Prüfsumme, Rechte, Besitzer), oder beide fehlen."""
+    if entry is None or state is None:
+        return entry is None and state is None
+    if not isinstance(state, dict):
+        return False
+    if isinstance(entry, FileEntry):
+        values = (entry.sha256, entry.mode, entry.owner)
+    else:
+        values = (entry.get("sha256"), entry.get("mode"), entry.get("owner"))
+    return values == (state.get("sha256"), state.get("mode"), state.get("owner"))
+
+
+def adopted_by_setup(change: Change, entry: FileEntry | None, old: dict[str, Any] | None, run: SetupRun) -> bool:
+    """Stammt die Änderung nachweislich von der eigenen Einrichtung? Nur genau das, was der Befehl gemeldet hat:
+    Konto-Dateien und die Schlüsseldatei mit dem Stand vorher und nachher (bestätigter Stand = vorher, jetzt = nachher)
+    und der passenden Aktion, die eigenen sudo-Regeln mit genau dem Inhalt, den der Kern schreibt, die alte
+    `lattice-<Benutzer>` nur gelöscht. Was nur Rechte oder Besitzer ändert, übernimmt der Wächter nie still."""
+    user, path = run.user, change.path
+    if not _SETUP_USER_RE.fullmatch(user):
+        return False
+    if old is not None and entry is not None and old.get("sha256") == entry.sha256:
+        return False
+    name = path.rsplit("/", 1)[-1]
+    if path.startswith("/etc/sudoers.d/"):
+        if entry is None:
+            expected = run.legacy_sudoers.get(path)
+            return (
+                name == f"lattice-{user}" and "legacy_rule_removed" in run.actions
+                and old is not None and isinstance(expected, str) and old.get("sha256") == expected
+            )
+        own = name == f"nodvard-{user}" or re.fullmatch(rf"nodvard_[a-z][a-z0-9-]{{1,63}}_{re.escape(user)}", name)
+        expected = run.sudoers.get(path)
+        return bool(own) and isinstance(expected, str) and entry.sha256 == expected and (entry.mode, entry.owner) == ("440", "root")
+    keys_file = path == _keys_file(user)
+    if path in _SETUP_ACCOUNT_ACTIONS:
+        allowed = bool(_SETUP_ACCOUNT_ACTIONS[path] & run.actions)
+    else:
+        allowed = keys_file and "key_added" in run.actions
+    state = run.files.get(path)
+    if not allowed or entry is None or not isinstance(state, dict) or "before" not in state or "after" not in state:
+        return False
+    if not _same(entry, state["after"]) or not _same(old, state["before"]):
+        return False
+    if old is None or (old.get("mode"), old.get("owner")) != (entry.mode, entry.owner):
+        # Neu angelegt oder andere Rechte: nur die eigene Schlüsseldatei, so wie der Befehl sie setzt.
+        return keys_file and entry.mode == "600" and entry.owner == user
+    return True
 
 
 def file_entry_dict(e: FileEntry) -> dict[str, Any]:

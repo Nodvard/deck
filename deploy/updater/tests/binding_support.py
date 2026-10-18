@@ -1,5 +1,5 @@
-"""Bausteine fuer Tests mit aendernden Engine-Aufrufen: ein Journal in jedem Schritt, ein Slot, und die Bindung des
-Clients zusammen mit dem passenden Waechter der Fake-Engine (`bound`).
+"""Bausteine für Tests mit ändernden Engine-Aufrufen: ein Journal in jedem Schritt, ein Slot, und die Bindung des
+Clients zusammen mit dem passenden Wächter der Fake-Engine (`bound`).
 
 Die IDs sind bewusst verschieden und sprechend: `OLD` (das Ziel vor dem Vorgang), `NEW` (der angelegte Container),
 `OWN` (der Helfer selbst), `OTHER` (ein beliebiger fremder Container) und entsprechend die Images und Digests.
@@ -45,9 +45,9 @@ ROLLBACK_VERSIONS = ("0.7.1", "0.7.0")
 def journal_at(step: str = "begin", action: str = "update", *, tag_text: str = TAG_TEXT,
                restart: tuple[str, int] = RESTART, repository: str = policy.REPOSITORY, undo: bool = False,
                code: str | None = None) -> Journal:
-    """Ein gueltiges Journal im Schritt `step`. Beim Update ist `new` das gezogene Image (mit Digest), beim Rueckweg der
-    Vorgaenger aus dem Slot (ohne Digest); ab `created` steht der neue Container darin. `undo`: der Rueckbau ist
-    angekuendigt (mit dem Grund `code`)."""
+    """Ein gültiges Journal im Schritt `step`. Beim Update ist `new` das gezogene Image (mit Digest), beim Rückweg der
+    Vorgänger aus dem Slot (ohne Digest); ab `created` steht der neue Container darin. `undo`: der Rückbau ist
+    angekündigt (mit dem Grund `code`)."""
     old_version, new_version = UPDATE_VERSIONS if action == "update" else ROLLBACK_VERSIONS
     old = OldContainer(id=OLD, name=NAME, image_id=OLD_IMAGE, version=old_version, restart_policy=restart,
                        tag_text=tag_text, repo_digest=repository + "@" + OLD_DIGEST)
@@ -66,8 +66,8 @@ def journal_at(step: str = "begin", action: str = "update", *, tag_text: str = T
 
 
 def slot_for(action: str = "update", **changes: Any) -> policy.Slot:
-    """Der Slot, der zu einem Vorgang gehoert: beim Update der, den der Commit ersetzt (von 0.6.9 auf das laufende
-    0.7.0), beim Rueckweg der, der benutzt wird (von 0.7.0 auf das laufende 0.7.1)."""
+    """Der Slot, der zu einem Vorgang gehört: beim Update der, den der Commit ersetzt (von 0.6.9 auf das laufende
+    0.7.0), beim Rückweg der, der benutzt wird (von 0.7.0 auf das laufende 0.7.1)."""
     values: dict[str, Any] = {
         "from_version": "0.6.9" if action == "update" else "0.7.0",
         "image_id": PREV_IMAGE, "repo_digest": policy.REPOSITORY + "@" + PREV_DIGEST,
@@ -81,7 +81,7 @@ def slot_for(action: str = "update", **changes: Any) -> policy.Slot:
 
 def bound(fake: FakeEngine, engine: E.Engine, journal: Journal | None, *, slot: policy.Slot | None = None,
           own_id: str = OWN, **options: Any) -> E.Binding:
-    """Die Bindung des Clients fuer `journal` -- und derselbe Stand als Waechter der Fake-Engine, als staende er so
+    """Die Bindung des Clients für `journal` -- und derselbe Stand als Wächter der Fake-Engine, als stände er so
     auf der Platte."""
     binding = engine.bind(journal, own_id, slot=slot, **options)
     fake.guard = JournalGuard.fixed(own_id, None if journal is None else journal.to_json(),

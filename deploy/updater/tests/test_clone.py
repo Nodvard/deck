@@ -4,14 +4,14 @@
   containerd-Store) aufgezeichnet wurden: API 1.54, 1.43 (Format wie Synology/Docker 24) und 1.41, dazu ein zweites
   Projekt mit benanntem Volume, Image ohne Tag und nur einem Netz (wie ein Portainer-Stack unter `/data/compose/3`).
 * **Echte Paare** alt/neu (`*-pair.json`): der neue Container wurde an der echten Engine mit dem Body aus
-  `clone.build` angelegt, verbunden und gestartet -- `clone.verify` muss beide Staende annehmen und jede
-  Verfaelschung ablehnen. Die Paare entstanden **vor** der Aenderung, die veroeffentlichte Ports in
-  `ExposedPorts` belaesst; ihr Body hatte also noch kein `ExposedPorts`. Mit dem heutigen Body ist das Ergebnis
-  gleich, weil beide Images 8080 per `EXPOSE` erklaeren. Den heutigen Body hat noch keine echte Engine angelegt
-  (die synthetischen Tests unten decken ihn ab); bei der naechsten Aufzeichnung mit `tools/record_engine.py` die
+  `clone.build` angelegt, verbunden und gestartet -- `clone.verify` muss beide Stände annehmen und jede
+  Verfälschung ablehnen. Die Paare entstanden **vor** der Änderung, die veröffentlichte Ports in
+  `ExposedPorts` belässt; ihr Body hatte also noch kein `ExposedPorts`. Mit dem heutigen Body ist das Ergebnis
+  gleich, weil beide Images 8080 per `EXPOSE` erklären. Den heutigen Body hat noch keine echte Engine angelegt
+  (die synthetischen Tests unten decken ihn ab); bei der nächsten Aufzeichnung mit `tools/record_engine.py` die
   Paare neu erzeugen.
 * **Synthetisch** jede Regel aus `clone.py` (Config, HostConfig, Netze, Nachkontrolle), mit einer Nachbildung des
-  Zusammenfuehrens im Docker-Dienst (`simulate_create`, nach moby `daemon/commit.go` `merge()`).
+  Zusammenführens im Docker-Dienst (`simulate_create`, nach moby `daemon/commit.go` `merge()`).
 """
 
 from __future__ import annotations
@@ -158,7 +158,7 @@ def _key(entry):
 
 def simulate_create(plan, new_image, new_id=NEW_ID, *, old=None, started=False, short_id_alias=False):
     """Was der Docker-Dienst aus dem Body macht (moby `merge()`): Nutzerwerte gewinnen, der Rest kommt aus dem
-    neuen Image. Volumes aus `VOLUME`, die nicht eingehaengt sind, werden neue anonyme Volumes."""
+    neuen Image. Volumes aus `VOLUME`, die nicht eingehängt sind, werden neue anonyme Volumes."""
     body = copy.deepcopy(plan.body)
     nic = new_image["Config"]
     config = {k: v for k, v in body.items() if k not in ("HostConfig", "NetworkingConfig")}
@@ -256,10 +256,10 @@ def test_recorded_body_rules(name):
     assert body["Labels"][clone.COMPOSE_IMAGE_LABEL] == new_image_id
     assert body["Labels"]["com.docker.compose.service"] == "nodvard-deck"
     assert "Volumes" not in body
-    assert body["ExposedPorts"] == {"8080/tcp": {}}  # der veroeffentlichte Port bleibt, obwohl das Image ihn erklaert
-    assert body["Image"] == target["Config"]["Image"]  # unveraenderter Tag-Text
+    assert body["ExposedPorts"] == {"8080/tcp": {}}  # der veröffentlichte Port bleibt, obwohl das Image ihn erklärt
+    assert body["Image"] == target["Config"]["Image"]  # unveränderter Tag-Text
     endpoints = body["NetworkingConfig"]["EndpointsConfig"]
-    assert list(endpoints) == [target["HostConfig"]["NetworkMode"]]  # genau ein Endpunkt, das Primaernetz
+    assert list(endpoints) == [target["HostConfig"]["NetworkMode"]]  # genau ein Endpunkt, das Primärnetz
     for endpoint in [*endpoints.values(), *(c[1] for c in plan.connects)]:
         assert target["Id"][:12] not in endpoint.get("Aliases", [])
         assert not {"NetworkID", "EndpointID", "Gateway", "IPAddress", "MacAddress", "DNSNames"} & set(endpoint)
@@ -282,7 +282,7 @@ def test_recorded_named_volume_needs_no_extra_mount():
     plan = clone.build(target, image, new_image_id=new_image_id, api_version=api, network_drivers=drivers)
     assert "Mounts" not in plan.body["HostConfig"]
     assert "u2stack_data:/app/data:rw" in plan.body["HostConfig"]["Binds"]
-    assert plan.body["Image"] == policy.REPOSITORY  # ohne Tag: gilt als latest, bleibt aber unveraendert
+    assert plan.body["Image"] == policy.REPOSITORY  # ohne Tag: gilt als latest, bleibt aber unverändert
 
 
 def test_recorded_api143_aliases_contain_the_short_id_but_the_body_does_not():
@@ -304,12 +304,12 @@ def test_recorded_anonymous_compose_volume_keeps_its_volume():
     plan = clone.build(target, image, new_image_id=new_image_id, api_version=api, network_drivers=drivers)
     mounts = plan.body["HostConfig"]["Mounts"]
     assert {"Type": "volume", "Source": data["Name"], "Target": "/app/data", "VolumeOptions": {}} in mounts
-    assert [m["Target"] for m in mounts].count("/app/data") == 1  # nicht noch einmal als anonymes Volume angehaengt
+    assert [m["Target"] for m in mounts].count("/app/data") == 1  # nicht noch einmal als anonymes Volume angehängt
 
 
 def test_recorded_anonymous_compose_volume_pair():
     # An der echten Engine angelegt und gestartet: /app/data ist dasselbe Volume wie vorher, sonst lehnt die
-    # Nachkontrolle ab. Ohne die Ergaenzung der Source (der naive Klon) bekaeme der neue ein frisches Volume.
+    # Nachkontrolle ab. Ohne die Ergänzung der Source (der naive Klon) bekäme der neue ein frisches Volume.
     data, plan = pair("docker29-api154-anon-pair")
     old_data = clone.mount_map(data["old"])["/app/data"]
     for stage in ("created", "started"):
@@ -326,7 +326,7 @@ def test_recorded_anonymous_compose_volume_pair():
 def test_recorded_tmpfs_and_extra_hosts_are_kept():
     _, target, image, new_image_id, drivers, api = recorded("docker29-api154")
     plan = clone.build(target, image, new_image_id=new_image_id, api_version=api, network_drivers=drivers)
-    assert plan.body["HostConfig"]["Tmpfs"] == {"/tmp/u2": ""}  # leerer Wert, Bedeutung im Schluessel
+    assert plan.body["HostConfig"]["Tmpfs"] == {"/tmp/u2": ""}  # leerer Wert, Bedeutung im Schlüssel
     assert plan.body["HostConfig"]["ExtraHosts"] == ["u2probe.local:127.0.0.1"]
 
 
@@ -372,7 +372,7 @@ def test_fixtures_are_scrubbed():
         for what, pattern in FORBIDDEN_IN_FIXTURES.items():
             assert not pattern.search(text), (path.name, what)
         data = json.loads(text)
-        assert tool.find_leaks(data) == [], path.name  # dieselbe Suche, mit der das Werkzeug seine Aufnahme prueft
+        assert tool.find_leaks(data) == [], path.name  # dieselbe Suche, mit der das Werkzeug seine Aufnahme prüft
         walk(data, path.name)
 
 
@@ -514,20 +514,20 @@ def test_env_without_the_image_entries():
     body = build(container(**{"Config.Env": ["NODVARD_DECK_AUDIT_RETENTION_DAYS=90", "PATH=/usr/local/bin:/usr/bin",
                                              "NODVARD_DECK_ENV=dev", "PYTHON_VERSION=3.12.14",
                                              "NODVARD_DECK_JWT_SECRET=x"]})).body
-    # Nutzerwerte bleiben (auch ein vom Image abweichender Wert), exakt gleiche Image-Eintraege fallen weg.
+    # Nutzerwerte bleiben (auch ein vom Image abweichender Wert), exakt gleiche Image-Einträge fallen weg.
     assert body["Env"] == ["NODVARD_DECK_AUDIT_RETENTION_DAYS=90", "NODVARD_DECK_ENV=dev", "NODVARD_DECK_JWT_SECRET=x"]
 
 
 def test_plan_repr_does_not_reveal_environment_values():
-    # Der Body enthaelt die Umgebungswerte im Klartext. Landet ein `Plan` einmal in einer Fehlermeldung oder in einer
-    # Protokollzeile (`repr`, `str`, f-String, `%r`), duerfen die Geheimnisse nicht mitkommen.
+    # Der Body enthält die Umgebungswerte im Klartext. Landet ein `Plan` einmal in einer Fehlermeldung oder in einer
+    # Protokollzeile (`repr`, `str`, f-String, `%r`), dürfen die Geheimnisse nicht mitkommen.
     inspect = container(**{"Config.Env": ["NODVARD_DECK_JWT_SECRET=" + SECRET]})
     inspect["NetworkSettings"]["Networks"]["deck_front"]["DriverOpts"] = {"token": SECRET + "-opt"}
     plan = build(inspect)
     assert plan.connects and SECRET in json.dumps(plan.body) and SECRET in json.dumps(plan.connects)  # sie sind drin
     for text in (repr(plan), str(plan), f"{plan}", f"{plan!r}", repr([plan]), repr({"plan": plan})):
         assert SECRET not in text
-        assert plan.name in text  # der Name genuegt zum Zuordnen in einem Protokoll
+        assert plan.name in text  # der Name genügt zum Zuordnen in einem Protokoll
 
 
 def test_env_value_equal_to_the_old_default_follows_the_new_image():
@@ -538,12 +538,12 @@ def test_env_value_equal_to_the_old_default_follows_the_new_image():
 
 def test_labels():
     inspect = container()
-    inspect["Config"]["Labels"]["org.opencontainers.image.source"] = "other"  # Nutzer hat ueberschrieben
+    inspect["Config"]["Labels"]["org.opencontainers.image.source"] = "other"  # Nutzer hat überschrieben
     inspect["Config"]["Labels"]["com.docker.compose.extra"] = "x"
     image = image_config(Labels={policy.VERSION_LABEL: "0.7.0", "org.opencontainers.image.source": "x",
                                  "com.docker.compose.extra": "x"})
     labels = build(inspect, image).body["Labels"]
-    assert policy.VERSION_LABEL not in labels                    # gleich im Image: faellt weg
+    assert policy.VERSION_LABEL not in labels                    # gleich im Image: fällt weg
     assert labels["org.opencontainers.image.source"] == "other"  # abweichend: bleibt
     assert labels["com.docker.compose.extra"] == "x"             # Compose-Labels bleiben immer
     assert labels[clone.COMPOSE_IMAGE_LABEL] == NEW_IMAGE        # = neue Image-ID
@@ -558,7 +558,7 @@ def test_compose_image_label_only_when_present():
 
 @pytest.mark.parametrize(("changes", "kept"), [
     ({}, False),                                                  # Kurz-ID: weglassen
-    ({"Config.Hostname": "deck"}, True),                          # eigener Name: uebernehmen
+    ({"Config.Hostname": "deck"}, True),                          # eigener Name: übernehmen
     ({"Config.Hostname": "deck", "HostConfig.NetworkMode": "host"}, False),
     ({"Config.Hostname": "deck", "HostConfig.NetworkMode": "container:" + "7" * 64}, False),
     ({"Config.Hostname": "deck", "HostConfig.UTSMode": "host"}, False),
@@ -591,7 +591,7 @@ def test_copied_fields():
 
 
 def test_exposed_ports_and_volumes_without_the_image_keys():
-    # Ohne veroeffentlichten Port gilt die Regel der Config: Schluessel des alten Images fallen heraus.
+    # Ohne veröffentlichten Port gilt die Regel der Config: Schlüssel des alten Images fallen heraus.
     inspect = container(**{"Config.ExposedPorts": {"8080/tcp": {}, "9000/udp": {}},
                            "Config.Volumes": {"/app/data": {}, "/extra": {}}, "HostConfig.PortBindings": None})
     body = build(inspect).body
@@ -600,16 +600,16 @@ def test_exposed_ports_and_volumes_without_the_image_keys():
 
 
 def test_published_ports_stay_in_exposed_ports_even_when_the_old_image_exposes_them():
-    # Compose schreibt jeden Port aus `ports:` auch in `ExposedPorts`; der Docker-Dienst (vor 29) veroeffentlicht
-    # einen Eintrag aus `PortBindings` nur, wenn der Port dort steht. Wuerde der Klon ihn "herausrechnen", haengt der
+    # Compose schreibt jeden Port aus `ports:` auch in `ExposedPorts`; der Docker-Dienst (vor 29) veröffentlicht
+    # einen Eintrag aus `PortBindings` nur, wenn der Port dort steht. Würde der Klon ihn "herausrechnen", hängt der
     # Zugang von `EXPOSE` im NEUEN Image ab.
     inspect = container(**{"Config.ExposedPorts": {"8080/tcp": {}, "9000/udp": {}, "7000/tcp": {}},
                            "HostConfig.PortBindings": {"8080/tcp": [{"HostIp": "", "HostPort": "8080"}],
                                                        "9000/udp": [{"HostIp": "", "HostPort": "9000"}]}})
     image = image_config(ExposedPorts={"8080/tcp": {}, "7000/tcp": {}})
     body = build(inspect, image).body
-    # 8080 (veroeffentlicht, im Image) bleibt, 9000 (nicht im Image) bleibt, 7000 (nur im Image, nicht veroeffentlicht)
-    # faellt wie bisher heraus.
+    # 8080 (veröffentlicht, im Image) bleibt, 9000 (nicht im Image) bleibt, 7000 (nur im Image, nicht veröffentlicht)
+    # fällt wie bisher heraus.
     assert body["ExposedPorts"] == {"8080/tcp": {}, "9000/udp": {}}
     assert body["HostConfig"]["PortBindings"] == inspect["HostConfig"]["PortBindings"]
     Engine()._check_create_body(body)
@@ -617,13 +617,13 @@ def test_published_ports_stay_in_exposed_ports_even_when_the_old_image_exposes_t
 
 def test_new_image_without_expose_keeps_the_published_port():
     old = container()
-    image = new_image(ExposedPorts=None)  # eine spaetere Version erklaert den Port nicht mehr
+    image = new_image(ExposedPorts=None)  # eine spätere Version erklärt den Port nicht mehr
     plan = build(old)
     new = simulate_create(plan, image, old=old)
     assert "8080/tcp" in new["Config"]["ExposedPorts"]
     clone.verify(old, new, plan, new_image=image, new_image_id=NEW_IMAGE)
     # Der naive Klon (ohne den Port im Body) verliert ihn: das Ergebnis passt zum erwarteten `Image + Body`, nur die
-    # Nachkontrolle auf veroeffentlichte Ports merkt es.
+    # Nachkontrolle auf veröffentlichte Ports merkt es.
     naive = clone.Plan(name=plan.name, body={k: v for k, v in plan.body.items() if k != "ExposedPorts"},
                        connects=plan.connects)
     lost = simulate_create(naive, image, old=old)
@@ -633,9 +633,9 @@ def test_new_image_without_expose_keeps_the_published_port():
 
 
 def test_verify_wants_published_ports_to_stay_exposed():
-    # Nur diese Regel darf hier greifen: Body und neues Image erklaeren den Port beide nicht, das Ergebnis passt also
-    # genau zu `Image + Body` (die Gleichheitspruefung in `_verify_config` ist zufrieden). Allein die Regel fuer
-    # veroeffentlichte Ports sieht, dass der alte Container 8080 veroeffentlicht hat und der neue ihn nicht erklaert.
+    # Nur diese Regel darf hier greifen: Body und neues Image erklären den Port beide nicht, das Ergebnis passt also
+    # genau zu `Image + Body` (die Gleichheitsprüfung in `_verify_config` ist zufrieden). Allein die Regel für
+    # veröffentlichte Ports sieht, dass der alte Container 8080 veröffentlicht hat und der neue ihn nicht erklärt.
     old = container()
     image = new_image(ExposedPorts=None)
     plan = build(old)
@@ -649,7 +649,7 @@ def test_verify_wants_published_ports_to_stay_exposed():
 
 
 def test_verify_refuses_a_foreign_exposed_port_by_equality():
-    # Die andere Seite: ein Port, der weder im Image noch im Body steht, faellt in der Gleichheitspruefung auf.
+    # Die andere Seite: ein Port, der weder im Image noch im Body steht, fällt in der Gleichheitsprüfung auf.
     old = container()
     plan = build(old)
     image = new_image()
@@ -659,7 +659,7 @@ def test_verify_refuses_a_foreign_exposed_port_by_equality():
 
 
 def test_a_port_the_old_container_never_exposed_is_no_reason_to_refuse():
-    # PortBindings ohne ExposedPorts beim alten (so veroeffentlichte schon der alte nichts): kein Fehlalarm.
+    # PortBindings ohne ExposedPorts beim alten (so veröffentlichte schon der alte nichts): kein Fehlalarm.
     old = container(**{"Config.ExposedPorts": None, "HostConfig.PortBindings": {"8080/tcp": [{"HostPort": "8080"}]}})
     image = new_image(ExposedPorts=None)
     plan = build(old, image_config(ExposedPorts=None))
@@ -731,7 +731,7 @@ def test_hostconfig_fields_are_copied_unchanged():
     inspect["HostConfig"] = {**values, "AutoRemove": False}
     body = build(inspect).body
     assert body["HostConfig"] == values
-    Engine()._check_create_body(body)  # jedes Feld, das `build` aus HOST_COPY uebernimmt, darf zum Engine-Client
+    Engine()._check_create_body(body)  # jedes Feld, das `build` aus HOST_COPY übernimmt, darf zum Engine-Client
 
 
 def test_hostconfig_drop_list():
@@ -746,7 +746,7 @@ def test_hostconfig_drop_list():
 @pytest.mark.parametrize("field", clone.HOST_PATHS)
 def test_explicitly_empty_system_paths_are_sent_as_empty(field):
     # `systempaths=unconfined` kommt im Inspect als `[]` an. Ohne dieses `[]` im Body setzte der Daemon die
-    # Standardliste: der Klon waere stillschweigend strenger (anders als der alte).
+    # Standardliste: der Klon wäre stillschweigend strenger (anders als der alte).
     plan = build(container(**{f"HostConfig.{field}": []}))
     assert plan.body["HostConfig"][field] == []
     for other in set(clone.HOST_PATHS) - {field}:
@@ -774,7 +774,7 @@ def test_verify_wants_at_least_the_paths_of_the_old_container(field):
     new = simulate_create(plan, image, old=old)  # der Daemon setzt seine Standardliste, ohne `/proc/extra`
     exc = refusal(clone.verify, old, new, plan, new_image=image, new_image_id=NEW_IMAGE)
     assert (exc.code, exc.detail) == (policy.CLONE_MISMATCH, clone._detail(field))
-    new["HostConfig"][field] = ["/proc/extra", "/proc/kcore", "/sys/devices/virtual/powercap"]  # laenger ist in Ordnung
+    new["HostConfig"][field] = ["/proc/extra", "/proc/kcore", "/sys/devices/virtual/powercap"]  # länger ist in Ordnung
     clone.verify(old, new, plan, new_image=image, new_image_id=NEW_IMAGE)
     for bad in ([], None, "x", [1]):
         new["HostConfig"][field] = bad
@@ -793,10 +793,10 @@ def test_verify_keeps_unconfined_unconfined(field):
     new = simulate_create(plan, image, old=old)
     assert new["HostConfig"][field] == []
     clone.verify(old, new, plan, new_image=image, new_image_id=NEW_IMAGE)
-    new["HostConfig"][field] = ["/proc/kcore"]  # der Klon waere stillschweigend strenger
+    new["HostConfig"][field] = ["/proc/kcore"]  # der Klon wäre stillschweigend strenger
     assert refusal(clone.verify, old, new, plan, new_image=image, new_image_id=NEW_IMAGE).detail == \
         clone._detail(field)
-    # `null` hiesse beim neuen Container die Standardliste des Daemons: auch das ist strenger als `[]`.
+    # `null` hieße beim neuen Container die Standardliste des Daemons: auch das ist strenger als `[]`.
     new["HostConfig"][field] = None
     assert refusal(clone.verify, old, new, plan, new_image=image, new_image_id=NEW_IMAGE).detail == \
         clone._detail(field)
@@ -805,7 +805,7 @@ def test_verify_keeps_unconfined_unconfined(field):
 @pytest.mark.parametrize("field", clone.HOST_PATHS)
 @pytest.mark.parametrize("old_value", [[], None, ["/proc/kcore"]])
 def test_verify_refuses_broken_path_values(field, old_value):
-    # Auch gegen einen alten Wert, bei dem die Teilmengen-Pruefung allein nichts abfaengt (`[]`, `null`).
+    # Auch gegen einen alten Wert, bei dem die Teilmengen-Prüfung allein nichts abfängt (`[]`, `null`).
     old = container(**{f"HostConfig.{field}": old_value})
     plan = build(old)
     image = new_image()
@@ -826,18 +826,18 @@ def test_null_paths_mean_the_default_list_not_no_masks(field):
     new = simulate_create(plan, image, old=old)
     assert new["HostConfig"][field]  # die Standardliste des Daemons
     clone.verify(old, new, plan, new_image=image, new_image_id=NEW_IMAGE)
-    new["HostConfig"][field] = None  # auch `null` beim neuen heisst Standardliste
+    new["HostConfig"][field] = None  # auch `null` beim neuen heißt Standardliste
     clone.verify(old, new, plan, new_image=image, new_image_id=NEW_IMAGE)
     new["HostConfig"][field] = ["/proc/kcore", "/proc/extra"]
     clone.verify(old, new, plan, new_image=image, new_image_id=NEW_IMAGE)
-    new["HostConfig"][field] = []  # ein Klon ohne Masken waere stillschweigend lockerer als der alte
+    new["HostConfig"][field] = []  # ein Klon ohne Masken wäre stillschweigend lockerer als der alte
     exc = refusal(clone.verify, old, new, plan, new_image=image, new_image_id=NEW_IMAGE)
     assert (exc.code, exc.detail) == (policy.CLONE_MISMATCH, clone._detail(field))
 
 
 def test_verify_ignores_system_paths_of_privileged_containers():
     # Ein privilegierter Container hat der Daemon nie maskiert; `build` schickt die Listen nicht mit, und der neue
-    # Container hat sie auch nicht. Ohne die Ausnahme in `verify` wuerde `/proc/extra` fehlen und der Klon abgelehnt.
+    # Container hat sie auch nicht. Ohne die Ausnahme in `verify` würde `/proc/extra` fehlen und der Klon abgelehnt.
     privileged = {"HostConfig.Privileged": True, "HostConfig.MaskedPaths": ["/proc/kcore", "/proc/extra"],
                   "HostConfig.ReadonlyPaths": ["/proc/sys"]}
     old = container(**privileged)
@@ -903,8 +903,8 @@ def test_covered_volume_is_not_added_again(cover):
 
 
 def test_single_path_bind_is_an_anonymous_volume_and_refused():
-    # Live geprueft (Docker 29.3): `Binds: ["/pfad"]` legt ein anonymes Volume an. Unveraendert gesendet bekaeme der
-    # Klon ein neues, leeres -- das soll schon die Vorpruefung melden, nicht erst die Nachkontrolle.
+    # Live geprüft (Docker 29.3): `Binds: ["/pfad"]` legt ein anonymes Volume an. Unverändert gesendet bekäme der
+    # Klon ein neues, leeres -- das soll schon die Vorprüfung melden, nicht erst die Nachkontrolle.
     inspect = container(**{"HostConfig.Binds": ["deck_updater:/app/updater:rw", "/app/data"]})
     exc = refusal(build, inspect)
     assert (exc.code, exc.detail) == (policy.UNKNOWN_FIELD, "binds")
@@ -1014,7 +1014,7 @@ def test_primary_network_by_id():
     {"NetworkSettings": None},
     {"NetworkSettings.Networks.deck_back.NetworkID": ""},
     {"NetworkSettings.Networks.deck_back.NetworkID": "short"},
-    {"NetworkSettings.Networks.deck_front.NetworkID": NET_B},  # zwei Treffer fuer das Primaernetz
+    {"NetworkSettings.Networks.deck_front.NetworkID": NET_B},  # zwei Treffer für das Primärnetz
     {"NetworkSettings.Networks.deck_front": "x"},
 ])
 def test_unclear_networks_are_refused(changes):
@@ -1190,8 +1190,8 @@ def test_verify_rejects(change, detail):
 
 @pytest.mark.parametrize("path", clone.REQUIRED_MOUNTS)
 def test_verify_needs_data_and_channel_mounts(path):
-    # Daten und Kanal (/app/data und /app/updater) muessen eingehaengt sein: fehlt einer schon beim alten (Daten in
-    # der Container-Schicht, kein Kanal) und bringt das neue Image dort ein anonymes Volume mit, ist das kein gueltiger
+    # Daten und Kanal (/app/data und /app/updater) müssen eingehängt sein: fehlt einer schon beim alten (Daten in
+    # der Container-Schicht, kein Kanal) und bringt das neue Image dort ein anonymes Volume mit, ist das kein gültiger
     # Klon.
     old = container()
     old["Mounts"] = [m for m in old["Mounts"] if m["Destination"] != path]
@@ -1199,7 +1199,7 @@ def test_verify_needs_data_and_channel_mounts(path):
     plan = build(old)
     image = new_image(Volumes={"/app/data": {}, "/app/updater": {}})
     new = simulate_create(plan, image, old=old)
-    assert path in clone.mount_map(new)  # das neue Image haengt dort ein frisches Volume ein
+    assert path in clone.mount_map(new)  # das neue Image hängt dort ein frisches Volume ein
     exc = refusal(clone.verify, old, new, plan, new_image=image, new_image_id=NEW_IMAGE)
     assert (exc.code, exc.detail) == (policy.CLONE_MISMATCH, "mounts")
 
@@ -1340,8 +1340,8 @@ def test_record_tool_scrubs_paths_addresses_and_hostnames():
     for private in PRIVATE_VALUES:
         assert private not in text, private
     assert tool.find_leaks(scrubbed) == []
-    assert tool.find_leaks(data) != []  # die Gegenprobe selbst schlaegt bei den Rohdaten an
-    assert data == private_inspect()  # die Eingabe bleibt unveraendert
+    assert tool.find_leaks(data) != []  # die Gegenprobe selbst schlägt bei den Rohdaten an
+    assert data == private_inspect()  # die Eingabe bleibt unverändert
 
 
 def test_record_tool_scrubbing_keeps_what_the_helper_depends_on():
@@ -1356,19 +1356,19 @@ def test_record_tool_scrubbing_keeps_what_the_helper_depends_on():
     files = labels["com.docker.compose.project.config_files"].split(",")
     assert len(files) == 2 and all(f.startswith(workdir + "/") for f in files)
     assert labels["com.docker.compose.project.environment_file"].startswith(workdir + "/")
-    # der Docker-Socket (auch unter anderem Pfad, das Ziel prueft auf den Namen), Volume-Namen und der
-    # Standardordner des Docker-Dienstes bleiben, damit die Vorpruefung dieselben Schluesse zieht
+    # der Docker-Socket (auch unter anderem Pfad, das Ziel prüft auf den Namen), Volume-Namen und der
+    # Standardordner des Docker-Dienstes bleiben, damit die Vorprüfung dieselben Schlüsse zieht
     assert host["Binds"][1] == "/var/run/docker.sock:/var/run/docker.sock" and host["Binds"][2] == "named_vol:/x"
     assert mounts[1]["Source"].endswith("/docker.sock") and "proxy" not in mounts[1]["Source"]
     assert mounts[2]["Source"] == "/var/lib/docker/volumes/named_vol/_data"
     assert host["Binds"][4].endswith(":/win") and "user" not in host["Binds"][4]
     assert host["Mounts"][1]["Source"] == "named_vol"  # ein Volume-Name als Quelle ist kein Pfad und bleibt
-    # Adressen: dieselbe Adresse -> dieselbe Ersetzung, dasselbe /24-Netz bleibt ein Netz, Laenge und Loopback bleiben
+    # Adressen: dieselbe Adresse -> dieselbe Ersetzung, dasselbe /24-Netz bleibt ein Netz, Länge und Loopback bleiben
     nic = out["NetworkSettings"]["Networks"]["back"]
     assert nic["IPAddress"] == nic["IPAMConfig"]["IPv4Address"] != "10.8.0.4"
     assert nic["IPAddress"].rpartition(".")[0] == nic["Gateway"].rpartition(".")[0] and nic["IPPrefixLen"] == 24
     assert nic["IPAddress"].endswith(".4") and nic["Gateway"].endswith(".1")
-    (subnet,) = out["Status"]["IPAM"]["Subnets"]  # auch ein Schluessel kann eine Adresse sein
+    (subnet,) = out["Status"]["IPAM"]["Subnets"]  # auch ein Schlüssel kann eine Adresse sein
     assert subnet == out["IPAM"]["Config"][0]["Subnet"] and subnet.endswith(".0/24")
     assert nic["DriverOpts"]["o"].startswith("addr=198.18.") and nic["DriverOpts"]["o"].endswith(",rw")
     assert host["ExtraHosts"][2].endswith(":127.0.0.1") and not host["ExtraHosts"][2].startswith("lokal")
@@ -1377,7 +1377,7 @@ def test_record_tool_scrubbing_keeps_what_the_helper_depends_on():
     assert host["PortBindings"]["8080/tcp"][0]["HostIp"].startswith("198.18.")
     # Rechnernamen: gleicher Name, gleiches Kennzeichen; die Kurz-ID als Hostname ist der Standard und bleibt
     assert config["Domainname"] == host["DnsSearch"][1] and config["Hostname"] != "meinserver"
-    # `DNSNames` und `Aliases` (aeltere API-Versionen) wiederholen den Hostname (ersetzt wie dort); Containername,
+    # `DNSNames` und `Aliases` (ältere API-Versionen) wiederholen den Hostname (ersetzt wie dort); Containername,
     # Alias und Kurz-ID bleiben
     assert nic["DNSNames"] == ["stack-web-1", "web", "a" * 12, config["Hostname"]]
     assert nic["Aliases"] == ["stack-web-1", "web", "a" * 12, config["Hostname"]]
@@ -1388,7 +1388,7 @@ def test_record_tool_scrubbing_keeps_what_the_helper_depends_on():
 
 
 def test_record_tool_dns_names_follow_the_hostname_in_any_order():
-    # Die Engine schreibt `Config` vor `NetworkSettings`; die Ersetzung in `DNSNames` haengt nicht daran.
+    # Die Engine schreibt `Config` vor `NetworkSettings`; die Ersetzung in `DNSNames` hängt nicht daran.
     inspect = {"NetworkSettings": {"Networks": {"n": {"DNSNames": ["stack-web-1", "meinserver"]}}},
                "Config": {"Hostname": "meinserver"}}
     out = _record_tool().Scrubber().walk(inspect)
@@ -1397,9 +1397,9 @@ def test_record_tool_dns_names_follow_the_hostname_in_any_order():
 
 
 def test_record_tool_aliases_follow_the_hostname_in_any_order():
-    # Bei aelteren API-Versionen haengt Docker die Kurz-ID und den eigenen Hostname eines Containers in
+    # Bei älteren API-Versionen hängt Docker die Kurz-ID und den eigenen Hostname eines Containers in
     # benutzerdefinierten Netzen auch an `Aliases` an (ein alter Docker-Dienst ohne `DNSNames` nennt ihn nur dort).
-    # Auch hier ersetzt, unabhaengig von der Reihenfolge.
+    # Auch hier ersetzt, unabhängig von der Reihenfolge.
     tool = _record_tool()
     short_id = "0123456789ab"
     inspect = {"NetworkSettings": {"Networks": {"n": {"Aliases": ["stack-web-1", "web", short_id, "meinserver"]},
@@ -1448,13 +1448,13 @@ def test_record_tool_does_not_flag_harmless_values(text):
     "host.docker.internal:host-gateway", "8080/tcp", "u2probe_back", "https://example.org/x:1",
 ])
 def test_record_tool_scrubber_leaves_other_text_alone(text):
-    # Nur gueltige Adressen werden ersetzt; Versionen, Zeitstempel, Pruefsummen und Pfade im Container bleiben.
+    # Nur gültige Adressen werden ersetzt; Versionen, Zeitstempel, Prüfsummen und Pfade im Container bleiben.
     assert _record_tool().Scrubber().text(text) == text
 
 
 def test_record_tool_output_has_no_host_details():
     # Von Anfang bis Ende: ein Rechner mit Heimatordner, Heimnetz-Adressen und eigenem Rechnernamen -- in der
-    # Aufnahme steht davon nichts, und die Zusammenhaenge (Binds gleich Mounts) bleiben.
+    # Aufnahme steht davon nichts, und die Zusammenhänge (Binds gleich Mounts) bleiben.
     from fake_engine import FakeEngine, World
     tool = _record_tool()
     world = World.from_fixture("docker29-api154")
@@ -1471,7 +1471,7 @@ def test_record_tool_output_has_no_host_details():
         endpoint["IPAddress"], endpoint["Gateway"] = "192.168.2.50", "192.168.2.1"
         endpoint["MacAddress"] = "3c:52:82:11:22:33"
         endpoint["DNSNames"] = [*(endpoint["DNSNames"] or []), "meinserver"]  # so meldet es die Engine
-        endpoint["Aliases"] = [*(endpoint["Aliases"] or []), "meinserver"]  # ... und aeltere API-Versionen
+        endpoint["Aliases"] = [*(endpoint["Aliases"] or []), "meinserver"]  # ... und ältere API-Versionen
     with FakeEngine(world) as fake:
         data = tool.record(fake.path, "u2probe", None, [])
     text = json.dumps(data)
@@ -1513,7 +1513,7 @@ def test_record_tool_refuses_anything_but_get():
         engine = tool.read_only_engine(fake.path)
         engine.negotiate()
         engine.list_containers()
-        # Ohne Bindung lehnte schon der Client ab; das Werkzeug muss vorher greifen (jede Methode ausser GET).
+        # Ohne Bindung lehnte schon der Client ab; das Werkzeug muss vorher greifen (jede Methode außer GET).
         for call in (lambda: engine.remove_container("a" * 64, binding=None),
                      lambda: engine.start_container("a" * 64, binding=None),
                      lambda: engine.pull("sha256:" + "d" * 64, binding=None)):

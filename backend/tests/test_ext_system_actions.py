@@ -433,6 +433,12 @@ async def test_executor_reports_failures_honestly():
     ctx.replies = [SimpleNamespace(exit_code=126, stdout="@@noroot\n@@noroot-helper\n", stderr="", duration_ms=1)]
     error = (await sa.SystemActionExecutor(ctx).execute(_req())).error
     assert error == sa.NO_ROOT_HELPER_MESSAGE and "neu einrichten" in error
+    ctx = _Ctx()
+    ctx.replies = [SimpleNamespace(exit_code=126, stdout="@@noroot\n@@noroot-helper-unreadable\n", stderr="", duration_ms=1)]
+    error = (await sa.SystemActionExecutor(ctx).execute(_req())).error
+    assert error == sa.NO_ROOT_HELPER_UNREADABLE_MESSAGE and "lässt sich nicht lesen" in error
+    for message in (sa.NO_ROOT_HELPER_MESSAGE, sa.NO_ROOT_HELPER_UNREADABLE_MESSAGE):
+        assert len(message) <= 200 and "neu einrichten" in message
 
     ctx = _Ctx()
     ctx.replies = [SimpleNamespace(exit_code=5, stdout="@@rc=5\ninactive\n", stderr="Failed to restart nginx.service: Unit not found.\n", duration_ms=1)]

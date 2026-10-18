@@ -105,7 +105,7 @@ describe("HostPage (Server-Seite, Plesk-Stil)", () => {
     vi.stubGlobal("fetch", mockFetch());
     renderHost("g-valheim");
     expect(await screen.findByRole("heading", { level: 1, name: /game-win/ })).toBeInTheDocument();
-    expect(screen.getByText(/Virtuelle Maschine · 192\.168\.2\.24 · läuft/)).toBeInTheDocument();
+    expect(screen.getByText(/VM auf pve2 · 192\.168\.2\.24 · läuft/)).toBeInTheDocument();
     expect(screen.getByText("gameserver")).toBeInTheDocument();
 
     const tools = screen.getByTestId("host-tools");
@@ -146,6 +146,106 @@ describe("HostPage (Server-Seite, Plesk-Stil)", () => {
     expect(trigger?.method).toBe("POST");
     expect(trigger?.body).toMatchObject({ payload: { snapname: "vor-update" } });
     expect(calls.some((c) => c.path === "/actions/a1/approve" && c.method === "POST")).toBe(true);
+  });
+
+  describe("Zahlenfelder in der Aktion", () => {
+    // Der Kern prüft die Angaben gegen das Schema und lehnt "4" für ein Feld vom Typ `integer` mit 422 ab.
+    const RESIZE_PATH = "/hosts/g-valheim/actions/vm.resize";
+    const resize = {
+      action_type: "vm.resize", label: "Größe ändern", description: null, icon: null, default_risk: "low", permissions: [],
+      host_bound: true, confirm_text: null, command_field: null, source: "host",
+      params_schema: {
+        type: "object",
+        properties: { cores: { type: "integer", title: "Kerne" }, factor: { type: "number", title: "Faktor" }, note: { type: "string", title: "Notiz" } },
+        required: ["cores", "factor", "note"],
+      },
+    };
+
+    function mockResize(calls: Call[]) {
+      return mockFetch({
+        "/hosts/g-valheim/actions": [...(respond("/api/v1/hosts/g-valheim/actions", "GET") as object[]), resize],
+        [RESIZE_PATH]: { id: "a7", status: "succeeded", risk: "low", result: {} },
+      }, calls);
+    }
+
+    async function openResize() {
+      fireEvent.click(await screen.findByRole("button", { name: "Größe ändern …" }));
+    }
+
+    const type = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    const submit = () => fireEvent.click(screen.getByRole("button", { name: "Ausführen" }));
+    const resizeCalls = (calls: Call[]) => calls.filter((c) => c.path === RESIZE_PATH);
+
+    it("ganze Zahl und Zahl gehen als Zahl raus (Komma als Dezimaltrenner), Text bleibt Text", async () => {
+      const calls: Call[] = [];
+      vi.stubGlobal("fetch", mockResize(calls));
+      renderHost("g-valheim");
+      await openResize();
+      type("Kerne", "4");
+      type("Faktor", "1,5");
+      type("Notiz", "42");
+      submit();
+
+      await waitFor(() => expect(resizeCalls(calls)).toHaveLength(1));
+      const payload = (resizeCalls(calls)[0].body as { payload: Record<string, unknown> }).payload;
+      expect(payload).toEqual({ cores: 4, factor: 1.5, note: "42" });
+      expect(typeof payload.cores).toBe("number");
+      expect(typeof payload.note).toBe("string");
+    });
+
+    it("ein leeres Feld (nur Leerzeichen) fehlt im POST-Body", async () => {
+      const calls: Call[] = [];
+      vi.stubGlobal("fetch", mockResize(calls));
+      renderHost("g-valheim");
+      await openResize();
+      type("Kerne", "2");
+      type("Faktor", "   ");
+      type("Notiz", "hallo");
+      submit();
+
+      await waitFor(() => expect(resizeCalls(calls)).toHaveLength(1));
+      const payload = (resizeCalls(calls)[0].body as { payload: Record<string, unknown> }).payload;
+      expect(payload).toEqual({ cores: 2, note: "hallo" });
+      expect("factor" in payload).toBe(false);
+    });
+
+    it.each([["abc", "Kerne", "eine ganze Zahl"], ["1.5", "Kerne", "eine ganze Zahl"], ["viel", "Faktor", "eine Zahl"]])(
+      "ungültige Eingabe %j: nichts wird gesendet, die Seite sagt es auf Deutsch und das Formular bleibt offen",
+      async (bad, label, what) => {
+        const calls: Call[] = [];
+        vi.stubGlobal("fetch", mockResize(calls));
+        renderHost("g-valheim");
+        await openResize();
+        type("Kerne", label === "Kerne" ? bad : "2");
+        type("Faktor", label === "Faktor" ? bad : "1");
+        type("Notiz", "x");
+        submit();
+
+        await waitFor(() => expect(screen.getByRole("status").textContent).toContain(`Größe ändern: Bitte bei „${label}“ ${what} eingeben`));
+        expect(screen.getByRole("status")).toHaveClass("text-red-400");
+        expect(resizeCalls(calls)).toHaveLength(0);
+        expect(calls.some((c) => c.method === "POST")).toBe(false);
+        expect(screen.getByLabelText("Kerne")).toHaveValue(label === "Kerne" ? bad : "2"); // nichts ging verloren
+      },
+    );
+
+    it("nach der Korrektur geht es durch, und die Fehlermeldung ist weg", async () => {
+      const calls: Call[] = [];
+      vi.stubGlobal("fetch", mockResize(calls));
+      renderHost("g-valheim");
+      await openResize();
+      type("Kerne", "vier");
+      type("Faktor", "1");
+      type("Notiz", "x");
+      submit();
+      await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Bitte bei „Kerne“"));
+
+      type("Kerne", "4");
+      submit();
+
+      await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Größe ändern: Ausgeführt"));
+      expect((resizeCalls(calls)[0].body as { payload: unknown }).payload).toEqual({ cores: 4, factor: 1, note: "x" });
+    });
   });
 
   it("Gate-Sperre (403 mit ActionOut): Begründung statt „HTTP 403“", async () => {

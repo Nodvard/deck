@@ -1,15 +1,7 @@
 /**
- * Image-Updates einspielen: der Knopf in der Spalte "Image-Update" und die Uebersicht davor.
- *
- * Ablauf: "Einspielen" oeffnet unter der Zeile eine Uebersicht (`GET .../image-update/plan`,
- * nur lesend): welches Image, welcher Befehl laeuft auf dem Host, was ist betroffen, welche
- * Warnungen gibt es, wie geht es zurueck. Erst "Jetzt einspielen" legt die Gate-Aktion
- * `container.image_update` an (`POST .../image-update` mit der `plan_id` genau dieser
- * Uebersicht). Wer `actions.approve:<risk>` hat, gibt selbst frei (die Uebersicht IST die
- * menschliche Bestaetigung -- deshalb kein Dialog: `confirmDialog` zeigt nur kurzen Text und
- * koennte den Befehl nicht anzeigen), sonst bleibt es ein Vorschlag fuer einen Admin.
- *
- * Der Lauf selbst geschieht auf dem Server (entkoppelt); die Seite fragt nur nach.
+ * Image-Updates einspielen: der Knopf in der Spalte „Image-Update“ und die Übersicht davor (`GET .../image-update/plan`,
+ * nur lesend). Erst „Jetzt einspielen“ legt die Gate-Aktion `container.image_update` an (`POST .../image-update`); wer
+ * `actions.approve:<risk>` hat, gibt selbst frei. Die Übersicht ersetzt den Dialog, der den Befehl nicht zeigen könnte.
  */
 import { useEffect, useState } from "react";
 
@@ -18,7 +10,7 @@ import { authedFetch, errorFromBody, errorText } from "../../../_shared/frontend
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { deck } from "../../../_shared/frontend/src/deck";
 
-/** Was die Pruefung ueber die Einspielbarkeit weiss (nur aus Etiketten; endgueltig entscheidet die Uebersicht). */
+/** Was die Prüfung über die Einspielbarkeit weiß (nur aus Etiketten; endgültig entscheidet die Übersicht). */
 export interface ImageApply {
   mode: "compose" | "none";
   kind?: string;
@@ -82,7 +74,7 @@ export function ImageUpdateAction({
   entryId, offer, apply, applying, applied, open, onToggle,
 }: {
   entryId: string;
-  /** Darf hier ueberhaupt angeboten werden (verwaltbar, laeuft, nicht Nodvard Deck selbst, Status "Update", hosts.execute). */
+  /** Darf hier überhaupt angeboten werden (verwaltbar, läuft, nicht Nodvard Deck selbst, Status „Update“, hosts.execute). */
   offer: boolean;
   apply?: ImageApply;
   applying?: ApplyingState;
@@ -125,7 +117,7 @@ type Run =
   | { state: "done"; ok: boolean; text: string; output: string | null }
   | { state: "error"; message: string; conflict: boolean };
 
-/** Die Uebersicht vor dem Einspielen und, nach dem Klick, der Verlauf bis zum Ergebnis. */
+/** Die Übersicht vor dem Einspielen und, nach dem Klick, der Verlauf bis zum Ergebnis. */
 export function UpdatePanel({
   hostId, container, applying, onStarted, onFinished, onClose,
 }: {
@@ -133,7 +125,7 @@ export function UpdatePanel({
   container: string;
   applying?: ApplyingState;
   /** Der Vorschlag ist angelegt bzw. freigegeben: den Stand der Image-Updates sofort neu laden, damit
-   * "Update läuft" erscheint und der Knopf in der Zeile verschwindet (nicht erst nach dem naechsten Takt). */
+   * „Update läuft“ erscheint und der Knopf in der Zeile verschwindet (nicht erst nach dem nächsten Takt). */
   onStarted: () => void;
   /** Nach einem Ergebnis (Erfolg oder Fehler): Seite und Image-Stand neu laden. */
   onFinished: () => void;
@@ -177,8 +169,8 @@ export function UpdatePanel({
         return;
       }
       onStarted();
-      // Selbst freigeben, wenn erlaubt (die Uebersicht war die Bestaetigung) -- hier statt in
-      // `settleAction`, damit der Stand gleich danach neu geladen werden kann.
+      // Selbst freigeben, wenn erlaubt (die Übersicht war die Bestätigung), hier statt in `settleAction`, damit der Stand
+      // gleich danach neu geladen werden kann.
       let action = body as { id?: string; action_id?: string; status?: string; risk?: string };
       let approvedHere = false;
       const id = action.id ?? action.action_id;

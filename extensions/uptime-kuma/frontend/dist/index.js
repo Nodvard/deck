@@ -298,6 +298,16 @@ function SettingsLink({
   if (!deck().hasPermission(permission)) return null;
   return /* @__PURE__ */ jsx3("a", { href: to, className: buttonClass(variant), children });
 }
+function safeHref(url) {
+  const text = url?.trim();
+  if (!text || !/^https?:\/\//i.test(text)) return void 0;
+  try {
+    const parsed = new URL(text);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? text : void 0;
+  } catch {
+    return void 0;
+  }
+}
 
 // ../../../frontend/src/lib/deckTimezone.ts
 import { useSyncExternalStore } from "react";
@@ -431,11 +441,12 @@ function ConnectionCard({ connection, onRetry }) {
   const s = connection.summary;
   const problem = connection.state !== "ok" && connection.state !== "not_configured";
   const canManage = deck().hasPermission("extensions.manage");
+  const openHref = safeHref(connection.url);
   return /* @__PURE__ */ jsx4(
     Card,
     {
       title: connection.name,
-      description: connection.url ? /* @__PURE__ */ jsx4("a", { href: connection.url, target: "_blank", rel: "noreferrer", className: "break-all hover:text-white hover:underline", children: "Uptime Kuma \xF6ffnen" }) : void 0,
+      description: openHref ? /* @__PURE__ */ jsx4("a", { href: openHref, target: "_blank", rel: "noreferrer", className: "break-all hover:text-white hover:underline", children: "Uptime Kuma \xF6ffnen" }) : void 0,
       actions: /* @__PURE__ */ jsx4(Badge, { tone: head.tone, children: head.label }),
       children: /* @__PURE__ */ jsxs3("div", { "data-testid": `connection-${connection.name}`, className: "space-y-4", children: [
         connection.state === "not_configured" && /* @__PURE__ */ jsxs3("div", { "data-testid": "not-configured", className: "flex flex-col items-start gap-3", children: [

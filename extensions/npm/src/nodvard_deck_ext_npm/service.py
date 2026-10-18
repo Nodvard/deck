@@ -13,7 +13,14 @@ from nodvard_sdk import ServiceCatalog
 
 from .address_check import check_all, docker_hosts, problem_count
 from .client import NpmClient, NpmError
-from .config import NPM_SECRET, SETTINGS_HINT, NotConfigured, NpmConfig, npm_config
+from .config import (
+    NPM_SECRET,
+    SETTINGS_HINT,
+    InvalidSetting,
+    NotConfigured,
+    NpmConfig,
+    npm_config,
+)
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
@@ -99,7 +106,7 @@ class NpmService:
         try:
             client = await self.npm_client()
         except NotConfigured as exc:
-            return {"state": "not_configured", "message": str(exc), "url": None, **empty}
+            return {"state": "not_configured", "message": str(exc), "invalid": isinstance(exc, InvalidSetting), "url": None, **empty}
         try:
             certificates = await client.certificates(now=now or datetime.now(timezone.utc))
             hosts = await client.proxy_hosts(certificates)

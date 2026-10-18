@@ -311,6 +311,14 @@ async def register_core_jobs(runs_dir: Path) -> None:
     except Exception:  # der Start darf daran nie scheitern
         logger.exception("secret_expiry_job_setup_failed")
 
+    # Hinweis „Server neu einrichten“ in der Übersicht (`services.helper_hints`): alle 6 Stunden ein lesender Befehl je Server.
+    from ..services import helper_hints as helper_hints_service
+
+    try:
+        await helper_hints_service.sync_job()
+    except Exception:  # der Start darf daran nie scheitern
+        logger.exception("helper_hints_job_setup_failed")
+
     # Automatische Sicherungen (`services.backups`): Zeitplan und Schalter aus `backup.config`.
     # Ein Fehler hier darf den Start nicht verhindern, er steht im Protokoll.
     from ..services import backups as backups_service

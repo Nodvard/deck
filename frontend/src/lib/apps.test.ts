@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { APP_ICON_NAMES, appIconComponent, isAppIconName } from "./appIcons";
 import {
   bodyFromForm,
+  dataLink,
   EMPTY_FORM,
   existingGroups,
   FILTER_ALL,
@@ -11,6 +12,7 @@ import {
   filterApps,
   groupChips,
   groupFilter,
+  internalPath,
   isEmoji,
   normalizeUrl,
   safeHref,
@@ -89,6 +91,24 @@ describe("safeHref und urlHost", () => {
     expect(safeHref("http://")).toBeUndefined();
     expect(safeHref(null)).toBeUndefined();
     expect(safeHref("")).toBeUndefined();
+  });
+
+  it("internalPath nimmt nur Pfade im Dashboard, dataLink dazu Webadressen", () => {
+    expect(internalPath("/ext/shield/soc?tab=guard")).toBe("/ext/shield/soc?tab=guard");
+    expect(internalPath("//evil.example/x")).toBeUndefined();
+    expect(internalPath("/\\evil.example")).toBeUndefined();
+    expect(internalPath("/\t/evil.example")).toBeUndefined();
+    expect(internalPath("/\n/evil.example")).toBeUndefined();
+    expect(internalPath("/\r/evil.example")).toBeUndefined();
+    expect(internalPath("/hosts/h1\u0000")).toBeUndefined();
+    expect(internalPath("/hosts/h1\u007f")).toBeUndefined();
+    expect(internalPath("ext/x")).toBeUndefined();
+    expect(internalPath(42)).toBeUndefined();
+    expect(dataLink("https://a.example/x")).toBe("https://a.example/x");
+    expect(dataLink("/hosts/h1")).toBe("/hosts/h1");
+    expect(dataLink("javascript:alert(1)")).toBeUndefined();
+    expect(dataLink("//evil.example")).toBeUndefined();
+    expect(dataLink("/\t/evil.example")).toBeUndefined();
   });
 
   it("zeigt Rechner und Port als Untertitel", () => {

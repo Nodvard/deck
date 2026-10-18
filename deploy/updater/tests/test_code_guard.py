@@ -1,24 +1,24 @@
-"""Code-Waechter fuer den Update-Helfer.
+"""Code-Wächter für den Update-Helfer.
 
-Der Helfer laeuft mit Zugriff auf den Docker-Socket, also mit so viel Macht wie root auf dem Rechner. Darum
-prueft dieser Test ueber den Syntaxbaum **jedes** `*.py` im Paket `nodvard_deck_updater` -- auch Module, die
-spaeter dazukommen (engine, target, clone, flow, __main__), ohne dass jemand hier etwas eintragen muss. Er ist eine
-**Erlaubnisliste**, keine Verbotsliste: was nicht ausdruecklich erlaubt ist, faellt auf.
+Der Helfer läuft mit Zugriff auf den Docker-Socket, also mit so viel Macht wie root auf dem Rechner. Darum
+prüft dieser Test über den Syntaxbaum **jedes** `*.py` im Paket `nodvard_deck_updater` -- auch Module, die
+später dazukommen (engine, target, clone, flow, __main__), ohne dass jemand hier etwas eintragen muss. Er ist eine
+**Erlaubnisliste**, keine Verbotsliste: was nicht ausdrücklich erlaubt ist, fällt auf.
 
-1. **Nur erlaubte Module** (`ALLOWED_MODULES`, vollstaendige Namen; `sys.stdlib_module_names` und das eigene Paket
-   zusaetzlich). Ein neues Modul muss bewusst und mit Begruendung eingetragen werden -- das faellt in der Durchsicht
-   auf. Nie erlaubt (`FORBIDDEN_MODULES`, ein Test haelt beide Listen getrennt): Programmstart, Code nachladen oder
-   ausfuehren (auch `timeit`, `doctest`, `pydoc`, `pkgutil`), Netz ueber `AF_UNIX` hinaus (auch `logging.handlers`,
-   `_socket`), und alles, was Dateien an `os.open` vorbei oeffnet (`io`, `pathlib`, `shutil`, `tempfile`, ...).
-   Module bekommen keinen Alias (`import socket as so` wuerde die Pruefung am Namen umgehen).
-2. **Dateien nur ueber `os.open`**, immer mit `O_NOFOLLOW` und relativ zu einem Ordner-Deskriptor (`dir_fd=`; nur die
+1. **Nur erlaubte Module** (`ALLOWED_MODULES`, vollständige Namen; `sys.stdlib_module_names` und das eigene Paket
+   zusätzlich). Ein neues Modul muss bewusst und mit Begründung eingetragen werden -- das fällt in der Durchsicht
+   auf. Nie erlaubt (`FORBIDDEN_MODULES`, ein Test hält beide Listen getrennt): Programmstart, Code nachladen oder
+   ausführen (auch `timeit`, `doctest`, `pydoc`, `pkgutil`), Netz über `AF_UNIX` hinaus (auch `logging.handlers`,
+   `_socket`), und alles, was Dateien an `os.open` vorbei öffnet (`io`, `pathlib`, `shutil`, `tempfile`, ...).
+   Module bekommen keinen Alias (`import socket as so` würde die Prüfung am Namen umgehen).
+2. **Dateien nur über `os.open`**, immer mit `O_NOFOLLOW` und relativ zu einem Ordner-Deskriptor (`dir_fd=`; nur die
    Wurzel selbst, `O_DIRECTORY`, und `/proc/...` ohne). `O_NOFOLLOW` wirkt nur auf die letzte Pfadkomponente, ein
-   absoluter Pfad `/channel/requests/x.json` waere also kein Schutz. Die pfadbasierten `os`-Funktionen (`stat`,
+   absoluter Pfad `/channel/requests/x.json` wäre also kein Schutz. Die pfadbasierten `os`-Funktionen (`stat`,
    `unlink`, `rename`, `chmod`, ...) verlangen `dir_fd=` (und `follow_symlinks=False`), `os.scandir`/`os.listdir`
    nur einen Deskriptor (eine Variable `...fd`); `os.fdopen`, `os.system`, `os.exec*`, `os.spawn*`, `os.fork*`,
    `os.kill*`, `os.walk`, `os.chdir` und `os.path.exists`/`realpath`/... sind verboten, ebenso `open()` und
    `eval`/`exec`/`compile`/`__import__`/`breakpoint`/`globals`/`locals`/`vars`/`input`.
-3. **Netz nur ueber `AF_UNIX`:** keine andere Adressfamilie (`AF_INET`, `AF_INET6`, ...), `socket.socket()` nur als
+3. **Netz nur über `AF_UNIX`:** keine andere Adressfamilie (`AF_INET`, `AF_INET6`, ...), `socket.socket()` nur als
    Aufruf mit `socket.AF_UNIX` (der Name `socket.socket` darf nirgends sonst vorkommen: keine Zuweisung an eine
    Variable, keine Basisklasse, kein `SocketType`, kein `from socket import socket`), kein `create_connection`,
    `getaddrinfo`, `HTTPSConnection`, `urlopen`. `HTTPConnection` darf nur als Basisklasse vorkommen; die Unterklasse
@@ -28,23 +28,23 @@ spaeter dazukommen (engine, target, clone, flow, __main__), ohne dass jemand hie
    ist genau einmal als Text in `policy.py` gesetzt und wird nirgends neu gebunden. Das Repository ist eine Konstante,
    die nur in `policy.py` und nur einmal gesetzt wird; der Text `ghcr.io/nodvard/deck` steht sonst nirgends im Code
    (Docstrings ausgenommen). Es stimmt mit `release.yml` (und, sobald vorhanden, mit `core.updates.OFFICIAL_IMAGE`
-   im Dashboard) ueberein. `REPOSITORY` und `SERVICE_ENV` werden weder per Attribut noch per `setattr` noch ueber
-   `__dict__`, `sys.modules`, `globals()` o. a. ueberschrieben.
+   im Dashboard) überein. `REPOSITORY` und `SERVICE_ENV` werden weder per Attribut noch per `setattr` noch über
+   `__dict__`, `sys.modules`, `globals()` o. a. überschrieben.
 5. **Reflexion:** `getattr`/`setattr`/`delattr` nur mit `self`/`cls` als erstem Argument (und nie als Wert
    weitergereicht, z. B. an `functools.reduce`), keine Attribute wie `__dict__`, `__builtins__`, `__globals__`,
    `__subclasses__`, `f_globals`, `_getframe`, `sys.modules`, `attrgetter`, ...
-6. **Keine gefaehrlichen Engine-Pfade im Code:** `/exec`, `/archive`, `/build`, `/commit`, `/images/load`,
+6. **Keine gefährlichen Engine-Pfade im Code:** `/exec`, `/archive`, `/build`, `/commit`, `/images/load`,
    `/volumes`, `/swarm`, `/plugins`, `/session`, `v=1`/`v=true`, `force=1`/`force=true`.
 
-**Was ein Syntaxbaum-Waechter prinzipiell nicht kann:** er sieht keine Typen und keine Laufzeitwerte. Wer es darauf
-anlegt (`operator.attrgetter`-artige Umwege, Zeichenketten fuer Attributnamen ueber Formatstrings, ein Objekt, dessen
-Methode `open` heisst, Code in einer Datei, die das Paket zur Laufzeit nachlaedt, ...), kommt immer vorbei. Der
-Waechter schuetzt vor **Versehen** bei spaeteren Aenderungen (und macht Absicht auffaellig), nicht vor einem
-absichtlichen Angreifer im Code-Review. Die tatsaechliche Grenze setzen das Image (nur das Paket, kein pip, kein
+**Was ein Syntaxbaum-Wächter prinzipiell nicht kann:** er sieht keine Typen und keine Laufzeitwerte. Wer es darauf
+anlegt (`operator.attrgetter`-artige Umwege, Zeichenketten für Attributnamen über Formatstrings, ein Objekt, dessen
+Methode `open` heißt, Code in einer Datei, die das Paket zur Laufzeit nachlädt, ...), kommt immer vorbei. Der
+Wächter schützt vor **Versehen** bei späteren Änderungen (und macht Absicht auffällig), nicht vor einem
+absichtlichen Angreifer im Code-Review. Die tatsächliche Grenze setzen das Image (nur das Paket, kein pip, kein
 Compiler), `read_only`, `cap_drop: ALL`, `network_mode: none` und die Allowlist der Engine-Pfade.
 
-Dazu ein Lauf mit `python -I -S`: das Paket laesst sich ohne `site-packages` importieren, und Umgebungsvariablen
-aendern das Repository nicht.
+Dazu ein Lauf mit `python -I -S`: das Paket lässt sich ohne `site-packages` importieren, und Umgebungsvariablen
+ändern das Repository nicht.
 """
 
 from __future__ import annotations
@@ -72,11 +72,11 @@ ALLOWED_MODULES = frozenset({
     "typing", "dataclasses", "enum", "collections", "collections.abc", "contextlib", "functools", "itertools",
     # Text und Zahlen: Protokoll-JSON, Muster, isfinite
     "json", "re", "math",
-    # Dateien nur ueber os.open + dir_fd, Sperre (fcntl), Zufallsnamen fuer Temp-Dateien (secrets)
+    # Dateien nur über os.open + dir_fd, Sperre (fcntl), Zufallsnamen für Temp-Dateien (secrets)
     "os", "os.path", "stat", "errno", "fcntl", "secrets",
     # Uhr, SIGTERM, Argumente/Ausgabe, Heartbeat-Thread
     "time", "signal", "sys", "threading",
-    # Engine-API ueber AF_UNIX: ein eigener Client, nichts anderes
+    # Engine-API über AF_UNIX: ein eigener Client, nichts anderes
     "socket", "http.client", "urllib.parse",
 })
 """Alles, was das Paket braucht oder fuer `engine`, `target`, `clone`, `flow` und `__main__` brauchen
@@ -88,12 +88,12 @@ mit Begruendung ein."""
 FORBIDDEN_MODULES = frozenset({
     # Programme starten
     "subprocess", "pty", "multiprocessing", "asyncio", "concurrent", "_posixsubprocess",
-    # Code nachladen / ausfuehren / deserialisieren
+    # Code nachladen / ausführen / deserialisieren
     "importlib", "imp", "runpy", "code", "codeop", "builtins", "pickle", "_pickle", "pickletools", "copyreg",
     "marshal", "shelve", "dbm", "ctypes", "_ctypes", "pdb", "bdb", "trace", "zipimport", "webbrowser",
     "timeit", "cProfile", "profile", "doctest", "pydoc", "pkgutil", "zipapp", "venv", "ensurepip", "sqlite3",
     "unittest", "operator",
-    # Netz (ausser AF_UNIX ueber socket/http.client)
+    # Netz (außer AF_UNIX über socket/http.client)
     "ssl", "_ssl", "_socket", "ftplib", "smtplib", "poplib", "imaplib", "nntplib", "telnetlib", "socketserver",
     "xmlrpc", "http.server", "http.cookiejar", "urllib.request", "urllib.robotparser", "wsgiref", "mailbox",
     "logging.config", "logging.handlers",
@@ -159,8 +159,8 @@ OS_FROM_IMPORTS_OK = {"path"}
 
 
 def _flag_definitions(tree: ast.AST) -> dict[str, tuple[bool, bool]]:
-    """Modul-Konstanten mit Flags (`X = os.O_RDONLY | os.O_NOFOLLOW | ...`): Name -> (enthaelt O_NOFOLLOW,
-    enthaelt O_DIRECTORY)."""
+    """Modul-Konstanten mit Flags (`X = os.O_RDONLY | os.O_NOFOLLOW | ...`): Name -> (enthält O_NOFOLLOW,
+    enthält O_DIRECTORY)."""
     found: dict[str, tuple[bool, bool]] = {}
     for node in tree.body if isinstance(tree, ast.Module) else []:
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
@@ -200,7 +200,7 @@ def _module_allowed(name: str) -> str | None:
 
 def _is_submodule(module: str, name: str) -> bool:
     """Ist `module.name` ein Untermodul (`from http import client`) und kein Name im Modul?"""
-    try:  # nur fuer Module von der Erlaubnisliste aufgerufen: das Importieren des Elternmoduls ist harmlos
+    try:  # nur für Module von der Erlaubnisliste aufgerufen: das Importieren des Elternmoduls ist harmlos
         return importlib.util.find_spec(f"{module}.{name}") is not None
     except Exception:  # noqa: BLE001 - "kein Paket", "nicht gefunden": dann ist es ein Name im Modul
         return False
@@ -281,7 +281,7 @@ def _foreign_family(name: str) -> bool:
 def _name_problem(name: str, *, bare: bool, attr: bool = False) -> str | None:
     """Grund, warum der Bezeichner `name` verboten ist. `bare`: ein einzelner Name (`eval`) oder ein Import-Name,
     nicht der Teil nach einem Punkt (`re.compile`, `store.open` sind in Ordnung). `attr`: ein Attribut oder ein
-    importierter Name (dort zusaetzlich die Reflexions-Attribute)."""
+    importierter Name (dort zusätzlich die Reflexions-Attribute)."""
     if (bare and name in FORBIDDEN_NAMES) or FORBIDDEN_ATTR_RE.fullmatch(name):
         return f"verbotener Name {name}"
     if attr and name in REFLECTION_ATTRS:
@@ -298,7 +298,7 @@ def _kw(call: ast.Call, name: str) -> ast.AST | None:
 
 
 def _flags_problem(call: ast.Call, nofollow: frozenset[str], directory: frozenset[str]) -> str | None:
-    """Regeln fuer `os.open(path, flags, ..., dir_fd=...)`."""
+    """Regeln für `os.open(path, flags, ..., dir_fd=...)`."""
     flags = call.args[1] if len(call.args) > 1 else _kw(call, "flags")
     if flags is None:
         return "os.open ohne Flags"
@@ -314,7 +314,7 @@ def _flags_problem(call: ast.Call, nofollow: frozenset[str], directory: frozense
 
 
 def _os_call_problem(func: str, call: ast.Call) -> str | None:
-    """Regeln fuer `os.<func>(...)` mit Pfad: Deskriptor-Bezug."""
+    """Regeln für `os.<func>(...)` mit Pfad: Deskriptor-Bezug."""
     if func in PATH_FUNCS_NEED_DIR_FD and not any(
             kw.arg in {"dir_fd", "src_dir_fd", "dst_dir_fd"} for kw in call.keywords):
         return f"os.{func} ohne dir_fd (Pfade folgen Symlinks)"
@@ -335,7 +335,7 @@ def _reflection_call_ok(call: ast.Call) -> bool:
 
 
 def _http_connection_problems(node: ast.ClassDef, filename: str) -> list[str]:
-    """Eine Unterklasse von `HTTPConnection` verbindet selbst ueber `AF_UNIX`."""
+    """Eine Unterklasse von `HTTPConnection` verbindet selbst über `AF_UNIX`."""
     problems = []
     where = f"{filename}:{node.lineno}"
     connect = next((item for item in node.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -358,7 +358,7 @@ def _http_connection_problems(node: ast.ClassDef, filename: str) -> list[str]:
 
 def violations(source: str, filename: str = "<test>", *,
                flag_names: tuple[frozenset[str], frozenset[str]] | None = None) -> list[str]:
-    """Alle Verstoesse in `source` (leer = sauber). `flag_names`: Namen aus dem Paket, die `O_NOFOLLOW` bzw.
+    """Alle Verstöße in `source` (leer = sauber). `flag_names`: Namen aus dem Paket, die `O_NOFOLLOW` bzw.
     `O_DIRECTORY` enthalten (Vorgabe: nur die in `source` selbst definierten)."""
     tree = ast.parse(source, filename=filename)
     local = _flag_definitions(tree)
@@ -565,8 +565,8 @@ def test_repository_binding_detector_sees_every_form():
 
 
 def test_production_code_never_overrides_the_expected_owner():
-    # `expected_uid` (Besitzer von /channel und /state) ist ein Parameter nur fuer Tests ohne root. Im Betrieb gilt
-    # die Vorgabe 0: kein Modul des Pakets reicht ihn weiter, und er ist nur ueber den Konstruktor zu aendern.
+    # `expected_uid` (Besitzer von /channel und /state) ist ein Parameter nur für Tests ohne root. Im Betrieb gilt
+    # die Vorgabe 0: kein Modul des Pakets reicht ihn weiter, und er ist nur über den Konstruktor zu ändern.
     hits = []
     for path in MODULES:
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -670,19 +670,19 @@ def test_package_imports_without_site_packages_and_ignores_the_environment():
 
 
 def test_dashboard_image_never_contains_the_channel_path():
-    # Ein Image, das `/app/updater` schon mitbringt, gaebe der Wurzel des Kanals beim ersten Einhaengen des
+    # Ein Image, das `/app/updater` schon mitbringt, gäbe der Wurzel des Kanals beim ersten Einhängen des
     # Volumes (Copy-up) den Besitzer uid 1000 -- der Helfer richtet den Kanal selbst ein, das Dashboard-Image
-    # kennt den Pfad nicht. Das Dashboard bekommt ihn nur ueber das Volume in der Compose-Datei.
+    # kennt den Pfad nicht. Das Dashboard bekommt ihn nur über das Volume in der Compose-Datei.
     for name in ("Dockerfile", "entrypoint.sh"):
         assert "/app/updater" not in (REPO_ROOT / "deploy" / name).read_text(encoding="utf-8"), name
     assert _final_stage_problems((REPO_ROOT / "deploy" / "Dockerfile").read_text(encoding="utf-8")) == []
 
 
 def _final_stage_problems(dockerfile: str) -> list[str]:
-    """Anweisungen der letzten Stufe, die etwas vom Helfer ins Dashboard-Image bringen koennten.
+    """Anweisungen der letzten Stufe, die etwas vom Helfer ins Dashboard-Image bringen könnten.
 
     Nur die letzte Stufe wird zum Image. Die Bau-Stufe des Frontends darf die Test-Vektoren des Helfers lesen (tsc
-    prueft den Test der Helfer-Texte mit); die letzte Stufe holt sich von dort nur das fertige Frontend und die
+    prüft den Test der Helfer-Texte mit); die letzte Stufe holt sich von dort nur das fertige Frontend und die
     Erweiterungen."""
     instructions, pending = [], ""
     for line in dockerfile.splitlines():
@@ -704,8 +704,8 @@ def _final_stage_problems(dockerfile: str) -> list[str]:
 
 
 def test_the_image_guard_reads_only_the_final_stage():
-    """Gegenprobe: In der Bau-Stufe darf der Helfer vorkommen, in der letzten Stufe nicht -- auch nicht ueber eine
-    fortgesetzte Zeile oder ein `--from=`, das mehr als das fertige Frontend holt. Kommentare zaehlen nicht."""
+    """Gegenprobe: In der Bau-Stufe darf der Helfer vorkommen, in der letzten Stufe nicht -- auch nicht über eine
+    fortgesetzte Zeile oder ein `--from=`, das mehr als das fertige Frontend holt. Kommentare zählen nicht."""
     build = "FROM node AS b\nCOPY deploy/updater/tests/vectors/ x/\nFROM python AS runtime\n# COPY deploy/updater/ x/\n"
     assert _final_stage_problems(build + "COPY --from=b /src/frontend/dist ./frontend/dist\n") == []
     assert len(_final_stage_problems(build + "COPY a \\\n  deploy/updater/ /x/\n")) == 1
@@ -714,7 +714,7 @@ def test_the_image_guard_reads_only_the_final_stage():
 
 
 def test_ci_runs_the_updater_tests():
-    # Eigener Aufruf (nicht in `pytest backend/tests` eingehaengt): der Helfer ist ein eigenes Programm mit nur der
+    # Eigener Aufruf (nicht in `pytest backend/tests` eingehängt): der Helfer ist ein eigenes Programm mit nur der
     # Standardbibliothek und wird ohne Installation und ohne Backend-conftest getestet.
     text = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert re.search(r"^\s*- run: python -m pytest deploy/updater/tests\s*$", text, re.MULTILINE)
@@ -722,7 +722,7 @@ def test_ci_runs_the_updater_tests():
 
 def test_ci_also_runs_the_needs_root_tests_as_root():
     # Der Runner ist nicht root: ohne diesen Schritt werden die Tests mit Dateien eines anderen Besitzers (Betriebsbild:
-    # Helfer uid 0, Dashboard uid 1000) dort nie ausgefuehrt. `sudo` ohne Passwort gibt es auf GitHub-Runnern; `-E` und
+    # Helfer uid 0, Dashboard uid 1000) dort nie ausgeführt. `sudo` ohne Passwort gibt es auf GitHub-Runnern; `-E` und
     # `env "PATH=$PATH"` nehmen dasselbe Python und dieselben Pakete mit.
     text = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     steps = re.findall(r"^\s*- run: (sudo .*)$", text, re.MULTILINE)
@@ -733,14 +733,14 @@ def test_ci_also_runs_the_needs_root_tests_as_root():
     assert "python -m pytest" in step and re.search(r"-m needs_root\b", step)
     assert "-p no:cacheprovider" in step, "kein root-eigener Cache im Checkout"
     assert "PYTHONDONTWRITEBYTECODE=1" in step, "kein root-eigener Bytecode im Checkout"
-    # Der Marker muss es geben (sonst waehlt `-m needs_root` nichts aus und der Schritt wuerde still nichts tun).
+    # Der Marker muss es geben (sonst wählt `-m needs_root` nichts aus und der Schritt würde still nichts tun).
     count = sum(1 for path in UPDATER_DIR.joinpath("tests").glob("test_*.py")
                 for line in path.read_text(encoding="utf-8").splitlines() if line.startswith("@needs_root"))
     assert count >= 5, count
 
 
 # ---------------------------------------------------------------------------
-# Der Waechter selbst (damit er nicht still nichts prueft)
+# Der Wächter selbst (damit er nicht still nichts prüft)
 # ---------------------------------------------------------------------------
 
 BAD = {
@@ -819,8 +819,8 @@ def test_guard_catches(source):
     assert violations(source), source
 
 
-# Jede Regel hat ihren eigenen Fall mit dem erwarteten Grund: so faellt auf, wenn eine Regel entfernt wird, auch wenn
-# ein anderer Fall denselben Quelltext noch aus anderem Grund bemaengelt.
+# Jede Regel hat ihren eigenen Fall mit dem erwarteten Grund: so fällt auf, wenn eine Regel entfernt wird, auch wenn
+# ein anderer Fall denselben Quelltext noch aus anderem Grund bemängelt.
 CONNECT = "import http.client, socket\nclass C(http.client.HTTPConnection):\n    def connect(self):\n"
 BAD_WHY = {
     # --- Erlaubnisliste statt Verbotsliste (Funde 8, 11)
@@ -862,7 +862,7 @@ BAD_WHY = {
                                                  "socket.socket nur als Aufruf"),
     "socket.socket als Basisklasse": ("import socket\nclass S(socket.socket): pass", "socket.socket nur als Aufruf"),
     "from socket import SocketType": ("from socket import SocketType", "from socket import SocketType"),
-    # --- Dateien nur ueber os.open mit O_NOFOLLOW und dir_fd (Funde 9, 16)
+    # --- Dateien nur über os.open mit O_NOFOLLOW und dir_fd (Funde 9, 16)
     "io.open": ("import io\nio.open('/channel/requests/x.json').read()", "verbotenes Modul: io"),
     "Path.open": ("from pathlib import Path\nPath('/channel/requests/x.json').open()", "verbotenes Modul: pathlib"),
     "shutil.copy": ("import shutil\nshutil.copy('/channel/x', '/state/x')", "verbotenes Modul: shutil"),
@@ -1007,7 +1007,7 @@ def test_guard_allows_what_the_helper_needs():
 
 
 def test_guard_still_flags_the_package_patterns_when_a_rule_is_broken_on_purpose():
-    # Gegenprobe zum Test oben: derselbe Quelltext mit je einer kleinen Aenderung faellt auf (der Waechter hat also
+    # Gegenprobe zum Test oben: derselbe Quelltext mit je einer kleinen Änderung fällt auf (der Wächter hat also
     # nicht einfach nur "alles erlaubt").
     good = "import os\nDIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW\nroot = os.open('/channel', DIR_FLAGS)\n"
     assert violations(good) == []
@@ -1027,7 +1027,7 @@ NETWORK_MODULES = {"socket", "http.client", "http"}
 
 def engine_path_problems(source: str, filename: str, allowed: set[str]) -> list[str]:
     """Jeder Text im Code (ohne Docstrings), der mit einem Engine-Pfad beginnt, muss genau ein Muster aus `allowed`
-    sein (fuer engine.py: die Tabelle `ENDPOINTS`; fuer alle anderen Module: nichts)."""
+    sein (für engine.py: die Tabelle `ENDPOINTS`; für alle anderen Module: nichts)."""
     tree = ast.parse(source, filename=filename)
     docstrings = _docstring_ids(tree)
     found = []
@@ -1063,7 +1063,7 @@ def test_endpoint_table_contains_nothing_forbidden():
     ("x = '/containers/{id}/json'", set()),                       # in einem anderen Modul
     ("x = '/info'", set()),
     ("x = '/events?since=1'", set()),
-    ("x = f'/containers/{cid}/json'", set()),                     # f-String: der feste Anfang zaehlt
+    ("x = f'/containers/{cid}/json'", set()),                     # f-String: der feste Anfang zählt
     ("x = '/images/' + ref", set()),
 ])
 def test_engine_path_guard_catches(source, allowed):
@@ -1107,7 +1107,7 @@ def test_network_and_engine_internals_only_in_engine():
     "self._engine._UnixConnection",
 ])
 def test_network_guard_catches(source):
-    # Negativtest zur Regel oben: jede dieser Zeilen ausserhalb von engine.py faellt auf.
+    # Negativtest zur Regel oben: jede dieser Zeilen außerhalb von engine.py fällt auf.
     imported, uses_internals = network_use(source)
     assert imported & NETWORK_MODULES or uses_internals
 
@@ -1132,8 +1132,8 @@ INTERNAL_REFERENCE_RE = re.compile("|".join([
 
 
 def test_code_and_tests_refer_to_no_internal_planning_documents():
-    # Das Paket liegt im oeffentlichen Repository: Kommentare, Docstrings, Testnamen und Vektoren muessen ohne
-    # Unterlagen verstaendlich sein, die der Leser nicht hat. Aufnahmen unter `fixtures/` sind Daten der Engine.
+    # Das Paket liegt im öffentlichen Repository: Kommentare, Docstrings, Testnamen und Vektoren müssen ohne
+    # Unterlagen verständlich sein, die der Leser nicht hat. Aufnahmen unter `fixtures/` sind Daten der Engine.
     files = [*UPDATER_DIR.joinpath("nodvard_deck_updater").rglob("*.py"), *UPDATER_DIR.joinpath("tools").rglob("*.py"),
              *UPDATER_DIR.joinpath("tests").glob("*.py"), *UPDATER_DIR.joinpath("tests", "vectors").glob("*.json")]
     assert len(files) > 15

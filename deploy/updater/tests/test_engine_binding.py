@@ -1,13 +1,13 @@
-"""Die Bindung der aendernden Engine-Aufrufe an das Journal (`engine.Binding`, `Engine.bind`).
+"""Die Bindung der ändernden Engine-Aufrufe an das Journal (`engine.Binding`, `Engine.bind`).
 
-Geprueft wird von beiden Seiten:
+Geprüft wird von beiden Seiten:
 
 * **Client:** Jede Probe -- ohne Bindung, beliebige ID, die eigene ID, beliebiger Name, beliebige Image-ID, falsche
   Version, falscher Digest, falscher Schritt -- wirft `NotBound`, bevor etwas an die Engine geht. Die erlaubten
-  Aufrufe eines Updates, eines Rueckbaus, eines Rueckwegs und des Aufraeumens gehen durch.
-* **Fake-Engine:** Dieselben Proben, am Client vorbei als rohe HTTP-Anfrage geschickt, haelt der Waechter der
-  Fake-Engine (`JournalGuard`, unabhaengig nachgebaut) fest und beantwortet sie mit 599. Er prueft gegen das Journal,
-  das gerade gilt -- ein Ablauf, der an ein noch nicht geschriebenes Journal bindet, faellt so in den Tests auf.
+  Aufrufe eines Updates, eines Rückbaus, eines Rückwegs und des Aufräumens gehen durch.
+* **Fake-Engine:** Dieselben Proben, am Client vorbei als rohe HTTP-Anfrage geschickt, hält der Wächter der
+  Fake-Engine (`JournalGuard`, unabhängig nachgebaut) fest und beantwortet sie mit 599. Er prüft gegen das Journal,
+  das gerade gilt -- ein Ablauf, der an ein noch nicht geschriebenes Journal bindet, fällt so in den Tests auf.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ CREATE_BODY = {"Image": TAG_TEXT, "HostConfig": {}}
 
 
 def answer_everything(fake: FakeEngine) -> None:
-    """Die Fake-Engine beantwortet jeden aendernden Aufruf mit Erfolg (sofern der Waechter ihn durchlaesst)."""
+    """Die Fake-Engine beantwortet jeden ändernden Aufruf mit Erfolg (sofern der Wächter ihn durchlässt)."""
     fake.route("POST", "/containers/create", Response(status=201, body={"Id": NEW, "Warnings": []}))
     fake.route("POST", r"/containers/[0-9a-f]{64}/(start|stop|rename)", Response(status=204))
     fake.route("POST", r"/containers/[0-9a-f]{64}/update", Response(status=200, body={"Warnings": []}))
@@ -97,7 +97,7 @@ def test_every_endpoint_except_get_needs_a_binding():
 
 
 def test_a_bound_endpoint_without_its_own_rule_is_refused(client):
-    # Kommt spaeter ein aendernder Endpunkt dazu, gilt fuer ihn nichts, bis er eine eigene Regel hat (fail-closed).
+    # Kommt später ein ändernder Endpunkt dazu, gilt für ihn nichts, bis er eine eigene Regel hat (fail-closed).
     binding = client.bind(journal_at("created"), OWN)
     with pytest.raises(E.NotBound):
         client._check_binding("kill_container", binding, {"id": OLD}, {}, None)
@@ -171,8 +171,8 @@ def test_the_one_request_function_refuses_changes_without_a_binding(fake, client
 
 
 @pytest.mark.parametrize("options", [
-    {"versioned": False},             # ohne Praefix gaelte die neueste API-Version des Docker-Dienstes
-    {"api_version": (1, 24)},         # eine aeltere API mit anderen Regeln fuer start und create
+    {"versioned": False},             # ohne Präfix gälte die neueste API-Version des Docker-Dienstes
+    {"api_version": (1, 24)},         # eine ältere API mit anderen Regeln für start und create
     {"api_version": (1, 99)},
     {"api_version": "1.54"},
 ])
@@ -185,9 +185,9 @@ def test_the_api_version_of_a_change_is_always_the_negotiated_one(fake, client, 
 
 
 @pytest.mark.parametrize(("method", "pattern", "options"), [
-    ("GET", "/_ping", {}),                          # /_ping nur ohne Praefix (so in der Aushandlung)
+    ("GET", "/_ping", {}),                          # /_ping nur ohne Präfix (so in der Aushandlung)
     ("GET", "/version", {"api_version": (1, 40)}),  # unter der Spanne
-    ("GET", "/version", {"api_version": (1, 55)}),  # ueber der Spanne
+    ("GET", "/version", {"api_version": (1, 55)}),  # über der Spanne
     ("GET", "/containers/json", {"versioned": False}),
     ("GET", "/containers/json", {"api_version": (1, 54)}),
 ])
@@ -204,11 +204,11 @@ def test_reads_need_no_binding(fake, client):
 
 
 # ---------------------------------------------------------------------------
-# Erlaubt: die Aufrufe des Ablaufs, jeder im Schritt, in dem er laeuft
+# Erlaubt: die Aufrufe des Ablaufs, jeder im Schritt, in dem er läuft
 # ---------------------------------------------------------------------------
 
 ALLOWED = [
-    # Update vorwaerts
+    # Update vorwärts
     ("pull", ("begin", "update"), {"pull_digest": DIGEST}, lambda c, b: c.pull(DIGEST, binding=b)),
     ("protect", ("protected", "update"), {}, lambda c, b: c.tag_image(OLD_IMAGE, PREVIOUS, "0.7.0", binding=b)),
     ("rename", ("renamed", "update"), {}, lambda c, b: c.rename_container(OLD, NAME + "-previous", binding=b)),
@@ -220,9 +220,9 @@ ALLOWED = [
     ("start_new", ("started", "update"), {}, lambda c, b: c.start_container(NEW, binding=b)),
     ("remove_old", ("committed", "update"), {}, lambda c, b: c.remove_container(OLD, binding=b)),
     # Wiederaufnahme im Schritt `creating`: der gefundene eigene Container steht jetzt im Journal (`created`), dann
-    # wird zurueckgebaut
+    # wird zurückgebaut
     ("remove_found", ("created", "update"), {"undo": True}, lambda c, b: c.remove_container(NEW, binding=b)),
-    # Rueckbau vor dem Commit
+    # Rückbau vor dem Commit
     ("undo_stop_new", ("started", "update"), {"undo": True}, lambda c, b: c.stop_container(NEW, 30, binding=b)),
     ("undo_remove_new", ("started", "update"), {"undo": True}, lambda c, b: c.remove_container(NEW, binding=b)),
     ("undo_retag", ("started", "update"), {"undo": True},
@@ -232,7 +232,7 @@ ALLOWED = [
      lambda c, b: c.set_restart_policy(OLD, *RESTART, binding=b)),
     ("undo_start_old", ("started", "update"), {"undo": True}, lambda c, b: c.start_container(OLD, binding=b)),
     ("undo_untag", ("started", "update"), {"undo": True}, lambda c, b: c.remove_protect_tag("0.7.0", binding=b)),
-    # Rueckbau in einem fruehen Schritt: nur zurueck, was schon angekuendigt war
+    # Rückbau in einem frühen Schritt: nur zurück, was schon angekündigt war
     ("undo_early_retag", ("renamed", "update"), {"undo": True},
      lambda c, b: c.tag_image(OLD_IMAGE, REPO, "latest", binding=b)),
     ("undo_early_rename", ("renamed", "update"), {"undo": True},
@@ -244,7 +244,7 @@ ALLOWED = [
     # Commit eines Updates: das Schutz-Tag des ersetzten Slots
     ("commit_untag_slot", ("committed", "update"), {"slot": "update"},
      lambda c, b: c.remove_protect_tag("0.6.9", binding=b)),
-    # Rueckweg auf Wunsch: Image aus dem Slot nachladen, zurueckhaengen, Commit raeumt beide Schutz-Tags weg
+    # Rückweg auf Wunsch: Image aus dem Slot nachladen, zurückhängen, Commit räumt beide Schutz-Tags weg
     ("rollback_pull", ("begin", "rollback"), {"pull_digest": PREV_DIGEST, "slot": "rollback"},
      lambda c, b: c.pull(PREV_DIGEST, binding=b)),
     ("rollback_protect", ("protected", "rollback"), {},
@@ -258,7 +258,7 @@ ALLOWED = [
     ("rollback_commit_untag_slot", ("committed", "rollback"), {"slot": "rollback"},
      lambda c, b: c.remove_protect_tag("0.7.0", binding=b)),
     ("rollback_remove_newer", ("committed", "rollback"), {}, lambda c, b: c.remove_container(OLD, binding=b)),
-    # Aufraeumen ohne Vorgang: Slot abgelaufen
+    # Aufräumen ohne Vorgang: Slot abgelaufen
     ("slot_expired", (None, None), {"slot": "update"}, lambda c, b: c.remove_protect_tag("0.6.9", binding=b)),
 ]
 
@@ -275,7 +275,7 @@ def _bind(fake, client, where, options):
 @pytest.mark.parametrize(("label", "where", "options", "call"), ALLOWED, ids=[row[0] for row in ALLOWED])
 def test_the_calls_of_the_flow_are_allowed(fake, client, label, where, options, call):
     if label == "pull":
-        client.distribution("latest")  # die Fake-Engine kennt den Digest erst nach der Aufloesung
+        client.distribution("latest")  # die Fake-Engine kennt den Digest erst nach der Auflösung
     call(client, _bind(fake, client, where, options))
     assert len(changes(fake)) == 1
 
@@ -334,7 +334,7 @@ REFUSED = [
      lambda c, b: c.tag_image(OLD_IMAGE, PREVIOUS, "0.6.9", binding=b)),
     ("protect_in_undo", ("started", "update"), {"undo": True},
      lambda c, b: c.tag_image(OLD_IMAGE, PREVIOUS, "0.7.0", binding=b)),
-    # create: Schritt, Image-Text, Rueckbau
+    # create: Schritt, Image-Text, Rückbau
     *[(f"create_in_{step}", (step, "update"), {}, lambda c, b: c.create_container(NAME, dict(CREATE_BODY), binding=b))
       for step in ("begin", "pulled", "tagged", "created", "started", "committed")],
     ("create_other_tag_text", ("creating", "update"), {},
@@ -359,7 +359,7 @@ REFUSED = [
     ("policy_other_retries", ("created", "update"), {},
      lambda c, b: c.set_restart_policy(OLD, "on-failure", 3, binding=b)),
     ("policy_no_with_retries", ("created", "update"), {}, lambda c, b: c.set_restart_policy(OLD, "no", 5, binding=b)),
-    # pull: nur im Schritt begin, nur der aufgeloeste Digest
+    # pull: nur im Schritt begin, nur der aufgelöste Digest
     ("pull_other_digest", ("begin", "update"), {"pull_digest": DIGEST},
      lambda c, b: c.pull(OTHER_DIGEST, binding=b)),
     ("pull_without_resolution", ("begin", "update"), {}, lambda c, b: c.pull(DIGEST, binding=b)),
@@ -382,7 +382,7 @@ REFUSED = [
      lambda c, b: c.remove_protect_tag("0.7.0", binding=b)),
     ("untag_rollback_slot_before_commit", ("started", "rollback"), {"slot": "rollback", "undo": True},
      lambda c, b: c.remove_protect_tag("0.7.0", binding=b)),
-    # vorwaerts nur in dem Schritt, den das Journal ankuendigt: nie zwei Dashboards zugleich
+    # vorwärts nur in dem Schritt, den das Journal ankündigt: nie zwei Dashboards zugleich
     *[(f"start_new_in_{step}", (step, "update"), {}, lambda c, b: c.start_container(NEW, binding=b))
       for step in ("created", "old_stopped", "committed")],
     ("start_new_in_undo", ("started", "update"), {"undo": True}, lambda c, b: c.start_container(NEW, binding=b)),
@@ -422,7 +422,7 @@ REFUSED = [
      lambda c, b: c.connect_network(NETWORK, NEW, {}, binding=b)),
     ("remove_new_forward", ("started", "update"), {}, lambda c, b: c.remove_container(NEW, binding=b)),
     ("untag_own_forward", ("tagged", "update"), {}, lambda c, b: c.remove_protect_tag("0.7.0", binding=b)),
-    # Rueckweg: nur der Digest des Slots wird nachgeladen
+    # Rückweg: nur der Digest des Slots wird nachgeladen
     ("rollback_pull_resolved_digest", ("begin", "rollback"), {"pull_digest": DIGEST, "slot": "rollback"},
      lambda c, b: c.pull(DIGEST, binding=b)),
     ("rollback_pull_without_slot", ("begin", "rollback"), {"pull_digest": PREV_DIGEST},
@@ -450,7 +450,7 @@ def test_probes_are_refused_before_anything_goes_out(fake, client, label, where,
 
 
 def test_untag_after_update_commit_never_removes_the_tag_of_the_new_slot(fake, client):
-    # Ein veralteter Slot, dessen Vorgaenger zufaellig die alte Version ist (von Hand zurueckgestellt): sein Schutz-Tag
+    # Ein veralteter Slot, dessen Vorgänger zufällig die alte Version ist (von Hand zurückgestellt): sein Schutz-Tag
     # ist jetzt das des neuen Slots und bleibt.
     stale = slot_for("update", from_version="0.7.0", installed_container_id=OTHER)
     binding = client.bind(journal_at("committed"), OWN, slot=stale)
@@ -465,7 +465,7 @@ def test_protect_versions_by_state():
     assert engine.bind(None, OWN).protect_versions == frozenset()
     assert engine.bind(None, OWN, slot=update).protect_versions == {"0.6.9"}
     for step in policy.STEPS[:-1]:
-        # Vor dem Commit nur im Rueckbau das Schutz-Tag dieses Vorgangs, vorwaerts keins.
+        # Vor dem Commit nur im Rückbau das Schutz-Tag dieses Vorgangs, vorwärts keins.
         assert engine.bind(journal_at(step), OWN, slot=update, undo=True).protect_versions == {"0.7.0"}, step
         assert engine.bind(journal_at(step, "rollback"), OWN, slot=rollback,
                            undo=True).protect_versions == {"0.7.1"}, step
@@ -489,25 +489,25 @@ def test_container_ids_by_step():
 
 
 def _journal(**changes):
-    """Ein Journal ohne Pruefung beim Anlegen (wie es aus einem Fehler im Ablauf kaeme)."""
+    """Ein Journal ohne Prüfung beim Anlegen (wie es aus einem Fehler im Ablauf käme)."""
     return dataclasses.replace(journal_at("created"), **changes)
 
 
 @pytest.mark.parametrize(("journal", "options"), [
     (journal_at("created"), {"own_id": "9" * 63}),
-    (journal_at("created"), {"own_id": OLD.upper()}),        # Grossbuchstaben: keine ID
+    (journal_at("created"), {"own_id": OLD.upper()}),        # Großbuchstaben: keine ID
     (journal_at("created"), {"own_id": None}),
     (journal_at("created"), {"own_id": OLD}),             # das Journal nennt den Helfer als alten Container
     (journal_at("created"), {"own_id": NEW}),             # ... oder als neuen
     (_journal(new=NewImage(image_id=NEW_IMAGE, digest=DIGEST, version="0.7.1", id=OLD)), {}),  # neuer == alter
-    (_journal(new=NewImage(image_id=NEW_IMAGE, digest=DIGEST, version="0.7.1", id=None)), {}),  # ungueltig
+    (_journal(new=NewImage(image_id=NEW_IMAGE, digest=DIGEST, version="0.7.1", id=None)), {}),  # ungültig
     (_journal(step="pulled", new=None), {}),
     (_journal(old=dataclasses.replace(journal_at("created").old, id="kurz")), {}),
     (_journal(old=dataclasses.replace(journal_at("created").old, tag_text="docker.io/fremd:latest")), {}),
     (journal_at("created").to_json(), {}),
     ("journal", {}),
-    (journal_at("committed"), {"undo": True}),           # nach dem Commit gibt es keinen Rueckbau
-    (journal_at("started", undo=True), {}),               # Rueckbau angekuendigt: vorwaerts geht nichts mehr
+    (journal_at("committed"), {"undo": True}),           # nach dem Commit gibt es keinen Rückbau
+    (journal_at("started", undo=True), {}),               # Rückbau angekündigt: vorwärts geht nichts mehr
     (journal_at("begin", undo=True), {"pull_digest": DIGEST}),
     (journal_at("created"), {"undo": 1}),
     (journal_at("created"), {"undo": "ja"}),
@@ -533,14 +533,14 @@ def test_binding_is_immutable_and_rechecked_on_replace():
     with pytest.raises(dataclasses.FrozenInstanceError):
         binding.undo = True  # type: ignore[misc]
     with pytest.raises(E.NotBound):
-        dataclasses.replace(binding, own_id=OLD)  # auch eine Kopie wird beim Anlegen geprueft
+        dataclasses.replace(binding, own_id=OLD)  # auch eine Kopie wird beim Anlegen geprüft
     with pytest.raises(E.NotBound):
         dataclasses.replace(binding, undo=True, journal=journal_at("committed"))
 
 
 def test_only_the_latest_binding_of_this_engine_counts(fake, client):
-    # Nach jedem geschriebenen Schritt holt der Ablauf eine neue Bindung; eine aeltere gilt dann nicht mehr -- auch
-    # wenn sie den Aufruf fuer sich erlaubt haette.
+    # Nach jedem geschriebenen Schritt holt der Ablauf eine neue Bindung; eine ältere gilt dann nicht mehr -- auch
+    # wenn sie den Aufruf für sich erlaubt hätte.
     tagged = bound(fake, client, journal_at("tagged"))
     bound(fake, client, journal_at("creating"))
     with pytest.raises(E.NotBound, match="zuletzt"):
@@ -617,16 +617,16 @@ def test_engine_docstring_describes_the_binding_and_its_limit():
     # Gegen eine falsche Zielwahl hilft sie nicht -- das muss im Kopf des Moduls stehen.
     text = " ".join(doc.split())
     assert "keine gegen eine falsche Zielwahl" in text and "target.py" in text
-    assert "erneute Pruefung der Container vor jedem Schritt" in text
+    assert "erneute Prüfung der Container vor jedem Schritt" in text
 
 
 # ---------------------------------------------------------------------------
-# Die Fake-Engine prueft dieselben Regeln (am Client vorbei)
+# Die Fake-Engine prüft dieselben Regeln (am Client vorbei)
 # ---------------------------------------------------------------------------
 
 
 def raw(fake: FakeEngine, method: str, path: str, query: dict | None = None, body: object = None) -> int:
-    """Eine Anfrage am Client vorbei (ohne Allowlist und ohne Bindung); gibt den Status zurueck."""
+    """Eine Anfrage am Client vorbei (ohne Allowlist und ohne Bindung); gibt den Status zurück."""
     conn = E._UnixConnection("localhost", timeout=5)
     conn.socket_path = fake.path
     url = "/v1.54" + path + ("?" + urlencode(query) if query else "")
@@ -643,7 +643,7 @@ def raw(fake: FakeEngine, method: str, path: str, query: dict | None = None, bod
 
 @pytest.fixture
 def watched():
-    """Eine Fake-Engine, deren Verstoesse der Test selbst ansieht."""
+    """Eine Fake-Engine, deren Verstöße der Test selbst ansieht."""
     with FakeEngine(World()) as server:
         answer_everything(server)
         yield server
@@ -692,7 +692,7 @@ RAW_REFUSED = [
     ("untag_old_after_commit", "committed", {"slot": "update"}, ("DELETE", f"/images/{PREVIOUS}:0.7.0", None, None)),
     ("untag_without_journal", None, {}, ("DELETE", f"/images/{PREVIOUS}:0.6.9", None, None)),
     ("start_without_journal", None, {"slot": "update"}, ("POST", f"/containers/{OLD}/start", None, None)),
-    # vorwaerts nur im angekuendigten Schritt
+    # vorwärts nur im angekündigten Schritt
     ("start_new_too_early", "old_stopped", {}, ("POST", f"/containers/{NEW}/start", None, None)),
     ("start_old_after_commit", "committed", {}, ("POST", f"/containers/{OLD}/start", None, None)),
     ("stop_old_too_early", "created", {}, ("POST", f"/containers/{OLD}/stop", {"t": 30}, None)),
@@ -711,7 +711,7 @@ RAW_REFUSED = [
                                          None)),
     ("connect_later", "old_stopped", {}, ("POST", f"/networks/{NETWORK}/connect", None,
                                           {"Container": NEW, "EndpointConfig": {}})),
-    # die Form, unabhaengig vom Journal
+    # die Form, unabhängig vom Journal
     ("remove_v1", "created", {}, ("DELETE", f"/containers/{NEW}", {"v": "1", "force": "0"}, None)),
     ("remove_force", "created", {}, ("DELETE", f"/containers/{NEW}", {"v": "0", "force": "1"}, None)),
     ("remove_without_query", "created", {}, ("DELETE", f"/containers/{NEW}", None, None)),
@@ -792,7 +792,7 @@ def test_the_fake_engine_takes_the_digest_of_the_slot_for_a_rollback(watched):
     guard(watched, "begin", "rollback", slot=slot_for("rollback"))
     assert raw(watched, "POST", "/images/create", {"fromImage": REPO, "tag": PREV_DIGEST}) == 200
     assert watched.violations == []
-    # ... und beim Rueckweg nur diesen, auch wenn das bewegliche Tag eben aufgeloest wurde
+    # ... und beim Rückweg nur diesen, auch wenn das bewegliche Tag eben aufgelöst wurde
     raw(watched, "GET", f"/distribution/{REPO}:latest/json")
     assert raw(watched, "POST", "/images/create", {"fromImage": REPO, "tag": DIGEST}) == 599
     # ... und beim Update nie den des Slots
@@ -809,8 +809,8 @@ def test_the_fake_engine_refuses_changes_without_a_guard(watched):
 
 
 def test_a_binding_to_a_journal_not_yet_written_is_caught_by_the_fake_engine(watched, tmp_path, uid):
-    # Write-ahead: der Ablauf schreibt den Schritt, *bevor* er ihn ausfuehrt. Bindet er an ein Journal, das noch nicht
-    # auf der Platte steht, laesst der Client den Aufruf zwar zu -- die Fake-Engine, die das Journal auf der Platte
+    # Write-ahead: der Ablauf schreibt den Schritt, *bevor* er ihn ausführt. Bindet er an ein Journal, das noch nicht
+    # auf der Platte steht, lässt der Client den Aufruf zwar zu -- die Fake-Engine, die das Journal auf der Platte
     # liest, aber nicht.
     store = StateStore(tmp_path, expected_uid=uid)
     store.open()
@@ -856,12 +856,12 @@ def test_the_journal_helper_builds_valid_journals_for_every_step():
 
 
 # ---------------------------------------------------------------------------
-# Client und Fake-Engine entscheiden gleich (ueber alle Schritte, Aktionen und Aufrufe)
+# Client und Fake-Engine entscheiden gleich (über alle Schritte, Aktionen und Aufrufe)
 # ---------------------------------------------------------------------------
 
 
 def _candidates():
-    """Viele aendernde Aufrufe, jeder als Aufruf des Clients und als die Anfrage, die er schickt."""
+    """Viele ändernde Aufrufe, jeder als Aufruf des Clients und als die Anfrage, die er schickt."""
     floating = (REPO, "latest")
     for ref in (OLD, NEW, OWN, OTHER):
         yield (lambda c, b, r=ref: c.start_container(r, binding=b), "POST", f"/containers/{ref}/start", {}, None)
@@ -895,8 +895,8 @@ def _candidates():
 
 
 def _contexts():
-    """(Journal, Slot, Digest fuer den Pull, moegliche Werte fuer `undo`) -- ohne Journal, in jedem Schritt und mit
-    angekuendigtem Rueckbau (dann gibt es nur noch die Bindung mit `undo`)."""
+    """(Journal, Slot, Digest für den Pull, mögliche Werte für `undo`) -- ohne Journal, in jedem Schritt und mit
+    angekündigtem Rückbau (dann gibt es nur noch die Bindung mit `undo`)."""
     for slot in (None, slot_for("update")):
         yield None, slot, None, (False,)
     for action, step in itertools.product(policy.ACTIONS, policy.STEPS):
@@ -908,10 +908,10 @@ def _contexts():
 
 
 def test_client_and_fake_engine_allow_exactly_the_same_calls():
-    # Die Fake-Engine sieht nicht, ob der Client gerade zurueckbaut: sie erlaubt, was der Client vorwaerts *oder* im
-    # Rueckbau erlaubt -- und nichts sonst. Laeuft beides auseinander, haette der Ablauf in den Tests eine andere
+    # Die Fake-Engine sieht nicht, ob der Client gerade zurückbaut: sie erlaubt, was der Client vorwärts *oder* im
+    # Rückbau erlaubt -- und nichts sonst. Läuft beides auseinander, hätte der Ablauf in den Tests eine andere
     # Schranke als im Betrieb.
-    engine = E.Engine("/nicht/da")  # nie ausgehandelt: was die Bindung durchlaesst, endet bei `not_negotiated`
+    engine = E.Engine("/nicht/da")  # nie ausgehandelt: was die Bindung durchlässt, endet bei `not_negotiated`
     candidates = list(_candidates())
     mismatches, allowed = [], 0
     for journal, slot, digest, undo_values in _contexts():

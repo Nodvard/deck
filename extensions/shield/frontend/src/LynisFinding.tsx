@@ -1,7 +1,7 @@
 /**
  * Ein Fund des Härtungs-Audits (Lynis). Kennt das Backend die Kennung (lynis_text.py), steht oben die deutsche
- * Überschrift und auf Klick „Was heißt das?“ und „Was kannst du tun?“; der englische Text von Lynis bleibt klein darunter.
- * Unbekannte Kennungen bleiben wie bisher englisch.
+ * Überschrift und auf Klick „Was heißt das?“ und „Was kannst du tun?“; der englische Text von Lynis bleibt klein
+ * darunter. Unbekannte Kennungen bleiben englisch.
  */
 import { useState } from "react";
 

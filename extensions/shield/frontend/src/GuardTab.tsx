@@ -1,8 +1,7 @@
 /**
- * Einbruchschutz & Datei-Waechter (Reiter "Einbruchschutz"): Sicherheitsereignisse
- * (Brute-Force, Anmeldung von neuer Adresse, neuer Port, geaenderte Systemdatei),
- * je Server SSH-Angriffe, Fail2ban, letzte Anmeldungen, offene Ports und der Stand
- * des Datei-Waechters. Daten: GET /ext/shield/defender/guard und /events.
+ * Einbruchschutz & Datei-Wächter (Reiter „Einbruchschutz“): Sicherheitsereignisse (Brute-Force, Anmeldung von neuer
+ * Adresse, neuer Port, geänderte Systemdatei), je Server SSH-Angriffe, Fail2ban, letzte Anmeldungen, offene Ports und
+ * der Stand des Datei-Wächters. Daten: GET /ext/shield/defender/guard und /events.
  */
 import { useCallback, useEffect, useState } from "react";
 
@@ -81,9 +80,9 @@ const SEVERITY: Record<string, { label: string; tone: Tone }> = {
   info: { label: "Hinweis", tone: "info" },
 };
 
-/** Neuer Port und geänderte Datei: „Ist in Ordnung“ übernimmt den neuen Stand (früher „Als bekannt übernehmen“ und
- * „Änderung übernehmen“). Bei Angriff, Fail2ban oder neuer Anmelde-Adresse wird nichts übernommen, das Ereignis nur
- * abgehakt: dort bleibt es bei „Zur Kenntnis genommen“ (ein „in Ordnung“ für einen Angriff wäre falsch). */
+/** Neuer Port und geänderte Datei: „Ist in Ordnung“ übernimmt den neuen Stand. Bei Angriff, Fail2ban oder neuer
+ * Anmelde-Adresse wird nichts übernommen, das Ereignis nur abgehakt: dort bleibt es bei „Zur Kenntnis genommen“
+ * (ein „in Ordnung“ für einen Angriff wäre falsch). */
 const ACK_TAKES_OVER: Record<string, string> = {
   new_port: "Der Port gilt danach als bekannt und meldet sich nicht wieder.",
   file_changed: "Der neue Stand der Datei gilt danach als richtig.",
@@ -195,8 +194,14 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
         { confirmLabel: "Alle abhaken" },
       );
       if (!ok) return "abgebrochen.";
-      const r = await call<{ acknowledged: number }>(`${API}/events/acknowledge-all`, { method: "POST" });
-      return `${r.acknowledged} abgehakt.`;
+      const r = await call<{ acknowledged: number; kept_open?: number }>(`${API}/events/acknowledge-all`, { method: "POST" });
+      const kept = r.kept_open ?? 0;
+      if (!kept) return `${r.acknowledged} abgehakt.`;
+      // Als Fehler anzeigen: Was offen bleibt, braucht noch einen Klick.
+      throw new Error(
+        `${r.acknowledged} abgehakt, ${kept} ${kept === 1 ? "bleibt" : "bleiben"} offen, weil ein Server den Stand seiner Dateien `
+          + "gerade nicht geliefert hat. Bitte gleich noch einmal versuchen.",
+      );
     });
 
   const ban = (hostId: string, hostName: string, ip: string, unban = false) =>

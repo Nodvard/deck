@@ -1,5 +1,5 @@
 // src/PiholePage.tsx
-import { useCallback, useEffect as useEffect2, useState } from "react";
+import { useCallback, useEffect as useEffect3, useState as useState2 } from "react";
 
 // ../../../frontend/src/lib/deckGlobal.ts
 function findDeck() {
@@ -356,8 +356,22 @@ function Field({ label, children, className = "" }) {
   ] });
 }
 
+// ../../_shared/frontend/src/links.tsx
+import { useEffect as useEffect2, useState } from "react";
+import { jsx as jsx2 } from "react/jsx-runtime";
+function safeHref(url) {
+  const text = url?.trim();
+  if (!text || !/^https?:\/\//i.test(text)) return void 0;
+  try {
+    const parsed = new URL(text);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? text : void 0;
+  } catch {
+    return void 0;
+  }
+}
+
 // src/PiholePage.tsx
-import { Fragment as Fragment2, jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
+import { Fragment as Fragment2, jsx as jsx3, jsxs as jsxs2 } from "react/jsx-runtime";
 var API = "/ext/pihole";
 var SETTINGS_PATH = "/settings/extensions/pihole";
 var PAUSE_MINUTES = [5, 15, 60];
@@ -410,19 +424,19 @@ var PROBLEM = {
 };
 function SettingsHint() {
   if (deck().hasPermission("extensions.manage")) {
-    return /* @__PURE__ */ jsx2("a", { href: SETTINGS_PATH, className: buttonClass("primary", true), children: "Jetzt einrichten" });
+    return /* @__PURE__ */ jsx3("a", { href: SETTINGS_PATH, className: buttonClass("primary", true), children: "Jetzt einrichten" });
   }
-  return /* @__PURE__ */ jsx2("p", { className: "text-xs text-white/45", children: "Ein Administrator kann das unter Einstellungen \u2192 Erweiterungen \u2192 Pi-hole einrichten." });
+  return /* @__PURE__ */ jsx3("p", { className: "text-xs text-white/45", children: "Ein Administrator kann das unter Einstellungen \u2192 Erweiterungen \u2192 Pi-hole einrichten." });
 }
 function BlockingCard({ data, canAct, busy, onPause, onResume }) {
   const enabled = data.blocking?.enabled;
   const minutesLeft = data.blocking?.timer_s ? Math.max(1, Math.round(data.blocking.timer_s / 60)) : null;
   const badge = enabled === true ? { label: "Blockierung aktiv", tone: "good" } : enabled === false ? minutesLeft ? { label: `pausiert \u2013 noch ${minutesLeft} Min.`, tone: "warn" } : { label: "Blockierung aus", tone: "bad" } : { label: "Zustand unklar", tone: "warn" };
-  return /* @__PURE__ */ jsx2(Card, { title: "Blockierung", actions: /* @__PURE__ */ jsx2(Badge, { tone: badge.tone, children: badge.label }), children: /* @__PURE__ */ jsx2("div", { "data-testid": "blocking", className: "flex flex-wrap items-center gap-2", children: enabled === false ? /* @__PURE__ */ jsxs2(Fragment2, { children: [
-    /* @__PURE__ */ jsx2("span", { className: "text-sm text-white/70", children: minutesLeft ? `Blockierung pausiert, noch ${minutesLeft} Min.` : "Blockierung ist ausgeschaltet \u2013 Werbung und Tracker kommen durch." }),
-    canAct && /* @__PURE__ */ jsx2(Button, { variant: "primary", small: true, disabled: busy !== null, onClick: onResume, children: "Blockierung fortsetzen" })
+  return /* @__PURE__ */ jsx3(Card, { title: "Blockierung", actions: /* @__PURE__ */ jsx3(Badge, { tone: badge.tone, children: badge.label }), children: /* @__PURE__ */ jsx3("div", { "data-testid": "blocking", className: "flex flex-wrap items-center gap-2", children: enabled === false ? /* @__PURE__ */ jsxs2(Fragment2, { children: [
+    /* @__PURE__ */ jsx3("span", { className: "text-sm text-white/70", children: minutesLeft ? `Blockierung pausiert, noch ${minutesLeft} Min.` : "Blockierung ist ausgeschaltet \u2013 Werbung und Tracker kommen durch." }),
+    canAct && /* @__PURE__ */ jsx3(Button, { variant: "primary", small: true, disabled: busy !== null, onClick: onResume, children: "Blockierung fortsetzen" })
   ] }) : /* @__PURE__ */ jsxs2(Fragment2, { children: [
-    /* @__PURE__ */ jsx2("span", { className: "text-sm text-white/70", children: canAct ? "Blockierung pausieren:" : "Werbung und Tracker werden im ganzen Netz blockiert." }),
+    /* @__PURE__ */ jsx3("span", { className: "text-sm text-white/70", children: canAct ? "Blockierung pausieren:" : "Werbung und Tracker werden im ganzen Netz blockiert." }),
     canAct && PAUSE_MINUTES.map((m) => /* @__PURE__ */ jsxs2(Button, { small: true, disabled: busy !== null, onClick: () => onPause(m), ariaLabel: `${m} Minuten pausieren`, children: [
       m,
       " Min."
@@ -430,10 +444,10 @@ function BlockingCard({ data, canAct, busy, onPause, onResume }) {
   ] }) }) });
 }
 function ClientsCard({ clients }) {
-  return /* @__PURE__ */ jsx2(Card, { title: "Aktivste Ger\xE4te", description: "Die meisten Anfragen in den letzten 24 Stunden.", children: clients.length === 0 ? /* @__PURE__ */ jsx2("p", { className: "text-sm text-white/45", children: "Pi-hole meldet noch keine Ger\xE4te." }) : /* @__PURE__ */ jsx2("ul", { "data-testid": "top-clients", className: "divide-y divide-white/[0.06]", children: clients.map((c) => /* @__PURE__ */ jsxs2("li", { className: "flex flex-wrap items-center justify-between gap-2 py-2 first:pt-0 last:pb-0", children: [
+  return /* @__PURE__ */ jsx3(Card, { title: "Aktivste Ger\xE4te", description: "Die meisten Anfragen in den letzten 24 Stunden.", children: clients.length === 0 ? /* @__PURE__ */ jsx3("p", { className: "text-sm text-white/45", children: "Pi-hole meldet noch keine Ger\xE4te." }) : /* @__PURE__ */ jsx3("ul", { "data-testid": "top-clients", className: "divide-y divide-white/[0.06]", children: clients.map((c) => /* @__PURE__ */ jsxs2("li", { className: "flex flex-wrap items-center justify-between gap-2 py-2 first:pt-0 last:pb-0", children: [
     /* @__PURE__ */ jsxs2("div", { className: "min-w-0", children: [
-      /* @__PURE__ */ jsx2("p", { className: "break-words text-sm font-medium", children: c.name }),
-      c.ip && c.ip !== c.name && /* @__PURE__ */ jsx2("p", { className: "break-words text-xs text-white/50", children: c.ip })
+      /* @__PURE__ */ jsx3("p", { className: "break-words text-sm font-medium", children: c.name }),
+      c.ip && c.ip !== c.name && /* @__PURE__ */ jsx3("p", { className: "break-words text-xs text-white/50", children: c.ip })
     ] }),
     /* @__PURE__ */ jsxs2("span", { className: "text-sm tabular-nums text-white/70", children: [
       num(c.count),
@@ -442,23 +456,23 @@ function ClientsCard({ clients }) {
   ] }, `${c.ip ?? ""}-${c.name}`)) }) });
 }
 function ListsCard({ data, canAct, busy, onGravity, onDomain }) {
-  const [domain, setDomain] = useState("");
+  const [domain, setDomain] = useState2("");
   const problem = domainProblem(domain);
   const s = data.summary;
   async function submit(list) {
     if (!domain.trim() || problem) return;
     if (await onDomain(list, domain.trim().toLowerCase().replace(/\.$/, ""))) setDomain("");
   }
-  return /* @__PURE__ */ jsx2(
+  return /* @__PURE__ */ jsx3(
     Card,
     {
       title: "Sperrlisten",
       description: `${num(s?.domains_blocked)} Domains \xB7 aktualisiert ${ago(s?.gravity_updated_at)}`,
-      actions: canAct ? /* @__PURE__ */ jsx2(Button, { small: true, disabled: busy !== null, onClick: onGravity, children: "Listen aktualisieren" }) : void 0,
+      actions: canAct ? /* @__PURE__ */ jsx3(Button, { small: true, disabled: busy !== null, onClick: onGravity, children: "Listen aktualisieren" }) : void 0,
       children: canAct ? (
         // Enter löst nichts aus: ob erlauben oder sperren, entscheidet der Knopf.
         /* @__PURE__ */ jsxs2("form", { "data-testid": "domain-form", className: "space-y-2", onSubmit: (e) => e.preventDefault(), children: [
-          /* @__PURE__ */ jsx2(Field, { label: "Eine Domain erlauben oder sperren", children: /* @__PURE__ */ jsx2(
+          /* @__PURE__ */ jsx3(Field, { label: "Eine Domain erlauben oder sperren", children: /* @__PURE__ */ jsx3(
             "input",
             {
               value: domain,
@@ -468,29 +482,29 @@ function ListsCard({ data, canAct, busy, onGravity, onDomain }) {
               "aria-invalid": problem ? true : void 0
             }
           ) }),
-          problem && /* @__PURE__ */ jsx2("p", { className: "text-xs text-red-300", children: problem }),
+          problem && /* @__PURE__ */ jsx3("p", { className: "text-xs text-red-300", children: problem }),
           /* @__PURE__ */ jsxs2("div", { className: "flex flex-wrap items-center gap-2", children: [
-            /* @__PURE__ */ jsx2(Button, { small: true, disabled: busy !== null || !domain.trim() || problem !== null, onClick: () => void submit("allow"), children: "Erlauben" }),
-            /* @__PURE__ */ jsx2(Button, { small: true, variant: "danger", disabled: busy !== null || !domain.trim() || problem !== null, onClick: () => void submit("deny"), children: "Sperren" }),
-            /* @__PURE__ */ jsx2("span", { className: "text-xs text-white/45", children: "Gilt genau f\xFCr diese Domain, nicht f\xFCr Unterdomains." })
+            /* @__PURE__ */ jsx3(Button, { small: true, disabled: busy !== null || !domain.trim() || problem !== null, onClick: () => void submit("allow"), children: "Erlauben" }),
+            /* @__PURE__ */ jsx3(Button, { small: true, variant: "danger", disabled: busy !== null || !domain.trim() || problem !== null, onClick: () => void submit("deny"), children: "Sperren" }),
+            /* @__PURE__ */ jsx3("span", { className: "text-xs text-white/45", children: "Gilt genau f\xFCr diese Domain, nicht f\xFCr Unterdomains." })
           ] })
         ] })
-      ) : /* @__PURE__ */ jsx2("p", { className: "text-sm text-white/45", children: "Listen \xE4ndern d\xFCrfen nur Konten, die auch Server steuern d\xFCrfen." })
+      ) : /* @__PURE__ */ jsx3("p", { className: "text-sm text-white/45", children: "Listen \xE4ndern d\xFCrfen nur Konten, die auch Server steuern d\xFCrfen." })
     }
   );
 }
 function PiholePage() {
   const unmountSignal = useUnmountSignal();
-  const [data, setData] = useState(null);
-  const [loadError, setLoadError] = useState(null);
-  const [message, setMessage] = useState(null);
-  const [busy, setBusy] = useState(null);
+  const [data, setData] = useState2(null);
+  const [loadError, setLoadError] = useState2(null);
+  const [message, setMessage] = useState2(null);
+  const [busy, setBusy] = useState2(null);
   const canAct = deck().hasPermission("hosts.execute");
   const load = useCallback(() => {
     setLoadError(null);
     call(`${API}/summary`).then(setData).catch((err) => setLoadError(err instanceof Error ? err.message : String(err)));
   }, []);
-  useEffect2(() => {
+  useEffect3(() => {
     load();
   }, [load]);
   async function run(key, path, body2) {
@@ -532,51 +546,52 @@ function PiholePage() {
   }
   let body = null;
   if (data?.state === "not_configured") {
-    body = /* @__PURE__ */ jsx2(Card, { title: "Pi-hole", children: /* @__PURE__ */ jsxs2("div", { "data-testid": "not-configured", className: "flex flex-col items-start gap-3", children: [
-      /* @__PURE__ */ jsx2(Badge, { children: "nicht eingerichtet" }),
-      /* @__PURE__ */ jsx2("p", { className: "text-sm text-white/60", children: data.message }),
-      /* @__PURE__ */ jsx2(SettingsHint, {})
+    body = /* @__PURE__ */ jsx3(Card, { title: "Pi-hole", children: /* @__PURE__ */ jsxs2("div", { "data-testid": "not-configured", className: "flex flex-col items-start gap-3", children: [
+      /* @__PURE__ */ jsx3(Badge, { children: "nicht eingerichtet" }),
+      /* @__PURE__ */ jsx3("p", { className: "text-sm text-white/60", children: data.message }),
+      /* @__PURE__ */ jsx3(SettingsHint, {})
     ] }) });
   } else if (data && (data.state !== "ok" || !data.summary)) {
     const problem = PROBLEM[data.state] ?? PROBLEM.unreachable;
-    body = /* @__PURE__ */ jsx2(Card, { title: "Pi-hole", actions: /* @__PURE__ */ jsx2(Badge, { tone: problem.tone, children: problem.label }), children: /* @__PURE__ */ jsxs2("div", { "data-testid": "problem", className: "flex flex-col items-start gap-3", children: [
-      /* @__PURE__ */ jsx2("p", { className: "text-sm text-white/70", children: data.message }),
+    body = /* @__PURE__ */ jsx3(Card, { title: "Pi-hole", actions: /* @__PURE__ */ jsx3(Badge, { tone: problem.tone, children: problem.label }), children: /* @__PURE__ */ jsxs2("div", { "data-testid": "problem", className: "flex flex-col items-start gap-3", children: [
+      /* @__PURE__ */ jsx3("p", { className: "text-sm text-white/70", children: data.message }),
       /* @__PURE__ */ jsxs2("div", { className: "flex flex-wrap items-center gap-2", children: [
-        /* @__PURE__ */ jsx2(Button, { small: true, onClick: load, children: "Erneut versuchen" }),
-        (data.state === "auth_failed" || data.state === "unsupported") && deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx2("a", { href: SETTINGS_PATH, className: buttonClass("ghost", true), children: "Einstellungen" })
+        /* @__PURE__ */ jsx3(Button, { small: true, onClick: load, children: "Erneut versuchen" }),
+        (data.state === "auth_failed" || data.state === "unsupported") && deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx3("a", { href: SETTINGS_PATH, className: buttonClass("ghost", true), children: "Einstellungen" })
       ] })
     ] }) });
   } else if (data?.summary) {
     const s = data.summary;
     body = /* @__PURE__ */ jsxs2("div", { className: "space-y-4", children: [
       /* @__PURE__ */ jsxs2("div", { "data-testid": "stats", className: "grid grid-cols-2 gap-3 lg:grid-cols-4", children: [
-        /* @__PURE__ */ jsx2(Stat, { label: "Anfragen (24 Std.)", value: num(s.queries_total), hint: s.clients_active != null ? `${num(s.clients_active)} aktive Ger\xE4te` : void 0 }),
-        /* @__PURE__ */ jsx2(Stat, { label: "Blockiert", value: num(s.queries_blocked) }),
-        /* @__PURE__ */ jsx2(Stat, { label: "Anteil blockiert", value: pct(s.percent_blocked) }),
-        /* @__PURE__ */ jsx2(Stat, { label: "Domains auf der Sperrliste", value: num(s.domains_blocked), hint: `aktualisiert ${ago(s.gravity_updated_at)}` })
+        /* @__PURE__ */ jsx3(Stat, { label: "Anfragen (24 Std.)", value: num(s.queries_total), hint: s.clients_active != null ? `${num(s.clients_active)} aktive Ger\xE4te` : void 0 }),
+        /* @__PURE__ */ jsx3(Stat, { label: "Blockiert", value: num(s.queries_blocked) }),
+        /* @__PURE__ */ jsx3(Stat, { label: "Anteil blockiert", value: pct(s.percent_blocked) }),
+        /* @__PURE__ */ jsx3(Stat, { label: "Domains auf der Sperrliste", value: num(s.domains_blocked), hint: `aktualisiert ${ago(s.gravity_updated_at)}` })
       ] }),
-      /* @__PURE__ */ jsx2(BlockingCard, { data, canAct, busy, onPause: (m) => void pause(m), onResume: () => void run("blocking", `${API}/resume`, void 0) }),
+      /* @__PURE__ */ jsx3(BlockingCard, { data, canAct, busy, onPause: (m) => void pause(m), onResume: () => void run("blocking", `${API}/resume`, void 0) }),
       /* @__PURE__ */ jsxs2("div", { className: "grid gap-4 lg:grid-cols-2", children: [
-        /* @__PURE__ */ jsx2(ClientsCard, { clients: data.top_clients ?? [] }),
-        /* @__PURE__ */ jsx2(ListsCard, { data, canAct, busy, onGravity: () => void gravity(), onDomain: domain })
+        /* @__PURE__ */ jsx3(ClientsCard, { clients: data.top_clients ?? [] }),
+        /* @__PURE__ */ jsx3(ListsCard, { data, canAct, busy, onGravity: () => void gravity(), onDomain: domain })
       ] })
     ] });
   } else if (!loadError) {
-    body = /* @__PURE__ */ jsx2(Card, { title: "Pi-hole", children: /* @__PURE__ */ jsx2("p", { className: "text-sm text-white/50", children: "Lade \u2026" }) });
+    body = /* @__PURE__ */ jsx3(Card, { title: "Pi-hole", children: /* @__PURE__ */ jsx3("p", { className: "text-sm text-white/50", children: "Lade \u2026" }) });
   }
+  const adminHref = safeHref(data?.url);
   return /* @__PURE__ */ jsxs2(
     Page,
     {
       title: "Pi-hole",
       description: "Werbe- und Tracker-Blocker f\xFCr das ganze Netz.",
       actions: /* @__PURE__ */ jsxs2(Fragment2, { children: [
-        data?.url && /* @__PURE__ */ jsx2("a", { href: `${data.url}/admin/`, target: "_blank", rel: "noreferrer", className: buttonClass("ghost"), children: "Pi-hole \xF6ffnen" }),
-        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx2("a", { href: SETTINGS_PATH, className: buttonClass("ghost"), children: "Einstellungen" }),
-        /* @__PURE__ */ jsx2(Button, { onClick: load, children: "Aktualisieren" })
+        adminHref && /* @__PURE__ */ jsx3("a", { href: `${adminHref}/admin/`, target: "_blank", rel: "noreferrer", className: buttonClass("ghost"), children: "Pi-hole \xF6ffnen" }),
+        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx3("a", { href: SETTINGS_PATH, className: buttonClass("ghost"), children: "Einstellungen" }),
+        /* @__PURE__ */ jsx3(Button, { onClick: load, children: "Aktualisieren" })
       ] }),
       children: [
-        loadError && /* @__PURE__ */ jsx2(Notice, { text: loadError, onClose: () => setLoadError(null) }),
-        message && /* @__PURE__ */ jsx2(Notice, { text: message.text, kind: message.kind, onClose: () => setMessage(null) }),
+        loadError && /* @__PURE__ */ jsx3(Notice, { text: loadError, onClose: () => setLoadError(null) }),
+        message && /* @__PURE__ */ jsx3(Notice, { text: message.text, kind: message.kind, onClose: () => setMessage(null) }),
         body
       ]
     }

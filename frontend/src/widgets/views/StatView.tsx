@@ -16,7 +16,7 @@ export function StatView({ view, data }: { view: StatViewSpec; data: unknown }) 
   const tone = renderTone(view.tone, data);
 
   return (
-    <div className="flex h-full flex-col justify-center gap-1">
+    <div className="flex flex-col gap-1">
       <span className={`text-4xl font-semibold tabular-nums tracking-tight ${TONE_TEXT[tone]}`}>{value}</span>
       {label && <span className="text-xs text-white/60">{label}</span>}
       {delta && <span className="text-[11px] text-white/45">{delta}</span>}

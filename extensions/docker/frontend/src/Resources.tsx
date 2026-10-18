@@ -210,6 +210,19 @@ export function ResourcesSection({ kind, hostId, onHost, empty }: {
   onHost: (id: string) => void;
   empty: ReactNode;
 }): JSX.Element {
+  return (
+    <HostSection hostId={hostId} onHost={onHost} empty={empty}>
+      {(id) => <ResourceList key={`${id}:${kind}`} hostId={id} kind={kind} />}
+    </HostSection>
+  );
+}
+
+export function HostSection({ hostId, onHost, empty, children }: {
+  hostId: string | null;
+  onHost: (id: string) => void;
+  empty: ReactNode;
+  children: (hostId: string) => ReactNode;
+}): JSX.Element {
   const [hosts, setHosts] = useState<{ id: string; name: string }[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
@@ -238,7 +251,7 @@ export function ResourcesSection({ kind, hostId, onHost, empty }: {
           </select>
         </label>
       )}
-      <ResourceList key={`${current.id}:${kind}`} hostId={current.id} kind={kind} />
+      {children(current.id)}
     </section>
   );
 }

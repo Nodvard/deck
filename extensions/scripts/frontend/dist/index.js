@@ -1236,7 +1236,7 @@ function ScriptsPage() {
             ) }, s.id)) })
           ] }) }),
           /* @__PURE__ */ jsx4("div", { className: "min-w-0 flex-1 space-y-5", children: !showEditor ? (
-            // Erst nach dem Laden: vorher (oder bei einem Ladefehler) waere "Noch keine Skripte" falsch.
+            // Erst nach dem Laden: vorher (oder bei einem Ladefehler) wäre „Noch keine Skripte“ falsch.
             scripts && /* @__PURE__ */ jsx4(
               EmptyState,
               {

@@ -1,12 +1,6 @@
 /**
- * Seite „Nginx Proxy Manager“ -- PageSpec `component="NpmPage"` (nodvard_deck_ext_npm/__init__.py).
- *
- * Proxy-Hosts mit Ziel und Zertifikat, Hosts ein- und ausschalten; „nicht eingerichtet“ zeigt einen Hinweis mit Link
- * zu den Einstellungen. Aktionen gehen als Vorschlag ans Aktions-Gate; wer `actions.approve:<risk>` hat, gibt den
- * eigenen Vorschlag gleich frei, alle anderen sehen „wartet auf Freigabe“.
- *
- * Adress-Check (`GET /address-check`): je Proxy-Host, zu welchem Docker-Container das Ziel führt und ob er läuft. Ist
- * er gestoppt, startet ihn ein Knopf über die Aktion `container.start` des Moduls Docker (Gate).
+ * Seite „Nginx Proxy Manager“ (PageSpec `component="NpmPage"`): Proxy-Hosts mit Ziel und Zertifikat, ein- und ausschalten.
+ * Der Adress-Check zeigt je Host den Docker-Container hinter dem Ziel; ein gestoppter startet über `container.start` (Gate).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -15,6 +9,7 @@ import { authedFetch, errorFromBody } from "../../../_shared/frontend/src/api";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { Badge, Button, Card, Notice, Page, SearchInput, Stat, buttonClass, type Tone } from "../../../_shared/frontend/src/ui";
 import { deck } from "../../../_shared/frontend/src/deck";
+import { safeHref } from "../../../_shared/frontend/src/links";
 
 const API = "/ext/npm";
 const SETTINGS_PATH = "/settings/extensions/npm";
@@ -89,8 +84,7 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
-/** Vorschlagen und, wer freigeben darf, gleich bestätigen; läuft die Aktion länger,
- * fragt runAction alle 3 s nach. */
+/** Vorschlagen und, wer freigeben darf, gleich bestätigen; läuft die Aktion länger, fragt runAction alle 3 s nach. */
 async function proposeAndApprove(path: string, body?: unknown, signal?: AbortSignal): Promise<Message> {
   const { action, approved } = await runAction(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) }, { signal });
   const status = action.status ?? "";
@@ -169,7 +163,7 @@ function CertBadge({ cert }: { cert: Certificate | null }) {
 function hostUrl(host: ProxyHost): string | null {
   const domain = host.domains[0];
   if (!domain || domain.includes("*")) return null;
-  return `${host.certificate_id ? "https" : "http"}://${domain}`;
+  return safeHref(`${host.certificate_id ? "https" : "http"}://${domain}`) ?? null;
 }
 
 function addressSummary(result: AddressCheckResult | null, loading: boolean): { text: string; className: string } | null {
@@ -230,12 +224,13 @@ function NpmSection({ data, canAct, busy, onToggle, onRetry, checks, checking, o
   const s = data.summary;
   const urgent = data.certificates.filter((c) => c.status === "warn" || c.status === "expired");
   const summary = addressSummary(checks, checking);
+  const adminHref = safeHref(data.url);
 
   return (
     <div className="space-y-4">
       <Card
         title="Nginx Proxy Manager"
-        description={data.url ? <a href={data.url} target="_blank" rel="noreferrer" className="hover:text-white hover:underline">Verwaltung öffnen</a> : undefined}
+        description={adminHref ? <a href={adminHref} target="_blank" rel="noreferrer" className="hover:text-white hover:underline">Verwaltung öffnen</a> : undefined}
       >
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Stat label="Proxy-Hosts" value={`${s.hosts_enabled} / ${s.hosts}`} hint="eingeschaltet / gesamt" />
@@ -322,8 +317,8 @@ export function NpmPage(): JSX.Element {
 
   const [checks, setChecks] = useState<AddressCheckResult | null>(null);
   const [checking, setChecking] = useState(false);
-  // Der Adress-Check fragt jeden Docker-Server per SSH und dauert deshalb laenger: getrennt laden, die Liste wartet nicht.
-  // Laeuft er mehrfach (Aktualisieren, Umschalten, Starten), gilt nur die letzte Anfrage.
+  // Der Adress-Check fragt jeden Docker-Server per SSH und dauert länger: getrennt laden, die Liste wartet nicht.
+  // Bei mehreren Läufen (Aktualisieren, Umschalten, Starten) gilt nur die letzte Anfrage.
   const checkSeq = useRef(0);
   const loadChecks = useCallback(() => {
     const seq = ++checkSeq.current;

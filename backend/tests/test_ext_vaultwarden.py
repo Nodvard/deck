@@ -135,6 +135,34 @@ async def test_nothing_configured_is_reported_cleanly_everywhere(client, db_sess
 
 
 @pytest.mark.asyncio
+async def test_widget_meta_says_not_configured_only_when_no_address_is_entered(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+
+    async def widget() -> dict:
+        res = await client.get("/api/v1/ext/vaultwarden/widgets/status", headers=headers)
+        assert res.status_code == 200, res.text
+        return res.json()
+
+    # Nichts eingetragen: die Übersicht darf die Kachel ausblenden; die Textzeile bleibt für ältere Oberflächen.
+    body = await widget()
+    assert body["meta"] == {"state": "not_configured"} and body["data"][0]["label"] == "nicht eingerichtet"
+
+    # Eine eingetragene, aber unbrauchbare Adresse ist ein Fehler und bleibt sichtbar.
+    for url in ("ftp://vault.example.org", "https://anna:geheim@vault.example.org"):
+        await _configure(client, headers, url)
+        body = await widget()
+        assert body["meta"] == {"state": "error"}, url
+        assert "ist ungültig" in body["data"][0]["subtitle"] or "Benutzernamen" in body["data"][0]["subtitle"]
+
+    # Eine gültige Adresse gilt als eingerichtet, auch wenn der Server nicht antwortet.
+    await _configure(client, headers, "http://vault.example.org")
+    fake.error = httpx.ConnectError("refused")
+    assert (await widget())["meta"] == {"state": "unreachable"}
+    fake.error = None
+    assert (await widget())["meta"] == {"state": "ok"}
+
+
+@pytest.mark.asyncio
 async def test_a_running_vaultwarden_shows_version_https_and_closed_signups(client, db_session, test_settings):
     headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers)
@@ -317,3 +345,27 @@ def test_every_page_in_the_security_menu_has_its_own_place():
         for order in re.findall(r'nav_section="Sicherheit",\s*nav_order=(\d+)', init.read_text(encoding="utf-8")):
             orders.setdefault(int(order), []).append(init.parts[-4])
     assert orders and all(len(owners) == 1 for owners in orders.values()), orders
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://vault.example.org/#/login", "https://vault.example.org"),
+        ("https://vault.example.org/admin", "https://vault.example.org"),
+        ("https://vault.example.org/admin/", "https://vault.example.org"),
+        ("https://vault.example.org/admin/diagnostics", "https://vault.example.org"),
+        ("https://vault.example.org/Admin/users/overview", "https://vault.example.org"),
+        ("http://192.0.2.20:8222/admin/organizations/overview/", "http://192.0.2.20:8222"),
+        ("https://example.org/vault/admin", "https://example.org/vault"),
+        ("https://example.org/vw/admin/diagnostics", "https://example.org/vw"),
+        ("https://example.org/vault/", "https://example.org/vault"),
+        ("https://example.org/administration", "https://example.org/administration"),
+        ("https://example.org/vw/administration/admin", "https://example.org/vw/administration"),
+        ("https://example.org/vault/adminer", "https://example.org/vault/adminer"),
+    ],
+)
+def test_the_admin_page_copied_from_the_browser_becomes_the_base_address(url, expected):
+    sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "vaultwarden" / "src"))
+    from nodvard_deck_ext_vaultwarden.config import normalize_url
+
+    assert normalize_url(url) == expected

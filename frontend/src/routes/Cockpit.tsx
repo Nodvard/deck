@@ -6,14 +6,17 @@ import {
   AlertTriangle,
   CheckCircle2,
   DatabaseBackup,
+  Info,
   Monitor,
   Server,
   ShieldCheck,
   SquareTerminal,
+  X,
 } from "lucide-react";
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
 
+import { groupHosts, GroupHeading, guestSummary, hostCategory, isGone, kindLabel } from "../../../extensions/_shared/frontend/src/hostKind";
 import { AppsSection } from "../components/AppsSection";
 import { DemoSeedButton } from "../components/DemoSeedButton";
 import { ButtonLink, EmptyState } from "../components/EmptyState";
@@ -31,12 +34,14 @@ import {
   formatBytes,
   formatUptime,
   hasConsole,
+  helperHintText,
   hostHealth,
   hostStatusText,
   type HostLatestMetrics,
   type HostOut,
   isNode,
   relativeTime,
+  useDismissHelperHint,
   useHostMetrics,
   useHosts,
   useLatestMetrics,
@@ -47,8 +52,6 @@ import { useAuthStore } from "../state/auth";
 
 /** Grund, wenn eine Abfrage ohne Fehler wartet: das Gerät hat gerade kein Netz. */
 const OFFLINE_TEXT = "Dieses Gerät ist gerade offline. Sobald es wieder Netz hat, lädt die Seite von selbst.";
-
-const KIND_LABEL: Record<string, string> = { vm: "VM", lxc: "Container", hypervisor: "Knoten", node: "Knoten" };
 
 function Panel({ title, right, children }: { title: string; right?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -73,13 +76,16 @@ function backupSummary(failed: number, unreachable: number, unknown: number): st
 }
 
 function StatCard({
-  to, label, value, sub, tone = "neutral",
-}: { to?: string; label: string; value: string; sub: string; tone?: "good" | "warn" | "danger" | "neutral" }) {
+  to, label, value, extra, sub, tone = "neutral",
+}: { to?: string; label: string; value: string; extra?: string; sub: string; tone?: "good" | "warn" | "danger" | "neutral" }) {
   const toneClass = { good: "text-emerald-300", warn: "text-amber-300", danger: "text-red-300", neutral: "text-white/55" }[tone];
   const body = (
     <div className="panel panel-hover h-full px-4 py-3" data-testid={`stat-${label}`}>
       <p className="text-sm text-white/55">{label}</p>
-      <p className={`mt-1 text-2xl font-semibold tabular-nums ${tone === "neutral" ? "" : toneClass}`}>{value}</p>
+      <p className={`mt-1 text-2xl font-semibold tabular-nums ${tone === "neutral" ? "" : toneClass}`}>
+        {value}
+        {extra && <span className="ml-1.5 inline-block whitespace-nowrap text-sm font-normal text-white/55" data-testid={`stat-${label}-extra`}>+ {extra}</span>}
+      </p>
       <p className={`mt-0.5 text-xs ${tone === "neutral" ? "text-white/55" : toneClass}`}>{sub}</p>
     </div>
   );
@@ -169,12 +175,17 @@ function HostActions({ host, canTerminal, console }: { host: HostOut; canTermina
   );
 }
 
+/** Zustand samt An/Aus; beim Anbieter nicht mehr vorhanden ist grau wie „aus“ (wie `hostHealthOf` in lib/overview). */
+function healthOf(host: HostOut): ReturnType<typeof hostHealth> {
+  return isGone(host) ? "stopped" : hostHealth(host.status, host.power_state);
+}
+
 const ROW = "border-t border-[var(--color-line)] align-middle";
 const CELL = "px-3 py-2.5";
 
 /** Eine Tabellenzeile für Hypervisor-Knoten und Linux-Server mit Messwerten; nur die Quelle der Zahlen unterscheidet sich. */
 function HostRow({ host, data, testId, canTerminal, provider }: { host: HostOut; data: CardData; testId: string; canTerminal: boolean; provider?: HostProvider }) {
-  const health = hostHealth(host.status);
+  const health = healthOf(host);
   const offline = data.state === "offline";
   const dim = data.state !== "live";
   const uptime = offline ? null : data.uptime_s;
@@ -192,13 +203,16 @@ function HostRow({ host, data, testId, canTerminal, provider }: { host: HostOut;
           </span>
         )}
       </td>
-      <td className={`${CELL} hidden tabular-nums text-white/55 md:table-cell`}>{host.address}</td>
+      <td className={`${CELL} hidden text-white/55 md:table-cell`}>
+        <span className="block whitespace-nowrap tabular-nums">{host.address}</span>
+        <span className="block whitespace-nowrap text-[11px] text-white/40">{kindLabel(host)}</span>
+      </td>
       <td className={CELL}><Meter value={offline ? null : data.cpu} label="CPU" dim={dim} /></td>
       <td className={CELL}><Meter value={offline ? null : data.mem} label="RAM" caption={data.memText} dim={dim} /></td>
       <td className={`${CELL} hidden sm:table-cell`}>
         {data.disk !== undefined ? <Meter value={offline ? null : data.disk} label="Platte" caption={data.diskText} dim={dim} /> : <span className="text-white/35">–</span>}
       </td>
-      <td className={`${CELL} hidden whitespace-nowrap tabular-nums text-white/55 lg:table-cell`} data-testid={`${testId}-uptime`}>
+      <td className={`${CELL} hidden whitespace-nowrap tabular-nums text-white/55 xl:table-cell`} data-testid={`${testId}-uptime`}>
         {uptime ? formatUptime(uptime) : "–"}
       </td>
       <HostActions host={host} canTerminal={canTerminal} console={false} />
@@ -211,7 +225,7 @@ function NodeCard({ host, canTerminal, provider }: { host: HostOut; canTerminal:
   const { data, isError } = useHostMetrics(host.id);
   const v = data?.values ?? {};
   const memPct = v.mem_total_bytes ? (100 * (v.mem_used_bytes ?? 0)) / v.mem_total_bytes : null;
-  const offline = hostHealth(host.status) === "problem";
+  const offline = healthOf(host) === "problem";
   return (
     <HostRow
       host={host}
@@ -233,7 +247,7 @@ function NodeCard({ host, canTerminal, provider }: { host: HostOut; canTerminal:
 /** Linux-Server mit Messwerten aus dem Verlauf (`GET /hosts/metrics/latest`, ohne SSH-Aufruf). Ein
  * nicht erreichbarer Server zeigt keine alten Werte als aktuell; ein zu alter Wert heisst „veraltet“. */
 function ServerCard({ host, latest, unconfirmed, canTerminal, provider }: { host: HostOut; latest: HostLatestMetrics; unconfirmed: boolean; canTerminal: boolean; provider?: HostProvider }) {
-  const offline = hostHealth(host.status) === "problem";
+  const offline = healthOf(host) === "problem";
   const stale = latest.stale || unconfirmed;
   return (
     <HostRow
@@ -259,7 +273,7 @@ function ServerCard({ host, latest, unconfirmed, canTerminal, provider }: { host
 
 /** Server ohne Messwerte: dieselbe Zeile, die Auslastung bleibt leer, dafür steht der Grund unter dem Namen. */
 function MachineRow({ host, canTerminal, hint, provider }: { host: HostOut; canTerminal: boolean; hint?: string | null; provider?: HostProvider }) {
-  const health = hostHealth(host.status);
+  const health = healthOf(host);
   const empty = <span className="text-white/35">–</span>;
   return (
     <tr className={ROW} data-testid={`machine-${host.id}`}>
@@ -269,16 +283,21 @@ function MachineRow({ host, canTerminal, hint, provider }: { host: HostOut; canT
           <Link to={`/hosts/${host.id}`} className="min-w-0 break-words font-medium hover:underline">{host.display_name}</Link>
           {provider?.problem && <ProviderBadge provider={provider} testId={`machine-${host.id}-provider-off`} />}
         </span>
-        {hint && <span className="mt-0.5 block text-[11px] text-white/45" data-testid={`machine-${host.id}-hint`}>{hint}</span>}
+        {host.gone_since ? (
+          <span className="mt-0.5 block text-[11px] text-white/45" data-testid={`machine-${host.id}-gone`}>
+            {provider ? `In ${provider.name}` : "Beim Anbieter"} nicht mehr vorhanden ·{" "}
+            <Link to="/settings/hosts" className="underline underline-offset-2 hover:text-white">entfernen</Link>
+          </span>
+        ) : hint && <span className="mt-0.5 block text-[11px] text-white/45" data-testid={`machine-${host.id}-hint`}>{hint}</span>}
       </td>
-      <td className={`${CELL} hidden whitespace-nowrap text-white/55 md:table-cell`}>
-        <span className="tabular-nums">{host.address}</span>
-        <span className="text-white/40"> · {KIND_LABEL[host.kind ?? ""] ?? "Server"}</span>
+      <td className={`${CELL} hidden text-white/55 md:table-cell`}>
+        <span className="block whitespace-nowrap tabular-nums">{host.address}</span>
+        <span className="block whitespace-nowrap text-[11px] text-white/40">{kindLabel(host)}</span>
       </td>
       <td className={CELL}>{empty}</td>
       <td className={CELL}>{empty}</td>
       <td className={`${CELL} hidden sm:table-cell`}>{empty}</td>
-      <td className={`${CELL} hidden lg:table-cell`}>{empty}</td>
+      <td className={`${CELL} hidden xl:table-cell`}>{empty}</td>
       <HostActions host={host} canTerminal={canTerminal} console={hasConsole(host) && health === "online"} />
     </tr>
   );
@@ -294,8 +313,8 @@ function metricsHint(host: HostOut, systemModuleOn: boolean | null): string | nu
   if (!host.enabled) return "Keine Auslastung: Messwerte für diesen Server sind aus";
   if (systemModuleOn === false) return "Keine Auslastung: Modul „Server-Zustand“ ist aus";
   // Hat der Server nie geantwortet, kommt auch nichts mehr nach: erst die Verbindung klaeren, nicht auf Kurven warten.
-  if (hostHealth(host.status) === "problem" && neverAnswered(host)) return "Noch keine Verbindung: prüfe zuerst den Zugang";
-  if (systemModuleOn && hostHealth(host.status) !== "problem") return "Noch keine Messwerte";
+  if (healthOf(host) === "problem" && neverAnswered(host)) return "Noch keine Verbindung: prüfe zuerst den Zugang";
+  if (systemModuleOn && healthOf(host) !== "problem") return "Noch keine Messwerte";
   return null;
 }
 
@@ -322,30 +341,58 @@ export function Cockpit() {
     const order = { problem: 0, unknown: 1, online: 2, stopped: 3 } as const;
     const rest = (hosts ?? [])
       .filter((h) => !isNode(h))
-      .sort((a, b) => order[hostHealth(a.status)] - order[hostHealth(b.status)] || a.display_name.localeCompare(b.display_name));
+      .sort((a, b) => order[healthOf(a)] - order[healthOf(b)] || a.display_name.localeCompare(b.display_name));
     const measured = latest?.hosts ?? {};
     return [rest.filter((h) => measured[h.id]), rest.filter((h) => !measured[h.id])] as const;
   }, [hosts, latest]);
   const systemModuleOn = pages ? pages.some((p) => p.ext_id === "system") : null;
+  // Zeilen der Tabelle in der bisherigen Reihenfolge (Knoten, Server mit Messwerten, übrige), danach nach Art gruppiert.
+  const tableGroups = useMemo(
+    () => groupHosts([...nodes, ...servers, ...(latestLoading ? [] : machines)]),
+    [nodes, servers, machines, latestLoading],
+  );
   const terminalIds = useMemo(() => new Set(terminalHosts ?? []), [terminalHosts]);
+  const measured = latest?.hosts ?? {};
+  const renderHostRow = (host: HostOut) => {
+    const provider = hostProvider(host, extensions);
+    const canTerminal = terminalIds.has(host.id);
+    if (isNode(host)) return <NodeCard key={host.id} host={host} canTerminal={canTerminal} provider={provider} />;
+    if (measured[host.id]) {
+      return <ServerCard key={host.id} host={host} latest={measured[host.id]} unconfirmed={latestError} canTerminal={canTerminal} provider={provider} />;
+    }
+    return <MachineRow key={host.id} host={host} canTerminal={canTerminal} hint={metricsHint(host, systemModuleOn)} provider={provider} />;
+  };
 
   const allHosts = hosts ?? [];
-  const online = allHosts.filter((h) => hostHealth(h.status) === "online").length;
-  const problemHosts = allHosts.filter((h) => hostHealth(h.status) === "problem");
+  // Die Kennzahl „Server“ zählt die physischen Maschinen (auch Hypervisor-Knoten), VMs und LXC stehen dahinter
+  // („3/3 + 4 VMs · 5 LXC“). Ohne physische (nur Gäste) zählt sie alle wie bisher.
+  // Was der Anbieter nicht mehr kennt (etwa in Proxmox gelöscht), zählt nirgends mit; es steht grau in der Tabelle.
+  const present = allHosts.filter((h) => !isGone(h));
+  const physical = present.filter((h) => hostCategory(h) === "server");
+  const counted = physical.length > 0 ? physical : present;
+  const countedOnline = counted.filter((h) => healthOf(h) === "online").length;
+  const guestText = physical.length > 0 ? guestSummary(present) : "";
+  const serversOnline = `${countedOnline} von ${counted.length} Servern online${guestText ? ` (dazu ${guestText})` : ""}`;
+  const problemHosts = allHosts.filter((h) => healthOf(h) === "problem");
   // Von Hand angelegte Server haben ohne „Verbindung prüfen“ keinen Zustand (Proxmox liefert ihn
   // für seine Gäste mit): „unbekannt“ ist weder online noch ein Problem und wird so auch gezählt.
-  const unknownHosts = allHosts.filter((h) => hostHealth(h.status) === "unknown");
+  const unknownHosts = allHosts.filter((h) => healthOf(h) === "unknown");
   const backups = overview?.backups ?? null;
   const backupsUnreachable = backups?.unreachable_names ?? [];
   // Platzhalter nicht erreichbarer Server (`unreachable`) sind keine Dienste: sie zaehlen weder als „laeuft“ noch als „laeuft nicht“.
   const services = (overview?.services ?? []).filter((s) => !s.unreachable);
-  const servicesDown = overview?.services_unreachable_hosts ?? [];
+  // Ein ausgeschalteter oder beim Anbieter gelöschter Gast hat kein Docker, das antworten könnte: keine Störung.
+  const switchedOffNames = new Set(allHosts.filter((h) => healthOf(h) === "stopped").map((h) => h.display_name || h.name));
+  const servicesDown = (overview?.services_unreachable_hosts ?? []).filter((name) => !switchedOffNames.has(name));
   // Nicht nur „Server aus“: der Platzhalter kommt auch, wenn der Server antwortet, Docker aber nicht (Dienst aus, keine Rechte).
   const servicesDownText = `Container von ${servicesDown.length === 1 ? "1 Server" : `${servicesDown.length} Servern`} nicht abrufbar`;
   // Ein Server, der ohnehin als „nicht erreichbar“ in der Liste steht, zaehlt nicht doppelt.
   const problemNames = new Set(problemHosts.map((h) => h.display_name));
   const servicesDownExtra = servicesDown.filter((name) => !problemNames.has(name));
   const attention = overview?.attention ?? [];
+  // Dezent: ein Hinweis, kein Problem. Er zählt nicht in `issues`, verdrängt aber das „Nichts offen“.
+  const helperHints = overview?.helper_hints ?? [];
+  const dismissHint = useDismissHelperHint();
   const issues = problemHosts.length + servicesDownExtra.length + (backups?.failed ?? 0) + backupsUnreachable.length + attention.length + (overview?.pending_actions ?? 0);
 
   // Eigene Apps und erkannte Dienste in einer Liste (`services` bleibt fuer die Kennzahl „Dienste“).
@@ -394,23 +441,23 @@ export function Cockpit() {
             ) : issues === 0 && overviewFailed ? (
               <>
                 <Server size={16} className="text-white/55" />
-                Keine Störung bei den Servern bekannt, {online} von {allHosts.length} online. Dienste, Backups und Meldungen sind {unavailable}.
+                Keine Störung bei den Servern bekannt, {serversOnline}. Dienste, Backups und Meldungen sind {unavailable}.
               </>
             ) : issues === 0 && stale ? (
               <>
                 <Server size={16} className="text-white/55" />
-                Zuletzt keine Störung bekannt, {online} von {allHosts.length} Servern online. Der Stand ist nicht aktuell.
+                Zuletzt keine Störung bekannt, {serversOnline}. Der Stand ist nicht aktuell.
               </>
             ) : issues === 0 && unknownHosts.length > 0 ? (
               <>
                 <Server size={16} className="text-white/55" />
-                Keine Störung bekannt. {online} von {allHosts.length} Servern online, {unknownHosts.length} noch nicht geprüft
+                Keine Störung bekannt. {serversOnline}, {unknownHosts.length} noch nicht geprüft
                 {services.length > 0 && overview ? `, ${overview.services_running} Dienste aktiv` : ""}.
               </>
             ) : issues === 0 ? (
               <>
                 <CheckCircle2 size={16} className="text-emerald-400" />
-                Alles läuft rund. {online} von {allHosts.length} Servern online{overview && services.length > 0 ? `, ${overview.services_running} Dienste aktiv` : ""}.
+                Alles läuft rund. {serversOnline}{overview && services.length > 0 ? `, ${overview.services_running} Dienste aktiv` : ""}.
               </>
             ) : (
               <>
@@ -442,7 +489,8 @@ export function Cockpit() {
       {canReadHosts && (
         <div className="grid grid-cols-2 gap-3 px-4 pt-4 sm:px-6 md:grid-cols-3 xl:grid-cols-5">
           <StatCard
-            label="Server" value={loading ? "…" : hostsFailed ? "–" : noHosts ? "0" : `${online}/${allHosts.length}`}
+            label="Server" value={loading ? "…" : hostsFailed ? "–" : noHosts ? "0" : `${countedOnline}/${counted.length}`}
+            extra={loading || hostsFailed ? undefined : guestText || undefined}
             sub={
               hostsFailed ? unavailable
                 : problemHosts.length ? `${problemHosts.length} nicht erreichbar`
@@ -503,31 +551,25 @@ export function Cockpit() {
                       <th className="px-3 py-2 font-medium">CPU</th>
                       <th className="px-3 py-2 font-medium">RAM</th>
                       <th className="hidden px-3 py-2 font-medium sm:table-cell">Platte</th>
-                      <th className="hidden px-3 py-2 font-medium lg:table-cell">Läuft seit</th>
+                      <th className="hidden px-3 py-2 font-medium xl:table-cell">Läuft seit</th>
                       <th className="px-2 py-2"><span className="sr-only">Aktionen</span></th>
                     </tr>
                   </thead>
-                  {nodes.length + servers.length > 0 && (
-                    <tbody data-testid="host-cards">
-                      {nodes.map((node) => <NodeCard key={node.id} host={node} canTerminal={terminalIds.has(node.id)} provider={hostProvider(node, extensions)} />)}
-                      {servers.map((host) => (
-                        <ServerCard
-                          key={host.id}
-                          host={host}
-                          latest={latest!.hosts[host.id]}
-                          unconfirmed={latestError}
-                          canTerminal={terminalIds.has(host.id)}
-                          provider={hostProvider(host, extensions)}
-                        />
-                      ))}
-                    </tbody>
-                  )}
-                  {!latestLoading && machines.length > 0 && (
-                    <tbody>
-                      {machines.map((host) => (
-                        <MachineRow key={host.id} host={host} canTerminal={terminalIds.has(host.id)} hint={metricsHint(host, systemModuleOn)} provider={hostProvider(host, extensions)} />
-                      ))}
-                    </tbody>
+                  {tableGroups.length > 1 ? (
+                    // Mehrere Arten: je Art ein Abschnitt mit Überschrift (physisch, VMs, LXC), darin wie sonst.
+                    tableGroups.map((group) => (
+                      <tbody key={group.category} data-testid={`host-group-${group.category}`}>
+                        <tr className={ROW}>
+                          <th colSpan={7} className="px-4 pb-1.5 pt-3 text-left font-normal"><GroupHeading group={group} /></th>
+                        </tr>
+                        {group.hosts.map(renderHostRow)}
+                      </tbody>
+                    ))
+                  ) : (
+                    <>
+                      {nodes.length + servers.length > 0 && <tbody data-testid="host-cards">{[...nodes, ...servers].map(renderHostRow)}</tbody>}
+                      {!latestLoading && machines.length > 0 && <tbody>{machines.map(renderHostRow)}</tbody>}
+                    </>
                   )}
                 </table>
               </div>
@@ -569,7 +611,7 @@ export function Cockpit() {
                       : "Vielleicht nicht vollständig: Ein Teil der Daten ließ sich gerade nicht laden."}
                   </p>
                 )}
-                {!loading && issues === 0 && !hostsFailed && !overviewFailed && (stale ? (
+                {!loading && issues === 0 && helperHints.length === 0 && !hostsFailed && !overviewFailed && (stale ? (
                   <p className="p-4 text-sm text-white/60" data-testid="attention-stale">
                     Zuletzt war nichts offen. Der Stand ist nicht aktuell.
                   </p>
@@ -612,6 +654,31 @@ export function Cockpit() {
                       <span className="text-[11px] text-white/45">{relativeTime(a.ts)}{a.source_ext_id ? ` · ${extensionLabel(a.source_ext_id)}` : ""}</span>
                     </span>
                   </Link>
+                ))}
+                {helperHints.map((hint) => (
+                  <div key={`helper-hint-${hint.host_id}`} className="flex items-start gap-2 px-4 py-3 text-sm" data-testid="helper-hint">
+                    <Info size={15} className="mt-0.5 flex-none text-white/45" aria-hidden />
+                    <span className="min-w-0 flex-1 text-white/70">
+                      {canWriteHosts ? (
+                        <Link to={`/settings/hosts/${hint.host_id}?befehl=1`} className="block break-words hover:underline">{helperHintText(hint)}</Link>
+                      ) : (
+                        <span className="block break-words">{helperHintText(hint)}</span>
+                      )}
+                      <span className="text-[11px] text-white/45">geprüft {relativeTime(hint.checked_at)}</span>
+                    </span>
+                    {canWriteHosts && (
+                      <button
+                        type="button"
+                        onClick={() => dismissHint.mutate(hint.host_id)}
+                        disabled={dismissHint.isPending}
+                        aria-label={`Hinweis zu ${hint.host_name} ausblenden`}
+                        title="Ausblenden"
+                        className="flex-none rounded p-1 text-white/40 hover:bg-white/[0.06] hover:text-white disabled:opacity-50"
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
                 ))}
                 {(overview?.errors ?? []).map((e) => (
                   <p key={e} className="px-4 py-2 text-[11px] text-white/45">Teilweise nicht abrufbar: {e}</p>

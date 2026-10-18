@@ -19,6 +19,8 @@ from ..models import CustomApp, Host
 NAME_MAX = 60
 GROUP_MAX = 40
 URL_MAX = 1000
+SERVICE_URL_MAX = 2000
+"""Adressen erkannter Dienste: Das Modul Docker nimmt eigene Kachel-Adressen bis zu dieser Länge an."""
 EMOJI_MAX_CODEPOINTS = 12
 """Längste echte Emoji-Folge (Familie mit Hautfarben) liegt darunter."""
 
@@ -157,13 +159,13 @@ def clean_group(value: str | None) -> str | None:
 # `data:`, `file:` & Co. wären ein Angriff auf den, der klickt). Zugangsdaten in der Adresse (`http://user:pass@...`)
 # werden abgelehnt: Sie stünden für alle lesbar in der Datenbank und täuschen mit `https://google.com@boese.example` ein
 # anderes Ziel vor. Ebenso Leer- und Steuerzeichen und Backslashes (Browser lesen `\` wie `/`).
-def clean_url(value: str) -> str:
+def clean_url(value: str, max_length: int = URL_MAX) -> str:
     """Nur `http://`/`https://` mit Rechnername oder IP-Adresse; gibt die getrimmte Adresse unverändert zurück."""
     text = value.strip()
     if not text:
         raise CustomAppError("Bitte gib eine Adresse an.")
-    if len(text) > URL_MAX:
-        raise CustomAppError(f"Die Adresse ist zu lang (höchstens {URL_MAX} Zeichen).")
+    if len(text) > max_length:
+        raise CustomAppError(f"Die Adresse ist zu lang (höchstens {max_length} Zeichen).")
     if not _SCHEME_RE.match(text):
         raise CustomAppError("Die Adresse muss mit http:// oder https:// beginnen.")
     if "\\" in text or any(ch.isspace() or unicodedata.category(ch).startswith("C") for ch in text):
@@ -193,13 +195,13 @@ def _valid_host(host: str) -> bool:
     return _HOST_RE.fullmatch(host) is not None
 
 
-def stored_url(value: str | None) -> str | None:
+def stored_url(value: str | None, max_length: int = URL_MAX) -> str | None:
     """Die gespeicherte Adresse für die Anzeige, nur wenn sie die Prüfung besteht: Selbst bei einer von Hand
     veränderten Datenbank kommt nie ein `javascript:`-Link in die Oberfläche."""
     if not value:
         return None
     try:
-        return clean_url(value)
+        return clean_url(value, max_length)
     except CustomAppError:
         return None
 

@@ -36,7 +36,7 @@ from .client import NpmError
 from .config import NotConfigured
 from .service import NpmService
 from .suggestions import NpmAppSuggestions
-from .widgets import certificate_rows
+from .widgets import certificate_rows, widget_state
 
 _WIDGET_ITEM = ListItem(title="{{ title }}", subtitle="{{ subtitle }}", badge=Badge(text="{{ label }}", tone="{{ tone }}"))
 
@@ -78,7 +78,7 @@ class Extension(NodvardExtension):
         @read_router.get("/widgets/certificates")
         async def certificates_widget() -> dict[str, Any]:
             state = await service.npm_status()
-            return {"data": certificate_rows(state), "meta": {"state": state["state"]}}
+            return {"data": certificate_rows(state), "meta": {"state": widget_state(state)}}
 
         async def _propose(action_type: str, payload: dict[str, Any], risk: Risk, reason: str, correlation_id: str, actor: Actor) -> dict[str, Any]:
             decision = await ctx.actions.propose(ActionRequest(

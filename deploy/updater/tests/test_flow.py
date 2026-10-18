@@ -1,10 +1,10 @@
-"""Ablauf: Update und Rueckweg gegen eine durchgespielte Engine (`flow_support.LiveWorld`) mit eigener Uhr.
+"""Ablauf: Update und Rückweg gegen eine durchgespielte Engine (`flow_support.LiveWorld`) mit eigener Uhr.
 
-Jeder Test laeuft ueber den echten Client (`engine.Engine`) und die Fake-Engine. Die Fake-Engine prueft Allowlist,
-Form und die Bindung jedes aendernden Aufrufs gegen das Journal, wie es gerade auf der Platte steht
-(`JournalGuard.from_state_dir`) -- ein Ablauf, der einen Schritt ausfuehrt, bevor er ihn ins Journal geschrieben hat,
-faellt so auf. Die Welt prueft bei jedem Aufruf, dass nie zwei Container an denselben Daten laufen und jeder Container
-beim Start dieselben Daten hat wie das Ziel. Am Ende jedes Tests muessen beide Listen leer sein (`Lab.close`).
+Jeder Test läuft über den echten Client (`engine.Engine`) und die Fake-Engine. Die Fake-Engine prüft Allowlist,
+Form und die Bindung jedes ändernden Aufrufs gegen das Journal, wie es gerade auf der Platte steht
+(`JournalGuard.from_state_dir`) -- ein Ablauf, der einen Schritt ausführt, bevor er ihn ins Journal geschrieben hat,
+fällt so auf. Die Welt prüft bei jedem Aufruf, dass nie zwei Container an denselben Daten laufen und jeder Container
+beim Start dieselben Daten hat wie das Ziel. Am Ende jedes Tests müssen beide Listen leer sein (`Lab.close`).
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ def outcome_of(outcome: flow.Outcome) -> tuple:
 
 
 # ---------------------------------------------------------------------------
-# Gesund: applied und ein Rueckweg-Slot
+# Gesund: applied und ein Rückweg-Slot
 # ---------------------------------------------------------------------------
 
 
@@ -54,13 +54,13 @@ def test_healthy_update_is_applied_and_leaves_a_way_back(tmp_path, uid, fixture)
             "applied", None, "0.7.0", "0.7.1", True)
         deck = lab.only_deck()
         assert deck["Id"] != lab.old_id and deck["Name"] == "/" + lab.name and deck["Image"] == new_image
-        assert deck["Config"]["Image"] == lab.target["Config"]["Image"]  # der Tag-Text bleibt unveraendert
+        assert deck["Config"]["Image"] == lab.target["Config"]["Image"]  # der Tag-Text bleibt unverändert
         assert deck["HostConfig"]["RestartPolicy"] == lab.restart
         assert LiveWorld.mount_origin(deck, "/app/data") == lab.world.data_origin  # dieselben Daten
         lab.assert_healthy(deck)
-        assert lab.old_id not in lab.world.containers  # kein Doppelgaenger, den Compose zurueckstufen koennte
+        assert lab.old_id not in lab.world.containers  # kein Doppelgänger, den Compose zurückstufen könnte
         assert lab.world.tagged(LATEST) == new_image
-        assert lab.protect("0.7.0") == lab.old_image  # das alte Image ueberlebt `image prune`
+        assert lab.protect("0.7.0") == lab.old_image  # das alte Image überlebt `image prune`
         state = lab.state()
         assert state.slot == policy.Slot(
             from_version="0.7.0", image_id=lab.old_image, repo_digest=f"{REPOSITORY}@{lab.old_digest}",
@@ -76,8 +76,8 @@ def test_healthy_update_is_applied_and_leaves_a_way_back(tmp_path, uid, fixture)
 
 def test_update_and_rollback_with_the_containerd_store(tmp_path, uid):
     # Docker 29 mit containerd-Store, installiert mit `docker compose pull`: Das alte Image hat nur den Namen des
-    # beweglichen Tags. Nach dem Umhaengen nennt die Engine seinen Registry-Digest nicht mehr -- der Slot stimmt
-    # trotzdem, und der Rueckweg geht, auch nach `image prune -a`.
+    # beweglichen Tags. Nach dem Umhängen nennt die Engine seinen Registry-Digest nicht mehr -- der Slot stimmt
+    # trotzdem, und der Rückweg geht, auch nach `image prune -a`.
     lab = Lab(tmp_path, uid, image_store="containerd")
     try:
         lab.release("0.7.1")
@@ -96,11 +96,11 @@ def test_update_and_rollback_with_the_containerd_store(tmp_path, uid):
 
 @pytest.mark.parametrize("pruned", [False, True], ids=["old_image_still_there", "after_image_prune"])
 def test_a_self_built_image_with_the_containerd_store(tmp_path, uid, pruned):
-    # containerd-Store: Das Dashboard laeuft mit einem selbst gebauten, nur als ghcr getaggten Image. Die Engine nennt
-    # dafuer trotzdem einen Digest im Repository (aus dem Namen abgeleitet), nur kennt die Registry ihn nicht. Ohne
-    # Frage an die Registry sieht das aus wie ein gezogenes Image: Die Vorpruefung ist bereit, das Update holt das
-    # offizielle Image, und der Slot traegt den Digest, den nur dieser Rechner kennt. Der Rueckweg geht, solange das
-    # alte Image da ist; nach `image prune -a` scheitert er am Ziehen, ohne etwas zu veraendern, und der Slot bleibt.
+    # containerd-Store: Das Dashboard läuft mit einem selbst gebauten, nur als ghcr getaggten Image. Die Engine nennt
+    # dafür trotzdem einen Digest im Repository (aus dem Namen abgeleitet), nur kennt die Registry ihn nicht. Ohne
+    # Frage an die Registry sieht das aus wie ein gezogenes Image: Die Vorprüfung ist bereit, das Update holt das
+    # offizielle Image, und der Slot trägt den Digest, den nur dieser Rechner kennt. Der Rückweg geht, solange das
+    # alte Image da ist; nach `image prune -a` scheitert er am Ziehen, ohne etwas zu verändern, und der Slot bleibt.
     lab = Lab(tmp_path, uid, image_store="containerd")
     try:
         del lab.world.registry[lab.old_digest]  # selbst gebaut: nie in der Registry gewesen
@@ -122,10 +122,10 @@ def test_a_self_built_image_with_the_containerd_store(tmp_path, uid, pruned):
             before = list(lab.world.mutations)
             actions = lab.state().actions
             assert outcome_of(lab.run("rollback", "0.7.0")) == ("refused", policy.PULL_FAILED)
-            assert lab.world.mutations == before  # nichts veraendert, auch kein gezogenes Image
+            assert lab.world.mutations == before  # nichts verändert, auch kein gezogenes Image
             assert lab.fake.calls("POST", "/images/create")[-1].query["tag"] == [lab.old_digest]
             assert lab.only_deck()["Id"] == installed["Id"] and lab.world.tagged(LATEST) == newer
-            assert lab.state().slot == slot and lab.state().actions == actions  # der Slot bleibt, zaehlt nicht
+            assert lab.state().slot == slot and lab.state().actions == actions  # der Slot bleibt, zählt nicht
             assert lab.steps == ["begin", None] and not lab.journal_left()
     finally:
         lab.close()
@@ -137,7 +137,7 @@ def test_the_steps_run_in_this_order(lab):
     lab.run()
     kinds = [kind for kind, _ in lab.mutations()]
     assert kinds == ["pull", "tag", "rename", "tag", "create", "connect", "update", "stop", "start", "remove"]
-    # das Primaernetz kommt mit `create`, das zweite Netz per `connect` vor dem Start
+    # das Primärnetz kommt mit `create`, das zweite Netz per `connect` vor dem Start
     assert lab.mutations("tag") == [("tag", f"{PREVIOUS_REPOSITORY}:0.7.0"), ("tag", LATEST)]
     assert lab.mutations("rename") == [("rename", lab.name + "-previous")]
     assert lab.mutations("update") == [("update", "no")]
@@ -193,8 +193,8 @@ def test_a_replaced_slot_gives_up_its_protection(lab):
 
 
 def test_a_protect_tag_of_the_replaced_slot_that_never_goes_does_not_keep_the_helper_busy(lab):
-    # Das Schutz-Tag des ersetzten Slots laesst sich nie entfernen (500). Es geht vor dem Speichern des neuen Slots
-    # (danach liesse die Bindung es nicht mehr zu); nach `CLEANUP_ROUNDS` Runden bleibt es liegen, der neue Slot und
+    # Das Schutz-Tag des ersetzten Slots lässt sich nie entfernen (500). Es geht vor dem Speichern des neuen Slots
+    # (danach ließe die Bindung es nicht mehr zu); nach `CLEANUP_ROUNDS` Runden bleibt es liegen, der neue Slot und
     # das Ergebnis werden gespeichert, der alte Container geht, und der Helfer ist wieder frei.
     old_previous = "sha256:" + _hex("image-0.6.9")
     lab.world.images[old_previous] = {**copy.deepcopy(lab.world.images[lab.old_image]), "Id": old_previous,
@@ -221,7 +221,7 @@ def test_a_protect_tag_of_the_replaced_slot_that_never_goes_does_not_keep_the_he
 
 
 def test_one_off_container_in_parallel_is_left_alone(lab):
-    # `docker compose run nodvard-deck ...` (z. B. eine Sicherung) laeuft neben dem Ziel: es ist kein Ziel, und der
+    # `docker compose run nodvard-deck ...` (z. B. eine Sicherung) läuft neben dem Ziel: es ist kein Ziel, und der
     # Ablauf fasst es nicht an.
     one_off = copy.deepcopy(lab.target)
     one_off["Id"] = _hex("one-off")
@@ -236,7 +236,7 @@ def test_one_off_container_in_parallel_is_left_alone(lab):
 
 
 # ---------------------------------------------------------------------------
-# Vorab abgelehnt: nichts veraendert
+# Vorab abgelehnt: nichts verändert
 # ---------------------------------------------------------------------------
 
 
@@ -311,12 +311,12 @@ def _pulled_image_shows(**changes):
 @pytest.mark.parametrize(("prepare", "code"), [
     (lambda lab: lab.release("0.7.1", label="0.7.2"), policy.TAG_NOT_ON_VERSION),  # das Tag zeigt auf etwas anderes
     (lambda lab: lab.release("0.7.1", label=""), policy.TAG_NOT_ON_VERSION),  # ohne Versions-Label
-    (_point_latest_at_the_old_image, policy.TAG_NOT_ON_VERSION),  # umgehaengt auf die alte Version
+    (_point_latest_at_the_old_image, policy.TAG_NOT_ON_VERSION),  # umgehängt auf die alte Version
     (lambda lab: lab.release("0.7.1", Architecture="arm64"), policy.PLATFORM_MISMATCH),
     (lambda lab: lab.release("0.7.1", tag=None), policy.PULL_FAILED),  # die Registry kennt das Tag nicht
     (lambda lab: lab.release("0.7.1", Config=None), policy.IMAGE_CONFIG_MISSING),
-    # Die Registry nennt keinen gueltigen Digest; das gezogene Image nennt den aufgeloesten Digest nicht; es hat keine
-    # gueltige Image-ID.
+    # Die Registry nennt keinen gültigen Digest; das gezogene Image nennt den aufgelösten Digest nicht; es hat keine
+    # gültige Image-ID.
     pytest.param(_registry_names("sha256:" + "z" * 64), policy.PULL_FAILED, id="resolved_digest_invalid"),
     pytest.param(_registry_names(None), policy.PULL_FAILED, id="resolved_digest_missing"),
     pytest.param(_pulled_image_shows(RepoDigests=[f"{REPOSITORY}@sha256:{'5' * 64}"]), policy.PULL_FAILED,
@@ -328,10 +328,10 @@ def test_wrong_pulled_image_changes_nothing(lab, prepare, code):
     prepare(lab)
     outcome = lab.run()
     assert outcome_of(outcome) == ("refused", code)
-    assert {kind for kind, _ in lab.mutations()} <= {"pull"}  # hoechstens ein gezogenes Image
+    assert {kind for kind, _ in lab.mutations()} <= {"pull"}  # höchstens ein gezogenes Image
     assert lab.only_deck()["Id"] == lab.old_id and lab.world.tagged(LATEST) == lab.old_image
     assert lab.steps[-1] is None and not lab.journal_left()
-    assert lab.state().actions == []  # abgelehnt: zaehlt nicht fuer die Grenze
+    assert lab.state().actions == []  # abgelehnt: zählt nicht für die Grenze
 
 
 @pytest.mark.parametrize("response", [
@@ -367,7 +367,7 @@ def test_a_running_journal_refuses(lab):
 
 
 # ---------------------------------------------------------------------------
-# Rueckbau vor dem Commit
+# Rückbau vor dem Commit
 # ---------------------------------------------------------------------------
 
 
@@ -396,7 +396,7 @@ def test_hard_failures_roll_back_early(lab, behavior, code):
     new_id = lab.mutations("start")[0][1]
     order = lab.world.mutations
     assert order.index(("remove", new_id)) < order.index(("start", lab.old_id))  # erst der neue weg, dann der alte
-    assert lab.clock.t - started < policy.DEADLINE_S / 2  # frueh, nicht erst nach der Frist
+    assert lab.clock.t - started < policy.DEADLINE_S / 2  # früh, nicht erst nach der Frist
     lab.assert_back_to_old()
 
 
@@ -450,8 +450,8 @@ def test_docker_time_refuses_anything_else(value):
 
 
 def test_boot_uptime_is_the_time_since_the_host_started(monkeypatch):
-    # Die Laufzeit des Rechners kommt aus `CLOCK_BOOTTIME` (haengt nicht an der Wanduhr). Nennt das System sie nicht,
-    # ist sie unbekannt -- dann entscheiden bei der Wiederaufnahme die uebrigen Hinweise.
+    # Die Laufzeit des Rechners kommt aus `CLOCK_BOOTTIME` (hängt nicht an der Wanduhr). Nennt das System sie nicht,
+    # ist sie unbekannt -- dann entscheiden bei der Wiederaufnahme die übrigen Hinweise.
     value = flow.boot_uptime()
     assert isinstance(value, float) and value > 0
     assert value <= flow.time.clock_gettime(flow.time.CLOCK_BOOTTIME)
@@ -475,8 +475,8 @@ def test_create_fails_and_the_old_never_stopped(lab):
 
 
 def test_tag_moved_in_between_is_caught_by_the_check(lab):
-    # Zwischen dem Umhaengen des Tags und `create` haengt etwas anderes (Watchtower, `compose pull`) das Tag um:
-    # der neue Container hat dann nicht das gepruefte Image (`.Image`) und wird nie gestartet.
+    # Zwischen dem Umhängen des Tags und `create` hängt etwas anderes (Watchtower, `compose pull`) das Tag um:
+    # der neue Container hat dann nicht das geprüfte Image (`.Image`) und wird nie gestartet.
     lab.release("0.7.1")
     other, other_digest = lab.release("0.7.2", tag=None)
     lab.world.images[other] = copy.deepcopy(lab.world.registry[other_digest])
@@ -494,7 +494,7 @@ def test_tag_moved_in_between_is_caught_by_the_check(lab):
 
 @pytest.mark.parametrize("response", [
     Response(status=500, body={"message": "tried to kill container, but did not receive an exit event"}),
-    Response(status=204),  # meldet Erfolg, der Container laeuft aber weiter
+    Response(status=204),  # meldet Erfolg, der Container läuft aber weiter
 ])
 def test_stop_fails_and_the_old_keeps_running(lab, response):
     lab.release("0.7.1")
@@ -511,10 +511,10 @@ def test_stop_fails_and_the_old_keeps_running(lab, response):
     Response(raw=b""),  # die Antwort geht verloren (Zeitlimit, abgerissene Verbindung)
 ])
 def test_a_stop_that_fails_but_ends_the_old_container_later_brings_it_back(lab, answer):
-    # Der Docker-Dienst antwortet auf den Stopp mit einem Fehler (der Prozess haengt nach SIGKILL noch, etwa auf einer
+    # Der Docker-Dienst antwortet auf den Stopp mit einem Fehler (der Prozess hängt nach SIGKILL noch, etwa auf einer
     # langsamen SD-Karte) oder gar nicht, stoppt den alten Container aber weiter. Kurz danach ist er aus und gilt als
-    # von Hand gestoppt: `unless-stopped` startet ihn nie wieder. Der Rueckbau darf darum nicht gleich glauben, dass er
-    # noch laeuft, sondern wartet die Frist des Stopps ab und startet ihn dann selbst.
+    # von Hand gestoppt: `unless-stopped` startet ihn nie wieder. Der Rückbau darf darum nicht gleich glauben, dass er
+    # noch läuft, sondern wartet die Frist des Stopps ab und startet ihn dann selbst.
     lab.release("0.7.1")
 
     def stop(request):
@@ -524,9 +524,9 @@ def test_a_stop_that_fails_but_ends_the_old_container_later_brings_it_back(lab, 
     lab.fake.route("POST", rf"/containers/{lab.old_id}/stop", stop)
     outcome = lab.run()
     assert outcome_of(outcome) == ("aborted", policy.STOP_FAILED)
-    lab.clock.t += 120  # was danach geschieht: der Stopp ist laengst durch
+    lab.clock.t += 120  # was danach geschieht: der Stopp ist längst durch
     lab.assert_back_to_old()
-    assert lab.mutations("start") == [("start", lab.old_id)]  # der Rueckbau hat ihn selbst wieder gestartet
+    assert lab.mutations("start") == [("start", lab.old_id)]  # der Rückbau hat ihn selbst wieder gestartet
 
 
 def test_start_fails_and_the_old_comes_back(lab):
@@ -540,8 +540,8 @@ def test_start_fails_and_the_old_comes_back(lab):
 
 def test_a_start_that_times_out_but_happens_later_is_undone_anyway(lab):
     # Die Antwort auf `start` bleibt aus (`start_failed`), der Docker-Dienst startet den neuen Container aber noch --
-    # hier genau dann, wenn der Rueckbau ihn entfernen will. Der Rueckbau stoppt ihn trotzdem und entfernt ihn, statt
-    # am 409 (laeuft) aufzugeben und den alten Container gestoppt liegen zu lassen.
+    # hier genau dann, wenn der Rückbau ihn entfernen will. Der Rückbau stoppt ihn trotzdem und entfernt ihn, statt
+    # am 409 (läuft) aufzugeben und den alten Container gestoppt liegen zu lassen.
     lab.release("0.7.1")
     new = {"id": None}
 
@@ -552,7 +552,7 @@ def test_a_start_that_times_out_but_happens_later_is_undone_anyway(lab):
     def remove(request):
         if new["id"] is not None and lab.world.containers[new["id"]]["State"]["Running"] is not True \
                 and ("start", new["id"]) not in lab.mutations():
-            lab.world._start(new["id"], {}, None)  # jetzt laeuft er doch
+            lab.world._start(new["id"], {}, None)  # jetzt läuft er doch
         return lab.world.answer(request)
 
     lab.fake.route("POST", r"/containers/(?!" + lab.old_id + r")[0-9a-f]{64}/start", start)
@@ -572,8 +572,8 @@ def test_rename_conflict(lab):
 
 
 def test_create_timeout_with_a_created_container_is_cleaned_up(lab):
-    # `create` legt den Container an, die Antwort geht aber verloren: seine ID steht nie im Journal. Der Rueckbau
-    # erkennt ihn (angelegt, nie gestartet, neues Image, Compose-Labels), traegt ihn als `created` ein und entfernt ihn.
+    # `create` legt den Container an, die Antwort geht aber verloren: seine ID steht nie im Journal. Der Rückbau
+    # erkennt ihn (angelegt, nie gestartet, neues Image, Compose-Labels), trägt ihn als `created` ein und entfernt ihn.
     new_image, _ = lab.release("0.7.1")
 
     def lost(request):
@@ -608,8 +608,8 @@ def test_foreign_container_under_the_name_is_left_alone(lab):
 
 
 def test_undo_is_announced_before_anything_goes_back(lab):
-    # Write-ahead auch fuer den Rueckbau: bevor der erste Teil zurueckgeht, steht im Journal `undo` mit dem Grund. Ab
-    # dann laesst die Bindung (und die Fake-Engine) nichts mehr vorwaerts zu.
+    # Write-ahead auch für den Rückbau: bevor der erste Teil zurückgeht, steht im Journal `undo` mit dem Grund. Ab
+    # dann lässt die Bindung (und die Fake-Engine) nichts mehr vorwärts zu.
     lab.release("0.7.1", behavior=Behavior(exit_after=20))
     seen = []
 
@@ -664,16 +664,16 @@ def test_old_container_that_does_not_come_back_needs_a_hand(lab):
     outcome = lab.run()
     assert outcome_of(outcome) == ("failed_manual", policy.ROLLBACK_FAILED)
     deck = lab.only_deck()
-    assert deck["Id"] == lab.old_id and deck["Name"] == "/" + lab.name  # so weit wie moeglich zurueckgebaut
+    assert deck["Id"] == lab.old_id and deck["Name"] == "/" + lab.name  # so weit wie möglich zurückgebaut
     assert deck["HostConfig"]["RestartPolicy"] == lab.restart
-    assert lab.protect("0.7.0") == lab.old_image  # das Schutz-Tag bleibt fuer den Weg von Hand
+    assert lab.protect("0.7.0") == lab.old_image  # das Schutz-Tag bleibt für den Weg von Hand
     assert not lab.journal_left()  # kein weiterer Versuch, keine Schleife
     assert len(lab.mutations("start")) == 2  # neu einmal, alt einmal
 
 
 def test_old_slot_that_shares_the_version_keeps_its_tag(lab):
-    # Das Ziel laeuft mit der Version, auf die der Slot zurueckfuehrt (von Hand dorthin gegangen): ein Rueckbau entfernt
-    # das gemeinsame Schutz-Tag nicht, sonst verloere der Slot seinen Schutz.
+    # Das Ziel läuft mit der Version, auf die der Slot zurückführt (von Hand dorthin gegangen): ein Rückbau entfernt
+    # das gemeinsame Schutz-Tag nicht, sonst verlöre der Slot seinen Schutz.
     lab.world._tag(lab.old_image, PREVIOUS_REPOSITORY, "0.7.0")
     slot = policy.Slot(from_version="0.7.0", image_id=lab.old_image, repo_digest=f"{REPOSITORY}@{lab.old_digest}",
                        installed_container_id=_hex("gone"), installed_image_id="sha256:" + _hex("gone-image"),
@@ -686,7 +686,7 @@ def test_old_slot_that_shares_the_version_keeps_its_tag(lab):
 
 
 # ---------------------------------------------------------------------------
-# Engine-Fehler waehrend des Beobachtens
+# Engine-Fehler während des Beobachtens
 # ---------------------------------------------------------------------------
 
 
@@ -718,7 +718,7 @@ def test_engine_errors_while_watching_do_not_end_the_update(lab, lose_version):
 
 
 def test_external_change_while_watching_stops_everything(lab):
-    # Waehrend des Beobachtens legt jemand (z. B. `docker compose up -d`) einen weiteren Container des Dienstes an.
+    # Während des Beobachtens legt jemand (z. B. `docker compose up -d`) einen weiteren Container des Dienstes an.
     lab.release("0.7.1", behavior=Behavior(healthy_after=None, unhealthy_from=10))
     intruder = copy.deepcopy(lab.target)
     intruder.update(Id=_hex("intruder"), Name=f"/{lab.name[:-1]}9")
@@ -735,7 +735,7 @@ def test_external_change_while_watching_stops_everything(lab):
     lab.fake.route("GET", "/containers/json", listing)
     outcome = lab.run()
     assert outcome_of(outcome) == ("external_change", policy.EXTERNAL_CHANGE)
-    assert seen["at"] is not None and len(lab.world.mutations) == seen["at"]  # danach nichts mehr veraendert
+    assert seen["at"] is not None and len(lab.world.mutations) == seen["at"]  # danach nichts mehr verändert
     assert not lab.journal_left()
     # Der alte Container steht mit der Restart-Policy `no`, die der Helfer gesetzt hat: das Log nennt die alte.
     hints = [entry for entry in lab.logs if entry["event"] == "old_restart_policy_left"]
@@ -745,7 +745,7 @@ def test_external_change_while_watching_stops_everything(lab):
 
 
 def _while_watching(lab, change, *, after=30):
-    """Fuehrt `change()` einmal aus, sobald der neue Container `after` Sekunden laeuft (beim Lesen der Liste)."""
+    """Führt `change()` einmal aus, sobald der neue Container `after` Sekunden läuft (beim Lesen der Liste)."""
     seen = {"at": None}
 
     def listing(request):
@@ -761,8 +761,8 @@ def _while_watching(lab, change, *, after=30):
 
 
 def test_old_container_started_from_outside_while_watching(lab):
-    # Jemand startet den alten Container von Hand (`docker start`), waehrend der neue noch hochfaehrt: der Ablauf faellt
-    # nicht auf einen Rueckbau oder Commit herein, sondern fasst nichts mehr an.
+    # Jemand startet den alten Container von Hand (`docker start`), während der neue noch hochfährt: der Ablauf fällt
+    # nicht auf einen Rückbau oder Commit herein, sondern fasst nichts mehr an.
     lab.release("0.7.1", behavior=Behavior(healthy_after=120))
     seen = _while_watching(lab, lambda _new: lab.world._start(lab.old_id, {}, None))
     outcome = lab.run()
@@ -792,8 +792,8 @@ def test_new_container_removed_from_outside_while_watching(lab):
 
 
 def test_without_write_ahead_the_engine_side_notices(lab, monkeypatch):
-    # Gegenprobe zur Pruefung in allen anderen Tests: schreibt der Ablauf den Schritt nicht, lehnt die Fake-Engine den
-    # Aufruf ab (Waechter gegen das Journal auf der Platte), und der Ablauf baut zurueck.
+    # Gegenprobe zur Prüfung in allen anderen Tests: schreibt der Ablauf den Schritt nicht, lehnt die Fake-Engine den
+    # Aufruf ab (Wächter gegen das Journal auf der Platte), und der Ablauf baut zurück.
     real = lab.store.write_journal
 
     def skip_renamed(journal):
@@ -825,8 +825,8 @@ def test_journal_write_failure_rolls_back(lab, monkeypatch):
 
 
 def test_commit_that_cannot_be_written_changes_nothing_more(lab, monkeypatch):
-    # Ohne `committed` auf der Platte wird nichts mehr veraendert: das Journal bleibt auf `started`, der neue
-    # Container laeuft gesund, der alte steht -- die Wiederaufnahme entscheidet spaeter. Kein Rueckbau nach `healthy`.
+    # Ohne `committed` auf der Platte wird nichts mehr verändert: das Journal bleibt auf `started`, der neue
+    # Container läuft gesund, der alte steht -- die Wiederaufnahme entscheidet später. Kein Rückbau nach `healthy`.
     real = lab.store.write_journal
 
     def full(journal):
@@ -846,8 +846,8 @@ def test_commit_that_cannot_be_written_changes_nothing_more(lab, monkeypatch):
 
 @pytest.mark.parametrize("action", ["update", "rollback"])
 def test_a_full_disk_at_the_commit_loses_neither_slot_nor_result(lab, monkeypatch, action):
-    # Nach dem Commit laesst sich `state.json` in dieser Runde nicht schreiben (Datentraeger voll), weder gleich nach
-    # `committed` noch mit dem Slot. Slot bzw. Sperre und Ergebnis stehen dann nur im geladenen Zustand. Die naechste
+    # Nach dem Commit lässt sich `state.json` in dieser Runde nicht schreiben (Datenträger voll), weder gleich nach
+    # `committed` noch mit dem Slot. Slot bzw. Sperre und Ergebnis stehen dann nur im geladenen Zustand. Die nächste
     # Runde bekommt denselben Zustand (wie im Helfer) und muss sie trotzdem speichern, bevor das Journal geht.
     if action == "rollback":
         _updated(lab)
@@ -857,7 +857,7 @@ def test_a_full_disk_at_the_commit_loses_neither_slot_nor_result(lab, monkeypatc
 
     def full_once(state):
         calls.append(None)
-        if len(calls) in (2, 3):  # das erste Speichern zaehlt die Aktion, die naechsten zwei gehoeren zum Commit
+        if len(calls) in (2, 3):  # das erste Speichern zählt die Aktion, die nächsten zwei gehören zum Commit
             raise OSError(28, "No space left on device")
         real(state)
 
@@ -880,7 +880,7 @@ def test_a_full_disk_at_the_commit_loses_neither_slot_nor_result(lab, monkeypatc
 
 
 # ---------------------------------------------------------------------------
-# Rueckweg auf Wunsch
+# Rückweg auf Wunsch
 # ---------------------------------------------------------------------------
 
 
@@ -960,7 +960,7 @@ def test_failed_rollback_returns_to_the_newer_version(lab):
     assert deck["Id"] == installed and deck["Image"] == newer and deck["Name"] == "/" + lab.name
     lab.assert_healthy(deck)
     assert lab.world.tagged(LATEST) == newer
-    assert lab.protect("0.7.1") is None  # das Schutz-Tag dieses Rueckwegs ist weg ...
+    assert lab.protect("0.7.1") is None  # das Schutz-Tag dieses Rückwegs ist weg ...
     assert lab.protect("0.7.0") == lab.old_image  # ... das des Slots bleibt
     assert lab.state().slot == slot and lab.state().blocked == {}
 
@@ -973,7 +973,7 @@ def test_failed_rollback_returns_to_the_newer_version(lab):
 def test_expired_slot_gives_up_its_tag(lab):
     _updated(lab)
     state = lab.state()
-    assert lab.flow.drop_expired_slot(state) is False  # noch gueltig: nichts passiert
+    assert lab.flow.drop_expired_slot(state) is False  # noch gültig: nichts passiert
     assert lab.protect("0.7.0") == lab.old_image
     lab.clock.t += policy.SLOT_TTL_S
     state = lab.state()
@@ -982,13 +982,13 @@ def test_expired_slot_gives_up_its_tag(lab):
 
 
 # ---------------------------------------------------------------------------
-# Weitere Faelle
+# Weitere Fälle
 # ---------------------------------------------------------------------------
 
 
 def test_external_change_between_two_steps_stops_everything(lab):
-    # Nach dem Umbenennen legt jemand einen weiteren Container des Dienstes an: vor dem naechsten Schritt faellt das
-    # auf, und der Ablauf veraendert nichts mehr.
+    # Nach dem Umbenennen legt jemand einen weiteren Container des Dienstes an: vor dem nächsten Schritt fällt das
+    # auf, und der Ablauf verändert nichts mehr.
     lab.release("0.7.1")
     intruder = copy.deepcopy(lab.target)
     intruder.update(Id=_hex("intruder"), Name=f"/{lab.name[:-1]}9")
@@ -1050,13 +1050,13 @@ def test_a_clock_jump_back_after_the_start_does_not_extend_the_deadline(lab):
     started = lab.clock.m
     outcome = lab.run()
     assert outcome_of(outcome) == ("rolled_back", policy.TIMEOUT)
-    assert lab.clock.m - started < policy.DEADLINE_S + 5 * 60  # eine Frist und der Rueckbau, nicht eine Stunde mehr
+    assert lab.clock.m - started < policy.DEADLINE_S + 5 * 60  # eine Frist und der Rückbau, nicht eine Stunde mehr
     lab.assert_back_to_old()
 
 
 def test_a_clock_jump_while_waiting_for_the_old_container_is_no_failure(lab):
-    # Der neue Container beendet sich, der Rueckbau startet den alten und wartet auf `healthy`. Springt die Wanduhr
-    # genau dann um eine Stunde vor, ist das kein Grund, den Rueckweg fuer gescheitert zu erklaeren.
+    # Der neue Container beendet sich, der Rückbau startet den alten und wartet auf `healthy`. Springt die Wanduhr
+    # genau dann um eine Stunde vor, ist das kein Grund, den Rückweg für gescheitert zu erklären.
     lab.release("0.7.1", behavior=Behavior(exit_after=20))
     jumped = {"done": False}
 
@@ -1085,7 +1085,7 @@ def test_on_step_errors_do_not_stop_the_update(lab):
 
 
 def test_undo_gives_up_when_the_engine_never_answers(lab):
-    # Der neue Container laesst sich bis zur Frist nicht entfernen: kein weiterer Versuch, keine Schleife, und der alte
+    # Der neue Container lässt sich bis zur Frist nicht entfernen: kein weiterer Versuch, keine Schleife, und der alte
     # Container wird nicht neben dem neuen gestartet.
     lab.release("0.7.1", behavior=Behavior(exit_after=20))
     lab.fake.route("DELETE", r"/containers/[0-9a-f]{64}", Response(status=500, body={"message": "busy"}))
@@ -1097,7 +1097,7 @@ def test_undo_gives_up_when_the_engine_never_answers(lab):
 
 
 def _unreachable_for(lab, seconds):
-    """Ein Handler, der die Verbindung ohne Antwort schliesst (Docker-Dienst haengt oder startet neu), `seconds` lang ab
+    """Ein Handler, der die Verbindung ohne Antwort schließt (Docker-Dienst hängt oder startet neu), `seconds` lang ab
     dem ersten Aufruf; danach antwortet wieder die Welt."""
     down = {"until": None, "calls": 0}
 
@@ -1118,10 +1118,10 @@ def _old_started_by_the_undo(lab):
 
 @pytest.mark.parametrize("where", ["remove_new", "watch_old"])
 def test_engine_away_longer_than_the_deadline_while_undoing_waits_instead_of_giving_up(lab, where):
-    # Der Docker-Dienst ist laenger als die Frist des Rueckbaus nicht erreichbar (haengt, startet neu), der Helfer
-    # laeuft weiter. Ein endgueltiges `failed_manual` loeschte das Journal: Der alte Container bliebe als
-    # `<name>-previous` gestoppt und ohne Restart-Policy liegen, und niemand raeumte mehr auf. Stattdessen bleibt das
-    # Journal mit dem angekuendigten Rueckbau stehen, und die Wiederaufnahme baut zurueck, sobald die Engine wieder da
+    # Der Docker-Dienst ist länger als die Frist des Rückbaus nicht erreichbar (hängt, startet neu), der Helfer
+    # läuft weiter. Ein endgültiges `failed_manual` löschte das Journal: Der alte Container bliebe als
+    # `<name>-previous` gestoppt und ohne Restart-Policy liegen, und niemand räumte mehr auf. Stattdessen bleibt das
+    # Journal mit dem angekündigten Rückbau stehen, und die Wiederaufnahme baut zurück, sobald die Engine wieder da
     # ist.
     lab.release("0.7.1", behavior=Behavior(exit_after=20))
     handler, down = _unreachable_for(lab, policy.DEADLINE_S + 60)
@@ -1145,10 +1145,10 @@ def test_engine_away_longer_than_the_deadline_while_undoing_waits_instead_of_giv
 
 
 def test_a_full_disk_right_after_create_waits_for_space_instead_of_giving_up(lab, monkeypatch):
-    # Der Datentraeger laeuft genau nach `create` voll: Der neue Container laesst sich weder als `created` eintragen
-    # noch vom Rueckbau uebernehmen. Ein endgueltiges `failed_manual` liesse den alten Container als `<name>-previous`
+    # Der Datenträger läuft genau nach `create` voll: Der neue Container lässt sich weder als `created` eintragen
+    # noch vom Rückbau übernehmen. Ein endgültiges `failed_manual` ließe den alten Container als `<name>-previous`
     # und den neuen unter `<name>` liegen, das bewegliche Tag schon auf dem neuen Image. Stattdessen bleibt das Journal
-    # in `creating` stehen; ist wieder Platz, baut die Wiederaufnahme zurueck.
+    # in `creating` stehen; ist wieder Platz, baut die Wiederaufnahme zurück.
     real = lab.store.write_journal
     disk = {"full": False}
 
@@ -1174,8 +1174,8 @@ def test_a_full_disk_right_after_create_waits_for_space_instead_of_giving_up(lab
 
 
 def test_a_lost_answer_to_the_rename_back_is_no_reason_to_give_up(lab):
-    # Der Docker-Dienst benennt den alten Container im Rueckbau zurueck, die Antwort geht aber verloren (Zeitlimit auf
-    # einem ueberlasteten Rechner, abgerissene Verbindung). Ein zweiter Versuch auf denselben Namen bekaeme 400 ("same
+    # Der Docker-Dienst benennt den alten Container im Rückbau zurück, die Antwort geht aber verloren (Zeitlimit auf
+    # einem überlasteten Rechner, abgerissene Verbindung). Ein zweiter Versuch auf denselben Namen bekäme 400 ("same
     # name as its current name"): kein Grund aufzugeben, der Name stimmt ja schon. Sonst bliebe der alte Container
     # gestoppt und mit der Restart-Policy `no` liegen, und es liefe gar kein Dashboard mehr.
     lab.release("0.7.1", behavior=Behavior(exit_after=20))
@@ -1184,7 +1184,7 @@ def test_a_lost_answer_to_the_rename_back_is_no_reason_to_give_up(lab):
     def rename(request):
         renames["n"] += 1
         answer = lab.world.answer(request)
-        if renames["n"] == 2:  # das Zurueckbenennen im Rueckbau: ausgefuehrt, aber ohne Antwort
+        if renames["n"] == 2:  # das Zurückbenennen im Rückbau: ausgeführt, aber ohne Antwort
             return Response(raw=b"")
         return answer
 
@@ -1201,7 +1201,7 @@ def test_the_world_refuses_a_rename_to_the_current_name_like_docker(lab):
 
 
 def test_client_errors_while_undoing_are_final(lab):
-    # Ein 4xx der Engine aendert sich durch Warten nicht: sofort aufgeben statt 15 Minuten zu wiederholen.
+    # Ein 4xx der Engine ändert sich durch Warten nicht: sofort aufgeben statt 15 Minuten zu wiederholen.
     lab.release("0.7.1", behavior=Behavior(exit_after=20))
     real = lab.world.answer
     renames = {"n": 0}
@@ -1238,9 +1238,9 @@ def test_expired_slot_stays_while_the_engine_fails(lab):
 
 
 def test_expired_slot_whose_tag_is_refused_for_good_goes_anyway(lab):
-    # Der Docker-Dienst lehnt das Entfernen des Schutz-Tags endgueltig ab (409: ein liegen gebliebener alter Container
-    # benutzt das Image noch, und das Tag ist sein letzter Name). Ein weiterer Versuch aenderte daran nichts: Das Tag
-    # bleibt liegen (es haelt nur ein Image fest), der Slot geht trotzdem -- statt alle 30 s ohne Ende neu zu fragen.
+    # Der Docker-Dienst lehnt das Entfernen des Schutz-Tags endgültig ab (409: ein liegen gebliebener alter Container
+    # benutzt das Image noch, und das Tag ist sein letzter Name). Ein weiterer Versuch änderte daran nichts: Das Tag
+    # bleibt liegen (es hält nur ein Image fest), der Slot geht trotzdem -- statt alle 30 s ohne Ende neu zu fragen.
     _updated(lab)
     lab.fake.route("DELETE", r"/images/.*", Response(status=409, body={
         "message": "conflict: unable to remove repository reference (must force) - container is using its image"}))
@@ -1254,12 +1254,12 @@ def test_expired_slot_whose_tag_is_refused_for_good_goes_anyway(lab):
 
 
 # ---------------------------------------------------------------------------
-# Die Welt prueft wirklich
+# Die Welt prüft wirklich
 # ---------------------------------------------------------------------------
 
 
 def test_world_notices_two_containers_on_the_same_data(lab):
-    # Gegenprobe zu "keine Verstoesse" in allen Tests: die Welt haelt einen zweiten laufenden Container an denselben
+    # Gegenprobe zu "keine Verstöße" in allen Tests: die Welt hält einen zweiten laufenden Container an denselben
     # Daten und einen Start mit anderen Daten fest.
     twin = copy.deepcopy(lab.target)
     twin.update(Id=_hex("twin"), Name="/twin", State=created_state_for_test())
@@ -1306,7 +1306,7 @@ def test_the_world_restarts_containers_like_docker(lab):
 
 
 def test_the_containerd_world_derives_repo_digests_from_the_names(tmp_path, uid):
-    # Gegenprobe zum containerd-Store: `RepoDigests` folgt den Namen. Verlaesst das bewegliche Tag das alte Image, nennt
+    # Gegenprobe zum containerd-Store: `RepoDigests` folgt den Namen. Verlässt das bewegliche Tag das alte Image, nennt
     # die Engine dessen Digest im Repository nicht mehr, nur noch unter dem Schutz-Tag.
     lab = Lab(tmp_path, uid, image_store="containerd")
     try:
@@ -1329,7 +1329,7 @@ def created_state_for_test() -> dict:
 
 
 def test_no_renegotiation_during_a_healthy_update(lab):
-    # Die API-Version wird einmal vor dem Vorgang ausgehandelt (Vorpruefung), danach nur nach einem Engine-Fehler.
+    # Die API-Version wird einmal vor dem Vorgang ausgehandelt (Vorprüfung), danach nur nach einem Engine-Fehler.
     lab.release("0.7.1", behavior=Behavior(healthy_after=300))
     lab.run()
     assert len(lab.fake.calls("GET", "/_ping")) == 1
@@ -1350,5 +1350,5 @@ def test_a_protect_tag_that_will_not_go_does_not_spoil_the_way_back(lab):
     assert outcome_of(outcome) == ("rolled_back", policy.EXITED)
     deck = lab.only_deck()
     assert deck["Id"] == lab.old_id and deck["Name"] == "/" + lab.name
-    assert lab.protect("0.7.0") == lab.old_image  # bleibt liegen, haelt nur das Image fest
+    assert lab.protect("0.7.0") == lab.old_image  # bleibt liegen, hält nur das Image fest
     assert any(e["event"] == "protect_tag_left" for e in lab.logs)

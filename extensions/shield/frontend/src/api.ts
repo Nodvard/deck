@@ -5,8 +5,8 @@ import { isActionRunning, runAction, RUNNING_IN_BACKGROUND } from "../../../_sha
 import { authedFetch, errorFromBody } from "../../../_shared/frontend/src/api";
 import { EXT_API } from "./ids";
 
-/** Server-Ansicht: kommt man ueber die Kachel "Sicherheit" auf der Server-Seite
- * (`?host=<id>`), zeigen alle Reiter nur diesen Server. */
+/** Server-Ansicht: Kommt man über die Kachel „Sicherheit“ auf der Server-Seite (`?host=<id>`) her, zeigen alle Reiter
+ * nur diesen Server. */
 export const HostFilter = createContext<string | null>(null);
 
 export function useForHost<T extends { host_id: string }>(rows: T[]): T[] {
@@ -23,11 +23,11 @@ export async function call<T = unknown>(path: string, init: RequestInit = {}): P
   return body as T;
 }
 
-/** Aktion ueber das Gate vorschlagen und -- wer freigeben darf -- gleich bestaetigen. */
+/** Schlägt die Aktion über das Gate vor und bestätigt sie gleich, wenn der Nutzer freigeben darf. */
 export async function proposeAndApprove(path: string, body: unknown, risk: "low" | "medium" | "high", signal?: AbortSignal): Promise<string> {
-  // Die Route nennt keine Risikostufe -- fuer die Freigabe-Pruefung gilt `risk`. Laeuft die
-  // Aktion laenger als die Anfrage wartet, fragt runAction alle 3 s nach (bis `signal`,
-  // das Verlassen der Seite, abbricht -- dann gilt sie als "laeuft im Hintergrund").
+  // Die Route nennt keine Risikostufe, für die Freigabe-Prüfung gilt `risk`. Läuft die Aktion länger als die Anfrage
+  // wartet, fragt runAction alle 3 s nach, bis `signal` (Seite verlassen) abbricht: dann gilt sie als „läuft im
+  // Hintergrund“.
   const { action, approved } = await runAction(path, { method: "POST", body: JSON.stringify(body) }, { risk, signal });
   const status = action.status ?? "";
   if (approved) {

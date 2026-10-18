@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from .client import VaultwardenClient, VaultwardenError
-from .config import NotConfigured, vaultwarden_config
+from .config import InvalidSetting, NotConfigured, vaultwarden_config
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
@@ -23,7 +23,7 @@ class VaultwardenService:
         try:
             config = vaultwarden_config(await self._ctx.settings.get())
         except NotConfigured as exc:
-            return {"state": "not_configured", "message": str(exc)}
+            return {"state": "not_configured", "message": str(exc), "invalid": isinstance(exc, InvalidSetting)}
         base: dict[str, Any] = {"url": config.url, "https": config.https}
         try:
             info = await VaultwardenClient(self._ctx.http, config.url, insecure_tls=config.insecure_tls).info()

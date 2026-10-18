@@ -32,6 +32,7 @@ const SUGGESTIONS = {
   suggestions: [
     { name: "cloud.example.org", url: "https://cloud.example.org", source: "Nginx Proxy Manager", host: null },
     { name: "uptime", url: "http://10.0.0.5:3001", source: "Docker", host: "docker" },
+    { name: "grafana", url: "http://10.0.0.5:3000", source: "Docker", host: "docker", service_id: "d1" },
   ],
   errors: ["Vorschläge von „Netzwerk“ ließen sich gerade nicht lesen."],
 };
@@ -135,6 +136,18 @@ describe("Seite „Apps“", () => {
     expect(screen.getByDisplayValue("cloud.example.org")).toBeInTheDocument();
   });
 
+  it("ein erkannter Dienst steht nicht noch einmal unter Vorschläge, er wird an seiner Kachel übernommen", async () => {
+    renderPage();
+    const list = await screen.findByTestId("suggestions");
+    await within(list).findByText("cloud.example.org");
+    expect(within(list).queryByText("grafana")).toBeNull();
+    expect(within(list).getByText("uptime")).toBeInTheDocument(); // ohne Kachel bleibt er ein Vorschlag
+    const detected = screen.getByTestId("detected");
+    fireEvent.click(within(detected).getByRole("button", { name: "grafana als App übernehmen" }));
+    expect(await screen.findByDisplayValue("http://10.0.0.5:3000")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("grafana")).toBeInTheDocument();
+  });
+
   it("ohne Schreibrecht: kein Ziehen, keine Vorschläge, kein Hinzufügen", async () => {
     login(["hosts.read"]);
     renderPage();
@@ -142,6 +155,7 @@ describe("Seite „Apps“", () => {
     expect(screen.getByTestId("drag-a1")).not.toHaveAttribute("draggable", "true");
     expect(screen.queryByTestId("suggestions")).toBeNull();
     expect(screen.queryByRole("button", { name: /App hinzufügen/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /als App übernehmen/ })).toBeNull();
     expect(calls.some((c) => c.url === "/apps/suggestions")).toBe(false);
   });
 

@@ -211,7 +211,7 @@ describe("InventoryPage", () => {
     const csv = inventoryCsv([{ ...ITEMS[0], notes: 'Regal "oben"; links' }], () => "Elektronik", () => "Keller");
     const [header, row] = csv.replace(/^\ufeff/, "").split("\r\n");
     expect(csv.startsWith("\ufeff")).toBe(true);
-    // Neue Spalten hinten angehängt, damit vorhandene Auswertungen weiter passen.
+    // Die Technik-Spalten stehen hinten, damit vorhandene Auswertungen weiter passen.
     expect(header).toBe("Name;Kategorie;Standort;Menge;Kaufdatum;Preis (EUR);Garantie bis;Beschreibung;Notizen;Hersteller;Modell;Seriennummer;Produktlink");
     expect(row).toBe('Bohrmaschine;Elektronik;Keller;2;2024-01-15;89,99;2099-01-01;Bosch;"Regal ""oben""; links";;;;');
     // Text, den Excel für eine Formel hielte, bekommt einen Apostroph davor (eingelesen fällt er wieder weg).

@@ -8,7 +8,7 @@ import "@xterm/xterm/css/xterm.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { HostPicker, type HostTile } from "../../../extensions/_shared/frontend/src/HostPicker";
+import { HostPicker, statusTone, tileFromHost, type HostTile } from "../../../extensions/_shared/frontend/src/HostPicker";
 import { ButtonLink, EmptyState } from "../components/EmptyState";
 import { api } from "../lib/api";
 import { loadOnce } from "../lib/chunkLoad";
@@ -20,6 +20,12 @@ interface HostOut {
   display_name: string;
   address: string;
   kind: string | null;
+  /** Art und An/Aus (siehe `hostKind.tsx`); fehlen bei älteren Servern. */
+  category?: string;
+  parent_label?: string | null;
+  power_state?: string | null;
+  /** Seit wann der Anbieter den Gast nicht mehr kennt. */
+  gone_since?: string | null;
   status: string;
   /** Standard-Zugang, `null` ohne Zugang. */
   credential?: { kind: string } | null;
@@ -368,7 +374,7 @@ export function TerminalPage() {
     return hosts
       .filter((h) => terminalIds.has(h.id) || consoleIds.has(h.id))
       .sort((a, b) => (a.display_name || a.name).localeCompare(b.display_name || b.name))
-      .map((h) => ({ id: h.id, name: h.display_name || h.name, address: h.address, os: h.os_family, status: h.status }));
+      .map(tileFromHost);
   }, [hosts, terminalIds, consoleIds]);
   const hostById = useMemo(() => new Map((hosts ?? []).map((h) => [h.id, h])), [hosts]);
 
@@ -391,6 +397,12 @@ export function TerminalPage() {
             canManageExtensions={canManageExtensions}
           />
         )}
+        {hasUsable && (
+          <p className="text-xs text-white/50" data-testid="terminal-explain">
+            <b className="font-medium text-white/70">Terminal</b>: SSH mit dem Zugang von Nodvard Deck.{" "}
+            <b className="font-medium text-white/70">Konsole</b>: Bildschirm des Gasts über Proxmox, geht auch ohne SSH.
+          </p>
+        )}
         <div className="max-h-48 min-h-0 overflow-auto lg:max-h-none">
           <HostPicker
             hosts={tiles}
@@ -399,24 +411,36 @@ export function TerminalPage() {
             storageKey="terminal"
             searchFrom={2}
             gridClass="grid-cols-1"
-            actions={(h) => (
-              <>
-                {terminalIds.has(h.id) && (
-                  <button
-                    type="button"
-                    onClick={() => { const host = hostById.get(h.id); if (host) openTab(host); }}
-                    className="accent-soft rounded px-2 py-0.5 text-xs hover:brightness-125"
-                  >
-                    Terminal öffnen
-                  </button>
-                )}
-                {consoleIds.has(h.id) && (
-                  <Link to={`/console/${h.id}`} className="rounded bg-white/10 px-2 py-0.5 text-xs hover:bg-white/20">
-                    Konsole
-                  </Link>
-                )}
-              </>
-            )}
+            actions={(h) => {
+              // Nicht erreichbar, aus oder in Proxmox gelöscht: Knöpfe gedimmt, aber bedienbar (der Status kann veraltet sein).
+              const tone = statusTone(h.status, h.power_state, h.gone_since).tone;
+              const offline = tone === "bad" || tone === "off";
+              const why = h.gone_since ? "Nicht mehr vorhanden." : tone === "off" ? "Ausgeschaltet." : "Gerade nicht erreichbar.";
+              const dim = offline ? " opacity-50" : "";
+              return (
+                <>
+                  {terminalIds.has(h.id) && (
+                    <button
+                      type="button"
+                      onClick={() => { const host = hostById.get(h.id); if (host) openTab(host); }}
+                      className={`accent-soft rounded px-2 py-0.5 text-xs hover:brightness-125${dim}`}
+                      title={`${offline ? `${why} ` : ""}SSH mit dem Zugang von Nodvard Deck`}
+                    >
+                      Terminal öffnen
+                    </button>
+                  )}
+                  {consoleIds.has(h.id) && (
+                    <Link
+                      to={`/console/${h.id}`}
+                      className={`rounded bg-white/10 px-2 py-0.5 text-xs hover:bg-white/20${dim}`}
+                      title={offline ? `${why} Bildschirm des Gasts über Proxmox.` : "Bildschirm des Gasts über Proxmox, geht auch ohne SSH"}
+                    >
+                      Konsole
+                    </Link>
+                  )}
+                </>
+              );
+            }}
           />
         </div>
       </aside>

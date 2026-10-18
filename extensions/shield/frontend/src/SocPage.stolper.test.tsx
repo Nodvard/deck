@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { ContainerWatch } from "./ContainerWatch";
 import { SocPage } from "./SocPage";
 
-/** Stolperstellen Teil 1: Ladefehler sind keine leere Liste, Grossaktionen fragen nach, Fehler mit Grund. */
+/** Stolperstellen: Ladefehler sind keine leere Liste, Großaktionen fragen nach, Fehler mit Grund. */
 
 const OVERVIEW = {
   hosts: [

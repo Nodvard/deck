@@ -1935,7 +1935,8 @@ async def test_upsert_discovered_resync_keeps_the_login_proof_of_the_core(tmp_pa
     )
     host = await db_session.get(Host, created[0].id)
     proof = {"credential_id": "c1", "address": "192.168.1.10", "port": 22, "at": "2026-10-01T10:00:00+00:00"}
-    host.host_metadata = {**host.host_metadata, "login_ok": proof}
+    setup_run = {"from": "2026-10-16T08:00:00+00:00", "to": "2026-10-16T08:01:00+00:00"}
+    host.host_metadata = {**host.host_metadata, "login_ok": proof, "setup_run": setup_run}
     await db_session.commit()
 
     await ctx.hosts.upsert_discovered(
@@ -1944,6 +1945,51 @@ async def test_upsert_discovered_resync_keeps_the_login_proof_of_the_core(tmp_pa
     db_session.expire_all()
     stored = (await db_session.get(Host, created[0].id)).host_metadata
     assert stored["connection"] == "b" and stored["login_ok"] == proof
+    # Ebenso das Zeitfenster der letzten eigenen Einrichtung (für den Datei-Wächter von Nodvard Shield).
+    assert stored["setup_run"] == setup_run
+
+
+@pytest.mark.asyncio
+async def test_upsert_discovered_keeps_parent_and_power_state_in_step_with_the_provider(tmp_path, db_session, monkeypatch):
+    """Elternhost und An/Aus kommen bei jedem Abgleich neu vom Anbieter; fehlt eine Angabe, verschwindet sie mit."""
+    from nodvard_deck.models import Host
+
+    _, _, ctx = _build(tmp_path, permissions=["hosts.read", "hosts.write"])
+    guest = {"provider_ref": "lxc/201", "name": "dns", "address": "192.168.1.20", "kind": "lxc"}
+    created = await ctx.hosts.upsert_discovered(
+        [DiscoveredHost(**guest, parent_ref="node/pve1", parent_label="pve1", power_state="stopped")]
+    )
+    host = await db_session.get(Host, created[0].id)
+    assert host.host_metadata == {"parent_ref": "node/pve1", "parent_label": "pve1", "power_state": "stopped"}
+    assert created[0].metadata["parent_label"] == "pve1"
+
+    await ctx.hosts.upsert_discovered([DiscoveredHost(**guest, parent_label="pve2")])
+    db_session.expire_all()
+    assert (await db_session.get(Host, created[0].id)).host_metadata == {"parent_label": "pve2"}
+
+
+@pytest.mark.asyncio
+async def test_mark_gone_touches_only_own_hosts_and_needs_write(tmp_path, db_session):
+    from nodvard_deck.models import Host
+    from nodvard_sdk.errors import PermissionDenied
+
+    _, _, ctx = _build(tmp_path, permissions=["hosts.read", "hosts.write"])
+    created = await ctx.hosts.upsert_discovered([DiscoveredHost(provider_ref="lxc/201", name="dns", address="192.168.1.20")])
+    foreign = Host(name="fremd", address="192.168.1.21", provider_ext_id="andere", provider_ref="lxc/201")
+    db_session.add(foreign)
+    await db_session.flush()
+    foreign_id = foreign.id
+    await db_session.commit()
+
+    assert await ctx.hosts.mark_gone(["lxc/201"]) == 1
+    assert await ctx.hosts.mark_gone(["lxc/201"]) == 0  # schon markiert: Zeitpunkt bleibt
+    db_session.expire_all()
+    assert (await db_session.get(Host, created[0].id)).host_metadata["gone_since"]
+    assert "gone_since" not in ((await db_session.get(Host, foreign_id)).host_metadata or {})
+
+    _, _, reader = _build(tmp_path, permissions=["hosts.read"])
+    with pytest.raises(PermissionDenied):
+        await reader.hosts.mark_gone(["lxc/201"])
 
 
 @pytest.mark.asyncio

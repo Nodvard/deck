@@ -266,6 +266,13 @@ class FakeResult:
         self.exit_code, self.stdout, self.stderr, self.duration_ms = exit_code, stdout, stderr, 1
 
 
+def _registry_of(call: str) -> str:
+    """Erster Teil des Image-Namens hinter `inspect`, bei Docker Hub der Namensraum."""
+    args = shlex.split(call)
+    ref = next(a for a in args[args.index("inspect") + 1:] if not a.startswith("-"))
+    return ref.split("/", 1)[0]
+
+
 class FakeDocker:
     """Antwortet auf genau die Befehle der Extension; alles andere waere ein Fehler im Test."""
 
@@ -293,6 +300,9 @@ class FakeDocker:
 
     def registry_calls(self) -> list[str]:
         return [c for c in self.calls if " imagetools " in c or " manifest " in c]
+
+    def registry_hosts(self) -> list[str]:
+        return [_registry_of(call) for call in self.registry_calls()]
 
     async def run(self, command: str) -> FakeResult:
         self.calls.append(command)
@@ -693,7 +703,7 @@ async def test_rate_limit_stops_further_questions_to_the_same_registry_only(tmp_
     service, ctx = make(tmp_path, docker)
     await service.check_host(ctx.host_objects[0])
     # Alle Docker-Hub-Images nach dem ersten Fehlschlag: keine weitere Anfrage, gleicher Grund.
-    hub_calls = [c for c in docker.registry_calls() if "ghcr.io" not in c]
+    hub_calls = [c for c in docker.registry_calls() if _registry_of(c) != "ghcr.io"]
     assert len(hub_calls) == 1
     for name in ("a", "b", "c"):
         assert result_of(service, "h1", name)["status"] == UNKNOWN
@@ -1122,7 +1132,7 @@ async def test_an_unreachable_registry_is_asked_once_per_run_not_once_per_image(
     docker.add("fine", "quay.io/a/b:3", image_id=dg("7"), repo_digests=["quay.io/a/b@" + dg("c")], remote=dg("c"))
     service, ctx = make(tmp_path, docker)
     await service.check_host(ctx.host_objects[0])
-    assert len([c for c in docker.registry_calls() if "ghcr.io" in c]) == 1
+    assert docker.registry_hosts().count("ghcr.io") == 1
     for n in range(6):
         assert result_of(service, "h1", f"c{n}")["status"] == UNKNOWN
         assert "nicht erreichbar" in result_of(service, "h1", f"c{n}")["reason"]

@@ -91,7 +91,7 @@ def test_fixtures_hold_no_private_addresses():
     for address in re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text):
         assert address.startswith("203.0.113."), address
     for host in re.findall(r"https?://([^/\s\"':]+)", text):
-        assert host.endswith("example.com"), host
+        assert host == "example.com" or host.endswith(".example.com"), host
     assert TOKEN not in text
 
 
@@ -359,6 +359,7 @@ def test_base_url_is_normalized_and_credentials_are_refused():
     assert normalize_base_url("http://plex.example.com:32400/") == BASE
     assert normalize_base_url(" https://plex.example.com/plex/ ") == "https://plex.example.com/plex"
     assert normalize_base_url("http://203.0.113.20:32400/?x=1#y") == "http://203.0.113.20:32400"
+    assert normalize_base_url("http://203.0.113.20:32400/web/index.html#!/") == "http://203.0.113.20:32400"
     for bad in ("plex.example.com:32400", "ftp://plex.example.com", "http://", "http://user:pw@plex.example.com", "http://@plex.example.com", "http://plex.example.com:999999", ""):
         with pytest.raises(ValueError):
             normalize_base_url(bad)
@@ -708,6 +709,34 @@ async def test_connection_without_token_is_not_configured(client, db_session, te
     assert res.status_code == 204
     assert _only(await _overview(client, headers))["state"] == "ok"
 
+
+@pytest.mark.asyncio
+async def test_widget_meta_says_not_configured_only_without_any_set_up_connection(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    # Nichts eingetragen: die Übersicht darf die Kachel ausblenden; die übrigen `meta`-Felder bleiben.
+    assert (await _widget(client, headers))["meta"] == {"connections": 0, "playing": 0, "transcoding": 0, "state": "not_configured"}
+
+    # Eine Verbindung ohne Token ist ebenfalls nicht eingerichtet; die Textzeile bleibt für ältere Oberflächen.
+    await _configure(client, headers, _connection(), token=None)
+    widget = await _widget(client, headers)
+    assert widget["meta"]["state"] == "not_configured" and widget["meta"]["connections"] == 1
+    assert widget["data"][0]["label"] == "nicht eingerichtet"
+
+    # Mit Token gilt die Verbindung als eingerichtet, auch wenn der Server nicht antwortet: Fehler bleiben sichtbar.
+    await _configure(client, headers, _connection())
+    fake.error = httpx.ConnectError("refused")
+    widget = await _widget(client, headers)
+    assert "state" not in widget["meta"] and widget["meta"]["connections"] == 1
+    assert _only(await _overview(client, headers))["state"] == "unreachable"
+
+    # Eine eingerichtete und eine nicht eingerichtete Verbindung: das Modul ist eingerichtet.
+    await _configure(client, headers, _connection(), _connection("zwei"), token=None)
+    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": "plex-token:pl", "value": TOKEN}, headers=headers)
+    assert res.status_code == 204
+    assert [c["state"] for c in (await _overview(client, headers))["connections"]] == ["unreachable", "not_configured"]
+    widget = await _widget(client, headers)
+    assert "state" not in widget["meta"] and widget["meta"]["connections"] == 2
+    assert [row["label"] for row in widget["data"]] == ["nicht erreichbar", "nicht eingerichtet"]
 
 @pytest.mark.asyncio
 async def test_full_overview_shows_server_playbacks_libraries_and_new_media(client, db_session, test_settings, caplog):
@@ -1685,7 +1714,7 @@ async def test_each_connection_is_suggested_as_an_app_without_any_request(client
     res = await client.get("/api/v1/apps/suggestions", headers=headers)
     assert res.status_code == 200, res.text
     assert res.json() == {
-        "suggestions": [{"name": "Plex", "url": "http://203.0.113.20:32400", "source": "Plex", "host": None}],
+        "suggestions": [{"name": "Plex", "url": "http://203.0.113.20:32400", "source": "Plex", "host": None, "service_id": None}],
         "errors": [],
     }
 

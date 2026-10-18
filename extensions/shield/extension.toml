@@ -12,7 +12,7 @@ sort_order  = 10
 entrypoint  = "nodvard_deck_ext_shield:Extension"
 frontend    = "frontend/dist/index.js"
 # Hilfsskript für root-Befehle (inline, nicht als eigener Abschnitt; Regeln in nodvard_sdk.RootHelperSpec).
-root_helper = { file = "root-helper/shield-root.sh", version = 12 }
+root_helper = { file = "root-helper/shield-root.sh", version = 14 }
 
 permissions = [
   "net.outbound",

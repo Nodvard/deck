@@ -327,14 +327,10 @@ select option {
   from { opacity: 0; transform: scale(0.97); }
 }
 
-/* Widgets scrollen notfalls, ohne sichtbaren Balken; der Inhalt blendet unten weich aus. */
+/* Die Karten wachsen mit dem Inhalt und kürzen lange Listen mit „+ x weitere“ (src/widgets/fit.ts). Nur Text, der
+   nicht in die größte Stufe passt, scrollt noch: mit schmalem, sichtbarem Balken statt ausgeblendetem Rand. */
 .widget-body {
-  scrollbar-width: none;
-  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 18px), transparent);
-  mask-image: linear-gradient(to bottom, black calc(100% - 18px), transparent);
-}
-.widget-body::-webkit-scrollbar {
-  display: none;
+  scrollbar-width: thin;
 }
 
 /* Chrome färbt automatisch ausgefüllte Felder hellblau, das passt zu keinem Theme. */
@@ -345,4 +341,12 @@ input:-webkit-autofill:focus {
   caret-color: var(--color-text);
   box-shadow: 0 0 0 1000px var(--color-surface) inset;
   transition: background-color 9999s ease-out 0s;
+}
+
+/* `sr-only` ist absolut positioniert. Steht es in einer waagerecht scrollenden Leiste (Einstellungs-Menü schmal,
+   Tabelle mit overflow-x-auto) ohne positionierten Vorfahren, gilt es nicht als Inhalt dieser Leiste: An seiner
+   gedachten Stelle weit rechts machte es die ganze Seite breiter (bei 900 px Fensterbreite 1541 px). Links verankert
+   bleibt es, wo es ist, nur ohne Breite nach rechts. Senkrecht bleibt die Stelle, damit Fokus nicht nach oben springt. */
+.sr-only {
+  left: 0;
 }

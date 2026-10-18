@@ -1,7 +1,7 @@
 """`channel.py`: der Kanal zwischen Dashboard und Helfer.
 
 Echtes Dateisystem unter `tmp_path`. Das Dashboard gilt als Angreifer: Symlinks, FIFOs, Hardlinks, riesige und
-duenne Dateien, ausgetauschte Ordner, vorab hingelegte Temp-Namen, sehr viele Eintraege. Der Helfer darf dabei
+dünne Dateien, ausgetauschte Ordner, vorab hingelegte Temp-Namen, sehr viele Einträge. Der Helfer darf dabei
 nie blockieren, nie einem Link folgen, nie in Anforderungen schreiben und nur feste Codes in den Status schreiben.
 """
 
@@ -77,7 +77,7 @@ def unsafe(func, *args, **kwargs) -> str | None:
 
 
 def run_with_timeout(func, timeout: float = 10.0):
-    """Fuehrt `func` in einem Thread aus und schlaegt fehl, wenn er blockiert (statt die Tests haengen zu lassen)."""
+    """Führt `func` in einem Thread aus und schlägt fehl, wenn er blockiert (statt die Tests hängen zu lassen)."""
     result: dict = {}
 
     def target():
@@ -167,7 +167,7 @@ def test_requests_dir_of_dashboard_user_is_unsafe(root):
 
 
 def test_production_defaults_are_the_strict_ones():
-    # Testbarkeit ohne root nur ueber den Konstruktor (nie ueber die Umgebung); im Betrieb gelten die Vorgaben.
+    # Testbarkeit ohne root nur über den Konstruktor (nie über die Umgebung); im Betrieb gelten die Vorgaben.
     params = inspect.signature(Channel.__init__).parameters
     assert params["root"].default == "/channel"
     assert params["expected_uid"].default == 0 and params["expected_uid"].kind is inspect.Parameter.KEYWORD_ONLY
@@ -233,7 +233,7 @@ def test_fifo_request_does_not_block(ch, root):
 
 def test_fifo_swapped_in_after_lstat_does_not_block(root, tmp_path, uid):
     # Der Wettlauf: zwischen lstat und open tauscht das Dashboard die Datei gegen ein FIFO. O_NONBLOCK + fstat
-    # fangen das ab; hier direkt am Lese-Helfer geprueft.
+    # fangen das ab; hier direkt am Lese-Helfer geprüft.
     fifo_dir = tmp_path / "fifo"
     fifo_dir.mkdir()
     os.mkfifo(fifo_dir / "x.json")
@@ -246,7 +246,7 @@ def test_fifo_swapped_in_after_lstat_does_not_block(root, tmp_path, uid):
 
 
 def test_file_swapped_after_lstat_is_refused(ch, root, monkeypatch):
-    # lstat sieht die eine Datei, geoeffnet wird eine andere (anderes Inode) -> abgelehnt.
+    # lstat sieht die eine Datei, geöffnet wird eine andere (anderes Inode) -> abgelehnt.
     put(root, f"{RID}.json", request_doc())
     real_stat = os.stat
 
@@ -306,8 +306,8 @@ def test_non_empty_directories_stay_and_are_reported_never_removed_recursively(c
 
 def test_directories_never_crowd_out_real_requests(ch, root):
     # Mehr als 32 Ordner `<uuid4>.json` und mehr als 1000 fremde Ordner (alle nicht leer, damit sie
-    # stehen bleiben) belegten frueher die Plaetze von MAX_HANDLE/MAX_SCAN -- echte Anforderungen kamen nie dran.
-    # Echte Anforderungen vor *und* nach den Ordnern, damit es von der Reihenfolge im Dateisystem unabhaengig ist.
+    # stehen bleiben) belegten früher die Plätze von MAX_HANDLE/MAX_SCAN -- echte Anforderungen kamen nie dran.
+    # Echte Anforderungen vor *und* nach den Ordnern, damit es von der Reihenfolge im Dateisystem unabhängig ist.
     wanted = {rid(i) for i in range(5)} | {rid(i) for i in range(5, 10)}
     for i in range(5):
         put(root, f"{rid(i)}.json", request_doc(rid(i)))
@@ -361,8 +361,8 @@ def make_full_folders(root, count: int, prefix: str = "fremd") -> None:
 
 
 def test_rmdir_attempts_per_round_are_bounded_but_every_folder_still_counts(ch, root, rmdir_calls):
-    # 100 500 volle Ordner kosteten jede Runde 100 500 `rmdir` (0,6 s). Jetzt hoechstens `MAX_RMDIR`;
-    # der Rest wird ohne Systemaufruf als uebrig gezaehlt, `directories` und `cluttered` bleiben richtig.
+    # 100 500 volle Ordner kosteten jede Runde 100 500 `rmdir` (0,6 s). Jetzt höchstens `MAX_RMDIR`;
+    # der Rest wird ohne Systemaufruf als übrig gezählt, `directories` und `cluttered` bleiben richtig.
     assert 0 < channel.MAX_RMDIR <= channel.MAX_SCAN
     total = channel.MAX_RMDIR + 50
     make_full_folders(root, total)
@@ -401,8 +401,8 @@ def test_empty_folders_beyond_the_rmdir_budget_go_in_later_rounds(ch, root, rmdi
 
 
 def test_entry_that_becomes_a_directory_after_the_listing_is_left_alone(ch, root, monkeypatch):
-    # Zwischen Durchlesen (Datei) und Bearbeiten (Ordner) getauscht: weder gelesen noch geloescht, nicht als bad_request
-    # gemeldet; der Ordner wird in der naechsten Runde als Ordner behandelt.
+    # Zwischen Durchlesen (Datei) und Bearbeiten (Ordner) getauscht: weder gelesen noch gelöscht, nicht als bad_request
+    # gemeldet; der Ordner wird in der nächsten Runde als Ordner behandelt.
     put(root, f"{RID}.json", request_doc())
     put(root, "fremd", b"x")
     swapped = {f"{RID}.json", "fremd"}
@@ -422,8 +422,8 @@ def test_entry_that_becomes_a_directory_after_the_listing_is_left_alone(ch, root
 
 
 def test_vanished_or_swapped_entries_do_not_count_as_handled(ch, root, monkeypatch):
-    # `handled` zaehlt erst, wenn wirklich gelesen oder geloescht wurde: Eintraege, die zwischen Durchlesen und
-    # Bearbeiten verschwinden oder zu Ordnern werden, nehmen keinen der 32 Plaetze.
+    # `handled` zählt erst, wenn wirklich gelesen oder gelöscht wurde: Einträge, die zwischen Durchlesen und
+    # Bearbeiten verschwinden oder zu Ordnern werden, nehmen keinen der 32 Plätze.
     for i in range(channel.MAX_HANDLE + 15):
         put(root, f"{rid(i)}.json", request_doc(rid(i)))
     ghosts = {f"{rid(i)}.json" for i in range(10)}
@@ -489,7 +489,7 @@ def test_never_writes_into_requests(ch, root, monkeypatch):
 
 
 def test_requests_dir_of_another_owner_is_unsafe_without_root_too(root, uid, monkeypatch):
-    # Die Besitzerpruefung an `requests/` auch ohne root: `fstat` meldet einen anderen Besitzer.
+    # Die Besitzerprüfung an `requests/` auch ohne root: `fstat` meldet einen anderen Besitzer.
     c = Channel(root, expected_uid=uid)
     c.setup()
     fake_owner(monkeypatch, {requests_dir(root): uid + 1000})
@@ -498,8 +498,8 @@ def test_requests_dir_of_another_owner_is_unsafe_without_root_too(root, uid, mon
 
 
 def test_request_files_of_the_dashboard_user_are_read_without_root_too(ch, root, uid, monkeypatch):
-    # Im Betrieb gehoeren Anforderungen uid 1000, nicht dem Helfer: der Besitzer einer Anforderung ist egal
-    # (Fremdes wird ueber Typ, Links und Groesse abgewehrt). Wuerde `_take` einen Besitzer verlangen, lehnte der
+    # Im Betrieb gehören Anforderungen uid 1000, nicht dem Helfer: der Besitzer einer Anforderung ist egal
+    # (Fremdes wird über Typ, Links und Größe abgewehrt). Würde `_take` einen Besitzer verlangen, lehnte der
     # Helfer im Betrieb jede Anforderung ab.
     put(root, f"{RID}.json", request_doc())
     fake_owner(monkeypatch, {requests_dir(root) / f"{RID}.json": uid + 1000})
@@ -510,8 +510,8 @@ def test_request_files_of_the_dashboard_user_are_read_without_root_too(ch, root,
 @pytest.mark.skipif(shutil.which("setpriv") is None, reason="braucht setpriv (util-linux)")
 def test_operating_profile_root_without_capabilities(root):
     # Das Betriebsbild: Helfer = root OHNE Capabilities (`cap_drop: ALL`), Anforderungen von uid 1000. Eine 0644-Datei
-    # liest root auch ohne CAP_DAC_OVERRIDE, eine 0600-Datei nicht (-> bad_request, geloescht); FIFO, Symlink und
-    # Hardlink bleiben bad_request. Der Helfer laeuft mit den Vorgaben (`expected_uid=0`), nichts wird ueberschrieben.
+    # liest root auch ohne CAP_DAC_OVERRIDE, eine 0600-Datei nicht (-> bad_request, gelöscht); FIFO, Symlink und
+    # Hardlink bleiben bad_request. Der Helfer läuft mit den Vorgaben (`expected_uid=0`), nichts wird überschrieben.
     Channel(root).setup()
     requests = requests_dir(root)
     for name, data, mode in ((rid(1), request_doc(rid(1)), 0o644), (rid(2), request_doc(rid(2)), 0o600)):
@@ -544,8 +544,8 @@ def test_operating_profile_root_without_capabilities(root):
 
 
 def test_protocol_vector_files_section_matches_the_channel():
-    # Der Abschnitt `files` ist der Vertrag fuer das Dashboard; weichen Helfer und Vektor ab, bleiben
-    # beide Seiten gruen und arbeiten trotzdem nicht zusammen (z. B. 0600 statt 0644, anderes Muster fuer Temp-Dateien).
+    # Der Abschnitt `files` ist der Vertrag für das Dashboard; weichen Helfer und Vektor ab, bleiben
+    # beide Seiten grün und arbeiten trotzdem nicht zusammen (z. B. 0600 statt 0644, anderes Muster für Temp-Dateien).
     files = load_vectors("protocol.json")["files"]
     assert set(files) == {"status", "requests_dir", "request_name_pattern", "dashboard_tmp_pattern", "requests_mode",
                           "status_mode", "request_mode"}
@@ -670,7 +670,7 @@ def test_status_is_written_atomically_world_readable_and_compact(ch, root):
 
 
 def test_status_mode_is_0644_whatever_the_umask(ch, root):
-    # `mode=0o644` beim Anlegen reicht nicht (die umask nimmt davon weg): nur `fchmod` am Deskriptor sorgt dafuer, dass
+    # `mode=0o644` beim Anlegen reicht nicht (die umask nimmt davon weg): nur `fchmod` am Deskriptor sorgt dafür, dass
     # das Dashboard (uid 1000) den Status lesen kann.
     old = os.umask(0o277)
     try:

@@ -1,7 +1,6 @@
 /**
- * Warum ist ein Backup fehlgeschlagen? Spricht `GET /ext/backups/jobs/{job_ref}/failure` (failure_text.py im Backend):
- * zwei feste Sätze („Was ist passiert?“, „Was kannst du tun?“) und darunter die Zeile von Proxmox. Ohne `upid` der
- * neueste fehlgeschlagene Lauf, sonst genau dieser.
+ * Warum ist ein Backup fehlgeschlagen? Zeigt `GET /ext/backups/jobs/{job_ref}/failure`: zwei feste Sätze und darunter die
+ * Zeile von Proxmox. Ohne `upid` der neueste fehlgeschlagene Lauf, sonst genau dieser.
  */
 import { useEffect, useState } from "react";
 

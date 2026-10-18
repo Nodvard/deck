@@ -1,18 +1,18 @@
-"""Inspect-Antworten einer echten Engine aufzeichnen -- fuer die Testdaten unter `tests/fixtures/engines/`.
+"""Inspect-Antworten einer echten Engine aufzeichnen -- für die Testdaten unter `tests/fixtures/engines/`.
 
-Nicht Teil des Helfers: liegt ausserhalb des Pakets und kommt nicht ins Image. Liest **nur** (`GET`), ueber den
-Client des Helfers (`nodvard_deck_updater.engine`, also mit dessen Allowlist), und prueft zusaetzlich jede Anfrage
+Nicht Teil des Helfers: liegt außerhalb des Pakets und kommt nicht ins Image. Liest **nur** (`GET`), über den
+Client des Helfers (`nodvard_deck_updater.engine`, also mit dessen Allowlist), und prüft zusätzlich jede Anfrage
 auf `GET`.
 
-Aufgezeichnet werden fuer ein Compose-Projekt: `/_ping` (nur `Api-Version`), `/version`, die Container-Liste des
+Aufgezeichnet werden für ein Compose-Projekt: `/_ping` (nur `Api-Version`), `/version`, die Container-Liste des
 Projekts, das Inspect jedes Containers, seines Images und seiner Netze. Mit `--api 1.43` fragt das Werkzeug mit
 dieser API-Version (der Docker-Dienst antwortet dann im Format dieser Version, z. B. wie Synology).
 
 **Nur ein Testprojekt aufzeichnen**, mit neutralem Namen und am besten auf einem Wegwerf-Rechner -- nie das echte
-Projekt eines Servers. Die Aufnahme kommt in ein oeffentliches Repository.
+Projekt eines Servers. Die Aufnahme kommt in ein öffentliches Repository.
 
-**Bereinigt** (Geheimnisse und Angaben zum Rechner koennen dort stehen). Geheimnisse: Werte in `Env`, Label-Werte
-ausser `com.docker.compose.*` und `org.opencontainers.image.*`, Optionen des Log-Treibers, die Argumente von
+**Bereinigt** (Geheimnisse und Angaben zum Rechner können dort stehen). Geheimnisse: Werte in `Env`, Label-Werte
+außer `com.docker.compose.*` und `org.opencontainers.image.*`, Optionen des Log-Treibers, die Argumente von
 `Healthcheck.Test`, `Cmd` und `Args`, die Ausgaben in `State.Health.Log`. Jeder Wert wird durch ein Kennzeichen
 `scrubbed-<n>` ersetzt; gleiche Werte bekommen dasselbe Kennzeichen, damit Vergleiche (Container-Wert gleich
 Image-Wert) erhalten bleiben. Leere Werte bleiben leer. Angaben zum Rechner:
@@ -20,23 +20,23 @@ Image-Wert) erhalten bleiben. Leere Werte bleiben leer. Angaben zum Rechner:
 * **Pfade** auf dem Rechner (die Compose-Labels `...working_dir`, `...config_files` und `...environment_file`, die
   Quellen von `Binds` und `Mounts` (ein Volume-Name als Quelle bleibt), `LogPath`, `ResolvConfPath`,
   `GraphDriver`-Ordner, `device`-Optionen): jeder Ordnername wird durch `d<n>` ersetzt (gleicher Name, gleiches
-  Kennzeichen; die Verschachtelung bleibt, ein Pfad ist weiter Vorsatz eines anderen). Unveraendert bleiben
+  Kennzeichen; die Verschachtelung bleibt, ein Pfad ist weiter Vorsatz eines anderen). Unverändert bleiben
   `/var/lib/docker/...` (der Standardordner des Docker-Dienstes, darin stehen nur Namen von Volumes), der
   Docker-Socket und allgemeine Systemordner.
-* **Adressen:** IPv4 ausser `127.x` und `0.0.0.0` -> `198.18.x.y` (dasselbe /24-Netz bleibt dasselbe Netz, die letzte
+* **Adressen:** IPv4 außer `127.x` und `0.0.0.0` -> `198.18.x.y` (dasselbe /24-Netz bleibt dasselbe Netz, die letzte
   Stelle bleibt), IPv6 -> `2001:db8::<n>`, MAC -> `02:00:00:00:x:y`.
-* **Rechnernamen:** `Hostname` (ausser der Kurz-ID des Containers, das ist der Standard; auch dort, wo `DNSNames` und
+* **Rechnernamen:** `Hostname` (außer der Kurz-ID des Containers, das ist der Standard; auch dort, wo `DNSNames` und
   `Aliases` eines Netzes ihn wiederholen), `Domainname`, `DnsSearch` und die Namen in `ExtraHosts` -> `host-<n>`.
 
 **Nicht bereinigt** sind die Namen von Projekt, Containern, Diensten, Netzen, Volumes und Images sowie die Namen
-von Labels und Umgebungsvariablen. Sie stehen als Schluessel, in `NetworkMode`, in `Binds`, in Quellpfaden und in
-den Namen der Container zugleich; eine Ersetzung per Textsuche zerstoerte die Zusammenhaenge, auf die `clone.py`
-sich verlaesst (und trafe ein Volume namens `data` auch `/app/data`). Darum gilt der Hinweis oben.
+von Labels und Umgebungsvariablen. Sie stehen als Schlüssel, in `NetworkMode`, in `Binds`, in Quellpfaden und in
+den Namen der Container zugleich; eine Ersetzung per Textsuche zerstörte die Zusammenhänge, auf die `clone.py`
+sich verlässt (und trafe ein Volume namens `data` auch `/app/data`). Darum gilt der Hinweis oben.
 
-**Gegenprobe:** Nach dem Bereinigen sucht `find_leaks` die Aufnahme nach dem ab, was nicht hineingehoert (Adressen
-aus 10.x, 100.64-100.127, 192.168.x und 169.254.x, echte IPv6-Adressen, MAC-Adressen von Geraeten, Heimatordner
+**Gegenprobe:** Nach dem Bereinigen sucht `find_leaks` die Aufnahme nach dem ab, was nicht hineingehört (Adressen
+aus 10.x, 100.64-100.127, 192.168.x und 169.254.x, echte IPv6-Adressen, MAC-Adressen von Geräten, Heimatordner
 `/home`, `/Users`, `/root`). Findet sie etwas, wird nichts geschrieben. Der Test `test_fixtures_are_scrubbed` in
-`tests/test_clone.py` prueft mit derselben Suche (und eigenen Mustern) alle eingecheckten Aufnahmen.
+`tests/test_clone.py` prüft mit derselben Suche (und eigenen Mustern) alle eingecheckten Aufnahmen.
 
 Aufruf (im Repo-Wurzelordner, als Nutzer mit Zugriff auf den Socket):
 
@@ -89,7 +89,7 @@ _SHORT_ID_RE = re.compile(r"[0-9a-f]{12}")
 
 class Scrubber:
     """Ersetzt Geheimnisse durch `scrubbed-<n>` (gleicher Wert -> gleiches Kennzeichen) und Angaben zum Rechner (Pfade,
-    Adressen, Rechnernamen) durch neutrale Werte, die Zusammenhaenge erhalten (siehe Kopf der Datei)."""
+    Adressen, Rechnernamen) durch neutrale Werte, die Zusammenhänge erhalten (siehe Kopf der Datei)."""
 
     def __init__(self) -> None:
         self.tokens: dict[str, str] = {}
@@ -170,7 +170,7 @@ class Scrubber:
 
     def dns_names(self, names: list[Any]) -> list[Any]:
         """`DNSNames` (ab API 1.44) und `Aliases` eines Netzes: Containername, Aliases, Kurz-ID und der `Hostname`
-        (bei aelteren API-Versionen haengt Docker die Kurz-ID und den eigenen Hostname eines Containers in
+        (bei älteren API-Versionen hängt Docker die Kurz-ID und den eigenen Hostname eines Containers in
         benutzerdefinierten Netzen auch an `Aliases` an, so in den Aufnahmen mit 1.41 und 1.43; ein alter
         Docker-Dienst ohne `DNSNames` nennt ihn nur dort). Nur ein schon bekannter Rechnername wird ersetzt, die
         Namen der Container bleiben (siehe Kopf der Datei)."""
@@ -205,7 +205,7 @@ class Scrubber:
         return f"02:00:00:00:{number >> 8:02x}:{number & 255:02x}"
 
     def text(self, value: str) -> str:
-        """Adressen in beliebigem Text (MAC, IPv4, IPv6) ersetzen; was keine gueltige Adresse ist, bleibt."""
+        """Adressen in beliebigem Text (MAC, IPv4, IPv6) ersetzen; was keine gültige Adresse ist, bleibt."""
         value = _MAC_RE.sub(lambda match: self.mac(match.group(0)), value)
         value = _IPV4_RE.sub(lambda match: self.ipv4(match.group(0)), value)
         return _IPV6_RE.sub(lambda match: self.ipv6(match.group(0)), value)
@@ -217,7 +217,7 @@ class Scrubber:
             self.remember_hostname(obj)
             out = {}
             for k, v in obj.items():
-                dest = self.text(k) if isinstance(k, str) else k  # auch Schluessel koennen Adressen sein (`Subnets`)
+                dest = self.text(k) if isinstance(k, str) else k  # auch Schlüssel können Adressen sein (`Subnets`)
                 if k == "Env" and isinstance(v, list):
                     out[dest] = self.env(v)
                 elif k == "Labels" and isinstance(v, dict):
@@ -262,7 +262,7 @@ class Scrubber:
 
 
 def leak_kinds(text: str) -> list[str]:
-    """Was in `text` nicht in eine eingecheckte Aufnahme gehoert (leer, wenn nichts auffaellt)."""
+    """Was in `text` nicht in eine eingecheckte Aufnahme gehört (leer, wenn nichts auffällt)."""
     kinds = []
     for match in _IPV4_RE.finditer(text):
         try:
@@ -281,7 +281,7 @@ def leak_kinds(text: str) -> list[str]:
             kinds.append("IPv6-Adresse")
             break
     for match in _MAC_RE.finditer(text):
-        if not int(match.group(0)[:2], 16) & 2:  # Docker vergibt "lokal verwaltete" MACs (02:42:...), Geraete nicht
+        if not int(match.group(0)[:2], 16) & 2:  # Docker vergibt "lokal verwaltete" MACs (02:42:...), Geräte nicht
             kinds.append("MAC-Adresse eines Geraets")
             break
     if _HOME_RE.search(text):
@@ -290,7 +290,7 @@ def leak_kinds(text: str) -> list[str]:
 
 
 def find_leaks(obj: Any, where: str = "$") -> list[str]:
-    """Alle Stellen einer Aufnahme (Schluessel und Werte), die `leak_kinds` beanstandet -- als Ort und Art, ohne den
+    """Alle Stellen einer Aufnahme (Schlüssel und Werte), die `leak_kinds` beanstandet -- als Ort und Art, ohne den
     Wert selbst."""
     found: list[str] = []
     if isinstance(obj, dict):
@@ -306,7 +306,7 @@ def find_leaks(obj: Any, where: str = "$") -> list[str]:
 
 
 def read_only_engine(socket_path: str) -> engine_mod.Engine:
-    """Der Client des Helfers, der zusaetzlich jede Anfrage ausser `GET` verweigert."""
+    """Der Client des Helfers, der zusätzlich jede Anfrage außer `GET` verweigert."""
     engine = engine_mod.Engine(socket_path)
     real_request = engine._request
 
@@ -378,7 +378,7 @@ GOLDEN_NAMES = ("docker29-api141", "docker29-api143", "docker29-api154", "docker
 
 def write_goldens(out: Path) -> list[Path]:
     """Erzeugt `<name>.clone.json` (erwarteter `create`-Body und `connect`-Liste) aus den Aufzeichnungen neu --
-    ohne Engine. Danach den Unterschied pruefen: jede Aenderung am Body muss gewollt sein."""
+    ohne Engine. Danach den Unterschied prüfen: jede Änderung am Body muss gewollt sein."""
     from nodvard_deck_updater import clone
 
     written = []

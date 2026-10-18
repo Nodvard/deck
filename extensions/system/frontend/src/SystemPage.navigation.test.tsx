@@ -11,7 +11,7 @@ import { renderInShell } from "../../../_shared/frontend/src/testShell";
 vi.mock("../../../../frontend/src/lib/catalog", () => ({
   usePages: () => ({ data: [{ ext_id: "system", path: "/system", component: "SystemPage" }], isLoading: false }),
 }));
-// ExtensionPage laedt das Bundle per import(url) -- hier durch die echte Seite aus den Quellen ersetzt.
+// ExtensionPage lädt das Bundle per import(url); hier wird es durch die echte Seite aus den Quellen ersetzt.
 vi.mock("/api/v1/extensions/system/frontend/index.js?v=dev", async () => ({ SystemPage: (await import("./SystemPage")).SystemPage }));
 
 function mockFetch() {
@@ -82,9 +82,8 @@ describe("Server-Zustand in der echten Kern-Shell", () => {
     await shows("Server-Zustand");
   });
 
-  // Zurück/Vor meldet die Kern-Shell selbst (nodvard-deck:navigate). Hörte die Seite zusätzlich auf
-  // popstate, zeigte die alte Seite kurz die neue Adresse und fragte den Server doppelt ab, bevor
-  // der Kern sie neu aufbaut.
+  // Zurück/Vor meldet die Kern-Shell selbst (nodvard-deck:navigate); hörte die Seite zusätzlich auf popstate, fragte sie
+  // den Server doppelt ab.
   it("Zurück und Vor fragen die Live-Werte nur einmal ab", async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal("fetch", fetchMock);

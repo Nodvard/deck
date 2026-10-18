@@ -19,7 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...ext.runtime import get_extension_runtime
 from ...models import Action, Notification
 from ...services import custom_apps as custom_apps_service
+from ...services import helper_hints as helper_hints_service
 from ..deps import SessionDep, require_permission
+from .host_access import root_helpers_for
 
 router = APIRouter(prefix="/overview", tags=["overview"])
 
@@ -87,6 +89,16 @@ class AttentionItem(BaseModel):
     source_ext_id: str | None
 
 
+class HelperHintOut(BaseModel):
+    """Ein Server mit voller sudo-Regel, auf dem Hilfsskripte fehlen oder veraltet sind (`services.helper_hints`)."""
+
+    host_id: str
+    host_name: str
+    modules: list[str]
+    """Anzeigenamen der Module, die dort noch über die volle Regel laufen."""
+    checked_at: datetime
+
+
 class OverviewOut(BaseModel):
     services: list[ServiceOut]
     services_running: int
@@ -100,26 +112,42 @@ class OverviewOut(BaseModel):
     pending_actions: int
     unread_notifications: int
     attention: list[AttentionItem]
+    helper_hints: list[HelperHintOut] = []
+    """Server, die neu eingerichtet werden sollten, damit die Module mit engen Rechten laufen. Nur aus dem gemerkten
+    Stand der letzten Prüfung, ohne SSH beim Abruf; weggeklickte fehlen."""
     errors: list[str]
     generated_at: float
 
 
-async def _collect_services(errors: list[str]) -> list[ServiceOut]:
+async def _collect_services(
+    errors: list[str], sources: dict[str, str] | None = None, failed: list[str] | None = None,
+) -> list[ServiceOut]:
+    """Alle erkannten Dienste; `sources` bekommt je Dienst die Kennung der Erweiterung, die ihn gemeldet hat, `failed`
+    die Kennung jeder Erweiterung, deren Dienste sich nicht lesen ließen."""
     services: list[ServiceOut] = []
-    for provider in get_extension_runtime().capabilities.query(ServiceCatalog):
+    for ext_id, provider in get_extension_runtime().capabilities.query_named(ServiceCatalog):
         try:
             rows = await asyncio.wait_for(provider.list_services(), timeout=SOURCE_TIMEOUT_S)
         except Exception as exc:  # noqa: BLE001 - eine Quelle darf die anderen nicht verdecken
             errors.append(f"Dienste: {str(exc) or type(exc).__name__}")
+            if failed is not None and ext_id not in failed:
+                failed.append(ext_id)
             continue
         for row in rows:
             if not row.get("name"):
                 continue  # Fehlerkacheln einer Erweiterung ("Host nicht erreichbar") sind keine Dienste
+            url = row.get("url")
             services.append(ServiceOut(
                 id=str(row.get("id") or row["name"]), name=str(row["name"]), host=row.get("host"),
                 host_id=row.get("host_id"), state=row.get("state"), tone=row.get("tone"),
-                url=row.get("url"), image=row.get("image"), unreachable=row.get("unreachable") is True,
+                # Gleiche Regel wie bei eigenen Apps: nur http(s), sonst keine Adresse (kein `javascript:`-Link).
+                url=custom_apps_service.stored_url(
+                    url if isinstance(url, str) else None, custom_apps_service.SERVICE_URL_MAX,
+                ),
+                image=row.get("image"), unreachable=row.get("unreachable") is True,
             ))
+            if sources is not None:
+                sources[services[-1].id] = ext_id
     services.sort(key=lambda s: (s.state != "running", (s.name or "").lower()))
     return services
 
@@ -191,10 +219,22 @@ async def _expensive_part() -> dict[str, Any]:
         if _cache["value"] is not None and time.monotonic() - _cache["at"] < CACHE_TTL_S:
             return _cache["value"]
         errors: list[str] = []
-        services, backups = await asyncio.gather(_collect_services(errors), _collect_backups(errors))
-        value = {"services": services, "backups": backups, "errors": errors, "generated_at": time.time()}
+        sources: dict[str, str] = {}
+        failed: list[str] = []
+        services, backups = await asyncio.gather(_collect_services(errors, sources, failed), _collect_backups(errors))
+        value = {
+            "services": services, "sources": sources, "failed": failed, "backups": backups, "errors": errors,
+            "generated_at": time.time(),
+        }
         _cache.update(at=time.monotonic(), value=value)
         return value
+
+
+async def service_snapshot() -> tuple[list[ServiceOut], dict[str, str], list[str]]:
+    """Die erkannten Dienste aus demselben Zwischenspeicher wie `GET /overview`, je Dienst die Erweiterung und die
+    Erweiterungen, deren Dienste sich nicht lesen ließen."""
+    value = await _expensive_part()
+    return value["services"], value.get("sources") or {}, value.get("failed") or []
 
 
 def reset_cache() -> None:
@@ -226,6 +266,10 @@ async def overview(session: SessionDep) -> OverviewOut:
         attention=[
             AttentionItem(id=n.id, ts=n.ts, severity=n.severity, title=n.title, source_ext_id=n.source_ext_id)
             for n in attention_rows
+        ],
+        helper_hints=[
+            HelperHintOut(host_id=h.host_id, host_name=h.host_name, modules=h.modules, checked_at=h.checked_at)
+            for h in await helper_hints_service.current_hints(session, root_helpers_for)
         ],
         errors=expensive["errors"],
         generated_at=expensive["generated_at"],

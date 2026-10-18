@@ -10,6 +10,7 @@ import * as ReactDOMClient from "react-dom/client";
 import { createMemoryRouter, RouterProvider, useParams } from "react-router-dom";
 
 import { ActionsPage } from "../routes/ActionsPage";
+import { AppsPage } from "../routes/AppsPage";
 import { AppShell } from "../routes/AppShell";
 import { DashboardPage } from "../routes/DashboardPage";
 import { FilesPage } from "../routes/FilesPage";
@@ -118,6 +119,8 @@ if (scenario === "ohne-proxmox" || scenario === "ohne-proxmox-min" || scenario =
 }
 // ?scenario=keine-apps: Server da, aber weder erkannte Dienste noch eigene Apps (Leerzustand von „Apps“).
 if (scenario === "keine-apps") previewState.noApps = true;
+// ?scenario=lange-namen: sehr lange Namen und Adressen ohne Leerzeichen (Apps, Vorschläge), für schmale Fenster.
+if (scenario === "lange-namen") previewState.longNames = true;
 // ?scenario=start: Server angelegt, aber noch ohne Zugang; Module brauchen Einrichtung ("Erste Schritte").
 if (scenario === "start") previewState.start = true;
 // ?scenario=restore-uploaded|restore-ready|restore-pending|restore-result|restore-replaced: Zustand der Karte Wiederherstellen.
@@ -177,6 +180,7 @@ const router = createMemoryRouter(
         { path: "/", element: <DashboardPage /> },
         { path: "/notifications", element: <NotificationsPage /> },
         { path: "/actions", element: <ActionsPage /> },
+        { path: "/apps", element: <AppsPage /> },
         { path: "/files/*", element: <FilesPage /> },
         { path: "/terminal", element: <TerminalPage /> },
         {

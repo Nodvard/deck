@@ -161,6 +161,12 @@ class HostsHandle(Protocol):
     async def upsert_discovered(self, hosts: list[DiscoveredHost]) -> list[Host]:
         """Gleicht entdeckte Hosts gegen die Kern-Tabelle ab (Schlüssel: ext + ref)."""
         ...
+    async def mark_gone(self, provider_refs: list[str]) -> int:
+        """Markiert eigene Hosts (Schlüssel: ext + ref) als beim Anbieter nicht mehr vorhanden, etwa einen in Proxmox
+        gelöschten Gast; die Oberfläche bietet dann an, ihn zu entfernen. Nur für Bereiche aufrufen, die gerade
+        vollständig gelesen wurden, nie für eine nicht erreichbare Verbindung. Ein späteres `upsert_discovered` mit
+        derselben Kennung hebt die Markierung auf. Gibt zurück, wie viele Hosts neu markiert wurden."""
+        ...
 
 
 class ExecHandle(Protocol):
@@ -178,6 +184,25 @@ class ExecHandle(Protocol):
         """Wie `run()` nur für *lesende* Kommandos, deren Ausgabe laufend kommt und
         die nicht von selbst enden (Live-Logs). Beim Verlassen des Kontexts wird der
         entfernte Prozess beendet."""
+        ...
+
+    async def run_argv(
+        self, host: Host, argv: Sequence[str], *, stdin: str | bytes | None = None, timeout_s: int = 60,
+        log_command: str | None = None,
+    ) -> ExecResult:
+        """Wie `run()`, aber das Kommando kommt als Liste von Wörtern: Der Kern setzt sie mit POSIX-Quoting
+        (`shlex.join`) zur Kommandozeile zusammen, die Extension baut nie selbst eine. So wird ein Wert aus einer
+        Eingabe nie zu Shell-Syntax, wohl aber mit führendem `-` zu einer Option: Eingaben mit `--` abtrennen. Eine
+        Zeichenkette statt einer Liste, ein leeres `argv`, ein leeres erstes Wort, ein erstes Wort wie `NAME=wert`, ein
+        Wort, das keine Zeichenkette ist, oder ein NUL-Zeichen: `TypeError`/`ValueError` vor jeder Verbindung.
+
+        `stdin`: Daten für die Standardeingabe (z. B. eine Datei, die nur geprüft wird). Sie stehen nie auf der
+        Kommandozeile und nie im Protokoll; danach bekommt der Prozess EOF, auch bei leeren Daten. Ohne `stdin` wie
+        `run()`. Eine Zeichenkette geht als UTF-8."""
+        ...
+
+    def stream_argv(self, host: Host, argv: Sequence[str]) -> AsyncContextManager[AsyncIterator[bytes]]:
+        """Wie `stream()`, mit `argv` wie bei `run_argv()` (ohne Standardeingabe)."""
         ...
 
     def open_shell(

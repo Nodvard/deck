@@ -1,8 +1,7 @@
 /**
- * Alte Tokens von Nodvard Deck in Proxmox (Benutzer nodvard@pve und nodvard-backup@pve): angelegt beim Verbinden mit
- * Passwort, benutzt von keiner Verbindung mehr. Nodvard Deck zeigt sie mit dem Befehl zum Löschen, löscht sie aber
- * nicht selbst – dafür bräuchte sein Zugang in Proxmox das Recht „User.Modify“, und damit könnte er sich alle Rechte
- * des Benutzers geben (password_connect.py, `old_tokens_of`).
+ * Alte Tokens von Nodvard Deck in Proxmox (nodvard@pve, nodvard-backup@pve), von keiner Verbindung mehr benutzt.
+ * Es zeigt sie mit dem Befehl zum Löschen, löscht sie aber nicht selbst: dafür bräuchte sein Zugang das Recht „User.Modify“,
+ * und damit könnte er sich alle Rechte des Benutzers geben (password_connect.py, `old_tokens_of`).
  */
 import { useEffect, useState } from "react";
 

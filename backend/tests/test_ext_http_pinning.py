@@ -142,7 +142,7 @@ async def test_peer_certificate_reads_a_self_signed_certificate_without_sending_
     assert isinstance(info, PeerCertificate)
     assert info.trusted is False
     assert info.sha256 == _fingerprint(cert)
-    assert "pve1.example" in (info.subject or "")
+    assert "CN=pve1.example" in (info.subject or "").split(",")
     assert "pve1.example" in info.alt_names and "127.0.0.1" in info.alt_names
     assert info.not_after and info.not_after.startswith(str(cert.not_valid_after_utc.year))
 

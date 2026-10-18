@@ -1,21 +1,21 @@
 """Wiederaufnahme nach einem Absturz des Helfers (`Flow.recover`): die Absturz-Matrix.
 
-Jeder Fall laesst einen Vorgang an genau einer Stelle "abstuerzen" -- vor und nach jedem Schreiben in `/state`
-(Journal, `state.json`, Loeschen des Journals) und nach jedem aendernden Engine-Aufruf --, startet den Helfer neu (neue
+Jeder Fall lässt einen Vorgang an genau einer Stelle "abstürzen" -- vor und nach jedem Schreiben in `/state`
+(Journal, `state.json`, Löschen des Journals) und nach jedem ändernden Engine-Aufruf --, startet den Helfer neu (neue
 Sperre, neuer Client, neuer Ablauf; Engine und `/state` bleiben) und nimmt den Vorgang wieder auf. In den
-verschachtelten Faellen stuerzt auch die Wiederaufnahme selbst ab, an jeder ihrer Stellen einzeln und mehrmals
-hintereinander, bis eine durchlaeuft. Danach gilt immer (`assert_settled`):
+verschachtelten Fällen stürzt auch die Wiederaufnahme selbst ab, an jeder ihrer Stellen einzeln und mehrmals
+hintereinander, bis eine durchläuft. Danach gilt immer (`assert_settled`):
 
-* genau ein Container des Dienstes laeuft, unter dem Originalnamen und gesund; kein `<name>-previous` bleibt liegen;
-* nie zwei laufende Container an denselben Daten, jeder Start mit den Daten des Ziels (die Welt prueft das bei jedem
-  Aufruf); kein Volume geloescht (jedes Entfernen mit `v=0`, der laufende Container hat alle Volumes des Ziels);
-* die Anforderung laeuft nicht doppelt: hoechstens ein Pull und ein angelegter Container, eine weitere Wiederaufnahme
+* genau ein Container des Dienstes läuft, unter dem Originalnamen und gesund; kein `<name>-previous` bleibt liegen;
+* nie zwei laufende Container an denselben Daten, jeder Start mit den Daten des Ziels (die Welt prüft das bei jedem
+  Aufruf); kein Volume gelöscht (jedes Entfernen mit `v=0`, der laufende Container hat alle Volumes des Ziels);
+* die Anforderung läuft nicht doppelt: höchstens ein Pull und ein angelegter Container, eine weitere Wiederaufnahme
   hat nichts mehr zu tun, dieselbe Anforderung noch einmal ist `replay`;
-* die Grenze bleibt erhalten: die Aktion zaehlt genau einmal, sobald sie gezaehlt war -- ein Neustart setzt nichts
-  zurueck, und die Wiederaufnahme selbst wird von keiner Grenze gebremst;
+* die Grenze bleibt erhalten: die Aktion zählt genau einmal, sobald sie gezählt war -- ein Neustart setzt nichts
+  zurück, und die Wiederaufnahme selbst wird von keiner Grenze gebremst;
 * das Ergebnis steht fest, passt in den Status (`status.json`) und steht genau einmal in `state.json`.
 
-Wie der Helfer eine Anforderung annimmt (Grenzen pruefen, ID merken, speichern, dann `Flow.run`), spielt `Case.submit`
+Wie der Helfer eine Anforderung annimmt (Grenzen prüfen, ID merken, speichern, dann `Flow.run`), spielt `Case.submit`
 nach.
 """
 
@@ -100,7 +100,7 @@ def _cases():
 
 
 def expected(scenario: str, index: int) -> tuple[str, str | None] | None:
-    """Was am Ende herauskommen muss, wenn der Vorgang an der Stelle `index` abstuerzt. `None`, wenn das vor dem ersten
+    """Was am Ende herauskommen muss, wenn der Vorgang an der Stelle `index` abstürzt. `None`, wenn das vor dem ersten
     Eintrag im Journal geschah: dann ist nichts geschehen und es gibt kein Ergebnis."""
     seen = POINTS[scenario][:index + 1]
     written = [point.split(":", 1)[1] for point in seen if point.startswith("after:")]
@@ -112,8 +112,8 @@ def expected(scenario: str, index: int) -> tuple[str, str | None] | None:
     if step != "started":
         return "aborted", None  # der neue Container lief nie
     if "call:start_container" not in seen[seen.index("after:started"):]:
-        return "rolled_back", policy.START_FAILED  # angekuendigt, aber nie gestartet
-    return FINAL[scenario]  # er lief: weiter beobachten, dann Commit oder Rueckbau
+        return "rolled_back", policy.START_FAILED  # angekündigt, aber nie gestartet
+    return FINAL[scenario]  # er lief: weiter beobachten, dann Commit oder Rückbau
 
 
 def find(scenario: str, point: str, occurrence: int = 1) -> int:
@@ -123,7 +123,7 @@ def find(scenario: str, point: str, occurrence: int = 1) -> int:
 
 
 def counted(scenario: str, index: int) -> bool:
-    """Die Aktion zaehlt, sobald sie nach `pulled` gespeichert ist (vor der ersten Aenderung)."""
+    """Die Aktion zählt, sobald sie nach `pulled` gespeichert ist (vor der ersten Änderung)."""
     return "after:state" in POINTS[scenario][:index + 1]
 
 
@@ -133,8 +133,8 @@ def counted(scenario: str, index: int) -> bool:
 
 
 def _slot_from_an_earlier_update(lab: Lab, version: str = "0.6.9") -> str:
-    """Ein Rueckweg auf `version` von einem frueheren Update (auf die laufende Version): das Image mit seinem Schutz-Tag
-    und der Slot in `state.json`. Gibt die ID des Images zurueck."""
+    """Ein Rückweg auf `version` von einem früheren Update (auf die laufende Version): das Image mit seinem Schutz-Tag
+    und der Slot in `state.json`. Gibt die ID des Images zurück."""
     image_id = "sha256:" + _hex(f"image-{version}")
     lab.world.images[image_id] = {**copy.deepcopy(lab.world.images[lab.old_image]), "Id": image_id,
                                   "RepoTags": [f"{PREVIOUS_REPOSITORY}:{version}"], "RepoDigests": []}
@@ -147,7 +147,7 @@ def _slot_from_an_earlier_update(lab: Lab, version: str = "0.6.9") -> str:
 
 
 class Case:
-    """Ein Labor mit einem vorbereiteten Szenario. `submit` nimmt eine Anforderung an wie der Helfer, `crash_at` fuehrt
+    """Ein Labor mit einem vorbereiteten Szenario. `submit` nimmt eine Anforderung an wie der Helfer, `crash_at` führt
     sie bis zu einem Absturz aus, `revive` startet den Helfer neu und nimmt wieder auf."""
 
     def __init__(self, tmp_path, uid, scenario: str, image_store: str = "graphdriver") -> None:
@@ -160,7 +160,7 @@ class Case:
         if scenario == "rollback":
             self.newer, _ = lab.release("0.7.1")
             assert self.submit(lab.request("update", "0.7.1")).outcome == "applied"
-            lab.clock.t += policy.ACTION_INTERVAL_S  # die Grenze laesst den Rueckweg wieder zu
+            lab.clock.t += policy.ACTION_INTERVAL_S  # die Grenze lässt den Rückweg wieder zu
             self.request = lab.request("rollback", "0.7.0")
         else:
             self.newer, _ = lab.release("0.7.1", behavior=Behavior(exit_after=20) if scenario == "failing" else None)
@@ -179,7 +179,7 @@ class Case:
         return lab.flow.run(request, state)
 
     def crash_at(self, index: int | None) -> Outcome | None:
-        """Fuehrt die Anforderung aus und stuerzt an der Stelle `index` ab (`None`: gar nicht). Das Ergebnis, oder
+        """Führt die Anforderung aus und stürzt an der Stelle `index` ab (`None`: gar nicht). Das Ergebnis, oder
         `None` nach einem Absturz."""
         points = Points(index)
         self.lab.restart_helper(points)
@@ -195,8 +195,8 @@ class Case:
         return self.lab.flow.recover(self.lab.state())
 
     def revive_until_done(self) -> tuple[Outcome | None, int]:
-        """Neu starten und wieder aufnehmen, bis es durchlaeuft; die n-te Wiederaufnahme stuerzt an ihrer n-ten Stelle
-        ab. Gibt das letzte Ergebnis und die Zahl der Abstuerze in der Wiederaufnahme zurueck."""
+        """Neu starten und wieder aufnehmen, bis es durchläuft; die n-te Wiederaufnahme stürzt an ihrer n-ten Stelle
+        ab. Gibt das letzte Ergebnis und die Zahl der Abstürze in der Wiederaufnahme zurück."""
         for attempt in range(100):
             try:
                 return self.revive(Points(attempt)), attempt
@@ -242,7 +242,7 @@ def assert_settled(case: Case, outcome: Outcome | None, want: tuple[str, str | N
     lab = case.lab
     assert not case.journal_left
 
-    # Genau ein Container des Dienstes, unter dem Originalnamen, laeuft gesund.
+    # Genau ein Container des Dienstes, unter dem Originalnamen, läuft gesund.
     deck = lab.only_deck()
     assert deck["Name"] == "/" + lab.name
     assert [c["Id"] for c in lab.world.containers.values() if c["Name"] == "/" + lab.name] == [deck["Id"]]
@@ -252,14 +252,14 @@ def assert_settled(case: Case, outcome: Outcome | None, want: tuple[str, str | N
     assert judge(deck, 0) == HEALTHY, deck["State"]
     assert deck["HostConfig"]["RestartPolicy"] == lab.restart
 
-    # Keine Daten verloren: dieselbe Quelle fuer /app/data, alle Volumes des Ziels, jedes Entfernen ohne Volumes.
+    # Keine Daten verloren: dieselbe Quelle für /app/data, alle Volumes des Ziels, jedes Entfernen ohne Volumes.
     assert LiveWorld.mount_origin(deck, "/app/data") == lab.world.data_origin
     volumes = {m["Name"] for m in case.before["Mounts"] if m.get("Type") == "volume"}
     assert volumes <= {m["Name"] for m in deck["Mounts"] if m.get("Type") == "volume"}
     removals = lab.fake.calls("DELETE", r"/containers/[0-9a-f]{64}")
     assert all(r.query == {"v": ["0"], "force": ["0"]} for r in removals)
 
-    # Was am Ende laeuft.
+    # Was am Ende läuft.
     done = want is not None and want[0] in ("applied", "reverted")
     final_image = (case.newer if case.scenario != "rollback" else lab.old_image) if done else case.before["Image"]
     assert deck["Image"] == final_image and lab.world.tagged(LATEST) == final_image
@@ -274,18 +274,18 @@ def assert_settled(case: Case, outcome: Outcome | None, want: tuple[str, str | N
     elif done:
         assert lab.protect("0.7.0") == lab.old_image
         assert state.slot is not None and state.slot.installed_container_id == deck["Id"]
-        # Ein Rueckweg genau auf das alte Image, auch wenn die Engine dessen Digest nicht mehr nennt (containerd-Store).
+        # Ein Rückweg genau auf das alte Image, auch wenn die Engine dessen Digest nicht mehr nennt (containerd-Store).
         assert (state.slot.image_id, state.slot.repo_digest) == (lab.old_image, f"{policy.REPOSITORY}@{lab.old_digest}")
     else:
         assert lab.protect("0.7.0") is None and state.slot == case.slot_before  # bei `replacing` der von 0.6.9
     if case.scenario == "replacing":
         assert lab.protect("0.6.9") == (None if done else case.previous_image)
 
-    # Nicht doppelt: hoechstens ein Pull und ein angelegter Container fuer diese Anforderung.
+    # Nicht doppelt: höchstens ein Pull und ein angelegter Container für diese Anforderung.
     mine = [kind for kind, _ in lab.world.mutations[case.mutations_before:]]
     assert mine.count("create") <= 1 and mine.count("pull") <= 1
 
-    # Das Ergebnis: entschieden, genau einmal in state.json, gueltig fuer den Status.
+    # Das Ergebnis: entschieden, genau einmal in state.json, gültig für den Status.
     entries = [entry for entry in state.results if entry["id"] == case.request.id]
     if want is None:
         assert outcome is None and entries == []
@@ -298,7 +298,7 @@ def assert_settled(case: Case, outcome: Outcome | None, want: tuple[str, str | N
             case.request.action, case.before_version, to)
         status_with(entries)
 
-    # Die Grenze und der Schutz vor Wiederholung ueberstehen jeden Neustart.
+    # Die Grenze und der Schutz vor Wiederholung überstehen jeden Neustart.
     assert case.request.id in state.seen
     assert len([at for at in state.actions if at >= case.submitted_at]) == (1 if was_counted else 0)
 
@@ -335,25 +335,25 @@ def test_crash_and_recover(make_case, scenario, index, image_store):
 
 
 NESTED = [
-    ("update", "after:pulled", 1),  # Journal loeschen
-    ("update", "call:rename_container", 1),  # Rueckbau, der alte laeuft noch
-    ("update", "call:create_container", 1),  # der eigene Container wird uebernommen und entfernt
-    ("update", "call:stop_container", 1),  # Rueckbau, der alte steht und startet wieder
-    ("update", "after:started", 1),  # nie gestartet: Rueckbau
+    ("update", "after:pulled", 1),  # Journal löschen
+    ("update", "call:rename_container", 1),  # Rückbau, der alte läuft noch
+    ("update", "call:create_container", 1),  # der eigene Container wird übernommen und entfernt
+    ("update", "call:stop_container", 1),  # Rückbau, der alte steht und startet wieder
+    ("update", "after:started", 1),  # nie gestartet: Rückbau
     ("update", "call:start_container", 1),  # weiter beobachten, dann Commit
-    ("update", "after:committed", 1),  # Aufraeumen nach dem Commit
+    ("update", "after:committed", 1),  # Aufräumen nach dem Commit
     ("replacing", "after:committed", 1),  # dazu das Schutz-Tag des ersetzten Slots
-    ("failing", "call:start_container", 1),  # beobachten, dann Rueckbau
-    ("failing", "call:rename_container", 2),  # mitten im angekuendigten Rueckbau
-    ("rollback", "call:start_container", 1),  # Commit des Rueckwegs
-    ("rollback", "call:remove_container", 1),  # Aufraeumen nach dem Rueckweg
+    ("failing", "call:start_container", 1),  # beobachten, dann Rückbau
+    ("failing", "call:rename_container", 2),  # mitten im angekündigten Rückbau
+    ("rollback", "call:start_container", 1),  # Commit des Rückwegs
+    ("rollback", "call:remove_container", 1),  # Aufräumen nach dem Rückweg
 ]
 
 
 @pytest.mark.parametrize(("scenario", "point", "occurrence"), NESTED, ids=[f"{s}-{p}-{n}" for s, p, n in NESTED])
 def test_crash_after_crash_after_crash(make_case, scenario, point, occurrence):
-    # Erst stuerzt der Vorgang ab, dann die Wiederaufnahme selbst, immer wieder -- die n-te an ihrer n-ten Stelle --,
-    # bis eine durchlaeuft. Jede Wiederaufnahme beginnt dort, wo die vorige liegen blieb.
+    # Erst stürzt der Vorgang ab, dann die Wiederaufnahme selbst, immer wieder -- die n-te an ihrer n-ten Stelle --,
+    # bis eine durchläuft. Jede Wiederaufnahme beginnt dort, wo die vorige liegen blieb.
     index = find(scenario, point, occurrence)
     case = make_case(scenario)
     assert case.crash_at(index) is None
@@ -363,19 +363,19 @@ def test_crash_after_crash_after_crash(make_case, scenario, point, occurrence):
 
 
 INSIDE = [
-    ("update", "call:create_container", 1),  # uebernehmen, ankuendigen, zurueckbauen
-    ("update", "call:stop_container", 1),  # Rueckbau mit Neustart des alten
-    ("update", "call:start_container", 1),  # Commit und Aufraeumen
-    ("replacing", "call:start_container", 1),  # Commit, Schutz-Tag des ersetzten Slots, Aufraeumen
-    ("failing", "call:start_container", 1),  # Rueckbau nach dem Beobachten
-    ("rollback", "call:start_container", 1),  # Commit des Rueckwegs, beide Schutz-Tags
+    ("update", "call:create_container", 1),  # übernehmen, ankündigen, zurückbauen
+    ("update", "call:stop_container", 1),  # Rückbau mit Neustart des alten
+    ("update", "call:start_container", 1),  # Commit und Aufräumen
+    ("replacing", "call:start_container", 1),  # Commit, Schutz-Tag des ersetzten Slots, Aufräumen
+    ("failing", "call:start_container", 1),  # Rückbau nach dem Beobachten
+    ("rollback", "call:start_container", 1),  # Commit des Rückwegs, beide Schutz-Tags
 ]
 
 
 @pytest.mark.parametrize(("scenario", "point", "occurrence"), INSIDE, ids=[f"{s}-{p}-{n}" for s, p, n in INSIDE])
 def test_crash_at_every_point_of_the_recovery(tmp_path, uid, scenario, point, occurrence):
-    # Fuer jede Stelle der Wiederaufnahme einzeln: Vorgang stuerzt ab, Wiederaufnahme stuerzt genau dort ab, die
-    # naechste laeuft durch.
+    # Für jede Stelle der Wiederaufnahme einzeln: Vorgang stürzt ab, Wiederaufnahme stürzt genau dort ab, die
+    # nächste läuft durch.
     index = find(scenario, point, occurrence)
     probe = Case(tmp_path / "probe", uid, scenario)
     try:
@@ -406,10 +406,10 @@ def test_crash_at_every_point_of_the_recovery(tmp_path, uid, scenario, point, oc
 
 
 def test_crash_right_after_create_adopts_the_own_container(make_case):
-    # `create` ist durch, die Antwort kam nie an: der neue Container traegt die Compose-Labels des Ziels, seine ID steht
-    # aber noch nicht im Journal. Die Vorpruefung haelt ihn darum fuer fremd -- die Wiederaufnahme darf sich nicht auf
-    # sie stuetzen, sondern erkennt ihn selbst (Zustand `created`, nie gestartet, neues Image, gleiche Labels),
-    # traegt ihn als `created` ein und entfernt ihn.
+    # `create` ist durch, die Antwort kam nie an: der neue Container trägt die Compose-Labels des Ziels, seine ID steht
+    # aber noch nicht im Journal. Die Vorprüfung hält ihn darum für fremd -- die Wiederaufnahme darf sich nicht auf
+    # sie stützen, sondern erkennt ihn selbst (Zustand `created`, nie gestartet, neues Image, gleiche Labels),
+    # trägt ihn als `created` ein und entfernt ihn.
     case = make_case("update")
     lab = case.lab
     assert case.crash_at(UPDATE_POINTS.index("call:create_container")) is None
@@ -423,14 +423,14 @@ def test_crash_right_after_create_adopts_the_own_container(make_case):
     lab.steps.clear()
     outcome = case.revive()
     assert (outcome.outcome, outcome.code) == ("aborted", None)
-    assert lab.steps[:2] == ["created", "undo"]  # erst eingetragen, dann der Rueckbau angekuendigt
+    assert lab.steps[:2] == ["created", "undo"]  # erst eingetragen, dann der Rückbau angekündigt
     assert ("remove", created) in lab.mutations() and created not in lab.world.containers
     assert_settled(case, outcome, ("aborted", None), was_counted=True)
 
 
 def test_a_foreign_container_under_the_name_after_a_crash_in_creating_is_left_alone(make_case):
-    # Absturz vor `create`; dann legt jemand selbst einen Container unter dem Namen an. Er gehoert nicht dem Helfer
-    # (laeuft schon, anderes Image): nichts anfassen.
+    # Absturz vor `create`; dann legt jemand selbst einen Container unter dem Namen an. Er gehört nicht dem Helfer
+    # (läuft schon, anderes Image): nichts anfassen.
     case = make_case("update")
     lab = case.lab
     assert case.crash_at(UPDATE_POINTS.index("after:creating")) is None
@@ -478,9 +478,9 @@ NOT_OWN_CREATED = {
 @pytest.mark.parametrize("path", ["recover", "undo"])
 @pytest.mark.parametrize("change", list(NOT_OWN_CREATED.values()), ids=list(NOT_OWN_CREATED))
 def test_a_container_under_the_name_that_differs_in_one_point_is_left_alone(make_case, change, path):
-    # Die ID des neuen Containers steht nicht im Journal: der Helfer stuerzt direkt nach `create` ab (`recover`), oder
-    # die Antwort auf `create` geht verloren und der Ablauf baut zurueck (`undo`, dort genuegt danach die ID). Der
-    # Container unter `<name>` waere der eigene -- bis auf genau eine Sache. Dann ist er es nicht: nichts entfernen,
+    # Die ID des neuen Containers steht nicht im Journal: der Helfer stürzt direkt nach `create` ab (`recover`), oder
+    # die Antwort auf `create` geht verloren und der Ablauf baut zurück (`undo`, dort genügt danach die ID). Der
+    # Container unter `<name>` wäre der eigene -- bis auf genau eine Sache. Dann ist er es nicht: nichts entfernen,
     # nichts anfassen, das Journal geht.
     case = make_case("update")
     lab = case.lab
@@ -507,12 +507,12 @@ def test_a_container_under_the_name_that_differs_in_one_point_is_left_alone(make
 
 
 # ---------------------------------------------------------------------------
-# Von aussen geaendert, waehrend der Helfer nicht lief
+# Von außen geändert, während der Helfer nicht lief
 # ---------------------------------------------------------------------------
 
 
 def _compose_created_a_new_one(case: Case, *, running: bool) -> dict:
-    """Wie `docker compose up -d` waehrend der Helfer nicht lief: ein weiterer Container des Dienstes."""
+    """Wie `docker compose up -d` während der Helfer nicht lief: ein weiterer Container des Dienstes."""
     lab = case.lab
     twin = copy.deepcopy(case.before)
     twin.update(Id=_hex("compose-twin"), Name=f"/{lab.name[:-1]}2")
@@ -539,7 +539,7 @@ def test_compose_recreated_in_between_means_no_action(make_case, point):
 
 
 def test_compose_replaced_the_new_container_while_the_helper_was_down(make_case):
-    # Der neue Container laeuft schon; Compose hat ihn ersetzt (entfernt und einen eigenen angelegt und gestartet).
+    # Der neue Container läuft schon; Compose hat ihn ersetzt (entfernt und einen eigenen angelegt und gestartet).
     case = make_case("update")
     lab = case.lab
     assert case.crash_at(UPDATE_POINTS.index("call:start_container")) is None
@@ -557,7 +557,7 @@ def test_compose_replaced_the_new_container_while_the_helper_was_down(make_case)
 
 @pytest.mark.parametrize("point", ["after:started", "call:start_container"])
 def test_old_container_started_by_hand_while_the_helper_was_down(make_case, point):
-    # Der alte Container laeuft wieder (jemand hat `docker start` gemacht), der neue ist angekuendigt bzw. laeuft schon:
+    # Der alte Container läuft wieder (jemand hat `docker start` gemacht), der neue ist angekündigt bzw. läuft schon:
     # nichts anfassen, weder den einen noch den anderen stoppen oder starten.
     case = make_case("update")
     lab = case.lab
@@ -587,8 +587,8 @@ def test_old_container_removed_by_hand_while_the_helper_was_down(make_case, poin
 
 @pytest.mark.parametrize("point", ["call:tag_image", "call:create_container", "call:start_container"])
 def test_old_container_renamed_back_by_hand_while_the_helper_was_down(make_case, point):
-    # Nur im angekuendigten Schritt `renamed` darf der alte Container noch seinen Namen haben; danach heisst ein
-    # zurueckbenannter alter Container: jemand hat selbst eingegriffen.
+    # Nur im angekündigten Schritt `renamed` darf der alte Container noch seinen Namen haben; danach heißt ein
+    # zurückbenannter alter Container: jemand hat selbst eingegriffen.
     case = make_case("update")
     lab = case.lab
     assert case.crash_at(find("update", point, 2 if point == "call:tag_image" else 1)) is None
@@ -603,8 +603,8 @@ def test_old_container_renamed_back_by_hand_while_the_helper_was_down(make_case,
 
 
 def test_undo_announced_before_any_change_keeps_its_reason(make_case):
-    # Die Pruefung vor dem ersten aendernden Schritt scheitert an der Engine: der Rueckbau kuendigt sich noch in
-    # `pulled` an (es gibt nichts zurueckzunehmen). Stuerzt der Helfer genau dann ab, bleibt der Grund im Ergebnis.
+    # Die Prüfung vor dem ersten ändernden Schritt scheitert an der Engine: der Rückbau kündigt sich noch in
+    # `pulled` an (es gibt nichts zurückzunehmen). Stürzt der Helfer genau dann ab, bleibt der Grund im Ergebnis.
     case = make_case("update")
     lab = case.lab
 
@@ -626,9 +626,9 @@ def test_undo_announced_before_any_change_keeps_its_reason(make_case):
 
 
 def test_a_stop_still_under_way_when_the_helper_comes_back_is_waited_for(make_case):
-    # Die Antwort auf den Stopp des alten Containers geht verloren, der Helfer stuerzt gleich danach ab; der
+    # Die Antwort auf den Stopp des alten Containers geht verloren, der Helfer stürzt gleich danach ab; der
     # Docker-Dienst stoppt den Container aber weiter. Die Wiederaufnahme sieht ihn noch laufen -- und wartet, bis der
-    # Stopp durch sein kann, statt ihn fuer gesund zu halten. Danach startet sie ihn selbst (von Hand gestoppt startet
+    # Stopp durch sein kann, statt ihn für gesund zu halten. Danach startet sie ihn selbst (von Hand gestoppt startet
     # ihn `unless-stopped` nicht wieder).
     case = make_case("update")
     lab = case.lab
@@ -652,9 +652,9 @@ def test_a_stop_still_under_way_when_the_helper_comes_back_is_waited_for(make_ca
 
 
 def test_a_half_undo_without_its_announcement_counts_as_external(make_case):
-    # Gegenprobe zur Ankuendigung des Rueckbaus: Ohne `undo` im Journal sieht ein halber Rueckbau (der neue Container
-    # ist schon weg) aus wie eine Aenderung von aussen, und die Wiederaufnahme fasst nichts an. Mit der Ankuendigung
-    # baut sie weiter zurueck (siehe Matrix).
+    # Gegenprobe zur Ankündigung des Rückbaus: Ohne `undo` im Journal sieht ein halber Rückbau (der neue Container
+    # ist schon weg) aus wie eine Änderung von außen, und die Wiederaufnahme fasst nichts an. Mit der Ankündigung
+    # baut sie weiter zurück (siehe Matrix).
     case = make_case("failing")
     lab = case.lab
     assert case.crash_at(find("failing", "call:remove_container")) is None
@@ -674,7 +674,7 @@ def test_a_half_undo_without_its_announcement_counts_as_external(make_case):
 
 
 def test_recovery_is_never_held_back_by_the_limits(make_case):
-    # Die Wiederaufnahme prueft keine Grenze: weder die Aktion von eben noch eine gesperrte Version noch die 24-h-Sperre
+    # Die Wiederaufnahme prüft keine Grenze: weder die Aktion von eben noch eine gesperrte Version noch die 24-h-Sperre
     # nach einem kaputten Zustand halten sie auf.
     case = make_case("update")
     lab = case.lab
@@ -691,7 +691,7 @@ def test_recovery_is_never_held_back_by_the_limits(make_case):
 
 
 def test_a_restart_resets_nothing(make_case):
-    # Nach dem Absturz (Aktion gezaehlt, ID gemerkt) und dem Neustart: eine neue Anforderung ist durch die Grenze
+    # Nach dem Absturz (Aktion gezählt, ID gemerkt) und dem Neustart: eine neue Anforderung ist durch die Grenze
     # gesperrt, dieselbe ist eine Wiederholung -- vor und nach der Wiederaufnahme.
     case = make_case("update")
     lab = case.lab
@@ -724,8 +724,8 @@ def test_a_new_request_while_the_journal_stands_is_busy(make_case):
 
 
 def test_the_deadline_is_not_extended_by_a_restart(make_case):
-    # Der neue Container wird nie gesund. Der Helfer stuerzt gleich nach dem Start ab und kommt erst 20 Minuten spaeter
-    # wieder: die gespeicherte Frist ist dann vorbei, er baut sofort zurueck, statt neu 15 Minuten zu warten.
+    # Der neue Container wird nie gesund. Der Helfer stürzt gleich nach dem Start ab und kommt erst 20 Minuten später
+    # wieder: die gespeicherte Frist ist dann vorbei, er baut sofort zurück, statt neu 15 Minuten zu warten.
     case = make_case("update")
     lab = case.lab
     lab.world.behaviors[case.newer] = Behavior(healthy_after=None, unhealthy_from=10)
@@ -736,12 +736,12 @@ def test_the_deadline_is_not_extended_by_a_restart(make_case):
     outcome = case.revive()
     assert (outcome.outcome, outcome.code) == ("rolled_back", policy.TIMEOUT)
     assert resumed_at > deadline
-    assert lab.clock.t - resumed_at < 5 * 60  # nur der Rueckbau (der alte wird nach 30 s gesund), kein neues Warten
+    assert lab.clock.t - resumed_at < 5 * 60  # nur der Rückbau (der alte wird nach 30 s gesund), kein neues Warten
 
 
 def test_a_slow_migration_goes_on_after_a_restart(make_case):
     # Der neue Container braucht 10 Minuten (Migration). Der Helfer kommt nach 5 Minuten wieder, beobachtet bis zur
-    # gespeicherten Frist weiter und schliesst ab.
+    # gespeicherten Frist weiter und schließt ab.
     case = make_case("update")
     lab = case.lab
     lab.world.behaviors[case.newer] = Behavior(unhealthy_from=10, healthy_after=600)
@@ -755,8 +755,8 @@ def test_a_slow_migration_goes_on_after_a_restart(make_case):
 
 
 def test_a_clock_set_back_before_the_restart_does_not_extend_the_deadline(make_case):
-    # Die Frist im Journal stammt von einer vorgehenden Uhr, die danach um Stunden zurueckgestellt wurde. Die
-    # Wiederaufnahme beobachtet hoechstens noch eine ganze Frist, nicht bis die Wanduhr die alte Frist wieder erreicht.
+    # Die Frist im Journal stammt von einer vorgehenden Uhr, die danach um Stunden zurückgestellt wurde. Die
+    # Wiederaufnahme beobachtet höchstens noch eine ganze Frist, nicht bis die Wanduhr die alte Frist wieder erreicht.
     case = make_case("update")
     lab = case.lab
     lab.world.behaviors[case.newer] = Behavior(healthy_after=None, unhealthy_from=10)
@@ -766,15 +766,15 @@ def test_a_clock_set_back_before_the_restart_does_not_extend_the_deadline(make_c
     outcome = case.revive()
     assert (outcome.outcome, outcome.code) == ("rolled_back", policy.TIMEOUT)
     assert lab.clock.m - resumed < policy.DEADLINE_S + 5 * 60
-    lab.assert_back_to_old()  # (`assert_settled` rechnet mit der Wanduhr, die hier sechs Stunden zurueckliegt)
+    lab.assert_back_to_old()  # (`assert_settled` rechnet mit der Wanduhr, die hier sechs Stunden zurückliegt)
 
 
 def _power_cut_while_watched(case: Case, *, off: float, saved_before: float | None = None, ran: float = 0.0,
                              helper_after: float | None = None, ntp_after: float = 60.0) -> float:
-    """Strom weg, waehrend das Journal auf `started` steht und der neue Container seit `ran` Sekunden laeuft; der
-    Rechner ist `off` Sekunden spaeter wieder da (`Lab.boot`). Der Docker-Dienst startet den neuen Container neu (seine
+    """Strom weg, während das Journal auf `started` steht und der neue Container seit `ran` Sekunden läuft; der
+    Rechner ist `off` Sekunden später wieder da (`Lab.boot`). Der Docker-Dienst startet den neuen Container neu (seine
     Restart-Policy) und mit ihm den Helfer, der alte bleibt aus (`no`). Gibt die Wanduhr beim Neustart des Containers
-    zurueck.
+    zurück.
 
     `saved_before`: Ohne Echtzeituhr (Raspberry Pi) startet der Rechner mit der zuletzt gespeicherten Zeit, hier so
     viele Sekunden vor dem Stromausfall. `ntp_after` Sekunden nach dem Neustart des Containers stellt NTP die Uhr
@@ -806,7 +806,7 @@ def _power_cut_while_watched(case: Case, *, off: float, saved_before: float | No
 def test_a_migration_that_starts_again_after_a_power_cut_gets_its_time(make_case):
     # Strom weg um 03:07, die Frist im Journal endet um 03:20, um 03:45 ist der Rechner wieder da. Der Docker-Dienst hat
     # den neuen Container neu gestartet, seine Migration beginnt von vorn (10 Minuten). Er bekommt eine ganze Frist ab
-    # diesem Neustart -- statt nach einem einzigen Blick als `timeout` zurueckgebaut zu werden.
+    # diesem Neustart -- statt nach einem einzigen Blick als `timeout` zurückgebaut zu werden.
     case = make_case("update")
     lab = case.lab
     lab.world.behaviors[case.newer] = Behavior(unhealthy_from=10, healthy_after=600)
@@ -828,7 +828,7 @@ def _clock_cases():
 @pytest.mark.parametrize(("ran", "saved_before", "known"), list(_clock_cases()))
 def test_a_clock_set_right_after_the_power_cut_does_not_cut_the_migration_short(make_case, ran, saved_before, known):
     # Wie oben, aber die Uhr geht nach dem Hochfahren falsch und wird erst nach dem Neustart des Containers richtig
-    # gestellt. Wie lange der Container schon laeuft, ist mit der Wanduhr nicht zu sagen. `State.StartedAt` liegt vor dem
+    # gestellt. Wie lange der Container schon läuft, ist mit der Wanduhr nicht zu sagen. `State.StartedAt` liegt vor dem
     # Eintrag `started` (so kann es beim eigenen Start nie sein): eine ganze Frist ab der Wiederaufnahme, auch ohne die
     # Laufzeit des Rechners und den Start des Helfers. Fiel der Strom 90 s nach dem Start aus und wurde die Zeit 30 bzw.
     # 60 s davor gespeichert, liegt es kurz danach, genau wie beim eigenen Start: Dann zeigt die Laufzeit des Rechners
@@ -851,9 +851,9 @@ def test_a_clock_set_right_after_the_power_cut_does_not_cut_the_migration_short(
 def test_the_uptime_shows_a_power_cut_whatever_the_clock_does(make_case, helper_after, ntp_after):
     # Fiel der Strom 90 s nach dem Start aus und wurde die Zeit 30 s davor gespeichert, startet der Docker-Dienst den
     # neuen Container mit einer Zeit kurz nach dem Eintrag `started` -- wie beim eigenen Start. Der Helfer startet aber
-    # nicht mit ihm zusammen: erst nachdem NTP die Uhr gestellt hat, oder mehr als `TOGETHER_S` spaeter. Dann zeigt nur
+    # nicht mit ihm zusammen: erst nachdem NTP die Uhr gestellt hat, oder mehr als `TOGETHER_S` später. Dann zeigt nur
     # die Laufzeit des Rechners, dass die Migration von vorn begann: Sie bekommt ihre Zeit, statt nach einem einzigen
-    # Blick als `timeout` zurueckgebaut zu werden.
+    # Blick als `timeout` zurückgebaut zu werden.
     case = make_case("update")
     lab = case.lab
     lab.world.behaviors[case.newer] = Behavior(unhealthy_from=10, healthy_after=600)
@@ -865,13 +865,13 @@ def test_the_uptime_shows_a_power_cut_whatever_the_clock_does(make_case, helper_
 
 
 def test_a_recent_boot_does_not_extend_the_deadline_of_an_update_started_after_it(make_case):
-    # Der Rechner laeuft erst seit fuenf Minuten, als das Update beginnt; der Helfer stuerzt gleich nach dem Start des
-    # neuen Containers ab und kommt drei Minuten spaeter wieder (nicht mehr wie ein gemeinsamer Start). Der Container laeuft seit seinem eigenen Start: Es
+    # Der Rechner läuft erst seit fünf Minuten, als das Update beginnt; der Helfer stürzt gleich nach dem Start des
+    # neuen Containers ab und kommt drei Minuten später wieder (nicht mehr wie ein gemeinsamer Start). Der Container läuft seit seinem eigenen Start: Es
     # bleibt bei der Frist im Journal (die Laufzeit des Rechners gibt nie mehr als eine Frist ab dem Hochfahren).
     case = make_case("update")
     lab = case.lab
     lab.world.behaviors[case.newer] = Behavior(healthy_after=None, unhealthy_from=10)
-    lab.clock.t -= 5 * 60  # (nur die Wanduhr: das Hochfahren liegt so fuenf Minuten vor dem Update)
+    lab.clock.t -= 5 * 60  # (nur die Wanduhr: das Hochfahren liegt so fünf Minuten vor dem Update)
     lab.boot()
     lab.clock.t += 5 * 60
     assert case.crash_at(UPDATE_POINTS.index("call:start_container")) is None
@@ -900,11 +900,11 @@ def _helper_start_unknown(lab: Lab) -> None:
 
 @pytest.mark.parametrize("helper", ["started_later", "started_with_it", "start_unknown"])
 def test_a_container_restarted_by_docker_has_one_deadline_from_its_restart(make_case, helper):
-    # Nach dem Neustart des Rechners wird der neue Container nie gesund. Startet der Helfer erst fuenf Minuten nach ihm
-    # (oder nennt das Inspect seinen Start nicht), geht es zurueck nach einer ganzen Frist ab dem Neustart des neuen
-    # Containers, nicht spaeter. Hat der Docker-Dienst beide zusammen gestartet, ist die Uhrzeit dieses Neustarts nicht
-    # sicher (sie kann falsch gegangen sein): eine ganze Frist ab der Wiederaufnahme -- kommt die erst fuenf Minuten
-    # spaeter, wartet er so laenger als noetig, aber nie zu kurz.
+    # Nach dem Neustart des Rechners wird der neue Container nie gesund. Startet der Helfer erst fünf Minuten nach ihm
+    # (oder nennt das Inspect seinen Start nicht), geht es zurück nach einer ganzen Frist ab dem Neustart des neuen
+    # Containers, nicht später. Hat der Docker-Dienst beide zusammen gestartet, ist die Uhrzeit dieses Neustarts nicht
+    # sicher (sie kann falsch gegangen sein): eine ganze Frist ab der Wiederaufnahme -- kommt die erst fünf Minuten
+    # später, wartet er so länger als nötig, aber nie zu kurz.
     case = make_case("update")
     lab = case.lab
     lab.world.behaviors[case.newer] = Behavior(healthy_after=None, unhealthy_from=10)
@@ -924,10 +924,10 @@ def test_a_container_restarted_by_docker_has_one_deadline_from_its_restart(make_
 
 @pytest.mark.parametrize("after", [10 * 60, 60])
 def test_a_restart_of_the_helper_alone_does_not_extend_the_deadline(make_case, after):
-    # Nur der Helfer startet neu (Absturz, seine Restart-Policy); der neue Container laeuft seit seinem eigenen Start
-    # weiter und wird nie gesund. Startet der Helfer viel spaeter als er, bleibt es bei der Frist im Journal. Startet er
-    # zufaellig kurz danach (hier nach einer Minute), sieht das aus wie ein gemeinsamer Start: Dann wartet er eine ganze
-    # Frist ab jetzt -- hoechstens `TOGETHER_S` laenger als die Frist im Journal, nie kuerzer.
+    # Nur der Helfer startet neu (Absturz, seine Restart-Policy); der neue Container läuft seit seinem eigenen Start
+    # weiter und wird nie gesund. Startet der Helfer viel später als er, bleibt es bei der Frist im Journal. Startet er
+    # zufällig kurz danach (hier nach einer Minute), sieht das aus wie ein gemeinsamer Start: Dann wartet er eine ganze
+    # Frist ab jetzt -- höchstens `TOGETHER_S` länger als die Frist im Journal, nie kürzer.
     case = make_case("update")
     lab = case.lab
     lab.world.behaviors[case.newer] = Behavior(healthy_after=None, unhealthy_from=10)
@@ -949,7 +949,7 @@ def test_a_restart_of_the_helper_alone_does_not_extend_the_deadline(make_case, a
 
 @pytest.mark.parametrize("saved_before", [None, 5 * 60])
 def test_a_clock_set_back_after_the_restart_gives_at_most_one_deadline(make_case, saved_before):
-    # Die Uhr wird nach dem Neustart des Containers um Stunden zurueckgestellt: `State.StartedAt` liegt dann in der
+    # Die Uhr wird nach dem Neustart des Containers um Stunden zurückgestellt: `State.StartedAt` liegt dann in der
     # Zukunft. Mehr als eine ganze Frist ab der Wiederaufnahme gibt es trotzdem nicht.
     case = make_case("update")
     lab = case.lab
@@ -970,7 +970,7 @@ def test_a_clock_set_back_after_the_restart_gives_at_most_one_deadline(make_case
 
 @pytest.mark.parametrize("point", ["after:begin", "call:pull", "after:pulled", "after:state"])
 def test_before_any_change_the_recovery_needs_no_engine(make_case, point):
-    # Bis `pulled` hat der Helfer nichts veraendert (hoechstens ein Image gezogen): das Journal geht weg, ohne die
+    # Bis `pulled` hat der Helfer nichts verändert (höchstens ein Image gezogen): das Journal geht weg, ohne die
     # Engine zu fragen -- auch wenn sie gerade nicht antwortet oder inzwischen ein weiterer Container des Dienstes
     # dasteht.
     case = make_case("update")
@@ -1016,8 +1016,8 @@ def test_a_corrupt_journal_is_never_acted_on(make_case):
 def test_after_a_crash_at_the_commit_the_result_is_kept_before_the_engine_is_asked(make_case, scenario):
     # Absturz gleich nachdem `committed` im Journal steht, noch bevor das Ergebnis gespeichert ist. Beim Neustart
     # antwortet der Docker-Dienst nicht (er startet gerade neu). Entschieden ist der Vorgang trotzdem: Die
-    # Wiederaufnahme traegt das Ergebnis ein, bevor sie die Engine fragt, und meldet den Schritt fuer den Status -- jede
-    # Runde, bis die Engine wieder da ist. Danach raeumt sie fertig auf, das Ergebnis behaelt seinen ersten Zeitpunkt.
+    # Wiederaufnahme trägt das Ergebnis ein, bevor sie die Engine fragt, und meldet den Schritt für den Status -- jede
+    # Runde, bis die Engine wieder da ist. Danach räumt sie fertig auf, das Ergebnis behält seinen ersten Zeitpunkt.
     case = make_case(scenario)
     lab = case.lab
     assert case.crash_at(find(scenario, "after:committed")) is None
@@ -1041,8 +1041,8 @@ def test_after_a_crash_at_the_commit_the_result_is_kept_before_the_engine_is_ask
 
 
 def test_cleanup_after_the_commit_waits_for_the_engine(make_case):
-    # Nach dem Commit laesst sich der alte Container eine Weile nicht entfernen (500): das Journal bleibt auf
-    # `committed`, das Ergebnis steht schon fest; die naechste Wiederaufnahme raeumt fertig auf.
+    # Nach dem Commit lässt sich der alte Container eine Weile nicht entfernen (500): das Journal bleibt auf
+    # `committed`, das Ergebnis steht schon fest; die nächste Wiederaufnahme räumt fertig auf.
     case = make_case("update")
     lab = case.lab
     assert case.crash_at(UPDATE_POINTS.index("after:committed")) is None
@@ -1070,9 +1070,9 @@ def _saved_commit(case: Case) -> None:
 
 @pytest.mark.parametrize("scenario", ["update", "rollback"])
 def test_an_old_container_that_never_goes_does_not_keep_the_helper_busy_for_good(make_case, scenario):
-    # Der alte Container laesst sich nach dem Commit nie entfernen (500, etwa "device or resource busy" von overlay2).
+    # Der alte Container lässt sich nach dem Commit nie entfernen (500, etwa "device or resource busy" von overlay2).
     # Slot bzw. Sperre und Ergebnis stehen trotzdem schon nach dem ersten Versuch in `state.json`. Nach
-    # `CLEANUP_ROUNDS` Runden bleibt er liegen wie bei einer endgueltigen Ablehnung, und der Helfer ist wieder frei.
+    # `CLEANUP_ROUNDS` Runden bleibt er liegen wie bei einer endgültigen Ablehnung, und der Helfer ist wieder frei.
     case = make_case(scenario)
     lab = case.lab
     old_id = case.before["Id"]
@@ -1081,7 +1081,7 @@ def test_an_old_container_that_never_goes_does_not_keep_the_helper_busy_for_good
     outcome = case.submit(case.request)
     assert (outcome.outcome, outcome.finished) == (FINAL[scenario][0], False) and case.journal_left
     _saved_commit(case)
-    state = lab.state()  # wie im Helfer: derselbe Zustand fuer alle Runden
+    state = lab.state()  # wie im Helfer: derselbe Zustand für alle Runden
     for _round in range(2, flow.CLEANUP_ROUNDS):
         outcome = lab.flow.recover(state)
         assert (outcome.outcome, outcome.finished) == (FINAL[scenario][0], False) and case.journal_left
@@ -1098,7 +1098,7 @@ def test_an_old_container_that_never_goes_does_not_keep_the_helper_busy_for_good
 
 @pytest.mark.parametrize("scenario", ["update", "rollback"])
 def test_flow_done_is_logged_once_however_many_rounds_the_cleanup_takes(make_case, scenario):
-    # Das Aufraeumen nach dem Commit braucht mehrere Runden (der alte Container laesst sich erst spaeter entfernen):
+    # Das Aufräumen nach dem Commit braucht mehrere Runden (der alte Container lässt sich erst später entfernen):
     # Jede Runde meldet nur, dass es noch offen ist; "flow_done" steht genau einmal im Log, wenn der Vorgang fertig ist.
     case = make_case(scenario)
     lab = case.lab
@@ -1120,8 +1120,8 @@ def test_flow_done_is_logged_once_however_many_rounds_the_cleanup_takes(make_cas
 
 
 def test_an_unreachable_engine_after_the_commit_counts_no_round(make_case):
-    # Ist die Engine nur nicht erreichbar, zaehlt das nicht: Aufgeben hiesse dann nur, den alten Container liegen zu
-    # lassen, obwohl er sich spaeter entfernen liesse.
+    # Ist die Engine nur nicht erreichbar, zählt das nicht: Aufgeben hieße dann nur, den alten Container liegen zu
+    # lassen, obwohl er sich später entfernen ließe.
     case = make_case("update")
     lab = case.lab
     assert case.crash_at(UPDATE_POINTS.index("after:committed")) is None
@@ -1151,8 +1151,8 @@ def test_old_container_started_by_hand_after_the_commit_is_left_and_the_helper_i
 
 @pytest.mark.parametrize("scenario", ["update", "rollback"])
 def test_what_is_saved_is_not_written_again(make_case, scenario):
-    # Absturz nach dem Speichern, vor dem Loeschen des Journals: die Wiederaufnahme verlaengert weder den Slot noch die
-    # Sperre nach dem Rueckweg, und das Ergebnis behaelt seinen Zeitpunkt.
+    # Absturz nach dem Speichern, vor dem Löschen des Journals: die Wiederaufnahme verlängert weder den Slot noch die
+    # Sperre nach dem Rückweg, und das Ergebnis behält seinen Zeitpunkt.
     case = make_case(scenario)
     lab = case.lab
     assert case.crash_at(find(scenario, "before:clear")) is None
@@ -1167,8 +1167,8 @@ def test_what_is_saved_is_not_written_again(make_case, scenario):
 
 @pytest.mark.parametrize("scenario", ["update", "rollback"])
 def test_the_result_saved_right_after_the_commit_keeps_its_time(make_case, scenario):
-    # Absturz gleich nachdem das Ergebnis gespeichert ist, noch vor Slot bzw. Sperre. Die Wiederaufnahme traegt es nicht
-    # noch einmal ein (es behaelt seinen Zeitpunkt) und speichert Slot bzw. Sperre dazu.
+    # Absturz gleich nachdem das Ergebnis gespeichert ist, noch vor Slot bzw. Sperre. Die Wiederaufnahme trägt es nicht
+    # noch einmal ein (es behält seinen Zeitpunkt) und speichert Slot bzw. Sperre dazu.
     case = make_case(scenario)
     lab = case.lab
     assert case.crash_at(find(scenario, "after:state", 2)) is None
@@ -1186,8 +1186,8 @@ def test_the_result_saved_right_after_the_commit_keeps_its_time(make_case, scena
 @pytest.mark.parametrize("full", [("result",), ("slot",), ("result", "slot"), ("slot", "again"),
                                   ("result", "slot", "again")])
 def test_a_full_disk_while_a_slot_is_replaced(make_case, monkeypatch, full):
-    # Das Update ersetzt einen vorhandenen Slot. `state.json` laesst sich nicht schreiben: gleich nach dem Commit (das
-    # Ergebnis), beim neuen Slot und auch in der naechsten Runde noch einmal. Die Runden bekommen denselben Zustand
+    # Das Update ersetzt einen vorhandenen Slot. `state.json` lässt sich nicht schreiben: gleich nach dem Commit (das
+    # Ergebnis), beim neuen Slot und auch in der nächsten Runde noch einmal. Die Runden bekommen denselben Zustand
     # (wie im Helfer). Am Ende ist das Schutz-Tag des alten Slots weg, der neue Slot und das Ergebnis stehen genau
     # einmal in `state.json`.
     case = make_case("replacing")
@@ -1216,16 +1216,16 @@ def test_a_full_disk_while_a_slot_is_replaced(make_case, monkeypatch, full):
         outcome = lab.flow.recover(state)
     assert rounds == len({"slot", "again"} & set(full))
     monkeypatch.undo()
-    case.seen = ["after:pulled"]  # (fuer `assert_settled`: die Version steht im Journal)
+    case.seen = ["after:pulled"]  # (für `assert_settled`: die Version steht im Journal)
     assert lab.state().slot.from_version == "0.7.0" and lab.protect("0.6.9") is None
     assert_settled(case, outcome, ("applied", None), was_counted=True)
 
 
 @pytest.mark.parametrize("image_store", ["graphdriver", "containerd"])
 def test_old_image_gone_before_the_commit_cleanup_still_leaves_a_way_back(make_case, image_store):
-    # Nach dem Commit, noch bevor der Slot gespeichert ist, entfernt jemand den alten Container und raeumt mit `image
+    # Nach dem Commit, noch bevor der Slot gespeichert ist, entfernt jemand den alten Container und räumt mit `image
     # prune -a` auf. Der Digest des alten Images steht seit `begin` im Journal: Der Slot entsteht trotzdem, und ein
-    # Rueckweg zieht das Image nach diesem Digest wieder (genau dieselbe ID und Version, sonst `previous_mismatch`) --
+    # Rückweg zieht das Image nach diesem Digest wieder (genau dieselbe ID und Version, sonst `previous_mismatch`) --
     # wie nach einem Commit ohne Absturz.
     case = make_case("update", image_store)
     lab = case.lab
@@ -1266,9 +1266,9 @@ def test_old_image_gone_still_replaces_the_previous_slot(make_case):
 
 @pytest.mark.parametrize("image_store", ["graphdriver", "containerd"])
 def test_docker_restarts_while_the_new_container_is_watched(make_case, image_store):
-    # Der Docker-Dienst (oder der ganze Rechner) startet neu, waehrend das Journal auf `started` steht. Der alte
-    # Container bleibt aus (Restart-Policy `no`), der neue kommt mit seiner uebernommenen Policy wieder; nie laufen
-    # beide. Die Wiederaufnahme beobachtet weiter und schliesst ab -- mit einem Rueckweg-Slot, auch wenn die Engine den
+    # Der Docker-Dienst (oder der ganze Rechner) startet neu, während das Journal auf `started` steht. Der alte
+    # Container bleibt aus (Restart-Policy `no`), der neue kommt mit seiner übernommenen Policy wieder; nie laufen
+    # beide. Die Wiederaufnahme beobachtet weiter und schließt ab -- mit einem Rückweg-Slot, auch wenn die Engine den
     # Digest des alten Images inzwischen nicht mehr nennt (containerd-Store).
     case = make_case("update", image_store)
     lab = case.lab
@@ -1283,13 +1283,13 @@ def test_docker_restarts_while_the_new_container_is_watched(make_case, image_sto
 
 
 @pytest.mark.parametrize(("point", "running_after"), [
-    ("call:rename_container", True),  # der alte laeuft noch als `<name>-previous` mit seiner Policy: er kommt wieder
+    ("call:rename_container", True),  # der alte läuft noch als `<name>-previous` mit seiner Policy: er kommt wieder
     ("call:set_restart_policy", False),  # schon auf `no`, aber noch nicht gestoppt: er bleibt aus
-    ("call:stop_container", False),  # gestoppt mit `no`, der neue nur angelegt: keiner laeuft
+    ("call:stop_container", False),  # gestoppt mit `no`, der neue nur angelegt: keiner läuft
 ])
 def test_docker_restarts_before_the_new_container_ran(make_case, point, running_after):
-    # Der Rechner startet neu, bevor der neue Container lief: Danach laeuft hoechstens der alte (nie beide, nie der
-    # nur angelegte neue), und die Wiederaufnahme baut zurueck -- der alte laeuft wieder unter seinem Namen.
+    # Der Rechner startet neu, bevor der neue Container lief: Danach läuft höchstens der alte (nie beide, nie der
+    # nur angelegte neue), und die Wiederaufnahme baut zurück -- der alte läuft wieder unter seinem Namen.
     case = make_case("update")
     lab = case.lab
     assert case.crash_at(find("update", point)) is None
@@ -1308,7 +1308,7 @@ def test_docker_restarts_before_the_new_container_ran(make_case, point, running_
 ])
 def test_the_recovery_sees_the_same_hard_failures(make_case, behavior, code):
     # Der Helfer kommt eine Minute nach dem Start des neuen Containers wieder. Der steckt inzwischen in einer
-    # Neustart-Schleife bzw. zeigt die Notseite: Die Wiederaufnahme erkennt das wie der erste Lauf und baut zurueck.
+    # Neustart-Schleife bzw. zeigt die Notseite: Die Wiederaufnahme erkennt das wie der erste Lauf und baut zurück.
     case = make_case("update")
     lab = case.lab
     lab.world.behaviors[case.newer] = behavior

@@ -119,8 +119,22 @@ async def test_each_module_with_a_helper_gets_one_item_after_root(client, module
     items = {item["id"]: item for item in r.json()["items"]}
     assert (items["helper:fake-a"]["status"], items["helper:fake-a"]["label"]) == ("ok", "Hilfsskript für Modul fake-a")
     assert items["helper:fake-a"]["detail"] == "Version 2, nur root kann es ändern. Eigene sudo-Regel vorhanden."
-    assert items["helper:fake-b"]["status"] == "skipped" and "Noch nicht auf dem Server" in items["helper:fake-b"]["detail"]
+    # Volle Regel gesetzt, Skript fehlt: ein Hinweis (gelb), kein Fehler, und nicht mehr „Alles in Ordnung“.
+    assert items["helper:fake-b"]["status"] == "warn" and "Fehlt auf dem Server" in items["helper:fake-b"]["detail"]
+    assert "Server neu einrichten" in items["helper:fake-b"]["hint"]
     assert r.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_missing_helper_without_the_full_rule_is_only_skipped(client, modules, local_ssh_server, fake_probe):
+    _, port, *_ = local_ssh_server
+    headers = await _owner(client)
+    host_id = await _host_with_login(client, headers, port)
+    fake_probe[host_check.SUDO_COMMAND] = (1, "", "sudo: a password is required\n")
+    fake_probe[helper_check_command([SHIELD, OTHER])] = (0, _answer(_missing(SHIELD), _missing(OTHER)), "")
+    items = await _items(client, headers, host_id)
+    for item_id in ("helper:fake-a", "helper:fake-b"):
+        assert items[item_id]["status"] == "skipped" and "Noch nicht auf dem Server" in items[item_id]["detail"]
 
 
 UNUSED = " Nodvard Deck ruft es nicht auf."

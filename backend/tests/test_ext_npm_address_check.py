@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 from nodvard_deck.ext.runtime import get_extension_runtime
@@ -327,4 +328,4 @@ async def test_endpoint_not_configured(client, db_session, test_settings, catalo
     catalog([])
     body = (await client.get("/api/v1/ext/npm/address-check", headers=headers)).json()
     assert body["state"] == "not_configured" and body["checks"] == []
-    assert NPM_URL.startswith("http://npm.test")
+    assert (urlsplit(NPM_URL).scheme, urlsplit(NPM_URL).hostname) == ("http", "npm.test")

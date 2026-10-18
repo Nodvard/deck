@@ -80,10 +80,7 @@ class _DiscoveryJobSpec:
         self._ctx = ctx
 
     async def handler(self, **_: Any) -> dict[str, int]:
-        provider = ProxmoxHostProvider(self._ctx)
-        discovered = await provider.discover_hosts()
-        hosts = await self._ctx.hosts.upsert_discovered(discovered)
-        return {"discovered": len(hosts)}
+        return {"discovered": await ProxmoxHostProvider(self._ctx).sync()}
 
 
 class _WatchJobSpec:

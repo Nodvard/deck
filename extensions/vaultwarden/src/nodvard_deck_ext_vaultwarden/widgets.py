@@ -8,6 +8,12 @@ from typing import Any
 from .config import SETTINGS_HINT
 
 
+def widget_state(status: dict[str, Any]) -> str:
+    """`meta.state` der Kachel: `not_configured`, wenn nichts eingetragen ist (die Übersicht blendet sie dann aus).
+    Eine eingetragene, aber unbrauchbare Einstellung ist ein Fehler und bleibt sichtbar."""
+    return "error" if status.get("invalid") else str(status["state"])
+
+
 def status_rows(status: dict[str, Any]) -> list[dict[str, Any]]:
     state = status.get("state")
     if state == "not_configured":

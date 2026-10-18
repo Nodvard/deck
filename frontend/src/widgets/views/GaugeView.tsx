@@ -11,7 +11,7 @@ export function GaugeView({ view, data }: { view: GaugeViewSpec; data: unknown }
   const shown = Number.isInteger(value) ? String(value) : value.toFixed(1);
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2">
+    <div className="flex flex-col items-center gap-2">
       <div className="relative h-24 w-24">
         <svg viewBox="0 0 100 100" className="h-24 w-24 -rotate-90">
           <circle cx="50" cy="50" r="40" fill="none" stroke="currentColor" strokeOpacity={0.08} strokeWidth={9} />

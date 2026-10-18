@@ -11,6 +11,7 @@ import json
 import logging
 import secrets
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,7 @@ from . import after_check as ac
 from . import detached as dt
 from . import image_apply as ia
 from .capabilities import CONTAINER_NAME_RE, is_own_container
+from .compose_errors import scrub_compose_output
 from .image_apply import ComposeTarget, NotUpdatable
 from .image_updates import UPDATE, ImageUpdateService, _write_atomic
 
@@ -70,6 +72,7 @@ RESTARTED_LINE = "Das Dashboard wurde währenddessen neu gestartet."
 ACTION_TYPE = "container.image_update"
 STALE_MESSAGE = "Der Container wurde inzwischen verändert – bitte neu prüfen und neu auslösen."
 BUSY_MESSAGE = ia.BUSY_TEXT
+
 RISK_ORDER = (Risk.LOW, Risk.MEDIUM, Risk.HIGH, Risk.CRITICAL)
 NOT_A_USER_MESSAGE = "Ein Image-Update kann nur ein Mensch über die Docker-Seite vorschlagen."
 RISK_TOO_LOW_MESSAGE = "Der Vorschlag hat eine niedrigere Risikostufe, als dieses Update jetzt verlangt – bitte neu prüfen und neu auslösen."
@@ -84,6 +87,10 @@ ROLLBACK_RETRY_S = 2
 # gescheitert), nie bei bloßem "ungesund": eine App mitten in einer langen Datenumstellung würde sonst abgebrochen.
 AUTO_ROLLBACK_SETTING = "image_update_auto_rollback"
 """Einstellung: Startet die neue Version nicht sauber, geht es automatisch zurück auf das Sicherungs-Image (Vorgabe: an)."""
+
+
+def _stack_busy_text(project: str, what: str) -> str:
+    return f"Am Stack „{project}“ läuft gerade schon etwas ({what}). Versuch es danach noch einmal."
 
 
 IMAGE_UPDATE_SPEC = ActionSpec(
@@ -239,12 +246,20 @@ class ImageApplier:
         self._images = images
         self._busy: dict[str, str] = {}
         """`host_id:projekt` -> Container, für den dort gerade ein Update läuft."""
+        self.stack_busy: Callable[[str, str], str | None] | None = None
+        """Was die Stack-Aktionen gerade an einem Projekt tun; solange lehnt das Update eines seiner Container ab."""
         self._applying: dict[str, dict[str, Any]] = {}
         """`host_id:container` -> Stand des laufenden Updates (Schritt, Start, Lauf-ID)."""
         self._applied: dict[str, dict[str, Any]] = {}
         """`host_id:container` -> Ergebnis des letzten Updates (nur im Speicher)."""
         self._applied_at: dict[str, float] = {}
         self._now = time.monotonic  # Test-Einhänger (Dauer eines Laufs)
+
+    def project_busy(self, host_id: str, project: str) -> str | None:
+        return "Image-Update eines Containers" if f"{host_id}:{project}" in self._busy else None
+
+    def _stack_busy(self, host_id: str, project: str) -> str | None:
+        return self.stack_busy(host_id, project) if self.stack_busy is not None else None
 
     def snapshot(self) -> dict[str, Any]:
         cutoff = time.time() - APPLIED_KEEP_S
@@ -298,6 +313,8 @@ class ImageApplier:
             return NotUpdatable("no_update", "Laut letzter Prüfung gibt es für diesen Container kein neueres Image. Erst „Image-Updates prüfen“.")
         if f"{host.id}:{t.project}" in self._busy:
             return NotUpdatable("busy", "Für dieses Compose-Projekt läuft gerade schon ein Update.")
+        if (stack := self._stack_busy(host.id, t.project)) is not None:
+            return NotUpdatable("busy", _stack_busy_text(t.project, stack))
 
         probe = await self._ctx.exec.run(host, ia.cmd_probe(t), timeout_s=PROBE_TIMEOUT_S)
         blocked = ia.parse_probe(probe.stdout, t)
@@ -394,7 +411,10 @@ class ImageApplier:
             return ActionResult(success=False, error=RISK_TOO_LOW_MESSAGE)
 
         busy_key, app_key = f"{host.id}:{t.project}", f"{host.id}:{container}"
-        if busy_key in self._busy:  # zwischen Übersicht und hier kann ein anderer Lauf begonnen haben
+        # Zwischen Übersicht und hier kann ein anderer Lauf oder eine Stack-Aktion begonnen haben.
+        if (stack := self._stack_busy(host.id, t.project)) is not None:
+            return ActionResult(success=False, error=_stack_busy_text(t.project, stack))
+        if busy_key in self._busy:
             return ActionResult(success=False, error=BUSY_MESSAGE)
         run_id = req.correlation_id if isinstance(req.correlation_id, str) and dt.RUN_ID_RE.match(req.correlation_id) else "imgupd_" + secrets.token_hex(8)
         self._busy[busy_key] = container
@@ -682,7 +702,7 @@ class ImageApplier:
             unknown = f"Start fehlgeschlagen: {_describe(exc)}"
             reach_grace_s = REACH_GRACE_S
         else:
-            out = (res.stdout or "") + (res.stderr or "")
+            out = scrub_compose_output((res.stdout or "") + (res.stderr or ""))
             info = dt.parse_launch(out)
             if info.busy:  # auf dem Host läuft schon ein Update dieses Projekts (z. B. von einem anderen Dashboard)
                 return _Outcome("not_started", message=BUSY_MESSAGE)
@@ -715,7 +735,7 @@ class ImageApplier:
             except Exception as exc:  # noqa: BLE001 - Verbindung weg: weiter nachfragen
                 last_error = _describe(exc)
             else:
-                poll = dt.parse_poll((res.stdout or "") + (res.stderr or ""))
+                poll = dt.parse_poll(scrub_compose_output((res.stdout or "") + (res.stderr or "")))
                 if poll.state == "noreply":
                     last_error = f"keine Antwort vom Host (Rückgabecode {res.exit_code})"
                 else:
@@ -746,7 +766,7 @@ class ImageApplier:
 
     async def _read_state(self, host: Any, t: ComposeTarget, rollback_ref: str) -> ia.Snapshot:
         res = await self._ctx.exec.run(host, ia.cmd_verify(t, rollback_ref), timeout_s=VERIFY_CALL_TIMEOUT_S)
-        return ia.parse_verify((res.stdout or "") + (res.stderr or ""))
+        return ia.parse_verify(scrub_compose_output((res.stdout or "") + (res.stderr or "")))
 
     async def _rollback_started(self, host: Any, run_id: str) -> bool:
         """Gibt es auf dem Host schon einen Rückweg zu diesem Update (nach einem Neustart des Dashboards)?"""

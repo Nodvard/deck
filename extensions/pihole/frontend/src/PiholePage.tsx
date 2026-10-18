@@ -1,11 +1,7 @@
 /**
- * Pi-hole-Seite -- PageSpec `component="PiholePage"` (nodvard_deck_ext_pihole/__init__.py).
- *
- * Anfragen, Anteil blockiert, Blockierung (pausieren/fortsetzen), aktivste Geräte, Stand der Sperrlisten
- * (neu laden) und eine Domain erlauben oder sperren.
- *
- * Aktionen gehen als Vorschlag ans Aktions-Gate; wer `actions.approve:<risk>` hat, gibt den eigenen Vorschlag gleich
- * frei, alle anderen sehen „wartet auf Freigabe“.
+ * Pi-hole-Seite (PageSpec `component="PiholePage"`): Anfragen, Blockierung, aktivste Geräte, Sperrlisten, Domains
+ * erlauben/sperren. Aktionen gehen als Vorschlag ans Aktions-Gate; wer `actions.approve:<risk>` hat, gibt den eigenen
+ * Vorschlag gleich frei.
  */
 import { useCallback, useEffect, useState } from "react";
 
@@ -14,6 +10,7 @@ import { authedFetch, errorFromBody } from "../../../_shared/frontend/src/api";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { Badge, Button, Card, Field, Notice, Page, Stat, buttonClass, inputClass, type Tone } from "../../../_shared/frontend/src/ui";
 import { deck } from "../../../_shared/frontend/src/deck";
+import { safeHref } from "../../../_shared/frontend/src/links";
 
 const API = "/ext/pihole";
 const SETTINGS_PATH = "/settings/extensions/pihole";
@@ -325,6 +322,7 @@ export function PiholePage(): JSX.Element {
   } else if (!loadError) {
     body = <Card title="Pi-hole"><p className="text-sm text-white/50">Lade …</p></Card>;
   }
+  const adminHref = safeHref(data?.url);
 
   return (
     <Page
@@ -332,7 +330,7 @@ export function PiholePage(): JSX.Element {
       description="Werbe- und Tracker-Blocker für das ganze Netz."
       actions={
         <>
-          {data?.url && <a href={`${data.url}/admin/`} target="_blank" rel="noreferrer" className={buttonClass("ghost")}>Pi-hole öffnen</a>}
+          {adminHref && <a href={`${adminHref}/admin/`} target="_blank" rel="noreferrer" className={buttonClass("ghost")}>Pi-hole öffnen</a>}
           {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("ghost")}>Einstellungen</a>}
           <Button onClick={load}>Aktualisieren</Button>
         </>

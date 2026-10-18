@@ -70,6 +70,18 @@ docker build --pull -f deploy/Dockerfile -t nodvard-deck:latest .
 `--pull` holt die Basis-Images (`python`, `node`) jedes Mal frisch. Ohne bleibt die einmal geladene Fassung im
 Build-Cache liegen, und Sicherheitskorrekturen darin kommen nie im Image an.
 
+Nur einige Module ins Image nehmen (etwa für ein Einzelprodukt), durch Kommas getrennt:
+
+```bash
+docker build --pull -f deploy/Dockerfile --build-arg NODVARD_DECK_EXTENSIONS=docker -t nodvard-docker:test .
+```
+
+Ohne Angabe kommen alle Module mit, wie bisher. Ein unbekannter Name oder eine Liste ohne Modul bricht den Build ab.
+Tesseract (Texterkennung für Dokumente) kommt nur mit, wenn das Modul `documents` dabei ist; die Python-Pakete des Kerns
+bleiben in jedem Image dieselben. Braucht ein Modul ein anderes (etwa `npm` das Modul `docker`), nimm beide in die Liste,
+sonst fehlt ihm im Image der Partner. Ein Image mit weniger Modulen gehört zu einem eigenen Datenvolume: Mit den Daten
+eines Images, in dem mehr Module waren, startet es nicht und zeigt nur die Notseite.
+
 Laufzeitdaten gelangen nicht ins Image: `.dockerignore` schließt in jedem Unterordner (z. B. ein `backend/data/` nach
 einem Start aus `backend/`) Datenordner `data/`, Datenbanken (`*.db`, `*.sqlite`), Sicherungen (`*.ndbak`), Schlüssel
 (`*.key`, `jwt_secret*`, `vault_keyring.json`) und `.env`-Dateien aus.

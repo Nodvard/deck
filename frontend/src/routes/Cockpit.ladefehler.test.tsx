@@ -73,7 +73,7 @@ describe("Cockpit bei Ladefehlern", () => {
 
     failing.clear();
     fireEvent.click(within(screen.getByTestId("cockpit-load-error")).getByRole("button", { name: "Erneut versuchen" }));
-    await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("Alles läuft rund. 9 von 9 Servern online"));
+    await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("Alles läuft rund. 3 von 3 Servern online"));
     expect(screen.queryByTestId("cockpit-load-error")).toBeNull();
   });
 
@@ -83,7 +83,7 @@ describe("Cockpit bei Ladefehlern", () => {
 
     await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("Dienste, Backups und Meldungen sind gerade nicht abrufbar"));
     const status = screen.getByTestId("cockpit-status").textContent ?? "";
-    expect(status).toContain("9 von 9 online");
+    expect(status).toContain("3 von 3 Servern online (dazu 4 VMs · 2 LXC)");
     expect(status).not.toContain("Alles läuft rund");
     expect(screen.getByTestId("cockpit-load-error").textContent).toContain("Die Übersicht (Dienste, Backups, Meldungen) ließ sich gerade nicht laden");
     for (const label of ["Dienste", "Meldungen", "Freigaben"]) {
@@ -105,7 +105,7 @@ describe("Cockpit bei Ladefehlern", () => {
     await act(() => client.refetchQueries({ queryKey: ["hosts", "all"] }));
     await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("Zuletzt keine Störung bekannt"));
     expect(screen.getByTestId("cockpit-status").textContent).toContain("nicht aktuell");
-    expect(screen.getByTestId("stat-Server").textContent).toContain("9/9");
+    expect(screen.getByTestId("stat-Server").textContent).toContain("3/3");
     expect(screen.getByTestId("cockpit-load-error").textContent).toContain("Der aktuelle Stand ließ sich gerade nicht laden: Datenbank gesperrt");
     expect(screen.getByTestId("attention-stale").textContent).toContain("nicht aktuell");
     expect(screen.getByTestId("attention").textContent).not.toContain("genieß die Ruhe");

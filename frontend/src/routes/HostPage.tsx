@@ -13,6 +13,7 @@ import { ArrowLeft, Monitor, Pencil, Server, SquareTerminal } from "lucide-react
 import { useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
+import { kindLabel } from "../../../extensions/_shared/frontend/src/hostKind";
 import { ButtonLink, EmptyState } from "../components/EmptyState";
 import { Icon } from "../components/Icon";
 import { LoadError } from "../components/LoadError";
@@ -24,6 +25,7 @@ import {
   OUTCOME_TEXT_CLASS,
   type OutcomeTone,
 } from "../lib/actionOutcome";
+import { buildActionPayload } from "../lib/actionPayload";
 import {
   ActionWaitTimeout,
   GAVE_UP_WAITING_TEXT,
@@ -41,7 +43,7 @@ import {
   formatBytes,
   formatUptime,
   hasConsole,
-  hostHealth,
+  hostHealthOf,
   hostStatusText,
   type HostOut,
   isNode,
@@ -104,7 +106,6 @@ const CATEGORY_LABEL: Record<string, string> = {
   settings: "Einstellungen",
 };
 const CATEGORY_ORDER = ["control", "monitoring", "services", "data", "settings"];
-const KIND_LABEL: Record<string, string> = { vm: "Virtuelle Maschine", lxc: "Container", hypervisor: "Proxmox-Knoten", node: "Knoten" };
 
 const RISK_STYLE: Record<string, string> = {
   low: "bg-white/10 hover:bg-white/15",
@@ -152,6 +153,14 @@ function ActionControl({ hostId, spec, onStart, onDone }: { hostId: string; spec
   }
 
   async function run() {
+    // Die Felder liefern Text; Zahlenfelder gehen als Zahl raus (der Kern prüft gegen das Schema und lehnt "4" für eine
+    // ganze Zahl ab), leere Felder gar nicht. Ist eine Eingabe keine Zahl, wird weder gefragt noch gesendet: die Meldung
+    // steht wie jede andere auf der Seite und das Formular bleibt offen.
+    const built = buildActionPayload(required, values, spec.params_schema?.properties);
+    if (!built.ok) {
+      onDone({ tone: "error", text: `${spec.label}: ${built.error}` }, onStart());
+      return;
+    }
     if (spec.default_risk !== "low" || spec.confirm_text) {
       const ok = await confirmDialog(spec.confirm_text ?? `${spec.label}?`, { danger: spec.default_risk !== "low", confirmLabel: spec.label });
       // Waehrend die Rueckfrage offen war, kann man die Seite verlassen haben (Zurueck,
@@ -174,7 +183,7 @@ function ActionControl({ hostId, spec, onStart, onDone }: { hostId: string; spec
     };
     try {
       const action = await api.post<ActionOutcomeSource & { id: string; status: string; risk: string }>(`/hosts/${hostId}/actions/${spec.action_type}`, {
-        payload: values, reason: `${spec.label} über die Server-Seite`,
+        payload: built.payload, reason: `${spec.label} über die Server-Seite`,
       });
       if (action.status === "proposed" && hasPermission(`actions.approve:${action.risk}`)) {
         const approved = await api.post<ActionOutcomeSource>(`/actions/${action.id}/approve`);
@@ -411,7 +420,7 @@ function HostView({ hostId }: { hostId: string }) {
   }
 
   const h = host.data;
-  const health = hostHealth(h.status);
+  const health = hostHealthOf(h);
   // Von einem Modul eingelesen (z. B. Proxmox) und das Modul ist inzwischen aus: der Zustand wird nicht mehr nachgeführt.
   const provider = hostProvider(h, extensions);
   const providerOff = Boolean(provider?.problem);
@@ -458,7 +467,7 @@ function HostView({ hostId }: { hostId: string }) {
               {h.display_name}
             </h1>
             <p className="text-sm text-white/55">
-              {KIND_LABEL[h.kind ?? ""] ?? "Server"} · {h.address} · {hostStatusText(h)}
+              {kindLabel(h)} · {h.address} · {hostStatusText(h)}
             </p>
             {h.tags.length > 0 && (
               <div className="mt-1.5 flex flex-wrap gap-1">

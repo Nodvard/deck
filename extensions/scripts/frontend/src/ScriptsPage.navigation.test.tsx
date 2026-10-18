@@ -11,7 +11,7 @@ import { renderInShell } from "../../../_shared/frontend/src/testShell";
 vi.mock("../../../../frontend/src/lib/catalog", () => ({
   usePages: () => ({ data: [{ ext_id: "scripts", path: "/scripts", component: "ScriptsPage" }], isLoading: false }),
 }));
-// ExtensionPage laedt das Bundle per import(url) -- hier durch die echte Seite aus den Quellen ersetzt.
+// ExtensionPage lädt das Bundle per import(url); hier wird es durch die echte Seite aus den Quellen ersetzt.
 vi.mock("/api/v1/extensions/scripts/frontend/index.js?v=dev", async () => ({ ScriptsPage: (await import("./ScriptsPage")).ScriptsPage }));
 
 const SCRIPT = { description: "", content: "uptime\n", params_schema: {}, schedule: null, enabled: true };

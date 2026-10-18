@@ -291,6 +291,16 @@ function SettingsLink({
   if (!deck().hasPermission(permission)) return null;
   return /* @__PURE__ */ jsx3("a", { href: to, className: buttonClass(variant), children });
 }
+function safeHref(url) {
+  const text = url?.trim();
+  if (!text || !/^https?:\/\//i.test(text)) return void 0;
+  try {
+    const parsed = new URL(text);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? text : void 0;
+  } catch {
+    return void 0;
+  }
+}
 
 // ../../../frontend/src/lib/deckTimezone.ts
 import { useSyncExternalStore } from "react";
@@ -425,11 +435,12 @@ function ConnectionCard({ connection, zone, onRetry }) {
   const counts = connection.counts;
   const shownCounts = counts ? COUNT_LABELS.filter(([key]) => (counts[key] ?? 0) > 0) : [];
   const ok = connection.state === "ok";
+  const openHref = safeHref(connection.url);
   return /* @__PURE__ */ jsx4(
     Card,
     {
       title: connection.name,
-      description: connection.url ? /* @__PURE__ */ jsx4("a", { href: connection.url, target: "_blank", rel: "noreferrer", className: "break-all hover:text-white hover:underline", children: "Jellyfin \xF6ffnen" }) : void 0,
+      description: openHref ? /* @__PURE__ */ jsx4("a", { href: openHref, target: "_blank", rel: "noreferrer", className: "break-all hover:text-white hover:underline", children: "Jellyfin \xF6ffnen" }) : void 0,
       actions: /* @__PURE__ */ jsx4(Badge, { tone: head.tone, children: head.label }),
       children: /* @__PURE__ */ jsxs3("div", { "data-testid": `connection-${connection.name}`, className: "space-y-4", children: [
         facts.length > 0 && /* @__PURE__ */ jsx4("p", { "data-testid": "facts", className: "break-words text-sm text-white/70", children: facts.join(" \xB7 ") }),

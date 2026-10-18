@@ -127,3 +127,72 @@ describe("Dashboard-Kacheln schneiden keine Namen ab", () => {
     expect(actionBlock.className).not.toContain("shrink-0");
   });
 });
+
+describe("StatusGridView: Links aus den Daten", () => {
+  const view = { kind: "status_grid", tile_title: "{{ name }}", tile_tone: "good", tile_link: "{{ link }}" };
+
+  it("verlinkt Webadressen und Pfade im Dashboard, sonst nichts", () => {
+    const data = [
+      { name: "web", link: "https://a.example/x" },
+      { name: "intern", link: "/hosts/h1" },
+      { name: "js", link: "javascript:alert(1)" },
+      { name: "fremd", link: "//evil.example/x" },
+      { name: "leer", link: "" },
+    ];
+    const { container } = render(<StatusGridView view={view as never} data={data} />);
+    const hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    expect(hrefs).toEqual(["https://a.example/x", "/hosts/h1"]);
+    expect(container.textContent).toContain("js");
+    expect(container.textContent).toContain("fremd");
+  });
+});
+
+/**
+ * Ruhiger: Pillen nur bei Warnung und Störung, „gut“ nur als grüner Punkt, Knöpfe schlicht
+ * mit Farbe erst beim Darüberfahren.
+ */
+describe("Widgets ruhiger", () => {
+  const listView = (tone: string, actions: object[] = []) => ({
+    kind: "list",
+    item: { title: "{{ title }}", subtitle: null, badge: { text: "{{ state }}", tone }, actions },
+    empty_text: "leer",
+    max_items: null,
+  });
+
+  it("Ton „good“: nur der Punkt, das Wort als Tooltip und für Screenreader", () => {
+    const { container } = render(<ListView view={listView("good") as never} data={[{ title: "pve1", state: "gesund" }]} extId="x" onAction={() => {}} />);
+    const word = [...container.querySelectorAll("span")].find((el) => el.textContent === "gesund");
+    expect(word).toHaveClass("sr-only");
+    expect(container.querySelector(".status-dot")).toHaveAttribute("title", "gesund");
+    expect(container.querySelector(".rounded-full")).toBeNull();
+  });
+
+  it("Ton „neutral“: schlichter grauer Text, keine Pille; „warn“ und „danger“ bleiben Pillen", () => {
+    const neutral = render(<ListView view={listView("neutral") as never} data={[{ title: "a", state: "unbekannt" }]} extId="x" onAction={() => {}} />);
+    const plain = [...neutral.container.querySelectorAll("span")].find((el) => el.textContent === "unbekannt")!;
+    expect(plain.className).not.toContain("rounded-full");
+    expect(plain).not.toHaveClass("sr-only");
+    neutral.unmount();
+
+    for (const tone of ["warn", "danger"]) {
+      const { container, unmount } = render(<ListView view={listView(tone) as never} data={[{ title: "a", state: "läuft ab" }]} extId="x" onAction={() => {}} />);
+      const pill = [...container.querySelectorAll("span")].find((el) => el.textContent === "läuft ab")!;
+      expect(pill.className).toContain("rounded-full");
+      unmount();
+    }
+  });
+
+  it("Knöpfe schlicht: keine gefüllte Akzent- oder Rotfläche, Farbe erst beim Darüberfahren", () => {
+    const action = (id: string, style: string) => ({
+      id, label: id, endpoint: "x", method: "POST", confirm: false, confirm_text: null, style, permissions: [], show_if: null, payload: null,
+    });
+    const view = listView("good", [action("primär", "primary"), action("gefährlich", "danger")]);
+    const { getByRole } = render(<ListView view={view as never} data={[{ title: "a", state: "ok" }]} extId="x" onAction={() => {}} />);
+    const primary = getByRole("button", { name: "primär" });
+    const danger = getByRole("button", { name: "gefährlich" });
+    expect(primary.className).not.toContain("accent-gradient");
+    expect(primary.className).toContain("hover:text-[var(--color-accent-text)]");
+    expect(danger.className).not.toMatch(/(^|\s)bg-red-/);
+    expect(danger.className).toContain("hover:bg-red-500/15");
+  });
+});

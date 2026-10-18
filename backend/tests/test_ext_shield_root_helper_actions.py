@@ -110,6 +110,8 @@ def _state(base: Path) -> dict[str, str]:
             out[rel] = "link->" + os.readlink(path).replace(str(base), "BASE")
         elif stat.S_ISDIR(info.st_mode):
             out[rel] = f"dir {stat.S_IMODE(info.st_mode):o}"
+        elif stat.S_ISFIFO(info.st_mode):
+            out[rel] = "fifo"
         else:
             # Ohne root ist eine Datei mit Rechten 000 nicht lesbar; verglichen wird dann nur, dass sie es nicht ist.
             raw = path.read_bytes() if os.access(path, os.R_OK) else b"<nicht lesbar>"
@@ -173,6 +175,59 @@ def _quarantined(base: Path, monkeypatch, *, mode: str = "640", origin: bool = T
     if origin:
         (base / "q" / ".herkunft" / "f1_evil.sh").write_text(f"{mode}\n{original}\n")
     return original
+
+
+@pytest.mark.parametrize(("kind", "expected"), [
+    ("quarantined", "@@state=quarantined\n@@mode=640\n"),
+    ("no_origin", "@@state=quarantined\n"),
+    ("checking", "@@state=checking\n"),
+    ("absent", "@@state=absent\n"),
+    ("no_quarantine_yet", "@@state=absent\n"),
+    ("link", "@@state=absent\n"),
+    ("origin_link", "@@state=quarantined\n"),
+    ("origin_fifo", "@@state=quarantined\n"),
+])
+def test_quarantine_state_behaves_like_the_old_command_and_changes_nothing(tmp_path, monkeypatch, kind, expected):
+    av = _av()
+    results = []
+    for side in ("alt", "neu"):
+        base = tmp_path / side
+        if kind != "no_quarantine_yet":
+            _quarantined(base, monkeypatch, origin=kind != "no_origin")
+        if kind in ("checking", "absent", "link"):
+            (base / "q" / "f1_evil.sh").unlink()
+        if kind == "checking":
+            (base / "q" / ".pruefen").mkdir(mode=0o700)
+            (base / "q" / ".pruefen" / "f1_evil.sh").write_text("inhalt")
+        if kind == "link":
+            (base / "fremd").write_text("geheim")
+            (base / "q" / "f1_evil.sh").symlink_to(base / "fremd")
+        if kind in ("origin_link", "origin_fifo"):
+            (base / "q" / ".herkunft" / "f1_evil.sh").unlink()
+            if kind == "origin_link":
+                (base / "fremd").write_text("644\nfremde Datei\n")
+                (base / "q" / ".herkunft" / "f1_evil.sh").symlink_to(base / "fremd")
+            else:
+                os.mkfifo(base / "q" / ".herkunft" / "f1_evil.sh")
+        before = _state(base) if base.exists() else {}
+        monkeypatch.setattr(av, "QUARANTINE_DIR", str(base / "q"))
+        if side == "alt":
+            result = _run_old(av.quarantine_state_command("f1_evil.sh"))
+        else:
+            base.mkdir(exist_ok=True)
+            result = _run_new(_helper(base), *av.quarantine_state_args("f1_evil.sh"))
+        assert {k: v for k, v in _state(base).items() if k != "shield-root"} == before
+        results.append(result)
+    assert results[0] == results[1] == (0, expected)
+
+
+@pytest.mark.parametrize("name", ["", ".herkunft", "../x", "a/b", "f1 evil"])
+def test_quarantine_state_refuses_odd_names(tmp_path, name):
+    av = _av()
+    with pytest.raises(ValueError):
+        av.quarantine_state_args(name)
+    code, _out = _run_new(_helper(tmp_path), "quarantine-state", name)
+    assert code != 0
 
 
 @pytest.mark.parametrize("kind", ["roundtrip", "occupied", "folder_missing", "folder_link", "not_in_quarantine"])

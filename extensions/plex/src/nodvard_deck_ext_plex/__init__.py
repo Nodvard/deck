@@ -22,7 +22,7 @@ from .config import SETTINGS_HINT
 from .models import Overview
 from .service import PlexService
 from .suggestions import PlexAppSuggestions
-from .widgets import status_rows
+from .widgets import nothing_set_up, status_rows
 
 _WIDGET_ITEM = ListItem(title="{{ title }}", subtitle="{{ subtitle }}", badge=Badge(text="{{ label }}", tone="{{ tone }}"))
 
@@ -69,14 +69,14 @@ class Extension(NodvardExtension):
         @router.get("/widgets/status")
         async def status_widget() -> dict[str, Any]:
             data = await service.overview()
-            return {
-                "data": status_rows(data),
-                "meta": {
-                    "connections": data.summary.connections,
-                    "playing": data.summary.playing,
-                    "transcoding": data.summary.transcoding,
-                },
+            meta: dict[str, Any] = {
+                "connections": data.summary.connections,
+                "playing": data.summary.playing,
+                "transcoding": data.summary.transcoding,
             }
+            if nothing_set_up(data):
+                meta["state"] = "not_configured"
+            return {"data": status_rows(data), "meta": meta}
 
         ctx.api.include_router(router, permission="hosts.read")
 

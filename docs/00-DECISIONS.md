@@ -53,8 +53,9 @@ Auslieferungsfrage löst stattdessen ein Multi-Arch-Docker-Image (D-10).
 
 ## D-02 Datenbank: SQLite als Default, PostgreSQL optional
 
-**Entscheidung:** SQLite ist die Standard-Datenbank. PostgreSQL funktioniert ohne
-Codeänderung, ist aber optional.
+**Entscheidung:** SQLite ist die Standard-Datenbank. PostgreSQL ist vorgesehen und der
+Code bleibt dafür dialektneutral, ist aber **ungetestet**: Es gab noch keinen Testlauf
+gegen PostgreSQL, und der Treiber `asyncpg` ist nicht im Image.
 
 **Begründung:**
 
@@ -71,8 +72,8 @@ Codeänderung, ist aber optional.
    liegt Größenordnungen über diesem Bedarf.
 
 **Umsetzung:** SQLAlchemy 2.0 (async) + Alembic. `DATABASE_URL` entscheidet;
-`sqlite+aiosqlite:///./data/lattice.db` ist der Default,
-`postgresql+asyncpg://…` funktioniert ohne Codeänderung.
+`sqlite+aiosqlite:///./data/lattice.db` ist der Default. `postgresql+asyncpg://…` ist
+vorgesehen, gilt aber erst nach einem echten Testlauf als unterstützt.
 
 **Disziplin-Regeln, die die Wahlfreiheit erhalten — für jeden neuen Code verbindlich:**
 

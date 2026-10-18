@@ -85,6 +85,36 @@ async def test_overview_without_dead_hosts_has_empty_unreachable_list(client):
     assert not any(s["unreachable"] for s in body["services"])
 
 
+class _ServicesWithBadUrls:
+    """Adressen, wie sie eine fehlerhafte oder fremde Erweiterung liefern könnte."""
+
+    async def list_services(self):
+        return [
+            {"id": "ok", "name": "ok", "url": " http://10.0.0.5:3000 "},
+            {"id": "js", "name": "js", "url": "javascript:alert(1)"},
+            {"id": "data", "name": "data", "url": "data:text/html,<script>alert(1)</script>"},
+            {"id": "proto", "name": "proto", "url": "//evil.example/x"},
+            {"id": "slash", "name": "slash", "url": "http:\\\\evil.example"},
+            {"id": "num", "name": "num", "url": 42},
+            {"id": "long", "name": "long", "url": "http://10.0.0.5/" + "a" * 1500},
+            {"id": "too-long", "name": "too-long", "url": "http://10.0.0.5/" + "a" * 2000},
+        ]
+
+
+@pytest.mark.asyncio
+async def test_service_urls_are_only_http_or_https(client):
+    token = await _bootstrap_owner(client)
+    get_extension_runtime().capabilities.provide("fake-services", ServiceCatalog, _ServicesWithBadUrls())
+
+    body = (await client.get("/api/v1/overview", headers=_auth_header(token))).json()
+    urls = {s["id"]: s["url"] for s in body["services"]}
+    assert urls == {
+        "ok": "http://10.0.0.5:3000", "js": None, "data": None, "proto": None, "slash": None, "num": None,
+        "long": "http://10.0.0.5/" + "a" * 1500, "too-long": None,
+    }
+    assert {t["id"]: t["url"] for t in body["apps"] if t["source"] == "detected"} == urls, "App-Kacheln ebenso"
+
+
 class _Backups:
     async def list_jobs(self):
         return [

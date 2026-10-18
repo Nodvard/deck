@@ -16,6 +16,11 @@ class NotConfigured(Exception):
     """Dienst nicht (vollständig) eingetragen; `str(exc)` sagt auf Deutsch, was fehlt."""
 
 
+class InvalidSetting(NotConfigured):
+    """Etwas ist eingetragen, aber unbrauchbar (z. B. eine ungültige Adresse). Die Übersicht zählt das als
+    eingerichtet, damit die Kachel den Fehler zeigt, statt zu verschwinden."""
+
+
 @dataclass(frozen=True)
 class NpmConfig:
     url: str
@@ -24,8 +29,30 @@ class NpmConfig:
     notify_expiring: bool
 
 
+UI_PATHS = (
+    "login", "users", "audit-log", "settings", "nginx/proxy", "nginx/redirection", "nginx/stream", "nginx/404",
+    "nginx/certificates", "nginx/access", "certificates", "access", "logs",
+)
+"""Seiten der Weboberfläche des Nginx Proxy Managers (`/nginx/proxy`, `/certificates`, `/users`, …). Wer die Adresse aus dem
+Browser kopiert, hat oft eine davon dabei; die Anfragen gehören aber an die Grundadresse. Ein Eintrag mit `/` gilt nur,
+wenn beide Teile hintereinander stehen (ein Pfad `/nginx` davor bleibt)."""
+
+
+def strip_ui_path(path: str) -> str:
+    """Schneidet den Pfad ab der ersten Seite aus `UI_PATHS` ab, ohne Schrägstrich am Ende. Ein Pfad davor bleibt (z. B.
+    `/npm` hinter einem Reverse Proxy), ein Teil wie `users-verwaltung` zählt nicht."""
+    parts = path.split("/")
+    names = [part.lower() for part in parts]
+    for index in range(len(parts)):
+        for page in UI_PATHS:
+            wanted = page.split("/")
+            if names[index : index + len(wanted)] == wanted:
+                return "/".join(parts[:index]).rstrip("/")
+    return "/".join(parts).rstrip("/")
+
+
 def normalize_url(raw: Any, *, strip_suffixes: tuple[str, ...] = ()) -> str | None:
-    """`192.0.2.10` wird `http://192.0.2.10`, `http://npm.example/api/` wird `http://npm.example`.
+    """`192.0.2.10` wird `http://192.0.2.10`, `http://npm.example/nginx/proxy` wird `http://npm.example`.
 
     `None` bei leer, `ValueError` bei offensichtlich unbrauchbar."""
     text = str(raw or "").strip()
@@ -36,7 +63,7 @@ def normalize_url(raw: Any, *, strip_suffixes: tuple[str, ...] = ()) -> str | No
     parts = urlsplit(text)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise ValueError(text)
-    path = parts.path.rstrip("/")
+    path = strip_ui_path(parts.path)
     changed = True
     while changed:
         changed = False
@@ -52,7 +79,7 @@ def npm_config(settings: dict[str, Any]) -> NpmConfig:
     try:
         url = normalize_url(settings.get("url"), strip_suffixes=("/api",))
     except ValueError as exc:
-        raise NotConfigured(f"Die Adresse des Nginx Proxy Managers „{exc}“ ist ungültig – bitte in den Einstellungen prüfen.") from exc
+        raise InvalidSetting(f"Die Adresse des Nginx Proxy Managers „{exc}“ ist ungültig – bitte in den Einstellungen prüfen.") from exc
     identity = str(settings.get("identity") or "").strip()
     if url is None:
         raise NotConfigured(

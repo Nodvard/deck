@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { errorMessage, fetchJson, LoadError } from "../../../_shared/frontend/src/loadError";
-import { SettingsLink } from "../../../_shared/frontend/src/links";
+import { SettingsLink, safeHref } from "../../../_shared/frontend/src/links";
 import { useDeckTimezone } from "../../../_shared/frontend/src/timezone";
 import { Badge, Button, Card, EmptyState, Page, Stat, buttonClass, type Tone } from "../../../_shared/frontend/src/ui";
 import { deck } from "../../../_shared/frontend/src/deck";
@@ -185,10 +185,11 @@ function ConnectionCard({ connection, zone, onRetry }: { connection: Connection;
   const hiddenPlaybacks = playbacks && connection.playback_count !== null ? connection.playback_count - playbacks.length : 0;
   const libraries = connection.libraries;
   const ok = connection.state === "ok";
+  const openHref = safeHref(connection.url);
   return (
     <Card
       title={connection.name}
-      description={connection.url ? <a href={connection.url} target="_blank" rel="noreferrer" className="break-all hover:text-white hover:underline">Plex öffnen</a> : undefined}
+      description={openHref ? <a href={openHref} target="_blank" rel="noreferrer" className="break-all hover:text-white hover:underline">Plex öffnen</a> : undefined}
       actions={<Badge tone={head.tone}>{head.label}</Badge>}
     >
       <div data-testid={`connection-${connection.name}`} className="space-y-4">

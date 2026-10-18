@@ -1,19 +1,7 @@
 /**
- * „Mit Passwort verbinden“: Adresse und Passwort eines Proxmox-Administrators (meist root@pam) EINMAL eingeben,
- * Nodvard Deck legt in Proxmox Rolle, Benutzer, Berechtigung und API-Token selbst an und trägt die Verbindung ein
- * (`POST /ext/proxmox/connect...`, password_connect.py).
- *
- * Ablauf: 1. Adresse → Nodvard Deck liest nur das Zertifikat (es wird nichts gesendet). 2. Ist es nicht von einer
- * anerkannten Stelle bestätigt (bei Proxmox der Normalfall), zeigt die Seite den Fingerabdruck; erst nach dem Haken
- * „stimmt überein“ geht das Passwort hinaus, und zwar nur an genau dieses Zertifikat; die Verbindung merkt sich den
- * Fingerabdruck und prüft ihn auch später bei jeder Anfrage (statt „Zertifikat nicht prüfen“). 3. Verlangt Proxmox einen
- * zweiten Faktor, fragt die Seite nach dem Code (das Passwort geht dabei nicht noch einmal hinaus). Ist das Modul
- * „Proxmox-Backups“ an, legt Nodvard Deck dafür gleich einen eigenen Zugang an (Schalter, Vorgabe an).
- *
- * Das Passwort lebt nur im Feld, bis es abgeschickt wird: im selben Augenblick wird das Feld geleert (noch vor der
- * Antwort). `autocomplete="new-password"` hält den Browser davon ab, ein gespeichertes Passwort von selbst einzusetzen;
- * ob er danach anbietet, es zu speichern, entscheidet der Browser selbst (manche tun es trotzdem). Derselbe Umgang mit
- * dem Zwei-Faktor-Code.
+ * „Mit Passwort verbinden“: Adresse und Passwort eines Proxmox-Administrators einmal eingeben, Nodvard Deck legt Rolle,
+ * Benutzer, Berechtigung und API-Token selbst an und trägt die Verbindung ein (password_connect.py). Das Passwort geht
+ * nur an ein anerkanntes oder per Fingerabdruck bestätigtes Zertifikat und wird beim Absenden aus dem Feld geleert.
  */
 import { useId, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
@@ -394,8 +382,8 @@ export function ProxmoxConnect({
           <p role="status" className="text-emerald-300">
             Verbunden als „{result.connection.name}“ ({result.connection.token_id}).{" "}
             {result.discovery === "started"
-              ? "Nodvard Deck liest Knoten, VMs und Container jetzt ein – das dauert meist nur einen Moment."
-              : "Nodvard Deck liest Knoten, VMs und Container in den nächsten Minuten ein."}
+              ? "Nodvard Deck liest Knoten, VMs und LXC jetzt ein – das dauert meist nur einen Moment."
+              : "Nodvard Deck liest Knoten, VMs und LXC in den nächsten Minuten ein."}
           </p>
           {result.backups && (
             <p className="text-emerald-300" data-testid="proxmox-connect-backups">

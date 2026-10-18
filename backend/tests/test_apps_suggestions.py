@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from nodvard_deck.api.v1 import apps as apps_api
+from nodvard_deck.api.v1 import overview as overview_api
 from nodvard_deck.ext.runtime import get_extension_runtime
 from nodvard_sdk import AppSuggestion, AppSuggestionProvider, ServiceCatalog
 from test_apps_api import _auth, _bootstrap_owner, _create, _user_token
@@ -19,7 +20,9 @@ FAKE_IDS = ("fake-proxy", "fake-services", "fake-broken", "fake-slow")
 
 @pytest.fixture(autouse=True)
 def _clean_runtime():
+    overview_api.reset_cache()  # erkannte Dienste kommen aus dem Zwischenspeicher der Übersicht
     yield
+    overview_api.reset_cache()
     runtime = get_extension_runtime()
     for ext_id in FAKE_IDS:
         runtime.capabilities.clear_extension(ext_id)
@@ -54,6 +57,11 @@ class _Slow:
         return []
 
 
+class _BrokenServices:
+    async def list_services(self):
+        raise RuntimeError("geheim: http://user:pw@intern")
+
+
 def _provide(ext_id, protocol, impl):
     get_extension_runtime().capabilities.provide(ext_id, protocol, impl)
 
@@ -83,6 +91,40 @@ async def test_suggestions_are_checked_deduplicated_and_skip_existing_apps(clien
         ("x" * 60, "http://lang.example.org", "Nginx Proxy Manager"),
     ]
     assert body["suggestions"][0]["host"] == "docker"
+    assert [s["service_id"] for s in body["suggestions"]] == ["a", None, None]
+
+
+class _CountingServices(_Services):
+    def __init__(self):
+        self.calls = 0
+
+    async def list_services(self):
+        self.calls += 1
+        return await super().list_services()
+
+
+@pytest.mark.asyncio
+async def test_detected_services_come_from_the_same_read_as_the_overview_tiles(client, db_session):
+    """Die erkannten Dienste tragen die Kennung ihrer Kachel und kommen aus demselben Abruf wie die Übersicht."""
+    token = await _bootstrap_owner(client)
+    services = _CountingServices()
+    _provide("fake-services", ServiceCatalog, services)
+    tiles = (await client.get("/api/v1/overview", headers=_auth(token))).json()["apps"]
+    body = (await client.get("/api/v1/apps/suggestions", headers=_auth(token))).json()
+    assert services.calls == 1, "kein zweites docker ps für die Vorschläge"
+    detected = {t["id"] for t in tiles if t["source"] == "detected"}
+    assert [s["service_id"] for s in body["suggestions"]] == ["a"] and "a" in detected
+
+
+@pytest.mark.asyncio
+async def test_a_module_address_that_is_also_a_detected_service_stays_at_the_service(client, db_session):
+    token = await _bootstrap_owner(client)
+    _provide("fake-services", ServiceCatalog, _Services())
+    _provide("fake-proxy", AppSuggestionProvider, _Proxy([
+        AppSuggestion(name="Nextcloud", url="http://192.168.2.20:8080/", source="Nextcloud"),
+    ]))
+    body = (await client.get("/api/v1/apps/suggestions", headers=_auth(token))).json()
+    assert [(s["name"], s["service_id"]) for s in body["suggestions"]] == [("nextcloud", "a")]
 
 
 @pytest.mark.asyncio
@@ -99,6 +141,39 @@ async def test_a_broken_or_slow_source_costs_only_its_own_suggestions(client, db
     assert len(body["errors"]) == 2
     assert all("ließen sich gerade nicht lesen" in e for e in body["errors"])
     assert "geheim" not in " ".join(body["errors"]) and "pw@" not in " ".join(body["errors"])
+
+
+@pytest.mark.asyncio
+async def test_a_service_source_that_cannot_be_read_gets_a_sentence_and_the_others_stay(client, db_session):
+    token = await _bootstrap_owner(client)
+    _provide("fake-broken", ServiceCatalog, _BrokenServices())
+    _provide("fake-services", ServiceCatalog, _Services())
+    r = await client.get("/api/v1/apps/suggestions", headers=_auth(token))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [s["name"] for s in body["suggestions"]] == ["nextcloud"]
+    assert body["errors"] == ["Dienste von „fake-broken“ ließen sich gerade nicht lesen."]
+    assert "geheim" not in r.text and "pw@" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_a_failure_while_reading_the_services_is_a_sentence_not_a_server_error(
+    client, db_session, monkeypatch, caplog
+):
+    async def explode():
+        raise RuntimeError("geheim: http://user:pw@intern")
+
+    monkeypatch.setattr(overview_api, "service_snapshot", explode)
+    token = await _bootstrap_owner(client)
+    _provide("fake-proxy", AppSuggestionProvider, _Proxy([AppSuggestion(name="ok", url="https://ok.example.org", source="X")]))
+    with caplog.at_level("WARNING", logger="nodvard_deck.apps"):
+        r = await client.get("/api/v1/apps/suggestions", headers=_auth(token))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [s["name"] for s in body["suggestions"]] == ["ok"]
+    assert body["errors"] == ["Die erkannten Dienste ließen sich gerade nicht lesen."]
+    assert "geheim" not in r.text and "pw@" not in r.text
+    assert "RuntimeError" in caplog.text and "geheim" not in caplog.text and "pw@" not in caplog.text
 
 
 @pytest.mark.asyncio

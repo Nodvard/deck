@@ -200,13 +200,16 @@ KEPT_NAMES: tuple[Kept, ...] = (
        "der Einrichtungsbefehl erkennt alte Eintraege aber an Art und Schluesseltext, nicht am Kommentar (die Tests pruefen "
        "genau das mit `lattice@...`). Dazu das Proxmox-Token `...!lattice` und der Proxmox-Snapshot `lattice-<Zeitstempel>`: "
        "sie stehen auf fremden Rechnern, dort aendern wir nichts."),
-    _k("Alte sudo-Regel auf verwalteten Servern", r"/etc/sudoers\.d/lattice[-.]|lattice[-.]\$U|lattice-<Benutzer>|\blattice-lattice\b",
+    _k("Alte sudo-Regel auf verwalteten Servern", r"/etc/sudoers\.d/lattice[-.]|lattice[-.]\$U|lattice-<Benutzer>|\blattice-lattice\b|\"lattice-\"|sudo-Regel lattice-[a-z_][a-z0-9_-]*",
        "Neue Einrichtungen legen `/etc/sudoers.d/nodvard-<Benutzer>` an. Die alte Regel `/etc/sudoers.d/lattice-<Benutzer>` liegt auf "
        "bestehenden Servern und bleibt dort gueltig; der Einrichtungsbefehl entfernt sie nur, wenn sie genau der Regel entspricht, "
        "die Nodvard Deck frueher selbst angelegt hat, sonst bleibt sie mit Hinweis stehen. Deshalb nennen der Befehl (`$O`) und seine "
        "Tests den alten Dateinamen weiter (`lattice-lattice` = alte Regel fuer den Benutzer `lattice`). Nur dort: neuer Code "
-       "darf keine Regel unter dem alten Namen anlegen.",
-       paths=r"^backend/(?:src/nodvard_deck/services/host_setup\.py|tests/test_host_setup_script\.py)$"),
+       "darf keine Regel unter dem alten Namen anlegen. Der Datei-Wächter von Nodvard Shield (`intrusion.py`) kennt den Namen, "
+       "damit er das Wegräumen der alten Regel durch die eigene Einrichtung nicht als Einbruch meldet.",
+       paths=r"^(?:backend/(?:src/nodvard_deck/services/host_setup\.py|tests/test_host_setup_script\.py|tests/test_ext_shield_guard\.py"
+             r"|tests/test_host_setup_with_password\.py)"
+             r"|extensions/shield/src/nodvard_deck_ext_shield/intrusion\.py)$"),
     _k("Systemd-Einheit des alten Dienstes", r"lattice(?:-backend)?\.service\b",
        "Die alte Dienst-Einheit `lattice.service` bleibt in der Sperrliste der system-Extension (das Dashboard darf sich nicht "
        "selbst anhalten, auch nicht unter dem alten Namen)."),

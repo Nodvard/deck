@@ -1,7 +1,6 @@
 /**
- * Update-Zentrale (Reiter "Updates"): anstehende Paket-Updates je Server,
- * Sicherheitsupdates, Neustart-Bedarf, Einspielen per Klick (ueber das Gate) und der
- * Verlauf aller Laeufe. Daten: GET /ext/shield/defender/updates.
+ * Update-Zentrale (Reiter „Updates“): anstehende Paket-Updates je Server, Sicherheitsupdates, Neustart-Bedarf,
+ * Einspielen per Klick (über das Gate) und der Verlauf aller Läufe. Daten: GET /ext/shield/defender/updates.
  */
 import { useCallback, useContext, useEffect, useState } from "react";
 
@@ -40,7 +39,7 @@ interface UpdateState {
   checked_at: number | null;
   /** Letzter Versuch, auch fehlgeschlagen (fehlt bei älteren Ständen). */
   attempted_at?: number | null;
-  /** Neustart ausgeloest -- die naechste erfolgreiche Pruefung ersetzt den Stand und entfernt das Feld. */
+  /** Neustart ausgelöst; die nächste erfolgreiche Prüfung ersetzt den Stand und entfernt das Feld. */
   reboot_pending_since?: number;
   /** Offene Updates, die den Docker-Dienst neu starten (fehlt, wenn keine dabei sind). */
   docker_packages?: { all: string[]; security: string[] };
@@ -82,9 +81,9 @@ export interface UpdatesOverview {
   config: {
     check_enabled: boolean; check_cron: string; auto_enabled: boolean; auto_mode: string; auto_cron: string;
     auto_reboot: boolean; auto_tag: string | null;
-    /** Einstellung „Diese Server nie automatisch neu starten“ (Feld fehlt bei aelteren Servern). */
+    /** Einstellung „Diese Server nie automatisch neu starten“ (Feld fehlt bei älteren Servern). */
     auto_reboot_skip?: string[];
-    /** Einstellung „Proxmox: Alle Updates als dist-upgrade“ (Feld fehlt bei aelteren Servern). */
+    /** Einstellung „Proxmox: Alle Updates als dist-upgrade“ (Feld fehlt bei älteren Servern). */
     proxmox_dist_upgrade?: boolean;
   };
 }
@@ -326,8 +325,8 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
 
   async function apply(h: HostUpdates, mode: Mode) {
     const st = h.status;
-    // "Alle Updates" laeuft auf Proxmox als dist-upgrade, wenn die Einstellung an ist -- das kann
-    // Pakete entfernen und gilt als "hoch". Ob der Server Proxmox ist, weiss erst der Befehl selbst.
+    // „Alle Updates“ läuft auf Proxmox als dist-upgrade, wenn die Einstellung an ist; das kann Pakete entfernen und gilt als
+    // „hoch“. Ob der Server Proxmox ist, weiß erst der Befehl selbst.
     const distUpgrade = mode === "all" && st?.manager === "apt" && !!data?.config.proxmox_dist_upgrade;
     const questions: Record<Mode, string> = {
       security: `${count(st?.security_count ?? 0, "Sicherheitsupdate", "Sicherheitsupdates")} auf „${h.host_name}“ jetzt einspielen?${deckRestartHint(st, "security")}`,
@@ -570,7 +569,7 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
                   <span className="text-white/60">{r.mode_label}</span>
                   {r.trigger === "schedule" && <Badge>automatisch</Badge>}
                   <span className="text-xs text-white/40">{when(r.started_at)}</span>
-                  <span className="min-w-0 flex-1 truncate text-xs text-white/55">{r.summary}</span>
+                  <span className="min-w-0 flex-1 break-words text-xs text-white/55">{r.summary}</span>
                   {r.output_tail && (
                     <button type="button" onClick={() => setOpenRun(openRun === r.id ? null : r.id)} className="text-xs text-white/50 hover:text-white">
                       {openRun === r.id ? "Ausgabe ausblenden" : "Ausgabe"}

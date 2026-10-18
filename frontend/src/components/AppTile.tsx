@@ -21,6 +21,7 @@ function initials(name: string): string {
 const AVATAR = "grid h-10 w-10 flex-none place-items-center rounded-lg text-sm font-bold uppercase text-on-accent";
 
 export function AppTile({ service }: { service: ServiceOut }) {
+  const href = safeHref(service.url);
   const hue = hueFor(service.name);
   const running = service.state === "running";
   const inner = (
@@ -35,16 +36,16 @@ export function AppTile({ service }: { service: ServiceOut }) {
           <span className="min-w-0 break-words">{service.host ?? "–"}</span>
         </span>
       </span>
-      {service.url && <ExternalLink size={13} className="flex-none text-white/30 group-hover:text-white/70" />}
+      {href && <ExternalLink size={13} className="flex-none text-white/30 group-hover:text-white/70" />}
     </>
   );
-  const className = `panel group flex items-center gap-3 px-3 py-2.5 ${service.url ? "panel-hover" : "opacity-60"}`;
-  return service.url ? (
-    <a href={service.url} target="_blank" rel="noopener noreferrer" className={className} data-testid={`app-${service.id}`}>
+  const className = `panel group flex items-center gap-3 px-3 py-2.5 ${href ? "panel-hover" : "opacity-60"}`;
+  return href ? (
+    <a href={href} target="_blank" rel="noopener noreferrer" className={className} data-testid={`app-${service.id}`}>
       {inner}
     </a>
   ) : (
-    <div className={className} data-testid={`app-${service.id}`} title="Keine Web-Oberfläche erkannt">
+    <div className={className} data-testid={`app-${service.id}`} title={service.url ? "Die Adresse dieses Dienstes ist nicht gültig." : "Keine Web-Oberfläche erkannt"}>
       {inner}
     </div>
   );

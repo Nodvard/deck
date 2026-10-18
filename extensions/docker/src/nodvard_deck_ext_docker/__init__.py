@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends
@@ -47,6 +47,18 @@ from .image_updates import ImageUpdateService, register_job
 from .places import DockerFilePlaces
 from .resources import DockerResourceExecutor, DockerResources, ResourceProblem, resource_action_specs
 from .shell import ContainerShell
+from .adopt import AdoptedStacks, adopt_routes
+from .editor import DockerStackSaveExecutor, StackEditor, editor_routes, save_action_spec
+from .new_stack import DockerStackCreateExecutor, NewStacks, create_action_spec, new_routes
+from .stack_delete import DockerStackDeleteExecutor, StackDelete, delete_action_spec, delete_routes
+from .stack_backup import VolumeBackup
+from .stack_update import DockerStackUpdateExecutor, StackBackups, StackUpdate, stack_actions_specs, update_routes
+from .locks import StackLocks
+from .stack_actions import DockerStackExecutor, stack_action_specs
+from .stacks import DockerStacks, stack_routes
+from .container_to_stack import ContainerToStack, DockerContainerToStackExecutor, convert_action_spec, convert_routes
+from .portainer_move import DockerPortainerMoveExecutor, PortainerMove, move_action_spec, move_routes
+from .templates import template_routes
 
 
 class _TileUrlIn(BaseModel):
@@ -68,7 +80,7 @@ def _apply_docker_tag(ctx: ExtensionContext, tag: str) -> None:
     """Kachel und Aktionen folgen dem eingestellten Docker-Tag (gleiche ID/Typ ersetzt)."""
     _register_host_tool(ctx, tag)
     _register_docker_requirement(ctx, tag)
-    for spec in container_action_specs(tag) + resource_action_specs(tag):
+    for spec in container_action_specs(tag) + resource_action_specs(tag) + stack_action_specs(tag):
         ctx.actions.register(spec)
 
 
@@ -104,7 +116,9 @@ class Extension(NodvardExtension):
         ctx.capabilities.provide(self._catalog)
         ctx.capabilities.provide(DockerFilePlaces(ctx, self._catalog))
         ctx.capabilities.provide(DockerContainerExecutor(ctx))
-        ctx.capabilities.provide(DockerMaintenanceExecutor(ctx))
+        # Eine Sperre je Stack für alle, die ein Compose-Projekt ändern, auch für den Neustart.
+        self._locks = StackLocks()
+        ctx.capabilities.provide(DockerMaintenanceExecutor(ctx, self._locks))
         ctx.capabilities.provide(ImageUpdateExecutor(self._applier))
         ctx.capabilities.provide(ContainerShell(ctx))
         self._resources = DockerResources(ctx)
@@ -112,8 +126,15 @@ class Extension(NodvardExtension):
         # Nicht in `container_action_specs` (die hängen am Docker-Tag): den Befehl baut immer die Extension, die Aktion
         # kommt nur über die Route unten, nie über die Server-Seite.
         ctx.actions.register(IMAGE_UPDATE_SPEC)
+        ctx.actions.register(save_action_spec())
+        ctx.actions.register(create_action_spec())
+        ctx.actions.register(delete_action_spec())
+        ctx.actions.register(move_action_spec())
+        ctx.actions.register(convert_action_spec())
+        for spec in stack_actions_specs():
+            ctx.actions.register(spec)
         # Mit dem Standard-Tag; on_start meldet sie mit dem eingestellten Tag neu an.
-        for spec in container_action_specs() + resource_action_specs():
+        for spec in container_action_specs() + resource_action_specs() + stack_action_specs():
             ctx.actions.register(spec)
 
         ctx.settings.declare(
@@ -140,9 +161,9 @@ class Extension(NodvardExtension):
 
         @router.get("/stats")
         async def container_stats() -> dict:
-            """CPU/RAM je laufendem Container, getrennt von der Liste (dauert ein paar Sekunden, siehe
-            `DockerServiceCatalog.container_stats()`)."""
-            return {"data": await self._catalog.container_stats()}
+            """CPU/RAM je laufendem Container, Neustarts je Container und je Host CPU-Zahl und Arbeitsspeicher, getrennt von
+            der Liste (dauert ein paar Sekunden, siehe `DockerServiceCatalog.measure()`)."""
+            return await self._catalog.measure()
 
         @router.get("/hosts")
         async def docker_hosts() -> dict:
@@ -254,17 +275,18 @@ class Extension(NodvardExtension):
             container: str,
             tail: int = Query(default=200, ge=0, le=commands.MAX_LOG_TAIL),
             follow: bool = True,
+            since: str | None = None,
         ) -> StreamingResponse:
-            """Live-Logs eines Containers als laufender Text-Strom (`docker logs -f`).
-            Lesend, aber nicht harmlos (Logs enthalten gern Tokens und Adressen): dieselbe Berechtigung wie das Terminal
-            (`hosts.execute`)."""
+            """Live-Logs eines Containers als laufender Text-Strom (`docker logs -f`), auf Wunsch nur die der letzten Zeit
+            (`since`, etwa `10m` oder `24h`). Lesend, aber nicht harmlos (Logs enthalten gern Tokens und Adressen):
+            dieselbe Berechtigung wie das Terminal (`hosts.execute`)."""
             if not CONTAINER_NAME_RE.match(container):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ungültiger Containername.")
-            host = await ctx.hosts.get(host_id)
-            if host is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
+            if since is not None and not commands.LOG_SINCE_RE.match(since):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ungültiger Zeitraum.")
+            host = await _docker_host(host_id)
 
-            command = commands.logs(container, tail, follow=follow)
+            command = commands.logs(container, tail, follow=follow, since=since)
             # Strom vor der Antwort öffnen: ein unerreichbarer Host wird so ein ehrlicher 502 statt 200 mit leerem Körper.
             stack = AsyncExitStack()
             try:
@@ -321,9 +343,40 @@ class Extension(NodvardExtension):
 
         # Lesend, aber jeder Abruf öffnet SSH und lässt Docker den Speicher zählen, deshalb wie `/hosts/{id}/docker`.
         ctx.api.include_router(resources_router, permission="hosts.execute")
+        # Die Dateien liest SFTP mit den Zugangsdaten des Servers, wie im Dateimanager des Kerns.
+        adopted = AdoptedStacks(Path(str(ctx.data_dir)))
+        stacks = DockerStacks(ctx, adopted)
+        stack_executor = DockerStackExecutor(ctx, stacks, adopted, self._locks)
+        stack_executor.locks.outside = self._applier.project_busy
+        self._applier.stack_busy = stack_executor.locks.held
+        ctx.capabilities.provide(stack_executor)
+        editor = StackEditor(ctx, stack_executor, Path(str(ctx.data_dir)))
+        ctx.capabilities.provide(DockerStackSaveExecutor(ctx, editor, stack_executor))
+        ctx.api.include_router(stack_routes(stacks, _docker_host), permission="hosts.execute")
+        ctx.api.include_router(adopt_routes(ctx, stacks, adopted, _docker_host), permission="hosts.execute")
+        ctx.api.include_router(editor_routes(editor, _docker_host, ctx.api.current_actor), permission="hosts.execute")
+        # Ordner für neue Stacks und eigene Kachel-Adressen schreiben beide das ganze Einstellungsdokument.
+        settings_lock = asyncio.Lock()
+        new = NewStacks(ctx, editor, stacks, adopted, settings_lock)
+        create_executor = DockerStackCreateExecutor(ctx, new, adopted, stack_executor)
+        ctx.capabilities.provide(create_executor)
+        move = PortainerMove(ctx, stacks, adopted, new)
+        ctx.capabilities.provide(DockerPortainerMoveExecutor(ctx, move, create_executor, adopted, stack_executor))
+        ctx.api.include_router(move_routes(move, editor, _docker_host, ctx.api.current_actor), permission="hosts.execute")
+        convert = ContainerToStack(ctx, new, adopted, stacks)
+        ctx.capabilities.provide(DockerContainerToStackExecutor(ctx, convert, create_executor, adopted, stack_executor))
+        ctx.api.include_router(convert_routes(convert, editor, _docker_host, ctx.api.current_actor), permission="hosts.execute")
+        ctx.api.include_router(new_routes(new, _docker_host, ctx.api.current_actor), permission="hosts.execute")
+        ctx.api.include_router(template_routes(), permission="hosts.execute")
+        update = StackUpdate(ctx, stacks, self._images, stack_executor, StackBackups(Path(str(ctx.data_dir))), VolumeBackup(ctx, self._resources))
+        update_executor = DockerStackUpdateExecutor(ctx, update, self._images)
+        ctx.capabilities.provide(update_executor)
+        ctx.api.include_router(update_routes(update, editor, _docker_host, ctx.api.current_actor), permission="hosts.execute")
+        delete = StackDelete(ctx, stacks, adopted, new, stack_executor)
+        ctx.capabilities.provide(DockerStackDeleteExecutor(ctx, delete, adopted, update_executor.drop_backups))
+        ctx.api.include_router(delete_routes(delete, editor, _docker_host, ctx.api.current_actor), permission="hosts.execute")
 
         apps_router = APIRouter()
-        url_lock = asyncio.Lock()
 
         @apps_router.put("/containers/{host_id}/{container}/url")
         async def set_tile_url(host_id: str, container: str, body: _TileUrlIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
@@ -334,7 +387,7 @@ class Extension(NodvardExtension):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ungültiger Containername.")
             host = await _docker_host(host_id)
             key = f"{host.id}:{container}"
-            async with url_lock:
+            async with settings_lock:
                 settings = await ctx.settings.get()
                 overrides = url_overrides(settings)
                 if body.url is None:

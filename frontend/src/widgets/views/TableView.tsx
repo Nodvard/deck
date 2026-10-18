@@ -8,8 +8,12 @@ const ALIGN_CLASS: Record<"left" | "right" | "center", string> = {
   center: "text-center",
 };
 
-export function TableView({ view, data, extId, onAction }: { view: TableViewSpec; data: unknown; extId: string; onAction: () => void }) {
-  const rows = Array.isArray(data) ? data : [];
+export function TableView({
+  view, data, extId, onAction, limit = null,
+}: { view: TableViewSpec; data: unknown; extId: string; onAction: () => void; limit?: number | null }) {
+  const all = Array.isArray(data) ? data : [];
+  // `limit`: so viele Zeilen passen in die Karte, den Rest zählt die Karte als „+ x weitere“ (WidgetCard).
+  const rows = limit !== null ? all.slice(0, limit) : all;
 
   if (rows.length === 0) {
     return <p className="text-sm opacity-60">{view.empty_text}</p>;
@@ -30,7 +34,7 @@ export function TableView({ view, data, extId, onAction }: { view: TableViewSpec
         </thead>
         <tbody className="divide-y divide-white/5">
           {rows.map((row, idx) => (
-            <tr key={idx}>
+            <tr key={idx} data-fit-row>
               {view.columns.map((col) => (
                 <td key={col.field} className={`px-2 py-1 ${ALIGN_CLASS[col.align]}`}>
                   {col.template ? renderTemplate(col.template, row) : String(resolvePath(row, col.field) ?? "")}

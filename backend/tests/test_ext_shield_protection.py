@@ -399,3 +399,78 @@ async def test_an_old_scan_still_counts_as_old_while_a_new_one_runs_and_the_reas
     assert failed["score"] == fresh["score"]
     assert failed["score_reasons"] == ["Letzter Scan auf Pi fehlgeschlagen"]
     await engine.dispose()
+
+
+class _AutoRebootCtx(_Ctx):
+    async def _settings(self):
+        return {"auto_updates_enabled": True, "auto_reboot": True}
+
+
+def _update_run(run_id: str, status: str, started_at: datetime):
+    from nodvard_deck_ext_shield.models import UpdateRunRecord
+
+    return UpdateRunRecord(id=run_id, host_id="h1", host_name="Pi", mode="security", trigger="schedule", status=status,
+                           started_at=started_at)
+
+
+@pytest.mark.asyncio
+async def test_a_held_reboot_needs_attention_until_a_clean_run():
+    from nodvard_deck_ext_shield.patching import save_baseline
+
+    engine, sm = await _engine()
+    recent = (datetime.now(UTC) - timedelta(days=1)).strftime("%a %b %d %H:%M:%S %Y")
+    ctx = _AutoRebootCtx(sm, _status(recent))
+    await save_baseline(ctx, "h1", "updates", {"manager": "apt", "reboot_required": True})
+    now = datetime.now(UTC)
+    async with sm() as s:
+        s.add(_update_run("u1", "error", now - timedelta(hours=2)))
+        await s.commit()
+
+    [item] = (await Defender(ctx).overview())["attention"]
+    assert (item["kind"], item["tone"], item["host_id"]) == ("reboot_held", "warn", "h1")
+    assert item["title"] == "Pi: Neustart wartet auf ein sauberes Update"
+
+    async with sm() as s:
+        s.add(_update_run("u2", "ok", now - timedelta(hours=1)))
+        await s.commit()
+    assert (await Defender(ctx).overview())["attention"] == []
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_running_update_is_no_held_reboot():
+    from nodvard_deck_ext_shield.patching import save_baseline
+
+    engine, sm = await _engine()
+    recent = (datetime.now(UTC) - timedelta(days=1)).strftime("%a %b %d %H:%M:%S %Y")
+    ctx = _AutoRebootCtx(sm, _status(recent))
+    await save_baseline(ctx, "h1", "updates", {"manager": "apt", "reboot_required": True})
+    async with sm() as s:
+        s.add(_update_run("u1", "running", datetime.now(UTC) - timedelta(minutes=5)))
+        await s.commit()
+    assert (await Defender(ctx).overview())["attention"] == []
+    await engine.dispose()
+
+
+class _TaggedAutoRebootCtx(_Ctx):
+    async def _settings(self):
+        return {"auto_updates_enabled": True, "auto_reboot": True, "auto_updates_host_tag": "auto-update"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("tags", "held"), [([], False), (["auto-update"], True)])
+async def test_only_servers_of_the_automatic_updates_wait_for_their_reboot(tags, held):
+    from nodvard_deck_ext_shield.patching import save_baseline
+
+    engine, sm = await _engine()
+    recent = (datetime.now(UTC) - timedelta(days=1)).strftime("%a %b %d %H:%M:%S %Y")
+    ctx = _TaggedAutoRebootCtx(sm, _status(recent))
+    ctx._host.tags = tags
+    await save_baseline(ctx, "h1", "updates", {"manager": "apt", "reboot_required": True})
+    async with sm() as s:
+        s.add(_update_run("u1", "error", datetime.now(UTC) - timedelta(hours=2)))
+        await s.commit()
+
+    attention = (await Defender(ctx).overview())["attention"]
+    assert [i["kind"] for i in attention] == (["reboot_held"] if held else [])
+    await engine.dispose()

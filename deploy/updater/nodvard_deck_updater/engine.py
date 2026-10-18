@@ -1,50 +1,50 @@
-"""Engine-API des Docker-Dienstes ueber `AF_UNIX`.
+"""Engine-API des Docker-Dienstes über `AF_UNIX`.
 
 Die eigentliche Macht des Helfers ist nicht `subprocess`, sondern die Engine-API: `/exec`, `/build`, `/archive`
-und Co. fuehren beliebige Befehle als root auf dem Rechner aus. Darum geht **jeder** Aufruf durch eine Funktion
+und Co. führen beliebige Befehle als root auf dem Rechner aus. Darum geht **jeder** Aufruf durch eine Funktion
 (`Engine._request`) mit einer festen Tabelle (`ENDPOINTS`, Methode + Pfadmuster). Was dort nicht steht, wirft
-`NotAllowed` -- auch fuer den Helfer selbst, nicht nur fuer Eingaben von aussen.
+`NotAllowed` -- auch für den Helfer selbst, nicht nur für Eingaben von außen.
 
-* **Pfadteile** kommen nur aus geprueften Werten: volle IDs (`^[0-9a-f]{64}\\Z`), Image-IDs (`sha256:<64 hex>`),
-  die Konstante des Repositorys, ein bewegliches Tag (`latest`/`X.Y`) oder eine gepruefte Version -- und werden
+* **Pfadteile** kommen nur aus geprüften Werten: volle IDs (`^[0-9a-f]{64}\\Z`), Image-IDs (`sha256:<64 hex>`),
+  die Konstante des Repositorys, ein bewegliches Tag (`latest`/`X.Y`) oder eine geprüfte Version -- und werden
   trotzdem URL-kodiert (`quote(..., safe="/:@")`).
 * **Abfrageparameter** sind je Endpunkt festgelegt (z. B. `DELETE /containers/{id}` immer genau `v=0&force=0`,
   Pull nie ohne Digest als `tag`). **Bodies** ebenso: `POST /containers/{id}/update` nur
-  `{"RestartPolicy": {"Name": ..., "MaximumRetryCount": ...}}`; `create` und `connect` nur mit den Schluesseln, die
+  `{"RestartPolicy": {"Name": ..., "MaximumRetryCount": ...}}`; `create` und `connect` nur mit den Schlüsseln, die
   `clone.py` senden kann, **in genau dieser Schreibweise** (nie `Entrypoint`, nie `AutoRemove`; der Docker-Dienst ordnet
-  JSON-Schluessel ohne Beachtung der Gross- und Kleinschreibung zu, ein Schluessel wie `entrypoint` oder ein zweites
-  `image` wuerde sonst an einer Pruefung auf einzelne Namen vorbeigehen).
+  JSON-Schlüssel ohne Beachtung der Groß- und Kleinschreibung zu, ein Schlüssel wie `entrypoint` oder ein zweites
+  `image` würde sonst an einer Prüfung auf einzelne Namen vorbeigehen).
 * **API-Version** wird ausgehandelt (`negotiate`, Spanne 1.41 bis 1.54), alle weiteren Aufrufe tragen `/v1.NN/`.
   Ohne ausgehandelte Version geht kein versionierter Aufruf hinaus (`EngineError("not_negotiated")`, ein Zustand der
   Engine-Anbindung und kein Programmfehler wie `NotAllowed`). Scheitert eine **erneute** Aushandlung nur am Transport
-  (der Docker-Dienst startet gerade neu), bleibt die bisherige Version stehen; bei einer unverstaendlichen Antwort oder
-  einer Ablehnung (Podman, Version ausser Spanne) wird sie verworfen.
-* **Grenzen:** Antworten hoechstens 16 MiB, je Aufruf 60 s, Stop `t + 30` s, Pull insgesamt 30 min (der Strom darf
+  (der Docker-Dienst startet gerade neu), bleibt die bisherige Version stehen; bei einer unverständlichen Antwort oder
+  einer Ablehnung (Podman, Version außer Spanne) wird sie verworfen.
+* **Grenzen:** Antworten höchstens 16 MiB, je Aufruf 60 s, Stop `t + 30` s, Pull insgesamt 30 min (der Strom darf
   dabei bis zu 300 s schweigen). Eine Verbindung je Anfrage, kein Keep-Alive.
 * **Fehler** sind `EngineError` mit festem Bezeichner (`reason`) und ggf. HTTP-Status. Der Text der Engine steht nur
-  bereinigt und gekuerzt in `message` und ist nur fuer das Helfer-Protokoll gedacht, nie fuer den Status.
+  bereinigt und gekürzt in `message` und ist nur für das Helfer-Protokoll gedacht, nie für den Status.
 
-Fuer Tests nimmt der Konstruktor den Socket-Pfad und das Repository (`repository=`) -- nie aus der Umgebung.
+Für Tests nimmt der Konstruktor den Socket-Pfad und das Repository (`repository=`) -- nie aus der Umgebung.
 
-**Bindung der aendernden Aufrufe.** Die Tabelle prueft Form und feste Werte, aber nicht, *welcher* Container oder
-welches Image gemeint ist. Das regelt die Bindung (`Binding`, unveraenderlich, angelegt mit
-`Engine.bind(journal, own_id, ...)`): Jeder Endpunkt ausser `GET` -- `create`, `start`, `stop`, `rename`, `update`,
+**Bindung der ändernden Aufrufe.** Die Tabelle prüft Form und feste Werte, aber nicht, *welcher* Container oder
+welches Image gemeint ist. Das regelt die Bindung (`Binding`, unveränderlich, angelegt mit
+`Engine.bind(journal, own_id, ...)`): Jeder Endpunkt außer `GET` -- `create`, `start`, `stop`, `rename`, `update`,
 `remove_container`, `connect`, `tag_image`, `remove_protect_tag` und `pull` -- verlangt sie als Pflichtparameter
 `binding=`. Ohne sie (auch mit `None` oder einem anderen Objekt) wirft der Aufruf `NotBound` (eine Art von
 `NotAllowed`), bevor etwas an die Engine geht. Es gilt nur die **zuletzt** mit `Engine.bind` angelegte Bindung
-derselben Engine; eine aeltere, eine Kopie (`dataclasses.replace`) oder eine ohne `Engine.bind` gebaute wirft ebenso
+derselben Engine; eine ältere, eine Kopie (`dataclasses.replace`) oder eine ohne `Engine.bind` gebaute wirft ebenso
 `NotBound`. Mit ihr gilt:
 
 * `id` nur der alte oder (ab `created`) der neue Container aus dem Journal, nie die eigene ID des Helfers.
   `Engine.bind` lehnt ein Journal ab, das die eigene ID nennt oder dessen neuer Container der alte ist.
-* **Vorwaerts** (`undo=False`) geht jeder aendernde Aufruf nur in dem Schritt des Journals, der ihn ankuendigt
-  (das Journal wird *vor* dem Schritt geschrieben, die Wiederaufnahme verlaesst sich darauf):
+* **Vorwärts** (`undo=False`) geht jeder ändernde Aufruf nur in dem Schritt des Journals, der ihn ankündigt
+  (das Journal wird *vor* dem Schritt geschrieben, die Wiederaufnahme verlässt sich darauf):
 
-  * `begin`: `pull` mit dem Digest aus der Aufloesung des Tags (`pull_digest`; beim Rueckweg der Digest des Slots);
+  * `begin`: `pull` mit dem Digest aus der Auflösung des Tags (`pull_digest`; beim Rückweg der Digest des Slots);
   * `protected`: `tag_image` auf `nodvard-deck-previous` -- das alte Image mit dessen Version als Tag;
   * `renamed`: `rename` des alten Containers auf `<name>-previous`;
   * `tagged`: `tag_image` auf das Repository -- das bewegliche Tag des Ziels auf das neue Image;
-  * `creating`: `create` mit dem Namen des Ziels (`old.name`) und dessen unveraendertem Tag-Text als `Image`;
+  * `creating`: `create` mit dem Namen des Ziels (`old.name`) und dessen unverändertem Tag-Text als `Image`;
   * `created`: `connect` des neuen Containers (der Ablauf schreibt `created` mit der neuen ID darum gleich nach
     `create`, vor `connect` und der Nachkontrolle);
   * `old_stopped`: `update` des alten Containers auf `no` (er darf nach einem Neustart des Docker-Dienstes nicht
@@ -52,42 +52,42 @@ derselben Engine; eine aeltere, eine Kopie (`dataclasses.replace`) oder eine ohn
   * `started`: `start` des neuen Containers;
   * `committed`: `remove_container` des alten Containers.
 
-  So startet der neue Container nie, solange das Journal noch sagt, dass der alte laeuft, und der alte wird nie
-  gestoppt, bevor das Journal es ankuendigt.
-* **Rueckbau** (`undo=True`, nur vor dem Commit) in jedem Schritt, aber nur zurueck auf den alten Stand. Hat das Journal
-  den Rueckbau schon angekuendigt (`Journal.undo`), gibt es nur noch diese Bindung: `Engine.bind` ohne `undo` wirft
-  dann `NotBound`, vorwaerts geht nichts mehr. Erlaubt sind `stop` und
+  So startet der neue Container nie, solange das Journal noch sagt, dass der alte läuft, und der alte wird nie
+  gestoppt, bevor das Journal es ankündigt.
+* **Rückbau** (`undo=True`, nur vor dem Commit) in jedem Schritt, aber nur zurück auf den alten Stand. Hat das Journal
+  den Rückbau schon angekündigt (`Journal.undo`), gibt es nur noch diese Bindung: `Engine.bind` ohne `undo` wirft
+  dann `NotBound`, vorwärts geht nichts mehr. Erlaubt sind `stop` und
   `remove_container` des neuen Containers, das bewegliche Tag auf das alte Image, `rename` des alten Containers auf
   den Namen des Ziels, `update` des alten auf genau seine Restart-Policy aus dem Journal, `start` des alten und
   `remove_protect_tag` seiner Version. Kein `create`, kein `connect`, kein `pull`, kein neues Schutz-Tag, nie `stop`
   des alten oder `start` des neuen. Einen Container, der nicht im Journal steht, entfernt die Bindung nie: Wer nach
-  einem Absturz im Schritt `creating` den eigenen, schon angelegten Container findet, traegt ihn zuerst ins Journal
-  ein (`created`) und baut dann zurueck.
-* `remove_protect_tag` nur mit einer Version aus Journal bzw. Slot: vor dem Commit nur im Rueckbau die des alten
+  einem Absturz im Schritt `creating` den eigenen, schon angelegten Container findet, trägt ihn zuerst ins Journal
+  ein (`created`) und baut dann zurück.
+* `remove_protect_tag` nur mit einer Version aus Journal bzw. Slot: vor dem Commit nur im Rückbau die des alten
   Images (das Schutz-Tag dieses Vorgangs); nach dem Commit eines Updates die des ersetzten Slots (nie die des alten
-  Images, denn das Tag schuetzt jetzt den neuen Slot); nach dem Commit eines Rueckwegs beide Versionen aus dem Journal;
+  Images, denn das Tag schützt jetzt den neuen Slot); nach dem Commit eines Rückwegs beide Versionen aus dem Journal;
   ohne Journal nur die des Slots.
 * Nach dem Commit gibt es nur noch `remove_container` des alten Containers und `remove_protect_tag`.
 
-Die Bindung gilt fuer genau einen Stand des Journals: Nach jedem geschriebenen Schritt holt der Ablauf eine neue
+Die Bindung gilt für genau einen Stand des Journals: Nach jedem geschriebenen Schritt holt der Ablauf eine neue
 (`Engine.bind` mit dem Journal, wie es jetzt auf der Platte steht); die vorige gilt damit nicht mehr. Scheitert
 `Engine.bind`, gilt keine. Nach dem Commit eines Updates und beim Ablauf eines Slots gibt er den Slot, dessen
 Schutz-Tag entfernt wird, mit, solange dieser noch in `state.json` steht -- erst das Tag entfernen, dann den Slot
-ersetzen (Update) bzw. loeschen (Ablauf), sonst ginge die Version bei einem Absturz verloren und das Tag bliebe fuer
-immer liegen. Beim Rueckweg ist es umgekehrt: Beide Versionen stehen im Journal, darum geht dort zuerst der Slot, und
-die Tags folgen danach (ohne Slot in der Bindung). Die Fake-Engine der Tests prueft dieselben Regeln (und die Form der
+ersetzen (Update) bzw. löschen (Ablauf), sonst ginge die Version bei einem Absturz verloren und das Tag bliebe für
+immer liegen. Beim Rückweg ist es umgekehrt: Beide Versionen stehen im Journal, darum geht dort zuerst der Slot, und
+die Tags folgen danach (ohne Slot in der Bindung). Die Fake-Engine der Tests prüft dieselben Regeln (und die Form der
 Aufrufe) auf ihrer Seite gegen das Journal, das gerade gilt (`tests/fake_engine.py`, `JournalGuard`).
 
 **Was die Bindung nicht kann:** Sie ist eine zweite Schranke gegen Fehler im Ablauf, keine gegen eine falsche
 Zielwahl. Die gebundenen IDs kommen aus der Zielwahl in `target.py`; zeigt diese auf den falschen Container, bindet
 die Bindung eben an ihn. Dagegen helfen nur die Zielwahl selbst (genau ein Treffer, ohne die eigene ID, mit Journal
-nie ein Ziel) und die erneute Pruefung der Container vor jedem Schritt. Ebenso wenig prueft sie, an welches Netz
-`connect` geht (das kommt aus dem Inspect des Ziels), oder den Body von `create` ueber das Image hinaus (das ist
+nie ein Ziel) und die erneute Prüfung der Container vor jedem Schritt. Ebenso wenig prüft sie, an welches Netz
+`connect` geht (das kommt aus dem Inspect des Ziels), oder den Body von `create` über das Image hinaus (das ist
 Sache von `clone.py` und der Nachkontrolle).
 
-**Ein `Engine`-Objekt fuer alles:** Vorpruefung, Ablauf und Wiederaufnahme benutzen im Helfer dasselbe Objekt. Die
-Vorpruefung handelt bei jedem Lauf die API-Version neu aus; sie laeuft aber in derselben Schleife wie der Ablauf und ruht
-darum, solange ein Vorgang laeuft (`__main__`). Waehrend eines Vorgangs handelt nur der Ablauf selbst neu aus, und nur
+**Ein `Engine`-Objekt für alles:** Vorprüfung, Ablauf und Wiederaufnahme benutzen im Helfer dasselbe Objekt. Die
+Vorprüfung handelt bei jedem Lauf die API-Version neu aus; sie läuft aber in derselben Schleife wie der Ablauf und ruht
+darum, solange ein Vorgang läuft (`__main__`). Während eines Vorgangs handelt nur der Ablauf selbst neu aus, und nur
 nach einem Fehler der Engine (`flow`).
 """
 
@@ -157,28 +157,28 @@ aendert, faellt so von selbst darunter -- und wird abgelehnt, bis `Engine._check
 
 
 class NotAllowed(Exception):
-    """Ein Aufruf ausserhalb der Allowlist oder mit ungeprueften Teilen. Ein Programmierfehler, kein Fehler der
+    """Ein Aufruf außerhalb der Allowlist oder mit ungeprüften Teilen. Ein Programmierfehler, kein Fehler der
     Engine: er wird nie an die Engine geschickt."""
 
 
 class NotBound(NotAllowed):
-    """Ein aendernder Aufruf ohne Bindung, mit einer ungueltigen Bindung oder mit Teilen, die nicht zu ihr passen
+    """Ein ändernder Aufruf ohne Bindung, mit einer ungültigen Bindung oder mit Teilen, die nicht zu ihr passen
     (Container, Name, Image, Version, Digest oder Schritt). Wie `NotAllowed` ein Programmierfehler; die eigene Klasse
-    trennt nur in Tests, welche Pruefung gegriffen hat."""
+    trennt nur in Tests, welche Prüfung gegriffen hat."""
 
 
 @dataclass(frozen=True)
 class Binding:
-    """Bindet die aendernden Aufrufe an einen Stand des Journals (Regeln im Kopf des Moduls). Unveraenderlich; angelegt
-    mit `Engine.bind`, die Felder werden beim Anlegen geprueft (sonst `NotBound`). Gueltig ist nur die zuletzt
+    """Bindet die ändernden Aufrufe an einen Stand des Journals (Regeln im Kopf des Moduls). Unveränderlich; angelegt
+    mit `Engine.bind`, die Felder werden beim Anlegen geprüft (sonst `NotBound`). Gültig ist nur die zuletzt
     angelegte Bindung der Engine, die sie angelegt hat -- eine Kopie mit denselben Werten nicht.
 
     * `own_id`: die eigene Container-ID des Helfers (aus `/proc/self/mountinfo`).
-    * `journal`: der Vorgang, wie er jetzt auf der Platte steht; `None` nur fuer das Aufraeumen des Slots.
+    * `journal`: der Vorgang, wie er jetzt auf der Platte steht; `None` nur für das Aufräumen des Slots.
     * `slot`: der Slot, dessen Schutz-Tag entfernt werden darf (der abgelaufene bzw. beim Commit ersetzte); beim
-      Rueckweg der benutzte, dessen Digest allein `pull` nachladen darf.
-    * `pull_digest`: der Digest aus der Aufloesung des beweglichen Tags (beim Rueckweg der des Slots), nur fuer `pull`.
-    * `undo`: Rueckbau vor dem Commit -- alles geht zurueck auf den alten Container und das alte Image, nichts wird
+      Rückweg der benutzte, dessen Digest allein `pull` nachladen darf.
+    * `pull_digest`: der Digest aus der Auflösung des beweglichen Tags (beim Rückweg der des Slots), nur für `pull`.
+    * `undo`: Rückbau vor dem Commit -- alles geht zurück auf den alten Container und das alte Image, nichts wird
       angelegt.
     * `repository`: das Repository der Engine, die die Bindung angelegt hat; eine andere Engine lehnt sie ab.
     """
@@ -227,7 +227,7 @@ class Binding:
 
     @property
     def container_ids(self) -> frozenset[str]:
-        """Die Container, die aendernde Aufrufe ansprechen duerfen: der alte und (ab `created`) der neue."""
+        """Die Container, die ändernde Aufrufe ansprechen dürfen: der alte und (ab `created`) der neue."""
         journal = self.journal
         if journal is None:
             return frozenset()
@@ -244,7 +244,7 @@ class Binding:
         if journal is None:
             return frozenset(from_slot)
         if journal.step != "committed":
-            # Vor dem Commit nur im Rueckbau: vorwaerts bleibt das Schutz-Tag dieses Vorgangs liegen.
+            # Vor dem Commit nur im Rückbau: vorwärts bleibt das Schutz-Tag dieses Vorgangs liegen.
             return frozenset({journal.old.version}) if self.undo else frozenset()
         if journal.action == "rollback":
             return frozenset({journal.old.version} | ({journal.new.version} if journal.new is not None else set()))
@@ -252,15 +252,15 @@ class Binding:
 
 
 class EngineError(Exception):
-    """Fehler im Gespraech mit der Engine.
+    """Fehler im Gespräch mit der Engine.
 
     * `reason`: fester Bezeichner -- `unreachable` (Socket fehlt, keine Rechte, verweigert), `timeout`,
-      `disconnected` (Verbindung abgerissen), `too_large`, `bad_response` (kein gueltiges HTTP/JSON, unerwartete
-      Form), `http` (Status ausserhalb des Erwarteten, siehe `status`), `stream_error` (Fehler im 200-Strom),
+      `disconnected` (Verbindung abgerissen), `too_large`, `bad_response` (kein gültiges HTTP/JSON, unerwartete
+      Form), `http` (Status außerhalb des Erwarteten, siehe `status`), `stream_error` (Fehler im 200-Strom),
       `not_negotiated` (noch keine API-Version ausgehandelt oder die letzte Aushandlung wurde abgelehnt; es ging
       nichts an die Engine).
     * `status`: HTTP-Status, wenn es eine Antwort gab.
-    * `message`: Text der Engine, bereinigt (Steuerzeichen und ANSI escaped) und gekuerzt -- nur fuers Log.
+    * `message`: Text der Engine, bereinigt (Steuerzeichen und ANSI escaped) und gekürzt -- nur fürs Log.
     """
 
     def __init__(self, reason: str, *, status: int | None = None, message: str | None = None) -> None:
@@ -275,7 +275,7 @@ class EngineError(Exception):
 
     @property
     def code(self) -> str:
-        """Der Code fuer den Status: Transportfehler -> `engine_unreachable`, unverstaendliche Antworten ->
+        """Der Code für den Status: Transportfehler -> `engine_unreachable`, unverständliche Antworten ->
         `engine_unsupported`, HTTP-Fehler -> `engine_unreachable` (die Engine kann gerade nicht)."""
         if self.reason in ("too_large", "bad_response"):
             return policy.ENGINE_UNSUPPORTED
@@ -283,7 +283,7 @@ class EngineError(Exception):
 
 
 def sanitize(text: object, limit: int = MESSAGE_MAX_CHARS) -> str:
-    """Fremdtext fuers Log: nur ASCII, Steuerzeichen/ANSI/Unicode escaped (`\\x1b`, `\\u2028`), gekuerzt."""
+    """Fremdtext fürs Log: nur ASCII, Steuerzeichen/ANSI/Unicode escaped (`\\x1b`, `\\u2028`), gekürzt."""
     if not isinstance(text, str):
         text = str(text) if isinstance(text, (int, float)) else ""
     return ascii(text[: limit * 2])[1:-1][:limit]
@@ -298,7 +298,7 @@ def parse_api_version(value: object) -> tuple[int, int] | None:
 
 
 class _UnixConnection(http.client.HTTPConnection):
-    """HTTP ueber den Unix-Socket der Engine (nie TCP: `connect` ist ueberschrieben, ohne `super()`)."""
+    """HTTP über den Unix-Socket der Engine (nie TCP: `connect` ist überschrieben, ohne `super()`)."""
 
     socket_path = SOCKET_PATH
 
@@ -326,7 +326,7 @@ def _restart_policy_body(body: object) -> bool:
 
 
 class Engine:
-    """Client fuer die Engine-API. Erst `negotiate()`, dann die Methoden (je Aufruf eine Verbindung)."""
+    """Client für die Engine-API. Erst `negotiate()`, dann die Methoden (je Aufruf eine Verbindung)."""
 
     def __init__(self, socket_path: str = SOCKET_PATH, *, repository: str = policy.REPOSITORY,
                  call_timeout: float = CALL_TIMEOUT_S) -> None:
@@ -347,7 +347,7 @@ class Engine:
         `EngineError` bei Transportfehlern.
 
         `api_version` wird erst bei Erfolg gesetzt. Scheitert die Aushandlung am Transport (`unreachable`, `timeout`,
-        `disconnected`, ein HTTP-Fehler), bleibt der bisherige Wert stehen; bei einer Ablehnung oder unverstaendlichen
+        `disconnected`, ein HTTP-Fehler), bleibt der bisherige Wert stehen; bei einer Ablehnung oder unverständlichen
         Antwort wird er verworfen (die Engine ist jetzt eine andere)."""
         try:
             version = self._negotiate()
@@ -406,22 +406,22 @@ class Engine:
         return self._object("GET", "/networks/{id}", params={"id": network_id})
 
     def distribution(self, tag: str) -> dict[str, Any]:
-        """`GET /distribution/<repository>:<tag>/json` -- loest das bewegliche Tag in der Registry auf."""
+        """`GET /distribution/<repository>:<tag>/json` -- löst das bewegliche Tag in der Registry auf."""
         return self._object("GET", "/distribution/{repository}:{tag}/json",
                             params={"repository": self._repository, "tag": tag})
 
-    # --- Aendern (fuer den Ablauf; jeder Aufruf mit Bindung) -----------------
+    # --- Ändern (für den Ablauf; jeder Aufruf mit Bindung) -----------------
 
     def bind(self, journal: Journal | None, own_id: str, *, slot: Slot | None = None, pull_digest: str | None = None,
              undo: bool = False) -> Binding:
-        """Die Bindung fuer die aendernden Aufrufe dieses Stands des Journals (Regeln im Kopf des Moduls). Wirft
-        `NotBound`, wenn die Teile nicht zusammenpassen (ungueltiges Journal oder Slot, die eigene ID im Journal,
-        neuer gleich altem Container, Rueckbau nach dem Commit, `pull_digest` oder `undo` ohne Journal).
+        """Die Bindung für die ändernden Aufrufe dieses Stands des Journals (Regeln im Kopf des Moduls). Wirft
+        `NotBound`, wenn die Teile nicht zusammenpassen (ungültiges Journal oder Slot, die eigene ID im Journal,
+        neuer gleich altem Container, Rückbau nach dem Commit, `pull_digest` oder `undo` ohne Journal).
 
-        Der Name des Ziels kommt aus dem Journal (`old.name`), nicht als eigener Parameter: zwei Quellen fuer denselben
-        Namen koennten auseinanderlaufen.
+        Der Name des Ziels kommt aus dem Journal (`old.name`), nicht als eigener Parameter: zwei Quellen für denselben
+        Namen könnten auseinanderlaufen.
 
-        Ab jetzt gilt nur die neue Bindung; jede fruehere dieser Engine ist ungueltig, auch wenn `bind` scheitert."""
+        Ab jetzt gilt nur die neue Bindung; jede frühere dieser Engine ist ungültig, auch wenn `bind` scheitert."""
         self._binding = None
         binding = Binding(own_id=own_id, journal=journal, slot=slot, pull_digest=pull_digest, undo=undo,
                           repository=self._repository)
@@ -429,7 +429,7 @@ class Engine:
         return binding
 
     def create_container(self, name: str, body: dict[str, Any], *, binding: Binding) -> tuple[str, int]:
-        """`POST /containers/create?name=<name>`; gibt `(Id, Anzahl Warnungen)` zurueck."""
+        """`POST /containers/create?name=<name>`; gibt `(Id, Anzahl Warnungen)` zurück."""
         result = self._object("POST", "/containers/create", query={"name": name}, body=body, ok=(201,),
                               binding=binding)
         new_id = result.get("Id")
@@ -450,7 +450,7 @@ class Engine:
 
     def stop_container(self, container_id: str, t: int, *, binding: Binding) -> bool:
         """`True`, wenn gestoppt; `False` bei 304 (stand schon). Wartet bis `t + 30` s auf die Antwort."""
-        timeout = float(t + STOP_GRACE_S) if type(t) is int else None  # ungueltiges `t` lehnt `_query_for` ab
+        timeout = float(t + STOP_GRACE_S) if type(t) is int else None  # ungültiges `t` lehnt `_query_for` ab
         return self._expect("POST", "/containers/{id}/stop", params={"id": container_id}, query={"t": t},
                             ok=(204, 304), timeout=timeout, binding=binding) == 204
 
@@ -482,7 +482,7 @@ class Engine:
         """`POST /images/create?fromImage=<repository>&tag=<digest>` und den Strom bis zum Ende lesen.
 
         Fehler kommen als HTTP-Status vor dem Strom **oder** als `error`/`errorDetail` mitten im 200-Strom
-        (`EngineError("stream_error")`). Gibt die Zahl der gelesenen Meldungen zurueck."""
+        (`EngineError("stream_error")`). Gibt die Zahl der gelesenen Meldungen zurück."""
         deadline = time.monotonic() + PULL_TIMEOUT_S
         status, _, data = self._request(
             "POST", "/images/create", query={"fromImage": self._repository, "tag": digest},
@@ -529,19 +529,19 @@ class Engine:
         stream: bool = False,
         binding: Binding | None = None,
     ) -> tuple[int, dict[str, str], Any]:
-        """Der einzige Weg zur Engine. Prueft Methode + Muster gegen `ENDPOINTS`, die Pfadteile, die Abfrage und
-        den Body (`NotAllowed`) und bei aendernden Endpunkten danach die Bindung (`NotBound`), schickt die Anfrage und
-        liest die Antwort mit Groessen- und Zeitgrenzen.
+        """Der einzige Weg zur Engine. Prüft Methode + Muster gegen `ENDPOINTS`, die Pfadteile, die Abfrage und
+        den Body (`NotAllowed`) und bei ändernden Endpunkten danach die Bindung (`NotBound`), schickt die Anfrage und
+        liest die Antwort mit Größen- und Zeitgrenzen.
 
-        Gibt `(status, headers, data)` zurueck: `data` ist das JSON der Antwort (oder `None` ohne Body bzw. ohne
-        JSON), beim Strom die Zahl der Meldungen. `api_version` ersetzt fuer diesen einen Aufruf die ausgehandelte
-        Version (nur die Aushandlung selbst braucht das, solange sie noch nicht abgeschlossen ist): erlaubt nur fuer
-        `/version` und nur innerhalb der Spanne; ohne Versionspraefix (`versioned=False`) geht nur `/_ping`."""
+        Gibt `(status, headers, data)` zurück: `data` ist das JSON der Antwort (oder `None` ohne Body bzw. ohne
+        JSON), beim Strom die Zahl der Meldungen. `api_version` ersetzt für diesen einen Aufruf die ausgehandelte
+        Version (nur die Aushandlung selbst braucht das, solange sie noch nicht abgeschlossen ist): erlaubt nur für
+        `/version` und nur innerhalb der Spanne; ohne Versionspräfix (`versioned=False`) geht nur `/_ping`."""
         name = _ALLOWED.get((method, pattern))
         if name is None:
             raise NotAllowed("Endpunkt nicht in der Allowlist")
         if versioned != (name != "ping"):
-            # Ohne Praefix antwortet der Docker-Dienst mit seiner neuesten API-Version: das braucht nur `/_ping`.
+            # Ohne Präfix antwortet der Docker-Dienst mit seiner neuesten API-Version: das braucht nur `/_ping`.
             raise NotAllowed("nur /_ping geht ohne Versionspraefix")
         if api_version is not None and (name != "version" or not isinstance(api_version, tuple)
                                         or not API_MIN <= api_version <= API_MAX):
@@ -554,7 +554,7 @@ class Engine:
         if versioned:
             version = api_version or self.api_version
             if version is None:
-                # Kein Verstoss gegen die Allowlist, sondern der Zustand der Anbindung: der Aufrufer fasst `EngineError`
+                # Kein Verstoß gegen die Allowlist, sondern der Zustand der Anbindung: der Aufrufer fasst `EngineError`
                 # ohnehin ab und handelt neu aus.
                 raise EngineError("not_negotiated")
             path = f"/v{version[0]}.{version[1]}{path}"
@@ -576,7 +576,7 @@ class Engine:
             except TimeoutError:
                 raise EngineError("timeout") from None
             except http.client.RemoteDisconnected:
-                # Verbindung ohne Antwort geschlossen (z. B. der Docker-Dienst startet neu): nicht "unverstaendlich".
+                # Verbindung ohne Antwort geschlossen (z. B. der Docker-Dienst startet neu): nicht "unverständlich".
                 raise EngineError("disconnected") from None
             except http.client.HTTPException:
                 raise EngineError("bad_response") from None
@@ -601,7 +601,7 @@ class Engine:
 
     def _check_binding(self, name: str, binding: object, params: Mapping[str, Any], query: Mapping[str, Any],
                        body: Any) -> None:
-        """Die Regeln der Bindung (Kopf des Moduls). Laeuft nach den Pruefungen der Form: Pfadteile, Abfrage und Body
+        """Die Regeln der Bindung (Kopf des Moduls). Läuft nach den Prüfungen der Form: Pfadteile, Abfrage und Body
         haben hier schon die erwartete Gestalt."""
         if type(binding) is not Binding:
             raise NotBound(f"{name}: ohne Bindung")
@@ -620,13 +620,13 @@ class Engine:
         new_id = new.id if new is not None else None
 
         def forward(announced: str) -> bool:
-            """Vorwaerts nur in dem Schritt, den das Journal schon angekuendigt hat."""
+            """Vorwärts nur in dem Schritt, den das Journal schon angekündigt hat."""
             return not undo and step == announced
 
         if name == "pull_image":
             digest = binding.pull_digest
             if journal.action == "rollback":
-                # Der Rueckweg zieht nur den Vorgaenger aus dem Slot nach (nach `image prune -a`).
+                # Der Rückweg zieht nur den Vorgänger aus dem Slot nach (nach `image prune -a`).
                 slot = binding.slot
                 prefix = binding.repository + "@"
                 if slot is None or not slot.repo_digest.startswith(prefix) or digest != slot.repo_digest[len(prefix):]:
@@ -638,7 +638,7 @@ class Engine:
             if repo == PREVIOUS_REPOSITORY:
                 allowed = forward("protected") and image_id == old.image_id and tag == old.version
             else:
-                # Gegen das Repository der Bindung: dagegen ist das Journal beim Anlegen geprueft worden.
+                # Gegen das Repository der Bindung: dagegen ist das Journal beim Anlegen geprüft worden.
                 floating = policy.floating_tag(old.tag_text, repository=binding.repository)
                 if undo:
                     allowed = image_id == old.image_id
@@ -659,8 +659,8 @@ class Engine:
             if container_id == binding.own_id or container_id not in binding.container_ids:
                 raise NotBound(f"{name}: Container nicht aus dem Journal")
             if name == "start_container":
-                # Nie zwei Dashboards zugleich: der neue erst, wenn das Journal den alten als gestoppt fuehrt; der
-                # alte nur im Rueckbau.
+                # Nie zwei Dashboards zugleich: der neue erst, wenn das Journal den alten als gestoppt führt; der
+                # alte nur im Rückbau.
                 allowed = container_id == old.id if undo else (forward("started") and container_id == new_id)
             elif name == "stop_container":
                 allowed = container_id == new_id if undo else (forward("old_stopped") and container_id == old.id)
@@ -674,7 +674,7 @@ class Engine:
                 expected = old.restart_policy if undo else ("no", 0)
                 allowed = container_id == old.id and wanted_policy == expected and (undo or forward("old_stopped"))
             else:
-                # Vor dem Commit nur der neue (im Rueckbau), ab dem Commit nur der alte Container.
+                # Vor dem Commit nur der neue (im Rückbau), ab dem Commit nur der alte Container.
                 allowed = (container_id == old.id if step == "committed"
                            else undo and new_id is not None and container_id == new_id)
             if not allowed:
@@ -714,7 +714,7 @@ class Engine:
         return False
 
     def _query_for(self, name: str, query: Mapping[str, Any]) -> str:
-        """Feste Abfrage je Endpunkt. Gibt den kodierten Text zurueck."""
+        """Feste Abfrage je Endpunkt. Gibt den kodierten Text zurück."""
         keys = set(query)
         if name == "list_containers":
             if query.get("all") != "1" or not keys <= {"all", "filters"}:
@@ -743,7 +743,7 @@ class Engine:
                 raise NotAllowed(f"{name}: {key} ungeprueft")
         if name == "tag_image":
             # Das Repository bekommt nur das bewegliche Tag, das Schutz-Repository nur eine Version -- nie z. B.
-            # `ghcr.io/nodvard/deck:0.6.0` (das saehe aus wie ein festes Tag von Compose).
+            # `ghcr.io/nodvard/deck:0.6.0` (das sähe aus wie ein festes Tag von Compose).
             wanted = policy.is_version if query["repo"] == PREVIOUS_REPOSITORY else _is_floating_tag
             if not wanted(query["tag"]):
                 raise NotAllowed("tag: falsche Art von Tag fuer dieses Repository")
@@ -765,11 +765,11 @@ class Engine:
         return None if body is None else policy.dumps(body)
 
     def _check_create_body(self, body: Any) -> None:
-        """Gurt und Hosentraeger zu `clone.py`: im Body stehen nur Schluessel, die `clone.build` senden kann, und
+        """Gurt und Hosenträger zu `clone.py`: im Body stehen nur Schlüssel, die `clone.build` senden kann, und
         zwar in genau dieser Schreibweise (`clone.CREATE_*_KEYS`). Damit gibt es nie `Entrypoint` und nie `AutoRemove`
-        -- auch nicht als `entrypoint` oder `autoremove`, die der Docker-Dienst gleich lesen wuerde. Das Image ist der
-        unveraenderte Tag-Text des Ziels (bewegliches Tag des Repositorys). Tiefere Ebenen (`RestartPolicy`, `LogConfig`,
-        die Eintraege von `Mounts`, ...) kommen unveraendert aus dem Inspect des Docker-Dienstes."""
+        -- auch nicht als `entrypoint` oder `autoremove`, die der Docker-Dienst gleich lesen würde. Das Image ist der
+        unveränderte Tag-Text des Ziels (bewegliches Tag des Repositorys). Tiefere Ebenen (`RestartPolicy`, `LogConfig`,
+        die Einträge von `Mounts`, ...) kommen unverändert aus dem Inspect des Docker-Dienstes."""
         if not isinstance(body, dict):
             raise NotAllowed("create: Body ist kein Objekt")
         _only_keys(body, clone.CREATE_CONFIG_KEYS, "create")
@@ -798,9 +798,9 @@ class Engine:
 
 
 def _only_keys(obj: Mapping[Any, Any], known: frozenset[str], what: str) -> None:
-    """Nur bekannte Schluessel in genau der bekannten Schreibweise. Eine andere Schreibweise eines bekannten Namens
-    ist ebenso abgelehnt wie ein unbekannter Name: der Docker-Dienst ordnet Schluessel ohne Beachtung der
-    Gross-/Kleinschreibung zu."""
+    """Nur bekannte Schlüssel in genau der bekannten Schreibweise. Eine andere Schreibweise eines bekannten Namens
+    ist ebenso abgelehnt wie ein unbekannter Name: der Docker-Dienst ordnet Schlüssel ohne Beachtung der
+    Groß-/Kleinschreibung zu."""
     folded = {key.casefold() for key in known}
     for key in obj:
         if not isinstance(key, str) or key not in known:
@@ -843,7 +843,7 @@ def _remaining(deadline: float) -> float:
 
 
 def _read_body(response: http.client.HTTPResponse, deadline: float) -> bytes:
-    """Liest den Body hoechstens bis `MAX_RESPONSE_BYTES` (eine laengere Antwort ist `too_large`)."""
+    """Liest den Body höchstens bis `MAX_RESPONSE_BYTES` (eine längere Antwort ist `too_large`)."""
     length = response.getheader("Content-Length")
     if length is not None and length.isdigit() and int(length) > MAX_RESPONSE_BYTES:
         raise EngineError("too_large", status=response.status)
@@ -852,7 +852,7 @@ def _read_body(response: http.client.HTTPResponse, deadline: float) -> bytes:
     try:
         while True:
             _remaining(deadline)
-            # `read1`: hoechstens ein Lesevorgang am Socket, damit die Gesamtfrist auch bei tropfenden Antworten greift.
+            # `read1`: höchstens ein Lesevorgang am Socket, damit die Gesamtfrist auch bei tropfenden Antworten greift.
             chunk = response.read1(min(_CHUNK, MAX_RESPONSE_BYTES + 1 - size))
             if not chunk:
                 break
@@ -867,14 +867,14 @@ def _read_body(response: http.client.HTTPResponse, deadline: float) -> bytes:
     except OSError:
         raise EngineError("disconnected", status=response.status) from None
     if response.length:
-        # `read(amt)` meldet ein vorzeitiges Ende bei `Content-Length` nicht (kein `IncompleteRead`): selbst pruefen.
+        # `read(amt)` meldet ein vorzeitiges Ende bei `Content-Length` nicht (kein `IncompleteRead`): selbst prüfen.
         raise EngineError("disconnected", status=response.status)
     return b"".join(chunks)
 
 
 def _read_stream(response: http.client.HTTPResponse, deadline: float) -> int:
     """Liest einen JSON-Strom (ein Objekt je Zeile, `raw_decode`) bis zum Ende. `error`/`errorDetail` in einem
-    Objekt -> `EngineError("stream_error")`. Gibt die Zahl der Objekte zurueck."""
+    Objekt -> `EngineError("stream_error")`. Gibt die Zahl der Objekte zurück."""
     decoder_buffer = ""
     total = count = 0
     pending = b""
@@ -914,7 +914,7 @@ def _read_stream(response: http.client.HTTPResponse, deadline: float) -> int:
 
 
 def _decode_objects(buffer: str) -> tuple[str, int]:
-    """Nimmt alle vollstaendigen JSON-Objekte vorn aus `buffer`; gibt den Rest und ihre Zahl zurueck."""
+    """Nimmt alle vollständigen JSON-Objekte vorn aus `buffer`; gibt den Rest und ihre Zahl zurück."""
     count = 0
     while True:
         stripped = buffer.lstrip()
@@ -922,7 +922,7 @@ def _decode_objects(buffer: str) -> tuple[str, int]:
             return "", count
         newline = stripped.find("\n")
         if newline < 0:
-            return stripped, count  # Zeile noch nicht vollstaendig
+            return stripped, count  # Zeile noch nicht vollständig
         line, buffer = stripped[:newline], stripped[newline + 1:]
         if not line.strip():
             continue

@@ -26,6 +26,7 @@ from ..core.vault import VaultError
 from ..db import utcnow
 from ..ext.root_helpers import RootHelperFile
 from ..models import Host, HostCredential
+from . import helper_hints
 from . import hosts as hosts_service
 
 log = logging.getLogger("nodvard_deck.host_check")
@@ -257,6 +258,9 @@ class _State:
         self.key_problem = False
         self.sudo_full: bool | None = None
         """`sudo -n true` klappte (volle Regel); `None`: nicht geprüft oder keine Antwort."""
+        self.helper_stale: dict[str, int] | None = None
+        """Für den Hinweis in der Übersicht (`helper_hints`): fehlende oder veraltete Hilfsskripte bei voller Regel,
+        `{}` für „nichts zu melden“; `None`: nicht festgestellt, der bisherige Stand bleibt."""
 
     def add(self, id_: str, label: str, status: str, detail: str = "", hint: str = "") -> None:
         self.items.append(CheckItem(id=id_, label=label, status=status, detail=detail, hint=hint))  # type: ignore[arg-type]
@@ -359,6 +363,8 @@ async def _run(
             host.status = "down"
         elif state.key_problem:
             host.status = "unknown"
+    if state.helper_stale is not None and credential is not None and credential.is_default:
+        await helper_hints.record(session, host.id, state.helper_stale)
     await session.flush()
     return ConnectionCheckOut(
         ok=not any(item.status in ("fail", "confirm") for item in state.items),
@@ -400,6 +406,7 @@ async def _probe(
                 state.add(f"req:{ext_id}:{spec.id}", spec.label, "skipped", "Wird bei Windows-Servern nicht geprüft.")
         for helper in helpers:
             state.add(_helper_id(helper), _helper_label(helper), "skipped", "Wird bei Windows-Servern nicht geprüft.")
+        state.helper_stale = {}
         return
     await _step_root(state, conn, user, requirements)
     await _step_helpers(state, conn, user, helpers)
@@ -731,19 +738,34 @@ def parse_helper_check(out: str, helpers: Sequence[RootHelperFile]) -> dict[str,
     return seen
 
 
+def split_sudo_lines(out: str) -> list[str]:
+    """Die Zeilen von `sudo -n -l` am Ende der Antwort auf `helper_check_command` (leer ohne die Marke)."""
+    lines = out.splitlines()
+    for index, raw in enumerate(lines):
+        if raw.strip() == f"{_HELPER_TAG}sudo":
+            return [line.strip() for line in lines[index + 1:]]
+    return []
+
+
 async def _step_helpers(
     state: _State, conn: asyncssh.SSHClientConnection, user: str, helpers: Sequence[RootHelperFile]
 ) -> None:
     if not helpers:
+        state.helper_stale = {}
         return
     if user == "root":
         for helper in helpers:
             state.add(_helper_id(helper), _helper_label(helper), "skipped", "Angemeldet als root – kein Hilfsskript nötig.")
+        state.helper_stale = {}
         return
     result = await _run_command(conn, helper_check_command(helpers))
     seen = parse_helper_check(result[1], helpers) if result is not None else {}
     for helper in helpers:
         _add_helper_item(state, helper, seen.get(helper.install_path))
+    if result is not None:
+        # Wie der Job `helper-hints`: die volle Regel aus `sudo -n -l` (nicht aus `sudo -n true`), damit beide gleich urteilen.
+        full = helper_hints.has_full_rule(split_sudo_lines(result[1]))
+        state.helper_stale = helper_hints.stale_helpers(helpers, seen) if full else {}
 
 
 _RERUN_HINT = "Server neu einrichten: Einrichtungsbefehl mit „Root-Rechte ohne Passwort“ erneut ausführen."
@@ -755,6 +777,15 @@ def _add_helper_item(state: _State, helper: RootHelperFile, seen: _HelperSeen | 
         state.add(id_, label, "skipped", "Keine verwertbare Antwort auf die Abfrage.")
         return
     if not seen.present:
+        if state.sudo_full:
+            # Volle Regel gesetzt, Skript fehlt: Das Modul läuft, aber mit mehr Rechten als nötig. Ein Hinweis (gelb), kein
+            # Fehler, wie in der Übersicht.
+            state.add(
+                id_, label, "warn",
+                "Fehlt auf dem Server. Bis es dort liegt, nutzt Nodvard Deck für dieses Modul die volle sudo-Regel statt enger Rechte.",
+                _RERUN_HINT,
+            )
+            return
         state.add(
             id_, label, "skipped", "Noch nicht auf dem Server. Bis dahin nutzt Nodvard Deck für dieses Modul die volle sudo-Regel.",
             "Kommt mit dem Einrichtungsbefehl mit „Root-Rechte ohne Passwort“ auf den Server.",

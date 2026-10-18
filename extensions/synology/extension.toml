@@ -1,0 +1,25 @@
+[extension]
+id          = "synology"
+name        = "Synology DSM"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Zeigt den Zustand deiner Synology: Modell, DSM-Version, Auslastung, Speicherpools, Volumes, Festplatten, Hyper Backup und ob ein Update bereitsteht. Meldet, wenn etwas nicht stimmt. Nur lesend."
+icon        = "server"
+category    = "servers"
+sort_order  = 120
+stage       = "beta"
+entrypoint  = "nodvard_deck_ext_synology:Extension"
+frontend    = "frontend/dist/index.js"
+
+# Nur lesend: kein Zugriff auf Server, keine Aktionen, nichts zum Freigeben.
+permissions = [
+  "net.outbound",
+  "net.outbound.insecure_tls",
+  "secrets.read:synology-*",
+  "schedule.register",
+  "notify.send",
+]
+
+[settings]
+schema = "settings.schema.json"

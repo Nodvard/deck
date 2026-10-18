@@ -334,8 +334,8 @@ permission-checked and writes to the audit log where needed.
 | `ctx.connectors` | `register_type(ConnectorType)` | — |
 | `ctx.capabilities` | `provide(protocol_instance)` | per protocol |
 | `ctx.actions` | `register(ActionSpec)`, `propose(ActionRequest)` (optionally with `standing_approval`, see section 3), `check_standing_approval(granted_by_user_id, risk=…)` (would a standing approval by this person still apply today? `None` = yes, otherwise the reason), `waiting_count()` (how many proposals of all modules are waiting for approval, just the number) | `hosts.execute` and others; standing approval: `actions.standing_approval`; `waiting_count()`: `hosts.read` |
-| `ctx.hosts` | `list()`, `get()`, `upsert_discovered()` | `hosts.read` / `hosts.write` |
-| `ctx.exec` | `run(host, command)`, `stream(host, command)` (live output, e.g. live logs), `open_shell(host)`, `sftp(host)` | `hosts.execute` |
+| `ctx.hosts` | `list()`, `get()`, `upsert_discovered()`, `mark_gone(provider_refs)`: marks the extension's own servers (only those of this extension) as no longer present at the provider, such as a guest deleted in Proxmox; the interface shows them greyed out and offers "Entfernen". A server that is already marked keeps its first timestamp (`gone_since`), and a later `upsert_discovered()` with the same ID clears the mark. Call it only for areas that were just read completely, never for a connection that could not be reached. Returns how many servers were newly marked. Older cores do not have the method | `hosts.read` / `hosts.write` (`mark_gone()` and `upsert_discovered()` need `hosts.write`) |
+| `ctx.exec` | `run(host, command)`, `stream(host, command)` (live output, e.g. live logs), `open_shell(host)`, `sftp(host)`. Also `run_argv(host, argv, stdin=None)` and `stream_argv(host, argv)`: the extension passes a list of words (`["docker", "compose", "-f", path, "config"]`), and the core joins them into the command line with POSIX quoting (`shlex.join`). A value from user input therefore never becomes shell syntax; for anything that is not fixed, this is the recommended way. Quoting does not protect against options: the program reads a value with a leading `-` as an option, so separate input values used as arguments from the rest with `--`. A string instead of a list, an empty `argv`, an empty first word, a first word like `NAME=value` (the shell would set it as a variable), a word that is not a string or a NUL character: `TypeError`/`ValueError` before any connection is made. Deny list and permission as with `run()`, checked against the joined line. `stdin` (text as UTF-8 or bytes) only goes to standard input, never onto the command line and never into the audit log; afterwards the process gets EOF, even for empty data (e.g. to check a file without writing it). The server's login shell has to be a POSIX shell (sh, bash, dash, zsh), as with `run()`. Older cores do not have either method | `hosts.execute` |
 | `ctx.secrets` | `get_handle(label)`, `create()`, `delete(label)` (deletes the secret; `True` if there was one, otherwise `False`; audit log `extension.secret_removed`; older cores do not have it), `replace(label=, value=)` (new value in one step, the old one stays if it fails; `SecretUnavailable` if there is none; audit log `extension.secret_set`; older cores do not have it). An extension may replace or delete only its **own** secrets (created under its id or a former one, via `create()` or its settings page); otherwise `SecretNotOwned` (a kind of `PermissionDenied`) and the secret stays unchanged. Reading still follows the permission. No extension gets the two-factor secret of an account, not even for reading | `secrets.read:<label>` |
 | `ctx.vault_use` | context manager that materializes a value in memory only | same |
 | `ctx.db` | AsyncSession factory, **only** on `ext_<id>_*` tables (after a rename also on the prefixes of the old IDs, see section 1 "Renaming an extension") | — |
@@ -877,6 +877,13 @@ hosts with at least one of these tags — both the listing AND triggering check 
 `POST /hosts/{id}/actions/{typ}` either (404) — only the extension itself proposes them
 via `ctx.actions.propose`. Required fields of type object/list get no form there; such
 actions need their own form in the extension (example: `vm.config_set`).
+
+When someone triggers an action that has a `params_schema` via `POST /hosts/{id}/actions/{typ}`, the core checks
+`payload` against that schema first and answers a non-matching value right away with `422` and a German sentence
+(field and error); no action is created then. The check is deliberately narrow (`core/schema_check.py`: `type`,
+`enum`, `pattern`, `minLength`/`maxLength`, `minimum`/`maximum`, `properties`, `required`, `additionalProperties`,
+`items`, `minItems`/`maxItems`); other keywords pass through. The executor therefore still validates on its own,
+and that is the binding check.
 
 ### Loading the frontend bundle
 

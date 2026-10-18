@@ -1,0 +1,275 @@
+version = "0.10.0"
+date = "2026-10-18"
+title = "Docker-Stacks, Synology DSM (Beta) und Server nach Art"
+
+[[entries]]
+kind = "verbessert"
+text = "Die Anleitung zum Installieren beschreibt jetzt viele weitere Wege Schritt für Schritt: einen einzelnen Docker-Befehl, Podman, Dockge, die NAS-Systeme von Synology, UGREEN, QNAP, Unraid, TrueNAS, OpenMediaVault und ZimaOS/CasaOS, Proxmox und Docker Desktop."
+
+[[entries]]
+kind = "neu"
+text = "Unter „Über Nodvard Deck“ gibt es jetzt den Abschnitt „Community und Credits“ mit dem Discord, GitHub und den Lizenzen der verwendeten Bibliotheken."
+
+[[entries]]
+kind = "verbessert"
+text = "Wenn bei einer Aktion auf der Server-Seite eine Angabe nicht passt (zum Beispiel ein fehlender oder falscher Name), sagt Nodvard Deck das sofort und verständlich, statt die Aktion erst fehlschlagen zu lassen."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Ein Container, der ohne Compose gestartet wurde, lässt sich in einen Stack umwandeln. Deck schreibt die Compose-Datei aus seinen Einstellungen, zeigt sie vorher und startet ihn daraus neu; Volumes und Ordner bleiben dieselben. Läuft der neue nicht, startet der alte wieder; läuft der neue, löscht Deck den alten, und was nur im Container lag, ist dann weg. Was Deck nicht sicher übersetzen kann, nennt es, statt es wegzulassen; Nodvard Deck selbst und sein Update-Helfer bleiben außen vor."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Logs lassen sich auf einen Zeitraum begrenzen, etwa die letzte Stunde, durchsuchen und als Textdatei herunterladen."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Die Container-Liste lässt sich nach Server, Stack und Zustand filtern, etwa nur Container mit Problemen."
+
+[[entries]]
+kind = "verbessert"
+text = "Docker: Läuft Docker in einem Container auf Proxmox (LXC) oder in einer virtuellen Maschine, steht das beim Server, samt der Grenze für CPU und Arbeitsspeicher."
+
+[[entries]]
+kind = "neu"
+text = "Docker: In der Container-Liste steht, wie oft Docker einen Container nach seinem Ende von selbst neu starten musste. Sind es drei oder mehr und liegt der letzte Start keine Stunde zurück, zählt er zu „Mit Problemen“."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Stacks aus Portainer lassen sich übernehmen. Deck holt Datei und Variablen aus dem Speicher von Portainer in einen eigenen Ordner und rollt den Stack dort unter demselben Namen neu aus; die Volumes mit den Daten bleiben. Zeigt ein Pfad nach dem Umzug woanders hin, etwa ein Ordner neben der Datei, oder passt die Datei nicht zu den laufenden Diensten, zieht Deck nicht um und nennt den Grund. Scheitert das Ausrollen, kann ein Teil der Container schon ersetzt sein; Deck sagt dann, was gerade läuft und was zu tun ist."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Übernommene Stacks lassen sich löschen. Deck fährt sie mit allen Diensten herunter (die Volumes bleiben) und vergisst sie; den Ordner mit allen Dateien löscht es nur, wenn du das ausdrücklich anhakst und nichts dagegen spricht, etwa ein anderer Stack, ein eingehängtes Laufwerk oder ein fremder Container, der Dateien daraus nutzt."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Beim Update eines Stacks lassen sich die Volumes vorher sichern. Deck zeigt Größe und freien Platz, stoppt die Dienste kurz und legt je Volume ein Archiv im Heimatordner des Zugangs an; ohne Haken bleibt alles wie bisher."
+
+[[entries]]
+kind = "verbessert"
+text = "Docker: An einem Stack läuft immer nur eine Änderung zur Zeit, ob Anwenden, Neustart, Speichern, Anlegen, Löschen, Update oder das Image-Update eines seiner Container. Wer dazwischen kommt, erfährt, was gerade läuft. Einzelne Container lassen sich weiter jederzeit starten und stoppen."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Übernommene Stacks lassen sich als Ganzes aktualisieren. Deck holt die neuen Images, behält die alten als Sicherung und prüft danach, ob wirklich die neue Version läuft; startet ein Dienst nicht, geht es von selbst zurück, außer bei Datenbanken. Hat die Datei noch nicht angewendete Änderungen, wartet das Update, bis sie angewendet sind."
+
+[[entries]]
+kind = "neu"
+text = "Docker: „Zurück zur vorigen Version“ setzt die Dienste eines Stacks auf die Images vor dem letzten Update zurück, aber nur, solange die Sicherung noch zum laufenden Dienst passt."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Übernommene Stacks lassen sich anwenden, stoppen, herunterfahren und ihre Images neu holen, jeweils mit Freigabe. Nach dem Anwenden prüft Deck, ob alle Dienste der Datei laufen."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Die Compose-Datei eines übernommenen Stacks lässt sich direkt in Deck bearbeiten. Compose prüft sie vor dem Speichern, gespeichert wird nur mit Freigabe, und die letzten 20 Fassungen bleiben im Verlauf."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Vor dem Speichern nennt Deck riskante Einstellungen, etwa volle Rechte, das Netz des Servers, Systemordner oder den Zugriff auf Docker selbst. Kommt so eine Einstellung neu dazu, braucht die Freigabe die hohe Stufe."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Bei „Datei ansehen“ stehen jetzt auch die Namen der Variablen aus der .env des Stacks. Die Werte zeigt Deck nicht, weil darin oft Passwörter stehen."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Compose-Dateien lassen sich auch als Formular bearbeiten, mit Image, Ports, Ordnern, Umgebungsvariablen und Neustart-Regel je Dienst. Das Formular ändert nur die Stelle, die du bearbeitest; Kommentare und der Rest der Datei bleiben."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Vor dem Speichern zeigt der Editor Zeile für Zeile, was sich gegenüber der Datei auf dem Server ändert."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Neuer Reiter „Stacks“. Er zeigt alle Gruppen von Containern, die zusammen aus einer Compose-Datei laufen, auch die von Hand oder mit Portainer angelegten, mit Zustand und Verbrauch."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Die Compose-Datei eines Stacks lässt sich ansehen, und es steht dabei, wenn sie geändert, aber noch nicht angewendet wurde."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Neue Stacks lassen sich in Deck anlegen, aus einem Beispiel, eingefügtem Text oder einer hochgeladenen Datei. Deck legt dafür nach der Freigabe einen eigenen Ordner an (Vorgabe /opt/stacks, je Server änderbar) und überschreibt nie einen bestehenden."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Vorhandene Stacks lassen sich übernehmen. Nodvard Deck prüft vorher, ob die Compose-Datei lesbar ist, und nennt sonst den Grund. Am Server ändert sich dabei nichts."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Ein übernommener Stack bleibt vorerst in der Liste, auch wenn gerade keiner seiner Container existiert, und seine Datei lässt sich weiter ansehen."
+
+[[entries]]
+kind = "neu"
+text = "Docker: „Neuer Stack“ hat Vorlagen für Uptime Kuma, Vaultwarden, Nginx Proxy Manager und Gitea, jede mit fester Version und an einem echten Docker gestartet. Die Vorlage füllt Name und Datei und sagt, welche Ports sie belegt und was danach zu tun ist."
+
+[[entries]]
+kind = "neu"
+text = "Für Entwickler von Erweiterungen: Befehle an einen Server lassen sich jetzt als Liste übergeben. Nodvard Deck setzt die Befehlszeile dann selbst zusammen, ein Wert wird nie zu Shell-Syntax."
+
+[[entries]]
+kind = "neu"
+text = "Die Übersicht zeigt dezent, wenn ein Server neu eingerichtet werden sollte, damit Nodvard Shield und Server-Zustand dort mit engen Rechten laufen. Der Hinweis führt direkt zur Einrichtung und lässt sich je Server wegklicken."
+
+[[entries]]
+kind = "neu"
+text = "Server sind nach Art getrennt: physische Server, virtuelle Maschinen und LXC-Container stehen in eigenen Gruppen, jede mit einer Plakette wie „LXC auf pve1“."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Übersicht zählt die physischen Server und nennt VMs und LXC dahinter, etwa „3/3 + 4 VMs · 5 LXC“."
+
+[[entries]]
+kind = "behoben"
+text = "Eine in Proxmox ausgeschaltete VM oder ein ausgeschalteter LXC steht grau als „aus“ da und gilt nicht mehr als Störung."
+
+[[entries]]
+kind = "verbessert"
+text = "Richtet Nodvard Deck einen Server mit Passwort ein, schlägt der Datei-Wächter von Nodvard Shield deswegen keinen Alarm mehr. Er übernimmt nur genau das, was die Einrichtung gemeldet hat, und zeigt es im Verlauf mit der Uhrzeit. Alles andere meldet er weiter."
+
+[[entries]]
+kind = "neu"
+text = "Synology DSM zeigt jetzt auch die Speicherpools und die Sicherungen aus Hyper Backup mit letztem Lauf, Ergebnis und nächstem Lauf, dazu eine neue Kachel „Synology Hyper Backup“."
+
+[[entries]]
+kind = "neu"
+text = "Synology DSM meldet sich von selbst, wenn etwas nicht stimmt: ein Speicherpool, eine Festplatte, zu viel Wärme oder eine fehlgeschlagene oder überfällige Sicherung. Die Meldung steht unter „Braucht Aufmerksamkeit“, ein neues DSM-Update kommt als ruhiger Hinweis."
+
+[[entries]]
+kind = "verbessert"
+text = "Synology DSM läuft jetzt auch mit älteren und neueren DSM-Versionen und lässt sich auf das Zertifikat deiner Synology festlegen."
+
+[[entries]]
+kind = "neu"
+text = "Neues Modul „Synology DSM“ (Beta, nur lesend): zeigt Modell, DSM-Version, Auslastung, Volumes, Festplatten und ob ein Update bereitsteht, auf einer Seite und in zwei Kacheln."
+
+[[entries]]
+kind = "neu"
+text = "Synology DSM: Am besten legst du in DSM ein eigenes Konto ohne Zwei-Faktor für Nodvard Deck an; für Speicher und Updates muss es in der Gruppe „administrators“ sein. Das Passwort liegt im Tresor."
+
+[[entries]]
+kind = "neu"
+text = "Eine in Proxmox gelöschte VM oder ein gelöschter LXC steht nicht mehr stumm in der Liste: Nodvard Deck zeigt „nicht mehr vorhanden“ und bietet an, den Eintrag mit einem Klick zu entfernen."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Widgets auf der Übersicht sind so hoch wie ihr Inhalt: leere Widgets ganz klein, lange Listen enden sauber mit „+ x weitere“ statt abgeschnitten. Ein Klick auf den Kopf öffnet die Seite des Moduls, verschoben wird am kleinen Griff daneben."
+
+[[entries]]
+kind = "verbessert"
+text = "Widgets von Modulen, die noch nicht eingerichtet sind, verschwinden von der Übersicht; unter „Widgets verwalten“ stehen sie mit einem Link zum Einrichten."
+
+[[entries]]
+kind = "verbessert"
+text = "Ruhigere Widgets: Symbole grau, „alles gut“ nur als grüner Punkt, Knöpfe schlicht. Die Vorfälle-Kachel zeigt nur noch offene und vorgeschlagene Vorfälle."
+
+[[entries]]
+kind = "behoben"
+text = "Auf der Apps-Seite stehen erkannte Dienste nicht mehr zusätzlich unter „Vorschläge“. Du übernimmst sie direkt an ihrer Kachel mit „Als App übernehmen“."
+
+[[entries]]
+kind = "behoben"
+text = "Pi-hole, Nginx Proxy Manager, Nextcloud, Uptime Kuma, Jellyfin, Plex, qBittorrent, Home Assistant und Vaultwarden funktionieren auch, wenn die Adresse mit einer aus dem Browser kopierten Unterseite wie /dashboard eingetragen ist."
+
+[[entries]]
+kind = "sicherheit"
+text = "App-Kacheln, Suche, Widgets und Modulseiten öffnen nur noch echte Webadressen. Eine manipulierte Adresse aus einem Modul kann so kein Skript im Dashboard starten."
+
+[[entries]]
+kind = "verbessert"
+text = "Übernimmt ein Modul Tresor-Einträge eines alten Moduls und darf einige davon nicht lesen, nennt das Protokoll nur noch ihre Anzahl, nicht ihre Namen."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Reißt die Verbindung zum Server beim Lesen ab, sagt Nodvard Deck nicht mehr, eine Datei fehle, sondern nennt den Grund."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Beim Anlegen eines Stacks und beim Umzug von Portainer gilt eine abgerissene Verbindung nicht mehr als fehlender oder freier Ordner, und fehlende Rechte nennt Nodvard Deck schon beim Prüfen."
+
+[[entries]]
+kind = "sicherheit"
+text = "Docker: Ist eine .env-Datei kaputt, zitiert Docker Compose in seiner Fehlermeldung oft einen Teil der Datei, und das kann ein Passwort sein. Nodvard Deck nennt davon jetzt nur noch Datei und Grund, auch in Aktionen, Meldungen und Protokoll. Namen nicht gesetzter Variablen zeigt es aus demselben Grund nicht mehr."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Das Image-Update erkennt jetzt auch mit aktuellem Docker Compose, wenn Variablen ohne Wert sind, und bricht dann vor dem Update ab."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Wird ein Stack-Update abgebrochen, während Deck die Volumes sichert, bleibt kein leerer Sicherungsordner mehr auf dem Server liegen."
+
+[[entries]]
+kind = "behoben"
+text = "Synology DSM: Die Entwarnung zu einem Speicherpool oder Volume kommt erst, wenn es wieder „Normal“ ist, auch bei einem unbekannten Zustand. Während ein Pool repariert wird, meldet sein Volume nichts doppelt, und viele Hyper-Backup-Aufgaben halten die Seite nicht mehr auf."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield: Antwortet ein Server nach einer Zeitüberschreitung beim Verschieben in die Quarantäne nicht mehr, steht am Fund „ließ sich nicht feststellen“ statt „nicht angekommen“. Eine abgeschnittene Antwort des Datei-Wächters löst keinen falschen Alarm mehr aus."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield: Lassen die automatischen Updates einen Neustart aus, weil das letzte Update nicht sauber durchlief, steht das als Warnung da und unter „Braucht Aufmerksamkeit“, bis ein Update wieder klappt."
+
+[[entries]]
+kind = "behoben"
+text = "Bei halber Bildschirmbreite läuft keine Seite mehr seitlich aus dem Fenster; die Übersicht stapelt ihre Kacheln dann in zwei Spalten."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Terminal-Seite erklärt den Unterschied zwischen Terminal und Konsole und blendet die Knöpfe nicht erreichbarer Server ab."
+
+[[entries]]
+kind = "behoben"
+text = "Die Meldung zu einem veralteten oder veränderten Hilfsskript ist kürzer und wird nicht mehr abgeschnitten: Der Hinweis, den Server neu einzurichten, bleibt sichtbar."
+
+[[entries]]
+kind = "behoben"
+text = "Kann Nodvard Deck das Hilfsskript auf einem Server nicht lesen, sagt die Meldung das jetzt, statt es „verändert“ zu nennen."
+
+[[entries]]
+kind = "behoben"
+text = "Diagramme stürzen bei sehr vielen Werten nicht mehr ab und bleiben bei ungültigen Zahlen nicht mehr leer, die betroffenen Punkte werden einfach ausgelassen."
+
+[[entries]]
+kind = "behoben"
+text = "Neue Kennungen in der Datenbank sind echte UUIDs mit 36 Zeichen und passen damit in ihre Spalten, auch für eine spätere Unterstützung von PostgreSQL."
+
+[[entries]]
+kind = "behoben"
+text = "Automatische Updates starten einen Server nicht mehr neu, wenn das letzte Update dort fehlgeschlagen ist, abgebrochen wurde oder noch läuft, auch nicht in der Nacht danach. Die Zusammenfassung sagt dann, dass der Neustart ausgelassen wurde."
+
+[[entries]]
+kind = "behoben"
+text = "Dauert das Verschieben in die Quarantäne länger als fünf Minuten, sieht Deck danach noch bis zu 20 Minuten nach, ob die Datei angekommen ist, und trägt das am Fund ein. Bisher galt sie als nicht verschoben, und Wiederherstellen oder Löschen ging dann nicht mehr."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield: „Ist in Ordnung“ beim Datei-Wächter geht nicht mehr verloren, wenn zwei Bestätigungen oder eine Prüfung zur selben Zeit laufen."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield: Antwortet ein Server beim Bestätigen einer geänderten Datei nicht, bleibt das Ereignis offen und Deck sagt, warum. Bisher wurden die Dateien dabei aus dem bestätigten Stand entfernt, und die nächste Prüfung meldete sie fälschlich als neu angelegt."
+
+[[entries]]
+kind = "behoben"
+text = "Startet der Viren-Wächter in Echtzeit auf einem Server nicht, räumt Nodvard Shield dort wieder auf und merkt sich den Wächter als ausgeschaltet."
+
+[[entries]]
+kind = "behoben"
+text = "Läuft der Echtzeit-Wächter auf einem Server nicht mehr, meldet die Schnittstelle von Nodvard Shield ihn nicht mehr als „an“, sondern dass er seitdem im Minuten-Takt prüft."
+
+[[entries]]
+kind = "behoben"
+text = "Der Einrichtungsbefehl scheitert nicht mehr, wenn eine fremde sudo-Datei auf dem Server falsche Rechte hat. Er nennt dann die Datei und sagt, wie man sie repariert."
+
+[[entries]]
+kind = "verbessert"
+text = "„Verbindung prüfen“ zeigt einen Hinweis, wenn ein Hilfsskript fehlt, obwohl Root-Rechte eingerichtet sind. Fehlt ein Hilfsskript, nennt die Einrichtung jetzt den Grund."
+
+[[entries]]
+kind = "verbessert"
+text = "Warnungen über unbekannte Einträge in den Benutzer-Einstellungen des Servers erscheinen bei der Einrichtung nicht mehr."

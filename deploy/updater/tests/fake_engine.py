@@ -1,21 +1,21 @@
-"""Fake-Engine fuer die Tests des Helfers: ein echter HTTP-Server auf einem Unix-Socket.
+"""Fake-Engine für die Tests des Helfers: ein echter HTTP-Server auf einem Unix-Socket.
 
 Der echte Client (`nodvard_deck_updater.engine`) spricht mit ihm wie mit dem Docker-Dienst. Antworten kommen aus
 einer **Welt** (`World`: Container-, Image- und Netz-Inspects, `/version`, `Api-Version`), die aus einer
 aufgezeichneten Fixture (`fixtures/engines/*.json`, `tools/record_engine.py`) geladen oder im Test gebaut wird.
-Einzelne Antworten lassen sich ueberschreiben (`route`): Status, Body, Kopfzeilen, Ströme in Stuecken, Verzoegerung,
+Einzelne Antworten lassen sich überschreiben (`route`): Status, Body, Kopfzeilen, Ströme in Stücken, Verzögerung,
 abgebrochene Verbindung, rohe Bytes.
 
-Jede Anfrage wird aufgezeichnet (`requests`). Pfade ausserhalb der Allowlist des Helfers werden als Verstoss
-festgehalten (`violations`) und mit 599 beantwortet -- die Tests pruefen, dass es keine gibt.
+Jede Anfrage wird aufgezeichnet (`requests`). Pfade außerhalb der Allowlist des Helfers werden als Verstoß
+festgehalten (`violations`) und mit 599 beantwortet -- die Tests prüfen, dass es keine gibt.
 
-**Bindung auf der Seite der Engine:** Jeder aendernde Aufruf (alles ausser `GET`) muss zu dem Journal passen, das
-gerade gilt (`JournalGuard`, im Ablauf das Journal auf der Platte). Die Regeln sind hier unabhaengig vom Client
-nachgebaut, ebenso die Form der aendernden Aufrufe (`form_problem`: nie `v=1`, nie `force`, `/update` nur mit der
-Restart-Policy, ...); ein Verstoss -- auch ein aendernder Aufruf ohne Waechter -- landet ebenso in `violations` und
-wird mit 599 beantwortet. So faellt auch ein Ablauf auf, der an ein Journal bindet, das er noch nicht geschrieben hat.
+**Bindung auf der Seite der Engine:** Jeder ändernde Aufruf (alles außer `GET`) muss zu dem Journal passen, das
+gerade gilt (`JournalGuard`, im Ablauf das Journal auf der Platte). Die Regeln sind hier unabhängig vom Client
+nachgebaut, ebenso die Form der ändernden Aufrufe (`form_problem`: nie `v=1`, nie `force`, `/update` nur mit der
+Restart-Policy, ...); ein Verstoß -- auch ein ändernder Aufruf ohne Wächter -- landet ebenso in `violations` und
+wird mit 599 beantwortet. So fällt auch ein Ablauf auf, der an ein Journal bindet, das er noch nicht geschrieben hat.
 
-Der Socket liegt unter `/tmp/ndu...` (kurz: Unix-Sockets duerfen hoechstens 107 Byte lang sein).
+Der Socket liegt unter `/tmp/ndu...` (kurz: Unix-Sockets dürfen höchstens 107 Byte lang sein).
 """
 
 from __future__ import annotations
@@ -75,8 +75,8 @@ class Request:
 
 @dataclass
 class Response:
-    """Eine vorgegebene Antwort. `body`: JSON (wird kodiert) oder `bytes`; `chunks`: Strom in Stuecken
-    (chunked); `delay`: so lange vor der Antwort warten; `drop`: Verbindung nach den Kopfzeilen schliessen."""
+    """Eine vorgegebene Antwort. `body`: JSON (wird kodiert) oder `bytes`; `chunks`: Strom in Stücken
+    (chunked); `delay`: so lange vor der Antwort warten; `drop`: Verbindung nach den Kopfzeilen schließen."""
 
     status: int = 200
     body: Any = None
@@ -99,14 +99,14 @@ def _nothing() -> None:
 
 @dataclass
 class JournalGuard:
-    """Was die Fake-Engine fuer aendernde Aufrufe zulaesst: dieselben Regeln wie die Bindung des Clients, aber gegen
+    """Was die Fake-Engine für ändernde Aufrufe zulässt: dieselben Regeln wie die Bindung des Clients, aber gegen
     das Journal, das **jetzt** gilt (`journal`, als JSON wie in `journal.json`), den Slot (`slot`, wie in
     `state.json`) und die eigene ID des Helfers.
 
-    Was nur der Client weiss, sieht die Engine nicht: ob der Ablauf gerade zurueckbaut (hier gilt vor dem Commit, was
-    vorwaerts **oder** im Rueckbau erlaubt ist -- `test_engine_binding.py` prueft, dass das genau die Regeln des
+    Was nur der Client weiß, sieht die Engine nicht: ob der Ablauf gerade zurückbaut (hier gilt vor dem Commit, was
+    vorwärts **oder** im Rückbau erlaubt ist -- `test_engine_binding.py` prüft, dass das genau die Regeln des
     Clients sind) und welchen Digest er meint (hier: beim Update einer, den die Fake-Engine bei `/distribution`
-    geliefert hat, beim Rueckweg der des Slots)."""
+    geliefert hat, beim Rückweg der des Slots)."""
 
     own_id: str
     journal: Callable[[], dict[str, Any] | None]
@@ -116,7 +116,7 @@ class JournalGuard:
     @classmethod
     def fixed(cls, own_id: str, journal: dict[str, Any] | None, slot: dict[str, Any] | None = None, *,
               repository: str = REPOSITORY) -> JournalGuard:
-        """Ein fester Stand (fuer Tests ohne `/state`)."""
+        """Ein fester Stand (für Tests ohne `/state`)."""
         return cls(own_id=own_id, journal=lambda: journal, slot=lambda: slot, repository=repository)
 
     @classmethod
@@ -139,13 +139,13 @@ class JournalGuard:
         return cls(own_id=own_id, journal=lambda: read("journal.json"), slot=slot, repository=repository)
 
     def problem(self, request: Request, resolved: set[str]) -> str | None:
-        """Der Verstoss als Text, sonst `None`. `resolved`: die Digests, die `/distribution` geliefert hat.
+        """Der Verstoß als Text, sonst `None`. `resolved`: die Digests, die `/distribution` geliefert hat.
 
-        Vorwaerts geht jeder aendernde Aufruf nur in dem Schritt des Journals, der ihn ankuendigt (der neue Container
-        startet erst bei `started`, der alte stoppt erst bei `old_stopped`, ...). Was nur dem Rueckbau dient (der
-        alte Container startet wieder, der neue stoppt, das Tag geht zurueck), laesst die Fake-Engine vor dem Commit
-        in jedem Schritt zu -- ob der Ablauf gerade zurueckbaut, weiss nur der Client. Hat das Journal den Rueckbau
-        angekuendigt (`undo`), geht nur noch das: kein Aufruf vorwaerts mehr."""
+        Vorwärts geht jeder ändernde Aufruf nur in dem Schritt des Journals, der ihn ankündigt (der neue Container
+        startet erst bei `started`, der alte stoppt erst bei `old_stopped`, ...). Was nur dem Rückbau dient (der
+        alte Container startet wieder, der neue stoppt, das Tag geht zurück), lässt die Fake-Engine vor dem Commit
+        in jedem Schritt zu -- ob der Ablauf gerade zurückbaut, weiß nur der Client. Hat das Journal den Rückbau
+        angekündigt (`undo`), geht nur noch das: kein Aufruf vorwärts mehr."""
         kind, ref = _mutation(request.method, request.path)
         where = f"{request.method} {request.path}"
         journal, slot = self.journal(), self.slot()
@@ -159,7 +159,7 @@ class JournalGuard:
             return f"aendernd ohne Journal: {where}"
         old, new = journal["old"], journal["new"] or {}
         new_id, undoing = new.get("id"), journal.get("undo") is True
-        step = None if undoing else journal["step"]  # im angekuendigten Rueckbau passt kein Schritt vorwaerts
+        step = None if undoing else journal["step"]  # im angekündigten Rückbau passt kein Schritt vorwärts
         before_commit = journal["step"] != "committed"
         if kind == "pull":
             if journal["action"] == "rollback":
@@ -203,7 +203,7 @@ class JournalGuard:
 
 
 def _mutation(method: str, path: str) -> tuple[str | None, str | None]:
-    """Art des aendernden Aufrufs und die angesprochene ID, das Image bzw. die Version; `(None, None)` fuer Lesen."""
+    """Art des ändernden Aufrufs und die angesprochene ID, das Image bzw. die Version; `(None, None)` für Lesen."""
     if method == "GET":
         return None, None
     if (method, path) == ("POST", "/containers/create"):
@@ -241,10 +241,10 @@ _NEVER_CREATE_KEYS = frozenset({"entrypoint", "autoremove"})
 
 
 def form_problem(request: Request, repository: str = REPOSITORY) -> str | None:
-    """Die Form eines aendernden Aufrufs, unabhaengig vom Client nachgebaut: feste Abfrage (nie `v=1`, nie `force`,
+    """Die Form eines ändernden Aufrufs, unabhängig vom Client nachgebaut: feste Abfrage (nie `v=1`, nie `force`,
     kein `fromSrc`, kein `signal`), Pull nur des Repositorys nach Digest, `/update` nur mit genau der Restart-Policy,
     `connect` nur mit `Container` und `EndpointConfig`, `create` nie mit `Entrypoint` oder `AutoRemove` (in keiner
-    Schreibweise) und jeder Schluessel nur in einer Schreibweise. Gibt den Verstoss als Text zurueck, sonst `None`."""
+    Schreibweise) und jeder Schlüssel nur in einer Schreibweise. Gibt den Verstoß als Text zurück, sonst `None`."""
     kind, _ = _mutation(request.method, request.path)
     where = f"{request.method} {request.path}"
     if kind in (None, "unknown"):
@@ -303,7 +303,7 @@ def _floating(tag_text: str, repository: str) -> str | None:
 
 
 class World:
-    """Was die Engine weiss: Container (Inspect je ID), Images (je ID), Netze (je ID), `/version`, `Api-Version`."""
+    """Was die Engine weiß: Container (Inspect je ID), Images (je ID), Netze (je ID), `/version`, `Api-Version`."""
 
     def __init__(self, *, api: str = "1.54", version: dict[str, Any] | None = None,
                  containers: dict[str, dict[str, Any]] | None = None, images: dict[str, dict[str, Any]] | None = None,
@@ -328,7 +328,7 @@ class World:
         return World(api=self.api, version=copy.deepcopy(self.version), containers=copy.deepcopy(self.containers),
                      images=copy.deepcopy(self.images), networks=copy.deepcopy(self.networks))
 
-    # --- Hilfen fuer Tests ---------------------------------------------------
+    # --- Hilfen für Tests ---------------------------------------------------
 
     def by_service(self, service: str) -> dict[str, Any]:
         found = [c for c in self.containers.values()
@@ -433,7 +433,7 @@ class FakeEngine:
     # --- Steuerung -----------------------------------------------------------
 
     def route(self, method: str, pattern: str, handler: Handler | Response) -> None:
-        """Ueberschreibt die Antwort fuer `method` + `pattern` (regulaerer Ausdruck auf den Pfad ohne Version)."""
+        """Überschreibt die Antwort für `method` + `pattern` (regulärer Ausdruck auf den Pfad ohne Version)."""
         func = handler if callable(handler) else (lambda _req, r=handler: r)
         self._routes.insert(0, (method, re.compile(pattern), func))
 
@@ -464,7 +464,7 @@ class FakeEngine:
 
         self._server = _Server(self.path, Handler)
         self._thread = threading.Thread(target=self._server.serve_forever, kwargs={"poll_interval": 0.005},
-                                        daemon=True)  # kurz: `stop` wartet hoechstens so lange
+                                        daemon=True)  # kurz: `stop` wartet höchstens so lange
         self._thread.start()
         return self
 

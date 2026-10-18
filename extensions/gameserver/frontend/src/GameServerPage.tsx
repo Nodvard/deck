@@ -1,14 +1,7 @@
 /**
- * Gameserver-Seite: je Server
- * Join-Code gross mit Kopieren, Spieler online und zuletzt gesehen, Welt und Sicherungen,
- * Server-Einstellungen, Log -- und Start/Stop/Neustart/Welt sichern ueber das Gate.
- * Alles Spielspezifische kommt aus dem Profil des Servers (Backend `profiles/`); die
- * Seite zeigt nur, was das Profil liefert.
- *
- * Authentifizierung wie die uebrigen Extension-Seiten: `window.__nodvardDeck.getAccessToken()`.
- * Auto-Freigabe: ein Vorschlag (`status=proposed`) wird automatisch freigegeben, wenn
- * der Nutzer `actions.approve:<risk>` hat -- die Rueckfrage vor Stopp/Neustart ist dann
- * die menschliche Bestaetigung; sonst verweist die Seite auf "Aktionen".
+ * Gameserver-Seite: je Server Join-Code, Spieler, Welt und Sicherungen, Einstellungen, Log und Start/Stop/Neustart über
+ * das Gate. Alles Spielspezifische liefert das Profil des Servers (Backend `profiles/`). Wer `actions.approve:<risk>` hat,
+ * gibt Vorschläge gleich frei (die Rückfrage vor Stopp/Neustart ist die Bestätigung).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -59,8 +52,8 @@ interface Details extends Summary {
     error?: string | null;
   };
   config: { profile: string; values: Record<string, string> };
-  /** Nur im Frontend: Die Details dieses Servers liessen sich nicht laden (Grund). Dann fehlt auch
-   * die gespeicherte Einstellung, und "Einstellungen" bleibt zu -- sonst ueberschriebe Speichern
+  /** Nur im Frontend: Die Details dieses Servers ließen sich nicht laden (Grund). Dann fehlt auch
+   * die gespeicherte Einstellung, und „Einstellungen“ bleibt zu, sonst überschriebe Speichern
    * sie mit einem leeren Profil. */
   details_error?: string;
   /** Nur im Frontend: Neu laden ist gescheitert, angezeigt wird der letzte gute Stand (Einstellungen bleiben offen). */
@@ -75,7 +68,7 @@ interface Profile {
 
 type Action = "start" | "stop" | "restart" | "backup";
 
-/** Wie die uebrigen Seiten, nur "erledigt" statt "abgeschlossen". */
+/** Wie die übrigen Seiten, nur „erledigt“ statt „abgeschlossen“. */
 const ACTION_STATUS_LABEL: Record<string, string> = { ...SHARED_STATUS_LABEL, succeeded: "erledigt" };
 const ACTION_LABEL: Record<Action, string> = { start: "Starten", stop: "Stoppen", restart: "Neustarten", backup: "Welt sichern" };
 const TONE: Record<string, string> = {
@@ -402,7 +395,7 @@ export function GameServerPage(): JSX.Element {
           try {
             return await fetchJson<Details>(path);
           } catch (err) {
-            // Ein Server ohne Details reisst die anderen nicht mit. Gab es schon einen guten Stand, bleibt der stehen.
+            // Ein Server ohne Details reißt die anderen nicht mit. Gab es schon einen guten Stand, bleibt der stehen.
             const previous = serversRef.current?.find((p) => p.host_id === s.host_id && !p.details_error);
             if (previous) return { ...previous, ...s, stale_error: errorMessage(err) };
             return { ...s, details: {}, config: { profile: "", values: {} }, details_error: errorMessage(err) } as Details;

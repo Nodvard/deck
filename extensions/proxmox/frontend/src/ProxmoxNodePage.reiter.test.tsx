@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { ProxmoxNodePage } from "./ProxmoxNodePage";
 
-/** Proxmox-Seite neu geordnet: oben das Wichtigste als Kacheln, darunter Reiter statt einer langen Liste. */
+/** Proxmox-Seite: oben das Wichtigste als Kacheln, darunter Reiter statt einer langen Liste. */
 
 const GB = 1024 ** 3;
 const HOSTS = [
@@ -74,7 +74,7 @@ describe("Kacheln oben", () => {
     expect(screen.getByTestId("tile-storage")).toHaveTextContent("am vollsten: local-lvm (pve2)");
     expect(screen.getByRole("tab", { name: /^Updates/ })).toHaveTextContent("Updates4");
 
-    expect(screen.getByRole("tab", { name: "VMs & Container" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "VMs & LXC" })).toHaveAttribute("aria-selected", "true");
     fireEvent.click(screen.getByTestId("tile-storage"));
     expect(screen.getByRole("tab", { name: "Speicher" })).toHaveAttribute("aria-selected", "true");
     expect(window.location.search).toBe("?tab=storage");
@@ -198,25 +198,25 @@ describe("Reiter", () => {
     expect(calls.filter((c) => c.includes("/log?upid=")).length).toBe(1);
   });
 
-  it("unbekannter Reiter in der Adresse: „VMs & Container“", async () => {
+  it("unbekannter Reiter in der Adresse: „VMs & LXC“", async () => {
     window.history.replaceState({}, "", "/ext/proxmox/nodes?tab=gibtsnicht");
     render(<ProxmoxNodePage />);
-    expect(await screen.findByRole("tab", { name: "VMs & Container" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("tab", { name: "VMs & LXC" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("Tastatur: nur der offene Reiter ist ein Tab-Stopp, Pfeiltasten wechseln", async () => {
     render(<ProxmoxNodePage />);
-    const first = await screen.findByRole("tab", { name: "VMs & Container" });
+    const first = await screen.findByRole("tab", { name: "VMs & LXC" });
     expect(screen.getAllByRole("tab").map((t) => t.getAttribute("tabindex"))).toEqual(["0", "-1", "-1", "-1", "-1"]);
     fireEvent.keyDown(first, { key: "ArrowRight" });
     const storage = screen.getByRole("tab", { name: "Speicher" });
     expect(storage).toHaveAttribute("aria-selected", "true");
     expect(document.activeElement).toBe(storage);
     fireEvent.keyDown(storage, { key: "ArrowLeft" });
-    fireEvent.keyDown(screen.getByRole("tab", { name: "VMs & Container" }), { key: "ArrowLeft" });
+    fireEvent.keyDown(screen.getByRole("tab", { name: "VMs & LXC" }), { key: "ArrowLeft" });
     expect(screen.getByRole("tab", { name: "Verbindungen" })).toHaveAttribute("aria-selected", "true");
     fireEvent.keyDown(screen.getByRole("tab", { name: "Verbindungen" }), { key: "Home" });
-    expect(screen.getByRole("tab", { name: "VMs & Container" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "VMs & LXC" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("Reiter „Verbindungen“: Verwaltung gleich offen, „Mit Passwort verbinden“ öffnet das Formular dort", async () => {
@@ -232,7 +232,7 @@ describe("Reiter", () => {
     window.history.replaceState({}, "", "/ext/proxmox/nodes?tab=storage&host=h-node");
     render(<ProxmoxNodePage />);
     await screen.findAllByTestId(/^pool-/);
-    fireEvent.click(screen.getByRole("tab", { name: "VMs & Container" }));
+    fireEvent.click(screen.getByRole("tab", { name: "VMs & LXC" }));
     expect(window.location.search).toBe("?tab=guests");
     expect(document.getElementById("host-h-node")?.className).not.toContain("nodvard-deck-focus");
     expect(within(document.getElementById("host-h-node")!).getByRole("button", { name: "Knotendetails anzeigen" })).toBeInTheDocument();

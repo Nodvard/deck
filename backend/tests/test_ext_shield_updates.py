@@ -1382,7 +1382,7 @@ async def test_without_root_or_without_a_started_run_nothing_is_polled():
     # Nur die enge Regel und ein altes Hilfsskript: kein „keine root-Rechte“, sondern „neu einrichten“.
     ctx.launch_reply = f"{NO_ROOT}\n@@noroot-helper 3\n"
     ok, summary, _out, _rc = await center.execute(ctx._host, "all", command=up.upgrade_command("apt", "all"), trigger="manual")
-    assert not ok and summary.startswith("Das Hilfsskript auf diesem Server ist veraltet (Version 3,") and not _polls(ctx)
+    assert not ok and summary.startswith("Das Hilfsskript auf dem Server ist veraltet (Version 3,") and not _polls(ctx)
 
     ctx.launch_reply = "@@launch\nmkdir: cannot create directory '/var/lib/nexus-updates': Read-only file system\n@@nopid\n"
     ok, summary, _out, _rc = await center.execute(ctx._host, "all", command=up.upgrade_command("apt", "all"), trigger="manual")
@@ -1977,6 +1977,130 @@ async def test_the_sure_dashboard_host_reboots_after_the_unclear_ones():
 
     assert res == {"hosts": 3, "failed": 0}
     assert reboots == ["h3", "h2", "h1"]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("polls", "wait_limit", "tags"), [
+    ([POLL_RUNNING, POLL_FAILED], None, ["auto-update"]),
+    ([POLL_RUNNING, POLL_LOST, POLL_LOST], None, ["auto-update"]),
+    ([POLL_RUNNING], 0, ["auto-update"]),
+    ([POLL_RUNNING, POLL_FAILED], None, ["auto-update", "dashboard"]),
+], ids=["fehlgeschlagen", "verloren", "wartezeit", "dashboard-server"])
+async def test_auto_update_never_reboots_after_an_unclean_run(monkeypatch, polls, wait_limit, tags):
+    """Ein Neustart auf einen halben oder noch laufenden Lauf kann die Paketverwaltung beschädigen."""
+    import re
+
+    from nodvard_deck_ext_shield import patching
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.patching import UpdateCenter
+
+    if wait_limit is not None:
+        monkeypatch.setattr(patching, "UPGRADE_TIMEOUT", wait_limit)
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
+    ctx._host.tags = tags
+    ctx.polls = polls
+    run_orig = ctx.exec.run
+
+    async def run(host, command, timeout_s=60):
+        if "docker inspect" in command:
+            return SimpleNamespace(exit_code=0, stdout="@@other\n", stderr="", duration_ms=1)
+        res = await run_orig(host, command, timeout_s)
+        if "@@pm" in command:
+            res.stdout = re.sub(r"@@reboot\n\w+", "@@reboot\nyes\nlinux-image-6.1.0-26-amd64", res.stdout)
+        return res
+
+    ctx.exec.run = run
+    center = UpdateCenter(ctx, Defender(ctx))
+    res = await center.auto_update()
+    await asyncio.gather(*center._late)
+
+    assert res == {"hosts": 1, "failed": 1}
+    assert not any("shutdown" in c for c in ctx.commands)
+    [note] = ctx.notes
+    assert "Neustart nötig, aber ausgelassen, weil das letzte Update nicht sauber durchgelaufen ist" in note.body
+    await engine.dispose()
+
+
+def _pending_reboot(ctx):
+    import re
+
+    run_orig = ctx.exec.run
+
+    async def run(host, command, timeout_s=60):
+        if "docker inspect" in command:
+            return SimpleNamespace(exit_code=0, stdout="@@other\n", stderr="", duration_ms=1)
+        res = await run_orig(host, command, timeout_s)
+        if "@@pm" in command:
+            res.stdout = re.sub(r"@@reboot\n\w+", "@@reboot\nyes\nlinux-image-6.1.0-26-amd64", res.stdout)
+        return res
+
+    ctx.exec.run = run
+
+
+@pytest.mark.asyncio
+async def test_auto_update_reboots_a_server_with_nothing_to_do():
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.patching import UpdateCenter
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
+    ctx.after_upgrade = True
+    _pending_reboot(ctx)
+    assert await UpdateCenter(ctx, Defender(ctx)).auto_update() == {"hosts": 1, "failed": 0}
+    assert any("shutdown" in c for c in ctx.commands)
+    assert ctx.notes[0].body.startswith("- Raspberry Pi: aktuell\n  ↳ Neustart:")
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_after_a_failed_run_the_next_night_waits_for_a_clean_run_before_rebooting():
+    """Ein abgebrochener Lauf kann Pakete halb eingerichtet haben, ohne dass die nächste Prüfung noch etwas findet."""
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.patching import UpdateCenter
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
+    _pending_reboot(ctx)
+    center = UpdateCenter(ctx, Defender(ctx))
+    ctx.polls = [POLL_RUNNING, POLL_FAILED]
+    await center.auto_update()
+
+    ctx.after_upgrade = True  # die nächste Prüfung findet nichts mehr
+    ctx.notes.clear()
+    assert await center.auto_update() == {"hosts": 1, "failed": 0}
+    assert not any("shutdown" in c for c in ctx.commands)
+    assert "- Raspberry Pi: aktuell\n  ↳ Neustart nötig, aber ausgelassen" in ctx.notes[0].body
+    assert ctx.notes[0].severity.value == "warning"  # steht unter „Braucht Aufmerksamkeit“
+
+    ctx.polls = [POLL_RUNNING, POLL_DONE]
+    ok, *_ = await center.execute(ctx._host, "security", command=up.upgrade_command("apt", "security", ["openssl"]),
+                                  trigger="manual")
+    assert ok
+    await center.auto_update()
+    assert any("shutdown" in c for c in ctx.commands)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_server_never_rebooted_automatically_raises_no_warning_after_an_unclean_run():
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.patching import UpdateCenter
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True,
+                    "auto_reboot_skip_hosts": ["h1"]})
+    _pending_reboot(ctx)
+    center = UpdateCenter(ctx, Defender(ctx))
+    ctx.polls = [POLL_RUNNING, POLL_FAILED]
+    await center.auto_update()
+
+    ctx.after_upgrade = True
+    ctx.notes.clear()
+    await center.auto_update()
+    assert "für diesen Server aber ausgeschaltet" in ctx.notes[0].body and "ausgelassen" not in ctx.notes[0].body
+    assert ctx.notes[0].severity.value == "info"
     await engine.dispose()
 
 

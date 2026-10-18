@@ -74,6 +74,23 @@
     "204": null
    }
   },
+  "DELETE /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/adopt": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "DELETE /api/v1/ext/documents/documents/{document_id}": {
    "params": {
     "path:document_id": {
@@ -227,6 +244,23 @@
    },
    "responses": {
     "204": null
+   }
+  },
+  "DELETE /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/adopt": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
    }
   },
   "DELETE /api/v1/extensions/{ext_id}/secrets": {
@@ -852,6 +886,9 @@
          "name": {
           "type": "string"
          },
+         "service_id": {
+          "type": "null|string"
+         },
          "source": {
           "type": "string"
          },
@@ -1428,6 +1465,9 @@
     "query:follow": {
      "type": "boolean"
     },
+    "query:since": {
+     "type": "null|string"
+    },
     "query:tail": {
      "type": "integer"
     }
@@ -1439,6 +1479,23 @@
    }
   },
   "GET /api/v1/ext/docker/hosts": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts/{host_id}/containers/{container}/to-stack": {
+   "params": {
+    "path:container": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
    "responses": {
     "200": {
      "type": "object"
@@ -1484,6 +1541,168 @@
     }
    }
   },
+  "GET /api/v1/ext/docker/hosts/{host_id}/new-stack": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts/{host_id}/stacks": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts/{host_id}/stacks/usage": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/adopt": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/delete": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/file": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/from-portainer": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/history": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/history/{entry_id}": {
+   "params": {
+    "path:entry_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/update": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/docker/hosts/{host_id}/volumes": {
    "params": {
     "path:host_id": {
@@ -1498,6 +1717,13 @@
    }
   },
   "GET /api/v1/ext/docker/image-updates": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/stack-templates": {
    "responses": {
     "200": {
      "type": "object"
@@ -3786,6 +4012,9 @@
     "query:follow": {
      "type": "boolean"
     },
+    "query:since": {
+     "type": "null|string"
+    },
     "query:tail": {
      "type": "integer"
     }
@@ -3797,6 +4026,23 @@
    }
   },
   "GET /api/v1/ext/service-matrix/hosts": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/containers/{container}/to-stack": {
+   "params": {
+    "path:container": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
    "responses": {
     "200": {
      "type": "object"
@@ -3842,6 +4088,168 @@
     }
    }
   },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/new-stack": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/stacks": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/stacks/usage": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/adopt": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/delete": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/file": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/from-portainer": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/history": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/history/{entry_id}": {
+   "params": {
+    "path:entry_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/update": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/service-matrix/hosts/{host_id}/volumes": {
    "params": {
     "path:host_id": {
@@ -3856,6 +4264,13 @@
    }
   },
   "GET /api/v1/ext/service-matrix/image-updates": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/stack-templates": {
    "responses": {
     "200": {
      "type": "object"
@@ -4085,6 +4500,349 @@
    }
   },
   "GET /api/v1/ext/shield/widgets/incidents": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/synology/overview": {
+   "params": {
+    "query:refresh": {
+     "type": "boolean"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "backup_note": {
+       "fields": {
+        "kind": {
+         "type": "string"
+        },
+        "message": {
+         "type": "string"
+        }
+       },
+       "type": "null|object"
+      },
+      "backups": {
+       "items": {
+        "fields": {
+         "id": {
+          "type": "string"
+         },
+         "last_result": {
+          "type": "null|string"
+         },
+         "last_run": {
+          "type": "null|string"
+         },
+         "last_success": {
+          "type": "null|string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "next_run": {
+          "type": "null|string"
+         },
+         "overdue": {
+          "type": "boolean"
+         },
+         "problem": {
+          "type": "null|string"
+         },
+         "result_label": {
+          "type": "string"
+         },
+         "running": {
+          "type": "boolean"
+         },
+         "state": {
+          "type": "null|string"
+         },
+         "status_read": {
+          "type": "boolean"
+         },
+         "tone": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array|null"
+      },
+      "disks": {
+       "items": {
+        "fields": {
+         "id": {
+          "type": "string"
+         },
+         "kind": {
+          "type": "string"
+         },
+         "model": {
+          "type": "null|string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "smart_label": {
+          "type": "null|string"
+         },
+         "smart_status": {
+          "type": "null|string"
+         },
+         "smart_tone": {
+          "type": "string"
+         },
+         "status": {
+          "type": "string"
+         },
+         "status_label": {
+          "type": "string"
+         },
+         "temp": {
+          "type": "integer|null"
+         },
+         "temp_warn": {
+          "type": "boolean"
+         },
+         "tone": {
+          "type": "string"
+         },
+         "warning": {
+          "type": "null|string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array|null"
+      },
+      "load": {
+       "fields": {
+        "cpu_percent": {
+         "type": "null|number"
+        },
+        "ram_percent": {
+         "type": "null|number"
+        }
+       },
+       "type": "null|object"
+      },
+      "load_note": {
+       "fields": {
+        "kind": {
+         "type": "string"
+        },
+        "message": {
+         "type": "string"
+        }
+       },
+       "type": "null|object"
+      },
+      "message": {
+       "type": "null|string"
+      },
+      "pools": {
+       "items": {
+        "fields": {
+         "description": {
+          "type": "null|string"
+         },
+         "disks": {
+          "type": "integer|null"
+         },
+         "id": {
+          "type": "string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "raid": {
+          "type": "null|string"
+         },
+         "status": {
+          "type": "string"
+         },
+         "status_label": {
+          "type": "string"
+         },
+         "tone": {
+          "type": "string"
+         },
+         "total": {
+          "type": "integer|null"
+         },
+         "volumes": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array|null"
+      },
+      "problems": {
+       "items": {
+        "fields": {
+         "key": {
+          "type": "string"
+         },
+         "severity": {
+          "type": "string"
+         },
+         "subject": {
+          "type": "string"
+         },
+         "text": {
+          "type": "string"
+         },
+         "title": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "state": {
+       "type": "string"
+      },
+      "storage_note": {
+       "fields": {
+        "kind": {
+         "type": "string"
+        },
+        "message": {
+         "type": "string"
+        }
+       },
+       "type": "null|object"
+      },
+      "system": {
+       "fields": {
+        "clock": {
+         "type": "null|string"
+        },
+        "dsm_version": {
+         "type": "null|string"
+        },
+        "model": {
+         "type": "null|string"
+        },
+        "ram_mb": {
+         "type": "integer|null"
+        },
+        "temperature": {
+         "type": "integer|null"
+        },
+        "temperature_warn": {
+         "type": "boolean|null"
+        },
+        "uptime_seconds": {
+         "type": "integer|null"
+        }
+       },
+       "type": "null|object"
+      },
+      "system_note": {
+       "fields": {
+        "kind": {
+         "type": "string"
+        },
+        "message": {
+         "type": "string"
+        }
+       },
+       "type": "null|object"
+      },
+      "update": {
+       "fields": {
+        "available": {
+         "type": "boolean"
+        },
+        "version": {
+         "type": "null|string"
+        }
+       },
+       "type": "null|object"
+      },
+      "update_note": {
+       "fields": {
+        "kind": {
+         "type": "string"
+        },
+        "message": {
+         "type": "string"
+        }
+       },
+       "type": "null|object"
+      },
+      "url": {
+       "type": "null|string"
+      },
+      "volumes": {
+       "items": {
+        "fields": {
+         "fs_type": {
+          "type": "null|string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "percent": {
+          "type": "integer|null"
+         },
+         "pool_id": {
+          "type": "null|string"
+         },
+         "status": {
+          "type": "string"
+         },
+         "status_label": {
+          "type": "string"
+         },
+         "tone": {
+          "type": "string"
+         },
+         "total": {
+          "type": "integer|null"
+         },
+         "used": {
+          "type": "integer|null"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array|null"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/synology/widgets/backups": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/synology/widgets/status": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/synology/widgets/volumes": {
    "responses": {
     "200": {
      "type": "object"
@@ -4813,6 +5571,9 @@
        "address": {
         "type": "string"
        },
+       "category": {
+        "type": "string"
+       },
        "created_at": {
         "type": "string"
        },
@@ -4838,6 +5599,9 @@
        },
        "enabled": {
         "type": "boolean"
+       },
+       "gone_since": {
+        "type": "null|string"
        },
        "id": {
         "type": "string"
@@ -4865,6 +5629,12 @@
        },
        "os_family": {
         "type": "string"
+       },
+       "parent_label": {
+        "type": "null|string"
+       },
+       "power_state": {
+        "type": "null|string"
        },
        "provider_ext_id": {
         "type": "null|string"
@@ -4919,6 +5689,9 @@
       "address": {
        "type": "string"
       },
+      "category": {
+       "type": "string"
+      },
       "created_at": {
        "type": "string"
       },
@@ -4944,6 +5717,9 @@
       },
       "enabled": {
        "type": "boolean"
+      },
+      "gone_since": {
+       "type": "null|string"
       },
       "id": {
        "type": "string"
@@ -4971,6 +5747,12 @@
       },
       "os_family": {
        "type": "string"
+      },
+      "parent_label": {
+       "type": "null|string"
+      },
+      "power_state": {
+       "type": "null|string"
       },
       "provider_ext_id": {
        "type": "null|string"
@@ -5833,6 +6615,29 @@
       },
       "generated_at": {
        "type": "number"
+      },
+      "helper_hints": {
+       "items": {
+        "fields": {
+         "checked_at": {
+          "type": "string"
+         },
+         "host_id": {
+          "type": "string"
+         },
+         "host_name": {
+          "type": "string"
+         },
+         "modules": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
       },
       "pending_actions": {
        "type": "integer"
@@ -7218,6 +8023,9 @@
       "address": {
        "type": "string"
       },
+      "category": {
+       "type": "string"
+      },
       "created_at": {
        "type": "string"
       },
@@ -7243,6 +8051,9 @@
       },
       "enabled": {
        "type": "boolean"
+      },
+      "gone_since": {
+       "type": "null|string"
       },
       "id": {
        "type": "string"
@@ -7270,6 +8081,12 @@
       },
       "os_family": {
        "type": "string"
+      },
+      "parent_label": {
+       "type": "null|string"
+      },
+      "power_state": {
+       "type": "null|string"
       },
       "provider_ext_id": {
        "type": "null|string"
@@ -8629,6 +9446,322 @@
      "type": "string"
     },
     "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/hosts/{host_id}/containers/{container}/to-stack": {
+   "params": {
+    "path:container": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/hosts/{host_id}/new-stack": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "content": {
+       "required": true,
+       "type": "string"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      },
+      "start": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/hosts/{host_id}/new-stack/check": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "content": {
+       "required": true,
+       "type": "string"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/adopt": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "config_files": {
+       "items": {
+        "type": "string"
+       },
+       "required": true,
+       "type": "array"
+      },
+      "env_files": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "working_dir": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/check": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "content": {
+       "required": true,
+       "type": "string"
+      },
+      "path": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/delete": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "remove_folder": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/from-portainer": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/rollback": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "backup": {
+       "type": "boolean"
+      },
+      "services": {
+       "items": {
+        "type": "string"
+       },
+       "required": true,
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/save": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "apply": {
+       "type": "boolean"
+      },
+      "base_sha256": {
+       "required": true,
+       "type": "string"
+      },
+      "content": {
+       "required": true,
+       "type": "string"
+      },
+      "path": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/update": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "backup": {
+       "type": "boolean"
+      },
+      "services": {
+       "items": {
+        "type": "string"
+       },
+       "required": true,
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
      "required": true,
      "type": "string"
     }
@@ -10348,6 +11481,322 @@
     }
    }
   },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/containers/{container}/to-stack": {
+   "params": {
+    "path:container": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/new-stack": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "content": {
+       "required": true,
+       "type": "string"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      },
+      "start": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/new-stack/check": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "content": {
+       "required": true,
+       "type": "string"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/adopt": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "config_files": {
+       "items": {
+        "type": "string"
+       },
+       "required": true,
+       "type": "array"
+      },
+      "env_files": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "working_dir": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/check": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "content": {
+       "required": true,
+       "type": "string"
+      },
+      "path": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/delete": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "remove_folder": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/from-portainer": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/rollback": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "backup": {
+       "type": "boolean"
+      },
+      "services": {
+       "items": {
+        "type": "string"
+       },
+       "required": true,
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/save": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "apply": {
+       "type": "boolean"
+      },
+      "base_sha256": {
+       "required": true,
+       "type": "string"
+      },
+      "content": {
+       "required": true,
+       "type": "string"
+      },
+      "path": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/update": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "backup": {
+       "type": "boolean"
+      },
+      "services": {
+       "items": {
+        "type": "string"
+       },
+       "required": true,
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
   "POST /api/v1/ext/service-matrix/image-updates/check": {
    "params": {
     "query:force": {
@@ -11379,6 +12828,9 @@
       "address": {
        "type": "string"
       },
+      "category": {
+       "type": "string"
+      },
       "created_at": {
        "type": "string"
       },
@@ -11404,6 +12856,9 @@
       },
       "enabled": {
        "type": "boolean"
+      },
+      "gone_since": {
+       "type": "null|string"
       },
       "id": {
        "type": "string"
@@ -11431,6 +12886,12 @@
       },
       "os_family": {
        "type": "string"
+      },
+      "parent_label": {
+       "type": "null|string"
+      },
+      "power_state": {
+       "type": "null|string"
       },
       "provider_ext_id": {
        "type": "null|string"
@@ -12009,6 +13470,17 @@
      },
      "type": "object"
     }
+   }
+  },
+  "POST /api/v1/hosts/{host_id}/helper-hint/dismiss": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
    }
   },
   "POST /api/v1/hosts/{host_id}/known-hosts": {
@@ -13238,6 +14710,31 @@
     }
    }
   },
+  "PUT /api/v1/ext/docker/hosts/{host_id}/stack-root": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "path": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "PUT /api/v1/ext/gameserver/servers/{host_id}/config": {
    "body": {
     "content_type": "application/json",
@@ -13794,6 +15291,31 @@
      "required": true,
      "type": "string"
     },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "PUT /api/v1/ext/service-matrix/hosts/{host_id}/stack-root": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "path": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
     "path:host_id": {
      "required": true,
      "type": "string"

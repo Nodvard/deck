@@ -92,6 +92,12 @@ def _entity_row(connection: Connection, entity: EntityValue) -> dict[str, Any]:
     return _row(entity.name, subtitle, value_text(entity.state, entity.unit), "neutral")
 
 
+def nothing_set_up(overview: Overview) -> bool:
+    """Wahr, wenn keine einzige Verbindung eingerichtet ist (keine eingetragen oder alle ohne Zugangsdaten).
+    Eine Verbindung mit Fehler oder ohne Antwort zählt als eingerichtet; dann bleibt die Kachel mit dem Fehler sichtbar."""
+    return all(c.state == "not_configured" for c in overview.connections)
+
+
 def status_rows(overview: Overview) -> list[dict[str, Any]]:
     if not overview.connections:
         return [_row("Home Assistant nicht eingerichtet", SETTINGS_HINT, "nicht eingerichtet", "neutral")]

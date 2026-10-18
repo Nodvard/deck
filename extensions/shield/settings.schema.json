@@ -165,7 +165,7 @@
       "type": "boolean",
       "default": false,
       "title": "Danach automatisch neu starten, wenn nötig",
-      "description": "Nur wenn ein Update (z. B. ein neuer Kernel) einen Neustart verlangt. Vorsicht bei Servern, auf denen andere Dienste laufen."
+      "description": "Nur wenn ein Update (z. B. ein neuer Kernel) einen Neustart verlangt und das letzte Update sauber durchgelaufen ist. Vorsicht bei Servern, auf denen andere Dienste laufen."
     },
     "auto_reboot_skip_hosts": {
       "type": "array",

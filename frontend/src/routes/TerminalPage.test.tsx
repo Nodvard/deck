@@ -181,6 +181,45 @@ describe("TerminalPage", () => {
     expect(screen.getByRole("link", { name: "Konsole" }).getAttribute("href")).toBe("/console/h-vm");
   });
 
+  it("erklärt Terminal und Konsole und dimmt die Knöpfe eines nicht erreichbaren Servers", async () => {
+    const hosts = HOSTS.map((h) => ((h as { id: string }).id === "h-vm" ? { ...(h as object), status: "down" } : h));
+    vi.stubGlobal("fetch", mockFetch([], undefined, hosts));
+    renderPage();
+    await screen.findByText("Raspberry Pi");
+    expect(screen.getByTestId("terminal-explain")).toHaveTextContent("Terminal: SSH mit dem Zugang von Nodvard Deck.");
+    expect(screen.getByTestId("terminal-explain")).toHaveTextContent("Konsole: Bildschirm des Gasts über Proxmox, geht auch ohne SSH.");
+    const [pi, vm] = screen.getAllByRole("button", { name: "Terminal öffnen" });
+    expect(pi).not.toHaveClass("opacity-50");
+    expect(vm).toHaveClass("opacity-50");
+    expect(vm).toHaveAttribute("title", expect.stringContaining("nicht erreichbar"));
+    expect(screen.getByRole("link", { name: "Konsole" })).toHaveClass("opacity-50");
+  });
+
+  it("ein laut Proxmox ausgeschalteter Gast: gedimmt mit „Ausgeschaltet.“, Plakette und eigene Gruppe", async () => {
+    const hosts = HOSTS.map((h) => ((h as { id: string }).id === "h-vm"
+      ? { ...(h as object), status: "down", category: "vm", parent_label: "pve1", power_state: "stopped" } : h));
+    vi.stubGlobal("fetch", mockFetch([], undefined, hosts));
+    renderPage();
+    await screen.findByText("Raspberry Pi");
+    const [, vm] = screen.getAllByRole("button", { name: "Terminal öffnen" });
+    expect(vm).toHaveClass("opacity-50");
+    expect(vm).toHaveAttribute("title", "Ausgeschaltet. SSH mit dem Zugang von Nodvard Deck");
+    expect(screen.getByTestId("group-vm")).toHaveTextContent("Virtuelle Maschinen");
+    expect(screen.getByText("VM auf pve1")).toBeInTheDocument();
+  });
+
+  it("ein in Proxmox gelöschter Gast: gedimmt mit „Nicht mehr vorhanden.“, graue Ampel", async () => {
+    const hosts = HOSTS.map((h) => ((h as { id: string }).id === "h-vm"
+      ? { ...(h as object), status: "down", category: "vm", parent_label: "pve1", gone_since: "2026-10-16T08:00:00Z" } : h));
+    vi.stubGlobal("fetch", mockFetch([], undefined, hosts));
+    renderPage();
+    await screen.findByText("Raspberry Pi");
+    const [, vm] = screen.getAllByRole("button", { name: "Terminal öffnen" });
+    expect(vm).toHaveClass("opacity-50");
+    expect(vm).toHaveAttribute("title", "Nicht mehr vorhanden. SSH mit dem Zugang von Nodvard Deck");
+    expect(screen.getByRole("img", { name: "nicht mehr vorhanden" })).toBeInTheDocument();
+  });
+
   it("oeffnet eine echte Sitzung: Ticket mit Terminalgroesse, Bytes hin und zurueck, Resize als Steuerframe", async () => {
     const sessions: unknown[] = [];
     vi.stubGlobal("fetch", mockFetch(sessions));

@@ -42,6 +42,7 @@ import { useCallback, useEffect, useRef, useState, type DragEvent } from "react"
 import { useSearchParams } from "react-router-dom";
 
 import { osLabel, StatusDot } from "../../../extensions/_shared/frontend/src/HostPicker";
+import { isGone, isSwitchedOff } from "../../../extensions/_shared/frontend/src/hostKind";
 import { ButtonLink, EmptyState } from "../components/EmptyState";
 import { Icon } from "../components/Icon";
 import { FilePreview, previewKind, type PreviewKind } from "../components/FilePreview";
@@ -79,7 +80,7 @@ function isAbsolutePath(path: string): boolean {
 }
 
 /** Was die Leiste von einem Server zeigt: Status-Ampel und Betriebssystem (wie die Server-Kacheln). */
-interface SourceHost { status: string; os_family: string }
+interface SourceHost { status: string; os_family: string; power_state?: string | null; gone_since?: string | null }
 
 interface FileEntryOut {
   name: string;
@@ -218,7 +219,7 @@ export function FilesPage(): JSX.Element {
         if (list.some((s) => s.host_id)) {
           api
             .get<({ id: string } & SourceHost)[]>("/hosts")
-            .then((hosts) => setSourceHosts(Object.fromEntries(hosts.map((h) => [h.id, { status: h.status, os_family: h.os_family }]))))
+            .then((hosts) => setSourceHosts(Object.fromEntries(hosts.map((h) => [h.id, { status: h.status, os_family: h.os_family, power_state: h.power_state, gone_since: h.gone_since }]))))
             .catch(() => undefined);
         }
       })
@@ -805,12 +806,13 @@ export function FilesPage(): JSX.Element {
 /** Name der Quelle; bei einer Server-Quelle davor die Status-Ampel und dahinter das Betriebssystem. */
 function SourceLabel({ source, host }: { source: FileSourceOut; host: SourceHost | undefined }) {
   if (!host) return <>{source.label}</>;
-  const os = osLabel(host.os_family);
+  const off = isGone(host) ? "nicht mehr vorhanden" : isSwitchedOff(host) ? "aus" : "";
+  const detail = [osLabel(host.os_family), off].filter(Boolean).join(" · ");
   return (
     <span className="flex items-center gap-2" data-testid={`source-host-${source.source_id}`}>
-      <StatusDot status={host.status} />
+      <StatusDot status={host.status} powerState={host.power_state} goneSince={host.gone_since} />
       <span className="min-w-0 truncate">{source.label}</span>
-      {os && <span className="ml-auto flex-none text-xs opacity-50">{os}</span>}
+      {detail && <span className="ml-auto flex-none text-xs opacity-50">{detail}</span>}
     </span>
   );
 }

@@ -31,6 +31,9 @@ CLAMD_CONF_NAME = "clamav/clamd.conf"
 LOG_PATH = "/var/log/clamav/nodvard-onaccess.log"
 STATE_KIND = "realtime"
 """Art der Merkzeile je Server (`patching.save_baseline`): ob der Wächter dort in Echtzeit läuft."""
+DOWN_KIND = "realtime_down"
+"""Art der Merkzeile je Server: seit wann der Wächter-Lauf auf den Minuten-Takt zurückgeschaltet hat (`since`), zu welchem
+Einschalten (`changed_at` aus `STATE_KIND`). Eigene Zeile, damit der Lauf den Schalter nie überschreibt."""
 POSITION_KIND = "realtime_log"
 """Art der Merkzeile je Server: bis zu welcher Zeile das Protokoll des Wächters gelesen ist."""
 LOG_BATCH = 2000
@@ -63,6 +66,7 @@ READINESS_COMMAND = (
     "echo @@clamonacc; (command -v clamonacc 2>/dev/null || echo none); "
     # Kein `|| echo`: Bei einem gestoppten Dienst gibt systemctl "inactive" mit rc 3 aus.
     "echo @@clamd_state; (systemctl is-active clamav-daemon 2>/dev/null; true); "
+    "echo @@clamonacc_state; (systemctl is-active clamav-clamonacc 2>/dev/null; true); "
     # Das Hilfsskript zuerst: Mit der engen sudo-Regel wäre `sudo -n true` ein abgelehnter Aufruf im Protokoll. Es zählt
     # nur, wenn es genau das mitgelieferte ist (`helper_matches`, ohne es auszuführen).
     "echo @@root; if [ \"$(id -u)\" = 0 ]; then echo root; "
@@ -89,6 +93,8 @@ class RealtimeReadiness:
     clamd_installed: bool = False
     clamonacc_installed: bool = False
     clamd_active: bool | None = None
+    clamonacc_active: bool | None = None
+    """Läuft clamonacc gerade (`False` auch beim Neustart in Schleife, „activating“)? `None`: unbekannt."""
     root: str | None = None
     apt: bool | None = None
 
@@ -137,6 +143,7 @@ def parse_readiness(output: str) -> RealtimeReadiness:
     virt = _first_line(sections.get("virt", ""))
     mem = _memory_mb(sections.get("mem", ""))
     state = _first_line(sections.get("clamd_state", ""))
+    onacc = _first_line(sections.get("clamonacc_state", ""))
     root = _first_line(sections.get("root", ""))
     apt = _first_line(sections.get("apt", ""))
     r = RealtimeReadiness(
@@ -148,6 +155,7 @@ def parse_readiness(output: str) -> RealtimeReadiness:
         clamd_installed=_found(sections.get("clamd", "")),
         clamonacc_installed=_found(sections.get("clamonacc", "")),
         clamd_active=True if state == "active" else False if state in ("inactive", "failed") else None,
+        clamonacc_active=True if onacc == "active" else False if onacc in ("inactive", "failed", "activating") else None,
         root=root if root in ("root", "helper", "sudo", "none") else None,
         apt=True if apt == "yes" else False if apt == "no" else None,
     )
@@ -227,7 +235,7 @@ def enable_command(
     systemd_dir: str = "/run/systemd/system", wait_s: int = 120, settle_s: int = SETTLE_S, log_path: str = LOG_PATH,
 ) -> str:
     """Shell-Befehl (als root), der clamonacc für die Ordner einrichtet und startet; installiert nichts. Gelungen ist es
-    erst, wenn clamonacc nach `settle_s` Sekunden noch mit derselben PID läuft.
+    erst, wenn clamonacc nach `settle_s` Sekunden noch mit derselben PID läuft. Sonst räumt er wie `disable_command` auf.
 
     Dasselbe macht `shield-root realtime-on`; `etc`, `systemd_dir`, `wait_s`, `settle_s` und `log_path` ändern nur die
     Tests."""
@@ -272,9 +280,11 @@ def enable_command(
         "systemctl daemon-reload",
         "systemctl enable --now clamav-daemon",
         "systemctl enable clamav-clamonacc",
+        # Nach dem Journal wie `disable_command` zurück: kein halb eingerichteter Dienst, der sich immer neu startet.
+        "undo() {", *_undo_lines(), "}",
         (
             f"fail() {{ echo {q(REALTIME_NOT_STARTED)}; "
-            "journalctl -u clamav-clamonacc -n 20 --no-pager 2>&1 || true; exit 4; }"
+            "journalctl -u clamav-clamonacc -n 20 --no-pager 2>&1 || true; undo; exit 4; }"
         ),
         "systemctl restart clamav-clamonacc || fail",
         "n=0",
@@ -296,9 +306,12 @@ def disable_command(*, etc: str = "/etc") -> str:
     """Shell-Befehl (als root), der unsere Dateien entfernt und clamd in den Stand von vorher zurückversetzt.
 
     Dasselbe macht `shield-root realtime-off`."""
-    return "\n".join([
-        'PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"',
-        *_files(etc),
+    return "\n".join(['PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"', *_files(etc), *_undo_lines(), f"echo {OFF_MARK}"])
+
+
+def _undo_lines() -> list[str]:
+    """Unsere Dateien weg, clamonacc aus, clamd wie vor dem ersten Einschalten; jede Zeile scheitert nie (`set -e`)."""
+    return [
         "systemctl disable --now clamav-clamonacc || true",
         'rm -f "$dropin" "$conf" "$watch_file" "$exclude_file"',
         'rmdir "${dropin%/*}" 2>/dev/null || true',
@@ -307,8 +320,7 @@ def disable_command(*, etc: str = "/etc") -> str:
         'if grep -qx clamd_active=no "$state" 2>/dev/null; then systemctl stop clamav-daemon || true; fi',
         'if grep -qx clamd_enabled=no "$state" 2>/dev/null; then systemctl disable clamav-daemon || true; fi',
         'rm -f "$state"',
-        f"echo {OFF_MARK}",
-    ])
+    ]
 
 
 def helper_args(enable: bool, watch: list[str], exclude: list[str], *, max_filesize_mb: int) -> list[str]:

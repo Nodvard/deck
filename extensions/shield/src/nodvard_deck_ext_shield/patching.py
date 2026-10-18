@@ -166,6 +166,12 @@ def _reboot_skip_names(settings: dict[str, Any]) -> set[str]:
     return {s.strip().lower() for s in settings.get("auto_reboot_skip_hosts") or [] if isinstance(s, str) and s.strip()}
 
 
+def auto_update_hosts(hosts: list[Host], settings: dict[str, Any]) -> list[Host]:
+    """Die Server, die die automatischen Updates bearbeiten: mit Markierung nur die markierten."""
+    tag = (settings.get("auto_updates_host_tag") or "").strip()
+    return [h for h in hosts if tag in (h.tags or [])] if tag else list(hosts)
+
+
 def no_auto_reboot(host: Any, settings: dict[str, Any]) -> bool:
     """Steht der Server in „Diese Server nie automatisch neu starten“ (Name, Anzeigename oder Kennung)?
 
@@ -200,6 +206,22 @@ async def load_baselines(ctx: ExtensionContext, kind: str) -> dict[str, dict[str
     async with ctx.db.session() as session:
         rows = (await session.execute(select(BaselineRecord).where(BaselineRecord.kind == kind))).scalars()
         return {r.host_id: dict(r.data or {}) for r in rows}
+
+
+async def last_run_status(ctx: ExtensionContext, host_id: str) -> str | None:
+    """Zustand des jüngsten Laufs auf dem Server ohne Neustarts (`running`, `ok`, `error`); ohne Lauf `None`."""
+    async with ctx.db.session() as session:
+        return (await session.execute(
+            select(UpdateRunRecord.status)
+            .where(UpdateRunRecord.host_id == host_id, UpdateRunRecord.mode != "reboot")
+            .order_by(UpdateRunRecord.started_at.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+
+
+async def last_run_ok(ctx: ExtensionContext, host_id: str) -> bool:
+    """Ob der jüngste Lauf sauber fertig wurde; ohne Lauf `True`, ein noch laufender zählt nicht als sauber."""
+    return await last_run_status(ctx, host_id) in (None, "ok")
 
 
 async def load_baseline(ctx: ExtensionContext, host_id: str, kind: str) -> dict[str, Any] | None:
@@ -794,10 +816,7 @@ class UpdateCenter:
     async def auto_update(self) -> dict[str, Any]:
         settings = await self._ctx.settings.get()
         mode = settings.get("auto_updates_mode") or "security"
-        tag = (settings.get("auto_updates_host_tag") or "").strip()
-        hosts = await self._defender.target_hosts()
-        if tag:
-            hosts = [h for h in hosts if tag in (h.tags or [])]
+        hosts = auto_update_hosts(await self._defender.target_hosts(), settings)
         # Der Server mit dem Dashboard kommt zuletzt, sein Neustart erst nach der Zusammenfassung: Sonst bräche die
         # Schleife bei einem Neustart mittendrin ab (oder ein Docker-Update beendete den Container), die übrigen
         # Server bekämen nichts, und die Zusammenfassung käme nie. Als gewöhnlicher Server gilt nur, wo Docker antwortet
@@ -812,6 +831,7 @@ class UpdateCenter:
         lines: list[str] = []
         failed = 0
         skipped = 0
+        held = 0
         reboot_last: list[Host] = []
         for host in hosts:  # nacheinander: nie alle Server gleichzeitig mitten im Update
             name = host.display_name or host.name
@@ -824,6 +844,7 @@ class UpdateCenter:
                 failed += 1
                 continue
             todo = st.get("security_count") if mode == "security" else st.get("count")
+            update_ok = True
             if todo:
                 try:
                     # Automatische Läufe nehmen nie dist-upgrade: das darf Pakete ersetzen oder entfernen
@@ -836,14 +857,24 @@ class UpdateCenter:
                     continue
                 # Die Meldung nennt nur `public`: eine Zeile vom Server steht nicht in der Push-Nachricht.
                 run, _out, _rc = await self._execute(host, mode, command=command, trigger="schedule", plan=plan)
+                update_ok = run.ok
                 failed += 0 if run.ok else 1
                 lines.append(f"- {name}: {run.public}" if run.ok else f"- {name}: FEHLGESCHLAGEN – {run.public}")
                 st = await load_baseline(self._ctx, host.id, "updates") or st
             else:
                 lines.append(f"- {name}: aktuell")
+                # Ein abgebrochener Lauf von gestern kann Pakete halb eingerichtet haben, ohne dass die Prüfung noch
+                # etwas zu tun findet.
+                update_ok = await last_run_ok(self._ctx, host.id)
             if settings.get("auto_reboot", False) and st.get("reboot_required") and not st.get("reboot_pending_since"):
+                # Ein gescheiterter, verlorener oder noch laufender Lauf kann die Paketverwaltung halb fertig
+                # hinterlassen; ein Neustart darauf macht es schlimmer.
                 if no_auto_reboot(host, settings):
                     lines.append("  ↳ Neustart nötig, für diesen Server aber ausgeschaltet – bitte selbst neu starten.")
+                elif not update_ok:
+                    held += 1
+                    lines.append("  ↳ Neustart nötig, aber ausgelassen, weil das letzte Update nicht sauber durchgelaufen ist "
+                                 "oder noch läuft – bitte erst in der Update-Zentrale nachsehen und dann selbst neu starten.")
                 elif host.id in own_ids:
                     reboot_last.append(host)
                     lines.append(
@@ -856,7 +887,7 @@ class UpdateCenter:
         if lines:
             title = f"Automatische Updates: {len(hosts) - skipped} Server" + (f", {failed} Fehler" if failed else "")
             await self._ctx.notify.send(Notification(
-                title=title, body="\n".join(lines), severity=Severity.WARNING if failed else Severity.INFO,
+                title=title, body="\n".join(lines), severity=Severity.WARNING if failed or held else Severity.INFO,
                 payload={"path": f"{SOC_PATH}?tab=updates", "tags": ["package"], **host_scope(h.id for h in hosts)},
             ))
         for host in reboot_last:

@@ -13,6 +13,7 @@
 #                                          geprueft in $QDIR/.pruefen), Ursprung und Rechte in $QDIR/.herkunft/<name>
 #   restore <name>                         an den Ort aus $QDIR/.herkunft, sonst wie antivirus.restore_command (8)
 #   delete <name>                          antivirus.delete_command (3)
+#   quarantine-state <name>                antivirus.quarantine_state_command (14); nur lesend
 #   ban|unban <ip> <jail>                  intrusion.ban_command (3)
 #   install <paket>                        antivirus.INSTALL_COMMANDS[<paket>] (3)
 #   reboot                                 updates.REBOOT_COMMAND (4)
@@ -41,7 +42,7 @@ IFS='
 '
 umask 022
 
-HELPER_VERSION=12
+HELPER_VERSION=14
 QDIR=/var/lib/nexus-quarantine
 JOBDIR=/var/lib/nexus-updates
 SELF=/usr/local/lib/nodvard-deck/shield-root
@@ -375,6 +376,28 @@ restore() {
     esac
     rm -f "$origin"
     echo ok
+}
+
+# Nach einer Zeitueberschreitung beim Verschieben: liegt die Datei in der Quarantaene, noch im Pruefordner oder nicht da?
+quarantine_state() {
+    [ "$#" -eq 1 ] || die "quarantine-state erwartet einen Namen"
+    check_qname "$1"
+    set +e
+    if [ -f "$QDIR/$1" ] && [ ! -L "$QDIR/$1" ]; then
+        echo "@@state=quarantined"
+        M=
+        # Nur eine echte Datei: Ein Link oder eine FIFO in der Ablage wird nicht gelesen.
+        if [ -f "$QDIR/.herkunft/$1" ] && [ ! -L "$QDIR/.herkunft/$1" ]; then
+            M=$(sed -n 1p "$QDIR/.herkunft/$1" 2>/dev/null)
+        fi
+        case $M in
+            [0-7][0-7][0-7] | [0-7][0-7][0-7][0-7]) echo "@@mode=$M" ;;
+        esac
+    elif [ -e "$QDIR/.pruefen/$1" ] || [ -L "$QDIR/.pruefen/$1" ]; then
+        echo "@@state=checking"
+    else
+        echo "@@state=absent"
+    fi
 }
 
 delete() {
@@ -1163,14 +1186,16 @@ realtime_on() {
     echo @@realtime-on
 }
 
+# Nach dem Journal wie realtime_off zurueck: kein halb eingerichteter Dienst, der sich immer wieder neu startet.
 realtime_fail() {
     echo @@msg=realtime_not_started
     journalctl -u clamav-clamonacc -n 20 --no-pager 2>&1 || true
+    rt_undo
     exit 4
 }
 
 # Wie realtime.disable_command; clamd wie vor dem ersten Einschalten (ohne Merkdatei bleibt er).
-realtime_off() {
+rt_undo() {
     set +e
     systemctl disable --now clamav-clamonacc
     rm -f "$RT_DROPIN" "$RT_CONF" "$RT_WATCH" "$RT_EXCLUDE"
@@ -1179,6 +1204,10 @@ realtime_off() {
     if grep -qx clamd_active=no "$RT_STATE" 2>/dev/null; then systemctl stop clamav-daemon; fi
     if grep -qx clamd_enabled=no "$RT_STATE" 2>/dev/null; then systemctl disable clamav-daemon; fi
     rm -f "$RT_STATE"
+}
+
+realtime_off() {
+    rt_undo
     echo @@realtime-off
 }
 
@@ -1245,6 +1274,9 @@ case $command in
         ;;
     delete)
         delete "$@"
+        ;;
+    quarantine-state)
+        quarantine_state "$@"
         ;;
     ban)
         fail2ban_set banip "$@"

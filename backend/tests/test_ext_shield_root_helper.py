@@ -9,6 +9,7 @@ bisherige Befehl: Das prüfen die Gleichlauf-Tests, die beide in derselben Umgeb
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -110,8 +111,9 @@ def test_the_command_tries_the_helper_first(monkeypatch):
         "else sh -c 'echo alt'; fi"
     )
     assert av.via_helper(["x"], "echo alt", version=2).endswith(
-        f"else echo '@@noroot'; if [ -e {path} ] && ! {{ {matches}; }}; then "
-        f"echo \"@@noroot-helper $(sed -n 's/^HELPER_VERSION=//p' {path} 2>/dev/null | head -n 1)\"; fi; exit 126; fi"
+        f"else echo '@@noroot'; if [ -e {path} ] && ! {{ {matches}; }}; then if [ -r {path} ]; then "
+        f"echo \"@@noroot-helper $(sed -n 's/^HELPER_VERSION=//p' {path} 2>/dev/null | head -n 1)\"; "
+        "else echo '@@noroot-helper-unreadable'; fi; fi; exit 126; fi"
     )
 
 
@@ -219,9 +221,9 @@ def test_without_any_root_a_read_runs_as_the_user(tmp_path):
 @pytest.mark.parametrize(
     ("helper_version", "extra", "what"),
     [
-        (1, "", "veraltet (Version 1, dieses Dashboard bringt Version 2 mit)"),
-        (2, "# geaendert", "verändert (Version 2, aber mit anderem Inhalt)"),
-        (3, "", "verändert oder neuer als dieses Dashboard"),
+        (1, "", "ist veraltet (Version 1, Dashboard hat 2)"),
+        (2, "# geaendert", "ist verändert (Version 2, anderer Inhalt)"),
+        (3, "", "ist verändert oder neuer als dieses Dashboard"),
     ],
     ids=["alt", "veraendert", "neuer"],
 )
@@ -233,17 +235,49 @@ def test_with_only_a_foreign_helper_the_message_asks_to_set_up_again(tmp_path, h
     done = _sh(av.via_helper(["refresh-packages"], "echo alt", version=2, required=True), bin_dir)
     assert done.returncode == 126 and done.stdout.split()[0] == av.NO_ROOT
     message = av.no_root_message(done.stdout)
-    assert message.startswith(f"Das Hilfsskript auf diesem Server ist {what}, darum ruft Nodvard Deck es nicht auf")
-    assert "Einrichtungsbefehl" in message
+    assert message.startswith(f"Das Hilfsskript auf dem Server {what}, darum fehlen die root-Rechte.")
+    assert message.endswith("(Einrichtungsbefehl mit „Root-Rechte ohne Passwort“).")
+    assert not any(av.HELPER in c for c in log.read_text().splitlines())
+
+
+@needs_sh
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root darf jede Datei lesen")
+def test_an_unreadable_helper_gets_its_own_marker_and_message(tmp_path):
+    """Nur die enge Regel und ein Skript, das der Benutzer nicht lesen kann: Die Prüfsumme lässt sich nicht bilden, also
+    weder „veraltet“ noch „verändert“, sondern eine eigene Kennung und ein eigener Satz."""
+    av = _av()
+    bin_dir, log = _routing_world(tmp_path, helper_version=2, full_rule=False)
+    Path(av.HELPER).chmod(0)
+    done = _sh(av.via_helper(["refresh-packages"], "echo alt", version=2, required=True), bin_dir)
+    assert done.returncode == 126
+    assert done.stdout.splitlines() == [av.NO_ROOT, av.NO_ROOT_HELPER_UNREADABLE]
+    assert av.no_root_message(done.stdout).startswith("Das Hilfsskript auf dem Server lässt sich nicht lesen,")
     assert not any(av.HELPER in c for c in log.read_text().splitlines())
 
 
 def test_the_message_believes_only_a_plain_version_number():
     av = _av()
-    unknown = "Das Hilfsskript auf diesem Server ist verändert oder neuer als dieses Dashboard"
+    unknown = "Das Hilfsskript auf dem Server ist verändert oder neuer als dieses Dashboard"
     for line in ("@@noroot-helper 8; rm -rf /", "@@noroot-helper ", "@@noroot-helper", "@@noroot-helper 99999"):
         assert av.no_root_message(f"@@noroot\n{line}\n").startswith(unknown), line
     assert av.no_root_message("@@noroot\n") == av.NO_ROOT_MESSAGE
+
+
+def test_the_unreadable_marker_counts_only_as_a_line_of_its_own():
+    av = _av()
+    unreadable = av.no_root_message(f"{av.NO_ROOT}\n{av.NO_ROOT_HELPER_UNREADABLE}\n")
+    assert unreadable.startswith("Das Hilfsskript auf dem Server lässt sich nicht lesen, darum fehlen die root-Rechte.")
+    # Im Text einer anderen Zeile zählt die Kennung nicht, und sie ist kein `@@noroot-helper <Version>`.
+    assert av.no_root_message(f"{av.NO_ROOT}\nx {av.NO_ROOT_HELPER_UNREADABLE}\n") == av.NO_ROOT_MESSAGE
+
+
+@pytest.mark.parametrize("line", ["@@noroot-helper 1", "@@noroot-helper 2", "@@noroot-helper 9999", "@@noroot-helper", "@@noroot-helper-unreadable"])
+def test_every_helper_message_fits_into_200_characters(line):
+    """Anzeigen mit einer Zeile schneiden lange Meldungen ab, dann fehlt der Teil mit „neu einrichten“."""
+    av = _av()
+    av.HELPER_BUNDLED = (9999, "0" * 64)
+    message = av.no_root_message(f"@@noroot\n{line}\n")
+    assert len(message) <= 200 and "neu einrichten" in message
 
 
 # --- Gleichlauf: das Skript gibt aus, was der alte Befehl ausgibt -----------------------------------------------------

@@ -13,7 +13,7 @@ import { api } from "../lib/api";
 import { findExtension } from "../lib/extensionNames";
 import { useExtensions } from "../lib/firstSteps";
 import { loginUnproven, neverAnswered } from "../lib/hosts";
-import { formatBytes, hostHealth, type HostOut } from "../lib/overview";
+import { formatBytes, hostHealthOf, type HostOut } from "../lib/overview";
 
 interface HistoryOut {
   range: string;
@@ -69,11 +69,11 @@ function lastValue(values: (number | null)[] | undefined): number | undefined {
   return undefined;
 }
 
-type HistoryHost = Pick<HostOut, "status" | "last_seen_at"> & Partial<Pick<HostOut, "login_ok_at" | "credential" | "provider_ext_id">>;
+type HistoryHost = Pick<HostOut, "status" | "last_seen_at"> & Partial<Pick<HostOut, "login_ok_at" | "credential" | "provider_ext_id" | "power_state" | "gone_since">>;
 
 /** Was statt der Kurven steht, solange es keine Messwerte gibt. Ohne Angaben zum Server: der allgemeine Satz. */
 function EmptyHistory({ source, host, canCheck }: { source: HistoryOut["source"]; host?: HistoryHost; canCheck: boolean }) {
-  const health = host ? hostHealth(host.status) : "online";
+  const health = host ? hostHealthOf(host) : "online";
   if (host && health !== "online" && source !== "provider") {
     // Der Server hat (noch) nicht geantwortet: „in ein paar Minuten“ waere falsch, es wird so nichts kommen.
     const never = neverAnswered(host);

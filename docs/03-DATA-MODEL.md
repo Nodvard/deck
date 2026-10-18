@@ -1,10 +1,11 @@
 # 03 — Kern-Datenmodell
 
-SQLAlchemy 2.0, dialektneutral (SQLite-Default, Postgres optional — siehe
+SQLAlchemy 2.0, dialektneutral (SQLite-Default, Postgres vorgesehen, aber ungetestet — siehe
 D-02 in [00-DECISIONS](00-DECISIONS.md)).
 
 Konventionen:
-- PK: `id` als UUIDv7-artiger String(36) (sortierbar, dialektneutral, in Logs lesbar).
+- PK: `id` als UUIDv7 (RFC 9562) in `String(36)` (zeitlich sortierbar, dialektneutral, in Logs lesbar).
+  IDs aus Versionen bis 0.9.0 haben 40 Zeichen (12 Zeichen Zeit vorne) und bleiben in SQLite gültig.
 - Zeitstempel: `DateTime(timezone=True)`, UTC, in Python gesetzt.
 - Strukturierte Felder: `sa.JSON` (nicht `JSONB`).
 - Listen: Assoziationstabelle, nie Array-Spalte.

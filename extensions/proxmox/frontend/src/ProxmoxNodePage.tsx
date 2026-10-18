@@ -1,35 +1,7 @@
 /**
- * Die "Node-Seite" -- PageSpec `component=
- * "ProxmoxNodePage"` (siehe nodvard_deck_ext_proxmox/__init__.py). Ruft ausschliesslich
- * bereits bestehende, generische KERN-Endpunkte auf (`GET /hosts`, `GET
- * /hosts/{id}/metrics`, `POST /hosts/{id}/actions/{type}`) -- kein einziger
- * proxmox-spezifischer Endpunkt fuer Liste/Metriken/Aktionen selbst, das ist die
- * eigentliche Nagelprobe: der Kern weiss nichts von "Proxmox", diese
- * Seite tut es, und beide passen trotzdem zusammen.
- *
- * Authentifizierung: ein Extension-Bundle hat keinen Zugriff auf state/auth.ts (nur
- * React/ReactDOM sind ueber den Import-Map-Shim geteilt) -- `window.__nodvardDeck.
- * getAccessToken()` (main.tsx) liefert den aktuellen Access-Token live. Anders
- * als die Kern-App selbst versucht diese Seite KEINEN stillen Refresh bei 401.
- *
- * Aufbau: oben Kacheln mit dem Wichtigsten (Knoten, Gäste, Updates, vollster Speicher), darunter
- * Reiter (`?tab=`): „VMs & Container“, „Speicher“, „Updates“, „Aufgabenverlauf“, „Verbindungen“.
- * Innerhalb der Reiter nach Verbindung (mehrere Proxmox-Instanzen) UND Knoten gruppiert
- * (`provider_ref = "<connection>/<kind>/<node>/<vmid>"`, siehe capabilities.py); jede VM/jeder
- * Container klappt auf und zeigt echte Live-Metriken (`GET /hosts/{id}/metrics`,
- * CPU/RAM/Laufzeit). In der Zeile stehen nur Konsole und Starten/Herunterfahren, der Rest
- * unter „Mehr“.
- *
- * **Freigabe:** `POST /hosts/{id}/actions/{type}` erzeugt bei `autonomy.mode=propose`
- * (Default) IMMER nur einen Vorschlag (`status=proposed`) -- eine zweite, separate
- * Bestaetigung ueber `POST /actions/{id}/approve` ist noetig (sonst auf der
- * Aktionen-Seite, siehe ActionsPage.tsx im Kern). Diese Seite bestaetigt einen eigenen
- * Vorschlag automatisch, WENN der angemeldete
- * Nutzer die noetige `actions.approve:<risk>`-Berechtigung hat (`window.__nodvardDeck.
- * hasPermission()`) -- der Bestaetigungsdialog VOR dem Vorschlag ist in diesem Fall
- * bereits die menschliche Bestaetigung, ein zweiter Seitenwechsel waere unnoetige
- * Reibung. Fehlt die Berechtigung, bleibt der Vorschlag bewusst stehen (Vier-Augen-
- * Faelle, andere Rollen) -- die Seite verweist dann auf die Aktionen-Seite.
+ * Proxmox-Seite (PageSpec `component="ProxmoxNodePage"`) über generische Kern-Endpunkte (`/hosts`, `/hosts/{id}/metrics`,
+ * `/hosts/{id}/actions/{type}`), gruppiert nach `provider_ref = "<connection>/<kind>/<node>/<vmid>"`. Einen Vorschlag
+ * bestätigt die Seite nur selbst, wenn der Nutzer `actions.approve:<risk>` hat (der Dialog davor ist die Freigabe).
  */
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, ReactNode } from "react";
@@ -79,17 +51,14 @@ interface MetricsOut {
   sampled_at: string;
 }
 
-/** Host-Status (HostStatus-Enum) auf Deutsch -- vorher stand "up"/"down" roh in der Tabelle. */
+/** Host-Status (HostStatus-Enum) auf Deutsch. */
 const HOST_STATUS_LABEL: Record<string, string> = { up: "läuft", down: "gestoppt", unknown: "unbekannt", maintenance: "Wartung" };
 
 const KIND_LABEL: Record<string, string> = { vm: "VM", lxc: "LXC", hypervisor: "Knoten" };
 
-/** `showWhen`: nur die Knoepfe, die im aktuellen Zustand Sinn ergeben (sonst stuende
- * z. B. "Starten" neben jeder laufenden VM). Unbekannter Zustand -> alle.
- * `vm.shutdown` fährt den Gast geordnet herunter und ist der normale Weg; `vm.stop` ist in
- * Proxmox ein hartes Ausschalten (/status/stop) -- ein Knopf, der nur "Stoppen"
- * hiesse, warnte nicht vor Datenverlust. Das harte Ausschalten steht deshalb ganz hinten
- * und in Rot (`variant: "danger"`), als Ausweg für einen hängenden Gast. */
+/** `showWhen`: nur die Knöpfe, die im aktuellen Zustand Sinn ergeben (sonst stünde „Starten“ neben jeder laufenden VM);
+ * unbekannter Zustand: alle. `vm.shutdown` fährt geordnet herunter, `vm.stop` ist in Proxmox ein hartes Ausschalten
+ * (/status/stop) und steht deshalb ganz hinten in Rot (`variant: "danger"`) als Ausweg für einen hängenden Gast. */
 const VM_ACTIONS: {
   type: string;
   label: string;
@@ -121,8 +90,7 @@ const VM_ACTIONS: {
   },
 ];
 
-/** Deutsche Namen fuer die Meldung nach einer Aktion (statt des internen Namens,
- * z. B. "vm.snapshot_rollback"). */
+/** Deutsche Namen für die Meldung nach einer Aktion (statt des internen Namens, z. B. „vm.snapshot_rollback“). */
 const ACTION_LABEL: Record<string, string> = {
   ...Object.fromEntries(VM_ACTIONS.map((a) => [a.type, a.label])),
   "vm.snapshot_rollback": "Snapshot zurückrollen",
@@ -159,7 +127,7 @@ function parseProviderRef(ref: string | null): { connection: string; node: strin
   return { connection: parts[0] ?? "?", node: parts[2] ?? "?", vmid: parts[3] ?? null };
 }
 
-/** Schluessel fuer Sperre und Meldung einer Aktion: `host:aktion`, bei Snapshots `host:aktion:snapshot`. */
+/** Schlüssel für Sperre und Meldung einer Aktion: `host:aktion`, bei Snapshots `host:aktion:snapshot`. */
 function pendingKey(hostId: string, actionType: string, snapname?: string): string {
   return [hostId, actionType, snapname].filter(Boolean).join(":");
 }
@@ -169,7 +137,7 @@ function scrollToElement(id: string): void {
   document.getElementById(id)?.scrollIntoView?.({ block: "center", behavior: "smooth" });
 }
 
-/** Proxmox zeigt Groessen immer mit einer Nachkommastelle ("2.0 GB"). */
+/** Proxmox zeigt Größen immer mit einer Nachkommastelle („2.0 GB“). */
 const formatBytes = (n: number): string => formatSize(n, { fixed: true });
 
 function formatUptime(seconds: number): string {
@@ -190,6 +158,7 @@ interface SnapshotOut {
   with_ram: boolean;
 }
 
+/** Speicher-Übersicht: Belegung je Pool und welche Gast-Disks darauf liegen. */
 interface StoragePool {
   id: string;
   connection: string;
@@ -214,10 +183,9 @@ const BAR_TONE: Record<string, string> = {
 };
 
 /**
- * Snapshots eines Gasts: anlegen, zurueckrollen und loeschen, ohne in die Proxmox-
- * Oberflaeche zu wechseln -- sonst sammeln sie sich unsichtbar an. Zurueckrollen und
- * Loeschen laufen als Aktion ueber das Gate (`vm.snapshot_rollback` hohes Risiko,
- * `vm.snapshot_delete`).
+ * Snapshots eines Gasts anlegen, zurückrollen und löschen, ohne in die Proxmox-Oberfläche zu wechseln (sonst sammeln
+ * sie sich unsichtbar an). Zurückrollen und Löschen laufen als Aktion über das Gate (`vm.snapshot_rollback` hohes
+ * Risiko, `vm.snapshot_delete`).
  */
 function SnapshotsPanel({
   hostId,
@@ -228,7 +196,7 @@ function SnapshotsPanel({
   hostId: string;
   refreshKey: number;
   onAction: (actionType: string, snapname: string) => void;
-  /** Laeuft diese Aktion fuer diesen Snapshot schon? Dann ist der Knopf gesperrt. */
+  /** Läuft diese Aktion für diesen Snapshot schon? Dann ist der Knopf gesperrt. */
   isPending: (actionType: string, snapname: string) => boolean;
 }): JSX.Element {
   const [snaps, setSnaps] = useState<SnapshotOut[] | null>(null);
@@ -273,10 +241,6 @@ function SnapshotsPanel({
   );
 }
 
-/**
- * Speicher-Uebersicht: Belegung je Pool UND welche Gast-Disks
- * darauf liegen -- in Proxmox muss man dafuer jeden Pool einzeln aufklappen.
- */
 interface NodeUpdates {
   connection: string;
   node: string;
@@ -552,9 +516,8 @@ function TaskRow({ task }: { task: TaskOut }): JSX.Element {
 }
 
 /**
- * Aufgabenverlauf einer Verbindung: was auf den Knoten passiert ist, wer es ausgeloest hat, ob es
- * geklappt hat -- z. B. geplante Neustarts oder Backups, die sonst nur in der
- * Proxmox-Oberflaeche sichtbar waeren.
+ * Aufgabenverlauf einer Verbindung: was auf den Knoten passiert ist, wer es ausgelöst hat und ob es geklappt hat (z. B.
+ * geplante Neustarts oder Backups, die sonst nur in der Proxmox-Oberfläche sichtbar wären).
  */
 function TasksTable({ tasks }: { tasks: TaskOut[] }): JSX.Element {
   if (tasks.length === 0) return <p className="text-xs opacity-60">Keine Aufgaben in letzter Zeit.</p>;
@@ -670,13 +633,13 @@ const EDIT_LABEL: Record<EditKey, string> = {
 function toEditValues(d: GuestDetails): EditValues {
   return {
     cores: String(d.cores), sockets: String(d.sockets ?? 1), memory: String(d.memory_mb ?? ""),
-    // Kein Ballon-Wert heisst in Proxmox: Minimum = RAM.
+    // Kein Ballon-Wert heißt in Proxmox: Minimum = RAM.
     balloon: String(d.balloon_mb ?? d.memory_mb ?? ""), swap: String(d.swap_mb ?? 0),
     onboot: d.onboot, startup_order: d.startup_order == null ? "" : String(d.startup_order),
   };
 }
 
-/** Nur was sich wirklich geaendert hat -- der Server prueft Whitelist und Grenzen. */
+/** Nur was sich wirklich geändert hat; der Server prüft Whitelist und Grenzen. */
 export function editChanges(kind: GuestDetails["kind"], before: EditValues, after: EditValues): Record<string, unknown> {
   const changes: Record<string, unknown> = {};
   for (const key of EDIT_KEYS[kind]) {
@@ -689,8 +652,8 @@ export function editChanges(kind: GuestDetails["kind"], before: EditValues, afte
 }
 
 /**
- * Hardware aendern (Roadmap Punkt 1): Kerne, RAM, Autostart ... ueber das Aktions-Gate
- * (`vm.config_set`). Disks, Netzwerk und Durchreichungen bleiben bewusst in Proxmox.
+ * Hardware ändern (Kerne, RAM, Autostart ...) über das Aktions-Gate (`vm.config_set`); Disks, Netzwerk und Durchreichungen
+ * bleiben bewusst in Proxmox.
  */
 function GuestEditForm({ hostId, details, onDone }: { hostId: string; details: GuestDetails; onDone: (message: string | null) => void }): JSX.Element {
   const unmountSignal = useUnmountSignal();
@@ -768,11 +731,8 @@ function GuestEditForm({ hostId, details, onDone }: { hostId: string; details: G
   );
 }
 
-/**
- * Hardware-Ueberblick eines Gasts -- was man sonst im
- * "Hardware"-Reiter nachsieht. Kerne/RAM/Autostart lassen sich hier aendern (ueber
- * das Gate); Disks, Netzwerk und Durchreichungen bleiben in Proxmox.
- */
+/** Hardware-Überblick eines Gasts, wie im Reiter „Hardware“ von Proxmox; ändern lässt sich nur, was `GuestEditForm`
+ * anbietet. */
 function GuestDetailsPanel({ hostId }: { hostId: string }): JSX.Element {
   const [details, setDetails] = useState<GuestDetails | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -943,9 +903,8 @@ interface ZfsPool {
 }
 
 /**
- * Knoten-Gesundheit: "Uebersicht" + "Disks" des Knotens. Nur lesend. Hat ein Knoten
- * nur eine Platte, ist sie ein Single Point of Failure -- der SMART-Zustand steht
- * deshalb hier UND im Widget "Proxmox-Datentraeger".
+ * Knoten-Gesundheit: „Übersicht“ und „Disks“ des Knotens, nur lesend. Hat ein Knoten nur eine Platte, ist sie ein
+ * Single Point of Failure; der SMART-Zustand steht deshalb hier und im Widget „Proxmox-Datenträger“.
  */
 function NodeHealthPanel({ hostId }: { hostId: string }): JSX.Element {
   const [health, setHealth] = useState<NodeHealth | null>(null);
@@ -1053,8 +1012,8 @@ function NodeHealthPanel({ hostId }: { hostId: string }): JSX.Element {
   );
 }
 
-/** Knoten-Karte: zugeklappt nur Name + Status; aufgeklappt Hardware + Datentraeger
- * (erst dann geladen -- SMART-Abfragen kosten auf pve2 spuerbar Zeit). */
+/** Knoten-Karte: zugeklappt nur Name + Status; aufgeklappt Hardware + Datenträger (erst dann geladen, SMART-Abfragen
+ * kosten auf pve2 spürbar Zeit). */
 function NodeCard({
   node, focused = false, visit = 0, updates, onOpenUpdates,
 }: {
@@ -1148,13 +1107,9 @@ function MetricsPanel({ hostId }: { hostId: string }): JSX.Element {
 }
 
 /**
- * Verbindungsverwaltung: Verbindungen (pve1, pve2, ...) lassen sich ueber die
- * Oberflaeche anlegen, aendern und entfernen. Ruft die
- * `GET/POST/PUT/DELETE /ext/proxmox/connections...`-
- * Endpunkte auf; der Token-WERT geht weiterhin ausschliesslich ueber den
- * bestehenden `POST .../{name}/token`-Endpunkt (Vault), nie durch dieses Formular.
- * "Aktiv"-Umschalter deckt das unabhaengige Aktivieren/Deaktivieren einzelner
- * Verbindungen ab (`enabled`-Feld, siehe config.py::build_connectors()).
+ * Verbindungsverwaltung: Verbindungen (pve1, pve2, ...) anlegen, ändern und entfernen über
+ * `GET/POST/PUT/DELETE /ext/proxmox/connections...`. Der Token-Wert geht nie durch dieses Formular, sondern in den
+ * Tresor; „Aktiv“ schaltet einzelne Verbindungen ab (`enabled`, siehe config.py::build_connectors()).
  */
 function ConnectionsPanel({
   onConnectWithPassword, version = 0, bare = false,
@@ -1228,9 +1183,8 @@ function ConnectionsPanel({
     setPending(`token:${name}`);
     setMessage(null);
     try {
-      // Legt an ODER ersetzt. Der alte Weg (`POST /ext/proxmox/connections/{name}/token`) legt nur
-      // an und meldete beim zweiten Mal 409.
-      // Ein gespeichertes Token ersetzt der Kern nur mit Passwort und gegebenenfalls Code (Dialog des Kerns).
+      // Legt an oder ersetzt; ein gespeichertes Token ersetzt der Kern nur mit Passwort und gegebenenfalls Code (Dialog
+      // des Kerns).
       const res = await authedFetchConfirmed(`/extensions/proxmox/secrets`, (confirmation) => ({
         method: "PUT", body: JSON.stringify({ label: `proxmox-token:${name}`, value, ...confirmation }),
       }));
@@ -1449,7 +1403,7 @@ function ConnectionsPanel({
 export function ProxmoxNodePage(): JSX.Element {
   const unmountSignal = useUnmountSignal();
   // Sprungziel von der Server-Seite des Kerns (`HostToolSpec.path` mit `?host=`, Aufgabenverlauf
-  // zusaetzlich `&tasks=1`). Folgt der Adresszeile (location.ts): jeder Link, auch derselbe noch
+  // zusätzlich `&tasks=1`). Folgt der Adresszeile (location.ts): jeder Link, auch derselbe noch
   // einmal auf die schon offene Seite, markiert, klappt auf und scrollt hin (`visits`).
   const [urlParams, updateUrl, visits] = useUrlParams();
   const focusHost = urlParams.get("host") || null;
@@ -1457,16 +1411,14 @@ export function ProxmoxNodePage(): JSX.Element {
   // Reiter: `?tab=`; ein Link auf den Aufgabenverlauf (`&tasks=1`) ohne Reiter öffnet den Verlauf.
   const tabParam = urlParams.get("tab");
   const tab: TabId = isTab(tabParam) ? tabParam : focusTasks ? "tasks" : "guests";
-  // Ein Wechsel per Hand beendet den Sprung von einer anderen Seite: sonst markierte z. B. „VMs & Container“
+  // Ein Wechsel per Hand beendet den Sprung von einer anderen Seite: sonst markierte z. B. „VMs & LXC“
   // nach der Speicher-Meldung noch den Knoten und klappte ihn (mit SMART-Abfrage) auf.
   const setTab = useCallback((id: TabId) => updateUrl({ tab: id, host: null, tasks: null }), [updateUrl]);
   const [hosts, setHosts] = useState<HostOut[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Mehrere Aktionen koennen gleichzeitig laufen (z. B. mehrere Gaeste herunterfahren, das
-  // dauert bis zu ~190 s): jeder Knopf bleibt bis zum ENDE SEINER Aktion gesperrt, und
-  // jede Aktion behaelt ihre eigene Meldung. Eine Meldung entsteht
-  // erst, wenn ihre Aktion fertig ist -- beginnt eine neue, sind alle vorhandenen also von
-  // fertigen Aktionen und werden weggeraeumt (wie frueher die eine Meldung).
+  // Mehrere Aktionen laufen gleichzeitig (z. B. mehrere Gäste herunterfahren, bis zu ~190 s): jeder Knopf bleibt bis zum
+  // Ende seiner Aktion gesperrt, jede hat ihre eigene Meldung. Eine Meldung entsteht erst, wenn ihre Aktion fertig ist;
+  // beginnt eine neue, sind alle vorhandenen von fertigen Aktionen und werden weggeräumt.
   const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set());
   const [actionMessages, setActionMessages] = useState<ReadonlyMap<string, string>>(() => new Map());
   const [expanded, setExpanded] = useState<string | null>(focusHost);
@@ -1485,7 +1437,7 @@ export function ProxmoxNodePage(): JSX.Element {
   const [updatesErrors, setUpdatesErrors] = useState<FetchError[]>([]);
   const [storageErrors, setStorageErrors] = useState<FetchError[]>([]);
   // Ganze Abfrage gescheitert (nicht nur ein Knoten): sonst fehlten Updates und Speicher still, und der Aufgabenverlauf
-  // stuende auf "(0)" -- als gaebe es nichts.
+  // stünde auf „(0)“, als gäbe es nichts.
   const [updatesLoadError, setUpdatesLoadError] = useState<string | null>(null);
   const [tasksLoadError, setTasksLoadError] = useState<string | null>(null);
   const [storageLoadError, setStorageLoadError] = useState<string | null>(null);
@@ -1597,12 +1549,12 @@ export function ProxmoxNodePage(): JSX.Element {
       const ok = await deck().confirmDialog(`"${hostLabel}" ${confirmText}`, { danger: dangerConfirm });
       if (!ok) return;
     }
-    // Snapshot-Aktionen desselben Gasts laufen nebeneinander: der Snapshot gehoert in den
-    // Schluessel, sonst ueberschreiben sich Meldung und Sperre gegenseitig.
+    // Snapshot-Aktionen desselben Gasts laufen nebeneinander: der Snapshot gehört in den Schlüssel, sonst überschreiben sich
+    // Meldung und Sperre gegenseitig.
     const snapname = typeof payload.snapname === "string" && payload.snapname ? payload.snapname : undefined;
     const key = pendingKey(hostId, actionType, snapname);
     setPending((prev) => new Set(prev).add(key));
-    // Die Meldungen hier gehoeren zu fertigen Aktionen (laufende melden sich erst am Ende).
+    // Die Meldungen hier gehören zu fertigen Aktionen (laufende melden sich erst am Ende).
     setActionMessages(new Map());
     try {
       const { action, approved } = await runAction(`/hosts/${hostId}/actions/${actionType}`, {
@@ -1647,14 +1599,13 @@ export function ProxmoxNodePage(): JSX.Element {
     );
   }
 
-  // Der Abgleich legt Knoten als kind="hypervisor" an -- ein Filter nur auf "node"
-  // zeigte deshalb nie einen Knoten an.
+  // Der Abgleich legt Knoten als kind="hypervisor" an, ein Filter nur auf „node“ fände deshalb keinen.
   const nodes = (hosts ?? []).filter((h) => h.kind === "hypervisor" || h.kind === "node");
   const guests = (hosts ?? []).filter((h) => h.kind === "vm" || h.kind === "lxc");
   const connections = [...new Set((hosts ?? []).map((h) => parseProviderRef(h.provider_ref).connection))].sort();
   const empty = !hosts || hosts.length === 0;
 
-  // Aufgabenverlauf nur fuer den Host, von dessen Server-Seite der Nutzer kommt.
+  // Aufgabenverlauf nur für den Host, von dessen Server-Seite der Nutzer kommt.
   const taskHost = (hosts ?? []).find((h) => h.id === taskFocus) ?? null;
   const taskRef = taskHost ? parseProviderRef(taskHost.provider_ref) : null;
   function tasksFor(connection: string): TaskOut[] {
@@ -1684,7 +1635,7 @@ export function ProxmoxNodePage(): JSX.Element {
   return (
     <div className="mx-auto w-full max-w-7xl p-4 sm:p-6">
       <h2 className="font-semibold text-xl tracking-tight">Proxmox</h2>
-      <p className="mb-4 text-sm opacity-60">Deine Proxmox-Server mit allen VMs und Containern: starten, herunterfahren, Snapshots, Speicher und Updates.</p>
+      <p className="mb-4 text-sm opacity-60">Deine Proxmox-Server mit allen VMs und LXC: starten, herunterfahren, Snapshots, Speicher und Updates.</p>
       {empty && (
         <ConnectionsPanel onConnectWithPassword={canConnect ? () => setConnectOpen(true) : undefined} version={connectionsVersion} />
       )}
@@ -1704,8 +1655,8 @@ export function ProxmoxNodePage(): JSX.Element {
           title="Noch keine Proxmox-Server gefunden"
           text={
             canConnect
-              ? "Am einfachsten: „Mit Passwort verbinden“ – Adresse und Passwort deines Proxmox-Servers eingeben, Nodvard Deck legt dort einen eigenen Zugang an. Oder trag einen API-Token von Hand ein (oben unter „Verbindungen verwalten“ oder in den Moduleinstellungen). Danach liest Nodvard Deck alle 5 Minuten alle Knoten, VMs und Container von selbst ein."
-              : "Trag dafür die Adresse deines Proxmox-Servers und einen API-Token ein (oben unter „Verbindungen verwalten“ oder in den Moduleinstellungen). Danach liest Nodvard Deck alle 5 Minuten alle Knoten, VMs und Container von selbst ein."
+              ? "Am einfachsten: „Mit Passwort verbinden“ – Adresse und Passwort deines Proxmox-Servers eingeben, Nodvard Deck legt dort einen eigenen Zugang an. Oder trag einen API-Token von Hand ein (oben unter „Verbindungen verwalten“ oder in den Moduleinstellungen). Danach liest Nodvard Deck alle 5 Minuten alle Knoten, VMs und LXC von selbst ein."
+              : "Trag dafür die Adresse deines Proxmox-Servers und einen API-Token ein (oben unter „Verbindungen verwalten“ oder in den Moduleinstellungen). Danach liest Nodvard Deck alle 5 Minuten alle Knoten, VMs und LXC von selbst ein."
           }
           action={
             <div className="flex flex-wrap items-center justify-center gap-2">
@@ -1799,10 +1750,9 @@ export function ProxmoxNodePage(): JSX.Element {
                               <td className={`hidden py-1.5 whitespace-nowrap sm:table-cell ${STATUS_TONE[host.status] ?? ""}`}>{HOST_STATUS_LABEL[host.status] ?? host.status}</td>
                               <td className="py-1.5">
                                 <div className="flex flex-wrap justify-end gap-1.5">
-                                  {/* Konsole: Bildschirm direkt in Nodvard Deck (Kern-Seite
-                                      /console/:hostId), ohne Proxmox-Login. Neuer Tab, damit die
-                                      Konsole neben dieser Liste offen bleiben kann. Eine gestoppte
-                                      VM hat keinen Bildschirm -- Proxmox wuerde den Aufruf ablehnen. */}
+                                  {/* Konsole: Bildschirm direkt in Nodvard Deck (Kern-Seite /console/:hostId) ohne
+                                      Proxmox-Login, im neuen Tab. Eine gestoppte VM hat keinen Bildschirm, Proxmox
+                                      würde den Aufruf ablehnen. */}
                                   {host.status === "up" ? (
                                     <a
                                       href={`/console/${host.id}`}
@@ -1814,7 +1764,7 @@ export function ProxmoxNodePage(): JSX.Element {
                                     </a>
                                   ) : (
                                     <span
-                                      title="Nur für laufende VMs/Container verfügbar."
+                                      title="Nur für laufende VMs/LXC verfügbar."
                                       className="cursor-not-allowed rounded-lg bg-white/5 px-2.5 py-1 text-xs opacity-40"
                                     >
                                       Konsole
@@ -1991,7 +1941,7 @@ export function ProxmoxNodePage(): JSX.Element {
 type TabId = "guests" | "storage" | "updates" | "tasks" | "connections";
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: "guests", label: "VMs & Container" },
+  { id: "guests", label: "VMs & LXC" },
   { id: "storage", label: "Speicher" },
   { id: "updates", label: "Updates" },
   { id: "tasks", label: "Aufgabenverlauf" },
@@ -2168,7 +2118,7 @@ function Summary({ nodes, guests, connections, updates, pools, updatesIncomplete
         tone={nodes.length === 0 ? "neutral" : nodesUp < nodes.length ? "bad" : "good"} onClick={() => onOpen("guests")}
       />
       <Tile
-        testId="tile-guests" label="VMs & Container" value={`${guestsUp}/${guests.length}`}
+        testId="tile-guests" label="VMs & LXC" value={`${guestsUp}/${guests.length}`}
         hint={guestsDown > 0 ? `laufen · ${guestsDown} gestoppt` : "laufen"} onClick={() => onOpen("guests")}
       />
       <Tile testId="tile-updates" label="Updates" {...updatesTile} onClick={() => onOpen("updates")} />

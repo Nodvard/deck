@@ -137,6 +137,45 @@ describe("FilesPage Server-Quellen", () => {
     expect(screen.queryByTestId("source-host-nextcloud")).toBeNull();
   });
 
+  it("ein ausgeschalteter Gast steht grau als „aus“ da, nicht als nicht erreichbar", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/files/sources")) {
+        return new Response(JSON.stringify([{ ...SOURCES[0], host_id: "h-pve2" }, SOURCES[1]]), { status: 200 });
+      }
+      if (url.endsWith("/api/v1/hosts")) {
+        return new Response(JSON.stringify([{ id: "h-pve2", name: "pve2", status: "down", os_family: "linux", power_state: "stopped" }]), { status: 200 });
+      }
+      if (url.includes("/list")) return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      throw new Error(`Unerwarteter Fetch in diesem Test: ${url}`);
+    }));
+    render(<FilesPage />);
+    const label = await screen.findByTestId("source-host-ssh-sftp:pve2");
+    expect(within(label).getByRole("img").getAttribute("aria-label")).toBe("aus");
+    expect(label.textContent).toContain("Linux · aus");
+  });
+
+  it("ein beim Anbieter gelöschter Gast steht grau als „nicht mehr vorhanden“ da", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/files/sources")) {
+        return new Response(JSON.stringify([{ ...SOURCES[0], host_id: "h-pve2" }, SOURCES[1]]), { status: 200 });
+      }
+      if (url.endsWith("/api/v1/hosts")) {
+        return new Response(
+          JSON.stringify([{ id: "h-pve2", name: "pve2", status: "down", os_family: "linux", gone_since: "2026-10-16T08:00:00+00:00" }]),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/list")) return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      throw new Error(`Unerwarteter Fetch in diesem Test: ${url}`);
+    }));
+    render(<FilesPage />);
+    const label = await screen.findByTestId("source-host-ssh-sftp:pve2");
+    expect(within(label).getByRole("img").getAttribute("aria-label")).toBe("nicht mehr vorhanden");
+    expect(label.textContent).toContain("Linux · nicht mehr vorhanden");
+  });
+
   it("ohne Server-Quellen fragt die Seite die Serverliste gar nicht erst ab", async () => {
     const calls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {

@@ -31,6 +31,8 @@ const WIDGET_B = {
 };
 
 let layoutItems: unknown[];
+/** `meta` der Antwort des Backup-Widgets; `{ state: "not_configured" }` blendet es aus. */
+let backupsMeta: Record<string, unknown>;
 /** Jede gespeicherte Fassung des Layouts (PUT), die erste ist die der Auto-Platzierung. */
 let puts: unknown[][];
 
@@ -64,7 +66,7 @@ function mockFetch(catalog: unknown[] = [WIDGET_A, WIDGET_B]) {
       );
     }
     if (url.endsWith("/api/v1/ext/backups/widgets/summary") && method === "GET") {
-      return new Response(JSON.stringify({ data: { count: 2 }, meta: {} }), { status: 200 });
+      return new Response(JSON.stringify({ data: { count: 2 }, meta: backupsMeta }), { status: 200 });
     }
     if (url.endsWith("/api/v1/ext/renamed/widgets/summary") && method === "GET") {
       return new Response(JSON.stringify({ data: { count: 5 }, meta: {} }), { status: 200 });
@@ -99,6 +101,7 @@ beforeEach(() => {
     { widget_id: "overview", ext_id: "proxmox", x: 2, y: 0, w: 2, h: 2, config: {} },
   ];
   puts = [];
+  backupsMeta = {};
 });
 
 afterEach(() => {
@@ -142,10 +145,23 @@ describe("DashboardPage Rasterbreite", () => {
     expect(width).toBeLessThan(180);
   });
 
-  it("quetscht Karten auf schmalen Containern nicht unter die Mindestbreite", async () => {
-    // 800px Container (Tablet) -> Raster bleibt bei 960px (waagerecht scrollbar), w=2-Karte
-    // ~146px statt der ~121px, die ein reines Mitschrumpfen ergaebe.
-    const width = await cardWidthForContainer(800);
+  it("quetscht Karten nicht und scrollt nicht waagerecht: unter 960px gestapelt in zwei Spalten", async () => {
+    // Halbes Fenster (~930 px)
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 930 });
+    try {
+      vi.stubGlobal("fetch", mockFetch());
+      renderDashboard();
+      const card = await screen.findByText("Jobs");
+      expect(card.closest(".react-grid-item")).toBeNull();
+      expect(screen.getByTestId("widget-stack")).toHaveClass("sm:grid-cols-2");
+    } finally {
+      if (original) Object.defineProperty(HTMLElement.prototype, "clientWidth", original);
+    }
+  });
+
+  it("ab 960px wieder das Raster, w=2-Karte dort ~146px", async () => {
+    const width = await cardWidthForContainer(960);
     expect(width).toBeGreaterThan(140);
     expect(width).toBeLessThan(150);
   });
@@ -385,6 +401,87 @@ describe("Widget-Mindestgrößen (Nutzer: 'die Widgets sind kacke')", () => {
     expect(Object.fromEntries(pos)).toEqual({
       a: { x: 0, y: 0 }, b: { x: 4, y: 0 }, c: { x: 8, y: 0 }, d: { x: 0, y: 3 }, e: { x: 3, y: 3 },
     });
+  });
+});
+
+describe("Höhe nach Inhalt: gespeichert werden nur Lage und Breite", () => {
+  const item = (widget_id: string, x: number, y: number, w: number, h: number) => ({ widget_id, ext_id: "e", x, y, w, h, config: {} });
+
+  it("rowsFor: gemessen vor Vorgabe; Zahl und Tacho bis zur Messung S, sonst die Mindesthöhe, höchstens L", async () => {
+    const { rowsFor } = await import("./DashboardPage");
+    expect(rowsFor("list", 1, 3)).toBe(1);
+    expect(rowsFor("stat", undefined, 4)).toBe(2);
+    expect(rowsFor("list", undefined, 3)).toBe(3);
+    expect(rowsFor("list", undefined, 9)).toBe(5);
+  });
+
+  it("placeItems übernimmt x, y und w aus dem Raster, die gespeicherte Höhe bleibt", async () => {
+    const { placeItems } = await import("./DashboardPage");
+    const items = [item("a", 0, 0, 4, 2), item("b", 4, 0, 4, 2)];
+    const next = placeItems(items, [
+      { i: "e:a", x: 4, y: 3, w: 6, h: 5 },
+      { i: "e:b", x: 4, y: 0, w: 4, h: 1 },
+    ]);
+    expect(next).toEqual([item("a", 4, 3, 6, 2), item("b", 4, 0, 4, 2)]);
+  });
+
+  it("placeItems: nur andere Höhen (gemessen) -- dieselben Einträge zurück, also kein PUT", async () => {
+    const { placeItems } = await import("./DashboardPage");
+    const items = [item("a", 0, 0, 4, 2)];
+    expect(placeItems(items, [{ i: "e:a", x: 0, y: 0, w: 4, h: 5 }])).toBe(items);
+  });
+});
+
+describe("DashboardPage: nicht eingerichtete Module", () => {
+  it("blendet das Widget aus; „Widgets verwalten“ zeigt den Hinweis mit Link zu den Einstellungen", async () => {
+    backupsMeta = { state: "not_configured" };
+    useAuthStore.setState({
+      user: { id: "u1", username: "a", display_name: null, email: null, is_owner: true, locale: "de", permissions: ["*"] },
+    });
+    vi.stubGlobal("fetch", mockFetch());
+    renderDashboard();
+    expect(await screen.findByText("Hosts")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Jobs")).not.toBeInTheDocument());
+    expect(screen.queryByText("Backup-Center", { selector: "h3" })).not.toBeInTheDocument();
+
+    const dialog = await openPicker();
+    const hint = dialog.getByTestId("widget-not-configured-backups:summary");
+    expect(hint.textContent).toContain("Nicht eingerichtet");
+    expect(within(hint).getByRole("link", { name: "Einrichten" })).toHaveAttribute("href", "/settings/extensions/backups");
+    // Bleibt im Layout (Häkchen gesetzt), nichts gespeichert.
+    expect(dialog.getByRole("checkbox", { name: /Backup-Center/ })).toBeChecked();
+    expect(puts).toHaveLength(0);
+  });
+
+  it("ohne Recht extensions.manage nur der Hinweis, kein Link", async () => {
+    backupsMeta = { state: "not_configured" };
+    useAuthStore.setState({
+      user: { id: "u2", username: "v", display_name: null, email: null, is_owner: false, locale: "de", permissions: ["hosts.read"] },
+    });
+    vi.stubGlobal("fetch", mockFetch());
+    renderDashboard();
+    await screen.findByText("Hosts");
+    const dialog = await openPicker();
+    const hint = await dialog.findByTestId("widget-not-configured-backups:summary");
+    expect(hint.textContent).toContain("Administrator");
+    expect(within(hint).queryByRole("link")).toBeNull();
+  });
+
+  it("andere Zustände (z. B. unreachable) blenden nichts aus", async () => {
+    backupsMeta = { state: "unreachable" };
+    vi.stubGlobal("fetch", mockFetch());
+    renderDashboard();
+    expect(await screen.findByText("Jobs")).toBeInTheDocument();
+  });
+
+  it("sind alle Widgets nicht eingerichtet: Hinweis statt leerer Fläche", async () => {
+    backupsMeta = { state: "not_configured" };
+    vi.stubGlobal("fetch", mockFetch([WIDGET_A]));
+    layoutItems = [{ widget_id: "summary", ext_id: "backups", x: 0, y: 0, w: 2, h: 2, config: {} }];
+    renderDashboard();
+    const empty = await screen.findByTestId("dashboard-all-not-configured");
+    expect(empty.textContent).toContain("Noch nichts eingerichtet");
+    expect(screen.queryByTestId("dashboard-no-visible-widgets")).not.toBeInTheDocument();
   });
 });
 

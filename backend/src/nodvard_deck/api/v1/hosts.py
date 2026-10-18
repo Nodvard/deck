@@ -21,6 +21,7 @@ from ...core import gate as gate_service
 from ...core import ssh
 from ...core.error_text import describe_connection_error, is_expected_connection_error
 from ...core.metrics_history import resolve_metrics_provider
+from ...core.schema_check import SchemaError, check_value
 from ...ext.runtime import get_extension_runtime
 from ...models import Action, Host, HostCredential, HostGroup, KnownHostKey, User
 from ...services import audit as audit_service
@@ -119,11 +120,27 @@ class HostOut(BaseModel):
     login_ok_at: datetime | None = None
     """Wann sich Nodvard Deck zuletzt wirklich mit dem Standard-Zugang angemeldet hat, `null`: noch nie
     (oder der Zugang bzw. die Adresse wurde seitdem geändert, oder die letzte Anmeldung scheiterte)."""
+    category: str = "server"
+    """Art für Gruppen und Plaketten, aus `kind`: `vm`, `lxc` oder `server` (alles andere, auch ein Hypervisor-Knoten
+    und jeder von Hand angelegte Server ohne Art)."""
+    parent_label: str | None = None
+    """Bei einem Gast: auf welchem Host er läuft, so wie der Anbieter ihn nennt (etwa der Knotenname); sonst `null`."""
+    power_state: str | None = None
+    """Vom Anbieter gemeldet: `running`, `stopped` oder `paused`; `null`, wenn unbekannt (etwa bei von Hand angelegten
+    Servern). Ein gestoppter Gast ist ausgeschaltet, nicht gestört; `status` ist dann `down` wie bisher."""
+    gone_since: datetime | None = None
+    """Seit wann der Anbieter den Server nicht mehr kennt (etwa ein in Proxmox gelöschter Gast), sonst `null`. `status`
+    wird dann nicht mehr nachgeführt; die Oberfläche bietet an, den Server zu entfernen."""
 
     @classmethod
     def from_model(cls, host: Host) -> "HostOut":
         default = next((c for c in host.credentials if c.is_default), None)
+        placement = host.host_metadata or {}
         return cls(
+            category=host_category(host.kind),
+            parent_label=_text_or_none(placement.get("parent_label")),
+            power_state=_text_or_none(placement.get("power_state")),
+            gone_since=_time_or_none(placement.get("gone_since")),
             login_ok_at=hosts_service.login_confirmed_at(host, default),
             managed_tags=[t.tag for t in host.tags if t.managed_by_ext_id is not None],
             credential=(
@@ -136,6 +153,24 @@ class HostOut(BaseModel):
             last_seen_at=host.last_seen_at, provider_ext_id=host.provider_ext_id,
             provider_ref=host.provider_ref, created_at=host.created_at, updated_at=host.updated_at,
         )
+
+
+def host_category(kind: str | None) -> str:
+    """`vm`, `lxc` oder `server` (siehe `HostOut.category`)."""
+    return kind if kind in ("vm", "lxc") else "server"
+
+
+def _text_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _time_or_none(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 _TAG_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
@@ -813,6 +848,17 @@ async def trigger_host_action(
     for perm in required_permissions:
         if not user_has_permission(user, perm):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Berechtigung '{perm}' fehlt.")
+
+    # Passen die Angaben nicht zum `params_schema` der Aktion, gibt es gleich 422 mit einem verständlichen Text: keine
+    # Action-Zeile, nichts geht ans Gate. Die Prüfung ist schmal (`core.schema_check`); der Ausführer prüft verbindlich.
+    if spec.params_schema:
+        try:
+            check_value(payload.payload, spec.params_schema)
+        except SchemaError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Ungültige Angaben für „{spec.label}“: {exc}",
+            ) from exc
 
     request = ActionRequest(
         action_type=action_type,

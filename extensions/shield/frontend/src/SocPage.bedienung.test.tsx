@@ -115,7 +115,7 @@ describe("Kachel „In Quarantäne“", () => {
     vi.stubGlobal("fetch", mockFetch());
     render(<SocPage />);
     const tile = (await screen.findByText("In Quarantäne")).closest("div.panel") as HTMLElement;
-    // Genau diese Kachel: Wert 2 (in Quarantäne), nicht 5 (die frühere Summe), darunter die Funde der 30 Tage.
+    // Genau diese Kachel: Wert 2 (in Quarantäne), nicht 5 (Quarantäne plus Gelöschtes), darunter die Funde der 30 Tage.
     expect(tile).toHaveTextContent(/^In Quarantäne23 Funde in 30 Tagen$/);
     expect(screen.queryByText("Neutralisiert")).toBeNull();
   });

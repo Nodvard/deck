@@ -88,9 +88,21 @@ def signature_problem(row: dict[str, Any]) -> str | None:
     return None
 
 
-def attention_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Einträge unter „Braucht Aufmerksamkeit“ auf der Übersicht; `kind` sagt der Seite, welcher Knopf dazugehört."""
-    items: list[dict[str, Any]] = []
+def attention_items(rows: list[dict[str, Any]], held_reboots: frozenset[str] = frozenset()) -> list[dict[str, Any]]:
+    """Einträge unter „Braucht Aufmerksamkeit“ auf der Übersicht; `kind` sagt der Seite, welcher Knopf dazugehört.
+
+    `held_reboots`: Server, deren automatischer Neustart auf ein sauberes Update wartet."""
+    items: list[dict[str, Any]] = [
+        {
+            "kind": "reboot_held", "tone": "warn", "host_id": row["host_id"], "host_name": row["host_name"],
+            "title": f"{row['host_name']}: Neustart wartet auf ein sauberes Update",
+            "hint": "Das letzte Update ist nicht sauber durchgelaufen, deshalb starten die automatischen Updates den Server "
+                    "nicht neu. In der Update-Zentrale nachsehen und das Update erneut einspielen. Ist nichts mehr offen, "
+                    "den Server selbst neu starten.",
+            "action_label": "",
+        }
+        for row in rows if row["host_id"] in held_reboots
+    ]
     for row in rows:
         if not row.get("clamav_installed"):
             continue

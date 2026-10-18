@@ -36,7 +36,7 @@ async def build_connector(ctx: "ExtensionContext") -> NextcloudConnector | None:
     async with ctx.vault_use(handle) as password:
         return NextcloudConnector(
             ctx,
-            base_url=str(base_url),
+            base_url=_connector_base_url(base_url),
             username=str(username),
             password=password,
             tls_insecure_skip_verify=bool(settings.get("tls_insecure_skip_verify", False)),
@@ -53,8 +53,26 @@ class ServerInfoConfig:
     problem: str | None = None
 
 
+UI_PATHS = ("index.php", "apps", "settings", "login", "remote.php")
+"""Erste Pfadteile von Seiten der Weboberfläche von Nextcloud (`/index.php/apps/files`, `/settings/user`) und der
+WebDAV-Adresse (`/remote.php/dav/…`). Wer die Adresse aus dem Browser kopiert, hat oft eine davon dabei; die Anfragen des
+Moduls hängen den Rest selbst an die Grundadresse."""
+
+
+def strip_ui_path(path: str) -> str:
+    """Schneidet den Pfad ab dem ersten Teil aus `UI_PATHS` ab, ohne Schrägstrich am Ende. Ein Pfad davor bleibt (z. B.
+    `/nextcloud` bei einer Nextcloud im Unterordner)."""
+    parts = path.split("/")
+    for index, part in enumerate(parts):
+        if part.lower() in UI_PATHS:
+            parts = parts[:index]
+            break
+    return "/".join(parts).rstrip("/")
+
+
 def normalize_base_url(raw: Any) -> str:
-    """Entfernt den Schrägstrich am Ende; `ValueError`, wenn die Adresse unbrauchbar ist."""
+    """Entfernt den Schrägstrich am Ende und eine Seite der Weboberfläche (`strip_ui_path`); `ValueError`, wenn die
+    Adresse unbrauchbar ist."""
     text = str(raw or "").strip()
     parts = urlsplit(text)
     if parts.scheme not in ("http", "https") or not parts.hostname:
@@ -63,7 +81,15 @@ def normalize_base_url(raw: Any) -> str:
     if "@" in parts.netloc:
         raise ValueError(text)
     _ = parts.port  # wirft ValueError bei einem Port außerhalb von 0-65535
-    return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
+    return urlunsplit((parts.scheme, parts.netloc, strip_ui_path(parts.path), "", ""))
+
+
+def _connector_base_url(raw: Any) -> str:
+    """Die Grundadresse für den Dateizugriff; eine unbrauchbare gibt der Connector selbst als solche an."""
+    try:
+        return normalize_base_url(raw)
+    except ValueError:
+        return str(raw)
 
 
 def read_serverinfo_config(settings: dict[str, Any]) -> ServerInfoConfig:

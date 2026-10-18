@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SocPage, hostScanBadge } from "./SocPage";
 
-/** Fehler in 0.7.0: Nach Quarantäne oder Löschen stand oben „keine Bedrohung“, beim Server aber
- * „Bedrohung gefunden“. Die Spalte „Letzter Scan“ richtet sich jetzt nach denselben Funden wie die Zahl oben. */
+/** Die Spalte „Letzter Scan“ richtet sich nach denselben Funden wie die Zahl oben: nach Quarantäne oder Löschen
+ * steht dort nicht mehr „Bedrohung gefunden“, während oben „keine Bedrohung“ steht. */
 
 const now = Date.now() / 1000;
 const scan = (host: string, status: string) => ({

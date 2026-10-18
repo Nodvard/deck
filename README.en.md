@@ -62,6 +62,7 @@ first, so nothing happens on your machines by accident.
 | Jellyfin (beta) | Current playback with user and device, whether it transcodes, library sizes and recently added media (read-only) |
 | Plex (beta) | Current playback with user and device, library sizes and recently added media; talks only to your own server, never to plex.tv (read-only) |
 | qBittorrent (beta) | Speed, active torrents, count per state and free space (read-only) |
+| Synology DSM (beta) | Model, DSM version, load, storage pools, volumes, disks, Hyper Backup and whether an update is available (read-only); reports when something is wrong; best with a dedicated DSM account without two-factor, and for storage, updates and Hyper Backup a member of the "administrators" group |
 
 "Beta" means: the extension works, but is not yet as thoroughly tested as the rest. Feedback helps.
 
@@ -75,7 +76,8 @@ see [docs/en/EXTENSION-API.md](docs/en/EXTENSION-API.md).
 
 **Note:** The user interface is currently in German only; an English interface is planned.
 
-**Requirements:** Docker with Docker Compose. Nodvard Deck runs fine on a Raspberry Pi 4/5
+**Requirements:** Docker with Docker Compose (for some of the further ways below, Docker or Podman alone
+is enough). Nodvard Deck runs fine on a Raspberry Pi 4/5
 (arm64) as well as on any x86-64 machine. Nothing is built: the ready-made image comes from the
 GitHub Container Registry (`ghcr.io/nodvard/deck`).
 
@@ -181,6 +183,17 @@ has to be downloaded first.
   kept.
 
 </details>
+
+**Further ways**, each step by step in
+[docs/en/FIRST-SETUP.md, section 1.1](docs/en/FIRST-SETUP.md#11-installation-without-the-repo):
+
+- **In a terminal:** a single `docker run` command, Podman
+  ([guide](docs/en/FIRST-SETUP.md#in-a-terminal))
+- **With a web interface:** Dockge ([guide](docs/en/FIRST-SETUP.md#with-a-web-interface))
+- **On a NAS:** Synology, UGREEN, QNAP, Unraid, TrueNAS SCALE, OpenMediaVault, ZimaOS and CasaOS
+  ([guide](docs/en/FIRST-SETUP.md#on-a-nas))
+- **On particular machines:** Proxmox (VM or LXC container) and Docker Desktop for trying it out
+  ([guide](docs/en/FIRST-SETUP.md#raspberry-pi-proxmox-and-docker-desktop))
 
 Then follow the setup assistant in the browser. Everything else – servers, SSH access, modules,
 backups – is set up in the web interface.

@@ -1,132 +1,132 @@
-"""Der Ablauf: Update, Rueckweg und die Wiederaufnahme nach einem Absturz. Nur hier veraendert der Helfer etwas an
+"""Der Ablauf: Update, Rückweg und die Wiederaufnahme nach einem Absturz. Nur hier verändert der Helfer etwas an
 der Engine.
 
-Ein Vorgang laeuft in festen Schritten (`policy.STEPS`). **Jeder Schritt steht vorher im Journal**
+Ein Vorgang läuft in festen Schritten (`policy.STEPS`). **Jeder Schritt steht vorher im Journal**
 (`/state/journal.json`, atomar mit fsync, `StateStore.write_journal`); erst danach holt der Ablauf eine neue Bindung
-(`Engine.bind`) und macht den Aufruf. Die Bindung laesst nur die Aufrufe des Schritts durch, der im Journal steht --
-und die Fake-Engine der Tests prueft dasselbe gegen die Datei auf der Platte.
+(`Engine.bind`) und macht den Aufruf. Die Bindung lässt nur die Aufrufe des Schritts durch, der im Journal steht --
+und die Fake-Engine der Tests prüft dasselbe gegen die Datei auf der Platte.
 
 **Update auf Version X** (`Flow.run` mit der Aktion `update`):
 
-* *Vorab, ohne Aenderung:* Vorpruefung erneut (`target.preflight`: genau ein gesundes Ziel, Image des Repositorys mit
+* *Vorab, ohne Änderung:* Vorprüfung erneut (`target.preflight`: genau ein gesundes Ziel, Image des Repositorys mit
   beweglichem Tag und einem Digest dort, klonbar), das bewegliche Tag passt zu X (`check_tag_fits`), X ist neuer als die
   laufende Version (`check_newer`).
-* `begin`: Journal anlegen, mit dem Digest des alten Images im Repository aus der Vorpruefung (fuer den Slot beim
-  Commit; spaeter nennt die Engine ihn womoeglich nicht mehr). Beim containerd-Store kann das auch ein Digest sein, den
-  nur dieser Rechner kennt (selbst gebautes Image, siehe `policy.require_registry_digest`); das Update selbst haengt
-  nicht davon ab. Das bewegliche Tag in der Registry aufloesen (`/distribution`, ein Digest D), nach D ziehen, das
-  Image per `<repository>@D` lesen: `RepoDigests` enthaelt D, das Versions-Label ist **genau** X (sonst
+* `begin`: Journal anlegen, mit dem Digest des alten Images im Repository aus der Vorprüfung (für den Slot beim
+  Commit; später nennt die Engine ihn womöglich nicht mehr). Beim containerd-Store kann das auch ein Digest sein, den
+  nur dieser Rechner kennt (selbst gebautes Image, siehe `policy.require_registry_digest`); das Update selbst hängt
+  nicht davon ab. Das bewegliche Tag in der Registry auflösen (`/distribution`, ein Digest D), nach D ziehen, das
+  Image per `<repository>@D` lesen: `RepoDigests` enthält D, das Versions-Label ist **genau** X (sonst
   `tag_not_on_version`), X ist neuer, Betriebssystem und Architektur wie beim laufenden Image (`platform_mismatch`).
-  Scheitert das, ist nichts veraendert ausser einem gezogenen Image: Ergebnis `refused` (zaehlt nicht fuer die Grenze).
-* `pulled`: das neue Image steht im Journal. Den `create`-Body bauen (`clone.build`). Ab hier zaehlt die Aktion fuer die
-  Grenze von einer Aktion je 10 Minuten (`State.record_action`, gespeichert, bevor sich etwas aendert).
+  Scheitert das, ist nichts verändert außer einem gezogenen Image: Ergebnis `refused` (zählt nicht für die Grenze).
+* `pulled`: das neue Image steht im Journal. Den `create`-Body bauen (`clone.build`). Ab hier zählt die Aktion für die
+  Grenze von einer Aktion je 10 Minuten (`State.record_action`, gespeichert, bevor sich etwas ändert).
 * `protected`: das alte Image bekommt das Schutz-Tag `nodvard-deck-previous:<alte Version>`.
-* `renamed`: der alte Container (laeuft weiter) heisst jetzt `<name>-previous`.
+* `renamed`: der alte Container (läuft weiter) heißt jetzt `<name>-previous`.
 * `tagged`: das bewegliche Tag zeigt auf das neue Image.
-* `creating`: neuen Container unter `<name>` anlegen (Tag-Text unveraendert). Gleich danach `created` mit der neuen ID,
+* `creating`: neuen Container unter `<name>` anlegen (Tag-Text unverändert). Gleich danach `created` mit der neuen ID,
   dann die weiteren Netze verbinden (`connect`) und die Nachkontrolle (`clone.verify`, sonst `clone_mismatch`; dazu
-  gehoert `.Image` gleich dem neuen Image, falls jemand das Tag dazwischen umgehaengt hat).
-* `old_stopped`: alte Restart-Policy auf `no` (nach einem Neustart des Docker-Dienstes laeuft er nicht wieder an),
-  alten stoppen (`t` mindestens 30 s), pruefen, dass er steht (`stop_failed`).
+  gehört `.Image` gleich dem neuen Image, falls jemand das Tag dazwischen umgehängt hat).
+* `old_stopped`: alte Restart-Policy auf `no` (nach einem Neustart des Docker-Dienstes läuft er nicht wieder an),
+  alten stoppen (`t` mindestens 30 s), prüfen, dass er steht (`stop_failed`).
 * `started`: neue Frist (15 min) im Journal, neuen Container starten (`start_failed`).
-* *Beobachten* alle 5 s bis zum ersten `healthy` (laeuft, startet nicht neu, `RestartCount` unveraendert). Harte Fehler
-  vor der Frist: `exited`, `restart_loop`, `rescue_page` (die letzten zwei Eintraege in `Health.Log` zeigen die
+* *Beobachten* alle 5 s bis zum ersten `healthy` (läuft, startet nicht neu, `RestartCount` unverändert). Harte Fehler
+  vor der Frist: `exited`, `restart_loop`, `rescue_page` (die letzten zwei Einträge in `Health.Log` zeigen die
   Notseite mit 503). `unhealthy` allein ist **kein** Fehler: eine lange Migration darf lange brauchen. Nach der Frist:
   `timeout`.
 * `committed` beim ersten `healthy`: Ab hier ist der Vorgang entschieden (Ergebnis `applied`, danach gibt es keinen
-  automatischen Rueckweg mehr). Das Ergebnis kommt sofort in `state.json` und in den Status, noch vor jedem Aufruf an
+  automatischen Rückweg mehr). Das Ergebnis kommt sofort in `state.json` und in den Status, noch vor jedem Aufruf an
   der Engine; der Status zu `committed` wird erst mit ihm geschrieben (`Flow._decide`). Solange der Status `busy.step`
   = `committed` zeigt, steht das Ergebnis dieser Anforderung also schon in `results` (nach einem Absturz ebenso: die
-  Wiederaufnahme traegt es ein, bevor sie die Engine fragt). Dann das Schutz-Tag eines ersetzten Slots entfernen (solange dieser noch in `state.json` steht, nur dann
-  laesst die Bindung es zu), den neuen Slot (Rueckweg 7 Tage) speichern und den Status gleich danach schreiben (bis
+  Wiederaufnahme trägt es ein, bevor sie die Engine fragt). Dann das Schutz-Tag eines ersetzten Slots entfernen (solange dieser noch in `state.json` steht, nur dann
+  lässt die Bindung es zu), den neuen Slot (Rückweg 7 Tage) speichern und den Status gleich danach schreiben (bis
   dahin zeigt `previous` noch den ersetzten Slot), dann den alten Container entfernen (`v=0`, ohne `force`), Journal
-  loeschen. Scheitert ein Teil des Aufraeumens an der Engine, bleibt das Journal stehen, und die naechste Runde macht
+  löschen. Scheitert ein Teil des Aufräumens an der Engine, bleibt das Journal stehen, und die nächste Runde macht
   weiter; nach `CLEANUP_ROUNDS` Runden bleibt der Teil liegen.
 
-**Rueckweg auf Wunsch** (Aktion `rollback`): nur mit gueltigem Slot (`policy.check_rollback`: genau der installierte
+**Rückweg auf Wunsch** (Aktion `rollback`): nur mit gültigem Slot (`policy.check_rollback`: genau der installierte
 Container, genau die Version davor, innerhalb der Frist). In `begin` wird das Image des Slots gelesen; fehlt es (nach
 `image prune -a`), wird es nach dem Digest des Slots gezogen und muss genau die ID und die Version des Slots haben
 (`previous_mismatch`). Kennt die Registry den Digest nicht (beim containerd-Store ein selbst gebautes Image), scheitert
-das Ziehen: `pull_failed`, nichts veraendert, der Slot bleibt. Danach dieselben Schritte wie beim Update, Vorlage ist
+das Ziehen: `pull_failed`, nichts verändert, der Slot bleibt. Danach dieselben Schritte wie beim Update, Vorlage ist
 der **aktuelle** Container. Beim Commit: das Ergebnis `reverted` wie beim Update sofort speichern und in den Status,
-dann den Slot loeschen, die verlassene Version 24 h fuer Updates sperren und das speichern (bis dahin zeigt `previous`
+dann den Slot löschen, die verlassene Version 24 h für Updates sperren und das speichern (bis dahin zeigt `previous`
 noch den gerade benutzten Slot), dann den neueren Container und beide Schutz-Tags entfernen (die Bindung nimmt deren
 Versionen aus dem Journal).
 
-**Rueckbau vor dem Commit** (`Flow._undo`, mit `Engine.bind(..., undo=True)`): Zuerst kuendigt er sich im Journal an
-(`Journal.start_undo`, mit dem Grund als `code`, write-ahead wie jeder Schritt). Ab dann laesst die Bindung nichts mehr
-vorwaerts zu, und eine Wiederaufnahme erkennt einen halb zurueckgebauten Stand als den eigenen. Dann in umgekehrter
+**Rückbau vor dem Commit** (`Flow._undo`, mit `Engine.bind(..., undo=True)`): Zuerst kündigt er sich im Journal an
+(`Journal.start_undo`, mit dem Grund als `code`, write-ahead wie jeder Schritt). Ab dann lässt die Bindung nichts mehr
+vorwärts zu, und eine Wiederaufnahme erkennt einen halb zurückgebauten Stand als den eigenen. Dann in umgekehrter
 Reihenfolge nur, was laut Journal schon geschehen sein kann -- neuen Container stoppen (immer, auch wenn er gerade nicht
-laeuft: ein Start, dessen Antwort ausblieb, kann noch nachkommen) und entfernen, bewegliches Tag zurueck, alten zurueck
-umbenennen, seine Restart-Policy wiederherstellen, ihn starten und bis zu 15 min auf `healthy` warten (laeuft er noch,
+läuft: ein Start, dessen Antwort ausblieb, kann noch nachkommen) und entfernen, bewegliches Tag zurück, alten zurück
+umbenennen, seine Restart-Policy wiederherstellen, ihn starten und bis zu 15 min auf `healthy` warten (läuft er noch,
 obwohl ein Stopp hinausging, erst dessen Frist abwarten: der Docker-Dienst stoppt nach einer Fehlerantwort weiter),
-zuletzt das Schutz-Tag entfernen (geht das nicht, bleibt es liegen: es haelt nur ein Image fest).
-Jeder Teil ist wiederholbar (was schon erledigt ist, wird uebersprungen), damit eine Wiederaufnahme nach einem Absturz
+zuletzt das Schutz-Tag entfernen (geht das nicht, bleibt es liegen: es hält nur ein Image fest).
+Jeder Teil ist wiederholbar (was schon erledigt ist, wird übersprungen), damit eine Wiederaufnahme nach einem Absturz
 denselben Weg gehen kann. Steht das Journal noch auf `creating` (etwa weil `create` am Zeitlimit scheiterte, der
-Container aber angelegt wurde), sucht der Rueckbau den eigenen Container unter `<name>` (Zustand `created`, nie
-gestartet, neues Image, gleiche Compose-Labels), traegt ihn erst als `created` ins Journal ein und entfernt ihn dann.
+Container aber angelegt wurde), sucht der Rückbau den eigenen Container unter `<name>` (Zustand `created`, nie
+gestartet, neues Image, gleiche Compose-Labels), trägt ihn erst als `created` ins Journal ein und entfernt ihn dann.
 Ergebnis `aborted`, solange der neue Container nie gestartet wurde, sonst `rolled_back`; wird der alte Container nicht
 wieder gesund, `failed_manual` (Code `rollback_failed`): kein weiterer Versuch, keine Schleife, das Schutz-Tag bleibt.
 Ebenso bei einem dauerhaften Fehler der Engine (4xx, oder 5xx bis zur Frist). War die Engine dagegen nur nicht
-erreichbar (Transportfehler bis zur Frist, etwa ein haengender Docker-Dienst) oder liess sich das Journal gerade nicht
-schreiben, gibt der Rueckbau nicht endgueltig auf: Das Journal bleibt mit dem angekuendigten Rueckbau stehen
-(`outcome=None`, `finished=False`), und die Wiederaufnahme baut zurueck, sobald es wieder geht -- sonst bliebe der alte
-Container gestoppt und ohne Restart-Policy liegen, und niemand raeumte mehr auf.
+erreichbar (Transportfehler bis zur Frist, etwa ein hängender Docker-Dienst) oder ließ sich das Journal gerade nicht
+schreiben, gibt der Rückbau nicht endgültig auf: Das Journal bleibt mit dem angekündigten Rückbau stehen
+(`outcome=None`, `finished=False`), und die Wiederaufnahme baut zurück, sobald es wieder geht -- sonst bliebe der alte
+Container gestoppt und ohne Restart-Policy liegen, und niemand räumte mehr auf.
 
-**Von aussen geaendert:** Vor jedem aendernden Schritt und bei jedem Blick waehrend des Beobachtens liest der Ablauf die
+**Von außen geändert:** Vor jedem ändernden Schritt und bei jedem Blick während des Beobachtens liest der Ablauf die
 Container erneut: Es darf kein weiterer Container mit den Ziel-Labels dazugekommen sein, und alter bzw. neuer Container
-muessen mit ID, Image und Namen zum Journal passen. Sonst Ergebnis `external_change`: das Journal wird geloescht und
+müssen mit ID, Image und Namen zum Journal passen. Sonst Ergebnis `external_change`: das Journal wird gelöscht und
 nichts mehr angefasst (nie gegen den Nutzer).
 
 **Wiederaufnahme nach einem Absturz** (`Flow.recover`, beim Start des Helfers und bevor er Anforderungen liest): Der
-Schritt im Journal ist angekuendigt, aber vielleicht noch nicht ausgefuehrt. Entschieden wird nur aus dem Journal und
-der Engine -- nie aus den Grenzen in `state.json` (die Wiederherstellung wird nie gedrosselt, und die Aktion zaehlt kein
-zweites Mal) und nie aus der Vorpruefung: Mit Journal meldet `target.preflight` nie ein Ziel, und in `creating` haelt
-sie den eigenen, schon angelegten Container fuer fremd. Darum liest die Wiederaufnahme die Container mit den
+Schritt im Journal ist angekündigt, aber vielleicht noch nicht ausgeführt. Entschieden wird nur aus dem Journal und
+der Engine -- nie aus den Grenzen in `state.json` (die Wiederherstellung wird nie gedrosselt, und die Aktion zählt kein
+zweites Mal) und nie aus der Vorprüfung: Mit Journal meldet `target.preflight` nie ein Ziel, und in `creating` hält
+sie den eigenen, schon angelegten Container für fremd. Darum liest die Wiederaufnahme die Container mit den
 Ziel-Labels selbst und gleicht sie mit den IDs im Journal ab.
 
-* `begin`, `pulled`: nichts veraendert (hoechstens ein Image gezogen) -> Journal loeschen, `aborted`.
-* `protected` bis `old_stopped`: pruefen, dann Rueckbau -> `aborted`. In `creating` sucht sie vorher den eigenen, schon
-  angelegten Container und traegt ihn ein (wie der Rueckbau, siehe oben).
-* `started`: Laeuft der neue Container und ist gesund -> Commit. Laeuft er und die Frist im Journal laeuft noch ->
-  weiter beobachten, bis zu genau dieser Frist (ein Neustart nur des Helfers verlaengert sie nicht). Hat der
+* `begin`, `pulled`: nichts verändert (höchstens ein Image gezogen) -> Journal löschen, `aborted`.
+* `protected` bis `old_stopped`: prüfen, dann Rückbau -> `aborted`. In `creating` sucht sie vorher den eigenen, schon
+  angelegten Container und trägt ihn ein (wie der Rückbau, siehe oben).
+* `started`: Läuft der neue Container und ist gesund -> Commit. Läuft er und die Frist im Journal läuft noch ->
+  weiter beobachten, bis zu genau dieser Frist (ein Neustart nur des Helfers verlängert sie nicht). Hat der
   Docker-Dienst ihn inzwischen neu gestartet (Stromausfall, Neustart des Rechners), beginnt eine Migration von vorn: dann
   eine ganze Frist ab diesem Neustart (`State.StartedAt`), nie mehr als eine ganze Frist ab jetzt; hat er ihn zusammen
-  mit dem Helfer gestartet (beide Starts hoechstens `TOGETHER_S` auseinander), eine ganze Frist ab jetzt, denn die Uhr
-  kann nach dem Hochfahren falsch gegangen sein; laeuft der Rechner selbst noch keine ganze Frist, mindestens den Rest
-  einer Frist ab dem Hochfahren (seine Laufzeit haengt nicht an der Wanduhr; `Flow._resume_left`). Wurde er nie gestartet -> Rueckbau mit
-  `start_failed`. Sonst Rueckbau mit dem Grund (`exited`, `restart_loop`, `rescue_page`, `timeout`) -> `rolled_back`.
-* Rueckbau angekuendigt (`undo`): weiter zurueckbauen, mit dem Grund aus dem Journal.
+  mit dem Helfer gestartet (beide Starts höchstens `TOGETHER_S` auseinander), eine ganze Frist ab jetzt, denn die Uhr
+  kann nach dem Hochfahren falsch gegangen sein; läuft der Rechner selbst noch keine ganze Frist, mindestens den Rest
+  einer Frist ab dem Hochfahren (seine Laufzeit hängt nicht an der Wanduhr; `Flow._resume_left`). Wurde er nie gestartet -> Rückbau mit
+  `start_failed`. Sonst Rückbau mit dem Grund (`exited`, `restart_loop`, `rescue_page`, `timeout`) -> `rolled_back`.
+* Rückbau angekündigt (`undo`): weiter zurückbauen, mit dem Grund aus dem Journal.
 * `committed`: zuerst das Ergebnis eintragen und speichern, ohne die Engine (alles steht im Journal; eine Engine, die
-  nicht antwortet, haelt es so nicht auf). Dann das Aufraeumen fertig machen (in derselben Reihenfolge wie nach dem
-  Commit: Schutz-Tag des ersetzten Slots, Slot bzw. Sperre und Ergebnis speichern, alten Container und beim Rueckweg
-  die Schutz-Tags entfernen, Journal loeschen); was schon erledigt ist, wird uebersprungen (ein schon gespeichertes
-  Ergebnis behaelt seinen Zeitpunkt) -> `applied` bzw. `reverted`.
+  nicht antwortet, hält es so nicht auf). Dann das Aufräumen fertig machen (in derselben Reihenfolge wie nach dem
+  Commit: Schutz-Tag des ersetzten Slots, Slot bzw. Sperre und Ergebnis speichern, alten Container und beim Rückweg
+  die Schutz-Tags entfernen, Journal löschen); was schon erledigt ist, wird übersprungen (ein schon gespeichertes
+  Ergebnis behält seinen Zeitpunkt) -> `applied` bzw. `reverted`.
 
-Vorher prueft sie wie vor jedem Schritt (kein weiterer Container mit den Ziel-Labels, alter und neuer Container passen
-zum Journal); nur im angekuendigten Schritt selbst gilt der Stand davor wie der danach (der alte Container schon
+Vorher prüft sie wie vor jedem Schritt (kein weiterer Container mit den Ziel-Labels, alter und neuer Container passen
+zum Journal); nur im angekündigten Schritt selbst gilt der Stand davor wie der danach (der alte Container schon
 umbenannt oder noch nicht, schon gestoppt oder noch nicht). Passt etwas nicht: `external_change`, nichts anfassen. Ist
 die Engine gerade nicht erreichbar, bleibt alles stehen (`Outcome` mit `outcome=None`, `finished=False`); der Aufrufer
-versucht es spaeter erneut, ohne Grenze.
+versucht es später erneut, ohne Grenze.
 
-**Engine-Fehler:** Waehrend eines Vorgangs handelt der Ablauf die API-Version nicht nebenbei neu aus (die regelmaessige
-Vorpruefung laeuft in derselben Schleife und ruht so lange). Beobachten, Rueckbau und Aufraeumen fangen `EngineError`
+**Engine-Fehler:** Während eines Vorgangs handelt der Ablauf die API-Version nicht nebenbei neu aus (die regelmäßige
+Vorprüfung läuft in derselben Schleife und ruht so lange). Beobachten, Rückbau und Aufräumen fangen `EngineError`
 (auch `not_negotiated`) ab, warten 5 s, handeln selbst neu aus und versuchen es erneut, bis zur jeweiligen Frist. Ein
-Fehler in einem Schritt vorwaerts fuehrt zum Rueckbau.
+Fehler in einem Schritt vorwärts führt zum Rückbau.
 
-**Was der Ablauf nicht tut:** die Grenzen aus `/state` pruefen und die ID merken (das macht der Aufrufer vorher mit
-`StateStore.check`), und `/app/data` beruehren (die Daten regelt das Dashboard beim Start selbst).
+**Was der Ablauf nicht tut:** die Grenzen aus `/state` prüfen und die ID merken (das macht der Aufrufer vorher mit
+`StateStore.check`), und `/app/data` berühren (die Daten regelt das Dashboard beim Start selbst).
 
 **Zwei Uhren:** Was in `/state` steht (Frist im Journal, Slot, Sperren, Ergebnisse), rechnet mit der Wanduhr (`clock`);
 gewartet wird im laufenden Prozess nur mit der monotonen Uhr (`monotonic`). Ein Uhrsprung (NTP stellt die Uhr eines
-Raspberry Pi ohne Echtzeituhr kurz nach dem Hochfahren um Stunden) bricht so kein gesundes Update ab und verlaengert
+Raspberry Pi ohne Echtzeituhr kurz nach dem Hochfahren um Stunden) bricht so kein gesundes Update ab und verlängert
 kein Warten. Bei der Wiederaufnahme wird die Restzeit einmal aus der Frist im Journal (bzw. aus `State.StartedAt` eines
 vom Docker-Dienst neu gestarteten Containers, dazu aus der Laufzeit des Rechners, `boot_uptime`) berechnet und auf
-hoechstens `policy.DEADLINE_S` begrenzt (die Uhr kann seit dem Schreiben zurueckgestellt worden sein).
+höchstens `policy.DEADLINE_S` begrenzt (die Uhr kann seit dem Schreiben zurückgestellt worden sein).
 
-Uhren und Warten kommen ueber den Konstruktor (`clock`, `monotonic`, `sleep`, `uptime`): die Tests stellen eine eigene
+Uhren und Warten kommen über den Konstruktor (`clock`, `monotonic`, `sleep`, `uptime`): die Tests stellen eine eigene
 Uhr. Ebenso `checkpoint`: er wird vor und nach jedem Schreiben in `/state` aufgerufen, im Betrieb ist er leer; die Tests
-lassen den Ablauf damit an genau dieser Stelle "abstuerzen" und nehmen ihn dann wieder auf.
+lassen den Ablauf damit an genau dieser Stelle "abstürzen" und nehmen ihn dann wieder auf.
 """
 
 from __future__ import annotations
@@ -206,7 +206,7 @@ def _index(step: str) -> int:
 
 
 def _refused_for_good(exc: EngineError) -> bool:
-    """Hat die Engine den Aufruf endgueltig abgelehnt (4xx)? Dann aendert ein weiterer Versuch nichts."""
+    """Hat die Engine den Aufruf endgültig abgelehnt (4xx)? Dann ändert ein weiterer Versuch nichts."""
     return exc.reason == "http" and exc.status is not None and 400 <= exc.status < 500
 
 
@@ -217,15 +217,15 @@ def _refused_for_good(exc: EngineError) -> bool:
 
 @dataclass(frozen=True)
 class Outcome:
-    """Ergebnis eines Vorgangs, fuer einen Eintrag in `status.results` (`result`).
+    """Ergebnis eines Vorgangs, für einen Eintrag in `status.results` (`result`).
 
     * `outcome`: einer aus `policy.OUTCOMES`, oder `None`, solange es noch nicht entschieden ist (das Journal steht
-      noch vor dem Commit, etwa weil `committed` nicht geschrieben werden konnte oder der Rueckbau auf die Engine
+      noch vor dem Commit, etwa weil `committed` nicht geschrieben werden konnte oder der Rückbau auf die Engine
       wartet; die Wiederaufnahme entscheidet).
     * `code`: ein fester Code oder `None` (bei `applied` und `reverted`).
     * `from_version`: die Version des Ziels vorher (soweit bekannt), `to_version`: die angeforderte.
-    * `finished`: das Journal ist geloescht. `False`: es steht noch (Aufraeumen offen oder noch nicht entschieden),
-      der Helfer bleibt beschaeftigt, bis die Wiederaufnahme fertig ist.
+    * `finished`: das Journal ist gelöscht. `False`: es steht noch (Aufräumen offen oder noch nicht entschieden),
+      der Helfer bleibt beschäftigt, bis die Wiederaufnahme fertig ist.
     """
 
     request_id: str
@@ -237,7 +237,7 @@ class Outcome:
     finished: bool = True
 
     def result(self, finished_at: float) -> dict[str, Any]:
-        """Der Eintrag fuer `status.results`. Nur fuer ein entschiedenes Ergebnis."""
+        """Der Eintrag für `status.results`. Nur für ein entschiedenes Ergebnis."""
         if self.outcome is None:
             raise ValueError("noch kein Ergebnis")
         return {"id": self.request_id, "action": self.action, "from": self.from_version, "to": self.to_version,
@@ -245,7 +245,7 @@ class Outcome:
 
 
 def committed_result(journal: Journal, now: float) -> dict[str, Any] | None:
-    """Das Ergebnis eines Vorgangs, dessen Journal auf `committed` steht (`applied` bzw. `reverted`), als Eintrag fuer
+    """Das Ergebnis eines Vorgangs, dessen Journal auf `committed` steht (`applied` bzw. `reverted`), als Eintrag für
     `status.results` mit `finished_at` = `now`; sonst `None`. Braucht weder die Engine noch die eigene ID: ID, Aktion
     und beide Versionen stehen im Journal (derselbe Eintrag wie der des Ablaufs, `Flow._decide`)."""
     if journal.step != "committed" or journal.new is None:
@@ -260,7 +260,7 @@ def _committed_outcome(journal: Journal) -> str:
 
 class _Abort(Exception):
     """Ein Schritt ist gescheitert (`code` aus `policy.CODES`; `None`, wenn die Wiederaufnahme ohne einen Fehler
-    zurueckbaut): vor dem Commit zurueckbauen."""
+    zurückbaut): vor dem Commit zurückbauen."""
 
     def __init__(self, code: str | None, detail: str | None = None) -> None:
         super().__init__(code)
@@ -269,7 +269,7 @@ class _Abort(Exception):
 
 
 class _External(Exception):
-    """Jemand hat von aussen etwas geaendert (`detail`, ein fester Bezeichner): nichts mehr anfassen."""
+    """Jemand hat von außen etwas geändert (`detail`, ein fester Bezeichner): nichts mehr anfassen."""
 
     def __init__(self, detail: str) -> None:
         super().__init__(detail)
@@ -277,10 +277,10 @@ class _External(Exception):
 
 
 class _GaveUp(Exception):
-    """Ein Aufruf beim Rueckbau oder Aufraeumen ging bis zur Frist nicht durch (`code`), oder der alte Container wurde
-    nicht wieder gesund. `final`: die Engine hat ihn endgueltig abgelehnt (4xx), ein spaeterer Versuch aendert
+    """Ein Aufruf beim Rückbau oder Aufräumen ging bis zur Frist nicht durch (`code`), oder der alte Container wurde
+    nicht wieder gesund. `final`: die Engine hat ihn endgültig abgelehnt (4xx), ein späterer Versuch ändert
     nichts. `transient`: es lag nur am Weg dorthin (die Engine war bis zur Frist nicht erreichbar, siehe
-    `_TRANSPORT_ERRORS`) oder das Journal liess sich gerade nicht schreiben -- ein spaeterer Versuch kann gelingen."""
+    `_TRANSPORT_ERRORS`) oder das Journal ließ sich gerade nicht schreiben -- ein späterer Versuch kann gelingen."""
 
     def __init__(self, code: str | None, *, final: bool = False, transient: bool = False) -> None:
         super().__init__(code)
@@ -290,12 +290,12 @@ class _GaveUp(Exception):
 
 
 class _WriteFailed(Exception):
-    """Das Journal liess sich nicht schreiben (voller Datentraeger, ...)."""
+    """Das Journal ließ sich nicht schreiben (voller Datenträger, ...)."""
 
 
 @dataclass
 class _Run:
-    """Was ein Vorgang ueber seine Schritte mitnimmt. `journal` ist immer der Stand, der auf der Platte steht."""
+    """Was ein Vorgang über seine Schritte mitnimmt. `journal` ist immer der Stand, der auf der Platte steht."""
 
     request_id: str
     action: str
@@ -333,7 +333,7 @@ class _Run:
 
 
 def shows_rescue_page(log: object) -> bool:
-    """Zeigen die letzten `RESCUE_CHECKS` Eintraege in `Health.Log` die Notseite (503)? Die Ausgabe wird nur
+    """Zeigen die letzten `RESCUE_CHECKS` Einträge in `Health.Log` die Notseite (503)? Die Ausgabe wird nur
     durchsucht, nie weitergegeben."""
     if not isinstance(log, list) or len(log) < RESCUE_CHECKS:
         return False
@@ -346,8 +346,8 @@ def judge(container: Mapping[str, Any], restart_base: int) -> str | None:
     """Was das Inspect eines gerade gestarteten Containers sagt: `HEALTHY`, ein harter Fehler (`restart_loop`,
     `exited`, `rescue_page`) oder `None` (weiter warten -- auch bei `unhealthy`).
 
-    `restart_base` ist der `RestartCount` von vorher: steigt er, startet der Container neu. Ein Neustart zaehlt vor dem
-    Rest, denn waehrend des Neustarts meldet der Docker-Dienst `Running` noch als wahr."""
+    `restart_base` ist der `RestartCount` von vorher: steigt er, startet der Container neu. Ein Neustart zählt vor dem
+    Rest, denn während des Neustarts meldet der Docker-Dienst `Running` noch als wahr."""
     state = container.get("State")
     if not isinstance(state, dict):
         return None
@@ -397,8 +397,8 @@ def _ignore(*_args: Any, **_fields: Any) -> None:
 
 
 def boot_uptime() -> float | None:
-    """Wie lange der Rechner seit dem Hochfahren laeuft, in Sekunden (`CLOCK_BOOTTIME`). Der Container teilt den Kernel
-    und damit diese Uhr mit dem Rechner; sie haengt nicht an der Wanduhr (NTP stellt sie nie) und zaehlt einen
+    """Wie lange der Rechner seit dem Hochfahren läuft, in Sekunden (`CLOCK_BOOTTIME`). Der Container teilt den Kernel
+    und damit diese Uhr mit dem Rechner; sie hängt nicht an der Wanduhr (NTP stellt sie nie) und zählt einen
     Ruhezustand mit. `None`, wenn das System sie nicht nennt."""
     try:
         value = time.clock_gettime(time.CLOCK_BOOTTIME)
@@ -408,22 +408,22 @@ def boot_uptime() -> float | None:
 
 
 class Flow:
-    """Fuehrt Update und Rueckweg aus. Die Bausteine kommen ueber den Konstruktor:
+    """Führt Update und Rückweg aus. Die Bausteine kommen über den Konstruktor:
 
-    * `engine`, `store`: die Engine und der geoeffnete Zustand (`StateStore.open`, die Sperre haelt der Aufrufer).
+    * `engine`, `store`: die Engine und der geöffnete Zustand (`StateStore.open`, die Sperre hält der Aufrufer).
     * `own_id`: die eigene Container-ID des Helfers (nie Teil eines Vorgangs).
     * `service`: der Compose-Dienst des Dashboards.
-    * `clock`, `monotonic`, `sleep`: Wanduhr (fuer alles, was in `/state` steht), monotone Uhr (fuer Fristen und Warten
+    * `clock`, `monotonic`, `sleep`: Wanduhr (für alles, was in `/state` steht), monotone Uhr (für Fristen und Warten
       im laufenden Prozess) und Warten. Die Tests stellen eine eigene Uhr.
-    * `uptime`: wie lange der Rechner schon laeuft (`boot_uptime`; `None`, wenn unbekannt), fuer die Wiederaufnahme
+    * `uptime`: wie lange der Rechner schon läuft (`boot_uptime`; `None`, wenn unbekannt), für die Wiederaufnahme
       nach einem Neustart des Rechners (`_resume_left`). Die Tests stellen einen eigenen Startzeitpunkt.
     * `on_step`: wird nach jedem geschriebenen Journal-Schritt mit dem Journal aufgerufen (bei `committed` erst, wenn
       das Ergebnis im Zustand steht; danach noch einmal, sobald Slot bzw. Sperre gespeichert sind) und am Ende mit
-      `None` (fuer den Status: `busy.step`). Ein Fehler darin unterbricht den Ablauf nicht.
+      `None` (für den Status: `busy.step`). Ein Fehler darin unterbricht den Ablauf nicht.
     * `logger`: wie `__main__.log` (Ereignis + feste Felder).
-    * `checkpoint`: nur fuer Tests, im Betrieb leer. Wird vor und nach jedem Schreiben in `/state` aufgerufen
-      (`checkpoint(when, what)`: `when` ist `before` oder `after`, `what` der Schritt des Journals, `undo` fuer das
-      Ankuendigen des Rueckbaus, `clear` fuer das Loeschen des Journals, `state` fuer `state.json`). Wirft er, endet
+    * `checkpoint`: nur für Tests, im Betrieb leer. Wird vor und nach jedem Schreiben in `/state` aufgerufen
+      (`checkpoint(when, what)`: `when` ist `before` oder `after`, `what` der Schritt des Journals, `undo` für das
+      Ankündigen des Rückbaus, `clear` für das Löschen des Journals, `state` für `state.json`). Wirft er, endet
       der Ablauf genau dort wie bei einem Absturz.
     """
 
@@ -464,11 +464,11 @@ class Flow:
     # --- Einstieg -----------------------------------------------------------
 
     def run(self, request: Request, state: State) -> Outcome:
-        """Fuehrt eine gepruefte Anforderung aus (Update oder Rueckweg) und gibt das Ergebnis zurueck.
+        """Führt eine geprüfte Anforderung aus (Update oder Rückweg) und gibt das Ergebnis zurück.
 
-        Der Aufrufer hat die Anforderung gelesen und gegen die Grenzen geprueft (`StateStore.check`, ID gemerkt), haelt
-        die Sperre von `/state`, und es laeuft kein Vorgang. `state` ist der geladene Zustand: der Ablauf aendert ihn
-        (Aktion zaehlen, Slot, Sperre nach einem Rueckweg) und speichert ihn selbst."""
+        Der Aufrufer hat die Anforderung gelesen und gegen die Grenzen geprüft (`StateStore.check`, ID gemerkt), hält
+        die Sperre von `/state`, und es läuft kein Vorgang. `state` ist der geladene Zustand: der Ablauf ändert ihn
+        (Aktion zählen, Slot, Sperre nach einem Rückweg) und speichert ihn selbst."""
         if request.action not in policy.ACTIONS:
             raise ValueError("unbekannte Aktion")
         run = _Run(request_id=request.id, action=request.action, state=state, to_version=request.version,
@@ -501,10 +501,10 @@ class Flow:
         """Nimmt einen Vorgang wieder auf, der beim letzten Lauf nicht zu Ende kam (siehe Kopf des Moduls). `None`, wenn
         kein Journal da ist.
 
-        Der Aufrufer haelt die Sperre von `/state` und uebergibt den geladenen Zustand; geprueft wird keine Grenze, und
-        die Aktion wird nicht noch einmal gezaehlt. Ein ungueltiges oder gerade nicht lesbares Journal wirft
+        Der Aufrufer hält die Sperre von `/state` und übergibt den geladenen Zustand; geprüft wird keine Grenze, und
+        die Aktion wird nicht noch einmal gezählt. Ein ungültiges oder gerade nicht lesbares Journal wirft
         `JournalCorrupt` bzw. `StateUnsafe` (aus `StateStore.load_journal`): dann handelt der Ablauf nicht. Bei
-        `outcome=None` bzw. `finished=False` steht das Journal noch, der Aufrufer ruft `recover` spaeter erneut auf."""
+        `outcome=None` bzw. `finished=False` steht das Journal noch, der Aufrufer ruft `recover` später erneut auf."""
         journal = self._store.load_journal(self._clock())
         if journal is None:
             return None
@@ -513,9 +513,9 @@ class Flow:
                    from_version=journal.old.version, journal=journal)
         self._log("recover", id=run.request_id, action=run.action, step=journal.step, undo=journal.undo)
         if _index(journal.step) >= _index("old_stopped"):
-            run.stop_sent_at = self._mono()  # ob und wann gestoppt wurde, weiss nur der abgestuerzte Lauf
+            run.stop_sent_at = self._mono()  # ob und wann gestoppt wurde, weiß nur der abgestürzte Lauf
         if journal.step in ("begin", "pulled"):
-            # Nichts veraendert, hoechstens ein Image gezogen. War der Rueckbau schon angekuendigt, bleibt sein Grund.
+            # Nichts verändert, höchstens ein Image gezogen. War der Rückbau schon angekündigt, bleibt sein Grund.
             return self._finish(run, "aborted", journal.code)
         if journal.step == "committed":
             self._decide(run)  # entschieden ist er schon: das Ergebnis braucht keine Engine
@@ -531,7 +531,7 @@ class Flow:
             return self._undo(run, journal.code, "resumed")
         try:
             if journal.step == "creating":
-                self._adopt(run, self._mono())  # ein Versuch; scheitert er an der Engine: spaeter erneut
+                self._adopt(run, self._mono())  # ein Versuch; scheitert er an der Engine: später erneut
             _old, created = self._check(run, undo=False, resume=True)
             if journal.step != "started":
                 raise _Abort(None, "interrupted")
@@ -554,42 +554,42 @@ class Flow:
     def _resume_left(self, run: _Run, created: Mapping[str, Any] | None) -> float:
         """Wie lange die Wiederaufnahme in `started` den neuen Container noch beobachtet (Sekunden, monotone Uhr).
 
-        Grundsaetzlich bis zur Frist im Journal, aber nie laenger als eine ganze Frist: Wurde die Uhr seit dem
-        Schreiben zurueckgestellt, laege die Frist sonst um den Sprung weiter in der Zukunft. Ein Neustart nur des
-        Helfers verlaengert sie so nicht.
+        Grundsätzlich bis zur Frist im Journal, aber nie länger als eine ganze Frist: Wurde die Uhr seit dem
+        Schreiben zurückgestellt, läge die Frist sonst um den Sprung weiter in der Zukunft. Ein Neustart nur des
+        Helfers verlängert sie so nicht.
 
         Hat aber der Docker-Dienst den neuen Container inzwischen neu gestartet (Stromausfall, Neustart des Rechners
         oder des Dienstes), beginnt dessen Start und eine Migration von vorn: Er bekommt eine ganze Frist ab diesem
         Neustart, wie beim ersten Start. Die Wanduhr hilft dabei nur bedingt: Ein Raspberry Pi ohne Echtzeituhr startet
         mit der zuletzt gespeicherten Zeit, NTP stellt sie erst danach -- jeder Vergleich mit einem Zeitpunkt von vor
-        dem Stellen stimmt dann nicht mehr. Darum drei Hinweise; es gilt der grosszuegigste, kuerzer als bis zur Frist
-        im Journal und laenger als eine ganze Frist ab jetzt wird es nie:
+        dem Stellen stimmt dann nicht mehr. Darum drei Hinweise; es gilt der großzügigste, kürzer als bis zur Frist
+        im Journal und länger als eine ganze Frist ab jetzt wird es nie:
 
-        * **Laufzeit des Rechners** (`uptime`, `CLOCK_BOOTTIME`: haengt nicht an der Wanduhr, NTP stellt sie nie).
-          Laeuft der Rechner noch keine ganze Frist, ist der neue Container erst nach dem Hochfahren gestartet worden
-          (er laeuft ja): Er bekommt mindestens den Rest einer ganzen Frist ab dem Hochfahren. Das ist nie mehr, als ihm
-          ab seinem eigenen Start zusteht. Nach einem Neustart nur des Helfers laeuft der Rechner laengst, dann zaehlt
+        * **Laufzeit des Rechners** (`uptime`, `CLOCK_BOOTTIME`: hängt nicht an der Wanduhr, NTP stellt sie nie).
+          Läuft der Rechner noch keine ganze Frist, ist der neue Container erst nach dem Hochfahren gestartet worden
+          (er läuft ja): Er bekommt mindestens den Rest einer ganzen Frist ab dem Hochfahren. Das ist nie mehr, als ihm
+          ab seinem eigenen Start zusteht. Nach einem Neustart nur des Helfers läuft der Rechner längst, dann zählt
           das nicht.
-        * **Start des Helfers** (`SelfInfo.started_at`). Liegt `StartedAt` des neuen Containers hoechstens `TOGETHER_S`
+        * **Start des Helfers** (`SelfInfo.started_at`). Liegt `StartedAt` des neuen Containers höchstens `TOGETHER_S`
           vor oder nach ihm, hat der Docker-Dienst beide zusammen gestartet, und beide Zeitpunkte stammen aus derselben
           Uhr (ihr Abstand stimmt, auch wenn sie falsch geht -- solange NTP sie nicht zwischen den beiden Starts stellt;
-          dann hilft die Laufzeit des Rechners). Er bekommt eine ganze Frist ab jetzt, auch wenn seine Zeit zufaellig so
+          dann hilft die Laufzeit des Rechners). Er bekommt eine ganze Frist ab jetzt, auch wenn seine Zeit zufällig so
           aussieht wie der eigene Start (die gespeicherte Uhrzeit eines Pi lag kurz nach dem Eintrag `started`) oder wie
-          ein Neustart vor langer Zeit. Wie lange er schon laeuft, ist mit einer falschen Uhr nicht zu sagen;
-          wiederaufgenommen wird kurz nach dem gemeinsamen Start, die ganze Frist ab jetzt ist also hoechstens um diese
-          kurze Zeit zu grosszuegig. Dieselbe Regel greift, wenn der Helfer zufaellig kurz vor oder nach dem eigenen
-          Start des neuen Containers gestartet wurde (etwa nach einem Absturz gleich danach): Dann wird nur laenger
-          gewartet, hoechstens eine ganze Frist ab der Wiederaufnahme statt bis zur Frist im Journal (folgt die
-          Wiederaufnahme gleich dem Start, also nur etwa `TOGETHER_S` laenger). Ein vorschneller Rueckbau entsteht so
-          nie. Startete der Helfer viel frueher oder viel spaeter als der neue Container (er allein wurde neu
+          ein Neustart vor langer Zeit. Wie lange er schon läuft, ist mit einer falschen Uhr nicht zu sagen;
+          wiederaufgenommen wird kurz nach dem gemeinsamen Start, die ganze Frist ab jetzt ist also höchstens um diese
+          kurze Zeit zu großzügig. Dieselbe Regel greift, wenn der Helfer zufällig kurz vor oder nach dem eigenen
+          Start des neuen Containers gestartet wurde (etwa nach einem Absturz gleich danach): Dann wird nur länger
+          gewartet, höchstens eine ganze Frist ab der Wiederaufnahme statt bis zur Frist im Journal (folgt die
+          Wiederaufnahme gleich dem Start, also nur etwa `TOGETHER_S` länger). Ein vorschneller Rückbau entsteht so
+          nie. Startete der Helfer viel früher oder viel später als der neue Container (er allein wurde neu
           gestartet), gilt diese Regel nicht.
         * **Zeitpunkte aus dem Journal.** Der eigene Start folgt dem Eintrag `started` (write-ahead) binnen
-          `OWN_START_S`: Liegt `StartedAt` dort, laeuft er seit dem eigenen Start, und es bleibt bei der Frist im
-          Journal. Liegt es davor oder in der Zukunft, wurde die Uhr dazwischen gestellt -- wie lange er schon laeuft,
+          `OWN_START_S`: Liegt `StartedAt` dort, läuft er seit dem eigenen Start, und es bleibt bei der Frist im
+          Journal. Liegt es davor oder in der Zukunft, wurde die Uhr dazwischen gestellt -- wie lange er schon läuft,
           ist dann unbekannt, und er bekommt eine ganze Frist ab jetzt. Liegt es dazwischen, eine ganze Frist ab
           `StartedAt`.
 
-        Fehlt die Laufzeit des Rechners oder der Start des Helfers (`None`), entscheiden die uebrigen Hinweise."""
+        Fehlt die Laufzeit des Rechners oder der Start des Helfers (`None`), entscheiden die übrigen Hinweise."""
         journal = run.journal
         assert journal is not None
         whole = float(policy.DEADLINE_S)
@@ -604,7 +604,7 @@ class Flow:
         helper_started = run.me.started_at if run.me is not None else None
         together = started is not None and helper_started is not None and abs(started - helper_started) <= TOGETHER_S
         if started is None or (not together and written - START_SLACK_S <= started <= written + OWN_START_S):
-            pass  # Start unbekannt bzw. er laeuft seit dem eigenen Start: nur die Laufzeit des Rechners zaehlt
+            pass  # Start unbekannt bzw. er läuft seit dem eigenen Start: nur die Laufzeit des Rechners zählt
         elif together or started < written - START_SLACK_S or started > now + START_SLACK_S:
             fresh = whole  # mit dem Helfer zusammen gestartet, oder die Uhr wurde dazwischen gestellt
         else:
@@ -616,7 +616,7 @@ class Flow:
         return max(left, fresh)
 
     def _context(self, run: _Run) -> None:
-        """Fuer die Wiederaufnahme neu lesen, was der erste Lauf aus der Vorpruefung kannte (nur lesend): die Labels des
+        """Für die Wiederaufnahme neu lesen, was der erste Lauf aus der Vorprüfung kannte (nur lesend): die Labels des
         Ziels aus dem eigenen Projekt und den alten Container als Vorlage. Vor dem Commit muss der alte Container noch
         genau der aus dem Journal sein (`_External`)."""
         journal = run.journal
@@ -638,11 +638,11 @@ class Flow:
         return self._outcome(run, None, None, finished=False)
 
     def drop_expired_slot(self, state: State) -> bool:
-        """Raeumt einen abgelaufenen Slot weg: erst sein Schutz-Tag entfernen (solange der Slot noch in `state.json`
-        steht), dann den Slot loeschen und speichern. Nur ohne laufenden Vorgang aufrufen. `True`, wenn er weg ist;
-        scheitert die Engine voruebergehend, bleibt alles stehen (spaeter erneut). Lehnt sie endgueltig ab (4xx, etwa
-        409, weil ein liegen gebliebener alter Container das Image noch benutzt), aendert ein weiterer Versuch nichts:
-        Das Tag bleibt liegen (es haelt nur ein Image fest), der Slot geht trotzdem -- wie beim Aufraeumen nach dem
+        """Räumt einen abgelaufenen Slot weg: erst sein Schutz-Tag entfernen (solange der Slot noch in `state.json`
+        steht), dann den Slot löschen und speichern. Nur ohne laufenden Vorgang aufrufen. `True`, wenn er weg ist;
+        scheitert die Engine vorübergehend, bleibt alles stehen (später erneut). Lehnt sie endgültig ab (4xx, etwa
+        409, weil ein liegen gebliebener alter Container das Image noch benutzt), ändert ein weiterer Versuch nichts:
+        Das Tag bleibt liegen (es hält nur ein Image fest), der Slot geht trotzdem -- wie beim Aufräumen nach dem
         Commit, sonst fragte der Helfer die Engine alle 30 s erneut, ohne Ende."""
         slot = state.slot
         if slot is None or self._now() < slot.until:
@@ -665,10 +665,10 @@ class Flow:
         self._log("slot_expired", version=slot.from_version)
         return True
 
-    # --- Vorab: pruefen, Journal anlegen, Image holen ------------------------
+    # --- Vorab: prüfen, Journal anlegen, Image holen ------------------------
 
     def _prepare(self, run: _Run) -> None:
-        """Vorpruefung erneut und die Pruefungen der Anforderung, alles nur lesend."""
+        """Vorprüfung erneut und die Prüfungen der Anforderung, alles nur lesend."""
         request = run.request
         assert request is not None
         check = target.preflight(self._engine, self_id=self._own_id, service=self._service,
@@ -716,7 +716,7 @@ class Flow:
             raise Refusal(policy.STATE_UNSAFE, "journal_write") from None
 
     def _fetch_update(self, run: _Run) -> None:
-        """Bewegliches Tag aufloesen, nach Digest ziehen, das gezogene Image pruefen; dann `pulled`."""
+        """Bewegliches Tag auflösen, nach Digest ziehen, das gezogene Image prüfen; dann `pulled`."""
         journal = run.journal
         assert journal is not None and run.target is not None
         try:
@@ -756,7 +756,7 @@ class Flow:
                                                                          version=label)))
 
     def _fetch_previous(self, run: _Run) -> None:
-        """Rueckweg: das Image aus dem Slot. Fehlt es, nach dem Digest des Slots ziehen. Es muss genau die ID und die
+        """Rückweg: das Image aus dem Slot. Fehlt es, nach dem Digest des Slots ziehen. Es muss genau die ID und die
         Version des Slots haben (`previous_mismatch`); dann `pulled`."""
         journal, slot = run.journal, run.slot
         assert journal is not None and slot is not None and run.target is not None
@@ -789,14 +789,14 @@ class Flow:
                                                                          version=label)))
 
     def _build(self, run: _Run) -> None:
-        """Den `create`-Body mit dem neuen Image bauen (reine Funktion; Ablehnungen wie in der Vorpruefung)."""
+        """Den `create`-Body mit dem neuen Image bauen (reine Funktion; Ablehnungen wie in der Vorprüfung)."""
         found, journal = run.target, run.journal
         assert found is not None and journal is not None and journal.new is not None
         run.plan = clone.build(found.container, found.image, new_image_id=journal.new.image_id,
                                api_version=self._engine.api_version or API_MIN, network_drivers=found.network_drivers)
 
     def _count(self, run: _Run) -> None:
-        """Ab hier aendert sich etwas: die Aktion zaehlt fuer die Grenze, gespeichert vor der ersten Aenderung."""
+        """Ab hier ändert sich etwas: die Aktion zählt für die Grenze, gespeichert vor der ersten Änderung."""
         run.state.record_action(self._now())
         try:
             self._save_state(run.state)
@@ -804,7 +804,7 @@ class Flow:
             raise Refusal(policy.STATE_UNSAFE, "state_write") from None
 
     def _refuse(self, run: _Run, code: str, detail: str | None) -> Outcome:
-        """Nichts veraendert (hoechstens ein Image gezogen): Journal loeschen, falls es eins gibt."""
+        """Nichts verändert (höchstens ein Image gezogen): Journal löschen, falls es eins gibt."""
         self._log("flow_refused", id=run.request_id, code=code, detail=detail)
         self._keep(run, "refused", code)
         finished = True
@@ -812,10 +812,10 @@ class Flow:
             finished = self._clear(run)
         return self._outcome(run, "refused", code, finished=finished)
 
-    # --- Vorwaerts ------------------------------------------------------------
+    # --- Vorwärts ------------------------------------------------------------
 
     def _switch(self, run: _Run) -> None:
-        """Von `protected` bis `started`. Jeder Fehler ist ein `_Abort` (Rueckbau) oder `_External`."""
+        """Von `protected` bis `started`. Jeder Fehler ist ein `_Abort` (Rückbau) oder `_External`."""
         journal = run.journal
         assert journal is not None and journal.new is not None
         old, new = journal.old, journal.new
@@ -873,7 +873,7 @@ class Flow:
         run.restart_base = _restart_count(created)
 
     def _stop_old(self, run: _Run) -> None:
-        """`old_stopped`: Restart-Policy des alten auf `no`, stoppen, pruefen, dass er steht."""
+        """`old_stopped`: Restart-Policy des alten auf `no`, stoppen, prüfen, dass er steht."""
         journal = run.journal
         assert journal is not None
         old = journal.old
@@ -906,7 +906,7 @@ class Flow:
 
     def _observe(self, run: _Run) -> str | None:
         """Bis zum ersten `healthy` (`None`), einem harten Fehler oder der Frist (`timeout`). Engine-Fehler beenden das
-        Beobachten nicht: neu aushandeln und beim naechsten Blick erneut."""
+        Beobachten nicht: neu aushandeln und beim nächsten Blick erneut."""
         journal, until = run.journal, run.watch_until
         assert journal is not None and until is not None
         while True:
@@ -930,7 +930,7 @@ class Flow:
 
     def _commit(self, run: _Run) -> Outcome:
         """Beim ersten `healthy`: `committed` schreiben, das Ergebnis eintragen und erst dann den Status schreiben
-        (`_decide`), dann aufraeumen. Ohne `committed` auf der Platte wird nichts mehr veraendert (das Journal bleibt
+        (`_decide`), dann aufräumen. Ohne `committed` auf der Platte wird nichts mehr verändert (das Journal bleibt
         auf `started`, die Wiederaufnahme entscheidet)."""
         try:
             self._advance(run, "committed", notify=False)
@@ -943,34 +943,34 @@ class Flow:
     def _decide(self, run: _Run) -> None:
         """Mit `committed` ist der Vorgang entschieden: das Ergebnis eintragen und speichern (`_keep`), dann den Status
         schreiben -- gleich nach dem Schreiben von `committed` (der Status dazu wartet darauf) und bei der
-        Wiederaufnahme, jeweils vor jedem Aufruf an der Engine. Alles Noetige steht im Journal. So zeigt kein Status
-        `busy.step` = `committed` ohne dieses Ergebnis, auch wenn das Aufraeumen danach an der Engine haengt oder sie
+        Wiederaufnahme, jeweils vor jedem Aufruf an der Engine. Alles Nötige steht im Journal. So zeigt kein Status
+        `busy.step` = `committed` ohne dieses Ergebnis, auch wenn das Aufräumen danach an der Engine hängt oder sie
         gar nicht erreichbar ist. Scheitert das Speichern, steht das Ergebnis schon im geladenen Zustand (und damit im
-        Status), und das Speichern mit dem Slot holt es nach. Eine Wiederaufnahme traegt es nicht noch einmal ein
-        (dasselbe Ergebnis fuer dieselbe ID): Es behaelt seinen ersten Zeitpunkt."""
+        Status), und das Speichern mit dem Slot holt es nach. Eine Wiederaufnahme trägt es nicht noch einmal ein
+        (dasselbe Ergebnis für dieselbe ID): Es behält seinen ersten Zeitpunkt."""
         journal = run.journal
         assert journal is not None
         self._keep(run, _committed_outcome(journal), None)
         self._notify(journal)
 
     def _finish_commit(self, run: _Run) -> Outcome:
-        """Aufraeumen nach `committed`, auch bei der Wiederaufnahme. Jeder Teil ist wiederholbar (schon weg gilt als
+        """Aufräumen nach `committed`, auch bei der Wiederaufnahme. Jeder Teil ist wiederholbar (schon weg gilt als
         erledigt, ein schon geschriebener Slot wird nicht noch einmal geschrieben). Das Ergebnis steht schon im Zustand
         und im Status (`_decide`, vorher aufgerufen).
 
-        Reihenfolge: Nach einem Update zuerst das Schutz-Tag des ersetzten Slots -- die Bindung laesst es nur zu,
-        solange dieser Slot noch in `state.json` steht (das Speichern des Ergebnisses davor laesst den Slot
-        unveraendert). Dann Slot bzw. Sperre und Ergebnis speichern, und zwar jedes Mal (der Inhalt ist derselbe):
-        Scheiterte das Speichern in einer frueheren Runde, steht beides sonst nur im geladenen Zustand, und das Journal
+        Reihenfolge: Nach einem Update zuerst das Schutz-Tag des ersetzten Slots -- die Bindung lässt es nur zu,
+        solange dieser Slot noch in `state.json` steht (das Speichern des Ergebnisses davor lässt den Slot
+        unverändert). Dann Slot bzw. Sperre und Ergebnis speichern, und zwar jedes Mal (der Inhalt ist derselbe):
+        Scheiterte das Speichern in einer früheren Runde, steht beides sonst nur im geladenen Zustand, und das Journal
         ginge, ohne dass es je auf der Platte stand. Gleich danach den Status schreiben (`previous` zeigt so sofort den
-        neuen Slot). Erst danach den alten Container entfernen und beim Rueckweg die beiden Schutz-Tags (eins davon
-        gehoert zum Image des alten Containers), zuletzt das Journal loeschen. So haengen Rueckweg-Slot und Ergebnis
+        neuen Slot). Erst danach den alten Container entfernen und beim Rückweg die beiden Schutz-Tags (eins davon
+        gehört zum Image des alten Containers), zuletzt das Journal löschen. So hängen Rückweg-Slot und Ergebnis
         nie an einem Container, der nicht gehen will.
 
         Geht ein Teil bis `CLEANUP_RETRY_S` nicht durch, bleibt das Journal auf `committed` (`finished=False`, die
-        naechste Runde macht weiter). Lehnt die Engine ihn endgueltig ab (4xx, etwa weil jemand den alten Container von
+        nächste Runde macht weiter). Lehnt die Engine ihn endgültig ab (4xx, etwa weil jemand den alten Container von
         Hand gestartet hat) oder scheitert er `CLEANUP_ROUNDS` Runden lang an ihr, bleibt dieser Teil liegen und es
-        geht weiter -- sonst bliebe der Helfer fuer immer beschaeftigt."""
+        geht weiter -- sonst bliebe der Helfer für immer beschäftigt."""
         journal = run.journal
         assert journal is not None and journal.new is not None and journal.new.id is not None
         old = journal.old
@@ -978,8 +978,8 @@ class Flow:
         outcome = _committed_outcome(journal)
         update = journal.action == "update"
         needs_slot = update and not self._slot_written(run)
-        # Die Bindung kennt den Slot, der jetzt ersetzt wird: nur dessen Schutz-Tag darf weg (beim Rueckweg beide
-        # Versionen aus dem Journal). Ist der neue Slot schon gespeichert, bleibt sein Tag (die Bindung laesst die
+        # Die Bindung kennt den Slot, der jetzt ersetzt wird: nur dessen Schutz-Tag darf weg (beim Rückweg beide
+        # Versionen aus dem Journal). Ist der neue Slot schon gespeichert, bleibt sein Tag (die Bindung lässt die
         # Version des alten Images nach einem Update nie zu).
         binding = self._engine.bind(journal, self._own_id, slot=state.slot if update else None)
         tags = [("protect_tag_left", "untag:" + version, lambda v=version: self._untag(v, binding))
@@ -1001,8 +1001,8 @@ class Flow:
         return self._outcome(run, outcome, None, finished=self._clear(run))
 
     def _cleanup(self, run: _Run, parts: list[tuple[str, str, Callable[[], None]]], until: float) -> bool:
-        """Die Teile des Aufraeumens nacheinander, je `(Ereignis im Log, wenn er liegen bleibt; Schluessel fuer das
-        Zaehlen der Runden; Aufruf)`. `False`, wenn einer in dieser Runde nicht durchging und es spaeter erneut versucht
+        """Die Teile des Aufräumens nacheinander, je `(Ereignis im Log, wenn er liegen bleibt; Schlüssel für das
+        Zählen der Runden; Aufruf)`. `False`, wenn einer in dieser Runde nicht durchging und es später erneut versucht
         wird."""
         for left, key, call in parts:
             try:
@@ -1019,7 +1019,7 @@ class Flow:
         return True
 
     def _slot_written(self, run: _Run) -> bool:
-        """Steht der Slot dieses Updates schon in `state.json` (Absturz nach dem Speichern, vor dem Loeschen des
+        """Steht der Slot dieses Updates schon in `state.json` (Absturz nach dem Speichern, vor dem Löschen des
         Journals)?"""
         journal, slot = run.journal, run.state.slot
         assert journal is not None and journal.new is not None
@@ -1027,7 +1027,7 @@ class Flow:
                 and slot.installed_image_id == journal.new.image_id)
 
     def _settle(self, run: _Run, needs_slot: bool) -> None:
-        """Slot nach einem Update bzw. Sperre nach einem Rueckweg in `run.state` eintragen, falls das noch nicht
+        """Slot nach einem Update bzw. Sperre nach einem Rückweg in `run.state` eintragen, falls das noch nicht
         geschehen ist (ein schon eingetragener Slot und eine schon gesetzte Sperre bleiben, wie sie sind)."""
         journal = run.journal
         assert journal is not None and journal.new is not None and journal.new.id is not None
@@ -1036,8 +1036,8 @@ class Flow:
             if not needs_slot:
                 return
             # Der Digest stammt aus dem Journal, nicht aus der Engine: Ist das alte Image inzwischen weg (`image prune
-            # -a`) oder nennt die Engine ihn nicht mehr (containerd-Store), zieht ein Rueckweg es nach genau diesem
-            # Digest wieder und prueft ID und Version.
+            # -a`) oder nennt die Engine ihn nicht mehr (containerd-Store), zieht ein Rückweg es nach genau diesem
+            # Digest wieder und prüft ID und Version.
             state.commit_update(policy.new_slot(
                 from_version=old.version, image_id=old.image_id, repo_digest=old.repo_digest,
                 installed_container_id=new.id, installed_image_id=new.image_id, now=now,
@@ -1047,11 +1047,11 @@ class Flow:
             return
         state.commit_rollback(old.version, now)
 
-    # --- Rueckbau -------------------------------------------------------------
+    # --- Rückbau -------------------------------------------------------------
 
     def _undo(self, run: _Run, code: str | None, detail: str | None) -> Outcome:
-        """Zurueck auf den alten Stand (siehe Kopf des Moduls). Jeder Teil ist wiederholbar; eine Wiederaufnahme mit
-        angekuendigtem Rueckbau geht denselben Weg mit dem Grund aus dem Journal."""
+        """Zurück auf den alten Stand (siehe Kopf des Moduls). Jeder Teil ist wiederholbar; eine Wiederaufnahme mit
+        angekündigtem Rückbau geht denselben Weg mit dem Grund aus dem Journal."""
         journal = run.journal
         assert journal is not None
         self._log("flow_undo", id=run.request_id, step=journal.step, code=code, detail=detail)
@@ -1090,16 +1090,16 @@ class Flow:
                 try:
                     self._retry(lambda: self._untag(old.version, binding), until)
                 except _GaveUp:
-                    # Der alte Container laeuft wieder: ein liegen gebliebenes Schutz-Tag haelt nur ein Image fest.
+                    # Der alte Container läuft wieder: ein liegen gebliebenes Schutz-Tag hält nur ein Image fest.
                     self._log("protect_tag_left", id=run.request_id, version=old.version)
         except _External as exc:
             return self._external(run, exc.detail)
         except _GaveUp as exc:
             current_journal = run.journal
             if exc.transient and current_journal is not None and (current_journal.undo or not announced):
-                # Nur voruebergehend: Das Journal bleibt stehen -- mit angekuendigtem Rueckbau, oder noch vor dessen
-                # erstem Teil --, und die Wiederaufnahme macht weiter, sobald die Engine bzw. der Datentraeger wieder
-                # geht. Ohne Ankuendigung nach dem ersten Teil saehe sie den halben Rueckbau als Aenderung von aussen.
+                # Nur vorübergehend: Das Journal bleibt stehen -- mit angekündigtem Rückbau, oder noch vor dessen
+                # erstem Teil --, und die Wiederaufnahme macht weiter, sobald die Engine bzw. der Datenträger wieder
+                # geht. Ohne Ankündigung nach dem ersten Teil sähe sie den halben Rückbau als Änderung von außen.
                 self._log("undo_pending", id=run.request_id, code=exc.code)
                 return self._outcome(run, None, None, finished=False)
             self._log("rollback_failed", id=run.request_id, code=code, detail=exc.code)
@@ -1108,9 +1108,9 @@ class Flow:
         return self._finish(run, outcome, code)
 
     def _announce_undo(self, run: _Run, code: str | None) -> None:
-        """Den Rueckbau im Journal ankuendigen, bevor sein erster Teil laeuft. Geht das Schreiben nicht, wird trotzdem
-        zurueckgebaut: der alte Container geht vor (eine Wiederaufnahme nach einem weiteren Absturz saehe den halben
-        Rueckbau dann als Aenderung von aussen und fasste nichts an)."""
+        """Den Rückbau im Journal ankündigen, bevor sein erster Teil läuft. Geht das Schreiben nicht, wird trotzdem
+        zurückgebaut: der alte Container geht vor (eine Wiederaufnahme nach einem weiteren Absturz sähe den halben
+        Rückbau dann als Änderung von außen und fasste nichts an)."""
         journal = run.journal
         assert journal is not None
         if journal.undo:
@@ -1121,9 +1121,9 @@ class Flow:
             self._log("undo_unannounced", id=run.request_id)
 
     def _adopt(self, run: _Run, until: float) -> None:
-        """Rueckbau im Schritt `creating`: Wurde der neue Container angelegt, ohne dass seine ID im Journal steht (etwa
+        """Rückbau im Schritt `creating`: Wurde der neue Container angelegt, ohne dass seine ID im Journal steht (etwa
         `create` am Zeitlimit), wird er hier erkannt -- `<name>`, Zustand `created`, nie gestartet, das neue Image, die
-        Compose-Labels des Ziels -- und erst als `created` ins Journal eingetragen, damit der Rueckbau ihn entfernen
+        Compose-Labels des Ziels -- und erst als `created` ins Journal eingetragen, damit der Rückbau ihn entfernen
         darf. Ein anderer Container unter `<name>` ist `external_change`."""
         journal = run.journal
         assert journal is not None and journal.new is not None
@@ -1146,7 +1146,7 @@ class Flow:
 
     def _is_own_created(self, run: _Run, container: Mapping[str, Any]) -> bool:
         """Angelegt, nie gestartet, mit dem neuen Image und genau den Compose-Labels des Ziels (das Label
-        `com.docker.compose.image` traegt beim Klon die neue Image-ID)."""
+        `com.docker.compose.image` trägt beim Klon die neue Image-ID)."""
         journal, template = run.journal, run.template
         assert journal is not None and journal.new is not None and template is not None
         state = container.get("State")
@@ -1163,10 +1163,10 @@ class Flow:
 
     def _old_after_stop(self, run: _Run, until: float) -> dict[str, Any]:
         """Das Inspect des alten Containers, sobald ein Stopp von vorhin durch sein kann. Der Docker-Dienst stoppt nach
-        einer Fehlerantwort auf `stop` (oder wenn die Antwort ausblieb) weiter und haelt den Container danach fuer von
+        einer Fehlerantwort auf `stop` (oder wenn die Antwort ausblieb) weiter und hält den Container danach für von
         Hand gestoppt: `unless-stopped` startet ihn dann nie wieder, und sein Health-Status bleibt bis zum Ende auf
-        `healthy`. Laeuft er noch, wird darum gewartet, bis er steht oder die Frist des Stopps (`t + STOP_GRACE_S` ab
-        dem Aufruf) um ist; steht er, startet ihn der Rueckbau wie gewohnt. Laeuft er danach noch, laesst er sich
+        `healthy`. Läuft er noch, wird darum gewartet, bis er steht oder die Frist des Stopps (`t + STOP_GRACE_S` ab
+        dem Aufruf) um ist; steht er, startet ihn der Rückbau wie gewohnt. Läuft er danach noch, lässt er sich
         wirklich nicht stoppen und gilt als laufend."""
         journal = run.journal
         assert journal is not None
@@ -1183,16 +1183,16 @@ class Flow:
             self._sleep(POLL_INTERVAL_S)
 
     def _slot_keeps_tag(self, run: _Run) -> bool:
-        """Das Schutz-Tag der alten Version gehoert zugleich dem Slot (das Ziel laeuft gerade mit der Version, auf die
-        der Slot zurueckfuehrt): dann bleibt es liegen, sonst verloere der Slot seinen Schutz. Es geht mit dem Slot
+        """Das Schutz-Tag der alten Version gehört zugleich dem Slot (das Ziel läuft gerade mit der Version, auf die
+        der Slot zurückführt): dann bleibt es liegen, sonst verlöre der Slot seinen Schutz. Es geht mit dem Slot
         weg."""
         journal, slot = run.journal, run.state.slot
         return journal is not None and slot is not None and slot.from_version == journal.old.version
 
     def _watch(self, container_id: str, until: float) -> str | None:
-        """Wartet nach dem Rueckbau auf den alten Container: `HEALTHY`, ein harter Fehler oder `timeout` (`until` auf
-        der monotonen Uhr). War die Engine bis zur Frist nicht erreichbar, ist ueber den Container nichts bekannt:
-        `_GaveUp` (voruebergehend), die Wiederaufnahme sieht spaeter nach."""
+        """Wartet nach dem Rückbau auf den alten Container: `HEALTHY`, ein harter Fehler oder `timeout` (`until` auf
+        der monotonen Uhr). War die Engine bis zur Frist nicht erreichbar, ist über den Container nichts bekannt:
+        `_GaveUp` (vorübergehend), die Wiederaufnahme sieht später nach."""
         base: int | None = None
         unreachable: EngineError | None = None
         while True:
@@ -1216,7 +1216,7 @@ class Flow:
                 return policy.TIMEOUT
             self._sleep(POLL_INTERVAL_S)
 
-    # --- Pruefen, ob jemand von aussen etwas geaendert hat ----------------------
+    # --- Prüfen, ob jemand von außen etwas geändert hat ----------------------
 
     def _check_forward(self, run: _Run) -> None:
         try:
@@ -1226,18 +1226,18 @@ class Flow:
             raise _Abort(exc.code, exc.reason) from None
 
     def _check(self, run: _Run, *, undo: bool, resume: bool = False) -> tuple[dict[str, Any], dict[str, Any] | None]:
-        """Liest die Container erneut und haelt sie gegen das Journal. Gibt `(alter, neuer)` zurueck (der neue ist
-        `None`, solange er nicht im Journal steht, oder im Rueckbau, wenn er schon entfernt ist). Wirft `_External`.
+        """Liest die Container erneut und hält sie gegen das Journal. Gibt `(alter, neuer)` zurück (der neue ist
+        `None`, solange er nicht im Journal steht, oder im Rückbau, wenn er schon entfernt ist). Wirft `_External`.
 
-        * Kein weiterer Container mit den Ziel-Labels (Projekt, Dienst, kein One-off) ausser dem alten, dem neuen und
+        * Kein weiterer Container mit den Ziel-Labels (Projekt, Dienst, kein One-off) außer dem alten, dem neuen und
           dem Helfer selbst.
-        * Der alte Container hat seine ID, sein Image und den Namen, den die erledigten Schritte erwarten (im Rueckbau
-          einen der beiden); vorwaerts steht er ab `old_stopped`.
-        * Der neue Container (ab `created`) hat seine ID und vorwaerts das neue Image und den Namen des Ziels.
+        * Der alte Container hat seine ID, sein Image und den Namen, den die erledigten Schritte erwarten (im Rückbau
+          einen der beiden); vorwärts steht er ab `old_stopped`.
+        * Der neue Container (ab `created`) hat seine ID und vorwärts das neue Image und den Namen des Ziels.
 
-        `resume` (Wiederaufnahme ohne angekuendigten Rueckbau): Der Schritt im Journal ist angekuendigt, aber vielleicht
-        noch nicht ausgefuehrt. In `renamed` gilt darum jeder der beiden Namen, in `old_stopped` darf der alte noch
-        laufen; fuer alle frueheren Schritte gilt dasselbe wie vorwaerts."""
+        `resume` (Wiederaufnahme ohne angekündigten Rückbau): Der Schritt im Journal ist angekündigt, aber vielleicht
+        noch nicht ausgeführt. In `renamed` gilt darum jeder der beiden Namen, in `old_stopped` darf der alte noch
+        laufen; für alle früheren Schritte gilt dasselbe wie vorwärts."""
         journal = run.journal
         assert journal is not None
         old, new = journal.old, journal.new
@@ -1276,8 +1276,8 @@ class Flow:
             elif created.get("Id") != new_id:
                 raise _External("new_changed")
             elif not undo and (created.get("Image") != new.image_id or created.get("Name") != "/" + old.name):
-                # Im Rueckbau genuegt die ID: sie stammt aus der Antwort auf das eigene `create` (oder aus der Pruefung
-                # in `_adopt`), der Container gehoert also dem Ablauf -- auch wenn die Nachkontrolle ihn gerade wegen
+                # Im Rückbau genügt die ID: sie stammt aus der Antwort auf das eigene `create` (oder aus der Prüfung
+                # in `_adopt`), der Container gehört also dem Ablauf -- auch wenn die Nachkontrolle ihn gerade wegen
                 # eines falschen Images verworfen hat.
                 raise _External("new_changed")
         return current, created
@@ -1291,9 +1291,9 @@ class Flow:
             raise
 
     def _external(self, run: _Run, detail: str) -> Outcome:
-        """Von aussen geaendert: Journal loeschen, nichts mehr anfassen. Ab `old_stopped` hat der Helfer womoeglich
-        die Restart-Policy des alten Containers auf `no` gesetzt und nicht wieder hergestellt (zuruecknehmen hiesse,
-        doch etwas anzufassen): Das Log nennt dann die alte, damit sie sich von Hand setzen laesst."""
+        """Von außen geändert: Journal löschen, nichts mehr anfassen. Ab `old_stopped` hat der Helfer womöglich
+        die Restart-Policy des alten Containers auf `no` gesetzt und nicht wieder hergestellt (zurücknehmen hieße,
+        doch etwas anzufassen): Das Log nennt dann die alte, damit sie sich von Hand setzen lässt."""
         self._log("external_change", id=run.request_id, detail=detail)
         journal = run.journal
         if (journal is not None and journal.step != "committed" and _index(journal.step) >= _index("old_stopped")
@@ -1306,8 +1306,8 @@ class Flow:
     # --- Hilfen ---------------------------------------------------------------
 
     def _advance(self, run: _Run, step: str, *, notify: bool = True, **changes: Any) -> Binding:
-        """Den naechsten Schritt ins Journal schreiben (write-ahead), dann neu binden. Scheitert das Schreiben, bleibt
-        der vorige Stand gueltig und es geht in den Rueckbau (`state_unsafe`). `notify=False`: den Status schreibt der
+        """Den nächsten Schritt ins Journal schreiben (write-ahead), dann neu binden. Scheitert das Schreiben, bleibt
+        der vorige Stand gültig und es geht in den Rückbau (`state_unsafe`). `notify=False`: den Status schreibt der
         Aufrufer selbst (bei `committed` erst mit dem Ergebnis)."""
         journal = run.journal
         assert journal is not None
@@ -1366,9 +1366,9 @@ class Flow:
                        from_version=run.from_version, to_version=run.to_version).result(self._clock())
 
     def _keep(self, run: _Run, outcome: str, code: str | None) -> bool:
-        """Das Ergebnis in `state.json` festhalten, bevor das Journal geloescht wird: So steht es nach einem Absturz
+        """Das Ergebnis in `state.json` festhalten, bevor das Journal gelöscht wird: So steht es nach einem Absturz
         dazwischen trotzdem im Status. Scheitert das Schreiben, geht es trotzdem weiter (das Ergebnis steht dann nur im
-        Status dieses Laufs). `True`, wenn es neu eingetragen wurde (`False`: fuer diese ID stand dasselbe schon da)."""
+        Status dieses Laufs). `True`, wenn es neu eingetragen wurde (`False`: für diese ID stand dasselbe schon da)."""
         if not run.state.record_result(self._entry(run, outcome, code)):
             return False
         try:
@@ -1378,13 +1378,13 @@ class Flow:
         return True
 
     def _outcome(self, run: _Run, outcome: str | None, code: str | None, *, finished: bool) -> Outcome:
-        """Das Ergebnis fuer den Aufrufer. `flow_done` kommt je Anforderung genau einmal ins Log: erst, wenn der Vorgang
-        ganz fertig ist (das Journal ist geloescht). Bleibt das Aufraeumen nach dem Commit Runde um Runde offen, steht
-        dort jedes Mal nur `commit_cleanup_pending`. So braucht es kein Gedaechtnis, das ueber einen Neustart verloren
-        ginge oder begrenzt werden muesste: Nach dem Loeschen des Journals gibt es fuer diese ID keinen Ablauf mehr.
+        """Das Ergebnis für den Aufrufer. `flow_done` kommt je Anforderung genau einmal ins Log: erst, wenn der Vorgang
+        ganz fertig ist (das Journal ist gelöscht). Bleibt das Aufräumen nach dem Commit Runde um Runde offen, steht
+        dort jedes Mal nur `commit_cleanup_pending`. So braucht es kein Gedächtnis, das über einen Neustart verloren
+        ginge oder begrenzt werden müsste: Nach dem Löschen des Journals gibt es für diese ID keinen Ablauf mehr.
 
         Die Zeile `request` schreibt nicht der Ablauf, sondern `__main__`, einmal je ID und Prozess: sobald `run`
-        zurueckkommt (beim Commit also erst nach der ersten Runde des Aufraeumens; `outcome` ist `None`, wenn noch
+        zurückkommt (beim Commit also erst nach der ersten Runde des Aufräumens; `outcome` ist `None`, wenn noch
         nichts entschieden ist), nach einem Neustart des Helfers erst, wenn `recover` ein entschiedenes Ergebnis
         liefert. Sie steht also nie schon im Moment der Entscheidung im Log."""
         if outcome is not None and finished:
@@ -1400,7 +1400,7 @@ class Flow:
 
     def _retry(self, call: Callable[[], Any], until: float) -> Any:
         """Ruft `call` auf, bis es ohne `EngineError` durchgeht. Dazwischen 5 s warten und neu aushandeln. Ein
-        Client-Fehler der Engine (4xx) ist endgueltig, ebenso das Erreichen von `until` (monotone Uhr): dann
+        Client-Fehler der Engine (4xx) ist endgültig, ebenso das Erreichen von `until` (monotone Uhr): dann
         `_GaveUp`."""
         while True:
             try:
@@ -1429,9 +1429,9 @@ class Flow:
                 raise
 
     def _discard(self, container_id: str, t: int, binding: Binding) -> None:
-        """Den neuen Container im Rueckbau stoppen und entfernen. Gestoppt wird immer, auch wenn er gerade nicht laeuft
+        """Den neuen Container im Rückbau stoppen und entfernen. Gestoppt wird immer, auch wenn er gerade nicht läuft
         (dann antwortet der Docker-Dienst mit 304): Ging die Antwort auf `start` verloren, kann er ihn noch danach
-        starten. Lehnt der Docker-Dienst das Entfernen ab (409) und laeuft der Container inzwischen, wird er noch
+        starten. Lehnt der Docker-Dienst das Entfernen ab (409) und läuft der Container inzwischen, wird er noch
         einmal gestoppt und dann entfernt."""
         self._stop(container_id, t, binding)
         try:
@@ -1456,10 +1456,10 @@ class Flow:
                 raise
 
     def _rename_back(self, old: OldContainer, binding: Binding) -> None:
-        """Den alten Container im Rueckbau zurueck auf den Namen des Ziels umbenennen. Als einziger Aufruf des Rueckbaus
-        ist das nicht von sich aus wiederholbar: Ging die Antwort auf einen frueheren Versuch verloren (Zeitlimit,
-        abgerissene Verbindung), hat der Docker-Dienst ihn womoeglich schon umbenannt und lehnt ein Umbenennen auf den
-        aktuellen Namen mit 400 ab. Darum nach jedem Fehler nachsehen: traegt er den Namen schon, ist es erledigt."""
+        """Den alten Container im Rückbau zurück auf den Namen des Ziels umbenennen. Als einziger Aufruf des Rückbaus
+        ist das nicht von sich aus wiederholbar: Ging die Antwort auf einen früheren Versuch verloren (Zeitlimit,
+        abgerissene Verbindung), hat der Docker-Dienst ihn womöglich schon umbenannt und lehnt ein Umbenennen auf den
+        aktuellen Namen mit 400 ab. Darum nach jedem Fehler nachsehen: trägt er den Namen schon, ist es erledigt."""
         try:
             self._engine.rename_container(old.id, old.name, binding=binding)
         except EngineError:

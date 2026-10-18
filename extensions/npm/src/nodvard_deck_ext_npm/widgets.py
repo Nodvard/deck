@@ -28,6 +28,12 @@ def _problem_row(service: str, status: dict[str, Any]) -> dict[str, Any]:
     return {"title": f"{service} nicht erreichbar", "subtitle": status.get("message") or "", "label": "nicht erreichbar", "tone": "danger"}
 
 
+def widget_state(status: dict[str, Any]) -> str:
+    """`meta.state` der Kachel: `not_configured`, wenn nichts eingetragen ist (die Übersicht blendet sie dann aus).
+    Eine eingetragene, aber unbrauchbare Einstellung ist ein Fehler und bleibt sichtbar."""
+    return "error" if status.get("invalid") else str(status["state"])
+
+
 def certificate_rows(status: dict[str, Any]) -> list[dict[str, Any]]:
     if status.get("state") != "ok":
         return [_problem_row("Nginx Proxy Manager", status)]

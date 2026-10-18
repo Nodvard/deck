@@ -458,6 +458,55 @@ async def test_otherwise_the_minute_watch_runs_as_before(shield, enabled, answer
 
 
 @pytest.mark.asyncio
+async def test_the_fallback_to_the_minute_watch_is_remembered_and_cleared_again(shield):
+    """Läuft clamonacc nicht, merkt sich der Lauf den Rückfall (eigene Zeile `DOWN_KIND`); läuft es wieder, ist er weg.
+    Der Schalter selbst bleibt dabei unberührt."""
+    from nodvard_deck_ext_shield.patching import load_baseline, save_baseline
+
+    async def load(kind: str) -> dict:
+        return (await load_baseline(shield.ctx, "h1", kind)) or {}
+
+    await save_baseline(shield.ctx, "h1", _rt().STATE_KIND, {"enabled": True, "changed_at": "2026-10-16T05:00:00+00:00"})
+    await save_baseline(shield.ctx, "h1", _rt().POSITION_KIND, {"line": 7})
+    shield.ctx.answers = {"realtime-log": _log(7, [], active=False)}
+    await _watch(shield)
+    first = await load(_rt().DOWN_KIND)
+    assert isinstance(first["since"], str) and first["changed_at"] == "2026-10-16T05:00:00+00:00"
+    await _watch(shield)
+    assert await load(_rt().DOWN_KIND) == first, "der erste Zeitpunkt bleibt"
+
+    shield.ctx.answers = {"realtime-log": _log(7, [])}
+    await _watch(shield)
+    assert await load(_rt().DOWN_KIND) == {}
+    assert await load(_rt().STATE_KIND) == {"enabled": True, "changed_at": "2026-10-16T05:00:00+00:00"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("active", [False, True])
+async def test_switching_off_during_a_run_stays_off(shield, active):
+    """Schaltet jemand aus, während der Lauf das Protokoll holt, schreibt der Lauf danach nicht „eingeschaltet“ zurück
+    (weder beim Merken noch beim Löschen des Rückfalls)."""
+    from nodvard_deck_ext_shield.patching import load_baseline, save_baseline
+
+    off = {"enabled": False, "changed_at": "2026-10-16T06:00:00+00:00"}
+    await save_baseline(shield.ctx, "h1", _rt().STATE_KIND, {"enabled": True, "changed_at": "2026-10-16T05:00:00+00:00"})
+    await save_baseline(shield.ctx, "h1", _rt().POSITION_KIND, {"line": 7})
+    if active:  # ein Rückfall aus einem früheren Lauf, den dieser Lauf löscht
+        await save_baseline(shield.ctx, "h1", _rt().DOWN_KIND, {"since": "2026-10-16T05:30:00+00:00"})
+    run = shield.ctx.exec.run
+
+    async def switched_off_meanwhile(host, command, timeout_s=60):
+        if "realtime-log" in command:
+            await save_baseline(shield.ctx, "h1", _rt().STATE_KIND, off)
+        return await run(host, command, timeout_s=timeout_s)
+
+    shield.ctx.exec.run = switched_off_meanwhile
+    shield.ctx.answers = {"realtime-log": _log(7, [], active=active)}
+    await _watch(shield)
+    assert await load_baseline(shield.ctx, "h1", _rt().STATE_KIND) == off
+
+
+@pytest.mark.asyncio
 async def test_lines_written_before_clamonacc_stopped_are_still_collected(shield):
     await _realtime(shield)
     shield.ctx.answers = {
@@ -472,6 +521,7 @@ async def test_lines_written_before_clamonacc_stopped_are_still_collected(shield
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("answer", "error"), [
     ("@@noroot\n", "NO_ROOT"),
+    ("@@noroot\n@@noroot-helper 7\n", "STALE"),
     ("@@active=yes\n@@lines=0-1\n", "BROKEN"),
 ])
 async def test_a_failed_read_is_an_error_row_and_keeps_the_position(shield, answer, error):
@@ -481,5 +531,7 @@ async def test_a_failed_read_is_an_error_row_and_keeps_the_position(shield, answ
     shield.ctx.answers = {"realtime-log": answer}
     scan = await _watch(shield)
     assert scan["status"] == "error"
-    assert scan["error"] == (_av().NO_ROOT_MESSAGE if error == "NO_ROOT" else REALTIME_LOG_BROKEN)
+    expected = {"NO_ROOT": _av().NO_ROOT_MESSAGE, "STALE": _av().no_root_message(answer), "BROKEN": REALTIME_LOG_BROKEN}
+    assert scan["error"] == expected[error]
+    assert error != "STALE" or "veraltet" in scan["error"]
     assert await _position(shield) == 3 and _minute_runs(shield.ctx) == 0

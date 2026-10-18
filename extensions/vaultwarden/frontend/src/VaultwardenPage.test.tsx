@@ -41,6 +41,13 @@ describe("Vaultwarden-Seite", () => {
     expect(screen.getByRole("link", { name: "Web-Tresor öffnen" })).toHaveAttribute("href", "https://vault.example.org/");
   });
 
+  it("zeigt bei einer Adresse ohne http(s) keinen Link zum Web-Tresor", async () => {
+    vi.stubGlobal("fetch", mockFetch({ ...OK, url: "javascript:alert(1)" }));
+    render(<VaultwardenPage />);
+    await screen.findByTestId("stats");
+    expect(screen.queryByRole("link", { name: "Web-Tresor öffnen" })).not.toBeInTheDocument();
+  });
+
   it("warnt bei HTTP, offener Registrierung und abweichender DOMAIN", async () => {
     vi.stubGlobal("fetch", mockFetch({
       ...OK, url: "http://192.0.2.20:8222", https: false, signups_open: true, domain: "https://vault.example.org",

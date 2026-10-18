@@ -1,10 +1,10 @@
-"""Hauptprogramm: Schleife, Heartbeat, Status, Vorpruefung, Anforderungen bis zum Ergebnis, Wiederaufnahme, Selbsttest.
+"""Hauptprogramm: Schleife, Heartbeat, Status, Vorprüfung, Anforderungen bis zum Ergebnis, Wiederaufnahme, Selbsttest.
 
-Echte Ordner fuer Kanal und Zustand unter `tmp_path` (Besitzer = eigene uid als `expected_uid`). Die Engine ist die
-durchgespielte Welt aus `flow_support` (eine aufgezeichnete Aufnahme, dazu Registry, Uhr der Tests und die aendernden
-Aufrufe): Eine gueltige Anforderung laeuft also wirklich bis `applied`, `rolled_back` oder `reverted`. Die Fake-Engine
-prueft dabei jeden aendernden Aufruf gegen das Journal auf der Platte, die Welt, dass nie zwei Container an denselben
-Daten laufen. Am Ende jedes Tests muessen beide Listen leer sein, und das Geheimnis aus der Umgebung des Ziels steht
+Echte Ordner für Kanal und Zustand unter `tmp_path` (Besitzer = eigene uid als `expected_uid`). Die Engine ist die
+durchgespielte Welt aus `flow_support` (eine aufgezeichnete Aufnahme, dazu Registry, Uhr der Tests und die ändernden
+Aufrufe): Eine gültige Anforderung läuft also wirklich bis `applied`, `rolled_back` oder `reverted`. Die Fake-Engine
+prüft dabei jeden ändernden Aufruf gegen das Journal auf der Platte, die Welt, dass nie zwei Container an denselben
+Daten laufen. Am Ende jedes Tests müssen beide Listen leer sein, und das Geheimnis aus der Umgebung des Ziels steht
 weder im Protokoll noch im Status.
 """
 
@@ -51,7 +51,7 @@ class Setup:
 
     def __init__(self, tmp_path, uid, *, points: Points | None = None) -> None:
         self.lab = Lab(tmp_path, uid)
-        self.lab.store.close()  # die Sperre gehoert dem Helfer, nicht dem Labor
+        self.lab.store.close()  # die Sperre gehört dem Helfer, nicht dem Labor
         self.uid = uid
         self.root = tmp_path / "channel"
         self.root.mkdir(mode=0o755)
@@ -78,7 +78,7 @@ class Setup:
                                   checkpoint=None if points is None else points.checkpoint)
 
     def restart(self, points: Points | None = None) -> None:
-        """Der Helfer startet neu: die Sperre faellt mit dem Prozess, der neue hat einen frischen Client (noch nichts
+        """Der Helfer startet neu: die Sperre fällt mit dem Prozess, der neue hat einen frischen Client (noch nichts
         ausgehandelt). Kanal, `/state` und die Engine bleiben, wie sie sind."""
         self.store.close()
         self.channel.close()
@@ -122,7 +122,7 @@ class Setup:
         self.helper.tick(now)
 
     def next_round(self, after: float = 5.0) -> None:
-        """Die naechste Runde, `after` Sekunden nach dem jetzigen Stand der Uhr (ein Ablauf hat sie weitergestellt)."""
+        """Die nächste Runde, `after` Sekunden nach dem jetzigen Stand der Uhr (ein Ablauf hat sie weitergestellt)."""
         self.tick(self.clock.t + after)
 
     def start(self, now=NOW):
@@ -164,7 +164,7 @@ def vector(name: str) -> dict:
 
 
 def assert_like(status: dict, name: str, *, ids: list[str] | None = None) -> None:
-    """Der Status hat genau die Form des Vektors `name` (Zustand, Grund, Ziel, Vorgang, Rueckweg und die Ergebnisse,
+    """Der Status hat genau die Form des Vektors `name` (Zustand, Grund, Ziel, Vorgang, Rückweg und die Ergebnisse,
     ohne IDs und Zeiten): So schreibt der Helfer, was die gemeinsamen Vektoren dem Dashboard versprechen."""
     want = vector(name)
     assert {key: status[key] for key in ("state", "ready", "reason", "target")} == \
@@ -222,11 +222,11 @@ def test_seq_and_heartbeat(env):
 
 
 def test_a_long_round_does_not_overwrite_the_fresher_heartbeat(env):
-    # Die Runde haengt an der Engine; der Heartbeat-Thread schreibt derweil frische Zeitstempel. Der Status am Ende
-    # der Runde darf `heartbeat_at` nicht auf den Rundenbeginn zuruecksetzen (das Dashboard zeigte sonst bis zum
-    # naechsten Heartbeat "antwortet nicht").
+    # Die Runde hängt an der Engine; der Heartbeat-Thread schreibt derweil frische Zeitstempel. Der Status am Ende
+    # der Runde darf `heartbeat_at` nicht auf den Rundenbeginn zurücksetzen (das Dashboard zeigte sonst bis zum
+    # nächsten Heartbeat "antwortet nicht").
     env.start()
-    env.helper._preflight_at = None  # die Vorpruefung ist faellig und ruft die Engine
+    env.helper._preflight_at = None  # die Vorprüfung ist fällig und ruft die Engine
 
     def slow(request):
         env.clock.t += 120  # die Engine antwortet erst nach zwei Minuten ...
@@ -246,13 +246,13 @@ def test_a_long_round_does_not_overwrite_the_fresher_heartbeat(env):
 @pytest.mark.parametrize("jump", [3600, -3600])
 def test_wall_clock_jump_during_a_round_keeps_the_heartbeat_on_the_new_time_axis(env, jump):
     # Ein Raspberry Pi ohne Echtzeituhr stellt die Uhr kurz nach dem Start per NTP um Stunden. Heartbeat und Rundenende
-    # muessen dieselbe (neue) Zeitachse benutzen: Eine Hochrechnung vom Rundenbeginn (`now` plus gemessene Dauer) landete
-    # auf der alten Achse, `heartbeat_at` liefe zurueck, und das Dashboard meldete "antwortet nicht" bzw. "nicht da".
+    # müssen dieselbe (neue) Zeitachse benutzen: Eine Hochrechnung vom Rundenbeginn (`now` plus gemessene Dauer) landete
+    # auf der alten Achse, `heartbeat_at` liefe zurück, und das Dashboard meldete "antwortet nicht" bzw. "nicht da".
     env.start()
     env.helper._preflight_at = None
 
     def hang(request):
-        env.clock.t += 20 + jump  # die Engine haengt 20 s, mitten drin springt die Wanduhr
+        env.clock.t += 20 + jump  # die Engine hängt 20 s, mitten drin springt die Wanduhr
         env.helper._guarded(env.helper.heartbeat)
         assert env.status()["heartbeat_at"] == NOW + 20 + jump
         return Response(body=env.world.list_containers(request.query))
@@ -363,7 +363,7 @@ def test_cluttered_channel_is_reported_while_ready(env):
 def test_channel_unsafe(env):
     env.root.chmod(0o777)
     env.start()
-    status = env.status()  # der Status laesst sich trotzdem schreiben (Wurzel ist offen)
+    status = env.status()  # der Status lässt sich trotzdem schreiben (Wurzel ist offen)
     assert (status["state"], status["ready"], status["reason"]) == ("unsafe", False, policy.CHANNEL_UNSAFE)
     env.root.chmod(0o755)
     env.tick(NOW + 5)
@@ -447,7 +447,7 @@ def test_unreadable_journal_is_not_treated_as_no_journal(env, monkeypatch):
     monkeypatch.setattr(env.store, "load_journal", flaky)
     rid = env.request()
     env.start()
-    assert env.pending() == [f"{rid}.json"]  # nicht gelesen: es koennte ein Vorgang laufen
+    assert env.pending() == [f"{rid}.json"]  # nicht gelesen: es könnte ein Vorgang laufen
     assert env.status()["ready"] is False
     env.tick(NOW + 5)  # zweiter Versuch scheitert ebenfalls
     assert env.pending() == [f"{rid}.json"] and env.world.mutations == []
@@ -504,15 +504,15 @@ def test_valid_update_is_applied(env):
     deck = env.lab.only_deck()
     assert deck["Image"] == new_image and deck["Name"] == "/" + env.lab.name
     state = saved_state(env)
-    assert rid in state["seen"] and len(state["actions"]) == 1  # angenommen: zaehlt fuer die Grenze
-    assert [entry["id"] for entry in state["results"]] == [rid]  # das Ergebnis uebersteht einen Neustart
+    assert rid in state["seen"] and len(state["actions"]) == 1  # angenommen: zählt für die Grenze
+    assert [entry["id"] for entry in state["results"]] == [rid]  # das Ergebnis übersteht einen Neustart
     assert [e for e in env.logs if e["event"] == "request"] == [
         {"event": "request", "id": rid, "action": "update", "outcome": "applied", "code": None}]
     assert not (env.state_dir / JOURNAL_NAME).exists()
 
 
 def test_status_shows_each_step_while_the_flow_runs(env):
-    # Die Schleife haengt im Ablauf. Nach jedem Schritt im Journal steht er im Status (`busy`, ohne `target`), und der
+    # Die Schleife hängt im Ablauf. Nach jedem Schritt im Journal steht er im Status (`busy`, ohne `target`), und der
     # Heartbeat-Thread schreibt weiter frische Zeitstempel.
     env.lab.release("0.7.1")
     env.start()
@@ -544,7 +544,7 @@ def test_status_shows_each_step_while_the_flow_runs(env):
 
 def test_the_periodic_preflight_rests_while_the_flow_runs(env):
     # Kein `/_ping` (also keine Neu-Aushandlung auf demselben Engine-Objekt) zwischen der ersten und der letzten
-    # Aenderung: Die Vorpruefung laeuft im selben Thread wie der Ablauf und kommt erst danach wieder dran.
+    # Änderung: Die Vorprüfung läuft im selben Thread wie der Ablauf und kommt erst danach wieder dran.
     env.lab.release("0.7.1")
     env.start()
     env.request()
@@ -553,7 +553,7 @@ def test_the_periodic_preflight_rests_while_the_flow_runs(env):
     changes = [n for n, (method, _path) in enumerate(paths) if method != "GET"]
     assert len(changes) >= 9
     assert ("GET", "/_ping") not in paths[changes[0]:changes[-1]]
-    assert ("GET", "/_ping") in paths[changes[-1]:]  # gleich danach eine frische Vorpruefung
+    assert ("GET", "/_ping") in paths[changes[-1]:]  # gleich danach eine frische Vorprüfung
     assert env.status()["target"]["current_version"] == "0.7.1"
 
 
@@ -597,8 +597,8 @@ def test_status_holds_only_fixed_codes_never_the_text_of_the_engine(env):
 
 
 def test_external_change_stops_everything(env):
-    # Waehrend des Updates legt jemand einen weiteren Container des Dienstes an (z. B. `docker compose up -d`): Der
-    # Helfer hoert sofort auf und fasst nichts mehr an.
+    # Während des Updates legt jemand einen weiteren Container des Dienstes an (z. B. `docker compose up -d`): Der
+    # Helfer hört sofort auf und fasst nichts mehr an.
     env.lab.release("0.7.1")
     twin = json.loads(json.dumps(env.target))
     twin.update(Id=_hex("twin"), Name="/deck-twin")
@@ -664,8 +664,8 @@ def test_rate_limit_after_an_update_and_a_second_update_later(env):
 
 
 def test_at_most_one_flow_per_round(env):
-    # Zwei gueltige Anforderungen in einer Runde: Die erste laeuft (und scheitert hier an der Registry, das zaehlt nicht
-    # fuer die Grenze), die zweite bekommt `busy` statt eines zweiten Ablaufs gleich hinterher.
+    # Zwei gültige Anforderungen in einer Runde: Die erste läuft (und scheitert hier an der Registry, das zählt nicht
+    # für die Grenze), die zweite bekommt `busy` statt eines zweiten Ablaufs gleich hinterher.
     env.start()
     first, second = env.request(), env.request()
     env.tick(NOW + 5)
@@ -711,13 +711,13 @@ def test_requests_get_a_fresh_preflight_but_only_one_per_round(env):
     for _ in range(10):
         env.request("update", "0.7.0")
     env.tick(NOW + 10)
-    assert lists() - after_one == after_one - before  # zehn Anforderungen: eine Vorpruefung
+    assert lists() - after_one == after_one - before  # zehn Anforderungen: eine Vorprüfung
 
 
 @pytest.mark.parametrize(("action", "version", "expected"), [
     ("update", "0.7.0", policy.NOT_NEWER),
     ("update", "0.6.9", policy.NOT_NEWER),
-    ("update", "1.0.0", policy.PULL_FAILED),  # besteht alle Pruefungen, die Registry kennt die Version nicht
+    ("update", "1.0.0", policy.PULL_FAILED),  # besteht alle Prüfungen, die Registry kennt die Version nicht
     ("rollback", "0.6.9", policy.NO_PREVIOUS),
 ])
 def test_request_checks(env, action, version, expected):
@@ -854,7 +854,7 @@ def test_unreadable_request_without_action_has_no_status_entry(env):
             "code": policy.BAD_REQUEST} in env.logs
     assert env.result(other)["code"] == policy.BAD_REQUEST and env.result(other)["action"] == "update"
     assert env.pending() == []
-    assert [entry["id"] for entry in saved_state(env)["results"]] == [other]  # auch Ablehnungen ueberstehen Neustarts
+    assert [entry["id"] for entry in saved_state(env)["results"]] == [other]  # auch Ablehnungen überstehen Neustarts
 
 
 def test_fifo_request_does_not_block(env):
@@ -897,7 +897,7 @@ def test_a_failing_request_does_not_take_the_others_of_the_round_down(env, monke
 def test_request_gets_the_reason_of_the_fresh_preflight(env):
     env.start()
     assert env.status()["ready"] is True
-    env.target["State"]["Health"]["Status"] = "unhealthy"  # seit der letzten Vorpruefung krank geworden
+    env.target["State"]["Health"]["Status"] = "unhealthy"  # seit der letzten Vorprüfung krank geworden
     rid = env.request()
     env.tick(NOW + 5)
     result = env.result(rid)
@@ -923,7 +923,7 @@ def test_unexpected_error_in_a_round_does_not_stop_the_helper(env, monkeypatch):
 
 
 def _crash_during_an_update(env, point: str) -> str:
-    """Der Helfer stuerzt mitten in einem Update ab (wie bei `kill -9`), genau an `point`; gibt die ID zurueck."""
+    """Der Helfer stürzt mitten in einem Update ab (wie bei `kill -9`), genau an `point`; gibt die ID zurück."""
     env.lab.release("0.7.1")
     env.restart(Points(crash_on=point))
     env.start()
@@ -941,7 +941,7 @@ def test_a_journal_at_start_is_recovered_before_anything_else(env):
     seen_pending = []
 
     def rename(request):
-        seen_pending.append(env.pending())  # der Rueckbau laeuft, bevor die Anforderung gelesen ist
+        seen_pending.append(env.pending())  # der Rückbau läuft, bevor die Anforderung gelesen ist
         return env.world.answer(request)
 
     env.fake.route("POST", rf"/containers/{env.lab.old_id}/rename", rename)
@@ -950,7 +950,7 @@ def test_a_journal_at_start_is_recovered_before_anything_else(env):
     assert events.index("recover") < events.index("preflight")
     assert seen_pending == [[f"{waiting}.json"]]
     assert env.outcome(crashed) == ("aborted", None)
-    # Die Aktion war vor dem Absturz gezaehlt: Ein Neustart setzt die Grenze nicht zurueck, die Wiederaufnahme lief
+    # Die Aktion war vor dem Absturz gezählt: Ein Neustart setzt die Grenze nicht zurück, die Wiederaufnahme lief
     # trotzdem (sie wird nie gedrosselt).
     assert env.outcome(waiting) == ("refused", policy.RATE_LIMITED)
     assert len(saved_state(env)["actions"]) == 1
@@ -971,7 +971,7 @@ def test_busy_while_the_recovery_waits_for_the_engine(env):
     status = env.status()
     assert_like(status, "Wiederaufnahme wartet auf die Engine")
     assert status["busy"]["id"] == crashed
-    later = saved_state(env)["actions"][-1] + policy.ACTION_INTERVAL_S  # die Grenze laesst wieder eine Aktion zu
+    later = saved_state(env)["actions"][-1] + policy.ACTION_INTERVAL_S  # die Grenze lässt wieder eine Aktion zu
     asked = env.request(created_at=later)
     env.tick(later)
     assert env.outcome(asked) == ("refused", policy.BUSY)
@@ -983,9 +983,9 @@ def test_busy_while_the_recovery_waits_for_the_engine(env):
 
 
 def test_an_old_preflight_never_shows_as_target_while_busy(env, monkeypatch):
-    # Nach dem Neustart ist das Journal zuerst nicht lesbar: Die Vorpruefung laeuft trotzdem (sie liest nur) und sieht
-    # den umbenannten alten Container als Ziel. Sobald das Journal gelesen ist, gilt der Helfer als beschaeftigt, und
-    # der Status zeigt kein Ziel aus dieser Vorpruefung, auch solange die Wiederaufnahme auf die Engine wartet.
+    # Nach dem Neustart ist das Journal zuerst nicht lesbar: Die Vorprüfung läuft trotzdem (sie liest nur) und sieht
+    # den umbenannten alten Container als Ziel. Sobald das Journal gelesen ist, gilt der Helfer als beschäftigt, und
+    # der Status zeigt kein Ziel aus dieser Vorprüfung, auch solange die Wiederaufnahme auf die Engine wartet.
     crashed = _crash_during_an_update(env, "call:rename_container")
     env.restart()
     real = env.store.load_journal
@@ -1019,7 +1019,7 @@ def test_an_old_preflight_never_shows_as_target_while_busy(env, monkeypatch):
 
 def test_an_unexpected_error_in_the_flow_is_taken_up_in_the_next_round(env, monkeypatch):
     # Ein Fehler im Programm mitten im Ablauf beendet nur diese Anforderung, nicht den Helfer. Das Journal steht noch,
-    # und die naechste Runde nimmt den Vorgang wie nach einem Absturz wieder auf.
+    # und die nächste Runde nimmt den Vorgang wie nach einem Absturz wieder auf.
     env.lab.release("0.7.1")
     env.start()
     current = env.helper._ensure_flow()
@@ -1041,7 +1041,7 @@ def test_an_unexpected_error_in_the_flow_is_taken_up_in_the_next_round(env, monk
 
 def test_an_error_in_the_recovery_does_not_stop_the_round(env, monkeypatch):
     crashed = _crash_during_an_update(env, "call:rename_container")
-    later = saved_state(env)["actions"][-1] + policy.ACTION_INTERVAL_S  # die Grenze laesst wieder eine Aktion zu
+    later = saved_state(env)["actions"][-1] + policy.ACTION_INTERVAL_S  # die Grenze lässt wieder eine Aktion zu
     env.restart()
 
     def broken(_state):
@@ -1070,7 +1070,7 @@ def test_an_error_while_tidying_the_slot_does_not_stop_the_round(env, monkeypatc
     env.start()
     assert env.outcome(rid) == ("refused", policy.NOT_NEWER)
     assert {"event": "internal_error", "kind": "RuntimeError"} in env.logs
-    assert saved_state(env)["slot"] is not None  # bleibt stehen, der naechste Versuch kommt spaeter
+    assert saved_state(env)["slot"] is not None  # bleibt stehen, der nächste Versuch kommt später
 
 
 def test_crash_before_anything_changed(env):
@@ -1107,7 +1107,7 @@ def test_cleanup_after_the_commit_is_finished_in_a_later_round(env):
     env.tick(NOW + 5)
     status = env.status()
     assert status["state"] == "busy" and status["busy"]["step"] == "committed"
-    # Entschieden und schon gespeichert (Slot und Ergebnis gehen vor dem alten Container), das Aufraeumen laeuft noch.
+    # Entschieden und schon gespeichert (Slot und Ergebnis gehen vor dem alten Container), das Aufräumen läuft noch.
     assert (env.result(rid)["outcome"], env.result(rid)["code"]) == ("applied", None)
     assert env.status()["previous"]["version"] == "0.7.0"
     refuse["now"] = False
@@ -1118,7 +1118,7 @@ def test_cleanup_after_the_commit_is_finished_in_a_later_round(env):
 
 
 def _slot_from(env, version: str = "0.6.9") -> policy.Slot:
-    """Ein Rueckweg von einem frueheren Update (auf die laufende Version) samt Schutz-Tag, gespeichert in `/state`
+    """Ein Rückweg von einem früheren Update (auf die laufende Version) samt Schutz-Tag, gespeichert in `/state`
     (vor dem Start des Helfers)."""
     lab = env.lab
     image_id = "sha256:" + _hex(f"image-{version}")
@@ -1137,7 +1137,7 @@ def _slot_from(env, version: str = "0.6.9") -> policy.Slot:
 
 
 def _rollback_ready(env) -> str:
-    """Ein Update auf 0.7.1 ist eingespielt, die Grenze laesst den Rueckweg zu. Gibt die ID des Updates zurueck."""
+    """Ein Update auf 0.7.1 ist eingespielt, die Grenze lässt den Rückweg zu. Gibt die ID des Updates zurück."""
     env.lab.release("0.7.1")
     env.start()
     update = env.request()
@@ -1153,8 +1153,8 @@ CLEANUP_CALLS = [("DELETE", r"/containers/[0-9a-f]{64}"), ("DELETE", rf"/images/
 
 @pytest.mark.parametrize("case", ["update", "update_replacing_a_slot", "rollback"])
 def test_the_result_is_in_the_status_before_the_cleanup_changes_anything(env, case):
-    # Mit `committed` ist der Vorgang entschieden. Noch bevor der Helfer beim Aufraeumen irgendetwas an der Engine
-    # aendert, steht das Ergebnis in `state.json` und im Status: Das Dashboard sieht `busy.step` = `committed` nie ohne
+    # Mit `committed` ist der Vorgang entschieden. Noch bevor der Helfer beim Aufräumen irgendetwas an der Engine
+    # ändert, steht das Ergebnis in `state.json` und im Status: Das Dashboard sieht `busy.step` = `committed` nie ohne
     # das Ergebnis dieser Anforderung.
     seen: list[tuple[str, dict, dict]] = []
 
@@ -1186,8 +1186,8 @@ def test_the_result_is_in_the_status_before_the_cleanup_changes_anything(env, ca
 
 
 def test_while_the_engine_hangs_at_the_cleanup_the_status_already_has_the_result(env):
-    # Das Schutz-Tag des ersetzten Slots laesst sich nicht entfernen, weil der Docker-Dienst haengt (Verbindung ohne
-    # Antwort). Das zaehlt keine Runde, der Helfer bleibt so lange beschaeftigt -- aber das Ergebnis steht die ganze Zeit
+    # Das Schutz-Tag des ersetzten Slots lässt sich nicht entfernen, weil der Docker-Dienst hängt (Verbindung ohne
+    # Antwort). Das zählt keine Runde, der Helfer bleibt so lange beschäftigt -- aber das Ergebnis steht die ganze Zeit
     # im Status, und `previous` zeigt noch den ersetzten Slot, bis dessen Tag weg ist.
     env.lab.release("0.7.1")
     _slot_from(env)
@@ -1233,7 +1233,7 @@ def _results_of(doc: dict, rid: str) -> list[tuple]:
 
 @pytest.mark.parametrize("case", ["update", "update_replacing_a_slot", "rollback"])
 def test_no_status_ever_shows_committed_without_its_result(env, case):
-    # Jeder Status, den der Helfer waehrend eines Vorgangs schreibt -- auch der erste zu `committed` --, zeigt
+    # Jeder Status, den der Helfer während eines Vorgangs schreibt -- auch der erste zu `committed` --, zeigt
     # `busy.step` = `committed` nur zusammen mit dem Ergebnis dieser Anforderung.
     if case == "rollback":
         _rollback_ready(env)
@@ -1255,8 +1255,8 @@ def test_no_status_ever_shows_committed_without_its_result(env, case):
 
 
 def _crash_at_the_commit(env, action: str) -> tuple[str, tuple]:
-    """Der Helfer stuerzt ab, gleich nachdem `committed` im Journal steht, noch bevor das Ergebnis gespeichert ist.
-    Gibt die ID und das Ergebnis zurueck, das am Ende dastehen muss."""
+    """Der Helfer stürzt ab, gleich nachdem `committed` im Journal steht, noch bevor das Ergebnis gespeichert ist.
+    Gibt die ID und das Ergebnis zurück, das am Ende dastehen muss."""
     if action == "rollback":
         _rollback_ready(env)
         version, start = "0.7.0", int(env.clock.t)
@@ -1285,7 +1285,7 @@ def _crash_at_the_commit(env, action: str) -> tuple[str, tuple]:
 def test_after_a_crash_at_the_commit_the_status_has_the_result_while_the_engine_is_away(env, action):
     # Nach dem Neustart antwortet der Docker-Dienst nicht. Schon der erste Herzschlag (vor der ersten Runde) und jeder
     # Status danach zeigt `committed` mit dem Ergebnis, und es steht in `state.json` -- ohne die Engine. Ist sie wieder
-    # da, raeumt der Helfer fertig auf; das Ergebnis behaelt seinen ersten Zeitpunkt.
+    # da, räumt der Helfer fertig auf; das Ergebnis behält seinen ersten Zeitpunkt.
     rid, want = _crash_at_the_commit(env, action)
     env.fake.route("GET", "/_ping", lambda request: Response(status=500, body={"message": "daemon restarting"}))
     written = _written_statuses(env)
@@ -1330,8 +1330,8 @@ def test_after_a_crash_at_the_commit_the_status_has_the_result_while_the_own_id_
 
 @pytest.mark.parametrize("replacing", [False, True], ids=["first", "replacing"])
 def test_the_new_way_back_shows_as_soon_as_it_is_saved(env, replacing):
-    # Gleich nach dem Speichern des neuen Slots schreibt der Helfer den Status: `previous` zeigt den neuen Rueckweg schon,
-    # waehrend er den alten Container entfernt -- nicht erst mit dem naechsten Herzschlag.
+    # Gleich nach dem Speichern des neuen Slots schreibt der Helfer den Status: `previous` zeigt den neuen Rückweg schon,
+    # während er den alten Container entfernt -- nicht erst mit dem nächsten Herzschlag.
     env.lab.release("0.7.1")
     if replacing:
         _slot_from(env)
@@ -1352,8 +1352,8 @@ def test_the_new_way_back_shows_as_soon_as_it_is_saved(env, replacing):
 
 
 def test_an_undo_that_waits_for_the_engine_is_finished_in_a_later_round(env):
-    # Der Docker-Dienst haengt laenger als die Frist des Rueckbaus (Verbindung ohne Antwort): Der Helfer bleibt
-    # beschaeftigt statt aufzugeben, und eine spaetere Runde baut fertig zurueck.
+    # Der Docker-Dienst hängt länger als die Frist des Rückbaus (Verbindung ohne Antwort): Der Helfer bleibt
+    # beschäftigt statt aufzugeben, und eine spätere Runde baut fertig zurück.
     env.lab.release("0.7.1", behavior=Behavior(exit_after=20))
     down = {"now": True}
 
@@ -1395,7 +1395,7 @@ def test_an_expired_slot_is_tidied_up(env):
 
 
 def test_an_expired_slot_whose_tag_is_refused_for_good_is_not_asked_again_and_again(env):
-    # 409 beim Entfernen des Schutz-Tags (ein liegen gebliebener Container benutzt das Image): endgueltig. Der Slot geht
+    # 409 beim Entfernen des Schutz-Tags (ein liegen gebliebener Container benutzt das Image): endgültig. Der Slot geht
     # beim ersten Mal, und die folgenden Runden fragen die Engine nicht alle 30 s erneut.
     env.lab.release("0.7.1")
     env.start()
@@ -1421,8 +1421,8 @@ def test_heartbeat_continues_while_the_engine_hangs(env, monkeypatch):
     monkeypatch.setattr(main, "HEARTBEAT_INTERVAL_S", 0.05)
     env.start(now=time.time())
     seq_before = env.status()["seq"]
-    env.fake.route("GET", "/containers/json", Response(body=[], delay=1.5))  # die naechste Vorpruefung haengt
-    env.helper._preflight_at = 0  # sofort faellig
+    env.fake.route("GET", "/containers/json", Response(body=[], delay=1.5))  # die nächste Vorprüfung hängt
+    env.helper._preflight_at = 0  # sofort fällig
     stop = threading.Event()
     runner = threading.Thread(target=env.helper.run, args=(stop,), daemon=True)
     runner.start()
@@ -1431,7 +1431,7 @@ def test_heartbeat_continues_while_the_engine_hangs(env, monkeypatch):
     stop.set()
     runner.join(10)
     assert not runner.is_alive()
-    assert seqs > seq_before + 3  # der Heartbeat-Thread schreibt weiter, waehrend die Schleife wartet
+    assert seqs > seq_before + 3  # der Heartbeat-Thread schreibt weiter, während die Schleife wartet
     assert env.logs[-1]["event"] == "stop"
 
 
@@ -1563,7 +1563,7 @@ def test_every_code_has_a_test():
 
 
 def test_valid_requests_never_end_with_not_implemented():
-    # Update und Rueckweg fuehrt der Helfer aus: kein Modul schreibt den reservierten Code.
+    # Update und Rückweg führt der Helfer aus: kein Modul schreibt den reservierten Code.
     package = UPDATER_DIR / "nodvard_deck_updater"
     for path in package.glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))

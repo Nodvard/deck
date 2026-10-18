@@ -108,6 +108,38 @@ describe("Über Nodvard Deck", () => {
     await screen.findByRole("alert");
   });
 
+  it("nennt Discord, GitHub, den Entwickler und die Lizenzen der Bibliotheken, auch wenn das Protokoll fehlt", async () => {
+    serve({ detail: "Nicht authentifiziert" }, 403);
+    renderPage();
+    const card = screen.getByRole("heading", { name: "Community und Credits" }).closest("section")!;
+    const links: [string, string][] = [
+      ["Discord von Nodvard", "https://discord.gg/gTTs7qMabt"],
+      ["Diskussionen", "https://github.com/nodvard/deck/discussions"],
+      ["GitHub", "https://github.com/nodvard/deck"],
+      ["Lizenzen der verwendeten Bibliotheken", "https://github.com/nodvard/deck/blob/main/THIRD_PARTY_LICENSES"],
+    ];
+    for (const [name, href] of links) {
+      const link = within(card).getByRole("link", { name });
+      expect(link).toHaveAttribute("href", href);
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"));
+    }
+    expect(within(card).getByText("Entwickelt von Nico Benks.")).toBeInTheDocument();
+    expect(within(card).getByText("Discord-Community und Bot: yosuke.ae")).toBeInTheDocument();
+    expect(within(card).getByText(/findest du auf/)).toBeInTheDocument(); // Oberfläche duzt
+    await screen.findByRole("alert");
+  });
+
+  it("Community und Credits steht zwischen den Versionen und der Lizenz", async () => {
+    serve(DATA);
+    renderPage();
+    const oldest = await screen.findByRole("heading", { name: /Version 0\.4\.0/ });
+    const community = screen.getByRole("heading", { name: "Community und Credits" });
+    const marken = screen.getByRole("heading", { name: "Lizenz und Marken" });
+    expect(oldest.compareDocumentPosition(community) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(community.compareDocumentPosition(marken) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("die Karte zu Lizenz und Marken steht unter der Versionsangabe", async () => {
     serve(DATA);
     renderPage();

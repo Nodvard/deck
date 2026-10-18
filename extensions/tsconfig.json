@@ -22,7 +22,8 @@
       "react-dom/*": ["../frontend/node_modules/@types/react-dom/*"],
       "react-router-dom": ["../frontend/node_modules/react-router-dom"],
       "@testing-library/react": ["../frontend/node_modules/@testing-library/react"],
-      "vitest": ["../frontend/node_modules/vitest"]
+      "vitest": ["../frontend/node_modules/vitest"],
+      "yaml": ["../frontend/node_modules/yaml"]
     }
   },
   "include": [

@@ -11,7 +11,7 @@ import { renderInShell } from "../../../_shared/frontend/src/testShell";
 vi.mock("../../../../frontend/src/lib/catalog", () => ({
   usePages: () => ({ data: [{ ext_id: "docker", path: "/matrix", component: "ContainersPage" }], isLoading: false }),
 }));
-// ExtensionPage laedt das Bundle per import(url) -- hier durch die echte Seite aus den Quellen ersetzt.
+// ExtensionPage lädt das Bundle per import(url); hier wird es durch die echte Seite aus den Quellen ersetzt.
 vi.mock("/api/v1/extensions/docker/frontend/index.js?v=dev", async () => ({
   ContainersPage: (await import("./ContainersPage")).ContainersPage,
 }));
@@ -35,13 +35,13 @@ const click = (name: string) => fireEvent.click(screen.getByRole("link", { name 
 // Beides zusammen abwarten: bei Zurück/Vor folgt die Seite erst selbst (popstate), dann baut der
 // Kern sie wegen der geänderten Query neu auf -- ein einmal gefundenes Element kann dabei verschwinden.
 const filtered = () => waitFor(() => {
-  expect(screen.getByTestId("host-filter")).toBeInTheDocument();
+  expect(screen.getByLabelText("Server")).toHaveValue("h1");
   expect(screen.getByText("nginx")).toBeInTheDocument();
   expect(screen.queryByText("redis")).toBeNull();
 });
 const unfiltered = () => waitFor(() => {
   expect(screen.getByText("redis")).toBeInTheDocument();
-  expect(screen.queryByTestId("host-filter")).toBeNull();
+  expect(screen.getByLabelText("Server")).toHaveValue("");
 });
 
 beforeEach(() => {

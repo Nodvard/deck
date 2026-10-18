@@ -84,6 +84,7 @@ async def test_other_extensions_bind_their_secrets_to_the_address(test_settings)
         "jellyfin": {"jellyfin-key:{name}": ["base_url"]},
         "plex": {"plex-token:{name}": ["base_url"]},
         "qbittorrent": {"qbittorrent-password:{name}": ["base_url"]},
+        "synology": {"synology-password": ["base_url"]},
     }
     for ext_id, labels in expected.items():
         schema = json.loads((REPO_EXTENSIONS_DIR / ext_id / "settings.schema.json").read_text(encoding="utf-8"))

@@ -20,7 +20,7 @@ from nodvard_sdk import (
 
 from .models import Overview
 from .service import UptimeKumaService
-from .widgets import status_rows
+from .widgets import nothing_set_up, status_rows
 
 _WIDGET_ITEM = ListItem(title="{{ title }}", subtitle="{{ subtitle }}", badge=Badge(text="{{ label }}", tone="{{ tone }}"))
 
@@ -63,10 +63,10 @@ class Extension(NodvardExtension):
         @router.get("/widgets/status")
         async def status_widget() -> dict[str, Any]:
             data = await service.overview()
-            return {
-                "data": status_rows(data),
-                "meta": {"connections": len(data.connections), "total": data.summary.total, "down": data.summary.down},
-            }
+            meta: dict[str, Any] = {"connections": len(data.connections), "total": data.summary.total, "down": data.summary.down}
+            if nothing_set_up(data):
+                meta["state"] = "not_configured"
+            return {"data": status_rows(data), "meta": meta}
 
         ctx.api.include_router(router, permission="hosts.read")
 

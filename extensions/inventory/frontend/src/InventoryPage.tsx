@@ -1,10 +1,6 @@
 /**
- * Inventar-Seite (Inventar-Modul im Stil von Homebox) -- PageSpec
- * `component="InventoryPage"` (siehe nodvard_deck_ext_inventory/__init__.py). Ruft die eigenen
- * `/ext/inventory/...`-Endpunkte auf, dazu `GET /hosts` (Auswahl „Gehört zu Server“).
- *
- * Authentifizierung wie jede andere Extension-Seite: `window.__nodvardDeck.
- * getAccessToken()` (kein Zugriff auf state/auth.ts ueber den Import-Map-Shim).
+ * Inventar-Seite (Inventar-Modul im Stil von Homebox, PageSpec `component="InventoryPage"`) über die
+ * `/ext/inventory/...`-Endpunkte, dazu `GET /hosts` für die Auswahl „Gehört zu Server“.
  */
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
@@ -14,6 +10,7 @@ import { AuthImage } from "../../../_shared/frontend/src/AuthImage";
 import { LoadError, errorMessage, fetchJson } from "../../../_shared/frontend/src/loadError";
 import { Badge, Button, Card, EmptyState, Field, Icon, Loading, Notice, Page, SearchInput, Stat, buttonClass, inputClass, type Tone } from "../../../_shared/frontend/src/ui";
 import { deck } from "../../../_shared/frontend/src/deck";
+import { safeHref } from "../../../_shared/frontend/src/links";
 import { MoreMenu } from "../../../_shared/frontend/src/menu";
 
 import { type ImportResult, type ImportRow, MAX_IMPORT_BYTES, decodeCsv, rowsFromCsv } from "./importCsv";
@@ -69,9 +66,9 @@ interface Rack {
 }
 
 /**
- * Vollständiger Datensatz für `PUT /items/{id}`: die ursprünglichen Felder ersetzt der Server immer (fehlt eins, ist
- * es danach leer), darum gehen sie alle mit. Von den neuen Feldern nur die geänderten -- die übrigen lässt der
- * Server dann, wie sie sind.
+ * Datensatz für `PUT /items/{id}`: Die Grundfelder (Name bis Notizen) ersetzt der Server immer (fehlt eins, ist es
+ * danach leer), darum gehen sie alle mit. Von den übrigen Feldern (Hersteller, Rack ...) nur die geänderten, die
+ * anderen lässt der Server, wie sie sind.
  */
 export function itemPayload(item: Item, changes: Partial<Item> = {}): Record<string, unknown> {
   const i = { ...item, ...changes };
@@ -176,8 +173,8 @@ const DAY_MS = 86_400_000;
 /** Wie `inputClass`, aber ohne volle Breite: für Felder in einer Zeile (sonst gewinnt `w-full` gegen `w-auto`). */
 const inlineInput = inputClass.replace("w-full ", "");
 
-/** Garantie-Zustand relativ zu `today`: laeuft, laeuft in <= 90 Tagen ab, abgelaufen, keine.
- * Die 90 Tage gelten auch fuer die Dashboard-Kachel (`_WARRANTY_SOON_DAYS` im Backend). */
+/** Garantie-Zustand relativ zu `today`: läuft, läuft in <= 90 Tagen ab, abgelaufen, keine. Die 90 Tage gelten auch
+ * für die Dashboard-Kachel (`_WARRANTY_SOON_DAYS` im Backend). */
 export function warrantyState(until: string | null, today = new Date()): Exclude<WarrantyFilter, ""> {
   if (!until) return "none";
   const days = (new Date(`${until}T00:00:00`).getTime() - new Date(today.toDateString()).getTime()) / DAY_MS;
@@ -193,7 +190,7 @@ function csvCell(value: string | number | null | undefined): string {
   return /[";\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-/** CSV fuer Excel/LibreOffice (Semikolon, UTF-8 mit BOM, Komma als Dezimaltrenner). */
+/** CSV für Excel/LibreOffice (Semikolon, UTF-8 mit BOM, Komma als Dezimaltrenner). */
 export function inventoryCsv(items: Item[], categoryName: (id: string | null) => string, locationName: (id: string | null) => string): string {
   const header = [
     "Name", "Kategorie", "Standort", "Menge", "Kaufdatum", "Preis (EUR)", "Garantie bis", "Beschreibung", "Notizen",
@@ -830,7 +827,7 @@ function ScanPanel({
 }
 
 /**
- * Bestellliste einlesen (z. B. den Amazon-Bestellverlauf oder eine früher exportierte Inventar-CSV): Vorschau mit
+ * Bestellliste einlesen (z. B. den Amazon-Bestellverlauf oder eine exportierte Inventar-CSV): Vorschau mit
  * Häkchen, übernommen wird nur das Angekreuzte. Die Datei bleibt im Browser.
  */
 function ImportPanel({
@@ -1569,8 +1566,8 @@ export function InventoryPage(): JSX.Element {
                         )}
                       </dl>
                       <div className="mb-4 flex flex-wrap items-center gap-2 text-xs" data-testid={`links-${item.id}`}>
-                        {item.product_url && (
-                          <a href={item.product_url} target="_blank" rel="noopener noreferrer" className="accent-soft rounded-lg px-2.5 py-1 hover:brightness-125">
+                        {safeHref(item.product_url) && (
+                          <a href={safeHref(item.product_url)} target="_blank" rel="noopener noreferrer" className="accent-soft rounded-lg px-2.5 py-1 hover:brightness-125">
                             Zum Produkt
                           </a>
                         )}

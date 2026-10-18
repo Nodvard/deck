@@ -77,7 +77,7 @@ def test_fixtures_hold_no_private_addresses():
     for address in re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text):
         assert address.startswith("203.0.113."), address
     for host in re.findall(r"https?://([^/\s\"':]+)", text):
-        assert host == "203.0.113.20" or host.endswith("example.com"), host
+        assert host in ("203.0.113.20", "example.com") or host.endswith(".example.com"), host
     assert KEY not in text
 
 
@@ -270,6 +270,9 @@ def test_base_url_is_normalized_and_credentials_are_refused():
     assert normalize_base_url("http://jellyfin.example.com:8096/") == BASE
     assert normalize_base_url(" https://jellyfin.example.com/jellyfin/ ") == "https://jellyfin.example.com/jellyfin"
     assert normalize_base_url("http://203.0.113.20:8096/?x=1#y") == "http://203.0.113.20:8096"
+    assert normalize_base_url("http://203.0.113.20:8096/web/index.html#!/home.html") == "http://203.0.113.20:8096"
+    assert normalize_base_url("https://jellyfin.example.com/jellyfin/web/") == "https://jellyfin.example.com/jellyfin"
+    assert normalize_base_url("http://jellyfin.test/jellyfin") == "http://jellyfin.test/jellyfin"
     for bad in ("jellyfin.example.com:8096", "ftp://jellyfin.example.com", "http://", "http://user:pw@jellyfin.example.com", "http://@jellyfin.example.com", "http://jellyfin.example.com:999999", ""):
         with pytest.raises(ValueError):
             normalize_base_url(bad)
@@ -605,6 +608,35 @@ async def test_connection_without_key_is_not_configured(client, db_session, test
     assert res.status_code == 204
     assert _only(await _overview(client, headers))["state"] == "ok"
 
+
+@pytest.mark.asyncio
+async def test_widget_meta_says_not_configured_only_without_any_set_up_connection(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    # Nichts eingetragen: die Übersicht darf die Kachel ausblenden; die übrigen `meta`-Felder bleiben.
+    assert (await _widget(client, headers))["meta"] == {"connections": 0, "playing": 0, "transcoding": 0, "state": "not_configured"}
+
+    # Eine Verbindung ohne Schlüssel ist ebenfalls nicht eingerichtet; die Textzeile bleibt für ältere Oberflächen.
+    await _configure(client, headers, _connection(), key=None)
+    widget = await _widget(client, headers)
+    assert widget["meta"]["state"] == "not_configured" and widget["meta"]["connections"] == 1
+    assert widget["data"][0]["label"] == "nicht eingerichtet"
+
+    # Mit Schlüssel gilt die Verbindung als eingerichtet, auch wenn der Server nicht antwortet: Fehler bleiben sichtbar.
+    await _configure(client, headers, _connection())
+    fake.error = httpx.ConnectError("refused")
+    widget = await _widget(client, headers)
+    assert "state" not in widget["meta"] and widget["meta"]["connections"] == 1
+    assert _only(await _overview(client, headers))["state"] == "unreachable"
+
+    # Eine eingerichtete und eine nicht eingerichtete Verbindung: das Modul ist eingerichtet.
+    await _configure(client, headers, _connection(), _connection("zwei"), key=None)
+    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": "jellyfin-key:jf", "value": KEY}, headers=headers)
+    assert res.status_code == 204
+    body = await _overview(client, headers)
+    assert [c["state"] for c in body["connections"]] == ["unreachable", "not_configured"]
+    widget = await _widget(client, headers)
+    assert "state" not in widget["meta"] and widget["meta"]["connections"] == 2
+    assert [row["label"] for row in widget["data"]] == ["nicht erreichbar", "nicht eingerichtet"]
 
 @pytest.mark.asyncio
 async def test_full_overview_shows_server_playbacks_libraries_and_new_media(client, db_session, test_settings, caplog):
@@ -1465,7 +1497,7 @@ async def test_each_connection_is_suggested_as_an_app_without_any_request(client
     res = await client.get("/api/v1/apps/suggestions", headers=headers)
     assert res.status_code == 200, res.text
     assert res.json() == {
-        "suggestions": [{"name": "Jellyfin", "url": "http://203.0.113.20:8096", "source": "Jellyfin", "host": None}],
+        "suggestions": [{"name": "Jellyfin", "url": "http://203.0.113.20:8096", "source": "Jellyfin", "host": None, "service_id": None}],
         "errors": [],
     }
 

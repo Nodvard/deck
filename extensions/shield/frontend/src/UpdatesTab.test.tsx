@@ -680,7 +680,7 @@ describe("Zwei Wege, Updates automatisch einzuspielen", () => {
     await screen.findByText("Raspberry Pi");
     expect(screen.queryByText(/Tipp: Der Server kann Sicherheitsupdates/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Einrichten" })).toBeNull();
-    // Auch beim Server mit unattended-upgrades (docker) gibt es „Aufräumen“ – vorher hing es am Tipp.
+    // Auch beim Server mit unattended-upgrades (docker) gibt es „Aufräumen“, unabhängig vom Tipp.
     expect(screen.getAllByRole("button", { name: "Aufräumen" })).toHaveLength(2);
   });
 

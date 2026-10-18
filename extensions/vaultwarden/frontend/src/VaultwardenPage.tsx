@@ -1,14 +1,13 @@
 /**
- * Vaultwarden-Seite -- PageSpec `component="VaultwardenPage"` (nodvard_deck_ext_vaultwarden/__init__.py).
- *
- * Läuft Vaultwarden, welche Version, über HTTPS erreichbar, Registrierung offen oder zu, und wie sich die
- * Bitwarden-Apps verbinden. Nur lesen: Deck schickt Vaultwarden kein Passwort.
+ * Vaultwarden-Seite (PageSpec `component="VaultwardenPage"`): Version, HTTPS, Registrierung, Anleitung für die
+ * Bitwarden-Apps. Nur lesend: Deck schickt Vaultwarden kein Passwort.
  */
 import { useCallback, useEffect, useState } from "react";
 
 import { authedFetch, errorFromBody } from "../../../_shared/frontend/src/api";
 import { Badge, Button, Card, Notice, Page, Stat, buttonClass, type Tone } from "../../../_shared/frontend/src/ui";
 import { deck } from "../../../_shared/frontend/src/deck";
+import { safeHref } from "../../../_shared/frontend/src/links";
 
 const API = "/ext/vaultwarden";
 const SETTINGS_PATH = "/settings/extensions/vaultwarden";
@@ -136,13 +135,15 @@ export function VaultwardenPage(): JSX.Element {
     body = <Card title="Vaultwarden"><p className="text-sm text-white/50">Lade …</p></Card>;
   }
 
+  const webVault = safeHref(data?.url);
+
   return (
     <Page
       title="Vaultwarden"
       description="Dein Passwort-Manager. Die Bitwarden-Apps sprechen direkt mit Vaultwarden."
       actions={
         <>
-          {data?.url && <a href={`${data.url}/`} target="_blank" rel="noreferrer" className={buttonClass("ghost")}>Web-Tresor öffnen</a>}
+          {webVault && <a href={`${webVault}/`} target="_blank" rel="noreferrer" className={buttonClass("ghost")}>Web-Tresor öffnen</a>}
           {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("ghost")}>Einstellungen</a>}
           <Button onClick={load}>Aktualisieren</Button>
         </>

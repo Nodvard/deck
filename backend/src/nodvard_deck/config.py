@@ -207,8 +207,8 @@ class Settings(BaseSettings):
     keinen Helfer. Nur für Tests ändern."""
 
     database_url: str = "sqlite+aiosqlite:///./data/lattice.db"
-    """SQLite ist die Vorgabe; `postgresql+asyncpg://...` geht ohne Codeänderung, solange die Regeln aus
-    docs/00-DECISIONS.md (Datenbank) eingehalten werden."""
+    """SQLite ist die Vorgabe. `postgresql+asyncpg://...` ist vorgesehen (Regeln in docs/00-DECISIONS.md, D-02), aber
+    ungetestet, und `asyncpg` ist nicht im Image."""
 
     master_key_path: Path = Path("./data/master.key")
     """Fernet-Schlüssel für den Secrets-Vault. Wird bei der Erstinbetriebnahme erzeugt (0600), nie in der Datenbank abgelegt."""

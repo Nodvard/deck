@@ -22,6 +22,13 @@ import { REPO_URL } from "../../lib/docs";
 import { NOVNC_SOURCE_URL, NOVNC_VERSION, THIRD_PARTY_LICENSES_IMAGE_PATH, THIRD_PARTY_LICENSES_URL } from "../../lib/thirdParty";
 import { Badge, Card, NoticeLine, PageHeader, errorText } from "./ui";
 
+/** Discord von Nodvard, derselbe Link wie in der README. */
+const DISCORD_URL = "https://discord.gg/gTTs7qMabt";
+/** Fragen und Ideen öffentlich auf GitHub. */
+const DISCUSSIONS_URL = `${REPO_URL}/discussions`;
+
+const LINK_CLASS = "underline underline-offset-2 hover:text-white";
+
 const KIND_TONE: Record<ChangeKind, "good" | "accent" | "warn" | "bad"> = {
   neu: "good",
   verbessert: "accent",
@@ -96,7 +103,10 @@ export function AboutSettings(): JSX.Element {
 
   return (
     <>
-      <PageHeader title="Über Nodvard Deck" description="Welche Version läuft, was sich in den Versionen geändert hat, dazu Lizenz und Marken." />
+      <PageHeader
+        title="Über Nodvard Deck"
+        description="Welche Version läuft, was sich in den Versionen geändert hat, wo du Hilfe und Austausch findest, dazu Lizenz und Marken."
+      />
 
       {error && <NoticeLine notice={{ kind: "error", text: `Das Änderungsprotokoll konnte nicht geladen werden: ${errorText(error)}` }} />}
       {isPending && !error && <p className="text-sm text-white/50">Wird geladen …</p>}
@@ -134,6 +144,34 @@ export function AboutSettings(): JSX.Element {
           {data.versions.length === 0 && <p className="text-sm text-white/50">Es gibt noch keine Einträge im Änderungsprotokoll.</p>}
         </>
       )}
+
+      <Card title="Community und Credits">
+        <p className="text-sm leading-relaxed text-white/80">
+          Fragen, Ideen und Austausch gibt es im{" "}
+          <a href={DISCORD_URL} target="_blank" rel="noopener noreferrer" className={LINK_CLASS}>
+            Discord von Nodvard
+          </a>
+          . Den Quellcode und die{" "}
+          <a href={DISCUSSIONS_URL} target="_blank" rel="noopener noreferrer" className={LINK_CLASS}>
+            Diskussionen
+          </a>{" "}
+          findest du auf{" "}
+          <a href={REPO_URL} target="_blank" rel="noopener noreferrer" className={LINK_CLASS}>
+            GitHub
+          </a>
+          .
+        </p>
+        <p className="mt-3 text-sm leading-relaxed text-white/80">Entwickelt von Nico Benks.</p>
+        <p className="mt-1 text-sm leading-relaxed text-white/80">Discord-Community und Bot: yosuke.ae</p>
+        <p className="mt-3 text-sm leading-relaxed text-white/80">
+          Nodvard Deck baut auf vielen freien Bibliotheken auf. Danke an alle, die daran mitarbeiten. Welche es sind und
+          unter welcher Lizenz sie stehen, findest du in den{" "}
+          <a href={THIRD_PARTY_LICENSES_URL} target="_blank" rel="noopener noreferrer" className={LINK_CLASS}>
+            Lizenzen der verwendeten Bibliotheken
+          </a>
+          .
+        </p>
+      </Card>
 
       <Card title="Lizenz und Marken">
         <p className="text-sm leading-relaxed text-white/80">

@@ -1,12 +1,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowUpRight, GripVertical } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Icon } from "../components/Icon";
 import { usePages } from "../lib/catalog";
 
-import { api } from "../lib/api";
 import { useWsSubscription } from "../lib/ws";
+import { MAX_ROWS, MIN_ROWS, MORE_LINE_PX, fitCount, rowsToPx, stageFor } from "./fit";
+import { widgetDataQuery } from "./query";
 import type { WidgetDataResponse, WidgetOut } from "./types";
 import {
   ActionsView,
@@ -21,25 +23,32 @@ import {
 } from "./views";
 
 const ARRAY_KINDS = new Set(["list", "table", "chart", "status_grid"]);
+/** Zahl und Tacho stehen mittig in der Karte; alles andere beginnt oben. */
+const CENTERED_KINDS = new Set(["stat", "gauge"]);
 
-function queryKeyFor(widget: WidgetOut): [string, string, string] {
-  return ["widget-data", widget.ext_id, widget.data_endpoint];
+/** Gemessene Stufe für einen Stand (Daten und Breite); `limit` kürzt Listen, die nicht in L passen. */
+interface Fit {
+  key: string;
+  rows: number;
+  limit: number | null;
 }
 
 /**
  * Eine Karte pro Widget: holt `data_endpoint` (`{data, meta}`, docs/02-EXTENSION-API.md), hält sich per
  * `refresh.interval_s` und/oder `refresh.ws_channel` aktuell und validiert die Form gegen den View-Typ defensiv: Eine
  * Abweichung wird als Extension-Fehler angezeigt statt als kaputtes oder leeres UI.
+ *
+ * Die Höhe richtet sich nach dem Inhalt (Stufen in `fit.ts`): Die Karte misst ihn und meldet die Rasterzeilen über
+ * `onRows`. Passt eine Liste nicht in die größte Stufe, endet sie an der letzten ganzen Zeile, darunter „+ x weitere“.
  */
-export function WidgetCard({ widget }: { widget: WidgetOut }) {
+export function WidgetCard({
+  widget, onRows, draggable = false,
+}: { widget: WidgetOut; onRows?: (rows: number) => void; /** Im Raster: ein kleiner Griff rechts im Kopf zum Verschieben. */ draggable?: boolean }) {
   const queryClient = useQueryClient();
-  const queryKey = queryKeyFor(widget);
+  const query = widgetDataQuery(widget);
+  const { queryKey } = query;
 
-  const { data: response, error, isLoading } = useQuery({
-    queryKey,
-    queryFn: () => api.get<WidgetDataResponse>(`/ext/${widget.ext_id}/${widget.data_endpoint}`),
-    refetchInterval: widget.refresh.interval_s ? widget.refresh.interval_s * 1000 : false,
-  });
+  const { data: response, error, isLoading, dataUpdatedAt, errorUpdatedAt } = useQuery(query);
 
   useWsSubscription(widget.refresh.ws_channel, () => {
     void queryClient.invalidateQueries({ queryKey });
@@ -49,44 +58,154 @@ export function WidgetCard({ widget }: { widget: WidgetOut }) {
     void queryClient.invalidateQueries({ queryKey });
   }
 
-  // „Öffnen“ führt zur Seite derselben Extension (die mit der kleinsten nav_order), generisch über den Seitenkatalog,
+  // Der Kopf führt zur Seite derselben Extension (die mit der kleinsten nav_order), generisch über den Seitenkatalog,
   // der Kern kennt keine Extension namentlich.
   const { data: pages } = usePages();
   const page = (pages ?? [])
     .filter((p) => p.ext_id === widget.ext_id && p.show_in_nav !== false)
     .sort((a, b) => a.nav_order - b.nav_order)[0];
+  const pageHref = page ? `/ext/${page.ext_id}${page.path}` : null;
+
+  const cardRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  const [fit, setFit] = useState<Fit | null>(null);
+  const minRows = MIN_ROWS[widget.view.kind] ?? 1;
+  // Neue Daten oder eine andere Breite: Der alte Zuschnitt gilt nicht mehr, gemessen wird wieder der ganze Inhalt.
+  const fitKey = `${dataUpdatedAt}:${errorUpdatedAt}:${width}`;
+  const limit = fit?.key === fitKey ? fit.limit : null;
+  const settled = Boolean(response || error);
+  const fitRef = useRef(fit);
+  fitRef.current = fit;
+
+  const measure = useCallback(() => {
+    // Schon gekürzt: nicht nachmessen, die gekürzte Liste ist kürzer und die Karte wechselte sonst zwischen gekürzt
+    // und ungekürzt. Neue Daten oder eine andere Breite ändern `fitKey`, dann zählt der ganze Inhalt wieder.
+    if (fitRef.current?.key === fitKey && fitRef.current.limit !== null) return;
+    const card = cardRef.current;
+    const body = bodyRef.current;
+    const content = contentRef.current;
+    // Ohne Layout (verborgen, jsdom) ist alles 0: dann nicht messen, die Startseite nimmt ihre Vorgabe.
+    if (!settled || !card || !body || !content || card.offsetHeight === 0) return;
+    const chrome = card.offsetHeight - body.clientHeight;
+    const needed = chrome + content.offsetHeight;
+    let next: Fit;
+    const stage = stageFor(needed, minRows);
+    if (stage !== null) {
+      next = { key: fitKey, rows: stage, limit: null };
+    } else {
+      // Zu lang für L: so viele ganze Zeilen, wie über „+ x weitere“ Platz haben. Ohne Zeilen (Text, Diagramm) bleibt
+      // die Karte L und scrollt.
+      const rowEls = [...content.querySelectorAll<HTMLElement>("[data-fit-row]")];
+      const top = content.getBoundingClientRect().top;
+      const padBottom = Number.parseFloat(getComputedStyle(content).paddingBottom) || 0;
+      const available = rowsToPx(MAX_ROWS) - chrome - padBottom - MORE_LINE_PX;
+      const rowLimit = rowEls.length ? fitCount(rowEls.map((el) => el.getBoundingClientRect().bottom - top), available) : null;
+      next = { key: fitKey, rows: MAX_ROWS, limit: rowLimit };
+    }
+    setFit((prev) => (prev && prev.key === next.key && prev.rows === next.rows && prev.limit === next.limit ? prev : next));
+  }, [minRows, settled, fitKey]);
+
+  // Vor dem Zeichnen messen, damit die ungekürzte Liste nie zu sehen ist.
+  useLayoutEffect(() => {
+    measure();
+  });
+
+  // Breite der Karte beobachten; Inhalt, der später wächst (Bilder, Schrift), löst ebenfalls ein Nachmessen aus.
+  const measureRef = useRef(measure);
+  measureRef.current = measure;
+  useEffect(() => {
+    const card = cardRef.current;
+    const content = contentRef.current;
+    if (!card || !content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.target === card) setWidth(Math.round(entry.contentRect.width));
+      }
+      measureRef.current();
+    });
+    observer.observe(card);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
+
+  const rows = fit?.rows ?? null;
+  const onRowsRef = useRef(onRows);
+  onRowsRef.current = onRows;
+  useLayoutEffect(() => {
+    if (rows !== null) onRowsRef.current?.(rows);
+  }, [rows]);
+
+  const total = response && Array.isArray(response.data) ? response.data.length : 0;
+  const maxItems = widget.view.kind === "list" ? widget.view.max_items : null;
+  const hiddenCount = limit !== null ? Math.min(total, maxItems ?? total) - limit : 0;
+
+  const titleRow = (
+    <>
+      <span className="grid h-6 w-6 flex-none place-items-center rounded-md bg-white/[0.06] text-white/55">
+        <Icon name={widget.icon} size={13} />
+      </span>
+      <h3 className="min-w-0 flex-1 break-words text-[13px] font-semibold" title={widget.title}>{widget.title}</h3>
+    </>
+  );
 
   return (
-    <div className="panel flex h-full flex-col overflow-hidden">
-      <div className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-2.5">
-        <span className="accent-soft grid h-6 w-6 flex-none place-items-center rounded-md">
-          <Icon name={widget.icon} size={13} />
-        </span>
-        <h3 className="min-w-0 flex-1 break-words text-[13px] font-semibold" title={widget.title}>{widget.title}</h3>
-        {page && (
+    <div ref={cardRef} className="panel group/card flex h-full flex-col overflow-hidden" data-testid={`widget-${widget.ext_id}-${widget.id}`}>
+      <div className="flex items-center gap-1 border-b border-white/[0.06] px-4 py-2.5">
+        {pageHref ? (
           <Link
-            to={`/ext/${page.ext_id}${page.path}`}
-            className="flex flex-none items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[11px] text-white/45 hover:bg-white/5 hover:text-white"
+            to={pageHref}
+            className="group/head flex min-w-0 flex-1 items-center gap-2 rounded-md hover:text-white"
             aria-label={`${widget.title} öffnen`}
           >
-            Öffnen <ArrowUpRight size={12} />
+            {titleRow}
+            <ArrowUpRight
+              size={13}
+              className="flex-none text-white/45 opacity-0 transition-opacity group-hover/head:opacity-100 group-focus-visible/head:opacity-100"
+              aria-hidden="true"
+            />
           </Link>
+        ) : (
+          <div className="flex min-w-0 flex-1 items-center gap-2">{titleRow}</div>
+        )}
+        {draggable && (
+          <span
+            className="widget-drag-handle grid h-6 w-5 flex-none cursor-grab place-items-center rounded text-white/40 opacity-0 transition-opacity hover:bg-white/5 hover:text-white/70 active:cursor-grabbing group-hover/card:opacity-100 [@media(hover:none)]:opacity-100"
+            title="Zum Verschieben ziehen"
+            aria-hidden="true"
+          >
+            <GripVertical size={14} />
+          </span>
         )}
       </div>
-      <div className="widget-body min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        {isLoading && (
-          <div className="space-y-2" aria-label="Lade …">
-            <div className="h-3 w-3/4 animate-pulse rounded bg-white/10" />
-            <div className="h-3 w-1/2 animate-pulse rounded bg-white/10" />
-            <div className="h-3 w-2/3 animate-pulse rounded bg-white/10" />
-          </div>
-        )}
-        {error && (
-          <p className="text-sm text-red-400">
-            Fehler im Modul: {error instanceof Error ? error.message : String(error)}
-          </p>
-        )}
-        {response && renderBody(widget, response)}
+      <div ref={bodyRef} className="widget-body flex min-h-0 flex-1 flex-col overflow-y-auto">
+        {/* `my-auto` statt `justify-center`: Die Höhe des Inhalts bleibt messbar, und was nicht passt, beginnt oben. */}
+        <div ref={contentRef} className={`px-4 py-2.5 ${CENTERED_KINDS.has(widget.view.kind) ? "my-auto" : ""}`}>
+          {isLoading && (
+            <div className="space-y-2" aria-label="Lade …">
+              <div className="h-3 w-3/4 animate-pulse rounded bg-white/10" />
+              <div className="h-3 w-1/2 animate-pulse rounded bg-white/10" />
+              <div className="h-3 w-2/3 animate-pulse rounded bg-white/10" />
+            </div>
+          )}
+          {error && (
+            <p className="text-sm text-red-400">
+              Fehler im Modul: {error instanceof Error ? error.message : String(error)}
+            </p>
+          )}
+          {response && renderBody(widget, response)}
+          {hiddenCount > 0 &&
+            (pageHref ? (
+              <Link to={pageHref} className="mt-2 block text-[12px] leading-5 text-white/50 hover:text-white" data-testid="widget-more">
+                + {hiddenCount} weitere
+              </Link>
+            ) : (
+              <p className="mt-2 text-[12px] leading-5 text-white/50" data-testid="widget-more">
+                + {hiddenCount} weitere
+              </p>
+            ))}
+        </div>
       </div>
     </div>
   );
@@ -116,13 +235,13 @@ export function WidgetCard({ widget }: { widget: WidgetOut }) {
       case "stat":
         return <StatView view={spec.view} data={data} />;
       case "list":
-        return <ListView view={spec.view} data={data} extId={spec.ext_id} onAction={refetch} />;
+        return <ListView view={spec.view} data={data} extId={spec.ext_id} onAction={refetch} limit={limit} />;
       case "table":
-        return <TableView view={spec.view} data={data} extId={spec.ext_id} onAction={refetch} />;
+        return <TableView view={spec.view} data={data} extId={spec.ext_id} onAction={refetch} limit={limit} />;
       case "chart":
         return <ChartView view={spec.view} data={data} />;
       case "status_grid":
-        return <StatusGridView view={spec.view} data={data} />;
+        return <StatusGridView view={spec.view} data={data} limit={limit} />;
       case "gauge":
         return <GaugeView view={spec.view} data={data} />;
       case "markdown":

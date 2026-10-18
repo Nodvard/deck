@@ -271,6 +271,16 @@ def test_base_url_is_normalized_and_credentials_are_refused():
     assert normalize_base_url("http://kuma.test:3001/") == "http://kuma.test:3001"
     assert normalize_base_url(" https://kuma.example.com/kuma/ ") == "https://kuma.example.com/kuma"
     assert normalize_base_url("http://kuma.test:3001/?x=1#y") == "http://kuma.test:3001"
+    # Aus dem Browser kopiert: Seiten der Oberfläche fallen weg, ein Präfix hinter einem Proxy bleibt.
+    assert normalize_base_url("http://203.0.113.10:3001/dashboard") == "http://203.0.113.10:3001"
+    assert normalize_base_url("http://kuma.test/kuma") == "http://kuma.test/kuma"
+    assert normalize_base_url("http://kuma.test:3001/dashboard/12") == "http://kuma.test:3001"
+    assert normalize_base_url("http://kuma.test:3001/manage-status-page") == "http://kuma.test:3001"
+    assert normalize_base_url("http://kuma.test:3001/settings/notifications") == "http://kuma.test:3001"
+    assert normalize_base_url("http://kuma.test:3001/status/heim") == "http://kuma.test:3001"
+    assert normalize_base_url("http://kuma.test:3001/status-page/heim") == "http://kuma.test:3001"
+    assert normalize_base_url("http://kuma.test:3001/metrics") == "http://kuma.test:3001"
+    assert normalize_base_url("https://kuma.example.com/kuma/Dashboard/") == "https://kuma.example.com/kuma"
     for bad in ("kuma.test:3001", "ftp://kuma.test", "http://", "http://user:pw@kuma.test", "http://@kuma.test", "http://kuma.test:999999", ""):
         with pytest.raises(ValueError):
             normalize_base_url(bad)
@@ -528,6 +538,34 @@ async def test_connection_without_key_and_status_page_is_not_configured(client, 
     assert res.status_code == 204
     assert _only(await _overview(client, headers))["state"] == "ok"
 
+
+@pytest.mark.asyncio
+async def test_widget_meta_says_not_configured_only_without_any_set_up_connection(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    # Nichts eingetragen: die Übersicht darf die Kachel ausblenden; die übrigen `meta`-Felder bleiben.
+    assert (await _widget(client, headers))["meta"] == {"connections": 0, "total": 0, "down": 0, "state": "not_configured"}
+
+    # Ohne Schlüssel und ohne Status-Seite ist die Verbindung nicht eingerichtet; die Textzeile bleibt für ältere Oberflächen.
+    await _configure(client, headers, _connection(slug=""), key=None)
+    widget = await _widget(client, headers)
+    assert widget["meta"]["state"] == "not_configured" and widget["meta"]["connections"] == 1
+    assert widget["data"][0]["label"] == "nicht eingerichtet"
+
+    # Mit Schlüssel (und Status-Seite) gilt die Verbindung als eingerichtet, auch wenn der Server nicht antwortet.
+    await _configure(client, headers, _connection())
+    fake.error = httpx.ConnectError("refused")
+    widget = await _widget(client, headers)
+    assert "state" not in widget["meta"] and widget["meta"]["connections"] == 1
+    assert _only(await _overview(client, headers))["state"] == "unreachable"
+
+    # Eine eingerichtete und eine nicht eingerichtete Verbindung: das Modul ist eingerichtet.
+    await _configure(client, headers, _connection(), _connection("zwei", slug=""), key=None)
+    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": "uptime-kuma-key:kuma", "value": KEY}, headers=headers)
+    assert res.status_code == 204
+    assert [c["state"] for c in (await _overview(client, headers))["connections"]] == ["unreachable", "not_configured"]
+    widget = await _widget(client, headers)
+    assert "state" not in widget["meta"] and widget["meta"]["connections"] == 2
+    assert [row["label"] for row in widget["data"]] == ["nicht erreichbar", "nicht eingerichtet"]
 
 @pytest.mark.asyncio
 async def test_full_overview_merges_metrics_and_status_page_without_leaking_the_key(client, db_session, test_settings, caplog):

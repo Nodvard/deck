@@ -1,7 +1,7 @@
 /**
- * Seite „Server-Zustand“ (Modul-Kennung `system`, bis 0.8.0 hiess es „System“; Roadmap Punkt 3, "Linux-Hosts per
- * SSH"): Zustand EINES Linux-Servers -- Betriebssystem, Auslastung, Platten, fehlgeschlagene Dienste, Updates.
- * Erreichbar ueber die Kachel „Server-Zustand“ auf der Server-Seite (`?host=`) oder direkt mit Host-Auswahl.
+ * Seite „Server-Zustand“ (Modul-Kennung `system`): Zustand eines Linux-Servers mit Betriebssystem, Auslastung, Platten,
+ * fehlgeschlagenen Diensten und Updates. Erreichbar über die Kachel „Server-Zustand“ auf der Server-Seite (`?host=`)
+ * oder direkt mit Host-Auswahl.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -9,7 +9,7 @@ import { isActionRunning, runAction, RUNNING_IN_BACKGROUND } from "../../../_sha
 import { authedFetch, errorFromBody } from "../../../_shared/frontend/src/api";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { SettingsLink } from "../../../_shared/frontend/src/links";
-import { HostPicker, type HostTile } from "../../../_shared/frontend/src/HostPicker";
+import { HostPicker, tileFromHost, type HostTile } from "../../../_shared/frontend/src/HostPicker";
 import { errorMessage, fetchJson, LoadError } from "../../../_shared/frontend/src/loadError";
 import { useUrlParams } from "../../../_shared/frontend/src/location";
 import { Button, EmptyState, Notice } from "../../../_shared/frontend/src/ui";
@@ -20,10 +20,16 @@ import { TempLimit } from "./TempLimit";
 
 interface HostOut {
   id: string;
+  name: string;
   display_name: string;
   address: string;
   os_family: string;
   status: string;
+  /** Art und An/Aus für Gruppen und Plaketten der Auswahl (siehe `hostKind.tsx`); fehlen bei älteren Servern. */
+  kind?: string | null;
+  category?: string;
+  parent_label?: string | null;
+  power_state?: string | null;
   /** Standard-Zugang, `null` ohne SSH-Zugang (ohne den es nichts zu messen gibt). */
   credential?: unknown;
 }
@@ -39,7 +45,8 @@ interface HealthRow {
 
 /** Was eine Kachel aus dem Zustand zeigt: die Auslastung als Zusatz, einen Befund (gelb/rot) als Hinweis. */
 export function tileState(row: HealthRow | undefined): { extra: string | null; hint: string | null } {
-  if (!row) return { extra: null, hint: null };
+  // Ausgeschaltet (neutral): die Kachel sagt es selbst, ein Zusatz wäre doppelt.
+  if (!row || row.tone === "neutral") return { extra: null, hint: null };
   const load = [
     typeof row.cpu_percent === "number" ? `CPU ${Math.round(row.cpu_percent)} %` : null,
     typeof row.mem_percent === "number" ? `RAM ${Math.round(row.mem_percent)} %` : null,
@@ -230,16 +237,16 @@ function InfoView({ info, canRestart, busyUnit, onRestart, onTempLimitChanged }:
 }
 
 export function SystemPage(): JSX.Element {
-  // Der gewaehlte Server steht in der Adresszeile (`?host=`) und folgt ihr (location.ts): ein Link
-  // von der Server-Seite wirkt auch auf die schon offene Seite, nachdem man hier umgeschaltet hat.
+  // Der gewählte Server steht in der Adresszeile (`?host=`) und folgt ihr (location.ts): ein Link von der Server-Seite
+  // wirkt auch auf die schon offene Seite, nachdem man hier umgeschaltet hat.
   const [urlParams, updateUrl] = useUrlParams();
   const hostId = urlParams.get("host") || null;
-  // `null`: noch nicht geladen -- sonst gaebe es kurz den Leerzustand "kein Server".
+  // `null`: noch nicht geladen, sonst gäbe es kurz den Leerzustand „kein Server“.
   const [hosts, setHosts] = useState<HostOut[] | null>(null);
   // Serverliste nicht abrufbar: nicht "Noch kein Linux-Server" zeigen, sondern den Grund.
   const [hostsError, setHostsError] = useState<string | null>(null);
-  // Zustand je Server fuer die Kacheln der Auswahl (Widget "Server-Zustand", 5 min zwischengespeichert):
-  // Auslastung und der wichtigste Befund. Nicht zwingend -- die Auswahl geht auch ohne.
+  // Zustand je Server für die Kacheln der Auswahl (Widget „Server-Zustand“, 5 min zwischengespeichert): Auslastung
+  // und der wichtigste Befund. Nicht zwingend, die Auswahl geht auch ohne.
   const [health, setHealth] = useState<Record<string, HealthRow>>({});
   const [info, setInfo] = useState<SystemInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -312,7 +319,7 @@ export function SystemPage(): JSX.Element {
   // Kacheln der Server-Auswahl: Name, Adresse, System, Status aus der Serverliste des Kerns.
   const tiles = useMemo<HostTile[] | null>(
     () => hosts === null ? null : hosts.map((h) => ({
-      id: h.id, name: h.display_name, address: h.address, os: h.os_family, status: h.status,
+      ...tileFromHost(h),
       ...tileState(health[h.id]),
       ...(h.credential === null ? { hint: "ohne SSH-Zugang" } : {}),
     })),
@@ -321,8 +328,7 @@ export function SystemPage(): JSX.Element {
 
   useEffect(() => { setMessage(null); }, [hostId]);
 
-  /** Vorschlagen und -- wer freigeben darf -- gleich bestätigen (runAction fragt bei
-   * längerer Dauer alle 3 s nach). */
+  /** Vorschlagen und, wer freigeben darf, gleich bestätigen (runAction fragt bei längerer Dauer alle 3 s nach). */
   async function restartUnit(unit: string) {
     if (!hostId) return;
     const ok = await deck().confirmDialog(

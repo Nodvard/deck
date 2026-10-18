@@ -9,6 +9,7 @@ Ein verändertes oder veraltetes Skript läuft nie, auch nicht für `version`. D
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 import sys
@@ -113,7 +114,8 @@ def test_the_command_tries_the_helper_first_then_the_old_way(monkeypatch):
         "sudo -n /usr/local/lib/nodvard-deck/system-root service-restart nginx.service; "
         f"elif sudo -n true 2>/dev/null; then sudo -n sh -c '{old}'; "
         f"else echo '@@noroot'; if [ -e /usr/local/lib/nodvard-deck/system-root ] && ! {{ {matches}; }}; then "
-        "echo '@@noroot-helper'; fi; exit 126; fi"
+        "if [ -r /usr/local/lib/nodvard-deck/system-root ]; then echo '@@noroot-helper'; "
+        "else echo '@@noroot-helper-unreadable'; fi; fi; exit 126; fi"
     )
     with pytest.raises(sa.PayloadError):
         sa.restart_as_root("nginx.service; reboot")
@@ -202,6 +204,19 @@ def test_without_any_way_nothing_runs(tmp_path, helper_version, installed, lines
     done = _run(sa.restart_as_root("nginx.service"), bin_dir)
     assert done.stdout.split() == lines and done.returncode == 126
     assert not any(c.startswith("systemctl") for c in log.read_text().splitlines())
+
+
+@needs_sh
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root darf jede Datei lesen")
+def test_an_unreadable_helper_gets_its_own_marker(tmp_path):
+    """Die Prüfsumme eines unlesbaren Skripts lässt sich nicht bilden: weder „veraltet“ noch „verändert“, sondern eine
+    eigene Kennung, und das Skript läuft nicht."""
+    sa = _actions()
+    bin_dir, log = _world(tmp_path, helper_version=2, full_rule=False)
+    Path(sa.HELPER).chmod(0o311)
+    done = _run(sa.restart_as_root("nginx.service"), bin_dir)
+    assert done.stdout.split() == ["@@noroot", "@@noroot-helper-unreadable"] and done.returncode == 126
+    assert not any(c.startswith(("systemctl", f"sudo -n {sa.HELPER}")) for c in log.read_text().splitlines())
 
 
 @needs_sh

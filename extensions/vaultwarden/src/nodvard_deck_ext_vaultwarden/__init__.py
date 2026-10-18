@@ -22,7 +22,7 @@ from nodvard_sdk import (
 
 from .service import VaultwardenService
 from .suggestions import VaultwardenAppSuggestions
-from .widgets import status_rows
+from .widgets import status_rows, widget_state
 
 _WIDGET_ITEM = ListItem(title="{{ title }}", subtitle="{{ subtitle }}", badge=Badge(text="{{ label }}", tone="{{ tone }}"))
 
@@ -45,7 +45,7 @@ class Extension(NodvardExtension):
         @read_router.get("/widgets/status")
         async def status_widget() -> dict[str, Any]:
             state = await service.status()
-            return {"data": status_rows(state), "meta": {"state": state["state"]}}
+            return {"data": status_rows(state), "meta": {"state": widget_state(state)}}
 
         ctx.api.include_router(read_router, permission="hosts.read")
         ctx.ui.register_page(

@@ -2,50 +2,50 @@
 
 * **Schleife alle 5 s** (`Helper.tick`), immer in dieser Reihenfolge:
 
-  1. Einrichtung bzw. Zustand und Journal neu laden, falls noetig.
+  1. Einrichtung bzw. Zustand und Journal neu laden, falls nötig.
   2. **Wiederaufnahme vor allem anderen:** Steht ein Journal in `/state` (ein Vorgang kam beim letzten Lauf nicht zu
      Ende, etwa nach einem Absturz oder einem Neustart des Rechners), nimmt `Flow.recover` ihn wieder auf -- vor der
-     Vorpruefung und bevor eine Anforderung gelesen wird. Keine Grenze bremst das, und die Aktion zaehlt nicht noch
+     Vorprüfung und bevor eine Anforderung gelesen wird. Keine Grenze bremst das, und die Aktion zählt nicht noch
      einmal. Ist die Engine gerade nicht erreichbar (oder die eigene ID unbekannt), bleibt das Journal stehen, und die
-     naechste Runde versucht es erneut; Anforderungen bekommen bis dahin `busy`. Steht es auf `committed`, ist das
+     nächste Runde versucht es erneut; Anforderungen bekommen bis dahin `busy`. Steht es auf `committed`, ist das
      Ergebnis trotzdem schon eingetragen: Das geschieht beim Laden des Journals, ohne Engine. Auch ein Fehler im
-     Programm haelt die Runde dabei nicht auf (ebenso beim Aufraeumen des Slots).
-  3. Ohne Journal: die **Vorpruefung**, falls faellig (beim Start, danach alle 5 min, solange nicht bereit alle 30 s,
-     nach jedem Vorgang sofort), und einen abgelaufenen Rueckweg-Slot aufraeumen (`Flow.drop_expired_slot`).
-  4. Kanal lesen (`Channel.poll`), Anforderungen pruefen und ausfuehren, Status schreiben.
+     Programm hält die Runde dabei nicht auf (ebenso beim Aufräumen des Slots).
+  3. Ohne Journal: die **Vorprüfung**, falls fällig (beim Start, danach alle 5 min, solange nicht bereit alle 30 s,
+     nach jedem Vorgang sofort), und einen abgelaufenen Rückweg-Slot aufräumen (`Flow.drop_expired_slot`).
+  4. Kanal lesen (`Channel.poll`), Anforderungen prüfen und ausführen, Status schreiben.
 
-* **Eine Anforderung** durchlaeuft: Format (`policy.parse_request`), die Grenzen aus `/state` (`StateStore.check`:
+* **Eine Anforderung** durchläuft: Format (`policy.parse_request`), die Grenzen aus `/state` (`StateStore.check`:
   Wiederholung derselben ID, Sperre nach kaputtem Zustand, eine Aktion je 10 min, 24 h gesperrte Version). Dann wird die
-  ID gemerkt und gespeichert (auch fuer abgelehnte), dann: kein laufender Vorgang, eine frische Vorpruefung (hoechstens
-  eine je Runde), Tag und Version bzw. der Rueckweg-Slot. Erst dann fuehrt `Flow.run` sie aus (Update oder Rueckweg).
-  **Hoechstens ein Ablauf je Runde:** weitere Anforderungen derselben Runde bekommen `busy`.
+  ID gemerkt und gespeichert (auch für abgelehnte), dann: kein laufender Vorgang, eine frische Vorprüfung (höchstens
+  eine je Runde), Tag und Version bzw. der Rückweg-Slot. Erst dann führt `Flow.run` sie aus (Update oder Rückweg).
+  **Höchstens ein Ablauf je Runde:** weitere Anforderungen derselben Runde bekommen `busy`.
 * **Ergebnisse** stehen in `state.json` (`State.results`: die letzten 10, eins je Anforderungs-ID) und von dort im
-  Status, so ueberstehen sie einen Neustart des Helfers. Ablehnungen vor dem Ablauf traegt die Schleife ein, die
+  Status, so überstehen sie einen Neustart des Helfers. Ablehnungen vor dem Ablauf trägt die Schleife ein, die
   Ergebnisse eines Ablaufs (auch seine Ablehnungen) `Flow` selbst. **Das erste Ergebnis einer ID bleibt:** eine
-  Wiederholung derselben ID (`replay`) ueberschreibt es nicht, sonst saehe das Dashboard ein eingespieltes Update
-  ploetzlich als abgelehnt.
-* **Waehrend eines Vorgangs** haengt die Schleife im Ablauf (bis zu 15 min Beobachten, dazu ein Rueckbau). Die
-  regelmaessige Vorpruefung ruht dabei von selbst, weil sie im selben Thread laeuft: Niemand handelt nebenbei die
+  Wiederholung derselben ID (`replay`) überschreibt es nicht, sonst sähe das Dashboard ein eingespieltes Update
+  plötzlich als abgelehnt.
+* **Während eines Vorgangs** hängt die Schleife im Ablauf (bis zu 15 min Beobachten, dazu ein Rückbau). Die
+  regelmäßige Vorprüfung ruht dabei von selbst, weil sie im selben Thread läuft: Niemand handelt nebenbei die
   API-Version auf demselben `Engine`-Objekt neu aus. Nach jedem Schritt im Journal schreibt der Ablauf den Status
-  (`busy` mit `step`, `target` ist dann `null`); das Ergebnis der letzten Vorpruefung gilt ab dann als veraltet. Den
+  (`busy` mit `step`, `target` ist dann `null`); das Ergebnis der letzten Vorprüfung gilt ab dann als veraltet. Den
   Status zu `committed` schreibt er erst, wenn das Ergebnis eingetragen ist (vor jedem Aufruf an der Engine), und noch
   einmal, sobald Slot bzw. Sperre gespeichert sind: `busy.step` = `committed` steht nie ohne das Ergebnis im Status.
 * **Heartbeat-Thread alle 30 s:** schreibt den Status mit frischem `heartbeat_at` (ohne fsync), auch wenn die
-  Schleife gerade an einem langen Engine-Aufruf oder in einem Ablauf haengt -- sonst zeigte das Dashboard "antwortet
-  nicht". Der Status am Ende einer langen Runde traegt nicht den Zeitpunkt vom Rundenbeginn (er wuerde den frischeren
-  Heartbeat ueberschreiben und `heartbeat_at` rueckwaerts laufen lassen), sondern die Wanduhr im Moment des Schreibens
-  -- dieselbe Uhr wie beim Heartbeat, auch wenn sie waehrend der Runde springt (Raspberry Pi ohne Echtzeituhr).
+  Schleife gerade an einem langen Engine-Aufruf oder in einem Ablauf hängt -- sonst zeigte das Dashboard "antwortet
+  nicht". Der Status am Ende einer langen Runde trägt nicht den Zeitpunkt vom Rundenbeginn (er würde den frischeren
+  Heartbeat überschreiben und `heartbeat_at` rückwärts laufen lassen), sondern die Wanduhr im Moment des Schreibens
+  -- dieselbe Uhr wie beim Heartbeat, auch wenn sie während der Runde springt (Raspberry Pi ohne Echtzeituhr).
 * **Zweite Instanz** (`flock` in `/state` belegt): liest den Kanal nicht, nimmt nichts wieder auf und schreibt keinen
   Status, versucht es alle 30 s erneut.
-* **Zustand gerade nicht lesbar** (`state_read`/`journal_read`): diese Runde nichts lesen, nichts loeschen, nichts
-  ausfuehren, spaeter erneut -- nie wie "kein Journal" behandeln.
+* **Zustand gerade nicht lesbar** (`state_read`/`journal_read`): diese Runde nichts lesen, nichts löschen, nichts
+  ausführen, später erneut -- nie wie "kein Journal" behandeln.
 
 Protokoll: JSON-Zeilen auf stdout mit festen Codes (`event`, `code`, IDs). Nie Env, HostConfig, Kanal-Rohdaten
 oder Ausgaben von Healthchecks; Fremdtexte nur bereinigt (`engine.sanitize`). Je Anforderungs-ID eine Zeile `request`
-mit ihrem Ergebnis. Der Status enthaelt nur feste Codes, Versionen, Zeiten und IDs (`channel.validate_status`), nie
+mit ihrem Ergebnis. Der Status enthält nur feste Codes, Versionen, Zeiten und IDs (`channel.validate_status`), nie
 einen Text der Engine.
 
-`--selftest` prueft ohne Kanal, Zustand und Engine, ob das Paket vollstaendig und lauffaehig ist (Image-Test).
+`--selftest` prüft ohne Kanal, Zustand und Engine, ob das Paket vollständig und lauffähig ist (Image-Test).
 """
 
 from __future__ import annotations
@@ -101,13 +101,13 @@ def log(event: str, **fields: Any) -> None:
 
 
 class Helper:
-    """Der Helfer. Die Bausteine kommen ueber den Konstruktor (Tests geben eigene mit, nie ueber die Umgebung).
+    """Der Helfer. Die Bausteine kommen über den Konstruktor (Tests geben eigene mit, nie über die Umgebung).
 
-    * `clock`, `monotonic`, `sleep`: Wanduhr, monotone Uhr und Warten, auch fuer den Ablauf (die Tests stellen eine
+    * `clock`, `monotonic`, `sleep`: Wanduhr, monotone Uhr und Warten, auch für den Ablauf (die Tests stellen eine
       eigene Uhr). Fristen und Warten im Ablauf laufen auf der monotonen Uhr, alles in `/state` auf der Wanduhr.
-    * `uptime`: Laufzeit des Rechners fuer den Ablauf (`flow.boot_uptime`; die Tests stellen eine eigene).
-    * `checkpoint`: nur fuer Tests, im Betrieb leer. Geht unveraendert an `Flow`: die Tests lassen den Ablauf damit an
-      einer bestimmten Stelle "abstuerzen" und starten den Helfer dann neu.
+    * `uptime`: Laufzeit des Rechners für den Ablauf (`flow.boot_uptime`; die Tests stellen eine eigene).
+    * `checkpoint`: nur für Tests, im Betrieb leer. Geht unverändert an `Flow`: die Tests lassen den Ablauf damit an
+      einer bestimmten Stelle "abstürzen" und starten den Helfer dann neu.
     """
 
     def __init__(
@@ -165,8 +165,8 @@ class Helper:
     # --- Einrichten ---------------------------------------------------------
 
     def setup(self, now: float) -> None:
-        """Zustand oeffnen (Sperre), Zustand und Journal laden, Kanal einrichten. Fehler fuehren nie zum Abbruch,
-        sondern in den Status; `tick` versucht es spaeter erneut."""
+        """Zustand öffnen (Sperre), Zustand und Journal laden, Kanal einrichten. Fehler führen nie zum Abbruch,
+        sondern in den Status; `tick` versucht es später erneut."""
         self._last_setup_at = now
         if not self._store_open:
             try:
@@ -185,8 +185,8 @@ class Helper:
         if self._store_open:
             self._load_state(now)
         if not self._channel_ok:
-            # Unter der Sperre: `Channel.setup` schliesst und oeffnet den Deskriptor der Wurzel neu; der Heartbeat-Thread
-            # darf nicht gleichzeitig ueber eine (womoeglich neu vergebene) Deskriptornummer schreiben.
+            # Unter der Sperre: `Channel.setup` schließt und öffnet den Deskriptor der Wurzel neu; der Heartbeat-Thread
+            # darf nicht gleichzeitig über eine (womöglich neu vergebene) Deskriptornummer schreiben.
             with self._lock:
                 try:
                     self._channel.setup()
@@ -201,7 +201,7 @@ class Helper:
         self._store_reason = exc.code
 
     def _load_state(self, now: float) -> None:
-        """Zustand und Journal (neu) laden. Gerade nicht lesbar: alter Stand bleibt, spaeter erneut."""
+        """Zustand und Journal (neu) laden. Gerade nicht lesbar: alter Stand bleibt, später erneut."""
         try:
             state = self._store.load_state(now)
         except StateUnsafe as exc:
@@ -218,11 +218,11 @@ class Helper:
             self._store_reason = None
 
     def _read_journal(self, now: float) -> bool:
-        """Liest das Journal von der Platte, der einzigen Quelle dafuer. `False`, wenn es gerade nicht lesbar war: Dann
-        gilt es als unbekannt, und bis es wieder lesbar ist, wird nichts gelesen und nichts ausgefuehrt.
+        """Liest das Journal von der Platte, der einzigen Quelle dafür. `False`, wenn es gerade nicht lesbar war: Dann
+        gilt es als unbekannt, und bis es wieder lesbar ist, wird nichts gelesen und nichts ausgeführt.
 
         Steht es auf `committed` (Absturz gleich nach dem Commit), ist der Vorgang entschieden: Sein Ergebnis kommt in den
-        Zustand, bevor der Status das Journal zeigt, und wird gleich gespeichert. Dafuer braucht es weder die eigene ID
+        Zustand, bevor der Status das Journal zeigt, und wird gleich gespeichert. Dafür braucht es weder die eigene ID
         noch die Engine (`flow.committed_result`); so zeigt auch der erste Herzschlag nach dem Neustart `committed` nie
         ohne das Ergebnis, und ebenso nicht, solange die Wiederaufnahme wartet."""
         try:
@@ -273,8 +273,8 @@ class Helper:
         return self._flow
 
     def _on_step(self, journal: Journal | None) -> None:
-        """Vom Ablauf nach jedem geschriebenen Schritt (und mit `None` nach dem Loeschen des Journals): `busy.step` sofort
-        im Status zeigen. Ab der ersten Aenderung ist das Ergebnis der letzten Vorpruefung veraltet."""
+        """Vom Ablauf nach jedem geschriebenen Schritt (und mit `None` nach dem Löschen des Journals): `busy.step` sofort
+        im Status zeigen. Ab der ersten Änderung ist das Ergebnis der letzten Vorprüfung veraltet."""
         with self._lock:
             self._journal = journal
             self._journal_known = True
@@ -285,13 +285,13 @@ class Helper:
     # --- Schleife -----------------------------------------------------------
 
     def tick(self, now: float) -> None:
-        """Eine Runde: ggf. Einrichtung wiederholen, einen liegen gebliebenen Vorgang wieder aufnehmen, Vorpruefung
-        falls faellig, Kanal lesen und Anforderungen ausfuehren, Status schreiben.
+        """Eine Runde: ggf. Einrichtung wiederholen, einen liegen gebliebenen Vorgang wieder aufnehmen, Vorprüfung
+        falls fällig, Kanal lesen und Anforderungen ausführen, Status schreiben.
 
-        `now` ist der Zeitpunkt vom Rundenbeginn (er steuert, was faellig ist). Die Runde kann lange an der Engine oder
-        in einem Ablauf haengen, waehrenddessen schreibt der Heartbeat-Thread frische Zeitstempel; der Status am Ende
+        `now` ist der Zeitpunkt vom Rundenbeginn (er steuert, was fällig ist). Die Runde kann lange an der Engine oder
+        in einem Ablauf hängen, währenddessen schreibt der Heartbeat-Thread frische Zeitstempel; der Status am Ende
         bekommt darum die Wanduhr im Moment des Schreibens (`clock`, wie der Heartbeat) und nie den alten Wert -- auch
-        dann nicht, wenn die Uhr waehrend der Runde springt."""
+        dann nicht, wenn die Uhr während der Runde springt."""
         incomplete = self._second_instance or not self._store_open or not self._channel_ok or self._store_reason
         wait = RETRY_SETUP_S if self._second_instance else POLL_INTERVAL_S
         if incomplete and (self._last_setup_at is None or not 0 <= now - self._last_setup_at < wait):
@@ -351,12 +351,12 @@ class Helper:
             ids.append(journal.new.id)
         return tuple(ids)
 
-    # --- Wiederaufnahme und Aufraeumen ----------------------------------------
+    # --- Wiederaufnahme und Aufräumen ----------------------------------------
 
     def _recover(self) -> bool:
         """Nimmt den Vorgang im Journal wieder auf (`Flow.recover`): ohne Grenze und ohne die Aktion noch einmal zu
-        zaehlen, entschieden nur aus dem Journal und der Engine. `True`, wenn danach kein Journal mehr steht. Bleibt es
-        stehen (Engine gerade nicht erreichbar, eigene ID unbekannt), versucht die naechste Runde es erneut."""
+        zählen, entschieden nur aus dem Journal und der Engine. `True`, wenn danach kein Journal mehr steht. Bleibt es
+        stehen (Engine gerade nicht erreichbar, eigene ID unbekannt), versucht die nächste Runde es erneut."""
         state = self._state
         current = self._ensure_flow()
         if current is None or state is None:
@@ -382,8 +382,8 @@ class Helper:
         return self._journal_known and self._journal is None
 
     def _tidy_slot(self, now: float) -> None:
-        """Ohne laufenden Vorgang: einen abgelaufenen Rueckweg-Slot samt Schutz-Tag aufraeumen. Scheitert die Engine
-        voruebergehend, bleibt er stehen, und es geht nach `SLOT_RETRY_S` erneut (eine endgueltige Ablehnung beendet
+        """Ohne laufenden Vorgang: einen abgelaufenen Rückweg-Slot samt Schutz-Tag aufräumen. Scheitert die Engine
+        vorübergehend, bleibt er stehen, und es geht nach `SLOT_RETRY_S` erneut (eine endgültige Ablehnung beendet
         das, siehe `Flow.drop_expired_slot`)."""
         state = self._state
         slot = state.slot if state is not None else None
@@ -397,7 +397,7 @@ class Helper:
             return
         try:
             removed = current.drop_expired_slot(state)
-        except Exception as exc:  # noqa: BLE001 - Aufraeumen darf die Anforderungen dieser Runde nie aufhalten
+        except Exception as exc:  # noqa: BLE001 - Aufräumen darf die Anforderungen dieser Runde nie aufhalten
             self._log("internal_error", kind=sanitize(type(exc).__name__, 60))
             removed = False
         self._slot_failed_at = None if removed or state.slot is None else now
@@ -414,8 +414,8 @@ class Helper:
         self._cluttered = result.cluttered
         self._flow_in_round = False
         for item in result.items:
-            # Die Anforderungen sind schon aus dem Kanal genommen: ein Fehler an einer darf die uebrigen dieser Runde
-            # nicht mitreissen (jede Ausnahme gilt nur fuer diese eine).
+            # Die Anforderungen sind schon aus dem Kanal genommen: ein Fehler an einer darf die übrigen dieser Runde
+            # nicht mitreißen (jede Ausnahme gilt nur für diese eine).
             try:
                 self._handle(item, now)
             except Exception as exc:  # noqa: BLE001
@@ -423,7 +423,7 @@ class Helper:
         return bool(result.items)
 
     def _handle(self, item: Incoming, now: float) -> None:
-        """Prueft eine Anforderung vollstaendig und fuehrt sie aus (Reihenfolge im Kopf des Moduls)."""
+        """Prüft eine Anforderung vollständig und führt sie aus (Reihenfolge im Kopf des Moduls)."""
         if item.raw is None:
             self._refuse(item.id, _guess_action(None), None, None, item.code or policy.BAD_REQUEST)
             return
@@ -451,8 +451,8 @@ class Helper:
         if self._journal is not None or self._flow_in_round:
             self._refuse(request.id, request.action, known_version, to_version, policy.BUSY)
             return
-        # Frische Vorpruefung vor jeder Anforderung, aber hoechstens eine je Runde (sonst kostete eine Flut von
-        # Anforderungen je Runde bis zu 32 Vorpruefungen an der Engine).
+        # Frische Vorprüfung vor jeder Anforderung, aber höchstens eine je Runde (sonst kostete eine Flut von
+        # Anforderungen je Runde bis zu 32 Vorprüfungen an der Engine).
         check = self._preflight
         if check is None or self._preflight_at != now:
             check = self.run_preflight(now)
@@ -471,15 +471,15 @@ class Helper:
             self._refuse(request.id, request.action, from_version, to_version, exc.code)
             return
         current = self._ensure_flow()
-        if current is None:  # die Vorpruefung war bereit, kannte die eigene ID also; nur zur Sicherheit
+        if current is None:  # die Vorprüfung war bereit, kannte die eigene ID also; nur zur Sicherheit
             self._refuse(request.id, request.action, from_version, to_version, policy.SELF_UNKNOWN)
             return
         self._flow_in_round = True
         self._execute(current, request, state)
 
     def _execute(self, current: Flow, request: policy.Request, state: State) -> None:
-        """Fuehrt die Anforderung aus. Das Ergebnis haelt der Ablauf selbst in `state.json` fest. Steht danach noch ein
-        Journal (Aufraeumen offen, Commit nicht schreibbar), bleibt der Helfer beschaeftigt, und die naechste Runde nimmt
+        """Führt die Anforderung aus. Das Ergebnis hält der Ablauf selbst in `state.json` fest. Steht danach noch ein
+        Journal (Aufräumen offen, Commit nicht schreibbar), bleibt der Helfer beschäftigt, und die nächste Runde nimmt
         den Vorgang wieder auf."""
         try:
             outcome = current.run(request, state)
@@ -490,7 +490,7 @@ class Helper:
             self.run_preflight(self._clock())  # der Status zeigt gleich die neue Lage, nicht die von vorher
 
     def _remember(self, state: State, request: policy.Request, now: float) -> bool:
-        """Merkt die ID (Replay-Schutz, auch fuer abgelehnte Anforderungen) und speichert den Zustand, mit den
+        """Merkt die ID (Replay-Schutz, auch für abgelehnte Anforderungen) und speichert den Zustand, mit den
         Ergebnissen, die bis hierhin dazugekommen sind."""
         try:
             state.mark_seen(request.id, now)
@@ -503,12 +503,12 @@ class Helper:
 
     def _refuse(self, request_id: str, action: str | None, from_version: str | None, to_version: str | None,
                 code: str) -> None:
-        """Eine Ablehnung vor dem Ablauf: eine Logzeile je ID und ein Ergebnis im Zustand (gespeichert mit dem naechsten
-        `save_state`) -- ausser fuer diese ID steht schon eins da: eine Wiederholung ueberschreibt nie das erste."""
+        """Eine Ablehnung vor dem Ablauf: eine Logzeile je ID und ein Ergebnis im Zustand (gespeichert mit dem nächsten
+        `save_state`) -- außer für diese ID steht schon eins da: eine Wiederholung überschreibt nie das erste."""
         self._log_request(request_id, action, "refused", code)
         state = self._state
         if action is None or state is None:
-            return  # ohne gueltige Aktion gibt es keinen Eintrag im Status (das Schema verlangt eine)
+            return  # ohne gültige Aktion gibt es keinen Eintrag im Status (das Schema verlangt eine)
         if any(entry["id"] == request_id for entry in state.results):
             return
         entry = {"id": request_id, "action": action, "from": from_version, "to": to_version, "outcome": "refused",
@@ -594,7 +594,7 @@ class Helper:
         return "idle", True, policy.CHANNEL_CLUTTERED if self._cluttered else None
 
     def write_status(self, now: float, *, durable: bool = True) -> bool:
-        """Schreibt den Status (atomar). Gibt `False` zurueck, wenn das nicht ging (wird nur einmal je Serie
+        """Schreibt den Status (atomar). Gibt `False` zurück, wenn das nicht ging (wird nur einmal je Serie
         geloggt). Eine zweite Instanz schreibt nie."""
         if self._second_instance:
             return False
@@ -618,11 +618,11 @@ class Helper:
 
     def run(self, stop: threading.Event) -> None:
         """Bis `stop` gesetzt ist: Einrichtung, dann alle 5 s `tick`; daneben der Heartbeat-Thread. Ein laufender
-        Vorgang wird dafuer nicht abgebrochen; endet der Prozess mittendrin, nimmt der naechste Start ihn wieder auf."""
+        Vorgang wird dafür nicht abgebrochen; endet der Prozess mittendrin, nimmt der nächste Start ihn wieder auf."""
         self._log("start", version=__version__, service=self._service)
         self._guarded(self.setup)
-        # Der Heartbeat startet vor der ersten Runde: haengt schon die erste Vorpruefung (oder die Wiederaufnahme) an der
-        # Engine, zeigt der Status trotzdem "lebt" (bzw. "beschaeftigt").
+        # Der Heartbeat startet vor der ersten Runde: hängt schon die erste Vorprüfung (oder die Wiederaufnahme) an der
+        # Engine, zeigt der Status trotzdem "lebt" (bzw. "beschäftigt").
         beat = threading.Thread(target=self._beat, args=(stop,), name="heartbeat", daemon=True)
         beat.start()
         self._guarded(self.heartbeat)
@@ -643,7 +643,7 @@ class Helper:
 
 
 def _guess_action(raw: bytes | None) -> str | None:
-    """Fuer den Status-Eintrag einer ungueltigen Anforderung: die Aktion, wenn sie sich lesen laesst."""
+    """Für den Status-Eintrag einer ungültigen Anforderung: die Aktion, wenn sie sich lesen lässt."""
     if raw is None:
         return None
     try:
@@ -660,7 +660,7 @@ def _guess_action(raw: bytes | None) -> str | None:
 
 
 def selftest() -> int:
-    """Ohne Kanal, Zustand und Engine: Paket vollstaendig, reine Funktionen arbeiten wie erwartet."""
+    """Ohne Kanal, Zustand und Engine: Paket vollständig, reine Funktionen arbeiten wie erwartet."""
     checks: list[tuple[str, Callable[[], bool]]] = [
         ("python", lambda: sys.version_info >= (3, 11)),
         ("repository", lambda: policy.floating_tag(policy.REPOSITORY) == "latest"),

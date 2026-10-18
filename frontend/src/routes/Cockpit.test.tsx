@@ -61,7 +61,7 @@ describe("Cockpit", () => {
     renderCockpit();
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Übersicht");
     await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("2 Dinge brauchen deine Aufmerksamkeit"));
-    expect(screen.getByTestId("stat-Server").textContent).toContain("9/9");
+    expect(screen.getByTestId("stat-Server").textContent).toContain("3/3");
     expect(screen.getByTestId("stat-Dienste").textContent).toContain("13/14");
     expect(screen.getByTestId("stat-Backups").textContent).toContain("3/5");
     expect(screen.getByTestId("stat-Backups").textContent).toContain("2 noch ohne Lauf");
@@ -108,12 +108,116 @@ describe("Cockpit", () => {
     expect(names).not.toContain("app-docker:grafana");
   });
 
+  it("ausgeschaltete Gäste: grau „aus“, keine Störung; die Tabelle ist nach Art gruppiert", async () => {
+    const calm = { ...(respond("/api/v1/overview", "GET") as object), pending_actions: 0, attention: [] };
+    const hosts = (respond("/api/v1/hosts", "GET") as { id: string; status: string; power_state: string | null }[]).map((h) =>
+      h.id === "g-bastion" ? { ...h, status: "down", power_state: "stopped" } : h);
+    vi.stubGlobal("fetch", mockFetch({ "/overview": calm, "/hosts": hosts }));
+    renderCockpit();
+    await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("Alles läuft rund."));
+    expect(screen.getByTestId("stat-Server").textContent).toContain("3/3");
+    expect(screen.getByTestId("stat-Server-extra").textContent).toBe("+ 4 VMs · 2 LXC");
+    expect(screen.getByTestId("attention").textContent).toContain("Nichts offen");
+    expect(screen.getByTestId("attention").textContent).not.toContain("bastion");
+
+    const lxc = await screen.findByTestId("host-group-lxc");
+    expect(within(lxc).getByTestId("group-lxc").textContent).toMatch(/^LXC\d+$/);
+    const row = within(lxc).getByTestId("machine-g-bastion");
+    expect(row.querySelector(".status-dot")?.className).toContain("stopped");
+    expect(row.querySelector(".status-dot")?.getAttribute("title")).toBe("aus");
+    expect(row.textContent).toContain("LXC auf pve1");
+    expect(screen.getByTestId("host-group-server").textContent).toContain("Physische Server");
+    expect(screen.getByTestId("host-group-vm").textContent).toContain("Virtuelle Maschinen");
+  });
+
+  it("in Proxmox gelöschter Gast: zählt nicht mit, grau mit „nicht mehr vorhanden · entfernen“", async () => {
+    const calm = { ...(respond("/api/v1/overview", "GET") as object), pending_actions: 0, attention: [] };
+    const hosts = (respond("/api/v1/hosts", "GET") as { id: string }[]).map((h) =>
+      h.id === "g-ki" ? { ...h, status: "up", gone_since: "2026-10-16T08:00:00Z" } : h);
+    vi.stubGlobal("fetch", mockFetch({ "/overview": calm, "/hosts": hosts }));
+    renderCockpit();
+    await waitFor(() => expect(screen.getByTestId("stat-Server-extra").textContent).toBe("+ 3 VMs · 2 LXC"));
+    const gone = await screen.findByTestId("machine-g-ki-gone");
+    expect(gone.textContent).toContain("nicht mehr vorhanden");
+    expect(within(gone).getByRole("link", { name: "entfernen" })).toHaveAttribute("href", "/settings/hosts");
+    expect(screen.getByTestId("machine-g-ki").querySelector(".status-dot")?.getAttribute("title")).toBe("nicht mehr vorhanden");
+  });
+
+  it("ausgeschalteter Gast: seine nicht abrufbaren Container sind keine Aufmerksamkeit, ein laufender Server bleibt drin", async () => {
+    const base = respond("/api/v1/overview", "GET") as { services: object[] };
+    const placeholder = (name: string) => ({ id: `${name}:__error__`, name: `⚠ ${name}`, host: name, host_id: null, state: "error", tone: "danger", url: null, image: null, unreachable: true });
+    const overview = {
+      ...base, pending_actions: 0, attention: [], services: [placeholder("bastion"), placeholder("docker")],
+      services_running: 0, services_unreachable_hosts: ["bastion", "docker"],
+    };
+    const hosts = (respond("/api/v1/hosts", "GET") as { id: string; status: string; power_state: string | null }[]).map((h) =>
+      h.id === "g-bastion" ? { ...h, status: "down", power_state: "stopped" } : h);
+    vi.stubGlobal("fetch", mockFetch({ "/overview": overview, "/hosts": hosts }));
+    renderCockpit();
+
+    await waitFor(() => expect(screen.getByTestId("attention").textContent).toContain("Container nicht abrufbar: docker"));
+    expect(screen.getByTestId("attention").textContent).not.toContain("bastion");
+    expect(screen.getByTestId("stat-Dienste").textContent).toContain("Container von 1 Server nicht abrufbar");
+  });
+
+  it("in Proxmox gelöschter Gast: seine nicht abrufbaren Container sind keine Aufmerksamkeit", async () => {
+    const base = respond("/api/v1/overview", "GET") as { services: object[] };
+    const placeholder = (name: string) => ({ id: `${name}:__error__`, name: `⚠ ${name}`, host: name, host_id: null, state: "error", tone: "danger", url: null, image: null, unreachable: true });
+    const overview = {
+      ...base, pending_actions: 0, attention: [], services: [placeholder("ki-server"), placeholder("docker")],
+      services_running: 0, services_unreachable_hosts: ["ki-server", "docker"],
+    };
+    const hosts = (respond("/api/v1/hosts", "GET") as { id: string }[]).map((h) =>
+      h.id === "g-ki" ? { ...h, status: "down", gone_since: "2026-10-16T08:00:00Z" } : h);
+    vi.stubGlobal("fetch", mockFetch({ "/overview": overview, "/hosts": hosts }));
+    renderCockpit();
+
+    await waitFor(() => expect(screen.getByTestId("attention").textContent).toContain("Container nicht abrufbar: docker"));
+    expect(screen.getByTestId("attention").textContent).not.toContain("ki-server");
+    expect(screen.getByTestId("stat-Dienste").textContent).toContain("Container von 1 Server nicht abrufbar");
+  });
+
   it("alles gut: 'Alles läuft rund' und leere Aufmerksamkeits-Liste", async () => {
     const calm = { ...(respond("/api/v1/overview", "GET") as object), pending_actions: 0, attention: [] };
     vi.stubGlobal("fetch", mockFetch({ "/overview": calm }));
     renderCockpit();
-    await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("Alles läuft rund. 9 von 9 Servern online, 13 Dienste aktiv."));
+    await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("Alles läuft rund. 3 von 3 Servern online (dazu 4 VMs · 2 LXC), 13 Dienste aktiv."));
     expect(screen.getByTestId("attention").textContent).toContain("Nichts offen");
+  });
+
+  it("Hinweis „Server neu einrichten“: dezent, mit Link zur Einrichtung und zum Wegklicken, ohne „Nichts offen“", async () => {
+    const hint = {
+      host_id: "h-pi", host_name: "Raspberry Pi", modules: ["Nodvard Shield", "Server-Zustand"], checked_at: new Date().toISOString(),
+    };
+    const overview = { ...(respond("/api/v1/overview", "GET") as object), pending_actions: 0, attention: [], helper_hints: [hint] };
+    const fetchMock = mockFetch({ "/overview": overview, "/hosts/h-pi/helper-hint/dismiss": {} });
+    vi.stubGlobal("fetch", fetchMock);
+    renderCockpit();
+    const row = await screen.findByTestId("helper-hint");
+    expect(row.textContent).toContain(
+      "Raspberry Pi: Server neu einrichten, damit Nodvard Shield und Server-Zustand mit engen Rechten laufen",
+    );
+    expect(within(row).getByRole("link")).toHaveAttribute("href", "/settings/hosts/h-pi?befehl=1");
+    expect(screen.getByTestId("attention").textContent).not.toContain("Nichts offen");
+    // Dezent: Die Lage oben bleibt „rund“, der Hinweis ist kein Problem.
+    await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("Alles läuft rund"));
+
+    fireEvent.click(within(row).getByRole("button", { name: "Hinweis zu Raspberry Pi ausblenden" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(
+      ([url, init]) => String(url).endsWith("/hosts/h-pi/helper-hint/dismiss") && (init as RequestInit | undefined)?.method === "POST",
+    )).toBe(true));
+  });
+
+  it("Hinweis ohne Recht zum Ändern: nur Text, kein Link und kein Knopf; ein Modul „läuft“", async () => {
+    login(["hosts.read"], false);
+    const hint = { host_id: "h-pi", host_name: "Raspberry Pi", modules: ["Nodvard Shield"], checked_at: new Date().toISOString() };
+    const overview = { ...(respond("/api/v1/overview", "GET") as object), pending_actions: 0, attention: [], helper_hints: [hint] };
+    vi.stubGlobal("fetch", mockFetch({ "/overview": overview }));
+    renderCockpit();
+    const row = await screen.findByTestId("helper-hint");
+    expect(row.textContent).toContain("Raspberry Pi: Server neu einrichten, damit Nodvard Shield mit engen Rechten läuft");
+    expect(within(row).queryByRole("link")).toBeNull();
+    expect(within(row).queryByRole("button")).toBeNull();
   });
 
   it("alle Docker-Server nicht erreichbar: „unbekannt“ statt 0 von 3", async () => {
@@ -261,7 +365,7 @@ describe("Cockpit", () => {
     previewState.start = false; // der Normalfall der Vorschau: alles erledigt
     renderCockpit();
     await screen.findByTestId("cockpit-status");
-    await waitFor(() => expect(screen.getByTestId("stat-Server").textContent).toContain("9/9"));
+    await waitFor(() => expect(screen.getByTestId("stat-Server").textContent).toContain("3/3"));
     expect(screen.queryByTestId("first-steps")).toBeNull();
   });
 
@@ -371,8 +475,8 @@ describe("Cockpit", () => {
       previewState.noApps = true;
       vi.stubGlobal("fetch", mockFetch());
       renderCockpit();
-      await waitFor(() => expect(screen.getByTestId("stat-Server").textContent).toContain("9/9"));
-      await screen.findByTestId("host-cards");
+      await waitFor(() => expect(screen.getByTestId("stat-Server").textContent).toContain("3/3"));
+      await screen.findByTestId("host-group-server");
       expect(screen.queryByTestId("apps-section")).toBeNull();
     });
 

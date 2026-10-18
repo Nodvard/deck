@@ -1,0 +1,49 @@
+# Nodvard Dock (Beta): Container-Verwaltung für Docker, ohne das Repository installieren.
+#   1. Diese Datei als compose.yml in einen leeren Ordner laden:
+#        curl -fsSL -o compose.yml https://raw.githubusercontent.com/nodvard/deck/main/deploy/nodvard-dock/compose.yml
+#   2. In diesem Ordner:  docker compose up -d
+#   3. Browser öffnen: http://<Adresse-des-Rechners>:8080  und der Anleitung auf dem Bildschirm folgen.
+#      (Der Einrichtungscode steht im Protokoll: docker compose logs nodvard-dock)
+#
+# Aktualisieren: docker compose pull && docker compose up -d
+# Anderer Port: Umgebungsvariable NODVARD_DOCK_PORT setzen (z. B. in einer Datei .env neben dieser Datei).
+# Kein Docker-Socket: Nodvard Dock verwaltet auch diesen Rechner über SSH. Warum, steht im README daneben.
+# Portainer: Stacks -> Add stack, als Aufbau "Web editor" mit dem INHALT dieser Datei, nicht mit den Befehlen oben.
+
+# Fester Projektname: Der Ordnername bestimmt sonst den Namen des Datenspeichers.
+name: nodvard-dock
+
+services:
+  nodvard-dock:
+    image: ghcr.io/nodvard/dock:latest
+    restart: unless-stopped
+    ports:
+      - "${NODVARD_DOCK_PORT:-8080}:8080"
+    volumes:
+      # Alle Daten: Datenbank, verschlüsselte Schlüssel und die Merkliste der übernommenen Stacks.
+      - nodvard_dock_data:/app/data
+      # Optional: Ordner für die Sicherungen aus Einstellungen -> System -> Sicherung, außerhalb des Datenspeichers
+      # (am besten ein anderes Laufwerk oder ein NAS). Zeile einkommentieren, Ordner anlegen und dem Nutzer 1000 geben
+      # (`mkdir sicherungen && sudo chown 1000:1000 sicherungen`), dann in der Oberfläche den Ordner `/backups` wählen.
+      # - ./sicherungen:/backups
+    # Eigener Namensserver nur für diesen Container, nötig nur, wenn Namen aus dem Heimnetz (z. B. von einem Pi-hole)
+    # nicht gefunden werden. Zum Einschalten die Zeilen einkommentieren:
+    # dns:
+    #   - 192.168.1.10
+    #   - 1.1.1.1
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-I", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health', timeout=2)"]
+      interval: 30s
+      timeout: 3s
+      # Vor dem Start läuft die Migration samt Kopie der Datenbank; das kann auf einem Pi dauern.
+      start_period: 300s
+      retries: 3
+
+volumes:
+  nodvard_dock_data:
+    name: nodvard-dock-data

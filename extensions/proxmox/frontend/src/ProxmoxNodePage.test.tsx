@@ -5,11 +5,6 @@ import { navigateTo } from "../../../_shared/frontend/src/testShell";
 
 import { ProxmoxNodePage, shieldUpdatesHref } from "./ProxmoxNodePage";
 
-/**
- * `window.__lattice` wird im Produktivbetrieb von frontend/src/main.tsx gesetzt
- * (Import-Map-Shim, docs/02 §5) -- hier direkt gestubbt, wie es jedes echte
- * Extension-Bundle zur Laufzeit vorfindet.
- */
 const HOSTS = [
   { id: "h-vm", name: "docker", display_name: "docker", status: "running", kind: "vm", provider_ref: "pve2/qemu/pve2/100" },
   { id: "h-lxc", name: "docker-lxc", display_name: "docker-lxc", status: "running", kind: "lxc", provider_ref: "pve1/lxc/pve1/100" },
@@ -18,11 +13,8 @@ const HOSTS = [
 const METRICS = { values: { cpu_percent: 12.5, mem_used_bytes: 512 * 1024 * 1024, mem_total_bytes: 2 * 1024 ** 3, uptime_s: 3725 }, sampled_at: "2026-09-19T00:00:00Z" };
 
 /**
- * `POST /hosts/{id}/actions/{type}` liefert bei autonomy.mode=propose (Default)
- * IMMER `status="proposed"`, nie ein direktes Ergebnis -- die alte Version dieses
- * Tests mockte faelschlich `{status: "accepted"}`, ein Wert, den das echte Backend
- * nie liefert (siehe ActionStatus-Enum), und uebersah damit die Bestaetigungs-Luecke
- * komplett.
+ * `POST /hosts/{id}/actions/{type}` liefert bei autonomy.mode=propose (Default) immer `status="proposed"`, nie ein direktes
+ * Ergebnis (siehe ActionStatus-Enum); der Mock bildet das nach.
  */
 function mockFetch(
   opts: { onAction?: (url: string) => void; onApprove?: (url: string) => void; connections?: unknown[]; approveBody?: unknown } = {},
@@ -61,6 +53,7 @@ beforeEach(() => {
   window.history.replaceState({}, "", "/ext/proxmox/nodes");
   confirmDialog = vi.fn<(message: string, options?: { danger?: boolean }) => Promise<boolean>>().mockResolvedValue(true);
   hasPermission = vi.fn<(permission: string) => boolean>().mockReturnValue(true);
+  // Die Kern-Shell (frontend/src/main.tsx) wird hier gestubbt, wie sie jedes Extension-Bundle zur Laufzeit vorfindet.
   window.__lattice = {
     React: undefined as never,
     ReactDOM: undefined as never,
@@ -85,7 +78,7 @@ describe("ProxmoxNodePage", () => {
     await screen.findByText("docker");
     await screen.findByText("docker-lxc");
 
-    // Vorher: nur die VM-Zeile hatte "Starten" -- die LXC-Zeile (pve1) blieb leer.
+    // Auch die LXC-Zeile (pve1) hat „Starten“, nicht nur die VM-Zeile.
     expect(screen.getAllByRole("button", { name: "Starten" })).toHaveLength(2);
   });
 
@@ -102,8 +95,7 @@ describe("ProxmoxNodePage", () => {
   });
 
   it("fragt bei 'Hart ausschalten' erst nach, warnt vor Datenverlust und bricht ohne Aktion ab, wenn abgelehnt", async () => {
-    // vm.stop zieht in Proxmox virtuell den Stecker -- vorher hiess der Knopf
-    // nur "Stoppen" mit der Rueckfrage "wirklich stoppen?".
+    // vm.stop zieht in Proxmox virtuell den Stecker: der Knopf warnt davor, statt nur „wirklich stoppen?“ zu fragen.
     confirmDialog.mockResolvedValue(false);
     const fetchMock = mockFetch();
     vi.stubGlobal("fetch", fetchMock);
@@ -282,10 +274,7 @@ describe("ProxmoxNodePage", () => {
   });
 });
 
-/**
- * Verbindungen über API/UI verwalten: bisher gab es dafuer keine Oberflaeche, nur direkten
- * DB-Schreibzugriff -- `ConnectionsPanel` schliesst diese Luecke.
- */
+/** Verbindungen über die Oberfläche verwalten (`ConnectionsPanel`). */
 describe("ProxmoxNodePage ConnectionsPanel", () => {
   it("legt eine neue Verbindung an und fordert danach ein Token an", async () => {
     let created: unknown = null;
@@ -747,7 +736,7 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
     const stopall = screen.getByTestId("task-UPID:pve2:2");
     expect(stopall.textContent).toContain("unexpected status");
     expect(stopall.textContent).toContain("2m 5s");
-    // Nur die eigene Verbindung, Konsolen standardmaessig ausgeblendet.
+    // Nur die eigene Verbindung, Konsolen standardmäßig ausgeblendet.
     expect(screen.queryByTestId("task-UPID:pve1:1")).toBeNull();
     expect(screen.queryByTestId("task-UPID:pve2:5")).toBeNull();
     expect(screen.getByTestId("tasks-count-pve2")).toHaveTextContent("3 Aufgaben");
@@ -779,12 +768,12 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
       expect(screen.getByRole("tab", { name: "Aufgabenverlauf" })).toHaveAttribute("aria-selected", "true");
       expect(window.location.search).toBe("?host=h-vm&tab=tasks");
 
-      // Im Reiter „VMs & Container“ ist der Gast markiert (neuer und alter Klassenname: ein Tab mit aelterem Kern
-      // kennt nur .lattice-focus) und aufgeklappt; nach dem Wechsel per Hand bleibt er offen.
+      // Im Reiter „VMs & LXC“ ist der Gast markiert (neuer und alter Klassenname: ein Tab mit älterem Kern kennt nur
+      // .lattice-focus) und aufgeklappt; nach dem Wechsel per Hand bleibt er offen.
       const row = document.getElementById("host-h-vm")!;
       expect(row.className).toContain("nodvard-deck-focus");
       expect(row.className).toContain("lattice-focus");
-      fireEvent.click(screen.getByRole("tab", { name: "VMs & Container" }));
+      fireEvent.click(screen.getByRole("tab", { name: "VMs & LXC" }));
       expect(row).toBeVisible();
       expect(within(row).getByRole("button", { name: "Details einklappen" })).toBeInTheDocument();
     } finally {
@@ -807,7 +796,7 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
       // Auf der Seite verstellen: Filter weg, anderer Reiter, Gast zu.
       fireEvent.click(screen.getByRole("button", { name: "Filter entfernen" }));
       await waitFor(() => expect(screen.getByTestId("tasks-count-pve2")).toHaveTextContent("3 Aufgaben"));
-      fireEvent.click(screen.getByRole("tab", { name: "VMs & Container" }));
+      fireEvent.click(screen.getByRole("tab", { name: "VMs & LXC" }));
       fireEvent.click(within(row()).getByRole("button", { name: "Details einklappen" }));
 
       // Für den Router ist das dieselbe Adresse wie beim Öffnen -- die Seite muss trotzdem folgen.
@@ -899,7 +888,7 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
     expect(pve2.textContent).toContain("6.0.5 → 6.0.6");
     expect(pve2.textContent).toContain("neu: 7.0.14-19");
     expect(within(pve2).getByText("Pakete anzeigen (2)")).toBeInTheDocument();
-    // pve1 gehoert zu einer anderen Verbindung ohne Hosts auf dieser Seite.
+    // pve1 gehört zu einer anderen Verbindung ohne Hosts auf dieser Seite.
     expect(screen.queryByTestId("updates-pve1")).toBeNull();
   });
 

@@ -1,7 +1,4 @@
-/**
- * Netzwerk -- PageSpec `component="NetworkPage"`: Wegweiser zu den Modulen „Pi-hole“ und „Nginx Proxy Manager“, die den
- * Inhalt dieser Seite übernommen haben.
- */
+/** Wegweiser zu den Modulen „Pi-hole“ und „Nginx Proxy Manager“ (PageSpec `component="NetworkPage"`). */
 import { Card, Page, buttonClass } from "../../../_shared/frontend/src/ui";
 
 const MOVED = [

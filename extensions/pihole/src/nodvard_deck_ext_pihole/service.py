@@ -7,7 +7,13 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 from .client import PiholeClient, PiholeError
-from .config import PIHOLE_SECRET, NotConfigured, PiholeConfig, pihole_config
+from .config import (
+    PIHOLE_SECRET,
+    InvalidSetting,
+    NotConfigured,
+    PiholeConfig,
+    pihole_config,
+)
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
@@ -71,7 +77,10 @@ class PiholeService:
         try:
             client = await self.client()
         except NotConfigured as exc:
-            return {"state": "not_configured", "message": str(exc), "url": None, "summary": None, "blocking": None, "top_clients": None}
+            return {
+                "state": "not_configured", "message": str(exc), "invalid": isinstance(exc, InvalidSetting), "url": None,
+                "summary": None, "blocking": None, "top_clients": None,
+            }
         result: dict[str, Any] = {
             "state": "ok", "message": None, "url": client.base_url, "summary": None, "blocking": None, "top_clients": None,
         }

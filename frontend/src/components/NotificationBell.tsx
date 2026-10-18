@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { api } from "../lib/api";
+import { internalPath } from "../lib/apps";
 import { useExtensionLabel } from "../lib/extensionNames";
 import { relativeTime } from "../lib/overview";
 import { useAuthStore } from "../state/auth";
@@ -31,10 +32,9 @@ export function notificationHeadline(n: Pick<NotificationOut, "title" | "body">)
   return n.title.trim() || n.body.split("\n").find((line) => line.trim())?.trim() || "Meldung";
 }
 
-/** Nur Ziele innerhalb des Dashboards ("/…", nicht "//host") -- wie auf der Meldungsseite. */
+/** Nur Ziele innerhalb des Dashboards, wie auf der Meldungsseite. */
 function targetPath(n: NotificationOut): string | null {
-  const path = n.payload?.path;
-  return typeof path === "string" && path.startsWith("/") && !path.startsWith("//") ? path : null;
+  return internalPath(n.payload?.path) ?? null;
 }
 
 function BellRow({ n, onOpen }: { n: NotificationOut; onOpen: (n: NotificationOut) => void }) {

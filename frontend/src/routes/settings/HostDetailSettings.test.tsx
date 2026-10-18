@@ -190,18 +190,18 @@ describe("Server-Detail: Einrichtungsbefehl-Kasten ohne doppelte Sätze", () => 
   const NOTES = [
     "Der Schlüssel gilt nur zum Anmelden und für Befehle (restrict,pty): kein Weiterleiten von Ports, kein Agent.",
     "Wer in der Gruppe docker ist oder sudo ohne Passwort darf, kann auf dem Server praktisch alles.",
-    "Eine enger begrenzte sudo-Regel funktioniert mit Nodvard Deck nicht, weil es root-Befehle über „sudo sh -c“ startet. Darum bekommt nur dieser eine Benutzer die Rechte, und er kann sich nur mit dem Schlüssel anmelden.",
+    "Nodvard Deck startet einige root-Befehle über „sudo sh -c“, darum braucht es die volle sudo-Regel. Deshalb bekommt nur dieser eine Benutzer die Rechte, und er kann sich nur mit dem Schlüssel anmelden.",
   ];
   const withNotes = (call: Call) => ({ ...setupFixture(call), notes: NOTES });
 
-  it("„enger begrenzte sudo-Regel“ steht genau einmal da, und „So geht’s“ steht über dem Befehl", async () => {
+  it("der Satz zu „sudo sh -c“ steht genau einmal da, und „So geht’s“ steht über dem Befehl", async () => {
     mockHostsApi(routes({ "GET /hosts/h1/credentials": [credentialFixture()], "GET /hosts/h1/credentials/c1/setup": withNotes }));
     renderDetail();
     fireEvent.click(await screen.findByRole("button", { name: "Einrichtungsbefehl zeigen" }));
     const area = await screen.findByLabelText("Einrichtungsbefehl");
     await waitFor(() => expect(area).toHaveValue(`${ONE_LINER} #sudo #docker`));
     const box = screen.getByTestId("setup-command");
-    expect(box.textContent!.match(/enger begrenzte sudo-Regel/g)).toHaveLength(1);
+    expect(box.textContent!.match(/sudo sh -c/g)).toHaveLength(1);
     // Die übrigen Hinweise des Backends bleiben.
     expect(box.textContent).toContain("restrict,pty");
     // Die Bedienhinweise stehen direkt über dem Befehl, nicht ganz unten nach allen Sicherheitshinweisen.
@@ -247,7 +247,7 @@ describe("Server-Detail: Einrichtungsbefehl-Kasten ohne doppelte Sätze", () => 
     await screen.findByLabelText("Einrichtungsbefehl");
     fireEvent.click(screen.getByRole("checkbox", { name: /Root-Rechte ohne Passwort/ }));
     await waitFor(() => expect(screen.queryByTestId("setup-sudo-note")).toBeNull());
-    expect(screen.getByTestId("setup-command").textContent).not.toContain("enger begrenzte");
+    expect(screen.getByTestId("setup-command").textContent).not.toContain("sudo sh -c");
   });
 });
 
@@ -761,7 +761,7 @@ describe("Server-Detail: bearbeiten und löschen", () => {
       "GET /extensions": [{ id: "proxmox", name: "Proxmox VE", state: "disabled" }],
     }));
     renderDetail();
-    expect(await screen.findByText(/Dieser Server wurde von der Erweiterung „Proxmox VE“ eingelesen \(Virtuelle Maschine\)\. Die Erweiterung läuft nicht mehr/)).toBeInTheDocument();
+    expect(await screen.findByText(/Dieser Server wurde von der Erweiterung „Proxmox VE“ eingelesen \(VM\)\. Die Erweiterung läuft nicht mehr/)).toBeInTheDocument();
     const danger = await screen.findByRole("heading", { name: "Gefahrenbereich", level: 3 });
     vi.mocked(promptDialog).mockResolvedValueOnce(null);
     fireEvent.click(within(danger.closest("section") as HTMLElement).getByRole("button", { name: "Server löschen" }));

@@ -162,6 +162,13 @@ describe("NotificationsPage", () => {
     expect(within(screen.getByTestId("notification-n1")).queryByRole("link")).toBeNull();
   });
 
+  it.each(["//evil.example/x", "/\\evil.example", "https://evil.example"])("Ziel %s außerhalb des Dashboards gibt keinen Link", async (path) => {
+    rows[1].payload = { path };
+    vi.stubGlobal("fetch", mockFetch([]));
+    renderPage();
+    expect(within(await screen.findByTestId("notification-n2")).queryByRole("link")).toBeNull();
+  });
+
   it("einzeln und alle als gelesen markieren", async () => {
     const calls: { url: string; method: string; body?: unknown }[] = [];
     vi.stubGlobal("fetch", mockFetch(calls));

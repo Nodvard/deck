@@ -1791,6 +1791,340 @@ async def test_scan_finding_is_quarantined_notified_and_audited():
     await engine.dispose()
 
 
+async def _open_finding(ctx_outputs):
+    from datetime import UTC, datetime
+
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.models import Base, FindingRecord
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    ctx = _FakeCtx(async_sessionmaker(engine, expire_on_commit=False), ctx_outputs)
+    async with ctx._sm() as s:
+        s.add(FindingRecord(id="f1", host_id="h1", host_name="pi", path="/srv/upload/evil.sh", signature="EICAR",
+                            status="detected", detected_at=datetime.now(UTC)))
+        await s.commit()
+    return engine, ctx, Defender(ctx)
+
+
+def _slow_mover(ctx, states):
+    """Das Verschieben läuft in die Zeitüberschreitung; `quarantine-state` antwortet der Reihe nach mit `states`."""
+    run = ctx._run
+
+    async def slow(host, command, timeout_s=60):
+        if "mv -f" in command:
+            ctx.commands.append(command)
+            raise TimeoutError
+        if "@@state=" in command:
+            ctx.commands.append(command)
+            state = states.pop(0) if len(states) > 1 else states[0]
+            out = "@@state=quarantined\n@@mode=750\n" if state == "quarantined" else f"@@state={state}\n"
+            return SimpleNamespace(exit_code=0, stdout=out, stderr="", duration_ms=5)
+        return await run(host, command, timeout_s)
+
+    ctx.exec.run = slow
+
+
+@pytest.mark.asyncio
+async def test_a_quarantine_that_arrives_after_the_timeout_is_taken_over(monkeypatch):
+    import asyncio
+
+    from nodvard_deck_ext_shield import defender as dmod
+
+    monkeypatch.setattr(dmod, "QUARANTINE_FOLLOW_INTERVAL_S", 0)
+    engine, ctx, defender = await _open_finding({})
+    _slow_mover(ctx, ["absent", "checking", "quarantined"])
+
+    ok, message = await defender.quarantine("f1", actor=None)
+    assert not ok and message.startswith("Nach 5 Minuten kam keine Rückmeldung vom Server.")
+    assert "Deck sieht bis" in message
+    until = re.search(r"Deck sieht bis (\d\d:\d\d) Uhr nach", message).group(1)
+    again, busy = await defender.quarantine("f1", actor=None)
+    assert not again and busy == dmod.QUARANTINE_STILL_FOLLOWING.format(until=until)
+    await asyncio.gather(*(t for t, _until in defender._quarantine_follow.values()))
+
+    [finding] = await defender.list_findings()
+    assert finding["status"] == "quarantined" and finding["quarantine_path"].endswith("_evil.sh")
+    assert sum("@@state=" in c for c in ctx.commands) == 3 and sum("mv -f" in c for c in ctx.commands) == 1
+    late = [a for a in ctx.audits if a["action"] == "shield.quarantine" and a["outcome"] == "success"]
+    assert len(late) == 1 and late[0]["detail"]["late"] is True
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("state", "note"), [
+    ("absent", "ist auch danach nicht in der Quarantäne angekommen"),
+    ("checking", "liegt noch im Prüfordner"),
+    ("weg", "ließ sich nicht feststellen"),
+])
+async def test_without_the_file_in_quarantine_the_finding_stays_open_and_says_why(monkeypatch, state, note):
+    import asyncio
+
+    from nodvard_deck_ext_shield import defender as dmod
+
+    monkeypatch.setattr(dmod, "QUARANTINE_FOLLOW_INTERVAL_S", 0)
+    monkeypatch.setattr(dmod, "QUARANTINE_FOLLOW_S", 0.05)
+    engine, ctx, defender = await _open_finding({})
+    _slow_mover(ctx, [state])
+
+    await defender.quarantine("f1", actor=None)
+    await asyncio.gather(*(t for t, _until in defender._quarantine_follow.values()))
+    [finding] = await defender.list_findings()
+    assert finding["status"] == "detected" and note in finding["note"]
+    assert not defender._quarantine_follow  # ein neuer Versuch geht wieder
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_server_that_stops_answering_leaves_the_outcome_unknown(monkeypatch):
+    import asyncio
+
+    from nodvard_deck_ext_shield import defender as dmod
+
+    monkeypatch.setattr(dmod, "QUARANTINE_FOLLOW_INTERVAL_S", 0)
+    monkeypatch.setattr(dmod, "QUARANTINE_FOLLOW_S", 0.05)
+    engine, ctx, defender = await _open_finding({})
+    _slow_mover(ctx, ["absent"])
+    answered = ctx.exec.run
+
+    async def then_silent(host, command, timeout_s=60):
+        if "@@state=" in command and sum("@@state=" in c for c in ctx.commands) >= 1:
+            ctx.commands.append(command)
+            raise TimeoutError
+        return await answered(host, command, timeout_s)
+
+    ctx.exec.run = then_silent
+    await defender.quarantine("f1", actor=None)
+    await asyncio.gather(*(t for t, _until in defender._quarantine_follow.values()))
+    [finding] = await defender.list_findings()
+    assert sum("@@state=" in c for c in ctx.commands) > 1
+    assert finding["note"] == dmod.QUARANTINE_LATE_UNKNOWN
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_without_root_the_follow_up_stops_at_once(monkeypatch):
+    import asyncio
+
+    from nodvard_deck_ext_shield import antivirus as av
+    from nodvard_deck_ext_shield import defender as dmod
+
+    monkeypatch.setattr(dmod, "QUARANTINE_FOLLOW_INTERVAL_S", 0)
+    monkeypatch.setattr(dmod, "QUARANTINE_FOLLOW_S", 60)
+    engine, ctx, defender = await _open_finding({})
+    _slow_mover(ctx, ["absent"])
+    answered = ctx.exec.run
+
+    async def no_root(host, command, timeout_s=60):
+        if "@@state=" in command:
+            ctx.commands.append(command)
+            return SimpleNamespace(exit_code=1, stdout=f"{av.NO_ROOT}\n", stderr="", duration_ms=5)
+        return await answered(host, command, timeout_s)
+
+    ctx.exec.run = no_root
+    await defender.quarantine("f1", actor=None)
+    await asyncio.wait_for(asyncio.gather(*(t for t, _until in defender._quarantine_follow.values())), timeout=5)
+    [finding] = await defender.list_findings()
+    assert sum("@@state=" in c for c in ctx.commands) == 1
+    assert finding["note"] == dmod.QUARANTINE_LATE_UNKNOWN
+    await engine.dispose()
+
+
+def _errors():
+    import asyncssh
+    from nodvard_deck.core.ssh import HostKeyMismatch, SshAuthError, SshTimeout
+
+    return [
+        (TimeoutError(), True),
+        (asyncssh.ConnectionLost("Verbindung weg"), True),
+        (ConnectionResetError("Verbindung weg"), True),
+        (SshTimeout("Server nicht erreichbar"), False),
+        (SshAuthError("Anmeldung abgelehnt"), False),
+        (HostKeyMismatch("h1", "ssh-ed25519", "SHA256:alt", "SHA256:neu"), False),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", range(6), ids=["zeitlimit", "abgerissen", "zurueckgesetzt", "nie-verbunden", "anmeldung",
+                                                "schluessel"])
+async def test_only_a_command_that_went_out_is_followed_up(monkeypatch, case):
+    import asyncio
+
+    from nodvard_deck_ext_shield import defender as dmod
+
+    error, followed = _errors()[case]
+
+    monkeypatch.setattr(dmod, "QUARANTINE_FOLLOW_INTERVAL_S", 0)
+    monkeypatch.setattr(dmod, "QUARANTINE_FOLLOW_S", 0.05)
+    engine, ctx, defender = await _open_finding({})
+
+    async def run(host, command, timeout_s=60):
+        ctx.commands.append(command)
+        if "@@state=" in command:
+            return SimpleNamespace(exit_code=0, stdout="@@state=absent\n", stderr="", duration_ms=5)
+        raise error
+
+    ctx.exec.run = run
+    ok, message = await defender.quarantine("f1", actor=None)
+    assert not ok and (("Deck sieht bis" in message) is followed)
+    assert bool(defender._quarantine_follow) is followed
+    await asyncio.gather(*(t for t, _until in defender._quarantine_follow.values()))
+    [finding] = await defender.list_findings()
+    if followed:
+        assert "nicht in der Quarantäne angekommen" in finding["note"]
+    else:
+        assert finding["note"].startswith("Quarantäne fehlgeschlagen:") and str(error)[-80:] in finding["note"]
+        assert not any("@@state=" in c for c in ctx.commands)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_path_is_noted_and_logged_like_before():
+    from datetime import UTC, datetime
+
+    from nodvard_deck_ext_shield.models import FindingRecord
+
+    engine, ctx, defender = await _open_finding({})
+    async with ctx._sm() as s:
+        s.add(FindingRecord(id="f2", host_id="h1", host_name="pi", path="relativ/datei", signature="EICAR",
+                            status="detected", detected_at=datetime.now(UTC)))
+        await s.commit()
+    ok, message = await defender.quarantine("f2", actor=None)
+    assert not ok and message == "Ungültiger Dateipfad." and not defender._quarantine_follow
+    finding = next(f for f in await defender.list_findings() if f["id"] == "f2")
+    assert finding["note"] == "Quarantäne fehlgeschlagen: Ungültiger Dateipfad."
+    assert [a["outcome"] for a in ctx.audits if a["action"] == "shield.quarantine"] == ["failure"]
+    assert not ctx.commands
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_finding_ignored_meanwhile_still_shows_that_it_is_in_quarantine(monkeypatch):
+    import asyncio
+
+    from nodvard_deck_ext_shield import defender as dmod
+
+    monkeypatch.setattr(dmod, "QUARANTINE_FOLLOW_INTERVAL_S", 0)
+    engine, ctx, defender = await _open_finding({})
+    gate = asyncio.Event()
+
+    async def run(host, command, timeout_s=60):
+        ctx.commands.append(command)
+        if "@@state=" in command:
+            await gate.wait()
+            return SimpleNamespace(exit_code=0, stdout="@@state=quarantined\n@@mode=750\n", stderr="", duration_ms=5)
+        raise TimeoutError
+
+    ctx.exec.run = run
+    await defender.quarantine("f1", actor=None)
+    assert await defender.ignore("f1")
+    gate.set()
+    await asyncio.gather(*(t for t, _until in defender._quarantine_follow.values()))
+    [finding] = await defender.list_findings()
+    assert finding["status"] == "quarantined" and finding["quarantine_path"].endswith("_evil.sh")
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_stopped_early_does_not_leave_its_promise(monkeypatch):
+    import asyncio
+
+    from nodvard_deck_ext_shield import defender as dmod
+
+    monkeypatch.setattr(dmod, "QUARANTINE_FOLLOW_INTERVAL_S", 0.01)
+    engine, ctx, defender = await _open_finding({})
+    _slow_mover(ctx, ["absent"])
+    await defender.quarantine("f1", actor=None)
+    [(task, _until)] = defender._quarantine_follow.values()
+    await asyncio.sleep(0.05)
+    defender.cancel_quarantine_follow()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    [finding] = await defender.list_findings()
+    assert finding["status"] == "detected" and "Deck sieht bis" not in finding["note"]
+    assert finding["note"] == dmod.QUARANTINE_LATE_UNKNOWN
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_two_clicks_at_the_same_moment_start_one_run():
+    import asyncio
+
+    from nodvard_deck_ext_shield import defender as dmod
+
+    engine, ctx, defender = await _open_finding({})
+
+    async def run(host, command, timeout_s=60):
+        ctx.commands.append(command)
+        await asyncio.sleep(0.01)
+        return SimpleNamespace(exit_code=0, stdout="@@mode=640\n", stderr="", duration_ms=5)
+
+    async def get(host_id):
+        await asyncio.sleep(0.01)  # wie die echte Abfrage in der Datenbank
+        return ctx._host
+
+    ctx.exec.run, ctx.hosts.get = run, get
+    results = await asyncio.gather(defender.quarantine("f1", actor=None), defender.quarantine("f1", actor=None))
+    assert sorted(results) == [(False, dmod.QUARANTINE_STILL_RUNNING), (True, "In Quarantäne verschoben.")]
+    assert len(ctx.commands) == 1
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_after_a_restart_no_old_promise_stays_on_a_finding():
+    from nodvard_deck_ext_shield import defender as dmod
+    from nodvard_deck_ext_shield.models import FindingRecord
+
+    engine, ctx, defender = await _open_finding({})
+    promise = f"Nach 5 Minuten kam keine Rückmeldung vom Server. {dmod.QUARANTINE_FOLLOWING.format(until='17:30')}"
+    async with ctx._sm() as s:
+        (await s.get(FindingRecord, "f1")).note = promise
+        await s.commit()
+    assert await defender.drop_stale_follow_notes() == 1
+    [finding] = await defender.list_findings()
+    assert finding["note"] == dmod.QUARANTINE_LATE_UNKNOWN
+    assert await defender.drop_stale_follow_notes() == 0
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_second_click_while_moving_does_not_start_a_second_run():
+    import asyncio
+
+    from nodvard_deck_ext_shield import defender as dmod
+
+    engine, ctx, defender = await _open_finding({})
+    release = asyncio.Event()
+
+    async def slow(host, command, timeout_s=60):
+        ctx.commands.append(command)
+        await release.wait()
+        return SimpleNamespace(exit_code=0, stdout="@@mode=640\n", stderr="", duration_ms=5)
+
+    ctx.exec.run = slow
+    first = asyncio.ensure_future(defender.quarantine("f1", actor=None))
+    await asyncio.sleep(0.01)
+    assert await defender.quarantine("f1", actor=None) == (False, dmod.QUARANTINE_STILL_RUNNING)
+    release.set()
+    assert (await first)[0] and len(ctx.commands) == 1
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_refused_quarantine_is_not_followed_up():
+    engine, ctx, defender = await _open_finding({"mv -f": "Datei nicht mehr vorhanden\n"})
+
+    async def gone(host, command, timeout_s=60):
+        ctx.commands.append(command)
+        return SimpleNamespace(exit_code=3, stdout="Datei nicht mehr vorhanden\n", stderr="", duration_ms=5)
+
+    ctx.exec.run = gone
+    ok, message = await defender.quarantine("f1", actor=None)
+    assert not ok and message == "Datei nicht mehr vorhanden" and not defender._quarantine_follow
+    await engine.dispose()
+
+
 def _widget_rows(defender) -> list[dict]:
     from fastapi import FastAPI
     from fastapi.testclient import TestClient

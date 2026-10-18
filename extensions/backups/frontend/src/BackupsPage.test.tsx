@@ -10,10 +10,8 @@ const JOBS = [
 ];
 
 /**
- * `POST .../retry` liefert bei autonomy.mode=propose (Default) IMMER
- * `status="proposed"` -- die alte Version dieses Tests pruefte nur, DASS der
- * Retry-Aufruf feuert, nie was danach passiert (die eigentliche Luecke: nichts
- * bestaetigte den Vorschlag je).
+ * Der Mock bildet den Server nach: `POST .../retry` liefert bei autonomy.mode=propose (Default) immer `status="proposed"`,
+ * die Seite muss den Vorschlag also selbst bestätigen.
  */
 function mockFetch(opts: { jobs?: unknown[]; onRetry?: () => void; onApprove?: () => void; connections?: unknown[]; unprotected?: unknown; inventory?: unknown } = {}) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -152,8 +150,8 @@ describe("BackupsPage retry()", () => {
     expect(approveCalled).toBe(false);
   });
 
-  /** Live gefunden: ein grosses Backup fuellte den Backup-Speicher. Der Server warnt
-   * (409 + space_warning), die Seite fragt nach und schickt erst bei "Trotzdem" erneut. */
+  /** Ein großes Backup würde den Backup-Speicher füllen: der Server warnt (409 + space_warning), die Seite fragt
+   * nach und schickt erst bei „Trotzdem“ erneut. */
   function mockSpaceWarning(retryBodies: unknown[]) {
     const base = mockFetch();
     return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -200,10 +198,8 @@ describe("BackupsPage retry()", () => {
   });
 });
 
-/**
- * Verbindungen über API/UI verwalten -- identisches Muster wie ProxmoxNodePage.test.tsx, backups haelt
- * eine eigene, unabhaengige Verbindungsliste.
- */
+/** Verbindungen über API/UI verwalten, wie in ProxmoxNodePage.test.tsx; backups hält eine eigene, unabhängige
+ * Verbindungsliste. */
 describe("BackupsPage ConnectionsPanel", () => {
   it("legt eine neue Verbindung an und fordert danach ein Token an", async () => {
     let created: unknown = null;

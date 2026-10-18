@@ -59,6 +59,7 @@ etwas verändert, läuft zuerst durch eine **Freigabe** – so passiert nichts v
 | Jellyfin (Beta) | Laufende Wiedergaben mit Benutzer und Gerät, ob transkodiert wird, Größe der Bibliotheken und neue Medien (nur lesend) |
 | Plex (Beta) | Laufende Wiedergaben mit Benutzer und Gerät, Größe der Bibliotheken und neue Medien; spricht nur mit deinem Server, nie mit plex.tv (nur lesend) |
 | qBittorrent (Beta) | Geschwindigkeit, aktive Torrents, Anzahl je Zustand und freier Platz (nur lesend) |
+| Synology DSM (Beta) | Modell, DSM-Version, Auslastung, Speicherpools, Volumes, Festplatten, Hyper Backup und ob ein Update bereitsteht (nur lesend); meldet, wenn etwas nicht stimmt; am besten mit einem eigenen DSM-Konto ohne Zwei-Faktor, für Speicher, Updates und Hyper Backup in der Gruppe „administrators“ |
 
 „Beta“ heißt: Die Erweiterung funktioniert, ist aber noch nicht so gründlich erprobt wie der Rest. Rückmeldungen helfen.
 
@@ -70,7 +71,8 @@ siehe [docs/02-EXTENSION-API.md](docs/02-EXTENSION-API.md).
 
 ## Loslegen
 
-**Voraussetzung:** Docker mit Docker Compose. Nodvard Deck läuft auf einem Raspberry Pi 4/5
+**Voraussetzung:** Docker mit Docker Compose (für die weiteren Wege unten reicht teils Docker oder Podman
+allein). Nodvard Deck läuft auf einem Raspberry Pi 4/5
 (arm64) genauso wie auf jedem x86-64-Rechner. Es wird nichts gebaut: Das fertige Image kommt aus
 der GitHub-Container-Registry (`ghcr.io/nodvard/deck`).
 
@@ -180,6 +182,17 @@ Image erst geladen wird.
   bleiben erhalten.
 
 </details>
+
+**Weitere Wege**, jeweils Schritt für Schritt in
+[docs/11, Abschnitt 1.1](docs/11-ERST-EINRICHTUNG.md#11-installation-ohne-das-repo):
+
+- **Im Terminal:** ein einzelner `docker run`-Befehl, Podman
+  ([Anleitung](docs/11-ERST-EINRICHTUNG.md#im-terminal))
+- **Mit einer Web-Oberfläche:** Dockge ([Anleitung](docs/11-ERST-EINRICHTUNG.md#mit-einer-web-oberfläche))
+- **Auf einem NAS:** Synology, UGREEN, QNAP, Unraid, TrueNAS SCALE, OpenMediaVault, ZimaOS und CasaOS
+  ([Anleitung](docs/11-ERST-EINRICHTUNG.md#auf-einem-nas))
+- **Auf bestimmten Geräten:** Proxmox (VM oder LXC-Container) und Docker Desktop zum Ausprobieren
+  ([Anleitung](docs/11-ERST-EINRICHTUNG.md#raspberry-pi-proxmox-und-docker-desktop))
 
 Danach im Browser dem Einrichtungs-Assistenten folgen. Alles Weitere – Server, SSH-Zugang, Module,
 Sicherung – richtest du in der Oberfläche ein.

@@ -268,6 +268,9 @@
     "metadata": false,
     "name": true,
     "os_family": false,
+    "parent_label": false,
+    "parent_ref": false,
+    "power_state": false,
     "provider_ref": true,
     "status": false,
     "tags": false
@@ -1377,11 +1380,22 @@
      "timeout_s": false,
      "user": false
     },
+    "run_argv": {
+     "argv": true,
+     "host": true,
+     "log_command": false,
+     "stdin": false,
+     "timeout_s": false
+    },
     "sftp": {
      "host": true
     },
     "stream": {
      "command": true,
+     "host": true
+    },
+    "stream_argv": {
+     "argv": true,
      "host": true
     }
    }
@@ -1417,6 +1431,9 @@
     "list": {
      "group": false,
      "tag": false
+    },
+    "mark_gone": {
+     "provider_refs": true
     },
     "upsert_discovered": {
      "hosts": true
@@ -1862,6 +1879,9 @@
     "metadata": false,
     "name": true,
     "os_family": false,
+    "parent_label": false,
+    "parent_ref": false,
+    "power_state": false,
     "provider_ref": true,
     "status": false,
     "tags": false
@@ -2508,6 +2528,9 @@
     "metadata": false,
     "name": true,
     "os_family": false,
+    "parent_label": false,
+    "parent_ref": false,
+    "power_state": false,
     "provider_ref": true,
     "status": false,
     "tags": false
@@ -3617,11 +3640,22 @@
      "timeout_s": false,
      "user": false
     },
+    "run_argv": {
+     "argv": true,
+     "host": true,
+     "log_command": false,
+     "stdin": false,
+     "timeout_s": false
+    },
     "sftp": {
      "host": true
     },
     "stream": {
      "command": true,
+     "host": true
+    },
+    "stream_argv": {
+     "argv": true,
      "host": true
     }
    }
@@ -3657,6 +3691,9 @@
     "list": {
      "group": false,
      "tag": false
+    },
+    "mark_gone": {
+     "provider_refs": true
     },
     "upsert_discovered": {
      "hosts": true
@@ -4102,6 +4139,9 @@
     "metadata": false,
     "name": true,
     "os_family": false,
+    "parent_label": false,
+    "parent_ref": false,
+    "power_state": false,
     "provider_ref": true,
     "status": false,
     "tags": false

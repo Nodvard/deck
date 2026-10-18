@@ -772,6 +772,31 @@ async def test_logs_reject_bad_names_and_require_login(
     assert not any(c.startswith("docker logs") for c in docker["calls"])
 
 
+@pytest.mark.asyncio
+async def test_logs_since_a_time_and_only_on_docker_hosts(
+    running_app, db_session, test_settings, local_ssh_server, fake_docker
+):
+    from httpx import AsyncClient
+
+    from nodvard_deck.services import hosts as hosts_service
+
+    http_base, token, host, docker = await _setup_real_docker_host(
+        running_app, db_session, test_settings, local_ssh_server, fake_docker
+    )
+    no_docker = await hosts_service.create_host(db_session, name="proxmox-knoten", address="10.9.9.9")
+    await db_session.commit()
+    async with AsyncClient(base_url=http_base, timeout=30) as ac:
+        auth = _auth_header(token)
+        base = f"/api/v1/ext/docker/containers/{host.id}/web/logs"
+        recent = await ac.get(f"{base}?tail=5000&follow=false&since=24h", headers=auth)
+        assert recent.status_code == 200, recent.text
+        assert "web bereit" in recent.text
+        for bad in ("1d", "10m%3Bid", "0m", "10m%0A"):
+            assert (await ac.get(f"{base}?since={bad}", headers=auth)).status_code == 400, bad
+        assert (await ac.get(f"/api/v1/ext/docker/containers/{no_docker.id}/web/logs", headers=auth)).status_code == 404
+    assert [c for c in docker["calls"] if c.startswith("docker logs")] == ["docker logs --tail 5000 --timestamps --since 24h web"]
+
+
 # ---------------------------------------------------------------------------
 # CPU/RAM je Container + Image (Portainer-Ersatz)
 # ---------------------------------------------------------------------------
@@ -882,6 +907,34 @@ def test_name_rules_do_not_accept_a_trailing_newline():
     # Das JSON-Schema an die Seite bleibt in ECMA-Syntax (kein `\\Z`).
     for spec in caps.container_action_specs():
         assert "\\Z" not in str(spec.params_schema)
+
+
+@pytest.mark.asyncio
+async def test_stack_restart_waits_its_turn_at_the_stack():
+    import nodvard_deck_ext_docker.capabilities as caps
+    from nodvard_deck_ext_docker.locks import StackLocks
+    from nodvard_sdk import ActionRequest, Actor
+
+    exec_handle = _RecordingExec()
+    locks = StackLocks()
+    req = ActionRequest(action_type="docker.stack_restart", payload={"project": "shop"}, host_ref="h1",
+                        proposed_by=Actor.user("u1", "owner1"), reason="Test")
+    executor = caps.DockerMaintenanceExecutor(_ExecutorCtx(exec_handle), locks)
+    with locks.hold("h1", "shop", "Update") as busy:
+        assert busy is None
+        refused = await executor.execute(req)
+    assert refused.success is False and refused.error == "An diesem Stack läuft gerade schon etwas (Update). Versuch es danach noch einmal."
+    assert exec_handle.commands == []
+    seen: list[str | None] = []
+    real_run = exec_handle.run
+
+    async def watching(host, command, **kwargs):
+        seen.append(locks.held("h1", "shop"))
+        return await real_run(host, command, **kwargs)
+
+    exec_handle.run = watching
+    assert (await executor.execute(req)).success is True
+    assert set(seen) == {"Neustart"} and locks.held("h1", "shop") is None
 
 
 @pytest.mark.asyncio

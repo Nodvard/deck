@@ -642,6 +642,18 @@ async def test_nan_and_infinity_are_never_stored(client, db_session, number_exte
     assert (await client.get("/api/v1/extensions/zahl/settings", headers=headers)).json()["values"] == {"free": 1}
 
 
+@pytest.mark.asyncio
+async def test_a_huge_integer_is_a_422_not_a_500(client, db_session, number_extension):
+    """Der JSON-Leser macht aus `1000…0` (400 Stellen) eine Python-`int`; `math.isfinite` darauf warf `OverflowError`."""
+    db_session.add(ExtensionRecord(id="zahl", version="1", api_version="0.1.0", state="disabled", settings={"interval": 10}))
+    await db_session.flush()
+    headers = await _owner(client)
+    r = await _put_raw(client, headers, '{"values": {"interval": 1' + "0" * 400 + "}}")
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == "„Prüfabstand“: Erlaubt sind Werte von 2 bis 59. Eingetragen ist 1,000 × 10^400."
+    assert (await client.get("/api/v1/extensions/zahl/settings", headers=headers)).json()["values"] == {"interval": 10}
+
+
 def test_every_number_field_of_the_shipped_extensions_has_bounds_around_its_default():
     """Jedes Zahlenfeld einer mitgelieferten Erweiterung hat `minimum` und `maximum`, und der Standard liegt dazwischen.
     Ein neues Feld ohne Grenzen faellt hier auf."""

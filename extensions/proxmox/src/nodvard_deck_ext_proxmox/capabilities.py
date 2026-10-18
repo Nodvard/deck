@@ -102,6 +102,15 @@ def _parse_ref(provider_ref: str) -> tuple[str, str, str, str | None]:
     return connection, kind, node, parts[3]
 
 
+def _power_state(guest: dict[str, Any]) -> str | None:
+    """`running`, `stopped` oder `paused` aus der Gästeliste; eine pausierte VM meldet `status: running` und
+    `qmpstatus: paused`. Andere Werte (`unknown`, fehlend) bleiben unbekannt."""
+    status = guest.get("status")
+    if status == "running" and guest.get("qmpstatus") == "paused":
+        return "paused"
+    return status if status in ("running", "stopped") else None
+
+
 # Schnittstellen, über die man den Gast im Heimnetz nicht erreicht (Docker-Brücken, VPNs); nur für den Fall ohne
 # Subnetz-Treffer.
 _NOT_THE_LAN = ("lo", "docker", "br-", "veth", "virbr", "tailscale", "cni", "flannel", "wg", "zt")
@@ -223,9 +232,14 @@ class ProxmoxHostProvider:
 
     def __init__(self, ctx: "ExtensionContext") -> None:
         self._ctx = ctx
+        self.covered: list[str] = []
+        """Kennungs-Anfänge, die der letzte `discover_hosts()` vollständig gelesen hat (`<verbindung>/node/` und je
+        Knoten `<verbindung>/qemu|lxc/<knoten>/`). Was darunter fehlt, gibt es nicht mehr; eine nicht erreichbare
+        Verbindung oder ein Knoten, dessen Gäste nicht lesbar waren, steht nicht darin."""
 
     async def discover_hosts(self) -> list[DiscoveredHost]:
         discovered: list[DiscoveredHost] = []
+        self.covered = []
         # Kennungen sind im Kern eindeutig. Wer schon eingelesen ist, behält seine (der Kern übernimmt `name` nur
         # beim Anlegen); für neue wird die einheitliche Form nur genommen, wenn sie noch frei ist, sonst die bisherige.
         known = await self._ctx.hosts.list()
@@ -256,6 +270,7 @@ class ProxmoxHostProvider:
             except ProxmoxApiError as exc:
                 _log.warning("Proxmox-Discovery: Verbindung '%s' nicht erreichbar: %s", conn_name, exc)
                 continue
+            self.covered.append(f"{conn_name}/node/")
             for node in nodes:
                 node_name = node["node"]
                 node_ref = f"{conn_name}/node/{node_name}"
@@ -284,6 +299,7 @@ class ProxmoxHostProvider:
                 except ProxmoxApiError as exc:
                     _log.warning("Proxmox-Discovery: Gäste von Knoten '%s' (%s) nicht lesbar: %s", node_name, conn_name, exc)
                     continue
+                self.covered += [f"{conn_name}/qemu/{node_name}/", f"{conn_name}/lxc/{node_name}/"]
                 # Echte Gast-Adressen nur für laufende Gäste, parallel, je Abfrage höchstens 5 s. Ohne Antwort bleibt die
                 # Knoten-Adresse als Platzhalter, der eine vorhandene Adresse nie überschreibt (siehe `address_verified`).
                 addresses = await asyncio.gather(*(
@@ -309,6 +325,10 @@ class ProxmoxHostProvider:
                             # Nur gesetzt, wenn bekannt -- der Kern übernimmt es sonst nicht.
                             **({"os_family": os_family} if os_family else {}),
                             status=HostStatus.UP if guest.get("status") == "running" else HostStatus.DOWN,
+                            # Damit die Oberfläche „LXC auf <Knoten>“ zeigt und einen gestoppten Gast grau statt rot.
+                            parent_ref=node_ref,
+                            parent_label=node_name,
+                            power_state=_power_state(guest),
                             tags=["proxmox", short],
                             metadata={
                                 "connection": conn_name, "node": node_name, "vmid": vmid,
@@ -318,6 +338,22 @@ class ProxmoxHostProvider:
                         )
                     )
         return discovered
+
+    async def sync(self) -> int:
+        """Abgleich in einem Schritt: einlesen, übernehmen und Hosts, die es in einem vollständig gelesenen Bereich nicht
+        mehr gibt (in Proxmox gelöscht, auf einen anderen Knoten gewandert), als nicht mehr vorhanden markieren. Gibt die
+        Zahl der übernommenen Hosts zurück."""
+        discovered = await self.discover_hosts()
+        hosts = await self._ctx.hosts.upsert_discovered(discovered)
+        seen = {d.provider_ref for d in discovered}
+        gone = [
+            h.provider_ref for h in await self._ctx.hosts.list()
+            if h.provider_ext_id == self._ctx.ext_id and h.provider_ref and h.provider_ref not in seen
+            and h.provider_ref.startswith(tuple(self.covered))
+        ]
+        if gone:
+            await self._ctx.hosts.mark_gone(gone)
+        return len(hosts)
 
     async def host_status(self, provider_ref: str) -> HostStatus:
         connection, kind, node, vmid = _parse_ref(provider_ref)
@@ -510,8 +546,7 @@ class ProxmoxActionExecutor:
 
     async def _refresh_hosts(self) -> None:
         try:
-            discovered = await ProxmoxHostProvider(self._ctx).discover_hosts()
-            await self._ctx.hosts.upsert_discovered(discovered)
+            await ProxmoxHostProvider(self._ctx).sync()
         except Exception:  # noqa: BLE001 - die Aktion selbst war erfolgreich; der Status holt die Discovery nach
             _log.warning("Proxmox: Host-Status nach der Aktion nicht aufgefrischt", exc_info=True)
 

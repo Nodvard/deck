@@ -303,6 +303,19 @@ async def test_nextcloud_list_stat_download_over_the_real_files_api(client, db_s
 
 
 @pytest.mark.asyncio
+async def test_nextcloud_files_work_with_a_page_address_copied_from_the_browser(
+    client, db_session, test_settings, mock_webdav
+):
+    base_url, _state = mock_webdav
+    token = await _setup_nextcloud(client, db_session, test_settings, f"{base_url}/index.php/apps/files/")
+
+    listing = await client.get("/api/v1/files/nextcloud/list?path=/docs", headers=_auth_header(token))
+
+    assert listing.status_code == 200, listing.text
+    assert {item["name"] for item in listing.json()["items"]} == {"notes.txt"}
+
+
+@pytest.mark.asyncio
 async def test_nextcloud_download_that_is_redirected_is_an_error_and_not_an_empty_file(
     client, db_session, test_settings, mock_webdav
 ):

@@ -1,35 +1,18 @@
 /**
- * Docker-Seite -- echte Verwaltung statt reiner Anzeige:
- * Start/Stop/Neustart je Container und Live-Logs direkt in Nodvard Deck, damit man
- * fuer den Alltag weder Portainer noch eine SSH-Sitzung auf dem Docker-Host braucht.
+ * Docker-Seite: Start, Stopp, Neustart und Live-Logs je Container, damit man dafür weder Portainer noch SSH braucht.
  *
- * Aktionen laufen ueber den generischen Kern-Endpunkt `POST /hosts/{id}/actions/
- * container.*` (derselbe Weg wie die Proxmox-Knoepfe) -- damit steht der NUTZER als
- * Ausloeser im Aktions-Journal und das Gate (Sperrliste, Anti-Flapping, Autonomie)
- * greift wie bei jeder anderen Aktion. Hat der Nutzer die passende
- * `actions.approve:<risk>`-Berechtigung, wird der eigene Vorschlag direkt freigegeben
- * (der Bestaetigungsdialog davor IST die menschliche Bestaetigung), sonst bleibt er
- * fuer einen Admin stehen.
- *
- * Image-Updates: Fuer Container mit "Update verfuegbar" bietet die Spalte "Image-Update" bei
- * Compose-Diensten den Knopf "Einspielen" (`ImageUpdateApply.tsx`): erst eine Uebersicht
- * (Befehl, Betroffenes, Warnungen, Rueckweg), dann die Gate-Aktion `container.image_update`.
- * Die Uebersicht ist hier die Bestaetigung (kein Dialog). Alles andere (Portainer, `docker
- * run`, Nodvard Deck selbst) zeigt statt des Knopfes den Grund.
- *
- * Live-Logs: `GET .../containers/{host_id}/{name}/logs` liefert einen laufenden
- * Text-Strom (`docker logs --follow`), gelesen per `fetch()`-Stream (der Auth-Header
- * waere mit EventSource nicht moeglich). Schliessen/Abbrechen beendet den Strom und
- * damit serverseitig den entfernten Prozess.
+ * Aktionen laufen über `POST /hosts/{id}/actions/container.*` wie die Proxmox-Knöpfe: Der Nutzer steht als Auslöser im
+ * Aktions-Journal, Sperrliste, Anti-Flapping und Selbstständigkeit greifen. Wer `actions.approve:<risk>` hat, gibt den
+ * eigenen Vorschlag direkt frei (der Bestätigungsdialog davor ist die Bestätigung), sonst wartet er auf einen Admin.
  */
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { ACTION_STATUS_LABEL, runAction } from "../../../_shared/frontend/src/actions";
 import { authedFetch, errorText } from "../../../_shared/frontend/src/api";
 import { formatBytes } from "../../../_shared/frontend/src/format";
 import { LoadError, errorMessage, fetchJson } from "../../../_shared/frontend/src/loadError";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
-import { SettingsLink, useSettingText } from "../../../_shared/frontend/src/links";
+import { SettingsLink, safeHref, useSettingText } from "../../../_shared/frontend/src/links";
 import { useUrlParams } from "../../../_shared/frontend/src/location";
 import { Button, EmptyState } from "../../../_shared/frontend/src/ui";
 import { deck } from "../../../_shared/frontend/src/deck";
@@ -37,7 +20,10 @@ import { deck } from "../../../_shared/frontend/src/deck";
 import { BulkProposeButton } from "./BulkPropose";
 import { runHostAction } from "./hostAction";
 import { ImageUpdateAction, UpdatePanel, type AppliedState, type ApplyingState, type ImageApply } from "./ImageUpdateApply";
+import { LogPanel } from "./Logs";
 import { RESOURCE_TABS, ResourcesSection, type ResourceKind } from "./Resources";
+import { StacksSection } from "./Stacks";
+import { ToStackPanel } from "./ToStack";
 
 interface ServiceEntry {
   id: string;
@@ -65,9 +51,16 @@ interface ContainerStats {
   mem_limit: number | null;
 }
 
-/** RAM "unbekannt" statt "0 B": live auf dem Raspberry Pi zaehlt der Kernel keinen
- * Speicher je Container (cgroup-Speicher-Abrechnung standardmaessig aus). */
+/** Was Docker auf einem Host an CPU und Arbeitsspeicher sieht; im LXC-Container sind das dessen Grenzen. */
+export interface HostEnvironment {
+  virtualization: "lxc" | "container" | "vm" | "none" | null;
+  cpus: number;
+  mem_total: number | null;
+  docker_version: string | null;
+}
+
 const MEASURING_HINT = "CPU/RAM werden gemessen – das braucht je Server ein paar Sekunden.";
+/** RAM „unbekannt“ statt „0 B“: Auf dem Raspberry Pi zählt der Kernel standardmäßig keinen Speicher je Container. */
 const MEM_UNKNOWN_HINT = "Der Server meldet keinen Speicherverbrauch je Container (auf dem Raspberry Pi ist die cgroup-Speicherabrechnung standardmäßig aus).";
 
 const TONE_CLASS: Record<string, string> = {
@@ -85,8 +78,7 @@ const CARD_LABEL = "max-md:before:mr-1 max-md:before:opacity-60 max-md:before:co
 /** Größere Knöpfe am Handy: ein Finger trifft die kleinen Schaltflächen sonst kaum. */
 const TOUCH = "max-md:px-3 max-md:py-2";
 
-/** Dockers Zustandswoerter auf Deutsch -- die Farbe haengt weiter am `tone` aus dem
- * Backend, nicht am Text. */
+/** Dockers Zustandswörter auf Deutsch; die Farbe kommt vom `tone` des Backends, nicht vom Text. */
 export const STATE_LABEL: Record<string, string> = {
   running: "läuft",
   exited: "gestoppt",
@@ -97,6 +89,74 @@ export const STATE_LABEL: Record<string, string> = {
   dead: "tot",
   error: "Fehler",
 };
+
+/** Zustands-Filter (`?state=`). „Mit Problemen“ zählt auch laufende, die Docker als ungesund meldet, abgestürzte und solche,
+ * die Docker in letzter Zeit mehrmals neu starten musste. */
+export const STATE_FILTERS: { value: string; label: string }[] = [
+  { value: "running", label: "Läuft" },
+  { value: "stopped", label: "Gestoppt oder pausiert" },
+  { value: "problems", label: "Mit Problemen" },
+];
+
+/** Ab so vielen Neustarts durch Docker (`RestartCount`) gilt ein Container als auffällig, wenn der letzte Start keine
+ * Stunde her ist; danach läuft er offenbar wieder stabil, der Zähler bleibt aber stehen. */
+export const MANY_RESTARTS = 3;
+const RECENT_START = /^(Up (Less than a second|\d+ seconds?|About a minute|\d+ minutes?)|Restarting)\b/;
+
+export function restartsAreAProblem(restarts: number | undefined, status: string): boolean {
+  return (restarts ?? 0) >= MANY_RESTARTS && RECENT_START.test(status);
+}
+
+/** Exit-Codes nach einem normalen `docker stop` (SIGTERM, nach der Frist SIGKILL) oder Strg+C; alles andere ist ein Absturz. */
+const STOP_CODES = new Set([0, 130, 137, 143]);
+
+function crashed(status: string): boolean {
+  const code = /^Exited \((\d+)\)/.exec(status)?.[1];
+  return code !== undefined && !STOP_CODES.has(Number(code));
+}
+
+export function inStateFilter(entry: { state: string; status: string }, filter: string, restarts = 0): boolean {
+  if (filter === "running") return entry.state === "running";
+  if (filter === "stopped") return ["exited", "created", "paused"].includes(entry.state);
+  if (filter === "problems") {
+    return ["restarting", "dead", "removing", "error"].includes(entry.state) || /\(unhealthy\)/.test(entry.status)
+      || crashed(entry.status) || restartsAreAProblem(restarts, entry.status);
+  }
+  return true;
+}
+
+/** `?stack=-`: nur Container ohne Compose-Projekt; ein Projektname beginnt nie mit „-“. */
+const NO_STACK = "-";
+
+/** Der Platzhalter eines nicht erreichbaren Servers trägt seine Server-ID nur in `id` (`<id>:__error__`). */
+function hostIdOf(entry: { id: string; host_id?: string }): string | undefined {
+  return entry.host_id ?? (entry.id.endsWith(":__error__") ? entry.id.slice(0, -":__error__".length) : undefined);
+}
+
+export function environmentText(env: HostEnvironment): { text: string; title: string } {
+  const limits = [`${env.cpus} CPU`, ...(env.mem_total ? [`${formatBytes(env.mem_total)} RAM`] : [])].join(" · ");
+  if (env.virtualization === "lxc") {
+    return {
+      text: `im LXC-Container, Grenze ${limits}`,
+      title: "Docker läuft hier in einem LXC-Container und sieht nur dessen Anteil. CPU und RAM der Container zählen innerhalb dieser Grenze, nicht für den ganzen Rechner darunter.",
+    };
+  }
+  if (env.virtualization === "vm") return { text: `VM mit ${limits}`, title: "Docker läuft hier in einer virtuellen Maschine; das sind ihre Werte." };
+  if (env.virtualization === "container") return { text: `im Container, ${limits}`, title: "Docker läuft hier selbst in einem Container; das sind die Werte, die er sieht." };
+  return { text: limits, title: "So viel CPU und RAM sieht Docker auf diesem Server." };
+}
+
+function FilterSelect({ label, all, value, options, onChange, testId }: {
+  label: string; all: string; value: string | null; options: [string, string][]; onChange: (value: string | null) => void; testId?: string;
+}): JSX.Element {
+  return (
+    <select aria-label={label} value={value ?? ""} onChange={(e) => onChange(e.target.value || null)} data-testid={testId}
+      className="max-w-[12rem] px-2 py-1 text-sm rounded-lg border border-white/10 bg-black/25 outline-none focus:border-[var(--color-accent)]">
+      <option value="">{all}</option>
+      {options.map(([v, text]) => <option key={v} value={v}>{text}</option>)}
+    </select>
+  );
+}
 
 /** Zeiteinheiten: Einzahl, Mehrzahl (jeweils im Dativ, wie nach „seit“ und „vor“) und der Artikel für „etwa …“. */
 const DURATION_UNITS: Record<string, { one: string; many: string; about: string }> = {
@@ -146,9 +206,8 @@ export function statusText(status: string | null | undefined): string {
   return plain[raw.toLowerCase()] ?? raw;
 }
 
-/** Image-Updates (rein lesende Pruefung, siehe image_updates.py): Ergebnis je laufendem
- * Container und Stand je Host. Schluessel wie `ServiceEntry.id` (`host_id:container`).
- * `local`: selbst gebautes Image -- ein klares Ergebnis, kein Problem (es gibt keine Registry). */
+/** Ergebnis der Image-Prüfung je laufendem Container; der Schlüssel ist wie `ServiceEntry.id` (`host_id:container`).
+ * `local`: selbst gebautes Image, ein klares Ergebnis und kein Problem (es gibt keine Registry). */
 export interface ImageResult {
   image: string;
   status: "current" | "update" | "local" | "unknown";
@@ -157,7 +216,7 @@ export interface ImageResult {
   registry_at: string | null;
   /** Die Registry hat diesmal nicht geantwortet: `remote_digest` ist ihre letzte Antwort. */
   stale?: boolean;
-  /** Nur bei "update": laesst sich der Container hier einspielen (`compose`) oder warum nicht (`none`). */
+  /** Nur bei „update“: lässt sich der Container hier einspielen (`compose`) oder warum nicht (`none`). */
   apply?: ImageApply;
 }
 interface ImageHostState {
@@ -168,15 +227,14 @@ interface ImageHostState {
 interface ImageUpdates {
   data: Record<string, ImageResult>;
   hosts: Record<string, ImageHostState>;
-  /** Laufende Updates (Schluessel wie `data`) und das Ergebnis der zuletzt beendeten. */
+  /** Laufende Updates (Schlüssel wie `data`) und das Ergebnis der zuletzt beendeten. */
   applying?: Record<string, ApplyingState>;
   applied?: Record<string, AppliedState>;
 }
 
 const IMAGE_POLL_MS = 2000;
 
-/** Nur der Stand des Hosts `hostId` (mit Server-Filter `?host=`): Zusammenfassung, "Prüfe
- * Images …" und Knopf sollen zu dem passen, was die Tabelle und die Knöpfe betrifft. */
+/** Nur der Stand des Hosts `hostId` (Server-Filter `?host=`), damit Zusammenfassung, „Prüfe Images …“ und Knopf zur Tabelle passen. */
 export function scopeImages(images: ImageUpdates | null, hostId: string | null): ImageUpdates | null {
   if (!images || !hostId) return images;
   const prefix = `${hostId}:`;
@@ -191,11 +249,9 @@ export function scopeImages(images: ImageUpdates | null, hostId: string | null):
   };
 }
 
-/** Zeile ueber der Tabelle. "alles aktuell" steht nur da, wenn wirklich etwas geprueft
- * wurde und nichts offen blieb -- ein Abruflimit, eine unerreichbare Registry oder ein
- * Host, der nicht antwortet, sind KEIN "alles aktuell". Selbst gebaute Container sind kein
- * Problem: sie stehen nur als Zahl dabei (und allein sind sie auch kein "alles aktuell",
- * denn verglichen wurde ja nichts). */
+/** Zeile über der Tabelle. „alles aktuell“ steht nur, wenn etwas geprüft wurde und nichts offen blieb (Abruflimit,
+ * unerreichbare Registry oder stummer Host sprechen dagegen). Selbst gebaute Container sind kein Problem, zählen aber
+ * nicht als geprüft. */
 export function summarizeImages(images: ImageUpdates | null, checking: boolean): string | null {
   if (checking) return "Image-Updates: Die Image-Quellen werden gefragt …";
   if (!images) return null;
@@ -249,8 +305,7 @@ function NeutralBadge({ label, reason }: { label: string; reason: string | null 
   );
 }
 
-/** Badge in der Spalte "Image-Update". `result` fehlt, wenn der Container noch nicht (oder
- * gar nicht -- gestoppte Container werden nicht geprueft) untersucht wurde. */
+/** Badge in der Spalte „Image-Update“. `result` fehlt, wenn der Container noch nicht (gestoppte gar nicht) geprüft wurde. */
 export function ImageUpdateBadge({ result, checking = false, running = true }: { result?: ImageResult; checking?: boolean; running?: boolean }): JSX.Element {
   if (!result) {
     return checking
@@ -306,11 +361,6 @@ export function consoleHref(hostId: string, container: string): string {
 /** Nur gestoppte Container lassen sich löschen (wie `_REMOVABLE_STATES` im Backend). */
 const REMOVABLE_STATES = new Set(["exited", "created", "dead"]);
 
-const TAIL_OPTIONS = [100, 200, 500, 2000];
-const MAX_LINES = 5000;
-// eslint-disable-next-line no-control-regex
-const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
-
 interface DiskRow { type: string; label: string; total: number | null; active: number | null; size: number | null; reclaimable: number | null }
 interface ImageRow { id: string; name: string | null; dangling: boolean; size: number | null; created: string | null; in_use: boolean | null }
 
@@ -320,8 +370,7 @@ const PRUNE_ACTIONS: { type: string; label: string; confirm: string }[] = [
   { type: "docker.prune_build_cache", label: "Build-Cache leeren", confirm: "Build-Cache leeren? Der nächste docker build auf diesem Server dauert dann deutlich länger." },
 ];
 
-/** Docker-Speicher eines Hosts (Roadmap Punkt 2, Portainer-Ersatz): wofuer der Platz
- * draufgeht, welche Images ungenutzt sind, Aufraeumen ueber das Gate. */
+/** Docker-Speicher eines Hosts: wofür der Platz draufgeht und welche Images ungenutzt sind; Aufräumen läuft über die Freigabe. */
 function StoragePanel({ hostId }: { hostId: string }): JSX.Element {
   const unmountSignal = useUnmountSignal();
   const [data, setData] = useState<{ disk: DiskRow[]; images: ImageRow[] } | null>(null);
@@ -435,10 +484,11 @@ const RESTART_LABEL: Record<string, string> = {
 };
 const HEALTH_LABEL: Record<string, string> = { healthy: "gesund", unhealthy: "ungesund", starting: "startet" };
 
-/** Container-Details wie in Portainer -- Umgebungsvariablen nur mit Namen. */
-function DetailsPanel({ entry }: { entry: ServiceEntry }): JSX.Element {
+/** Container-Details; von den Umgebungsvariablen nur die Namen, die Werte sind oft Passwörter. */
+function DetailsPanel({ entry, onChanged }: { entry: ServiceEntry; onChanged?: (message: string, warn?: boolean) => void }): JSX.Element {
   const [data, setData] = useState<InspectOut | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [toStack, setToStack] = useState(false);
   useEffect(() => {
     let cancelled = false;
     authedFetch(`/ext/docker/containers/${entry.host_id}/${encodeURIComponent(entry.container!)}/inspect`)
@@ -480,14 +530,19 @@ function DetailsPanel({ entry }: { entry: ServiceEntry }): JSX.Element {
       <p className="opacity-85">{d.networks.map((n) => `${n.name}${n.ip ? ` (${n.ip})` : ""}`).join(" · ") || "keine"}</p>
       <p className="mt-2 mb-0.5 font-medium opacity-60">Umgebungsvariablen ({d.env_keys.length})</p>
       <p className="break-words opacity-70" title="Werte werden bewusst nicht angezeigt – dort stehen oft Passwörter.">{d.env_keys.join(", ") || "keine"}</p>
+      {!d.compose && entry.host_id && entry.container && onChanged && deck().hasPermission("hosts.execute") && (
+        <div className="mt-2">
+          <Button small pressed={toStack} onClick={() => setToStack((open) => !open)}>In Stack umwandeln</Button>
+          {toStack && <ToStackPanel hostId={entry.host_id} container={entry.container} onDone={(text, warn) => { setToStack(false); onChanged(text, warn); }} />}
+        </div>
+      )}
     </div>
   );
 }
 
-/** Eigene Adresse fuer die Kachel (`PUT .../url`), z. B. wenn die erkannte auf den falschen Port zeigt. Bleibt
- * gespeichert, auch wenn der Container neu erstellt wird; „Erkannte nehmen“ loescht sie wieder. Vorbelegt ist nur eine
- * eigene Adresse, die erkannte steht als Platzhalter: Sonst wuerde „Speichern“ ohne Aenderung die erkannte als eigene
- * festschreiben, und spaetere Verbesserungen der Erkennung kaemen nicht mehr an. */
+/** Eigene Adresse für die Kachel (`PUT .../url`), z. B. wenn die erkannte auf den falschen Port zeigt; sie bleibt auch nach
+ * dem Neuerstellen des Containers. Vorbelegt ist nur eine eigene Adresse: Mit der erkannten als Wert würde „Speichern“
+ * ohne Änderung sie als eigene festschreiben, und spätere Verbesserungen der Erkennung kämen nicht mehr an. */
 function UrlPanel({ entry, onSaved, onClose }: { entry: ServiceEntry; onSaved: () => void; onClose: () => void }): JSX.Element {
   const current = entry.url_custom ? entry.url ?? "" : "";
   const [value, setValue] = useState(current);
@@ -537,115 +592,14 @@ function UrlPanel({ entry, onSaved, onClose }: { entry: ServiceEntry; onSaved: (
   );
 }
 
-function LogPanel({ entry, onClose }: { entry: ServiceEntry; onClose: () => void }): JSX.Element {
-  const [lines, setLines] = useState<string[]>([]);
-  const [tail, setTail] = useState(200);
-  const [running, setRunning] = useState(true);
-  const [follow, setFollow] = useState(true);
-  const [filter, setFilter] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [ended, setEnded] = useState(false);
-  const boxRef = useRef<HTMLPreElement | null>(null);
-
-  useEffect(() => {
-    if (!running || !entry.host_id || !entry.container) return;
-    const controller = new AbortController();
-    setLines([]);
-    setError(null);
-    setEnded(false);
-
-    (async () => {
-      try {
-        const res = await authedFetch(
-          `/ext/docker/containers/${entry.host_id}/${encodeURIComponent(entry.container!)}/logs?tail=${tail}`,
-          { signal: controller.signal },
-        );
-        if (!res.ok || !res.body) throw new Error(await errorText(res));
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let rest = "";
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          rest += decoder.decode(value, { stream: true });
-          const parts = rest.split("\n");
-          rest = parts.pop() ?? "";
-          if (parts.length > 0) {
-            const clean = parts.map((l) => l.replace(ANSI_RE, ""));
-            setLines((prev) => {
-              const next = prev.concat(clean);
-              return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
-            });
-          }
-        }
-        if (rest) setLines((prev) => prev.concat(rest.replace(ANSI_RE, "")));
-        setEnded(true);
-      } catch (err) {
-        if (controller.signal.aborted) return;
-        setError(err instanceof Error ? err.message : String(err));
-      }
-    })();
-
-    return () => controller.abort();
-  }, [entry.host_id, entry.container, tail, running]);
-
-  useEffect(() => {
-    if (follow && boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight;
-  }, [lines, follow]);
-
-  const shown = useMemo(() => {
-    if (!filter) return lines;
-    const needle = filter.toLowerCase();
-    return lines.filter((l) => l.toLowerCase().includes(needle));
-  }, [lines, filter]);
-
+/** „Öffnen“ nur für http- und https-Adressen: Eine eigene Adresse wie `javascript:…` wird nie ein Link. */
+function OpenLink({ url }: { url: string | null | undefined }) {
+  const href = safeHref(url);
+  if (!href) return null;
   return (
-    <div className="flex flex-col gap-2" data-testid="log-panel">
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="font-medium">Logs: {entry.name}</span>
-        <span className={`rounded-full px-2 py-0.5 ${running && !ended && !error ? "bg-emerald-500/20 text-emerald-300" : "bg-white/10 opacity-70"}`}>
-          {error ? "Fehler" : !running ? "angehalten" : ended ? "beendet" : "live"}
-        </span>
-        <label className="flex items-center gap-1">
-          Letzte
-          <select value={tail} onChange={(e) => setTail(Number(e.target.value))} className="px-1 py-0.5 rounded-lg border border-white/10 bg-black/25 outline-none focus:border-[var(--color-accent)]">
-            {TAIL_OPTIONS.map((n) => (
-              <option key={n} value={n}>{n}</option>
-            ))}
-          </select>
-          Zeilen
-        </label>
-        <input
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtern …"
-          aria-label="Logs filtern"
-          className="w-40 px-2 py-0.5 rounded-lg border border-white/10 bg-black/25 outline-none focus:border-[var(--color-accent)]"
-        />
-        <label className="flex items-center gap-1">
-          <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />
-          Mitlaufen
-        </label>
-        <div className="ml-auto flex gap-1.5">
-          <button type="button" onClick={() => setRunning((r) => !r)} className="px-2 py-0.5 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
-            {running ? "Anhalten" : "Fortsetzen"}
-          </button>
-          <button type="button" onClick={() => setLines([])} className="px-2 py-0.5 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
-            Leeren
-          </button>
-          <button type="button" onClick={onClose} className="px-2 py-0.5 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
-            Schließen
-          </button>
-        </div>
-      </div>
-      {error && <p className="text-xs text-red-400">{error}</p>}
-      <pre
-        ref={boxRef}
-        className="h-72 overflow-auto whitespace-pre-wrap break-all rounded bg-black/60 p-2 font-mono text-[11px] leading-snug"
-      >
-        {shown.length === 0 ? (filter ? "Keine passenden Zeilen." : "Noch keine Ausgabe …") : shown.join("\n")}
-      </pre>
-    </div>
+    <a href={href} target="_blank" rel="noreferrer" className="px-1 py-1 text-xs opacity-70 hover:opacity-100 hover:underline max-md:px-2 max-md:py-2">
+      Öffnen
+    </a>
   );
 }
 
@@ -667,15 +621,18 @@ function NoContainers() {
   );
 }
 
-/** Reiter Container, Images, Volumes, Netze (`?tab=`); die Container-Liste fragt nur, solange ihr Reiter offen ist. */
+type Tab = ResourceKind | "stacks";
+const TABS: { kind: Tab; label: string }[] = [{ kind: "stacks", label: "Stacks" }, ...RESOURCE_TABS];
+
+/** Reiter Container, Stacks, Images, Volumes, Netze (`?tab=`); die Container-Liste fragt nur, solange ihr Reiter offen ist. */
 export function ContainersPage(): JSX.Element {
   const [urlParams, updateUrl] = useUrlParams();
   // Die Listen öffnen SSH wie `/hosts/{id}/docker`, deshalb erst mit `hosts.execute`.
   const resourcesAllowed = deck().hasPermission("hosts.execute");
-  const tab: ResourceKind | null = (resourcesAllowed && RESOURCE_TABS.find((t) => t.kind === urlParams.get("tab"))?.kind) || null;
+  const tab: Tab | null = (resourcesAllowed && TABS.find((t) => t.kind === urlParams.get("tab"))?.kind) || null;
   const tabs = resourcesAllowed && (
     <nav className="mb-4 flex flex-wrap gap-1.5" aria-label="Bereiche der Docker-Seite">
-      {[{ kind: null, label: "Container" }, ...RESOURCE_TABS].map((t) => (
+      {[{ kind: null, label: "Container" }, ...TABS].map((t) => (
         <Button key={t.label} small variant={tab === t.kind ? "primary" : "secondary"} pressed={tab === t.kind}
           onClick={() => updateUrl({ tab: t.kind })}>
           {t.label}
@@ -688,7 +645,11 @@ export function ContainersPage(): JSX.Element {
     <div className="mx-auto w-full max-w-7xl p-4 sm:p-6">
       <h2 className="mb-4 font-semibold text-xl tracking-tight">Docker</h2>
       {tabs}
-      <ResourcesSection kind={tab} hostId={urlParams.get("host") || null} onHost={(id) => updateUrl({ host: id })} empty={<NoContainers />} />
+      {tab === "stacks" ? (
+        <StacksSection hostId={urlParams.get("host") || null} onHost={(id) => updateUrl({ host: id })} empty={<NoContainers />} />
+      ) : (
+        <ResourcesSection kind={tab} hostId={urlParams.get("host") || null} onHost={(id) => updateUrl({ host: id })} empty={<NoContainers />} />
+      )}
     </div>
   );
 }
@@ -699,24 +660,25 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
-  // Offene Logs (`?logs=<id>`) und der Server-Filter (`?host=`, Sprung von der Server-Seite des
-  // Kerns: nur die Container dieses Hosts) stehen in der Adresszeile und folgen ihr (location.ts):
-  // ein Link auf die schon offene Seite setzt sie wieder, auch nachdem man sie hier geändert hat.
+  // Offene Logs (`?logs=<id>`) und Server-Filter (`?host=`, Sprung von der Server-Seite des Kerns) stehen in der
+  // Adresszeile und folgen ihr (location.ts), auch bei einem Link auf die schon offene Seite.
   const [urlParams, updateUrl] = useUrlParams();
   const logsFor = urlParams.get("logs") || null;
   const setLogsFor = (id: string | null) => updateUrl({ logs: id });
   const hostFilter = urlParams.get("host") || null;
+  const stackFilter = urlParams.get("stack") || null;
+  const stateFilter = urlParams.get("state") || null;
   const [detailsFor, setDetailsFor] = useState<string | null>(null);
   const [urlFor, setUrlFor] = useState<string | null>(null);
   const [updateFor, setUpdateFor] = useState<string | null>(null);
   const [storageFor, setStorageFor] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [stats, setStats] = useState<Record<string, ContainerStats>>({});
-  // Die Messung dauert ein paar Sekunden (z. B. ~2-3 s auf einem Raspberry Pi) --
-  // "noch am Messen" muss anders aussehen als "kein Wert" ("–").
+  const [environments, setEnvironments] = useState<Record<string, HostEnvironment>>({});
+  const [restarts, setRestarts] = useState<Record<string, number>>({});
+  // Die Messung dauert ein paar Sekunden: „noch am Messen“ muss anders aussehen als „kein Wert“ („–“).
   const [statsLoaded, setStatsLoaded] = useState(false);
-  // Image-Updates: zuletzt gespeicherter Stand des Servers; während einer Prüfung
-  // (läuft im Hintergrund) wird nachgefragt, bis alle Hosts fertig sind.
+  // Zuletzt gespeicherter Stand der Image-Updates; während einer Prüfung im Hintergrund wird nachgefragt, bis alle Hosts fertig sind.
   const [images, setImages] = useState<ImageUpdates | null>(null);
   const [imageMessage, setImageMessage] = useState<string | null>(null);
 
@@ -727,16 +689,15 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
       const body = (await res.json()) as ImageUpdates;
       if (!signal?.aborted) setImages(body);
     } catch {
-      // Ohne Stand bleibt die Spalte bei "–" -- die Seite selbst funktioniert weiter.
+      // Ohne Stand bleibt die Spalte bei „–“, die Seite funktioniert weiter.
     }
   }, []);
 
   const reloadImages = useCallback(() => void loadImages(unmountSignal()), [loadImages, unmountSignal]);
 
   const load = useCallback(() => {
-    // Der Hinweis auf einen Ladefehler verschwindet erst mit dem nächsten Erfolg (sonst blinkt er alle 30 s).
-    // Auch der Stand der Image-Updates: Ergebnisse des Tagesjobs oder einer Prüfung in
-    // einem anderen Tab erscheinen sonst erst nach einem Neuladen der Seite.
+    // Der Ladefehler verschwindet erst mit dem nächsten Erfolg, sonst blinkt er alle 30 s.
+    // Die Image-Updates mitladen: Ergebnisse des Tagesjobs oder eines anderen Tabs erscheinen sonst erst nach dem Neuladen.
     void loadImages(unmountSignal());
     fetchJson<{ data: ServiceEntry[] }>("/ext/docker/widgets/matrix")
       .then((body) => { setServices(body.data); setError(null); })
@@ -749,10 +710,10 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
     return () => clearInterval(interval);
   }, [load]);
 
-  // Mit Server-Filter (`?host=`) zaehlt nur dieser Host -- wie Tabelle und Pruefknoepfe.
+  // Mit Server-Filter (`?host=`) zählt nur dieser Host, wie bei Tabelle und Prüfknöpfen.
   const visibleImages = scopeImages(images, hostFilter);
   const imagesChecking = Object.values(visibleImages?.hosts ?? {}).some((h) => h.checking);
-  // Auch waehrend ein Update laeuft (`applying`): sein Schritt und das Ende sollen erscheinen.
+  // Auch während ein Update läuft (`applying`): sein Schritt und das Ende sollen erscheinen.
   const imagesBusy = imagesChecking || Object.keys(visibleImages?.applying ?? {}).length > 0;
   useEffect(() => {
     if (!imagesBusy) return;
@@ -770,10 +731,14 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
     let cancelled = false;
     const loadStats = () =>
       authedFetch("/ext/docker/stats")
-        .then((res) => (res.ok ? (res.json() as Promise<{ data: Record<string, ContainerStats> }>) : { data: {} }))
+        .then((res) => (res.ok
+          ? (res.json() as Promise<{ data: Record<string, ContainerStats>; hosts?: Record<string, HostEnvironment>; restarts?: Record<string, number> }>)
+          : { data: {}, hosts: undefined, restarts: undefined }))
         .then((body) => {
           if (cancelled) return;
           setStats(body.data);
+          if (body.hosts) setEnvironments(body.hosts);
+          if (body.restarts) setRestarts(body.restarts);
           setStatsLoaded(true);
         })
         .catch(() => !cancelled && setStatsLoaded(true));
@@ -887,11 +852,26 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
   const byHost = new Map<string, ServiceEntry[]>();
   for (const s of services ?? []) {
     if (needle && !s.name.toLowerCase().includes(needle) && !(s.compose_project ?? "").toLowerCase().includes(needle)) continue;
-    if (hostFilter && s.host_id !== hostFilter) continue;
+    if (hostFilter && hostIdOf(s) !== hostFilter) continue;
+    // Ein nicht erreichbarer Server bleibt bei jedem Stack- und Zustands-Filter sichtbar, sonst sähe er aus wie ohne Treffer.
+    if (s.state !== "error") {
+      if (stackFilter && (stackFilter === NO_STACK ? Boolean(s.compose_project) : s.compose_project !== stackFilter)) continue;
+      if (stateFilter && !inStateFilter(s, stateFilter, restarts[s.id])) continue;
+    }
     const list = byHost.get(s.host) ?? [];
     list.push(s);
     byHost.set(s.host, list);
   }
+  const hostOptions = new Map<string, string>();
+  for (const s of services ?? []) {
+    const id = hostIdOf(s);
+    if (id && !hostOptions.has(id)) hostOptions.set(id, s.host);
+  }
+  if (hostFilter && !hostOptions.has(hostFilter)) hostOptions.set(hostFilter, "dieser Server");
+  const stacks = new Set((services ?? []).filter((s) => !hostFilter || hostIdOf(s) === hostFilter).flatMap((s) => (s.compose_project ? [s.compose_project] : [])));
+  if (stackFilter && stackFilter !== NO_STACK) stacks.add(stackFilter);
+  const stackOptions: [string, string][] = [...[...stacks].sort().map((p): [string, string] => [p, p]), [NO_STACK, "Ohne Stack"]];
+  const filtered = Boolean(hostFilter || stackFilter || stateFilter);
 
   return (
     <div className="mx-auto w-full max-w-7xl p-4 sm:p-6">
@@ -914,16 +894,27 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
             {imagesChecking ? "Prüfe Images …" : "Image-Updates prüfen"}
           </button>
         )}
-        {hostFilter && (
-          <span className="accent-soft flex items-center gap-1 rounded px-2 py-0.5 text-xs" data-testid="host-filter">
-            Nur {(services ?? []).find((s) => s.host_id === hostFilter)?.host ?? "dieser Server"}
-            <button type="button" onClick={() => updateUrl({ host: null })} aria-label="Filter entfernen" className="opacity-70 hover:opacity-100">
-              ✕
-            </button>
-          </span>
-        )}
       </div>
       {tabs}
+      {(services ?? []).length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2" data-testid="filters">
+          {(hostOptions.size > 1 || hostFilter) && (
+            <FilterSelect label="Server" all="Alle Server" value={hostFilter} options={[...hostOptions]} testId="host-filter"
+              onChange={(v) => updateUrl({ host: v, stack: null })} />
+          )}
+          {(stacks.size > 0 || stackFilter) && (
+            <FilterSelect label="Stack" all="Alle Stacks" value={stackFilter} options={stackOptions} onChange={(v) => updateUrl({ stack: v })} />
+          )}
+          <FilterSelect label="Zustand" all="Alle Zustände" value={stateFilter} options={STATE_FILTERS.map((f) => [f.value, f.label])}
+            onChange={(v) => updateUrl({ state: v })} />
+          {filtered && (
+            <button type="button" onClick={() => updateUrl({ host: null, stack: null, state: null })}
+              className="px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
+              Filter entfernen
+            </button>
+          )}
+        </div>
+      )}
       {error && <LoadError what="Der aktuelle Stand" error={error} onRetry={load} hint="Die Tabelle zeigt den letzten bekannten Stand." />}
       {message && <p className="mb-3 text-sm opacity-80">{message}</p>}
       {(imageSummary || imageMessage) && (
@@ -949,6 +940,11 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
         <section key={host} className="mb-6 overflow-x-auto">
           <div className="mb-2 flex flex-wrap items-center gap-3">
             <h3 className="text-sm font-medium opacity-60">{host}</h3>
+            {entries[0]?.host_id && environments[entries[0].host_id] && (
+              <span className="text-xs opacity-60" title={environmentText(environments[entries[0].host_id]).title} data-testid={`environment-${entries[0].host_id}`}>
+                {environmentText(environments[entries[0].host_id]).text}
+              </span>
+            )}
             {entries[0]?.host_id && entries[0].state !== "error" && deck().hasPermission("hosts.execute") && (
               <button type="button" onClick={() => setStorageFor(storageFor === entries[0].host_id ? null : entries[0].host_id!)}
                 aria-expanded={storageFor === entries[0].host_id}
@@ -978,9 +974,8 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
               <StoragePanel hostId={storageFor} />
             </div>
           )}
-          {/* Am Handy (unter 768 px) wird aus jeder Zeile eine Karte: Name, Zustand, Werte und die Knöpfe
-              stehen untereinander, nichts liegt rechts außerhalb des Bildschirms. Die Spaltenköpfe entfallen,
-              die Werte tragen ihre Beschriftung selbst (`data-label`). Die Rollen halten die Tabellen-Bedeutung
+          {/* Am Handy (unter 768 px) wird jede Zeile zur Karte, nichts liegt außerhalb des Bildschirms. Die Spaltenköpfe
+              entfallen, die Werte tragen ihre Beschriftung selbst (`data-label`). Die Rollen erhalten die Tabellen-Bedeutung
               für Vorlese-Programme, die sie bei `display: block` sonst verlieren. */}
           <table role="table" className="w-full text-sm max-md:block">
             <thead className="max-md:hidden">
@@ -1028,6 +1023,12 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
                       </td>
                       <td role="cell" className="py-1.5 break-words opacity-70 max-md:min-w-0 max-md:flex-1 max-md:py-0 max-md:text-xs" title={s.status !== statusText(s.status) ? s.status : undefined}>
                         {statusText(s.status)}
+                        {restarts[s.id] > 0 && (
+                          <span className={`ml-1 whitespace-nowrap ${restartsAreAProblem(restarts[s.id], s.status) ? "text-amber-300" : ""}`}
+                            data-testid={`restarts-${s.id}`} title="So oft hat Docker den Container nach seinem Ende von selbst wieder gestartet.">
+                            · {restarts[s.id]}× neu gestartet
+                          </span>
+                        )}
                       </td>
                       <td role="cell" className={`py-1.5 text-xs max-md:w-full max-md:py-0 ${imageShown ? "" : "max-md:hidden"}`}>
                         <div data-testid={`image-${s.id}`}>
@@ -1113,11 +1114,7 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
                               Logs
                             </button>
                           )}
-                          {s.url && (
-                            <a href={s.url} target="_blank" rel="noreferrer" className="px-1 py-1 text-xs opacity-70 hover:opacity-100 hover:underline max-md:px-2 max-md:py-2">
-                              Öffnen
-                            </a>
-                          )}
+                          <OpenLink url={s.url} />
                           {manageable && s.host_id && s.container && deck().hasPermission("apps.write") && (
                             <button type="button" onClick={() => setUrlFor(urlFor === s.id ? null : s.id)} aria-expanded={urlFor === s.id}
                               title={s.url_custom ? "Eigene Adresse – hier ändern oder die erkannte wieder nehmen." : "Adresse für „Öffnen“ selbst festlegen."}
@@ -1138,7 +1135,7 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
                     {detailsFor === s.id && (
                       <tr role="row" className="max-md:block">
                         <td role="cell" colSpan={7} className="bg-black/20 p-2 max-md:block">
-                          <DetailsPanel entry={s} />
+                          <DetailsPanel entry={s} onChanged={(text) => { setDetailsFor(null); setMessage(text); load(); }} />
                         </td>
                       </tr>
                     )}
@@ -1168,5 +1165,5 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
   );
 }
 
-// Tabs, die vor dem Umzug geöffnet wurden, fragen das Bundle noch unter dem alten Namen.
+// Alter Name der Seite: Schon geöffnete Tabs fragen das Bundle noch damit an.
 export const ServiceMatrixPage = ContainersPage;

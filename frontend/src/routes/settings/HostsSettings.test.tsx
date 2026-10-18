@@ -346,3 +346,54 @@ describe("Server & Zugänge: Ladefehler", () => {
     expect(screen.queryByTestId("load-error")).toBeNull();
   });
 });
+
+describe("Server & Zugänge: nach Art gruppiert", () => {
+  it("Überschriften mit Anzahl, Plakette „VM auf …“, leere Gruppen fehlen; die Chips filtern", async () => {
+    const DNS = hostFixture({
+      id: "h4", name: "dns", display_name: "DNS", address: "192.168.2.53", kind: "lxc", provider_ext_id: "proxmox",
+      category: "lxc", parent_label: "pve1", power_state: "stopped", status: "down",
+    });
+    mockHostsApi({ "GET /hosts": [PI, { ...ZABBIX, category: "vm", parent_label: "pve1" }, DNS], "GET /host-groups": [] });
+    renderPage();
+    const vms = await screen.findByRole("region", { name: "Virtuelle Maschinen" });
+    expect(within(vms).getByTestId("group-vm").textContent).toContain("1");
+    expect(within(vms).getByText("VM auf pve1")).toBeInTheDocument();
+    const lxc = screen.getByRole("region", { name: "LXC" });
+    expect(lxc.textContent).toContain("LXC auf pve1");
+    expect(lxc.textContent).toContain("· aus");
+    expect(screen.getByRole("region", { name: "Physische Server" }).textContent).toContain("Bastel-Pi");
+
+    fireEvent.click(within(screen.getByTestId("host-kind-filter")).getByRole("button", { name: /^LXC/ }));
+    expect(screen.queryByRole("region", { name: "Virtuelle Maschinen" })).toBeNull();
+    expect(screen.getByRole("region", { name: "LXC" })).toBeInTheDocument();
+    fireEvent.click(within(screen.getByTestId("host-kind-filter")).getByRole("button", { name: /^Alle/ }));
+    expect(screen.getByRole("region", { name: "Virtuelle Maschinen" })).toBeInTheDocument();
+  });
+
+  it("nur eine Art: keine Überschriften und keine Chips, wie bisher", async () => {
+    mockHostsApi({ "GET /hosts": [PI, KI], "GET /host-groups": [] });
+    renderPage();
+    await screen.findByText("KI-Server");
+    expect(screen.queryByTestId("host-kind-filter")).toBeNull();
+    expect(screen.queryByTestId("group-server")).toBeNull();
+  });
+});
+
+describe("Server & Zugänge: beim Anbieter gelöschte Gäste", () => {
+  it("Kennzeichen und „Entfernen“ mit einfacher Rückfrage statt Kurznamen-Eingabe", async () => {
+    const OLD_VM = hostFixture({
+      id: "h7", name: "alt-vm", display_name: "Alte VM", address: "192.168.2.87", kind: "vm", provider_ext_id: "proxmox",
+      category: "vm", gone_since: "2026-10-16T08:00:00Z", status: "up",
+    });
+    const calls = mockHostsApi({ "GET /hosts": [PI, OLD_VM], "GET /host-groups": [], "DELETE /hosts/h7": undefined });
+    renderPage();
+    const row = (await screen.findByText("Alte VM")).closest("li")!;
+    expect(row.textContent).toContain("nicht mehr vorhanden");
+    expect(within(screen.getByText("Bastel-Pi").closest("li")!).queryByRole("button", { name: "Entfernen" })).toBeNull();
+
+    fireEvent.click(within(row).getByRole("button", { name: "Entfernen" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/hosts/h7")).toBe(true));
+    expect(vi.mocked(confirmDialog).mock.calls[0][0]).toMatch(/„Alte VM“ gibt es .* nicht mehr\. Aus Nodvard Deck entfernen\?/);
+    expect(vi.mocked(promptDialog)).not.toHaveBeenCalled();
+  });
+});
