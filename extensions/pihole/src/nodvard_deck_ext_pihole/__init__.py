@@ -149,6 +149,7 @@ class Extension(NodvardExtension):
             WidgetSpec(
                 id="status",
                 title="Pi-hole",
+                group="services",
                 icon="shield-check",
                 size=GridSize(w=2, h=2),
                 refresh=Refresh(interval_s=60),

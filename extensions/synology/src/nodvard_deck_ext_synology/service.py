@@ -1,4 +1,5 @@
-"""Holt den Zustand der Synology und hält ihn kurz im Speicher; `overview()` wirft nie."""
+"""Holt den Zustand jedes Synology-Geräts und hält ihn kurz im Speicher; ein Gerät, das sich nicht abfragen lässt, wird ein
+Zustand mit Grund, nie eine Ausnahme."""
 
 from __future__ import annotations
 
@@ -11,14 +12,14 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from .backup import UNKNOWN_CLOCK_SLACK, build_task
-from .client import AUTH_PAUSE_S, SessionBox, SynologyClient, logout
+from .client import AUTH_PAUSE_S, SessionBox, SynologyClient, backup_deadline, logout
 from .config import (
-    PASSWORD_LABEL,
     SETTINGS_HINT,
     AlertConfig,
-    SynologyConfig,
+    DeviceConfig,
+    password_label,
     read_alerts,
-    read_config,
+    read_devices,
 )
 from .models import Load, Note, Overview, SystemInfo, Update
 from .parse import BackupStatus, Storage, TaskEntry
@@ -32,11 +33,16 @@ logger = logging.getLogger(__name__)
 
 # Seite und Kacheln (fragen jede Minute) sollen DSM nicht mehrfach belasten.
 CACHE_TTL_S = 20.0
-# Nach einer abgelehnten Anmeldung wird eine Weile nicht neu gefragt, auch nicht auf „Aktualisieren“;
-# „Verbindung testen“ und geänderte Einstellungen heben die Pause auf.
+# Nach einer abgelehnten Anmeldung wird eine Weile nicht neu gefragt, auch nicht auf „Aktualisieren“; die Pause gilt
+# je Gerät. „Verbindung testen“ hebt alle auf, geänderte Angaben eines Geräts (Adresse, Konto, Zertifikat) seine eigene.
 AUTH_FAILED_TTL_S = AUTH_PAUSE_S
-TEST_TIMEOUT_S = 20.0  # für „Verbindung testen“ (der Kern bricht nach 25 Sekunden ab)
-CONNECTION_TIMEOUT_S = 50.0  # alle Abfragen zusammen
+# „Verbindung testen“: Der Kern bricht nach 25 Sekunden ab und verliert dann auch die Ergebnisse der gesunden Geräte.
+# Darum bekommt jedes Gerät eine Gesamtfrist, und das Abmelden vorher bleibt kurz.
+TEST_TIMEOUT_S = 20.0  # je Anfrage
+TEST_DEVICE_TIMEOUT_S = 17.0  # alle Anfragen eines Geräts zusammen
+TEST_LOGOUT_TIMEOUT_S = 2.0
+CONNECTION_TIMEOUT_S = 50.0  # alle Abfragen eines Geräts zusammen
+LOGOUT_TIMEOUT_S = 5.0
 
 NOT_CONFIGURED = f"{SERVICE} ist noch nicht eingerichtet. {SETTINGS_HINT}"
 MORE_TASKS = (
@@ -62,7 +68,7 @@ async def _section[T](call: Awaitable[T]) -> tuple[T | None, DsmError | None]:
         return None, exc
 
 
-def _gap(cfg: SynologyConfig, has_password: bool) -> str | None:
+def _gap(cfg: DeviceConfig, has_password: bool) -> str | None:
     """Was zu den Zugangsdaten fehlt, als Satz; `None`, wenn Benutzername und Passwort da sind."""
     if cfg.username and has_password:
         return None
@@ -72,7 +78,16 @@ def _gap(cfg: SynologyConfig, has_password: bool) -> str | None:
         what = "fehlt der Benutzername"
     else:
         what = "fehlt das Passwort"
-    return f"Für {SERVICE} {what}. {SETTINGS_HINT}"
+    return f"Für {cfg.name} {what}. {SETTINGS_HINT}"
+
+
+def _bad(text: str) -> dict[str, Any]:
+    # `verbatim`: der Kern übersetzt den Satz nicht.
+    return {"healthy": False, "error": text, "verbatim": True}
+
+
+class UnknownDevice(LookupError):
+    """Unter diesem Kurznamen ist kein Gerät eingetragen."""
 
 
 @dataclass
@@ -86,6 +101,13 @@ class _Entry:
 class _Box:
     fingerprint: Any
     session: SessionBox
+
+
+@dataclass
+class _Pause:
+    identity: Any
+    until: float
+    overview: Overview
 
 
 def _nas_now(system: SystemInfo | None, wall: Callable[[], datetime]) -> tuple[datetime, timedelta]:
@@ -106,60 +128,85 @@ class SynologyService:
         self._ctx = ctx
         self._clock = clock
         self._wall = wall
-        self._cache: _Entry | None = None
-        self._box: _Box | None = None
-        self._lock = asyncio.Lock()
+        # Alles Folgende gilt je Gerät (Kurzname). Die Pause hängt nicht am Zwischenergebnis: Sie gilt, solange sich die
+        # Angaben des Geräts nicht ändern, auch wenn sich gemeinsame Einstellungen oder die Zahl der Geräte ändern.
+        self._cache: dict[str, _Entry] = {}
+        self._paused: dict[str, _Pause] = {}
+        self._boxes: dict[str, _Box] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
 
-    async def clear(self) -> None:
-        """Meldet die Sitzung ab und verwirft Zwischenergebnis, Pause und Sitzung; gibt das Abmelden nach fünf Sekunden auf."""
-        box, self._box = self._box, None
-        self._cache = None
-        if box is None:
+    async def _log_out(self, boxes: list[_Box], limit_s: float = LOGOUT_TIMEOUT_S) -> None:
+        """Meldet die Sitzungen ab; gibt nach `limit_s` Sekunden auf."""
+        if not boxes:
             return
         try:
-            async with asyncio.timeout(5.0):
-                await logout(self._ctx.http, box.session)
+            async with asyncio.timeout(limit_s):
+                await asyncio.gather(*(logout(self._ctx.http, box.session) for box in boxes))
         except Exception:  # noqa: BLE001 - Abmelden ist nur Höflichkeit und darf nichts aufhalten
             logger.debug("Synology: Abmelden unvollständig")
+
+    async def clear(self, *, logout_limit_s: float = LOGOUT_TIMEOUT_S) -> None:
+        """Meldet alle Sitzungen ab und verwirft Zwischenergebnisse, Pausen und Sitzungen."""
+        boxes, self._boxes = list(self._boxes.values()), {}
+        self._cache.clear()
+        self._paused.clear()
+        await self._log_out(boxes, logout_limit_s)
+
+    async def settings_changed(self) -> None:
+        """Verwirft Sitzung, Zwischenergebnis und Pause der Geräte, deren Angaben sich geändert haben oder die weg sind."""
+        current = {c.name: c for c in await self.configs() if c.named}
+        stale = [name for name, box in self._boxes.items() if current.get(name) != box.fingerprint[0]]
+        boxes = [self._boxes.pop(name) for name in stale]
+        for name in stale:
+            self._cache.pop(name, None)
+            self._paused.pop(name, None)
+        await self._log_out(boxes)
 
     async def shutdown(self) -> None:
         await self.clear()
 
-    async def config(self) -> SynologyConfig:
-        return read_config(await self._ctx.settings.get())
+    async def configs(self) -> list[DeviceConfig]:
+        return read_devices(await self._ctx.settings.get())
 
     async def alerts(self) -> AlertConfig:
         return read_alerts(await self._ctx.settings.get())
 
-    async def has_password(self) -> bool:
-        return await self._ctx.secrets.exists(PASSWORD_LABEL)
+    async def many(self) -> bool:
+        """Ob mehr als ein Gerät eingetragen ist; dann nennen Titel und Kacheln den Kurznamen."""
+        return len(await self.configs()) > 1
 
-    async def read_password(self) -> str:
+    async def has_password(self, cfg: DeviceConfig) -> bool:
+        return await self._ctx.secrets.exists(password_label(cfg.name))
+
+    async def read_password(self, cfg: DeviceConfig) -> str:
         try:
-            handle = await self._ctx.secrets.get_handle(PASSWORD_LABEL)
+            handle = await self._ctx.secrets.get_handle(password_label(cfg.name))
             async with self._ctx.vault_use(handle) as value:
                 # Leerzeichen können zum Passwort gehören, ein Zeilenumbruch vom Einfügen nicht.
                 password = str(value or "").rstrip("\r\n")
         except Exception as exc:  # noqa: BLE001 - nie den Text der Ausnahme weitergeben
-            logger.warning("Synology: Passwort nicht lesbar (%s)", type(exc).__name__)
+            logger.warning("Synology %s: Passwort nicht lesbar (%s)", cfg.name, type(exc).__name__)
             raise DsmError(
-                "Das Passwort ließ sich nicht aus dem Tresor lesen. Bitte unter Einstellungen → Erweiterungen → "
-                "Synology DSM neu eintragen."
+                f"Das Passwort für {cfg.name} ließ sich nicht aus dem Tresor lesen. Bitte unter Einstellungen → "
+                "Erweiterungen → Synology DSM neu eintragen."
             ) from None
         if not password:
-            raise DsmError("Das Passwort ist leer. Bitte unter Einstellungen → Erweiterungen → Synology DSM neu eintragen.")
+            raise DsmError(
+                f"Das Passwort für {cfg.name} ist leer. Bitte unter Einstellungen → Erweiterungen → Synology DSM neu eintragen."
+            )
         return password
 
-    def _session_box(self, cfg: SynologyConfig, has_password: bool) -> SessionBox:
+    def _session_box(self, cfg: DeviceConfig, has_password: bool) -> SessionBox:
         fingerprint = (cfg, has_password)
-        if self._box is None or self._box.fingerprint != fingerprint:
-            self._box = _Box(fingerprint, SessionBox())
-        return self._box.session
+        box = self._boxes.get(cfg.name)
+        if box is None or box.fingerprint != fingerprint:
+            box = self._boxes[cfg.name] = _Box(fingerprint, SessionBox())
+        return box.session
 
-    async def client(self, cfg: SynologyConfig, *, total_timeout_s: float = TOTAL_TIMEOUT_S) -> tuple[SynologyClient, str]:
+    async def client(self, cfg: DeviceConfig, *, total_timeout_s: float = TOTAL_TIMEOUT_S) -> tuple[SynologyClient, str]:
         """Der Client samt Passwort; wirft `DsmError`, wenn Adresse, Benutzername oder Passwort nicht reichen."""
         assert cfg.base_url is not None
-        password = await self.read_password()
+        password = await self.read_password(cfg)
         client = SynologyClient(
             self._ctx.http, base_url=cfg.base_url, username=cfg.username, password=password,
             box=self._session_box(cfg, True), insecure_tls=cfg.insecure_tls, pin=cfg.pin, total_timeout_s=total_timeout_s,
@@ -167,21 +214,24 @@ class SynologyService:
         return client, password
 
     @staticmethod
-    def _failed(cfg: SynologyConfig, state: str, message: str) -> Overview:
+    def _failed(cfg: DeviceConfig | None, state: str, message: str, *, config_problem: bool = False) -> Overview:
         return Overview(
-            state=state, message=message, url=cfg.base_url, system=None, load=None, volumes=None, disks=None, update=None,
-            system_note=None, load_note=None, storage_note=None, update_note=None,
+            device=cfg.name if cfg is not None else None, state=state, message=message, url=cfg.base_url if cfg is not None else None,
+            system=None, load=None, volumes=None, disks=None, update=None,
+            system_note=None, load_note=None, storage_note=None, update_note=None, config_problem=config_problem,
         )
 
-    async def _load(self, cfg: SynologyConfig, has_password: bool, alerts: AlertConfig) -> Overview:
+    async def _load(self, cfg: DeviceConfig, has_password: bool, alerts: AlertConfig, many: bool) -> Overview:
         if cfg.problem:
-            return self._failed(cfg, "error", cfg.problem)
+            return self._failed(cfg, "error", cfg.problem, config_problem=True)
         if cfg.base_url is None:
-            return self._failed(cfg, "not_configured", NOT_CONFIGURED)
+            return self._failed(cfg, "not_configured", f"Für {cfg.name} fehlt die Adresse. {SETTINGS_HINT}")
         gap = _gap(cfg, has_password)
         if gap:
             return self._failed(cfg, "not_configured", gap)
         password = ""
+        # Die Frist für Hyper Backup läuft schon während der Anmeldung: Sonst reicht die Gesamtfrist nicht für beides.
+        backup_by = backup_deadline()
         try:
             client, password = await self.client(cfg)
             # Zuerst allein: Hier findet der Client die Schnittstellen und meldet sich an. Wird die Anmeldung abgelehnt
@@ -192,7 +242,7 @@ class SynologyService:
         (system, system_error), (load, load_error), (storage, storage_error), (update, update_error), (listed, backup_error) = (
             await asyncio.gather(
                 _section(client.system_info()), _section(client.load()), _section(client.storage()), _section(client.update()),
-                _section(client.backup_tasks()),
+                _section(client.backup_tasks(backup_by)),
             )
         )
         errors = [system_error, load_error, storage_error, update_error]
@@ -205,14 +255,14 @@ class SynologyService:
             return self._failed(cfg, broken.state, _clean(broken, password))
         tasks, total = listed if listed is not None else (None, 0)
         return self._overview(
-            cfg, password, alerts, system=system, load=load, storage=storage, update=update, tasks=tasks,
+            cfg, password, alerts, many, system=system, load=load, storage=storage, update=update, tasks=tasks,
             errors=[*errors, backup_error], tasks_total=total,
         )
 
     def _overview(
-        self, cfg: SynologyConfig, password: str, alerts: AlertConfig, *, system: SystemInfo | None, load: Load | None,
-        storage: Storage | None, update: Update | None, tasks: Tasks | None, errors: list[DsmError | None],
-        tasks_total: int = 0,
+        self, cfg: DeviceConfig, password: str, alerts: AlertConfig, many: bool, *, system: SystemInfo | None,
+        load: Load | None, storage: Storage | None, update: Update | None, tasks: Tasks | None,
+        errors: list[DsmError | None], tasks_total: int = 0,
     ) -> Overview:
         def note(error: DsmError | None) -> Note | None:
             return None if error is None else Note(kind=error.kind, message=_clean(error, password))
@@ -230,60 +280,106 @@ class SynologyService:
                 d.model_copy(update={"temp_warn": d.temp is not None and d.temp >= alerts.disk_limit(d.kind)}) for d in storage.disks
             ]
         return Overview(
-            state="ok", message=None, url=cfg.base_url, system=system, load=load,
+            device=cfg.name, state="ok", message=None, url=cfg.base_url, system=system, load=load,
             volumes=None if storage is None else storage.volumes, disks=disks, pools=None if storage is None else storage.pools,
             update=update, backups=None if tasks is None else [build_task(entry, status, now, slack) for entry, status in tasks],
             system_note=note(system_error), load_note=note(load_error), storage_note=note(storage_error),
             update_note=note(update_error), backup_note=backup_note,
-            problems=collect(system=system, storage=storage, update=update, tasks=tasks, alerts=alerts, now=now, slack=slack),
+            problems=collect(
+                system=system, storage=storage, update=update, tasks=tasks, alerts=alerts, now=now, slack=slack,
+                label=cfg.name if many else None,
+            ),
         )
 
-    async def _load_bounded(self, cfg: SynologyConfig, has_password: bool, alerts: AlertConfig) -> Overview:
+    async def _load_bounded(self, cfg: DeviceConfig, has_password: bool, alerts: AlertConfig, many: bool) -> Overview:
         try:
             async with asyncio.timeout(CONNECTION_TIMEOUT_S):
-                return await self._load(cfg, has_password, alerts)
+                return await self._load(cfg, has_password, alerts, many)
         except TimeoutError:
-            return self._failed(cfg, "unreachable", f"{SERVICE} antwortet nicht (Zeitüberschreitung).")
+            return self._failed(cfg, "unreachable", f"{cfg.name} antwortet nicht (Zeitüberschreitung).")
 
-    async def overview(self, *, refresh: bool = False) -> Overview:
-        settings = await self._ctx.settings.get()
-        cfg, alerts = read_config(settings), read_alerts(settings)
+    async def _device(self, cfg: DeviceConfig, alerts: AlertConfig, many: bool, *, refresh: bool) -> Overview:
+        if not cfg.named:
+            return self._failed(cfg, "error", cfg.problem or "", config_problem=True)
         try:
-            has_password = False if cfg.problem else await self.has_password()
-            async with self._lock:
-                fingerprint = (cfg, has_password, alerts)
-                entry = self._cache
-                fresh = entry is not None and entry.fingerprint == fingerprint and entry.expires > self._clock()
+            has_password = False if cfg.problem else await self.has_password(cfg)
+            lock = self._locks.setdefault(cfg.name, asyncio.Lock())
+            async with lock:
+                now = self._clock()
+                identity = (cfg, has_password)
+                pause = self._paused.get(cfg.name)
+                if pause is not None and (pause.identity != identity or pause.until <= now):
+                    del self._paused[cfg.name]
+                    pause = None
                 # „Aktualisieren“ umgeht den Zwischenspeicher, aber nicht die Pause nach einer abgelehnten Anmeldung.
-                if entry is not None and fresh and (not refresh or entry.overview.state == "auth_failed"):
+                if pause is not None:
+                    return pause.overview
+                fingerprint = (cfg, has_password, alerts, many)
+                entry = self._cache.get(cfg.name)
+                if entry is not None and entry.fingerprint == fingerprint and entry.expires > now and not refresh:
                     return entry.overview
-                overview = await self._load_bounded(cfg, has_password, alerts)
-                ttl = AUTH_FAILED_TTL_S if overview.state == "auth_failed" else CACHE_TTL_S
-                self._cache = _Entry(fingerprint, self._clock() + ttl, overview)
+                overview = await self._load_bounded(cfg, has_password, alerts, many)
+                if overview.state == "auth_failed":
+                    self._paused[cfg.name] = _Pause(identity, self._clock() + AUTH_FAILED_TTL_S, overview)
+                    self._cache.pop(cfg.name, None)
+                else:
+                    self._cache[cfg.name] = _Entry(fingerprint, self._clock() + CACHE_TTL_S, overview)
                 return overview
-        except Exception:  # eine Abfrage darf nie die ganze Antwort kippen
-            logger.exception("Synology: unerwarteter Fehler")
-            return self._failed(cfg, "error", f"Bei der Abfrage von {SERVICE} ist ein unerwarteter Fehler aufgetreten.")
+        except Exception:  # ein Gerät darf nie die ganze Antwort kippen
+            logger.exception("Synology %s: unerwarteter Fehler", cfg.name)
+            return self._failed(cfg, "error", f"Bei der Abfrage von {cfg.name} ist ein unerwarteter Fehler aufgetreten.")
 
-    async def test_connection(self) -> dict[str, Any]:
-        """Leert Zwischenspeicher, Pause und Sitzung und prüft Anmeldung und Geräteinfo; das Ergebnis ist ein Eintrag für
-        `HealthReport.details`."""
+    def _forget_gone(self, configs: list[DeviceConfig]) -> None:
+        names = {c.name for c in configs}
+        for table in (self._cache, self._paused, self._boxes, self._locks):
+            for gone in [name for name in table if name not in names]:
+                del table[gone]
 
-        def bad(text: str) -> dict[str, Any]:
-            # `verbatim`: der Kern übersetzt den Satz nicht.
-            return {"healthy": False, "error": text, "verbatim": True}
+    async def overview(self, device: str | None = None, *, refresh: bool = False) -> Overview:
+        """Der Zustand des Geräts mit diesem Kurznamen, ohne Namen des ersten; wirft `UnknownDevice`, wenn es keins gibt."""
+        settings = await self._ctx.settings.get()
+        configs, alerts = read_devices(settings), read_alerts(settings)
+        self._forget_gone(configs)
+        if device is None:
+            if not configs:
+                return self._failed(None, "not_configured", NOT_CONFIGURED)
+            cfg = configs[0]
+        else:
+            found = next((c for c in configs if c.named and c.name == device), None)
+            if found is None:
+                raise UnknownDevice(device)
+            cfg = found
+        return await self._device(cfg, alerts, len(configs) > 1, refresh=refresh)
 
-        await self.clear()
-        cfg = await self.config()
-        if cfg.problem:
-            return bad(cfg.problem)
+    async def overviews(self, *, refresh: bool = False) -> list[Overview]:
+        """Der Zustand aller Geräte in der Reihenfolge der Einstellungen, gleichzeitig abgefragt."""
+        settings = await self._ctx.settings.get()
+        configs, alerts = read_devices(settings), read_alerts(settings)
+        self._forget_gone(configs)
+        many = len(configs) > 1
+        return list(await asyncio.gather(*(self._device(c, alerts, many, refresh=refresh) for c in configs)))
+
+    async def _test_one(self, cfg: DeviceConfig) -> dict[str, Any]:
+        """Prüft Anmeldung und Geräteinfo eines Geräts; das Ergebnis ist ein Eintrag für `HealthReport.details`."""
+        try:
+            async with asyncio.timeout(TEST_DEVICE_TIMEOUT_S):
+                return await self._probe(cfg)
+        except TimeoutError:
+            return _bad(
+                f"{cfg.name} antwortet nicht rechtzeitig. Läuft die Synology gerade hoch oder ist sie sehr ausgelastet, "
+                "versuche es in ein paar Minuten noch einmal."
+            )
+
+    async def _probe(self, cfg: DeviceConfig) -> dict[str, Any]:
+        if cfg.problem or not cfg.named:
+            return _bad(cfg.problem or "")
         if cfg.base_url is None:
-            return bad(NOT_CONFIGURED)
+            return _bad(f"Für {cfg.name} fehlt die Adresse. {SETTINGS_HINT}")
         password = ""
         try:
-            gap = _gap(cfg, await self.has_password())
+            gap = _gap(cfg, await self.has_password(cfg))
             if gap:
-                return bad(gap)
+                return _bad(gap)
             client, password = await self.client(cfg, total_timeout_s=TEST_TIMEOUT_S)
             await client.connect()
             try:
@@ -293,8 +389,22 @@ class SynologyService:
                 if exc.kind == "error":
                     raise
         except DsmError as exc:
-            return bad(_clean(exc, password))
+            return _bad(_clean(exc, password))
         except Exception:  # "Verbindung testen" darf nie als 500 enden
-            logger.exception("Synology: unerwarteter Fehler beim Testen")
-            return bad(f"Beim Testen von {SERVICE} ist ein unerwarteter Fehler aufgetreten.")
+            logger.exception("Synology %s: unerwarteter Fehler beim Testen", cfg.name)
+            return _bad(f"Beim Testen von {cfg.name} ist ein unerwarteter Fehler aufgetreten.")
         return {"healthy": True}
+
+    async def test_connections(self) -> dict[str, dict[str, Any]]:
+        """Leert Zwischenspeicher, Pausen und Sitzungen und prüft jedes Gerät gleichzeitig; leer, wenn keins eingetragen ist."""
+        await self.clear(logout_limit_s=TEST_LOGOUT_TIMEOUT_S)
+        configs = await self.configs()
+        results = await asyncio.gather(*(self._test_one(c) for c in configs))
+        out: dict[str, dict[str, Any]] = {}
+        for cfg, result in zip(configs, results, strict=True):
+            key, number = cfg.name, 1
+            while key in out:  # ein doppelter Kurzname überschreibt den ersten nicht
+                number += 1
+                key = f"{cfg.name} ({number})"
+            out[key] = result
+        return out

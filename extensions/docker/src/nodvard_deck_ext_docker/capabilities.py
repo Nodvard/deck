@@ -1,7 +1,5 @@
 """Dienstkatalog (`ServiceCatalog`) und Container-Aktionen des Docker-Moduls, per `docker ps` über SSH (`ctx.exec.run()`).
-
-Jeder Container eines getaggten Hosts erscheint von selbst und verschwindet wieder, sobald er entfernt wird.
-"""
+Jeder Container eines getaggten Hosts erscheint von selbst und verschwindet wieder, sobald er entfernt wird."""
 
 from __future__ import annotations
 
@@ -145,10 +143,8 @@ def _own_container_id() -> str:
 
 
 def is_own_container(container_id: str) -> bool:
-    """Läuft dieser Container Nodvard Deck selbst? Vergleich auf die kurze ID (12 Zeichen, Hostname-Vorgabe von Docker).
-
-    "Stoppen" darauf würde die Oberfläche abschalten, aus der man ihn wieder starten müsste.
-    """
+    """Läuft dieser Container Nodvard Deck selbst? Vergleich auf die kurze ID (12 Zeichen, Hostname-Vorgabe von Docker);
+    "Stoppen" darauf würde die Oberfläche abschalten, aus der man ihn wieder starten müsste."""
     own = _own_container_id()
     if not container_id or len(own) < 12:
         return False
@@ -389,9 +385,9 @@ def parse_port_bindings(stdout: str) -> dict[str, list[int]]:
                 if not isinstance(key, str) or not key.endswith("/tcp") or not isinstance(binds, list):
                     continue
                 for bind in binds:
-                    host_port = bind.get("HostPort") if isinstance(bind, dict) else None
-                    if _loopback_bind(str(bind.get("HostIp") or "")):
+                    if not isinstance(bind, dict) or _loopback_bind(str(bind.get("HostIp") or "")):
                         continue
+                    host_port = bind.get("HostPort")
                     if isinstance(host_port, str) and host_port.isdigit() and 0 < int(host_port) <= 65535:
                         found.add(int(host_port))
         out[container_id[:12]] = sorted(found)[:MAX_PUBLISHED_PORTS]
@@ -481,17 +477,16 @@ class DockerServiceCatalog:
         return dirs
 
     async def list_services(self) -> list[dict[str, Any]]:
-        """Alle Container der Docker-Hosts als lose Dicts.
+        """Alle Container der Docker-Hosts als lose Dicts; ein Host ohne laufenden Docker-Daemon oder ganz unerreichbar
+        erscheint als `tone="danger"`-Kachel statt zu fehlen."""
+        from .operate import docker_hosts  # spät: operate braucht commands, das hier schon geladen ist
 
-        Ein Host ohne laufenden Docker-Daemon oder ganz unerreichbar erscheint als `tone="danger"`-Kachel statt zu fehlen.
-        """
         settings = await self._ctx.settings.get()
-        tag = settings.get("docker_host_tag") or "docker"
         scheme = settings.get("url_scheme") or "http"
         overrides = url_overrides(settings)
 
         services: list[dict[str, Any]] = []
-        for host in await self._ctx.hosts.list(tag=tag):
+        for host, operate in await docker_hosts(self._ctx):
             try:
                 result = await self._ctx.exec.run(host, commands.ps_all(), timeout_s=10)
             except Exception as exc:  # noqa: BLE001 - ein nicht erreichbarer Host darf die anderen nicht verstecken
@@ -541,6 +536,8 @@ class DockerServiceCatalog:
                     # Für den Adress-Check (Netzwerk-Erweiterung): Proxy-Ziel `adresse:port` -> Container.
                     "host_address": host.address,
                     "published_ports": published_ports(ports),
+                    # Modus „Nur bedienen“: nur Ansehen, Logs, Starten, Stoppen und Neustarten.
+                    "operate_only": operate,
                 }
                 services.append(row)
                 if state in STOPPED_STATES and DOCKER_ID_RE.match(container_id):
@@ -575,12 +572,12 @@ class DockerServiceCatalog:
         """CPU/RAM je laufendem Container (`data`, Schlüssel wie in `list_services()`), Neustarts je Container (`restarts`)
         und je Host, was Docker dort an CPU und Arbeitsspeicher sieht (`hosts`). Docker wartet eine Messperiode ab, das
         dauert je Host 2 bis 3 s; ein Host, der nicht antwortet, fehlt einfach (die Liste zeigt seinen Fehler schon)."""
-        settings = await self._ctx.settings.get()
-        tag = settings.get("docker_host_tag") or "docker"
+        from .operate import docker_hosts
+
         stats: dict[str, dict[str, Any]] = {}
         restarts: dict[str, int] = {}
         environments: dict[str, dict[str, Any]] = {}
-        for host in await self._ctx.hosts.list(tag=tag):
+        for host, _ in await docker_hosts(self._ctx):
             try:
                 result = await self._ctx.exec.run(host, commands.stats(), timeout_s=20)
             except Exception:  # noqa: BLE001 - ein kaputter Host darf die anderen nicht verdecken
@@ -636,28 +633,29 @@ _PARAMS_SCHEMA = {
     "required": ["container"],
 }
 
-def container_action_specs(tag: str = "docker") -> list[ActionSpec]:
+def container_action_specs(tag: str = "docker", operate_tag: str | None = None) -> list[ActionSpec]:
     """Nur für Docker-Hosts (`host_tags`); der Tag ist einstellbar, deshalb eine Funktion: bei geänderter Einstellung
-    meldet die Extension die Specs neu an."""
+    meldet die Extension die Specs neu an. Starten, Stoppen und Neustarten gibt es auch im Modus „Nur bedienen“."""
+    operate = [tag, operate_tag] if operate_tag else [tag]
     return [
         ActionSpec(
             action_type="container.start", label="Container starten", icon="play",
             description="Startet einen gestoppten Docker-Container auf diesem Host.",
             default_risk=Risk.LOW, permissions=["hosts.execute"], host_bound=True, params_schema=_PARAMS_SCHEMA,
-            host_tags=[tag],
+            host_tags=operate,
         ),
         ActionSpec(
             action_type="container.stop", label="Container stoppen", icon="square",
             description="Stoppt einen laufenden Docker-Container auf diesem Host.",
             default_risk=Risk.MEDIUM, permissions=["hosts.execute"], host_bound=True, params_schema=_PARAMS_SCHEMA,
             confirm_text="Der Dienst ist danach nicht mehr erreichbar, bis er wieder gestartet wird. Fortfahren?",
-            host_tags=[tag],
+            host_tags=operate,
         ),
         ActionSpec(
             action_type="container.restart", label="Container neu starten", icon="rotate-cw",
             description="Startet einen Docker-Container auf diesem Host neu.",
             default_risk=Risk.MEDIUM, permissions=["hosts.execute"], host_bound=True, params_schema=_PARAMS_SCHEMA,
-            host_tags=[tag],
+            host_tags=operate,
         ),
         ActionSpec(
             action_type="container.remove", label="Container löschen", icon="trash-2",
@@ -699,10 +697,8 @@ CONTAINER_ACTION_SPECS = container_action_specs()
 
 
 async def _checked(ctx: ExtensionContext, host: Any, refs: list[str], duration_ms: int | None, done: str) -> ActionResult:
-    """Prüfung nach einem erfolgreichen Start/Neustart (`after_check`).
-
-    Läuft der Container danach nicht stabil, ist die Aktion fehlgeschlagen: der Befehl lief, das Ziel nicht.
-    """
+    """Prüfung nach einem erfolgreichen Start/Neustart (`after_check`): Läuft der Container danach nicht stabil, ist die
+    Aktion fehlgeschlagen, denn der Befehl lief, das Ziel nicht."""
     from . import after_check as ac  # spät: after_check braucht dieses Modul
 
     started = time.monotonic()
@@ -781,10 +777,8 @@ class DockerMaintenanceExecutor:
 
 
 class DockerContainerExecutor:
-    """Start/Stop/Neustart/Löschen einzelner Container (`ActionExecutor`), nur nach dem Gate.
-
-    Der Befehl entsteht aus einem festen Verb und einem gegen Dockers Namensregel geprüften Namen, ohne freien Befehlstext.
-    """
+    """Start/Stop/Neustart/Löschen einzelner Container (`ActionExecutor`), nur nach dem Gate. Der Befehl entsteht aus
+    einem festen Verb und einem gegen Dockers Namensregel geprüften Namen, ohne freien Befehlstext."""
 
     action_types = frozenset(_VERBS)
 

@@ -18,6 +18,7 @@ from datetime import datetime
 
 import asyncssh
 import pytest
+import pytest_asyncio
 from nodvard_sdk import HostRequirementSpec
 from sqlalchemy import select
 
@@ -690,7 +691,7 @@ async def test_check_with_generated_key_against_the_key_server(client, db_sessio
     assert _statuses(r) == {"reachable": "ok", "host_key": "ok", "login": "fail"}
     login = _items(r)["login"]
     assert login["label"] == "Anmeldung als lattice"
-    assert "Einrichtungsbefehl" in login["hint"] and "Benutzer" in login["hint"]
+    assert "Einrichtungsbefehl" in login["hint"] and "Benutzer" in login["hint"] and "Dropbear" not in login["hint"]
 
     # 3. Eingetragen: die Anmeldung klappt.
     authorized.append(fingerprint)
@@ -698,6 +699,47 @@ async def test_check_with_generated_key_against_the_key_server(client, db_sessio
     assert r.json()["ok"] is True
     assert _statuses(r)["login"] == "ok" and "Schlüssel" in _items(r)["login"]["detail"]
     assert "PRIVATE KEY" not in r.text
+
+
+@pytest_asyncio.fixture
+async def dropbear_key_server():
+    """Wie `local_ssh_key_server`, meldet sich aber wie Dropbear; liefert `(port, authorized_keys)`."""
+    from conftest import _handle_ssh_process, _TestSshServer
+
+    authorized: list[str] = []
+    server = await asyncssh.listen(
+        "127.0.0.1", 0, server_host_keys=[asyncssh.generate_private_key("ssh-ed25519")],
+        server_factory=lambda: _TestSshServer("lattice", "", authorized), process_factory=_handle_ssh_process,
+        encoding=None, server_version="dropbear_2025.89",
+    )
+    try:
+        yield server.sockets[0].getsockname()[1], authorized
+    finally:
+        server.close()
+        try:
+            await asyncio.wait_for(server.wait_closed(), timeout=5.0)
+        except TimeoutError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_a_key_refused_by_dropbear_points_to_setting_up_again(client, db_session, dropbear_key_server):
+    port, authorized = dropbear_key_server
+    token = await _bootstrap_owner(client)
+    host, _cred, fingerprint = await _key_host(client, token, port)
+    await _pin_seen_key(client, token, host["id"], await _check(client, token, host["id"]))
+
+    r = await _check(client, token, host["id"])
+    assert _items(r)["reachable"]["detail"] == "SSH-Dienst antwortet (SSH-2.0-dropbear_2025.89)."
+    login = _items(r)["login"]
+    assert login["status"] == "fail" and login["detail"] == "Der Server hat den Schlüssel nicht akzeptiert."
+    assert login["hint"] == (
+        f"Ist der Einrichtungsbefehl auf dem Server gelaufen? Stimmt der Benutzer? {host_check.DROPBEAR_KEY_HINT}"
+    )
+    assert "noch einmal einrichten" in login["hint"] and "pty" in login["hint"]
+
+    authorized.append(fingerprint)
+    assert _statuses(await _check(client, token, host["id"]))["login"] == "ok"
 
 
 @pytest.mark.asyncio

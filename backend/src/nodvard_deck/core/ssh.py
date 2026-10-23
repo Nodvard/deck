@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -18,8 +19,8 @@ from .error_text import describe_connection_error
 
 KEEPALIVE_INTERVAL_S = 15.0
 KEEPALIVE_COUNT_MAX = 3
-"""Ohne Keepalive bemerkt asyncssh einen hart weggefallenen Host erst nach dem TCP-Timeout (etwa 15 min); so ist die
-Verbindung nach 45-60 s zu und der Pool verbindet neu."""
+"""Ohne Keepalive bemerkt asyncssh einen weggefallenen Host erst nach dem TCP-Timeout (etwa 15 min), so schon nach
+45–60 s."""
 
 
 class SshError(Exception):
@@ -32,9 +33,8 @@ class SshError(Exception):
 
 
 class SshUnreachable(SshError, OSError):
-    """Server nicht erreichbar oder Verbindung abgerissen (Netzwerkfehler, Zeitlimit, Name unbekannt).
-
-    Auch ein `OSError`, damit ein bestehendes `except OSError` greift; `__cause__` ist die ursprüngliche Ausnahme."""
+    """Server nicht erreichbar oder Verbindung abgerissen; auch ein `OSError`, damit ein bestehendes `except
+    OSError` greift."""
 
 
 class SshTimeout(SshUnreachable, TimeoutError):
@@ -42,13 +42,12 @@ class SshTimeout(SshUnreachable, TimeoutError):
 
 
 class SshAuthError(SshError):
-    """Der Server hat die Anmeldung abgelehnt (falsches Passwort, Schlüssel nicht eingetragen, Benutzer unbekannt);
-    sein Schlüssel war schon geprüft."""
+    """Der Server hat die Anmeldung abgelehnt (sein Schlüssel war schon geprüft)."""
 
 
 class HostKeyUnknown(SshError):
-    """Server-Schlüssel noch nicht bestätigt und TOFU aus: Es wurden weder Anmeldedaten gesendet noch etwas gespeichert.
-    `fingerprint` ist der angebotene Schlüssel, zum Vergleichen und Bestätigen."""
+    """Server-Schlüssel noch nicht bestätigt und TOFU aus: Es wurden weder Anmeldedaten gesendet noch etwas
+    gespeichert."""
 
     def __init__(self, host_id: str, key_type: str | None, fingerprint: str | None) -> None:
         super().__init__(
@@ -82,7 +81,7 @@ class SshTargetChanged(SshError):
 
 @dataclass(frozen=True)
 class ConnectionTarget:
-    """Alles, was `connect()` braucht. Der Klartext lebt nur kurz (aus dem Tresor) und wird nie gespeichert."""
+    """Alles, was `connect()` braucht; der Klartext lebt nur kurz (aus dem Tresor) und wird nie gespeichert."""
 
     host_id: str
     address: str
@@ -92,16 +91,14 @@ class ConnectionTarget:
     secret_value: str = field(repr=False)
     """Passwort oder privater Schlüssel im Klartext; nicht im `repr`, damit er in keinem Traceback landet."""
     generation: int | None = None
-    """`SshPool.generation(host_id)` vor dem Lesen der Verbindungsdaten aus der Datenbank. Hat `drop_host()` seitdem
-    zugeschlagen, lehnt `get()` das Ziel ab. `None`: es gilt der Stand beim Start von `get()`."""
+    """`SshPool.generation(host_id)` vor dem Lesen der Verbindungsdaten; hat `drop_host()` seitdem zugeschlagen,
+    lehnt `get()` das Ziel ab."""
     allow_tofu: bool = True
     """`False`: ein unbekannter Server-Schlüssel wird nicht still gemerkt, die Verbindung scheitert mit
     `HostKeyUnknown`."""
 
 
 class _PinningClient(asyncssh.SSHClient):
-    """Entscheidet synchron im Schlüsseltausch über den Host-Schlüssel (Pinning)."""
-
     def __init__(self, known: dict[str, str], allow_tofu: bool = True) -> None:
         self._known = known
         self._allow_tofu = allow_tofu
@@ -136,9 +133,8 @@ class _PinningClient(asyncssh.SSHClient):
         return True
 
 
+# Lehnt jeden Server-Schlüssel ab, damit nach dem Lesen nie Zugangsdaten gesendet werden.
 class _InspectClient(asyncssh.SSHClient):
-    """Merkt sich den angebotenen Server-Schlüssel und lehnt immer ab, damit nichts gesendet wird."""
-
     def __init__(self) -> None:
         self.key_type: str | None = None
         self.fingerprint: str | None = None
@@ -153,7 +149,6 @@ _RSA_SIGNATURE_ALGS = ("rsa-sha2-512", "rsa-sha2-256", "ssh-rsa")
 
 
 def _preferred_host_key_algs(known: dict[str, str]) -> list[str] | None:
-    """Host-Key-Verfahren für asyncssh: gemerkte Typen zuerst, danach die übrigen; `None`, wenn noch nichts gemerkt ist."""
     # Der Server nimmt das erste Verfahren der Clientliste, das er kann, und zeigt so bei mehreren Schlüsseln den
     # gemerkten. Die übrigen bleiben erlaubt: zeigt ein Server nur einen anderen Typ, soll das als geänderter
     # Schlüssel gemeldet werden (`_PinningClient`) und nicht als unverständlicher Verschlüsselungsfehler.
@@ -172,7 +167,6 @@ def _preferred_host_key_algs(known: dict[str, str]) -> list[str] | None:
 
 
 def _known_summary(known: dict[str, str]) -> str | None:
-    """Das Gemerkte, lesbar (für Meldungen bei einem anderen Schlüsseltyp)."""
     return "; ".join(f"{fp} ({key_type})" for key_type, fp in sorted(known.items())) or None
 
 
@@ -188,13 +182,13 @@ async def _known_fingerprints(session: AsyncSession, host_id: str) -> dict[str, 
 
 
 HOST_KEY_CONFIRM_REQUIRED = "ssh.host_key_confirm_required"
-"""Merker je Server in `settings` (`scope=HOST_KEY_CONFIRM_SCOPE`, `user_id=<host_id>`): Nach "Schlüssel vergessen" wird
-kein Schlüssel still gemerkt, bis er ausdrücklich bestätigt ist. Gesetzt und entfernt in `services/hosts.py`."""
+"""Merker je Server in `settings`: Nach „Schlüssel vergessen“ wird kein Schlüssel still gemerkt, bis er
+ausdrücklich bestätigt ist."""
 HOST_KEY_CONFIRM_SCOPE = "host"
 
 
 async def host_key_confirm_pending(session: AsyncSession, host_id: str) -> bool:
-    """Liegt für `host_id` der Merker `HOST_KEY_CONFIRM_REQUIRED`? Immer frisch aus der Datenbank."""
+    """Ob für `host_id` der Merker `HOST_KEY_CONFIRM_REQUIRED` liegt, immer frisch aus der Datenbank."""
     result = await session.execute(
         select(Setting.key).where(
             Setting.key == HOST_KEY_CONFIRM_REQUIRED, Setting.scope == HOST_KEY_CONFIRM_SCOPE,
@@ -219,9 +213,8 @@ async def load_known_fingerprints(session: AsyncSession, host_id: str) -> dict[s
 async def connect(
     session: AsyncSession, target: ConnectionTarget, *, connect_timeout_s: float = 10.0, tofu: bool = True
 ) -> asyncssh.SSHClientConnection:
-    """Baut eine einzelne, gepinnte Verbindung auf (gepoolt wird in `SshPool.get()`). Ist `tofu` oder
-    `target.allow_tofu` falsch, scheitert ein ungemerkter Schlüssel mit `HostKeyUnknown`, bevor Anmeldedaten gesendet
-    werden."""
+    """Baut eine einzelne, gepinnte Verbindung auf; ohne TOFU scheitert ein ungemerkter Schlüssel, bevor
+    Anmeldedaten gesendet werden."""
     allow_tofu = tofu and target.allow_tofu
     # Vor dem Connect laden: asyncssh fragt den Schlüssel synchron im Handshake ab, ein `await` ist dort nicht möglich.
     # Ein neu gesehener Typ wird deshalb erst nach dem Connect gespeichert.
@@ -302,8 +295,8 @@ class HostKeyReport:
     fingerprint: str
     """Wie `key.get_fingerprint()`: `SHA256:...`."""
     status: Literal["known", "new", "changed"]
-    """`known`: stimmt mit dem Gemerkten dieses Typs überein; `new`: für den Host ist noch nichts gemerkt;
-    `changed`: es ist etwas gemerkt und der Server zeigt anderes (auch einen anderen Typ)."""
+    """`known`: stimmt mit dem Gemerkten dieses Typs überein; `new`: noch nichts gemerkt; `changed`: etwas anderes
+    gemerkt oder anderer Typ."""
     expected: str | None = None
     """Gemerkter Fingerabdruck dieses Typs (`known`, `changed`); bei einem anderen Typ alles Gemerkte als
     `SHA256:... (typ)`; bei `new` `None`."""
@@ -312,8 +305,8 @@ class HostKeyReport:
 async def inspect_host_key(
     address: str, port: int, known: dict[str, str], *, timeout_s: float = 10.0
 ) -> HostKeyReport:
-    """Liest den Server-Schlüssel, ohne sich anzumelden: der Client lehnt ihn im Schlüsseltausch immer ab. Keine
-    Zugangsdaten, nichts wird gespeichert; ein anderer Typ als der gemerkte gilt als `changed`, nicht als `new`."""
+    """Liest den Server-Schlüssel, ohne sich anzumelden und ohne etwas zu speichern; ein anderer Typ als der
+    gemerkte gilt als `changed`."""
     holder: list[_InspectClient] = []
 
     def _client_factory() -> asyncssh.SSHClient:
@@ -359,7 +352,6 @@ class _Retired:
 
 
 async def _close_quietly(conn: asyncssh.SSHClientConnection) -> None:
-    """Verbindung schließen und kurz auf das Ende warten; Aufräumen darf weder scheitern noch hängen."""
     try:
         conn.close()
         await asyncio.wait_for(conn.wait_closed(), timeout=2.0)
@@ -423,8 +415,7 @@ class SshPool:
         return self._generation.get(host_id, 0)
 
     async def drop_host(self, host_id: str) -> None:
-        """Schließt alle Verbindungen (auch ausgemusterte) zu `host_id` sofort, für alles, was Vertrauen oder Ziel
-        ändert; der nächste Zugriff verbindet mit dann aktuellen Daten."""
+        """Schließt alle Verbindungen zu `host_id` sofort, für alles, was Vertrauen oder Ziel ändert."""
         self._generation[host_id] = self._generation.get(host_id, 0) + 1
         conns = [self._connections.pop(k) for k in [k for k in self._connections if k[0] == host_id]]
         for retired in [r for r in self._retired if r.host_id == host_id]:
@@ -434,8 +425,8 @@ class SshPool:
         await asyncio.gather(*(_close_quietly(conn) for conn in conns))
 
     def retire_host(self, host_id: str, grace_s: float = 900.0) -> None:
-        """Nimmt die Verbindungen zu `host_id` aus dem Pool und schließt die alten erst nach `grace_s` Sekunden,
-        damit bei neuen Gruppenrechten kein laufendes `tail -f` abreißt."""
+        """Nimmt die Verbindungen zu `host_id` aus dem Pool und schließt die alten erst nach `grace_s` Sekunden
+        (kein `tail -f` reißt ab)."""
         loop = asyncio.get_running_loop()
         for key in [k for k in self._connections if k[0] == host_id]:
             retired = _Retired(host_id, self._connections.pop(key))
@@ -485,12 +476,72 @@ async def reset_ssh_pool() -> None:
     _pool = None
 
 
+INLINE_COMMAND_MAX = 8000
+"""Längere Befehle gehen über die Standardeingabe: Dropbear bricht bei mehr als 9000 Byte Befehlstext die ganze
+Verbindung ab, samt aller Kanäle darauf."""
+
+
+class CommandTooLong(SshError):
+    """Ein Befehl hätte über `INLINE_COMMAND_MAX` Byte auf die Befehlszeile gemusst und wurde nicht gesendet."""
+
+    def __init__(self, size: int) -> None:
+        super().__init__(
+            f"Der Befehl ist mit {size} Byte zu lang für eine SSH-Befehlszeile (höchstens {INLINE_COMMAND_MAX}), "
+            "deshalb wurde er nicht gesendet. Kleine SSH-Server wie Dropbear würden sonst die Verbindung trennen."
+        )
+        self.size = size
+
+
+def check_command_line(command: str, *, posix_shell: bool = True) -> None:
+    """Wirft `CommandTooLong`, wenn `command` für einen POSIX-Server zu lang für die Befehlszeile ist."""
+    size = len(command.encode("utf-8"))
+    if posix_shell and size > INLINE_COMMAND_MAX:
+        raise CommandTooLong(size)
+
+
+STDIN_INCOMPLETE = "Nodvard Deck: Befehl kam nicht vollständig an."
+"""Feste stderr-Zeile (mit Exit `STDIN_INCOMPLETE_EXIT`), wenn ein Befehl über die Standardeingabe nicht ganz ankam;
+ausgeführt wurde dann nichts."""
+STDIN_INCOMPLETE_EXIT = 125
+
+
+def end_mark() -> str:
+    """Zufällige Marke um einen Befehl auf der Standardeingabe, damit eine unvollständige Übertragung auffällt."""
+    return "@@nodvard-ende-" + secrets.token_hex(16)
+
+
+def stdin_command(command: str) -> tuple[str, bytes]:
+    """Kurzer, fester Befehlstext und Eingabe, mit denen eine POSIX-Login-Shell `command` ganz einliest, auf
+    Vollständigkeit prüft und selbst ausführt."""
+    # Als Befehlszeile lehnt der Server NUL ab, `$(cat)` ließe es still fallen: Aus `rm\0 -rf` würde ein Befehl, den
+    # die Sperrliste so nie gesehen hat.
+    if "\x00" in command:
+        raise ValueError("Ein Befehl darf kein NUL-Zeichen enthalten.")
+    # `eval` statt `sh -s`: Ein Befehl, der stdin liest, äße sonst den Rest des Skripts; so bekommt er sofort EOF und
+    # läuft in derselben Shell wie eine Befehlszeile. Die Marke auch vorn zeigt, ob vorher schon etwas (etwa eine
+    # ~/.bashrc) von der Standardeingabe gelesen hat.
+    end = end_mark()
+    text = (
+        f"__nd=$(cat) || __nd=; case $__nd in {end}*{end}) ;; "
+        f"*) echo '{STDIN_INCOMPLETE}' >&2; exit {STDIN_INCOMPLETE_EXIT};; esac; "
+        f'exec </dev/null; __nd=${{__nd#{end}}}; eval "unset __nd; ${{__nd%{end}}}"'
+    )
+    return text, f"{end}{command}{end}".encode()
+
+
 async def run(
     conn: asyncssh.SSHClientConnection, command: str, *, timeout_s: float = 60.0, stdin: bytes | None = None,
+    posix_shell: bool = True,
 ) -> tuple[int, str, str]:
-    """Führt ein *lesendes* Kommando ohne Nebenwirkung aus und liefert `(exit_code, stdout, stderr)`.
-
-    `stdin`: Daten für die Standardeingabe, danach EOF. Ohne (None) bleibt die Standardeingabe wie bisher offen."""
+    """Führt ein lesendes Kommando ohne Nebenwirkung aus und liefert `(exit_code, stdout, stderr)`, nach `stdin` folgt
+    EOF; über `INLINE_COMMAND_MAX` Byte geht es bei `posix_shell` über die Standardeingabe, mit eigener Eingabe gibt es
+    dann `CommandTooLong`."""
+    size = len(command.encode("utf-8"))
+    if posix_shell and size > INLINE_COMMAND_MAX:
+        if stdin:
+            # Die Eingabe gehört dem Befehl, er müsste also auf die Befehlszeile.
+            raise CommandTooLong(size)
+        command, stdin = stdin_command(command)
     # `encoding=None`: bei abweichenden Standard-Kodierungen von Client und Server wirft der Server einen unbehandelten
     # `TypeError`, und die ganze Verbindung fällt mit "Connection lost", nicht nur der Kanal. Rohe Bytes und
     # explizites Dekodieren sind robuster als auf übereinstimmende Kodierungen fremder Server zu bauen.
@@ -512,9 +563,14 @@ async def run(
 @asynccontextmanager
 async def open_shell(
     conn: asyncssh.SSHClientConnection, *, cols: int = 80, rows: int = 24, term_type: str = "xterm",
-    command: str | None = None,
+    command: str | None = None, posix_shell: bool = True,
 ) -> AsyncIterator[asyncssh.SSHClientProcess]:
-    """Interaktive PTY-Sitzung für das Web-Terminal; mit `command` läuft statt der Login-Shell genau dieses Kommando."""
+    """Interaktive PTY-Sitzung für das Web-Terminal; mit `command` läuft statt der Login-Shell genau dieses Kommando
+    (bei `posix_shell` höchstens `INLINE_COMMAND_MAX` Byte, sonst `CommandTooLong`)."""
+    # Mit Terminal-Modus geht kein Befehl über die Standardeingabe: Das Terminal schriebe ihn zurück und kürzte lange
+    # Zeilen.
+    if command is not None:
+        check_command_line(command, posix_shell=posix_shell)
     # Ohne Positionsargument startet asyncssh die Login-Shell.
     args = (command,) if command is not None else ()
     process = await conn.create_process(*args, term_type=term_type, term_size=(cols, rows), encoding=None)
@@ -526,9 +582,11 @@ async def open_shell(
 
 @asynccontextmanager
 async def open_command_stream(
-    conn: asyncssh.SSHClientConnection, command: str
+    conn: asyncssh.SSHClientConnection, command: str, *, posix_shell: bool = True
 ) -> AsyncIterator[asyncssh.SSHClientProcess]:
-    """Ein Kommando mit laufend gelesener Ausgabe (z. B. `tail -f`); `run()` kehrt bei einem endlosen Strom nie zurück."""
+    """Ein Kommando mit laufend gelesener Ausgabe (etwa `tail -f`), bei `posix_shell` höchstens `INLINE_COMMAND_MAX`
+    Byte wie bei `open_shell`; `run()` kehrt bei einem endlosen Strom nie zurück."""
+    check_command_line(command, posix_shell=posix_shell)
     # Bewusst mit PTY: ohne bekommt ein entferntes `... -f` beim Schließen des Kanals kein Signal und läuft weiter, bis
     # es das nächste Mal schreibt. Mit PTY hängt sshd die Sitzung auf und der Prozess bekommt SIGHUP. Nebenwirkung:
     # stdout und stderr kommen gemischt, Zeilenenden `\r\n`; der Aufrufer normalisiert sie.
@@ -549,9 +607,8 @@ _drop_tasks: set[asyncio.Task[None]] = set()
 
 
 def drop_host_after_commit(session: AsyncSession, host_id: str) -> None:
-    """Nimmt `host_id` nach dem Commit dieser Session nochmals aus dem Pool.
-
-    Ein paralleler Leser mit eigener Session sieht bis dahin noch alte Daten und würde sofort neu poolen."""
+    """Nimmt `host_id` nach dem Commit nochmals aus dem Pool, weil ein paralleler Leser bis dahin noch alte Daten
+    sieht und neu poolen würde."""
     session.sync_session.info.setdefault(_DROP_INFO_KEY, set()).add(host_id)
 
 

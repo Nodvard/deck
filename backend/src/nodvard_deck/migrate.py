@@ -12,12 +12,10 @@ from .config import get_settings
 
 
 class DuplicateRevisions(RuntimeError):
-    """Dieselbe Revision liegt in zwei Erweiterungsordnern, meist ist nach einer Umbenennung der alte Ordner liegen
-    geblieben. Die Meldung ist ein ganzer deutscher Satz ohne Pfade; `boot` zeigt sie auf der Notseite."""
+    """Dieselbe Revision liegt in zwei Erweiterungsordnern (meist blieb nach einer Umbenennung der alte liegen)."""
 
 
 def _check_duplicate_revisions(extension_locations: list[Path]) -> None:
-    """Läuft vor Alembic, das sonst mit unverständlicher Meldung abbricht (Zweigname vergeben, Revision mehrfach da)."""
     from .core.backup.snapshot import REVISION_RE
 
     seen: dict[str, str] = {}
@@ -43,7 +41,6 @@ def _check_duplicate_revisions(extension_locations: list[Path]) -> None:
 
 
 def _discover_version_locations(repo_root: Path, backend_dir: Path) -> list[Path]:
-    """Der Kern plus jedes `extensions/<id>/migrations/versions`, damit eine neue Erweiterung nichts nachziehen muss."""
     # Alembic liest `version_locations`, bevor `env.py` läuft; ein statischer Eintrag in `alembic.ini` müsste bei jeder
     # neuen Erweiterung von Hand ergänzt werden. Sie legt nur ihre erste Revision mit `down_revision=None` und eigenem
     # `branch_labels` an.
@@ -59,8 +56,8 @@ def _discover_version_locations(repo_root: Path, backend_dir: Path) -> list[Path
 
 
 def alembic_config(database_url: str | None = None, repo_root: Path | None = None) -> tuple[Config, list[Path]]:
-    """Alembic-Konfiguration samt der gefundenen `version_locations`. Ohne `database_url` bleibt die URL leer (Abfragen am
-    Skriptordner brauchen keine Datenbank). `DuplicateRevisions` bei derselben Revision in zwei Erweiterungsordnern."""
+    """Alembic-Konfiguration samt der gefundenen `version_locations`; bei derselben Revision in zwei
+    Erweiterungsordnern `DuplicateRevisions`."""
     # Der Arbeitsordner, nicht `Path(__file__)`: Im Container liegt das Paket nicht editierbar in site-packages, neben
     # `__file__` steht kein `backend/alembic.ini`. Der Entrypoint wechselt vorher nach `/app`, die README ruft vom Repo
     # aus auf.
@@ -77,7 +74,7 @@ def alembic_config(database_url: str | None = None, repo_root: Path | None = Non
 
 
 def known_revisions(repo_root: Path | None = None) -> tuple[set[str], set[str]]:
-    """-> (alle Revisionen dieses Images; deren Köpfe), zum Prüfen einer fremden Datenbank auf bekannte Stände."""
+    """Alle Revisionen dieses Images und deren Köpfe, zum Prüfen einer fremden Datenbank auf bekannte Stände."""
     from alembic.script import ScriptDirectory
 
     cfg, _ = alembic_config(repo_root=repo_root)

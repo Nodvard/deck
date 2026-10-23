@@ -768,10 +768,35 @@ on for this, it knows the containers. A target that matches no container (e.g. t
 is not an error. Not detected: containers in host network mode (they show no ports), network aliases and additional
 locations of a proxy host.
 
-**Synology DSM (Beta, read-only):** The "Synology DSM" page shows model, DSM version, load, temperature, storage pools,
-volumes, drives (with SMART), the Hyper Backup tasks and whether a DSM update is available. Nodvard Deck only reads and
-changes nothing on the Synology. It asks DSM which version of each interface to use, so DSM 7.1 to 7.4 work. So far this
-has been tried against recreated DSM answers; feedback from real devices helps.
+**Synology DSM (Beta, read-only):** The "Synology DSM" page shows, for one or several Synology devices, model, DSM
+version, load, temperature, storage pools, volumes, drives (with SMART), the Hyper Backup tasks and whether a DSM update
+is available. Nodvard Deck only reads and changes nothing on the Synology. It asks DSM which version of each interface to
+use, so DSM 7.1 to 7.4 work, also side by side. So far this has been tried against recreated DSM answers; feedback from
+real devices helps.
+
+- **Several devices:** Under Settings → Extensions → Synology DSM, enter each device on its own (up to ten): with a short
+  name (e.g. "ds920" or "keller"), address, its own account, its own password in the vault and its own certificate
+  settings. The short name appears in notifications and on the tiles so you can tell the devices apart; do not change it
+  after setting up, because the password belongs to the name and would have to be entered again. The page shows a picker
+  of all devices with their state at the top. If a device cannot be queried, its reason and "Try again" („Erneut
+  versuchen“) show up at that device and the others are left alone. On the home page each device has its three tiles
+  (state, storage, Hyper Backup), with the short name in the title when there are several; new tiles show up under
+  "Manage widgets" („Widgets verwalten“). Notifications are separate too: with several devices their title names the short
+  name (with a single device, the model), and a problem or all-clear on one device does not touch the other. If a short
+  name appears twice (upper and lower case do not matter), Nodvard Deck queries none of those entries. If the spelling is
+  exactly the same, a password stored for that name is deleted when you save (after confirmation), so it never ends up at
+  another entry's address, and a new one is only accepted once one of the entries has been renamed and saved. If the names
+  differ only in upper and lower case, the password stays with the existing entry but is not used until one of the names
+  is changed.
+- **From one device to several:** If you already set the module up with one device, you enter nothing again. On the first
+  start with this version the existing device is adopted as the device „synology“: address, account, certificate
+  settings, the password (copied in the vault to „synology-password:synology“), the tiles on the home page and the state
+  of the notifications. Problems that were already reported therefore do not come again. The old single fields and the
+  old vault entry „synology-password“ stay as they were, so a step back to the older version still finds the device. As
+  long as the device „synology“ is in the list, the old entry stays in the vault; it belongs to the module and cannot be
+  deleted there on its own. If you later remove the device „synology“ or rename it, Nodvard Deck deletes the old entry
+  with it, and there is no way back to the older version after that. From now on you enter a new password at the device
+  „synology“. More devices simply get added.
 
 - **Account:** Create a separate DSM account just for Nodvard Deck (Control Panel → User & Group) and enter it in the
   module's settings; the password goes into the vault. To be honest: DSM only hands out storage, load, updates and
@@ -783,11 +808,14 @@ has been tried against recreated DSM answers; feedback from real devices helps.
   account without two-factor. If DSM enforces two-factor for all administrators, that includes this account; then limit
   the requirement to specific accounts in DSM's security settings.
 - **Wrong password:** DSM blocks addresses automatically after several failed attempts. After a rejected sign-in Nodvard
-  Deck therefore does not ask again for 30 minutes, unless you press "Test connection" („Verbindung testen“).
+  Deck therefore does not ask again for 30 minutes, unless you press "Test connection" („Verbindung testen“), which lifts
+  the pause of all devices, or change that device's address, account or certificate settings. The pause applies only to
+  the device whose sign-in was rejected; the other devices are still queried. Saving other settings, or adding or removing
+  a device, does not change the pause. If you only replaced the password in the vault, press "Test connection".
 - **Certificate:** DSM often has a self-signed certificate. Then, in your own network, switch on „Selbstsigniertes
   Zertifikat erlauben“ (allow self-signed certificate), or better enter the certificate's fingerprint under "Advanced"
   (only with https://): Nodvard Deck then only talks to exactly that certificate.
-- **Notifications:** Every five minutes Nodvard Deck checks and reports when a storage pool or volume is not okay (e.g.
+- **Notifications:** Every five minutes Nodvard Deck checks each device and reports when a storage pool or volume is not okay (e.g.
   „Eingeschränkt“, degraded, after a drive failure), a drive warns (SMART, bad sectors, remaining life), the device or a
   drive gets too hot, or Hyper Backup fails or is overdue. The message shows under "Needs attention" („Braucht
   Aufmerksamkeit“) and reaches your phone through the configured channels; once everything is fine again, an all-clear
@@ -796,7 +824,8 @@ has been tried against recreated DSM answers; feedback from real devices helps.
   under "Advanced", default 55 °C for hard drives, 65 °C for SSDs, 70 °C for NVMe). Repairing, expanding or scrubbing a
   pool or volume does not count as a problem, nor does a state Nodvard Deck does not know; if it was reported before,
   the all-clear only comes once it is „Normal“ again. While a pool is not „Normal“, its volumes report nothing of their
-  own unless one has crashed. A new DSM update arrives once per version as a quiet hint (level "info", not under
+  own. If a volume crashes, its pool's message names it when the pool has a message of its own (such as „Eingeschränkt“,
+  degraded) and becomes urgent; without a pool message (for example during a repair) the volume reports itself. A new DSM update arrives once per version as a quiet hint (level "info", not under
   "Needs attention"). Both can be switched off in the module's settings. If the Synology cannot be reached or the
   sign-in is rejected, the watch reports nothing new; the page and the tile show that.
 - **Hyper Backup:** Each task shows its result, last and next run, in the Synology's local time. Overdue means: a
@@ -804,8 +833,10 @@ has been tried against recreated DSM answers; feedback from real devices helps.
   runs plus six hours (54 hours for a daily backup). This is measured with the Synology's clock; if DSM does not provide
   it, 14 extra hours allow for a different time zone. A backup that is running is not overdue. If Hyper Backup is not
   installed, a quiet hint says so and the rest of the page stays. Nodvard Deck reads up to 64 tasks; if Hyper Backup has
-  more, the page says so. If not all states have arrived after 25 seconds, the remaining tasks show „Stand unbekannt“
-  (state unknown), with neither a message nor an all-clear; the rest of the page stays. Not yet confirmed on real
+  more, the page says so. Hyper Backup gets 25 seconds for the list and the states together, counted from the start of the
+  query. If the list does not arrive in time, Hyper Backup shows „Hyper Backup hat nicht rechtzeitig geantwortet“ (did
+  not answer in time); if not all states arrive, the remaining tasks show „Stand unbekannt“ (state unknown), with
+  neither a message nor an all-clear. In both cases the rest of the page stays. Not yet confirmed on real
   devices (beta): that DSM reports a task that is not backing up with the state `status: none`. If a task keeps
   showing „Läuft gerade“ (running) although nothing runs, please let us know.
 
@@ -935,6 +966,15 @@ Only steps for which you have the privilege are shown. The card disappears by it
 Files, server page, Docker, Game servers, Proxmox) now also say what is missing and offer the button for the
 next step.
 
+**The widgets on the start page:** Modules bring their widgets along; they are arranged in groups (Servers and Proxmox,
+Security, Docker and apps, Backups, Services – „Server und Proxmox“, „Sicherheit“, „Docker und Apps“, „Backups“,
+„Dienste“). Clicking a group's name collapses it; a coloured dot next to it then reports a warning, a fault or a widget
+that currently does not load. With **"Edit"** („Bearbeiten“) above the widgets you arrange everything: drag cards by their
+handle, choose height (Automatic, Small, Medium, Large – „Automatisch“, „Klein“, „Mittel“, „Groß“), width (Narrow, Wide)
+and group, remove widgets and rename groups. Only **"Done"** („Fertig“) saves everything at once, **"Cancel"**
+(„Abbrechen“) discards the changes; you bring a removed widget back via **"Manage widgets"** („Widgets verwalten“). On a
+phone the cards are stacked: height, group and removing work there too, moving and width only on a larger screen.
+
 ## 5. Servers and SSH access
 
 Everything about this is on one page: **Settings → Servers & access** („Einstellungen → Server & Zugänge“). There
@@ -951,6 +991,13 @@ the phone and is visible only to users with the privilege `hosts.write` (owner a
 - Terminal, Server status, Docker, Nodvard Shield, Game servers and Scripts need an **SSH login** (user + key or
   password) for every server. Nodvard Deck stores it encrypted; the private key never leaves the vault and is
   never displayed anywhere.
+- **Small SSH servers** such as Dropbear from version 2015.68 on (e.g. on DietPi, routers and some NAS devices) work
+  too: Nodvard Deck sends long commands (over 8000 bytes, e.g. the setup and the updates, hardening audit and
+  intrusion check of Nodvard Shield) through standard input instead of as a command line. For that, the account's
+  login shell has to be a POSIX shell (sh, bash, dash or BusyBox ash); with fish or tcsh as the login shell, these
+  long commands do not work. Where standard input is not possible (console, live logs), Nodvard Deck reports a command
+  that is too long in plain words beforehand and does not send it. Older Dropbear versions (e.g. on OpenWrt 15.05)
+  only accept commands up to 1024 bytes, so many commands fail there.
 
 **No server at hand yet?** On a fresh installation without servers, the cockpit (and this page) offers the button
 **"View with sample data"** („Mit Beispieldaten ansehen“). One click creates five made-up servers (addresses from
@@ -970,7 +1017,8 @@ have created a real server, the button is gone; you can still delete the sample 
 3. **Display name** („Anzeigename“) (what the server is called in the lists; empty = short name) and **Address**
    („Adresse“) (IP or host name, without `http://` and without a port, e.g. `192.168.1.30`).
 4. **Operating system** („Betriebssystem“): Linux or Windows. For Windows servers there is no setup command and no
-   privilege check.
+   privilege check. Really choose Windows for a Windows server (such as a game server): otherwise Nodvard Deck sends
+   long commands the Linux way, and they fail on Windows.
 5. **Tags** („Markierungen“) (comma-separated): `docker` if Docker runs there – the Docker module (setting "Server
    tag" – „Server-Markierung“) and the AI container watch of Nodvard Shield ("Monitored servers" – „Überwachte Server“)
    take exactly the servers with this tag. Game servers appear only with the tag `gameserver`. Tags can be changed at
@@ -1013,7 +1061,9 @@ management), paste it, press Enter. It
 
 - creates the user if necessary (without a password, login only with the key),
 - adds the public key to `~/.ssh/authorized_keys` (with `restrict,pty`: terminal, files and commands work,
-  forwardings do not),
+  forwardings do not). If Dropbear runs on the server (e.g. on DietPi), it uses
+  `no-port-forwarding,no-agent-forwarding,no-X11-forwarding` instead: Dropbear does not know `pty` and would otherwise
+  discard the whole line,
 - optionally sets up **root rights without a password** and the **docker group** (see
   [6.](#6-root-rights-without-a-password-and-the-docker-group)).
 
@@ -1021,6 +1071,12 @@ Under "What does the command do?" („Was macht der Befehl?“) the same sequenc
 line. The command runs directly as root, otherwise via `sudo` – so it works on Proxmox (no sudo) as well as on
 Debian or the Pi. It can safely be run several times: it recognizes a key that is already there, even with the older
 comment `lattice@…`, and does not add it twice.
+
+If you set up a server with Dropbear with an older version and "Check connection" („Verbindung prüfen“) reports that
+the server did not accept the key („Der Server hat den Schlüssel nicht akzeptiert“), simply set it up again (with a
+password or with the command). The command then replaces exactly its own old line `restrict,pty …` with the line for
+Dropbear (message „Schlüssel für Dropbear angepasst.“); other lines, including your own ones with the same key, stay as
+they are.
 
 #### Set up with a password (Nodvard Deck runs the command)
 
@@ -1166,7 +1222,10 @@ a password (Nodvard Deck then runs the same command).
     are kept on the server under `/var/lib/nodvard-shield-audit/`. Scans and the
     real-time guard never run at the same time on a server; for this lock Shield creates a small folder there:
     `/run/nodvard-shield` (as root) or `~/.nodvard-shield`. A finding that you ignored or restored is not moved to
-    quarantine again by the next scan (unless ClamAV reports the same file with a different signature).
+    quarantine again by the next scan (unless ClamAV reports the same file with a different signature). To undo
+    this, open "Findings & quarantine" („Funde & Quarantäne“), choose the filter "All, including done" („Alle, inkl.
+    erledigt“) and click "Watch again" („Wieder beachten“): the finding is open again and the next scan reports the
+    file again.
   - **Protection score** (0 to 100, on the overview): counts the antivirus (ClamAV, signatures, scans, open findings),
     the hardening and also open security updates, pending reboots, Fail2ban, the SSH settings (root or password login,
     in proportion to the number of affected servers) and open critical security events (5 points each, at most 15).
@@ -1184,16 +1243,59 @@ a password (Nodvard Deck then runs the same command).
   - **Intrusion protection and file watcher:** SSH log, Fail2ban status, processes behind open ports, SSH settings,
     checksums of files such as `/etc/shadow`. Only limited without root – Nodvard Deck says so, instead of falsely
     giving the all-clear. Blocking/unblocking IP addresses via Fail2ban works only with root.
+    Intrusion protection reports each new open port on its own ("New open port", „Neuer offener Port“). Programs that
+    pick random ports on every start or for every request (NFS, Tailscale, Pi-hole and other DNS services) count as one
+    entry. For a program with a port range of its own, such as a game server, enter the program, protocol and range
+    under Settings → Extensions → "Nodvard Shield" → "Advanced" („Erweitert“) → "Own port ranges per program"
+    („Eigene Portbereiche je Programm“). New ports in that range are then no longer reported one by one. Any program
+    can give itself any name, malware included: only enter programs you trust and keep the ranges small. Ports below
+    1024 only count with the tick box "Also ports below 1024" („Auch Ports unter 1024“). A range covers at most 1000
+    ports (a larger one only counts up to there), more only with the tick box "Wide range" („Breiter Bereich“); a wide
+    range always starts at 1024 at the earliest, so SSH and other fixed services stay visible. At most 50 ranges count.
   - **Server status:** restart services (systemd). Afterwards Deck checks for up to 45 seconds whether the service runs and
     keeps running (twice, 10 seconds apart, without a new start; the check needs no root). If it fails right away or
     keeps restarting, the action counts as failed and says so.
+  - **Docker in the "operate only" mode** („Nur bedienen“, servers tagged only `docker-bedienen`): view containers, read
+    logs, start, stop and restart them through the helper script `docker-root`, without the docker group.
 - **"Add to the docker group"** („Zur Gruppe docker hinzufügen“) – needed for the Docker module and the AI container
-  watch of Nodvard Shield; they call `docker` without sudo. The group is only entered if it exists on the server.
+  watch of Nodvard Shield; they call `docker` without sudo. The group is only entered if it exists on the server. For a
+  server tagged only `docker-bedienen` the page does not offer the group; the helper script is enough there.
 
 Without either tick box you get the **lean variant**: its own user, key only, no root rights. That is enough for
 Terminal, Files and Scripts.
 
-**What the "Root rights" tick box does exactly:** It creates `/etc/sudoers.d/nodvard-<user>` with the line
+**What the "Root rights" tick box does exactly:** That depends on which modules need root on this server.
+
+- **Only the helper scripts (default):** If at least one module needs root here and each of them has a helper script
+  (Nodvard Shield, Server status and Docker in the "operate only" mode have one), the tick box sets up only those
+  scripts (see "Helper scripts" below). Each gets its own rule
+  `<user> ALL=(root) NOPASSWD: /usr/local/lib/nodvard-deck/<module>-root`; there is no full sudo rule. The user may
+  start exactly these scripts with sudo, and what they do is written in the scripts themselves (such as installing
+  updates, quarantine, restarting services). Under "Was macht der Befehl?" (what does the command do?) you can read
+  every script. First the command checks that the scripts can be set up safely: `sudo`, `base64`, `sha256sum` and
+  `stat` must be present, every folder above `/usr/local/lib/nodvard-deck` must be a real folder owned by root that
+  nobody but root may write to (not through one of the user's groups or an ACL either), and if
+  `/usr/local/lib/nodvard-deck` already exists, the same applies to it (otherwise the command creates it). The user's
+  groups include the ones the command is about to add: the ticked ones (such as docker) and, for a new user, the group
+  named after the user. To be safe, a new user also counts as a member of the default group of `useradd` (usually
+  users), since it cannot be told for sure which group the user gets, and of groups without a name (just a number),
+  which `useradd` could hand out. The command checks ACLs with `getfacl`; if it is missing (package `acl`) and an ACL
+  could be involved, the folder counts as unsafe. If that fails, it changes **nothing**, names the folder, the reason
+  and the fix (such as `chmod go-w /usr/local/lib` or `mkdir -p /usr/local/lib`) and ends with an error; "Mit Passwort
+  einrichten" (set up with password) shows the same lines. Fix the reason or, unless sudo is missing, choose "Volle
+  Rechte" and set up again.
+- **Full rights:** If a module needs root and has no helper script, or if you tick "Volle Rechte" (full rights) under
+  "Erweitert" (advanced), the full rule is added. You only need that tick box if you start your own commands with sudo
+  through Nodvard Deck, for example in scripts.
+
+The command never takes back a full rule that is already there: a server that has one keeps running as before, even if
+you run the command there again. To get rid of it, run the command once more first and press "Verbindung prüfen". If
+every helper script shows "Eigene sudo-Regel vorhanden" (own sudo rule present), delete the full rule on the server
+(`sudo rm /etc/sudoers.d/nodvard-<user>`, on older servers `lattice-<user>`) and check again: "Root-Rechte" then says
+"sudo erlaubt nur die Hilfsskripte der Module, keine volle Regel. Das reicht." (sudo allows only the modules' helper
+scripts, no full rule; that is enough).
+
+The full rule is `/etc/sudoers.d/nodvard-<user>` with the line
 `<user> ALL=(root) NOPASSWD: ALL`. The line is first written to a trial file and checked with `visudo -c`; only then
 does it move into place with permissions `0440` (root). Afterwards `visudo` checks the installed file and the whole
 configuration once more. On an error the file is removed again immediately ("sudo-Regel zurückgenommen" – sudo rule
@@ -1205,24 +1307,48 @@ older rule `lattice-<user>` only after this check and only if it consists of exa
 stays in place and you get a hint. If `sudo` is not
 installed at all, the command says so (as root `apt install sudo`; on Proxmox best log in as `root` right away).
 
-**This is practically root – and the page tells you so too:** Anyone who is in the `docker` group or may use sudo
-without a password can do practically anything on the server. Nodvard Deck starts some root commands as
-`sudo -n sh -c '…'`, so it needs the full sudo rule, and anyone who may start `sh` as root may do anything. The
+**This is practically root – and the page tells you so too:** Anyone who is in the `docker` group or has the full
+sudo rule can do practically anything on the server. Without a helper script Nodvard Deck starts some root commands as
+`sudo -n sh -c '…'`, so it then needs the full sudo rule, and anyone who may start `sh` as root may do anything. The
 security comes from the fact that **only** this one user gets the rights, can log in **only with the key**, and the key
 is stored encrypted in Nodvard Deck.
 
-**Helper scripts:** With the "root rights" tick box the command also puts the modules' helper scripts (Nodvard Shield
-and Server status) into `/usr/local/lib/nodvard-deck` and allows each one with its own narrow sudo rule. If that fails
-for a script, the command names the reason (file could not be stored safely, or `visudo` rejected the rule). If a
-script is missing although the full rule is set, "Verbindung prüfen" shows a yellow hint "Fehlt auf dem Server"
-(missing on the server). The modules
-call a script only if the one on the server is byte for byte the one that ships with Nodvard Deck; otherwise they use
-the full rule. "Verbindung prüfen" (check connection) shows for each script whether it matches.
+**Helper scripts:** With the "root rights" tick box the command puts the modules' helper scripts (Nodvard Shield,
+Server status and Docker in the "operate only" mode) into `/usr/local/lib/nodvard-deck` and allows each one with its own narrow sudo rule. If that fails
+for a script, the command names the reason (folder or file not safe, tool missing, or `visudo` rejected the rule). With
+the full rule that is a hint, and the module then uses the full rule. Without the full rule it is an error, because the
+module would then have no root at all: there the pre-check covers folders and tools before anything changes (see above);
+a damaged script or a rejected rule is reported along the way with "FEHLER: …" and at the end "Nicht alles hat
+geklappt" (not everything worked). The
+modules call a script only if the one on the server is byte for byte the one that ships with Nodvard Deck.
+"Verbindung prüfen" (check connection) shows for each script whether it matches, and under "Root-Rechte" it says
+"sudo erlaubt nur die Hilfsskripte der Module, keine volle Regel. Das reicht." (sudo allows only the modules' helper
+scripts, no full rule; that is enough) when all of them match. If a script is missing, it shows "Fehlt auf dem Server"
+(missing on the server, yellow); without the full rule it adds that the module has no root here.
 After an update that brings a new script it says "Veraltet" (outdated): then run the setup command once more.
-You do not have to spot this yourself: if a script is missing or outdated while the full rule is set, the overview
-shows a quiet hint under "Braucht Aufmerksamkeit" (needs attention) with a link to the setup. Nodvard Deck checks this
+You do not have to spot this yourself: if a script is missing or outdated while sudo may run scripts there (full rule
+or a script's own rule), the overview shows a quiet hint under "Braucht Aufmerksamkeit" (needs attention) with a link
+to the setup. Nodvard Deck checks this
 every 6 hours and on every "Verbindung prüfen". The × hides the hint for that server until an update brings newer
 scripts.
+
+**Switching Docker to "operate only":** If a server that is already set up with the docker group or the full sudo rule
+gets the tag `docker-bedienen` instead of `docker`, it keeps both. The setup command takes back neither the group nor the
+rule, so the login is still practically root there. "Verbindung prüfen" shows this in the items "Nur bedienen: Zugang nicht
+in der Gruppe docker" and "Nur bedienen: keine volle sudo-Regel" (yellow). If the login is `root`, "operate only"
+restricts nothing; then "Nur bedienen: Zugang ist nicht root" is yellow, and the login needs a user of its own. If a server
+has both tags (`docker` and `docker-bedienen`), these items may be yellow; that is intended, it is then a full Docker server.
+To switch:
+
+1. Run the setup command once more with "root rights without a password". It puts `docker-root` in place and no longer
+   offers the docker group.
+2. "Verbindung prüfen": "Docker nur bedienen" must say that the helper script answers.
+3. Take the login out of the group: `sudo gpasswd -d <user> docker` (takes effect at the next login).
+4. If no other module needs full rights here, remove the full rule as described above.
+5. "Verbindung prüfen" once more: the check logs in afresh for this, so the "Nur bedienen: …" items turn green right
+   away, and from then on Nodvard Deck uses only new connections elsewhere too.
+
+Back to a full Docker server: set the tag `docker` again and run the setup command with "Add to the docker group".
 
 **Proxmox nodes:** There, Nodvard Deck is easiest to log in directly as `root` (enter user `root` when generating).
 Then it needs neither sudo nor tick boxes. The key ends up in `/root/.ssh/authorized_keys`, which on Proxmox is a link
@@ -1360,8 +1486,8 @@ Settings → **Automation & security** („Einstellungen → Automatik & Sicherh
   under "Waiting for confirmation" („Wartet auf Bestätigung“) but under "All" („Alle“), "Succeeded" or "Failed".
   Without that right it waits under "Waiting for confirmation" for someone who has it. Exceptions: "Propose all
   updates" („Alle Updates vorschlagen“) deliberately only proposes (the proposals wait), when applying an image update
-  the overview is the confirmation, and "Quarantine" („In Quarantäne“) and "Ignore" („Ignorieren“) in Nodvard Shield run
-  without an action (log only).
+  the overview is the confirmation, and "Quarantine" („In Quarantäne“), "Ignore" („Ignorieren“) and "Watch again"
+  („Wieder beachten“) in Nodvard Shield run without an action (log only).
 - **Scripts without a click**: Independently of this, an active script with a schedule can get a standing approval
   („Dauerfreigabe“): on the Scripts page („Skripte“), turn on the switch "Without approval on schedule" („Ohne Freigabe
   nach Zeitplan“) for the script (owner and `admin` only). Beforehand you see which servers, accounts and addresses it
@@ -1414,8 +1540,9 @@ afterwards: automatic, except …). If the server Nodvard Deck itself runs on is
 either.
 If the last update on a server failed, was cut off or has not finished yet, Deck does not restart it either, not in the
 following nights as well: half-configured packages and a restart do not go well together. The summary then says
-„Neustart nötig, aber ausgelassen“ (restart needed, but skipped) and comes as a warning, so it shows up in the cockpit
-under "Needs attention" („Braucht Aufmerksamkeit“). If the run failed, the Nodvard Shield overview also shows „Neustart
+„Neustart nötig, aber ausgelassen“ (restart needed, but skipped). It comes as a warning, and so under "Needs attention"
+(„Braucht Aufmerksamkeit“) in the cockpit, only once per failed run; in the following nights the sentence stays in the
+summary as info. If the run failed, the Nodvard Shield overview also shows „Neustart
 wartet auf ein sauberes Update“ (restart waits for a clean update) there until a run works again. Check in the update
 center what went wrong; after the next clean run, Deck restarts the server by itself again. If nothing is left to
 install, restart the server yourself.
@@ -1730,10 +1857,17 @@ abrufbar: …" (not available)) – the error message usually gives the reason:
   proxy's login page. Check the address. "Test connection" („Verbindung testen“) shows both sentences the same way.
 - Test from the machine running Nodvard Deck: the `curl` command in
   [PROXMOX-TOKEN.md](PROXMOX-TOKEN.md#check-before-you-enter-it-in-nodvard-deck).
-- A failed Proxmox (e.g. pve2 off) no longer slows the others down; it simply shows as "unreachable". If it is off for
-  longer: on the Proxmox page ("Connections" tab, „Verbindungen“) and the Proxmox-Backups page (under "Manage
-  connections", „Verbindungen verwalten“), switch it to
-  "disabled" („deaktiviert“); then no notifications come either.
+- A failed Proxmox (e.g. pve2 off) no longer slows the others down; it simply shows as "unreachable". On the start
+  page its node then no longer counts as online: after the first sync without an answer it shows as "unbekannt"
+  (unknown, so a short reboot causes no false alarm). It only counts as "nicht erreichbar" (unreachable) once it has
+  not answered any sync for at least 4 minutes in a row, so usually at the next scheduled sync (after about 5 to 10
+  minutes); a sync started by hand does not shorten this. An answer or a refusal in between starts it over. If the
+  connection points to a cluster or Proxmox only refuses (such as an expired
+  token), the nodes stay "unbekannt", because the machines may still be running. Its VMs and containers show as
+  "unbekannt" until it answers again. If it is off for longer: on the Proxmox page ("Connections" tab, „Verbindungen“)
+  and the Proxmox-Backups page (under "Manage connections", „Verbindungen verwalten“), switch it to
+  "disabled" („deaktiviert“); then no notifications come either, and its servers show as "unbekannt" until you switch
+  the connection back on.
 
 **"… leitet auf eine andere Adresse um"** (… redirects to another address; Pi-hole, Nginx Proxy Manager,
 ntfy, Nextcloud): instead of an answer, the server sent a redirect (HTTP 301, 302, 303, 307 or 308). Nodvard Deck never

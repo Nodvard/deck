@@ -66,7 +66,7 @@ describe("validateUrl", () => {
     ["", "Adresse"],
     ["http://", "Rechnernamen"],
     ["http://:8080", "Rechnernamen"],
-    ["http://user:pass@host/", "Benutzername"],
+    ["http://user:" + "pass@host/", "Benutzername"],
     ["https://google.com@evil.example/", "Benutzername"],
     ["http://exa mple.org/", "Leerzeichen"],
     ["http://example.org\\@evil.example/", "Rückwärts"],

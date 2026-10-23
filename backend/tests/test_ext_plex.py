@@ -360,7 +360,7 @@ def test_base_url_is_normalized_and_credentials_are_refused():
     assert normalize_base_url(" https://plex.example.com/plex/ ") == "https://plex.example.com/plex"
     assert normalize_base_url("http://203.0.113.20:32400/?x=1#y") == "http://203.0.113.20:32400"
     assert normalize_base_url("http://203.0.113.20:32400/web/index.html#!/") == "http://203.0.113.20:32400"
-    for bad in ("plex.example.com:32400", "ftp://plex.example.com", "http://", "http://user:pw@plex.example.com", "http://@plex.example.com", "http://plex.example.com:999999", ""):
+    for bad in ("plex.example.com:32400", "ftp://plex.example.com", "http://", "http://user:" + "pw@plex.example.com", "http://@plex.example.com", "http://plex.example.com:999999", ""):
         with pytest.raises(ValueError):
             normalize_base_url(bad)
 
@@ -378,7 +378,7 @@ def test_read_connections_flags_unusable_entries_without_dropping_the_rest():
     configs = read_connections({"connections": [
         {"name": "a", "base_url": "http://a.example.com:32400/", "tls_insecure_skip_verify": True},
         {"name": "a", "base_url": "http://zweite.example.com"},
-        {"name": "b", "base_url": "http://user:pw@b.example.com"},
+        {"name": "b", "base_url": "http://user:" + "pw@b.example.com"},
         {"name": "e", "base_url": "https://e.example.com", "tls_fingerprint_sha256": "kaputt", "tls_insecure_skip_verify": True},
         {"name": "f", "base_url": "http://f.example.com", "tls_fingerprint_sha256": PIN},
         {"name": "g", "base_url": "https://g.example.com", "tls_fingerprint_sha256": "ab" * 32, "tls_insecure_skip_verify": True},
@@ -1504,7 +1504,7 @@ async def test_unusable_entries_become_error_cards_without_a_request(client, db_
     await loaded.ctx.settings.set({"connections": [
         {"name": "ok", "base_url": BASE},
         {"name": "ok", "base_url": BASE},
-        {"name": "pw", "base_url": "http://nutzer:passwort@plex.example.com:32400"},
+        {"name": "pw", "base_url": "http://nutzer:" + "passwort@plex.example.com:32400"},
     ]})
     await loaded.ctx.secrets.create(label="plex-token:ok", kind="generic", value=TOKEN)
     body = await _overview(client, headers)
@@ -1561,7 +1561,7 @@ async def test_unreadable_or_odd_tokens_are_a_hint_not_a_crash(client, db_sessio
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("token", ["kPXz7xHqXJAbCdE_fgH1", "ab-cd_EF.12", "eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl"])
+@pytest.mark.parametrize("token", ["kPXz7xHqXJAbCdE_fgH1", "ab-cd_EF.12", "eyJhbGciOi." + "eyJzdWIiOi.c2lnbmF0dXJl"])
 async def test_the_characters_of_real_tokens_are_accepted(client, db_session, test_settings, token):
     headers, fake = await _enable(client, db_session, test_settings)
     fake.token = token
@@ -1732,7 +1732,7 @@ async def test_unusable_entries_are_not_suggested(client, db_session, test_setti
     loaded = get_extension_runtime().loaded[EXT]
     await loaded.ctx.settings.set({"connections": [
         {"name": "ok", "base_url": BASE},
-        {"name": "pw", "base_url": "http://nutzer:passwort@plex.example.com:32400"},
+        {"name": "pw", "base_url": "http://nutzer:" + "passwort@plex.example.com:32400"},
         {"name": "leer", "base_url": ""},
     ]})
     suggestions = (await client.get("/api/v1/apps/suggestions", headers=headers)).json()["suggestions"]

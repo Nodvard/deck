@@ -86,6 +86,7 @@ class Extension(NodvardExtension):
             WidgetSpec(
                 id="status",
                 title="Uptime Kuma",
+                group="services",
                 icon="activity",
                 size=GridSize(w=2, h=2),
                 refresh=Refresh(interval_s=60),

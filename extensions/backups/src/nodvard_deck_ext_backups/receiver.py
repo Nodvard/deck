@@ -62,7 +62,12 @@ class ProxmoxConnectionReceiver:
     def _problem(connections: list[dict[str, Any]], name: str, base_url: str) -> str | None:
         if not _valid_base_url(base_url):
             return "Für Proxmox-Backups ist die Adresse ungültig (nur https:// mit Rechner, ohne Pfad)."
-        if any(same_target(str(c.get("base_url") or ""), base_url) for c in connections):
+        match = next((c for c in connections if same_target(str(c.get("base_url") or ""), base_url)), None)
+        if match is not None:
+            # Teilt sie den Namen mit einer anderen Verbindung, hinge es von der Reihenfolge ab, welche das Token nutzt.
+            taken = match.get("name")
+            if sum(1 for c in connections if c.get("name") == taken) > 1:
+                return f"In Proxmox-Backups gibt es den Kurznamen „{taken}“ zweimal. Erst einen davon umbenennen."
             return None  # Diese Verbindung bekommt den neuen Token.
         if not NAME_PATTERN.fullmatch(name):
             return "Für Proxmox-Backups ist der Kurzname ungültig."

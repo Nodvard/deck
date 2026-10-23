@@ -194,6 +194,10 @@ View = Annotated[
 ]
 
 
+WidgetGroup = Literal["servers", "security", "apps", "backups", "services"]
+"""Gruppen auf der Startseite, als Schlüssel; die Oberfläche übersetzt sie."""
+
+
 class WidgetSpec(BaseModel):
     """Was eine Extension über ctx.ui.register_widget() anmeldet."""
 
@@ -212,6 +216,10 @@ class WidgetSpec(BaseModel):
     Ein Widget nur mit `component` wird abgelehnt (`view` ist Pflichtfeld), damit es keine Web-only-Widgets gibt."""
 
     default_enabled: bool = True
+
+    group: WidgetGroup | None = None
+    """Gruppe auf der Startseite. Ohne Angabe folgt sie der Kategorie der Erweiterung (`security`, `servers`, sonst
+    `services`); die Person kann ein Widget in eine andere Gruppe legen."""
 
     @model_validator(mode="after")
     def _check_action_permissions(self) -> "WidgetSpec":

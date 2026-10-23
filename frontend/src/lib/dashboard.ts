@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "./api";
+import type { DashboardGroupState } from "../widgets/groups";
 
 export interface DashboardLayoutItem {
   widget_id: string;
@@ -26,6 +27,8 @@ export interface LayoutOut {
   name: string;
   is_default: boolean;
   items: DashboardLayoutItem[];
+  /** Reihenfolge, Namen und Zuklappen der Gruppen; fehlt bei einem älteren Backend, leer heißt Vorgabe. */
+  groups?: DashboardGroupState[];
   created_at: string;
   updated_at: string;
 }
@@ -42,15 +45,26 @@ export function useDashboardLayout() {
     queryFn: () => api.get<LayoutOut[]>("/dashboard/layouts"),
   });
 
-  const layout = query.data?.find((l) => l.is_default) ?? query.data?.[0] ?? null;
+  const pick = (list: LayoutOut[] | undefined) => list?.find((l) => l.is_default) ?? list?.[0] ?? null;
+  const layout = pick(query.data);
 
-  async function saveItems(items: DashboardLayoutItem[]) {
+  async function save(patch: { items?: DashboardLayoutItem[]; groups?: DashboardGroupState[] }) {
     if (!layout) return;
-    const updated = await api.put<LayoutOut>(`/dashboard/layouts/${layout.id}`, { items });
+    const updated = await api.put<LayoutOut>(`/dashboard/layouts/${layout.id}`, patch);
     queryClient.setQueryData<LayoutOut[]>(["dashboard-layouts"], (prev) =>
       prev ? prev.map((l) => (l.id === updated.id ? updated : l)) : [updated],
     );
   }
 
-  return { layout, isLoading: query.isLoading, error: query.error, saveItems };
+  const saveItems = (items: DashboardLayoutItem[]) => save({ items });
+  const saveGroups = (groups: DashboardGroupState[]) => save({ groups });
+  // Eine Anfrage für beides: Der Bearbeiten-Modus speichert seinen Entwurf nur ganz oder gar nicht.
+  const saveLayout = (items: DashboardLayoutItem[], groups?: DashboardGroupState[]) => save({ items, groups });
+  // Der Stand vom Server, nicht aus dem Zwischenspeicher: Ein anderes Gerät kann inzwischen gespeichert haben.
+  const fetchLatest = async () => pick((await query.refetch()).data);
+
+  return {
+    layout, isLoading: query.isLoading, error: query.error, refetch: query.refetch, fetchLatest,
+    saveItems, saveGroups, saveLayout,
+  };
 }

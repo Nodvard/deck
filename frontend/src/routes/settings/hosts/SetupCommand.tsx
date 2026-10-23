@@ -1,7 +1,8 @@
 /**
  * Der Einrichtungsbefehl, den man auf dem Server einfügt: Benutzer anlegen, öffentlichen Schlüssel eintragen (der
  * private verlässt den Tresor nie), auf Wunsch Gruppe `docker` und sudo ohne Passwort. Die Erweiterungen belegen die
- * Haken vor. „Mit Passwort einrichten“ führt denselben Befehl selbst aus (`PasswordSetup`).
+ * Haken vor. Reichen die Hilfsskripte der Module, erlaubt sudo nur sie; die volle Regel gibt es dann unter „Erweitert“.
+ * „Mit Passwort einrichten“ führt denselben Befehl selbst aus (`PasswordSetup`).
  */
 import { useMemo, useRef, useState } from "react";
 
@@ -48,19 +49,25 @@ export function SetupCommand({
 
   // Vorbelegung: alles an, was eine Erweiterung verlangt. `null` = noch nicht angefasst.
   const [sudoChoice, setSudoChoice] = useState<boolean | null>(null);
+  const [fullChoice, setFullChoice] = useState(false);
   const [groupsOff, setGroupsOff] = useState<string[]>([]);
   const sudo = !isRoot && (sudoChoice ?? rootReasons.length > 0);
   const chosenGroups = isRoot ? [] : groups.map(([g]) => g).filter((g) => !groupsOff.includes(g));
 
   const ready = requirements.isSuccess || requirements.isError;
-  const setup = useSetup(host.id, credential.id, { sudo, groups: chosenGroups, enabled: ready });
+  const setup = useSetup(host.id, credential.id, { sudo, fullSudo: fullChoice, groups: chosenGroups, enabled: ready });
+  // Solange der Befehl lädt, oder bei einem älteren Server ohne die Angabe: die volle Regel annehmen.
+  const fullRule = sudo && (setup.data?.full_sudo ?? true);
+  const offersHelpers = (setup.data?.helpers ?? []).length > 0;
+  // Ein Modul braucht root ohne Hilfsskript: Dann gehört die volle Regel dazu, auch ohne Häkchen.
+  const fullForced = sudo && !fullChoice && setup.data?.full_sudo === true;
 
   const area = useRef<HTMLTextAreaElement>(null);
   const [copyFailed, setCopyFailed] = useState(false);
   const [way, setWay] = useState<Way>("command");
   const loading = !ready || setup.isLoading || setup.isFetching;
 
-  const powerful = sudo || chosenGroups.length > 0;
+  const powerful = fullRule || chosenGroups.length > 0;
   return (
     <div className="space-y-3" data-testid="setup-command">
       <h4 className="text-sm font-semibold">Server für diesen Schlüssel einrichten</h4>
@@ -90,11 +97,35 @@ export function SetupCommand({
               Das ist praktisch root: Wer in der Gruppe docker ist oder sudo ohne Passwort darf, kann auf dem Server alles tun.
             </p>
           )}
-          {sudo && (
+          {sudo && (fullRule ? (
             <p className="text-xs text-white/45" data-testid="setup-sudo-note">
               Nodvard Deck startet einige root-Befehle über „sudo sh -c“, darum braucht es die volle sudo-Regel.
               Deshalb bekommt nur dieser eine Benutzer die Rechte, und er kann sich nur mit dem Schlüssel anmelden.
             </p>
+          ) : (
+            <p className="text-xs text-white/45" data-testid="setup-sudo-note">
+              Kein volles root: sudo erlaubt nur die Hilfsskripte der Module, jedes mit einer eigenen Regel. Was ein
+              Skript darf, steht unter „Was macht der Befehl?“.
+            </p>
+          ))}
+          {sudo && (fullChoice || offersHelpers) && (
+            <details className="text-sm" data-testid="setup-advanced">
+              <summary className="cursor-pointer text-xs text-white/55">Erweitert</summary>
+              <label className="mt-2 flex cursor-pointer items-start gap-2.5">
+                <input
+                  type="checkbox" className={CHECKBOX} checked={fullChoice || fullForced} disabled={fullForced}
+                  onChange={(e) => setFullChoice(e.target.checked)}
+                />
+                <span>
+                  Volle Rechte: sudo ohne Passwort für alles
+                  <span className="text-white/50">
+                    {fullForced
+                      ? " (nötig, weil ein Modul root braucht und noch kein Hilfsskript hat)"
+                      : " (nur nötig, wenn du über Nodvard Deck eigene Befehle mit sudo startest)"}
+                  </span>
+                </span>
+              </label>
+            </details>
           )}
         </div>
       )}
@@ -117,7 +148,7 @@ export function SetupCommand({
             // Bleibt stehen, während der Befehl nach einem Haken neu geladen wird (sonst wären die Eingaben weg). Die
             // Haken gelten hier genauso; das Backend baut daraus denselben Befehl wie oben.
             <PasswordSetup
-              host={host} credential={credential} sudo={sudo} groups={chosenGroups} ready={ready}
+              host={host} credential={credential} sudo={sudo} fullSudo={fullChoice} groups={chosenGroups} ready={ready}
               knownNotes={setup.data?.notes ?? []} onChecked={onChecked}
             />
           ) : loading ? (
@@ -161,7 +192,7 @@ export function SetupCommand({
                 ))}
               </details>
               {/* Hinweise zu root/sudo stehen schon oben bei den Haken: nicht doppelt zeigen. */}
-              {setup.data.notes.filter((n) => !n.includes("praktisch") && !n.includes("sudo sh -c")).map((n) => (
+              {setup.data.notes.filter((n) => !["praktisch", "sudo sh -c", "kein volles root"].some((part) => n.includes(part))).map((n) => (
                 <p key={n} className="text-xs text-white/55">{n}</p>
               ))}
             </>

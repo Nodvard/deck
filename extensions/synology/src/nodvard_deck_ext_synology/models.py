@@ -101,6 +101,7 @@ class Problem(BaseModel):
 
 
 class Overview(BaseModel):
+    device: str | None = Field(None, description="Kurzname des Geräts; leer, wenn noch keins eingetragen ist.")
     state: str = Field(description="ok | not_configured | auth_failed | unreachable | error")
     message: str | None = Field(description="Hinweis auf Deutsch; bei einem anderen Zustand als ok der Grund, sonst leer.")
     url: str | None = Field(description="Die eingetragene Adresse, ohne Pfad der Oberfläche.")
@@ -117,3 +118,10 @@ class Overview(BaseModel):
     update_note: Note | None
     backup_note: Note | None = None
     problems: list[Problem] = Field(default_factory=list, description="Was gerade Aufmerksamkeit braucht, das Wichtigste zuerst.")
+    config_problem: bool = Field(
+        False, description="true, wenn der Eintrag in den Einstellungen unbrauchbar ist (Kurzname, Adresse, Fingerabdruck); erneut abfragen hilft dann nicht."
+    )
+
+
+class DeviceList(BaseModel):
+    devices: list[Overview] = Field(description="Alle eingetragenen Geräte in der Reihenfolge der Einstellungen, je mit eigenem Zustand.")

@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import math
 import re
+import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -191,6 +193,27 @@ async def _connector_for(ctx: "ExtensionContext", connection: str):
     return connector
 
 
+# So lange muss eine Verbindung am Stück schweigen, bevor ihr Knoten „nicht erreichbar“ heißt: Der nächste geplante
+# Abgleich (alle 5 Minuten) liegt darüber, zwei von Hand kurz hintereinander angestoßene nicht.
+_DOWN_AFTER_S = 240.0
+# Verbindung -> Beginn des ersten Abgleichs ohne Antwort seit der letzten Antwort. Nur im Speicher: Nach einem Neustart
+# beginnt die Frist neu, ein schon nicht erreichbarer Knoten bleibt es trotzdem.
+_no_answer_since: dict[str, float] = {}
+# Verbindung -> Beginn des jüngsten Abgleichs mit Antwort oder Ablehnung. Abgleiche können parallel laufen (von Hand,
+# nach einer Aktion); ein älterer, der erst danach fertig wird, kennt nur einen überholten Stand.
+_answered_at: dict[str, float] = {}
+
+
+def _now() -> float:
+    return time.monotonic()
+
+
+def _no_answer(exc: ProxmoxApiError) -> bool:
+    """Kam gar keine Antwort (Netz, Zeitüberschreitung) oder nur ein Serverfehler? Eine Ablehnung (Anmeldung, Rechte,
+    Zertifikat, Weiterleitung) zeigt dagegen, dass die Maschine läuft."""
+    return exc.code is None and (exc.status_code is None or exc.status_code >= 500)
+
+
 async def _none() -> None:
     return None
 
@@ -236,10 +259,16 @@ class ProxmoxHostProvider:
         """Kennungs-Anfänge, die der letzte `discover_hosts()` vollständig gelesen hat (`<verbindung>/node/` und je
         Knoten `<verbindung>/qemu|lxc/<knoten>/`). Was darunter fehlt, gibt es nicht mehr; eine nicht erreichbare
         Verbindung oder ein Knoten, dessen Gäste nicht lesbar waren, steht nicht darin."""
+        self.unreachable: dict[str, bool] = {}
+        """Nicht lesbare Verbindungen: Name -> ob gar keine Antwort kam (`_no_answer`)."""
+        self.unread: list[str] = []
+        """Kennungs-Anfänge der Gäste, deren Liste nicht lesbar war: je Verbindung oder je Knoten."""
+        self.connections: set[str] = set()
+        """Verbindungen, die der letzte `discover_hosts()` abgefragt hat; deaktivierte und unvollständige fehlen."""
 
     async def discover_hosts(self) -> list[DiscoveredHost]:
         discovered: list[DiscoveredHost] = []
-        self.covered = []
+        self.covered, self.unreachable, self.unread = [], {}, []
         # Kennungen sind im Kern eindeutig. Wer schon eingelesen ist, behält seine (der Kern übernimmt `name` nur
         # beim Anlegen); für neue wird die einheitliche Form nur genommen, wenn sie noch frei ist, sonst die bisherige.
         known = await self._ctx.hosts.list()
@@ -262,13 +291,17 @@ class ProxmoxHostProvider:
             taken.add(chosen)
             return chosen
 
-        for conn_name, connector in (await build_connectors(self._ctx)).items():
+        connectors = await build_connectors(self._ctx)
+        self.connections = set(connectors)
+        for conn_name, connector in connectors.items():
             # Eine nicht erreichbare Verbindung überspringen, damit die anderen weiter eingelesen werden. Ihre bekannten
-            # Hosts bleiben stehen: upsert_discovered() löscht nichts und setzt nichts auf "aus", was fehlt.
+            # Hosts bleiben stehen, `sync()` setzt nur ihren Zustand.
             try:
                 nodes = await connector.list_nodes()
             except ProxmoxApiError as exc:
                 _log.warning("Proxmox-Discovery: Verbindung '%s' nicht erreichbar: %s", conn_name, exc)
+                self.unreachable[conn_name] = _no_answer(exc)
+                self.unread += [f"{conn_name}/qemu/", f"{conn_name}/lxc/"]
                 continue
             self.covered.append(f"{conn_name}/node/")
             for node in nodes:
@@ -298,6 +331,7 @@ class ProxmoxHostProvider:
                     ]
                 except ProxmoxApiError as exc:
                     _log.warning("Proxmox-Discovery: Gäste von Knoten '%s' (%s) nicht lesbar: %s", node_name, conn_name, exc)
+                    self.unread += [f"{conn_name}/qemu/{node_name}/", f"{conn_name}/lxc/{node_name}/"]
                     continue
                 self.covered += [f"{conn_name}/qemu/{node_name}/", f"{conn_name}/lxc/{node_name}/"]
                 # Echte Gast-Adressen nur für laufende Gäste, parallel, je Abfrage höchstens 5 s. Ohne Antwort bleibt die
@@ -340,19 +374,51 @@ class ProxmoxHostProvider:
         return discovered
 
     async def sync(self) -> int:
-        """Abgleich in einem Schritt: einlesen, übernehmen und Hosts, die es in einem vollständig gelesenen Bereich nicht
-        mehr gibt (in Proxmox gelöscht, auf einen anderen Knoten gewandert), als nicht mehr vorhanden markieren. Gibt die
-        Zahl der übernommenen Hosts zurück."""
+        """Abgleich in einem Schritt: einlesen, übernehmen, in vollständig gelesenen Bereichen Fehlende als nicht mehr
+        vorhanden markieren und Hosts, die gerade nicht lesbar sind, als unbekannt oder nicht erreichbar führen; gibt
+        die Zahl der übernommenen Hosts zurück."""
+        started = _now()
         discovered = await self.discover_hosts()
         hosts = await self._ctx.hosts.upsert_discovered(discovered)
         seen = {d.provider_ref for d in discovered}
-        gone = [
-            h.provider_ref for h in await self._ctx.hosts.list()
+        unseen = [
+            h for h in await self._ctx.hosts.list()
             if h.provider_ext_id == self._ctx.ext_id and h.provider_ref and h.provider_ref not in seen
-            and h.provider_ref.startswith(tuple(self.covered))
         ]
+        gone = [h.provider_ref for h in unseen if h.provider_ref.startswith(tuple(self.covered))]
         if gone:
             await self._ctx.hosts.mark_gone(gone)
+        # Sonst behielten Knoten und Gäste einer ausgefallenen Maschine für immer ihren letzten Zustand „läuft“.
+        down: list[str] = []
+        unknown = [
+            h.provider_ref for h in unseen
+            if h.provider_ref.startswith(tuple(self.unread)) or h.provider_ref.split("/", 1)[0] not in self.connections
+        ]
+        # Es zählt nur, was die Abgleiche selbst erlebt haben: Eine Antwort oder eine Ablehnung beendet die Folge, ein
+        # Zustand „unbekannt“ aus einem anderen Grund beginnt keine.
+        for conn_name in self.connections:
+            if not self.unreachable.get(conn_name):
+                _answered_at[conn_name] = max(_answered_at.get(conn_name, started), started)
+        for conn_name in list(_no_answer_since):
+            if conn_name not in self.connections or _no_answer_since[conn_name] < _answered_at.get(conn_name, -math.inf):
+                del _no_answer_since[conn_name]
+        for conn_name, no_answer in self.unreachable.items():
+            if started < _answered_at.get(conn_name, -math.inf):  # ein neuerer Abgleich hat schon eine Antwort
+                unknown = [ref for ref in unknown if not ref.startswith(f"{conn_name}/")]
+                continue
+            nodes = [
+                h for h in unseen if h.provider_ref.startswith(f"{conn_name}/node/") and not h.metadata.get("gone_since")
+            ]
+            silent_for = started - _no_answer_since.setdefault(conn_name, started) if no_answer else 0.0
+            # Hinter einem Cluster ist offen, welcher Knoten fehlt, und ein kurzer Aussetzer kann ein Neustart sein.
+            if no_answer and len(nodes) == 1 and (nodes[0].status == HostStatus.DOWN or silent_for >= _DOWN_AFTER_S):
+                down.append(nodes[0].provider_ref)
+            else:
+                unknown += [h.provider_ref for h in nodes]
+        if down:
+            await self._ctx.hosts.set_status(down, HostStatus.DOWN)
+        if unknown:
+            await self._ctx.hosts.set_status(unknown, HostStatus.UNKNOWN)
         return len(hosts)
 
     async def host_status(self, provider_ref: str) -> HostStatus:

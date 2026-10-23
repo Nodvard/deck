@@ -29,7 +29,7 @@ async def test_removed_docker_host_disappears_from_the_image_state(tmp_path):
 
 @pytest.mark.asyncio
 async def test_listing_docker_hosts_is_enough_to_drop_a_removed_host(tmp_path):
-    """Auch ohne neue Pruefung (Seite laedt nur den Stand): sobald die Host-Liste bekannt ist."""
+    """Auch ohne neue Prüfung (Seite lädt nur den Stand): sobald die Host-Liste bekannt ist."""
     service, ctx = _two_hosts(tmp_path)
     await service.check_hosts(ctx.host_objects)
     ctx.host_objects.pop()

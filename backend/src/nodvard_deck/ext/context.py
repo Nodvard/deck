@@ -1,7 +1,5 @@
-"""Setzt `nodvard_sdk.ExtensionContext` im Kern um (docs/02-EXTENSION-API.md §2).
-
-Jeder Handle prüft seine Berechtigung zuerst (`_PermissionChecker`, Wildcard-Logik wie bei der Nutzer-RBAC).
-"""
+"""Setzt `nodvard_sdk.ExtensionContext` im Kern um (docs/02-EXTENSION-API.md §2), jeder Handle prüft seine
+Berechtigung zuerst."""
 
 from __future__ import annotations
 
@@ -79,9 +77,8 @@ class _PermissionChecker:
 
 
 class ApiHandle:
-    """Hängt die Routen einer Erweiterung unter `/api/v1/ext/<id>/...` ein.
-
-    Jede Route verlangt eine gültige Anmeldung; öffentlich ist sie nur mit `public=True`."""
+    """Hängt die Routen einer Erweiterung unter `/api/v1/ext/<id>/...` ein; jede Route verlangt Anmeldung, außer
+    mit `public=True`."""
 
     def __init__(self, loaded: LoadedExtension) -> None:
         self._loaded = loaded
@@ -130,9 +127,8 @@ class ApiHandle:
         permission: str | None = None,
         public: bool = False,
     ) -> None:
-        """Registriert den Router; montiert wird erst nach setup() (docs/02 §1: setup() macht kein I/O).
-
-        Der Zugriff gilt für den ganzen Router: `permission` verlangt Anmeldung und Recht, `public=True` nichts."""
+        """Registriert den Router (montiert wird erst nach setup()); `permission` verlangt Anmeldung und Recht,
+        `public=True` nichts."""
         # Ohne `permission` und `public` genügt eine gültige Anmeldung (keine Berechtigung); Routen mit Daten setzen
         # `permission=`. `public=True` braucht `api.public` im Manifest und schließt `permission` aus.
         # Grenze: Der Host prüft nach `setup()` und `on_start()` (`check_routes`) und lehnt WebSocket,
@@ -182,7 +178,6 @@ class ApiHandle:
 
 
 def _unguarded_routes(router: Any) -> list[str]:
-    """Routen eines Routers, an denen eine Router-Abhängigkeit wie `get_current_user` nicht greift."""
     # FastAPI übernimmt Abhängigkeiten nur für `APIRoute`: Starlette-Routen (`add_route`), `mount()` und WebSockets
     # fallen heraus, unbekannte Arten zählen als ungeschützt. Unter-Router werden mitgesucht (je nach FastAPI-Version
     # als Platzhalter mit `original_router` oder schon aufgelöst).
@@ -210,6 +205,9 @@ class UiHandle:
 
     def register_widget(self, spec: WidgetSpec) -> None:
         self._runtime.ui.register_widget(self._ext_id, spec)
+
+    def unregister_widget(self, widget_id: str) -> bool:
+        return self._runtime.ui.unregister_widget(self._ext_id, widget_id)
 
     def register_host_tool(self, spec: HostToolSpec) -> None:
         self._runtime.ui.register_host_tool(self._ext_id, spec)
@@ -243,9 +241,8 @@ class CapabilitiesHandle:
             self._runtime.capabilities.provide(self._ext_id, proto, implementation)
 
     async def query(self, protocol: type) -> list[Any]:
-        """Nur Capabilities von Extensions, die in `requires` deklariert sind (docs/02 §2).
-
-        Alte Kennungen in `requires` gelten für die umbenannte Erweiterung; aufgelöst wird erst hier."""
+        """Nur Capabilities von Extensions, die in `requires` deklariert sind (docs/02 §2); alte Kennungen in
+        `requires` gelten weiter."""
         allowed = self._allowed | {self._runtime.canonical(ext_id) for ext_id in self._allowed}
         return self._runtime.capabilities.query(protocol, allowed_ext_ids=allowed)
 
@@ -374,6 +371,29 @@ class HostsHandle:
                 marked += 1
         return marked
 
+    async def set_status(self, provider_refs: list[str], status: HostStatus) -> int:
+        self._perm.require("hosts.write")
+        target = HostStatus(status)
+        # Wartung ist kein Befund des Anbieters, und einen Host in Wartung lässt diese Methode stehen: einmal gesetzt,
+        # käme ein Modul davon nicht mehr weg.
+        if target is HostStatus.MAINTENANCE:
+            raise ValueError("Den Zustand „Wartung“ setzt ein Modul nicht über set_status.")
+        if not provider_refs:
+            return 0
+        changed = 0
+        async with session_scope() as session:
+            rows = (await session.execute(
+                select(Host).where(Host.provider_ext_id == self._ext_id, Host.provider_ref.in_(list(provider_refs)))
+            )).scalars().all()
+            for host in rows:
+                if host.status in (target.value, HostStatus.MAINTENANCE.value):
+                    continue
+                if (host.host_metadata or {}).get(GONE_KEY):
+                    continue
+                host.status = target.value
+                changed += 1
+        return changed
+
 
 # Schlüssel in `Host.host_metadata`, die der Kern aus den gleichnamigen Feldern von `DiscoveredHost` füllt (bei jedem
 # Abgleich neu, ein weggefallenes Feld verschwindet mit). `api/v1/hosts.py` liest sie für `HostOut`.
@@ -391,12 +411,9 @@ _ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+?=")
 
 
 def _join_argv(argv: Sequence[str]) -> str:
-    """Kommandozeile aus einer Wortliste für `run_argv()`/`stream_argv()`: Der Kern quotet, nicht die Extension.
-
-    `shlex.join` setzt jedes Wort, das nicht nur aus sicheren Zeichen besteht, in einfache Anführungszeichen; eine
-    POSIX-Shell (sh, bash, dash, zsh) macht daraus wieder genau diese Wörter. Eine Zeichenkette statt einer Liste wäre
-    auch eine `Sequence[str]` (Zeichen für Zeichen) und wird deshalb abgewiesen, ebenso NUL, das kein Programmargument
-    tragen kann, und ein erstes Wort wie `x=y`: `shlex.join` lässt es unquotiert, die Shell setzt es als Variable."""
+    # `shlex.join` quotet unsichere Wörter, eine POSIX-Shell macht daraus wieder genau diese Wörter. Abgewiesen werden
+    # eine Zeichenkette (wäre auch eine `Sequence[str]`), NUL und ein erstes Wort wie `x=y`, das die Shell als
+    # Variable setzte.
     if isinstance(argv, (str, bytes)) or not isinstance(argv, Sequence):
         raise TypeError("argv muss eine Liste von Wörtern sein, keine Zeichenkette.")
     words = list(argv)
@@ -413,9 +430,8 @@ def _join_argv(argv: Sequence[str]) -> str:
 
 
 class ExecHandle:
-    """Der gemeinsame SSH-Layer (`core/ssh.py`) für Extensions.
-
-    Zugangsdaten kommen je Aufruf frisch aus dem Tresor, der Klartext lebt nur im Aufrufrahmen (docs/03 §3)."""
+    """Der gemeinsame SSH-Layer (`core/ssh.py`) für Extensions; der Klartext der Zugangsdaten lebt nur im
+    Aufrufrahmen."""
 
     def __init__(self, perm: _PermissionChecker, settings: Any) -> None:
         self._perm = perm
@@ -471,9 +487,8 @@ class ExecHandle:
         self, host: SdkHost, command: str, *, timeout_s: int = 60, user: str | None = None,
         log_command: str | None = None,
     ) -> ExecResult:
-        """Für lesende Kommandos ohne Nebenwirkung (docs/02 §2); ändernde Aktionen gehen über `ctx.actions.propose()`.
-
-        `log_command`: maskierte Fassung des Kommandos für die Audit-Zeile, falls `command` Geheimnisse enthält."""
+        """Für lesende Kommandos ohne Nebenwirkung (ändernde Aktionen gehen über `ctx.actions.propose()`);
+        `log_command` maskiert die Audit-Zeile."""
         # Extensions sind vertrauenswürdiger Code, keine Sandbox (docs/01 §7), und `run()` ist nur per Konvention auf
         # lesende Kommandos beschränkt. Deshalb läuft jedes Kommando vor der Verbindung durch die Sperrliste: ohne
         # Action-Zeile (niemand könnte bestätigen), aber mit Audit-Zeile.
@@ -484,9 +499,8 @@ class ExecHandle:
         self, host: SdkHost, argv: Sequence[str], *, stdin: str | bytes | None = None, timeout_s: int = 60,
         log_command: str | None = None,
     ) -> ExecResult:
-        """Wie `run()`, aber die Kommandozeile setzt der Kern aus `argv` zusammen (`_join_argv`, docs/02 §2).
-
-        `stdin` geht nur in die Standardeingabe, nie auf die Kommandozeile und nie in die Audit-Zeile."""
+        """Wie `run()`, aber der Kern setzt die Kommandozeile aus `argv` zusammen; `stdin` geht nie auf die
+        Kommandozeile oder in die Audit-Zeile."""
         self._perm.require("hosts.execute")
         command = _join_argv(argv)
         if stdin is None or isinstance(stdin, bytes):
@@ -506,14 +520,15 @@ class ExecHandle:
 
         conn = await self._connection(host)
         started = time.monotonic()
-        exit_code, stdout, stderr = await ssh.run(conn, command, timeout_s=timeout_s, stdin=stdin)
+        exit_code, stdout, stderr = await ssh.run(
+            conn, command, timeout_s=timeout_s, stdin=stdin, posix_shell=host.os_family != "windows"
+        )
         return ExecResult(
             exit_code=exit_code, stdout=stdout, stderr=stderr,
             duration_ms=int((time.monotonic() - started) * 1000),
         )
 
     async def _reject_denied(self, command: str, *, log_command: str | None = None) -> None:
-        """Sperrlisten-Prüfung für jedes Kommando, das eine Extension selbst verschickt (`run()` und `stream()`)."""
         from ..core import deny_patterns
 
         matched = deny_patterns.match_deny_patterns(command)
@@ -536,16 +551,15 @@ class ExecHandle:
         raise ActionBlocked(f"deny_pattern:{matched.id}", matched.description)
 
     def stream(self, host: SdkHost, command: str) -> Any:
-        """Wie `run()` (gleiche Berechtigung und Sperrliste, geprüft beim Betreten), aber mit laufender Ausgabe.
-
-        Gibt einen Kontextmanager mit `AsyncIterator[bytes]` zurück; beim Verlassen endet der Prozess (PTY-Hangup)."""
+        """Wie `run()` (Berechtigung und Sperrliste beim Betreten geprüft), aber mit laufender Ausgabe; beim
+        Verlassen endet der Prozess."""
         self._perm.require("hosts.execute")
 
         @asynccontextmanager
         async def _cm():
             await self._reject_denied(command)
             conn = await self._connection(host)
-            async with ssh.open_command_stream(conn, command) as process:
+            async with ssh.open_command_stream(conn, command, posix_shell=host.os_family != "windows") as process:
 
                 async def _chunks():
                     while True:
@@ -574,7 +588,9 @@ class ExecHandle:
             if command is not None:
                 await self._reject_denied(command)
             conn = await self._connection(host)
-            async with ssh.open_shell(conn, cols=cols, rows=rows, command=command) as process:
+            async with ssh.open_shell(
+                conn, cols=cols, rows=rows, command=command, posix_shell=host.os_family != "windows"
+            ) as process:
                 yield process
 
         return _cm()
@@ -596,19 +612,16 @@ class ExecHandle:
 
 
 async def _is_login_secret(session: Any, secret: Secret) -> bool:
-    """Gehört das Geheimnis zur Zwei-Faktor-Anmeldung eines Kontos (`User.totp_secret_id`, Label `totp:<Nutzer>:...`)?
-
-    Auch unbestätigte oder verwaiste Einträge bleiben unberührt (wie `_refuse_login_secret` in `api/v1/secrets.py`)."""
     if secret.label.startswith("totp:"):
         return True
+    # Auch unbestätigte oder verwaiste Einträge bleiben unberührt (wie `_refuse_login_secret` in `api/v1/secrets.py`).
     owner_of = await session.execute(select(User.id).where(User.totp_secret_id == secret.id).limit(1))
     return owner_of.first() is not None
 
 
 class SecretsHandle:
-    """Lesen nach `secrets.read:<label>`; ersetzen und löschen nur eigene Geheimnisse (`SecretNotOwned`).
-
-    Anmelde-Geheimnisse sind tabu, sonst könnte `secrets.read:*` den Authenticator eines Kontos austauschen."""
+    """Lesen nach `secrets.read:<label>`, ersetzen und löschen nur eigene Geheimnisse; Anmelde-Geheimnisse sind
+    tabu (Authenticator-Austausch)."""
 
     def __init__(self, perm: _PermissionChecker, ext_id: str, settings: Any, *, own_ids: Sequence[str] = ()) -> None:
         self._perm = perm
@@ -618,7 +631,6 @@ class SecretsHandle:
         self._own_ids = {ext_id, *own_ids}
 
     async def _secret(self, session: Any, label: str, *, change: bool) -> Secret | None:
-        """Die Zeile zum Label; Anmelde-Geheimnisse werden verweigert, bei `change` (ersetzen, löschen) auch fremde."""
         from nodvard_sdk.errors import SecretNotOwned
 
         secret = (await session.execute(select(Secret).where(Secret.label == label))).scalar_one_or_none()
@@ -662,9 +674,8 @@ class SecretsHandle:
             return await vault.get_handle(session, label) is not None
 
     async def replace(self, *, label: str, value: str) -> SecretHandleRef:
-        """Ersetzt den Wert in derselben Transaktion (`vault.replace_secret_value`); scheitert etwas, bleibt der alte.
-
-        Im Protokoll steht wie über die Einstellungsseite nur das Label."""
+        """Ersetzt den Wert in derselben Transaktion; im Protokoll steht wie über die Einstellungsseite nur das
+        Label."""
         self._perm.require(f"secrets.read:{label}")
         async with session_scope() as session:
             secret = await self._secret(session, label, change=True)
@@ -690,7 +701,6 @@ class SecretsHandle:
                 return False
             await vault.delete_secret(session, secret.id)
             await session.flush()
-            # Wie über die Einstellungsseite: Im Protokoll steht nur das Label, nie der Wert.
             await audit_service.log(
                 session, actor_type="extension", actor_id=self._ext_id, action="extension.secret_removed",
                 outcome="success", target_type="extension", target_id=self._ext_id, detail={"label": label},
@@ -871,7 +881,7 @@ class NotifyHandle:
         if host_id is not None:
             payload["host_id"] = host_id
         if host_ids is not None:
-            # Unverändert weitergeben: Ob die Liste taugt, entscheidet dieselbe Prüfung wie in send().
+            # Ob die Liste taugt, entscheidet dieselbe Prüfung wie in send().
             payload["host_ids"] = host_ids
         async with session_scope() as session:
             return await notifications_service.would_suppress(session, payload)
@@ -902,9 +912,8 @@ class AuditHandle:
         correlation_id: str | None = None,
         actor: Any | None = None,  # noqa: ANN401 - nodvard_sdk.Actor
     ) -> None:
-        """Schreibt einen Eintrag; mit `actor` (`current_actor`) steht der Mensch darin, die Extension in `detail.via`.
-
-        Namen aus `CORE_AUDIT_PREFIXES` sind dem Kern vorbehalten (`ValueError`)."""
+        """Schreibt einen Eintrag; mit `actor` steht der Mensch darin, Namen aus `CORE_AUDIT_PREFIXES` sind dem
+        Kern vorbehalten (`ValueError`)."""
         self._perm.require("audit.write")
         # Groß-/Kleinschreibung und Leerzeichen zählen nicht: Die Abfrage des Kerns unterscheidet sie teils nicht.
         if str(action).strip().casefold().startswith(CORE_AUDIT_PREFIXES):
@@ -941,9 +950,7 @@ class WsHandle:
         self._legacy_ids = legacy_ids
 
     async def broadcast(self, channel: str, payload: dict[str, Any]) -> None:
-        """Sendet auf `ext.<Kennung>.<Kanal>` und nach einer Umbenennung auch auf den Kanälen der alten Kennungen.
-
-        Eine noch offene Seite mit altem Katalog hat ihren Kanal unter der alten Kennung abonniert."""
+        """Sendet auf `ext.<Kennung>.<Kanal>` und nach einer Umbenennung auch auf den Kanälen der alten Kennungen."""
         from ..core.ws_hub import get_ws_hub
 
         hub = get_ws_hub()
@@ -1022,9 +1029,8 @@ class ActionsHandle:
             )
 
     async def check_standing_approval(self, granted_by_user_id: str, *, risk: Risk) -> str | None:
-        """Gälte eine Dauerfreigabe von `granted_by_user_id` heute für die Stufe `risk`? `None` = ja, sonst der Grund.
-
-        Lesend (`core.gate.standing_approval_problem`); braucht dieselbe Berechtigung wie `propose()` mit Freigabe."""
+        """Ob eine Dauerfreigabe von `granted_by_user_id` heute für die Stufe `risk` gälte (`None` = ja, sonst der
+        Grund), nur lesend."""
         from ..core import gate as gate_service
 
         self._perm.require(gate_service.STANDING_APPROVAL_PERMISSION)
@@ -1083,9 +1089,7 @@ class ActionsHandle:
 
 
 class WebSocketRedirectRefused(ConnectionError):
-    """Der Server hat beim WebSocket-Handshake mit einer Weiterleitung (3xx) geantwortet, der nie gefolgt wird.
-
-    Der Text ist ein fertiger deutscher Satz (`readable`) und kommt unverändert beim Aufrufer an."""
+    """Der Server hat beim WebSocket-Handshake mit einer Weiterleitung (3xx) geantwortet, der nie gefolgt wird."""
 
     readable = True
 
@@ -1100,7 +1104,6 @@ class WebSocketRedirectRefused(ConnectionError):
 
 @functools.lru_cache(maxsize=1)
 def _websocket_connect_class() -> type:
-    """`websockets.asyncio.client.connect` ohne Weiterleitungen, lazy geladen wie `websockets` sonst auch."""
     # Die Bibliothek folgt 3xx bis zu zehnmal, prüft aber nur die Start-Adresse gegen `_require_target_allowed`: Ein
     # Server könnte so auf eine Adresse umlenken, die die Erweiterung nicht erreichen dürfte. `process_redirect()` ist
     # dafür die vorgesehene Stelle: Eine zurückgegebene Ausnahme wird statt eines zweiten Verbindungsaufbaus ausgelöst.
@@ -1117,7 +1120,6 @@ def _websocket_connect_class() -> type:
 
 
 def _direct_transport(*, verify: bool | ssl.SSLContext = True) -> httpx.AsyncHTTPTransport:
-    """Transport ohne Proxy aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`)."""
     # httpx liest Proxys nur, wenn der Client den Transport selbst anlegt. `trust_env=False` am Client wäre falsch: Es
     # schaltet auch `SSL_CERT_FILE`/`SSL_CERT_DIR` ab, und ein Betreiber mit eigener Zertifizierungsstelle verlöre sie.
     # Sonst gilt, was `httpx.AsyncClient()` selbst angelegt hätte; Weiterleitungen folgt der Client weiter nicht.
@@ -1129,12 +1131,10 @@ def _format_sha256(digest: bytes) -> str:
 
 
 def _pin_digest(value: str) -> bytes:
-    """`pinned_sha256` als 32 Bytes; `ValueError` mit deutschem Satz, wenn es kein SHA-256-Fingerabdruck ist."""
     return bytes.fromhex(sha256_fingerprint(value).replace(":", ""))
 
 
 def _pinned_sslobject_class(expected: bytes) -> type[ssl.SSLObject]:
-    """`ssl.SSLObject`, das nach dem Handshake den Fingerabdruck des Server-Zertifikats mit `expected` vergleicht."""
     # asyncio (`websockets`) und anyio (`httpx`/`httpcore`) bauen ihre TLS-Verbindung über `SSLContext.wrap_bio()`, das
     # `SSLContext.sslobject_class` nutzt (laut Python-Doku für Unterklassen gedacht). Beide rufen `do_handshake()` vor
     # dem ersten Anwendungsbyte: Passt das Zertifikat nicht, scheitert der Handshake (`CertificateMismatch`, ein
@@ -1161,9 +1161,6 @@ def _pinned_sslobject_class(expected: bytes) -> type[ssl.SSLObject]:
 
 
 def _pinned_ssl_context(expected: bytes) -> ssl.SSLContext:
-    """TLS-Kontext, der genau ein Zertifikat annimmt (`_pinned_sslobject_class`).
-
-    Keine Prüfung über Zertifizierungsstellen und Rechnernamen; ein selbstsigniertes Zertifikat fiele dort durch."""
     # Ein einfacher `ssl.SSLContext` ohne Unterklasse: anyio ruft `wrap_bio()` nur für genau diese Klasse direkt auf.
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
@@ -1184,7 +1181,7 @@ _CERT_MAX_NAMES = 10
 
 
 def _cert_text(value: Any, limit: int = _CERT_TEXT_LIMIT) -> str | None:
-    """Einzeilig, ohne Steuer- und Formatzeichen, gekürzt: Die Felder kommen ungeprüft vom Server."""
+    # Die Felder kommen ungeprüft vom Server: einzeilig, ohne Steuer- und Formatzeichen, gekürzt.
     if not isinstance(value, str):
         return None
     text = "".join(" " if unicodedata.category(ch).startswith("C") else ch for ch in value)
@@ -1195,7 +1192,6 @@ def _cert_text(value: Any, limit: int = _CERT_TEXT_LIMIT) -> str | None:
 
 
 def _describe_certificate(der: bytes, *, trusted: bool) -> PeerCertificate:
-    """Fingerabdruck immer; Inhaber, Aussteller, Ablauf und Namen nur, soweit sich das Zertifikat lesen lässt."""
     sha256 = _format_sha256(hashlib.sha256(der).digest())
     subject = issuer = not_after = None
     names: list[str] = []
@@ -1224,7 +1220,7 @@ def _describe_certificate(der: bytes, *, trusted: bool) -> PeerCertificate:
 
 
 async def _read_peer_certificate(host: str, port: int, context: ssl.SSLContext, timeout_s: float) -> bytes:
-    """Nur der TLS-Handshake: Verbindung auf, Zertifikat lesen, Verbindung zu. Es geht keine Anfrage hinaus."""
+    # Nur der TLS-Handshake: Verbindung auf, Zertifikat lesen, Verbindung zu. Es geht keine Anfrage hinaus.
 
     async def _handshake() -> bytes:
         _reader, writer = await asyncio.open_connection(
@@ -1249,8 +1245,6 @@ _MAX_PINNED_CLIENTS = 8
 
 
 class _NoCookies(http.cookiejar.DefaultCookiePolicy):
-    """Kein Cookie wird gemerkt oder mitgeschickt."""
-
     # Ein gepinnter Client ist für Aufrufe mit etwas Geheimem da (etwa eine einmalige Anmeldung). Merkte er ein
     # `Set-Cookie` (z. B. eine Sitzung), ginge es mit jeder späteren Anfrage an denselben Fingerabdruck mit, auch von
     # anderen Stellen der Erweiterung. Wer ein Cookie braucht, setzt den Kopf selbst je Anfrage.
@@ -1322,7 +1316,6 @@ class HttpHandle:
             raise ValueError("pinned_sha256 geht nur mit einer verschluesselten Adresse (https:// bzw. wss://).")
 
     def _pinned_client(self, url: str, pinned_sha256: str, *, insecure_tls: bool) -> httpx.AsyncClient:
-        """Client, der nur das Zertifikat mit diesem Fingerabdruck annimmt; die ältesten gehen bei zu vielen zu."""
         # Für Ziele mit selbstsigniertem Zertifikat, an die etwas wirklich Geheimes geht (etwa ein einmal benutztes
         # Administrator-Passwort): Der Vergleich läuft im TLS-Handshake vor dem ersten Byte der Anfrage, bei Abweichung
         # gibt es `CertificateMismatch`. Je Fingerabdruck ein eigener Client, damit keine Pool-Verbindung eines anderen
@@ -1349,7 +1342,6 @@ class HttpHandle:
 
     @staticmethod
     def _refuse_redirects(kwargs: dict[str, Any]) -> None:
-        """Lehnt `follow_redirects=True` mit `ValueError` ab, bevor etwas gesendet wird (auch mit `insecure_tls`)."""
         # `_require_target_allowed()` sieht nur die Adresse des Aufrufs: Folgte httpx einer 3xx-Antwort, ginge die
         # nächste Anfrage samt `Authorization` an ein ungeprüftes Ziel, und ein Server könnte die Erweiterung so aus
         # ihren `net.outbound:<cidr>`-Bereichen lenken. 3xx-Antworten kommen unverändert zurück (wie bei `websocket()`).
@@ -1381,9 +1373,8 @@ class HttpHandle:
         return await client.request(method, url, **kwargs)
 
     async def peer_certificate(self, url: str, *, timeout_s: float = 10.0) -> PeerCertificate:
-        """Liest das Zertifikat des Ziels ohne Anfrage: erst streng, sonst ohne Prüfung nur zum Lesen.
-
-        Gleiche Zertifizierungsstellen wie `self._client` (`httpx.create_ssl_context()`), direkt und ohne Proxy."""
+        """Liest das Zertifikat des Ziels ohne Anfrage: erst streng, sonst ohne Prüfung nur zum Lesen, direkt und
+        ohne Proxy."""
         self._require_target_allowed(url)
         parts = urlsplit(url)
         if parts.scheme.lower() not in ("https", "wss"):
@@ -1418,9 +1409,8 @@ class HttpHandle:
         open_timeout_s: float = 10.0,
         pinned_sha256: str | None = None,
     ):  # noqa: ANN201 - AsyncContextManager[websockets ClientConnection]
-        """Ausgehender WebSocket mit denselben Prüfungen wie die HTTP-Methoden, beim Aufruf und vor dem Verbinden.
-
-        Ziel (`net.outbound`/CIDR), dann `insecure_tls` oder `pinned_sha256` nur mit `net.outbound.insecure_tls`."""
+        """Ausgehender WebSocket mit denselben Prüfungen wie die HTTP-Methoden (Ziel, `insecure_tls`,
+        `pinned_sha256`)."""
         self._require_target_allowed(url)
         ssl_context: ssl.SSLContext | None = None
         # Gepinnt (nur `wss://`): Der TLS-Handshake scheitert mit `CertificateMismatch` vor den Kopfzeilen.
@@ -1473,7 +1463,6 @@ class DbHandle:
     # (docs/02 §3: Extensions sind vertrauenswürdiger Code).
 
     def __init__(self, ext_id: str, table_prefix: str | tuple[str, ...]) -> None:
-        """Ein Präfix oder mehrere (`ExtensionManifest.table_prefixes`; nach einer Umbenennung auch die alten)."""
         self._ext_id = ext_id
         self._table_prefix = table_prefix
 
@@ -1481,9 +1470,8 @@ class DbHandle:
         return session_scope()
 
     def declare_tables(self, metadata: Any) -> None:
-        """Prüft die `MetaData` der Extension gegen `ext_<id>_`; bei einer Abweichung wirft sie `TablePrefixViolation`.
-
-        Der Fehler läuft über den Fehlerpfad von `setup()` und verhindert das Laden."""
+        """Prüft die `MetaData` der Extension gegen `ext_<id>_` und wirft bei Abweichung `TablePrefixViolation`,
+        was das Laden verhindert."""
         from .tables import validate_table_prefix
 
         validate_table_prefix(self._ext_id, metadata.tables.keys(), expected_prefix=self._table_prefix)

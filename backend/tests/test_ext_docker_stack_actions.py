@@ -245,6 +245,7 @@ async def test_a_failure_names_the_reason(tmp_path):
     ("changes", "start"),
     [
         ({"image": "ghcr.io/nodvard/deck:0.9.0"}, "Das ist Nodvard Deck selbst."),
+        ({"image": "nodvard-dock:selbst"}, "Das ist Nodvard Deck selbst."),
         ({"working_dir": "/srv/shop", "config_files": "/srv/shop/compose.yaml"}, "Übernommen aus /opt/stacks/shop"),
     ],
 )
@@ -263,6 +264,47 @@ async def test_odd_requests(tmp_path, request_args, reason):
     executor, _, fake = _executor(tmp_path)
     done = await executor.execute(_request(**request_args))
     assert done.success is False and done.error.startswith(reason)
+    assert fake.argv_calls == []
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_action_type_is_refused_before_anything_is_read(tmp_path):
+    executor, store, fake = _executor(tmp_path)
+    await store.add("h1", _stack())
+    done = await executor.execute(_request("docker.stack_restart"))
+    assert (done.success, done.error) == (False, "Unbekannte Aktion 'docker.stack_restart'.")
+    assert fake.calls == [] and fake.argv_calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_failing_docker_ps_is_the_reason(tmp_path):
+    executor, store, fake = _executor(tmp_path)
+    await store.add("h1", _stack())
+    daemon_down = "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?"
+    fake.list = result(stderr=f"{daemon_down}\n", code=1)
+    done = await executor.execute(_request("docker.stack_up"))
+    assert (done.success, done.error) == (False, daemon_down)
+    assert fake.argv_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (OSError("Verbindung abgerissen"), "Server nicht erreichbar: Verbindung abgerissen"),
+        (TimeoutError(), "Der Server hat nicht innerhalb von 15 Sekunden geantwortet."),
+    ],
+)
+async def test_an_unreachable_server_is_the_reason(tmp_path, error, reason):
+    executor, store, fake = _executor(tmp_path)
+    await store.add("h1", _stack())
+
+    async def unreachable(host, command, timeout_s=60):
+        raise error
+
+    fake.run = unreachable
+    done = await executor.execute(_request("docker.stack_stop"))
+    assert (done.success, done.error) == (False, reason)
     assert fake.argv_calls == []
 
 
@@ -365,6 +407,22 @@ async def test_a_reason_without_full_stop_gets_one(tmp_path):
     fake.run_argv = unreachable
     done = await executor.execute(_request("docker.stack_stop"))
     assert done.error == "Server nicht erreichbar. Sieh im Reiter Stacks nach, ob sich am Stack schon etwas geändert hat."
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (TimeoutError(), "der Server hat nicht rechtzeitig geantwortet"),
+        (_SshTimeout("Server antwortet nicht."), "Server antwortet nicht"),
+        (_SshUnreachable("Server nicht erreichbar"), "Server nicht erreichbar"),
+        (_SshUnreachable(" "), "die Verbindung zum Server ist abgebrochen"),
+        (OSError("Connection reset by peer"), "die Verbindung zum Server ist abgebrochen"),
+    ],
+    ids=["zeitlimit", "eigener-text-statt-zeitlimit", "eigener-text", "leerer-text", "fremder-text"],
+)
+def test_a_lost_call_gets_a_short_reason(error, reason):
+    _, stack_actions, _ = _mods()
+    assert stack_actions._lost(error) == reason
 
 
 @pytest.mark.asyncio
@@ -477,6 +535,24 @@ async def test_up_when_the_services_cannot_be_read(tmp_path, monkeypatch, error)
 
 
 @pytest.mark.asyncio
+async def test_an_unexpected_error_reading_the_services_is_not_hidden(tmp_path, monkeypatch):
+    executor, store, fake = _executor(tmp_path)
+    await store.add("h1", _stack())
+    checked = _checking(monkeypatch)
+    original = fake.run_argv
+
+    async def run_argv(host, argv, **kwargs):
+        if argv[-2:] == ["config", "--services"]:
+            raise RuntimeError("Compose abgestürzt")
+        return await original(host, argv, **kwargs)
+
+    fake.run_argv = run_argv
+    with pytest.raises(RuntimeError, match="Compose abgestürzt"):
+        await executor.execute(_request("docker.stack_up"))
+    assert fake.argv_calls[-1][-2:] == ["up", "-d"] and checked == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("services", "rows", "note"),
     [
@@ -505,6 +581,23 @@ async def test_up_without_a_check_says_so(tmp_path, monkeypatch, services, rows,
     done = await executor.execute(_request("docker.stack_up"))
     assert (done.success, done.output) == (True, f"Stack „shop“ angewendet.\n{note}")
     assert checked == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "summary"),
+    [
+        ("docker.stack_up", "Würde für den Stack „shop“ in seinem Ordner „docker compose up -d“ ausführen."),
+        ("docker.stack_stop", "Würde für den Stack „shop“ in seinem Ordner „docker compose stop“ ausführen."),
+        ("docker.stack_down", "Würde für den Stack „shop“ in seinem Ordner „docker compose down“ (ohne Volumes) ausführen."),
+        ("docker.stack_pull", "Würde für den Stack „shop“ in seinem Ordner „docker compose pull“ ausführen."),
+    ],
+)
+async def test_the_dry_run_names_the_command_and_touches_nothing(tmp_path, action, summary):
+    executor, _, fake = _executor(tmp_path)
+    report = await executor.dry_run(_request(action))
+    assert (report.would_change, report.summary) == (True, summary)
+    assert fake.calls == [] and fake.argv_calls == []
 
 
 # --- Durch den echten Kern -------------------------------------------------------------------------------------------

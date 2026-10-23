@@ -134,7 +134,7 @@ async def test_only_docker_hosts_with_access_and_valid_names():
 
     shell = ContainerShell(_Ctx(_Exec(), {"docker_host_tag": "container-host"}))
     assert await shell.can_open_in(_Host(tags=["container-host"]), "web") is True
-    assert await shell.can_open_in(_Host(tags=["docker"]), "web") is False  # eingestellter Tag zaehlt
+    assert await shell.can_open_in(_Host(tags=["docker"]), "web") is False  # eingestellter Tag zählt
     assert await shell.can_open_in(_Host(tags=["container-host"], has_credential=False), "web") is False
     assert await shell.can_open_in(_Host(tags=["container-host"]), "web;id") is False
 
@@ -182,4 +182,4 @@ async def test_a_bad_name_or_a_failing_host_opens_nothing():
     failing = _Exec(fail=ConnectionRefusedError("weg"))
     with pytest.raises(ConnectionRefusedError):
         await ContainerShell(_Ctx(failing)).open_in(_Host(), "web", cols=80, rows=24)
-    assert failing.closed == 0  # nichts geoeffnet, nichts haengt
+    assert failing.closed == 0  # nichts geöffnet, nichts hängt

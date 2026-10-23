@@ -8,12 +8,13 @@ import { Badge, Button, Card, EmptyState, Icon, Notice, Page, Stat, buttonClass,
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { useUrlParams } from "../../../_shared/frontend/src/location";
 import { describeSchedule } from "../../../_shared/frontend/src/SchedulePicker";
-import { API, HostFilter, ago, call, clock, count, proposeAndApprove, useForHost, when } from "./api";
+import { API, HostFilter, ago, call, clock, count, PageActionsContext, proposeAndApprove, track, useActionNotices, useBusyKeys, useForHost, usePageActions, useReloadWhenSettled, when, type ActionResult } from "./api";
 import { deck } from "../../../_shared/frontend/src/deck";
 import { ContainerWatch } from "./ContainerWatch";
 import { EXT_ID } from "./ids";
 import { GuardTab } from "./GuardTab";
 import { LynisFinding, TopIssues, topIssues, type LynisHelp } from "./LynisFinding";
+import { RunNotice, RunNotices, type PageNotice } from "./RunNotice";
 import { UpdatesTab } from "./UpdatesTab";
 import { WatchTemplates } from "./WatchTemplates";
 
@@ -330,37 +331,6 @@ function HardeningCell({ host: h }: { host: HostRow }) {
   );
 }
 
-/** Hinweis oben auf der Seite. Neben „ok“/„error“ gibt es „warn“ (erledigt, aber mit Einschränkung) und „info“
- * (läuft gerade); `links` führen zur Stelle, an der man es richtet. */
-interface PageNotice {
-  kind: "ok" | "error" | "warn" | "info";
-  text: string;
-  links?: { href: string; label: string }[];
-}
-
-const NOTICE_STYLE: Record<PageNotice["kind"], string> = {
-  ok: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
-  error: "border-red-500/30 bg-red-500/10 text-red-200",
-  warn: "border-amber-500/30 bg-amber-500/10 text-amber-200",
-  info: "border-sky-500/30 bg-sky-500/10 text-sky-200",
-};
-
-function RunNotice({ notice, onClose }: { notice: PageNotice; onClose?: () => void }) {
-  return (
-    <div role={notice.kind === "error" ? "alert" : "status"} className={`mb-4 flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${NOTICE_STYLE[notice.kind]}`}>
-      <span className="min-w-0">
-        {notice.text}
-        {notice.links?.map((l) => (
-          <a key={l.href} href={l.href} className="ml-2 whitespace-nowrap underline underline-offset-2 hover:text-white">{l.label}</a>
-        ))}
-      </span>
-      {onClose && (
-        <button type="button" aria-label="Hinweis schließen" onClick={onClose} className="flex-none opacity-60 hover:opacity-100"><Icon name="x" size={14} /></button>
-      )}
-    </div>
-  );
-}
-
 /** Antwort von `POST /defender/briefing`; `push` sagt ehrlich, ob die Meldung aufs Handy ging. */
 interface BriefingResult {
   title: string;
@@ -459,6 +429,12 @@ export function SocPage(): JSX.Element {
   const [notice, setNotice] = useState<PageNotice | null>(null);
   const [briefingBusy, setBriefingBusy] = useState(false);
   const briefingLock = useRef(false);
+  const pageBusy = useBusyKeys();
+  const actionNotices = useActionNotices();
+  const pageActions = useMemo(
+    () => ({ keys: pageBusy, signal: unmountSignal, report: actionNotices.report }),
+    [pageBusy, unmountSignal, actionNotices.report],
+  );
   const canManage = deck().hasPermission("soc.manage");
   const hostFilter = urlParams.get("host") || null;
   const showAllHosts = () => updateUrl({ host: null });
@@ -492,11 +468,13 @@ export function SocPage(): JSX.Element {
     return () => clearInterval(t);
   }, [scanning, auditing, loadOverview]);
 
-  async function run(label: string, fn: () => Promise<string>) {
+  // `null`: Der Nutzer hat die Rückfrage abgelehnt, es gibt nichts zu melden.
+  async function run(label: string, fn: () => Promise<ActionResult | null>) {
     setNotice(null);
     try {
-      const text = await fn();
-      setNotice({ kind: text.startsWith("Fehlgeschlagen") ? "error" : "ok", text: `${label}: ${text}` });
+      const result = await fn();
+      if (!result) return;
+      setNotice({ ...result, text: `${label}: ${result.text}` });
       loadOverview();
     } catch (err) {
       setNotice({ kind: "error", text: `${label}: ${err instanceof Error ? err.message : String(err)}` });
@@ -506,7 +484,7 @@ export function SocPage(): JSX.Element {
   const startScan = (kind: "quick" | "deep", hostIds: string[] | "all" = "all") =>
     run(kind === "quick" ? "Schnellscan" : "Tiefenscan", async () => {
       const r = await call<{ scans: string[] }>(`${API}/scans`, { method: "POST", body: JSON.stringify({ kind, host_ids: hostIds }) });
-      return r.scans.length ? `${r.scans.length} Server werden geprüft.` : "Läuft bereits oder kein Server verfügbar.";
+      return r.scans.length ? { kind: "ok", text: `${r.scans.length} Server werden geprüft.` } : { kind: "warn", text: "Läuft bereits oder kein Server verfügbar." };
     });
 
   // Sofort sichtbar machen, was läuft: Hinweis oben und „Audit läuft seit …“ in der Zeile des Servers (ohne auf die
@@ -550,32 +528,23 @@ export function SocPage(): JSX.Element {
     }
   }
 
-  // Die Knöpfe oben starten auf ALLEN Servern: ein Fehlklick würde alle stundenlang auslasten, deshalb erst fragen.
   async function confirmAll(kind: "deep" | "audit") {
-    const n = overview?.hosts.length ?? 0;
-    const where = n === 1 ? "dem Server" : n > 1 ? `allen ${n} Servern` : "allen Servern";
-    const ok = await deck().confirmDialog(
-      kind === "deep"
-        ? `Tiefenscan auf ${where} starten? Er prüft das ganze System und kann Stunden dauern. Die Server sind in der Zeit spürbar ausgelastet.`
-        : `Härtungs-Audit auf ${where} starten? Lynis braucht je Server einige Minuten, auf großen Servern auch länger.`,
-      { confirmLabel: kind === "deep" ? "Tiefenscan starten" : "Audit starten" },
-    );
-    if (!ok) return;
+    if (!(await confirmOnAllServers(kind, overview?.hosts.length ?? 0))) return;
     if (kind === "deep") await startScan("deep");
     else await startAudit();
   }
 
-  const install = (host: HostRow, pkg: "clamav" | "lynis" | "signatures") =>
-    run(pkg === "signatures" ? `Signaturen (${host.host_name})` : `${pkg === "clamav" ? "ClamAV" : "Lynis"} installieren (${host.host_name})`, async () => {
-      const ok = await deck().confirmDialog(
-        pkg === "signatures" ? `Virensignaturen auf „${host.host_name}“ jetzt aktualisieren? Das automatische Signatur-Update wird dabei eingeschaltet.` : `${pkg === "clamav" ? "ClamAV" : "Lynis"} auf „${host.host_name}“ installieren?`,
-        { confirmLabel: pkg === "signatures" ? "Aktualisieren" : "Installieren" },
-      );
-      if (!ok) return "abgebrochen.";
-      const text = await proposeAndApprove(`${API}/hosts/${host.host_id}/install`, { package: pkg }, pkg === "signatures" ? "low" : "medium", unmountSignal());
-      loadOverview(true);
-      return text;
-    });
+  async function install(host: HostRow, pkg: InstallPackage) {
+    const ok = await deck().confirmDialog(
+      pkg === "signatures" ? `Virensignaturen auf „${host.host_name}“ jetzt aktualisieren? Das automatische Signatur-Update wird dabei eingeschaltet.` : `${INSTALL_NAME[pkg]} auf „${host.host_name}“ installieren?`,
+      { confirmLabel: pkg === "signatures" ? "Aktualisieren" : "Installieren" },
+    );
+    if (!ok) return;
+    const label = pkg === "signatures" ? `Signaturen (${host.host_name})` : `${INSTALL_NAME[pkg]} installieren (${host.host_name})`;
+    await track(pageActions, installKey(host.host_id, pkg), label, installProgress(pkg, host.host_name), () =>
+      proposeAndApprove(`${API}/hosts/${host.host_id}/install`, { package: pkg }, pkg === "signatures" ? "low" : "medium", unmountSignal()));
+    loadOverview(true);
+  }
 
   const headerActions: HeaderAction[] = [
     { id: "briefing", label: briefingBusy ? "Briefing wird erstellt …" : "Briefing senden", disabled: briefingBusy, run: () => void sendBriefing(),
@@ -639,20 +608,23 @@ export function SocPage(): JSX.Element {
         </div>
       )}
       <HostFilter.Provider value={hostFilter}>
+      <PageActionsContext.Provider value={pageActions}>
       {notice && <RunNotice notice={notice} onClose={() => setNotice(null)} />}
+      <RunNotices notices={actionNotices.notices} onClose={(key) => actionNotices.report(key, null)} />
       {error && ["overview", "scans", "quarantine", "hardening"].includes(tab) && <Notice text={`Fehler: ${error}`} />}
 
       {tab === "overview" && overview && (
         <OverviewTab overview={overview} canManage={canManage} onRefresh={() => loadOverview(true)} onScan={(h) => void startScan("quick", [h.host_id])}
-          onAudit={(h) => void startAudit([h.host_id])} onInstall={(h, p) => void install(h, p)} onOpenThreats={() => setTab("quarantine")} side={side} onOpen={setTab} />
+          onAudit={(h) => void startAudit([h.host_id])} onInstall={(h, p) => void install(h, p)} installing={pageBusy.busy} onOpenThreats={() => setTab("quarantine")} side={side} onOpen={setTab} />
       )}
       {tab === "overview" && !overview && !error && <p className="text-sm text-white/50">Lade …</p>}
       {tab === "scans" && <ScansTab hosts={overview?.hosts ?? []} canManage={canManage} onStarted={() => loadOverview()} />}
       {tab === "quarantine" && <QuarantineTab canManage={canManage} onChanged={() => loadOverview()} />}
-      {tab === "hardening" && <HardeningTab canManage={canManage} hosts={overview?.hosts ?? []} onAudit={() => void startAudit()} />}
+      {tab === "hardening" && <HardeningTab canManage={canManage} hosts={overview?.hosts ?? []} onAudit={(ids) => void (ids === "all" ? confirmAll("audit") : startAudit(ids))} />}
       {tab === "updates" && <UpdatesTab canManage={canManage} />}
       {tab === "guard" && <GuardTab canManage={canManage} />}
       {tab === "containers" && <ContainerWatch />}
+      </PageActionsContext.Provider>
       </HostFilter.Provider>
     </Page>
   );
@@ -677,10 +649,24 @@ function SideLink({ title, text, tone, onClick }: { title: string; text: string;
   );
 }
 
+type InstallPackage = "clamav" | "lynis" | "signatures";
+
+const INSTALL_NAME: Record<InstallPackage, string> = { clamav: "ClamAV", lynis: "Lynis", signatures: "Signaturen" };
+
+const installKey = (hostId: string, pkg: InstallPackage) => `${hostId}:${pkg}`;
+
+const installRunningLabel = (pkg: InstallPackage) => (pkg === "signatures" ? "Aktualisiere …" : "Installiere …");
+
+function installProgress(pkg: InstallPackage, hostName: string): string {
+  const what = pkg === "signatures" ? `Die Virensignaturen auf „${hostName}“ werden aktualisiert` : `${INSTALL_NAME[pkg]} wird auf „${hostName}“ installiert`;
+  return `${what}. Das kann einige Minuten dauern.`;
+}
+
 /** Was als Erstes zu tun ist, für jemanden, der die Begriffe noch nicht kennt. `null`: nichts Dringendes. */
 interface NextStep {
   text: string;
-  action?: { label: string; run: () => void };
+  /** `busyKey`: Schlüssel der Installation, die der Knopf auslöst; läuft sie, ist er gesperrt. */
+  action?: { label: string; run: () => void; busyKey?: string };
   link?: { href: string; label: string };
 }
 
@@ -705,7 +691,7 @@ function nextStep(
   if (noClam) {
     const more = reachable.filter((h) => !h.clamav_installed).length - 1;
     return { text: `Installiere ClamAV (den Virenscanner) auf „${noClam.host_name}“${more > 0 ? ` und ${more} weiteren Server${more > 1 ? "n" : ""}` : ""}. Ohne ihn wird dort nichts geprüft.`,
-      action: canManage ? { label: "ClamAV installieren", run: () => on.install(noClam, "clamav") } : undefined };
+      action: canManage ? { label: "ClamAV installieren", run: () => on.install(noClam, "clamav"), busyKey: installKey(noClam.host_id, "clamav") } : undefined };
   }
   const neverScanned = reachable.find((h) => h.clamav_installed && !h.last_scan && !h.scanning);
   if (neverScanned) {
@@ -715,7 +701,7 @@ function nextStep(
   const noLynis = reachable.find((h) => !h.lynis_installed);
   if (noLynis) {
     return { text: `Installiere Lynis auf „${noLynis.host_name}“. Es prüft, wie sicher der Server eingestellt ist (Härtung).`,
-      action: canManage ? { label: "Lynis installieren", run: () => on.install(noLynis, "lynis") } : undefined };
+      action: canManage ? { label: "Lynis installieren", run: () => on.install(noLynis, "lynis"), busyKey: installKey(noLynis.host_id, "lynis") } : undefined };
   }
   return null;
 }
@@ -753,7 +739,7 @@ function Glossary() {
 }
 
 function OverviewTab({
-  overview, canManage, onRefresh, onScan, onAudit, onInstall, onOpenThreats, side, onOpen,
+  overview, canManage, onRefresh, onScan, onAudit, onInstall, installing, onOpenThreats, side, onOpen,
 }: {
   side: SideSummary;
   onOpen: (tab: Tab) => void;
@@ -762,7 +748,9 @@ function OverviewTab({
   onRefresh: () => void;
   onScan: (h: HostRow) => void;
   onAudit: (h: HostRow) => void;
-  onInstall: (h: HostRow, pkg: "clamav" | "lynis" | "signatures") => void;
+  onInstall: (h: HostRow, pkg: InstallPackage) => void;
+  /** Schlüssel (`installKey`) der Installationen, die gerade laufen. */
+  installing: ReadonlySet<string>;
   onOpenThreats: () => void;
 }) {
   const s = overview.summary;
@@ -775,12 +763,14 @@ function OverviewTab({
   });
   const realtime = coverageBadge(c.realtime_enabled, "Echtzeit-Wächter", "aktiv", s.protected, s.hosts, ` (alle ${c.watch_interval_min} Min.)`);
   const quarantine = coverageBadge(c.auto_quarantine, "Automatische Quarantäne", "an", s.protected, s.hosts);
+  const stepBusy = !!step?.action?.busyKey && installing.has(step.action.busyKey);
+  const installRunning = (hostId: string, pkg: InstallPackage) => installing.has(installKey(hostId, pkg));
   return (
     <>
       {step && (
         <div className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] px-4 py-3 text-sm" data-testid="next-step">
           <p className="min-w-0 flex-1"><strong className="font-semibold">Nächster Schritt:</strong> {step.text}</p>
-          {step.action && <Button variant="primary" small onClick={step.action.run}>{step.action.label}</Button>}
+          {step.action && <Button variant="primary" small disabled={stepBusy} onClick={step.action.run}>{stepBusy ? "Installiere …" : step.action.label}</Button>}
           {step.link && <a href={step.link.href} className="text-xs underline underline-offset-2 hover:text-white">{step.link.label}</a>}
         </div>
       )}
@@ -836,7 +826,9 @@ function OverviewTab({
                       <p className="text-xs text-white/50">{a.hint}</p>
                     </div>
                     {canManage && host && a.kind === "signatures" && (
-                      <Button small onClick={() => onInstall(host, "signatures")}>{a.action_label}</Button>
+                      <Button small disabled={installRunning(host.host_id, "signatures")} onClick={() => onInstall(host, "signatures")}>
+                        {installRunning(host.host_id, "signatures") ? installRunningLabel("signatures") : a.action_label}
+                      </Button>
                     )}
                   </li>
                 );
@@ -935,9 +927,21 @@ function OverviewTab({
                       {canManage && (
                         <div className="flex flex-wrap justify-end gap-1">
                           {h.clamav_installed && <Button small onClick={() => onScan(h)} disabled={h.scanning}>Scannen</Button>}
-                          {h.clamav_installed && <Button small variant="ghost" title="Die Liste bekannter Schadprogramme jetzt aktualisieren" onClick={() => onInstall(h, "signatures")}>Signaturen</Button>}
-                          {!h.clamav_installed && h.reachable !== false && <Button small variant="primary" title="ClamAV ist ein kostenloser Virenscanner. Er wird auf dem Server installiert." onClick={() => onInstall(h, "clamav")}>ClamAV installieren</Button>}
-                          {!h.lynis_installed && h.reachable !== false && <Button small title="Lynis prüft, wie sicher der Server eingestellt ist." onClick={() => onInstall(h, "lynis")}>Lynis installieren</Button>}
+                          {h.clamav_installed && (
+                            <Button small variant="ghost" title="Die Liste bekannter Schadprogramme jetzt aktualisieren" disabled={installRunning(h.host_id, "signatures")} onClick={() => onInstall(h, "signatures")}>
+                              {installRunning(h.host_id, "signatures") ? installRunningLabel("signatures") : "Signaturen"}
+                            </Button>
+                          )}
+                          {!h.clamav_installed && h.reachable !== false && (
+                            <Button small variant="primary" title="ClamAV ist ein kostenloser Virenscanner. Er wird auf dem Server installiert." disabled={installRunning(h.host_id, "clamav")} onClick={() => onInstall(h, "clamav")}>
+                              {installRunning(h.host_id, "clamav") ? installRunningLabel("clamav") : "ClamAV installieren"}
+                            </Button>
+                          )}
+                          {!h.lynis_installed && h.reachable !== false && (
+                            <Button small title="Lynis prüft, wie sicher der Server eingestellt ist." disabled={installRunning(h.host_id, "lynis")} onClick={() => onInstall(h, "lynis")}>
+                              {installRunning(h.host_id, "lynis") ? installRunningLabel("lynis") : "Lynis installieren"}
+                            </Button>
+                          )}
                           {h.lynis_installed && (
                             <Button small variant="ghost" onClick={() => onAudit(h)}
                               title={h.auditing ? "Das Audit läuft schon – ein Klick zeigt, seit wann." : "Prüft, wie sicher der Server eingestellt ist (Härtung)"}>
@@ -964,6 +968,17 @@ function visibleScanOutput(tail: string): string {
   return tail.split("\n").filter((line) => !line.startsWith("@@")).join("\n").trim();
 }
 
+// Tiefenscan und Audit auf allen Servern: Ein Fehlklick würde alle stundenlang auslasten, deshalb erst fragen.
+function confirmOnAllServers(kind: "deep" | "audit", n: number): Promise<boolean> {
+  const where = n === 1 ? "dem Server" : n > 1 ? `allen ${n} Servern` : "allen Servern";
+  return deck().confirmDialog(
+    kind === "deep"
+      ? `Tiefenscan auf ${where} starten? Er prüft das ganze System und kann Stunden dauern. Die Server sind in der Zeit spürbar ausgelastet.`
+      : `Härtungs-Audit auf ${where} starten? Lynis braucht je Server einige Minuten, auf großen Servern auch länger.`,
+    { confirmLabel: kind === "deep" ? "Tiefenscan starten" : "Audit starten" },
+  );
+}
+
 function ScansTab({ hosts, canManage, onStarted }: { hosts: HostRow[]; canManage: boolean; onStarted: () => void }) {
   const [scans, setScans] = useState<ScanRow[] | null>(null);
   const [showWatch, setShowWatch] = useState(false);
@@ -971,7 +986,7 @@ function ScansTab({ hosts, canManage, onStarted }: { hosts: HostRow[]; canManage
   const [kind, setKind] = useState<"quick" | "deep" | "custom">("quick");
   const [target, setTarget] = useState("all");
   const [paths, setPaths] = useState("");
-  const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const [msg, setMsg] = useState<PageNotice | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const hostFilter = useContext(HostFilter);
   useEffect(() => { setTarget(hostFilter ?? "all"); }, [hostFilter]);
@@ -990,10 +1005,11 @@ function ScansTab({ hosts, canManage, onStarted }: { hosts: HostRow[]; canManage
 
   async function start() {
     setMsg(null);
+    if (kind === "deep" && target === "all" && !(await confirmOnAllServers("deep", hosts.length))) return;
     try {
       const body = { kind, host_ids: target === "all" ? "all" : [target], paths: kind === "custom" ? paths.split(/[\n,]/).map((p) => p.trim()).filter(Boolean) : null };
       const r = await call<{ scans: string[] }>(`${API}/scans`, { method: "POST", body: JSON.stringify(body) });
-      setMsg({ kind: "ok", text: r.scans.length ? `${count(r.scans.length, "Scan", "Scans")} gestartet.` : "Läuft bereits oder kein Server verfügbar." });
+      setMsg(r.scans.length ? { kind: "ok", text: `${count(r.scans.length, "Scan", "Scans")} gestartet.` } : { kind: "warn", text: "Läuft bereits oder kein Server verfügbar." });
       load();
       onStarted();
     } catch (err) {
@@ -1005,7 +1021,7 @@ function ScansTab({ hosts, canManage, onStarted }: { hosts: HostRow[]; canManage
     <div className="space-y-5">
       {canManage && (
         <Card title="Scan starten" description="Schnellscan prüft typische Ablageorte (tmp, home, root), der Tiefenscan das ganze System – das kann Stunden dauern.">
-          {msg && <Notice text={msg.text} kind={msg.kind} onClose={() => setMsg(null)} />}
+          {msg && <RunNotice notice={msg} onClose={() => setMsg(null)} />}
           <div className="flex flex-wrap items-end gap-3">
             <label className="text-sm">
               <span className="mb-1.5 block text-white/70">Art</span>
@@ -1080,11 +1096,31 @@ function ScansTab({ hosts, canManage, onStarted }: { hosts: HostRow[]; canManage
   );
 }
 
+type FindingAction = "quarantine" | "ignore" | "reopen" | "restore" | "delete";
+
+const FINDING_ACTIONS: FindingAction[] = ["quarantine", "ignore", "reopen", "restore", "delete"];
+
+const FINDING_PROGRESS: Record<FindingAction, string> = {
+  quarantine: "in Quarantäne verschoben", ignore: "ignoriert", reopen: "wieder beachtet", restore: "wiederhergestellt", delete: "gelöscht",
+};
+
+const FINDING_RUNNING_LABEL: Record<FindingAction, string> = {
+  quarantine: "Verschiebe …", ignore: "Ignoriere …", reopen: "Beachte wieder …", restore: "Stelle wieder her …", delete: "Lösche …",
+};
+
+const FINDING_CONFIRM_LABEL: Record<FindingAction, string> = {
+  quarantine: "Verschieben", ignore: "Ignorieren", reopen: "Wieder beachten", restore: "Wiederherstellen", delete: "Löschen",
+};
+
+const KEPT_FOR_GOOD = "Findet ein Scan dieselbe Datei mit demselben Fund wieder, meldet Shield sie nicht mehr. Rückgängig geht das unter „Alle, inkl. erledigt“ mit „Wieder beachten“.";
+
+const findingKey = (id: string, action: FindingAction) => `${id}:${action}`;
+
 function QuarantineTab({ canManage, onChanged }: { canManage: boolean; onChanged: () => void }) {
-  const unmountSignal = useUnmountSignal();
+  const page = usePageActions();
+  const { keys: { busy }, signal: unmountSignal } = page;
   const [items, setItems] = useState<Finding[] | null>(null);
   const [filter, setFilter] = useState<"active" | "all">("active");
-  const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -1093,6 +1129,7 @@ function QuarantineTab({ canManage, onChanged }: { canManage: boolean; onChanged
       .catch((err: unknown) => setLoadError(errorText(err)));
   }, []);
   useEffect(() => { load(); }, [load]);
+  useReloadWhenSettled(busy, load);
 
   const hostItems = useForHost(items ?? []);
   const visible = useMemo(
@@ -1100,29 +1137,26 @@ function QuarantineTab({ canManage, onChanged }: { canManage: boolean; onChanged
     [hostItems, filter],
   );
 
-  async function act(f: Finding, action: "quarantine" | "ignore" | "restore" | "delete") {
-    setMsg(null);
-    const questions = {
+  async function act(f: Finding, action: FindingAction) {
+    const questions: Record<FindingAction, string> = {
       quarantine: `„${f.path}“ in Quarantäne verschieben?`,
-      ignore: `Fund „${f.path}“ ignorieren? Die Datei bleibt, wo sie ist.`,
-      restore: `„${f.path}“ wiederherstellen? Nur tun, wenn sicher ist, dass es ein Fehlalarm war.`,
+      ignore: `Fund „${f.path}“ ignorieren? Die Datei bleibt, wo sie ist. ${KEPT_FOR_GOOD}`,
+      reopen: `„${f.path}“ wieder als Fund beachten? Er steht dann wieder offen. Der nächste Scan meldet die Datei wieder und verschiebt sie, wenn die automatische Quarantäne an ist.`,
+      restore: `„${f.path}“ wiederherstellen? Nur tun, wenn sicher ist, dass es ein Fehlalarm war. ${KEPT_FOR_GOOD}`,
       delete: `„${f.path}“ endgültig löschen?`,
     };
-    const ok = await deck().confirmDialog(questions[action], { danger: action !== "quarantine", confirmLabel: { quarantine: "Verschieben", ignore: "Ignorieren", restore: "Wiederherstellen", delete: "Löschen" }[action] });
+    const ok = await deck().confirmDialog(questions[action], { danger: action !== "quarantine" && action !== "reopen", confirmLabel: FINDING_CONFIRM_LABEL[action] });
     if (!ok) return;
-    try {
-      let text = "Erledigt.";
-      if (action === "quarantine" || action === "ignore") {
+    const progress = `„${f.path}“ wird ${FINDING_PROGRESS[action]} …`;
+    await track(page, findingKey(f.id, action), `„${f.path}“`, progress, async (): Promise<ActionResult> => {
+      if (action === "quarantine" || action === "ignore" || action === "reopen") {
         await call(`${API}/findings/${f.id}/${action}`, { method: "POST" });
-      } else {
-        text = await proposeAndApprove(`${API}/findings/${f.id}/${action}`, {}, "medium", unmountSignal());
+        return { kind: "ok", text: action === "reopen" ? "Der Fund ist wieder offen. Der nächste Scan meldet die Datei wieder." : "Erledigt." };
       }
-      setMsg({ kind: text.startsWith("Fehlgeschlagen") ? "error" : "ok", text });
-      load();
-      onChanged();
-    } catch (err) {
-      setMsg({ kind: "error", text: err instanceof Error ? err.message : String(err) });
-    }
+      return proposeAndApprove(`${API}/findings/${f.id}/${action}`, {}, "medium", unmountSignal());
+    });
+    load();
+    onChanged();
   }
 
   const failed = loadError ? <LoadError what="Die Liste der Funde" error={loadError} onRetry={load} /> : null;
@@ -1136,7 +1170,6 @@ function QuarantineTab({ canManage, onChanged }: { canManage: boolean; onChanged
   }
   return (
     <>
-      {msg && <Notice text={msg.text} kind={msg.kind} onClose={() => setMsg(null)} />}
       <Card
         title="Funde & Quarantäne"
         description="Dateien in Quarantäne sind unlesbar und nicht ausführbar (Rechte 000) im Tresor auf dem Server, auf dem sie gefunden wurden."
@@ -1152,6 +1185,8 @@ function QuarantineTab({ canManage, onChanged }: { canManage: boolean; onChanged
           {visible.length === 0 && <li className="px-5 py-6 text-sm text-white/50">Nichts offen.</li>}
           {visible.map((f) => {
             const st = FINDING_STATUS[f.status] ?? { label: f.status, tone: "neutral" as Tone };
+            const running = FINDING_ACTIONS.find((a) => busy.has(findingKey(f.id, a)));
+            const label = (action: FindingAction, text: string) => (running === action ? FINDING_RUNNING_LABEL[action] : text);
             return (
               <li key={f.id} className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm">
                 <div className="min-w-0 flex-1">
@@ -1165,10 +1200,11 @@ function QuarantineTab({ canManage, onChanged }: { canManage: boolean; onChanged
                 </div>
                 {canManage && (
                   <div className="flex gap-1">
-                    {f.status === "detected" && <Button small variant="primary" onClick={() => void act(f, "quarantine")}>In Quarantäne</Button>}
-                    {f.status === "detected" && <Button small variant="ghost" onClick={() => void act(f, "ignore")}>Ignorieren</Button>}
-                    {f.status === "quarantined" && <Button small onClick={() => void act(f, "restore")}>Wiederherstellen</Button>}
-                    {f.status === "quarantined" && <Button small variant="danger" onClick={() => void act(f, "delete")}>Endgültig löschen</Button>}
+                    {f.status === "detected" && <Button small variant="primary" disabled={!!running} onClick={() => void act(f, "quarantine")}>{label("quarantine", "In Quarantäne")}</Button>}
+                    {f.status === "detected" && <Button small variant="ghost" disabled={!!running} onClick={() => void act(f, "ignore")}>{label("ignore", "Ignorieren")}</Button>}
+                    {f.status === "quarantined" && <Button small disabled={!!running} onClick={() => void act(f, "restore")}>{label("restore", "Wiederherstellen")}</Button>}
+                    {f.status === "quarantined" && <Button small variant="danger" disabled={!!running} onClick={() => void act(f, "delete")}>{label("delete", "Endgültig löschen")}</Button>}
+                    {(f.status === "ignored" || f.status === "restored") && <Button small variant="ghost" disabled={!!running} onClick={() => void act(f, "reopen")}>{label("reopen", "Wieder beachten")}</Button>}
                   </div>
                 )}
               </li>
@@ -1180,7 +1216,8 @@ function QuarantineTab({ canManage, onChanged }: { canManage: boolean; onChanged
   );
 }
 
-function HardeningTab({ canManage, hosts, onAudit }: { canManage: boolean; hosts: HostRow[]; onAudit: () => void }) {
+function HardeningTab({ canManage, hosts, onAudit }: { canManage: boolean; hosts: HostRow[]; onAudit: (hostIds: string[] | "all") => void }) {
+  const hostFilter = useContext(HostFilter);
   const [audits, setAudits] = useState<AuditRow[] | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   // Laufende Audits kommen aus der Übersicht (die Seite fragt sie nach, solange eines läuft). Wird eines fertig,
@@ -1218,7 +1255,7 @@ function HardeningTab({ canManage, hosts, onAudit }: { canManage: boolean; hosts
         {runningBox}
         {!runningBox && (
           <EmptyState icon="clock" title="Noch kein Härtungs-Audit" text="Lynis ist ein kostenloses Prüfprogramm. Es sucht auf jedem Server nach unsicheren Einstellungen (SSH, Passwortregeln, offene Dienste …) und vergibt einen Härtungswert von 0 bis 100 – je höher, desto sicherer."
-            action={canManage && <Button variant="primary" onClick={onAudit}>Audit jetzt starten</Button>} />
+            action={canManage && <Button variant="primary" onClick={() => onAudit(hostFilter ? [hostFilter] : "all")}>Audit jetzt starten</Button>} />
         )}
       </>
     );

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import traceback
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -23,15 +23,22 @@ logger = logging.getLogger("nodvard_deck.scheduler")
 
 Handler = Callable[..., Awaitable[Any]]
 
+_SHUTDOWN_ERROR = "Beim Herunterfahren von Nodvard Deck abgebrochen."
+
 
 # Bewusst ohne den SQLAlchemy-Jobstore von APScheduler: Er speichert Jobs per Pickle, ein `JobSpec.handler` ist aber eine
 # gebundene Methode einer Extension-Instanz, die bei jedem Start neu entsteht; zwei dauerhafte Quellen liefen außerdem
 # auseinander. Erweiterungen planen Jobs nach einem Neustart in `setup()` neu ein, Kern-Jobs über `register_core_jobs()`.
 class SchedulerService:
+    SHUTDOWN_WAIT_S = 5.0
+    """So lange wartet `shutdown()`, bis abgebrochene Läufe sich noch im Protokoll vermerkt haben."""
+
     def __init__(self) -> None:
         self._scheduler = AsyncIOScheduler()
         self._runs_dir = Path("./data/runs")
         self._running_tasks: dict[str, asyncio.Task] = {}
+        self._runs: set[asyncio.Task] = set()
+        self._stopping = False
 
     @property
     def runs_dir(self) -> Path:
@@ -42,14 +49,27 @@ class SchedulerService:
         self._runs_dir.mkdir(parents=True, exist_ok=True)
 
     def start(self) -> None:
+        self._stopping = False
         if not self._scheduler.running:
             self._scheduler.start()
 
     async def shutdown(self) -> None:
+        """Startet nichts Neues mehr, bricht laufende Handler ab und wartet, bis ihre Läufe sich vermerkt haben."""
+        self._stopping = True
+        # Erst pausieren, dann abbauen: Der Scheduler bricht beim Abbau auch die äußeren Läufe mitten in der Nacharbeit ab.
         if self._scheduler.running:
-            self._scheduler.shutdown(wait=False)
+            self._scheduler.pause()
         for task in list(self._running_tasks.values()):
             task.cancel()
+        runs = self._runs - {asyncio.current_task()}
+        if runs:
+            _, hanging = await asyncio.wait(runs, timeout=self.SHUTDOWN_WAIT_S)
+            for run in hanging:
+                run.cancel()
+            if hanging:
+                await asyncio.wait(hanging, timeout=1)  # ein abgebrochener Lauf endet mit seinem nächsten Schritt
+        if self._scheduler.running:
+            self._scheduler.shutdown(wait=False)
 
     async def schedule(self, job: Job, handler: Handler) -> None:
         """Fügt den Job hinzu oder ersetzt ihn (`replace_existing`), damit ein erneutes `register_job()` auch hier
@@ -100,6 +120,19 @@ class SchedulerService:
     async def _run_job(
         self, *, job_id: str, ext_id: str | None, handler: Handler, params: dict[str, Any], trigger_kind: str
     ) -> str:
+        current = asyncio.current_task()
+        assert current is not None  # läuft immer als Aufgabe der Event-Loop
+        self._runs.add(current)
+        try:
+            return await self._execute_run(
+                job_id=job_id, ext_id=ext_id, handler=handler, params=params, trigger_kind=trigger_kind
+            )
+        finally:
+            self._runs.discard(current)
+
+    async def _execute_run(
+        self, *, job_id: str, ext_id: str | None, handler: Handler, params: dict[str, Any], trigger_kind: str
+    ) -> str:
         from .ws_hub import get_ws_hub
 
         async with session_scope() as session:
@@ -107,12 +140,53 @@ class SchedulerService:
             run_id = run.id
 
         hub = get_ws_hub()
-        await hub.publish(f"jobs.{job_id}", {"run_id": run_id, "status": "running"}, required_permission="jobs.read")
-        await hub.publish(f"runs.{run_id}", {"status": "running"}, required_permission="jobs.read")
-
         lines = [f"[{utcnow().isoformat()}] gestartet (trigger={trigger_kind}, params={params!r})"]
-        status, exit_code, error = "succeeded", 0, None
+        if not self._stopping:
+            await hub.publish(f"jobs.{job_id}", {"run_id": run_id, "status": "running"}, required_permission="jobs.read")
+            await hub.publish(f"runs.{run_id}", {"status": "running"}, required_permission="jobs.read")
+        # Kam das Herunterfahren, während der Lauf angelegt oder gemeldet wurde, hat `shutdown()` die Handler schon
+        # abgebrochen: Dieser startet gar nicht erst, sonst liefe er bis zum Ende der Wartezeit weiter.
+        if self._stopping:
+            status, exit_code, error = "interrupted", None, _SHUTDOWN_ERROR
+            lines.append(f"[{utcnow().isoformat()}] {error}")
+        else:
+            status, exit_code, error = await self._await_handler(job_id, run_id, handler, params, trigger_kind, lines)
 
+        # Bricht das Herunterfahren auch die Nacharbeit ab, bleibt der Lauf auf `running`; der nächste Start setzt ihn auf
+        # `interrupted`.
+        try:
+            log_path = self._runs_dir / f"{run_id}.log"
+            content = "\n".join(lines) + "\n"
+            # `configure()` legt den Ordner normalerweise schon an, der Dienst lässt sich aber auch ohne diesen Aufruf
+            # benutzen (etwa in Tests über die API); darum hier noch einmal.
+            await asyncio.to_thread(self._runs_dir.mkdir, parents=True, exist_ok=True)
+            await asyncio.to_thread(log_path.write_text, content, encoding="utf-8")
+
+            async with session_scope() as session:
+                run_row = await session.get(JobRun, run_id)
+                await jobs_service.finish_run(
+                    session, run_row, status=status, exit_code=exit_code, error=error, output_ref=str(log_path)
+                )
+                # APScheduler berechnet nach jedem Lauf den nächsten Termin neu (auch nach `trigger_now`); die
+                # gespiegelte Spalte muss mitziehen, sonst zeigt `GET /jobs` einen veralteten Termin.
+                apscheduler_job = self._scheduler.get_job(job_id)
+                await jobs_service.set_next_run_at(
+                    session, job_id, getattr(apscheduler_job, "next_run_time", None)
+                )
+
+            await hub.publish(f"jobs.{job_id}", {"run_id": run_id, "status": status}, required_permission="jobs.read")
+            await hub.publish(f"runs.{run_id}", {"status": status, "error": error}, required_permission="jobs.read")
+        except asyncio.CancelledError:
+            if not self._stopping:
+                raise
+            logger.warning("job_run_unfinished job_id=%s run_id=%s", job_id, run_id)
+        return run_id
+
+    async def _await_handler(
+        self, job_id: str, run_id: str, handler: Handler, params: dict[str, Any], trigger_kind: str, lines: list[str]
+    ) -> tuple[str, int | None, str | None]:
+        """Führt den Handler als eigene Aufgabe aus (`cancel_run` bricht sie ab), schreibt sein Ergebnis in `lines` und
+        gibt Status, Exit-Code und Fehler des Laufs zurück."""
         # Der Task übernimmt den Kontext beim Anlegen: So weiß der Handler über `nodvard_sdk.current_job_trigger()`, ob er
         # nach Zeitplan oder von Hand läuft.
         token = _JOB_TRIGGER.set(trigger_kind)
@@ -121,11 +195,15 @@ class SchedulerService:
         finally:
             _JOB_TRIGGER.reset(token)
         self._running_tasks[run_id] = task
+        status, exit_code, error = "succeeded", 0, None
         try:
             result = await task
             lines.append(f"[{utcnow().isoformat()}] Ergebnis: {result!r}")
         except asyncio.CancelledError:
-            status, exit_code, error = "failed", 1, "Abgebrochen (POST /runs/{id}/cancel)."
+            if self._stopping:
+                status, exit_code, error = "interrupted", None, _SHUTDOWN_ERROR
+            else:
+                status, exit_code, error = "failed", 1, "Abgebrochen (POST /runs/{id}/cancel)."
             lines.append(f"[{utcnow().isoformat()}] {error}")
         except NodvardError as exc:
             # Ein Fehlschlag, den der Handler selbst mit Klartext meldet (z. B. "Das Skript lief auf keinem
@@ -140,29 +218,7 @@ class SchedulerService:
             logger.exception("job_run_failed job_id=%s run_id=%s", job_id, run_id)
         finally:
             self._running_tasks.pop(run_id, None)
-
-        log_path = self._runs_dir / f"{run_id}.log"
-        content = "\n".join(lines) + "\n"
-        # `configure()` legt den Ordner normalerweise schon an, der Dienst lässt sich aber auch ohne diesen Aufruf benutzen
-        # (etwa in Tests über die API); darum hier noch einmal.
-        await asyncio.to_thread(self._runs_dir.mkdir, parents=True, exist_ok=True)
-        await asyncio.to_thread(log_path.write_text, content, encoding="utf-8")
-
-        async with session_scope() as session:
-            run_row = await session.get(JobRun, run_id)
-            await jobs_service.finish_run(
-                session, run_row, status=status, exit_code=exit_code, error=error, output_ref=str(log_path)
-            )
-            # APScheduler berechnet nach jedem Lauf den nächsten Termin neu (auch nach `trigger_now`); die gespiegelte
-            # Spalte muss mitziehen, sonst zeigt `GET /jobs` einen veralteten Termin.
-            apscheduler_job = self._scheduler.get_job(job_id)
-            await jobs_service.set_next_run_at(
-                session, job_id, getattr(apscheduler_job, "next_run_time", None)
-            )
-
-        await hub.publish(f"jobs.{job_id}", {"run_id": run_id, "status": status}, required_permission="jobs.read")
-        await hub.publish(f"runs.{run_id}", {"status": status, "error": error}, required_permission="jobs.read")
-        return run_id
+        return status, exit_code, error
 
     def cancel_run(self, run_id: str) -> bool:
         task = self._running_tasks.get(run_id)

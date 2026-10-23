@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ContainersPage } from "./ContainersPage";
@@ -267,6 +267,93 @@ describe("ContainersPage – Reiter", () => {
     await screen.findByRole("textbox", { name: "Container suchen" });
     expect(new URLSearchParams(window.location.search).get("tab")).toBeNull();
     expect(screen.queryByTestId("resources-images")).toBeNull();
+  });
+
+  it("zeigt für einen Server im Modus „Nur bedienen“ den Grund statt der Liste und nur die Knöpfe, die dort gehen", async () => {
+    window.history.replaceState({}, "", "/ext/docker/matrix?tab=images&host=h2");
+    const calls: Call[] = [];
+    const hosts = { hosts: [{ id: "h1", name: "pi", mode: "full" }, { id: "h2", name: "nas", mode: "operate" }] };
+    const services = [SERVICES[0], { ...SERVICES[1], compose_project: "shop", operate_only: true },
+      { ...SERVICES[1], id: "h2:alt", name: "alt", container: "alt", state: "exited", operate_only: true }];
+    vi.stubGlobal("fetch", resourceFetch(calls, {
+      "/ext/docker/hosts": () => Response.json(hosts),
+      "/widgets/matrix": () => Response.json({ data: services, meta: {} }),
+    }));
+    const { unmount } = render(<ContainersPage />);
+    expect(await screen.findByTestId("operate-h2")).toHaveTextContent("Modus „Nur bedienen“");
+    expect(screen.getByRole("option", { name: "nas (nur bedienen)" })).toBeInTheDocument();
+    expect(calls.some((c) => c.url.includes("/hosts/h2/images"))).toBe(false);
+    unmount();
+
+    window.history.replaceState({}, "", "/ext/docker/matrix");
+    render(<ContainersPage />);
+    await screen.findByTestId("operate-h2");
+    const nas = screen.getByTestId("operate-h2").closest("section")!;
+    const pi = screen.getByText("pi", { selector: "h3" }).closest("section")!;
+    expect(within(nas).getByRole("button", { name: "Starten" })).toBeInTheDocument();
+    expect(within(nas).getByRole("button", { name: "Stoppen" })).toBeInTheDocument();
+    expect(within(nas).getAllByRole("button", { name: "Logs" })).toHaveLength(2);
+    expect(within(nas).queryByRole("button", { name: "Löschen" })).toBeNull();
+    expect(within(nas).queryByRole("link", { name: "Konsole" })).toBeNull();
+    expect(within(nas).queryByRole("button", { name: "Docker-Speicher" })).toBeNull();
+    expect(within(nas).getByText("shop").tagName).toBe("SPAN");
+    expect(within(nas).queryByRole("button", { name: "shop" })).toBeNull();
+    expect(within(pi).getByRole("link", { name: "Konsole" })).toBeInTheDocument();
+    expect(within(pi).getByRole("button", { name: "Docker-Speicher" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Image-Updates prüfen" })).toBeInTheDocument();
+    cleanup();
+
+    window.history.replaceState({}, "", "/ext/docker/matrix?host=h2");
+    render(<ContainersPage />);
+    await screen.findByTestId("operate-h2");
+    expect(screen.queryByRole("button", { name: "Image-Updates prüfen" })).toBeNull();
+  });
+
+  it("nennt im Modus „Nur bedienen“ die Markierung, mit der ein Server mehr darf", async () => {
+    window.history.replaceState({}, "", "/ext/docker/matrix?tab=images&host=h2");
+    const hosts = { hosts: [{ id: "h1", name: "pi", mode: "full" }, { id: "h2", name: "nas", mode: "operate" }] };
+    const settings = (tag: string) => () => Response.json({ values: { docker_host_tag: tag } });
+    vi.stubGlobal("fetch", resourceFetch([], { "/ext/docker/hosts": () => Response.json(hosts), "/extensions/docker/settings": settings("voll") }));
+    const { unmount } = render(<ContainersPage />);
+    const note = await screen.findByTestId("operate-h2");
+    await waitFor(() => expect(note).toHaveTextContent("Markierung „voll“"));
+    expect(note).toHaveTextContent("Einstellungen, Server & Zugänge");
+    expect(note).toHaveTextContent("nimmt den Zugang in die Gruppe docker auf");
+    unmount();
+
+    window.history.replaceState({}, "", "/ext/docker/matrix");
+    const services = [SERVICES[0], { ...SERVICES[1], operate_only: true }];
+    vi.stubGlobal("fetch", resourceFetch([], {
+      "/ext/docker/hosts": () => Response.json(hosts),
+      "/widgets/matrix": () => Response.json({ data: services, meta: {} }),
+      "/extensions/docker/settings": settings("voll"),
+    }));
+    render(<ContainersPage />);
+    const badge = await screen.findByTestId("operate-h2");
+    await waitFor(() => expect(badge.title).toContain("Markierung „voll“"));
+    expect(badge.title).toContain("Gruppe docker");
+  });
+
+  it("sagt bei Servern im Modus „Nur bedienen“, dass dort nicht auf neue Images geprüft wird", async () => {
+    const operate = { ...SERVICES[1], operate_only: true };
+    const checked = {
+      data: { "h1:web": { image: "busybox:1.37", status: "current", reason: null, remote_digest: null, registry_at: null } },
+      hosts: { h1: { checking: false, checked_at: "2026-10-16T10:00:00+00:00", error: null } },
+    };
+    vi.stubGlobal("fetch", resourceFetch([], {
+      "/widgets/matrix": () => Response.json({ data: [SERVICES[0], operate], meta: {} }),
+      "/ext/docker/image-updates": () => Response.json(checked),
+    }));
+    const { unmount } = render(<ContainersPage />);
+    await waitFor(() => expect(screen.getByTestId("image-summary")).toHaveTextContent("alles aktuell · 1 Server im Modus „Nur bedienen“ nicht geprüft"));
+    expect(within(screen.getByTestId("image-h2:db")).getByTitle("Auf Servern im Modus „Nur bedienen“ prüft Nodvard Deck nicht auf neue Images.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Image-Updates prüfen" })).toBeInTheDocument();
+    unmount();
+
+    vi.stubGlobal("fetch", resourceFetch([], { "/widgets/matrix": () => Response.json({ data: [operate], meta: {} }) }));
+    render(<ContainersPage />);
+    await screen.findByText("db");
+    expect(screen.queryByRole("button", { name: "Image-Updates prüfen" })).toBeNull();
   });
 
   it("zeigt die Reiter nur mit Server-Rechten", async () => {

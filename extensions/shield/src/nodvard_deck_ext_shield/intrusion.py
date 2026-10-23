@@ -37,6 +37,7 @@ DEFAULT_DYNAMIC_PROCESSES = [
     "avahi-daemon",  # mDNS-Antwort-Ports
     "dhclient", "dhcpcd",  # neben Port 68 zufällige Ports
     "chronyd",  # zufälliger Quell-Port beim Zeitabgleich (acquisitionport)
+    "pihole-FTL", "dnsmasq", "unbound", "named",  # zufälliger Quell-Port je DNS-Anfrage nach außen
 ]
 # RPC-Dienste (libtirpc) suchen ihren Port zuerst im reservierten Bereich 600-1023 (bindresvport); auch dort wechselt
 # er bei jedem Start. Feste Ports wie 111 (rpcbind) liegen darunter und bleiben einzeln sichtbar.
@@ -50,6 +51,13 @@ TCP_DYNAMIC_PROCESSES = {"rpc.mountd", "rpc.statd"}
 TAILSCALE_NETS = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
 # Untergrenze des dynamischen Bereichs, falls ip_local_port_range nicht lesbar ist.
 DEFAULT_DYNAMIC_PORT_MIN = 32768
+# Eigene Bereiche je Programm (Einstellung "guard_port_ranges"). Unter 1024 liegen feste Dienste wie SSH und DNS,
+# dort gilt ein Bereich nur mit ausdrücklichem Häkchen. Mehr als PORT_RANGE_MAX_SPAN Ports gibt es nur mit eigenem
+# Häkchen ("wide"), und ein solcher Bereich reicht nie unter 1024: Sonst verbärge 1-65535 jeden neuen Port.
+PORT_RANGE_PROCESS_RE = re.compile(r"[A-Za-z0-9._:@+-]{1,15}")
+PORT_RANGE_LOW_MIN = 1024
+PORT_RANGE_MAX_SPAN = 1000
+PORT_RANGES_MAX = 50
 
 _SAFE_GLOB_RE = re.compile(r"^/[A-Za-z0-9_./*@+-]+$")
 
@@ -136,15 +144,23 @@ class Port:
     # Ohne root zeigt `ss` keinen Programmnamen: Ein UDP-Port im Zufallsbereich wird dann mit allen anderen dieser Art
     # zusammengefasst ("udp/dyn/?"), statt einzeln zu melden.
     unreadable: bool = False
+    # Eigener Bereich (von, bis) aus der Einstellung, in den der Port fällt.
+    span: tuple[int, int] | None = None
 
     @property
     def key(self) -> str:
+        if self.span is not None:
+            return f"{self.proto}/{self.span[0]}-{self.span[1]}/{self.process}"
         if self.dynamic:
             return f"{self.proto}/dyn/{self.process or ('?' if self.unreadable else '-')}"
         return f"{self.proto}/{self.port}/{self.process or '?'}"
 
     @property
     def label(self) -> str:
+        if self.span is not None:
+            low, high = self.span
+            ports = f"Port {low}" if low == high else f"Ports {low}–{high}"
+            return f"{ports}/{self.proto} ({self.process}, eigener Bereich)"
         if self.dynamic and self.unreadable:
             return f"wechselnde Ports/{self.proto} (Programm nicht lesbar)"
         if self.dynamic:
@@ -359,6 +375,42 @@ def _on_tailscale(address: str) -> bool:
     return any(ip.version == net.version and ip in net for net in TAILSCALE_NETS)
 
 
+@dataclass(frozen=True)
+class PortRange:
+    process: str
+    proto: str
+    low: int
+    high: int
+
+
+def port_ranges(entries: object) -> list[PortRange]:
+    """Die gültigen Einträge der Einstellung "guard_port_ranges", höchstens die ersten PORT_RANGES_MAX. Ein fehlerhafter
+    Eintrag gilt nicht, ein zu breiter wird auf PORT_RANGE_MAX_SPAN Ports gekürzt; die übrigen Ports melden einzeln."""
+    if not isinstance(entries, list):
+        return []
+    out: list[PortRange] = []
+    for entry in entries[:PORT_RANGES_MAX]:
+        if not isinstance(entry, dict):
+            continue
+        name, protocol = entry.get("name"), entry.get("protocol", "udp")
+        bounds = [entry.get("from"), entry.get("to")]
+        if not isinstance(name, str) or not PORT_RANGE_PROCESS_RE.fullmatch(name) or protocol not in ("udp", "tcp", "both"):
+            continue
+        if not all(isinstance(b, int) and not isinstance(b, bool) and 1 <= b <= 65535 for b in bounds):
+            continue
+        low, high = sorted(bounds)
+        wide = entry.get("wide") is True
+        if wide or entry.get("allow_low") is not True:
+            low = max(low, PORT_RANGE_LOW_MIN)
+        if not wide:
+            high = min(high, low + PORT_RANGE_MAX_SPAN - 1)
+        if low > high:
+            continue
+        for proto in ("udp", "tcp") if protocol == "both" else (protocol,):
+            out.append(PortRange(name.lower(), proto, low, high))
+    return out
+
+
 def _builtin_allows(name: str, proto: str, address: str) -> bool:
     """Darf ein Port des eingebauten Programms `name` auf diesem Protokoll als wechselnd gelten?"""
     if proto == "udp":
@@ -369,10 +421,10 @@ def _builtin_allows(name: str, proto: str, address: str) -> bool:
 
 
 def parse_ports(lines: list[str], *, dynamic_processes: list[str] | None = None, dynamic_min: int = DEFAULT_DYNAMIC_PORT_MIN,
-                is_root: bool = True) -> list[Port]:
+                is_root: bool = True, ranges: list[PortRange] | None = None) -> list[Port]:
     """Wertet `ss -tulnp` aus. Zufällige Ports (>= `dynamic_min`) wechselnder Programme und Kernel-Sockets bekommen
     einen Schlüssel ohne Port, sonst meldet jeder Neustart 15 "neue" Ports; RPC-Dienste zählen auch im Bereich
-    600-1023 so."""
+    600-1023 so. Ports in einem eigenen Bereich (`ranges`) zählen je Bereich als ein Eintrag."""
     builtin = {n.lower() for n in DEFAULT_DYNAMIC_PROCESSES}
     # Eingebaute Namen behalten ihre Regeln, auch wenn sie (alter gespeicherter Wert) zusätzlich in der Einstellung
     # stehen; nur weitere Programme aus der Einstellung gelten für TCP und UDP.
@@ -392,14 +444,17 @@ def parse_ports(lines: list[str], *, dynamic_processes: list[str] | None = None,
         num = int(port)
         proto = m.group("proto")
         unreadable = False
+        span = None
         if proc:
             # Der Name allein ist fälschbar, darum zählen eingebaute Programme nur auf ihren echten Protokollen.
             lower = proc.lower()
+            span = next(((r.low, r.high) for r in ranges or () if r.process == lower and r.proto == proto
+                         and r.low <= num <= r.high), None)
             allowed = lower in extra or (lower in builtin and _builtin_allows(lower, proto, addr))
-            dynamic = allowed and (
+            dynamic = span is not None or (allowed and (
                 num >= dynamic_min
                 or (lower in RESERVED_DYNAMIC_PROCESSES and RESERVED_DYNAMIC_PORT_MIN <= num <= RESERVED_DYNAMIC_PORT_MAX)
-            )
+            ))
         # Sockets ohne Prozess gelten nur mit root als Kernel-Sockets: Ohne root sind auch normale Programme namenlos,
         # und eine neue Hintertür bliebe hinter dem Sammeleintrag verborgen. Nur UDP wird auch dann zusammengefasst
         # (Zufallsports sind dort der Normalfall: Tailscale, DHCP, mDNS), ein TCP-Dienst bleibt einzeln sichtbar.
@@ -407,7 +462,7 @@ def parse_ports(lines: list[str], *, dynamic_processes: list[str] | None = None,
             dynamic = num >= dynamic_min
         else:
             dynamic = unreadable = proto == "udp" and num >= dynamic_min
-        p = Port(proto=proto, address=addr, port=num, process=proc, dynamic=dynamic, unreadable=unreadable)
+        p = Port(proto=proto, address=addr, port=num, process=proc, dynamic=dynamic, unreadable=unreadable, span=span)
         # IPv4 und IPv6 desselben Dienstes nur einmal zeigen, die öffentliche Adresse gewinnt.
         existing = ports.get(p.key)
         seen.setdefault(p.key, set()).add(num)
@@ -427,6 +482,12 @@ def port_is_known(port: Port, known: set[str], *, dynamic_min: int = DEFAULT_DYN
     sie decken den Sammeleintrag ab, damit nicht überall auf einmal "neue" Ports gemeldet werden."""
     if port.key in known:
         return True
+    if port.span is not None:
+        low, high = port.span
+        return any(
+            m.group("proto") == port.proto and m.group("proc") == port.process and low <= int(m.group("port")) <= high
+            for m in map(_LEGACY_PORT_KEY_RE.match, known) if m
+        )
     if not port.dynamic:
         return False
     legacy_proc = port.process or "?"
@@ -456,7 +517,7 @@ def parse_files(lines: list[str], *, binary: bool) -> dict[str, FileEntry]:
     return out
 
 
-def parse_guard(output: str, dynamic_processes: list[str] | None = None) -> GuardSnapshot:
+def parse_guard(output: str, dynamic_processes: list[str] | None = None, ranges: list[PortRange] | None = None) -> GuardSnapshot:
     s = _sections(output)
     uid = (s.get("uid") or ["?"])[0].strip()
     dynamic_min = parse_port_range(s.get("range", []))
@@ -469,7 +530,7 @@ def parse_guard(output: str, dynamic_processes: list[str] | None = None) -> Guar
         sshd=sshd, ssh_findings=ssh_findings,
         is_root=uid == "0", failures=failures, logins=logins, fail2ban=state if state in F2B_STATES else "none",
         jails=jails, ports=parse_ports(s.get("ports", []), dynamic_processes=dynamic_processes, dynamic_min=dynamic_min,
-                                       is_root=uid == "0"),
+                                       is_root=uid == "0", ranges=ranges),
         files=files, ssh_log_found=bool(s.get("ssh")), dynamic_min=dynamic_min,
     )
 
@@ -625,7 +686,7 @@ def adopted_by_setup(change: Change, entry: FileEntry | None, old: dict[str, Any
     if path in _SETUP_ACCOUNT_ACTIONS:
         allowed = bool(_SETUP_ACCOUNT_ACTIONS[path] & run.actions)
     else:
-        allowed = keys_file and "key_added" in run.actions
+        allowed = keys_file and bool({"key_added", "key_fixed"} & run.actions)
     state = run.files.get(path)
     if not allowed or entry is None or not isinstance(state, dict) or "before" not in state or "after" not in state:
         return False

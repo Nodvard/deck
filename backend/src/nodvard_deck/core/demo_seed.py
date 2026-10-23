@@ -1,6 +1,5 @@
-"""Beispieldaten ("Mit Beispieldaten ansehen") und Demo-Modus (`NODVARD_DECK_DEMO_MODE`).
-
-Nur generische Kern-Konzepte, nie Modul-Spezifisches (sonst Verstoß gegen `scripts/check_core_purity.py`)."""
+"""Beispieldaten („Mit Beispieldaten ansehen“) und Demo-Modus (`NODVARD_DECK_DEMO_MODE`), nur mit generischen
+Kern-Konzepten."""
 
 from __future__ import annotations
 
@@ -44,7 +43,7 @@ _DEMO_HOSTS: list[dict[str, Any]] = [
      "tags": ["demo", "speicher"]},
     {"name": "demo-webserver", "display_name": "Beispiel-Webserver", "address": "192.0.2.11", "status": "up",
      "tags": ["demo", "web"]},
-    {"name": "demo-pi", "display_name": "Beispiel-Raspberry-Pi", "address": "192.0.2.12", "status": "up",
+    {"name": "demo-heimserver", "display_name": "Beispiel-Heimserver", "address": "192.0.2.12", "status": "up",
      "tags": ["demo", "zuhause"]},
     {"name": "demo-sicherung", "display_name": "Beispiel-Sicherungsziel", "address": "192.0.2.13", "status": "down",
      "tags": ["demo", "sicherung"]},
@@ -58,7 +57,7 @@ _DEMO_HOSTS: list[dict[str, Any]] = [
 _DEMO_APPS: list[tuple[str, str, str, str, str | None]] = [
     ("Beispiel-Router", "http://192.0.2.1", "router", "Netzwerk", None),
     ("Beispiel-NAS", "http://192.0.2.10:5000", "hard-drive", "Speicher", "demo-nas"),
-    ("Beispiel-Pi-hole", "http://192.0.2.12/admin", "shield-check", "Netzwerk", "demo-pi"),
+    ("Beispiel-Pi-hole", "http://192.0.2.12/admin", "shield-check", "Netzwerk", "demo-heimserver"),
 ]
 
 # (Schwere, Titel, Text, Ziel-Server oder None für die Startseite, Minuten seit jetzt, gelesen). Sie werden direkt als
@@ -96,8 +95,8 @@ class DemoStatus:
     apps: int = 0
     layout_replaced: bool = False
     hosts_with_access: list[str] = field(default_factory=list)
-    """Anzeigenamen der Beispiel-Server, an denen inzwischen ein Zugang hängt. Beim Löschen werden sie
-    trotzdem entfernt, die Oberfläche warnt vorher."""
+    """Anzeigenamen der Beispiel-Server, an denen inzwischen ein Zugang hängt; beim Löschen werden sie trotzdem
+    entfernt, die Oberfläche warnt."""
 
 
 @dataclass
@@ -131,7 +130,6 @@ def _ids(record: dict[str, Any] | None, key: str) -> list[str]:
 
 
 def _app_is_still_demo(app: CustomApp) -> bool:
-    """Eine Beispiel-App ist erkennbar eines, solange ihre Adresse im Dokumentationsbereich liegt."""
     try:
         return ipaddress.ip_address((urlsplit(app.url).hostname or "").strip()) in DEMO_NETWORK
     except ValueError:
@@ -139,8 +137,6 @@ def _app_is_still_demo(app: CustomApp) -> bool:
 
 
 def _is_still_demo(host: Host) -> bool:
-    """Noch erkennbar ein Beispiel: Adresse im Dokumentationsbereich und nicht von einem Modul
-    eingelesen. Alles andere hat jemand zu einem echten Server gemacht."""
     if host.provider_ext_id:
         return False
     try:
@@ -150,8 +146,7 @@ def _is_still_demo(host: Host) -> bool:
 
 
 async def still_demo_host_ids(session: AsyncSession) -> set[str]:
-    """IDs der Server, die noch erkennbar Beispiele sind (von `seed_demo_data` angelegt, nicht von einem Modul eingelesen).
-    Hintergrundaufträge, die sich mit Servern verbinden (Erreichbarkeitsprüfung), fassen genau diese nie an."""
+    """IDs der Server, die noch erkennbar Beispiele sind, damit Hintergrundaufträge sich nie mit ihnen verbinden."""
     host_ids = _ids(await _record(session), "host_ids")
     if not host_ids:
         return set()
@@ -164,7 +159,6 @@ async def demo_status(session: AsyncSession) -> DemoStatus:
     host_ids = _ids(record, "host_ids")
     notification_ids = _ids(record, "notification_ids")
     app_ids = _ids(record, "app_ids")
-    # Nur Server, die noch erkennbar Beispiele sind: ein zum echten Server umgebauter zählt nicht mehr.
     hosts = (
         [h for h in (await session.execute(select(Host).where(Host.id.in_(host_ids)))).scalars().unique() if _is_still_demo(h)]
         if host_ids else []
@@ -200,7 +194,6 @@ async def demo_status(session: AsyncSession) -> DemoStatus:
 
 
 def _arrange(widgets: Sequence[tuple[str, Any]]) -> list[dict[str, Any]]:
-    """Die Widgets nebeneinander auf das Zwölferraster setzen, Zeile für Zeile."""
     items: list[dict[str, Any]] = []
     x = y = row_h = 0
     for ext_id, spec in widgets:
@@ -222,9 +215,8 @@ async def seed_demo_data(
     actor_type: str = "system",
     actor_id: str = "demo-mode",
 ) -> tuple[DemoStatus, bool]:
-    """Legt die Beispieldaten an und gibt `(Status, neu angelegt)` zurück; sind sie schon da, passiert nichts.
-
-    Wirft `DemoBlockedError`, wenn es echte Server gibt. Mit `user_id` und `widgets` wird das Layout ersetzt."""
+    """Legt die Beispieldaten an und gibt `(Status, neu angelegt)` zurück, bei echten Servern wirft es
+    `DemoBlockedError`."""
     from ..services import custom_apps as custom_apps_service
     from ..services import dashboard as dashboard_service
     from ..services import hosts as hosts_service
@@ -321,9 +313,8 @@ async def remove_demo_data(
     actor_id: str = "demo-mode",
     audit: bool = True,
 ) -> DemoRemoval:
-    """Entfernt genau die Zeilen aus `demo.seeded_ids` und stellt das Layout wieder her; sonst passiert nichts.
-
-    Läuft auf einem Beispiel-Server eine Aktion, wirft es `HostBusyError` und lässt alles unverändert."""
+    """Entfernt genau die Zeilen aus `demo.seeded_ids` und stellt das Layout wieder her, bei laufender Aktion
+    `HostBusyError`."""
     from ..services import hosts as hosts_service
 
     record = await _record(session)
@@ -331,8 +322,8 @@ async def remove_demo_data(
         return DemoRemoval()
     result = DemoRemoval()
 
-    # Erst prüfen, dann löschen: Läuft auf einem Beispiel-Server gerade eine Aktion, bleibt alles unverändert
-    # (kein halb gelöschter Zustand, auch ohne Rollback des Aufrufers).
+    # Erst prüfen, dann löschen: So bleibt bei einer laufenden Aktion alles unverändert, auch ohne Rollback des
+    # Aufrufers.
     host_ids = _ids(record, "host_ids")
     if host_ids:
         busy = await session.execute(

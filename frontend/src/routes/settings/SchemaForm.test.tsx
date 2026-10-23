@@ -344,3 +344,21 @@ describe("bestehende Zusätze", () => {
     expect(screen.queryByLabelText("Zeitpunkt", { selector: "input[type=text]" })).toBeNull();
   });
 });
+
+describe("x-warning", () => {
+  it("steht gelb unter der Überschrift, bei Listen, Ja/Nein-Feldern und in jedem Listeneintrag", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        ranges: {
+          type: "array", title: "Bereiche", "x-item-title": "Bereich", "x-warning": "Namen sind fälschbar.",
+          items: { type: "object", properties: { wide: { type: "boolean", title: "Breit", "x-warning": "Alles darin fällt nicht auf." } } },
+        },
+        plain: { type: "string", title: "Ohne" },
+      },
+    };
+    render(<Harness schema={schema} initial={{ ranges: [{ wide: false }] }} />);
+    const notes = screen.getAllByRole("note").map((n) => n.textContent);
+    expect(notes).toEqual(["Namen sind fälschbar.", "Alles darin fällt nicht auf."]);
+  });
+});

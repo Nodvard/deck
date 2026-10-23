@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,6 +35,11 @@ let layoutItems: unknown[];
 let backupsMeta: Record<string, unknown>;
 /** Jede gespeicherte Fassung des Layouts (PUT), die erste ist die der Auto-Platzierung. */
 let puts: unknown[][];
+let layoutGroups: unknown[] | undefined;
+/** Jede gespeicherte Fassung der Gruppen (PUT nur mit `groups`). */
+let groupPuts: unknown[][];
+/** Antwort des Proxmox-Widgets. */
+let proxmoxData: Record<string, unknown>;
 
 /** Was tatsaechlich auf dem Dashboard steht -- entfernte Widgets bleiben als
  * `config.hidden` im gespeicherten Layout (siehe lib/dashboard.ts). */
@@ -52,16 +57,22 @@ function mockFetch(catalog: unknown[] = [WIDGET_A, WIDGET_B]) {
     }
     if (url.endsWith("/api/v1/dashboard/layouts") && method === "GET") {
       return new Response(
-        JSON.stringify([{ id: "layout-1", name: "Standard", is_default: true, items: layoutItems, created_at: "", updated_at: "" }]),
+        JSON.stringify([{ id: "layout-1", name: "Standard", is_default: true, items: layoutItems, groups: layoutGroups, created_at: "", updated_at: "" }]),
         { status: 200 },
       );
     }
     if (url.endsWith("/api/v1/dashboard/layouts/layout-1") && method === "PUT") {
       const body = JSON.parse(init!.body as string);
-      layoutItems = body.items;
-      puts.push(body.items);
+      if (body.items) {
+        layoutItems = body.items;
+        puts.push(body.items);
+      }
+      if (body.groups) {
+        layoutGroups = body.groups;
+        groupPuts.push(body.groups);
+      }
       return new Response(
-        JSON.stringify({ id: "layout-1", name: "Standard", is_default: true, items: layoutItems, created_at: "", updated_at: "" }),
+        JSON.stringify({ id: "layout-1", name: "Standard", is_default: true, items: layoutItems, groups: layoutGroups, created_at: "", updated_at: "" }),
         { status: 200 },
       );
     }
@@ -72,7 +83,7 @@ function mockFetch(catalog: unknown[] = [WIDGET_A, WIDGET_B]) {
       return new Response(JSON.stringify({ data: { count: 5 }, meta: {} }), { status: 200 });
     }
     if (url.endsWith("/api/v1/ext/proxmox/widgets/overview") && method === "GET") {
-      return new Response(JSON.stringify({ data: { count: 7 }, meta: {} }), { status: 200 });
+      return new Response(JSON.stringify({ data: proxmoxData, meta: {} }), { status: 200 });
     }
     throw new Error(`Unerwarteter Fetch in diesem Test: ${method} ${url}`);
   });
@@ -80,13 +91,14 @@ function mockFetch(catalog: unknown[] = [WIDGET_A, WIDGET_B]) {
 
 function renderDashboard() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={["/"]}>
         <DashboardPage />
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...view, queryClient };
 }
 
 beforeEach(() => {
@@ -102,6 +114,9 @@ beforeEach(() => {
   ];
   puts = [];
   backupsMeta = {};
+  layoutGroups = undefined;
+  groupPuts = [];
+  proxmoxData = { count: 7 };
 });
 
 afterEach(() => {
@@ -379,7 +394,43 @@ describe("DashboardPage: Widgets einer umbenannten Erweiterung", () => {
   });
 });
 
+describe("Neue Kacheln nach dem Zwischenspeicher", () => {
+  const WIDGET_C = { ...WIDGET_A, id: "status-keller", title: "Keller", data_endpoint: "widgets/summary" };
+
+  it("platziert eine Kachel, die erst der frische Katalog kennt, auch wenn zuerst der Zwischenspeicher gezeigt wurde", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const page = () => (
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/"]}><DashboardPage /></MemoryRouter>
+      </QueryClientProvider>
+    );
+    vi.stubGlobal("fetch", mockFetch([WIDGET_A, WIDGET_B]));
+    const first = render(page());
+    await screen.findByText("Jobs");
+    first.unmount();
+    expect(puts).toEqual([]);
+
+    // Zurück auf die Startseite: zuerst der alte Katalog aus dem Zwischenspeicher, danach der frische mit der neuen Kachel.
+    vi.stubGlobal("fetch", mockFetch([WIDGET_A, WIDGET_B, WIDGET_C]));
+    render(page());
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect((puts[0] as { widget_id: string }[]).map((i) => i.widget_id)).toEqual(["summary", "overview", "status-keller"]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(puts).toHaveLength(1);
+  });
+});
+
 describe("Widget-Mindestgrößen (Nutzer: 'die Widgets sind kacke')", () => {
+  it("gridLayoutFor packt eine Gruppe dicht von links, auch wenn ihre gespeicherten Plätze Lücken lassen", async () => {
+    const { gridLayoutFor } = await import("./DashboardPage");
+    const entry = (widget_id: string, x: number, y: number) => ({
+      item: { widget_id, ext_id: "e", x, y, w: 4, h: 3, config: {} }, size: { w: 4, h: 3 }, min: { w: 4, h: 3 },
+    });
+    // Gespeichert in voller Breite, die übrigen Plätze gehören zu anderen Gruppen.
+    const layout = gridLayoutFor([entry("b", 8, 0), entry("a", 4, 0), entry("c", 8, 3)]);
+    expect(layout.map(({ i, x, y }) => [i, x, y])).toEqual([["e:b", 4, 0], ["e:a", 0, 0], ["e:c", 8, 0]]);
+  });
+
   it("sizeFor hebt zu kleine Karten auf die Mindestgröße ihres Typs", async () => {
     const { sizeFor } = await import("./DashboardPage");
     expect(sizeFor("list", 2, 2)).toEqual({ w: 4, h: 3 });
@@ -521,5 +572,647 @@ describe("DashboardPage Leerzustände", () => {
     const dialog = await openPicker();
     expect(dialog.getByText("Noch keine Widgets")).toBeInTheDocument();
     expect(dialog.getByRole("link", { name: "Module ansehen" })).toHaveAttribute("href", "/settings/extensions");
+  });
+});
+
+describe("DashboardPage: Gruppen", () => {
+  const BACKUPS = { ...WIDGET_A, group: "backups" };
+  const PROXMOX = { ...WIDGET_B, group: "servers", view: { ...WIDGET_B.view, tone: "{{ tone }}" } };
+
+  it("zeigt die Widgets unter ihren Gruppen, in der Reihenfolge der Vorgabe", async () => {
+    vi.stubGlobal("fetch", mockFetch([BACKUPS, PROXMOX]));
+    renderDashboard();
+    await screen.findByText("Jobs");
+    const sections = screen.getAllByTestId(/^widget-group-/).map((el) => el.dataset.testid);
+    expect(sections).toEqual(["widget-group-servers", "widget-group-backups"]);
+    expect(within(screen.getByTestId("widget-group-servers")).getByText("Hosts")).toBeInTheDocument();
+    expect(within(screen.getByTestId("widget-group-backups")).getByRole("button", { name: /Backups/ })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("zuklappen versteckt die Widgets der Gruppe und speichert nur die Gruppen", async () => {
+    vi.stubGlobal("fetch", mockFetch([BACKUPS, PROXMOX]));
+    renderDashboard();
+    await screen.findByText("Jobs");
+    const before = puts.length;
+    fireEvent.click(within(screen.getByTestId("widget-group-backups")).getByRole("button", { name: /Backups/ }));
+    await waitFor(() => expect(groupPuts).toHaveLength(1));
+    expect(screen.queryByText("Jobs")).toBeNull();
+    expect(screen.getByText("Hosts")).toBeInTheDocument();
+    expect(groupPuts[0]).toContainEqual({ key: "backups", title: null, collapsed: true });
+    expect(groupPuts[0].map((g) => (g as { key: string }).key)).toEqual(["servers", "security", "apps", "backups", "services"]);
+    expect(puts).toHaveLength(before);
+  });
+
+  it("zwei Gruppen schnell hintereinander zuklappen: beide bleiben zu", async () => {
+    vi.stubGlobal("fetch", mockFetch([BACKUPS, PROXMOX]));
+    renderDashboard();
+    await screen.findByText("Jobs");
+    const backups = within(screen.getByTestId("widget-group-backups")).getByRole("button", { name: /Backups/ });
+    const servers = within(screen.getByTestId("widget-group-servers")).getByRole("button", { name: /Server und Proxmox/ });
+    act(() => {
+      backups.click();
+      servers.click();
+    });
+    await waitFor(() => expect(groupPuts).toHaveLength(2));
+    const collapsed = (groupPuts[1] as { key: string; collapsed: boolean }[]).filter((g) => g.collapsed).map((g) => g.key);
+    expect(collapsed).toEqual(["servers", "backups"]);
+    expect(screen.queryByText("Jobs")).toBeNull();
+    expect(screen.queryByText("Hosts")).toBeNull();
+  });
+
+  it("nach dem Speichern gilt wieder der Stand vom Server, auch eine Änderung von einem anderen Gerät", async () => {
+    vi.stubGlobal("fetch", mockFetch([BACKUPS, PROXMOX]));
+    const { queryClient } = renderDashboard();
+    await screen.findByText("Jobs");
+    fireEvent.click(within(screen.getByTestId("widget-group-backups")).getByRole("button", { name: /Backups/ }));
+    await waitFor(() => expect(groupPuts).toHaveLength(1));
+    expect(screen.queryByText("Jobs")).toBeNull();
+
+    layoutGroups = [{ key: "backups", title: null, collapsed: false }];
+    await act(() => queryClient.invalidateQueries({ queryKey: ["dashboard-layouts"] }));
+    expect(await screen.findByText("Jobs")).toBeInTheDocument();
+    expect(within(screen.getByTestId("widget-group-backups")).getByRole("button", { name: /Backups/ })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("eine zugeklappte Gruppe zeigt einen Warnpunkt, wenn darin etwas nicht stimmt", async () => {
+    layoutGroups = [{ key: "servers", title: null, collapsed: true }];
+    proxmoxData = { count: 7, tone: "danger" };
+    vi.stubGlobal("fetch", mockFetch([BACKUPS, PROXMOX]));
+    renderDashboard();
+    await screen.findByText("Jobs");
+    const servers = within(screen.getByTestId("widget-group-servers"));
+    expect(await servers.findByTestId("group-attention")).toHaveTextContent("Störung");
+    expect(servers.queryByText("Hosts")).toBeNull();
+    expect(within(screen.getByTestId("widget-group-backups")).queryByTestId("group-attention")).toBeNull();
+  });
+
+  it("aufgeklappt kein Punkt, auch bei einer Störung (die Karten zeigen sie selbst)", async () => {
+    proxmoxData = { count: 7, tone: "danger" };
+    const fetchMock = mockFetch([BACKUPS, PROXMOX]);
+    vi.stubGlobal("fetch", fetchMock);
+    renderDashboard();
+    await screen.findByText("Hosts");
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/widgets/overview"))).toBe(true));
+    expect(screen.queryByTestId("group-attention")).toBeNull();
+  });
+
+  it("ein Widget, das nicht lädt, gibt der zugeklappten Gruppe einen grauen Punkt statt Ruhe", async () => {
+    layoutGroups = [{ key: "servers", title: null, collapsed: true }];
+    const base = mockFetch([BACKUPS, PROXMOX]);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/widgets/overview")) return new Response("{}", { status: 500 });
+      return base(input, init);
+    }));
+    renderDashboard();
+    await screen.findByText("Jobs");
+    const dot = await within(screen.getByTestId("widget-group-servers")).findByTestId("group-attention");
+    expect(dot).toHaveTextContent("Nicht geladen");
+  });
+
+  it("ohne Warnung kein Punkt, auch zugeklappt", async () => {
+    layoutGroups = [{ key: "servers", title: null, collapsed: true }];
+    const fetchMock = mockFetch([BACKUPS, PROXMOX]);
+    vi.stubGlobal("fetch", fetchMock);
+    renderDashboard();
+    await screen.findByText("Jobs");
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/widgets/overview"))).toBe(true));
+    const servers = within(screen.getByTestId("widget-group-servers"));
+    expect(servers.getByRole("button", { name: /Server und Proxmox/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByTestId("group-attention")).toBeNull();
+  });
+
+  it("eine selbst gewählte Gruppe (config.group) geht vor; ein Widget ohne Gruppe steht unter „Dienste“", async () => {
+    layoutItems = [
+      { widget_id: "summary", ext_id: "backups", x: 0, y: 0, w: 2, h: 2, config: {} },
+      { widget_id: "overview", ext_id: "proxmox", x: 2, y: 0, w: 2, h: 2, config: { group: "security" } },
+    ];
+    vi.stubGlobal("fetch", mockFetch([WIDGET_A, PROXMOX]));
+    renderDashboard();
+    await screen.findByText("Jobs");
+    expect(within(screen.getByTestId("widget-group-security")).getByText("Hosts")).toBeInTheDocument();
+    expect(within(screen.getByTestId("widget-group-services")).getByText("Jobs")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Sicherheit/ })).toBeInTheDocument();
+  });
+
+  it("ein eigener Gruppenname aus dem Layout steht im Kopf", async () => {
+    layoutGroups = [{ key: "backups", title: "Sicherungen", collapsed: false }];
+    vi.stubGlobal("fetch", mockFetch([BACKUPS, PROXMOX]));
+    renderDashboard();
+    await screen.findByText("Jobs");
+    expect(within(screen.getByTestId("widget-group-backups")).getByRole("button", { name: /Sicherungen/ })).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^widget-group-/).map((el) => el.dataset.testid)).toEqual(["widget-group-backups", "widget-group-servers"]);
+  });
+});
+
+describe("DashboardPage: Ladefehler statt Leerzustand", () => {
+  it("scheitert die Liste der Widgets, steht der Grund mit „Erneut versuchen“ da, nicht „Noch keine Widgets“", async () => {
+    const base = mockFetch();
+    let fail = true;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (fail && url.endsWith("/api/v1/widgets")) return new Response(JSON.stringify({ detail: "Dienst startet neu" }), { status: 503 });
+      return base(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderDashboard();
+    const error = await screen.findByTestId("load-error");
+    expect(error).toHaveTextContent("Die Liste der Widgets ließ sich gerade nicht laden");
+    expect(screen.queryByTestId("dashboard-no-widgets")).toBeNull();
+
+    fail = false;
+    fireEvent.click(within(error).getByRole("button", { name: "Erneut versuchen" }));
+    await waitFor(() => expect(screen.queryByTestId("load-error")).toBeNull());
+  });
+
+  it("scheitert die Anordnung, steht der Grund da statt „Kein Dashboard-Layout gefunden“", async () => {
+    const base = mockFetch();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/api/v1/dashboard/layouts") && (init?.method ?? "GET") === "GET") {
+        return new Response(JSON.stringify({ detail: "Datenbank gesperrt" }), { status: 500 });
+      }
+      return base(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderDashboard();
+    expect(await screen.findByTestId("load-error")).toHaveTextContent("Die Anordnung der Widgets ließ sich gerade nicht laden");
+    expect(screen.queryByText("Kein Dashboard-Layout gefunden.")).toBeNull();
+  });
+});
+
+describe("DashboardPage: Bearbeiten", () => {
+  const BACKUPS = { ...WIDGET_A, group: "backups" };
+  const PROXMOX = { ...WIDGET_B, group: "servers" };
+  const card = (id: string) => screen.getByTestId(`widget-${id}`);
+
+  function setup(catalog: unknown[] = [BACKUPS, PROXMOX]) {
+    const fetchMock = mockFetch(catalog);
+    vi.stubGlobal("fetch", fetchMock);
+    renderDashboard();
+    return fetchMock;
+  }
+  /** Alle gesendeten PUT-Bodies, in der Reihenfolge. */
+  const putBodies = (fetchMock: ReturnType<typeof mockFetch>) =>
+    fetchMock.mock.calls
+      .filter(([, init]) => (init as RequestInit | undefined)?.method === "PUT")
+      .map(([, init]) => JSON.parse((init as RequestInit).body as string) as { items?: { widget_id: string; w: number; config: Record<string, unknown> }[]; groups?: { key: string; title: string | null; collapsed: boolean }[] });
+  async function startEditing() {
+    await screen.findByText("Jobs");
+    fireEvent.click(screen.getByRole("button", { name: "Bearbeiten" }));
+  }
+  const finish = () => fireEvent.click(screen.getByRole("button", { name: "Fertig" }));
+
+  it("außerhalb des Bearbeitens: kein Griff, keine Leiste, kein Ziehen der Breite", async () => {
+    setup();
+    await screen.findByText("Jobs");
+    expect(document.querySelector(".widget-drag-handle")).toBeNull();
+    // react-grid-layout lässt die Breitengriffe im Dokument und versteckt sie per Klasse.
+    const items = document.querySelectorAll(".react-grid-item");
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) expect(item).toHaveClass("react-resizable-hide");
+    expect(screen.queryAllByTestId("widget-edit-bar")).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: "Fertig" })).toBeNull();
+  });
+
+  it("„Bearbeiten“ zeigt an jeder Karte Griff und Leiste, dazu den Hinweis; Abbrechen und Fertig ersetzen den Knopf", async () => {
+    setup();
+    await startEditing();
+    expect(screen.queryByRole("button", { name: "Bearbeiten" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Abbrechen" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Fertig" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Widgets verwalten" })).toBeInTheDocument();
+    expect(screen.getAllByTitle("Zum Verschieben ziehen")).toHaveLength(2);
+    expect(screen.getAllByTestId("widget-edit-bar")).toHaveLength(2);
+    for (const item of document.querySelectorAll(".react-grid-item")) expect(item).not.toHaveClass("react-resizable-hide");
+    expect(screen.getByTestId("edit-hint")).toHaveTextContent("Ziehe Widgets am Griff");
+    const bar = within(card("backups-summary"));
+    expect(bar.getByLabelText("Höhe")).toHaveValue("auto");
+    expect(bar.getByRole("button", { name: "Schmal" })).toHaveAttribute("aria-pressed", "true");
+    expect(bar.getByLabelText("Gruppe")).toHaveValue("backups");
+  });
+
+  it("den Knopf „Bearbeiten“ gibt es nur, solange ein Widget auf der Startseite steht", async () => {
+    setup();
+    expect(await screen.findByRole("button", { name: "Bearbeiten" })).toBeInTheDocument();
+    cleanup();
+
+    layoutItems = (layoutItems as { config: object }[]).map((i) => ({ ...i, config: { hidden: true } }));
+    setup();
+    await screen.findByText(/Keine Widgets auf dem Dashboard/);
+    expect(screen.queryByRole("button", { name: "Bearbeiten" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Widgets verwalten" })).toBeInTheDocument();
+  });
+
+  it("Höhe „Groß“ wählen und „Fertig“: genau ein PUT mit den Einträgen, ohne Gruppen, danach endet der Modus", async () => {
+    const fetchMock = setup();
+    await startEditing();
+    fireEvent.change(within(card("backups-summary")).getByLabelText("Höhe"), { target: { value: "l" } });
+    expect(putBodies(fetchMock)).toHaveLength(0);
+
+    finish();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Bearbeiten" })).toBeInTheDocument());
+    const bodies = putBodies(fetchMock);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0].items!.find((i) => i.widget_id === "summary")!.config.size).toBe("l");
+    expect(bodies[0].items!.find((i) => i.widget_id === "overview")!.config.size).toBeUndefined();
+    expect(bodies[0]).not.toHaveProperty("groups");
+    expect(screen.queryAllByTestId("widget-edit-bar")).toHaveLength(0);
+  });
+
+  it("eine Kachel, die erst während des Bearbeitens dazukommt, stellt die Seite nach „Fertig“ dazu", async () => {
+    const KELLER = { ...BACKUPS, id: "status-keller", title: "Keller" };
+    vi.stubGlobal("fetch", mockFetch([BACKUPS, PROXMOX]));
+    const { queryClient } = renderDashboard();
+    await startEditing();
+    vi.stubGlobal("fetch", mockFetch([BACKUPS, PROXMOX, KELLER]));
+    await queryClient.invalidateQueries({ queryKey: ["widgets"] });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(puts).toEqual([]);
+
+    finish();
+    await waitFor(() => expect(visible().map((i) => i.widget_id)).toEqual(["summary", "overview", "status-keller"]));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(visible().map((i) => i.widget_id)).toEqual(["summary", "overview", "status-keller"]);
+  });
+
+  it("nach „Fertig“ gilt für die Gruppen wieder der Stand vom Server, auch eine Änderung von einem anderen Gerät", async () => {
+    vi.stubGlobal("fetch", mockFetch([BACKUPS, PROXMOX]));
+    const { queryClient } = renderDashboard();
+    await startEditing();
+    fireEvent.change(screen.getByLabelText("Name der Gruppe Server und Proxmox"), { target: { value: "Maschinen" } });
+    finish();
+    expect(await screen.findByRole("button", { name: /Maschinen/ })).toBeInTheDocument();
+
+    layoutGroups = [{ key: "servers", title: "Rechner", collapsed: false }];
+    await act(() => queryClient.invalidateQueries({ queryKey: ["dashboard-layouts"] }));
+    expect(await screen.findByRole("button", { name: /Rechner/ })).toBeInTheDocument();
+  });
+
+  // Für das Layout gibt es keinen Kanal und kein Nachladen beim Fokus: Was ein anderes Gerät im Modus speichert, steht
+  // nur auf dem Server (`layoutGroups`), die Seite kennt es nicht.
+  it("klappt ein anderes Gerät im Modus eine Gruppe zu, bleibt sie nach „Fertig“ zu", async () => {
+    setup();
+    await startEditing();
+    fireEvent.change(within(card("backups-summary")).getByLabelText("Höhe"), { target: { value: "l" } });
+    layoutGroups = [{ key: "backups", title: null, collapsed: true }];
+
+    finish();
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(groupPuts).toHaveLength(0);
+    expect((puts[0] as { config: object }[])[0].config).toEqual({ size: "l" });
+    await waitFor(() => expect(screen.queryByText("Jobs")).toBeNull());
+  });
+
+  it("benennt ein anderes Gerät im Modus eine Gruppe um, die hier unberührt bleibt, gilt nach „Fertig“ der neue Name", async () => {
+    layoutGroups = [{ key: "servers", title: "Maschinen", collapsed: false }];
+    setup();
+    await startEditing();
+    fireEvent.change(screen.getByLabelText("Name der Gruppe Backups"), { target: { value: "Sicherungen" } });
+    layoutGroups = [{ key: "servers", title: "Rechner", collapsed: false }];
+
+    finish();
+    await waitFor(() => expect(groupPuts).toHaveLength(1));
+    expect(groupPuts[0]).toContainEqual({ key: "servers", title: "Rechner", collapsed: false });
+    expect(groupPuts[0]).toContainEqual({ key: "backups", title: "Sicherungen", collapsed: false });
+    expect(await screen.findByRole("button", { name: /Rechner/ })).toBeInTheDocument();
+  });
+
+  it("benennen beide Geräte dieselbe Gruppe um, gewinnt der Name aus dem Modus, das Zuklappen vom anderen Gerät bleibt", async () => {
+    setup();
+    await startEditing();
+    fireEvent.change(screen.getByLabelText("Name der Gruppe Backups"), { target: { value: "Sicherungen" } });
+    layoutGroups = [{ key: "backups", title: "Ablage", collapsed: false }, { key: "servers", title: null, collapsed: true }];
+
+    finish();
+    await waitFor(() => expect(groupPuts).toHaveLength(1));
+    expect(groupPuts[0]).toContainEqual({ key: "backups", title: "Sicherungen", collapsed: false });
+    expect(groupPuts[0]).toContainEqual({ key: "servers", title: null, collapsed: true });
+    expect(await screen.findByRole("button", { name: /Sicherungen/ })).toBeInTheDocument();
+  });
+
+  it("zurück auf „Automatisch“ nimmt die Größe wieder aus dem Eintrag", async () => {
+    layoutItems = [{ widget_id: "summary", ext_id: "backups", x: 0, y: 0, w: 2, h: 2, config: { size: "m" } }, layoutItems[1]];
+    const fetchMock = setup();
+    await startEditing();
+    const select = within(card("backups-summary")).getByLabelText("Höhe");
+    expect(select).toHaveValue("m");
+    fireEvent.change(select, { target: { value: "auto" } });
+    finish();
+    await waitFor(() => expect(putBodies(fetchMock)).toHaveLength(1));
+    expect(putBodies(fetchMock)[0].items![0].config).toEqual({});
+  });
+
+  it("„Abbrechen“ verwirft alles ohne Anfrage; beim nächsten Bearbeiten steht der alte Stand da", async () => {
+    const fetchMock = setup();
+    await startEditing();
+    const bar = within(card("backups-summary"));
+    fireEvent.change(bar.getByLabelText("Höhe"), { target: { value: "l" } });
+    fireEvent.click(bar.getByRole("button", { name: "Breit" }));
+    fireEvent.change(bar.getByLabelText("Gruppe"), { target: { value: "security" } });
+    fireEvent.change(screen.getByLabelText("Name der Gruppe Server und Proxmox"), { target: { value: "Maschinen" } });
+    fireEvent.click(within(card("proxmox-overview")).getByRole("button", { name: "Entfernen" }));
+    expect(screen.queryByText("Hosts")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Abbrechen" }));
+    expect(putBodies(fetchMock)).toHaveLength(0);
+    expect(await screen.findByText("Hosts")).toBeInTheDocument();
+    expect(within(screen.getByTestId("widget-group-backups")).getByText("Jobs")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Server und Proxmox/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Bearbeiten" }));
+    const again = within(card("backups-summary"));
+    expect(again.getByLabelText("Höhe")).toHaveValue("auto");
+    expect(again.getByRole("button", { name: "Schmal" })).toHaveAttribute("aria-pressed", "true");
+    expect(layoutItems).toEqual([
+      { widget_id: "summary", ext_id: "backups", x: 0, y: 0, w: 2, h: 2, config: {} },
+      { widget_id: "overview", ext_id: "proxmox", x: 2, y: 0, w: 2, h: 2, config: {} },
+    ]);
+  });
+
+  it("Gruppe wechseln: die Karte steht sofort unter der neuen Gruppe, nach „Fertig“ steht sie im PUT", async () => {
+    const fetchMock = setup();
+    await startEditing();
+    fireEvent.change(within(card("backups-summary")).getByLabelText("Gruppe"), { target: { value: "security" } });
+    expect(await within(screen.getByTestId("widget-group-security")).findByText("Jobs")).toBeInTheDocument();
+    expect(screen.queryByTestId("widget-group-backups")).toBeNull();
+    expect(putBodies(fetchMock)).toHaveLength(0);
+
+    finish();
+    await waitFor(() => expect(putBodies(fetchMock)).toHaveLength(1));
+    const moved = putBodies(fetchMock)[0].items!.find((i) => i.widget_id === "summary")!;
+    expect(moved.config.group).toBe("security");
+  });
+
+  it("eine Karte, die in eine Gruppe mit anderen kommt, steht dort am Ende", async () => {
+    layoutItems = [
+      { widget_id: "summary", ext_id: "backups", x: 0, y: 0, w: 2, h: 2, config: {} },
+      { widget_id: "overview", ext_id: "proxmox", x: 0, y: 4, w: 2, h: 2, config: { group: "services" } },
+    ];
+    const fetchMock = setup();
+    await startEditing();
+    fireEvent.change(within(card("backups-summary")).getByLabelText("Gruppe"), { target: { value: "services" } });
+    finish();
+    await waitFor(() => expect(putBodies(fetchMock)).toHaveLength(1));
+    const items = putBodies(fetchMock)[0].items as unknown as { widget_id: string; y: number }[];
+    expect(items.find((i) => i.widget_id === "summary")!.y).toBeGreaterThan(items.find((i) => i.widget_id === "overview")!.y);
+  });
+
+  it("Breite: „Breit“ setzt 8 Spalten, „Schmal“ wieder die Mindestbreite des Typs (mindestens 4)", async () => {
+    const fetchMock = setup();
+    await startEditing();
+    const bar = within(card("backups-summary"));
+    fireEvent.click(bar.getByRole("button", { name: "Breit" }));
+    expect(bar.getByRole("button", { name: "Breit" })).toHaveAttribute("aria-pressed", "true");
+    finish();
+    await waitFor(() => expect(putBodies(fetchMock)).toHaveLength(1));
+    expect(putBodies(fetchMock)[0].items!.find((i) => i.widget_id === "summary")!.w).toBe(8);
+
+    fireEvent.click(screen.getByRole("button", { name: "Bearbeiten" }));
+    fireEvent.click(within(card("backups-summary")).getByRole("button", { name: "Schmal" }));
+    finish();
+    await waitFor(() => expect(putBodies(fetchMock)).toHaveLength(2));
+    expect(putBodies(fetchMock)[1].items!.find((i) => i.widget_id === "summary")!.w).toBe(4);
+  });
+
+  it("ein Klick auf die schon gewählte Breite ändert nichts, auch nicht bei einer Karte unter der Schmal-Breite", async () => {
+    const fetchMock = setup();
+    await startEditing();
+    const narrow = within(card("backups-summary")).getByRole("button", { name: "Schmal" });
+    expect(narrow).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(narrow);
+    finish();
+    await waitFor(() => expect(putBodies(fetchMock)).toHaveLength(1));
+    expect(putBodies(fetchMock)[0].items!.find((i) => i.widget_id === "summary")!.w).toBe(2);
+  });
+
+  it("ein unveränderter Gruppenname wird als Vorgabe gespeichert, nicht als eigener Name", async () => {
+    const fetchMock = setup();
+    await startEditing();
+    expect(screen.getByLabelText("Name der Gruppe Server und Proxmox")).toHaveValue("Server und Proxmox");
+    fireEvent.change(screen.getByLabelText("Name der Gruppe Backups"), { target: { value: "Sicherungen" } });
+    finish();
+    await waitFor(() => expect(putBodies(fetchMock)).toHaveLength(1));
+    for (const group of putBodies(fetchMock)[0].groups!) expect(group.title).toBe(group.key === "backups" ? "Sicherungen" : null);
+  });
+
+  it("im Modus ist der Inhalt jeder Karte inert, also auch per Tastatur nicht bedienbar; danach wieder normal", async () => {
+    setup();
+    await startEditing();
+    const bodies = () => [...document.querySelectorAll(".widget-body")];
+    expect(bodies().length).toBe(2);
+    for (const body of bodies()) expect(body).toHaveAttribute("inert");
+    fireEvent.click(screen.getByRole("button", { name: "Abbrechen" }));
+    await waitFor(() => {
+      for (const body of bodies()) expect(body).not.toHaveAttribute("inert");
+    });
+  });
+
+  it("eine umbenannte Gruppe, deren letzte Karte wegzieht, behält ihren Namen im PUT", async () => {
+    const fetchMock = setup();
+    await startEditing();
+    fireEvent.change(screen.getByLabelText("Name der Gruppe Backups"), { target: { value: "Sicherungen" } });
+    fireEvent.change(within(card("backups-summary")).getByLabelText("Gruppe"), { target: { value: "security" } });
+    expect(screen.queryByTestId("widget-group-backups")).toBeNull();
+    finish();
+    await waitFor(() => expect(putBodies(fetchMock)).toHaveLength(1));
+    expect(putBodies(fetchMock)[0].groups!.find((g) => g.key === "backups")!.title).toBe("Sicherungen");
+    expect(putBodies(fetchMock)[0].items!.find((i) => i.widget_id === "summary")!.config.group).toBe("security");
+  });
+
+  it("Entfernen: die Karte ist sofort weg, nach „Fertig“ steht config.hidden im PUT", async () => {
+    const fetchMock = setup();
+    await startEditing();
+    fireEvent.click(within(card("backups-summary")).getByRole("button", { name: "Entfernen" }));
+    expect(screen.queryByText("Jobs")).toBeNull();
+    expect(screen.getByText("Hosts")).toBeInTheDocument();
+    expect(putBodies(fetchMock)).toHaveLength(0);
+
+    finish();
+    await waitFor(() => expect(putBodies(fetchMock)).toHaveLength(1));
+    const removed = putBodies(fetchMock)[0].items!.find((i) => i.widget_id === "summary")!;
+    expect(removed.config.hidden).toBe(true);
+    expect(screen.queryByText("Jobs")).toBeNull();
+  });
+
+  it("nach dem Gruppenwechsel bleibt der Fokus im Gruppen-Feld der Karte, auch beim nächsten Wechsel", async () => {
+    setup();
+    await startEditing();
+    const select = within(card("backups-summary")).getByLabelText("Gruppe");
+    select.focus();
+    fireEvent.change(select, { target: { value: "security" } });
+    await within(screen.getByTestId("widget-group-security")).findByText("Jobs");
+    const moved = within(card("backups-summary")).getByLabelText("Gruppe");
+    expect(moved).not.toBe(select);
+    expect(document.activeElement).toBe(moved);
+
+    fireEvent.change(moved, { target: { value: "apps" } });
+    await within(screen.getByTestId("widget-group-apps")).findByText("Jobs");
+    expect(document.activeElement).toBe(within(card("backups-summary")).getByLabelText("Gruppe"));
+  });
+
+  it("nach „Entfernen“ steht der Fokus auf dem Hinweis, ohne dass die Seite dorthin springt", async () => {
+    setup();
+    await startEditing();
+    const remove = within(card("backups-summary")).getByRole("button", { name: "Entfernen" });
+    const hint = screen.getByTestId("edit-hint");
+    const focusHint = vi.spyOn(hint, "focus");
+    remove.focus();
+    fireEvent.click(remove);
+    expect(screen.queryByText("Jobs")).toBeNull();
+    expect(document.activeElement).toBe(hint);
+    expect(focusHint).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it("Gruppe umbenennen: der Name steht nach „Fertig“ im PUT und im Kopf; ein leeres Feld heißt wieder Vorgabe", async () => {
+    layoutGroups = [{ key: "servers", title: "Maschinen", collapsed: false }];
+    const fetchMock = setup();
+    await startEditing();
+    const backups = screen.getByLabelText("Name der Gruppe Backups");
+    expect(backups).toHaveValue("Backups");
+    expect(backups).toHaveAttribute("placeholder", "Backups");
+    expect(backups).toHaveAttribute("maxlength", "60");
+    const servers = screen.getByLabelText("Name der Gruppe Server und Proxmox");
+    expect(servers).toHaveValue("Maschinen");
+
+    fireEvent.change(backups, { target: { value: "  Sicherungen " } });
+    fireEvent.change(servers, { target: { value: "" } });
+    finish();
+    await waitFor(() => expect(putBodies(fetchMock)).toHaveLength(1));
+    const groups = putBodies(fetchMock)[0].groups!;
+    expect(groups.find((g) => g.key === "backups")!.title).toBe("Sicherungen");
+    expect(groups.find((g) => g.key === "servers")!.title).toBeNull();
+    expect(await screen.findByRole("button", { name: /Sicherungen/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Server und Proxmox/ })).toBeInTheDocument();
+  });
+
+  it("zugeklappte Gruppen stehen im Modus offen, ohne Zuklappen; der gespeicherte Zustand bleibt", async () => {
+    layoutGroups = [{ key: "backups", title: null, collapsed: true }];
+    const fetchMock = setup();
+    await screen.findByText("Hosts");
+    expect(screen.queryByText("Jobs")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Bearbeiten" }));
+    expect(await screen.findByText("Jobs")).toBeInTheDocument();
+    for (const section of screen.getAllByTestId(/^widget-group-/)) expect(section.querySelector("[aria-expanded]")).toBeNull();
+
+    finish();
+    await waitFor(() => expect(putBodies(fetchMock)).toHaveLength(1));
+    expect(putBodies(fetchMock)[0]).not.toHaveProperty("groups");
+    await waitFor(() => expect(screen.queryByText("Jobs")).toBeNull());
+  });
+
+  it("im Modus löst nichts ein PUT aus, auch „Widgets verwalten“ ändert nur den Entwurf", async () => {
+    const fetchMock = setup();
+    await startEditing();
+    const dialog = await openPicker();
+    fireEvent.click((await dialog.findByText("Backup-Center")).closest("label")!.querySelector("input")!);
+    expect(putBodies(fetchMock)).toHaveLength(0);
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Schließen" }));
+    await waitFor(() => expect(screen.queryByText("Jobs")).toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "Abbrechen" }));
+    expect(await screen.findByText("Jobs")).toBeInTheDocument();
+    expect(putBodies(fetchMock)).toHaveLength(0);
+  });
+
+  it("scheitert das Speichern, bleibt der Modus samt Entwurf, mit Hinweis; ein zweiter Versuch klappt", async () => {
+    const base = mockFetch([BACKUPS, PROXMOX]);
+    let failNext = true;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT" && failNext) {
+        failNext = false;
+        return new Response(JSON.stringify({ detail: "Datenbank gesperrt" }), { status: 500 });
+      }
+      return base(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderDashboard();
+    await startEditing();
+    fireEvent.change(within(card("backups-summary")).getByLabelText("Höhe"), { target: { value: "m" } });
+
+    finish();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Speichern hat nicht geklappt");
+    expect(alert).toHaveTextContent("Datenbank gesperrt");
+    expect(within(card("backups-summary")).getByLabelText("Höhe")).toHaveValue("m");
+    expect(screen.getByRole("button", { name: "Fertig" })).toBeEnabled();
+
+    finish();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Bearbeiten" })).toBeInTheDocument());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(puts).toHaveLength(1);
+  });
+
+  it("während „Fertig“ speichert, ruht der Entwurf: keine Änderung per Tastatur, kein zweites Speichern", async () => {
+    const base = mockFetch([BACKUPS, PROXMOX]);
+    let release: () => void = () => undefined;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") await new Promise<void>((resolve) => { release = resolve; });
+      return base(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderDashboard();
+    await startEditing();
+    const height = within(card("backups-summary")).getByLabelText("Höhe");
+    fireEvent.change(height, { target: { value: "m" } });
+
+    finish();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Fertig" })).toBeDisabled());
+    expect(screen.getByTestId("edit-hint").parentElement?.querySelector("[aria-busy='true']")).toHaveAttribute("inert");
+    fireEvent.change(height, { target: { value: "l" } });
+    fireEvent.click(screen.getByRole("button", { name: "Fertig" }));
+    release();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Bearbeiten" })).toBeInTheDocument());
+    expect(putBodies(fetchMock)).toHaveLength(1);
+    expect(putBodies(fetchMock)[0].items!.find((i) => i.widget_id === "summary")!.config.size).toBe("m");
+    expect(screen.getByRole("button", { name: "Bearbeiten" })).toHaveFocus();
+  });
+
+  it("„Widgets verwalten“ im Modus: der Dialog sagt, dass erst „Fertig“ speichert, und heißt „Schließen“", async () => {
+    setup();
+    await startEditing();
+    expect(screen.getByTestId("edit-hint")).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Widgets verwalten" }));
+    expect(await screen.findByTestId("picker-draft-hint")).toHaveTextContent("erst mit „Fertig“ auf der Startseite");
+    expect(within(screen.getByRole("dialog")).getByRole("button", { name: "Schließen" })).toBeInTheDocument();
+    expect(within(screen.getByRole("dialog")).queryByRole("button", { name: "Fertig" })).toBeNull();
+  });
+
+  it("eine breite Karte rechts rückt beim Speichern so weit nach links, dass sie ins Raster passt", async () => {
+    layoutItems = [
+      { widget_id: "summary", ext_id: "backups", x: 6, y: 0, w: 4, h: 2, config: {} },
+      { widget_id: "overview", ext_id: "proxmox", x: 0, y: 0, w: 4, h: 2, config: { group: "backups" } },
+    ];
+    const fetchMock = setup();
+    await startEditing();
+    fireEvent.click(within(card("backups-summary")).getByRole("button", { name: "Breit" }));
+    finish();
+    await waitFor(() => expect(putBodies(fetchMock)).toHaveLength(1));
+    const saved = putBodies(fetchMock)[0].items!.find((i) => i.widget_id === "summary") as unknown as { x: number; w: number };
+    expect(saved.w).toBe(8);
+    expect(saved.x + saved.w).toBeLessThanOrEqual(12);
+  });
+
+  it("am Handy dieselbe Leiste, aber ohne Griff und mit passendem Hinweis", async () => {
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 390 });
+    try {
+      setup();
+      await startEditing();
+      expect(screen.getAllByTestId("widget-edit-bar")).toHaveLength(2);
+      expect(document.querySelector(".widget-drag-handle")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Breit" })).toBeNull();
+      expect(screen.getByTestId("edit-hint")).toHaveTextContent("größeren Bildschirm");
+    } finally {
+      if (original) Object.defineProperty(HTMLElement.prototype, "clientWidth", original);
+    }
+  });
+
+  it("rowsFor: eine gewählte Größe gilt vor der Messung, Zahl und Tacho bleiben mindestens S", async () => {
+    const { rowsFor } = await import("./DashboardPage");
+    expect(rowsFor("list", 3, 3, 5)).toBe(5);
+    expect(rowsFor("list", undefined, 3, 2)).toBe(2);
+    expect(rowsFor("stat", 1, 2, 2)).toBe(2);
+    expect(rowsFor("list", 1, 3, null)).toBe(1);
   });
 });

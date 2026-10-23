@@ -56,6 +56,8 @@ export interface SetupOut {
   notes: string[];
   groups: string[];
   sudo: boolean;
+  /** Ob zu `sudo` die volle Regel gehört (sonst nur die Regeln der Hilfsskripte). Fehlt bei älteren Servern: dann ja. */
+  full_sudo?: boolean;
   /** Fehlt bei älteren Servern. */
   helpers?: SetupHelper[];
 }
@@ -235,13 +237,17 @@ export function useGroupMembers(groupIds: string[]): { members: Record<string, s
 }
 
 /** Der Einrichtungsbefehl. Ändert nichts auf dem Server (GET); die Wahl von sudo und Gruppen steht im Key. */
-export function useSetup(hostId: string, credentialId: string, options: { sudo: boolean; groups: string[]; enabled: boolean }) {
+export function useSetup(
+  hostId: string, credentialId: string, options: { sudo: boolean; fullSudo?: boolean; groups: string[]; enabled: boolean },
+) {
   const groups = [...options.groups].sort();
+  const fullSudo = options.sudo && Boolean(options.fullSudo);
   const query = new URLSearchParams();
   query.set("sudo", String(options.sudo));
+  if (fullSudo) query.set("full_sudo", "true");
   for (const g of groups) query.append("groups", g);
   return useQuery({
-    queryKey: ["hosts", hostId, "credentials", credentialId, "setup", options.sudo, groups],
+    queryKey: ["hosts", hostId, "credentials", credentialId, "setup", options.sudo, fullSudo, groups],
     queryFn: () => api.get<SetupOut>(`/hosts/${hostId}/credentials/${credentialId}/setup?${query.toString()}`),
     enabled: options.enabled,
     retry: false,

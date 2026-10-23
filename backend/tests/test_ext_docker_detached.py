@@ -1,7 +1,7 @@
-"""Docker-Modul: Image-Update-Laeufe entkoppelt vom SSH-Kanal -- mit einer echten Shell.
+"""Docker-Modul: Image-Update-Läufe entkoppelt vom SSH-Kanal -- mit einer echten Shell.
 
-Statt Docker laeuft ein kleines `docker` auf PATH, das seine Argumente aufschreibt; statt
-des echten Home-Ordners ein Testordner (`HOME`). Der setsid-Weg wird echt geprueft."""
+Statt Docker läuft ein kleines `docker` auf PATH, das seine Argumente aufschreibt; statt
+des echten Home-Ordners ein Testordner (`HOME`). Der setsid-Weg wird echt geprüft."""
 
 from __future__ import annotations
 
@@ -80,7 +80,7 @@ def test_the_run_survives_when_the_launching_shell_and_its_channel_die(tmp_path)
     proc.wait(timeout=10)
     launch = dt.parse_launch("\n".join(seen))
     assert launch.started and launch.method in ("setsid", "nohup"), seen
-    assert not (_jobs(tmp_path) / f"{RID}.rc").exists()  # laeuft noch
+    assert not (_jobs(tmp_path) / f"{RID}.rc").exists()  # läuft noch
     p = _poll(env)
     assert (p.state, p.rc, p.step) == ("done", 0, "done"), p
     assert "Recreated" in p.output
@@ -157,7 +157,7 @@ def test_old_logs_are_cleaned_up_on_each_new_run(tmp_path):
 @posix
 def test_an_unusable_home_means_not_started(tmp_path):
     home = tmp_path / "keine-mappe"
-    home.write_text("ich bin eine Datei")  # dort laesst sich kein Ordner anlegen
+    home.write_text("ich bin eine Datei")  # dort lässt sich kein Ordner anlegen
     out = subprocess.run(["sh", "-c", dt.launch_command(RID, "true")], capture_output=True, text=True, timeout=30,
                          env={"PATH": "/usr/bin:/bin", "HOME": str(home)}, check=False)
     assert dt.parse_launch(out.stdout).started is False
@@ -183,7 +183,7 @@ def test_poll_parsing_handles_every_state():
     assert dt.parse_poll("@@lost\n@@tail\nletzte Zeile\n").state == "lost"
     assert dt.parse_poll("@@unknown\n@@tail\n").state == "unknown"
     assert dt.parse_poll("").state == "noreply" and dt.parse_poll("Connection reset\n").state == "noreply"
-    # Text aus dem Protokoll darf den Kopf nicht vortaeuschen.
+    # Text aus dem Protokoll darf den Kopf nicht vortäuschen.
     fake = dt.parse_poll("@@running\n@@tail\n@@rc=0\n")
     assert fake.state == "running" and fake.rc is None
     assert dt.parse_launch("@@launch\n@@method=setsid\n@@pid=42\n") == dt.Launch("setsid", 42)
@@ -194,7 +194,7 @@ def test_poll_parsing_handles_every_state():
 @posix
 def test_quoting_end_to_end_paths_with_spaces_reach_docker_exactly(tmp_path):
     """`apply_script` durch `launch_command` (sh -c in setsid): ein `docker`-Stub schreibt
-    seine Argumente Zeile fuer Zeile auf -- sie muessen genau stimmen."""
+    seine Argumente Zeile für Zeile auf -- sie müssen genau stimmen."""
     bindir = tmp_path / "bin"
     record = tmp_path / "argv"
     # `docker image inspect` meldet eine ANDERE ID als die laufende: der Pull hat etwas Neues gebracht.
@@ -296,7 +296,7 @@ def test_a_lock_of_a_dead_run_is_cleaned_up_and_never_blocks(tmp_path):
     fresh, _ = _launch_out("echo neu", env, run_id="imgupd_bbbbbbbbbbbbbbbb", lock="web")
     assert fresh.started and not fresh.busy
     assert _poll(env, run_id="imgupd_bbbbbbbbbbbbbbbb").rc == 0
-    # Auch eine wiederverwendete Prozessnummer eines fremden Programms haelt sie nicht.
+    # Auch eine wiederverwendete Prozessnummer eines fremden Programms hält sie nicht.
     (_jobs(tmp_path) / "lock-web").mkdir(exist_ok=True)
     (_jobs(tmp_path) / "lock-web" / "pid").write_text(str(os.getpid()))
     assert _busy_probe(env) is False

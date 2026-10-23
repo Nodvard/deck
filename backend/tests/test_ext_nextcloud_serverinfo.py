@@ -220,10 +220,10 @@ def test_garbage_gives_nothing_but_no_error(data):
 def test_base_url_is_normalized_and_credentials_are_refused():
     assert normalize_base_url(" https://cloud.example.com/ ") == "https://cloud.example.com"
     assert normalize_base_url("http://cloud.example.com:8080/nextcloud/?x=1#y") == "http://cloud.example.com:8080/nextcloud"
-    for bad in ("cloud.example.com", "ftp://cloud.example.com", "https://user:pw@cloud.example.com", "https://cloud.example.com:99999", "https://", ""):
+    for bad in ("cloud.example.com", "ftp://cloud.example.com", "https://user:" + "pw@cloud.example.com", "https://cloud.example.com:99999", "https://", ""):
         with pytest.raises(ValueError):
             normalize_base_url(bad)
-    cfg = read_serverinfo_config({"base_url": "https://u:geheim@cloud.example.com", "username": "alice"})
+    cfg = read_serverinfo_config({"base_url": "https://u:" + "geheim@cloud.example.com", "username": "alice"})
     assert cfg.base_url is None and "ungültig" in (cfg.problem or "") and "geheim" not in (cfg.problem or "")
     assert read_serverinfo_config({}) == read_serverinfo_config({"base_url": "  ", "username": ""})
     assert read_serverinfo_config({"base_url": BASE, "username": "alice", "tls_insecure_skip_verify": "ja"}).insecure_tls is False
@@ -705,7 +705,7 @@ async def test_widget_meta_says_not_configured_only_without_usable_credentials(c
     assert widget["meta"]["state"] == "not_configured" and widget["data"][0]["label"] == "nicht eingerichtet"
 
     # Eine eingetragene, aber unbrauchbare Adresse ist ein Fehler und bleibt sichtbar.
-    await _configure(client, headers, token=TOKEN, url="https://alice:geheim@cloud.example.com")
+    await _configure(client, headers, token=TOKEN, url="https://alice:" + "geheim@cloud.example.com")
     widget = await _widget(client, headers)
     assert widget["meta"]["state"] == "error" and widget["data"][0]["label"] == "Fehler"
 
@@ -881,7 +881,7 @@ async def test_tls_exception_is_used_only_when_asked_for(client, db_session, tes
 @pytest.mark.asyncio
 async def test_address_with_credentials_is_refused_before_anything_is_sent(client, db_session, test_settings):
     headers, fake = await _enable(client, db_session, test_settings)
-    await _configure(client, headers, token=TOKEN, url="https://alice:geheim@cloud.example.com")
+    await _configure(client, headers, token=TOKEN, url="https://alice:" + "geheim@cloud.example.com")
     body = await _serverinfo(client, headers)
     assert body["state"] == "error" and "ungültig" in body["message"] and "geheim" not in json.dumps(body)
     assert fake.requests == []

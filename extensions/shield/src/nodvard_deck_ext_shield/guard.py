@@ -113,7 +113,8 @@ class Guard:
                 output = res.stdout or ""
                 # Abgeschnitten sähen die fehlenden Dateien wie gelöscht aus.
                 error = None if ix.guard_complete(output) else GUARD_INCOMPLETE
-                snap = ix.parse_guard(output, settings.get("guard_dynamic_processes"))
+                snap = ix.parse_guard(output, settings.get("guard_dynamic_processes"),
+                                      ix.port_ranges(settings.get("guard_port_ranges")))
             except Exception as exc:  # noqa: BLE001
                 error = _describe(exc)
             if error is not None:
@@ -176,7 +177,8 @@ class Guard:
                     "kind": "new_port", "severity": "warning" if any(p.public for p in fresh) else "info",
                     "title": "Neuer offener Port: " + ", ".join(p.label for p in fresh[:5]),
                     "detail": {"ports": [{"key": p.key, "port": p.port, "proto": p.proto, "address": p.address, "process": p.process,
-                                          "public": p.public, "dynamic": p.dynamic, "count": p.count, "unreadable": p.unreadable}
+                                          "public": p.public, "dynamic": p.dynamic, "count": p.count, "unreadable": p.unreadable,
+                                          "span": list(p.span) if p.span else None}
                                          for p in fresh]},
                 })
                 ports["alerted"] = sorted(alerted | {p.key for p in fresh})
@@ -328,6 +330,7 @@ class Guard:
             "banned_count": len(banned),
             "ports": [{"key": p.key, "proto": p.proto, "address": p.address, "port": p.port, "process": p.process,
                        "public": p.public, "dynamic": p.dynamic, "count": p.count, "unreadable": p.unreadable,
+                       "span": list(p.span) if p.span else None,
                        "new": not ix.port_is_known(p, known_ports, dynamic_min=snap.dynamic_min)} for p in snap.ports],
             "ssh_port": snap.sshd.get("port"),
             # None = nicht lesbar (ohne root liefert `sshd -T` nichts), nicht "keine Auffälligkeiten".
@@ -398,10 +401,13 @@ class Guard:
             },
         }
 
-    async def list_events(self, *, include_acknowledged: bool = False, limit: int = 200) -> list[dict[str, Any]]:
+    async def list_events(self, *, include_acknowledged: bool = False, limit: int = 200,
+                          host_id: str | None = None) -> list[dict[str, Any]]:
         stmt = select(SecurityEventRecord).order_by(SecurityEventRecord.created_at.desc()).limit(limit)
         if not include_acknowledged:
             stmt = stmt.where(SecurityEventRecord.acknowledged.is_(False))
+        if host_id is not None:
+            stmt = stmt.where(SecurityEventRecord.host_id == host_id)
         async with self._ctx.db.session() as session:
             return [event_out(r) for r in (await session.execute(stmt)).scalars()]
 
@@ -454,11 +460,12 @@ class Guard:
         )
         return True
 
-    async def acknowledge_all(self, actor: Actor | None = None) -> tuple[int, int]:
-        """Erledigt alle offenen Ereignisse; zählt die erledigten und die, die offen bleiben, weil ein Server nicht antwortet."""
+    async def acknowledge_all(self, actor: Actor | None = None, host_id: str | None = None) -> tuple[int, int]:
+        """Erledigt alle offenen Ereignisse, mit `host_id` nur die dieses Servers; zählt die erledigten und die, die offen
+        bleiben, weil ein Server nicht antwortet."""
         done = kept = 0
         silent: set[str] = set()  # nach dem ersten Fehlschlag nicht für jedes Ereignis erneut auf den Server warten
-        for event in await self.list_events(limit=1000):
+        for event in await self.list_events(limit=1000, host_id=host_id):
             if event["kind"] == "file_changed" and event["host_id"] in silent:
                 kept += 1
                 continue

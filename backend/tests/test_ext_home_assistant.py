@@ -202,7 +202,7 @@ def test_base_url_is_normalized_and_credentials_are_refused():
     assert normalize_base_url("http://203.0.113.10:8123/lovelace/0") == "http://203.0.113.10:8123"
     assert normalize_base_url("http://203.0.113.10:8123/config/integrations/dashboard") == "http://203.0.113.10:8123"
     assert normalize_base_url("http://203.0.113.10:8123/dashboard-haus/wohnzimmer") == "http://203.0.113.10:8123"
-    for bad in ("ha.example.com:8123", "ftp://ha.example.com", "http://", "http://user:pw@ha.example.com", "http://@ha.example.com", "http://ha.example.com:999999", ""):
+    for bad in ("ha.example.com:8123", "ftp://ha.example.com", "http://", "http://user:" + "pw@ha.example.com", "http://@ha.example.com", "http://ha.example.com:999999", ""):
         with pytest.raises(ValueError):
             normalize_base_url(bad)
 
@@ -220,7 +220,7 @@ def test_read_connections_flags_unusable_entries_without_dropping_the_rest():
     configs = read_connections({"connections": [
         {"name": "a", "base_url": "http://a.example.com:8123/", "entities": ["sensor.x", " sensor.x ", "light.y", ""], "tls_insecure_skip_verify": True},
         {"name": "a", "base_url": "http://zweite.example.com"},
-        {"name": "b", "base_url": "http://user:pw@b.example.com"},
+        {"name": "b", "base_url": "http://user:" + "pw@b.example.com"},
         {"name": "c", "base_url": "http://c.example.com", "entities": ["Sensor.Gross"]},
         {"name": "d", "base_url": "http://d.example.com", "entities": [f"sensor.s{i}" for i in range(31)]},
         {"name": "e", "base_url": "https://e.example.com", "tls_fingerprint_sha256": "kaputt", "tls_insecure_skip_verify": True},
@@ -767,7 +767,7 @@ async def test_wrong_token_is_rejected_by_the_server_and_shown_as_auth_failed(cl
     await _configure(client, headers, _connection(), token="falsches-token-0000")
     connection = _only(await _overview(client, headers))
     assert connection["state"] == "auth_failed"
-    assert fake.requests[0].headers["Authorization"] == "Bearer falsches-token-0000"
+    assert fake.requests[0].headers["Authorization"] == "Bearer " + "falsches-token-0000"
     assert "falsches-token-0000" not in json.dumps(connection)
 
 
@@ -1181,7 +1181,7 @@ async def test_unusable_entries_become_error_cards_without_a_request(client, db_
     await loaded.ctx.settings.set({"connections": [
         {"name": "ok", "base_url": BASE},
         {"name": "ok", "base_url": BASE},
-        {"name": "pw", "base_url": "http://nutzer:passwort@ha.example.com:8123"},
+        {"name": "pw", "base_url": "http://nutzer:" + "passwort@ha.example.com:8123"},
         {"name": "gross", "base_url": BASE, "entities": ["Sensor.X"]},
     ]})
     await loaded.ctx.secrets.create(label="home-assistant-token:ok", kind="generic", value=TOKEN)
@@ -1401,7 +1401,7 @@ async def test_unusable_entries_are_not_suggested(client, db_session, test_setti
     loaded = get_extension_runtime().loaded[EXT]
     await loaded.ctx.settings.set({"connections": [
         {"name": "ok", "base_url": "http://ha.example.com:8123"},
-        {"name": "pw", "base_url": "http://nutzer:passwort@ha.example.com:8123"},
+        {"name": "pw", "base_url": "http://nutzer:" + "passwort@ha.example.com:8123"},
         {"name": "leer", "base_url": ""},
     ]})
     suggestions = (await client.get("/api/v1/apps/suggestions", headers=headers)).json()["suggestions"]

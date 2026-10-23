@@ -45,7 +45,7 @@ async def test_create_list_get_patch_delete_host(client):
 
     filtered = await client.get("/api/v1/hosts", params={"tag": "docker"}, headers=_auth_header(token))
     assert len(filtered.json()) == 1
-    filtered_miss = await client.get("/api/v1/hosts", params={"tag": "berry"}, headers=_auth_header(token))
+    filtered_miss = await client.get("/api/v1/hosts", params={"tag": "keller"}, headers=_auth_header(token))
     assert filtered_miss.json() == []
 
     got = await client.get(f"/api/v1/hosts/{host_id}", headers=_auth_header(token))
@@ -1002,11 +1002,11 @@ async def test_create_host_rejects_invalid_tags(client, tags):
 async def test_create_host_normalises_tags(client):
     token = await _bootstrap_owner(client)
     resp = await client.post(
-        "/api/v1/hosts", json={"name": "h", "address": "1.1.1.1", "tags": [" Docker", "docker", "Berry"]},
+        "/api/v1/hosts", json={"name": "h", "address": "1.1.1.1", "tags": [" Docker", "docker", "Keller"]},
         headers=_auth_header(token),
     )
     assert resp.status_code == 201, resp.text
-    assert sorted(resp.json()["tags"]) == ["berry", "docker"]
+    assert sorted(resp.json()["tags"]) == ["docker", "keller"]
 
 
 async def _host_id(client, token):
@@ -1243,14 +1243,14 @@ async def test_host_lifecycle_is_audited(client, db_session):
     created = (
         await client.post(
             "/api/v1/hosts",
-            json={"name": "berry", "address": "10.0.0.5", "tags": ["docker"]},
+            json={"name": "heimserver", "address": "10.0.0.5", "tags": ["docker"]},
             headers=_auth_header(token),
         )
     ).json()
     hid = created["id"]
     await client.patch(
         f"/api/v1/hosts/{hid}",
-        json={"address": "10.0.0.6", "display_name": "Berry", "tags": ["docker", "pi"], "enabled": False},
+        json={"address": "10.0.0.6", "display_name": "Heimserver", "tags": ["docker", "pi"], "enabled": False},
         headers=_auth_header(token),
     )
     # Ein Patch ohne tatsaechliche Aenderung schreibt nichts.
@@ -1261,13 +1261,13 @@ async def test_host_lifecycle_is_audited(client, db_session):
     assert [r.action for r in rows] == ["host.created", "host.updated", "host.deleted"]
     assert all(r.outcome == "success" and r.actor_type == "user" and r.actor_id == me["id"] for r in rows)
     assert all(r.target_type == "host" and r.target_id == hid for r in rows)
-    assert rows[0].detail == {"name": "berry", "address": "10.0.0.5", "os_family": "linux", "kind": None, "tags": ["docker"]}
+    assert rows[0].detail == {"name": "heimserver", "address": "10.0.0.5", "os_family": "linux", "kind": None, "tags": ["docker"]}
     changed = rows[1].detail["changed"]
     assert changed["address"] == {"from": "10.0.0.5", "to": "10.0.0.6"}
-    assert changed["display_name"] == {"from": "berry", "to": "Berry"}
+    assert changed["display_name"] == {"from": "heimserver", "to": "Heimserver"}
     assert changed["enabled"] == {"from": True, "to": False}
     assert changed["tags"] == {"from": ["docker"], "to": ["docker", "pi"]}
-    assert rows[2].detail["name"] == "berry"
+    assert rows[2].detail["name"] == "heimserver"
     assert rows[2].detail["address"] == "10.0.0.6"
 
 

@@ -169,7 +169,7 @@ async def test_place_without_rack_is_cleared_and_blank_ids_are_none(client, db_s
 @pytest.mark.parametrize("url", [
     "http://", "https:///pfad", "https://x\nhttps://y", "https://a b.de",
     # Sieht nach dem Shop aus, führt aber zu boese.example; Zugangsdaten gehören nicht in einen sichtbaren Link.
-    "https://shop.example@boese.example/", "https://nutzer:geheim@example.com/", "https://@example.com/",
+    "https://shop.example@boese.example/", "https://nutzer:" + "geheim@example.com/", "https://@example.com/",
 ])
 async def test_broken_product_links_are_rejected(client, db_session, test_settings, url):
     headers = _auth_header(await _enable_inventory(client, db_session, test_settings))

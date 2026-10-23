@@ -451,7 +451,7 @@ describe("HostPage (Server-Seite, Plesk-Stil)", () => {
       ],
     }));
     renderHost("h-pi");
-    await screen.findByRole("heading", { level: 1, name: /Raspberry Pi/ });
+    await screen.findByRole("heading", { level: 1, name: /Heimserver/ });
     await waitFor(() => expect(screen.getByTestId("host-tools").textContent).toContain("Skripte"));
     expect(within(screen.getByTestId("host-tools")).queryByRole("link", { name: /Konsole/ })).toBeNull();
     await waitFor(() => expect(screen.getByTestId("host-more-actions")).toBeInTheDocument());

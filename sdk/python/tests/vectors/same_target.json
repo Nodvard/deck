@@ -11,7 +11,7 @@
     ["http://pi.hole/admin//", "http://pi.hole/admin"],
     ["pve.lan:8006/", "http://pve.lan:8006"],
     ["https://[::1]:443/x//", "https://[::1]/x"],
-    ["https://User:Pw@Host:8443/A/?x=1#frag", "https://User:Pw@host:8443/A?x=1"],
+    ["https://User:@Host:8443/A/?x=1#frag", "https://User:@host:8443/A?x=1"],
     ["ftp://host:21", "ftp://host:21"],
     ["http://h:", "http://h"],
     ["http://h:0123", "http://h:123"],

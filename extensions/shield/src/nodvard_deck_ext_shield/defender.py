@@ -555,8 +555,8 @@ class Defender:
                 existing = (await session.execute(
                     select(FindingRecord).where(
                         FindingRecord.host_id == host.id, FindingRecord.path == path, FindingRecord.status == "detected"
-                    )
-                )).scalar_one_or_none()
+                    ).order_by(FindingRecord.detected_at.desc())
+                )).scalars().first()
                 if existing is not None:
                     existing.scan_id = scan_id
                     if parsed.paths_unsure and not existing.note:
@@ -811,6 +811,29 @@ class Defender:
             row.status = "ignored"
             row.status_changed_at = _now()
             return True
+
+    async def reopen(self, finding_id: str) -> tuple[bool, str]:
+        """Nimmt ein Ignorieren oder Wiederherstellen zurück: Der Fund ist wieder offen und der nächste Scan meldet ihn."""
+        async with self._ctx.db.session() as session:
+            row = await session.get(FindingRecord, finding_id)
+            if row is None or row.status not in ("ignored", "restored"):
+                return False, "Dieser Fund ist weder ignoriert noch wiederhergestellt."
+            # Je Datei höchstens ein offener Fund: Der Scan ordnet eine Meldung genau einem offenen Fund zu.
+            other = (await session.execute(
+                select(FindingRecord.id).where(
+                    FindingRecord.host_id == row.host_id, FindingRecord.path == row.path, FindingRecord.id != row.id,
+                    FindingRecord.status.in_(("detected", "quarantined")),
+                ).limit(1)
+            )).scalar_one_or_none()
+            if other is not None:
+                return False, ("Für diese Datei gibt es schon einen offenen Fund oder sie liegt in der Quarantäne. "
+                               "Bitte den bei „Offen & in Quarantäne“ bearbeiten.")
+            row.status = "detected"
+            row.status_changed_at = _now()
+            # Eine Nachschau, die nicht mehr läuft, verspricht am wieder offenen Fund nichts mehr.
+            if row.note and QUARANTINE_FOLLOWING_MARK in row.note and finding_id not in self._quarantine_follow:
+                row.note = QUARANTINE_LATE_UNKNOWN
+            return True, ""
 
     # --- Audits ----------------------------------------------------------------
 

@@ -138,6 +138,9 @@ export type View =
   | ActionsView
   | LogView;
 
+/** Gruppe auf der Startseite (SDK `WidgetGroup`). */
+export type WidgetGroupKey = "servers" | "security" | "apps" | "backups" | "services";
+
 export interface WidgetSpec {
   id: string;
   title: string;
@@ -150,6 +153,8 @@ export interface WidgetSpec {
   permissions: string[];
   component: string | null;
   default_enabled: boolean;
+  /** Fehlt bei einem älteren Backend; der Katalog setzt sonst immer eine Gruppe. */
+  group?: WidgetGroupKey | null;
 }
 
 export interface WidgetOut extends WidgetSpec {

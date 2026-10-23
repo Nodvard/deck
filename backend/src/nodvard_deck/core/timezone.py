@@ -1,6 +1,5 @@
-"""Zeitzone des Dashboards (Einstellung `system.timezone`) für Zeitpläne und Wartungsfenster.
-Vorgabe ohne Einstellung: `config.default_timezone()` (`NODVARD_DECK_TIMEZONE`, sonst `TZ`, sonst Europe/Berlin).
-Angezeigte Zeitstempel formatiert der Server nie, die Oberfläche zeigt sie in der Zeit des Geräts."""
+"""Zeitzone des Dashboards (Einstellung `system.timezone`) für Zeitpläne und Wartungsfenster, Vorgabe ist
+`config.default_timezone()`."""
 
 from __future__ import annotations
 
@@ -37,7 +36,8 @@ def reset_timezone_cache() -> None:
 
 
 async def get_timezone(session: AsyncSession) -> str:
-    """Die eingestellte Zone, sonst die Vorgabe; ein ungültiger Wert (z. B. von Hand bearbeitet) zählt als nicht gesetzt."""
+    """Die eingestellte Zone, sonst die Vorgabe; ein ungültiger Wert (etwa von Hand bearbeitet) zählt als nicht
+    gesetzt."""
     global _cached
     if _cached is not None:
         return _cached

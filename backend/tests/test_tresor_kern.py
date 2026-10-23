@@ -306,7 +306,7 @@ async def test_used_by_follows_a_renamed_module_and_sorts_server_before_module(c
     secret = await vault.create_secret(
         db_session, keyring, label="umzug-key", kind="ssh_password", plaintext="pw", owner_ext_id="altes-modul"
     )
-    host = Host(name="berry", display_name="", address="198.51.100.7")
+    host = Host(name="heimserver", display_name="", address="198.51.100.7")
     db_session.add(host)
     await db_session.flush()
     db_session.add(HostCredential(host_id=host.id, kind="ssh_password", username="root", port=22, secret_id=secret.id))
@@ -319,7 +319,7 @@ async def test_used_by_follows_a_renamed_module_and_sorts_server_before_module(c
     listed = {s["label"]: s for s in (await client.get("/api/v1/secrets", headers=headers)).json()}
     used_by = listed["umzug-key"]["used_by"]
     assert [(u["type"], u["id"], u["name"]) for u in used_by] == [
-        ("host", host.id, "berry"),
+        ("host", host.id, "heimserver"),
         ("extension", "neues-modul", "Neues Modul"),
         ("user", "u-42", "u-42"),
     ]

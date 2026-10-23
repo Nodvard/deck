@@ -4,7 +4,9 @@ Wartungsfenster-Unterdrueckung."""
 
 from __future__ import annotations
 
+import sys
 from datetime import timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -186,10 +188,19 @@ async def test_a_channel_that_skips_on_purpose_is_neither_delivered_nor_failed(d
     assert (both.delivered, both.skipped) == (True, False)
 
 
+@pytest.fixture
+def shield_on_path(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "extensions" / "shield" / "src"))
+    yield
+    for name in list(sys.modules):
+        if name.startswith("nodvard_deck_ext_shield"):
+            del sys.modules[name]
+
+
 @pytest.mark.asyncio
-async def test_a_failed_channel_next_to_a_skipping_one_is_not_reported_as_skipped(db_session):
-    """Ist neben dem uebersprungenen Kanal ein anderer ausgefallen, darf `skipped` nicht `True` sein: Das
-    Shield-Briefing meldete sonst gruen "liegt unter der Mindest-Stufe" und versteckte den Ausfall."""
+async def test_a_failed_channel_next_to_a_skipping_one_is_not_reported_as_skipped(db_session, shield_on_path):
+    """Ist neben dem übersprungenen Kanal ein anderer ausgefallen, darf `skipped` nicht `True` sein: Das
+    Shield-Briefing meldete sonst grün „liegt unter der Mindest-Stufe“ und versteckte den Ausfall."""
     from nodvard_deck.ext.context import NotifyHandle, _PermissionChecker
     from nodvard_deck_ext_shield.defender import push_state
 

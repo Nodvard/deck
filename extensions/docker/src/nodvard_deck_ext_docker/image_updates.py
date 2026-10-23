@@ -1,7 +1,5 @@
 """Image-Updates prüfen, rein lesend: hat die Registry unter demselben Tag eine neuere Fassung als der Container nutzt?
-
-Verglichen werden nur Prüfsummen (Digests), nichts wird geladen, neu erstellt oder gestartet. Einspielen: `applier.py`.
-"""
+Verglichen werden nur Prüfsummen (Digests), nichts wird geladen, neu erstellt oder gestartet. Einspielen: `applier.py`."""
 
 from __future__ import annotations
 

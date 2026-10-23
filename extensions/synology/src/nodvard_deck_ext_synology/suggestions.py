@@ -1,4 +1,4 @@
-"""Vorschlag für eine App-Kachel aus der eingetragenen Adresse (`nodvard_sdk.AppSuggestionProvider`)."""
+"""Vorschläge für App-Kacheln aus den eingetragenen Adressen (`nodvard_sdk.AppSuggestionProvider`)."""
 
 from __future__ import annotations
 
@@ -18,7 +18,10 @@ class SynologyAppSuggestions:
 
     async def app_suggestions(self) -> list[AppSuggestion]:
         # Nur Wissen aus den Einstellungen: keine Anfrage, das Passwort wird nicht gelesen.
-        config = await self._service.config()
-        if not config.base_url:
-            return []
-        return [AppSuggestion(name=NAME, url=config.base_url, source=NAME)]
+        configs = await self._service.configs()
+        many = len(configs) > 1
+        return [
+            AppSuggestion(name=f"{NAME} {c.name}" if many else NAME, url=c.base_url, source=NAME)
+            for c in configs
+            if c.base_url
+        ]

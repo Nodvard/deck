@@ -1,6 +1,5 @@
-"""Anmeldung, Token-Ausgabe und -Erneuerung, Zwei-Faktor-Einrichtung und Owner-Einrichtung.
-
-Endpunkte in `api/v1/auth.py` und `api/v1/me.py` rufen nur diese Funktionen auf und übersetzen deren Fehler in HTTP."""
+"""Anmeldung, Token-Ausgabe und -Erneuerung, Zwei-Faktor-Einrichtung und Owner-Einrichtung (die API-Schicht
+übersetzt nur die Fehler)."""
 
 from __future__ import annotations
 
@@ -56,9 +55,8 @@ class InvalidMfaCode(AuthError):
 
 
 class TooManyAttempts(AuthError):
-    """Zu viele Fehlversuche (HTTP 429); `retry_after` in Sekunden für den `Retry-After`-Header.
-
-    `None`, wenn Warten nicht hilft: Das `mfa_token` ist verbraucht, man muss sich neu anmelden."""
+    """Zu viele Fehlversuche (HTTP 429); `retry_after` in Sekunden, `None`, wenn Warten nicht hilft (verbrauchtes
+    `mfa_token`)."""
 
     def __init__(self, message: str, retry_after: int | None = None) -> None:
         super().__init__(message)
@@ -66,20 +64,18 @@ class TooManyAttempts(AuthError):
 
 
 REFRESH_GRACE_SECONDS = 30
-"""Gnadenfrist: Ein gerade durch Rotation widerrufener Refresh-Token bekommt noch einen frischen Access-Token
-(zwei Tabs, die fast gleichzeitig aktualisieren)."""
+"""Gnadenfrist: Ein gerade durch Rotation widerrufener Refresh-Token bekommt noch einen frischen Access-Token (zwei
+Tabs)."""
 
 SENSITIVE_ATTEMPT_KEY = "passwortabfrage"
 """Pseudo-Benutzername für die Drosselung falscher Passwörter bei empfindlichen Aktionen."""
 
 RECOVERY_ATTEMPT_KEY = "wiederherstellungscode"
-"""Pseudo-Benutzername für falsche Wiederherstellungs-Codes bei Bestätigungen (`require_current_totp`), je Konto.
-Eigener Zähler wie beim Anmelden: Den der Passwortabfrage setzt das richtige Passwort davor jedes Mal zurück."""
+"""Pseudo-Benutzername für falsche Wiederherstellungs-Codes bei Bestätigungen, ein eigener Zähler neben dem der
+Passwortabfrage."""
 
 
 def _account_key(user_id: str) -> str:
-    """Pseudo-Adresse `konto:<id>` für Zähler, die an einem Konto hängen statt an einer Adresse (Passwortabfrage,
-    Wiederherstellungs-Codes bei Bestätigungen)."""
     return f"konto:{user_id}"
 
 
@@ -98,8 +94,6 @@ def _begin_attempt(
     mfa_token: str | None = None,
     account: str | None = None,
 ) -> login_limit.Attempt:
-    """Prüft die Drosselung vor jeder Passwort- und Code-Prüfung (kein Argon2-Aufwand für gesperrte Versuche) und zählt
-    den Versuch sofort mit."""
     try:
         return login_limit.begin(ip, username, mfa_token=mfa_token, account=account)
     except login_limit.MfaTokenUsed:
@@ -115,9 +109,8 @@ UNKNOWN_ACTOR = "unbekannt"
 
 
 def unknown_login_audit(settings: Settings, typed: str, *, length: int | None = None) -> dict:
-    """Was das Protokoll über eine Anmeldung mit unbekanntem Namen festhält: nicht den Text, nur Kennung und Länge.
-
-    Die Kennung ist ein HMAC mit dem Server-Schlüssel (nicht umkehrbar); gleiche Eingaben haben dieselbe."""
+    """Was das Protokoll über eine Anmeldung mit unbekanntem Namen festhält: nur Kennung (HMAC, nicht umkehrbar)
+    und Länge."""
     # Wer sein Passwort ins Namensfeld tippt, soll es im Protokoll nicht wiederfinden; das lesen auch Konten mit „Nur
     # ansehen“.
     key = settings.get_or_create_jwt_secret().encode("utf-8")
@@ -128,7 +121,6 @@ def unknown_login_audit(settings: Settings, typed: str, *, length: int | None = 
 async def _verify_password(
     attempt: login_limit.Attempt | None, password: str, password_hash: str, *, signed_in: bool = False
 ) -> bool:
-    """Argon2-Prüfung im Thread, begrenzt (`security.verify_password_async`)."""
     try:
         return await security.verify_password_async(password, password_hash, signed_in=signed_in)
     except security.HashingBusy:
@@ -140,9 +132,6 @@ async def _verify_password(
 
 
 def _lock_windows(scopes: list[str]) -> dict[str, int]:
-    """Fenster der Grenzen, die eine Sperre ausgelöst haben, für `detail` im Protokoll.
-
-    Passwörter und Anmeldungen (Scopes `user`, `ip`) zählen in `WINDOW_SECONDS`."""
     # Die Grenze je Konto für den zweiten Faktor hat zwei Fenster; ist sie dabei, stehen beide immer drin, denn aus den
     # Scopes allein sieht man nicht, welches griff (auch zusammen mit einer anderen Grenze: Beim Anmelden erreichen
     # (Adresse, Name) und Konto ihre 10 mit demselben Versuch). Das kurze `window_seconds` gilt nur bei ihr allein.
@@ -167,9 +156,8 @@ async def _record_failure(
     actor_type: str = "user",
     username_detail: dict | None = None,
 ) -> list[str]:
-    """Verbucht einen Fehlversuch; beginnt dadurch eine Sperre, steht genau ein `login.locked`-Eintrag im Protokoll
-    (`auth.password_check_locked` mit `sensitive_user_id`, der Passwortabfrage bei empfindlichen Aktionen). Der
-    eingegebene Name kommt nur ins Protokoll, wenn er zu einem Konto gehört, sonst `username_detail` und `anonymous`."""
+    # Beginnt durch den Fehlversuch eine Sperre, steht genau ein `login.locked`-Eintrag im Protokoll; der eingegebene
+    # Name kommt nur hinein, wenn er zu einem Konto gehört.
     scopes = login_limit.failed(attempt)
     if not scopes:
         return []
@@ -248,7 +236,6 @@ class InvalidSetupCode(AuthError):
 
 
 async def _commit_before_raising(session: AsyncSession) -> None:
-    """Schreibt den Protokolleintrag fest, bevor die `AuthError` zu einer HTTP-Antwort wird."""
     # `session_scope()` rollt bei jeder durchgereichten Exception zurück, auch bei einem erwarteten 401; ohne dieses
     # Zwischen-Commit ginge der gerade geschriebene `login.failed`-/`mfa.failed`-Eintrag verloren. Sicher, weil sonst
     # nur eine gewollte Lazy-Key-Migration (`vault.read_secret_plaintext`) im Puffer steht.
@@ -258,9 +245,6 @@ async def _commit_before_raising(session: AsyncSession) -> None:
 async def _reload_unchanged(
     session: AsyncSession, user_id: str, *, password_hash: str, two_factor: bool = False
 ) -> User | None:
-    """Liest das Konto nach einer langen Prüfung frisch und gibt es nur zurück, wenn es noch so ist wie geprüft.
-
-    Gleich heißt: vorhanden, aktiv, derselbe `password_hash` (nie der Dummy) und mit `two_factor` weiter an."""
     # Ändert sich das Konto erst nach diesem Lesen, ist das dasselbe Rennen wie bei jeder anderen Anfrage.
     current = await session.get(User, user_id, populate_existing=True)
     if current is None or not current.is_active or current.password_hash != password_hash:
@@ -271,9 +255,7 @@ async def _reload_unchanged(
 
 
 async def _store_rehash(session: AsyncSession, user: User, *, old_hash: str, new_hash: str) -> None:
-    """Speichert den neuen Hash nur, wenn das Passwort unverändert ist (`WHERE password_hash = <alter Hash>`).
-
-    Sonst würde ein gleichzeitiger Passwortwechsel mit dem Hash des alten Passworts überschrieben."""
+    # Nur speichern, wenn das Passwort unverändert ist, sonst würde ein gleichzeitiger Passwortwechsel überschrieben.
     result = await session.execute(
         update(User)
         .where(User.id == user.id, User.password_hash == old_hash)
@@ -289,8 +271,8 @@ class IssuedTokens:
     access_token: str
     access_expires_in: int
     refresh_token: str | None
-    """Klartext, nur einmal sichtbar: Die API-Schicht legt ihn in einen HttpOnly-Cookie (Web) oder den JSON-Body (App).
-    `None` nur in der Gnadenfrist von `refresh_access_token()`, der Client behält den Token vom ersten Aufruf."""
+    """Klartext, nur einmal sichtbar, von der API-Schicht in Cookie (Web) oder Body (App) gelegt; `None` in der
+    Gnadenfrist."""
     refresh_expires_at: datetime | None
     user: User
     client_type: str
@@ -299,15 +281,11 @@ class IssuedTokens:
     """Kennung der neu angelegten Refresh-Token-Zeile (= `sid` im Access-Token)."""
 
 
-# ---------------------------------------------------------------------------
-# Grenzen für Zwei-Faktor-Codes nach einem Neustart
-# ---------------------------------------------------------------------------
-
-
+# Ein neuer Weg mit Code schreibt je Fehlversuch einen dieser Einträge mit dem Konto als `target_id` und ohne
+# `detail.via`, sonst vergisst die Grenze seine Fehlversuche bei jedem Neustart.
 CODE_FAILURE_ACTIONS = ("mfa.failed", "auth.totp_check_failed")
-"""Protokolleinträge für falsche Zwei-Faktor-Codes (Anmeldung, `require_current_totp`) für die Grenze je Konto:
-je einer mit dem Konto als `target_id`, ohne `detail.via` (Wiederherstellungs-Codes tragen `via: "recovery_code"`).
-Ein neuer Weg mit Code muss sich daran halten, sonst vergisst die Grenze seine Fehlversuche bei jedem Neustart."""
+"""Protokolleinträge falscher Zwei-Faktor-Codes, aus denen die Grenze je Konto nach einem Neustart
+wiederhergestellt wird."""
 
 
 async def _recent_code_failures(
@@ -319,9 +297,6 @@ async def _recent_code_failures(
     per_account: int,
     now_wall: float,
 ) -> dict[str, list[float]]:
-    """Konto -> Zeitpunkte (Sekunden seit 1970) der jüngsten `per_account` falschen Codes der letzten `window` Sekunden.
-
-    `recovery` wählt Wiederherstellungs-Codes oder alle anderen."""
     via = func.coalesce(AuditEntry.detail["via"].as_string(), "")
     # Begrenzt in der Abfrage selbst (je Konto), damit auch ein sehr volles Protokoll den Start nicht aufhält.
     ranked = (
@@ -389,16 +364,9 @@ async def restore_code_limits(session: AsyncSession, *, now_wall: float | None =
     return restored
 
 
-# ---------------------------------------------------------------------------
-# Rollen-Seeding
-# ---------------------------------------------------------------------------
-
-
 async def ensure_builtin_roles(session: AsyncSession) -> dict[str, Role]:
-    """Legt admin/operator/viewer an, falls sie fehlen; idempotent, bei jedem Start aufrufbar.
-
-    `owner` ist keine Rolle: Die Owner-Eigenschaft ist `User.is_owner` und umgeht RBAC (docs/03-DATA-MODEL.md §1).
-    """
+    """Legt admin/operator/viewer an, falls sie fehlen (idempotent); `owner` ist keine Rolle, sondern
+    `User.is_owner`."""
     # Relationship-Attribute eines geflushten Objekts sind in Async-SQLAlchemy weder lesbar noch per `.append()`
     # beschreibbar, solange sie nicht ausdrücklich geladen wurden (`MissingGreenlet`), auch bei neu angelegten. Darum
     # Kind-Zeilen per `session.add()` als eigene Objekte anlegen und danach `refresh_relationships` rufen.
@@ -436,11 +404,6 @@ async def ensure_builtin_roles(session: AsyncSession) -> dict[str, Role]:
     return by_name
 
 
-# ---------------------------------------------------------------------------
-# Berechtigungen eines Nutzers
-# ---------------------------------------------------------------------------
-
-
 def user_permissions(user: User) -> list[str]:
     """Der Owner bekommt den Wildcard-Scope `*` direkt, wie ihn `core.rbac.has_permission` ohnehin versteht."""
     if user.is_owner:
@@ -458,13 +421,9 @@ def user_has_permission(user: User, permission: str) -> bool:
     return has_permission(user_permissions(user), permission)
 
 
-# ---------------------------------------------------------------------------
-# Owner-Bootstrap: Erstinbetriebnahme
-# ---------------------------------------------------------------------------
-
-
 async def needs_bootstrap(session: AsyncSession) -> bool:
-    """Gibt es noch keinen Nutzer? Dieselbe Prüfung wie in `bootstrap_owner()`, aber nur lesend, ohne Seiteneffekt."""
+    """Ob es noch keinen Nutzer gibt, dieselbe Prüfung wie in `bootstrap_owner()`, aber nur lesend und ohne
+    Seiteneffekt."""
     any_user = (await session.execute(select(User.id).limit(1))).first()
     return any_user is None
 
@@ -490,9 +449,8 @@ USERNAME_TOO_SHORT_TEXT = f"Benutzername: Mindestens {USERNAME_MIN_LENGTH} Zeich
 
 
 def validate_new_username(username: str) -> str:
-    """Prüft den Namen eines neuen Kontos: wie `normalize_username`, aber nur `a-z 0-9 . - _`; sonst `ValueError`.
-
-    Gilt nur beim Anlegen, damit sich bestehende Konten mit Leerzeichen weiter anmelden und zurücksetzen lassen."""
+    """Prüft den Namen eines neuen Kontos (nur `a-z 0-9 . - _`, sonst `ValueError`); bestehende Konten mit
+    Leerzeichen bleiben anmeldbar."""
     # Sonst entstünde aus „Kollege Max“ das Konto „kollege max“, und jeder Notfall-Befehl bräuchte Anführungszeichen.
     name = normalize_username(username)
     if len(name) < USERNAME_MIN_LENGTH:
@@ -506,8 +464,7 @@ SETUP_CODE_HINT = "Der Einrichtungscode steht im Protokoll des Containers (beim 
 
 
 async def prepare_setup_code(session: AsyncSession, settings: Settings) -> str | None:
-    """Beim Start: Ohne Nutzer den Einrichtungscode bereitstellen und ins Protokoll schreiben, sonst eine
-    übrig gebliebene Code-Datei löschen. Gibt den Code zurück (`None` = nichts zu tun)."""
+    """Stellt beim Start ohne Nutzer den Einrichtungscode bereit, sonst löscht es eine übrig gebliebene Code-Datei."""
     if not await needs_bootstrap(session):
         setup_code.clear(settings.data_dir)
         return None
@@ -532,9 +489,8 @@ async def verify_setup_code(
     ip: str | None,
     user_agent: str | None = None,
 ) -> None:
-    """Prüft den Einrichtungscode, gedrosselt wie der Login (je IP); wirft `InvalidSetupCode` bzw. `TooManyAttempts`.
-
-    Fehlversuche stehen im Protokoll."""
+    """Prüft den Einrichtungscode, gedrosselt wie der Login (je IP); wirft `InvalidSetupCode` oder
+    `TooManyAttempts`."""
     attempt = _begin_attempt(ip, SETUP_ATTEMPT_KEY)
     # Fehlt der Code (z. B. nach einem abgebrochenen Start), wird einer angelegt und ausgegeben; die Anfrage scheitert
     # dann, denn der Anrufer kennt ihn nicht.
@@ -562,9 +518,8 @@ async def verify_setup_code(
 
 
 async def bootstrap_owner(session: AsyncSession, *, username: str, password: str) -> User:
-    """Legt den ersten Nutzer als Owner an, nur wenn noch keiner existiert.
-
-    Der Endpunkt braucht deshalb keine Anmeldung und ist selbstlimitierend: Jeder weitere Aufruf schlägt fehl."""
+    """Legt den ersten Nutzer als Owner an, nur wenn noch keiner existiert, daher braucht der Endpunkt keine
+    Anmeldung."""
     if not await needs_bootstrap(session):
         raise UsersAlreadyExist("Es existiert bereits mindestens ein Nutzer.")
 
@@ -587,13 +542,7 @@ async def bootstrap_owner(session: AsyncSession, *, username: str, password: str
     return user
 
 
-# ---------------------------------------------------------------------------
-# Token-Ausgabe (gemeinsam für Login, Zwei-Faktor und Erneuerung)
-# ---------------------------------------------------------------------------
-
-
 def _create_access_token(settings: Settings, user: User, session_id: str) -> str:
-    """Access-Token für die Anmeldung `session_id` (Refresh-Token-Zeile, siehe `sid`)."""
     return security.create_jwt(
         subject=user.id,
         token_type="access",
@@ -646,11 +595,6 @@ async def _issue_tokens(
         client_type=client_type,
         session_id=refresh_id,
     )
-
-
-# ---------------------------------------------------------------------------
-# Login / MFA / Refresh / Logout
-# ---------------------------------------------------------------------------
 
 
 async def login(
@@ -801,7 +745,7 @@ async def verify_mfa(
     code: str,
     ip: str | None = None,
 ) -> IssuedTokens:
-    """`ip` ist die IP dieser Anfrage (für die Drosselung); das Protokoll nennt die IP aus dem Anmeldeschritt."""
+    """Schließt die Anmeldung mit dem zweiten Faktor ab; `ip` ist die IP dieser Anfrage für die Drosselung."""
     secret = settings.get_or_create_jwt_secret()
     try:
         payload = security.decode_jwt(mfa_token, secret=secret, expected_type="mfa")
@@ -900,9 +844,6 @@ async def verify_mfa(
 
 
 async def _report_mfa_guessing(session: AsyncSession, user: User) -> None:
-    """Meldet dem Besitzer, dass ein Konto durchprobiert wird (wer so oft rät, kennt das Passwort schon).
-
-    Zugestellt wird nur nebenbei; ein Fehler dabei darf die Antwort an den Anrufer nie kippen."""
     try:
         from . import notifications as notifications_service
 
@@ -924,9 +865,7 @@ async def _report_mfa_guessing(session: AsyncSession, user: User) -> None:
 
 
 def match_totp_step(totp_secret: str, code: str) -> int | None:
-    """Der Zeitschritt, zu dem `code` passt (aktueller, einer davor und einer danach wegen Uhrabweichung), sonst `None`.
-
-    Wer einen Code nur einmal gelten lassen will, merkt sich den Schritt (`login_limit.claim_success`)."""
+    """Der Zeitschritt, zu dem `code` passt (aktueller, einer davor, einer danach), sonst `None`."""
     totp = pyotp.TOTP(totp_secret)
     current = int(_totp_now() // login_limit.TOTP_STEP_SECONDS)
     for step in (current, current - 1, current + 1):
@@ -973,9 +912,8 @@ async def report_recovery_use(
     user_agent: str | None,
     action: str = RECOVERY_USE_LOGIN,
 ) -> None:
-    """Meldet die Nutzung eines Wiederherstellungs-Codes: Er ersetzt den zweiten Faktor und soll nie unbemerkt bleiben.
-
-    Erst aufrufen, wenn die Aktion durch ist, damit `remaining` stimmt; die Meldung darf sie nie kippen."""
+    """Meldet die Nutzung eines Wiederherstellungs-Codes; erst nach der Aktion aufrufen, damit `remaining`
+    stimmt."""
     where, outcome_text, advice = _RECOVERY_USE_TEXTS.get(action, _RECOVERY_USE_TEXTS[RECOVERY_USE_LOGIN])
     remaining = await recovery_codes_remaining(session, user.id)
     await audit_service.log(
@@ -1017,9 +955,8 @@ async def report_recovery_use(
 async def refresh_access_token(
     session: AsyncSession, settings: Settings, *, raw_refresh_token: str
 ) -> IssuedTokens:
-    """Rotation: Der eingelöste Refresh-Token wird sofort widerrufen und ein neuer ausgegeben.
-
-    Ein späterer Einlösungsversuch desselben Werts scheitert, statt ein zweites gültiges Sitzungspaar zu erzeugen."""
+    """Rotation: Der eingelöste Refresh-Token wird sofort widerrufen und ein neuer ausgegeben, ein zweiter
+    Einlösungsversuch scheitert."""
     # Vertrag für `refresh_with_candidates`: Hier gibt es keine Erkennung von Wiederverwendung mit Widerruf der ganzen
     # Kette, und ein ungültiger Token löst `InvalidCredentials` aus, bevor etwas geschrieben wurde. Wer das ändert, muss
     # `refresh_with_candidates` mitändern (sonst beendet ein veralteter Cookie-Wert die Sitzung im anderen).
@@ -1077,9 +1014,8 @@ async def refresh_access_token(
 async def refresh_with_candidates(
     session: AsyncSession, settings: Settings, *, raw_refresh_tokens: Sequence[str]
 ) -> IssuedTokens:
-    """Wie `refresh_access_token`, aber mit mehreren möglichen Werten, nacheinander versucht; der erste Erfolg gilt.
-
-    Scheitern alle, gilt der Fehler des ersten Versuchs. Gleiche Werte sollte der Aufrufer vorher entfernen."""
+    """Wie `refresh_access_token`, aber mit mehreren möglichen Werten, nacheinander versucht; der erste Erfolg
+    gilt."""
     # Gebraucht, solange der alte und der neue Cookie-Name im Browser nebeneinander stehen; nach einem Rollback aufs
     # alte Image kann der eine veraltet sein, der andere aktuell. Das schwächt die Erkennung von Wiederverwendung nicht:
     # Ein Fehlversuch ändert nichts in der Datenbank, und pro Aufruf wird nie mehr als ein Wert eingelöst.
@@ -1100,9 +1036,7 @@ async def _grace_tokens(
     now: datetime,
     invalid: InvalidCredentials,
 ) -> IssuedTokens:
-    """Access-Token der Nachfolger-Sitzung in der Gnadenfrist, ohne neuen Refresh-Token.
-
-    So entsteht keine zweite Sitzungskette, die Laufzeit wächst nicht, und danach nützt der alte Token nichts."""
+    # Ohne neuen Refresh-Token: So entsteht keine zweite Sitzungskette und die Laufzeit wächst nicht.
     successor = await _grace_successor(session, token_row, now)
     if successor is None:
         raise invalid
@@ -1123,9 +1057,6 @@ async def _grace_tokens(
 async def _grace_successor(
     session: AsyncSession, token_row: RefreshToken, now: datetime
 ) -> RefreshToken | None:
-    """Nachfolger-Sitzung eines vor kurzem durch Rotation widerrufenen Tokens, sonst `None` (Gnadenfrist greift nicht).
-
-    Das gilt bei Abmelden oder Passwortwechsel, abgelaufener Frist und widerrufenem oder abgelaufenem Nachfolger."""
     if token_row.replaced_by_id is None or token_row.revoked_at is None:
         return None
     if now - token_row.revoked_at > timedelta(seconds=REFRESH_GRACE_SECONDS):
@@ -1142,14 +1073,9 @@ async def _grace_successor(
 
 
 async def _live_session_head(session: AsyncSession, user_id: str, token_id: str) -> str:
-    """Folgt der Rotationskette (`replaced_by_id`) von einer durch Erneuern widerrufenen Sitzung bis zur lebenden.
-
-    Bleibt bei `token_id`, wenn die Zeile fehlt, einem anderen Nutzer gehört, noch gilt oder keinen Nachfolger hat."""
-    # Bekannte Grenze: Die Kette sagt nicht, wer erneuert hat; der Nachfolger übernimmt Browser, Gerät und IP, und das
-    # Refresh-Cookie (Pfad `/api/v1/auth`) kommt beim Passwortwechsel gar nicht an. Hat jemand mit einem abgegriffenen
-    # Cookie die Kette weitergedreht, bleibt dessen Sitzung erhalten, solange der Wechsel noch mit dem alten
-    # Zugangs-Token kommt (höchstens `access_token_ttl_seconds`); wer eine Übernahme vermutet, meldet sich vorher neu an
-    # (die `sid` zeigt dann auf eine frische Sitzung, jede andere Kette endet).
+    # Bekannte Grenze: Die Kette sagt nicht, wer erneuert hat. Hat jemand mit einem abgegriffenen Cookie die Kette
+    # weitergedreht, bleibt dessen Sitzung erhalten, solange der Wechsel noch mit dem alten Zugangs-Token kommt
+    # (höchstens `access_token_ttl_seconds`).
     head = token_id
     for _ in range(20):  # Schutz vor Schleifen in kaputten Daten
         row = await session.get(RefreshToken, head)
@@ -1167,8 +1093,8 @@ async def _live_session_head(session: AsyncSession, user_id: str, token_id: str)
 async def revoke_refresh_tokens(
     session: AsyncSession, user_id: str, *, except_token_id: str | None = None
 ) -> int:
-    """Meldet alle Sitzungen eines Nutzers ab (sonst holten alte Refresh-Tokens nach einem Passwortwechsel noch 30 Tage
-    neue Access-Tokens); `except_token_id` bleibt angemeldet. Gibt die Zahl der abgemeldeten Sitzungen zurück."""
+    """Meldet alle Sitzungen eines Nutzers ab, `except_token_id` bleibt angemeldet; zurück kommt die Zahl der
+    abgemeldeten."""
     stmt = (
         update(RefreshToken)
         .where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
@@ -1214,17 +1140,11 @@ async def logout(session: AsyncSession, *, raw_refresh_token: str) -> None:
         )
 
 
-# ---------------------------------------------------------------------------
-# TOTP: Setup / Confirm / Disable
-# ---------------------------------------------------------------------------
-
-
 async def start_totp_setup(
     session: AsyncSession, settings: Settings, user: User
 ) -> tuple[str, str]:
-    """Legt ein neues Secret verschlüsselt (unbestätigt) am Nutzer ab; gibt `(secret_base32, otpauth_uri)` zurück.
-
-    Der Base32-Wert ist nur jetzt im Klartext sichtbar, kein Endpunkt liefert ihn wieder aus."""
+    """Legt ein neues, unbestätigtes Secret am Nutzer ab und gibt `(secret_base32, otpauth_uri)` zurück, einmalig
+    im Klartext."""
     if user.totp_secret_id is not None and user.totp_confirmed_at is not None:
         raise AuthError(
             "Zwei-Faktor ist schon aktiv. Schalte sie zuerst ab, dann kannst du sie neu einrichten."
@@ -1265,9 +1185,8 @@ async def confirm_totp_setup(
     ip: str | None = None,
     user_agent: str | None = None,
 ) -> list[str]:
-    """Bestätigt die 2FA-Einrichtung und erzeugt dabei die ersten Wiederherstellungs-Codes (Klartext, einmalig).
-
-    Falsche Codes werden wie falsche Passwörter je Nutzer gedrosselt."""
+    """Bestätigt die 2FA-Einrichtung und erzeugt die ersten Wiederherstellungs-Codes (einmalig im Klartext);
+    falsche Codes werden gedrosselt."""
     # Nur für eine noch nicht bestätigte Einrichtung: Bei aktiver 2FA gäbe dieser Weg ohne Passwort einen frischen Satz
     # Codes aus (dafür gibt es `POST /me/recovery-codes` mit Passwort).
     if user.totp_secret_id is not None and user.totp_confirmed_at is not None:
@@ -1330,11 +1249,6 @@ def two_factor_enabled(user: User) -> bool:
     return user.totp_secret_id is not None and user.totp_confirmed_at is not None
 
 
-# ---------------------------------------------------------------------------
-# Wiederherstellungs-Codes
-# ---------------------------------------------------------------------------
-
-
 WRONG_PASSWORD_MESSAGE = "Das aktuelle Passwort stimmt nicht."
 
 
@@ -1351,9 +1265,8 @@ async def require_current_password(
     ip: str | None = None,
     user_agent: str | None = None,
 ) -> None:
-    """Bestätigt eine empfindliche Konto-Aktion (`action`, z. B. `2fa_abschalten`) mit dem aktuellen Passwort.
-
-    Falsche Eingaben werden gedrosselt (wie beim Login, dann 429) und als `auth.password_check_failed` protokolliert."""
+    """Bestätigt eine empfindliche Konto-Aktion (`action`) mit dem aktuellen Passwort; falsche Eingaben werden
+    gedrosselt und protokolliert."""
     # Ein Zähler je Nutzer für alle empfindlichen Aktionen, nicht je IP: Sonst ließe sich die Sperre mit wechselnden
     # Adressen umgehen, und ein Angreifer mit gestohlener Sitzung käme trotz Drosselung weiter.
     attempt = _begin_attempt(_account_key(user.id), SENSITIVE_ATTEMPT_KEY)
@@ -1388,8 +1301,8 @@ PASSWORD_CHANGE_TOTP_REQUIRED_MESSAGE = (
     "Zum Ändern des Passworts brauchst du jetzt deinen Zwei-Faktor-Code. "
     "Nutzt du die Handy-App und siehst kein Feld dafür, aktualisiere zuerst die App."
 )
-"""Antwort auf `POST /me/password` ohne Code. Eine ältere App zeigt nur dieses `detail`, der Satz muss für sich
-verständlich sein und sagen, was zu tun ist."""
+"""Antwort auf `POST /me/password` ohne Code; eine ältere App zeigt nur dieses `detail`, der Satz muss für sich
+verständlich sein."""
 _TOTP_REQUIRED_MESSAGE_BY_ACTION = {"passwort_aendern": PASSWORD_CHANGE_TOTP_REQUIRED_MESSAGE}
 """Eigener Satz je Vorgang (`action` von `require_current_totp`); alle anderen nehmen den allgemeinen."""
 WRONG_TOTP_MESSAGE = "Der Zwei-Faktor-Code stimmt nicht."
@@ -1408,9 +1321,8 @@ class TotpRequired(AuthError):
 
 
 class WrongTotp(AuthError):
-    """Der Zwei-Faktor-Code zur Bestätigung stimmt nicht oder wurde schon benutzt (API: 400). `code` ist `totp_used` für
-    einen schon benutzten Code aus der App, sonst `totp_wrong`, auch für einen verbrauchten Wiederherstellungs-Code
-    (den kennt die Datenbank nicht mehr)."""
+    """Der Zwei-Faktor-Code zur Bestätigung stimmt nicht oder wurde schon benutzt (API: 400, `code` `totp_wrong`
+    oder `totp_used`)."""
 
     def __init__(self, message: str, *, used: bool = False) -> None:
         super().__init__(message)
@@ -1429,9 +1341,8 @@ async def require_current_totp(
     allow_recovery: bool = False,
     before_claim: Callable[[], Awaitable[object]] | None = None,
 ) -> str | None:
-    """Verlangt bei eingeschaltetem Zwei-Faktor für eine empfindliche Aktion (`action`) den aktuellen Code aus der App.
-
-    Gibt `None` zurück, wenn Zwei-Faktor aus ist, sonst womit bestätigt wurde (`VIA_TOTP` bzw. `VIA_RECOVERY`)."""
+    """Verlangt bei eingeschaltetem Zwei-Faktor den aktuellen Code aus der App; `None` bei Zwei-Faktor aus, sonst
+    `VIA_TOTP` oder `VIA_RECOVERY`."""
     # Dieselben Bausteine wie beim Anmelden (`verify_mfa`): Ein Code gilt je Konto nur einmal, auch quer zwischen
     # Anmeldung und Bestätigung. Gedrosselt wird nur über die IP-unabhängige Grenze je Konto, die sich beide teilen; der
     # Zähler der Passwortabfrage taugt nicht dafür, das richtige Passwort davor setzt ihn zurück.
@@ -1516,9 +1427,8 @@ async def require_current_totp(
 
 @dataclass
 class RecoveryCodeSet:
-    """Ein neuer, noch nicht gespeicherter Satz Wiederherstellungs-Codes (`new_recovery_code_set`).
-
-    `hash()` rechnet die Hashes (Argon2, auf einem Pi Sekunden), `issue_recovery_codes` speichert sie."""
+    """Ein neuer, noch nicht gespeicherter Satz Wiederherstellungs-Codes; `hash()` rechnet die Hashes,
+    `issue_recovery_codes` speichert sie."""
 
     # So lässt sich das Rechnen vor einen Schreibzugriff ziehen: Wer neue Codes mit einem Wiederherstellungs-Code
     # bestätigt, hält ab dessen Verbrauch die Schreibsperre der Datenbank (`before_claim` von `require_current_totp`),
@@ -1549,9 +1459,8 @@ def new_recovery_code_set() -> RecoveryCodeSet:
 async def issue_recovery_codes(
     session: AsyncSession, user: User, code_set: RecoveryCodeSet | None = None
 ) -> list[str]:
-    """Speichert einen neuen Satz (`RECOVERY_CODE_COUNT` Codes) und ersetzt alle bisherigen, benutzte wie unbenutzte.
-
-    Gibt die Klartext-Codes zurück: Das ist das einzige Mal, dass sie existieren."""
+    """Speichert einen neuen Satz, ersetzt alle bisherigen und gibt die Klartext-Codes zurück, das einzige Mal,
+    dass sie existieren."""
     if code_set is None:
         code_set = new_recovery_code_set()
     hashes = await code_set.hash()
@@ -1578,9 +1487,8 @@ async def consume_recovery_code(
     *,
     before_claim: Callable[[], Awaitable[object]] | None = None,
 ) -> bool:
-    """Löst einen Wiederherstellungs-Code ein: `True`, wenn er zu einem unbenutzten Code des Nutzers passt.
-
-    Achtung: Schreibt `session` vor der langen Prüfung fest (`commit()`); Ungespeichertes wird mitgespeichert."""
+    """Löst einen Wiederherstellungs-Code ein und schreibt dafür `session` vorher fest, auch alles noch
+    Ungespeicherte."""
     normalized = security.normalize_recovery_code(code)
     if not normalized:
         return False

@@ -1,13 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUpRight, GripVertical } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import { Icon } from "../components/Icon";
 import { usePages } from "../lib/catalog";
 
 import { useWsSubscription } from "../lib/ws";
-import { MAX_ROWS, MIN_ROWS, MORE_LINE_PX, fitCount, rowsToPx, stageFor } from "./fit";
+import { MIN_ROWS, MORE_LINE_PX, capRows, fitCount, rowsToPx, stageFor } from "./fit";
 import { widgetDataQuery } from "./query";
 import type { WidgetDataResponse, WidgetOut } from "./types";
 import {
@@ -26,7 +26,7 @@ const ARRAY_KINDS = new Set(["list", "table", "chart", "status_grid"]);
 /** Zahl und Tacho stehen mittig in der Karte; alles andere beginnt oben. */
 const CENTERED_KINDS = new Set(["stat", "gauge"]);
 
-/** Gemessene Stufe für einen Stand (Daten und Breite); `limit` kürzt Listen, die nicht in L passen. */
+/** Gemessene Stufe für einen Stand (Daten und Breite); `limit` kürzt Listen, die nicht in die größte Stufe passen. */
 interface Fit {
   key: string;
   rows: number;
@@ -34,16 +34,22 @@ interface Fit {
 }
 
 /**
- * Eine Karte pro Widget: holt `data_endpoint` (`{data, meta}`, docs/02-EXTENSION-API.md), hält sich per
- * `refresh.interval_s` und/oder `refresh.ws_channel` aktuell und validiert die Form gegen den View-Typ defensiv: Eine
- * Abweichung wird als Extension-Fehler angezeigt statt als kaputtes oder leeres UI.
- *
- * Die Höhe richtet sich nach dem Inhalt (Stufen in `fit.ts`): Die Karte misst ihn und meldet die Rasterzeilen über
- * `onRows`. Passt eine Liste nicht in die größte Stufe, endet sie an der letzten ganzen Zeile, darunter „+ x weitere“.
+ * Eine Karte pro Widget: lädt `data_endpoint`, bleibt per `refresh` aktuell und zeigt eine unerwartete Form als Fehler
+ * der Erweiterung. Die Höhe misst sie selbst (Stufen in `fit.ts`) und meldet sie über `onRows`; was nicht passt, endet
+ * mit „+ x weitere“.
  */
 export function WidgetCard({
-  widget, onRows, draggable = false,
-}: { widget: WidgetOut; onRows?: (rows: number) => void; /** Im Raster: ein kleiner Griff rechts im Kopf zum Verschieben. */ draggable?: boolean }) {
+  widget, onRows, draggable = false, fixedRows = null, edit,
+}: {
+  widget: WidgetOut;
+  onRows?: (rows: number) => void;
+  /** Ein Griff im Kopf zum Verschieben im Raster. */
+  draggable?: boolean;
+  /** Gewählte Höhe in Rasterzeilen; sie ist dann die einzige Stufe. */
+  fixedRows?: number | null;
+  /** Steuerung im Bearbeiten-Modus: Der Kopf führt nicht weg, der Inhalt nimmt weder Klicks noch Tastatur an. */
+  edit?: ReactNode;
+}) {
   const queryClient = useQueryClient();
   const query = widgetDataQuery(widget);
   const { queryKey } = query;
@@ -64,7 +70,8 @@ export function WidgetCard({
   const page = (pages ?? [])
     .filter((p) => p.ext_id === widget.ext_id && p.show_in_nav !== false)
     .sort((a, b) => a.nav_order - b.nav_order)[0];
-  const pageHref = page ? `/ext/${page.ext_id}${page.path}` : null;
+  // Im Bearbeiten-Modus führt nichts von der Seite weg.
+  const pageHref = page && !edit ? `/ext/${page.ext_id}${page.path}` : null;
 
   const cardRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -72,8 +79,11 @@ export function WidgetCard({
   const [width, setWidth] = useState(0);
   const [fit, setFit] = useState<Fit | null>(null);
   const minRows = MIN_ROWS[widget.view.kind] ?? 1;
-  // Neue Daten oder eine andere Breite: Der alte Zuschnitt gilt nicht mehr, gemessen wird wieder der ganze Inhalt.
-  const fitKey = `${dataUpdatedAt}:${errorUpdatedAt}:${width}`;
+  const maxRows = capRows(minRows, fixedRows);
+  const editing = edit !== undefined;
+  // Neue Daten, eine andere Breite oder Höhe, die Steuerung: Der alte Zuschnitt gilt nicht mehr, gemessen wird wieder
+  // der ganze Inhalt.
+  const fitKey = `${dataUpdatedAt}:${errorUpdatedAt}:${width}:${maxRows}:${editing}`;
   const limit = fit?.key === fitKey ? fit.limit : null;
   const settled = Boolean(response || error);
   const fitRef = useRef(fit);
@@ -91,21 +101,21 @@ export function WidgetCard({
     const chrome = card.offsetHeight - body.clientHeight;
     const needed = chrome + content.offsetHeight;
     let next: Fit;
-    const stage = stageFor(needed, minRows);
+    const stage = stageFor(needed, minRows, fixedRows);
     if (stage !== null) {
       next = { key: fitKey, rows: stage, limit: null };
     } else {
-      // Zu lang für L: so viele ganze Zeilen, wie über „+ x weitere“ Platz haben. Ohne Zeilen (Text, Diagramm) bleibt
-      // die Karte L und scrollt.
+      // Zu lang für die größte Stufe: so viele ganze Zeilen, wie über „+ x weitere“ Platz haben. Ohne Zeilen (Text,
+      // Diagramm) bleibt die Karte in dieser Stufe und scrollt.
       const rowEls = [...content.querySelectorAll<HTMLElement>("[data-fit-row]")];
       const top = content.getBoundingClientRect().top;
       const padBottom = Number.parseFloat(getComputedStyle(content).paddingBottom) || 0;
-      const available = rowsToPx(MAX_ROWS) - chrome - padBottom - MORE_LINE_PX;
+      const available = rowsToPx(maxRows) - chrome - padBottom - MORE_LINE_PX;
       const rowLimit = rowEls.length ? fitCount(rowEls.map((el) => el.getBoundingClientRect().bottom - top), available) : null;
-      next = { key: fitKey, rows: MAX_ROWS, limit: rowLimit };
+      next = { key: fitKey, rows: maxRows, limit: rowLimit };
     }
     setFit((prev) => (prev && prev.key === next.key && prev.rows === next.rows && prev.limit === next.limit ? prev : next));
-  }, [minRows, settled, fitKey]);
+  }, [minRows, maxRows, fixedRows, settled, fitKey]);
 
   // Vor dem Zeichnen messen, damit die ungekürzte Liste nie zu sehen ist.
   useLayoutEffect(() => {
@@ -130,6 +140,11 @@ export function WidgetCard({
     return () => observer.disconnect();
   }, []);
 
+  // `inert` statt nur `pointer-events-none`: Sonst löste Tab und Enter einen Knopf im Inhalt doch aus.
+  useEffect(() => {
+    bodyRef.current?.toggleAttribute("inert", editing);
+  }, [editing]);
+
   const rows = fit?.rows ?? null;
   const onRowsRef = useRef(onRows);
   onRowsRef.current = onRows;
@@ -151,7 +166,7 @@ export function WidgetCard({
   );
 
   return (
-    <div ref={cardRef} className="panel group/card flex h-full flex-col overflow-hidden" data-testid={`widget-${widget.ext_id}-${widget.id}`}>
+    <div ref={cardRef} className="panel flex h-full flex-col overflow-hidden" data-testid={`widget-${widget.ext_id}-${widget.id}`}>
       <div className="flex items-center gap-1 border-b border-white/[0.06] px-4 py-2.5">
         {pageHref ? (
           <Link
@@ -171,15 +186,16 @@ export function WidgetCard({
         )}
         {draggable && (
           <span
-            className="widget-drag-handle grid h-6 w-5 flex-none cursor-grab place-items-center rounded text-white/40 opacity-0 transition-opacity hover:bg-white/5 hover:text-white/70 active:cursor-grabbing group-hover/card:opacity-100 [@media(hover:none)]:opacity-100"
+            className="widget-drag-handle grid h-6 w-5 flex-none cursor-grab place-items-center rounded text-white/60 hover:bg-white/5 hover:text-white active:cursor-grabbing"
             title="Zum Verschieben ziehen"
-            aria-hidden="true"
+            aria-hidden
           >
             <GripVertical size={14} />
           </span>
         )}
       </div>
-      <div ref={bodyRef} className="widget-body flex min-h-0 flex-1 flex-col overflow-y-auto">
+      {edit}
+      <div ref={bodyRef} className={`widget-body flex min-h-0 flex-1 flex-col overflow-y-auto ${editing ? "pointer-events-none" : ""}`}>
         {/* `my-auto` statt `justify-center`: Die Höhe des Inhalts bleibt messbar, und was nicht passt, beginnt oben. */}
         <div ref={contentRef} className={`px-4 py-2.5 ${CENTERED_KINDS.has(widget.view.kind) ? "my-auto" : ""}`}>
           {isLoading && (

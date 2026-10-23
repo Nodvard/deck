@@ -140,7 +140,9 @@ describe("Mit Passwort einrichten: Formular", () => {
     expect(within(form).getByRole("button", { name: /Richte ein/ })).toBeDisabled();
     const sent = calls.find((c) => `${c.method} ${c.path}` === SETUP_URL);
     // Vorbelegt: root-Rechte (Nodvard Shield) und die Gruppe docker (Docker), wie beim Befehl.
-    expect(sent?.body).toEqual({ login_user: "root", password: SECRET, sudo: true, groups: ["docker"], sudo_password_same: true });
+    expect(sent?.body).toEqual({
+      login_user: "root", password: SECRET, sudo: true, full_sudo: false, groups: ["docker"], sudo_password_same: true,
+    });
     expect(sent?.query).toBe("");
 
     answer(okResult());
@@ -162,6 +164,23 @@ describe("Mit Passwort einrichten: Formular", () => {
     fireEvent.click(within(form).getByRole("button", { name: "Einrichten" }));
     await within(form).findByTestId("password-setup-result");
     expect(calls.find((c) => `${c.method} ${c.path}` === SETUP_URL)?.body).toMatchObject({ sudo: false, groups: [] });
+  });
+
+  it("„Volle Rechte“ unter „Erweitert“ geht auch beim Einrichten mit Passwort mit", async () => {
+    const helper = {
+      ext_id: "shield", module: "Nodvard Shield", path: "/usr/local/lib/nodvard-deck/shield-root", version: 1,
+      sha256: "a".repeat(64), text: "#!/bin/sh\n",
+    };
+    const withHelpers = (call: Call) => ({
+      ...setupFixture(call), helpers: [helper], full_sudo: new URLSearchParams(call.query).get("full_sudo") === "true",
+    });
+    const calls = mockHostsApi(routes({ "GET /hosts/h1/credentials/c1/setup": withHelpers, [SETUP_URL]: okResult() }));
+    renderDetail();
+    const form = await openPasswordWay();
+    fireEvent.click(within(await screen.findByTestId("setup-advanced")).getByRole("checkbox", { name: /Volle Rechte/ }));
+    typePassword(form);
+    fireEvent.click(within(form).getByRole("button", { name: "Einrichten" }));
+    await waitFor(() => expect(calls.find((c) => `${c.method} ${c.path}` === SETUP_URL)?.body).toMatchObject({ sudo: true, full_sudo: true }));
   });
 
   it("anderes Konto als root: Haken „Für sudo dasselbe Passwort nehmen“ (Vorgabe an), abgewählt geht false mit", async () => {

@@ -1,9 +1,10 @@
-/** Synology-Seite (PageSpec `component="SynologyPage"`): Zustand eines DSM mit Modell, Auslastung, Speicherpools, Volumes, Festplatten und Hyper Backup, nur lesend. */
-import { useCallback, useEffect, useRef, useState } from "react";
+/** Synology-Seite (PageSpec `component="SynologyPage"`): Zustand eines oder mehrerer DSM mit Modell, Auslastung, Speicherpools, Volumes, Festplatten und Hyper Backup, nur lesend. */
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { errorMessage, fetchJson, LoadError } from "../../../_shared/frontend/src/loadError";
 import { SettingsLink, safeHref } from "../../../_shared/frontend/src/links";
+import { useUrlParams } from "../../../_shared/frontend/src/location";
 import { Badge, Button, Card, EmptyState, Page, Stat, buttonClass, type Tone } from "../../../_shared/frontend/src/ui";
 import { deck } from "../../../_shared/frontend/src/deck";
 
@@ -106,6 +107,8 @@ export interface Problem {
 }
 
 export interface Overview {
+  /** Kurzname des Geräts; fehlt bei einem älteren Backend und leer, wenn noch keins eingetragen ist. */
+  device?: string | null;
   state: OverviewState | string;
   message: string | null;
   url: string | null;
@@ -122,6 +125,12 @@ export interface Overview {
   update_note: Note | null;
   backup_note: Note | null;
   problems: Problem[];
+  /** Der Eintrag in den Einstellungen ist unbrauchbar (Kurzname, Adresse, Fingerabdruck); erneut abfragen hilft nicht. */
+  config_problem?: boolean;
+}
+
+export interface DeviceList {
+  devices: Overview[];
 }
 
 const PROBLEM: Record<string, { label: string; tone: Tone }> = {
@@ -437,17 +446,18 @@ function Tiles({ data }: { data: Overview }) {
   );
 }
 
-function Device({ data }: { data: Overview }) {
+function Device({ data, many }: { data: Overview; many: boolean }) {
   const system = data.system;
   const head = headline(data);
   const openHref = safeHref(data.url);
   const facts = [system?.dsm_version, system?.ram_mb != null ? `${sizeText(system.ram_mb * 1024 * 1024)} Arbeitsspeicher` : null].filter(Boolean);
+  const open = openHref ? <a href={openHref} target="_blank" rel="noreferrer" className="break-all hover:text-white hover:underline">DSM öffnen</a> : null;
   return (
     <div className="space-y-6">
       <AttentionCard data={data} />
       <Card
         title={system?.model ?? "Synology"}
-        description={openHref ? <a href={openHref} target="_blank" rel="noreferrer" className="break-all hover:text-white hover:underline">DSM öffnen</a> : undefined}
+        description={many || open ? <>{many ? <span data-testid="device-name">{data.device}</span> : null}{many && open ? " · " : null}{open}</> : undefined}
         actions={<Badge tone={head.tone}>{head.label}</Badge>}
       >
         <div data-testid="device" className="space-y-3">
@@ -470,50 +480,167 @@ function Device({ data }: { data: Overview }) {
   );
 }
 
-function StateProblem({ data, onRetry }: { data: Overview; onRetry: () => void }) {
+function StateProblem({ data, many, busy, retryError, onRetry }: {
+  data: Overview; many: boolean; busy: boolean; retryError: string | null; onRetry: () => void;
+}) {
   const canManage = deck().hasPermission("extensions.manage");
   const head = PROBLEM[data.state] ?? PROBLEM.error;
+  // Nach einer abgelehnten Anmeldung fragt das Dashboard erst nach einer Pause wieder; ein unbrauchbarer Eintrag
+  // ändert sich nur in den Einstellungen.
+  const onlySettings = data.state === "auth_failed" || data.config_problem === true;
   return (
-    <Card title="Synology DSM" actions={<Badge tone={head.tone}>{head.label}</Badge>}>
+    <Card title={many && data.device ? data.device : "Synology DSM"} actions={<Badge tone={head.tone}>{head.label}</Badge>}>
       <div data-testid="problem" role="alert" className="flex flex-col items-start gap-3">
         <p className="break-words text-sm text-red-300">{data.message}</p>
+        {retryError && <LoadError compact what={`Die erneute Abfrage von ${data.device ?? "der Synology"}`} error={retryError} />}
         <div className="flex flex-wrap items-center gap-2">
-          {/* Nach einer abgelehnten Anmeldung fragt das Dashboard erst nach einer Pause wieder. */}
-          {data.state !== "auth_failed" && <Button small onClick={onRetry}>Erneut versuchen</Button>}
+          {!onlySettings && <Button small disabled={busy} onClick={onRetry}>{busy ? "Prüfe …" : "Erneut versuchen"}</Button>}
           {canManage && <a href={SETTINGS_PATH} className={buttonClass("ghost", true)}>Einstellungen</a>}
         </div>
+        {!canManage && onlySettings && (
+          <p className="text-xs text-white/45">Ein Administrator kann das unter Einstellungen → Erweiterungen → Synology DSM beheben.</p>
+        )}
       </div>
     </Card>
   );
 }
 
-function NotConfigured({ data }: { data: Overview }) {
+function NotConfigured({ message }: { message: string | null }) {
   const canManage = deck().hasPermission("extensions.manage");
   return (
     <EmptyState
       icon="clock"
       title="Noch nicht eingerichtet"
-      text={canManage ? data.message ?? undefined : "Ein Administrator kann Synology DSM unter Einstellungen → Erweiterungen → Synology DSM einrichten."}
+      text={canManage ? message ?? undefined : "Ein Administrator kann Synology DSM unter Einstellungen → Erweiterungen → Synology DSM einrichten."}
       action={<SettingsLink to={SETTINGS_PATH} permission="extensions.manage">Jetzt einrichten</SettingsLink>}
     />
   );
 }
 
+const NOTHING_SET_UP = "Trage deine Synology unter Einstellungen → Erweiterungen → Synology DSM ein.";
+
+/** Kopfzeile eines Geräts für die Auswahl: wie die Kopfzeile seiner Karte, auch wenn es sich nicht abfragen ließ. */
+function tabStatus(data: Overview): { label: string; tone: Tone } {
+  if (data.state === "ok") return headline(data);
+  if (data.state === "not_configured") return { label: "nicht eingerichtet", tone: "neutral" };
+  return PROBLEM[data.state] ?? PROBLEM.error;
+}
+
+/** Die wievielte Zeile mit diesem Kurznamen die Zeile `index` ist (ab 1); nur unbrauchbare Einträge teilen sich einen Namen. */
+function occurrence(list: Overview[], index: number): number {
+  return list.slice(0, index + 1).filter((d) => d.device === list[index].device).length;
+}
+
+function indexOfDevice(list: Overview[], name: string | null, nth: number): number {
+  let seen = 0;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].device === name && ++seen === nth) return i;
+  }
+  return -1;
+}
+
+const PANEL_ID = "synology-panel";
+const tabId = (index: number) => `synology-tab-${index}`;
+
+function DeviceTabs({ devices, selected, onSelect }: { devices: Overview[]; selected: number; onSelect: (index: number) => void }) {
+  const buttons = useRef<(HTMLButtonElement | null)[]>([]);
+  // Am Handy liegt der gewählte Reiter sonst außerhalb des sichtbaren Streifens, etwa nach einem Link aus einer Meldung.
+  useEffect(() => {
+    buttons.current[selected]?.scrollIntoView?.({ block: "nearest", inline: "center" });
+  }, [selected]);
+
+  function onKeyDown(e: KeyboardEvent<HTMLButtonElement>, index: number) {
+    const last = devices.length - 1;
+    const next = e.key === "ArrowRight" ? (index === last ? 0 : index + 1)
+      : e.key === "ArrowLeft" ? (index === 0 ? last : index - 1)
+        : e.key === "Home" ? 0
+          : e.key === "End" ? last
+            : -1;
+    if (next < 0) return;
+    e.preventDefault();
+    onSelect(next);
+    buttons.current[next]?.focus();
+  }
+
+  return (
+    <div role="tablist" aria-label="Geräte" data-testid="device-tabs" className="mb-5 flex gap-1 overflow-x-auto border-b border-white/[0.08] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {devices.map((d, index) => {
+        const status = tabStatus(d);
+        return (
+          <button
+            key={`${d.device}-${index}`}
+            ref={(el) => { buttons.current[index] = el; }}
+            type="button"
+            role="tab"
+            id={tabId(index)}
+            aria-selected={selected === index}
+            aria-controls={selected === index ? PANEL_ID : undefined}
+            tabIndex={selected === index ? 0 : -1}
+            onClick={() => onSelect(index)}
+            onKeyDown={(e) => onKeyDown(e, index)}
+            className={`-mb-px flex items-center gap-2 whitespace-nowrap border-b-2 px-3.5 py-2 text-sm transition ${
+              selected === index ? "border-[var(--color-accent)] text-white" : "border-transparent text-white/55 hover:text-white"
+            }`}
+          >
+            {d.device}
+            <Badge tone={status.tone}>{status.label}</Badge>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function DeviceSection({ data, many, busy, retryError, onRetry }: {
+  data: Overview; many: boolean; busy: boolean; retryError: string | null; onRetry: () => void;
+}) {
+  if (data.state === "ok") return <Device data={data} many={many} />;
+  if (data.state === "not_configured") {
+    // Ein einzelnes Gerät ohne Zugangsdaten ist die ganze Seite; bei mehreren bleibt es ein Abschnitt neben den anderen.
+    return many ? <NotConfiguredDevice data={data} /> : <NotConfigured message={data.message} />;
+  }
+  return <StateProblem data={data} many={many} busy={busy} retryError={retryError} onRetry={onRetry} />;
+}
+
+function NotConfiguredDevice({ data }: { data: Overview }) {
+  const canManage = deck().hasPermission("extensions.manage");
+  return (
+    <Card title={data.device ?? "Synology DSM"} actions={<Badge tone="neutral">nicht eingerichtet</Badge>}>
+      <div data-testid="not-configured-device" className="flex flex-col items-start gap-3">
+        <p className="break-words text-sm text-white/70">{data.message}</p>
+        {canManage
+          ? <a href={SETTINGS_PATH} className={buttonClass("primary", true)}>Jetzt einrichten</a>
+          : <p className="text-xs text-white/45">Ein Administrator kann das unter Einstellungen → Erweiterungen → Synology DSM einrichten.</p>}
+      </div>
+    </Card>
+  );
+}
+
 export function SynologyPage(): JSX.Element {
   const unmountSignal = useUnmountSignal();
-  const [data, setData] = useState<Overview | null>(null);
+  const [urlParams, updateUrl] = useUrlParams();
+  const [devices, setDevices] = useState<Overview[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const seq = useRef(0);
+  // Geräte, die gerade einzeln neu abgefragt werden: Der Knopf ist gesperrt, bis die Antwort da ist.
+  const retrying = useRef(new Set<string>());
+  const [retryingNames, setRetryingNames] = useState<ReadonlySet<string>>(new Set());
+  // Was beim einzelnen Abfragen schiefging, je Gerät; der seitenweite `error` gehört nur der Gesamtabfrage.
+  const [retryErrors, setRetryErrors] = useState<ReadonlyMap<string, string>>(new Map());
+  // Antworten einzeln neu abgefragter Geräte, die eine laufende Gesamtabfrage überholt haben.
+  const retried = useRef(new Map<string, Overview>());
 
   const load = useCallback((refresh: boolean) => {
     const mine = ++seq.current;
+    retried.current.clear();
     setLoading(true);
-    fetchJson<Overview>(`${API}/overview${refresh ? "?refresh=true" : ""}`, { signal: unmountSignal() })
+    fetchJson<DeviceList>(`${API}/devices${refresh ? "?refresh=true" : ""}`, { signal: unmountSignal() })
       .then((body) => {
         if (mine !== seq.current) return;
-        setData(body);
+        setDevices(body.devices.map((d) => (d.device ? retried.current.get(d.device) ?? d : d)));
         setError(null);
+        setRetryErrors(new Map());
       })
       .catch((err: unknown) => {
         if (mine !== seq.current || (err instanceof DOMException && err.name === "AbortError")) return;
@@ -525,10 +652,50 @@ export function SynologyPage(): JSX.Element {
   useEffect(() => { load(false); }, [load]);
   const reload = useCallback(() => load(true), [load]);
 
+  // „Erneut versuchen“ fragt nur dieses Gerät noch einmal; die anderen bleiben, wie sie sind.
+  const retry = useCallback((name: string | null | undefined) => {
+    if (!name) return reload();
+    if (retrying.current.has(name)) return;
+    retrying.current.add(name);
+    setRetryingNames(new Set(retrying.current));
+    const started = seq.current;
+    const setDeviceError = (text: string | null) => setRetryErrors((errors) => {
+      const next = new Map(errors);
+      if (text === null) next.delete(name); else next.set(name, text);
+      return next;
+    });
+    fetchJson<Overview>(`${API}/overview?device=${encodeURIComponent(name)}&refresh=true`, { signal: unmountSignal() })
+      .then((body) => {
+        // Eine Gesamtabfrage, die danach begann, fragt dieses Gerät ebenfalls neu und ist die jüngere Antwort.
+        if (seq.current !== started) return;
+        retried.current.set(name, body);
+        setDevices((list) => (list ?? []).map((d) => (d.device === name ? body : d)));
+        setDeviceError(null);
+      })
+      .catch((err: unknown) => {
+        if (seq.current !== started || (err instanceof DOMException && err.name === "AbortError")) return;
+        setDeviceError(errorMessage(err));
+      })
+      .finally(() => {
+        retrying.current.delete(name);
+        setRetryingNames(new Set(retrying.current));
+      });
+  }, [reload, unmountSignal]);
+
+  const list = devices ?? [];
+  const many = list.length > 1;
+  const found = indexOfDevice(list, urlParams.get("device"), Number(urlParams.get("nr")) || 1);
+  const selected = found >= 0 ? found : 0;
+  const current = list[selected];
+  const select = (index: number) => {
+    const nth = occurrence(list, index);
+    updateUrl({ device: list[index].device ?? null, nr: nth > 1 ? String(nth) : null });
+  };
+
   return (
     <Page
       title="Synology DSM"
-      description="Zeigt den Zustand deiner Synology: Auslastung, Speicherpools, Volumes, Festplatten, Hyper Backup und ob ein Update bereitsteht. Nur lesend."
+      description="Zeigt den Zustand deiner Synology-Geräte: Auslastung, Speicherpools, Volumes, Festplatten, Hyper Backup und ob ein Update bereitsteht. Nur lesend."
       actions={
         <>
           {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("ghost")}>Einstellungen</a>}
@@ -537,10 +704,25 @@ export function SynologyPage(): JSX.Element {
       }
     >
       {error && <LoadError what="Der Zustand der Synology" error={error} onRetry={reload} />}
-      {!data && !error && <Card><p className="text-sm text-white/50">Lade …</p></Card>}
-      {data?.state === "not_configured" && <NotConfigured data={data} />}
-      {data && data.state !== "ok" && data.state !== "not_configured" && <StateProblem data={data} onRetry={reload} />}
-      {data?.state === "ok" && <Device data={data} />}
+      {!devices && !error && <Card><p className="text-sm text-white/50">Lade …</p></Card>}
+      {devices && list.length === 0 && <NotConfigured message={NOTHING_SET_UP} />}
+      {many && <DeviceTabs devices={list} selected={selected} onSelect={select} />}
+      {current && (
+        <div
+          role={many ? "tabpanel" : undefined}
+          id={many ? PANEL_ID : undefined}
+          aria-labelledby={many ? tabId(selected) : undefined}
+          data-testid={many ? `panel-${current.device}` : undefined}
+        >
+          <DeviceSection
+            data={current}
+            many={many}
+            busy={current.device != null && retryingNames.has(current.device)}
+            retryError={(current.device != null && retryErrors.get(current.device)) || null}
+            onRetry={() => retry(current.device)}
+          />
+        </div>
+      )}
     </Page>
   );
 }

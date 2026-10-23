@@ -1,6 +1,5 @@
-"""Nach Updates suchen: einzige Quelle ist die Container-Registry von GitHub (ghcr.io), es gibt keinen eigenen Dienst.
-
-Die Registry sieht nur IP-Adresse und Zeitpunkt, nie die installierte Version. Das Ergebnis liegt in `update_check.json`."""
+"""Nach Updates suchen: einzige Quelle ist die Container-Registry von GitHub (ghcr.io), die nur IP-Adresse und
+Zeitpunkt sieht."""
 
 from __future__ import annotations
 
@@ -27,8 +26,8 @@ from ..version import __version__
 logger = logging.getLogger("nodvard_deck.updates")
 
 REPOSITORY = "nodvard/deck"
-"""Das offizielle Repository, die einzige Stelle im Kern, die es nennt. Image `ghcr.io/<REPOSITORY>`,
-Quelltext und Release-Notizen unter `github.com/<REPOSITORY>`."""
+"""Das offizielle Repository, die einzige Stelle im Kern, die es nennt (Image `ghcr.io/<REPOSITORY>`, Quelltext auf
+GitHub)."""
 
 REGISTRY_HOST = "ghcr.io"
 OFFICIAL_IMAGE = f"{REGISTRY_HOST}/{REPOSITORY}"
@@ -57,8 +56,8 @@ MAX_CACHE_BYTES = 64 * 1024
 OFFLINE_TEXT = "Konnte nicht prüfen (offline?)."
 
 USER_AGENT = "nodvard-deck"
-"""Bewusst ohne Versionsnummer: ghcr.io soll nicht erfahren, welche Version hier läuft. Nicht weglassen,
-sonst schickt httpx seinen eigenen Namen samt Version."""
+"""Bewusst ohne Versionsnummer, damit ghcr.io nicht erfährt, welche Version läuft; nicht weglassen, sonst schickt
+httpx seinen eigenen Namen."""
 
 _ACCEPT_MANIFEST = "application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json"
 _STABLE_RE = re.compile(r"(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})")
@@ -72,13 +71,7 @@ class CheckFailed(Exception):
     """Die Prüfung hat kein verlässliches Ergebnis gebracht (Grund nur für das Protokoll)."""
 
 
-# ---------------------------------------------------------------------------
-# Versionen
-# ---------------------------------------------------------------------------
-
-
 def _version_key(text: str, *, allow_pre: bool = True) -> tuple | None:
-    """Sortierschlüssel nach Semver oder `None`, wenn `text` keine Version ist; Vorabversionen liegen vor der fertigen."""
     if not isinstance(text, str) or len(text) > MAX_TAG_LENGTH:
         return None
     match = _STABLE_RE.fullmatch(text)
@@ -96,8 +89,6 @@ def _version_key(text: str, *, allow_pre: bool = True) -> tuple | None:
 
 
 def _pre_part_key(part: str) -> tuple[int, int, str, int]:
-    """Schlüssel eines Teils der Vorabversion: reine Zahlen vor allem mit Buchstaben, `rc10` wird zu ("rc", 10),
-    ein Teil ohne Zahl (`rc`, `beta`) liegt vor demselben Wort mit Zahl."""
     if part.isdigit():
         return (0, int(part), "", 0)
     match = _PRE_PART_RE.fullmatch(part)
@@ -112,7 +103,7 @@ def is_version(text: Any) -> bool:
 
 
 def is_newer(candidate: str, current: str) -> bool:
-    """`candidate` ist nach Semver größer als `current`. Unbekannte Formate sind nie neuer."""
+    """`candidate` ist nach Semver größer als `current`, unbekannte Formate sind nie neuer."""
     a, b = _version_key(candidate), _version_key(current)
     return a is not None and b is not None and a > b
 
@@ -136,9 +127,7 @@ def is_official_image(image: str | None) -> bool:
 
 
 def running_version(settings: Any, fallback: str | None = None) -> str:
-    """Die genaue Version dieses Containers, für die Update-Suche und die Kopien vor Updates (`boot`).
-
-    `settings` ist `config.Settings` (Felder `image`, `build`, `image_info_path`)."""
+    """Die genaue Version dieses Containers für die Update-Suche und die Kopien vor Updates (`boot`)."""
     if is_official_image(getattr(settings, "image", None)):
         # Die Datei im Image geht vor der Variable `NODVARD_DECK_BUILD`: sie kommt immer aus dem laufenden Image, die
         # Variable könnte aus einem alten Container stammen. Auch eine Vorabversion wie `0.6.0-rc1` zählt, die
@@ -156,11 +145,6 @@ def normalize_channel(channel: str | None) -> str:
     return channel if channel in CHANNELS else DEFAULT_CHANNEL
 
 
-# ---------------------------------------------------------------------------
-# Registry
-# ---------------------------------------------------------------------------
-
-
 def _make_client(transport: httpx.AsyncBaseTransport | None = None) -> httpx.AsyncClient:
     # Der Proxy aus der Umgebung (HTTP_PROXY/HTTPS_PROXY) bleibt hier gewollt: Die Prüfung fragt nur den festen Ort
     # ghcr.io, nie ein Ziel einer Erweiterung, und hinter einem Proxy für ausgehende Verbindungen käme sie sonst nicht
@@ -175,7 +159,6 @@ def _make_client(transport: httpx.AsyncBaseTransport | None = None) -> httpx.Asy
 
 
 async def _get_limited(client: httpx.AsyncClient, url: str, **kwargs: Any) -> tuple[bytes, httpx.Response]:
-    """GET mit Größengrenze: nur Status 200 und ungepackt, höchstens `MAX_BODY_BYTES` im Speicher."""
     async with client.stream("GET", url, **kwargs) as response:
         if response.status_code != 200:
             raise CheckFailed(f"HTTP {response.status_code} von {httpx.URL(url).path}")
@@ -215,7 +198,6 @@ async def _token(client: httpx.AsyncClient) -> str:
 
 
 def _next_page(response: httpx.Response) -> str | None:
-    """Adresse der nächsten Seite aus dem `Link`-Kopf, nur auf demselben Host und Pfad."""
     link = response.links.get("next", {}).get("url")
     if not link:
         return None
@@ -247,7 +229,6 @@ async def _tags(client: httpx.AsyncClient, token: str) -> list[str]:
 
 
 async def _digest(client: httpx.AsyncClient, token: str, tag: str) -> str | None:
-    """sha256 über das Manifest der Version `tag` (OCI-Index), `None`, wenn das nicht klappt."""
     try:
         body, _ = await _get_limited(
             client, f"https://{REGISTRY_HOST}/v2/{REPOSITORY}/manifests/{tag}",
@@ -265,9 +246,7 @@ async def _find_latest(client: httpx.AsyncClient, channel: str) -> tuple[str, st
 
 
 async def fetch_latest(channel: str, *, transport: httpx.AsyncBaseTransport | None = None) -> tuple[str | None, str | None]:
-    """Neueste Version im Kanal und ihr Digest.
-
-    Wirft `CheckFailed`, wenn Token oder Tags nicht innerhalb von `TOTAL_TIMEOUT_S` kommen."""
+    """Neueste Version im Kanal und ihr Digest, wirft `CheckFailed`, wenn Token oder Tags nicht rechtzeitig kommen."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + TOTAL_TIMEOUT_S
     async with _make_client(transport) as client:
@@ -286,11 +265,6 @@ async def fetch_latest(channel: str, *, transport: httpx.AsyncBaseTransport | No
             except TimeoutError:
                 logger.info("update_check_digest_skipped reason=Zeitlimit")
     return latest, digest
-
-
-# ---------------------------------------------------------------------------
-# Cache
-# ---------------------------------------------------------------------------
 
 
 def _now_iso() -> str:
@@ -331,10 +305,9 @@ def save_cache(data_dir: Path, data: dict[str, Any]) -> None:
 
 
 def _sweep_stale_tmp(path: Path) -> None:
-    """Löscht alte Zwischendateien (`.update_check.json.*.tmp`, normale Dateien, älter als `STALE_TMP_S`) neben `path`.
-    Links werden nie verfolgt; jeder Fehler wird ignoriert, das Speichern ist da schon gelungen."""
     prefix = f".{CACHE_NAME}."
     limit = time.time() - STALE_TMP_S
+    # Links werden nie verfolgt; jeder Fehler wird ignoriert, das Speichern ist da schon gelungen.
     with contextlib.suppress(OSError):
         for entry in os.scandir(path.parent):
             if not (entry.name.startswith(prefix) and entry.name.endswith(".tmp")):
@@ -349,8 +322,7 @@ _lock_slot: tuple[weakref.ReferenceType[asyncio.AbstractEventLoop], asyncio.Lock
 
 
 def _check_lock() -> asyncio.Lock:
-    """Die Sperre für den laufenden Event-Loop; wechselt der Loop (Tests), gibt es eine neue.
-    Es bleibt höchstens ein Platz belegt, und der hält den Loop nur schwach."""
+    # Wechselt der Loop (Tests), gibt es eine neue Sperre; der Platz hält den Loop nur schwach.
     global _lock_slot
     loop = asyncio.get_running_loop()
     if _lock_slot is None or _lock_slot[0]() is not loop:
@@ -405,9 +377,8 @@ async def check(
     current: str = __version__,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> dict[str, Any]:
-    """Fragt die Registry jetzt, schreibt den Cache und liefert das Ergebnis wie `status`; wirft nie.
-
-    Unter einer Sperre: Eine zweite Prüfung (täglicher Job oder Knopf) wartet, statt den frischen Stand zu überschreiben."""
+    """Fragt die Registry jetzt, schreibt den Cache und liefert das Ergebnis wie `status`, wirft nie; eine zweite
+    Prüfung wartet."""
     channel = normalize_channel(channel)
     async with _check_lock():
         cache = await asyncio.to_thread(load_cache, data_dir)

@@ -87,7 +87,7 @@ Der Kern besitzt die Host-Identität — siehe
 | is_managed | ob Aktionen erlaubt sind |
 | enabled | |
 | last_seen_at | letzte erfolgreiche Prüfung (Modul, „Verbindung prüfen“ oder `host-reachability`); leer = noch nie gesehen, dann gibt es beim ersten Ausfall keine Meldung |
-| status | `up` \| `down` \| `unknown` \| `maintenance`. Von Hand angelegte Server führt `host-reachability` nach (TCP zum SSH-Port, „down“ erst nach 2 Fehlschlägen hintereinander); `maintenance` fasst der Job nicht an |
+| status | `up` \| `down` \| `unknown` \| `maintenance`. Von Hand angelegte Server führt `host-reachability` nach (TCP zum SSH-Port, „down“ erst nach 2 Fehlschlägen hintereinander); `maintenance` fasst der Job nicht an. Eingelesene Server führt ihr Modul nach, über `ctx.hosts.set_status` (Proxmox: der einzige Knoten einer Verbindung, die mindestens 4 Minuten am Stück bei keinem Abgleich antwortet, `down`; Knoten eines Clusters oder einer Verbindung, die nur ablehnt, Gäste, deren Liste nicht lesbar war, und Server deaktivierter Verbindungen `unknown`) |
 | metadata | JSON, anbieterspezifisch. Ausnahme ist der Schlüssel `login_ok`, er gehört dem Kern: der Beleg einer erfolgreichen SSH-Anmeldung mit dem Standard-Zugang (`credential_id`, `address`, `port`, `at`). Daraus entsteht `login_ok_at` in der API, solange Zugang, Adresse und Port noch passen. Der Abgleich eines Anbieters ersetzt den Rest und behält ihn |
 | created_at, updated_at | |
 
@@ -271,7 +271,7 @@ host_id, output_ref, error, actor, correlation_id`
 `output_ref` zeigt auf eine Datei unter `/data/runs/<id>.log`, nicht in die DB —
 Skript-Ausgaben sind unbegrenzt groß, DB-Zeilen sollten es nicht sein.
 `interrupted` existiert, damit ein Neustart mitten im Lauf sichtbar wird statt zu
-verschwinden.
+verschwinden; ebenso endet ein Lauf, den das Herunterfahren abbricht oder gar nicht mehr startet.
 
 **Aufräumen** (`services/job_retention.py`, Kern-Job `job-runs-retention`, nachts 03:20): beendete Läufe
 (`status` ≠ `running`), die vor mehr als `jobs.run_retention_days` Tagen (Vorgabe 30, 1–3650) begannen, werden samt
@@ -375,8 +375,12 @@ Konstante: der Kern liefert einen Satz Defaults mit, Extensions dürfen ergänze
 niemand darf sie leeren.
 
 ### `dashboard_layouts`
-`id, user_id, name, is_default, items (JSON: [{widget_id, ext_id, x, y, w, h, config}])` —
-identisch für Web und App, damit die Anordnung auf dem Telefon nicht neu erfunden wird.
+`id, user_id, name, is_default, items (JSON: [{widget_id, ext_id, x, y, w, h, config}]), groups (JSON, null)` —
+identisch für Web und App, damit die Anordnung auf dem Telefon nicht neu erfunden wird. `config.group` legt ein Widget
+in eine andere Gruppe als die seines Moduls. `config.size` (`s`, `m` oder `l`, in der Oberfläche klein, mittel, groß:
+2, 3 oder 5 Rasterzeilen hoch) legt eine feste Höhe fest; ohne Angabe richtet sich die Höhe nach dem Inhalt. Die
+Oberfläche speichert `x + w` höchstens 12. `groups` hält Reihenfolge, eigene Namen und Zuklappen der Gruppen (`[{key, title, collapsed}]`);
+leer heißt Vorgabe.
 
 ### `custom_apps`
 Eigene App-Kacheln im Cockpit („+ App hinzufügen“) – von Hand angelegte Links für alles, was der

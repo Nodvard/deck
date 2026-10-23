@@ -61,7 +61,7 @@ async def _setup(client, db_session, test_settings, *, enable: tuple[str, ...]) 
 
 @pytest.mark.asyncio
 async def test_menu_widgets_and_overview_have_no_proxmox_and_no_errors(client, db_session, test_settings):
-    pi = await _manual_host(db_session, test_settings, "raspberry-pi", "192.168.2.72", tags=["docker"])
+    home = await _manual_host(db_session, test_settings, "heimserver", "192.168.2.30", tags=["docker"])
     await _manual_host(db_session, test_settings, "nas", "192.168.2.20")
     await db_session.commit()
     headers = await _setup(client, db_session, test_settings, enable=SSH_MODULES)
@@ -89,7 +89,7 @@ async def test_menu_widgets_and_overview_have_no_proxmox_and_no_errors(client, d
     assert rows["proxmox"]["state"] == "disabled" and rows["backups"]["state"] == "disabled"
 
     # Die Server-Seite eines von Hand angelegten Servers bietet die SSH-Werkzeuge an, keine von Proxmox.
-    tools = (await client.get(f"/api/v1/hosts/{pi.id}/tools", headers=headers)).json()
+    tools = (await client.get(f"/api/v1/hosts/{home.id}/tools", headers=headers)).json()
     offered = {t["ext_id"] for t in tools}
     assert {"system", "docker", "scripts"} <= offered
     assert not offered & {"proxmox", "backups"}
@@ -99,7 +99,7 @@ async def test_menu_widgets_and_overview_have_no_proxmox_and_no_errors(client, d
 async def test_manual_server_gets_metrics_over_ssh_only_with_the_system_module(client, db_session, test_settings):
     """Ist-Stand: Auslastung und Verlauf eines Servers ohne Proxmox kommen vom Modul „System“ (SSH). Ohne
     dieses Modul antwortet der Kern mit 404 -- die Server-Seite zeigt dafür einen Hinweis statt einer Lücke."""
-    host = await _manual_host(db_session, test_settings, "raspberry-pi", "192.168.2.72")
+    host = await _manual_host(db_session, test_settings, "heimserver", "192.168.2.30")
     await db_session.commit()
     headers = await _setup(client, db_session, test_settings, enable=("terminal",))
 
@@ -127,7 +127,7 @@ async def test_status_of_manual_servers_only_changes_when_someone_checks(client,
     sich nichts von selbst -- es gibt keine regelmäßige Erreichbarkeitsprüfung. `GET /hosts/{id}/status` prüft
     live, aber die Oberfläche ruft es nicht auf. Dieser Test hält das fest, damit eine spätere Prüfung
     (siehe Bericht) sichtbar etwas ändert."""
-    host = await _manual_host(db_session, test_settings, "raspberry-pi", "192.168.2.72")
+    host = await _manual_host(db_session, test_settings, "heimserver", "192.168.2.30")
     await db_session.commit()
     headers = await _setup(client, db_session, test_settings, enable=SSH_MODULES)
 

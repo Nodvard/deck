@@ -218,7 +218,7 @@ async def test_generate_key_stores_private_key_in_the_vault_and_returns_only_the
 
     # Der private Schluessel liegt im Vault, und der oeffentliche Teil gehoert dazu.
     private = await _private_key_of(db_session, test_settings, cred["id"])
-    assert "BEGIN OPENSSH PRIVATE KEY" in private
+    assert "-----BEGIN OPENSSH " + "PRIVATE KEY-----" in private
     key = asyncssh.import_private_key(private)
     assert key.get_algorithm() == "ssh-ed25519"
     assert key.export_public_key("openssh").decode().split()[:2] == body["public_key"].split()[:2]
@@ -388,8 +388,9 @@ async def test_setup_returns_one_liner_script_and_the_derived_public_key(client,
     r = await client.get(_setup_url(host["id"], cid), params={"sudo": "true", "groups": "docker"}, headers=_auth(token))
     assert r.status_code == 200, r.text
     body = r.json()
-    assert set(body) == {"username", "public_key", "fingerprint", "one_liner", "script", "notes", "groups", "sudo", "helpers"}
+    assert set(body) == {"username", "public_key", "fingerprint", "one_liner", "script", "notes", "groups", "sudo", "helpers", "full_sudo"}
     assert body["helpers"] == [], "ohne eingeschaltete Erweiterung mit Hilfsskript bringt der Befehl keins mit"
+    assert body["full_sudo"] is True, "ohne Hilfsskript bleibt nur die volle Regel"
     assert body["public_key"] == gen["public_key"] and body["fingerprint"] == gen["fingerprint"]
     assert (body["username"], body["groups"], body["sudo"]) == ("lattice", ["docker"], True)
     assert body["one_liner"].startswith('S=; [ "$(id -u)" = 0 ] || S=sudo; $S sh -c ')

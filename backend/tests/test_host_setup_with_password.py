@@ -47,7 +47,12 @@ class ServerState:
     sudo_needs_password: bool = True
     behaviour: str = "ok"
     """`ok`, `fail` (Skript bricht mit eigener Meldung ab), `fail_silent` (bricht ohne eigene Meldung ab), `leak`
-    (der Server gibt das Passwort aus), `hang` oder `drop` (die Verbindung bricht nach dem Start des Befehls ab)."""
+    (der Server gibt das Passwort aus), `hang`, `drop` (die Verbindung bricht nach dem Start des Befehls ab), `cut`
+    (von der Standardeingabe kommt nur die erste Hälfte an) oder `fish` (die Login-Shell kann einen langen Befehl nicht
+    lesen)."""
+    dropbear: bool = True
+    """Wie Dropbear ab 2015.68: Ein Befehlstext über 9000 Byte beendet die ganze Verbindung."""
+    too_long: int = 0
     authorized: dict[str, set[str]] = field(default_factory=dict)
     """Fingerabdruecke erlaubter Schluessel je Benutzer -- fuellt erst der Einrichtungsbefehl."""
     connections: int = 0
@@ -56,11 +61,14 @@ class ServerState:
     password_tries: list[tuple[str, str]] = field(default_factory=list)
     key_logins: list[str] = field(default_factory=list)
     runs: list[dict] = field(default_factory=list)
-    """Jeder Lauf des Einrichtungsbefehls: Benutzer, Befehlszeile, Standardeingabe."""
+    """Jeder Lauf des Einrichtungsbefehls: Benutzer, Befehlszeile, Aufruf davor (`sh -c` oder sudo), Skript und was
+    danach auf der Standardeingabe kam."""
 
 
 _SCRIPT_KEY_RE = re.compile(r'K="(ssh-ed25519 [A-Za-z0-9+/=]+)')
 _SCRIPT_USER_RE = re.compile(r"U=([a-z_][a-z0-9_-]*)")
+_END_MARK_RE = re.compile(r"@@nodvard-ende-[0-9a-f]{32}")
+DROPBEAR_MAX_COMMAND = 9000
 
 
 class _Server(asyncssh.SSHServer):
@@ -91,24 +99,60 @@ class _Server(asyncssh.SSHServer):
         return ok
 
 
+def _launcher(start: str) -> str:
+    """Was vor `sh -c` steht: leer als root, sonst der Aufruf von sudo."""
+    return "" if start.startswith("sh -c ") else start.split(" sh -c ", 1)[0]
+
+
 def _process_handler(state: ServerState):
     async def handle(process) -> None:
         command = process.command or ""
-        if host_setup.SETUP_STARTED not in command:
+        if state.dropbear and len(command.encode()) > DROPBEAR_MAX_COMMAND:
+            # Wie Dropbear: Ein zu langer Befehlstext beendet die ganze Verbindung.
+            state.too_long += 1
+            process.channel.get_connection().abort()
+            return
+        end = _END_MARK_RE.search(command)
+        if end is None and host_setup.SETUP_STARTED not in command:
             # Die Befehle von „Verbindung prüfen“ (sudo -n true, os-release): alles in Ordnung.
             process.stdout.write(f"ran:{command}\n".encode())
             await process.stdout.drain()
             process.exit(0)
             return
         stdin = await process.stdin.read()
-        state.runs.append({"user": process.get_extra_info("username"), "command": command, "stdin": stdin})
+        if state.behaviour == "cut":
+            stdin = stdin[: len(stdin) // 2]
+        read = ""
+        if end is None:
+            launcher, script, rest = _launcher(command), shlex.split(command)[-1], stdin
+        elif state.behaviour == "fish":
+            process.stderr.write(b"fish: Unsupported use of '='. In fish, please use 'set __nd '.\n")
+            await process.stdout.drain()
+            process.exit(127)
+            return
+        else:
+            # Wie die Login-Shell: das Skript zwischen den Marken, was danach kommt, liest sudo.
+            launcher = _launcher(command.rsplit(" && exec ", 1)[1])
+            mark = f"{end.group()}\n".encode()
+            head, found, rest = stdin.removeprefix(mark).partition(b"\n" + mark)
+            if not stdin.startswith(mark) or not found:
+                process.stderr.write(f"{ssh.STDIN_INCOMPLETE}\n".encode())
+                await process.stdout.drain()
+                process.exit(ssh.STDIN_INCOMPLETE_EXIT)
+                return
+            script, read = head.decode(), f"{host_setup.SETUP_INPUT_READ}\n"
+        state.runs.append({
+            "user": process.get_extra_info("username"), "command": command, "launcher": launcher, "script": script,
+            "stdin": rest,
+        })
         if state.behaviour == "drop":
             # Die Verbindung reisst mitten im Lauf ab (kein sauberes Ende), nachdem der Befehl schon etwas getan hat.
-            process.stdout.write(f"{host_setup.SETUP_STARTED}\nBenutzer nodvard angelegt.\n".encode())
+            process.stdout.write(f"{read}{host_setup.SETUP_STARTED}\nBenutzer nodvard angelegt.\n".encode())
             await process.stdout.drain()
             process.channel.get_connection().abort()
             return
-        out, err, code = await _run_setup(state, command, stdin)
+        out, err, code = await _run_setup(state, launcher, script, rest)
+        out = read + out
         if out:
             process.stdout.write(out.encode())
         if err:
@@ -119,13 +163,13 @@ def _process_handler(state: ServerState):
     return handle
 
 
-async def _run_setup(state: ServerState, command: str, stdin: bytes) -> tuple[str, str, int]:
+async def _run_setup(state: ServerState, launcher: str, script: str, stdin: bytes) -> tuple[str, str, int]:
     """Was der Server auf den Einrichtungsbefehl antwortet: wie sudo (Passwort von der Standardeingabe) und das
     Skript (traegt den Schluessel fuer den Benutzer ein)."""
-    via_sudo_s = command.startswith("env LC_ALL=C sudo -S ")
-    if via_sudo_s and state.sudo_needs_password and stdin.decode().split("\n")[0] != state.sudo_password:
+    password = stdin.decode().split("\n")[0]
+    if launcher == "env LC_ALL=C sudo -S -p ''" and state.sudo_needs_password and password != state.sudo_password:
         return "", "Sorry, try again.\nsudo: no password was provided\nsudo: 1 incorrect password attempt\n", 1
-    if command.startswith("env LC_ALL=C sudo -n ") and state.sudo_needs_password:
+    if launcher == "env LC_ALL=C sudo -n" and state.sudo_needs_password:
         return "", "sudo: a password is required\n", 1
     if state.behaviour == "hang":
         await asyncio.sleep(30)
@@ -134,6 +178,13 @@ async def _run_setup(state: ServerState, command: str, stdin: bytes) -> tuple[st
         return started + "FEHLER: Das Home-Verzeichnis /home/nodvard gibt es nicht.\n", "useradd: kaputt\n", 1
     if state.behaviour == "fail_silent":
         return started, "useradd: kaputt\n", 1
+    if state.behaviour == "helpers_blocked":
+        return (
+            started + "FEHLER: Im Ordner /usr/local/lib darf außer root noch jemand schreiben (Rechte 775, Gruppe nodvard).\n"
+            + f"{host_setup.HELPERS_BLOCKED}\nHinweis: Den Grund oben beheben.\n",
+            "",
+            1,
+        )
     if state.behaviour == "leak":
         leaked = stdin.decode().strip() or PASSWORD
         return (
@@ -141,14 +192,14 @@ async def _run_setup(state: ServerState, command: str, stdin: bytes) -> tuple[st
             f"sudo: {leaked}\n",
             1,
         )
-    key = _SCRIPT_KEY_RE.search(command)
-    user = _SCRIPT_USER_RE.search(command)
+    key = _SCRIPT_KEY_RE.search(script)
+    user = _SCRIPT_USER_RE.search(script)
     assert key and user, "das Skript traegt Benutzer und Schluessel"
     fingerprint = asyncssh.import_public_key(key.group(1)).get_fingerprint()
     state.authorized.setdefault(user.group(1), set()).add(fingerprint)
     name = user.group(1)
     report = ""
-    if "ST before" in command:
+    if "ST before" in script:
         # Wie `ST` im Skript: Stand vorher und nachher, hier mit festen Prüfsummen.
         keys = "/root/.ssh/authorized_keys" if name == "root" else f"/home/{name}/.ssh/authorized_keys"
         mark = host_setup.STATE_MARK
@@ -314,20 +365,21 @@ async def test_as_root_runs_exactly_the_setup_command_once_and_deck_then_logs_in
     items = {i["id"]: i for i in out["check"]["items"]}
     assert items["login"]["status"] == "ok" and items["login"]["detail"] == "Mit Schlüssel angemeldet."
     assert out["check"]["credential_id"] == gen["credential"]["id"]
-    assert any("restrict,pty" in n for n in out["notes"])
+    assert any("kein Weiterleiten" in n for n in out["notes"])
 
     assert state.password_tries == [("root", PASSWORD)], "genau eine Anmeldung mit Passwort"
     assert len(state.runs) == 1 and state.runs[0]["user"] == "root"
     assert state.runs[0]["stdin"] == b"", "als root bekommt der Befehl keine Eingabe"
+    assert state.too_long == 0
     assert state.key_logins and set(state.key_logins) == {"nodvard"}, "die Pruefung lief mit dem neuen Schluessel"
 
     # Genau der Befehl von GET .../setup, nur verpackt (als root: sh -c) und mit den Zeilen, die den Stand der Dateien
     # vorher und nachher melden.
     script = (await client.get(SETUP.format(host["id"], gen["credential"]["id"]), params={"sudo": "true"}, headers=_auth(token))).json()["script"]
-    expected = host_setup.remote_setup_command(script, as_root=True, sudo_with_password=False)
-    assert _without_state_report(state.runs[0]["command"]) == shlex.split(expected)[-1]
+    expected, _ = host_setup.remote_setup_command(script, as_root=True, sudo_with_password=False)
+    assert _without_state_report(state.runs[0]["script"]) == shlex.split(expected)[-1]
     assert "ST before" not in script, "der Befehl zum Selbst-Einfügen meldet keinen Stand"
-    assert state.runs[0]["command"].startswith("sh -c ")
+    assert state.runs[0]["command"].startswith("sh -c ") and state.runs[0]["launcher"] == ""
 
     rows = await _audit(db_session)
     assert [(a.outcome, a.detail["result"], a.detail["login_user"], a.target_id) for a in rows] == [
@@ -335,6 +387,7 @@ async def test_as_root_runs_exactly_the_setup_command_once_and_deck_then_logs_in
         ("success", "ok", "root", host["id"]),
     ]
     assert rows[-1].detail["check_ok"] is True and rows[-1].detail["credential_id"] == gen["credential"]["id"]
+    assert rows[-1].detail["full_sudo"] is True, "ohne Modul mit Hilfsskript gibt es nur die volle Regel"
     assert len(await _audit(db_session, "host.connection_checked")) == 1
     # Was die eigene Einrichtung getan hat, für den Datei-Wächter von Nodvard Shield (nur der eine echte Lauf).
     run = await _setup_run(db_session, host["id"])
@@ -349,9 +402,32 @@ async def test_as_root_runs_exactly_the_setup_command_once_and_deck_then_logs_in
     assert run["legacy_sudoers"] == {"/etc/sudoers.d/lattice-nodvard": full_rule}
 
 
-def _without_state_report(command: str) -> str:
-    inner = shlex.split(command)[-1]
-    return "\n".join(line for line in inner.split("\n") if not line.startswith("ST()") and "ST before" not in line and "ST after" not in line)
+def _without_state_report(script: str) -> str:
+    return "\n".join(line for line in script.split("\n") if not line.startswith("ST()") and "ST before" not in line and "ST after" not in line)
+
+
+@pytest.fixture
+def helper_modules(client):
+    from test_host_check_helpers import OTHER, SHIELD, _fake_modules
+
+    yield from _fake_modules((("fake-a", SHIELD), ("fake-b", OTHER)))
+
+
+@pytest.mark.asyncio
+async def test_only_helper_rules_unless_full_rights_are_asked_for(client, db_session, setup_server, helper_modules):
+    port, state, server_fp = setup_server
+    token = await _bootstrap_owner(client)
+    host, gen = await _key_host(client, token, port)
+    assert (await _setup(client, token, host, gen)).status_code == 409
+    r = await client.post(PIN.format(host["id"]), json={"key_type": "ssh-ed25519", "fingerprint": server_fp}, headers=_auth(token))
+    assert r.status_code == 201, r.text
+
+    assert (await _setup(client, token, host, gen, sudo=True)).status_code == 200
+    assert (await _setup(client, token, host, gen, sudo=True, full_sudo=True)).status_code == 200
+    narrow, full = (run["script"] for run in state.runs)
+    assert "NOPASSWD: ALL" not in narrow and "HS fake-a-root" in narrow
+    assert "NOPASSWD: ALL" in full and "HS fake-a-root" in full
+    assert [a.detail["full_sudo"] for a in await _audit(db_session)][1:] == [False, True]
 
 
 @pytest.mark.asyncio
@@ -390,6 +466,121 @@ async def test_non_root_without_sudo_password_uses_sudo_n_and_sends_nothing_on_s
     r = await _setup(client, token, host, gen, login_user="admin", sudo_password_same=False)
     assert r.status_code == 400 and r.json()["code"] == "sudo_failed"
     assert r.json()["detail"] == "sudo verlangt ein Passwort. Setze den Haken „Für sudo dasselbe Passwort nehmen“."
+
+
+# ---------------------------------------------------------------------------
+# Langer Einrichtungsbefehl (mit Hilfsskripten) an einen Server wie Dropbear
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def bundled_helpers(monkeypatch):
+    """Die mitgelieferten Hilfsskripte, als wären ihre Module eingeschaltet: Der Befehl wird so lang wie im Alltag."""
+    from nodvard_deck.api.v1 import host_access
+    from test_bundled_root_helpers import _helpers
+
+    helpers = [helper for _ext_id, helper in sorted(_helpers().items())]
+    monkeypatch.setattr(host_access, "root_helpers_for", lambda _host: helpers)
+    return helpers
+
+
+async def _long_setup_host(client, db_session, setup_server) -> tuple:
+    port, state, server_fp = setup_server
+    token = await _bootstrap_owner(client)
+    host, gen = await _key_host(client, token, port)
+    await _pin(db_session, host["id"], server_fp)
+    return state, token, host, gen
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("login_user,sudo_password_same,launcher,after_script", [
+    ("root", True, "", b""),
+    ("admin", True, "env LC_ALL=C sudo -S -p ''", f"{PASSWORD}\n".encode()),
+    ("admin", False, "env LC_ALL=C sudo -n", b""),
+])
+async def test_a_long_setup_reaches_a_dropbear_like_server_as_input(
+    client, db_session, setup_server, bundled_helpers, login_user, sudo_password_same, launcher, after_script
+):
+    state, token, host, gen = await _long_setup_host(client, db_session, setup_server)
+    state.sudo_needs_password = sudo_password_same
+    r = await _setup(client, token, host, gen, login_user=login_user, sudo=True, sudo_password_same=sudo_password_same)
+    assert r.status_code == 200, r.text
+    assert r.json()["messages"] == ["Benutzer nodvard angelegt.", host_setup.KEY_ADDED]
+    assert state.too_long == 0 and len(state.runs) == 1
+    run = state.runs[0]
+    assert len(run["command"].encode()) <= 600 and PASSWORD not in run["command"]
+    assert run["launcher"] == launcher
+    assert run["stdin"] == after_script, "nach dem Skript kommt höchstens die Passwortzeile für sudo"
+    assert run["script"].startswith(f"exec </dev/null; echo {host_setup.SETUP_STARTED}\n")
+    assert len(run["script"].encode()) > 50_000 and PASSWORD not in run["script"]
+    assert set(state.key_logins) == {"nodvard"}, "die Prüfung lief mit dem neuen Schlüssel"
+
+
+@pytest.mark.asyncio
+async def test_on_the_command_line_the_long_setup_takes_the_dropbear_connection_down(
+    client, db_session, setup_server, bundled_helpers, monkeypatch
+):
+    state, token, host, gen = await _long_setup_host(client, db_session, setup_server)
+    monkeypatch.setattr(ssh, "INLINE_COMMAND_MAX", 10**9)
+    r = await _setup(client, token, host, gen, sudo=True)
+    assert (r.status_code, r.json()["code"]) == (502, "connection_lost"), r.text
+    assert state.too_long == 1 and state.runs == [] and state.authorized == {}
+
+
+@pytest.mark.asyncio
+async def test_an_incomplete_input_runs_nothing_and_has_its_own_sentence(client, db_session, setup_server, bundled_helpers):
+    state, token, host, gen = await _long_setup_host(client, db_session, setup_server)
+    state.behaviour = "cut"
+    r = await _setup(client, token, host, gen, login_user="admin", sudo=True)
+    assert r.status_code == 502, r.text
+    assert r.json() == {
+        "detail": (
+            "Der Einrichtungsbefehl kam nicht vollständig auf dem Server an, deshalb wurde nichts ausgeführt. "
+            "Bitte versuche es noch einmal."
+        ),
+        "code": "setup_failed",
+        "messages": [],
+    }
+    assert state.runs == [] and state.authorized == {}
+    assert [a.detail["result"] for a in await _audit(db_session)] == ["setup_failed"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("behaviour,sudo_password,same,status,code", [
+    ("ok", "ein-anderes", True, 400, "sudo_failed"),
+    ("ok", PASSWORD, False, 400, "sudo_failed"),
+    ("fail", PASSWORD, True, 502, "setup_failed"),
+    ("fail_silent", PASSWORD, True, 502, "setup_failed"),
+    ("leak", PASSWORD, True, 502, "setup_failed"),
+    ("drop", PASSWORD, True, 502, "connection_lost"),
+    ("hang", PASSWORD, True, 504, "timeout"),
+])
+async def test_a_long_setup_fails_like_a_short_one(
+    client, db_session, setup_server, bundled_helpers, monkeypatch, behaviour, sudo_password, same, status, code
+):
+    state, token, host, gen = await _long_setup_host(client, db_session, setup_server)
+    state.behaviour, state.sudo_password = behaviour, sudo_password
+    if behaviour == "hang":
+        monkeypatch.setattr(one_time_password, "COMMAND_TIMEOUT_S", 0.5)
+    r = await _setup(client, token, host, gen, login_user="admin", sudo=True, sudo_password_same=same)
+    assert (r.status_code, r.json()["code"]) == (status, code), r.text
+    assert PASSWORD not in r.text
+    assert "Login-Shell" not in r.json()["detail"]
+    assert state.too_long == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("login_user,status,code", [("admin", 400, "sudo_failed"), ("root", 502, "setup_failed")])
+async def test_a_login_shell_that_cannot_read_the_long_setup_is_named(
+    client, db_session, setup_server, bundled_helpers, login_user, status, code
+):
+    state, token, host, gen = await _long_setup_host(client, db_session, setup_server)
+    state.behaviour = "fish"
+    r = await _setup(client, token, host, gen, login_user=login_user, sudo=True)
+    assert (r.status_code, r.json()["code"]) == (status, code), r.text
+    assert r.json()["detail"].startswith("Die Login-Shell dieses Kontos konnte den langen Einrichtungsbefehl nicht lesen")
+    assert "nichts ausgeführt" in r.json()["detail"]
+    assert state.runs == [] and state.authorized == {}
 
 
 @pytest.mark.asyncio
@@ -561,6 +752,24 @@ async def test_password_is_nowhere_afterwards_db_audit_log_responses(client, db_
     assert PASSWORD not in " ".join(f"{a.action} {a.reason} {a.detail}" for a in (await db_session.execute(select(AuditEntry))).scalars())
     assert PASSWORD not in caplog.text
     assert caplog.records, "das Log wurde wirklich mitgeschnitten"
+
+
+@pytest.mark.asyncio
+async def test_helpers_that_cannot_be_placed_safely_are_a_clear_409(client, db_session, setup_server):
+    port, state, server_fp = setup_server
+    token = await _bootstrap_owner(client)
+    host, gen = await _key_host(client, token, port)
+    await _pin(db_session, host["id"], server_fp)
+    state.behaviour = "helpers_blocked"
+
+    r = await _setup(client, token, host, gen, login_user="admin")
+    assert r.status_code == 409, r.text
+    body = r.json()
+    assert body["code"] == "helpers_blocked" and "nichts geändert" in body["detail"]
+    assert body["messages"][0].startswith("FEHLER: Im Ordner /usr/local/lib darf außer root")
+    assert host_setup.HELPERS_BLOCKED in body["messages"]
+    assert (await _audit(db_session))[-1].detail["result"] == "helpers_blocked"
+    assert await _setup_run(db_session, host["id"]) is None, "nichts geändert, also nichts für den Datei-Wächter"
 
 
 @pytest.mark.asyncio

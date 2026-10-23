@@ -1,6 +1,5 @@
-"""Ein fremdes Passwort genau einmal benutzen: eine SSH-Anmeldung, ein Befehl, danach vergessen.
-
-Es wird nie gespeichert oder protokolliert und geht nur an das gespeicherte Ziel mit bekanntem Server-Schlüssel."""
+"""Ein fremdes Passwort genau einmal am gespeicherten Ziel mit bekanntem Server-Schlüssel benutzen, nie gespeichert
+oder protokolliert."""
 
 from __future__ import annotations
 
@@ -29,8 +28,8 @@ ATTEMPTS_PER_USER = 10
 """Höchstens so viele Versuche je Nutzer im Zeitfenster, egal, an welchem Server."""
 ATTEMPT_WINDOW_S = 10 * 60
 REQUESTS_PER_USER = 30
-"""Grobe Drossel: Höchstens so viele Läufe je Nutzer im Fenster `REQUEST_WINDOW_S`, ob sie als Versuch zählen oder
-nicht, damit auch Läufe ohne Versuch nicht beliebig oft Verbindungen aufbauen."""
+"""Grobe Drossel: Höchstens so viele Läufe je Nutzer im Fenster, damit auch Läufe ohne Versuch nicht beliebig oft
+verbinden."""
 REQUEST_WINDOW_S = 5 * 60
 MAX_PASSWORD_LENGTH = 512
 CONNECT_TIMEOUT_S = 10.0
@@ -47,10 +46,6 @@ _refusals_logged = rate_limit.SlidingWindow(1, ATTEMPT_WINDOW_S)
 """Je Nutzer kommt eine Sperre (`rate_limited`) einmal im Fenster ins Protokoll."""
 _busy: set[str] = set()
 
-
-# ---------------------------------------------------------------------------
-# Fehler: feste Sätze, feste Codes
-# ---------------------------------------------------------------------------
 
 _ERRORS: dict[str, tuple[int, str]] = {
     "rate_limited": (429, "Zu viele Versuche mit Passwort. Bitte in {wait} erneut versuchen."),
@@ -99,8 +94,8 @@ CODES = frozenset(_ERRORS)
 
 
 class PasswordUseError(Exception):
-    """Der Versuch ging nicht: `str(exc)` ist ein fester deutscher Satz, `code` ein fester Bezeichner, `status` der
-    HTTP-Status. Nie mit Text vom Server oder von asyncssh, damit kein Passwort ins Protokoll gelangt."""
+    """Der Versuch ging nicht: `str(exc)` ist ein fester deutscher Satz, nie mit Text vom Server, damit kein
+    Passwort ins Protokoll gelangt."""
 
     def __init__(
         self, code: str, *, retry_after: int | None = None, host_key: dict[str, Any] | None = None,
@@ -114,15 +109,10 @@ class PasswordUseError(Exception):
         self.status = status
         self.retry_after = retry_after
         self.host_key = host_key
-        """Bei `host_key_unconfirmed`/`host_key_changed`: `{status, key_type, fingerprint, expected}` wie
-        `host_check.HostKeyInfo`, zum Vergleichen und Bestätigen."""
+        """Bei `host_key_unconfirmed` und `host_key_changed`: `{status, key_type, fingerprint, expected}` zum
+        Vergleichen und Bestätigen."""
         self.audit = audit
         """`False`: dieselbe Sperre steht für diesen Nutzer schon im Protokoll."""
-
-
-# ---------------------------------------------------------------------------
-# Grenzen
-# ---------------------------------------------------------------------------
 
 
 def _target_key(address: str, port: int) -> str:
@@ -135,9 +125,9 @@ def _refused(wait: int, user_id: str) -> PasswordUseError:
 
 
 def claim_attempt(*, address: str, port: int, user_id: str) -> None:
-    """Zählt einen Versuch für `user_id` und das Ziel `address:port`; `rate_limited`, wenn eine Grenze erreicht ist.
-
-    Erst die Grenze des Nutzers: Wer darüber ist, verbraucht nichts vom Budget des Ziels (das gehört auch anderen)."""
+    """Zählt einen Versuch für `user_id` und das Ziel `address:port`; `rate_limited`, wenn eine Grenze erreicht
+    ist."""
+    # Erst die Grenze des Nutzers: Wer darüber ist, verbraucht nichts vom Budget des Ziels, das auch anderen gehört.
     # Ein abgelehnter Versuch zählt bei der ablehnenden Grenze nicht mit.
     for window, key in ((_per_user, user_id), (_per_target, _target_key(address, port))):
         wait = window.hit(key)
@@ -146,7 +136,6 @@ def claim_attempt(*, address: str, port: int, user_id: str) -> None:
 
 
 def _throttle(user_id: str) -> None:
-    """Grobe Drossel je Nutzer für jeden Lauf, vor jeder Verbindung (auch vor dem bloßen Lesen des Schlüssels)."""
     wait = _requests_per_user.hit(user_id)
     if wait:
         raise _refused(wait, user_id)
@@ -172,19 +161,12 @@ def reset_state() -> None:
     _refusals_logged.reset()
 
 
-# ---------------------------------------------------------------------------
-# Server-Schlüssel
-# ---------------------------------------------------------------------------
-
-
 def _key_info(status: str, key_type: str | None, fingerprint: str | None, expected: str | None) -> dict[str, Any]:
     return {"status": status, "key_type": key_type or "?", "fingerprint": fingerprint or "?", "expected": expected}
 
 
 async def _require_known_host_key(session: AsyncSession, host: Host, port: int, timeout_s: float) -> None:
-    """Ohne gemerkten Server-Schlüssel: ihn ohne Anmeldung lesen, vormerken und `host_key_unconfirmed` werfen.
-
-    Ob ein gemerkter Schlüssel auch passt, prüft danach `ssh.connect` im Schlüsseltausch, bevor das Passwort geht."""
+    # Ob ein gemerkter Schlüssel auch passt, prüft danach `ssh.connect` im Schlüsseltausch, bevor das Passwort geht.
     known = await ssh.load_known_fingerprints(session, host.id)
     if known:
         return
@@ -196,21 +178,15 @@ async def _require_known_host_key(session: AsyncSession, host: Host, port: int, 
     raise PasswordUseError("host_key_unconfirmed", host_key=_key_info("new", report.key_type, report.fingerprint, None))
 
 
-# ---------------------------------------------------------------------------
-# Der eine Lauf
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class RemoteResult:
-    """Ergebnis des einen Befehls. In `stdout`/`stderr` ist das Passwort durch `MASK` ersetzt."""
+    """Ergebnis des einen Befehls, in `stdout`/`stderr` ist das Passwort durch `MASK` ersetzt."""
 
     exit_status: int | None
     stdout: str
     stderr: str
     flags: frozenset[str] = frozenset()
-    """Namen der Prüfungen aus `flags` (siehe `run_once`), die auf der unveränderten Ausgabe zutrafen, nie Servertext.
-    So zerstört das Unkenntlichmachen keine Marke, wenn das Passwort zufällig darin vorkommt."""
+    """Namen der Prüfungen aus `flags`, die auf der unveränderten Ausgabe zutrafen, nie Servertext."""
     extracted: Any = None
     """Ergebnis von `extract` (siehe `run_once`) auf der unveränderten Standardausgabe, sonst `None`."""
 
@@ -244,17 +220,17 @@ async def run_once(
     login_user: str,
     password: SecretStr,
     command: str,
+    stdin_payload: bytes = b"",
     password_on_stdin: bool = False,
     connect_timeout_s: float | None = None,
     command_timeout_s: float | None = None,
     flags: Mapping[str, Callable[[str, str], bool]] | None = None,
     extract: Callable[[str], Any] | None = None,
 ) -> RemoteResult:
-    """Meldet sich einmal mit `login_user`/`password` an `host.address:port` an, führt `command` aus, schließt wieder.
-
-    `flags` ist eine feste Tabelle `{Name: Prüfung(stdout, stderr)}`; zurück kommen nur die Namen der zutreffenden.
-    `extract` liest feste Formen aus der unveränderten Standardausgabe (etwa Prüfsummen); es darf keinen Servertext
-    durchreichen."""
+    """Meldet sich einmal mit `login_user`/`password` an `host.address:port` an, führt `command` mit `stdin_payload`
+    (bei `password_on_stdin` gefolgt von der Passwortzeile) auf der Standardeingabe aus und schließt wieder; ein zu
+    langer `command` ergibt `ssh.CommandTooLong`, bevor etwas zählt oder gesendet wird."""
+    ssh.check_command_line(command)
     connect_timeout_s = CONNECT_TIMEOUT_S if connect_timeout_s is None else connect_timeout_s
     command_timeout_s = COMMAND_TIMEOUT_S if command_timeout_s is None else command_timeout_s
     # Reihenfolge: grobe Drossel, ein Lauf je Server, Passwort sendbar, Server-Schlüssel bekannt (kostet keinen
@@ -274,7 +250,7 @@ async def run_once(
             host_id=host.id, address=host.address, port=port, username=login_user, kind="ssh_password",
             secret_value=secret, allow_tofu=False,
         )
-        stdin_data: bytes | None = None
+        stdin_data = b""
         stdout = stderr = ""
         conn: asyncssh.SSHClientConnection | None = None
         try:
@@ -305,8 +281,8 @@ async def run_once(
             try:
                 # Das Passwort geht nur auf die Standardeingabe, nie in die Befehlszeile: Die ist auf dem Server
                 # für alle sichtbar und steht in Fehlern von asyncssh.
-                stdin_data = (secret + "\n").encode("utf-8") if password_on_stdin else None
-                if stdin_data is not None:
+                stdin_data = stdin_payload + ((secret + "\n").encode("utf-8") if password_on_stdin else b"")
+                if stdin_data:
                     result = await conn.run(
                         command, input=stdin_data, check=False, encoding=None, timeout=command_timeout_s
                     )

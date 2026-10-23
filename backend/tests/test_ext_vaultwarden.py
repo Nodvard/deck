@@ -148,7 +148,7 @@ async def test_widget_meta_says_not_configured_only_when_no_address_is_entered(c
     assert body["meta"] == {"state": "not_configured"} and body["data"][0]["label"] == "nicht eingerichtet"
 
     # Eine eingetragene, aber unbrauchbare Adresse ist ein Fehler und bleibt sichtbar.
-    for url in ("ftp://vault.example.org", "https://anna:geheim@vault.example.org"):
+    for url in ("ftp://vault.example.org", "https://anna:" + "geheim@vault.example.org"):
         await _configure(client, headers, url)
         body = await widget()
         assert body["meta"] == {"state": "error"}, url
@@ -276,7 +276,7 @@ async def test_a_broken_address_is_a_clear_hint(client, db_session, test_setting
 
 
 @pytest.mark.parametrize(
-    "url", ["https://anna:geheim@vault.example.org", "anna:geheim@vault.example.org:8222", "https://anna@vault.example.org"],
+    "url", ["https://anna:" + "geheim@vault.example.org", "anna:geheim@vault.example.org:8222", "https://anna@vault.example.org"],
 )
 def test_an_address_with_name_or_password_is_refused_without_repeating_it(url):
     # Ohne laufendes Modul fehlt der Paketpfad; die autouse-Fixture setzt sys.path danach zurück.
@@ -301,7 +301,7 @@ def test_an_address_with_name_or_password_is_refused_without_repeating_it(url):
 async def test_a_password_in_the_address_shows_up_nowhere_and_nothing_is_asked(client, db_session, test_settings):
     """Die Adresse steht in der Übersicht, der Kachel und dem App-Vorschlag, die jeder mit Leserecht sieht."""
     headers, fake = await _enable(client, db_session, test_settings)
-    await _configure(client, headers, "https://anna:geheim@vault.example.org")
+    await _configure(client, headers, "https://anna:" + "geheim@vault.example.org")
     summary = await _summary(client, headers)
     assert summary["state"] == "not_configured" and "Benutzernamen oder ein Passwort" in summary["message"]
     widget = (await client.get("/api/v1/ext/vaultwarden/widgets/status", headers=headers)).json()

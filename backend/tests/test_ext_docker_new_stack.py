@@ -517,6 +517,69 @@ async def test_a_broken_channel_while_creating_the_folder_names_no_missing_paren
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup", ["geht", "kaputt"])
+@pytest.mark.parametrize("lost", [_lost, lambda: pytest.importorskip("asyncssh").SFTPConnectionLost("Kanal zu")], ids=["kanal", "sftp"])
+async def test_a_folder_created_without_an_answer_is_removed_or_named(tmp_path, cleanup, lost):
+    env = _setup(tmp_path)
+    original = env.sftp.mkdir
+
+    async def mkdir(path, attrs=None):
+        await original(path, attrs)
+        if path == FOLDER:
+            raise lost()
+
+    async def broken(path):
+        raise lost()
+
+    env.sftp.mkdir = mkdir
+    if cleanup == "kaputt":
+        env.sftp.rmdir = broken
+    done = await env.create.execute(_request(env))
+    assert done.error.startswith("/opt/stacks/neu ließ sich nicht anlegen: Kanal zu"), done.error
+    if cleanup == "geht":
+        assert FOLDER not in env.sftp.dirs and "Aufräumen" not in done.error
+    else:
+        assert "Beim Aufräumen blieb stehen: /opt/stacks/neu." in done.error
+    assert env.store.for_host("h1") == {}
+
+
+@pytest.mark.asyncio
+async def test_a_root_created_without_an_answer_goes_with_a_failed_check(tmp_path):
+    env = _setup(tmp_path)
+    _without_root(env)
+    env.fake.config = result(stderr="validating -: services.app.foo false schema\n", code=1)
+    original = env.sftp.mkdir
+
+    async def mkdir(path, attrs=None):
+        await original(path, attrs)
+        if path == ROOT:
+            raise _lost()
+
+    env.sftp.mkdir = mkdir
+    done = await env.create.execute(_request(env))
+    assert done.error.startswith("Compose lehnt die Datei ab") and "Aufräumen" not in done.error, done.error
+    assert ROOT not in env.sftp.dirs and FOLDER not in env.sftp.dirs
+
+
+@pytest.mark.asyncio
+async def test_a_compose_file_others_could_read_is_never_written(tmp_path, monkeypatch):
+    env = _setup(tmp_path)
+    real_stat = env.sftp.stat
+
+    async def stat(path):
+        attrs = await real_stat(path)
+        if path == PATH:
+            attrs.permissions = 0o100644
+        return attrs
+
+    monkeypatch.setattr(env.sftp, "stat", stat)
+    done = await env.create.execute(_request(env))
+    assert done.error.startswith("compose.yaml wäre für andere auf dem Server lesbar; der Server übernimmt die Rechte 600 nicht. Liegt der "
+                                 "Ordner auf einem Laufwerk ohne Linux-Rechte"), done.error
+    assert env.sftp.seen_modes == [] and PATH not in env.fake.files and FOLDER not in env.sftp.dirs and env.store.for_host("h1") == {}
+
+
+@pytest.mark.asyncio
 async def test_the_first_reason_stays_when_the_channel_breaks_afterwards(tmp_path):
     env = _setup(tmp_path)
     _without_root(env)
@@ -616,6 +679,8 @@ async def test_a_host_without_docker(tmp_path):
     env = _setup(tmp_path)
     env.ctx.hosts = SimpleNamespace(get=lambda host_id: _async(SimpleNamespace(id=host_id, tags=["web"])))
     assert (await env.create.execute(_request(env))).error == "Kein Docker-Host."
+    env.ctx.hosts = SimpleNamespace(get=lambda host_id: _async(SimpleNamespace(id=host_id, tags=["docker-bedienen"])))
+    assert (await env.create.execute(_request(env))).error.startswith("Auf diesem Server ist Docker im Modus „Nur bedienen“")
 
 
 @pytest.mark.asyncio
@@ -767,3 +832,266 @@ async def test_only_with_hosts_execute(client, docker_on, method, tail, body):
     assert (await getattr(client, method)(_url(docker_on, tail), headers=docker_on.viewer, **kwargs)).status_code == 403
     other = await getattr(client, method)(f"/api/v1/ext/docker/hosts/{docker_on.other}/{tail}", headers=docker_on.owner, **kwargs)
     assert other.status_code == 404
+
+
+# --- Fehler und Grenzfälle -------------------------------------------------------------------------------------------
+
+
+async def _creations(client, headers):
+    listed = await client.get("/api/v1/actions", params={"action_type": "docker.stack_create"}, headers=headers)
+    assert listed.status_code == 200, listed.text
+    return listed.json()
+
+
+@pytest.mark.asyncio
+async def test_the_roots_per_server_have_a_limit(tmp_path):
+    from fastapi import HTTPException
+
+    env = _setup(tmp_path)
+    limit = env.mod.MAX_ROOTS
+    env.ctx.settings.data["stack_roots"] = {f"h{n}": "/srv/stacks" for n in range(limit - 1)}
+    assert await env.new.set_root("neu", "/opt/stacks") == "/opt/stacks"
+    full = dict(env.ctx.settings.data["stack_roots"])
+    assert len(full) == limit
+    with pytest.raises(HTTPException) as refused:
+        await env.new.set_root("noch-einer", "/opt/stacks")
+    assert (refused.value.status_code, refused.value.detail) == (409, f"Es sind schon {limit} Server mit eigenem Ordner eingetragen.")
+    assert env.ctx.settings.data["stack_roots"] == full
+    assert await env.new.set_root("h0", "/home/pi/stacks") == "/home/pi/stacks", "wer schon in der Liste steht, darf ändern"
+    assert await env.new.set_root("noch-einer", None) == "/opt/stacks", "zurück auf die Vorgabe geht immer"
+
+
+@pytest.mark.asyncio
+async def test_a_full_table_of_roots_is_a_409_through_the_core(client, docker_on):
+    from nodvard_deck.ext.runtime import get_extension_runtime
+
+    _, _, new_stack, _, _ = _mods()
+    limit = new_stack.MAX_ROOTS
+    ctx = get_extension_runtime().loaded["docker"].ctx
+    full = {f"x{n}": "/srv/stacks" for n in range(limit)}
+    await ctx.settings.set({"stack_roots": full})
+    refused = await client.put(_url(docker_on, "stack-root"), json={"path": "/home/pi/stacks"}, headers=docker_on.owner)
+    assert (refused.status_code, refused.json()["detail"]) == (409, f"Es sind schon {limit} Server mit eigenem Ordner eingetragen.")
+    assert (await ctx.settings.get())["stack_roots"] == full
+    logged = await client.get("/api/v1/audit", params={"action": "docker.stack_root"}, headers=docker_on.owner)
+    assert logged.json() == [], "abgelehnt heißt auch: nichts im Protokoll"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("answer", "error"),
+    [
+        (result(stderr="permission denied while trying to connect to the docker socket\n", code=1),
+         "permission denied while trying to connect to the docker socket"),
+        (result(code=2), "docker ps endete mit 2."),
+    ],
+    ids=["stderr", "ohne-text"],
+)
+async def test_a_server_whose_stacks_cannot_be_listed_stops_the_creation(tmp_path, answer, error):
+    env = _setup(tmp_path)
+    env.fake.list = answer
+    done = await env.create.execute(_request(env))
+    assert (done.success, done.error) == (False, error)
+    assert FOLDER not in env.sftp.dirs and PATH not in env.fake.files and env.store.for_host("h1") == {}
+    assert env.fake.argv_calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_server_whose_stacks_cannot_be_listed_is_a_409_through_the_core(client, docker_on):
+    docker_on.exec.list = result(stderr="Cannot connect to the Docker daemon\n", code=1)
+    body = {"name": "neu", "content": CONTENT.decode()}
+    checked = await client.post(_url(docker_on, "new-stack/check"), json=body, headers=docker_on.owner)
+    assert (checked.status_code, checked.json()["conflict"]) == (200, "Cannot connect to the Docker daemon")
+    refused = await client.post(_url(docker_on, "new-stack"), json=body, headers=docker_on.owner)
+    assert (refused.status_code, refused.json()["detail"]) == (409, "Cannot connect to the Docker daemon")
+    assert await _creations(client, docker_on.owner) == []
+    assert FOLDER not in docker_on.exec.sftp_server.dirs
+
+
+def _ssh_timeout():
+    from nodvard_deck.core.ssh import SshTimeout
+
+    return SshTimeout("Server antwortet nicht")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "unverified"),
+    [
+        (TimeoutError, "Compose hat nicht innerhalb von 60 Sekunden geantwortet."),
+        (lambda: ConnectionResetError("Verbindung weg"), "Server nicht erreichbar: Verbindung weg"),
+        (OSError, "Server nicht erreichbar: OSError"),
+        # Auch ein TimeoutError, aber Compose lief nie: kein Zeitlimit des Befehls.
+        (_ssh_timeout, "Server nicht erreichbar: Server antwortet nicht"),
+    ],
+    ids=["zeitgrenze", "verbindung", "ohne-text", "verbindungs-zeitgrenze"],
+)
+async def test_a_precheck_that_cannot_run_is_unverified(tmp_path, failure, unverified):
+    env = _setup(tmp_path)
+    calls = []
+
+    async def run_argv(host, argv, **kwargs):
+        calls.append(argv[4])
+        raise failure()
+
+    env.fake.run_argv = run_argv
+    checked = await env.new.check(SimpleNamespace(id="h1"), env.mod.new_stack("neu", ROOT), ROOT, CONTENT)
+    assert (checked.unverified, checked.error) == (unverified, None)
+    assert checked.problem == f"Die Datei ließ sich nicht prüfen: {unverified}"
+    assert calls == [ROOT], "ohne Antwort gibt es keinen zweiten Versuch in /"
+
+
+@pytest.mark.asyncio
+async def test_a_precheck_that_cannot_run_is_a_502_through_the_core(client, docker_on, monkeypatch):
+    async def lost(host, argv, **kwargs):
+        raise ConnectionResetError("Verbindung weg")
+
+    monkeypatch.setattr(docker_on.handle, "run_argv", lost)
+    body = {"name": "neu", "content": CONTENT.decode()}
+    checked = await client.post(_url(docker_on, "new-stack/check"), json=body, headers=docker_on.owner)
+    assert checked.status_code == 200 and checked.json()["ok"] is False
+    assert checked.json()["unverified"] == "Server nicht erreichbar: Verbindung weg"
+    refused = await client.post(_url(docker_on, "new-stack"), json=body, headers=docker_on.owner)
+    assert refused.status_code == 502
+    assert refused.json()["detail"] == "Die Datei ließ sich nicht prüfen: Server nicht erreichbar: Verbindung weg"
+    assert await _creations(client, docker_on.owner) == []
+    assert FOLDER not in docker_on.exec.sftp_server.dirs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "reason"), [(OSError("Platte weg"), "Platte weg"), (OSError(), "OSError")], ids=["mit-text", "ohne-text"],
+)
+async def test_a_file_whose_mode_cannot_be_read_is_never_written(tmp_path, monkeypatch, failure, reason):
+    env = _setup(tmp_path)
+    real_stat = env.sftp.stat
+
+    async def stat(path):
+        if path == PATH:
+            raise failure
+        return await real_stat(path)
+
+    monkeypatch.setattr(env.sftp, "stat", stat)
+    done = await env.create.execute(_request(env))
+    assert (done.success, done.error) == (False, f"compose.yaml ließ sich nicht prüfen: {reason}")
+    assert env.sftp.seen_modes == [] and PATH not in env.fake.files and FOLDER not in env.sftp.dirs and env.store.for_host("h1") == {}
+
+
+def _root_is_a_file(env):
+    _without_root(env)
+    env.fake.files[ROOT] = b"datei"
+
+
+def _root_is_world_writable(env):
+    env.sftp.dir_modes[ROOT] = 0o777
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("prepare", "error"),
+    [
+        (_root_is_a_file, "/opt/stacks ist kein Ordner, sondern eine Datei. Wähle einen anderen Ordner für neue Stacks."),
+        (_root_is_world_writable,
+         "In /opt/stacks darf jeder Nutzer des Servers schreiben. Dort legt Nodvard Deck keine Stacks an; nimm einen eigenen Ordner."),
+    ],
+    ids=["datei", "fuer-alle-schreibbar"],
+)
+async def test_a_root_that_changes_after_the_conflict_check_is_refused(tmp_path, prepare, error):
+    env = _setup(tmp_path)
+    prepare(env)
+    # Der Ordner ändert sich erst nach der Konfliktprüfung; das Anlegen muss ihn selbst ablehnen.
+    env.new.conflict = lambda *_a: _async(None)
+    done = await env.create.execute(_request(env))
+    assert (done.success, done.error) == (False, error)
+    assert FOLDER not in env.sftp.dirs and PATH not in env.fake.files and env.store.for_host("h1") == {}
+    assert env.fake.argv_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ours", [True, False], ids=["selbst-angelegt", "gleichzeitig-angelegt"])
+async def test_a_new_root_everyone_can_write_to_is_refused(tmp_path, ours):
+    env = _setup(tmp_path)
+    _without_root(env)
+    original = env.sftp.mkdir
+
+    async def mkdir(path, attrs=None):
+        await original(path, attrs)
+        if path == ROOT:
+            env.sftp.dir_modes[ROOT] = 0o777  # der Server übernimmt die Rechte nicht
+            if not ours:
+                raise FileExistsError(path)
+
+    env.sftp.mkdir = mkdir
+    done = await env.create.execute(_request(env))
+    assert not done.success
+    assert done.error == "In /opt/stacks darf jeder Nutzer des Servers schreiben. Dort legt Nodvard Deck keine Stacks an; nimm einen eigenen Ordner."
+    assert (ROOT in env.sftp.dirs) is (not ours), "aufgeräumt wird nur, was dieser Lauf selbst angelegt hat"
+    assert FOLDER not in env.sftp.dirs and PATH not in env.fake.files and env.store.for_host("h1") == {}
+    assert env.fake.argv_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "reason"), [(PermissionError("kein Platz"), "kein Platz"), (OSError(), "OSError")], ids=["mit-text", "ohne-text"],
+)
+async def test_an_extra_file_that_cannot_be_written_stops_the_layout(tmp_path, failure, reason):
+    env = _setup(tmp_path)
+    original = env.sftp._writer
+
+    async def writer(path, mode, attrs):
+        if path.endswith(".env"):
+            raise failure
+        return await original(path, mode, attrs)
+
+    env.sftp._writer = writer
+    created: list[tuple[str, str]] = []
+    problem = await env.create.lay_out(
+        _request(env), env.sftp, SimpleNamespace(id="h1"), env.mod.new_stack("neu", ROOT), ROOT, CONTENT, created,
+        extra=((f"{FOLDER}/.env", b"TOKEN=1\n"),),
+    )
+    assert problem == f".env ließ sich nicht schreiben: {reason}"
+    assert created == [("dir", FOLDER)], "der Aufrufer räumt den Ordner weg, die Datei gibt es nicht"
+    assert f"{FOLDER}/.env" not in env.fake.files and PATH not in env.fake.files
+    assert env.fake.argv_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "summary"),
+    [
+        ({"project": "neu", "folder": FOLDER, "start": True}, "Würde den Stack „neu“ in /opt/stacks/neu anlegen und ihn starten."),
+        ({"project": "neu", "folder": FOLDER, "start": False}, "Würde den Stack „neu“ in /opt/stacks/neu anlegen."),
+        ({"project": "neu", "folder": FOLDER}, "Würde den Stack „neu“ in /opt/stacks/neu anlegen."),
+        ({}, "Würde den Stack „?“ in ? anlegen."),
+    ],
+    ids=["mit-start", "ohne-start", "start-fehlt", "ohne-angaben"],
+)
+async def test_the_dry_run_names_stack_and_folder(tmp_path, payload, summary):
+    env = _setup(tmp_path)
+    report = await env.create.dry_run(_request(env).model_copy(update={"payload": payload}))
+    assert (report.would_change, report.summary) == (True, summary)
+    assert FOLDER not in env.sftp.dirs and env.fake.argv_calls == [] and env.store.for_host("h1") == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tail", ["new-stack/check", "new-stack"], ids=["pruefen", "anlegen"])
+async def test_a_file_over_the_byte_limit_is_a_413(client, docker_on, tail):
+    *_, stacks = _mods()
+    limit = stacks.MAX_FILE_BYTES
+    # Zwei Bytes je Zeichen: unter dem Zeichenlimit des Formulars, aber ein Byte über dem der Datei.
+    content = "ä" * (limit // 2) + "a"
+    refused = await client.post(_url(docker_on, tail), json={"name": "neu", "content": content}, headers=docker_on.owner)
+    assert (refused.status_code, refused.json()["detail"]) == (413, "Die Datei ist größer als 256 KB.")
+    assert docker_on.exec.argv_calls == []
+    assert await _creations(client, docker_on.owner) == [] and FOLDER not in docker_on.exec.sftp_server.dirs
+
+
+@pytest.mark.asyncio
+async def test_a_file_of_exactly_the_byte_limit_is_accepted(client, docker_on):
+    *_, stacks = _mods()
+    limit = stacks.MAX_FILE_BYTES
+    content = "ä" * (limit // 2)
+    assert len(content.encode()) == limit
+    proposed = await client.post(_url(docker_on, "new-stack"), json={"name": "neu", "content": content}, headers=docker_on.owner)
+    assert proposed.status_code == 202, proposed.text
+    assert len(await _creations(client, docker_on.owner)) == 1

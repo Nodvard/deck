@@ -1080,6 +1080,66 @@ describe("Erweiterung konfigurieren", () => {
     expect(screen.getByText(/Beim Speichern werden diese Zugangsdaten gelöscht.*Schlüssel/)).toBeInTheDocument();
   });
 
+  describe("doppelte Namen in einer Liste mit Zugangsdaten je Eintrag", () => {
+    const POOL = {
+      type: "object",
+      properties: {
+        connections: {
+          type: "array", title: "Geräte", "x-item-title": "Gerät",
+          items: {
+            type: "object",
+            properties: { name: { type: "string", title: "Kurzname" }, base_url: { type: "string", title: "Adresse" } },
+            required: ["name", "base_url"],
+          },
+        },
+      },
+      "x-secrets": [{ label: "pw:{name}", title: "Passwort", per_item: "connections", "x-secret-bound-to": ["base_url"] }],
+    };
+    const slot = (name: string, isSet = true) => ({ label: `pw:${name}`, title: "Passwort", description: null, item: name, is_set: isSet });
+    const device = (name: string, url: string) => ({ name, base_url: url });
+    const EXT = { id: "proxmox", name: "Proxmox VE", description: null, icon: "server", state: "enabled", version: "0.1.0" };
+
+    it("warnt und sperrt, wenn ein Eintrag mit gleicher Adresse doppelt angelegt wird, und nennt danach den richtigen Grund", async () => {
+      const dup = [device("nas", "https://a"), device("nas", "https://a")];
+      mockApi({
+        "GET /extensions/proxmox": () => EXT,
+        "GET /extensions/proxmox/settings": () => ({ schema: POOL, values: { connections: [device("nas", "https://a")] }, secrets: [slot("nas")] }),
+        "PUT /extensions/proxmox/settings": () => ({
+          schema: POOL, values: { connections: dup }, secrets: [slot("nas", false), slot("nas", false)], secrets_cleared: ["pw:nas"],
+        }),
+      });
+      renderConfig();
+      fireEvent.click(await screen.findByRole("button", { name: "Gerät hinzufügen" }));
+      fireEvent.change(screen.getAllByLabelText(/^Kurzname/)[1], { target: { value: "nas" } });
+      fireEvent.change(screen.getAllByLabelText(/^Adresse/)[1], { target: { value: "https://a" } });
+      expect(screen.getByText(/Ein Name kommt mehrfach vor. Beim Speichern werden diese Zugangsdaten gelöscht: Passwort \(nas\)/)).toBeInTheDocument();
+      expect(screen.queryByText(/Du hast eine Adresse/)).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Ersetzen" }));
+      expect(screen.getByText(/Dieser Name kommt mehrfach vor/)).toBeInTheDocument();
+      expect(within(screen.getByTestId("secret-pw:nas")).getByRole("button", { name: /Ersetzen/ })).toBeDisabled();
+
+      fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
+      expect(await screen.findByText(/Weil ein Name mehrfach vorkommt, wurden diese Zugangsdaten gelöscht: Passwort \(nas\)/)).toBeInTheDocument();
+      expect(screen.queryByText(/Weil sich eine Adresse/)).not.toBeInTheDocument();
+      // Der Server liefert das Label für beide Einträge; die Oberfläche zeigt es einmal.
+      expect(screen.getAllByTestId("secret-pw:nas")).toHaveLength(1);
+      expect(screen.getByText(/Dieser Name kommt mehrfach vor/)).toBeInTheDocument();
+    });
+
+    it("warnt bei beiden Einträgen, wenn der erste auf den Namen des zweiten umbenannt wird", async () => {
+      mockApi({
+        "GET /extensions/proxmox": () => EXT,
+        "GET /extensions/proxmox/settings": () => ({
+          schema: POOL, values: { connections: [device("a", "https://a"), device("b", "https://b")] }, secrets: [slot("a"), slot("b")],
+        }),
+      });
+      renderConfig();
+      fireEvent.change((await screen.findAllByLabelText(/^Kurzname/))[0], { target: { value: "b" } });
+      expect(screen.getByText(/Ein Name kommt mehrfach vor.*Passwort \(b\)/)).toBeInTheDocument();
+      expect(screen.getByText(/Beim Speichern werden diese Zugangsdaten gelöscht, danach trägst du sie neu ein: Passwort \(a\)/)).toBeInTheDocument();
+    });
+  });
+
   it("lässt beim ersten Einrichten erst die Adresse speichern, dann die Zugangsdaten eintragen", async () => {
     const schema = {
       type: "object",

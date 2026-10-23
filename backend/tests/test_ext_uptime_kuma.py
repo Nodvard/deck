@@ -171,7 +171,7 @@ def test_label_value_treats_null_and_empty_as_missing():
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
-        ("https://admin:geheim@intern.example.com:8443/status?token=abc#x", "https://intern.example.com:8443/status"),
+        ("https://admin:" + "geheim@intern.example.com:8443/status?token=abc#x", "https://intern.example.com:8443/status"),
         ("http://[2001:db8::1]:8080/x", "http://[2001:db8::1]:8080/x"),
         ("https://example.com/", "https://example.com/"),
         ("keine adresse", None), ("", None), (None, None), ("http://host:99999/x", None),
@@ -281,7 +281,7 @@ def test_base_url_is_normalized_and_credentials_are_refused():
     assert normalize_base_url("http://kuma.test:3001/status-page/heim") == "http://kuma.test:3001"
     assert normalize_base_url("http://kuma.test:3001/metrics") == "http://kuma.test:3001"
     assert normalize_base_url("https://kuma.example.com/kuma/Dashboard/") == "https://kuma.example.com/kuma"
-    for bad in ("kuma.test:3001", "ftp://kuma.test", "http://", "http://user:pw@kuma.test", "http://@kuma.test", "http://kuma.test:999999", ""):
+    for bad in ("kuma.test:3001", "ftp://kuma.test", "http://", "http://user:" + "pw@kuma.test", "http://@kuma.test", "http://kuma.test:999999", ""):
         with pytest.raises(ValueError):
             normalize_base_url(bad)
 
@@ -290,7 +290,7 @@ def test_read_connections_flags_unusable_entries_without_dropping_the_rest():
     configs = read_connections({"connections": [
         {"name": "a", "base_url": "http://a.test:3001/", "status_page_slug": "heim", "tls_insecure_skip_verify": True},
         {"name": "a", "base_url": "http://zweite.test"},
-        {"name": "b", "base_url": "http://user:pw@b.test"},
+        {"name": "b", "base_url": "http://user:" + "pw@b.test"},
         {"name": "c", "base_url": "http://c.test", "status_page_slug": "Gross Geschrieben"},
         {"name": " ", "base_url": "http://leer.test"},
         "kaputt",
@@ -992,7 +992,7 @@ async def test_unusable_entries_become_error_cards_without_a_request(client, db_
     await loaded.ctx.settings.set({"connections": [
         {"name": "ok", "base_url": BASE, "status_page_slug": "heim"},
         {"name": "ok", "base_url": BASE},
-        {"name": "pw", "base_url": "http://nutzer:passwort@kuma.test:3001"},
+        {"name": "pw", "base_url": "http://nutzer:" + "passwort@kuma.test:3001"},
         {"name": "gross", "base_url": BASE, "status_page_slug": "Heim"},
     ]})
     body = await _overview(client, headers)

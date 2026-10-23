@@ -1,6 +1,5 @@
-"""Prüft, ob eine offene Verbindung (Terminal-Shell, Live-Aktualisierung) noch erlaubt ist.
-
-Sie kennt Anmeldung und Rechte nur vom Aufbau; gelesen wird neu aus der Datenbank, auch nach dem Notfall-Befehl."""
+"""Prüft, ob eine offene Verbindung (Terminal-Shell, Live-Aktualisierung) noch erlaubt ist, gelesen wird neu aus
+der Datenbank."""
 
 from __future__ import annotations
 
@@ -25,9 +24,8 @@ def credential_stamp(user: User) -> str:
 
 
 class SessionWatch:
-    """Stand einer offenen Verbindung beim Aufbau, plus die Prüfung dazu.
-
-    `login_id` (`sid` im Zugangs-Token) bindet sie an genau eine Anmeldung; ohne `sid` reicht irgendeine gültige."""
+    """Stand einer offenen Verbindung beim Aufbau samt Prüfung; `login_id` (`sid` im Zugangs-Token) bindet sie an
+    genau eine Anmeldung."""
 
     def __init__(self, *, user_id: str, stamp: str, login_id: str | None) -> None:
         self.user_id = user_id
@@ -35,9 +33,8 @@ class SessionWatch:
         self.login_id = login_id
 
     async def ended_reason(self, session: AsyncSession, *, permission: str | None = None) -> str | None:
-        """`None`, solange alles stimmt; sonst der Grund (Klartext für die Anzeige), warum die Verbindung enden muss.
-
-        Ohne `permission` wird keine bestimmte Berechtigung verlangt; die Live-Aktualisierung filtert selbst."""
+        """`None`, solange alles stimmt, sonst der Grund (Klartext für die Anzeige), warum die Verbindung enden
+        muss."""
         user = await session.get(User, self.user_id)
         if user is None or not user.is_active:
             return "Das Konto ist nicht mehr aktiv."
@@ -73,7 +70,6 @@ async def _any_live_login(session: AsyncSession, user_id: str) -> bool:
 
 
 async def _live_login_head(session: AsyncSession, user_id: str, login_id: str) -> str | None:
-    """Die gültige Zeile am Ende der Erneuerungskette ab `login_id`, sonst `None` (widerrufen, abgelaufen, fremd)."""
     now = utcnow()
     current = login_id
     for _ in range(_MAX_HOPS):

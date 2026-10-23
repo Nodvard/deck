@@ -132,7 +132,9 @@ def test_ausnahmen_geben_nur_ihren_teilstring_frei() -> None:
 
 
 # Schluessel, deren Text in der Oberflaeche steht.
-_VISIBLE_KEYS = ("title", "description", "name", "x-item-title", "x-empty-label", "x-pattern-message", "placeholder")
+_VISIBLE_KEYS = (
+    "title", "description", "name", "x-item-title", "x-empty-label", "x-pattern-message", "x-warning", "placeholder",
+)
 
 
 def _walk_texts(node: object, path: str = ""):

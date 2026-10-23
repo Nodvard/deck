@@ -1,9 +1,10 @@
 """Hinweis in der Übersicht, wenn auf einem Server die Hilfsskripte der Module fehlen oder veraltet sind.
 
 Nach einem Update bringt Nodvard Deck neue Hilfsskripte mit, auf den Server kommen sie aber erst mit dem
-Einrichtungsbefehl. Bis dahin laufen Shield und Server-Zustand dort über die volle sudo-Regel. Das soll man sehen, ohne
-„Verbindung prüfen“ zu drücken. Gemeldet wird nur, wenn die volle Regel (`NOPASSWD: ALL`) gesetzt ist und mindestens
-ein Skript nicht Byte für Byte das mitgelieferte ist; nie für root (braucht kein Skript) und nie für Windows.
+Einrichtungsbefehl. Bis dahin laufen Shield und Server-Zustand dort über die volle sudo-Regel, ohne sie (nur die Regeln
+der Skripte) gar nicht mit root. Das soll man sehen, ohne „Verbindung prüfen“ zu drücken. Gemeldet wird nur, wenn sudo
+dort Skripte erlaubt (volle Regel `NOPASSWD: ALL` oder die Regel eines Skripts) und mindestens ein Skript nicht Byte
+für Byte das mitgelieferte ist; nie für root (braucht kein Skript) und nie für Windows.
 
 Der Stand je Server liegt in einem internen Merker (`KEY_STATE`). Ihn schreiben „Verbindung prüfen“ und der Kern-Job
 `helper-hints` (alle 6 Stunden ein lesender Befehl je Server, derselbe wie bei der Prüfung). Die Übersicht liest nur
@@ -47,25 +48,52 @@ _RUNAS_RE = re.compile(r"\(([^()]*)\)")
 _TAG_RE = re.compile(r"([A-Z_]+):")
 
 
-def _is_full_rule(line: str) -> bool:
-    """`(root) NOPASSWD: ALL`, `(ALL : ALL) NOPASSWD: ALL`, auch mit weiteren Angaben (`NOPASSWD: SETENV: ALL`,
-    `SETENV: NOPASSWD: ALL`). Zählt nur, wenn sie für root gilt und die Befehlsliste genau `ALL` ist."""
+def _root_commands(line: str) -> list[str] | None:
+    """Die Befehlsliste einer Zeile von `sudo -n -l`, wenn sie für root gilt und kein Passwort verlangt (auch mit
+    weiteren Angaben wie `NOPASSWD: SETENV:`), sonst `None`."""
     text = line.strip()
     runas = _RUNAS_RE.match(text)
     if runas is None or runas.group(1).split(":")[0].strip() not in ("root", "ALL"):
-        return False
+        return None
     rest = text[runas.end():].lstrip()
     tags: list[str] = []
     while (tag := _TAG_RE.match(rest)) is not None:
         tags.append(tag.group(1))
         rest = rest[tag.end():].lstrip()
-    return "NOPASSWD" in tags and rest == "ALL"
+    return [command.strip() for command in rest.split(",")] if "NOPASSWD" in tags else None
+
+
+def _is_full_rule(line: str) -> bool:
+    """`(root) NOPASSWD: ALL`, `(ALL : ALL) NOPASSWD: ALL`, auch mit weiteren Angaben. Nur mit genau `ALL`."""
+    return _root_commands(line) == ["ALL"]
+
+
+def allows_helper(sudo_lines: Sequence[str], path: str) -> bool:
+    """Ob eine Regel ohne Passwort genau dieses Skript für root erlaubt (`path` als eigener Eintrag der Liste, nicht als
+    Argument eines anderen Befehls)."""
+    return any(path in (_root_commands(line) or []) for line in sudo_lines)
 
 
 def has_full_rule(sudo_lines: Sequence[str]) -> bool:
     """Ob `sudo -n -l` die volle Regel ohne Passwort zeigt. Dieselbe Prüfung nutzen „Verbindung prüfen“ und der Job,
     damit der Hinweis nicht zwischen beiden hin und her springt."""
     return any(_is_full_rule(line) for line in sudo_lines)
+
+
+def sudo_runs_helpers(sudo_lines: Sequence[str], seen: Mapping[str, Any]) -> bool:
+    """Ob sudo auf dem Server Hilfsskripte ausführen lässt: mit der vollen Regel oder der eigenen Regel eines Skripts
+    (`seen` aus `host_check.parse_helper_check`). Nur dann ist ein fehlendes oder veraltetes Skript einen Hinweis wert."""
+    return has_full_rule(sudo_lines) or any(item.tight_rule for item in seen.values())
+
+
+def judge(
+    helpers: Sequence[RootHelperFile], sudo_lines: Sequence[str], seen: Mapping[str, Any]
+) -> tuple[dict[str, int], bool]:
+    """Was der Hinweis meldet: die Skripte, die nicht das mitgelieferte sind, und ob dort die volle Regel fehlt (dann
+    haben diese Module gar kein root). Gemeinsam für „Verbindung prüfen“ und den Job."""
+    if not sudo_runs_helpers(sudo_lines, seen):
+        return {}, False
+    return stale_helpers(helpers, seen), not has_full_rule(sudo_lines)
 
 
 def stale_helpers(helpers: Sequence[RootHelperFile], seen: Mapping[str, Any]) -> dict[str, int]:
@@ -84,7 +112,9 @@ def _entry(state: Mapping[str, Any], host_id: str) -> dict[str, Any] | None:
     return dict(entry) if isinstance(entry, dict) else None
 
 
-async def record(session: AsyncSession, host_id: str, stale: Mapping[str, int] | None) -> None:
+async def record(
+    session: AsyncSession, host_id: str, stale: Mapping[str, int] | None, *, without_root: bool = False
+) -> None:
     """Merkt das Ergebnis einer Prüfung. `None` oder leer: nichts zu melden (Merker weg, auch das Wegklicken)."""
     state: dict[str, Any] = dict(await settings_service.get_global(session, KEY_STATE, {}) or {})
     before = _entry(state, host_id)
@@ -95,6 +125,7 @@ async def record(session: AsyncSession, host_id: str, stale: Mapping[str, int] |
     else:
         entry = before or {}
         entry["stale"] = dict(stale)
+        entry["without_root"] = without_root
         entry["checked_at"] = utcnow().isoformat()
         state[host_id] = entry
     await settings_service.set_global(session, KEY_STATE, state)
@@ -119,6 +150,8 @@ class Hint:
     modules: list[str]
     """Anzeigenamen der Module, deren Skript fehlt oder veraltet ist."""
     checked_at: datetime
+    without_root: bool = False
+    """Ohne volle sudo-Regel: Diese Module haben dort gerade gar kein root."""
 
 
 async def current_hints(
@@ -146,7 +179,10 @@ async def current_hints(
             checked_at = datetime.fromisoformat(str(entry.get("checked_at")))
         except ValueError:
             checked_at = utcnow()
-        hints.append(Hint(host_id=host.id, host_name=host.display_name or host.name, modules=names, checked_at=checked_at))
+        hints.append(Hint(
+            host_id=host.id, host_name=host.display_name or host.name, modules=names, checked_at=checked_at,
+            without_root=entry.get("without_root") is True,
+        ))
     return hints
 
 
@@ -177,8 +213,8 @@ async def _check_host(
             session, target, credential_id=credential.id, connect_timeout_s=settings.ssh_connect_timeout_s
         )
         _code, out, _err = await ssh.run(conn, helper_check_command(helpers), timeout_s=COMMAND_TIMEOUT_S)
-        stale = stale_helpers(helpers, parse_helper_check(out, helpers)) if has_full_rule(split_sudo_lines(out)) else {}
-        await record(session, host.id, stale)
+        stale, without_root = judge(helpers, split_sudo_lines(out), parse_helper_check(out, helpers))
+        await record(session, host.id, stale, without_root=without_root)
         return "hint" if stale else "ok"
 
 

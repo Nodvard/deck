@@ -1,6 +1,5 @@
-"""Update-Helfer, Seite des Dashboards: Zustand zeigen, Update und Rückweg anfordern, Ergebnisse festhalten.
-
-Verbindlich entscheidet immer der Helfer; was hier vorab geprüft wird, dient nur einer klaren Antwort."""
+"""Update-Helfer, Seite des Dashboards: Zustand zeigen, Update und Rückweg anfordern, Ergebnisse festhalten;
+verbindlich entscheidet immer der Helfer."""
 
 from __future__ import annotations
 
@@ -46,8 +45,8 @@ ROLLBACK_BY = "update-helfer"
 NOTIFY_OUTCOMES = frozenset({"applied", "reverted", "rolled_back", "failed_manual", "external_change"})
 CLEAR_ROLLBACK_OUTCOMES = frozenset({"refused", "aborted"})
 MARKER_SLACK_S = 10
-"""Die Vormerkung eines Rückwegs entsteht unmittelbar vor seiner Anforderung: so weit dürfen beide Zeiten
-auseinander liegen, damit sie als zusammengehörig gelten."""
+"""Die Vormerkung eines Rückwegs entsteht unmittelbar vor seiner Anforderung; so weit dürfen beide Zeiten
+auseinander liegen."""
 SUCCESS_OUTCOMES = frozenset({"applied", "reverted"})
 
 _request_window = rate_limit.SlidingWindow(1, REQUEST_WINDOW_S)
@@ -58,8 +57,8 @@ _seen_in_process: set[str] = set()
 
 
 class HelperRefused(Exception):
-    """Die Anforderung wird nicht geschrieben: `status_code` 409/422/429, `code` ein fester Bezeichner, `message` ein
-    kurzer deutscher Satz (die genaueren Texte zu den Codes hat das Frontend)."""
+    """Die Anforderung wird nicht geschrieben: `status_code` 409/422/429, `code` ein fester Bezeichner, `message`
+    ein kurzer deutscher Satz."""
 
     def __init__(self, status_code: int, code: str, message: str, *, retry_after: int | None = None,
                  helper_reason: str | None = None) -> None:
@@ -75,8 +74,8 @@ _lock_slots: dict[str, tuple[weakref.ReferenceType[asyncio.AbstractEventLoop], a
 
 
 def _lock(name: str) -> asyncio.Lock:
-    """Eine Sperre je Zweck für den laufenden Event-Loop (wie `core.updates._check_lock`).
-    Die Sperre "request" sorgt dafür, dass zwei gleichzeitige Klicks nie zwei Anforderungen schreiben."""
+    # Eine Sperre je Zweck für den laufenden Event-Loop; die Sperre „request“ verhindert, dass zwei gleichzeitige
+    # Klicks zwei Anforderungen schreiben.
     loop = asyncio.get_running_loop()
     slot = _lock_slots.get(name)
     if slot is None or slot[0]() is not loop:
@@ -89,11 +88,6 @@ def reset_for_tests() -> None:
     _request_window.reset()
     _seen_in_process.clear()
     _lock_slots.clear()
-
-
-# ---------------------------------------------------------------------------
-# Eigene Datei: gesehene Ergebnisse und eigene Anforderungen
-# ---------------------------------------------------------------------------
 
 
 def _seen_path(settings: Settings) -> Path:
@@ -152,17 +146,12 @@ def _own_requests(settings: Settings) -> list[dict[str, Any]]:
         return _load_book(settings)["requests"]
 
 
-# ---------------------------------------------------------------------------
-# Ansehen
-# ---------------------------------------------------------------------------
-
-
 def read_status(settings: Settings, *, now: float | None = None) -> client.HelperStatus:
     return client.read_status(settings.updater_dir, now=now)
 
 
 def helper_present(settings: Settings) -> bool:
-    """Gibt es einen Helfer, der gerade antwortet? Quelle für `updater_available` (`GET /system/info`) und `helper`."""
+    """Ob ein Helfer gerade antwortet, Quelle für `updater_available` (`GET /system/info`) und `helper`."""
     return read_status(settings).present
 
 
@@ -193,9 +182,8 @@ def _committed(doc: dict[str, Any] | None) -> bool:
 
 
 def finishing(doc: dict[str, Any] | None) -> bool:
-    """Der Vorgang ist entschieden, der Helfer räumt nur noch auf (`busy.step == "committed"`, Ergebnis in `results`).
-
-    Das gilt nicht mehr als beschäftigt; eine neue Anforderung nimmt der Helfer aber erst nach dem Aufräumen an."""
+    """Der Vorgang ist entschieden, der Helfer räumt nur noch auf (`busy.step == "committed"`); das gilt nicht als
+    beschäftigt."""
     # Der Helfer schreibt `committed` erst zusammen mit dem Ergebnis. Ein Status mit `committed`, aber ohne dieses
     # Ergebnis gilt trotzdem weiter als beschäftigt.
     busy = (doc or {}).get("busy")
@@ -203,9 +191,8 @@ def finishing(doc: dict[str, Any] | None) -> bool:
 
 
 def rollback_data(settings: Settings, previous_version: str) -> tuple[bool | None, int | None]:
-    """Was der Rückweg auf `previous_version` mit den Daten macht, für die Ansicht (entschieden wird in `data_plan`).
-    `(True, seit)`: die Daten gehen zurück, alles seit `seit` (Beginn des Umbaus, Unix-Zeit) geht verloren;
-    `(False, None)`: sie bleiben; `(None, None)`: unklar, der Rückweg wird mit `data_unclear` abgelehnt."""
+    """Was der Rückweg auf `previous_version` mit den Daten macht: `(True, seit)` zurück, `(False, None)` bleiben,
+    `(None, None)` unklar."""
     try:
         revert, _copy = data_plan(settings, previous_version)
     except HelperRefused:
@@ -220,8 +207,8 @@ def rollback_data(settings: Settings, previous_version: str) -> tuple[bool | Non
 
 
 def status_view_sync(settings: Settings, *, now: float | None = None) -> dict[str, Any]:
-    """Die Ansicht für `GET /system/updates/helper`; zu `previous` kommt, was der Rückweg mit den Daten macht
-    (`data_revert`, `data_since`, siehe `rollback_data`)."""
+    """Die Ansicht für `GET /system/updates/helper` samt dem, was der Rückweg mit den Daten macht
+    (`rollback_data`)."""
     current = time.time() if now is None else now
     status = read_status(settings, now=current)
     doc = status.doc if status.present else None
@@ -253,11 +240,6 @@ def status_view_sync(settings: Settings, *, now: float | None = None) -> dict[st
 
 async def status_view(settings: Settings) -> dict[str, Any]:
     return await asyncio.to_thread(status_view_sync, settings)
-
-
-# ---------------------------------------------------------------------------
-# Anfordern
-# ---------------------------------------------------------------------------
 
 
 def _require_ready(status: client.HelperStatus) -> dict[str, Any]:
@@ -305,7 +287,6 @@ def _write(settings: Settings, *, action: str, version: str) -> dict[str, Any]:
 
 
 def _check_update(settings: Settings, doc: dict[str, Any], version: str, cached: dict[str, Any]) -> str:
-    """Die Prüfungen vor einem Update; gibt die laufende Version zurück."""
     target = doc["target"]
     if not updates.is_official_image(settings.image):
         raise HelperRefused(409, "not_official_image", "Diese Installation nutzt nicht das offizielle Image.")
@@ -327,9 +308,8 @@ def _check_update(settings: Settings, doc: dict[str, Any], version: str, cached:
 
 
 async def apply(session: AsyncSession, settings: Settings, *, version: str) -> dict[str, Any]:
-    """Update auf `version` anfordern; gibt `{request_id, action, from, to}` zurück oder wirft `HelperRefused`.
-
-    Nur für den Owner, nachdem Passwort (und ggf. Zwei-Faktor-Code) bestätigt sind."""
+    """Fordert das Update auf `version` an und gibt `{request_id, action, from, to}` zurück oder wirft
+    `HelperRefused`."""
     await record_results(settings)  # erst festhalten, was der Helfer schon entschieden hat
     async with _lock("request"):
         status = await asyncio.to_thread(read_status, settings)
@@ -347,9 +327,7 @@ async def apply(session: AsyncSession, settings: Settings, *, version: str) -> d
 
 
 def data_plan(settings: Settings, previous_version: str) -> tuple[bool, str | None]:
-    """Müssen beim Rückweg auf `previous_version` die Daten mit zurück? `(True, Kopie)` oder `(False, None)`.
-
-    Wirft `HelperRefused(409, "data_unclear")`, wenn die Datenbank umgebaut wurde, der Eintrag aber nicht passt."""
+    """Ob beim Rückweg auf `previous_version` die Daten mit zurück müssen (`(True, Kopie)` oder `(False, None)`)."""
     state = bootstate.read_state(settings.data_dir)
     migration = state.get("last_migration") or {}
     running = updates.running_version(settings)
@@ -369,8 +347,7 @@ def data_plan(settings: Settings, previous_version: str) -> tuple[bool, str | No
 
 
 async def rollback(settings: Settings, *, accept_data_loss: bool) -> dict[str, Any]:
-    """Rückweg auf die Vorgängerversion anfordern; gibt `{request_id, action, from, to, data_revert, copy}` zurück
-    oder wirft `HelperRefused`. Nur für den Owner, nachdem Passwort (und ggf. Zwei-Faktor-Code) bestätigt sind."""
+    """Fordert den Rückweg auf die Vorgängerversion an und wirft `HelperRefused`, wenn er nicht geht."""
     await record_results(settings)  # erst festhalten, was der Helfer schon entschieden hat
     async with _lock("request"):
         status = await asyncio.to_thread(read_status, settings)
@@ -424,10 +401,6 @@ async def _remember(settings: Settings, entry: dict[str, Any]) -> None:
         logger.warning("update_helper_book_not_written")
 
 
-# ---------------------------------------------------------------------------
-# Ergebnisse
-# ---------------------------------------------------------------------------
-
 # Meldungstexte stehen immer hier, nie im Status: `core.updater_client` lässt nur feste Codes, Versionen und IDs durch.
 _FLOW_TEXTS = {
     "exited": "Die neue Version hat sich gleich wieder beendet.",
@@ -479,8 +452,6 @@ def data_after_failed_rollback(settings: Settings, entry: dict[str, Any]) -> str
 
 
 def _message(result: dict[str, Any], data: str | None = None) -> tuple[str, str, str]:
-    """(Titel, Text, Schwere) einer Meldung zu einem Ergebnis; `data` nur bei einem eigenen Rückweg mit Daten,
-    der in `rolled_back` endete (siehe `data_after_failed_rollback`)."""
     action, outcome = result["action"], result["outcome"]
     old, new = result["from"] or "?", result["to"] or "?"
     reason = _FLOW_TEXTS.get(result["code"] or "")
@@ -536,8 +507,8 @@ async def _log_result(session: AsyncSession, settings: Settings, result: dict[st
 
 
 def reconcile_rollback(settings: Settings, results: list[dict[str, Any]]) -> bool:
-    """Löscht die Rückweg-Vormerkung, wenn der Helfer genau den eigenen Rückweg mit Daten abgelehnt oder vor jeder
-    Änderung abgebrochen hat; `True`, wenn gelöscht wurde. Sonst läge sie 24 Stunden herum."""
+    """Löscht die Rückweg-Vormerkung, wenn der Helfer den eigenen Rückweg abgelehnt oder vor jeder Änderung
+    abgebrochen hat."""
     mine = {e["id"]: e for e in _own_requests(settings) if e["action"] == "rollback" and e["data_revert"]}
     for result in results:
         entry = mine.get(result["id"])
@@ -554,7 +525,6 @@ def reconcile_rollback(settings: Settings, results: list[dict[str, Any]]) -> boo
 
 
 async def _already_logged(session: AsyncSession, request_id: str) -> bool:
-    """Steht das Ergebnis schon im Audit-Protokoll (falls `updater_seen.json` nicht geschrieben werden konnte)?"""
     found = await session.execute(
         select(AuditEntry.id).where(
             AuditEntry.actor_type == "system", AuditEntry.actor_id == "updater", AuditEntry.target_id == request_id,
@@ -565,8 +535,8 @@ async def _already_logged(session: AsyncSession, request_id: str) -> bool:
 
 
 async def record_results(settings: Settings) -> int:
-    """Hält neue Ergebnisse des Helfers genau einmal je Anforderungs-ID fest (Audit-Protokoll, bei wichtigen Ausgängen eine
-    Meldung) und gibt ihre Zahl zurück. Ein Fehler hier darf nie den Start oder eine Anfrage scheitern lassen."""
+    """Hält neue Ergebnisse des Helfers genau einmal je Anforderungs-ID fest und gibt ihre Zahl zurück, ohne je zu
+    werfen."""
     try:
         async with _lock("results"):
             status = await asyncio.to_thread(read_status, settings)
@@ -613,8 +583,8 @@ def follow_up_needed(settings: Settings) -> bool:
 
 async def follow_up(settings: Settings, *, interval_s: float = FOLLOW_UP_INTERVAL_S,
                     max_s: float = FOLLOW_UP_MAX_S) -> None:
-    """Nachlauf nach dem Start: alle `interval_s` Sekunden die Ergebnisse festhalten, bis nichts mehr offen ist,
-    höchstens `max_s` Sekunden."""
+    """Nachlauf nach dem Start: alle `interval_s` Sekunden die Ergebnisse festhalten, bis nichts mehr offen ist
+    (höchstens `max_s`)."""
     deadline = time.monotonic() + max_s
     while time.monotonic() < deadline:
         await asyncio.sleep(interval_s)
@@ -627,7 +597,7 @@ async def follow_up(settings: Settings, *, interval_s: float = FOLLOW_UP_INTERVA
 
 
 def start_follow_up(settings: Settings) -> asyncio.Task | None:
-    """Startet den Nachlauf, wenn nötig. Ein Fehler beim Prüfen heißt: kein Nachlauf."""
+    """Startet den Nachlauf, wenn nötig; ein Fehler beim Prüfen heißt: kein Nachlauf."""
     try:
         needed = follow_up_needed(settings)
     except Exception:  # noqa: BLE001

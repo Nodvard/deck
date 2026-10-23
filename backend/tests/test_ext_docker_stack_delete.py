@@ -684,3 +684,147 @@ async def test_only_with_hosts_execute(client, docker_on, method):
     assert (await getattr(client, method)(_url(docker_on), headers=docker_on.viewer, **kwargs)).status_code == 403
     other = await getattr(client, method)(f"/api/v1/ext/docker/hosts/{docker_on.other}/stacks/shop/delete", headers=docker_on.owner, **kwargs)
     assert other.status_code == 404
+
+
+# --- Fehler und Grenzfälle beim Löschen ------------------------------------------------------------------------------
+
+
+def _fails_with(env, error, when):
+    """Lässt jeden Aufruf, auf den `when(argv)` passt, mit `error` scheitern."""
+    original = env.fake.run_argv
+
+    async def run_argv(host, argv, **kwargs):
+        if when(argv):
+            raise error
+        return await original(host, argv, **kwargs)
+
+    env.fake.run_argv = run_argv
+
+
+def _inspect_says(env, change):
+    """Ersetzt die Antwort von `docker container inspect` durch `change(antwort)`."""
+    original = env.fake.run_argv
+
+    async def run_argv(host, argv, **kwargs):
+        answer = await original(host, argv, **kwargs)
+        return change(answer) if argv[:3] == ["docker", "container", "inspect"] else answer
+
+    env.fake.run_argv = run_argv
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/proc/self/mountinfo", "/etc/passwd"])
+async def test_a_system_file_that_is_too_big_keeps_the_folder(tmp_path, path):
+    env = await _setup(tmp_path)
+    env.sftp.files[path] = b"x" * (env.mod.MAX_TEXT_BYTES + 1)
+    done = await env.executor.execute(_request(remove_folder=True))
+    assert done.error == (f"Den Ordner {FOLDER} löscht Nodvard Deck nicht: Er ließ sich auf dem Server nicht prüfen "
+                          f"({path} ist zu groß). Gelöscht wurde nichts.")
+    assert _changing(env) == [] and "shop" in env.store.for_host("h1")
+
+
+@pytest.mark.asyncio
+async def test_a_system_file_at_the_size_limit_is_still_read(tmp_path):
+    env = await _setup(tmp_path)
+    env.sftp.files["/proc/self/mountinfo"] = MOUNTINFO.encode().ljust(env.mod.MAX_TEXT_BYTES, b"x")
+    assert await env.delete.folder_refusal(SimpleNamespace(id="h1"), _stack()) is None
+
+
+@pytest.mark.asyncio
+async def test_unreadable_other_stacks_keep_the_folder(tmp_path):
+    env = await _setup(tmp_path)
+    original = env.delete.stacks.stacks
+
+    async def stacks(host, project=None):
+        if project is None:
+            raise _mods().stacks.StackProblem("Cannot connect to the Docker daemon")
+        return await original(host, project)
+
+    env.delete.stacks.stacks = stacks
+    done = await env.executor.execute(_request(remove_folder=True))
+    assert done.error == (f"Den Ordner {FOLDER} löscht Nodvard Deck nicht: "
+                          "Die anderen Stacks des Servers ließen sich nicht prüfen. Cannot connect to the Docker daemon "
+                          "Gelöscht wurde nichts.")
+    assert env.fake.argv_calls == [] and "shop" in env.store.for_host("h1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("when", "down_ran"),
+    [
+        (lambda argv: argv == READING[0], False),
+        (lambda argv: argv[:3] == ["docker", "container", "inspect"], False),
+        (lambda argv: argv == PROBE, False),
+        (lambda argv: argv[-2:] == ["down", "--remove-orphans"], False),
+        (lambda argv: argv == RM, True),
+    ],
+    ids=["container-liste", "container-details", "rm-probe", "herunterfahren", "rm"],
+)
+async def test_an_unexpected_error_is_not_turned_into_a_reason(tmp_path, when, down_ran):
+    env = await _setup(tmp_path)
+    _fails_with(env, RuntimeError("Docker kaputt"), when)
+    with pytest.raises(RuntimeError, match="Docker kaputt"):
+        await env.executor.execute(_request(remove_folder=True))
+    assert _changing(env) == ([_take_down()] if down_ran else [])
+    assert "shop" in env.store.for_host("h1") and FOLDER in env.sftp.dirs
+    assert env.delete.actions.locks.held("h1", "shop") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda answer: result("kein json\n" + answer.stdout.split("\n", 1)[1]),
+        lambda answer: result(answer.stdout.split("\n", 1)[0] + "\n"),
+        lambda answer: result('[1]\n"text"\n'),
+        lambda answer: result(answer.stdout, "Error: No such container: abc\n", 1),
+    ],
+    ids=["kaputte-zeile", "zu-wenige-zeilen", "keine-objekte", "exit-code"],
+)
+async def test_unreadable_container_details_keep_the_folder(tmp_path, change):
+    env = await _setup(tmp_path)
+    _inspect_says(env, change)
+    done = await env.executor.execute(_request(remove_folder=True))
+    assert done.error == (f"Den Ordner {FOLDER} löscht Nodvard Deck nicht: "
+                          "Die Container des Servers ließen sich nicht prüfen. Gelöscht wurde nichts.")
+    assert _changing(env) == [] and "shop" in env.store.for_host("h1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remove", [False, True])
+async def test_unreadable_containers_after_the_down_keep_the_stack(tmp_path, remove):
+    env = await _setup(tmp_path)
+    original = env.delete.stacks.stacks
+
+    async def stacks(host, project=None):
+        if _take_down() in env.fake.argv_calls:
+            raise _mods().stacks.StackProblem("Cannot connect to the Docker daemon")
+        return await original(host, project)
+
+    env.delete.stacks.stacks = stacks
+    done = await env.executor.execute(_request(remove_folder=remove))
+    nothing = "Nodvard Deck hat den Stack nicht vergessen" + (" und den Ordner nicht gelöscht." if remove else ".")
+    assert done.error == ("Ob der Stack ganz heruntergefahren ist, ließ sich nicht prüfen. "
+                          "Die Container des Stacks ließen sich nicht lesen. "
+                          f"Cannot connect to the Docker daemon {nothing}")
+    assert _changing(env) == [_take_down()] and "shop" in env.store.for_host("h1") and FOLDER in env.sftp.dirs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "summary"),
+    [
+        ({"project": "shop", "remove_folder": False, "folder": FOLDER}, "Würde den Stack „shop“ herunterfahren (ohne Volumes)."),
+        ({"project": "shop", "remove_folder": True, "folder": FOLDER},
+         f"Würde den Stack „shop“ herunterfahren (ohne Volumes) und den Ordner {FOLDER} löschen."),
+        ({"project": "shop", "remove_folder": "ja", "folder": FOLDER}, "Würde den Stack „shop“ herunterfahren (ohne Volumes)."),
+        ({"remove_folder": True}, "Würde den Stack „?“ herunterfahren (ohne Volumes) und den Ordner ? löschen."),
+        ({}, "Würde den Stack „?“ herunterfahren (ohne Volumes)."),
+    ],
+    ids=["ohne-ordner", "mit-ordner", "nur-ein-echtes-true", "ohne-angaben-mit-ordner", "ohne-angaben"],
+)
+async def test_the_preview_names_what_would_happen(tmp_path, payload, summary):
+    env = await _setup(tmp_path)
+    report = await env.executor.dry_run(_request().model_copy(update={"payload": payload}))
+    assert report.would_change is True and report.summary == summary
+    assert env.fake.argv_calls == [] and "shop" in env.store.for_host("h1")

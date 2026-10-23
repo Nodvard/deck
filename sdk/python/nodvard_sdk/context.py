@@ -18,6 +18,7 @@ from .types import (
     Event,
     ExecResult,
     Host,
+    HostStatus,
     Notification,
     NotifyResult,
     PeerCertificate,
@@ -71,7 +72,14 @@ class ApiHandle(Protocol):
 
 class UiHandle(Protocol):
     def register_page(self, spec: PageSpec) -> None: ...
-    def register_widget(self, spec: WidgetSpec) -> None: ...
+    def register_widget(self, spec: WidgetSpec) -> None:
+        """Meldet eine Kachel an; dieselbe `id` erneut registriert ersetzt sie (z. B. in `on_settings_changed`)."""
+        ...
+
+    def unregister_widget(self, widget_id: str) -> bool:
+        """Nimmt eine eigene Kachel wieder aus dem Katalog; `False`, wenn es keine mit dieser `id` gab."""
+        ...
+
     def register_nav(self, *, section: str, order: int = 100) -> None: ...
     def register_host_tool(self, spec: HostToolSpec) -> None:
         """Werkzeug-Kachel auf der Server-Seite passender Hosts (siehe HostToolSpec)."""
@@ -167,6 +175,10 @@ class HostsHandle(Protocol):
         vollständig gelesen wurden, nie für eine nicht erreichbare Verbindung. Ein späteres `upsert_discovered` mit
         derselben Kennung hebt die Markierung auf. Gibt zurück, wie viele Hosts neu markiert wurden."""
         ...
+    async def set_status(self, provider_refs: list[str], status: HostStatus) -> int:
+        """Setzt nur den Zustand eigener Hosts (Schlüssel: ext + ref) und gibt die Zahl der geänderten zurück; Hosts in
+        Wartung oder mit `gone_since` bleiben stehen, `MAINTENANCE` als Ziel lehnt die Methode mit `ValueError` ab."""
+        ...
 
 
 class ExecHandle(Protocol):
@@ -175,30 +187,24 @@ class ExecHandle(Protocol):
         self, host: Host, command: str, *, timeout_s: int = 60, user: str | None = None,
         log_command: str | None = None,
     ) -> ExecResult:
-        """Nur für *lesende* Kommandos ohne Nebenwirkung (Status, Logs, Inventar); `timeout_s` in Sekunden.
-        Alles Verändernde geht über `ctx.actions.propose()`: Das Gate prüft anhand des ActionSpec, nicht der Absicht.
-        `log_command`: maskierte Fassung des Befehls für die Audit-Zeile, falls `command` Geheimnisse enthält."""
+        """Nur für *lesende* Kommandos (Status, Logs, Inventar), Veränderndes geht über `ctx.actions.propose()`;
+        `log_command` maskiert die Audit-Zeile, und über 8000 Byte geht `command` (außer an Windows-Server) über die
+        Standardeingabe der POSIX-Login-Shell."""
         ...
 
     def stream(self, host: Host, command: str) -> AsyncContextManager[AsyncIterator[bytes]]:
-        """Wie `run()` nur für *lesende* Kommandos, deren Ausgabe laufend kommt und
-        die nicht von selbst enden (Live-Logs). Beim Verlassen des Kontexts wird der
-        entfernte Prozess beendet."""
+        """Wie `run()` für *lesende* Kommandos mit laufender Ausgabe, die nicht von selbst enden (Live-Logs), beim
+        Verlassen endet der entfernte Prozess; über 8000 Byte (außer an Windows-Server) scheitert `command` vor dem
+        Senden mit lesbarem Text."""
         ...
 
     async def run_argv(
         self, host: Host, argv: Sequence[str], *, stdin: str | bytes | None = None, timeout_s: int = 60,
         log_command: str | None = None,
     ) -> ExecResult:
-        """Wie `run()`, aber das Kommando kommt als Liste von Wörtern: Der Kern setzt sie mit POSIX-Quoting
-        (`shlex.join`) zur Kommandozeile zusammen, die Extension baut nie selbst eine. So wird ein Wert aus einer
-        Eingabe nie zu Shell-Syntax, wohl aber mit führendem `-` zu einer Option: Eingaben mit `--` abtrennen. Eine
-        Zeichenkette statt einer Liste, ein leeres `argv`, ein leeres erstes Wort, ein erstes Wort wie `NAME=wert`, ein
-        Wort, das keine Zeichenkette ist, oder ein NUL-Zeichen: `TypeError`/`ValueError` vor jeder Verbindung.
-
-        `stdin`: Daten für die Standardeingabe (z. B. eine Datei, die nur geprüft wird). Sie stehen nie auf der
-        Kommandozeile und nie im Protokoll; danach bekommt der Prozess EOF, auch bei leeren Daten. Ohne `stdin` wie
-        `run()`. Eine Zeichenkette geht als UTF-8."""
+        """Wie `run()`, aber der Kern setzt die Kommandozeile mit POSIX-Quoting aus `argv` zusammen (Eingaben mit `--`
+        abtrennen, ungültige Wörter geben vor jeder Verbindung `TypeError`/`ValueError`), und `stdin` geht samt EOF
+        nur auf die Standardeingabe, dann darf die Kommandozeile höchstens 8000 Byte haben (außer an Windows-Server)."""
         ...
 
     def stream_argv(self, host: Host, argv: Sequence[str]) -> AsyncContextManager[AsyncIterator[bytes]]:
@@ -208,8 +214,9 @@ class ExecHandle(Protocol):
     def open_shell(
         self, host: Host, *, cols: int, rows: int, command: str | None = None
     ) -> AsyncContextManager[Any]:
-        """Interaktive Sitzung mit PTY. Ohne `command` die Login-Shell des Hosts; mit `command` genau dieses
-        Kommando (z. B. eine Shell in einem Container), geprüft gegen dieselbe Sperrliste wie `run()`."""
+        """Interaktive Sitzung mit PTY, ohne `command` mit der Login-Shell des Hosts, sonst mit genau diesem Kommando
+        (z. B. eine Shell in einem Container), geprüft gegen die Sperrliste wie bei `run()` und mit höchstens 8000 Byte
+        wie bei `stream()`."""
         ...
     def sftp(self, host: Host) -> AsyncContextManager[Any]: ...
 

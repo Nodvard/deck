@@ -23,6 +23,8 @@ export interface JsonSchema {
   "x-hidden"?: boolean;
   "x-item-title"?: string;
   "x-enum-labels"?: Record<string, string>;
+  /** Gelber Hinweis unter der Überschrift, etwa wenn das Feld Schutz abschaltet. */
+  "x-warning"?: string;
   /**
    * "schedule": Cron-Feld als Zeitplan-Wähler (Wecker-Stil) statt Textfeld.
    * "host" / "host-tag": Server bzw. Markierung (Tag) aus der Serverliste (Text oder Liste).
@@ -49,6 +51,15 @@ export interface JsonSchema {
   "x-generate"?: { label?: string; prefix?: string; length?: number };
   /** Kopfebene: Pfad unter /api/v1, der `{url, text, error}` liefert -> Karte mit QR-Code unter dem Formular. */
   "x-qr-url"?: string;
+}
+
+function FieldWarning({ schema }: { schema: JsonSchema }) {
+  if (!schema["x-warning"]) return null;
+  return (
+    <p role="note" className="mt-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+      {schema["x-warning"]}
+    </p>
+  );
 }
 
 const GENERIC_PATTERN_MESSAGE = "Das Format stimmt nicht.";
@@ -233,6 +244,7 @@ function FieldFor({
         {required && <span className="ml-0.5 text-[var(--color-accent)]" title="Pflichtfeld">*</span>}
       </label>
       {schema.description && <p className="mt-0.5 text-xs text-white/45">{schema.description}</p>}
+      <FieldWarning schema={schema} />
     </div>
   );
   const fallback = schema.default;
@@ -335,6 +347,7 @@ function FieldFor({
           <div>
             <p className="text-sm text-white/80">{label}</p>
             {schema.description && <p className="mt-0.5 text-xs text-white/45">{schema.description}</p>}
+            <FieldWarning schema={schema} />
           </div>
           <Toggle label={label} checked={checked} onChange={onChange} />
         </div>
@@ -359,6 +372,7 @@ function FieldFor({
           <fieldset className="rounded-lg border border-white/[0.08] p-4">
             <legend className="px-1 text-sm text-white/80">{label}</legend>
             {schema.description && <p className="mb-3 text-xs text-white/45">{schema.description}</p>}
+            <FieldWarning schema={schema} />
             <SchemaFields schema={schema} values={(value as Values) ?? {}} onChange={onChange} idPrefix={id} />
           </fieldset>
         );

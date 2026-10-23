@@ -1,7 +1,5 @@
 """Image-Updates einspielen: alles, was Hosts anspricht (reine Teile: `image_apply.py`, entkoppelter Lauf: `detached.py`).
-
-Kein sudo: der SSH-Benutzer ist in der Gruppe `docker`; Compose-Dateien, die er nicht lesen kann, blockieren das Update.
-"""
+Kein sudo: der SSH-Benutzer ist in der Gruppe `docker`; Compose-Dateien, die er nicht lesen kann, blockieren das Update."""
 
 from __future__ import annotations
 
@@ -28,6 +26,7 @@ from .capabilities import CONTAINER_NAME_RE, is_own_container
 from .compose_errors import scrub_compose_output
 from .image_apply import ComposeTarget, NotUpdatable
 from .image_updates import UPDATE, ImageUpdateService, _write_atomic
+from .operate import not_full_host
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
@@ -236,10 +235,8 @@ class Plan:
 
 
 class ImageApplier:
-    """`hints()` und `plan()` lesen nur, `apply()` ist die Gate-Aktion `container.image_update`.
-
-    Der Lauf startet entkoppelt auf dem Host; das Dashboard fragt nach, prüft den Start, bewertet neu und meldet.
-    """
+    """`hints()` und `plan()` lesen nur, `apply()` ist die Gate-Aktion `container.image_update`: Der Lauf startet
+    entkoppelt auf dem Host, das Dashboard fragt nach, prüft den Start, bewertet neu und meldet."""
 
     def __init__(self, ctx: ExtensionContext, images: ImageUpdateService) -> None:
         self._ctx = ctx
@@ -385,9 +382,8 @@ class ImageApplier:
         host = await self._ctx.hosts.get(req.host_ref) if req.host_ref else None
         if host is None:
             return ActionResult(success=False, error="Host nicht gefunden.")
-        tag = (await self._ctx.settings.get()).get("docker_host_tag") or "docker"
-        if tag not in host.tags:
-            return ActionResult(success=False, error="Kein Docker-Host.")
+        if why := not_full_host(host, await self._ctx.settings.get()):
+            return ActionResult(success=False, error=why)
         container = str(payload.get("container") or "")
         if not CONTAINER_NAME_RE.match(container):
             return ActionResult(success=False, error=f"Ungültiger Containername: {container!r}")

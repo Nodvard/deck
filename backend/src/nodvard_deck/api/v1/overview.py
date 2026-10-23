@@ -90,13 +90,17 @@ class AttentionItem(BaseModel):
 
 
 class HelperHintOut(BaseModel):
-    """Ein Server mit voller sudo-Regel, auf dem Hilfsskripte fehlen oder veraltet sind (`services.helper_hints`)."""
+    """Ein Server, auf dem sudo Hilfsskripte ausführen lässt und welche fehlen oder veraltet sind
+    (`services.helper_hints`)."""
 
     host_id: str
     host_name: str
     modules: list[str]
-    """Anzeigenamen der Module, die dort noch über die volle Regel laufen."""
+    """Anzeigenamen der Module, deren Skript fehlt oder veraltet ist."""
     checked_at: datetime
+    without_root: bool = False
+    """`true`: Dort gibt es keine volle sudo-Regel, diese Module haben gerade gar kein root. Sonst laufen sie über die
+    volle Regel."""
 
 
 class OverviewOut(BaseModel):
@@ -268,7 +272,10 @@ async def overview(session: SessionDep) -> OverviewOut:
             for n in attention_rows
         ],
         helper_hints=[
-            HelperHintOut(host_id=h.host_id, host_name=h.host_name, modules=h.modules, checked_at=h.checked_at)
+            HelperHintOut(
+                host_id=h.host_id, host_name=h.host_name, modules=h.modules, checked_at=h.checked_at,
+                without_root=h.without_root,
+            )
             for h in await helper_hints_service.current_hints(session, root_helpers_for)
         ],
         errors=expensive["errors"],

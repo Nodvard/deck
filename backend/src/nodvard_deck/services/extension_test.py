@@ -1,7 +1,5 @@
-"""„Verbindung testen“ für Erweiterungen (`POST /extensions/{id}/test`).
-
-Übersetzt `health()` und Kanaltests in kurze deutsche Sätze; Geheimnisse werden vorher geschwärzt. Generisch.
-"""
+"""„Verbindung testen“ für Erweiterungen (`POST /extensions/{id}/test`), übersetzt `health()` und Kanaltests in
+kurze deutsche Sätze."""
 
 from __future__ import annotations
 
@@ -58,7 +56,6 @@ _FOREIGN_TEXT_NAMES = frozenset({"InvalidHandshake", "InvalidURI", "InvalidMessa
 
 
 def _text_is_foreign(exc: BaseException) -> bool:
-    """Ob der Text von `exc` aus der fremden Antwort oder der eigenen Anfrage stammen kann (dann nie angezeigt)."""
     # h11 zitiert kaputte Antwortzeilen, httpx das Weiterleitungsziel und kaputte Header; es bleiben Ausnahmename und
     # Statuscode (`exception_status`).
     if isinstance(exc, (httpx.ProtocolError, httpx.InvalidURL, httpx.DecodingError, httpx.HTTPStatusError)):
@@ -84,7 +81,6 @@ _REDIRECT_STEPS = frozenset(
 
 
 def _came_from_redirect(exc: BaseException) -> bool:
-    """Ob `exc` beim Zusammenbauen einer Weiterleitung entstand (Traceback, ersatzweise das Wort "location")."""
     tb = exc.__traceback__
     while tb is not None:
         if tb.tb_frame.f_code.co_name in _REDIRECT_STEPS:
@@ -101,9 +97,8 @@ def _status_of(exc: BaseException) -> int | None:
 
 
 def describe_exception(exc: BaseException) -> str:
-    """Text für die Erkennung: Typnamen und Meldungen der ganzen Ursachenkette und ein HTTP-Status.
-
-    Ein `ConnectError` trägt die Ursache oft nur in `__cause__`; fremde Texte (`_text_is_foreign`) fehlen."""
+    """Text für die Erkennung: Typnamen und Meldungen der ganzen Ursachenkette und ein HTTP-Status, fremde Texte
+    fehlen."""
     parts: list[str] = []
     seen: set[int] = set()
     current: BaseException | None = exc
@@ -262,9 +257,8 @@ def translate(
     text: str, *, host: str | None = None, tls_hint: str | None = None, status: int | None = None, readable: str | None = None,
     tls_pin: str | None = None,
 ) -> Translation:
-    """Macht aus einer technischen Fehlermeldung einen verständlichen deutschen Satz.
-
-    `status` geht vor einer Zahl im Text; `readable` ersetzt den Vorspann „Technische Meldung“."""
+    """Macht aus einer technischen Fehlermeldung einen verständlichen deutschen Satz (`status` geht vor einer Zahl
+    im Text)."""
     where = host or host_of(text)
     code_match = _HTTP_CODE.search(text)
     code = status if status is not None else (int(code_match.group(1)) if code_match else None)
@@ -334,10 +328,9 @@ def translate(
 def translate_exception(
     exc: BaseException, *, host: str | None, tls_hint: str | None, secrets: list[str], tls_pin: str | None = None
 ) -> Translation:
-    """`translate()` für eine Ausnahme; mit `verbatim = True` gilt ihr Satz unverändert.
-
-    Sonst nähme die Übersetzung den ersten HTTP-Code in einem Satz über mehrere Ziele und verlöre die anderen."""
+    """`translate()` für eine Ausnahme; mit `verbatim = True` gilt ihr Satz unverändert."""
     ready = readable_text(exc)
+    # Ein fertiger Satz über mehrere Ziele bleibt, wie er ist: Die Übersetzung nähme nur seinen ersten HTTP-Code.
     if ready and getattr(exc, "verbatim", False):
         return Translation("readable", scrub(str(exc).strip(), secrets, limit=_MAX_VERBATIM))
     return translate(
@@ -366,7 +359,7 @@ class CheckOutcome:
 
 
 def _detail_items(report_details: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
-    """Das Muster „ein Eintrag je Verbindung“ in `HealthReport.details`: `{"pve1": {"healthy": True, ...}}`."""
+    # Das Muster „ein Eintrag je Verbindung“ in `HealthReport.details`: `{"pve1": {"healthy": True, ...}}`.
     return [(k, v) for k, v in report_details.items() if isinstance(v, dict) and isinstance(v.get("healthy"), bool)]
 
 

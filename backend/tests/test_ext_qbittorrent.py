@@ -264,7 +264,7 @@ def test_base_url_is_normalized_and_credentials_are_refused():
     assert normalize_base_url("http://203.0.113.20:8080/?x=1#y") == "http://203.0.113.20:8080"
     assert normalize_base_url("http://203.0.113.20:8080/index.html") == "http://203.0.113.20:8080"
     assert normalize_base_url("https://qbt.example.com/qbt/index.html") == "https://qbt.example.com/qbt"
-    for bad in ("qbt.example.com:8080", "ftp://qbt.example.com", "http://", "http://user:pw@qbt.example.com", "http://@qbt.example.com", "http://qbt.example.com:999999", ""):
+    for bad in ("qbt.example.com:8080", "ftp://qbt.example.com", "http://", "http://user:" + "pw@qbt.example.com", "http://@qbt.example.com", "http://qbt.example.com:999999", ""):
         with pytest.raises(ValueError):
             normalize_base_url(bad)
 
@@ -289,7 +289,7 @@ def test_read_connections_flags_unusable_entries_without_dropping_the_rest():
     configs = read_connections({"connections": [
         {"name": "a", "base_url": "http://a.example.com:8080/", "username": " admin ", "tls_insecure_skip_verify": True},
         {"name": "a", "base_url": "http://zweite.example.com"},
-        {"name": "b", "base_url": "http://user:pw@b.example.com"},
+        {"name": "b", "base_url": "http://user:" + "pw@b.example.com"},
         {"name": "e", "base_url": "https://e.example.com", "tls_fingerprint_sha256": "kaputt", "tls_insecure_skip_verify": True},
         {"name": "f", "base_url": "http://f.example.com", "tls_fingerprint_sha256": PIN},
         {"name": "g", "base_url": "https://g.example.com", "tls_fingerprint_sha256": "ab" * 32, "tls_insecure_skip_verify": True},
@@ -1645,7 +1645,7 @@ async def test_unusable_entries_become_error_cards_without_a_request(client, db_
     await loaded.ctx.settings.set({"connections": [
         {"name": "ok", "base_url": BASE, "username": USER},
         {"name": "ok", "base_url": BASE, "username": USER},
-        {"name": "pw", "base_url": "http://nutzer:passwort@qbt.example.com:8080"},
+        {"name": "pw", "base_url": "http://nutzer:" + "passwort@qbt.example.com:8080"},
     ]})
     await loaded.ctx.secrets.create(label="qbittorrent-password:ok", kind="generic", value=PASSWORD)
     body = await _overview(client, headers)
@@ -1929,7 +1929,7 @@ async def test_unusable_entries_are_not_suggested(client, db_session, test_setti
     loaded = get_extension_runtime().loaded[EXT]
     await loaded.ctx.settings.set({"connections": [
         {"name": "ok", "base_url": BASE},
-        {"name": "pw", "base_url": "http://nutzer:passwort@qbt.example.com:8080"},
+        {"name": "pw", "base_url": "http://nutzer:" + "passwort@qbt.example.com:8080"},
         {"name": "leer", "base_url": ""},
     ]})
     suggestions = (await client.get("/api/v1/apps/suggestions", headers=headers)).json()["suggestions"]

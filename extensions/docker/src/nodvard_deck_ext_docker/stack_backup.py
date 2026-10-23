@@ -4,8 +4,8 @@ kurzen Container ohne Netz, der das Volume nur lesend sieht."""
 from __future__ import annotations
 
 import hashlib
+import json
 import re
-import shlex
 from typing import Any
 
 from .commands import VOLUME_NAME_RE
@@ -22,11 +22,16 @@ STOP_TIMEOUT_S = 900
 SPACE_MARGIN = 1.1
 """Ein Archiv ist meist kleiner als das Volume; mit etwas Luft, falls nicht."""
 # Ein halbes Archiv trägt nie den Endnamen: gepackt wird nach `.part`, umbenannt erst am Schluss.
+# Ohne die Zwischenordner eines abgebrochenen Zurückspielens, sonst scheiterte jedes Zurückspielen dieser Sicherung.
 _ARCHIVE_SCRIPT = (
-    'umask 077; tar czf "/backup/$1.part" -C /data . && chown "$2" "/backup/$1.part" && chmod 600 "/backup/$1.part" '
+    'umask 077; tar czf "/backup/$1.part" --exclude ./.nodvard-zurueck --exclude ./.nodvard-vorher -C /data . '
+    '&& chown "$2" "/backup/$1.part" && chmod 600 "/backup/$1.part" '
     '&& mv "/backup/$1.part" "/backup/$1" || { rc=$?; rm -f "/backup/$1.part"; exit "$rc"; }'
 )
 PART_SUFFIX = ".tar.gz.part"
+CONTENTS_FILE = "inhalt.json"
+"""Liegt vor dem ersten Archiv im Zeitordner und nennt die Volumes, die hineingehören; so fällt ein fehlendes Archiv später auf."""
+MAX_CONTENTS_BYTES = 64 * 1024
 NO_VOLUMES = "Die Dienste mit Update haben keine benannten Volumes; ihre Daten liegen in Ordnern auf dem Server."
 _STAMP_RE = re.compile(r"^[0-9]{8}-[0-9]{6}\Z")
 _OWNER_RE = re.compile(r"^[0-9]{1,10}:[0-9]{1,10}\Z")
@@ -95,11 +100,29 @@ def cmd_start_services(stack: Stack, services: list[str]) -> list[str]:
     return _in_folder(stack, "start", *_checked_services(services))
 
 
-def restore_hint(folder: str) -> str:
-    return (
-        f"Zurückspielen geht im Moment im Terminal: Stack stoppen, dann je Volume „docker run --rm -v <volume>:/data -v "
-        f"{shlex.quote(folder + ':/backup')} {BACKUP_IMAGE} sh -c 'cd /data && tar xzf /backup/<volume>.tar.gz'“."
-    )
+def contents(volumes: list[str]) -> bytes:
+    """Der Inhalt der Inhaltsliste für diese Volumes."""
+    if not all(VOLUME_NAME_RE.match(v) for v in volumes):
+        raise ValueError(f"Ungültige Volumes: {volumes!r}")
+    return json.dumps({"volumes": volumes}).encode()
+
+
+def parse_contents(raw: bytes) -> list[str] | None:
+    """Die Volumes aus einer Inhaltsliste; `None`, wenn sie nicht dieser Form entspricht."""
+    if len(raw) > MAX_CONTENTS_BYTES:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    volumes = data.get("volumes") if isinstance(data, dict) else None
+    if not isinstance(volumes, list) or not all(isinstance(v, str) and VOLUME_NAME_RE.match(v) for v in volumes):
+        return None
+    return volumes
+
+
+def restore_hint() -> str:
+    return "Zurückspielen geht im Reiter Stacks unter „Sicherungen“."
 
 
 class VolumeBackup:

@@ -38,12 +38,10 @@ USER = "deck"
 
 def _helper_sandbox(
     tmp_path: Path, *, stat_values: dict[tuple[str, str], str] | None = None, groups: str = USER,
-    writable: tuple[str, ...] = (), **kw
+    writable: tuple[str, ...] = (), acls: dict[str, str] | None = None, **kw
 ):
-    """Wie `_sandbox`, dazu ein Ordner für die Hilfsskripte im tmp-Ordner. `install` kopiert dorthin wirklich und legt
-    jede sudoers-Datei unter `captured/` ab; `stat` meldet root und 755, außer für Einträge in `stat_values`
-    (`(format, pfad) -> wert`); `id -Gn` nennt `groups`; `runuser ... test -w` sagt nur für `writable` ja (der Test
-    läuft womöglich als root, der überall schreiben darf)."""
+    """Wie `_sandbox` mit Ordner für die Hilfsskripte und `captured/` für sudoers-Dateien; `stat` (sonst root und 755),
+    `id -Gn`, `runuser ... test -w` (der Test läuft womöglich als root) und `getfacl -c` antworten nach den Parametern."""
     bin_dir, _, log = _sandbox(tmp_path, user=USER, **kw)
     can_write = "".join(f"    {shlex.quote(path)}) exit 0;;\n" for path in writable)
     _stub(bin_dir / "runuser", f'''echo "runuser $*" >> "{log}"
@@ -81,6 +79,12 @@ esac
   -gn) echo {USER};;
   -Gn) echo {groups};;
   *) exit 0;;
+esac
+''')
+    acl_cases = "".join(f"  {shlex.quote(path)}) printf %s {shlex.quote(text)};;\n" for path, text in (acls or {}).items())
+    _stub(bin_dir / "getfacl", f'''[ "$1" = -c ] || exit 2
+case "$2" in
+{acl_cases}  *) printf "user::rwx\\ngroup::r-x\\nother::r-x\\n\\n";;
 esac
 ''')
     return bin_dir, log, helper_dir, captured
@@ -175,6 +179,23 @@ def test_a_group_writable_folder_is_fine_when_the_user_is_not_in_that_group(tmp_
     )
     done = _run(_script(helper_dir, SHIELD), bin_dir)
     assert done.returncode == 0 and (captured / "nodvard_shield_deck").exists(), done.stdout
+
+
+@needs_sh
+def test_without_getfacl_the_note_names_the_acl_check(tmp_path):
+    helper_dir = tmp_path / "usr-local-lib" / "nodvard-deck"
+    parent = str(helper_dir.parent)
+    bin_dir, _, helper_dir, captured = _helper_sandbox(
+        tmp_path, stat_values={("%a", parent): "2775", ("%G", parent): "staff"},
+    )
+    _stub(bin_dir / "getfacl", "exit 127\n")
+    _stub(bin_dir / "ls", '[ "$1" = -ld ] || exit 1\necho "drwxrwsr-x    2 root     staff         4096 Oct 21 12:00 $2"\n')
+    done = _run(_script(helper_dir, SHIELD), bin_dir)
+    assert done.returncode == 0 and not (captured / "nodvard_shield_deck").exists(), done.stdout
+    assert (
+        f"Hinweis: Ob eine ACL (erweiterte Rechte) im Ordner {helper_dir} oder einem darüber Schreibrecht gibt, lässt sich "
+        "ohne getfacl (Paket acl) nicht prüfen, die Hilfsskripte wurden übersprungen."
+    ) in done.stdout.splitlines()
 
 
 @needs_sh

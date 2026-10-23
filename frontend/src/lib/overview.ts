@@ -130,7 +130,7 @@ export interface OverviewOut {
   pending_actions: number;
   unread_notifications: number;
   attention: { id: string; ts: string; severity: string; title: string; source_ext_id: string | null }[];
-  /** Server, die neu eingerichtet werden sollten: volle sudo-Regel, aber Hilfsskripte fehlen oder sind veraltet. */
+  /** Server, die neu eingerichtet werden sollten: sudo führt dort Hilfsskripte aus, aber welche fehlen oder sind veraltet. */
   helper_hints?: HelperHint[];
   errors: string[];
   generated_at: number;
@@ -139,9 +139,11 @@ export interface OverviewOut {
 export interface HelperHint {
   host_id: string;
   host_name: string;
-  /** Anzeigenamen der Module, die dort noch über die volle sudo-Regel laufen. */
+  /** Anzeigenamen der Module, deren Skript fehlt oder veraltet ist. */
   modules: string[];
   checked_at: string;
+  /** Keine volle sudo-Regel: Diese Module haben dort gerade gar kein root. Fehlt bei älteren Servern. */
+  without_root?: boolean;
 }
 
 /** Blendet den Hinweis für einen Server aus, bis sich die fehlenden Skripte ändern. */
@@ -153,13 +155,14 @@ export function useDismissHelperHint() {
   });
 }
 
-/** „Nodvard Shield und Server-Zustand mit engen Rechten laufen“ (Einzahl: „läuft“). */
+/** „… damit Nodvard Shield und Server-Zustand mit engen Rechten laufen“, ohne volle Regel „… sonst haben … kein root“. */
 export function helperHintText(hint: HelperHint): string {
   const names = hint.modules.length > 1
     ? `${hint.modules.slice(0, -1).join(", ")} und ${hint.modules[hint.modules.length - 1]}`
     : hint.modules[0] ?? "die Module";
-  const verb = hint.modules.length === 1 ? "läuft" : "laufen";
-  return `${hint.host_name}: Server neu einrichten, damit ${names} mit engen Rechten ${verb}`;
+  const one = hint.modules.length === 1;
+  if (hint.without_root) return `${hint.host_name}: Server neu einrichten, sonst ${one ? "hat" : "haben"} ${names} dort kein root`;
+  return `${hint.host_name}: Server neu einrichten, damit ${names} mit engen Rechten ${one ? "läuft" : "laufen"}`;
 }
 
 export function useOverview(enabled = true) {
@@ -234,12 +237,19 @@ export function hostHealthOf(host: Pick<HostOut, "status" | "power_state" | "gon
 
 const STATUS_TEXT: Record<HostHealth, string> = { online: "läuft", stopped: "aus", problem: "nicht erreichbar", unknown: "unbekannt" };
 
-/** Zustand eines Servers in Worten. Ein von Hand angelegter Server hat ohne „Verbindung prüfen“ nie
- * einen Zustand (nichts hat ihn je gesehen): das heißt „noch nicht geprüft“, nicht „unbekannt“. */
-export function hostStatusText(host: Pick<HostOut, "status" | "last_seen_at" | "power_state" | "gone_since">): string {
+/** Von Hand angelegt und nie gesehen: ohne „Verbindung prüfen“ hat so ein Server keinen Zustand. Den Zustand
+ * eingelesener Server meldet ihr Modul, „unbekannt“ heißt dort, dass es ihn gerade nicht lesen kann. */
+export function isUnchecked(host: Pick<HostOut, "last_seen_at" | "provider_ext_id">): boolean {
+  return !host.last_seen_at && !host.provider_ext_id;
+}
+
+/** Zustand eines Servers in Worten; ein nie geprüfter heißt „noch nicht geprüft“, nicht „unbekannt“. */
+export function hostStatusText(
+  host: Pick<HostOut, "status" | "last_seen_at" | "power_state" | "gone_since" | "provider_ext_id">,
+): string {
   if (host.gone_since) return "nicht mehr vorhanden";
   const health = hostHealth(host.status, host.power_state);
-  return health === "unknown" && !host.last_seen_at ? "noch nicht geprüft" : STATUS_TEXT[health];
+  return health === "unknown" && isUnchecked(host) ? "noch nicht geprüft" : STATUS_TEXT[health];
 }
 
 export function isNode(host: HostOut): boolean {

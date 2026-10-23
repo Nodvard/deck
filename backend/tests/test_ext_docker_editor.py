@@ -539,6 +539,7 @@ async def test_a_draft_that_fails_the_check_is_not_written(tmp_path, answer, err
     [
         (OSError("Verbindung abgerissen"), "Die Datei ließ sich nicht prüfen: Server nicht erreichbar: Verbindung abgerissen"),
         (TimeoutError(), "Die Datei ließ sich nicht prüfen: Compose hat nicht innerhalb von 60 Sekunden geantwortet."),
+        (RuntimeError("Kanal zu"), "Die Datei ließ sich nicht prüfen: Die Prüfung ist abgebrochen: Kanal zu"),
     ],
 )
 async def test_an_unreachable_check_is_not_a_rejection(tmp_path, raised, error):
@@ -1046,3 +1047,175 @@ async def test_only_with_hosts_execute(client, docker_on, method, tail, body):
     kwargs = {"json": body} if body is not None else {}
     assert (await getattr(client, method)(_url(docker_on, tail), **kwargs)).status_code == 401
     assert (await getattr(client, method)(_url(docker_on, tail), headers=docker_on.viewer, **kwargs)).status_code == 403
+
+
+# --- Seltene Wege --------------------------------------------------------------------------------------------------
+
+
+def test_history_skips_records_that_are_not_complete(tmp_path):
+    _, editor, _, _ = _mods()
+    history = editor.History(tmp_path)
+    good, broken, partial = (history.add("h1", "shop", PATH, OLD) for _ in range(3))
+    folder = next(tmp_path.rglob(f"{good}.json")).parent
+    (folder / f"{broken}.json").write_text("[1, 2]", encoding="utf-8")
+    (folder / f"{partial}.json").write_text(json.dumps({"path": PATH, "saved_at": "x"}), encoding="utf-8")
+    assert [e["id"] for e in history.entries("h1", "shop")] == [good]
+    assert history.entry("h1", "shop", broken) is None and history.entry("h1", "shop", partial) is None
+
+
+def _renames(env):
+    seen = []
+    original = env.sftp.posix_rename
+
+    async def posix_rename(old, new):
+        seen.append(new)
+        await original(old, new)
+
+    env.sftp.posix_rename = posix_rename
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_a_file_that_grows_while_it_is_read_is_not_edited(tmp_path):
+    env = _setup(tmp_path)
+    await env.store.add("h1", _stack())
+    env.fake.files[PATH] = OLD + b"#" * env.mod.MAX_FILE_BYTES
+    attrs = env.sftp._attrs
+    env.sftp.lstat = lambda path: _async(SimpleNamespace(**{**vars(attrs(path)), "size": len(OLD)}))
+    done = await env.save.execute(_request(env))
+    assert done.error == f"Die Datei ist größer als {env.mod.MAX_FILE_BYTES // 1024} KB."
+    assert env.editor.history.entries("h1", "shop") == []
+
+
+@pytest.mark.asyncio
+async def test_without_a_saved_old_version_nothing_is_written(tmp_path):
+    env = _setup(tmp_path)
+    await env.store.add("h1", _stack())
+
+    def full(*args):
+        raise OSError(28, "No space left on device")
+
+    env.editor.history.add = full
+    done = await env.save.execute(_request(env))
+    assert done.error == "Die alte Fassung ließ sich nicht sichern, deshalb wurde nichts geändert."
+    assert env.fake.files == {PATH: OLD}
+
+
+@pytest.mark.asyncio
+async def test_no_channel_to_the_server_is_said(tmp_path):
+    from contextlib import asynccontextmanager
+
+    env = _setup(tmp_path)
+    await env.store.add("h1", _stack())
+
+    @asynccontextmanager
+    async def no_channel(host):
+        raise RuntimeError("Kanal geschlossen")
+        yield
+
+    env.fake.sftp = no_channel
+    done = await env.save.execute(_request(env))
+    assert done.error == "Die Datei ließ sich nicht schreiben: Kanal geschlossen"
+    assert env.fake.files[PATH] == OLD and env.editor.history.entries("h1", "shop") == []
+
+
+@pytest.mark.asyncio
+async def test_a_write_that_breaks_with_the_connection_keeps_the_old_version_in_the_history(tmp_path):
+    env = _setup(tmp_path)
+    await env.store.add("h1", _stack())
+    writer, reader, reads = env.sftp._writer, env.sftp._reader, []
+
+    async def failing(path, mode, attrs):
+        handle = await writer(path, mode, attrs)
+
+        async def write(data):
+            raise ConnectionResetError("Verbindung getrennt")
+
+        handle.write = write
+        return handle
+
+    async def read_once(path):
+        reads.append(path)
+        if len(reads) > 1:
+            raise ConnectionResetError("Verbindung getrennt")
+        return await reader(path)
+
+    env.sftp._writer, env.sftp._reader = failing, read_once
+    done = await env.save.execute(_request(env))
+    assert done.error == f"Die Datei ließ sich nicht schreiben: Verbindung getrennt{env.mod.AFTER_FAILURE['unknown']}"
+    assert len(env.editor.history.entries("h1", "shop")) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_temp_file_that_cannot_be_created_changes_nothing(tmp_path):
+    env = _setup(tmp_path)
+    await env.store.add("h1", _stack())
+    writer = env.sftp._writer
+
+    async def full(path, mode, attrs):
+        if ".nodvard-neu-" in path:
+            raise OSError("No space left on device")
+        return await writer(path, mode, attrs)
+
+    env.sftp._writer = full
+    done = await env.save.execute(_request(env))
+    assert done.error == "Die Datei ließ sich nicht schreiben: No space left on device"
+    assert env.fake.files == {PATH: OLD} and env.editor.history.entries("h1", "shop") == []
+
+
+@pytest.mark.asyncio
+async def test_a_server_without_owner_and_mode_gets_the_file_replaced_without_a_note(tmp_path):
+    env = _setup(tmp_path)
+    await env.store.add("h1", _stack())
+    attrs = env.sftp._attrs
+    env.sftp.lstat = lambda path: _async(SimpleNamespace(size=attrs(path).size, permissions=None, uid=None, gid=None))
+    # Ohne root: Ein unbekannter Besitzer wird gar nicht erst übertragen, ersetzt wird trotzdem.
+    env.sftp.chown_denied = True
+    renamed = _renames(env)
+    done = await env.save.execute(_request(env))
+    assert done.success is True and done.output.endswith("Die alte Fassung steht im Verlauf.")
+    assert renamed == [PATH] and env.fake.files[PATH] == NEW and _leftovers(env) == []
+
+
+@pytest.mark.asyncio
+async def test_an_owner_that_cannot_be_checked_means_writing_in_place(tmp_path):
+    env = _setup(tmp_path)
+    await env.store.add("h1", _stack())
+    writer = env.sftp._writer
+
+    async def unreadable(path, mode, attrs):
+        handle = await writer(path, mode, attrs)
+
+        async def stat():
+            raise OSError("stat nicht erlaubt")
+
+        handle.stat = stat
+        return handle
+
+    env.sftp._writer = unreadable
+    renamed = _renames(env)
+    done = await env.save.execute(_request(env))
+    assert done.success is True and renamed == [] and env.fake.files[PATH] == NEW
+    assert env.sftp.owners[PATH] == (1000, 1000) and _leftovers(env) == []
+
+
+@pytest.mark.asyncio
+async def test_the_dry_run_names_file_stack_changes_and_apply(tmp_path):
+    env = _setup(tmp_path)
+    request = _request(env, changes="+1 −1 Zeilen")
+    assert (await env.save.dry_run(request)).summary == "Würde „compose.yaml“ von Stack „shop“ ersetzen (+1 −1 Zeilen)."
+    request = _request(env, apply=True, changes="+1 −1 Zeilen")
+    assert (await env.save.dry_run(request)).summary.endswith("ersetzen (+1 −1 Zeilen) und den Stack danach anwenden.")
+    assert env.fake.files == {PATH: OLD}
+
+
+@pytest.mark.asyncio
+async def test_routes_refuse_bad_stack_names_and_oversized_content(client, docker_on):
+    await _adopt(client, docker_on)
+    bad = f"/api/v1/ext/docker/hosts/{docker_on.host}/stacks/Shop;id"
+    assert (await client.post(f"{bad}/check", json={"path": PATH, "content": "x"}, headers=docker_on.owner)).status_code == 400
+    assert (await client.get(f"{bad}/history", headers=docker_on.owner)).status_code == 400
+    assert (await client.get(f"{bad}/history/20990101T000000000000Z-00000000", headers=docker_on.owner)).status_code == 400
+    limit = sys.modules["nodvard_deck_ext_docker.editor"].MAX_FILE_BYTES
+    huge = await client.post(_url(docker_on, "check"), json={"path": PATH, "content": "ä" * (limit // 2 + 1)}, headers=docker_on.owner)
+    assert huge.status_code == 413 and huge.json()["detail"] == f"Die Datei ist größer als {limit // 1024} KB."

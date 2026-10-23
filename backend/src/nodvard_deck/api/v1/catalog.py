@@ -5,7 +5,7 @@ Der Bestand liegt im Prozessspeicher: Aktivieren oder Deaktivieren einer Erweite
 
 from __future__ import annotations
 
-from nodvard_sdk import PageSpec, WidgetSpec
+from nodvard_sdk import PageSpec, WidgetGroup, WidgetSpec
 from pydantic import Field
 
 from ...ext.runtime import get_extension_runtime
@@ -38,6 +38,14 @@ class WidgetOut(WidgetSpec):
     Einträge mit alter `ext_id` diesem Widget zuzuordnen. Ohne Umbenennung leer."""
 
 
+# Ohne `WidgetSpec.group` entscheidet die Kategorie der Erweiterung; der Kern kennt nur die Gruppen, keine Module.
+_GROUP_BY_CATEGORY: dict[str, WidgetGroup] = {"security": "security", "servers": "servers"}
+
+
+def _group_of(spec: WidgetSpec, category: str | None) -> WidgetGroup:
+    return spec.group or _GROUP_BY_CATEGORY.get(category or "", "services")
+
+
 @router.get("/pages")
 async def list_pages(user: CurrentUser) -> list[PageOut]:
     runtime = get_extension_runtime()
@@ -52,7 +60,10 @@ async def list_pages(user: CurrentUser) -> list[PageOut]:
 async def list_widgets(user: CurrentUser) -> list[WidgetOut]:
     runtime = get_extension_runtime()
     return [
-        WidgetOut(ext_id=ext_id, legacy_ext_ids=runtime.legacy_ids_of(ext_id), **spec.model_dump())
+        WidgetOut(
+            ext_id=ext_id, legacy_ext_ids=runtime.legacy_ids_of(ext_id),
+            **{**spec.model_dump(), "group": _group_of(spec, runtime.category_of(ext_id))},
+        )
         for ext_id, spec in runtime.ui.all_widgets()
         if _visible(user, spec.permissions)
     ]

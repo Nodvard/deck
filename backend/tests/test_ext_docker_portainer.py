@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,8 +26,11 @@ ROOT = "/opt/stacks"
 FOLDER = "/opt/stacks/kuma"
 COMPOSE = "services:\n  app:\n    image: louislam/uptime-kuma:2.5.6\n    environment:\n      TOKEN: ${TOKEN}\n    volumes:\n      - daten:/app/data\nvolumes:\n  daten:\n"
 ENV = "TOKEN=geheim123\n"
+IMAGE = "louislam/uptime-kuma:2.5.6"
 PORTAINER = {"id": "a" * 64, "name": "/portainer", "project": "", "image": "portainer/portainer-ce:lts", "running": True,
              "mounts": [{"Type": "volume", "Name": "portainer_data", "Destination": "/data"}]}
+SECOND_PORTAINER = {**PORTAINER, "id": "b" * 64, "name": "/portainer-zwei",
+                    "mounts": [{"Type": "volume", "Name": "zweiter_data", "Destination": "/data"}]}
 
 
 def _m():
@@ -73,6 +77,10 @@ def _setup(monkeypatch, tmp_path, *, files=None, verdict=True, tags=("docker",))
             if stored[name] is LINK:
                 return result(code=m.move.NOT_A_FILE_EXIT)
             return result(stored[name][:limit])
+        if argv[:4] == ["docker", "inspect", "--type", "container"]:
+            fake.argv_calls.append(list(argv))
+            return result("".join(json.dumps({"name": f"/{r['name']}", "service": r["service"], "ref": r.get("ref", IMAGE), "running": True,
+                                              "image_id": "sha256:" + "1" * 64, "mounts": []}) + "\n" for r in fake.rows if r["name"] in argv))
         if argv[:3] == ["docker", "ps", "-a"] and m.move.WORKING_DIRS_FORMAT in argv:
             fake.argv_calls.append(list(argv))
             return result("".join(f"{r['working_dir']}\t{r.get('state', 'running')}\n" for r in fake.rows if r["project"] == "kuma"))
@@ -230,6 +238,27 @@ async def test_the_plan(env):
     e.sftp.dirs.add(FOLDER)
     assert (await e.move.plan(e.host, "kuma"))["problem"] == f"Den Ordner {FOLDER} gibt es schon. Nodvard Deck überschreibt nie einen bestehenden Ordner."
     assert (await e.move.plan(e.host, "fehlt"))["problem"] == "Auf diesem Server läuft kein Stack „fehlt“."
+
+
+@pytest.mark.asyncio
+async def test_the_plan_names_an_adopted_stack_and_an_unreachable_server(env, monkeypatch):
+    e = env()
+    monkeypatch.setattr(e.store, "for_host", lambda host_id: {"kuma": None})
+    assert (await e.move.plan(e.host, "kuma"))["problem"] == "Einen Stack „kuma“ hat Nodvard Deck auf diesem Server schon übernommen."
+    monkeypatch.undo()
+
+    async def unreachable(host):
+        raise OSError("Kanal zu")
+
+    monkeypatch.setattr(e.move, "storage", unreachable)
+    assert (await e.move.plan(e.host, "kuma"))["problem"] == "Server nicht erreichbar: Kanal zu"
+
+
+@pytest.mark.asyncio
+async def test_the_preview_names_stack_and_folder(env):
+    e = env()
+    preview = await e.executor.dry_run(_request(await e.move.plan(e.host, "kuma")))
+    assert preview.would_change and preview.summary == f"Würde den Portainer-Stack „kuma“ nach {FOLDER} holen und dort neu ausrollen."
 
 
 @pytest.mark.asyncio
@@ -599,6 +628,8 @@ async def test_only_on_docker_hosts(monkeypatch, tmp_path):
     e = _setup(monkeypatch, tmp_path, tags=())
     plan = {"folder": FOLDER, "portainer_id": "7"}
     assert (await e.executor.execute(_request(plan))).error == "Kein Docker-Host."
+    e = _setup(monkeypatch, tmp_path, tags=("docker-bedienen",))
+    assert (await e.executor.execute(_request(plan))).error.startswith("Auf diesem Server ist Docker im Modus „Nur bedienen“")
 
 
 def test_resolved_paths_inside_the_new_folder_are_refused():
@@ -638,6 +669,32 @@ def test_values_as_compose_reads_them():
     values = mv.secret_values(b'MIT=geheim-mit # Kommentar\nESC="a\\"bcdef"\nZEILEN="erste-zeile\nzweite-zeile"\n')
     for value in ("geheim-mit", 'a"bcdef', "erste-zeile", "zweite-zeile"):
         assert value in values, value
+
+
+def test_single_quotes_unbraced_names_and_export_without_a_name():
+    mv = _m().move
+    values = mv.secret_values(b"S='geheim $X # wert'\nT=${S}-z\nA=erster-wert\nB=$A-ende\nexport =${A}-ohne-namen\n")
+    assert "geheim $X # wert-z" in values and "erster-wert-ende" in values and "erster-wert-ohne-namen" in values
+
+
+def test_lines_without_a_variable_name_still_count():
+    mv = _m().move
+    values = mv.secret_values(b"# ALT=im-kommentar-9\nkein name=mit-leerzeichen\n")
+    assert "im-kommentar-9" in values and "mit-leerzeichen" in values
+
+
+def test_a_value_too_long_to_substitute_stays_raw_for_later_lines():
+    mv = _m().move
+    # Vier Einsetzungen zu je einem Viertel der Grenze passen gerade noch, die 100 Zeichen dahinter nicht mehr.
+    raw = "${A}" * 4 + "b" * 100
+    values = mv.secret_values(f"A={'a' * (mv._MAX_VALUE // 4)}\nB={raw}\nC=${{B}}-z\n".encode())
+    assert raw + "-z" in values
+
+
+def test_a_file_without_services_cannot_move():
+    mv = _m().move
+    assert mv.move_blockers("version: '3'\n", FOLDER) == ["Die Datei beschreibt keine Dienste."]
+    assert mv.move_blockers("- app\n", FOLDER) == ["Die Datei beschreibt keine Dienste."]
 
 
 def test_values_as_docker_quotes_them():
@@ -698,6 +755,7 @@ async def test_the_move_through_the_gate(client, docker_on):
     assert not any(c[:2] == ["docker", "run"] for c in docker_on.exec.argv_calls), "vor der Freigabe liest nichts bei Portainer"
     action = await client.get(f"/api/v1/actions/{proposed.json()['action_id']}", headers=docker_on.owner)
     assert "Portainer-Stack „kuma“ nach /opt/stacks/kuma holen" in action.text
+    assert "was nur in den alten Containern lag" in action.text and "bricht Deck vorher ab" in action.text
     docker_on.exec.containers = []
     refused = await client.post(url, headers=docker_on.owner)
     assert refused.status_code == 409 and "kein Portainer" in refused.json()["detail"]
@@ -713,3 +771,704 @@ async def test_not_offered_on_the_server_page_and_only_with_hosts_execute(client
     for method in ("get", "post"):
         assert (await getattr(client, method)(url)).status_code == 401
         assert (await getattr(client, method)(url, headers=docker_on.viewer)).status_code == 403
+
+
+# So zeigten Compose 5.6.0 und Docker 29.8.2 die Werte in ihren Meldungen (nachgestellt mit busybox:1.37).
+@pytest.mark.parametrize(
+    ("env", "shown", "hidden"),
+    [
+        (b"X=zwischen-teil\nTOKEN=anfang-${X}-ende\n", 'exec: "anfang-zwischen-teil-ende": executable file not found in $PATH',
+         ["anfang", "zwischen", "ende"]),
+        (b"UNK=vorne-${UNBEKANNT}-hinten\n", 'exec: "vorne--hinten": executable file not found in $PATH', ["vorne", "hinten"]),
+        (b"DEF=x-${NIX:-standard-wert}-y\n", 'exec: "x-standard-wert-y": executable file not found in $PATH', ["standard"]),
+        (b"TAB=geheim\twert\n", 'exec: "geheim\\twert": executable file not found in $PATH', ["geheim", "wert"]),
+        (b"TAB=geheim\twert\n", "invalid hostPort: geheim\twert", ["geheim", "wert"]),
+        (b"T=geheim\t#kein-kommentar\n", 'exec: "geheim\\t#kein-kommentar": executable file not found in $PATH', ["geheim", "kommentar"]),
+        (b'DQ="dq\\tgeheim\\nzweite"\n', 'exec: "dq\\tgeheim\\nzweite": executable file not found in $PATH', ["geheim", "zweite"]),
+        (b"CTRL=ab\x01cd-efgh\n", 'exec: "ab\\x01cd-efgh": executable file not found in $PATH', ["cd-efgh"]),
+        (b"U=cafe-\xe2\x80\x8b-ende\n", 'exec: "cafe-\\u200b-ende": executable file not found in $PATH', ["cafe", "ende"]),
+        (b"P=geheim:wert1\n", 'service "app" refers to undefined volume geheim: invalid compose project', ["geheim"]),
+        (b"P=geheim:wert1\n", 'Error response from daemon: invalid IP address in add-host: "wert1"', ["wert1"]),
+        (b"V=geheim wert2 drei\n", 'exec: "geheim": executable file not found in $PATH', ["geheim"]),
+        (b'Q="a\\\\b$$c-defg"\n', 'exec: "a\\\\b$c-defg": executable file not found in $PATH', ["defg"]),
+        (b'O="geheim\\0101wert"\n', 'exec: "geheimAwert": executable file not found in $PATH', ["geheim", "Awert"]),
+        (b'O="geheim\\0777wert"\n', 'exec: "geheim\\\\777wert": executable file not found in $PATH', ["geheim", "777wert"]),
+        (b'U="x\\u0041-geheim"\n', 'exec: "xA-geheim": executable file not found in $PATH', ["geheim"]),
+        (b'B="ab\\acd-efgh"\n', 'exec: "ab\\acd-efgh": executable file not found in $PATH', ["cd-efgh"]),
+        (b": geheimwert\n", "Error response from daemon: invalid environment variable: =geheimwert", ["geheimwert"]),
+        (b"X=innen-teil\n=${X:-x}-aussen\n", "Error response from daemon: invalid environment variable: =innen-teil-aussen",
+         ["innen", "aussen"]),
+        (b"\xef\xbb\xbfTOKEN=geheim123\n", 'exec: "geheim123": executable file not found in $PATH', ["geheim123"]),
+    ],
+    ids=["eingesetzt", "unbekannt", "vorgabe", "tab-zitiert", "tab-roh", "tab-vor-raute", "escapes", "steuerzeichen", "unsichtbar",
+         "stueck-doppelpunkt", "stueck-hinten", "stueck-leerzeichen", "backslash-dollar", "oktal", "oktal-zu-gross", "unicode", "klingel",
+         "ohne-namen", "ohne-namen-eingesetzt", "bom"],
+)
+def test_values_never_show_the_way_compose_and_docker_print_them(env, shown, hidden):
+    mv = _m().move
+    scrubbed = mv.scrub(shown, mv.secret_values(env))
+    assert "…" in scrubbed and not [h for h in hidden if h in scrubbed], scrubbed
+
+
+@pytest.mark.asyncio
+async def test_an_interpolated_value_never_shows_in_a_failed_roll_out(env):
+    e = env(files={"docker-compose.yml": COMPOSE, "stack.env": "X=zwischen-teil\nTOKEN=anfang-${X}-ende\n"})
+    plan = await e.move.plan(e.host, "kuma")
+    e.fake.up["moves"] = False
+    e.fake.verb = result(stderr='Error response from daemon: failed to create task for container: exec: "anfang-zwischen-teil-ende": '
+                                "executable file not found in $PATH\n", code=1)
+    done = await e.executor.execute(_request(plan))
+    assert done.error.startswith('Neu ausrollen ist gescheitert: Error response from daemon: failed to create task for container: exec: "…"')
+    assert "anfang" not in done.error and "ende:" not in done.error, done.error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", [".env", "compose.yaml"])
+async def test_nothing_is_written_before_the_rights_are_checked(env, monkeypatch, name):
+    e = env()
+    real_stat = e.sftp.stat
+
+    async def stat(path):
+        attrs = await real_stat(path)
+        if path == f"{FOLDER}/{name}":
+            attrs.permissions = 0o100640
+        return attrs
+
+    monkeypatch.setattr(e.sftp, "stat", stat)
+    done = await e.executor.execute(_request(await e.move.plan(e.host, "kuma")))
+    assert done.error.startswith(f"{name} wäre für andere auf dem Server lesbar"), done.error
+    assert not [path for path, _ in e.sftp.seen_modes if path == f"{FOLDER}/{name}"], "kein Inhalt vor der Prüfung"
+    assert FOLDER not in e.sftp.dirs
+
+
+def test_images_count_as_equal_the_way_docker_reads_them():
+    mv = _m().move
+    pinned = "ghcr.io/x/y:1@sha256:" + "a" * 64
+    config = {"services": {"a": {"image": "nginx"}, "b": {"image": pinned}, "c": {"build": "."}, "d": {"image": "redis:7"}}}
+    same = {"a": "docker.io/library/nginx:latest", "b": pinned, "c": "c:1", "d": "library/redis:7", "e": "x:1"}
+    assert mv.changed_images(config, same) is None
+    assert mv.changed_images({"services": {"b": {"image": pinned}}}, {"b": pinned[:-64] + "b" * 64}) is not None
+    assert mv.changed_images(config, {"a": "nginx:1.27", "d": "redis:7"}).startswith(
+        "Die Datei bei Portainer passt nicht zum laufenden Stack: Für „a“ steht darin das Image nginx, der Container läuft aber mit nginx:1.27.")
+
+
+@pytest.mark.asyncio
+async def test_a_file_with_other_images_than_the_running_stack_is_refused(env):
+    e = env()
+    e.fake.rows = [_portainer_row(ref="louislam/uptime-kuma:1.23.16")]
+    e.fake.config = result(json.dumps({"services": {"app": {"image": IMAGE}}}))
+    done = await e.executor.execute(_request(await e.move.plan(e.host, "kuma")))
+    assert done.error.startswith(f"Die Datei bei Portainer passt nicht zum laufenden Stack: Für „app“ steht darin das Image {IMAGE}, der "
+                                 "Container läuft aber mit louislam/uptime-kuma:1.23.16."), done.error
+    assert done.error.endswith("Am Stack hat sich nichts geändert.")
+    assert FOLDER not in e.sftp.dirs and not any("--force-recreate" in c for c in e.fake.argv_calls)
+    e.fake.rows = [_portainer_row(ref=f"docker.io/{IMAGE}")]
+    assert (await e.executor.execute(_request(await e.move.plan(e.host, "kuma")))).success is True
+
+
+@pytest.mark.asyncio
+async def test_unreadable_containers_stop_the_move(env):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    inner = e.fake.run_argv
+
+    async def run_argv(host, argv, **kwargs):
+        if argv[:4] == ["docker", "inspect", "--type", "container"]:
+            return result(stderr="Cannot connect to the Docker daemon\n", code=1)
+        return await inner(host, argv, **kwargs)
+
+    e.fake.run_argv = run_argv
+    done = await e.executor.execute(_request(plan))
+    assert done.error == "Die Container des Stacks ließen sich nicht lesen: Cannot connect to the Docker daemon. Geändert wurde nichts."
+    assert FOLDER not in e.sftp.dirs
+
+
+def test_the_question_says_what_only_lived_in_the_containers_is_gone():
+    spec = _m().move.move_action_spec()
+    assert "was nur in den alten Containern lag und nicht in einem Volume oder Ordner, ist danach weg" in spec.confirm_text
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_after_a_failed_roll_out_still_takes_the_folder_back(env, caplog):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    e.fake.up["moves"] = False
+    e.fake.verb = result(stderr="Error response from daemon: port is already allocated\n", code=1)
+    reading, removing, removed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    inner_dirs, inner_remove = e.move.working_dirs, e.sftp.remove
+
+    async def slow_dirs(host, project):
+        if not reading.is_set():
+            reading.set()
+            await asyncio.sleep(3600)
+        return await inner_dirs(host, project)
+
+    async def slow_remove(path):
+        removing.set()
+        await asyncio.sleep(0.05)
+        await inner_remove(path)
+        removed.set()
+
+    e.move.working_dirs, e.sftp.remove = slow_dirs, slow_remove
+    task = asyncio.create_task(e.executor.execute(_request(plan)))
+    await asyncio.wait_for(reading.wait(), 5)
+    task.cancel()
+    await asyncio.wait_for(removing.wait(), 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.wait_for(removed.wait(), 5)
+    for _ in range(50):
+        if FOLDER not in e.sftp.dirs:
+            break
+        await asyncio.sleep(0.01)
+    assert FOLDER not in e.sftp.dirs and not [p for p in e.sftp.files if p.startswith(FOLDER)]
+    assert "kuma" not in e.store.for_host("h1") and "left_after_abort" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_during_the_roll_out_keeps_the_folder_and_logs_it(env, caplog):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    e.fake.up.update({"hang": True, "moves": False})
+    task = asyncio.create_task(e.executor.execute(_request(plan)))
+    while not any("--force-recreate" in c for c in e.fake.argv_calls):
+        await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert f"{FOLDER}/compose.yaml" in e.sftp.files and "kuma" not in e.store.for_host("h1")
+    assert f"docker_portainer_move_left_after_abort project=kuma folder={FOLDER} compose_may_run=True" in caplog.text
+
+
+def test_values_that_double_with_each_line_stay_small():
+    import time
+
+    mv = _m().move
+    env = "A0=abcdefgh\n" + "".join(f"A{k}=${{A{k - 1}}}${{A{k - 1}}}\n" for k in range(1, 22))
+    begin = time.monotonic()
+    values = mv.secret_values(env.encode())
+    assert time.monotonic() - begin < 1 and max(map(len, values)) <= mv._MAX_VALUE * 2
+
+
+def test_many_large_substituted_values_stay_small():
+    import time
+
+    mv = _m().move
+    big = "".join(chr(97 + i % 26) for i in range(32_000))
+    env = f"A={big}\n" + "".join(f"B{k}=${{A}}{k}\n" for k in range(2_300))
+    assert len(env) <= mv.MAX_ENV_BYTES
+    begin = time.monotonic()
+    values = mv.secret_values(env.encode())
+    assert time.monotonic() - begin < 1 and sum(map(len, values)) <= 16 * mv.MAX_ENV_BYTES
+    assert big in values and "${A}2299" in values
+
+
+@pytest.mark.asyncio
+async def test_its_own_refusal_keeps_the_image_names_from_stack_env(env):
+    e = env(files={"docker-compose.yml": COMPOSE, "stack.env": f"IMG={IMAGE}\n"})
+    e.fake.rows = [_portainer_row(ref="louislam/uptime-kuma:1.23.16")]
+    e.fake.config = result(json.dumps({"services": {"app": {"image": IMAGE}}}))
+    done = await e.executor.execute(_request(await e.move.plan(e.host, "kuma")))
+    assert f"steht darin das Image {IMAGE}, der Container läuft aber mit louislam/uptime-kuma:1.23.16." in done.error, done.error
+
+
+@pytest.mark.asyncio
+async def test_a_service_with_mixed_images_is_not_compared(env):
+    e = env()
+    e.fake.rows = [_portainer_row(ref="louislam/uptime-kuma:1.23.16"), _portainer_row(name="kuma-app-2", ref=IMAGE)]
+    e.fake.config = result(json.dumps({"services": {"app": {"image": IMAGE}}}))
+    done = await e.executor.execute(_request(await e.move.plan(e.host, "kuma")))
+    assert "passt nicht zum laufenden Stack" not in (done.error or "")
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_while_removing_a_refused_folder_still_removes_it(env, monkeypatch, caplog):
+    e = env()
+    real_stat, inner_remove = e.sftp.stat, e.sftp.remove
+    removing, removed = asyncio.Event(), asyncio.Event()
+
+    async def stat(path):
+        attrs = await real_stat(path)
+        if path == f"{FOLDER}/.env":
+            attrs.permissions = 0o100640
+        return attrs
+
+    async def slow_remove(path):
+        removing.set()
+        await asyncio.sleep(0.05)
+        await inner_remove(path)
+        removed.set()
+
+    monkeypatch.setattr(e.sftp, "stat", stat)
+    e.sftp.remove = slow_remove
+    task = asyncio.create_task(e.executor.execute(_request(await e.move.plan(e.host, "kuma"))))
+    await asyncio.wait_for(removing.wait(), 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.wait_for(asyncio.gather(*e.executor._cleanups), 5)
+    assert FOLDER not in e.sftp.dirs and removed.is_set() and "left_after_abort" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_without_a_look_at_the_containers_after_a_cancel_the_folder_stays(env, caplog):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    e.fake.up["moves"] = False
+    e.fake.verb = result(stderr="Error response from daemon: port is already allocated\n", code=1)
+    reading, calls = asyncio.Event(), []
+
+    async def dirs(host, project):
+        calls.append(project)
+        if len(calls) == 1:
+            reading.set()
+            await asyncio.sleep(3600)
+
+    e.move.working_dirs = dirs
+    task = asyncio.create_task(e.executor.execute(_request(plan)))
+    await asyncio.wait_for(reading.wait(), 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert FOLDER in e.sftp.dirs and len(calls) == 2
+    assert f"docker_portainer_move_left_after_abort project=kuma folder={FOLDER} compose_may_run=False" in caplog.text
+
+
+def test_long_and_deeply_nested_values_are_read_quickly():
+    import time
+
+    mv = _m().move
+    begin = time.monotonic()
+    for env in (b"A=" + b"${A" * 20000 + b"\n", b"A=" + b"${A:-" * 12000 + b"x" + b"}" * 12000 + b"\n", b"A=" + b"$" * 60000 + b"\n"):
+        assert mv.secret_values(env)
+    assert time.monotonic() - begin < 2
+
+
+# --- Fehlerzweige ----------------------------------------------------------------------------------------------------
+
+
+class _Refusing:
+    """Ein SFTP-Zugang, der schon beim Öffnen scheitert."""
+
+    def __init__(self, exc):
+        self._exc = exc
+
+    async def __aenter__(self):
+        raise self._exc
+
+    async def __aexit__(self, *_exc):
+        return False
+
+
+def _raises(e, when, exc):
+    inner = e.fake.run_argv
+
+    async def run_argv(host, argv, **kwargs):
+        if when(argv):
+            raise exc
+        return await inner(host, argv, **kwargs)
+
+    e.fake.run_argv = run_argv
+
+
+def _after_plan(e, change):
+    """Ändert den Server, sobald der Ausführer nach seinem Plan ein zweites Mal Portainers Speicher sucht."""
+    real, calls = e.move.storage, []
+
+    async def storage(host):
+        calls.append(host)
+        if len(calls) == 2:
+            change(e)
+        return await real(host)
+
+    e.move.storage = storage
+
+
+def _count_sftp(e):
+    real, opened = e.fake.sftp, []
+
+    @asynccontextmanager
+    async def sftp(host):
+        opened.append(host)
+        async with real(host) as server:
+            yield server
+
+    e.fake.sftp = sftp
+    return opened
+
+
+async def _until(check):
+    async def wait():
+        while not check():
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(wait(), 5)
+
+
+def _add_fails(monkeypatch, e, exc):
+    async def add(host_id, stack):
+        raise exc
+
+    monkeypatch.setattr(e.store, "add", add)
+
+
+def test_resolved_paths_skip_a_service_without_a_body():
+    mv = _m().move
+    config = {"services": {"leer": None, "app": {"build": {"context": FOLDER}}}}
+    assert mv.resolved_blockers(config, FOLDER, "/data/compose/7") == ["„app“ wird aus Dateien bei Portainer gebaut (build)."]
+
+
+def test_move_check_skips_empty_services_and_absolute_configs():
+    mv = _m().move
+    assert mv.move_blockers("services:\n  leer:\n  web:\n    build: .\n", "/data/compose/7") == [
+        "„web“ wird aus Dateien bei Portainer gebaut oder erweitert (build, extends)."]
+    absolute = "services:\n  a:\n    image: x\nconfigs:\n  c:\n    file: /etc/c.conf\n  d:\n    external: true\n"
+    assert mv.move_blockers(absolute, "/data/compose/7") == []
+
+
+def test_a_file_that_cannot_be_read_does_not_use_stack_env():
+    mv = _m().move
+    assert mv.uses_stack_env("services: [") is False and mv.uses_stack_env("- app\n") is False
+    assert mv.uses_stack_env("services:\n  a:\n    env_file: other.env\n") is False
+
+
+def test_a_service_without_a_body_counts_as_starting():
+    m = _m()
+    stack = m.stacks.parse_members(ps(_portainer_row()))[0]
+    found = m.move.foreign_file("services:\n  app:\n    image: a:1\n  leer:\n", stack)
+    assert found.startswith("Für „leer“ steht ein Dienst in der Datei bei Portainer, es gibt aber keinen Container dazu.")
+
+
+def test_containers_without_a_folder_label_are_not_listed():
+    mv = _m().move
+    assert mv.parse_working_dirs("/opt/stacks/kuma\tRunning\n\texited\n") == [("/opt/stacks/kuma", "running")]
+
+
+def test_portainers_storage_must_be_a_usable_volume_or_folder():
+    mv = _m().move
+    for mount in ({"Type": "volume", "Name": "a;b"}, {"Type": "bind", "Source": "relativ/pfad"}, {"Type": "bind", "Source": "/srv/a:b"}):
+        unusable = {**PORTAINER, "mounts": [{**mount, "Destination": "/data"}]}
+        assert mv.find_storage(json.dumps(unusable)) is None, mount
+
+
+def test_portainer_is_found_without_a_tag_and_behind_a_registry_port():
+    mv = _m().move
+    for image in ("portainer/portainer-ce", "registry.lokal:5000/portainer/portainer-ee", "portainer/portainer-ce@sha256:" + "c" * 64):
+        assert mv.find_storage(json.dumps({**PORTAINER, "image": image})) == "portainer_data", image
+
+
+@pytest.mark.asyncio
+async def test_the_plan_says_when_the_stacks_cannot_be_listed(env):
+    e = env()
+    e.fake.list = result(stderr="Cannot connect to the Docker daemon\n", code=1)
+    plan = await e.move.plan(e.host, "kuma")
+    assert plan["problem"] == "Cannot connect to the Docker daemon" and plan["services"] == [] and plan["portainer_id"] is None
+
+    async def unreachable(host, command, timeout_s=60):
+        raise OSError("Kanal zu")
+
+    e.fake.run = unreachable
+    assert (await e.move.plan(e.host, "kuma"))["problem"] == "Server nicht erreichbar: Kanal zu"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("change", "problem"),
+    [
+        ({"working_dir": "/srv/kuma", "config_files": "/srv/kuma/compose.yaml"}, "Das ist kein Stack, den Portainer auf diesem Server angelegt hat."),
+        ({"config_files": "/data/compose/7/a.yml,/data/compose/7/b.yml"},
+         "Dieser Portainer-Stack besteht aus mehreren Dateien (etwa aus Git). Das kann der Umzug noch nicht."),
+    ],
+    ids=["kein-portainer", "mehrere-dateien"],
+)
+async def test_the_plan_names_why_a_stack_cannot_move(env, change, problem):
+    e = env()
+    e.fake.rows = [_portainer_row(**change)]
+    plan = await e.move.plan(e.host, "kuma")
+    assert plan["problem"] == problem and plan["portainer_id"] is None
+    assert not any(c[:2] == ["docker", "run"] for c in e.fake.argv_calls)
+
+
+@pytest.mark.asyncio
+async def test_the_plan_names_two_portainers_it_cannot_tell_apart(env):
+    e = env()
+    e.fake.containers = [PORTAINER, SECOND_PORTAINER]
+    problem = (await e.move.plan(e.host, "kuma"))["problem"]
+    assert problem.startswith("Auf diesem Server gibt es mehrere Portainer mit eigenem Speicher (portainer_data, zweiter_data).")
+    assert "kein Portainer" not in problem
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("exc", "reason"), [(OSError("Kanal zu"), "Kanal zu"), (ConnectionResetError(), "ConnectionResetError")])
+async def test_a_folder_check_that_cannot_reach_the_server_names_the_reason(env, exc, reason):
+    e = env()
+    e.fake.sftp = lambda host: _Refusing(exc)
+    assert (await e.move.plan(e.host, "kuma"))["problem"] == f"Der Ordner {FOLDER} ließ sich nicht prüfen ({reason}). Versuch es noch einmal."
+
+
+@pytest.mark.asyncio
+async def test_only_a_lost_connection_ends_the_look_at_the_containers(env):
+    e = env()
+
+    def is_ps(argv):
+        return argv[:3] == ["docker", "ps", "-a"]
+
+    _raises(e, is_ps, OSError("Kanal zu"))
+    assert await e.move.working_dirs(e.host, "kuma") is None
+    _raises(e, is_ps, RuntimeError("kaputt"))
+    with pytest.raises(RuntimeError, match="kaputt"):
+        await e.move.working_dirs(e.host, "kuma")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", [["docker", "run"], ["docker", "inspect", "--type", "container"]], ids=["lesen", "images"])
+async def test_an_unexpected_error_before_the_move_is_not_a_lost_connection(env, command):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    _raises(e, lambda argv: argv[: len(command)] == command, RuntimeError("kaputt"))
+    with pytest.raises(RuntimeError, match="kaputt"):
+        await e.executor.execute(_request(plan))
+    assert e.actions.locks.held("h1", "kuma") is None and FOLDER not in e.sftp.dirs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "stderr", "reason"),
+    [
+        ("docker-compose.yml", "docker: Error response from daemon: cannot start the helper container\n",
+         "docker: Error response from daemon: cannot start the helper container"),
+        ("stack.env", "", "Exit 137"),
+        ("docker-compose.yml", "  \n", "Exit 137"),
+        ("docker-compose.yml", "Error: No such volume.\n", "Error: No such volume"),
+    ],
+    ids=["compose-stderr", "env-ohne-stderr", "compose-leere-stderr", "stderr-mit-punkt"],
+)
+async def test_a_failed_read_never_shows_what_the_command_printed(env, name, stderr, reason):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    inner = e.fake.run_argv
+
+    async def run_argv(host, argv, **kwargs):
+        if argv[:2] == ["docker", "run"] and argv[-2] == name:
+            return result("TOKEN=geheim123\n", stderr, 137)
+        return await inner(host, argv, **kwargs)
+
+    e.fake.run_argv = run_argv
+    done = await e.executor.execute(_request(plan))
+    assert done.error == f"{name} ließ sich bei Portainer nicht lesen: {reason}. Geändert wurde nichts."
+    assert "geheim123" not in done.error and FOLDER not in e.sftp.dirs
+
+
+@pytest.mark.asyncio
+async def test_without_usable_container_names_there_is_nothing_to_compare(env):
+    e = env()
+    stack = SimpleNamespace(members=[SimpleNamespace(name="kaputt;id"), SimpleNamespace(name="-vorne")])
+    assert await e.executor._images(e.host, stack) == {}
+    assert not any(c[:2] == ["docker", "inspect"] for c in e.fake.argv_calls)
+
+
+@pytest.mark.asyncio
+async def test_a_folder_that_appears_after_the_plan_is_left_alone(env):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    e.sftp.dirs.add(FOLDER)
+    done = await e.executor.execute(_request(plan))
+    assert done.error == f"Den Ordner {FOLDER} gibt es schon. Nodvard Deck überschreibt nie einen bestehenden Ordner. Geändert wurde nichts."
+    assert FOLDER in e.sftp.dirs and not any(c[:2] == ["docker", "run"] for c in e.fake.argv_calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        (lambda e: setattr(e.fake, "containers", [PORTAINER, SECOND_PORTAINER]),
+         "Auf diesem Server gibt es mehrere Portainer mit eigenem Speicher (portainer_data, zweiter_data)."),
+        (lambda e: setattr(e.fake, "containers", []), "Portainer oder der Stack ist inzwischen nicht mehr zu finden."),
+        (lambda e: setattr(e.fake, "rows", []), "Portainer oder der Stack ist inzwischen nicht mehr zu finden."),
+        (lambda e: setattr(e.fake, "rows", [_portainer_row(config_files="/data/compose/7/a.yml,/data/compose/7/b.yml")]),
+         "Dieser Portainer-Stack besteht aus mehreren Dateien (etwa aus Git). Das kann der Umzug noch nicht."),
+    ],
+    ids=["zweiter-portainer", "portainer-weg", "stack-weg", "mehrere-dateien"],
+)
+async def test_a_portainer_that_changes_after_the_plan_stops_the_move(env, change, error):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    _after_plan(e, change)
+    done = await e.executor.execute(_request(plan))
+    assert done.success is False and done.error.startswith(error) and done.error.endswith(" Geändert wurde nichts."), done.error
+    assert not any(c[:2] == ["docker", "run"] for c in e.fake.argv_calls) and FOLDER not in e.sftp.dirs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exc", "created", "opened"),
+    [(RuntimeError("kaputt"), True, 3), (asyncio.CancelledError(), True, 3), (RuntimeError("kaputt"), False, 2)],
+    ids=["fehler", "abbruch", "nichts-angelegt"],
+)
+async def test_an_abort_while_laying_out_takes_the_folder_back_and_goes_on(env, caplog, exc, created, opened):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    real = e.executor._create.lay_out
+
+    async def lay_out(*args, **kwargs):
+        if created:
+            await real(*args, **kwargs)
+        raise exc
+
+    e.executor._create.lay_out = lay_out
+    connections = _count_sftp(e)
+    with pytest.raises(type(exc)):
+        await e.executor.execute(_request(plan))
+    assert FOLDER not in e.sftp.dirs and not [p for p in e.sftp.files if p.startswith(FOLDER)]
+    assert "kuma" not in e.store.for_host("h1") and not _rolled(e.fake.argv_calls)
+    assert e.actions.locks.held("h1", "kuma") is None and "left_after_abort" not in caplog.text
+    assert len(connections) == opened, "ohne Angelegtes öffnet das Aufräumen keine zweite Verbindung"
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_error_while_rolling_out_keeps_the_folder_and_logs_it(env, caplog):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    _raises(e, lambda argv: "--force-recreate" in argv, RuntimeError("kaputt"))
+    with pytest.raises(RuntimeError, match="kaputt"):
+        await e.executor.execute(_request(plan))
+    assert f"{FOLDER}/compose.yaml" in e.sftp.files and "kuma" not in e.store.for_host("h1")
+    assert f"docker_portainer_move_left_after_abort project=kuma folder={FOLDER} compose_may_run=True" in caplog.text
+    assert e.actions.locks.held("h1", "kuma") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("exc", "reason"), [(OSError("Platte voll"), "Platte voll"), (PermissionError(), "PermissionError")])
+async def test_a_move_that_cannot_be_remembered_says_so(env, monkeypatch, exc, reason):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    _add_fails(monkeypatch, e, exc)
+    done = await e.executor.execute(_request(plan))
+    assert done.success is False and done.error == (
+        f"Der Stack läuft jetzt aus {FOLDER}, Nodvard Deck konnte sich ihn aber nicht merken ({reason}). Übernimm ihn im Reiter Stacks. "
+        f"{e.m.move.KEEP_IN_PORTAINER}")
+    assert f"{FOLDER}/compose.yaml" in e.sftp.files and "kuma" not in e.store.for_host("h1")
+
+
+@pytest.mark.asyncio
+async def test_a_half_done_roll_out_that_cannot_be_remembered_says_so(env, monkeypatch):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    e.fake.verb = result(stderr="Error response from daemon: port is already allocated\n", code=1)
+    _add_fails(monkeypatch, e, OSError("Platte voll"))
+    done = await e.executor.execute(_request(plan))
+    assert (f"Die Container kommen schon aus {FOLDER}; übernehmen ließ er sich nicht (Platte voll). Übernimm ihn im Reiter Stacks. "
+            "Behebe den Grund und wende ihn im Reiter Stacks noch einmal an.") in done.error
+    assert f"{FOLDER}/compose.yaml" in e.sftp.files and "kuma" not in e.store.for_host("h1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stderr", ["Docker ist nicht erreichbar.\n", "Docker ist nicht erreichbar\n"])
+async def test_a_stack_that_cannot_be_read_after_the_move_is_still_adopted(env, stderr):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    inner = e.fake.run_argv
+
+    async def run_argv(host, argv, **kwargs):
+        answer = await inner(host, argv, **kwargs)
+        if "--force-recreate" in argv:
+            e.fake.list = result(stderr=stderr, code=1)
+        return answer
+
+    e.fake.run_argv = run_argv
+    done = await e.executor.execute(_request(plan))
+    assert done.success is False and done.exit_code == 0
+    assert done.output == f"Stack „kuma“ liegt jetzt in {FOLDER} und ist übernommen."
+    assert done.error == f"Prüfung danach nicht möglich: Docker ist nicht erreichbar. {e.m.move.KEEP_IN_PORTAINER}"
+    assert "kuma" in e.store.for_host("h1")
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_after_the_containers_moved_logs_a_stack_it_could_not_remember(env, monkeypatch, caplog):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    e.fake.up["hang"] = True
+    _add_fails(monkeypatch, e, OSError("Platte voll"))
+    task = asyncio.create_task(e.executor.execute(_request(plan)))
+    await _until(lambda: _rolled(e.fake.argv_calls))
+    e.fake.rows = [_portainer_row(working_dir=FOLDER, config_files=f"{FOLDER}/compose.yaml")]
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 5)
+    assert f"docker_portainer_move_not_adopted project=kuma folder={FOLDER} reason=Platte voll" in caplog.text
+    assert f"{FOLDER}/compose.yaml" in e.sftp.files and "kuma" not in e.store.for_host("h1")
+    assert "left_after_abort" not in caplog.text, "die Container laufen aus dem Ordner, er gilt nicht als Rest"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("exc", "logged"), [(OSError("Kanal zu"), False), (RuntimeError("kaputt"), True)])
+async def test_a_clean_up_that_fails_names_what_stays(env, caplog, exc, logged):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    e.fake.config = result(stderr="service app: invalid\n", code=15)
+    real = e.fake.sftp
+
+    @asynccontextmanager
+    async def sftp(host):
+        if FOLDER in e.sftp.dirs:
+            raise exc
+        async with real(host) as server:
+            yield server
+
+    e.fake.sftp = sftp
+    done = await e.executor.execute(_request(plan))
+    assert "Compose lehnt die Datei ab" in done.error and f" Beim Aufräumen blieb stehen: {FOLDER}, {FOLDER}/.env." in done.error
+    assert f"rmdir -- {FOLDER}" in done.error and done.error.endswith("Am Stack hat sich nichts geändert.")
+    assert FOLDER in e.sftp.dirs and f"{FOLDER}/.env" in e.sftp.files
+    failures = [r for r in caplog.records if "docker_portainer_move_clean_up_failed project=kuma" in r.getMessage()]
+    assert bool(failures) is logged and all(r.exc_info for r in failures)
+
+
+@pytest.mark.asyncio
+async def test_a_clean_up_that_is_cancelled_itself_is_logged(env, caplog):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    real = e.executor._create.lay_out
+    removing = asyncio.Event()
+
+    async def lay_out(*args, **kwargs):
+        await real(*args, **kwargs)
+        raise RuntimeError("kaputt")
+
+    async def stuck_remove(path):
+        removing.set()
+        await asyncio.sleep(3600)
+
+    e.executor._create.lay_out, e.sftp.remove = lay_out, stuck_remove
+    task = asyncio.create_task(e.executor.execute(_request(plan)))
+    await asyncio.wait_for(removing.wait(), 5)
+    for cleanup in list(e.executor._cleanups):
+        cleanup.cancel()
+    with pytest.raises(RuntimeError, match="kaputt"):
+        await asyncio.wait_for(task, 5)
+    assert f"docker_portainer_move_clean_up_cancelled project=kuma folder={FOLDER}" in caplog.text
+    assert not e.executor._cleanups and FOLDER in e.sftp.dirs
+
+
+@pytest.mark.asyncio
+async def test_a_clean_up_that_breaks_after_a_cancel_is_logged_with_its_error(env, caplog):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    e.fake.up.update({"hang": True, "moves": False})
+
+    async def broken(host, project):
+        raise RuntimeError("kaputt")
+
+    e.move.working_dirs = broken
+    task = asyncio.create_task(e.executor.execute(_request(plan)))
+    await _until(lambda: _rolled(e.fake.argv_calls))
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 5)
+    failures = [r for r in caplog.records if f"docker_portainer_move_clean_up_failed project=kuma folder={FOLDER}" in r.getMessage()]
+    assert len(failures) == 1 and failures[0].exc_info[1].args == ("kaputt",)
+    assert not [r for r in caplog.records if r.name == "asyncio"], "der Fehler wird nur einmal gemeldet"
+    assert f"{FOLDER}/compose.yaml" in e.sftp.files and "left_after_abort" not in caplog.text

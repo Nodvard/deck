@@ -4,6 +4,7 @@ Dienste neu erstellen und prüfen. Startet einer nicht, geht es zur alten Versio
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import hashlib
 import json
@@ -39,6 +40,7 @@ from .stack_backup import (
     ARCHIVE_BUDGET_S,
     BACKUP_IMAGE,
     BACKUP_ROOT,
+    CONTENTS_FILE,
     NO_VOLUMES,
     PART_SUFFIX,
     STOP_TIMEOUT_S,
@@ -50,6 +52,7 @@ from .stack_backup import (
     cmd_start_services,
     cmd_stop_archive,
     cmd_stop_services,
+    contents,
     restore_hint,
 )
 from .stacks import DockerStacks, Stack, StackProblem, no_such_file
@@ -164,6 +167,8 @@ class Running:
     running: bool = True
     volumes: tuple[str, ...] = ()
     """Die benannten Volumes seiner Container."""
+    up: tuple[str, ...] = ()
+    """Die Container, die gerade laufen."""
 
 
 def parse_container_images(text: str) -> dict[str, Running]:
@@ -190,7 +195,8 @@ def parse_container_images(text: str) -> dict[str, Running]:
         name, ref, image_id, _, _ = found[0]
         mixed = len({r[1] for r in found}) > 1 or len({r[2] for r in found}) > 1
         volumes = tuple(sorted(set().union(*(r[4] for r in found))))
-        out[service] = Running(service, name, ref, image_id, tuple(r[0] for r in found), mixed, any(r[3] for r in found), volumes)
+        out[service] = Running(service, name, ref, image_id, tuple(r[0] for r in found), mixed, any(r[3] for r in found), volumes,
+                               tuple(r[0] for r in found if r[3]))
     return out
 
 
@@ -406,6 +412,15 @@ def _uses(current: dict[str, Running]) -> dict[str, tuple[tuple[str, ...], bool]
     return {service: (entry.volumes, entry.running) for service, entry in current.items()}
 
 
+async def _write_contents(sftp: Any, folder: str, volumes: list[str], kind: Any) -> None:
+    """Legt die Inhaltsliste neu an, nur für den Zugang lesbar; `kind` ist die Attribut-Klasse des SFTP-Clients."""
+    async with sftp.open(f"{folder}/{CONTENTS_FILE}", "xb", kind(permissions=0o600)) as handle:
+        # Nicht jeder SFTP-Server übernimmt die Rechte beim Anlegen; vor dem Schreiben noch einmal setzen.
+        with contextlib.suppress(Exception):
+            await handle.chmod(0o600)
+        await handle.write(contents(volumes))
+
+
 class TimedOut(str):
     """Ein Grund, nach dem Compose auf dem Server noch laufen kann."""
 
@@ -565,7 +580,7 @@ class DockerStackUpdateExecutor:
                 after = ("die Dienste laufen weiter mit der alten Version." if not_started is None else
                          f"die Dienste ließen sich aber nicht wieder starten ({not_started}). Starte den Stack im Reiter Stacks.")
                 return _fail(f"{problem} Aktualisiert wurde nichts; {after}", started)
-            saved = f" Volumes gesichert in {folder}. {restore_hint(folder)}"
+            saved = f" Volumes gesichert in {folder}. {restore_hint()}"
         try:
             return await self._finish(host, stack, changed, current, new, pending, stored, held, started, saved)
         except BaseException:
@@ -635,12 +650,15 @@ class DockerStackUpdateExecutor:
             return "", problem, None
         home, owner = found
         folder = backup_folder(home, stack.project, time.strftime("%Y%m%d-%H%M%S", time.gmtime()))
+        step = "Der Ordner für die Sicherung ließ sich nicht anlegen"
+        reached = False
         try:
             async with self._ctx.exec.sftp(host) as sftp:
                 kind = type(await sftp.stat(home))
                 path = home
-                for part in (BACKUP_ROOT, stack.project, folder.rsplit("/", 1)[1]):
+                for depth, part in enumerate((BACKUP_ROOT, stack.project, folder.rsplit("/", 1)[1])):
                     path = f"{path}/{part}"
+                    reached = depth == 2
                     try:
                         await sftp.mkdir(path, kind(permissions=0o700))
                     except Exception as first:  # ein vorhandener Ordner ist recht
@@ -650,8 +668,15 @@ class DockerStackUpdateExecutor:
                             raise (first if no_such_file(second) else second) from None
                         if not statmod.S_ISDIR(attrs.permissions or 0):
                             raise
+                step = "Die Inhaltsliste der Sicherung ließ sich nicht anlegen"
+                await _write_contents(sftp, folder, volumes, kind)
         except Exception as exc:  # noqa: BLE001 - als Grund melden
-            return "", f"Der Ordner für die Sicherung ließ sich nicht anlegen: {str(exc) or type(exc).__name__}", None
+            # Ging beim Zeitordner nur die Antwort verloren, steht er womöglich schon.
+            removed = not reached or await asyncio.shield(self._remove_folder(host, folder))
+            left = "" if removed else (
+                f" Der Ordner {folder} kann noch leer auf dem Server liegen; lösche ihn im Reiter Stacks unter „Sicherungen“.")
+            reason = (str(exc) or type(exc).__name__).rstrip(".")
+            return "", f"{step}: {reason}.{left}", None
         except BaseException:
             # Der Server kann den Ordner schon angelegt haben; auch ein zweiter Abbruch soll ihn nicht liegen lassen.
             await asyncio.shield(self._remove_folder(host, folder))
@@ -718,18 +743,24 @@ class DockerStackUpdateExecutor:
         """Ist nichts fertig gepackt, geht der Zeitordner weg; sonst nennt die Meldung, was dort liegt."""
         if packed:
             return (f" Schon gepackt: {', '.join(packed)} in {folder}. Diese Sicherung ist unvollständig; brauchst du sie nicht, lösche "
-                    "den Ordner im Dateimanager.")
+                    "sie im Reiter Stacks unter „Sicherungen“.")
         if hint or await self._remove_folder(host, folder):
             return ""
         return f" Der Ordner {folder} ließ sich nicht entfernen; sieh nach, ob darin schon ein fertiges Archiv liegt."
 
     async def _remove_folder(self, host: Any, folder: str) -> bool:
-        """Entfernt den Zeitordner, wenn er leer ist; False, wenn er danach noch da sein kann."""
+        """Entfernt den Zeitordner, wenn darin höchstens die Inhaltsliste liegt; False, wenn er danach noch da sein kann."""
         try:
             async with self._ctx.exec.sftp(host) as sftp:
+                if {str(n) for n in await sftp.listdir(folder)} - {".", ".."} == {CONTENTS_FILE}:
+                    try:
+                        await sftp.remove(f"{folder}/{CONTENTS_FILE}")
+                    except Exception as exc:
+                        if not no_such_file(exc):
+                            raise
                 await sftp.rmdir(folder)
         except Exception as exc:
-            if isinstance(exc, FileNotFoundError) or type(exc).__name__ in ("SFTPNoSuchFile", "SFTPNoSuchPath"):
+            if no_such_file(exc):
                 return True
             log.warning("docker_stack_backup_folder_not_removed folder=%s", folder, exc_info=True)
             return False

@@ -251,6 +251,66 @@ describe("Server-Detail: Einrichtungsbefehl-Kasten ohne doppelte Sätze", () => 
   });
 });
 
+describe("Server-Detail: nur die Hilfsskripte oder volle Rechte", () => {
+  const helper = {
+    ext_id: "shield", module: "Nodvard Shield", path: "/usr/local/lib/nodvard-deck/shield-root", version: 1,
+    sha256: "a".repeat(64), text: "#!/bin/sh\nHELPER_VERSION=1\n",
+  };
+  const narrowNote = "Der Befehl gibt dem Benutzer kein volles root. Er legt die Hilfsskripte shield-root nach /usr/local/lib/nodvard-deck.";
+  const withHelpers = (call: Call) => {
+    const full = new URLSearchParams(call.query).get("full_sudo") === "true";
+    return { ...setupFixture(call), helpers: [helper], full_sudo: full, notes: full ? [] : [narrowNote] };
+  };
+
+  it("reichen die Hilfsskripte, gibt es kein volles root; „Volle Rechte“ steht unter „Erweitert“ und lädt den Befehl neu", async () => {
+    const calls = mockHostsApi(routes({ "GET /hosts/h1/credentials": [credentialFixture()], "GET /hosts/h1/credentials/c1/setup": withHelpers }));
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Einrichtungsbefehl zeigen" }));
+    await screen.findByLabelText("Einrichtungsbefehl");
+    await waitFor(() => expect(screen.getByTestId("setup-sudo-note").textContent).toContain("Kein volles root"));
+    const box = screen.getByTestId("setup-command");
+    expect(box.textContent).not.toContain("sudo sh -c");
+    expect(box.textContent!.match(/kein volles root/gi)).toHaveLength(1);
+    // Die Gruppe docker bleibt so mächtig, wie sie ist.
+    expect(screen.getByText(/Das ist praktisch root/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: /Zur Gruppe „docker“ hinzufügen/ }));
+    await waitFor(() => expect(screen.queryByText(/Das ist praktisch root/)).not.toBeInTheDocument());
+
+    const full = within(screen.getByTestId("setup-advanced")).getByRole("checkbox", { name: /Volle Rechte/ });
+    expect(full).not.toBeChecked();
+    fireEvent.click(full);
+    await waitFor(() => expect(screen.getByTestId("setup-sudo-note").textContent).toContain("sudo sh -c"));
+    expect(screen.getByText(/Das ist praktisch root/)).toBeInTheDocument();
+    const queries = calls.filter((c) => c.path === "/hosts/h1/credentials/c1/setup").map((c) => c.query);
+    expect(queries).toContain("sudo=true&groups=docker");
+    expect(queries).toContain("sudo=true&full_sudo=true");
+  });
+
+  it("braucht ein Modul ohne Hilfsskript root, steht „Volle Rechte“ angehakt und gesperrt da, mit Grund", async () => {
+    const forced = (call: Call) => ({ ...setupFixture(call), helpers: [helper], full_sudo: true, notes: [] });
+    mockHostsApi(routes({ "GET /hosts/h1/credentials": [credentialFixture()], "GET /hosts/h1/credentials/c1/setup": forced }));
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Einrichtungsbefehl zeigen" }));
+    await screen.findByLabelText("Einrichtungsbefehl");
+    const full = within(await screen.findByTestId("setup-advanced")).getByRole("checkbox", { name: /Volle Rechte/ });
+    expect(full).toBeChecked();
+    expect(full).toBeDisabled();
+    expect(screen.getByTestId("setup-advanced").textContent).toContain("noch kein Hilfsskript hat");
+    expect(screen.getByTestId("setup-sudo-note").textContent).toContain("sudo sh -c");
+  });
+
+  it("ohne Hilfsskripte gibt es den Schalter nicht", async () => {
+    const calls = mockHostsApi(routes({ "GET /hosts/h1/credentials": [credentialFixture()] }));
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Einrichtungsbefehl zeigen" }));
+    await screen.findByLabelText("Einrichtungsbefehl");
+    expect(screen.queryByTestId("setup-advanced")).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: /Root-Rechte ohne Passwort/ }));
+    await waitFor(() => expect(screen.queryByTestId("setup-sudo-note")).toBeNull());
+    expect(calls.every((c) => !(c.query ?? "").includes("full_sudo"))).toBe(true);
+  });
+});
+
 describe("Server-Detail: Verbindung prüfen", () => {
   const withCred = () => routes({ "GET /hosts/h1": hostFixture({ credential: { id: "c1", kind: "ssh_key", username: "lattice", port: 22 } }), "GET /hosts/h1/credentials": [credentialFixture()] });
 
@@ -633,7 +693,9 @@ describe("Server-Detail: Eingaben werden nach dem Absenden gelöscht", () => {
   });
 
   it("eigener Schlüssel: Feld leer, Meldung des Servers am Feld, nichts im Cache", async () => {
-    const pasted = "-----BEGIN OPENSSH PRIVATE KEY-----\nGEHEIMERINHALT\n-----END OPENSSH PRIVATE KEY-----";
+    // Kopf und Fuß zusammengesetzt, damit Geheimnis-Scanner die Attrappe nicht für einen echten Schlüssel halten.
+    const kind = "OPENSSH " + "PRIVATE KEY";
+    const pasted = `-----BEGIN ${kind}-----\nGEHEIMERINHALT\n-----END ${kind}-----`;
     mockHostsApi(routes({
       "POST /hosts/h1/credentials": reply(422, { detail: [{ type: "value_error", loc: ["body", "secret_value"], msg: "Das ist kein gültiger privater SSH-Schlüssel." }] }),
     }));

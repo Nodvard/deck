@@ -143,6 +143,11 @@ _ERRORS: dict[str, tuple[int, str]] = {
     "invalid_code": (400, "Der Code fehlt oder enthält ein Zeichen, das sich nicht senden lässt."),
     "invalid_fingerprint": (400, "Der bestätigte Fingerabdruck ist kein SHA-256-Fingerabdruck."),
     "name_taken": (409, "Der Kurzname „{name}“ gehört schon zu einem anderen Proxmox-Server. Nimm einen anderen."),
+    "name_twice": (
+        409,
+        ("Der Kurzname „{name}“ steht in den Einstellungen bei zwei Verbindungen. Benenne unter Einstellungen → "
+         "Erweiterungen → Proxmox VE eine davon um und verbinde dann noch einmal."),
+    ),
     "already_connected": (
         409,
         ("Diese Adresse ist schon als „{name}“ eingetragen. Lass den Kurznamen leer oder nimm „{name}“ – dann bekommt "
@@ -446,6 +451,10 @@ class _Plan:
 def _plan(connections: list[dict[str, Any]], target: _Target, name: str | None) -> _Plan:
     """Prüft VOR dem Senden des Passworts, ob Kurzname und Adresse zusammenpassen."""
     same = [c for c in connections if same_target(str(c.get("base_url") or ""), target.base_url)]
+    wanted = name if name is not None else (str(same[0].get("name")) if same else None)
+    # Bei zwei Verbindungen mit dem Namen hinge es von der Reihenfolge ab, welche das Token bekommt.
+    if wanted is not None and sum(1 for c in connections if c.get("name") == wanted) > 1:
+        raise PasswordConnectError("name_twice", name=wanted)
     if name is not None:
         by_name = next((c for c in connections if c.get("name") == name), None)
         if by_name is not None and not same_target(str(by_name.get("base_url") or ""), target.base_url):
@@ -453,9 +462,7 @@ def _plan(connections: list[dict[str, Any]], target: _Target, name: str | None) 
         if same and same[0].get("name") != name:
             raise PasswordConnectError("already_connected", name=str(same[0].get("name")))
         return _Plan(name=name)
-    if same:
-        return _Plan(name=str(same[0].get("name")))
-    return _Plan(name=None)
+    return _Plan(name=wanted)
 
 
 def _derive_name(candidate: str, connections: list[dict[str, Any]]) -> str:
@@ -1645,9 +1652,12 @@ async def _save(ctx: Any, *, name: str, base_url: str, token_id: str, token_valu
     settings = await ctx.settings.get()
     before = [dict(c) for c in settings.get("connections") or [] if isinstance(c, dict)]
     connections = [dict(c) for c in before]
-    existing = next((c for c in connections if c.get("name") == name), None)
+    named = [c for c in connections if c.get("name") == name]
+    existing = named[0] if named else None
+    # Inzwischen (während der Anmeldung) hat jemand den Namen doppelt oder für einen anderen Server vergeben.
+    if len(named) > 1:
+        raise PasswordConnectError("name_twice", name=name)
     if existing is not None and not same_target(str(existing.get("base_url") or ""), base_url):
-        # Inzwischen (während der Anmeldung) hat jemand den Namen für einen anderen Server vergeben.
         raise PasswordConnectError("name_taken", name=name)
     replaced: str | None = None
     # Mit `pin` wird der Fingerabdruck gemerkt und "Selbstsigniertes Zertifikat erlauben" geht aus. Ohne (anerkanntes

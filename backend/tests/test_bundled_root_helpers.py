@@ -18,6 +18,7 @@ from nodvard_deck.ext.root_helpers import MAX_HELPER_BYTES, RootHelperFile, read
 REPO_EXTENSIONS_DIR = Path(__file__).resolve().parents[2] / "extensions"
 
 PINNED = {
+    ("docker", 1): "6106247478608e47ce207d1e4788994e6d22cbaa06ffd6b87b0b910487db3798",
     ("shield", 1): "56f2bbd11188f6321d2ecca26d84db614bcf7c0814326f262d687b90264652ef",
     ("shield", 2): "06cbf646edf4ee9bc9e265b226b56d4d71822c2ee67d9a9d5d61c7f234c58d14",
     ("shield", 3): "40ba30ad425c6b28600a2838a844a122305911c9533f7df98784c4ae59ce004b",
@@ -58,7 +59,7 @@ def _shells() -> list[str]:
 
 
 def test_exactly_the_modules_with_root_commands_bring_a_helper():
-    assert sorted(_helpers()) == ["shield", "system"]
+    assert sorted(_helpers()) == ["docker", "shield", "system"]
 
 
 def test_every_helper_is_pinned_to_its_version():
@@ -78,7 +79,7 @@ def test_all_helpers_fit_into_one_setup_command():
 
     key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlatzhalterPlatzhalterPlatzhalterPlatzhalter deck@pi"
     _, one_liner = build_setup_script("deck", key, sudo=True, helpers=list(_helpers().values()))
-    assert len(one_liner) <= MAX_ONE_LINER * 0.8
+    assert len(one_liner.encode()) <= MAX_ONE_LINER * 0.8
     assert all(len(h.text) <= MAX_HELPER_BYTES for h in _helpers().values())
 
 

@@ -148,6 +148,7 @@ class Extension(NodvardExtension):
             WidgetSpec(
                 id="certificates",
                 title="Zertifikate",
+                group="security",
                 icon="shield-alert",
                 size=GridSize(w=2, h=2),
                 refresh=Refresh(interval_s=600),

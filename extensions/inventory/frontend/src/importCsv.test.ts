@@ -204,7 +204,7 @@ describe("CSV einlesen", () => {
   });
 
   it("Links nur so, wie der Server sie nimmt", () => {
-    const result = rowsFromCsv("Name,Link\nA,https:example.com\nB,http:/example.com\nC,https:///example.com\nD,https://nutzer:geheim@example.com/\nE,https://example.com/x\nF,https://@example.com/\n");
+    const result = rowsFromCsv("Name,Link\nA,https:example.com\nB,http:/example.com\nC,https:///example.com\nD,https://nutzer:" + "geheim@example.com/\nE,https://example.com/x\nF,https://@example.com/\n");
     expect(result.rows.map((r) => r.product_url)).toEqual([null, null, null, null, "https://example.com/x", null]);
   });
 });

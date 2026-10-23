@@ -1,7 +1,5 @@
-"""Prüfung nach dem Starten von Containern: laufen sie wirklich, und bleiben sie laufen?
-
-Gemeinsam für Start, Neustart, Stack-Neustart (`capabilities`) und Image-Update samt Rücksprung (`applier`). Nur lesend.
-"""
+"""Prüfung nach dem Starten von Containern: laufen sie wirklich, und bleiben sie laufen? Nur lesend; gemeinsam für
+Start, Neustart, Stack-Neustart (`capabilities`) und Image-Update samt Rücksprung (`applier`)."""
 
 from __future__ import annotations
 
@@ -39,9 +37,7 @@ async def wait_settled(
     restarts_allowed: int = 0, loop_text: LoopText | None = None,
 ) -> tuple[ia.Verdict, ia.Snapshot | None]:
     """Liest den Zustand, bis `judge(snap, final)` entschieden hat; mit `final=True` (Zeit um) muss es entscheiden.
-
-    Ein Lesefehler zählt nicht; meldet sich der Host bis zum Ende nicht, ist der Zustand "nicht prüfbar".
-    """
+    Ein Lesefehler zählt nicht; meldet sich der Host bis zum Ende nicht, ist der Zustand "nicht prüfbar"."""
     deadline = time.monotonic() + timeout_s
     snap: ia.Snapshot | None = None
     first_ok: tuple[ia.Snapshot, float] | None = None
@@ -99,10 +95,8 @@ def cmd_stack_running(project: str) -> str:
 
 
 def judge_running(snap: ia.Snapshot, final: bool, *, expected: int) -> ia.Verdict | None:
-    """Laufen alle `expected` Container? `None`: noch nicht entschieden.
-
-    Wie `ia.judge_verify`, nur ohne den Vergleich der Images: es wurde ja nur gestartet.
-    """
+    """Laufen alle `expected` Container? `None`: noch nicht entschieden. Wie `ia.judge_verify`, nur ohne den Vergleich
+    der Images, denn es wurde nur gestartet."""
     members = snap.members
 
     def who(m: ia.Member) -> str:

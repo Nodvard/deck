@@ -8,6 +8,7 @@ import { LoadError, errorMessage, fetchJson } from "../../../_shared/frontend/sr
 import { Badge, Button } from "../../../_shared/frontend/src/ui";
 
 import { hostAction } from "./hostAction";
+import { OperateNote } from "./operate";
 
 export type ResourceKind = "images" | "volumes" | "networks";
 
@@ -203,6 +204,8 @@ export function ResourceList({ hostId, kind }: { hostId: string; kind: ResourceK
   );
 }
 
+interface DockerHost { id: string; name: string; mode?: "full" | "operate" }
+
 /** Ein Reiter mit Server-Auswahl; der Server folgt `?host=`, ohne Angabe der erste. */
 export function ResourcesSection({ kind, hostId, onHost, empty }: {
   kind: ResourceKind;
@@ -223,14 +226,14 @@ export function HostSection({ hostId, onHost, empty, children }: {
   empty: ReactNode;
   children: (hostId: string) => ReactNode;
 }): JSX.Element {
-  const [hosts, setHosts] = useState<{ id: string; name: string }[] | null>(null);
+  const [hosts, setHosts] = useState<DockerHost[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
     setError(null);
-    fetchJson<{ hosts: { id: string; name: string }[] }>("/ext/docker/hosts", { signal: controller.signal })
+    fetchJson<{ hosts: DockerHost[] }>("/ext/docker/hosts", { signal: controller.signal })
       .then((body) => { if (!controller.signal.aborted) setHosts(body.hosts ?? []); })
       .catch((err: unknown) => { if (!controller.signal.aborted) setError(errorMessage(err)); });
     return () => controller.abort();
@@ -247,11 +250,11 @@ export function HostSection({ hostId, onHost, empty, children }: {
           Server
           <select value={current.id} onChange={(e) => onHost(e.target.value)}
             className="rounded-lg border border-white/10 bg-black/25 px-2 py-1 text-sm outline-none focus:border-[var(--color-accent)]">
-            {hosts.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
+            {hosts.map((h) => <option key={h.id} value={h.id}>{h.name}{h.mode === "operate" ? " (nur bedienen)" : ""}</option>)}
           </select>
         </label>
       )}
-      {children(current.id)}
+      {current.mode === "operate" ? <OperateNote hostId={current.id} name={current.name} /> : children(current.id)}
     </section>
   );
 }

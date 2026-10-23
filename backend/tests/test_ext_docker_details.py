@@ -1,7 +1,7 @@
-"""Portainer-Ersatz: Container-Details, Docker-Speicher, Aufraeumen.
+"""Portainer-Ersatz: Container-Details, Docker-Speicher, Aufräumen.
 
 Die df-/images-Zeilen sind echte Ausgaben von Docker 29.8 auf einem Raspberry Pi,
-nur die Image-Liste gekuerzt."""
+nur die Image-Liste gekürzt."""
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ def test_inspect_is_a_whitelist_env_values_never_leave():
                   "ExitCode": 0, "OOMKilled": False, "Health": {"Status": "healthy"}},
         "Config": {
             "Image": "postgres:16",
-            "Env": ["POSTGRES_PASSWORD=GEHEIM", "DATABASE_URL=postgres://u:GEHEIM@db/x", "TZ=Europe/Berlin", "PATH=/usr/bin"],
+            "Env": ["POSTGRES_PASSWORD=GEHEIM", "DATABASE_URL=postgres://u:" + "GEHEIM@db/x", "TZ=Europe/Berlin", "PATH=/usr/bin"],
             "Cmd": ["postgres", "--password=GEHEIM"],
             "Labels": {"com.docker.compose.project": "nextcloud", "com.docker.compose.service": "db",
                        "com.docker.compose.project.working_dir": "/opt/nextcloud"},

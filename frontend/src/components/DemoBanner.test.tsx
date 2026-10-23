@@ -142,10 +142,10 @@ describe("DemoBanner", () => {
 
 describe("removeQuestion", () => {
   it("nennt Zahlen, Layout und Server mit Zugang", () => {
-    const text = removeQuestion({ active: true, hosts: 5, notifications: 4, layout_replaced: true, hosts_with_access: ["Beispiel-Raspberry-Pi"] });
+    const text = removeQuestion({ active: true, hosts: 5, notifications: 4, layout_replaced: true, hosts_with_access: ["Beispiel-Heimserver"] });
     expect(text).toContain("5 Beispiel-Server, 4 Beispiel-Meldungen");
     expect(text).toContain("Dashboard-Layout wird auf den Stand von vorher zurückgesetzt");
-    expect(text).toContain("Bei „Beispiel-Raspberry-Pi“ hast du inzwischen einen Zugang hinterlegt. Er wird mit gelöscht.");
+    expect(text).toContain("Bei „Beispiel-Heimserver“ hast du inzwischen einen Zugang hinterlegt. Er wird mit gelöscht.");
   });
 
   it("nennt die Beispiel-Apps, wenn es welche gibt (und keine, wenn die Antwort das Feld nicht kennt)", () => {

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -55,6 +55,7 @@ const warning: Problem = {
 const info: Problem = { key: "update", subject: "DSM", severity: "info", title: "Update", text: "DSM 7.2.2-72806 steht bereit." };
 
 const overview = (over: Partial<Overview> = {}): Overview => ({
+  device: "synology",
   state: "ok",
   message: null,
   url: "https://nas.test:5001",
@@ -89,13 +90,18 @@ const failed = (over: Partial<Overview>): Overview =>
 
 let permissions: Set<string>;
 let urls: string[];
+/** Antwort auf eine Abfrage eines einzelnen Geräts; `GET /devices` verpackt sie als einziges Gerät. */
 let answer: () => Response | Promise<Response>;
+/** Antwort auf `GET /devices` für mehrere Geräte; ohne sie gilt `answer` als einziges Gerät. */
+let devicesAnswer: (() => Response | Promise<Response>) | null;
 
 const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
 
 beforeEach(() => {
   permissions = new Set(["hosts.read", "extensions.manage"]);
   urls = [];
+  devicesAnswer = null;
+  window.history.replaceState(null, "", "/");
   answer = () => ok(overview());
   window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
@@ -105,6 +111,11 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
     urls.push(url);
+    if (url.includes("/ext/synology/devices")) {
+      if (devicesAnswer) return devicesAnswer();
+      const single = await answer();
+      return single.ok ? ok({ devices: [await single.json()] }) : single;
+    }
     if (url.includes("/ext/synology/overview")) return answer();
     throw new Error(`Unerwarteter Fetch: ${url}`);
   }));
@@ -145,7 +156,7 @@ describe("Synology-Seite", () => {
     expect(within(disks[0]).getByText("36 °C")).toBeInTheDocument();
     expect(within(disks[0]).getByText("In Ordnung")).toBeInTheDocument();
     expect(within(disks[1]).getByTestId("disk-warning")).toHaveTextContent("Zu viele defekte Sektoren");
-    expect(urls).toEqual(["/api/v1/ext/synology/overview"]);
+    expect(urls).toEqual(["/api/v1/ext/synology/devices"]);
   });
 
   it("ohne Update steht „DSM ist aktuell“, ohne Probleme „in Ordnung“", async () => {
@@ -273,7 +284,7 @@ describe("Synology-Seite", () => {
     answer = () => ok(overview());
     fireEvent.click(problem.getByRole("button", { name: "Erneut versuchen" }));
     await waitFor(() => expect(screen.getByTestId("device")).toBeInTheDocument());
-    expect(urls).toEqual(["/api/v1/ext/synology/overview", "/api/v1/ext/synology/overview?refresh=true"]);
+    expect(urls).toEqual(["/api/v1/ext/synology/devices", "/api/v1/ext/synology/overview?device=synology&refresh=true"]);
     expect(screen.queryByTestId("problem")).not.toBeInTheDocument();
   });
 
@@ -317,7 +328,7 @@ describe("Synology-Seite", () => {
     fireEvent.click(screen.getByRole("button", { name: "Aktualisieren" }));
     expect(await screen.findByTestId("load-error")).toHaveTextContent("Server überlastet.");
     expect(screen.getByTestId("device")).toBeInTheDocument();
-    expect(urls[1]).toBe("/api/v1/ext/synology/overview?refresh=true");
+    expect(urls[1]).toBe("/api/v1/ext/synology/devices?refresh=true");
   });
 
   it("zeigt „Lade …“, solange die Antwort fehlt", async () => {
@@ -585,5 +596,364 @@ describe("Hilfen", () => {
 
   it("toneOf macht aus den Tönen des Servers die des UI-Kits", () => {
     expect(["good", "warn", "danger", "neutral", "etwas", null].map(toneOf)).toEqual(["good", "warn", "bad", "neutral", "neutral", "neutral"]);
+  });
+});
+
+describe("Mehrere Geräte", () => {
+  const second = (over: Partial<Overview> = {}): Overview => overview({
+    device: "keller", url: "https://nas2.test:5001",
+    system: { model: "DS415play", dsm_version: "DSM 7.1.1-42962 Update 9", uptime_seconds: 86400, temperature: 38, temperature_warn: false, ram_mb: 1024, clock: null },
+    load: { cpu_percent: 3, ram_percent: 20 }, volumes: [{ ...volume1, id: "volume_9", name: "Volume 9" }], disks: [], update: { available: false, version: null },
+    ...over,
+  });
+  const both = (a: Partial<Overview> = {}, b: Partial<Overview> = {}) => { devicesAnswer = () => ok({ devices: [overview({ device: "ds920", ...a }), second(b)] }); };
+
+  it("zeigt eine Auswahl mit beiden Namen und Zuständen und das erste Gerät", async () => {
+    both({}, { problems: [critical] });
+    render(<SynologyPage />);
+    const tabs = within(await screen.findByTestId("device-tabs"));
+    expect(tabs.getAllByRole("tab").map((t) => t.textContent)).toEqual(["ds920Hinweis", "kellerProblem"]);
+    expect(tabs.getByRole("tab", { name: /ds920/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getAllByTestId("device")).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: "DS220+" })).toBeInTheDocument();
+    expect(screen.getByTestId("device-name")).toHaveTextContent("ds920");
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("data-testid", "panel-ds920");
+  });
+
+  it("wechselt das Gerät, merkt es in der Adresse und folgt einer Adresse mit ?device=", async () => {
+    both();
+    const { unmount } = render(<SynologyPage />);
+    fireEvent.click(await screen.findByRole("tab", { name: /keller/ }));
+    expect(screen.getByRole("heading", { name: "DS415play" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "DS220+" })).not.toBeInTheDocument();
+    expect(screen.getByText("Volume 9")).toBeInTheDocument();
+    expect(window.location.search).toBe("?device=keller");
+    unmount();
+
+    render(<SynologyPage />);
+    expect(await screen.findByRole("heading", { name: "DS415play" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /keller/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("ein Name in der Adresse, den es nicht gibt, fällt auf das erste Gerät zurück", async () => {
+    window.history.replaceState(null, "", "/?device=entfernt");
+    both();
+    render(<SynologyPage />);
+    expect(await screen.findByRole("heading", { name: "DS220+" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /ds920/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("ein Gerät, das sich nicht abfragen lässt, zeigt Grund und Erneut versuchen; das andere bleibt voll da", async () => {
+    const message = "keller antwortet nicht (Zeitüberschreitung). Prüfe Adresse und Port und ob die Synology läuft.";
+    both({}, { state: "unreachable", message, system: null, load: null, volumes: null, disks: null, update: null });
+    render(<SynologyPage />);
+    const tabs = within(await screen.findByTestId("device-tabs"));
+    expect(tabs.getByRole("tab", { name: /keller/ })).toHaveTextContent("nicht erreichbar");
+    expect(screen.getByTestId("device")).toBeInTheDocument();
+
+    fireEvent.click(tabs.getByRole("tab", { name: /keller/ }));
+    const problem = within(screen.getByTestId("problem"));
+    expect(problem.getByText(message)).toBeInTheDocument();
+    expect(screen.queryByText("Noch nicht eingerichtet")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("device")).not.toBeInTheDocument();
+
+    // Erneut versuchen fragt nur dieses Gerät und lässt das andere in Ruhe.
+    answer = () => ok(second());
+    fireEvent.click(problem.getByRole("button", { name: "Erneut versuchen" }));
+    expect(await screen.findByRole("heading", { name: "DS415play" })).toBeInTheDocument();
+    expect(urls).toEqual(["/api/v1/ext/synology/devices", "/api/v1/ext/synology/overview?device=keller&refresh=true"]);
+    expect(tabs.getByRole("tab", { name: /keller/ })).toHaveTextContent("in Ordnung");
+    fireEvent.click(tabs.getByRole("tab", { name: /ds920/ }));
+    expect(screen.getByRole("heading", { name: "DS220+" })).toBeInTheDocument();
+  });
+
+  it("Erneut versuchen mitten in einem Aktualisieren: der Knopf wird wieder frei, die Antwort des einzelnen Geräts bleibt", async () => {
+    const down = { state: "unreachable", message: "keller antwortet nicht.", system: null, load: null, volumes: null, disks: null, update: null };
+    both({}, down);
+    render(<SynologyPage />);
+    fireEvent.click(await screen.findByRole("tab", { name: /keller/ }));
+
+    let finishAll!: (response: Response) => void;
+    let finishOne!: (response: Response) => void;
+    devicesAnswer = () => new Promise<Response>((resolve) => { finishAll = resolve; });
+    answer = () => new Promise<Response>((resolve) => { finishOne = resolve; });
+    fireEvent.click(screen.getByRole("button", { name: "Aktualisieren" }));
+    expect(screen.getByRole("button", { name: "Aktualisieren" })).toBeDisabled();
+    fireEvent.click(within(screen.getByTestId("problem")).getByRole("button", { name: "Erneut versuchen" }));
+
+    finishOne(ok(second()));
+    expect(await screen.findByRole("heading", { name: "DS415play" })).toBeInTheDocument();
+    finishAll(ok({ devices: [overview({ device: "ds920", system: { ...overview().system!, model: "DS920+" } }), second(down)] }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Aktualisieren" })).toBeEnabled());
+    expect(screen.getByRole("heading", { name: "DS415play" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /ds920/ }));
+    expect(screen.getByRole("heading", { name: "DS920+" })).toBeInTheDocument();
+  });
+
+  const down = { state: "unreachable", message: "keller antwortet nicht.", system: null, load: null, volumes: null, disks: null, update: null } as const;
+  const flush = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+
+  it("Erneut versuchen sperrt den Knopf und sagt „Prüfe …“, bis die Antwort da ist; ein zweiter Klick fragt nicht noch einmal", async () => {
+    both({}, down);
+    render(<SynologyPage />);
+    fireEvent.click(await screen.findByRole("tab", { name: /keller/ }));
+    let finish!: (response: Response) => void;
+    answer = () => new Promise<Response>((resolve) => { finish = resolve; });
+
+    const problem = within(screen.getByTestId("problem"));
+    fireEvent.click(problem.getByRole("button", { name: "Erneut versuchen" }));
+    const busy = problem.getByRole("button", { name: "Prüfe …" });
+    expect(busy).toBeDisabled();
+    fireEvent.click(busy);
+    expect(urls.filter((u) => u.includes("/overview"))).toHaveLength(1);
+
+    finish(ok(second()));
+    expect(await screen.findByRole("heading", { name: "DS415play" })).toBeInTheDocument();
+    expect(urls.filter((u) => u.includes("/overview"))).toHaveLength(1);
+  });
+
+  it("Erneut versuchen vor einem Aktualisieren: die jüngere Gesamtabfrage gilt, auch wenn die Antwort des einzelnen Geräts später kommt", async () => {
+    both({}, down);
+    render(<SynologyPage />);
+    fireEvent.click(await screen.findByRole("tab", { name: /keller/ }));
+
+    let finishOne!: (response: Response) => void;
+    let finishAll!: (response: Response) => void;
+    answer = () => new Promise<Response>((resolve) => { finishOne = resolve; });
+    fireEvent.click(within(screen.getByTestId("problem")).getByRole("button", { name: "Erneut versuchen" }));
+    devicesAnswer = () => new Promise<Response>((resolve) => { finishAll = resolve; });
+    fireEvent.click(screen.getByRole("button", { name: "Aktualisieren" }));
+
+    finishOne(ok(failed({ device: "keller", ...down })));
+    await flush();
+    finishAll(ok({ devices: [overview({ device: "ds920" }), second()] }));
+    expect(await screen.findByRole("heading", { name: "DS415play" })).toBeInTheDocument();
+    expect(screen.queryByTestId("problem")).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /keller/ })).toHaveTextContent("in Ordnung");
+  });
+
+  it("Erneut versuchen vor einem Aktualisieren: eine ältere „in Ordnung“-Antwort verdeckt keine neuere Störung", async () => {
+    both({}, down);
+    render(<SynologyPage />);
+    fireEvent.click(await screen.findByRole("tab", { name: /keller/ }));
+
+    let finishOne!: (response: Response) => void;
+    let finishAll!: (response: Response) => void;
+    answer = () => new Promise<Response>((resolve) => { finishOne = resolve; });
+    fireEvent.click(within(screen.getByTestId("problem")).getByRole("button", { name: "Erneut versuchen" }));
+    devicesAnswer = () => new Promise<Response>((resolve) => { finishAll = resolve; });
+    fireEvent.click(screen.getByRole("button", { name: "Aktualisieren" }));
+
+    finishOne(ok(second()));
+    await flush();
+    finishAll(ok({ devices: [overview({ device: "ds920" }), second(down)] }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Aktualisieren" })).toBeEnabled());
+    expect(screen.getByTestId("problem")).toHaveTextContent("keller antwortet nicht.");
+    expect(screen.getByRole("tab", { name: /keller/ })).toHaveTextContent("nicht erreichbar");
+  });
+
+  it("ein erfolgreiches Erneut versuchen löscht den Fehler eines gescheiterten Aktualisierens nicht", async () => {
+    both({}, down);
+    render(<SynologyPage />);
+    fireEvent.click(await screen.findByRole("tab", { name: /keller/ }));
+    devicesAnswer = () => new Response(JSON.stringify({ detail: "Server überlastet." }), { status: 503 });
+    fireEvent.click(screen.getByRole("button", { name: "Aktualisieren" }));
+    expect(await screen.findByTestId("load-error")).toHaveTextContent("Server überlastet.");
+
+    answer = () => ok(second());
+    fireEvent.click(within(screen.getByTestId("problem")).getByRole("button", { name: "Erneut versuchen" }));
+    expect(await screen.findByRole("heading", { name: "DS415play" })).toBeInTheDocument();
+    expect(screen.getByTestId("load-error")).toHaveTextContent("Server überlastet.");
+  });
+
+  it("scheitert Erneut versuchen, steht der Grund bei diesem Gerät, und ein anderes Gerät löscht ihn nicht", async () => {
+    both({ ...down, message: "ds920 antwortet nicht." }, down);
+    render(<SynologyPage />);
+    await screen.findByTestId("device-tabs");
+    answer = () => new Response(JSON.stringify({ detail: "Gateway Timeout" }), { status: 504 });
+    fireEvent.click(within(screen.getByTestId("problem")).getByRole("button", { name: "Erneut versuchen" }));
+
+    const reason = await within(screen.getByTestId("problem")).findByTestId("load-error");
+    expect(reason).toHaveTextContent("Die erneute Abfrage von ds920 ließ sich gerade nicht laden: Gateway Timeout");
+    expect(screen.getAllByTestId("load-error")).toHaveLength(1);
+    expect(within(screen.getByTestId("problem")).getByRole("button", { name: "Erneut versuchen" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("tab", { name: /keller/ }));
+    expect(screen.queryByTestId("load-error")).not.toBeInTheDocument();
+    answer = () => ok(second());
+    fireEvent.click(within(screen.getByTestId("problem")).getByRole("button", { name: "Erneut versuchen" }));
+    expect(await screen.findByRole("heading", { name: "DS415play" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /ds920/ }));
+    expect(within(screen.getByTestId("problem")).getByTestId("load-error")).toHaveTextContent("Die erneute Abfrage von ds920");
+  });
+
+  it("ein unbrauchbarer Eintrag bietet kein Erneut versuchen, sondern die Einstellungen", async () => {
+    const message = "Der Kurzname „mein nas“ ist ungültig. Erlaubt sind Buchstaben, Zahlen, Punkt, Bindestrich und Unterstrich.";
+    both({}, { state: "error", message, config_problem: true, system: null, load: null, volumes: null, disks: null, update: null });
+    render(<SynologyPage />);
+    fireEvent.click(await screen.findByRole("tab", { name: /keller/ }));
+    const problem = within(screen.getByTestId("problem"));
+    expect(problem.getByText(message)).toBeInTheDocument();
+    expect(problem.queryByRole("button", { name: "Erneut versuchen" })).not.toBeInTheDocument();
+    expect(problem.getByRole("link", { name: "Einstellungen" })).toHaveAttribute("href", "/settings/extensions/synology");
+  });
+
+  it.each([
+    ["ein unbrauchbarer Eintrag", { state: "error", config_problem: true }],
+    ["eine abgelehnte Anmeldung", { state: "auth_failed" }],
+  ] as const)("%s: ohne extensions.manage steht, wer es beheben kann", async (_name, over) => {
+    permissions.delete("extensions.manage");
+    both({}, { message: "Hier stimmt etwas nicht.", system: null, load: null, volumes: null, disks: null, update: null, ...over });
+    render(<SynologyPage />);
+    fireEvent.click(await screen.findByRole("tab", { name: /keller/ }));
+    const problem = within(screen.getByTestId("problem"));
+    expect(problem.getByText("Ein Administrator kann das unter Einstellungen → Erweiterungen → Synology DSM beheben.")).toBeInTheDocument();
+    expect(problem.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("mit extensions.manage führt der Link zu den Einstellungen und der Satz über den Administrator fehlt", async () => {
+    both({}, { state: "error", config_problem: true, message: "Hier stimmt etwas nicht.", system: null, load: null, volumes: null, disks: null, update: null });
+    render(<SynologyPage />);
+    fireEvent.click(await screen.findByRole("tab", { name: /keller/ }));
+    expect(within(screen.getByTestId("problem")).getByRole("link", { name: "Einstellungen" })).toBeInTheDocument();
+    expect(screen.queryByText(/Ein Administrator kann das/)).not.toBeInTheDocument();
+  });
+
+  it("die Auswahl der Geräte folgt dem Tastaturmuster der Reiter", async () => {
+    both();
+    render(<SynologyPage />);
+    const [first, last] = await screen.findAllByRole("tab");
+    const panel = screen.getByRole("tabpanel");
+    expect([first.getAttribute("tabindex"), last.getAttribute("tabindex")]).toEqual(["0", "-1"]);
+    expect(first).toHaveAttribute("aria-controls", panel.id);
+    expect(panel).toHaveAttribute("aria-labelledby", first.id);
+
+    first.focus();
+    fireEvent.keyDown(first, { key: "ArrowRight" });
+    expect(last).toHaveAttribute("aria-selected", "true");
+    expect(last).toHaveFocus();
+    expect([first.getAttribute("tabindex"), last.getAttribute("tabindex")]).toEqual(["-1", "0"]);
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", last.id);
+    expect(screen.getByRole("heading", { name: "DS415play" })).toBeInTheDocument();
+
+    fireEvent.keyDown(last, { key: "ArrowRight" });
+    expect(first).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(first, { key: "ArrowLeft" });
+    expect(last).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(last, { key: "Home" });
+    expect(first).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(first, { key: "End" });
+    expect(last).toHaveAttribute("aria-selected", "true");
+    expect(last).toHaveFocus();
+  });
+
+  it("holt den gewählten Reiter in den sichtbaren Streifen, auch wenn ihn die Adresse wählt", async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      window.history.replaceState(null, "", "/?device=keller");
+      both();
+      render(<SynologyPage />);
+      const tab = await screen.findByRole("tab", { name: /keller/ });
+      expect(scroll).toHaveBeenCalledWith({ block: "nearest", inline: "center" });
+      expect(scroll.mock.contexts.at(-1)).toBe(tab);
+
+      fireEvent.click(screen.getByRole("tab", { name: /ds920/ }));
+      expect(scroll.mock.contexts.at(-1)).toBe(screen.getByRole("tab", { name: /ds920/ }));
+    } finally {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it("zwei Einträge mit demselben Namen: jede Auswahl zeigt ihren eigenen Eintrag, auch nach dem Neuladen", async () => {
+    const twice = (text: string) => failed({ device: "nas", state: "error", message: text, config_problem: true });
+    devicesAnswer = () => ok({ devices: [twice("Der erste Eintrag."), twice("Der zweite Eintrag."), second()] });
+    const { unmount } = render(<SynologyPage />);
+    const tabs = await screen.findAllByRole("tab", { name: /^nas/ });
+    expect(screen.getByText("Der erste Eintrag.")).toBeInTheDocument();
+    fireEvent.click(tabs[1]);
+    expect(screen.getByText("Der zweite Eintrag.")).toBeInTheDocument();
+    expect(screen.getAllByRole("tab")[1]).toHaveAttribute("aria-selected", "true");
+    expect(window.location.search).toBe("?device=nas&nr=2");
+    unmount();
+
+    render(<SynologyPage />);
+    expect(await screen.findByText("Der zweite Eintrag.")).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("tab")[2]);
+    expect(window.location.search).toBe("?device=keller");
+  });
+
+  it("eine abgelehnte Anmeldung eines Geräts: Meldung, Einstellungen, kein Knopf zum erneuten Versuchen", async () => {
+    const message = "Benutzername oder Passwort stimmt nicht. Prüfe beides in den Einstellungen.";
+    both({ state: "auth_failed", message, system: null, load: null, volumes: null, disks: null, update: null });
+    render(<SynologyPage />);
+    const problem = within(await screen.findByTestId("problem"));
+    expect(problem.getByText(message)).toBeInTheDocument();
+    expect(problem.queryByRole("button", { name: "Erneut versuchen" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /ds920/ })).toHaveTextContent("Anmeldung fehlgeschlagen");
+    expect(screen.getByRole("heading", { name: "ds920" })).toBeInTheDocument();
+  });
+
+  it("ein Gerät ohne Zugangsdaten ist ein Abschnitt mit Hinweis und Link, nicht die ganze Seite", async () => {
+    const message = "Für keller fehlt das Passwort. Unter Einstellungen → Erweiterungen → Synology DSM eintragen.";
+    both({}, { state: "not_configured", message, url: "https://nas2.test:5001", system: null, load: null, volumes: null, disks: null, update: null });
+    render(<SynologyPage />);
+    fireEvent.click(await screen.findByRole("tab", { name: /keller/ }));
+    const section = within(screen.getByTestId("not-configured-device"));
+    expect(section.getByText(message)).toBeInTheDocument();
+    expect(section.getByRole("link", { name: "Jetzt einrichten" })).toHaveAttribute("href", "/settings/extensions/synology");
+    expect(screen.queryByText("Noch nicht eingerichtet")).not.toBeInTheDocument();
+  });
+
+  it("alle Geräte unbrauchbar: jede Auswahl nennt ihren Grund, nichts ist leer", async () => {
+    devicesAnswer = () => ok({ devices: [
+      failed({ device: "a", state: "unreachable", message: "a antwortet nicht." }), failed({ device: "b", state: "error", message: "Der Kurzname ist ungültig." }),
+    ] });
+    render(<SynologyPage />);
+    expect(await screen.findByText("a antwortet nicht.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /^b/ }));
+    expect(screen.getByText("Der Kurzname ist ungültig.")).toBeInTheDocument();
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["anicht erreichbar", "bFehler"]);
+  });
+
+  it("ohne Gerät steht, wie man eines einträgt; ohne Recht der Verweis auf einen Administrator", async () => {
+    devicesAnswer = () => ok({ devices: [] });
+    const { unmount } = render(<SynologyPage />);
+    expect(await screen.findByText("Noch nicht eingerichtet")).toBeInTheDocument();
+    expect(screen.getByText("Trage deine Synology unter Einstellungen → Erweiterungen → Synology DSM ein.")).toBeInTheDocument();
+    expect(screen.queryByTestId("device-tabs")).not.toBeInTheDocument();
+    unmount();
+
+    permissions.delete("extensions.manage");
+    render(<SynologyPage />);
+    expect(await screen.findByText(/Ein Administrator kann Synology DSM/)).toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("mit einem einzigen Gerät gibt es keine Auswahl und der Name steht nicht neben dem Modell", async () => {
+    render(<SynologyPage />);
+    expect(await screen.findByTestId("device")).toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("device-name")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tabpanel")).not.toBeInTheDocument();
+  });
+
+  it("Aktualisieren fragt alle Geräte neu; schlägt es fehl, bleiben beide stehen und der Fehler steht dabei", async () => {
+    both();
+    render(<SynologyPage />);
+    await screen.findByTestId("device-tabs");
+    devicesAnswer = () => new Response(JSON.stringify({ detail: "Server überlastet." }), { status: 503 });
+    fireEvent.click(screen.getByRole("button", { name: "Aktualisieren" }));
+    expect(await screen.findByTestId("load-error")).toHaveTextContent("Server überlastet.");
+    expect(urls[1]).toBe("/api/v1/ext/synology/devices?refresh=true");
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(screen.getByTestId("device")).toBeInTheDocument();
+  });
+
+  it("ein Name mit Sonderzeichen erscheint nur als Text", async () => {
+    devicesAnswer = () => ok({ devices: [overview({ device: "<b>x</b>" }), second()] });
+    render(<SynologyPage />);
+    const tab = await screen.findByRole("tab", { name: /<b>x<\/b>/ });
+    expect(tab.querySelector("b")).toBeNull();
   });
 });

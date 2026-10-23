@@ -6,14 +6,14 @@ Mattermost, Apprise-API, Matrix) dazu gegen einen echten lokalen Server -- wie n
 from __future__ import annotations
 
 import asyncio
-import socket
+import contextlib
 import sys
 
 import httpx
 import pytest
-import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
+from local_server_helpers import serve_app
 from nodvard_deck.ext.context import build_context
 from nodvard_deck.ext.runtime import (
     ExtensionRuntime,
@@ -38,6 +38,8 @@ PO_APP = "a" * 30
 # Zusammengesetzt, damit Geheimnis-Scanner die erfundene Webhook-Adresse nicht für echt halten.
 SLACK_PATH = "T0123ABCD/B0123ABCD/XYZxyz123456"
 SLACK_HOOK = "https://hooks.slack.com/services/" + SLACK_PATH
+# Wie lange eine Anfrage auf die anderen wartet, bevor sie ohne sie weiterläuft (nur im Fehlerfall relevant).
+TOGETHER_WAIT_S = 3.0
 
 
 def _channels():
@@ -234,14 +236,22 @@ async def fake_services():
     """Gotify, Mattermost, Apprise-API und Matrix auf einem lokalen Server (echter HTTP-Roundtrip)."""
     app = FastAPI()
     received: list[dict] = []
-    answer = {"status": 200}
+    # Steuern: status, delay (s), together (so viele Anfragen warten aufeinander). Messen: in_flight, peak (Höchststand).
+    answer = {"status": 200, "in_flight": 0, "peak": 0}
 
     async def record(request: Request, kind: str):
-        if answer.get("delay"):
-            await asyncio.sleep(answer["delay"])
-        body = await request.json() if request.method != "GET" else None
-        received.append({"kind": kind, "path": request.url.path, "headers": dict(request.headers), "body": body})
-        return JSONResponse({"ok": True}, status_code=answer["status"])
+        answer["in_flight"] += 1
+        answer["peak"] = max(answer["peak"], answer["in_flight"])
+        try:
+            if answer.get("together"):
+                await _until_peak(answer)
+            if answer.get("delay"):
+                await asyncio.sleep(answer["delay"])
+            body = await request.json() if request.method != "GET" else None
+            received.append({"kind": kind, "path": request.url.path, "headers": dict(request.headers), "body": body})
+            return JSONResponse({"ok": True}, status_code=answer["status"])
+        finally:
+            answer["in_flight"] -= 1
 
     @app.post("/message")
     async def gotify(request: Request):
@@ -291,24 +301,16 @@ async def fake_services():
             return JSONResponse({"errcode": "M_UNKNOWN_TOKEN"}, status_code=401)
         return {"user_id": "@deck:127.0.0.1"}
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off"))
-    serve_task = asyncio.ensure_future(server.serve())
-    for _ in range(200):
-        if server.started:
-            break
-        await asyncio.sleep(0.01)
-    try:
-        yield f"127.0.0.1:{port}", received, answer
-    finally:
-        server.should_exit = True
-        try:
-            await asyncio.wait_for(serve_task, timeout=5.0)
-        except asyncio.TimeoutError:
-            serve_task.cancel()
+    async with serve_app(app) as url:
+        yield url.removeprefix("http://"), received, answer
+
+
+async def _until_peak(answer: dict) -> None:
+    """Hält die Antwort, bis `together` Anfragen zugleich liefen; wer die Kanäle nacheinander abarbeitet, erreicht das nie."""
+    with contextlib.suppress(TimeoutError):
+        async with asyncio.timeout(TOGETHER_WAIT_S):
+            while answer["peak"] < answer["together"]:
+                await asyncio.sleep(0.01)
 
 
 async def _extension(db_session, tmp_path, test_settings, settings: dict, secrets: dict[str, str]):
@@ -592,16 +594,16 @@ async def test_a_slow_recipient_does_not_turn_a_partial_delivery_into_a_failure(
     channels = _channels()
     monkeypatch.setattr(channels, "REQUEST_TIMEOUT_S", 0.2)
 
-    class _Slow(_Http):
+    class _Hanging(_Http):
         async def request(self, method, url, **kwargs):
             self.calls.append({"method": method, "url": url, **kwargs})
             if kwargs["json"]["chat_id"] == "333":
-                await asyncio.sleep(5)
+                await asyncio.Event().wait()  # antwortet nie
             return httpx.Response(200, json={"ok": True}, request=httpx.Request(method, url))
 
-    started = asyncio.get_running_loop().time()
-    partial = await channels.send_to(_Slow(), channels.parse_channel_url(f"tgram://{TG_TOKEN}/111/222/333"), _note(), None)
-    assert asyncio.get_running_loop().time() - started < 1
+    # Ohne Frist je Anfrage käme nie eine Antwort; die Obergrenze liegt weit über 0,2 s und unter der echten Frist (7 s).
+    async with asyncio.timeout(3):
+        partial = await channels.send_to(_Hanging(), channels.parse_channel_url(f"tgram://{TG_TOKEN}/111/222/333"), _note(), None)
     assert partial.startswith("1 von 3 Empfängern nicht erreicht") and "Zeitüberschreitung" in partial
 
 
@@ -617,12 +619,20 @@ async def test_channels_run_side_by_side_each_with_its_own_time_limit(
         "push-kanal:mattermost": f"mmost://{host}/hook12345",
         "push-kanal:apprise": f"apprise://{host}/schluessel",
     })
-    answer["delay"] = 0.5
-    started = asyncio.get_running_loop().time()
+    answer["together"] = 3  # jede Antwort wartet auf die beiden anderen Anfragen
     await channel.send(_note())
-    assert asyncio.get_running_loop().time() - started < 1.2  # nebeneinander, nicht 1,5 s nacheinander
+    assert answer["peak"] == 3, "die Kanäle liefen nicht nebeneinander"
     assert len(received) == 3
 
+    # Die Frist läuft schon während der Tresor-Abfrage; ein Abbruch dort ließe die geteilte Test-Datenbankverbindung
+    # hängen. Darum liegen die Adressen vor der Frist bereit.
+    targets = {name: await type(channel)._target(channel, name) for name in ("gotify", "mattermost", "apprise")}
+
+    async def resolved(self, name):
+        return targets[name]
+
+    monkeypatch.setattr(type(channel), "_target", resolved)
+    answer.update(together=None, delay=0.5)
     ntfy_module = sys.modules["nodvard_deck_ext_ntfy"]
     monkeypatch.setattr(ntfy_module, "CHANNEL_TIMEOUT_S", 0.1)
     with pytest.raises(Exception, match="Zeitüberschreitung") as caught:

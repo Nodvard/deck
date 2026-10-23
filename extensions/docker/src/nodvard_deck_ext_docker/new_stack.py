@@ -33,6 +33,7 @@ from .editor import (
     sha256,
 )
 from .image_apply import PROJECT_RE, _valid_path
+from .operate import not_full_host
 from .stack_actions import IN_FOLDER, DockerStackExecutor, busy_text
 from .stacks import (
     MAX_FILE_BYTES,
@@ -54,6 +55,8 @@ MAX_ROOTS = 200
 RISK_TOO_LOW = "Die Datei enthält riskante Einstellungen; dafür braucht es eine Freigabe mit hohem Risiko. Bitte noch einmal anlegen."
 # Dort kann jeder Nutzer des Servers Ordner anlegen und austauschen.
 _SHARED_ROOTS = ("/tmp", "/var/tmp", "/dev/shm", "/run/user")
+# SFTP-Fehler ohne Antwort des Servers: keine Verbindung, Verbindung abgerissen.
+_SFTP_NO_ANSWER = (6, 7)
 
 
 def create_action_spec() -> ActionSpec:
@@ -312,8 +315,9 @@ async def _undo(sftp: Any, created: list[tuple[str, str]]) -> list[tuple[str, st
     for kind, path in reversed(created):
         try:
             await (sftp.remove(path) if kind == "file" else sftp.rmdir(path))
-        except Exception:  # noqa: BLE001 - was bleibt, nennt die Meldung
-            left.append((kind, path))
+        except Exception as exc:  # noqa: BLE001 - was bleibt, nennt die Meldung
+            if not no_such_file(exc):
+                left.append((kind, path))
     return left
 
 
@@ -330,22 +334,32 @@ def _leftover(left: list[tuple[str, str]]) -> str:
     return text
 
 
+def _answered(exc: BaseException) -> bool:
+    """Ob der SFTP-Server mit einem Fehler geantwortet hat; ohne Antwort kann er den Aufruf trotzdem ausgeführt haben."""
+    if isinstance(exc, (FileExistsError, FileNotFoundError, PermissionError)):
+        return True
+    return any(cls.__name__ == "SFTPError" for cls in type(exc).__mro__) and getattr(exc, "code", None) not in _SFTP_NO_ANSWER
+
+
 async def _make_dir(sftp: Any, path: str, created: list[tuple[str, str]], *, may_exist: bool = False) -> None:
     attrs = type(await sftp.lstat(posixpath.dirname(path)))(permissions=NEW_DIR_MODE)
-    # Vorher eintragen: Bricht der Lauf mitten im Anlegen ab, versucht das Aufräumen ihn trotzdem (nur, wenn er leer ist).
+    # Vorher eintragen: Bricht der Lauf mitten im Anlegen ab oder geht die Antwort verloren, versucht das Aufräumen ihn
+    # trotzdem (nur, wenn er leer ist).
     created.append(("dir", path))
     try:
         await sftp.mkdir(path, attrs)
-    except Exception:
-        created.pop()
+    except Exception as exc:
+        if _answered(exc):
+            created.pop()
         # Ein gleichzeitiger zweiter Lauf hat den Ordner für neue Stacks schon angelegt; er gehört dann nicht diesem Lauf.
         if may_exist and _kind(await _attrs_or_none(sftp, path)) == "dir":
             return
         raise
 
 
-async def _write_new(sftp: Any, path: str, content: bytes, like: Any, created: list[tuple[str, str]]) -> None:
-    """Die Compose-Datei neu anlegen (`O_EXCL`), nur für den Zugang lesbar: Sie kann Passwörter enthalten."""
+async def _write_new(sftp: Any, path: str, content: bytes, like: Any, created: list[tuple[str, str]]) -> str | None:
+    """Legt die Datei neu an (`O_EXCL`) und schreibt erst hinein, wenn nur der Zugang sie lesen kann (sie kann Passwörter
+    enthalten); sonst der Grund, die leere Datei räumt der Aufrufer weg."""
     created.append(("file", path))
     try:
         handle = await sftp.open(path, "xb", type(like)(permissions=NEW_FILE_MODE))
@@ -353,23 +367,26 @@ async def _write_new(sftp: Any, path: str, content: bytes, like: Any, created: l
         created.pop()
         raise
     async with handle:
-        # Nicht jeder SFTP-Server übernimmt die Rechte beim Anlegen; vor dem Schreiben noch einmal setzen.
         with contextlib.suppress(Exception):
             await handle.chmod(NEW_FILE_MODE)
+        if (problem := await _private(sftp, path)) is not None:
+            return problem
         await handle.write(content)
+    return None
 
 
 async def _private(sftp: Any, path: str) -> str | None:
     """Die Datei nur für den Zugang lesbar: Nicht jeder SFTP-Server übernimmt die Rechte beim Anlegen."""
     name = posixpath.basename(path)
     with contextlib.suppress(Exception):
-        await sftp.chmod(path, 0o600)
+        await sftp.chmod(path, NEW_FILE_MODE)
     try:
         mode = (await sftp.stat(path)).permissions
     except Exception as exc:  # noqa: BLE001 - als Grund melden
         return f"{name} ließ sich nicht prüfen: {str(exc) or type(exc).__name__}"
     if mode is None or mode & 0o077:
-        return f"{name} wäre für andere auf dem Server lesbar; der Server übernimmt die Rechte 600 nicht."
+        return (f"{name} wäre für andere auf dem Server lesbar; der Server übernimmt die Rechte 600 nicht. Liegt der Ordner auf "
+                "einem Laufwerk ohne Linux-Rechte (etwa einer Windows-Freigabe), wähle einen anderen Ordner für neue Stacks.")
     return None
 
 
@@ -399,9 +416,10 @@ class DockerStackCreateExecutor:
         if not PROJECT_RE.match(name):
             return ActionResult(success=False, error=f"Ungültiger Stack-Name: {name!r}")
         host = await self._ctx.hosts.get(req.host_ref) if req.host_ref else None
-        tag = (await self._ctx.settings.get()).get("docker_host_tag") or "docker"
-        if host is None or tag not in host.tags:
+        if host is None:
             return ActionResult(success=False, error="Kein Docker-Host.")
+        if why := not_full_host(host, await self._ctx.settings.get()):
+            return ActionResult(success=False, error=why)
         root = await self._new.root(host.id)
         stack = new_stack(name, root)
         if payload.get("folder") != stack.working_dir:
@@ -484,15 +502,16 @@ class DockerStackCreateExecutor:
             target, parent = folder, root
             await _make_dir(sftp, folder, created)
         except Exception as exc:  # noqa: BLE001 - als Grund melden
-            if target == folder and await _attrs_or_none(sftp, folder) is not None:
+            # Steht der Ordner noch in `created`, kam keine Antwort; dann kann ihn dieser Lauf selbst angelegt haben.
+            if target == folder and ("dir", folder) not in created and await _attrs_or_none(sftp, folder) is not None:
                 return f"Den Ordner {folder} gibt es inzwischen. Nodvard Deck überschreibt nie einen bestehenden Ordner; nimm einen anderen Namen."
             return _create_problem(exc, target, parent, home)
         for extra_path, extra_content in extra:
             try:
-                await _write_new(sftp, extra_path, extra_content, await sftp.lstat(folder), created)
+                problem = await _write_new(sftp, extra_path, extra_content, await sftp.lstat(folder), created)
             except Exception as exc:  # noqa: BLE001 - als Grund melden
                 return f"{posixpath.basename(extra_path)} ließ sich nicht schreiben: {str(exc) or type(exc).__name__}"
-            if (problem := await _private(sftp, extra_path)) is not None:
+            if problem is not None:
                 return problem
         checked = await self._new.editor.check(host, stack, 0, content)
         if checked.problem is not None:
@@ -502,11 +521,9 @@ class DockerStackCreateExecutor:
         if vet is not None and (refusal := vet(checked.config or {})) is not None:
             return refusal
         try:
-            await _write_new(sftp, path, content, await sftp.lstat(folder), created)
+            return await _write_new(sftp, path, content, await sftp.lstat(folder), created)
         except Exception as exc:  # noqa: BLE001 - als Grund melden
             return f"Die Compose-Datei ließ sich nicht schreiben: {str(exc) or type(exc).__name__}"
-        # Mit Variablen aus einem anderen Speicher kann auch die Datei Geheimnisse enthalten.
-        return await _private(sftp, path) if extra else None
 
     async def dry_run(self, req: ActionRequest) -> DryRunReport | None:
         payload = req.payload or {}

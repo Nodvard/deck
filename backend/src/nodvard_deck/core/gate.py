@@ -53,10 +53,9 @@ def describe_error(exc: BaseException) -> str:
 
 
 def _audit_error_for(exc: BaseException) -> str:
-    """Grund fürs Protokoll bei einer Ausnahme, bewusst ohne deren Text: Ein Executor kann Inhalte vom Server
-    hineinschreiben, darum steht hier nur die Art des Fehlers; der volle Text steht in der Aktion (`describe_error`)."""
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
         return "Zeitüberschreitung – der Befehl hat zu lange gebraucht."
+    # Bewusst ohne den Text der Ausnahme: Ein Executor kann Inhalte vom Server hineinschreiben.
     return f"Die Ausführung ist mit einem Fehler beendet worden ({type(exc).__name__}). Einzelheiten stehen in der Aktion."
 
 
@@ -87,9 +86,8 @@ async def find_executor(action_type: str) -> ActionExecutor | None:
 
 
 WAIT_S = REQUEST_WAIT_S
-"""So lange wartet eine Anfrage höchstens auf das Ergebnis. Längere Ausführungen (Update bis 45 min, Skript bis 30 min)
-laufen als Hintergrund-Task weiter, denn Browser und Proxys brechen lange Anfragen ab (Firefox nach 300 s, ein Proxy mit
-60 s Timeout meldet 504); die API antwortet dann 202 `executing`."""
+"""So lange wartet eine Anfrage höchstens auf das Ergebnis; längere Ausführungen laufen im Hintergrund weiter, weil
+Browser und Proxys lange Anfragen abbrechen."""
 
 CANCELLED_ERROR = (
     "Abgebrochen: das Dashboard wurde beendet – Ausgang unbekannt, bitte auf dem Server prüfen."
@@ -97,20 +95,20 @@ CANCELLED_ERROR = (
 """Der Befehl kann auf dem Server weitergelaufen oder fertig geworden sein; das Dashboard weiß es nicht mehr."""
 
 EXECUTE_TIMEOUT_S = 60 * 60.0
-"""Notbremse um jede Ausführung: Ein Executor ohne eigenes Timeout (z. B. tote SSH-Verbindung ohne Keepalive) bliebe sonst
-bis zum nächsten Neustart auf `executing`. Großzügig über der längsten bekannten Ausführung (Update, 45 min)."""
+"""Notbremse um jede Ausführung: Ein Executor ohne eigenes Timeout bliebe sonst bis zum nächsten Neustart auf
+`executing`."""
 
 EXECUTE_TIMEOUT_ERROR = (
     "Zeitüberschreitung: keine Rückmeldung nach 60 Minuten – Ausgang unbekannt, bitte auf dem Server prüfen."
 )
 
 _RECORD_RETRY_DELAYS_S: tuple[float, ...] = (1.0, 3.0, 10.0)
-"""Wartezeiten zwischen den Versuchen, das Ergebnis zu speichern, falls SQLite gesperrt ist (`database is locked`,
-busy_timeout 5 s). Niemand wartet mehr auf die Anfrage, also versucht der Hintergrund-Task es selbst erneut."""
+"""Wartezeiten zwischen den Versuchen, das Ergebnis zu speichern, falls SQLite gesperrt ist; niemand wartet mehr
+auf die Anfrage."""
 
 _running: dict[str, asyncio.Task[None]] = {}
-"""Laufende Ausführungen je Aktion. Die Event-Loop hält Tasks nur schwach: Ohne diese Referenz könnte der Garbage
-Collector einen laufenden Task einsammeln, und die Aktion bliebe für immer auf `executing`."""
+"""Laufende Ausführungen je Aktion; die Event-Loop hält Tasks nur schwach, ohne diese Referenz könnte der GC einen
+laufenden Task einsammeln."""
 
 
 def _request_from_row(action: Action) -> ActionRequest:
@@ -128,8 +126,6 @@ def _request_from_row(action: Action) -> ActionRequest:
 
 
 def _standing_from_row(action: Action) -> StandingApproval | None:
-    """Die Dauerfreigabe, mit der die Aktion ohne Klick anlief; `None` bei Freigabe per Klick, auch wenn das Gate eine
-    genannte Dauerfreigabe nicht anerkannt hat. So prüft der Executor direkt vor dem Befehl, ob sie noch gilt."""
     decision = action.gate_decision or {}
     info = decision.get("standing_approval")
     if decision.get("rule") != "standing_approval" or not isinstance(info, dict):
@@ -167,19 +163,19 @@ def is_running(action_id: str) -> bool:
 
 
 async def wait_for_action(action_id: str, timeout: float | None) -> bool:
-    """Wartet höchstens `timeout` Sekunden (None = bis zum Ende) auf die Ausführung; `True`, wenn sie fertig ist oder
-    hier nicht läuft. Bei Zeitablauf oder Abbruch des Aufrufers läuft die Aktion weiter, denn `asyncio.wait()` bricht
-    die Tasks nie ab."""
+    """Wartet höchstens `timeout` Sekunden auf die Ausführung und gibt `True` zurück, wenn sie fertig ist oder hier
+    nicht läuft."""
     task = _running.get(action_id)
     if task is None or task.done():
         return True
+    # `asyncio.wait()` bricht die Task nie ab: Bei Zeitablauf oder Abbruch des Aufrufers läuft die Aktion weiter.
     done, _ = await asyncio.wait({task}, timeout=timeout)
     return task in done
 
 
 async def shutdown_running(timeout: float = 5.0) -> None:
-    """Bricht laufende Ausführungen ab; sie vermerken sich selbst als `failed` (`CANCELLED_ERROR`), den Rest fängt
-    `fail_interrupted_on_boot()` beim nächsten Start auf."""
+    """Bricht laufende Ausführungen ab, sie vermerken sich selbst als `failed`; den Rest fängt
+    `fail_interrupted_on_boot()` auf."""
     tasks = [t for t in _running.values() if not t.done()]
     for task in tasks:
         task.cancel()
@@ -189,8 +185,6 @@ async def shutdown_running(timeout: float = 5.0) -> None:
 
 
 async def _run_action(action_id: str) -> None:
-    """Hintergrund-Task: führt aus und schreibt immer Ergebnis und Audit-Zeile, auch wenn Executor oder Laden scheitern."""
-    # Status, Ergebnis und, falls das Gate den Grund selbst nennt, der feste Text fürs Protokoll.
     outcome: tuple[ActionStatus, dict[str, Any], str | None] | None = None
     try:
         # Eigene kurze Sessions statt der Anfrage-Session: Ein Executor ist Extension-Code und öffnet evtl. selbst eine
@@ -237,7 +231,7 @@ async def _run_action(action_id: str) -> None:
             action_id, {"success": False, "error": CANCELLED_ERROR}, gate_error=CANCELLED_ERROR, publish=False
         )
         raise
-    except Exception as exc:  # z. B. Datenbankfehler beim Laden/Speichern
+    except Exception as exc:
         logger.exception("gate_background_failed action_id=%s", action_id)
         await _record_outcome_safely(
             action_id, {"success": False, "error": describe_error(exc)}, gate_error=_audit_error_for(exc)
@@ -256,9 +250,6 @@ async def _record_outcome_safely(
 async def _record_outcome(
     action_id: str, status: ActionStatus, result: dict[str, Any], *, gate_error: str | None = None, publish: bool = True
 ) -> None:
-    """Schreibt Ergebnis und Audit-Zeile in einer eigenen Transaktion fest und benachrichtigt erst danach die
-    Abonnenten. Bewacht auf `executing`: Hat jemand anderes die Aktion schon abgeschlossen, bleibt dessen Ergebnis
-    stehen."""
     from ..services import audit as audit_service
 
     outcome = "success" if status == ActionStatus.SUCCEEDED else "failure"
@@ -266,6 +257,8 @@ async def _record_outcome(
     while True:
         try:
             async with session_scope() as session:
+                # Bewacht auf `executing`: Hat jemand anderes die Aktion schon abgeschlossen, bleibt dessen Ergebnis
+                # stehen.
                 action, moved = await _atomic_transition(
                     session, action_id, from_status=ActionStatus.EXECUTING.value, to_status=status.value,
                     result=result, finished_at=utcnow(),
@@ -315,9 +308,8 @@ async def _record_outcome(
 
 
 async def _start_and_wait(session: AsyncSession, action: Action, wait_s: float | None) -> Action:
-    """Schreibt den Übergang nach `executing` fest, startet die Ausführung im Hintergrund und wartet höchstens `wait_s`
-    Sekunden. Der Commit vorab ist Pflicht: Der Hintergrund-Task liest die Zeile über eine eigene Verbindung, die
-    Schreibsperre muss frei sein."""
+    # Der Commit vorab ist Pflicht: Der Hintergrund-Task liest die Zeile über eine eigene Verbindung, die
+    # Schreibsperre muss frei sein.
     await session.commit()
     start_execution(action.id)
     await wait_for_action(action.id, wait_s)
@@ -364,8 +356,8 @@ async def _persist_denied(
 
 
 STANDING_APPROVAL_PERMISSION = "actions.standing_approval"
-"""Wer eine Dauerfreigabe erteilen darf (bei den eingebauten Rollen Owner und Admin); zugleich die Berechtigung einer
-Extension, Vorschläge mit Dauerfreigabe einzureichen."""
+"""Wer eine Dauerfreigabe erteilen darf (bei den eingebauten Rollen Owner und Admin), zugleich die Berechtigung
+einer Extension dafür."""
 
 
 _RISK_WORDS = {Risk.LOW: "niedrigem", Risk.MEDIUM: "mittlerem", Risk.HIGH: "hohem", Risk.CRITICAL: "kritischem"}
@@ -374,9 +366,8 @@ _RISK_WORDS = {Risk.LOW: "niedrigem", Risk.MEDIUM: "mittlerem", Risk.HIGH: "hohe
 async def standing_approval_problem(
     session: AsyncSession, *, granted_by_user_id: str, risk: Risk, from_ai: bool = False
 ) -> tuple[str, str | None] | None:
-    """`None`, wenn die Dauerfreigabe von `granted_by_user_id` für Stufe `risk` gilt, sonst `(Grund, Berechtigung)`.
-
-    Der Grund landet in Aktion, Protokoll und Push und nennt deshalb keine Berechtigung, die steht getrennt daneben."""
+    """`None`, wenn die Dauerfreigabe für Stufe `risk` gilt, sonst `(Grund, Berechtigung)`, der Grund nennt die
+    Berechtigung bewusst nicht."""
     # Prüft, was nur der Kern weiß: Gibt es die Person noch, ist sie aktiv, darf sie heute noch Dauerfreigaben erteilen
     # und diese Stufe bestätigen? Wird sie herabgestuft oder gesperrt, läuft wieder alles über den Klick. Die Anzeige
     # nutzt dieselbe Prüfung, damit sie nie "gilt" zeigt, wo das Gate ablehnen würde.
@@ -410,15 +401,15 @@ async def standing_approval_problem(
 
 
 async def _standing_note(session: AsyncSession, granted_by_user_id: str, granted_at: Any) -> str:
-    """Der Text "vom <Datum> durch <Benutzer>"; das Datum in der eingestellten Zeitzone, nicht der des Prozesses."""
     from zoneinfo import ZoneInfo
 
     from ..models import User
     from .timezone import get_timezone
 
     try:
+        # Das Datum steht in der eingestellten Zeitzone, nicht in der des Prozesses.
         zone = ZoneInfo(await get_timezone(session))
-    except Exception:  # noqa: BLE001 -- ein Anzeigedatum darf den Vorschlag nie kippen
+    except Exception:  # noqa: BLE001 – ein Anzeigedatum darf den Vorschlag nie kippen
         zone = None
     when = granted_at if granted_at.tzinfo is not None else granted_at.replace(tzinfo=timezone.utc)
     date = when.astimezone(zone).strftime("%d.%m.%Y") if zone is not None else when.strftime("%d.%m.%Y")
@@ -431,9 +422,8 @@ async def propose(
     session: AsyncSession, *, ext_id: str, request: ActionRequest, command_field: str | None,
     wait_s: float | None = None,
 ) -> GateDecision:
-    """Sperrliste, Anti-Flapping, Autonomie und Audit für einen Vorschlag (Berechtigungen prüft der Aufrufer vorher).
-    `command_field` nennt das Payload-Feld mit dem Befehl (`None`: keine Sperrliste); `wait_s` begrenzt das Warten auf
-    eine sofort anlaufende Ausführung (None = bis zum Ende), die dann ggf. noch `executing` ist."""
+    """Prüft Sperrliste, Anti-Flapping, Autonomie und Audit für einen Vorschlag; die Berechtigungen prüft der
+    Aufrufer vorher."""
     from ..services import settings as settings_service
 
     now = utcnow()
@@ -522,7 +512,6 @@ async def propose(
     )
     if auto_allow:
         row.approved_at = now
-        # Bei einer Dauerfreigabe steht ihr Urheber als "bestätigt von" an der Aktion.
         row.approved_by_user_id = approved_by_user_id
     session.add(row)
     await session.flush()
@@ -559,11 +548,11 @@ async def propose(
 async def _atomic_transition(
     session: AsyncSession, action_id: str, *, from_status: str, to_status: str, **extra_values: Any
 ) -> tuple[Action | None, bool]:
-    """Guardierter `UPDATE ... WHERE id=? AND status=?`: Der Status selbst schützt bei Doppelklick oder Retry vor
-    doppelter Ausführung. Gibt `(Zeile, hat_diesen_Übergang_gemacht)` zurück."""
     action = await session.get(Action, action_id)
     if action is None:
         return None, False
+    # Guardierter `UPDATE ... WHERE id=? AND status=?`: Der Status schützt bei Doppelklick oder Retry vor doppelter
+    # Ausführung.
     result = await session.execute(
         update(Action)
         .where(Action.id == action_id, Action.status == from_status)
@@ -576,9 +565,8 @@ async def _atomic_transition(
 async def approve(
     session: AsyncSession, action_id: str, *, user_id: str, wait_s: float | None = None
 ) -> tuple[Action | None, bool]:
-    """Gibt `(Zeile, hat_dieser_Aufruf_die_Ausführung_ausgelöst)` zurück; `wait_s` begrenzt das Warten (None = bis zum
-    Ende). Das Flag steht nicht im `status`: Ein Vorschlag aus einem vorherigen Aufruf sähe gleich aus, ein Doppelklick
-    bekäme 200 statt 409."""
+    """Gibt `(Zeile, hat_dieser_Aufruf_die_Ausführung_ausgelöst)` zurück, damit ein Doppelklick 409 statt 200
+    bekommt."""
     now = utcnow()
     action = await session.get(Action, action_id)
     if action is None:
@@ -650,9 +638,7 @@ INTERRUPTED_ERROR = "Durch Neustart unterbrochen – Ausgang unbekannt, bitte au
 
 
 async def fail_interrupted_on_boot(session: AsyncSession) -> int:
-    """Setzt Aktionen, die beim Start noch `executing` sind, auf `failed` (ein Neustart hat sie abgebrochen), je mit
-    einer Audit-Zeile. Muss vor dem Laden der Extensions laufen, damit keine frisch gestartete Ausführung erwischt
-    wird."""
+    """Setzt beim Start noch `executing` stehende Aktionen auf `failed`; muss vor dem Laden der Extensions laufen."""
     from sqlalchemy import select
 
     from ..services import audit as audit_service

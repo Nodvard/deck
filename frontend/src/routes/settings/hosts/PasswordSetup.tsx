@@ -67,12 +67,14 @@ function Failure({
 }
 
 export function PasswordSetup({
-  host, credential, sudo, groups, ready = true, knownNotes = [], onChecked,
+  host, credential, sudo, fullSudo = false, groups, ready = true, knownNotes = [], onChecked,
 }: {
   host: HostOut;
   credential: CredentialOut;
   /** Wie beim Befehl zum Einfügen: root-Rechte ohne Passwort für den Benutzer des Zugangs. */
   sudo: boolean;
+  /** Zu `sudo` die volle Regel statt nur der Regeln der Hilfsskripte. */
+  fullSudo?: boolean;
   groups: string[];
   /** Sind die Haken schon vorbelegt (was die Erweiterungen brauchen)? Vorher kein Absenden. */
   ready?: boolean;
@@ -108,7 +110,7 @@ export function PasswordSetup({
     setBusy(true);
     try {
       const out = await api.post<SetupWithPasswordOut>(`/hosts/${host.id}/credentials/${credential.id}/setup-with-password`, {
-        login_user: loginUser.trim(), password: typed, sudo, groups, sudo_password_same: samePassword,
+        login_user: loginUser.trim(), password: typed, sudo, full_sudo: sudo && fullSudo, groups, sudo_password_same: samePassword,
       });
       setResult(out);
       if (out.check) onChecked?.(out.check);

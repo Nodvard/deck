@@ -1,6 +1,7 @@
-"""Hinweis „Server neu einrichten“ in der Übersicht (`services.helper_hints`): nur bei voller sudo-Regel und einem
-Hilfsskript, das nicht das mitgelieferte ist; nie für root und Windows. Den Stand schreiben „Verbindung prüfen“ und der
-Kern-Job, die Übersicht liest nur den Merker. Wegklicken gilt je Server, bis sich die fehlenden Skripte ändern.
+"""Hinweis „Server neu einrichten“ in der Übersicht (`services.helper_hints`): nur wenn sudo dort Skripte erlaubt (volle
+Regel oder die eigene Regel eines Skripts) und ein Hilfsskript nicht das mitgelieferte ist; nie für root und Windows.
+Den Stand schreiben „Verbindung prüfen“ und der Kern-Job, die Übersicht liest nur den Merker. Wegklicken gilt je
+Server, bis sich die fehlenden Skripte ändern.
 
 Gegen den lokalen SSH-Server aus `conftest.py` (`fake_probe` beantwortet die Abfrage)."""
 
@@ -96,7 +97,9 @@ async def test_check_with_full_rule_and_missing_script_shows_a_hint_until_it_is_
     assert (await client.post(CHECK.format(host_id), headers=headers)).status_code == 200
 
     hints = await _overview_hints(client, headers)
-    assert [(h["host_id"], h["host_name"], h["modules"]) for h in hints] == [(host_id, "bastel-pi", ["Modul fake-b"])]
+    assert [(h["host_id"], h["host_name"], h["modules"], h["without_root"]) for h in hints] == [
+        (host_id, "bastel-pi", ["Modul fake-b"], False)
+    ]
 
     fake_probe[helper_check_command([SHIELD, OTHER])] = (0, _answer(_present(SHIELD), _present(OTHER), sudo_list=FULL_RULE), "")
     await client.post(CHECK.format(host_id), headers=headers)
@@ -144,10 +147,46 @@ async def test_check_and_job_judge_the_full_rule_the_same_way(
 
 
 @pytest.mark.asyncio
+async def test_a_server_with_only_helper_rules_gets_the_hint_too(
+    client, modules, local_ssh_server, fake_probe, monkeypatch, test_settings
+):
+    from nodvard_deck import config
+
+    monkeypatch.setattr(config, "_settings", test_settings)
+    _, port, *_ = local_ssh_server
+    headers = await _owner(client)
+    host_id = await _host_with_login(client, headers, port)
+    rules = (
+        "User testuser may run the following commands:\n"
+        f"    (root) NOPASSWD: {SHIELD.install_path}\n    (root) NOPASSWD: {OTHER.install_path}\n"
+    )
+    fake_probe[host_check.SUDO_COMMAND] = (1, "", "sudo: a password is required\n")
+    fake_probe[helper_check_command([SHIELD, OTHER])] = (
+        0, _answer(_present(SHIELD), _present(OTHER, version="0", sha="0" * 64), sudo_list=rules), "",
+    )
+    await client.post(CHECK.format(host_id), headers=headers)
+    assert [(h["modules"], h["without_root"]) for h in await _overview_hints(client, headers)] == [(["Modul fake-b"], True)]
+    await helper_hints.run_once()
+    assert [(h["modules"], h["without_root"]) for h in await _overview_hints(client, headers)] == [(["Modul fake-b"], True)]
+
+
+def test_a_helper_rule_must_name_the_script_itself():
+    path = SHIELD.install_path
+    assert helper_hints.allows_helper([f"(root) NOPASSWD: {path}"], path)
+    assert helper_hints.allows_helper([f"(ALL : ALL) NOPASSWD: /usr/bin/true, {path}"], path)
+    assert helper_hints.allows_helper([f"(root) SETENV: NOPASSWD: {path}"], path)
+    for line in (
+        f"(root) NOPASSWD: /usr/bin/tee {path}", f"(root) PASSWD: {path}", f"(www-data) NOPASSWD: {path}",
+        f"(root) NOPASSWD: {path}.alt", f"{path}", "(root) NOPASSWD: ALL",
+    ):
+        assert not helper_hints.allows_helper([line], path), line
+
+
+@pytest.mark.asyncio
 async def test_the_check_records_nothing_for_root():
     """„Verbindung prüfen“ als root: kein Hilfsskript nötig, der Merker wird geleert (`{}`), ohne Abfrage."""
     state = host_check._State()
-    await host_check._step_helpers(state, None, "root", [SHIELD, OTHER])  # type: ignore[arg-type]
+    host_check._step_helpers(state, "root", [SHIELD, OTHER], None)
     assert state.helper_stale == {}
     assert {item.status for item in state.items} == {"skipped"}
 

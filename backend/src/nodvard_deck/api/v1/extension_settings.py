@@ -313,6 +313,14 @@ async def put_extension_secret(
     slot = next((s for s in _secret_slots_spec(schema, values) if s["label"] == payload.label), None)
     if slot is None:
         raise HTTPException(status_code=422, detail="Dieses Geheimnis gehört nicht zu dieser Erweiterung.")
+    if extension_setup.secret_name_twice(values, slot):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Der Name „{slot['item']}“ kommt mehrfach vor. Erst einen der Einträge umbenennen und die "
+                "Einstellungen speichern, danach die Zugangsdaten hinterlegen."
+            ),
+        )
     if extension_setup.secret_target_missing(schema, values, slot):
         # Ohne gespeichertes Ziel gehört das Geheimnis zu keinem Server; es bekäme sonst die
         # Adresse, die später als Erstes eingetragen wird (auch die eines fremden Servers).

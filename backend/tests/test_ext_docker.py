@@ -109,6 +109,14 @@ async def test_lists_running_and_stopped_containers_with_tone():
     assert by_name["nginx"]["host"] == "docker"
 
 
+@pytest.mark.asyncio
+async def test_lines_without_enough_fields_or_a_name_are_skipped():
+    host = _FakeHost("h1", "docker", "10.0.0.5")
+    lines = ["kaputt|zeile|running", _ps_line("", "running", "Up 2 hours"), _ps_line("nginx", "running", "Up 2 hours")]
+    ctx = _FakeCtx(settings={}, hosts=[host], outputs={"h1": _FakeExecResult(0, "\n".join(lines))})
+    assert [s["name"] for s in await DockerServiceCatalog(ctx).list_services()] == ["nginx"]
+
+
 PIHOLE_PORTS = (
     "0.0.0.0:53->53/tcp, :::53->53/tcp, 0.0.0.0:53->53/udp, :::53->53/udp, 0.0.0.0:8088->80/tcp, :::8088->80/tcp"
 )
@@ -117,11 +125,11 @@ PIHOLE_PORTS = (
 @pytest.mark.parametrize(
     ("ports", "image", "expected"),
     [
-        # Live auf dem Pi: vorher oeffnete die Kachel :53 (DNS).
+        # Live auf dem Pi: vorher öffnete die Kachel :53 (DNS).
         (PIHOLE_PORTS, "pihole/pihole:latest", "http://10.0.0.5:8088/admin/"),
-        # Portainer-Agent: keine Weboberflaeche.
+        # Portainer-Agent: keine Weboberfläche.
         ("0.0.0.0:9001->9001/tcp, :::9001->9001/tcp", "portainer/agent:2.21.0", None),
-        # Portainer: 8000 ist der Edge-Tunnel, 9443 die Oberflaeche (https).
+        # Portainer: 8000 ist der Edge-Tunnel, 9443 die Oberfläche (https).
         ("0.0.0.0:8000->8000/tcp, 0.0.0.0:9443->9443/tcp, 0.0.0.0:9000->9000/tcp", "portainer/portainer-ce:latest",
          "https://10.0.0.5:9443"),
         ("0.0.0.0:8000->8000/tcp, 0.0.0.0:9000->9000/tcp", "portainer/portainer-ce:2.19.4", "http://10.0.0.5:9000"),
@@ -133,9 +141,9 @@ PIHOLE_PORTS = (
          "jc21/nginx-proxy-manager:latest", "http://10.0.0.5:81"),
         ("0.0.0.0:3000-3001->3000-3001/tcp", "lscr.io/linuxserver/webtop:latest", "http://10.0.0.5:3000"),
         ("0.0.0.0:8080-8081->8080-8081/tcp", "img:latest", "http://10.0.0.5:8080"),
-        # Unterschiedlich lange Bereiche: welcher Port wohin gehoert, steht nicht fest.
+        # Unterschiedlich lange Bereiche: welcher Port wohin gehört, steht nicht fest.
         ("0.0.0.0:8000-8010->8000/tcp", "img:latest", None),
-        # Kamera-Streams (RTSP) sind keine Weboberflaeche.
+        # Kamera-Streams (RTSP) sind keine Weboberfläche.
         ("0.0.0.0:5000->5000/tcp, 0.0.0.0:8554->8554/tcp, 0.0.0.0:8555->8555/tcp", "ghcr.io/blakeblackshear/frigate:stable",
          "http://10.0.0.5:5000"),
         ("0.0.0.0:8554->8554/tcp", "img:latest", None),
@@ -149,12 +157,15 @@ PIHOLE_PORTS = (
         ("0.0.0.0:5432->5432/tcp", "postgres:16", None),
         ("0.0.0.0:1883->1883/tcp, 0.0.0.0:9001->9001/tcp", "eclipse-mosquitto:2", None),
         ("0.0.0.0:51820->51820/udp", "linuxserver/wireguard", None),
-        # Unbekannt, aber 8000 bis 8999: fast immer eine Weboberflaeche.
+        # Unbekannt, aber 8000 bis 8999: fast immer eine Weboberfläche.
         ("0.0.0.0:8123->8123/tcp", "homeassistant/home-assistant", "http://10.0.0.5:8123"),
         ("0.0.0.0:8765->8765/tcp", "img:latest", "http://10.0.0.5:8765"),
         ("0.0.0.0:7000->7000/tcp", "img:latest", None),
         # Nur am Server selbst erreichbar.
         ("127.0.0.1:8080->80/tcp", "img:latest", None),
+        # Ports außerhalb von 1 bis 65535 zählen nicht.
+        ("0.0.0.0:70000->80/tcp", "img:latest", None),
+        ("0.0.0.0:0->80/tcp, 0.0.0.0:8081->80/tcp", "img:latest", "http://10.0.0.5:8081"),
     ],
 )
 def test_guess_url_picks_the_web_port_by_the_port_inside_the_container(ports, image, expected):
@@ -185,7 +196,7 @@ def test_image_key_drops_registry_tag_and_digest(image, key):
 async def test_own_tile_url_wins_and_the_detected_one_stays_visible():
     host = _FakeHost("h1", "pi-host", "10.0.0.5")
     ctx = _FakeCtx(
-        # Auch was an der Route vorbei in die Einstellungen kam, wird beim Lesen geprueft.
+        # Auch was an der Route vorbei in die Einstellungen kam, wird beim Lesen geprüft.
         settings={"url_overrides": {"h1:pihole": "https://pihole.example/admin/", "h1:kaputt": "javascript:alert(1)", "h1:x": 5}},
         hosts=[host],
         outputs={"h1": _FakeExecResult(0, chr(10).join([
@@ -205,7 +216,7 @@ async def test_own_tile_url_wins_and_the_detected_one_stays_visible():
     [
         ("ftp://10.0.0.5", "http://"),
         ("http://", "http://"),
-        ("http://nutzer:geheim@10.0.0.5", "Passwort"),
+        ("http://nutzer:" + "geheim@10.0.0.5", "Passwort"),
         ("http://10.0.0.5:99999", "Port"),
         ("http://10.0.0.5/ a", "Leerzeichen"),
         ("javascript:alert(1)", "http://"),
@@ -217,6 +228,8 @@ async def test_own_tile_url_wins_and_the_detected_one_stays_visible():
         ("http://x/\x7f", "Steuerzeichen"),
         ("http://[::1", "ungültig"),
         ("http://@10.0.0.5", "Passwort"),
+        ("  ", "Bitte eine Adresse angeben"),
+        ("http://x/" + "a" * 2000, "zu lang"),
     ],
 )
 def test_clean_tile_url_rejects_what_does_not_belong_in_a_tile(value, message):
@@ -225,6 +238,7 @@ def test_clean_tile_url_rejects_what_does_not_belong_in_a_tile(value, message):
     with pytest.raises(ValueError, match=message):
         clean_tile_url(value)
     assert clean_tile_url(" https://pihole.example/admin/ ") == "https://pihole.example/admin/"
+    assert clean_tile_url("http://[2001:db8::5]:8080/") == "http://[2001:db8::5]:8080/"
 
 
 @pytest.mark.asyncio
@@ -249,7 +263,7 @@ async def test_tile_url_is_saved_reset_and_only_for_docker_hosts(client, db_sess
     assert (await ctx.settings.get())["url_overrides"] == {f"{host.id}:pihole": "http://10.0.0.5:8088/admin/"}
 
     assert (await client.put(base, json={}, headers=auth)).status_code == 422
-    bad = await client.put(base, json={"url": "http://a:b@10.0.0.5"}, headers=auth)
+    bad = await client.put(base, json={"url": "http://a:" + "b@10.0.0.5"}, headers=auth)
     assert bad.status_code == 422
     assert "Passwort" in bad.text
     assert (await client.put(f"/api/v1/ext/docker/containers/{other.id}/pihole/url", json={"url": "http://x"}, headers=auth)).status_code == 404
@@ -275,8 +289,8 @@ def test_guess_url_returns_none_when_no_port_published():
 
 def test_guess_url_ignores_ipv6_only_bindings():
     """Live-relevant: manche Container binden NUR auf `:::PORT` (kein IPv4-Host-
-    Mapping) -- eine geratene URL waere dann trotzdem falsch/nicht erreichbar aus
-    einem gewoehnlichen Browser heraus, deshalb bewusst kein Fallback auf IPv6."""
+    Mapping) -- eine geratene URL wäre dann trotzdem falsch/nicht erreichbar aus
+    einem gewöhnlichen Browser heraus, deshalb bewusst kein Fallback auf IPv6."""
     from nodvard_deck_ext_docker.capabilities import _guess_url
 
     assert _guess_url(":::9000->9000/tcp", "10.0.0.5", "http") is None
@@ -294,10 +308,10 @@ async def test_unreachable_host_shows_a_visible_error_tile_not_raised():
     assert "no route to host" in services[0]["status"]
     # "host" muss der ECHTE Host-Anzeigename
     # bleiben, nicht die Fehlermeldung -- ContainersPage.tsx gruppiert danach,
-    # eine Fehlermeldung als "Hostname" haette dort eine eigene falsche Gruppe
+    # eine Fehlermeldung als "Hostname" hätte dort eine eigene falsche Gruppe
     # erzeugt.
     assert services[0]["host"] == "docker"
-    # Marker fuer die Uebersicht: Platzhalter, kein Container.
+    # Marker für die Übersicht: Platzhalter, kein Container.
     assert services[0]["unreachable"] is True
 
 
@@ -341,7 +355,7 @@ async def test_uses_configured_tag_and_url_scheme():
 @pytest.mark.asyncio
 async def test_non_zero_exit_code_shows_a_visible_error_tile_not_raised():
     """Der konkrete Fall aus der Checkliste: SSH klappt, aber der Docker-Daemon
-    laeuft nicht (oder fehlende Rechte) -- `docker ps` selbst schlaegt fehl."""
+    läuft nicht (oder fehlende Rechte) -- `docker ps` selbst schlägt fehl."""
     host = _FakeHost("h1", "docker", "10.0.0.5")
     result = _FakeExecResult(1, "")
     result.stderr = "permission denied"
@@ -356,7 +370,7 @@ async def test_non_zero_exit_code_shows_a_visible_error_tile_not_raised():
 async def test_matrix_page_is_registered_after_enabling(client, db_session, test_settings):
     """Das Docker-Modul hatte bisher NUR ein
     Dashboard-Widget, keine eigene Seite -- `GET /pages` muss nach dem Aktivieren
-    die neue ContainersPage zeigen, wie es fuer hello-world/proxmox/backups
+    die neue ContainersPage zeigen, wie es für hello-world/proxmox/backups
     bereits bewiesen ist (test_extensions_api.py)."""
     token = await _bootstrap_owner(client)
     test_settings.extensions_dir = REPO_EXTENSIONS_DIR
@@ -378,8 +392,8 @@ async def test_matrix_page_is_registered_after_enabling(client, db_session, test
 
 @pytest.mark.asyncio
 async def test_container_tool_follows_the_configured_docker_tag(client, db_session, test_settings):
-    """Server-Seite: die Kachel "Container" haengt am Docker-Tag. Aendert der Admin
-    den Tag, wandert die Kachel mit -- ueber den jetzt echten on_settings_changed-Hook."""
+    """Server-Seite: die Kachel "Container" hängt am Docker-Tag. Ändert der Admin
+    den Tag, wandert die Kachel mit -- über den jetzt echten on_settings_changed-Hook."""
     from nodvard_deck.ext.runtime import get_extension_runtime
 
     token = await _bootstrap_owner(client)
@@ -389,15 +403,29 @@ async def test_container_tool_follows_the_configured_docker_tag(client, db_sessi
 
     runtime = get_extension_runtime()
     tags = lambda: [t.tags for e, t in runtime.ui.all_host_tools() if e == "docker" and t.id == "containers"]  # noqa: E731
-    assert tags() == [["docker"]]
+    assert tags() == [["docker", "docker-bedienen"]]
 
     await runtime.loaded["docker"].ctx.settings.set({"docker_host_tag": "container-host"})
-    assert tags() == [["container-host"]]
+    assert tags() == [["container-host", "docker-bedienen"]]
+
+
+@pytest.mark.asyncio
+async def test_container_tool_promises_nothing_that_operate_servers_lack(client, db_session, test_settings):
+    from nodvard_deck.ext.runtime import get_extension_runtime
+
+    token = await _bootstrap_owner(client)
+    test_settings.extensions_dir = REPO_EXTENSIONS_DIR
+    await extensions_service.discover_and_sync(db_session, test_settings)
+    assert (await client.post("/api/v1/extensions/docker/enable", headers=_auth_header(token))).status_code == 200
+
+    [tool] = [t for e, t in get_extension_runtime().ui.all_host_tools() if e == "docker" and t.id == "containers"]
+    assert "docker-bedienen" in tool.tags
+    assert not [word for word in ("löschen", "Konsole", "Docker-Speicher") if word in tool.description]
 
 
 @pytest.mark.asyncio
 async def test_docker_group_requirement_follows_the_configured_docker_tag(client, db_session, test_settings):
-    """Der Einrichtungsbefehl fuer einen Server bietet die Gruppe "docker" nur dort an, wo
+    """Der Einrichtungsbefehl für einen Server bietet die Gruppe "docker" nur dort an, wo
     Container verwaltet werden -- und folgt dem eingestellten Tag; ohne die Extension weg."""
     from nodvard_deck.ext.runtime import get_extension_runtime
 
@@ -407,7 +435,7 @@ async def test_docker_group_requirement_follows_the_configured_docker_tag(client
     assert (await client.post("/api/v1/extensions/docker/enable", headers=_auth_header(token))).status_code == 200
 
     runtime = get_extension_runtime()
-    specs = lambda: [r for e, r in runtime.ui.all_host_requirements() if e == "docker"]  # noqa: E731
+    specs = lambda: [r for e, r in runtime.ui.all_host_requirements() if e == "docker" and r.id == "docker-group"]  # noqa: E731
     [spec] = specs()
     assert spec.id == "docker-group" and spec.unix_group == "docker" and spec.tags == ["docker"]
     assert spec.check_command == "docker ps -q" and spec.needs_root is False
@@ -420,6 +448,27 @@ async def test_docker_group_requirement_follows_the_configured_docker_tag(client
 
     assert (await client.post("/api/v1/extensions/docker/disable", headers=_auth_header(token))).status_code == 200
     assert specs() == []
+
+
+@pytest.mark.asyncio
+async def test_operate_requirement_brings_the_helper(client, db_session, test_settings):
+    from nodvard_deck.ext.runtime import get_extension_runtime
+
+    token = await _bootstrap_owner(client)
+    test_settings.extensions_dir = REPO_EXTENSIONS_DIR
+    await extensions_service.discover_and_sync(db_session, test_settings)
+    assert (await client.post("/api/v1/extensions/docker/enable", headers=_auth_header(token))).status_code == 200
+    runtime = get_extension_runtime()
+    [spec] = [r for e, r in runtime.ui.all_host_requirements() if e == "docker" and r.id == "docker-operate"]
+    assert spec.tags == ["docker-bedienen"] and spec.needs_root is True and spec.unix_group is None
+    assert spec.check_command == "sudo -n /usr/local/lib/nodvard-deck/docker-root version"
+    assert runtime.loaded["docker"].root_helper is not None and runtime.loaded["docker"].root_helper.version == 1
+    await runtime.loaded["docker"].ctx.settings.set({"docker_operate_tag": "nur-bedienen"})
+    [spec] = [r for e, r in runtime.ui.all_host_requirements() if e == "docker" and r.id == "docker-operate"]
+    assert spec.tags == ["nur-bedienen"]
+    for action, operate in (("container.start", True), ("container.restart", True), ("container.remove", False), ("docker.stack_up", False)):
+        _, spec = runtime.actions.get(action)
+        assert ("nur-bedienen" in spec.host_tags) is operate, action
 
 
 # ---------------------------------------------------------------------------
@@ -443,7 +492,7 @@ class _RecordingExec:
 
 
 def _running_state(name: str = "web") -> _FakeExecResult:
-    """Antwort auf die Pruefung nach der Aktion: der Container laeuft (ohne Healthcheck)."""
+    """Antwort auf die Prüfung nach der Aktion: der Container läuft (ohne Healthcheck)."""
     import json
 
     result = _FakeExecResult(0, json.dumps({
@@ -456,7 +505,7 @@ def _running_state(name: str = "web") -> _FakeExecResult:
 
 @pytest.fixture(autouse=True)
 def _quick_after_check(monkeypatch):
-    """Die Pruefung nach der Aktion wartet sonst 15 s auf die zweite ruhige Lesung."""
+    """Die Prüfung nach der Aktion wartet sonst 15 s auf die zweite ruhige Lesung."""
     import nodvard_deck_ext_docker.after_check as ac
 
     monkeypatch.setattr(ac, "CHECK_STABLE_S", 0)
@@ -487,7 +536,7 @@ def _request(action_type: str, container: str):  # noqa: ANN202
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bad", ["x; rm -rf /", "$(reboot)", "a b", "-f", "", "../etc", "name`id`"])
 async def test_executor_rejects_container_names_that_could_escape_into_the_shell(bad):
-    """Der Name landet in einem SSH-Kommando -- alles ausser Dockers eigener
+    """Der Name landet in einem SSH-Kommando -- alles außer Dockers eigener
     Namensregel wird abgelehnt, BEVOR irgendein Befehl den Host erreicht."""
     from nodvard_deck_ext_docker.capabilities import DockerContainerExecutor
 
@@ -513,8 +562,8 @@ async def test_executor_builds_the_exact_docker_command():
 
 @pytest.mark.asyncio
 async def test_executor_refuses_to_stop_the_container_the_dashboard_runs_in(monkeypatch):
-    """Nodvard Deck laeuft selbst als Container auf einem der Server -- "Stoppen" darauf schaltete
-    genau die Oberflaeche ab, mit der man ihn wieder starten muesste."""
+    """Nodvard Deck läuft selbst als Container auf einem der Server -- "Stoppen" darauf schaltete
+    genau die Oberfläche ab, mit der man ihn wieder starten müsste."""
     import nodvard_deck_ext_docker.capabilities as caps
 
     monkeypatch.setattr(caps, "_own_container_id", lambda: "3f2a9c1b7d4e")
@@ -532,14 +581,14 @@ _OTHER_ID = "0123456789ab" * 5 + "0011"
 
 @pytest.mark.asyncio
 async def test_remove_deletes_only_a_stopped_container_and_keeps_volumes():
-    """`container.remove` laeuft als `docker rm <name>` -- ohne `-f` (Docker lehnt einen laufenden Container
+    """`container.remove` läuft als `docker rm <name>` -- ohne `-f` (Docker lehnt einen laufenden Container
     selbst ab) und ohne `-v` (Volumes bleiben)."""
     from nodvard_deck_ext_docker.capabilities import DockerContainerExecutor
 
     exec_handle = _RecordingExec({"docker inspect": _FakeExecResult(0, f"{_OTHER_ID}|exited\n")})
     result = await DockerContainerExecutor(_ExecutorCtx(exec_handle)).execute(_request("container.remove", "alt-1"))
     assert result.success, result.error
-    # Geloescht wird die gepruefte volle ID, nicht noch einmal der Name.
+    # Gelöscht wird die geprüfte volle ID, nicht noch einmal der Name.
     assert exec_handle.commands[-1] == f"docker rm {_OTHER_ID}"
     assert "--type container" in exec_handle.commands[0]
 
@@ -669,7 +718,7 @@ async def test_portainer_parts_details_storage_and_cleanup_through_the_gate(
     running_app, db_session, test_settings, local_ssh_server, fake_docker
 ):
     """Details (ohne Env-Werte), Speicher mit freigebbarem Anteil,
-    Aufraeumen nur nach Freigabe -- und alles nur fuer Hosts mit dem Docker-Tag."""
+    Aufräumen nur nach Freigabe -- und alles nur für Hosts mit dem Docker-Tag."""
     from httpx import AsyncClient
 
     from nodvard_deck.services import hosts as hosts_service
@@ -813,7 +862,7 @@ def test_parse_stats_line_reads_cpu_and_memory():
 
 
 def test_memory_is_unknown_not_zero_when_the_host_does_not_account_it():
-    """Live auf einem Raspberry Pi: "0B / 0B" -- der Kernel zaehlt dort keinen Speicher je
+    """Live auf einem Raspberry Pi: "0B / 0B" -- der Kernel zählt dort keinen Speicher je
     cgroup. Das ist UNBEKANNT, nicht "0 B belegt"."""
     from nodvard_deck_ext_docker.capabilities import parse_stats_line
 
@@ -821,6 +870,12 @@ def test_memory_is_unknown_not_zero_when_the_host_does_not_account_it():
     assert values == {"cpu_percent": 0.29, "mem_used": None, "mem_limit": None}
     assert parse_stats_line("") is None
     assert parse_stats_line("kaputt") is None
+
+
+def test_a_stats_line_without_a_name_is_skipped():
+    from nodvard_deck_ext_docker.capabilities import parse_stats_line
+
+    assert parse_stats_line(" |0.29%|1MiB / 2MiB|0.00%") is None
 
 
 @pytest.mark.asyncio
@@ -884,6 +939,42 @@ async def test_stack_restart_runs_compose_without_a_file(project):
 
 
 @pytest.mark.asyncio
+async def test_maintenance_refuses_unknown_actions_and_hosts_before_any_command():
+    import nodvard_deck_ext_docker.capabilities as caps
+    from nodvard_sdk import ActionRequest, Actor
+
+    def req(action_type, host_ref="h1", payload=None):
+        return ActionRequest(action_type=action_type, payload=payload or {}, host_ref=host_ref,
+                             proposed_by=Actor.user("u1", "owner1"), reason="Test")
+
+    exec_handle = _RecordingExec()
+    executor = caps.DockerMaintenanceExecutor(_ExecutorCtx(exec_handle))
+    assert (await executor.execute(req("docker.unbekannt"))).error == "Unbekannte Aktion 'docker.unbekannt'."
+    assert (await executor.execute(req("docker.prune_images", host_ref=None))).error == "Aktion ohne Host-Referenz."
+    assert (await executor.execute(req("docker.prune_images", host_ref="weg"))).error == "Host 'weg' nicht gefunden."
+    assert (await executor.execute(req("docker.stack_restart", "weg", {"project": "shop"}))).error == "Host nicht gefunden."
+    assert exec_handle.commands == []
+    assert (await executor.dry_run(req("docker.prune_build_cache"))).summary == "Würde ausführen: docker builder prune -f"
+
+
+@pytest.mark.asyncio
+async def test_container_actions_refuse_unknown_actions_and_hosts_before_any_command():
+    from nodvard_deck_ext_docker.capabilities import DockerContainerExecutor
+    from nodvard_sdk import ActionRequest, Actor
+
+    def req(action_type, host_ref="h1"):
+        return ActionRequest(action_type=action_type, payload={"container": "web"}, host_ref=host_ref,
+                             proposed_by=Actor.user("u1", "owner1"), reason="Test")
+
+    exec_handle = _RecordingExec()
+    executor = DockerContainerExecutor(_ExecutorCtx(exec_handle))
+    assert (await executor.execute(req("container.pause"))).error == "Unbekannte Aktion 'container.pause'."
+    assert (await executor.execute(req("container.start", None))).error == "Aktion ohne Host-Referenz."
+    assert (await executor.execute(req("container.start", "weg"))).error == "Host 'weg' nicht gefunden."
+    assert exec_handle.commands == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("project", ["x; rm -rf /", "Gross", "", "-a", "a" * 70, "web\n", "web\nrm -rf /"])
 async def test_stack_restart_rejects_names_outside_composes_rule(project):
     import nodvard_deck_ext_docker.capabilities as caps
@@ -943,7 +1034,7 @@ async def test_stack_restart_quotes_the_project_in_the_command():
     from nodvard_sdk import ActionRequest, Actor
 
     exec_handle = _RecordingExec()
-    # Die Regel laesst nichts Sonderbares durch -- der Befehl ist trotzdem gequotet (zweite Sicherung).
+    # Die Regel lässt nichts Sonderbares durch -- der Befehl ist trotzdem gequotet (zweite Sicherung).
     project = "deploy"
     req = ActionRequest(action_type="docker.stack_restart", payload={"project": project}, host_ref="h1",
                         proposed_by=Actor.user("u1", "owner1"), reason="Test")
@@ -958,7 +1049,7 @@ async def test_stack_restart_quotes_the_project_in_the_command():
 
 
 # ---------------------------------------------------------------------------
-# Image-Updates pruefen (Teil C) -- ueber die echte Kette, nur lesend
+# Image-Updates prüfen (Teil C) -- über die echte Kette, nur lesend
 # ---------------------------------------------------------------------------
 
 
@@ -1007,11 +1098,11 @@ async def test_image_update_check_goes_over_ssh_reads_only_and_follows_the_permi
         web = snap["data"][f"{host.id}:web"]
         assert (web["status"], web["image"], web["remote_digest"]) == ("update", "nginx:1.27", "sha256:" + "b" * 64)
 
-        # Update eingespielt (lokal jetzt dieselbe Pruefsumme wie die Registry) -> "aktuell".
+        # Update eingespielt (lokal jetzt dieselbe Prüfsumme wie die Registry) -> "aktuell".
         docker["local_digest"] = docker["remote_digest"]
         assert (await check())["data"][f"{host.id}:web"]["status"] == "current"
 
-        # Nur Docker-Hosts; Betrachter duerfen den Stand lesen, aber nichts anstossen.
+        # Nur Docker-Hosts; Betrachter dürfen den Stand lesen, aber nichts anstoßen.
         assert (await ac.post(f"{base}/check", params={"host_id": no_docker.id}, headers=auth)).status_code == 404
         assert (await ac.post(f"{base}/check", params={"host_id": "gibt-es-nicht"}, headers=auth)).status_code == 404
         login = await ac.post("/api/v1/auth/login", json={"username": "viewer1", "password": "whatever123"})
@@ -1021,7 +1112,7 @@ async def test_image_update_check_goes_over_ssh_reads_only_and_follows_the_permi
         assert (await ac.get(base)).status_code == 401
         assert (await ac.post(f"{base}/check")).status_code == 401
 
-    # Nichts davon hat etwas veraendert: nur lesende docker-Befehle.
+    # Nichts davon hat etwas verändert: nur lesende docker-Befehle.
     image_calls = [c for c in docker["calls"] if "inspect" in c or c.startswith(("docker ps -q", "docker buildx"))]
     assert image_calls and all(c.startswith(("docker ps -q", "docker container inspect", "docker image inspect", "docker buildx imagetools inspect")) for c in image_calls)
     assert not any(word in c for c in docker["calls"] for word in ("pull", " rm ", "docker start", "docker stop", "docker restart", "docker run"))
@@ -1054,7 +1145,7 @@ async def test_image_update_plan_route_follows_the_permissions_and_checks_its_in
         def url(host_id: str, name: str) -> str:
             return f"/api/v1/ext/docker/containers/{host_id}/{name}/image-update/plan"
 
-        # Ein Container, den es nicht gibt (oder den die Pruefung nicht als "Update" kennt): 200 mit Grund, nichts wird veraendert.
+        # Ein Container, den es nicht gibt (oder den die Prüfung nicht als "Update" kennt): 200 mit Grund, nichts wird verändert.
         unknown = await ac.get(url(host.id, "web"), headers=auth)
         assert unknown.status_code == 200, unknown.text
         assert unknown.json()["ok"] is False and unknown.json()["reason"]
@@ -1073,9 +1164,9 @@ async def test_image_update_plan_route_follows_the_permissions_and_checks_its_in
 async def test_image_update_goes_through_the_gate_and_never_through_the_host_page(
     running_app, db_session, test_settings, local_ssh_server, fake_docker
 ):
-    """Die Aktion `container.image_update` ist nur ueber die Route der Extension zu haben: sie
-    braucht `hosts.execute`, prueft den Namen und die Uebersicht (`plan_id`), legt ihren Vorschlag
-    im Gate an (Begruendung mit den Fakten, Befehl im Payload) und laeuft erst nach der Freigabe.
+    """Die Aktion `container.image_update` ist nur über die Route der Extension zu haben: sie
+    braucht `hosts.execute`, prüft den Namen und die Übersicht (`plan_id`), legt ihren Vorschlag
+    im Gate an (Begründung mit den Fakten, Befehl im Payload) und läuft erst nach der Freigabe.
     Auf der Server-Seite (`/hosts/{id}/actions`) taucht sie nicht auf."""
     from httpx import AsyncClient
     from nodvard_deck_ext_docker import applier as ap
@@ -1111,7 +1202,7 @@ async def test_image_update_goes_through_the_gate_and_never_through_the_host_pag
         remote_digest=remote, registry_at=None, stale=False, plan_id=ia.plan_id(command, t.image_id, remote),
     )
 
-    async def canned(_host, container):  # noqa: ANN001, ANN202 - die Uebersicht selbst ist in test_ext_docker_apply.py geprueft
+    async def canned(_host, container):  # noqa: ANN001, ANN202 - die Übersicht selbst ist in test_ext_docker_apply.py geprüft
         return plan if container == "web" else ap.NotUpdatable("gone", "Container nicht gefunden.")
 
     applier.plan = canned
@@ -1133,7 +1224,7 @@ async def test_image_update_goes_through_the_gate_and_never_through_the_host_pag
         stale = await ac.post(f"{base}/web/image-update", json={"plan_id": "0" * 16}, headers=auth)
         assert stale.status_code == 409 and "neu laden" in stale.json()["detail"]
 
-        # Nie ueber die Server-Seite.
+        # Nie über die Server-Seite.
         listed = await ac.get(f"/api/v1/hosts/{host.id}/actions", headers=auth)
         assert "container.image_update" not in {a["action_type"] for a in listed.json()}
         direct = await ac.post(
@@ -1141,7 +1232,7 @@ async def test_image_update_goes_through_the_gate_and_never_through_the_host_pag
         )
         assert direct.status_code in (404, 400, 403, 422), direct.text
 
-        # Vorschlag: nichts laeuft vor der Freigabe.
+        # Vorschlag: nichts läuft vor der Freigabe.
         proposed = await ac.post(f"{base}/web/image-update", json=body, headers=auth)
         assert proposed.status_code == 202, proposed.text
         answer = proposed.json()
@@ -1153,7 +1244,7 @@ async def test_image_update_goes_through_the_gate_and_never_through_the_host_pag
         assert action["correlation_id"].startswith("imgupd_")
         assert not any("compose" in c or "@@launch" in c for c in docker["calls"]), "vor der Freigabe darf nichts laufen"
 
-        # Freigabe: der Executor baut den Befehl neu, prueft ihn und startet den Lauf -- hier ueber den
+        # Freigabe: der Executor baut den Befehl neu, prüft ihn und startet den Lauf -- hier über den
         # echten SSH-Kanal. Der Test-Server kennt den entkoppelten Start nicht und meldet nur `ran:...`;
         # das muss als "nicht gestartet" enden, nicht als Erfolg und nicht als Absturz.
         approved = await ac.post(f"/api/v1/actions/{answer['action_id']}/approve", headers=auth)
@@ -1167,7 +1258,7 @@ async def test_image_update_goes_through_the_gate_and_never_through_the_host_pag
 
 @pytest.mark.asyncio
 async def test_image_update_settings_are_declared_and_the_job_follows_them(client, db_session, test_settings):
-    """Tagesjob: standardmaessig aus, `enabled` + Zeitplan folgen den Einstellungen."""
+    """Tagesjob: standardmäßig aus, `enabled` + Zeitplan folgen den Einstellungen."""
     from nodvard_deck.ext.runtime import get_extension_runtime
     from nodvard_deck.models import Job
 

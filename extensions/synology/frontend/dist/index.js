@@ -1,5 +1,5 @@
 // src/SynologyPage.tsx
-import { useCallback, useEffect as useEffect3, useRef as useRef2, useState as useState2 } from "react";
+import { useCallback as useCallback2, useEffect as useEffect4, useRef as useRef2, useState as useState3 } from "react";
 
 // ../../_shared/frontend/src/lifecycle.ts
 import { useEffect, useRef } from "react";
@@ -14,12 +14,18 @@ function useUnmountSignal() {
 }
 
 // ../../../frontend/src/lib/deckGlobal.ts
+var EVENT_PREFIX = "nodvard-deck:";
+var LEGACY_EVENT_PREFIX = "lattice:";
 function findDeck() {
   if (typeof window === "undefined") return void 0;
   return window.__nodvardDeck ?? window.__lattice;
 }
 function deck() {
   return findDeck();
+}
+function deckEventName(event) {
+  const modern = typeof window !== "undefined" && Boolean(window.__nodvardDeck);
+  return (modern ? EVENT_PREFIX : LEGACY_EVENT_PREFIX) + event;
 }
 
 // ../../_shared/frontend/src/api.ts
@@ -296,6 +302,42 @@ function safeHref(url) {
   }
 }
 
+// ../../_shared/frontend/src/location.ts
+import { useCallback, useEffect as useEffect3, useMemo, useState as useState2 } from "react";
+function useUrlParams() {
+  const [search, setSearch] = useState2(() => window.location.search);
+  const [visits, setVisits] = useState2(0);
+  useEffect3(() => {
+    const sync = () => setSearch(window.location.search);
+    const visit = () => {
+      sync();
+      setVisits((n) => n + 1);
+    };
+    const onPopState = () => {
+      if (!findDeck()?.navigateEvents) visit();
+    };
+    sync();
+    const navigateEvent = deckEventName("navigate");
+    window.addEventListener("popstate", onPopState);
+    window.addEventListener(navigateEvent, visit);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+      window.removeEventListener(navigateEvent, visit);
+    };
+  }, []);
+  const params = useMemo(() => new URLSearchParams(search), [search]);
+  const update = useCallback((changes) => {
+    const url = new URL(window.location.href);
+    for (const [key, value] of Object.entries(changes)) {
+      if (value === null) url.searchParams.delete(key);
+      else url.searchParams.set(key, value);
+    }
+    window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+    setSearch(window.location.search);
+  }, []);
+  return [params, update, visits];
+}
+
 // src/SynologyPage.tsx
 import { Fragment as Fragment2, jsx as jsx4, jsxs as jsxs3 } from "react/jsx-runtime";
 var API = "/ext/synology";
@@ -533,18 +575,23 @@ function Tiles({ data }) {
     /* @__PURE__ */ jsx4(PartNote, { note: data.load_note, testId: "note-load" })
   ] });
 }
-function Device({ data }) {
+function Device({ data, many }) {
   const system = data.system;
   const head = headline(data);
   const openHref = safeHref(data.url);
   const facts = [system?.dsm_version, system?.ram_mb != null ? `${sizeText(system.ram_mb * 1024 * 1024)} Arbeitsspeicher` : null].filter(Boolean);
+  const open = openHref ? /* @__PURE__ */ jsx4("a", { href: openHref, target: "_blank", rel: "noreferrer", className: "break-all hover:text-white hover:underline", children: "DSM \xF6ffnen" }) : null;
   return /* @__PURE__ */ jsxs3("div", { className: "space-y-6", children: [
     /* @__PURE__ */ jsx4(AttentionCard, { data }),
     /* @__PURE__ */ jsx4(
       Card,
       {
         title: system?.model ?? "Synology",
-        description: openHref ? /* @__PURE__ */ jsx4("a", { href: openHref, target: "_blank", rel: "noreferrer", className: "break-all hover:text-white hover:underline", children: "DSM \xF6ffnen" }) : void 0,
+        description: many || open ? /* @__PURE__ */ jsxs3(Fragment2, { children: [
+          many ? /* @__PURE__ */ jsx4("span", { "data-testid": "device-name", children: data.device }) : null,
+          many && open ? " \xB7 " : null,
+          open
+        ] }) : void 0,
         actions: /* @__PURE__ */ jsx4(Badge, { tone: head.tone, children: head.label }),
         children: /* @__PURE__ */ jsxs3("div", { "data-testid": "device", className: "space-y-3", children: [
           facts.length > 0 && /* @__PURE__ */ jsx4("p", { "data-testid": "facts", className: "break-words text-sm text-white/70", children: facts.join(" \xB7 ") }),
@@ -564,42 +611,123 @@ function Device({ data }) {
     /* @__PURE__ */ jsx4(BackupsCard, { data })
   ] });
 }
-function StateProblem({ data, onRetry }) {
+function StateProblem({ data, many, busy, retryError, onRetry }) {
   const canManage = deck().hasPermission("extensions.manage");
   const head = PROBLEM[data.state] ?? PROBLEM.error;
-  return /* @__PURE__ */ jsx4(Card, { title: "Synology DSM", actions: /* @__PURE__ */ jsx4(Badge, { tone: head.tone, children: head.label }), children: /* @__PURE__ */ jsxs3("div", { "data-testid": "problem", role: "alert", className: "flex flex-col items-start gap-3", children: [
+  const onlySettings = data.state === "auth_failed" || data.config_problem === true;
+  return /* @__PURE__ */ jsx4(Card, { title: many && data.device ? data.device : "Synology DSM", actions: /* @__PURE__ */ jsx4(Badge, { tone: head.tone, children: head.label }), children: /* @__PURE__ */ jsxs3("div", { "data-testid": "problem", role: "alert", className: "flex flex-col items-start gap-3", children: [
     /* @__PURE__ */ jsx4("p", { className: "break-words text-sm text-red-300", children: data.message }),
+    retryError && /* @__PURE__ */ jsx4(LoadError, { compact: true, what: `Die erneute Abfrage von ${data.device ?? "der Synology"}`, error: retryError }),
     /* @__PURE__ */ jsxs3("div", { className: "flex flex-wrap items-center gap-2", children: [
-      data.state !== "auth_failed" && /* @__PURE__ */ jsx4(Button, { small: true, onClick: onRetry, children: "Erneut versuchen" }),
+      !onlySettings && /* @__PURE__ */ jsx4(Button, { small: true, disabled: busy, onClick: onRetry, children: busy ? "Pr\xFCfe \u2026" : "Erneut versuchen" }),
       canManage && /* @__PURE__ */ jsx4("a", { href: SETTINGS_PATH, className: buttonClass("ghost", true), children: "Einstellungen" })
-    ] })
+    ] }),
+    !canManage && onlySettings && /* @__PURE__ */ jsx4("p", { className: "text-xs text-white/45", children: "Ein Administrator kann das unter Einstellungen \u2192 Erweiterungen \u2192 Synology DSM beheben." })
   ] }) });
 }
-function NotConfigured({ data }) {
+function NotConfigured({ message }) {
   const canManage = deck().hasPermission("extensions.manage");
   return /* @__PURE__ */ jsx4(
     EmptyState,
     {
       icon: "clock",
       title: "Noch nicht eingerichtet",
-      text: canManage ? data.message ?? void 0 : "Ein Administrator kann Synology DSM unter Einstellungen \u2192 Erweiterungen \u2192 Synology DSM einrichten.",
+      text: canManage ? message ?? void 0 : "Ein Administrator kann Synology DSM unter Einstellungen \u2192 Erweiterungen \u2192 Synology DSM einrichten.",
       action: /* @__PURE__ */ jsx4(SettingsLink, { to: SETTINGS_PATH, permission: "extensions.manage", children: "Jetzt einrichten" })
     }
   );
 }
+var NOTHING_SET_UP = "Trage deine Synology unter Einstellungen \u2192 Erweiterungen \u2192 Synology DSM ein.";
+function tabStatus(data) {
+  if (data.state === "ok") return headline(data);
+  if (data.state === "not_configured") return { label: "nicht eingerichtet", tone: "neutral" };
+  return PROBLEM[data.state] ?? PROBLEM.error;
+}
+function occurrence(list, index) {
+  return list.slice(0, index + 1).filter((d) => d.device === list[index].device).length;
+}
+function indexOfDevice(list, name, nth) {
+  let seen = 0;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].device === name && ++seen === nth) return i;
+  }
+  return -1;
+}
+var PANEL_ID = "synology-panel";
+var tabId = (index) => `synology-tab-${index}`;
+function DeviceTabs({ devices, selected, onSelect }) {
+  const buttons = useRef2([]);
+  useEffect4(() => {
+    buttons.current[selected]?.scrollIntoView?.({ block: "nearest", inline: "center" });
+  }, [selected]);
+  function onKeyDown(e, index) {
+    const last = devices.length - 1;
+    const next = e.key === "ArrowRight" ? index === last ? 0 : index + 1 : e.key === "ArrowLeft" ? index === 0 ? last : index - 1 : e.key === "Home" ? 0 : e.key === "End" ? last : -1;
+    if (next < 0) return;
+    e.preventDefault();
+    onSelect(next);
+    buttons.current[next]?.focus();
+  }
+  return /* @__PURE__ */ jsx4("div", { role: "tablist", "aria-label": "Ger\xE4te", "data-testid": "device-tabs", className: "mb-5 flex gap-1 overflow-x-auto border-b border-white/[0.08] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", children: devices.map((d, index) => {
+    const status = tabStatus(d);
+    return /* @__PURE__ */ jsxs3(
+      "button",
+      {
+        ref: (el) => {
+          buttons.current[index] = el;
+        },
+        type: "button",
+        role: "tab",
+        id: tabId(index),
+        "aria-selected": selected === index,
+        "aria-controls": selected === index ? PANEL_ID : void 0,
+        tabIndex: selected === index ? 0 : -1,
+        onClick: () => onSelect(index),
+        onKeyDown: (e) => onKeyDown(e, index),
+        className: `-mb-px flex items-center gap-2 whitespace-nowrap border-b-2 px-3.5 py-2 text-sm transition ${selected === index ? "border-[var(--color-accent)] text-white" : "border-transparent text-white/55 hover:text-white"}`,
+        children: [
+          d.device,
+          /* @__PURE__ */ jsx4(Badge, { tone: status.tone, children: status.label })
+        ]
+      },
+      `${d.device}-${index}`
+    );
+  }) });
+}
+function DeviceSection({ data, many, busy, retryError, onRetry }) {
+  if (data.state === "ok") return /* @__PURE__ */ jsx4(Device, { data, many });
+  if (data.state === "not_configured") {
+    return many ? /* @__PURE__ */ jsx4(NotConfiguredDevice, { data }) : /* @__PURE__ */ jsx4(NotConfigured, { message: data.message });
+  }
+  return /* @__PURE__ */ jsx4(StateProblem, { data, many, busy, retryError, onRetry });
+}
+function NotConfiguredDevice({ data }) {
+  const canManage = deck().hasPermission("extensions.manage");
+  return /* @__PURE__ */ jsx4(Card, { title: data.device ?? "Synology DSM", actions: /* @__PURE__ */ jsx4(Badge, { tone: "neutral", children: "nicht eingerichtet" }), children: /* @__PURE__ */ jsxs3("div", { "data-testid": "not-configured-device", className: "flex flex-col items-start gap-3", children: [
+    /* @__PURE__ */ jsx4("p", { className: "break-words text-sm text-white/70", children: data.message }),
+    canManage ? /* @__PURE__ */ jsx4("a", { href: SETTINGS_PATH, className: buttonClass("primary", true), children: "Jetzt einrichten" }) : /* @__PURE__ */ jsx4("p", { className: "text-xs text-white/45", children: "Ein Administrator kann das unter Einstellungen \u2192 Erweiterungen \u2192 Synology DSM einrichten." })
+  ] }) });
+}
 function SynologyPage() {
   const unmountSignal = useUnmountSignal();
-  const [data, setData] = useState2(null);
-  const [error, setError] = useState2(null);
-  const [loading, setLoading] = useState2(true);
+  const [urlParams, updateUrl] = useUrlParams();
+  const [devices, setDevices] = useState3(null);
+  const [error, setError] = useState3(null);
+  const [loading, setLoading] = useState3(true);
   const seq = useRef2(0);
-  const load = useCallback((refresh) => {
+  const retrying = useRef2(/* @__PURE__ */ new Set());
+  const [retryingNames, setRetryingNames] = useState3(/* @__PURE__ */ new Set());
+  const [retryErrors, setRetryErrors] = useState3(/* @__PURE__ */ new Map());
+  const retried = useRef2(/* @__PURE__ */ new Map());
+  const load = useCallback2((refresh) => {
     const mine = ++seq.current;
+    retried.current.clear();
     setLoading(true);
-    fetchJson(`${API}/overview${refresh ? "?refresh=true" : ""}`, { signal: unmountSignal() }).then((body) => {
+    fetchJson(`${API}/devices${refresh ? "?refresh=true" : ""}`, { signal: unmountSignal() }).then((body) => {
       if (mine !== seq.current) return;
-      setData(body);
+      setDevices(body.devices.map((d) => d.device ? retried.current.get(d.device) ?? d : d));
       setError(null);
+      setRetryErrors(/* @__PURE__ */ new Map());
     }).catch((err) => {
       if (mine !== seq.current || err instanceof DOMException && err.name === "AbortError") return;
       setError(errorMessage(err));
@@ -607,25 +735,77 @@ function SynologyPage() {
       if (mine === seq.current) setLoading(false);
     });
   }, [unmountSignal]);
-  useEffect3(() => {
+  useEffect4(() => {
     load(false);
   }, [load]);
-  const reload = useCallback(() => load(true), [load]);
+  const reload = useCallback2(() => load(true), [load]);
+  const retry = useCallback2((name) => {
+    if (!name) return reload();
+    if (retrying.current.has(name)) return;
+    retrying.current.add(name);
+    setRetryingNames(new Set(retrying.current));
+    const started = seq.current;
+    const setDeviceError = (text) => setRetryErrors((errors) => {
+      const next = new Map(errors);
+      if (text === null) next.delete(name);
+      else next.set(name, text);
+      return next;
+    });
+    fetchJson(`${API}/overview?device=${encodeURIComponent(name)}&refresh=true`, { signal: unmountSignal() }).then((body) => {
+      if (seq.current !== started) return;
+      retried.current.set(name, body);
+      setDevices((list2) => (list2 ?? []).map((d) => d.device === name ? body : d));
+      setDeviceError(null);
+    }).catch((err) => {
+      if (seq.current !== started || err instanceof DOMException && err.name === "AbortError") return;
+      setDeviceError(errorMessage(err));
+    }).finally(() => {
+      retrying.current.delete(name);
+      setRetryingNames(new Set(retrying.current));
+    });
+  }, [reload, unmountSignal]);
+  const list = devices ?? [];
+  const many = list.length > 1;
+  const found = indexOfDevice(list, urlParams.get("device"), Number(urlParams.get("nr")) || 1);
+  const selected = found >= 0 ? found : 0;
+  const current = list[selected];
+  const select = (index) => {
+    const nth = occurrence(list, index);
+    updateUrl({ device: list[index].device ?? null, nr: nth > 1 ? String(nth) : null });
+  };
   return /* @__PURE__ */ jsxs3(
     Page,
     {
       title: "Synology DSM",
-      description: "Zeigt den Zustand deiner Synology: Auslastung, Speicherpools, Volumes, Festplatten, Hyper Backup und ob ein Update bereitsteht. Nur lesend.",
+      description: "Zeigt den Zustand deiner Synology-Ger\xE4te: Auslastung, Speicherpools, Volumes, Festplatten, Hyper Backup und ob ein Update bereitsteht. Nur lesend.",
       actions: /* @__PURE__ */ jsxs3(Fragment2, { children: [
         deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx4("a", { href: SETTINGS_PATH, className: buttonClass("ghost"), children: "Einstellungen" }),
         /* @__PURE__ */ jsx4(Button, { onClick: reload, disabled: loading, children: "Aktualisieren" })
       ] }),
       children: [
         error && /* @__PURE__ */ jsx4(LoadError, { what: "Der Zustand der Synology", error, onRetry: reload }),
-        !data && !error && /* @__PURE__ */ jsx4(Card, { children: /* @__PURE__ */ jsx4("p", { className: "text-sm text-white/50", children: "Lade \u2026" }) }),
-        data?.state === "not_configured" && /* @__PURE__ */ jsx4(NotConfigured, { data }),
-        data && data.state !== "ok" && data.state !== "not_configured" && /* @__PURE__ */ jsx4(StateProblem, { data, onRetry: reload }),
-        data?.state === "ok" && /* @__PURE__ */ jsx4(Device, { data })
+        !devices && !error && /* @__PURE__ */ jsx4(Card, { children: /* @__PURE__ */ jsx4("p", { className: "text-sm text-white/50", children: "Lade \u2026" }) }),
+        devices && list.length === 0 && /* @__PURE__ */ jsx4(NotConfigured, { message: NOTHING_SET_UP }),
+        many && /* @__PURE__ */ jsx4(DeviceTabs, { devices: list, selected, onSelect: select }),
+        current && /* @__PURE__ */ jsx4(
+          "div",
+          {
+            role: many ? "tabpanel" : void 0,
+            id: many ? PANEL_ID : void 0,
+            "aria-labelledby": many ? tabId(selected) : void 0,
+            "data-testid": many ? `panel-${current.device}` : void 0,
+            children: /* @__PURE__ */ jsx4(
+              DeviceSection,
+              {
+                data: current,
+                many,
+                busy: current.device != null && retryingNames.has(current.device),
+                retryError: current.device != null && retryErrors.get(current.device) || null,
+                onRetry: () => retry(current.device)
+              }
+            )
+          }
+        )
       ]
     }
   );

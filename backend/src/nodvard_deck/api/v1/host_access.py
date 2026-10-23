@@ -113,6 +113,14 @@ def root_helpers_for(host: Host) -> list[RootHelperFile]:
     return [found[ext_id] for ext_id in sorted(found)]
 
 
+def root_needs_helpers_only(host: Host) -> bool:
+    """Ob auf diesem Server jede Anforderung mit `needs_root` zu einem eingeschalteten Modul mit Hilfsskript gehört: Dann
+    reichen die engen Regeln der Skripte, die volle sudo-Regel braucht es nicht."""
+    loaded = get_extension_runtime().loaded
+    needing = {ext_id for ext_id, spec in matching_requirements(host) if spec.needs_root}
+    return bool(needing) and all((ext := loaded.get(ext_id)) is not None and ext.root_helper is not None for ext_id in needing)
+
+
 def valid_group(name: str | None, ext_id: str | None = None) -> str | None:
     """Der Gruppenname, wenn er gültig und nicht privilegiert ist, sonst `None` (bei einer Sperrlisten-Gruppe mit
     Eintrag im Log). `docker` ist bewusst erlaubt."""
@@ -232,6 +240,8 @@ class SetupOut(BaseModel):
     """Die Gruppen, die der Befehl wirklich einträgt (nur solche, die Erweiterungen verlangen)."""
     sudo: bool
     """Ob der Befehl root ohne Passwort einrichtet (nie für `root` selbst)."""
+    full_sudo: bool = False
+    """Ob dazu die volle sudo-Regel (`NOPASSWD: ALL`) gehört. `false` mit `sudo`: nur die Regeln der Hilfsskripte."""
     helpers: list[SetupHelperOut] = Field(default_factory=list)
     """Die Hilfsskripte, die der Befehl mitbringt (nur mit `sudo`), samt Text: Im Befehl stehen sie base64-kodiert."""
 
@@ -253,15 +263,17 @@ class _PreparedSetup:
     groups: list[str]
     sudo: bool
     helpers: list[RootHelperFile]
+    full_sudo: bool
 
 
 async def _prepare_setup(
     session: SessionDep, settings: Settings, host_id: str, credential_id: str, *, sudo: bool, groups: list[str] | None,
-    report_state: bool = False,
+    report_state: bool = False, full_sudo: bool = False,
 ) -> _PreparedSetup:
     """Gemeinsame Vorbedingungen und das Skript für `GET .../setup` und `POST .../setup-with-password`. Nur Linux, nur
     Zugänge mit SSH-Schlüssel, nur übliche Linux-Benutzernamen; Gruppen nur, wenn Erweiterungen sie für diesen Server
-    verlangen. Fehler sind feste Sätze (404/422)."""
+    verlangen. Mit `sudo` gibt es die volle Regel nur auf Wunsch (`full_sudo`) oder wenn ein Modul ohne Hilfsskript
+    root braucht, sonst nur die Regeln der Hilfsskripte. Fehler sind feste Sätze (404/422)."""
     host = await _load_host(session, host_id)
     credential = await session.get(HostCredential, credential_id)
     if credential is None or credential.host_id != host_id:
@@ -293,6 +305,7 @@ async def _prepare_setup(
         wanted = []
     use_sudo = sudo and not is_root
     helpers = root_helpers_for(host) if use_sudo else []
+    use_full = use_sudo and (full_sudo or not helpers or not root_needs_helpers_only(host))
 
     try:
         private_key = await vault.read_secret_plaintext(session, vault.load_keyring(settings), credential.secret_id)
@@ -300,21 +313,22 @@ async def _prepare_setup(
         info = host_setup.derive_public_key(private_key, comment=host_setup.key_comment(host.name))
         del private_key
         script, one_liner = host_setup.build_setup_script(
-            credential.username, info.public_key, groups=wanted, sudo=use_sudo, helpers=helpers, report_state=report_state
+            credential.username, info.public_key, groups=wanted, sudo=use_sudo, helpers=helpers, report_state=report_state,
+            full_sudo=use_full,
         )
     except (SetupError, VaultError) as exc:
         detail = str(exc) if isinstance(exc, SetupError) else "Der gespeicherte Schlüssel lässt sich nicht lesen."
         raise HTTPException(status_code=422, detail=detail) from None
     return _PreparedSetup(
         host=host, credential=credential, info=info, script=script, one_liner=one_liner, groups=wanted, sudo=use_sudo,
-        helpers=helpers,
+        helpers=helpers, full_sudo=use_full,
     )
 
 
 def _notes(prepared: _PreparedSetup) -> list[str]:
     return host_setup.setup_notes(
         prepared.credential.username, groups=prepared.groups, sudo=prepared.sudo,
-        helpers=[f"{h.ext_id}-root" for h in prepared.helpers],
+        helpers=[f"{h.ext_id}-root" for h in prepared.helpers], full_sudo=prepared.full_sudo,
     )
 
 
@@ -327,16 +341,19 @@ async def credential_setup(
     _user: WriteUser,
     sudo: bool = False,
     groups: Annotated[list[str] | None, Query()] = None,
+    full_sudo: bool = False,
 ) -> SetupOut:
     """Der Befehl, den man auf dem Server ausführt, damit sich Nodvard Deck mit diesem Schlüssel anmelden kann. `groups`
-    sind Wünsche (`?groups=docker` oder `?groups=a,b`), eingetragen werden nur Gruppen, die Erweiterungen verlangen.
-    Ändert nichts, daher GET."""
-    prepared = await _prepare_setup(session, settings, host_id, credential_id, sudo=sudo, groups=groups)
+    sind Wünsche (`?groups=docker` oder `?groups=a,b`), eingetragen werden nur Gruppen, die Erweiterungen verlangen;
+    `full_sudo` wünscht zu `sudo` die volle Regel. Ändert nichts, daher GET."""
+    prepared = await _prepare_setup(
+        session, settings, host_id, credential_id, sudo=sudo, groups=groups, full_sudo=full_sudo
+    )
     username = prepared.credential.username
     return SetupOut(
         username=username, public_key=prepared.info.public_key, fingerprint=prepared.info.fingerprint,
         one_liner=prepared.one_liner, script=prepared.script, notes=_notes(prepared), groups=prepared.groups,
-        sudo=prepared.sudo, helpers=[SetupHelperOut.from_file(h) for h in prepared.helpers],
+        sudo=prepared.sudo, full_sudo=prepared.full_sudo, helpers=[SetupHelperOut.from_file(h) for h in prepared.helpers],
     )
 
 
@@ -352,6 +369,8 @@ class SetupWithPasswordIn(BaseModel):
     """Wird einmal benutzt und nie gespeichert, protokolliert oder zurückgegeben."""
     sudo: bool = False
     """Wie `GET .../setup`: root ohne Passwort für den Benutzer des Zugangs einrichten."""
+    full_sudo: bool = False
+    """Wie `GET .../setup`: zu `sudo` die volle Regel statt nur der Regeln der Hilfsskripte."""
     groups: list[str] = Field(default_factory=list, max_length=20)
     """Wie `GET .../setup`: nur Gruppen, die Erweiterungen für diesen Server verlangen, werden eingetragen."""
     sudo_password_same: bool = True
@@ -405,6 +424,10 @@ async def _audit_check(session: SessionDep, user: User, host_id: str, result: Co
     )
 
 
+_SETUP_FAILURE_STATUS = {"sudo_failed": 400, "helpers_blocked": 409}
+"""Status je Ausgang des Einrichtungsbefehls; alles andere ist 502."""
+
+
 @router.post(
     "/hosts/{host_id}/credentials/{credential_id}/setup-with-password",
     dependencies=[Depends(require_permission("hosts.execute"))],
@@ -418,8 +441,8 @@ async def credential_setup_with_password(
     user: WriteUser,
 ) -> SetupWithPasswordOut:
     """Richtet den Server für diesen Schlüssel-Zugang ein: Nodvard Deck meldet sich EINMAL mit `login_user`/`password`
-    an, führt den Befehl von `GET .../setup` aus und prüft mit dem neuen Schlüssel wie `POST /hosts/{id}/check`. Fehler
-    als `{detail, code}`: 400 Passwort/sudo, 409 Schlüssel unbestätigt (`host_key`) oder geändert, 429, 502, 504."""
+    an, führt den Befehl von `GET .../setup` aus und prüft mit dem neuen Schlüssel. Fehler als `{detail, code}`: 400
+    Passwort/sudo, 409 Server-Schlüssel (`host_key`) oder Hilfsskripte nicht einrichtbar, 429, 502, 504."""
     # Verlangt `hosts.write` UND `hosts.execute` (der Befehl läuft als root). Nicht durchs Aktions-Gate: ein Vorschlag
     # stünde samt Eingaben in `actions.payload`, dort darf das Passwort nie landen; der Mensch entscheidet mit dem
     # Absenden, jeder Versuch steht im Protokoll.
@@ -427,15 +450,18 @@ async def credential_setup_with_password(
     # Das Passwort geht nur an die gespeicherte Adresse und nur bei schon gemerktem Server-Schlüssel (sonst
     # `host_key_unconfirmed`). Grenzen: `services/one_time_password.py`.
     prepared = await _prepare_setup(
-        session, settings, host_id, credential_id, sudo=payload.sudo, groups=payload.groups, report_state=True
+        session, settings, host_id, credential_id, sudo=payload.sudo, groups=payload.groups, report_state=True,
+        full_sudo=payload.full_sudo,
     )
     host, credential = prepared.host, prepared.credential
     as_root = payload.login_user == "root"
     sudo_with_password = not as_root and payload.sudo_password_same
-    command = host_setup.remote_setup_command(prepared.script, as_root=as_root, sudo_with_password=sudo_with_password)
+    command, command_input = host_setup.remote_setup_command(
+        prepared.script, as_root=as_root, sudo_with_password=sudo_with_password
+    )
     detail: dict[str, Any] = {
         "credential_id": credential.id, "username": credential.username, "login_user": payload.login_user,
-        "sudo": prepared.sudo, "groups": prepared.groups,
+        "sudo": prepared.sudo, "full_sudo": prepared.full_sudo, "groups": prepared.groups,
         "helpers": {h.ext_id: h.version for h in prepared.helpers},
     }
 
@@ -457,7 +483,8 @@ async def credential_setup_with_password(
     try:
         remote = await one_time_password.run_once(
             session, host=host, port=credential.port, user_id=user.id, login_user=payload.login_user,
-            password=payload.password, command=command, password_on_stdin=sudo_with_password,
+            password=payload.password, command=command, stdin_payload=command_input,
+            password_on_stdin=sudo_with_password,
             connect_timeout_s=min(settings.ssh_connect_timeout_s, one_time_password.CONNECT_TIMEOUT_S),
             flags=host_setup.SETUP_FLAGS,
             extract=lambda stdout: host_setup.setup_report(stdout, user=credential.username),
@@ -468,20 +495,23 @@ async def credential_setup_with_password(
             exc.code, str(exc), exc.status, retry_after=exc.retry_after, audit=exc.audit, **extra
         ) from None
 
-    # Der Befehl ist gelaufen (auch wenn er gleich als gescheitert gilt): für den Datei-Wächter festhalten, was er getan
-    # hat. Fehlt der Bericht, merkt der Wächter nur das Zeitfenster und übernimmt nichts still.
-    record = host_setup.setup_record(
-        credential.username, remote.extracted or {}, sudo=prepared.sudo, helpers=prepared.helpers
-    )
-    hosts_service.record_setup_run(host, started, record=record)
     run = host_setup.evaluate_setup_run(
         remote.exit_status, remote.stdout, remote.stderr, via_sudo=not as_root, sudo_with_password=sudo_with_password,
-        flags=remote.flags,
+        flags=remote.flags, long_command=bool(command_input),
     )
+    if run.outcome != "helpers_blocked":
+        # Der Befehl ist gelaufen (auch wenn er gleich als gescheitert gilt): für den Datei-Wächter festhalten, was er
+        # getan hat. Fehlt der Bericht, merkt der Wächter nur das Zeitfenster und übernimmt nichts still.
+        record = host_setup.setup_record(
+            credential.username, remote.extracted or {}, sudo=prepared.sudo, helpers=prepared.helpers,
+            full_sudo=prepared.full_sudo,
+        )
+        hosts_service.record_setup_run(host, started, record=record)
     del remote
     if run.outcome != "ok":
-        status_code = 400 if run.outcome == "sudo_failed" else 502
-        raise await refuse(run.outcome, run.reason, status_code, messages=run.messages) from None
+        raise await refuse(
+            run.outcome, run.reason, _SETUP_FAILURE_STATUS.get(run.outcome, 502), messages=run.messages
+        ) from None
 
     notes = _notes(prepared)
     check: ConnectionCheckOut | None

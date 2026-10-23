@@ -27,7 +27,7 @@ async def test_create_host_duplicate_name_rejected(db_session):
 @pytest.mark.asyncio
 async def test_list_hosts_filters_by_tag(db_session):
     await hosts_service.create_host(db_session, name="a", address="1.1.1.1", tags=["docker"])
-    await hosts_service.create_host(db_session, name="b", address="2.2.2.2", tags=["berry"])
+    await hosts_service.create_host(db_session, name="b", address="2.2.2.2", tags=["keller"])
 
     docker_hosts = await hosts_service.list_hosts(db_session, tag="docker")
     assert [h.name for h in docker_hosts] == ["a"]

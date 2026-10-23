@@ -20,6 +20,7 @@ from .adopt import AdoptedStacks
 from .applier import RISK_ORDER
 from .capabilities import is_own_container
 from .commands import CONTAINER_NAME_RE, VOLUME_NAME_RE
+from .compose_errors import docker_quoted
 from .editor import StackEditor, risky_settings, sha256
 from .image_apply import is_helper_labels, is_self_image
 from .image_updates import is_valid_ref
@@ -31,6 +32,7 @@ from .new_stack import (
     _undo,
     new_stack,
 )
+from .operate import not_full_host
 from .stack_actions import (
     FAILURE_LIMIT,
     DockerStackExecutor,
@@ -87,8 +89,8 @@ class Converted:
     project: str
     service: str
     compose: str = ""
-    env: str | None = None
-    """Inhalt der `container.env`; die Werte gehen nie an den Browser."""
+    env: str | None = field(default=None, repr=False)
+    """Inhalt der `container.env`; die Werte gehen nie an den Browser und nie ins Log."""
     env_names: list[str] = field(default_factory=list)
     env_values: dict[str, str] = field(default_factory=dict, repr=False)
     """Was Compose aus `container.env` lesen muss; nur für die Gegenprobe im Ordner."""
@@ -442,7 +444,8 @@ def cmd_remove_old(container_id: str) -> list[str]:
 
 @dataclass
 class Facts:
-    inspect: dict[str, Any]
+    inspect: dict[str, Any] = field(repr=False)
+    """Enthält mit `Config.Env` die Werte der Variablen."""
     converted: Converted
 
 
@@ -567,8 +570,8 @@ class DockerContainerToStackExecutor:
         host = await self._ctx.hosts.get(req.host_ref) if req.host_ref else None
         if host is None:
             return ActionResult(success=False, error="Server nicht gefunden.")
-        if ((await self._ctx.settings.get()).get("docker_host_tag") or "docker") not in host.tags:
-            return ActionResult(success=False, error="Kein Docker-Host.")
+        if why := not_full_host(host, await self._ctx.settings.get()):
+            return ActionResult(success=False, error=why)
         project = stack_name(container)
         with self._actions.locks.hold(host.id, project, "Umwandeln in einen Stack") as busy:
             if busy is not None:
@@ -751,8 +754,10 @@ def _env_vet(config: dict[str, Any], converted: Converted) -> str | None:
 
 
 def _scrub(text: str, converted: Converted) -> str:
-    """Eine Meldung von Compose ohne die Werte der Variablen: Sie geht in das Ergebnis der Aktion und damit an den Browser."""
-    if any(_shows(text, value) for value in converted.env_values.values() if len(value) >= 3):
+    """Eine Meldung von Compose ohne die Werte der Variablen, auch so, wie Docker sie zitiert: Sie geht in das Ergebnis der
+    Aktion und damit an den Browser."""
+    values = [value for value in converted.env_values.values() if len(value) >= 3]
+    if any(_shows(text, form) for value in values for form in {value, docker_quoted(value)}):
         return f"Compose meldet einen Fehler, der Werte aus {ENV_NAME} enthält; Deck zeigt ihn deshalb nicht."
     return text
 

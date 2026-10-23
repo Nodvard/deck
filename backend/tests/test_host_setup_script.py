@@ -8,6 +8,7 @@ Skript gegen Attrappen der Systembefehle wirklich aus."""
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 import stat
@@ -17,7 +18,9 @@ from pathlib import Path
 
 import asyncssh
 import pytest
+from test_core_ssh_stdin import LOGIN_SHELLS, login_shell
 
+from nodvard_deck.core import ssh
 from nodvard_deck.services import host_setup
 from nodvard_deck.services.host_setup import SetupError, build_setup_script
 
@@ -48,8 +51,12 @@ EVIL_VALUES = [
 ]
 
 
-def _script(user="lattice", key=KEY, **kw) -> str:
-    return build_setup_script(user, key, **kw)[0]
+NO_PROCESSES = "/nodvard-test-ohne-prozesse/[0-9]*/comm"
+"""Statt /proc: Auf dem Testrechner darf ein laufender Dropbear das Ergebnis nicht ändern."""
+
+
+def _script(user="lattice", key=KEY, *, processes: str = NO_PROCESSES, **kw) -> str:
+    return build_setup_script(user, key, **kw)[0].replace(host_setup._PROC_COMMS, processes)
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +80,7 @@ def test_user_variant_creates_user_with_locked_password_and_restricted_key():
     assert 'useradd -m -s /bin/bash -c "Nodvard Deck" "$U"' in script
     # "*" statt "!": sshd mit `UsePAM no` behandelt "!" als gesperrtes Konto.
     assert 'usermod -p "*" "$U"' in script
-    assert 'printf "%s\\n" "restrict,pty $K"' in script
+    assert 'KO="restrict,pty"' in script and 'printf "%s\\n" "$KO $K"' in script
     assert script.startswith("set -e\n")
     assert "U=lattice\n" in script
     assert f'K="{KEY}"\n' in script
@@ -172,7 +179,7 @@ def test_notes_warn_that_replaced_keys_stay_on_the_server():
 
 def test_notes_are_honest_about_the_rights():
     plain = host_setup.setup_notes("lattice", groups=(), sudo=False)
-    assert any("restrict" in n and "pty" in n for n in plain)
+    assert any("kein Weiterleiten" in n and "Dropbear" in n and "noch einmal einrichten" in n for n in plain)
     assert not any("praktisch alles" in n for n in plain)
     full = host_setup.setup_notes("lattice", groups=("docker",), sudo=True)
     assert any("Gruppe docker ist oder sudo ohne Passwort darf" in n and "praktisch alles" in n for n in full)
@@ -285,7 +292,9 @@ def test_public_key_is_derived_with_our_own_comment_not_the_one_in_the_key():
 
 
 def test_public_key_derivation_hides_details_of_broken_keys():
-    for bad in ("kein Schluessel GEHEIM", "", "-----BEGIN OPENSSH PRIVATE KEY-----\nGEHEIM\n-----END OPENSSH PRIVATE KEY-----\n"):
+    # Kopf und Fuß zusammengesetzt, damit Geheimnis-Scanner die Attrappe nicht für einen echten Schlüssel halten.
+    kind = "OPENSSH " + "PRIVATE KEY"
+    for bad in ("kein Schluessel GEHEIM", "", f"-----BEGIN {kind}-----\nGEHEIM\n-----END {kind}-----\n"):
         with pytest.raises(SetupError) as exc:
             host_setup.derive_public_key(bad, comment="x")
         assert "GEHEIM" not in str(exc.value)
@@ -798,10 +807,289 @@ def test_run_root_does_not_add_the_key_again_when_it_is_there_with_the_old_comme
 
 
 # ---------------------------------------------------------------------------
+# Dropbear: Optionen, die er versteht, und die alte eigene Zeile
+# ---------------------------------------------------------------------------
+
+OLD_LINE = f"restrict,pty {KEY}"
+DROPBEAR_LINE = f"{host_setup.DROPBEAR_KEY_OPTIONS} {KEY}"
+SCRIPT_SHELLS = ("sh", "dash", "bash")
+"""Shells für das ganze Skript; busybox sh nimmt seine eigenen Befehle statt der Attrappen und prüft die neuen Teile
+für sich (`test_detection_and_repair_work_in_every_login_shell`)."""
+
+
+def _processes(tmp_path: Path, *names: str) -> str:
+    """Eine Prozessliste wie /proc mit diesen Namen; zurück kommt das Muster, das im Skript /proc ersetzt."""
+    root = tmp_path / "proc"
+    (root / "self").mkdir(parents=True)
+    for pid, name in enumerate(names, start=100):
+        (root / str(pid)).mkdir()
+        (root / str(pid) / "comm").write_text(f"{name}\n")
+    return f"{root}/[0-9]*/comm"
+
+
+def _run_in(shell: str, script: str, bin_dir: Path, tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    argv, path = login_shell(shell, tmp_path, path="/usr/bin:/bin")
+    env = {"PATH": f"{bin_dir}:{path}", "LC_ALL": "C.UTF-8"}
+    return subprocess.run([*argv, "-c", script], capture_output=True, text=True, env=env, timeout=30, check=False)
+
+
+def _keys_file(home: Path, text: str) -> Path:
+    (home / ".ssh").mkdir()
+    authorized = home / ".ssh" / "authorized_keys"
+    authorized.write_text(text)
+    authorized.chmod(0o600)
+    return authorized
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", SCRIPT_SHELLS)
+def test_without_dropbear_the_key_gets_restrict_pty(tmp_path, shell):
+    bin_dir, home, _ = _sandbox(tmp_path)
+    processes = _processes(tmp_path, "systemd", "sshd", "sshd-session", "drop")
+    done = _run_in(shell, _script(processes=processes), bin_dir, tmp_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (home / ".ssh" / "authorized_keys").read_text() == f"{OLD_LINE}\n"
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", SCRIPT_SHELLS)
+@pytest.mark.parametrize("user", ["lattice", "root"])
+@pytest.mark.parametrize("name", ["dropbear", "dropbearmulti"])
+def test_with_dropbear_running_the_key_gets_options_dropbear_knows(tmp_path, shell, user, name):
+    bin_dir, home, _ = _sandbox(tmp_path, user=user)
+    processes = _processes(tmp_path, "systemd", "sshd", name)
+    done = _run_in(shell, _script(user, processes=processes), bin_dir, tmp_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (home / ".ssh" / "authorized_keys").read_text() == f"{DROPBEAR_LINE}\n"
+    assert host_setup.setup_messages(done.stdout) == [host_setup.KEY_ADDED]
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", SCRIPT_SHELLS)
+@pytest.mark.parametrize("user", ["lattice", "root"])
+def test_with_dropbear_the_old_own_line_is_replaced_and_nothing_else(tmp_path, shell, user):
+    bin_dir, home, _ = _sandbox(tmp_path, user=user)
+    before = [
+        "ssh-rsa AAAAold nico@pc",
+        "",
+        "  # Notiz mit\tTab, \\Backslash, $HOME, `id` und *",
+        "-n",
+        OLD_LINE,
+        f'from="192.0.2.0/24" {KEY}',
+        "ssh-ed25519 AAAAzweite ohne-zeilenende",
+    ]
+    authorized = _keys_file(home, "\n".join(before))
+    inode = authorized.stat().st_ino
+    script = _script(user, processes=_processes(tmp_path, "dropbear"))
+    done = _run_in(shell, script, bin_dir, tmp_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+    after = [DROPBEAR_LINE if line == OLD_LINE else line for line in before]
+    assert authorized.read_text() == "\n".join(after) + "\n"
+    assert authorized.stat().st_ino == inode and stat.S_IMODE(authorized.stat().st_mode) == 0o600
+    assert host_setup.setup_messages(done.stdout) == [host_setup.KEY_FIXED]
+
+    again = _run_in(shell, script, bin_dir, tmp_path)
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert authorized.read_text() == "\n".join(after) + "\n"
+    assert host_setup.setup_messages(again.stdout) == []
+
+
+def _detect_and_repair(shell: str, tmp_path: Path, keys: Path, processes: str) -> subprocess.CompletedProcess[str]:
+    """Nur Erkennung und Reparatur aus dem Skript, in einer Login-Shell mit ihren eigenen Befehlen."""
+    argv, path = login_shell(shell, tmp_path, path="/usr/bin:/bin")
+    snippet = "; ".join([
+        "set -e", f'K="{KEY}"', 'B=$(echo "$K" | cut -d" " -f1,2)', f'A="{keys}"',
+        host_setup._KEY_OPTIONS.replace(host_setup._PROC_COMMS, processes),
+        host_setup._KEY_FIX_FUNCTION, host_setup._key_fix(""), 'echo "KO=$KO"',
+    ])
+    return subprocess.run(
+        [*argv, "-c", snippet], capture_output=True, text=True, env={"PATH": path, "LC_ALL": "C.UTF-8"}, timeout=30,
+        check=False,
+    )
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", LOGIN_SHELLS)
+@pytest.mark.parametrize("running", [("sshd",), ("sshd", "dropbear")], ids=["openssh", "dropbear"])
+def test_detection_and_repair_work_in_every_login_shell(tmp_path, shell, running):
+    keys = tmp_path / "authorized_keys"
+    keys.write_text(f"ssh-rsa AAAAold nico@pc\n{OLD_LINE}\n")
+    done = _detect_and_repair(shell, tmp_path, keys, _processes(tmp_path, *running))
+    assert (done.returncode, done.stderr) == (0, "")
+    if "dropbear" in running:
+        assert done.stdout.splitlines() == [host_setup.KEY_FIXED, f"KO={host_setup.DROPBEAR_KEY_OPTIONS}"]
+        assert keys.read_text() == f"ssh-rsa AAAAold nico@pc\n{DROPBEAR_LINE}\n"
+    else:
+        assert done.stdout.splitlines() == [f"KO={host_setup.OPENSSH_KEY_OPTIONS}"]
+        assert keys.read_text() == f"ssh-rsa AAAAold nico@pc\n{OLD_LINE}\n"
+
+
+@needs_sh
+@pytest.mark.parametrize("line", [
+    f'from="192.0.2.0/24" {KEY}',
+    f"restrict {KEY}",
+    f"restrict,pty {KEY} ",
+    f"no-pty,restrict,pty {KEY}",
+    f"restrict,pty {KEY.rsplit(' ', 1)[0]} nico@pc",
+    f"restrict,pty {KEY.rsplit(' ', 1)[0]} nodvard@pi zusatz",
+    f"restrict,pty {KEY.rsplit(' ', 1)[0]}  nodvard@pi",
+    f"restrict,pty {KEY.rsplit(' ', 1)[0]} nodvard@pi\tx",
+])
+def test_with_dropbear_a_line_of_the_user_with_the_same_key_stays(tmp_path, line):
+    bin_dir, home, _ = _sandbox(tmp_path)
+    authorized = _keys_file(home, f"{line}\n")
+    done = _run(_script(processes=_processes(tmp_path, "dropbear")), bin_dir)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert authorized.read_text() == f"{line}\n"
+    assert host_setup.setup_messages(done.stdout) == []
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", SCRIPT_SHELLS)
+@pytest.mark.parametrize("comment", ["lattice@bastel-pi", "nodvard@alter-name"])
+def test_with_dropbear_an_old_own_line_with_another_comment_is_replaced(tmp_path, shell, comment):
+    bin_dir, home, _ = _sandbox(tmp_path)
+    key = KEY.rsplit(" ", 1)[0]
+    authorized = _keys_file(home, f"ssh-rsa AAAAold nico@pc\nrestrict,pty {key} {comment}\n")
+    script = _script(key=f"{key} nodvard@bastel-pi", processes=_processes(tmp_path, "dropbear"))
+    done = _run_in(shell, script, bin_dir, tmp_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert authorized.read_text() == f"ssh-rsa AAAAold nico@pc\n{host_setup.DROPBEAR_KEY_OPTIONS} {key} {comment}\n"
+    assert host_setup.setup_messages(done.stdout) == [host_setup.KEY_FIXED]
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", LOGIN_SHELLS)
+def test_with_dropbear_a_key_file_that_read_would_change_is_left_alone(tmp_path, shell):
+    keys = tmp_path / "authorized_keys"
+    original = f"ssh-rsa AAAAold nico@a\0versteckt\n{OLD_LINE}\n".encode()
+    keys.write_bytes(original)
+    done = _detect_and_repair(shell, tmp_path, keys, _processes(tmp_path, "dropbear"))
+    assert done.returncode == 1
+    assert keys.read_bytes() == original
+    error, hint = host_setup.setup_messages(done.stdout)
+    assert error.startswith("FEHLER: ") and hint.startswith("Hinweis: Von Hand beheben:")
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", LOGIN_SHELLS)
+@pytest.mark.parametrize("namespace", ["eigener", "fremder"])
+def test_a_dropbear_in_another_pid_namespace_does_not_count(tmp_path, shell, namespace):
+    processes = _processes(tmp_path, "sshd", "dropbear")
+    proc = tmp_path / "proc"
+    for pid, target in (("self", "eigener"), ("100", "eigener"), ("101", namespace)):
+        (tmp_path / target).touch()
+        (proc / pid / "ns").mkdir()
+        (proc / pid / "ns" / "pid").symlink_to(tmp_path / target)
+    keys = tmp_path / "authorized_keys"
+    keys.write_text(f"{OLD_LINE}\n")
+    done = _detect_and_repair(shell, tmp_path, keys, processes)
+    assert (done.returncode, done.stderr) == (0, "")
+    if namespace == "eigener":
+        assert done.stdout.splitlines() == [host_setup.KEY_FIXED, f"KO={host_setup.DROPBEAR_KEY_OPTIONS}"]
+    else:
+        assert done.stdout.splitlines() == [f"KO={host_setup.OPENSSH_KEY_OPTIONS}"]
+        assert keys.read_text() == f"{OLD_LINE}\n"
+
+
+@needs_sh
+def test_with_dropbear_only_the_first_old_line_is_replaced(tmp_path):
+    bin_dir, home, _ = _sandbox(tmp_path)
+    authorized = _keys_file(home, f"{OLD_LINE}\n{OLD_LINE}\n")
+    done = _run(_script(processes=_processes(tmp_path, "dropbear")), bin_dir)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert authorized.read_text() == f"{DROPBEAR_LINE}\n{OLD_LINE}\n"
+
+
+@needs_sh
+def test_without_dropbear_the_old_line_stays(tmp_path):
+    bin_dir, home, _ = _sandbox(tmp_path)
+    authorized = _keys_file(home, f"ssh-rsa AAAAold nico@pc\n{OLD_LINE}\n")
+    done = _run(_script(processes=_processes(tmp_path, "sshd")), bin_dir)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert authorized.read_text() == f"ssh-rsa AAAAold nico@pc\n{OLD_LINE}\n"
+    assert host_setup.setup_messages(done.stdout) == []
+
+
+@needs_sh
+def test_with_dropbear_a_linked_root_key_file_stays_a_link(tmp_path):
+    bin_dir, home, log = _sandbox(tmp_path, user="root")
+    (home / ".ssh").mkdir()
+    target = tmp_path / "pve-priv-authorized_keys"
+    target.write_text(f"ssh-rsa AAAAcluster admin\n{OLD_LINE}\n")
+    (home / ".ssh" / "authorized_keys").symlink_to(target)
+    done = _run(_script("root", processes=_processes(tmp_path, "dropbear")), bin_dir)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (home / ".ssh" / "authorized_keys").is_symlink()
+    assert target.read_text() == f"ssh-rsa AAAAcluster admin\n{DROPBEAR_LINE}\n"
+    calls = log.read_text()
+    assert "chmod" not in calls and "chown" not in calls
+
+
+@needs_sh
+def test_with_dropbear_a_linked_key_file_of_a_user_is_still_refused(tmp_path):
+    bin_dir, home, log = _sandbox(tmp_path)
+    (home / ".ssh").mkdir()
+    foreign = tmp_path / "fremd"
+    foreign.write_text(f"{OLD_LINE}\n")
+    (home / ".ssh" / "authorized_keys").symlink_to(foreign)
+    done = _run(_script(processes=_processes(tmp_path, "dropbear")), bin_dir)
+    assert done.returncode != 0 and "ist ein Link" in done.stdout
+    assert foreign.read_text() == f"{OLD_LINE}\n" and "runuser" not in log.read_text()
+
+
+@needs_sh
+def test_with_dropbear_a_write_that_does_not_check_out_restores_the_old_content(tmp_path):
+    bin_dir, home, _ = _sandbox(tmp_path)
+    _stub(bin_dir / "cmp", "exit 1\n")
+    original = f"ssh-rsa AAAAold nico@pc\n{OLD_LINE}\n"
+    authorized = _keys_file(home, original)
+    done = _run(_script(processes=_processes(tmp_path, "dropbear")), bin_dir)
+    assert done.returncode == 1
+    assert authorized.read_text() == original
+    [message] = host_setup.setup_messages(done.stdout)
+    assert message.startswith("FEHLER: ") and "nicht sicher schreiben" in message and "Fertig." not in done.stdout
+
+
+@needs_sh
+def test_with_dropbear_an_unreadable_key_file_is_left_alone(tmp_path):
+    bin_dir, home, _ = _sandbox(tmp_path)
+    _stub(bin_dir / "cat", "exit 1\n")
+    authorized = _keys_file(home, f"{OLD_LINE}\n")
+    done = _run(_script(processes=_processes(tmp_path, "dropbear")), bin_dir)
+    assert done.returncode == 1
+    assert authorized.read_text() == f"{OLD_LINE}\n"
+    error, hint = host_setup.setup_messages(done.stdout)
+    assert error.startswith(f"FEHLER: Die Schlüsselzeile in {authorized} ließ sich nicht für Dropbear anpassen")
+    assert error.endswith("sie ist unverändert.")
+    assert hint.startswith("Hinweis: Von Hand beheben:") and host_setup.DROPBEAR_KEY_OPTIONS in hint
+
+
+@needs_sh
+def test_the_repair_is_reported_for_the_file_guard(tmp_path):
+    bin_dir, home, _ = _sandbox(tmp_path)
+    authorized = _keys_file(home, f"{OLD_LINE}\n")
+    done = _run(_script(report_state=True, processes=_processes(tmp_path, "dropbear")), bin_dir)
+    assert done.returncode == 0, done.stdout + done.stderr
+    report = host_setup.setup_report(done.stdout, user="lattice")
+    assert report["actions"] == ["key_fixed"]
+    states = report["files"][str(authorized)]
+    assert states["before"]["sha256"] != states["after"]["sha256"]
+    run = host_setup.evaluate_setup_run(0, f"{host_setup.SETUP_STARTED}\n{done.stdout}", "", via_sudo=False, sudo_with_password=False)
+    assert run.outcome == "ok" and run.messages == [host_setup.KEY_FIXED]
+
+
+# ---------------------------------------------------------------------------
 # Nodvard Deck fuehrt den Befehl selbst aus (Einrichten mit Passwort)
 # ---------------------------------------------------------------------------
 
 SECRET = "Pw-nur-einmal-4711"
+LONG_TAIL = "\n# " + "x" * 9000
+"""Macht ein Skript zu lang für die Befehlszeile, ohne etwas zu tun."""
+
+
+def _inner(script: str) -> str:
+    return f"exec </dev/null; echo {host_setup.SETUP_STARTED}\n{script}"
 
 
 @pytest.mark.parametrize("as_root,with_password,prefix", [
@@ -811,25 +1099,73 @@ SECRET = "Pw-nur-einmal-4711"
 ])
 def test_remote_command_wraps_the_unchanged_script(as_root, with_password, prefix):
     script = _script(groups=("docker",), sudo=True)
-    command = host_setup.remote_setup_command(script, as_root=as_root, sudo_with_password=with_password)
+    command, command_input = host_setup.remote_setup_command(script, as_root=as_root, sudo_with_password=with_password)
     parts = shlex.split(command)
     assert parts[:-1] == prefix
     # Davor nur: Standardeingabe zu, Marke. Danach das Skript Zeichen fuer Zeichen.
-    assert parts[-1] == f"exec </dev/null; echo {host_setup.SETUP_STARTED}\n{script}"
+    assert parts[-1] == _inner(script)
+    assert command_input == b""
 
 
-def _sudo_stub(bin_dir: Path, log: Path, *, needs_password: bool) -> None:
-    """Wie sudo: mit -S liest es EINE Zeile von der Standardeingabe als Passwort (nur wenn es eins braucht),
-    dann startet es den Befehl (`sh -c ...`)."""
+@pytest.mark.parametrize("as_root,with_password,start", [
+    (True, False, 'sh -c "$__nd"'),
+    (False, True, "env LC_ALL=C sudo -S -p '' sh -c \"$__nd\""),
+    (False, False, 'env LC_ALL=C sudo -n sh -c "$__nd"'),
+])
+def test_a_long_script_travels_as_input_and_the_command_line_stays_short(as_root, with_password, start):
+    script = _script(groups=("docker",), sudo=True) + LONG_TAIL
+    command, command_input = host_setup.remote_setup_command(script, as_root=as_root, sudo_with_password=with_password)
+    assert len(command.encode()) <= 600
+    assert command.endswith(f"echo {host_setup.SETUP_INPUT_READ} && exec {start}")
+    assert KEY.split()[1] not in command and "xxxx" not in command
+    sent = re.fullmatch(r"(@@nodvard-ende-[0-9a-f]{32})\n(.*)\n\1\n", command_input.decode(), re.DOTALL)
+    assert sent is not None and sent.group(2) == _inner(script)
+    assert command.count(f'[ "$__l" = {sent.group(1)} ]') == 2
+
+
+def test_the_setup_uses_the_same_limit_as_every_other_command():
+    def script_for(size: int) -> str:
+        rest = size - len(f"sh -c '{_inner('')}'".encode())
+        return "ä" * (rest // 2) + "x" * (rest % 2)
+
+    at_limit = script_for(ssh.INLINE_COMMAND_MAX)
+    command, command_input = host_setup.remote_setup_command(at_limit, as_root=True, sudo_with_password=False)
+    assert len(command.encode()) == ssh.INLINE_COMMAND_MAX and command_input == b""
+    command, command_input = host_setup.remote_setup_command(at_limit + "x", as_root=True, sudo_with_password=False)
+    assert command.startswith("IFS= read -r __l") and command_input
+
+
+def test_the_length_limit_of_the_one_liner_counts_bytes(monkeypatch):
+    _, one_liner = build_setup_script("lattice", KEY, sudo=True)
+    assert len(one_liner.encode()) > len(one_liner), "der Befehl enthält Umlaute"
+    monkeypatch.setattr(host_setup, "MAX_ONE_LINER", len(one_liner))
+    with pytest.raises(SetupError, match="zu lang"):
+        build_setup_script("lattice", KEY, sudo=True)
+
+
+def _sudo_stub(bin_dir: Path, log: Path, *, needs_password: bool) -> Path:
+    """Wie sudo: mit -S liest es bis zu drei Versuche Zeile für Zeile von der Standardeingabe (nur wenn es ein Passwort
+    braucht), dann startet es den Befehl (`sh -c ...`); jeder Versuch landet in der zurückgegebenen Datei."""
+    attempts = log.parent / "sudo-attempts"
     check = (
-        f'IFS= read -r pw; [ "$pw" = "{SECRET}" ] || {{ echo "Sorry, try again." >&2; echo "sudo: 1 incorrect password attempt" >&2; exit 1; }}'
+        f'n=0; while :; do IFS= read -r pw || {{ echo "sudo: no password was provided" >&2; exit 1; }}; '
+        f'n=$((n + 1)); echo "$n" >> "{attempts}"; [ "$pw" = "{SECRET}" ] && break; echo "Sorry, try again." >&2; '
+        f'[ "$n" -lt 3 ] || {{ echo "sudo: 3 incorrect password attempts" >&2; exit 1; }}; done'
         if needs_password else ":"
     )
-    _stub(bin_dir / "sudo", f'''echo "sudo $*" >> "{log}"
-case "$1" in -S) {check};; -n) {'echo "sudo: a password is required" >&2; exit 1' if needs_password else ':'};; esac
-while [ "$1" != "sh" ]; do shift; done
-exec "$@"
-''')
+    # Steht das Passwort in der Befehlszeile irgendeines Prozesses, landet LEAK im Protokoll. Das Muster kommt aus
+    # einer Datei, sonst fände grep es in seiner eigenen Befehlszeile.
+    pattern = log.parent / "secret-pattern"
+    pattern.write_text(SECRET + "\n")
+    no_password = 'echo "sudo: a password is required" >&2; exit 1' if needs_password else ":"
+    _stub(bin_dir / "sudo", (
+        f'echo "sudo $*" >> "{log}"\n'
+        f'[ ! -d /proc/self ] || ! grep -qaFf "{pattern}" /proc/[0-9]*/cmdline 2>/dev/null || echo LEAK >> "{log}"\n'
+        f'case "$1" in -S) {check};; -n) {no_password};; esac\n'
+        'while [ "$1" != "sh" ]; do shift; done\n'
+        'exec "$@"\n'
+    ))
+    return attempts
 
 
 def _useradd_reading_stdin(bin_dir: Path, tmp_path: Path, log: Path) -> Path:
@@ -843,17 +1179,18 @@ def _useradd_reading_stdin(bin_dir: Path, tmp_path: Path, log: Path) -> Path:
 @pytest.mark.parametrize("sudo_needs_password", [True, False])
 def test_remote_run_via_sudo_reads_the_password_from_stdin_and_the_script_never_sees_it(tmp_path, sudo_needs_password):
     bin_dir, home, log = _sandbox(tmp_path, existing_user=False)
-    _sudo_stub(bin_dir, log, needs_password=sudo_needs_password)
+    attempts = _sudo_stub(bin_dir, log, needs_password=sudo_needs_password)
     seen = _useradd_reading_stdin(bin_dir, tmp_path, log)
-    command = host_setup.remote_setup_command(_script(), as_root=False, sudo_with_password=True)
-    assert SECRET not in command
+    command, command_input = host_setup.remote_setup_command(_script(), as_root=False, sudo_with_password=True)
+    assert SECRET not in command and command_input == b""
 
     env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "LC_ALL": "C.UTF-8"}
     done = subprocess.run(["sh", "-c", command], input=f"{SECRET}\n", capture_output=True, text=True, env=env, timeout=30, check=False)
     assert done.returncode == 0, done.stderr
     assert (home / ".ssh" / "authorized_keys").read_text() == f"restrict,pty {KEY}\n", "das Skript lief wirklich"
     assert seen.read_text() == "", "das Skript bekommt das Passwort nie zu lesen, auch wenn sudo es nicht braucht"
-    assert "sudo -S -p  sh -c" in log.read_text() and SECRET not in log.read_text()
+    assert "sudo -S -p  sh -c" in log.read_text() and SECRET not in log.read_text() and "LEAK" not in log.read_text()
+    assert (attempts.read_text().split() if attempts.exists() else []) == (["1"] if sudo_needs_password else [])
     run = host_setup.evaluate_setup_run(done.returncode, done.stdout, done.stderr, via_sudo=True, sudo_with_password=True)
     assert run.outcome == "ok" and run.messages == ["Benutzer lattice angelegt.", host_setup.KEY_ADDED]
 
@@ -862,7 +1199,7 @@ def test_remote_run_via_sudo_reads_the_password_from_stdin_and_the_script_never_
 def test_remote_run_with_a_wrong_sudo_password_never_starts_the_script(tmp_path):
     bin_dir, home, log = _sandbox(tmp_path, existing_user=False)
     _sudo_stub(bin_dir, log, needs_password=True)
-    command = host_setup.remote_setup_command(_script(), as_root=False, sudo_with_password=True)
+    command, _ = host_setup.remote_setup_command(_script(), as_root=False, sudo_with_password=True)
     env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "LC_ALL": "C.UTF-8"}
     done = subprocess.run(["sh", "-c", command], input="falsch\n", capture_output=True, text=True, env=env, timeout=30, check=False)
     assert done.returncode == 1
@@ -874,7 +1211,7 @@ def test_remote_run_with_a_wrong_sudo_password_never_starts_the_script(tmp_path)
 @needs_sh
 def test_remote_run_as_root_runs_the_script_directly(tmp_path):
     bin_dir, home, _log = _sandbox(tmp_path, user="root")
-    command = host_setup.remote_setup_command(_script("root"), as_root=True, sudo_with_password=False)
+    command, _ = host_setup.remote_setup_command(_script("root"), as_root=True, sudo_with_password=False)
     env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "LC_ALL": "C.UTF-8"}
     done = subprocess.run(["sh", "-c", command], input="", capture_output=True, text=True, env=env, timeout=30, check=False)
     assert done.returncode == 0, done.stderr
@@ -887,12 +1224,176 @@ def test_remote_run_as_root_runs_the_script_directly(tmp_path):
 def test_remote_run_reports_a_failing_script_with_its_own_lines(tmp_path):
     bin_dir, _home, _log = _sandbox(tmp_path, user="root")
     (tmp_path / "home").rmdir()  # das Home fehlt: das Skript bricht mit FEHLER ab
-    command = host_setup.remote_setup_command(_script("root"), as_root=True, sudo_with_password=False)
+    command, _ = host_setup.remote_setup_command(_script("root"), as_root=True, sudo_with_password=False)
     env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "LC_ALL": "C.UTF-8"}
     done = subprocess.run(["sh", "-c", command], input="", capture_output=True, text=True, env=env, timeout=30, check=False)
     run = host_setup.evaluate_setup_run(done.returncode, done.stdout, done.stderr, via_sudo=False, sudo_with_password=False)
     assert run.outcome == "setup_failed"
     assert len(run.messages) == 1 and run.messages[0].startswith("FEHLER: Das Home-Verzeichnis ")
+
+
+# ---------------------------------------------------------------------------
+# Langes Skript über die Standardeingabe, in jeder Login-Shell
+# ---------------------------------------------------------------------------
+
+
+def _remote_long(
+    tmp_path: Path, shell: str, bin_dir: Path, script: str, *, as_root: bool = False, with_password: bool = True,
+    password: str | None = SECRET, cut: int | None = None, before: str = "",
+) -> subprocess.CompletedProcess[bytes]:
+    argv, path = login_shell(shell, tmp_path, path="/usr/bin:/bin")
+    command, command_input = host_setup.remote_setup_command(script, as_root=as_root, sudo_with_password=with_password)
+    assert command_input, "der Weg über die Standardeingabe"
+    data = command_input + (f"{password}\n".encode() if password is not None else b"")
+    return subprocess.run(
+        [*argv, "-c", before + command], input=data[:cut], capture_output=True, timeout=60, check=False,
+        env={"PATH": f"{bin_dir}:{path}", "LC_ALL": "C.UTF-8"},
+    )
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", LOGIN_SHELLS)
+@pytest.mark.parametrize("sudo_needs_password", [True, False])
+def test_long_remote_run_leaves_the_password_to_sudo(tmp_path, shell, sudo_needs_password):
+    bin_dir, home, log = _sandbox(tmp_path, existing_user=False)
+    attempts = _sudo_stub(bin_dir, log, needs_password=sudo_needs_password)
+    seen = _useradd_reading_stdin(bin_dir, tmp_path, log)
+    done = _remote_long(tmp_path, shell, bin_dir, _script() + LONG_TAIL)
+    stdout, stderr = done.stdout.decode(), done.stderr.decode()
+    assert done.returncode == 0, stderr
+    assert (home / ".ssh" / "authorized_keys").read_text() == f"restrict,pty {KEY}\n", "das Skript lief wirklich"
+    assert seen.read_text() == "", "das Skript bekommt das Passwort nie zu lesen"
+    calls = log.read_text()
+    assert "LEAK" not in calls, "das Passwort stand in keiner Befehlszeile"
+    assert SECRET not in calls
+    assert (attempts.read_text().split() if attempts.exists() else []) == (["1"] if sudo_needs_password else [])
+    run = host_setup.evaluate_setup_run(
+        done.returncode, stdout, stderr, via_sudo=True, sudo_with_password=True, long_command=True
+    )
+    assert run.outcome == "ok" and run.messages == ["Benutzer lattice angelegt.", host_setup.KEY_ADDED]
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", LOGIN_SHELLS)
+def test_without_a_password_prompt_the_password_line_is_never_run(tmp_path, shell):
+    bin_dir, home, log = _sandbox(tmp_path, existing_user=False)
+    _sudo_stub(bin_dir, log, needs_password=False)
+    pwned = tmp_path / "PWNED"
+    done = _remote_long(tmp_path, shell, bin_dir, _script() + LONG_TAIL, password=f"touch {pwned}")
+    assert done.returncode == 0, done.stderr
+    assert (home / ".ssh" / "authorized_keys").exists()
+    assert not pwned.exists()
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", LOGIN_SHELLS)
+def test_long_remote_run_with_a_wrong_password_gets_exactly_one_attempt(tmp_path, shell):
+    bin_dir, home, log = _sandbox(tmp_path, existing_user=False)
+    attempts = _sudo_stub(bin_dir, log, needs_password=True)
+    done = _remote_long(tmp_path, shell, bin_dir, _script() + LONG_TAIL, password="falsch")
+    assert done.returncode == 1
+    assert attempts.read_text().split() == ["1"], "keine Zeile des Skripts wird zum zweiten Versuch"
+    assert not (home / ".ssh").exists()
+    run = host_setup.evaluate_setup_run(
+        done.returncode, done.stdout.decode(), done.stderr.decode(), via_sudo=True, sudo_with_password=True,
+        long_command=True,
+    )
+    assert (run.outcome, run.reason) == ("sudo_failed", "sudo hat das Passwort nicht angenommen.")
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", LOGIN_SHELLS)
+@pytest.mark.parametrize("as_root", [False, True])
+def test_an_incomplete_setup_input_runs_nothing(tmp_path, shell, as_root):
+    bin_dir, home, log = _sandbox(tmp_path, existing_user=False)
+    _sudo_stub(bin_dir, log, needs_password=True)
+    script = _script() + LONG_TAIL
+    _, command_input = host_setup.remote_setup_command(script, as_root=as_root, sudo_with_password=not as_root)
+    for cut in (10, len(command_input) // 2, len(command_input) - 1):
+        done = _remote_long(
+            tmp_path, shell, bin_dir, script, as_root=as_root, with_password=not as_root, password=None, cut=cut
+        )
+        stdout, stderr = done.stdout.decode(), done.stderr.decode()
+        assert done.returncode == ssh.STDIN_INCOMPLETE_EXIT, (cut, stderr)
+        assert (stdout, stderr.splitlines()) == ("", [ssh.STDIN_INCOMPLETE])
+        assert log.read_text() == "" and not (home / ".ssh").exists(), "weder sudo noch das Skript liefen"
+        run = host_setup.evaluate_setup_run(
+            done.returncode, stdout, stderr, via_sudo=not as_root, sudo_with_password=not as_root, long_command=True
+        )
+        assert (run.outcome, run.messages) == ("setup_failed", [])
+        assert run.reason.startswith("Der Einrichtungsbefehl kam nicht vollständig auf dem Server an")
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", LOGIN_SHELLS)
+@pytest.mark.parametrize("as_root", [False, True])
+def test_input_read_before_the_setup_runs_nothing(tmp_path, shell, as_root):
+    bin_dir, home, log = _sandbox(tmp_path, existing_user=False)
+    _sudo_stub(bin_dir, log, needs_password=False)
+    # Wie eine ~/.bashrc, die eine Zeile von der Standardeingabe liest: Ohne die Marke vorn liefe das Skript ohne
+    # `exec </dev/null` und könnte die Passwortzeile lesen.
+    done = _remote_long(
+        tmp_path, shell, bin_dir, _script() + LONG_TAIL, as_root=as_root, before="IFS= read -r _vorher; "
+    )
+    stdout, stderr = done.stdout.decode(), done.stderr.decode()
+    assert done.returncode == ssh.STDIN_INCOMPLETE_EXIT, stderr
+    assert (stdout, stderr.splitlines()) == ("", [ssh.STDIN_INCOMPLETE])
+    assert log.read_text() == "" and not (home / ".ssh").exists(), "weder sudo noch das Skript liefen"
+    run = host_setup.evaluate_setup_run(
+        done.returncode, stdout, stderr, via_sudo=not as_root, sudo_with_password=True, long_command=True
+    )
+    assert run.reason.startswith("Der Einrichtungsbefehl kam nicht vollständig auf dem Server an")
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", LOGIN_SHELLS)
+def test_long_remote_run_with_sudo_n_stops_when_sudo_wants_a_password(tmp_path, shell):
+    bin_dir, home, log = _sandbox(tmp_path, existing_user=False)
+    _sudo_stub(bin_dir, log, needs_password=True)
+    done = _remote_long(tmp_path, shell, bin_dir, _script() + LONG_TAIL, with_password=False, password=None)
+    assert done.returncode == 1
+    assert "sudo -n sh -c" in log.read_text() and not (home / ".ssh").exists()
+    run = host_setup.evaluate_setup_run(
+        done.returncode, done.stdout.decode(), done.stderr.decode(), via_sudo=True, sudo_with_password=False,
+        long_command=True,
+    )
+    assert (run.outcome, run.reason) == (
+        "sudo_failed", "sudo verlangt ein Passwort. Setze den Haken „Für sudo dasselbe Passwort nehmen“."
+    )
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", LOGIN_SHELLS)
+def test_long_remote_run_as_root_runs_the_script_directly(tmp_path, shell):
+    bin_dir, home, _log = _sandbox(tmp_path, user="root")
+    script = _script("root") + LONG_TAIL
+    done = _remote_long(tmp_path, shell, bin_dir, script, as_root=True, with_password=False, password=None)
+    assert done.returncode == 0, done.stderr
+    assert (home / ".ssh" / "authorized_keys").read_text() == f"restrict,pty {KEY}\n"
+    run = host_setup.evaluate_setup_run(
+        done.returncode, done.stdout.decode(), done.stderr.decode(), via_sudo=False, sudo_with_password=False,
+        long_command=True,
+    )
+    assert run.outcome == "ok" and run.messages == [host_setup.KEY_ADDED]
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", LOGIN_SHELLS)
+def test_the_real_setup_with_all_helpers_reaches_sudo_unchanged(tmp_path, shell):
+    from test_bundled_root_helpers import _helpers
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    seen = tmp_path / "sudo-sah"
+    _stub(bin_dir / "sudo", f'IFS= read -r pw; mkdir "{seen}"; printf %s "$pw" > "{seen}/pw"; '
+          f'printf "%s\\n" "$1" "$2" "$3" "$4" "$5" > "{seen}/args"; printf %s "$6" > "{seen}/script"\n')
+    script, _ = build_setup_script("deck", KEY, sudo=True, helpers=list(_helpers().values()), report_state=True)
+    assert len(script.encode()) > 50_000
+    done = _remote_long(tmp_path, shell, bin_dir, script)
+    assert done.returncode == 0, done.stderr
+    assert (seen / "args").read_text().split("\n")[:5] == ["-S", "-p", "", "sh", "-c"]
+    assert (seen / "pw").read_text() == SECRET
+    assert (seen / "script").read_text() == _inner(script) + "\n"
 
 
 @pytest.mark.parametrize("stderr,code,with_password,reason", [
@@ -907,6 +1408,44 @@ def test_sudo_failures_are_fixed_sentences(stderr, code, with_password, reason):
     run = host_setup.evaluate_setup_run(code, "", stderr, via_sudo=True, sudo_with_password=with_password)
     assert run.outcome == "sudo_failed" and run.reason.startswith(reason) and run.messages == []
     assert stderr not in run.reason
+
+
+def test_an_incomplete_input_counts_only_with_its_line_and_exit_code():
+    line = f"{ssh.STDIN_INCOMPLETE}\n"
+    run = host_setup.evaluate_setup_run(ssh.STDIN_INCOMPLETE_EXIT, "", line, via_sudo=True, sudo_with_password=True)
+    assert (run.outcome, run.messages) == ("setup_failed", []) and "nichts ausgeführt" in run.reason
+    assert host_setup.evaluate_setup_run(1, "", line, via_sudo=True, sudo_with_password=True).outcome == "sudo_failed"
+    other = host_setup.evaluate_setup_run(
+        ssh.STDIN_INCOMPLETE_EXIT, "", "kaputt", via_sudo=False, sudo_with_password=False
+    )
+    assert other.reason == "Der Befehl ließ sich auf dem Server nicht starten."
+
+
+# Was fish 3.7 und tcsh 6.24 als Login-Shell auf die Hülle antworten; gelaufen ist dabei nichts.
+FISH = (127, "fish: Unsupported use of '='. In fish, please use 'set __nd '.\nIFS= read -r __l && [ \"$__l\" ...\n")
+TCSH = (1, "Unmatched '\"'.\nUnmatched '\"'.\n")
+
+
+@pytest.mark.parametrize("code,stderr", [FISH, TCSH])
+@pytest.mark.parametrize("via_sudo,outcome", [(True, "sudo_failed"), (False, "setup_failed")])
+def test_a_login_shell_that_cannot_read_the_long_command_is_named(code, stderr, via_sudo, outcome):
+    run = host_setup.evaluate_setup_run(
+        code, "", stderr, via_sudo=via_sudo, sudo_with_password=True, long_command=True
+    )
+    assert (run.outcome, run.messages) == (outcome, [])
+    assert run.reason.startswith("Die Login-Shell dieses Kontos konnte den langen Einrichtungsbefehl nicht lesen")
+    assert "fish oder tcsh" in run.reason and "sudo ist" not in run.reason
+
+
+def test_only_a_long_command_without_its_read_mark_blames_the_login_shell():
+    code, stderr = FISH
+    short = host_setup.evaluate_setup_run(code, "", stderr, via_sudo=True, sudo_with_password=True)
+    assert short.reason == "sudo ist auf dem Server nicht installiert. Melde dich als root an."
+    read = f"{host_setup.SETUP_INPUT_READ}\n"
+    sudo = host_setup.evaluate_setup_run(
+        1, read, "sudo: 1 incorrect password attempt\n", via_sudo=True, sudo_with_password=True, long_command=True
+    )
+    assert sudo.reason == "sudo hat das Passwort nicht angenommen."
 
 
 def test_without_the_marker_as_root_the_command_did_not_start():

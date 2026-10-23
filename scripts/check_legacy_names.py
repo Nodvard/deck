@@ -208,7 +208,7 @@ KEPT_NAMES: tuple[Kept, ...] = (
        "darf keine Regel unter dem alten Namen anlegen. Der Datei-Wächter von Nodvard Shield (`intrusion.py`) kennt den Namen, "
        "damit er das Wegräumen der alten Regel durch die eigene Einrichtung nicht als Einbruch meldet.",
        paths=r"^(?:backend/(?:src/nodvard_deck/services/host_setup\.py|tests/test_host_setup_script\.py|tests/test_ext_shield_guard\.py"
-             r"|tests/test_host_setup_with_password\.py)"
+             r"|tests/test_host_setup_with_password\.py|tests/test_host_setup_helpers_only\.py)"
              r"|extensions/shield/src/nodvard_deck_ext_shield/intrusion\.py)$"),
     _k("Systemd-Einheit des alten Dienstes", r"lattice(?:-backend)?\.service\b",
        "Die alte Dienst-Einheit `lattice.service` bleibt in der Sperrliste der system-Extension (das Dashboard darf sich nicht "

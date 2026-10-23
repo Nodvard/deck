@@ -97,6 +97,7 @@ class Extension(NodvardExtension):
             WidgetSpec(
                 id="status",
                 title="Home Assistant",
+                group="apps",
                 icon="layout-grid",
                 size=GridSize(w=2, h=2),
                 refresh=Refresh(interval_s=60),

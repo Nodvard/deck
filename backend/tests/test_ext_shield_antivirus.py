@@ -4443,3 +4443,188 @@ def test_the_watcher_also_checks_files_copied_with_an_old_modification_time(tmp_
     out = subprocess.run(["/bin/sh", "-c", cmd], capture_output=True, text=True, env=env, timeout=60, check=False)
     res = av.parse_scan_output(out.stdout, mark)
     assert [path for path, _sig in res.findings] == [str(copied)], out.stdout + out.stderr
+
+
+def _scan_client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from nodvard_deck_ext_shield.defender_api import build_routers
+
+    started: list[list[str] | None] = []
+
+    class _Def:
+        async def target_hosts(self):
+            return [Host(id="h1", name="pve2", display_name="pve2", address="10.0.0.2")]
+
+        async def start_scans(self, hosts, kind, *, paths, trigger):
+            started.append(paths)
+            return ["s1"]
+
+    _, manage = build_routers(SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None)), _Def())
+    app = FastAPI()
+    app.include_router(manage)
+    return TestClient(app), started
+
+
+@pytest.mark.parametrize("paths", [["var/www"], ["/srv", "uploads"], ["  "]])
+def test_a_custom_scan_without_full_paths_is_refused_instead_of_scanning_the_defaults(paths):
+    client, started = _scan_client()
+    res = client.post("/defender/scans", json={"kind": "custom", "paths": paths})
+    assert res.status_code == 400 and started == []
+    if paths != ["  "]:
+        assert "vollem Pfad" in res.json()["detail"]
+
+
+def test_a_custom_scan_gets_exactly_its_folders():
+    client, started = _scan_client()
+    assert client.post("/defender/scans", json={"kind": "custom", "paths": [" /srv/www ", "", "/tmp"]}).status_code == 200
+    assert started == [["/srv/www", "/tmp"]]
+
+
+@pytest.mark.asyncio
+async def test_an_ignored_finding_can_be_watched_again():
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.models import Base, FindingRecord
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    ctx = _FakeCtx(sm, {"clamscan -r": CLAM_INFECTED})
+
+    async def settings():
+        return {"auto_quarantine": False}
+
+    ctx.settings = SimpleNamespace(get=settings)
+    defender = Defender(ctx)
+
+    async def scan() -> None:
+        await defender.start_scans(await defender.target_hosts(), "quick", paths=None, trigger="manual")
+        for _ in range(100):
+            await asyncio.sleep(0.02)
+            if not defender.is_running("h1", "quick"):
+                break
+
+    await scan()
+    found = {f["path"]: f["id"] for f in await defender.list_findings()}
+    eicar = found["/tmp/eicar.com"]
+    assert await defender.ignore(eicar)
+    assert await defender.reopen(found["/home/user/x.sh"]) == (False, "Dieser Fund ist weder ignoriert noch wiederhergestellt.")
+    assert (await defender.reopen(eicar))[0]
+    notes = len(ctx.notes)
+    await scan()
+    statuses = sorted((f["path"], f["status"]) for f in await defender.list_findings())
+    assert statuses == [("/home/user/x.sh", "detected"), ("/tmp/eicar.com", "detected")]
+    assert len(ctx.notes) == notes + 1 and "/tmp/eicar.com" in ctx.notes[-1].body
+
+    # Neben einem offenen Fund derselben Datei bleibt ein alter ignorierter Fund, wie er ist.
+    async with sm() as session:
+        (await session.get(FindingRecord, eicar)).status = "ignored"
+        session.add(FindingRecord(id="f-old", scan_id="s0", host_id="h1", host_name="pve2", path="/home/user/x.sh",
+                                  signature="Old.Sig", status="ignored", detected_at=datetime.now(UTC)))
+        await session.commit()
+    ok, message = await defender.reopen("f-old")
+    assert not ok and "schon einen offenen Fund" in message
+    await engine.dispose()
+
+
+def test_reopen_route_answers_with_the_reason_and_logs_who_did_it():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from nodvard_deck_ext_shield.defender_api import build_routers
+
+    audits: list[dict] = []
+    answers = iter([(True, ""), (False, "Dieser Fund ist weder ignoriert noch wiederhergestellt.")])
+
+    class _Def:
+        async def reopen(self, finding_id):
+            return next(answers)
+
+    async def log(**kw):
+        audits.append(kw)
+
+    ctx = SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None), audit=SimpleNamespace(log=log))
+    _, manage = build_routers(ctx, _Def())
+    app = FastAPI()
+    app.include_router(manage)
+    client = TestClient(app)
+    assert client.post("/defender/findings/f1/reopen").json() == {"ok": True}
+    refused = client.post("/defender/findings/f1/reopen")
+    assert refused.status_code == 409 and refused.json()["detail"].startswith("Dieser Fund ist weder")
+    assert [(a["action"], a["reason"]) for a in audits] == [("shield.finding_reopened", "f1")]
+
+
+@pytest.mark.asyncio
+async def test_reopen_keeps_true_notes_and_refuses_beside_a_quarantined_file():
+    from datetime import UTC, datetime
+
+    from nodvard_deck_ext_shield.defender import QUARANTINE_FOLLOWING, QUARANTINE_LATE_UNKNOWN, UNRELIABLE_NOTE, Defender
+    from nodvard_deck_ext_shield.models import Base, FindingRecord
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    defender = Defender(_FakeCtx(sm, {}))
+    stale = f"Nach 5 Minuten kam keine Rückmeldung vom Server. {QUARANTINE_FOLLOWING.format(until='03:10')}"
+    rows = [
+        ("f-restored", "/srv/a.sh", "restored", stale),
+        ("f-unsure", "/srv/b.sh", "ignored", UNRELIABLE_NOTE),
+        ("f-old", "/srv/c.sh", "ignored", None),
+        ("f-quarantined", "/srv/c.sh", "quarantined", None),
+    ]
+    async with sm() as session:
+        for fid, path, state, note in rows:
+            session.add(FindingRecord(id=fid, scan_id="s0", host_id="h1", host_name="pi", path=path, signature="Sig",
+                                      status=state, note=note, detected_at=datetime.now(UTC)))
+        await session.commit()
+
+    assert await defender.reopen("f-restored") == (True, "")
+    assert await defender.reopen("f-unsure") == (True, "")
+    ok, message = await defender.reopen("f-old")
+    assert not ok and "Quarantäne" in message
+    found = {f["id"]: f for f in await defender.list_findings()}
+    assert found["f-restored"]["status"] == "detected" and found["f-restored"]["note"] == QUARANTINE_LATE_UNKNOWN
+    assert found["f-unsure"]["note"] == UNRELIABLE_NOTE
+    assert found["f-old"]["status"] == "ignored"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_scan_survives_two_open_findings_for_one_file():
+    import asyncio
+    from datetime import UTC, datetime, timedelta
+
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.models import Base, FindingRecord, ScanRecord
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    ctx = _FakeCtx(sm, {"clamscan -r": CLAM_INFECTED})
+
+    async def settings():
+        return {"auto_quarantine": False}
+
+    ctx.settings = SimpleNamespace(get=settings)
+    now = datetime.now(UTC)
+    async with sm() as session:
+        for fid, age in (("f-a", 2), ("f-b", 1)):
+            session.add(FindingRecord(id=fid, scan_id="s0", host_id="h1", host_name="pi", path="/tmp/eicar.com",
+                                      signature="Win.Test.EICAR_HC-1", status="detected",
+                                      detected_at=now - timedelta(hours=age)))
+        await session.commit()
+    defender = Defender(ctx)
+    (scan_id,) = await defender.start_scans(await defender.target_hosts(), "quick", paths=None, trigger="manual")
+    for _ in range(100):
+        await asyncio.sleep(0.02)
+        if not defender.is_running("h1", "quick"):
+            break
+    async with sm() as session:
+        assert (await session.get(ScanRecord, scan_id)).status == "infected"
+        assert (await session.get(FindingRecord, "f-b")).scan_id == scan_id
+    await engine.dispose()

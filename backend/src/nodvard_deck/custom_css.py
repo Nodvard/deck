@@ -35,8 +35,8 @@ def _name_char(c: str) -> bool:
 
 
 def is_local_url(target: str) -> bool:
-    """`data:` oder ein Pfad auf diesem Server (nicht `//`, kein `\\`, keine Leer- und Steuerzeichen). Gilt auch für
-    Logo und Favicon (`branding.py`), weil die App-Seite Bilder nur von dort laden soll (`img-src 'self' data: blob:`)."""
+    """`data:` oder ein Pfad auf diesem Server (nicht `//`, kein Backslash, keine Leer- und Steuerzeichen), auch
+    für Logo und Favicon."""
     if any(ord(c) < 0x21 or ord(c) == 0x7F for c in target):
         return False
     if target[:5].lower() == "data:":
@@ -52,10 +52,9 @@ def _check_url(target: str) -> None:
         )
 
 
+# Liest das CSS genau einmal von vorn nach hinten wie der Browser, ohne reguläre Ausdrücke mit Rückschritten: Die
+# Laufzeit wächst nur linear.
 class _Scanner:
-    """Liest das CSS genau einmal von vorn nach hinten wie der Browser (CSS Syntax Level 3, Tokenizer), ohne
-    reguläre Ausdrücke mit Rückschritten: Die Laufzeit wächst nur linear mit der Länge."""
-
     def __init__(self, css: str) -> None:
         self.s = css
         self.n = len(css)
@@ -226,10 +225,7 @@ class _Scanner:
 
 
 def check_css(css: str) -> None:
-    """Wirft `UnsafeCss`, wenn das CSS etwas von einer fremden Adresse laden würde oder größer als 64 KB ist.
-
-    Geprüft wird mit einer Erlaubnisliste wie im Browser: Zeilenenden erst vereinheitlichen (CR LF, CR und Seitenvorschub
-    werden LF), dann in einem Durchgang Kommentare, Zeichenketten, Escapes und `url()` lesen."""
+    """Wirft `UnsafeCss`, wenn das CSS etwas von einer fremden Adresse laden würde oder größer als 64 KB ist."""
     try:
         size = len(css.encode("utf-8"))
     except UnicodeEncodeError:
@@ -243,8 +239,8 @@ def check_css(css: str) -> None:
 
 @lru_cache(maxsize=8)
 def servable_css(css: str) -> str:
-    """Was `GET /branding/custom.css` ausliefert: das gespeicherte CSS, wenn es die Prüfung besteht, sonst nichts.
-    Zwischengespeichert, weil die Route ohne Anmeldung erreichbar ist und sonst jede Anfrage bis zu 64 KB neu prüfte."""
+    """Das gespeicherte CSS, wenn es die Prüfung besteht, sonst nichts; zwischengespeichert, weil die Route ohne
+    Anmeldung erreichbar ist."""
     try:
         check_css(css)
     except UnsafeCss:

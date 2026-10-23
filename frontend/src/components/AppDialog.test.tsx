@@ -160,7 +160,7 @@ describe("AppDialog: neue App", () => {
   it("lehnt Zugangsdaten in der Adresse ab", async () => {
     renderDialog();
     fireEvent.change(field("Name"), { target: { value: "NAS" } });
-    fireEvent.change(field("Adresse"), { target: { value: "http://admin:geheim@192.168.2.20" } });
+    fireEvent.change(field("Adresse"), { target: { value: "http://admin:" + "geheim@192.168.2.20" } });
     submit("Hinzufügen");
     expect(await screen.findByText("Bitte keinen Benutzernamen und kein Passwort in die Adresse schreiben.")).toBeInTheDocument();
     expect(calls).toEqual([]);

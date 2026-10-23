@@ -48,6 +48,7 @@ transport = _ExtModule("transport")
 widgets = _ExtModule("widgets")
 
 BASE = "https://nas.test:5001"
+DEVICE = "synology"  # so heißt das Gerät der Einzeltests, wie das aus der früheren Einrichtung übernommene
 USER = "nodvard"
 PASSWORD = "Beispiel&Pass wort=1+%"
 EXT = "synology"
@@ -148,7 +149,7 @@ def test_the_ui_paths_are_webman_and_webapi():
 
 @pytest.mark.parametrize(
     "raw",
-    ["", "nas.test", "ftp://nas.test", "https://", "https://nutzer:geheim@nas.test:5001", "https://nas.test:99999", "https://nas .test", None],
+    ["", "nas.test", "ftp://nas.test", "https://", "https://nutzer:" + "geheim@nas.test:5001", "https://nas.test:99999", "https://nas .test", None],
 )
 def test_unusable_addresses_are_refused(raw):
     with pytest.raises(ValueError):
@@ -161,19 +162,87 @@ def test_username_is_trimmed_or_empty():
     assert syn_config.normalize_username("a\nb") == "" and syn_config.normalize_username("x" * 200) == ""
 
 
+def _read_one(**entry: Any):
+    """Das eine Gerät, das aus diesem Eintrag gelesen wird."""
+    found = syn_config.read_devices({"connections": [{"name": "nas", **entry}]})
+    assert len(found) == 1
+    return found[0]
+
+
 def test_the_certificate_check_stays_on_unless_it_is_switched_off_on_purpose():
-    assert syn_config.read_config({"base_url": BASE}).insecure_tls is False
-    assert syn_config.read_config({"base_url": BASE, "tls_insecure_skip_verify": False}).insecure_tls is False
-    assert syn_config.read_config({"base_url": BASE, "tls_insecure_skip_verify": "true"}).insecure_tls is False, "nur ein echtes „an“ zählt"
-    assert syn_config.read_config({"base_url": BASE, "tls_insecure_skip_verify": True}).insecure_tls is True
+    assert _read_one(base_url=BASE).insecure_tls is False
+    assert _read_one(base_url=BASE, tls_insecure_skip_verify=False).insecure_tls is False
+    assert _read_one(base_url=BASE, tls_insecure_skip_verify="true").insecure_tls is False, "nur ein echtes „an“ zählt"
+    assert _read_one(base_url=BASE, tls_insecure_skip_verify=True).insecure_tls is True
 
 
-def test_config_without_an_address_is_not_a_problem_but_a_bad_address_is():
-    assert syn_config.read_config({}).base_url is None and syn_config.read_config({}).problem is None
-    assert syn_config.read_config({"base_url": "  "}).problem is None
-    bad = syn_config.read_config({"base_url": "https://nutzer:geheim@nas.test"})
-    assert bad.base_url is None and bad.problem and "geheim" not in bad.problem
-    assert syn_config.read_config({"base_url": "https://nas.test/webman/x", "username": " a "}).username == "a"
+def test_a_device_without_an_address_is_not_a_problem_but_a_bad_address_is():
+    assert _read_one().base_url is None and _read_one().problem is None
+    assert _read_one(base_url="  ").problem is None
+    bad = _read_one(base_url="https://nutzer:" + "geheim@nas.test")
+    assert bad.base_url is None and bad.problem and "geheim" not in bad.problem and "nas" in bad.problem
+    assert _read_one(base_url="https://nas.test/webman/x", username=" a ").username == "a"
+
+
+def test_no_devices_when_the_list_is_missing_or_broken():
+    for settings in ({}, {"connections": None}, {"connections": "nas"}, {"connections": [5, None, "x", {"name": ""}, {}]}):
+        assert syn_config.read_devices(settings) == []
+    assert syn_config.read_devices({"base_url": BASE, "username": USER}) == [], "die alten Einzelfelder lesen nur die Übernahme"
+
+
+def test_devices_keep_their_order_and_their_own_settings():
+    found = syn_config.read_devices({"connections": [
+        {"name": "ds920", "base_url": "https://a.test:5001/webman/index.cgi", "username": "eins", "tls_insecure_skip_verify": True},
+        {"name": "ds415", "base_url": "http://b.test:5000", "username": "zwei"},
+    ]})
+    assert [(d.name, d.base_url, d.username, d.insecure_tls, d.problem) for d in found] == [
+        ("ds920", "https://a.test:5001", "eins", True, None), ("ds415", "http://b.test:5000", "zwei", False, None),
+    ]
+
+
+@pytest.mark.parametrize("name", ["..", ".versteckt", "-x", "mit leerzeichen", "a/b", "../etc", "ä", "x" * 41, "a\nb"])
+def test_a_name_that_cannot_be_used_in_a_file_name_or_label_is_a_problem_without_any_request(name):
+    [device] = syn_config.read_devices({"connections": [{"name": name, "base_url": BASE, "username": USER}]})
+    assert device.named is False and device.problem and "Kurzname" in device.problem
+    assert device.base_url is None
+
+
+@pytest.mark.parametrize("name", ["a", "ds920", "DS415.play", "keller_2", "nas-1", "x" * 40])
+def test_the_names_the_schema_allows_are_valid(name):
+    [device] = syn_config.read_devices({"connections": [{"name": name, "base_url": BASE, "username": USER}]})
+    assert device.named is True and device.problem is None
+    assert syn_config.password_label(name) == f"synology-password:{name}"
+    assert len(syn_config.password_label(name)) <= 128
+
+
+def test_a_name_twice_makes_every_entry_with_it_unusable_regardless_of_case():
+    found = syn_config.read_devices({"connections": [
+        {"name": "Nas", "base_url": BASE, "username": USER}, {"name": "nas", "base_url": BASE, "username": USER},
+        {"name": "Nas", "base_url": BASE, "username": USER}, {"name": "keller", "base_url": BASE, "username": USER},
+    ]})
+    assert [(d.name, d.named) for d in found] == [("Nas", False), ("nas", False), ("Nas", False), ("keller", True)]
+    assert all("mehrfach" in (d.problem or "") and d.base_url is None for d in found[:3])
+
+
+def test_the_schema_pattern_and_the_code_agree_on_names():
+    import re
+
+    pattern = json.loads((REPO_EXTENSIONS_DIR / EXT / "settings.schema.json").read_text(encoding="utf-8"))
+    pattern = pattern["properties"]["connections"]["items"]["properties"]["name"]["pattern"]
+    for name in ["a", "ds920", "..", "-x", "x" * 40, "x" * 41, "a b", "ä", ".a", "a.b", "a_b-c"]:
+        assert bool(re.fullmatch(pattern, name)) is syn_config.is_valid_name(name), name
+
+
+def test_the_old_single_fields_become_one_entry_for_the_first_device():
+    entry = syn_config.legacy_entry({
+        "base_url": BASE, "username": USER, "tls_insecure_skip_verify": True, "tls_fingerprint_sha256": "AB:CD", "notify": False,
+    })
+    assert entry == {
+        "name": "synology", "base_url": BASE, "username": USER, "tls_insecure_skip_verify": True, "tls_fingerprint_sha256": "AB:CD",
+    }
+    assert syn_config.legacy_entry({"base_url": BASE}) == {"name": "synology", "base_url": BASE}
+    for nothing in ({}, {"base_url": ""}, {"base_url": "  "}, {"base_url": None}, {"username": USER}, {"base_url": 5}):
+        assert syn_config.legacy_entry(nothing) is None
 
 
 # --- Antworten lesen
@@ -613,21 +682,41 @@ async def _enable(client, db_session, test_settings) -> tuple[dict, FakeDsm]:
     return headers, fake
 
 
-async def _configure(client, headers, *, url: str | None = BASE, username: str | None = USER, password: str | None = PASSWORD, **more: Any) -> None:
-    values: dict[str, Any] = dict(more)
-    if url is not None:
-        values["base_url"] = url
-    if username is not None:
-        values["username"] = username
+def _entry(name: str = DEVICE, *, url: str | None = BASE, username: str | None = USER, **more: Any) -> dict[str, Any]:
+    """Ein Gerät für `connections`; `None` lässt das Feld weg."""
+    entry = {"name": name, "base_url": url, "username": username, **more}
+    return {key: value for key, value in entry.items() if value is not None}
+
+
+_DEVICE_FIELDS = ("tls_insecure_skip_verify", "tls_fingerprint_sha256")
+
+
+async def _put_settings(client, headers, values: dict[str, Any]) -> None:
     saved = await client.put(f"/api/v1/extensions/{EXT}/settings", json={"current_password": "correct-horse-battery", "values": values}, headers=headers)
     assert saved.status_code == 200, saved.text
+
+
+async def _configure(
+    client, headers, *, url: str | None = BASE, username: str | None = USER, password: str | None = PASSWORD, name: str = DEVICE,
+    **more: Any,
+) -> None:
+    """Richtet das eine Gerät der Einzeltests ein; `tls_*` gehört zum Gerät, alles andere zu den gemeinsamen Einstellungen."""
+    entry = _entry(name, url=url, username=username, **{k: v for k, v in more.items() if k in _DEVICE_FIELDS})
+    values = {"connections": [entry], **{k: v for k, v in more.items() if k not in _DEVICE_FIELDS}}
+    if username is None:
+        # Die Oberfläche lässt den Benutzernamen nicht weg; so bleibt der Zustand „Benutzername fehlt“ erreichbar.
+        ctx = get_extension_runtime().loaded[EXT].ctx
+        await ctx.settings.set({**await ctx.settings.get(), **values})
+    else:
+        await _put_settings(client, headers, values)
     if password is not None:
-        await _set_password(client, headers, password)
+        await _set_password(client, headers, password, name)
 
 
-async def _set_password(client, headers, password: str) -> None:
+async def _set_password(client, headers, password: str, name: str = DEVICE) -> None:
     res = await client.put(
-        f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": "synology-password", "value": password}, headers=headers,
+        f"/api/v1/extensions/{EXT}/secrets",
+        json={"current_password": "correct-horse-battery", "label": f"synology-password:{name}", "value": password}, headers=headers,
     )
     assert res.status_code == 204, res.text
 
@@ -706,17 +795,21 @@ async def test_manifest_asks_for_reading_only(client, db_session, test_settings)
 @pytest.mark.asyncio
 async def test_the_schema_has_its_settings_and_a_vault_password_bound_to_the_address():
     schema = json.loads((REPO_EXTENSIONS_DIR / EXT / "settings.schema.json").read_text(encoding="utf-8"))
-    assert set(schema["properties"]) == {
-        "base_url", "username", "tls_insecure_skip_verify", "tls_fingerprint_sha256", "notify", "notify_update",
-        "disk_temp_warn_c",
-    }
-    assert schema["properties"]["tls_insecure_skip_verify"]["default"] is False
+    assert set(schema["properties"]) == {"connections", "notify", "notify_update", "disk_temp_warn_c"}
+    device = schema["properties"]["connections"]["items"]
+    assert set(device["properties"]) == {"name", "base_url", "username", "tls_insecure_skip_verify", "tls_fingerprint_sha256"}
+    assert device["required"] == ["name", "base_url", "username"]
+    assert schema["properties"]["connections"]["maxItems"] == 10
+    assert device["properties"]["tls_insecure_skip_verify"]["default"] is False
+    assert device["properties"]["tls_fingerprint_sha256"]["x-advanced"] is True
     assert schema["properties"]["notify"]["default"] is True and schema["properties"]["notify_update"]["default"] is True
     assert schema["properties"]["disk_temp_warn_c"]["x-advanced"] is True
-    assert [(s["label"], s["x-secret-bound-to"]) for s in schema["x-secrets"]] == [("synology-password", ["base_url"])]
-    assert "administrators" in schema["properties"]["username"]["description"]
-    assert "Zwei-Faktor" in schema["properties"]["username"]["description"]
-    assert "eigenes" in schema["properties"]["tls_insecure_skip_verify"]["description"]
+    assert [(s["label"], s["x-secret-bound-to"], s["per_item"]) for s in schema["x-secrets"]] == [
+        ("synology-password:{name}", ["base_url"], "connections"),
+    ]
+    assert "administrators" in device["properties"]["username"]["description"]
+    assert "Zwei-Faktor" in device["properties"]["username"]["description"]
+    assert "eigenes" in device["properties"]["tls_insecure_skip_verify"]["description"]
 
 
 # --- Nicht eingerichtet
@@ -767,7 +860,7 @@ async def test_an_address_without_credentials_is_not_set_up_and_sends_nothing(cl
 async def test_a_bad_address_is_an_error_not_a_missing_setup(client, db_session, test_settings):
     headers, fake = await _enable(client, db_session, test_settings)
     loaded = get_extension_runtime().loaded[EXT]
-    await loaded.ctx.settings.set({"base_url": "https://nutzer:geheim@nas.test:5001", "username": USER})
+    await loaded.ctx.settings.set({"connections": [_entry(url="https://nutzer:" + "geheim@nas.test:5001")]})
     body = await _overview(client, headers)
     assert body["state"] == "error" and "ungültig" in body["message"] and "geheim" not in json.dumps(body)
     assert body["url"] is None
@@ -826,7 +919,7 @@ async def test_full_overview_shows_model_version_load_volumes_disks_and_update(c
 
     # Das Passwort und die Sitzung stehen nirgends: weder in Antworten noch in Einstellungen, Protokoll oder Audit.
     settings = (await client.get(f"/api/v1/extensions/{EXT}/settings", headers=headers)).json()
-    assert {s["label"]: s["is_set"] for s in settings["secrets"]} == {"synology-password": True}
+    assert {s["label"]: s["is_set"] for s in settings["secrets"]} == {"synology-password:synology": True}
     audit = (await db_session.execute(select(AuditEntry))).scalars().all()
     _no_secret_in(fake, res.text, json.dumps(widget), json.dumps(settings), caplog.text, json.dumps([a.detail or {} for a in audit], default=str))
     assert "SERIAL" not in caplog.text
@@ -992,7 +1085,7 @@ async def test_every_login_error_code_has_a_german_sentence_and_pauses(client, d
     assert widget["meta"]["state"] == "error"
     assert widget["data"] == [{"title": "Synology DSM: Anmeldung fehlgeschlagen", "subtitle": body["message"], "label": "Anmeldung fehlgeschlagen", "tone": "danger"}]
     health = await _health()
-    assert health.healthy is False and health.message.startswith(fragment)
+    assert health.healthy is False and health.message.startswith(f"{DEVICE}: {fragment}")
     assert fake.failed_logins == 2, "„Verbindung testen“ hebt die Pause auf"
 
 
@@ -1021,13 +1114,14 @@ async def test_a_wrong_password_pauses_for_thirty_minutes_and_stays_below_the_ds
 
 
 @pytest.mark.asyncio
-async def test_changed_settings_end_the_pause(client, db_session, test_settings):
+async def test_changed_details_of_the_device_end_its_pause(client, db_session, test_settings):
     headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers, password="falsch")
     assert (await _overview(client, headers))["state"] == "auth_failed"
     await _set_password(client, headers, PASSWORD)
     saved = await client.put(
-        f"/api/v1/extensions/{EXT}/settings", json={"current_password": "correct-horse-battery", "values": {"base_url": BASE, "username": USER, "tls_insecure_skip_verify": True}}, headers=headers,
+        f"/api/v1/extensions/{EXT}/settings",
+        json={"current_password": "correct-horse-battery", "values": {"connections": [_entry(DEVICE, tls_insecure_skip_verify=True)]}}, headers=headers,
     )
     assert saved.status_code == 200, saved.text
     assert not saved.json().get("secrets_cleared"), "dieselbe Adresse: das Passwort bleibt"
@@ -1412,10 +1506,10 @@ async def test_changing_the_address_removes_the_password_so_it_never_goes_to_a_n
     await _configure(client, headers)
     assert (await _overview(client, headers))["state"] == "ok"
     saved = await client.put(
-        f"/api/v1/extensions/{EXT}/settings", json={"current_password": "correct-horse-battery", "values": {"base_url": "https://angreifer.test:5001", "username": USER}}, headers=headers,
+        f"/api/v1/extensions/{EXT}/settings", json={"current_password": "correct-horse-battery", "values": {"connections": [_entry(url="https://angreifer.test:5001")]}}, headers=headers,
     )
     assert saved.status_code == 200, saved.text
-    assert saved.json()["secrets_cleared"] == ["synology-password"]
+    assert saved.json()["secrets_cleared"] == ["synology-password:synology"]
     fake.requests.clear()
     body = await _overview(client, headers)
     assert body["state"] == "not_configured" and "fehlt das Passwort" in body["message"]
@@ -1449,7 +1543,7 @@ async def test_unexpected_errors_do_not_become_a_500(client, db_session, test_se
     res = await client.get(f"{API}/overview", headers=headers)
     assert res.status_code == 200
     body = res.json()
-    assert body["state"] == "error" and body["message"] == "Bei der Abfrage von Synology DSM ist ein unerwarteter Fehler aufgetreten."
+    assert body["state"] == "error" and body["message"] == "Bei der Abfrage von synology ist ein unerwarteter Fehler aufgetreten."
     assert PASSWORD not in res.text
 
 
@@ -1566,8 +1660,8 @@ async def test_routes_need_a_login_and_hosts_read_and_there_is_nothing_to_write(
 def test_openapi_describes_the_overview_with_typed_fields():
     schema = models.Overview.model_json_schema()
     assert set(schema["properties"]) == {
-        "state", "message", "url", "system", "load", "volumes", "disks", "pools", "update", "backups",
-        "system_note", "load_note", "storage_note", "update_note", "backup_note", "problems",
+        "device", "state", "message", "url", "system", "load", "volumes", "disks", "pools", "update", "backups",
+        "system_note", "load_note", "storage_note", "update_note", "backup_note", "problems", "config_problem",
     }
     assert set(schema["$defs"]) >= {"Note", "SystemInfo", "Load", "Volume", "Disk", "Pool", "Update", "BackupTask", "Problem"}
     assert set(schema["$defs"]["SystemInfo"]["properties"]) == {
@@ -1600,9 +1694,15 @@ async def test_openapi_of_the_running_app_lists_the_routes_with_their_model(clie
     paths = (await client.get("/api/v1/system/openapi.json", headers=headers)).json()["paths"]
     path = paths[f"{API}/overview"]["get"]
     assert path["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith("/Overview")
-    assert [p["name"] for p in path["parameters"]] == ["refresh"]
+    assert [p["name"] for p in path["parameters"]] == ["refresh", "device"]
     assert set(paths[f"{API}/overview"]) == {"get"}
     assert set(paths[f"{API}/widgets/status"]) == {"get"} and set(paths[f"{API}/widgets/volumes"]) == {"get"}
+    devices = paths[f"{API}/devices"]["get"]
+    assert devices["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith("/DeviceList")
+    assert [p["name"] for p in devices["parameters"]] == ["refresh"]
+    for kind in ("status", "volumes", "backups"):
+        named = paths[f"{API}/widgets/{kind}/{{device}}"]["get"]
+        assert [p["name"] for p in named["parameters"]] == ["device"], kind
 
 
 # --- Verbindung testen
@@ -1613,8 +1713,8 @@ async def test_testing_the_connection_asks_the_paths_logs_in_and_reads_the_devic
     headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers)
     health = await _health()
-    assert health.healthy is True and health.message == "in Ordnung"
-    assert health.details == {"Synology DSM": {"healthy": True}}
+    assert health.healthy is True and health.message == f"{DEVICE}: in Ordnung"
+    assert health.details == {DEVICE: {"healthy": True}}
     assert fake.calls() == [("SYNO.API.Info", "query"), ("SYNO.API.Auth", "login"), ("SYNO.DSM.Info", "getinfo")]
 
 
@@ -1622,13 +1722,14 @@ async def test_testing_the_connection_asks_the_paths_logs_in_and_reads_the_devic
 async def test_testing_the_connection_names_each_problem_with_a_fixed_sentence(client, db_session, test_settings):
     headers, fake = await _enable(client, db_session, test_settings)
     health = await _health()
-    assert health.healthy is False and "noch nicht eingerichtet" in health.message
-    assert health.details["Synology DSM"]["verbatim"] is True
+    assert health.healthy is False and health.message == "Synology DSM ist noch nicht eingerichtet. Unter Einstellungen → Erweiterungen → Synology DSM eintragen."
+    assert health.details is None or health.details == {}
 
     await _configure(client, headers, password="falsch")
     health = await _health()
-    assert health.healthy is False and health.message.startswith("Benutzername oder Passwort stimmt nicht.")
-    assert health.details["Synology DSM"] == {"healthy": False, "error": health.message, "verbatim": True}
+    assert health.healthy is False and health.message.startswith(f"{DEVICE}: Benutzername oder Passwort stimmt nicht.")
+    error = health.details[DEVICE]["error"]
+    assert health.details[DEVICE] == {"healthy": False, "error": error, "verbatim": True} and error.startswith("Benutzername oder Passwort")
 
     await _set_password(client, headers, PASSWORD)
     fake.error = httpx.ReadTimeout("timed out")
@@ -1656,10 +1757,10 @@ async def test_testing_the_connection_survives_surprises(client, db_session, tes
 
     monkeypatch.setattr(_service(), "client", boom)
     health = await _health()
-    assert health.healthy is False and health.message == "Beim Testen von Synology DSM ist ein unerwarteter Fehler aufgetreten."
+    assert health.healthy is False and health.message == f"{DEVICE}: Beim Testen von {DEVICE} ist ein unerwarteter Fehler aufgetreten."
     assert PASSWORD not in json.dumps(health.model_dump(), default=str)
 
-    monkeypatch.setattr(_service(), "test_connection", boom)
+    monkeypatch.setattr(_service(), "test_connections", boom)
     health = await _health()
     assert health.healthy is False and "RuntimeError" in health.message and PASSWORD not in health.message
 
@@ -1688,7 +1789,7 @@ async def test_the_address_is_suggested_as_an_app_without_any_request(client, db
 async def test_an_unusable_address_is_not_suggested(client, db_session, test_settings):
     headers, _ = await _enable(client, db_session, test_settings)
     loaded = get_extension_runtime().loaded[EXT]
-    await loaded.ctx.settings.set({"base_url": "https://nutzer:passwort@nas.test:5001"})
+    await loaded.ctx.settings.set({"base_url": "https://nutzer:" + "passwort@nas.test:5001"})
     suggestions = (await client.get("/api/v1/apps/suggestions", headers=headers)).json()["suggestions"]
     assert suggestions == [] and "passwort" not in json.dumps(suggestions)
 
@@ -1743,7 +1844,8 @@ async def test_logging_out_gives_up_quickly_and_sends_nothing_without_a_session(
 def test_only_get_requests_and_the_one_login_post_exist():
     source = REPO_EXTENSIONS_DIR / "synology" / "src" / "nodvard_deck_ext_synology"
     text = "".join(p.read_text(encoding="utf-8") for p in source.glob("*.py"))
-    assert not re.search(r"\.(post|put|patch|delete|request)\(", text)
+    # `secrets.delete(` räumt eine Passwort-Kopie im Tresor auf und ist kein HTTP-Aufruf.
+    assert not re.search(r"(?<!secrets)\.(post|put|patch|delete|request)\(", text)
     assert not re.search(r"""["'](PUT|PATCH|DELETE)["']""", text)
     posts = [line for line in text.splitlines() if '"POST"' in line]
     assert len(posts) == 2, posts  # die Prüfung in `_send` und die Anmeldung
@@ -2139,6 +2241,50 @@ async def test_slow_tasks_hit_their_own_time_limit_and_the_rest_of_the_page_stay
 
 
 @pytest.mark.asyncio
+async def test_a_slow_task_list_uses_up_the_same_time_limit_and_the_rest_of_the_page_stays(
+    client, db_session, test_settings, monkeypatch,
+):
+    headers, fake = await _enable(client, db_session, test_settings)
+    fake.install_hyper_backup({"1": ("Nacht", OK_TASK)})
+
+    async def slow_list(request: httpx.Request) -> None:
+        if FakeDsm.params(request).get("method") == "list":
+            await asyncio.sleep(300)
+
+    fake.before = slow_list
+    monkeypatch.setattr("nodvard_deck_ext_synology.client.BACKUP_TIMEOUT_S", 0.5)
+    monkeypatch.setattr("nodvard_deck_ext_synology.service.CONNECTION_TIMEOUT_S", 3.0)
+    await _configure(client, headers)
+    body = await _overview(client, headers)
+    assert body["state"] == "ok", body["message"]
+    assert body["volumes"] and body["system"] and body["update"] and body["storage_note"] is None
+    assert body["backups"] is None
+    assert body["backup_note"]["message"].startswith("Hyper Backup hat nicht rechtzeitig geantwortet.")
+
+
+@pytest.mark.asyncio
+async def test_the_time_limit_for_hyper_backup_already_runs_while_connecting(client, db_session, test_settings, monkeypatch):
+    headers, fake = await _enable(client, db_session, test_settings)
+    fake.install_hyper_backup({"1": ("Nacht", OK_TASK)})
+
+    async def slow_connect_and_list(request: httpx.Request) -> None:
+        params = FakeDsm.params(request)
+        if params.get("api") == "SYNO.API.Info":
+            await asyncio.sleep(0.8)
+        elif params.get("method") == "list":
+            await asyncio.sleep(300)
+
+    fake.before = slow_connect_and_list
+    monkeypatch.setattr("nodvard_deck_ext_synology.client.BACKUP_TIMEOUT_S", 0.8)
+    monkeypatch.setattr("nodvard_deck_ext_synology.service.CONNECTION_TIMEOUT_S", 1.4)
+    await _configure(client, headers)
+    body = await _overview(client, headers)
+    assert body["state"] == "ok", body["message"]
+    assert body["volumes"] and body["system"] and body["update"]
+    assert body["backup_note"]["message"].startswith("Hyper Backup hat nicht rechtzeitig geantwortet.")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("installed", "total", "shown"), [(70, 70, 64), (3, 9, 3)], ids=["mehr-als-64", "dsm-blaettert"])
 async def test_more_tasks_than_shown_are_said_and_not_hidden(client, db_session, test_settings, installed, total, shown):
     headers, fake = await _enable(client, db_session, test_settings)
@@ -2530,12 +2676,14 @@ async def test_the_watch_is_quiet_when_nothing_is_set_up(client, db_session, tes
 
 
 @pytest.mark.asyncio
-async def test_new_settings_and_testing_the_connection_log_the_old_session_out(client, db_session, test_settings):
+async def test_new_device_details_and_testing_the_connection_log_the_old_session_out(client, db_session, test_settings):
     headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers)
     await _overview(client, headers)
     assert len(fake.sessions) == 1
     await _configure(client, headers, notify=False, password=None)
+    assert len(fake.sessions) == 1, "gemeinsame Einstellungen lassen die Sitzung des Geräts stehen"
+    await _configure(client, headers, tls_insecure_skip_verify=True, password=None)
     assert not fake.sessions and fake.calls()[-1] == ("SYNO.API.Auth", "logout")
     await _overview(client, headers)
     assert (await _health()).healthy is True
@@ -2562,11 +2710,11 @@ def test_the_fingerprint_is_normalized_or_refused():
 
 
 def test_a_pin_needs_https_and_a_broken_one_is_never_ignored():
-    pinned = syn_config.read_config({"base_url": BASE, "tls_fingerprint_sha256": "ab" * 32, "tls_insecure_skip_verify": True})
+    pinned = _read_one(base_url=BASE, tls_fingerprint_sha256="ab" * 32, tls_insecure_skip_verify=True)
     assert (pinned.pin, pinned.problem) == (PIN, None)
-    broken = syn_config.read_config({"base_url": BASE, "tls_fingerprint_sha256": "kaputt"})
+    broken = _read_one(base_url=BASE, tls_fingerprint_sha256="kaputt")
     assert broken.base_url is None and "Fingerabdruck" in broken.problem and "ungültig" in broken.problem
-    plain = syn_config.read_config({"base_url": "http://nas.test:5000", "tls_fingerprint_sha256": PIN})
+    plain = _read_one(base_url="http://nas.test:5000", tls_fingerprint_sha256=PIN)
     assert plain.base_url is None and "nur für https://" in plain.problem
 
 
@@ -2718,8 +2866,8 @@ async def test_a_failed_message_is_tried_again_and_the_state_is_written_whole(cl
     assert not (data_dir / "alerts.json.tmp").exists()
 
 
-@pytest.mark.parametrize("state", ["repairing", None, "migrating", "degraded"], ids=["repairing", "unknown", "migrating", "degraded"])
-def test_a_crashed_volume_reports_itself_under_a_pool_that_is_not_normal(state):
+@pytest.mark.parametrize("state", ["repairing", None, "migrating"], ids=["repairing", "unknown", "migrating"])
+def test_a_crashed_volume_reports_itself_under_a_pool_without_its_own_message(state):
     storage = json.loads(json.dumps(POOLS_STORAGE))
     storage["disks"][1].update(status="normal", smart_status="normal")
     storage["volumes"][0]["status"] = "crashed"
@@ -2729,6 +2877,36 @@ def test_a_crashed_volume_reports_itself_under_a_pool_that_is_not_normal(state):
         storage["storagePools"][0]["status"] = state
     found = syn_problems.collect(system=None, storage=_storage(storage), update=None, tasks=None, alerts=_alerts(), now=NOW)
     assert ("volume:volume_1", "critical") in [(p.key, p.severity) for p in found]
+
+
+def test_a_crashed_volume_in_a_degraded_pool_is_one_urgent_message():
+    storage = json.loads(json.dumps(POOLS_STORAGE))
+    storage["disks"][1].update(status="normal", smart_status="normal")
+    storage["volumes"][0]["status"] = "crashed"
+    found = syn_problems.collect(system=None, storage=_storage(storage), update=None, tasks=None, alerts=_alerts(), now=NOW)
+    assert [(p.key, p.severity) for p in found] == [("pool:reuse_1", "critical")]
+    assert found[0].title.endswith(": Speicherpool 1 – Eingeschränkt, Volume 1 ausgefallen")
+    assert "Außerdem ist Volume 1 ausgefallen" in found[0].text
+
+
+@pytest.mark.asyncio
+async def test_a_volume_crashing_in_a_degraded_pool_raises_the_pool_message_once(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    fake.data["SYNO.Core.Upgrade.Server"] = {"update": {"available": False}}
+    storage = json.loads(json.dumps(POOLS_STORAGE))
+    storage["disks"][1].update(status="normal", smart_status="normal")
+    storage["volumes"][0]["status"] = "normal"
+    fake.data["SYNO.Storage.CGI.Storage"] = storage
+    await _configure(client, headers)
+    assert (await _watch())["notified"] == 1
+    storage["volumes"][0]["status"] = "crashed"
+    await _service().clear()
+    assert (await _watch())["notified"] == 1
+    assert (await _watch())["notified"] == 0
+    assert await _notes(db_session) == [
+        ("warning", "DS220+: Speicherpool 1 – Eingeschränkt"),
+        ("critical", "DS220+: Speicherpool 1 – Eingeschränkt, Volume 1 ausgefallen"),
+    ]
 
 
 def test_a_crashed_volume_of_a_crashed_pool_is_one_message():

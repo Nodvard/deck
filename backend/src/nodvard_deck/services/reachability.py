@@ -1,5 +1,5 @@
 """Regelmäßige Erreichbarkeitsprüfung (Kern-Job `host-reachability`): TCP-Verbindung zum SSH-Port, Meldung nur bei
-Wechseln und mit Entprellung. Geprüft werden Server, deren Zustand kein Modul selbst pflegt (`provider_ext_id` leer)."""
+Wechseln."""
 
 from __future__ import annotations
 
@@ -31,8 +31,8 @@ JOB_NAME = "Erreichbarkeit der Server"
 KEY_ENABLED = "hosts.reachability.enabled"
 KEY_INTERVAL = "hosts.reachability.interval_minutes"
 KEY_STATE = "hosts.reachability.state"
-"""Interner Merker (Host-ID -> {"muted": bool}) darüber, was gemeldet wurde, damit ein Neustart keine Meldungsflut und
-keine verlorene Entwarnung verursacht; nicht über die Einstellungs-API sichtbar."""
+"""Interner Merker (Host-ID -> {"muted": bool}), damit ein Neustart weder eine Meldungsflut noch eine verlorene
+Entwarnung bringt."""
 
 DEFAULT_ENABLED = True
 DEFAULT_INTERVAL_MINUTES = 2
@@ -59,11 +59,10 @@ DOWN_AFTER_WINDOW_BODY = (
 UP_TITLE = "Server {name} ist wieder erreichbar"
 UP_BODY = "{address}:{port} antwortet wieder."
 
-# Läuft noch ein Durchlauf, wird der nächste übersprungen.
 _run_lock = asyncio.Lock()
 _streaks: dict[str, tuple[tuple[str, int], int]] = {}
-"""Host-ID -> (Ziel, Fehlschläge in Folge); ein neues Ziel (Adresse oder Port geändert) beginnt neu. Nur im
-Prozessspeicher: ein Neustart beginnt bei null und kostet höchstens eine Prüfrunde."""
+"""Host-ID -> (Ziel, Fehlschläge in Folge); ein neues Ziel beginnt neu, ein Neustart kostet höchstens eine
+Prüfrunde."""
 
 
 def reset_state() -> None:
@@ -115,14 +114,9 @@ async def load_config(session: AsyncSession) -> Config:
     )
 
 
-# ---------------------------------------------------------------------------
-# Prüfung
-# ---------------------------------------------------------------------------
-
-
 async def probe_tcp(address: str, port: int, timeout_s: float = CONNECT_TIMEOUT_S) -> bool:
-    """Nimmt `address:port` innerhalb von `timeout_s` eine TCP-Verbindung an? Es wird nichts gesendet. Bewusst kein
-    Login, kein Schlüssel, kein SSH-Pool und kein ICMP (Ping braucht im Container Root oder Capabilities)."""
+    """Ob `address:port` innerhalb von `timeout_s` eine TCP-Verbindung annimmt; es wird nichts gesendet, auch kein
+    ICMP (Ping braucht Root)."""
     try:
         _, writer = await asyncio.wait_for(asyncio.open_connection(address, port), timeout=timeout_s)
     except (OSError, TimeoutError, UnicodeError, ValueError):
@@ -161,8 +155,6 @@ async def select_targets(session: AsyncSession) -> list[Target]:
 
 
 async def _probe_all(targets: list[Target], budget_s: float) -> dict[str, bool]:
-    """Prüft alle Ziele, höchstens `MAX_PARALLEL` gleichzeitig. Was nach `budget_s` noch läuft, wird abgebrochen und
-    zählt weder als Erfolg noch als Fehlschlag."""
     semaphore = asyncio.Semaphore(MAX_PARALLEL)
 
     async def _one(target: Target) -> bool:
@@ -185,11 +177,6 @@ async def _probe_all(targets: list[Target], budget_s: float) -> dict[str, bool]:
     return results
 
 
-# ---------------------------------------------------------------------------
-# Auswerten und Melden
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class _Message:
     kind: str  # "down" | "up" | "late_down"
@@ -206,8 +193,6 @@ def _payload(host_id: str, *, down: bool) -> dict[str, Any]:
 async def _apply(
     targets: list[Target], results: dict[str, bool]
 ) -> tuple[list[_Message], list[tuple[str, str, str]], dict[str, int]]:
-    """Führt Zustand, `last_seen_at` und den Merker nach; liefert die zu sendenden Meldungen, die Zustandswechsel
-    (Host-ID, alt, neu) und eine Zählung."""
     messages: list[_Message] = []
     changes: list[tuple[str, str, str]] = []
     counts = {"up": 0, "down": 0, "unknown": 0}
@@ -268,7 +253,6 @@ async def _apply(
                     state[host.id] = {"muted": False}
                     messages.append(_Message("late_down", target))
 
-        # Gelöschte Server aus dem Merker räumen.
         if state:
             existing = set((await session.execute(select(Host.id).where(Host.id.in_(list(state))))).scalars())
             for host_id in [h for h in state if h not in existing]:
@@ -322,7 +306,6 @@ async def run_once() -> dict[str, Any]:
         # Ein Durchlauf wartet nie länger als das Intervall.
         budget_s = max(10.0, config.interval_minutes * 60 - 5.0)
         results = await _probe_all(targets, budget_s)
-        # Zähler der Server aufräumen, die es nicht mehr zu prüfen gibt.
         for host_id in [h for h in _streaks if h not in {t.host_id for t in targets}]:
             _streaks.pop(host_id)
         messages, changes, counts = await _apply(targets, results)
@@ -330,11 +313,6 @@ async def run_once() -> dict[str, Any]:
             await _send(message)
         await _publish_changes(changes)
         return {"checked": len(results), "of": len(targets), "changed": len(changes), **counts}
-
-
-# ---------------------------------------------------------------------------
-# Kern-Job
-# ---------------------------------------------------------------------------
 
 
 async def _prune_own_runs() -> None:
@@ -366,8 +344,7 @@ async def _job_handler(**_: Any) -> dict[str, Any]:
 
 
 async def sync_job() -> None:
-    """Legt den Kern-Job an bzw. passt Zeitplan und Schalter an und plant ihn neu (beim Start und nach jeder Änderung
-    der Einstellungen)."""
+    """Legt den Kern-Job an bzw. passt Zeitplan und Schalter an und plant ihn neu."""
     from ..core.scheduler import CORE_SCHEDULER_EXT_ID, get_scheduler_service
     from ..ext.runtime import get_extension_runtime
 

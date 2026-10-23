@@ -89,7 +89,7 @@ describe("Cockpit", () => {
     const pi = await screen.findByTestId("server-h-pi");
     expect(screen.queryByTestId("machine-h-pi")).toBeNull();
     expect(within(pi).queryByRole("link", { name: /Konsole/ })).toBeNull();
-    await waitFor(() => expect(within(pi).getByRole("link", { name: "Terminal Raspberry Pi" })).toHaveAttribute("href", "/terminal?host=h-pi"));
+    await waitFor(() => expect(within(pi).getByRole("link", { name: "Terminal Heimserver" })).toHaveAttribute("href", "/terminal?host=h-pi"));
   });
 
   it("Apps: nur mit Web-Oberfläche, auf Wunsch alle, filterbar", async () => {
@@ -102,9 +102,9 @@ describe("Cockpit", () => {
     fireEvent.click(screen.getByLabelText("auch ohne Web-Oberfläche"));
     expect(within(screen.getByTestId("apps")).getByTestId("app-docker:redis")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Apps filtern"), { target: { value: "pi" } });
+    fireEvent.change(screen.getByLabelText("Apps filtern"), { target: { value: "heim" } });
     const names = within(screen.getByTestId("apps")).getAllByTestId(/^app-/).map((el) => el.getAttribute("data-testid"));
-    expect(names).toEqual(expect.arrayContaining(["app-Raspberry Pi:pihole", "app-Raspberry Pi:npm-nginx-1"]));
+    expect(names).toEqual(expect.arrayContaining(["app-Heimserver:pihole", "app-Heimserver:npm-nginx-1"]));
     expect(names).not.toContain("app-docker:grafana");
   });
 
@@ -128,6 +128,19 @@ describe("Cockpit", () => {
     expect(row.textContent).toContain("LXC auf pve1");
     expect(screen.getByTestId("host-group-server").textContent).toContain("Physische Server");
     expect(screen.getByTestId("host-group-vm").textContent).toContain("Virtuelle Maschinen");
+  });
+
+  it("Gast, dessen Zustand Proxmox gerade nicht liefert: „unbekannt“, nicht „noch nicht geprüft“", async () => {
+    const calm = { ...(respond("/api/v1/overview", "GET") as object), pending_actions: 0, attention: [] };
+    const hosts = (respond("/api/v1/hosts", "GET") as { id: string }[]).map((h) =>
+      h.id === "g-bastion" ? { ...h, status: "unknown" } : h);
+    vi.stubGlobal("fetch", mockFetch({ "/overview": calm, "/hosts": hosts }));
+    renderCockpit();
+    await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("Keine Störung bekannt."));
+    const status = screen.getByTestId("cockpit-status").textContent ?? "";
+    expect(status).toContain("3 von 3 Servern online (dazu 4 VMs · 2 LXC), 1 unbekannt");
+    expect(status).not.toContain("noch nicht geprüft");
+    expect(screen.getByTestId("stat-Server").textContent).toContain("online · 1 unbekannt");
   });
 
   it("in Proxmox gelöschter Gast: zählt nicht mit, grau mit „nicht mehr vorhanden · entfernen“", async () => {
@@ -187,7 +200,7 @@ describe("Cockpit", () => {
 
   it("Hinweis „Server neu einrichten“: dezent, mit Link zur Einrichtung und zum Wegklicken, ohne „Nichts offen“", async () => {
     const hint = {
-      host_id: "h-pi", host_name: "Raspberry Pi", modules: ["Nodvard Shield", "Server-Zustand"], checked_at: new Date().toISOString(),
+      host_id: "h-pi", host_name: "Heimserver", modules: ["Nodvard Shield", "Server-Zustand"], checked_at: new Date().toISOString(),
     };
     const overview = { ...(respond("/api/v1/overview", "GET") as object), pending_actions: 0, attention: [], helper_hints: [hint] };
     const fetchMock = mockFetch({ "/overview": overview, "/hosts/h-pi/helper-hint/dismiss": {} });
@@ -195,14 +208,14 @@ describe("Cockpit", () => {
     renderCockpit();
     const row = await screen.findByTestId("helper-hint");
     expect(row.textContent).toContain(
-      "Raspberry Pi: Server neu einrichten, damit Nodvard Shield und Server-Zustand mit engen Rechten laufen",
+      "Heimserver: Server neu einrichten, damit Nodvard Shield und Server-Zustand mit engen Rechten laufen",
     );
     expect(within(row).getByRole("link")).toHaveAttribute("href", "/settings/hosts/h-pi?befehl=1");
     expect(screen.getByTestId("attention").textContent).not.toContain("Nichts offen");
     // Dezent: Die Lage oben bleibt „rund“, der Hinweis ist kein Problem.
     await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("Alles läuft rund"));
 
-    fireEvent.click(within(row).getByRole("button", { name: "Hinweis zu Raspberry Pi ausblenden" }));
+    fireEvent.click(within(row).getByRole("button", { name: "Hinweis zu Heimserver ausblenden" }));
     await waitFor(() => expect(fetchMock.mock.calls.some(
       ([url, init]) => String(url).endsWith("/hosts/h-pi/helper-hint/dismiss") && (init as RequestInit | undefined)?.method === "POST",
     )).toBe(true));
@@ -210,14 +223,25 @@ describe("Cockpit", () => {
 
   it("Hinweis ohne Recht zum Ändern: nur Text, kein Link und kein Knopf; ein Modul „läuft“", async () => {
     login(["hosts.read"], false);
-    const hint = { host_id: "h-pi", host_name: "Raspberry Pi", modules: ["Nodvard Shield"], checked_at: new Date().toISOString() };
+    const hint = { host_id: "h-pi", host_name: "Heimserver", modules: ["Nodvard Shield"], checked_at: new Date().toISOString() };
     const overview = { ...(respond("/api/v1/overview", "GET") as object), pending_actions: 0, attention: [], helper_hints: [hint] };
     vi.stubGlobal("fetch", mockFetch({ "/overview": overview }));
     renderCockpit();
     const row = await screen.findByTestId("helper-hint");
-    expect(row.textContent).toContain("Raspberry Pi: Server neu einrichten, damit Nodvard Shield mit engen Rechten läuft");
+    expect(row.textContent).toContain("Heimserver: Server neu einrichten, damit Nodvard Shield mit engen Rechten läuft");
     expect(within(row).queryByRole("link")).toBeNull();
     expect(within(row).queryByRole("button")).toBeNull();
+  });
+
+  it("Hinweis auf einem Server nur mit den Regeln der Skripte: sagt, dass dort kein root da ist", async () => {
+    const hint = {
+      host_id: "h-pi", host_name: "Heimserver", modules: ["Nodvard Shield"], checked_at: new Date().toISOString(), without_root: true,
+    };
+    const overview = { ...(respond("/api/v1/overview", "GET") as object), pending_actions: 0, attention: [], helper_hints: [hint] };
+    vi.stubGlobal("fetch", mockFetch({ "/overview": overview }));
+    renderCockpit();
+    const row = await screen.findByTestId("helper-hint");
+    expect(row.textContent).toContain("Heimserver: Server neu einrichten, sonst hat Nodvard Shield dort kein root");
   });
 
   it("alle Docker-Server nicht erreichbar: „unbekannt“ statt 0 von 3", async () => {

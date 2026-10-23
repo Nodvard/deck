@@ -40,6 +40,7 @@ import {
   type HostLatestMetrics,
   type HostOut,
   isNode,
+  isUnchecked,
   relativeTime,
   useDismissHelperHint,
   useHostMetrics,
@@ -374,9 +375,14 @@ export function Cockpit() {
   const guestText = physical.length > 0 ? guestSummary(present) : "";
   const serversOnline = `${countedOnline} von ${counted.length} Servern online${guestText ? ` (dazu ${guestText})` : ""}`;
   const problemHosts = allHosts.filter((h) => healthOf(h) === "problem");
-  // Von Hand angelegte Server haben ohne „Verbindung prüfen“ keinen Zustand (Proxmox liefert ihn
-  // für seine Gäste mit): „unbekannt“ ist weder online noch ein Problem und wird so auch gezählt.
+  // „Unbekannt“ ist weder online noch ein Problem und wird so auch gezählt. Nie geprüfte, von Hand angelegte Server
+  // heißen dabei wie im Tooltip „noch nicht geprüft“.
   const unknownHosts = allHosts.filter((h) => healthOf(h) === "unknown");
+  const uncheckedCount = unknownHosts.filter(isUnchecked).length;
+  const unknownText = [
+    uncheckedCount > 0 ? `${uncheckedCount} noch nicht geprüft` : "",
+    unknownHosts.length > uncheckedCount ? `${unknownHosts.length - uncheckedCount} unbekannt` : "",
+  ].filter(Boolean).join(", ");
   const backups = overview?.backups ?? null;
   const backupsUnreachable = backups?.unreachable_names ?? [];
   // Platzhalter nicht erreichbarer Server (`unreachable`) sind keine Dienste: sie zaehlen weder als „laeuft“ noch als „laeuft nicht“.
@@ -451,7 +457,7 @@ export function Cockpit() {
             ) : issues === 0 && unknownHosts.length > 0 ? (
               <>
                 <Server size={16} className="text-white/55" />
-                Keine Störung bekannt. {serversOnline}, {unknownHosts.length} noch nicht geprüft
+                Keine Störung bekannt. {serversOnline}, {unknownText}
                 {services.length > 0 && overview ? `, ${overview.services_running} Dienste aktiv` : ""}.
               </>
             ) : issues === 0 ? (
@@ -495,7 +501,7 @@ export function Cockpit() {
               hostsFailed ? unavailable
                 : problemHosts.length ? `${problemHosts.length} nicht erreichbar`
                 : noHosts ? "noch keiner angelegt"
-                : unknownHosts.length ? `online · ${unknownHosts.length} noch nicht geprüft`
+                : unknownHosts.length ? `online · ${unknownText}`
                 : "online"
             }
             tone={hostsFailed ? "warn" : problemHosts.length ? "danger" : noHosts || unknownHosts.length ? "neutral" : "good"}

@@ -252,6 +252,12 @@ class FakeSftp:
             raise OSError(f"directory not empty: {path}")
         self.dirs.remove(path)
 
+    async def listdir(self, path):
+        if path not in self.dirs:
+            raise FileNotFoundError(path)
+        prefix = path.rstrip("/") + "/"
+        return [".", "..", *sorted({p[len(prefix):].split("/", 1)[0] for p in (*self.files, *self.dirs) if p.startswith(prefix)})]
+
     async def remove(self, path):
         if path not in self.files:
             raise FileNotFoundError(path)

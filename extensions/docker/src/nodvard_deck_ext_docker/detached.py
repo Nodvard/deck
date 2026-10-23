@@ -58,9 +58,7 @@ def log_path(run_id: str) -> str:
 
 def wrapper_command(run_id: str, script: str, lock: str | None = None) -> str:
     """Was auf dem Host entkoppelt läuft: pid merken, `script` mit Ausgabe ins Protokoll, danach den Rückgabecode ablegen.
-
-    Mit `lock` (Projektname) bekommt die Sperre `lock-<projekt>` zuerst die Prozessnummer dieses Laufs.
-    """
+    Mit `lock` (Projektname) bekommt die Sperre `lock-<projekt>` zuerst die Prozessnummer dieses Laufs."""
     _check(run_id)
     _check_lock(lock)
     # Kein systemd-run, die Shell wertet `$$` selbst aus (kein Verdoppeln nötig). Die Sperre trägt die Prozessnummer, ehe die
@@ -78,10 +76,8 @@ def wrapper_command(run_id: str, script: str, lock: str | None = None) -> str:
 
 
 def launch_command(run_id: str, script: str, lock: str | None = None) -> str:
-    """Startet `script` entkoppelt, kehrt nach höchstens ~5 s zurück und meldet `@@pid=<n>` (läuft) oder `@@nopid`.
-
-    `@@exists`: dieser Lauf wurde schon gestartet. `@@busy` (mit `lock`): für das Compose-Projekt läuft schon ein Update.
-    """
+    """Startet `script` entkoppelt, kehrt nach höchstens ~5 s zurück und meldet `@@pid=<n>` (läuft) oder `@@nopid`; dazu
+    `@@exists` (dieser Lauf wurde schon gestartet) und `@@busy` (mit `lock`: für das Compose-Projekt läuft schon ein Update)."""
     _check(run_id)
     w = shlex.quote(wrapper_command(run_id, script, lock))
     rid = run_id  # durch RUN_ID_RE gesichert: nur Buchstaben, Ziffern, "_"
@@ -110,10 +106,8 @@ def launch_command(run_id: str, script: str, lock: str | None = None) -> str:
 
 
 def poll_command(run_id: str) -> str:
-    """Fragt den Stand eines Laufs ab.
-
-    Ausgabe: `@@running` / `@@rc=<n>` / `@@lost` / `@@unknown`, dann `@@step=<schritt>`, `@@tail` und das Protokollende.
-    """
+    """Fragt den Stand eines Laufs ab. Ausgabe: `@@running` / `@@rc=<n>` / `@@lost` / `@@unknown`, dann
+    `@@step=<schritt>`, `@@tail` und das Protokollende."""
     _check(run_id)
     rid = run_id
     # Erst "läuft der Prozess noch?", dann "gibt es die rc-Datei?": andersherum würde ein Lauf, der genau dazwischen fertig

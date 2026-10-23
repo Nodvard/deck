@@ -6,6 +6,7 @@ import base64
 import hashlib
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -31,6 +32,24 @@ def test_the_inline_import_map_is_allowed_by_its_hash(tmp_path):
     )
     # Der Kommentar mit `<script …>` zählt nicht, das Skript mit `src` braucht keine Prüfsumme.
     assert spa_script_policy(index) == f"script-src 'self' {_sha(IMPORT_MAP)}"
+
+
+@pytest.mark.parametrize(
+    ("html", "scripts"),
+    [
+        # Ein Kommentar endet auch mit `--!>`, das Skript dahinter läuft.
+        ("<!-- alt --!><script>a()</script><!-- neu -->", ["a()"]),
+        ("<script>b()</script >", ["b()"]),
+        ('<SCRIPT TYPE="importmap">{}</SCRIPT>', ["{}"]),
+        ('<script data-src="x">c()</script>', ["c()"]),
+        ("<script src></script><script src=/x.js></script>", []),
+        ('<script>if (a < b) "</scr" + "ipt>"</script>', ['if (a < b) "</scr" + "ipt>"']),
+    ],
+)
+def test_inline_scripts_are_read_like_a_browser_reads_them(tmp_path, html, scripts):
+    index = tmp_path / "index.html"
+    index.write_text(html, encoding="utf-8")
+    assert spa_script_policy(index) == " ".join(["script-src", "'self'", *sorted(_sha(s) for s in scripts)])
 
 
 def test_a_missing_index_allows_only_own_files(tmp_path):

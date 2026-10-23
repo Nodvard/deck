@@ -1,7 +1,5 @@
 """Konsole in einem Container (`docker exec -it`) über das Terminal des Kerns (`ScopedTerminalTarget`, scope `container`).
-
-Hängt nur am Recht `hosts.execute`, auch wenn die Erweiterung "Terminal" aus ist.
-"""
+Hängt nur am Recht `hosts.execute`, auch wenn die Erweiterung "Terminal" aus ist."""
 
 from __future__ import annotations
 

@@ -156,7 +156,7 @@ def clean_group(value: str | None) -> str | None:
 # Anfragen an interne Adressen bringen (SSRF); die Adresse ist nur ein Link für den Browser der klickenden Person.
 #
 # Streng, weil der Link auf der Startseite aller Nutzer landet: Erlaubt ist nur `http://` und `https://` (`javascript:`,
-# `data:`, `file:` & Co. wären ein Angriff auf den, der klickt). Zugangsdaten in der Adresse (`http://user:pass@...`)
+# `data:`, `file:` & Co. wären ein Angriff auf den, der klickt). Zugangsdaten in der Adresse (`http://<benutzer>:<passwort>@...`)
 # werden abgelehnt: Sie stünden für alle lesbar in der Datenbank und täuschen mit `https://google.com@boese.example` ein
 # anderes Ziel vor. Ebenso Leer- und Steuerzeichen und Backslashes (Browser lesen `\` wie `/`).
 def clean_url(value: str, max_length: int = URL_MAX) -> str:

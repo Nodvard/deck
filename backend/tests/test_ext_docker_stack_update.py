@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import importlib
 import json
 import re
 import sys
+from contextlib import asynccontextmanager
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -207,6 +210,8 @@ def test_rollback_names_and_commands():
             su.cmd_untag(bad)
     with pytest.raises(ValueError):
         su.cmd_container_images(["a;b"])
+    with pytest.raises(ValueError):
+        su.cmd_image_id("$(id)")
 
 
 def test_reading_the_containers():
@@ -217,9 +222,10 @@ def test_reading_the_containers():
         {"name": "/shop-db-1", "image_id": OLD, "ref": "redis:7", "service": "db", "running": False},
         {"name": "/kaputt", "image_id": "sha256:x", "ref": "redis:7", "service": "db", "running": True},
     ]
-    found = su.parse_container_images("\n".join(json.dumps(r) for r in rows) + "\nkein json\n")
+    found = su.parse_container_images("\n".join(json.dumps(r) for r in rows) + "\nkein json\n[1, 2]\n\"text\"\n")
     assert found["web"].containers == ("shop-web-1", "shop-web-2") and found["web"].mixed and found["web"].running
     assert found["db"].containers == ("shop-db-1",) and not found["db"].mixed and not found["db"].running
+    assert found["web"].up == ("shop-web-1",) and found["db"].up == ()
     assert su.with_sharers({"web": "a:1", "worker": "a:1", "db": "b:1"}, ["web"]) == ["web", "worker"]
     assert su.with_sharers({"web": "a:1", "worker": "a:1"}, ["worker", "web"]) == ["worker", "web"]
 
@@ -493,6 +499,20 @@ async def test_a_failed_tag_on_the_way_back_puts_the_names_back(tmp_path, monkey
     assert back.error == "Rückweg gescheitert: Error: kaputt Zurückgesetzt wurde nichts; die Sicherungen liegen bereit."
     assert env.docker.images["busybox:1.37"] == NEW and env.docker.pending() == []
     assert not any("up" in c for c in env.docker.calls[-6:])
+
+
+@pytest.mark.asyncio
+async def test_a_failed_hold_of_the_new_version_changes_nothing_on_the_way_back(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch)
+    assert (await env.executor.execute(_request())).success is True
+    env.docker.fail.update({"tag": "Error: kaputt\n", "tag_target": env.m.stack_update.rollback_ref("shop", "web", "pending")})
+    start = len(env.docker.calls)
+    back = await env.executor.execute(_request("docker.stack_rollback", risk="high"))
+    assert back.error == "Rückweg gescheitert: Error: kaputt Zurückgesetzt wurde nichts; die Sicherungen liegen bereit."
+    tags = [c for c in env.docker.calls[start:] if c[:2] == ["docker", "tag"]]
+    assert len(tags) == 1 and tags[0][3].endswith(":pending")
+    assert env.docker.containers["web"][2] == NEW and env.docker.pending() == []
+    assert not any("up" in c for c in env.docker.calls[start:])
 
 
 @pytest.mark.asyncio
@@ -873,7 +893,8 @@ def test_backup_commands():
     assert sb.cmd_archive("shop_data", folder, "1000:1000") == [
         "docker", "run", "--rm", "--name", name, "--network", "none", "-v", "shop_data:/data:ro", "-v", f"{folder}:/backup",
         "busybox:1.37", "sh", "-c",
-        'umask 077; tar czf "/backup/$1.part" -C /data . && chown "$2" "/backup/$1.part" && chmod 600 "/backup/$1.part" '
+        'umask 077; tar czf "/backup/$1.part" --exclude ./.nodvard-zurueck --exclude ./.nodvard-vorher -C /data . '
+        '&& chown "$2" "/backup/$1.part" && chmod 600 "/backup/$1.part" '
         '&& mv "/backup/$1.part" "/backup/$1" || { rc=$?; rm -f "/backup/$1.part"; exit "$rc"; }', "sh", "shop_data.tar.gz",
         "1000:1000",
     ]
@@ -888,7 +909,26 @@ def test_backup_commands():
         sb.backup_folder("/home/deck", "shop", "jetzt")
     assert sb.parse_free_space("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 100 1 2048 1% /\n") == 2 * 1024 * 1024
     assert sb.parse_free_space("kaputt") is None
-    assert "-v '/home/deck/mit leer/x:/backup' busybox:1.37" in sb.restore_hint("/home/deck/mit leer/x")
+    assert sb.restore_hint() == "Zurückspielen geht im Reiter Stacks unter „Sicherungen“."
+
+
+def test_the_free_space_command_needs_a_plain_path():
+    sb = _mods().stack_backup
+    assert sb.cmd_free_space("/home/deck") == ["df", "-Pk", "/home/deck"]
+    for bad in ("", "home/deck", "/home/../etc", "/home/$(id)"):
+        with pytest.raises(ValueError, match=re.escape(f"Ungültiger Pfad: {bad!r}")):
+            sb.cmd_free_space(bad)
+
+
+def test_stop_and_start_take_only_plain_service_names():
+    m = _mods()
+    stack = m.adopt.Adopted(FOLDER, (f"{FOLDER}/compose.yaml",), (), "").stack("shop")
+    assert m.stack_backup.cmd_stop_services(stack, ["web", "worker"])[-3:] == ["stop", "web", "worker"]
+    assert m.stack_backup.cmd_start_services(stack, ["web"])[-2:] == ["start", "web"]
+    for command in (m.stack_backup.cmd_stop_services, m.stack_backup.cmd_start_services):
+        for bad in ([], ["web;id"], ["--all"], ["web", ""]):
+            with pytest.raises(ValueError, match=re.escape(f"Ungültige Dienste: {bad!r}")):
+                command(stack, bad)
 
 
 @pytest.mark.asyncio
@@ -928,7 +968,7 @@ async def test_update_with_backup_stops_saves_then_recreates(tmp_path, monkeypat
     env = await _setup(tmp_path, monkeypatch)
     done = await env.executor.execute(_request(backup=True))
     assert done.success is True, done.error
-    assert "Volumes gesichert in /home/deck/nodvard-sicherungen/shop/" in done.output and "Zurückspielen geht im Moment im Terminal" in done.output
+    assert "Volumes gesichert in /home/deck/nodvard-sicherungen/shop/" in done.output and "Zurückspielen geht im Reiter Stacks unter „Sicherungen“." in done.output
     order = [next(k for k, test in (("hold", lambda c: c[:2] == ["docker", "tag"] and c[3].endswith(":pending")),
                                     ("pull", lambda c: "pull" in c), ("stop", lambda c: "stop" in c), ("archive", lambda c: c[:2] == ["docker", "run"]),
                                     ("keep", lambda c: c[:2] == ["docker", "tag"]), ("drop", lambda c: c[:3] == ["docker", "image", "rm"]),
@@ -990,6 +1030,40 @@ async def test_a_broken_channel_after_a_failed_mkdir_is_named(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("rmdir_works", [True, False], ids=["entfernt", "genannt"])
+async def test_a_time_folder_created_without_an_answer_is_removed_or_named(tmp_path, monkeypatch, rmdir_works):
+    env = await _setup(tmp_path, monkeypatch)
+    sftp = env.docker.fake.sftp_server
+    lost = pytest.importorskip("asyncssh").SFTPConnectionLost("Kanal zu")
+    mkdir, lstat = sftp.mkdir, sftp.lstat
+
+    async def mkdir_without_answer(path, attrs=None):
+        await mkdir(path, attrs)
+        if path.startswith(STAMP_ROOT):
+            raise lost
+
+    async def lstat_without_answer(path):
+        if path.startswith(STAMP_ROOT):
+            raise lost
+        return await lstat(path)
+
+    async def rmdir_without_answer(path):
+        raise lost
+
+    sftp.mkdir, sftp.lstat = mkdir_without_answer, lstat_without_answer
+    if not rmdir_works:
+        sftp.rmdir = rmdir_without_answer
+    done = await env.executor.execute(_request(backup=True))
+    assert done.error.startswith("Der Ordner für die Sicherung ließ sich nicht anlegen: Kanal zu."), done.error
+    assert not any("stop" in c for c in env.docker.calls)
+    if rmdir_works:
+        assert _stamp_folders(env) == [] and "kann noch leer" not in done.error
+    else:
+        [folder] = _stamp_folders(env)
+        assert f"Der Ordner {folder} kann noch leer auf dem Server liegen; lösche ihn im Reiter Stacks unter „Sicherungen“." in done.error
+
+
+@pytest.mark.asyncio
 async def test_a_failed_archive_starts_the_services_again_and_updates_nothing(tmp_path, monkeypatch):
     env = await _setup(tmp_path, monkeypatch)
     env.docker.fail["archive"] = "Error: no space left on device\n"
@@ -1001,8 +1075,111 @@ async def test_a_failed_archive_starts_the_services_again_and_updates_nothing(tm
     assert _stamp_folders(env) == [], "ohne fertiges Archiv bleibt kein leerer Zeitordner"
 
 
+STAMP_ROOT = "/home/deck/nodvard-sicherungen/shop/"
+
+
 def _stamp_folders(env):
-    return sorted(d for d in env.docker.fake.sftp_server.dirs if d.startswith("/home/deck/nodvard-sicherungen/shop/"))
+    return sorted(d for d in env.docker.fake.sftp_server.dirs if d.startswith(STAMP_ROOT))
+
+
+@pytest.mark.asyncio
+async def test_the_contents_list_is_written_before_anything_stops(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch)
+    _two_volumes(env)
+    sftp, inner, seen = env.docker.fake.sftp_server, env.fake.run_argv, []
+    sftp.open_ignores_mode = True
+
+    async def run_argv(host, argv, **kwargs):
+        if "stop" in argv:
+            seen.extend(p for p in sftp.files if p.endswith("/inhalt.json"))
+        return await inner(host, argv, **kwargs)
+
+    env.fake.run_argv = run_argv
+    assert (await env.executor.execute(_request(backup=True))).success is True
+    [folder] = _stamp_folders(env)
+    assert seen == [f"{folder}/inhalt.json"] and json.loads(sftp.files[seen[0]]) == {"volumes": ["shop_data", "shop_more"]}
+    assert (seen[0], 0o600) in sftp.seen_modes and sftp.modes[seen[0]] & 0o777 == 0o600
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [lambda: PermissionError(13, "Permission denied"), lambda: FileExistsError("schon da")])
+async def test_a_contents_list_that_cannot_be_written_stops_nothing(tmp_path, monkeypatch, error):
+    env = await _setup(tmp_path, monkeypatch)
+    sftp = env.docker.fake.sftp_server
+    opened = sftp.open
+
+    def open_(path, mode, attrs=None):
+        if path.endswith("/inhalt.json"):
+            raise error()
+        return opened(path, mode, attrs)
+
+    sftp.open = open_
+    done = await env.executor.execute(_request(backup=True))
+    assert done.error.startswith(f"Die Inhaltsliste der Sicherung ließ sich nicht anlegen: {str(error()).rstrip('.')}. Aktualisiert wurde nichts; die Dienste "
+                                 "laufen weiter mit der alten Version.")
+    assert _stamp_folders(env) == [] and not any("stop" in c for c in env.docker.calls)
+
+
+@pytest.mark.asyncio
+async def test_a_folder_left_after_a_failed_contents_list_is_named(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch)
+    sftp = env.docker.fake.sftp_server
+    opened = sftp.open
+
+    def open_(path, mode, attrs=None):
+        if path.endswith("/inhalt.json"):
+            raise ConnectionError("Verbindung verloren")
+        return opened(path, mode, attrs)
+
+    async def rmdir(path):
+        raise ConnectionError("Verbindung verloren")
+
+    sftp.open, sftp.rmdir = open_, rmdir
+    done = await env.executor.execute(_request(backup=True))
+    [folder] = _stamp_folders(env)
+    assert done.error.startswith(f"Die Inhaltsliste der Sicherung ließ sich nicht anlegen: Verbindung verloren. Der Ordner {folder} kann noch "
+                                 "leer auf dem Server liegen; lösche ihn im Reiter Stacks unter „Sicherungen“. Aktualisiert wurde nichts;")
+    assert not any("stop" in c for c in env.docker.calls)
+
+
+@pytest.mark.asyncio
+async def test_an_abort_while_writing_the_contents_list_leaves_no_folder(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch)
+    sftp, reached = env.docker.fake.sftp_server, asyncio.Event()
+    opened = sftp.open
+
+    @asynccontextmanager
+    async def hanging(path, mode, attrs):
+        await opened(path, mode, attrs)
+        reached.set()
+        await asyncio.sleep(3600)
+        yield
+
+    sftp.open = lambda path, mode, attrs=None: hanging(path, mode, attrs) if path.endswith("/inhalt.json") else opened(path, mode, attrs)
+    task = asyncio.create_task(env.executor.execute(_request(backup=True)))
+    await asyncio.wait_for(reached.wait(), 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert _stamp_folders(env) == [] and not any("stop" in c for c in env.docker.calls)
+
+
+@pytest.mark.asyncio
+async def test_a_folder_with_more_than_the_contents_list_keeps_it(tmp_path, monkeypatch, caplog):
+    env = await _setup(tmp_path, monkeypatch)
+    env.docker.fail["archive"] = "kaputt"
+    sftp, inner = env.docker.fake.sftp_server, env.fake.run_argv
+
+    async def run_argv(host, argv, **kwargs):
+        if argv[:2] == ["docker", "run"]:
+            folder = next(a for a in argv if a.endswith(":/backup"))[: -len(":/backup")]
+            sftp.files[f"{folder}/fremd.txt"] = b"x"
+        return await inner(host, argv, **kwargs)
+
+    env.fake.run_argv = run_argv
+    done = await env.executor.execute(_request(backup=True))
+    [folder] = _stamp_folders(env)
+    assert f"Der Ordner {folder} ließ sich nicht entfernen" in done.error and f"{folder}/inhalt.json" in sftp.files
 
 
 @pytest.mark.asyncio
@@ -1023,7 +1200,7 @@ async def test_a_backup_that_breaks_off_after_one_volume_names_what_is_left(tmp_
     done = await env.executor.execute(_request(backup=True))
     [folder] = _stamp_folders(env)
     assert done.error.startswith("Sicherung von shop_more gescheitert: Error: no space left on device Schon gepackt: shop_data in "
-                                 f"{folder}. Diese Sicherung ist unvollständig; brauchst du sie nicht, lösche den Ordner im Dateimanager.")
+                                 f"{folder}. Diese Sicherung ist unvollständig; brauchst du sie nicht, lösche sie im Reiter Stacks unter „Sicherungen“.")
     assert any("start" in c for c in env.docker.calls) and not any("up" in c for c in env.docker.calls)
 
 
@@ -1483,3 +1660,415 @@ async def test_no_archive_starts_once_the_time_is_used_up(tmp_path, monkeypatch)
     assert done.error == ("Für die Sicherung reichte die Zeit nicht, shop_data ist nicht mehr dran gekommen. Aktualisiert wurde nichts; "
                           "die Dienste laufen weiter mit der alten Version.")
     assert not any(c[:2] == ["docker", "run"] for c in env.docker.calls) and any("start" in c for c in env.docker.calls)
+
+
+# --- Seltene Wege --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_notes_file_offers_nothing_and_is_never_overwritten(tmp_path, monkeypatch, caplog):
+    su = _mods().stack_update
+    backups = su.StackBackups(tmp_path)
+    await backups.put("h1", "shop", {"web": su.Backup("busybox:1.37", OLD, NEW, "x")})
+    path = tmp_path / su.BACKUPS_FILE
+    stored = path.read_bytes()
+    real = Path.read_text
+
+    def read_text(self, *args, **kwargs):
+        if self == path:
+            raise PermissionError(str(path))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    assert backups.get("h1", "shop") == {}
+    assert "docker_stack_backups_unreadable" in caplog.text
+    with pytest.raises(PermissionError):
+        await backups.drop("h1", "shop")
+    assert path.read_bytes() == stored
+
+
+@pytest.mark.asyncio
+async def test_notes_that_cannot_be_removed_do_not_change_the_result(tmp_path, monkeypatch, caplog):
+    env = await _setup(tmp_path, monkeypatch)
+    assert (await env.executor.execute(_request())).success is True
+
+    async def locked(*args, **kwargs):
+        raise PermissionError("Keine Berechtigung")
+
+    monkeypatch.setattr(env.backups, "drop", locked)
+    back = await env.executor.execute(_request("docker.stack_rollback", risk="high"))
+    assert back.success is True and env.docker.containers["web"][2] == OLD
+    await env.executor.drop_backups(env.host, "shop", ["web"])
+    assert caplog.text.count("docker_stack_backups_not_dropped project=shop") == 2
+
+
+@pytest.mark.asyncio
+async def test_a_failed_up_on_the_way_back_names_the_reason(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch)
+    assert (await env.executor.execute(_request())).success is True
+    env.docker.fail["up"] = "Error: port is already allocated\n"
+    back = await env.executor.execute(_request("docker.stack_rollback", risk="high"))
+    assert back.success is False and back.error == "Rückweg gescheitert: Error: port is already allocated"
+    assert env.docker.pending() == []
+
+
+@pytest.mark.asyncio
+async def test_an_old_version_that_does_not_run_cleanly_either_is_named(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch, verdicts=(True, False))
+    assert (await env.executor.execute(_request())).success is True
+    back = await env.executor.execute(_request("docker.stack_rollback", risk="high"))
+    assert back.success is False
+    assert back.error == "Zurück auf der vorigen Version, aber auch sie läuft nicht sauber: Container startet immer wieder neu."
+    assert env.docker.containers["web"][2] == OLD
+
+
+@pytest.mark.asyncio
+async def test_names_that_cannot_be_put_back_after_a_failed_tag_are_named(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch)
+    env.images.statuses["shop-worker-1"] = "update"
+    assert (await env.executor.execute(_request(services=("web", "worker"), risk="high"))).success is True
+    original = env.fake.run_argv
+
+    async def run_argv(host, argv, **kwargs):
+        if argv[:2] == ["docker", "tag"] and (argv[3] == "redis:7" or argv[2].endswith(":pending")):
+            return result(stderr="Error: kaputt\n", code=1)
+        return await original(host, argv, **kwargs)
+
+    env.fake.run_argv = run_argv
+    back = await env.executor.execute(_request("docker.stack_rollback", services=("web", "worker"), risk="high"))
+    assert back.error == ("Rückweg gescheitert: Error: kaputt Einzelne Image-Namen zeigen schon auf die alte Version, die Dienste "
+                          "laufen aber noch mit der neuen.")
+    assert env.docker.images["busybox:1.37"] == OLD and env.docker.containers["web"][2] == NEW
+    assert not any("up" in c for c in env.docker.calls[-6:])
+
+
+@pytest.mark.asyncio
+async def test_a_lost_connection_while_reading_the_backups_changes_nothing(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch)
+    assert (await env.executor.execute(_request())).success is True
+    before = len(env.docker.changing())
+    _lose_at(env, lambda argv: argv[:3] == ["docker", "image", "inspect"] and argv[-1].endswith(":previous"))
+    back = await env.executor.execute(_request("docker.stack_rollback", risk="high"))
+    assert back.error == "Docker auf dem Server ließ sich nicht abfragen (die Verbindung zum Server ist abgebrochen)."
+    assert len(env.docker.changing()) == before and env.update.actions.locks.held("h1", "shop") is None
+
+
+@pytest.mark.asyncio
+async def test_a_backup_is_checked_again_for_the_services_that_really_change(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch, statuses={"shop-web-1": "update", "shop-worker-1": "update"})
+    env.docker.mounts["worker"] = ["shop_data"]
+    env.docker.remote["redis:7"] = OLD
+    done = await env.executor.execute(_request(services=("web", "worker"), risk="high", backup=True))
+    assert done.error == (
+        "Sicherung der Volumes nicht möglich: Das Volume shop_data nutzt auch der Dienst „worker“, der dabei weiterliefe; das "
+        "Archiv wäre nicht verlässlich. Stoppe „worker“ vorher oder aktualisiere ohne Sicherung. Aktualisiert wurde nichts; die "
+        "Dienste laufen weiter mit der alten Version. Aktualisiere ohne Sicherung."
+    )
+    assert not any("stop" in c or "up" in c for c in env.docker.calls) and env.docker.containers["web"][2] == OLD
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("answer", "left"), [("Error response from daemon: permission denied", True),
+                                              ("Error response from daemon: No such container: x", False)])
+async def test_an_archive_container_that_does_not_stop_keeps_its_file(tmp_path, monkeypatch, answer, left):
+    env = await _setup(tmp_path, monkeypatch)
+    _archive_breaks(env, TimeoutError())
+    original = env.fake.run_argv
+
+    async def run_argv(host, argv, **kwargs):
+        if argv[:3] == ["docker", "rm", "-f"]:
+            return result(stderr=answer + "\n", code=1)
+        return await original(host, argv, **kwargs)
+
+    env.fake.run_argv = run_argv
+    done = await env.executor.execute(_request(backup=True))
+    assert ("packt vielleicht noch" in done.error) is left and any("start" in c for c in env.docker.calls)
+    assert bool([p for p in env.docker.fake.sftp_server.files if p.endswith("shop_data.tar.gz.part")]) is left
+
+
+@pytest.mark.asyncio
+async def test_the_dry_run_names_stack_services_and_direction(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch)
+    update = await env.executor.dry_run(_request(services=("web", "worker")))
+    back = await env.executor.dry_run(_request("docker.stack_rollback"))
+    assert (update.would_change, update.summary) == (True, "Würde im Stack „shop“ web, worker aktualisieren.")
+    assert back.summary == "Würde im Stack „shop“ web auf die vorige Version zurücksetzen."
+    assert env.docker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_the_route_says_when_the_server_cannot_be_read(client, docker_on, monkeypatch):
+    docker = await _adopted(client, docker_on, monkeypatch)
+
+    async def lost(host, argv, **kwargs):
+        if argv[:4] == ["docker", "inspect", "--type", "container"]:
+            raise ConnectionResetError("Verbindung weg")
+        return await docker.run_argv(host, argv, **kwargs)
+
+    monkeypatch.setattr(docker_on.handle, "run_argv", lost, raising=False)
+    plan = await client.get(_url(docker_on), headers=docker_on.owner)
+    assert plan.status_code == 502
+    assert plan.json()["detail"].startswith("Server nicht erreichbar: Docker auf dem Server ließ sich nicht abfragen (")
+
+
+@pytest.mark.asyncio
+async def test_the_route_refuses_when_the_file_cannot_be_compared(client, docker_on, monkeypatch):
+    docker = await _adopted(client, docker_on, monkeypatch)
+    docker_on.exec.hashes = result(stderr="Cannot connect\n", code=1)
+    refused = await client.post(_url(docker_on), json={"services": ["web"]}, headers=docker_on.owner)
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "Ob die Datei Änderungen hat, die noch nicht angewendet sind, ließ sich nicht prüfen: Cannot connect"
+    assert docker.changing() == []
+
+
+@pytest.mark.asyncio
+async def test_the_route_refuses_a_way_back_that_would_only_cover_part_of_an_image(client, docker_on, monkeypatch):
+    docker = await _adopted(client, docker_on, monkeypatch)
+    proposed = await client.post(_url(docker_on), json={"services": ["web"]}, headers=docker_on.owner)
+    approved = await client.post(f"/api/v1/actions/{proposed.json()['action_id']}/approve", headers=docker_on.owner)
+    assert approved.json()["status"] == "succeeded", approved.json()
+    docker.containers["worker"][1] = "busybox:1.37"
+    refused = await client.post(_url(docker_on, "rollback"), json={"services": ["web"]}, headers=docker_on.owner)
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "worker nutzt dasselbe Image, hat aber keine passende Sicherung; so ginge nur ein Teil zurück."
+
+
+@pytest.mark.asyncio
+async def test_the_reason_says_that_volumes_are_saved_first(client, docker_on, monkeypatch):
+    await _adopted(client, docker_on, monkeypatch)
+    real_run = docker_on.exec.run
+
+    async def run(host, command, **kwargs):
+        if command.startswith("docker system df -v"):
+            return result(json.dumps({"Volumes": [{"Name": "shop_data", "Size": "2GB"}, {"Name": "shop_cache", "Size": "1MB"}]}))
+        return await real_run(host, command, **kwargs)
+
+    monkeypatch.setattr(docker_on.handle, "run", run)
+    proposed = await client.post(_url(docker_on), json={"services": ["web"], "backup": True}, headers=docker_on.owner)
+    assert proposed.status_code == 202, proposed.text
+    action = (await client.get(f"/api/v1/actions/{proposed.json()['action_id']}", headers=docker_on.owner)).json()
+    assert action["reason"].endswith("Vorher werden ihre Volumes gesichert; die Dienste sind dabei gestoppt.")
+    assert action["payload"]["backup"] is True
+
+
+# --- Randfälle -----------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_service_lists_are_checked_before_any_command(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch)
+    su = env.m.stack_update
+    for bad in ([], ["web;id"], ["web"] * (su.MAX_SERVICES + 1)):
+        for build in (su.cmd_stack_pull, su.cmd_stack_up):
+            with pytest.raises(ValueError):
+                build(env.stack, bad)
+
+
+@pytest.mark.asyncio
+async def test_other_errors_while_reading_are_not_hidden(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch)
+
+    async def broken(host, argv, **kwargs):
+        raise RuntimeError("kaputt")
+
+    env.fake.run_argv = broken
+    with pytest.raises(RuntimeError, match="kaputt"):
+        await env.update.image_id(env.host, "busybox:1.37")
+
+
+@pytest.mark.asyncio
+async def test_a_stack_that_is_gone_has_no_unapplied_changes(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch)
+    env.fake.rows = []
+    assert await env.update.unapplied(env.host, env.stack) == []
+
+
+@pytest.mark.asyncio
+async def test_a_service_with_containers_on_different_images_is_refused(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch)
+    real = env.update.running
+
+    async def running(host, stack):
+        found = await real(host, stack)
+        found["web"] = dataclasses.replace(found["web"], mixed=True)
+        return found
+
+    monkeypatch.setattr(env.update, "running", running)
+    done = await env.executor.execute(_request())
+    assert done.error.startswith("Die Container von „web“ laufen mit verschiedenen Images. Wende den Stack einmal an und versuch es "
+                                 "dann noch einmal."), done.error
+    assert env.docker.changing() == []
+
+
+@pytest.mark.asyncio
+async def test_a_file_where_the_backup_folder_belongs_stops_the_update(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch)
+    env.docker.fake.sftp_server.files["/home/deck/nodvard-sicherungen"] = b""
+    done = await env.executor.execute(_request(backup=True))
+    assert done.error.startswith("Der Ordner für die Sicherung ließ sich nicht anlegen: /home/deck/nodvard-sicherungen."), done.error
+    assert not any("stop" in c for c in env.docker.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("error", "kept"), [
+    (lambda: type("SFTPNoSuchFile", (Exception,), {})("No such file"), False),
+    (lambda: PermissionError(13, "Permission denied"), True),
+], ids=["schon-weg", "verweigert"])
+async def test_the_folder_stays_only_if_its_contents_file_does(tmp_path, monkeypatch, caplog, error, kept):
+    env = await _setup(tmp_path, monkeypatch)
+    env.docker.fail["archive"] = "kaputt"
+    sftp = env.docker.fake.sftp_server
+    remove = sftp.remove
+
+    async def failing_remove(path):
+        if path.endswith("/" + env.m.stack_update.CONTENTS_FILE):
+            if not kept:
+                await remove(path)
+            raise error()
+        await remove(path)
+
+    sftp.remove = failing_remove
+    done = await env.executor.execute(_request(backup=True))
+    assert done.error.startswith("Sicherung von shop_data gescheitert: kaputt")
+    assert ("ließ sich nicht entfernen" in done.error) is kept and bool(_stamp_folders(env)) is kept
+    logged = [r.exc_info[1] for r in caplog.records if "docker_stack_backup_folder_not_removed" in r.getMessage()]
+    assert [type(e) for e in logged] == ([PermissionError] if kept else [])
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_clean_up_leaves_no_log(tmp_path, monkeypatch, caplog):
+    env = await _setup(tmp_path, monkeypatch)
+    cleanup = asyncio.create_task(asyncio.sleep(3600))
+    cleanup.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cleanup
+    env.m.stack_update._report_after_abort("shop", STAMP_ROOT + "x", None, [], cleanup)
+    assert "docker_stack" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_the_check_after_start_without_containers_cannot_judge(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch)
+    assert await env.executor._check(env.host, env.stack, ["gibt-es-nicht"]) is None
+    assert env.checked == []
+
+
+# --- Platzprüfung vor der Sicherung --------------------------------------------------------------------------------
+
+
+NO_HOME = "Der Heimatordner des Zugangs von Nodvard Deck ließ sich nicht lesen."
+NO_FREE = "Der freie Platz im Heimatordner ließ sich nicht lesen."
+
+
+class _SftpDown:
+    """Ein SFTP-Kanal, der sich nicht öffnen lässt."""
+
+    async def __aenter__(self):
+        raise OSError("Verbindung getrennt")
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _sftp_down(env):
+    env.fake.sftp = lambda host: _SftpDown()
+
+
+def _sftp_fails(step):
+    def apply(env):
+        async def fail(path):
+            raise OSError("Verbindung getrennt")
+
+        setattr(env.fake.sftp_server, step, fail)
+
+    return apply
+
+
+def _home_is(path="/home/deck", uid=1000, gid=1000):
+    def apply(env):
+        async def realpath(_):
+            return path
+
+        async def stat(_):
+            return SimpleNamespace(uid=uid, gid=gid, permissions=0o040755, size=4096)
+
+        env.fake.sftp_server.realpath, env.fake.sftp_server.stat = realpath, stat
+
+    return apply
+
+
+def _df_answers(env, reply):
+    """`df` bekommt `reply` (ein Ergebnis oder eine Ausnahme), alles andere läuft unverändert durch."""
+    inner = env.fake.run_argv
+
+    async def run_argv(host, argv, **kwargs):
+        if argv[:2] != ["df", "-Pk"]:
+            return await inner(host, argv, **kwargs)
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+
+    env.fake.run_argv = run_argv
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "problem",
+    [
+        _sftp_down, _sftp_fails("realpath"), _sftp_fails("stat"), _home_is("home/deck"), _home_is("/home/de:ck"),
+        _home_is(uid=None), _home_is(gid=None),
+    ],
+    ids=["kein-sftp", "realpath-scheitert", "stat-scheitert", "relativer-pfad", "doppelpunkt", "ohne-uid", "ohne-gid"],
+)
+async def test_a_home_that_cannot_be_read_allows_no_backup(tmp_path, monkeypatch, problem):
+    env = await _setup(tmp_path, monkeypatch)
+    problem(env)
+    plan = await env.update.plan(env.host, env.stack)
+    assert plan["volume_backup"] == {"volumes": {"shop_data": None}, "free_bytes": None, "folder": None, "error": NO_HOME}
+    assert not any(c[:2] == ["df", "-Pk"] for c in env.docker.calls)
+    done = await env.executor.execute(_request(backup=True))
+    assert done.error.startswith(f"Sicherung der Volumes nicht möglich: {NO_HOME}"), done.error
+    assert not any("stop" in c for c in env.docker.calls)
+
+
+@pytest.mark.asyncio
+async def test_without_named_volumes_there_is_nothing_to_check(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch)
+    env.docker.mounts.update({"web": [], "worker": []})
+    _sftp_down(env)
+    no_volumes = "Die Dienste mit Update haben keine benannten Volumes; ihre Daten liegen in Ordnern auf dem Server."
+    expected = {"volumes": {}, "free_bytes": None, "folder": None, "error": no_volumes}
+    assert (await env.update.plan(env.host, env.stack))["volume_backup"] == expected
+    assert await env.update.volumes.plan(env.host, "shop", []) == expected, "der Heimatordner wird dafür gar nicht erst gelesen"
+    assert not any(c[:2] == ["df", "-Pk"] for c in env.docker.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [
+        result(stderr="df: /home/deck: No such file or directory\n", code=1),
+        result("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 100 1 2048 1% /\n", code=1),
+        result("kaputt\n"),
+        result("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 100 1 viel 1% /\n"),
+    ],
+    ids=["exit-code", "exit-code-trotz-ausgabe", "unlesbar", "keine-zahl"],
+)
+async def test_free_space_that_cannot_be_read_allows_no_backup(tmp_path, monkeypatch, answer):
+    env = await _setup(tmp_path, monkeypatch)
+    _df_answers(env, answer)
+    plan = await env.update.plan(env.host, env.stack)
+    assert plan["volume_backup"] == {
+        "volumes": {"shop_data": 2 * 1024**3}, "free_bytes": None, "folder": "/home/deck/nodvard-sicherungen/shop/", "error": NO_FREE,
+    }
+    done = await env.executor.execute(_request(backup=True))
+    assert done.error.startswith(f"Sicherung der Volumes nicht möglich: {NO_FREE}"), done.error
+    assert not any("stop" in c for c in env.docker.calls)
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_error_reading_free_space_is_not_hidden(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch)
+    _df_answers(env, RuntimeError("df ausgefallen"))
+    with pytest.raises(RuntimeError, match="df ausgefallen"):
+        await env.update.plan(env.host, env.stack)

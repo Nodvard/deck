@@ -35,6 +35,7 @@ from .transport import (
     NoRights,
     Reply,
     Unavailable,
+    Unreachable,
     send,
 )
 
@@ -63,9 +64,15 @@ QUERIED_APIS = (API_AUTH, API_DSM_INFO, API_UTILIZATION, API_STORAGE, API_UPGRAD
 
 # Zeiten und Ergebnis des letzten Laufs liefert Hyper Backup nur auf Nachfrage.
 BACKUP_FIELDS = '["last_bkp_time","next_bkp_time","last_bkp_result","is_modified","last_bkp_progress"]'
-# Frist für die Stände aller Aufgaben zusammen; sie bleibt deutlich unter der Frist der ganzen Abfrage, damit Speicher,
-# System und Update auch bei vielen Aufgaben ankommen.
+# Frist für Liste und Stände aller Aufgaben zusammen; sie bleibt deutlich unter der Frist der ganzen Abfrage, damit
+# Speicher, System und Update auch bei vielen oder trägen Aufgaben ankommen.
 BACKUP_TIMEOUT_S = 25.0
+BACKUP_LIST_LATE = "Hyper Backup hat nicht rechtzeitig geantwortet. Beim nächsten Aktualisieren fragt Nodvard Deck noch einmal."
+
+
+def backup_deadline() -> float:
+    """Ende der Frist für Hyper Backup, gerechnet ab jetzt auf der Uhr der Ereignisschleife."""
+    return asyncio.get_running_loop().time() + BACKUP_TIMEOUT_S
 
 # Die Sitzung ist abgelaufen (106), durch eine andere Anmeldung beendet (107) oder DSM kennt sie nicht (119).
 SESSION_ERRORS = frozenset({106, 107, 119})
@@ -390,11 +397,18 @@ class SynologyClient:
             raise self._bad_format("die Frage nach Updates")
         return parsed
 
-    async def backup_tasks(self) -> tuple[list[tuple[TaskEntry, BackupStatus | None]], int]:
+    async def backup_tasks(self, deadline: float | None = None) -> tuple[list[tuple[TaskEntry, BackupStatus | None]], int]:
         """`SYNO.Backup.Task` `list` und je Aufgabe `status`: die Aufgaben von Hyper Backup mit dem letzten Lauf, dazu wie
-        viele es insgesamt gibt. Lässt sich der Stand einer Aufgabe nicht lesen oder kommt er nicht innerhalb von
-        `BACKUP_TIMEOUT_S`, steht sie mit `None` in der Liste."""
-        listed = parse_backup_tasks(await self._call(API_BACKUP, "list"))
+        viele es insgesamt gibt. Bis `deadline` (Vorgabe: `backup_deadline()`) müssen Liste und Stände da sein; ein Stand,
+        der sich nicht lesen lässt oder nicht rechtzeitig kommt, steht als `None` in der Liste."""
+        if deadline is None:
+            deadline = backup_deadline()
+        try:
+            async with asyncio.timeout_at(deadline):
+                raw = await self._call(API_BACKUP, "list")
+        except TimeoutError:
+            raise Unreachable(BACKUP_LIST_LATE) from None
+        listed = parse_backup_tasks(raw)
         if listed is None:
             raise self._bad_format("die Frage nach Hyper Backup")
         tasks, total = listed
@@ -413,7 +427,7 @@ class SynologyClient:
             found[index] = parse_backup_status(data)
 
         try:
-            async with asyncio.timeout(BACKUP_TIMEOUT_S):
+            async with asyncio.timeout_at(deadline):
                 await asyncio.gather(*(status(index, task) for index, task in enumerate(tasks)))
         except TimeoutError:
             pass  # was bis dahin angekommen ist, bleibt; die übrigen Aufgaben haben keinen Stand

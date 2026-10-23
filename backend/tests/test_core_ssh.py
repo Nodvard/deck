@@ -8,7 +8,13 @@ Flotte.
 
 from __future__ import annotations
 
+import asyncio
+import shutil
+import sys
+
+import asyncssh
 import pytest
+import pytest_asyncio
 
 from nodvard_deck.core import ssh
 from nodvard_deck.models import KnownHostKey
@@ -779,3 +785,122 @@ async def test_inspect_host_key_ignores_home_and_agent(fake_home, ssh_server_fac
     finally:
         agent_server.close()
         await agent_server.wait_closed()
+
+
+# ---------------------------------------------------------------------------
+# Server wie Dropbear: ein Befehlstext über 9000 Byte beendet die ganze Verbindung
+# ---------------------------------------------------------------------------
+
+DROPBEAR_MAX_COMMAND = 9000
+needs_sh = pytest.mark.skipif(sys.platform == "win32" or shutil.which("sh") is None, reason="braucht eine echte POSIX-Shell")
+
+
+class _PasswordServer(asyncssh.SSHServer):
+    def begin_auth(self, username: str) -> bool:
+        return True
+
+    def password_auth_supported(self) -> bool:
+        return True
+
+    def validate_password(self, username: str, password: str) -> bool:
+        return password == "pw"
+
+
+def _dropbear_like(shells: set):
+    async def handle(process) -> None:
+        command = process.command or ""
+        if len(command.encode()) > DROPBEAR_MAX_COMMAND:
+            process.channel.get_connection().abort()
+            return
+        shell = await asyncio.create_subprocess_exec(
+            "sh", "-c", command,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        shells.add(shell)
+
+        async def feed() -> None:
+            try:
+                while chunk := await process.stdin.read(65536):
+                    shell.stdin.write(chunk)
+                    await shell.stdin.drain()
+            except (asyncssh.Error, OSError):
+                pass
+            finally:
+                shell.stdin.close()
+
+        feeder = asyncio.ensure_future(feed())
+        try:
+            out, err = await asyncio.gather(shell.stdout.read(), shell.stderr.read())
+            code = await shell.wait()
+            process.stdout.write(out)
+            process.stderr.write(err)
+            await process.stdout.drain()
+            process.exit(code)
+        except (asyncssh.Error, OSError):
+            pass
+        finally:
+            feeder.cancel()
+
+    return handle
+
+
+@pytest_asyncio.fixture
+async def dropbear_like_server():
+    shells: set = set()
+    server = await asyncssh.listen(
+        "127.0.0.1", 0, server_host_keys=[asyncssh.generate_private_key("ssh-ed25519")],
+        server_factory=_PasswordServer, process_factory=_dropbear_like(shells), encoding=None,
+    )
+    try:
+        yield "127.0.0.1", server.sockets[0].getsockname()[1]
+    finally:
+        server.close()
+        for shell in shells:
+            if shell.returncode is None:
+                shell.kill()
+            await shell.wait()
+        try:
+            await asyncio.wait_for(server.wait_closed(), timeout=5.0)
+        except TimeoutError:
+            pass
+
+
+LONG_COMMAND = "# " + "x" * 20_000 + "\necho lang-ok"
+
+
+@needs_sh
+@pytest.mark.asyncio
+async def test_a_long_command_runs_on_a_dropbear_like_server_and_a_parallel_one_survives(dropbear_like_server, db_session):
+    host, port = dropbear_like_server
+    target = _target(host, port, "deck", "pw")
+    pool = ssh.SshPool()
+    try:
+        conn = await pool.get(db_session, target, credential_id="cred-1")
+        parallel = asyncio.ensure_future(ssh.run(conn, "sleep 0.3; echo parallel"))
+        await asyncio.sleep(0.05)
+        assert await ssh.run(conn, LONG_COMMAND) == (0, "lang-ok\n", "")
+        assert await parallel == (0, "parallel\n", "")
+        assert await pool.get(db_session, target, credential_id="cred-1") is conn, "die Verbindung lebt weiter"
+    finally:
+        await pool.close_all()
+
+
+@needs_sh
+@pytest.mark.asyncio
+async def test_on_the_command_line_the_same_command_takes_the_whole_connection_down(dropbear_like_server, db_session):
+    host, port = dropbear_like_server
+    conn = await ssh.connect(db_session, _target(host, port, "deck", "pw"))
+    try:
+        parallel = asyncio.ensure_future(ssh.run(conn, "sleep 0.3; echo parallel"))
+        await asyncio.sleep(0.05)
+        results = []
+        for pending in (ssh.run(conn, LONG_COMMAND, posix_shell=False), parallel):
+            try:
+                results.append(await pending)
+            except (asyncssh.Error, OSError):
+                results.append(None)
+        assert all(result in (None, (-1, "", "")) for result in results), results
+        assert conn.is_closed()
+    finally:
+        conn.close()
+        await conn.wait_closed()

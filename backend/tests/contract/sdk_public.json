@@ -914,6 +914,10 @@
     "style": false
    }
   },
+  "lattice_sdk.WidgetGroup": {
+   "art": "funktion",
+   "params": {}
+  },
   "lattice_sdk.WidgetSpec": {
    "art": "klasse",
    "params": {
@@ -921,6 +925,7 @@
     "data_endpoint": true,
     "default_enabled": false,
     "description": false,
+    "group": false,
     "icon": false,
     "id": true,
     "permissions": false,
@@ -1435,6 +1440,10 @@
     "mark_gone": {
      "provider_refs": true
     },
+    "set_status": {
+     "provider_refs": true,
+     "status": true
+    },
     "upsert_discovered": {
      "hosts": true
     }
@@ -1563,6 +1572,9 @@
     },
     "register_widget": {
      "spec": true
+    },
+    "unregister_widget": {
+     "widget_id": true
     }
    }
   },
@@ -2252,6 +2264,7 @@
     "data_endpoint": true,
     "default_enabled": false,
     "description": false,
+    "group": false,
     "icon": false,
     "id": true,
     "permissions": false,
@@ -3174,6 +3187,10 @@
     "style": false
    }
   },
+  "nodvard_sdk.WidgetGroup": {
+   "art": "funktion",
+   "params": {}
+  },
   "nodvard_sdk.WidgetSpec": {
    "art": "klasse",
    "params": {
@@ -3181,6 +3198,7 @@
     "data_endpoint": true,
     "default_enabled": false,
     "description": false,
+    "group": false,
     "icon": false,
     "id": true,
     "permissions": false,
@@ -3695,6 +3713,10 @@
     "mark_gone": {
      "provider_refs": true
     },
+    "set_status": {
+     "provider_refs": true,
+     "status": true
+    },
     "upsert_discovered": {
      "hosts": true
     }
@@ -3823,6 +3845,9 @@
     },
     "register_widget": {
      "spec": true
+    },
+    "unregister_widget": {
+     "widget_id": true
     }
    }
   },
@@ -4512,6 +4537,7 @@
     "data_endpoint": true,
     "default_enabled": false,
     "description": false,
+    "group": false,
     "icon": false,
     "id": true,
     "permissions": false,

@@ -104,13 +104,16 @@ function targetMoved(node: JsonSchema | undefined, path: string, before: unknown
   return !sameTarget(targetAt(node, before, path), targetAt(node, after, path));
 }
 
+/** Warum der Server ein Geheimnis beim Speichern löscht: Das Ziel zog um oder fiel weg, oder der Name ist doppelt. */
+type ClearReason = "moved" | "twice";
+
 /**
- * Welche Zugangsdaten der Server beim Speichern dieses Formulars löschen würde, weil sich die Adresse geändert hat,
- * zu der sie gehören (gleiche Regel wie im Backend). Wer in diesem Zustand erst das neue Token einträgt und dann
- * speichert, verlöre es sofort wieder.
+ * Welche Zugangsdaten der Server beim Speichern dieses Formulars löschen würde (gleiche Regel wie im Backend): weil sich
+ * die Adresse geändert hat, zu der sie gehören, der Eintrag wegfiel oder sein Name doppelt vorkommt. Wer in diesem
+ * Zustand erst das neue Token einträgt und dann speichert, verlöre es sofort wieder.
  */
-function pendingSecretClears(schema: (JsonSchema & { "x-secrets"?: unknown }) | null, saved: Record<string, unknown>, current: Record<string, unknown>): Set<string> {
-  const out = new Set<string>();
+function pendingSecretClears(schema: (JsonSchema & { "x-secrets"?: unknown }) | null, saved: Record<string, unknown>, current: Record<string, unknown>): Map<string, ClearReason> {
+  const out = new Map<string, ClearReason>();
   const specs = Array.isArray(schema?.["x-secrets"]) ? (schema["x-secrets"] as SecretSpec[]) : [];
   for (const spec of specs) {
     const bound = (spec["x-secret-bound-to"] ?? []).filter((p) => typeof p === "string" && p);
@@ -119,15 +122,21 @@ function pendingSecretClears(schema: (JsonSchema & { "x-secrets"?: unknown }) | 
       const itemSchema = schema?.properties?.[spec.per_item]?.items;
       const items = (v: unknown) => (Array.isArray(v) ? (v as Record<string, unknown>[]) : []).filter((i) => i && typeof i === "object");
       const nameOf = (i: Record<string, unknown>) => String(i.name ?? "").trim();
+      const names = items(current[spec.per_item]).map(nameOf);
       const now = new Map(items(current[spec.per_item]).map((i) => [nameOf(i), i] as const));
       for (const item of items(saved[spec.per_item])) {
         const name = nameOf(item);
         if (!name) continue;
+        const label = spec.label.replace("{name}", name);
+        if (names.indexOf(name) !== names.lastIndexOf(name)) {
+          out.set(label, "twice");
+          continue;
+        }
         const after = now.get(name);
-        if (after === undefined || bound.some((p) => targetMoved(itemSchema, p, item, after))) out.add(spec.label.replace("{name}", name));
+        if (after === undefined || bound.some((p) => targetMoved(itemSchema, p, item, after))) out.set(label, "moved");
       }
     } else if (bound.some((p) => targetMoved(schema ?? undefined, p, saved, current))) {
-      out.add(spec.label);
+      out.set(spec.label, "moved");
     }
   }
   return out;
@@ -205,11 +214,13 @@ export function ExtensionConfigPage(): JSX.Element {
 
   const dirty = data !== null && JSON.stringify(values) !== JSON.stringify(data.values);
   const formErrors = data?.schema?.properties ? validateValues(data.schema, values) : [];
-  const pendingClears = data ? pendingSecretClears(data.schema, data.values, values) : new Set<string>();
+  const pendingClears = data ? pendingSecretClears(data.schema, data.values, values) : new Map<string, ClearReason>();
   const noTarget = data ? secretsWithoutTarget(data.schema, data.values) : new Set<string>();
-  const pendingTitles = (data?.secrets ?? [])
-    .filter((slot) => pendingClears.has(slot.label) && slot.is_set)
-    .map((slot) => slot.title + (slot.item ? ` (${slot.item})` : ""));
+  const pendingTitles = (reason: ClearReason) => uniqueSlots(data?.secrets ?? [])
+    .filter((slot) => pendingClears.get(slot.label) === reason && slot.is_set)
+    .map(slotTitle);
+  const pendingMoved = pendingTitles("moved");
+  const pendingTwice = pendingTitles("twice");
 
   async function save() {
     setBusy(true);
@@ -224,15 +235,21 @@ export function ExtensionConfigPage(): JSX.Element {
       setData(d);
       setValues(d.values);
       setSaves((n) => n + 1);
-      const cleared = (d.secrets_cleared ?? []).map((label) => {
-        const slot = d.secrets.find((x) => x.label === label);
-        return slot ? slot.title + (slot.item ? ` (${slot.item})` : "") : label;
-      });
+      const clearedBy = (reason: ClearReason) => (d.secrets_cleared ?? [])
+        .filter((label) => (pendingClears.get(label) ?? "moved") === reason)
+        .map((label) => {
+          const slot = d.secrets.find((x) => x.label === label);
+          return slot ? slotTitle(slot) : label;
+        });
+      const moved = clearedBy("moved");
+      const twice = clearedBy("twice");
       setNotice({
         kind: "ok",
-        text: cleared.length > 0
-          ? `Einstellungen gespeichert. Weil sich die Adresse geändert hat, wurden diese Zugangsdaten gelöscht: ${cleared.join(", ")}. Bitte neu eintragen.`
-          : "Einstellungen gespeichert.",
+        text: [
+          "Einstellungen gespeichert.",
+          moved.length > 0 && `Weil sich eine Adresse oder ein Name geändert hat oder ein Eintrag wegfiel, wurden diese Zugangsdaten gelöscht: ${moved.join(", ")}. Bitte neu eintragen.`,
+          twice.length > 0 && `Weil ein Name mehrfach vorkommt, wurden diese Zugangsdaten gelöscht: ${twice.join(", ")}. Erst jedem Eintrag einen eigenen Namen geben, danach neu eintragen.`,
+        ].filter(Boolean).join(" "),
       });
       refreshInfo();
     } catch (err) {
@@ -274,10 +291,16 @@ export function ExtensionConfigPage(): JSX.Element {
       </div>
       <NoticeLine notice={notice} />
       {info?.needs_setup && info.state === "enabled" && <SetupBanner reasons={info.setup_reasons ?? []} />}
-      {pendingTitles.length > 0 && (
+      {pendingMoved.length > 0 && (
         <p role="status" className="mb-4 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
           <AlertTriangle size={16} className="mt-0.5 flex-none" />
-          <span>Du hast eine Adresse geändert. Beim Speichern werden diese Zugangsdaten gelöscht, danach trägst du sie neu ein: {pendingTitles.join(", ")}.</span>
+          <span>Du hast eine Adresse oder einen Namen geändert oder einen Eintrag entfernt. Beim Speichern werden diese Zugangsdaten gelöscht, danach trägst du sie neu ein: {pendingMoved.join(", ")}.</span>
+        </p>
+      )}
+      {pendingTwice.length > 0 && (
+        <p role="status" className="mb-4 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+          <AlertTriangle size={16} className="mt-0.5 flex-none" />
+          <span>Ein Name kommt mehrfach vor. Beim Speichern werden diese Zugangsdaten gelöscht: {pendingTwice.join(", ")}. Gib jedem Eintrag einen eigenen Namen und trage sie danach neu ein.</span>
         </p>
       )}
       {formErrors.length > 0 && (
@@ -344,7 +367,7 @@ function ConnectionCard({
   schema: JsonSchema;
   state: string;
   dirty: boolean;
-  pendingClears: Set<string>;
+  pendingClears: Map<string, ClearReason>;
   noTarget: Set<string>;
   lastTest: { ok: boolean; message: string } | null;
   onSecretChanged: (label: string, isSet: boolean) => void;
@@ -378,12 +401,12 @@ function ConnectionCard({
     >
       {slots.length > 0 && (
         <div className="divide-y divide-white/[0.06]">
-          {slots.map((slot) => (
+          {uniqueSlots(slots).map((slot) => (
             <SecretRow
               key={slot.label}
               extId={extId}
               slot={slot}
-              lockedHint={pendingClears.has(slot.label) ? LOCKED_HINT : noTarget.has(slot.label) ? NO_TARGET_HINT : null}
+              lockedHint={lockedHintFor(pendingClears.get(slot.label)) ?? (noTarget.has(slot.label) ? NO_TARGET_HINT : null)}
               onChanged={onSecretChanged}
             />
           ))}
@@ -436,7 +459,21 @@ function TestResultBox({ ok, message, details, earlier }: { ok: boolean; message
 }
 
 const LOCKED_HINT = "Erst die Einstellungen mit der neuen Adresse speichern, dann hier eintragen. Sonst wird der Wert beim Speichern gleich wieder gelöscht.";
+const TWICE_HINT = "Dieser Name kommt mehrfach vor. Erst einen der Einträge umbenennen und die Einstellungen speichern, dann hier eintragen.";
 const NO_TARGET_HINT = "Erst die Adresse eintragen und die Einstellungen speichern, dann hier die Zugangsdaten hinterlegen.";
+
+function lockedHintFor(reason: ClearReason | undefined): string | null {
+  return reason === "twice" ? TWICE_HINT : reason === "moved" ? LOCKED_HINT : null;
+}
+
+/** Bei einem doppelten Namen liefert der Server dasselbe Label mehrfach; es gibt nur ein Geheimnis dafür. */
+function uniqueSlots(slots: SecretSlot[]): SecretSlot[] {
+  return slots.filter((slot, index) => slots.findIndex((other) => other.label === slot.label) === index);
+}
+
+function slotTitle(slot: SecretSlot): string {
+  return slot.title + (slot.item ? ` (${slot.item})` : "");
+}
 
 function SecretRow({ extId, slot, lockedHint, onChanged }: { extId: string; slot: SecretSlot; lockedHint: string | null; onChanged: (label: string, isSet: boolean) => void }) {
   const [value, setValue] = useState("");

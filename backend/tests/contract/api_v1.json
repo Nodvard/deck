@@ -1165,6 +1165,30 @@
        "created_at": {
         "type": "string"
        },
+       "groups": {
+        "items": {
+         "fields": {
+          "collapsed": {
+           "type": "boolean"
+          },
+          "key": {
+           "enum": [
+            "apps",
+            "backups",
+            "security",
+            "servers",
+            "services"
+           ],
+           "type": "string"
+          },
+          "title": {
+           "type": "null|string"
+          }
+         },
+         "type": "object"
+        },
+        "type": "array"
+       },
        "id": {
         "type": "string"
        },
@@ -1202,6 +1226,30 @@
      "fields": {
       "created_at": {
        "type": "string"
+      },
+      "groups": {
+       "items": {
+        "fields": {
+         "collapsed": {
+          "type": "boolean"
+         },
+         "key": {
+          "enum": [
+           "apps",
+           "backups",
+           "security",
+           "servers",
+           "services"
+          ],
+          "type": "string"
+         },
+         "title": {
+          "type": "null|string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
       },
       "id": {
        "type": "string"
@@ -1554,6 +1602,19 @@
     }
    }
   },
+  "GET /api/v1/ext/docker/hosts/{host_id}/registries": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/docker/hosts/{host_id}/stacks": {
    "params": {
     "path:host_id": {
@@ -1581,6 +1642,23 @@
    }
   },
   "GET /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/adopt": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/backups": {
    "params": {
     "path:host_id": {
      "required": true,
@@ -4101,6 +4179,19 @@
     }
    }
   },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/registries": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/service-matrix/hosts/{host_id}/stacks": {
    "params": {
     "path:host_id": {
@@ -4128,6 +4219,23 @@
    }
   },
   "GET /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/adopt": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/backups": {
    "params": {
     "path:host_id": {
      "required": true,
@@ -4506,8 +4614,344 @@
     }
    }
   },
+  "GET /api/v1/ext/synology/devices": {
+   "params": {
+    "query:refresh": {
+     "type": "boolean"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "devices": {
+       "items": {
+        "fields": {
+         "backup_note": {
+          "fields": {
+           "kind": {
+            "type": "string"
+           },
+           "message": {
+            "type": "string"
+           }
+          },
+          "type": "null|object"
+         },
+         "backups": {
+          "items": {
+           "fields": {
+            "id": {
+             "type": "string"
+            },
+            "last_result": {
+             "type": "null|string"
+            },
+            "last_run": {
+             "type": "null|string"
+            },
+            "last_success": {
+             "type": "null|string"
+            },
+            "name": {
+             "type": "string"
+            },
+            "next_run": {
+             "type": "null|string"
+            },
+            "overdue": {
+             "type": "boolean"
+            },
+            "problem": {
+             "type": "null|string"
+            },
+            "result_label": {
+             "type": "string"
+            },
+            "running": {
+             "type": "boolean"
+            },
+            "state": {
+             "type": "null|string"
+            },
+            "status_read": {
+             "type": "boolean"
+            },
+            "tone": {
+             "type": "string"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array|null"
+         },
+         "config_problem": {
+          "type": "boolean"
+         },
+         "device": {
+          "type": "null|string"
+         },
+         "disks": {
+          "items": {
+           "fields": {
+            "id": {
+             "type": "string"
+            },
+            "kind": {
+             "type": "string"
+            },
+            "model": {
+             "type": "null|string"
+            },
+            "name": {
+             "type": "string"
+            },
+            "smart_label": {
+             "type": "null|string"
+            },
+            "smart_status": {
+             "type": "null|string"
+            },
+            "smart_tone": {
+             "type": "string"
+            },
+            "status": {
+             "type": "string"
+            },
+            "status_label": {
+             "type": "string"
+            },
+            "temp": {
+             "type": "integer|null"
+            },
+            "temp_warn": {
+             "type": "boolean"
+            },
+            "tone": {
+             "type": "string"
+            },
+            "warning": {
+             "type": "null|string"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array|null"
+         },
+         "load": {
+          "fields": {
+           "cpu_percent": {
+            "type": "null|number"
+           },
+           "ram_percent": {
+            "type": "null|number"
+           }
+          },
+          "type": "null|object"
+         },
+         "load_note": {
+          "fields": {
+           "kind": {
+            "type": "string"
+           },
+           "message": {
+            "type": "string"
+           }
+          },
+          "type": "null|object"
+         },
+         "message": {
+          "type": "null|string"
+         },
+         "pools": {
+          "items": {
+           "fields": {
+            "description": {
+             "type": "null|string"
+            },
+            "disks": {
+             "type": "integer|null"
+            },
+            "id": {
+             "type": "string"
+            },
+            "name": {
+             "type": "string"
+            },
+            "raid": {
+             "type": "null|string"
+            },
+            "status": {
+             "type": "string"
+            },
+            "status_label": {
+             "type": "string"
+            },
+            "tone": {
+             "type": "string"
+            },
+            "total": {
+             "type": "integer|null"
+            },
+            "volumes": {
+             "type": "array"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array|null"
+         },
+         "problems": {
+          "items": {
+           "fields": {
+            "key": {
+             "type": "string"
+            },
+            "severity": {
+             "type": "string"
+            },
+            "subject": {
+             "type": "string"
+            },
+            "text": {
+             "type": "string"
+            },
+            "title": {
+             "type": "string"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array"
+         },
+         "state": {
+          "type": "string"
+         },
+         "storage_note": {
+          "fields": {
+           "kind": {
+            "type": "string"
+           },
+           "message": {
+            "type": "string"
+           }
+          },
+          "type": "null|object"
+         },
+         "system": {
+          "fields": {
+           "clock": {
+            "type": "null|string"
+           },
+           "dsm_version": {
+            "type": "null|string"
+           },
+           "model": {
+            "type": "null|string"
+           },
+           "ram_mb": {
+            "type": "integer|null"
+           },
+           "temperature": {
+            "type": "integer|null"
+           },
+           "temperature_warn": {
+            "type": "boolean|null"
+           },
+           "uptime_seconds": {
+            "type": "integer|null"
+           }
+          },
+          "type": "null|object"
+         },
+         "system_note": {
+          "fields": {
+           "kind": {
+            "type": "string"
+           },
+           "message": {
+            "type": "string"
+           }
+          },
+          "type": "null|object"
+         },
+         "update": {
+          "fields": {
+           "available": {
+            "type": "boolean"
+           },
+           "version": {
+            "type": "null|string"
+           }
+          },
+          "type": "null|object"
+         },
+         "update_note": {
+          "fields": {
+           "kind": {
+            "type": "string"
+           },
+           "message": {
+            "type": "string"
+           }
+          },
+          "type": "null|object"
+         },
+         "url": {
+          "type": "null|string"
+         },
+         "volumes": {
+          "items": {
+           "fields": {
+            "fs_type": {
+             "type": "null|string"
+            },
+            "id": {
+             "type": "string"
+            },
+            "name": {
+             "type": "string"
+            },
+            "percent": {
+             "type": "integer|null"
+            },
+            "pool_id": {
+             "type": "null|string"
+            },
+            "status": {
+             "type": "string"
+            },
+            "status_label": {
+             "type": "string"
+            },
+            "tone": {
+             "type": "string"
+            },
+            "total": {
+             "type": "integer|null"
+            },
+            "used": {
+             "type": "integer|null"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array|null"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/synology/overview": {
    "params": {
+    "query:device": {
+     "type": "null|string"
+    },
     "query:refresh": {
      "type": "boolean"
     }
@@ -4572,6 +5016,12 @@
         "type": "object"
        },
        "type": "array|null"
+      },
+      "config_problem": {
+       "type": "boolean"
+      },
+      "device": {
+       "type": "null|string"
       },
       "disks": {
        "items": {
@@ -4835,6 +5285,19 @@
     }
    }
   },
+  "GET /api/v1/ext/synology/widgets/backups/{device}": {
+   "params": {
+    "path:device": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/synology/widgets/status": {
    "responses": {
     "200": {
@@ -4842,7 +5305,33 @@
     }
    }
   },
+  "GET /api/v1/ext/synology/widgets/status/{device}": {
+   "params": {
+    "path:device": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/synology/widgets/volumes": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/synology/widgets/volumes/{device}": {
+   "params": {
+    "path:device": {
+     "required": true,
+     "type": "string"
+    }
+   },
    "responses": {
     "200": {
      "type": "object"
@@ -5884,6 +6373,9 @@
      "required": true,
      "type": "string"
     },
+    "query:full_sudo": {
+     "type": "boolean"
+    },
     "query:groups": {
      "items": {
       "type": "string"
@@ -5899,6 +6391,9 @@
      "fields": {
       "fingerprint": {
        "type": "string"
+      },
+      "full_sudo": {
+       "type": "boolean"
       },
       "groups": {
        "items": {
@@ -6633,6 +7128,9 @@
            "type": "string"
           },
           "type": "array"
+         },
+         "without_root": {
+          "type": "boolean"
          }
         },
         "type": "object"
@@ -7431,6 +7929,16 @@
        },
        "ext_id": {
         "type": "string"
+       },
+       "group": {
+        "enum": [
+         "apps",
+         "backups",
+         "security",
+         "servers",
+         "services"
+        ],
+        "type": "null|string"
        },
        "icon": {
         "type": "null|string"
@@ -9536,6 +10044,40 @@
     }
    }
   },
+  "POST /api/v1/ext/docker/hosts/{host_id}/registries/{name}/login": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/hosts/{host_id}/registries/{name}/logout": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
   "POST /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/adopt": {
    "body": {
     "content_type": "application/json",
@@ -9575,6 +10117,64 @@
    },
    "responses": {
     "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/backups/{stamp}/delete": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    },
+    "path:stamp": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/backups/{stamp}/restore": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "volumes": {
+       "items": {
+        "type": "string"
+       },
+       "required": true,
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    },
+    "path:stamp": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
      "type": "object"
     }
    }
@@ -10580,6 +11180,11 @@
    }
   },
   "POST /api/v1/ext/nexus-soc/defender/events/acknowledge-all": {
+   "params": {
+    "query:host": {
+     "type": "null|string"
+    }
+   },
    "responses": {
     "200": {
      "type": "object"
@@ -10613,6 +11218,19 @@
    }
   },
   "POST /api/v1/ext/nexus-soc/defender/findings/{finding_id}/quarantine": {
+   "params": {
+    "path:finding_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/defender/findings/{finding_id}/reopen": {
    "params": {
     "path:finding_id": {
      "required": true,
@@ -11561,6 +12179,40 @@
     }
    }
   },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/registries/{name}/login": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/registries/{name}/logout": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
   "POST /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/adopt": {
    "body": {
     "content_type": "application/json",
@@ -11600,6 +12252,64 @@
    },
    "responses": {
     "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/backups/{stamp}/delete": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    },
+    "path:stamp": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/backups/{stamp}/restore": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "volumes": {
+       "items": {
+        "type": "string"
+       },
+       "required": true,
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    },
+    "path:stamp": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
      "type": "object"
     }
    }
@@ -11865,6 +12575,11 @@
    }
   },
   "POST /api/v1/ext/shield/defender/events/acknowledge-all": {
+   "params": {
+    "query:host": {
+     "type": "null|string"
+    }
+   },
    "responses": {
     "200": {
      "type": "object"
@@ -11898,6 +12613,19 @@
    }
   },
   "POST /api/v1/ext/shield/defender/findings/{finding_id}/quarantine": {
+   "params": {
+    "path:finding_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/defender/findings/{finding_id}/reopen": {
    "params": {
     "path:finding_id": {
      "required": true,
@@ -13333,6 +14061,9 @@
     "required": true,
     "schema": {
      "fields": {
+      "full_sudo": {
+       "type": "boolean"
+      },
       "groups": {
        "items": {
         "type": "string"
@@ -14542,6 +15273,30 @@
     "required": true,
     "schema": {
      "fields": {
+      "groups": {
+       "items": {
+        "fields": {
+         "collapsed": {
+          "type": "boolean"
+         },
+         "key": {
+          "enum": [
+           "apps",
+           "backups",
+           "security",
+           "servers",
+           "services"
+          ],
+          "type": "string"
+         },
+         "title": {
+          "type": "null|string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array|null"
+      },
       "items": {
        "items": {
         "type": "object"
@@ -14566,6 +15321,30 @@
      "fields": {
       "created_at": {
        "type": "string"
+      },
+      "groups": {
+       "items": {
+        "fields": {
+         "collapsed": {
+          "type": "boolean"
+         },
+         "key": {
+          "enum": [
+           "apps",
+           "backups",
+           "security",
+           "servers",
+           "services"
+          ],
+          "type": "string"
+         },
+         "title": {
+          "type": "null|string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
       },
       "id": {
        "type": "string"

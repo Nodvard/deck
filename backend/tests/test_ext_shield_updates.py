@@ -2066,13 +2066,14 @@ async def test_after_a_failed_run_the_next_night_waits_for_a_clean_run_before_re
     center = UpdateCenter(ctx, Defender(ctx))
     ctx.polls = [POLL_RUNNING, POLL_FAILED]
     await center.auto_update()
+    assert "Neustart nötig, aber ausgelassen" in ctx.notes[0].body and ctx.notes[0].severity.value == "warning"
 
     ctx.after_upgrade = True  # die nächste Prüfung findet nichts mehr
     ctx.notes.clear()
     assert await center.auto_update() == {"hosts": 1, "failed": 0}
     assert not any("shutdown" in c for c in ctx.commands)
     assert "- Raspberry Pi: aktuell\n  ↳ Neustart nötig, aber ausgelassen" in ctx.notes[0].body
-    assert ctx.notes[0].severity.value == "warning"  # steht unter „Braucht Aufmerksamkeit“
+    assert ctx.notes[0].severity.value == "info", "derselbe Lauf warnt nicht jede Nacht neu"
 
     ctx.polls = [POLL_RUNNING, POLL_DONE]
     ok, *_ = await center.execute(ctx._host, "security", command=up.upgrade_command("apt", "security", ["openssl"]),
@@ -2080,6 +2081,41 @@ async def test_after_a_failed_run_the_next_night_waits_for_a_clean_run_before_re
     assert ok
     await center.auto_update()
     assert any("shutdown" in c for c in ctx.commands)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_skipped_reboot_warns_again_only_after_another_unclean_run():
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.patching import UpdateCenter
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
+    _pending_reboot(ctx)
+    center = UpdateCenter(ctx, Defender(ctx))
+    ctx.polls = [POLL_RUNNING, POLL_FAILED]
+    ok, *_ = await center.execute(ctx._host, "security", command=up.upgrade_command("apt", "security", ["openssl"]),
+                                  trigger="manual")
+    assert not ok
+    ctx.after_upgrade = True
+
+    severities = []
+    for _night in range(3):
+        ctx.notes.clear()
+        await center.auto_update()
+        severities.append(ctx.notes[0].severity.value)
+    assert severities == ["warning", "info", "info"]
+
+    ctx.after_upgrade = False
+    ctx.polls = [POLL_RUNNING, POLL_FAILED]
+    ok, *_ = await center.execute(ctx._host, "security", command=up.upgrade_command("apt", "security", ["openssl"]),
+                                  trigger="manual")
+    assert not ok
+    ctx.after_upgrade = True
+    ctx.notes.clear()
+    await center.auto_update()
+    assert ctx.notes[0].severity.value == "warning"
+    assert not any("shutdown" in c for c in ctx.commands)
     await engine.dispose()
 
 

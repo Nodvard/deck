@@ -577,6 +577,8 @@ describe("ContainersPage -- Image-Updates", () => {
     expect(screen.getByText("–")).toBeInTheDocument();
     rerender(<ImageUpdateBadge checking />);
     expect(screen.getByText("prüft …")).toBeInTheDocument();
+    rerender(<ImageUpdateBadge operateOnly />);
+    expect(screen.getByText("–")).toHaveAttribute("title", "Auf Servern im Modus „Nur bedienen“ prüft Nodvard Deck nicht auf neue Images.");
   });
 
   it("zeigt beim Öffnen den gespeicherten Stand, ohne selbst zu prüfen", async () => {
@@ -710,6 +712,17 @@ describe("ContainersPage -- Image-Updates", () => {
       );
       expect(text).toContain("1 mit Update · 2 aktuell · 1 nicht prüfbar · 1 mit älterer Antwort der Registry · 1 Server nicht erreichbar");
       expect(text).not.toContain("alles aktuell");
+    });
+
+    it("Server im Modus „Nur bedienen“ werden nie geprüft und stehen als nicht geprüft dabei", () => {
+      const data = { "h1:a": res("current") };
+      expect(summarizeImages({ data, hosts: { h1: okHost } }, false, 1)).toContain("alles aktuell · 1 Server im Modus „Nur bedienen“ nicht geprüft");
+      expect(summarizeImages({ data, hosts: { h1: okHost } }, false, 2)).toContain("· 2 Server im Modus „Nur bedienen“ nicht geprüft");
+      expect(summarizeImages({ data: {}, hosts: { h1: okHost } }, false, 1)).toBe(
+        `Image-Updates geprüft ${new Date(at).toLocaleString()} · keine laufenden Container · 1 Server im Modus „Nur bedienen“ nicht geprüft`,
+      );
+      expect(summarizeImages({ data, hosts: { h1: okHost } }, false)).not.toContain("Nur bedienen");
+      expect(summarizeImages(null, false, 1)).toBeNull();
     });
 
     it("selbst gebaut ist kein Problem: 'alles aktuell' bleibt, die Zahl steht dahinter", () => {

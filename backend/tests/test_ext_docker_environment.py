@@ -179,6 +179,26 @@ async def test_measure_keeps_the_last_environment_when_docker_info_fails(ext, mo
     assert (await catalog.measure())["hosts"]["lxc"]["cpus"] == 2
 
 
+@pytest.mark.asyncio
+async def test_measure_stays_useful_when_counts_or_docker_info_break(ext, monkeypatch):
+    capabilities, _ = ext
+    ctx = _Ctx({
+        ("lxc", "stats"): _Result(0, "web|1.50%|45.3MiB / 4GiB|1.10%\n"),
+        ("lxc", "info"): OSError("Zeitüberschreitung"),
+        ("lxc", "restarts"): OSError("Zeitüberschreitung"),
+    })
+    catalog = capabilities.DockerServiceCatalog(ctx)
+    measured = await catalog.measure()
+    assert list(measured["data"]) == ["lxc:web"] and measured["restarts"] == {} and measured["hosts"] == {}
+
+    ctx.answers[("lxc", "info")] = _Result(0, INFO)
+    assert (await catalog.measure())["hosts"]["lxc"]["cpus"] == 2
+    monkeypatch.setattr(capabilities, "ENVIRONMENT_TTL_S", 0.0)
+    for broken in (OSError("Zeitüberschreitung"), _Result(0, "kein json")):
+        ctx.answers[("lxc", "info")] = broken
+        assert (await catalog.measure())["hosts"]["lxc"]["cpus"] == 2
+
+
 def test_restart_counts_in_one_call(ext):
     capabilities, commands = ext
     assert commands.restart_counts() == (

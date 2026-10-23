@@ -1,6 +1,5 @@
-"""Nach Updates suchen: Einstellungen und täglicher Kern-Job `system-update-check`.
-
-Die Abfrage selbst und der Cache stehen in `core/updates.py`."""
+"""Nach Updates suchen: Einstellungen und täglicher Kern-Job `system-update-check`; Abfrage und Cache stehen in
+`core/updates.py`."""
 
 from __future__ import annotations
 
@@ -70,8 +69,8 @@ async def _job_handler(**_: Any) -> dict[str, Any]:
 
 
 async def sync_job() -> None:
-    """Legt den Kern-Job an bzw. setzt den Schalter und plant neu: beim Start (`register_core_jobs`) und
-    nach jeder Änderung von `system.update_check.enabled`."""
+    """Legt den Kern-Job an bzw. setzt den Schalter und plant neu, beim Start und nach jeder Änderung von
+    `system.update_check.enabled`."""
     from ..core.scheduler import CORE_SCHEDULER_EXT_ID, get_scheduler_service
     from ..ext.runtime import get_extension_runtime
 

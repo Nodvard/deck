@@ -655,7 +655,7 @@ async def test_info_offers_no_docker_restart_where_the_dashboard_runs(client, db
         assert units == ["cron.service", "nginx.service"]
 
     # Der Tag "dashboard" reicht -- ohne zusaetzliche SSH-Abfrage.
-    tagged = (await client.post("/api/v1/hosts", json={"name": "berry", "address": "10.0.0.6", "tags": ["dashboard"]}, headers=headers)).json()
+    tagged = (await client.post("/api/v1/hosts", json={"name": "heimserver", "address": "10.0.0.6", "tags": ["dashboard"]}, headers=headers)).json()
     units, commands = await _info_units(client, headers, tagged["id"], monkeypatch, probe="@@other\n")
     assert units == ["cron.service", "nginx.service"]
     assert not any("@@own" in c for c in commands)

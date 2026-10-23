@@ -1,4 +1,4 @@
-"""Pruefung nach der Aktion (after_check.py): Laeuft ein Container nach "starten"/"neu starten"/"Stack neu starten"
+"""Prüfung nach der Aktion (after_check.py): Läuft ein Container nach "starten"/"neu starten"/"Stack neu starten"
 wirklich -- und bleibt er laufen?"""
 
 from __future__ import annotations
@@ -34,8 +34,8 @@ def _snap(*lines: str) -> ia.Snapshot:
 
 def _after_check_modules() -> list:
     """`capabilities` importiert `after_check` erst beim Aufruf. Haben andere Tests die Erweiterung zwischendurch neu
-    geladen (`sys.modules`), ist das ein anderes Modul als `ac` -- die Konstanten muessen dann auch dort gesetzt werden,
-    sonst wartet die Pruefung echte 15 s (und liest sechsmal statt zweimal)."""
+    geladen (`sys.modules`), ist das ein anderes Modul als `ac` -- die Konstanten müssen dann auch dort gesetzt werden,
+    sonst wartet die Prüfung echte 15 s (und liest sechsmal statt zweimal)."""
     current = importlib.import_module("nodvard_deck_ext_docker.after_check")
     return [ac] if current is ac else [ac, current]
 

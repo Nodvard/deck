@@ -49,7 +49,7 @@ const HOSTS = [
   host("g-valheim", "game-win", "192.168.2.24", "vm", "running", { os_family: "windows" }),
   host("g-dmini", "docker-lxc", "192.168.2.25", "lxc", "running"),
   host("g-bastion", "bastion", "192.168.2.26", "lxc", "running"),
-  host("h-pi", "Raspberry Pi", "192.168.2.31", null, "up", { name: "bastel-pi", provider_ext_id: null, credential: KEY_LATTICE }),
+  host("h-pi", "Heimserver", "192.168.2.31", null, "up", { name: "heimserver", provider_ext_id: null, credential: KEY_LATTICE }),
 ];
 
 const HOST_ID_BY_NAME: Record<string, string> = Object.fromEntries(HOSTS.map((h) => [h.display_name, h.id]));
@@ -177,10 +177,10 @@ const OVERVIEW = {
     svc("docker", "redis", "redis:7", null),
     svc("docker-lxc", "uptime-kuma", "louislam/uptime-kuma", 3001),
     svc("docker-lxc", "ntfy-relay", "binwiederhier/ntfy", 8090),
-    svc("Raspberry Pi", "pihole", "pihole/pihole", 8088),
-    svc("Raspberry Pi", "npm-nginx-1", "jc21/nginx-proxy-manager", 81),
-    svc("Raspberry Pi", "deploy-nodvard-deck-1", "nodvard-deck:latest", 8080),
-    svc("Raspberry Pi", "portainer_agent", "portainer/agent", null),
+    svc("Heimserver", "pihole", "pihole/pihole", 8088),
+    svc("Heimserver", "npm-nginx-1", "jc21/nginx-proxy-manager", 81),
+    svc("Heimserver", "deploy-nodvard-deck-1", "nodvard-deck:latest", 8080),
+    svc("Heimserver", "portainer_agent", "portainer/agent", null),
     svc("docker", "clamav", "clamav/clamav", null, "exited"),
   ],
   services_running: 13,
@@ -194,9 +194,17 @@ const OVERVIEW = {
   generated_at: Date.now() / 1000,
 };
 
+// Gruppe wie im Katalog: aus `WidgetSpec.group` oder der Kategorie des Moduls.
+const PREVIEW_GROUP: Record<string, string> = {
+  system: "servers", proxmox: "servers", gameserver: "servers",
+  shield: "security", vaultwarden: "security", npm: "security",
+  docker: "apps", jellyfin: "apps", plex: "apps", qbittorrent: "apps", "home-assistant": "apps",
+  backups: "backups",
+};
 const w = (ext_id: string, id: string, title: string, icon: string, data_endpoint: string, view: object) => ({
   id, ext_id, title, icon, description: null, size: { w: 2, h: 2, min_w: 1, min_h: 1 },
   refresh: { interval_s: null, ws_channel: null }, data_endpoint, view, permissions: [], component: null, default_enabled: true,
+  group: PREVIEW_GROUP[ext_id] ?? "services",
 });
 const listItem = (title: string, subtitle: string | null, badge: object | null, actions: object[] = []) => ({ title, subtitle, icon: null, badge, actions });
 
@@ -249,6 +257,7 @@ const WIDGETS = [
 ];
 
 let layoutItems: unknown[] = WIDGETS.map((widget, i) => ({ widget_id: widget.id, ext_id: widget.ext_id, x: (i * 2) % 12, y: Math.floor(i / 6) * 2, w: 2, h: 2, config: {} }));
+let layoutGroups: unknown[] = [];
 
 /** `meta` der Widget-Antworten; „nicht eingerichtet“ blendet die Startseite aus. */
 const WIDGET_META: Record<string, Record<string, unknown>> = {
@@ -446,7 +455,7 @@ const ACTIONS = [
 /** Dateien-Seite, Format wie api/v1/files.py (FileSourceOut, list -> {items, next_cursor}). */
 const FILE_CAPS = { write: true, rename: true, remove: true, mkdir: true, search: true, range_read: true, sync_status: false, quota: false, trash: false };
 const FILE_SOURCES = [
-  { source_id: "ssh-sftp:h-pi", label: "SSH (SFTP): Raspberry Pi", icon: "server", caps: FILE_CAPS, host_id: "h-pi" },
+  { source_id: "ssh-sftp:h-pi", label: "SSH (SFTP): Heimserver", icon: "server", caps: FILE_CAPS, host_id: "h-pi" },
   { source_id: "ssh-sftp:g-docker", label: "SSH (SFTP): docker", icon: "server", caps: FILE_CAPS, host_id: "g-docker" },
   { source_id: "nextcloud", label: "Nextcloud", icon: "cloud", caps: FILE_CAPS },
 ];
@@ -611,7 +620,7 @@ function appRoutes(p: string, method: string, body: unknown): { handled: boolean
 const DEMO_APPS = [
   { ...appTile(previewApp("da1", "Beispiel-Router", "http://192.0.2.1", "router", "Netzwerk")), sort_order: 0 },
   { ...appTile(previewApp("da2", "Beispiel-NAS", "http://192.0.2.10:5000", "hard-drive", "Speicher", { host_id: "demo-nas" })), host: "Beispiel-NAS", sort_order: 1 },
-  { ...appTile(previewApp("da3", "Beispiel-Pi-hole", "http://192.0.2.12/admin", "shield-check", "Netzwerk", { host_id: "demo-pi" })), host: "Beispiel-Raspberry-Pi", sort_order: 2 },
+  { ...appTile(previewApp("da3", "Beispiel-Pi-hole", "http://192.0.2.12/admin", "shield-check", "Netzwerk", { host_id: "demo-heimserver" })), host: "Beispiel-Heimserver", sort_order: 2 },
 ];
 
 /** Beispieldaten wie das Backend sie anlegt (core/demo_seed.py): fuenf Server ohne Zugang, Adressen aus 192.0.2.0/24. */
@@ -622,7 +631,7 @@ const demoHost = (id: string, display_name: string, address: string, status: str
 const DEMO_HOSTS = [
   demoHost("demo-nas", "Beispiel-NAS", "192.0.2.10", "up", ["demo", "speicher"]),
   demoHost("demo-webserver", "Beispiel-Webserver", "192.0.2.11", "up", ["demo", "web"]),
-  demoHost("demo-pi", "Beispiel-Raspberry-Pi", "192.0.2.12", "up", ["demo", "zuhause"]),
+  demoHost("demo-heimserver", "Beispiel-Heimserver", "192.0.2.12", "up", ["demo", "zuhause"]),
   demoHost("demo-sicherung", "Beispiel-Sicherungsziel", "192.0.2.13", "down", ["demo", "sicherung"]),
   demoHost("demo-testrechner", "Beispiel-Testrechner", "192.0.2.14", "unknown", ["demo", "test"]),
 ];
@@ -1016,7 +1025,7 @@ function backupRoutes(p: string, method: string): { handled: boolean; value?: un
   }
   if (p === "/system/backups") return { handled: true, value: backupOverview() };
   if (p === "/system/backups/config") return { handled: true, value: backupOverview() };
-  if (p === "/system/backups/key") return { handled: true, value: { key_id: "5be3e6c41d0a9f87", recipient: "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq", recovery_key: "AGE-SECRET-KEY-1QYQSZQGPQYQSZQGPQYQSZQGPQYQSZQGPQYQSZQGPQYQSZQGPQYQSDV5NZE" } };
+  if (p === "/system/backups/key") return { handled: true, value: { key_id: "5be3e6c41d0a9f87", recipient: "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq", recovery_key: "AGE-SECRET-" + "KEY-1QYQSZQGPQYQSZQGPQYQSZQGPQYQSZQGPQYQSZQGPQYQSZQGPQYQSDV5NZE" } };
   if (p === "/system/backups/run") return { handled: true, value: { started: true } };
   const ticket = { ticket: "vorschau", status: "ready", filename: BACKUP_ITEMS[0].name, size: BACKUP_ITEMS[0].size, error: null, expires_in: 300, url: "#vorschau-download" };
   if (p === "/system/backups/download" || p.endsWith("/ticket") || p.endsWith("/status")) return { handled: true, value: ticket };
@@ -1264,7 +1273,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   if (p.startsWith("/ext/inventory/items")) {
     const items = [
       { id: "i1", name: "TP-Link TL-SG108 Switch", description: "8-Port Gigabit", category_id: "c1", location_id: "l1", quantity: 2, purchase_date: "2024-03-02", purchase_price_cents: 2499, warranty_until: "2026-11-20", notes: null, images: [], manufacturer: "TP-Link", model: "TL-SG108", rack_id: "r1", rack_position: 12, rack_units: 1 },
-      { id: "i2", name: "Raspberry Pi 4 (4 GB)", description: null, category_id: "c3", location_id: "l1", quantity: 1, purchase_date: "2023-06-11", purchase_price_cents: 6490, warranty_until: "2025-06-11", notes: "Raspberry Pi", images: [], host_id: "h-pi" },
+      { id: "i2", name: "Raspberry Pi 4 (4 GB)", description: null, category_id: "c3", location_id: "l1", quantity: 1, purchase_date: "2023-06-11", purchase_price_cents: 6490, warranty_until: "2025-06-11", notes: "Heimserver", images: [], host_id: "h-pi" },
       { id: "i3", name: "Bosch Akkuschrauber", description: null, category_id: "c2", location_id: "l2", quantity: 1, purchase_date: "2025-01-05", purchase_price_cents: 8999, warranty_until: "2028-01-05", notes: null, images: [] },
       { id: "i4", name: "Festplatte 4 TB", description: null, category_id: "c3", location_id: "l1", quantity: 2, purchase_date: "2026-09-20", purchase_price_cents: 11990, warranty_until: "2029-09-20", notes: null, images: [], manufacturer: "WD", model: "Red Plus 4TB", serial_number: "WX00000000", product_url: "https://www.example.com/wd-red-plus", project_id: "p1" },
       { id: "i5", name: "NAS-Gehäuse 2U", description: null, category_id: "c3", location_id: "l1", quantity: 1, purchase_date: "2026-09-18", purchase_price_cents: 7500, warranty_until: null, notes: null, images: [], project_id: "p1", rack_id: "r1", rack_position: 8, rack_units: 2 },
@@ -1309,13 +1318,13 @@ export function respond(path: string, method: string, body?: unknown): unknown {
       hosts: [
         { host_id: "h-pve2", host_name: "Proxmox-Knoten pve2", host_status: "up", checking: false, busy: null, last_run: null,
           status: st(5, 2, { reboot_required: true, reboot_reasons: ["neuer Kernel 6.8.12-10-pve (läuft: 6.8.12-4-pve)"], latest_kernel: "6.8.12-10-pve" }) },
-        { host_id: "h-pi", host_name: "Raspberry Pi", host_status: "up", checking: false, busy: null, last_run: null, status: st(3, 0, { kernel: "6.6.51+rpt-rpi-2712" }) },
+        { host_id: "h-pi", host_name: "Heimserver", host_status: "up", checking: false, busy: null, last_run: null, status: st(3, 0, { kernel: "6.6.51+rpt-rpi-2712" }) },
         { host_id: "h-docker", host_name: "docker", host_status: "up", checking: false, busy: null, last_run: run, status: st(0, 0, { unattended: true, kernel: "6.1.0-25-amd64" }) },
         { host_id: "h-pve1", host_name: "Proxmox-Knoten pve1", host_status: "down", checking: false, busy: null, last_run: null,
           status: { ...st(0, 0), manager: null, error: "Zeitüberschreitung – der Vorgang hat zu lange gebraucht." } },
       ],
       summary: { hosts: 4, checked: 3, up_to_date: 1, packages: 8, security: 2, reboot: 1, errors: 1 },
-      runs: [run, { ...run, id: "r2", host_id: "h-pi", host_name: "Raspberry Pi", mode: "all", mode_label: "Alle Updates", trigger: "manual", status: "error", upgraded: 0, summary: "E: dpkg was interrupted, you must manually run 'dpkg --configure -a'", started_at: t - 200000 }],
+      runs: [run, { ...run, id: "r2", host_id: "h-pi", host_name: "Heimserver", mode: "all", mode_label: "Alle Updates", trigger: "manual", status: "error", upgraded: 0, summary: "E: dpkg was interrupted, you must manually run 'dpkg --configure -a'", started_at: t - 200000 }],
       config: { check_enabled: true, check_cron: "0 6 * * *", auto_enabled: true, auto_mode: "security", auto_cron: "30 3 * * *", auto_reboot: false, auto_tag: null },
     };
   }
@@ -1335,7 +1344,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
             logins: [{ user: "root", ip: "192.168.2.77", method: "publickey", ts: t - 1800 }, { user: "root", ip: "192.168.2.43", method: "publickey", ts: t - 7200 }],
             ports: [port(22, "tcp", "sshd"), port(111, "tcp", "rpcbind"), port(3128, "tcp", "spiceproxy"), port(8006, "tcp", "pveproxy"), port(25, "tcp", "master", false), port(85, "tcp", "pvedaemon", false), port(4444, "tcp", "nc", true, true)],
             files_watched: 26, files_pending: ["/etc/passwd"], checked_at: t - 300 } },
-        { host_id: "h-pi", host_name: "Raspberry Pi", host_status: "up", checking: false, open_events: 0,
+        { host_id: "h-pi", host_name: "Heimserver", host_status: "up", checking: false, open_events: 0,
           view: { is_root: true, ssh_log_found: true, failed_24h: 0, attacker_count: 0, banned_count: 0, fail2ban: "none", jails: {}, attackers: [],
             logins: [{ user: "admin", ip: "192.168.2.77", method: "password", ts: t - 600 }],
             ports: [port(22, "tcp", "sshd"), port(80, "tcp", "docker-proxy"), port(53, "udp", "pihole-FTL")], files_watched: 19, files_pending: [], checked_at: t - 300 } },
@@ -1355,8 +1364,8 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   }
   if (p.startsWith("/ext/shield/defender/overview")) return {
     hosts: [
-      { host_id: "h-pi", host_name: "Raspberry Pi", host_status: "up", reachable: true, clamav_installed: true, clamav_version: "1.0.7", signature_version: "27410", signature_date: "Thu Sep 25 07:12 2026", signature_age_days: 1, signature_stale: false, freshclam_active: true, lynis_installed: true, quarantine_files: 1,
-        last_scan: { id: "s1", host_id: "h-pi", host_name: "Raspberry Pi", kind: "quick", kind_label: "Schnellscan", paths: ["/tmp"], trigger: "schedule", status: "clean", files_scanned: 14210, infected: 0, error: null, output_tail: null, started_at: Date.now() / 1000 - 5400, finished_at: null },
+      { host_id: "h-pi", host_name: "Heimserver", host_status: "up", reachable: true, clamav_installed: true, clamav_version: "1.0.7", signature_version: "27410", signature_date: "Thu Sep 25 07:12 2026", signature_age_days: 1, signature_stale: false, freshclam_active: true, lynis_installed: true, quarantine_files: 1,
+        last_scan: { id: "s1", host_id: "h-pi", host_name: "Heimserver", kind: "quick", kind_label: "Schnellscan", paths: ["/tmp"], trigger: "schedule", status: "clean", files_scanned: 14210, infected: 0, error: null, output_tail: null, started_at: Date.now() / 1000 - 5400, finished_at: null },
         last_audit: { status: "ok", hardening_index: 71, warnings: 1, created_at: Date.now() / 1000 - 80000, error: null }, scanning: false, auditing: false },
       { host_id: "h-pve2", host_name: "Proxmox-Knoten pve2", host_status: "up", reachable: true, clamav_installed: true, clamav_version: "1.0.7", signature_version: "27410", signature_date: "Thu Aug 20 06:40 2026", signature_age_days: 43, signature_stale: true, freshclam_active: false, lynis_installed: true, quarantine_files: 1,
         last_scan: { id: "s2", host_id: "h-pve2", host_name: "pve2", kind: "quick", kind_label: "Schnellscan", paths: ["/tmp"], trigger: "schedule", status: "infected", files_scanned: 50311, infected: 1, error: null, output_tail: null, started_at: Date.now() / 1000 - 5000, finished_at: null },
@@ -1374,7 +1383,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   if (p.startsWith("/ext/shield/defender/findings") && method === "GET") {
     const t = Date.now() / 1000;
     const finding = (id: string, host: "h-pi" | "h-pve2", path: string, signature: string, status: string, daysAgo: number, note: string | null = null) => ({
-      id, host_id: host, host_name: host === "h-pi" ? "Raspberry Pi" : "Proxmox-Knoten pve2", path, signature, status,
+      id, host_id: host, host_name: host === "h-pi" ? "Heimserver" : "Proxmox-Knoten pve2", path, signature, status,
       quarantine_path: status === "quarantined" ? `/var/lib/nexus-quarantine/${id}_${path.split("/").pop()}` : null,
       note, detected_at: t - daysAgo * 86400, status_changed_at: status === "detected" ? null : t - daysAgo * 86400 + 600,
     });
@@ -1389,7 +1398,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   if (p.startsWith("/ext/shield/defender/scans") && method === "GET") {
     const t = Date.now() / 1000;
     const scan = (id: string, host: "h-pi" | "h-pve2", kind: "quick" | "deep" | "watch", status: string, minutesAgo: number, files: number | null, infected = 0, error: string | null = null) => ({
-      id, host_id: host, host_name: host === "h-pi" ? "Raspberry Pi" : "Proxmox-Knoten pve2", kind,
+      id, host_id: host, host_name: host === "h-pi" ? "Heimserver" : "Proxmox-Knoten pve2", kind,
       kind_label: { quick: "Schnellscan", deep: "Tiefenscan", watch: "Wächter" }[kind],
       paths: kind === "deep" ? ["/"] : ["/tmp", "/var/tmp", "/home", "/root"], trigger: "schedule",
       status, files_scanned: files, infected, error, output_tail: null,
@@ -1417,7 +1426,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
       { id: "au-2", host_id: "h-pve2", host_name: "Proxmox-Knoten pve2", status: "ok", hardening_index: 62, created_at: t - 80000, error: null, help,
         warnings: ["SSH-7408: Consider hardening SSH configuration", "PKGS-7392: Found one or more vulnerable packages", "AUTH-9230: Configure password hashing rounds"],
         suggestions: ["BANN-7126: Add a legal banner to /etc/issue"] },
-      { id: "au-1", host_id: "h-pi", host_name: "Raspberry Pi", status: "ok", hardening_index: 71, created_at: t - 80000, error: null, help,
+      { id: "au-1", host_id: "h-pi", host_name: "Heimserver", status: "ok", hardening_index: 71, created_at: t - 80000, error: null, help,
         warnings: ["SSH-7408: Consider hardening SSH configuration"],
         suggestions: ["AUTH-9230: Configure password hashing rounds", "BANN-7126: Add a legal banner to /etc/issue"] },
     ];
@@ -1430,10 +1439,10 @@ export function respond(path: string, method: string, body?: unknown): unknown {
       { id: "inc-2", host_name: "docker", target: "nextcloud-app", message: "Container 'nextcloud-app' neu gestartet (Exit 1)", created_at: t - 86400, status: "resolved",
         status_changed_at: t - 82000, ai_summary: "Die App startete nicht, weil die Datenbank noch nicht bereit war.", action_id: null, is_crash: true,
         auto_resolved: "Läuft wieder seit gestern – von selbst erledigt." },
-      { id: "inc-1", host_name: "Raspberry Pi", target: "pihole", message: "Container 'pihole' beendet (Exit 0)", created_at: t - 86400 * 3, status: "dismissed",
+      { id: "inc-1", host_name: "Heimserver", target: "pihole", message: "Container 'pihole' beendet (Exit 0)", created_at: t - 86400 * 3, status: "dismissed",
         status_changed_at: t - 86400 * 3 + 600, ai_summary: null, action_id: null, is_crash: false },
     ];
-    return { items, total: items.length, hosts: ["docker", "Raspberry Pi"] };
+    return { items, total: items.length, hosts: ["docker", "Heimserver"] };
   }
   if (p === "/ext/shield/stats") return {
     by_status: { open: 0, proposed: 1, reviewed: 0, resolved: 1, dismissed: 1 }, pending_batch: 0, watched_hosts: 2, ai_healthy: true, ai_message: null, ai_configured: true,
@@ -1545,7 +1554,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
     if (previewState.longNames) suggestions.push({
       name: "ein-sehr-langer-container-name-ohne-leerzeichen-der-nicht-umbricht",
       url: "http://192.168.2.31:30001/ein/sehr/langer/pfad/ohne/leerzeichen/der/nirgends/umbricht",
-      source: "Docker", host: "Raspberry Pi",
+      source: "Docker", host: "Heimserver",
     });
     return { suggestions, errors: [] };
   }
@@ -1563,8 +1572,13 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   if (p === "/notifications/unread-count") return { unread: 3 };
   if (p.startsWith("/notifications?")) return NOTIFICATIONS;
   if (p.startsWith("/notifications")) return [];
-  if (p === "/dashboard/layouts") return [{ id: "l1", name: "Standard", is_default: true, items: previewState.noHosts ? [] : layoutItems, created_at: "", updated_at: "" }];
-  if (p === "/dashboard/layouts/l1" && method === "PUT") return { id: "l1", name: "Standard", is_default: true, items: layoutItems, created_at: "", updated_at: "" };
+  if (p === "/dashboard/layouts") return [{ id: "l1", name: "Standard", is_default: true, items: previewState.noHosts ? [] : layoutItems, groups: layoutGroups, created_at: "", updated_at: "" }];
+  if (p === "/dashboard/layouts/l1" && method === "PUT") {
+    const patch = (body ?? {}) as { items?: unknown[]; groups?: unknown[] };
+    if (patch.items) layoutItems = patch.items;
+    if (patch.groups) layoutGroups = patch.groups;
+    return { id: "l1", name: "Standard", is_default: true, items: layoutItems, groups: layoutGroups, created_at: "", updated_at: "" };
+  }
   if (p in WIDGET_DATA) return { data: WIDGET_DATA[p], meta: WIDGET_META[p] ?? {} };
   layoutItems = layoutItems.slice();
   return undefined;
@@ -1585,7 +1599,7 @@ const SHIELD_SCHEMA = {"type": "object", "properties": {"ollama_url": {"type": "
 
 // ---------------------------------------------------------------------------
 // Szenario „ohne Proxmox“ (`?scenario=ohne-proxmox`, `…-min`): eine Installation ganz ohne Proxmox.
-// Vier von Hand angelegte Server mit SSH-Zugang (Raspberry Pi, Debian-VM, NAS, Spiele-PC), die
+// Vier von Hand angelegte Server mit SSH-Zugang (Heimserver, Debian-VM, NAS, Spiele-PC), die
 // Module Proxmox VE und Proxmox-Backups sind aus. Die Server haben nie „Verbindung prüfen“ erlebt, ausser
 // dem Pi -- so sieht es aus, solange nichts den Zustand von Hand angelegter Server nachführt.
 // Bei `-min` sind auch Server-Zustand, Docker, Nodvard Shield & Co. aus (nur Terminal/Dateien laufen).
@@ -1604,7 +1618,7 @@ function respondWithoutScenario(p: string, method: string, body?: unknown): unkn
 }
 
 const NP_ID: Record<string, { id: string; name: string }> = {
-  "h-pi": { id: "m-pi", name: "Raspberry Pi" },
+  "h-pi": { id: "m-pi", name: "Heimserver" },
   "h-docker": { id: "m-deb", name: "Debian-VM" },
 };
 
@@ -1660,7 +1674,7 @@ export function applyOhneProxmox(min: boolean, many = false): void {
     tags: (extra.tags ?? []) as never[], last_seen_at: (status === "up" ? new Date(Date.now() - 3 * 86_400_000).toISOString() : null) as never,
   });
   HOSTS.splice(0, HOSTS.length,
-    mk("m-pi", "Raspberry Pi", "192.168.2.31", "up", { cred: KEY_LATTICE, tags: ["docker"] }),
+    mk("m-pi", "Heimserver", "192.168.2.31", "up", { cred: KEY_LATTICE, tags: ["docker"] }),
     mk("m-deb", "Debian-VM", "192.168.2.40", "unknown", { cred: KEY_LATTICE, tags: ["docker"] }),
     mk("m-nas", "NAS", "192.168.2.20", "unknown", { cred: KEY_PW }),
     mk("m-win", "Spiele-PC", "192.168.2.50", "unknown", { os: "windows", cred: KEY_PW, tags: ["gameserver"] }),
@@ -1680,11 +1694,11 @@ export function applyOhneProxmox(min: boolean, many = false): void {
   );
   const svcNp = (hostName: string, name: string, image: string, port: number | null, state = "running") => ({
     id: `${hostName}:${name}`, name, host: hostName, host_id: HOST_ID_BY_NAME[hostName], state, tone: state === "running" ? "good" : "danger",
-    url: port ? `http://192.168.2.${hostName === "Raspberry Pi" ? 31 : 40}:${port}` : null, image,
+    url: port ? `http://192.168.2.${hostName === "Heimserver" ? 31 : 40}:${port}` : null, image,
   });
   const services = on ? [
-    svcNp("Raspberry Pi", "pihole", "pihole/pihole", 8088),
-    svcNp("Raspberry Pi", "deploy-nodvard-deck-1", "nodvard-deck:latest", 8080),
+    svcNp("Heimserver", "pihole", "pihole/pihole", 8088),
+    svcNp("Heimserver", "deploy-nodvard-deck-1", "nodvard-deck:latest", 8080),
     svcNp("Debian-VM", "nextcloud-app", "nextcloud:29", 8081),
     svcNp("Debian-VM", "nextcloud-db", "mariadb:11", null),
     svcNp("Debian-VM", "uptime-kuma", "louislam/uptime-kuma", 3001),
@@ -1709,7 +1723,7 @@ export function applyOhneProxmox(min: boolean, many = false): void {
   for (const key of Object.keys(WIDGET_DATA)) delete WIDGET_DATA[key];
   Object.assign(WIDGET_DATA, {
     "/ext/system/widgets/health": [
-      { name: "Raspberry Pi", summary: "Debian 13 · CPU 6 % · RAM 44 % · Platte 30 %", badge: "gut", tone: "good" },
+      { name: "Heimserver", summary: "Debian 13 · CPU 6 % · RAM 44 % · Platte 30 %", badge: "gut", tone: "good" },
       { name: "Debian-VM", summary: "Debian 12 · CPU 2 % · RAM 31 % · Platte 52 %", badge: "gut", tone: "good" },
       { name: "NAS", summary: "Debian 12 · CPU 1 % · RAM 18 % · Platte 78 %", badge: "gut", tone: "good" },
     ],

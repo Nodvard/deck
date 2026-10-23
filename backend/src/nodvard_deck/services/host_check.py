@@ -62,6 +62,14 @@ die Meldung ließe sich nicht einordnen. `env` statt `LC_ALL=C sudo ...`, damit 
 Login-Shell geht."""
 
 
+DROPBEAR_KEY_HINT = (
+    "Auf dem Server läuft Dropbear (etwa bei DietPi). Dropbear verwirft eine Schlüsselzeile ganz, wenn sie eine Option "
+    "enthält, die er nicht kennt, etwa „pty“ aus einer älteren Einrichtung durch Nodvard Deck. Abhilfe: den Server "
+    "noch einmal einrichten, mit Passwort oder mit dem Befehl; dabei wird die alte Zeile angepasst."
+)
+"""Zusatz zum Hinweis, wenn Dropbear den Schlüssel ablehnt."""
+
+
 class CheckRefused(Exception):
     """Die Prüfung läuft gar nicht erst (zu viele, oder es läuft schon eine); für den Aufrufer HTTP 429."""
 
@@ -254,13 +262,20 @@ class _State:
         self.os: OsInfo | None = None
         self.conn: asyncssh.SSHClientConnection | None = None
         self.login_ok = False
+        self.banner = ""
+        """Erste Zeile des SSH-Dienstes (etwa `SSH-2.0-dropbear_2025.89`), auf druckbares ASCII gekürzt."""
         self.unreachable = False
         self.key_problem = False
         self.sudo_full: bool | None = None
-        """`sudo -n true` klappte (volle Regel); `None`: nicht geprüft oder keine Antwort."""
+        """Volle Regel: `sudo -n true` klappte, oder `sudo -n -l` zeigt sie, wenn die Skripte schon reichen; `None`: nicht
+        geprüft oder keine Antwort."""
+        self.helper_rules = False
+        """Mindestens ein Hilfsskript hat seine eigene sudo-Regel (eingerichtet mit nur den Regeln der Skripte)."""
         self.helper_stale: dict[str, int] | None = None
-        """Für den Hinweis in der Übersicht (`helper_hints`): fehlende oder veraltete Hilfsskripte bei voller Regel,
-        `{}` für „nichts zu melden“; `None`: nicht festgestellt, der bisherige Stand bleibt."""
+        """Für den Hinweis in der Übersicht (`helper_hints`): fehlende oder veraltete Hilfsskripte, wenn sudo dort
+        Skripte erlaubt; `{}` für „nichts zu melden“; `None`: nicht festgestellt, der bisherige Stand bleibt."""
+        self.helper_without_root = False
+        """Für denselben Hinweis: Ohne volle Regel haben diese Module dort gerade gar kein root."""
 
     def add(self, id_: str, label: str, status: str, detail: str = "", hint: str = "") -> None:
         self.items.append(CheckItem(id=id_, label=label, status=status, detail=detail, hint=hint))  # type: ignore[arg-type]
@@ -364,7 +379,7 @@ async def _run(
         elif state.key_problem:
             host.status = "unknown"
     if state.helper_stale is not None and credential is not None and credential.is_default:
-        await helper_hints.record(session, host.id, state.helper_stale)
+        await helper_hints.record(session, host.id, state.helper_stale, without_root=state.helper_without_root)
     await session.flush()
     return ConnectionCheckOut(
         ok=not any(item.status in ("fail", "confirm") for item in state.items),
@@ -408,8 +423,10 @@ async def _probe(
             state.add(_helper_id(helper), _helper_label(helper), "skipped", "Wird bei Windows-Servern nicht geprüft.")
         state.helper_stale = {}
         return
-    await _step_root(state, conn, user, requirements)
-    await _step_helpers(state, conn, user, helpers)
+    # Die Hilfsskripte zuerst abfragen: Ohne volle Regel entscheiden ihre eigenen Regeln über „Root-Rechte“.
+    helper_answer = await _query_helpers(conn, user, helpers)
+    await _step_root(state, conn, user, requirements, helpers, helper_answer)
+    _step_helpers(state, user, helpers, helper_answer)
     await _step_requirements(state, conn, user, requirements)
     await _step_os(state, conn)
 
@@ -452,8 +469,8 @@ async def _step_reachable(state: _State, address: str, port: int) -> bool:
                 "Ist der Port richtig? Der SSH-Standard ist 22.",
             )
         else:
-            banner = _printable(first_line, 80)
-            state.add("reachable", label, "ok", f"SSH-Dienst antwortet ({banner}).")
+            state.banner = _printable(first_line, 80)
+            state.add("reachable", label, "ok", f"SSH-Dienst antwortet ({state.banner}).")
             return True
     state.unreachable = True
     return False
@@ -570,10 +587,10 @@ def _login_failed(state: _State, credential: HostCredential, label: str, exc: Ba
         state.add("host_key", "Server-Schlüssel", "ok", f"Bekannt ({offered}).")
     if isinstance(exc, ssh.SshAuthError):
         if credential.kind == "ssh_key":
-            state.add(
-                "login", label, "fail", "Der Server hat den Schlüssel nicht akzeptiert.",
-                "Ist der Einrichtungsbefehl auf dem Server gelaufen? Stimmt der Benutzer?",
-            )
+            hint = "Ist der Einrichtungsbefehl auf dem Server gelaufen? Stimmt der Benutzer?"
+            if "dropbear" in state.banner.lower():
+                hint = f"{hint} {DROPBEAR_KEY_HINT}"
+            state.add("login", label, "fail", "Der Server hat den Schlüssel nicht akzeptiert.", hint)
         else:
             state.add(
                 "login", label, "fail", "Der Server hat die Anmeldung abgelehnt.",
@@ -625,13 +642,27 @@ def _root_label(requirements: Sequence[tuple[str, HostRequirementSpec]]) -> str:
     return f"Root-Rechte (für {', '.join(reasons)})" if reasons else "Root-Rechte"
 
 
+HELPER_RULES_ENOUGH = "sudo erlaubt nur die Hilfsskripte der Module, keine volle Regel. Das reicht."
+
+
 async def _step_root(
     state: _State, conn: asyncssh.SSHClientConnection, user: str,
     requirements: Sequence[tuple[str, HostRequirementSpec]],
+    helpers: Sequence[RootHelperFile] = (), helper_answer: _HelperAnswer | None = None,
 ) -> None:
     label = _root_label(requirements)
     if user == "root":
         state.add("root", label, "ok", "Angemeldet als root – sudo nicht nötig.")
+        return
+    seen = helper_answer.seen if helper_answer is not None else {}
+    state.helper_rules = any(item.tight_rule for item in seen.values())
+    without_root = [h.ext_name for h in helpers if not _helper_ready(h, seen.get(h.install_path))]
+    if {ext_id for ext_id, spec in requirements if spec.needs_root} - {h.ext_id for h in helpers}:
+        without_root.append("Module ohne Hilfsskript")
+    if helper_answer is not None and helpers and not without_root:
+        # Die Skripte reichen. `sudo -n true` wäre auf einem Server nur mit ihren Regeln ein abgelehnter Aufruf im Protokoll.
+        state.sudo_full = helper_hints.has_full_rule(helper_answer.sudo_lines)
+        state.add("root", label, "ok", "sudo ohne Passwort klappt." if state.sudo_full else HELPER_RULES_ENOUGH)
         return
     result = await _run_command(conn, SUDO_COMMAND)
     if result is None:
@@ -642,6 +673,11 @@ async def _step_root(
     state.sudo_full = code == 0
     if code == 0:
         state.add("root", label, "ok", "sudo ohne Passwort klappt.")
+    elif state.helper_rules:
+        state.add(
+            "root", label, "warn", f"sudo erlaubt nur einzelne Hilfsskripte. Hier ohne root: {', '.join(without_root)}.",
+            _RERUN_HINT,
+        )
     elif "password is required" in text or "a terminal is required" in text:
         state.add(
             "root", label, "warn", "sudo verlangt ein Passwort.",
@@ -734,7 +770,7 @@ def parse_helper_check(out: str, helpers: Sequence[RootHelperFile]) -> dict[str,
         elif tag == "owner":
             current.owner_ok = value == "ok"
     for path, item in seen.items():
-        item.tight_rule = any(path in line and "NOPASSWD" in line for line in sudo_lines or [])
+        item.tight_rule = helper_hints.allows_helper(sudo_lines or [], path)
     return seen
 
 
@@ -747,8 +783,31 @@ def split_sudo_lines(out: str) -> list[str]:
     return []
 
 
-async def _step_helpers(
-    state: _State, conn: asyncssh.SSHClientConnection, user: str, helpers: Sequence[RootHelperFile]
+@dataclass(frozen=True)
+class _HelperAnswer:
+    seen: dict[str, _HelperSeen]
+    sudo_lines: list[str]
+
+
+async def _query_helpers(
+    conn: asyncssh.SSHClientConnection, user: str, helpers: Sequence[RootHelperFile]
+) -> _HelperAnswer | None:
+    """Die Antwort auf `helper_check_command`; `None` ohne Skripte, für root oder ohne Antwort."""
+    if not helpers or user == "root":
+        return None
+    result = await _run_command(conn, helper_check_command(helpers))
+    if result is None:
+        return None
+    return _HelperAnswer(parse_helper_check(result[1], helpers), split_sudo_lines(result[1]))
+
+
+def _helper_ready(helper: RootHelperFile, seen: _HelperSeen | None) -> bool:
+    """Genau das mitgelieferte Skript, nur root kann es ändern, und es hat seine eigene sudo-Regel."""
+    return seen is not None and seen.present and seen.owner_ok and seen.sha256 == helper.sha256 and seen.tight_rule
+
+
+def _step_helpers(
+    state: _State, user: str, helpers: Sequence[RootHelperFile], answer: _HelperAnswer | None
 ) -> None:
     if not helpers:
         state.helper_stale = {}
@@ -758,14 +817,12 @@ async def _step_helpers(
             state.add(_helper_id(helper), _helper_label(helper), "skipped", "Angemeldet als root – kein Hilfsskript nötig.")
         state.helper_stale = {}
         return
-    result = await _run_command(conn, helper_check_command(helpers))
-    seen = parse_helper_check(result[1], helpers) if result is not None else {}
+    seen = answer.seen if answer is not None else {}
     for helper in helpers:
         _add_helper_item(state, helper, seen.get(helper.install_path))
-    if result is not None:
-        # Wie der Job `helper-hints`: die volle Regel aus `sudo -n -l` (nicht aus `sudo -n true`), damit beide gleich urteilen.
-        full = helper_hints.has_full_rule(split_sudo_lines(result[1]))
-        state.helper_stale = helper_hints.stale_helpers(helpers, seen) if full else {}
+    if answer is not None:
+        # Wie der Job `helper-hints`: die Regeln aus `sudo -n -l` (nicht aus `sudo -n true`), damit beide gleich urteilen.
+        state.helper_stale, state.helper_without_root = helper_hints.judge(helpers, answer.sudo_lines, seen)
 
 
 _RERUN_HINT = "Server neu einrichten: Einrichtungsbefehl mit „Root-Rechte ohne Passwort“ erneut ausführen."
@@ -777,6 +834,11 @@ def _add_helper_item(state: _State, helper: RootHelperFile, seen: _HelperSeen | 
         state.add(id_, label, "skipped", "Keine verwertbare Antwort auf die Abfrage.")
         return
     if not seen.present:
+        if state.helper_rules and not state.sudo_full:
+            state.add(
+                id_, label, "warn", "Fehlt auf dem Server. Ohne das Skript hat dieses Modul hier kein root.", _RERUN_HINT,
+            )
+            return
         if state.sudo_full:
             # Volle Regel gesetzt, Skript fehlt: Das Modul läuft, aber mit mehr Rechten als nötig. Ein Hinweis (gelb), kein
             # Fehler, wie in der Übersicht.
@@ -786,9 +848,11 @@ def _add_helper_item(state: _State, helper: RootHelperFile, seen: _HelperSeen | 
                 _RERUN_HINT,
             )
             return
+        detail = "Noch nicht auf dem Server." if state.sudo_full is False else (
+            "Noch nicht auf dem Server. Bis dahin nutzt Nodvard Deck für dieses Modul die volle sudo-Regel."
+        )
         state.add(
-            id_, label, "skipped", "Noch nicht auf dem Server. Bis dahin nutzt Nodvard Deck für dieses Modul die volle sudo-Regel.",
-            "Kommt mit dem Einrichtungsbefehl mit „Root-Rechte ohne Passwort“ auf den Server.",
+            id_, label, "skipped", detail, "Kommt mit dem Einrichtungsbefehl mit „Root-Rechte ohne Passwort“ auf den Server.",
         )
         return
     if not seen.owner_ok:

@@ -31,29 +31,24 @@ _HOST_STATUS_VALUES = {s.value for s in HostStatus}
 
 
 CONFIRM_NEW_KEYS_SETTING = "ssh.confirm_new_host_keys"
-"""Globale Einstellung (Tabelle `settings`): neue Server-Schlüssel nur nach Bestätigung merken.
-Der Bootstrap des ersten Kontos schaltet sie bei neuen Installationen ein; fehlt sie (bestehende Installationen), gilt `False`."""
+"""Globale Einstellung: neue Server-Schlüssel nur nach Bestätigung merken; fehlt sie (bestehende Installation),
+gilt `False`."""
 
 # `core/ssh.connect` prüft den Merker zusätzlich direkt vor dem Verbindungsaufbau.
 HOST_KEY_CONFIRM_REQUIRED = ssh.HOST_KEY_CONFIRM_REQUIRED
-"""Merker je Server (Tabelle `settings`, `scope="host"`, `user_id=<host_id>`): Nach "Schlüssel vergessen" bekommt der
-Server nie wieder still einen Schlüssel untergeschoben, erst die Bestätigung (`POST /hosts/{id}/known-hosts`) nimmt ihn
-weg. Nicht in `Host.host_metadata`: Das überschreibt der Abgleich der Anbieter-Erweiterungen, und Erweiterungen sehen es."""
+"""Merker je Server in `settings`, nicht in `host_metadata` (das überschreibt der Abgleich): erst die Bestätigung
+nimmt ihn weg."""
 _HOST_SCOPE = ssh.HOST_KEY_CONFIRM_SCOPE
 
 
 LOGIN_OK_KEY = "login_ok"
-"""Schlüssel in `Host.host_metadata`: die letzte erfolgreiche SSH-Anmeldung. Der Erreichbarkeits-Job
-setzt `status`/`last_seen_at` schon, wenn nur der Port antwortet -- belegt ist eine Anmeldung erst
-hiermit."""
+"""Schlüssel in `Host.host_metadata`: die letzte erfolgreiche SSH-Anmeldung; belegt ist eine Anmeldung erst
+hiermit, nicht durch `status`."""
 
 
 SETUP_RUN_KEY = "setup_run"
-"""Schlüssel in `Host.host_metadata`: der letzte Lauf des Einrichtungsbefehls durch Nodvard Deck („Mit Passwort
-einrichten“), egal mit welchem Ergebnis: `from`/`to` (ISO) und was er laut seiner Ausgabe getan hat
-(`host_setup.setup_record`: Benutzer, Aktionen, Stand der Dateien vorher und nachher, Prüfsummen der sudo-Regeln).
-Erweiterungen sehen es über `Host.metadata`; der Datei-Wächter von Nodvard Shield übernimmt damit genau diese Änderungen
-still. Bleibt beim Abgleich der Anbieter-Erweiterungen stehen (`CORE_METADATA_KEYS`)."""
+"""Schlüssel in `Host.host_metadata`: der letzte Lauf des Einrichtungsbefehls (`host_setup.setup_record`) für den
+Datei-Wächter."""
 
 CORE_METADATA_KEYS = (LOGIN_OK_KEY, SETUP_RUN_KEY)
 """Was dem Kern gehört und beim Abgleich (`upsert_discovered`) nicht mit den Angaben des Anbieters überschrieben wird."""
@@ -67,9 +62,8 @@ def record_setup_run(
 
 
 def record_login_ok(host: Host, credential: HostCredential, at: datetime | None = None) -> None:
-    """Hält dauerhaft fest: die Anmeldung mit `credential` an `host` hat geklappt (`at`: wann, sonst jetzt).
-    Es gibt nur diesen einen Beleg je Server, er gehört zum Standard-Zugang -- ein anderer Zugang
-    darf ihn nicht überschreiben (`login_confirmed_at` vergleicht den Zugang)."""
+    """Hält dauerhaft fest, dass die Anmeldung mit `credential` an `host` geklappt hat; der Beleg gehört zum
+    Standard-Zugang."""
     record = {
         "credential_id": credential.id, "address": host.address, "port": credential.port,
         "at": (at or utcnow()).isoformat(),
@@ -78,9 +72,8 @@ def record_login_ok(host: Host, credential: HostCredential, at: datetime | None 
 
 
 def clear_login_ok(host: Host, credential_id: str | None = None) -> None:
-    """Die Anmeldung hat zuletzt nicht geklappt: der gespeicherte Beleg gilt nicht mehr. Mit `credential_id`
-    nur, wenn der Beleg zu genau diesem Zugang gehört -- scheitert ein anderer Zugang, bleibt der
-    Beleg des funktionierenden stehen."""
+    """Die Anmeldung hat zuletzt nicht geklappt, der gespeicherte Beleg gilt nicht mehr (mit `credential_id` nur
+    für diesen Zugang)."""
     record = (host.host_metadata or {}).get(LOGIN_OK_KEY)
     if record is None:
         return
@@ -90,8 +83,8 @@ def clear_login_ok(host: Host, credential_id: str | None = None) -> None:
 
 
 def login_confirmed_at(host: Host, credential: HostCredential | None) -> datetime | None:
-    """Wann hat sich das Dashboard zuletzt per SSH angemeldet, mit genau diesem Zugang, an dieser Adresse und diesem Port?
-    Sonst `None` (nie, oder der Zugang bzw. die Adresse wurde seitdem geändert)."""
+    """Wann sich das Dashboard zuletzt per SSH mit genau diesem Zugang an dieser Adresse und diesem Port angemeldet
+    hat, sonst `None`."""
     record = (host.host_metadata or {}).get(LOGIN_OK_KEY)
     if credential is None or not isinstance(record, dict):
         return None
@@ -118,8 +111,8 @@ async def drop_pooled_connections(session: AsyncSession, host_id: str) -> None:
 
 
 async def forget_address_bound_access(session: AsyncSession, host: Host, *, spare_pinned: bool = False) -> int:
-    """Löscht nach einer geänderten Adresse die gespeicherten SSH-Passwörter und schließt offene Verbindungen; liefert die
-    Zahl der gelöschten Passwörter. Mit `spare_pinned` bleiben sie, wenn für den Server schon ein Schlüssel gemerkt ist."""
+    """Löscht nach einer geänderten Adresse die gespeicherten SSH-Passwörter, schließt offene Verbindungen und gibt
+    die Zahl der gelöschten Passwörter zurück."""
     from ..db import refresh_relationships
 
     removed = 0
@@ -139,8 +132,7 @@ async def forget_address_bound_access(session: AsyncSession, host: Host, *, spar
 
 
 def host_to_sdk(host: Host) -> SdkHost:
-    """Kern-ORM -> SDK-Vertragstyp; die einzige Stelle, die das tut, damit `ext/context.py` und `api/v1/terminal.py` dieselbe
-    Umwandlung benutzen."""
+    """Kern-ORM -> SDK-Vertragstyp, die einzige Stelle, die das tut."""
     status = HostStatus(host.status) if host.status in _HOST_STATUS_VALUES else HostStatus.UNKNOWN
     return SdkHost(
         id=host.id,
@@ -245,7 +237,7 @@ async def update_host(session: AsyncSession, host_id: str, **fields: object) -> 
 
 
 async def delete_host(session: AsyncSession, host_id: str) -> bool:
-    """Löscht den Server samt Zugangsdaten und Markierungen; `False`, wenn er unbekannt ist, `HostBusyError`, wenn auf ihm
+    """Löscht den Server samt Zugangsdaten und Markierungen; `False`, wenn er unbekannt ist, `HostBusyError`, wenn
     gerade eine Aktion läuft."""
     from ..db import refresh_relationships
 
@@ -363,9 +355,8 @@ async def delete_credential(session: AsyncSession, host_id: str, credential_id: 
 async def make_default_credential(
     session: AsyncSession, host_id: str, credential_id: str, *, delete_previous: bool = False
 ) -> tuple[HostCredential, HostCredential | None] | None:
-    """Macht einen Zugang zum Standard (Schlüsselwechsel: erst den neuen prüfen, dann umstellen). Mit `delete_previous`
-    fällt der bisherige Standard samt Geheimnis in derselben Transaktion weg. Rückgabe: `(Zugang, gelöschter alter
-    Standard oder None)`, `None` bei unbekanntem Zugang."""
+    """Macht einen Zugang zum Standard (Schlüsselwechsel); mit `delete_previous` fällt der bisherige samt Geheimnis
+    weg."""
     from ..db import refresh_relationships
 
     credential = await session.get(HostCredential, credential_id)
@@ -454,7 +445,7 @@ async def require_host_key_confirmation(session: AsyncSession, host_id: str) -> 
 
 
 async def host_key_was_confirmed(session: AsyncSession, host_id: str) -> None:
-    """Nimmt den Merker weg. Nur der Bestätigen-Weg (`POST /hosts/{id}/known-hosts`) ruft das auf."""
+    """Nimmt den Merker weg, nur der Bestätigen-Weg (`POST /hosts/{id}/known-hosts`) ruft das auf."""
     row = await session.get(Setting, (HOST_KEY_CONFIRM_REQUIRED, _HOST_SCOPE, host_id))
     if row is not None:
         await session.delete(row)
@@ -462,9 +453,7 @@ async def host_key_was_confirmed(session: AsyncSession, host_id: str) -> None:
 
 
 async def clear_known_host_key(session: AsyncSession, host_id: str, key_type: str) -> bool:
-    """Admin-Weg, eine Host-Key-Änderung nach manueller Prüfung erneut zuzulassen.
-
-    Das Vertrauen wiederherzustellen ist eine bewusste, protokollierte Handlung, kein automatischer Fallback."""
+    """Admin-Weg, eine Host-Key-Änderung nach manueller Prüfung erneut zuzulassen, bewusst und protokolliert."""
     result = await session.execute(
         select(KnownHostKey).where(KnownHostKey.host_id == host_id, KnownHostKey.key_type == key_type)
     )
@@ -524,8 +513,8 @@ async def delete_group(session: AsyncSession, group_id: str) -> bool:
 
 
 async def add_group_member(session: AsyncSession, group_id: str, host_id: str) -> bool:
-    """Idempotent: Ist der Host schon in der Gruppe, passiert nichts (Rückgabe False).
-    Unbekannte Gruppe oder unbekannter Host -> `HostServiceError` (API: 404)."""
+    """Idempotent: Ist der Host schon in der Gruppe, passiert nichts (False); unbekannte Gruppe oder Host ergibt
+    `HostServiceError` (API: 404)."""
     if await session.get(HostGroup, group_id) is None:
         raise HostServiceError("Unbekannte Gruppe.")
     if await session.get(Host, host_id) is None:

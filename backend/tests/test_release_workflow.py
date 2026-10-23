@@ -2,8 +2,9 @@
 
 Kein Deploy, keine eigenen Geheimnisse: nur der automatisch vergebene `GITHUB_TOKEN`. Der Image-Name
 steht ganz oben als Variable, weil die Organisation "nodvard" erst angelegt werden muss. Der zweite Job
-`updater-image` baut danach das Image des Update-Helfers (deploy/updater) unter demselben Namen mit "-updater".
-Die Tests lesen nur die YAML-Struktur (kein Lauf bei GitHub).
+`updater-image` baut danach das Image des Update-Helfers (deploy/updater) unter demselben Namen mit "-updater",
+der dritte `dock-image` Nodvard Dock (nur das Modul docker). Die Tests lesen die YAML-Struktur und führen einzelne
+Schritte lokal aus (kein Lauf bei GitHub).
 """
 
 from __future__ import annotations
@@ -233,8 +234,8 @@ def _updater_named(name: str) -> tuple[int, dict]:
     return found[0]
 
 
-def test_jobs_are_the_dashboard_image_and_the_helper_image():
-    assert list(_workflow()["jobs"]) == ["image", "updater-image"]
+def test_jobs_are_the_dashboard_the_helper_and_dock():
+    assert list(_workflow()["jobs"]) == ["image", "updater-image", "dock-image"]
 
 
 def test_helper_image_waits_for_the_dashboard_image():
@@ -428,3 +429,191 @@ def test_helper_version_is_the_dashboard_version():
     from nodvard_deck.version import __version__
 
     assert _helper_version() == __version__
+
+
+# ---------------------------------------------------------------------------
+# Job `dock-image`: Nodvard Dock, das Dashboard nur mit dem Modul docker
+# ---------------------------------------------------------------------------
+
+DOCK_COMPOSE = ROOT / "deploy" / "nodvard-dock" / "compose.yml"
+
+
+def _dock_job() -> dict:
+    return _workflow()["jobs"]["dock-image"]
+
+
+def _dock_step(uses_prefix: str) -> tuple[int, dict]:
+    found = [(i, s) for i, s in enumerate(_dock_job()["steps"]) if str(s.get("uses", "")).split("@")[0] == uses_prefix]
+    assert len(found) == 1, f"genau ein Schritt mit {uses_prefix} erwartet"
+    return found[0]
+
+
+def _dock_named(name: str) -> tuple[int, dict]:
+    found = [(i, s) for i, s in enumerate(_dock_job()["steps"]) if s.get("name") == name]
+    assert len(found) == 1, f"genau ein Schritt {name!r} erwartet"
+    return found[0]
+
+
+def test_dock_image_name_sits_next_to_the_dashboard_name():
+    yaml = pytest.importorskip("yaml")
+    env = _workflow()["env"]
+    assert env["DOCK_IMAGE_NAME"] == "ghcr.io/nodvard/dock"
+    assert env["DOCK_IMAGE_NAME"].rsplit("/", 1)[0] == env["IMAGE_NAME"].rsplit("/", 1)[0]
+    assert RELEASE.read_text(encoding="utf-8").count("ghcr.io/nodvard/dock") == 1
+    _, meta = _dock_step("docker/metadata-action")
+    assert meta["with"]["images"] == "${{ env.DOCK_IMAGE_NAME }}"
+    compose = yaml.safe_load(DOCK_COMPOSE.read_text(encoding="utf-8"))
+    assert compose["services"]["nodvard-dock"]["image"] == env["DOCK_IMAGE_NAME"] + ":latest"
+
+
+def test_dock_image_waits_for_the_dashboard_image():
+    # Ein Tag, das "Tag passt zu version.py" ablehnt, bringt so auch kein Dock-Image.
+    job = _dock_job()
+    assert job["needs"] == "image"
+    assert set(job) == {"needs", "runs-on", "permissions", "steps"}, sorted(job)
+
+
+def test_dock_image_is_the_dashboard_dockerfile_with_only_the_docker_module():
+    _dock_step("docker/setup-qemu-action")
+    _dock_step("docker/setup-buildx-action")
+    _, build = _dock_step("docker/build-push-action")
+    args = build["with"]
+    assert build["id"] == "build"
+    assert args["file"] == "deploy/Dockerfile"
+    assert args["context"] == "."
+    assert args["platforms"] == "linux/amd64,linux/arm64"
+    assert args["push"] is True
+    assert args["tags"] == "${{ steps.meta.outputs.tags }}"
+    assert args["labels"] == "${{ steps.meta.outputs.labels }}"
+    assert dict(line.split("=", 1) for line in args["build-args"].strip().splitlines()) == {
+        "VERSION": "${{ env.VERSION }}",
+        "IMAGE": "${{ env.DOCK_IMAGE_NAME }}",
+        "NODVARD_DECK_EXTENSIONS": "docker",
+    }
+    ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    assert "--build-arg NODVARD_DECK_EXTENSIONS=docker -t ghcr.io/nodvard/dock:latest" in ci
+
+
+def test_dock_image_reads_the_dashboard_cache_but_writes_its_own():
+    _, build = _dock_step("docker/build-push-action")
+    dashboard = _step("docker/build-push-action")["with"]
+    assert build["with"]["cache-from"].split() == [dashboard["cache-from"], "type=gha,scope=dock"]
+    assert build["with"]["cache-to"] == "type=gha,scope=dock,mode=max"
+    assert "scope=" not in dashboard["cache-to"]
+
+
+def test_dock_tags_and_labels():
+    _, meta = _dock_step("docker/metadata-action")
+    args = meta["with"]
+    assert "latest=false" in args["flavor"]
+    assert [line.strip() for line in args["tags"].strip().splitlines()] == ["type=semver,pattern={{version}}"]
+    labels = args["labels"]
+    for label in ("org.opencontainers.image.title=Nodvard Dock", "org.opencontainers.image.source=",
+                  "org.opencontainers.image.version=${{ env.VERSION }}",
+                  "org.opencontainers.image.licenses=PolyForm-Noncommercial-1.0.0"):
+        assert label in labels, label
+
+
+def test_dock_version_login_and_actions_as_for_the_dashboard():
+    _, step = _dock_named("Version aus dem Tag")
+    _, dashboard = _named("Version aus dem Tag")
+    assert step == dashboard
+    _, login = _dock_step("docker/login-action")
+    assert login["with"] == {"registry": "ghcr.io", "username": "${{ github.actor }}", "password": "${{ secrets.GITHUB_TOKEN }}"}
+    pinned = {str(s["uses"]).split("@")[0]: s["uses"] for s in _steps() if "uses" in s}
+    for step in _dock_job()["steps"]:
+        if "uses" in step:
+            assert step["uses"] == pinned[str(step["uses"]).split("@")[0]], step["uses"]
+
+
+def test_dock_latest_moves_only_after_the_check_and_never_for_a_prerelease():
+    steps = _dock_job()["steps"]
+    build_index, _ = _dock_step("docker/build-push-action")
+    check_index, check = _dock_named("Prüfung am Digest (amd64 und arm64)")
+    latest_index, latest = _dock_named("Tag latest setzen")
+    assert build_index < check_index == latest_index - 1 == len(steps) - 2
+    environment = {"IMAGE": "${{ env.DOCK_IMAGE_NAME }}", "DIGEST": "${{ steps.build.outputs.digest }}"}
+    assert set(check) == {"name", "env", "run"}, sorted(check)
+    assert check["env"] == environment
+    assert "${{" not in check["run"], "Image und Digest nur über die Umgebung, nie in den Befehl eingesetzt"
+    assert "||" not in check["run"] and "set +e" not in check["run"]
+    for step in steps:
+        assert "continue-on-error" not in step, step
+        if "if" in step:
+            assert step.get("name") == "Tag latest setzen", step
+    assert latest["if"] == "${{ !contains(github.ref_name, '-') }}"
+    assert latest["env"] == environment
+    assert latest["run"].strip() == 'docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE@$DIGEST"'
+
+
+def _run_dock_check(tmp_path: Path, modules: list[str], *, tesseract: bool = False, fail: bool = False):
+    """Führt die Prüfung mit einem nachgebauten `docker` aus, das den Befehl im Container hier auf einen Ordner lenkt."""
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    if sys.platform == "win32":
+        pytest.skip("braucht POSIX-Pfade und Symlinks (wie der Runner von GitHub)")
+    bash, sh = shutil.which("bash"), shutil.which("sh")
+    tools = {name: shutil.which(name) for name in ("ls", "tr", "sed")}
+    if bash is None or sh is None or None in tools.values():
+        pytest.skip("braucht bash, sh, ls, tr und sed (wie der Runner von GitHub)")
+    for module in modules:
+        (tmp_path / "app" / "extensions" / module).mkdir(parents=True)
+    image_bin = tmp_path / "image-bin"
+    image_bin.mkdir()
+    for name in ("ls", "tr"):
+        (image_bin / name).symlink_to(tools[name])
+    if tesseract:
+        (image_bin / "tesseract").write_text("#!/bin/sh\n", encoding="utf-8")
+        (image_bin / "tesseract").chmod(0o755)
+    host_bin = tmp_path / "host-bin"
+    host_bin.mkdir()
+    (host_bin / "docker").write_text(
+        "#!/bin/sh\n"
+        'echo "$*" >> "$FAKE_ROOT/calls"\n'
+        'if [ "$1" = run ]; then\n'
+        '  [ -n "$FAKE_FAIL" ] && exit 125\n'
+        '  while [ "$1" != -c ]; do shift; done\n'
+        f'  script="$(printf \'%s\' "$2" | {tools["sed"]} "s#/app/extensions#$FAKE_ROOT/app/extensions#")"\n'
+        f'  exec env -i LC_ALL=C PATH="$FAKE_ROOT/image-bin" {sh} -c "$script"\n'
+        "fi\n",
+        encoding="utf-8",
+    )
+    (host_bin / "docker").chmod(0o755)
+    _, check = _dock_named("Prüfung am Digest (amd64 und arm64)")
+    env = {**os.environ, "PATH": f"{host_bin}{os.pathsep}{os.environ.get('PATH', '')}", "FAKE_ROOT": str(tmp_path),
+           "IMAGE": "ghcr.io/nodvard/dock", "DIGEST": "sha256:" + "a" * 64, "FAKE_FAIL": "1" if fail else ""}
+    done = subprocess.run([bash, "-eo", "pipefail", "-c", check["run"]], cwd=tmp_path, env=env, capture_output=True,
+                          text=True, check=False)
+    calls = (tmp_path / "calls").read_text(encoding="utf-8").splitlines() if (tmp_path / "calls").exists() else []
+    return done, calls
+
+
+def test_dock_check_passes_with_only_the_docker_module_on_both_platforms(tmp_path):
+    done, calls = _run_dock_check(tmp_path, ["_shared", "docker"])
+    assert done.returncode == 0, done.stderr
+    runs = [call for call in calls if call.startswith("run ")]
+    assert [call.split("--platform ")[1].split()[0] for call in runs] == ["linux/amd64", "linux/arm64"]
+    assert all("--network none" in call and "ghcr.io/nodvard/dock@sha256:" in call for call in runs)
+    assert len([call for call in calls if call.startswith("image rm ")]) == 2
+
+
+@pytest.mark.parametrize(
+    ("modules", "tesseract", "fail"),
+    [
+        (["_shared", "docker", "documents"], False, False),
+        (["_shared"], False, False),
+        ([], False, False),
+        (["_shared", "docker"], True, False),
+        (["_shared", "docker"], False, True),
+    ],
+    ids=["weiteres-modul", "ohne-docker", "ohne-ordner", "tesseract", "start-scheitert"],
+)
+def test_dock_check_stops_before_latest(tmp_path, modules, tesseract, fail):
+    done, calls = _run_dock_check(tmp_path, modules, tesseract=tesseract, fail=fail)
+    assert done.returncode != 0
+    assert not any(call.startswith("image rm ") for call in calls)
+    if not fail:
+        assert "Erwartet war nur das Modul docker" in done.stderr

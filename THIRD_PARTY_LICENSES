@@ -24,7 +24,7 @@ Inhalt
   argon2-cffi                        25.1.0         MIT
   argon2-cffi-bindings               26.1.0         MIT
   asyncssh                           2.24.0         EPL-2.0 OR GPL-2.0-or-later
-  certifi                            2026.7.22      MPL-2.0
+  certifi                            2026.10.19     MPL-2.0
   cffi                               2.1.1          MIT-0
   click                              8.5.0          BSD-3-Clause
   cryptography                       50.0.1         Apache-2.0 OR BSD-3-Clause
@@ -40,7 +40,7 @@ Inhalt
   Mako                               1.4.3          MIT
   MarkupSafe                         3.0.3          BSD-3-Clause
   packaging                          26.3           Apache-2.0 OR BSD-2-Clause
-  pillow                             12.3.0         MIT-CMU
+  pillow                             13.0.0         MIT-CMU
   pycparser                          3.0            BSD-3-Clause
   pydantic                           2.13.5         MIT
   pydantic-settings                  2.15.0         MIT
@@ -94,7 +94,7 @@ Inhalt
   @types/react-dom                   18.3.7         MIT
   @xterm/addon-fit                   0.11.0         MIT
   @xterm/xterm                       6.0.0          MIT
-  argparse                           3.0.2          PSF-2.0
+  argparse                           3.0.3          PSF-2.0
   aria-hidden                        1.2.6          MIT
   clsx                               2.1.1          MIT
   cookie                             1.1.1          MIT
@@ -107,7 +107,7 @@ Inhalt
   linkify-it                         6.1.0          MIT
   loose-envify                       1.4.0          MIT
   lucide-react                       1.48.0         ISC
-  markdown-it                        15.0.2         MIT
+  markdown-it                        15.0.3         MIT
   mdurl                              2.1.0          MIT
   object-assign                      4.1.1          MIT
   prop-types                         15.8.1         MIT
@@ -142,8 +142,8 @@ UNVERÄNDERT aus dem Paketregister übernommen (npm: Prüfsumme in frontend/pack
 Python: Version in deploy/constraints.txt). Den Quelltext gibt es unter den folgenden Adressen
 und über das jeweilige Paketregister (npm bzw. PyPI) in genau dieser Version.
 
-  certifi 2026.7.22 (python): https://github.com/certifi/python-certifi
-      Paket genau dieser Version: https://pypi.org/project/certifi/2026.7.22/
+  certifi 2026.10.19 (python): https://github.com/certifi/python-certifi
+      Paket genau dieser Version: https://pypi.org/project/certifi/2026.10.19/
       Im Image: Python-Paket unter site-packages/certifi, unverändert.
   @novnc/novnc 1.7.0 (npm): https://github.com/novnc/noVNC
       Quelltext genau dieser Version: https://github.com/novnc/noVNC/tree/v1.7.0
@@ -642,7 +642,7 @@ version(s), and exceptions or additional permissions here}."
   You may add additional accurate notices of copyright ownership.
 
 ------------------------------------------------------------------------------
-certifi 2026.7.22
+certifi 2026.10.19
 Lizenz: MPL-2.0
 ------------------------------------------------------------------------------
 This package contains a modified version of ca-bundle.crt:
@@ -2786,7 +2786,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-pillow 12.3.0
+pillow 13.0.0
 Lizenz: MIT-CMU
 ------------------------------------------------------------------------------
 The Python Imaging Library (PIL) is
@@ -11010,7 +11010,7 @@ THE SOFTWARE.
  *--------------------------------------------------------------------------------------------*/
 
 ------------------------------------------------------------------------------
-argparse 3.0.2
+argparse 3.0.3
 Lizenz: PSF-2.0
 ------------------------------------------------------------------------------
 PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -11375,7 +11375,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-markdown-it 15.0.2
+markdown-it 15.0.3
 Lizenz: MIT
 ------------------------------------------------------------------------------
 Copyright (c) 2014 Vitaly Puzrin, Alex Kocharin.

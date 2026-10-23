@@ -98,6 +98,7 @@ class Extension(NodvardExtension):
             WidgetSpec(
                 id="status",
                 title="qBittorrent",
+                group="apps",
                 icon="hard-drive",
                 size=GridSize(w=2, h=2),
                 refresh=Refresh(interval_s=60),

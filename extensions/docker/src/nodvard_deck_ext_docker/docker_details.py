@@ -1,7 +1,5 @@
-"""Container-Details und Docker-Speicher (Belegung, Images) für das Docker-Modul.
-
-Rein lesend bis auf das Aufräumen (`docker.prune_*`, über das Gate).
-"""
+"""Container-Details und Docker-Speicher (Belegung, Images) für das Docker-Modul, rein lesend bis auf das Aufräumen
+(`docker.prune_*`, über das Gate)."""
 
 from __future__ import annotations
 
@@ -24,9 +22,7 @@ _ALL_ADDRESSES = frozenset({None, "", "0.0.0.0", "::"})  # nosec B104
 
 def _ports(raw_ports: dict[str, Any] | None) -> list[dict[str, Any]]:
     """`{"80/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}, ...]}` -> je Container-Port die veröffentlichten Host-Ports.
-
-    IPv4/IPv6-Dubletten sind zusammengefasst; ein nicht veröffentlichter Port bleibt mit leerer Liste (nur im Docker-Netz).
-    """
+    IPv4/IPv6-Dubletten sind zusammengefasst; ein nicht veröffentlichter Port bleibt mit leerer Liste (nur im Docker-Netz)."""
     ports: list[dict[str, Any]] = []
     for container_port, bindings in sorted((raw_ports or {}).items()):
         published = sorted({
@@ -38,9 +34,33 @@ def _ports(raw_ports: dict[str, Any] | None) -> list[dict[str, Any]]:
     return ports
 
 
+# Was `docker-root inspect` im Modus „Nur bedienen“ ausgibt: genau die Felder, die `summarize_inspect` liest, Umgebungsvariablen
+# nur mit Namen. Das Skript hat dieselbe Zeichenkette, ein Test vergleicht beide.
+DETAILS_FORMAT = (
+    '[{"Name":{{json .Name}},"Image":{{json .Image}},"Created":{{json .Created}},'
+    '"RestartCount":{{json .RestartCount}},"State":{{with .State}}{"Running":{{json .Running}},'
+    '"StartedAt":{{json .StartedAt}},"FinishedAt":{{json .FinishedAt}},"ExitCode":{{json .ExitCode}},'
+    '"OOMKilled":{{json .OOMKilled}},'
+    '"Health":{{if .Health}}{"Status":{{json .Health.Status}}}{{else}}null{{end}}}{{end}},'
+    '"HostConfig":{{with .HostConfig}}{"RestartPolicy":{"Name":{{json .RestartPolicy.Name}}},'
+    '"Privileged":{{json .Privileged}},"NetworkMode":{{json .NetworkMode}},"Memory":{{json .Memory}}}{{end}},'
+    '"NetworkSettings":{{with .NetworkSettings}}{"Ports":{{json .Ports}},'
+    '"Networks":{ {{- $f := 1}}{{range $n, $v := .Networks}}{{if not $f}},{{end}}{{$f = 0}}'
+    '{{json $n}}:{"IPAddress":{{json $v.IPAddress}}}{{end -}} }}{{end}},'
+    '"Mounts":[{{range $i, $m := .Mounts}}{{if $i}},{{end}}{"Type":{{json .Type}},"Name":{{json .Name}},'
+    '"Source":{{json .Source}},"Destination":{{json .Destination}},"RW":{{json .RW}}}{{end}}],'
+    '"Config":{"Image":{{json .Config.Image}},'
+    '"Env":[{{range $i, $e := .Config.Env}}{{if $i}},{{end}}{{json (index (split . "=") 0)}}{{end}}],'
+    '"Labels":{{with .Config.Labels}}{"com.docker.compose.project":{{json (index . "com.docker.compose.project")}},'
+    '"com.docker.compose.service":{{json (index . "com.docker.compose.service")}},'
+    '"com.docker.compose.project.working_dir":{{json (index . "com.docker.compose.project.working_dir")}}}'
+    '{{else}}{}{{end}}}}]'
+)
+
+
 def summarize_inspect(raw: dict[str, Any]) -> dict[str, Any]:
     # Nur ausgewählte Felder (Positivliste). Umgebungsvariablen nur mit Namen, nie mit Wert: Passwörter stehen auch unter
-    # harmlos wirkenden Namen (`DATABASE_URL=postgres://user:pw@...`). Befehlszeile und Entrypoint fehlen deshalb auch.
+    # harmlos wirkenden Namen (etwa in der Adresse unter `DATABASE_URL`). Befehlszeile und Entrypoint fehlen deshalb auch.
     state = raw.get("State") or {}
     config = raw.get("Config") or {}
     host_config = raw.get("HostConfig") or {}
@@ -123,10 +143,8 @@ def parse_system_df(text: str) -> list[dict[str, Any]]:
 
 
 def parse_images(text: str) -> list[dict[str, Any]]:
-    """`docker images --format '{{json .}}'`.
-
-    "Containers" kennt erst neueres Docker (z. B. 29.x); älteres liefert "N/A", dann bleibt `in_use` offen (None).
-    """
+    """`docker images --format '{{json .}}'`. "Containers" kennt erst neueres Docker (z. B. 29.x); älteres liefert "N/A",
+    dann bleibt `in_use` offen (None)."""
     images = []
     for row in _json_lines(text):
         repo, tag = row.get("Repository") or "<none>", row.get("Tag") or "<none>"

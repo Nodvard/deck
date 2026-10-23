@@ -1,0 +1,191 @@
+version = "0.11.0"
+date = "2026-10-23"
+title = "Startseite zum Bearbeiten, Nodvard Dock als fertiges Image und Einrichten nur mit Hilfsskripten"
+
+[[entries]]
+kind = "neu"
+text = "Nodvard Dock (Beta), die schlanke Ausgabe nur mit der Container-Verwaltung, gibt es jetzt als fertiges Image zum Herunterladen."
+
+[[entries]]
+kind = "verbessert"
+text = "In den Beispieldaten heißt ein Beispiel-Server jetzt „Beispiel-Heimserver“ statt nach einem Gerät benannt."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Neuer Modus „Nur bedienen“ für Server, deren Zugang nicht in der Gruppe docker sein soll (das käme vollen root-Rechten gleich). Mit der Markierung „docker-bedienen“ darf Nodvard Deck dort per sudo nur ein festes Hilfsskript aufrufen, das Container anzeigt, ihre Logs liest und sie startet, stoppt und neu startet. Stacks, Images, Löschen und Konsole gibt es dort nicht; die Seite sagt, warum."
+
+[[entries]]
+kind = "sicherheit"
+text = "Docker: Im Modus „Nur bedienen“ prüft das Hilfsskript jeden Aufruf selbst und führt nur eine feste Auswahl von Docker-Befehlen aus."
+
+[[entries]]
+kind = "neu"
+text = "Docker: „Verbindung prüfen“ zeigt, wenn der Zugang auf einem Server im Modus „Nur bedienen“ trotzdem alles darf: Anmeldung als root, Gruppe docker oder volle sudo-Rechte. Der Hinweis nennt, wie du das änderst."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Private Registries wie ghcr.io lassen sich in den Einstellungen eintragen, das Passwort oder Token kommt in den Tresor. Im neuen Reiter Registries siehst du je Server, wo Docker angemeldet ist, und meldest über die Freigabe an oder ab; das Passwort steht dabei nie in einem Befehl, den andere auf dem Server sehen könnten."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Volume-Sicherungen eines Stacks lassen sich im Reiter Stacks unter „Sicherungen“ zurückspielen und löschen, beides über die Freigabe. Deck prüft vorher, ob das Archiv lesbar ist und der Platz reicht, entpackt es neben die alten Daten und tauscht erst dann; ist etwas nicht in Ordnung, bleiben die Daten, wie sie sind. Laufende Dienste stoppen dafür kurz und werden danach geprüft; gestoppte startet Deck nicht selbst wieder, Compose kann sie aber mitstarten, wenn ein laufender Dienst sie braucht. Besitzer und Rechte der Volumes bleiben dabei erhalten."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Bricht ein Zurückspielen ab oder kommt keine klare Antwort vom Server, startet Deck die Dienste nicht blind wieder, sondern sagt, wo die Daten liegen."
+
+[[entries]]
+kind = "verbessert"
+text = "Docker: Jede neue Volume-Sicherung merkt sich, welche Volumes hineingehören. Brach das Packen ab, nennt die Liste der Sicherungen die fehlenden Volumes."
+
+[[entries]]
+kind = "sicherheit"
+text = "Beim Einrichten eines Servers bekommt Nodvard Deck dort keine vollen Verwaltungsrechte mehr, wenn die Hilfsskripte der Module reichen: Es darf dann nur genau diese Skripte starten. Volle Rechte gibt es weiter unter „Erweitert“."
+
+[[entries]]
+kind = "verbessert"
+text = "„Verbindung prüfen“ und der Hinweis in der Übersicht erkennen Server, die nur die Hilfsskripte erlauben, und sagen deutlich, wenn einem Modul dort deshalb Rechte fehlen."
+
+[[entries]]
+kind = "verbessert"
+text = "Lassen sich die Hilfsskripte auf einem Server nicht sicher einrichten, etwa weil ein Ordner für andere beschreibbar ist, ändert die Einrichtung dort nichts und sagt, welcher Ordner betroffen ist und wie man es behebt."
+
+[[entries]]
+kind = "neu"
+text = "Im Einbruchschutz kannst du je Programm eigene Portbereiche eintragen, etwa für einen Spieleserver. Neue Ports darin melden dann nicht mehr einzeln, sondern zählen als ein Eintrag. Ein Bereich umfasst höchstens 1000 Ports, mehr nur mit dem Häkchen „Breiter Bereich“; Ports unter 1024 zählen nur mit eigenem Häkchen und in einem breiten Bereich nie. Eine gelbe Warnung beim Eintragen erinnert daran, nur Programme einzutragen, denen du vertraust."
+
+[[entries]]
+kind = "neu"
+text = "Synology DSM (Beta): Du kannst jetzt mehrere Synology eintragen, jede mit eigenem Namen, Konto, Passwort und Zertifikat-Angaben. Die Seite hat eine Auswahl der Geräte, auf der Startseite hat jedes Gerät seine eigenen Kacheln, und die Meldungen nennen den Gerätenamen."
+
+[[entries]]
+kind = "verbessert"
+text = "Synology DSM (Beta): Wer das Modul schon mit einer Synology eingerichtet hat, muss nichts neu eintragen; das Gerät wird beim ersten Start als „synology“ übernommen, samt Passwort, Kacheln und bereits gemeldeten Problemen. Wird bei einem Gerät die Anmeldung abgelehnt, pausiert nur dieses Gerät für 30 Minuten."
+
+[[entries]]
+kind = "sicherheit"
+text = "Kommt in den Einstellungen eines Moduls (zum Beispiel Jellyfin, Plex oder Synology) derselbe Kurzname zweimal vor, wird das dazu gespeicherte Passwort beim Speichern gelöscht (nach Rückfrage), und ein neues nimmt Nodvard Deck erst an, wenn der Name nur noch einmal vorkommt. So landet es nie bei der Adresse eines anderen Eintrags."
+
+[[entries]]
+kind = "neu"
+text = "Startseite: Mit „Bearbeiten“ verschiebst du Widgets, änderst Höhe, Breite und Gruppe und benennst Gruppen um. „Fertig“ speichert alles auf einmal."
+
+[[entries]]
+kind = "verbessert"
+text = "Startseite: Widgets lassen sich nicht mehr aus Versehen verschieben oder in der Breite ziehen, das geht nur noch im Bearbeiten-Modus."
+
+[[entries]]
+kind = "behoben"
+text = "Startseite: Lassen sich die Widgets oder ihre Anordnung gerade nicht laden, steht der Grund mit „Erneut versuchen“ da statt „Noch keine Widgets“ oder „Kein Dashboard-Layout gefunden“."
+
+[[entries]]
+kind = "neu"
+text = "Startseite: Die Widgets stehen in Gruppen (Server und Proxmox, Sicherheit, Docker und Apps, Backups, Dienste), die sich einzeln zuklappen lassen; das gilt ohne Neuladen auch auf deinen anderen Geräten."
+
+[[entries]]
+kind = "neu"
+text = "Startseite: Eine zugeklappte Gruppe zeigt einen farbigen Punkt, wenn darin etwas eine Warnung oder Störung meldet oder ein Widget gerade nicht lädt."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Bibliothek, die Bilder liest, ist aktualisiert. Sie behebt mehrere Fehler, durch die ein präpariertes Bild beim Hochladen in die Dokumente das Dashboard ausbremsen oder abstürzen lassen konnte. Hochladen kann so ein Bild nur, wer Dokumente ändern darf."
+
+[[entries]]
+kind = "sicherheit"
+text = "Bei Verbindungen ins Internet vertraut Nodvard Deck der Zertifizierungsstelle „emSign ECC Root CA - G3“ nicht mehr, weil Zertifikate unter ihr in falsche Hände geraten sind. Ein Dienst, dessen Zertifikat von dieser Stelle stammt, meldet künftig einen Zertifikatsfehler."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Darstellung von Markdown-Kacheln ist aktualisiert. Ein sehr langer Text mit mehrzeiligen Link-Angaben konnte die Seite spürbar ausbremsen."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Schutzregel gegen eingeschleuste Skripte liest die Seite von Nodvard Deck jetzt so wie der Browser, auch bei ungewöhnlich geschriebenen Kommentaren."
+
+[[entries]]
+kind = "verbessert"
+text = "Nodvard Dock bietet für sich selbst keinen Update-Knopf an, sondern erklärt, wie man es auf dem Server aktualisiert."
+
+[[entries]]
+kind = "sicherheit"
+text = "Docker: Passwörter und andere Werte aus den Variablen eines Stacks blendet Nodvard Deck in Fehlermeldungen auch dann aus, wenn Docker sie umwandelt, zerlegt oder in Anführungszeichen zeigt."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Beim Umzug von Portainer bricht Nodvard Deck vorher ab, wenn die gespeicherte Datei andere Images nennt als die laufenden Container, und die Rückfrage sagt, dass nur in den Containern liegende Daten verloren gehen."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Nach einem Abbruch oder einer abgerissenen Verbindung bleiben beim Anlegen, Umziehen und Sichern keine leeren Ordner mehr unbemerkt liegen, und neue Dateien sind schon geschützt, bevor etwas hineingeschrieben wird."
+
+[[entries]]
+kind = "behoben"
+text = "Auf Servern mit Dropbear, etwa DietPi, klappt das Einrichten jetzt: Nodvard Deck trägt den Schlüssel dort so ein, dass Dropbear ihn annimmt. Wer so einen Server schon eingerichtet hat und sich nicht anmelden kann, richtet ihn einfach noch einmal ein."
+
+[[entries]]
+kind = "verbessert"
+text = "Lehnt ein Server mit Dropbear den Schlüssel ab, nennt „Verbindung prüfen“ jetzt den Grund und wie man es behebt."
+
+[[entries]]
+kind = "sicherheit"
+text = "Beim Einrichten eines Servers zählen bei der Prüfung des Ordners für die Hilfsskripte jetzt auch erweiterte Zugriffsrechte und die Gruppen, die ein neuer Benutzer bekommt. Ist der Ordner dadurch unsicher, legt Nodvard Deck die Hilfsskripte dort nicht ab: mit vollen Rechten mit einem Hinweis, nur mit Hilfsskripten ändert die Einrichtung dann gar nichts."
+
+[[entries]]
+kind = "verbessert"
+text = "Nodvard Shield: Ein ausgelassener Neustart nach einem gescheiterten Update kommt nur einmal als Warnung. In den Nächten danach steht er weiter in der Zusammenfassung und unter „Braucht Aufmerksamkeit“."
+
+[[entries]]
+kind = "verbessert"
+text = "Synology DSM (Beta): Fällt in einem eingeschränkten Speicherpool ein Volume aus, kommt eine einzige dringende Meldung, die beides nennt, statt zwei Meldungen."
+
+[[entries]]
+kind = "behoben"
+text = "Synology DSM (Beta): Antwortet Hyper Backup sehr langsam, zeigt die Seite Speicher, System und Updates trotzdem an und sagt bei Hyper Backup, dass die Antwort nicht rechtzeitig kam."
+
+[[entries]]
+kind = "behoben"
+text = "Auf kleinen Servern wie DietPi brechen Updates, Audit und Viren-Wächter von Nodvard Shield, die Stack-Liste bei vielen Docker-Stacks und das Einrichten mit Passwort nicht mehr mit „Connection lost“ ab."
+
+[[entries]]
+kind = "behoben"
+text = "Fällt ein Proxmox-Server aus, steht er auf der Startseite nicht mehr weiter als online: Antwortet er 4 Minuten am Stück nicht, gilt er als nicht erreichbar (in einem Cluster als unbekannt), ein kurzer Neustart löst das nicht aus. Seine VMs und Container stehen als unbekannt da, bis er wieder antwortet."
+
+[[entries]]
+kind = "behoben"
+text = "Fährt Nodvard Deck herunter, während geplante Aufgaben laufen, stehen sie als abgebrochen in der Liste, ohne Fehlermeldungen im Protokoll. Eine Aufgabe, die gerade erst beginnen will, startet dann gar nicht mehr; so ist das Herunterfahren schneller fertig."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield: Nach dem Installieren von Fail2ban oder dem Einrichten der automatischen Sicherheitsupdates bleibt das Ergebnis stehen und wird nicht gleich von der Meldung zur anschließenden Prüfung ersetzt."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield: Scheitert eine Aktion, steht der Grund in Rot da, mit einem Link zur Freigabe oder zu den Server-Zugängen, wenn das weiterhilft. Eine abgelehnte Aktion erscheint als Hinweis, eine abgebrochene Rückfrage gar nicht mehr."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield: Bei langen Aktionen wie Installieren, Wiederherstellen, Löschen, Sperren und Entsperren ist der Knopf gesperrt und zeigt, was gerade läuft, auch nach einem Wechsel des Reiters. Das Ergebnis erscheint auch dann, wenn inzwischen ein anderer Reiter offen ist, und laufen zwei Aktionen gleichzeitig, hat jede ihren eigenen Hinweis. Ein zweiter Klick startet nichts doppelt, und danach steht der neue Stand ohne Neuladen da."
+
+[[entries]]
+kind = "behoben"
+text = "Der Einbruchschutz meldet bei Pi-hole und anderen DNS-Diensten (dnsmasq, unbound, named) nicht mehr ständig „Neuer offener Port“, nur weil sie für jede Anfrage einen zufälligen Port nutzen. Ihre festen Ports wie 53 bleiben weiter einzeln sichtbar."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield: Tiefenscan und Härtungs-Audit auf allen Servern starten nur noch nach einer Rückfrage, und in der Ansicht eines Servers wirken „Audit jetzt starten“ und „Alle abhaken“ nur auf diesen Server."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield: „Ist in Ordnung“, „Ignorieren“ und „Wiederherstellen“ sagen vorher, was danach als bekannt gilt, und „Wieder beachten“ holt einen ignorierten Fund zurück."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield: Ein eigener Scan mit Ordnern ohne vollen Pfad wird mit Grund abgelehnt, statt still die Standardordner zu prüfen."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Beim Umzug von Portainer sind die Meldungen sauberer formuliert, und lässt sich der Zielordner nicht prüfen, steht jetzt dabei, dass du es noch einmal versuchen kannst."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Die Container-Übersicht fällt nicht mehr ganz aus, wenn ein Server für einen gestoppten Container ungewöhnliche Port-Angaben liefert."

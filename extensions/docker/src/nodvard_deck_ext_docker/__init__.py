@@ -1,7 +1,5 @@
-"""Docker: entdeckt Container per SSH und zeigt sie als Kacheln, mit Container-Verwaltung und Image-Updates.
-
-Alles Ändernde (Container-Aktionen, Einspielen von Image-Updates) läuft über das Aktions-Gate.
-"""
+"""Docker: entdeckt Container per SSH und zeigt sie als Kacheln, mit Container-Verwaltung und Image-Updates; alles
+Ändernde (Container-Aktionen, Einspielen von Image-Updates) läuft über das Aktions-Gate."""
 
 from __future__ import annotations
 
@@ -52,13 +50,22 @@ from .editor import DockerStackSaveExecutor, StackEditor, editor_routes, save_ac
 from .new_stack import DockerStackCreateExecutor, NewStacks, create_action_spec, new_routes
 from .stack_delete import DockerStackDeleteExecutor, StackDelete, delete_action_spec, delete_routes
 from .stack_backup import VolumeBackup
+from .stack_restore import DockerStackRestoreExecutor, StackRestore, restore_routes, restore_specs
 from .stack_update import DockerStackUpdateExecutor, StackBackups, StackUpdate, stack_actions_specs, update_routes
 from .locks import StackLocks
 from .stack_actions import DockerStackExecutor, stack_action_specs
 from .stacks import DockerStacks, stack_routes
 from .container_to_stack import ContainerToStack, DockerContainerToStackExecutor, convert_action_spec, convert_routes
+from .registries import DockerRegistryExecutor, Registries, login_spec, registry_routes
 from .portainer_move import DockerPortainerMoveExecutor, PortainerMove, move_action_spec, move_routes
 from .templates import template_routes
+from .operate import DEFAULT_TAG as OPERATE_DEFAULT_TAG
+from .operate import FULL_SUDO_CHECK, GROUP_CHECK, ROOT_CHECK
+from .operate import HELPER as OPERATE_HELPER
+from .operate import OperateContext, is_docker_host, is_operate_host
+from .operate import docker_hosts as operate_hosts
+from .operate import refused_text as operate_refused
+from .operate import tags as operate_tags
 
 
 class _TileUrlIn(BaseModel):
@@ -76,21 +83,68 @@ class _ApplyIn(BaseModel):
     """Die Kennung der Übersicht, die der Nutzer gesehen hat (`GET .../image-update/plan`)."""
 
 
-def _apply_docker_tag(ctx: ExtensionContext, tag: str) -> None:
-    """Kachel und Aktionen folgen dem eingestellten Docker-Tag (gleiche ID/Typ ersetzt)."""
-    _register_host_tool(ctx, tag)
+def _apply_docker_tag(ctx: ExtensionContext, settings: dict[str, Any]) -> None:
+    """Kachel, Anforderungen und Aktionen folgen den eingestellten Markierungen (gleiche ID/Typ ersetzt)."""
+    tag, operate_tag = operate_tags(settings)
+    _register_host_tool(ctx, [tag, operate_tag])
     _register_docker_requirement(ctx, tag)
-    for spec in container_action_specs(tag) + resource_action_specs(tag) + stack_action_specs(tag):
+    _register_operate_requirement(ctx, operate_tag)
+    _register_operate_limits(ctx, operate_tag, tag)
+    for spec in container_action_specs(tag, operate_tag) + resource_action_specs(tag) + stack_action_specs(tag):
         ctx.actions.register(spec)
 
 
-def _register_host_tool(ctx: ExtensionContext, tag: str) -> None:
+def _register_host_tool(ctx: ExtensionContext, tags: list[str]) -> None:
     """Kachel "Container" auf der Server-Seite jedes Docker-Hosts. Der Tag ist einstellbar (`docker_host_tag`), deshalb
     wird sie bei jeder Änderung neu gemeldet."""
     ctx.ui.register_host_tool(HostToolSpec(
         id="containers", title="Container", icon="layout-grid", category="services",
-        description="Container starten, stoppen, löschen, Logs, Konsole, Details -- Docker-Speicher aufräumen", path="/matrix?host={host_id}",
-        tags=[tag],
+        description="Container ansehen, starten, stoppen, neu starten, Logs lesen", path="/matrix?host={host_id}",
+        tags=tags,
+    ))
+
+
+def _register_operate_requirement(ctx: ExtensionContext, tag: str) -> None:
+    """Server im Modus „Nur bedienen“: statt der Gruppe docker das Hilfsskript `docker-root`, das die Einrichtung root-eigen
+    ablegt und per sudo nur dieses Skript erlaubt."""
+    ctx.ui.register_host_requirement(HostRequirementSpec(
+        id="docker-operate", label="Docker nur bedienen (ohne Gruppe docker)",
+        check_command=f"sudo -n {OPERATE_HELPER} version", ok_text="Das Hilfsskript für Docker antwortet.",
+        fail_hint="Den Zugang neu einrichten (Einstellungen, Server & Zugänge): Die Einrichtung legt das Hilfsskript ab und erlaubt "
+        "es per sudo.",
+        needs_root=True, root_reason="Container ansehen, starten, stoppen und Logs lesen, ohne Gruppe docker",
+        tags=[tag], order=31,
+    ))
+
+
+def _register_operate_limits(ctx: ExtensionContext, tag: str, full_tag: str) -> None:
+    """Ein Zugang als root, mit Gruppe docker oder mit voller sudo-Regel darf auch im Modus „Nur bedienen“ alles."""
+    both = f"Hat der Server auch die Markierung „{full_tag}“, ist er ein voller Docker-Server und das so gewollt. "
+    ctx.ui.register_host_requirement(HostRequirementSpec(
+        id="docker-operate-root", label="Nur bedienen: Zugang ist nicht root",
+        check_command=ROOT_CHECK, ok_text="Der Zugang meldet sich nicht als root an.",
+        fail_hint=both + "Sonst: Der Zugang meldet sich als root an und darf hier ohnehin alles, „Nur bedienen“ schränkt ihn "
+        "also nicht ein. Richte den Zugang mit einem eigenen Benutzer statt root neu ein (Einstellungen, Server & Zugänge).",
+        tags=[tag], order=32,
+    ))
+    ctx.ui.register_host_requirement(HostRequirementSpec(
+        id="docker-operate-group", label="Nur bedienen: Zugang nicht in der Gruppe docker",
+        check_command=GROUP_CHECK,
+        ok_text="Der Zugang kommt ohne sudo nicht an Docker heran, oder er ist root (dann gilt „Zugang ist nicht root“).",
+        fail_hint=both + "Sonst: Der Zugang kann Docker noch ohne sudo benutzen, meist über die Gruppe docker, und ist damit "
+        "auf diesem Server praktisch root. Nimm ihn aus der Gruppe: sudo gpasswd -d {user} docker (gilt ab der nächsten "
+        "Anmeldung, „Verbindung prüfen“ meldet sich dafür neu an).",
+        tags=[tag], order=33,
+    ))
+    ctx.ui.register_host_requirement(HostRequirementSpec(
+        id="docker-operate-sudo", label="Nur bedienen: keine volle sudo-Regel",
+        check_command=FULL_SUDO_CHECK,
+        ok_text="sudo erlaubt dem Zugang nicht alles, oder er ist root (dann gilt „Zugang ist nicht root“).",
+        fail_hint=both + "Sonst: sudo erlaubt dem Zugang hier noch alles ohne Passwort, und die Einrichtung nimmt so eine Regel "
+        "nie zurück. Braucht kein anderes Modul hier volle Rechte, entferne sie, sobald das Hilfsskript antwortet und der "
+        "Zugang nicht mehr in der Gruppe docker ist (Erst-Einrichtung, Abschnitt 6). Welche Datei die Regel enthält, zeigt: "
+        "sudo grep -rl NOPASSWD /etc/sudoers /etc/sudoers.d",
+        tags=[tag], order=34,
     ))
 
 
@@ -108,6 +162,8 @@ def _register_docker_requirement(ctx: ExtensionContext, tag: str) -> None:
 
 class Extension(NodvardExtension):
     async def setup(self, ctx: ExtensionContext) -> None:
+        # Jeder Befehl des Moduls geht durch `OperateExec`, auch auf Servern im Modus „Nur bedienen“.
+        ctx = OperateContext(ctx)  # type: ignore[assignment]
         self._ctx = ctx
         self._catalog = DockerServiceCatalog(ctx)
         self._images = ImageUpdateService(ctx)
@@ -131,10 +187,14 @@ class Extension(NodvardExtension):
         ctx.actions.register(delete_action_spec())
         ctx.actions.register(move_action_spec())
         ctx.actions.register(convert_action_spec())
+        for spec in login_spec():
+            ctx.actions.register(spec)
+        for spec in restore_specs():
+            ctx.actions.register(spec)
         for spec in stack_actions_specs():
             ctx.actions.register(spec)
         # Mit dem Standard-Tag; on_start meldet sie mit dem eingestellten Tag neu an.
-        for spec in container_action_specs() + resource_action_specs() + stack_action_specs():
+        for spec in container_action_specs("docker", OPERATE_DEFAULT_TAG) + resource_action_specs() + stack_action_specs():
             ctx.actions.register(spec)
 
         ctx.settings.declare(
@@ -142,6 +202,7 @@ class Extension(NodvardExtension):
                 "type": "object",
                 "properties": {
                     "docker_host_tag": {"type": "string"},
+                    "docker_operate_tag": {"type": "string"},
                     "url_scheme": {"type": "string", "enum": ["http", "https"]},
                     "image_updates_enabled": {"type": "boolean"},
                     "image_updates_cron": {"type": "string"},
@@ -167,8 +228,10 @@ class Extension(NodvardExtension):
 
         @router.get("/hosts")
         async def docker_hosts() -> dict:
-            """Die Server mit Docker-Markierung, auch ohne Container; nur aus der Datenbank."""
-            return {"hosts": [{"id": h.id, "name": h.name} for h in await self._images.docker_hosts()]}
+            """Die Server mit Docker-Markierung, auch ohne Container; nur aus der Datenbank. `mode`: `operate` für „Nur
+            bedienen“, sonst `full`."""
+            await self._images.docker_hosts()  # räumt entfernte Hosts aus dem Stand der Image-Prüfung
+            return {"hosts": [{"id": h.id, "name": h.name, "mode": "operate" if operate else "full"} for h, operate in await operate_hosts(ctx)]}
 
         @router.get("/image-updates")
         async def image_updates() -> dict:
@@ -190,9 +253,16 @@ class Extension(NodvardExtension):
         async def _docker_host(host_id: str):  # noqa: ANN202 - nodvard_sdk.Host
             """Nur Hosts mit Docker-Tag, sonst liefe `docker ...` per SSH auf jedem Host, dessen ID jemand kennt."""
             host = await ctx.hosts.get(host_id)
-            tag = (await ctx.settings.get()).get("docker_host_tag") or "docker"
-            if host is None or tag not in host.tags:
+            if host is None or not is_docker_host(host, await ctx.settings.get()):
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kein Docker-Host.")
+            return host
+
+        async def _full_docker_host(host_id: str):  # noqa: ANN202 - nodvard_sdk.Host
+            """Wie `_docker_host`, aber 409 mit Grund für Server im Modus „Nur bedienen“, statt dort abgelehnter Befehle."""
+            host = await _docker_host(host_id)
+            settings = await ctx.settings.get()
+            if is_operate_host(host, settings):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=operate_refused(operate_tags(settings)[0]))
             return host
 
         @logs_router.post("/image-updates/check", status_code=status.HTTP_202_ACCEPTED)
@@ -200,7 +270,7 @@ class Extension(NodvardExtension):
             """Startet die Prüfung im Hintergrund (alle Docker-Hosts oder nur `host_id`) und antwortet sofort mit dem Stand
             (`hosts[..].checking`). Lesend, aber sie öffnet SSH-Verbindungen und fragt Registries, deshalb `hosts.execute`
             wie bei den Logs. `force`: Antworten der Registry nicht aus dem 6-Stunden-Speicher nehmen."""
-            hosts = [await _docker_host(host_id)] if host_id else await self._images.docker_hosts()
+            hosts = [await _full_docker_host(host_id)] if host_id else await self._images.docker_hosts()
             self._images.start(hosts, force=force)
             return self._snapshot()
 
@@ -210,7 +280,7 @@ class Extension(NodvardExtension):
             Warnungen es gibt. `ok: false` mit Grund, wenn sich der Container so nicht aktualisieren lässt."""
             if not CONTAINER_NAME_RE.match(container):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ungültiger Containername.")
-            host = await _docker_host(host_id)
+            host = await _full_docker_host(host_id)
             try:
                 plan = await self._applier.plan(host, container)
             except Exception as exc:  # noqa: BLE001 - dem Nutzer zeigen, nicht als 500 verstecken
@@ -227,7 +297,7 @@ class Extension(NodvardExtension):
             Nutzer gesehen hat (`plan_id`). Hat sich der Stand seitdem geändert, 409 mit der Aufforderung, neu zu laden."""
             if not CONTAINER_NAME_RE.match(container):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ungültiger Containername.")
-            host = await _docker_host(host_id)
+            host = await _full_docker_host(host_id)
             try:
                 plan = await self._applier.plan(host, container)
             except Exception as exc:  # noqa: BLE001
@@ -259,7 +329,7 @@ class Extension(NodvardExtension):
         @logs_router.get("/hosts/{host_id}/docker")
         async def docker_storage(host_id: str) -> dict:
             """Belegung (Images, Container, Volumes, Build-Cache) und Images des Hosts, wie `docker system df` sie zeigt."""
-            host = await _docker_host(host_id)
+            host = await _full_docker_host(host_id)
             df = await ctx.exec.run(host, commands.system_df(), timeout_s=60)
             images = await ctx.exec.run(host, commands.images(), timeout_s=30)
             if df.exit_code != 0:
@@ -319,7 +389,7 @@ class Extension(NodvardExtension):
         resources_router = APIRouter()
 
         async def _resources(host_id: str):  # noqa: ANN202 - resources.Snapshot
-            host = await _docker_host(host_id)
+            host = await _full_docker_host(host_id)
             try:
                 return await self._resources.snapshot(host)
             except ResourceProblem as exc:
@@ -352,9 +422,9 @@ class Extension(NodvardExtension):
         ctx.capabilities.provide(stack_executor)
         editor = StackEditor(ctx, stack_executor, Path(str(ctx.data_dir)))
         ctx.capabilities.provide(DockerStackSaveExecutor(ctx, editor, stack_executor))
-        ctx.api.include_router(stack_routes(stacks, _docker_host), permission="hosts.execute")
-        ctx.api.include_router(adopt_routes(ctx, stacks, adopted, _docker_host), permission="hosts.execute")
-        ctx.api.include_router(editor_routes(editor, _docker_host, ctx.api.current_actor), permission="hosts.execute")
+        ctx.api.include_router(stack_routes(stacks, _full_docker_host), permission="hosts.execute")
+        ctx.api.include_router(adopt_routes(ctx, stacks, adopted, _full_docker_host), permission="hosts.execute")
+        ctx.api.include_router(editor_routes(editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
         # Ordner für neue Stacks und eigene Kachel-Adressen schreiben beide das ganze Einstellungsdokument.
         settings_lock = asyncio.Lock()
         new = NewStacks(ctx, editor, stacks, adopted, settings_lock)
@@ -362,19 +432,25 @@ class Extension(NodvardExtension):
         ctx.capabilities.provide(create_executor)
         move = PortainerMove(ctx, stacks, adopted, new)
         ctx.capabilities.provide(DockerPortainerMoveExecutor(ctx, move, create_executor, adopted, stack_executor))
-        ctx.api.include_router(move_routes(move, editor, _docker_host, ctx.api.current_actor), permission="hosts.execute")
+        ctx.api.include_router(move_routes(move, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
         convert = ContainerToStack(ctx, new, adopted, stacks)
         ctx.capabilities.provide(DockerContainerToStackExecutor(ctx, convert, create_executor, adopted, stack_executor))
-        ctx.api.include_router(convert_routes(convert, editor, _docker_host, ctx.api.current_actor), permission="hosts.execute")
-        ctx.api.include_router(new_routes(new, _docker_host, ctx.api.current_actor), permission="hosts.execute")
+        ctx.api.include_router(convert_routes(convert, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
+        known_registries = Registries(ctx)
+        ctx.capabilities.provide(DockerRegistryExecutor(ctx, known_registries))
+        ctx.api.include_router(registry_routes(known_registries, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
+        ctx.api.include_router(new_routes(new, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
         ctx.api.include_router(template_routes(), permission="hosts.execute")
         update = StackUpdate(ctx, stacks, self._images, stack_executor, StackBackups(Path(str(ctx.data_dir))), VolumeBackup(ctx, self._resources))
         update_executor = DockerStackUpdateExecutor(ctx, update, self._images)
         ctx.capabilities.provide(update_executor)
-        ctx.api.include_router(update_routes(update, editor, _docker_host, ctx.api.current_actor), permission="hosts.execute")
+        ctx.api.include_router(update_routes(update, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
+        restore = StackRestore(ctx, update, self._resources)
+        ctx.capabilities.provide(DockerStackRestoreExecutor(ctx, restore))
+        ctx.api.include_router(restore_routes(restore, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
         delete = StackDelete(ctx, stacks, adopted, new, stack_executor)
         ctx.capabilities.provide(DockerStackDeleteExecutor(ctx, delete, adopted, update_executor.drop_backups))
-        ctx.api.include_router(delete_routes(delete, editor, _docker_host, ctx.api.current_actor), permission="hosts.execute")
+        ctx.api.include_router(delete_routes(delete, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
 
         apps_router = APIRouter()
 
@@ -428,6 +504,7 @@ class Extension(NodvardExtension):
             WidgetSpec(
                 id="matrix",
                 title="Container",
+                group="apps",
                 icon="layout-grid",
                 size=GridSize(w=2, h=2),
                 refresh=Refresh(interval_s=30),
@@ -449,7 +526,7 @@ class Extension(NodvardExtension):
         # Nicht in setup(): das liest die Einstellungen (I/O), setup soll nur registrieren. Die Server-Seite fragt die
         # Werkzeuge erst zur Anfragezeit ab.
         settings = await ctx.settings.get()
-        _apply_docker_tag(ctx, settings.get("docker_host_tag") or "docker")
+        _apply_docker_tag(ctx, settings)
         await register_job(ctx, self._images, settings)
         # Ein Update, das beim letzten Beenden noch auf dem Host lief, wird hier weiterverfolgt und gemeldet.
         # Kein Neustart der Aufgabe: sie wartet bis zur Frist des Laufs und meldet dann selbst.
@@ -459,5 +536,5 @@ class Extension(NodvardExtension):
         return HealthReport(healthy=True)
 
     async def on_settings_changed(self, ctx: ExtensionContext, values: dict[str, Any]) -> None:
-        _apply_docker_tag(ctx, values.get("docker_host_tag") or "docker")
+        _apply_docker_tag(ctx, values)
         await register_job(ctx, self._images, await ctx.settings.get())

@@ -1,5 +1,5 @@
-"""Drosselung fehlgeschlagener Anmeldungen in gleitenden Zeitfenstern, bewusst im Speicher: kein Schreibzugriff pro
-Versuch, und die Prüfung läuft vor der teuren Argon2-Verifikation."""
+"""Drosselung fehlgeschlagener Anmeldungen in gleitenden Zeitfenstern, bewusst im Speicher und vor der teuren
+Argon2-Prüfung."""
 
 from __future__ import annotations
 
@@ -18,14 +18,14 @@ MAX_FAILURES_PER_USER = 10
 MAX_FAILURES_PER_IP = 30
 """Fehlversuche je IP über alle Benutzernamen im Fenster, danach 429; bremst das Durchprobieren vieler Namen."""
 MAX_MFA_FAILURES = 5
-"""Falsche 2FA-Codes je `mfa_token`, danach ist es verbraucht; sie zählen auch für (IP, Benutzername), sonst ließe
-sich über immer neue Token weiter raten."""
+"""Falsche 2FA-Codes je `mfa_token`, danach ist es verbraucht; sie zählen auch je IP und Benutzername, sonst ließe
+sich mit immer neuen Token weiter raten."""
 MFA_ENTRY_TTL_SECONDS = 60 * 60
 """So lange wird der Zähler je `mfa_token` aufgehoben, länger als jedes Token lebt."""
 
 MAX_MFA_FAILURES_PER_ACCOUNT = 10
-"""Falsche 2FA-Codes je Konto in `ACCOUNT_WINDOW_SECONDS`, egal von welcher IP, danach 429; wer zum Code kommt, kennt
-das Passwort schon, und mit vielen Adressen ließe er sich sonst durchprobieren."""
+"""Falsche 2FA-Codes je Konto im Fenster, egal von welcher IP, danach 429; sonst ließe sich der Code mit vielen
+Adressen erraten."""
 ACCOUNT_WINDOW_SECONDS = 15 * 60
 MAX_MFA_FAILURES_PER_ACCOUNT_DAY = 20
 """Dasselbe über 24 Stunden; bremst auch langsames, über den Tag verteiltes Raten."""
@@ -37,9 +37,8 @@ _ACCOUNT_LIMITS = (
 TOTP_STEP_SECONDS = 30
 """Länge eines TOTP-Zeitschritts (Standard, wie bei pyotp)."""
 RESTORE_FUTURE_SECONDS = ACCOUNT_DAY_SECONDS
-"""Fehlversuche, die laut Protokoll höchstens so weit in der Zukunft liegen (Uhr ging beim Schreiben vor oder beim Start
-nach, z. B. Raspberry Pi vor dem Zeitabgleich), zählen beim Wiederherstellen als gerade eben. Was weiter voraus liegt,
-zählt nicht, sonst sperrte eine falsch gestellte Uhr jedes Konto einen Tag lang."""
+"""Fehlversuche bis so weit in der Zukunft zählen beim Wiederherstellen als gerade eben, weiter voraus nicht, sonst
+sperrte eine falsch gehende Uhr jedes Konto einen Tag lang."""
 
 _SWEEP_THRESHOLD = 1024
 _UNKNOWN_IP = "unbekannt"
@@ -80,13 +79,12 @@ def lockout_message(retry_after: int) -> str:
 
 
 IPV6_BUCKET_PREFIX = 64
-"""IPv6-Adressen zählen je Netz dieser Größe: Ein Anschluss bekommt meist ein ganzes /64 und könnte sonst mit jeder
-neuen Adresse von vorn raten."""
+"""IPv6-Adressen zählen je /64, denn ein Anschluss bekommt meist ein ganzes /64 und könnte sonst mit jeder Adresse
+von vorn raten."""
 
 
 def ip_bucket(ip: str | None) -> str:
-    """Wofür die Grenzen je Adresse zählen: IPv4 je Adresse, IPv6 je /64, `::ffff:192.0.2.1` als IPv4; Nicht-Adressen
-    (`unbekannt`, `konto:<id>`) bleiben, wie sie sind. Ins Protokoll kommt weiter die echte Adresse."""
+    """Wofür die Grenzen je Adresse zählen: IPv4 je Adresse, IPv6 je /64, `::ffff:192.0.2.1` als IPv4."""
     if not ip:
         return _UNKNOWN_IP
     try:
@@ -131,7 +129,7 @@ _mfa_used: dict[str, float] = {}
 """Hash des `mfa_token` -> Zeitpunkt, an dem damit eine Anmeldung gelungen ist."""
 _totp_steps: dict[str, int] = {}
 """Konto -> letzter angenommener TOTP-Zeitschritt; nach einem Neustart gilt ein Code noch höchstens für sein
-Zeitfenster von rund 90 Sekunden erneut."""
+Zeitfenster erneut."""
 
 
 def reset() -> None:
@@ -159,14 +157,12 @@ def _pruned(store: dict, key, now: float, window: float = WINDOW_SECONDS) -> deq
 
 
 def _retry_after(dq: deque[float], limit: int, now: float) -> int:
-    """0, wenn nicht gesperrt; sonst Sekunden, bis wieder weniger als `limit` Einträge im Fenster liegen."""
     if len(dq) < limit:
         return 0
     return max(1, math.ceil(dq[len(dq) - limit] + WINDOW_SECONDS - now))
 
 
 def _account_retry(dq: deque[float], now: float) -> int:
-    """0, wenn das Konto für weitere 2FA-Versuche frei ist; sonst die längste Wartezeit über beide Fenster."""
     return max(
         (_retry_after_window(dq, limit, window, now) for limit, window in _ACCOUNT_LIMITS),
         default=0,
@@ -217,7 +213,7 @@ def begin(
     account: str | None = None,
 ) -> Attempt:
     """Vor der Passwort-/Code-Prüfung aufrufen: wirft `MfaTokenUsed`, `MfaExhausted` oder `Locked`, sonst zählt der
-    Versuch sofort; `account` nur beim zweiten Faktor angeben (zusätzliche IP-unabhängige Grenze je Konto)."""
+    Versuch sofort."""
     # `ip` ist `request.client.host`. Hinter einem Reverse-Proxy ist das die echte Adresse nur, wenn der Proxy unter
     # `system.trusted_proxies` steht (`api/proxy_headers.py`); sonst teilen sich alle Anfragen die Grenze je IP.
     ip = ip or _UNKNOWN_IP
@@ -264,8 +260,8 @@ def begin(
 
 
 def failed(attempt: Attempt) -> list[str]:
-    """Der (schon gezählte) Versuch war falsch; gibt die Bereiche zurück, deren Sperre genau jetzt beginnt, je Sperre
-    nur einmal, damit der Aufrufer einen Audit-Eintrag schreibt."""
+    """Der (schon gezählte) Versuch war falsch; gibt die Bereiche zurück, deren Sperre genau jetzt beginnt (für den
+    Audit-Eintrag)."""
     started: list[str] = []
     with _lock:
         now = _now()
@@ -328,8 +324,8 @@ def succeeded(attempt: Attempt) -> None:
 
 
 def claim_success(attempt: Attempt, *, totp_step: int | None = None) -> bool:
-    """Der zweite Faktor stimmt (vor dem Ausgeben der Anmeldung aufrufen); `False`, wenn der Code (`totp_step`, nur beim
-    Authenticator-Weg) oder das `mfa_token` schon benutzt ist; Wiederherstellungs-Codes verbraucht die Datenbank."""
+    """Der zweite Faktor stimmt (vor dem Ausgeben der Anmeldung aufrufen); `False`, wenn der Code oder das
+    `mfa_token` schon benutzt ist."""
     # Prüfen und Eintragen in einem Zug, damit zwei gleichzeitige Anfragen nicht beide durchkommen.
     with _lock:
         if attempt.mfa_key is not None and attempt.mfa_key in _mfa_used:
@@ -344,16 +340,14 @@ def claim_success(attempt: Attempt, *, totp_step: int | None = None) -> bool:
 
 
 def remember_totp_step(account: str, step: int) -> None:
-    """Ein Authenticator-Code wurde außerhalb von `claim_success` angenommen (Einrichtung bestätigt); sein Zeitschritt
-    gilt danach als benutzt. Abgelehnt wird hier nichts, denn der Code gehört zu einem neuen Schlüssel."""
+    """Ein Authenticator-Code wurde außerhalb von `claim_success` angenommen (Einrichtung), sein Zeitschritt gilt
+    danach als benutzt."""
     with _lock:
         if step > _totp_steps.get(account, -1):
             _totp_steps[account] = step
 
 
 def _restored(wall_times: Iterable[float], *, window: float, limit: int, now: float, now_wall: float) -> list[float]:
-    """Zeitpunkte aus dem Protokoll (Wanduhr) als Zeitpunkte dieses Prozesses (monoton) mit demselben Alter, nur die im
-    Fenster, davon die jüngsten `limit`, aufsteigend; Zukunft siehe `RESTORE_FUTURE_SECONDS`."""
     ages = sorted(
         max(0.0, now_wall - ts)
         for ts in wall_times
@@ -368,8 +362,8 @@ def _merge(store: dict, key, times: list[float]) -> None:
 
 
 def restore_account_failures(account: str, wall_times: Iterable[float], *, now_wall: float | None = None) -> int:
-    """Trägt falsche 2FA-Codes aus dem Protokoll (`wall_times`, Sekunden seit 1970) für die Grenze je Konto wieder
-    ein und gibt ihre Zahl zurück; nur einmal beim Start aufrufen, bevor Anfragen kommen (sonst zählen sie doppelt)."""
+    """Trägt falsche 2FA-Codes aus dem Protokoll für die Grenze je Konto wieder ein, nur einmal beim Start aufrufen
+    (sonst zählen sie doppelt)."""
     # Sonst finge die Grenze je Konto nach jedem Neustart von vorn an, und wer Sitzung und Passwort hat, könnte im
     # Wechsel raten und neu starten.
     with _lock:
@@ -385,8 +379,8 @@ def restore_account_failures(account: str, wall_times: Iterable[float], *, now_w
 
 
 def restore_failures(ip: str, username: str, wall_times: Iterable[float], *, now_wall: float | None = None) -> int:
-    """Wie `restore_account_failures`, für den Zähler je (`ip`, `username`); gedacht für Zähler, die mit einem
-    Pseudo-Namen an einem Konto hängen (`services.auth.RECOVERY_ATTEMPT_KEY`); die je Adresse bleiben flüchtig."""
+    """Wie `restore_account_failures`, für den Zähler je (`ip`, `username`) bei Zählern mit Pseudo-Namen
+    (`RECOVERY_ATTEMPT_KEY`)."""
     with _lock:
         restored = _restored(
             wall_times,

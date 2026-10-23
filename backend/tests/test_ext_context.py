@@ -1993,6 +1993,41 @@ async def test_mark_gone_touches_only_own_hosts_and_needs_write(tmp_path, db_ses
 
 
 @pytest.mark.asyncio
+async def test_set_status_touches_only_own_hosts_outside_maintenance_and_gone(tmp_path, db_session):
+    from nodvard_deck.models import Host
+
+    _, _, ctx = _build(tmp_path, permissions=["hosts.read", "hosts.write"])
+    created = await ctx.hosts.upsert_discovered([
+        DiscoveredHost(provider_ref=ref, name=name, address="10.0.0.20", status=HostStatus.UP)
+        for ref, name in (("node/a", "knoten"), ("lxc/201", "dns"), ("lxc/202", "wartung"), ("lxc/203", "weg"))
+    ])
+    ids = {h.provider_ref: h.id for h in created}
+    foreign = Host(name="fremd", address="10.0.0.21", status="up", provider_ext_id="andere", provider_ref="node/a")
+    db_session.add(foreign)
+    await db_session.flush()
+    foreign_id = foreign.id
+    (await db_session.get(Host, ids["lxc/202"])).status = "maintenance"
+    await db_session.commit()
+    await ctx.hosts.mark_gone(["lxc/203"])
+
+    refs = ["node/a", "lxc/201", "lxc/202", "lxc/203", "lxc/999"]
+    assert await ctx.hosts.set_status(refs, HostStatus.DOWN) == 2
+    assert await ctx.hosts.set_status(refs, HostStatus.DOWN) == 0
+    assert await ctx.hosts.set_status([], HostStatus.DOWN) == 0
+    db_session.expire_all()
+    status = {ref: (await db_session.get(Host, host_id)).status for ref, host_id in ids.items()}
+    assert status == {"node/a": "down", "lxc/201": "down", "lxc/202": "maintenance", "lxc/203": "up"}
+    assert (await db_session.get(Host, foreign_id)).status == "up"
+
+    assert await ctx.hosts.set_status(["lxc/201"], HostStatus.UNKNOWN) == 1
+    with pytest.raises(ValueError):
+        await ctx.hosts.set_status(["node/a"], HostStatus.MAINTENANCE)
+    _, _, reader = _build(tmp_path, permissions=["hosts.read"])
+    with pytest.raises(PermissionDenied):
+        await reader.hosts.set_status(["node/a"], HostStatus.UP)
+
+
+@pytest.mark.asyncio
 async def test_exec_connection_records_the_login_once_it_worked(tmp_path, db_session, test_settings, monkeypatch):
     """Eine angemeldete Verbindung (z. B. die Messung der System-Erweiterung) belegt, dass der Zugang klappt,
     auch wenn nie „Verbindung prüfen“ gedrückt wurde."""

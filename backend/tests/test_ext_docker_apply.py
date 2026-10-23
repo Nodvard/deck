@@ -1,6 +1,6 @@
 """Image-Updates EINSPIELEN (Docker-Modul): erkennen, Befehle bauen, Ergebnis beurteilen.
 
-Teil 1 (rein): `image_apply.py` ohne Host. Die Fluesse gegen ein Fake-Docker stehen weiter unten."""
+Teil 1 (rein): `image_apply.py` ohne Host. Die Flüsse gegen ein Fake-Docker stehen weiter unten."""
 
 from __future__ import annotations
 
@@ -85,7 +85,7 @@ def test_relative_config_files_belong_to_the_project_directory_and_env_files_are
         ("stack", {"lbls": {"com.docker.stack.namespace": "prod"}}, "swarm"),
         ("oneoff", {"lbls": {**labels(), L("oneoff"): "True"}}, "oneoff"),
         ("portainer-dir", {"lbls": {**labels(), L("project.working_dir"): "/data/compose/7"}}, "portainer"),
-        # Auch wenn die Dateien zufaellig auf dem Host lesbar sind: Portainer haelt die Variablen in seiner Datenbank.
+        # Auch wenn die Dateien zufällig auf dem Host lesbar sind: Portainer hält die Variablen in seiner Datenbank.
         ("portainer-files", {"lbls": {**labels(), L("project.config_files"): "/data/compose/7/docker-compose.yml"}}, "portainer"),
         ("lattice-name", {"image": "lattice:latest"}, "self"),
         ("lattice-hub", {"image": "docker.io/library/lattice:1"}, "self"),
@@ -118,20 +118,43 @@ def test_the_container_the_dashboard_runs_in_is_never_updated_here():
 
 
 @pytest.mark.parametrize("image", ["ghcr.io/other/deck:1", "nodvard/deck-tools:1", "ghcr.io/nodvard/link:1", "deck:1", "ghcr.io/nodvard/decks:1",
-                                   "ghcr.io/other/deck-updater:1", "deck-updater:1", "ghcr.io/nodvard/deck-updaters:1"])
-def test_only_nodvard_deck_is_the_dashboard_not_any_repo_called_deck(image):
+                                   "ghcr.io/other/deck-updater:1", "deck-updater:1", "ghcr.io/nodvard/deck-updaters:1",
+                                   "ghcr.io/other/dock:1", "dock:1", "ghcr.io/nodvard/docks:1", "nodvard-dock-tools:1"])
+def test_only_nodvard_deck_and_dock_are_the_dashboard_not_any_repo_with_that_name(image):
     assert isinstance(ia.classify(info(image=image), own=False), ComposeTarget), image
 
 
 @pytest.mark.parametrize("image", ["ghcr.io/nodvard/deck-updater:1", "ghcr.io/nodvard/deck-updater:0.7.0@sha256:" + "c" * 64,
                                    "registry.local:5000/nodvard/deck-updater"])
 def test_the_update_helper_is_never_updated_here_and_the_reason_says_how(image):
-    """Der Update-Helfer hat Zugriff auf Docker; neu angelegt mitten in einem Update des Dashboards liesse er es halb
+    """Der Update-Helfer hat Zugriff auf Docker; neu angelegt mitten in einem Update des Dashboards ließe er es halb
     fertig liegen. Kein Knopf, stattdessen der Weg auf dem Server."""
     result = ia.classify(info(image=image), own=False)
     assert isinstance(result, NotUpdatable) and result.kind == "self", image
     assert "Update-Helfer" in result.why and "docker compose pull updater" in result.why
     assert "deploy_pi" not in result.why
+
+
+@pytest.mark.parametrize("own", [False, True])
+@pytest.mark.parametrize(
+    ("image", "why"),
+    [
+        ("ghcr.io/nodvard/dock:latest", ia.SELF_WHY_DOCK),
+        ("ghcr.io/nodvard/dock:0.11.0", ia.SELF_WHY_DOCK),
+        ("ghcr.io/nodvard/dock@sha256:" + "e" * 64, ia.SELF_WHY_DOCK),
+        ("registry.local:5000/nodvard/dock:1", ia.SELF_WHY_DOCK),
+        ("nodvard-dock:selbst", ia.SELF_WHY_DOCK_BUILT),
+    ],
+)
+def test_nodvard_dock_is_never_updated_here_and_the_reason_says_how(image, why, own):
+    # Die Update-Suche im Dashboard kennt nur das Image von Nodvard Deck: kein Verweis dorthin und keiner aufs Deploy-Skript.
+    assert ia.is_self_image(image)
+    result = ia.classify(info(image=image), own=own)
+    assert isinstance(result, NotUpdatable) and result.kind == "self", image
+    assert result.why == why and "„docker compose up -d“" in result.why
+    assert "Einstellungen" not in result.why and "Deploy-Skript" not in result.why
+    # Ein selbst gebautes Image liegt in keiner Registry, „pull“ scheiterte dort.
+    assert ("„docker compose pull“" in result.why) == (why == ia.SELF_WHY_DOCK)
 
 
 HELPER_TITLE = {"org.opencontainers.image.title": "Nodvard Deck Update-Helfer"}
@@ -140,8 +163,8 @@ HELPER_TITLE = {"org.opencontainers.image.title": "Nodvard Deck Update-Helfer"}
 @pytest.mark.parametrize("image", ["registry.local:5000/spiegel/updater:1", "harbor.example.org/proxy-cache/helfer:0.7.0",
                                    "updater:lokal", "ghcr.io/other/deck-tools:1"])
 def test_a_mirrored_update_helper_is_recognised_by_the_title_of_its_image(image):
-    """Unter einem anderen Namen gespiegelt (eigene Registry, Proxy-Cache) hilft der Name nicht. Docker uebernimmt die
-    Labels des Images in die des Containers: Der Titel aus deploy/updater/Dockerfile verraet den Helfer trotzdem."""
+    """Unter einem anderen Namen gespiegelt (eigene Registry, Proxy-Cache) hilft der Name nicht. Docker übernimmt die
+    Labels des Images in die des Containers: Der Titel aus deploy/updater/Dockerfile verrät den Helfer trotzdem."""
     result = ia.classify(info({**labels(), **HELPER_TITLE}, image=image), own=False)
     assert isinstance(result, NotUpdatable) and result.kind == "self", image
     assert "Update-Helfer" in result.why and "docker compose pull updater" in result.why
@@ -155,8 +178,8 @@ def test_other_titles_keep_the_button(title):
 
 
 def test_the_title_is_the_one_the_helper_image_really_carries():
-    """Dieselbe Angabe in deploy/updater/Dockerfile und in release.yml (die Labels dort ueberschreiben die des
-    Dockerfiles); aendert sich der Titel, muss die Erkennung mitziehen."""
+    """Dieselbe Angabe in deploy/updater/Dockerfile und in release.yml (die Labels dort überschreiben die des
+    Dockerfiles); ändert sich der Titel, muss die Erkennung mitziehen."""
     import re
 
     root = Path(__file__).resolve().parents[2]
@@ -173,7 +196,7 @@ def test_the_title_is_the_one_the_helper_image_really_carries():
 @pytest.mark.parametrize("image", ["ghcr.io/nodvard/deck:latest", "ghcr.io/nodvard/deck:0.7", "ghcr.io/nodvard/deck@sha256:" + "d" * 64])
 def test_the_official_image_points_to_the_updates_in_the_settings(image, own):
     """Wer das offizielle Image nutzt, aktualisiert unter Einstellungen -> System -> Updates, nicht mit dem
-    Deploy-Skript (das gibt es nur fuer selbst gebaute Images)."""
+    Deploy-Skript (das gibt es nur für selbst gebaute Images)."""
     result = ia.classify(info(image=image), own=own)
     assert isinstance(result, NotUpdatable) and result.kind == "self"
     assert "Einstellungen → System → Updates" in result.why and "deploy_pi" not in result.why
@@ -520,7 +543,7 @@ def test_the_public_pull_failure_text_never_quotes_a_line_from_the_host():
     public = ia.describe_pull_failure(log, public=True)
     assert "GEHEIM" not in public
     assert public == "Herunterladen fehlgeschlagen – Einzelheiten stehen in der Aktion. Der Container läuft unverändert weiter."
-    # Feste Gruende bleiben, wie sie sind.
+    # Feste Gründe bleiben, wie sie sind.
     assert ia.describe_pull_failure("toomanyrequests", public=True) == ia.describe_pull_failure("toomanyrequests")
     assert ia.describe_pull_failure("no space left", public=True) == ia.describe_pull_failure("no space left")
 
@@ -546,7 +569,7 @@ def test_result_texts_contain_ids_rollback_and_a_log_tail():
 
 
 # =============================================================================================
-# Teil 2: gegen ein Fake-Docker (Hinweise beim Pruefen, Uebersicht, spaeter der Lauf)
+# Teil 2: gegen ein Fake-Docker (Hinweise beim Prüfen, Übersicht, später der Lauf)
 # =============================================================================================
 
 import asyncio  # noqa: E402
@@ -721,8 +744,8 @@ class Ctx:
 
 
 def pretend_own_container(monkeypatch, short_id: str) -> None:
-    """Nodvard Deck laeuft in diesem Container. Gesetzt wird dort, wo der Applier seine Funktion her hat:
-    andere Tests laden die Extension neu, ein frisch importiertes `capabilities` waere ein anderes Modul."""
+    """Nodvard Deck läuft in diesem Container. Gesetzt wird dort, wo der Applier seine Funktion her hat:
+    andere Tests laden die Extension neu, ein frisch importiertes `capabilities` wäre ein anderes Modul."""
     monkeypatch.setitem(ap.is_own_container.__globals__, "_own_container_id", lambda: short_id)
 
 
@@ -741,7 +764,7 @@ async def checked(tmp_path, docker: FakeApplyDocker | None = None):
     return service, applier, ctx
 
 
-# --- Hinweise beim Pruefen ------------------------------------------------------------------
+# --- Hinweise beim Prüfen ------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -828,7 +851,7 @@ def test_the_named_inspect_builder_checks_names_itself():
             iu.cmd_inspect_named([bad])
 
 
-# --- Uebersicht (plan) ----------------------------------------------------------------------
+# --- Übersicht (plan) ----------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -893,7 +916,7 @@ async def test_the_own_container_and_stale_or_missing_checks_block_the_plan(tmp_
     assert (await applier.plan(ctx.host, "nextcloud-app")).kind == "self"
     monkeypatch.undo()
 
-    # Unbekannter Container / ungueltiger Name / kein "Update" laut letzter Pruefung.
+    # Unbekannter Container / ungültiger Name / kein "Update" laut letzter Prüfung.
     assert (await applier.plan(ctx.host, "gibt-es-nicht")).kind == "gone"
     assert (await applier.plan(ctx.host, "web\n")).kind == "name"
     docker.recreate_with_new_image()
@@ -901,7 +924,7 @@ async def test_the_own_container_and_stale_or_missing_checks_block_the_plan(tmp_
     no_update = await applier.plan(ctx.host, "nextcloud-app")
     assert no_update.kind == "no_update" and "Image-Updates prüfen" in no_update.why
     service2, applier2, ctx2 = make_applier(tmp_path, FakeApplyDocker())
-    assert (await applier2.plan(ctx2.host, "nextcloud-app")).kind == "no_update"  # noch nie geprueft
+    assert (await applier2.plan(ctx2.host, "nextcloud-app")).kind == "no_update"  # noch nie geprüft
 
 
 @pytest.mark.asyncio
@@ -1002,7 +1025,7 @@ POLL_BACK_DONE = "@@rc=0\n@@step=rollback-done\n@@tail\n@@step=rollback\nContain
 
 
 class FlowDocker(FakeApplyDocker):
-    """Dazu: der entkoppelte Lauf (Start, Abfragen) und die Pruefung nach dem Lauf."""
+    """Dazu: der entkoppelte Lauf (Start, Abfragen) und die Prüfung nach dem Lauf."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -1015,7 +1038,7 @@ class FlowDocker(FakeApplyDocker):
         self.rollback_tag_id: str | None = IMG_ID
         self.poll_gate: asyncio.Event | None = None
         self.on_poll = None
-        # Der automatische Rueckweg: eigener Start, eigene Abfragen, danach laeuft wieder das alte Image.
+        # Der automatische Rückweg: eigener Start, eigene Abfragen, danach läuft wieder das alte Image.
         self.rollback_launched: list[str] = []
         self.rollback_launch_outs: list[str] = []
         self.rollback_polls: list[str] = [POLL_BACK_DONE]
@@ -1023,7 +1046,7 @@ class FlowDocker(FakeApplyDocker):
         self.rollback_verify: dict = {}
         self.rolled_back = False
         self.rollback_running_before = False
-        """Der Rueckweg lief schon vor einem Neustart des Dashboards (er ist auf dem Host zu finden)."""
+        """Der Rückweg lief schon vor einem Neustart des Dashboards (er ist auf dem Host zu finden)."""
 
     async def run_run(self, command: str) -> FakeResult:
         if command.startswith("echo @@launch") and "@@step=rollback" in command:
@@ -1037,7 +1060,7 @@ class FlowDocker(FakeApplyDocker):
             return FakeResult(stdout=self.launch_out)
         if command.startswith('d="$HOME"') and "@@running" in command and ap.rollback_run_id(RUN_ID) in command:
             if not self.rollback_launched and not self.rollback_running_before:
-                return FakeResult(stdout="@@unknown\n")  # kein Rueckweg auf dem Host
+                return FakeResult(stdout="@@unknown\n")  # kein Rückweg auf dem Host
             item = self.rollback_polls.pop(0) if len(self.rollback_polls) > 1 else self.rollback_polls[0]
             if "@@rc=0" in item and self.rollback_restores:
                 self.infos["nextcloud-app"]["image_id"] = IMG_ID
@@ -1117,7 +1140,7 @@ async def test_success_pulls_recreates_verifies_rechecks_and_audits(tmp_path, fa
     assert result.detail["new_image_id"] == NEW_ID and result.detail["old_image_id"] == IMG_ID and result.detail["run_id"] == RUN_ID
     assert result.detail["log_path"] == f"~/.local/state/lattice-image-updates/{RUN_ID}.log"
 
-    # Reihenfolge der Befehle: Uebersicht (lesend) -> Start -> Abfragen -> Pruefung -> Neubewertung.
+    # Reihenfolge der Befehle: Übersicht (lesend) -> Start -> Abfragen -> Prüfung -> Neubewertung.
     order = [c for c in docker.calls if c.startswith(("echo @@launch", 'd="$HOME"', "ids=$(docker ps -aq"))]
     assert order[0].startswith("echo @@launch") and order[-1].startswith("ids=$(docker ps -aq")
     assert all(c.startswith('d="$HOME"') for c in order[1:4]) and all(c.startswith("ids=") for c in order[4:])
@@ -1173,7 +1196,7 @@ async def test_a_failing_pull_leaves_the_container_alone_and_always_pushes(tmp_p
 
 
 def assert_no_host_text(ctx, applier, secret: str) -> None:
-    """Uebersicht der Seite (`applied`, ohne besonderes Recht lesbar), Protokoll und Meldung tragen keine Zeile vom Host."""
+    """Übersicht der Seite (`applied`, ohne besonderes Recht lesbar), Protokoll und Meldung tragen keine Zeile vom Host."""
     (applied,) = applier.snapshot()["applied"].values()
     (row,) = ctx.audit_rows
     (note,) = ctx.sent
@@ -1274,7 +1297,7 @@ async def test_a_healthcheck_that_stays_on_starting_is_a_success_with_a_note(tmp
 @pytest.mark.asyncio
 async def test_the_same_image_after_the_pull_is_a_success_that_says_nothing_changed(tmp_path, fast):
     docker, service, applier, ctx, plan = await flow(tmp_path)
-    docker.recreate_on_success = False  # Multi-Arch: die Registry hat etwas Neues, fuer diesen Host aber nicht
+    docker.recreate_on_success = False  # Multi-Arch: die Registry hat etwas Neues, für diesen Host aber nicht
     result = await applier.apply(request_for(plan))
     assert result.success is True
     assert result.output.splitlines()[0] == "Für diesen Host gibt es kein neueres Image – der Container bleibt, wie er ist."
@@ -1343,6 +1366,16 @@ async def test_the_executor_rebuilds_the_command_and_ignores_what_the_payload_wo
     assert not any("evil" in c or "p; id" in c for c in docker.calls)
     unknown_host = request_for(plan).model_copy(update={"host_ref": "gibt-es-nicht"})
     assert (await applier.apply(unknown_host)).error == "Host nicht gefunden."
+
+
+@pytest.mark.asyncio
+async def test_a_server_switched_to_operate_only_says_so(tmp_path, fast):
+    _, _, applier, ctx, plan = await flow(tmp_path)
+    ctx.host.tags = ["docker-bedienen"]
+    done = await applier.apply(request_for(plan))
+    assert done.success is False and done.error.startswith("Auf diesem Server ist Docker im Modus „Nur bedienen“")
+    ctx.host.tags = ["nas"]
+    assert (await applier.apply(request_for(plan))).error == "Kein Docker-Host."
 
 
 @pytest.mark.asyncio
@@ -1440,7 +1473,7 @@ async def test_an_unknown_run_lost_runs_and_silence_end_with_clear_messages(tmp_
 
 @pytest.mark.asyncio
 async def test_a_dashboard_shutdown_keeps_the_run_and_the_next_steps_possible(tmp_path, fast):
-    """`CancelledError` (Dashboard faehrt herunter): der Lauf auf dem Host laeuft weiter, es wird
+    """`CancelledError` (Dashboard fährt herunter): der Lauf auf dem Host läuft weiter, es wird
     nichts als fertig gemeldet, die Sperren werden frei. (Fortsetzen nach dem Neustart: Teil 3.)"""
     docker, service, applier, ctx, plan = await flow(tmp_path)
     docker.poll_gate = asyncio.Event()
@@ -1527,7 +1560,7 @@ def test_the_spec_is_not_bound_to_hosts_and_the_gate_checks_the_command():
 
 
 # =============================================================================================
-# Teil 4: Nachbesserungen aus der Gegenpruefung
+# Teil 4: Nachbesserungen aus der Gegenprüfung
 # =============================================================================================
 
 
@@ -1567,7 +1600,7 @@ async def test_success_without_healthcheck_needs_two_reads_and_waits_between_the
     assert result.success is True
     assert len(docker.calls_with("ids=$(docker ps -aq")) >= 2, "ein einzelnes 'running' reicht ohne Healthcheck nicht"
 
-    # Mit Healthcheck (gesund) genuegt eine Lesung.
+    # Mit Healthcheck (gesund) genügt eine Lesung.
     docker2, service2, applier2, ctx2, plan2 = await flow(tmp_path)
     docker2.verify_overrides = [{"health": "healthy"}]
     result2 = await applier2.apply(request_for(plan2))
@@ -1593,7 +1626,7 @@ def test_quoted_values_in_compose_errors_never_reach_the_text():
     stderr = 'WARN irgendwas\nerror while interpolating services.app.environment.PW: invalid interpolation format for "geheim$123" in \'auch$geheim\''
     why = ia.check_config("", stderr, 1, target()).why
     assert "geheim" not in why and why.endswith('in "…"') and "docker compose config meldet einen Fehler:" in why
-    # Nachrichten ohne Anfuehrungszeichen bleiben lesbar.
+    # Nachrichten ohne Anführungszeichen bleiben lesbar.
     assert ia.check_config("", "yaml: line 3: mapping values", 1, target()).why.endswith("yaml: line 3: mapping values")
 
 
@@ -1644,7 +1677,7 @@ async def test_only_a_human_with_a_big_enough_risk_level_may_start_an_update(tmp
     refused = await applier.apply(base.model_copy(update={"risk": Risk.LOW}))
     assert refused.success is False and refused.error == ap.RISK_TOO_LOW_MESSAGE
     no_launch(docker)
-    # Gleich hoch oder hoeher ist in Ordnung.
+    # Gleich hoch oder höher ist in Ordnung.
     assert (await applier.apply(base.model_copy(update={"risk": Risk.HIGH}))).success is True
 
 
@@ -1695,7 +1728,7 @@ async def wait_for_poll(docker: FlowDocker) -> None:
 
 
 async def interrupt_update(tmp_path):
-    """Ein Update laeuft, das Dashboard wird beendet (CancelledError): der Eintrag bleibt."""
+    """Ein Update läuft, das Dashboard wird beendet (CancelledError): der Eintrag bleibt."""
     docker, service, applier, ctx, plan = await flow(tmp_path)
     docker.poll_gate = asyncio.Event()
     task = asyncio.ensure_future(applier.apply(request_for(plan)))
@@ -1760,7 +1793,7 @@ async def test_a_failed_run_forgets_its_entry_too_and_other_entries_stay(tmp_pat
     docker.polls = ["@@rc=10\n@@step=pull\n@@tail\nEs ging schief\n"]
     assert (await applier.apply(request_for(plan))).success is False
     assert list(stored_runs(ctx)) == ["imgupd_ffffffffffffffff"]
-    # Auch ein Start, der gar nicht zustande kam, hinterlaesst nichts.
+    # Auch ein Start, der gar nicht zustande kam, hinterlässt nichts.
     docker.launch_out = "@@launch\n@@nopid\n"
     assert (await applier.apply(request_for(plan))).error.startswith("Update-Lauf konnte nicht gestartet werden")
     assert list(stored_runs(ctx)) == ["imgupd_ffffffffffffffff"]
@@ -1781,7 +1814,7 @@ async def test_after_the_restart_the_run_is_polled_verified_reported_and_forgott
     assert await applier.resume_interrupted() == 1
 
     assert not docker.calls_with("echo @@launch"), "nichts wird ein zweites Mal gestartet"
-    # Zwei Abfragen des Updates, dazu eine Nachfrage, ob vor dem Neustart schon ein Rueckweg lief.
+    # Zwei Abfragen des Updates, dazu eine Nachfrage, ob vor dem Neustart schon ein Rückweg lief.
     assert len(docker.polls_made()) == 3 and docker.calls_with("ids=$(docker ps -aq")
     assert docker.calls_with(ap.rollback_run_id(RUN_ID))
     assert stored_runs(ctx) == {} and applier._busy == {} and applier.snapshot()["applying"] == {}
@@ -1917,7 +1950,7 @@ async def test_a_failing_host_lookup_keeps_the_entry_for_the_next_start(tmp_path
 
 @pytest.mark.asyncio
 async def test_a_run_this_process_still_looks_after_is_not_resumed_a_second_time(tmp_path, resume_fast):
-    """Extension aus- und wieder eingeschaltet: das alte `apply()` laeuft in der Gate-Aufgabe weiter."""
+    """Extension aus- und wieder eingeschaltet: das alte `apply()` läuft in der Gate-Aufgabe weiter."""
     docker, service, applier, ctx, plan = await flow(tmp_path)
     docker.poll_gate = asyncio.Event()
     task = asyncio.ensure_future(applier.apply(request_for(plan)))
@@ -1975,6 +2008,9 @@ async def test_entries_of_unknown_hosts_or_with_broken_content_are_dropped_with_
         "imgupd_6666666666666666": {**good, "run_id": "imgupd_6666666666666666", "started_at": "gestern"},
         "imgupd_7777777777777777": {**good, "run_id": "imgupd_7777777777777777", "started_at": "2026-01-01T00:00:00+00:00"},
         "imgupd_8888888888888888": {**good, "run_id": "imgupd_8888888888888888", "started_at": None},
+        "imgupd_9999999999999999": {**good, "run_id": "imgupd_9999999999999999", "target": "kein Ziel"},
+        "imgupd_aaaaaaaaaaaaaaaa": {**good, "run_id": "imgupd_aaaaaaaaaaaaaaaa", "target": {k: v for k, v in good["target"].items() if k != "image"}},
+        "imgupd_bbbbbbbbbbbbbbbb": {**good, "run_id": "imgupd_bbbbbbbbbbbbbbbb", "container": "anderer"},
     }
     runs_file(ctx).write_text(json.dumps({"runs": runs}), encoding="utf-8")
     docker.calls.clear()
@@ -1983,7 +2019,8 @@ async def test_entries_of_unknown_hosts_or_with_broken_content_are_dropped_with_
         assert await applier.resume_interrupted() == 0
     assert stored_runs(ctx) == {} and docker.calls == [] and ctx.sent == [] and ctx.audit_rows == []
     dropped = [r.getMessage() for r in caplog.records if "image_update_resume_dropped" in r.getMessage()]
-    assert len(dropped) == 9 and any("existiert nicht mehr" in m for m in dropped) and any("zu alt" in m for m in dropped)
+    assert len(dropped) == 12 and any("existiert nicht mehr" in m for m in dropped) and any("zu alt" in m for m in dropped)
+    assert all(any(reason in m for m in dropped) for reason in ("kein Ziel", "Ziel unvollständig", "Eintrag unvollständig"))
     assert applier._busy == {} and applier.snapshot()["applying"] == {}
 
 
@@ -2004,7 +2041,7 @@ async def test_a_broken_file_is_ignored_with_a_log_line_and_the_next_update_repl
 async def test_while_resuming_the_container_counts_as_applying_and_the_project_is_locked(tmp_path, resume_fast):
     docker, ctx, plan = await interrupt_update(tmp_path)
     service, applier = new_dashboard(ctx)
-    await service.check_host(ctx.host)  # die Seite kennt das Update noch: nur die Sperre haelt ein zweites auf
+    await service.check_host(ctx.host)  # die Seite kennt das Update noch: nur die Sperre hält ein zweites auf
     docker.poll_gate = asyncio.Event()
     task = asyncio.ensure_future(applier.resume_interrupted())
     await wait_for_poll(docker)
@@ -2093,7 +2130,7 @@ async def test_an_entry_whose_project_is_busy_is_dropped_the_running_update_repo
 
 
 # =============================================================================================
-# Automatischer Rueckweg: startet die neue Version nicht sauber, laeuft danach wieder die alte
+# Automatischer Rückweg: startet die neue Version nicht sauber, läuft danach wieder die alte
 # =============================================================================================
 
 BACK_TAG = "docker tag lattice-rollback/nextcloud-app-902344c2:previous nextcloud:30-apache"
@@ -2182,7 +2219,7 @@ async def test_no_automatic_rollback_without_a_proven_backup_image(tmp_path, fas
     monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
     docker, service, applier, ctx, plan = await flow(tmp_path)
     docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
-    docker.rollback_tag_id = None  # das Sicherungs-Image fehlt (z. B. aufgeraeumt)
+    docker.rollback_tag_id = None  # das Sicherungs-Image fehlt (z. B. aufgeräumt)
     result = await applier.apply(request_for(plan))
     assert result.success is False and docker.rollback_launched == []
 
@@ -2228,8 +2265,8 @@ async def test_a_still_held_project_lock_is_waited_out_briefly(tmp_path, fast, m
 
 @pytest.mark.asyncio
 async def test_a_restart_during_the_rollback_reports_the_failed_start_and_the_rollback_not_a_success(tmp_path, resume_fast):
-    """Lief der Rueckweg schon, als das Dashboard neu startete, saehe die Pruefung das alte Image und urteilte "kein
-    neueres Image" (Erfolg). Stattdessen: den laufenden Rueckweg weiterverfolgen und den Fehlstart melden."""
+    """Lief der Rückweg schon, als das Dashboard neu startete, sähe die Prüfung das alte Image und urteilte "kein
+    neueres Image" (Erfolg). Stattdessen: den laufenden Rückweg weiterverfolgen und den Fehlstart melden."""
     docker, ctx, plan = await interrupt_update(tmp_path)
     docker.polls = [POLL_DONE]
     docker.rollback_running_before = True
@@ -2261,7 +2298,7 @@ def test_data_stores_never_get_an_automatic_rollback():
 
 @pytest.mark.asyncio
 async def test_unhealthy_alone_is_no_reason_for_an_automatic_rollback(tmp_path, fast, monkeypatch):
-    """Eine App mitten in einer langen Datenumstellung kann "ungesund" melden -- sie abzubrechen waere schlimmer."""
+    """Eine App mitten in einer langen Datenumstellung kann "ungesund" melden -- sie abzubrechen wäre schlimmer."""
     monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
     docker, service, applier, ctx, plan = await flow(tmp_path)
     docker.verify_overrides = [{"health": "unhealthy"}]
@@ -2274,3 +2311,184 @@ def test_the_approver_sees_the_automatic_rollback_in_the_reason():
     text = ia.reason_text("docker", "web", "nginx:1.27", "web", "nginx", Risk.MEDIUM, auto_rollback=True)
     assert text.endswith(ia.AUTO_ROLLBACK_REASON)
     assert ia.AUTO_ROLLBACK_REASON not in ia.reason_text("docker", "web", "nginx:1.27", "web", "nginx", Risk.MEDIUM)
+
+
+# --- Seltene Wege ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_hints_skip_bad_names_and_containers_nobody_asked_for(tmp_path):
+    docker = FakeApplyDocker()
+    _service, applier, ctx = make_applier(tmp_path, docker)
+    assert await applier.hints(ctx.host, ["x; id", "-a", ""]) == {}
+    assert docker.calls == []
+    # Docker nimmt auch eine ID-Kurzform an und liefert dann einen Container mit anderem Namen.
+    short_id = docker.infos["nextcloud-app"]["id"][:12]
+    assert await applier.hints(ctx.host, [short_id]) == {}
+    assert len(docker.calls) == 1
+
+
+def test_results_leave_the_overview_after_the_keep_time(tmp_path):
+    _service, applier, _ctx = make_applier(tmp_path)
+    now = datetime.now(timezone.utc).timestamp()
+    applier._applied = {"h1:alt": {"ok": True}, "h1:neu": {"ok": False}}
+    applier._applied_at = {"h1:alt": now - ap.APPLIED_KEEP_S - 60, "h1:neu": now}
+    assert list(applier.snapshot()["applied"]) == ["h1:neu"]
+    assert list(applier._applied_at) == ["h1:neu"]
+
+
+@pytest.mark.asyncio
+async def test_a_failing_drift_check_gives_no_warning_and_does_not_block(tmp_path):
+    docker = FakeApplyDocker()
+
+    async def hash_fails(command):
+        if " config --hash " in command:
+            raise OSError("Verbindung weg")
+
+    docker.handle_extra = hash_fails
+    _service, applier, ctx = await checked(tmp_path, docker)
+    plan = await applier.plan(ctx.host, "nextcloud-app")
+    assert isinstance(plan, ap.Plan) and docker.calls_with(" config --hash ")
+    assert not any("seit dem letzten Start geändert" in w for w in plan.warnings)
+
+
+@pytest.mark.asyncio
+async def test_no_docker_tag_or_no_answer_starts_nothing(tmp_path, fast):
+    docker, _service, applier, ctx, plan = await flow(tmp_path)
+    ctx.host.tags = ["proxmox"]
+    result = await applier.apply(request_for(plan))
+    assert (result.success, result.error) == (False, "Kein Docker-Host.")
+
+    ctx.host.tags = ["docker"]
+    docker.down = TimeoutError()
+    result = await applier.apply(request_for(plan))
+    assert result.success is False
+    assert result.error == "Host nicht erreichbar: Zeitüberschreitung – der Vorgang hat zu lange gebraucht."
+    no_launch(docker)
+    assert applier._busy == {} and stored_runs(ctx) == {}
+
+
+@pytest.mark.asyncio
+async def test_an_unusable_run_file_never_stops_an_update(tmp_path, fast, caplog):
+    _docker, _service, applier, ctx, plan = await flow(tmp_path)
+    runs_file(ctx).mkdir()
+    with caplog.at_level("WARNING", logger="nodvard_deck.ext.docker"):
+        result = await applier.apply(request_for(plan))
+        assert await applier.resume_interrupted() == 0
+    assert result.success is True
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("image_update_runs_unreadable" in m for m in messages)
+    assert any("image_update_runs_write_failed" in m for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_a_shutdown_in_the_wait_before_resuming_keeps_the_entry_and_frees_the_locks(tmp_path, fast):
+    docker, ctx, _plan = await interrupt_update(tmp_path)
+    _service, applier = new_dashboard(ctx)
+    task = asyncio.ensure_future(applier.resume_interrupted())
+    for _ in range(50):
+        await asyncio.sleep(0)
+        if applier._busy:
+            break
+    assert applier._busy == {"h1:nextcloud": "nextcloud-app"} and RUN_ID in ap._ACTIVE_RUNS
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert RUN_ID in stored_runs(ctx) and RUN_ID not in ap._ACTIVE_RUNS
+    assert applier._busy == {} and applier.snapshot()["applying"] == {} and docker.polls_made() == []
+
+
+@pytest.mark.asyncio
+async def test_an_error_while_resuming_drops_the_entry_so_it_does_not_return(tmp_path, resume_fast, caplog, monkeypatch):
+    docker, ctx, _plan = await interrupt_update(tmp_path)
+    docker.polls = [POLL_DONE]
+    _service, applier = new_dashboard(ctx)
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("kaputt")
+
+    monkeypatch.setattr(applier, "_conclude", broken)
+    with caplog.at_level("ERROR", logger="nodvard_deck.ext.docker"):
+        assert await applier.resume_interrupted() == 1
+    assert stored_runs(ctx) == {} and RUN_ID not in ap._ACTIVE_RUNS
+    assert applier._busy == {} and applier.snapshot()["applying"] == {}
+    assert any("image_update_resume_failed" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_after_the_restart_no_answer_about_a_rollback_means_the_normal_check(tmp_path, resume_fast):
+    docker, ctx, _plan = await interrupt_update(tmp_path)
+    docker.polls = [POLL_DONE]
+    back_id = ap.rollback_run_id(RUN_ID)
+
+    async def no_answer(command):
+        if back_id in command:
+            raise OSError("Verbindung weg")
+
+    docker.handle_extra = no_answer
+    _service, applier = new_dashboard(ctx)
+    assert await applier.resume_interrupted() == 1
+    applied = applier.snapshot()["applied"]["h1:nextcloud-app"]
+    assert applied["ok"] is True and applied["summary"].startswith("„nextcloud-app“ aktualisiert")
+    assert docker.rollback_launched == []
+
+
+@pytest.mark.asyncio
+async def test_a_rollback_whose_healthcheck_still_says_starting_is_named_so(tmp_path, fast, monkeypatch):
+    monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(ap, "VERIFY_INTERVAL_S", 0.01)
+    docker, _service, applier, _ctx, plan = await flow(tmp_path)
+    docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
+    docker.rollback_verify = {"health": "starting"}
+    result = await applier.apply(request_for(plan))
+    assert result.success is False and result.detail["auto_rollback"]["ok"] is True
+    assert result.error.endswith("Automatisch zurück auf die alte Version – sie läuft, ihr Healthcheck meldet aber noch „startet“.")
+
+
+@pytest.mark.asyncio
+async def test_unreadable_settings_keep_the_automatic_rollback_on(tmp_path, fast, monkeypatch):
+    monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
+    docker, _service, applier, ctx, plan = await flow(tmp_path)
+    docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
+    reads = 0
+    real_get = ctx.settings.get
+
+    async def locked_after_the_first_read():
+        nonlocal reads
+        reads += 1
+        if reads > 1:
+            raise RuntimeError("database is locked")
+        return await real_get()
+
+    ctx.settings.get = locked_after_the_first_read
+    result = await applier.apply(request_for(plan))
+    assert reads > 1 and len(docker.rollback_launched) == 1
+    assert "sie läuft wieder" in result.error
+
+
+@pytest.mark.asyncio
+async def test_a_failing_audit_or_push_does_not_change_the_result(tmp_path, fast, caplog):
+    docker, _service, applier, ctx, plan = await flow(tmp_path)
+    docker.polls = ["@@rc=10\n@@step=pull\n@@tail\nError response from daemon: manifest unknown\n"]
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("kaputt")
+
+    ctx.audit.log = broken
+    ctx.notify.send = broken
+    with caplog.at_level("ERROR", logger="nodvard_deck.ext.docker"):
+        result = await applier.apply(request_for(plan))
+    assert result.success is False and result.error
+    assert applier.snapshot()["applied"]["h1:nextcloud-app"]["ok"] is False and applier._busy == {}
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("image_update_audit_failed" in m for m in messages)
+    assert any("image_update_notify_failed" in m for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_the_dry_run_names_the_update_without_asking_the_host(tmp_path, fast):
+    docker, _service, applier, _ctx, plan = await flow(tmp_path)
+    docker.calls.clear()
+    report = await ap.ImageUpdateExecutor(applier).dry_run(request_for(plan))
+    assert (report.would_change, report.summary) == (True, plan.reason_text())
+    assert docker.calls == []

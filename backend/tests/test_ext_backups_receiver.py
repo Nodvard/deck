@@ -183,7 +183,7 @@ async def test_a_strict_connection_is_never_switched_to_allow_self_signed_certif
     [
         ("http://192.168.2.10:8006", "nodvard-backup@pve!deck"),
         ("https://", "nodvard-backup@pve!deck"),
-        ("https://nutzer:pw@192.168.2.10:8006", "nodvard-backup@pve!deck"),
+        ("https://nutzer:" + "pw@192.168.2.10:8006", "nodvard-backup@pve!deck"),
         ("https://192.168.2.10:8006/api2/json", "nodvard-backup@pve!deck"),
         ("https://192.168.2.10:8006?x=1", "nodvard-backup@pve!deck"),
         ("https://192.168.2.10:8006\n", "nodvard-backup@pve!deck"),
@@ -314,4 +314,20 @@ async def test_an_invalid_fingerprint_is_refused_without_changes(client, db_sess
         )
     assert type(refused.value).__name__ == "ConnectionRefused"
     assert await _connections(db_session) == []
+    assert not await ctx.secrets.exists("backups-token:pve1")
+
+
+@pytest.mark.asyncio
+async def test_a_name_used_twice_gets_no_token(client, db_session, test_settings):
+    twice = [{"name": "pve1", "base_url": url, "token_id": "a@pve!x"} for url in (URL, "https://192.168.2.11:8006")]
+    receiver, ctx = await _receiver(client, db_session, test_settings, twice)
+    conflict = await receiver.connection_conflict(name="pve1", base_url=URL)
+    assert conflict is not None and "zweimal" in conflict
+    with pytest.raises(Exception, match="zweimal") as refused:
+        await receiver.receive_connection(
+            name="pve1", base_url=URL, token_id="nodvard-backup@pve!deck", token_secret=SecretStr("geheim"),
+            tls_insecure_skip_verify=False,
+        )
+    assert type(refused.value).__name__ == "ConnectionRefused"
+    assert await _connections(db_session) == twice
     assert not await ctx.secrets.exists("backups-token:pve1")

@@ -36,6 +36,26 @@ def test_ui_registry_tracks_per_extension_and_clears():
     assert ui.all_widgets() == []
 
 
+def test_ui_registry_replaces_a_widget_with_the_same_id_in_place():
+    ui = UiRegistry()
+    ui.register_widget("ext-a", _widget("w1"))
+    ui.register_widget("ext-a", _widget("w2"))
+    ui.register_widget("ext-a", WidgetSpec(id="w1", title="neu", data_endpoint="w", view=ListView(item=ListItem(title="{{ t }}"))))
+
+    assert [(w.id, w.title) for _, w in ui.all_widgets()] == [("w1", "neu"), ("w2", "w2")]
+
+
+def test_ui_registry_unregisters_only_the_own_widget():
+    ui = UiRegistry()
+    ui.register_widget("ext-a", _widget("w1"))
+    ui.register_widget("ext-b", _widget("w1"))
+
+    assert ui.unregister_widget("ext-a", "w1") is True
+    assert ui.unregister_widget("ext-a", "w1") is False
+    assert ui.unregister_widget("ext-c", "w1") is False
+    assert [(ext, w.id) for ext, w in ui.all_widgets()] == [("ext-b", "w1")]
+
+
 class _ProtoA:
     pass
 

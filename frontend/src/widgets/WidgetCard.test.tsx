@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -62,7 +63,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function renderCard(items: unknown[], onRows: (rows: number) => void, { widget = WIDGET, draggable = false } = {}) {
+function renderCard(
+  items: unknown[],
+  onRows: (rows: number) => void,
+  { widget = WIDGET, draggable = false, fixedRows = null, edit }: { widget?: WidgetOut; draggable?: boolean; fixedRows?: number | null; edit?: ReactNode } = {},
+) {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
     if (url.endsWith("/api/v1/pages")) {
@@ -74,13 +79,15 @@ function renderCard(items: unknown[], onRows: (rows: number) => void, { widget =
     throw new Error(`Unerwarteter Fetch: ${url}`);
   }));
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const tree = (props: { fixedRows: number | null; edit?: ReactNode }) => (
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
-        <WidgetCard widget={widget} onRows={onRows} draggable={draggable} />
+        <WidgetCard widget={widget} onRows={onRows} draggable={draggable} fixedRows={props.fixedRows} edit={props.edit} />
       </MemoryRouter>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  const view = render(tree({ fixedRows, edit }));
+  return { rerenderWith: (next: { fixedRows: number | null; edit?: ReactNode }) => view.rerender(tree(next)) };
 }
 
 const domains = (n: number) => Array.from({ length: n }, (_, i) => ({ domain: `dienst-${i + 1}.example` }));
@@ -111,6 +118,73 @@ describe("WidgetCard: Höhe nach Inhalt", () => {
     expect(screen.getByText("dienst-8.example")).toBeInTheDocument();
     expect(screen.queryByText("dienst-9.example")).not.toBeInTheDocument();
     expect(onRows).toHaveBeenLastCalledWith(5);
+  });
+});
+
+describe("WidgetCard: gewählte Größe", () => {
+  it("eine lange Liste endet an der letzten ganzen Zeile der Stufe, darunter „+ x weitere“", async () => {
+    const onRows = vi.fn();
+    renderCard(domains(6), onRows, { fixedRows: 2 });
+    const more = await screen.findByTestId("widget-more");
+    // Platz in S: 192 - 47 - 28 = 117; Unterkanten 58, 106 passen, 154 nicht mehr.
+    expect(more).toHaveTextContent("+ 4 weitere");
+    expect(screen.getByText("dienst-2.example")).toBeInTheDocument();
+    expect(screen.queryByText("dienst-3.example")).not.toBeInTheDocument();
+    expect(onRows).toHaveBeenLastCalledWith(2);
+
+    // Dieselbe Liste ohne gewählte Größe passt in L und wird nicht gekürzt.
+    cleanup();
+    renderCard(domains(6), onRows);
+    expect(await screen.findByText("dienst-6.example")).toBeInTheDocument();
+    expect(screen.queryByTestId("widget-more")).not.toBeInTheDocument();
+  });
+
+  it("ein kurzer Inhalt bekommt trotzdem genau die gewählte Höhe", async () => {
+    const onRows = vi.fn();
+    renderCard(domains(1), onRows, { fixedRows: 5 });
+    expect(await screen.findByText("dienst-1.example")).toBeInTheDocument();
+    await waitFor(() => expect(onRows).toHaveBeenLastCalledWith(5));
+    expect(screen.queryByTestId("widget-more")).not.toBeInTheDocument();
+  });
+
+  it("eine andere Größe misst den Inhalt neu: aus der gekürzten Liste wird wieder die ganze", async () => {
+    const onRows = vi.fn();
+    const view = renderCard(domains(6), onRows, { fixedRows: 2 });
+    await screen.findByTestId("widget-more");
+    view.rerenderWith({ fixedRows: 5 });
+    expect(await screen.findByText("dienst-6.example")).toBeInTheDocument();
+    expect(screen.queryByTestId("widget-more")).not.toBeInTheDocument();
+    await waitFor(() => expect(onRows).toHaveBeenLastCalledWith(5));
+  });
+});
+
+describe("WidgetCard: Bearbeiten", () => {
+  it("die Steuerung steht unter dem Kopf, der Kopf ist kein Link und „+ x weitere“ auch nicht", async () => {
+    renderCard(domains(14), vi.fn(), { edit: <div data-testid="bar">Leiste</div> });
+    const more = await screen.findByTestId("widget-more");
+    expect(more.closest("a")).toBeNull();
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.getByText("Zertifikate")).toBeInTheDocument();
+    // Kopf, Leiste, Inhalt
+    expect(screen.getByTestId("widget-npm-certificates").children[1]).toBe(screen.getByTestId("bar"));
+  });
+
+  it("der Inhalt nimmt keine Klicks an, damit beim Anordnen keine Aktion ausgelöst wird", async () => {
+    renderCard(domains(1), vi.fn(), { edit: <div /> });
+    const row = await screen.findByText("dienst-1.example");
+    expect(row.closest(".widget-body")).toHaveClass("pointer-events-none");
+    cleanup();
+    renderCard(domains(1), vi.fn());
+    expect((await screen.findByText("dienst-1.example")).closest(".widget-body")).not.toHaveClass("pointer-events-none");
+  });
+
+  it("der Griff ist immer sichtbar, nicht erst beim Darüberfahren", async () => {
+    renderCard(domains(1), vi.fn(), { draggable: true, edit: <div /> });
+    await screen.findByText("dienst-1.example");
+    const handle = screen.getByTitle("Zum Verschieben ziehen");
+    expect(handle).not.toHaveClass("opacity-0");
+    // Ohne Bedienung per Tastatur bleibt der Griff für Screenreader stumm.
+    expect(handle).toHaveAttribute("aria-hidden", "true");
   });
 });
 

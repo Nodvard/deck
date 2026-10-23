@@ -71,7 +71,7 @@ class NtfyError(RuntimeError):
     """Fehler beim Senden oder Testen; der Text ist ein fertiger deutscher Satz."""
 
     # Weder Adresse noch Antworttext des Servers im Satz: Eine Adresse aus der Antwort käme vom fremden Server, und
-    # die eingetragene kann Zugangsdaten tragen (`https://name:passwort@...`).
+    # die eingetragene kann Zugangsdaten tragen (`https://<name>:<passwort>@...`).
     readable = True
 
 
@@ -191,7 +191,7 @@ def build_subscribe_link(server_url: Any, topic: Any) -> tuple[str | None, str |
 
     Liefert `(Link, None)` oder `(None, Satz)`; der Satz ist fertiges Deutsch."""
     # Der Link steht auf der Einstellungsseite und im QR-Code: Nur Adresse, Port, Pfad und Thema kommen hinein, nie
-    # Zugangsdaten aus der eingetragenen Adresse (`https://name:passwort@...`), Abfrage, Fragment oder das Zugriffstoken.
+    # Zugangsdaten aus der eingetragenen Adresse (`https://<name>:<passwort>@...`), Abfrage, Fragment oder das Zugriffstoken.
     server = server_url.strip() if isinstance(server_url, str) else ""
     name = topic.strip() if isinstance(topic, str) else ""
     if not server and not name:

@@ -10,6 +10,32 @@ shown inside Nodvard Deck under *Settings → About Nodvard Deck*. This file is 
 
 ## [Unreleased]
 
+## [0.11.0] – 2026-10-23
+
+Editable home page, Nodvard Dock as a ready-made image and setup with helper scripts only.
+
+- **New:** widget groups on the home page that can be collapsed and show a dot when something needs attention, and an
+  edit mode for position, height, width, group and group names.
+- **New:** Nodvard Dock is published as `ghcr.io/nodvard/dock` (amd64, arm64). Private Docker registries with
+  credentials in the vault and a "Registries" tab per server; volume backups of a stack can be restored (after
+  checking archive and free space) and deleted.
+- **New:** Docker mode "Operate only" (tag `docker-bedienen`): list, start, stop and restart containers and read their
+  logs without adding the login user to the docker group, through the fixed helper script `docker-root`; no stacks,
+  images, deleting or console there. "Check connection" warns if such a server's login can still do everything.
+- **New:** Synology DSM (beta) supports several devices with their own name, account, password and certificate; an
+  existing setup is taken over automatically.
+- **New:** custom port ranges per program in intrusion detection, capped at 1000 ports unless marked as wide.
+- **Security:** new servers get only the helper scripts' narrow sudo rules when those are enough, full rights stay
+  available under "Advanced"; the helper folder check includes ACLs and new users' groups. Updated Pillow, certifi
+  and markdown-it. The "Operate only" helper checks every call itself. Duplicate short names in module settings no
+  longer send a password to another entry's address. Docker hides transformed variable values in errors.
+- **Improved:** "Check connection" recognises helper-only servers and keys rejected by Dropbear; one alert for a
+  degraded Synology pool with a failed volume; Docker volume backups record their volumes.
+- **Fixed:** password setup, Shield updates and audit on Dropbear servers (DietPi); a Proxmox node that stops
+  answering for 4 minutes no longer counts as online; random DNS ports of Pi-hole and similar services; many Shield,
+  Docker and Synology fixes; no tracebacks on shutdown during scheduled tasks.
+- **Note:** one database migration (home page groups), applied automatically.
+
 ## [0.10.0] – 2026-10-18
 
 Docker stacks, Synology DSM (beta) and servers grouped by type.

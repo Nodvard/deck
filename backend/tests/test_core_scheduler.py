@@ -7,6 +7,7 @@ Lauf-Protokoll (DB + Datei), WS-Events, Abbruch, Idempotenz."""
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 
 import pytest
@@ -187,8 +188,7 @@ async def test_cancel_run_cancels_in_flight_task(service, db_session):
     await asyncio.wait_for(run_task, timeout=2)
     db_session.expire_all()  # _run_job() aktualisiert ueber eine ANDERE Session (session_scope())
     run = await jobs_service.get_run(db_session, run_id)
-    assert run.status == "failed"
-    assert "Abgebrochen" in run.error
+    assert (run.status, run.exit_code, run.error) == ("failed", 1, "Abgebrochen (POST /runs/{id}/cancel).")
 
 
 @pytest.mark.asyncio
@@ -360,3 +360,220 @@ async def test_schedule_sunday_next_run_is_a_sunday(service, db_session, schedul
     assert next_run.astimezone(ZoneInfo("Europe/Berlin")).strftime("%A") == "Sunday"
     scheduled = service._scheduler.get_job(job_id).next_run_time
     assert scheduled.astimezone(ZoneInfo("Europe/Berlin")).strftime("%A") == "Sunday"
+
+
+SHUTDOWN_TEXT = "Beim Herunterfahren von Nodvard Deck abgebrochen."
+
+
+@pytest.fixture
+def loud_loggers(monkeypatch):
+    # Alembic-Tests schalten bestehende Logger ab (`fileConfig`); ohne das sähe `caplog` nichts.
+    for name in ("nodvard_deck.scheduler", "apscheduler.executors.default"):
+        monkeypatch.setattr(logging.getLogger(name), "disabled", False)
+
+
+def _fire(service: SchedulerService, job: Job, handler) -> None:
+    """Startet den Lauf wie der Zeitplan, also als Aufgabe des APScheduler-Ausführers."""
+    service._scheduler.add_job(
+        service._run_job,
+        kwargs={"job_id": job.id, "ext_id": job.ext_id, "handler": handler, "params": {}, "trigger_kind": "schedule"},
+    )
+
+
+async def _the_run(db_session, job_id: str) -> JobRun:
+    db_session.expire_all()
+    return (await db_session.execute(select(JobRun).where(JobRun.job_id == job_id))).scalar_one()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_ends_a_running_job_as_interrupted(service, db_session, caplog, loud_loggers):
+    job = await _make_job(db_session)
+    started = asyncio.Event()
+
+    async def handler(**kwargs):
+        started.set()
+        await asyncio.sleep(3600)
+
+    _fire(service, job, handler)
+    await asyncio.wait_for(started.wait(), timeout=2)
+
+    with caplog.at_level(logging.WARNING):
+        await asyncio.wait_for(service.shutdown(), timeout=2)
+        await asyncio.sleep(0.05)
+
+    run = await _the_run(db_session, job.id)
+    assert (run.status, run.exit_code, run.error) == ("interrupted", None, SHUTDOWN_TEXT)
+    assert run.finished_at is not None
+    assert SHUTDOWN_TEXT in Path(run.output_ref).read_text(encoding="utf-8")
+    assert not [r for r in caplog.records if r.exc_info]
+    assert service._runs == set()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_keeps_the_next_run_time_of_the_job(service, db_session):
+    job = await _make_job(db_session, schedule="* * * * *")
+    job_id = job.id
+    started = asyncio.Event()
+
+    async def handler(**kwargs):
+        started.set()
+        await asyncio.sleep(3600)
+
+    await service.schedule(job, handler)
+    _fire(service, job, handler)
+    await asyncio.wait_for(started.wait(), timeout=2)
+    await service.shutdown()
+    await asyncio.sleep(0.05)
+
+    db_session.expire_all()
+    assert (await jobs_service.get_job(db_session, job_id)).next_run_at is not None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_gives_up_on_hanging_wrapup_without_traceback(
+    service, db_session, monkeypatch, caplog, loud_loggers
+):
+    monkeypatch.setattr(service, "SHUTDOWN_WAIT_S", 0.1)
+    job = await _make_job(db_session)
+    started = asyncio.Event()
+
+    async def handler(**kwargs):
+        started.set()
+        await asyncio.sleep(3600)
+
+    async def stuck(*args, **kwargs):
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(jobs_service, "finish_run", stuck)
+    _fire(service, job, handler)
+    await asyncio.wait_for(started.wait(), timeout=2)
+
+    with caplog.at_level(logging.WARNING):
+        await asyncio.wait_for(service.shutdown(), timeout=2)
+        await asyncio.sleep(0.05)
+
+    unfinished = [r for r in caplog.records if "job_run_unfinished" in r.getMessage()]
+    assert len(unfinished) == 1 and unfinished[0].levelno == logging.WARNING
+    assert f"job_id={job.id}" in unfinished[0].getMessage()
+    assert not [r for r in caplog.records if r.exc_info]
+    assert (await _the_run(db_session, job.id)).status == "running"
+    assert service._runs == set()
+
+
+@pytest.mark.asyncio
+async def test_cancel_from_outside_during_wrapup_is_not_swallowed(service, db_session, monkeypatch):
+    job = await _make_job(db_session)
+    entered = asyncio.Event()
+
+    async def handler(**kwargs):
+        return None
+
+    async def stuck(*args, **kwargs):
+        entered.set()
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(jobs_service, "finish_run", stuck)
+    run_task = asyncio.ensure_future(service.trigger_now(job, handler))
+    await asyncio.wait_for(entered.wait(), timeout=2)
+
+    run_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run_task
+    assert service._runs == set()
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_works_as_before_after_a_restart(service, db_session):
+    await service.shutdown()
+    service.start()
+    job = await _make_job(db_session)
+    started = asyncio.Event()
+
+    async def handler(**kwargs):
+        started.set()
+        await asyncio.sleep(3600)
+
+    run_task = asyncio.ensure_future(service.trigger_now(job, handler))
+    await asyncio.wait_for(started.wait(), timeout=2)
+    run_id = next(iter(service._running_tasks))
+
+    assert service.cancel_run(run_id) is True
+    await asyncio.wait_for(run_task, timeout=2)
+    run = await _the_run(db_session, job.id)
+    assert (run.status, run.error) == ("failed", "Abgebrochen (POST /runs/{id}/cancel).")
+
+
+def _slow_create_run(monkeypatch) -> tuple[asyncio.Event, asyncio.Event]:
+    """`create_run` wartet, bis das zweite Ereignis gesetzt ist; das erste meldet, dass es so weit ist."""
+    entered, go_on = asyncio.Event(), asyncio.Event()
+    create_run = jobs_service.create_run
+
+    async def slow(*args, **kwargs):
+        entered.set()
+        await go_on.wait()
+        return await create_run(*args, **kwargs)
+
+    monkeypatch.setattr(jobs_service, "create_run", slow)
+    return entered, go_on
+
+
+def _job_statuses(monkeypatch, job_id: str) -> list[str]:
+    import nodvard_deck.core.ws_hub as ws_hub_module
+
+    hub, sent = WsHub(), []
+
+    class _Sock:
+        async def send_json(self, data):
+            sent.append(data["payload"]["status"])
+
+    monkeypatch.setattr(ws_hub_module, "_hub", hub)
+    hub.subscribe(hub.connect(_Sock(), user_id="u1", permissions=["jobs.read"]), f"jobs.{job_id}")
+    return sent
+
+
+@pytest.mark.asyncio
+async def test_a_run_still_being_created_at_shutdown_never_starts_its_handler(service, db_session, monkeypatch):
+    job = await _make_job(db_session)
+    entered, go_on = _slow_create_run(monkeypatch)
+    statuses = _job_statuses(monkeypatch, job.id)
+    called = []
+
+    async def handler(**kwargs):
+        called.append(kwargs)
+        await asyncio.sleep(3600)
+
+    _fire(service, job, handler)
+    await asyncio.wait_for(entered.wait(), timeout=2)
+    stopping = asyncio.ensure_future(service.shutdown())
+    await asyncio.sleep(0)
+    assert service._stopping
+    go_on.set()
+    await asyncio.wait_for(stopping, timeout=service.SHUTDOWN_WAIT_S / 2)
+
+    assert called == []
+    run = await _the_run(db_session, job.id)
+    assert (run.status, run.exit_code, run.error) == ("interrupted", None, SHUTDOWN_TEXT)
+    assert run.finished_at is not None
+    assert SHUTDOWN_TEXT in Path(run.output_ref).read_text(encoding="utf-8")
+    assert statuses == ["interrupted"]
+    assert service._runs == set() and service._running_tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_a_slow_start_without_shutdown_runs_as_before(service, db_session, monkeypatch):
+    job = await _make_job(db_session)
+    entered, go_on = _slow_create_run(monkeypatch)
+    statuses = _job_statuses(monkeypatch, job.id)
+
+    async def handler(**kwargs):
+        return "fertig"
+
+    run_task = asyncio.ensure_future(service.trigger_now(job, handler))
+    await asyncio.wait_for(entered.wait(), timeout=2)
+    go_on.set()
+    run_id = await asyncio.wait_for(run_task, timeout=2)
+
+    run = await jobs_service.get_run(db_session, run_id)
+    assert (run.status, run.exit_code, run.error) == ("succeeded", 0, None)
+    assert "Ergebnis: 'fertig'" in Path(run.output_ref).read_text(encoding="utf-8")
+    assert statuses == ["running", "succeeded"]

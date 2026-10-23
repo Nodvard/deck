@@ -32,7 +32,8 @@ from restore_helpers import REPO_ROOT
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Prozesse und Signale wie im Container (POSIX)")
 
-SECRET_TEXT = "absichtlich kaputt: /home/user/geheim postgresql://admin:Sup3rGeheim@10.0.0.5/deck"
+# Zusammengesetzt, damit Geheimnis-Scanner die Attrappe nicht für eine echte Adresse halten.
+SECRET_TEXT = "absichtlich kaputt: /home/user/geheim postgresql://admin:" + "Sup3rGeheim@10.0.0.5/deck"
 
 
 def free_port() -> int:

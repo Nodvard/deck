@@ -801,12 +801,10 @@ async def test_discovery_marks_a_guest_deleted_in_proxmox_and_clears_the_mark_wh
 
 @pytest.mark.asyncio
 async def test_discovery_keeps_going_when_one_connection_or_one_node_is_unreachable(
-    client, db_session, test_settings, mock_proxmox
+    client, db_session, test_settings, mock_proxmox, monkeypatch
 ):
-    """pve1 aus (oder im Neustart) -- vorher brach JEDER Discovery-Lauf
-    ab, auch pve2 wurde nicht mehr eingelesen, alle Status froren ein. Ebenso ein
-    offline Knoten im Cluster (list_qemu wirft dort). bekannte Gaeste von pve1 bleiben
-    unangetastet stehen (nicht geloescht)."""
+    """Eine nicht erreichbare Verbindung oder ein offline Knoten im Cluster hält den Abgleich der übrigen nicht auf;
+    bekannte Hosts dort bleiben stehen, nur ihr Zustand ändert sich."""
     base_url, state = mock_proxmox
     state["nodes"]["pve2"] = {"node": "pve2", "status": "offline"}
     state["offline_nodes"] = {"pve2"}
@@ -817,24 +815,42 @@ async def test_discovery_keeps_going_when_one_connection_or_one_node_is_unreacha
             {"name": "pve2", "base_url": base_url, "token_id": _TOKEN_ID},
         ],
     )
-    known_mini = Host(
-        name="proxmox-pve1-lxc-104", display_name="Teleport", address="192.168.1.89", kind="lxc", status="up",
-        provider_ext_id="proxmox", provider_ref="pve1/lxc/pve1/104", host_metadata={"connection": "pve1"},
-    )
-    db_session.add(known_mini)
+    known = [
+        Host(
+            name=name, display_name=name, address="10.0.0.104", kind=kind, status="up",
+            provider_ext_id="proxmox", provider_ref=ref, host_metadata={"connection": ref.split("/")[0]},
+        )
+        for name, kind, ref in (
+            ("pve-pve1", "hypervisor", "pve1/node/pve1"),
+            ("proxmox-pve1-lxc-104", "lxc", "pve1/lxc/pve1/104"),
+            ("proxmox-pve2-vm-300", "vm", "pve2/qemu/pve2/300"),
+        )
+    ]
+    db_session.add_all(known)
     await db_session.flush()
+    clock = _outage_clock(monkeypatch)
 
     result = await _run_discovery()
     assert result == {"discovered": 4}  # pve2: pve1 + VM + LXC, dazu der offline Knoten pve2
 
     hosts = {h.provider_ref: h for h in (await db_session.execute(select(Host).where(Host.provider_ext_id == "proxmox"))).scalars().all()}
-    assert set(hosts) == {"pve2/node/pve1", "pve2/qemu/pve1/100", "pve2/lxc/pve1/201", "pve2/node/pve2", "pve1/lxc/pve1/104"}
+    assert set(hosts) == {
+        "pve2/node/pve1", "pve2/qemu/pve1/100", "pve2/lxc/pve1/201", "pve2/node/pve2",
+        "pve1/node/pve1", "pve1/lxc/pve1/104", "pve2/qemu/pve2/300",
+    }
     assert hosts["pve2/node/pve2"].status == "down"
     assert hosts["pve2/qemu/pve1/100"].status == "up"
-    await db_session.refresh(known_mini)
-    assert (known_mini.status, known_mini.display_name) == ("up", "Teleport")
+    for host in known:
+        await db_session.refresh(host)
+    assert {h.provider_ref: h.status for h in known} == {
+        "pve1/node/pve1": "unknown", "pve1/lxc/pve1/104": "unknown", "pve2/qemu/pve2/300": "unknown",
+    }
     # Nicht erreichbar heißt nicht gelöscht: keine Markierung „nicht mehr vorhanden“.
-    assert "gone_since" not in known_mini.host_metadata
+    assert all("gone_since" not in h.host_metadata for h in known)
+    clock[0] += 300
+    await _run_discovery()
+    await db_session.refresh(known[0])
+    assert known[0].status == "down"
 
     # Auch die Statusauffrischung nach einer Aktion darf an pve1 nicht scheitern.
     vm = hosts["pve2/qemu/pve1/100"]
@@ -844,6 +860,239 @@ async def test_discovery_keeps_going_when_one_connection_or_one_node_is_unreacha
     assert approve.json()["status"] == "succeeded", approve.text
     await db_session.refresh(vm)
     assert vm.status == "down"
+
+
+async def _status_by_ref(db_session) -> dict[str, str]:
+    db_session.expire_all()
+    rows = (await db_session.execute(select(Host).where(Host.provider_ext_id == "proxmox"))).scalars().all()
+    return {h.provider_ref: h.status for h in rows}
+
+
+def _outage_clock(monkeypatch) -> list[float]:
+    """Uhr der Frist, nach der ein schweigender Knoten als nicht erreichbar gilt; `clock[0] += …` stellt sie vor."""
+    clock = [1000.0]
+    monkeypatch.setattr(sys.modules["nodvard_deck_ext_proxmox.capabilities"], "_now", lambda: clock[0])
+    return clock
+
+
+@pytest.mark.asyncio
+async def test_discovery_shows_an_unreachable_proxmox_and_takes_the_real_state_once_it_answers(
+    client, db_session, test_settings, mock_proxmox, monkeypatch
+):
+    base_url, state = mock_proxmox
+    token = await _setup_proxmox(client, db_session, test_settings, base_url)
+    clock = _outage_clock(monkeypatch)
+    await _run_discovery()
+    all_up = {"primary/node/pve1": "up", "primary/qemu/pve1/100": "up", "primary/lxc/pve1/201": "up"}
+    assert await _status_by_ref(db_session) == all_up
+
+    state["api_down"] = True
+    await _run_discovery()
+    unknown = dict.fromkeys(all_up, "unknown")
+    assert await _status_by_ref(db_session) == unknown
+    clock[0] += 300
+    await _run_discovery()
+    assert await _status_by_ref(db_session) == {**unknown, "primary/node/pve1": "down"}
+    listed = (await client.get("/api/v1/hosts", headers=_auth_header(token))).json()
+    assert all(h["gone_since"] is None for h in listed)
+
+    # Knoten wieder da, seine Gäste aber noch nicht lesbar.
+    state["api_down"] = False
+    state["offline_nodes"] = {"pve1"}
+    await _run_discovery()
+    assert await _status_by_ref(db_session) == {
+        "primary/node/pve1": "up", "primary/qemu/pve1/100": "unknown", "primary/lxc/pve1/201": "unknown",
+    }
+
+    state["offline_nodes"] = set()
+    await _run_discovery()
+    assert await _status_by_ref(db_session) == all_up
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["cluster", "refused"])
+async def test_proxmox_that_may_still_run_never_shows_its_nodes_as_unreachable(
+    client, db_session, test_settings, mock_proxmox, monkeypatch, failure
+):
+    base_url, state = mock_proxmox
+    if failure == "cluster":
+        state["nodes"]["pve2"] = {"node": "pve2", "status": "online"}
+    await _setup_proxmox(client, db_session, test_settings, base_url)
+    clock = _outage_clock(monkeypatch)
+    await _run_discovery()
+    nodes = [ref for ref in await _status_by_ref(db_session) if "/node/" in ref]
+    assert len(nodes) == (2 if failure == "cluster" else 1)
+
+    if failure == "cluster":
+        state["api_down"] = True
+    else:
+        state["forced"] = {"status": 401, "body": '{"data": null}', "media_type": "application/json"}
+    for _ in range(3):
+        await _run_discovery()
+        clock[0] += 300
+    status = await _status_by_ref(db_session)
+    assert {ref: status[ref] for ref in nodes} == dict.fromkeys(nodes, "unknown")
+
+
+async def _node_status(db_session) -> str:
+    return (await _status_by_ref(db_session))["primary/node/pve1"]
+
+
+@pytest.mark.asyncio
+async def test_syncs_in_quick_succession_do_not_make_a_node_unreachable(
+    client, db_session, test_settings, mock_proxmox, monkeypatch
+):
+    base_url, state = mock_proxmox
+    await _setup_proxmox(client, db_session, test_settings, base_url)
+    clock = _outage_clock(monkeypatch)
+    await _run_discovery()
+
+    state["api_down"] = True
+    for step in (0, 10, 229):  # von Hand angestoßen, zusammen noch keine 4 Minuten
+        clock[0] += step
+        await _run_discovery()
+        assert await _node_status(db_session) == "unknown"
+    clock[0] += 1
+    await _run_discovery()
+    assert await _node_status(db_session) == "down"
+
+
+@pytest.mark.asyncio
+async def test_a_node_unknown_for_another_reason_still_gets_the_full_grace_period(
+    client, db_session, test_settings, mock_proxmox, monkeypatch
+):
+    base_url, state = mock_proxmox
+    await _setup_proxmox(client, db_session, test_settings, base_url)
+    clock = _outage_clock(monkeypatch)
+    await _run_discovery()
+    state["forced"] = {"status": 401, "body": '{"data": null}', "media_type": "application/json"}
+    await _run_discovery()
+    assert await _node_status(db_session) == "unknown"
+
+    del state["forced"]
+    state["api_down"] = True
+    clock[0] += 300
+    await _run_discovery()
+    assert await _node_status(db_session) == "unknown"
+    clock[0] += 300
+    await _run_discovery()
+    assert await _node_status(db_session) == "down"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("between", ["answer", "refused"])
+async def test_an_answer_or_a_refusal_starts_the_grace_period_over(
+    client, db_session, test_settings, mock_proxmox, monkeypatch, between
+):
+    base_url, state = mock_proxmox
+    await _setup_proxmox(client, db_session, test_settings, base_url)
+    clock = _outage_clock(monkeypatch)
+    await _run_discovery()
+
+    state["api_down"] = True
+    await _run_discovery()
+    state["api_down"] = False
+    if between == "refused":
+        state["forced"] = {"status": 401, "body": '{"data": null}', "media_type": "application/json"}
+    clock[0] += 120
+    await _run_discovery()
+    state.pop("forced", None)
+    state["api_down"] = True
+    clock[0] += 180
+    await _run_discovery()
+    assert await _node_status(db_session) == "unknown"
+    clock[0] += 240
+    await _run_discovery()
+    assert await _node_status(db_session) == "down"
+
+
+@pytest.mark.asyncio
+async def test_an_older_sync_that_finishes_late_changes_nothing(
+    client, db_session, test_settings, mock_proxmox, monkeypatch
+):
+    base_url, state = mock_proxmox
+    await _setup_proxmox(client, db_session, test_settings, base_url)
+    clock = _outage_clock(monkeypatch)
+    clock[0] = 1005
+    await _run_discovery()
+
+    # Begann vor dem Abgleich mit Antwort und wird erst nach ihm fertig.
+    state["api_down"] = True
+    clock[0] = 1003
+    await _run_discovery()
+    assert set((await _status_by_ref(db_session)).values()) == {"up"}
+
+    clock[0] = 1300
+    await _run_discovery()
+    assert await _node_status(db_session) == "unknown"
+    clock[0] = 1540
+    await _run_discovery()
+    assert await _node_status(db_session) == "down"
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_node_stays_unreachable_when_the_count_is_lost(
+    client, db_session, test_settings, mock_proxmox, monkeypatch
+):
+    base_url, state = mock_proxmox
+    await _setup_proxmox(client, db_session, test_settings, base_url)
+    clock = _outage_clock(monkeypatch)
+    await _run_discovery()
+    state["api_down"] = True
+    await _run_discovery()
+    clock[0] += 300
+    await _run_discovery()
+    assert await _node_status(db_session) == "down"
+
+    sys.modules["nodvard_deck_ext_proxmox.capabilities"]._no_answer_since.clear()  # wie nach einem Neustart
+    await _run_discovery()
+    assert await _node_status(db_session) == "down"
+
+
+@pytest.mark.asyncio
+async def test_disabled_connection_shows_its_hosts_as_unknown(client, db_session, test_settings, mock_proxmox):
+    base_url, _state = mock_proxmox
+    await _setup_proxmox(client, db_session, test_settings, base_url)
+    await _run_discovery()
+    record = await db_session.get(ExtensionRecord, "proxmox")
+    record.settings = {"connections": [{"name": "primary", "base_url": base_url, "token_id": _TOKEN_ID, "enabled": False}]}
+    await db_session.flush()
+
+    await _run_discovery()
+    assert set((await _status_by_ref(db_session)).values()) == {"unknown"}
+
+
+@pytest.mark.asyncio
+async def test_unreachable_connection_leaves_a_connection_with_a_longer_name_alone(
+    client, db_session, test_settings, mock_proxmox, monkeypatch
+):
+    base_url, _state = mock_proxmox
+    await _setup_proxmox_connections(
+        client, db_session, test_settings,
+        [
+            {"name": "lab", "base_url": _dead_url(), "token_id": _TOKEN_ID},
+            {"name": "lab2", "base_url": base_url, "token_id": _TOKEN_ID},
+        ],
+    )
+    db_session.add_all([
+        Host(name=name, address="10.0.0.30", kind=kind, status="up", provider_ext_id="proxmox", provider_ref=ref)
+        for name, kind, ref in (
+            ("pve-lab", "hypervisor", "lab/node/pve1"),
+            ("proxmox-lab-vm-100", "vm", "lab/qemu/pve1/100"),
+            # Gast eines Knotens, den lab2 nicht mehr meldet: weder gelesen noch unlesbar.
+            ("proxmox-lab2-vm-300", "vm", "lab2/qemu/pve9/300"),
+        )
+    ])
+    await db_session.flush()
+    clock = _outage_clock(monkeypatch)
+
+    await _run_discovery()
+    clock[0] += 300
+    await _run_discovery()
+    status = await _status_by_ref(db_session)
+    assert (status["lab/node/pve1"], status["lab/qemu/pve1/100"]) == ("down", "unknown")
+    assert status["lab2/qemu/pve9/300"] == "up"
+    assert status["lab2/node/pve1"] == "up"
 
 
 @pytest.mark.asyncio
@@ -1523,6 +1772,21 @@ async def test_token_ersetzen_ueber_einstellungs_endpunkt(client, db_session, te
     listed = await client.get("/api/v1/ext/proxmox/connections", headers=headers)
     assert listed.json()[0]["has_token"] is True
     assert "geheim" not in listed.text
+
+
+@pytest.mark.asyncio
+async def test_no_token_is_taken_while_two_connections_share_the_name(client, db_session, test_settings):
+    test_settings.extensions_dir = REPO_EXTENSIONS_DIR
+    await extensions_service.discover_and_sync(db_session, test_settings)
+    headers = _auth_header(await _bootstrap_owner(client))
+    await client.post("/api/v1/extensions/proxmox/enable", headers=headers)
+    twice = [{"name": "pve1", "base_url": url, "token_id": _TOKEN_ID} for url in ("https://eins.test:8006", "https://zwei.test:8006")]
+    saved = await client.put("/api/v1/extensions/proxmox/settings", json={"values": {"connections": twice}}, headers=headers)
+    assert saved.status_code == 200, saved.text
+
+    refused = await client.post("/api/v1/ext/proxmox/connections/pve1/token", json={"value": "geheim"}, headers=headers)
+    assert refused.status_code == 409 and "mehrfach" in refused.json()["detail"], refused.text
+    assert "geheim" not in refused.text
 
 
 @pytest.mark.asyncio
@@ -2572,6 +2836,7 @@ async def test_watch_reports_a_degraded_zfs_pool_and_again_when_it_fails(client,
 
 
 def test_zfs_and_temperature_helpers():
+    sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "proxmox" / "src"))  # _cleanup_sys_path räumt auf
     from nodvard_deck_ext_proxmox.node_health import temperature_limit, zfs_assessment
 
     assert zfs_assessment("ONLINE")[:2] == ("ONLINE", "good")

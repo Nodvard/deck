@@ -700,6 +700,28 @@ async def test_acknowledge_all_reports_what_it_did_and_what_stays_open():
     await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_acknowledge_all_for_one_server_leaves_the_others_open():
+    from datetime import UTC, datetime
+
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.guard import Guard
+    from nodvard_deck_ext_shield.models import SecurityEventRecord
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, [_output()])
+    async with sm() as session:
+        for event_id, host_id in (("e1", "h1"), ("e2", "h2"), ("e3", "h1")):
+            session.add(SecurityEventRecord(id=event_id, host_id=host_id, host_name=host_id, kind="login",
+                                            severity="critical", title="Anmeldung", detail={},
+                                            created_at=datetime.now(UTC)))
+        await session.commit()
+    guard = Guard(ctx, Defender(ctx))
+    assert await guard.acknowledge_all(host_id="h1") == (2, 0)
+    assert [e["id"] for e in await guard.list_events()] == ["e2"]
+    await engine.dispose()
+
+
 def test_acknowledge_routes_say_what_stays_open():
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -710,7 +732,10 @@ def test_acknowledge_routes_say_what_stays_open():
     async def acknowledge(event_id, actor=None):
         raise GuardUnavailable("pve2 ist gerade nicht erreichbar (timeout). Das Ereignis bleibt offen.")
 
-    async def acknowledge_all(actor=None):
+    hosts_asked: list[str | None] = []
+
+    async def acknowledge_all(actor=None, host_id=None):
+        hosts_asked.append(host_id)
         return 3, 1
 
     ctx = SimpleNamespace(api=SimpleNamespace(current_actor=lambda: Actor.user("u1", "anna")))
@@ -722,6 +747,8 @@ def test_acknowledge_routes_say_what_stays_open():
     one = client.post("/defender/events/ev1/acknowledge")
     assert one.status_code == 503 and one.json()["detail"].startswith("pve2 ist gerade nicht erreichbar")
     assert client.post("/defender/events/acknowledge-all").json() == {"acknowledged": 3, "kept_open": 1}
+    client.post("/defender/events/acknowledge-all?host=h2")
+    assert hosts_asked == [None, "h2"]
 
 
 @pytest.mark.asyncio
@@ -908,7 +935,8 @@ def test_rpc_port_in_reserved_range_changes_per_start_but_fixed_ports_stay_visib
     assert not ix.port_is_known(dyn, {"udp/723/nc"})
 
 
-@pytest.mark.parametrize("proc", ["tailscaled", "rpcbind", "avahi-daemon", "dhclient", "dhcpcd", "chronyd", "Tailscaled"])
+@pytest.mark.parametrize("proc", ["tailscaled", "rpcbind", "avahi-daemon", "dhclient", "dhcpcd", "chronyd", "Tailscaled",
+                                  "pihole-FTL", "dnsmasq", "unbound", "named"])
 def test_builtin_programs_with_changing_udp_ports_collapse(proc):
     first = ix.parse_ports([_ss("udp", 41641, proc), _ss("udp", 50123, proc, "[::]")])
     second = ix.parse_ports([_ss("udp", 36001, proc)])
@@ -916,7 +944,8 @@ def test_builtin_programs_with_changing_udp_ports_collapse(proc):
     assert first[0].count == 2
 
 
-@pytest.mark.parametrize("proc", ["chronyd", "dhclient", "dhcpcd", "avahi-daemon", "rpcbind", "tailscaled"])
+@pytest.mark.parametrize("proc", ["chronyd", "dhclient", "dhcpcd", "avahi-daemon", "rpcbind", "tailscaled", "pihole-FTL",
+                                  "dnsmasq", "unbound", "named"])
 @pytest.mark.parametrize("port", [4444, 40000])
 def test_fake_builtin_name_on_tcp_port_is_reported(proc, port):
     # Den Programmnamen kann jeder setzen (`exec -a chronyd`): ein TCP-Dienst unter diesem Namen
@@ -926,6 +955,143 @@ def test_fake_builtin_name_on_tcp_port_is_reported(proc, port):
     assert not ix.port_is_known(ports[0], {"tcp/dyn/chronyd", f"tcp/{port + 1}/{proc}"})
     # Auch wenn der Name (alter gespeicherter Wert) zusaetzlich in der Einstellung steht
     assert not ix.parse_ports([_ss("tcp", port, proc)], dynamic_processes=[proc, "rpc.statd"])[0].dynamic
+
+
+PIHOLE_FIXED = [_ss("tcp", 53, "pihole-FTL"), _ss("udp", 53, "pihole-FTL"), _ss("udp", 67, "pihole-FTL"),
+                _ss("tcp", 4711, "pihole-FTL", "127.0.0.1")]
+
+
+def test_pihole_query_ports_collapse_but_its_fixed_ports_stay_visible():
+    first = ix.parse_ports([*PIHOLE_FIXED, _ss("udp", 48593, "pihole-FTL"), _ss("udp", 58697, "pihole-FTL")])
+    second = ix.parse_ports([*PIHOLE_FIXED, _ss("udp", 33017, "pihole-FTL")])
+    fixed = {"tcp/53/pihole-FTL", "udp/53/pihole-FTL", "udp/67/pihole-FTL", "tcp/4711/pihole-FTL"}
+    assert {p.key for p in first} == {p.key for p in second} == {*fixed, "udp/dyn/pihole-FTL"}
+    assert next(p for p in first if p.dynamic).count == 2
+    # Unterhalb des dynamischen Bereichs bleibt auch ein UDP-Port einzeln sichtbar
+    assert {p.key for p in ix.parse_ports([_ss("udp", 5335, "pihole-FTL")])} == {"udp/5335/pihole-FTL"}
+    # Wer die Zufallsports früher einzeln bestätigt hat, bekommt keine neue Meldung
+    assert ix.port_is_known(next(p for p in second if p.dynamic), {"udp/48593/pihole-FTL"})
+
+
+@pytest.mark.asyncio
+async def test_pihole_reports_no_new_port_after_its_next_queries():
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.guard import Guard
+
+    engine, sm = await _engine()
+    scans = [[*PIHOLE_FIXED, _ss("udp", 41000 + n * 1111, "pihole-FTL")] for n in range(3)]
+    ctx = _Ctx(sm, [_output(ports="\n".join(lines)) for lines in scans])
+    guard = Guard(ctx, Defender(ctx))
+    assert [(await guard.inspect(ctx._host))["events"] for _ in scans] == [0, 0, 0]
+    await engine.dispose()
+
+
+GAME_RANGE = {"name": "srcds_linux", "protocol": "udp", "from": 27015, "to": 27030}
+
+
+def test_port_ranges_are_checked_strictly():
+    assert ix.port_ranges([GAME_RANGE]) == [ix.PortRange("srcds_linux", "udp", 27015, 27030)]
+    assert ix.port_ranges([{**GAME_RANGE, "protocol": "both", "from": 27030, "to": 27015}]) == [
+        ix.PortRange("srcds_linux", "udp", 27015, 27030), ix.PortRange("srcds_linux", "tcp", 27015, 27030)]
+    assert ix.port_ranges([{"name": "Mein-Dienst", "from": 5000, "to": 5000}]) == [ix.PortRange("mein-dienst", "udp", 5000, 5000)]
+    # Unter 1024 nur mit Häkchen: ohne zählt der Bereich erst ab 1024, ganz darunter gar nicht
+    assert ix.port_ranges([{**GAME_RANGE, "from": 100, "to": 1500}]) == [ix.PortRange("srcds_linux", "udp", 1024, 1500)]
+    assert ix.port_ranges([{**GAME_RANGE, "from": 100, "to": 200}]) == []
+    assert ix.port_ranges([{**GAME_RANGE, "from": 100, "to": 200, "allow_low": True}]) == [
+        ix.PortRange("srcds_linux", "udp", 100, 200)]
+    assert ix.port_ranges([{**GAME_RANGE, "from": 100, "to": 200, "allow_low": "true"}]) == []
+
+
+def test_a_wide_port_range_needs_its_own_tick_and_never_reaches_below_1024():
+    everything = {**GAME_RANGE, "from": 1, "to": 65535}
+    assert ix.port_ranges([everything]) == [ix.PortRange("srcds_linux", "udp", 1024, 2023)]
+    assert ix.port_ranges([{**everything, "allow_low": True}]) == [ix.PortRange("srcds_linux", "udp", 1, 1000)]
+    assert ix.port_ranges([{**everything, "wide": True}]) == [ix.PortRange("srcds_linux", "udp", 1024, 65535)]
+    assert ix.port_ranges([{**everything, "wide": True, "allow_low": True}]) == [ix.PortRange("srcds_linux", "udp", 1024, 65535)]
+    assert ix.port_ranges([{**everything, "wide": "true"}]) == [ix.PortRange("srcds_linux", "udp", 1024, 2023)]
+    # Genau 1000 Ports gehen ohne Häkchen, einer mehr wird gekürzt.
+    assert ix.port_ranges([{**GAME_RANGE, "from": 10000, "to": 10999}]) == [ix.PortRange("srcds_linux", "udp", 10000, 10999)]
+    assert ix.port_ranges([{**GAME_RANGE, "from": 10000, "to": 11000}]) == [ix.PortRange("srcds_linux", "udp", 10000, 10999)]
+    assert ix.port_ranges([{**GAME_RANGE, "from": 1, "to": 1023, "wide": True, "allow_low": True}]) == []
+
+
+def test_only_the_first_50_port_ranges_count():
+    entries = [{**GAME_RANGE, "name": f"dienst{i}"} for i in range(60)]
+    assert [r.process for r in ix.port_ranges(entries)] == [f"dienst{i}" for i in range(ix.PORT_RANGES_MAX)]
+    assert ix.PORT_RANGES_MAX == 50
+    # Auch fehlerhafte Einträge zählen mit: Was nach den ersten 50 steht, gilt nie.
+    assert ix.port_ranges(["kaputt"] * 50 + [GAME_RANGE]) == []
+
+
+def test_ssh_stays_visible_next_to_a_wide_range():
+    ranges = ix.port_ranges([{"name": "sshd", "protocol": "tcp", "from": 1, "to": 65535, "wide": True, "allow_low": True}])
+    (port,) = ix.parse_ports([_ss("tcp", 22, "sshd")], ranges=ranges)
+    assert port.span is None and port.key == "tcp/22/sshd"
+
+
+@pytest.mark.parametrize("entry", [
+    {**GAME_RANGE, "name": "zwei worte"},
+    {**GAME_RANGE, "name": "a" * 16},
+    {**GAME_RANGE, "name": ""},
+    {**GAME_RANGE, "name": None},
+    {**GAME_RANGE, "protocol": "icmp"},
+    {**GAME_RANGE, "from": 0},
+    {**GAME_RANGE, "to": 65536},
+    {**GAME_RANGE, "from": True},
+    {**GAME_RANGE, "from": "27015"},
+    {**GAME_RANGE, "from": 27015.0},
+    {"name": "srcds_linux", "from": 27015},
+    "srcds_linux 27015-27030",
+])
+def test_a_broken_port_range_does_not_count(entry):
+    assert ix.port_ranges([entry]) == []
+    assert ix.port_ranges(entry) == []
+
+
+def test_ports_in_an_own_range_count_as_one_entry():
+    ranges = ix.port_ranges([GAME_RANGE])
+    lines = [_ss("udp", 27015, "srcds_linux"), _ss("udp", 27016, "SRCDS_linux", "[::]"), _ss("udp", 27031, "srcds_linux"),
+             _ss("tcp", 27015, "srcds_linux"), _ss("udp", 27020, "nc"), _ss("udp", 27021, None)]
+    ports = {p.key: p for p in ix.parse_ports(lines, ranges=ranges)}
+    assert set(ports) == {"udp/27015-27030/srcds_linux", "udp/27015-27030/SRCDS_linux", "udp/27031/srcds_linux",
+                          "tcp/27015/srcds_linux", "udp/27020/nc", "udp/27021/?"}
+    collective = ports["udp/27015-27030/srcds_linux"]
+    assert collective.dynamic and collective.span == (27015, 27030)
+    assert collective.label == "Ports 27015–27030/udp (srcds_linux, eigener Bereich)"
+    later = ix.parse_ports([_ss("udp", 27029, "srcds_linux")], ranges=ranges)
+    assert [p.key for p in later] == ["udp/27015-27030/srcds_linux"]
+    # Ohne root kein Programmname, also auch kein eigener Bereich
+    assert [p.key for p in ix.parse_ports([_ss("udp", 27015, None)], ranges=ranges, is_root=False)] == ["udp/27015/?"]
+
+
+def test_ports_confirmed_one_by_one_cover_the_new_range():
+    port = ix.parse_ports([_ss("udp", 27020, "srcds_linux")], ranges=ix.port_ranges([GAME_RANGE]))[0]
+    assert ix.port_is_known(port, {"udp/27016/srcds_linux"})
+    assert not ix.port_is_known(port, {"udp/27031/srcds_linux"})
+    assert not ix.port_is_known(port, {"tcp/27016/srcds_linux", "udp/27016/nc", "udp/dyn/srcds_linux"})
+
+
+@pytest.mark.asyncio
+async def test_a_game_server_in_its_range_reports_only_once_and_ports_outside_still_do():
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.guard import Guard
+
+    engine, sm = await _engine()
+    base = [_ss("tcp", 22, "sshd")]
+    scans = [base, [*base, _ss("udp", 27015, "srcds_linux")], [*base, _ss("udp", 27022, "srcds_linux")],
+             [*base, _ss("udp", 27040, "srcds_linux")]]
+    ctx = _Ctx(sm, [_output(ports="\n".join(lines)) for lines in scans],
+               settings={"bruteforce_threshold": 3, "guard_port_ranges": [GAME_RANGE]})
+    guard = Guard(ctx, Defender(ctx))
+    assert (await guard.inspect(ctx._host))["events"] == 0
+    assert (await guard.inspect(ctx._host))["events"] == 1
+    assert (await guard.list_events())[0]["title"] == "Neuer offener Port: Ports 27015–27030/udp (srcds_linux, eigener Bereich)"
+    assert (await guard.inspect(ctx._host))["events"] == 0
+    assert (await guard.inspect(ctx._host))["events"] == 1
+    assert (await guard.list_events())[0]["title"] == "Neuer offener Port: 27040/udp (srcds_linux)"
+    view = (await guard.overview())["hosts"][0]["view"]
+    assert {p["key"]: p["span"] for p in view["ports"]} == {"tcp/22/sshd": None, "udp/27040/srcds_linux": None}
+    await engine.dispose()
 
 
 def test_tailscaled_tcp_counts_as_changing_only_on_its_tailscale_address():
@@ -1280,6 +1446,19 @@ def test_foreign_changes_are_never_adopted_even_right_after_the_setup():
     legacy = "/etc/sudoers.d/lattice-nodvard"
     assert not _adopted(run, legacy, _state(SHA_C, "440", "root"), None)
     assert not _adopted(run, legacy, None, _entry(legacy, _full_rule("nodvard"), "440", "root"))
+
+
+def test_a_key_line_repaired_for_dropbear_is_adopted_like_an_added_key():
+    from nodvard_deck.services import host_setup
+
+    keys = "/home/nodvard/.ssh/authorized_keys"
+    mark = host_setup.STATE_MARK
+    out = f"{host_setup.KEY_FIXED}\n{mark} before {SHA_A} 600 nodvard {keys}\n{mark} after {SHA_B} 600 nodvard {keys}\n"
+    run = _setup_run(**host_setup.setup_record("nodvard", host_setup.setup_report(out, user="nodvard"), sudo=False))
+    assert run.actions == frozenset({"key_fixed"})
+    assert _adopted(run, keys, _state(SHA_A, "600", "nodvard"), _entry(keys, SHA_B, "600", "nodvard"))
+    assert not _adopted(run, keys, _state(SHA_A, "600", "nodvard"), _entry(keys, SHA_C, "600", "nodvard"))
+    assert not _adopted(run, keys, _state(SHA_C, "600", "nodvard"), _entry(keys, SHA_B, "600", "nodvard"))
 
 
 def test_without_the_matching_action_nothing_is_adopted():

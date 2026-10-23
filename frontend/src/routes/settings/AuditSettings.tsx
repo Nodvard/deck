@@ -144,6 +144,7 @@ const ACTION_LABELS: Record<string, string> = {
   "host.setup_with_password": "Server mit Passwort einrichten",
   "host.group_changed": "Gruppe geändert",
   "shield.finding_ignored": "Fund ignoriert",
+  "shield.finding_reopened": "Fund wieder beachtet",
   "shield.malware_found": "Schadsoftware gefunden",
   "shield.quarantine": "Datei in Quarantäne verschoben",
   "shield.guard_bruteforce": "Angriff auf SSH erkannt",

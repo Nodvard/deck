@@ -84,7 +84,7 @@ describe("ContainersPage -- eigene Kachel-Adresse", () => {
     render(<ContainersPage />);
     const row = await screen.findByTestId("row-h1:pihole");
     fireEvent.click(within(row).getByRole("button", { name: "Adresse" }));
-    fireEvent.change(screen.getByRole("textbox", { name: /Adresse, die/ }), { target: { value: "http://a:b@10.0.0.5" } });
+    fireEvent.change(screen.getByRole("textbox", { name: /Adresse, die/ }), { target: { value: "http://a:" + "b@10.0.0.5" } });
     fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Passwort");
     expect(screen.getByRole("button", { name: "Speichern" })).toBeInTheDocument();

@@ -8,8 +8,9 @@ import { Badge, Button, Card, EmptyState, Icon, Notice, Stat, type Tone } from "
 import { ServerUnavailableError } from "../../../_shared/frontend/src/api";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { describeSchedule } from "../../../_shared/frontend/src/SchedulePicker";
-import { API, ago, call, count, HostFilter, proposeAndApprove, useForHost, when } from "./api";
+import { API, ago, call, count, HostFilter, proposeAndApprove, track, useForHost, usePageActions, useReloadWhenSettled, when } from "./api";
 import { deck } from "../../../_shared/frontend/src/deck";
+import { RunNotice, RunNotices, type PageNotice } from "./RunNotice";
 import { ServerSetupLink } from "./ServerSetupLink";
 
 interface Pkg {
@@ -160,11 +161,13 @@ function without<T>(record: Record<string, T>, keys: string[]): Record<string, T
 }
 
 /** Ergebnis eines Laufs als Hinweis: maßgeblich ist der Lauf auf dem Server, nicht die (vielleicht unterbrochene) Aktion. */
-function runNotice(name: string, run: UpdateRun): { kind: "ok" | "error"; text: string } {
+function runNotice(name: string, run: UpdateRun): PageNotice {
   return run.status === "ok"
     ? { kind: "ok", text: `${name}: ${run.summary ?? "Erledigt."}` }
     : { kind: "error", text: `${name}: Fehlgeschlagen: ${run.summary ?? "unbekannter Fehler"}` };
 }
+
+const unattendedKey = (hostId: string) => `${hostId}:unattended`;
 
 const RESUMED_TEXT = "Nodvard Deck wurde zwischendurch neu gestartet. Das Einspielen läuft auf dem Server weiter, das Ergebnis erscheint hier.";
 
@@ -211,7 +214,9 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
   const unmountSignal = useUnmountSignal();
   const [data, setData] = useState<UpdatesOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const [notice, setNotice] = useState<PageNotice | null>(null);
+  const page = usePageActions();
+  const { keys: { busy: acting }, signal: pageSignal } = page;
   const [open, setOpen] = useState<string | null>(null);
   const [openRun, setOpenRun] = useState<string | null>(null);
   const [pending, setPending] = useState<Record<string, Mode>>({});
@@ -233,6 +238,7 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  useReloadWhenSettled(acting, load);
   // Nicht erreichbar: nach einer kurzen Pause selbst noch einmal, bis es wieder klappt.
   useEffect(() => {
     if (!unreachable) return;
@@ -276,6 +282,10 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
       setNotice({ kind: "error", text: err instanceof Error ? err.message : String(err) });
     }
   }
+
+  // Stößt nach einer Aktion eine Prüfung an und lädt neu, ohne den Hinweis anzufassen: Das Ergebnis der Aktion soll stehen bleiben.
+  const recheck = (hostId: string) =>
+    void call(`${API}/updates/check`, { method: "POST", body: JSON.stringify({ host_ids: [hostId] }) }).catch(() => undefined).finally(() => load());
 
   /** Server, für die der Sammel-Vorschlag in dieser Art etwas anlegen würde (dieselben Bedingungen wie die Einzel-Knöpfe;
    *  ein Server, auf dem gerade etwas läuft, bekommt keinen Vorschlag). */
@@ -340,21 +350,21 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
     const ok = await deck().confirmDialog(questions[mode], { confirmLabel: labels[mode], danger: mode === "reboot" || distUpgrade });
     if (!ok) return;
     setPending((p) => ({ ...p, [h.host_id]: mode }));
-    setNotice({ kind: "ok", text: mode === "reboot" ? `Neustart von ${h.host_name} wird ausgelöst …` : `${h.host_name}: läuft – du kannst die Seite offen lassen oder weiterarbeiten.` });
+    setNotice({ kind: "info", text: mode === "reboot" ? `Neustart von ${h.host_name} wird ausgelöst …` : `${h.host_name}: läuft – du kannst die Seite offen lassen oder weiterarbeiten.` });
     const prevRun = h.last_run?.id ?? null;
     if (mode !== "reboot") setFollows((fs) => ({ ...fs, [h.host_id]: { host_name: h.host_name, prev_run: prevRun, since: Date.now() } }));
     try {
-      const text = await proposeAndApprove(`${API}/hosts/${h.host_id}/upgrade`, { mode }, mode === "reboot" ? "high" : "medium", unmountSignal());
-      let notice: { kind: "ok" | "error"; text: string } = { kind: text.startsWith("Fehlgeschlagen") ? "error" : "ok", text: `${h.host_name}: ${text}` };
+      const result = await proposeAndApprove(`${API}/hosts/${h.host_id}/upgrade`, { mode }, mode === "reboot" ? "high" : "medium", unmountSignal());
+      let notice: PageNotice = { ...result, text: `${h.host_name}: ${result.text}` };
       let keepFollowing = false;
-      if (mode !== "reboot" && text !== "Erledigt.") {
+      if (mode !== "reboot" && result.kind !== "ok") {
         // Endet die Aktion anders als „erledigt“ (etwa „durch Neustart unterbrochen“), zählt der Lauf auf dem Server.
         const fresh = await call<UpdatesOverview>(`${API}/updates`).catch(() => null);
         if (fresh) setData(fresh);
         const run = fresh?.hosts.find((x) => x.host_id === h.host_id)?.last_run;
         if (run && run.id !== prevRun) {
           if (run.status === "running") {
-            notice = { kind: "ok", text: `${h.host_name}: ${RESUMED_TEXT}` };
+            notice = { kind: "info", text: `${h.host_name}: ${RESUMED_TEXT}` };
             keepFollowing = true;
           } else notice = runNotice(h.host_name, run);
         }
@@ -380,13 +390,12 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
       { confirmLabel: "Einrichten" },
     );
     if (!ok) return;
-    try {
-      const text = await proposeAndApprove(`${API}/hosts/${h.host_id}/install`, { package: "unattended" }, "medium", unmountSignal());
-      setNotice({ kind: text.startsWith("Fehlgeschlagen") ? "error" : "ok", text: `${h.host_name}: ${text}` });
-      void checkAll([h.host_id]);
-    } catch (err) {
-      setNotice({ kind: "error", text: err instanceof Error ? err.message : String(err) });
-    }
+    const progress = `Automatische Sicherheitsupdates werden auf „${h.host_name}“ eingerichtet. Das kann einige Minuten dauern.`;
+    await track(page, unattendedKey(h.host_id), h.host_name, progress, async () => {
+      const result = await proposeAndApprove(`${API}/hosts/${h.host_id}/install`, { package: "unattended" }, "medium", pageSignal());
+      recheck(h.host_id);
+      return result;
+    });
   }
 
   const hosts = useForHost(data?.hosts ?? []);
@@ -408,7 +417,8 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
   return (
     <>
       {offline}
-      {notice && <Notice text={notice.text} kind={notice.kind} onClose={() => setNotice(null)} />}
+      {page.notices && <RunNotices notices={page.notices} onClose={(key) => page.report(key, null)} />}
+      {notice && <RunNotice notice={notice} onClose={() => setNotice(null)} />}
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Server aktuell" value={`${sm.up_to_date}/${sm.hosts}`} tone={sm.up_to_date === sm.hosts ? "good" : undefined}
@@ -544,7 +554,9 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
                   {st.unattended === false && !(c.auto_enabled && !c.auto_tag) && (
                     <>
                       Tipp: Der Server kann Sicherheitsupdates auch jeden Tag selbst einspielen.
-                      <button type="button" onClick={() => void installUnattended(h)} className="text-[var(--color-accent)] hover:underline">Einrichten</button>
+                      <button type="button" disabled={acting.has(unattendedKey(h.host_id))} onClick={() => void installUnattended(h)} className="text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline">
+                        {acting.has(unattendedKey(h.host_id)) ? "Richte ein …" : "Einrichten"}
+                      </button>
                       <span className="text-white/25">·</span>
                     </>
                   )}

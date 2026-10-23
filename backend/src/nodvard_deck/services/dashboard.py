@@ -44,11 +44,14 @@ async def get_layout(session: AsyncSession, layout_id: str, *, user_id: str) -> 
 
 
 async def update_layout(
-    session: AsyncSession, layout: DashboardLayout, *, name: str | None = None, items: list[dict[str, Any]] | None = None
+    session: AsyncSession, layout: DashboardLayout, *, name: str | None = None, items: list[dict[str, Any]] | None = None,
+    groups: list[dict[str, Any]] | None = None,
 ) -> DashboardLayout:
     if name is not None:
         layout.name = name
     if items is not None:
         layout.items = items
+    if groups is not None:
+        layout.groups = groups
     await session.flush()
     return layout

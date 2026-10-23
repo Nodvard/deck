@@ -112,6 +112,7 @@ from .widgets import (
     TableView,
     Tone,
     WidgetAction,
+    WidgetGroup,
     WidgetSpec,
 )
 
@@ -189,6 +190,7 @@ __all__ = [
     "PeerCertificate",
     # Widgets / Seiten
     "WidgetSpec",
+    "WidgetGroup",
     "HostToolSpec",
     "HostRequirementSpec",
     "PageSpec",

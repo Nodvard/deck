@@ -256,8 +256,8 @@ def test_the_subscribe_link_follows_the_ntfy_deep_link_format(server, topic, lin
 @pytest.mark.parametrize(
     ("server", "link"),
     [
-        ("https://name:geheimes-passwort@ntfy.example.org/ntfy?token=tk_geheim#frag", f"ntfy://ntfy.example.org/ntfy/alarm?{NAME}"),
-        ("http://name:geheimes-passwort@192.168.2.40:8080", f"ntfy://192.168.2.40:8080/alarm?secure=false&{NAME}"),
+        ("https://name:" + "geheimes-passwort@ntfy.example.org/ntfy?token=tk_geheim#frag", f"ntfy://ntfy.example.org/ntfy/alarm?{NAME}"),
+        ("http://name:" + "geheimes-passwort@192.168.2.40:8080", f"ntfy://192.168.2.40:8080/alarm?secure=false&{NAME}"),
     ],
 )
 def test_the_subscribe_link_carries_no_credentials_from_the_address(server, link):

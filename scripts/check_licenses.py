@@ -69,7 +69,7 @@ EXCEPTIONS: dict[tuple[str, str], Ausnahme] = {
         ),
     ),
     ("python", "pillow"): Ausnahme(
-        version="12.3.0",
+        version="13.0.0",
         bewertet_als="MIT-CMU (HPND-Familie, permissiv)",
         grund=(
             "Die Pillow-Lizenz heißt in SPDX 'MIT-CMU' (früher HPND): MIT-ähnlich, freizügig, "

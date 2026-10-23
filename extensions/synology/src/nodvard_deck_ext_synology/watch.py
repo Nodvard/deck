@@ -1,5 +1,5 @@
-"""Wächter: meldet über das Meldungs-Center, wenn an der Synology etwas kippt oder schlimmer wird und wenn es wieder in
-Ordnung ist. Was die Seite unter „Braucht Aufmerksamkeit“ zeigt, ist dieselbe Liste (`problems.py`)."""
+"""Wächter: meldet je Synology über das Meldungs-Center, wenn etwas kippt, schlimmer wird oder wieder in Ordnung ist
+(dieselbe Liste wie „Braucht Aufmerksamkeit“ auf der Seite, `problems.py`), mit eigenem Stand je Gerät."""
 
 from __future__ import annotations
 
@@ -8,13 +8,15 @@ import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
+from urllib.parse import quote
 
 from nodvard_sdk import Notification, Severity
 
-from .config import AlertConfig
+from .config import LEGACY_NAME, AlertConfig
 from .models import Overview, Problem
 from .parse import is_problem_status, is_undecided
-from .problems import covered_by_pool, pool_tones
+from .problems import covered_by_pool, device_label, pools_by_id
+from .service import NOT_CONFIGURED
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
@@ -25,6 +27,7 @@ _log = logging.getLogger(__name__)
 
 SCHEDULE = "*/5 * * * *"
 STATE_FILE = "alerts.json"
+STATE_PREFIX = "alerts-"
 PAGE_PATH = "/ext/synology/synology"
 # Die Temperatur schwankt: erst nach drei Prüfungen in Folge (10 bis 15 Minuten) melden, wieder normal erst so viele
 # Grad unter der Grenze.
@@ -40,6 +43,32 @@ _PARTS = {
     "update": "update", "backup-state": "backups", "backup-failed": "backups", "backup-overdue": "backups",
 }
 _BACKUP_KINDS = ("backup-state", "backup-failed", "backup-overdue")
+
+
+def state_path(data_dir: Path, name: str) -> Path:
+    """Der Stand eines Geräts; das übernommene Gerät behält die Datei aus der Zeit mit nur einem Gerät."""
+    return data_dir / (STATE_FILE if name == LEGACY_NAME else f"{STATE_PREFIX}{name}.json")
+
+
+def correlation_id(name: str, key: str) -> str:
+    """Die Kennung einer Meldung; das übernommene Gerät behält die alten, damit „wieder in Ordnung“ die offene Meldung ablöst."""
+    return f"synology:{key}" if name == LEGACY_NAME else f"synology:{name}:{key}"
+
+
+def _prune(data_dir: Path, names: set[str]) -> None:
+    """Löscht den Stand von Geräten, die es nicht mehr gibt, damit er bei einem neuen Gerät gleichen Namens nicht wieder auftaucht."""
+    try:
+        for path in data_dir.glob("alerts*.json"):
+            if path.name == STATE_FILE:
+                name = LEGACY_NAME
+            elif path.name.startswith(STATE_PREFIX):
+                name = path.name[len(STATE_PREFIX):-len(".json")]
+            else:
+                continue
+            if name not in names:
+                path.unlink(missing_ok=True)
+    except OSError:
+        _log.warning("Synology-Wächter: alter Stand ließ sich nicht aufräumen.", exc_info=True)
 
 
 def _load(path: Path) -> dict[str, dict[str, Any]]:
@@ -95,10 +124,10 @@ def _undecided(overview: Overview) -> set[str]:
     if overview.system is not None and overview.system.temperature_warn is None:
         found.add("temperature")
     found |= {f"pool:{p.id}" for p in overview.pools or [] if is_undecided(p.status)}
-    tones = pool_tones(overview.pools or [])
+    pools = pools_by_id(overview.pools or [])
     found |= {
         f"volume:{v.id}" for v in overview.volumes or []
-        if is_undecided(v.status) or (is_problem_status(v.status) and covered_by_pool(v, tones))
+        if is_undecided(v.status) or (is_problem_status(v.status) and covered_by_pool(v, pools))
     }
     return found
 
@@ -114,32 +143,30 @@ def _wanted(key: str, alerts: AlertConfig) -> bool:
     return alerts.notify_update if _kind(key) == "update" else alerts.notify
 
 
-async def _send(ctx: ExtensionContext, severity: Severity, title: str, body: str, key: str) -> bool:
+async def _send(ctx: ExtensionContext, severity: Severity, title: str, body: str, name: str, key: str, path: str) -> bool:
     """Ob die Meldung angelegt wurde; scheitert sie, bleibt der Stand, und sie kommt bei der nächsten Prüfung."""
     try:
         await ctx.notify.send(Notification(
-            title=title, body=body, severity=severity, correlation_id=f"synology:{key}", payload={"path": PAGE_PATH},
+            title=title, body=body, severity=severity, correlation_id=correlation_id(name, key), payload={"path": path},
         ))
     except Exception:  # noqa: BLE001 - eine fehlgeschlagene Meldung darf die übrigen nicht verhindern
-        _log.warning("Synology-Wächter: Meldung %s ließ sich nicht anlegen.", key, exc_info=True)
+        _log.warning("Synology-Wächter: Meldung %s von %s ließ sich nicht anlegen.", key, name, exc_info=True)
         return False
     return True
 
 
-async def run_watch(ctx: ExtensionContext, service: SynologyService) -> dict[str, Any]:
-    alerts = await service.alerts()
-    if not alerts.notify and not alerts.notify_update:
-        return {"checked": 0, "notified": 0, "skipped": "abgeschaltet"}
-    overview = await service.overview()
-    if overview.state != "ok":
-        # Ohne Antwort bleibt der gemerkte Stand, wie er ist; sonst käme beim nächsten Mal eine falsche Entwarnung.
-        return {"checked": 0, "notified": 0, "skipped": overview.message or overview.state}
-
-    path = Path(str(ctx.data_dir)) / STATE_FILE
+async def _watch_device(
+    ctx: ExtensionContext, data_dir: Path, overview: Overview, alerts: AlertConfig, many: bool,
+) -> tuple[int, int]:
+    """(geprüft, gemeldet) für ein Gerät, dessen Abfrage geklappt hat."""
+    name = overview.device or LEGACY_NAME
+    path = state_path(data_dir, name)
     state = _load(path)
     current: dict[str, Problem] = {p.key: p for p in overview.problems}
     readable, existing, undecided = _readable(overview), _existing(overview), _undecided(overview)
-    device = (overview.system.model if overview.system is not None else None) or "Synology"
+    # Bei mehreren Geräten sagt der Kurzname, welches gemeint ist; ein einzelnes Gerät heißt wie sein Modell.
+    device = name if many else device_label(overview.system)
+    page = f"{PAGE_PATH}?device={quote(name, safe='')}" if many else PAGE_PATH
     sent = 0
     try:
         for key in sorted(set(current) | set(state)):
@@ -165,19 +192,46 @@ async def run_watch(ctx: ExtensionContext, service: SynologyService) -> dict[str
                 first = not entry["alerted"] and entry["streak"] >= threshold
                 worse = entry["alerted"] and RANK.get(problem.severity, 1) > RANK.get(entry.get("severity", "warning"), 1)
                 severity = SEVERITIES.get(problem.severity, Severity.WARNING)
-                if (first or worse) and await _send(ctx, severity, problem.title, problem.text, key):
+                if (first or worse) and await _send(ctx, severity, problem.title, problem.text, name, key, page):
                     entry.update(alerted=True, subject=problem.subject, severity=problem.severity)
                     sent += 1
                 continue
             if entry["alerted"] and alerts.notify:
                 title = f"{device}: {entry.get('subject') or 'Problem'} wieder in Ordnung"
-                if not await _send(ctx, Severity.INFO, title, RECOVERED, key):
+                if not await _send(ctx, Severity.INFO, title, RECOVERED, name, key, page):
                     continue
                 sent += 1
             state.pop(key, None)
     finally:
         _save(path, state)
-    return {"checked": len(current), "notified": sent}
+    return len(current), sent
+
+
+async def run_watch(ctx: ExtensionContext, service: SynologyService) -> dict[str, Any]:
+    alerts = await service.alerts()
+    if not alerts.notify and not alerts.notify_update:
+        return {"checked": 0, "notified": 0, "skipped": "abgeschaltet"}
+    overviews = await service.overviews()
+    if not overviews:
+        return {"checked": 0, "notified": 0, "skipped": NOT_CONFIGURED}
+    data_dir = Path(str(ctx.data_dir))
+    _prune(data_dir, {o.device for o in overviews if o.device})
+    many = len(overviews) > 1
+    checked = notified = 0
+    skipped: list[str] = []
+    for overview in overviews:
+        if overview.state != "ok":
+            # Ohne Antwort bleibt der gemerkte Stand, wie er ist; sonst käme beim nächsten Mal eine falsche Entwarnung.
+            reason = overview.message or overview.state
+            skipped.append(f"{overview.device}: {reason}" if many else reason)
+            continue
+        done, sent = await _watch_device(ctx, data_dir, overview, alerts, many)
+        checked += done
+        notified += sent
+    result: dict[str, Any] = {"checked": checked, "notified": notified}
+    if skipped:
+        result["skipped"] = "; ".join(skipped)
+    return result
 
 
 class WatchJob:

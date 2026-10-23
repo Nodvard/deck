@@ -1,7 +1,5 @@
-"""Registry-Sync sowie Laden und Entladen von Extensions, verdrahtet mit der Datenbank und der App.
-
-Jede Phase fängt ihre eigenen Fehler und setzt `state=error`; `enable_extension()` wirft nie in den Start (docs/02 §1).
-"""
+"""Registry-Sync sowie Laden und Entladen von Extensions; jede Phase fängt ihre eigenen Fehler und setzt
+`state=error` (docs/02 §1)."""
 
 from __future__ import annotations
 
@@ -49,16 +47,13 @@ class ExtensionLoadError(Exception):
 
 
 async def get_record(session: AsyncSession, ext_id: str) -> ExtensionRecord | None:
-    """Die Registry-Zeile zu einer Kennung (heutige oder alte), gesucht über `ExtensionRuntime.store_id`.
-
-    Ein verwaister Zwilling kommt so nie zurück. Einzelzugriffe laufen hierüber, ein Test verbietet sie sonst."""
+    """Die Registry-Zeile zu einer Kennung (heutige oder alte), ein verwaister Zwilling kommt nie zurück."""
+    # Einzelzugriffe auf die Registry laufen nur hierüber, ein Test verbietet sie sonst.
     return await session.get(ExtensionRecord, get_extension_runtime().store_id(ext_id))
 
 
 async def get_records(session: AsyncSession, ext_ids: Iterable[str]) -> dict[str, ExtensionRecord]:
-    """Die Registry-Zeilen zu mehreren Kennungen mit einer Abfrage, wie `get_record` je Kennung.
-
-    Der Schlüssel ist die Kennung, wie sie übergeben wurde; Kennungen ohne Zeile fehlen im Ergebnis."""
+    """Die Registry-Zeilen zu mehreren Kennungen mit einer Abfrage; Kennungen ohne Zeile fehlen im Ergebnis."""
     runtime = get_extension_runtime()
     row_ids = {ext_id: runtime.store_id(ext_id) for ext_id in ext_ids}
     if not row_ids:
@@ -69,9 +64,8 @@ async def get_records(session: AsyncSession, ext_ids: Iterable[str]) -> dict[str
 
 
 async def is_stale_twin_address(session: AsyncSession, ext_id: str) -> bool:
-    """`ext_id` ist eine alte Kennung mit eigener, ungenutzter Registry-Zeile (verwaister Zwilling).
-
-    Die Adresse ist dann mehrdeutig (Rückweg aufs alte Image), die API darf darüber nichts ändern."""
+    """`ext_id` ist eine alte Kennung mit eigener, ungenutzter Registry-Zeile; die Adresse ist dann mehrdeutig, die
+    API ändert darüber nichts."""
     if not get_extension_runtime().is_stale_twin(ext_id):
         return False
     return await session.get(ExtensionRecord, ext_id) is not None
@@ -108,9 +102,8 @@ def public_route_prefixes(ext_id: str) -> list[str]:
 async def auto_enable_for(
     app: FastAPI, session: AsyncSession, settings: Settings, trigger: str, *, user_id: str | None = None
 ) -> list[str]:
-    """Schaltet ausgeschaltete, unberührte Erweiterungen mit `trigger` in `enable_on` ein; gibt die laufenden zurück.
-
-    Jeder Fehler bleibt hier, der Aufrufer (etwa das Anlegen eines Zugangs) scheitert daran nie."""
+    """Schaltet ausgeschaltete, unberührte Erweiterungen mit `trigger` in `enable_on` ein; der Aufrufer scheitert
+    daran nie."""
     enabled: list[str] = []
     runtime = get_extension_runtime()
     try:
@@ -156,10 +149,8 @@ async def auto_enable_for(
 
 
 def _stored_manifest(manifest: ExtensionManifest) -> dict:
-    """Das Manifest, wie es in der Registry-Zeile steht; leere `legacy_ids`- und `adopts`-Listen und ein fehlendes
-    `root_helper` bleiben weg, damit die Zeilen der übrigen Module unverändert bleiben.
-
-    Mit den Schlüsseln aus `extension.toml` (`adopts[].from`, nicht `from_`)."""
+    # Leere `legacy_ids`- und `adopts`-Listen und ein fehlendes `root_helper` bleiben weg, damit die Zeilen der
+    # übrigen Module unverändert bleiben.
     data = manifest.model_dump(mode="json", by_alias=True)
     for key in ("legacy_ids", "adopts"):
         if not data.get(key):
@@ -170,7 +161,6 @@ def _stored_manifest(manifest: ExtensionManifest) -> dict:
 
 
 def _configured(section: dict, schema: dict | None) -> bool:
-    """Steht in einem Abschnitt der Einstellungen etwas Eingetragenes, nicht nur leere Felder und Vorgaben aus `schema`?"""
     properties = (schema or {}).get("properties") or {}
     defaults = {key: spec["default"] for key, spec in properties.items() if isinstance(spec, dict) and "default" in spec}
     return any(
@@ -180,8 +170,6 @@ def _configured(section: dict, schema: dict | None) -> bool:
 
 
 async def _adopt_widgets(session: AsyncSession, source: str, target: str, widgets: dict[str, str]) -> int:
-    """Hängt die Kacheln `widgets` (alt -> neu) von `source` in allen Cockpit-Layouts an `target` um, mit Ort, Größe und
-    `config`; steht die neue Kachel schon da, fällt die alte weg. Zurück: die Zahl der umgehängten Kacheln."""
     if not widgets:
         return 0
     moved = 0
@@ -206,7 +194,6 @@ async def _adopt_widgets(session: AsyncSession, source: str, target: str, widget
 
 
 async def _adopt_secrets(session: AsyncSession, manifest: ExtensionManifest, source: str, labels: list[str]) -> int:
-    """Macht die Tresor-Einträge `labels` von `source` zu eigenen, soweit das Modul sie lesen darf. Zurück: ihre Zahl."""
     moved = unreadable = 0
     for label in labels:
         if not rbac.has_permission(manifest.permissions, f"secrets.read:{label}"):
@@ -217,7 +204,7 @@ async def _adopt_secrets(session: AsyncSession, manifest: ExtensionManifest, sou
             secret.owner_ext_id = manifest.id
             moved += 1
     if unreadable:
-        # Ohne Bezeichnung: Was im Protokoll steht, soll nichts aus dem Tresor nennen.
+        # Die Bezeichnungen stehen bewusst nicht im Protokoll: Es soll nichts aus dem Tresor nennen.
         log.warning(
             "Erweiterung '%s' übernimmt Tresor-Einträge von '%s' nicht, weil ihr das Recht secrets.read dafür fehlt "
             "(Anzahl: %d, siehe adopts im Manifest).", manifest.id, source, unreadable,
@@ -226,7 +213,6 @@ async def _adopt_secrets(session: AsyncSession, manifest: ExtensionManifest, sou
 
 
 def _uncovered(permissions: Iterable[str], granted: Iterable[str] | None) -> list[str]:
-    """Die Rechte aus `permissions`, die `granted` nicht deckt (leer: alle gedeckt)."""
     have = list(granted or [])
     return [p for p in permissions if not rbac.has_permission(have, p)]
 
@@ -234,13 +220,9 @@ def _uncovered(permissions: Iterable[str], granted: Iterable[str] | None) -> lis
 async def _adopt(
     session: AsyncSession, d: DiscoveredExtension, record: ExtensionRecord, existing: set[str], sources: dict[str, str],
 ) -> bool:
-    """Übernimmt beim ersten Entdecken, was andere Module abgeben (`adopts`), aber nur aus Zeilen von vor diesem Start
-    (`existing`). Zurück: ob etwas übernommen wurde; dann gilt das Ein/Aus als bewusst gewählt.
-
-    Nur unter mitgelieferten Modulen (`source == "bundled"` beim übernehmenden Fund und bei der Quelle, `sources`: die
-    Funde dieses Starts, sonst die gespeicherte Zeile): Ein nachinstalliertes Paket bekommt so nie Einstellungen, Kacheln
-    oder Tresor-Einträge eines anderen Moduls. Eingeschaltet wird nur, wenn die Quelle alle Rechte des neuen Moduls
-    hatte."""
+    # Übernommen wird nur aus Zeilen von vor diesem Start und nur unter mitgelieferten Modulen: Ein nachinstalliertes
+    # Paket bekommt so nie Einstellungen, Kacheln oder Tresor-Einträge eines anderen Moduls. Eingeschaltet wird nur,
+    # wenn die Quelle alle Rechte des neuen Moduls hatte.
     manifest = d.manifest
     assert manifest is not None  # nur für gültige Funde
     adopted = False
@@ -283,9 +265,7 @@ async def _adopt(
 
 
 async def _find_record(session: AsyncSession, d: DiscoveredExtension) -> ExtensionRecord | None:
-    """Die Zeile mit der Kennung des Funds, sonst die erste einer alten Kennung in der Reihenfolge von `legacy_ids`.
-
-    Jede weitere Zeile einer alten Kennung ist ein verwaister Zwilling und bleibt liegen."""
+    # Jede weitere Zeile einer alten Kennung ist ein verwaister Zwilling und bleibt liegen.
     assert d.manifest is not None  # nur für gültige Funde
     chosen: ExtensionRecord | None = None
     for candidate in (d.id, *d.manifest.legacy_ids):
@@ -305,11 +285,8 @@ async def _find_record(session: AsyncSession, d: DiscoveredExtension) -> Extensi
 
 
 def _without_twins(found: list[DiscoveredExtension]) -> list[DiscoveredExtension]:
-    """Jede Kennung nur einmal: Es gilt der erste Fund (der Ordner der mitgelieferten Module kommt vor den Paketen), jeder
-    weitere mit derselben Kennung wird verworfen. Sonst ersetzte ein nachinstalliertes Paket ein mitgeliefertes Modul
-    samt Zeile, Einstellungen, Rechten und dem, was es beim ersten Entdecken übernimmt (`adopts`).
-
-    Ein Paket mit kaputtem Manifest trägt den Distributionsnamen statt einer Kennung und belegt nichts."""
+    # Es gilt der erste Fund (die mitgelieferten Module kommen vor den Paketen), sonst ersetzte ein nachinstalliertes
+    # Paket ein mitgeliefertes Modul samt Einstellungen und Rechten.
     taken: dict[str, DiscoveredExtension] = {}
     kept: list[DiscoveredExtension] = []
     for d in found:
@@ -327,9 +304,8 @@ def _without_twins(found: list[DiscoveredExtension]) -> list[DiscoveredExtension
 
 
 async def discover_and_sync(session: AsyncSession, settings: Settings) -> dict[str, DiscoveredExtension]:
-    """Scannt, legt Zeilen für neue Funde an (`state=disabled`, aktiviert wird bewusst) und merkt sich das Ergebnis.
-
-    Bei Umbenennungen gilt die Zeile der alten Kennung weiter; nichts wird kopiert, ein Rückweg findet sie wieder."""
+    """Scannt, legt Zeilen für neue Funde an (`state=disabled`) und merkt sich das Ergebnis; die Zeile einer alten
+    Kennung gilt weiter."""
     resolution = resolve_legacy(_without_twins(discover_all(settings.extensions_dir)))
     for refused in resolution.refused:
         log.warning("Erweiterung '%s' wird nicht geladen: %s", refused.id, refused.error)
@@ -378,9 +354,8 @@ async def discover_and_sync(session: AsyncSession, settings: Settings) -> dict[s
 
 
 async def load_enabled_from_registry(app: FastAPI, session: AsyncSession, settings: Settings) -> None:
-    """Lädt beim Start alles, was noch `state=enabled` ist; ein Neustart vergisst keine Aktivierung.
-
-    Fehlt eine Erweiterung (zurückgerolltes Image), bleibt ihr Zustand stehen; `last_error` nennt den Grund."""
+    """Lädt beim Start alles, was noch `state=enabled` ist; fehlt eine Erweiterung, bleibt ihr Zustand stehen und
+    `last_error` nennt den Grund."""
     runtime = get_extension_runtime()
     result = await session.execute(select(ExtensionRecord).where(ExtensionRecord.state == "enabled"))
     records = result.scalars().all()
@@ -398,13 +373,9 @@ LOADED_LINE_NONE = "(keine)"
 
 
 def _announce_loaded(runtime: ExtensionRuntime, records: list[ExtensionRecord]) -> None:
-    """Schreibt `Erweiterungen geladen: <Speicher-Kennungen, sortiert, kommagetrennt>` ins Container-Protokoll.
-
-    Gemeint ist, was wirklich läuft: eingeschaltet, geladen und `on_start()` ohne Fehler."""
-    # `deploy/pi_switch.sh` vergleicht damit alten und neuen Container und schaltet zurück, wenn eine Kennung fehlt;
-    # deshalb schreibt auch jedes Ein- und Ausschalten sie. Die Speicher-Kennung bleibt bei Umbenennung gleich,
-    # Kennungen enthalten nie ein Komma. `print` statt `logging`: Der Dienst richtet kein Logging ein, eine
-    # `log.info`-Zeile erreichte das Protokoll nie.
+    # `deploy/pi_switch.sh` vergleicht damit alten und neuen Container und schaltet zurück, wenn eine Kennung fehlt,
+    # darum schreibt auch jedes Ein- und Ausschalten die Zeile. `print` statt `logging`: Der Dienst richtet kein
+    # Logging ein.
     ids = sorted(
         {
             ext.store_id or ext.manifest.id
@@ -419,7 +390,6 @@ def _announce_loaded(runtime: ExtensionRuntime, records: list[ExtensionRecord]) 
 
 
 async def _announce_current(session: AsyncSession) -> None:
-    """`_announce_loaded` nach einem Ein- oder Ausschalten im laufenden Betrieb, mit dem Zustand im Speicher."""
     # Ohne Autoflush: Ein Schreibvorgang hielte die Datenbanksperre, während der Aufrufer womöglich noch Code einer
     # Erweiterung ausführt (siehe `enable_extension`).
     with session.no_autoflush:
@@ -430,9 +400,8 @@ async def _announce_current(session: AsyncSession) -> None:
 async def enable_extension(
     app: FastAPI, session: AsyncSession, settings: Settings, ext_id: str, *, at_boot: bool = False
 ) -> None:
-    """Lädt die Erweiterung (`ext_id` darf eine alte Kennung sein) und setzt `state` auf das Ergebnis.
-
-    `at_boot=True` nur beim Start: Eine fehlende Erweiterung behält ihren Zustand, sonst `ExtensionLoadError`."""
+    """Lädt die Erweiterung (`ext_id` darf eine alte Kennung sein) und setzt `state`; mit `at_boot=True` behält
+    eine fehlende ihren Zustand."""
     await _enable_extension(app, session, settings, ext_id, at_boot=at_boot)
     if not at_boot:
         await _announce_current(session)
@@ -441,7 +410,6 @@ async def enable_extension(
 async def _enable_extension(
     app: FastAPI, session: AsyncSession, settings: Settings, ext_id: str, *, at_boot: bool
 ) -> None:
-    """Der eigentliche Ablauf von `enable_extension`, ohne die Zeile im Protokoll."""
     runtime = get_extension_runtime()
     ext_id = runtime.canonical(ext_id)
     if ext_id in runtime.loaded:
@@ -497,7 +465,7 @@ async def _enable_extension(
         record.last_error_at = utcnow()
         return
 
-    # Aktivieren gewährt das ganze im Manifest deklarierte Set; eine Auswahl gibt es noch nicht.
+    # Aktivieren gewährt das ganze im Manifest deklarierte Set (keine Auswahl).
     granted = list(manifest.permissions)
     record.granted_permissions = granted
 
@@ -598,7 +566,6 @@ async def _enable_extension(
 
 
 async def _may_alias(session: AsyncSession, runtime: ExtensionRuntime, d: DiscoveredExtension, source_id: str) -> bool:
-    """Alte Adressen eines anderen Moduls (`adopts.routes`) nur unter mitgelieferten Modulen, wie bei `_adopt`."""
     if d.source != "bundled":
         return False
     found = runtime.discovered.get(source_id)
@@ -609,12 +576,10 @@ async def _may_alias(session: AsyncSession, runtime: ExtensionRuntime, d: Discov
 
 
 def _path_shape(path: str) -> str:
-    """Pfad ohne Namen der Platzhalter: `/a/{id}` und `/a/{host_id}` treffen dieselben Adressen."""
     return re.sub(r"\{[^}]*\}", "{}", path)
 
 
 def _served_by(runtime: ExtensionRuntime, ext_id: str) -> set[str]:
-    """Die Pfade (unter `/api/v1/ext/<ext_id>`), die die geladene Erweiterung `ext_id` selbst bedient."""
     from fastapi.routing import APIRoute
 
     loaded = runtime.loaded.get(ext_id)
@@ -629,8 +594,6 @@ def _served_by(runtime: ExtensionRuntime, ext_id: str) -> set[str]:
 
 
 def _adopted_router(included: Iterable[tuple[APIRouter, str, list]], routes: dict[str, str]) -> tuple[APIRouter, list[str]]:
-    """Die eigenen Routen unter den alten Adressen aus `adopts.routes`, mit der Zugriffsprüfung ihres Routers, und die
-    alten Adressen ohne passende eigene Route."""
     from fastapi.routing import APIRoute
 
     out = APIRouter()
@@ -656,10 +619,8 @@ def _mount_routes(
     app: FastAPI, runtime: ExtensionRuntime, ext_id: str, router: APIRouter, *,
     adopts: Iterable[AdoptSpec] = (), included: Iterable[tuple[APIRouter, str, list]] = (),
 ) -> list[BaseRoute]:
-    """Hängt den Router unter der heutigen Kennung ein, als veraltet auch unter jeder alten und unter den Adressen aus
-    `adopts.routes`; wirft ein Einhängen, kommen die schon eingehängten Routen wieder heraus."""
-    # `mount_router` fügt immer an derselben Stelle ein, Späteres steht also davor: erst die übernommenen und die alten
-    # Kennungen rückwärts, die heutige zuletzt, damit die heutige vorn steht (`url_for`, OpenAPI).
+    # `mount_router` fügt immer an derselben Stelle ein, Späteres steht also davor: erst die übernommenen und die
+    # alten Kennungen rückwärts, die heutige zuletzt, damit sie vorn steht.
     legacy_routes: list[BaseRoute] = []
     included = list(included)
     try:
@@ -686,8 +647,7 @@ def _mount_routes(
 
 
 def _data_dir(settings: Settings, manifest: ExtensionManifest, store_id: str) -> Path:
-    """`data/ext/<Speicher-Kennung>`; fehlt der Ordner, gilt der erste vorhandene der Kennung oder einer alten."""
-    # Dort liegen die Dateien zu den Tabellenzeilen, die alle Kennungen teilen. Verschoben wird nie etwas, ein Rückweg
+    # Dort liegen die Dateien zu den Tabellenzeilen, die alle Kennungen teilen; verschoben wird nie etwas, ein Rückweg
     # aufs alte Image findet auch neue Dateien.
     for name in dict.fromkeys((store_id, manifest.id, *manifest.legacy_ids)):
         if (settings.ext_data_dir / name).is_dir():
@@ -696,7 +656,6 @@ def _data_dir(settings: Settings, manifest: ExtensionManifest, store_id: str) ->
 
 
 async def _unload_extension(app: FastAPI, session: AsyncSession, ext_id: str) -> None:
-    """Entfernt die geladene Extension (on_stop, Tasks, Routen, Registrierungen); `state` bleibt Sache des Aufrufers."""
     runtime = get_extension_runtime()
     loaded = runtime.loaded.pop(ext_id, None)
     if loaded is None:
@@ -712,7 +671,6 @@ async def _unload_extension(app: FastAPI, session: AsyncSession, ext_id: str) ->
 
 
 async def _cleanup_loaded(app: FastAPI, loaded: LoadedExtension) -> None:
-    """Entfernt alles, was eine Extension angemeldet hat; für `_unload_extension` und den setup()-Fehlerfall."""
     runtime = get_extension_runtime()
     ext_id = loaded.manifest.id
     await runtime.cancel_tasks(loaded)

@@ -1,10 +1,5 @@
-"""Hilfsskripte der Module für root-Befehle (`root_helper` im Manifest), gelesen ohne den Code des Moduls zu importieren.
-
-Ein Modul mit root-Bedarf bringt ein festes POSIX-sh-Skript mit, das neben `extension.toml` liegt. Die Einrichtung soll
-es root-eigen auf den Server legen und dem Server-Benutzer per sudo genau dieses Skript erlauben statt `ALL`. Weil der
-Text später als root läuft, prüft der Kern die Datei streng, bevor er sie je weitergibt. Ist etwas nicht in Ordnung, gibt
-es für dieses Modul kein Hilfsskript (eine Zeile im Protokoll) und es gilt die bisherige Regel; das Laden des Moduls
-scheitert daran nie. Name und Ort auf dem Server kommen aus dem SDK (`root_helper_path`), nie aus dem Modul."""
+"""Hilfsskripte der Module für root-Befehle (`root_helper` im Manifest), gelesen ohne den Code des Moduls zu
+importieren."""
 
 from __future__ import annotations
 
@@ -21,13 +16,12 @@ from .discovery import DiscoveredExtension
 logger = logging.getLogger("nodvard_deck.ext")
 
 MAX_HELPER_BYTES = 56 * 1024
-"""Größte erlaubte Datei. Das Skript reist base64-kodiert im Einrichtungsbefehl mit, der als ein Argument an `sh -c`
-geht (Linux erlaubt 128 KiB je Argument); alle Module zusammen müssen darunter bleiben (`host_setup.MAX_ONE_LINER`,
-geprüft mit den mitgelieferten Skripten in `test_bundled_root_helpers.py`)."""
+"""Größte erlaubte Datei: Das Skript reist base64-kodiert als ein `sh -c`-Argument mit (128 KiB), alle Module
+zusammen bleiben darunter."""
 SHEBANG = "#!/bin/sh"
 _ALLOWED_BYTES = frozenset(range(0x20, 0x7F)) | {0x0A, 0x09}
-"""Druckbares ASCII, Zeilenumbruch und Tabulator. Kein CR: Mit Windows-Zeilenenden liefe das Skript auf dem Server nicht
-(und hätte eine andere Prüfsumme als ein Image aus Linux), kein NUL, keine Steuerzeichen."""
+"""Druckbares ASCII, Zeilenumbruch und Tabulator; kein CR (mit Windows-Zeilenenden liefe das Skript auf dem Server
+nicht), kein NUL."""
 
 
 @dataclass(frozen=True)
@@ -57,6 +51,11 @@ def _has_symlink(base: Path, relative: str) -> bool:
     return False
 
 
+# Ein Modul mit root-Bedarf bringt ein festes POSIX-sh-Skript mit, das neben `extension.toml` liegt; die Einrichtung
+# legt es root-eigen auf den Server und erlaubt dem Server-Benutzer per sudo genau dieses Skript statt `ALL`. Weil der
+# Text als root läuft, prüft der Kern die Datei streng; ist etwas nicht in Ordnung, gibt es für dieses Modul kein
+# Hilfsskript (eine Zeile im Protokoll), das Laden des Moduls scheitert daran nie. Name und Ort auf dem Server kommen
+# aus dem SDK (`root_helper_path`), nie aus dem Modul.
 def read_root_helper(discovered: DiscoveredExtension) -> RootHelperFile | None:
     """Das Hilfsskript eines entdeckten Moduls oder `None` (keins angegeben, oder die Datei ist nicht in Ordnung)."""
     manifest = discovered.manifest

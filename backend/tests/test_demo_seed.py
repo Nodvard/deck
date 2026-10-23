@@ -26,7 +26,7 @@ async def test_seeds_generic_demo_hosts_into_an_empty_database(db_session):
 
     rows = (await db_session.execute(select(Host))).scalars().all()
     names = {h.name for h in rows}
-    assert names == {"demo-nas", "demo-webserver", "demo-pi", "demo-sicherung", "demo-testrechner"}
+    assert names == {"demo-nas", "demo-webserver", "demo-heimserver", "demo-sicherung", "demo-testrechner"}
     assert {h.status for h in rows} == {"up", "down", "unknown"}
     for h in rows:
         # Dokumentationsbereich (RFC 5737): nie ein echtes Netz.

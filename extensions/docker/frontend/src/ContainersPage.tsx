@@ -21,6 +21,8 @@ import { BulkProposeButton } from "./BulkPropose";
 import { runHostAction } from "./hostAction";
 import { ImageUpdateAction, UpdatePanel, type AppliedState, type ApplyingState, type ImageApply } from "./ImageUpdateApply";
 import { LogPanel } from "./Logs";
+import { OPERATE_NO_IMAGE_CHECK, OperateBadge } from "./operate";
+import { RegistriesSection } from "./Registries";
 import { RESOURCE_TABS, ResourcesSection, type ResourceKind } from "./Resources";
 import { StacksSection } from "./Stacks";
 import { ToStackPanel } from "./ToStack";
@@ -41,6 +43,8 @@ interface ServiceEntry {
   /** Von Nodvard Deck erkannte Adresse; `url` ist die eigene, wenn `url_custom`. */
   url_detected?: string | null;
   url_custom?: boolean;
+  /** Server im Modus „Nur bedienen“: nur Ansehen, Logs, Starten, Stoppen und Neustarten. */
+  operate_only?: boolean;
 }
 
 type Verb = "start" | "stop" | "restart" | "remove";
@@ -251,8 +255,8 @@ export function scopeImages(images: ImageUpdates | null, hostId: string | null):
 
 /** Zeile über der Tabelle. „alles aktuell“ steht nur, wenn etwas geprüft wurde und nichts offen blieb (Abruflimit,
  * unerreichbare Registry oder stummer Host sprechen dagegen). Selbst gebaute Container sind kein Problem, zählen aber
- * nicht als geprüft. */
-export function summarizeImages(images: ImageUpdates | null, checking: boolean): string | null {
+ * nicht als geprüft. `operateServers`: Server im Modus „Nur bedienen“, die nie geprüft werden. */
+export function summarizeImages(images: ImageUpdates | null, checking: boolean, operateServers = 0): string | null {
   if (checking) return "Image-Updates: Die Image-Quellen werden gefragt …";
   if (!images) return null;
   const results = Object.values(images.data ?? {});
@@ -263,6 +267,7 @@ export function summarizeImages(images: ImageUpdates | null, checking: boolean):
   const applyingText = applying === 1 ? "1 Update wird eingespielt" : `${applying} Updates werden eingespielt`;
   if (!lastCheck && failedHosts === 0) return applying > 0 ? `Image-Updates: ${applyingText}` : null;
   const head = lastCheck ? `Image-Updates geprüft ${new Date(lastCheck).toLocaleString()}` : "Image-Updates";
+  const notChecked = operateServers > 0 ? ` · ${operateServers} Server im Modus „Nur bedienen“ nicht geprüft` : "";
 
   const count = (status: ImageResult["status"]) => results.filter((r) => r.status === status).length;
   const update = count("update");
@@ -270,7 +275,9 @@ export function summarizeImages(images: ImageUpdates | null, checking: boolean):
   const local = count("local");
   const unknown = count("unknown");
   const stale = results.filter((r) => r.stale).length;
-  if (results.length === 0) return `${head} · ${failedHosts > 0 ? "Prüfung nicht möglich" : "keine laufenden Container"}${applying > 0 ? ` · ${applyingText}` : ""}`;
+  if (results.length === 0) {
+    return `${head} · ${failedHosts > 0 ? "Prüfung nicht möglich" : "keine laufenden Container"}${applying > 0 ? ` · ${applyingText}` : ""}${notChecked}`;
+  }
 
   const parts: string[] = [];
   const open = update > 0 || unknown > 0 || stale > 0 || failedHosts > 0;
@@ -285,7 +292,7 @@ export function summarizeImages(images: ImageUpdates | null, checking: boolean):
   if (stale > 0) parts.push(`${stale} mit älterer Antwort der Registry`);
   if (failedHosts > 0) parts.push(failedHosts === 1 ? "1 Server nicht erreichbar" : `${failedHosts} Server nicht erreichbar`);
   if (applying > 0) parts.push(applyingText);
-  return `${head} · ${parts.join(" · ")}`;
+  return `${head} · ${parts.join(" · ")}${notChecked}`;
 }
 
 /** Hinweis, wenn die Registry diesmal nicht geantwortet hat und die letzte Antwort gilt. */
@@ -305,8 +312,15 @@ function NeutralBadge({ label, reason }: { label: string; reason: string | null 
   );
 }
 
-/** Badge in der Spalte „Image-Update“. `result` fehlt, wenn der Container noch nicht (gestoppte gar nicht) geprüft wurde. */
-export function ImageUpdateBadge({ result, checking = false, running = true }: { result?: ImageResult; checking?: boolean; running?: boolean }): JSX.Element {
+/** Badge in der Spalte „Image-Update“. `result` fehlt, wenn der Container noch nicht (gestoppte gar nicht) geprüft wurde.
+ * `operateOnly`: Server im Modus „Nur bedienen“, dort wird nie geprüft. */
+export function ImageUpdateBadge({ result, checking = false, running = true, operateOnly = false }: {
+  result?: ImageResult;
+  checking?: boolean;
+  running?: boolean;
+  operateOnly?: boolean;
+}): JSX.Element {
+  if (operateOnly) return <span className="text-xs opacity-40" title={OPERATE_NO_IMAGE_CHECK}>–</span>;
   if (!result) {
     return checking
       ? <span className="text-xs opacity-60">prüft …</span>
@@ -530,7 +544,7 @@ function DetailsPanel({ entry, onChanged }: { entry: ServiceEntry; onChanged?: (
       <p className="opacity-85">{d.networks.map((n) => `${n.name}${n.ip ? ` (${n.ip})` : ""}`).join(" · ") || "keine"}</p>
       <p className="mt-2 mb-0.5 font-medium opacity-60">Umgebungsvariablen ({d.env_keys.length})</p>
       <p className="break-words opacity-70" title="Werte werden bewusst nicht angezeigt – dort stehen oft Passwörter.">{d.env_keys.join(", ") || "keine"}</p>
-      {!d.compose && entry.host_id && entry.container && onChanged && deck().hasPermission("hosts.execute") && (
+      {!d.compose && !entry.operate_only && entry.host_id && entry.container && onChanged && deck().hasPermission("hosts.execute") && (
         <div className="mt-2">
           <Button small pressed={toStack} onClick={() => setToStack((open) => !open)}>In Stack umwandeln</Button>
           {toStack && <ToStackPanel hostId={entry.host_id} container={entry.container} onDone={(text, warn) => { setToStack(false); onChanged(text, warn); }} />}
@@ -621,10 +635,10 @@ function NoContainers() {
   );
 }
 
-type Tab = ResourceKind | "stacks";
-const TABS: { kind: Tab; label: string }[] = [{ kind: "stacks", label: "Stacks" }, ...RESOURCE_TABS];
+type Tab = ResourceKind | "stacks" | "registries";
+const TABS: { kind: Tab; label: string }[] = [{ kind: "stacks", label: "Stacks" }, ...RESOURCE_TABS, { kind: "registries", label: "Registries" }];
 
-/** Reiter Container, Stacks, Images, Volumes, Netze (`?tab=`); die Container-Liste fragt nur, solange ihr Reiter offen ist. */
+/** Reiter Container, Stacks, Images, Volumes, Netze, Registries (`?tab=`); die Container-Liste fragt nur, solange ihr Reiter offen ist. */
 export function ContainersPage(): JSX.Element {
   const [urlParams, updateUrl] = useUrlParams();
   // Die Listen öffnen SSH wie `/hosts/{id}/docker`, deshalb erst mit `hosts.execute`.
@@ -647,6 +661,8 @@ export function ContainersPage(): JSX.Element {
       {tabs}
       {tab === "stacks" ? (
         <StacksSection hostId={urlParams.get("host") || null} onHost={(id) => updateUrl({ host: id })} empty={<NoContainers />} />
+      ) : tab === "registries" ? (
+        <RegistriesSection hostId={urlParams.get("host") || null} onHost={(id) => updateUrl({ host: id })} empty={<NoContainers />} />
       ) : (
         <ResourcesSection kind={tab} hostId={urlParams.get("host") || null} onHost={(id) => updateUrl({ host: id })} empty={<NoContainers />} />
       )}
@@ -846,7 +862,10 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
   // Scheitert erst das Nachladen (alle 30 s), bleibt die Tabelle mit dem letzten Stand stehen; der Hinweis steht darüber.
   if (error && !services) return <div className="p-4 sm:p-6">{tabs}<LoadError what="Die Liste der Container" error={error} onRetry={load} /></div>;
 
-  const imageSummary = summarizeImages(visibleImages, imagesChecking);
+  // Server im Modus „Nur bedienen“ prüft Nodvard Deck nie auf neue Images.
+  const scoped = (services ?? []).filter((s) => !hostFilter || hostIdOf(s) === hostFilter);
+  const operateServers = new Set(scoped.filter((s) => s.operate_only).map((s) => hostIdOf(s))).size;
+  const imageSummary = summarizeImages(visibleImages, imagesChecking, operateServers);
 
   const needle = query.trim().toLowerCase();
   const byHost = new Map<string, ServiceEntry[]>();
@@ -872,6 +891,7 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
   if (stackFilter && stackFilter !== NO_STACK) stacks.add(stackFilter);
   const stackOptions: [string, string][] = [...[...stacks].sort().map((p): [string, string] => [p, p]), [NO_STACK, "Ohne Stack"]];
   const filtered = Boolean(hostFilter || stackFilter || stateFilter);
+  const onlyOperate = scoped.length > 0 && scoped.every((s) => s.operate_only);
 
   return (
     <div className="mx-auto w-full max-w-7xl p-4 sm:p-6">
@@ -887,7 +907,7 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
         <button type="button" onClick={load} className="px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
           Aktualisieren
         </button>
-        {deck().hasPermission("hosts.execute") && (services ?? []).length > 0 && (
+        {deck().hasPermission("hosts.execute") && (services ?? []).length > 0 && !onlyOperate && (
           <button type="button" disabled={imagesChecking} onClick={() => void startImageCheck(false)}
             title="Fragt bei den Registries nach, ob es neuere Images gibt. Es wird nichts heruntergeladen oder neu gestartet."
             className="px-2 py-1 text-xs disabled:opacity-40 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
@@ -945,14 +965,15 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
                 {environmentText(environments[entries[0].host_id]).text}
               </span>
             )}
-            {entries[0]?.host_id && entries[0].state !== "error" && deck().hasPermission("hosts.execute") && (
+            {entries[0]?.operate_only && entries[0].host_id && <OperateBadge hostId={entries[0].host_id} />}
+            {entries[0]?.host_id && entries[0].state !== "error" && !entries[0].operate_only && deck().hasPermission("hosts.execute") && (
               <button type="button" onClick={() => setStorageFor(storageFor === entries[0].host_id ? null : entries[0].host_id!)}
                 aria-expanded={storageFor === entries[0].host_id}
                 className="px-2 py-0.5 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
                 Docker-Speicher
               </button>
             )}
-            {entries[0]?.host_id && deck().hasPermission("hosts.execute") && (
+            {entries[0]?.host_id && !entries[0].operate_only && deck().hasPermission("hosts.execute") && (
               <BulkProposeButton
                 hostId={entries[0].host_id}
                 hostName={host}
@@ -1003,7 +1024,10 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
                       <td role="cell" className="py-1.5 break-words max-md:w-full max-md:py-0 max-md:text-base">
                         {s.name}
                         {s.is_self && <span className="ml-1.5 rounded bg-white/10 px-1 text-[10px] opacity-70">Nodvard Deck</span>}
-                        {s.compose_project && (
+                        {s.compose_project && s.operate_only && (
+                          <span className="ml-1.5 rounded bg-sky-500/15 px-1 text-[10px] text-sky-300" title="Docker-Compose-Projekt">{s.compose_project}</span>
+                        )}
+                        {s.compose_project && !s.operate_only && (
                           <button
                             type="button"
                             disabled={!deck().hasPermission("hosts.execute") || pending === `stack:${s.host_id}:${s.compose_project}`}
@@ -1032,12 +1056,13 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
                       </td>
                       <td role="cell" className={`py-1.5 text-xs max-md:w-full max-md:py-0 ${imageShown ? "" : "max-md:hidden"}`}>
                         <div data-testid={`image-${s.id}`}>
-                          {manageable && <ImageUpdateBadge result={images?.data[s.id]} checking={Boolean(s.host_id && images?.hosts[s.host_id]?.checking)} running={isRunning} />}
+                          {manageable && <ImageUpdateBadge result={images?.data[s.id]} checking={Boolean(s.host_id && images?.hosts[s.host_id]?.checking)} running={isRunning}
+                            operateOnly={s.operate_only} />}
                         </div>
                         {manageable && (
                           <ImageUpdateAction
                             entryId={s.id}
-                            offer={isRunning && !s.is_self && images?.data[s.id]?.status === "update" && deck().hasPermission("hosts.execute")}
+                            offer={isRunning && !s.is_self && !s.operate_only && images?.data[s.id]?.status === "update" && deck().hasPermission("hosts.execute")}
                             apply={images?.data[s.id]?.apply}
                             applying={images?.applying?.[s.id]}
                             applied={images?.applied?.[s.id]}
@@ -1076,7 +1101,7 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
                               {busy("start") ? "…" : "Starten"}
                             </button>
                           )}
-                          {manageable && REMOVABLE_STATES.has(s.state) && !s.is_self && (
+                          {manageable && REMOVABLE_STATES.has(s.state) && !s.is_self && !s.operate_only && (
                             <button type="button" disabled={busy("remove")} onClick={() => void trigger(s, "remove")}
                               className={`rounded px-2 py-1 text-xs text-red-300 hover:bg-red-500/20 disabled:opacity-40 ${TOUCH}`}>
                               {busy("remove") ? "…" : "Löschen"}
@@ -1101,7 +1126,7 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
                               Details
                             </button>
                           )}
-                          {manageable && isRunning && !s.is_self && s.host_id && s.container && deck().hasPermission("hosts.execute") && (
+                          {manageable && isRunning && !s.is_self && !s.operate_only && s.host_id && s.container && deck().hasPermission("hosts.execute") && (
                             // Shell im Container über das Terminal des Kerns (scope/ref, siehe shell.py).
                             <a href={consoleHref(s.host_id, s.container)}
                               className={`rounded bg-white/10 px-2 py-1 text-xs hover:bg-white/20 ${TOUCH}`}>

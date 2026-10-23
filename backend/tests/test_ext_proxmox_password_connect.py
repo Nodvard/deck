@@ -1830,3 +1830,41 @@ def test_repr_never_shows_the_ticket_the_challenge_or_a_token_value():
     shown = repr(api) + repr(pending) + repr(backup)
     for secret in (TICKET, "GEHEIME-AUFFORDERUNG", "TOKEN-WERT-GEHEIM"):
         assert secret not in shown
+
+
+@pytest.mark.asyncio
+async def test_a_name_used_twice_stops_before_the_password_goes_out(client, db_session, test_settings, fake_pve):
+    twice = [
+        {"name": "pve1", "base_url": fake_pve["base_url"], "token_id": "x@pve!y"},
+        {"name": "pve1", "base_url": "https://192.168.2.11:8006", "token_id": "x@pve!z"},
+    ]
+    token = await _owner_with_proxmox(client, db_session, test_settings, twice)
+    for extra in ({"name": "pve1"}, {}):
+        r = await _connect(client, token, fake_pve["base_url"], fingerprint=fake_pve["fingerprint"], **extra)
+        assert r.status_code == 409 and r.json()["code"] == "name_twice", r.text
+        assert "Benenne" in r.json()["detail"]
+    assert fake_pve["state"]["requests"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_name_doubled_during_the_login_gets_no_token(client, db_session, test_settings, fake_pve, monkeypatch):
+    token = await _owner_with_proxmox(client, db_session, test_settings)
+    loaded = get_extension_runtime().loaded["proxmox"]
+    real_get = loaded.ctx.settings.get
+    reads = []
+
+    async def get():
+        reads.append(1)
+        values = await real_get()
+        if len(reads) > 1:
+            values["connections"] = [
+                {"name": "pve1", "base_url": fake_pve["base_url"], "token_id": "a@pve!b"},
+                {"name": "pve1", "base_url": "https://192.168.2.99:8006", "token_id": "a@pve!c"},
+            ]
+        return values
+
+    monkeypatch.setattr(loaded.ctx.settings, "get", get)
+    r = await _connect(client, token, fake_pve["base_url"], fingerprint=fake_pve["fingerprint"], name="pve1")
+    assert r.status_code == 409 and r.json()["code"] == "name_twice", r.text
+    assert fake_pve["state"]["deleted_tokens"] == ["nodvard@pve!deck"]
+    assert not await loaded.ctx.secrets.exists("proxmox-token:pve1")

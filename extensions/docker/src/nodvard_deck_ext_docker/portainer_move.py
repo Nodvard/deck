@@ -4,7 +4,9 @@ demselben Projektnamen neu ausgerollt. Die Volumes bleiben, die Container werden
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
+import logging
 import posixpath
 import re
 import time
@@ -18,7 +20,8 @@ from nodvard_sdk.types import Actor, Risk
 from .adopt import COMPOSE_V1, ITSELF, AdoptedStacks
 from .applier import RISK_ORDER
 from .capabilities import is_own_container
-from .commands import VOLUME_NAME_RE
+from .commands import CONTAINER_NAME_RE, VOLUME_NAME_RE
+from .compose_errors import docker_quoted
 from .editor import StackEditor
 from .image_apply import (
     LABEL_PROJECT,
@@ -36,6 +39,7 @@ from .new_stack import (
     _undo,
     new_stack,
 )
+from .operate import not_full_host
 from .stack_actions import (
     FAILURE_LIMIT,
     _connection_error,
@@ -46,6 +50,7 @@ from .stack_actions import (
 )
 from .stack_backup import BACKUP_IMAGE
 from .stack_delete import _ID_RE, MAX_CONTAINERS, cmd_container_ids
+from .stack_update import cmd_container_images, parse_container_images
 from .stacks import (
     MAX_ENV_BYTES,
     MAX_FILE_BYTES,
@@ -57,6 +62,8 @@ from .stacks import (
     _line_end,
     no_such_file,
 )
+
+log = logging.getLogger(__name__)
 
 MOVE_ACTION = "docker.stack_from_portainer"
 ENV_NAME = "stack.env"
@@ -86,9 +93,19 @@ _ENTRY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.ya?ml\Z")
 _LINE_RE = re.compile(r"\b(?:line|Zeile) (\d+)")
 # Nur Meldungen, in denen Compose die Datei zitiert; eigene Sätze wie „.env ließ sich nicht schreiben“ bleiben.
 _ENV_FILE_RE = re.compile(r"(?:Compose kann|failed to (?:read|load)|error reading) (?:eine |\S*/)?(?:stack)?\.env\b")
-_ESCAPE_RE = re.compile(r"\\(.)", re.DOTALL)
-_ESCAPES = {"n": "\n", "r": "\r", "t": "\t"}
-_COMMENT_RE = re.compile(r"\s#")
+# In doppelten Anführungszeichen übersetzt Compose diese Folgen, dazu `\0` mit drei Oktalziffern; alle anderen bleiben samt
+# Backslash stehen, und ein `\0` ohne passende Ziffern wird zum bloßen Backslash (nachgeprüft mit Compose 5.6).
+_ESCAPE_RE = re.compile(r"\\(u[0-9a-fA-F]{4}|0[0-7]{3}|.)", re.DOTALL)
+_ESCAPES = {"a": "\a", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v", "\\": "\\", '"': '"', "$": "$$"}
+_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_OPERATOR_RE = re.compile(r":?[-+?]")
+_MAX_NESTING = 8
+# Werte, die beim Einsetzen größer würden, bleiben roh; sonst verdoppelt jede Zeile wie `B=${A}${A}` den Speicher.
+_MAX_VALUE = MAX_ENV_BYTES
+# Für alle eingesetzten Werte einer Datei zusammen; danach bleiben sie roh, ihre Teile stehen schon einzeln in der Liste.
+_MAX_EXPANDED = 4 * MAX_ENV_BYTES
+# An diesen Zeichen zerlegen Compose und Docker einen Wert (Ports, Ordner, Image-Namen, Listen, Befehle) und zeigen ein Stück.
+_PART_RE = re.compile(r"[\s:/@,=]+")
 
 
 class PortainerProblem(Exception):
@@ -102,8 +119,8 @@ def move_action_spec() -> ActionSpec:
         "Volumes bleiben.",
         permissions=["hosts.execute"],
         host_bound=False,
-        confirm_text="Die Container des Stacks werden einmal neu erstellt und sind dabei kurz nicht erreichbar. Die Volumes bleiben. "
-        "Fortfahren?",
+        confirm_text="Die Container des Stacks werden einmal neu erstellt und sind dabei kurz nicht erreichbar. Die Volumes bleiben; was "
+        "nur in den alten Containern lag und nicht in einem Volume oder Ordner, ist danach weg. Fortfahren?",
     )
 
 
@@ -226,30 +243,130 @@ def resolved_blockers(config: dict[str, Any], folder: str, portainer_dir: str) -
     return found
 
 
+def _unescape(match: re.Match[str]) -> str:
+    code = match[1]
+    if code[0] == "u" and len(code) == 5:
+        return chr(int(code[1:], 16))
+    if code[0] == "0":
+        octal = int(code[1:] or "400", 8)
+        return chr(octal) if octal <= 0o377 else "\\" + code[1:]
+    return _ESCAPES.get(code, match[0])
+
+
+def _closing_braces(text: str) -> dict[int, int]:
+    """Zu jedem `${` die Stelle seiner schließenden Klammer; verschachtelte Vorgaben wie `${A:-${B}}` zählen mit."""
+    found: dict[int, int] = {}
+    opened: list[int] = []
+    pos = 0
+    while pos < len(text):
+        if text.startswith("$$", pos):
+            pos += 2
+            continue
+        if text.startswith("${", pos):
+            opened.append(pos)
+            pos += 2
+            continue
+        if text[pos] == "}" and opened:
+            found[opened.pop()] = pos
+        pos += 1
+    return found
+
+
+def _substitute(value: str | None, operator: str, word: str) -> str:
+    if value is None or (operator.startswith(":") and not value):
+        return word if operator.endswith("-") else ""
+    return word if operator.endswith("+") else value
+
+
+def _expand(raw: str, known: dict[str, str], limit: int = _MAX_VALUE, depth: int = 0) -> tuple[str, list[str]]:
+    """Der Wert, wie Compose `$NAME`, `${NAME}` und `${NAME:-…}` darin einsetzt (unbekannte Namen leer), und die festen Stücke
+    dazwischen: Auf dem Server kann ein unbekannter Name auch einen Wert haben."""
+    if depth > _MAX_NESTING:
+        return raw, [raw]
+    closes = _closing_braces(raw)
+    out: list[str] = []
+    pieces: list[str] = []
+    piece: list[str] = []
+    size = 0
+    pos = 0
+    while pos < len(raw):
+        if raw.startswith("$$", pos):
+            out.append("$")
+            piece.append("$")
+            pos += 2
+            continue
+        braced = raw.startswith("${", pos)
+        name = _NAME_RE.match(raw, pos + (2 if braced else 1)) if raw[pos] == "$" else None
+        if name is None or (braced and pos not in closes):
+            out.append(raw[pos])
+            piece.append(raw[pos])
+            pos += 1
+            continue
+        pieces.append("".join(piece))
+        piece.clear()
+        value = known.get(name[0])
+        if braced:
+            rest = raw[name.end():closes[pos]]
+            operator = _OPERATOR_RE.match(rest)
+            word, inner = _expand(rest[operator.end():], known, limit, depth + 1) if operator else ("", [])
+            pieces += inner
+            value = _substitute(value, operator[0] if operator else "", word)
+            pos = closes[pos] + 1
+        else:
+            pos = name.end()
+        size += len(value or "")
+        if size > limit:
+            return raw, [raw]
+        out.append(value or "")
+    pieces.append("".join(piece))
+    return "".join(out), pieces
+
+
+def _nameless(text: str, pos: int, end: int) -> tuple[str, int] | None:
+    """Eine Zeile `=wert` oder `: wert`: Compose liest sie als Variable ohne Namen, und Docker nennt den Wert beim Start ganz."""
+    body = text[pos:end].lstrip(" \t")
+    if body.startswith("export") and body[6:7] in (" ", "\t"):
+        body = body[7:].lstrip(" \t")
+    return ("", end - len(body) + 1) if body[:1] in ("=", ":") else None
+
+
 def secret_values(env: bytes | None) -> list[str]:
-    """Die Werte aus `stack.env` roh, wie Compose sie liest und wie Docker sie zitiert, längste zuerst; deckt die bekannten Formen ab."""
+    """Die Werte aus `stack.env` in den Formen, in denen Compose oder Docker sie zeigen: roh, gelesen und eingesetzt wie von
+    Compose, in Stücken und so, wie Docker sie zitiert; längste zuerst."""
     text = (env or b"").decode("utf-8", "replace").removeprefix("\ufeff")
     found: set[str] = set()
+    known: dict[str, str] = {}
+    budget = _MAX_EXPANDED
     pos = 0
     while pos < len(text):
         end = _line_end(text, pos)
         found.add(text[pos:end].partition("=")[2].strip().strip("\"'"))
-        if (assignment := _assignment(text, pos, end)) is not None:
-            start = assignment[1]
+        if (assignment := _assignment(text, pos, end) or _nameless(text, pos, end)) is not None:
+            name, start = assignment
             while start < end and text[start] in " \t":
                 start += 1
-            if start < end and text[start] in "'\"":
+            if start < end and text[start] == "'":
                 close = _closing_quote(text, start)
                 raw = text[start + 1:close]
-                found |= {raw, _ESCAPE_RE.sub(lambda m: _ESCAPES.get(m[1], m[1]), raw)}
+                value, pieces = raw.replace("\\'", "'"), []
+                end = _line_end(text, close)
+            elif start < end and text[start] == '"':
+                close = _closing_quote(text, start)
+                raw = text[start + 1:close]
+                value, pieces = _expand(_ESCAPE_RE.sub(_unescape, raw), known, min(budget, _MAX_VALUE))
                 end = _line_end(text, close)
             else:
-                found.add(_COMMENT_RE.split(text[start:end], maxsplit=1)[0].strip())
+                # Wie Compose: Ein Kommentar beginnt erst mit „ #“, ein Tabulator davor gehört zum Wert.
+                raw = text[start:end].split(" #", 1)[0].rstrip()
+                value, pieces = _expand(raw, known, min(budget, _MAX_VALUE))
+            if value != raw:
+                budget = max(budget - len(value), 0)
+            known[name] = value if len(value) <= _MAX_VALUE else raw
+            found |= {raw, value, *pieces}
         pos = end + 1
     found |= {line.strip() for value in list(found) for line in value.splitlines()}
-    # Compose macht aus `$$` ein `$`; Docker setzt in Anführungszeichen vor `\` und `"` einen Backslash.
-    found |= {form for value in list(found) for plain in (value, value.replace("$$", "$"))
-              for form in (plain, plain.replace("\\", "\\\\").replace('"', '\\"'))}
+    found |= {part for value in list(found) for part in _PART_RE.split(value)}
+    found |= {docker_quoted(value) for value in list(found)}
     return sorted((v for v in found if len(v) >= 4), key=len, reverse=True)
 
 
@@ -259,6 +376,8 @@ def scrub(text: str, values: list[str]) -> str:
         text = text.replace(value, "…")
     # Eine gekürzte Meldung kann mit dem Anfang eines Werts enden.
     for value in values:
+        if value[:4] not in text[-FAILURE_LIMIT:]:
+            continue
         if cut := next((n for n in range(min(len(value) - 1, FAILURE_LIMIT), 3, -1) if text.endswith(value[:n])), 0):
             text = text[:-cut] + "…"
     if values and _ENV_FILE_RE.search(text):
@@ -340,6 +459,30 @@ def foreign_file(compose: str, stack: Stack) -> str | None:
         return (f"Für {_names(extra)} steht ein Dienst in der Datei bei Portainer, es gibt aber keinen Container dazu. Rolle den Stack "
                 "in Portainer einmal neu aus und versuch es dann noch einmal.")
     return None
+
+
+def _image_key(ref: str) -> str:
+    """Ein Image-Name, wie Docker ihn auflöst: ohne `docker.io/` und `library/`, mit `:latest`, wenn weder Tag noch Digest dasteht."""
+    name, at, digest = ref.partition("@")
+    name = name.removeprefix("docker.io/").removeprefix("index.docker.io/").removeprefix("library/")
+    if not at and name.rfind(":") <= name.rfind("/"):
+        name += ":latest"
+    return name + at + digest
+
+
+def changed_images(config: dict[str, Any], running: dict[str, str]) -> str | None:
+    """Warum die Datei, wie Compose sie im neuen Ordner auflöst, andere Images nennt als die laufenden Container, oder `None`."""
+    services = config.get("services") if isinstance(config.get("services"), dict) else {}
+    found = []
+    for name, ref in sorted(running.items()):
+        image = services[name].get("image") if isinstance(services.get(name), dict) else None
+        if isinstance(image, str) and _image_key(image) != _image_key(ref):
+            found.append(f"Für „{name}“ steht darin das Image {image}, der Container läuft aber mit {ref}.")
+    if not found:
+        return None
+    return (f"Die Datei bei Portainer passt nicht zum laufenden Stack: {' '.join(found)} Vielleicht gehört sie zu einem anderen Stack, "
+            "oder der Stack wurde außerhalb von Portainer geändert. Prüfe den Stack in Portainer; stimmt die Datei, rolle ihn dort einmal "
+            "neu aus und versuch es dann noch einmal.")
 
 
 def _starts(service: Any) -> bool:
@@ -437,7 +580,7 @@ class PortainerMove:
                 except Exception as exc:  # noqa: BLE001 - als Grund zeigen
                     return None if no_such_file(exc) else await _unclear(sftp, exc, folder, root)
         except Exception as exc:  # noqa: BLE001 - als Grund zeigen
-            return f"Der Ordner {folder} ließ sich nicht prüfen ({str(exc) or type(exc).__name__})."
+            return f"Der Ordner {folder} ließ sich nicht prüfen ({str(exc) or type(exc).__name__}). Versuch es noch einmal."
         return f"Den Ordner {folder} gibt es schon. Nodvard Deck überschreibt nie einen bestehenden Ordner."
 
 
@@ -452,6 +595,7 @@ class DockerPortainerMoveExecutor:
         self._create = create
         self._adopted = adopted
         self._actions = actions
+        self._cleanups: set[asyncio.Task[list[tuple[str, str]]]] = set()
 
     async def execute(self, req: ActionRequest) -> ActionResult:
         payload = req.payload or {}
@@ -463,9 +607,10 @@ class DockerPortainerMoveExecutor:
         if not PROJECT_RE.match(project):
             return ActionResult(success=False, error=f"Ungültiger Stack-Name: {project!r}")
         host = await self._ctx.hosts.get(req.host_ref) if req.host_ref else None
-        tag = (await self._ctx.settings.get()).get("docker_host_tag") or "docker"
-        if host is None or tag not in host.tags:
+        if host is None:
             return ActionResult(success=False, error="Kein Docker-Host.")
+        if why := not_full_host(host, await self._ctx.settings.get()):
+            return ActionResult(success=False, error=why)
         with self._actions.locks.hold(host.id, project, "Umzug von Portainer") as busy:
             if busy is not None:
                 return ActionResult(success=False, error=busy_text(busy))
@@ -485,7 +630,7 @@ class DockerPortainerMoveExecutor:
         if result.exit_code != 0:
             # Nie die Ausgabe: Sie könnte schon Inhalt der Datei sein.
             reason = failure_line(result.stderr) if (result.stderr or "").strip() else f"Exit {result.exit_code}"
-            return f"{name} ließ sich bei Portainer nicht lesen: {reason}."
+            return f"{name} ließ sich bei Portainer nicht lesen: {_sentence(reason)}"
         if "\ufffd" in result.stdout:
             return f"{name} ist keine Textdatei in UTF-8."
         data = result.stdout.encode("utf-8")
@@ -493,8 +638,20 @@ class DockerPortainerMoveExecutor:
             return f"{name} ist größer als {limit // 1024} KB."
         return data
 
-    async def _gather(self, host: Any, project: str, payload: dict[str, Any]) -> tuple[Stack, bytes, bytes | None] | str:
-        """Stack, Datei und Variablen bei Portainer, oder warum es nicht weitergeht; ändert noch nichts."""
+    async def _images(self, host: Any, stack: Stack) -> dict[str, str] | str:
+        """Dienst -> Image-Name, mit dem seine Container angelegt wurden, oder warum sich das nicht lesen ließ."""
+        names = [m.name for m in stack.members if CONTAINER_NAME_RE.match(m.name)]
+        if not names:
+            return {}
+        result = await self._ctx.exec.run_argv(host, cmd_container_images(names), timeout_s=60)
+        if result.exit_code != 0:
+            return f"Die Container des Stacks ließen sich nicht lesen: {failure_line(result.stderr or result.stdout)}"
+        # Laufen die Container eines Dienstes mit verschiedenen Images, gibt es keinen gemeinsamen Stand zum Vergleichen.
+        return {service: entry.ref for service, entry in parse_container_images(result.stdout).items() if not entry.mixed}
+
+    async def _gather(self, host: Any, project: str, payload: dict[str, Any]) -> tuple[Stack, bytes, bytes | None, dict[str, str]] | str:
+        """Stack, Datei und Variablen bei Portainer und die Images der laufenden Container, oder warum es nicht weitergeht; ändert
+        noch nichts."""
         plan = await self._move.plan(host, project)
         if plan["problem"] is not None:
             return f"{_sentence(plan['problem'])} Geändert wurde nichts."
@@ -505,8 +662,10 @@ class DockerPortainerMoveExecutor:
         except PortainerProblem as exc:
             return f"{exc} Geändert wurde nichts."
         stack = await self._move.running(host, project)
-        if storage is None or isinstance(stack, str) or isinstance(entry := portainer_entry(stack), str):
+        if storage is None or isinstance(stack, str):
             return "Portainer oder der Stack ist inzwischen nicht mehr zu finden. Geändert wurde nichts."
+        if isinstance(entry := portainer_entry(stack), str):
+            return f"{_sentence(entry)} Geändert wurde nichts."
         stack_id, name = entry
         compose = await self._read(host, storage, stack_id, name, MAX_FILE_BYTES)
         env = await self._read(host, storage, stack_id, ENV_NAME, MAX_ENV_BYTES, optional=True)
@@ -514,7 +673,10 @@ class DockerPortainerMoveExecutor:
             return f"{compose} Geändert wurde nichts."
         if isinstance(env, str):
             return f"{env} Geändert wurde nichts."
-        return stack, compose, env
+        images = await self._images(host, stack)
+        if isinstance(images, str):
+            return f"{_sentence(images)} Geändert wurde nichts."
+        return stack, compose, env, images
 
     async def _run(self, req: ActionRequest, host: Any, project: str, payload: dict[str, Any]) -> ActionResult:
         started = time.monotonic()
@@ -526,7 +688,7 @@ class DockerPortainerMoveExecutor:
             gathered = f"Der Stack ließ sich bei Portainer nicht lesen: {_lost(exc)}. Geändert wurde nichts."
         if isinstance(gathered, str):
             return ActionResult(success=False, error=gathered)
-        stack, compose, env = gathered
+        stack, compose, env, images = gathered
         values = secret_values(env)
         text = compose.decode("utf-8")
         if blockers := move_blockers(text, stack.working_dir):
@@ -540,43 +702,59 @@ class DockerPortainerMoveExecutor:
         if env and uses_stack_env(text):
             extra += ((f"{target.working_dir}/{ENV_NAME}", env),)
 
+        own: list[str] = []
+
         def vet(config: dict[str, Any]) -> str | None:
             found = resolved_blockers(config, target.working_dir, stack.working_dir)
-            return " ".join(_sentence(b) for b in found) if found else None
+            refusal = " ".join(_sentence(b) for b in found) if found else changed_images(config, images)
+            own.extend([refusal] if refusal else [])
+            return refusal
 
         created: list[tuple[str, str]] = []
         async with self._ctx.exec.sftp(host) as sftp:
             try:
                 problem = await self._create.lay_out(req, sftp, host, target, root, compose, created, extra, vet=vet)
             except BaseException:
-                await _shielded_undo(sftp, created)
+                await self._clean_up_after_abort(host, target, created, look=False, compose_may_run=False)
                 raise
-            if problem is not None:
-                left = await _shielded_undo(sftp, created)
-                return ActionResult(success=False, error=_sentence(scrub(problem, values)) + _leftover(left) + " Am Stack hat sich nichts geändert.")
+        if problem is not None:
+            left = await self._clean_up_now(host, target, created)
+            # Nur Ausgaben von Compose können Werte zitieren; Decks eigene Sätze nennen Ordner und Images, die bleiben lesbar.
+            reason = problem if problem in own else scrub(problem, values)
+            return ActionResult(success=False, error=_sentence(reason) + _leftover(left) + " Am Stack hat sich nichts geändert.")
         before = sum(1 for m in stack.members if m.state == "running")
         return await self._roll_out(host, target, created, values, started, before)
 
     async def _roll_out(
         self, host: Any, target: Stack, created: list[tuple[str, str]], values: list[str], started: float, before: int,
     ) -> ActionResult:
-        """Rollt im neuen Ordner aus und übernimmt erst, wenn dort Container laufen; sonst räumt es den Ordner wieder weg."""
+        """Rollt im neuen Ordner aus; nach einem Abbruch räumt es auf, soweit das sicher geht, und nennt Reste im Log."""
+        compose_may_run = True
+        try:
+            try:
+                result = await self._ctx.exec.run_argv(host, cmd_move_up(target), timeout_s=UP_TIMEOUT_S)
+            except Exception as exc:
+                if not _connection_error(exc):
+                    raise
+                # Ohne Antwort ist offen, ob Compose auf dem Server schon läuft; es lebt auch nach einem Abriss der Verbindung weiter.
+                cut, problem = (f"Neu ausrollen hat nach {UP_TIMEOUT_S // 60} Minuten nicht geendet" if type(exc) is TimeoutError
+                                else f"Beim Ausrollen brach die Verbindung ab ({_lost(exc)})"), None
+            else:
+                compose_may_run, cut = False, None
+                problem = scrub(failure_line(scrub(result.stderr or result.stdout, values)), values) if result.exit_code != 0 else None
+            return await self._settle(host, target, created, started, before, cut, problem)
+        except BaseException:
+            # Abbruch (Zeitgrenze der Freigabe, Neustart) oder ein unerwarteter Fehler: Es gibt keine Meldung mehr.
+            await self._clean_up_after_abort(host, target, created, look=True, compose_may_run=compose_may_run)
+            raise
+
+    async def _settle(
+        self, host: Any, target: Stack, created: list[tuple[str, str]], started: float, before: int, cut: str | None, problem: str | None,
+    ) -> ActionResult:
+        """Übernimmt den Stack, wenn Container aus dem neuen Ordner laufen; sonst räumt es den Ordner wieder weg."""
         from . import after_check as ac  # spät: after_check braucht capabilities
 
         folder = target.working_dir
-        cut, problem = None, None
-        try:
-            result = await self._ctx.exec.run_argv(host, cmd_move_up(target), timeout_s=UP_TIMEOUT_S)
-            if result.exit_code != 0:
-                problem = scrub(failure_line(scrub(result.stderr or result.stdout, values)), values)
-        except BaseException as exc:
-            if not isinstance(exc, Exception) or not _connection_error(exc):
-                # Abbruch (Zeitgrenze der Freigabe, Neustart): Läuft schon etwas aus dem neuen Ordner, wenigstens merken.
-                await asyncio.shield(self._adopt_if_moved(host, target))
-                raise
-            # Ohne Antwort ist offen, ob Compose auf dem Server schon läuft; es lebt auch nach einem Abriss der Verbindung weiter.
-            cut = (f"Neu ausrollen hat nach {UP_TIMEOUT_S // 60} Minuten nicht geendet" if type(exc) is TimeoutError
-                   else f"Beim Ausrollen brach die Verbindung ab ({_lost(exc)})")
         duration_ms = int((time.monotonic() - started) * 1000)
         rows = await self._move.working_dirs(host, target.project)
         moved = rows is not None and any(d == folder for d, _ in rows)
@@ -610,13 +788,7 @@ class DockerPortainerMoveExecutor:
                 then = f"der Stack ist übernommen. {fix}" if adopted is None else (
                     f"übernehmen ließ er sich nicht ({adopted}). Übernimm ihn im Reiter Stacks. {fix}")
                 return ActionResult(success=False, duration_ms=duration_ms, error=f"{reason} {where}; {then} {KEEP_IN_PORTAINER}")
-            try:
-                async with self._ctx.exec.sftp(host) as sftp:
-                    left = await _shielded_undo(sftp, created)
-            except Exception as exc:
-                if not _connection_error(exc):
-                    raise
-                left = list(created)
+            left = await self._clean_up_now(host, target, created)
             running = sum(1 for d, state in rows if d.startswith(PORTAINER_DIR) and state == "running")
             if running >= before:
                 now = "Die Container laufen weiter wie unter Portainer." if before else "Der Stack bleibt gestoppt wie vorher."
@@ -638,7 +810,7 @@ class DockerPortainerMoveExecutor:
         moved_text = f"Stack „{target.project}“ liegt jetzt in {folder} und ist übernommen."
         if isinstance(after, str):
             return ActionResult(success=False, exit_code=0, output=moved_text, duration_ms=duration_ms, error=(
-                f"Prüfung danach nicht möglich: {after} {KEEP_IN_PORTAINER}"
+                f"Prüfung danach nicht möglich: {_sentence(after)} {KEEP_IN_PORTAINER}"
             ))
         verdict, _ = await ac.check_running(self._ctx, host, [m.id for m in after.members])
         line = ac.result_line(verdict)
@@ -655,10 +827,58 @@ class DockerPortainerMoveExecutor:
             return str(exc) or type(exc).__name__
         return None
 
-    async def _adopt_if_moved(self, host: Any, target: Stack) -> None:
-        rows = await self._move.working_dirs(host, target.project)
-        if rows is not None and any(d == target.working_dir for d, _ in rows):
-            await self._adopt(host, target)
+    def _clean_up_task(
+        self, host: Any, target: Stack, created: list[tuple[str, str]], *, look: bool, compose_may_run: bool,
+    ) -> asyncio.Task[list[tuple[str, str]]]:
+        """Das Aufräumen als eigene Aufgabe, die ein Abbruch der Aktion nicht mitreißt; sie übernimmt, was der Umzug angelegt hat."""
+        task = asyncio.get_running_loop().create_task(
+            self._clean_up(host, target, list(created), look=look, compose_may_run=compose_may_run))
+        created.clear()
+        self._cleanups.add(task)
+        task.add_done_callback(self._cleanups.discard)
+        return task
+
+    async def _clean_up_now(self, host: Any, target: Stack, created: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        """Entfernt den neuen Ordner und gibt zurück, was stehen blieb; bricht die Aktion dabei ab, räumt es trotzdem fertig auf."""
+        cleanup = self._clean_up_task(host, target, created, look=False, compose_may_run=False)
+        try:
+            return await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            cleanup.add_done_callback(functools.partial(_report_after_abort, target.project, target.working_dir, False))
+            raise
+
+    async def _clean_up_after_abort(
+        self, host: Any, target: Stack, created: list[tuple[str, str]], *, look: bool, compose_may_run: bool,
+    ) -> None:
+        if not created:
+            return
+        cleanup = self._clean_up_task(host, target, created, look=look, compose_may_run=compose_may_run)
+        cleanup.add_done_callback(functools.partial(_report_after_abort, target.project, target.working_dir, compose_may_run))
+        # Auch ein zweiter Abbruch reißt das Aufräumen nicht mit, er beendet nur das Warten darauf.
+        await asyncio.wait([cleanup])
+
+    async def _clean_up(
+        self, host: Any, target: Stack, created: list[tuple[str, str]], *, look: bool, compose_may_run: bool,
+    ) -> list[tuple[str, str]]:
+        """Entfernt, was der Umzug angelegt hat, und gibt zurück, was stehen blieb; laufen laut `look` schon Container aus dem neuen
+        Ordner, merkt sich Deck stattdessen den Stack, und solange Compose noch laufen kann, bleibt alles stehen."""
+        if look:
+            rows = await self._move.working_dirs(host, target.project)
+            if rows is not None and any(d == target.working_dir for d, _ in rows):
+                if (adopted := await self._adopt(host, target)) is not None:
+                    log.warning("docker_portainer_move_not_adopted project=%s folder=%s reason=%s", target.project, target.working_dir, adopted)
+                return []
+            if rows is None:
+                return list(created)
+        if compose_may_run:
+            return list(created)
+        try:
+            async with self._ctx.exec.sftp(host) as sftp:
+                return await _undo(sftp, created)
+        except Exception as exc:  # noqa: BLE001 - was stehen bleibt, nennt die Meldung oder das Log
+            if not _connection_error(exc):
+                log.warning("docker_portainer_move_clean_up_failed project=%s folder=%s", target.project, target.working_dir, exc_info=True)
+            return list(created)
 
     async def dry_run(self, req: ActionRequest) -> DryRunReport | None:
         payload = req.payload or {}
@@ -667,8 +887,17 @@ class DockerPortainerMoveExecutor:
         ))
 
 
-async def _shielded_undo(sftp: Any, created: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    return await asyncio.shield(_undo(sftp, created))
+def _report_after_abort(project: str, folder: str, compose_may_run: bool, cleanup: asyncio.Task[list[tuple[str, str]]]) -> None:
+    """Nach einem Abbruch gibt es keine Meldung mehr; was vom neuen Ordner stehen bleibt, steht dann im Log."""
+    if cleanup.cancelled():
+        log.warning("docker_portainer_move_clean_up_cancelled project=%s folder=%s", project, folder)
+        return
+    if (exc := cleanup.exception()) is not None:
+        log.warning("docker_portainer_move_clean_up_failed project=%s folder=%s", project, folder, exc_info=exc)
+        return
+    if left := cleanup.result():
+        log.warning("docker_portainer_move_left_after_abort project=%s folder=%s compose_may_run=%s left=%s", project, folder,
+                    compose_may_run, ",".join(path for _, path in left))
 
 
 def move_routes(move: PortainerMove, editor: StackEditor, docker_host: Any, current_actor: Any) -> APIRouter:
@@ -692,7 +921,9 @@ def move_routes(move: PortainerMove, editor: StackEditor, docker_host: Any, curr
         if plan["problem"] is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=plan["problem"])
         reason = (f"Portainer-Stack „{project}“ nach {plan['folder']} holen: Datei und Variablen aus Portainer, dann neu ausrollen. "
-                  "Die Container werden einmal neu erstellt, die Volumes bleiben.")
+                  "Die Container werden einmal neu erstellt, die Volumes bleiben; was nur in den alten Containern lag und nicht in einem "
+                  "Volume oder Ordner, ist danach weg. Nennt die Datei bei Portainer andere Dienste oder Images, als gerade laufen, bricht "
+                  "Deck vorher ab.")
         decision = await editor.propose(ActionRequest(
             action_type=MOVE_ACTION, host_ref=host.id, risk=Risk.HIGH, proposed_by=actor, reason=reason,
             payload={"project": project, "folder": plan["folder"], "portainer_id": plan["portainer_id"]},

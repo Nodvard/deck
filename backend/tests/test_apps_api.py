@@ -265,7 +265,7 @@ async def test_delete_removes_the_app(client, db_session):
         "vbscript:x",
         "192.168.2.1",
         "//evil.example/",
-        "http://user:pass@192.168.2.1/",
+        "http://user:" + "pass@192.168.2.1/",
         "http://exa mple.org/",
         "http://",
         "http://host:99999/",

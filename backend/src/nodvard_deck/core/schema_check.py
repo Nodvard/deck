@@ -1,18 +1,4 @@
-"""Schmaler Prüfer für Werte gegen ein JSON-Schema (bewusst ohne `jsonschema`-Abhängigkeit).
-
-Gebraucht wird er für die Parameter einer Aktion (`ActionSpec.params_schema`, Route `POST /hosts/{id}/actions/{typ}`):
-Passt ein Wert nicht, soll der Nutzer das gleich beim Auslösen mit einem klaren deutschen Satz erfahren, nicht erst als
-fehlgeschlagene Aktion.
-
-Geprüft werden nur die Schlüsselwörter, die Schemas der Erweiterungen wirklich benutzen oder die sich billig und
-eindeutig prüfen lassen: `type` (auch als Liste), `enum`, `pattern`, `minLength`/`maxLength`, `minimum`/`maximum`,
-`properties`, `required`, `additionalProperties`, `items`, `minItems`/`maxItems`. Alles andere (`oneOf`, `$ref`,
-`format`, ...) wird NICHT geprüft und auch nicht abgelehnt: lieber eine Angabe durchlassen als eine gültige Aktion
-blockieren. Verbindlich prüft immer der Ausführer der Aktion; diese Prüfung ist nur die frühe, freundliche Vorstufe.
-
-Die kleinen Helfer für Muster und Zahlen (`pattern_matches`, `range_text`, ...) nutzen auch die Einstellungen der
-Erweiterungen (`api/v1/extension_settings.py`), damit beide Stellen gleich urteilen.
-"""
+"""Schmale Prüfung von Werten gegen ein JSON-Schema, bewusst ohne `jsonschema`-Abhängigkeit."""
 
 from __future__ import annotations
 
@@ -26,8 +12,7 @@ PATTERN_MAX_LENGTH = 2000
 
 
 def js_anchors(pattern: str) -> str:
-    """`$` heißt in JavaScript „Ende des Textes“, in Python auch „vor einem `\\n` am Ende“.
-    Damit Oberfläche und Backend gleich urteilen, wird ein `$` außerhalb von Zeichenklassen zu `\\Z`."""
+    """`$` heißt in JavaScript „Ende des Textes“, in Python auch „vor einem `\\n` am Ende“, darum wird es zu `\\Z`."""
     out: list[str] = []
     in_class = False
     i = 0
@@ -61,8 +46,7 @@ def bound(schema: dict[str, Any], key: str) -> float | None:
     value = schema.get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    # Nur ein `float` kann NaN oder unendlich sein. `math.isfinite` auf einer riesigen ganzen Zahl (`10**400`) wirft
-    # dagegen `OverflowError`, weil sie sich nicht in ein `float` wandeln lässt.
+    # `math.isfinite` wirft bei einer riesigen ganzen Zahl (`10**400`) `OverflowError`, nur ein `float` kann NaN sein.
     return value if isinstance(value, int) or math.isfinite(value) else None
 
 
@@ -71,8 +55,7 @@ _SHORT_DIGITS = 20
 
 
 def number_text(value: float) -> str:
-    """Zahl für eine Meldung: ganze Zahlen ohne Nachkommastellen, sonst mit deutschem Komma (wie die Oberfläche).
-    Riesige ganze Zahlen werden gekürzt (`1,000 × 10^400`), die Meldung soll kurz bleiben."""
+    """Zahl für eine Meldung: ganze Zahlen ohne Nachkommastellen, sonst mit deutschem Komma, riesige gekürzt."""
     if isinstance(value, float) and value.is_integer():
         value = int(value)
     if isinstance(value, int):
@@ -95,7 +78,8 @@ def range_text(low: float | None, high: float | None) -> str:
 
 
 class SchemaError(ValueError):
-    """Ein Wert passt nicht zum Schema. Der Text ist für Anwender gedacht (deutsch, nennt das Feld und was falsch ist)."""
+    """Ein Wert passt nicht zum Schema; der Text ist für Anwender gedacht (deutsch, nennt das Feld und was falsch
+    ist)."""
 
 
 _TYPE_LABEL = {
@@ -144,8 +128,6 @@ def _value_type_label(value: Any) -> str:  # noqa: ANN401 - jeder JSON-Wert
 
 
 def _declared_types(schema: dict[str, Any]) -> list[str]:
-    """Die Typnamen aus `type` (Text oder Liste). Ist einer davon unbekannt, bleibt die Liste leer: dann wird der Typ
-    nicht geprüft."""
     declared = schema.get("type")
     names = [declared] if isinstance(declared, str) else declared if isinstance(declared, list) else []
     if not names or any(n not in _TYPE_LABEL for n in names):
@@ -171,9 +153,13 @@ def _in_enum(value: Any, allowed: list[Any]) -> bool:  # noqa: ANN401 - jeder JS
     return any(isinstance(item, bool) == isinstance(value, bool) and item == value for item in allowed)
 
 
+# Geprüft werden nur `type`, `enum`, `pattern`, `minLength`/`maxLength`, `minimum`/`maximum`, `properties`, `required`,
+# `additionalProperties`, `items` und `minItems`/`maxItems`. Alles andere (`oneOf`, `$ref`, `format`, ...) wird weder
+# geprüft noch abgelehnt: lieber eine Angabe durchlassen als eine gültige Aktion blockieren. Verbindlich prüft immer
+# der Ausführer der Aktion.
 def check_value(value: Any, schema: Any, path: str = "") -> None:  # noqa: ANN401 - jeder JSON-Wert, jedes Schema
-    """Wirft `SchemaError` mit dem ersten gefundenen Fehler, wenn `value` nicht zu `schema` passt. `path` ist der Name des
-    Feldes in der Meldung (ein `title` im Schema hat Vorrang)."""
+    """Wirft `SchemaError` mit dem ersten gefundenen Fehler, wenn `value` nicht zu `schema` passt (`path` ist der
+    Feldname)."""
     if not isinstance(schema, dict):
         return
     name = _label(schema, path)

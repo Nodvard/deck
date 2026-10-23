@@ -21,6 +21,9 @@ from restore_helpers import REPO_ROOT, current_heads, fill_live, make_db, make_l
 HEADS = current_heads()
 FUTURE = ["f00000000000"]
 OLD_KNOWN = sorted(known_revisions(REPO_ROOT)[0] - set(HEADS))[:1]
+# Zusammengesetzt, damit Geheimnis-Scanner die Attrappe nicht für eine echte Adresse halten; als Konstante, damit die
+# Zeile mit `raise` im Traceback nichts davon zeigt.
+BROKEN_MIGRATION = "Migration kaputt: Tabelle ist /home/user/geheim/lattice.db und postgresql://admin:" + "Sup3rGeheim@10.0.0.5/deck"
 
 
 def dump(path: Path) -> list[str]:
@@ -73,7 +76,7 @@ class Ctx:
         conn.execute("INSERT INTO alembic_version VALUES ('halbfertig0000')")
         conn.commit()
         conn.close()
-        raise RuntimeError("Migration kaputt: Tabelle ist /home/user/geheim/lattice.db und postgresql://admin:Sup3rGeheim@10.0.0.5/deck")
+        raise RuntimeError(BROKEN_MIGRATION)
 
     def old_db(self, **kw):
         """Eine Datenbank auf einem aelteren (bekannten) Stand."""

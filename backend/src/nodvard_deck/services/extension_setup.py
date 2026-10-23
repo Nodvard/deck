@@ -1,10 +1,9 @@
-"""„Einrichtung nötig“ für Erweiterungen: fehlende Pflichtfelder oder Zugangsdaten, fehlgeschlagener Verbindungstest.
-
-Generisch: liest nur das Einstellungs-Schema und die gespeicherten Werte, keine einzelne Erweiterung.
-"""
+"""„Einrichtung nötig“ für Erweiterungen: fehlende Pflichtfelder oder Zugangsdaten, fehlgeschlagener
+Verbindungstest."""
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 from nodvard_sdk.addresses import same_target
@@ -36,7 +35,6 @@ def secret_slots_spec(schema: dict[str, Any] | None, values: dict[str, Any]) -> 
 
 
 def _path_value(values: Any, path: str) -> Any:
-    """Wert hinter einem Pfad wie `server_url` oder `pihole.url` (nur Objekte, kein Raten)."""
     cur = values
     for part in path.split("."):
         if not isinstance(cur, dict):
@@ -61,7 +59,6 @@ def _bound_paths(spec: dict[str, Any]) -> list[str]:
 def _target_at(
     values: Any, path: str, schema: dict[str, Any] | None, item_schema: dict[str, Any] | None = None
 ) -> Any:
-    """Das Ziel hinter `path`: der gespeicherte Wert, sonst der Schema-Standard; leer ist immer `""`."""
     value = _path_value(values, path)
     if value is None:
         value = _default_for(schema, path, item_schema)
@@ -88,9 +85,11 @@ def secrets_to_clear(schema: dict[str, Any] | None, old: dict[str, Any], new: di
         per_item = spec.get("per_item")
         if per_item:
             items_schema = (((schema or {}).get("properties") or {}).get(per_item) or {}).get("items")
-            new_by_name = {
-                str((i or {}).get("name") or "").strip(): i for i in new.get(per_item) or [] if isinstance(i, dict)
-            }
+            new_items = [(str(i.get("name") or "").strip(), i) for i in new.get(per_item) or [] if isinstance(i, dict)]
+            new_by_name = dict(new_items)
+            # Zwei Einträge mit demselben Namen teilen sich ein Label; je nach Modul und Reihenfolge gälte der erste
+            # oder der letzte, und das Geheimnis ginge an die falsche Adresse.
+            twice = {name for name, count in Counter(name for name, _ in new_items).items() if name and count > 1}
             old_names = {
                 str((i or {}).get("name") or "").strip() for i in old.get(per_item) or [] if isinstance(i, dict)
             }
@@ -98,7 +97,7 @@ def secrets_to_clear(schema: dict[str, Any] | None, old: dict[str, Any], new: di
             # entfernten Verbindung), gehörte zu einem anderen Ziel. Fällt ein Eintrag weg oder wird
             # umbenannt, fällt auch sein Geheimnis weg.
             for name in new_by_name:
-                if name and name not in old_names:
+                if name and (name not in old_names or name in twice):
                     out.append(spec["label"].replace("{name}", name))
             for item in old.get(per_item) or []:
                 name = str((item or {}).get("name") or "").strip()
@@ -114,7 +113,7 @@ def secrets_to_clear(schema: dict[str, Any] | None, old: dict[str, Any], new: di
 
 
 def secret_target_missing(schema: dict[str, Any] | None, values: dict[str, Any], slot: dict[str, Any]) -> bool:
-    """Ist das Geheimnis `slot` an Felder gebunden, die alle noch leer sind? Dann zuerst die Adresse speichern."""
+    """Ob das Geheimnis `slot` an Felder gebunden ist, die alle noch leer sind; dann zuerst die Adresse speichern."""
     bound = _bound_paths(slot)
     if not bound:
         return False
@@ -127,6 +126,15 @@ def secret_target_missing(schema: dict[str, Any] | None, values: dict[str, Any],
         )
         return all(same_target(_target_at(item, p, schema, items_schema), "") for p in bound)
     return all(same_target(_target_at(values, p, schema), "") for p in bound)
+
+
+def secret_name_twice(values: dict[str, Any], slot: dict[str, Any]) -> bool:
+    """Ob der Name, zu dem `slot` gehört, mehrfach in der Liste steht und sich dann mehrere Einträge ein Label teilen."""
+    per_item = slot.get("per_item")
+    if not per_item:
+        return False
+    names = [str(i.get("name") or "").strip() for i in values.get(per_item) or [] if isinstance(i, dict)]
+    return names.count(slot.get("item")) > 1
 
 
 def _is_empty(value: Any) -> bool:
@@ -142,9 +150,8 @@ def _wanted(key: str, sub: dict[str, Any]) -> str:
 
 
 def missing_fields(schema: dict[str, Any] | None, values: dict[str, Any]) -> list[str]:
-    """Pflichtfelder ohne Wert und ohne Schema-Standard, oben und je Listeneintrag.
-
-    `x-required-any`: mindestens eine der Feldgruppen muss ganz ausgefüllt sein."""
+    """Pflichtfelder ohne Wert und ohne Schema-Standard, oben und je Listeneintrag; `x-required-any` verlangt eine
+    ganz ausgefüllte Gruppe."""
     out: list[str] = []
     props = (schema or {}).get("properties") or {}
     groups = [g for g in (schema or {}).get("x-required-any") or [] if isinstance(g, list) and g]

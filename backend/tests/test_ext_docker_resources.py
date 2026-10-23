@@ -437,7 +437,7 @@ async def test_the_lists_need_a_login_and_hosts_execute(client, docker_on, kind)
 @pytest.mark.asyncio
 async def test_the_docker_servers_for_the_tabs(client, docker_on):
     listed = await client.get("/api/v1/ext/docker/hosts", headers=docker_on.viewer)
-    assert listed.status_code == 200 and listed.json() == {"hosts": [{"id": docker_on.host, "name": "pi-host"}]}
+    assert listed.status_code == 200 and listed.json() == {"hosts": [{"id": docker_on.host, "name": "pi-host", "mode": "full"}]}
     assert docker_on.exec.calls == []
     assert (await client.get("/api/v1/ext/docker/hosts")).status_code == 401
 

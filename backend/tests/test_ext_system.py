@@ -245,11 +245,11 @@ def test_widget_row_worst_first_and_unreachable_is_danger():
 
     from nodvard_deck_ext_system import widget_row
 
-    host = SimpleNamespace(id="h1", name="pi", display_name="Raspberry Pi")
+    host = SimpleNamespace(id="h1", name="heimserver", display_name="Heimserver")
     info = parse_system_info(PI)
     info["findings"] = summary_findings(info)
     assert widget_row(host, info, None) == {
-        "name": "Raspberry Pi", "host_id": "h1", "kind": "Server", "summary": "Swap zu 71 % belegt – RAM knapp",
+        "name": "Heimserver", "host_id": "h1", "kind": "Server", "summary": "Swap zu 71 % belegt – RAM knapp",
         "badge": "2 Befunde", "tone": "warn",
         "cpu_percent": 3.0, "mem_percent": 44,  # fuer die Server-Kacheln der System-Seite
     }
@@ -363,7 +363,7 @@ def test_widget_row_text_is_the_worst_finding_not_the_first():
 
     from nodvard_deck_ext_system import widget_row
 
-    host = SimpleNamespace(id="h1", name="pi", display_name="Raspberry Pi")
+    host = SimpleNamespace(id="h1", name="heimserver", display_name="Heimserver")
     info = parse_system_info(
         "@@os\nDebian\n@@disks\n/dev/sda2 ext4 1000 820 180 82% /\n@@failed\nnginx.service\n@@reboot\nno\n@@end\n"
     )

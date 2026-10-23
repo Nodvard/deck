@@ -30,13 +30,12 @@ async def _close_quietly(session: Any) -> None:
         pass
 
 
-# Anders als beim Terminal (`core/terminal_sessions.py`: Ticket jetzt, Verbindung erst beim WebSocket-Aufbau) öffnet
-# `POST /console/sessions` die Konsole sofort: Das Einmal-Kennwort für die RFB-Authentifizierung entsteht erst beim
-# Öffnen, noVNC braucht es aber vor dem WebSocket-Aufbau (als WebSocket-Nachricht ginge die Server-Begrüßung verloren,
-# weil noVNC sich asynchron anhängt).
+# Anders als beim Terminal (`core/terminal_sessions.py`) öffnet `POST /console/sessions` die Konsole sofort: Das
+# Einmal-Kennwort für die RFB-Authentifizierung entsteht erst beim Öffnen, noVNC braucht es aber vor dem
+# WebSocket-Aufbau (als WebSocket-Nachricht ginge die Server-Begrüßung verloren, weil noVNC sich asynchron anhängt).
 #
-# Die Session-ID ist wie beim Terminal ein kurzlebiges Einmal-Ticket; nicht abgeholte Sitzungen werden nach `ttl_s`
-# geschlossen, sonst bliebe nach einem abgebrochenen Seitenaufruf eine Verbindung zum Hypervisor offen.
+# Nicht abgeholte Sitzungen werden nach `ttl_s` geschlossen, sonst bliebe nach einem abgebrochenen Seitenaufruf eine
+# Verbindung zum Hypervisor offen.
 class ConsoleSessionStore:
     def __init__(self) -> None:
         self._pending: dict[str, PendingConsole] = {}

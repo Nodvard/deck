@@ -80,11 +80,21 @@ def widget_state(overview: Overview) -> str:
     return "not_configured" if overview.state == "not_configured" else "error"
 
 
-def _problem_row(overview: Overview) -> dict[str, Any]:
+def _subject(overview: Overview, many: bool) -> str:
+    """Wovon die Zeile spricht: bei mehreren Geräten vom Gerät, sonst vom Modul."""
+    return overview.device if many and overview.device else SERVICE
+
+
+def _problem_row(overview: Overview, many: bool) -> dict[str, Any]:
     if overview.state == "not_configured":
-        return _row(f"{SERVICE} nicht eingerichtet", overview.message or SETTINGS_HINT, "nicht eingerichtet", "neutral")
+        return _row(f"{_subject(overview, many)} nicht eingerichtet", overview.message or SETTINGS_HINT, "nicht eingerichtet", "neutral")
     label, tone = _PROBLEM.get(overview.state, _PROBLEM["error"])
-    return _row(f"{SERVICE}: {label}", overview.message or "", label, tone)
+    return _row(f"{_subject(overview, many)}: {label}", overview.message or "", label, tone)
+
+
+def gone_rows(device: str) -> list[dict[str, Any]]:
+    """Die Zeile einer Kachel, deren Gerät nicht mehr in den Einstellungen steht."""
+    return [_row(f"{device} nicht eingetragen", "Dieses Gerät steht nicht mehr in den Einstellungen.", "nicht eingerichtet", "neutral")]
 
 
 def _note_row(title: str, note: Note) -> dict[str, Any]:
@@ -109,9 +119,9 @@ def attention_rows(overview: Overview) -> list[dict[str, Any]]:
     return rows
 
 
-def status_rows(overview: Overview) -> list[dict[str, Any]]:
+def status_rows(overview: Overview, many: bool = False) -> list[dict[str, Any]]:
     if overview.state != "ok":
-        return [_problem_row(overview)]
+        return [_problem_row(overview, many)]
     rows = attention_rows(overview)
     system, load, update = overview.system, overview.load, overview.update
     if system is not None:
@@ -139,9 +149,9 @@ def status_rows(overview: Overview) -> list[dict[str, Any]]:
     return _trimmed(rows)
 
 
-def volume_rows(overview: Overview) -> list[dict[str, Any]]:
+def volume_rows(overview: Overview, many: bool = False) -> list[dict[str, Any]]:
     if overview.state != "ok":
-        return [_problem_row(overview)]
+        return [_problem_row(overview, many)]
     if overview.volumes is None:
         return [_note_row("Speicher", overview.storage_note)] if overview.storage_note is not None else []
     rows: list[dict[str, Any]] = []
@@ -183,9 +193,9 @@ def task_subtitle(task: BackupTask) -> str:
     return " · ".join(parts)
 
 
-def backup_rows(overview: Overview) -> list[dict[str, Any]]:
+def backup_rows(overview: Overview, many: bool = False) -> list[dict[str, Any]]:
     if overview.state != "ok":
-        return [_problem_row(overview)]
+        return [_problem_row(overview, many)]
     if overview.backups is None:
         return [_note_row("Hyper Backup", overview.backup_note)] if overview.backup_note is not None else []
     if not overview.backups:

@@ -8,6 +8,7 @@ import { formatBytes } from "../../../_shared/frontend/src/format";
 import { LoadError, errorMessage, fetchJson } from "../../../_shared/frontend/src/loadError";
 import { Badge, Button, type Tone } from "../../../_shared/frontend/src/ui";
 
+import { BackupsPanel } from "./Backups";
 import { hostAction } from "./hostAction";
 import { HostSection } from "./Resources";
 import { NewStack } from "./NewStack";
@@ -36,7 +37,7 @@ interface AdoptCheck { ok: boolean; reasons: string[]; working_dir: string | nul
 interface Usage { cpu_percent: number | null; mem_used: number | null }
 interface FileOut { path: string; content: string | null; error: string | null }
 interface EnvOut { path: string; names: string[]; error: string | null; note?: string | null }
-type Panel = "file" | "adopt" | "edit" | "delete" | "update" | "portainer";
+type Panel = "file" | "adopt" | "edit" | "delete" | "update" | "portainer" | "backups";
 
 const STATE: Record<StackOut["state"], { label: string; tone: Tone }> = {
   running: { label: "läuft", tone: "good" },
@@ -285,7 +286,8 @@ function PortainerPanel({ hostId, project, onDone }: { hostId: string; project: 
 
   async function move(folder: string) {
     const started = plan?.stopped ? " Der Stack ist gerade gestoppt; der Umzug startet ihn." : "";
-    const question = `Stack „${project}“ von Portainer nach ${folder} holen und dort neu ausrollen? Die Container werden einmal neu erstellt, die Volumes bleiben.${started} ${KEEP_IN_PORTAINER}`;
+    const question = `Stack „${project}“ von Portainer nach ${folder} holen und dort neu ausrollen? Die Container werden einmal neu erstellt, die Volumes bleiben; `
+      + `was nur in den alten Containern lag und nicht in einem Volume oder Ordner, ist danach weg.${started} ${KEEP_IN_PORTAINER}`;
     if (!(await deck().confirmDialog(question, { confirmLabel: "Umziehen" }))) return;
     setBusy(true);
     setFailed(null);
@@ -314,8 +316,8 @@ function PortainerPanel({ hostId, project, onDone }: { hostId: string; project: 
     <div className="flex flex-col gap-2 text-xs" data-testid={`portainer-${project}`}>
       <p className="opacity-70">
         Nodvard Deck holt Datei und Variablen dieses Stacks aus Portainer in den Ordner <span className="break-all font-mono">{plan.folder}</span> und
-        rollt ihn dort unter demselben Namen neu aus. Die Container werden dabei einmal neu erstellt, die Volumes mit den Daten bleiben. Danach
-        bearbeitest du ihn hier.
+        rollt ihn dort unter demselben Namen neu aus. Die Container werden dabei einmal neu erstellt, die Volumes mit den Daten bleiben; was nur in
+        den alten Containern lag und nicht in einem Volume oder Ordner, geht dabei verloren. Danach bearbeitest du ihn hier.
       </p>
       <p className="text-amber-300">{KEEP_IN_PORTAINER} Lass den Eintrag stehen oder schalte Portainer ganz ab, wenn alle Stacks umgezogen sind.</p>
       {plan.stopped && <p className="text-amber-300">Der Stack ist gerade gestoppt; der Umzug startet ihn. Dienste für einmalige Aufgaben laufen dabei noch einmal.</p>}
@@ -704,6 +706,11 @@ export function StackList({ hostId }: { hostId: string }): JSX.Element {
                     </Button>
                   )}
                   {stack.adopted && !stack.is_self && (
+                    <Button small pressed={open?.project === stack.project && open.panel === "backups"} onClick={() => void toggle(stack.project, "backups")}>
+                      Sicherungen
+                    </Button>
+                  )}
+                  {stack.adopted && !stack.is_self && (
                     <Button small variant="danger" pressed={open?.project === stack.project && open.panel === "delete"}
                       onClick={() => void toggle(stack.project, "delete")}>
                       Löschen
@@ -722,6 +729,8 @@ export function StackList({ hostId }: { hostId: string }): JSX.Element {
                     <UpdatePanel hostId={hostId} project={stack.project} onDone={(text, warn) => { setOpen(null); note(text, warn); setReload((n) => n + 1); }} />
                   ) : open.panel === "portainer" ? (
                     <PortainerPanel hostId={hostId} project={stack.project} onDone={(text, warn) => { setOpen(null); note(text, warn); setReload((n) => n + 1); }} />
+                  ) : open.panel === "backups" ? (
+                    <BackupsPanel hostId={hostId} project={stack.project} onDone={(text, warn) => { setOpen(null); note(text, warn); setReload((n) => n + 1); }} />
                   ) : open.panel === "delete" ? (
                     <DeletePanel hostId={hostId} project={stack.project} onDone={(text, warn) => { setOpen(null); note(text, warn); setReload((n) => n + 1); }} />
                   ) : (

@@ -226,6 +226,16 @@ class Extension(NodvardExtension):
         @router.post("/connections/{name}/token", status_code=status.HTTP_204_NO_CONTENT)
         async def set_token(name: str, payload: _TokenIn) -> None:
             label = f"{TOKEN_LABEL}:{name}"
+            # Bei einem doppelten Namen würden sich zwei Adressen ein Token teilen.
+            connections = (await ctx.settings.get()).get("connections") or []
+            if [str(c.get("name") or "").strip() for c in connections if isinstance(c, dict)].count(name) > 1:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"Der Name „{name}“ kommt mehrfach vor. Benenne unter Einstellungen → Erweiterungen → "
+                        "Proxmox-Backups eine der Verbindungen um und speichere; danach kannst du das Token hinterlegen."
+                    ),
+                )
             if await ctx.secrets.exists(label):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
@@ -585,6 +595,7 @@ class Extension(NodvardExtension):
             WidgetSpec(
                 id="summary",
                 title="Backup-Center",
+                group="backups",
                 icon="database-backup",
                 size=GridSize(w=2, h=2),
                 refresh=Refresh(interval_s=60),

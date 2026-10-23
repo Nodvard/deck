@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -107,6 +108,44 @@ async def test_a_list_that_cannot_be_read_right_now_is_left_alone(tmp_path):
     assert (tmp_path / "stacks.json").is_dir() and not list(tmp_path.glob("stacks.json.kaputt-*"))
 
 
+def test_a_host_entry_that_is_not_a_map_is_skipped(tmp_path):
+    adopt, _ = _mods()
+    shop = {"working_dir": "/opt/a", "config_files": ["/opt/a/c.yml"]}
+    (tmp_path / "stacks.json").write_text(json.dumps({"adopted": {"h1": "kaputt", "h2": ["shop"], "h3": {"shop": shop}}}), encoding="utf-8")
+    store = adopt.AdoptedStacks(tmp_path)
+    assert (store.for_host("h1"), store.for_host("h2")) == ({}, {})
+    assert list(store.for_host("h3")) == ["shop"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["add", "remove"])
+async def test_a_broken_list_that_cannot_be_set_aside_stays_as_it_is(tmp_path, monkeypatch, change):
+    adopt, _ = _mods()
+    path = tmp_path / "stacks.json"
+    path.write_text("{halb", encoding="utf-8")
+
+    def refuse(src, dst):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(adopt.os, "replace", refuse)
+    store = adopt.AdoptedStacks(tmp_path)
+    with pytest.raises(adopt.StoreProblem) as raised:
+        await (store.add("h1", _stack()) if change == "add" else store.remove("h1", "shop"))
+    assert str(raised.value) == "Die kaputte Liste der übernommenen Stacks ließ sich nicht beiseitelegen."
+    assert isinstance(raised.value.__cause__, PermissionError)
+    assert path.read_text(encoding="utf-8") == "{halb" and [p.name for p in tmp_path.iterdir()] == ["stacks.json"]
+
+
+@pytest.mark.asyncio
+async def test_a_stack_without_files_is_not_added(tmp_path):
+    adopt, _ = _mods()
+    stack = _stack(config_files="")
+    assert stack.files is None
+    with pytest.raises(ValueError, match="^Stack ohne lesbare Dateien: 'shop'$"):
+        await adopt.AdoptedStacks(tmp_path).add("h1", stack)
+    assert not (tmp_path / "stacks.json").exists()
+
+
 def test_a_moved_stack_no_longer_counts_as_adopted():
     adopt, _ = _mods()
     entry = adopt.Adopted("/opt/stacks/shop", ("/opt/stacks/shop/compose.yaml",), (), "2026-10-16T00:00:00+00:00")
@@ -135,6 +174,7 @@ async def test_a_plain_compose_stack_can_be_adopted():
         ({"version": "1.29.2"}, "Angelegt mit dem alten docker-compose (Version 1)"),
         ({"image": "ghcr.io/nodvard/deck:0.9.0"}, "Das ist Nodvard Deck selbst"),
         ({"image": "nodvard-deck:latest"}, "Das ist Nodvard Deck selbst"),
+        ({"image": "ghcr.io/nodvard/dock:0.11.0"}, "Das ist Nodvard Deck selbst"),
         # Was ohnehin nie übernommen werden kann, steht vor allem, was sich beheben ließe.
         ({"image": "nodvard-deck:latest", "version": "1.29.2"}, "Das ist Nodvard Deck selbst"),
     ],
@@ -182,6 +222,37 @@ async def test_compose_itself_must_read_the_file(output, reason):
     fake = FakeExec()
     fake.validate = result(output, code=1)
     assert await _problems(_stack(), fake) == [reason]
+
+
+class _SftpDown:
+    """Ein SFTP-Kanal, der sich nicht öffnen lässt."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    async def __aenter__(self):
+        raise self._error
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (OSError("Verbindung getrennt"), "Dateien nicht lesbar: Verbindung getrennt"),
+        (RuntimeError(), "Dateien nicht lesbar: RuntimeError"),
+    ],
+)
+async def test_files_that_cannot_be_opened_are_a_stack_problem(error, reason):
+    _, stacks = _mods()
+    fake = FakeExec()
+    fake.sftp = lambda host: _SftpDown(error)
+    with pytest.raises(stacks.StackProblem) as raised:
+        await _problems(_stack(), fake)
+    assert str(raised.value) == reason and raised.value.__cause__ is error
+    assert not any("config --quiet" in c for c in fake.calls), "Compose läuft erst, wenn die Dateien gelesen sind"
 
 
 VALIDATE_LOG = """#!/bin/sh
@@ -317,6 +388,58 @@ async def test_check_adopt_and_release_through_the_core(client, db_session, dock
     entries = (await db_session.execute(select(AuditEntry).where(AuditEntry.target_type == "stack").order_by(AuditEntry.ts))).scalars().all()
     assert [(e.action, e.target_id, e.outcome) for e in entries] == [
         ("docker.stack_adopt", f"{docker_on.host}:shop", "success"), ("docker.stack_release", f"{docker_on.host}:shop", "success"),
+    ]
+
+
+DAEMON_DOWN = "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["GET", "POST"])
+async def test_a_server_that_cannot_list_its_stacks_is_a_502(client, docker_on, method):
+    docker_on.exec.list = result(stderr=f"{DAEMON_DOWN}\n", code=1)
+    url = f"/api/v1/ext/docker/hosts/{docker_on.host}/stacks/shop/adopt"
+    refused = await client.request(method, url, json=SHOWN if method == "POST" else None, headers=docker_on.owner)
+    assert (refused.status_code, refused.json()["detail"]) == (502, DAEMON_DOWN)
+    assert not (docker_on.data_dir / "stacks.json").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["GET", "POST"])
+async def test_files_that_cannot_be_read_are_a_502(client, docker_on, monkeypatch, method):
+    monkeypatch.setattr(docker_on.handle, "sftp", lambda host: _SftpDown(OSError("Verbindung getrennt")))
+    url = f"/api/v1/ext/docker/hosts/{docker_on.host}/stacks/shop/adopt"
+    refused = await client.request(method, url, json=SHOWN if method == "POST" else None, headers=docker_on.owner)
+    assert (refused.status_code, refused.json()["detail"]) == (502, "Dateien nicht lesbar: Verbindung getrennt")
+    assert not (docker_on.data_dir / "stacks.json").exists()
+    assert not any("config --quiet" in c for c in docker_on.exec.calls)
+
+
+@pytest.mark.asyncio
+async def test_a_failing_audit_does_not_undo_the_adoption(client, docker_on, monkeypatch, caplog):
+    from nodvard_deck.ext.runtime import get_extension_runtime
+
+    actions = []
+
+    async def broken(**kwargs):
+        actions.append(kwargs["action"])
+        raise RuntimeError("Protokoll nicht erreichbar")
+
+    monkeypatch.setattr(get_extension_runtime().loaded["docker"].ctx.audit, "log", broken)
+    url = f"/api/v1/ext/docker/hosts/{docker_on.host}/stacks/shop/adopt"
+    stored = docker_on.data_dir / "stacks.json"
+    with caplog.at_level(logging.ERROR):
+        adopted = await client.post(url, json=SHOWN, headers=docker_on.owner)
+        assert adopted.status_code == 200, adopted.text
+        assert list(json.loads(stored.read_text(encoding="utf-8"))["adopted"][docker_on.host]) == ["shop"]
+        released = await client.delete(url, headers=docker_on.owner)
+        assert (released.status_code, released.json()) == (200, {"project": "shop", "adopted": False})
+        assert json.loads(stored.read_text(encoding="utf-8")) == {"adopted": {}}
+    assert actions == ["docker.stack_adopt", "docker.stack_release"]
+    logged = [(r.getMessage(), type(r.exc_info[1])) for r in caplog.records if "docker_stack_audit_failed" in r.getMessage()]
+    assert logged == [
+        ("docker_stack_audit_failed action=docker.stack_adopt", RuntimeError),
+        ("docker_stack_audit_failed action=docker.stack_release", RuntimeError),
     ]
 
 

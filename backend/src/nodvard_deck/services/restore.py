@@ -55,13 +55,13 @@ class UnknownRestore(BackupError):
 
 
 class WrongState(BackupError):
-    """Der Schritt passt nicht zum Stand (z. B. Vormerken, bevor geprüft wurde) (409)."""
+    """Der Schritt passt nicht zum Stand (etwa Vormerken, bevor geprüft wurde) (409)."""
 
 
 @dataclass(frozen=True)
 class Scope:
-    """Ein Zwischenstand gehört zu einem Bereich: dem Owner, der ihn angelegt hat, oder dem Assistenten (Einrichtungscode).
-    Eine ID des einen Bereichs ist im anderen unbekannt."""
+    """Ein Zwischenstand gehört zu einem Bereich: dem Owner oder dem Assistenten (Einrichtungscode), die ID des
+    einen ist im anderen unbekannt."""
 
     kind: str
     """`owner` (Einstellungen) oder `bootstrap` (Assistent, mit Einrichtungscode)."""
@@ -139,12 +139,11 @@ def limits_info(settings: Settings) -> dict[str, int]:
 
 
 def _sweep(layout: restore.Layout) -> list[str]:
-    """Aufräumen, aber nie unter einer laufenden Prüfung weg."""
     return restore.sweep(layout, keep={_inspect_active} if _inspect_active else frozenset())
 
 
 def _schedule_sweep(layout: restore.Layout) -> None:
-    """Ein aufgegebener Zwischenstand wird auch dann nach einer Stunde gelöscht, wenn niemand mehr nachsieht."""
+    # Ein aufgegebener Zwischenstand wird auch dann nach einer Stunde gelöscht, wenn niemand mehr nachsieht.
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -226,8 +225,7 @@ def _mb(value: int) -> str:
 
 
 async def receive_upload(settings: Settings, scope: Scope, chunks: AsyncIterator[bytes], content_length: int | None) -> dict[str, Any]:
-    """Schreibt den Strom nach `restore/<id>/upload.ndbak`. Vorab-Prüfungen, alle vor dem ersten gelesenen Byte:
-    Obergrenze laut Kopf, Vormerkung, laufende Arbeit, freier Platz."""
+    """Schreibt den Strom nach `restore/<id>/upload.ndbak`, mit Vorab-Prüfungen vor dem ersten gelesenen Byte."""
     global _upload_active
     layout = layout_for(settings)
     limit = settings.restore_max_upload_bytes
@@ -311,8 +309,8 @@ def _inspect_sync(settings: Settings, layout: restore.Layout, rid: str, secret: 
 
 
 async def inspect(settings: Settings, scope: Scope, rid: str, *, secret: str, instance_id: str | None, has_accounts: bool) -> dict[str, Any]:
-    """Entschlüsselt und prüft. Falsches Passwort und zu wenig Platz lassen den Upload stehen (noch einmal versuchen),
-    jeder andere Fehler löscht den ganzen Zwischenstand."""
+    """Entschlüsselt und prüft; falsches Passwort und zu wenig Platz lassen den Upload stehen, jeder andere Fehler
+    löscht den Zwischenstand."""
     global _inspect_active
     layout = layout_for(settings)
     meta = _meta(layout, scope, rid)
@@ -404,8 +402,7 @@ async def audit(session: AsyncSession, scope: Scope, action: str, *, outcome: st
 
 
 async def record_result(settings: Settings) -> None:
-    """Beim Start: ein Ergebnis von `boot`, das noch nicht im Audit-Protokoll steht, dort eintragen, in die jetzt gültige
-    Datenbank. Danach aufräumen. Nie ein Grund, nicht zu starten."""
+    """Beim Start: ein Ergebnis von `boot`, das noch nicht im Audit-Protokoll steht, dort eintragen und aufräumen."""
     try:
         layout = layout_for(settings)
     except BackupError:
@@ -440,8 +437,8 @@ async def record_result(settings: Settings) -> None:
 
 
 async def failed_result(settings: Settings) -> dict[str, Any] | None:
-    """Für `GET /auth/bootstrap`: das letzte Ergebnis, aber nur wenn es ein Scheitern aus dem Assistenten war,
-    sonst nichts (es gibt noch kein Konto, das es sehen dürfte)."""
+    """Für `GET /auth/bootstrap`: das letzte Ergebnis, nur wenn es ein Scheitern aus dem Assistenten war (es gibt
+    noch kein Konto)."""
     try:
         layout = layout_for(settings)
     except BackupError:
@@ -456,8 +453,8 @@ _PATH_RE = re.compile(r"(?:/[^\s/'\"():,]+)+/?")
 
 
 def _without_paths(message: object) -> str | None:
-    """Ohne Anmeldung sichtbar (GET /auth/bootstrap): Dateipfade aus Fehlertexten (z. B. OSError) durch „…“ ersetzen,
-    damit niemand im Netz den Aufbau des Datenordners erfährt."""
+    # Ohne Anmeldung sichtbar (`GET /auth/bootstrap`): Dateipfade durch „…“ ersetzen, damit niemand den Aufbau des
+    # Datenordners erfährt.
     if not isinstance(message, str):
         return None
     return _PATH_RE.sub("…", message)[:500]

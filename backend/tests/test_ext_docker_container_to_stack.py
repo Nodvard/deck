@@ -154,6 +154,11 @@ def test_allowed_env_names_and_a_backslash_inside():
         (lambda d: d["NetworkSettings"]["Networks"].update(bridge={"IPAMConfig": {"LinkLocalIPs": ["169.254.1.1"]}}) or
             d["HostConfig"].update(NetworkMode="eigenes") or d["NetworkSettings"]["Networks"].update(eigenes=d["NetworkSettings"]["Networks"].pop("bridge")),
          "Am Netz eigenes hat der Container eigene Link-Local-Adressen."),
+        (lambda d: d["HostConfig"].update(NetworkMode="eigenes") or d["NetworkSettings"]["Networks"].update(
+            eigenes={**d["NetworkSettings"]["Networks"].pop("bridge"), "Links": ["db:db"]}), "Am Netz eigenes hängen Links oder eigene Treiber-Optionen."),
+        (lambda d: d["Mounts"].append({"Type": "npipe", "Destination": "/pipe"}), "Der Mount /pipe ist vom Typ npipe."),
+        (lambda d: d["Config"].update(KuenftigesFeld="x"), "Die Einstellung KuenftigesFeld übersetzt Deck noch nicht."),
+        (lambda d: d["Config"].update(NetworkDisabled=True), "Das Netz des Containers ist abgeschaltet."),
     ],
 )
 def test_what_deck_cannot_carry_over_is_named(change, why):
@@ -161,6 +166,38 @@ def test_what_deck_cannot_carry_over_is_named(change, why):
     change(data)
     refused = _convert(data).refused
     assert any(r.startswith(why) for r in refused), refused
+
+
+def test_a_switched_off_entrypoint_is_refused():
+    refused = _convert(_sample(), {**IMAGE, "Entrypoint": ["/init"]}).refused
+    assert "Der Startbefehl des Images ist abgeschaltet (--entrypoint \"\")." in refused
+
+
+def test_runtime_settings_are_carried_over():
+    data = _sample(RestartPolicy={"Name": "on-failure", "MaximumRetryCount": 3}, IpcMode="host", MemorySwap=1 << 30,
+                   Devices=[{"PathOnHost": "/dev/ttyUSB0", "PathInContainer": "/dev/zigbee", "CgroupPermissions": ""}],
+                   Ulimits=[{"Name": "nofile", "Soft": 1024, "Hard": 2048}], Tmpfs={"/run": "size=64m"})
+    data["Config"].update(StopSignal="SIGINT", Healthcheck={"Test": ["NONE"]})
+    data["Mounts"].append({"Type": "tmpfs", "Destination": "/cache"})
+    out = _convert(data)
+    service = yaml.safe_load(out.compose)["services"]["plaintest"]
+    assert out.refused == []
+    assert service["restart"] == "on-failure:3" and service["ipc"] == "host" and service["memswap_limit"] == 1 << 30
+    assert service["devices"] == ["/dev/ttyUSB0:/dev/zigbee:rwm"] and service["ulimits"] == {"nofile": {"soft": 1024, "hard": 2048}}
+    assert service["tmpfs"] == ["/cache", "/run:size=64m"] and service["stop_signal"] == "SIGINT"
+    assert service["healthcheck"] == {"disable": True}
+
+
+def test_fixed_addresses_and_health_retries_are_carried_over():
+    data = _sample(NetworkMode="eigenes")
+    bridge = data["NetworkSettings"]["Networks"].pop("bridge")
+    data["NetworkSettings"]["Networks"]["eigenes"] = {**bridge, "IPAMConfig": {"IPv4Address": "172.20.0.5", "IPv6Address": "fd00::5"}}
+    data["Config"]["Healthcheck"] = {"Test": ["CMD", "true"], "Retries": 3}
+    compose = yaml.safe_load(_convert(data).compose)
+    service = compose["services"]["plaintest"]
+    assert service["networks"] == {"eigenes": {"ipv4_address": "172.20.0.5", "ipv6_address": "fd00::5"}}
+    assert compose["networks"] == {"eigenes": {"external": True}}
+    assert service["healthcheck"] == {"test": ["CMD", "true"], "retries": 3}
 
 
 @pytest.mark.parametrize(
@@ -401,6 +438,8 @@ async def test_only_on_docker_hosts_and_only_the_planned_file(env):
     plan = await e.conv.plan(e.host, "plaintest")
     e.host.tags = []
     assert (await e.executor.execute(_request(plan))).error == "Kein Docker-Host."
+    e.host.tags = ["docker-bedienen"]
+    assert (await e.executor.execute(_request(plan))).error.startswith("Auf diesem Server ist Docker im Modus „Nur bedienen“")
     e.host.tags = ["docker"]
     other = {**plan, "compose": plan["compose"] + "# anders\n"}
     assert (await e.executor.execute(_request(other))).error.startswith("Der Container oder der Ordner hat sich inzwischen geändert.")
@@ -456,6 +495,27 @@ async def test_a_value_only_in_the_progress_does_not_hide_the_reason(env):
 )
 def test_when_a_value_counts_as_shown(text, value, shown):
     assert _m().c2s._shows(text, value) is shown
+
+
+@pytest.mark.parametrize(
+    ("value", "shown"),
+    [
+        ('ab"cd\\ef', 'exec: "ab\\"cd\\\\ef": executable file not found in $PATH'),
+        ("geheim\twert", 'exec: "geheim\\twert": executable file not found in $PATH'),
+    ],
+    ids=["anfuehrung-backslash", "tabulator"],
+)
+def test_values_as_docker_quotes_them_never_show(value, shown):
+    c2s = _m().c2s
+    converted = c2s.Converted("p", "p", env_values={"A": value})
+    assert c2s._scrub(shown, converted) == "Compose meldet einen Fehler, der Werte aus container.env enthält; Deck zeigt ihn deshalb nicht."
+
+
+def test_values_never_show_in_the_repr():
+    c2s = _m().c2s
+    out = _convert(_sample())
+    assert "Europe/Berlin" not in repr(out) and "Europe/Berlin" not in repr(c2s.Facts(_sample(), out))
+    assert "Europe/Berlin" in out.env
 
 
 def test_a_long_value_is_checked_quickly():

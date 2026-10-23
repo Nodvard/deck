@@ -1,12 +1,4 @@
-"""Anwendungseinstiegspunkt.
-
-    uvicorn nodvard_deck.main:app --reload --port 8080
-
-Startet mit **einem** Worker (docs/00-DECISIONS.md D-01) — die Extension-Registry, der
-Event-Bus und der Scheduler halten Prozesszustand, der nicht dupliziert werden darf.
-Das ist in `--reload`-Entwicklung ohnehin der Fall; die Warnung gilt fuer den
-Produktivstart in deploy/.
-"""
+"""Anwendungseinstiegspunkt, nur für einen Worker, weil Registry, Event-Bus und Scheduler Prozesszustand halten."""
 
 from __future__ import annotations
 
@@ -15,9 +7,9 @@ import base64
 import contextlib
 import hashlib
 import logging
-import re
 import time
 from contextlib import asynccontextmanager
+from html.parser import HTMLParser
 from pathlib import Path
 
 import asyncssh
@@ -62,8 +54,8 @@ _demo_logger = logging.getLogger("nodvard_deck.demo")
 _boot_logger = logging.getLogger("nodvard_deck.boot")
 
 APP_LOCK_WAIT_S = 20.0
-"""So lange wartet die Anwendung auf die Sperre des Datenordners (z. B. ein `compose run`, dessen `boot` gerade
-laeuft), bevor sie ohne Sperre weitermacht."""
+"""So lange wartet die Anwendung auf die Sperre des Datenordners (etwa ein laufendes `boot`), bevor sie ohne Sperre
+weitermacht."""
 STARTED_OK_RETRY_S = 60.0
 """Scheitert das Festhalten von `started_ok`, wird es in diesem Abstand wiederholt, bis es klappt."""
 
@@ -71,49 +63,54 @@ STARTED_OK_RETRY_S = 60.0
 SPA_CSP = (
     "style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'"
 )
-"""Stile und Schriften nur vom eigenen Server, auch wenn im eigenen CSS der Admins doch eine fremde Adresse stünde;
-keine Plugins, kein fremdes `<base>`, Formulare nur an Deck selbst."""
+"""Stile und Schriften nur vom eigenen Server, auch wenn im CSS der Admins eine fremde Adresse stünde; keine
+Plugins, kein fremdes `<base>`."""
 
 SPA_CSP_REPORT_ONLY = "img-src 'self' data: blob:"
-"""Bilder nur vom eigenen Server (`blob:` für Vorschauen, Inventar-Fotos und Dokumente), vorerst nur gemeldet: Der Browser
-schreibt einen Verstoß in die Konsole, lädt das Bild aber noch. Logo und Favicon nimmt `PUT /branding` schon nur noch als
-eigenen Pfad oder `data:image/…` an. Bleibt die Konsole im Alltag still, wandert die Angabe in `SPA_CSP`. Dazu kommt je
-App-Seite `spa_script_policy()`."""
+"""Bilder nur vom eigenen Server (`blob:` für Vorschauen), nur gemeldet (Report-Only): Der Browser loggt einen
+Verstoß, lädt das Bild aber."""
 
-_INLINE_SCRIPT_RE = re.compile(r"<script\b(?![^>]*\bsrc\s*=)[^>]*>(.*?)</script\s*>", re.IGNORECASE | re.DOTALL)
-_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+# Auskommentierte Skripte zählen nicht: HTML-Kommentare überspringt der Parser selbst.
+class _InlineScripts(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.scripts: list[str] = []
+        self._current: list[str] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "script" and all(name != "src" for name, _ in attrs):
+            self._current = []
+
+    def handle_data(self, data: str) -> None:
+        if self._current is not None:
+            self._current.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "script" and self._current is not None:
+            self.scripts.append("".join(self._current))
+            self._current = None
 
 
 def spa_script_policy(index_html: Path) -> str:
-    """`script-src` der App-Seite: nur eigene Dateien und die eingebetteten Skripte der `index.html` (die Import-Map)
-    über ihre Prüfsumme. Damit läuft kein `javascript:`-Link; vorerst nur gemeldet (`Content-Security-Policy-Report-Only`)."""
+    """`script-src` der App-Seite: nur eigene Dateien und die eingebetteten Skripte der `index.html` über ihre
+    Prüfsumme."""
+    parser = _InlineScripts()
     try:
-        text = _HTML_COMMENT_RE.sub("", index_html.read_text(encoding="utf-8"))
+        parser.feed(index_html.read_text(encoding="utf-8"))
+        parser.close()
     except (OSError, UnicodeDecodeError):
-        text = ""
+        return "script-src 'self'"
     hashes = {
-        f"'sha256-{base64.b64encode(hashlib.sha256(m.group(1).encode()).digest()).decode()}'"
-        for m in _INLINE_SCRIPT_RE.finditer(text)
+        f"'sha256-{base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()}'"
+        for script in parser.scripts
     }
     return " ".join(["script-src", "'self'", *sorted(hashes)])
 
 
+# `StaticFiles(html=True)` liefert `index.html` nicht für Tiefen-Links wie `/settings`; darum fällt jede 404 hier auf
+# `index.html` zurück, außer unter `/api/` (siehe `_is_api_path()`).
 class _SpaStaticFiles(StaticFiles):
-    """Nachtrag (beim Testen der
-    neuen /settings-Route gefunden): `StaticFiles(html=True)` liefert `index.html`
-    fuer `/`, aber NICHT fuer einen Tiefen-Link wie `/settings` oder `/files/foo` --
-    ein direkter Aufruf, ein Lesezeichen oder ein Browser-Reload auf JEDER
-    React-Router-Route ausser `/` endete deshalb schon immer in einem rohen
-    `{"detail":"Not Found"}` statt der App. Betraf nicht nur die neue Settings-Seite,
-    sondern grundsaetzlich jede Client-Route -- nur nie aufgefallen, weil man sie
-    bisher immer nur per Klick (clientseitige Navigation) erreicht hat.
-
-    Jede echte 404 innerhalb dieses Mounts faellt jetzt auf `index.html` zurueck --
-    AUSSER unter `/api/`: dorthin gelangt nur, was kein API-Router kennt (Tippfehler,
-    Route einer deaktivierten Extension), und das bleibt ein ehrlicher 404 (siehe
-    `_is_api_path()`). Alles andere ist weder API noch vorhandene Datei im Build;
-    React Router uebernimmt danach clientseitig."""
-
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         index = Path(self.directory) / "index.html" if self.directory is not None else Path("/nonexistent")
@@ -123,16 +120,13 @@ class _SpaStaticFiles(StaticFiles):
         try:
             response = await super().get_response(path, scope)
         except StarletteHTTPException as exc:
-            # Starlettes StaticFiles.get_response() RAIST bei "nicht gefunden" (siehe
-            # dortige Quelle) -- gibt KEINE 404-Response zurueck, die sich hier
-            # einfach abfangen liesse.
+            # Starlettes StaticFiles.get_response() wirft bei „nicht gefunden“ und gibt keine 404-Response zurück, die
+            # sich einfach abfangen ließe.
             if exc.status_code != 404:
                 raise
-            # Live gefunden: die Annahme im Docstring
-            # ("steht fest, dass es kein API-Pfad ist") stimmte nicht -- ein UNBEKANNTER
-            # `/api/...`-Pfad (Tippfehler, Route einer deaktivierten Extension) landete
-            # hier und bekam `index.html` mit 200. API-Aufrufer (apiFetch) scheiterten
-            # dann an "Unexpected token <" statt an einem ehrlichen 404.
+            # Ein unbekannter `/api/...`-Pfad (Tippfehler, Route einer deaktivierten Extension) landet auch hier und
+            # darf nicht `index.html` mit 200 bekommen, sonst scheitern API-Aufrufer an „Unexpected token <“ statt an
+            # einem ehrlichen 404.
             if _is_api_path(path) or _is_api_doc_path(path):
                 raise
             response = await super().get_response("index.html", scope)
@@ -150,11 +144,8 @@ def _is_api_path(path: str) -> bool:
 
 
 _API_DOC_PATHS = frozenset({"docs", "docs/oauth2-redirect", "redoc", "openapi.json"})
-"""Adressen der API-Doku von FastAPI. Sind sie abgeschaltet (Standard ausserhalb des
-Entwicklungsmodus, siehe `create_app`), kennt sie kein Router -- sie wuerden dann hier mit der
-App-Shell (200, HTML) beantwortet, und ein Werkzeug, das `/openapi.json` erwartet, bekaeme
-HTML statt JSON. Sie bleiben deshalb ein ehrlicher 404. Wo sie eingeschaltet sind, erreichen
-sie diesen Mount nie (ihre Routen stehen davor)."""
+"""Adressen der API-Doku von FastAPI; sind sie abgeschaltet, soll hier ein ehrlicher 404 kommen statt der App-Shell
+(200, HTML)."""
 
 
 def _is_api_doc_path(path: str) -> bool:
@@ -162,16 +153,8 @@ def _is_api_doc_path(path: str) -> bool:
 
 
 def _cache_policy_for(path: str) -> str:
-    """Live gefunden (nach einem Redeploy standen weiter alte UI-Texte da): ohne
-    `Cache-Control` cachen Browser heuristisch anhand von `Last-Modified` -- bei
-    einem Tage alten Build fuer Stunden, ohne nachzufragen. Fuer `index.html` ist das
-    besonders heikel: ein veraltetes `index.html` referenziert gehashte
-    `assets/index-<alt>.js`-Dateien, die es nach dem Rebuild nicht mehr gibt.
-
-    `assets/` traegt Vite-Inhaltshashes im Dateinamen -- eine neue Version ist immer
-    ein neuer Dateiname, deshalb dort dauerhaft cachebar. Alles andere (vor allem
-    `index.html`) nur mit Revalidierung (`no-cache` = ETag/Last-Modified-Abgleich,
-    ein billiges 304, kein erneuter Download)."""
+    # Ohne `Cache-Control` cachen Browser heuristisch, ein veraltetes `index.html` verwiese auf gehashte Assets, die
+    # es nach dem Rebuild nicht mehr gibt. `assets/` ist dauerhaft cachebar, alles andere nur mit Revalidierung.
     normalized = path.replace("\\", "/").lstrip("./")
     if normalized.startswith("assets/"):
         return "public, max-age=31536000, immutable"
@@ -179,18 +162,12 @@ def _cache_policy_for(path: str) -> str:
 
 
 async def _log_event(event: Event) -> None:
-    """Der eine eingebaute Abonnent des Event-Bus: bis der
-    Extension-Host (WP-3) echte Konsumenten mitbringt, ist strukturiertes Loggen
-    jedes Events die einzige Weise, den Bus im laufenden Betrieb zu beobachten
-    (D-11)."""
     _event_logger.info("event name=%s correlation_id=%s", event.name, event.correlation_id)
 
 
 async def _take_boot_lock(settings) -> bootstate.Lock:
-    """Die laufende Anwendung haelt die Sperre des Datenordners (`<Datenordner>/.boot/app.lock`): `nodvard_deck.boot`
-    spielt dann nie unter ihr etwas ein, und `nodvard_deck.admin restore-backup` raeumt keinen laufenden Upload weg.
-    Nie ein Grund, nicht zu starten: Geht die Sperre nicht (anderer Halter, Dateisystem ohne Sperren), wird das
-    gemeldet und ohne Sperre weitergemacht."""
+    # Die laufende Anwendung hält die Sperre des Datenordners, damit `boot` nie unter ihr etwas einspielt; geht sie
+    # nicht, wird ohne Sperre weitergemacht.
     try:
         lock = await asyncio.to_thread(bootstate.acquire_lock, settings.data_dir, purpose="app", wait_s=APP_LOCK_WAIT_S)
     except bootstate.LockHeld:
@@ -208,9 +185,6 @@ async def _take_boot_lock(settings) -> bootstate.Lock:
 
 
 async def _mark_started_ok(settings, *, retry: bool = False) -> bool:
-    """Der Start ist gelungen: `started_ok=true` in `<Datenordner>/.boot/state.json`. Damit weiss `nodvard_deck.boot`
-    einer spaeter zurueckgestellten aelteren Version, dass in der neuen schon gearbeitet wurde (siehe boot.py).
-    `False`, wenn es nicht geklappt hat (nie ein Grund, nicht zu starten)."""
     try:
         await asyncio.to_thread(bootstate.mark_started_ok, settings.data_dir)
     except Exception as exc:  # noqa: BLE001 - nie ein Grund, nicht zu starten
@@ -223,8 +197,7 @@ async def _mark_started_ok(settings, *, retry: bool = False) -> bool:
 
 
 async def _keep_marking_started_ok(settings) -> None:
-    """Wiederholt `_mark_started_ok`, bis es klappt (z. B. war der Speicher beim Start kurz voll). Bliebe `started_ok=false`
-    stehen, hielte eine spaeter zurueckgestellte aeltere Version die neue fuer nie gestartet."""
+    # Bliebe `started_ok=false` stehen, hielte eine später zurückgestellte ältere Version die neue für nie gestartet.
     while True:
         await asyncio.sleep(STARTED_OK_RETRY_S)
         if await _mark_started_ok(settings, retry=True):
@@ -233,8 +206,6 @@ async def _keep_marking_started_ok(settings) -> None:
 
 
 async def _load_trusted_proxies(settings) -> None:
-    """Vertrauenswuerdige Proxys (`core.trusted_proxies`) vor der ersten Anfrage laden. Klappt das nicht, bleibt die
-    Liste leer: dann gilt niemand als Proxy (wie vor der Einstellung), und der Start geht weiter."""
     try:
         async with session_scope() as session:
             loaded = await trusted_proxies.load(session, settings)
@@ -247,15 +218,9 @@ async def _load_trusted_proxies(settings) -> None:
 
 
 async def _restore_code_limits() -> None:
-    """Zaehler fuer falsche Zwei-Faktor-Codes aus dem Protokoll wieder eintragen (`services.auth.restore_code_limits`).
-    Klappt das nicht, startet Nodvard Deck trotzdem, mit leeren Zaehlern (wie frueher nach jedem Neustart) und einer
-    Warnung im Protokoll. Der Start darf daran nie scheitern (sonst Notseite oder Rueckweg auf die alte Version), und
-    jedes Konto vorsorglich zu sperren, saehe den Besitzer bis zu einem Tag lang von allem aus, was einen Code verlangt
-    (Update, Sicherung, Abschalten). Ausloesen laesst sich der Fehler von aussen nicht: Gelesen werden nur Eintraege,
-    die Nodvard Deck selbst geschrieben hat.
-
-    Die Warnung ist eine kurze Zeile ohne Traceback: Die Pruefung nach einem Deploy (`scripts/deploy_pi.sh`) wertet jeden
-    Traceback in den Logs als Fehler und schaltet zurueck -- genau das soll dieser Fehler nicht ausloesen."""
+    # Der Start darf daran nie scheitern (sonst Notseite oder Rückweg), und jedes Konto vorsorglich zu sperren,
+    # sperrte den Besitzer bis zu einem Tag von allem aus, was einen Code verlangt. Die Warnung ist eine Zeile ohne
+    # Traceback, weil `deploy_pi.sh` jeden Traceback als Fehler wertet.
     try:
         async with session_scope() as session:
             restored = await restore_code_limits(session)
@@ -289,7 +254,7 @@ async def _lifespan_body(app: FastAPI):
     # Wem `X-Forwarded-For`/`-Proto` geglaubt wird (api/proxy_headers.py), steht vor der ersten Anfrage fest.
     await _load_trusted_proxies(settings)
 
-    # Idempotent -- sicher bei jedem Start (eingebaute Rollen muessen
+    # Idempotent – sicher bei jedem Start (eingebaute Rollen müssen
     # existieren, bevor irgendjemand eine davon zugewiesen bekommen kann).
     async with session_scope() as session:
         await ensure_builtin_roles(session)
@@ -299,22 +264,21 @@ async def _lifespan_body(app: FastAPI):
     async with session_scope() as session:
         await prepare_setup_code(session, settings)
 
-    # Die Grenzen fuer falsche Zwei-Faktor-Codes gelten ueber einen Neustart hinweg (vor der ersten Anfrage).
+    # Die Grenzen für falsche Zwei-Faktor-Codes gelten über einen Neustart hinweg (vor der ersten Anfrage).
     await _restore_code_limits()
 
     # Ergebnis einer Wiederherstellung (von `nodvard_deck.boot` vor dem Start geschrieben) ins Audit-Protokoll
-    # der jetzt gueltigen Datenbank eintragen und Aufgegebenes in restore/ wegraeumen.
+    # der jetzt gültigen Datenbank eintragen und Aufgegebenes in restore/ wegräumen.
     await record_restore_result(settings)
 
-    # Ergebnisse des Update-Helfers (ein Update oder ein Rueckweg hat gerade diesen Start ausgeloest) ins Audit-Protokoll
-    # und als Meldung, genau einmal je Anforderung. Ist der Helfer noch beschaeftigt (er wartet z. B. auf das erste
-    # "gesund" dieses Starts), schaut ein kleiner Nachlauf alle 30 s nach, hoechstens 30 Minuten.
+    # Ergebnisse des Update-Helfers (ein Update oder ein Rückweg hat gerade diesen Start ausgelöst) ins Audit-Protokoll
+    # und als Meldung, genau einmal je Anforderung. Ist der Helfer noch beschäftigt (er wartet z. B. auf das erste
+    # "gesund" dieses Starts), schaut ein kleiner Nachlauf alle 30 s nach, höchstens 30 Minuten.
     await update_helper.record_results(settings)
     helper_follow_up = update_helper.start_follow_up(settings)
 
-    # D-10 ("Demo-Image zum Selbst-Antesten"): NODVARD_DECK_DEMO_MODE=1 legt dieselben Beispieldaten
-    # an wie der Knopf "Mit Beispieldaten ansehen" -- idempotent, und nie auf einer Installation, die
-    # schon echte Server hat (dann bleibt alles, wie es ist).
+    # `NODVARD_DECK_DEMO_MODE=1` legt dieselben Beispieldaten an wie der Knopf „Mit Beispieldaten ansehen“, idempotent
+    # und nie auf einer Installation, die schon echte Server hat.
     if settings.demo_mode:
         try:
             async with session_scope() as session:
@@ -322,9 +286,9 @@ async def _lifespan_body(app: FastAPI):
         except DemoBlockedError:
             _demo_logger.info("demo_mode_skipped reason=hosts_exist")
 
-    # Aktionen, die ein Neustart mitten in der Ausfuehrung abgebrochen hat,
-    # als fehlgeschlagen markieren -- VOR dem Laden der Extensions, damit keine gerade
-    # neu gestartete Ausfuehrung (z. B. aus einem Extension-Hintergrund-Task) mit
+    # Aktionen, die ein Neustart mitten in der Ausführung abgebrochen hat,
+    # als fehlgeschlagen markieren – VOR dem Laden der Extensions, damit keine gerade
+    # neu gestartete Ausführung (z. B. aus einem Extension-Hintergrund-Task) mit
     # erwischt wird.
     async with session_scope() as session:
         await fail_interrupted_actions_on_boot(session)
@@ -333,20 +297,17 @@ async def _lifespan_body(app: FastAPI):
     bus.subscribe("*", _log_event)
     await bus.publish(Event(name="system.started"))
 
-    # WP-3: Extensions entdecken (Verzeichnis + Entry-Points), Registry-Zeilen fuer
-    # neue Funde anlegen, dann alles laden, was von einem frueheren Lauf noch
-    # state=enabled ist -- "aktiviert" ist eine dauerhafte Admin-Entscheidung, kein
-    # Prozess-Neustart soll sie stillschweigend vergessen. Fehler-isoliert pro
-    # Extension (services/extensions.py); ein Boot-Fehler einer Extension darf den
-    # restlichen Start nie verhindern.
+    # Extensions entdecken (Verzeichnis und Entry-Points), Registry-Zeilen für neue Funde anlegen, dann alles laden,
+    # was von einem früheren Lauf noch `state=enabled` ist: „aktiviert“ ist eine dauerhafte Admin-Entscheidung, die
+    # ein Neustart nicht vergessen darf. Fehler werden pro Extension isoliert (`services/extensions.py`), ein
+    # Boot-Fehler einer Extension verhindert den restlichen Start nie.
     async with session_scope() as session:
         await discover_and_sync(session, settings)
         await load_enabled_from_registry(app, session, settings)
 
-    # WP-6: `interrupted` MUSS vor jeder neuen Ausfuehrung laufen, sonst markiert ein
-    # sofort danach gestarteter echter Lauf sich selbst um (docs/03 §7). Kern-Jobs
-    # (kein setup(), das sie erneut anmeldet, anders als Extension-Jobs -- siehe
-    # core/scheduler.py Modul-Docstring) explizit registrieren, dann erst starten.
+    # `interrupted` muss vor jeder neuen Ausführung laufen, sonst markiert ein sofort danach gestarteter echter Lauf
+    # sich selbst um (docs/03 §7). Kern-Jobs haben kein `setup()`, das sie erneut anmeldet (anders als Extension-Jobs,
+    # siehe `core/scheduler.py`), darum werden sie explizit registriert, dann erst gestartet.
     async with session_scope() as session:
         await mark_interrupted_on_boot(session)
     await register_core_jobs(settings.data_dir / "runs")
@@ -364,27 +325,27 @@ async def _lifespan_body(app: FastAPI):
             await retry_mark
     await get_metrics_collector().stop()
     await get_scheduler_service().shutdown()
-    # Aktionen laufen als Hintergrund-Tasks. Vor dem Schliessen der
-    # Datenbank abbrechen, damit sie sich noch als abgebrochen vermerken koennen.
+    # Aktionen laufen als Hintergrund-Tasks. Vor dem Schließen der
+    # Datenbank abbrechen, damit sie sich noch als abgebrochen vermerken können.
     await shutdown_running_actions()
     engine = get_engine()
     await engine.dispose()
-    exit_if_requested(app)  # Neustart auf Wunsch (POST /system/restart): Ende mit Rueckgabewert 75
+    exit_if_requested(app)  # Neustart auf Wunsch (POST /system/restart): Ende mit Rückgabewert 75
 
 
 def create_app() -> FastAPI:
     install_access_log_filters()  # Download-Tickets nicht ins Zugriffsprotokoll von uvicorn
     settings = get_settings()
-    # API-Doku (Swagger-Oberflaeche, ReDoc, `/openapi.json`): FastAPI liefert sie sonst ohne
-    # Anmeldung aus und verraet damit jeden Endpunkt samt Feldern. Nur im Entwicklungsmodus
+    # API-Doku (Swagger-Oberfläche, ReDoc, `/openapi.json`): FastAPI liefert sie sonst ohne
+    # Anmeldung aus und verrät damit jeden Endpunkt samt Feldern. Nur im Entwicklungsmodus
     # (`Settings.api_docs_public`) bleiben die drei Routen; sonst gibt es sie nicht (404).
-    # `app.openapi()` laeuft unabhaengig davon (Vertragstests, `GET /api/v1/system/openapi.json`
-    # fuer angemeldete Admins) -- `openapi_url=None` schaltet nur die Route ab.
+    # `app.openapi()` läuft unabhängig davon (Vertragstests, `GET /api/v1/system/openapi.json`
+    # für angemeldete Admins) – `openapi_url=None` schaltet nur die Route ab.
     docs_public = settings.api_docs_public
     app = FastAPI(
         title="Nodvard Deck",
         # Fester Produktname im API-Dokument (technische Angabe, kein White-Label);
-        # das Branding fuer Menschen kommt aus GET /api/v1/branding.
+        # das Branding für Menschen kommt aus GET /api/v1/branding.
         version=__version__,
         lifespan=lifespan,
         docs_url="/docs" if docs_public else None,
@@ -394,25 +355,23 @@ def create_app() -> FastAPI:
     app.include_router(api_v1_router)
     install_validation_error_handler(app)
     install_coded_error_handler(app)
-    # Obergrenze fuer die Groesse jeder Anfrage, bevor irgendein Handler sie liest (api/body_limit.py).
     app.add_middleware(BodyLimitMiddleware, max_body_bytes=settings.max_body_bytes)
-    # Sicherheits-Kopfzeilen fuer jede Antwort, auch fuer die 413 der Groessen-Grenze (api/security_headers.py).
+    # Nach der Größen-Grenze eingehängt, also weiter außen: Auch ihre 413 bekommt die Sicherheits-Kopfzeilen.
     app.add_middleware(SecurityHeadersMiddleware)
-    # Echte Client-Adresse und echtes Schema hinter einem vertrauenswuerdigen Proxy (api/proxy_headers.py). Zuletzt
-    # hinzugefuegt = ganz aussen: alles danach (auch die Routen) sieht schon die echte Adresse.
+    # Echte Client-Adresse und echtes Schema hinter einem vertrauenswürdigen Proxy (api/proxy_headers.py). Zuletzt
+    # hinzugefügt = ganz außen: alles danach (auch die Routen) sieht schon die echte Adresse.
     app.add_middleware(ProxyHeadersMiddleware)
 
-    # Live gefunden (Backup-Job-Editor): schlaegt eine Extension eine Aktion vor, fuer
-    # die ihr selbst eine Berechtigung fehlt, kam beim Nutzer nur "HTTP 500" an. Das
-    # bleibt ein Serverfehler (nicht die Schuld des Nutzers), aber mit lesbarem Grund.
+    # Schlägt eine Extension eine Aktion vor, für die ihr selbst eine Berechtigung fehlt, soll beim Nutzer nicht nur
+    # „HTTP 500“ ankommen: Es bleibt ein Serverfehler (nicht die Schuld des Nutzers), aber mit lesbarem Grund.
     @app.exception_handler(ExtensionPermissionDenied)
     async def _extension_permission_denied(_request: Request, exc: ExtensionPermissionDenied) -> JSONResponse:
         logging.getLogger("nodvard_deck.ext").warning("Extension-Berechtigung fehlt: %s", exc)
         return JSONResponse(status_code=500, content={"detail": f"Einer Erweiterung fehlt eine Berechtigung: {exc}"})
 
-    # Eine Erweiterung wollte ein Geheimnis ersetzen oder loeschen, das nicht ihr gehoert (ext/context.py,
+    # Eine Erweiterung wollte ein Geheimnis ersetzen oder löschen, das nicht ihr gehört (ext/context.py,
     # `SecretsHandle`): kein Programmfehler und keine fehlende Berechtigung, sondern ein Zustand im Tresor, den der
-    # Nutzer aufloesen kann. Das Geheimnis bleibt unveraendert.
+    # Nutzer auflösen kann. Das Geheimnis bleibt unverändert.
     @app.exception_handler(SecretNotOwned)
     async def _secret_not_owned(_request: Request, exc: SecretNotOwned) -> JSONResponse:
         logging.getLogger("nodvard_deck.ext").warning(
@@ -425,7 +384,7 @@ def create_app() -> FastAPI:
         )
         return JSONResponse(status_code=409, content={"detail": detail})
 
-    # Passwort-Pruefungen rechnen in wenigen Threads (`security.run_hashing`); stauen sich dahinter
+    # Passwort-Prüfungen rechnen in wenigen Threads (`security.run_hashing`); stauen sich dahinter
     # zu viele, kommt ein ehrliches "gleich nochmal" statt einer Warteschlange ohne Ende.
     @app.exception_handler(HashingBusy)
     async def _hashing_busy(_request: Request, _exc: HashingBusy) -> JSONResponse:
@@ -435,11 +394,9 @@ def create_app() -> FastAPI:
             content={"detail": "Gerade sind viele Anmeldungen gleichzeitig im Gange. Bitte versuche es in ein paar Sekunden noch einmal."},
         )
 
-    # Live gefunden: ein abgebrochener VZDump-Lauf hatte die Platte des Hosts von
-    # Nodvard Deck gefuellt -- jeder Schreibzugriff (z. B. "Bestaetigen" auf der
-    # Aktionen-Seite) endete in SQLites "database or disk is full", beim Nutzer kam nur
-    # "HTTP 500" an und niemand dachte an die Platte. 507 Insufficient Storage mit
-    # Klartext; jeder andere OperationalError bleibt ein normaler 500 (re-raise).
+    # Eine volle Platte des Hosts (z. B. durch einen abgebrochenen VZDump-Lauf) ließ jeden Schreibzugriff mit SQLites
+    # „database or disk is full“ enden und beim Nutzer nur „HTTP 500“ ankommen: 507 Insufficient Storage mit Klartext;
+    # jeder andere OperationalError bleibt ein normaler 500 (re-raise).
     @app.exception_handler(SqlOperationalError)
     async def _sql_operational_error(_request: Request, exc: SqlOperationalError) -> JSONResponse:
         if "disk is full" not in str(exc.orig if exc.orig is not None else exc):
@@ -453,10 +410,10 @@ def create_app() -> FastAPI:
             },
         )
 
-    # Ein Server, der nicht antwortet, ist kein Programmfehler. Faengt eine Anfrage das nirgends selbst
-    # ab (z. B. eine Erweiterung, die per SSH misst), kam bisher ein 500 mit Traceback im Protokoll --
-    # und `deploy_pi.sh` wertet "Traceback" in den letzten Minuten als gescheiterten Start. Jetzt:
-    # 502 mit verstaendlichem Grund, im Protokoll eine Zeile.
+    # Ein Server, der nicht antwortet, ist kein Programmfehler. Fängt eine Anfrage das nirgends selbst ab (z. B. eine
+    # Erweiterung, die per SSH misst), gäbe es sonst einen 500 mit Traceback im Protokoll, und `deploy_pi.sh` wertet
+    # „Traceback“ in den letzten Minuten als gescheiterten Start: Stattdessen 502 mit verständlichem Grund und einer
+    # Zeile im Protokoll.
     @app.exception_handler(SshError)
     @app.exception_handler(asyncssh.Error)
     @app.exception_handler(HostUnreachable)
@@ -465,17 +422,15 @@ def create_app() -> FastAPI:
         logging.getLogger("nodvard_deck.ssh").info("server_unreachable path=%s reason=%s", request.url.path, reason)
         return JSONResponse(status_code=502, content={"detail": reason})
 
-    # Merkposition FUER Extension-Routen: sie muessen vor dem StaticFiles-Catch-all
-    # unten stehen, sonst wuerde "/" ihn zuerst treffen und jede /api/v1/ext/<id>/...
-    # -Anfrage verschlucken, bevor der Router sie je sieht. `ext.runtime.mount_router()`
-    # fuegt neue Routen IMMER an dieser Stelle ein, nie ans Ende von app.router.routes.
+    # Merkposition für Extension-Routen: Sie müssen vor dem StaticFiles-Catch-all unten stehen, sonst würde „/“ ihn
+    # zuerst treffen und jede /api/v1/ext/<id>/...-Anfrage verschlucken, bevor der Router sie je sieht.
+    # `ext.runtime.mount_router()` fügt neue Routen immer an dieser Stelle ein, nie ans Ende von app.router.routes.
     app.state.ext_mount_index = len(app.router.routes)
 
     frontend_dist = settings.data_dir.parent / "frontend" / "dist"
     if frontend_dist.is_dir():
-        # Produktionsauslieferung (D-03): ein Port, ein Dienst. Im Entwicklungsbetrieb
-        # laeuft das Frontend stattdessen ueber `npm run dev` mit Proxy auf :8080 —
-        # dann existiert frontend/dist schlicht noch nicht und wir ueberspringen das.
+        # Produktionsauslieferung: ein Port, ein Dienst. Im Entwicklungsbetrieb läuft das Frontend über `npm run dev`
+        # mit Proxy auf :8080, dann existiert `frontend/dist` noch nicht und das wird übersprungen.
         app.mount("/", _SpaStaticFiles(directory=frontend_dist, html=True), name="frontend")
 
     return app

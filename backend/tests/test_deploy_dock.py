@@ -85,6 +85,33 @@ def test_readme_uses_the_same_commands_and_names():
     assert (FOLDER / "../../LICENSE").resolve().is_file()
 
 
+def _source(path: str) -> str:
+    return (ROOT / path).read_text(encoding="utf-8")
+
+
+def _constant(path: str, name: str) -> str:
+    match = re.search(rf'^(?:export const )?{name} = "([^"]+)"', _source(path), re.MULTILINE)
+    assert match, f"{name} fehlt in {path}"
+    return match[1]
+
+
+def test_readme_names_backups_and_screens_as_the_code_does():
+    text = README.read_text(encoding="utf-8")
+    root = _constant("extensions/docker/src/nodvard_deck_ext_docker/stack_backup.py", "BACKUP_ROOT")
+    user = _constant("frontend/src/routes/settings/hosts/AccessPanel.tsx", "DEFAULT_KEY_USER")
+    assert f"(Vorgabe `{user}`) unter `{root}/<Stack>/<Zeit>/`" in text
+    assert f"(default `{user}`) under `{root}/<stack>/<time>/`" in text
+    assert "# - ./sicherungen:/backups" in COMPOSE.read_text(encoding="utf-8")
+    assert text.count("`- ./sicherungen:/backups`") == 2
+    assert '{ path: "system", label: "System"' in _source("frontend/src/routes/settings/SettingsLayout.tsx")
+    assert '<Card title="Sicherung">' in _source("frontend/src/routes/settings/BackupCard.tsx")
+    assert '<Card title="Wiederherstellen"' in _source("frontend/src/routes/settings/RestoreCard.tsx")
+    assert "Oder: Sicherung einspielen" in _source("frontend/src/routes/SetupPage.tsx")
+    for screen in ("Sicherung", "Wiederherstellen"):
+        assert text.count(f"**Einstellungen → System → {screen}**") == 2, screen
+    assert text.count("**Oder: Sicherung einspielen**") == 2
+
+
 def test_readme_has_both_languages_with_working_anchors():
     text = README.read_text(encoding="utf-8")
     titles = re.findall(r"^#+ (.+)$", text, re.MULTILINE)

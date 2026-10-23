@@ -192,6 +192,16 @@ class Extension(NodvardExtension):
             """Legt das Token im Tresor ab, nie in den Einstellungen; ein Geheimnis je Verbindung."""
             # Nur Erstanlage. Ersetzen und Entfernen laufen über die Moduleinstellungen des Kerns, mit Passwort.
             label = f"{TOKEN_LABEL}:{name}"
+            # Bei einem doppelten Namen gälte das Token für die zuletzt eingetragene Adresse, nicht unbedingt die gemeinte.
+            connections = (await ctx.settings.get()).get("connections") or []
+            if [str(c.get("name") or "").strip() for c in connections if isinstance(c, dict)].count(name) > 1:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"Der Name „{name}“ kommt mehrfach vor. Benenne unter Einstellungen → Erweiterungen → Proxmox VE "
+                        "eine der Verbindungen um und speichere; danach kannst du das Token hinterlegen."
+                    ),
+                )
             if await ctx.secrets.exists(label):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,

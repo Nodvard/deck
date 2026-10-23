@@ -3,12 +3,12 @@
  * Adresse, neuer Port, geänderte Systemdatei), je Server SSH-Angriffe, Fail2ban, letzte Anmeldungen, offene Ports und
  * der Stand des Datei-Wächters. Daten: GET /ext/shield/defender/guard und /events.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useContext, useEffect, useState } from "react";
 
 import { Badge, Button, Card, EmptyState, Icon, Notice, Stat, type Tone } from "../../../_shared/frontend/src/ui";
-import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
-import { API, ago, call, proposeAndApprove, useForHost, when } from "./api";
+import { API, HostFilter, ago, call, proposeAndApprove, track, useForHost, usePageActions, useReloadWhenSettled, when, type ActionResult } from "./api";
 import { deck } from "../../../_shared/frontend/src/deck";
+import { RunNotice, RunNotices, type PageNotice } from "./RunNotice";
 import { ServerSetupLink } from "./ServerSetupLink";
 
 interface Attacker { ip: string; count: number; users: string[]; last_ts: number | null; banned: boolean }
@@ -18,6 +18,8 @@ interface PortRow {
   dynamic?: boolean; count?: number;
   /** Ohne root zeigt der Server keinen Programmnamen (fehlt bei älteren Ständen). */
   unreadable?: boolean;
+  /** Eigener Bereich aus den Einstellungen (von, bis), in den die Ports fallen. */
+  span?: [number, number] | null;
 }
 
 /** Was bei einem Port ohne Programmnamen dahintersteht: ohne root nicht lesbar, sonst ein Kernel-Dienst. */
@@ -26,10 +28,20 @@ function noProcessText(p: PortRow): string {
   return p.dynamic ? "ohne Programm (Kernel)" : "unbekanntes Programm";
 }
 
-/** Programme mit wechselnden Ports (NFS-Server) erscheinen als ein Eintrag statt mit jedem Zufallsport. */
+/** Programme mit wechselnden Ports (NFS-Server) und eigene Bereiche erscheinen als ein Eintrag statt mit jedem Port. */
 function portName(p: PortRow): string {
-  if (p.dynamic) return `wechselnde Ports/${p.proto}${p.count && p.count > 1 ? ` (${p.count})` : ""}`;
+  const count = p.count && p.count > 1 ? ` (${p.count})` : "";
+  if (p.span) return `${p.span[0] === p.span[1] ? `Port ${p.span[0]}` : `Ports ${p.span[0]}–${p.span[1]}`}/${p.proto}${count}`;
+  if (p.dynamic) return `wechselnde Ports/${p.proto}${count}`;
   return `${p.port}/${p.proto}`;
+}
+
+const SPAN_NOTE = "Ports in eigenen Bereichen meldet der Einbruchschutz nicht einzeln. Den Programmnamen kann sich jedes Programm selbst geben, auch eine Schadsoftware.";
+
+function portTitle(p: PortRow): string {
+  if (p.span) return `Eigener Bereich aus den Einstellungen · ${p.process ?? "?"} · ${SPAN_NOTE}`;
+  if (p.dynamic) return `Zufällige Ports, ändern sich nach jedem Neustart · ${p.process ?? (p.unreadable ? "Programm nicht lesbar (kein root)" : "ohne Programm")}`;
+  return `${p.address}:${p.port} · ${p.process ?? "?"}${p.public ? "" : " · nur lokal"}`;
 }
 
 interface GuardView {
@@ -88,8 +100,16 @@ const ACK_TAKES_OVER: Record<string, string> = {
   file_changed: "Der neue Stand der Datei gilt danach als richtig.",
 };
 const ACK_HINT_OTHER = "Das Ereignis wird abgehakt. Gesperrt oder geändert wird dadurch nichts.";
+// Wer einen neuen Stand übernimmt, sieht vorher, was das heißt, auch am Handy ohne Tooltip.
+const ACK_ONLY_IF: Record<string, string> = {
+  new_port: "Nur bestätigen, wenn du den Dienst dahinter kennst.",
+  file_changed: "Spätere Änderungen werden mit diesem Stand verglichen. Nur bestätigen, wenn du die Änderung selbst gemacht hast oder kennst.",
+};
 
-function EventDetail({ ev, onBan }: { ev: SecurityEvent; onBan: (ip: string) => void }) {
+const banKey = (hostId: string, ip: string) => `${hostId}:${ip}`;
+const fail2banKey = (hostId: string) => `${hostId}:fail2ban`;
+
+function EventDetail({ ev, onBan, banning }: { ev: SecurityEvent; onBan: (ip: string) => void; banning: (ip: string) => boolean }) {
   const d = ev.detail as {
     changes?: { path: string; change: string; severity: string; note: string }[];
     attackers?: { ip: string; count: number; users: string[] }[];
@@ -115,7 +135,9 @@ function EventDetail({ ev, onBan }: { ev: SecurityEvent; onBan: (ip: string) => 
             <li key={a.ip} className="flex flex-wrap items-center gap-2">
               <span className="font-mono">{a.ip}</span>
               <span className="text-white/50">{a.count}× · Benutzer: {a.users.join(", ") || "–"}</span>
-              <button type="button" onClick={() => onBan(a.ip)} className="text-[var(--color-accent)] hover:underline">Sperren</button>
+              <button type="button" disabled={banning(a.ip)} onClick={() => onBan(a.ip)} className="text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline">
+                {banning(a.ip) ? "Sperre …" : "Sperren"}
+              </button>
             </li>
           ))}
         </ul>
@@ -137,13 +159,14 @@ function EventDetail({ ev, onBan }: { ev: SecurityEvent; onBan: (ip: string) => 
 }
 
 export function GuardTab({ canManage }: { canManage: boolean }) {
-  const unmountSignal = useUnmountSignal();
+  const page = usePageActions();
+  const { keys: { busy: acting }, signal: unmountSignal } = page;
   const [data, setData] = useState<GuardOverview | null>(null);
   const [events, setEvents] = useState<SecurityEvent[] | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const [notice, setNotice] = useState<PageNotice | null>(null);
   const [checking, setChecking] = useState(false);
 
   const load = useCallback(() => {
@@ -153,6 +176,7 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
   }, [showAll]);
 
   useEffect(() => { load(); }, [load]);
+  useReloadWhenSettled(acting, load);
   const busy = checking || !!data?.hosts.some((h) => h.checking);
   useEffect(() => {
     if (!busy) return;
@@ -163,11 +187,12 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
     return () => clearInterval(t);
   }, [busy, load]);
 
-  async function run(label: string, fn: () => Promise<string>) {
+  // `null`: Der Nutzer hat die Rückfrage abgelehnt, es gibt nichts zu melden.
+  async function run(label: string, fn: () => Promise<ActionResult | null>) {
     setNotice(null);
     try {
-      const text = await fn();
-      setNotice({ kind: text.startsWith("Fehlgeschlagen") ? "error" : "ok", text: `${label}: ${text}` });
+      const result = await fn();
+      if (result) setNotice({ ...result, text: `${label}: ${result.text}` });
     } catch (err) {
       setNotice({ kind: "error", text: `${label}: ${err instanceof Error ? err.message : String(err)}` });
     }
@@ -178,25 +203,38 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
     run("Prüfung", async () => {
       const r = await call<{ hosts: number }>(`${API}/guard/check`, { method: "POST", body: JSON.stringify({ host_ids: hostIds }) });
       setChecking(true);
-      return r.hosts ? `${r.hosts} Server werden geprüft …` : "läuft bereits.";
+      return { kind: "ok", text: r.hosts ? `${r.hosts} Server werden geprüft …` : "läuft bereits." };
     });
+
+  // Stößt nach einer Aktion eine Prüfung an, ohne den Hinweis anzufassen: Das Ergebnis der Aktion soll stehen bleiben.
+  const recheck = (hostId: string) =>
+    void call(`${API}/guard/check`, { method: "POST", body: JSON.stringify({ host_ids: [hostId] }) }).then(() => setChecking(true)).catch(() => undefined);
 
   const acknowledge = (ev: SecurityEvent) =>
     run(ev.kind_label, async () => {
+      if (ev.kind in ACK_TAKES_OVER) {
+        const ok = await deck().confirmDialog(
+          `„${ev.title}“ auf „${ev.host_name}“ als in Ordnung markieren? ${ACK_TAKES_OVER[ev.kind]} ${ACK_ONLY_IF[ev.kind]}`,
+          { confirmLabel: "Ist in Ordnung" },
+        );
+        if (!ok) return null;
+      }
       await call(`${API}/events/${ev.id}/acknowledge`, { method: "POST" });
-      return ev.kind in ACK_TAKES_OVER ? "als in Ordnung markiert." : "zur Kenntnis genommen.";
+      return { kind: "ok", text: ev.kind in ACK_TAKES_OVER ? "als in Ordnung markiert." : "zur Kenntnis genommen." };
     });
 
-  const acknowledgeAll = () =>
+  // In der Ansicht eines Servers nur dessen Ereignisse: Die anderen hat hier niemand gesehen.
+  const acknowledgeAll = (host: { id: string; name: string } | null) =>
     run("Ereignisse", async () => {
       const ok = await deck().confirmDialog(
-        "Alle offenen Ereignisse abhaken? Neue Ports und geänderte Dateien gelten danach als bekannt. Gesperrt oder geändert wird dadurch nichts.",
+        `${host ? `Alle offenen Ereignisse von „${host.name}“ abhaken?` : "Alle offenen Ereignisse abhaken?"} Neue Ports und geänderte Dateien gelten danach als bekannt. Gesperrt oder geändert wird dadurch nichts.`,
         { confirmLabel: "Alle abhaken" },
       );
-      if (!ok) return "abgebrochen.";
-      const r = await call<{ acknowledged: number; kept_open?: number }>(`${API}/events/acknowledge-all`, { method: "POST" });
+      if (!ok) return null;
+      const scope = host ? `?host=${encodeURIComponent(host.id)}` : "";
+      const r = await call<{ acknowledged: number; kept_open?: number }>(`${API}/events/acknowledge-all${scope}`, { method: "POST" });
       const kept = r.kept_open ?? 0;
-      if (!kept) return `${r.acknowledged} abgehakt.`;
+      if (!kept) return { kind: "ok", text: `${r.acknowledged} abgehakt.` };
       // Als Fehler anzeigen: Was offen bleibt, braucht noch einen Klick.
       throw new Error(
         `${r.acknowledged} abgehakt, ${kept} ${kept === 1 ? "bleibt" : "bleiben"} offen, weil ein Server den Stand seiner Dateien `
@@ -204,32 +242,40 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
       );
     });
 
-  const ban = (hostId: string, hostName: string, ip: string, unban = false) =>
-    run(`${ip} ${unban ? "entsperren" : "sperren"}`, async () => {
-      const ok = await deck().confirmDialog(
-        unban ? `${ip} auf „${hostName}“ wieder freigeben?` : `${ip} auf „${hostName}“ per Fail2ban sperren? Von dieser Adresse ist dann keine SSH-Verbindung mehr möglich.`,
-        { confirmLabel: unban ? "Entsperren" : "Sperren", danger: !unban },
-      );
-      if (!ok) return "abgebrochen.";
-      const text = await proposeAndApprove(`${API}/hosts/${hostId}/ban`, { ip, unban }, "low", unmountSignal());
-      void call(`${API}/guard/check`, { method: "POST", body: JSON.stringify({ host_ids: [hostId] }) }).then(() => setChecking(true)).catch(() => undefined);
-      return text;
+  async function ban(hostId: string, hostName: string, ip: string, unban = false) {
+    const ok = await deck().confirmDialog(
+      unban ? `${ip} auf „${hostName}“ wieder freigeben?` : `${ip} auf „${hostName}“ per Fail2ban sperren? Von dieser Adresse ist dann keine SSH-Verbindung mehr möglich.`,
+      { confirmLabel: unban ? "Entsperren" : "Sperren", danger: !unban },
+    );
+    if (!ok) return;
+    const progress = unban ? `${ip} wird auf „${hostName}“ entsperrt …` : `${ip} wird auf „${hostName}“ gesperrt …`;
+    await track(page, banKey(hostId, ip), `${ip} ${unban ? "entsperren" : "sperren"}`, progress, async () => {
+      const result = await proposeAndApprove(`${API}/hosts/${hostId}/ban`, { ip, unban }, "low", unmountSignal());
+      recheck(hostId);
+      return result;
     });
+    load();
+  }
 
-  const installFail2ban = (h: GuardHost) =>
-    run(`Fail2ban (${h.host_name})`, async () => {
-      const ok = await deck().confirmDialog(
-        `Fail2ban auf „${h.host_name}“ installieren? Es sperrt Adressen automatisch, die zu oft ein falsches SSH-Passwort versuchen.`,
-        { confirmLabel: "Installieren" },
-      );
-      if (!ok) return "abgebrochen.";
-      const text = await proposeAndApprove(`${API}/hosts/${h.host_id}/install`, { package: "fail2ban" }, "medium", unmountSignal());
-      void checkNow([h.host_id]);
-      return text;
+  async function installFail2ban(h: GuardHost) {
+    const ok = await deck().confirmDialog(
+      `Fail2ban auf „${h.host_name}“ installieren? Es sperrt Adressen automatisch, die zu oft ein falsches SSH-Passwort versuchen.`,
+      { confirmLabel: "Installieren" },
+    );
+    if (!ok) return;
+    const progress = `Fail2ban wird auf „${h.host_name}“ installiert. Das kann einige Minuten dauern.`;
+    await track(page, fail2banKey(h.host_id), `Fail2ban (${h.host_name})`, progress, async () => {
+      const result = await proposeAndApprove(`${API}/hosts/${h.host_id}/install`, { package: "fail2ban" }, "medium", unmountSignal());
+      recheck(h.host_id);
+      return result;
     });
+    load();
+  }
 
   const hosts = useForHost(data?.hosts ?? []);
   const shownEvents = useForHost(events ?? []);
+  const hostFilter = useContext(HostFilter);
+  const shownHost = hostFilter ? { id: hostFilter, name: hosts[0]?.host_name ?? shownEvents[0]?.host_name ?? hostFilter } : null;
   if (error) return <Notice text={`Fehler: ${error}`} />;
   if (!data || !events) return <p className="text-sm text-white/50">Lade …</p>;
   const sm = data.summary;
@@ -240,7 +286,8 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
 
   return (
     <>
-      {notice && <Notice text={notice.text} kind={notice.kind} onClose={() => setNotice(null)} />}
+      {page.notices && <RunNotices notices={page.notices} onClose={(key) => page.report(key, null)} />}
+      {notice && <RunNotice notice={notice} onClose={() => setNotice(null)} />}
 
       <p className="mb-4 text-sm text-white/55" data-testid="guard-intro">
         Der Einbruchschutz zeigt, wer sich von außen auf deinen Servern anzumelden versucht (per SSH, dem Fernzugang) und was sich auf ihnen verändert.
@@ -272,7 +319,7 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
             <label className="flex items-center gap-1.5 text-xs text-white/55">
               <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> auch erledigte
             </label>
-            {canManage && shownEvents.some((e) => !e.acknowledged) && <Button small onClick={() => void acknowledgeAll()}>Alle abhaken</Button>}
+            {canManage && shownEvents.some((e) => !e.acknowledged) && <Button small onClick={() => void acknowledgeAll(shownHost)}>Alle abhaken</Button>}
           </div>
         }
       >
@@ -293,7 +340,7 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
                   </button>
                   {canManage && !ev.acknowledged && <Button small onClick={() => void acknowledge(ev)} title={ACK_TAKES_OVER[ev.kind] ?? ACK_HINT_OTHER}>{ev.kind in ACK_TAKES_OVER ? "Ist in Ordnung" : "Zur Kenntnis genommen"}</Button>}
                 </div>
-                {open === ev.id && <EventDetail ev={ev} onBan={(ip) => void ban(ev.host_id, ev.host_name, ip)} />}
+                {open === ev.id && <EventDetail ev={ev} onBan={(ip) => void ban(ev.host_id, ev.host_name, ip)} banning={(ip) => acting.has(banKey(ev.host_id, ip))} />}
               </li>
             );
           })}
@@ -349,17 +396,27 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
                               {a.banned ? (
                                 <>
                                   <Badge tone="good">gesperrt</Badge>
-                                  {canManage && <button type="button" onClick={() => void ban(h.host_id, h.host_name, a.ip, true)} className="text-white/45 hover:text-white">entsperren</button>}
+                                  {canManage && (
+                                    <button type="button" disabled={acting.has(banKey(h.host_id, a.ip))} onClick={() => void ban(h.host_id, h.host_name, a.ip, true)} className="text-white/45 hover:text-white disabled:opacity-50">
+                                      {acting.has(banKey(h.host_id, a.ip)) ? "Entsperre …" : "entsperren"}
+                                    </button>
+                                  )}
                                 </>
                               ) : canManage && f2b === "running" ? (
-                                <button type="button" onClick={() => void ban(h.host_id, h.host_name, a.ip)} className="text-[var(--color-accent)] hover:underline">Sperren</button>
+                                <button type="button" disabled={acting.has(banKey(h.host_id, a.ip))} onClick={() => void ban(h.host_id, h.host_name, a.ip)} className="text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline">
+                                  {acting.has(banKey(h.host_id, a.ip)) ? "Sperre …" : "Sperren"}
+                                </button>
                               ) : null}
                             </li>
                           ))}
                         </ul>
                       )}
                       {canManage && f2b === "none" && (
-                        <div className="mt-2"><Button small onClick={() => void installFail2ban(h)}>Fail2ban installieren</Button></div>
+                        <div className="mt-2">
+                          <Button small disabled={acting.has(fail2banKey(h.host_id))} onClick={() => void installFail2ban(h)}>
+                            {acting.has(fail2banKey(h.host_id)) ? "Installiere …" : "Fail2ban installieren"}
+                          </Button>
+                        </div>
                       )}
                     </section>
 
@@ -409,7 +466,7 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
                         {v.ports.map((p) => (
                           <span
                             key={p.key}
-                            title={p.dynamic ? `Zufällige Ports, ändern sich nach jedem Neustart · ${p.process ?? (p.unreadable ? "Programm nicht lesbar (kein root)" : "ohne Programm")}` : `${p.address}:${p.port} · ${p.process ?? "?"}${p.public ? "" : " · nur lokal"}`}
+                            title={portTitle(p)}
                             className={`rounded-md px-2 py-0.5 font-mono text-[11px] ${p.new ? "bg-red-500/20 text-red-200" : p.public ? "bg-white/[0.08] text-white/80" : "bg-white/[0.04] text-white/40"}`}
                           >
                             {portName(p)}{p.process ? ` ${p.process}` : ""}{p.new ? " · neu" : ""}
@@ -417,6 +474,7 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
                         ))}
                         {v.ports.length === 0 && <span className="text-xs text-white/45">keine gefunden</span>}
                       </div>
+                      {v.ports.some((p) => p.span) && <p className="mt-1.5 text-xs text-white/45">{SPAN_NOTE}</p>}
                     </section>
 
                     <section>

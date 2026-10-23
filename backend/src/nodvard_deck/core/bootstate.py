@@ -1,5 +1,5 @@
-"""Zustand des Starts in `<Datenordner>/.boot/` (nicht Teil von Sicherungen), gemeinsam genutzt von `nodvard_deck.boot`, der
-Anwendung, `nodvard_deck.admin` und der Notseite."""
+"""Zustand des Starts in `<Datenordner>/.boot/`, gemeinsam genutzt von `boot`, Anwendung, Admin-Werkzeug und
+Notseite."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from typing import Any
 
 from .backup import restore as _restore
 
-try:  # nicht unter Windows
+try:
     import fcntl
 except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
@@ -186,8 +186,8 @@ def read_state(data_dir: Path) -> dict[str, Any]:
 
 
 def write_state(data_dir: Path, state: dict[str, Any]) -> None:
-    """Schreibt den bereinigten Stand. `scripts/deploy_pi.sh` liest `last_migration.at` und `started_ok` ohne JSON-Parser aus
-    der Datei (eingerückt, Schlüssel sortiert): das Format nicht ändern."""
+    """Schreibt den bereinigten Stand; das Format nicht ändern, `scripts/deploy_pi.sh` liest daraus ohne
+    JSON-Parser."""
     ensure_dir(data_dir)
     _restore.write_json_atomic(state_path(data_dir), clean_state(state))
 
@@ -205,8 +205,8 @@ def update_state(data_dir: Path, **changes: Any) -> dict[str, Any]:
 
 
 def mark_started_ok(data_dir: Path, *, now: float | None = None) -> bool:
-    """Die Anwendung ist (nach einer Migration) vollständig gestartet. Nur wenn es schon einen Stand gibt, also `boot` lief;
-    in Entwicklung und Tests entsteht so nichts im Datenordner."""
+    """Merkt, dass die Anwendung nach einer Migration vollständig gestartet ist, nur wenn es schon einen Stand
+    gibt."""
     if not os.path.lexists(state_path(data_dir)):
         return False
     state = read_state(data_dir)
@@ -241,7 +241,6 @@ class Lock:
 
 
 def _try_lock(path: Path, purpose: str) -> Lock:
-    """Ein Versuch: `LockHeld`, wenn ein anderer sie hat, sonst die Sperre oder eine ohne Wirkung."""
     if fcntl is None:
         return Lock(None, False)
     try:
@@ -263,7 +262,7 @@ def _try_lock(path: Path, purpose: str) -> Lock:
 
 
 def acquire_lock(data_dir: Path, *, purpose: str = "app", wait_s: float = 0.0, poll_s: float = 0.2) -> Lock:
-    """Nimmt die Sperre. Ist sie belegt, wird bis zu `wait_s` Sekunden gewartet, dann `LockHeld`."""
+    """Nimmt die Sperre und wartet bei Belegung bis zu `wait_s` Sekunden, dann `LockHeld`."""
     path = boot_dir(data_dir) / LOCK_NAME
     deadline = time.monotonic() + max(0.0, wait_s)
     while True:
@@ -276,7 +275,7 @@ def acquire_lock(data_dir: Path, *, purpose: str = "app", wait_s: float = 0.0, p
 
 
 def is_locked(data_dir: Path) -> bool:
-    """Hält gerade ein anderer Prozess die Sperre? (Ohne sie zu behalten.)"""
+    """Ob gerade ein anderer Prozess die Sperre hält, ohne sie zu behalten."""
     try:
         lock = acquire_lock(data_dir, purpose="pruefung")
     except LockHeld:
@@ -286,8 +285,8 @@ def is_locked(data_dir: Path) -> bool:
 
 
 def request_rollback(data_dir: Path, copy: str, *, by: str, now: float | None = None) -> None:
-    """Merkt vor, beim nächsten Start den Stand der Kopie `copy` wiederherzustellen, auch nach einem guten Start der neuen
-    Version (Änderungen seit dem Update gehen dann verloren). Von der Notseite oder vom Update-Helfer; gilt 24 Stunden."""
+    """Merkt vor, beim nächsten Start den Stand der Kopie `copy` wiederherzustellen (Änderungen seit dem Update
+    gehen verloren), gilt 24 Stunden."""
     if not _copy_name(copy):
         raise ValueError("ungueltiger Name der Kopie")
     ensure_dir(data_dir)
@@ -344,8 +343,8 @@ def _shorten_path(match: re.Match[str]) -> str:
 
 
 def sanitize_text(text: str, *, data_dir: Path | None = None, limit: int = _MAX_LINE) -> str:
-    """Ein Protokolltext für die Anzeige: ohne Pfade (der Datenordner heißt `<Daten>`), Zugangsdaten, SQL-Parameter und
-    lange undurchsichtige Zeichenketten; für die Fehlersuche bleiben Art des Fehlers, Dateinamen und Zeilennummern."""
+    """Ein Protokolltext für die Anzeige ohne Pfade, Zugangsdaten, SQL-Parameter und lange undurchsichtige
+    Zeichenketten."""
     text = _ANSI.sub("", text)
     text = _CONTROL.sub("", text)
     if data_dir is not None:

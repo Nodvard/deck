@@ -827,3 +827,66 @@ describe("Updates auf dem Server, auf dem Nodvard Deck läuft", () => {
     }
   });
 });
+
+describe("Automatische Sicherheitsupdates einrichten", () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => { resolve = r; });
+    return { promise, resolve };
+  }
+
+  /** Server ohne unattended-upgrades und ohne eigenes Einspielen, damit „Einrichten“ da ist; die Freigabe antwortet wie vorgegeben. */
+  function stubSetup(calls: Call[], approve: () => Response | Promise<Response>) {
+    const base = mockFetch(calls);
+    const data = { ...DATA, config: { ...DATA.config, auto_enabled: false } };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/defender/updates") && (init?.method ?? "GET") === "GET") return new Response(JSON.stringify(data), { status: 200 });
+      if (url.endsWith("/actions/a2/approve")) return approve();
+      return base(input, init);
+    }));
+  }
+
+  const checks = (calls: Call[]) => calls.filter((c) => c.method === "POST" && c.url.endsWith("/updates/check"));
+
+  it("lässt das Ergebnis stehen, auch wenn die Folgeprüfung antwortet", async () => {
+    const calls: Call[] = [];
+    stubSetup(calls, () => new Response(JSON.stringify({ status: "failed", result: { error: "E: unattended-upgrades nicht gefunden" } }), { status: 200 }));
+    render(<UpdatesTab canManage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Einrichten" }));
+
+    await waitFor(() => expect(checks(calls)).toHaveLength(1));
+    expect(checks(calls)[0].body).toEqual({ host_ids: ["h-pi"] });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(screen.getByRole("alert")).toHaveTextContent("Raspberry Pi: Fehlgeschlagen: E: unattended-upgrades nicht gefunden");
+    expect(screen.queryByText(/werden geprüft/)).toBeNull();
+  });
+
+  it("zeigt ein gelungenes Einrichten an", async () => {
+    stubSetup([], () => new Response(JSON.stringify({ status: "succeeded", result: {} }), { status: 200 }));
+    render(<UpdatesTab canManage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Einrichten" }));
+    await screen.findByText("Raspberry Pi: Erledigt.");
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(screen.getByText("Raspberry Pi: Erledigt.")).toBeInTheDocument();
+  });
+
+  it("sperrt den Knopf, solange es läuft, und startet es kein zweites Mal", async () => {
+    const approve = deferred<Response>();
+    const calls: Call[] = [];
+    stubSetup(calls, () => approve.promise);
+    render(<UpdatesTab canManage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Einrichten" }));
+
+    const running = await screen.findByRole("button", { name: "Richte ein …" });
+    expect(running).toBeDisabled();
+    expect(screen.getByText("Automatische Sicherheitsupdates werden auf „Raspberry Pi“ eingerichtet. Das kann einige Minuten dauern.")).toBeInTheDocument();
+    fireEvent.click(running);
+    expect(confirmDialog).toHaveBeenCalledTimes(1);
+    expect(calls.filter((c) => c.method === "POST" && c.url.endsWith("/hosts/h-pi/install"))).toHaveLength(1);
+
+    await act(async () => { approve.resolve(new Response(JSON.stringify({ status: "succeeded", result: {} }), { status: 200 })); });
+    expect(await screen.findByText("Raspberry Pi: Erledigt.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Einrichten" })).toBeEnabled();
+  });
+});

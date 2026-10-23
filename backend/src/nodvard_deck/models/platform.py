@@ -83,7 +83,8 @@ class JobRun(Base, IdMixin):
     status: Mapped[str] = mapped_column(String(16), default="running", index=True)
     """running | succeeded | failed | interrupted | skipped.
 
-    `interrupted` macht einen Neustart mitten im Lauf sichtbar: Beim Start setzt der Kern alle `running`-Läufe darauf."""
+    `interrupted` macht einen Neustart mitten im Lauf sichtbar: Beim Start setzt der Kern alle `running`-Läufe darauf.
+    Ein Lauf, den das Herunterfahren abbricht, endet ebenfalls so."""
 
     host_id: Mapped[str | None] = mapped_column(String(36))
     started_at: Mapped[datetime] = mapped_column(
@@ -145,6 +146,8 @@ class DashboardLayout(Base, IdMixin, TimestampMixin):
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     items: Mapped[list] = mapped_column(JSON, default=list)
     """[{widget_id, ext_id, x, y, w, h, config}], für Web und App identisch."""
+    groups: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    """Gruppen der Startseite in ihrer Reihenfolge, [{key, title, collapsed}]; leer heißt Vorgabe."""
 
 
 class CustomApp(Base, IdMixin, TimestampMixin):

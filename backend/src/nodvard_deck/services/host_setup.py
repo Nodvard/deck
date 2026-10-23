@@ -15,6 +15,7 @@ from typing import Any
 import asyncssh
 from nodvard_sdk import ROOT_HELPER_DIR
 
+from ..core import ssh
 from ..ext.root_helpers import RootHelperFile
 
 # Der Befehl wird von Hand auf dem Server ausgeführt, deshalb kommt nichts Ungeprüftes ins Skript: Benutzer, Gruppen und
@@ -43,6 +44,58 @@ _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 KEY_ADDED = "Schlüssel für Nodvard Deck eingetragen."
 """Meldung des Skripts, wenn es den Schlüssel neu in `authorized_keys` schreibt (steht er schon dort, kommt sie nicht)."""
+KEY_FIXED = "Schlüssel für Dropbear angepasst."
+"""Meldung des Skripts, wenn es bei Dropbear die eigene alte Zeile `restrict,pty <Schlüssel>` durch eine ersetzt, die
+Dropbear versteht."""
+
+# Dropbear verwirft eine Zeile mit `pty` ganz und gibt mit `restrict` kein Terminal; die Liste für Dropbear verstehen
+# beide Dienste, sie gilt deshalb, sobald ein Dropbear läuft. Auf OpenSSH fehlt ihr gegenüber `restrict` nur
+# `no-user-rc` (~/.ssh/rc legt nur das Konto selbst an), ein Prozess, der sich dropbear nennt, bringt also keine Rechte.
+# Das Banner der Verbindung braucht es nicht: Beim Einrichten mit Passwort bedient ein Prozess dropbear die Sitzung.
+OPENSSH_KEY_OPTIONS = "restrict,pty"
+DROPBEAR_KEY_OPTIONS = "no-port-forwarding,no-agent-forwarding,no-X11-forwarding"
+_PROC_COMMS = "/proc/[0-9]*/comm"
+# KO: Optionen vor dem Schlüssel; DB: ein Prozess dropbear läuft. Einer in einem anderen PID-Namensraum (Container
+# auf dem Rechner) zählt nicht; lässt sich der Namensraum nicht lesen, zählt er. Nur Builtins, so geht es in dash und
+# busybox sh.
+_KEY_OPTIONS = (
+    f'KO="{OPENSSH_KEY_OPTIONS}"; DB=; for KP in {_PROC_COMMS}; do IFS= read -r KL 2>/dev/null < "$KP" || continue; '
+    'case "$KL" in dropbear*) KN="${KP%/comm}/ns/pid"; KS="${KP%/*/comm}/self/ns/pid"; '
+    '[ -e "$KN" ] && [ -e "$KS" ] && ! [ "$KN" -ef "$KS" ] && continue; '
+    f'DB=1; KO="{DROPBEAR_KEY_OPTIONS}"; break;; esac; done'
+)
+# KM: KL ist eine eigene alte Zeile, also `restrict,pty $K` oder derselbe Schlüssel mit einem anderen eigenen Kommentar
+# (älteres `lattice@…`, Server umbenannt). KF ersetzt die erste davon durch `$KO <Rest der Zeile>`, alle anderen Zeilen
+# bleiben Byte für Byte; die Länge zeigt, ob `read` etwas verloren hat (etwa ein NUL-Byte). Lesen und Schreiben laufen
+# mit dem Aufruf davor (`KF R`: als der Benutzer). `tee` schreibt in dieselbe Datei, so bleiben Besitz, Rechte und ein
+# Link. KC: 1 nichts geändert, 2 Schreiben nicht bestätigt (alter Inhalt neu geschrieben), 3 keine eigene alte Zeile.
+_KEY_FIX_FUNCTION = (
+    'KM() { case "$KL" in "restrict,pty $K") return 0;; "restrict,pty $B "*) ;; *) return 1;; esac; '
+    'case "${KL##* }" in *[!A-Za-z0-9_.@-]*) return 1;; nodvard@*|lattice@*) [ "$KL" = "restrict,pty $B ${KL##* }" ];; '
+    '*) return 1;; esac; }; '
+    'KF() { KC=1; KT=$(mktemp -d) || return 1; if "$@" cat "$A" > "$KT/a"; then KX=; '
+    'while IFS= read -r KL || [ -n "$KL" ]; do if [ -z "$KX" ] && KM; then KL="$KO ${KL#* }"; KX=1; '
+    'fi; printf "%s\\n" "$KL"; done < "$KT/a" > "$KT/b"; '
+    'if [ -z "$KX" ]; then KC=3; '
+    f'elif [ $(( $(wc -c < "$KT/b") - $(wc -c < "$KT/a") )) -eq $(( ${{#KO}} - {len(OPENSSH_KEY_OPTIONS)} )) ]; then '
+    'if "$@" tee "$A" < "$KT/b" > /dev/null && "$@" cmp -s - "$A" < "$KT/b"; then KC=0; '
+    'else "$@" tee "$A" < "$KT/a" > /dev/null; KC=2; fi; fi; fi; rm -f "$KT/a" "$KT/b"; rmdir "$KT"; return $KC; }'
+)
+
+
+def _key_fix(run: str) -> str:
+    """Repariert bei Dropbear die eigene alte Zeile; `run` ist der Aufruf davor (`R ` ohne root)."""
+    return (
+        f'if [ -n "$DB" ] && {run}grep -qF -- "restrict,pty $B" "$A" 2>/dev/null; then '
+        f'if KF {run}; then echo "{KEY_FIXED}"; '
+        'elif [ "$KC" = 2 ]; then echo "FEHLER: $A ließ sich beim Anpassen für Dropbear nicht sicher schreiben. Nodvard '
+        'Deck hat versucht, den alten Inhalt zurückzuschreiben; bitte die Datei prüfen."; exit 1; '
+        'elif [ "$KC" != 3 ]; then echo "FEHLER: Die Schlüsselzeile in $A ließ sich nicht für Dropbear anpassen '
+        '(Datei nicht lesbar oder mit ungewöhnlichen Zeichen), sie ist unverändert."; '
+        'echo "Hinweis: Von Hand beheben: in dieser Datei vor dem Schlüssel von Nodvard Deck „restrict,pty“ durch '
+        f'„{DROPBEAR_KEY_OPTIONS}“ ersetzen, dann „Verbindung prüfen“."; exit 1; fi; fi'
+    )
+
 
 SETUP_ACCOUNT_FILES = ("/etc/passwd", "/etc/shadow", "/etc/group", "/etc/gshadow")
 """Konto-Dateien, die das Skript beim Anlegen des Benutzers und beim Eintragen in Gruppen ändern kann."""
@@ -59,8 +112,8 @@ _STATE_FUNCTION = (
 )
 _HELPER_DIR_RE = re.compile(r"/[A-Za-z0-9_./-]{1,200}")
 MAX_ONE_LINER = 120_000
-"""Obergrenze für den ganzen Befehl. Er geht als ein Argument an `sh -c`, Linux erlaubt 128 KiB (131 072 Byte) je
-Argument; der Rest bleibt Abstand."""
+"""Obergrenze für den ganzen Befehl in Byte (UTF-8). Er geht als ein Argument an `sh -c`, Linux erlaubt 128 KiB
+(131 072 Byte) je Argument; der Rest bleibt Abstand."""
 
 
 class SetupError(ValueError):
@@ -129,14 +182,14 @@ def helper_sudoers_file(ext_id: str) -> str:
     return f"/etc/sudoers.d/nodvard_{ext_id}_$U"
 
 
-def _helper_lines(helpers: Sequence[RootHelperFile], helper_dir: str) -> list[str]:
-    """Hilfsskripte der Module samt je einer sudo-Regel nur für dieses Skript, neben der vollen Regel. Was hier
-    scheitert, gibt einen Hinweis und lässt die übrige Einrichtung laufen: Ohne passendes Skript nimmt ein Modul die
-    volle Regel.
+HELPERS_BLOCKED = (
+    "FEHLER: Die Hilfsskripte lassen sich hier nicht sicher einrichten, und ohne sie gibt dieser Befehl den Modulen kein "
+    "root. Darum hat er nichts geändert."
+)
+"""Feste Zeile der Vorprüfung im Modus nur mit den Regeln der Hilfsskripte; `evaluate_setup_run` erkennt sie daran."""
 
-    Der Text reist base64-kodiert mit und wird auf dem Server gegen seine sha256 geprüft. Die Regel kommt nur dazu, wenn
-    das Skript und jeder Ordner bis `/` root gehören und weder andere noch der Benutzer selbst dort schreiben können
-    (`W`): Sonst könnte er das Skript tauschen und wäre über die Regel root."""
+
+def _check_helpers(helpers: Sequence[RootHelperFile], helper_dir: str) -> None:
     if not _HELPER_DIR_RE.fullmatch(helper_dir) or "//" in helper_dir or "/./" in helper_dir or "/../" in helper_dir:
         raise SetupError("Ungültiger Ordner für die Hilfsskripte.")
     seen: set[str] = set()
@@ -147,16 +200,56 @@ def _helper_lines(helpers: Sequence[RootHelperFile], helper_dir: str) -> list[st
         ):
             raise SetupError("Ungültiges Hilfsskript.")
         seen.add(helper.ext_id)
-    lines = [
+
+
+def _helper_functions(helper_dir: str) -> list[str]:
+    """`D` und die Funktionen für die Hilfsskripte. Ein Skript bekommt seine Regel nur, wenn es und jeder Ordner bis `/`
+    root gehören und weder andere noch der Benutzer selbst dort schreiben können (`W`): Sonst könnte er das Skript tauschen
+    und wäre über die Regel root."""
+    return [
         f'D="{_dq(helper_dir)}"; HX=',
-        # W: kein Link, gehört root, der Benutzer kann nicht schreiben (als er selbst gefragt, so zählen auch ACLs), andere
-        # auch nicht; schreibt die Gruppe, darf der Benutzer nicht in ihr sein.
+        # WA: Mit einer ACL zeigen die Gruppenbits nur die Maske, schreiben dürfen dann auch benannte Benutzer und
+        # Gruppen. AN ist der erste Eintrag mit w für den Benutzer oder eine seiner Gruppen, auch künftige (XG), oder
+        # eine Nummer ohne Namen, die ein neuer Benutzer oder seine neue Gruppe gleich bekommen kann. Ohne getfacl ist
+        # AN=?, wenn ls ein + zeigt oder keins zeigen kann (busybox).
         (
-            'W() { [ ! -L "$1" ] && [ "$(stat -c %u "$1" 2>/dev/null)" = 0 ] || return 1; ! R test -w "$1" 2>/dev/null || return 1; '
+            'WA() { AN=; if AL=$(getfacl -c "$1" 2>/dev/null); then AS=" $(id -Gn "$U" 2>/dev/null) $XG "; for AE in $AL; do '
+            'AV=${AE#*:}; AV=${AV%:*}; case "$AE" in user:*:?w?) [ "$AV" != "$U" ] || AN=$AV;; '
+            'group:*:?w?) case "$AS" in *" $AV "*) AN=$AV;; esac;; *) continue;; esac; '
+            'case "$AV" in ""|*[!0-9]*) ;; *) id "$U" >/dev/null 2>&1 || AN=$AV;; esac; [ -z "$AN" ] || return 1; done; return 0; fi; '
+            'case "$(ls -ld "$1" 2>/dev/null)" in ??????????+*) AN=?;; *) ls --version 2>/dev/null | grep -q coreutils || AN=?;; esac; '
+            '[ -z "$AN" ]; }'
+        ),
+        # W: kein Link, gehört root, der Benutzer kann nicht schreiben (als er selbst gefragt, so zählen auch ACLs), andere
+        # auch nicht; schreibt die Gruppe, darf der Benutzer nicht in ihr sein, auch nicht in einer, die er erst bekommt
+        # (XG), und keine ACL darf es ihm erlauben (WA). Eine Gruppe ohne Namen kann useradd einem neuen Benutzer geben.
+        (
+            'W() { AN=; [ ! -L "$1" ] && [ "$(stat -c %u "$1" 2>/dev/null)" = 0 ] || return 1; ! R test -w "$1" 2>/dev/null || return 1; '
             'M=$(stat -c %a "$1" 2>/dev/null) || return 1; '
-            'case "$M" in *[2367]) return 1;; *[2367]?) case " $(id -Gn "$U" 2>/dev/null) " in *" $(stat -c %G "$1" 2>/dev/null) "*) return 1;; esac;; esac; return 0; }'
+            'case "$M" in *[2367]) return 1;; *[2367]?) WG=$(stat -c %G "$1" 2>/dev/null); '
+            'case " $(id -Gn "$U" 2>/dev/null) $XG " in *" $WG "*) return 1;; esac; '
+            '[ "$WG" != UNKNOWN ] || id "$U" >/dev/null 2>&1 || return 1; WA "$1" || return 1;; esac; return 0; }'
         ),
         'WD() { P="$1"; while :; do W "$P" || return 1; [ "$P" = / ] && return 0; P=$(dirname "$P"); done; }',
+        # WM: warum W einen Ordner ablehnt, mit Abhilfe. Löschen nur für den eigenen Ordner vorschlagen, ein Link weiter
+        # oben kann zum System gehören. AN stammt aus dem letzten W, also dem für diesen Ordner.
+        (
+            'WM() { if [ -L "$1" ] && [ "$1" = "$D" ]; then echo "FEHLER: $1 ist ein Link. Die Hilfsskripte gehören in einen '
+            'echten Ordner. Abhilfe als root: rm $1 (entfernt nur den Link, nicht sein Ziel)."; '
+            'elif [ -L "$1" ]; then echo "FEHLER: $1 ist ein Link. Hilfsskripte legt Nodvard Deck nur auf einem Weg aus '
+            'echten Ordnern ab; hier hilft nur „Volle Rechte“."; '
+            'elif [ ! -e "$1" ]; then echo "FEHLER: Den Ordner $1 gibt es nicht. Abhilfe als root: mkdir -p $1"; '
+            'elif [ ! -d "$1" ]; then echo "FEHLER: $1 ist kein Ordner. Abhilfe als root: mv $1 $1.alt"; '
+            'elif [ "$(stat -c %u "$1" 2>/dev/null)" != 0 ]; then echo "FEHLER: Der Ordner $1 gehört nicht root. Abhilfe '
+            'als root: chown root:root $1"; '
+            'elif [ "$AN" = "?" ]; then echo "FEHLER: Für den Ordner $1 lässt sich ohne getfacl nicht prüfen, ob eine ACL '
+            '(erweiterte Rechte) dem Benutzer Schreibrecht gibt. Abhilfe als root: Paket acl installieren (apt install acl, '
+            'auf Alpine apk add acl) oder chmod g-w $1"; '
+            'elif [ -n "$AN" ]; then echo "FEHLER: Im Ordner $1 gibt eine ACL (erweiterte Rechte) $AN Schreibrecht, darüber '
+            'könnte auch der Benutzer dort schreiben. Abhilfe als root: setfacl -b $1 (entfernt die ACL)"; '
+            'else echo "FEHLER: Im Ordner $1 darf außer root noch jemand schreiben (Rechte $(stat -c %a "$1" 2>/dev/null), '
+            'Gruppe $(stat -c %G "$1" 2>/dev/null)). Abhilfe als root: chmod go-w $1 (bei einer ACL: setfacl -b $1)"; fi; }'
+        ),
         (
             'HS() { Y=$(mktemp) || return 1; if printf %s "$3" | base64 -d > "$Y" 2>/dev/null && [ "$(sha256sum "$Y" | cut -d" " -f1)" = "$2" ] '
             '&& install -m 0755 -o root -g root "$Y" "$D/$1" && W "$D/$1"; then rm -f "$Y"; return 0; fi; rm -f "$Y"; return 1; }'
@@ -166,13 +259,53 @@ def _helper_lines(helpers: Sequence[RootHelperFile], helper_dir: str) -> list[st
             'if visudo -c -q -f "$Z" && install -m 0440 -o root -g root "$Z" "$2"; then rm -f "$Z"; VC "$2" && return 0; rm -f "$2"; return 1; fi; '
             'rm -f "$Z"; return 1; }'
         ),
+    ]
+
+
+def _helper_precheck(groups: Sequence[str]) -> list[str]:
+    """Vorprüfung, wenn nur die Regeln der Hilfsskripte root geben: Lassen sich die Skripte nicht sicher einrichten, endet
+    der Befehl mit Grund und Abhilfe, bevor er etwas ändert."""
+    return [
+        # NG: Gruppen aus `useradd -D`, GROUP (ohne eigene Gruppe) und GROUPS (zusätzliche, nur neuere Versionen).
+        (
+            'NG() { for GN in $(useradd -D 2>/dev/null | grep "^GROUPS*=" | cut -d= -f2- | tr , " "); do '
+            'getent group "$GN" | cut -d: -f1; done | tr "\\n" " "; }'
+        ),
+        # XG: Gruppen, die der Benutzer gleich bekommt. Ein neuer bekommt mit USERGROUPS_ENAB eine Gruppe mit seinem
+        # Namen, sonst die aus NG; welche Einstellung gilt, lässt sich hier nicht sicher lesen (login.defs kann auch
+        # unter /usr liegen oder Ergänzungen haben), darum zählen beide.
+        f'XG="{" ".join(_check_group(g) for g in groups)}"; id "$U" >/dev/null 2>&1 || XG="$XG $U $(NG)"; HB=',
+        # HB=1: ohne sudo hilft auch die volle Regel nicht. Einen vorhandenen, aber falsch eingestellten eigenen Ordner lehnt
+        # die Vorprüfung ab, statt ihn wie `install -d` später still zu reparieren: So ändert der Befehl nichts.
+        (
+            'if ! command -v visudo >/dev/null; then echo "FEHLER: sudo ist nicht installiert (als root: apt install sudo)."; HB=1; '
+            'elif ! command -v base64 >/dev/null || ! command -v sha256sum >/dev/null || ! command -v stat >/dev/null; then '
+            'echo "FEHLER: base64, sha256sum oder stat fehlt hier. Sie gehören zu den coreutils, bitte nachinstallieren."; HB=2; '
+            'elif ! WD "$(dirname "$D")"; then WM "$P"; HB=2; '
+            'elif { [ -e "$D" ] || [ -L "$D" ]; } && { [ ! -d "$D" ] || ! W "$D"; }; then WM "$D"; HB=2; fi'
+        ),
+        (
+            f'[ -z "$HB" ] || {{ echo "{HELPERS_BLOCKED}"; [ "$HB" = 1 ] || echo "Hinweis: Den Grund oben beheben und den '
+            'Befehl noch einmal ausführen. Oder in Nodvard Deck unter „Erweitert“ „Volle Rechte“ wählen, dann laufen die '
+            'Module über die volle sudo-Regel."; exit 1; }'
+        ),
+    ]
+
+
+def _helper_lines(helpers: Sequence[RootHelperFile], *, strict: bool = False) -> list[str]:
+    """Hilfsskripte der Module, base64-kodiert und gegen ihre sha256 geprüft, samt je einer eigenen sudo-Regel. Ein
+    Fehlschlag ist neben der vollen Regel nur ein Hinweis (das Modul nimmt dann sie), ohne sie (`strict`) ein Fehler."""
+    level, fail = ("FEHLER", " F=1;") if strict else ("Hinweis", "")
+    lines = [
         (
             'if ! command -v visudo >/dev/null; then HX=1; '
             'elif ! command -v base64 >/dev/null || ! command -v sha256sum >/dev/null || ! command -v stat >/dev/null; then '
-            'echo "Hinweis: base64, sha256sum oder stat fehlt hier, die Hilfsskripte wurden übersprungen."; HX=1; '
+            f'echo "{level}: base64, sha256sum oder stat fehlt hier, die Hilfsskripte wurden übersprungen.";{fail} HX=1; '
             'elif ! WD "$(dirname "$D")" || [ -L "$D" ] || ! install -d -m 0755 -o root -g root "$D" || ! W "$D"; then '
-            'echo "Hinweis: Der Ordner $D oder einer darüber gehört nicht root oder ist für andere beschreibbar, '
-            'die Hilfsskripte wurden übersprungen."; HX=1; fi'
+            f'if [ "$AN" = "?" ]; then echo "{level}: Ob eine ACL (erweiterte Rechte) im Ordner $D oder einem darüber '
+            'Schreibrecht gibt, lässt sich ohne getfacl (Paket acl) nicht prüfen, die Hilfsskripte wurden übersprungen."; '
+            f'else echo "{level}: Der Ordner $D oder einer darüber gehört nicht root oder ist für andere beschreibbar, '
+            f'die Hilfsskripte wurden übersprungen."; fi;{fail} HX=1; fi'
         ),
     ]
     for helper in sorted(helpers, key=lambda h: h.ext_id):
@@ -180,21 +313,36 @@ def _helper_lines(helpers: Sequence[RootHelperFile], helper_dir: str) -> list[st
         blob = base64.b64encode(helper.text.encode("ascii")).decode("ascii")
         lines.append(
             f'if [ -z "$HX" ]; then if ! HS {name} {helper.sha256} "{blob}"; '
-            f'then echo "Hinweis: Das Hilfsskript {name} wurde nicht eingerichtet: Die Datei ließ sich nicht prüfen oder nicht sicher ablegen."; '
+            f'then echo "{level}: Das Hilfsskript {name} wurde nicht eingerichtet: Die Datei ließ sich nicht prüfen oder nicht sicher ablegen.";{fail} '
             f'elif ! HR {name} "{helper_sudoers_file(helper.ext_id)}"; '
-            f'then echo "Hinweis: Das Hilfsskript {name} wurde nicht eingerichtet: Seine sudo-Regel hat die Prüfung mit visudo nicht bestanden."; '
+            f'then echo "{level}: Das Hilfsskript {name} wurde nicht eingerichtet: Seine sudo-Regel hat die Prüfung mit visudo nicht bestanden.";{fail} '
             f'else echo "Hilfsskript {name} (Version {helper.version}) eingerichtet, mit eigener sudo-Regel."; fi; fi'
         )
     return lines
 
 
+# VO: höchstens fünf Zeilen von `visudo -c`. VC prüft eine eigene Datei; die ganze Konfiguration (VG) nur, wenn sie vor
+# der Einrichtung schon in Ordnung war (VP).
+_VISUDO_FUNCTIONS = (
+    'VO() { visudo -c 2>&1 | grep -v "parsed OK" | head -n 5 | sed "s/^/visudo: /"; }; '
+    'VG() { [ -z "$VP" ] || visudo -c -q; }; VC() { visudo -c -q -f "$1" && VG; }'
+)
+_VISUDO_PRE_ERROR = (
+    'echo "Hinweis: visudo meldet schon vor der Einrichtung einen Fehler, der nicht von Nodvard Deck kommt:"; VO; '
+    'echo "Hinweis: Die Regeln von Nodvard Deck werden deshalb einzeln geprüft. Steht oben „bad permissions“, hilft für '
+    'die genannte Datei: chmod 0440 und chown root:root.";'
+)
+
+
 def build_setup_script(
     user: str, public_key: str, *, groups: Iterable[str] = (), sudo: bool = False,
     helpers: Sequence[RootHelperFile] = (), helper_dir: str = ROOT_HELPER_DIR, report_state: bool = False,
+    full_sudo: bool = True,
 ) -> tuple[str, str]:
     """`(skript, einzeiler)`: `skript` zum Lesen (eine Anweisung je Zeile), `einzeiler` zum Einfügen (als root direkt, sonst
     über `sudo`, als ein Argument für `sh -c`). `groups`, `sudo` und `helpers` gelten nur für Benutzer außer root,
     `helpers` nur zusammen mit `sudo` (`helper_dir` ändern nur Tests); ein ungültiger Wert ergibt `SetupError`.
+    `full_sudo=False` schreibt statt der vollen Regel nur die Regeln der Hilfsskripte (braucht `helpers`).
     `report_state` (nur wenn Nodvard Deck das Skript selbst ausführt): Es meldet den Stand der Konto-Dateien und der
     Schlüsseldatei vorher und nachher, für `setup_report`."""
     user = _check_user(user)
@@ -205,10 +353,25 @@ def build_setup_script(
         if group not in wanted:
             wanted.append(group)
     is_root = user == "root"
+    narrow = sudo and not is_root and not full_sudo
+    if narrow and not helpers:
+        raise SetupError("Ohne Hilfsskripte gibt es keine engere sudo-Regel.")
+    with_helpers = sudo and not is_root and bool(helpers)
+    if with_helpers:
+        _check_helpers(helpers, helper_dir)
 
     # `B` = Art und Schlüsseltext ohne Kommentar: Ein schon eingetragener Schlüssel wird auch dann erkannt, wenn er mit
     # einem anderen Kommentar (z. B. `lattice@...`) auf dem Server steht.
     lines = ["set -e", f"U={shlex.quote(user)}", f'K="{_dq(key)}"', 'B=$(echo "$K" | cut -d" " -f1,2)']
+    if not is_root:
+        lines.append(
+            'R() { if command -v runuser >/dev/null 2>&1; then runuser -u "$U" -- "$@"; '
+            'else su -s /bin/sh "$U" -c "exec \\"\\$@\\"" -- sh "$@"; fi; }'
+        )
+    if with_helpers:
+        lines += _helper_functions(helper_dir)
+    if narrow:
+        lines += _helper_precheck(wanted)
     if report_state:
         lines += [_STATE_FUNCTION, f'for f in {" ".join(SETUP_ACCOUNT_FILES)}; do ST before "$f"; done']
     if not is_root:
@@ -229,6 +392,7 @@ def build_setup_script(
     ]
     if report_state:
         lines.append('ST before "$H/.ssh/authorized_keys"')
+    lines += [_KEY_OPTIONS, _KEY_FIX_FUNCTION]
     if is_root:
         lines += [
             # root: das Home ist /root. Proxmox: authorized_keys ist ein Link ins Cluster-Dateisystem,
@@ -236,9 +400,9 @@ def build_setup_script(
             'install -d -m 700 -o "$U" -g "$G" "$H/.ssh"; A="$H/.ssh/authorized_keys"; [ -e "$A" ] || touch "$A"',
             # Fehlt das Zeilenende der letzten Zeile, würde der neue Eintrag an sie gehängt.
             '[ ! -s "$A" ] || [ -z "$(tail -c1 "$A")" ] || echo >> "$A"',
-            # `restrict,pty`: kein Weiterleiten, kein Agent; ein Terminal (Terminal, `docker logs -f`),
-            # Befehle und SFTP gehen weiter.
-            f'grep -qF -- "$B" "$A" || {{ echo "restrict,pty $K" >> "$A"; echo "{KEY_ADDED}"; }}',
+            # `$KO`: kein Weiterleiten, kein Agent; ein Terminal (Terminal, `docker logs -f`), Befehle und SFTP gehen weiter.
+            f'grep -qF -- "$B" "$A" || {{ echo "$KO $K" >> "$A"; echo "{KEY_ADDED}"; }}',
+            _key_fix(""),
             '[ -L "$A" ] || { chown "$U:$G" "$A"; chmod 600 "$A"; }',
         ]
     else:
@@ -246,17 +410,14 @@ def build_setup_script(
         # eine sudoers-Datei) dem Benutzer keine Rechte an fremden Dateien verschaffen, weder per chown noch durch
         # Anhängen als root. Zusätzlich bricht das Skript bei einem Link ab, statt ihm zu folgen.
         lines += [
-            'R() { if command -v runuser >/dev/null 2>&1; then runuser -u "$U" -- "$@"; '
-            'else su -s /bin/sh "$U" -c "exec \\"\\$@\\"" -- sh "$@"; fi; }',
             'S="$H/.ssh"; A="$S/authorized_keys"',
             '[ ! -L "$S" ] || { echo "FEHLER: $S ist ein Link und wird nicht angefasst. Bitte selbst prüfen."; exit 1; }',
             '[ ! -L "$A" ] || { echo "FEHLER: $A ist ein Link und wird nicht angefasst. Bitte selbst prüfen."; exit 1; }',
             'R mkdir -p -m 700 "$S"; R chmod 700 "$S"',
             # Fehlt das Zeilenende der letzten Zeile, würde der neue Eintrag an sie gehängt.
             '[ -z "$(R tail -c1 "$A" 2>/dev/null)" ] || printf "\\n" | R tee -a "$A" >/dev/null',
-            # `restrict,pty`: kein Weiterleiten, kein Agent; ein Terminal (Terminal, `docker logs -f`),
-            # Befehle und SFTP gehen weiter.
-            f'R grep -qF -- "$B" "$A" 2>/dev/null || {{ printf "%s\\n" "restrict,pty $K" | R tee -a "$A" >/dev/null; echo "{KEY_ADDED}"; }}',
+            f'R grep -qF -- "$B" "$A" 2>/dev/null || {{ printf "%s\\n" "$KO $K" | R tee -a "$A" >/dev/null; echo "{KEY_ADDED}"; }}',
+            _key_fix("R "),
             'R chmod 600 "$A"',
         ]
     if not is_root:
@@ -266,7 +427,13 @@ def build_setup_script(
                 f'if getent group {g} >/dev/null; then Q usermod -aG {g} "$U"; echo "Zur Gruppe {group} hinzugefügt."; '
                 f'else echo "Hinweis: Gruppe {group} gibt es hier nicht – übersprungen."; fi'
             )
-        if sudo:
+        if narrow:
+            # Nur die Regeln der Hilfsskripte: Eine vorhandene volle Regel (nodvard- oder lattice-<Benutzer>) bleibt
+            # unberührt, sie zurückzunehmen ist ein eigener Schritt.
+            # Dass visudo da ist, hat die Vorprüfung schon festgestellt.
+            lines.append(_VISUDO_FUNCTIONS)
+            lines.append(f'VP=; visudo -c -q >/dev/null 2>&1 && VP=1; [ -n "$VP" ] || {{ {_VISUDO_PRE_ERROR} }}')
+        elif sudo:
             # Neue Regel: /etc/sudoers.d/nodvard-<Benutzer>. Eine alte Regel lattice-<Benutzer> wird erst nach
             # erfolgreicher Prüfung der neuen entfernt, und nur, wenn sie Byte für Byte die Regel ist, die dieser Befehl
             # selbst angelegt hat (`cmp` gegen die neue Datei); alles andere bleibt stehen (Hinweis).
@@ -274,15 +441,11 @@ def build_setup_script(
             # gelten, wenn sie es vorher schon tat (VP): Eine fremde Datei mit falschen Rechten (z. B. Modus 0644) lässt
             # `visudo -c` scheitern, obwohl sudo läuft und die Regel von Nodvard Deck in Ordnung ist. visudo nennt die
             # Datei dann im Hinweis (VO).
-            lines.append(
-                'VO() { visudo -c 2>&1 | grep -v "parsed OK" | head -n 5 | sed "s/^/visudo: /"; }; '
-                'VG() { [ -z "$VP" ] || visudo -c -q; }; VC() { visudo -c -q -f "$1" && VG; }'
-            )
+            lines.append(_VISUDO_FUNCTIONS)
             lines.append(
                 'if command -v visudo >/dev/null; then T=$(mktemp); trap "rm -f \\"\\$T\\"" EXIT; N="/etc/sudoers.d/nodvard-$U"; O="/etc/sudoers.d/lattice-$U"; '
                 'VP=; visudo -c -q >/dev/null 2>&1 && VP=1; '
-                '[ -n "$VP" ] || { echo "Hinweis: visudo meldet schon vor der Einrichtung einen Fehler, der nicht von Nodvard Deck kommt:"; VO; '
-                'echo "Hinweis: Die Regeln von Nodvard Deck werden deshalb einzeln geprüft. Steht oben „bad permissions“, hilft für die genannte Datei: chmod 0440 und chown root:root."; }; '
+                f'[ -n "$VP" ] || {{ {_VISUDO_PRE_ERROR} }}; '
                 'echo "$U ALL=(root) NOPASSWD: ALL" > "$T"; '
                 'if visudo -c -q -f "$T"; then install -m 0440 -o root -g root "$T" "$N"; '
                 'if VC "$N"; then '
@@ -296,8 +459,8 @@ def build_setup_script(
                 'else echo "FEHLER: visudo hat die sudo-Regel abgelehnt, sie wurde nicht eingetragen."; F=1; fi; '
                 'else echo "Hinweis: sudo ist nicht installiert (als root: apt install sudo)."; fi'
             )
-    if sudo and not is_root and helpers:
-        lines += _helper_lines(helpers, helper_dir)
+    if with_helpers:
+        lines += _helper_lines(helpers, strict=narrow)
     if report_state:
         lines.append(f'for f in {" ".join(SETUP_ACCOUNT_FILES)} "$H/.ssh/authorized_keys"; do ST after "$f"; done')
     if sudo and not is_root:
@@ -306,17 +469,22 @@ def build_setup_script(
 
     script = "\n".join(lines)
     one_liner = f'S=; [ "$(id -u)" = 0 ] || S=sudo; $S sh -c {shlex.quote("; ".join(lines))}'
-    if len(one_liner) > MAX_ONE_LINER:
+    if len(one_liner.encode("utf-8")) > MAX_ONE_LINER:
         raise SetupError("Der Einrichtungsbefehl wäre zu lang.")
     return script, one_liner
 
 
-def setup_notes(user: str, *, groups: Iterable[str], sudo: bool, helpers: Sequence[str] = ()) -> list[str]:
-    """Hinweise zum Befehl, in einfachem Deutsch. `helpers`: Namen der Hilfsskripte, die der Befehl mitbringt."""
-    notes = [
-        "Der Schlüssel gilt nur zum Anmelden und für Befehle (restrict,pty): kein Weiterleiten von "
-        "Ports, kein Agent. Terminal, Dateien und Live-Protokolle funktionieren weiter."
-    ]
+def setup_notes(
+    user: str, *, groups: Iterable[str], sudo: bool, helpers: Sequence[str] = (), full_sudo: bool = True,
+) -> list[str]:
+    """Hinweise zum Befehl, in einfachem Deutsch. `helpers`: Namen der Hilfsskripte, die der Befehl mitbringt;
+    `full_sudo=False`: nur ihre Regeln, keine volle."""
+    notes = [(
+        "Der Schlüssel gilt nur zum Anmelden und für Befehle: kein Weiterleiten von Ports, kein Agent. Terminal, Dateien "
+        "und Live-Protokolle funktionieren weiter. Auf Servern mit Dropbear (etwa DietPi) trägt Nodvard Deck ihn so "
+        "ein, wie Dropbear ihn versteht; klappt die Anmeldung dort nach einer älteren Einrichtung nicht, einfach noch "
+        "einmal einrichten."
+    )]
     notes.append(
         "Ersetzt du später diesen Zugang durch einen neuen Schlüssel: erst mit dem neuen „Verbindung prüfen“. "
         "Der alte öffentliche Schlüssel bleibt in ~/.ssh/authorized_keys auf dem Server stehen – "
@@ -329,19 +497,33 @@ def setup_notes(user: str, *, groups: Iterable[str], sudo: bool, helpers: Sequen
         )
         return notes
     groups = list(groups)
-    if groups or sudo:
+    full = sudo and full_sudo
+    if groups or full:
         who = []
         if groups:
             who.append(f"in der {'Gruppe' if len(groups) == 1 else 'Gruppen'} {', '.join(groups)} ist")
-        if sudo:
+        if full:
             who.append("sudo ohne Passwort darf")
         notes.append(f"Wer {' oder '.join(who)}, kann auf dem Server praktisch alles.")
-    if sudo:
+    if sudo and not full_sudo:
+        notes.append(
+            f"Der Befehl gibt dem Benutzer kein volles root. Er legt die Hilfsskripte {', '.join(helpers)} nach "
+            "/usr/local/lib/nodvard-deck und erlaubt per sudo nur diese Skripte, jedes mit einer eigenen Regel. Was sie "
+            "dürfen, steht in ihnen selbst (etwa Updates einspielen oder Dienste neu starten); das sind weiterhin "
+            "Rechte von root, aber nur für diese Aufgaben."
+        )
+        notes.append(
+            "Lassen sich die Skripte nicht sicher ablegen (etwa weil ein Ordner auf dem Weg für andere beschreibbar ist), "
+            "ändert der Befehl nichts und nennt Grund und Abhilfe; ohne volle sudo-Regel hätte das Modul sonst auf "
+            "diesem Server gar kein root. Dann den Grund beheben oder unter „Erweitert“ „Volle Rechte“ ankreuzen und "
+            "den Befehl noch einmal ausführen. Eine schon vorhandene volle sudo-Regel nimmt der Befehl nicht zurück."
+        )
+    elif sudo:
         notes.append(
             "Nodvard Deck startet einige root-Befehle über „sudo sh -c“, darum braucht es die volle sudo-Regel. "
             "Deshalb bekommt nur dieser eine Benutzer die Rechte, und er kann sich nur mit dem Schlüssel anmelden."
         )
-    if sudo and helpers:
+    if sudo and full_sudo and helpers:
         notes.append(
             f"Der Befehl legt außerdem die Hilfsskripte {', '.join(helpers)} nach /usr/local/lib/nodvard-deck "
             "und erlaubt jedes mit einer eigenen sudo-Regel nur für sich. Die Module rufen ein Skript nur auf, wenn "
@@ -362,10 +544,13 @@ def setup_notes(user: str, *, groups: Iterable[str], sudo: bool, helpers: Sequen
 SETUP_STARTED = "@@nodvard-setup-started"
 """Marke, die die Shell vor dem Skript ausgibt: Fehlt sie in der Ausgabe, ist schon `sudo` (oder der
 Start der Shell) gescheitert, nicht das Skript."""
+SETUP_INPUT_READ = "@@nodvard-setup-read"
+"""Marke, die die Login-Shell bei einem langen Befehl ausgibt, wenn sie das Skript ganz gelesen hat."""
 
 _MESSAGE_PREFIXES = (
     "Benutzer ", "Zur Gruppe ", "Hinweis:", "FEHLER:", "Die alte sudo-Regel", "Nicht alles hat geklappt", "Hilfsskript ",
     KEY_ADDED,
+    KEY_FIXED,
     "visudo: ",
 )
 """Zeilen, die das Skript selbst ausgibt (`echo` in `build_setup_script`). Nur sie gehen an die Oberfläche;
@@ -375,19 +560,34 @@ _MAX_MESSAGES = 20
 _MAX_MESSAGE_LENGTH = 300
 
 
-def remote_setup_command(script: str, *, as_root: bool, sudo_with_password: bool) -> str:
-    """Der Befehl, mit dem das Dashboard das Skript aus `build_setup_script` unverändert selbst ausführt: als root direkt
-    mit `sh -c`, sonst über sudo (mit `sudo_with_password` liest `sudo -S` das Passwort von der Standardeingabe, sonst
-    `sudo -n`)."""
+def remote_setup_command(script: str, *, as_root: bool, sudo_with_password: bool) -> tuple[str, bytes]:
+    """Befehl und Eingabe, mit denen das Dashboard das Skript aus `build_setup_script` unverändert selbst ausführt: als
+    root direkt mit `sh -c`, sonst über `sudo -n` oder, mit `sudo_with_password`, über `sudo -S`, das die Zeile hinter
+    der Eingabe als Passwort liest."""
     # Das Passwort steht nie in diesem Befehl: Die Befehlszeile ist auf dem Server für alle sichtbar (`ps`) und steht in
     # asyncssh-Fehlern. Vor dem Skript stehen nur `exec </dev/null` (braucht sudo das Passwort nicht, läge es sonst in
     # der Standardeingabe, wo das Skript es lesen könnte) und die Marke `SETUP_STARTED`. `-p ''` unterdrückt die
     # Eingabeaufforderung; `env LC_ALL=C` hält sudos Meldungen englisch, so lassen sie sich einordnen.
     inner = f"exec </dev/null; echo {SETUP_STARTED}\n{script}"
     if as_root:
-        return f"sh -c {shlex.quote(inner)}"
-    sudo = "sudo -S -p ''" if sudo_with_password else "sudo -n"
-    return f"env LC_ALL=C {sudo} sh -c {shlex.quote(inner)}"
+        start = "sh -c"
+    else:
+        start = "env LC_ALL=C " + ("sudo -S -p ''" if sudo_with_password else "sudo -n") + " sh -c"
+    command = f"{start} {shlex.quote(inner)}"
+    if len(command.encode("utf-8")) <= ssh.INLINE_COMMAND_MAX:
+        return command, b""
+    # Zu lang für die Befehlszeile mancher Server: Die Login-Shell liest das Skript zeilenweise zwischen zwei Marken.
+    # `read` holt Byte für Byte, so bleibt die Passwortzeile dahinter ungelesen, bis sudo sie selbst liest. Die Marke
+    # vorn zeigt, ob vorher schon etwas (etwa eine ~/.bashrc) von der Standardeingabe gelesen hat.
+    end = ssh.end_mark()
+    fail = f"{{ echo '{ssh.STDIN_INCOMPLETE}' >&2; exit {ssh.STDIN_INCOMPLETE_EXIT}; }}"
+    reader = (
+        f'IFS= read -r __l && [ "$__l" = {end} ] || {fail}; '
+        f'__nd=; __ok=; while IFS= read -r __l; do [ "$__l" = {end} ] && {{ __ok=1; break; }}; '
+        f'__nd="$__nd$__l\n"; done; '
+        f'[ -n "$__ok" ] || {fail}; echo {SETUP_INPUT_READ} && exec {start} "$__nd"'
+    )
+    return reader, f"{end}\n{inner}\n{end}\n".encode()
 
 
 def setup_messages(stdout: str) -> list[str]:
@@ -408,24 +608,32 @@ class SetupRun:
     """Wie der Lauf des Skripts ausgegangen ist."""
 
     outcome: str
-    """`ok`, `sudo_failed` (das Skript lief gar nicht erst) oder `setup_failed`."""
+    """`ok`, `sudo_failed` (das Skript lief gar nicht erst), `helpers_blocked` (die Vorprüfung für die Hilfsskripte hat
+    abgebrochen, nichts geändert) oder `setup_failed`."""
     reason: str
     """Fester deutscher Satz (leer bei `ok`)."""
     messages: list[str]
     """Meldungen des Skripts (`setup_messages`)."""
 
 
-def _marker_line(stdout: str, _stderr: str) -> bool:
+def _stdout_line(mark: str) -> Callable[[str, str], bool]:
     # Nur als eigene Zeile in stdout: eine Meldung von sudo nennt den ganzen Befehl samt Marke (auf stderr).
-    return any(line.strip() == SETUP_STARTED for line in stdout.splitlines())
+    return lambda stdout, _stderr: any(line.strip() == mark for line in stdout.splitlines())
 
 
 def _in_stderr(*signs: str) -> Callable[[str, str], bool]:
     return lambda _stdout, stderr: any(sign in stderr.lower() for sign in signs)
 
 
+def _incomplete_line(_stdout: str, stderr: str) -> bool:
+    return any(line.strip() == ssh.STDIN_INCOMPLETE for line in stderr.splitlines())
+
+
 SETUP_FLAGS: dict[str, Callable[[str, str], bool]] = {
-    "started": _marker_line,
+    "started": _stdout_line(SETUP_STARTED),
+    "input_read": _stdout_line(SETUP_INPUT_READ),
+    "incomplete": _incomplete_line,
+    "helpers_blocked": _stdout_line(HELPERS_BLOCKED),
     # Fehlerausgabe von sudo (englisch, `LC_ALL=C`).
     "sudo_not_allowed": _in_stderr("not in the sudoers", "may not run sudo", "is not allowed to"),
     "sudo_needs_password": _in_stderr("a password is required"),
@@ -460,22 +668,47 @@ def _sudo_reason(code: int | None, flags: frozenset[str], *, sudo_with_password:
     return "sudo hat nicht geklappt. Melde dich als root an oder füge den Befehl selbst auf dem Server ein."
 
 
+_INCOMPLETE_REASON = (
+    "Der Einrichtungsbefehl kam nicht vollständig auf dem Server an, deshalb wurde nichts ausgeführt. "
+    "Bitte versuche es noch einmal."
+)
+_LOGIN_SHELL_REASON = (
+    "Die Login-Shell dieses Kontos konnte den langen Einrichtungsbefehl nicht lesen, deshalb wurde nichts ausgeführt. "
+    "Das geht nur mit einer Shell wie sh oder bash, nicht mit fish oder tcsh. Melde dich mit einem anderen Konto an "
+    "oder füge den Befehl selbst in einer sh- oder bash-Sitzung auf dem Server ein."
+)
+
+
 def evaluate_setup_run(
     exit_status: int | None, stdout: str, stderr: str, *, via_sudo: bool, sudo_with_password: bool,
-    flags: frozenset[str] | None = None,
+    flags: frozenset[str] | None = None, long_command: bool = False,
 ) -> SetupRun:
-    """Ordnet den Lauf von `remote_setup_command` ein; die Ausgabe des Servers wird nie weitergereicht, nur feste Sätze
-    und `setup_messages`. `flags` sind die Namen aus `SETUP_FLAGS`, ermittelt auf der unveränderten Ausgabe
-    (`RemoteResult.flags`); ohne sie werden sie aus `stdout`/`stderr` gebildet."""
+    """Ordnet den Lauf von `remote_setup_command` ein (`long_command`: mit Eingabe); nur feste Sätze und
+    `setup_messages` gehen weiter. `flags` sind die Namen aus `SETUP_FLAGS` auf der unveränderten Ausgabe
+    (`RemoteResult.flags`), ohne sie werden sie aus `stdout`/`stderr` gebildet."""
     flags = setup_flags(stdout, stderr) if flags is None else flags
     started = "started" in flags
     messages = setup_messages(stdout)
     if started and exit_status == 0:
         return SetupRun("ok", "", messages)
+    if not started and exit_status == ssh.STDIN_INCOMPLETE_EXIT and "incomplete" in flags:
+        return SetupRun("setup_failed", _INCOMPLETE_REASON, [])
+    if not started and long_command and "input_read" not in flags:
+        return SetupRun("sudo_failed" if via_sudo else "setup_failed", _LOGIN_SHELL_REASON, [])
     if not started and via_sudo:
         return SetupRun("sudo_failed", _sudo_reason(exit_status, flags, sudo_with_password=sudo_with_password), [])
     if not started:
         return SetupRun("setup_failed", "Der Befehl ließ sich auf dem Server nicht starten.", [])
+    if "helpers_blocked" in flags:
+        return SetupRun(
+            "helpers_blocked",
+            (
+                "Die Hilfsskripte lassen sich auf diesem Server nicht sicher einrichten, und ohne sie bekämen die Module dort "
+                "kein root. Darum hat Nodvard Deck nichts geändert. Was am Server zu tun ist, steht in den Meldungen unten; "
+                "danach noch einmal einrichten."
+            ),
+            messages,
+        )
     if not messages:
         # Bricht das Skript ohne eigene Zeile ab (z. B. weil ein Systembefehl scheitert), gibt es unten nichts zu lesen.
         return SetupRun(
@@ -518,6 +751,8 @@ def setup_report(stdout: str, *, user: str) -> dict[str, Any]:
         line = raw.strip()
         if line == KEY_ADDED:
             actions.add("key_added")
+        elif line == KEY_FIXED:
+            actions.add("key_fixed")
         elif line == f"Benutzer {user} angelegt.":
             actions.add("user_created")
         elif re.fullmatch(rf"Zur Gruppe {_NAME} hinzugefügt\.", line):
@@ -542,7 +777,7 @@ def _sha256(text: str) -> str:
 
 def setup_record(
     user: str, report: dict[str, Any], *, sudo: bool, helpers: Sequence[RootHelperFile] = (),
-    helper_dir: str = ROOT_HELPER_DIR,
+    helper_dir: str = ROOT_HELPER_DIR, full_sudo: bool = True,
 ) -> dict[str, Any]:
     """Was der Datei-Wächter als eigene Einrichtung erkennen darf (`Host.metadata["setup_run"]`, ohne Zeitfenster):
     der Bericht aus `setup_report` und die Prüfsummen der sudo-Regeln, die dieses Skript schreibt (`sudoers`) oder als
@@ -551,9 +786,10 @@ def setup_record(
     legacy: dict[str, str] = {}
     if sudo and user != "root":
         # Wie im Skript: `echo "$U ALL=(root) NOPASSWD: ALL"` und für ein Hilfsskript `... NOPASSWD: $D/<name>`.
-        full_rule = _sha256(f"{user} ALL=(root) NOPASSWD: ALL\n")
-        sudoers[f"/etc/sudoers.d/nodvard-{user}"] = full_rule
-        legacy[f"/etc/sudoers.d/lattice-{user}"] = full_rule
+        if full_sudo:
+            full_rule = _sha256(f"{user} ALL=(root) NOPASSWD: ALL\n")
+            sudoers[f"/etc/sudoers.d/nodvard-{user}"] = full_rule
+            legacy[f"/etc/sudoers.d/lattice-{user}"] = full_rule
         offered = {helper.ext_id for helper in helpers}
         for ext_id in report.get("helpers", []):
             if ext_id in offered:

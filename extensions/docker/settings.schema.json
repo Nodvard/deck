@@ -7,6 +7,15 @@
       "title": "Server-Markierung",
       "description": "Server mit dieser Markierung (Tag) werden nach Docker-Containern durchsucht."
     },
+    "docker_operate_tag": {
+      "type": "string",
+      "default": "docker-bedienen",
+      "title": "Markierung für „Nur bedienen“",
+      "description": "Server mit dieser Markierung verwaltet Deck ohne die Gruppe docker: Der Zugang darf per sudo nur ein festes Hilfsskript, das Container ansehen, starten, stoppen und neu starten kann, aber nicht mehr. Stacks, Images und Updates gibt es dort nicht. Hat ein Server beide Markierungen, gilt er als voller Docker-Server.",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$",
+      "x-pattern-message": "Nur Buchstaben, Zahlen, Punkt, Bindestrich und Unterstrich.",
+      "x-advanced": true
+    },
     "url_scheme": {
       "type": "string",
       "enum": [
@@ -21,7 +30,7 @@
       "type": "boolean",
       "default": false,
       "title": "Täglich auf neue Image-Versionen prüfen",
-      "description": "Fragt einmal am Tag bei den Registries nach, ob es für laufende Container neuere Images gibt, und schickt bei Neuigkeiten eine einzige Nachricht. Es wird nichts heruntergeladen oder neu gestartet."
+      "description": "Fragt einmal am Tag bei den Registries nach, ob es für laufende Container neuere Images gibt, und schickt bei Neuigkeiten eine einzige Nachricht. Es wird nichts heruntergeladen oder neu gestartet. Server im Modus „Nur bedienen“ prüft Nodvard Deck nicht."
     },
     "image_updates_cron": {
       "type": "string",
@@ -63,6 +72,56 @@
       "x-hidden": true,
       "title": "Ordner für neue Stacks je Server",
       "description": "Wird auf der Docker-Seite je Server gesetzt."
+    },
+    "registries": {
+      "type": "array",
+      "title": "Private Registries",
+      "description": "Registries mit Anmeldung, aus denen Images kommen, etwa ghcr.io für private Pakete. Auf der Docker-Seite meldest du je Server an; das Passwort gibt Nodvard Deck nur dabei an Docker weiter.",
+      "x-item-title": "Registry",
+      "x-advanced": true,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Kurzname",
+            "description": "Eindeutig und ohne Leerzeichen, z. B. „ghcr“. Nach dem Einrichten nicht mehr ändern.",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+            "x-pattern-message": "Beginnt mit einem Buchstaben oder einer Zahl, danach Buchstaben, Zahlen, Punkt, Bindestrich oder Unterstrich, höchstens 64 Zeichen und keine Leerzeichen."
+          },
+          "address": {
+            "type": "string",
+            "title": "Adresse",
+            "description": "Name der Registry ohne https://, mit Port, wenn sie einen braucht, z. B. ghcr.io oder registry.example.com:5000. Für Docker Hub: docker.io.",
+            "pattern": "^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?$",
+            "x-pattern-message": "Nur der Name der Registry in Kleinbuchstaben, ohne https:// und ohne Pfad, z. B. ghcr.io."
+          },
+          "username": {
+            "type": "string",
+            "title": "Benutzername",
+            "pattern": "^[^\\s]{1,255}$",
+            "x-pattern-message": "Ohne Leerzeichen."
+          }
+        },
+        "required": [
+          "name",
+          "address",
+          "username"
+        ]
+      }
     }
-  }
+  },
+  "x-secrets": [
+    {
+      "label": "docker-registry-pw:{name}",
+      "x-secret-bound-to": [
+        "address",
+        "username"
+      ],
+      "per_item": "registries",
+      "title": "Passwort oder Token",
+      "description": "Am besten ein Token nur zum Lesen von Paketen, z. B. bei GitHub ein „Personal access token“ mit read:packages."
+    }
+  ]
 }

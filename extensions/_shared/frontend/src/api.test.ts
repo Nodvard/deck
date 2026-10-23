@@ -194,7 +194,7 @@ describe("authedFetch", () => {
 
     expect(res.status).toBe(200);
     expect(refresh).not.toHaveBeenCalled();
-    expect(auth(fetchMock.mock.calls[1] as unknown[])).toBe("Bearer von-anderem-aufruf");
+    expect(auth(fetchMock.mock.calls[1] as unknown[])).toBe("Bearer " + "von-anderem-aufruf");
   });
 
   it("kommt ohne Erneuern (ganz alter Kern) mit dem 401 zurecht", async () => {

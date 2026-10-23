@@ -218,16 +218,16 @@ async def test_remove_also_deletes_demo_host_with_credential_but_status_warns_be
     token = await _bootstrap_owner(client)
     await client.post("/api/v1/demo/seed", headers=_auth(token))
     hosts = (await client.get("/api/v1/hosts", headers=_auth(token))).json()
-    pi = next(h for h in hosts if h["name"] == "demo-pi")
+    home = next(h for h in hosts if h["name"] == "demo-heimserver")
     cred = await client.post(
-        f"/api/v1/hosts/{pi['id']}/credentials",
-        json={"kind": "ssh_password", "username": "pi", "port": 22, "secret_value": "geheim123"},
+        f"/api/v1/hosts/{home['id']}/credentials",
+        json={"kind": "ssh_password", "username": "demo", "port": 22, "secret_value": "geheim123"},
         headers=_auth(token),
     )
     assert cred.status_code == 201, cred.text
 
     status_ = (await client.get("/api/v1/demo", headers=_auth(token))).json()
-    assert status_["hosts_with_access"] == [pi["display_name"]]
+    assert status_["hosts_with_access"] == [home["display_name"]]
 
     assert (await client.delete("/api/v1/demo", headers=_auth(token))).status_code == 200
     assert await _count(db_session, Host) == 0

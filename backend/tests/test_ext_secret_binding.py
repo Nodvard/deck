@@ -84,12 +84,50 @@ async def test_other_extensions_bind_their_secrets_to_the_address(test_settings)
         "jellyfin": {"jellyfin-key:{name}": ["base_url"]},
         "plex": {"plex-token:{name}": ["base_url"]},
         "qbittorrent": {"qbittorrent-password:{name}": ["base_url"]},
-        "synology": {"synology-password": ["base_url"]},
+        "synology": {"synology-password:{name}": ["base_url"]},
     }
     for ext_id, labels in expected.items():
         schema = json.loads((REPO_EXTENSIONS_DIR / ext_id / "settings.schema.json").read_text(encoding="utf-8"))
         got = {s["label"]: s.get("x-secret-bound-to") for s in schema["x-secrets"]}
         assert got == labels, ext_id
+
+
+@pytest.mark.parametrize("ext_id,label", [("jellyfin", "jellyfin-key:nas"), ("plex", "plex-token:nas"), ("synology", "synology-password:nas")])
+def test_a_name_used_twice_loses_its_secret_whichever_entry_comes_first(ext_id, label):
+    """Je nach Modul gilt bei einem doppelten Namen der erste oder der letzte Eintrag; das Geheimnis bleibt bei keinem."""
+    import json
+
+    from nodvard_deck.services.extension_setup import secrets_to_clear
+
+    schema = json.loads((REPO_EXTENSIONS_DIR / ext_id / "settings.schema.json").read_text(encoding="utf-8"))
+    own, other = {"name": "nas", "base_url": "https://nas.test:5001"}, {"name": "nas", "base_url": "https://angreifer.test:5001"}
+    old = {"connections": [own, {"name": "zweit", "base_url": "https://zwei.test"}]}
+    for order in ([other, own], [own, other]):
+        new = {"connections": [*order, {"name": "zweit", "base_url": "https://zwei.test"}]}
+        assert secrets_to_clear(schema, old, new) == [label]
+    assert secrets_to_clear(schema, old, {"connections": [own, {"name": "zweit", "base_url": "https://zwei.test"}]}) == []
+
+
+@pytest.mark.asyncio
+async def test_no_secret_is_accepted_while_its_name_is_used_twice(client, db_session, test_settings):
+    headers = await _owner_with(client, db_session, test_settings, "jellyfin")
+    url, secret = "/api/v1/extensions/jellyfin/settings", "/api/v1/extensions/jellyfin/secrets"
+    auth = {"current_password": "correct-horse-battery"}
+    own, other = {"name": "nas", "base_url": "https://nas.test:8920"}, {"name": "nas", "base_url": "https://angreifer.test:8920"}
+
+    saved = await client.put(url, json={**auth, "values": {"connections": [own]}}, headers=headers)
+    assert saved.status_code == 200, saved.text
+    assert (await client.put(secret, json={**auth, "label": "jellyfin-key:nas", "value": "key-eins"}, headers=headers)).status_code == 204
+
+    saved = await client.put(url, json={**auth, "values": {"connections": [own, other]}}, headers=headers)
+    assert saved.status_code == 200 and saved.json()["secrets_cleared"] == ["jellyfin-key:nas"]
+    refused = await client.put(secret, json={**auth, "label": "jellyfin-key:nas", "value": "key-zwei"}, headers=headers)
+    assert refused.status_code == 409 and "mehrfach" in refused.json()["detail"]
+    assert not await _has_secret(db_session, "jellyfin-key:nas")
+
+    saved = await client.put(url, json={**auth, "values": {"connections": [own, {**other, "name": "zweit"}]}}, headers=headers)
+    assert saved.status_code == 200, saved.text
+    assert (await client.put(secret, json={**auth, "label": "jellyfin-key:nas", "value": "key-zwei"}, headers=headers)).status_code == 204
 
 
 @pytest.mark.asyncio

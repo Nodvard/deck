@@ -14,6 +14,11 @@ STORAGE_MANAGER = "Sieh im Speicher-Manager von DSM nach, was los ist."
 HYPER_BACKUP_LOG = "Den Grund nennt das Protokoll in Hyper Backup."
 
 
+def device_label(system: SystemInfo | None) -> str:
+    """Der Name eines einzelnen Geräts in Titeln: sein Modell, sonst „Synology“."""
+    return (system.model if system is not None else None) or "Synology"
+
+
 def _severity(tone: str) -> str:
     return "critical" if tone == "danger" else "warning"
 
@@ -33,33 +38,49 @@ def _space_text(name: str, status: str, label: str) -> str:
     return f"{name} meldet „{label}“. {STORAGE_MANAGER}"
 
 
-def pool_problems(device: str, pools: list[Pool]) -> list[Problem]:
-    return [
-        Problem(
-            key=f"pool:{pool.id}", subject=pool.name, severity=_severity(pool.tone),
-            title=f"{device}: {pool.name} – {pool.status_label}",
-            text=_space_text(pool.name + (f" ({pool.raid})" if pool.raid else ""), pool.status, pool.status_label),
-        )
-        for pool in pools
-        if is_problem_status(pool.status)
-    ]
+def _crashed(volumes: list[Volume], pool: Pool) -> list[str]:
+    return [v.name for v in volumes if v.pool_id == pool.id and v.tone == "danger" and is_problem_status(v.status)]
 
 
-def pool_tones(pools: list[Pool]) -> dict[str, str]:
-    return {pool.id: tone_for(pool.status) for pool in pools}
+def _listing(names: list[str]) -> str:
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} und {names[-1]}"
 
 
-def covered_by_pool(volume: Volume, tones: dict[str, str]) -> bool:
+def pool_problems(device: str, pools: list[Pool], volumes: list[Volume]) -> list[Problem]:
+    """Je Pool eine Meldung; ein ausgefallenes Volume darin steht mit in ihr und macht sie dringend."""
+    found: list[Problem] = []
+    for pool in pools:
+        if not is_problem_status(pool.status):
+            continue
+        title = f"{device}: {pool.name} – {pool.status_label}"
+        text = _space_text(pool.name + (f" ({pool.raid})" if pool.raid else ""), pool.status, pool.status_label)
+        crashed = _crashed(volumes, pool)
+        if crashed and pool.tone != "danger":
+            title += f", {_listing(crashed)} ausgefallen"
+            text += (
+                f" Außerdem {'ist' if len(crashed) == 1 else 'sind'} {_listing(crashed)} ausgefallen: Die Daten darauf sind "
+                "womöglich nicht mehr lesbar. Schreib nichts mehr darauf."
+            )
+        severity = "critical" if crashed else _severity(pool.tone)
+        found.append(Problem(key=f"pool:{pool.id}", subject=pool.name, severity=severity, title=title, text=text))
+    return found
+
+
+def pools_by_id(pools: list[Pool]) -> dict[str, Pool]:
+    return {pool.id: pool for pool in pools}
+
+
+def covered_by_pool(volume: Volume, pools: dict[str, Pool]) -> bool:
     """Ob das Problem eines Volumes zu seinem Pool gehört, der nicht „Normal“ ist (eingeschränkt, in Reparatur, unbekannt).
 
-    Ein ausgefallenes Volume meldet sich trotzdem selbst, außer sein Pool ist selbst ausgefallen."""
-    tone = tones.get(volume.pool_id or "")
-    if tone is None or tone == "good":
+    Ein ausgefallenes Volume meldet sich selbst, solange sein Pool keine eigene Meldung hat."""
+    pool = pools.get(volume.pool_id or "")
+    if pool is None or tone_for(pool.status) == "good":
         return False
-    return volume.tone != "danger" or tone == "danger"
+    return volume.tone != "danger" or is_problem_status(pool.status)
 
 
-def volume_problems(device: str, volumes: list[Volume], tones: dict[str, str]) -> list[Problem]:
+def volume_problems(device: str, volumes: list[Volume], pools: dict[str, Pool]) -> list[Problem]:
     return [
         Problem(
             key=f"volume:{volume.id}", subject=volume.name, severity=_severity(volume.tone),
@@ -67,7 +88,7 @@ def volume_problems(device: str, volumes: list[Volume], tones: dict[str, str]) -
             text=_space_text(volume.name, volume.status, volume.status_label),
         )
         for volume in volumes
-        if is_problem_status(volume.status) and not covered_by_pool(volume, tones)
+        if is_problem_status(volume.status) and not covered_by_pool(volume, pools)
     ]
 
 
@@ -154,14 +175,15 @@ def backup_problems(
 def collect(
     *, system: SystemInfo | None, storage: Storage | None, update: Update | None,
     tasks: list[tuple[TaskEntry, BackupStatus | None]] | None, alerts: AlertConfig, now: datetime,
-    slack: timedelta = timedelta(0),
+    slack: timedelta = timedelta(0), label: str | None = None,
 ) -> list[Problem]:
-    """Alle Probleme, das Wichtigste zuerst; ein Teil, der sich nicht lesen ließ, trägt nichts bei."""
-    device = (system.model if system is not None else None) or "Synology"
+    """Alle Probleme, das Wichtigste zuerst, mit `label` (bei mehreren Geräten der Kurzname, sonst das Modell) als Gerät
+    in den Titeln; ein Teil, der sich nicht lesen ließ, trägt nichts bei."""
+    device = label or device_label(system)
     found = system_problems(device, system) + update_problems(device, update)
     if storage is not None:
-        found += pool_problems(device, storage.pools)
-        found += volume_problems(device, storage.volumes, pool_tones(storage.pools)) + disk_problems(device, storage.disks, alerts)
+        found += pool_problems(device, storage.pools, storage.volumes)
+        found += volume_problems(device, storage.volumes, pools_by_id(storage.pools)) + disk_problems(device, storage.disks, alerts)
     if tasks is not None:
         found += backup_problems(device, tasks, now, slack)
     return sorted(found, key=lambda p: SEVERITY_ORDER.get(p.severity, 3))

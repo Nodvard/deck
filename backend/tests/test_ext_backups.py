@@ -1150,6 +1150,21 @@ async def test_token_ersetzen_ueber_einstellungs_endpunkt(client, db_session, te
 
 
 @pytest.mark.asyncio
+async def test_no_token_is_taken_while_two_connections_share_the_name(client, db_session, test_settings):
+    test_settings.extensions_dir = REPO_EXTENSIONS_DIR
+    await extensions_service.discover_and_sync(db_session, test_settings)
+    headers = _auth_header(await _bootstrap_owner(client))
+    await client.post("/api/v1/extensions/backups/enable", headers=headers)
+    twice = [{"name": "pve1", "base_url": url, "token_id": _TOKEN_ID} for url in ("https://eins.test:8006", "https://zwei.test:8006")]
+    saved = await client.put("/api/v1/extensions/backups/settings", json={"values": {"connections": twice}}, headers=headers)
+    assert saved.status_code == 200, saved.text
+
+    refused = await client.post("/api/v1/ext/backups/connections/pve1/token", json={"value": "geheim"}, headers=headers)
+    assert refused.status_code == 409 and "mehrfach" in refused.json()["detail"], refused.text
+    assert "geheim" not in refused.text
+
+
+@pytest.mark.asyncio
 async def test_update_and_delete_unknown_connection_return_404(client, db_session, test_settings):
     test_settings.extensions_dir = REPO_EXTENSIONS_DIR
     await extensions_service.discover_and_sync(db_session, test_settings)

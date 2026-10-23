@@ -1,9 +1,9 @@
-"""Image-Updates pruefen (Docker-Modul, Teil C) -- Fake-`ctx` mit einem kleinen
+"""Image-Updates prüfen (Docker-Modul, Teil C) -- Fake-`ctx` mit einem kleinen
 `docker`, das die Befehle der Extension wirklich liest (shlex) und Beispielausgaben
-liefert. Die echte Kette ueber SSH steht am Ende von `test_ext_docker.py`.
+liefert. Die echte Kette über SSH steht am Ende von `test_ext_docker.py`.
 
 Die Ausgabeformate stammen aus der Docker-Dokumentation bzw. aus Ausgaben, die wir von
-Docker 29 auf dem Pi kennen -- gegen echte Registries ist das hier NICHT geprueft."""
+Docker 29 auf dem Pi kennen -- gegen echte Registries ist das hier NICHT geprüft."""
 
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ def test_command_builders_quote_and_check_by_themselves():
     ]
     assert shlex.split(iu.cmd_remote_manifest("nginx:latest")) == ["docker", "manifest", "inspect", "-v", "nginx:latest"]
     assert shlex.split(iu.cmd_inspect_containers(["0123456789ab", "f" * 64]))[3:5] == ["--format", "{{.Name}}|{{.Config.Image}}|{{.Image}}"]
-    # Die Bauer pruefen selbst -- egal, ob der Aufrufer vorher geprueft hat.
+    # Die Bauer prüfen selbst -- egal, ob der Aufrufer vorher geprüft hat.
     for bad in ("x; rm -rf /", "$(id)", "-f", "a b", "nginx`id`"):
         for build in (iu.cmd_local_inspect, iu.cmd_remote_imagetools, iu.cmd_remote_manifest):
             with pytest.raises(ValueError):
@@ -145,7 +145,7 @@ def test_hub_names_match_in_every_spelling():
 )
 def test_official_docker_hub_names_are_the_ones_without_namespace_and_registry(repo, official):
     """Nur ein Hub-Name ohne Namespace ist ein offizielles `library/`-Image -- und das ist
-    immer oeffentlich; verweigert die Registry den Zugriff, kann es nur selbst gebaut sein."""
+    immer öffentlich; verweigert die Registry den Zugriff, kann es nur selbst gebaut sein."""
     assert iu.is_official_hub_repo(repo) is official
 
 
@@ -163,7 +163,7 @@ def test_local_is_a_fourth_status_next_to_the_others():
     assert iu.TRANSIENT.isdisjoint({"auth", "not_found"}), "auth/not_found sperren die Registry nicht"
     # Nur "Zugriff verweigert" deutet auf selbst gebaut: Docker Hub antwortet auf ein Repository,
     # das es gar nicht gibt (library/lattice), mit 401/denied. Ein entfernter Tag eines echten
-    # Images (nginx:1.27) heisst dagegen "manifest unknown" (not_found).
+    # Images (nginx:1.27) heißt dagegen "manifest unknown" (not_found).
     assert iu.SELF_BUILT_HINTS == {"auth"}
 
 
@@ -274,7 +274,7 @@ def _registry_of(call: str) -> str:
 
 
 class FakeDocker:
-    """Antwortet auf genau die Befehle der Extension; alles andere waere ein Fehler im Test."""
+    """Antwortet auf genau die Befehle der Extension; alles andere wäre ein Fehler im Test."""
 
     def __init__(self) -> None:
         self.containers: dict[str, tuple[str, str]] = {}  # Name -> (Image-Name, Image-ID)
@@ -432,7 +432,7 @@ async def test_only_read_only_docker_commands_are_ever_sent(tmp_path):
 @pytest.mark.asyncio
 async def test_check_uses_the_image_the_container_really_runs_not_what_the_name_shows_now(tmp_path):
     """Nach `docker pull` ohne Neustart zeigt der Name schon aufs neue Image -- der Container
-    laeuft aber noch mit dem alten. Lokal wird deshalb die ID des Containers gelesen."""
+    läuft aber noch mit dem alten. Lokal wird deshalb die ID des Containers gelesen."""
     docker = FakeDocker()
     docker.add("web", "nginx:1.27", image_id=dg("1"), repo_digests=["nginx@" + dg("a")], remote=dg("b"))
     docker.images["nginx:1.27"] = (["nginx@" + dg("b")], dg("2"), None)  # der Name zeigt schon aufs neue Image
@@ -576,7 +576,7 @@ async def test_an_official_looking_name_the_registry_refuses_is_self_built(tmp_p
     """Live gesehen: `lattice:latest` wird per `docker load` auf den Pi gebracht und hat mit dem
     containerd-Image-Speicher trotzdem RepoDigests. Docker Hub antwortet auf `library/lattice`
     (das Repository gibt es gar nicht) mit 401/"denied" -- jedes echte offizielle Image ist
-    oeffentlich, also kann das nur selbst gebaut sein."""
+    öffentlich, also kann das nur selbst gebaut sein."""
     docker = FakeDocker()
     docker.add("lattice-1", ref, image_id=dg("1"), repo_digests=["lattice@" + dg("a")], remote=("err", answer))
     service, ctx = make(tmp_path, docker)
@@ -641,7 +641,7 @@ async def test_other_names_keep_the_registry_messages_when_the_registry_refuses(
 @pytest.mark.asyncio
 async def test_an_official_name_is_only_self_built_when_the_registry_gave_a_clear_refusal(tmp_path):
     """Abruflimit, Netzproblem, Anmeldedaten-Fehler und "nicht gefunden" (entfernter Tag) sagen
-    nichts darueber, ob das Image selbst gebaut ist -- das bleibt "nicht pruefbar"."""
+    nichts darüber, ob das Image selbst gebaut ist -- das bleibt "nicht prüfbar"."""
     for answer, word in (
         ("manifest unknown: manifest unknown", "nicht gefunden"),
         ("toomanyrequests: You have reached your unauthenticated pull rate limit.", "Abruflimit"),
@@ -680,8 +680,8 @@ async def test_a_self_built_answer_does_not_block_the_registry_for_the_rest_of_t
 
 @pytest.mark.asyncio
 async def test_a_self_built_container_is_asked_again_next_time_but_never_cached_as_an_answer(tmp_path):
-    """Es gibt keine Antwort der Registry, die man merken koennte -- und wer den Container
-    spaeter aus einer echten Registry zieht, soll das sofort sehen."""
+    """Es gibt keine Antwort der Registry, die man merken könnte -- und wer den Container
+    später aus einer echten Registry zieht, soll das sofort sehen."""
     docker = FakeDocker()
     docker.add("lattice-1", "lattice:latest", image_id=dg("1"), repo_digests=["lattice@" + dg("a")], remote=("err", DENIED))
     service, ctx = make(tmp_path, docker)
@@ -770,7 +770,7 @@ async def test_registry_answers_are_cached_six_hours_but_the_local_state_is_alwa
     assert result_of(service, "h1", "web")["status"] == UPDATE
     assert len(docker.registry_calls()) == 1
 
-    # Der Nutzer spielt das Update ein (neues Image, gleicher Name) und prueft erneut:
+    # Der Nutzer spielt das Update ein (neues Image, gleicher Name) und prüft erneut:
     # sofort "aktuell", ohne dass die Registry noch einmal gefragt wird.
     docker.containers["web"] = ("nginx:1.27", dg("2"))
     docker.images[dg("2")] = (["nginx@" + dg("b")], dg("2"), None)
@@ -898,7 +898,7 @@ async def test_daily_job_sends_one_message_and_repeats_it_only_when_the_set_chan
     assert "redis" not in note.body
     assert note.payload == {"path": "/ext/docker/matrix", "tags": ["package"]}
 
-    # Naechster Tag, nichts Neues: still.
+    # Nächster Tag, nichts Neues: still.
     assert (await service.scheduled_check())["notified"] is False
     assert len(ctx.sent) == 1
 
@@ -908,14 +908,14 @@ async def test_daily_job_sends_one_message_and_repeats_it_only_when_the_set_chan
     assert len(ctx.sent) == 2
     assert ctx.sent[1].title == "Image-Updates: 2 Container mit neuer Version"
 
-    # ... ein aktualisierter Container ist keine (die Liste wird nur kuerzer) ...
+    # ... ein aktualisierter Container ist keine (die Liste wird nur kürzer) ...
     other.containers["db"] = ("postgres:16", dg("9"))
     other.images[dg("9")] = (["postgres@" + dg("d")], dg("9"), None)
     out = await service.scheduled_check()
     assert out["updates"] == 1 and out["notified"] is False
     assert len(ctx.sent) == 2
 
-    # ... aber der naechste Stand von db wird wieder gemeldet, weil der alte vergessen wurde.
+    # ... aber der nächste Stand von db wird wieder gemeldet, weil der alte vergessen wurde.
     other.remote["postgres:16"] = dg("a")
     assert (await service.scheduled_check())["notified"] is True
     assert len(ctx.sent) == 3
@@ -933,7 +933,7 @@ async def test_no_message_when_everything_is_current_and_the_state_survives_a_re
     docker.remote["nginx:1.27"] = dg("b")
     await service.scheduled_check()
     assert len(ctx.sent) == 1
-    # Nodvard Deck startet neu: neuer Dienst, gleicher Ordner -> keine zweite Meldung fuer dieselbe Version.
+    # Nodvard Deck startet neu: neuer Dienst, gleicher Ordner -> keine zweite Meldung für dieselbe Version.
     again = ImageUpdateService(ctx)  # type: ignore[arg-type]
     assert (await again.scheduled_check())["notified"] is False
     assert len(ctx.sent) == 1
@@ -1003,7 +1003,7 @@ def with_clock(service: ImageUpdateService, start: float = 1_000_000.0) -> list[
 
 @pytest.mark.asyncio
 async def test_a_container_that_could_not_be_checked_does_not_make_an_old_update_look_new(tmp_path):
-    """Tag 1: Update b (Meldung). Tag 2: Abruflimit nur fuer diesen Container. Tag 3: dieselbe
+    """Tag 1: Update b (Meldung). Tag 2: Abruflimit nur für diesen Container. Tag 3: dieselbe
     Version b -- ist keine Neuigkeit, auch wenn Tag 2 keine Aussage machte."""
     docker = one_update_host("b")
     docker.add("db", "postgres:16", image_id=dg("2"), repo_digests=["postgres@" + dg("c")], remote=dg("c"))
@@ -1013,7 +1013,7 @@ async def test_a_container_that_could_not_be_checked_does_not_make_an_old_update
     assert (await service.scheduled_check())["notified"] is True
     assert len(ctx.sent) == 1
 
-    now[0] += DAY_S  # Antworten von gestern sind laengst abgelaufen
+    now[0] += DAY_S  # Antworten von gestern sind längst abgelaufen
     docker.remote["nginx:1.27"] = ("err", LIMIT)
     out = await service.scheduled_check()
     assert result_of(service, "h1", "web")["status"] == UNKNOWN
@@ -1054,7 +1054,7 @@ async def test_a_positive_answer_forgets_the_notified_version_even_after_an_uncl
     saved = json.loads((tmp_path / iu.STATE_FILE).read_text(encoding="utf-8"))
     assert saved == {"notified": {"h1": []}}
 
-    # Dieselbe Version b als "neu" fuer einen anderen lokalen Stand: wieder eine Meldung.
+    # Dieselbe Version b als "neu" für einen anderen lokalen Stand: wieder eine Meldung.
     now[0] += DAY_S
     docker.containers["web"] = ("nginx:1.27", dg("1"))
     await service.scheduled_check()
@@ -1148,7 +1148,7 @@ async def test_a_registry_that_times_out_is_also_asked_only_once(tmp_path):
     await service.check_host(ctx.host_objects[0])
     assert len(docker.registry_calls()) == 1
     assert {result_of(service, "h1", f"c{n}")["reason"] for n in range(4)} == {"Registry antwortet nicht (Zeitüberschreitung)"}
-    # Ein neuer Lauf fragt wieder (die Registry kann inzwischen zurueck sein).
+    # Ein neuer Lauf fragt wieder (die Registry kann inzwischen zurück sein).
     await service.check_host(ctx.host_objects[0])
     assert len(docker.registry_calls()) == 2
 
@@ -1197,8 +1197,8 @@ async def test_self_built_containers_stay_out_of_the_message_next_to_real_update
     assert "lattice" not in ctx.sent[0].body
     assert state_file(tmp_path) == {"notified": {"h1": ["web|" + dg("b")]}}
 
-    # Naechster Tag mit Abruflimit nur fuer web: web bleibt "unklar" (alter Stand gehalten),
-    # der selbst gebaute Container aendert daran nichts und bekommt keinen Eintrag.
+    # Nächster Tag mit Abruflimit nur für web: web bleibt "unklar" (alter Stand gehalten),
+    # der selbst gebaute Container ändert daran nichts und bekommt keinen Eintrag.
     now[0] += DAY_S
     docker.remote["nginx:1.27"] = ("err", LIMIT)
     out = await service.scheduled_check()
@@ -1209,9 +1209,9 @@ async def test_self_built_containers_stay_out_of_the_message_next_to_real_update
 
 @pytest.mark.asyncio
 async def test_self_built_is_a_clear_result_not_an_unclear_one(tmp_path):
-    """Ein Container, der frueher gemeldet wurde und jetzt als selbst gebaut erkannt wird, ist
+    """Ein Container, der früher gemeldet wurde und jetzt als selbst gebaut erkannt wird, ist
     ein klares Ergebnis wie "aktuell": sein alter Meldungsstand wird vergessen, nicht gehalten
-    (gehalten wird nur bei "nicht pruefbar")."""
+    (gehalten wird nur bei "nicht prüfbar")."""
     docker = FakeDocker()
     docker.add("lattice-1", "lattice:latest", image_id=dg("1"), repo_digests=["lattice@" + dg("a")], remote=("err", DENIED))
     docker.add("web", "nginx:1.27", image_id=dg("2"), repo_digests=["nginx@" + dg("b")], remote=("err", LIMIT))
@@ -1236,7 +1236,7 @@ async def test_a_host_that_never_answered_has_no_check_time(tmp_path):
     assert host["checked_at"] is None and "no route to host" in host["error"]
     assert service.snapshot()["data"] == {}
 
-    # Nach dem ersten guten Lauf gibt es die Zeit; ein spaeterer Fehler behaelt sie.
+    # Nach dem ersten guten Lauf gibt es die Zeit; ein späterer Fehler behält sie.
     docker.down = None
     await service.check_host(ctx.host_objects[0])
     good_at = service.snapshot()["hosts"]["h1"]["checked_at"]
@@ -1255,7 +1255,7 @@ async def test_the_state_file_is_written_atomically(tmp_path, monkeypatch):
     before = path.read_text(encoding="utf-8")
     assert not list(tmp_path.glob("*.tmp")), "keine Reste der Zwischendatei"
 
-    # Der Rechner stuerzt beim Umbenennen ab: die alte Datei bleibt ganz, es gibt keine halbe.
+    # Der Rechner stürzt beim Umbenennen ab: die alte Datei bleibt ganz, es gibt keine halbe.
     def boom(*_a, **_k):
         raise OSError("Absturz")
 

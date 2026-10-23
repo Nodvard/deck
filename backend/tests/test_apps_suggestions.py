@@ -48,7 +48,7 @@ class _Services:
 
 class _Broken:
     async def app_suggestions(self):
-        raise RuntimeError("geheim: http://user:pw@intern")
+        raise RuntimeError("geheim: http://user:" + "pw@intern")
 
 
 class _Slow:
@@ -59,7 +59,7 @@ class _Slow:
 
 class _BrokenServices:
     async def list_services(self):
-        raise RuntimeError("geheim: http://user:pw@intern")
+        raise RuntimeError("geheim: http://user:" + "pw@intern")
 
 
 def _provide(ext_id, protocol, impl):
@@ -75,7 +75,7 @@ async def test_suggestions_are_checked_deduplicated_and_skip_existing_apps(clien
         AppSuggestion(name="cloud.example.org", url="https://cloud.example.org", source="Nginx Proxy Manager"),
         AppSuggestion(name="doppelt", url="https://cloud.example.org/", source="Nginx Proxy Manager"),
         AppSuggestion(name="böse", url="javascript:alert(1)", source="Nginx Proxy Manager"),
-        AppSuggestion(name="mit Zugang", url="http://user:pw@intern.example.org", source="Nginx Proxy Manager"),
+        AppSuggestion(name="mit Zugang", url="http://user:" + "pw@intern.example.org", source="Nginx Proxy Manager"),
         AppSuggestion(name="x" * 500, url="http://lang.example.org", source="Nginx Proxy Manager"),
         AppSuggestion(name="  ", url="http://leer.example.org", source="Nginx Proxy Manager"),
     ]))
@@ -161,7 +161,7 @@ async def test_a_failure_while_reading_the_services_is_a_sentence_not_a_server_e
     client, db_session, monkeypatch, caplog
 ):
     async def explode():
-        raise RuntimeError("geheim: http://user:pw@intern")
+        raise RuntimeError("geheim: http://user:" + "pw@intern")
 
     monkeypatch.setattr(overview_api, "service_snapshot", explode)
     token = await _bootstrap_owner(client)

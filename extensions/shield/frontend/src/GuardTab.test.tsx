@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
+import { HostFilter } from "./api";
 import { GuardTab, type GuardOverview, type SecurityEvent } from "./GuardTab";
 
 const now = Date.now() / 1000;
@@ -63,7 +64,7 @@ function mockFetch(calls: Call[]) {
     if (url.includes("/defender/events") && method === "GET") return json(EVENTS);
     if (url.endsWith("/guard/check")) return json({ hosts: 1 });
     if (url.endsWith("/events/ev1/acknowledge")) return json({ ok: true });
-    if (url.endsWith("/events/acknowledge-all")) return json({ acknowledged: 2 });
+    if (url.includes("/events/acknowledge-all")) return json({ acknowledged: 2 });
     if (url.endsWith("/hosts/h-pve2/ban")) return json({ action_id: "a1", status: "proposed" });
     if (url.endsWith("/hosts/h-pi/install")) return json({ action_id: "a2", status: "proposed" });
     if (url.includes("/actions/") && url.endsWith("/approve")) return json({ status: "succeeded", result: {} });
@@ -215,6 +216,22 @@ describe("Einbruchschutz", () => {
     expect(evRoot.getByText(/ohne Programm \(Kernel\)/)).toBeInTheDocument();
   });
 
+  it("zeigt Ports aus einem eigenen Bereich als einen Eintrag und sagt, dass sie nicht einzeln melden", async () => {
+    const base = OVERVIEW.hosts[1];
+    const ranged = { key: "udp/27015-27030/srcds_linux", proto: "udp", address: "0.0.0.0", port: 27015, process: "srcds_linux", public: true, new: false, dynamic: true, count: 2, span: [27015, 27030] as [number, number] };
+    const overview: GuardOverview = { ...OVERVIEW, hosts: [{ ...base, view: { ...base.view!, is_root: true, ports: [ranged] } }] };
+    const fallback = mockFetch([]);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      return url.endsWith("/defender/guard") ? new Response(JSON.stringify(overview), { status: 200 }) : fallback(input, init);
+    }));
+    render(<GuardTab canManage />);
+
+    const host = within(await screen.findByTestId(`guard-${base.host_id}`));
+    expect(host.getByText("Ports 27015–27030/udp (2) srcds_linux")).toHaveAttribute("title", expect.stringContaining("Eigener Bereich aus den Einstellungen"));
+    expect(host.getByText(/meldet der Einbruchschutz nicht einzeln\. Den Programmnamen kann sich jedes Programm selbst geben/)).toBeInTheDocument();
+  });
+
   it("übernimmt einen neuen Port als bekannt („Ist in Ordnung“, wie bei jedem Ereignis)", async () => {
     const calls: Call[] = [];
     vi.stubGlobal("fetch", mockFetch(calls));
@@ -248,13 +265,41 @@ describe("Einbruchschutz", () => {
     await waitFor(() => expect(screen.getByText("Prüfung: 1 Server werden geprüft …")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Alle abhaken" }));
     await waitFor(() => expect(screen.getByText("Ereignisse: 2 abgehakt.")).toBeInTheDocument());
+    expect(calls.filter((c) => c.method === "POST" && c.url.includes("acknowledge-all")).map((c) => c.url.split("/defender")[1])).toEqual(["/events/acknowledge-all"]);
+  });
+
+  it("in der Ansicht eines Servers hakt „Alle abhaken“ nur dessen Ereignisse ab", async () => {
+    const calls: Call[] = [];
+    vi.stubGlobal("fetch", mockFetch(calls));
+    render(<HostFilter.Provider value="h-pve2"><GuardTab canManage /></HostFilter.Provider>);
+    await screen.findByTestId("guard-h-pve2");
+    fireEvent.click(screen.getByRole("button", { name: "Alle abhaken" }));
+    await screen.findByText("Ereignisse: 2 abgehakt.");
+    expect(confirmDialog.mock.calls[0][0]).toMatch(/^Alle offenen Ereignisse von „pve2“ abhaken\?/);
+    expect(calls.filter((c) => c.method === "POST").map((c) => c.url.split("/defender")[1])).toEqual(["/events/acknowledge-all?host=h-pve2"]);
+  });
+
+  it("„Ist in Ordnung“ sagt vorher, was übernommen wird; abgebrochen bleibt alles offen", async () => {
+    const calls: Call[] = [];
+    vi.stubGlobal("fetch", mockFetch(calls));
+    confirmDialog.mockResolvedValueOnce(false);
+    render(<GuardTab canManage />);
+    fireEvent.click(within(await screen.findByTestId("event-ev2")).getByRole("button", { name: "Ist in Ordnung" }));
+    await waitFor(() => expect(confirmDialog).toHaveBeenCalledTimes(1));
+    const [question] = confirmDialog.mock.calls[0];
+    expect(question).toContain("„Wichtige Datei geändert: /usr/bin/ps“ auf „pve2“ als in Ordnung markieren?");
+    expect(question).toContain("Der neue Stand der Datei gilt danach als richtig.");
+    expect(question).toContain("Nur bestätigen, wenn du die Änderung selbst gemacht hast oder kennst.");
+    await waitFor(() => expect(calls.filter((c) => c.url.endsWith("/defender/events")).length).toBeGreaterThan(1));
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("sagt, wenn beim Abhaken Ereignisse offen bleiben", async () => {
     const base = mockFetch([]);
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
-      if (url.endsWith("/events/acknowledge-all")) return new Response(JSON.stringify({ acknowledged: 1, kept_open: 1 }), { status: 200 });
+      if (url.includes("/events/acknowledge-all")) return new Response(JSON.stringify({ acknowledged: 1, kept_open: 1 }), { status: 200 });
       return base(input, init);
     }));
     render(<GuardTab canManage />);
@@ -307,5 +352,74 @@ describe("Ereignisse abhaken: Wortwahl je Art", () => {
     expect(ack).toHaveAttribute("title", "Das Ereignis wird abgehakt. Gesperrt oder geändert wird dadurch nichts.");
     fireEvent.click(ack);
     await waitFor(() => expect(screen.getByText("Angriff auf SSH: zur Kenntnis genommen.")).toBeInTheDocument());
+  });
+});
+
+describe("Ergebnis einer Aktion", () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => { resolve = r; });
+    return { promise, resolve };
+  }
+
+  /** Wie `mockFetch`, aber die Freigabe antwortet, was der Test vorgibt. */
+  function stubApprove(calls: Call[], approve: () => Response | Promise<Response>) {
+    const base = mockFetch(calls);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/actions/") && url.endsWith("/approve")) return approve();
+      return base(input, init);
+    }));
+  }
+
+  const postsTo = (calls: Call[], suffix: string) => calls.filter((c) => c.method === "POST" && c.url.endsWith(suffix));
+
+  it("lässt den Fehlschlag der Fail2ban-Installation stehen, auch wenn die Folgeprüfung antwortet", async () => {
+    const calls: Call[] = [];
+    stubApprove(calls, () => new Response(JSON.stringify({ status: "failed", result: { error: "apt-get: Paket fail2ban nicht gefunden" } }), { status: 200 }));
+    render(<GuardTab canManage />);
+    fireEvent.click(within(await screen.findByTestId("guard-h-pi")).getByRole("button", { name: "Fail2ban installieren" }));
+
+    await waitFor(() => expect(postsTo(calls, "/guard/check")).toHaveLength(1));
+    expect(postsTo(calls, "/guard/check")[0].body).toEqual({ host_ids: ["h-pi"] });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(screen.getByRole("alert")).toHaveTextContent("Fail2ban (Raspberry Pi): Fehlgeschlagen: apt-get: Paket fail2ban nicht gefunden");
+    expect(screen.queryByText(/werden geprüft/)).toBeNull();
+    expect(within(screen.getByTestId("guard-h-pi")).getByRole("button", { name: "Fail2ban installieren" })).toBeEnabled();
+  });
+
+  it("sperrt beim Sperren nur den Knopf dieser Adresse und sagt, was läuft", async () => {
+    const approve = deferred<Response>();
+    const calls: Call[] = [];
+    stubApprove(calls, () => approve.promise);
+    render(<GuardTab canManage />);
+    const pve2 = within(await screen.findByTestId("guard-h-pve2"));
+    fireEvent.click(pve2.getByRole("button", { name: "Sperren" }));
+
+    const running = await pve2.findByRole("button", { name: "Sperre …" });
+    expect(running).toBeDisabled();
+    expect(pve2.getByRole("button", { name: "entsperren" })).toBeEnabled();
+    expect(screen.getByText("203.0.113.9 wird auf „pve2“ gesperrt …")).toBeInTheDocument();
+    fireEvent.click(running);
+    expect(confirmDialog).toHaveBeenCalledTimes(1);
+    expect(postsTo(calls, "/hosts/h-pve2/ban")).toHaveLength(1);
+
+    await act(async () => { approve.resolve(new Response(JSON.stringify({ status: "succeeded", result: {} }), { status: 200 })); });
+    expect(await screen.findByText("203.0.113.9 sperren: Erledigt.")).toBeInTheDocument();
+    expect(pve2.getByRole("button", { name: "Sperren" })).toBeEnabled();
+  });
+
+  it("zeigt nach einer abgebrochenen Rückfrage keinen Hinweis", async () => {
+    confirmDialog.mockResolvedValue(false);
+    const calls: Call[] = [];
+    vi.stubGlobal("fetch", mockFetch(calls));
+    render(<GuardTab canManage />);
+    fireEvent.click(within(await screen.findByTestId("guard-h-pi")).getByRole("button", { name: "Fail2ban installieren" }));
+    await waitFor(() => expect(confirmDialog).toHaveBeenCalledTimes(1));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
+
+    expect(screen.queryByText(/abgebrochen/)).toBeNull();
+    expect(screen.queryByText(/Fail2ban \(Raspberry Pi\)/)).toBeNull();
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
   });
 });

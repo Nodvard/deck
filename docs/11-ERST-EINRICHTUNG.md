@@ -789,10 +789,35 @@ Dafür muss das Modul Docker eingeschaltet sein, es kennt die Container. Ein Zie
 (etwa die Proxmox-Oberfläche), steht grau da und ist kein Fehler. Nicht erkannt werden Container im Host-Netz (sie
 zeigen keine Ports), Netzwerk-Aliase und zusätzliche Orte (`locations`) eines Proxy-Hosts.
 
-**Synology DSM (Beta, nur lesend):** Die Seite „Synology DSM“ zeigt Modell, DSM-Version, Auslastung, Temperatur,
-Speicherpools, Volumes, Festplatten (mit SMART), die Aufgaben von Hyper Backup und ob ein DSM-Update bereitsteht. Nodvard
-Deck liest nur und ändert an der Synology nichts. Welche Version jeder Schnittstelle es nimmt, fragt es DSM vorher; so
-laufen DSM 7.1 bis 7.4. Erprobt ist das bisher mit nachgebauten Antworten von DSM, Rückmeldungen von echten Geräten helfen.
+**Synology DSM (Beta, nur lesend):** Die Seite „Synology DSM“ zeigt von einer oder mehreren Synology Modell, DSM-Version,
+Auslastung, Temperatur, Speicherpools, Volumes, Festplatten (mit SMART), die Aufgaben von Hyper Backup und ob ein
+DSM-Update bereitsteht. Nodvard Deck liest nur und ändert an der Synology nichts. Welche Version jeder Schnittstelle es
+nimmt, fragt es DSM vorher; so laufen DSM 7.1 bis 7.4, auch nebeneinander. Erprobt ist das bisher mit nachgebauten
+Antworten von DSM, Rückmeldungen von echten Geräten helfen.
+
+- **Mehrere Geräte:** Trag unter Einstellungen → Erweiterungen → Synology DSM jedes Gerät einzeln ein (bis zu zehn): mit
+  Kurzname (z. B. „ds920“ oder „keller“), Adresse, eigenem Konto, eigenem Passwort im Tresor und eigenen Angaben zum
+  Zertifikat. Der Kurzname steht in Meldungen und auf den Kacheln, damit man die Geräte unterscheidet; ändere ihn nach dem
+  Einrichten nicht mehr, denn das Passwort gehört zum Namen und müsste neu eingetragen werden. Die Seite zeigt oben eine
+  Auswahl aller Geräte mit ihrem Zustand. Lässt sich ein Gerät nicht abfragen, steht bei ihm der Grund und „Erneut
+  versuchen“, die anderen bleiben davon unberührt. Auf der Startseite hat jedes Gerät seine drei Kacheln (Zustand,
+  Speicher, Hyper Backup), bei mehreren mit dem Kurznamen im Titel; neue Kacheln erscheinen unter „Widgets verwalten“. Auch
+  die Meldungen sind getrennt: Ihr Titel nennt bei mehreren Geräten den Kurznamen (bei einem einzigen das Modell), und
+  ein Problem oder eine Entwarnung des einen Geräts berührt das andere nicht. Kommt ein Kurzname doppelt vor (Groß- und
+  Kleinschreibung zählt nicht), fragt Nodvard Deck keinen dieser Einträge ab. Bei genau gleicher Schreibweise wird ein dazu
+  hinterlegtes Passwort beim Speichern gelöscht (nach Rückfrage), damit es nie bei der Adresse eines anderen Eintrags
+  landet, und ein neues nimmt Nodvard Deck erst an, wenn einer der Einträge umbenannt und gespeichert ist. Unterscheiden
+  sich die Namen nur in Groß- und Kleinschreibung, bleibt das Passwort beim bisherigen Eintrag stehen, wird aber nicht
+  benutzt, bis einer der Namen geändert ist.
+- **Von einem Gerät auf mehrere:** Wer das Modul schon mit einem Gerät eingerichtet hat, trägt nichts neu ein. Beim ersten
+  Start mit dieser Version wird das bisherige Gerät als Gerät „synology“ übernommen: Adresse, Konto, Angaben zum
+  Zertifikat, das Passwort (als Kopie im Tresor unter „synology-password:synology“), die Kacheln auf der Startseite und der
+  Stand der Meldungen. Schon gemeldete Probleme kommen darum nicht noch einmal. Die alten Einzelfelder und der alte
+  Tresor-Eintrag „synology-password“ bleiben unverändert stehen, damit ein Zurück auf die ältere Version das Gerät
+  findet. Solange das Gerät „synology“ in der Liste steht, bleibt der alte Eintrag im Tresor; er gehört dem Modul und
+  lässt sich dort nicht einzeln löschen. Entfernst du das Gerät „synology“ später oder benennst es um, löscht Nodvard Deck
+  den alten Eintrag gleich mit, danach führt kein Weg mehr zurück auf die ältere Version. Ein neues Passwort trägst du ab
+  jetzt beim Gerät „synology“ ein. Weitere Geräte kommen einfach dazu.
 
 - **Konto:** Lege in DSM ein eigenes Konto nur für Nodvard Deck an (Systemsteuerung → Benutzer und Gruppe) und trag es
   in den Einstellungen des Moduls ein, das Passwort kommt in den Tresor. Ehrlich gesagt: Speicher, Auslastung, Updates
@@ -804,11 +829,15 @@ laufen DSM 7.1 bis 7.4. Erprobt ist das bisher mit nachgebauten Antworten von DS
   Verlangt DSM Zwei-Faktor für alle Administratoren, gilt das auch für dieses Konto; dann beschränke die Pflicht in den
   Sicherheitseinstellungen von DSM auf bestimmte Konten.
 - **Falsches Passwort:** DSM sperrt Adressen nach mehreren Fehlversuchen automatisch. Nach einer abgelehnten Anmeldung
-  fragt Nodvard Deck darum 30 Minuten lang nicht erneut, außer du drückst „Verbindung testen“.
+  fragt Nodvard Deck darum 30 Minuten lang nicht erneut, außer du drückst „Verbindung testen“ (das hebt die Pause aller
+  Geräte auf) oder änderst Adresse, Konto oder Zertifikat-Angaben dieses Geräts. Die Pause gilt nur für das Gerät, bei dem
+  die Anmeldung abgelehnt wurde; die anderen Geräte werden weiter abgefragt. Andere Einstellungen zu speichern oder ein
+  Gerät hinzuzufügen oder zu entfernen ändert nichts an der Pause. Hast du nur das Passwort im Tresor ersetzt, drücke
+  „Verbindung testen“.
 - **Zertifikat:** DSM hat oft ein selbst erstelltes Zertifikat. Dann im eigenen Netz „Selbstsigniertes Zertifikat
   erlauben“ einschalten, oder besser unter „Erweitert“ den Fingerabdruck des Zertifikats eintragen (nur mit https://):
   Dann spricht Nodvard Deck nur mit genau diesem Zertifikat.
-- **Meldungen:** Alle fünf Minuten sieht Nodvard Deck nach und meldet sich, wenn ein Speicherpool oder Volume nicht in
+- **Meldungen:** Alle fünf Minuten sieht Nodvard Deck bei jedem Gerät nach und meldet sich, wenn ein Speicherpool oder Volume nicht in
   Ordnung ist (etwa „Eingeschränkt“ nach einem Plattenausfall), eine Festplatte warnt (SMART, defekte Sektoren,
   Restlebensdauer), das Gerät oder ein Laufwerk zu warm wird oder Hyper Backup fehlschlägt oder überfällig ist. Die
   Meldung steht unter „Braucht Aufmerksamkeit“ und kommt über die eingerichteten Kanäle aufs Handy; ist alles wieder gut,
@@ -817,8 +846,9 @@ laufen DSM 7.1 bis 7.4. Erprobt ist das bisher mit nachgebauten Antworten von DS
   Minuten anhält (Grenze für Laufwerke unter „Erweitert“, Vorgabe 55 °C für Festplatten, 65 °C für SSD, 70 °C für NVMe).
   Reparieren, Erweitern oder Prüfen eines Pools oder Volumes gilt nicht als Problem, ebenso ein Zustand, den Nodvard Deck
   nicht kennt; war er vorher gemeldet, kommt die Entwarnung aber erst, wenn er wieder „Normal“ ist. Solange ein Pool
-  nicht „Normal“ ist, melden seine Volumes nichts Eigenes, außer eines ist ausgefallen. Ein neues DSM-Update kommt
-  einmal je Version als
+  nicht „Normal“ ist, melden seine Volumes nichts Eigenes. Fällt ein Volume aus, steht das in der Meldung seines Pools,
+  wenn der Pool selbst eine hat (etwa „Eingeschränkt“), und diese Meldung wird dringend; ohne Meldung des Pools (etwa
+  während einer Reparatur) meldet sich das Volume selbst. Ein neues DSM-Update kommt einmal je Version als
   ruhiger Hinweis (Stufe „Info“, nicht unter „Braucht Aufmerksamkeit“). Beides lässt sich in den Einstellungen des Moduls
   abschalten. Ist die Synology nicht erreichbar oder wird die Anmeldung abgelehnt, meldet der Wächter nichts Neues; das
   zeigen die Seite und die Kachel.
@@ -827,9 +857,10 @@ laufen DSM 7.1 bis 7.4. Erprobt ist das bisher mit nachgebauten Antworten von DS
   Läufen und sechs Stunden Puffer (bei täglicher Sicherung also seit 54 Stunden) keinen erfolgreichen mehr. Gezählt wird
   mit der Uhr der Synology; liefert DSM sie nicht, kommen 14 Stunden Puffer für eine andere Zeitzone dazu. Läuft eine
   Sicherung gerade, ist sie nicht überfällig. Ist Hyper Backup nicht installiert, steht dort ein ruhiger Hinweis, der
-  Rest der Seite bleibt. Nodvard Deck fragt bis zu 64 Aufgaben ab; hat Hyper Backup mehr, sagt die Seite das. Sind nach
-  25 Sekunden noch nicht alle Stände da, stehen die übrigen Aufgaben mit „Stand unbekannt“ da, ohne Meldung und ohne
-  Entwarnung; der Rest der Seite bleibt.
+  Rest der Seite bleibt. Nodvard Deck fragt bis zu 64 Aufgaben ab; hat Hyper Backup mehr, sagt die Seite das. Für Liste und
+  Stände hat Hyper Backup zusammen 25 Sekunden, gerechnet ab Beginn der Abfrage. Kommt die Liste nicht rechtzeitig,
+  steht bei Hyper Backup „Hyper Backup hat nicht rechtzeitig geantwortet“; sind nicht alle Stände da, stehen die übrigen
+  Aufgaben mit „Stand unbekannt“ da, ohne Meldung und ohne Entwarnung. Der Rest der Seite bleibt in beiden Fällen.
   Noch nicht an echten Geräten bestätigt (Beta): dass DSM eine Aufgabe, die gerade nicht sichert, mit dem Zustand
   `status: none` meldet. Steht eine Aufgabe dauerhaft auf „Läuft gerade“, obwohl nichts läuft, gib bitte Bescheid.
 
@@ -952,6 +983,14 @@ für die du das Recht hast. Die Karte verschwindet von allein, wenn alles erledi
 (Terminal, Dateien, Server-Seite, Docker, Gameserver, Proxmox) sagen jetzt, was fehlt, und
 bieten den Knopf zum nächsten Schritt an.
 
+**Die Widgets auf der Startseite:** Die Module bringen ihre Widgets mit; sie stehen in Gruppen (Server und Proxmox,
+Sicherheit, Docker und Apps, Backups, Dienste). Ein Klick auf den Namen klappt eine Gruppe zu; ein farbiger Punkt daneben
+meldet dann eine Warnung, eine Störung oder ein Widget, das gerade nicht lädt. Mit **„Bearbeiten“** über den Widgets
+ordnest du alles an: Karten am Griff verschieben, Höhe (Automatisch, Klein, Mittel, Groß), Breite (Schmal, Breit) und
+Gruppe wählen, Widgets entfernen und Gruppen umbenennen. Erst **„Fertig“** speichert alles auf einmal, **„Abbrechen“**
+verwirft die Änderungen; ein entferntes Widget holst du über **„Widgets verwalten“** zurück. Am Handy stehen die Karten
+untereinander: Höhe, Gruppe und Entfernen gehen dort auch, Verschieben und Breite nur auf einem größeren Bildschirm.
+
 ## 5. Server und SSH-Zugang
 
 Alles dazu gibt es auf einer Seite: **Einstellungen → Server & Zugänge**. Dort legst du
@@ -969,6 +1008,13 @@ für das Handy gedacht und nur für Benutzer mit dem Recht `hosts.write` (Inhabe
 - Terminal, Server-Zustand, Docker, Nodvard Shield, Gameserver und Skripte brauchen für jeden
   Server einen **SSH-Zugang** (Benutzer + Schlüssel oder Passwort). Den speichert Nodvard Deck
   verschlüsselt; der private Schlüssel verlässt den Tresor nie und wird nirgends angezeigt.
+- **Kleine SSH-Server** wie Dropbear ab Version 2015.68 (etwa auf DietPi, Routern und manchen NAS) gehen auch: Lange
+  Befehle (über 8000 Byte, z. B. die Einrichtung, Updates, Härtungs-Audit und Einbruchschutz von Nodvard Shield)
+  schickt Nodvard Deck nicht als Befehlszeile, sondern über die Standardeingabe. Dafür muss die Login-Shell des Kontos
+  eine POSIX-Shell sein (sh, bash, dash oder die ash von BusyBox); mit fish oder tcsh als Login-Shell klappen diese
+  langen Befehle nicht. Wo die Standardeingabe nicht geht (Konsole, Live-Logs), sagt Nodvard Deck bei einem zu langen
+  Befehl vorher in Klartext Bescheid und schickt ihn nicht los. Ältere Dropbear-Versionen (etwa auf OpenWrt 15.05)
+  nehmen nur Befehle bis 1024 Byte an, dort scheitern viele Befehle.
 
 **Noch keinen Server zur Hand?** Auf einer frischen Installation ohne Server gibt es im Cockpit (und
 auf dieser Seite) den Knopf **Mit Beispieldaten ansehen**. Ein Klick legt fünf ausgedachte Server
@@ -989,7 +1035,8 @@ löschen.
 3. **Anzeigename** (so heißt der Server in den Listen; leer = Kurzname) und **Adresse**
    (IP oder Rechnername, ohne `http://` und ohne Port, z. B. `192.168.1.30`).
 4. **Betriebssystem:** Linux oder Windows. Für Windows-Server gibt es keinen
-   Einrichtungsbefehl und keine Rechte-Prüfung.
+   Einrichtungsbefehl und keine Rechte-Prüfung. Einen Windows-Server (etwa einen Gameserver) wirklich als Windows
+   eintragen: Lange Befehle schickt Nodvard Deck sonst auf Linux-Art, und die scheitern unter Windows.
 5. **Markierungen** (mit Komma getrennt): `docker`, wenn dort Docker läuft – das Modul Docker
    (Einstellung „Server-Markierung“) und die KI-Container-Wache von Nodvard Shield („Überwachte
    Server“) nehmen genau die Server mit dieser Markierung. Gameserver erscheinen nur mit der
@@ -1035,13 +1082,21 @@ Konsole deiner VM-Verwaltung), einfügen, Enter. Er
 
 - legt den Benutzer an, falls nötig (ohne Passwort, Anmeldung nur mit dem Schlüssel),
 - trägt den öffentlichen Schlüssel in `~/.ssh/authorized_keys` ein (mit `restrict,pty`: Terminal,
-  Dateien und Befehle gehen, Weiterleitungen nicht),
+  Dateien und Befehle gehen, Weiterleitungen nicht). Läuft auf dem Server Dropbear (etwa bei DietPi), nimmt er
+  stattdessen `no-port-forwarding,no-agent-forwarding,no-X11-forwarding`: Dropbear kennt `pty` nicht und verwirft
+  sonst die ganze Zeile,
 - richtet auf Wunsch **Root-Rechte ohne Passwort** und die **Gruppe docker** ein (siehe [6.](#6-root-rechte-ohne-passwort-und-gruppe-docker)).
 
 Unter „Was macht der Befehl?“ steht derselbe Ablauf lesbar, Zeile für Zeile. Der Befehl läuft als
 root direkt, sonst über `sudo` – er funktioniert also auf Proxmox (kein sudo) ebenso wie auf
 Debian oder dem Pi. Er lässt sich gefahrlos mehrfach ausführen: Einen schon eingetragenen Schlüssel erkennt er
 auch mit dem älteren Kommentar `lattice@…` und trägt ihn nicht doppelt ein.
+
+Hast du einen Server mit Dropbear schon mit einer älteren Version eingerichtet und „Verbindung prüfen“ meldet „Der
+Server hat den Schlüssel nicht akzeptiert“, dann richte ihn einfach noch einmal ein (mit Passwort oder mit dem
+Befehl). Der Befehl ersetzt dabei genau seine eigene alte Zeile `restrict,pty …` durch die Zeile für Dropbear
+(Meldung „Schlüssel für Dropbear angepasst.“); andere Zeilen, auch eigene mit demselben Schlüssel, bleiben, wie sie
+sind.
 
 #### Mit Passwort einrichten (Nodvard Deck führt den Befehl aus)
 
@@ -1193,7 +1248,8 @@ mit Passwort einrichtest (Nodvard Deck führt dann denselben Befehl aus).
     gleichzeitig; für diese Sperre legt Shield dort einen kleinen Ordner an: `/run/nodvard-shield` (als
     root) bzw. `~/.nodvard-shield`. Einen Fund, den du ignoriert oder wiederhergestellt hast, verschiebt
     der nächste Scan nicht noch einmal in die Quarantäne (außer ClamAV meldet dieselbe Datei mit einer
-    anderen Signatur).
+    anderen Signatur). Zurück geht das unter „Funde & Quarantäne“ mit dem Filter „Alle, inkl. erledigt“ und „Wieder
+    beachten“: Der Fund ist dann wieder offen, und der nächste Scan meldet die Datei wieder.
   - **Schutzwert** (0 bis 100, auf der Übersicht): zählt den Virenschutz (ClamAV, Signaturen, Scans, offene Funde),
     die Härtung und außerdem offene Sicherheitsupdates, nötige Neustarts, Fail2ban, die SSH-Einstellungen (root oder
     Anmeldung mit Passwort, nach der Zahl der betroffenen Server) und offene kritische Sicherheitsereignisse (je 5 Punkte,
@@ -1213,17 +1269,59 @@ mit Passwort einrichtest (Nodvard Deck führt dann denselben Befehl aus).
     SSH-Einstellungen, Prüfsummen von Dateien wie `/etc/shadow`. Ohne root nur eingeschränkt –
     Nodvard Deck sagt das dann dazu, statt falsch Entwarnung zu geben. IP-Adressen per Fail2ban
     sperren/entsperren geht nur mit root.
+    Einen neuen offenen Port meldet der Einbruchschutz einzeln („Neuer offener Port“). Programme, die bei jedem Start
+    oder je Anfrage zufällige Ports wählen (NFS, Tailscale, Pi-hole und andere DNS-Dienste), zählen als ein Eintrag. Für
+    ein Programm mit eigenem Portbereich, etwa einen Spieleserver, trägst du unter Einstellungen → Erweiterungen →
+    „Nodvard Shield“ → „Erweitert“ → „Eigene Portbereiche je Programm“ Programm, Protokoll und Bereich ein. Neue Ports
+    darin melden dann nicht mehr einzeln. Den Programmnamen kann sich jedes Programm selbst geben, auch eine
+    Schadsoftware: nur Programme eintragen, denen du vertraust, und die Bereiche klein halten. Ports unter 1024 zählen
+    nur mit dem Häkchen „Auch Ports unter 1024“. Ein Bereich umfasst höchstens 1000 Ports (ein größerer zählt nur bis
+    dahin), mehr nur mit dem Häkchen „Breiter Bereich“; ein breiter Bereich beginnt immer frühestens bei 1024, SSH und
+    andere feste Dienste bleiben also sichtbar. Es zählen höchstens 50 Bereiche.
   - **Server-Zustand:** Dienste (systemd) neu starten. Danach sieht Deck bis zu 45 Sekunden lang nach, ob der Dienst läuft
     und laufen bleibt (zweimal im Abstand von 10 Sekunden ohne neuen Start; das Nachsehen braucht kein root). Fällt er
     gleich wieder aus oder startet er immer wieder neu, gilt die Aktion als fehlgeschlagen und sagt das.
+  - **Docker im Modus „Nur bedienen“** (Server nur mit der Markierung `docker-bedienen`): Container ansehen, Logs lesen,
+    starten, stoppen und neu starten über das Hilfsskript `docker-root`, ohne die Gruppe docker.
 - **„Zur Gruppe docker hinzufügen“** – nötig für das Modul Docker und die KI-Container-Wache von
   Nodvard Shield; sie rufen `docker` ohne sudo auf. Die Gruppe wird nur eingetragen, wenn es sie auf
-  dem Server gibt.
+  dem Server gibt. Einem Server nur mit der Markierung `docker-bedienen` bietet die Seite die Gruppe nicht an; dort
+  reicht das Hilfsskript.
 
 Ohne beide Haken bekommst du die **schlanke Variante**: eigener Benutzer, nur Schlüssel, keine
 Root-Rechte. Die reicht für Terminal, Dateien und Skripte.
 
-**Was der Haken „Root-Rechte“ genau tut:** Er legt `/etc/sudoers.d/nodvard-<benutzer>` an mit
+**Was der Haken „Root-Rechte“ genau tut:** Das hängt davon ab, welche Module auf diesem Server root brauchen.
+
+- **Nur die Hilfsskripte (Standard):** Braucht hier mindestens ein Modul root und hat jedes davon ein Hilfsskript
+  (Nodvard Shield, Server-Zustand und Docker im Modus „Nur bedienen“ haben eins), richtet der Haken nur diese Skripte
+  ein (siehe „Hilfsskripte“ unten). Jedes bekommt eine
+  eigene Regel `<benutzer> ALL=(root) NOPASSWD: /usr/local/lib/nodvard-deck/<modul>-root`, eine volle sudo-Regel gibt es
+  nicht. Der Benutzer darf per sudo genau diese Skripte starten, und was sie tun, steht in ihnen selbst (etwa Updates
+  einspielen, Quarantäne, Dienste neu starten). Unter „Was macht der Befehl?“ kannst du jedes Skript lesen.
+  Vorher prüft der Befehl, ob sich die Skripte sicher einrichten lassen: `sudo`, `base64`, `sha256sum` und `stat` müssen
+  da sein, jeder Ordner über `/usr/local/lib/nodvard-deck` muss ein echter Ordner sein, der root gehört und in dem außer
+  root niemand schreiben darf (auch nicht über eine Gruppe des Benutzers oder eine ACL), und gibt es
+  `/usr/local/lib/nodvard-deck` schon, gilt für ihn dasselbe (sonst legt der Befehl ihn an). Als Gruppen des Benutzers
+  zählen auch die, die er erst durch den Befehl bekommt: die angehakten (etwa docker) und bei einem neuen Benutzer die
+  Gruppe mit seinem Namen. Vorsichtshalber zählen bei einem neuen Benutzer auch die Standardgruppe von `useradd` (meist
+  users), weil sich nicht sicher feststellen lässt, welche er bekommt, und Gruppen ohne Namen (nur eine Nummer), die
+  `useradd` ihm geben könnte. Eine ACL prüft der Befehl mit `getfacl`; fehlt es (Paket `acl`) und könnte eine ACL im
+  Spiel sein, gilt der Ordner als unsicher. Klappt das nicht, ändert er **nichts**, nennt den Ordner, den Grund und die
+  Abhilfe (etwa `chmod go-w /usr/local/lib` oder `mkdir -p /usr/local/lib`) und endet mit einem Fehler; „Mit Passwort
+  einrichten“ zeigt dieselben Zeilen. Dann den Grund beheben oder, außer wenn sudo fehlt, „Volle Rechte“ wählen und noch
+  einmal einrichten.
+- **Volle Rechte:** Braucht ein Modul root und hat kein Hilfsskript, oder setzt du unter „Erweitert“ das Häkchen
+  „Volle Rechte“, kommt die volle Regel dazu. Das Häkchen brauchst du nur, wenn du über Nodvard Deck eigene Befehle mit
+  sudo startest, etwa in Skripten.
+
+Eine schon vorhandene volle Regel nimmt der Befehl nie zurück: Ein Server, der sie hat, läuft weiter wie bisher, auch
+wenn du den Befehl dort noch einmal ausführst. Willst du sie loswerden, führ den Befehl zuerst noch einmal aus und drück
+„Verbindung prüfen“. Steht dort bei jedem Hilfsskript „Eigene sudo-Regel vorhanden“, lösch auf dem Server die volle
+Regel (`sudo rm /etc/sudoers.d/nodvard-<benutzer>`, auf älteren Servern `lattice-<benutzer>`) und prüf noch einmal: Bei
+„Root-Rechte“ steht dann „sudo erlaubt nur die Hilfsskripte der Module, keine volle Regel. Das reicht.“
+
+Die volle Regel ist `/etc/sudoers.d/nodvard-<benutzer>` mit
 der Zeile `<benutzer> ALL=(root) NOPASSWD: ALL`. Die Zeile wird erst in eine Probedatei geschrieben
 und mit `visudo -c` geprüft; nur dann kommt sie mit den Rechten `0440` (root) an ihren Platz.
 Danach prüft `visudo` die eingetragene Datei und die ganze Konfiguration noch einmal. Bei einem Fehler wird die Datei
@@ -1235,24 +1333,48 @@ Prüfung und nur, wenn sie aus genau der Zeile oben besteht; sonst bleibt sie st
 Ist `sudo` gar nicht installiert, sagt der Befehl das
 (als root `apt install sudo`; bei Proxmox am besten gleich als `root` anmelden).
 
-**Das ist praktisch root – die Seite sagt es dir auch:** Wer in der Gruppe `docker` ist oder sudo
-ohne Passwort darf, kann auf dem Server praktisch alles. Nodvard Deck startet einige root-Befehle
-als `sudo -n sh -c '…'`, darum braucht es die volle sudo-Regel, und wer `sh` als root starten darf,
+**Das ist praktisch root – die Seite sagt es dir auch:** Wer in der Gruppe `docker` ist oder die volle sudo-Regel
+hat, kann auf dem Server praktisch alles. Nodvard Deck startet ohne Hilfsskript einige root-Befehle
+als `sudo -n sh -c '…'`, darum braucht es dann die volle sudo-Regel, und wer `sh` als root starten darf,
 darf alles. Die Sicherheit kommt daher, dass **nur**
 dieser eine Benutzer die Rechte bekommt, er sich **nur mit dem Schlüssel** anmelden kann und der
 Schlüssel verschlüsselt in Nodvard Deck liegt.
 
-**Hilfsskripte:** Mit dem Haken „Root-Rechte“ legt der Befehl außerdem die Hilfsskripte der Module
-(Nodvard Shield und Server-Zustand) nach `/usr/local/lib/nodvard-deck` und erlaubt jedes mit einer
-eigenen, engen sudo-Regel. Klappt das für ein Skript nicht, nennt der Befehl den Grund (Datei nicht sicher ablegbar
-oder Regel von `visudo` abgelehnt). Fehlt ein Skript, obwohl die volle Regel gesetzt ist, zeigt „Verbindung prüfen“
-dafür einen gelben Hinweis „Fehlt auf dem Server“. Die Module rufen ein Skript nur auf, wenn es auf dem Server Byte für
-Byte das mitgelieferte ist; sonst nehmen sie die volle Regel. „Verbindung prüfen“ zeigt je
-Skript, ob es passt. Nach einem Update, das ein neues Skript mitbringt, steht dort „Veraltet“: dann
+**Hilfsskripte:** Mit dem Haken „Root-Rechte“ legt der Befehl die Hilfsskripte der Module
+(Nodvard Shield, Server-Zustand und Docker im Modus „Nur bedienen“) nach `/usr/local/lib/nodvard-deck` und erlaubt jedes mit einer
+eigenen, engen sudo-Regel. Klappt das für ein Skript nicht, nennt der Befehl den Grund (Ordner oder Datei nicht sicher,
+Werkzeug fehlt, Regel von `visudo` abgelehnt). Mit voller Regel ist das ein Hinweis, das Modul nimmt dann die volle
+Regel. Ohne volle Regel ist es ein Fehler, denn dann hätte das Modul gar kein root: Ordner und Werkzeuge prüft dort schon
+die Vorprüfung, bevor sich etwas ändert (siehe oben); ein beschädigtes Skript oder eine abgelehnte Regel meldet der
+Befehl unterwegs mit „FEHLER: …“ und am Ende „Nicht alles hat geklappt“.
+Die Module rufen ein Skript nur auf, wenn es auf dem Server Byte für Byte das mitgelieferte ist. „Verbindung prüfen“
+zeigt je Skript, ob es passt, und bei „Root-Rechte“: „sudo erlaubt nur die Hilfsskripte der Module, keine volle Regel.
+Das reicht.“, wenn alle passen. Fehlt ein Skript, steht dort „Fehlt auf dem Server“ (gelb), ohne volle Regel mit dem
+Zusatz, dass das Modul hier kein root hat. Nach einem Update, das ein neues Skript mitbringt, steht dort „Veraltet“: dann
 den Einrichtungsbefehl noch einmal ausführen. Das musst du nicht selbst bemerken: Fehlt ein Skript oder ist es veraltet,
-während die volle Regel gesetzt ist, steht unter „Braucht Aufmerksamkeit“ in der Übersicht ein dezenter Hinweis mit Link
-zur Einrichtung. Nodvard Deck prüft das alle 6 Stunden und bei jedem „Verbindung prüfen“. Mit dem × blendest du den
+während sudo dort Skripte ausführen darf (volle Regel oder die Regel eines Skripts), steht unter „Braucht
+Aufmerksamkeit“ in der Übersicht ein dezenter Hinweis mit Link zur Einrichtung. Nodvard Deck prüft das alle 6 Stunden und bei jedem „Verbindung prüfen“. Mit dem × blendest du den
 Hinweis für diesen Server aus, bis ein Update neuere Skripte mitbringt.
+
+**Docker auf „Nur bedienen“ umstellen:** Bekommt ein Server, der schon mit der Gruppe docker oder der vollen
+sudo-Regel eingerichtet ist, die Markierung `docker-bedienen` statt `docker`, bleibt beides erhalten. Der
+Einrichtungsbefehl nimmt weder die Gruppe noch die Regel zurück, der Zugang ist dort also weiter praktisch root.
+„Verbindung prüfen“ zeigt das in den Punkten „Nur bedienen: Zugang nicht in der Gruppe docker“ und „Nur bedienen:
+keine volle sudo-Regel“ (gelb). Meldet sich der Zugang als `root` an, schränkt „Nur bedienen“ nichts ein; dann ist
+„Nur bedienen: Zugang ist nicht root“ gelb, und der Zugang braucht einen eigenen Benutzer. Hat ein Server beide
+Markierungen (`docker` und `docker-bedienen`), können diese Punkte gelb sein; das ist gewollt, er ist dann ein voller
+Docker-Server. So stellst du um:
+
+1. Den Einrichtungsbefehl mit „Root-Rechte ohne Passwort“ noch einmal ausführen. Er legt `docker-root` ab und bietet die
+   Gruppe docker nicht mehr an.
+2. „Verbindung prüfen“: Bei „Docker nur bedienen“ muss stehen, dass das Hilfsskript antwortet.
+3. Den Zugang aus der Gruppe nehmen: `sudo gpasswd -d <benutzer> docker` (gilt ab der nächsten Anmeldung).
+4. Braucht kein anderes Modul hier volle Rechte, die volle Regel entfernen wie oben beschrieben.
+5. Noch einmal „Verbindung prüfen“: Die Prüfung meldet sich dafür neu an, die Punkte „Nur bedienen: …“ sind also gleich
+   grün, und danach nutzt Nodvard Deck auch sonst nur neue Verbindungen.
+
+Zurück zum vollen Docker-Server: Markierung `docker` wieder setzen und den Einrichtungsbefehl mit „Zur Gruppe docker
+hinzufügen“ ausführen.
 
 **Proxmox-Knoten:** Dort meldet sich Nodvard Deck am einfachsten direkt als `root` an (Benutzer
 `root` beim Erzeugen eintragen). Dann braucht es kein sudo und keine Haken. Der Schlüssel landet in
@@ -1408,7 +1530,8 @@ Einstellungen → **Automatik & Sicherheit**:
   Bestätigung“, sondern unter „Alle“ bzw. „Läuft“, „Erfolgreich“, „Fehlgeschlagen“ oder (Sperrliste) „Abgelehnt“. Ohne
   dieses Recht wartet sie unter „Wartet auf Bestätigung“ auf jemanden, der es hat. Ausnahmen: „Alle Updates
   vorschlagen“ schlägt bewusst nur vor (die Vorschläge warten), beim Einspielen eines Image-Updates ist die Übersicht die
-  Bestätigung, und „In Quarantäne“ und „Ignorieren“ in Nodvard Shield laufen ohne Aktion (nur im Protokoll).
+  Bestätigung, und „In Quarantäne“, „Ignorieren“ und „Wieder beachten“ in Nodvard Shield laufen ohne Aktion (nur im
+  Protokoll).
 - **Skripte ohne Klick:** Unabhängig davon kann ein aktives Skript mit Zeitplan eine Dauerfreigabe bekommen: auf der
   Skripte-Seite beim Skript den Schalter „Ohne Freigabe nach Zeitplan“ (nur Inhaber und `admin`). Vorher siehst du, für
   welche Server, unter welchem Konto und unter welcher Adresse sie gilt. Jede Änderung an Inhalt, Parametern, Ziel oder
@@ -1461,8 +1584,9 @@ starten“), und du startest ihn selbst neu. Die Update-Zentrale nennt die Ausna
 automatisch, außer …“). Steht der Server von Nodvard Deck selbst in der Liste, startet auch er nicht neu.
 Ist das letzte Update auf einem Server fehlgeschlagen, abgebrochen oder noch nicht fertig, startet Deck ihn ebenfalls
 nicht neu, auch in den folgenden Nächten nicht: Halb eingerichtete Pakete und ein Neustart vertragen sich schlecht. Die
-Zusammenfassung sagt dann „Neustart nötig, aber ausgelassen“ und kommt als Warnung, steht also im Cockpit unter „Braucht
-Aufmerksamkeit“. Ist der Lauf fehlgeschlagen, zeigt auch die Übersicht von Nodvard Shield dort „Neustart wartet auf ein
+Zusammenfassung sagt dann „Neustart nötig, aber ausgelassen“. Als Warnung, also im Cockpit unter „Braucht
+Aufmerksamkeit“, kommt sie nur einmal je gescheitertem Lauf; in den Nächten danach steht der Satz weiter in der
+Zusammenfassung, aber als Info. Ist der Lauf fehlgeschlagen, zeigt auch die Übersicht von Nodvard Shield dort „Neustart wartet auf ein
 sauberes Update“, bis ein Lauf wieder klappt. Sieh in der Update-Zentrale nach, was schiefging; nach dem nächsten
 sauberen Lauf startet Deck wieder selbst neu. Ist nichts mehr einzuspielen, starte den Server selbst neu.
 
@@ -1770,8 +1894,15 @@ erreichbar“ oder „Nicht abrufbar: …“) – die Fehlermeldung verrät meis
 - Testen vom Rechner mit Nodvard Deck aus: der `curl`-Befehl in
   [docs/10](10-PROXMOX-TOKEN.md#prüfen-bevor-du-es-in-nodvard-deck-einträgst).
 - Ein ausgefallener Proxmox (z. B. pve2 aus) bremst die anderen nicht mehr, er steht nur
-  als „nicht erreichbar“ da. Ist er länger aus: auf der Seite „Proxmox“ (Reiter „Verbindungen“) und
-  „Proxmox-Backups“ (unter „Verbindungen verwalten“) auf „deaktiviert“ schalten, dann kommen auch keine Meldungen.
+  als „nicht erreichbar“ da. Auf der Startseite zählt sein Knoten dann nicht als online: beim ersten Abgleich ohne
+  Antwort steht er als „unbekannt“ da (ein kurzer Neustart bleibt so ohne Fehlalarm). Als „nicht erreichbar“ gilt er
+  erst, wenn er mindestens 4 Minuten am Stück bei keinem Abgleich antwortet, in der Regel also beim nächsten geplanten
+  Abgleich (nach etwa 5 bis 10 Minuten); ein von Hand gestarteter Abgleich verkürzt diese Frist nicht. Eine Antwort
+  oder eine Ablehnung dazwischen beginnt sie neu. Steht hinter der Verbindung ein Cluster oder lehnt Proxmox nur ab
+  (etwa ein abgelaufenes Token), bleiben die Knoten „unbekannt“, denn die Maschinen können noch laufen. Seine VMs und
+  Container stehen als „unbekannt“ da, bis er wieder antwortet. Ist er länger aus: auf der Seite „Proxmox“ (Reiter
+  „Verbindungen“) und „Proxmox-Backups“ (unter „Verbindungen verwalten“) auf „deaktiviert“ schalten, dann kommen auch
+  keine Meldungen; seine Server stehen danach als „unbekannt“ da, bis du die Verbindung wieder einschaltest.
 
 **„… leitet auf eine andere Adresse um“** (Pi-hole, Nginx Proxy Manager, ntfy, Nextcloud): Der Server hat
 statt der Antwort eine Weiterleitung geschickt (HTTP 301, 302, 303, 307 oder 308). Nodvard Deck folgt dem nie, weil sonst

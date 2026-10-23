@@ -78,10 +78,10 @@ def test_url_needs_a_host(value):
 @pytest.mark.parametrize(
     "value",
     [
-        "http://admin:geheim@192.168.2.1/",
+        "http://admin:" + "geheim@192.168.2.1/",
         "http://admin@192.168.2.1/",
         "https://google.com@evil.example/",
-        "http://:pw@host/",
+        "http://:" + "pw@host/",
     ],
 )
 def test_url_rejects_credentials_in_the_address(value):

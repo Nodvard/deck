@@ -234,7 +234,7 @@ describe("Stack-Aktionen", () => {
     render(<ContainersPage />);
     const app = await screen.findByTestId("stack-app");
     expect(within(app).getAllByRole("button").map((b) => b.textContent)).toEqual(
-      ["Datei ansehen", "Bearbeiten", "Anwenden", "Stoppen", "Herunterfahren", "Images holen", "Übernahme aufheben", "Update", "Löschen"],
+      ["Datei ansehen", "Bearbeiten", "Anwenden", "Stoppen", "Herunterfahren", "Images holen", "Übernahme aufheben", "Update", "Sicherungen", "Löschen"],
     );
     expect(within(screen.getByTestId("stack-media")).queryByRole("button", { name: "Bearbeiten" })).toBeNull();
     const leer = screen.getByTestId("stack-leer");
@@ -470,9 +470,11 @@ describe("Stack-Aktionen", () => {
     const panel = await screen.findByTestId("portainer-portainer");
     expect(panel.textContent).toContain("/opt/stacks/portainer");
     expect(panel.textContent).toContain("Lösche den Stack danach nicht in Portainer");
+    expect(panel.textContent).toContain("was nur in den alten Containern lag und nicht in einem Volume oder Ordner, geht dabei verloren.");
     fireEvent.click(within(panel).getByRole("button", { name: "Umziehen" }));
     expect(await screen.findByText(/liegt jetzt in \/opt\/stacks\/portainer/)).toBeInTheDocument();
     expect(String(confirm.mock.calls[0][0])).toMatch(/^Stack „portainer“ von Portainer nach \/opt\/stacks\/portainer holen/);
+    expect(String(confirm.mock.calls[0][0])).toContain("was nur in den alten Containern lag und nicht in einem Volume oder Ordner, ist danach weg.");
     expect(requests).toContain("POST /api/v1/ext/docker/hosts/h1/stacks/portainer/from-portainer");
   });
 

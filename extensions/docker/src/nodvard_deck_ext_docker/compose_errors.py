@@ -83,3 +83,23 @@ def _read_error(rest: str) -> tuple[str, bool]:
     # Bei einem offenen Anführungszeichen nennt Compose die letzte Zeile der Datei, nicht die des Werts.
     where = f" (Zeile {line[1]})" if line is not None and needle != "unterminated quoted value" else ""
     return f"Compose kann {path} nicht lesen: {reason}{where}. {_HIDDEN}", True
+
+
+_GO_ESCAPES = {"\a": "\\a", "\b": "\\b", "\f": "\\f", "\n": "\\n", "\r": "\\r", "\t": "\\t", "\v": "\\v", "\\": "\\\\", '"': '\\"'}
+
+
+def docker_quoted(value: str) -> str:
+    """Ein Wert, wie Docker ihn in Anführungszeichen zitiert (Go `%q`): `\\` und `"` maskiert, Steuerzeichen als `\\t` oder `\\x01`."""
+    out = []
+    for char in value:
+        if char in _GO_ESCAPES:
+            out.append(_GO_ESCAPES[char])
+        elif char.isprintable():
+            out.append(char)
+        elif ord(char) < 0x80:
+            out.append(f"\\x{ord(char):02x}")
+        elif ord(char) < 0x10000:
+            out.append(f"\\u{ord(char):04x}")
+        else:
+            out.append(f"\\U{ord(char):08x}")
+    return "".join(out)

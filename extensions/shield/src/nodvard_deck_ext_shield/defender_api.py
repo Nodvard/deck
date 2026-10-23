@@ -655,9 +655,16 @@ def build_routers(
 
     @manage.post("/scans")
     async def start_scan(payload: _ScanIn) -> dict:
-        if payload.kind == "custom" and not payload.paths:
+        given = [p.strip() for p in payload.paths or [] if p.strip()]
+        if payload.kind == "custom" and not given:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Für einen eigenen Scan bitte mindestens einen Ordner angeben.")
-        paths = [p.strip() for p in payload.paths or [] if p.strip().startswith("/")] or None
+        relative = [p for p in given if not p.startswith("/")]
+        if relative:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Ordner bitte mit vollem Pfad ab „/“ angeben, zum Beispiel /var/www. Nicht so: {', '.join(relative[:3])}.",
+            )
+        paths = given or None
         ids = await defender.start_scans(await _hosts(payload.host_ids), payload.kind, paths=paths, trigger="manual")
         return {"scans": ids}
 
@@ -672,9 +679,9 @@ def build_routers(
         return {"hosts": guard.start(await _hosts(payload.host_ids))}
 
     @manage.post("/events/acknowledge-all")
-    async def acknowledge_all(actor: Actor = Depends(ctx.api.current_actor)) -> dict:
+    async def acknowledge_all(host: str | None = None, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
         assert guard is not None
-        done, kept = await guard.acknowledge_all(actor)
+        done, kept = await guard.acknowledge_all(actor, host_id=host)
         return {"acknowledged": done, "kept_open": kept}
 
     @manage.post("/events/{event_id}/acknowledge")
@@ -839,6 +846,14 @@ def build_routers(
         if not await defender.ignore(finding_id):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Dieser Fund ist nicht (mehr) offen.")
         await ctx.audit.log(action=f"{EXT_ID}.finding_ignored", outcome="success", reason=finding_id, actor=actor)
+        return {"ok": True}
+
+    @manage.post("/findings/{finding_id}/reopen")
+    async def reopen(finding_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
+        ok, message = await defender.reopen(finding_id)
+        if not ok:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=message)
+        await ctx.audit.log(action=f"{EXT_ID}.finding_reopened", outcome="success", reason=finding_id, actor=actor)
         return {"ok": True}
 
     @manage.post("/findings/{finding_id}/{action}")

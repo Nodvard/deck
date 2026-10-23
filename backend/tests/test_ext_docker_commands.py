@@ -110,10 +110,10 @@ _CHANGING = {"container_verb", "compose_restart", "prune", "image_remove", "volu
 _CHANGING_ELSEWHERE = {
     "cmd_verb", "cmd_take_down", "cmd_remove_folder", "cmd_stack_pull", "cmd_stack_up", "cmd_tag", "cmd_untag", "cmd_archive", "cmd_stop_services",
     "cmd_start_services", "cmd_pull_backup_image", "cmd_stop_archive", "cmd_read", "cmd_move_up", "cmd_stop_old", "cmd_rename_old",
-    "cmd_start_old", "cmd_remove_old",
+    "cmd_start_old", "cmd_remove_old", "cmd_login", "cmd_logout", "cmd_restore",
 }
 """Dasselbe für ändernde Bauer außerhalb von `commands.py` (Stack-Aktionen, Löschen und Update von Stacks)."""
-_PASS_THROUGH = {"_exec"}
+_PASS_THROUGH = {"_exec", "_call"}
 """Hüllen, die ihren Befehl nur weiterreichen; ihre Aufrufer prüft der Wächter selbst."""
 
 
@@ -147,12 +147,12 @@ def _is_exec(node: ast.AST) -> bool:
 
 
 def _command_arg(call: ast.Call) -> ast.AST | None:
-    """Das Befehls-Argument von `ctx.exec.run/stream(host, cmd)`, `self._exec(host, cmd, ...)` und `open_shell(command=)`."""
+    """Das Befehls-Argument von `ctx.exec.run/stream(host, cmd)`, `self._exec`/`self._call(host, cmd, ...)` und `open_shell(command=)`."""
     func = call.func
     if not isinstance(func, ast.Attribute):
         return None
     on_exec = isinstance(func.value, ast.Attribute) and func.value.attr == "exec"
-    if (on_exec and func.attr in ("run", "stream", "run_argv", "stream_argv")) or func.attr == "_exec":
+    if (on_exec and func.attr in ("run", "stream", "run_argv", "stream_argv")) or func.attr in _PASS_THROUGH:
         if any(isinstance(a, ast.Starred) for a in call.args) or any(k.arg is None for k in call.keywords):
             return call  # `*args`/`**kwargs`: der Befehl ist nicht zu sehen
         if len(call.args) >= 2:

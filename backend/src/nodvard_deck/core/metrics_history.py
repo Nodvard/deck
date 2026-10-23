@@ -1,6 +1,5 @@
-"""Metrik-Verlauf für Hosts, deren Anbieter selbst keine Historie hat (z. B. ein Pi über SSH). Bewusst eine eigene
-SQLite-Datei (`<data_dir>/metrics.db`) mit einem Schreiber: Zeitreihen gehören nicht in die relationale Datenbank, die
-Datei konkurriert nicht mit deren Schreibsperre und darf jederzeit gelöscht werden (dann fehlt nur der Verlauf)."""
+"""Metrik-Verlauf für Hosts ohne eigene Anbieter-Historie in einer eigenen SQLite-Datei (`metrics.db`), die
+jederzeit gelöscht werden darf."""
 
 from __future__ import annotations
 
@@ -43,9 +42,8 @@ def _step_for(range_s: int, native_s: int) -> int:
 
 
 class MetricsStore:
-    """Dünne, synchrone sqlite3-Schicht; alle Aufrufe laufen über `asyncio.to_thread`, also in wechselnden Threads
-    gleichzeitig (Sammler schreibt, Oberfläche liest). Die eine Verbindung verträgt das nicht (`InterfaceError: bad
-    parameter or other API misuse`), deshalb läuft jeder Zugriff darauf unter `_lock`."""
+    """Dünne, synchrone sqlite3-Schicht; die eine Verbindung verträgt keine parallelen Threads, darum läuft jeder
+    Zugriff unter `_lock`."""
 
     def __init__(self, path: Path) -> None:
         self._path = path
@@ -82,8 +80,6 @@ class MetricsStore:
                 self._conn.close()
                 self._conn = None
 
-    # -- schreiben ---------------------------------------------------------------
-
     def insert(self, host_id: str, ts: int, values: dict[str, float]) -> None:
         rows = [(host_id, k, ts, float(v)) for k, v in values.items() if isinstance(v, (int, float))]
         if not rows:
@@ -113,19 +109,18 @@ class MetricsStore:
                 db.execute("DELETE FROM raw WHERE ts < ?", (now - raw_retention_s,))
                 db.execute("DELETE FROM rollup WHERE ts < ?", (now - rollup_retention_s,))
 
-    # -- lesen -------------------------------------------------------------------
-
     def latest(
         self, host_ids: Iterable[str], now: int, *, max_age_s: int, metrics: Iterable[str] = LATEST_METRICS,
     ) -> dict[str, dict[str, tuple[int, float]]]:
-        """Letzter Rohwert je (Host, Metrik) innerhalb von `max_age_s`: `{host_id: {metrik: (ts, wert)}}`; Hosts ohne
-        Wert fehlen. Je Paar ein Sprung auf den Primärschlüssel (rückwärts, ein Treffer): Ein Bereichsscan über `ts`
-        läse die ganze Tabelle, denn `ts` steht im Schlüssel hinten."""
+        """Letzter Rohwert je (Host, Metrik) innerhalb von `max_age_s` als `{host_id: {metrik: (ts, wert)}}`, Hosts
+        ohne Wert fehlen."""
         since = now - max_age_s
         names = tuple(metrics)
         found: dict[str, dict[str, tuple[int, float]]] = {}
         with self._lock:
             db = self._db()
+            # Je Paar ein Sprung auf den Primärschlüssel: Ein Bereichsscan über `ts` läse die ganze Tabelle, denn
+            # `ts` steht im Schlüssel hinten.
             for host_id in host_ids:
                 for metric in names:
                     row = db.execute(
@@ -159,8 +154,8 @@ class MetricsStore:
 
 
 def columnar(rows: Iterable[tuple[str, int, float, float | None]], *, step: int, since: int, now: int) -> dict[str, Any]:
-    """(metric, bucket_ts, avg, max) -> gemeinsame Zeitachse, eine Werteliste je Metrik.
-    Lücken (Host nicht erreichbar) bleiben `None`, damit die Kurve sie als Lücke zeigt statt sie wegzuinterpolieren."""
+    """Macht aus `(metric, bucket_ts, avg, max)` eine gemeinsame Zeitachse mit einer Werteliste je Metrik; Lücken
+    bleiben `None`, damit die Kurve sie als Lücke zeigt."""
     by_metric: dict[str, dict[int, tuple[float, float | None]]] = {}
     for metric, ts, avg, mx in rows:
         if avg is None:
@@ -174,8 +169,7 @@ def columnar(rows: Iterable[tuple[str, int, float, float | None]], *, step: int,
 
 
 class MetricsCollector:
-    """Der einzige Schreiber in `metrics.db`: fragt alle `interval_s` jeden Host ohne eigene Historie ab. Ein nicht
-    erreichbarer Host wird übersprungen (Lücke im Verlauf) und ist nie ein Fehler für die anderen."""
+    """Der einzige Schreiber in `metrics.db`: fragt alle `interval_s` jeden Host ohne eigene Historie ab."""
 
     def __init__(self, store: MetricsStore, *, interval_s: int, raw_retention_s: int, rollup_retention_s: int) -> None:
         self.store = store
@@ -245,8 +239,7 @@ class MetricsCollector:
 
 
 async def resolve_metrics_provider(sdk_host: Any, provider_ext_id: str | None) -> Any | None:
-    """Eigener Anbieter des Hosts (`provider_ext_id`), sonst ein allgemeiner, der den Host nach eigener Auskunft
-    (`supports`) messen kann, etwa per SSH. Gemeinsam für Live-Werte, Verlauf und Sammler."""
+    """Eigener Anbieter des Hosts (`provider_ext_id`), sonst ein allgemeiner, der ihn messen kann (`supports`)."""
     from nodvard_sdk.capabilities import MetricsProvider
 
     from ..ext.runtime import get_extension_runtime

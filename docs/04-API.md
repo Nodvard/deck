@@ -33,8 +33,11 @@ gültiges JSON, unbekannte Angabe), etwa „Mindestens 8 Zeichen.“; seltenere 
 Objekts) behalten den englischen Text von pydantic. Eigene Prüfungen (`type` `value_error`) liefern ihren eigenen
 Satz, der das Feld oft schon nennt („Benutzername: …“). Wirft ein Endpunkt einen SSH-Fehler (Server nicht erreichbar,
 Anmeldung abgelehnt, Server-Schlüssel nicht bestätigt) oder `HostUnreachable` (auch aus einer Erweiterung) und fängt
-ihn nicht selbst ab, kommt `502` mit dem Grund in `detail` statt `500`, ohne Traceback im Container-Protokoll. Ein
-anderer Netzfehler (etwa einer HTTP-Verbindung), den der Endpunkt nicht abfängt, bleibt `500`.
+ihn nicht selbst ab, kommt `502` mit dem Grund in `detail` statt `500`, ohne Traceback im Container-Protokoll. Dazu
+zählt auch ein Befehl, der über 8000 Byte auf die Befehlszeile eines Linux-Servers müsste (mit eigener Eingabe, als
+Live-Strom oder in einer Konsole): Er geht gar nicht erst hinaus, `detail` nennt Länge und Grund („Der Befehl ist mit
+… Byte zu lang für eine SSH-Befehlszeile …“). Längere Befehle ohne eigene Eingabe kommen über die Standardeingabe
+an. Ein anderer Netzfehler (etwa einer HTTP-Verbindung), den der Endpunkt nicht abfängt, bleibt `500`.
 
 Der Body einer Anfrage ist standardmäßig auf 1 MiB begrenzt (`NODVARD_DECK_MAX_BODY_BYTES`), auch ohne Anmeldung. Ist die
 `Content-Length` größer, antwortet der Server mit `413` (dazu `Connection: close`), sobald der Endpunkt den Body liest,
@@ -399,7 +402,8 @@ POST   /extensions/{id}/reload       DELETE /extensions/{id}
 GET    /extensions/{id}/frontend/index.js     → ESM-Bundle
 GET    /extensions/{id}/settings     → {schema, values, secrets: [{label, title, description, item, is_set, optional}], secrets_cleared}
 PUT    /extensions/{id}/secrets      → Geheimnis eines `x-secrets`-Labels setzen/ersetzen (nie lesen); `409`, solange keines
-                                       der Felder aus `x-secret-bound-to` einen gespeicherten Wert oder `default` hat.
+                                       der Felder aus `x-secret-bound-to` einen gespeicherten Wert oder `default` hat,
+                                       und `409`, solange der Name des Listeneintrags (`per_item`) mehrfach vorkommt.
                                        Ein schon gespeichertes nur mit `current_password`/`totp_code` im Body
 DELETE /extensions/{id}/secrets?label=…  → Geheimnis entfernen (idempotent, 204); ein gespeichertes nur mit Body
                                        `{current_password, totp_code}`
@@ -553,17 +557,27 @@ Protokoll):
   Passwort) hat; sonst bleibt der bisherige Standard, bis `make-default` ihn umstellt. `username` und `port` werden wie
   bei `POST .../credentials` geprüft. Höchstens 10 Schlüssel je 5 Minuten und Nutzer, sonst `429` mit `Retry-After`.
   Protokoll `host.key_generated` (`credential_id`, `username`, `port`, `fingerprint`).
-- `GET /hosts/{id}/credentials/{cid}/setup?sudo=false&groups=` (`hosts.write`) → `{username, public_key, fingerprint,
-  one_liner, script, notes, groups, sudo}`: der Befehl, den man auf dem Server ausführt (als root direkt, sonst über
-  `sudo`; `script` ist dasselbe lesbar). Der öffentliche Schlüssel wird serverseitig aus dem Tresor abgeleitet, mit dem
+- `GET /hosts/{id}/credentials/{cid}/setup?sudo=false&full_sudo=false&groups=` (`hosts.write`) → `{username,
+  public_key, fingerprint, one_liner, script, notes, groups, sudo, full_sudo, helpers}`: der Befehl, den man auf dem
+  Server ausführt (als root direkt, sonst über `sudo`; `script` ist dasselbe lesbar). Der öffentliche Schlüssel wird serverseitig aus dem Tresor abgeleitet, mit dem
   Kommentar `nodvard@<Kurzname>` (nie dem im Schlüssel eingetragenen). Der Befehl legt den Benutzer an (falls es ihn
-  nicht gibt, ohne Passwort-Anmeldung), trägt den Schlüssel als `restrict,pty …` ein (einen schon eingetragenen erkennt
-  er an Art und Schlüsseltext, auch mit älterem Kommentar `lattice@…`) und richtet auf Wunsch `sudo` ohne Passwort
-  (`sudo=true`, Datei `/etc/sudoers.d/nodvard-<benutzer>`, geprüft mit `visudo`) und
+  nicht gibt, ohne Passwort-Anmeldung), trägt den Schlüssel als `restrict,pty …` ein, bei einem laufenden Dropbear als
+  `no-port-forwarding,no-agent-forwarding,no-X11-forwarding …` (einen schon eingetragenen erkennt er an Art und
+  Schlüsseltext, auch mit älterem Kommentar `lattice@…`; bei Dropbear ersetzt er seine eigene alte Zeile
+  `restrict,pty <Schlüssel>`, auch mit Kommentar `lattice@…` oder einem früheren Kurznamen, und meldet „Schlüssel für
+  Dropbear angepasst.“) und richtet auf Wunsch `sudo` ohne Passwort
+  (`sudo=true`, geprüft mit `visudo`, siehe unten) und
   Gruppen (`groups=docker` oder `groups=a,b`) ein. Gruppen werden nur eingetragen, wenn Erweiterungen sie für diesen
   Server verlangen (`unix_group`; privilegierte Gruppen – `root`, `sudo`, `wheel`, `admin`, `shadow`, `disk`, `adm`,
   `staff`, `lxd`, `libvirt`, `kvm` – ignoriert der Kern und protokolliert das im Log; `docker` ist bewusst erlaubt und
-  bedeutet praktisch root); für `root` gibt es weder Gruppen noch `sudo`. Bei einem Benutzer außer `root` läuft alles,
+  bedeutet praktisch root); für `root` gibt es weder Gruppen noch `sudo`. Mit `sudo=true` bringt der Befehl die
+  Hilfsskripte der eingeschalteten Module mit, die für diesen Server root brauchen (`helpers`: `[{ext_id, module, path,
+  version, sha256, text}]`), jedes mit eigener Regel `/etc/sudoers.d/nodvard_<ext_id>_<benutzer>` nur für sein Skript.
+  Nur diese Regeln gibt es, wenn mindestens ein eingeschaltetes Modul auf diesem Server root braucht und jedes davon ein
+  Hilfsskript hat. Sonst, oder mit `full_sudo=true`, kommt die volle Regel (`/etc/sudoers.d/nodvard-<benutzer>`,
+  `NOPASSWD: ALL`) dazu; `full_sudo` in der Antwort sagt, ob sie dabei ist. Ohne
+  volle Regel ist ein Hilfsskript, das sich nicht einrichten lässt, ein `FEHLER` (der Befehl endet mit Fehler), mit
+  voller Regel ein Hinweis. Eine schon vorhandene volle Regel nimmt der Befehl nie zurück. Bei einem Benutzer außer `root` läuft alles,
   was `~/.ssh` und `authorized_keys` anfasst, **als dieser Benutzer** (`runuser`, sonst `su`), nie als root mit `chown`;
   ist `~/.ssh` oder `authorized_keys` ein Link, bricht der Befehl mit `FEHLER` ab, statt ihm zu folgen. Bei `root`
   (z. B. Proxmox, wo `authorized_keys` ein Link ins Cluster-Dateisystem ist) bleibt der Link unangetastet. Eine ältere
@@ -577,10 +591,10 @@ Protokoll):
   geprüft bzw. mit `shlex.quote` gequotet. `422` für Passwort-Zugänge, nicht-Linux-Server, einen Benutzernamen, der kein
   üblicher Linux-Name ist (`^[a-z_][a-z0-9_-]{0,31}$`), und einen nicht lesbaren Schlüssel. Ändert nichts (kein
   Protokolleintrag).
-- `POST /hosts/{id}/credentials/{cid}/setup-with-password` `{password, login_user = "root", sudo = false, groups = [],
-  sudo_password_same = true}` (`hosts.write` **und** `hosts.execute`) richtet den Server für diesen Schlüssel-Zugang ein,
-  ohne dass jemand den Befehl selbst einfügt: Nodvard Deck meldet sich **einmal** mit `login_user`/`password` an,
-  führt genau den Befehl von `GET .../setup` aus (`sudo` und `groups` wie dort; als `root` direkt, sonst über
+- `POST /hosts/{id}/credentials/{cid}/setup-with-password` `{password, login_user = "root", sudo = false,
+  full_sudo = false, groups = [], sudo_password_same = true}` (`hosts.write` **und** `hosts.execute`) richtet den Server
+  für diesen Schlüssel-Zugang ein, ohne dass jemand den Befehl selbst einfügt: Nodvard Deck meldet sich **einmal** mit
+  `login_user`/`password` an, führt genau den Befehl von `GET .../setup` aus (`sudo`, `full_sudo` und `groups` wie dort; als `root` direkt, sonst über
   `sudo -S`, das das Passwort über die Standardeingabe bekommt, mit `sudo_password_same = false` über `sudo -n`, das nur
   geht, wenn das Konto sudo ohne Passwort darf), schließt die Verbindung und prüft danach mit dem neuen Schlüssel wie
   `POST /hosts/{id}/check`. `login_user` ist das Konto für diese eine Anmeldung, nicht der Benutzer des Zugangs. Antwort
@@ -594,7 +608,9 @@ Protokoll):
   festem Satz am Feld auch für ein leeres, über 512 Zeichen langes oder nicht sendbares Passwort (Zeilenumbruch,
   NUL, einzelnes Surrogat) und ein ungültiges `login_user` – nie mit dem Wert.
   **Das Passwort wird nie gespeichert, protokolliert oder zurückgegeben** (nicht in der Datenbank, im Tresor, im Log,
-  in einer Antwort, auch keiner `422`; in der Befehlszeile steht es nie). Es geht nur an die gespeicherte Adresse
+  in einer Antwort, auch keiner `422`; in der Befehlszeile steht es nie). Ist der Befehl länger als 8000 Byte, ist die
+  Befehlszeile ein kurzer, fester Text: Das Skript kommt über die Standardeingabe zwischen zwei gleichen, zufälligen
+  Marken, dahinter die Zeile, die `sudo -S` selbst als Passwort liest. Das Passwort geht nur an die gespeicherte Adresse
   und den Port des Zugangs, und nur, wenn Nodvard Deck den Server-Schlüssel schon kennt: sonst `409`
   `host_key_unconfirmed` mit `host_key` (`{status, key_type, fingerprint, expected}`), ohne dass das Passwort benutzt
   wurde und ohne dass es einen Versuch kostet; bestätigt wird mit `POST /hosts/{id}/known-hosts` und der `credential_id`
@@ -604,22 +620,28 @@ Protokoll):
   auf dem Server, wie bei Terminal und Konsole), und jeder Versuch steht im Protokoll.
   Fehler haben die Form `{detail, code}` mit festem deutschen Satz (nie Text vom Server oder von der SSH-Bibliothek);
   je nach Fall kommt `host_key` oder `messages` dazu: `wrong_password` (`400`, Anmeldung abgelehnt),
-  `sudo_failed` (`400`, der Befehl lief gar nicht erst, z. B. kein sudo-Recht oder falsches sudo-Passwort),
+  `sudo_failed` (`400`, der Befehl lief gar nicht erst, z. B. kein sudo-Recht oder falsches sudo-Passwort; ebenso,
+  wenn die Login-Shell einen langen Befehl nicht lesen kann, etwa fish oder tcsh, dann mit eigenem Satz und als root
+  mit dem Code `setup_failed`),
   `invalid_password` (`400`), `host_key_unconfirmed` und `host_key_changed` (`409`, mit `host_key`; bei `changed` wurde
   das Passwort ebenfalls nicht gesendet, `expected` ist der gemerkte Fingerabdruck; der geänderte Schlüssel wird nie zum
-  Bestätigen angeboten), `rate_limited` und `busy` (`429`, `rate_limited` mit `Retry-After`; `busy`: für diesen Server
+  Bestätigen angeboten), `helpers_blocked` (`409`, mit `messages`: nur mit den Regeln der Hilfsskripte, die sich auf dem
+  Server nicht sicher ablegen lassen; der Befehl hat vor jeder Änderung abgebrochen, die Meldungen nennen Ordner, Grund
+  und Abhilfe), `rate_limited` und `busy` (`429`, `rate_limited` mit `Retry-After`; `busy`: für diesen Server
   läuft schon eine Einrichtung), `unreachable` (`502`, nicht erreichbar), `connection_failed` (`502`, die Verbindung kam
   nicht zustande oder brach beim Anmelden ab; es ist nichts ausgeführt worden), `connection_lost` (`502`, die Verbindung
   brach ab, nachdem der Befehl gestartet war: die Einrichtung kann teilweise gelaufen sein, mit „Verbindung prüfen“
   nachsehen, ein neuer Versuch ist gefahrlos), `setup_failed` (`502`, der Befehl lief und scheiterte, mit
-  `messages`) und `timeout` (`504`, nach 90 s ohne Ende; er kann trotzdem durchgelaufen sein). Grenzen: je Ziel
-  (Adresse und Port) 5 und je Nutzer 10 Versuche in 10 Minuten (als Versuch zählt jeder Lauf, bei dem das Passwort an
-  den Server gehen könnte), dazu je Nutzer 30 Aufrufe in 5 Minuten, je Server nur ein Lauf gleichzeitig. Die Zähler
-  liegen im Speicher. Protokoll `host.setup_with_password` (`target_type` `host`; `outcome` `success`/`failure`;
-  `detail`: `credential_id`, `username`, `login_user`, `sudo`, `groups`, `result` (`ok` oder der Fehlercode), bei
-  Erfolg zusätzlich `check_ok` und `made_default`; nie das Passwort), dazu `host.connection_checked` für die Prüfung
-  und `host.credential_made_default`, wenn der Zugang Standard wurde. Eine Sperre (`rate_limited`) steht je Nutzer
-  nur einmal im Zeitfenster im Protokoll; Fehler vor dem Lauf (`403`, `404`, `422`) gar nicht.
+  `messages`; ebenso, wenn ein langer Befehl nicht vollständig bei der Login-Shell ankam, auch weil vorher schon etwas
+  von der Standardeingabe gelesen hat: dann lief nichts, `messages` ist leer, und ein neuer Versuch ist gefahrlos) und
+  `timeout` (`504`, nach 90 s ohne Ende; er kann trotzdem durchgelaufen sein). Grenzen: je Ziel (Adresse und Port) 5
+  und je Nutzer 10 Versuche in 10 Minuten (als Versuch zählt jeder Lauf, bei dem das Passwort an den Server gehen
+  könnte), dazu je Nutzer 30 Aufrufe in 5 Minuten, je Server nur ein Lauf gleichzeitig. Die Zähler liegen im Speicher.
+  Protokoll `host.setup_with_password` (`target_type` `host`; `outcome` `success`/`failure`; `detail`: `credential_id`,
+  `username`, `login_user`, `sudo`, `full_sudo`, `groups`, `helpers`, `result` (`ok` oder der Fehlercode), bei Erfolg
+  zusätzlich `check_ok` und `made_default`; nie das Passwort), dazu `host.connection_checked` für die Prüfung und
+  `host.credential_made_default`, wenn der Zugang Standard wurde. Eine Sperre (`rate_limited`) steht je Nutzer nur
+  einmal im Zeitfenster im Protokoll; Fehler vor dem Lauf (`403`, `404`, `422`) gar nicht.
 - `POST /hosts/{id}/credentials/{cid}/make-default` `{delete_previous = false, current_password, totp_code}`
   (`hosts.write`; Body darf fehlen) macht den Zugang zum Standard. `current_password` und, wenn Zwei-Faktor an ist,
   `totp_code` braucht es nur, wenn mit `delete_previous` wirklich ein bisheriger Zugang gelöscht wird (sonst
@@ -1034,9 +1056,11 @@ Grenzen: Inhalt höchstens 4 KiB (sonst `413`), Anfragezeile und Kopfzeilen zusa
   beim Lesen selbst auf die Grenze.
 - `PUT /extensions/{id}/secrets` antwortet für ein gebundenes Geheimnis mit `409` („Erst die
   Adresse eintragen und die Einstellungen speichern, danach die Zugangsdaten hinterlegen.“),
-  solange keines der Felder gespeichert einen Wert oder `default` hat.
+  solange keines der Felder gespeichert einen Wert oder `default` hat. Ebenso mit `409` („Der Name … kommt mehrfach
+  vor. Erst einen der Einträge umbenennen …“), solange der Name des Listeneintrags mehrfach vorkommt; `PUT
+  /extensions/{id}/settings` löscht das Geheimnis eines doppelten Namens ohnehin (nach Rückfrage).
 - Das alte `POST /ext/proxmox|backups/connections/{name}/token` legt ein Token nur an
-  (`409`, wenn schon eines existiert). Zum Setzen **und Ersetzen** dient
+  (`409`, wenn schon eines existiert oder der Name mehrfach vorkommt). Zum Setzen **und Ersetzen** dient
   `PUT /extensions/{id}/secrets` mit `{label: "proxmox-token:<name>", value}`; die Oberfläche
   nutzt nur noch diesen Weg. Das Token der Verbindung löschen die Routen der beiden Erweiterungen selbst:
   `POST /ext/proxmox|backups/connections` ein altes unter demselben Namen, `PUT …/connections/{name}` eines, wenn
@@ -1288,6 +1312,7 @@ deutscher Satz, nie Text von Proxmox.
 | `invalid_address`, `invalid_name`, `invalid_user`, `invalid_password`, `invalid_code`, `invalid_fingerprint` | 400 | Eingabe ungültig, nichts gesendet |
 | `https_required` | 400 | `http://`-Adresse, nichts gesendet |
 | `name_taken`, `already_connected` | 409 | Kurzname gehört zu einem anderen Server bzw. Adresse unter anderem Namen eingetragen |
+| `name_twice` | 409 | Kurzname steht in den Einstellungen bei zwei Verbindungen; erst eine umbenennen. Vor der Anmeldung geprüft, sonst wird das neue Token in Proxmox wieder gelöscht |
 | `certificate_unconfirmed` | 409 | Zertifikat nicht anerkannt und kein `fingerprint`; Passwort nicht gesendet |
 | `certificate_changed` | 409 | anderes Zertifikat als bestätigt, vor der Anmeldung; Passwort nicht gesendet |
 | `certificate_changed_after_login` | 409 | anderes Zertifikat nach der Anmeldung; das Passwort ging nur an das bestätigte, danach Abbruch |
@@ -1585,6 +1610,39 @@ GET    /widgets                      → Katalog aller WidgetSpecs aktivierter E
 GET    /ext/{ext_id}/{data_endpoint} → Widget-Daten, {data, meta}
 ```
 
+Ein Layout trägt neben `items` die Liste `groups` (`[{key, title, collapsed}]`, `key` einer von `servers`, `security`,
+`apps`, `backups`, `services`, `title` höchstens 60 Zeichen, leer heißt Name der Vorgabe). `PUT` nimmt `items` und
+`groups` getrennt an, ein Feld ohne Angabe bleibt, wie es ist; doppelte oder unbekannte Gruppen ergeben 422. Fehlt eine
+Gruppe in der Liste, steht sie in der Vorgabe-Reihenfolge dahinter. Jedes Widget aus `/widgets` hat `group`.
+
+Ein Eintrag in `items` hat die Form `{widget_id, ext_id, x, y, w, h, config}`. Das Backend prüft nur, dass `items` eine
+Liste von JSON-Objekten ist, und speichert Felder und Werte, wie sie kommen. Selbst ändert der Kern die Einträge nur,
+wenn ein Modul die Widgets eines anderen übernimmt (`adopts`: neue `ext_id` und `widget_id`, doppelte fallen weg), und
+mit den Beispieldaten (eigene Anordnung, beim Entfernen kommt die alte zurück). Ausgewertet werden `x`, `y`, `w`, `h`
+und `config` nur in der Oberfläche:
+
+- `x`, `y`, `w`: Lage und Breite in einem Raster aus 12 Spalten. Wo die Web-Oberfläche Lage oder Breite setzt (neue
+  Widgets, „Widgets verwalten“, Ziehen, „Schmal“ und „Breit“), gilt `x + w ≤ 12`; das Backend weist einen Eintrag, der
+  darüber hinausragt, nicht ab. Ist die Widget-Fläche mindestens 960 px breit, wird jede Gruppe dicht von links oben
+  gepackt, in der Reihenfolge von `y`, dann `x`; `w` hebt die Oberfläche dabei auf die Mindestbreite des Anzeige-Typs
+  und begrenzt es auf 12. Schmaler stehen die Karten nur in dieser Reihenfolge untereinander (auf Bildschirmen ab
+  640 px in zwei Spalten), `x` und `w` zählen dort nicht.
+- `h`: Höhe in Rasterzeilen; ohne `config.size` nur die Vorgabe, bis die Karte ihren Inhalt gemessen hat. Zahl und
+  Tacho nehmen bis dahin immer 2 Zeilen, die anderen Typen `h`, mindestens ihre Mindesthöhe (2 oder 3) und höchstens 5.
+  Die gemessene Höhe speichert die Oberfläche nie.
+- `config.hidden`: `true` heißt, das Widget ist von der Startseite entfernt. Der Eintrag bleibt stehen, sonst gälte das
+  Widget als neu und käme von selbst zurück; „Widgets verwalten“ nimmt den Schlüssel beim Zurückholen wieder heraus.
+  Jeder andere Wert zählt wie keiner.
+- `config.group`: einer der fünf Gruppen-Schlüssel oben; legt das Widget in eine andere Gruppe als die aus `/widgets`.
+  Fehlt der Wert oder ist er unbekannt, gilt die Gruppe des Widgets.
+- `config.size`: `"s"`, `"m"` oder `"l"` (in der Oberfläche Klein, Mittel, Groß) gibt der Karte eine feste Höhe von 2, 3
+  oder 5 Rasterzeilen (eine Zeile 90 px, dazwischen 12 px). Ohne Angabe oder mit einem anderen Wert richtet sich die
+  Höhe nach dem Inhalt: die kleinste Stufe aus 1, 2, 3 oder 5 Zeilen, in die er passt. Zahl und Tacho sind immer
+  mindestens 2 Zeilen hoch. Listen, Tabellen und Kachelraster, die nicht hineinpassen, enden mit „+ x weitere“,
+  anderer Inhalt scrollt.
+
+Weitere Schlüssel in `config` lässt die Web-Oberfläche beim Speichern stehen.
+
 Die Android-App holt `/widgets`, rendert die deklarativen Specs und zieht die Daten von
 denselben Endpunkten wie das Web. Eine neue Extension erscheint dadurch in der App,
 ohne dass die App aktualisiert wird — das ist der praktische Gewinn aus
@@ -1649,9 +1707,12 @@ Der Platzhalter kommt auch, wenn der Server antwortet, Docker aber nicht (Dienst
 App: nur `http://` oder `https://` mit Rechnername oder IP-Adresse, sonst `null` (kein `javascript:`, `data:` oder `//…`).
 
 Ebenfalls additiv: `helper_hints` – Server, die neu eingerichtet werden sollten, damit die Module mit engen Rechten
-laufen: `[{host_id, host_name, modules: [Anzeigename], checked_at}]`. Ein Eintrag kommt nur, wenn auf einem
-Linux-Server die volle sudo-Regel (`NOPASSWD: ALL`, auch mit weiteren Angaben wie `NOPASSWD: SETENV: ALL`) gesetzt ist und mindestens ein Hilfsskript eines eingeschalteten
-Moduls fehlt oder nicht das mitgelieferte ist (älter, verändert, unlesbar); nie für root und nie für Windows. Der Stand
+laufen: `[{host_id, host_name, modules: [Anzeigename], checked_at, without_root}]`. Ein Eintrag kommt nur, wenn sudo auf einem
+Linux-Server Hilfsskripte ausführen lässt (volle Regel `NOPASSWD: ALL`, auch mit weiteren Angaben wie
+`NOPASSWD: SETENV: ALL`, oder die eigene Regel mindestens eines Skripts) und mindestens ein Hilfsskript eines eingeschalteten
+Moduls fehlt oder nicht das mitgelieferte ist (älter, verändert, unlesbar); nie für root und nie für Windows.
+`without_root` ist `true`, wenn dort keine volle Regel steht: Diese Module haben dann gerade gar kein root (sonst laufen
+sie über die volle Regel). Der Stand
 stammt aus „Verbindung prüfen“ (nur mit dem Standard-Zugang) und dem Kern-Job `helper-hints` (alle 6 Stunden ein
 lesender Befehl je Server, derselbe wie bei der Prüfung); `GET /overview` selbst fragt keinen Server ab.
 `POST /hosts/{id}/helper-hint/dismiss` (`hosts.write`, 204, 404 ohne Server) blendet den Hinweis für diesen Server aus,
@@ -1995,6 +2056,8 @@ ohne Token mit `401` (früher war es ohne Anmeldung erreichbar). Ohne Anmeldung 
 `hosts.execute` noch `actions.approve:<risiko>` für das Risiko einer Aktion hat, bekommt ihren `payload` gekürzt
 (`payload_hidden`, siehe §3). Ebenso bei der Größe: Einen Body über 1 MiB (siehe §1) beantwortet ein
 Endpunkt, der ihn liest, mit `413` (früher gab es keine allgemeine Grenze); Uploads haben eigene, höhere Grenzen.
+Ebenso richtet `sudo=true` bei `GET .../setup` und `POST .../setup-with-password` nur noch die Regeln der Hilfsskripte
+ein, wenn die reichen; die volle sudo-Regel gibt es dann nur mit `full_sudo=true` (siehe §3).
 Ebenso verlangen `POST /me/password`, `DELETE /me/totp` und `POST /me/recovery-codes` bei eingeschalteter
 Zwei-Faktor-Anmeldung zusätzlich `totp_code` (App-Code oder Wiederherstellungs-Code), `POST /system/backups/download`,
 `POST /system/backups/{name}/ticket` und `POST /system/restore/{id}/schedule` den App-Code. Ebenso verlangen

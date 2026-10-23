@@ -42,7 +42,19 @@ class UiRegistry:
         self._pages.setdefault(ext_id, []).append(spec)
 
     def register_widget(self, ext_id: str, spec: WidgetSpec) -> None:
-        self._widgets.setdefault(ext_id, []).append(spec)
+        # Gleiche ID ersetzt an ihrer Stelle: so ändert ein Modul eine Kachel nach `on_settings_changed`.
+        specs = self._widgets.setdefault(ext_id, [])
+        for index, known in enumerate(specs):
+            if known.id == spec.id:
+                specs[index] = spec
+                return
+        specs.append(spec)
+
+    def unregister_widget(self, ext_id: str, widget_id: str) -> bool:
+        specs = self._widgets.get(ext_id, [])
+        kept = [spec for spec in specs if spec.id != widget_id]
+        self._widgets[ext_id] = kept
+        return len(kept) != len(specs)
 
     def register_host_tool(self, ext_id: str, spec: HostToolSpec) -> None:
         # Gleiche ID ersetzt: so meldet eine Extension ihr Werkzeug nach `on_settings_changed` mit neuen Bedingungen.
@@ -261,11 +273,17 @@ class ExtensionRuntime:
         manifest = getattr(self.discovered.get(ext_id), "manifest", None)
         return [old for old in getattr(manifest, "legacy_ids", None) or [] if self.legacy_owner.get(old) == ext_id]
 
+    def _manifest_of(self, ext_id: str) -> ExtensionManifest | None:
+        loaded = self.loaded.get(ext_id)
+        return loaded.manifest if loaded is not None else getattr(self.discovered.get(ext_id), "manifest", None)
+
     def stage_of(self, ext_id: str) -> str:
         """Der Reifegrad (`stable` oder `beta`) von `ext_id`; ohne Angabe oder ohne Fund `stable`."""
-        loaded = self.loaded.get(ext_id)
-        manifest = loaded.manifest if loaded is not None else getattr(self.discovered.get(ext_id), "manifest", None)
-        return getattr(manifest, "stage", None) or "stable"
+        return getattr(self._manifest_of(ext_id), "stage", None) or "stable"
+
+    def category_of(self, ext_id: str) -> str | None:
+        """Die Kategorie aus dem Manifest von `ext_id` (z. B. `servers`); ohne Angabe oder ohne Fund `None`."""
+        return getattr(self._manifest_of(ext_id), "category", None)
 
     def mount_router(
         self, app: FastAPI, ext_id: str, router: APIRouter, *, deprecated: bool = False

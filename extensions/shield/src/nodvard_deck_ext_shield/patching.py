@@ -208,15 +208,22 @@ async def load_baselines(ctx: ExtensionContext, kind: str) -> dict[str, dict[str
         return {r.host_id: dict(r.data or {}) for r in rows}
 
 
-async def last_run_status(ctx: ExtensionContext, host_id: str) -> str | None:
-    """Zustand des jüngsten Laufs auf dem Server ohne Neustarts (`running`, `ok`, `error`); ohne Lauf `None`."""
+async def last_run(ctx: ExtensionContext, host_id: str) -> tuple[str, str] | None:
+    """Kennung und Zustand des jüngsten Laufs auf dem Server ohne Neustarts; ohne Lauf `None`."""
     async with ctx.db.session() as session:
-        return (await session.execute(
-            select(UpdateRunRecord.status)
+        row = (await session.execute(
+            select(UpdateRunRecord.id, UpdateRunRecord.status)
             .where(UpdateRunRecord.host_id == host_id, UpdateRunRecord.mode != "reboot")
             .order_by(UpdateRunRecord.started_at.desc())
             .limit(1)
-        )).scalar_one_or_none()
+        )).first()
+    return (row.id, row.status) if row else None
+
+
+async def last_run_status(ctx: ExtensionContext, host_id: str) -> str | None:
+    """Zustand des jüngsten Laufs auf dem Server ohne Neustarts (`running`, `ok`, `error`); ohne Lauf `None`."""
+    run = await last_run(ctx, host_id)
+    return run[1] if run else None
 
 
 async def last_run_ok(ctx: ExtensionContext, host_id: str) -> bool:
@@ -872,9 +879,13 @@ class UpdateCenter:
                 if no_auto_reboot(host, settings):
                     lines.append("  ↳ Neustart nötig, für diesen Server aber ausgeschaltet – bitte selbst neu starten.")
                 elif not update_ok:
-                    held += 1
                     lines.append("  ↳ Neustart nötig, aber ausgelassen, weil das letzte Update nicht sauber durchgelaufen ist "
                                  "oder noch läuft – bitte erst in der Update-Zentrale nachsehen und dann selbst neu starten.")
+                    # Als Warnung nur einmal je Lauf; danach steht es in der Zusammenfassung und unter „Braucht Aufmerksamkeit“.
+                    run_id = (await last_run(self._ctx, host.id) or (None, None))[0]
+                    if (await load_baseline(self._ctx, host.id, "reboot_held") or {}).get("run_id") != run_id:
+                        held += 1
+                        await save_baseline(self._ctx, host.id, "reboot_held", {"run_id": run_id})
                 elif host.id in own_ids:
                     reboot_last.append(host)
                     lines.append(

@@ -38,6 +38,7 @@ ID_NEW = "cccccccccccc"
         ("0.0.0.0:5353->5353/udp", []),
         ("80/tcp", []),
         ("", []),
+        ("0.0.0.0:0->80/tcp, 0.0.0.0:9000-8000->80-81/tcp, 0.0.0.0:70000->80/tcp, 0.0.0.0:8080->80/tcp", [8080]),
     ],
 )
 def test_published_ports_reads_what_docker_ps_shows(ports, expected):
@@ -57,6 +58,19 @@ def test_parse_port_bindings_reads_the_container_config():
         "zzzz|{}",
     ])
     assert parse_port_bindings(stdout) == {ID_STOP: [2283], ID_NEW: []}
+
+
+def test_parse_port_bindings_skips_what_is_not_a_usable_binding():
+    # `null`: keine Zuordnung gesetzt.
+    stdout = "\n".join([
+        f"{ID_STOP}0123456789|null",
+        f"{ID_NEW}0123456789|" + json.dumps({
+            "80/tcp": ["8080", None, {"HostIp": "", "HostPort": "70000"}, {"HostIp": "", "HostPort": "0"},
+                       {"HostIp": "", "HostPort": "65535"}, {"HostIp": "", "HostPort": "8081"}],
+            "81/tcp": "kaputt",
+        }),
+    ])
+    assert parse_port_bindings(stdout) == {ID_STOP: [], ID_NEW: [8081, 65535]}
 
 
 class _CountingExec:
@@ -168,8 +182,8 @@ async def test_an_unreachable_server_keeps_its_address():
 
 
 def test_module_level_names_of_the_catalog_are_defined_once():
-    """Eine zweite Konstante gleichen Namens weiter unten im Modul (etwa aus einem anderen Zweig) ueberschriebe die erste
-    still -- so waere die Port-Pruefung gestoppter Container bei kurzen IDs nie gelaufen."""
+    """Eine zweite Konstante gleichen Namens weiter unten im Modul (etwa aus einem anderen Zweig) überschriebe die erste
+    still -- so wäre die Port-Prüfung gestoppter Container bei kurzen IDs nie gelaufen."""
     import ast
 
     import nodvard_deck_ext_docker.capabilities as module

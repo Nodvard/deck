@@ -11,13 +11,13 @@ der lokale asyncssh-Server in test_core_ssh.py."""
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, Header, Request
+from local_server_helpers import serve_app
 from raw_http_helpers import BROKEN_ANSWERS, REDIRECT_ANSWERS, raw_http_server
 
 from nodvard_deck.ext.context import build_context
@@ -76,10 +76,6 @@ async def fake_ntfy_server():
     """Ein echter, lokal laufender uvicorn.Server, der ntfys JSON-Publish- und
     Health-Protokoll nachbildet -- kein Mock der `httpx`-Ebene, ein echter
     HTTP-Roundtrip (dieselbe Begruendung wie `running_app` in conftest.py)."""
-    import socket
-
-    import uvicorn
-
     app = FastAPI()
     received: list[dict] = []
     healthy = {"value": True}
@@ -94,27 +90,8 @@ async def fake_ntfy_server():
     async def health():
         return {"healthy": healthy["value"]}
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off")
-    server = uvicorn.Server(config)
-    serve_task = asyncio.ensure_future(server.serve())
-    for _ in range(200):
-        if server.started:
-            break
-        await asyncio.sleep(0.01)
-
-    try:
-        yield f"http://127.0.0.1:{port}", received, healthy
-    finally:
-        server.should_exit = True
-        try:
-            await asyncio.wait_for(serve_task, timeout=5.0)
-        except asyncio.TimeoutError:
-            serve_task.cancel()
+    async with serve_app(app) as server_url:
+        yield server_url, received, healthy
 
 
 @pytest.mark.asyncio
@@ -252,9 +229,6 @@ EVIL_LOCATION = "https://angreifer.example/phish?x=geheim"
 @pytest.fixture
 async def scripted_ntfy_server():
     """Lokaler Server, der jede Anfrage mit einem vorgegebenen Status und Headern beantwortet."""
-    import socket
-
-    import uvicorn
     from fastapi import Response
 
     app = FastAPI()
@@ -265,24 +239,8 @@ async def scripted_ntfy_server():
         script["calls"].append(f"{request.method} /{path}")
         return Response(content=b'{"error":"geheim-text-vom-server"}', status_code=script["status"], headers=script["headers"], media_type="application/json")
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off"))
-    serve_task = asyncio.ensure_future(server.serve())
-    for _ in range(200):
-        if server.started:
-            break
-        await asyncio.sleep(0.01)
-    try:
-        yield f"http://127.0.0.1:{port}", script
-    finally:
-        server.should_exit = True
-        try:
-            await asyncio.wait_for(serve_task, timeout=5.0)
-        except asyncio.TimeoutError:
-            serve_task.cancel()
+    async with serve_app(app) as server_url:
+        yield server_url, script
 
 
 async def _channel(db_session, tmp_path, test_settings, server_url: str):

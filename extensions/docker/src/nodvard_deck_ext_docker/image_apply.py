@@ -1,7 +1,5 @@
-"""Image-Updates einspielen, die reinen Teile: erkennen, ob sich ein Container aktualisieren lässt, Befehle bauen.
-
-Ausgaben lesen und beurteilen gehört dazu; alles, was Hosts anspricht, steht in `applier.py`.
-"""
+"""Image-Updates einspielen, die reinen Teile: erkennen, ob sich ein Container aktualisieren lässt, Befehle bauen,
+Ausgaben lesen und beurteilen. Alles, was Hosts anspricht, steht in `applier.py`."""
 
 from __future__ import annotations
 
@@ -151,14 +149,17 @@ def _bad_field(field: str) -> NotUpdatable:
     return NotUpdatable("labels", f"Compose-Angaben ungewöhnlich ({field}) – aus Sicherheitsgründen kein Update über Nodvard Deck.")
 
 
-# Bildnamen (letzter Teil des Repositorys), an denen das Dashboard sich selbst erkennt.
-SELF_IMAGE_NAMES = frozenset({"lattice", "nodvard-deck", "nodvard"})
-# Registry-Images: `<registry>/nodvard/deck` (das Dashboard) und `<registry>/nodvard/deck-updater` (sein Update-Helfer).
-# Den Helfer tauscht das Docker-Modul nie aus: Er hat Zugriff auf Docker, und mitten in einem Update des Dashboards
-# neu angelegt, ließe er es halb fertig liegen.
+# Bildnamen (letzter Teil des Repositorys), an denen das Dashboard sich selbst erkennt; `nodvard-dock` ist ein selbst
+# gebautes Nodvard Dock.
+DOCK_SELF_BUILT_NAME = "nodvard-dock"
+SELF_IMAGE_NAMES = frozenset({"lattice", "nodvard-deck", "nodvard", DOCK_SELF_BUILT_NAME})
+# Registry-Images: `<registry>/nodvard/deck` (das Dashboard), `<registry>/nodvard/dock` (Nodvard Dock, das Dashboard nur
+# mit diesem Modul) und `<registry>/nodvard/deck-updater` (sein Update-Helfer). Den Helfer tauscht das Docker-Modul nie
+# aus: Er hat Zugriff auf Docker, und mitten in einem Update des Dashboards neu angelegt, ließe er es halb fertig liegen.
 OFFICIAL_IMAGE_PATH = ("nodvard", "deck")
+DOCK_IMAGE_PATH = ("nodvard", "dock")
 HELPER_IMAGE_PATH = ("nodvard", "deck-updater")
-SELF_IMAGE_PATHS = (OFFICIAL_IMAGE_PATH, HELPER_IMAGE_PATH)
+SELF_IMAGE_PATHS = (OFFICIAL_IMAGE_PATH, DOCK_IMAGE_PATH, HELPER_IMAGE_PATH)
 OFFICIAL_REGISTRY = "ghcr.io"
 LABEL_IMAGE_TITLE = "org.opencontainers.image.title"
 HELPER_IMAGE_TITLE = "Nodvard Deck Update-Helfer"
@@ -172,6 +173,14 @@ SELF_WHY_HELPER = (
     "Das ist der Update-Helfer von Nodvard Deck – ihn aktualisierst du auf dem Server mit "
     "„docker compose pull updater“ und danach „docker compose up -d updater“."
 )
+SELF_WHY_DOCK = (
+    "Das ist Nodvard Dock selbst – du aktualisierst es auf dem Server im Ordner mit seiner compose.yml: erst "
+    "„docker compose pull“, danach „docker compose up -d“."
+)
+SELF_WHY_DOCK_BUILT = (
+    "Das ist Nodvard Dock selbst, selbst gebaut – baue das Image neu und führe danach auf dem Server im Ordner mit seiner "
+    "compose.yml „docker compose up -d“ aus."
+)
 
 
 def _repo_parts(image: str) -> list[str] | None:
@@ -181,7 +190,8 @@ def _repo_parts(image: str) -> list[str] | None:
 
 
 def is_self_image(image: str) -> bool:
-    """Ist `image` das Dashboard oder sein Update-Helfer? Nur nach dem Repository-Namen, nie nach Tag oder Registry."""
+    """Ist `image` das Dashboard (auch als Nodvard Dock) oder sein Update-Helfer? Nur nach dem Repository-Namen, nie nach
+    Tag oder Registry."""
     parts = _repo_parts(image)
     if parts is None:
         return False
@@ -194,29 +204,31 @@ def is_helper_labels(labels: dict[str, str] | None) -> bool:
 
 
 def self_why(image: str, labels: dict[str, str] | None = None) -> str:
-    """Der Grund ohne Knopf für Nodvard Deck selbst: beim Helfer (nach Name oder Label), wie man ihn aktualisiert;
-    beim offiziellen Image (`ghcr.io/nodvard/deck`) der Weg zu den Updates im Dashboard; sonst (selbst gebaut) das
-    Deploy-Skript."""
+    """Der Grund ohne Knopf für Nodvard Deck selbst: bei Helfer und Nodvard Dock der Weg auf dem Server, beim
+    offiziellen Image (`ghcr.io/nodvard/deck`) der zu den Updates im Dashboard, sonst (selbst gebaut) das Deploy-Skript."""
     parts = _repo_parts(image) or []
     if tuple(parts[-2:]) == HELPER_IMAGE_PATH or is_helper_labels(labels):
         return SELF_WHY_HELPER
+    if tuple(parts[-2:]) == DOCK_IMAGE_PATH:
+        return SELF_WHY_DOCK
+    if parts[-1:] == [DOCK_SELF_BUILT_NAME]:
+        return SELF_WHY_DOCK_BUILT
     if parts == [OFFICIAL_REGISTRY, *OFFICIAL_IMAGE_PATH]:
         return SELF_WHY_OFFICIAL
     return SELF_WHY
 
 
 def classify(info: dict[str, Any], *, own: bool) -> ComposeTarget | NotUpdatable:
-    """Ein `docker container inspect` (`APPLY_FORMAT`) -> Ziel oder Grund; die Reihenfolge der Prüfungen zählt.
-
-    Nur Compose-v2-Container mit Compose-Dateien auf dem Host lassen sich einspielen, alles andere bekommt den Grund.
-    """
+    """Ein `docker container inspect` (`APPLY_FORMAT`) -> Ziel oder Grund; die Reihenfolge der Prüfungen zählt. Nur
+    Compose-v2-Container mit Compose-Dateien auf dem Host lassen sich einspielen, alles andere bekommt den Grund."""
     raw_labels = info.get("labels")
     labels = {str(k): str(v) for k, v in raw_labels.items()} if isinstance(raw_labels, dict) else {}
     image = str(info.get("image") or "")
     name = str(info.get("name") or "").lstrip("/")
 
     # 1. Das Dashboard selbst nie über sich selbst aktualisieren: Bildname `lattice` (alt), `nodvard-deck` (neu), `nodvard`
-    # (Tippvariante), `<registry>/nodvard/deck`; sein Helfer `<registry>/nodvard/deck-updater` auch an seinem Label.
+    # (Tippvariante), `<registry>/nodvard/deck`, `<registry>/nodvard/dock` und `nodvard-dock` (Nodvard Dock); sein Helfer
+    # `<registry>/nodvard/deck-updater` auch an seinem Label.
     if own or is_self_image(image) or is_helper_labels(labels):
         return _why("self", self_why(image, labels))
     # 2. Swarm.
@@ -481,10 +493,8 @@ def _first_line(text: str, limit: int = 200) -> str:
 
 
 def check_config(stdout: str, stderr: str, exit_code: int, t: ComposeTarget) -> NotUpdatable | None:
-    """Wertet `docker compose config --format json` aus.
-
-    Die Ausgabe enthält aufgelöste Umgebungswerte (Passwörter!): sie wird nur gelesen, nie zurückgegeben oder gespeichert.
-    """
+    """Wertet `docker compose config --format json` aus. Die Ausgabe enthält aufgelöste Umgebungswerte (Passwörter!):
+    sie wird nur gelesen, nie zurückgegeben oder gespeichert."""
     if exit_code != 0:
         return _why("config", f"docker compose config meldet einen Fehler: {_first_line(scrub_compose_output(stderr)) or f'Exit-Code {exit_code}'}")
     missing = len(set(UNSET_VAR_RE.findall(stderr or "")))

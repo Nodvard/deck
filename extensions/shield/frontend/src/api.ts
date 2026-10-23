@@ -1,8 +1,12 @@
 /** Gemeinsame Helfer der Nodvard-Shield-Reiter (Aufrufe, Freigabe, Zeitangaben). */
-import { createContext, useContext } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
-import { isActionRunning, runAction, RUNNING_IN_BACKGROUND } from "../../../_shared/frontend/src/actions";
+import {
+  actionReason, describeActionOutcome, isActionRunning, runAction, RUNNING_IN_BACKGROUND, type ActionState,
+} from "../../../_shared/frontend/src/actions";
 import { authedFetch, errorFromBody } from "../../../_shared/frontend/src/api";
+import { deck } from "../../../_shared/frontend/src/deck";
+import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { EXT_API } from "./ids";
 
 /** Server-Ansicht: Kommt man über die Kachel „Sicherheit“ auf der Server-Seite (`?host=<id>`) her, zeigen alle Reiter
@@ -23,22 +27,132 @@ export async function call<T = unknown>(path: string, init: RequestInit = {}): P
   return body as T;
 }
 
+/** Ausgang einer Aktion für die Anzeige. `links` führen zur Stelle, an der man weitermacht (Freigabe, Zugang einrichten). */
+export interface ActionResult {
+  kind: "ok" | "error" | "warn" | "info";
+  text: string;
+  links?: { href: string; label: string }[];
+}
+
+function outcome(kind: ActionResult["kind"], text: string, links: ActionResult["links"] = []): ActionResult {
+  return links.length ? { kind, text, links } : { kind, text };
+}
+
+/** Holt den Stand der Aktion nach, wenn die erste Antwort den Grund des Scheiterns nicht nennt. */
+async function withReason(action: ActionState): Promise<ActionState> {
+  const id = action.id ?? action.action_id;
+  if (!id || actionReason(action)) return action;
+  try {
+    const res = await authedFetch(`/actions/${encodeURIComponent(id)}`);
+    return res.ok ? { ...action, ...((await res.json()) as ActionState) } : action;
+  } catch {
+    return action;
+  }
+}
+
 /** Schlägt die Aktion über das Gate vor und bestätigt sie gleich, wenn der Nutzer freigeben darf. */
-export async function proposeAndApprove(path: string, body: unknown, risk: "low" | "medium" | "high", signal?: AbortSignal): Promise<string> {
+export async function proposeAndApprove(path: string, body: unknown, risk: "low" | "medium" | "high", signal?: AbortSignal): Promise<ActionResult> {
   // Die Route nennt keine Risikostufe, für die Freigabe-Prüfung gilt `risk`. Läuft die Aktion länger als die Anfrage
   // wartet, fragt runAction alle 3 s nach, bis `signal` (Seite verlassen) abbricht: dann gilt sie als „läuft im
   // Hintergrund“.
-  const { action, approved } = await runAction(path, { method: "POST", body: JSON.stringify(body) }, { risk, signal });
-  const status = action.status ?? "";
-  if (approved) {
-    if (status === "succeeded") return "Erledigt.";
-    if (isActionRunning(status)) return RUNNING_IN_BACKGROUND;
-    return `Fehlgeschlagen: ${action.result?.error ?? status}`;
+  const { action } = await runAction(path, { method: "POST", body: JSON.stringify(body) }, { risk, signal });
+  const id = action.id ?? action.action_id;
+  switch (action.status) {
+    case "succeeded":
+      return outcome("ok", "Erledigt.");
+    case "proposed":
+      return outcome("warn", "Wartet auf Freigabe unter „Aktionen“.", id ? [{ href: `/actions?action=${encodeURIComponent(id)}`, label: "Zur Freigabe" }] : []);
+    case "failed":
+    case "denied": {
+      const { tone, text } = describeActionOutcome(await withReason(action));
+      const needsAccess = text.includes("root-Rechte") && deck().hasPermission("hosts.write");
+      // Von einem Menschen abgelehnt ist eine Entscheidung, kein Fehler.
+      return outcome(tone === "error" ? "error" : "warn", text, needsAccess ? [{ href: "/settings/hosts", label: "Zugang einrichten" }] : []);
+    }
   }
-  if (status === "proposed") return "Wartet auf Freigabe unter „Aktionen“.";
-  if (status === "succeeded") return "Erledigt.";
-  if (isActionRunning(status)) return RUNNING_IN_BACKGROUND;
-  return status === "denied" ? "Von der Sperrliste abgelehnt." : `Status: ${status}`;
+  if (isActionRunning(action.status)) return outcome("info", RUNNING_IN_BACKGROUND);
+  return outcome("warn", describeActionOutcome(action).text);
+}
+
+/** Schlüssel (z. B. `server:paket`) der Aktionen, die gerade laufen: sperrt deren Knöpfe, ein zweiter Klick startet nichts. */
+export interface BusyKeys {
+  busy: ReadonlySet<string>;
+  begin: (key: string) => boolean;
+  end: (key: string) => void;
+}
+
+export function useBusyKeys(): BusyKeys {
+  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
+  const running = useRef(new Set<string>());
+  const begin = useCallback((key: string): boolean => {
+    if (running.current.has(key)) return false;
+    running.current.add(key);
+    setBusy(new Set(running.current));
+    return true;
+  }, []);
+  const end = useCallback((key: string) => {
+    running.current.delete(key);
+    setBusy(new Set(running.current));
+  }, []);
+  return { busy, begin, end };
+}
+
+/** Laufende Aktionen, ihre Hinweise und Abbruch beim Verlassen, gehalten von der Seite: Ein Reiter wird beim Wechsel
+ *  abgebaut, die Aktion läuft weiter, bleibt gesperrt und meldet ihr Ergebnis trotzdem. */
+export interface PageActions {
+  keys: BusyKeys;
+  signal: () => AbortSignal;
+  /** Setzt den Hinweis der Aktion `key`, `null` nimmt ihn weg. */
+  report: (key: string, notice: ActionResult | null) => void;
+}
+
+export type ActionNotices = ReadonlyArray<readonly [key: string, notice: ActionResult]>;
+
+/** Ein Hinweis je Aktion: Das Ergebnis ersetzt den Fortschritt an derselben Stelle, andere Aktionen bleiben stehen. */
+export function useActionNotices(): { notices: ActionNotices; report: PageActions["report"] } {
+  const [notices, setNotices] = useState<ActionNotices>([]);
+  const report = useCallback((key: string, notice: ActionResult | null) => {
+    setNotices((prev) => {
+      const at = prev.findIndex(([k]) => k === key);
+      if (!notice) return at < 0 ? prev : prev.filter((_, i) => i !== at);
+      return at < 0 ? [...prev, [key, notice]] : prev.map((entry, i) => (i === at ? [key, notice] : entry));
+    });
+  }, []);
+  return { notices, report };
+}
+
+export const PageActionsContext = createContext<PageActions | null>(null);
+
+/** Die der Seite; ein Reiter allein hat eigene und zeigt deren Hinweise (`notices`) dann selbst. */
+export function usePageActions(): PageActions & { notices: ActionNotices | null } {
+  const keys = useBusyKeys();
+  const signal = useUnmountSignal();
+  const own = useActionNotices();
+  const page = useContext(PageActionsContext);
+  return page ? { ...page, notices: null } : { keys, signal, report: own.report, notices: own.notices };
+}
+
+/** Führt eine Aktion aus, die einen Reiterwechsel überdauert: Fortschritt und Ergebnis meldet die Seite unter `key`. */
+export async function track(page: PageActions, key: string, label: string, progress: string, fn: () => Promise<ActionResult>) {
+  if (!page.keys.begin(key)) return;
+  page.report(key, { kind: "info", text: progress });
+  try {
+    const result = await fn();
+    page.report(key, { ...result, text: `${label}: ${result.text}` });
+  } catch (err) {
+    page.report(key, { kind: "error", text: `${label}: ${err instanceof Error ? err.message : String(err)}` });
+  } finally {
+    page.keys.end(key);
+  }
+}
+
+/** Lädt neu, sobald eine laufende Aktion fertig ist, auch eine aus einem früheren Aufbau des Reiters. */
+export function useReloadWhenSettled(busy: ReadonlySet<string>, load: () => void) {
+  const before = useRef(busy.size);
+  useEffect(() => {
+    if (busy.size < before.current) load();
+    before.current = busy.size;
+  }, [busy, load]);
 }
 
 export function when(ts: number | null | undefined): string {

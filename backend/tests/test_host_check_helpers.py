@@ -41,13 +41,10 @@ SHIELD = _helper("fake-a", 2)
 OTHER = _helper("fake-b", 1)
 
 
-@pytest.fixture
-def modules(client):
-    """Zwei vorgetäuschte eingeschaltete Erweiterungen mit Hilfsskript und root-Bedarf; `fake-c` braucht root, hat aber
-    keins. Nach `client`: Der Start der App setzt die Laufzeit zurück."""
+def _fake_modules(entries):
     runtime = get_extension_runtime()
     host_check.reset_state()
-    for ext_id, helper in (("fake-a", SHIELD), ("fake-b", OTHER), ("fake-c", None)):
+    for ext_id, helper in entries:
         manifest = ExtensionManifest(id=ext_id, name=f"Modul {ext_id}", version="0.1.0", api_version="0.1", entrypoint="x:y")
         runtime.loaded[ext_id] = LoadedExtension(
             manifest=manifest, instance=None, ctx=None, granted_permissions=[], root_helper=helper
@@ -55,9 +52,22 @@ def modules(client):
         runtime.ui.register_host_requirement(ext_id, HostRequirementSpec(id="root", label="Root", needs_root=True))
     yield
     host_check.reset_state()
-    for ext_id in ("fake-a", "fake-b", "fake-c"):
+    for ext_id, _ in entries:
         runtime.loaded.pop(ext_id, None)
         runtime.ui.clear_extension(ext_id)
+
+
+@pytest.fixture
+def modules(client):
+    """Zwei vorgetäuschte eingeschaltete Erweiterungen mit Hilfsskript und root-Bedarf; `fake-c` braucht root, hat aber
+    keins. Nach `client`: Der Start der App setzt die Laufzeit zurück."""
+    yield from _fake_modules((("fake-a", SHIELD), ("fake-b", OTHER), ("fake-c", None)))
+
+
+@pytest.fixture
+def helper_modules(client):
+    """Wie `modules`, aber jedes Modul mit root-Bedarf hat ein Hilfsskript."""
+    yield from _fake_modules((("fake-a", SHIELD), ("fake-b", OTHER)))
 
 
 async def _owner(client) -> dict:
@@ -201,7 +211,7 @@ def test_lines_before_the_sudo_list_cannot_be_faked_by_it():
 @pytest.mark.asyncio
 async def test_root_needs_no_helper():
     state = host_check._State()
-    await host_check._step_helpers(state, None, "root", [SHIELD])  # type: ignore[arg-type]  # für root keine Abfrage
+    host_check._step_helpers(state, "root", [SHIELD], None)  # für root keine Abfrage
     assert [(i.id, i.status, i.detail) for i in state.items] == [
         ("helper:fake-a", "skipped", "Angemeldet als root – kein Hilfsskript nötig.")
     ]
@@ -225,6 +235,120 @@ async def test_setup_brings_the_helpers_of_the_modules_only_with_sudo(client, mo
 
     plain = (await client.get(url, headers=headers)).json()
     assert plain["helpers"] == [] and "HS " not in plain["script"]
+
+
+def _tight(*helpers: RootHelperFile) -> str:
+    return "User testuser may run the following commands:\n" + "".join(
+        f"    (root) NOPASSWD: {helper.install_path}\n" for helper in helpers
+    )
+
+
+NO_PASSWORDLESS_SUDO = (1, "", "sudo: a password is required\n")
+ENOUGH = "sudo erlaubt nur die Hilfsskripte der Module, keine volle Regel. Das reicht."
+NOT_ENOUGH = "sudo erlaubt nur einzelne Hilfsskripte. Hier ohne root: "
+
+
+@pytest.mark.asyncio
+async def test_helper_rules_alone_are_enough_when_every_module_has_one(client, helper_modules, local_ssh_server, fake_probe):
+    _, port, *_ = local_ssh_server
+    headers = await _owner(client)
+    host_id = await _host_with_login(client, headers, port)
+    fake_probe[host_check.SUDO_COMMAND] = NO_PASSWORDLESS_SUDO
+    fake_probe[helper_check_command([SHIELD, OTHER])] = (
+        0, _answer(_present(SHIELD), _present(OTHER), sudo_list=_tight(SHIELD, OTHER)), "",
+    )
+    r = await client.post(CHECK.format(host_id), headers=headers)
+    items = {item["id"]: item for item in r.json()["items"]}
+    assert (items["root"]["status"], items["root"]["detail"]) == ("ok", ENOUGH)
+    assert items["helper:fake-a"]["detail"] == "Version 2, nur root kann es ändern. Eigene sudo-Regel vorhanden."
+    assert items["helper:fake-b"]["status"] == "ok" and r.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_helper_rules_are_not_enough_for_a_module_without_one(client, modules, local_ssh_server, fake_probe):
+    _, port, *_ = local_ssh_server
+    headers = await _owner(client)
+    host_id = await _host_with_login(client, headers, port)
+    fake_probe[host_check.SUDO_COMMAND] = NO_PASSWORDLESS_SUDO
+    fake_probe[helper_check_command([SHIELD, OTHER])] = (
+        0, _answer(_present(SHIELD), _present(OTHER), sudo_list=_tight(SHIELD, OTHER)), "",
+    )
+    root = (await _items(client, headers, host_id))["root"]
+    assert (root["status"], root["detail"]) == ("warn", f"{NOT_ENOUGH}Module ohne Hilfsskript.")
+    assert "Server neu einrichten" in root["hint"]
+
+
+@pytest.mark.parametrize(
+    ("first", "rules"),
+    [
+        (_present(SHIELD), ""),
+        (_present(SHIELD, sha="0" * 64), _tight(SHIELD, OTHER)),
+        (_present(SHIELD, owner="bad"), _tight(SHIELD, OTHER)),
+        (_present(SHIELD, version="1", sha="1" * 64), _tight(SHIELD, OTHER)),
+        (_present(SHIELD), _tight(OTHER) + f"    (root) NOPASSWD: /usr/bin/tee {SHIELD.install_path}\n"),
+        (_present(SHIELD), _tight(OTHER) + f"    (root) PASSWD: {SHIELD.install_path}\n"),
+        (_present(SHIELD), _tight(OTHER) + f"    (www-data) NOPASSWD: {SHIELD.install_path}\n"),
+    ],
+    ids=["ohne-regeln", "anderer-inhalt", "besitzer", "veraltet", "nur-als-argument", "mit-passwort", "anderer-benutzer"],
+)
+@pytest.mark.asyncio
+async def test_without_the_full_rule_root_is_only_ok_when_every_script_is_ready(
+    client, helper_modules, local_ssh_server, fake_probe, first, rules
+):
+    _, port, *_ = local_ssh_server
+    headers = await _owner(client)
+    host_id = await _host_with_login(client, headers, port)
+    fake_probe[host_check.SUDO_COMMAND] = NO_PASSWORDLESS_SUDO
+    fake_probe[helper_check_command([SHIELD, OTHER])] = (0, _answer(first, _present(OTHER), sudo_list=rules), "")
+    root = (await _items(client, headers, host_id))["root"]
+    assert root["status"] == "warn" and root["detail"] != ENOUGH
+
+
+@pytest.mark.asyncio
+async def test_a_missing_helper_next_to_helper_rules_means_no_root(client, helper_modules, local_ssh_server, fake_probe):
+    _, port, *_ = local_ssh_server
+    headers = await _owner(client)
+    host_id = await _host_with_login(client, headers, port)
+    fake_probe[host_check.SUDO_COMMAND] = NO_PASSWORDLESS_SUDO
+    fake_probe[helper_check_command([SHIELD, OTHER])] = (
+        0, _answer(_present(SHIELD), _missing(OTHER), sudo_list=_tight(SHIELD)), "",
+    )
+    items = await _items(client, headers, host_id)
+    assert (items["root"]["status"], items["root"]["detail"]) == ("warn", f"{NOT_ENOUGH}Modul fake-b.")
+    assert items["helper:fake-a"]["status"] == "ok"
+    assert (items["helper:fake-b"]["status"], items["helper:fake-b"]["detail"]) == (
+        "warn", "Fehlt auf dem Server. Ohne das Skript hat dieses Modul hier kein root.",
+    )
+
+
+@pytest.mark.asyncio
+async def test_setup_gives_only_helper_rules_when_they_cover_every_module(client, helper_modules):
+    headers = await _owner(client)
+    host = (await client.post("/api/v1/hosts", json={"name": "pi", "address": "10.0.0.5"}, headers=headers)).json()
+    generated = (await client.post(GENERATE.format(host["id"]), json={}, headers=headers)).json()
+    url = f"/api/v1/hosts/{host['id']}/credentials/{generated['credential']['id']}/setup"
+
+    narrow = (await client.get(url, params={"sudo": "true"}, headers=headers)).json()
+    assert (narrow["sudo"], narrow["full_sudo"]) == (True, False)
+    assert "NOPASSWD: ALL" not in narrow["script"] and "HS fake-a-root" in narrow["script"]
+    assert not any("praktisch alles" in n for n in narrow["notes"])
+
+    full = (await client.get(url, params={"sudo": "true", "full_sudo": "true"}, headers=headers)).json()
+    assert (full["sudo"], full["full_sudo"]) == (True, True)
+    assert "NOPASSWD: ALL" in full["script"] and "HS fake-a-root" in full["script"]
+
+    plain = (await client.get(url, params={"full_sudo": "true"}, headers=headers)).json()
+    assert (plain["sudo"], plain["full_sudo"]) == (False, False) and "sudoers" not in plain["script"]
+
+
+@pytest.mark.asyncio
+async def test_setup_keeps_the_full_rule_for_a_module_without_helper(client, modules):
+    headers = await _owner(client)
+    host = (await client.post("/api/v1/hosts", json={"name": "pi", "address": "10.0.0.5"}, headers=headers)).json()
+    generated = (await client.post(GENERATE.format(host["id"]), json={}, headers=headers)).json()
+    url = f"/api/v1/hosts/{host['id']}/credentials/{generated['credential']['id']}/setup"
+    body = (await client.get(url, params={"sudo": "true"}, headers=headers)).json()
+    assert body["full_sudo"] is True and "NOPASSWD: ALL" in body["script"] and "HS fake-c" not in body["script"]
 
 
 @pytest.mark.skipif(sys.platform == "win32" or shutil.which("sh") is None, reason="braucht eine echte POSIX-Shell")

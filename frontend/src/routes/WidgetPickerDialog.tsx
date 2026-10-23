@@ -31,14 +31,16 @@ interface Props {
   widgets: WidgetOut[];
   items: DashboardLayoutItem[];
   onChange: (items: DashboardLayoutItem[]) => void;
-  /** Optional von aussen gesteuert (der Leerzustand der Startseite oeffnet den Dialog). */
+  /** Optional von außen gesteuert (der Leerzustand der Startseite öffnet den Dialog). */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   /** Platzierte Widgets, deren Modul `meta.state = "not_configured"` meldet; die Startseite blendet sie aus. */
   notConfigured?: ReadonlySet<string>;
+  /** Im Bearbeiten-Modus ändert der Dialog nur den Entwurf; gespeichert wird mit „Fertig“ auf der Startseite. */
+  drafting?: boolean;
 }
 
-export function WidgetPickerDialog({ widgets, items, onChange, open, onOpenChange, notConfigured }: Props) {
+export function WidgetPickerDialog({ widgets, items, onChange, open, onOpenChange, notConfigured, drafting = false }: Props) {
   const canManageExtensions = useAuthStore((s) => s.hasPermission("extensions.manage"));
   const placedKeys = new Set(items.filter((i) => !isHiddenItem(i)).map(itemKey));
 
@@ -122,10 +124,15 @@ export function WidgetPickerDialog({ widgets, items, onChange, open, onOpenChang
               action={canManageExtensions ? <ButtonLink to="/settings/extensions">Module ansehen</ButtonLink> : undefined}
             />
           )}
-          <div className="mt-4 flex justify-end">
+          <div className="mt-4 flex items-center justify-end gap-3">
+            {drafting && (
+              <p className="mr-auto text-xs text-white/55" data-testid="picker-draft-hint">
+                Gespeichert wird erst mit „Fertig“ auf der Startseite.
+              </p>
+            )}
             <Dialog.Close asChild>
               <button type="button" className="rounded bg-white/10 px-3 py-1.5 text-sm hover:bg-white/20">
-                Fertig
+                {drafting ? "Schließen" : "Fertig"}
               </button>
             </Dialog.Close>
           </div>
