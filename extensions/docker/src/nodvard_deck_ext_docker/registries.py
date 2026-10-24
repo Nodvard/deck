@@ -28,8 +28,11 @@ STORED_NOTE = (
     "„Abmelden“ entfernt sie wieder."
 )
 LOOK = "Den Stand zeigt die Liste nach dem Neuladen."
+NOT_LISTED = "Diese Registry ist nicht (mehr) eingetragen. Bitte die Einstellungen prüfen."
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
-_ADDRESS_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?\Z")
+# Ein Port liegt zwischen 1 und 65535, ohne führende Null.
+_ADDRESS_RE = re.compile(
+    r"^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?\Z")
 _USER_RE = re.compile(r"^\S{1,255}\Z")
 DOCKER_HUB_KEYS = ("https://index.docker.io/v1/", "index.docker.io", "docker.io", "registry-1.docker.io")
 
@@ -50,6 +53,10 @@ class Registry:
         return "" if self.address in ("docker.io", "index.docker.io", "registry-1.docker.io") else self.address
 
 
+def usable(registry: Registry) -> bool:
+    return bool(_NAME_RE.match(registry.name) and _ADDRESS_RE.match(registry.address) and _USER_RE.match(registry.username))
+
+
 def registries(settings: dict[str, Any]) -> list[Registry]:
     """Die gültigen Einträge aus den Einstellungen; ein ungültiger fällt weg, ein doppelter Name mit allen seinen Einträgen."""
     out = []
@@ -57,7 +64,7 @@ def registries(settings: dict[str, Any]) -> list[Registry]:
         if not isinstance(raw, dict):
             continue
         entry = Registry(str(raw.get("name") or ""), str(raw.get("address") or ""), str(raw.get("username") or ""))
-        if _NAME_RE.match(entry.name) and _ADDRESS_RE.match(entry.address) and _USER_RE.match(entry.username):
+        if usable(entry):
             out.append(entry)
     # Das Passwort hängt am Namen; bei zwei gleichen Namen wäre offen, zu welcher Adresse es gehört.
     twice = duplicate_names(settings)
@@ -113,13 +120,13 @@ def _hosts(keys: Any) -> set[str]:
 
 
 def logged_in(config: dict[str, Any]) -> tuple[set[str], set[str], str | None]:
-    """(Registries mit Anmeldung, Registries mit eigenem Hilfsprogramm, Hilfsprogramm für alle) aus `config.json`; geprüft
-    wird nur, ob Einträge da sind, nie ihr Inhalt."""
+    """(Registries mit Anmeldung in der Datei, Registries mit eigenem Hilfsprogramm, Hilfsprogramm für alle) aus `config.json`;
+    geprüft wird nur, ob Einträge da sind, nie ihr Inhalt."""
     store = config.get("credsStore")
     store = store if isinstance(store, str) and store else None
     auths = config.get("auths")
-    if store is None and isinstance(auths, dict):
-        # Ohne Hilfsprogramm ist ein leerer Eintrag nur ein Rest, mit dem Docker ohne Anmeldung holt.
+    if isinstance(auths, dict):
+        # Ein leerer Eintrag ist ein Rest oder ein Verweis auf das Hilfsprogramm; eine Anmeldung belegt er nicht.
         auths = {key: value for key, value in auths.items()
                  if isinstance(value, dict) and any(value.get(field) for field in ("auth", "identitytoken", "registrytoken"))}
     return _hosts(auths), _hosts(config.get("credHelpers")), store
@@ -202,8 +209,8 @@ class Registries:
             out["error"] = f"{what}: {str(exc) or type(exc).__name__}"
         for entry in registries(settings):
             key = entry.address if entry.login_address else "docker.io"
-            # Mit eigenem Hilfsprogramm sagt die Datei nichts darüber, ob gerade Zugangsdaten hinterlegt sind.
-            known = out["error"] is None and key not in helped
+            # Mit einem Hilfsprogramm sagt die Datei nichts darüber, ob gerade Zugangsdaten hinterlegt sind.
+            known = out["error"] is None and out["creds_store"] is None and key not in helped
             out["registries"].append({
                 "name": entry.name, "address": entry.address, "username": entry.username,
                 "logged_in": (key in found) if known else None,
@@ -226,8 +233,16 @@ class DockerRegistryExecutor:
         if getattr(req.proposed_by.type, "value", req.proposed_by.type) != "user":
             return ActionResult(success=False, error="Bei einer Registry meldet nur ein Mensch über die Docker-Seite an.")
         registry = await self._registries.find(str(payload.get("registry") or ""))
-        if registry is None or registry.address != payload.get("address"):
-            return ActionResult(success=False, error="Diese Registry ist nicht (mehr) eingetragen. Bitte die Einstellungen prüfen.")
+        if registry is None or not usable(registry):
+            return ActionResult(success=False, error=NOT_LISTED)
+        if "username" not in payload:
+            return ActionResult(success=False, error=(
+                "Dieser Vorschlag stammt aus einer älteren Version von Nodvard Deck und nennt den Benutzernamen nicht. Schlag es bitte "
+                "noch einmal vor."))
+        if (registry.address, registry.username) != (payload.get("address"), payload.get("username")):
+            return ActionResult(success=False, error=(
+                f"Adresse oder Benutzername von „{registry.name}“ haben sich seit dem Vorschlag geändert. "
+                "Freigegeben wird nur, was vorgeschlagen war; schlag es mit den neuen Angaben noch einmal vor."))
         host = await self._ctx.hosts.get(req.host_ref) if req.host_ref else None
         if host is None:
             return ActionResult(success=False, error="Server nicht gefunden.")
@@ -241,7 +256,7 @@ class DockerRegistryExecutor:
         try:
             argv = cmd_login(registry)
         except ValueError:
-            return ActionResult(success=False, error="Diese Registry ist nicht (mehr) eingetragen. Bitte die Einstellungen prüfen.")
+            return ActionResult(success=False, error=NOT_LISTED)
         try:
             handle = await self._ctx.secrets.get_handle(registry.secret_label)
             async with self._ctx.vault_use(handle) as secret:
@@ -262,7 +277,11 @@ class DockerRegistryExecutor:
 
     async def _logout(self, host: Any, registry: Registry) -> ActionResult:
         try:
-            result = await self._ctx.exec.run_argv(host, cmd_logout(registry), timeout_s=LOGIN_TIMEOUT_S)
+            argv = cmd_logout(registry)
+        except ValueError:
+            return ActionResult(success=False, error=NOT_LISTED)
+        try:
+            result = await self._ctx.exec.run_argv(host, argv, timeout_s=LOGIN_TIMEOUT_S)
         except Exception as exc:  # noqa: BLE001 - als Grund melden
             return ActionResult(success=False, error=f"Abmelden bei {registry.address} ist gescheitert: {_broken(exc, 'Abmelden', 'logout')}")
         if result.exit_code != 0:
@@ -300,7 +319,7 @@ def registry_routes(registries_: Registries, editor: StackEditor, docker_host: A
         decision = await editor.propose(ActionRequest(
             action_type=action_type, host_ref=host.id, risk=risk, proposed_by=actor,
             reason=f"Docker bei {registry.address} {verb} (als {registry.username}).",
-            payload={"registry": registry.name, "address": registry.address},
+            payload={"registry": registry.name, "address": registry.address, "username": registry.username},
         ))
         return {"action_id": decision.action_id, "status": decision.status.value, "risk": risk.value, "detail": decision.detail}
 

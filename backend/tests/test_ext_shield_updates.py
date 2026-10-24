@@ -492,7 +492,7 @@ async def test_server_without_a_known_package_manager_is_unsupported_not_failed(
     from nodvard_deck_ext_shield.patching import UpdateCenter
 
     engine, sm = await _engine()
-    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update"})
+    ctx = _Ctx(sm, {"auto_updates_enabled": True, "auto_updates_mode": "security", "auto_updates_host_tag": "auto-update"})
 
     async def nas(host, command, timeout_s=60):
         ctx.commands.append(command)
@@ -502,7 +502,7 @@ async def test_server_without_a_known_package_manager_is_unsupported_not_failed(
     center = UpdateCenter(ctx, Defender(ctx))
     [st] = await center.check([ctx._host])
     assert st["unsupported"] is True and st["manager"] is None
-    # "Kein Paketmanager" ist ein gueltiges Ergebnis: geprueft, nicht "noch nie erfolgreich geprueft"
+    # "Kein Paketmanager" ist ein gültiges Ergebnis: geprüft, nicht "noch nie erfolgreich geprüft"
     assert isinstance(st["checked_at"], float) and st["attempted_at"] == st["checked_at"]
     summary = (await center.overview())["summary"]
     assert (summary["errors"], summary["checked"], summary["hosts"]) == (0, 0, 1)
@@ -551,30 +551,44 @@ async def test_auto_update_runs_only_on_tagged_hosts_and_reports():
     from nodvard_deck_ext_shield.patching import UpdateCenter
 
     engine, sm = await _engine()
-    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update"})
+    ctx = _Ctx(sm, {"auto_updates_enabled": True, "auto_updates_mode": "security", "auto_updates_host_tag": "auto-update"})
     center = UpdateCenter(ctx, Defender(ctx))
     res = await center.auto_update()
     assert res == {"hosts": 1, "failed": 0}
     assert ctx.notes and "Raspberry Pi: 2 Paket(e) aktualisiert" in ctx.notes[-1].body
-    assert ctx.notes[-1].payload["host_id"] == "h1"  # ein Server im Bericht: die naechtliche Meldung gehoert ihm
+    assert ctx.notes[-1].payload["host_id"] == "h1"  # ein Server im Bericht: die nächtliche Meldung gehört ihm
     assert not any("shutdown" in c for c in ctx.commands)  # ohne auto_reboot kein Neustart
     assert any("systemd-run" in c and "only-upgrade" in c and "sudo -n" in c for c in ctx.commands)
 
-    ctx2 = _Ctx(sm, {"auto_updates_host_tag": "gibt-es-nicht"})
+    ctx2 = _Ctx(sm, {"auto_updates_enabled": True, "auto_updates_host_tag": "gibt-es-nicht"})
     assert (await UpdateCenter(ctx2, Defender(ctx2)).auto_update())["hosts"] == 0
     await engine.dispose()
 
 
 @pytest.mark.asyncio
+async def test_auto_update_does_nothing_while_the_automation_is_off():
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.patching import AUTO_UPDATES_OFF, UpdateCenter
+
+    engine, sm = await _engine()
+    for settings in ({}, {"auto_updates_enabled": False, "auto_updates_host_tag": "auto-update", "auto_reboot": True}):
+        ctx = _Ctx(sm, settings)
+        res = await UpdateCenter(ctx, Defender(ctx)).auto_update()
+        assert res == {"hosts": 0, "failed": 0, "skipped": AUTO_UPDATES_OFF}
+        assert ctx.commands == [] and ctx.notes == []
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_auto_update_report_over_several_servers_names_all_of_them():
-    """Der naechtliche Bericht ueber mehrere Server traegt alle (`host_ids`),
-    nicht nur einen -- ein Wartungsfenster haelt ihn nur zurueck, wenn es fuer alle gilt."""
+    """Der nächtliche Bericht über mehrere Server trägt alle (`host_ids`); ein Wartungsfenster hält ihn nur zurück, wenn
+    es für alle gilt."""
     from nodvard_deck_ext_shield.defender import Defender
     from nodvard_deck_ext_shield.patching import UpdateCenter
     from nodvard_sdk import Host
 
     engine, sm = await _engine()
-    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update"})
+    ctx = _Ctx(sm, {"auto_updates_enabled": True, "auto_updates_mode": "security", "auto_updates_host_tag": "auto-update"})
     pve2 = Host(id="h2", name="pve2", display_name="pve2", address="10.0.0.3", tags=["auto-update"])
     ctx.hosts.list = lambda tag=None: _hosts(ctx._host, pve2)
     res = await UpdateCenter(ctx, Defender(ctx)).auto_update()
@@ -586,21 +600,20 @@ async def test_auto_update_report_over_several_servers_names_all_of_them():
 
 @pytest.mark.asyncio
 async def test_the_automatic_run_never_uses_dist_upgrade_even_when_the_setting_is_on():
-    """dist-upgrade darf Pakete entfernen und gehoert nur in eine Aktion, die jemand
-    freigibt. Der Weg der Oberflaeche (Vorschlag -> Freigabe -> Ausfuehrung) steht in
-    test_ext_shield_actions.py; hier: die automatische Nacht-Aktualisierung ignoriert die Einstellung."""
+    """dist-upgrade darf Pakete entfernen und gehört nur in eine freigegebene Aktion, der nächtliche Lauf ignoriert die
+    Einstellung."""
     from nodvard_deck_ext_shield.defender import Defender
     from nodvard_deck_ext_shield.patching import UpdateCenter
 
     engine, sm = await _engine()
-    ctx = _Ctx(sm, {"auto_updates_mode": "all", "auto_updates_host_tag": "auto-update", "proxmox_dist_upgrade": True})
+    ctx = _Ctx(sm, {"auto_updates_enabled": True, "auto_updates_mode": "all", "auto_updates_host_tag": "auto-update", "proxmox_dist_upgrade": True})
     center = UpdateCenter(ctx, Defender(ctx))
     ctx.polls = [POLL_RUNNING, POLL_DONE]
     res = await center.auto_update()
     assert res == {"hosts": 1, "failed": 0}
     [launch] = [c for c in ctx.commands if "@@launch" in c]
     assert "upgrade --with-new-pkgs" in launch and "dist-upgrade" not in launch and "pveversion" not in launch
-    assert "sudo -n" in launch  # laeuft wie immer als root
+    assert "sudo -n" in launch  # läuft wie immer als root
     await engine.dispose()
 
 
@@ -1784,7 +1797,7 @@ async def test_the_automatic_run_reports_a_failure_without_the_server_line():
     from nodvard_deck_ext_shield.patching import UpdateCenter
 
     engine, sm = await _engine()
-    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update"})
+    ctx = _Ctx(sm, {"auto_updates_enabled": True, "auto_updates_mode": "security", "auto_updates_host_tag": "auto-update"})
     center = UpdateCenter(ctx, Defender(ctx))
     ctx.polls = [POLL_RUNNING, POLL_FAILED]
     assert await center.auto_update() == {"hosts": 1, "failed": 1}
@@ -1797,8 +1810,8 @@ async def test_the_automatic_run_reports_a_failure_without_the_server_line():
 
 @pytest.mark.asyncio
 async def test_auto_update_handles_the_dashboard_host_last_and_reboots_it_after_the_summary():
-    """Startete der Server mit dem Dashboard mittendrin neu (`shutdown -r +1`), brach die Schleife ab:
-    die uebrigen Server bekamen in dieser Nacht nichts, und die Zusammenfassung kam nie."""
+    """Der Server mit dem Dashboard kommt zuletzt und startet erst nach der Zusammenfassung neu, sonst bekämen die
+    übrigen nichts."""
     import re
 
     from nodvard_deck_ext_shield.defender import Defender
@@ -1806,7 +1819,7 @@ async def test_auto_update_handles_the_dashboard_host_last_and_reboots_it_after_
     from nodvard_sdk import Host
 
     engine, sm = await _engine()
-    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
+    ctx = _Ctx(sm, {"auto_updates_enabled": True, "auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
     ctx._host = Host(id="h1", name="pi", display_name="Raspberry Pi", address="10.0.0.2", tags=["auto-update", "dashboard"])
     pve2 = Host(id="h2", name="pve2", display_name="pve2", address="10.0.0.3", tags=["auto-update"])
     ctx.hosts.list = lambda tag=None: _hosts(ctx._host, pve2)
@@ -1848,8 +1861,8 @@ async def test_auto_update_handles_the_dashboard_host_last_and_reboots_it_after_
 
 @pytest.mark.asyncio
 async def test_auto_update_never_reboots_a_server_from_the_no_reboot_list():
-    """Updates kommen auch dort, nur der Neustart faellt weg; die Meldung sagt, dass einer noetig ist. Der Name zaehlt
-    wie bei den System-Warnungen ohne Gross-/Kleinschreibung, auch der Anzeigename."""
+    """Updates kommen auch dort, nur der Neustart fällt weg; die Meldung sagt, dass einer nötig ist. Der Name zählt
+    wie bei den System-Warnungen ohne Groß-/Kleinschreibung, auch der Anzeigename."""
     import re
 
     from nodvard_deck_ext_shield.defender import Defender
@@ -1857,7 +1870,7 @@ async def test_auto_update_never_reboots_a_server_from_the_no_reboot_list():
     from nodvard_sdk import Host
 
     engine, sm = await _engine()
-    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True,
+    ctx = _Ctx(sm, {"auto_updates_enabled": True, "auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True,
                     "auto_reboot_skip_hosts": [" NAS-Box ", ""]})
     ctx._host = Host(id="h1", name="pve1", display_name="pve1", address="10.0.0.2", tags=["auto-update"])
     nas = Host(id="h2", name="nas", display_name="nas-box", address="10.0.0.3", tags=["auto-update"])
@@ -1898,7 +1911,7 @@ async def test_auto_update_treats_an_unknown_server_like_the_dashboard_host(prob
     from nodvard_sdk import Host
 
     engine, sm = await _engine()
-    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
+    ctx = _Ctx(sm, {"auto_updates_enabled": True, "auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
     ctx._host = Host(id="h1", name="pi", display_name="Raspberry Pi", address="10.0.0.2", tags=["auto-update"])
     pve2 = Host(id="h2", name="pve2", display_name="pve2", address="10.0.0.3", tags=["auto-update"])
     ctx.hosts.list = lambda tag=None: _hosts(ctx._host, pve2)
@@ -1953,7 +1966,7 @@ async def test_the_sure_dashboard_host_reboots_after_the_unclear_ones():
     from nodvard_sdk import Host
 
     engine, sm = await _engine()
-    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
+    ctx = _Ctx(sm, {"auto_updates_enabled": True, "auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
     ctx._host = Host(id="h1", name="deck", display_name="Deck", address="10.0.0.2", tags=["auto-update", "dashboard"])
     unclear = Host(id="h2", name="nas", display_name="NAS", address="10.0.0.3", tags=["auto-update"])
     other = Host(id="h3", name="pve", display_name="PVE", address="10.0.0.4", tags=["auto-update"])
@@ -1998,7 +2011,7 @@ async def test_auto_update_never_reboots_after_an_unclean_run(monkeypatch, polls
     if wait_limit is not None:
         monkeypatch.setattr(patching, "UPGRADE_TIMEOUT", wait_limit)
     engine, sm = await _engine()
-    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
+    ctx = _Ctx(sm, {"auto_updates_enabled": True, "auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
     ctx._host.tags = tags
     ctx.polls = polls
     run_orig = ctx.exec.run
@@ -2045,7 +2058,7 @@ async def test_auto_update_reboots_a_server_with_nothing_to_do():
     from nodvard_deck_ext_shield.patching import UpdateCenter
 
     engine, sm = await _engine()
-    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
+    ctx = _Ctx(sm, {"auto_updates_enabled": True, "auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
     ctx.after_upgrade = True
     _pending_reboot(ctx)
     assert await UpdateCenter(ctx, Defender(ctx)).auto_update() == {"hosts": 1, "failed": 0}
@@ -2061,7 +2074,7 @@ async def test_after_a_failed_run_the_next_night_waits_for_a_clean_run_before_re
     from nodvard_deck_ext_shield.patching import UpdateCenter
 
     engine, sm = await _engine()
-    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
+    ctx = _Ctx(sm, {"auto_updates_enabled": True, "auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
     _pending_reboot(ctx)
     center = UpdateCenter(ctx, Defender(ctx))
     ctx.polls = [POLL_RUNNING, POLL_FAILED]
@@ -2090,7 +2103,7 @@ async def test_a_skipped_reboot_warns_again_only_after_another_unclean_run():
     from nodvard_deck_ext_shield.patching import UpdateCenter
 
     engine, sm = await _engine()
-    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
+    ctx = _Ctx(sm, {"auto_updates_enabled": True, "auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
     _pending_reboot(ctx)
     center = UpdateCenter(ctx, Defender(ctx))
     ctx.polls = [POLL_RUNNING, POLL_FAILED]
@@ -2125,7 +2138,7 @@ async def test_a_server_never_rebooted_automatically_raises_no_warning_after_an_
     from nodvard_deck_ext_shield.patching import UpdateCenter
 
     engine, sm = await _engine()
-    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True,
+    ctx = _Ctx(sm, {"auto_updates_enabled": True, "auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True,
                     "auto_reboot_skip_hosts": ["h1"]})
     _pending_reboot(ctx)
     center = UpdateCenter(ctx, Defender(ctx))

@@ -573,9 +573,11 @@ async def approve(
         return None, False
 
     if action.status == ActionStatus.PROPOSED.value and action.expires_at is not None and action.expires_at < now:
-        action, _ = await _atomic_transition(
+        action, expired = await _atomic_transition(
             session, action_id, from_status=ActionStatus.PROPOSED.value, to_status=ActionStatus.EXPIRED.value
         )
+        if expired and action is not None:
+            await _audit_expired(session, action)
         return action, False
 
     action, moved = await _atomic_transition(
@@ -665,11 +667,18 @@ async def fail_interrupted_on_boot(session: AsyncSession) -> int:
     return failed
 
 
+async def _audit_expired(session: AsyncSession, action: Action) -> None:
+    from ..services import audit as audit_service
+
+    await audit_service.log(
+        session, actor_type="system", actor_id="gate", action="action.expired", outcome="denied",
+        target_type="action", target_id=action.id, reason=action.reason, correlation_id=action.correlation_id,
+    )
+
+
 async def expire_stale(session: AsyncSession) -> int:
     """Markiert unbestätigte Vorschläge nach `expires_at` (Standard 24 h) als `expired`, je mit einer Audit-Zeile."""
     from sqlalchemy import select
-
-    from ..services import audit as audit_service
 
     now = utcnow()
     rows = (
@@ -685,8 +694,5 @@ async def expire_stale(session: AsyncSession) -> int:
         if not moved:
             continue
         expired += 1
-        await audit_service.log(
-            session, actor_type="system", actor_id="gate", action="action.expired", outcome="denied",
-            target_type="action", target_id=row.id, reason=row.reason, correlation_id=row.correlation_id,
-        )
+        await _audit_expired(session, row)
     return expired

@@ -40,7 +40,7 @@ def _helper_sandbox(
     tmp_path: Path, *, stat_values: dict[tuple[str, str], str] | None = None, groups: str = USER,
     writable: tuple[str, ...] = (), acls: dict[str, str] | None = None, **kw
 ):
-    """Wie `_sandbox` mit Ordner für die Hilfsskripte und `captured/` für sudoers-Dateien; `stat` (sonst root und 755),
+    """Wie `_sandbox` mit Ordner für die Hilfsskripte und `captured/` für sudoers-Dateien; `stat` (sonst root, Gruppe root, 755),
     `id -Gn`, `runuser ... test -w` (der Test läuft womöglich als root) und `getfacl -c` antworten nach den Parametern."""
     bin_dir, _, log = _sandbox(tmp_path, user=USER, **kw)
     can_write = "".join(f"    {shlex.quote(path)}) exit 0;;\n" for path in writable)
@@ -71,6 +71,7 @@ exit 0
 case "$2|$3" in
 {cases}  %u\\|*) echo 0;;
   %a\\|*) echo 755;;
+  %g\\|*) echo 0;;
   %G\\|*) echo root;;
   *) exit 2;;
 esac
@@ -143,14 +144,16 @@ def test_a_damaged_helper_is_not_installed_and_gets_no_rule(tmp_path):
         ({("%u", "PARENT"): "1000"}, USER, ()),
         ({("%a", "PARENT"): "777"}, USER, ()),
         ({("%a", "PARENT"): "1777"}, USER, ()),
-        ({("%a", "PARENT"): "2775", ("%G", "PARENT"): "staff"}, f"{USER} staff", ()),
+        ({("%a", "PARENT"): "2775"}, f"{USER} root", ()),
+        ({("%a", "PARENT"): "2775", ("%g", "PARENT"): "50", ("%G", "PARENT"): "staff"}, USER, ()),
         ({("%u", "/"): "1000"}, USER, ()),
         ({("%a", "HELPERS"): "757"}, USER, ()),
         ({("%u", "FILE"): "1000"}, USER, ()),
         ({}, USER, ("PARENT",)),
     ],
     ids=[
-        "ordner-gehoert-benutzer", "ordner-fuer-alle", "ordner-sticky", "gruppe-des-benutzers", "wurzel", "hilfsordner",
+        "ordner-gehoert-benutzer", "ordner-fuer-alle", "ordner-sticky", "benutzer-in-gruppe-root", "fremde-gruppe", "wurzel",
+        "hilfsordner",
         "datei", "benutzer-darf-schreiben",
     ],
 )
@@ -170,12 +173,38 @@ def test_helpers_are_skipped_unless_only_root_can_change_them(tmp_path, stat_val
     assert "Hinweis:" in done.stdout and (captured / "nodvard-deck").exists() and "Fertig." in done.stdout
 
 
+SKIPPED = "Hinweis: Deshalb wurden die Hilfsskripte übersprungen, die Module nutzen die volle sudo-Regel."
+
+
 @needs_sh
-def test_a_group_writable_folder_is_fine_when_the_user_is_not_in_that_group(tmp_path):
+def test_a_folder_another_group_may_write_skips_the_helpers_with_the_way_out(tmp_path):
+    # Wie /usr/local/lib auf älteren Debian (2775 root:staff).
+    helper_dir = tmp_path / "usr-local-lib" / "nodvard-deck"
+    parent = str(helper_dir.parent)
+    bin_dir, _, helper_dir, captured = _helper_sandbox(
+        tmp_path, stat_values={("%a", parent): "2775", ("%g", parent): "50", ("%G", parent): "staff"},
+        groups=f"{USER} docker",
+    )
+    helper_dir.parent.mkdir(parents=True)
+    done = _run(_script(helper_dir, SHIELD), bin_dir)
+    assert done.returncode == 0 and not (captured / "nodvard_shield_deck").exists(), done.stdout
+    assert (captured / "nodvard-deck").exists() and "Fertig." in done.stdout
+    # Aus der Ausgabe, nicht aus `setup_messages`: Die kürzt lange Zeilen, und der Testordner hat einen langen Pfad.
+    lines = done.stdout.splitlines()
+    assert lines[lines.index(host_setup.KEY_ADDED) + 1:-1] == [
+        f"Hinweis: Im Ordner {parent} darf die Gruppe staff schreiben (Rechte 2775). Wer in ihr ist, könnte die "
+        f"Hilfsskripte austauschen und wäre damit root. Abhilfe als root: chmod g-w {parent}",
+        "Hinweis: Ältere Debian lassen die Gruppe staff in /usr/local und /usr/local/lib schreiben. Abhilfe als root für "
+        "beide auf einmal: chmod g-w /usr/local /usr/local/lib",
+        SKIPPED,
+    ]
+
+
+@needs_sh
+def test_a_folder_the_root_group_may_write_is_fine(tmp_path):
     helper_dir = tmp_path / "usr-local-lib" / "nodvard-deck"
     bin_dir, _, helper_dir, captured = _helper_sandbox(
-        tmp_path, stat_values={("%a", str(helper_dir.parent)): "2775", ("%G", str(helper_dir.parent)): "staff"},
-        groups=f"{USER} docker",
+        tmp_path, stat_values={("%a", str(helper_dir.parent)): "2775"}, groups=f"{USER} docker",
     )
     done = _run(_script(helper_dir, SHIELD), bin_dir)
     assert done.returncode == 0 and (captured / "nodvard_shield_deck").exists(), done.stdout
@@ -185,17 +214,19 @@ def test_a_group_writable_folder_is_fine_when_the_user_is_not_in_that_group(tmp_
 def test_without_getfacl_the_note_names_the_acl_check(tmp_path):
     helper_dir = tmp_path / "usr-local-lib" / "nodvard-deck"
     parent = str(helper_dir.parent)
-    bin_dir, _, helper_dir, captured = _helper_sandbox(
-        tmp_path, stat_values={("%a", parent): "2775", ("%G", parent): "staff"},
-    )
+    bin_dir, _, helper_dir, captured = _helper_sandbox(tmp_path, stat_values={("%a", parent): "2775"})
+    helper_dir.parent.mkdir(parents=True)
     _stub(bin_dir / "getfacl", "exit 127\n")
-    _stub(bin_dir / "ls", '[ "$1" = -ld ] || exit 1\necho "drwxrwsr-x    2 root     staff         4096 Oct 21 12:00 $2"\n')
+    _stub(bin_dir / "ls", '[ "$1" = -ld ] || exit 1\necho "drwxrwsr-x    2 root     root          4096 Oct 21 12:00 $2"\n')
     done = _run(_script(helper_dir, SHIELD), bin_dir)
     assert done.returncode == 0 and not (captured / "nodvard_shield_deck").exists(), done.stdout
+    lines = done.stdout.splitlines()
     assert (
-        f"Hinweis: Ob eine ACL (erweiterte Rechte) im Ordner {helper_dir} oder einem darüber Schreibrecht gibt, lässt sich "
-        "ohne getfacl (Paket acl) nicht prüfen, die Hilfsskripte wurden übersprungen."
-    ) in done.stdout.splitlines()
+        f"Hinweis: Für den Ordner {parent} lässt sich ohne getfacl nicht prüfen, ob eine ACL (erweiterte Rechte) außer "
+        "root jemandem Schreibrecht gibt. Abhilfe als root: Paket acl installieren (apt install acl, auf Alpine apk add "
+        f"acl) oder chmod g-w {parent}"
+    ) in lines
+    assert SKIPPED in lines
 
 
 @needs_sh
@@ -208,7 +239,9 @@ def test_a_symlinked_helper_folder_is_never_used(tmp_path):
     done = _run(_script(helper_dir, SHIELD), bin_dir)
     assert done.returncode == 0
     assert not list(elsewhere.iterdir()) and not (captured / "nodvard_shield_deck").exists()
-    assert "die Hilfsskripte wurden übersprungen" in done.stdout
+    lines = done.stdout.splitlines()
+    assert f"Hinweis: {helper_dir} ist ein Link. Die Hilfsskripte gehören in einen echten Ordner." in " ".join(lines)
+    assert SKIPPED in lines
 
 
 @needs_sh

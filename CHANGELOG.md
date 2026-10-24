@@ -10,6 +10,22 @@ shown inside Nodvard Deck under *Settings → About Nodvard Deck*. This file is 
 
 ## [Unreleased]
 
+## [0.11.1] – 2026-10-24
+
+Security update: narrower rights during server setup and protection against modified backups.
+
+- **Security:** if no enabled module needs root, the "root without password" option no longer sets up sudo (previously
+  full sudo). Helper scripts are only placed in folders that nobody but root and the root group can write to,
+  including extended ACLs. A Deck key already present without restrictions gets them during setup. Documents,
+  inventory images, job run output and the Shield quarantine only use files where Deck stores them, so a modified
+  backup cannot make Deck read, move or delete other files; the document preview only shows PDFs and images. Pages
+  only run scripts served by Deck. A disabled job can no longer be started through the API. Docker registry login
+  approvals are bound to the proposed user name, and a volume restore checks the archive is still the verified one.
+- **Fixed:** "Check connection" no longer asks for sudo when no module needs root; an expired proposal is logged when
+  someone approves it; Docker restore, backup list, Portainer migration, registry list and file manager fixes.
+- **Note:** no database migration. On older Debian, where the group "staff" can write to `/usr/local`, run
+  `chmod g-w /usr/local /usr/local/lib` as root before setting up a server with helper scripts only.
+
 ## [0.11.0] – 2026-10-23
 
 Editable home page, Nodvard Dock as a ready-made image and setup with helper scripts only.

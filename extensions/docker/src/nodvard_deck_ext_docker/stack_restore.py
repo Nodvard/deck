@@ -4,6 +4,8 @@ einen Hilfsordner im Volume, getauscht erst danach: Ein kaputtes Archiv lässt d
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 import stat as statmod
 import time
 from datetime import UTC, datetime
@@ -37,34 +39,43 @@ from .stack_backup import (
 from .stack_update import Running, StackUpdate
 from .stacks import Stack, StackProblem, no_such_file
 
+log = logging.getLogger(__name__)
+
 RESTORE_ACTION = "docker.stack_volume_restore"
 DROP_ACTION = "docker.stack_backup_delete"
 STAGING = ".nodvard-zurueck"
 ASIDE = ".nodvard-vorher"
 HELPER_PREFIX = "nodvard-zurueck-"
-# Exit-Codes der Skripte im Hilfscontainer; bei BROKEN, LEFTOVER und PREPARE ist an den Daten nichts geändert.
+# Exit-Codes der Skripte im Hilfscontainer; bei BROKEN, LEFTOVER, PREPARE und CHANGED ist an den Daten nichts geändert.
 BROKEN_EXIT = 3
 SWAP_EXIT = 4
 LEFTOVER_EXIT = 5
 CLEANUP_EXIT = 6
 PREPARE_EXIT = 7
+CHANGED_EXIT = 8
 RESTORE_UNTIL_S = 2700
 """Spätestens so lange nach dem Start endet das Entpacken; danach bleibt bis zur Grenze der Freigabe Zeit für den Rest."""
 CHECK_TIMEOUT_S = 900
 SPACE_MARGIN = 64 * 1024 * 1024
 MAX_BACKUPS = 50
 MAX_VOLUMES = 40
-# Vor dem Stoppen: Archiv ganz lesen (als tar und wie groß entpackt), freier Platz im Volume, keine Reste eines früheren Versuchs.
+# Vor dem Stoppen: Archiv ganz lesen (als tar und wie groß entpackt), freier Platz im Volume, keine Reste eines früheren Versuchs;
+# dazu Prüfsumme und Größe des Archivs, die das Zurückspielen gegenprüft. Gelesen wird wie beim Zurückspielen nur über einen
+# Griff, damit alle Angaben zu derselben Datei gehören.
 _CHECK_SCRIPT = (
-    f'[ ! -e /data/{ASIDE} ] || exit {LEFTOVER_EXIT}; tar tzf "/backup/$1" >/dev/null || exit {BROKEN_EXIT}; '
-    f'set -o pipefail; n=$(gzip -dc "/backup/$1" | wc -c) || exit {BROKEN_EXIT}; '
-    'set -- $(df -Pk /data | tail -n 1); echo "$n $4"'
+    f'[ ! -e /data/{ASIDE} ] || exit {LEFTOVER_EXIT}; command exec 3<"/backup/$1" || exit {BROKEN_EXIT}; a=/proc/self/fd/3; '
+    f'tar tzf "$a" >/dev/null || exit {BROKEN_EXIT}; set -o pipefail; n=$(gzip -dc <"$a" | wc -c) || exit {BROKEN_EXIT}; '
+    f'h=$(sha256sum <"$a" | cut -d " " -f 1) && s=$(stat -L -c %s "$a") || exit {BROKEN_EXIT}; '
+    'set -- $(df -Pk /data | tail -n 1); echo "$n $4 $h $s"'
 )
 _RESTORE_SCRIPT = (
     f't=/data/{STAGING}; o=/data/{ASIDE}; [ ! -e "$o" ] || exit {LEFTOVER_EXIT}; '
+    # Einmal geöffnet und danach nur über diesen Griff gelesen: Ein anderes Archiv unter demselben Namen ändert daran nichts mehr.
+    f'command exec 3<"/backup/$1" || exit {BROKEN_EXIT}; a=/proc/self/fd/3; '
+    f'[ "$(stat -L -c %s "$a")" = "$3" ] && [ "$(sha256sum <"$a" | cut -d " " -f 1)" = "$2" ] || exit {CHANGED_EXIT}; '
     # Ohne Eintrag `./` im Archiv behält das Volume Besitzer und Rechte von vorher.
     f'rm -rf "$t" && mkdir "$t" && chown "$(stat -c %u:%g /data)" "$t" && chmod "$(stat -c %a /data)" "$t" || {{ rm -rf "$t"; exit {PREPARE_EXIT}; }}; '
-    f'if ! tar xzf "/backup/$1" -C "$t"; then rm -rf "$t"; exit {BROKEN_EXIT}; fi; '
+    f'if ! tar xzf "$a" -C "$t"; then rm -rf "$t"; exit {BROKEN_EXIT}; fi; '
     f'rm -rf "$t/{STAGING}" "$t/{ASIDE}"; mkdir "$o" || {{ rm -rf "$t"; exit {PREPARE_EXIT}; }}; '
     f'find /data -mindepth 1 -maxdepth 1 ! -name {STAGING} ! -name {ASIDE} -exec mv -t "$o" {{}} + || exit {SWAP_EXIT}; '
     f'find "$t" -mindepth 1 -maxdepth 1 -exec mv -t /data {{}} + || exit {SWAP_EXIT}; '
@@ -72,8 +83,10 @@ _RESTORE_SCRIPT = (
     f'rm -rf "$o" || exit {CLEANUP_EXIT}'
 )
 """Entpackt neben die alten Daten, legt die alten beiseite und tauscht erst dann; die alten Daten löscht es zuletzt."""
+_LEFTOVER_SCRIPT = f'[ -e /data/{ASIDE} ] || [ -e /data/{STAGING} ] && exit 1; exit 0'
 _ARCHIVE_SUFFIX = ".tar.gz"
 _HARDENING = ["--network", "none", "--security-opt", "no-new-privileges", "--pids-limit", "64"]
+_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def helper_name(volume: str) -> str:
@@ -95,10 +108,20 @@ def cmd_check(volume: str, folder: str) -> list[str]:
             "sh", "-c", _CHECK_SCRIPT, "sh", f"{volume}{_ARCHIVE_SUFFIX}"]
 
 
-def cmd_restore(volume: str, folder: str) -> list[str]:
-    """Spielt `<folder>/<volume>.tar.gz` in das Volume zurück; der Ordner mit den Archiven ist nur lesend eingebunden."""
+def cmd_restore(volume: str, folder: str, sha256: str, size: int) -> list[str]:
+    """Spielt `<folder>/<volume>.tar.gz` in das Volume zurück, nur mit dieser Prüfsumme und Größe; der Ordner mit den Archiven ist
+    nur lesend eingebunden."""
+    if not _SHA256_RE.match(sha256) or isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        raise ValueError(f"Ungültiger Fingerabdruck: {sha256!r} {size!r}")
     return ["docker", "run", "--rm", "--name", helper_name(volume), *_HARDENING, *_mounts(volume, folder, read_only=False),
-            BACKUP_IMAGE, "sh", "-c", _RESTORE_SCRIPT, "sh", f"{volume}{_ARCHIVE_SUFFIX}"]
+            BACKUP_IMAGE, "sh", "-c", _RESTORE_SCRIPT, "sh", f"{volume}{_ARCHIVE_SUFFIX}", sha256, str(size)]
+
+
+def cmd_leftovers(volume: str) -> list[str]:
+    """Exit 0 nur, wenn im Volume weder alte Daten noch ein halbes Zurückspielen liegen; das Volume ist nur lesend eingebunden."""
+    if not VOLUME_NAME_RE.match(volume):
+        raise ValueError(f"Ungültiges Volume: {volume!r}")
+    return ["docker", "run", "--rm", *_HARDENING, "-v", f"{volume}:/data:ro", BACKUP_IMAGE, "sh", "-c", _LEFTOVER_SCRIPT]
 
 
 def cmd_helper_state(volume: str) -> list[str]:
@@ -108,6 +131,18 @@ def cmd_helper_state(volume: str) -> list[str]:
 def stamp_text(stamp: str) -> str:
     """`20261016-041500` (UTC) als ISO-Zeit."""
     return datetime.strptime(stamp, "%Y%m%d-%H%M%S").replace(tzinfo=UTC).isoformat(timespec="seconds")
+
+
+def valid_stamp(stamp: str) -> bool:
+    """Ein Zeitstempel im Format der Sicherungen, der auch ein echtes Datum ist."""
+    # Jahre am Rand des Kalenders ließen sich je nach Zeitzone nicht in Ortszeit umrechnen.
+    if not _STAMP_RE.match(stamp) or not 2000 <= int(stamp[:4]) < 2100:
+        return False
+    try:
+        stamp_text(stamp)
+    except ValueError:
+        return False
+    return True
 
 
 def _archive_volume(name: str, suffix: str = _ARCHIVE_SUFFIX) -> str | None:
@@ -168,7 +203,7 @@ class StackRestore:
             async with self._ctx.exec.sftp(host) as sftp:
                 if not await _is_dir(sftp, f"{home}/{BACKUP_ROOT}") or not await _is_dir(sftp, base):
                     return out
-                stamps = sorted((n for n in await sftp.listdir(base) if _STAMP_RE.match(str(n))), reverse=True)[:MAX_BACKUPS]
+                stamps = sorted((n for n in await sftp.listdir(base) if valid_stamp(str(n))), reverse=True)[:MAX_BACKUPS]
                 for stamp in stamps:
                     folder = backup_folder(home, stack.project, str(stamp))
                     if not await _is_dir(sftp, folder):
@@ -261,7 +296,7 @@ class DockerStackRestoreExecutor:
         if getattr(req.proposed_by.type, "value", req.proposed_by.type) != "user":
             return ActionResult(success=False, error="Eine Volume-Sicherung spielt nur ein Mensch über die Docker-Seite zurück oder löscht sie.")
         stamp = str(payload.get("stamp") or "")
-        if not _STAMP_RE.match(stamp):
+        if not valid_stamp(stamp):
             return ActionResult(success=False, error=f"Ungültige Sicherung: {stamp!r}")
         target = await self._restore.update.actions.target(req.host_ref, str(payload.get("project") or ""))
         if isinstance(target, str):
@@ -317,38 +352,42 @@ class DockerStackRestoreExecutor:
         state = await self._helper_state(host, volume)
         return None if state is None else state == "running"
 
-    async def _check(self, host: Any, folder: str, volume: str, started: float) -> str | None:
-        """Vor dem Stoppen: Läuft schon ein Zurückspielen, ist das Archiv lesbar, reicht der Platz? Der Grund dagegen."""
+    async def _check(self, host: Any, folder: str, volume: str, started: float) -> tuple[str | None, tuple[str, int] | None]:
+        """Vor dem Stoppen: Läuft schon ein Zurückspielen, ist das Archiv lesbar, reicht der Platz? (Grund dagegen, Prüfsumme und
+        Größe des geprüften Archivs)."""
         state, name = await self._helper_state(host, volume), helper_name(volume)
         if state == "running":
-            return f"Für {volume} läuft auf dem Server noch ein Zurückspielen (Container {name})."
+            return f"Für {volume} läuft auf dem Server noch ein Zurückspielen (Container {name}).", None
         if state == "stopped":
             # Mit diesem Namen schlüge `docker run` erst nach dem Stoppen der Dienste fehl.
             return (f"Auf dem Server steht noch der Hilfscontainer {name} von einem früheren Zurückspielen. Sieh im Volume {volume} nach, "
-                    f"ob dort {ASIDE} liegt, entferne den Container mit „docker rm {name}“ und versuch es dann noch einmal.")
+                    f"ob dort {ASIDE} liegt, entferne den Container mit „docker rm {name}“ und versuch es dann noch einmal."), None
         if state is None:
-            return f"Ob für {volume} noch ein Zurückspielen läuft, ließ sich nicht feststellen."
+            return f"Ob für {volume} noch ein Zurückspielen läuft, ließ sich nicht feststellen.", None
         left = min(CHECK_TIMEOUT_S, int(started + RESTORE_UNTIL_S - time.monotonic()))
         if left <= 0:
-            return "Für das Prüfen der Archive reichte die Zeit nicht."
+            return "Für das Prüfen der Archive reichte die Zeit nicht.", None
         result, lost = await self._call(host, cmd_check(volume, folder), left)
         if result is None:
-            return f"Das Archiv von {volume} ließ sich nicht prüfen: {lost}."
+            return f"Das Archiv von {volume} ließ sich nicht prüfen: {lost}.", None
         if result.exit_code == BROKEN_EXIT:
-            return f"Das Archiv von {volume} ist beschädigt oder unvollständig ({failure_line(result.stderr or result.stdout)})."
+            return f"Das Archiv von {volume} ist beschädigt oder unvollständig ({failure_line(result.stderr or result.stdout)}).", None
         if result.exit_code == LEFTOVER_EXIT:
             return (f"Im Volume {volume} liegt noch {ASIDE} von einem früheren Zurückspielen, darin können die alten Daten stehen. "
-                    "Sieh dir den Ordner an und lösch ihn, bevor du noch einmal zurückspielst.")
+                    "Sieh dir den Ordner an und lösch ihn, bevor du noch einmal zurückspielst."), None
+        parts = result.stdout.split()
         try:
-            size, free_kb = (int(v) for v in result.stdout.split())
-        except ValueError:
+            size, free_kb, archive = int(parts[0]), int(parts[1]), int(parts[3])
+        except (ValueError, IndexError):
+            parts = []
+        if len(parts) != 4 or not _SHA256_RE.match(parts[2]):
             reason = failure_line(result.stderr or result.stdout) or f"Exit-Code {result.exit_code}"
-            return f"Das Archiv von {volume} ließ sich nicht prüfen ({reason})."
+            return f"Das Archiv von {volume} ließ sich nicht prüfen ({reason}).", None
         need = size + max(SPACE_MARGIN, size // 20)
         if need > free_kb * 1024:
             return (f"Für {volume} ist zu wenig Platz: Deck entpackt die Sicherung erst neben die alten Daten und braucht dafür bis zu "
-                    f"{_gb(need)}, frei sind {_gb(free_kb * 1024)}.")
-        return None
+                    f"{_gb(need)}, frei sind {_gb(free_kb * 1024)}."), None
+        return None, (parts[2], archive)
 
     async def _run(self, host: Any, stack: Stack, stamp: str, volumes: list[str]) -> ActionResult:
         started = time.monotonic()
@@ -369,9 +408,12 @@ class DockerStackRestoreExecutor:
         if others:
             return _fail(f"{'; '.join(others)}. Halte diese Container an oder nimm sie aus dem Volume, dann versuch es noch einmal. "
                          "Zurückgespielt wurde nichts.", started)
+        prints: dict[str, tuple[str, int]] = {}
         for volume in volumes:
-            if (refused := await self._check(host, entry["folder"], volume, started)) is not None:
+            refused, checked = await self._check(host, entry["folder"], volume, started)
+            if refused is not None or checked is None:
                 return _fail(f"{refused} Zurückgespielt und gestoppt wurde nichts.", started)
+            prints[volume] = checked
         # Erst nach der Prüfung der Archive gelesen, die lange dauern kann: Was jetzt läuft, startet danach wieder.
         before, unreadable = await self._restore.state(host, stack)
         if before is None:
@@ -381,22 +423,28 @@ class DockerStackRestoreExecutor:
         idle = [s for s in users if not before[s].running]
         up = {name for e in before.values() for name in e.up}
         try:
+            stopped, ran = None, "die Dienste laufen weiter wie bisher."
             if services:
                 # Nur was läuft: Einen gestoppten Container ohne Dienst in der Compose-Datei lehnt `compose stop` ab.
                 _, stopped = await self._exec(host, cmd_stop_services(stack, services), STOP_TIMEOUT_S, "Stoppen vor dem Zurückspielen gescheitert")
                 if stopped is not None and "no such service" in stopped.lower():
                     stopped += (" Ein laufender Container gehört zu einem Dienst, der nicht mehr in der Compose-Datei steht; halte ihn im "
                                 "Reiter Container an oder entferne ihn, dann versuch es noch einmal.")
-                ran = "die Dienste laufen weiter wie bisher."
-                if stopped is None and (stopped := await self._still_running(host, stack, volumes)) is not None:
+                if stopped is None:
                     ran = "die Dienste sind wieder gestartet."
-                if stopped is not None:
-                    not_started = await self._start_again(host, stack, services)
-                    after = ran if not_started is None else (
-                        f"die Dienste ließen sich aber nicht wieder starten ({not_started}). Starte den Stack im Reiter Stacks.")
-                    _, _, others = await self._look(host, stack, idle, up)
-                    return _fail(f"{stopped} Zurückgespielt wurde nichts; {after}{others}", started)
-            done, problem, keep_stopped, notes = await self._unpack(host, entry["folder"], volumes, started)
+                    stopped = await self._still_running(host, stack, volumes)
+            if stopped is None:
+                # Während Prüfung und Stoppen kann ein Container außerhalb des Stacks das Volume eingebunden haben.
+                stopped = await self._late_users(host, stack, volumes)
+            if stopped is not None:
+                if not services:
+                    return _fail(f"{stopped} Zurückgespielt wurde nichts.", started)
+                not_started = await self._start_again(host, stack, services)
+                after = ran if not_started is None else (
+                    f"die Dienste ließen sich aber nicht wieder starten ({not_started}). Starte den Stack im Reiter Stacks.")
+                _, _, others = await self._look(host, stack, idle, up)
+                return _fail(f"{stopped} Zurückgespielt wurde nichts; {after}{others}", started)
+            done, problem, keep_stopped, notes = await self._unpack(host, entry["folder"], volumes, started, prints)
         except BaseException:
             # Abbruch (Zeitgrenze der Freigabe, Neustart von Deck): wieder starten, außer ein Hilfscontainer läuft noch.
             await asyncio.shield(self._after_abort(host, stack, services, volumes))
@@ -467,10 +515,31 @@ class DockerStackRestoreExecutor:
         return True, f" Die Dienste laufen wieder. Prüfung danach: {verdict.text}"
 
     async def _after_abort(self, host: Any, stack: Stack, services: list[str], volumes: list[str]) -> None:
-        if services and all([await self._helper_running(host, volume) is False for volume in volumes]):
+        if not services or not all([await self._helper_running(host, volume) is False for volume in volumes]):
+            return
+        # Der Hilfscontainer räumt sich selbst weg; ob er vor oder mitten im Tausch endete, zeigen nur die Ordner im Volume.
+        if all([await self._untouched(host, volume) for volume in volumes]):
             await self._start_again(host, stack, services)
+        else:
+            log.warning("docker_restore_kept_stopped project=%s services=%s", stack.project, ",".join(services))
 
-    async def _unpack(self, host: Any, folder: str, volumes: list[str], started: float) -> tuple[list[str], str | None, bool, list[str]]:
+    async def _untouched(self, host: Any, volume: str) -> bool:
+        """Liegen im Volume weder alte Daten noch ein halbes Zurückspielen? Im Zweifel nein."""
+        result, _ = await self._call(host, cmd_leftovers(volume), 120)
+        return result is not None and result.exit_code == 0
+
+    async def _late_users(self, host: Any, stack: Stack, volumes: list[str]) -> str | None:
+        others = await self._other_users(host, stack, volumes)
+        if isinstance(others, str):
+            return others
+        if others:
+            return (f"Inzwischen nutzt ein Container außerhalb des Stacks die Volumes: {'; '.join(others)}. Halte ihn an oder nimm ihn "
+                    "aus dem Volume, dann versuch es noch einmal.")
+        return None
+
+    async def _unpack(
+        self, host: Any, folder: str, volumes: list[str], started: float, prints: dict[str, tuple[str, int]],
+    ) -> tuple[list[str], str | None, bool, list[str]]:
         """(zurückgespielt, Grund für den Abbruch, Dienste lieber gestoppt lassen, Hinweise)."""
         done: list[str] = []
         notes: list[str] = []
@@ -479,7 +548,7 @@ class DockerStackRestoreExecutor:
             if left <= 0:
                 rest = volumes[volumes.index(volume):]
                 return done, f"Für das Zurückspielen reichte die Zeit nicht; an {', '.join(rest)} hat sich nichts geändert.", False, notes
-            result, lost = await self._call(host, cmd_restore(volume, folder), left)
+            result, lost = await self._call(host, cmd_restore(volume, folder, *prints[volume]), left)
             code = None if result is None else result.exit_code
             reason = lost if result is None else failure_line(result.stderr or result.stdout) or f"Exit-Code {code}"
             if code in (0, CLEANUP_EXIT):
@@ -487,6 +556,9 @@ class DockerStackRestoreExecutor:
                 if code == CLEANUP_EXIT:
                     notes.append(f"Die alten Daten von {volume} liegen noch im Volume unter {ASIDE} ({reason}); lösch den Ordner, sonst "
                                  "blockiert er das nächste Zurückspielen.")
+            elif code == CHANGED_EXIT:
+                return done, (f"Das Archiv von {volume} ist nicht mehr das, das Deck vorher geprüft hat. Zurückgespielt wurde es nicht; an "
+                              f"{volume} hat sich nichts geändert."), False, notes
             elif code == BROKEN_EXIT:
                 why = "Im Volume war zu wenig Platz" if "no space left" in reason.lower() else "Das Archiv ist beschädigt oder unvollständig"
                 return done, f"Zurückspielen von {volume} gescheitert: {why} ({reason}). An {volume} hat sich nichts geändert.", False, notes
@@ -619,7 +691,7 @@ def restore_routes(restore: StackRestore, editor: StackEditor, docker_host: Any,
         return await restore.backups(*await _target(host_id, project))
 
     async def _propose(host_id: str, project: str, stamp: str, actor: Actor, action_type: str, volumes: list[str]) -> dict:
-        if not _STAMP_RE.match(stamp):
+        if not valid_stamp(stamp):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ungültige Sicherung.")
         host, stack = await _target(host_id, project)
         entry, problem = await restore.entry(host, stack, stamp)

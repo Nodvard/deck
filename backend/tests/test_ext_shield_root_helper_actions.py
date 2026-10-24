@@ -345,9 +345,11 @@ def test_only_paths_directly_in_the_quarantine_go_to_the_helper():
     assert av.restore_args(f"{q}/f1_x", "/tmp/x", None) == ["restore", "f1_x"]
     assert av.restore_args(f"{q}/f1_x", "/tmp/x", "4755") == ["restore", "f1_x"]
     assert av.delete_args(f"{q}/f1_x") == ["delete", "f1_x"]
-    assert av.restore_args("/anderswo/f1_x", "/tmp/x", "644") is None
-    assert av.delete_args(f"{q}/a b") is None
-    assert av.restore_args(f"{q}/.herkunft", "/tmp/x", "644") is None and av.delete_args(f"{q}/.f1_x") is None
+    for bad in ("/anderswo/f1_x", f"{q}/a b", f"{q}/.herkunft", f"{q}/.f1_x", f"{q}//f1_x", f"{q}/./f1_x"):
+        with pytest.raises(ValueError):
+            av.restore_args(bad, "/tmp/x", "644")
+        with pytest.raises(ValueError):
+            av.delete_args(bad)
 
 
 # --- Was das Skript dem Dashboard nicht glaubt ----------------------------------------------------------------------

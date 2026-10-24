@@ -188,6 +188,15 @@ def test_runtime_settings_are_carried_over():
     assert service["healthcheck"] == {"disable": True}
 
 
+def test_unlimited_swap_domain_and_tty_are_carried_over():
+    data = _sample(Memory=64 << 20, MemorySwap=-1)
+    data["Config"].update(Domainname="example.org", Tty=True, OpenStdin=True)
+    out = _convert(data)
+    service = yaml.safe_load(out.compose)["services"]["plaintest"]
+    assert out.refused == [] and service["mem_limit"] == 64 << 20 and service["memswap_limit"] == -1
+    assert (service["domainname"], service["tty"], service["stdin_open"]) == ("example.org", True, True)
+
+
 def test_fixed_addresses_and_health_retries_are_carried_over():
     data = _sample(NetworkMode="eigenes")
     bridge = data["NetworkSettings"]["Networks"].pop("bridge")
@@ -243,6 +252,15 @@ def test_daemon_defaults_are_not_written():
         {"driver": "local"}, 128 * 1024 * 1024, "private", "crun", 1024)
     plain = yaml.safe_load(_convert(_sample(CgroupnsMode="private"), cgroup_v2=True).compose)["services"]["plaintest"]
     assert not {"logging", "shm_size", "cgroup", "runtime", "memswap_limit"} & set(plain)
+
+
+def test_only_folders_become_long_binds():
+    c2s = _m().c2s
+    document = {"services": {"leer": {"image": "x"}, "web": {"volumes": ["/srv:/x:ro", "daten:/y"]}}}
+    assert c2s._long_binds(document)["services"] == {
+        "leer": {"image": "x"},
+        "web": {"volumes": [{"type": "bind", "source": "/srv", "target": "/x", "read_only": True}, "daten:/y"]},
+    }
 
 
 def test_names_for_stacks():
@@ -398,6 +416,52 @@ async def test_ids_and_long_names_are_refused(env):
     e.data["Name"] = "/" + "x" * 250
     long = await e.conv.plan(e.host, "x" * 250)
     assert "Der Name des Containers ist zu lang, um ihn für den Rückweg umzubenennen." in long["refused"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("prefix", "answer", "why"),
+    [
+        (["docker", "container", "inspect"], result(stderr="Error: No such container: plaintest\n", code=1),
+         "Der Container ließ sich nicht lesen: Error: No such container: plaintest"),
+        (["docker", "container", "inspect"], result("kein json"), "Der Container ließ sich nicht lesen."),
+        (["docker", "container", "inspect"], result("[]"), "Den Container gibt es nicht mehr."),
+        (["docker", "image", "inspect"], result(stderr="Error: No such image: busybox:1.37\n", code=1),
+         "Das Image des Containers ließ sich nicht lesen: Error: No such image: busybox:1.37"),
+        (["docker", "info"], result("1 json-file\n"), "Docker ließ sich nicht befragen."),
+    ],
+)
+async def test_what_cannot_be_read_is_a_reason(env, prefix, answer, why):
+    e = env()
+    original = e.fake.run_argv
+
+    async def run_argv(host, argv, **kwargs):
+        return answer if argv[:len(prefix)] == prefix else await original(host, argv, **kwargs)
+
+    e.fake.run_argv = run_argv
+    plan = await e.conv.plan(e.host, "plaintest")
+    assert plan["refused"] == [why] and plan["compose"] is None
+
+
+@pytest.mark.asyncio
+async def test_other_errors_while_reading_are_not_hidden(env):
+    e = env()
+
+    async def run_argv(host, argv, **kwargs):
+        raise RuntimeError("kaputt")
+
+    e.fake.run_argv = run_argv
+    with pytest.raises(RuntimeError, match="kaputt"):
+        await e.conv.plan(e.host, "plaintest")
+
+
+@pytest.mark.asyncio
+async def test_an_existing_stack_of_the_same_name_is_a_reason(env):
+    e = env()
+    e.fake.rows = [row(project="plaintest", name="plaintest-web-1", service="web", working_dir="/srv/anders",
+                       config_files="/srv/anders/compose.yaml")]
+    refused = (await e.conv.plan(e.host, "plaintest"))["refused"]
+    assert refused == ["Auf diesem Server gibt es schon einen Stack „plaintest“. Nimm einen anderen Namen oder übernimm den bestehenden."]
 
 
 @pytest.mark.asyncio
@@ -637,7 +701,7 @@ async def test_a_cancel_brings_the_old_container_back(env, at):
 
     e.fake.run_argv = run_argv
     task = asyncio.create_task(e.executor.execute(_request(await e.conv.plan(e.host, "plaintest"))))
-    await hit.wait()
+    await asyncio.wait_for(hit.wait(), 5)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -770,14 +834,151 @@ async def test_one_change_at_a_time(env):
     assert busy.error == "An diesem Stack läuft gerade schon etwas (Anlegen). Versuch es danach noch einmal." and e.calls == []
 
 
-# --- Durch den echten Kern -------------------------------------------------------------------------------------------
+@pytest.mark.asyncio
+@pytest.mark.parametrize("host_ref", ["h2", None])
+async def test_an_unknown_server_changes_nothing(env, host_ref):
+    e = env()
+    request = _request(await e.conv.plan(e.host, "plaintest")).model_copy(update={"host_ref": host_ref})
+    assert (await e.executor.execute(request)).error == "Server nicht gefunden."
+    assert e.calls == [] and f"{ROOT}/plaintest" not in e.sftp.dirs
 
 
 @pytest.mark.asyncio
-async def test_converting_through_the_gate(client, docker_on, monkeypatch):
+async def test_a_container_gone_before_the_second_read_changes_nothing(env):
+    e = env()
+    plan = await e.conv.plan(e.host, "plaintest")
+    original = e.fake.run_argv
+    reads = []
+
+    async def run_argv(host, argv, **kwargs):
+        if argv[:3] == ["docker", "container", "inspect"]:
+            reads.append(argv)
+            if len(reads) == 2:
+                return result(stderr="Error: No such container: plaintest\n", code=1)
+        return await original(host, argv, **kwargs)
+
+    e.fake.run_argv = run_argv
+    done = await e.executor.execute(_request(plan))
+    assert done.error == "Der Container ließ sich nicht lesen: Error: No such container: plaintest. Geändert wurde nichts."
+    assert len(reads) == 2 and e.calls == [] and f"{ROOT}/plaintest" not in e.sftp.dirs
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_while_laying_out_leaves_nothing_behind(env):
+    e = env()
+    plan = await e.conv.plan(e.host, "plaintest")
+    original = e.fake.run_argv
+    hit = asyncio.Event()
+
+    async def run_argv(host, argv, **kwargs):
+        if argv[-3:] == ["config", "--format", "json"]:
+            hit.set()
+            await asyncio.sleep(3600)
+        return await original(host, argv, **kwargs)
+
+    e.fake.run_argv = run_argv
+    task = asyncio.create_task(e.executor.execute(_request(plan)))
+    await asyncio.wait_for(hit.wait(), 5)
+    assert f"{ROOT}/plaintest/container.env" in e.sftp.files
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert e.calls == [] and f"{ROOT}/plaintest" not in e.sftp.dirs
+    assert not [p for p in e.sftp.files if p.startswith(f"{ROOT}/plaintest")]
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_error_brings_the_old_container_back_and_is_raised(env):
+    e = env()
+    original = e.fake.run_argv
+
+    async def run_argv(host, argv, **kwargs):
+        if argv[-2:] == ["up", "-d"]:
+            raise RuntimeError("kaputt")
+        return await original(host, argv, **kwargs)
+
+    e.fake.run_argv = run_argv
+    with pytest.raises(RuntimeError, match="kaputt"):
+        await e.executor.execute(_request(await e.conv.plan(e.host, "plaintest")))
+    cid = "c" * 64
+    assert e.calls[-3:] == [["down"], ["docker", "rename", cid, "plaintest"], ["docker", "start", cid]]
+    assert f"{ROOT}/plaintest" not in e.sftp.dirs and e.store.for_host("h1") == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("after_up", ["keine-container", "liste-kaputt"])
+async def test_a_stack_that_cannot_be_checked_brings_the_old_container_back(env, monkeypatch, after_up):
+    e = env()
+    plan = await e.conv.plan(e.host, "plaintest")
+    original = e.fake.run_argv
+
+    async def broken(host, project):
+        raise RuntimeError("kaputt")
+
+    async def run_argv(host, argv, **kwargs):
+        answer = await original(host, argv, **kwargs)
+        if argv[-2:] == ["up", "-d"]:
+            if after_up == "keine-container":
+                e.fake.rows = []
+            else:
+                monkeypatch.setattr(e.conv.stacks, "stacks", broken)
+        return answer
+
+    e.fake.run_argv = run_argv
+    done = await e.executor.execute(_request(plan))
+    cid = "c" * 64
+    assert done.error == ("Der Stack ist nicht sauber angelaufen: Der neue Container ließ sich nicht prüfen. "
+                          "Der alte Container läuft wieder wie vorher.")
+    assert e.calls[2:] == [["up"], ["down"], ["docker", "rename", cid, "plaintest"], ["docker", "start", cid]]
+    assert e.store.for_host("h1") == {}
+
+
+@pytest.mark.asyncio
+async def test_a_failed_rename_back_is_said(env):
+    e = env(fail={"rename": "Error: boom\n"})
+    original = e.fake.run_argv
+
+    async def run_argv(host, argv, **kwargs):
+        if argv[1:2] == ["rename"] and argv[-1].endswith("-vor-stack"):
+            raise _lost()
+        return await original(host, argv, **kwargs)
+
+    e.fake.run_argv = run_argv
+    done = await e.executor.execute(_request(await e.conv.plan(e.host, "plaintest")))
+    assert done.error == ("Der Container ließ sich nicht umbenennen: die Verbindung zum Server ist abgebrochen. Ob er wieder wie bisher "
+                          "läuft, ließ sich nicht feststellen (Error: boom). Sieh im Reiter Container nach; er kann auch "
+                          "„plaintest-vor-stack“ heißen.")
+    assert e.calls[-1] == ["docker", "start", "c" * 64]
+
+
+@pytest.mark.asyncio
+async def test_a_stack_that_could_not_be_remembered_is_said(env, monkeypatch):
+    e = env()
+
+    async def full(host_id, stack):
+        raise OSError("Platte voll")
+
+    monkeypatch.setattr(e.store, "add", full)
+    done = await e.executor.execute(_request(await e.conv.plan(e.host, "plaintest")))
+    assert (done.success, done.exit_code) == (False, 0) and done.output == f"Stack „plaintest“ läuft aus {ROOT}/plaintest."
+    assert done.error == "Nodvard Deck konnte sich den Stack nicht merken (Platte voll). Übernimm ihn im Reiter Stacks."
+    assert e.calls[-1] == ["docker", "rm", "c" * 64]
+
+
+@pytest.mark.asyncio
+async def test_the_dry_run_names_container_and_folder(env):
+    e = env()
+    report = await e.executor.dry_run(_request(await e.conv.plan(e.host, "plaintest")))
+    assert report.would_change is True
+    assert report.summary == f"Würde den Container „plaintest“ in einen Stack in {ROOT}/plaintest umwandeln."
+
+
+# --- Durch den echten Kern -------------------------------------------------------------------------------------------
+
+
+def _through_the_core(docker_on, monkeypatch):
     data = _sample()
     data["Id"], data["State"] = "c" * 64, {"Running": True}
-    data["Config"]["Cmd"] = ["serve", "--token", "geheim-im-befehl"]
     original = docker_on.exec.run_argv
 
     async def run_argv(host, argv, **kwargs):
@@ -790,6 +991,13 @@ async def test_converting_through_the_gate(client, docker_on, monkeypatch):
         return await original(host, argv, **kwargs)
 
     monkeypatch.setattr(docker_on.handle, "run_argv", run_argv, raising=False)
+    return data
+
+
+@pytest.mark.asyncio
+async def test_converting_through_the_gate(client, docker_on, monkeypatch):
+    data = _through_the_core(docker_on, monkeypatch)
+    data["Config"]["Cmd"] = ["serve", "--token", "geheim-im-befehl"]
     url = f"/api/v1/ext/docker/hosts/{docker_on.host}/containers/plaintest/to-stack"
     plan = await client.get(url, headers=docker_on.owner)
     assert plan.status_code == 200 and plan.json()["refused"] == [] and plan.json()["env_names"] == ["FOO", "TZ"]
@@ -797,12 +1005,23 @@ async def test_converting_through_the_gate(client, docker_on, monkeypatch):
     assert proposed.status_code == 202 and proposed.json()["risk"] == "high"
     action = (await client.get(f"/api/v1/actions/{proposed.json()['action_id']}", headers=docker_on.owner)).json()
     assert "Container „plaintest“ in den Stack „plaintest“ umwandeln" in action["reason"] and "bar" not in json.dumps(action)
+    assert "Riskant" not in action["reason"]
     assert "geheim-im-befehl" not in json.dumps(action) and "compose" not in action["payload"]
     assert action["payload"]["compose_sha256"] == hashlib.sha256(plan.json()["compose"].encode()).hexdigest()
     data["HostConfig"]["Links"] = ["/a:/b"]
     refused = await client.post(url, headers=docker_on.owner)
     assert refused.status_code == 409 and refused.json()["detail"] == "Der Container nutzt alte Links (--link)."
     assert (await client.get(f"/api/v1/ext/docker/hosts/{docker_on.host}/containers/a;b/to-stack", headers=docker_on.owner)).status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_the_approval_names_what_is_risky(client, docker_on, monkeypatch):
+    data = _through_the_core(docker_on, monkeypatch)
+    data["Mounts"].append({"Type": "bind", "Source": "/var/run/docker.sock", "Destination": "/var/run/docker.sock", "RW": True})
+    proposed = await client.post(f"/api/v1/ext/docker/hosts/{docker_on.host}/containers/plaintest/to-stack", headers=docker_on.owner)
+    assert proposed.status_code == 202, proposed.text
+    reason = (await client.get(f"/api/v1/actions/{proposed.json()['action_id']}", headers=docker_on.owner)).json()["reason"]
+    assert " Riskant: " in reason and "docker.sock" in reason
 
 
 @pytest.mark.asyncio
@@ -825,3 +1044,4 @@ def test_the_env_check_knows_how_compose_writes_dollars():
 
     assert seen({"A": "x$$y"}) is None and seen({"A": "x$y"}) is None and seen(["A=x$$y"]) is None
     assert seen({"A": "x"}) == seen({"A": "x$y", "B": "1"}) == seen(None) == c2s.ENV_CHANGED
+    assert c2s._env_vet({}, c2s.Converted(project="p", service="s")) is None

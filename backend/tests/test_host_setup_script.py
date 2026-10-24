@@ -1080,6 +1080,212 @@ def test_the_repair_is_reported_for_the_file_guard(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Der Schlüssel steht schon ohne Optionen in der Datei
+# ---------------------------------------------------------------------------
+
+BARE = KEY.rsplit(" ", 1)[0]
+"""Art und Schlüsseltext ohne Kommentar, wie `B` im Skript."""
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", SCRIPT_SHELLS)
+@pytest.mark.parametrize("user", ["lattice", "root"])
+@pytest.mark.parametrize("running", [("sshd",), ("sshd", "dropbear")], ids=["openssh", "dropbear"])
+def test_a_line_with_the_key_but_without_options_gets_them(tmp_path, shell, user, running):
+    bin_dir, home, _ = _sandbox(tmp_path, user=user)
+    options = host_setup.DROPBEAR_KEY_OPTIONS if "dropbear" in running else host_setup.OPENSSH_KEY_OPTIONS
+    before = [
+        "ssh-rsa AAAAold nico@pc",
+        "  # Notiz mit\tTab, \\Backslash, $HOME, `id` und *",
+        KEY,
+        f'from="192.0.2.0/24" {KEY}',
+        "",
+    ]
+    authorized = _keys_file(home, "\n".join(before))
+    inode = authorized.stat().st_ino
+    script = _script(user, key=f"{BARE} nodvard@bastel-pi", processes=_processes(tmp_path, *running))
+    done = _run_in(shell, script, bin_dir, tmp_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+    after = [f"{options} {KEY}" if line == KEY else line for line in before]
+    assert authorized.read_text() == "\n".join(after)
+    assert authorized.stat().st_ino == inode and stat.S_IMODE(authorized.stat().st_mode) == 0o600
+    assert host_setup.setup_messages(done.stdout) == [host_setup.KEY_RESTRICTED]
+
+    again = _run_in(shell, script, bin_dir, tmp_path)
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert authorized.read_text() == "\n".join(after)
+    assert host_setup.setup_messages(again.stdout) == []
+
+
+@needs_sh
+def test_every_line_with_the_bare_key_gets_options(tmp_path):
+    bin_dir, home, _ = _sandbox(tmp_path)
+    authorized = _keys_file(home, f"{KEY}\nssh-rsa AAAAold nico@pc\n{BARE}\n{BARE}\tvom Laptop\n  {BARE} eingerückt\n")
+    done = _run(_script(processes=_processes(tmp_path, "sshd")), bin_dir)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert authorized.read_text() == (
+        f"{OLD_LINE}\nssh-rsa AAAAold nico@pc\nrestrict,pty {BARE}\nrestrict,pty {BARE}\tvom Laptop\n"
+        f"restrict,pty {BARE} eingerückt\n"
+    )
+    assert host_setup.setup_messages(done.stdout) == [host_setup.KEY_RESTRICTED]
+
+
+@needs_sh
+@pytest.mark.parametrize("line", [
+    f'from="192.0.2.0/24" {KEY}',
+    f"no-port-forwarding {KEY}",
+    f"# {KEY}",
+    f"{BARE}x weiterer-schluessel",
+    f"ssh-ed25519x {BARE.split(' ', 1)[1]} andere-art",
+])
+def test_a_line_that_is_not_the_bare_key_stays(tmp_path, line):
+    bin_dir, home, _ = _sandbox(tmp_path)
+    authorized = _keys_file(home, f"{OLD_LINE}\n{line}\n")
+    done = _run(_script(processes=_processes(tmp_path, "sshd")), bin_dir)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert authorized.read_text() == f"{OLD_LINE}\n{line}\n"
+    assert host_setup.setup_messages(done.stdout) == []
+
+
+def _restrict(shell: str, tmp_path: Path, keys: Path, path: str = "/usr/bin:/bin") -> subprocess.CompletedProcess[str]:
+    """Nur das Einschränken aus dem Skript, in einer Login-Shell mit ihren eigenen Befehlen."""
+    argv, path = login_shell(shell, tmp_path, path=path)
+    snippet = "; ".join([
+        "set -e", f'K="{KEY}"', 'B=$(echo "$K" | cut -d" " -f1,2)', f'A="{keys}"',
+        host_setup._KEY_OPTIONS.replace(host_setup._PROC_COMMS, _processes(tmp_path, "sshd")),
+        host_setup._KEY_FIX_FUNCTION, host_setup._key_restrict(""), 'echo "KO=$KO"',
+    ])
+    return subprocess.run(
+        [*argv, "-c", snippet], capture_output=True, text=True, env={"PATH": path, "LC_ALL": "C.UTF-8"}, timeout=30,
+        check=False,
+    )
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", LOGIN_SHELLS)
+def test_restricting_works_in_every_login_shell(tmp_path, shell):
+    keys = tmp_path / "authorized_keys"
+    keys.write_text(f"ssh-rsa AAAAold Nicos Rechner – Büro\n{BARE} Schlüssel für Nodvard Deck\n")
+    done = _restrict(shell, tmp_path, keys)
+    assert (done.returncode, done.stderr) == (0, "")
+    assert done.stdout.splitlines() == [host_setup.KEY_RESTRICTED, f"KO={host_setup.OPENSSH_KEY_OPTIONS}"]
+    assert keys.read_text() == f"ssh-rsa AAAAold Nicos Rechner – Büro\nrestrict,pty {BARE} Schlüssel für Nodvard Deck\n"
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", LOGIN_SHELLS)
+def test_a_key_file_that_read_would_change_is_not_restricted(tmp_path, shell):
+    keys = tmp_path / "authorized_keys"
+    original = f"ssh-rsa AAAAold nico@a\0versteckt\n{KEY}\n".encode()
+    keys.write_bytes(original)
+    done = _restrict(shell, tmp_path, keys)
+    assert done.returncode == 1
+    assert keys.read_bytes() == original
+    error, hint = host_setup.setup_messages(done.stdout)
+    assert error.startswith("FEHLER: In ") and error.endswith("sie ist unverändert.")
+    assert hint.startswith("Hinweis: Von Hand beheben:") and "„restrict,pty“" in hint
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", LOGIN_SHELLS)
+def test_windows_line_ends_and_other_blanks_after_the_type_are_restricted_too(tmp_path, shell):
+    kind, text = BARE.split(" ", 1)
+    keys = tmp_path / "authorized_keys"
+    keys.write_bytes(
+        f"ssh-rsa AAAAold nico@pc\r\n{BARE}\r\n{BARE} vom Laptop\r\n{kind}\t{text}\n{kind}  {text} doppelt\n".encode()
+    )
+    done = _restrict(shell, tmp_path, keys)
+    assert (done.returncode, done.stderr) == (0, "")
+    assert keys.read_bytes() == (
+        f"ssh-rsa AAAAold nico@pc\r\nrestrict,pty {BARE}\r\nrestrict,pty {BARE} vom Laptop\r\n"
+        f"restrict,pty {kind}\t{text}\nrestrict,pty {kind}  {text} doppelt\n"
+    ).encode()
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", LOGIN_SHELLS)
+def test_only_space_and_tab_count_as_blank(tmp_path, shell):
+    keys = tmp_path / "authorized_keys"
+    keys.write_text(f"\u3000{BARE} breit\n\u00a0{BARE} geschützt\n{BARE}\n", encoding="utf-8")
+    done = _restrict(shell, tmp_path, keys)
+    assert (done.returncode, done.stderr) == (0, "")
+    assert keys.read_text(encoding="utf-8") == f"\u3000{BARE} breit\n\u00a0{BARE} geschützt\nrestrict,pty {BARE}\n"
+
+
+@needs_sh
+def test_without_cmp_the_file_stays_and_the_message_says_why(tmp_path):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for name in ("cat", "cut", "grep", "mktemp", "rm", "rmdir", "tee", "wc"):
+        (tools / name).symlink_to(shutil.which(name))
+    keys = tmp_path / "authorized_keys"
+    keys.write_text(f"{BARE}\n")
+    done = _restrict("sh", tmp_path, keys, path=str(tools))
+    assert done.returncode == 1 and keys.read_text() == f"{BARE}\n"
+    error, hint = host_setup.setup_messages(done.stdout)
+    assert "cmp (Paket diffutils)" in error and hint.startswith("Hinweis: diffutils installieren")
+
+
+@needs_sh
+@pytest.mark.parametrize("runuser", ["runuser", "su"])
+@pytest.mark.parametrize(
+    "content,running", [(f"{BARE}\n", ("sshd",)), (f"{OLD_LINE}\n", ("sshd", "dropbear"))], ids=["ohne-optionen", "dropbear"]
+)
+def test_the_key_file_of_another_user_is_changed_as_that_user(tmp_path, runuser, content, running):
+    bin_dir, home, log = _sandbox(tmp_path, runuser=runuser)
+    authorized = _keys_file(home, content)
+    done = _run(_script(processes=_processes(tmp_path, *running)), bin_dir)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert authorized.read_text() != content
+    as_user = "runuser -u lattice -- " if runuser == "runuser" else "su -s /bin/sh lattice -c "
+    calls = [line for line in log.read_text().splitlines() if line.startswith(as_user)]
+    for command in ("grep -q", "cat ", "tee ", "cmp -s"):
+        assert any(f"-- {command}" in line or f"-- sh {command}" in line for line in calls), command
+
+
+@needs_sh
+def test_restricting_with_a_write_that_does_not_check_out_restores_the_old_content(tmp_path):
+    bin_dir, home, _ = _sandbox(tmp_path)
+    _stub(bin_dir / "cmp", "exit 1\n")
+    original = f"ssh-rsa AAAAold nico@pc\n{KEY}\n"
+    authorized = _keys_file(home, original)
+    done = _run(_script(processes=_processes(tmp_path, "sshd")), bin_dir)
+    assert done.returncode == 1
+    assert authorized.read_text() == original
+    [message] = host_setup.setup_messages(done.stdout)
+    assert message.startswith("FEHLER: ") and "nicht sicher schreiben" in message and "Fertig." not in done.stdout
+
+
+@needs_sh
+def test_restricting_a_linked_root_key_file_keeps_the_link(tmp_path):
+    bin_dir, home, log = _sandbox(tmp_path, user="root")
+    (home / ".ssh").mkdir()
+    target = tmp_path / "pve-priv-authorized_keys"
+    target.write_text(f"ssh-rsa AAAAcluster admin\n{KEY}\n")
+    (home / ".ssh" / "authorized_keys").symlink_to(target)
+    done = _run(_script("root", processes=_processes(tmp_path, "sshd")), bin_dir)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (home / ".ssh" / "authorized_keys").is_symlink()
+    assert target.read_text() == f"ssh-rsa AAAAcluster admin\n{OLD_LINE}\n"
+    calls = log.read_text()
+    assert "chmod" not in calls and "chown" not in calls
+
+
+@needs_sh
+def test_restricting_is_reported_for_the_file_guard(tmp_path):
+    bin_dir, home, _ = _sandbox(tmp_path)
+    authorized = _keys_file(home, f"{KEY}\n")
+    done = _run(_script(report_state=True, processes=_processes(tmp_path, "sshd")), bin_dir)
+    assert done.returncode == 0, done.stdout + done.stderr
+    report = host_setup.setup_report(done.stdout, user="lattice")
+    assert report["actions"] == ["key_fixed"]
+    states = report["files"][str(authorized)]
+    assert states["before"]["sha256"] != states["after"]["sha256"]
+    run = host_setup.evaluate_setup_run(0, f"{host_setup.SETUP_STARTED}\n{done.stdout}", "", via_sudo=False, sudo_with_password=False)
+    assert run.outcome == "ok" and run.messages == [host_setup.KEY_RESTRICTED]
+
+
+# ---------------------------------------------------------------------------
 # Nodvard Deck fuehrt den Befehl selbst aus (Einrichten mit Passwort)
 # ---------------------------------------------------------------------------
 

@@ -256,6 +256,121 @@ async def test_item_image_upload_serve_and_delete_round_trip(client, db_session,
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("column", "value"), [
+    ("filename", "../../geheim.txt"), ("filename", "/etc/passwd"), ("filename", "..png"), ("filename", ""),
+    ("content_type", "text/html"),
+])
+async def test_an_image_row_from_a_forged_backup_cannot_reach_out(client, db_session, test_settings, column, value):
+    from nodvard_deck_ext_inventory import INVALID_IMAGE
+    from sqlalchemy import text
+
+    token = await _enable_inventory(client, db_session, test_settings)
+    headers = _auth_header(token)
+    item = await client.post("/api/v1/ext/inventory/items", json={"name": "Kamera"}, headers=headers)
+    item_id = item.json()["id"]
+    uploaded = await client.post(
+        f"/api/v1/ext/inventory/items/{item_id}/images", content=b"\x89PNG-bild", headers={**headers, "Content-Type": "image/png"},
+    )
+    image_id = uploaded.json()["id"]
+    secret = test_settings.ext_data_dir / "geheim.txt"
+    secret.write_text("GEHEIM")
+    await db_session.execute(text(f"UPDATE ext_inventory_item_images SET {column} = :v WHERE id = :i"), {"v": value, "i": image_id})
+    await db_session.commit()
+
+    served = await client.get(f"/api/v1/ext/inventory/items/{item_id}/images/{image_id}", headers=headers)
+    if column == "filename":
+        assert (served.status_code, served.json()["detail"]) == (404, INVALID_IMAGE)
+    else:
+        assert (served.status_code, served.headers["content-type"]) == (200, "application/octet-stream")
+    assert (await client.delete(f"/api/v1/ext/inventory/items/{item_id}/images/{image_id}", headers=headers)).status_code == 204
+    assert secret.read_text() == "GEHEIM"
+
+
+async def _image(client, headers) -> tuple[str, str]:
+    item = await client.post("/api/v1/ext/inventory/items", json={"name": "Kamera"}, headers=headers)
+    item_id = item.json()["id"]
+    uploaded = await client.post(
+        f"/api/v1/ext/inventory/items/{item_id}/images", content=b"\x89PNG-bild", headers={**headers, "Content-Type": "image/png"},
+    )
+    return item_id, uploaded.json()["id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="symbolische Links brauchen unter Windows Adminrechte")
+async def test_a_link_out_of_the_images_folder_is_not_followed(client, db_session, test_settings):
+    from nodvard_deck_ext_inventory import INVALID_IMAGE
+    from nodvard_deck_ext_inventory.images import images_dir
+
+    token = await _enable_inventory(client, db_session, test_settings)
+    headers = _auth_header(token)
+    item_id, image_id = await _image(client, headers)
+    secret = test_settings.ext_data_dir / "geheim.txt"
+    secret.write_text("GEHEIM")
+    [stored] = images_dir(test_settings.ext_data_dir / "inventory").glob("*")
+    stored.unlink()
+    stored.symlink_to(secret)
+
+    served = await client.get(f"/api/v1/ext/inventory/items/{item_id}/images/{image_id}", headers=headers)
+    assert (served.status_code, served.json()["detail"]) == (404, INVALID_IMAGE)
+    assert (await client.delete(f"/api/v1/ext/inventory/items/{item_id}/images/{image_id}", headers=headers)).status_code == 204
+    assert secret.read_text() == "GEHEIM"
+    assert not stored.is_symlink()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="symbolische Links brauchen unter Windows Adminrechte")
+async def test_a_link_loop_in_the_images_folder_is_refused_not_a_crash(client, db_session, test_settings):
+    from nodvard_deck_ext_inventory import INVALID_IMAGE
+    from nodvard_deck_ext_inventory.images import images_dir
+
+    token = await _enable_inventory(client, db_session, test_settings)
+    headers = _auth_header(token)
+    item_id, image_id = await _image(client, headers)
+    [stored] = images_dir(test_settings.ext_data_dir / "inventory").glob("*")
+    stored.unlink()
+    stored.symlink_to(stored)
+
+    served = await client.get(f"/api/v1/ext/inventory/items/{item_id}/images/{image_id}", headers=headers)
+    assert (served.status_code, served.json()["detail"]) == (404, INVALID_IMAGE)
+    assert (await client.delete(f"/api/v1/ext/inventory/items/{item_id}/images/{image_id}", headers=headers)).status_code == 204
+    assert not stored.is_symlink()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="symbolische Links brauchen unter Windows Adminrechte")
+async def test_saving_an_image_never_follows_a_planted_link(tmp_path):
+    from nodvard_deck_ext_inventory.images import images_dir, save_image
+
+    target = tmp_path / "fremd.txt"
+    target.write_text("unberührt", encoding="utf-8")
+    (images_dir(tmp_path / "ext") / "abc.png").symlink_to(target)
+    with pytest.raises(OSError):
+        save_image(tmp_path / "ext", "abc", "png", b"neu")
+    assert target.read_text(encoding="utf-8") == "unberührt"
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="symbolische Links brauchen unter Windows Adminrechte")
+async def test_an_images_folder_that_is_a_link_keeps_working(client, db_session, test_settings, tmp_path):
+    token = await _enable_inventory(client, db_session, test_settings)
+    headers = _auth_header(token)
+    elsewhere = tmp_path / "nas"
+    elsewhere.mkdir()
+    folder = test_settings.ext_data_dir / "inventory" / "images"
+    folder.parent.mkdir(parents=True, exist_ok=True)
+    if folder.exists():
+        folder.rmdir()
+    folder.symlink_to(elsewhere)
+    item_id, image_id = await _image(client, headers)
+    assert len(list(elsewhere.iterdir())) == 1
+
+    served = await client.get(f"/api/v1/ext/inventory/items/{item_id}/images/{image_id}", headers=headers)
+    assert (served.status_code, served.content) == (200, b"\x89PNG-bild")
+    assert (await client.delete(f"/api/v1/ext/inventory/items/{item_id}/images/{image_id}", headers=headers)).status_code == 204
+    assert list(elsewhere.iterdir()) == []
+
+
+@pytest.mark.asyncio
 async def test_upload_rejects_unsupported_content_type(client, db_session, test_settings):
     token = await _enable_inventory(client, db_session, test_settings)
     headers = _auth_header(token)

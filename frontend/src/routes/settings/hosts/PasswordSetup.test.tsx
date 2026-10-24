@@ -183,6 +183,28 @@ describe("Mit Passwort einrichten: Formular", () => {
     await waitFor(() => expect(calls.find((c) => `${c.method} ${c.path}` === SETUP_URL)?.body).toMatchObject({ sudo: true, full_sudo: true }));
   });
 
+  it("braucht kein Modul root, sagt der Haken, dass kein sudo kommt, und bietet „Volle Rechte“ an", async () => {
+    const onlyGroup = REQUIREMENTS.filter((r) => !r.needs_root);
+    const withoutRoot = (call: Call) => {
+      const full = new URLSearchParams(call.query).get("full_sudo") === "true";
+      const notes = full ? [] : ["Kein eingeschaltetes Modul braucht auf diesem Server root. Darum richtet der Befehl kein sudo ein."];
+      return { ...setupFixture(call), sudo: full, full_sudo: full, helpers: [], notes };
+    };
+    mockHostsApi(routes({ "GET /hosts/h1/requirements": onlyGroup, "GET /hosts/h1/credentials/c1/setup": withoutRoot }));
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Einrichtungsbefehl zeigen" }));
+    const root = await screen.findByRole("checkbox", { name: /Root-Rechte ohne Passwort/ });
+    expect(root).not.toBeChecked();
+    fireEvent.click(root);
+    expect(await screen.findByText(/Kein Modul braucht auf diesem Server root/)).toBeInTheDocument();
+    expect(screen.queryByText(/darum braucht es die volle sudo-Regel/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Kein eingeschaltetes Modul/)).not.toBeInTheDocument();
+
+    fireEvent.click(within(screen.getByTestId("setup-advanced")).getByRole("checkbox", { name: /Volle Rechte/ }));
+    expect(await screen.findByText(/darum braucht es die volle sudo-Regel/)).toBeInTheDocument();
+    expect(screen.queryByText(/Kein Modul braucht auf diesem Server root/)).not.toBeInTheDocument();
+  });
+
   it("anderes Konto als root: Haken „Für sudo dasselbe Passwort nehmen“ (Vorgabe an), abgewählt geht false mit", async () => {
     const calls = mockHostsApi(routes({ [SETUP_URL]: okResult() }));
     renderDetail();

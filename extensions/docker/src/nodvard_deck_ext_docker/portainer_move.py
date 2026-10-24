@@ -470,14 +470,17 @@ def _image_key(ref: str) -> str:
     return name + at + digest
 
 
-def changed_images(config: dict[str, Any], running: dict[str, str]) -> str | None:
-    """Warum die Datei, wie Compose sie im neuen Ordner auflöst, andere Images nennt als die laufenden Container, oder `None`."""
+def changed_images(config: dict[str, Any], running: dict[str, tuple[str, ...]]) -> str | None:
+    """Warum die Datei, wie Compose sie im neuen Ordner auflöst, andere Images nennt als die laufenden Container, oder `None`; bei
+    Containern eines Dienstes mit verschiedenen Images genügt eines davon."""
     services = config.get("services") if isinstance(config.get("services"), dict) else {}
     found = []
-    for name, ref in sorted(running.items()):
+    for name, refs in sorted(running.items()):
         image = services[name].get("image") if isinstance(services.get(name), dict) else None
-        if isinstance(image, str) and _image_key(image) != _image_key(ref):
-            found.append(f"Für „{name}“ steht darin das Image {image}, der Container läuft aber mit {ref}.")
+        if isinstance(image, str) and _image_key(image) not in {_image_key(ref) for ref in refs}:
+            runs = (f"der Container läuft aber mit {refs[0]}" if len(refs) == 1
+                    else f"die Container laufen aber mit {', '.join(refs[:-1])} und {refs[-1]}")
+            found.append(f"Für „{name}“ steht darin das Image {image}, {runs}.")
     if not found:
         return None
     return (f"Die Datei bei Portainer passt nicht zum laufenden Stack: {' '.join(found)} Vielleicht gehört sie zu einem anderen Stack, "
@@ -638,18 +641,34 @@ class DockerPortainerMoveExecutor:
             return f"{name} ist größer als {limit // 1024} KB."
         return data
 
-    async def _images(self, host: Any, stack: Stack) -> dict[str, str] | str:
-        """Dienst -> Image-Name, mit dem seine Container angelegt wurden, oder warum sich das nicht lesen ließ."""
+    async def _images(self, host: Any, stack: Stack) -> dict[str, tuple[str, ...]] | str:
+        """Dienst -> Image-Namen, mit denen seine Container angelegt wurden, oder warum sich das nicht lesen ließ."""
         names = [m.name for m in stack.members if CONTAINER_NAME_RE.match(m.name)]
         if not names:
             return {}
         result = await self._ctx.exec.run_argv(host, cmd_container_images(names), timeout_s=60)
         if result.exit_code != 0:
             return f"Die Container des Stacks ließen sich nicht lesen: {failure_line(result.stderr or result.stdout)}"
-        # Laufen die Container eines Dienstes mit verschiedenen Images, gibt es keinen gemeinsamen Stand zum Vergleichen.
-        return {service: entry.ref for service, entry in parse_container_images(result.stdout).items() if not entry.mixed}
+        return {service: entry.refs for service, entry in parse_container_images(result.stdout).items()}
 
-    async def _gather(self, host: Any, project: str, payload: dict[str, Any]) -> tuple[Stack, bytes, bytes | None, dict[str, str]] | str:
+    async def _still_matching(self, host: Any, stack: Stack, before: dict[str, tuple[str, ...]]) -> str | None:
+        """Ob die Container kurz vor dem Ausrollen noch mit denselben Images laufen wie beim Lesen der Datei; `None` oder warum nicht."""
+        try:
+            images = await self._images(host, stack)
+        except Exception as exc:
+            if not _connection_error(exc):
+                raise
+            return f"Die Container ließen sich vor dem Ausrollen nicht noch einmal lesen: {_lost(exc)}."
+        if isinstance(images, str):
+            return f"{_sentence(images)} Vielleicht wird der Stack gerade in Portainer neu ausgerollt; versuch es in ein paar Minuten noch einmal."
+        if images != before:
+            return ("Die Container des Stacks laufen inzwischen mit anderen Images als beim Lesen der Datei, vielleicht wird der Stack gerade "
+                    "in Portainer neu ausgerollt. Warte, bis das fertig ist, und versuch es dann noch einmal.")
+        return None
+
+    async def _gather(
+        self, host: Any, project: str, payload: dict[str, Any],
+    ) -> tuple[Stack, bytes, bytes | None, dict[str, tuple[str, ...]]] | str:
         """Stack, Datei und Variablen bei Portainer und die Images der laufenden Container, oder warum es nicht weitergeht; ändert
         noch nichts."""
         plan = await self._move.plan(host, project)
@@ -714,6 +733,10 @@ class DockerPortainerMoveExecutor:
         async with self._ctx.exec.sftp(host) as sftp:
             try:
                 problem = await self._create.lay_out(req, sftp, host, target, root, compose, created, extra, vet=vet)
+                if problem is None:
+                    # Rollt Portainer den Stack inzwischen neu aus, gehört die gelesene Datei nicht mehr zu den Containern.
+                    problem = await self._still_matching(host, stack, images)
+                    own.extend([problem] if problem else [])
             except BaseException:
                 await self._clean_up_after_abort(host, target, created, look=False, compose_may_run=False)
                 raise
@@ -802,22 +825,28 @@ class DockerPortainerMoveExecutor:
             ))
         adopted = await self._adopt(host, target)
         after = await self._move.running(host, target.project)
+        # `up` ohne `--profile` startet keine Dienste mit Profil; deren Container bleiben im Ordner bei Portainer.
+        rest = sum(1 for d, _ in rows if d.startswith(PORTAINER_DIR))
+        behind = (f" {rest} {'Container kommt' if rest == 1 else 'Container kommen'} noch aus dem Ordner bei Portainer, etwa für "
+                  "Dienste mit einem Profil (profiles), die Nodvard Deck beim Ausrollen nicht startet. Brauchst du sie, starte sie im "
+                  f"Terminal in {folder} mit docker compose --profile <Profil> up -d; sonst lösche sie im Reiter Container.") if rest else ""
         if adopted is not None:
             return ActionResult(success=False, duration_ms=duration_ms, error=(
                 f"Der Stack läuft jetzt aus {folder}, Nodvard Deck konnte sich ihn aber nicht merken ({adopted}). Übernimm ihn im "
-                f"Reiter Stacks. {KEEP_IN_PORTAINER}"
+                f"Reiter Stacks.{behind} {KEEP_IN_PORTAINER}"
             ))
         moved_text = f"Stack „{target.project}“ liegt jetzt in {folder} und ist übernommen."
         if isinstance(after, str):
             return ActionResult(success=False, exit_code=0, output=moved_text, duration_ms=duration_ms, error=(
-                f"Prüfung danach nicht möglich: {_sentence(after)} {KEEP_IN_PORTAINER}"
+                f"Prüfung danach nicht möglich: {_sentence(after)}{behind} {KEEP_IN_PORTAINER}"
             ))
         verdict, _ = await ac.check_running(self._ctx, host, [m.id for m in after.members])
         line = ac.result_line(verdict)
         output = f"{moved_text} {line} {KEEP_IN_PORTAINER}"
-        if verdict.ok:
+        if verdict.ok and not rest:
             return ActionResult(success=True, exit_code=0, output=output, duration_ms=duration_ms)
-        return ActionResult(success=False, exit_code=0, output=moved_text, duration_ms=duration_ms, error=f"{line} {KEEP_IN_PORTAINER}")
+        return ActionResult(success=False, exit_code=0, output=moved_text, duration_ms=duration_ms,
+                            error=f"{line}{behind} {KEEP_IN_PORTAINER}")
 
     async def _adopt(self, host: Any, target: Stack) -> str | None:
         """Merkt sich den Stack; `None` oder warum es nicht ging."""

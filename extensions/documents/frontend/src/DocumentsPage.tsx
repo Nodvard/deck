@@ -42,6 +42,12 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+/** Was „Ansehen“ zeigt. Die Art der Vorschau und der Typ der Blob-URL kommen nur von hier, nie aus der Liste oder vom
+ * Server: Ein Dokument aus einer veränderten Sicherung kann sonst HTML in der Seite von Nodvard Deck anzeigen. */
+const PREVIEW_KINDS = new Map<string, "image" | "pdf">([
+  ["image/png", "image"], ["image/jpeg", "image"], ["image/webp", "image"], ["application/pdf", "pdf"],
+]);
+
 function typeLabel(contentType: string): string {
   if (contentType === "application/pdf") return "PDF";
   if (contentType.startsWith("image/")) return contentType.slice(6).toUpperCase();
@@ -239,7 +245,9 @@ export function DocumentsPage(): JSX.Element {
   const [tagFilter, setTagFilter] = useState("");
   const [showTags, setShowTags] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [preview, setPreview] = useState<{ id: string; url: string; type: string } | null>(null);
+  const [preview, setPreview] = useState<{ id: string; url: string; kind: "image" | "pdf" } | null>(null);
+  // Gibt die Blob-URL frei, sobald eine andere Vorschau kommt oder die Seite verlassen wird.
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview.url); }, [preview]);
   const [copied, setCopied] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [attachTagId, setAttachTagId] = useState<Record<string, string>>({});
@@ -359,14 +367,14 @@ export function DocumentsPage(): JSX.Element {
    * braucht. */
   async function togglePreview(doc: Doc) {
     if (preview?.id === doc.id) {
-      URL.revokeObjectURL(preview.url);
       setPreview(null);
       return;
     }
+    const kind = PREVIEW_KINDS.get(doc.content_type);
+    if (!kind) return;
     const blob = await fetchBlob(doc);
     if (!blob) return;
-    if (preview) URL.revokeObjectURL(preview.url);
-    setPreview({ id: doc.id, url: URL.createObjectURL(blob), type: doc.content_type });
+    setPreview({ id: doc.id, url: URL.createObjectURL(blob.slice(0, blob.size, doc.content_type)), kind });
     setExpanded(doc.id);
   }
 
@@ -524,9 +532,11 @@ export function DocumentsPage(): JSX.Element {
                       </div>
                     </div>
                     <div className="flex w-full flex-wrap items-center gap-1 sm:w-auto sm:flex-none">
-                      <Button small onClick={() => void togglePreview(doc)} pressed={preview?.id === doc.id}>
-                        <Icon name="eye" size={13} /> {preview?.id === doc.id ? "Vorschau schließen" : "Ansehen"}
-                      </Button>
+                      {PREVIEW_KINDS.has(doc.content_type) && (
+                        <Button small onClick={() => void togglePreview(doc)} pressed={preview?.id === doc.id}>
+                          <Icon name="eye" size={13} /> {preview?.id === doc.id ? "Vorschau schließen" : "Ansehen"}
+                        </Button>
+                      )}
                       <Button small onClick={() => void renameDocument(doc)}><Icon name="edit" size={13} /> Umbenennen</Button>
                       <Button small onClick={() => void downloadDocument(doc)}><Icon name="download" size={13} /> Herunterladen</Button>
                       <Button small variant="danger" onClick={() => void removeDocument(doc)}><Icon name="trash" size={13} /> Löschen</Button>
@@ -536,9 +546,10 @@ export function DocumentsPage(): JSX.Element {
                     <div className="ml-10 mt-3 space-y-3 rounded-lg border border-white/[0.06] bg-black/15 p-4 text-sm">
                       {preview?.id === doc.id && (
                         <div data-testid={`preview-${doc.id}`}>
-                          {preview.type.startsWith("image/") ? (
+                          {preview.kind === "image" ? (
                             <img src={preview.url} alt={doc.original_filename} className="max-h-[70vh] rounded-lg border border-white/10" />
                           ) : (
+                            // Ohne `sandbox`: Hier landet nur ein Blob vom Typ application/pdf aus PREVIEW_KINDS, nie HTML oder SVG.
                             <iframe src={preview.url} title={doc.original_filename} className="h-[70vh] w-full rounded-lg border border-white/10 bg-[#fff]" />
                           )}
                         </div>

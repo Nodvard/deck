@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -168,6 +167,12 @@ async def run_job_now(job_id: str, session: SessionDep) -> RunOut:
             else "Kern-Jobs können in dieser Runde nicht manuell ausgelöst werden."
         )
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+    if not job.enabled:
+        # Sonst liefe von Hand, was jemand bewusst ausgeschaltet hat (etwa die automatischen Updates).
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Der Job ist ausgeschaltet. Von Hand starten lässt er sich erst, wenn er wieder eingeschaltet ist.",
+        )
     handler = get_extension_runtime().scheduler.get(job.ext_id, job.ext_job_key or "")
     if handler is None:
         raise HTTPException(
@@ -201,12 +206,7 @@ async def get_run_output(run_id: str, session: SessionDep) -> dict[str, str]:
     run = await jobs_service.get_run(session, run_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Lauf.")
-    if run.output_ref is None:
-        return {"output": ""}
-    path = Path(run.output_ref)
-    if not path.is_file():
-        return {"output": ""}
-    return {"output": path.read_text(encoding="utf-8")}
+    return {"output": jobs_service.read_run_output(get_scheduler_service().runs_dir, run.output_ref)}
 
 
 @router.post("/runs/{run_id}/cancel", dependencies=[Depends(require_permission("jobs.run"))])

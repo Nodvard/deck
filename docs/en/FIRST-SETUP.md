@@ -1070,12 +1070,16 @@ management), paste it, press Enter. It
 Under "What does the command do?" („Was macht der Befehl?“) the same sequence is shown in readable form, line by
 line. The command runs directly as root, otherwise via `sudo` – so it works on Proxmox (no sudo) as well as on
 Debian or the Pi. It can safely be run several times: it recognizes a key that is already there, even with the older
-comment `lattice@…`, and does not add it twice.
+comment `lattice@…`, and does not add it twice. If the key is in the file without restrictions (for example added by
+hand), the command puts `restrict,pty` or the options for Dropbear in front of it and reports „Der schon eingetragene
+Schlüssel für Nodvard Deck ist jetzt eingeschränkt …“ (the key already there is now restricted). Lines with options of
+their own, such as `from="…"`, stay as they are. To check what it wrote, it needs `cmp` (package diffutils); if that
+is missing, it changes nothing and names the fix.
 
 If you set up a server with Dropbear with an older version and "Check connection" („Verbindung prüfen“) reports that
 the server did not accept the key („Der Server hat den Schlüssel nicht akzeptiert“), simply set it up again (with a
 password or with the command). The command then replaces exactly its own old line `restrict,pty …` with the line for
-Dropbear (message „Schlüssel für Dropbear angepasst.“); other lines, including your own ones with the same key, stay as
+Dropbear (message „Schlüssel für Dropbear angepasst.“); other lines with the same key and options of their own stay as
 they are.
 
 #### Set up with a password (Nodvard Deck runs the command)
@@ -1274,26 +1278,31 @@ Terminal, Files and Scripts.
   updates, quarantine, restarting services). Under "Was macht der Befehl?" (what does the command do?) you can read
   every script. First the command checks that the scripts can be set up safely: `sudo`, `base64`, `sha256sum` and
   `stat` must be present, every folder above `/usr/local/lib/nodvard-deck` must be a real folder owned by root that
-  nobody but root may write to (not through one of the user's groups or an ACL either), and if
-  `/usr/local/lib/nodvard-deck` already exists, the same applies to it (otherwise the command creates it). The user's
-  groups include the ones the command is about to add: the ticked ones (such as docker) and, for a new user, the group
-  named after the user. To be safe, a new user also counts as a member of the default group of `useradd` (usually
-  users), since it cannot be told for sure which group the user gets, and of groups without a name (just a number),
-  which `useradd` could hand out. The command checks ACLs with `getfacl`; if it is missing (package `acl`) and an ACL
-  could be involved, the folder counts as unsafe. If that fails, it changes **nothing**, names the folder, the reason
-  and the fix (such as `chmod go-w /usr/local/lib` or `mkdir -p /usr/local/lib`) and ends with an error; "Mit Passwort
-  einrichten" (set up with password) shows the same lines. Fix the reason or, unless sudo is missing, choose "Volle
+  nobody but root and the root group may write to: no other group, and no user or group through an ACL. If
+  `/usr/local/lib/nodvard-deck` already exists, the same applies to it (otherwise the command creates it). If the root
+  group may write to one of these folders, the user must not be in it, not even through the command (for a new user,
+  for example, through the default group of `useradd`). The command checks
+  ACLs with `getfacl`; if it is missing (package `acl`) and an ACL could be involved, the folder counts as unsafe. If
+  that fails, it changes **nothing**, names the folder, the reason and the fix (such as `chmod go-w /usr/local/lib` or
+  `mkdir -p /usr/local/lib`) and ends with an error; "Mit Passwort einrichten" (set up with password) shows the same
+  lines. Older Debian lets the group staff write to `/usr/local` and `/usr/local/lib`; there, as root,
+  `chmod g-w /usr/local /usr/local/lib` helps. Fix the reason or, unless sudo is missing, choose "Volle
   Rechte" and set up again.
 - **Full rights:** If a module needs root and has no helper script, or if you tick "Volle Rechte" (full rights) under
   "Erweitert" (advanced), the full rule is added. You only need that tick box if you start your own commands with sudo
   through Nodvard Deck, for example in scripts.
+- **No module needs root:** Then the tick box sets up no sudo at all, not even the full rule. The page says so below the
+  tick box. If you still want sudo, for example for your own commands in scripts, tick "Volle Rechte" under "Erweitert".
 
 The command never takes back a full rule that is already there: a server that has one keeps running as before, even if
 you run the command there again. To get rid of it, run the command once more first and press "Verbindung prüfen". If
 every helper script shows "Eigene sudo-Regel vorhanden" (own sudo rule present), delete the full rule on the server
 (`sudo rm /etc/sudoers.d/nodvard-<user>`, on older servers `lattice-<user>`) and check again: "Root-Rechte" then says
 "sudo erlaubt nur die Hilfsskripte der Module, keine volle Regel. Das reicht." (sudo allows only the modules' helper
-scripts, no full rule; that is enough).
+scripts, no full rule; that is enough). If no module needs root on the server at all, you can delete the full rule
+right away, unless you need sudo for your own commands through Nodvard Deck. "Verbindung prüfen" then shows under
+"Root-Rechte": "Kein eingeschaltetes Modul braucht hier root, sudo ohne Passwort ist nicht nötig." (no enabled module
+needs root here, sudo without a password is not needed).
 
 The full rule is `/etc/sudoers.d/nodvard-<user>` with the line
 `<user> ALL=(root) NOPASSWD: ALL`. The line is first written to a trial file and checked with `visudo -c`; only then
@@ -1580,11 +1589,55 @@ on its own every few seconds.
    installation from the repository) already contains the line `# - ./sicherungen:/backups` under `volumes:`. Remove
    the `#` (or enter a NAS path instead of `./sicherungen`), run `mkdir sicherungen && sudo chown 1000:1000 sicherungen`
    in the same folder (the folder must belong to the user with the number 1000), apply it with `docker compose up -d`
-   and choose `/backups` as the folder in the interface.
+   and choose `/backups` as the folder in the interface. For a NAS or NFS see
+   [Backups to a NAS or NFS](#backups-to-a-nas-or-nfs).
 4. **Check** („Prüfen“) compares a backup with its checksum (detects broken files, without a password).
    **Download** („Herunterladen“) fetches a backup to your PC, **Download backup** („Sicherung herunterladen“) creates
    a fresh one immediately – either with the backup password or with a one-time password of your own just for this
    file.
+
+#### Backups to a NAS or NFS
+
+**Which folder works:** Nodvard Deck only accepts `/app/data/backups` in the data folder or the mounted folder
+`/backups` including subfolders (such as `/backups/deck`). This is always the path **inside the container**, not the
+one on the host or on the NAS.
+
+**How to:**
+
+1. Mount the NAS folder on the machine Nodvard Deck runs on, for example at `/srv/backup/deck`. For NFS in
+   `/etc/fstab`:
+
+   ```
+   nas:/volume1/backup/deck  /srv/backup/deck  nfs  defaults,_netdev,x-systemd.before=docker.service  0  0
+   ```
+
+   The NFS share has to be mounted before Docker starts. Otherwise Docker mounts the empty folder on the local disk,
+   and the backups end up there instead of on the NAS. `_netdev` tells the system it is a network drive,
+   `x-systemd.before=docker.service` makes Docker wait for it.
+2. In the Compose file under `volumes:`, uncomment the prepared line and enter the path:
+   `- /srv/backup/deck:/backups`. Apply it with `docker compose up -d`. In Portainer: edit the stack and
+   "Update the stack".
+3. **Write access for user 1000:** Inside the container Nodvard Deck runs as user and group 1000. The folder on the
+   NAS has to be writable for 1000:
+   - `chown 1000:1000` for the folder on the NAS, or
+   - map all access to 1000 in the NFS export: `all_squash,anonuid=1000,anongid=1000`.
+
+   With NFS a `chown` on the host usually does nothing, because the NAS does not let root through (`root_squash`).
+4. **Test** before you save in the interface (`docker ps` shows the container's name):
+
+   ```bash
+   docker exec -u 1000 <container> sh -c 'touch /backups/.test && rm /backups/.test && echo ok'
+   ```
+
+   If it prints `ok`, choose `/backups` (or a subfolder) as the folder in the interface.
+
+**Error messages when saving** (shown in German):
+
+| Message | What helps |
+|---|---|
+| „Der Ordner /backups existiert nicht (ist er eingebunden?).“ (the folder does not exist, is it mounted?) | The line `- …:/backups` is missing or still commented out, or the container was not recreated afterwards (`docker compose up -d`, in Portainer "Update the stack"). |
+| „Sicherungen dürfen nur nach /app/data/backups oder in den eingebundenen Ordner /backups geschrieben werden.“ (backups may only go to …) | Enter the path inside the container (`/backups` or `/backups/…`), not the path on the host such as `/srv/backup/…`. |
+| „In /backups darf Nodvard Deck nicht schreiben.“ (Nodvard Deck may not write to /backups) | Write access for 1000 is missing (step 3), or the NFS share was not mounted yet when Docker started (step 1). |
 
 Emergency without Nodvard Deck: A `.ndbak` file is an ordinary [age](https://age-encryption.org) file with two lines in
 front of it.

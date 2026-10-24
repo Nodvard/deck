@@ -1090,13 +1090,17 @@ Konsole deiner VM-Verwaltung), einfügen, Enter. Er
 Unter „Was macht der Befehl?“ steht derselbe Ablauf lesbar, Zeile für Zeile. Der Befehl läuft als
 root direkt, sonst über `sudo` – er funktioniert also auf Proxmox (kein sudo) ebenso wie auf
 Debian oder dem Pi. Er lässt sich gefahrlos mehrfach ausführen: Einen schon eingetragenen Schlüssel erkennt er
-auch mit dem älteren Kommentar `lattice@…` und trägt ihn nicht doppelt ein.
+auch mit dem älteren Kommentar `lattice@…` und trägt ihn nicht doppelt ein. Steht der Schlüssel ohne Einschränkung in
+der Datei (etwa von Hand eingetragen), setzt der Befehl `restrict,pty` bzw. die Optionen für Dropbear davor und meldet
+„Der schon eingetragene Schlüssel für Nodvard Deck ist jetzt eingeschränkt …“. Zeilen mit eigenen Optionen, etwa
+`from="…"`, bleiben, wie sie sind. Zum Prüfen des Geschriebenen braucht er dabei `cmp` (Paket diffutils); fehlt es,
+ändert er nichts und nennt die Abhilfe.
 
 Hast du einen Server mit Dropbear schon mit einer älteren Version eingerichtet und „Verbindung prüfen“ meldet „Der
 Server hat den Schlüssel nicht akzeptiert“, dann richte ihn einfach noch einmal ein (mit Passwort oder mit dem
 Befehl). Der Befehl ersetzt dabei genau seine eigene alte Zeile `restrict,pty …` durch die Zeile für Dropbear
-(Meldung „Schlüssel für Dropbear angepasst.“); andere Zeilen, auch eigene mit demselben Schlüssel, bleiben, wie sie
-sind.
+(Meldung „Schlüssel für Dropbear angepasst.“); andere Zeilen mit demselben Schlüssel und eigenen Optionen bleiben,
+wie sie sind.
 
 #### Mit Passwort einrichten (Nodvard Deck führt den Befehl aus)
 
@@ -1301,25 +1305,30 @@ Root-Rechte. Die reicht für Terminal, Dateien und Skripte.
   einspielen, Quarantäne, Dienste neu starten). Unter „Was macht der Befehl?“ kannst du jedes Skript lesen.
   Vorher prüft der Befehl, ob sich die Skripte sicher einrichten lassen: `sudo`, `base64`, `sha256sum` und `stat` müssen
   da sein, jeder Ordner über `/usr/local/lib/nodvard-deck` muss ein echter Ordner sein, der root gehört und in dem außer
-  root niemand schreiben darf (auch nicht über eine Gruppe des Benutzers oder eine ACL), und gibt es
-  `/usr/local/lib/nodvard-deck` schon, gilt für ihn dasselbe (sonst legt der Befehl ihn an). Als Gruppen des Benutzers
-  zählen auch die, die er erst durch den Befehl bekommt: die angehakten (etwa docker) und bei einem neuen Benutzer die
-  Gruppe mit seinem Namen. Vorsichtshalber zählen bei einem neuen Benutzer auch die Standardgruppe von `useradd` (meist
-  users), weil sich nicht sicher feststellen lässt, welche er bekommt, und Gruppen ohne Namen (nur eine Nummer), die
-  `useradd` ihm geben könnte. Eine ACL prüft der Befehl mit `getfacl`; fehlt es (Paket `acl`) und könnte eine ACL im
-  Spiel sein, gilt der Ordner als unsicher. Klappt das nicht, ändert er **nichts**, nennt den Ordner, den Grund und die
-  Abhilfe (etwa `chmod go-w /usr/local/lib` oder `mkdir -p /usr/local/lib`) und endet mit einem Fehler; „Mit Passwort
-  einrichten“ zeigt dieselben Zeilen. Dann den Grund beheben oder, außer wenn sudo fehlt, „Volle Rechte“ wählen und noch
+  root und der Gruppe root niemand schreiben darf: keine andere Gruppe und kein Benutzer oder keine Gruppe über eine
+  ACL. Gibt es `/usr/local/lib/nodvard-deck` schon, gilt für ihn dasselbe (sonst legt der Befehl ihn an). Darf in einem
+  dieser Ordner die Gruppe root schreiben, darf der Benutzer nicht in ihr sein, auch nicht erst durch den Befehl (bei
+  einem neuen Benutzer etwa über die Standardgruppe von `useradd`). Eine ACL prüft der
+  Befehl mit `getfacl`; fehlt es (Paket `acl`) und könnte eine ACL im Spiel sein, gilt der Ordner als unsicher. Klappt
+  das nicht, ändert er **nichts**, nennt den Ordner, den Grund und die Abhilfe (etwa `chmod go-w /usr/local/lib` oder
+  `mkdir -p /usr/local/lib`) und endet mit einem Fehler; „Mit Passwort einrichten“ zeigt dieselben Zeilen. Ältere
+  Debian lassen die Gruppe staff in `/usr/local` und `/usr/local/lib` schreiben; dort hilft als root
+  `chmod g-w /usr/local /usr/local/lib`. Dann den Grund beheben oder, außer wenn sudo fehlt, „Volle Rechte“ wählen und noch
   einmal einrichten.
 - **Volle Rechte:** Braucht ein Modul root und hat kein Hilfsskript, oder setzt du unter „Erweitert“ das Häkchen
   „Volle Rechte“, kommt die volle Regel dazu. Das Häkchen brauchst du nur, wenn du über Nodvard Deck eigene Befehle mit
   sudo startest, etwa in Skripten.
+- **Kein Modul braucht root:** Dann richtet der Haken gar kein sudo ein, auch keine volle Regel. Die Seite sagt das unter
+  dem Haken. Willst du trotzdem sudo, etwa für eigene Befehle in Skripten, setz unter „Erweitert“ „Volle Rechte“.
 
 Eine schon vorhandene volle Regel nimmt der Befehl nie zurück: Ein Server, der sie hat, läuft weiter wie bisher, auch
 wenn du den Befehl dort noch einmal ausführst. Willst du sie loswerden, führ den Befehl zuerst noch einmal aus und drück
 „Verbindung prüfen“. Steht dort bei jedem Hilfsskript „Eigene sudo-Regel vorhanden“, lösch auf dem Server die volle
 Regel (`sudo rm /etc/sudoers.d/nodvard-<benutzer>`, auf älteren Servern `lattice-<benutzer>`) und prüf noch einmal: Bei
-„Root-Rechte“ steht dann „sudo erlaubt nur die Hilfsskripte der Module, keine volle Regel. Das reicht.“
+„Root-Rechte“ steht dann „sudo erlaubt nur die Hilfsskripte der Module, keine volle Regel. Das reicht.“ Braucht auf dem
+Server gar kein Modul root, kannst du die volle Regel gleich löschen, wenn du sudo nicht für eigene Befehle über Nodvard
+Deck brauchst. „Verbindung prüfen“ zeigt danach bei „Root-Rechte“: „Kein eingeschaltetes Modul braucht hier root, sudo
+ohne Passwort ist nicht nötig.“
 
 Die volle Regel ist `/etc/sudoers.d/nodvard-<benutzer>` mit
 der Zeile `<benutzer> ALL=(root) NOPASSWD: ALL`. Die Zeile wird erst in eine Probedatei geschrieben
@@ -1626,11 +1635,55 @@ Ist Nodvard Deck gerade nicht erreichbar, sagt der Reiter das und versucht es al
    schon die Zeile `# - ./sicherungen:/backups`. Das `#` davor entfernen (oder einen NAS-Pfad statt
    `./sicherungen` eintragen), im selben Ordner `mkdir sicherungen && sudo chown 1000:1000 sicherungen`
    ausführen (der Ordner muss dem Nutzer mit der Nummer 1000 gehören), mit `docker compose up -d`
-   übernehmen und in der Oberfläche als Ordner `/backups` wählen.
+   übernehmen und in der Oberfläche als Ordner `/backups` wählen. Für ein NAS oder NFS siehe
+   [Sicherungen auf ein NAS oder NFS](#sicherungen-auf-ein-nas-oder-nfs).
 4. **Prüfen** vergleicht eine Sicherung mit ihrer Prüfsumme (erkennt kaputte Dateien, ohne
    Passwort). **Herunterladen** holt eine Sicherung auf den PC, **Sicherung herunterladen**
    erstellt sofort eine frische – wahlweise mit dem Sicherungspasswort oder mit einem eigenen
    Einmal-Passwort nur für diese Datei.
+
+#### Sicherungen auf ein NAS oder NFS
+
+**Welcher Ordner geht:** Als Ziel nimmt Nodvard Deck nur `/app/data/backups` im Datenordner oder den eingebundenen
+Ordner `/backups` samt Unterordnern (etwa `/backups/deck`). Gemeint ist immer der Pfad **im Container**, nicht der auf
+dem Rechner oder dem NAS.
+
+**So geht's:**
+
+1. Den Ordner vom NAS auf dem Rechner einhängen, auf dem Nodvard Deck läuft, zum Beispiel unter `/srv/backup/deck`.
+   Bei NFS in `/etc/fstab`:
+
+   ```
+   nas:/volume1/backup/deck  /srv/backup/deck  nfs  defaults,_netdev,x-systemd.before=docker.service  0  0
+   ```
+
+   Das NFS muss eingehängt sein, bevor Docker startet. Sonst bindet Docker den leeren Ordner auf der eigenen Platte
+   ein, und die Sicherungen landen dort statt auf dem NAS. `_netdev` sagt dem System, dass es ein Netzlaufwerk ist,
+   `x-systemd.before=docker.service` lässt Docker darauf warten.
+2. In der Compose-Datei unter `volumes:` die vorbereitete Zeile einkommentieren und den Pfad eintragen:
+   `- /srv/backup/deck:/backups`. Mit `docker compose up -d` übernehmen. In Portainer heißt das: Stack bearbeiten und
+   „Update the stack“.
+3. **Schreibrechte für den Nutzer 1000:** Nodvard Deck läuft im Container als Nutzer und Gruppe 1000. Der Ordner auf
+   dem NAS muss für 1000 beschreibbar sein:
+   - auf dem NAS `chown 1000:1000` für den Ordner, oder
+   - beim NFS-Export alle Zugriffe auf 1000 abbilden: `all_squash,anonuid=1000,anongid=1000`.
+
+   Bei NFS bringt ein `chown` auf dem Rechner meist nichts, weil das NAS root nicht durchlässt (`root_squash`).
+4. **Testen**, bevor du in der Oberfläche speicherst (den Namen des Containers zeigt `docker ps`):
+
+   ```bash
+   docker exec -u 1000 <container> sh -c 'touch /backups/.test && rm /backups/.test && echo ok'
+   ```
+
+   Kommt `ok`, in der Oberfläche als Ordner `/backups` (oder einen Unterordner) wählen.
+
+**Fehlermeldungen beim Speichern:**
+
+| Meldung | Was hilft |
+|---|---|
+| „Der Ordner /backups existiert nicht (ist er eingebunden?).“ | Die Zeile `- …:/backups` fehlt oder ist noch auskommentiert, oder der Container wurde danach nicht neu erstellt (`docker compose up -d`, in Portainer „Update the stack“). |
+| „Sicherungen dürfen nur nach /app/data/backups oder in den eingebundenen Ordner /backups geschrieben werden.“ | Als Ordner den Pfad im Container eintragen (`/backups` oder `/backups/…`), nicht den Pfad auf dem Rechner wie `/srv/backup/…`. |
+| „In /backups darf Nodvard Deck nicht schreiben.“ | Schreibrechte für 1000 fehlen (Schritt 3), oder das NFS war beim Start von Docker noch nicht eingehängt (Schritt 1). |
 
 Notfall ohne Nodvard Deck: Eine `.ndbak`-Datei ist eine normale [age](https://age-encryption.org)-Datei
 mit zwei Zeilen davor.

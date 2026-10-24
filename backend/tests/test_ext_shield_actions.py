@@ -309,6 +309,24 @@ async def test_restore_and_delete_clicks_come_from_the_finding_row(soc):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("forged", ["/etc/shadow", "/var/lib/nexus-quarantine/.herkunft/f1_eicar.com"])
+async def test_a_quarantine_path_from_a_changed_backup_is_neither_proposed_nor_run(soc, forged):
+    from nodvard_deck_ext_shield.models import FindingRecord
+
+    req = await _click(soc, "/defender/findings/f1/restore")
+    async with soc.ctx._session() as s:
+        (await s.get(FindingRecord, "f1")).quarantine_path = forged
+        await s.commit()
+    for path in ("/defender/findings/f1/restore", "/defender/findings/f1/delete"):
+        r = await soc.client.post(path, json={})
+        assert r.status_code == 409 and "nicht in der Quarantäne" in r.json()["detail"]
+    res = await soc.executor.execute(req)
+    assert not res.success and "nicht in der Quarantäne" in res.error
+    assert soc.ctx.commands == []
+    assert (await soc.defender.finding("f1"))["status"] == "quarantined"
+
+
+@pytest.mark.asyncio
 async def test_quarantine_and_delete_reach_only_a_helper_that_checks_itself(soc):
     """Erst ab Version 8 prüft das Hilfsskript eine Datei vor der Quarantäne selbst und legt nur an den hinterlegten Ort
     zurück (Version 7 tat das auch, verlor aber bei zwei gleichzeitigen Aufrufen die Herkunft). Ein älteres Skript auf

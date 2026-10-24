@@ -5,7 +5,7 @@ Klick-Fallen), der Browser rät keinen Dateityp (`nosniff`), und fremde Seiten e
 welche Deck-Seite offen war (`Referrer-Policy: same-origin`).
 
 Setzt eine Route selbst eine `Content-Security-Policy` (Dateien von Nutzern mit `sandbox`, die App-Seite mit ihren Regeln
-für Stile), bleiben ihre Regeln stehen; die Middleware ersetzt darin nur eine eigene `frame-ancestors`-Angabe durch
+für Skripte und Stile), bleiben ihre Regeln stehen; die Middleware ersetzt darin nur eine eigene `frame-ancestors`-Angabe durch
 `'none'`. Die drei festen Kopfzeilen setzt sie immer, eine Route kann sie nicht lockern. WebSockets laufen unverändert
 durch. Die Notseite (`rescue.py`) ist ein eigener Server und setzt dieselben Kopfzeilen selbst."""
 

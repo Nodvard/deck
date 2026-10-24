@@ -409,6 +409,26 @@ async def test_setup_returns_one_liner_script_and_the_derived_public_key(client,
 
 
 @pytest.mark.asyncio
+async def test_setup_without_a_module_that_needs_root_sets_up_no_sudo(client):
+    token = await _bootstrap_owner(client)
+    get_extension_runtime().ui.register_host_requirement("fake-a", HostRequirementSpec(
+        id="docker-group", label="Docker ohne sudo", unix_group="docker", tags=["docker"],
+    ))
+    host = await _make_host(client, token, "docker", tags=["docker"])
+    cid = (await client.post(GENERATE.format(host["id"]), json={}, headers=_auth(token))).json()["credential"]["id"]
+
+    body = (await client.get(_setup_url(host["id"], cid), params={"sudo": "true", "groups": "docker"}, headers=_auth(token))).json()
+    assert (body["sudo"], body["full_sudo"], body["helpers"], body["groups"]) == (False, False, [], ["docker"])
+    assert "sudoers" not in body["script"] and "NOPASSWD" not in body["script"]
+    assert any("kein sudo ein" in n and "Volle Rechte" in n for n in body["notes"])
+
+    full = (await client.get(_setup_url(host["id"], cid), params={"sudo": "true", "full_sudo": "true"}, headers=_auth(token))).json()
+    assert (full["sudo"], full["full_sudo"]) == (True, True)
+    assert "NOPASSWD: ALL" in full["script"]
+    assert not any("kein sudo ein" in n for n in full["notes"])
+
+
+@pytest.mark.asyncio
 async def test_setup_offers_only_groups_that_extensions_ask_for(client):
     token = await _bootstrap_owner(client)
     host, gen = await _docker_host_with_key(client, token)

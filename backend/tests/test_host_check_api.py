@@ -119,6 +119,11 @@ def _clean_state():
 
 
 @pytest.fixture
+def needs_root():
+    get_extension_runtime().ui.register_host_requirement("fake-a", HostRequirementSpec(id="root", label="Root", needs_root=True))
+
+
+@pytest.fixture
 def server_port(monkeypatch):
     """Ohne Zugang prüft Nodvard Deck Port 22 -- im Test ist das der Port des Test-Servers."""
 
@@ -428,7 +433,7 @@ async def test_check_with_password_and_pinned_key_reports_login_root_and_os(
 
 
 @pytest.mark.asyncio
-async def test_check_sudo_asks_for_a_password(client, local_ssh_server, fake_probe):
+async def test_check_sudo_asks_for_a_password(client, local_ssh_server, fake_probe, needs_root):
     _, port, *_ = local_ssh_server
     fake_probe[SUDO] = (1, "", "sudo: a password is required\n")
     token = await _bootstrap_owner(client)
@@ -444,6 +449,19 @@ async def test_check_sudo_asks_for_a_password(client, local_ssh_server, fake_pro
 
 
 @pytest.mark.asyncio
+async def test_check_without_a_module_that_needs_root_wants_no_sudo(client, local_ssh_server, fake_probe):
+    _, port, *_ = local_ssh_server
+    fake_probe[SUDO] = (1, "", "sudo: a password is required\n")
+    token = await _bootstrap_owner(client)
+    host = await _make_host(client, token)
+    await _add_password(client, token, host["id"], port)
+    await _pin_seen_key(client, token, host["id"], await _check(client, token, host["id"]))
+
+    root = _items(await _check(client, token, host["id"]))["root"]
+    assert (root["status"], root["detail"], root["hint"]) == ("ok", host_check.NO_ROOT_NEEDED, "")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("result", "detail"),
     [
@@ -452,7 +470,7 @@ async def test_check_sudo_asks_for_a_password(client, local_ssh_server, fake_pro
         ((1, "", "irgendetwas anderes"), "sudo ohne Passwort klappt nicht."),
     ],
 )
-async def test_check_sudo_other_outcomes(client, local_ssh_server, fake_probe, result, detail):
+async def test_check_sudo_other_outcomes(client, local_ssh_server, fake_probe, needs_root, result, detail):
     _, port, *_ = local_ssh_server
     fake_probe[SUDO] = result
     token = await _bootstrap_owner(client)
@@ -1107,7 +1125,7 @@ async def test_check_with_only_an_api_token_behaves_like_no_credential(client, l
 
 
 @pytest.mark.asyncio
-async def test_check_is_audited_without_secrets(client, db_session, local_ssh_server, fake_probe):
+async def test_check_is_audited_without_secrets(client, db_session, local_ssh_server, fake_probe, needs_root):
     _, port, *_ = local_ssh_server
     fake_probe[SUDO] = (1, "", "sudo: a password is required SECRET-STDERR")
     token = await _bootstrap_owner(client)

@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -578,6 +579,18 @@ def test_commands_pass_the_deny_list_and_quote_paths():
         av.delete_command("/etc/passwd")
 
 
+@pytest.mark.parametrize("qpath", [
+    "/etc/shadow", "/var/lib/nexus-quarantine/../../etc/shadow", "/var/lib/nexus-quarantine", "relativ/f1_x",
+    "/var/lib/nexus-quarantine//f1_x", "/var/lib/nexus-quarantine/./f1_x", "/var/lib/nexus-quarantine/.herkunft/f1_x",
+    "/var/lib/nexus-quarantine/a b",
+])
+def test_restore_and_delete_only_take_files_directly_in_the_quarantine(qpath):
+    with pytest.raises(ValueError, match="nicht in der Quarantäne"):
+        av.restore_command(qpath, "/tmp/leak", "644")
+    with pytest.raises(ValueError, match="nicht in der Quarantäne"):
+        av.delete_command(qpath)
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell (Git-Bash-sh scheitert an Windows-Pfaden)")
 def test_quarantine_and_restore_roundtrip_on_a_real_shell(tmp_path, monkeypatch):
     monkeypatch.setattr(av, "QUARANTINE_DIR", str(tmp_path / "q"))
@@ -737,11 +750,17 @@ def test_restore_refuses_when_the_original_folder_became_a_symlink(tmp_path):
     home.mkdir()
     (home / "d").symlink_to(profile_d)
     for shell in ("sh", "bash"):
-        out = subprocess.run([shell, "-c", av.restore_command(str(qfile), str(home / "d" / "evil.sh"), "755")],
+        out = subprocess.run([shell, "-c", _restore_command(qfile, home / "d" / "evil.sh", "755")],
                              capture_output=True, text=True, check=False)
         assert out.returncode == 5, out.stdout + out.stderr
         assert "Verknüpfung" in out.stdout
         assert list(profile_d.iterdir()) == [] and qfile.exists()
+
+
+def _restore_command(qfile, target, mode):
+    """`restore_command` mit dem Ordner von `qfile` als Quarantäne."""
+    with mock.patch.object(av, "QUARANTINE_DIR", str(qfile.parent)):
+        return av.restore_command(str(qfile), str(target), mode)
 
 
 def _restore_setup(tmp_path, name="evil.sh"):
@@ -775,7 +794,7 @@ def _shim_bin(tmp_path, tool, body):
 
 
 def _run_restore(qfile, target, env=None, mode="755"):
-    return subprocess.run(["sh", "-c", av.restore_command(str(qfile), str(target), mode)],
+    return subprocess.run(["sh", "-c", _restore_command(qfile, target, mode)],
                           capture_output=True, text=True, check=False, env=env)
 
 
@@ -857,7 +876,7 @@ def test_restore_refuses_a_linked_parent_with_an_existing_subfolder(tmp_path, sh
     (elsewhere / "sub").mkdir(parents=True)
     (home / "d").symlink_to(elsewhere)
     target = home / "d" / "sub" / "evil.sh"
-    out = subprocess.run([shell, "-c", av.restore_command(str(qfile), str(target), "755")],
+    out = subprocess.run([shell, "-c", _restore_command(qfile, target, "755")],
                          capture_output=True, text=True, check=False)
     assert out.returncode == 5, out.stdout + out.stderr
     assert "Verknüpfung" in out.stdout
@@ -907,7 +926,7 @@ def test_quarantine_and_restore_keep_odd_file_and_folder_names_intact(tmp_path, 
         assert av.parse_mode(out.stdout) == "750"
         assert not os.path.lexists(victim) and bystander.read_text() == "bleibt"
         qfile = tmp_path / "q" / qname
-        back = subprocess.run([shell, "-c", av.restore_command(str(qfile), str(victim), "750")],
+        back = subprocess.run([shell, "-c", _restore_command(qfile, victim, "750")],
                               capture_output=True, text=True, check=False, cwd=tmp_path)
         assert back.returncode == 0 and back.stdout.split() == ["ok"], back.stdout + back.stderr
         assert victim.read_text() == "echo boom" and (victim.stat().st_mode & 0o777) == 0o750
@@ -964,7 +983,7 @@ def test_restore_works_in_a_setgid_folder(tmp_path, shell):
     probe.rmdir()
     if not inherited:
         pytest.skip("dieses Dateisystem vererbt das Gruppen-Bit nicht")
-    out = subprocess.run([shell, "-c", av.restore_command(str(qfile), str(home / "evil.sh"), "750")],
+    out = subprocess.run([shell, "-c", _restore_command(qfile, home / "evil.sh", "750")],
                          capture_output=True, text=True, check=False)
     assert out.returncode == 0 and out.stdout.split() == ["ok"], out.stdout + out.stderr
     assert (home / "evil.sh").read_text() == "echo boom" and ((home / "evil.sh").stat().st_mode & 0o777) == 0o750

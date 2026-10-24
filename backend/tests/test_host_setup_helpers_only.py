@@ -99,13 +99,18 @@ def test_a_damaged_helper_is_an_error(tmp_path):
     [
         ({("%a", "PARENT"): "777"}, USER, (), "darf außer root noch jemand schreiben (Rechte 777"),
         ({("%a", "PARENT"): "1777"}, USER, (), "chmod go-w PARENT"),
-        ({("%a", "PARENT"): "775", ("%G", "PARENT"): USER}, USER, (), "(Rechte 775, Gruppe deck)"),
-        ({("%a", "PARENT"): "2775", ("%G", "PARENT"): "staff"}, f"{USER} staff", (), "Gruppe staff"),
+        ({("%a", "PARENT"): "775", ("%g", "PARENT"): "1000", ("%G", "PARENT"): USER}, USER, (),
+         "darf die Gruppe deck schreiben (Rechte 775)"),
+        ({("%a", "PARENT"): "2775", ("%g", "PARENT"): "50", ("%G", "PARENT"): "staff"}, f"{USER} staff", (), "chmod g-w PARENT"),
+        ({("%a", "PARENT"): "775"}, f"{USER} root", (), "(Rechte 775, Gruppe root)"),
         ({("%u", "/"): "1000"}, USER, (), "Der Ordner / gehört nicht root."),
         ({("%a", "HELPERS"): "757"}, USER, (), "Im Ordner HELPERS darf"),
         ({}, USER, ("PARENT",), "setfacl -b PARENT"),
     ],
-    ids=["ordner-fuer-alle", "ordner-sticky", "gruppe-des-benutzers", "weitere-gruppe", "wurzel", "hilfsordner", "acl"],
+    ids=[
+        "ordner-fuer-alle", "ordner-sticky", "gruppe-des-benutzers", "weitere-gruppe", "gruppe-root-mit-benutzer", "wurzel",
+        "hilfsordner", "acl",
+    ],
 )
 @needs_sh
 def test_an_unsafe_folder_stops_before_anything_changes(tmp_path, stat_values, groups, writable, reason):
@@ -126,6 +131,7 @@ def test_an_unsafe_folder_stops_before_anything_changes(tmp_path, stat_values, g
 
 @needs_sh
 def test_a_group_the_command_adds_counts_already(tmp_path):
+    # Die stat-Attrappe gibt dem Ordner die Gruppennummer 0: geprüft wird die Mitgliedschaft, die bei der Gruppe root zählt.
     helper_dir = tmp_path / "usr-local-lib" / "nodvard-deck"
     parent = str(helper_dir.parent)
     bin_dir, log, helper_dir, captured = _helper_sandbox(
@@ -173,6 +179,7 @@ esac
 )
 @needs_sh
 def test_a_new_user_counts_with_the_groups_useradd_may_give(tmp_path, owner, defaults):
+    # Gruppennummer 0 wie oben: geprüft wird die Mitgliedschaft, die bei der Gruppe root zählt.
     parent = _folder_above(tmp_path)
     bin_dir, log, helper_dir, captured = _helper_sandbox(
         tmp_path, stat_values={("%a", parent): "775", ("%G", parent): owner}, groups="",
@@ -184,10 +191,54 @@ def test_a_new_user_counts_with_the_groups_useradd_may_give(tmp_path, owner, def
 
 
 @needs_sh
-def test_a_new_user_is_fine_with_a_folder_of_a_foreign_group(tmp_path):
+def test_a_folder_a_foreign_group_may_write_stops_it(tmp_path):
+    # Wie /usr/local auf älteren Debian (2775 root:staff): Jedes Mitglied von staff könnte die Skripte tauschen.
     parent = _folder_above(tmp_path)
     bin_dir, log, helper_dir, captured = _helper_sandbox(
-        tmp_path, stat_values={("%a", parent): "2775", ("%G", parent): "staff"}, groups="",
+        tmp_path, stat_values={("%a", parent): "2775", ("%g", parent): "50", ("%G", parent): "staff"}, groups="",
+    )
+    _new_user(bin_dir, tmp_path, log)
+    done = _run(_narrow(helper_dir, DOCKER), bin_dir)
+    _assert_blocked(done, log, captured, tmp_path)
+    lines = done.stdout.splitlines()
+    assert (
+        f"FEHLER: Im Ordner {parent} darf die Gruppe staff schreiben (Rechte 2775). Wer in ihr ist, könnte die "
+        f"Hilfsskripte austauschen und wäre damit root. Abhilfe als root: chmod g-w {parent}"
+    ) in lines
+    assert (
+        "Hinweis: Ältere Debian lassen die Gruppe staff in /usr/local und /usr/local/lib schreiben. Abhilfe als root "
+        "für beide auf einmal: chmod g-w /usr/local /usr/local/lib"
+    ) in lines
+
+
+@pytest.mark.parametrize("mode", ["3775", "1775", "775"])
+@needs_sh
+def test_a_foreign_group_stops_it_whatever_the_special_bits(tmp_path, mode):
+    parent = _folder_above(tmp_path)
+    bin_dir, log, helper_dir, captured = _helper_sandbox(
+        tmp_path, stat_values={("%a", parent): mode, ("%g", parent): "100", ("%G", parent): "users"},
+    )
+    done = _run(_narrow(helper_dir, DOCKER), bin_dir)
+    _assert_blocked(done, log, captured, tmp_path)
+    assert f"darf die Gruppe users schreiben (Rechte {mode})" in done.stdout
+    assert "Hinweis: Ältere Debian" not in done.stdout
+
+
+@needs_sh
+def test_a_group_number_that_stat_cannot_tell_stops_it(tmp_path):
+    parent = _folder_above(tmp_path)
+    bin_dir, log, helper_dir, captured = _helper_sandbox(tmp_path, stat_values={("%a", parent): "775"})
+    stat = (bin_dir / "stat").read_text()
+    _stub(bin_dir / "stat", stat.replace('[ "$1" = -c ] || exit 2\n', f'[ "$1 $2 $3" = "-c %g {parent}" ] && exit 1\n[ "$1" = -c ] || exit 2\n', 1))
+    done = _run(_narrow(helper_dir, DOCKER), bin_dir)
+    _assert_blocked(done, log, captured, tmp_path)
+
+
+@needs_sh
+def test_a_new_user_is_fine_with_a_folder_the_root_group_may_write(tmp_path):
+    parent = _folder_above(tmp_path)
+    bin_dir, log, helper_dir, captured = _helper_sandbox(
+        tmp_path, stat_values={("%a", parent): "2775", ("%g", parent): "0", ("%G", parent): "root"}, groups="",
     )
     _new_user(bin_dir, tmp_path, log)
     done = _run(_narrow(helper_dir, DOCKER), bin_dir)
@@ -201,21 +252,16 @@ ACL_DOCKER = "user::rwx\ngroup::r-x\ngroup:docker:rwx\nmask::rwx\nother::r-x\n\n
 @pytest.mark.parametrize(
     ("acl", "mode", "groups"),
     [
-        (ACL_DOCKER, "775", []),
-        ("user::rwx\ngroup::r-x\ngroup:staff:rwx\nmask::rwx\nother::r-x\n\n", "775", ["docker"]),
         ("user::rwx\ngroup::r-x\ngroup:docker:r-x\nmask::rwx\nother::r-x\n\n", "775", ["docker"]),
-        ("user::rwx\nuser:bob:rwx\ngroup::r-x\nmask::rwx\nother::r-x\n\n", "775", []),
+        ("user::rwx\nuser:root:rwx\ngroup::r-x\ngroup:root:rwx\nmask::rwx\nother::r-x\n\n", "775", []),
         # Die Gruppenbits sind die Maske: Ohne w entscheiden schon sie, die ACL wird gar nicht gelesen.
         ("user::rwx\ngroup::r-x\ngroup:docker:rwx\t#effective:r-x\nmask::r-x\nother::r-x\n\n", "755", ["docker"]),
         ("user::rwx\ngroup::rwx\nother::r-x\ndefault:user::rwx\ndefault:group:docker:rwx\ndefault:mask::rwx\n\n", "775", ["docker"]),
     ],
-    ids=[
-        "gruppe-kommt-nicht-dazu", "fremde-gruppe", "eigene-gruppe-nur-lesen", "anderer-benutzer", "maske-ohne-w",
-        "nur-vorgabe-fuer-neue-dateien",
-    ],
+    ids=["gruppe-nur-lesen", "nur-root", "maske-ohne-w", "nur-vorgabe-fuer-neue-dateien"],
 )
 @needs_sh
-def test_an_acl_that_does_not_reach_the_user_is_fine(tmp_path, acl, mode, groups):
+def test_an_acl_that_lets_only_root_write_is_fine(tmp_path, acl, mode, groups):
     parent = _folder_above(tmp_path)
     bin_dir, _, helper_dir, captured = _helper_sandbox(tmp_path, stat_values={("%a", parent): mode}, acls={parent: acl})
     done = _run(_narrow(helper_dir, DOCKER, groups=groups), bin_dir)
@@ -227,13 +273,17 @@ def test_an_acl_that_does_not_reach_the_user_is_fine(tmp_path, acl, mode, groups
     ("acl", "groups", "name"),
     [
         (ACL_DOCKER, ["docker"], "docker"),
+        (ACL_DOCKER, [], "docker"),
         ("user::rwx\ngroup::r-x\ngroup:staff:rwx\nmask::rwx\nother::r-x\n\n", [], "staff"),
         ("user::rwx\nuser:deck:rwx\ngroup::r-x\nmask::rwx\nother::r-x\n\n", [], USER),
+        ("user::rwx\nuser:bob:rwx\ngroup::r-x\nmask::rwx\nother::r-x\n\n", [], "bob"),
+        ("user::rwx\ngroup::r-x\ngroup:4711:rwx\nmask::rwx\nother::r-x\n\n", [], "4711"),
     ],
-    ids=["gruppe-aus-dem-befehl", "gruppe-des-benutzers", "benutzer-selbst"],
+    ids=["gruppe-aus-dem-befehl", "fremde-gruppe", "gruppe-des-benutzers", "benutzer-selbst", "anderer-benutzer",
+         "nummer-ohne-namen"],
 )
 @needs_sh
-def test_an_acl_for_the_user_or_their_groups_stops_it(tmp_path, acl, groups, name):
+def test_an_acl_that_lets_someone_else_write_stops_it(tmp_path, acl, groups, name):
     parent = _folder_above(tmp_path)
     bin_dir, log, helper_dir, captured = _helper_sandbox(
         tmp_path, stat_values={("%a", parent): "775"}, groups=f"{USER} staff", acls={parent: acl},
@@ -241,13 +291,14 @@ def test_an_acl_for_the_user_or_their_groups_stops_it(tmp_path, acl, groups, nam
     done = _run(_narrow(helper_dir, DOCKER, groups=groups), bin_dir)
     _assert_blocked(done, log, captured, tmp_path)
     assert (
-        f"FEHLER: Im Ordner {parent} gibt eine ACL (erweiterte Rechte) {name} Schreibrecht, darüber könnte auch der "
-        f"Benutzer dort schreiben. Abhilfe als root: setfacl -b {parent} (entfernt die ACL)"
+        f"FEHLER: Im Ordner {parent} gibt eine ACL (erweiterte Rechte) {name} Schreibrecht. Darüber könnte außer root "
+        f"noch jemand die Hilfsskripte austauschen und wäre damit root. Abhilfe als root: setfacl -b {parent} "
+        "(entfernt die ACL)"
     ) in done.stdout.splitlines()
 
 
 @needs_sh
-def test_an_acl_entry_without_a_name_stops_it_for_a_new_user(tmp_path):
+def test_an_acl_entry_without_a_name_stops_it_for_a_new_user_too(tmp_path):
     # useradd kann dem neuen Benutzer oder seiner neuen Gruppe genau diese Nummer geben.
     parent = _folder_above(tmp_path)
     acl = "user::rwx\ngroup::r-x\ngroup:4711:rwx\nmask::rwx\nother::r-x\n\n"
@@ -258,24 +309,20 @@ def test_an_acl_entry_without_a_name_stops_it_for_a_new_user(tmp_path):
     done = _run(_narrow(helper_dir, DOCKER), bin_dir)
     _assert_blocked(done, log, captured, tmp_path)
     assert "gibt eine ACL (erweiterte Rechte) 4711 Schreibrecht" in done.stdout
-    # Für einen vorhandenen Benutzer ist der Eintrag unschädlich.
-    (tmp_path / "created").touch()
-    assert _run(_narrow(helper_dir, DOCKER), bin_dir).returncode == 0
 
 
 @needs_sh
-def test_a_folder_of_a_group_without_a_name_stops_it_for_a_new_user(tmp_path):
-    # Wie beim ACL-Eintrag: Die Nummer kann useradd gleich der neuen Gruppe des Benutzers geben.
+def test_a_folder_of_a_group_without_a_name_stops_it(tmp_path):
     parent = _folder_above(tmp_path)
     bin_dir, log, helper_dir, captured = _helper_sandbox(
-        tmp_path, stat_values={("%a", parent): "775", ("%G", parent): "UNKNOWN"}, groups="",
+        tmp_path, stat_values={("%a", parent): "775", ("%g", parent): "4711", ("%G", parent): "UNKNOWN"}, groups="",
     )
     _new_user(bin_dir, tmp_path, log)
     done = _run(_narrow(helper_dir, DOCKER), bin_dir)
     _assert_blocked(done, log, captured, tmp_path)
-    assert f"FEHLER: Im Ordner {parent} darf außer root noch jemand schreiben (Rechte 775, Gruppe UNKNOWN)." in done.stdout
+    assert "darf die Gruppe mit der Nummer 4711 schreiben (Rechte 775)" in done.stdout
     (tmp_path / "created").touch()
-    assert _run(_narrow(helper_dir, DOCKER), bin_dir).returncode == 0
+    assert _run(_narrow(helper_dir, DOCKER), bin_dir).returncode == 1
 
 
 def _without_getfacl(bin_dir: Path) -> None:
@@ -283,7 +330,7 @@ def _without_getfacl(bin_dir: Path) -> None:
     _stub(bin_dir / "getfacl", "exit 127\n")
 
 
-GETFACL_MISSING = "lässt sich ohne getfacl nicht prüfen, ob eine ACL (erweiterte Rechte) dem Benutzer Schreibrecht gibt."
+GETFACL_MISSING = "lässt sich ohne getfacl nicht prüfen, ob eine ACL (erweiterte Rechte) außer root jemandem Schreibrecht gibt."
 
 
 @needs_sh
@@ -296,9 +343,7 @@ def test_an_acl_that_cannot_be_read_stops_it(tmp_path):
         os.setxattr(parent, "system.posix_acl_access", acl)
     except (AttributeError, OSError):
         pytest.skip("Das Dateisystem kann hier keine ACL setzen.")
-    bin_dir, log, helper_dir, captured = _helper_sandbox(
-        tmp_path, stat_values={("%a", parent): "775", ("%G", parent): "staff"},
-    )
+    bin_dir, log, helper_dir, captured = _helper_sandbox(tmp_path, stat_values={("%a", parent): "775"})
     _without_getfacl(bin_dir)
     done = _run(_narrow(helper_dir, DOCKER), bin_dir)
     _assert_blocked(done, log, captured, tmp_path)
@@ -308,11 +353,9 @@ def test_an_acl_that_cannot_be_read_stops_it(tmp_path):
 @needs_sh
 def test_without_getfacl_a_busybox_ls_counts_as_a_possible_acl(tmp_path):
     parent = _folder_above(tmp_path)
-    bin_dir, log, helper_dir, captured = _helper_sandbox(
-        tmp_path, stat_values={("%a", parent): "2775", ("%G", parent): "staff"},
-    )
+    bin_dir, log, helper_dir, captured = _helper_sandbox(tmp_path, stat_values={("%a", parent): "2775"})
     _without_getfacl(bin_dir)
-    _stub(bin_dir / "ls", '[ "$1" = -ld ] || exit 1\necho "drwxrwsr-x    2 root     staff         4096 Oct 21 12:00 $2"\n')
+    _stub(bin_dir / "ls", '[ "$1" = -ld ] || exit 1\necho "drwxrwsr-x    2 root     root          4096 Oct 21 12:00 $2"\n')
     done = _run(_narrow(helper_dir, DOCKER), bin_dir)
     _assert_blocked(done, log, captured, tmp_path)
     assert (

@@ -203,6 +203,25 @@ def test_manifest_inspect_single_image_and_oci_layout():
     assert iu.parse_manifest_inspect("[]", "linux/arm64") is None
 
 
+@pytest.mark.parametrize("entry", ["nur Text", None, 7, ["Liste"]], ids=["text", "null", "number", "list"])
+def test_manifest_list_entries_that_are_no_objects_are_skipped(entry):
+    entries = json.loads(manifest_list_output())
+    answer = iu.parse_manifest_inspect(json.dumps([entry, *entries]), "linux/arm64")
+    assert answer is not None and answer.matches == {dg("3"), dg("4")}
+    assert iu.parse_manifest_inspect(json.dumps([entry]), "linux/arm64") is None
+    assert iu.parse_manifest_inspect(json.dumps(entry), "linux/arm64") is None
+
+
+@pytest.mark.parametrize(
+    "junk",
+    ["", "web|nginx:1.27", f"web|nginx:1.27|{dg('1')}|zu viel", f"/|nginx:1.27|{dg('1')}", f"|nginx:1.27|{dg('1')}", "Error: No such container: abc"],
+    ids=["empty", "two-fields", "four-fields", "bare-slash", "no-name", "error-text"],
+)
+def test_container_lines_with_the_wrong_shape_are_skipped(junk):
+    rows = f"/zeta|redis:7|{dg('2')}\n{junk}\n/alpha|nginx:1.27|{dg('1')}\n"
+    assert iu.parse_containers(rows) == [("alpha", "nginx:1.27", dg("1")), ("zeta", "redis:7", dg("2"))]
+
+
 def test_imagetools_digest_and_local_image_parsing():
     assert iu.parse_imagetools_digest(f'"{dg("a")}"\n') == dg("a")
     assert iu.parse_imagetools_digest("null") is None
@@ -454,6 +473,36 @@ async def test_repo_digests_of_another_registry_do_not_count(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("answer", "reason"),
+    [
+        (FakeResult(1, "", "Error response from daemon: No such image"), "Image lokal nicht lesbar"),
+        (FakeResult(0, "kein json\n"), "Antwort von docker image inspect nicht lesbar"),
+        (FakeResult(0, "[]\n"), "Antwort von docker image inspect nicht lesbar"),
+    ],
+    ids=["exit-1", "text", "list"],
+)
+async def test_an_unreadable_local_image_is_not_checkable(tmp_path, answer, reason):
+    class Unreadable(FakeDocker):
+        async def run(self, command: str) -> FakeResult:
+            if command.startswith("docker image inspect"):
+                self.calls.append(command)
+                return answer
+            return await super().run(command)
+
+    docker = Unreadable()
+    for name in ("web", "web-2"):
+        docker.add(name, "nginx:1.27", image_id=dg("1"), repo_digests=["nginx@" + dg("a")], remote=dg("b"))
+    service, ctx = make(tmp_path, docker)
+    await service.check_host(ctx.host_objects[0])
+    for name in ("web", "web-2"):
+        result = result_of(service, "h1", name)
+        assert (result["status"], result["reason"], result["remote_digest"]) == (UNKNOWN, reason, None)
+    assert docker.registry_calls() == []
+    assert sum(c.startswith("docker image inspect") for c in docker.calls) == 1, "dasselbe Image wird nur einmal gelesen"
+
+
+@pytest.mark.asyncio
 async def test_docker_hub_spellings_and_untagged_names_are_matched(tmp_path):
     docker = FakeDocker()
     docker.add("cache", "docker.io/library/redis", image_id=dg("1"), repo_digests=["redis@" + dg("a")], remote=dg("a"))
@@ -477,6 +526,20 @@ async def test_manifest_error_and_auth_error_are_reported_per_container(tmp_path
     assert "docker login" in result_of(service, "h1", "private")["reason"]
     assert result_of(service, "h1", "fine")["status"] == CURRENT
     assert result_of(service, "h1", "gone")["status"] == UNKNOWN
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer", ["sha256:kurz", ["Liste"], "kein-digest"], ids=["short-digest", "list", "text"])
+async def test_an_unexpected_imagetools_answer_is_not_checkable(tmp_path, answer):
+    docker = FakeDocker()
+    docker.add("a-odd", "ghcr.io/x/odd:1", image_id=dg("1"), repo_digests=["ghcr.io/x/odd@" + dg("a")], remote=answer)
+    docker.add("b-fine", "ghcr.io/x/fine:1", image_id=dg("2"), repo_digests=["ghcr.io/x/fine@" + dg("c")], remote=dg("c"))
+    service, ctx = make(tmp_path, docker)
+    await service.check_host(ctx.host_objects[0])
+    odd = result_of(service, "h1", "a-odd")
+    assert (odd["status"], odd["reason"], odd["remote_digest"]) == (UNKNOWN, "Unerwartete Antwort von docker buildx imagetools", None)
+    assert result_of(service, "h1", "b-fine")["status"] == CURRENT
+    assert len(docker.registry_calls()) == 2, "dieselbe Registry wird danach weiter gefragt"
 
 
 @pytest.mark.asyncio
@@ -758,6 +821,65 @@ async def test_manifest_fallback_without_the_platform_and_with_errors(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exit_code", "stdout"),
+    [(1, ""), (1, "linux/arm64\n"), (0, "arm64\n"), (0, "")],
+    ids=["exit-1", "exit-1-with-output", "no-slash", "empty"],
+)
+async def test_an_unknown_platform_stops_the_manifest_fallback(tmp_path, exit_code, stdout):
+    class NoPlatform(FakeDocker):
+        async def run(self, command: str) -> FakeResult:
+            if command.startswith("docker version"):
+                self.calls.append(command)
+                return FakeResult(exit_code, stdout)
+            return await super().run(command)
+
+    docker = NoPlatform()
+    docker.buildx = False
+    docker.add("web", "nginx:1.27", image_id=dg("4"), repo_digests=["nginx@" + dg("f")])
+    docker.manifests["nginx:1.27"] = manifest_list_output()
+    service, ctx = make(tmp_path, docker)
+    await service.check_host(ctx.host_objects[0])
+    result = result_of(service, "h1", "web")
+    assert (result["status"], result["reason"]) == (UNKNOWN, "Plattform des Hosts nicht ermittelbar (docker version)")
+    assert not any(" manifest " in c for c in docker.calls), "ohne Plattform wird das Manifest nicht gelesen"
+
+
+@pytest.mark.asyncio
+async def test_a_slow_manifest_query_hurts_only_that_registry(tmp_path):
+    docker = FakeDocker()
+    docker.buildx = False
+    docker.add("a-slow", "slow.example.org/a:1", image_id=dg("1"), repo_digests=["slow.example.org/a@" + dg("a")])
+    docker.manifests["slow.example.org/a:1"] = TimeoutError()
+    docker.add("b-slow", "slow.example.org/b:1", image_id=dg("2"), repo_digests=["slow.example.org/b@" + dg("b")])
+    docker.manifests["slow.example.org/b:1"] = manifest_list_output()
+    docker.add("c-fine", "quay.io/a/b:3", image_id=dg("4"), repo_digests=["quay.io/a/b@" + dg("f")])
+    docker.manifests["quay.io/a/b:3"] = manifest_list_output()
+    service, ctx = make(tmp_path, docker)
+    await service.check_host(ctx.host_objects[0])
+    for name in ("a-slow", "b-slow"):
+        result = result_of(service, "h1", name)
+        assert result["status"] == UNKNOWN and "Zeitüberschreitung" in result["reason"], name
+    assert result_of(service, "h1", "c-fine")["status"] == CURRENT
+    assert sorted(shlex.split(c)[4] for c in docker.calls if c.startswith("docker manifest")) == ["quay.io/a/b:3", "slow.example.org/a:1"]
+    assert service.snapshot()["hosts"]["h1"]["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_lost_manifest_connection_is_a_host_error(tmp_path):
+    docker = FakeDocker()
+    docker.buildx = False
+    docker.add("a", "aaa/one:1", image_id=dg("1"), repo_digests=["aaa/one@" + dg("a")])
+    docker.manifests["aaa/one:1"] = ConnectionResetError("Verbindung weg")
+    docker.add("b", "bbb/two:1", image_id=dg("4"), repo_digests=["bbb/two@" + dg("f")])
+    docker.manifests["bbb/two:1"] = manifest_list_output()
+    service, ctx = make(tmp_path, docker)
+    await service.check_host(ctx.host_objects[0])
+    assert "Verbindung weg" in service.snapshot()["hosts"]["h1"]["error"]
+    assert len([c for c in docker.calls if c.startswith("docker manifest")]) == 1, "kein zweiter Versuch mit derselben toten Verbindung"
+
+
+@pytest.mark.asyncio
 async def test_registry_answers_are_cached_six_hours_but_the_local_state_is_always_fresh(tmp_path):
     docker = FakeDocker()
     docker.add("web", "nginx:1.27", image_id=dg("1"), repo_digests=["nginx@" + dg("a")], remote=dg("b"))
@@ -837,6 +959,81 @@ async def test_docker_daemon_down_and_ssh_loss_during_the_registry_query_are_hos
     # Kein zweiter Versuch mit derselben toten Verbindung.
     assert "Verbindung weg" in service.snapshot()["hosts"]["h1"]["error"]
     assert len(docker.registry_calls()) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stderr", "error"),
+    [
+        ("Cannot connect to the Docker daemon", "docker inspect fehlgeschlagen: Cannot connect to the Docker daemon"),
+        ("", "docker inspect fehlgeschlagen: Exit-Code 1"),
+    ],
+    ids=["stderr", "no-stderr"],
+)
+async def test_a_failed_container_inspect_is_a_host_error(tmp_path, stderr, error):
+    class InspectFails(FakeDocker):
+        async def run(self, command: str) -> FakeResult:
+            if command.startswith("docker container inspect"):
+                self.calls.append(command)
+                return FakeResult(1, "", stderr)
+            return await super().run(command)
+
+    docker = InspectFails()
+    docker.add("web", "nginx:1.27", image_id=dg("1"), repo_digests=["nginx@" + dg("a")], remote=dg("b"))
+    service, ctx = make(tmp_path, docker)
+    await service.check_host(ctx.host_objects[0])
+    snap = service.snapshot()
+    assert snap["hosts"]["h1"]["error"] == error and snap["hosts"]["h1"]["checked_at"] is None
+    assert snap["data"] == {} and docker.registry_calls() == []
+
+
+@pytest.mark.asyncio
+async def test_a_vanished_container_does_not_fail_the_host(tmp_path):
+    class OneVanishes(FakeDocker):
+        async def run(self, command: str) -> FakeResult:
+            result = await super().run(command)
+            if command.startswith("docker container inspect"):
+                result.exit_code, result.stderr = 1, "Error: No such container: abc"
+            return result
+
+    docker = OneVanishes()
+    docker.add("web", "nginx:1.27", image_id=dg("1"), repo_digests=["nginx@" + dg("a")], remote=dg("b"))
+    service, ctx = make(tmp_path, docker)
+    await service.check_host(ctx.host_objects[0])
+    assert service.snapshot()["hosts"]["h1"]["error"] is None
+    assert list(service.snapshot()["data"]) == ["h1:web"] and result_of(service, "h1", "web")["status"] == UPDATE
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_error_is_logged_and_marks_only_that_host(tmp_path, caplog):
+    class Garbled(FakeDocker):
+        broken = False
+
+        async def run(self, command: str) -> FakeResult:
+            result = await super().run(command)
+            if self.broken and command.startswith("docker ps"):
+                result.stdout = None  # type: ignore[assignment]
+            return result
+
+    docker = Garbled()
+    docker.add("web", "nginx:1.27", image_id=dg("1"), repo_digests=["nginx@" + dg("a")], remote=dg("b"))
+    other = FakeDocker()
+    other.add("db", "postgres:16", image_id=dg("2"), repo_digests=["postgres@" + dg("c")], remote=dg("c"))
+    service, ctx = make(tmp_path, {"h1": docker, "h2": other})
+    await service.check_hosts(ctx.host_objects)
+    good_at = service.snapshot()["hosts"]["h1"]["checked_at"]
+
+    docker.broken = True
+    with caplog.at_level("ERROR", logger="nodvard_deck.ext.docker"):
+        await service.check_hosts(ctx.host_objects, force=True)
+
+    snap = service.snapshot()
+    assert snap["hosts"]["h1"]["error"].startswith("Prüfung fehlgeschlagen: ")
+    assert snap["hosts"]["h1"] == {"checking": False, "checked_at": good_at, "error": snap["hosts"]["h1"]["error"]}
+    assert snap["data"]["h1:web"]["status"] == UPDATE, "der letzte gute Stand bleibt sichtbar"
+    assert snap["hosts"]["h2"]["error"] is None and snap["data"]["h2:db"]["status"] == CURRENT
+    (record,) = [r for r in caplog.records if "image_updates_check_failed" in r.getMessage()]
+    assert "host=h1" in record.getMessage() and record.exc_info is not None
 
 
 @pytest.mark.asyncio
@@ -989,6 +1186,24 @@ async def test_the_job_is_registered_disabled_by_default_with_the_chosen_schedul
     assert (on.enabled, on.schedule) == (True, "0 5 * * 1")
     assert default.schedule == iu.DEFAULT_CRON
     assert off.params == {} and off.name == "Image-Updates prüfen"
+
+
+@pytest.mark.asyncio
+async def test_the_job_handler_runs_the_scheduled_check(tmp_path):
+    registered = []
+
+    class Scheduler:
+        async def register_job(self, spec) -> None:
+            registered.append(spec)
+
+    class C:
+        scheduler = Scheduler()
+
+    service, ctx = make(tmp_path, one_update_host("b"))
+    await iu.register_job(C(), service, {"image_updates_enabled": True})  # type: ignore[arg-type]
+    (spec,) = registered
+    assert await spec.handler(**spec.params) == {"hosts": 1, "updates": 1, "notified": True}
+    assert [note.title for note in ctx.sent] == ["Image-Updates: 1 Container mit neuer Version"]
 
 
 DAY_S = 24 * 3600

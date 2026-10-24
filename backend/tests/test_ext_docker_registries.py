@@ -75,12 +75,13 @@ async def _async(value):
     return value
 
 
-def _request(action="docker.registry_login", registry="ghcr", address="ghcr.io", actor="user", host="h1"):
+def _request(action="docker.registry_login", registry="ghcr", address="ghcr.io", actor="user", host="h1", username="nico"):
     from nodvard_sdk.actions import ActionRequest
     from nodvard_sdk.types import Actor, Risk
 
+    payload = {"registry": registry, "address": address, **({} if username is None else {"username": username})}
     return ActionRequest(action_type=action, host_ref=host, risk=Risk.MEDIUM, proposed_by=Actor(type=actor, id="u1"), reason="Test",
-                         payload={"registry": registry, "address": address})
+                         payload=payload)
 
 
 class SFTPNoSuchFile(Exception):
@@ -124,12 +125,31 @@ def test_commands_keep_the_password_off_the_command_line():
             r.cmd_login(bad)
 
 
+def test_logout_refuses_a_bad_address():
+    r = _mod()
+    for address in ("https://ghcr.io", "-H", "ghcr.io/pfad", "GHCR.io", ""):
+        with pytest.raises(ValueError):
+            r.cmd_logout(r.Registry("x", address, "deck"))
+
+
 def test_only_valid_entries_count():
     r = _mod()
     raw = [*ENTRIES, {"name": "mit leer", "address": "a.io", "username": "u"}, {"name": "x", "address": "GHCR.io", "username": "u"},
            {"name": "y", "address": "a.io/pfad", "username": "u"}, {"name": "z", "address": "a.io", "username": ""}, "kaputt"]
     assert [e.name for e in r.registries({"registries": raw})] == ["ghcr", "hub", "lab"]
     assert r.registries({}) == []
+
+
+def test_a_port_lies_between_1_and_65535():
+    r = _mod()
+    field = json.loads((EXT_DIR / "settings.schema.json").read_text())["properties"]["registries"]["items"]["properties"]["address"]
+    assert field["pattern"].removesuffix("$") == r._ADDRESS_RE.pattern.removesuffix("\\Z")
+    schema = re.compile(field["pattern"])
+    for port in [*map(str, range(70000)), "", "00", "05000", "065535", "+80", " 80", "80 ", "\u0668\u0660"]:
+        ok = port.isascii() and port.isdigit() and not port.startswith("0") and 1 <= int(port) <= 65535
+        address = f"registry.lab:{port}"
+        assert bool(r._ADDRESS_RE.match(address)) is ok and bool(schema.fullmatch(address)) is ok, port
+    assert [e.name for e in r.registries({"registries": [{"name": "lab", "address": "registry.lab:65536", "username": "u"}]})] == []
 
 
 def test_logged_in_reads_only_the_keys():
@@ -140,7 +160,7 @@ def test_logged_in_reads_only_the_keys():
         "credsStore": "pass",
     }
     found, helped, store = r.logged_in(config)
-    assert found == {"docker.io", "ghcr.io", "registry.lab:5000"} and store == "pass"
+    assert found == {"docker.io", "registry.lab:5000"} and store == "pass"
     assert helped == {"123.dkr.ecr.eu-central-1.amazonaws.com"}
     assert r.logged_in({"auths": "kaputt"}) == (set(), set(), None)
 
@@ -150,11 +170,11 @@ def test_every_way_docker_writes_the_hub(key):
     assert _mod().logged_in({"auths": {key: {"auth": "eA=="}}})[0] == {"docker.io"}
 
 
-def test_without_a_helper_an_empty_entry_is_no_login():
+def test_an_empty_entry_is_no_login():
     r = _mod()
     auths = {"https://index.docker.io/v1/": {}, "docker.io": {"auth": ""}, "ghcr.io": {"identitytoken": "x"}, "lab.io": "kaputt"}
     assert r.logged_in({"auths": auths}) == ({"ghcr.io"}, set(), None)
-    assert r.logged_in({"auths": auths, "credsStore": "pass"})[0] == {"docker.io", "ghcr.io", "lab.io"}
+    assert r.logged_in({"auths": auths, "credsStore": "pass"}) == ({"ghcr.io"}, set(), "pass")
 
 
 def test_a_name_twice_drops_all_its_entries():
@@ -222,7 +242,7 @@ async def test_the_state_per_server(tmp_path):
     assert "c2VjcmV0" not in json.dumps(state)
     fake.files["/home/deck/.docker/config.json"] = json.dumps({**config, "credsStore": "pass"}).encode()
     state = await r.Registries(ctx).state(SimpleNamespace(id="h1"))
-    assert [e["logged_in"] for e in state["registries"]] == [True, True, False] and state["creds_store"] == "pass"
+    assert [e["logged_in"] for e in state["registries"]] == [None, None, None] and state["creds_store"] == "pass"
 
 
 @pytest.mark.asyncio
@@ -303,11 +323,20 @@ async def test_login_sends_the_password_only_through_stdin():
     assert PASSWORD not in json.dumps(done.model_dump(mode="json"))
 
 
+CHANGED = ("Adresse oder Benutzername von „ghcr“ haben sich seit dem Vorschlag geändert. "
+           "Freigegeben wird nur, was vorgeschlagen war; schlag es mit den neuen Angaben noch einmal vor.")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("request_", "secrets", "error"), [
     ({"actor": "ai"}, None, "Bei einer Registry meldet nur ein Mensch über die Docker-Seite an."),
     ({"registry": "weg"}, None, "Diese Registry ist nicht (mehr) eingetragen. Bitte die Einstellungen prüfen."),
-    ({"address": "andere.io"}, None, "Diese Registry ist nicht (mehr) eingetragen. Bitte die Einstellungen prüfen."),
+    ({"address": "andere.io"}, None, CHANGED),
+    ({"username": "admin"}, None, CHANGED),
+    ({"username": None}, None, ("Dieser Vorschlag stammt aus einer älteren Version von Nodvard Deck und nennt den Benutzernamen nicht. "
+                                "Schlag es bitte noch einmal vor.")),
+    ({"username": ""}, None, CHANGED),
+    ({"action": "docker.registry_logout", "username": "admin"}, None, CHANGED),
     ({"host": "h9"}, None, "Server nicht gefunden."),
     ({}, {}, "Für „ghcr“ ist kein Passwort im Tresor. Trag es unter Einstellungen → Docker ein."),
     ({}, {"docker-registry-pw:ghcr": ""}, "Für „ghcr“ ist kein Passwort im Tresor. Trag es unter Einstellungen → Docker ein."),
@@ -318,6 +347,30 @@ async def test_refusals_send_nothing(request_, secrets, error):
     seen = _recording(ctx.exec)
     done = await r.DockerRegistryExecutor(ctx, r.Registries(ctx)).execute(_request(**request_))
     assert done.success is False and done.error == error and seen == []
+
+
+class _Stale:
+    """Liefert einen Eintrag, den die Prüfung der Einstellungen nie durchließe."""
+
+    def __init__(self, registry) -> None:
+        self.registry = registry
+
+    async def find(self, name):
+        return self.registry
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["docker.registry_login", "docker.registry_logout"])
+@pytest.mark.parametrize(("address", "username"), [("ghcr.io", "a b"), ("https://ghcr.io", "deck"), ("-H", "nico")],
+                         ids=["benutzer", "adresse", "option"])
+async def test_an_invalid_entry_sends_nothing(action, address, username):
+    r = _mod()
+    ctx = _ctx()
+    seen = _recording(ctx.exec)
+    stale = _Stale(r.Registry("ghcr", address, username))
+    done = await r.DockerRegistryExecutor(ctx, stale).execute(_request(action=action, address=address))
+    assert done.success is False and seen == []
+    assert done.error == "Diese Registry ist nicht (mehr) eingetragen. Bitte die Einstellungen prüfen."
 
 
 @pytest.mark.asyncio
@@ -412,6 +465,22 @@ async def test_failed_login_and_logout_say_why():
     assert seen == [(["docker", "logout", "ghcr.io"], None)]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "verb"), [("docker.registry_login", "anmelden"), ("docker.registry_logout", "abmelden")], ids=["anmelden", "abmelden"],
+)
+async def test_the_dry_run_names_the_registry_and_touches_nothing(action, verb):
+    r = _mod()
+    ctx = _ctx()
+    seen = _recording(ctx.exec)
+    executor = r.DockerRegistryExecutor(ctx, r.Registries(ctx))
+    report = await executor.dry_run(_request(action=action))
+    assert (report.would_change, report.summary) == (True, f"Würde Docker bei ghcr.io {verb}.")
+    bare = await executor.dry_run(_request(action=action).model_copy(update={"payload": {}}))
+    assert bare.summary == f"Würde Docker bei ? {verb}."
+    assert seen == []
+
+
 # --- Durch den echten Kern -------------------------------------------------------------------------------------------
 
 
@@ -443,6 +512,22 @@ async def test_login_through_the_gate(client, docker_on, monkeypatch):
     assert PASSWORD not in action.text and PASSWORD not in state.text
     assert (await client.post(f"{base}/weg/login", headers=docker_on.owner)).status_code == 404
     assert (await client.post(f"{base}/a;b/login", headers=docker_on.owner)).status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_vault_is_a_503_without_its_text(client, docker_on, monkeypatch):
+    from nodvard_deck.ext.runtime import get_extension_runtime
+
+    await _with_registry(client, docker_on)
+
+    async def locked(label):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(get_extension_runtime().loaded["docker"].ctx.secrets, "exists", locked)
+    response = await client.get(f"/api/v1/ext/docker/hosts/{docker_on.host}/registries", headers=docker_on.owner)
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Ob die Passwörter im Tresor liegen, ließ sich gerade nicht lesen. Versuch es gleich noch einmal."
+    assert "database is locked" not in response.text
 
 
 @pytest.mark.asyncio

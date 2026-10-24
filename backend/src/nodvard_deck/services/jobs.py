@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import stat
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import delete, select, update
@@ -144,6 +147,27 @@ async def prune_runs(session: AsyncSession, *, job_id: str, older_than: datetime
 
 async def get_run(session: AsyncSession, run_id: str) -> JobRun | None:
     return await session.get(JobRun, run_id)
+
+
+def read_run_output(runs_dir: Path, ref: str | None) -> str:
+    """Inhalt der Lauf-Datei `ref`, nur wenn sie eine gewöhnliche Datei direkt in `runs_dir` ist (`output_ref` stammt aus
+    der Datenbank, auch aus einer eingespielten Sicherung), sonst leer."""
+    if not ref:
+        return ""
+    path = Path(ref)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        root = os.path.realpath(runs_dir)
+        if path.name in ("", ".", "..") or os.path.realpath(path.parent) != root:
+            return ""
+        fd = os.open(os.path.join(root, path.name), flags)
+    except (OSError, ValueError):
+        return ""
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        return ""
+    with os.fdopen(fd, encoding="utf-8", errors="replace") as file:
+        return file.read()
 
 
 async def mark_interrupted_on_boot(session: AsyncSession) -> int:

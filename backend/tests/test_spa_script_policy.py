@@ -10,7 +10,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from nodvard_deck.main import SPA_CSP_REPORT_ONLY, _SpaStaticFiles, spa_script_policy
+from nodvard_deck.main import SPA_CSP, SPA_CSP_REPORT_ONLY, _SpaStaticFiles, spa_script_policy
 
 REPO = Path(__file__).resolve().parents[2]
 IMPORT_MAP = '\n      {\n        "imports": { "react": "/lattice-shim/react.js" }\n      }\n    '
@@ -56,16 +56,32 @@ def test_a_missing_index_allows_only_own_files(tmp_path):
     assert spa_script_policy(tmp_path / "fehlt.html") == "script-src 'self'"
 
 
-def test_the_app_page_reports_inline_scripts_and_javascript_links(tmp_path):
+def test_the_app_page_blocks_inline_scripts_and_javascript_links(tmp_path):
     (tmp_path / "index.html").write_text(f'<html><script type="importmap">{IMPORT_MAP}</script></html>', encoding="utf-8")
     app = FastAPI()
     app.mount("/", _SpaStaticFiles(directory=tmp_path, html=True), name="frontend")
-    header = TestClient(app).get("/settings").headers["content-security-policy-report-only"]
-    assert header == f"{SPA_CSP_REPORT_ONLY}; script-src 'self' {_sha(IMPORT_MAP)}"
-    assert "'unsafe-inline'" not in header
+    headers = TestClient(app).get("/settings").headers
+    script = f"script-src 'self' {_sha(IMPORT_MAP)}"
+    assert headers["content-security-policy"] == f"{SPA_CSP}; {script}"
+    assert headers["content-security-policy-report-only"] == SPA_CSP_REPORT_ONLY
+    assert "script-src" not in SPA_CSP and "script-src" not in SPA_CSP_REPORT_ONLY
+    assert not {"'unsafe-inline'", "'unsafe-eval'", "'strict-dynamic'"} & set(script.split())
 
 
 def test_the_real_index_html_has_only_the_import_map_inline():
-    """Ein neues eingebettetes Skript in `frontend/index.html` bekäme ohne Prüfsumme eine Meldung."""
+    """Eingebettet ist nur die Import-Map; ein weiteres Skript bekäme seine Prüfsumme von selbst, darum fällt es hier
+    auf."""
     policy = spa_script_policy(REPO / "frontend" / "index.html")
     assert policy.startswith("script-src 'self' 'sha256-") and policy.count("'sha256-") == 1
+
+
+def test_a_changed_index_html_gets_its_new_hash_without_a_restart(tmp_path: Path):
+    index = tmp_path / "index.html"
+    index.write_text('<html><script type="importmap">{"imports": {}}</script></html>', encoding="utf-8")
+    app = FastAPI()
+    app.mount("/", _SpaStaticFiles(directory=tmp_path, html=True), name="frontend")
+    client = TestClient(app)
+    before = client.get("/").headers["content-security-policy"]
+    index.write_text(f'<html><script type="importmap">{IMPORT_MAP}</script></html>', encoding="utf-8")
+    after = client.get("/").headers["content-security-policy"]
+    assert before != after and after == f"{SPA_CSP}; script-src 'self' {_sha(IMPORT_MAP)}"

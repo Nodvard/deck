@@ -56,8 +56,12 @@ export function SetupCommand({
 
   const ready = requirements.isSuccess || requirements.isError;
   const setup = useSetup(host.id, credential.id, { sudo, fullSudo: fullChoice, groups: chosenGroups, enabled: ready });
-  // Solange der Befehl lädt, oder bei einem älteren Server ohne die Angabe: die volle Regel annehmen.
-  const fullRule = sudo && (setup.data?.full_sudo ?? true);
+  // Welche Regel kommt, steht erst mit dem Befehl fest; vorher keinen der Hinweise dazu zeigen.
+  const ruleKnown = sudo && setup.data !== undefined;
+  // Braucht hier kein Modul root, richtet der Befehl trotz Haken kein sudo ein; nur „Volle Rechte“ ändert das.
+  const noRootNeeded = ruleKnown && setup.data?.sudo === false;
+  // Ein älterer Server ohne die Angabe richtet die volle Regel ein.
+  const fullRule = ruleKnown && !noRootNeeded && (setup.data?.full_sudo ?? true);
   const offersHelpers = (setup.data?.helpers ?? []).length > 0;
   // Ein Modul braucht root ohne Hilfsskript: Dann gehört die volle Regel dazu, auch ohne Häkchen.
   const fullForced = sudo && !fullChoice && setup.data?.full_sudo === true;
@@ -67,7 +71,8 @@ export function SetupCommand({
   const [way, setWay] = useState<Way>("command");
   const loading = !ready || setup.isLoading || setup.isFetching;
 
-  const powerful = fullRule || chosenGroups.length > 0;
+  // Solange die Regel noch nicht feststeht, bleibt die Warnung stehen.
+  const powerful = (sudo && !ruleKnown) || fullRule || chosenGroups.length > 0;
   return (
     <div className="space-y-3" data-testid="setup-command">
       <h4 className="text-sm font-semibold">Server für diesen Schlüssel einrichten</h4>
@@ -97,7 +102,12 @@ export function SetupCommand({
               Das ist praktisch root: Wer in der Gruppe docker ist oder sudo ohne Passwort darf, kann auf dem Server alles tun.
             </p>
           )}
-          {sudo && (fullRule ? (
+          {ruleKnown && (noRootNeeded ? (
+            <p className="text-xs text-white/45" data-testid="setup-sudo-note">
+              Kein Modul braucht auf diesem Server root. Der Befehl richtet darum kein sudo ein; brauchst du sudo für
+              eigene Befehle über Nodvard Deck, kreuze unter „Erweitert“ „Volle Rechte“ an.
+            </p>
+          ) : fullRule ? (
             <p className="text-xs text-white/45" data-testid="setup-sudo-note">
               Nodvard Deck startet einige root-Befehle über „sudo sh -c“, darum braucht es die volle sudo-Regel.
               Deshalb bekommt nur dieser eine Benutzer die Rechte, und er kann sich nur mit dem Schlüssel anmelden.
@@ -108,7 +118,7 @@ export function SetupCommand({
               Skript darf, steht unter „Was macht der Befehl?“.
             </p>
           ))}
-          {sudo && (fullChoice || offersHelpers) && (
+          {sudo && (fullChoice || offersHelpers || noRootNeeded) && (
             <details className="text-sm" data-testid="setup-advanced">
               <summary className="cursor-pointer text-xs text-white/55">Erweitert</summary>
               <label className="mt-2 flex cursor-pointer items-start gap-2.5">
@@ -192,7 +202,7 @@ export function SetupCommand({
                 ))}
               </details>
               {/* Hinweise zu root/sudo stehen schon oben bei den Haken: nicht doppelt zeigen. */}
-              {setup.data.notes.filter((n) => !["praktisch", "sudo sh -c", "kein volles root"].some((part) => n.includes(part))).map((n) => (
+              {setup.data.notes.filter((n) => !["praktisch", "sudo sh -c", "kein volles root", "kein sudo ein"].some((part) => n.includes(part))).map((n) => (
                 <p key={n} className="text-xs text-white/55">{n}</p>
               ))}
             </>

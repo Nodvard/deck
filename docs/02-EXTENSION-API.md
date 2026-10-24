@@ -914,6 +914,12 @@ es per `import(url)`. Geteilte Singletons hängen an `window.__nodvardDeck` (alt
 `window.__lattice`, gilt weiter — Übergang), ein Import-Map-Shim
 löst `react`, `react/jsx-runtime` und `react-dom` dorthin auf.
 
+Das Bundle läuft unter der Content-Security-Policy der App-Seite (`script-src 'self'`, siehe
+[01-ARCHITECTURE.md](01-ARCHITECTURE.md)): Code nur vom Server von Nodvard Deck, kein `eval` und kein
+`new Function` (auch nicht in Bibliotheken, etwa Vorlagen- oder Schema-Compiler), keine `on…=`-Attribute in
+eingefügtem HTML, kein Nachladen von einem CDN, keine Worker aus `blob:` und kein WebAssembly. Was dagegen verstößt,
+blockiert der Browser und nennt den Grund in der Konsole.
+
 **Namen im Frontend-Vertrag (Übergang).** Mit der Umbenennung zu Nodvard Deck gibt es für alles,
 woran Bundles hängen, einen neuen Namen. Die alten gelten weiter, bis eine Major-Version sie
 ausdrücklich entfernt:

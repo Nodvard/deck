@@ -264,16 +264,17 @@ class _PreparedSetup:
     sudo: bool
     helpers: list[RootHelperFile]
     full_sudo: bool
+    sudo_skipped: bool = False
+    """`sudo` gewünscht, aber kein Modul braucht hier root: Der Befehl richtet kein sudo ein."""
 
 
 async def _prepare_setup(
     session: SessionDep, settings: Settings, host_id: str, credential_id: str, *, sudo: bool, groups: list[str] | None,
     report_state: bool = False, full_sudo: bool = False,
 ) -> _PreparedSetup:
-    """Gemeinsame Vorbedingungen und das Skript für `GET .../setup` und `POST .../setup-with-password`. Nur Linux, nur
-    Zugänge mit SSH-Schlüssel, nur übliche Linux-Benutzernamen; Gruppen nur, wenn Erweiterungen sie für diesen Server
-    verlangen. Mit `sudo` gibt es die volle Regel nur auf Wunsch (`full_sudo`) oder wenn ein Modul ohne Hilfsskript
-    root braucht, sonst nur die Regeln der Hilfsskripte. Fehler sind feste Sätze (404/422)."""
+    """Vorbedingungen und Skript für `GET .../setup` und `POST .../setup-with-password`, nur Linux mit SSH-Schlüssel.
+    Die volle sudo-Regel gibt es nur mit `full_sudo` oder für ein Modul ohne Hilfsskript, sonst die Regeln der
+    Hilfsskripte; braucht kein Modul root, gar keine."""
     host = await _load_host(session, host_id)
     credential = await session.get(HostCredential, credential_id)
     if credential is None or credential.host_id != host_id:
@@ -303,7 +304,8 @@ async def _prepare_setup(
     is_root = credential.username == "root"
     if is_root:
         wanted = []
-    use_sudo = sudo and not is_root
+    needs_root = any(spec.needs_root for _ext_id, spec in matching_requirements(host))
+    use_sudo = sudo and not is_root and (full_sudo or needs_root)
     helpers = root_helpers_for(host) if use_sudo else []
     use_full = use_sudo and (full_sudo or not helpers or not root_needs_helpers_only(host))
 
@@ -321,15 +323,22 @@ async def _prepare_setup(
         raise HTTPException(status_code=422, detail=detail) from None
     return _PreparedSetup(
         host=host, credential=credential, info=info, script=script, one_liner=one_liner, groups=wanted, sudo=use_sudo,
-        helpers=helpers, full_sudo=use_full,
+        helpers=helpers, full_sudo=use_full, sudo_skipped=sudo and not is_root and not use_sudo,
     )
 
 
 def _notes(prepared: _PreparedSetup) -> list[str]:
-    return host_setup.setup_notes(
+    notes = host_setup.setup_notes(
         prepared.credential.username, groups=prepared.groups, sudo=prepared.sudo,
         helpers=[f"{h.ext_id}-root" for h in prepared.helpers], full_sudo=prepared.full_sudo,
     )
+    if prepared.sudo_skipped:
+        notes.append(
+            "Kein eingeschaltetes Modul braucht auf diesem Server root. Darum richtet der Befehl kein sudo ein, auch "
+            "wenn „Root-Rechte ohne Passwort“ angekreuzt ist. Brauchst du sudo für eigene Befehle über Nodvard Deck, "
+            "kreuze unter „Erweitert“ „Volle Rechte“ an."
+        )
+    return notes
 
 
 @router.get("/hosts/{host_id}/credentials/{credential_id}/setup")

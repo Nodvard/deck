@@ -39,6 +39,9 @@ services:
       # dann in der Oberflaeche als Ordner `/backups` waehlen. Nur `/backups` (und darunter) ist
       # als Ziel erlaubt, neben dem Standard /app/data/backups.
       # - ./sicherungen:/backups
+      # NAS oder NFS: den eingehaengten Ordner eintragen, Rechte fuer 1000 und Reihenfolge beim Start siehe
+      # docs/11-ERST-EINRICHTUNG.md, Abschnitt "Sicherungen auf ein NAS oder NFS".
+      # - /pfad/zum/nas:/backups
     # Eigener Namensserver nur fuer diesen Container. Noetig nur, wenn interne Namen des Heimnetzes
     # (z. B. von einem Pi-hole) nicht gefunden werden. Zum Einschalten die Zeilen einkommentieren:
     # dns:

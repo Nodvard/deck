@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 
 import pytest
 
@@ -36,13 +38,13 @@ def _auth_header(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _register_job(db_session, *, ext_id="test-ext", key="job-1", handler=None):
+async def _register_job(db_session, *, ext_id="test-ext", key="job-1", handler=None, enabled=True):
     async def _default(**kwargs):
         return "ok"
 
     job = await jobs_service.upsert_job(
         db_session, ext_id=ext_id, ext_job_key=key, name="Testjob", kind="ext",
-        schedule="*/5 * * * *", params={}, enabled=True,
+        schedule="*/5 * * * *", params={}, enabled=enabled,
     )
     get_extension_runtime().scheduler.register(ext_id, key, handler or _default)
     return job
@@ -85,6 +87,24 @@ async def test_operator_has_jobs_read_and_run_but_not_write(client, db_session):
     assert (
         await client.patch(f"/api/v1/jobs/{job.id}", json={"enabled": False}, headers=_auth_header(token))
     ).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_a_switched_off_job_cannot_be_run_by_hand(client, db_session):
+    owner = await _bootstrap_owner(client)
+    await _create_user_with_role(db_session, username="op2", password="whatever123", role="operator")
+    calls: list[dict] = []
+
+    async def _updates(**kwargs):
+        calls.append(kwargs)
+
+    job = await _register_job(db_session, key="updates-auto", handler=_updates, enabled=False)
+    login = await client.post("/api/v1/auth/login", json={"username": "op2", "password": "whatever123"})
+    for token in (login.json()["access_token"], owner):
+        r = await client.post(f"/api/v1/jobs/{job.id}/run", headers=_auth_header(token))
+        assert r.status_code == 409 and "ausgeschaltet" in r.json()["detail"], r.text
+    assert calls == []
+    assert (await client.get(f"/api/v1/jobs/{job.id}/runs", headers=_auth_header(owner))).json() == []
 
 
 @pytest.mark.asyncio
@@ -278,3 +298,71 @@ async def test_patch_job_enable_on_file_db_does_not_block_itself(client, tmp_pat
             get_scheduler_service().unschedule(job_id)
         await engine.dispose()
         reset_engine_cache()
+
+
+@pytest.fixture
+def run_files(tmp_path):
+    runs = tmp_path / "runs"
+    (runs / "unter").mkdir(parents=True)
+    (runs / "a.log").write_text("eigene Ausgabe", encoding="utf-8")
+    (runs / "unter" / "b.log").write_text("weiter unten", encoding="utf-8")
+    (tmp_path / "geheim.txt").write_text("geheim", encoding="utf-8")
+    (tmp_path / "runs-nebenan").mkdir()
+    (tmp_path / "runs-nebenan" / "x.log").write_text("geheim", encoding="utf-8")
+    return runs
+
+
+@pytest.mark.parametrize("ref,expected", [
+    ("a.log", "eigene Ausgabe"),
+    ("unter/b.log", ""),
+    ("unter", ""),
+    ("..", ""),
+    ("../geheim.txt", ""),
+    ("../runs-nebenan/x.log", ""),
+    (".", ""),
+    ("a\x00.log", ""),
+])
+def test_run_output_is_read_only_from_files_directly_in_the_runs_folder(run_files, ref, expected):
+    assert jobs_service.read_run_output(run_files, f"{run_files}/{ref}") == expected
+
+
+def test_run_output_keeps_no_file_open_and_replaces_broken_text(run_files):
+    (run_files / "kaputt.log").write_bytes(b"vor\xffnach")
+    assert jobs_service.read_run_output(run_files, str(run_files / "kaputt.log")) == "vor\ufffdnach"
+    if not os.path.isdir("/proc/self/fd"):
+        pytest.skip("braucht /proc")
+    before = len(os.listdir("/proc/self/fd"))
+    for _ in range(20):
+        assert jobs_service.read_run_output(run_files, f"{run_files}/..") == ""
+    assert len(os.listdir("/proc/self/fd")) == before
+
+
+def test_run_output_ignores_absolute_paths_links_and_fifos(run_files, tmp_path):
+    assert jobs_service.read_run_output(run_files, str(tmp_path / "geheim.txt")) == ""
+    assert jobs_service.read_run_output(run_files, None) == ""
+    assert jobs_service.read_run_output(run_files, "") == ""
+    if sys.platform == "win32":
+        pytest.skip("braucht Symlinks und FIFOs")
+    (run_files / "link.log").symlink_to(tmp_path / "geheim.txt")
+    os.mkfifo(run_files / "fifo.log")
+    assert jobs_service.read_run_output(run_files, str(run_files / "link.log")) == ""
+    assert jobs_service.read_run_output(run_files, str(run_files / "fifo.log")) == ""
+
+
+@pytest.mark.asyncio
+async def test_a_run_from_a_changed_backup_cannot_read_other_files(client, db_session, tmp_path):
+    from sqlalchemy import insert
+
+    from nodvard_deck.db import utcnow
+    from nodvard_deck.models import JobRun
+
+    token = await _bootstrap_owner(client)
+    secret = tmp_path / "geheim.txt"
+    secret.write_text("root:x:0:0", encoding="utf-8")
+    await db_session.execute(insert(JobRun), [{
+        "id": "aus-sicherung", "job_id": None, "trigger": "schedule", "status": "succeeded", "started_at": utcnow(),
+        "output_ref": str(secret), "actor": {},
+    }])
+    await db_session.commit()
+    r = await client.get("/api/v1/runs/aus-sicherung/output", headers=_auth_header(token))
+    assert r.status_code == 200 and r.json() == {"output": ""}

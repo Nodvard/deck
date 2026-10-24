@@ -9,6 +9,7 @@ selbst in einer echten Shell."""
 from __future__ import annotations
 
 import hashlib
+import shlex
 import shutil
 import subprocess
 import sys
@@ -159,8 +160,9 @@ UNUSED = " Nodvard Deck ruft es nicht auf."
          f"Version 3 auf dem Server ist neuer als die dieses Dashboards (2).{UNUSED}"),
         (_present(SHIELD, sha="0" * 64), "fail", f"Version 2, aber mit anderem Inhalt als hier.{UNUSED}"),
         (_present(SHIELD, owner="bad"), "warn",
-         ("Liegt auf dem Server, aber nicht nur root kann es ändern (Datei oder ein Ordner darüber). Wer es ändern kann, "
-          "kommt über seine sudo-Regel an root.")),
+         ("Liegt auf dem Server, aber nicht nur root kann es ändern (Datei oder ein Ordner darüber, etwa weil eine "
+          "andere Gruppe dort schreiben darf). Wer es ändern kann, kommt über seine sudo-Regel an root. Der "
+          "Einrichtungsbefehl nennt den Ordner und die Abhilfe.")),
         (_present(SHIELD, version="zwei", sha="0" * 64), "fail",
          f"Die Version lässt sich nicht lesen, der Inhalt ist unbekannt.{UNUSED}"),
         (_present(SHIELD, version="2; rm -rf /", sha="0" * 64), "fail",
@@ -376,3 +378,55 @@ def test_the_query_runs_in_a_real_shell(tmp_path: Path):
     assert (item.present, item.version, item.sha256, item.owner_ok) == (True, 2, present.sha256, False)
     assert seen[missing.install_path].present is False
     assert not ran.exists(), "die Abfrage hat das Skript ausgeführt"
+
+
+def _stub(path: Path, body: str) -> None:
+    path.write_text("#!/bin/sh\n" + body)
+    path.chmod(0o755)
+
+
+def test_the_query_checks_every_folder_for_other_writers():
+    assert host_check._FOLDER_WRITERS in helper_check_command([SHIELD])
+
+
+@pytest.mark.parametrize(
+    ("mode", "gid", "acl", "ls", "verdict"),
+    [
+        ("755", "0", None, None, "ok"),
+        ("2775", "0", "user::rwx\ngroup::rwx\nother::r-x\n", None, "ok"),
+        ("775", "0", "user::rwx\nuser:root:rwx\ngroup::r-x\ngroup:root:rwx\nmask::rwx\nother::r-x\n", None, "ok"),
+        ("755", "0", "user::rwx\ngroup::r-x\ngroup:staff:rwx\t#effective:r-x\nmask::r-x\nother::r-x\n", None, "ok"),
+        ("777", "0", None, None, "bad"),
+        ("1777", "0", None, None, "bad"),
+        ("2775", "50", None, None, "bad"),
+        ("3775", "100", None, None, "bad"),
+        ("775", "0", "user::rwx\ngroup::r-x\ngroup:staff:rwx\nmask::rwx\nother::r-x\n", None, "bad"),
+        ("775", "0", "user::rwx\nuser:bob:rwx\ngroup::r-x\nmask::rwx\nother::r-x\n", None, "bad"),
+        ("775", "0", "user::rwx\ngroup::r-x\ngroup:4711:rwx\nmask::rwx\nother::r-x\n", None, "bad"),
+        ("775", "0", "", "drwxrwxr-x+ 2 root root 4096 Oct 21 12:00 x", "bad"),
+        ("775", "0", "", "drwxrwxr-x 2 root root 4096 Oct 21 12:00 x", "ok"),
+        ("775", "0", "", "busybox", "bad"),
+    ],
+    ids=[
+        "nur-root", "gruppe-root", "acl-nur-root", "acl-maske-ohne-w", "alle", "sticky", "fremde-gruppe",
+        "fremde-gruppe-sonderbits", "acl-fremde-gruppe", "acl-anderer-benutzer", "acl-nummer", "ohne-getfacl-mit-plus",
+        "ohne-getfacl-coreutils", "ohne-getfacl-busybox",
+    ],
+)
+@pytest.mark.skipif(sys.platform == "win32" or shutil.which("sh") is None, reason="braucht eine echte POSIX-Shell")
+def test_a_folder_counts_as_safe_only_if_no_one_but_root_may_write(tmp_path: Path, mode, gid, acl, ls, verdict):
+    """Die Ordnerprüfung der Abfrage für sich, mit Attrappen für `stat`, `getfacl` (leer: fehlt) und `ls`."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _stub(bin_dir / "stat", f'case "$2" in %a) echo {mode};; %g) echo {gid};; *) exit 2;; esac\n')
+    if acl is not None:
+        _stub(bin_dir / "getfacl", f"printf %s {shlex.quote(acl)}\n" if acl else "exit 127\n")
+    if ls == "busybox":
+        _stub(bin_dir / "ls", "exit 1\n")
+    elif ls is not None:
+        _stub(bin_dir / "ls", f'[ "$1" = --version ] && {{ echo "ls (GNU coreutils) 9.4"; exit 0; }}\necho {shlex.quote(ls)}\n')
+    done = subprocess.run(
+        ["sh", "-c", f'q=/x; s=ok; {host_check._FOLDER_WRITERS}echo "$s"'], capture_output=True, text=True, timeout=30,
+        check=False, env={"PATH": f"{bin_dir}:/usr/bin:/bin", "LC_ALL": "C"},
+    )
+    assert (done.stdout.strip(), done.stderr) == (verdict, "")

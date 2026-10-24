@@ -643,6 +643,7 @@ def _root_label(requirements: Sequence[tuple[str, HostRequirementSpec]]) -> str:
 
 
 HELPER_RULES_ENOUGH = "sudo erlaubt nur die Hilfsskripte der Module, keine volle Regel. Das reicht."
+NO_ROOT_NEEDED = "Kein eingeschaltetes Modul braucht hier root, sudo ohne Passwort ist nicht nötig."
 
 
 async def _step_root(
@@ -673,6 +674,8 @@ async def _step_root(
     state.sudo_full = code == 0
     if code == 0:
         state.add("root", label, "ok", "sudo ohne Passwort klappt.")
+    elif not any(spec.needs_root for _ext_id, spec in requirements):
+        state.add("root", label, "ok", NO_ROOT_NEEDED)
     elif state.helper_rules:
         state.add(
             "root", label, "warn", f"sudo erlaubt nur einzelne Hilfsskripte. Hier ohne root: {', '.join(without_root)}.",
@@ -716,18 +719,27 @@ def _helper_label(helper: RootHelperFile) -> str:
     return f"Hilfsskript für {helper.ext_name}"
 
 
+# Wie `W` im Einrichtungsbefehl: Schreiben darf außer root nur die Gruppe root, kein anderer und kein benannter
+# ACL-Eintrag. Die zählen nur, wenn die Gruppenbits (mit ACL die Maske) Schreiben erlauben.
+_FOLDER_WRITERS = (
+    'case "$(stat -c %a "$q" 2>/dev/null)" in *[2367]) s=bad;; *[2367]?) [ "$(stat -c %g "$q" 2>/dev/null)" = 0 ] || s=bad; '
+    'if AL=$(getfacl -c "$q" 2>/dev/null); then printf "%s\\n" "$AL" | grep -E "^(user|group):[^:]+:.w" '
+    '| grep -Evq "^(user|group):(root|0):" && s=bad; '
+    'else case "$(ls -ld "$q" 2>/dev/null)" in ??????????+*) s=bad;; *) ls --version 2>/dev/null | grep -q coreutils || s=bad;; '
+    'esac; fi;; esac; '
+)
+
+
 def helper_check_command(helpers: Sequence[RootHelperFile]) -> str:
-    """Ein lesender Befehl für alle Hilfsskripte, als der angemeldete Benutzer: je Skript die Zeile `HELPER_VERSION=<n>`
-    aus dem Text (das Skript läuft dafür nicht, ein verändertes soll nirgends ausgeführt werden), sha256 und ob es selbst
-    und jeder Ordner bis `/` root gehört und weder der Benutzer noch andere dort schreiben können; am Ende die eigenen
-    sudo-Regeln (`sudo -n -l` führt nichts aus). In `sh -c`, falls die Login-Shell des Benutzers keine POSIX-Shell ist."""
+    """Lesender Befehl als der angemeldete Benutzer: je Hilfsskript Version (ohne es auszuführen), sha256 und ob nur root
+    es und jeden Ordner bis `/` ändern kann, am Ende die eigenen sudo-Regeln (`sudo -n -l`)."""
     paths = " ".join(shlex.quote(h.install_path) for h in helpers)
     return "sh -c " + shlex.quote(
         f'for p in {paths}; do echo "{_HELPER_TAG}path $p"; if [ -f "$p" ] && [ ! -L "$p" ]; then '
         f'echo "{_HELPER_TAG}version $(sed -n "s/^HELPER_VERSION=//p" "$p" 2>/dev/null | head -n 1)"; '
         f'echo "{_HELPER_TAG}sha $(sha256sum "$p" 2>/dev/null | cut -d" " -f1)"; '
         'q="$p"; s=ok; while :; do if [ -L "$q" ] || [ -w "$q" ] || [ "$(stat -c %u "$q" 2>/dev/null)" != 0 ]; then s=bad; fi; '
-        'case "$(stat -c %a "$q" 2>/dev/null)" in *[2367]) s=bad;; esac; [ "$q" = / ] && break; q=$(dirname "$q"); done; '
+        f'{_FOLDER_WRITERS}[ "$q" = / ] && break; q=$(dirname "$q"); done; '
         f'echo "{_HELPER_TAG}owner $s"; else echo "{_HELPER_TAG}missing"; fi; done; '
         f'echo "{_HELPER_TAG}sudo"; env LC_ALL=C sudo -n -l 2>/dev/null'
     )
@@ -858,8 +870,9 @@ def _add_helper_item(state: _State, helper: RootHelperFile, seen: _HelperSeen | 
     if not seen.owner_ok:
         state.add(
             id_, label, "warn",
-            "Liegt auf dem Server, aber nicht nur root kann es ändern (Datei oder ein Ordner darüber). Wer es ändern kann, "
-            "kommt über seine sudo-Regel an root.",
+            "Liegt auf dem Server, aber nicht nur root kann es ändern (Datei oder ein Ordner darüber, etwa weil eine andere "
+            "Gruppe dort schreiben darf). Wer es ändern kann, kommt über seine sudo-Regel an root. Der Einrichtungsbefehl "
+            "nennt den Ordner und die Abhilfe.",
             _RERUN_HINT,
         )
         return

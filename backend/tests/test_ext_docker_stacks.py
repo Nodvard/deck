@@ -8,6 +8,8 @@ import os
 import shutil
 import subprocess
 import sys
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 from docker_stack_fakes import (  # noqa: F401 - Fixtures
@@ -131,6 +133,18 @@ def test_markers_from_the_file_cannot_fake_a_result():
     assert "b" not in checks
 
 
+def test_stray_marker_lines_are_skipped():
+    st = _st()
+    text = (
+        f"#{MARKER} rc 0\n"
+        f"#{MARKER} hashes a\n#{MARKER} rc 0 mehr\nweb {'a' * 64}\n"
+        f"#{MARKER} rc\n#{MARKER} bogus a\n"
+        f"#{MARKER} rc 0\n"
+    )
+    checks = st.parse_hashes(text, MARKER)
+    assert list(checks) == ["a"] and checks["a"].hashes == {"web": "a" * 64}
+
+
 def test_unchecked_is_never_shown_as_unchanged():
     st = _st()
     stack = next(s for s in st.parse_members(PS) if s.project == "shop")
@@ -167,6 +181,26 @@ def test_usage_per_stack():
         "shop": {"cpu_percent": 1.75, "mem_used": None},
     }
     assert st.sum_usage(stacks, "media-app-1|--|800KiB / 4GiB|0.02%\n")["media"]["cpu_percent"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (TimeoutError(), "Der Server hat nicht innerhalb von 120 Sekunden geantwortet."),
+        (OSError("Verbindung getrennt"), "Server nicht erreichbar: Verbindung getrennt"),
+    ],
+    ids=["zeitlimit", "getrennt"],
+)
+async def test_an_aborted_check_for_one_stack_says_why(error, reason):
+    st = _st()
+
+    async def run(host, command, timeout_s=60):
+        raise error
+
+    docker = st.DockerStacks(SimpleNamespace(exec=SimpleNamespace(run=run)))
+    stack = next(s for s in st.parse_members(PS) if s.project == "shop")
+    assert await docker.pending(SimpleNamespace(id="h1"), stack) == f"Die Prüfung auf Änderungen in der Datei ist abgebrochen. {reason}"
 
 
 # --- Prüfsummen in einer echten Shell --------------------------------------------------------------------------------
@@ -436,6 +470,207 @@ async def test_a_docker_error_is_a_502_with_the_reason(client, docker_on):
     docker_on.exec.list = result(stderr="Cannot connect to the Docker daemon\n", code=1)
     response = await client.get(f"/api/v1/ext/docker/hosts/{docker_on.host}/stacks", headers=docker_on.owner)
     assert response.status_code == 502 and response.json()["detail"] == "Cannot connect to the Docker daemon"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stderr", "detail"),
+    [
+        ("Cannot connect to the Docker daemon\nzweite Zeile\n", "Cannot connect to the Docker daemon"),
+        ("", "docker stats endete mit 125."),
+        (" \n", "docker stats endete mit 125."),
+    ],
+    ids=["mit-meldung", "ohne-meldung", "nur-leerzeichen"],
+)
+async def test_a_failed_docker_stats_is_a_502(client, docker_on, stderr, detail):
+    docker_on.exec.stats = result("shop-web-1|1.50%|1MiB / 4GiB|0.03%\n", stderr=stderr, code=125)
+    response = await client.get(f"/api/v1/ext/docker/hosts/{docker_on.host}/stacks/usage", headers=docker_on.owner)
+    assert (response.status_code, response.json()["detail"]) == (502, detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "changes",
+    [{"working_dir": "", "config_files": ""}, {"config_files": "/opt/stacks/$(reboot).yml"}],
+    ids=["altes-compose", "ungewoehnlicher-pfad"],
+)
+async def test_a_stack_without_a_readable_file_is_a_409(client, docker_on, changes):
+    from nodvard_deck_ext_docker import stacks
+
+    docker_on.exec.rows.append(row(project="alt", **changes))
+    response = await client.get(f"/api/v1/ext/docker/hosts/{docker_on.host}/stacks/alt/file", headers=docker_on.owner)
+    assert (response.status_code, response.json()["detail"]) == (409, stacks.NO_FILE)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("when", "error", "detail"),
+    [
+        ("open", OSError("Verbindung getrennt"), "Dateien nicht lesbar: Verbindung getrennt"),
+        ("close", RuntimeError(), "Dateien nicht lesbar: RuntimeError"),
+    ],
+    ids=["oeffnen", "schliessen"],
+)
+async def test_files_behind_a_broken_sftp_channel_are_a_502(client, docker_on, monkeypatch, when, error, detail):
+    @asynccontextmanager
+    async def channel(host):
+        if when == "open":
+            raise error
+        yield docker_on.exec.sftp_server
+        raise error
+
+    monkeypatch.setattr(docker_on.handle, "sftp", channel)
+    response = await client.get(f"/api/v1/ext/docker/hosts/{docker_on.host}/stacks/shop/file", headers=docker_on.owner)
+    assert (response.status_code, response.json()["detail"]) == (502, detail)
+
+
+def _fail_reading(monkeypatch, docker_on, suffix, error, *, when):
+    sftp = docker_on.exec.sftp_server
+    real_open = sftp.open
+
+    class Reading:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def read(self, n):
+            raise error
+
+    def opened(path, mode, attrs=None):
+        if not path.endswith(suffix):
+            return real_open(path, mode, attrs)
+        if when == "open":
+            raise error
+        return Reading()
+
+    monkeypatch.setattr(sftp, "open", opened)
+
+
+def _stat_says_small(monkeypatch, docker_on):
+    sftp = docker_on.exec.sftp_server
+    real_stat = sftp.stat
+
+    async def stat(path):
+        attrs = await real_stat(path)
+        attrs.size = 1
+        return attrs
+
+    monkeypatch.setattr(sftp, "stat", stat)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("when", "error", "reason"),
+    [("open", PermissionError(13, "Permission denied"), "[Errno 13] Permission denied"), ("read", RuntimeError(), "RuntimeError")],
+    ids=["oeffnen", "lesen"],
+)
+async def test_a_failed_compose_read_names_the_reason(client, docker_on, monkeypatch, when, error, reason):
+    _fail_reading(monkeypatch, docker_on, ".yaml", error, when=when)
+    response = await client.get(f"/api/v1/ext/docker/hosts/{docker_on.host}/stacks/shop/file", headers=docker_on.owner)
+    assert response.status_code == 200, response.text
+    assert response.json()["files"] == [
+        {"path": "/opt/stacks/shop/compose.yaml", "content": None, "error": f"Die Datei ließ sich nicht lesen: {reason}"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_compose_file_larger_than_stat_says_is_not_shown(client, docker_on, monkeypatch):
+    from nodvard_deck_ext_docker import stacks
+
+    url = f"/api/v1/ext/docker/hosts/{docker_on.host}/stacks/shop/file"
+    _stat_says_small(monkeypatch, docker_on)
+    docker_on.exec.files["/opt/stacks/shop/compose.yaml"] = b"#" * stacks.MAX_FILE_BYTES
+    exact = (await client.get(url, headers=docker_on.owner)).json()["files"][0]
+    assert (exact["content"], exact["error"]) == ("#" * stacks.MAX_FILE_BYTES, None)
+
+    docker_on.exec.files["/opt/stacks/shop/compose.yaml"] = b"#" * (stacks.MAX_FILE_BYTES + 1)
+    big = (await client.get(url, headers=docker_on.owner)).json()["files"][0]
+    assert big == {"path": "/opt/stacks/shop/compose.yaml", "content": None, "error": stacks.TOO_BIG}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("when", "error", "reason"),
+    [("open", PermissionError(13, "Permission denied"), "[Errno 13] Permission denied"), ("read", RuntimeError(), "RuntimeError")],
+    ids=["oeffnen", "lesen"],
+)
+async def test_a_failed_env_read_has_no_names_but_a_reason(client, docker_on, monkeypatch, when, error, reason):
+    docker_on.exec.files["/opt/stacks/shop/.env"] = b"A=1\n"
+    _fail_reading(monkeypatch, docker_on, ".env", error, when=when)
+    response = await client.get(f"/api/v1/ext/docker/hosts/{docker_on.host}/stacks/shop/file", headers=docker_on.owner)
+    body = response.json()
+    assert response.status_code == 200, response.text
+    assert body["files"][0]["error"] is None, "die Compose-Datei bleibt trotzdem sichtbar"
+    assert body["env"] == [{"path": "/opt/stacks/shop/.env", "names": [], "note": None, "error": f"Die Datei ließ sich nicht lesen: {reason}"}]
+
+
+@pytest.mark.asyncio
+async def test_an_env_file_larger_than_stat_says_is_not_shown(client, docker_on, monkeypatch):
+    from nodvard_deck_ext_docker import stacks
+
+    url = f"/api/v1/ext/docker/hosts/{docker_on.host}/stacks/shop/file"
+    head = b"GEHEIM=Pfirsich4711\n"
+    _stat_says_small(monkeypatch, docker_on)
+    docker_on.exec.files["/opt/stacks/shop/.env"] = head + b"#" * (stacks.MAX_ENV_BYTES - len(head))
+    exact = await client.get(url, headers=docker_on.owner)
+    assert exact.json()["env"] == [{"path": "/opt/stacks/shop/.env", "names": ["GEHEIM"], "error": None, "note": None}]
+    assert "Pfirsich4711" not in exact.text
+
+    docker_on.exec.files["/opt/stacks/shop/.env"] = head + b"#" * (stacks.MAX_ENV_BYTES - len(head) + 1)
+    big = await client.get(url, headers=docker_on.owner)
+    assert big.json()["env"] == [
+        {"path": "/opt/stacks/shop/.env", "names": [], "note": None, "error": "Die Datei ist größer als 64 KB und wird hier nicht gelesen."},
+    ]
+    assert "Pfirsich4711" not in big.text and "GEHEIM" not in big.text
+
+
+@pytest.mark.asyncio
+async def test_files_too_big_by_their_stat_are_never_opened(client, docker_on, monkeypatch):
+    from nodvard_deck_ext_docker import stacks
+
+    sftp = docker_on.exec.sftp_server
+    real_stat, opened = sftp.stat, []
+
+    async def stat(path):
+        attrs = await real_stat(path)
+        attrs.size = (stacks.MAX_ENV_BYTES if path.endswith(".env") else stacks.MAX_FILE_BYTES) + 1
+        return attrs
+
+    def never(path, mode, attrs=None):
+        opened.append(path)
+        raise AssertionError(path)
+
+    monkeypatch.setattr(sftp, "stat", stat)
+    monkeypatch.setattr(sftp, "open", never)
+    docker_on.exec.files["/opt/stacks/shop/.env"] = b"A=1\n"
+    body = (await client.get(f"/api/v1/ext/docker/hosts/{docker_on.host}/stacks/shop/file", headers=docker_on.owner)).json()
+    assert body["files"] == [{"path": "/opt/stacks/shop/compose.yaml", "content": None, "error": stacks.TOO_BIG}]
+    assert body["env"] == [
+        {"path": "/opt/stacks/shop/.env", "names": [], "note": None, "error": "Die Datei ist größer als 64 KB und wird hier nicht gelesen."},
+    ]
+    assert opened == []
+
+
+@pytest.mark.asyncio
+async def test_many_env_names_are_cut_with_a_note_and_no_values(client, docker_on):
+    from nodvard_deck_ext_docker import stacks
+
+    def env(count):
+        return "".join(f"V{i}=Pfirsich4711\n" for i in range(count)).encode()
+
+    url = f"/api/v1/ext/docker/hosts/{docker_on.host}/stacks/shop/file"
+    docker_on.exec.files["/opt/stacks/shop/.env"] = env(stacks.MAX_ENV_NAMES)
+    exact = (await client.get(url, headers=docker_on.owner)).json()["env"][0]
+    assert (len(exact["names"]), exact["note"]) == (stacks.MAX_ENV_NAMES, None)
+
+    docker_on.exec.files["/opt/stacks/shop/.env"] = env(stacks.MAX_ENV_NAMES + 50)
+    response = await client.get(url, headers=docker_on.owner)
+    cut = response.json()["env"][0]
+    assert cut["names"] == [f"V{i}" for i in range(stacks.MAX_ENV_NAMES)]
+    assert (cut["error"], cut["note"]) == (None, f"Gezeigt sind die ersten {stacks.MAX_ENV_NAMES} Namen.")
+    assert "Pfirsich4711" not in response.text
 
 
 @pytest.mark.asyncio

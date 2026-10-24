@@ -53,6 +53,7 @@ START_FAILED_PREFIX = "Start fehlgeschlagen:"  # steht schon während des Warten
 RESUME_DELAY_S = 5  # nach dem Start kurz warten, bis Netz und SSH wieder da sind
 RESUME_MIN_WAIT_S = 5 * 60  # nach einem Neustart mindestens so lange nachfragen
 BUSY_MESSAGE = "Auf diesem Server läuft schon ein Update-Lauf."
+AUTO_UPDATES_OFF = "Automatische Updates sind ausgeschaltet, es wurde nichts eingespielt."
 LOST_MESSAGE = ("Der Update-Lauf wurde auf dem Server abgebrochen (Neustart oder Absturz?). "
                 "Bitte dort „sudo dpkg --configure -a“ ausführen und neu prüfen.")
 MAX_PARALLEL = 4
@@ -822,6 +823,9 @@ class UpdateCenter:
 
     async def auto_update(self) -> dict[str, Any]:
         settings = await self._ctx.settings.get()
+        # Auch ein Lauf von Hand (Job-Liste der API) spielt nichts ein, solange die Automatik aus ist.
+        if not settings.get("auto_updates_enabled", False):
+            return {"hosts": 0, "failed": 0, "skipped": AUTO_UPDATES_OFF}
         mode = settings.get("auto_updates_mode") or "security"
         hosts = auto_update_hosts(await self._defender.target_hosts(), settings)
         # Der Server mit dem Dashboard kommt zuletzt, sein Neustart erst nach der Zusammenfassung: Sonst bräche die

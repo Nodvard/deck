@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 ALLOWED_CONTENT_TYPES = {
@@ -13,6 +14,8 @@ ALLOWED_CONTENT_TYPES = {
 }
 # Obergrenze beim Hochladen und beim Abruf aus der Nextcloud.
 MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
+# So benennt `save_document` jede Datei: Kennung und feste Endung, kein Punkt davor, kein Pfadtrenner.
+_FILENAME_RE = re.compile(r"[0-9A-Za-z_-]{1,64}\.(?:" + "|".join(sorted(set(ALLOWED_CONTENT_TYPES.values()))) + ")")
 
 
 def documents_dir(ext_data_dir: object) -> Path:
@@ -25,15 +28,29 @@ def documents_dir(ext_data_dir: object) -> Path:
     return d
 
 
-def document_path(ext_data_dir: object, filename: str) -> Path:
-    return documents_dir(ext_data_dir) / filename
+def _named_path(ext_data_dir: object, filename: str) -> Path | None:
+    """Der Pfad im Dokumentordner, `None` für einen Namen, den `save_document` nie vergibt (etwa aus einer veränderten
+    Sicherung)."""
+    return documents_dir(ext_data_dir) / filename if _FILENAME_RE.fullmatch(filename) else None
+
+
+def document_path(ext_data_dir: object, filename: str) -> Path | None:
+    """Die Datei zum Lesen, `None` für einen fremden Namen oder einen Link, der aus dem Ordner hinausführt."""
+    path = _named_path(ext_data_dir, filename)
+    try:
+        inside = path is not None and path.resolve().parent == path.parent.resolve()
+    except (OSError, RuntimeError):  # Link-Schleife
+        return None
+    return path if inside else None
 
 
 def save_document(ext_data_dir: object, document_id: str, extension: str, content: bytes) -> str:
     # Der Dateiname entsteht nur aus Kennung und fester Endung, nie aus dem Namen des Nutzers (der steht nur in der
     # Datenbank): so führt kein Upload aus dem Ordner hinaus.
     filename = f"{document_id}.{extension}"
-    path = document_path(ext_data_dir, filename)
+    path = _named_path(ext_data_dir, filename)
+    if path is None:
+        raise ValueError(f"Ungültiger Dateiname für ein Dokument: {filename!r}")
     # Neue Datei nur für den Besitzer (0600); ein vorhandener Link wird nicht verfolgt.
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags, 0o600)
@@ -43,4 +60,7 @@ def save_document(ext_data_dir: object, document_id: str, extension: str, conten
 
 
 def delete_document_file(ext_data_dir: object, filename: str) -> None:
-    document_path(ext_data_dir, filename).unlink(missing_ok=True)
+    # `unlink` entfernt einen Link selbst, nie sein Ziel.
+    path = _named_path(ext_data_dir, filename)
+    if path is not None:
+        path.unlink(missing_ok=True)

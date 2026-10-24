@@ -6,20 +6,32 @@ geht es um die Docker-ps-Parsing-/URL-Rate-Logik selbst.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
+import docker_stack_fakes as fakes
 import pytest
+from docker_stack_fakes import EXT_DIR, docker_on  # noqa: F401 - Fixture
 
 from nodvard_deck.services import extensions as extensions_service
 
-SRC = Path(__file__).resolve().parents[2] / "extensions" / "docker" / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-
-from nodvard_deck_ext_docker.capabilities import DockerServiceCatalog  # noqa: E402
-
 REPO_EXTENSIONS_DIR = Path(__file__).resolve().parents[2] / "extensions"
+
+
+@pytest.fixture(autouse=True)
+def _ext_docker_on_path(monkeypatch):
+    monkeypatch.syspath_prepend(str(EXT_DIR / "src"))
+    yield
+    for name in list(sys.modules):
+        if name.startswith("nodvard_deck_ext_docker"):
+            del sys.modules[name]
+
+
+def _catalog(ctx):
+    from nodvard_deck_ext_docker.capabilities import DockerServiceCatalog
+
+    return DockerServiceCatalog(ctx)
 
 
 async def _bootstrap_owner(client, username="owner1", password="correct-horse-battery"):
@@ -102,7 +114,7 @@ async def test_lists_running_and_stopped_containers_with_tone():
             _ps_line("worker", "exited", "Exited (1) 3 minutes ago"),
         ]))},
     )
-    services = await DockerServiceCatalog(ctx).list_services()
+    services = await _catalog(ctx).list_services()
     by_name = {s["name"]: s for s in services}
     assert by_name["nginx"]["tone"] == "good"
     assert by_name["worker"]["tone"] == "neutral"
@@ -114,7 +126,7 @@ async def test_lines_without_enough_fields_or_a_name_are_skipped():
     host = _FakeHost("h1", "docker", "10.0.0.5")
     lines = ["kaputt|zeile|running", _ps_line("", "running", "Up 2 hours"), _ps_line("nginx", "running", "Up 2 hours")]
     ctx = _FakeCtx(settings={}, hosts=[host], outputs={"h1": _FakeExecResult(0, "\n".join(lines))})
-    assert [s["name"] for s in await DockerServiceCatalog(ctx).list_services()] == ["nginx"]
+    assert [s["name"] for s in await _catalog(ctx).list_services()] == ["nginx"]
 
 
 PIHOLE_PORTS = (
@@ -204,7 +216,7 @@ async def test_own_tile_url_wins_and_the_detected_one_stays_visible():
             _ps_line("kaputt", "running", "Up", "0.0.0.0:8080->80/tcp"),
         ]))},
     )
-    services = {s["name"]: s for s in await DockerServiceCatalog(ctx).list_services()}
+    services = {s["name"]: s for s in await _catalog(ctx).list_services()}
     assert services["pihole"]["url"] == "https://pihole.example/admin/"
     assert services["pihole"]["url_detected"] == "http://10.0.0.5:8088/admin/"
     assert services["pihole"]["url_custom"] is True
@@ -227,6 +239,8 @@ async def test_own_tile_url_wins_and_the_detected_one_stays_visible():
         ("http://x/a\u200bb", "Steuerzeichen"),
         ("http://x/\x7f", "Steuerzeichen"),
         ("http://[::1", "ungültig"),
+        ("http://[v1.fe80::a]/", "Rechnernamen"),
+        ("http://[v1.2001:db8::5]:8080/", "Rechnernamen"),
         ("http://@10.0.0.5", "Passwort"),
         ("  ", "Bitte eine Adresse angeben"),
         ("http://x/" + "a" * 2000, "zu lang"),
@@ -302,7 +316,7 @@ async def test_unreachable_host_shows_a_visible_error_tile_not_raised():
     verschluckt -- fachlich ununterscheidbar von "keine Container laufen"."""
     host = _FakeHost("h1", "docker", "10.0.0.5")
     ctx = _FakeCtx(settings={}, hosts=[host], outputs={"h1": ConnectionError("no route to host")})
-    services = await DockerServiceCatalog(ctx).list_services()
+    services = await _catalog(ctx).list_services()
     assert len(services) == 1
     assert services[0]["tone"] == "danger"
     assert "no route to host" in services[0]["status"]
@@ -326,7 +340,7 @@ async def test_a_broken_host_does_not_hide_services_on_a_working_one():
             "h2": _FakeExecResult(0, _ps_line("grafana", "running", "Up")),
         },
     )
-    services = await DockerServiceCatalog(ctx).list_services()
+    services = await _catalog(ctx).list_services()
     tones = {s["name"]: s["tone"] for s in services}
     assert tones["grafana"] == "good"
     assert any(t == "danger" for t in tones.values())
@@ -348,7 +362,7 @@ async def test_uses_configured_tag_and_url_scheme():
         hosts=[host],
         outputs={"h1": _FakeExecResult(0, _ps_line("grafana", "running", "Up", "0.0.0.0:3000->3000/tcp"))},
     )
-    services = await DockerServiceCatalog(ctx).list_services()
+    services = await _catalog(ctx).list_services()
     assert services[0]["url"] == "https://10.0.0.9:3000"
 
 
@@ -360,7 +374,7 @@ async def test_non_zero_exit_code_shows_a_visible_error_tile_not_raised():
     result = _FakeExecResult(1, "")
     result.stderr = "permission denied"
     ctx = _FakeCtx(settings={}, hosts=[host], outputs={"h1": result})
-    services = await DockerServiceCatalog(ctx).list_services()
+    services = await _catalog(ctx).list_services()
     assert len(services) == 1
     assert services[0]["tone"] == "danger"
     assert "permission denied" in services[0]["status"]
@@ -493,8 +507,6 @@ class _RecordingExec:
 
 def _running_state(name: str = "web") -> _FakeExecResult:
     """Antwort auf die Prüfung nach der Aktion: der Container läuft (ohne Healthcheck)."""
-    import json
-
     result = _FakeExecResult(0, json.dumps({
         "name": f"/{name}", "image_id": "sha256:" + "c" * 64, "status": "running", "exit_code": 0, "health": None,
         "restarts": 0, "started": "2026-09-24T07:00:00Z",
@@ -504,7 +516,7 @@ def _running_state(name: str = "web") -> _FakeExecResult:
 
 
 @pytest.fixture(autouse=True)
-def _quick_after_check(monkeypatch):
+def _quick_after_check(monkeypatch, _ext_docker_on_path):
     """Die Prüfung nach der Aktion wartet sonst 15 s auf die zweite ruhige Lesung."""
     import nodvard_deck_ext_docker.after_check as ac
 
@@ -882,7 +894,7 @@ def test_a_stats_line_without_a_name_is_skipped():
 async def test_listing_carries_the_image():
     host = _FakeHost("h1", "pi-host", "10.0.0.5")
     ctx = _FakeCtx(settings={}, hosts=[host], outputs={"h1": _FakeExecResult(0, _ps_line("pihole", "running", "Up", image="pihole/pihole:latest"))})
-    services = await DockerServiceCatalog(ctx).list_services()
+    services = await _catalog(ctx).list_services()
     assert services[0]["image"] == "pihole/pihole:latest"
 
 
@@ -1170,8 +1182,6 @@ async def test_image_update_goes_through_the_gate_and_never_through_the_host_pag
     Auf der Server-Seite (`/hosts/{id}/actions`) taucht sie nicht auf."""
     from httpx import AsyncClient
     from nodvard_deck_ext_docker import applier as ap
-    from nodvard_deck_ext_docker import image_apply as ia
-    from nodvard_sdk.types import Risk
 
     from nodvard_deck.core import security
     from nodvard_deck.ext.runtime import get_extension_runtime
@@ -1190,17 +1200,7 @@ async def test_image_update_goes_through_the_gate_and_never_through_the_host_pag
 
     loaded = get_extension_runtime().loaded["docker"]
     applier = loaded.instance._applier
-    t = ia.ComposeTarget(
-        container="web", container_id="a" * 64, image="nginx:1.27", image_id="sha256:" + "c" * 64, project="webstack", service="web",
-        working_dir="/opt/web", config_files=("/opt/web/docker-compose.yml",), env_files=(), config_hash=None,
-    )
-    command = ia.display_command(t)
-    remote = "sha256:" + "b" * 64
-    plan = ap.Plan(
-        target=t, host_id=host.id, host_name="pi-host", affected=("web",), stopped=(), command=command,
-        rollback_ref=ia.rollback_ref("web"), rollback=ia.rollback_commands(t, ia.rollback_ref("web")), risk=Risk.MEDIUM, warnings=(),
-        remote_digest=remote, registry_at=None, stale=False, plan_id=ia.plan_id(command, t.image_id, remote),
-    )
+    plan = _plan(host.id)
 
     async def canned(_host, container):  # noqa: ANN001, ANN202 - die Übersicht selbst ist in test_ext_docker_apply.py geprüft
         return plan if container == "web" else ap.NotUpdatable("gone", "Container nicht gefunden.")
@@ -1238,8 +1238,8 @@ async def test_image_update_goes_through_the_gate_and_never_through_the_host_pag
         answer = proposed.json()
         assert (answer["status"], answer["risk"]) == ("proposed", "medium")
         action = (await ac.get(f"/api/v1/actions/{answer['action_id']}", headers=auth)).json()
-        assert action["action_type"] == "container.image_update" and action["payload"]["command"] == command
-        assert action["payload"]["old_image_id"] == t.image_id and action["host_id"] == host.id
+        assert action["action_type"] == "container.image_update" and action["payload"]["command"] == plan.command
+        assert action["payload"]["old_image_id"] == plan.target.image_id and action["host_id"] == host.id
         assert "„web“ auf pi-host" in action["reason"] and "nginx:1.27" in action["reason"] and "„webstack“/„web“" in action["reason"]
         assert action["correlation_id"].startswith("imgupd_")
         assert not any("compose" in c or "@@launch" in c for c in docker["calls"]), "vor der Freigabe darf nichts laufen"
@@ -1283,3 +1283,237 @@ async def test_image_update_settings_are_declared_and_the_job_follows_them(clien
 
     await ctx.settings.set({"image_updates_enabled": False})
     assert (await job()).enabled is False
+
+
+# ---------------------------------------------------------------------------
+# Fehlerwege der Routen (502 mit Grund statt 500) und Grenzen der Kachel-Adressen
+# ---------------------------------------------------------------------------
+
+
+def _docker_module():
+    from nodvard_deck.ext.runtime import get_extension_runtime
+
+    return get_extension_runtime().loaded["docker"]
+
+
+def _plan(host_id: str, *, affected=("web",), warnings=()):
+    from nodvard_deck_ext_docker import applier as ap
+    from nodvard_deck_ext_docker import image_apply as ia
+    from nodvard_sdk.types import Risk
+
+    target = ia.ComposeTarget(
+        container="web", container_id="a" * 64, image="nginx:1.27", image_id="sha256:" + "c" * 64, project="webstack", service="web",
+        working_dir="/opt/web", config_files=("/opt/web/docker-compose.yml",), env_files=(), config_hash=None,
+    )
+    command = ia.display_command(target)
+    remote = "sha256:" + "b" * 64
+    return ap.Plan(
+        target=target, host_id=host_id, host_name="pi-host", affected=affected, stopped=(), command=command,
+        rollback_ref=ia.rollback_ref("web"), rollback=ia.rollback_commands(target, ia.rollback_ref("web")), risk=Risk.MEDIUM,
+        warnings=warnings, remote_digest=remote, registry_at=None, stale=False,
+        plan_id=ia.plan_id(command, target.image_id, remote),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "detail"),
+    [
+        (OSError("Verbindung abgelehnt"), "Host nicht erreichbar: Verbindung abgelehnt"),
+        (TimeoutError(), "Host nicht erreichbar: TimeoutError"),
+        (RuntimeError("Docker antwortet nicht"), "Host nicht erreichbar: Docker antwortet nicht"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("method", "suffix", "body"),
+    [("GET", "image-update/plan", None), ("POST", "image-update", {"plan_id": "0" * 16})],
+)
+async def test_image_update_routes_say_502_when_the_plan_cannot_be_made(client, docker_on, monkeypatch, method, suffix, body, error, detail):
+    async def plan(host, container):
+        raise error
+
+    monkeypatch.setattr(_docker_module().instance._applier, "plan", plan)
+
+    answer = await client.request(
+        method, f"/api/v1/ext/docker/containers/{docker_on.host}/web/{suffix}", json=body, headers=docker_on.owner,
+    )
+
+    assert (answer.status_code, answer.json()["detail"]) == (502, detail)
+
+
+@pytest.mark.asyncio
+async def test_image_update_plan_route_answers_with_the_plan(client, docker_on, monkeypatch):
+    plan = _plan(docker_on.host, affected=("web", "worker"), warnings=("Der Container wird kurz neu gestartet.",))
+    asked = []
+
+    async def canned(host, container):
+        asked.append((host.id, container))
+        return plan
+
+    monkeypatch.setattr(_docker_module().instance._applier, "plan", canned)
+
+    answer = await client.get(f"/api/v1/ext/docker/containers/{docker_on.host}/web/image-update/plan", headers=docker_on.owner)
+
+    assert answer.status_code == 200, answer.text
+    body = answer.json()
+    assert body == json.loads(json.dumps(plan.as_response()))
+    assert (body["ok"], body["plan_id"], body["affected"], body["risk"], body["command"]) == (
+        True, plan.plan_id, ["web", "worker"], "medium", plan.command,
+    )
+    assert asked == [(docker_on.host, "web")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stdout", [
+    "", "kein json", "[]", "null", "{}", '{"0": {}}', "[1]", '["text"]', '[{"State": "kaputt"}]',
+    '[{"NetworkSettings": {"Ports": {"80/tcp": ["kaputt"]}}}]', '[{"Mounts": ["kaputt"]}]',
+])
+async def test_inspect_route_says_502_when_the_answer_is_no_inspect_list(client, docker_on, monkeypatch, caplog, stdout):
+    from nodvard_deck_ext_docker import commands
+
+    sent = []
+
+    async def run(host, command, timeout_s=60):
+        sent.append(command)
+        return fakes.result(stdout)
+
+    monkeypatch.setattr(docker_on.handle, "run", run)
+
+    with caplog.at_level("WARNING", logger="nodvard_deck.ext.docker"):
+        answer = await client.get(f"/api/v1/ext/docker/containers/{docker_on.host}/web/inspect", headers=docker_on.owner)
+
+    assert (answer.status_code, answer.json()["detail"]) == (502, "Unerwartete Antwort von docker inspect.")
+    assert sent == [commands.inspect_container("web")]
+    (record,) = [r for r in caplog.records if "docker_inspect_unreadable" in r.getMessage()]
+    assert f"host={docker_on.host} container=web" in record.getMessage() and record.exc_info is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stderr", "detail"),
+    [("Cannot connect to the Docker daemon\n", "Cannot connect to the Docker daemon"), ("", "docker system df fehlgeschlagen")],
+)
+async def test_storage_route_says_502_when_docker_system_df_fails(client, docker_on, monkeypatch, stderr, detail):
+    from nodvard_deck_ext_docker import commands
+
+    async def run(host, command, timeout_s=60):
+        return fakes.result("", stderr, 1) if command == commands.system_df() else fakes.result("")
+
+    monkeypatch.setattr(docker_on.handle, "run", run)
+
+    answer = await client.get(f"/api/v1/ext/docker/hosts/{docker_on.host}/docker", headers=docker_on.owner)
+
+    assert (answer.status_code, answer.json()["detail"]) == (502, detail)
+
+
+@pytest.mark.asyncio
+async def test_storage_route_still_answers_when_only_the_image_list_fails(client, docker_on, monkeypatch):
+    from nodvard_deck_ext_docker import commands
+
+    df = '{"Type":"Images","TotalCount":"3","Active":"1","Size":"1.5GB","Reclaimable":"1GB (66%)"}\n'
+    image = '{"ID":"sha256:0123456789abcdef","Repository":"nginx","Tag":"1.27","Size":"188MB","Containers":"1"}\n'
+
+    async def run(host, command, timeout_s=60):
+        return fakes.result(df) if command == commands.system_df() else fakes.result(image, "boom", 1)
+
+    monkeypatch.setattr(docker_on.handle, "run", run)
+
+    answer = await client.get(f"/api/v1/ext/docker/hosts/{docker_on.host}/docker", headers=docker_on.owner)
+
+    assert answer.status_code == 200, answer.text
+    body = answer.json()
+    assert body["images"] == []
+    assert [(row["type"], row["total"], row["active"]) for row in body["disk"]] == [("Images", 3, 1)]
+
+
+@pytest.mark.asyncio
+async def test_logs_route_says_502_when_the_log_stream_cannot_be_opened(client, docker_on, monkeypatch):
+    from contextlib import asynccontextmanager
+
+    from nodvard_deck_ext_docker import commands
+
+    opened = []
+
+    @asynccontextmanager
+    async def stream(host, command):
+        opened.append(command)
+        raise OSError("Verbindung abgelehnt")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(docker_on.handle, "stream", stream)
+
+    answer = await client.get(f"/api/v1/ext/docker/containers/{docker_on.host}/web/logs?tail=20", headers=docker_on.owner)
+
+    assert (answer.status_code, answer.json()["detail"]) == (502, "Logs nicht abrufbar: Verbindung abgelehnt")
+    assert opened == [commands.logs("web", 20, follow=True)]
+
+
+@pytest.mark.asyncio
+async def test_tile_urls_stop_at_the_limit_but_saved_ones_still_change(client, docker_on):
+    from nodvard_deck_ext_docker.capabilities import MAX_URL_OVERRIDES
+
+    ctx = _docker_module().ctx
+    full = {f"{docker_on.host}:c{i}": f"http://192.0.2.10:{8000 + i}" for i in range(MAX_URL_OVERRIDES)}
+    await ctx.settings.set({"url_overrides": full})
+    base = f"/api/v1/ext/docker/containers/{docker_on.host}"
+
+    refused = await client.put(f"{base}/neu/url", json={"url": "http://192.0.2.10:9000"}, headers=docker_on.owner)
+    assert refused.status_code == 409, refused.text
+    assert str(MAX_URL_OVERRIDES) in refused.json()["detail"]
+    assert (await ctx.settings.get())["url_overrides"] == full
+
+    changed = await client.put(f"{base}/c3/url", json={"url": "http://192.0.2.10:9003"}, headers=docker_on.owner)
+    assert changed.status_code == 200, changed.text
+    saved = (await ctx.settings.get())["url_overrides"]
+    assert saved[f"{docker_on.host}:c3"] == "http://192.0.2.10:9003" and len(saved) == MAX_URL_OVERRIDES
+
+    assert (await client.put(f"{base}/c4/url", json={"url": None}, headers=docker_on.owner)).status_code == 200
+    freed = await client.put(f"{base}/neu/url", json={"url": "http://192.0.2.10:9000"}, headers=docker_on.owner)
+    assert freed.status_code == 200, freed.text
+    saved = (await ctx.settings.get())["url_overrides"]
+    assert f"{docker_on.host}:neu" in saved and f"{docker_on.host}:c4" not in saved and len(saved) == MAX_URL_OVERRIDES
+
+
+@pytest.mark.asyncio
+async def test_tile_url_is_logged_with_the_origin_only(client, docker_on, monkeypatch):
+    logged = []
+
+    async def log(**entry):
+        logged.append(entry)
+
+    monkeypatch.setattr(_docker_module().ctx.audit, "log", log)
+
+    answer = await client.put(
+        f"/api/v1/ext/docker/containers/{docker_on.host}/pihole/url", json={"url": "http://192.0.2.10:8088/admin/?seite=2"},
+        headers=docker_on.owner,
+    )
+
+    assert answer.status_code == 200, answer.text
+    assert len(logged) == 1
+    assert (logged[0]["action"], logged[0]["outcome"], logged[0]["target_id"]) == ("service_matrix.tile_url", "success", f"{docker_on.host}:pihole")
+    assert logged[0]["detail"] == {"custom": True, "url": "http://192.0.2.10:8088"}
+
+
+@pytest.mark.asyncio
+async def test_tile_url_is_saved_even_when_the_log_entry_cannot_be_written(client, docker_on, monkeypatch):
+    module = _docker_module()
+
+    async def broken(**entry):
+        raise RuntimeError("Protokoll nicht beschreibbar")
+
+    monkeypatch.setattr(module.ctx.audit, "log", broken)
+    url = "http://192.0.2.10:8088/admin/"
+
+    answer = await client.put(f"/api/v1/ext/docker/containers/{docker_on.host}/pihole/url", json={"url": url}, headers=docker_on.owner)
+
+    assert answer.status_code == 200, answer.text
+    assert answer.json() == {"id": f"{docker_on.host}:pihole", "url": url}
+    assert (await module.ctx.settings.get())["url_overrides"] == {f"{docker_on.host}:pihole": url}
+
+
+@pytest.mark.asyncio
+async def test_the_connection_test_of_the_module_passes(client, docker_on):
+    answer = await client.post("/api/v1/extensions/docker/test", headers=docker_on.owner)
+
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["ok"] is True

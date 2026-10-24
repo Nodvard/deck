@@ -1090,6 +1090,8 @@ def restore_command(quarantine_path: str, original_path: str, mode: str | None) 
     # Der Ursprungsordner gehört oft einem normalen Benutzer, der dort jederzeit `./name` anlegen kann. Auf einem
     # anderen Dateisystem ist `mv` ein Kopieren, dessen Sicherheit vom Programm abhängt (BusyBox setzt Rechte über den
     # Pfad, uutils vor 0.10 folgt Verknüpfungen beim Anlegen). Darum zwei Schritte.
+    if not _in_quarantine(quarantine_path):
+        raise ValueError(_outside_quarantine("stellt Nodvard Shield sie nicht wieder her"))
     safe_mode = mode if mode and re.fullmatch(r"[0-7]{3,4}", mode) else "644"
     parent, _, name = original_path.rpartition("/")
     if not original_path.startswith("/") or name in ("", ".", ".."):
@@ -1164,9 +1166,23 @@ def parse_quarantine_state(output: str) -> str | None:
     return match.group(1) if match and match.group(1) in QUARANTINE_STATES else None
 
 
+def _in_quarantine(quarantine_path: str) -> bool:
+    # Der Pfad steht in der Datenbank, auch aus einer eingespielten Sicherung; root fasst sonst beliebige Dateien an.
+    # Dieselbe Regel wie im Hilfsskript, sonst fiele ein ungewöhnlicher Name auf den alten Weg mit Ort und Rechten von
+    # außen zurück.
+    return _quarantine_name_of(quarantine_path) is not None
+
+
+def _outside_quarantine(consequence: str) -> str:
+    return (
+        "Der gespeicherte Ablageort dieser Datei liegt nicht in der Quarantäne (etwa nach einer veränderten Sicherung). "
+        f"Aus Sicherheitsgründen {consequence}; bitte auf dem Server unter {QUARANTINE_DIR} nachsehen."
+    )
+
+
 def delete_command(quarantine_path: str) -> str:
-    if not quarantine_path.startswith(QUARANTINE_DIR + "/") or ".." in quarantine_path:
-        raise ValueError("Nur Dateien aus der Quarantäne dürfen gelöscht werden.")
+    if not _in_quarantine(quarantine_path):
+        raise ValueError(_outside_quarantine("löscht Nodvard Shield sie nicht"))
     return f"rm -f {_q(quarantine_path)} {_q(origin_record(quarantine_path))}; echo ok"
 
 

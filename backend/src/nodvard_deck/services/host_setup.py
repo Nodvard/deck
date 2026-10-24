@@ -47,6 +47,8 @@ KEY_ADDED = "Schlüssel für Nodvard Deck eingetragen."
 KEY_FIXED = "Schlüssel für Dropbear angepasst."
 """Meldung des Skripts, wenn es bei Dropbear die eigene alte Zeile `restrict,pty <Schlüssel>` durch eine ersetzt, die
 Dropbear versteht."""
+KEY_RESTRICTED = "Der schon eingetragene Schlüssel für Nodvard Deck ist jetzt eingeschränkt (kein Weiterleiten von Ports, kein Agent)."
+"""Meldung des Skripts, wenn der Schlüssel ohne Optionen in `authorized_keys` stand und sie jetzt davor stehen."""
 
 # Dropbear verwirft eine Zeile mit `pty` ganz und gibt mit `restrict` kein Terminal; die Liste für Dropbear verstehen
 # beide Dienste, sie gilt deshalb, sobald ein Dropbear läuft. Auf OpenSSH fehlt ihr gegenüber `restrict` nur
@@ -65,29 +67,56 @@ _KEY_OPTIONS = (
     f'DB=1; KO="{DROPBEAR_KEY_OPTIONS}"; break;; esac; done'
 )
 # KM: KL ist eine eigene alte Zeile, also `restrict,pty $K` oder derselbe Schlüssel mit einem anderen eigenen Kommentar
-# (älteres `lattice@…`, Server umbenannt). KF ersetzt die erste davon durch `$KO <Rest der Zeile>`, alle anderen Zeilen
-# bleiben Byte für Byte; die Länge zeigt, ob `read` etwas verloren hat (etwa ein NUL-Byte). Lesen und Schreiben laufen
-# mit dem Aufruf davor (`KF R`: als der Benutzer). `tee` schreibt in dieselbe Datei, so bleiben Besitz, Rechte und ein
-# Link. KC: 1 nichts geändert, 2 Schreiben nicht bestätigt (alter Inhalt neu geschrieben), 3 keine eigene alte Zeile.
+# (älteres `lattice@…`, Server umbenannt); nur die erste bekommt `$KO` statt `restrict,pty`. KN: KL ist der Schlüssel
+# ohne Optionen (etwa von Hand eingetragen); jede solche Zeile bekommt `$KO` davor. Leerraum ist wie bei sshd nur
+# Leerzeichen und Tab (KZ), am Ende darf ein CR (KQ) einer Windows-Zeile stehen.
+# KF <KM|KN> [Aufruf]: schreibt die Datei mit den so geänderten Zeilen neu, alle anderen bleiben Byte für Byte; die Länge
+# zeigt, ob `read` etwas verloren hat (etwa ein NUL-Byte). Lesen und Schreiben laufen mit dem Aufruf davor (`KF KM R`:
+# als der Benutzer). `tee` schreibt in dieselbe Datei, so bleiben Besitz, Rechte und ein Link. KC: 1 nichts geändert,
+# 2 Schreiben nicht bestätigt (alter Inhalt neu geschrieben), 3 keine passende Zeile.
 _KEY_FIX_FUNCTION = (
-    'KM() { case "$KL" in "restrict,pty $K") return 0;; "restrict,pty $B "*) ;; *) return 1;; esac; '
-    'case "${KL##* }" in *[!A-Za-z0-9_.@-]*) return 1;; nodvard@*|lattice@*) [ "$KL" = "restrict,pty $B ${KL##* }" ];; '
-    '*) return 1;; esac; }; '
-    'KF() { KC=1; KT=$(mktemp -d) || return 1; if "$@" cat "$A" > "$KT/a"; then KX=; '
-    'while IFS= read -r KL || [ -n "$KL" ]; do if [ -z "$KX" ] && KM; then KL="$KO ${KL#* }"; KX=1; '
-    'fi; printf "%s\\n" "$KL"; done < "$KT/a" > "$KT/b"; '
+    'KZ=" $(printf "\\t")"; KQ=$(printf "\\r"); '
+    'KM() { [ -z "$KX" ] || return 1; case "$KL" in "restrict,pty $K") ;; "restrict,pty $B "*) '
+    'case "${KL##* }" in *[!A-Za-z0-9_.@-]*) return 1;; '
+    'nodvard@*|lattice@*) [ "$KL" = "restrict,pty $B ${KL##* }" ] || return 1;; *) return 1;; esac;; '
+    '*) return 1;; esac; KL="$KO ${KL#* }"; }; '
+    'KN() { KV=${KL#"${KL%%[!$KZ]*}"}; KA=${KV%%[$KZ]*}; [ "$KA" = "${B%% *}" ] || return 1; KR=${KV#"$KA"}; '
+    'KG=${KR%%[!$KZ]*}; [ -n "$KG" ] || return 1; KR=${KR#"$KG"}; '
+    'case "$KR" in "${B#* }"|"${B#* }"[$KZ$KQ]*) KL="$KO $KV";; *) return 1;; esac; }; '
+    'KF() { KC=1; KW=$1; shift; KT=$(mktemp -d) || return 1; if "$@" cat "$A" > "$KT/a"; then KX=; KD=0; '
+    'while IFS= read -r KL || [ -n "$KL" ]; do KS=$KL; if $KW; then KX=1; KD=$(( KD + ${#KL} - ${#KS} )); fi; '
+    'printf "%s\\n" "$KL"; done < "$KT/a" > "$KT/b"; '
     'if [ -z "$KX" ]; then KC=3; '
-    f'elif [ $(( $(wc -c < "$KT/b") - $(wc -c < "$KT/a") )) -eq $(( ${{#KO}} - {len(OPENSSH_KEY_OPTIONS)} )) ]; then '
+    'elif [ $(( $(wc -c < "$KT/b") - $(wc -c < "$KT/a") )) -eq "$KD" ]; then '
     'if "$@" tee "$A" < "$KT/b" > /dev/null && "$@" cmp -s - "$A" < "$KT/b"; then KC=0; '
     'else "$@" tee "$A" < "$KT/a" > /dev/null; KC=2; fi; fi; fi; rm -f "$KT/a" "$KT/b"; rmdir "$KT"; return $KC; }'
 )
+
+
+def _key_restrict(run: str) -> str:
+    """Setzt `$KO` vor jede Zeile mit dem Schlüssel ohne Optionen; `run` ist der Aufruf davor (`R ` ohne root)."""
+    # Die Vorprüfung trifft mindestens jede Zeile, die KN trifft; ein `.` in der Art passt dabei auf jedes Zeichen.
+    return (
+        f'if {run}grep -q -- "^[$KZ]*${{B%% *}}[$KZ][$KZ]*${{B#* }}" "$A" 2>/dev/null; then '
+        'if ! command -v cmp >/dev/null; then echo "FEHLER: In $A steht der Schlüssel von Nodvard Deck ohne '
+        'Einschränkung, und zum sicheren Anpassen fehlt hier cmp (Paket diffutils). Die Datei ist unverändert."; '
+        'echo "Hinweis: diffutils installieren und noch einmal einrichten, oder von Hand vor den Schlüssel von Nodvard '
+        'Deck „$KO“ und ein Leerzeichen setzen."; exit 1; '
+        f'elif KF KN {run}; then echo "{KEY_RESTRICTED}"; '
+        'elif [ "$KC" = 2 ]; then echo "FEHLER: $A ließ sich beim Einschränken des Schlüssels nicht sicher schreiben. '
+        'Nodvard Deck hat versucht, den alten Inhalt zurückzuschreiben; bitte die Datei prüfen."; exit 1; '
+        'elif [ "$KC" != 3 ]; then echo "FEHLER: In $A steht der Schlüssel von Nodvard Deck ohne Einschränkung, und die '
+        'Zeile ließ sich nicht anpassen (Datei nicht lesbar oder mit ungewöhnlichen Zeichen), sie ist unverändert."; '
+        'echo "Hinweis: Von Hand beheben: in dieser Datei vor den Schlüssel von Nodvard Deck „$KO“ und ein Leerzeichen '
+        'setzen, dann „Verbindung prüfen“."; exit 1; fi; fi'
+    )
 
 
 def _key_fix(run: str) -> str:
     """Repariert bei Dropbear die eigene alte Zeile; `run` ist der Aufruf davor (`R ` ohne root)."""
     return (
         f'if [ -n "$DB" ] && {run}grep -qF -- "restrict,pty $B" "$A" 2>/dev/null; then '
-        f'if KF {run}; then echo "{KEY_FIXED}"; '
+        f'if KF KM {run}; then echo "{KEY_FIXED}"; '
         'elif [ "$KC" = 2 ]; then echo "FEHLER: $A ließ sich beim Anpassen für Dropbear nicht sicher schreiben. Nodvard '
         'Deck hat versucht, den alten Inhalt zurückzuschreiben; bitte die Datei prüfen."; exit 1; '
         'elif [ "$KC" != 3 ]; then echo "FEHLER: Die Schlüsselzeile in $A ließ sich nicht für Dropbear anpassen '
@@ -207,47 +236,52 @@ def _helper_functions(helper_dir: str) -> list[str]:
     root gehören und weder andere noch der Benutzer selbst dort schreiben können (`W`): Sonst könnte er das Skript tauschen
     und wäre über die Regel root."""
     return [
-        f'D="{_dq(helper_dir)}"; HX=',
+        f'D="{_dq(helper_dir)}"; HX=; WL=FEHLER',
         # WA: Mit einer ACL zeigen die Gruppenbits nur die Maske, schreiben dürfen dann auch benannte Benutzer und
-        # Gruppen. AN ist der erste Eintrag mit w für den Benutzer oder eine seiner Gruppen, auch künftige (XG), oder
-        # eine Nummer ohne Namen, die ein neuer Benutzer oder seine neue Gruppe gleich bekommen kann. Ohne getfacl ist
-        # AN=?, wenn ls ein + zeigt oder keins zeigen kann (busybox).
+        # Gruppen. AN ist der erste benannte Eintrag mit w außer root. Ohne getfacl ist AN=?, wenn ls ein + zeigt oder
+        # keins zeigen kann (busybox).
         (
-            'WA() { AN=; if AL=$(getfacl -c "$1" 2>/dev/null); then AS=" $(id -Gn "$U" 2>/dev/null) $XG "; for AE in $AL; do '
-            'AV=${AE#*:}; AV=${AV%:*}; case "$AE" in user:*:?w?) [ "$AV" != "$U" ] || AN=$AV;; '
-            'group:*:?w?) case "$AS" in *" $AV "*) AN=$AV;; esac;; *) continue;; esac; '
-            'case "$AV" in ""|*[!0-9]*) ;; *) id "$U" >/dev/null 2>&1 || AN=$AV;; esac; [ -z "$AN" ] || return 1; done; return 0; fi; '
+            'WA() { AN=; if AL=$(getfacl -c "$1" 2>/dev/null); then for AE in $AL; do case "$AE" in user:?*:?w?|group:?*:?w?) '
+            'AV=${AE#*:}; AV=${AV%:*}; case "$AV" in root|0) ;; *) AN=$AV; return 1;; esac;; esac; done; return 0; fi; '
             'case "$(ls -ld "$1" 2>/dev/null)" in ??????????+*) AN=?;; *) ls --version 2>/dev/null | grep -q coreutils || AN=?;; esac; '
             '[ -z "$AN" ]; }'
         ),
         # W: kein Link, gehört root, der Benutzer kann nicht schreiben (als er selbst gefragt, so zählen auch ACLs), andere
-        # auch nicht; schreibt die Gruppe, darf der Benutzer nicht in ihr sein, auch nicht in einer, die er erst bekommt
-        # (XG), und keine ACL darf es ihm erlauben (WA). Eine Gruppe ohne Namen kann useradd einem neuen Benutzer geben.
+        # auch nicht; schreiben darf außer root nur die Gruppe root (GID 0), keine andere Gruppe und kein Benutzer über eine
+        # ACL (WA), sonst könnte jeder davon das Skript tauschen. In der Gruppe root darf der Benutzer nicht sein, auch nicht
+        # künftig (XG).
         (
             'W() { AN=; [ ! -L "$1" ] && [ "$(stat -c %u "$1" 2>/dev/null)" = 0 ] || return 1; ! R test -w "$1" 2>/dev/null || return 1; '
             'M=$(stat -c %a "$1" 2>/dev/null) || return 1; '
-            'case "$M" in *[2367]) return 1;; *[2367]?) WG=$(stat -c %G "$1" 2>/dev/null); '
-            'case " $(id -Gn "$U" 2>/dev/null) $XG " in *" $WG "*) return 1;; esac; '
-            '[ "$WG" != UNKNOWN ] || id "$U" >/dev/null 2>&1 || return 1; WA "$1" || return 1;; esac; return 0; }'
+            'case "$M" in *[2367]) return 1;; *[2367]?) [ "$(stat -c %g "$1" 2>/dev/null)" = 0 ] || return 1; '
+            'WG=$(stat -c %G "$1" 2>/dev/null); case " $(id -Gn "$U" 2>/dev/null) $XG " in *" $WG "*) return 1;; esac; '
+            'WA "$1" || return 1;; esac; return 0; }'
         ),
         'WD() { P="$1"; while :; do W "$P" || return 1; [ "$P" = / ] && return 0; P=$(dirname "$P"); done; }',
-        # WM: warum W einen Ordner ablehnt, mit Abhilfe. Löschen nur für den eigenen Ordner vorschlagen, ein Link weiter
-        # oben kann zum System gehören. AN stammt aus dem letzten W, also dem für diesen Ordner.
+        # WM: warum W einen Ordner ablehnt, mit Abhilfe; WL ist der Anfang der Meldung. Löschen nur für den eigenen Ordner
+        # vorschlagen, ein Link weiter oben kann zum System gehören. AN stammt aus dem letzten W, also dem für diesen Ordner.
         (
-            'WM() { if [ -L "$1" ] && [ "$1" = "$D" ]; then echo "FEHLER: $1 ist ein Link. Die Hilfsskripte gehören in einen '
+            'WM() { if [ -L "$1" ] && [ "$1" = "$D" ]; then echo "$WL: $1 ist ein Link. Die Hilfsskripte gehören in einen '
             'echten Ordner. Abhilfe als root: rm $1 (entfernt nur den Link, nicht sein Ziel)."; '
-            'elif [ -L "$1" ]; then echo "FEHLER: $1 ist ein Link. Hilfsskripte legt Nodvard Deck nur auf einem Weg aus '
+            'elif [ -L "$1" ]; then echo "$WL: $1 ist ein Link. Hilfsskripte legt Nodvard Deck nur auf einem Weg aus '
             'echten Ordnern ab; hier hilft nur „Volle Rechte“."; '
-            'elif [ ! -e "$1" ]; then echo "FEHLER: Den Ordner $1 gibt es nicht. Abhilfe als root: mkdir -p $1"; '
-            'elif [ ! -d "$1" ]; then echo "FEHLER: $1 ist kein Ordner. Abhilfe als root: mv $1 $1.alt"; '
-            'elif [ "$(stat -c %u "$1" 2>/dev/null)" != 0 ]; then echo "FEHLER: Der Ordner $1 gehört nicht root. Abhilfe '
+            'elif [ ! -e "$1" ]; then echo "$WL: Den Ordner $1 gibt es nicht. Abhilfe als root: mkdir -p $1"; '
+            'elif [ ! -d "$1" ]; then echo "$WL: $1 ist kein Ordner. Abhilfe als root: mv $1 $1.alt"; '
+            'elif [ "$(stat -c %u "$1" 2>/dev/null)" != 0 ]; then echo "$WL: Der Ordner $1 gehört nicht root. Abhilfe '
             'als root: chown root:root $1"; '
-            'elif [ "$AN" = "?" ]; then echo "FEHLER: Für den Ordner $1 lässt sich ohne getfacl nicht prüfen, ob eine ACL '
-            '(erweiterte Rechte) dem Benutzer Schreibrecht gibt. Abhilfe als root: Paket acl installieren (apt install acl, '
-            'auf Alpine apk add acl) oder chmod g-w $1"; '
-            'elif [ -n "$AN" ]; then echo "FEHLER: Im Ordner $1 gibt eine ACL (erweiterte Rechte) $AN Schreibrecht, darüber '
-            'könnte auch der Benutzer dort schreiben. Abhilfe als root: setfacl -b $1 (entfernt die ACL)"; '
-            'else echo "FEHLER: Im Ordner $1 darf außer root noch jemand schreiben (Rechte $(stat -c %a "$1" 2>/dev/null), '
+            'elif [ "$AN" = "?" ]; then echo "$WL: Für den Ordner $1 lässt sich ohne getfacl nicht prüfen, ob eine ACL '
+            '(erweiterte Rechte) außer root jemandem Schreibrecht gibt. Abhilfe als root: Paket acl installieren (apt install '
+            'acl, auf Alpine apk add acl) oder chmod g-w $1"; '
+            'elif [ -n "$AN" ]; then echo "$WL: Im Ordner $1 gibt eine ACL (erweiterte Rechte) $AN Schreibrecht. Darüber '
+            'könnte außer root noch jemand die Hilfsskripte austauschen und wäre damit root. Abhilfe als root: setfacl -b $1 '
+            '(entfernt die ACL)"; '
+            'elif M=$(stat -c %a "$1" 2>/dev/null) && case "$M" in *[2367]) false;; *[2367]?) [ "$(stat -c %g "$1" 2>/dev/null)" != 0 ];; '
+            '*) false;; esac; then WG=$(stat -c %G "$1" 2>/dev/null); [ "$WG" != UNKNOWN ] || WG="mit der Nummer '
+            '$(stat -c %g "$1" 2>/dev/null)"; echo "$WL: Im Ordner $1 darf die Gruppe $WG schreiben (Rechte $M). Wer in ihr '
+            'ist, könnte die Hilfsskripte austauschen und wäre damit root. Abhilfe als root: chmod g-w $1"; '
+            '[ "$WG" != staff ] || echo "Hinweis: Ältere Debian lassen die Gruppe staff in /usr/local und /usr/local/lib '
+            'schreiben. Abhilfe als root für beide auf einmal: chmod g-w /usr/local /usr/local/lib"; '
+            'else echo "$WL: Im Ordner $1 darf außer root noch jemand schreiben (Rechte $(stat -c %a "$1" 2>/dev/null), '
             'Gruppe $(stat -c %G "$1" 2>/dev/null)). Abhilfe als root: chmod go-w $1 (bei einer ACL: setfacl -b $1)"; fi; }'
         ),
         (
@@ -296,16 +330,15 @@ def _helper_lines(helpers: Sequence[RootHelperFile], *, strict: bool = False) ->
     """Hilfsskripte der Module, base64-kodiert und gegen ihre sha256 geprüft, samt je einer eigenen sudo-Regel. Ein
     Fehlschlag ist neben der vollen Regel nur ein Hinweis (das Modul nimmt dann sie), ohne sie (`strict`) ein Fehler."""
     level, fail = ("FEHLER", " F=1;") if strict else ("Hinweis", "")
+    skipped = "" if strict else ", die Module nutzen die volle sudo-Regel"
     lines = [
         (
             'if ! command -v visudo >/dev/null; then HX=1; '
             'elif ! command -v base64 >/dev/null || ! command -v sha256sum >/dev/null || ! command -v stat >/dev/null; then '
             f'echo "{level}: base64, sha256sum oder stat fehlt hier, die Hilfsskripte wurden übersprungen.";{fail} HX=1; '
-            'elif ! WD "$(dirname "$D")" || [ -L "$D" ] || ! install -d -m 0755 -o root -g root "$D" || ! W "$D"; then '
-            f'if [ "$AN" = "?" ]; then echo "{level}: Ob eine ACL (erweiterte Rechte) im Ordner $D oder einem darüber '
-            'Schreibrecht gibt, lässt sich ohne getfacl (Paket acl) nicht prüfen, die Hilfsskripte wurden übersprungen."; '
-            f'else echo "{level}: Der Ordner $D oder einer darüber gehört nicht root oder ist für andere beschreibbar, '
-            f'die Hilfsskripte wurden übersprungen."; fi;{fail} HX=1; fi'
+            f'elif ! WD "$(dirname "$D")"; then WL={level}; WM "$P"; HX=2; '
+            f'elif [ -L "$D" ] || ! install -d -m 0755 -o root -g root "$D" || ! W "$D"; then WL={level}; WM "$D"; HX=2; fi; '
+            f'[ "$HX" != 2 ] || {{ echo "{level}: Deshalb wurden die Hilfsskripte übersprungen{skipped}.";{fail} }}'
         ),
     ]
     for helper in sorted(helpers, key=lambda h: h.ext_id):
@@ -402,6 +435,7 @@ def build_setup_script(
             '[ ! -s "$A" ] || [ -z "$(tail -c1 "$A")" ] || echo >> "$A"',
             # `$KO`: kein Weiterleiten, kein Agent; ein Terminal (Terminal, `docker logs -f`), Befehle und SFTP gehen weiter.
             f'grep -qF -- "$B" "$A" || {{ echo "$KO $K" >> "$A"; echo "{KEY_ADDED}"; }}',
+            _key_restrict(""),
             _key_fix(""),
             '[ -L "$A" ] || { chown "$U:$G" "$A"; chmod 600 "$A"; }',
         ]
@@ -417,6 +451,7 @@ def build_setup_script(
             # Fehlt das Zeilenende der letzten Zeile, würde der neue Eintrag an sie gehängt.
             '[ -z "$(R tail -c1 "$A" 2>/dev/null)" ] || printf "\\n" | R tee -a "$A" >/dev/null',
             f'R grep -qF -- "$B" "$A" 2>/dev/null || {{ printf "%s\\n" "$KO $K" | R tee -a "$A" >/dev/null; echo "{KEY_ADDED}"; }}',
+            _key_restrict("R "),
             _key_fix("R "),
             'R chmod 600 "$A"',
         ]
@@ -551,6 +586,7 @@ _MESSAGE_PREFIXES = (
     "Benutzer ", "Zur Gruppe ", "Hinweis:", "FEHLER:", "Die alte sudo-Regel", "Nicht alles hat geklappt", "Hilfsskript ",
     KEY_ADDED,
     KEY_FIXED,
+    KEY_RESTRICTED,
     "visudo: ",
 )
 """Zeilen, die das Skript selbst ausgibt (`echo` in `build_setup_script`). Nur sie gehen an die Oberfläche;
@@ -751,7 +787,7 @@ def setup_report(stdout: str, *, user: str) -> dict[str, Any]:
         line = raw.strip()
         if line == KEY_ADDED:
             actions.add("key_added")
-        elif line == KEY_FIXED:
+        elif line in (KEY_FIXED, KEY_RESTRICTED):
             actions.add("key_fixed")
         elif line == f"Benutzer {user} angelegt.":
             actions.add("user_created")

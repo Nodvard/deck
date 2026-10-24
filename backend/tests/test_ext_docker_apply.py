@@ -248,6 +248,15 @@ def test_hostile_container_facts_are_blocked_too(field, value):
     assert isinstance(result, NotUpdatable) and result.kind == "labels"
 
 
+def test_the_root_folder_alone_is_a_valid_project_folder():
+    lbls = {**labels(), L("project.working_dir"): "/", L("project.config_files"): "/compose.yml"}
+    t = ia.classify(info(lbls), own=False)
+    assert isinstance(t, ComposeTarget) and (t.working_dir, t.config_files) == ("/", ("/compose.yml",))
+    ia.check_target(t)
+    argv = shlex.split(ia.pull_command(t))
+    assert argv[argv.index("--project-directory") + 1] == "/"
+
+
 def test_builders_check_by_themselves_even_with_a_hand_built_bad_target():
     good = target()
     for bad in (
@@ -313,6 +322,24 @@ def test_the_rollback_name_is_a_valid_image_name_and_never_shared_between_contai
     # Gleicher Name-Rumpf, verschiedene Container: verschiedene Sicherungen.
     refs = {ia.rollback_ref(n) for n in ("foo_bar", "foo-bar", "Foo.Bar", "foo.bar")}
     assert len(refs) == 4 and all(r.startswith("lattice-rollback/foo-bar-") for r in refs)
+
+
+def test_a_backup_name_that_is_no_image_name_is_refused(monkeypatch):
+    monkeypatch.setattr(ia, "is_valid_ref", lambda ref: False)
+    with pytest.raises(ValueError, match="Sicherungs-Name"):
+        ia.rollback_ref("nextcloud-app")
+
+
+@pytest.mark.parametrize("bad", ["", "x; id", "a b", "-f", "nginx\n"], ids=["empty", "semicolon", "space", "option", "newline"])
+def test_the_verify_command_checks_the_backup_name_by_itself(bad):
+    with pytest.raises(ValueError, match="Sicherungs-Name"):
+        ia.cmd_verify(target(), bad)
+
+
+def test_the_verify_command_reads_the_backup_image_only_when_given_one():
+    backup = ia.rollback_ref("nextcloud-app")
+    assert backup in ia.cmd_verify(target(), backup)
+    assert "@@rollback=" in ia.cmd_verify(target(), backup) and "@@rollback=" not in ia.cmd_verify(target())
 
 
 def test_the_script_pulls_then_tags_only_a_really_new_image_then_recreates():
@@ -404,6 +431,23 @@ def test_config_check(stdout, stderr, code, kind):
         assert "GEHEIM" not in result.why
 
 
+@pytest.mark.parametrize("service", [None, "nextcloud:30-apache", ["image"], 7], ids=["null", "text", "list", "number"])
+def test_a_service_that_is_no_object_counts_as_missing(service):
+    result = ia.check_config(json.dumps({"services": {"app": service}}), "", 0, target())
+    assert result is not None and result.kind == "service_missing" and "„app“" in result.why
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    ["", "\n  \n", "WARN[0000] etwas Harmloses", 'time="2026-10-17T07:00:00Z" level=warning msg="x"\nWARN noch eins'],
+    ids=["empty", "blank", "warning", "warnings"],
+)
+def test_a_config_error_without_a_line_names_the_exit_code(stderr):
+    result = ia.check_config("", stderr, 3, target())
+    assert result is not None and result.kind == "config"
+    assert result.why == "docker compose config meldet einen Fehler: Exit-Code 3"
+
+
 def test_missing_variables_are_listed_and_config_errors_show_the_first_line():
     why = ia.check_config("", 'WARN The "DB_PASS" variable is not set.\nWARN The "TAG" variable is not set.', 0, target()).why
     assert "2 Variablen ohne Wert" in why and "von Hand" in why and "DB_PASS" not in why
@@ -457,6 +501,13 @@ def test_warnings_are_specific_and_quiet_when_there_is_nothing_to_say():
     assert any("30.09.2026 06:31 UTC" in w for w in warn(stale=True, registry_at="2026-09-30T06:31:00+00:00"))
 
 
+@pytest.mark.parametrize(
+    ("registry_at", "shown"), [(None, "unbekannt"), ("", "unbekannt"), ("gestern", "gestern")], ids=["none", "empty", "text"],
+)
+def test_a_registry_time_that_is_no_date_is_shown_as_it_is(registry_at, shown):
+    assert f"Antwort der Registry vom {shown} (diesmal nicht erreichbar)." in warn(stale=True, registry_at=registry_at)
+
+
 def test_reason_text_carries_the_essentials_for_the_actions_page():
     text = ia.reason_text("docker", "nextcloud-app", "nextcloud:30-apache", "nextcloud", "app", Risk.MEDIUM)
     for part in ("nextcloud-app", "docker", "nextcloud:30-apache", "„nextcloud“/„app“", "Kurz nicht erreichbar"):
@@ -490,6 +541,17 @@ def test_verify_output_parsing():
     assert got == ia.Snapshot((ia.Member("nextcloud-app", NEW_ID, "running", 0, "healthy"),), NEW_ID)
     assert ia.parse_verify("@@image=\n") == ia.Snapshot((), None)
     assert ia.parse_verify(json.dumps({"name": "/x", "image_id": "i", "status": "exited", "exit_code": 137, "health": None}) + "\n").members[0].exit_code == 137
+
+
+def test_verify_lines_with_broken_json_are_skipped():
+    line = json.dumps({"name": "/nextcloud-app", "image_id": NEW_ID, "status": "running", "exit_code": 0, "health": None})
+    got = ia.parse_verify(f'{{kaputt\n{{"name": "/halb"\n{line}\n@@image={NEW_ID}\n')
+    assert [m.name for m in got.members] == ["nextcloud-app"] and got.tag_image_id == NEW_ID
+
+
+def test_an_empty_snapshot_says_that_no_container_was_found():
+    assert ia.describe_members(snap()) == "Kein Container des Dienstes gefunden."
+    assert ia.describe_members(snap(member("a", health="healthy"), member("b", status="exited"))) == "a: running (healthy); b: exited"
 
 
 @pytest.mark.parametrize(
@@ -988,6 +1050,24 @@ async def test_a_stack_change_that_starts_during_the_plan_blocks_the_apply(tmp_p
     result = await applier.apply(request_for(plan))
     assert result.success is False and result.error.endswith("läuft gerade schon etwas (Update). Versuch es danach noch einmal.")
     no_launch(docker)
+
+
+@pytest.mark.asyncio
+async def test_an_update_started_during_the_plan_blocks_the_apply(tmp_path, fast):
+    docker, _service, applier, ctx, plan = await flow(tmp_path)
+    real_plan = applier.plan
+
+    async def plan_then_busy(host, container):
+        result = await real_plan(host, container)
+        applier._busy["h1:nextcloud"] = "nextcloud-db"
+        return result
+
+    applier.plan = plan_then_busy
+    result = await applier.apply(request_for(plan))
+    assert (result.success, result.error) == (False, ap.BUSY_MESSAGE)
+    no_launch(docker)
+    assert applier._busy == {"h1:nextcloud": "nextcloud-db"}, "die Sperre des anderen Laufs bleibt"
+    assert applier.snapshot()["applying"] == {} and stored_runs(ctx) == {}
 
 
 @pytest.mark.asyncio
@@ -2264,6 +2344,46 @@ async def test_a_still_held_project_lock_is_waited_out_briefly(tmp_path, fast, m
 
 
 @pytest.mark.asyncio
+async def test_a_shutdown_during_the_rollback_wait_keeps_the_run(tmp_path, fast, monkeypatch):
+    monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(ap, "ROLLBACK_RETRY_S", 60)
+    docker, _service, applier, ctx, plan = await flow(tmp_path)
+    docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
+    docker.rollback_launch_outs = ["@@launch\n@@busy\n"]
+    task = asyncio.ensure_future(applier.apply(request_for(plan)))
+    for _ in range(500):
+        await asyncio.sleep(0)
+        if docker.rollback_launched:
+            break
+    else:
+        raise AssertionError("der Rückweg wurde nie gestartet")
+    for _ in range(5):
+        await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert len(docker.rollback_launched) == 1
+    assert RUN_ID in stored_runs(ctx), "nach dem Neustart wird weitergemacht"
+    assert applier._busy == {} and applier.snapshot()["applying"] == {} and ctx.audit_rows == [] and ctx.sent == []
+
+
+@pytest.mark.asyncio
+async def test_a_rollback_that_cannot_start_shows_the_manual_way(tmp_path, fast, monkeypatch):
+    monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
+    docker, _service, applier, _ctx, plan = await flow(tmp_path)
+    docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
+
+    def refuse(*_args, **_kwargs):
+        raise RuntimeError("kaputt")
+
+    monkeypatch.setattr(ia, "rollback_script", refuse)
+    result = await applier.apply(request_for(plan))
+    assert result.success is False and docker.rollback_launched == []
+    assert result.error.endswith("Der automatische Rückweg ließ sich nicht starten (kaputt) – siehe unten.")
+    assert "Zurück (auf dem Host)" in result.output and result.detail["auto_rollback"]["ok"] is False
+
+
+@pytest.mark.asyncio
 async def test_a_restart_during_the_rollback_reports_the_failed_start_and_the_rollback_not_a_success(tmp_path, resume_fast):
     """Lief der Rückweg schon, als das Dashboard neu startete, sähe die Prüfung das alte Image und urteilte "kein
     neueres Image" (Erfolg). Stattdessen: den laufenden Rückweg weiterverfolgen und den Fehlstart melden."""
@@ -2379,6 +2499,29 @@ async def test_an_unusable_run_file_never_stops_an_update(tmp_path, fast, caplog
     messages = [r.getMessage() for r in caplog.records]
     assert any("image_update_runs_unreadable" in m for m in messages)
     assert any("image_update_runs_write_failed" in m for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_a_run_file_that_cannot_be_cleaned_up_is_only_logged(tmp_path, fast, caplog, monkeypatch):
+    docker, _service, applier, ctx, plan = await flow(tmp_path)
+
+    def disk_full(*_args, **_kwargs):
+        raise OSError("No space left on device")
+
+    stored: list[bool] = []
+
+    def break_the_disk() -> None:
+        stored.append(RUN_ID in stored_runs(ctx))  # erst nach dem Eintrag scheitert das Schreiben
+        monkeypatch.setattr(ap, "_write_atomic", disk_full)
+
+    docker.on_poll = break_the_disk
+    with caplog.at_level("ERROR", logger="nodvard_deck.ext.docker"):
+        result = await applier.apply(request_for(plan))
+    assert stored and all(stored)
+    assert result.success is True and applier._busy == {} and applier.snapshot()["applying"] == {}
+    assert [r.getMessage() for r in caplog.records if "image_update_runs_write_failed" in r.getMessage()] == [
+        f"image_update_runs_write_failed run={RUN_ID}",
+    ]
 
 
 @pytest.mark.asyncio

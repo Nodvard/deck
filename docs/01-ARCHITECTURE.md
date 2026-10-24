@@ -225,10 +225,15 @@ GET /api/v1/branding      (ohne Auth — die Login-Seite braucht es)
 Das Frontend schreibt die Farben beim Start in CSS-Custom-Properties auf `:root`.
 Kein Rebuild, kein Neustart, keine Umgebungsvariable. Logo und Favicon liegen als Upload im
 Daten-Volume (`branding/`); andere Adressen nimmt `PUT /branding` dafür nur als eigenen Pfad oder
-`data:image/…` an. Die App-Seite soll Bilder nur vom eigenen Server laden (`img-src 'self' data: blob:`); vorerst
-meldet der Browser andere Bilder nur (`Content-Security-Policy-Report-Only`), gesperrt wird später.
-Ebenso nur gemeldet wird `script-src 'self'` plus die Prüfsumme der eingebetteten Import-Map aus `index.html`
-(beim Start berechnet): Damit liefe kein `javascript:`-Link und kein eingeschleustes Skript. Links aus Daten von
+`data:image/…` an. Skripte lädt die App-Seite nur vom eigenen Server: `script-src 'self'` plus die Prüfsumme der
+eingebetteten Import-Map aus `index.html` gilt fest (`Content-Security-Policy`, auch auf der Antwort `304`), es läuft
+also kein `javascript:`-Link, kein `onclick=` aus eingeschleustem HTML und kein `eval`. Die Prüfsumme entsteht beim
+Ausliefern und wird neu berechnet, sobald sich `index.html` ändert; ein neues eingebettetes Skript braucht also keine
+Pflege. Bilder (`img-src 'self' data: blob:`), Verbindungen (`connect-src 'self'`, auch die WebSockets), Worker
+(`worker-src 'self'`) und Rahmen (`frame-src blob:`, nur die PDF-Vorschau in Dokumente) meldet der Browser vorerst
+nur (`Content-Security-Policy-Report-Only`), gesperrt wird später. Worker von fremden Adressen oder aus `blob:`
+sperrt schon `script-src`. Was das für Erweiterungs-Bundles heißt, steht in
+[02-EXTENSION-API.md](02-EXTENSION-API.md) unter „Frontend-Bundle laden“. Links aus Daten von
 Erweiterungen (App-Kacheln, Befehlspalette, Widgets, Erweiterungsseiten) nimmt die Oberfläche nur mit `http:` oder
 `https:`, Ziele von Meldungen nur als Pfad im Dashboard (`/…`, nicht `//…`).
 Ein SVG wird beim Hochladen geprüft (keine Skripte, keine Verweise aus der Datei hinaus), jedes

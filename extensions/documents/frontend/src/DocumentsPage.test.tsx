@@ -186,6 +186,48 @@ describe("DocumentsPage", () => {
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:x");
   });
 
+  it("gibt die Blob-URL der Vorschau frei, wenn die Seite verlassen wird", async () => {
+    vi.stubGlobal("fetch", mockFetch());
+    URL.createObjectURL = vi.fn(() => "blob:offen");
+    URL.revokeObjectURL = vi.fn();
+    const { unmount } = render(<DocumentsPage />);
+    await screen.findByText("stromrechnung.pdf");
+    fireEvent.click(screen.getByRole("button", { name: "Ansehen" }));
+    await screen.findByTestId("preview-doc-1");
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+    unmount();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:offen");
+  });
+
+  it("die Vorschau nimmt den Typ aus der festen Liste, nicht den vom Server", async () => {
+    // Ein Server (oder eine veränderte Sicherung) liefert HTML: Die Blob-URL bleibt trotzdem ein PDF.
+    const html = mockFetch();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => (
+      String(input).endsWith("/download")
+        ? new Response("<script>alert(1)</script>", { status: 200, headers: { "content-type": "text/html" } })
+        : html(input, init)
+    )));
+    const blobs: Blob[] = [];
+    URL.createObjectURL = vi.fn((b: Blob) => { blobs.push(b); return "blob:x"; });
+    URL.revokeObjectURL = vi.fn();
+    render(<DocumentsPage />);
+    await screen.findByText("stromrechnung.pdf");
+    fireEvent.click(screen.getByRole("button", { name: "Ansehen" }));
+    await screen.findByTestId("preview-doc-1");
+    expect(blobs.map((b) => b.type)).toEqual(["application/pdf"]);
+  });
+
+  it.each(["text/html", "image/svg+xml", "constructor", "application/xhtml+xml"])(
+    "ohne feste Vorschau (%s) gibt es nur Herunterladen", async (contentType) => {
+      vi.stubGlobal("fetch", mockFetch({ documents: [{ ...DOCUMENTS[0], content_type: contentType }] }));
+      render(<DocumentsPage />);
+      await screen.findByText("stromrechnung.pdf");
+      expect(screen.queryByRole("button", { name: "Ansehen" })).toBeNull();
+      expect(screen.getByRole("button", { name: /Herunterladen/ })).toBeInTheDocument();
+      expect(document.querySelector("iframe")).toBeNull();
+    },
+  );
+
   it("benennt ein Dokument über die Rückfrage um", async () => {
     let renamed = "";
     vi.stubGlobal("fetch", mockFetch({ onRename: (n) => (renamed = n) }));

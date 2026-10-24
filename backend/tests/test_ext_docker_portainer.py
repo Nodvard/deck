@@ -845,11 +845,22 @@ def test_images_count_as_equal_the_way_docker_reads_them():
     mv = _m().move
     pinned = "ghcr.io/x/y:1@sha256:" + "a" * 64
     config = {"services": {"a": {"image": "nginx"}, "b": {"image": pinned}, "c": {"build": "."}, "d": {"image": "redis:7"}}}
-    same = {"a": "docker.io/library/nginx:latest", "b": pinned, "c": "c:1", "d": "library/redis:7", "e": "x:1"}
+    same = {"a": ("docker.io/library/nginx:latest",), "b": (pinned,), "c": ("c:1",), "d": ("library/redis:7",), "e": ("x:1",)}
     assert mv.changed_images(config, same) is None
-    assert mv.changed_images({"services": {"b": {"image": pinned}}}, {"b": pinned[:-64] + "b" * 64}) is not None
-    assert mv.changed_images(config, {"a": "nginx:1.27", "d": "redis:7"}).startswith(
+    assert mv.changed_images({"services": {"b": {"image": pinned}}}, {"b": (pinned[:-64] + "b" * 64,)}) is not None
+    assert mv.changed_images(config, {"a": ("nginx:1.27",), "d": ("redis:7",)}).startswith(
         "Die Datei bei Portainer passt nicht zum laufenden Stack: Für „a“ steht darin das Image nginx, der Container läuft aber mit nginx:1.27.")
+
+
+def test_with_mixed_images_one_container_has_to_match_the_file():
+    mv = _m().move
+    config = {"services": {"a": {"image": "nginx:1.27"}}}
+    assert mv.changed_images(config, {"a": ("nginx:1.26", "docker.io/library/nginx:1.27")}) is None
+    assert mv.changed_images(config, {"a": ("nginx:1.25", "nginx:1.26")}).startswith(
+        "Die Datei bei Portainer passt nicht zum laufenden Stack: Für „a“ steht darin das Image nginx:1.27, die Container laufen aber "
+        "mit nginx:1.25 und nginx:1.26.")
+    assert "die Container laufen aber mit nginx:1.24, nginx:1.25 und nginx:1.26." in mv.changed_images(
+        config, {"a": ("nginx:1.24", "nginx:1.25", "nginx:1.26")})
 
 
 @pytest.mark.asyncio
@@ -864,6 +875,131 @@ async def test_a_file_with_other_images_than_the_running_stack_is_refused(env):
     assert FOLDER not in e.sftp.dirs and not any("--force-recreate" in c for c in e.fake.argv_calls)
     e.fake.rows = [_portainer_row(ref=f"docker.io/{IMAGE}")]
     assert (await e.executor.execute(_request(await e.move.plan(e.host, "kuma")))).success is True
+
+
+@pytest.mark.asyncio
+async def test_with_mixed_images_the_file_has_to_match_one_container(env):
+    e = env()
+    e.fake.config = result(json.dumps({"services": {"app": {"image": IMAGE}}}))
+    e.fake.rows = [_portainer_row(ref="louislam/uptime-kuma:1.23.16"), _portainer_row(name="kuma-app-2", ref="louislam/uptime-kuma:2.0.0")]
+    done = await e.executor.execute(_request(await e.move.plan(e.host, "kuma")))
+    assert done.error.startswith(f"Die Datei bei Portainer passt nicht zum laufenden Stack: Für „app“ steht darin das Image {IMAGE}, die "
+                                 "Container laufen aber mit louislam/uptime-kuma:1.23.16 und louislam/uptime-kuma:2.0.0."), done.error
+    assert FOLDER not in e.sftp.dirs and not _rolled(e.fake.argv_calls)
+    e.fake.rows = [_portainer_row(ref="louislam/uptime-kuma:1.23.16"), _portainer_row(name="kuma-app-2")]
+    assert (await e.executor.execute(_request(await e.move.plan(e.host, "kuma")))).success is True
+
+
+def _redeployed_after_lay_out(e, monkeypatch, change):
+    lay_out = e.executor._create.lay_out
+
+    async def then_change(*args, **kwargs):
+        problem = await lay_out(*args, **kwargs)
+        change()
+        return problem
+
+    monkeypatch.setattr(e.executor._create, "lay_out", then_change)
+
+
+REDEPLOYED = ("Die Container des Stacks laufen inzwischen mit anderen Images als beim Lesen der Datei, vielleicht wird der Stack gerade "
+              "in Portainer neu ausgerollt. Warte, bis das fertig ist, und versuch es dann noch einmal. Am Stack hat sich nichts geändert.")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("half", [False, True], ids=["ganz", "halb"])
+async def test_a_redeploy_in_portainer_just_before_the_roll_out_stops_the_move(env, monkeypatch, half):
+    e = env()
+    e.fake.config = result(json.dumps({"services": {"app": {"image": IMAGE}}}))
+    first = [_portainer_row(), _portainer_row(name="kuma-app-2")] if half else [_portainer_row()]
+    e.fake.rows = first
+    redeployed = [*first[:1], _portainer_row(name="kuma-app-2", ref="louislam/uptime-kuma:2.6.0")] if half else [
+        _portainer_row(ref="louislam/uptime-kuma:2.6.0")]
+    _redeployed_after_lay_out(e, monkeypatch, lambda: setattr(e.fake, "rows", redeployed))
+    done = await e.executor.execute(_request(await e.move.plan(e.host, "kuma")))
+    assert done.error == REDEPLOYED, done.error
+    assert FOLDER not in e.sftp.dirs and not _rolled(e.fake.argv_calls)
+    assert sum(c[:4] == ["docker", "inspect", "--type", "container"] for c in e.fake.argv_calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("lost", "reason"), [
+    (True, "Die Container ließen sich vor dem Ausrollen nicht noch einmal lesen: die Verbindung zum Server ist abgebrochen."),
+    (False, ("Die Container des Stacks ließen sich nicht lesen: Error: No such container: kuma-app-1. Vielleicht wird der Stack gerade "
+             "in Portainer neu ausgerollt; versuch es in ein paar Minuten noch einmal.")),
+], ids=["abgerissen", "weg"])
+async def test_without_a_second_look_at_the_images_nothing_rolls_out(env, monkeypatch, lost, reason):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    inner = e.fake.run_argv
+    looked = False
+
+    async def run_argv(host, argv, **kwargs):
+        nonlocal looked
+        if argv[:4] == ["docker", "inspect", "--type", "container"]:
+            if looked:
+                if lost:
+                    raise pytest.importorskip("asyncssh").ConnectionLost("Connection lost")
+                return result(stderr="Error: No such container: kuma-app-1\n", code=1)
+            looked = True
+        return await inner(host, argv, **kwargs)
+
+    e.fake.run_argv = run_argv
+    done = await e.executor.execute(_request(plan))
+    assert done.error == f"{reason} Am Stack hat sich nichts geändert.", done.error
+    assert FOLDER not in e.sftp.dirs and not _rolled(e.fake.argv_calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [RuntimeError("kaputt"), asyncio.CancelledError()], ids=["fehler", "abbruch"])
+async def test_an_error_in_the_second_look_removes_the_folder_and_rolls_nothing_out(env, error):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    real_images = e.executor._images
+    calls = 0
+
+    async def images(host, stack):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise error
+        return await real_images(host, stack)
+
+    e.executor._images = images
+    with pytest.raises(type(error)):
+        await e.executor.execute(_request(plan))
+    await asyncio.wait_for(asyncio.gather(*e.executor._cleanups), 5)
+    assert calls == 2 and FOLDER not in e.sftp.dirs and not _rolled(e.fake.argv_calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["running", "exited"])
+@pytest.mark.parametrize("then", ["geprueft", "nicht-lesbar", "nicht-gemerkt"])
+async def test_containers_left_in_portainers_folder_are_no_success(env, monkeypatch, state, then):
+    compose = COMPOSE.replace("\nvolumes:\n  daten:\n", "\n  extra:\n    image: busybox:1.37\n    profiles: [debug]\nvolumes:\n  daten:\n")
+    e = env(files={"docker-compose.yml": compose, "stack.env": ENV})
+    extra = _portainer_row(name="kuma-extra-1", service="extra", ref="busybox:1.37", state=state)
+    e.fake.rows = [_portainer_row(), extra]
+    inner = e.fake.run_argv
+
+    async def run_argv(host, argv, **kwargs):
+        answer = await inner(host, argv, **kwargs)
+        if "--force-recreate" in argv:
+            e.fake.rows.append(extra)
+            if then == "nicht-lesbar":
+                monkeypatch.setattr(e.move, "running", lambda host, project: _async("Die Container ließen sich nicht lesen."))
+        return answer
+
+    e.fake.run_argv = run_argv
+    plan = await e.move.plan(e.host, "kuma")
+    if then == "nicht-gemerkt":
+        async def refuse(host_id, stack):
+            raise OSError("Platte voll")
+
+        monkeypatch.setattr(e.store, "add", refuse)
+    done = await e.executor.execute(_request(plan))
+    assert done.success is False and " 1 Container kommt noch aus dem Ordner bei Portainer, etwa für Dienste mit einem Profil" in done.error
+    assert f"starte sie im Terminal in {FOLDER} mit docker compose --profile <Profil> up -d" in done.error
+    assert ("kuma" in e.store.for_host("h1")) is (then != "nicht-gemerkt")
 
 
 @pytest.mark.asyncio
@@ -973,15 +1109,6 @@ async def test_its_own_refusal_keeps_the_image_names_from_stack_env(env):
     e.fake.config = result(json.dumps({"services": {"app": {"image": IMAGE}}}))
     done = await e.executor.execute(_request(await e.move.plan(e.host, "kuma")))
     assert f"steht darin das Image {IMAGE}, der Container läuft aber mit louislam/uptime-kuma:1.23.16." in done.error, done.error
-
-
-@pytest.mark.asyncio
-async def test_a_service_with_mixed_images_is_not_compared(env):
-    e = env()
-    e.fake.rows = [_portainer_row(ref="louislam/uptime-kuma:1.23.16"), _portainer_row(name="kuma-app-2", ref=IMAGE)]
-    e.fake.config = result(json.dumps({"services": {"app": {"image": IMAGE}}}))
-    done = await e.executor.execute(_request(await e.move.plan(e.host, "kuma")))
-    assert "passt nicht zum laufenden Stack" not in (done.error or "")
 
 
 @pytest.mark.asyncio

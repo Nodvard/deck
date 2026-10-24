@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import hashlib
 import os
 import shutil
 import subprocess
@@ -22,12 +23,36 @@ from test_ext_docker_stack_update import _request as _update_request
 HOME = "/home/deck"
 STAMP, OLDER = "20261016-041500", "20261001-120000"
 FOLDER = f"{HOME}/nodvard-sicherungen/shop/{STAMP}"
+SHA, SIZE = "ab" * 32, 1234
 
 
 def _mod():
     from nodvard_deck_ext_docker import stack_restore
 
     return stack_restore
+
+
+_APPLETS = ("sh", "tar", "gzip", "sha256sum", "wc", "cut", "tr", "stat", "find", "mv", "rm", "mkdir", "chown", "chmod", "rmdir", "df", "tail")
+BUSYBOX = pytest.param("busybox", marks=pytest.mark.skipif(not shutil.which("busybox"), reason="braucht busybox"))
+
+
+def _shell(kind, tmp_path, *front):
+    """Aufruf und Umgebung für ein Skript: die Shell des Testrechners oder nur BusyBox-Applets wie im Hilfsimage."""
+    if kind != "busybox":
+        return [kind], {**os.environ, "PATH": os.pathsep.join([*map(str, front), os.environ.get("PATH", "")])}
+    tools = tmp_path / "busybox"
+    tools.mkdir()
+    for applet in _APPLETS:
+        (tools / applet).symlink_to(shutil.which("busybox"))
+    return [str(tools / "sh")], {**os.environ, "PATH": os.pathsep.join([*map(str, front), str(tools)])}
+
+
+async def _until(check):
+    for _ in range(1000):
+        if check():
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("Der erwartete Zustand trat nicht ein.")
 
 
 def _backup(sftp, stamp=STAMP, files=("shop_data.tar.gz",)):
@@ -40,6 +65,7 @@ def _backup(sftp, stamp=STAMP, files=("shop_data.tar.gz",)):
 async def _env(tmp_path, monkeypatch, used_by=None, **kwargs):
     env = await _setup(tmp_path, monkeypatch, **kwargs)
     users = {"shop_data": ["shop-web-1"], "shop_cache": ["shop-worker-1"], **(used_by or {})}
+    env.users = users
     resources = SimpleNamespace(
         forget=lambda host_id: None,
         snapshot=lambda host: _async(SimpleNamespace(volumes=[{"name": n, "used_by": u} for n, u in users.items()])),
@@ -59,6 +85,8 @@ async def _env(tmp_path, monkeypatch, used_by=None, **kwargs):
     """Je Volume `true`/`false` für einen Hilfscontainer; fehlt er, gibt es keinen."""
     env.orphans: set[str] = set()
     """Dienste mit Container, die nicht mehr in der Compose-Datei stehen; `compose stop/start` lehnt sie ab."""
+    env.leftovers: dict[str, object] = {}
+    """Je Volume der Exit-Code beim Nachsehen nach Resten im Volume (0 = keine) oder `lost`."""
     original = env.docker.run_argv
 
     async def run_argv(host, argv, **kwargs):
@@ -77,12 +105,18 @@ async def _env(tmp_path, monkeypatch, used_by=None, **kwargs):
             if state == "fehler":
                 return result(stderr="Cannot connect to the Docker daemon at unix:///var/run/docker.sock\n", code=1)
             return result(state + "\n") if state else result(stderr=f"Error: No such container: {argv[-1]}\n", code=1)
+        if argv[:2] == ["docker", "run"] and argv[-1] == m._LEFTOVER_SCRIPT:
+            env.docker.calls.append(list(argv))
+            answer = env.leftovers.get(argv[argv.index("-v") + 1].split(":", 1)[0], 0)
+            if answer == "lost":
+                raise ConnectionError("Verbindung verloren")
+            return result(code=answer)
         if argv[:2] == ["docker", "run"] and any(a.endswith(":/backup:ro") for a in argv):
             env.docker.calls.append(list(argv))
             volume = argv[argv.index("-v") + 1].split(":", 1)[0]
             if f"{volume}:/data:ro" in argv:
                 env.checked.append(volume)
-                code, out, err = env.check.get(volume, (0, "1000 99999999\n", ""))
+                code, out, err = env.check.get(volume, (0, f"1000 99999999 {SHA} {SIZE}\n", ""))
                 return result(out, err, code)
             env.restored.append(list(argv))
             if "hang" in env.unpack:
@@ -111,11 +145,11 @@ def _request(action="docker.stack_volume_restore", volumes=("shop_data",), stamp
 
 def test_the_commands():
     m = _mod()
-    argv = m.cmd_restore("shop_data", FOLDER)
+    argv = m.cmd_restore("shop_data", FOLDER, SHA, SIZE)
     assert argv[:5] == ["docker", "run", "--rm", "--name", "nodvard-zurueck-shop_data"]
     assert argv[5:11] == ["--network", "none", "--security-opt", "no-new-privileges", "--pids-limit", "64"]
     assert argv[11:15] == ["-v", "shop_data:/data", "-v", f"{FOLDER}:/backup:ro"]
-    assert argv[15] == "busybox:1.37" and argv[-2:] == ["sh", "shop_data.tar.gz"]
+    assert argv[15] == "busybox:1.37" and argv[-4:] == ["sh", "shop_data.tar.gz", SHA, str(SIZE)]
     script = argv[argv.index("-c") + 1]
     assert script.index("tar xzf") < script.index('mv -t "$o"') < script.index("mv -t /data") < script.rindex('rm -rf "$o"')
     check = m.cmd_check("shop_data", FOLDER)
@@ -123,10 +157,26 @@ def test_the_commands():
     assert m.cmd_helper_state("shop_data") == ["docker", "container", "inspect", "--format", "{{.State.Running}}", "nodvard-zurueck-shop_data"]
     for bad in (("a;b", FOLDER), ("shop_data", "/h:/x"), ("shop_data", "relativ"), ("shop_data", "/home/../etc")):
         with pytest.raises(ValueError):
-            m.cmd_restore(*bad)
+            m.cmd_restore(*bad, SHA, SIZE)
         with pytest.raises(ValueError):
             m.cmd_check(*bad)
+    for sha, size in (("AB" * 32, SIZE), ("ab" * 31, SIZE), (SHA + "\n", SIZE), (SHA, -1), (SHA, "1234"), (SHA, True)):
+        with pytest.raises(ValueError):
+            m.cmd_restore("shop_data", FOLDER, sha, size)
+    leftovers = m.cmd_leftovers("shop_data")
+    assert leftovers[leftovers.index("-v") + 1] == "shop_data:/data:ro" and "--name" not in leftovers and "/backup" not in " ".join(leftovers)
+    with pytest.raises(ValueError):
+        m.cmd_leftovers("a;b")
     assert m.stamp_text(STAMP) == "2026-10-16T04:15:00+00:00"
+    assert m.valid_stamp(STAMP) and not m.valid_stamp("99999999-999999") and not m.valid_stamp("20261301-000000")
+    assert m.valid_stamp("20000101-000000") and m.valid_stamp("20991231-235959")
+    for edge in ("00010101-000000", "19991231-235959", "21000101-000000", "99991231-235959"):
+        assert not m.valid_stamp(edge), edge
+
+
+def _fingerprint(path):
+    data = path.read_bytes() if path.exists() else b""
+    return [hashlib.sha256(data).hexdigest(), str(len(data))]
 
 
 @pytest.mark.skipif(sys.platform == "win32" or not all(map(shutil.which, ("sh", "tar", "gzip"))), reason="braucht POSIX mit sh, tar und gzip")
@@ -150,7 +200,8 @@ def test_the_archive_leaves_out_restore_leftovers_and_no_half_file(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32" or not all(map(shutil.which, ("sh", "tar", "gzip"))), reason="braucht POSIX mit sh, tar und gzip")
-def test_the_script_swaps_only_after_a_good_archive(tmp_path):
+@pytest.mark.parametrize("shell", ["sh", BUSYBOX])
+def test_the_script_swaps_only_after_a_good_archive(tmp_path, shell):
     m = _mod()
     script = m._RESTORE_SCRIPT.replace("/data", str(tmp_path / "data")).replace("/backup", str(tmp_path / "backup"))
     data, backup, source = tmp_path / "data", tmp_path / "backup", tmp_path / "source"
@@ -164,9 +215,11 @@ def test_the_script_swaps_only_after_a_good_archive(tmp_path):
     (backup / "kaputt.tar.gz").write_bytes(whole[:-20])
     (data / "a.txt").write_text("neu")
     (data / "dazu.txt").write_text("seit der Sicherung")
+    cmd, env = _shell(shell, tmp_path)
 
     def run(name):
-        return subprocess.run(["sh", "-c", script, "sh", name], capture_output=True, text=True, check=False)
+        return subprocess.run([*cmd, "-c", script, "sh", name, *_fingerprint(backup / name)], capture_output=True, text=True, check=False,
+                              env=env)
 
     assert run("kaputt.tar.gz").returncode == m.BROKEN_EXIT
     assert sorted(p.name for p in data.iterdir()) == ["a.txt", "dazu.txt"] and (data / "a.txt").read_text() == "neu"
@@ -193,7 +246,7 @@ def test_staging_left_in_an_archive_does_not_break_the_swap(tmp_path):
     (source / ".nodvard-zurueck" / "rest").write_text("x")
     subprocess.run(["tar", "czf", str(backup / "v.tar.gz"), "-C", str(source), "."], check=True)
     (data / "a.txt").write_text("neu")
-    done = subprocess.run(["sh", "-c", script, "sh", "v.tar.gz"], capture_output=True, text=True, check=False)
+    done = subprocess.run(["sh", "-c", script, "sh", "v.tar.gz", *_fingerprint(backup / "v.tar.gz")], capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
     assert sorted(p.name for p in data.iterdir()) == ["a.txt"] and (data / "a.txt").read_text() == "alt"
 
@@ -210,7 +263,7 @@ def test_the_volume_keeps_its_rights_unless_the_archive_brings_them(tmp_path, en
     source.chmod(0o750)
     subprocess.run(["tar", "czf", str(backup / "v.tar.gz"), "-C", str(source), *entries], check=True)
     data.chmod(0o770)
-    done = subprocess.run(["sh", "-c", script, "sh", "v.tar.gz"], capture_output=True, text=True, check=False)
+    done = subprocess.run(["sh", "-c", script, "sh", "v.tar.gz", *_fingerprint(backup / "v.tar.gz")], capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
     assert (data / "a.txt").read_text() == "alt" and data.stat().st_mode & 0o777 == mode
 
@@ -229,13 +282,15 @@ def test_refused_rights_on_the_staging_folder_leave_nothing_behind(tmp_path, ref
     (tools / refused).write_text("#!/bin/sh\nexit 1\n")
     (tools / refused).chmod(0o755)
     path = f"{tools}{os.pathsep}{os.environ.get('PATH', '')}"
-    done = subprocess.run(["sh", "-c", script, "sh", "v.tar.gz"], capture_output=True, text=True, check=False, env={**os.environ, "PATH": path})
+    done = subprocess.run(["sh", "-c", script, "sh", "v.tar.gz", *_fingerprint(backup / "v.tar.gz")], capture_output=True, text=True,
+                          check=False, env={**os.environ, "PATH": path})
     assert done.returncode == m.PREPARE_EXIT, done.stderr
     assert sorted(p.name for p in data.iterdir()) == ["a.txt"] and (data / "a.txt").read_text() == "neu"
 
 
 @pytest.mark.skipif(sys.platform == "win32" or not all(map(shutil.which, ("bash", "tar", "gzip"))), reason="braucht POSIX mit bash, tar und gzip")
-def test_the_check_reads_the_whole_archive_and_the_free_space(tmp_path):
+@pytest.mark.parametrize("shell", ["bash", BUSYBOX])
+def test_the_check_reads_the_whole_archive_and_the_free_space(tmp_path, shell):
     m = _mod()
     script = m._CHECK_SCRIPT.replace("/data", str(tmp_path / "data")).replace("/backup", str(tmp_path / "backup"))
     data, backup = tmp_path / "data", tmp_path / "backup"
@@ -245,17 +300,105 @@ def test_the_check_reads_the_whole_archive_and_the_free_space(tmp_path):
     subprocess.run(["tar", "czf", str(backup / "v.tar.gz"), "-C", str(data), "."], check=True)
     (backup / "kaputt.tar.gz").write_bytes((backup / "v.tar.gz").read_bytes()[:-20])
 
-    def run(name):
-        return subprocess.run(["bash", "-c", script, "sh", name], capture_output=True, text=True, check=False)
+    cmd, env = _shell(shell, tmp_path)
 
-    size, free = (int(v) for v in run("v.tar.gz").stdout.split())
-    assert size > 5000 and free > 0
+    def run(name):
+        return subprocess.run([*cmd, "-c", script, "sh", name], capture_output=True, text=True, check=False, env=env)
+
+    size, free, sha, archive = run("v.tar.gz").stdout.split()
+    assert int(size) > 5000 and int(free) > 0 and [sha, archive] == _fingerprint(backup / "v.tar.gz")
     assert run("kaputt.tar.gz").returncode == m.BROKEN_EXIT
     with gzip.open(backup / "nur-gzip.tar.gz", "wb") as plain:
         plain.write(b"kein tar " * 400)
     assert run("nur-gzip.tar.gz").returncode == m.BROKEN_EXIT
     (data / ".nodvard-vorher").mkdir()
     assert run("v.tar.gz").returncode == m.LEFTOVER_EXIT
+
+
+def _two_archives(tmp_path):
+    data, backup = tmp_path / "data", tmp_path / "backup"
+    for name, text in (("geprueft", "aus der Sicherung"), ("anders", "untergeschoben")):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "a.txt").write_text(text)
+        subprocess.run(["tar", "czf", str(tmp_path / f"{name}.tar.gz"), "-C", str(tmp_path / name), "."], check=True)
+    data.mkdir()
+    backup.mkdir()
+    (data / "a.txt").write_text("jetzt")
+    shutil.copy(tmp_path / "geprueft.tar.gz", backup / "v.tar.gz")
+    return data, backup
+
+
+@pytest.mark.skipif(sys.platform == "win32" or not all(map(shutil.which, ("sh", "tar", "gzip", "sha256sum"))),
+                    reason="braucht POSIX mit sh, tar, gzip und sha256sum")
+@pytest.mark.parametrize("change", ["inhalt", "gleich-gross", "groesse"])
+@pytest.mark.parametrize("shell", ["sh", BUSYBOX])
+def test_an_archive_other_than_the_checked_one_is_not_restored(tmp_path, change, shell):
+    m = _mod()
+    script = m._RESTORE_SCRIPT.replace("/data", str(tmp_path / "data")).replace("/backup", str(tmp_path / "backup"))
+    data, backup = _two_archives(tmp_path)
+    sha, size = _fingerprint(backup / "v.tar.gz")
+    if change == "inhalt":
+        shutil.copy(tmp_path / "anders.tar.gz", backup / "v.tar.gz")
+    elif change == "gleich-gross":
+        whole = bytearray((backup / "v.tar.gz").read_bytes())
+        whole[len(whole) // 2] ^= 0xFF
+        (backup / "v.tar.gz").write_bytes(bytes(whole))
+        assert _fingerprint(backup / "v.tar.gz")[1] == size
+    else:
+        size = str(int(size) + 1)
+    cmd, env = _shell(shell, tmp_path)
+    done = subprocess.run([*cmd, "-c", script, "sh", "v.tar.gz", sha, size], capture_output=True, text=True, check=False, env=env)
+    assert done.returncode == m.CHANGED_EXIT, done.stderr
+    assert sorted(p.name for p in data.iterdir()) == ["a.txt"] and (data / "a.txt").read_text() == "jetzt"
+
+
+@pytest.mark.skipif(sys.platform != "linux" or not all(map(shutil.which, ("sh", "tar", "gzip", "sha256sum"))),
+                    reason="braucht Linux mit sh, tar, gzip und sha256sum")
+def test_an_archive_swapped_after_opening_does_not_get_restored(tmp_path):
+    m = _mod()
+    script = m._RESTORE_SCRIPT.replace("/data", str(tmp_path / "data")).replace("/backup", str(tmp_path / "backup"))
+    data, backup = _two_archives(tmp_path)
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    # Tauscht das Archiv unter seinem Namen aus, während das Skript die Prüfsumme bildet.
+    (tools / "sha256sum").write_text(f'#!/bin/sh\nmv -f "{tmp_path / "anders.tar.gz"}" "{backup / "v.tar.gz"}"\nexec {shutil.which("sha256sum")} "$@"\n')
+    (tools / "sha256sum").chmod(0o755)
+    # Nur mit `sh`: Die BusyBox-Shell ruft ihr eigenes sha256sum auf und nie den Ersatz aus PATH.
+    cmd, env = _shell("sh", tmp_path, tools)
+    done = subprocess.run([*cmd, "-c", script, "sh", "v.tar.gz", *_fingerprint(backup / "v.tar.gz")], capture_output=True, text=True,
+                          check=False, env=env)
+    assert done.returncode == 0, done.stderr
+    assert not (tmp_path / "anders.tar.gz").exists() and (data / "a.txt").read_text() == "aus der Sicherung"
+
+
+@pytest.mark.skipif(sys.platform != "linux" or not all(map(shutil.which, ("bash", "tar", "gzip", "sha256sum"))),
+                    reason="braucht Linux mit bash, tar, gzip und sha256sum")
+def test_a_swap_during_the_check_does_not_mix_two_archives(tmp_path):
+    m = _mod()
+    script = m._CHECK_SCRIPT.replace("/data", str(tmp_path / "data")).replace("/backup", str(tmp_path / "backup"))
+    _data, backup = _two_archives(tmp_path)
+    checked = _fingerprint(backup / "v.tar.gz")
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    (tools / "sha256sum").write_text(f'#!/bin/sh\nmv -f "{tmp_path / "anders.tar.gz"}" "{backup / "v.tar.gz"}"\nexec {shutil.which("sha256sum")} "$@"\n')
+    (tools / "sha256sum").chmod(0o755)
+    cmd, env = _shell("bash", tmp_path, tools)
+    done = subprocess.run([*cmd, "-c", script, "sh", "v.tar.gz"], capture_output=True, text=True, check=False, env=env)
+    assert done.returncode == 0, done.stderr
+    assert not (tmp_path / "anders.tar.gz").exists() and done.stdout.split()[2:] == checked
+
+
+@pytest.mark.skipif(sys.platform == "win32" or not shutil.which("sh"), reason="braucht eine POSIX-Shell")
+@pytest.mark.parametrize(("folder", "code"), [(None, 0), (".nodvard-vorher", 1), (".nodvard-zurueck", 1)], ids=["sauber", "vorher", "zurueck"])
+def test_leftovers_in_the_volume_are_found(tmp_path, folder, code):
+    m = _mod()
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "a.txt").write_text("x")
+    if folder:
+        (data / folder).mkdir()
+    script = m._LEFTOVER_SCRIPT.replace("/data", str(data))
+    assert subprocess.run(["sh", "-c", script], capture_output=True, check=False).returncode == code
 
 
 @pytest.mark.asyncio
@@ -421,6 +564,7 @@ async def test_restore_stops_unpacks_and_starts_again(tmp_path, monkeypatch):
     assert order == ["stop", "restore", "start"] and env.checked == ["shop_data"]
     argv = env.restored[0]
     assert argv[argv.index("-v") + 1] == "shop_data:/data" and _verbs(env) == [("stop", ["web"]), ("start", ["web"])]
+    assert argv[-2:] == [SHA, str(SIZE)], "das Zurückspielen prüft gegen das, was vorher geprüft wurde"
 
 
 def _stopped(env):
@@ -435,8 +579,10 @@ def _started(env):
 @pytest.mark.parametrize(("check", "error"), [
     ((3, "", "gzip: unexpected end of file\n"), "Das Archiv von shop_data ist beschädigt oder unvollständig (gzip: unexpected end of file)."),
     ((5, "", ""), "Im Volume shop_data liegt noch .nodvard-vorher von einem früheren Zurückspielen"),
-    ((0, f"{5 * 1024 ** 3} 1048576\n", ""), "Für shop_data ist zu wenig Platz: Deck entpackt die Sicherung erst neben die alten Daten und braucht "
-                                            "dafür bis zu 5,2 GB, frei sind 1,0 GB."),
+    ((0, f"{5 * 1024 ** 3} 1048576 {SHA} {SIZE}\n", ""), ("Für shop_data ist zu wenig Platz: Deck entpackt die Sicherung erst neben die "
+                                                           "alten Daten und braucht dafür bis zu 5,2 GB, frei sind 1,0 GB.")),
+    ((0, "1000 99999999\n", ""), "Das Archiv von shop_data ließ sich nicht prüfen (1000 99999999)."),
+    ((0, f"1000 99999999 {'x' * 64} {SIZE}\n", ""), "Das Archiv von shop_data ließ sich nicht prüfen (1000 99999999"),
     ((125, "", "Unable to find image 'busybox:1.37' locally\n"), "Das Archiv von shop_data ließ sich nicht prüfen (Unable to find image"),
 ])
 async def test_the_check_before_stopping_changes_nothing(tmp_path, monkeypatch, check, error):
@@ -475,6 +621,8 @@ async def test_a_restore_still_running_on_the_server_blocks_a_new_one(tmp_path, 
      "Zurückspielen von shop_data gescheitert (docker: Error response from daemon: failed to create task). An shop_data hat sich nichts geändert."),
     ((7, "mkdir: can't create directory '/data/.nodvard-zurueck': Read-only file system\n"),
      "Zurückspielen von shop_data gescheitert (mkdir: can't create directory '/data/.nodvard-zurueck': Read-only file system)."),
+    ((8, ""), ("Das Archiv von shop_data ist nicht mehr das, das Deck vorher geprüft hat. Zurückgespielt wurde es nicht; an shop_data "
+               "hat sich nichts geändert.")),
 ])
 async def test_failures_before_the_swap_change_nothing_and_start_again(tmp_path, monkeypatch, answer, error):
     env = await _env(tmp_path, monkeypatch)
@@ -812,8 +960,7 @@ async def test_a_cancel_in_a_stopped_stack_starts_nothing(tmp_path, monkeypatch)
     _backup(env.sftp)
     env.unpack["hang"] = 1
     task = asyncio.create_task(env.executor.execute(_request()))
-    while not env.restored:
-        await asyncio.sleep(0)
+    await _until(lambda: env.restored)
     env.helper.clear()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -837,14 +984,115 @@ async def test_a_cancel_while_the_helper_runs_keeps_the_services_stopped(tmp_pat
     _backup(env.sftp)
     env.unpack["hang"] = 1
     task = asyncio.create_task(env.executor.execute(_request()))
-    while not env.restored:
-        await asyncio.sleep(0)
+    await _until(lambda: env.restored)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
     for _ in range(20):
         await asyncio.sleep(0)
     assert not _started(env) and env.update.actions.locks.held("h1", "shop") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("leftovers", "starts"), [(0, True), (1, False), ("lost", False)], ids=["sauber", "reste", "keine-antwort"])
+async def test_a_cancel_after_the_helper_ended_starts_again_only_without_leftovers(tmp_path, monkeypatch, leftovers, starts):
+    env = await _env(tmp_path, monkeypatch)
+    _backup(env.sftp)
+    env.unpack["hang"] = 1
+    env.leftovers["shop_data"] = leftovers
+    task = asyncio.create_task(env.executor.execute(_request()))
+    await _until(lambda: env.restored)
+    env.helper.clear()  # der Hilfscontainer hat sich mit --rm schon weggeräumt
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert _started(env) is starts and any(c[-1] == _mod()._LEFTOVER_SCRIPT for c in env.docker.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dirty", ["shop_data", "shop_cache"])
+async def test_a_cancel_with_leftovers_in_one_of_two_volumes_keeps_the_stack_stopped(tmp_path, monkeypatch, caplog, dirty):
+    env = await _env(tmp_path, monkeypatch)
+    _backup(env.sftp, files=("shop_data.tar.gz", "shop_cache.tar.gz"))
+    env.unpack["hang"] = 1
+    env.leftovers[dirty] = 1
+    task = asyncio.create_task(env.executor.execute(_request(volumes=("shop_data", "shop_cache"))))
+    await _until(lambda: env.restored)
+    env.helper.clear()
+    task.cancel()
+    with caplog.at_level("WARNING"), pytest.raises(asyncio.CancelledError):
+        await task
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert not _started(env) and sum(c[-1] == _mod()._LEFTOVER_SCRIPT for c in env.docker.calls) == 2
+    assert any("docker_restore_kept_stopped project=shop" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_a_user_from_outside_after_the_stop_stops_the_restore(tmp_path, monkeypatch):
+    env = await _env(tmp_path, monkeypatch)
+    _backup(env.sftp)
+    inner = env.docker.fake.run_argv
+
+    async def run_argv(host, argv, **kwargs):
+        answer = await inner(host, argv, **kwargs)
+        if "stop" in argv:
+            env.users["shop_data"] = ["shop-web-1", "fremd-1"]
+        return answer
+
+    env.docker.fake.run_argv = run_argv
+    done = await env.executor.execute(_request())
+    assert done.error.startswith("Inzwischen nutzt ein Container außerhalb des Stacks die Volumes: shop_data nutzt auch fremd-1. Halte ihn "
+                                 "an oder nimm ihn aus dem Volume, dann versuch es noch einmal. Zurückgespielt wurde nichts; die Dienste sind "
+                                 "wieder gestartet.")
+    assert env.restored == [] and _verbs(env) == [("stop", ["web"]), ("start", ["web"])]
+
+
+@pytest.mark.asyncio
+async def test_a_user_from_outside_during_the_check_of_a_stopped_stack_stops_the_restore(tmp_path, monkeypatch):
+    env = await _env(tmp_path, monkeypatch)
+    env.docker.stopped.update({"web", "worker"})
+    _backup(env.sftp)
+    _during_the_check(env, lambda: env.users.update({"shop_data": ["shop-web-1", "fremd-1"]}))
+    done = await env.executor.execute(_request())
+    assert done.error.endswith("shop_data nutzt auch fremd-1. Halte ihn an oder nimm ihn aus dem Volume, dann versuch es noch einmal. "
+                               "Zurückgespielt wurde nichts.")
+    assert env.restored == [] and _verbs(env) == []
+
+
+@pytest.mark.asyncio
+async def test_without_a_second_look_at_other_users_nothing_is_restored(tmp_path, monkeypatch):
+    from nodvard_deck_ext_docker.resources import ResourceProblem
+
+    env = await _env(tmp_path, monkeypatch)
+    _backup(env.sftp)
+    first = env.restore.resources.snapshot
+
+    def snapshot(host):
+        if _stopped(env):
+            raise ResourceProblem("Docker antwortet nicht.")
+        return first(host)
+
+    env.restore.resources.snapshot = snapshot
+    done = await env.executor.execute(_request())
+    assert done.error.startswith("Wer die Volumes sonst noch nutzt, ließ sich nicht lesen: Docker antwortet nicht. Zurückgespielt wurde "
+                                 "nichts; die Dienste sind wieder gestartet.")
+    assert env.restored == []
+
+
+@pytest.mark.asyncio
+async def test_a_folder_that_is_no_real_date_is_left_out(tmp_path, monkeypatch):
+    env = await _env(tmp_path, monkeypatch)
+    _backup(env.sftp)
+    _backup(env.sftp, stamp="99999999-999999")
+    listing = await env.restore.backups(env.host, env.stack)
+    assert listing["error"] is None and [b["stamp"] for b in listing["backups"]] == [STAMP]
+    for action in ("docker.stack_volume_restore", "docker.stack_backup_delete"):
+        done = await env.executor.execute(_request(action=action, stamp="99999999-999999"))
+        assert done.error == "Ungültige Sicherung: '99999999-999999'"
+    assert env.restored == [] and f"{HOME}/nodvard-sicherungen/shop/99999999-999999" in env.sftp.dirs
 
 
 @pytest.mark.asyncio
@@ -1028,6 +1276,7 @@ async def test_restore_through_the_gate(client, docker_on, monkeypatch):
     assert listing.status_code == 200 and listing.json()["backups"][0]["volumes"][0]["name"] == "shop_data"
     assert (await client.post(f"{base}/{STAMP}/restore", json={"volumes": ["shop_cache"]}, headers=docker_on.owner)).status_code == 409
     assert (await client.post(f"{base}/jetzt/restore", json={"volumes": ["shop_data"]}, headers=docker_on.owner)).status_code == 400
+    assert (await client.post(f"{base}/99999999-999999/restore", json={"volumes": ["shop_data"]}, headers=docker_on.owner)).status_code == 400
     proposed = await client.post(f"{base}/{STAMP}/restore", json={"volumes": ["shop_data"]}, headers=docker_on.owner)
     assert proposed.status_code == 202 and proposed.json()["risk"] == "high"
     assert not any(c[:2] == ["docker", "run"] or "stop" in c for c in docker.calls), "vor der Freigabe läuft nichts"

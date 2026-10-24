@@ -418,6 +418,115 @@ async def test_deleting_a_document_removes_its_file_from_disk(client, db_session
     assert missing.status_code == 404
 
 
+async def _forge(db_session, doc_id: str, **columns: str) -> None:
+    """Wie eine Zeile aus einer veränderten Sicherung: Werte, die Nodvard Deck selbst nie schreibt."""
+    from sqlalchemy import text
+
+    for column, value in columns.items():
+        await db_session.execute(text(f"UPDATE ext_documents_documents SET {column} = :v WHERE id = :i"), {"v": value, "i": doc_id})
+    await db_session.commit()
+
+
+async def _uploaded_png(client, headers) -> str:
+    uploaded = await client.post(
+        "/api/v1/ext/documents/documents?filename=x.png", content=_png_bytes("X"), headers={**headers, "Content-Type": "image/png"},
+    )
+    return uploaded.json()["id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forged", ["../../geheim.txt", "/etc/passwd", "a/../../../geheim.txt", "..png", "x.png.txt", ""])
+async def test_a_file_name_from_a_forged_backup_is_never_opened_or_deleted(client, db_session, test_settings, forged):
+    from nodvard_deck_ext_documents import INVALID_FILE
+
+    token = await _enable_documents(client, db_session, test_settings)
+    headers = _auth_header(token)
+    doc_id = await _uploaded_png(client, headers)
+    secret = test_settings.ext_data_dir / "geheim.txt"
+    secret.write_text("GEHEIM")
+    await _forge(db_session, doc_id, filename=forged)
+
+    res = await client.get(f"/api/v1/ext/documents/documents/{doc_id}/download", headers=headers)
+    assert (res.status_code, res.json()["detail"]) == (404, INVALID_FILE)
+    assert (await client.delete(f"/api/v1/ext/documents/documents/{doc_id}", headers=headers)).status_code == 204
+    assert secret.read_text() == "GEHEIM"
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="symbolische Links brauchen unter Windows Adminrechte")
+async def test_a_link_out_of_the_documents_folder_is_not_followed(client, db_session, test_settings):
+    from nodvard_deck_ext_documents import INVALID_FILE
+    from nodvard_deck_ext_documents.storage import documents_dir
+
+    token = await _enable_documents(client, db_session, test_settings)
+    headers = _auth_header(token)
+    doc_id = await _uploaded_png(client, headers)
+    secret = test_settings.ext_data_dir / "geheim.txt"
+    secret.write_text("GEHEIM")
+    [stored] = documents_dir(test_settings.ext_data_dir / "documents").glob("*")
+    stored.unlink()
+    stored.symlink_to(secret)
+
+    res = await client.get(f"/api/v1/ext/documents/documents/{doc_id}/download", headers=headers)
+    assert (res.status_code, res.json()["detail"]) == (404, INVALID_FILE)
+    assert (await client.delete(f"/api/v1/ext/documents/documents/{doc_id}", headers=headers)).status_code == 204
+    assert secret.read_text() == "GEHEIM"
+    assert not stored.is_symlink()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="symbolische Links brauchen unter Windows Adminrechte")
+async def test_a_link_loop_in_the_documents_folder_is_refused_not_a_crash(client, db_session, test_settings):
+    from nodvard_deck_ext_documents import INVALID_FILE
+    from nodvard_deck_ext_documents.storage import documents_dir
+
+    token = await _enable_documents(client, db_session, test_settings)
+    headers = _auth_header(token)
+    doc_id = await _uploaded_png(client, headers)
+    [stored] = documents_dir(test_settings.ext_data_dir / "documents").glob("*")
+    stored.unlink()
+    stored.symlink_to(stored)
+
+    res = await client.get(f"/api/v1/ext/documents/documents/{doc_id}/download", headers=headers)
+    assert (res.status_code, res.json()["detail"]) == (404, INVALID_FILE)
+    assert (await client.delete(f"/api/v1/ext/documents/documents/{doc_id}", headers=headers)).status_code == 204
+    assert not stored.is_symlink()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="symbolische Links brauchen unter Windows Adminrechte")
+async def test_a_documents_folder_that_is_a_link_keeps_working(client, db_session, test_settings, tmp_path):
+    token = await _enable_documents(client, db_session, test_settings)
+    headers = _auth_header(token)
+    elsewhere = tmp_path / "nas"
+    elsewhere.mkdir()
+    folder = test_settings.ext_data_dir / "documents" / "documents"
+    folder.parent.mkdir(parents=True, exist_ok=True)
+    if folder.exists():
+        folder.rmdir()
+    folder.symlink_to(elsewhere)
+    doc_id = await _uploaded_png(client, headers)
+    assert len(list(elsewhere.iterdir())) == 1
+
+    res = await client.get(f"/api/v1/ext/documents/documents/{doc_id}/download", headers=headers)
+    assert (res.status_code, res.content) == (200, _png_bytes("X"))
+    assert (await client.delete(f"/api/v1/ext/documents/documents/{doc_id}", headers=headers)).status_code == 204
+    assert list(elsewhere.iterdir()) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forged_type", ["text/html", "image/svg+xml", "application/xhtml+xml"])
+async def test_a_content_type_deck_never_stores_is_served_only_as_a_download(client, db_session, test_settings, forged_type):
+    token = await _enable_documents(client, db_session, test_settings)
+    headers = _auth_header(token)
+    doc_id = await _uploaded_png(client, headers)
+    await _forge(db_session, doc_id, content_type=forged_type)
+
+    res = await client.get(f"/api/v1/ext/documents/documents/{doc_id}/download", headers=headers)
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "application/octet-stream"
+
+
 @pytest.mark.asyncio
 async def test_get_unknown_document_returns_404(client, db_session, test_settings):
     token = await _enable_documents(client, db_session, test_settings)

@@ -342,6 +342,31 @@ async def test_approve_expired_proposal_is_marked_expired_and_never_executed(db_
 
 
 @pytest.mark.asyncio
+async def test_approve_after_expiry_leaves_the_audit_entry_to_the_cleanup_that_won(db_session, monkeypatch):
+    from datetime import timedelta
+
+    from nodvard_deck.db import utcnow
+
+    decision = await gate.propose(db_session, ext_id="terminal", request=_request(), command_field="command")
+    row = await db_session.get(Action, decision.action_id)
+    row.expires_at = utcnow() - timedelta(seconds=1)
+    await db_session.flush()
+    transition = gate._atomic_transition
+
+    async def cleanup_first(session, action_id, **kwargs):
+        monkeypatch.setattr(gate, "_atomic_transition", transition)
+        assert await gate.expire_stale(session) == 1
+        return await transition(session, action_id, **kwargs)
+
+    monkeypatch.setattr(gate, "_atomic_transition", cleanup_first)
+    result, moved = await gate.approve(db_session, decision.action_id, user_id="user-1")
+
+    assert (result.status, moved) == ("expired", False)
+    rows = (await db_session.execute(select(AuditEntry).where(AuditEntry.action == "action.expired"))).scalars().all()
+    assert [r.target_id for r in rows] == [decision.action_id]
+
+
+@pytest.mark.asyncio
 async def test_reject_denies_with_reason_and_is_idempotent(db_session):
     decision = await gate.propose(
         db_session, ext_id="terminal", request=_request(), command_field="command"

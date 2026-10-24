@@ -94,8 +94,8 @@
             "type": "string",
             "title": "Adresse",
             "description": "Name der Registry ohne https://, mit Port, wenn sie einen braucht, z. B. ghcr.io oder registry.example.com:5000. Für Docker Hub: docker.io.",
-            "pattern": "^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?$",
-            "x-pattern-message": "Nur der Name der Registry in Kleinbuchstaben, ohne https:// und ohne Pfad, z. B. ghcr.io."
+            "pattern": "^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$",
+            "x-pattern-message": "Nur der Name der Registry in Kleinbuchstaben, ohne https:// und ohne Pfad, z. B. ghcr.io; ein Port nach dem Doppelpunkt liegt zwischen 1 und 65535."
           },
           "username": {
             "type": "string",

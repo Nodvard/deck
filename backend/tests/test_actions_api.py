@@ -146,17 +146,17 @@ async def test_double_approve_second_call_returns_409(client, db_session):
 
 @pytest.mark.asyncio
 async def test_approve_expired_proposal_returns_409_and_keeps_it_expired(client, db_session):
-    """gate.approve() setzt einen abgelaufenen Vorschlag auf 'expired', die
-    Route antwortet 409 -- und die echte get_session() (session_scope) rollte bei
-    dieser Ausnahme alles zurueck. Die Zeile blieb 'Wartet', samt Knoepfen und
-    Zaehler, bis der stuendliche Aufraeum-Job kam. Die `client`-Fixture reicht die
-    Session ohne Commit/Rollback durch und haette das nie gezeigt, deshalb hier
-    dasselbe Verhalten wie session_scope()."""
+    """Mit Commit und Rollback wie in session_scope(): Der Vorschlag bleibt abgelaufen, und der Ablauf steht genau
+    einmal im Protokoll."""
     from datetime import timedelta
 
+    from sqlalchemy import select
+
     from nodvard_deck.api.deps import get_session
+    from nodvard_deck.core.gate import expire_stale
     from nodvard_deck.db import utcnow
     from nodvard_deck.main import app
+    from nodvard_deck.models import AuditEntry
 
     async def _like_session_scope():
         try:
@@ -184,6 +184,12 @@ async def test_approve_expired_proposal_returns_409_and_keeps_it_expired(client,
     pending = await client.get("/api/v1/actions?status_=proposed", headers=_auth_header(token))
     assert pending.status_code == 200
     assert all(a["id"] != action.id for a in pending.json())
+
+    again = await client.post(f"/api/v1/actions/{action.id}/approve", headers=_auth_header(token))
+    assert again.status_code == 409
+    assert await expire_stale(db_session) == 0
+    audit = (await db_session.execute(select(AuditEntry).where(AuditEntry.action == "action.expired"))).scalars().all()
+    assert [(a.target_id, a.actor_type, a.actor_id, a.outcome) for a in audit] == [(action.id, "system", "gate", "denied")]
 
 
 @pytest.mark.asyncio

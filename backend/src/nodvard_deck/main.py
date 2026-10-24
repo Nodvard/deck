@@ -7,6 +7,7 @@ import base64
 import contextlib
 import hashlib
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from html.parser import HTMLParser
@@ -21,6 +22,7 @@ from nodvard_sdk.errors import PermissionDenied as ExtensionPermissionDenied
 from nodvard_sdk.types import Event
 from sqlalchemy.exc import OperationalError as SqlOperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response
 from starlette.types import Scope
 
 from .api import api_v1_router
@@ -64,11 +66,11 @@ SPA_CSP = (
     "style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'"
 )
 """Stile und Schriften nur vom eigenen Server, auch wenn im CSS der Admins eine fremde Adresse stünde; keine
-Plugins, kein fremdes `<base>`."""
+Plugins, kein fremdes `<base>`. Dazu kommt `script-src` aus `spa_script_policy()`."""
 
-SPA_CSP_REPORT_ONLY = "img-src 'self' data: blob:"
-"""Bilder nur vom eigenen Server (`blob:` für Vorschauen), nur gemeldet (Report-Only): Der Browser loggt einen
-Verstoß, lädt das Bild aber."""
+SPA_CSP_REPORT_ONLY = "img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; frame-src blob:"
+"""Bilder, Verbindungen und Worker nur vom eigenen Server, Rahmen nur für Vorschauen (`blob:`); nur gemeldet
+(Report-Only). Fremde Worker sperrt schon das durchgesetzte `script-src`."""
 
 
 # Auskommentierte Skripte zählen nicht: HTML-Kommentare überspringt der Parser selbst.
@@ -113,8 +115,24 @@ def spa_script_policy(index_html: Path) -> str:
 class _SpaStaticFiles(StaticFiles):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        index = Path(self.directory) / "index.html" if self.directory is not None else Path("/nonexistent")
-        self._report_only = f"{SPA_CSP_REPORT_ONLY}; {spa_script_policy(index)}"
+        self._policies: dict[str, tuple[int, int, str]] = {}
+
+    def _policy_for(self, full_path: str, stat_result: os.stat_result) -> str:
+        known = self._policies.get(full_path)
+        if known is None or known[:2] != (stat_result.st_mtime_ns, stat_result.st_size):
+            known = (stat_result.st_mtime_ns, stat_result.st_size, f"{SPA_CSP}; {spa_script_policy(Path(full_path))}")
+            self._policies[full_path] = known
+        return known[2]
+
+    def file_response(
+        self, full_path: str | os.PathLike[str], stat_result: os.stat_result, scope: Scope, status_code: int = 200
+    ) -> Response:
+        # Auch an die 304: Der Browser übernimmt deren Kopfzeilen in die gespeicherte Seite.
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        if os.fspath(full_path).endswith(".html"):
+            response.headers["Content-Security-Policy"] = self._policy_for(os.fspath(full_path), stat_result)
+            response.headers["Content-Security-Policy-Report-Only"] = SPA_CSP_REPORT_ONLY
+        return response
 
     async def get_response(self, path: str, scope: Scope):
         try:
@@ -132,9 +150,6 @@ class _SpaStaticFiles(StaticFiles):
             response = await super().get_response("index.html", scope)
             path = "index.html"
         response.headers["Cache-Control"] = _cache_policy_for(path)
-        if response.headers.get("content-type", "").startswith("text/html"):
-            response.headers["Content-Security-Policy"] = SPA_CSP
-            response.headers["Content-Security-Policy-Report-Only"] = self._report_only
         return response
 
 

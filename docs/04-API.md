@@ -416,7 +416,7 @@ GET    /connectors                   POST /connectors
 GET/PATCH/DELETE /connectors/{id}    POST /connectors/{id}/test
 
 GET    /jobs         POST /jobs      GET/PATCH/DELETE /jobs/{id}
-POST   /jobs/{id}/run                → sofort ausführen
+POST   /jobs/{id}/run                → sofort ausführen; ein ausgeschalteter Job (`enabled: false`) → `409`
 GET    /jobs/{id}/runs               GET /runs/{id}      GET /runs/{id}/output
 POST   /runs/{id}/cancel
 
@@ -565,7 +565,9 @@ Protokoll):
   `no-port-forwarding,no-agent-forwarding,no-X11-forwarding …` (einen schon eingetragenen erkennt er an Art und
   Schlüsseltext, auch mit älterem Kommentar `lattice@…`; bei Dropbear ersetzt er seine eigene alte Zeile
   `restrict,pty <Schlüssel>`, auch mit Kommentar `lattice@…` oder einem früheren Kurznamen, und meldet „Schlüssel für
-  Dropbear angepasst.“) und richtet auf Wunsch `sudo` ohne Passwort
+  Dropbear angepasst.“; steht der Schlüssel ohne Optionen in der Datei, setzt er sie vor jede solche Zeile und meldet
+  „Der schon eingetragene Schlüssel für Nodvard Deck ist jetzt eingeschränkt …“, im Protokoll der eigenen Einrichtung
+  als `key_fixed`) und richtet auf Wunsch `sudo` ohne Passwort
   (`sudo=true`, geprüft mit `visudo`, siehe unten) und
   Gruppen (`groups=docker` oder `groups=a,b`) ein. Gruppen werden nur eingetragen, wenn Erweiterungen sie für diesen
   Server verlangen (`unix_group`; privilegierte Gruppen – `root`, `sudo`, `wheel`, `admin`, `shadow`, `disk`, `adm`,
@@ -574,8 +576,10 @@ Protokoll):
   Hilfsskripte der eingeschalteten Module mit, die für diesen Server root brauchen (`helpers`: `[{ext_id, module, path,
   version, sha256, text}]`), jedes mit eigener Regel `/etc/sudoers.d/nodvard_<ext_id>_<benutzer>` nur für sein Skript.
   Nur diese Regeln gibt es, wenn mindestens ein eingeschaltetes Modul auf diesem Server root braucht und jedes davon ein
-  Hilfsskript hat. Sonst, oder mit `full_sudo=true`, kommt die volle Regel (`/etc/sudoers.d/nodvard-<benutzer>`,
-  `NOPASSWD: ALL`) dazu; `full_sudo` in der Antwort sagt, ob sie dabei ist. Ohne
+  Hilfsskript hat. Braucht ein Modul root ohne Hilfsskript, oder mit `full_sudo=true`, kommt die volle Regel
+  (`/etc/sudoers.d/nodvard-<benutzer>`, `NOPASSWD: ALL`) dazu; `full_sudo` in der Antwort sagt, ob sie dabei ist. Braucht
+  kein Modul root, richtet `sudo=true` ohne `full_sudo` gar nichts mit sudo ein: `sudo` in der Antwort ist dann `false`,
+  und `notes` sagt es. Ohne
   volle Regel ist ein Hilfsskript, das sich nicht einrichten lässt, ein `FEHLER` (der Befehl endet mit Fehler), mit
   voller Regel ein Hinweis. Eine schon vorhandene volle Regel nimmt der Befehl nie zurück. Bei einem Benutzer außer `root` läuft alles,
   was `~/.ssh` und `authorized_keys` anfasst, **als dieser Benutzer** (`runuser`, sonst `su`), nie als root mit `chown`;
@@ -2056,6 +2060,10 @@ ohne Token mit `401` (früher war es ohne Anmeldung erreichbar). Ohne Anmeldung 
 `hosts.execute` noch `actions.approve:<risiko>` für das Risiko einer Aktion hat, bekommt ihren `payload` gekürzt
 (`payload_hidden`, siehe §3). Ebenso bei der Größe: Einen Body über 1 MiB (siehe §1) beantwortet ein
 Endpunkt, der ihn liest, mit `413` (früher gab es keine allgemeine Grenze); Uploads haben eigene, höhere Grenzen.
+Ebenso lehnt `POST /jobs/{id}/run` einen ausgeschalteten Job mit `409` ab (früher lief er trotzdem, so ließ sich etwa die
+ausgeschaltete Update-Automatik von Nodvard Shield mit `jobs.run` starten); die Automatik selbst spielt ohne
+`auto_updates_enabled` ohnehin nichts ein. Skripte ohne eingeschalteten Zeitplan startet man weiter über
+`POST /ext/scripts/scripts/{id}/run`.
 Ebenso richtet `sudo=true` bei `GET .../setup` und `POST .../setup-with-password` nur noch die Regeln der Hilfsskripte
 ein, wenn die reichen; die volle sudo-Regel gibt es dann nur mit `full_sudo=true` (siehe §3).
 Ebenso verlangen `POST /me/password`, `DELETE /me/totp` und `POST /me/recovery-codes` bei eingeschalteter

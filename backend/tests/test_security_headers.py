@@ -128,6 +128,7 @@ def test_the_app_page_cannot_be_framed(tmp_path: Path):
         _assert_fixed_headers(res.headers)
         [policy] = res.headers.get_list("content-security-policy")
         assert policy.endswith(FRAME_ANCESTORS) and policy.count("frame-ancestors") == 1
+        assert "; script-src 'self'; " in policy
 
 
 @pytest.mark.parametrize(

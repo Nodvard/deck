@@ -142,6 +142,11 @@ def _tag_out(row: Tag) -> TagOut:
     return TagOut(id=row.id, name=row.name, match_keyword=row.match_keyword, created_at=row.created_at)
 
 
+INVALID_FILE = (
+    "Die Datei dieses Dokuments liegt nicht dort, wo Nodvard Deck seine Dateien ablegt, oder hat einen Namen, den es nie "
+    "vergibt (etwa nach einer veränderten Sicherung). Sie wird deshalb nicht geöffnet. Löschen geht, die Datei selbst "
+    "bleibt dabei unberührt."
+)
 # Die Dateien kommen von Nutzern. Wird die Adresse direkt geöffnet, soll weder ein Skript laufen noch der Browser den Typ
 # erraten. Die Vorschau im Dashboard lädt die Datei als Blob und ist davon nicht betroffen.
 _UNTRUSTED_FILE_HEADERS = {
@@ -346,10 +351,13 @@ class Extension(NodvardExtension):
                 if row is None:
                     raise HTTPException(status_code=404, detail="Dokument nicht gefunden.")
                 path = document_path(ctx.data_dir, row.filename)
+                if path is None:
+                    raise HTTPException(status_code=404, detail=INVALID_FILE)
                 if not path.is_file():
                     raise HTTPException(status_code=404, detail="Dokumentdatei fehlt auf der Platte.")
                 return Response(
-                    content=path.read_bytes(), media_type=row.content_type,
+                    content=path.read_bytes(),
+                    media_type=row.content_type if row.content_type in ALLOWED_CONTENT_TYPES else "application/octet-stream",
                     headers={
                         "Content-Disposition": _content_disposition(row.original_filename),
                         **_UNTRUSTED_FILE_HEADERS,

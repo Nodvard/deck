@@ -93,20 +93,29 @@ def test_an_unknown_api_path_is_an_honest_404_not_the_app(spa_client: TestClient
     assert spa_client.get("/apis-uebersicht").status_code == 200
 
 
-def test_html_gets_a_csp_for_styles_and_fonts_and_reports_images_assets_do_not(spa_client: TestClient):
+def test_html_has_the_csp_assets_do_not(spa_client: TestClient):
     for path in ("/", "/settings/appearance"):
         headers = spa_client.get(path).headers
-        assert headers["content-security-policy"] == SPA_CSP
-        directives = {part.strip() for part in SPA_CSP.split(";")}
-        for directive in (
-            "style-src 'self' 'unsafe-inline'", "font-src 'self' data:", "object-src 'none'", "base-uri 'self'",
-            "form-action 'self'",
-        ):
-            assert directive in directives, directive
-        # Bilder vorerst nur gemeldet, nicht gesperrt.
-        assert "img-src" not in SPA_CSP
-        assert SPA_CSP_REPORT_ONLY == "img-src 'self' data: blob:"
         # Ohne eingebettete Skripte bleibt für Skripte nur der eigene Server.
-        assert headers["content-security-policy-report-only"] == f"{SPA_CSP_REPORT_ONLY}; script-src 'self'"
+        assert headers["content-security-policy"] == f"{SPA_CSP}; script-src 'self'"
+        directives = {part.strip() for part in headers["content-security-policy"].split(";")}
+        assert directives == {
+            "style-src 'self' 'unsafe-inline'", "font-src 'self' data:", "object-src 'none'", "base-uri 'self'",
+            "form-action 'self'", "script-src 'self'",
+        }
+        # Bilder, Verbindungen, Worker und Rahmen vorerst nur gemeldet.
+        assert headers["content-security-policy-report-only"] == SPA_CSP_REPORT_ONLY
+        assert {part.strip() for part in SPA_CSP_REPORT_ONLY.split(";")} == {
+            "img-src 'self' data: blob:", "connect-src 'self'", "worker-src 'self'", "frame-src blob:",
+        }
     asset = spa_client.get("/assets/app.js").headers
     assert "content-security-policy" not in asset and "content-security-policy-report-only" not in asset
+
+
+def test_a_revalidated_page_keeps_its_csp(spa_client: TestClient):
+    for path in ("/", "/settings"):
+        first = spa_client.get(path)
+        again = spa_client.get(path, headers={"If-None-Match": first.headers["etag"]})
+        assert again.status_code == 304, path
+        for name in ("content-security-policy", "content-security-policy-report-only"):
+            assert again.headers[name] == first.headers[name], (path, name)

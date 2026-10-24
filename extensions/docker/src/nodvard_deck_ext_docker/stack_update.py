@@ -169,6 +169,8 @@ class Running:
     """Die benannten Volumes seiner Container."""
     up: tuple[str, ...] = ()
     """Die Container, die gerade laufen."""
+    refs: tuple[str, ...] = ()
+    """Die Image-Namen seiner Container, jeder einmal."""
 
 
 def parse_container_images(text: str) -> dict[str, Running]:
@@ -196,7 +198,7 @@ def parse_container_images(text: str) -> dict[str, Running]:
         mixed = len({r[1] for r in found}) > 1 or len({r[2] for r in found}) > 1
         volumes = tuple(sorted(set().union(*(r[4] for r in found))))
         out[service] = Running(service, name, ref, image_id, tuple(r[0] for r in found), mixed, any(r[3] for r in found), volumes,
-                               tuple(r[0] for r in found if r[3]))
+                               tuple(r[0] for r in found if r[3]), tuple(dict.fromkeys(r[1] for r in found)))
     return out
 
 

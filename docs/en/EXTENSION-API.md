@@ -909,6 +909,12 @@ Shared singletons hang off `window.__nodvardDeck` (old name `window.__lattice`, 
 valid — transition); an import-map shim resolves `react`,
 `react/jsx-runtime` and `react-dom` to it.
 
+The bundle runs under the Content Security Policy of the app page (`script-src 'self'`, see
+[01-ARCHITECTURE.md](../01-ARCHITECTURE.md), in German): code only from the Nodvard Deck server, no `eval` and no
+`new Function` (not in libraries either, such as template or schema compilers), no `on…=` attributes in inserted
+HTML, no loading from a CDN, no workers from `blob:` and no WebAssembly. The browser blocks anything that breaks
+these rules and names the reason in the console.
+
 **Names in the frontend contract (transition).** With the rename to Nodvard Deck, everything
 bundles hook into has a new name. The old names remain valid until a major version removes
 them explicitly:

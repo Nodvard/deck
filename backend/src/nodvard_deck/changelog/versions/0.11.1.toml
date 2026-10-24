@@ -1,0 +1,79 @@
+version = "0.11.1"
+date = "2026-10-24"
+title = "Sicherheitsupdate: engere Rechte beim Einrichten und Schutz vor veränderten Sicherungen"
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Seiten von Nodvard Deck führen nur noch Skripte aus, die vom eigenen Server kommen. Bisher hat der Browser fremde oder eingeschleuste Skripte nur gemeldet, jetzt blockiert er sie."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Schickt ein Server die Angaben zu einem Container in unerwarteter Form, nennt Deck das als Grund, statt nur einen allgemeinen Serverfehler zu melden."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Im Dateimanager erscheint der Ordner eines Compose-Projekts nicht mehr leer oder abgeschnitten, wenn sein Pfad mit mehreren Schrägstrichen endet oder ungewöhnliche Zeichen enthält."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Der Umzug von Portainer prüft direkt vor dem Neu-Ausrollen noch einmal, ob die Container zu den Images in der Datei passen. Hat Portainer den Stack inzwischen neu ausgerollt, bricht Deck ab, statt eine ältere Fassung zu starten."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Laufen die Container eines Dienstes mit verschiedenen Images, prüft der Umzug, dass das Image aus der Datei zu einem davon passt. Bleiben nach dem Umzug Container im Ordner von Portainer zurück, etwa für Dienste mit Profil, meldet Deck das statt eines Erfolgs."
+
+[[entries]]
+kind = "sicherheit"
+text = "Docker: Eine Freigabe zum Anmelden bei einer Registry gilt nur für den Benutzernamen, der beim Vorschlag eingetragen war. Wurde er inzwischen geändert, meldet Deck nicht an und bittet um einen neuen Vorschlag."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Speichert ein Server seine Anmeldungen über ein eigenes Hilfsprogramm, zeigt die Registry-Liste „unbekannt“ statt fälschlich „angemeldet“. Eine Registry-Adresse nimmt nur noch Portnummern von 1 bis 65535 an."
+
+[[entries]]
+kind = "sicherheit"
+text = "Docker: Beim Zurückspielen einer Volume-Sicherung prüft Deck, dass das Archiv noch dasselbe ist wie bei der Prüfung kurz davor. Ein inzwischen ausgetauschtes Archiv wird nicht zurückgespielt."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Bricht das Zurückspielen genau beim Austausch der Daten ab, bleibt der Stack gestoppt, statt mit halb getauschten Daten wieder zu starten. Bindet ein anderer Container das Volume kurz bevor oder nachdem Deck die Dienste stoppt ein, spielt Deck nichts zurück."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Ein Sicherungsordner mit einem unmöglichen Datum im Namen legt nicht mehr die ganze Liste der Sicherungen lahm."
+
+[[entries]]
+kind = "sicherheit"
+text = "Ein Dokument oder ein Inventarbild aus einer veränderten Sicherung kann keine Dateien außerhalb seines Ordners mehr lesen oder löschen. Die Vorschau von Dokumenten zeigt nur noch PDF und Bilder, alles andere gibt es nur zum Herunterladen."
+
+[[entries]]
+kind = "behoben"
+text = "Ist ein Vorschlag schon abgelaufen, wenn jemand auf „Bestätigen“ klickt, steht der Ablauf jetzt auch im Protokoll, wie bei Vorschlägen, die von selbst ablaufen."
+
+[[entries]]
+kind = "sicherheit"
+text = "Hilfsskripte legt Nodvard Deck nur noch in Ordner, in die außer root und der Gruppe root niemand schreiben darf, auch nicht über erweiterte Zugriffsrechte; bisher durfte dort noch eine andere Gruppe schreiben, solange der eigene Benutzer nicht in ihr war. Darf auf einem Server eine andere Gruppe in /usr/local schreiben (auf älteren Debian etwa „staff“), bricht eine neue Einrichtung mit nur den Hilfsskripten deshalb ab, bevor sie etwas ändert, und „Verbindung prüfen“ warnt bei schon eingerichteten Servern. Abhilfe: auf dem Server als root einmal „chmod g-w /usr/local /usr/local/lib“ ausführen und den Einrichtungsbefehl noch einmal starten."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Ausgabe eines Job-Laufs liest Nodvard Deck nur noch aus dem eigenen Ordner für Lauf-Protokolle. Eine veränderte Sicherung konnte sonst eine beliebige Datei als Ausgabe anzeigen lassen, etwa eine Systemdatei aus dem Container."
+
+[[entries]]
+kind = "sicherheit"
+text = "War der Schlüssel von Nodvard Deck auf einem Server ohne Einschränkungen eingetragen, etwa von Hand, blieb das beim Einrichten so. Jetzt ergänzt die Einrichtung die Einschränkungen, zum Beispiel dass über den Schlüssel keine Ports weitergeleitet werden, und sagt dir das. Hast du selbst Optionen eingetragen, bleibt die Zeile, wie sie ist."
+
+[[entries]]
+kind = "sicherheit"
+text = "Nodvard Shield stellt nur noch Dateien wieder her oder löscht sie, wenn sie wirklich in der Quarantäne liegen. Mit einer veränderten Sicherung ließ sich sonst über „Wiederherstellen“ eine beliebige Datei auf dem Server verschieben, etwa eine Systemdatei."
+
+[[entries]]
+kind = "sicherheit"
+text = "Braucht auf einem Server kein Modul root, richtet der Haken „Root-Rechte ohne Passwort“ beim Einrichten kein sudo mehr ein. Bisher gab es dann die volle sudo-Regel für alles. Wer sudo trotzdem will, wählt unter „Erweitert“ „Volle Rechte“. Eine früher so eingerichtete Regel bleibt auf dem Server; wie du sie löschst, steht in der Anleitung zum Einrichten."
+
+[[entries]]
+kind = "behoben"
+text = "„Verbindung prüfen“ warnt nicht mehr vor fehlendem sudo, wenn auf dem Server kein Modul root braucht."
+
+[[entries]]
+kind = "sicherheit"
+text = "Ein ausgeschalteter Job lässt sich auch über die Schnittstelle nicht mehr von Hand starten, egal aus welchem Modul er kommt und auch nicht mit der Rolle Operator. Das betrifft vor allem die automatischen Updates von Nodvard Shield: Sind sie ausgeschaltet, spielt Deck nichts ein. In der Oberfläche ändert sich nichts, ein Skript ohne Zeitplan startet weiter über seinen eigenen Knopf."

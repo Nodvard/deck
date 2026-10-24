@@ -42,16 +42,17 @@ def parse_compose_dirs(text: str) -> dict[str, str]:
     achten Feld). Nur Ordner auf dem Host: absolut, ohne Steuerzeichen und `..`, nicht von Portainer; je Projekt gilt
     der erste."""
     dirs: dict[str, str] = {}
-    for line in text.splitlines():
+    # Nur an `\n`: `splitlines` trennt auch an U+0085 oder U+2028 und schnitte einen Ordner mit so einem Zeichen ab.
+    for line in text.split("\n"):
         parts = line.split("|", 7)
         if len(parts) < 8:
             continue
         project, folder = parts[5].strip(), parts[7].strip()
         if not project or project in dirs or not folder.startswith("/") or folder.startswith(_PORTAINER_DIR_PREFIX):
             continue
-        if any(ord(ch) < 32 for ch in folder) or ".." in folder.split("/"):
+        if any(unicodedata.category(ch) == "Cc" for ch in folder) or ".." in folder.split("/"):
             continue
-        dirs[project] = folder if folder == "/" else folder.rstrip("/")
+        dirs[project] = folder.rstrip("/") or "/"
     return dirs
 
 

@@ -73,6 +73,11 @@ def _scan_error_text(exc: BaseException) -> str:
     return "unerwarteter Fehler (Einzelheiten im Protokoll des Dashboards)."
 
 
+INVALID_IMAGE = (
+    "Die Datei dieses Bildes liegt nicht dort, wo Nodvard Deck seine Dateien ablegt, oder hat einen Namen, den es nie "
+    "vergibt (etwa nach einer veränderten Sicherung). Sie wird deshalb nicht geöffnet. Löschen geht, die Datei selbst "
+    "bleibt dabei unberührt."
+)
 # Die Bilder kommen von Nutzern. Wird die Adresse direkt geöffnet, soll weder ein Skript laufen
 # noch der Browser den Typ erraten. Als <img> eingebettet ändert sich nichts.
 _UNTRUSTED_FILE_HEADERS = {
@@ -707,11 +712,12 @@ class Extension(NodvardExtension):
                 from .images import image_path
 
                 path = image_path(ctx.data_dir, row.filename)
+                if path is None:
+                    raise HTTPException(status_code=404, detail=INVALID_IMAGE)
                 if not path.is_file():
                     raise HTTPException(status_code=404, detail="Bilddatei fehlt auf der Platte.")
-                return Response(
-                    content=path.read_bytes(), media_type=row.content_type, headers=_UNTRUSTED_FILE_HEADERS,
-                )
+                media_type = row.content_type if row.content_type in ALLOWED_CONTENT_TYPES else "application/octet-stream"
+                return Response(content=path.read_bytes(), media_type=media_type, headers=_UNTRUSTED_FILE_HEADERS)
 
         @write_router.delete("/items/{item_id}/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
         async def delete_item_image(item_id: str, image_id: str) -> None:

@@ -22,8 +22,10 @@ from dataclasses import dataclass, field
 import asyncssh
 import pytest
 from nodvard_deck.core import rate_limit, ssh
+from nodvard_deck.ext.runtime import get_extension_runtime
 from nodvard_deck.models import AuditEntry, Base, Host, HostCredential, KnownHostKey
 from nodvard_deck.services import host_check, host_setup, one_time_password
+from nodvard_sdk import HostRequirementSpec
 from sqlalchemy import select, text
 
 PASSWORD = "Einmal-Pw-7f3e9c!"
@@ -226,7 +228,7 @@ async def setup_server():
         server.close()
         try:
             await asyncio.wait_for(server.wait_closed(), timeout=5.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
 
@@ -237,6 +239,7 @@ def _clean_state():
     yield
     host_check.reset_state()
     one_time_password.reset_state()
+    get_extension_runtime().ui.clear_extension("fake-a")
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +288,10 @@ async def _permission_token(client, db_session, username: str, *permissions: str
 
 
 async def _key_host(client, token, port: int, name="bastel-pi", address="127.0.0.1", username="nodvard"):
+    # Ohne ein Modul, das root braucht, richtet der Befehl kein sudo ein.
+    get_extension_runtime().ui.register_host_requirement("fake-a", HostRequirementSpec(
+        id="root", label="Root-Rechte", needs_root=True, root_reason="Updates einspielen",
+    ))
     r = await client.post("/api/v1/hosts", json={"name": name, "address": address}, headers=_auth(token))
     assert r.status_code == 201, r.text
     host = r.json()
@@ -428,6 +435,22 @@ async def test_only_helper_rules_unless_full_rights_are_asked_for(client, db_ses
     assert "NOPASSWD: ALL" not in narrow and "HS fake-a-root" in narrow
     assert "NOPASSWD: ALL" in full and "HS fake-a-root" in full
     assert [a.detail["full_sudo"] for a in await _audit(db_session)][1:] == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_without_a_module_that_needs_root_sets_up_no_sudo(client, db_session, setup_server):
+    port, state, server_fp = setup_server
+    token = await _bootstrap_owner(client)
+    host, gen = await _key_host(client, token, port)
+    get_extension_runtime().ui.clear_extension("fake-a")
+    await _pin(db_session, host["id"], server_fp)
+
+    r = await _setup(client, token, host, gen, sudo=True)
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True and any("kein sudo ein" in n for n in r.json()["notes"])
+    assert "sudoers" not in state.runs[0]["script"] and "NOPASSWD" not in state.runs[0]["script"]
+    [row] = await _audit(db_session)
+    assert (row.detail["sudo"], row.detail["full_sudo"]) == (False, False)
 
 
 @pytest.mark.asyncio

@@ -285,6 +285,12 @@ function formatSize(bytes) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
+var PREVIEW_KINDS = /* @__PURE__ */ new Map([
+  ["image/png", "image"],
+  ["image/jpeg", "image"],
+  ["image/webp", "image"],
+  ["application/pdf", "pdf"]
+]);
 function typeLabel(contentType) {
   if (contentType === "application/pdf") return "PDF";
   if (contentType.startsWith("image/")) return contentType.slice(6).toUpperCase();
@@ -464,6 +470,9 @@ function DocumentsPage() {
   const [showTags, setShowTags] = useState(false);
   const [expanded, setExpanded] = useState(null);
   const [preview, setPreview] = useState(null);
+  useEffect(() => () => {
+    if (preview) URL.revokeObjectURL(preview.url);
+  }, [preview]);
   const [copied, setCopied] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [attachTagId, setAttachTagId] = useState({});
@@ -579,14 +588,14 @@ function DocumentsPage() {
   }
   async function togglePreview(doc) {
     if (preview?.id === doc.id) {
-      URL.revokeObjectURL(preview.url);
       setPreview(null);
       return;
     }
+    const kind = PREVIEW_KINDS.get(doc.content_type);
+    if (!kind) return;
     const blob = await fetchBlob(doc);
     if (!blob) return;
-    if (preview) URL.revokeObjectURL(preview.url);
-    setPreview({ id: doc.id, url: URL.createObjectURL(blob), type: doc.content_type });
+    setPreview({ id: doc.id, url: URL.createObjectURL(blob.slice(0, blob.size, doc.content_type)), kind });
     setExpanded(doc.id);
   }
   async function renameDocument(doc) {
@@ -744,7 +753,7 @@ function DocumentsPage() {
                     ] })
                   ] }),
                   /* @__PURE__ */ jsxs3("div", { className: "flex w-full flex-wrap items-center gap-1 sm:w-auto sm:flex-none", children: [
-                    /* @__PURE__ */ jsxs3(Button, { small: true, onClick: () => void togglePreview(doc), pressed: preview?.id === doc.id, children: [
+                    PREVIEW_KINDS.has(doc.content_type) && /* @__PURE__ */ jsxs3(Button, { small: true, onClick: () => void togglePreview(doc), pressed: preview?.id === doc.id, children: [
                       /* @__PURE__ */ jsx3(Icon, { name: "eye", size: 13 }),
                       " ",
                       preview?.id === doc.id ? "Vorschau schlie\xDFen" : "Ansehen"
@@ -764,7 +773,10 @@ function DocumentsPage() {
                   ] })
                 ] }),
                 isExpanded && /* @__PURE__ */ jsxs3("div", { className: "ml-10 mt-3 space-y-3 rounded-lg border border-white/[0.06] bg-black/15 p-4 text-sm", children: [
-                  preview?.id === doc.id && /* @__PURE__ */ jsx3("div", { "data-testid": `preview-${doc.id}`, children: preview.type.startsWith("image/") ? /* @__PURE__ */ jsx3("img", { src: preview.url, alt: doc.original_filename, className: "max-h-[70vh] rounded-lg border border-white/10" }) : /* @__PURE__ */ jsx3("iframe", { src: preview.url, title: doc.original_filename, className: "h-[70vh] w-full rounded-lg border border-white/10 bg-[#fff]" }) }),
+                  preview?.id === doc.id && /* @__PURE__ */ jsx3("div", { "data-testid": `preview-${doc.id}`, children: preview.kind === "image" ? /* @__PURE__ */ jsx3("img", { src: preview.url, alt: doc.original_filename, className: "max-h-[70vh] rounded-lg border border-white/10" }) : (
+                    // Ohne `sandbox`: Hier landet nur ein Blob vom Typ application/pdf aus PREVIEW_KINDS, nie HTML oder SVG.
+                    /* @__PURE__ */ jsx3("iframe", { src: preview.url, title: doc.original_filename, className: "h-[70vh] w-full rounded-lg border border-white/10 bg-[#fff]" })
+                  ) }),
                   doc.ocr_error && /* @__PURE__ */ jsxs3("p", { className: "text-amber-300", children: [
                     "Texterkennung: ",
                     doc.ocr_error

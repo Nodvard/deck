@@ -313,7 +313,8 @@ Ziele, die der Rechner direkt erreicht (z. B. im eigenen Netz), gehen weiter.
 ohne Anhalten des Dienstes, automatisch nach Zeitplan, mit Rotation und Download. Anleitung in
 [docs/11-ERST-EINRICHTUNG.md §10.1](../docs/11-ERST-EINRICHTUNG.md#101-in-der-oberfläche-empfohlen).
 Für einen Ordner außerhalb des Datenvolumes die vorbereitete Zeile `- ./sicherungen:/backups` in
-der Compose-Datei (`compose.yml` bzw. `deploy/docker-compose.yml`) einkommentieren. Die Skripte
+der Compose-Datei (`compose.yml` bzw. `deploy/docker-compose.yml`) einkommentieren, für ein NAS oder NFS
+siehe [Sicherungen auf ein NAS oder NFS](../docs/11-ERST-EINRICHTUNG.md#sicherungen-auf-ein-nas-oder-nfs). Die Skripte
 unten bleiben und funktionieren wie bisher.
 
 **Wiederherstellen** geht ebenfalls in der Oberfläche (Einstellungen → System → Wiederherstellen) und im

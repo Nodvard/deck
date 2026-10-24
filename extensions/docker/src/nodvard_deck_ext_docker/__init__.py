@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +67,8 @@ from .operate import OperateContext, is_docker_host, is_operate_host
 from .operate import docker_hosts as operate_hosts
 from .operate import refused_text as operate_refused
 from .operate import tags as operate_tags
+
+log = logging.getLogger("nodvard_deck.ext.docker")
 
 
 class _TileUrlIn(BaseModel):
@@ -320,11 +323,12 @@ class Extension(NodvardExtension):
             result = await ctx.exec.run(host, commands.inspect_container(container), timeout_s=20)
             if result.exit_code != 0:
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=result.stderr.strip() or "docker inspect fehlgeschlagen")
+            # Auch eine Antwort in anderer Form, etwa ein Objekt statt einer Liste, ist ein Fehler auf dem Server; das Log zeigt, woran es lag.
             try:
-                raw = json.loads(result.stdout)[0]
-            except (ValueError, IndexError, TypeError) as exc:
+                return summarize_inspect(json.loads(result.stdout)[0])
+            except (ValueError, LookupError, TypeError, AttributeError) as exc:
+                log.warning("docker_inspect_unreadable host=%s container=%s", host.id, container, exc_info=True)
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unerwartete Antwort von docker inspect.") from exc
-            return summarize_inspect(raw)
 
         @logs_router.get("/hosts/{host_id}/docker")
         async def docker_storage(host_id: str) -> dict:

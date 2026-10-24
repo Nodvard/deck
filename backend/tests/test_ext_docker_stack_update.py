@@ -226,6 +226,7 @@ def test_reading_the_containers():
     assert found["web"].containers == ("shop-web-1", "shop-web-2") and found["web"].mixed and found["web"].running
     assert found["db"].containers == ("shop-db-1",) and not found["db"].mixed and not found["db"].running
     assert found["web"].up == ("shop-web-1",) and found["db"].up == ()
+    assert found["web"].refs == ("busybox:1.37",) and found["db"].refs == ("redis:7",)
     assert su.with_sharers({"web": "a:1", "worker": "a:1", "db": "b:1"}, ["web"]) == ["web", "worker"]
     assert su.with_sharers({"web": "a:1", "worker": "a:1"}, ["worker", "web"]) == ["worker", "web"]
 
