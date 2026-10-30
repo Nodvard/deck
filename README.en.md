@@ -26,6 +26,14 @@ first, so nothing happens on your machines by accident.
 > **Status:** Nodvard Deck is in active development (beta). It runs 24/7 in a real homelab,
 > but APIs and data formats may still change between versions.
 
+> **Language:** The web interface is currently in German only; an English interface is planned.
+
+## Deck or Dock?
+
+- **Nodvard Deck** is the whole dashboard with all modules: servers, Proxmox, Docker, backups, security and more.
+- **[Nodvard Dock](https://github.com/nodvard/dock)** is Nodvard Deck with only the Docker module: the same code, just
+  less of it. Pick Dock if all you want is to manage the containers and stacks on your servers.
+
 ## Features
 
 **Core**

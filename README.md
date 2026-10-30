@@ -10,7 +10,10 @@ Selbst gehostet · Erweiterbar · White-Label-fähig
 
 </div>
 
-> **English:** This README is also available in English – see [README.en.md](README.en.md).
+> **Sprache:** Die Oberfläche von Nodvard Deck gibt es derzeit nur auf Deutsch.
+>
+> **English:** This README is also available in English – see [README.en.md](README.en.md). The web interface is
+> currently in German only.
 
 ---
 
@@ -22,6 +25,12 @@ etwas verändert, läuft zuerst durch eine **Freigabe** – so passiert nichts v
 
 > **Stand:** Nodvard Deck ist in aktiver Entwicklung (Beta). Es läuft rund um die Uhr in einem
 > echten Homelab, Schnittstellen und Datenformate können sich aber noch ändern.
+
+## Deck oder Dock?
+
+- **Nodvard Deck** ist das ganze Dashboard mit allen Modulen: Server, Proxmox, Docker, Backups, Sicherheit und mehr.
+- **[Nodvard Dock](https://github.com/nodvard/dock)** ist Nodvard Deck mit nur dem Modul Docker: derselbe Code, nur
+  weniger drin. Nimm Dock, wenn du nur die Container und Stacks auf deinen Servern verwalten willst.
 
 ## Funktionen
 
