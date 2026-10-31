@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import socket
 import sys
 from pathlib import Path
 
@@ -378,20 +379,78 @@ async def test_rate_limit_is_explained():
         await client.summary()
 
 
+def _caused_by(exc: BaseException, cause: BaseException) -> BaseException:
+    exc.__cause__ = cause
+    return exc
+
+
+REFUSED = "Pi-hole ist nicht erreichbar (Verbindung abgelehnt oder kein Weg dorthin). Läuft Pi-hole"
+DNS = "Die Adresse von Pi-hole ließ sich nicht auflösen"
+BROKEN = "Pi-hole hat die Verbindung abgebrochen oder eine fehlerhafte Antwort geschickt"
+
+# Fehler, ihr Satz und die Art, die „Verbindung testen“ im Kern daraus macht.
+NETWORK_ERRORS = [
+    (httpx.ConnectError("[Errno 111] Connection refused"), REFUSED, "refused"),
+    (
+        _caused_by(
+            httpx.ConnectError("All connection attempts failed"), ConnectionRefusedError(111, "Connection refused"),
+        ),
+        REFUSED,
+        "refused",
+    ),
+    (httpx.ConnectError("[Errno 113] No route to host"), REFUSED, "refused"),
+    (ConnectionResetError(104, "Connection reset by peer"), BROKEN, "invalid_answer"),
+    (httpx.ReadError("[Errno 104] Connection reset by peer"), BROKEN, "invalid_answer"),
+    (socket.gaierror(-2, "Name or service not known"), DNS, "dns"),
+    (httpx.ConnectError("[Errno -3] Temporary failure in name resolution"), DNS, "dns"),
+    (httpx.ReadTimeout("timed out"), "Pi-hole antwortet nicht (Zeitüberschreitung)", "timeout"),
+    (httpx.ConnectTimeout(""), "Pi-hole antwortet nicht (Zeitüberschreitung)", "timeout"),
+    (
+        httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate"),
+        "Pi-hole: Das Zertifikat wurde nicht akzeptiert",
+        "tls",
+    ),
+    (
+        httpx.ConnectError("[SSL: WRONG_VERSION_NUMBER] wrong version number (_ssl.c:1000)"),
+        BROKEN,
+        "invalid_answer",
+    ),
+    (httpx.DecodingError("Error -3 while decompressing data: incorrect header check"), BROKEN, "invalid_answer"),
+    (
+        httpx.UnsupportedProtocol("Request URL has an unsupported protocol 'ftp://'."),
+        "Pi-hole: Die eingetragene Adresse ist ungültig",
+        "invalid_address",
+    ),
+    (
+        httpx.TooManyRedirects("Exceeded maximum allowed redirects."),
+        "Die Verbindung zu Pi-hole ist fehlgeschlagen",
+        "failed",
+    ),
+]
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("exc", "expected"), [
-    (httpx.ConnectError("[Errno 111] Connection refused"), "Pi-hole ist nicht erreichbar"),
-    (httpx.ReadTimeout("timed out"), "Zeitüberschreitung"),
-    (httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"), "Selbstsigniertes Zertifikat erlauben"),
-])
-async def test_network_errors_become_clean_unreachable(exc, expected):
+@pytest.mark.parametrize(("exc", "expected", "kind"), NETWORK_ERRORS)
+async def test_network_errors_get_a_german_sentence_without_the_library_text(exc, expected, kind):
     def boom(request: httpx.Request) -> httpx.Response:
         raise exc
 
     client, _, _ = _pihole(boom)
-    with pytest.raises(_client_mod().PiholeError, match=expected) as err:
+    with pytest.raises(_client_mod().PiholeError) as err:
         await client.summary()
+    message = str(err.value)
+    assert message.startswith(expected)
     assert err.value.state == "unreachable"
+    assert not (str(exc) and str(exc) in message)
+    assert "errno" not in message.lower() and "[ssl" not in message.lower()
+
+
+@pytest.mark.parametrize(("exc", "expected", "kind"), NETWORK_ERRORS)
+def test_connection_test_still_recognises_each_sentence(exc, expected, kind):
+    from nodvard_deck.services.extension_test import translate
+
+    describe = importlib.import_module("nodvard_deck_ext_pihole.transport").describe_transport_error
+    assert translate(describe(exc, "Pi-hole"), host="pihole.test").kind == kind
 
 
 @pytest.mark.asyncio

@@ -7,7 +7,7 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from nodvard_sdk import REQUEST_WAIT_S, Actor, ActionRequest, ActionResult, ActionSpec, DryRunReport, GateDecision, Notification, Risk, Severity
 from pydantic import BaseModel, Field
 
@@ -29,7 +29,7 @@ from .ids import (
     LOGGER,
     SOC_PATH,
 )
-from .patching import DEFAULT_UPDATE_CRONS, UpdateCenter, load_baselines, save_baseline
+from .patching import DEFAULT_UPDATE_CRONS, UpdateCenter, load_baseline, load_baselines, save_baseline
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
@@ -208,7 +208,7 @@ class ActionCommands:
         if row.status != "quarantined" or not row.quarantine_path:
             raise ValueError("Die Datei liegt nicht (mehr) in der Quarantäne.")
         if action_type == ACTION_RESTORE:
-            return av.restore_command(row.quarantine_path, row.path, row.original_mode)
+            return av.restore_command(row.quarantine_path)
         return av.delete_command(row.quarantine_path)
 
     async def helper_args(self, action_type: str, host: Any, payload: dict[str, Any]) -> list[str] | None:
@@ -226,7 +226,7 @@ class ActionCommands:
             if row is None or not row.quarantine_path:
                 return None
             if action_type == ACTION_RESTORE:
-                return av.restore_args(row.quarantine_path, row.path, row.original_mode)
+                return av.restore_args(row.quarantine_path)
             return av.delete_args(row.quarantine_path)
         return None
 
@@ -288,6 +288,9 @@ class DefenderExecutor:
             ACTION_DELETE: av.HELPER_QUARANTINE_VERSION,
         }.get(req.action_type, av.HELPER_ACTION_VERSION)
         wrapped = av.via_helper(args, command, version=version) if args else av.as_root(command)
+        if req.action_type == ACTION_BAN and not req.payload["unban"]:
+            # Der Server prüft selbst vor sudo: Deck kann seit dem Vorschlag über eine andere Adresse verbunden sein.
+            wrapped = ix.deck_address_guard(req.payload["ip"]) + wrapped
         result = await self._ctx.exec.run(host, wrapped, timeout_s=timeout)
         stdout = av.helper_text(result.stdout) if result.stdout is not None else None
         ok = result.exit_code == 0
@@ -297,13 +300,27 @@ class DefenderExecutor:
         if req.action_type == ACTION_REALTIME:
             # Auch nach einem Fehlschlag: clamd kann schon laufen, die gemerkte Eignung stimmt dann nicht mehr.
             self._defender.forget_readiness(host.id)
-        if av.NO_ROOT in (stdout or ""):
+        # Nur bei einem Fehlschlag: Seit `restore` den Ort ausgibt, kann der Marker auch in einem Dateinamen stehen.
+        if not ok and av.NO_ROOT in (stdout or ""):
             return ActionResult(success=False, exit_code=result.exit_code, error=av.no_root_message(stdout))
         if req.action_type == ACTION_REALTIME:
             return await self._finish_realtime(host.id, req.payload["enable"], result, stdout or "")
+        if req.action_type == ACTION_BAN and req.payload["unban"] and ix.was_not_banned(
+            result.exit_code, (stdout or "") + (result.stderr or ""),
+        ):
+            return ActionResult(success=True, exit_code=result.exit_code, output=stdout,
+                                detail={"note": ix.NOT_BANNED_NOTE}, duration_ms=result.duration_ms)
         if req.action_type in (ACTION_RESTORE, ACTION_DELETE):
             action = "restore" if req.action_type == ACTION_RESTORE else "delete"
-            await self._defender.apply_action_result(req.payload["finding_id"], action, ok, (stdout or "") + (result.stderr or ""))
+            # Aus der rohen Ausgabe: `helper_text` würde Zeilen eines Pfads mit Zeilenumbrüchen umschreiben.
+            restored_to = av.parse_restored_to(result.stdout or "") if ok and action == "restore" else None
+            await self._defender.apply_action_result(
+                req.payload["finding_id"], action, ok, (stdout or "") + (result.stderr or ""), restored_to=restored_to,
+            )
+            if restored_to is not None:
+                note = f"Zurückgelegt nach {restored_to}."
+                return ActionResult(success=True, exit_code=result.exit_code, output=note,
+                                    detail={"note": note, "restored_to": restored_to}, duration_ms=result.duration_ms)
         return ActionResult(
             success=ok, exit_code=result.exit_code, output=stdout, error=result.stderr or None, duration_ms=result.duration_ms,
         )
@@ -695,12 +712,54 @@ def build_routers(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ereignis unbekannt oder schon erledigt.")
         return {"ok": True}
 
+    def _browser_addresses(request: Request) -> list[str]:
+        """Die Adresse des Browsers; kamen Weiterleitungs-Kopfzeilen von einem nicht eingetragenen Proxy, auch die aus
+        `X-Forwarded-For` (die Gegenstelle ist dann nur der Proxy)."""
+        found = [request.client.host] if request.client else []
+        forwarding = request.scope.get("nodvard_deck.forwarding")
+        if forwarding is not None and not forwarding.trusted and forwarding.forwarded_headers:
+            found += ix.forwarded_hosts(request.headers.getlist("x-forwarded-for"))
+        return found
+
+    async def _refuse_lockout(host: Any, ip: str, jail: str, browsers: list[str]) -> None:
+        """409 statt eines Vorschlags, der jemanden aussperrt: unbekannter Jail, die Adresse des Browsers oder die,
+        über die Deck den Server erreicht."""
+        def refuse(detail: str) -> HTTPException:
+            return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+        if any(ix.same_address(browser, ip) for browser in browsers):
+            raise refuse(ix.BROWSER_SELF_REFUSED)
+        guard = await load_baseline(ctx, host.id, "guard") or {}
+        jails = guard.get("jails")
+        if not isinstance(jails, dict) or not jails:
+            raise refuse(ix.JAILS_NONE if guard.get("fail2ban") == "running" and jails == {} else ix.JAILS_UNKNOWN)
+        if jail not in jails:
+            # Die Namen kommen vom Server.
+            known = ", ".join(sorted(name for name in jails if ix.valid_jail(name)))
+            raise refuse(f"Den Jail „{jail}“ gibt es auf diesem Server nicht (laut letzter Prüfung: {known}).")
+        try:
+            seen = await ctx.exec.run(host, ix.DECK_ADDRESS_COMMAND, timeout_s=15)
+        except Exception:  # noqa: BLE001 - beim Ausführen prüft der Server selbst noch einmal
+            return
+        if not (seen.stdout or "").strip():
+            raise refuse(ix.DECK_ADDRESS_UNKNOWN)
+        if ix.is_deck_address(ip, seen.stdout or ""):
+            raise refuse(ix.DECK_SELF_REFUSED)
+
     @manage.post("/hosts/{host_id}/ban")
-    async def ban(host_id: str, payload: _BanIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
+    async def ban(
+        host_id: str, payload: _BanIn, request: Request, actor: Actor = Depends(ctx.api.current_actor),
+    ) -> dict:
         host = await ctx.hosts.get(host_id)
         if host is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Server.")
-        ip = payload.ip.strip()
+        try:
+            ip = ix.canonical_ip(payload.ip)
+            ix.ban_command(ip, payload.jail, unban=payload.unban)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        if not payload.unban:
+            await _refuse_lockout(host, ip, payload.jail, _browser_addresses(request))
         verb = "entsperren" if payload.unban else "sperren"
         return await _propose(host, ACTION_BAN, {"ip": ip, "jail": payload.jail, "unban": payload.unban},
                               f"{ip} auf {host.display_name or host.name} {verb} (Fail2ban)", actor, Risk.LOW)
@@ -867,8 +926,9 @@ def build_routers(
         if host is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Server nicht mehr bekannt.")
         if action == "restore":
-            return await _propose(host, ACTION_RESTORE, {"finding_id": finding_id},
-                                  f"Wiederherstellen: {f['path']} ({f['signature']})", actor, Risk.MEDIUM,
+            # Das Ziel steht nur in der Ablage auf dem Server; der Pfad aus der Datenbank ist nur der laut Fund.
+            reason = f"Wiederherstellen an den hinterlegten Ort (laut Fund: {f['path']}; {f['signature']})"
+            return await _propose(host, ACTION_RESTORE, {"finding_id": finding_id}, reason, actor, Risk.MEDIUM,
                                   error_status=status.HTTP_409_CONFLICT)
         return await _propose(host, ACTION_DELETE, {"finding_id": finding_id},
                               f"Endgültig löschen: {f['path']} ({f['signature']})", actor, Risk.MEDIUM,

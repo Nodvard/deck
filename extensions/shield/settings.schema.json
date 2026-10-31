@@ -230,7 +230,7 @@
         "type": "string"
       },
       "title": "Überwachte Dateien",
-      "description": "Leer lassen = Standardliste. Platzhalter wie /home/*/.ssh/authorized_keys sind erlaubt.",
+      "description": "Leer lassen = Standardliste. Platzhalter wie /home/*/.ssh/authorized_keys sind erlaubt. Diese Dateien liest root nur, um die Prüfsumme zu bilden. Ans Dashboard gehen Prüfsumme, Rechte, Besitzer, Änderungszeit und Größe, nie der Inhalt.",
       "x-advanced": true
     },
     "guard_dynamic_processes": {

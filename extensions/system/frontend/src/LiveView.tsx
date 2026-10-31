@@ -170,7 +170,7 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
       </button>
       <span className="opacity-50">
         {paused ? "angehalten" : "aktualisiert alle 3 s"}
-        {updatedAt ? ` · Stand ${updatedAt.toLocaleTimeString()}` : ""}
+        {updatedAt ? ` · Stand ${updatedAt.toLocaleTimeString("de-DE")}` : ""}
       </span>
       {error && <span className="text-red-400">Fehler: {error}</span>}
     </div>

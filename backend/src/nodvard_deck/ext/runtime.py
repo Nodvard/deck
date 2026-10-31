@@ -16,6 +16,7 @@ from nodvard_sdk import ExtensionManifest, HostRequirementSpec, HostToolSpec, Pa
 from nodvard_sdk.actions import ActionSpec
 from starlette.routing import BaseRoute
 
+from ..core import known_actors
 from .root_helpers import RootHelperFile
 
 logger = logging.getLogger("nodvard_deck.ext")
@@ -185,6 +186,8 @@ class SupervisedTask:
         return self.target()  # type: ignore[operator]
 
     async def _run(self) -> None:
+        # Angelegt in einer Anfrage (etwa beim Einschalten), erbte der Task sonst deren Nutzer für immer.
+        known_actors.forget()
         while True:
             try:
                 await self._new_coro()
@@ -251,6 +254,10 @@ class ExtensionRuntime:
         """Kennung -> Grund, warum die Erweiterung wegen einer alten Kennung nicht geladen wird."""
         self.refused_old: dict[str, str] = {}
         """Alte Kennung -> Grund, warum ihre neue Version nicht geladen wird."""
+        self.awaiting_consent: dict[tuple[str, str], Any] = {}
+        """(Kennung, frühere Kennung) -> Fund der Erweiterung, deren Übernahme erst ein Admin erlauben muss."""
+        self.takeovers_allowed: dict[tuple[str, str], Any] = {}
+        """Wie `awaiting_consent`, aber schon erlaubt; gilt ab dem nächsten Start."""
 
     def canonical(self, ext_id: str) -> str:
         """Die heutige Kennung zu `ext_id` (eine alte wird aufgelöst, alles andere bleibt)."""

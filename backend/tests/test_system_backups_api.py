@@ -508,6 +508,70 @@ async def test_failed_backup_is_reported_and_notified(client, env):
     assert failed and failed[0]["outcome"] == "failure"
 
 
+async def _failed_run_without_write_access(client, env, monkeypatch) -> tuple[dict, Path]:
+    owner = await _owner(client)
+    await _set_key(client, owner)
+    nas = env["external"] / "nas"
+    r = await client.put("/api/v1/system/backups/config", json={"current_password": OWNER_PW, "enabled": False, "schedule": "0 3 * * *", "keep": 2, "dir": str(nas)}, headers=owner)
+    assert r.status_code == 200
+    real_access = store.os.access
+    monkeypatch.setattr(store.os, "access", lambda path, mode: str(path) != str(nas) and real_access(path, mode))
+    monkeypatch.setattr(store.os, "getuid", lambda: 4242, raising=False)
+    monkeypatch.setattr(store.os, "getgid", lambda: 1000, raising=False)
+    await _run(client, owner)
+    return owner, nas
+
+
+@pytest.mark.asyncio
+async def test_protocol_and_notification_only_get_the_short_reason(client, env, monkeypatch):
+    owner, nas = await _failed_run_without_write_access(client, env, monkeypatch)
+
+    short = f"In {nas} darf Nodvard Deck nicht schreiben."
+    overview = await _overview(client, owner)
+    assert overview["last_run"]["error"].startswith(f"{short} Es läuft als Benutzer 4242")
+    assert overview["target"]["error"].startswith(f"{short} Es läuft als Benutzer 4242")
+    assert "sudo chown 4242:1000" in overview["target"]["error"]
+    notes = (await client.get("/api/v1/notifications", headers=owner)).json()
+    assert [n["body"] for n in notes if n["title"] == "Sicherung fehlgeschlagen"] == [
+        f"{short} {backups_service.SEE_BACKUP_CARD}"
+    ]
+    failed = (await client.get("/api/v1/audit?action=system.backup.failed", headers=owner)).json()
+    assert [e["reason"] for e in failed] == [short]
+
+
+@pytest.mark.asyncio
+async def test_job_run_shows_viewers_only_the_short_reason(client, env, monkeypatch, caplog):
+    from nodvard_deck.core.ws_hub import get_ws_hub
+    from nodvard_deck.services import jobs as jobs_service
+
+    events: list[tuple[str, dict]] = []
+    hub = get_ws_hub()
+    real_publish = hub.publish
+
+    async def spy(channel, payload, **kwargs):
+        events.append((channel, payload))
+        await real_publish(channel, payload, **kwargs)
+
+    monkeypatch.setattr(hub, "publish", spy)
+    caplog.set_level(logging.WARNING)
+    owner, nas = await _failed_run_without_write_access(client, env, monkeypatch)
+    viewer = await _user_with_role(client, env["sessionmaker"], "viewer", "viewer1")
+    async with env["sessionmaker"]() as session:
+        job = await jobs_service.get_job_by_key(session, ext_id=None, ext_job_key="system-backup")
+
+    short = f"In {nas} darf Nodvard Deck nicht schreiben. {backups_service.SEE_BACKUP_CARD}"
+    runs = (await client.get(f"/api/v1/jobs/{job.id}/runs", headers=viewer)).json()
+    assert [(r["status"], r["error"]) for r in runs] == [("failed", short)]
+    output = (await client.get(f"/api/v1/runs/{runs[0]['id']}/output", headers=viewer)).json()["output"]
+    assert short in output
+    published = [p for channel, p in events if channel == f"runs.{runs[0]['id']}" and p.get("error")]
+    assert [p["error"] for p in published] == [short]
+    assert "job_run_failed" in caplog.text
+    for text in (output, caplog.text):
+        assert "Benutzer 4242" not in text and "4242:1000" not in text and "chown" not in text
+    assert "sudo chown 4242:1000" in (await _overview(client, owner))["last_run"]["error"]
+
+
 # ---------------------------------------------------------------------------
 # Download und Tickets
 # ---------------------------------------------------------------------------

@@ -16,9 +16,13 @@ name: nodvard-deck
 
 services:
   nodvard-deck:
+    # Lieber nicht automatisch auf die naechste Reihe? Statt "latest" ghcr.io/nodvard/deck:X.Y eintragen (die ersten
+    # beiden Zahlen deiner Version): Dann kommen nur noch Fehler- und Sicherheitskorrekturen dieser Reihe. Eine genaue
+    # Version (X.Y.Z) bleibt, bis du sie hier aenderst; dann gibt es kein Update per Knopf.
     image: ghcr.io/nodvard/deck:latest
     restart: unless-stopped
     ports:
+      # Der alte Name LATTICE_PORT gilt nur noch übergangsweise (spätestens bis 1.0).
       - "${NODVARD_DECK_PORT:-${LATTICE_PORT:-8080}}:8080"
     volumes:
       # Alle Daten (Datenbank, Schluessel, Dokumente). Ein benannter Datenspeicher braucht keine

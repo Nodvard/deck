@@ -196,7 +196,7 @@ describe("AppShell: Version und Änderungsprotokoll", () => {
 
 describe("AppShell: Zeitzone des Dashboards", () => {
   beforeEach(() => {
-    window.__lattice ??= {} as Window["__lattice"];
+    window.__nodvardDeck ??= {} as Window["__nodvardDeck"];
     setDeckTimezone(null);
   });
   afterEach(() => {

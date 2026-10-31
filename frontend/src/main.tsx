@@ -9,7 +9,6 @@ import { clearQueriesOnAccountChange } from "./lib/accountCache";
 import { installChunkReload } from "./lib/chunkLoad";
 import { installDeckGlobal } from "./lib/deckGlobal";
 import { refreshAccessToken, refreshAccessTokenResult } from "./lib/extensionToken";
-import { migrateLegacyStorage } from "./lib/legacyStorage";
 import { loadCustomCss } from "./lib/customCss";
 import { applyTheme, storedTheme } from "./lib/theme";
 import { router } from "./routes/router";
@@ -18,24 +17,19 @@ import { useBrandingStore } from "./state/branding";
 import { confirmDialog, confirmIdentity, promptDialog } from "./state/dialogs";
 import "./styles/index.css";
 
-// Gemerkte Einstellungen dieses Browsers unter ihren neuen Namen uebernehmen, BEVOR irgendetwas
-// rendert und sie liest (lib/legacyStorage.ts). Wirft nie.
-migrateLegacyStorage();
 // Vor dem ersten Rendern, damit die Seite nicht kurz im falschen Theme aufblitzt.
 applyTheme(storedTheme());
 loadCustomCss();
 
 // Import-Map-Shim (docs/02-EXTENSION-API.md §5): EINE React-Instanz fuer das
 // Kern-Bundle UND jedes per `import()` nachgeladene Extension-Bundle -- die Shims
-// unter public/lattice-shim/*.js lesen genau diese Felder (siehe dort). React 18
+// unter public/nodvard-deck-shim/*.js lesen genau diese Felder (siehe dort). React 18
 // trennt "react-dom" (createPortal, flushSync, …) und "react-dom/client"
 // (createRoot) in zwei Pakete -- zu EINEM Namespace zusammengefuehrt, damit ein
 // einziger `react-dom.js`-Shim beide bedienen kann.
 const mergedReactDom = { ...ReactDOM, ...ReactDOMClient };
 
-// Window.__nodvardDeck (alt: Window.__lattice) ist in ./global.d.ts deklariert (geteilt mit
-// extensions/tsconfig.json, siehe dort). Beide Namen zeigen auf DASSELBE Objekt
-// (lib/deckGlobal.ts): neue Bundles lesen `__nodvardDeck ?? __lattice`, aeltere nur `__lattice`.
+// Window.__nodvardDeck ist in ./global.d.ts deklariert (geteilt mit extensions/tsconfig.json, siehe dort).
 installDeckGlobal({
   React,
   ReactDOM: mergedReactDom,

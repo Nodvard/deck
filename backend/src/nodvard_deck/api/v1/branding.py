@@ -1,23 +1,6 @@
-"""Branding aendern -- docs/04-API.md §... (`PUT /branding`), docs/01-ARCHITECTURE.md §6.
-
-Getrennt von `public.router` (dort liegen nur `GET /branding`, `GET /branding/logo` und `GET /branding/favicon`,
-bewusst ohne Authentifizierung, weil die Login-Seite es braucht): Schreiben ist eine
-administrative Handlung und braucht eine eigene Berechtigung, `branding.write` --
-NICHT `settings.write`, `branding.py`s eigener Modul-Docstring und
-`api/v1/settings.py`s Gap-Fill-Begruendung nennen das ausdruecklich als eigenen,
-bewusst nicht mitgebauten Endpunkt. WP-13 baut ihn jetzt, weil der
-Erstinbetriebnahme-Assistent ihn braucht (Schritt 2: Produktname/Farben setzen).
-
-`POST /branding/logo`: war lange
-bewusst nicht Teil des Umfangs ("logo_url nimmt bereits eine beliebige URL entgegen") --
-jetzt gebaut, weil eine gehostete Logo-URL in der Praxis eine Huerde ist, die die
-meisten Installationen nicht selbst loesen koennen/wollen.
-
-`POST /branding/favicon` und die Regel fuer `logo_url`/`favicon_url` in `PUT /branding`: Die Seite soll Bilder nur
-noch von diesem Server laden (`img-src 'self' data: blob:`, vorerst als `main.SPA_CSP_REPORT_ONLY` nur gemeldet). Neue
-Werte muessen deshalb ein eigener Pfad oder `data:image/…` sein; ein schon gespeicherter fremder Wert bleibt gespeichert,
-bis jemand ihn ersetzt.
-"""
+"""Branding ändern (`PUT /branding`, Logo und Favicon hochladen), mit eigener Berechtigung `branding.write`; gelesen
+wird ohne Anmeldung über `public.router`. Logo und Favicon sind nur ein eigener Pfad oder `data:image/…`, weil die
+App-Seite Bilder nur von dort lädt (`img-src` in `main.SPA_CSP`); ein früher gespeicherter fremder Wert lädt nicht."""
 
 from __future__ import annotations
 

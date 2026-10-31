@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import updates
+
 # ---------------------------------------------------------------------------
 # Protokoll (gleich dem Helfer)
 # ---------------------------------------------------------------------------
@@ -31,7 +33,9 @@ from typing import Any
 PROTOCOL = 1
 """Version von `status.json` (Feld `proto`)."""
 REQUEST_VERSION = 1
-"""Version der Anforderung (Feld `v`), die dieses Dashboard schreibt."""
+"""Version der Anforderung (Feld `v`) ohne Freigabe; der Rückweg bleibt immer dabei."""
+SIGNED_REQUEST_VERSION = 2
+"""Ein Update mit Freigabe und Signatur; nur an einen Helfer, der `2` in `request_versions` nennt."""
 
 STATUS_NAME = "status.json"
 REQUESTS_DIR = "requests"
@@ -58,6 +62,9 @@ STEPS = (
     "committed",
 )
 REQUEST_KEYS = ("action", "created_at", "id", "v", "version")
+SIGNED_REQUEST_KEYS = ("action", "created_at", "digest", "grant", "id", "sig", "v", "version")
+REQUEST_OPTIONS = ("digest",)
+"""Zusätzliche Felder, die dieses Dashboard schreibt, wenn der Helfer sie im Status nennt (`request_options`)."""
 
 CODE_RE = re.compile(r"[a-z_]{1,40}", re.ASCII)
 """Gründe und Codes des Helfers. Unbekannte, aber passende Codes werden angenommen (ein neuerer Helfer darf neue
@@ -66,6 +73,7 @@ _NUM = r"(0|[1-9][0-9]{0,8})"
 VERSION_RE = re.compile(rf"{_NUM}\.{_NUM}\.{_NUM}", re.ASCII)
 """Fertige Version `X.Y.Z`: nur ASCII-Ziffern, ohne führende Nullen, je Teil höchstens 9 Stellen."""
 MINOR_TAG_RE = re.compile(rf"{_NUM}\.{_NUM}", re.ASCII)
+DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}", re.ASCII)
 UUID4_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", re.ASCII)
 REQUEST_NAME_RE = re.compile(rf"({UUID4_RE.pattern})\.json", re.ASCII)
 TMP_NAME_RE = re.compile(rf"\.(?:{UUID4_RE.pattern})\.tmp", re.ASCII)
@@ -268,10 +276,13 @@ def clean_status(raw: object) -> dict[str, Any]:
             raise _Invalid()
     results = [r for r in (_clean_result(entry) for entry in results_raw) if r is not None]
     seq = raw.get("seq")
+    # Fehlt bei Helfern, die nur die fünf Felder kennen; dann schreibt das Dashboard auch nur die.
+    options = raw.get("request_options")
     return {
         "proto": PROTOCOL,
         "helper_version": raw["helper_version"] if is_version(raw.get("helper_version")) else None,
         "request_versions": sorted(set(versions)),
+        "request_options": sorted({o for o in options if o in REQUEST_OPTIONS}) if isinstance(options, list) else [],
         "seq": seq if _int(seq) else None,
         "heartbeat_at": raw["heartbeat_at"],
         "state": raw["state"],
@@ -420,11 +431,23 @@ def pending_requests(updater_dir: Path, *, expected_uid: int | None = None) -> l
 # ---------------------------------------------------------------------------
 
 
-def encode_request(*, request_id: str, action: str, version: str, created_at: int) -> bytes:
-    """Die Anforderung als kompaktes ASCII-JSON (genau die fünf Schlüssel)."""
+def encode_request(*, request_id: str, action: str, version: str, created_at: int, digest: str | None = None,
+                   grant: dict[str, Any] | None = None) -> bytes:
+    """Die Anforderung als kompaktes ASCII-JSON: die fünf Schlüssel, bei einem Update auf Wunsch dazu `digest`, mit
+    einer Freigabe (`{"grant": ..., "sig": ...}` aus der Update-Suche) als `v: 2`."""
     if not is_request_id(request_id) or action not in ACTIONS or not is_version(version) or not _int(created_at):
         raise ValueError("ungueltige Anforderung")
-    body = {"v": REQUEST_VERSION, "id": request_id, "action": action, "version": version, "created_at": created_at}
+    if digest is not None and (action != "update" or not isinstance(digest, str) or not DIGEST_RE.fullmatch(digest)):
+        raise ValueError("ungueltiger Digest")
+    body: dict[str, Any] = {"v": REQUEST_VERSION, "id": request_id, "action": action, "version": version,
+                            "created_at": created_at}
+    if digest is not None:
+        body["digest"] = digest
+    if grant is not None:
+        if action != "update" or not updates.grant_fits(grant.get("grant"), grant.get("sig"), version=version,
+                                                         digest=digest):
+            raise ValueError("Freigabe passt nicht")
+        body.update(v=SIGNED_REQUEST_VERSION, grant=grant["grant"], sig=grant["sig"])
     data = json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
     if len(data) > REQUEST_MAX_BYTES:
         raise ValueError("Anforderung zu gross")
@@ -439,6 +462,8 @@ def write_request(
     now: float | None = None,
     request_id: str | None = None,
     expected_uid: int | None = None,
+    digest: str | None = None,
+    grant: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Schreibt eine Anforderung atomar mit Modus 0644 und gibt sie zurück; nur Owner-Code ruft das auf.
 
@@ -447,7 +472,8 @@ def write_request(
         raise ChannelError(MISSING)
     request_id = request_id or str(uuid.uuid4())
     created_at = int(time.time() if now is None else now)
-    data = encode_request(request_id=request_id, action=action, version=version, created_at=created_at)
+    data = encode_request(request_id=request_id, action=action, version=version, created_at=created_at, digest=digest,
+                          grant=grant)
     uid = _expected_uid(expected_uid)
     root_fd = _open_root(Path(updater_dir), uid)
     try:
@@ -489,4 +515,4 @@ def write_request(
         raise ChannelError(UNSAFE) from exc
     finally:
         os.close(dfd)
-    return {"v": REQUEST_VERSION, "id": request_id, "action": action, "version": version, "created_at": created_at}
+    return json.loads(data)

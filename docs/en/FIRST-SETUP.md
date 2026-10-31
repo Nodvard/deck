@@ -618,8 +618,9 @@ nothing is sent to an external service) plus the key as text in case scanning do
 six-digit code from the app and press "Confirm" („Bestätigen“). The **recovery codes** („Wiederherstellungs-Codes“;
 the interface also calls them „Rettungscodes“, see [2.1](#21-two-factor-login-and-recovery-codes)) are then shown
 **exactly once**: copy them or save them as a text file, then press "I have saved the codes" („Ich habe die Codes
-gesichert“). "Skip" sets nothing up; you can do it later under Settings → My account
-(„Einstellungen → Mein Konto“).
+gesichert“). "Set up later" („Später einrichten“) is there at the choice, at the password prompt and next to
+"Confirm", sets nothing up and goes on to step 5; you can do it later under Settings → My account
+(„Einstellungen → Mein Konto“). "Back" („Zurück“) within the step returns to the choice.
 
 **Step 5 of 6 — Appearance (optional)** („Aussehen“)
 
@@ -752,8 +753,9 @@ start for almost any home network: Terminal, Server status, Nodvard Shield and P
 Docker runs on a server, and Game servers if a game server runs there. **You only need Proxmox VE and Proxmox-Backups if
 you use Proxmox** – otherwise leave them off (see [4.1](#41-without-proxmox)). The rest as needed.
 
-**"Beta":** Game servers, Network, Pi-hole, Nginx Proxy Manager and Uptime Kuma carry a "Beta" badge (in the settings, in the wizard, in the menu and above the
-module's page). They work, but are not yet as thoroughly tested as the rest. Feedback helps.
+**"Beta":** Game servers, Home Assistant, Jellyfin, Network, Nginx Proxy Manager, Pi-hole, Plex, qBittorrent, Synology DSM,
+Uptime Kuma and Vaultwarden carry a "Beta" badge (in the settings, in the wizard, in the menu and above the module's
+page). They work, but are not yet as thoroughly tested as the rest. Feedback helps.
 
 **Address check (Nginx Proxy Manager):** On the "Nginx Proxy Manager" page each proxy host shows which Docker container
 it leads to and whether it runs, e.g. „Führt zum Container immich_server auf docker – der ist gestoppt.“ (leads to the
@@ -831,14 +833,17 @@ real devices helps.
 - **Hyper Backup:** Each task shows its result, last and next run, in the Synology's local time. Overdue means: a
   scheduled run has been missing for more than six hours, or there has been no successful run for two intervals between
   runs plus six hours (54 hours for a daily backup). This is measured with the Synology's clock; if DSM does not provide
-  it, 14 extra hours allow for a different time zone. A backup that is running is not overdue. If Hyper Backup is not
-  installed, a quiet hint says so and the rest of the page stays. Nodvard Deck reads up to 64 tasks; if Hyper Backup has
-  more, the page says so. Hyper Backup gets 25 seconds for the list and the states together, counted from the start of the
-  query. If the list does not arrive in time, Hyper Backup shows „Hyper Backup hat nicht rechtzeitig geantwortet“ (did
-  not answer in time); if not all states arrive, the remaining tasks show „Stand unbekannt“ (state unknown), with
-  neither a message nor an all-clear. In both cases the rest of the page stays. Not yet confirmed on real
-  devices (beta): that DSM reports a task that is not backing up with the state `status: none`. If a task keeps
-  showing „Läuft gerade“ (running) although nothing runs, please let us know.
+  it, 14 extra hours allow for a different time zone. A backup or integrity check that is running is not overdue; during
+  the check the page shows „Integritätsprüfung läuft“ (integrity check running), but a failed last run stays visible. If
+  Hyper Backup is not installed, a quiet hint says so and the rest of the page stays. Nodvard Deck reads up to 64 tasks;
+  if Hyper Backup has more, the page says so. Hyper Backup gets 25 seconds for the list and the states together, counted
+  from the start of the query. If the list does not arrive in time, Hyper Backup shows „Hyper Backup hat nicht
+  rechtzeitig geantwortet“ (did not answer in time); if not all states arrive, the remaining tasks show „Stand
+  unbekannt“ (state unknown), with neither a message nor an all-clear. In both cases the rest of the page stays. Not yet
+  confirmed on real devices (beta): that DSM reports a task that is not backing up with the state `status: none`. If a
+  task keeps showing „Läuft gerade“ (running) although nothing runs, please let us know. Likewise, that the state
+  `error_detect` is the running integrity check comes from a user report, not from a description by Synology; if a task
+  shows „Integritätsprüfung läuft“ for days, please let us know as well.
 
 **Credentials belong to their address.** In an extension's settings, first enter the address and click "Save"
 („Speichern“), then store the token or password in the "Connection" card („Verbindung“) – Nodvard Deck does not
@@ -1067,14 +1072,15 @@ management), paste it, press Enter. It
 - optionally sets up **root rights without a password** and the **docker group** (see
   [6.](#6-root-rights-without-a-password-and-the-docker-group)).
 
-Under "What does the command do?" („Was macht der Befehl?“) the same sequence is shown in readable form, line by
-line. The command runs directly as root, otherwise via `sudo` – so it works on Proxmox (no sudo) as well as on
-Debian or the Pi. It can safely be run several times: it recognizes a key that is already there, even with the older
-comment `lattice@…`, and does not add it twice. If the key is in the file without restrictions (for example added by
-hand), the command puts `restrict,pty` or the options for Dropbear in front of it and reports „Der schon eingetragene
-Schlüssel für Nodvard Deck ist jetzt eingeschränkt …“ (the key already there is now restricted). Lines with options of
-their own, such as `from="…"`, stay as they are. To check what it wrote, it needs `cmp` (package diffutils); if that
-is missing, it changes nothing and names the fix.
+Under "What does the command do?" („Was macht der Befehl?“) the same sequence is shown in readable form, line by line.
+The command runs directly as root, otherwise via `sudo` – so it works on Proxmox (no sudo) as well as on Debian or the
+Pi. It can safely be run several times: it recognizes a key that is already there, even with the older comment
+`lattice@…`, and does not add it twice. A commented-out line (`# …`) does not count: if you locked Nodvard Deck out
+that way, setting it up again adds a valid line, and the commented one stays. If the key is in the file without
+restrictions (for example added by hand), the command puts `restrict,pty` or the options for Dropbear in front of it
+and reports „Der schon eingetragene Schlüssel für Nodvard Deck ist jetzt eingeschränkt …“ (the key already there is
+now restricted). Lines with options of their own, such as `from="…"`, stay as they are. To check what it wrote, it
+needs `cmp` (package diffutils); if that is missing, it changes nothing and names the fix.
 
 If you set up a server with Dropbear with an older version and "Check connection" („Verbindung prüfen“) reports that
 the server did not accept the key („Der Server hat den Schlüssel nicht akzeptiert“), simply set it up again (with a
@@ -1225,8 +1231,17 @@ a password (Nodvard Deck then runs the same command).
     "Deine wichtigsten Baustellen" lists at most five findings with the biggest effect on the servers shown. The logs
     are kept on the server under `/var/lib/nodvard-shield-audit/`. Scans and the
     real-time guard never run at the same time on a server; for this lock Shield creates a small folder there:
-    `/run/nodvard-shield` (as root) or `~/.nodvard-shield`. A finding that you ignored or restored is not moved to
-    quarantine again by the next scan (unless ClamAV reports the same file with a different signature). To undo
+    `/run/nodvard-shield` (as root) or `~/.nodvard-shield`. A file only goes into quarantine if ClamAV itself reports
+    it again while it is moved, first where it is and then in a check folder only root can write to; this applies with
+    and without the helper script. If ClamAV is missing or does not answer, the file stays where it is. A restore only
+    puts the file back where Shield recorded it on the server when moving it, with the permissions it had (special ones
+    such as `4755` or `044` included), again with and without the helper script. The question and the approval
+    therefore name the path from the finding only "according to the finding" („laut Fund“); after the restore Shield
+    names the place the file really went to, and if it differs from the finding, that is noted at the finding too. If
+    the record is missing or invalid (for example for a file that went into quarantine with Nodvard Deck 0.8 or older),
+    the file stays there, and you put it back or delete it on the server by hand. A finding that
+    you ignored or restored is not moved to quarantine again by the next scan (unless ClamAV reports the same file
+    with a different signature). To undo
     this, open "Findings & quarantine" („Funde & Quarantäne“), choose the filter "All, including done" („Alle, inkl.
     erledigt“) and click "Watch again" („Wieder beachten“): the finding is open again and the next scan reports the
     file again.
@@ -1247,6 +1262,17 @@ a password (Nodvard Deck then runs the same command).
   - **Intrusion protection and file watcher:** SSH log, Fail2ban status, processes behind open ports, SSH settings,
     checksums of files such as `/etc/shadow`. Only limited without root – Nodvard Deck says so, instead of falsely
     giving the all-clear. Blocking/unblocking IP addresses via Fail2ban works only with root.
+    While Fail2ban runs, every server lists the banned IPs under "Banned addresses" („Gesperrte Adressen“), sorted by
+    jail (the protection rule for one service, such as `sshd` for SSH), with "Unban" („Entsperren“) next to each
+    address. From 20 addresses on there is a search; at most 200 are shown at once. Below it you ban a single address
+    by hand, in the jail `sshd` or another one the server has; Shield knows which ones only after checking the server.
+    A ban usually ends on its own after the jail's ban time. Shield does not ban addresses that belong to no other
+    machine (such as `127.0.0.1`), the address of your browser (behind a reverse proxy reliably only once it is listed
+    under "Trusted proxy", „Vertrauenswürdiger Proxy“; otherwise Shield also compares what the proxy wrote into
+    `X-Forwarded-For`), nor the address Nodvard Deck uses to reach the server; otherwise you would lock yourself out. The server checks the last
+    one itself as well before it bans (from `SSH_CLIENT` or `SSH_CONNECTION`); if it cannot tell, it bans nothing. If
+    the server has no jail for SSH, Shield offers no "Ban" („Sperren“) for attackers. If an address was already free
+    when you unban it, Shield says so instead of reporting an error.
     Intrusion protection reports each new open port on its own ("New open port", „Neuer offener Port“). Programs that
     pick random ports on every start or for every request (NFS, Tailscale, Pi-hole and other DNS services) count as one
     entry. For a program with a port range of its own, such as a game server, enter the program, protocol and range
@@ -1278,31 +1304,57 @@ Terminal, Files and Scripts.
   updates, quarantine, restarting services). Under "Was macht der Befehl?" (what does the command do?) you can read
   every script. First the command checks that the scripts can be set up safely: `sudo`, `base64`, `sha256sum` and
   `stat` must be present, every folder above `/usr/local/lib/nodvard-deck` must be a real folder owned by root that
-  nobody but root and the root group may write to: no other group, and no user or group through an ACL. If
-  `/usr/local/lib/nodvard-deck` already exists, the same applies to it (otherwise the command creates it). If the root
-  group may write to one of these folders, the user must not be in it, not even through the command (for a new user,
-  for example, through the default group of `useradd`). The command checks
-  ACLs with `getfacl`; if it is missing (package `acl`) and an ACL could be involved, the folder counts as unsafe. If
-  that fails, it changes **nothing**, names the folder, the reason and the fix (such as `chmod go-w /usr/local/lib` or
-  `mkdir -p /usr/local/lib`) and ends with an error; "Mit Passwort einrichten" (set up with password) shows the same
+  nobody but root may write to: no group, not even the root group, and nobody else. An ACL can only grant writing if
+  the group bits allow it (they are then the mask), so looking at them is enough. If `/usr/local/lib/nodvard-deck`
+  already exists, the same applies to it (otherwise the command creates it). If that fails, it changes **nothing**,
+  names the folder, the reason and the fix (such as `chmod g-w /usr/local/lib` or `mkdir -p /usr/local/lib`) and ends
+  with an error; "Mit Passwort einrichten" (set up with password) shows the same
   lines. Older Debian lets the group staff write to `/usr/local` and `/usr/local/lib`; there, as root,
   `chmod g-w /usr/local /usr/local/lib` helps. Fix the reason or, unless sudo is missing, choose "Volle
-  Rechte" and set up again.
+  Rechte" and set up again. "Volle Rechte" does not help Docker in the "operate only" mode: it works only through its
+  helper script, and the command says so.
 - **Full rights:** If a module needs root and has no helper script, or if you tick "Volle Rechte" (full rights) under
   "Erweitert" (advanced), the full rule is added. You only need that tick box if you start your own commands with sudo
   through Nodvard Deck, for example in scripts.
 - **No module needs root:** Then the tick box sets up no sudo at all, not even the full rule. The page says so below the
   tick box. If you still want sudo, for example for your own commands in scripts, tick "Volle Rechte" under "Erweitert".
 
-The command never takes back a full rule that is already there: a server that has one keeps running as before, even if
-you run the command there again. To get rid of it, run the command once more first and press "Verbindung prüfen". If
-every helper script shows "Eigene sudo-Regel vorhanden" (own sudo rule present), delete the full rule on the server
-(`sudo rm /etc/sudoers.d/nodvard-<user>`, on older servers `lattice-<user>`) and check again: "Root-Rechte" then says
-"sudo erlaubt nur die Hilfsskripte der Module, keine volle Regel. Das reicht." (sudo allows only the modules' helper
-scripts, no full rule; that is enough). If no module needs root on the server at all, you can delete the full rule
-right away, unless you need sudo for your own commands through Nodvard Deck. "Verbindung prüfen" then shows under
-"Root-Rechte": "Kein eingeschaltetes Modul braucht hier root, sudo ohne Passwort ist nicht nötig." (no enabled module
-needs root here, sudo without a password is not needed).
+The command only takes back a full rule that is already there if you explicitly ask for it: a server that has one
+keeps running as before, even if you run the command there again. To get rid of it, run the command once more first and
+press "Verbindung prüfen". Once every helper script has its own rule, "Root-Rechte" turns yellow with "sudo ohne
+Passwort für alles ist hier nicht nötig. Die Hilfsskripte reichen." (sudo without a password for everything is not
+needed here; the helper scripts are enough), and a subtle hint appears under "Braucht Aufmerksamkeit" on the overview
+(checked every 6 hours, hidden with ×). The hint leads to the setup command, where "Volle sudo-Regel entfernen" (remove
+the full sudo rule) is already ticked under "Erweitert". Run the command (paste it yourself or use "Mit Passwort
+einrichten") and check again: "Root-Rechte" then says "sudo erlaubt nur die Hilfsskripte der Module, keine volle Regel.
+Das reicht." (sudo allows only the modules' helper scripts, no full rule; that is enough).
+
+This is how the command goes about it, so you do not lock yourself out:
+
+- It first sets up the helper scripts and their rules as always. If anything goes wrong there, it leaves the full rule
+  alone.
+- If there is no rule from Nodvard Deck (only links, other content or none at all), it says so and changes nothing.
+- It only deletes `/etc/sudoers.d/nodvard-<user>` and `lattice-<user>`, and only if the file contains exactly the line
+  `<user> ALL=(root) NOPASSWD: ALL`. Links and files with other content stay, with a hint.
+- Before that it asks every script for its version through sudo. That only shows that it runs (still with the full
+  rule); if one does not answer, the full rule stays.
+- After deleting, it checks the sudo configuration with `visudo -c` (if it was fine before) and asks every script
+  again, now without the full rule. If any of that fails or the run is cut off (for example because the connection
+  drops), it puts the rule back right away. It never changes the key or the login.
+- If the user can still do everything through a rule from somewhere else (for example `010_pi-nopasswd` on Raspberry Pi
+  OS or the group `sudo` with NOPASSWD), it says so. That rule stays; whether it can go is your call. As long as it
+  applies, the check cannot show whether the helper scripts are enough on their own.
+
+Afterwards your own commands with sudo through Nodvard Deck no longer work. If an update of Nodvard Deck brings new
+helper scripts, the modules only get root there again once you set the server up once more; the overview tells you.
+
+If you want the full rule back, set the server up again with "Volle Rechte". If you need it for your own commands with
+sudo, tick "Volle sudo-Regel gewollt" (full sudo rule wanted) under "Bearbeiten", "Erweitert" for that server:
+"Root-Rechte" then stays green and the hint does not appear. If no module needs root on the server at all, the command
+brings no helper scripts and therefore cannot remove the rule. If you then do not need sudo for your own commands through
+Nodvard Deck, delete it yourself (`sudo rm /etc/sudoers.d/nodvard-<user>`, on older servers `lattice-<user>`).
+"Verbindung prüfen" then shows under "Root-Rechte": "Kein eingeschaltetes Modul braucht hier root, sudo ohne Passwort
+ist nicht nötig." (no enabled module needs root here, sudo without a password is not needed).
 
 The full rule is `/etc/sudoers.d/nodvard-<user>` with the line
 `<user> ALL=(root) NOPASSWD: ALL`. The line is first written to a trial file and checked with `visudo -c`; only then
@@ -1325,15 +1377,19 @@ is stored encrypted in Nodvard Deck.
 **Helper scripts:** With the "root rights" tick box the command puts the modules' helper scripts (Nodvard Shield,
 Server status and Docker in the "operate only" mode) into `/usr/local/lib/nodvard-deck` and allows each one with its own narrow sudo rule. If that fails
 for a script, the command names the reason (folder or file not safe, tool missing, or `visudo` rejected the rule). With
-the full rule that is a hint, and the module then uses the full rule. Without the full rule it is an error, because the
-module would then have no root at all: there the pre-check covers folders and tools before anything changes (see above);
-a damaged script or a rejected rule is reported along the way with "FEHLER: …" and at the end "Nicht alles hat
+the full rule that is a hint, and the module then uses the full rule; only Docker never does, so for `docker-root` it
+is always an error. Without the full rule it is an error, because the module would then have no root at all: there the
+pre-check covers folders and tools before anything changes (see above); a damaged script or a rejected rule is reported along the way with "FEHLER: …" and at the end "Nicht alles hat
 geklappt" (not everything worked). The
-modules call a script only if the one on the server is byte for byte the one that ships with Nodvard Deck.
+modules call a script only if the one on the server is byte for byte the one that ships with Nodvard Deck. The
+exception is Docker: it also calls an older version. If only root can change it and sudo allows it, Docker keeps root
+with it until you run the setup again ("Veraltet" then comes with "Docker ruft es trotzdem auf …", Docker still calls
+it).
 "Verbindung prüfen" (check connection) shows for each script whether it matches, and under "Root-Rechte" it says
 "sudo erlaubt nur die Hilfsskripte der Module, keine volle Regel. Das reicht." (sudo allows only the modules' helper
 scripts, no full rule; that is enough) when all of them match. If a script is missing, it shows "Fehlt auf dem Server"
-(missing on the server, yellow); without the full rule it adds that the module has no root here.
+(missing on the server, yellow); without the full rule, and for Docker always, it adds that the module has no root
+here. If `docker-root` is missing next to the full rule, "Root-Rechte" is yellow too.
 After an update that brings a new script it says "Veraltet" (outdated): then run the setup command once more.
 You do not have to spot this yourself: if a script is missing or outdated while sudo may run scripts there (full rule
 or a script's own rule), the overview shows a quiet hint under "Braucht Aufmerksamkeit" (needs attention) with a link
@@ -1341,12 +1397,42 @@ to the setup. Nodvard Deck checks this
 every 6 hours and on every "Verbindung prüfen". The × hides the hint for that server until an update brings newer
 scripts.
 
+**What the helper scripts may do:** The dashboard's user can run these subcommands as root through sudo, also without
+going through the dashboard. Each one checks its own arguments and stops on anything else before it does anything. A
+test runs every script in `sh` and `dash` with more than 200 invalid inputs (options instead of names, spaces, line
+breaks, `;`, `$(…)`, `..`, relative paths, overlong values) and requires that no program with side effects starts.
+The full sudo rule, in contrast, allows everything.
+
+| Script | Subcommand | What it does as root | Limits |
+|---|---|---|---|
+| all | `version` | prints the version | no arguments |
+| `system-root` | `service-restart` | restarts a systemd service and reports its state | only `.service`, `.socket`, `.timer`; never SSH, D-Bus, `systemd-*`, `networking`, `NetworkManager`, `dhcpcd`, `wpa_supplicant` or Nodvard Deck; other network services such as `firewalld` or `wg-quick@…` are allowed. Docker and containerd on the dashboard's own machine are blocked by the dashboard only; the script cannot tell which machine that is |
+| `docker-root` | `ps`, `stats` | lists containers and their load | no arguments |
+| `docker-root` | `inspect`, `id`, `id-state`, `state`, `ports` | reads container details in fixed formats | only valid names or IDs, at most 200 |
+| `docker-root` | `logs` | reads a container's log | at most 5000 lines at the start, then following on request; time span only in minutes or hours |
+| `docker-root` | `start`, `stop`, `restart` | starts, stops or restarts a container | exactly one valid name; there is no delete |
+| `shield-root` | `guard` | reads logins from the SSH log, the effective sshd settings (port, root login, password and key login and similar), Fail2ban, open ports with the range for outgoing connections and the checksum, mode, owner, modification time and size of the watched files and programs | read only; absolute paths without `..`, `*` only for files |
+| `shield-root` | `detect-templates`, `refresh-packages` | reads the Samba, NFS and Nextcloud settings or refreshes the package list | no arguments |
+| `shield-root` | `quarantine`, `restore`, `delete`, `quarantine-state` | moves a file reported by ClamAV into quarantine, puts it back, deletes it there or reports its state | ClamAV checks the file again first; back only to the place the script noted itself; no links |
+| `shield-root` | `ban`, `unban` | bans or unbans an address in Fail2ban | address only hex digits, `:` and `.`, at most 45 characters; jail only letters, digits, `_`, `.` and `-`, at most 64 characters. Fail2ban rejects anything that is not a valid address |
+| `shield-root` | `install` | installs ClamAV, Lynis, Fail2ban or unattended-upgrades, fetches new virus signatures | only these five |
+| `shield-root` | `reboot` | restarts the server in one minute (after 5 seconds without `shutdown`) | no arguments |
+| `shield-root` | `upgrade-start`, `upgrade-run`, `upgrade-poll` | installs updates with apt, dnf or apk and reports progress | fixed kinds; single packages only for security updates with apt, names from a fixed character set |
+| `shield-root` | `audit-start`, `audit-run`, `audit-poll`, `audit-stop` | starts, follows or stops a Lynis audit | run ID in a fixed form, fixed time limit, stops only its own run |
+| `shield-root` | `scan`, `watch` (internally `scan-run`, `watch-run`, `odd-scan`) | scans folders with ClamAV | absolute paths, numbers with an upper limit, one run at a time, time limit |
+| `shield-root` | `realtime-on`, `realtime-off`, `realtime-log`, `realtime-confirm` | turns ClamAV's real-time protection on or off, reads its log, checks reported files again | writes only fixed files under `/etc/clamav` and a systemd drop-in; folders absolute without `..`, at most 50 files |
+
+Which files `guard` reads comes from the settings of Nodvard Shield's file watcher ("Überwachte Dateien", watched
+files). Whoever may change that setting also decides for which files root reads the checksum, mode, owner, modification time
+and size. The script never prints the content of those files.
+
 **Switching Docker to "operate only":** If a server that is already set up with the docker group or the full sudo rule
 gets the tag `docker-bedienen` instead of `docker`, it keeps both. The setup command takes back neither the group nor the
 rule, so the login is still practically root there. "Verbindung prüfen" shows this in the items "Nur bedienen: Zugang nicht
 in der Gruppe docker" and "Nur bedienen: keine volle sudo-Regel" (yellow). If the login is `root`, "operate only"
 restricts nothing; then "Nur bedienen: Zugang ist nicht root" is yellow, and the login needs a user of its own. If a server
-has both tags (`docker` and `docker-bedienen`), these items may be yellow; that is intended, it is then a full Docker server.
+has both tags (`docker` and `docker-bedienen`), it is a full Docker server: the items "Nur bedienen: …" and the helper
+script `docker-root` do not apply there, Docker runs through the docker group.
 To switch:
 
 1. Run the setup command once more with "root rights without a password". It puts `docker-root` in place and no longer
@@ -1562,6 +1648,13 @@ a confirmation lists the servers first. Servers with an open update proposal or 
 skipped. You then approve under "Actions" („Aktionen“), together with "Approve selected" („Ausgewählte
 freigeben“); proposals with high risk (with "Proxmox: all updates as dist-upgrade") one by one. If autonomy is set to
 "Act autonomously" („Selbstständig handeln“), the proposals start without asking up to the configured risk level.
+
+**Updates delayed by phasing (Ubuntu):** Ubuntu rolls out some updates gradually, first to a share of machines, then to
+all. Until a server's turn comes, apt holds the update back, also with "Apply all" („Alle einspielen“). The update center
+counts these updates and adds "of which X delayed by phasing" („davon X durch Phasing verzögert“); clicking it explains
+it, and the package list marks them as "delayed" („verzögert“). This is intended, not an error: once the server's turn
+comes, they install like any other update. The check needs no root and does not depend on the server's language; Debian and
+Proxmox have no phasing, so the note does not appear there.
 
 **Updates on the server that runs Nodvard Deck:** if the updates include a package that restarts Docker (`docker-ce`,
 `docker.io`, `containerd` and similar), the check also looks whether Nodvard Deck runs there. The confirmation before
@@ -1806,7 +1899,9 @@ Under **Settings → System → "Updates"** („Einstellungen → System → Upd
 which one is the newest. Nodvard Deck looks **once a day** at ghcr.io to see which images exist; **"Search now"**
 („Jetzt suchen“) does it right away (at most once a minute).
 
-- **Privacy:** ghcr.io belongs to **GitHub**. On every search, GitHub sees the IP address of your connection and the
+- **Privacy:** ghcr.io belongs to **GitHub**, and so does github.com, where the search fetches the approval of a version
+  (downloads go through `objects.githubusercontent.com` or `release-assets.githubusercontent.com`; if you filter,
+  allow these addresses). On every search, GitHub sees the IP address of your connection and the
   time; nothing else is sent, not even the installed version. **You can turn the search off:** switch off "Search for
   updates automatically every day" („Täglich automatisch nach Updates suchen“; permission `settings.write`), and the
   dashboard never looks on its own. "Search now" still asks when the switch is off – anyone with the permission
@@ -1845,6 +1940,10 @@ this machine. Setting it up, updating and removing it: [deploy/README.md, sectio
   `ghcr.io/nodvard/deck` runs with `:latest` or a matching series such as `:0.7` (not a fixed version), and you are the
   owner of the installation. The helper only accepts versions from 0.7.0 on, so the first update with the button goes
   from 0.7.0 to the version after it. If something is missing, the card says why, where that helps.
+- **Release approval:** the button only offers a version that is approved at its release (signed with the project's
+  key); until then the card says there is no valid approval for version X yet („Für Version X liegt noch keine gültige
+  Freigabe vor …“), and updating by hand still works. A current helper checks the signature itself, the card then shows
+  that an approval is present („Freigabe liegt vor (Schlüssel …)“). With an older helper the card asks you to renew it.
 - **Update:** "Update now to X" („Jetzt aktualisieren auf X“), then enter your password and, if two-factor login is on,
   the code from the app. If the new version rebuilds the database, Nodvard Deck makes a copy first as always
   ([10.4](#104-updates-the-copy-before-the-migration)). The card shows the steps; you can close the page, the helper
@@ -2065,10 +2164,9 @@ usually called `nodvard-deck-nodvard-deck-1`. This is where the console is:
 The same instructions are on the login page under "Forgot password?" („Passwort vergessen?“).
 
 **Good to know:** When Nodvard Deck "signs someone out everywhere" (password changed, two-factor reset or turned off,
-emergency command), the login ends immediately – but someone who still has an access key that was already issued in the
-browser can keep working with it for **up to 15 minutes**, until it expires by itself. In case of serious suspicion,
-therefore also change the password and wait a few minutes. Terminal and console do not wait for this period: open
-sessions of an ended login close after at most 15 seconds, and new ones can no longer be used with it.
+emergency command) or you sign out, the login ends immediately, also for an access key already issued in the browser:
+the next request with it is refused. Open terminal and console sessions of an ended login close after at most
+15 seconds, the live updates after at most 30 seconds.
 
 ## 13. Nodvard Deck does not start: the rescue page
 

@@ -3,9 +3,9 @@
 
 Gleichlauf: Der bisherige Befehl und das Skript laufen in gleich vorbereiteten Ordnern. Ausgabe (nach `helper_text`),
 Rückgabewert und der Zustand der Dateien danach müssen gleich sein. Das Skript meldet Sätze als `@@msg=<kennung>` (nur
-ASCII), das Modul setzt denselben Satz ein wie bei seinem eigenen Befehl. Bewusst anders: Das Skript verschiebt nur, was
-ClamAV selbst findet (geprüft im Ordner `.pruefen`, in dem nur root schreibt), und legt nur an den Ort zurück, den es
-dabei hinterlegt hat (das Dashboard gilt ihm nicht als vertrauenswürdig)."""
+ASCII), das Modul setzt denselben Satz ein wie bei seinem eigenen Befehl. Verschoben wird auf beiden Wegen nur, was ClamAV
+selbst findet, zurückgelegt nur an den Ort, der dabei hinterlegt wurde (der Befehl des Moduls nimmt dafür die Funktionen
+des Skripts; das Dashboard gilt nicht als vertrauenswürdig)."""
 
 from __future__ import annotations
 
@@ -90,7 +90,7 @@ def _calls(base: Path) -> list[str]:
 
 def _run_old(command: str, *, env_path: str = "/usr/bin:/bin") -> tuple[int, str]:
     done = subprocess.run([SH, "-c", command], capture_output=True, text=True, timeout=60, check=False, env={"PATH": env_path, "LC_ALL": "C"})
-    return done.returncode, done.stdout
+    return done.returncode, _av().helper_text(done.stdout)
 
 
 def _run_new(helper: Path, *args: str) -> tuple[int, str]:
@@ -151,15 +151,15 @@ def test_quarantine_behaves_like_the_old_command(tmp_path, monkeypatch, kind):
     old_base, new_base = tmp_path / "alt", tmp_path / "neu"
     old_victim, new_victim = _scene(old_base, kind), _scene(new_base, kind)
     monkeypatch.setattr(av, "QUARANTINE_DIR", str(old_base / "q"))
-    old = _run_old(av.quarantine_command(old_victim, "f1_evil.sh"))
+    old = _run_old(av.quarantine_command(old_victim, "f1_evil.sh"), env_path=_scanner(old_base))
     new = _run_new(_helper(new_base, path=_scanner(new_base)), *av.quarantine_args(new_victim, "f1_evil.sh"))
     assert new == old
     assert _state(new_base) == _state(old_base)
     if kind == "normal":
         state = _state(new_base)
-        assert old == (0, "@@mode=750\n") and state["q/f1_evil.sh"].startswith("file 0 1 ")
+        assert old == (0, "@@mode=0750\n") and state["q/f1_evil.sh"].startswith("file 0 1 ")
         assert state["q"] == state["q/.herkunft"] == state["q/.pruefen"] == "dir 700"
-        assert state["q/.herkunft/f1_evil.sh"] == "file 600 1 b'750\\nBASE/work/evil.sh\\n'"
+        assert state["q/.herkunft/f1_evil.sh"] == "file 600 1 b'0750\\nBASE/work/evil.sh\\n'"
 
 
 def _quarantined(base: Path, monkeypatch, *, mode: str = "640", origin: bool = True) -> str:
@@ -178,7 +178,7 @@ def _quarantined(base: Path, monkeypatch, *, mode: str = "640", origin: bool = T
 
 
 @pytest.mark.parametrize(("kind", "expected"), [
-    ("quarantined", "@@state=quarantined\n@@mode=640\n"),
+    ("quarantined", "@@state=quarantined\n@@mode=0640\n"),
     ("no_origin", "@@state=quarantined\n"),
     ("checking", "@@state=checking\n"),
     ("absent", "@@state=absent\n"),
@@ -250,14 +250,15 @@ def test_restore_behaves_like_the_old_command(tmp_path, monkeypatch, kind):
         qpath = str(base / "q" / "f1_evil.sh")
         monkeypatch.setattr(av, "QUARANTINE_DIR", str(base / "q"))
         if side == "alt":
-            result = _run_old(av.restore_command(qpath, original, "640"))
+            code, out = _run_old(av.restore_command(qpath))
         else:
-            result = _run_new(_helper(base), *av.restore_args(qpath, original, "640"))
-        results.append((result, _state(base)))
+            code, out = _run_new(_helper(base), *av.restore_args(qpath))
+        results.append(((code, out.replace(str(base), "BASE")), _state(base)))
     assert results[1] == results[0]
     if kind == "roundtrip":
         (code, out), state = results[0]
-        assert (code, out) == (0, "ok\n") and state["work/evil.sh"] == "file 640 1 b'inhalt'"
+        assert (code, out) == (0, "@@restored_to=BASE/work/evil.sh\nok\n")
+        assert state["work/evil.sh"] == "file 640 1 b'inhalt'"
 
 
 def test_delete_behaves_like_the_old_command(tmp_path, monkeypatch):
@@ -342,12 +343,11 @@ def test_helper_text_puts_back_the_sentences_of_the_module():
 def test_only_paths_directly_in_the_quarantine_go_to_the_helper():
     av = _av()
     q = av.QUARANTINE_DIR
-    assert av.restore_args(f"{q}/f1_x", "/tmp/x", None) == ["restore", "f1_x"]
-    assert av.restore_args(f"{q}/f1_x", "/tmp/x", "4755") == ["restore", "f1_x"]
+    assert av.restore_args(f"{q}/f1_x") == ["restore", "f1_x"]
     assert av.delete_args(f"{q}/f1_x") == ["delete", "f1_x"]
     for bad in ("/anderswo/f1_x", f"{q}/a b", f"{q}/.herkunft", f"{q}/.f1_x", f"{q}//f1_x", f"{q}/./f1_x"):
         with pytest.raises(ValueError):
-            av.restore_args(bad, "/tmp/x", "644")
+            av.restore_args(bad)
         with pytest.raises(ValueError):
             av.delete_args(bad)
 
@@ -355,18 +355,28 @@ def test_only_paths_directly_in_the_quarantine_go_to_the_helper():
 # --- Was das Skript dem Dashboard nicht glaubt ----------------------------------------------------------------------
 
 
+def _quarantine(way: str, base: Path, monkeypatch, path: str, victim: str, name: str) -> tuple[int, str]:
+    """`quarantine` über das Skript (`neu`) oder mit dem Befehl des Moduls ohne Skript (`alt`, etwa Anmeldung als root)."""
+    av = _av()
+    if way == "neu":
+        return _run_new(_helper(base, path=path), *av.quarantine_args(victim, name))
+    monkeypatch.setattr(av, "QUARANTINE_DIR", str(base / "q"))
+    return _run_old(av.quarantine_command(victim, name), env_path=path)
+
+
+@pytest.mark.parametrize("way", ["neu", "alt"])
 @pytest.mark.parametrize(("content", "clamscan", "expected"), [
     ("nur text", "ok", (6, "QUARANTINE_NOT_FOUND")),
     ("x5o eicar", "fehler", (7, "QUARANTINE_UNCHECKED")),
 ])
-def test_quarantine_moves_only_what_clamav_finds_itself(tmp_path, content, clamscan, expected):
+def test_quarantine_moves_only_what_clamav_finds_itself(tmp_path, monkeypatch, way, content, clamscan, expected):
     """Ein Aufruf mit einer sauberen Datei (etwa /etc/shadow) verschiebt nichts; ohne Prüfung auch nicht."""
     av = _av()
     victim = tmp_path / "work" / "sauber.conf"
     victim.parent.mkdir()
     victim.write_text(content)
     victim.chmod(0o640)
-    code, out = _run_new(_helper(tmp_path, path=_scanner(tmp_path, clamscan=clamscan)), "quarantine", str(victim), "f1_x")
+    code, out = _quarantine(way, tmp_path, monkeypatch, _scanner(tmp_path, clamscan=clamscan), str(victim), "f1_x")
     assert (code, out) == (expected[0], getattr(av, expected[1]) + "\n")
     assert victim.read_text() == content and (victim.stat().st_mode & 0o777) == 0o640
     assert sorted(str(p.relative_to(tmp_path / "q")) for p in (tmp_path / "q").rglob("*")) == [".herkunft", ".pruefen"]
@@ -400,28 +410,105 @@ def test_restore_goes_back_only_to_the_place_recorded_at_quarantine(tmp_path):
     elsewhere = tmp_path / "cron.d"
     elsewhere.mkdir()
     helper = _helper(tmp_path, path=_scanner(tmp_path))
-    assert _run_new(helper, "quarantine", str(victim), "f1_evil.sh") == (0, "@@mode=750\n")
+    assert _run_new(helper, "quarantine", str(victim), "f1_evil.sh") == (0, "@@mode=0750\n")
     refused = subprocess.run([SH, str(helper), "restore", "f1_evil.sh", str(elsewhere / "x"), "644"],
                              capture_output=True, text=True, timeout=30, check=False)
     assert (refused.returncode, refused.stdout) == (64, "")
     assert list(elsewhere.iterdir()) == [] and (tmp_path / "q" / "f1_evil.sh").exists()
-    assert _run_new(helper, "restore", "f1_evil.sh") == (0, "ok\n")
+    assert _run_new(helper, "restore", "f1_evil.sh") == (0, f"@@restored_to={victim}\nok\n")
     assert victim.read_text() == "x5o eicar" and (victim.stat().st_mode & 0o777) == 0o750
     assert sorted(p.name for p in (tmp_path / "q").rglob("*")) == [".herkunft", ".pruefen"]
 
 
-@pytest.mark.parametrize("record", [None, "abc\n/tmp/x\n", "644\n"])
-def test_restore_without_a_usable_record_leaves_the_file_in_quarantine(tmp_path, monkeypatch, record):
+@pytest.mark.parametrize("way", ["neu", "alt"])
+@pytest.mark.parametrize("record", [
+    None, "abc\n/tmp/x\n", "4755x\n/tmp/x\n", "88\n/tmp/x\n", "00640\n/tmp/x\n", "644\n", "644\nrelativ/x\n",
+    "644\n/tmp/\n", "644\n/tmp/..\n", "link", "fifo",
+])
+def test_restore_without_a_usable_record_leaves_the_file_in_quarantine(tmp_path, monkeypatch, way, record):
+    """Ohne Ablage (etwa eine Datei, die vor dem Update in die Quarantäne kam) oder mit einer kaputten bleibt sie dort,
+    auch ohne Skript: Ort und Rechte aus der Datenbank zählen nicht."""
     av = _av()
     original = _quarantined(tmp_path, monkeypatch, origin=False)
-    if record is not None:
-        (tmp_path / "q" / ".herkunft" / "f1_evil.sh").write_text(record)
-    code, out = _run_new(_helper(tmp_path), "restore", "f1_evil.sh")
-    if record == "644\n":
-        assert code == 64  # leerer Pfad: kein Ort, das Skript bricht ab
+    entry = tmp_path / "q" / ".herkunft" / "f1_evil.sh"
+    if record == "link":
+        (tmp_path / "fremd").write_text(f"644\n{tmp_path}/anderswo\n")
+        entry.symlink_to(tmp_path / "fremd")
+    elif record == "fifo":
+        os.mkfifo(entry)
+    elif record is not None:
+        entry.write_text(record)
+    monkeypatch.setattr(av, "QUARANTINE_DIR", str(tmp_path / "q"))
+    qpath = str(tmp_path / "q" / "f1_evil.sh")
+    if way == "neu":
+        code, out = _run_new(_helper(tmp_path), *av.restore_args(qpath))
+    else:
+        code, out = _run_old(av.restore_command(qpath))
+    if record is not None and record.startswith("644\n"):
+        assert (code, out) == (64, "")  # kein gültiger Pfad: das Skript bricht ab
     else:
         assert (code, out) == (3, av.RESTORE_NO_ORIGIN + "\n")
     assert not Path(original).exists() and (tmp_path / "q" / "f1_evil.sh").exists()
+    assert not any(p.name.startswith(".nodvard") for p in tmp_path.rglob("*"))
+
+
+@pytest.mark.parametrize("way", ["neu", "alt"])
+@pytest.mark.parametrize(("mode", "record"), [(0o4755, "4755"), (0o2750, "2750"), (0o044, "0044"), (0o000, "0000")])
+def test_the_mode_comes_back_exactly_as_it_went_into_quarantine(tmp_path, monkeypatch, way, mode, record):
+    av = _av()
+    victim = tmp_path / "work" / "evil.sh"
+    victim.parent.mkdir()
+    victim.write_text("x5o eicar")
+    victim.chmod(mode)
+    monkeypatch.setattr(av, "QUARANTINE_DIR", str(tmp_path / "q"))
+    qpath = str(tmp_path / "q" / "f1_evil.sh")
+    # Ohne root ist eine Datei mit 044 oder 000 nicht lesbar: die Attrappe meldet stets einen Fund.
+    scanner = _scanner_script(tmp_path, "found=1")
+    if way == "neu":
+        helper = _helper(tmp_path, path=scanner)
+        moved = _run_new(helper, *av.quarantine_args(str(victim), "f1_evil.sh"))
+    else:
+        moved = _run_old(av.quarantine_command(str(victim), "f1_evil.sh"), env_path=scanner)
+    assert moved == (0, f"@@mode={record}\n")
+    assert (tmp_path / "q" / ".herkunft" / "f1_evil.sh").read_text() == f"{record}\n{victim}\n"
+    back = _run_new(helper, *av.restore_args(qpath)) if way == "neu" else _run_old(av.restore_command(qpath))
+    assert back == (0, f"@@restored_to={victim}\nok\n")
+    assert stat.S_IMODE(victim.stat().st_mode) == mode
+    victim.chmod(0o600)
+    assert victim.read_text() == "x5o eicar"
+
+
+@pytest.mark.parametrize("way", ["neu", "alt"])
+@pytest.mark.parametrize(("stored", "mode"), [("0", 0o000), ("44", 0o044), ("640", 0o640), ("4755", 0o4755)])
+def test_restore_still_reads_records_without_leading_zeros(tmp_path, monkeypatch, way, stored, mode):
+    av = _av()
+    original = _quarantined(tmp_path, monkeypatch, mode=stored)
+    monkeypatch.setattr(av, "QUARANTINE_DIR", str(tmp_path / "q"))
+    qpath = str(tmp_path / "q" / "f1_evil.sh")
+    if way == "neu":
+        result = _run_new(_helper(tmp_path), *av.restore_args(qpath))
+    else:
+        result = _run_old(av.restore_command(qpath))
+    assert result == (0, f"@@restored_to={original}\nok\n")
+    assert stat.S_IMODE(Path(original).stat().st_mode) == mode
+
+
+@pytest.mark.parametrize(("stored", "shown"), [
+    ("0", "0000"), ("44", "0044"), ("4755", "4755"), ("88", None), ("", None),
+])
+def test_quarantine_state_shows_every_record_with_four_digits(tmp_path, monkeypatch, stored, shown):
+    av = _av()
+    results = []
+    for side in ("alt", "neu"):
+        base = tmp_path / side
+        _quarantined(base, monkeypatch, mode=stored)
+        monkeypatch.setattr(av, "QUARANTINE_DIR", str(base / "q"))
+        if side == "alt":
+            results.append(_run_old(av.quarantine_state_command("f1_evil.sh")))
+        else:
+            results.append(_run_new(_helper(base), *av.quarantine_state_args("f1_evil.sh")))
+    mode_line = f"@@mode={shown}\n" if shown else ""
+    assert results[0] == results[1] == (0, f"@@state=quarantined\n{mode_line}")
 
 
 @pytest.mark.parametrize("name", ["zeilen\numbruch.sh", "ende mit umbruch\n", "-n evil.sh"])
@@ -434,9 +521,9 @@ def test_the_record_keeps_odd_file_names_exactly(tmp_path, name):
     av = _av()
     qname = av.quarantine_name("f1", str(victim))
     helper = _helper(tmp_path, path=_scanner(tmp_path))
-    assert _run_new(helper, "quarantine", str(victim), qname) == (0, "@@mode=750\n")
+    assert _run_new(helper, "quarantine", str(victim), qname) == (0, "@@mode=0750\n")
     assert not os.path.lexists(victim)
-    assert _run_new(helper, "restore", qname) == (0, "ok\n")
+    assert _run_new(helper, "restore", qname) == (0, f"@@restored_to={victim}\nok\n")
     assert victim.read_text() == "x5o eicar" and (victim.stat().st_mode & 0o777) == 0o750
     assert [p.name for p in folder.iterdir()] == [name]
 
@@ -459,7 +546,8 @@ def _scanner_doing(base: Path, during: str) -> str:
     return f"{tools}:/usr/bin:/bin"
 
 
-def test_a_file_swapped_in_during_the_check_stays_where_it_is(tmp_path):
+@pytest.mark.parametrize("way", ["neu", "alt"])
+def test_a_file_swapped_in_during_the_check_stays_where_it_is(tmp_path, monkeypatch, way):
     """Früher prüfte ClamAV die Datei nur an ihrem Ort, verschoben wurde danach: Wem der Ordner gehört, der konnte sie in
     der Zwischenzeit (ohne clamd gut eine Minute) gegen eine andere tauschen, und die wanderte als root in die
     Quarantäne. Jetzt prüft ClamAV einen Fund im Prüfordner, in dem nur root schreibt, noch einmal: Die untergeschobene
@@ -469,9 +557,9 @@ def test_a_file_swapped_in_during_the_check_stays_where_it_is(tmp_path):
     (work / "evil.sh").write_text("x5o eicar")
     (work / "evil.sh").chmod(0o750)
     (work / "anna.txt").write_text("annas notizen")
-    helper = _helper(tmp_path, path=_scanner_doing(tmp_path, f"mv -f '{work}/anna.txt' '{work}/evil.sh' 2>/dev/null"))
+    path = _scanner_doing(tmp_path, f"mv -f '{work}/anna.txt' '{work}/evil.sh' 2>/dev/null")
     av = _av()
-    assert _run_new(helper, "quarantine", str(work / "evil.sh"), "f1_evil.sh") == (6, av.QUARANTINE_NOT_FOUND + "\n")
+    assert _quarantine(way, tmp_path, monkeypatch, path, str(work / "evil.sh"), "f1_evil.sh") == (6, av.QUARANTINE_NOT_FOUND + "\n")
     assert not (tmp_path / "q" / "f1_evil.sh").exists()
     assert (work / "evil.sh").read_text() == "annas notizen"
     assert list((tmp_path / "q" / ".pruefen").iterdir()) == []
@@ -602,10 +690,10 @@ def test_two_calls_with_the_same_name_keep_the_record_of_the_one_that_moved_the_
     (sync / "weiter").touch()
     _wait_for(sync / "b.rc")
     assert first == (3, av.HELPER_MESSAGES["gone"] + "\n")
-    assert (sync / "b.rc").read_text().strip() == "0" and "@@mode=750" in (sync / "b.out").read_text()
+    assert (sync / "b.rc").read_text().strip() == "0" and "@@mode=0750" in (sync / "b.out").read_text()
     assert not victim.exists()
     origin = tmp_path / "q" / ".herkunft" / "f1_evil.sh"
-    assert origin.read_text() == f"750\n{victim}\n"
+    assert origin.read_text() == f"0750\n{victim}\n"
     assert (tmp_path / "q" / "f1_evil.sh").exists()
     assert list((tmp_path / "q" / ".pruefen").iterdir()) == []
     assert _run_new(helper, "restore", "f1_evil.sh")[0] == 0
@@ -740,7 +828,7 @@ def test_quarantine_takes_only_folders_of_root_alone(tmp_path, monkeypatch, kind
         elsewhere = _unsafe_quarantine(base, kind)
         if side == "alt":
             monkeypatch.setattr(av, "QUARANTINE_DIR", str(base / "q"))
-            result = _run_old(av.quarantine_command(str(victim), "f1_evil.sh"))
+            result = _run_old(av.quarantine_command(str(victim), "f1_evil.sh"), env_path=_scanner(base))
         else:
             result = _run_new(_helper(base, path=_scanner(base)), "quarantine", str(victim), "f1_evil.sh")
         assert victim.read_text() == "x5o eicar" and list(elsewhere.iterdir()) == []
@@ -749,8 +837,9 @@ def test_quarantine_takes_only_folders_of_root_alone(tmp_path, monkeypatch, kind
     assert results[0][0] == (5, av.QUARANTINE_DIR_UNSAFE + "\n")
 
 
+@pytest.mark.parametrize("way", ["neu", "alt"])
 @pytest.mark.parametrize("kind", ["q_open", "herkunft_open", "herkunft_link", pytest.param("herkunft_foreign", marks=_NOT_ROOT)])
-def test_restore_trusts_the_record_only_in_folders_of_root_alone(tmp_path, monkeypatch, kind):
+def test_restore_trusts_the_record_only_in_folders_of_root_alone(tmp_path, monkeypatch, kind, way):
     """Ort und Rechte kommen aus der Ablage; die zählt nur, wenn außer root niemand sie anlegen oder ändern kann."""
     av = _av()
     original = _quarantined(tmp_path, monkeypatch)
@@ -769,5 +858,10 @@ def test_restore_trusts_the_record_only_in_folders_of_root_alone(tmp_path, monke
         (forged / "f1_evil.sh").write_text(f"644\n{cron}/x\n")
         shutil.rmtree(q / ".herkunft")
         (q / ".herkunft").symlink_to(forged, target_is_directory=True)
-    assert _run_new(_helper(tmp_path), "restore", "f1_evil.sh") == (5, av.QUARANTINE_DIR_UNSAFE + "\n")
+    monkeypatch.setattr(av, "QUARANTINE_DIR", str(q))
+    if way == "neu":
+        result = _run_new(_helper(tmp_path), "restore", "f1_evil.sh")
+    else:
+        result = _run_old(av.restore_command(str(q / "f1_evil.sh")))
+    assert result == (5, av.QUARANTINE_DIR_UNSAFE + "\n")
     assert not Path(original).exists() and list(cron.iterdir()) == [] and (q / "f1_evil.sh").exists()

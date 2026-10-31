@@ -70,7 +70,6 @@ export function frontendBuildDate(): Date | null {
 
 // --- "Schon gesehen?" -----------------------------------------------------------------
 
-/** Neuer Name; der alte (`lattice.changelogSeen`) wird beim Start übernommen (lib/legacyStorage.ts). */
 export const SEEN_KEY = "nodvard-deck.changelogSeen";
 
 const listeners = new Set<() => void>();

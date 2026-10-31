@@ -21,10 +21,11 @@ TOKEN_PREFIX = "ghp"
 PASSWORD = f"{TOKEN_PREFIX}_geheim-0123456789"
 
 
-@pytest.fixture(autouse=True)
-def _ext_docker_on_path(monkeypatch):
-    monkeypatch.syspath_prepend(str(EXT_DIR / "src"))
-    yield
+@pytest.fixture(autouse=True, scope="module")
+def _ext_docker_on_path():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(EXT_DIR / "src"))
+        yield
     for name in list(sys.modules):
         if name.startswith("nodvard_deck_ext_docker"):
             del sys.modules[name]
@@ -215,7 +216,9 @@ async def test_a_server_without_the_docker_mark_is_refused():
     ctx.hosts = SimpleNamespace(get=lambda host_id: _async(SimpleNamespace(id=host_id, tags=["nas"])))
     seen = _recording(ctx.exec)
     done = await r.DockerRegistryExecutor(ctx, r.Registries(ctx)).execute(_request())
-    assert done.error == "Dieser Server ist kein Docker-Server (Markierung fehlt)." and seen == []
+    from nodvard_deck_ext_docker.operate import NOT_DOCKER
+
+    assert done.error == NOT_DOCKER and seen == []
 
 
 @pytest.mark.asyncio
@@ -512,6 +515,28 @@ async def test_login_through_the_gate(client, docker_on, monkeypatch):
     assert PASSWORD not in action.text and PASSWORD not in state.text
     assert (await client.post(f"{base}/weg/login", headers=docker_on.owner)).status_code == 404
     assert (await client.post(f"{base}/a;b/login", headers=docker_on.owner)).status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_a_replaced_password_is_used_for_the_next_login_without_a_hook(client, docker_on, monkeypatch):
+    _without_config(docker_on.exec)
+    await _with_registry(client, docker_on)
+    seen = _recording(docker_on.exec)
+    monkeypatch.setattr(docker_on.handle, "run_argv", docker_on.exec.run_argv, raising=False)
+    base = f"/api/v1/ext/docker/hosts/{docker_on.host}/registries"
+    newer = f"{TOKEN_PREFIX}_neu-9876543210"
+
+    async def login() -> None:
+        proposed = await client.post(f"{base}/ghcr/login", headers=docker_on.owner)
+        approved = await client.post(f"/api/v1/actions/{proposed.json()['action_id']}/approve", headers=docker_on.owner)
+        assert approved.status_code == 200 and approved.json()["status"] == "succeeded", approved.text
+
+    await login()
+    replaced = await client.put("/api/v1/extensions/docker/secrets", headers=docker_on.owner,
+                                json={"current_password": "correct-horse-battery", "label": "docker-registry-pw:ghcr", "value": newer})
+    assert replaced.status_code == 204, replaced.text
+    await login()
+    assert [stdin for _argv, stdin in seen] == [PASSWORD.encode() + b"\n", newer.encode() + b"\n"]
 
 
 @pytest.mark.asyncio

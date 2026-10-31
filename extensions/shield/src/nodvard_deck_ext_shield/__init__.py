@@ -264,19 +264,21 @@ class Extension(NodvardExtension):
             await ctx.ws.broadcast("incidents", {"changed": incident_id})
             return {"ok": True, "status": new_status}
 
-        @router.post("/incidents/{incident_id}/confirm")
+        incident_router = APIRouter()
+
+        @incident_router.post("/incidents/{incident_id}/confirm")
         async def confirm_incident(incident_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
             return await _change_status(incident_id, "reviewed", actor)
 
-        @router.post("/incidents/{incident_id}/dismiss")
+        @incident_router.post("/incidents/{incident_id}/dismiss")
         async def dismiss_incident(incident_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
             return await _change_status(incident_id, "dismissed", actor)
 
-        @router.post("/incidents/{incident_id}/resolve")
+        @incident_router.post("/incidents/{incident_id}/resolve")
         async def resolve_incident(incident_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
             return await _change_status(incident_id, "resolved", actor)
 
-        @router.post("/incidents/{incident_id}/reopen")
+        @incident_router.post("/incidents/{incident_id}/reopen")
         async def reopen_incident(incident_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
             return await _change_status(incident_id, "open", actor)
 
@@ -345,9 +347,10 @@ class Extension(NodvardExtension):
                 )
             await ctx.secrets.create(label=_TOKEN_LABEL, kind="generic", value=payload.value)
 
-        # "soc.read" deckt Chat, Vorfalls-Feed und Bestätigen/Verwerfen ab; das Token-Setzen braucht separat
+        # Lesen und Chat brauchen `soc.read`, den Status eines Vorfalls ändern `soc.manage`; das Token-Setzen braucht
         # `secrets.write`, wie bei ntfy und proxmox.
         ctx.api.include_router(router, permission="soc.read")
+        ctx.api.include_router(incident_router, permission="soc.manage")
         ctx.api.include_router(token_router, permission="secrets.write")
 
         ctx.ui.register_host_tool(HostToolSpec(
@@ -392,8 +395,14 @@ class Extension(NodvardExtension):
                         badge=Badge(text="{{ status_label }}", tone="{{ tone }}"),
                         actions=[
                             # Nur bei `open`; bei `proposed` bleibt im Widget nur "Verwerfen".
-                            WidgetAction(id="confirm", label="Bestätigen", endpoint="incidents/{{ id }}/confirm", method="POST", style="primary", show_if="{{ can_confirm }}"),
-                            WidgetAction(id="dismiss", label="Verwerfen", endpoint="incidents/{{ id }}/dismiss", method="POST"),
+                            WidgetAction(
+                                id="confirm", label="Bestätigen", endpoint="incidents/{{ id }}/confirm", method="POST",
+                                style="primary", permissions=["soc.manage"], show_if="{{ can_confirm }}",
+                            ),
+                            WidgetAction(
+                                id="dismiss", label="Verwerfen", endpoint="incidents/{{ id }}/dismiss", method="POST",
+                                permissions=["soc.manage"],
+                            ),
                         ],
                     ),
                     empty_text="Keine offenen Vorfälle",

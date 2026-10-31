@@ -31,7 +31,7 @@ function serve(over: Record<string, (init?: RequestInit) => Response> = {}) {
   }));
 }
 
-const confirm = () => window.__lattice.confirmDialog as Mock;
+const confirm = () => window.__nodvardDeck.confirmDialog as Mock;
 
 function edit(text: string) {
   fireEvent.change(screen.getByRole("textbox", { name: "Inhalt von compose.yaml" }), { target: { value: text } });
@@ -40,7 +40,7 @@ function edit(text: string) {
 beforeEach(() => {
   requests.length = 0;
   bodies.length = 0;
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn().mockResolvedValue(true), promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(true),
   };
@@ -116,7 +116,7 @@ describe("Stack-Editor", () => {
   });
 
   it("ohne eigene Freigabe-Rechte wartet der Vorschlag", async () => {
-    (window.__lattice.hasPermission as Mock).mockReturnValue(false);
+    (window.__nodvardDeck.hasPermission as Mock).mockReturnValue(false);
     const onClose = vi.fn();
     serve({ "/save": () => Response.json({ action_id: "a2", status: "proposed", risk: "medium", detail: null }, { status: 202 }) });
     render(<StackEditor hostId="h1" project="shop" onClose={onClose} />);

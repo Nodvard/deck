@@ -4,7 +4,7 @@ import { useCallback, useEffect as useEffect4, useState as useState4 } from "rea
 // ../../../frontend/src/lib/deckGlobal.ts
 function findDeck() {
   if (typeof window === "undefined") return void 0;
-  return window.__nodvardDeck ?? window.__lattice;
+  return window.__nodvardDeck;
 }
 function deck() {
   return findDeck();
@@ -1979,7 +1979,7 @@ function InventoryPage() {
         info && /* @__PURE__ */ jsx6(Notice, { kind: "ok", text: info, onClose: () => setInfo(null) }),
         message && /* @__PURE__ */ jsx6(Notice, { text: message, onClose: () => setMessage(null) }),
         items && items.length > 0 && /* @__PURE__ */ jsxs4("div", { className: "mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4", "data-testid": "inventory-summary", children: [
-          /* @__PURE__ */ jsx6(Stat, { label: "Gegenst\xE4nde", value: visible.length, hint: `${visible.length} Gegenstand/Gegenst\xE4nde angezeigt` }),
+          /* @__PURE__ */ jsx6(Stat, { label: "Gegenst\xE4nde", value: visible.length, hint: visible.length === items.length ? "alle angezeigt" : `von ${items.length}, gefiltert` }),
           /* @__PURE__ */ jsx6(Stat, { label: "Gesamtwert", value: (totalCents / 100).toLocaleString("de-DE", { style: "currency", currency: "EUR" }) }),
           /* @__PURE__ */ jsx6(Stat, { label: "Garantie endet bald", value: soonCount, hint: "in den n\xE4chsten 90 Tagen", tone: soonCount ? "warn" : void 0 }),
           /* @__PURE__ */ jsx6(Stat, { label: "Garantie abgelaufen", value: expiredCount, hint: `${expiredCount} abgelaufen`, tone: expiredCount ? "bad" : void 0 })

@@ -555,6 +555,7 @@ async def test_a_change_takes_effect_without_restart(client, test_settings):
         assert after == {
             "peer": PROXY, "client": "192.168.2.40", "scheme": "https", "via_trusted_proxy": True,
             "forwarded_headers": True, "trusted_proxies": [PROXY], "trusted_proxies_source": "setting",
+            "untrusted_proxies": [],
         }
 
         assert (await client.put("/api/v1/settings/system.trusted_proxies", json={"value": []}, headers=headers)).status_code == 200
@@ -593,7 +594,7 @@ async def test_connection_route_describes_a_direct_request(client, test_settings
     assert r.status_code == 200
     assert r.json() == {
         "peer": "127.0.0.1", "client": "127.0.0.1", "scheme": "http", "via_trusted_proxy": False,
-        "forwarded_headers": False, "trusted_proxies": [], "trusted_proxies_source": "setting",
+        "forwarded_headers": False, "trusted_proxies": [], "trusted_proxies_source": "setting", "untrusted_proxies": [],
     }
     test_settings.trusted_proxies = "172.18.0.9"
     assert (await client.get("/api/v1/system/connection", headers=headers)).json()["trusted_proxies_source"] == "env"

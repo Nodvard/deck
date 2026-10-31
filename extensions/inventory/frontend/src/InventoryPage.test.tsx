@@ -55,7 +55,7 @@ function mockFetch(overrides: { items?: unknown[]; onCreate?: (body: unknown) =>
 }
 
 beforeEach(() => {
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never,
     ReactDOM: undefined as never,
     ReactJsxRuntime: undefined as never,
@@ -97,7 +97,7 @@ describe("InventoryPage", () => {
     await screen.findByText("Bohrmaschine");
     fireEvent.click(screen.getByRole("button", { name: "Löschen" }));
 
-    await waitFor(() => expect(window.__lattice.confirmDialog).toHaveBeenCalledWith(expect.stringContaining("Bohrmaschine"), expect.anything()));
+    await waitFor(() => expect(window.__nodvardDeck.confirmDialog).toHaveBeenCalledWith(expect.stringContaining("Bohrmaschine"), expect.anything()));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/items/item-1"), expect.objectContaining({ method: "DELETE" })));
   });
 
@@ -191,12 +191,13 @@ describe("InventoryPage", () => {
     render(<InventoryPage />);
     const summary = await screen.findByTestId("inventory-summary");
     // 2 x 89,99 + 1 x 50,00 = 229,98
-    expect(summary.textContent).toContain("2 Gegenstand/Gegenstände");
+    expect(summary.textContent).toContain("alle angezeigt");
     expect(summary.textContent).toContain("229,98");
     expect(summary.textContent).toContain("1 abgelaufen");
     fireEvent.change(screen.getByLabelText("Nach Garantie filtern"), { target: { value: "expired" } });
     await waitFor(() => expect(screen.queryByText("Bohrmaschine")).toBeNull());
     expect(screen.getByText("Alter Router")).toBeInTheDocument();
+    expect(summary.textContent).toContain("von 2, gefiltert");
     fireEvent.change(screen.getByLabelText("Nach Garantie filtern"), { target: { value: "" } });
     fireEvent.change(screen.getByLabelText("Nach Kategorie filtern"), { target: { value: "cat-1" } });
     await waitFor(() => expect(screen.queryByText("Alter Router")).toBeNull());

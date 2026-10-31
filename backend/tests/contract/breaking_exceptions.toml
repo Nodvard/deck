@@ -23,3 +23,35 @@ methode = "POST"
 art = "antwortstatus_entfernt"
 ziel = "204"
 begruendung = "PR #64: Beim Scharfschalten der Zwei-Faktor-Anmeldung liefert die Antwort jetzt einmalig die ersten Wiederherstellungs-Codes und ist deshalb 200 mit Body statt 204 ohne Inhalt. Die Codes dürfen nur in genau dieser Antwort erscheinen, ein eigener Zusatz-Endpunkt wäre unsicherer. Clients, die nur auf 'erfolgreich' (2xx) prüfen, merken nichts."
+
+# --- Alte Paketnamen `lattice_sdk`, `LatticeExtension`, `LatticeError` --------------------
+
+[[ausnahmen]]
+pfad = "lattice_sdk.*"
+methode = "SDK"
+art = "sdk_name_entfernt"
+begruendung = "Das Alias-Paket `lattice_sdk` (alter Name von `nodvard_sdk`) fällt mit 0.12 weg, wie am 17.10.2026 entschieden: vor dem Versprechen für 1.0, damit 1.x keinen zweiten Paketnamen mittragen muss. Es war seit der ersten öffentlichen Beta (0.6.0) als veraltet markiert und warnte beim Import. Eine Erweiterung, die es noch importiert, bekommt beim Laden einen klaren Grund statt eines Importfehlers."
+
+[[ausnahmen]]
+pfad = "nodvard_sdk.LatticeExtension"
+methode = "SDK"
+art = "sdk_name_entfernt"
+begruendung = "Alter Klassenname von `NodvardExtension`, fällt mit dem Paket `lattice_sdk` weg (siehe dort)."
+
+[[ausnahmen]]
+pfad = "nodvard_sdk.extension.LatticeExtension"
+methode = "SDK"
+art = "sdk_name_entfernt"
+begruendung = "Alter Klassenname von `NodvardExtension`, fällt mit dem Paket `lattice_sdk` weg (siehe dort)."
+
+[[ausnahmen]]
+pfad = "nodvard_sdk.LatticeError"
+methode = "SDK"
+art = "sdk_name_entfernt"
+begruendung = "Alter Klassenname von `NodvardError`, fällt mit dem Paket `lattice_sdk` weg (siehe dort)."
+
+[[ausnahmen]]
+pfad = "nodvard_sdk.errors.LatticeError"
+methode = "SDK"
+art = "sdk_name_entfernt"
+begruendung = "Alter Klassenname von `NodvardError`, fällt mit dem Paket `lattice_sdk` weg (siehe dort)."

@@ -116,6 +116,9 @@ class ConnectionCheckOut(BaseModel):
     os: OsInfo | None = None
     credential_id: str | None = Field(default=None)
     """Der Zugang, mit dem geprüft wurde (`null`: es gab keinen)."""
+    full_rule_removable: bool = False
+    """Die volle sudo-Regel ist da, aber nicht nötig: Jedes Modul, das hier root braucht, hat ein brauchbares
+    Hilfsskript mit eigener Regel. Gilt auch, wenn sie beim Server gewollt ist (`sudo_full_wanted`)."""
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +279,9 @@ class _State:
         Skripte erlaubt; `{}` für „nichts zu melden“; `None`: nicht festgestellt, der bisherige Stand bleibt."""
         self.helper_without_root = False
         """Für denselben Hinweis: Ohne volle Regel haben diese Module dort gerade gar kein root."""
+        self.helper_still_used: list[str] = []
+        """Für denselben Hinweis: Module, die ihr veraltetes Skript trotzdem aufrufen (`calls_any_version`)."""
+        self.full_rule_removable = False
 
     def add(self, id_: str, label: str, status: str, detail: str = "", hint: str = "") -> None:
         self.items.append(CheckItem(id=id_, label=label, status=status, detail=detail, hint=hint))  # type: ignore[arg-type]
@@ -379,12 +385,16 @@ async def _run(
         elif state.key_problem:
             host.status = "unknown"
     if state.helper_stale is not None and credential is not None and credential.is_default:
-        await helper_hints.record(session, host.id, state.helper_stale, without_root=state.helper_without_root)
+        await helper_hints.record(
+            session, host.id, state.helper_stale, without_root=state.helper_without_root,
+            still_used=state.helper_still_used, removable=state.full_rule_removable,
+        )
     await session.flush()
     return ConnectionCheckOut(
         ok=not any(item.status in ("fail", "confirm") for item in state.items),
         checked_at=utcnow(), items=state.items, host_key=state.host_key, os=state.os,
         credential_id=credential.id if credential is not None else None,
+        full_rule_removable=state.full_rule_removable,
     )
 
 
@@ -425,7 +435,9 @@ async def _probe(
         return
     # Die Hilfsskripte zuerst abfragen: Ohne volle Regel entscheiden ihre eigenen Regeln über „Root-Rechte“.
     helper_answer = await _query_helpers(conn, user, helpers)
-    await _step_root(state, conn, user, requirements, helpers, helper_answer)
+    await _step_root(
+        state, conn, user, requirements, helpers, helper_answer, full_wanted=hosts_service.full_sudo_wanted(host),
+    )
     _step_helpers(state, user, helpers, helper_answer)
     await _step_requirements(state, conn, user, requirements)
     await _step_os(state, conn)
@@ -644,12 +656,21 @@ def _root_label(requirements: Sequence[tuple[str, HostRequirementSpec]]) -> str:
 
 HELPER_RULES_ENOUGH = "sudo erlaubt nur die Hilfsskripte der Module, keine volle Regel. Das reicht."
 NO_ROOT_NEEDED = "Kein eingeschaltetes Modul braucht hier root, sudo ohne Passwort ist nicht nötig."
+FULL_RULE_NOT_NEEDED = "sudo ohne Passwort für alles ist hier nicht nötig. Die Hilfsskripte reichen."
+FULL_RULE_WANTED = "sudo ohne Passwort klappt. Die volle Regel ist bei diesem Server gewollt."
+
+
+FULL_RULE_HINT = (
+    "Stammt sie aus einer früheren Einrichtung, nimmt der Einrichtungsbefehl sie mit „Volle sudo-Regel entfernen“ "
+    "(unter „Erweitert“) zurück. Brauchst du sie für eigene Befehle mit sudo, setz beim Server „Volle sudo-Regel "
+    "gewollt“."
+)
 
 
 async def _step_root(
     state: _State, conn: asyncssh.SSHClientConnection, user: str,
     requirements: Sequence[tuple[str, HostRequirementSpec]],
-    helpers: Sequence[RootHelperFile] = (), helper_answer: _HelperAnswer | None = None,
+    helpers: Sequence[RootHelperFile] = (), helper_answer: _HelperAnswer | None = None, *, full_wanted: bool = False,
 ) -> None:
     label = _root_label(requirements)
     if user == "root":
@@ -663,7 +684,13 @@ async def _step_root(
     if helper_answer is not None and helpers and not without_root:
         # Die Skripte reichen. `sudo -n true` wäre auf einem Server nur mit ihren Regeln ein abgelehnter Aufruf im Protokoll.
         state.sudo_full = helper_hints.has_full_rule(helper_answer.sudo_lines)
-        state.add("root", label, "ok", "sudo ohne Passwort klappt." if state.sudo_full else HELPER_RULES_ENOUGH)
+        state.full_rule_removable = state.sudo_full
+        if not state.sudo_full:
+            state.add("root", label, "ok", HELPER_RULES_ENOUGH)
+        elif full_wanted:
+            state.add("root", label, "ok", FULL_RULE_WANTED)
+        else:
+            state.add("root", label, "warn", FULL_RULE_NOT_NEEDED, FULL_RULE_HINT)
         return
     result = await _run_command(conn, SUDO_COMMAND)
     if result is None:
@@ -673,7 +700,19 @@ async def _step_root(
     text = f"{out}\n{err}".lower()
     state.sudo_full = code == 0
     if code == 0:
-        state.add("root", label, "ok", "sudo ohne Passwort klappt.")
+        stuck = [
+            h.ext_name for h in helpers if not h.sudo_fallback and not helper_hints.usable(h, seen.get(h.install_path))
+        ] if helper_answer is not None else []
+        if stuck:
+            # Die volle Regel hilft einem Modul, das nur über sein Skript arbeitet, nicht.
+            who = (f"{stuck[0]} hat" if len(stuck) == 1
+                   else f"{', '.join(stuck[:-1])} und {stuck[-1]} haben")
+            state.add(
+                "root", label, "warn",
+                f"sudo ohne Passwort klappt, aber {who} hier kein brauchbares Hilfsskript und damit kein root.", _RERUN_HINT,
+            )
+        else:
+            state.add("root", label, "ok", "sudo ohne Passwort klappt.")
     elif not any(spec.needs_root for _ext_id, spec in requirements):
         state.add("root", label, "ok", NO_ROOT_NEEDED)
     elif state.helper_rules:
@@ -702,9 +741,11 @@ async def _step_root(
 
 # 4b --------------------------------------------------------------------------
 # Hilfsskripte der Module. Ein Modul ruft sein Skript nur auf, wenn es Byte für Byte das mitgelieferte ist (sha256), sonst
-# nimmt es die volle sudo-Regel. `ok` heißt: genau dieses Skript, und nur root kann es ändern. Fehlt es, steht `skipped`
-# da. Ein veraltetes oder neueres Skript und eines, das andere ändern können, ist eine Warnung, ein verändertes Skript
-# (gleiche Version, anderer Inhalt) ein Fehler. Die Abfrage führt das Skript nie aus, auch nicht für die Version.
+# nimmt es die volle sudo-Regel (ohne `sudo_fallback` hat es dann kein root); ein Modul mit `calls_any_version` ruft jede
+# Fassung auf, als root zählt aber nur eine lesbar ältere (`helper_hints.usable`). `ok` heißt: genau dieses Skript, und
+# nur root kann es ändern. Fehlt es, steht `skipped` da. Ein veraltetes oder neueres Skript und eines, das andere ändern
+# können, ist eine Warnung, ein verändertes Skript (gleiche Version, anderer Inhalt) ein Fehler. Die Abfrage führt das
+# Skript nie aus, auch nicht für die Version.
 
 _HELPER_TAG = "@@nd-"
 _VERSION_RE = re.compile(r"[0-9]{1,4}")
@@ -719,15 +760,9 @@ def _helper_label(helper: RootHelperFile) -> str:
     return f"Hilfsskript für {helper.ext_name}"
 
 
-# Wie `W` im Einrichtungsbefehl: Schreiben darf außer root nur die Gruppe root, kein anderer und kein benannter
-# ACL-Eintrag. Die zählen nur, wenn die Gruppenbits (mit ACL die Maske) Schreiben erlauben.
-_FOLDER_WRITERS = (
-    'case "$(stat -c %a "$q" 2>/dev/null)" in *[2367]) s=bad;; *[2367]?) [ "$(stat -c %g "$q" 2>/dev/null)" = 0 ] || s=bad; '
-    'if AL=$(getfacl -c "$q" 2>/dev/null); then printf "%s\\n" "$AL" | grep -E "^(user|group):[^:]+:.w" '
-    '| grep -Evq "^(user|group):(root|0):" && s=bad; '
-    'else case "$(ls -ld "$q" 2>/dev/null)" in ??????????+*) s=bad;; *) ls --version 2>/dev/null | grep -q coreutils || s=bad;; '
-    'esac; fi;; esac; '
-)
+# Wie `W` im Einrichtungsbefehl: Schreiben darf nur root, keine Gruppe und kein anderer. Mit ACL sind die Gruppenbits
+# die Maske, ohne w darin schreibt auch kein benannter Eintrag.
+_FOLDER_WRITERS = 'case "$(stat -c %a "$q" 2>/dev/null)" in ""|*[2367]|*[2367]?) s=bad;; esac; '
 
 
 def helper_check_command(helpers: Sequence[RootHelperFile]) -> str:
@@ -814,8 +849,8 @@ async def _query_helpers(
 
 
 def _helper_ready(helper: RootHelperFile, seen: _HelperSeen | None) -> bool:
-    """Genau das mitgelieferte Skript, nur root kann es ändern, und es hat seine eigene sudo-Regel."""
-    return seen is not None and seen.present and seen.owner_ok and seen.sha256 == helper.sha256 and seen.tight_rule
+    """Ob das Modul ohne volle Regel über sein Skript root bekommt: eigene sudo-Regel und `helper_hints.usable`."""
+    return seen is not None and seen.tight_rule and helper_hints.usable(helper, seen)
 
 
 def _step_helpers(
@@ -835,6 +870,7 @@ def _step_helpers(
     if answer is not None:
         # Wie der Job `helper-hints`: die Regeln aus `sudo -n -l` (nicht aus `sudo -n true`), damit beide gleich urteilen.
         state.helper_stale, state.helper_without_root = helper_hints.judge(helpers, answer.sudo_lines, seen)
+        state.helper_still_used = helper_hints.still_used(helpers, answer.sudo_lines, seen, state.helper_stale)
 
 
 _RERUN_HINT = "Server neu einrichten: Einrichtungsbefehl mit „Root-Rechte ohne Passwort“ erneut ausführen."
@@ -851,6 +887,13 @@ def _add_helper_item(state: _State, helper: RootHelperFile, seen: _HelperSeen | 
                 id_, label, "warn", "Fehlt auf dem Server. Ohne das Skript hat dieses Modul hier kein root.", _RERUN_HINT,
             )
             return
+        if state.sudo_full and not helper.sudo_fallback:
+            state.add(
+                id_, label, "warn",
+                "Fehlt auf dem Server. Ohne das Skript hat dieses Modul hier kein root, auch nicht über die volle sudo-Regel.",
+                _RERUN_HINT,
+            )
+            return
         if state.sudo_full:
             # Volle Regel gesetzt, Skript fehlt: Das Modul läuft, aber mit mehr Rechten als nötig. Ein Hinweis (gelb), kein
             # Fehler, wie in der Übersicht.
@@ -860,7 +903,7 @@ def _add_helper_item(state: _State, helper: RootHelperFile, seen: _HelperSeen | 
                 _RERUN_HINT,
             )
             return
-        detail = "Noch nicht auf dem Server." if state.sudo_full is False else (
+        detail = "Noch nicht auf dem Server." if state.sudo_full is False or not helper.sudo_fallback else (
             "Noch nicht auf dem Server. Bis dahin nutzt Nodvard Deck für dieses Modul die volle sudo-Regel."
         )
         state.add(
@@ -870,7 +913,7 @@ def _add_helper_item(state: _State, helper: RootHelperFile, seen: _HelperSeen | 
     if not seen.owner_ok:
         state.add(
             id_, label, "warn",
-            "Liegt auf dem Server, aber nicht nur root kann es ändern (Datei oder ein Ordner darüber, etwa weil eine andere "
+            "Liegt auf dem Server, aber nicht nur root kann es ändern (Datei oder ein Ordner darüber, etwa weil eine "
             "Gruppe dort schreiben darf). Wer es ändern kann, kommt über seine sudo-Regel an root. Der Einrichtungsbefehl "
             "nennt den Ordner und die Abhilfe.",
             _RERUN_HINT,
@@ -889,10 +932,16 @@ def _add_helper_item(state: _State, helper: RootHelperFile, seen: _HelperSeen | 
 
 
 def _add_foreign_helper_item(state: _State, helper: RootHelperFile, seen: _HelperSeen) -> None:
-    """Ein Skript, das nicht das mitgelieferte ist: Das Modul ruft es nicht auf (siehe oben), bis der Server neu
-    eingerichtet ist. Gleiche Version mit anderem Inhalt hat niemand von Nodvard Deck so ausgeliefert, das ist ein Fehler."""
+    """Ein Skript, das nicht das mitgelieferte ist: Bis der Server neu eingerichtet ist, ruft das Modul es nicht auf,
+    außer mit `calls_any_version`. Gleiche Version mit anderem Inhalt hat niemand von Nodvard Deck so ausgeliefert."""
     id_, label = _helper_id(helper), _helper_label(helper)
-    unused = " Nodvard Deck ruft es nicht auf."
+    if not helper.calls_any_version:
+        unused = " Nodvard Deck ruft es nicht auf."
+    elif helper_hints.usable(helper, seen) and (seen.tight_rule or state.sudo_full):
+        # Nur dann zählt das Modul hier als „mit root“, wie beim Punkt Root-Rechte und in der Übersicht.
+        unused = f" {helper.ext_name} ruft es trotzdem auf, bis der Server neu eingerichtet ist."
+    else:
+        unused = ""
     if seen.sha256 is None:
         state.add(id_, label, "warn", f"Die Prüfsumme lässt sich auf dem Server nicht bilden (sha256sum).{unused}")
     elif seen.version is None:

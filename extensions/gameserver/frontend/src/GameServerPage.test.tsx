@@ -68,7 +68,7 @@ beforeEach(() => {
   details = structuredClone(DETAILS);
   confirmDialog = vi.fn<(message: string) => Promise<boolean>>().mockResolvedValue(true);
   hasPermission = vi.fn<(permission: string) => boolean>().mockReturnValue(true);
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never,
     ReactDOM: undefined as never,
     ReactJsxRuntime: undefined as never,

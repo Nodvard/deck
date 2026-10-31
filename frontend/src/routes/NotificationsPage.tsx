@@ -82,7 +82,7 @@ function NotificationItem({
         </span>
         <span className="min-w-0 flex-1 break-words font-medium">{n.title}</span>
         <span className="text-xs opacity-50">
-          {new Date(n.ts).toLocaleString()}
+          {new Date(n.ts).toLocaleString("de-DE")}
           {n.source_ext_id ? ` · ${sourceLabel(n.source_ext_id)}` : ""}
         </span>
         {path && (

@@ -5,6 +5,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "./api";
+import { repoFile } from "./docs";
 
 /** Der Standard-Zugang eines Servers (nie ein Geheimnis, nur Art, Benutzer und Port). */
 export interface HostCredentialSummary {
@@ -45,6 +46,8 @@ export interface HostOut {
   power_state?: string | null;
   /** Seit wann der Anbieter den Server nicht mehr kennt (etwa in Proxmox gelöscht); `null`: er ist da. */
   gone_since?: string | null;
+  /** Die volle sudo-Regel ist hier gewollt; „Verbindung prüfen“ rät dann nicht, sie zu entfernen. Fehlt bei älteren Kernen. */
+  sudo_full_wanted?: boolean;
 }
 
 export interface MetricsOut {
@@ -132,8 +135,48 @@ export interface OverviewOut {
   attention: { id: string; ts: string; severity: string; title: string; source_ext_id: string | null }[];
   /** Server, die neu eingerichtet werden sollten: sudo führt dort Hilfsskripte aus, aber welche fehlen oder sind veraltet. */
   helper_hints?: HelperHint[];
+  /** Proxys aus dem Heimnetz, die nicht als vertrauenswürdig eingetragen sind (letzte 7 Tage). */
+  untrusted_proxies?: UntrustedProxy[];
+  /** Alte Umgebungsvariablen, die nur noch übergangsweise gelten (spätestens bis 1.0). Nur für den Inhaber. */
+  legacy_env?: LegacyEnv[];
   errors: string[];
   generated_at: number;
+}
+
+export interface UntrustedProxy {
+  address: string;
+  last_seen: string;
+}
+
+export interface LegacyEnv {
+  old: string;
+  new: string;
+  /** Der neue Name ist schon gesetzt; der alte kann einfach weg. */
+  new_set?: boolean;
+}
+
+/** Abschnitt der Anleitung zum Umbenennen; `docs.test.ts` prüft, dass es die Überschrift gibt. */
+export const LEGACY_ENV_GUIDE = repoFile("deploy/README.md", "umgebungsvariablen-alte-namen-umbenennen");
+
+export function legacyEnvText(count: number): string {
+  const soon = "Eine der nächsten Versionen, spätestens 1.0,";
+  const what = count === 1
+    ? `Eine Einstellung steht noch unter ihrem alten Namen. ${soon} liest ihn nicht mehr.`
+    : `${count} Einstellungen stehen noch unter ihrem alten Namen. ${soon} liest sie nicht mehr.`;
+  return `${what} Fehlt dann etwas Wichtiges wie der Datenordner, startet Nodvard Deck ohne diese Einstellung, im schlimmsten Fall leer. `
+    + "Ändere die Namen dort, wo du den Container eingerichtet hast (Compose-Datei, .env oder Portainer), und erstelle ihn neu:";
+}
+
+export function legacyEnvLine(entry: LegacyEnv): string {
+  return entry.new_set ? `${entry.old} löschen, ${entry.new} ist schon gesetzt` : `${entry.old} → ${entry.new}`;
+}
+
+export function proxyHintText(addresses: string[]): string {
+  if (addresses.length === 1) {
+    return `Anmeldungen kommen über einen Proxy (${addresses[0]}), der nicht eingetragen ist. Ohne Eintrag sieht Nodvard Deck die echte Adresse nicht.`;
+  }
+  const list = `${addresses.slice(0, -1).join(", ")} und ${addresses[addresses.length - 1]}`;
+  return `Anmeldungen kommen über Proxys (${list}), die nicht eingetragen sind. Ohne Eintrag sieht Nodvard Deck die echten Adressen nicht.`;
 }
 
 export interface HelperHint {
@@ -144,6 +187,12 @@ export interface HelperHint {
   checked_at: string;
   /** Keine volle sudo-Regel: Diese Module haben dort gerade gar kein root. Fehlt bei älteren Servern. */
   without_root?: boolean;
+  /** Module aus `modules`, die ihr veraltetes Skript weiter aufrufen und dort root haben. */
+  still_used?: string[];
+  /** Module aus `modules`, die ohne ihr Skript auch mit der vollen sudo-Regel kein root haben. Fehlt bei älteren Kernen. */
+  no_fallback?: string[];
+  /** Die volle sudo-Regel ist dort nicht nötig, die Hilfsskripte reichen; `modules` kann dann leer sein. */
+  full_rule_removable?: boolean;
 }
 
 /** Blendet den Hinweis für einen Server aus, bis sich die fehlenden Skripte ändern. */
@@ -155,14 +204,46 @@ export function useDismissHelperHint() {
   });
 }
 
+function joinNames(names: string[]): string {
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} und ${names[names.length - 1]}` : names[0] ?? "die Module";
+}
+
+const FULL_RULE_NOT_NEEDED = "die volle sudo-Regel ist dort nicht nötig, die Hilfsskripte reichen";
+
 /** „… damit Nodvard Shield und Server-Zustand mit engen Rechten laufen“, ohne volle Regel „… sonst haben … kein root“. */
 export function helperHintText(hint: HelperHint): string {
-  const names = hint.modules.length > 1
-    ? `${hint.modules.slice(0, -1).join(", ")} und ${hint.modules[hint.modules.length - 1]}`
-    : hint.modules[0] ?? "die Module";
-  const one = hint.modules.length === 1;
-  if (hint.without_root) return `${hint.host_name}: Server neu einrichten, sonst ${one ? "hat" : "haben"} ${names} dort kein root`;
-  return `${hint.host_name}: Server neu einrichten, damit ${names} mit engen Rechten ${one ? "läuft" : "laufen"}`;
+  if (!hint.modules.length) return `${hint.host_name}: ${FULL_RULE_NOT_NEEDED}`;
+  const text = staleHintText(hint);
+  return hint.full_rule_removable ? `${text}; ${FULL_RULE_NOT_NEEDED}` : text;
+}
+
+/** Wohin der Hinweis führt. Veraltete Skripte: zum Einrichtungsbefehl. Nur eine unnötige volle Regel: dorthin mit „Volle
+ * sudo-Regel entfernen“. */
+export function helperHintTarget(hint: HelperHint): string {
+  const page = `/settings/hosts/${hint.host_id}`;
+  if (hint.modules.length) return `${page}?befehl=1`;
+  return hint.full_rule_removable ? `${page}?befehl=regel-entfernen` : page;
+}
+
+function staleHintText(hint: HelperHint): string {
+  const start = `${hint.host_name}: Server neu einrichten`;
+  const noRootText = (names: string[]) => `sonst ${names.length === 1 ? "hat" : "haben"} ${joinNames(names)} dort kein root`;
+  if (!hint.without_root) {
+    // Mit voller Regel fehlt root nur einem Modul, das ohne sein Skript nicht auf sie ausweicht.
+    const stuck = hint.modules.filter((name) => hint.no_fallback?.includes(name) && !hint.still_used?.includes(name));
+    const tight = hint.modules.filter((name) => !stuck.includes(name));
+    const tightText = `damit ${joinNames(tight)} mit engen Rechten ${tight.length === 1 ? "läuft" : "laufen"}`;
+    if (!stuck.length) return `${start}, ${tightText}`;
+    return tight.length ? `${start}, ${tightText}, ${noRootText(stuck)}` : `${start}, ${noRootText(stuck)}`;
+  }
+  // Ein Modul, das sein altes Skript weiter aufruft, hat dort root; nur die übrigen stehen ohne da.
+  const old = hint.modules.filter((name) => hint.still_used?.includes(name));
+  const missing = hint.modules.filter((name) => !old.includes(name));
+  const oldText = old.length === 1
+    ? `${old[0]} nutzt dort noch ein älteres Hilfsskript`
+    : `${joinNames(old)} nutzen dort noch ältere Hilfsskripte`;
+  if (!missing.length) return `${start}, denn ${oldText}`;
+  return old.length ? `${start}, ${noRootText(missing)}, und ${oldText}` : `${start}, ${noRootText(missing)}`;
 }
 
 export function useOverview(enabled = true) {

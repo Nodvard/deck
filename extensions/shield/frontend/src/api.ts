@@ -58,8 +58,11 @@ export async function proposeAndApprove(path: string, body: unknown, risk: "low"
   const { action } = await runAction(path, { method: "POST", body: JSON.stringify(body) }, { risk, signal });
   const id = action.id ?? action.action_id;
   switch (action.status) {
-    case "succeeded":
-      return outcome("ok", "Erledigt.");
+    case "succeeded": {
+      // Ein Hinweis der Aktion (etwa „war schon nicht mehr gesperrt“) ersetzt das schlichte „Erledigt.“.
+      const note = action.result?.detail?.note;
+      return outcome("ok", typeof note === "string" && note ? note : "Erledigt.");
+    }
     case "proposed":
       return outcome("warn", "Wartet auf Freigabe unter „Aktionen“.", id ? [{ href: `/actions?action=${encodeURIComponent(id)}`, label: "Zur Freigabe" }] : []);
     case "failed":
@@ -132,15 +135,20 @@ export function usePageActions(): PageActions & { notices: ActionNotices | null 
   return page ? { ...page, notices: null } : { keys, signal, report: own.report, notices: own.notices };
 }
 
-/** Führt eine Aktion aus, die einen Reiterwechsel überdauert: Fortschritt und Ergebnis meldet die Seite unter `key`. */
-export async function track(page: PageActions, key: string, label: string, progress: string, fn: () => Promise<ActionResult>) {
-  if (!page.keys.begin(key)) return;
+/** Führt eine Aktion aus, die einen Reiterwechsel überdauert, meldet Fortschritt und Ergebnis unter `key` und gibt die
+ * Art des Ergebnisses zurück (`null`, wenn unter `key` schon eine läuft). */
+export async function track(
+  page: PageActions, key: string, label: string, progress: string, fn: () => Promise<ActionResult>,
+): Promise<ActionResult["kind"] | null> {
+  if (!page.keys.begin(key)) return null;
   page.report(key, { kind: "info", text: progress });
   try {
     const result = await fn();
     page.report(key, { ...result, text: `${label}: ${result.text}` });
+    return result.kind;
   } catch (err) {
     page.report(key, { kind: "error", text: `${label}: ${err instanceof Error ? err.message : String(err)}` });
+    return "error";
   } finally {
     page.keys.end(key);
   }

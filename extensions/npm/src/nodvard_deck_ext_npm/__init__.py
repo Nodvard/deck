@@ -169,8 +169,14 @@ class Extension(NodvardExtension):
     async def on_settings_changed(self, ctx: ExtensionContext, values: dict[str, Any]) -> None:
         await self._service.refresh()
 
+    async def on_secret_changed(self, ctx: ExtensionContext, label: str) -> None:
+        # Eine Anmeldung von vorher gälte sonst weiter, auch wenn im Tresor inzwischen ein falsches Passwort steht.
+        await self._service.drop()
+
     async def health(self, ctx: ExtensionContext) -> HealthReport:
         try:
+            # „Verbindung testen“ prüft das Passwort, das jetzt im Tresor steht, nicht ein Token von vorher.
+            await self._service.drop()
             state = await self._service.npm_status()
         except Exception as exc:  # noqa: BLE001 - Health darf nie werfen
             return HealthReport(healthy=False, message=str(exc))

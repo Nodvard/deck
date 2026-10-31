@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SocPage } from "./SocPage";
+import { SocPage, signatureDateText } from "./SocPage";
 
 const NOW = Date.now() / 1000;
 const SCAN = {
@@ -42,7 +42,7 @@ const OVERVIEW = {
 
 beforeEach(() => {
   window.history.replaceState(null, "", "/ext/shield/soc");
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn().mockResolvedValue(true), promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(true),
   };
@@ -76,6 +76,14 @@ function stubFetch(calls: string[] = [], overview: unknown = OVERVIEW) {
 }
 
 describe("Nodvard Shield: Signaturen und Härtung", () => {
+  it("nennt das Datum der Signaturen auf Deutsch, ohne Zeitstempel den Text von ClamAV", () => {
+    const ts = Date.UTC(2026, 8, 25, 7, 12) / 1000;
+    expect(signatureDateText({ signature_date: "Thu Sep 25 07:12 2026", signature_ts: ts })).toBe("25.09.2026, 07:12");
+    expect(signatureDateText({ signature_date: "Wed Sep 24 2026", signature_ts: Date.UTC(2026, 8, 24) / 1000 })).toBe("24.09.2026");
+    expect(signatureDateText({ signature_date: "irgendwas", signature_ts: null })).toBe("irgendwas");
+    expect(signatureDateText({ signature_date: null })).toBe("");
+  });
+
   it("zeigt veraltete Signaturen unter „Braucht Aufmerksamkeit“ mit Knopf zum Aktualisieren", async () => {
     const calls: string[] = [];
     stubFetch(calls);

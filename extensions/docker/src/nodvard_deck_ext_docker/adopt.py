@@ -89,6 +89,8 @@ class AdoptedStacks:
     def __init__(self, data_dir: Path) -> None:
         self._path = data_dir / STORE_FILE
         self._lock = asyncio.Lock()
+        self.on_remove: Callable[[str, str], Awaitable[None]] | None = None
+        """Was nach dem Vergessen eines Stacks noch wegfällt, etwa sein Repository."""
 
     def _read(self, *, before_write: bool = False) -> dict[str, dict[str, Adopted]]:
         """Die Merkliste; eine kaputte Datei gilt als leer und wird vor dem nächsten Schreiben beiseitegelegt
@@ -158,6 +160,11 @@ class AdoptedStacks:
             if data.get(host_id, {}).pop(project, None) is None:
                 return False
             self._write(data)
+        if self.on_remove is not None:
+            try:
+                await self.on_remove(host_id, project)
+            except Exception:  # vergessen ist der Stack trotzdem
+                log.exception("docker_stack_forget_failed host=%s project=%s", host_id, project)
         return True
 
 

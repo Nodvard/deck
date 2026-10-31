@@ -1,4 +1,4 @@
-// Ambient global für den Import-Map-Shim (docs/02-EXTENSION-API.md, window.__nodvardDeck, alt: window.__lattice).
+// Ambient global für den Import-Map-Shim (docs/02-EXTENSION-API.md, window.__nodvardDeck).
 // Eigene Datei statt eines `declare global` in main.tsx, damit extensions/tsconfig.json dieselbe Deklaration einbinden
 // kann, ohne main.tsx als Modul mitzuziehen (die Extension-Frontends importieren main.tsx nie).
 import type * as React from "react";
@@ -18,13 +18,8 @@ declare global {
      * `httpStatus`/`message` (Status und Grund des Servers, z. B. 507 "Speicherplatz voll") gibt es nur, wenn er
      * wirklich geantwortet hat; ältere Kerne kennen sie nicht. */
     | { status: "unavailable"; httpStatus?: number; message?: string };
-  /** Alter Name von `NodvardDeckTokenRefreshResult`, gilt weiter (Übergang). */
-  type LatticeTokenRefreshResult = NodvardDeckTokenRefreshResult;
-  /**
-   * Das globale Objekt der Kern-Shell (main.tsx) hängt unter zwei Namen am Fenster (`window.__nodvardDeck`, alt:
-   * `window.__lattice`), beide zeigen auf dasselbe Objekt. Erweiterungscode holt es über `deck()` bzw. `findDeck()`
-   * (lib/deckGlobal.ts): ein neues Bundle in einem Tab mit älterem Kern findet nur den alten Namen.
-   */
+  /** Das globale Objekt der Kern-Shell (main.tsx) am Fenster; Erweiterungscode holt es über `deck()` bzw. `findDeck()`
+   * (lib/deckGlobal.ts). */
   interface NodvardDeckShell {
     React: typeof React;
     ReactDOM: typeof ReactDOM & typeof ReactDOMClient;
@@ -43,7 +38,7 @@ declare global {
     confirmIdentity?: (message: string, twoFactor?: boolean) => Promise<{ current_password: string; totp_code?: string } | null>;
     hasPermission: (permission: string) => boolean;
     /** Setzt die Kern-Shell, solange eine Erweiterungsseite offen ist: Sie meldet dann jede Navigation, auch
-     * Zurück/Vor, als `nodvard-deck:navigate` und `lattice:navigate` (routes/ExtensionPage.tsx), und die Seite hört
+     * Zurück/Vor, als `nodvard-deck:navigate` (routes/ExtensionPage.tsx), und die Seite hört
      * nicht zusätzlich auf `popstate` (extensions/_shared/frontend/src/location.ts). */
     navigateEvents?: boolean;
     /** Zeitzone des Dashboards (z. B. "Europe/Berlin"), in der Zeitpläne ihre Uhrzeit meinen. Setzt die Kern-Shell
@@ -51,10 +46,7 @@ declare global {
     timezone?: string | null;
   }
   interface Window {
-    /** Neuer Name. Ältere Kerne kennen ihn nicht: dort ist er zur Laufzeit `undefined`. */
     __nodvardDeck: NodvardDeckShell;
-    /** Alter Name, gilt weiter (Übergang): dasselbe Objekt wie `__nodvardDeck`. */
-    __lattice: NodvardDeckShell;
   }
 }
 

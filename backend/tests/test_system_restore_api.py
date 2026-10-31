@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import threading
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from nodvard_deck.core import restart as restart_service
@@ -26,6 +27,11 @@ from restore_api_fixtures import (  # noqa: F401 - Fixtures
 from restore_helpers import PASSWORD
 
 BASE = "/api/v1/system"
+
+
+def _replaced_name() -> str:
+    """Ein alter Stand von gestern: `GET /restore/status` räumt Stände nach 30 Tagen weg."""
+    return "replaced-" + (datetime.now(UTC) - timedelta(days=1)).strftime("%Y%m%dT%H%M%S")
 
 
 def up_headers(owner: dict, password: str = OWNER_PW, **extra) -> dict:
@@ -459,25 +465,27 @@ async def test_status_shows_the_last_result_and_the_old_state(client, rapi):
     restore.make_private_dir(rapi.layout.restore_dir)
     restore.write_result(rapi.layout, {"ok": False, "at": "2026-10-01T03:00:00Z", "message": "kaputt", "source": "owner",
                                        "actor": {"label": "owner1", "ip": "1.2.3.4"}, "backup": {}, "rolled_back": True})
-    (rapi.layout.restore_dir / "replaced-20261001T030000").mkdir()
-    (rapi.layout.restore_dir / "replaced-20261001T030000" / "master.key").write_bytes(b"x" * 10)
+    replaced = _replaced_name()
+    (rapi.layout.restore_dir / replaced).mkdir()
+    (rapi.layout.restore_dir / replaced / "master.key").write_bytes(b"x" * 10)
     status = (await client.get(f"{BASE}/restore/status", headers=owner)).json()
     assert status["result"] == {"ok": False, "at": "2026-10-01T03:00:00Z", "message": "kaputt", "source": "owner",
                                 "backup": {}, "replaced": None, "actor": "owner1", "rolled_back": True}
     assert "1.2.3.4" not in json.dumps(status), "keine IP-Adressen in der Statusantwort"
-    assert status["replaced"]["name"] == "replaced-20261001T030000" and status["replaced"]["size"] == 10
+    assert status["replaced"]["name"] == replaced and status["replaced"]["size"] == 10
 
 
 @pytest.mark.asyncio
 async def test_delete_old_state_needs_password(client, rapi):
     owner = await make_owner(client)
     restore.make_private_dir(rapi.layout.restore_dir)
-    (rapi.layout.restore_dir / "replaced-20261001T030000").mkdir()
+    replaced = rapi.layout.restore_dir / _replaced_name()
+    replaced.mkdir()
     assert (await client.request("DELETE", f"{BASE}/restore/replaced", json={}, headers=owner)).status_code == 403
     assert (await client.request("DELETE", f"{BASE}/restore/replaced", json={"current_password": "falsch"}, headers=owner)).status_code == 400
-    assert (rapi.layout.restore_dir / "replaced-20261001T030000").exists()
+    assert replaced.exists()
     ok = await client.request("DELETE", f"{BASE}/restore/replaced", json={"current_password": OWNER_PW}, headers=owner)
-    assert ok.status_code == 204 and not (rapi.layout.restore_dir / "replaced-20261001T030000").exists()
+    assert ok.status_code == 204 and not replaced.exists()
 
 
 @pytest.mark.asyncio
@@ -561,17 +569,18 @@ async def test_no_secret_ends_up_in_logs_or_audit(client, rapi, tmp_path, caplog
 async def test_record_result_writes_the_audit_entry_once(client, rapi, db_session):
     owner = await make_owner(client)
     restore.make_private_dir(rapi.layout.restore_dir)
+    replaced = _replaced_name()
     restore.write_result(rapi.layout, {
         "ok": True, "at": "2026-10-01T03:00:00Z", "id": "a" * 32, "source": "owner", "message": "ok",
         "actor": {"type": "user", "id": "u-alt", "label": "anna", "ip": "10.0.0.5"},
-        "backup": {"instance_id": "inst-1"}, "replaced": "replaced-20261001T030000", "sign_out_all": True,
+        "backup": {"instance_id": "inst-1"}, "replaced": replaced, "sign_out_all": True,
     })
     await restore_service.record_result(rapi.settings)
     await restore_service.record_result(rapi.settings)
     entries = (await client.get("/api/v1/audit?action=system.restore.applied", headers=owner)).json()
     assert len(entries) == 1
     e = entries[0]
-    assert e["actor_id"] == "u-alt" and e["outcome"] == "success" and e["detail"]["replaced"] == "replaced-20261001T030000"
+    assert e["actor_id"] == "u-alt" and e["outcome"] == "success" and e["detail"]["replaced"] == replaced
     assert restore.read_result(rapi.layout)["audit_logged"] is True
     restore.write_result(rapi.layout, {"ok": False, "id": None, "source": "cli", "message": "nicht gegangen", "actor": {}, "backup": {}})
     await restore_service.record_result(rapi.settings)

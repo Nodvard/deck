@@ -17,7 +17,7 @@ beforeEach(() => {
   calls = [];
   docs = [];
   inbox = { folder: "/Scans", folder_error: null, nextcloud_ready: true, running: false, last_run: null };
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn().mockResolvedValue(true), promptDialog: vi.fn(),
     hasPermission: vi.fn(() => true),

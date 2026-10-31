@@ -72,6 +72,21 @@ CONSTRAINTS = REPO_ROOT / "deploy" / "constraints.txt"
 FRONTEND = REPO_ROOT / "frontend"
 LOCKFILE = FRONTEND / "package-lock.json"
 OUTPUT = REPO_ROOT / "THIRD_PARTY_LICENSES"
+DOCKERFILE = REPO_ROOT / "deploy" / "Dockerfile"
+
+# Pakete ohne Lizenzangabe in den Metadaten: was ihre mitgelieferte Lizenzdatei sagt, geprüft für genau diese Version
+# (Version, Lizenz, Anfang der Lizenzdatei).
+_LICENSE_FROM_FILE: dict[tuple[str, str], tuple[str, str, str]] = {
+    ("python", "pyrage"): ("1.4.0", "MIT", "The MIT License"),
+}
+# Bei einer Wahl "A OR B" die Option, unter der Nodvard Deck das Paket nutzt.
+_CHOSEN_OPTION: dict[tuple[str, str], str] = {
+    ("python", "asyncssh"): "EPL-2.0",
+    ("python", "cryptography"): "Apache-2.0",
+    ("python", "dulwich"): "Apache-2.0",
+    ("python", "packaging"): "Apache-2.0",
+    ("python", "structlog"): "MIT",
+}
 
 # Lizenzdateien im Paketverzeichnis (npm) bzw. in der dist-info (Python).
 _LICENSE_FILE_RE = re.compile(r"^(licen[cs]e|licen[cs]es|copying|copyright|notice|unlicense)([.\-_].*)?$", re.IGNORECASE)
@@ -94,6 +109,7 @@ class Package:
     source_url: str = ""
     download_url: str = ""  # genau diese Version im Paketregister (npm: "resolved" aus dem Lockfile)
     note: str = ""  # warum das Paket hier steht, wenn das nicht offensichtlich ist (Build-Werkzeug)
+    shown_license: str = ""  # Angabe für die Datei, wenn sie mehr sagt als `license` (gewählte Option, Lizenzdatei)
     problems: list[str] = field(default_factory=list)  # Umgebung passt nicht (fehlt, andere Version)
     text_problems: list[str] = field(default_factory=list)  # Lizenztext nicht auffindbar
     skipped: str = ""  # Grund, warum das Paket auf dieser Plattform nicht installiert wird (dann kein Problem)
@@ -463,22 +479,22 @@ _PY_EMBEDDED: tuple[EmbeddedLibrary, ...] = (
     ),
     EmbeddedLibrary(
         package="dulwich",
-        package_version="1.2.15",
+        package_version="1.2.19",
         name="pyo3 und pyo3-ffi (Rust-Crates)",
-        version="0.29.2",
+        version="0.30.1",
         license="MIT OR Apache-2.0",
         holders="PyO3 Project and Contributors",
-        source_url="https://crates.io/crates/pyo3/0.29.2",
+        source_url="https://crates.io/crates/pyo3/0.30.1",
         evidence=(
             "Die drei Rust-Erweiterungen von dulwich (_objects, _pack, _diff_tree) bringen keine SBOM mit. In allen "
-            "dreien stehen die Crate-Pfade pyo3-0.29.2 und pyo3-ffi-0.29.2 (x86_64 und aarch64). Die Lizenzdateien "
+            "dreien stehen die Crate-Pfade pyo3-0.30.1 und pyo3-ffi-0.30.1 (x86_64 und aarch64). Die Lizenzdateien "
             "beider Crates sind gleich; ausgegeben ist der MIT-Text (von 'MIT OR Apache-2.0' gilt eine nach Wahl)."
         ),
-        texts=(("LICENSE-MIT", "pyo3-0.29.2-LICENSE-MIT.txt"),),
+        texts=(("LICENSE-MIT", "pyo3-0.30.1-LICENSE-MIT.txt"),),
     ),
     EmbeddedLibrary(
         package="dulwich",
-        package_version="1.2.15",
+        package_version="1.2.19",
         name="once_cell (Rust-Crate)",
         version="1.21.4",
         license="MIT OR Apache-2.0",
@@ -492,7 +508,7 @@ _PY_EMBEDDED: tuple[EmbeddedLibrary, ...] = (
     ),
     EmbeddedLibrary(
         package="dulwich",
-        package_version="1.2.15",
+        package_version="1.2.19",
         name="similar (Rust-Crate)",
         version="3.2.0",
         license="Apache-2.0",
@@ -508,7 +524,7 @@ _PY_EMBEDDED: tuple[EmbeddedLibrary, ...] = (
     EmbeddedLibrary(
         package="cryptography",
         package_version="50.0.1",
-        also_in=(("dulwich", "1.2.15"), ("pydantic-core", "2.46.5"), ("pyrage", "1.4.0"), ("watchfiles", "1.3.0")),
+        also_in=(("dulwich", "1.2.19"), ("pydantic-core", "2.46.5"), ("pyrage", "1.4.0"), ("watchfiles", "1.3.0")),
         name="Rust-Standardbibliothek (std, core, alloc)",
         version="",
         license="MIT OR Apache-2.0",
@@ -528,7 +544,11 @@ _PY_EMBEDDED: tuple[EmbeddedLibrary, ...] = (
             "im Binary, aber ihre Funktionen (z. B. object::read::read_ref::ReadRef) in cryptography, dulwich und "
             "watchfiles; die Binaries von pydantic-core und pyrage sind ohne Symbole, enthalten aber dieselben "
             "Crates der Fehlerausgabe (addr2line, gimli). Die Version 0.37.3 steht in der Cargo.lock der "
-            "Standardbibliothek bei allen drei Compiler-Ständen, mit denen diese Wheels gebaut sind."
+            "Standardbibliothek bei allen drei Compiler-Ständen, mit denen die übrigen Wheels gebaut sind "
+            "(Rust 1.96.0, 1.98.0 und 1.98.1). dulwich ist mit Rust 1.99.1 gebaut; dort stehen addr2line-0.27.1, "
+            "gimli-0.34.0, miniz_oxide-0.9.1, rustc-demangle-0.1.28 und hashbrown-0.17.1 im Binary, object hat laut "
+            "Cargo.lock dieses Compilers die Version 0.39.1. Die Lizenzdateien dieser neueren Versionen sind Wort "
+            "für Wort dieselben."
         ),
         note=(
             "Eine feste Version gibt es nicht: Die Standardbibliothek kommt mit dem Compiler, mit dem das jeweilige "
@@ -537,11 +557,11 @@ _PY_EMBEDDED: tuple[EmbeddedLibrary, ...] = (
         ),
         texts=(
             ("LICENSE-MIT der Standardbibliothek (rust-lang/rust)", "rust-std-LICENSE-MIT.txt"),
-            ("LICENSE-MIT aus addr2line 0.25.1", "addr2line-0.25.1-LICENSE-MIT.txt"),
-            ("LICENSE-MIT aus gimli 0.32.3", "gimli-0.32.3-LICENSE-MIT.txt"),
-            ("LICENSE-MIT aus object 0.37.3", "object-0.37.3-LICENSE-MIT.txt"),
-            ("LICENSE aus miniz_oxide 0.8.9 (MIT)", "miniz_oxide-0.8.9-LICENSE.txt"),
-            ("LICENSE-MIT aus rustc-demangle 0.1.27", "rustc-demangle-0.1.27-LICENSE-MIT.txt"),
+            ("LICENSE-MIT aus addr2line 0.25.1 (0.27.1 ist gleich)", "addr2line-0.25.1-LICENSE-MIT.txt"),
+            ("LICENSE-MIT aus gimli 0.32.3 (0.34.0 ist gleich)", "gimli-0.32.3-LICENSE-MIT.txt"),
+            ("LICENSE-MIT aus object 0.37.3 (0.39.1 ist gleich)", "object-0.37.3-LICENSE-MIT.txt"),
+            ("LICENSE aus miniz_oxide 0.8.9 (MIT; 0.9.1 ist gleich)", "miniz_oxide-0.8.9-LICENSE.txt"),
+            ("LICENSE-MIT aus rustc-demangle 0.1.27 (0.1.28 ist gleich)", "rustc-demangle-0.1.27-LICENSE-MIT.txt"),
             ("LICENSE-MIT aus hashbrown 0.17.1 (0.16.1 ist gleich)", "hashbrown-0.17.1-LICENSE-MIT.txt"),
         ),
     ),
@@ -1045,6 +1065,64 @@ def mpl_lines(pkg: Package) -> list[str]:
     return lines
 
 
+def _key(pkg: Package) -> tuple[str, str]:
+    return pkg.ecosystem, pkg.name.lower() if pkg.ecosystem == "npm" else pep503(pkg.name)
+
+
+def explain_licenses(packages: list[Package]) -> list[str]:
+    """Setzt `shown_license` aus `_LICENSE_FROM_FILE` und `_CHOSEN_OPTION` und gibt zurück, was nicht passt."""
+    problems = []
+    for pkg in packages:
+        key = _key(pkg)
+        found = _LICENSE_FROM_FILE.get(key)
+        if found is not None and not pkg.license:
+            version, license_, start = found
+            if version != pkg.version:
+                problems.append(f"{pkg.name}: _LICENSE_FROM_FILE gilt für {version}, installiert ist {pkg.version}")
+            elif not any(text.startswith(start) for _, text in pkg.texts):
+                problems.append(f"{pkg.name}: die Lizenzdatei beginnt nicht mit {start!r}")
+            else:
+                pkg.shown_license = f"{license_} (laut Lizenzdatei, die Metadaten nennen keine)"
+        options = [part.strip() for part in pkg.license.split(" OR ")] if " OR " in pkg.license else []
+        chosen = _CHOSEN_OPTION.get(key)
+        if options and chosen not in options:
+            problems.append(f"{pkg.name}: {pkg.license!r} ohne gewählte Option in _CHOSEN_OPTION")
+        elif options:
+            pkg.shown_license = f"{pkg.license}, genutzt als {chosen}"
+    present = {_key(p): p for p in packages if not p.skipped}
+    stale = sorted(key[1] for key in _CHOSEN_OPTION if key in present and " OR " not in present[key].license)
+    problems += [f"{name}: in _CHOSEN_OPTION, hat aber keine Wahl (mehr)" for name in stale]
+    return problems
+
+
+def image_system_packages(dockerfile: Path = DOCKERFILE) -> tuple[str, dict[str, list[str]]]:
+    """Basis-Image der letzten Stufe und die Debian-Pakete aus `apt-get install` dort, je Modul ("" für alle Images)."""
+    text = dockerfile.read_text(encoding="utf-8")
+    stages = re.findall(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)", text, re.MULTILINE)
+    final = text[text.rindex("\nFROM "):]
+    found: dict[str, set[str]] = {}
+    # Ein Zweig `*,<modul>,*)` installiert nur, wenn das Image mit diesem Modul gebaut wird.
+    for match in re.finditer(r"(?:\*,([\w-]+),\*\)\s*apt-get update\s*&&\s*)?apt-get install([^&;|]*)", final):
+        words = match.group(2).replace("\\", " ").split()
+        found.setdefault(match.group(1) or "", set()).update(word for word in words if not word.startswith("-"))
+    return stages[-1], {module: sorted(names) for module, names in sorted(found.items())}
+
+
+def _system_lines() -> list[str]:
+    base, extra = image_system_packages()
+    parts = [
+        f"die Debian-Pakete {', '.join(names)}" + (f" (nur in Images mit dem Modul {module})" if module else "")
+        for module, names in extra.items()
+    ]
+    text = (
+        f"Das Image baut auf {base} auf (Debian mit Python)"
+        + (f", dazu kommen {' und '.join(parts)}" if parts else "")
+        + ". Diese Programme des Betriebssystems sind nicht Teil von Nodvard Deck und stehen unter ihren eigenen "
+        "Lizenzen; den Text zu jedem Paket enthält das Image unter /usr/share/doc/<paket>/copyright."
+    )
+    return ["Systempakete im Image", _THIN, *_wrap(text, "", 78), ""]
+
+
 def sorted_packages(packages: list[Package]) -> list[Package]:
     return sorted(packages, key=lambda p: (p.ecosystem, p.name.lower(), p.version))
 
@@ -1073,8 +1151,9 @@ def render(python_packages: list[Package], npm_packages: list[Package]) -> str:
     ]
     for title, group in (("Python", python_sorted), ("npm", npm_sorted)):
         out += [f"[{title}] {len(group)} Pakete"]
-        out += [f"  {p.name:<34} {p.version:<14} {p.license or '(keine Angabe)'}" for p in group]
+        out += [f"  {p.name:<34} {p.version:<14} {p.shown_license or p.license or '(keine Angabe)'}" for p in group]
         out.append("")
+    out += _system_lines()
     mpl = [p for p in python_sorted + npm_sorted if _is_mpl(p)]
     if mpl:
         out += ["Hinweis zu MPL-2.0-Komponenten", _THIN, _MPL_NOTE, ""]
@@ -1084,7 +1163,8 @@ def render(python_packages: list[Package], npm_packages: list[Package]) -> str:
     for title, group in (("Python-Pakete", python_sorted), ("npm-Pakete", npm_sorted)):
         out += [_RULE, title, _RULE, ""]
         for pkg in group:
-            out += [_THIN, f"{pkg.name} {pkg.version}", f"Lizenz: {pkg.license or '(keine Angabe)'}", _THIN]
+            shown = pkg.shown_license or pkg.license or "(keine Angabe)"
+            out += [_THIN, f"{pkg.name} {pkg.version}", f"Lizenz: {shown}", _THIN]
             if pkg.note:
                 out += _wrap(f"Hinweis: {pkg.note}", "", 90) + [""]
             for label, text in pkg.texts:
@@ -1154,6 +1234,10 @@ def main(argv: list[str] | None = None) -> int:
     table_problems = embedded_table_problems(read_constraints())
     for problem in table_problems:
         print(f"PROBLEM  [python] _PY_EMBEDDED: {problem}", file=sys.stderr)
+    license_problems = explain_licenses(python_packages + npm_packages)
+    for problem in license_problems:
+        print(f"PROBLEM  Lizenzangabe: {problem}", file=sys.stderr)
+    table_problems += license_problems
     if report_problems(python_packages + npm_packages) + len(table_problems):
         print(
             "\nDie Umgebung passt nicht zu deploy/constraints.txt bzw. package-lock.json -- es wurde nichts geschrieben.\n"

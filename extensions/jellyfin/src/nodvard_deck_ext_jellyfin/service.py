@@ -61,10 +61,17 @@ class JellyfinService:
         self._clock = clock
         self._cache: dict[str, _Entry] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        # Steht in jeder Kennung; nach einem neuen Geheimnis gilt so auch nichts, was eine laufende Abfrage noch einträgt.
+        self._generation: dict[str, int] = {}
 
     def clear(self) -> None:
         """Verwirft alle Zwischenergebnisse."""
         self._cache.clear()
+
+    def forget(self, name: str) -> None:
+        """Verwirft Zwischenergebnis und Pause einer Verbindung, etwa nach einem neuen Schlüssel im Tresor."""
+        self._generation[name] = self._generation.get(name, 0) + 1
+        self._cache.pop(name, None)
 
     async def read_key(self, name: str) -> str:
         label = key_label(name)
@@ -150,7 +157,7 @@ class JellyfinService:
             has_key = False if cfg.problem else await self._ctx.secrets.exists(key_label(cfg.name))
             lock = self._locks.setdefault(cfg.name, asyncio.Lock())
             async with lock:
-                fingerprint = (cfg, has_key)
+                fingerprint = (cfg, has_key, self._generation.get(cfg.name, 0))
                 entry = self._cache.get(cfg.name)
                 fresh = entry is not None and entry.fingerprint == fingerprint and entry.expires > self._clock()
                 # „Aktualisieren“ umgeht den Zwischenspeicher, aber nicht die Pause nach einem abgelehnten Schlüssel.

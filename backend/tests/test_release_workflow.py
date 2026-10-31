@@ -9,6 +9,7 @@ Schritte lokal aus (kein Lauf bei GitHub).
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -67,9 +68,9 @@ def test_tags_are_version_major_minor_and_latest():
     assert "type=semver,pattern={{version}}" in tags
     assert "type=semver,pattern={{major}}.{{minor}}" in tags
     assert "type=raw,value=latest" in tags
-    # `latest` nie automatisch und nie fuer Vorabversionen (v1.2.3-rc1).
+    # `latest` nie automatisch, nur für die höchste fertige Version.
     assert "latest=false" in meta["flavor"]
-    assert "contains(github.ref_name, '-')" in tags
+    assert "type=raw,value=latest,enable=${{ steps.newest.outputs.newest == 'true' }}" in tags
 
 
 def test_oci_labels_source_license_version():
@@ -95,6 +96,10 @@ def test_login_uses_only_the_github_token_and_least_privilege():
     assert re.findall(r"\bsecrets\b(?!\.GITHUB_TOKEN\b)", text) == []
     assert text.count("secrets.GITHUB_TOKEN") == len(workflow["jobs"])
     for name, other in workflow["jobs"].items():
+        if name == "helper-release":
+            # Legt das GitHub-Release an: Schreibrecht aufs Repository, keins auf die Registry.
+            assert other["permissions"] == {"contents": "write"}
+            continue
         assert other["permissions"] == {"contents": "read", "packages": "write"}, name
     for forbidden in ("ssh", "scp", "deploy_pi", "docker compose", "kubectl"):
         assert forbidden not in text.lower().replace("docker/", ""), forbidden
@@ -116,7 +121,15 @@ def test_every_action_is_pinned_to_a_commit_sha_with_the_version_as_comment():
 def test_build_args_name_version_and_official_image():
     build = _step("docker/build-push-action")["with"]
     args = dict(line.split("=", 1) for line in build["build-args"].strip().splitlines())
-    assert args == {"VERSION": "${{ env.VERSION }}", "IMAGE": "${{ env.IMAGE_NAME }}"}
+    assert args == {"VERSION": "${{ env.VERSION }}", "IMAGE": "${{ env.IMAGE_NAME }}", "APT_REFRESH": "${{ github.run_id }}"}
+
+
+def test_every_release_fetches_the_debian_packages_fresh():
+    text = (ROOT / "deploy" / "Dockerfile").read_text(encoding="utf-8")
+    runtime = text[text.index("AS runtime"):]
+    apt_run = runtime.rindex("\nRUN ", 0, runtime.index("apt-get update"))
+    # Direkt davor: Ein neuer Wert baut sonst auch die Schritte dazwischen neu.
+    assert runtime[:apt_run].endswith('\nARG APT_REFRESH=""')
 
 
 def test_dockerfile_writes_the_build_args_into_a_file_not_the_environment():
@@ -149,6 +162,16 @@ def _named(name: str) -> tuple[int, dict]:
     found = [(i, s) for i, s in enumerate(_steps()) if s.get("name") == name]
     assert len(found) == 1, f"genau ein Schritt {name!r} erwartet"
     return found[0]
+
+
+def test_the_grant_guide_names_the_build_step_that_prints_the_digest():
+    _, build = _named("Bauen und veroeffentlichen")
+    assert build["uses"].split("@")[0] == "docker/build-push-action"
+    guide_path = ROOT / "docs" / "VEROEFFENTLICHEN.md"
+    if not guide_path.exists():
+        pytest.skip("Die Anleitung fehlt im öffentlichen Export (.gitattributes, export-ignore).")
+    guide = " ".join(guide_path.read_text(encoding="utf-8").split())
+    assert "Job `image`, Schritt „Bauen und veroeffentlichen“" in guide
 
 
 def test_tag_must_match_version_py_before_anything_is_built():
@@ -213,6 +236,67 @@ def _run_guard(version: str):
     return subprocess.run([bash, "-eo", "pipefail", "-c", guard["run"]], cwd=ROOT, env=env, capture_output=True, text=True, check=False)
 
 
+def test_newest_version_is_decided_after_the_tag_guard_and_before_the_tags():
+    guard_index, _ = _named("Tag passt zu version.py")
+    newest_index, newest = _named("Höchste fertige Version")
+    meta_index = next(i for i, s in enumerate(_steps()) if str(s.get("uses", "")).startswith("docker/metadata-action@"))
+    assert guard_index < newest_index < meta_index
+    assert newest["id"] == "newest"
+    assert "${{" not in newest["run"], "VERSION nur über die Umgebung, nie in den Befehl eingesetzt"
+    assert "if" not in newest and "continue-on-error" not in newest, "ohne Ergebnis darf der Lauf nicht weitergehen"
+    assert _workflow()["jobs"]["image"]["outputs"] == {"newest": "${{ steps.newest.outputs.newest }}"}
+
+
+def _run_newest(tmp_path: Path, version: str, tags: list[str], *, git_exit: int = 0):
+    """Führt den Schritt wie der Runner aus, mit einem `git`, das die Tags wie `git ls-remote` ausgibt."""
+    import os
+    import shutil
+    import subprocess
+
+    bash = shutil.which("bash")
+    if bash is None or shutil.which("python3") is None:
+        pytest.skip("braucht bash und python3 (wie der Runner von GitHub)")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    listing = tmp_path / "tags"
+    listing.write_text("".join(f"{'a' * 40}\trefs/tags/v{tag}\n" for tag in tags), encoding="utf-8")
+    (bin_dir / "git").write_text(f'#!/bin/sh\ncat "{listing}"\nexit {git_exit}\n', encoding="utf-8")
+    (bin_dir / "git").chmod(0o755)
+    output = tmp_path / "output"
+    output.write_text("", encoding="utf-8")
+    _, step = _named("Höchste fertige Version")
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}", "VERSION": version,
+           "GITHUB_OUTPUT": str(output)}
+    # Ohne `shell:` startet der Runner `bash -e {0}`, pipefail nur bei `shell: bash`.
+    flags = ["-eo", "pipefail"] if step.get("shell") == "bash" else ["-e"]
+    done = subprocess.run([bash, *flags, "-c", step["run"]], cwd=ROOT, env=env, capture_output=True, text=True,
+                          check=False)
+    return done, output.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("version", "tags", "newest"),
+    [
+        ("0.13.0", ["0.12.0", "0.12.1", "0.13.0"], "true"),
+        ("0.12.2", ["0.12.0", "0.12.1", "0.13.0", "0.12.2"], "false"),
+        ("0.12.2", ["0.12.1", "0.13.0-rc1", "0.12.2"], "true"),
+        ("0.13.0-rc1", ["0.12.1", "0.13.0-rc1"], "false"),
+    ],
+    ids=["hoechste", "patch-einer-aelteren-reihe", "nur-ein-rc-darueber", "vorabversion"],
+)
+def test_newest_step_writes_the_output(tmp_path, version, tags, newest):
+    done, output = _run_newest(tmp_path, version, tags)
+    assert done.returncode == 0, done.stderr
+    assert output == f"newest={newest}\n"
+
+
+@pytest.mark.parametrize("tags", [[], ["0.12.1", "0.13.0"]], ids=["ohne-ausgabe", "liste-dann-fehler"])
+def test_newest_step_stops_when_git_fails(tmp_path, tags):
+    done, output = _run_newest(tmp_path, "0.13.0", tags, git_exit=128)
+    assert done.returncode != 0
+    assert output == ""
+
+
 # ---------------------------------------------------------------------------
 # Job `updater-image`: das Image des Update-Helfers (deploy/updater)
 # ---------------------------------------------------------------------------
@@ -234,8 +318,8 @@ def _updater_named(name: str) -> tuple[int, dict]:
     return found[0]
 
 
-def test_jobs_are_the_dashboard_the_helper_and_dock():
-    assert list(_workflow()["jobs"]) == ["image", "updater-image", "dock-image"]
+def test_jobs_are_the_dashboard_the_helper_dock_and_the_release():
+    assert list(_workflow()["jobs"]) == ["image", "updater-image", "dock-image", "helper-release"]
 
 
 def test_helper_image_waits_for_the_dashboard_image():
@@ -321,7 +405,7 @@ def test_helper_selftest_cannot_be_skipped_or_ignored():
     kein `if`, kein `continue-on-error`, kein `|| true` am Selbsttest, kein `continue-on-error` an irgendeinem Schritt,
     und auf Job-Ebene nur die bekannten Schluessel."""
     job = _workflow()["jobs"]["updater-image"]
-    assert set(job) == {"needs", "runs-on", "permissions", "steps"}, sorted(job)
+    assert set(job) == {"needs", "runs-on", "permissions", "outputs", "steps"}, sorted(job)
     _, selftest = _updater_named("Selbsttest am Digest (amd64 und arm64)")
     assert set(selftest) == {"name", "env", "run"}, sorted(selftest)
     assert "||" not in selftest["run"] and "set +e" not in selftest["run"]
@@ -331,13 +415,12 @@ def test_helper_selftest_cannot_be_skipped_or_ignored():
             assert step.get("name") == "Tag 1 setzen", step
 
 
-def test_helper_tag_1_moves_only_after_the_selftest_and_never_for_a_prerelease():
-    """`:1` nimmt die Compose-Datei mit Helfer. Er wandert erst, wenn der Selbsttest bestanden ist, und nie fuer eine
-    Vorabversion (wie `latest` beim Dashboard-Image)."""
+def test_helper_tag_1_moves_only_after_the_selftest_and_only_for_the_newest_version():
+    """`:1` nimmt die Compose-Datei mit Helfer: erst nach dem Selbsttest und nur für die höchste fertige Version."""
     test_index, _ = _updater_named("Selbsttest am Digest (amd64 und arm64)")
     tag_index, step = _updater_named("Tag 1 setzen")
     assert tag_index == test_index + 1 == len(_updater_steps()) - 1
-    assert step["if"] == "${{ !contains(github.ref_name, '-') }}"
+    assert step["if"] == "${{ needs.image.outputs.newest == 'true' }}"
     assert step["env"] == {"IMAGE": "${{ env.IMAGE_NAME }}-updater", "DIGEST": "${{ steps.build.outputs.digest }}"}
     assert step["run"].strip() == 'docker buildx imagetools create --tag "$IMAGE:1" "$IMAGE@$DIGEST"'
 
@@ -429,6 +512,280 @@ def test_helper_version_is_the_dashboard_version():
     from nodvard_deck.version import __version__
 
     assert _helper_version() == __version__
+
+
+# ---------------------------------------------------------------------------
+# Job `helper-release`: Entwurf des GitHub-Releases mit der Compose-Datei, die den Helfer per Digest nennt
+# ---------------------------------------------------------------------------
+
+DIGEST = "sha256:" + "ab" * 32
+COMPOSE = "compose.standalone-mit-helfer.yml"
+GH_STEP = "Entwurf anlegen oder Release ergänzen"
+
+
+def _release_job() -> dict:
+    return _workflow()["jobs"]["helper-release"]
+
+
+def _release_named(name: str) -> dict:
+    found = [s for s in _release_job()["steps"] if s.get("name") == name]
+    assert len(found) == 1, f"genau ein Schritt {name!r} erwartet"
+    return found[0]
+
+
+def test_helper_digest_is_an_output_of_the_helper_job():
+    assert _workflow()["jobs"]["updater-image"]["outputs"] == {"digest": "${{ steps.build.outputs.digest }}"}
+
+
+def test_release_comes_after_tag_1_only_for_final_versions_with_least_privilege():
+    job = _release_job()
+    assert set(job) == {"needs", "if", "runs-on", "permissions", "steps"}, sorted(job)
+    assert job["needs"] == "updater-image"
+    assert job["if"] == "${{ !contains(github.ref_name, '-') }}"
+    assert job["permissions"] == {"contents": "write"}
+    checkout = job["steps"][0]
+    assert str(checkout["uses"]).split("@")[0] == "actions/checkout"
+    assert checkout["with"] == {"persist-credentials": False}, "kein Token mit Schreibrecht in der Arbeitskopie"
+    assert [s for s in job["steps"] if "uses" in s] == [checkout], "keine fremde Action mit Schreibrecht"
+    for step in job["steps"]:
+        assert "continue-on-error" not in step and "if" not in step, step
+
+
+def test_release_files_get_the_published_digest_only_through_the_environment():
+    step = _release_named("Dateien fürs Release")
+    assert step["env"] == {"IMAGE": "${{ env.IMAGE_NAME }}-updater", "DIGEST": "${{ needs.updater-image.outputs.digest }}"}
+    assert "${{" not in step["run"]
+    assert "\npython3 scripts/release_helper_assets.py files " in step["run"]
+
+
+def test_only_the_gh_step_sees_the_token():
+    step = _release_named(GH_STEP)
+    assert step["env"] == {"GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}", "GH_REPO": "${{ github.repository }}", "TAG": "${{ github.ref_name }}"}
+    assert "${{" not in step["run"]
+    others = [s for s in _release_job()["steps"] if s.get("name") != step["name"]]
+    assert all("GH_TOKEN" not in str(s) and "secrets" not in str(s) for s in others)
+
+
+def _gh_flags(job: dict) -> dict[str, list[str]]:
+    import re
+    import shlex
+
+    found: dict[str, list[str]] = {}
+    for step in job["steps"]:
+        for command, rest in re.findall(r"\bgh release (\w+) ([^\n;|&]*)", step.get("run", "")):
+            assert command not in found, command
+            found[command] = [token for token in shlex.split(rest) if token.startswith("-")]
+    return found
+
+
+def test_the_release_job_never_publishes_and_never_sets_latest():
+    import re
+
+    job = _release_job()
+    text = json.dumps(job, ensure_ascii=False)
+    assert re.findall(r"draft\W{0,4}(?:false|0|f)\b|--latest|make_latest|\bgh api\b", text, re.IGNORECASE) == []
+    assert _gh_flags(job) == {
+        "view": ["--json", "--jq"],
+        "upload": ["--clobber"],
+        "edit": ["--notes-file"],
+        "create": ["--draft", "--verify-tag", "--title", "--notes-file"],
+    }
+
+
+# Ersatz für `gh` mit einem Release als Zustand, nach den Regeln von gh: `create` ohne `--draft` veröffentlicht, `edit`
+# ändert nur, was als Schalter dasteht, `view`, `upload` und `edit` finden auch Entwürfe.
+FAKE_GH = '''\
+import json
+import sys
+from pathlib import Path
+
+state, args = Path(sys.argv[1]), sys.argv[2:]
+with (state / "calls.jsonl").open("a", encoding="utf-8") as log:
+    log.write(json.dumps(args) + "\\n")
+switches, values = {"--draft", "--latest", "--prerelease", "--verify-tag", "--clobber"}, {"--title", "--notes-file", "--json", "--jq"}
+flags, positional = {}, []
+rest = iter(args[2:])
+for arg in rest:
+    name, eq, value = arg.partition("=")
+    if name in switches:
+        # Wie strconv.ParseBool in gh: alles andere ist ein Fehler.
+        if not eq or value.lower() in ("1", "t", "true"):
+            flags[name] = True
+        elif value.lower() in ("0", "f", "false"):
+            flags[name] = False
+        else:
+            sys.exit(f"invalid argument {value!r} for {name}")
+    elif name in values:
+        flags[name] = value if eq else next(rest)
+    elif arg.startswith("-"):
+        sys.exit(f"unknown flag: {arg}")
+    else:
+        positional.append(arg)
+saved = state / "release.json"
+release = json.loads(saved.read_text(encoding="utf-8")) if saved.exists() else None
+command = args[1] if args[:1] == ["release"] else None
+if command == "view" and (state / "view-error").exists():
+    sys.exit((state / "view-error").read_text(encoding="utf-8"))
+if command == "create":
+    if release is not None:
+        sys.exit("a release with the same tag name already exists")
+    release = {"tag": positional[0], "draft": flags.get("--draft", False), "latest": flags.get("--latest"),
+               "prerelease": flags.get("--prerelease", False), "title": flags.get("--title", ""), "body": "", "assets": {}}
+elif command not in ("view", "upload", "edit"):
+    sys.exit(f"not faked: {args}")
+elif release is None or release["tag"] != positional[0]:
+    sys.exit("release not found")
+elif command == "view":
+    sys.stdout.write(release["body"] + "\\n")
+    sys.exit(0)
+elif command == "edit":
+    for flag, key in (("--draft", "draft"), ("--latest", "latest"), ("--prerelease", "prerelease"), ("--title", "title")):
+        if flag in flags:
+            release[key] = flags[flag]
+if "--notes-file" in flags:
+    release["body"] = Path(flags["--notes-file"]).read_bytes().decode("utf-8")
+for path in positional[1:]:
+    if command == "upload" and Path(path).name in release["assets"] and not flags.get("--clobber"):
+        sys.exit("asset under the same name already exists")
+    release["assets"][Path(path).name] = Path(path).read_text(encoding="utf-8")
+saved.write_text(json.dumps(release), encoding="utf-8")
+'''
+
+
+def _fake_gh(tmp_path: Path, release: dict | None, view_error: str | None) -> tuple[Path, Path]:
+    import sys
+
+    state = tmp_path / "github"
+    state.mkdir()
+    if release is not None:
+        (state / "release.json").write_text(json.dumps(release), encoding="utf-8")
+    if view_error is not None:
+        (state / "view-error").write_text(view_error, encoding="utf-8")
+    (tmp_path / "fake_gh.py").write_text(FAKE_GH, encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "gh").write_text(f'#!/bin/sh\nexec "{sys.executable}" -I "{tmp_path / "fake_gh.py"}" "{state}" "$@"\n', encoding="utf-8")
+    (bin_dir / "gh").chmod(0o755)
+    return bin_dir, state
+
+
+def _run_release(tmp_path: Path, release: dict | None = None, digest: str = DIGEST, *, version: str | None = None,
+                 view_error: str | None = None, files_out: list | None = None):
+    """Beide Schritte in bash wie auf dem Runner; zurück kommen Ergebnis, `gh`-Aufrufe, Release danach und RUNNER_TEMP."""
+    import os
+    import shutil
+    import subprocess
+
+    from nodvard_deck.version import __version__
+
+    bash = shutil.which("bash")
+    if bash is None or shutil.which("python3") is None:
+        pytest.skip("braucht bash und python3 (wie der Runner von GitHub)")
+    version = version or __version__
+    bin_dir, state = _fake_gh(tmp_path, release and {"tag": f"v{version}", **release}, view_error)
+    runner_temp = tmp_path / "runner"
+    runner_temp.mkdir()
+    image = _workflow()["env"]["IMAGE_NAME"] + "-updater"
+    env = {**os.environ, "VERSION": version, "IMAGE": image, "DIGEST": digest, "RUNNER_TEMP": str(runner_temp)}
+    files = subprocess.run([bash, "-eo", "pipefail", "-c", _release_named("Dateien fürs Release")["run"]], cwd=ROOT, env=env,
+                           capture_output=True, text=True, check=False)
+    if files_out is not None:
+        files_out.append(files)
+    done = files
+    if files.returncode == 0:
+        env.update(PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", GH_TOKEN="x", GH_REPO="nodvard/deck", TAG=f"v{version}")
+        done = subprocess.run([bash, "-eo", "pipefail", "-c", _release_named(GH_STEP)["run"]], cwd=ROOT, env=env,
+                              capture_output=True, text=True, check=False)
+    log, saved = state / "calls.jsonl", state / "release.json"
+    calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
+    after = json.loads(saved.read_text(encoding="utf-8")) if saved.exists() else None
+    return done, calls, after, runner_temp
+
+
+def _old_section() -> str:
+    return "<!-- nodvard-helper-digest -->\n## Update-Helfer / Update helper\n\nsha256:" + "cd" * 32 + "\n<!-- /nodvard-helper-digest -->"
+
+
+def test_a_new_release_is_only_a_draft_with_the_text_the_pinned_file_and_the_digest(tmp_path):
+    done, calls, release, runner_temp = _run_release(tmp_path, version="0.11.0")
+    assert done.returncode == 0, done.stderr
+    assert [c[:2] for c in calls] == [["release", "view"], ["release", "create"]]
+    out = runner_temp / "release"
+    image = _workflow()["env"]["IMAGE_NAME"] + "-updater"
+    pinned = (out / COMPOSE).read_text(encoding="utf-8")
+    assert f"image: {image}@{DIGEST}" in pinned and f"image: {image}:1" not in pinned
+    assert release == {
+        "tag": "v0.11.0", "draft": True, "latest": None, "prerelease": False,
+        "title": (out / "release-title.txt").read_text(encoding="utf-8").strip(),
+        "body": (out / "release-notes.md").read_text(encoding="utf-8"),
+        "assets": {COMPOSE: pinned},
+    }
+    assert release["title"].startswith("Nodvard Deck 0.11.0 – ")
+    assert release["body"].startswith("*English version: [below](#english).*\n")
+    assert f"`{image}@{DIGEST}`" in release["body"]
+    assert "::notice::Entwurf für v0.11.0 angelegt." in done.stdout
+
+
+def test_an_existing_draft_keeps_title_status_and_text_around_the_section(tmp_path):
+    body = f"Von Hand geschrieben.\r\n\r\n{_old_section()}\r\n\r\nDarunter auch.\r\n"
+    draft = {"draft": True, "latest": None, "prerelease": False, "title": "Von Hand", "body": body, "assets": {}}
+    done, calls, release, runner_temp = _run_release(tmp_path, draft, version="0.11.0")
+    assert done.returncode == 0, done.stderr
+    assert [c[:2] for c in calls] == [["release", "view"], ["release", "upload"], ["release", "edit"]]
+    out = runner_temp / "release"
+    section = (out / "helper-digest.md").read_text(encoding="utf-8").rstrip("\n")
+    assert release == {
+        **draft, "tag": "v0.11.0",
+        "body": f"Von Hand geschrieben.\r\n\r\n{section}\r\n\r\nDarunter auch.\r\n",
+        "assets": {COMPOSE: (out / COMPOSE).read_text(encoding="utf-8")},
+    }
+    assert "::notice::v0.11.0 ergänzt" in done.stdout
+
+
+def test_a_published_release_stays_published_and_gets_the_new_file(tmp_path):
+    published = {"draft": False, "latest": True, "prerelease": False, "title": "Schon draußen", "body": "Von Hand.",
+                 "assets": {COMPOSE: "alt\n"}}
+    done, _, release, runner_temp = _run_release(tmp_path, published)
+    assert done.returncode == 0, done.stderr
+    out = runner_temp / "release"
+    assert release == {
+        **published, "tag": release["tag"],
+        "body": "Von Hand.\n\n" + (out / "helper-digest.md").read_text(encoding="utf-8"),
+        "assets": {COMPOSE: (out / COMPOSE).read_text(encoding="utf-8")},
+    }
+
+
+@pytest.mark.parametrize("body", [
+    "Oben.\n\n<!-- nodvard-helper-digest -->\nalt\n\nVon Hand darunter.\n",
+    f"Oben.\n\n{_old_section()}\n\n{_old_section()}\n",
+], ids=["ohne-ende", "doppelt"])
+def test_a_broken_section_in_a_draft_changes_nothing(tmp_path, body):
+    draft = {"draft": True, "latest": None, "prerelease": False, "title": "Von Hand", "body": body, "assets": {}}
+    done, calls, release, _ = _run_release(tmp_path, draft)
+    assert done.returncode == 1 and "nicht genau einmal vollständig" in done.stderr
+    assert [c[:2] for c in calls] == [["release", "view"]]
+    assert release == {**draft, "tag": release["tag"]}
+
+
+def test_another_error_when_looking_up_the_release_stops_the_job(tmp_path):
+    done, calls, release, _ = _run_release(tmp_path, view_error="HTTP 502: Bad Gateway")
+    assert done.returncode == 1 and "HTTP 502" in done.stderr
+    assert [c[:2] for c in calls] == [["release", "view"]] and release is None
+
+
+@pytest.mark.parametrize(("version", "warned"), [("0.11.0", False), ("99.0.0", True)])
+def test_a_missing_release_text_gives_a_warning(tmp_path, version, warned):
+    assert (ROOT / "docs" / "release-notes" / "0.11.0.md").is_file()
+    files: list = []
+    done, _, _, _ = _run_release(tmp_path, version=version, files_out=files)
+    assert done.returncode == 0, done.stderr
+    assert ("::warning::docs/release-notes/99.0.0.md fehlt" in files[0].stdout) == warned
+
+
+def test_a_bad_digest_stops_before_anything_reaches_github(tmp_path):
+    done, calls, release, runner_temp = _run_release(tmp_path, digest="")
+    assert done.returncode == 1 and "Kein Digest" in done.stderr
+    assert calls == [] and release is None and not (runner_temp / "release").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -526,7 +883,7 @@ def test_dock_version_login_and_actions_as_for_the_dashboard():
             assert step["uses"] == pinned[str(step["uses"]).split("@")[0]], step["uses"]
 
 
-def test_dock_latest_moves_only_after_the_check_and_never_for_a_prerelease():
+def test_dock_latest_moves_only_after_the_check_and_only_for_the_newest_version():
     steps = _dock_job()["steps"]
     build_index, _ = _dock_step("docker/build-push-action")
     check_index, check = _dock_named("Prüfung am Digest (amd64 und arm64)")
@@ -541,7 +898,7 @@ def test_dock_latest_moves_only_after_the_check_and_never_for_a_prerelease():
         assert "continue-on-error" not in step, step
         if "if" in step:
             assert step.get("name") == "Tag latest setzen", step
-    assert latest["if"] == "${{ !contains(github.ref_name, '-') }}"
+    assert latest["if"] == "${{ needs.image.outputs.newest == 'true' }}"
     assert latest["env"] == environment
     assert latest["run"].strip() == 'docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE@$DIGEST"'
 

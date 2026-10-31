@@ -1391,7 +1391,7 @@ export function InventoryPage(): JSX.Element {
 
       {items && items.length > 0 && (
         <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4" data-testid="inventory-summary">
-          <Stat label="Gegenstände" value={visible.length} hint={`${visible.length} Gegenstand/Gegenstände angezeigt`} />
+          <Stat label="Gegenstände" value={visible.length} hint={visible.length === items.length ? "alle angezeigt" : `von ${items.length}, gefiltert`} />
           <Stat label="Gesamtwert" value={(totalCents / 100).toLocaleString("de-DE", { style: "currency", currency: "EUR" })} />
           <Stat label="Garantie endet bald" value={soonCount} hint="in den nächsten 90 Tagen" tone={soonCount ? "warn" : undefined} />
           <Stat label="Garantie abgelaufen" value={expiredCount} hint={`${expiredCount} abgelaufen`} tone={expiredCount ? "bad" : undefined} />

@@ -6,6 +6,7 @@ import { BetaPageNotice, isBeta } from "../components/BetaBadge";
 import { api } from "../lib/api";
 import { usePages } from "../lib/catalog";
 import { dispatchDeckEvent, findDeck } from "../lib/deckGlobal";
+import { extensionErrorText } from "../lib/extensionError";
 import { useExtensionLabel } from "../lib/extensionNames";
 import type { ExtensionInfo } from "../lib/firstSteps";
 import { useAuthStore } from "../state/auth";
@@ -34,7 +35,7 @@ function PageMissing({ extId }: { extId: string | undefined }) {
       const result = await api.post<{ state?: string; last_error?: string | null } | undefined>(`/extensions/${encodeURIComponent(extId ?? "")}/enable`);
       // Das Backend antwortet auch dann mit 200, wenn das Modul beim Laden abstürzt: dann nicht „eingeschaltet“ melden.
       if (result?.state && result.state !== "enabled") {
-        setError(`„${name}“ ließ sich nicht einschalten${result.last_error ? `: ${result.last_error}` : "."}`);
+        setError(`„${name}“ ließ sich nicht einschalten${result.last_error ? `: ${extensionErrorText(result.last_error)}` : "."}`);
       } else {
         setSwitchedOn(true);
       }
@@ -144,7 +145,7 @@ export function ExtensionPage() {
 
   // Der Router navigiert per pushState, das meldet der Browser bei niemandem: Seiten, die ihrer Query folgen, erfahren
   // jede Navigation über dieses Ereignis, auch bei gleicher Adresse (`location.key` ändert sich). Kindeffekte laufen
-  // davor, ein frisch eingehängter Zuhörer hört es. Es geht unter beiden Namen raus, das UI-Kit hört nur auf einen.
+  // davor, ein frisch eingehängter Zuhörer hört es.
   useEffect(() => {
     dispatchDeckEvent("navigate");
   }, [location.key]);

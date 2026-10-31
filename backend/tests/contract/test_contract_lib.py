@@ -303,6 +303,22 @@ def test_sdk_ausnahme_greift(fake_sdk):
     assert cl.uncovered(breaks, ex) == []
 
 
+def test_sdk_ausnahme_mit_stern_gilt_fuer_das_ganze_modul(fake_sdk):
+    old = fake_sdk(1)
+    breaks = cl.find_sdk_breaks(old, {**old, "names": {}})
+    assert len(breaks) > 1
+
+    def ex(pfad: str, methode: str = "SDK") -> list[dict[str, str]]:
+        return [{"pfad": pfad, "methode": methode, "art": "sdk_name_entfernt", "begruendung": "x"}]
+
+    assert cl.uncovered(breaks, ex("fake_sdk_pkg.*")) == []
+    assert cl.uncovered(breaks, ex("fake_sdk.*")) == breaks
+    assert cl.uncovered(breaks, ex("fake_sdk_pkg*")) == breaks
+    api_break = cl.Break("/api/v1/export.csv", "GET", "endpunkt_entfernt")
+    api_ex = [{"pfad": "/api/v1/export.*", "methode": "GET", "art": "endpunkt_entfernt", "begruendung": "x"}]
+    assert cl.uncovered([api_break], api_ex) == [api_break], "der Stern gilt nur im SDK"
+
+
 def test_sdk_alte_namen_per_modul_getattr_und_private_module(tmp_path, monkeypatch):
     """`_LEGACY_NAMES` eines SDK-Moduls (alter Name -> neuer Name, per Modul-`__getattr__`) kommt in den Schnappschuss;
     private Module (`_intern`) gehoeren nicht zum Vertrag."""

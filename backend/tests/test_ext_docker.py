@@ -12,17 +12,18 @@ from pathlib import Path
 
 import docker_stack_fakes as fakes
 import pytest
-from docker_stack_fakes import EXT_DIR, docker_on  # noqa: F401 - Fixture
+from docker_stack_fakes import EXT_DIR, FakeSettings, docker_on  # noqa: F401 - Fixture
 
 from nodvard_deck.services import extensions as extensions_service
 
 REPO_EXTENSIONS_DIR = Path(__file__).resolve().parents[2] / "extensions"
 
 
-@pytest.fixture(autouse=True)
-def _ext_docker_on_path(monkeypatch):
-    monkeypatch.syspath_prepend(str(EXT_DIR / "src"))
-    yield
+@pytest.fixture(autouse=True, scope="module")
+def _ext_docker_on_path():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(EXT_DIR / "src"))
+        yield
     for name in list(sys.modules):
         if name.startswith("nodvard_deck_ext_docker"):
             del sys.modules[name]
@@ -476,7 +477,9 @@ async def test_operate_requirement_brings_the_helper(client, db_session, test_se
     [spec] = [r for e, r in runtime.ui.all_host_requirements() if e == "docker" and r.id == "docker-operate"]
     assert spec.tags == ["docker-bedienen"] and spec.needs_root is True and spec.unix_group is None
     assert spec.check_command == "sudo -n /usr/local/lib/nodvard-deck/docker-root version"
-    assert runtime.loaded["docker"].root_helper is not None and runtime.loaded["docker"].root_helper.version == 1
+    script = (REPO_EXTENSIONS_DIR / "docker" / "root-helper" / "docker-root.sh").read_text(encoding="ascii")
+    assert runtime.loaded["docker"].root_helper is not None
+    assert f"HELPER_VERSION={runtime.loaded['docker'].root_helper.version}\n" in script
     await runtime.loaded["docker"].ctx.settings.set({"docker_operate_tag": "nur-bedienen"})
     [spec] = [r for e, r in runtime.ui.all_host_requirements() if e == "docker" and r.id == "docker-operate"]
     assert spec.tags == ["nur-bedienen"]
@@ -527,7 +530,9 @@ def _quick_after_check(monkeypatch, _ext_docker_on_path):
 class _ExecutorCtx:
     def __init__(self, exec_handle: _RecordingExec) -> None:
         self.exec = exec_handle
+        self.settings = FakeSettings()
         host = _FakeHost("h1", "pi-host", "192.168.1.72")
+        host.tags = ["docker"]
 
         class _Hosts:
             async def get(self, host_id: str):  # noqa: ANN202

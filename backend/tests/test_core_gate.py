@@ -211,6 +211,99 @@ async def test_approve_executes_exactly_once_even_on_concurrent_double_call(db_s
 
 
 @pytest.mark.asyncio
+async def test_while_executing_the_core_knows_who_proposed_and_approved(db_session):
+    from nodvard_deck.core import known_actors
+
+    seen: dict[str, bool] = {}
+
+    class _Watching(_FakeExecutor):
+        async def execute(self, req: ActionRequest) -> ActionResult:
+            seen.update(proposer=known_actors.is_known("user", "user-3"), approver=known_actors.is_known("user", "user-1"),
+                        other=known_actors.is_known("user", "user-2"))
+            return await super().execute(req)
+
+    get_extension_runtime().capabilities.provide("terminal", ActionExecutor, _Watching())
+    request = _request().model_copy(update={"proposed_by": Actor.user("user-3")})
+    decision = await gate.propose(db_session, ext_id="terminal", request=request, command_field="command")
+    await gate.approve(db_session, decision.action_id, user_id="user-1")
+    assert seen == {"proposer": True, "approver": True, "other": False}
+
+
+@pytest.mark.asyncio
+async def test_a_proposer_that_is_no_person_is_never_known(db_session):
+    from nodvard_deck.core import known_actors
+
+    seen: dict[str, bool] = {}
+
+    class _Watching(_FakeExecutor):
+        async def execute(self, req: ActionRequest) -> ActionResult:
+            seen.update(ai=known_actors.is_known("ai", "test-model"), user=known_actors.is_known("user", "test-model"))
+            return await super().execute(req)
+
+    get_extension_runtime().capabilities.provide("terminal", ActionExecutor, _Watching())
+    decision = await gate.propose(db_session, ext_id="terminal", request=_request(), command_field="command")
+    await gate.approve(db_session, decision.action_id, user_id="user-1")
+    assert seen == {"ai": False, "user": False}
+
+
+def test_known_while_counts_only_people_and_ends_with_the_block():
+    from nodvard_deck.core import known_actors
+
+    with known_actors.known_while([("user", "u-1"), ("extension", "x"), ("ai", "m")]):
+        assert known_actors.is_known("user", "u-1")
+        assert not known_actors.is_known("extension", "x") and not known_actors.is_known("ai", "m")
+    assert not known_actors.is_known("user", "u-1")
+
+
+def test_known_while_replaces_who_was_known_before():
+    from nodvard_deck.core import known_actors
+
+    with known_actors.known_while([("user", "u-1")]):
+        with known_actors.known_while([("user", "u-2")]):
+            assert known_actors.is_known("user", "u-2") and not known_actors.is_known("user", "u-1")
+        assert known_actors.is_known("user", "u-1") and not known_actors.is_known("user", "u-2")
+
+
+@pytest.mark.asyncio
+async def test_an_action_started_in_a_request_does_not_know_the_caller(db_session):
+    from nodvard_deck.core import known_actors
+
+    seen: dict[str, bool] = {}
+
+    class _Watching(_FakeExecutor):
+        async def execute(self, req: ActionRequest) -> ActionResult:
+            seen["caller"] = known_actors.is_known("user", "user-9")
+            return await super().execute(req)
+
+    get_extension_runtime().capabilities.provide("terminal", ActionExecutor, _Watching())
+    await settings_service.set_global(db_session, "autonomy.mode", "full")
+    await settings_service.set_global(db_session, "autonomy.max_risk", "medium")
+    with known_actors.known_while([("user", "user-9")]):
+        decision = await gate.propose(db_session, ext_id="terminal", request=_request(), command_field="command")
+    assert decision.status.value == "succeeded"
+    assert seen == {"caller": False}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("command", "entry"), [("uptime", "action.proposed"), ("rm -rf /", "action.denied")])
+@pytest.mark.parametrize(("ext_id", "proposer", "via"), [
+    ("terminal", Actor.ai("modell"), "terminal"),
+    ("terminal", Actor.scheduler("job-1"), "terminal"),
+    ("terminal", Actor.extension("terminal"), None),
+    ("terminal", Actor.extension("alt-terminal"), "terminal"),
+    ("core", Actor.ai("modell"), None),
+], ids=["ki", "zeitplan", "selbst", "alte-kennung", "kern"])
+async def test_the_proposal_entry_names_the_module_unless_it_proposes_itself(
+    db_session, command, entry, ext_id, proposer, via
+):
+    request = _request(command=command).model_copy(update={"proposed_by": proposer})
+    decision = await gate.propose(db_session, ext_id=ext_id, request=request, command_field="command")
+    audit = await _last_audit(db_session, entry)
+    assert audit.target_id == decision.action_id
+    assert audit.detail.get("via") == via
+
+
+@pytest.mark.asyncio
 async def test_approve_unknown_action_returns_none(db_session):
     result, moved = await gate.approve(db_session, "does-not-exist", user_id="user-1")
     assert result is None
@@ -249,6 +342,7 @@ async def test_execute_action_publishes_action_executed_event(db_session):
         assert executed[0].payload["action_id"] == decision.action_id
         assert executed[0].payload["action_type"] == "shell.exec"
         assert executed[0].payload["outcome"] == "success"
+        assert executed[0].payload["ext_id"] == "terminal"
     finally:
         get_event_bus().unsubscribe("action.*", _handler)
 

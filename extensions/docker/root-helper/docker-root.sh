@@ -10,11 +10,16 @@ IFS='
 umask 022
 HOME=/root
 export HOME
-# Nur der Docker-Dienst dieses Rechners, nichts aus der Umgebung des Aufrufers.
-unset DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_CERT_PATH DOCKER_TLS DOCKER_TLS_VERIFY DOCKER_API_VERSION
+# Nur der Docker-Dienst dieses Rechners, nichts aus der Umgebung des Aufrufers. DOCKER_HOST schlaegt jeden Kontext aus
+# /root/.docker; DOCKER_CONFIG zeigt auf einen Ordner, den es nicht gibt, damit auch Plugins und uebrige Eintraege von
+# dort nicht gelten. Er laege im Ordner der Hilfsskripte, den nur root aendern kann.
+unset DOCKER_CONTEXT DOCKER_CERT_PATH DOCKER_TLS DOCKER_TLS_VERIFY DOCKER_API_VERSION
 unset DOCKER_CLI_PLUGIN_EXTRA_DIRS DOCKER_DEFAULT_PLATFORM
+DOCKER_HOST=unix:///var/run/docker.sock
+DOCKER_CONFIG=/usr/local/lib/nodvard-deck/docker-root-config
+export DOCKER_HOST DOCKER_CONFIG
 
-HELPER_VERSION=1
+HELPER_VERSION=2
 MAX_ITEMS=200
 MAX_TAIL=5000
 PS_FORMAT='{{.ID}}|{{.Names}}|{{.State}}|{{.Status}}|{{.Image}}|{{.Label "com.docker.compose.project"}}|{{.Ports}}|{{.Label "com.docker.compose.project.working_dir"}}'

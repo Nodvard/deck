@@ -25,22 +25,15 @@
     <!--
       Import-Map-Shim (docs/02-EXTENSION-API.md §5): loest "react"/"react-dom"/
       "react/jsx-runtime" fuer JEDES per import() nachgeladene Extension-Bundle auf
-      window.__nodvardDeck auf (alt: window.__lattice, dasselbe Objekt; siehe main.tsx +
-      public/lattice-shim/*.js). MUSS vor jedem <script type="module"> stehen --
-      Import-Maps gelten nur fuer danach geparste Modul-Graphen.
-
-      Der Pfad /lattice-shim/ bleibt bewusst unter seinem alten Namen: Bundles tragen ihn nicht
-      in sich (sie importieren "react" ueber diese Map), aber die Seite eines Tabs, der vor einem
-      Update geladen wurde, verweist darauf und holt die Dateien erst beim Nachladen einer
-      Erweiterung -- umbenannte Dateien waeren dort ein 404. Die Dateien lesen beide Namen des
-      globalen Objekts.
+      window.__nodvardDeck auf (siehe main.tsx + public/nodvard-deck-shim/*.js). MUSS vor jedem
+      <script type="module"> stehen -- Import-Maps gelten nur fuer danach geparste Modul-Graphen.
     -->
     <script type="importmap">
       {
         "imports": {
-          "react": "/lattice-shim/react.js",
-          "react/jsx-runtime": "/lattice-shim/react-jsx-runtime.js",
-          "react-dom": "/lattice-shim/react-dom.js"
+          "react": "/nodvard-deck-shim/react.js",
+          "react/jsx-runtime": "/nodvard-deck-shim/react-jsx-runtime.js",
+          "react-dom": "/nodvard-deck-shim/react-dom.js"
         }
       }
     </script>

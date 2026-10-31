@@ -105,7 +105,7 @@ const OUTCOME_LABELS: Record<string, string> = {
 const PAGE_SIZE = 25;
 
 function formatTimestamp(unixSeconds: number): string {
-  return new Date(unixSeconds * 1000).toLocaleString();
+  return new Date(unixSeconds * 1000).toLocaleString("de-DE");
 }
 
 /** `<input type="date">` liefert „YYYY-MM-DD“ (lokaler Tag) -> ISO-Zeitpunkt am Tagesanfang bzw. -ende in lokaler Zeit,
@@ -132,7 +132,7 @@ function AuditTrail({ incidentId }: { incidentId: string }): JSX.Element {
     <ol className="space-y-1 border-l border-white/10 pl-3 text-xs" data-testid={`trail-${incidentId}`}>
       {entries.map((e) => (
         <li key={e.id}>
-          <span className="opacity-50">{new Date(e.ts).toLocaleString()}</span>{" "}
+          <span className="opacity-50">{new Date(e.ts).toLocaleString("de-DE")}</span>{" "}
           <span className="font-medium">{auditActionLabel(e.action)}</span>{" "}
           <span className="opacity-60">({OUTCOME_LABELS[e.outcome] ?? e.outcome})</span>
           {e.reason && <span className="opacity-80"> -- {withoutRelativeTime(e.reason)}</span>}
@@ -156,6 +156,7 @@ export function ContainerWatch(): JSX.Element {
   const [offset, setOffset] = useState(0);
   const [openTrail, setOpenTrail] = useState<string | null>(null);
   const canReadAudit = deck().hasPermission("audit.read");
+  const canManage = deck().hasPermission("soc.manage");
 
   const load = useCallback(() => {
     const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
@@ -333,14 +334,16 @@ export function ContainerWatch(): JSX.Element {
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-1">
-                    {active && (
+                    {canManage && active && (
                       <>
                         <Button small onClick={() => void changeStatus(incident.id, "confirm")}>Bestätigen</Button>
                         <Button small onClick={() => void changeStatus(incident.id, "resolve")}>Erledigt</Button>
                         <Button small variant="ghost" onClick={() => void changeStatus(incident.id, "dismiss")}>Verwerfen</Button>
                       </>
                     )}
-                    {!active && <Button small onClick={() => void changeStatus(incident.id, "reopen")}>Wieder öffnen</Button>}
+                    {canManage && !active && (
+                      <Button small onClick={() => void changeStatus(incident.id, "reopen")}>Wieder öffnen</Button>
+                    )}
                     {canReadAudit && (
                       <button
                         type="button"

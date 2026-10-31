@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import hashlib
 import itertools
 import json
 import time
@@ -18,14 +19,21 @@ TOKEN_URL = "https://ghcr.io/token"
 TAGS_PATH = "/v2/nodvard/deck/tags/list"
 
 
+def _no_release(_url: httpx.URL) -> httpx.Response:
+    return httpx.Response(404)
+
+
 def _registry(tags_pages: list[list[str]], *, token_status: int = 200, tags_status: int = 200, manifest: bytes | None = b'{"schemaVersion":2}',
-              next_links: list[str | None] | None = None, calls: list[httpx.Request] | None = None):
-    """Attrappe fuer ghcr.io: Token, Tag-Seiten (Link-Header), Manifest."""
+              next_links: list[str | None] | None = None, calls: list[httpx.Request] | None = None,
+              release=_no_release):
+    """Attrappe für ghcr.io: Token, Tag-Seiten (Link-Header), Manifest; Dateien am Release beantwortet `release`."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         if calls is not None:
             calls.append(request)
         url = request.url
+        if url.host in updates.GRANT_HOSTS:
+            return release(url)
         if url.host != "ghcr.io":
             raise AssertionError(f"fremder Host: {url}")
         if url.path == "/token":
@@ -147,7 +155,9 @@ async def test_live_check_uses_anonymous_token_and_finds_the_newest_version(tmp_
     assert result["latest_digest"] == "sha256:" + hashlib.sha256(b'{"schemaVersion":2}').hexdigest()
     assert calls[0].url.path == "/token"
     assert calls[1].url.path == TAGS_PATH and calls[1].url.params["n"] == "100"
-    assert calls[-1].url.path == "/v2/nodvard/deck/manifests/0.6.0"
+    assert calls[2].url.path == "/v2/nodvard/deck/manifests/0.6.0"
+    assert [c.url.path for c in calls[3:]] == ["/nodvard/deck/releases/download/v0.6.0/freigabe.json"]
+    assert result["approved"] is False and result["approved_key"] is None
 
 
 @pytest.mark.asyncio
@@ -238,8 +248,8 @@ def _with_tags_answer(make_tags_response, *, manifest_response=None, calls: list
 @pytest.mark.asyncio
 async def test_requests_ask_for_uncompressed_answers(tmp_path):
     calls: list[httpx.Request] = []
-    await _check(tmp_path, _registry([["0.6.0"]], calls=calls))
-    assert len(calls) == 3
+    await _check(tmp_path, _registry([["0.6.0"]], calls=calls, release=_release(_files())))
+    assert len(calls) == 7  # Token, Tags, Manifest, je zwei für Freigabe und Signatur (Weiterleitung)
     assert all(c.headers["accept-encoding"] == "identity" for c in calls)
 
 
@@ -644,3 +654,157 @@ def test_repository_is_one_constant():
 
     source = inspect.getsource(updates)
     assert source.count('"nodvard/deck"') == 1
+
+
+# ---------------------------------------------------------------------------
+# Freigabe am Release
+# ---------------------------------------------------------------------------
+
+MANIFEST_DIGEST = "sha256:" + hashlib.sha256(b'{"schemaVersion":2}').hexdigest()
+SIG = "ab" * 64
+KEY_ID = "21fe31dfa154a261"
+
+
+def _grant(**changes) -> dict:
+    now = int(time.time())
+    doc = {"fmt": 1, "repo": "ghcr.io/nodvard/deck", "version": "0.6.0", "digest": MANIFEST_DIGEST, "key_id": KEY_ID,
+           "issued_at": now - 60, "expires_at": now + 86400}
+    doc.update(changes)
+    return doc
+
+
+def _release(files: dict[str, bytes], *, via: str | None = "release-assets.githubusercontent.com"):
+    """GitHub leitet Downloads am Release auf einen Speicher-Host weiter (`via`), der liefert die Datei."""
+
+    def respond(url: httpx.URL) -> httpx.Response:
+        name = url.path.rsplit("/", 1)[-1]
+        if url.host == "github.com" and via is not None:
+            return httpx.Response(302, headers={"location": f"https://{via}/blob/{name}?token=x"})
+        body = files.get(name)
+        return httpx.Response(404) if body is None else httpx.Response(200, content=body)
+
+    return respond
+
+
+def _files(grant: dict | None = None, sig: str = SIG + "\n") -> dict[str, bytes]:
+    return {"freigabe.json": json.dumps(grant or _grant()).encode(), "freigabe.json.sig": sig.encode()}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("via", [None, "objects.githubusercontent.com", "release-assets.githubusercontent.com"])
+async def test_a_grant_at_the_release_makes_the_update_signed(tmp_path, via):
+    calls: list[httpx.Request] = []
+    result = await _check(tmp_path, _registry([["0.6.0"]], calls=calls, release=_release(_files(), via=via)))
+    assert result["source"] == "live" and result["approved"] is True and result["approved_key"] == KEY_ID
+    found = updates.cached_grant(tmp_path, channel="stable", version="0.6.0", digest=MANIFEST_DIGEST)
+    assert found == {"grant": _grant(issued_at=found["grant"]["issued_at"], expires_at=found["grant"]["expires_at"]),
+                     "sig": SIG}
+    to_github = [c for c in calls if c.url.host != "ghcr.io"]
+    assert to_github and all("authorization" not in c.headers for c in to_github), "der Token geht nur an ghcr.io"
+    without_digest = await _check(tmp_path, _registry([["0.6.0"]], manifest=None, release=_release(_files())))
+    assert without_digest["approved"] is False
+
+
+@pytest.mark.parametrize("files", [
+    _files(_grant(version="0.6.1")),
+    _files(_grant(digest="sha256:" + "5e" * 64)),
+    _files(_grant(repo="ghcr.io/nodvard/deck-fork")),
+    _files(_grant(fmt=2)),
+    _files(_grant(fmt=True)),
+    _files({**_grant(), "note": "x"}),
+    _files(_grant(key_id=KEY_ID.upper())),
+    _files(_grant(issued_at=1.5)),
+    _files(sig="ab" * 63),
+    _files(sig="AB" * 64),
+    _files(_grant(issued_at=0, expires_at=2**40)),
+    {"freigabe.json": b"{kaputt", "freigabe.json.sig": SIG.encode()},
+    {"freigabe.json": b'{"fmt":1,"fmt":1}', "freigabe.json.sig": SIG.encode()},
+    {"freigabe.json": b"[" * 2000 + b"]" * 2000, "freigabe.json.sig": SIG.encode()},
+    {"freigabe.json": json.dumps(_grant()).encode() + b" " * updates.GRANT_MAX_BYTES,
+     "freigabe.json.sig": SIG.encode()},
+    {"freigabe.json": json.dumps(_grant()).encode()},
+    {"freigabe.json.sig": SIG.encode()},
+], ids=["version", "digest", "repo", "fmt", "fmt_bool", "extra", "key_id", "float", "sig_short", "sig_upper", "forever",
+        "json",
+        "duplicate", "deep", "too_large", "no_sig", "no_grant"])
+@pytest.mark.asyncio
+async def test_an_unusable_grant_leaves_the_update_unsigned_but_the_check_counts(tmp_path, files):
+    result = await _check(tmp_path, _registry([["0.6.0"]], release=_release(files)))
+    assert result["source"] == "live" and result["latest"] == "0.6.0" and result["approved"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_grant_outside_its_time_is_not_used(tmp_path):
+    now = int(time.time())
+    for grant in (_grant(expires_at=now - 1), _grant(issued_at=now + 3600)):
+        result = await _check(tmp_path, _registry([["0.6.0"]], release=_release(_files(grant))))
+        assert result["approved"] is False
+        assert updates.cached_grant(tmp_path, channel="stable", version="0.6.0", digest=MANIFEST_DIGEST) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("location", ["https://evil.example/x", "http://objects.githubusercontent.com/x",
+                                      "https://github.com.evil.example/x", "http://[::1", "",
+                                      "https://objects.githubusercontent.com:8443/x",
+                                      "https://user:" + "pw@objects.githubusercontent.com/x"])
+async def test_a_redirect_away_from_github_is_not_followed(tmp_path, location):
+    calls: list[httpx.Request] = []
+
+    def respond(url: httpx.URL) -> httpx.Response:
+        return httpx.Response(302, headers={"location": location})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host not in updates.GRANT_HOSTS | {"ghcr.io"}:
+            calls.append(request)
+            raise AssertionError(f"fremder Host: {request.url}")
+        return registry.handler(request)
+
+    registry = _registry([["0.6.0"]], release=respond)
+    result = await _check(tmp_path, httpx.MockTransport(handler))
+    assert result["source"] == "live" and result["approved"] is False and calls == []
+
+
+@pytest.mark.asyncio
+async def test_endless_redirects_stop(tmp_path):
+    seen: list[str] = []
+
+    def respond(url: httpx.URL) -> httpx.Response:
+        seen.append(str(url))
+        return httpx.Response(302, headers={"location": f"https://objects.githubusercontent.com/{len(seen)}"})
+
+    result = await _check(tmp_path, _registry([["0.6.0"]], release=respond))
+    assert result["approved"] is False and len(seen) == updates.MAX_REDIRECTS + 1
+
+
+@pytest.mark.asyncio
+async def test_a_prerelease_never_counts_as_approved(tmp_path):
+    files = _files(_grant(version="0.6.1-rc1"))
+    result = await _check(tmp_path, _registry([["0.6.0", "0.6.1-rc1"]], release=_release(files)), channel="beta")
+    assert result["latest"] == "0.6.1-rc1" and result["approved"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_failed_fetch_keeps_the_approval_already_found_a_missing_one_drops_it(tmp_path):
+    assert (await _check(tmp_path, _registry([["0.6.0"]], release=_release(_files()))))["approved"] is True
+
+    def broken(url: httpx.URL) -> httpx.Response:
+        raise httpx.ConnectError("github.com nicht erreichbar")
+
+    kept = await _check(tmp_path, _registry([["0.6.0"]], release=broken))
+    assert kept["source"] == "live" and kept["approved"] is True
+    other = await _check(tmp_path, _registry([["0.6.0"]], manifest=b'{"schemaVersion":3}', release=broken))
+    assert other["approved"] is False, "neuer Digest: die alte Freigabe passt nicht mehr"
+    assert (await _check(tmp_path, _registry([["0.6.0"]], release=_release(_files()))))["approved"] is True
+    assert (await _check(tmp_path, _registry([["0.6.0"]], release=_no_release)))["approved"] is False
+
+
+def test_the_cached_grant_belongs_to_channel_version_and_digest(tmp_path):
+    updates.save_cache(tmp_path, {"channel": "stable", "latest": "0.6.0", "latest_digest": MANIFEST_DIGEST,
+                                  "grant": {"grant": _grant(), "sig": SIG}})
+    assert updates.cached_grant(tmp_path, channel="stable", version="0.6.0", digest=MANIFEST_DIGEST) is not None
+    assert updates.cached_grant(tmp_path, channel="beta", version="0.6.0", digest=MANIFEST_DIGEST) is None
+    assert updates.cached_grant(tmp_path, channel="stable", version="0.6.1", digest=MANIFEST_DIGEST) is None
+    assert updates.cached_grant(tmp_path, channel="stable", version="0.6.0", digest="sha256:" + "5e" * 64) is None
+    assert updates.cached_grant(tmp_path, channel="stable", version="0.6.0", digest=None) is None
+    assert updates.status(tmp_path, channel="stable", image=None, current="0.5.0")["approved"] is True
+

@@ -29,7 +29,7 @@ from nodvard_sdk import (
 from pydantic import BaseModel
 
 from .capabilities import NextcloudFileSourceProvider
-from .config import PASSWORD_LABEL, build_connector
+from .config import PASSWORD_LABEL, TOKEN_LABEL, build_connector
 from .connector import WebDavError
 from .models import ServerInfo
 from .service import ServerInfoService
@@ -115,6 +115,11 @@ class Extension(NodvardExtension):
 
     async def on_settings_changed(self, ctx: ExtensionContext, values: dict[str, Any]) -> None:
         self._serverinfo.clear()
+
+    async def on_secret_changed(self, ctx: ExtensionContext, label: str) -> None:
+        # Kennzahlen oder eine Pause mit dem alten Token oder App-Passwort gälten sonst bis zu 30 Minuten weiter.
+        if label in (PASSWORD_LABEL, TOKEN_LABEL):
+            self._serverinfo.forget()
 
     async def health(self, ctx: ExtensionContext) -> HealthReport:
         # Nach "Verbindung testen" fragt die Kachel neu, auch nach einer abgelehnten Anmeldung.

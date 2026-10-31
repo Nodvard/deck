@@ -33,12 +33,14 @@ _COPIED = (
     "frontend/package.json",
     "frontend/package-lock.json",
 )
+# Ein Patch prüft, dass der Zweig `latest` nur der höchsten Version gibt.
+_TOOLING = (".github/workflows/release.yml", "scripts/release_newest.py")
 
 
 @pytest.fixture
 def tree(tmp_path) -> release.Tree:
     root = tmp_path / "repo"
-    for rel in _COPIED:
+    for rel in _COPIED + _TOOLING:
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(REPO_ROOT / rel, root / rel)
     shutil.copytree(REPO_ROOT / "backend/src/nodvard_deck/changelog/versions", root / "backend/src/nodvard_deck/changelog/versions")
@@ -257,3 +259,71 @@ def test_the_real_repository_passes_the_sync_check():
     assert len(found) == 6 and None not in found.values()
     assert release.current_version(release.Tree(REPO_ROOT)) == __version__
     assert found["deploy/updater/nodvard_deck_updater/__init__.py"] == __version__
+
+
+def test_a_patch_takes_only_fixes_and_security(tree, capsys):
+    _fragment(tree, "a-fix", '[[entries]]\nkind = "behoben"\ntext = "Fehler."\n')
+    _fragment(tree, "b-neu", '[[entries]]\nkind = "neu"\ntext = "Neues."\n\n'
+                             '[[entries]]\nkind = "verbessert"\ntext = "Besser."\n')
+    before = _snapshot(tree)
+    assert release.main(["0.4.1"], root=tree.root) == 1
+    assert _snapshot(tree) == before
+    err = capsys.readouterr().err
+    assert "b-neu.toml (neu, verbessert)" in err and "a-fix" not in err
+    # Dieselben Bruchstücke gehen als Funktionsversion durch.
+    assert release.main(["0.5.0"], root=tree.root) == 0
+
+
+@pytest.mark.parametrize("version", ["0.5.1", "1.0.1"])
+def test_a_patch_stays_in_the_line_of_the_current_version(tree, capsys, version):
+    _fragment(tree, "fix", '[[entries]]\nkind = "sicherheit"\ntext = "Lücke."\n')
+    before = _snapshot(tree)
+    assert release.main([version], root=tree.root) == 1
+    assert _snapshot(tree) == before
+    assert "Reihe 0.4" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("old", ["workflow", "script"])
+def test_a_patch_needs_the_tooling_that_keeps_latest_on_the_newest_version(tree, capsys, old):
+    workflow = tree.release_workflow
+    current = workflow.read_text(encoding="utf-8")
+    if old == "workflow":
+        workflow.write_text(current.replace("scripts/release_newest.py", "scripts/anders.py"), encoding="utf-8")
+    else:
+        (tree.root / "scripts/release_newest.py").unlink()
+    _fragment(tree, "fix", '[[entries]]\nkind = "behoben"\ntext = "Fehler."\n')
+    before = _snapshot(tree)
+    assert release.main(["0.4.1"], root=tree.root) == 1
+    assert _snapshot(tree) == before
+    assert "release_newest.py" in capsys.readouterr().err
+    # Eine neue Reihe von main ist immer die höchste Version.
+    assert release.main(["0.5.0", "--dry-run"], root=tree.root) == 0
+    workflow.write_text(current, encoding="utf-8")
+    shutil.copy(REPO_ROOT / "scripts/release_newest.py", tree.root / "scripts/release_newest.py")
+    assert release.main(["0.4.1"], root=tree.root) == 0
+
+
+def test_an_entry_already_released_is_refused(tree, capsys):
+    released = changelog.read_release(tree.versions_dir / "0.4.0.toml").entries[0]
+    _with_fragments(tree)
+    text = release.toml_string(released.text)
+    _fragment(tree, "c-schon-da", f'[[entries]]\nkind = "{released.kind}"\ntext = {text}\n')
+    before = _snapshot(tree)
+    assert release.main(["0.5.0"], root=tree.root) == 1
+    assert _snapshot(tree) == before
+    err = capsys.readouterr().err
+    assert "c-schon-da.toml (schon in 0.4.0)" in err and "a-erster" not in err
+
+
+def test_after_a_patch_from_the_release_branch_main_does_not_release_it_twice(tree, capsys):
+    """Der Release-Commit des Patches kommt nach main; ein dort liegengebliebenes Bruchstück wird erkannt."""
+    fix = '[[entries]]\nkind = "behoben"\ntext = "Fehler im Zweig."\n'
+    _fragment(tree, "fix", fix)
+    assert release.main(["0.4.1"], root=tree.root) == 0
+    _fragment(tree, "fix", fix)
+    _fragment(tree, "neu", '[[entries]]\nkind = "neu"\ntext = "Funktion."\n')
+    assert release.main(["0.5.0"], root=tree.root) == 1
+    assert "fix.toml (schon in 0.4.1)" in capsys.readouterr().err
+    (tree.unreleased_dir / "fix.toml").unlink()
+    assert release.main(["0.5.0"], root=tree.root) == 0
+    assert [e.text for e in changelog.read_release(tree.versions_dir / "0.5.0.toml").entries] == ["Funktion."]

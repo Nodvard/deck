@@ -275,12 +275,29 @@ async def test_changing_the_details_of_the_paused_device_ends_only_its_pause(cli
     await _devices(client, headers)
     assert (a.failed_logins, b.logins) == (1, 1)
 
-    await _set_password(client, headers, PASSWORD, "ds920")
+    a.password = "falsch"
     ds920 = _entry("ds920", url=DS920, username="eins", tls_insecure_skip_verify=True)
     keller = _entry("keller", url=DS415, username="zwei", tls_insecure_skip_verify=True)
     await _put_settings(client, headers, {"connections": [ds920, keller]})
     assert [d["state"] for d in await _devices(client, headers)] == ["ok", "ok"]
     assert (a.logins, b.logins) == (1, 1), "keller behält seine Sitzung"
+
+
+@pytest.mark.asyncio
+async def test_a_new_password_ends_only_the_pause_and_session_of_its_device(client, db_session, test_settings):
+    headers, fakes = await _setup_two(client, db_session, test_settings)
+    a, b = fakes[DS920], fakes[DS415]
+    await _set_password(client, headers, "falsch", "ds920")
+    await _devices(client, headers)
+    assert (a.failed_logins, b.logins) == (1, 1)
+
+    await _set_password(client, headers, PASSWORD, "ds920")
+    assert [d["state"] for d in await _devices(client, headers)] == ["ok", "ok"]
+    assert (a.logins, b.logins) == (1, 1), "keller behält seine Sitzung"
+    loaded = get_extension_runtime().loaded[EXT]
+    await loaded.instance.on_secret_changed(loaded.ctx, "synology-password")
+    await _devices(client, headers, "?refresh=true")
+    assert (a.logins, b.logins) == (1, 1), "der alte Eintrag ohne Kurznamen betrifft kein Gerät"
 
 
 @pytest.mark.asyncio

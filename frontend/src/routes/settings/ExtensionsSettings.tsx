@@ -10,9 +10,22 @@ import { Link } from "react-router-dom";
 import { BetaBadge, BetaExplainer, isBeta } from "../../components/BetaBadge";
 import { Icon } from "../../components/Icon";
 import { api } from "../../lib/api";
+import { extensionErrorText } from "../../lib/extensionError";
 import { groupModules } from "../../lib/moduleGroups";
 import { confirmDialog } from "../../state/dialogs";
 import { Badge, ExtensionStateBadge, NoticeLine, PageHeader, Toggle, errorText, type Notice } from "./ui";
+
+/** Eine Erweiterung, die die gespeicherten Daten eines Moduls unter dessen Kennung übernehmen will (`legacy_ids`). */
+interface TakeoverRequest {
+  id: string;
+  old_id: string;
+  name: string;
+  /** `pip`: nachinstalliertes Paket; `bundled`: Ordner im Erweiterungsverzeichnis. */
+  source: string;
+  permissions: string[];
+  /** Schon erlaubt: gilt ab dem nächsten Neustart, bis dahin läuft keine der beiden. Fehlt bei älteren Servern. */
+  allowed?: boolean;
+}
 
 interface ExtensionRow {
   id: string;
@@ -39,6 +52,8 @@ interface ExtensionRow {
   /** Nur bei eingeschalteten Modulen: Pflichtangaben fehlen oder der letzte Test schlug fehl. */
   needs_setup?: boolean;
   setup_reasons?: string[];
+  /** Nur für Verwalter, fehlt bei älteren Servern. Die Erweiterung wird erst geladen, wenn jemand das erlaubt. */
+  takeover_requests?: TakeoverRequest[];
 }
 
 const MAX_REASONS = 2;
@@ -61,6 +76,14 @@ export function providedHostsText(count: number | null): string {
   return count === 1
     ? " Ein Server, den es eingelesen hat, bleibt in der Liste stehen, wird aber nicht mehr aktualisiert. Wenn du ihn nicht mehr brauchst, löschst du ihn unter Einstellungen → Server & Zugänge."
     : ` Die ${count} Server, die es eingelesen hat, bleiben in der Liste stehen, werden aber nicht mehr aktualisiert. Wenn du sie nicht mehr brauchst, löschst du sie unter Einstellungen → Server & Zugänge.`;
+}
+
+/** Der Satz nach dem Erlauben; die Übernahme gilt erst nach einem Neustart. */
+export function takeoverAllowedText(name: string, label: string, extra: string[]): string {
+  const allowed = `Übernahme durch „${name}“ erlaubt. Sie gilt nach dem nächsten Neustart von Nodvard Deck.`;
+  if (extra.length === 0) return allowed;
+  const more = `„${name}“ will mehr Rechte, als „${label}“ hatte (${extra.join(", ")})`;
+  return `${allowed} ${more}, und bleibt deshalb aus, bis du es einschaltest.`;
 }
 
 export function ExtensionsSettings(): JSX.Element {
@@ -89,15 +112,42 @@ export function ExtensionsSettings(): JSX.Element {
     setNotice(null);
     try {
       const result = await api.post<Partial<ExtensionRow> | undefined>(`/extensions/${ext.id}/${enable ? "enable" : "disable"}`);
-      // Das Backend antwortet auch dann mit 200, wenn das Modul beim Laden abstuerzt
-      // (state "error"/"incompatible", Grund in last_error) -- dann nicht "eingeschaltet" melden.
+      // Das Backend antwortet auch dann mit 200, wenn das Modul beim Laden abstürzt (state "error" oder
+      // "incompatible", Grund in last_error): dann nicht „eingeschaltet“ melden.
       if (enable && result?.state && result.state !== "enabled") {
-        setNotice({ kind: "error", text: `„${label}“ ließ sich nicht einschalten${result.last_error ? `: ${result.last_error}` : "."}` });
+        setNotice({ kind: "error", text: `„${label}“ ließ sich nicht einschalten${result.last_error ? `: ${extensionErrorText(result.last_error)}` : "."}` });
       } else {
         setNotice({ kind: "ok", text: `„${label}“ ${enable ? "eingeschaltet" : "ausgeschaltet"}.` });
       }
       load();
       for (const key of ["pages", "widgets", "capabilities"]) void queryClient.invalidateQueries({ queryKey: [key] });
+    } catch (err) {
+      setNotice({ kind: "error", text: errorText(err) });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function allowTakeover(ext: ExtensionRow, request: TakeoverRequest) {
+    const label = ext.name ?? ext.id;
+    const where = request.source === "pip" ? "ein nachinstalliertes Paket" : "ein Ordner im Erweiterungsverzeichnis";
+    const rights = request.permissions.length ? request.permissions.join(", ") : "keine";
+    const ok = await confirmDialog(
+      `„${request.name}“ (${where}) die gespeicherten Daten von „${label}“ übernehmen lassen? Dazu gehören ` +
+        `Einstellungen, Datenordner, Aktionen, Tresor-Einträge und Tabellen. Es bekommt die Rechte: ${rights}. ` +
+        `Erlaube das nur, wenn du weißt, dass es die neue Version von „${label}“ ist. Bis zum nächsten Neustart ` +
+        `kannst du es noch zurücknehmen, indem du „${request.name}“ wieder entfernst, danach nicht mehr.`,
+      { confirmLabel: "Übernahme erlauben" },
+    );
+    if (!ok) return;
+    setBusyId(ext.id);
+    setNotice(null);
+    try {
+      const result = await api.post<{ extra_permissions: string[] }>(`/extensions/${request.id}/takeover`, {
+        old_id: request.old_id,
+      });
+      setNotice({ kind: "ok", text: takeoverAllowedText(request.name, label, result.extra_permissions ?? []) });
+      load();
     } catch (err) {
       setNotice({ kind: "error", text: errorText(err) });
     } finally {
@@ -144,7 +194,36 @@ export function ExtensionsSettings(): JSX.Element {
                             {ext.setup_reasons!.length > MAX_REASONS && <li className="pl-[18px] text-white/45">und {ext.setup_reasons!.length - MAX_REASONS} weitere</li>}
                           </ul>
                         )}
-                        {ext.last_error && <p className="mt-1 text-xs text-red-300">{ext.last_error}</p>}
+                        {ext.last_error && <p className="mt-1 text-xs text-red-300">{extensionErrorText(ext.last_error)}</p>}
+                        {ext.takeover_requests?.map((request) => (
+                          <div
+                            key={`${request.id}:${request.old_id}`}
+                            data-testid={`takeover-${request.id}`}
+                            className="mt-2 rounded-lg border border-amber-300/25 bg-amber-300/[0.06] px-3 py-2 text-xs text-amber-100/90"
+                          >
+                            {request.allowed ? (
+                              <p>
+                                Übernahme durch „{request.name}“ erlaubt. Sie gilt nach dem nächsten Neustart von
+                                Nodvard Deck, bis dahin läuft keine der beiden.
+                              </p>
+                            ) : (
+                              <>
+                                <p>
+                                  „{request.name}“ will die gespeicherten Daten dieses Moduls übernehmen. Es wird erst
+                                  geladen, wenn du das erlaubst.
+                                </p>
+                                <button
+                                  type="button"
+                                  disabled={busyId !== null}
+                                  onClick={() => void allowTakeover(ext, request)}
+                                  className="mt-1.5 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-1 text-xs font-medium hover:bg-white/[0.12] disabled:opacity-50"
+                                >
+                                  Übernahme erlauben
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        ))}
                       </div>
                       {ext.has_settings && (
                         <Link
@@ -156,25 +235,37 @@ export function ExtensionsSettings(): JSX.Element {
                           <Settings2 size={14} /> {ext.needs_setup ? "Jetzt einrichten" : "Konfigurieren"}
                         </Link>
                       )}
-                      {ext.state === "error" && (
-                        // Nach einem Absturz in on_start() bleibt die Erweiterung halb geladen (Seiten,
-                        // Routen, Zeitplaene aktiv). Der Schalter steht auf "aus" und startet sie nur
-                        // neu -- zum Abschalten braucht es diesen eigenen Knopf.
-                        <button
-                          type="button"
-                          disabled={busyId !== null}
-                          onClick={() => void toggle(ext, false)}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-1.5 text-sm font-medium hover:bg-white/[0.12] disabled:opacity-50"
-                        >
-                          Ausschalten
-                        </button>
+                      {ext.state === "error" ? (
+                        // Nach einem Absturz beim Start bleibt die Erweiterung halb geladen (Seiten, Routen, Zeitpläne
+                        // aktiv): Ein Schalter auf „aus“ wäre falsch, deshalb zwei Knöpfe.
+                        <>
+                          <button
+                            type="button"
+                            disabled={busyId !== null}
+                            onClick={() => void toggle(ext, true)}
+                            aria-label={`${ext.name ?? ext.id} neu starten`}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-1.5 text-sm font-medium hover:bg-white/[0.12] disabled:opacity-50"
+                          >
+                            Neu starten
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busyId !== null}
+                            onClick={() => void toggle(ext, false)}
+                            aria-label={`${ext.name ?? ext.id} ausschalten`}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-1.5 text-sm font-medium hover:bg-white/[0.12] disabled:opacity-50"
+                          >
+                            Ausschalten
+                          </button>
+                        </>
+                      ) : (
+                        <Toggle
+                          checked={enabled}
+                          disabled={busyId !== null || ext.state === "uninstalling"}
+                          label={`${ext.name ?? ext.id} ${enabled ? "ausschalten" : "einschalten"}`}
+                          onChange={(v) => void toggle(ext, v)}
+                        />
                       )}
-                      <Toggle
-                        checked={enabled}
-                        disabled={busyId !== null || ext.state === "uninstalling"}
-                        label={`${ext.name ?? ext.id} ${enabled ? "ausschalten" : ext.state === "error" ? "neu starten" : "einschalten"}`}
-                        onChange={(v) => void toggle(ext, v)}
-                      />
                     </li>
                   );
                 })}

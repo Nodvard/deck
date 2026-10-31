@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FOLDER = ROOT / "deploy" / "nodvard-dock"
 COMPOSE = FOLDER / "compose.yml"
 README = FOLDER / "README.md"
+README_EN = FOLDER / "README.en.md"
 STANDALONE = ROOT / "deploy" / "compose.standalone.yml"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 RAW_URL = "https://raw.githubusercontent.com/nodvard/deck/main/deploy/nodvard-dock/compose.yml"
@@ -74,14 +75,15 @@ def test_header_explains_the_three_steps():
     assert "NODVARD_DOCK_PORT" in head
 
 
-def test_readme_uses_the_same_commands_and_names():
-    text = README.read_text(encoding="utf-8")
+@pytest.mark.parametrize("readme", [README, README_EN], ids=["deutsch", "englisch"])
+def test_readme_uses_the_same_commands_and_names(readme):
+    text = readme.read_text(encoding="utf-8")
     assert f"curl -fsSL -o compose.yml {RAW_URL}" in text
     assert "docker compose logs nodvard-dock" in text
     assert "NODVARD_DOCK_PORT=8081" in text
     assert "--build-arg NODVARD_DECK_EXTENSIONS=docker" in text
     assert "PolyForm Noncommercial License 1.0.0" in text
-    assert "[LICENSE](../../LICENSE)" in text
+    assert "](../../LICENSE)" in text
     assert (FOLDER / "../../LICENSE").resolve().is_file()
 
 
@@ -96,29 +98,54 @@ def _constant(path: str, name: str) -> str:
 
 
 def test_readme_names_backups_and_screens_as_the_code_does():
-    text = README.read_text(encoding="utf-8")
+    german, english = README.read_text(encoding="utf-8"), README_EN.read_text(encoding="utf-8")
     root = _constant("extensions/docker/src/nodvard_deck_ext_docker/stack_backup.py", "BACKUP_ROOT")
     user = _constant("frontend/src/routes/settings/hosts/AccessPanel.tsx", "DEFAULT_KEY_USER")
-    assert f"(Vorgabe `{user}`) unter `{root}/<Stack>/<Zeit>/`" in text
-    assert f"(default `{user}`) under `{root}/<stack>/<time>/`" in text
+    assert f"(Vorgabe `{user}`) unter `{root}/<Stack>/<Zeit>/`" in german
+    assert f"(default `{user}`) under `{root}/<stack>/<time>/`" in english
     assert "# - ./sicherungen:/backups" in COMPOSE.read_text(encoding="utf-8")
-    assert text.count("`- ./sicherungen:/backups`") == 2
     assert '{ path: "system", label: "System"' in _source("frontend/src/routes/settings/SettingsLayout.tsx")
     assert '<Card title="Sicherung">' in _source("frontend/src/routes/settings/BackupCard.tsx")
     assert '<Card title="Wiederherstellen"' in _source("frontend/src/routes/settings/RestoreCard.tsx")
     assert "Oder: Sicherung einspielen" in _source("frontend/src/routes/SetupPage.tsx")
-    for screen in ("Sicherung", "Wiederherstellen"):
-        assert text.count(f"**Einstellungen → System → {screen}**") == 2, screen
-    assert text.count("**Oder: Sicherung einspielen**") == 2
+    for text in (german, english):
+        assert text.count("`- ./sicherungen:/backups`") == 1
+        for screen in ("Sicherung", "Wiederherstellen"):
+            assert text.count(f"**Einstellungen → System → {screen}**") == 1, screen
+        assert text.count("**Oder: Sicherung einspielen**") == 1
 
 
-def test_readme_has_both_languages_with_working_anchors():
-    text = README.read_text(encoding="utf-8")
+@pytest.mark.parametrize("readme", [README, README_EN], ids=["deutsch", "englisch"])
+def test_readme_anchors_have_a_heading(readme):
+    text = readme.read_text(encoding="utf-8")
     titles = re.findall(r"^#+ (.+)$", text, re.MULTILINE)
     headings = {re.sub(r"[^\w\- ]", "", t.strip().lower()).replace(" ", "-") for t in titles}
     for anchor in re.findall(r"\]\(#([^)]+)\)", text):
         assert anchor in headings, anchor
-    assert "## English" in text
+
+
+def test_both_languages_link_to_each_other():
+    assert "[English](README.en.md)" in README.read_text(encoding="utf-8")
+    assert "[Deutsch](README.md)" in README_EN.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("readme", [README, README_EN], ids=["deutsch", "englisch"])
+def test_relative_links_of_the_readme_have_a_target(readme):
+    for link in re.findall(r"\]\(([^)#]+)(?:#[^)]*)?\)", readme.read_text(encoding="utf-8")):
+        if not link.startswith(("http://", "https://", "mailto:")):
+            assert (FOLDER / link).resolve().exists(), link
+
+
+def test_issue_templates_and_security_policy_for_the_dock_repository():
+    templates = sorted((FOLDER / "issue-templates").glob("*.yml"))
+    assert [t.name for t in templates] == ["bug_report.yml", "config.yml", "feature_request.yml"]
+    for template in templates:
+        data = _load(template)
+        ids = [field["id"] for field in data.get("body", []) if "id" in field]
+        assert len(ids) == len(set(ids)), template.name
+    assert _load(FOLDER / "issue-templates" / "config.yml")["blank_issues_enabled"] is False
+    policy = (FOLDER / "SECURITY.md").read_text(encoding="utf-8")
+    assert "https://github.com/nodvard/dock/security/advisories/new" in policy and "kontakt@nodvard.com" in policy
 
 
 def test_ci_job_starts_the_image_of_this_file():

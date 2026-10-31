@@ -9,6 +9,7 @@ import { LoadError, errorMessage, fetchJson } from "../../../_shared/frontend/sr
 import { Badge, Button, type Tone } from "../../../_shared/frontend/src/ui";
 
 import { BackupsPanel } from "./Backups";
+import { GitSourcePanel } from "./GitSource";
 import { hostAction } from "./hostAction";
 import { HostSection } from "./Resources";
 import { NewStack } from "./NewStack";
@@ -37,7 +38,7 @@ interface AdoptCheck { ok: boolean; reasons: string[]; working_dir: string | nul
 interface Usage { cpu_percent: number | null; mem_used: number | null }
 interface FileOut { path: string; content: string | null; error: string | null }
 interface EnvOut { path: string; names: string[]; error: string | null; note?: string | null }
-type Panel = "file" | "adopt" | "edit" | "delete" | "update" | "portainer" | "backups";
+type Panel = "file" | "adopt" | "edit" | "delete" | "update" | "portainer" | "backups" | "git";
 
 const STATE: Record<StackOut["state"], { label: string; tone: Tone }> = {
   running: { label: "läuft", tone: "good" },
@@ -648,7 +649,7 @@ export function StackList({ hostId }: { hostId: string }): JSX.Element {
           return (
             <li key={stack.project} className="py-2" data-testid={`stack-${stack.project}`}>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <div className="min-w-0 flex-1 max-md:basis-full">
+                <div className="min-w-[16rem] flex-1 max-md:min-w-0 max-md:basis-full">
                   <p className="flex flex-wrap items-center gap-1.5 break-words">
                     <span className="font-medium">{stack.project}</span>
                     <Badge tone={state.tone}>{state.label}</Badge>
@@ -670,7 +671,7 @@ export function StackList({ hostId }: { hostId: string }): JSX.Element {
                   {SOURCE_NOTE[stack.source] && <p className="text-xs opacity-70">{SOURCE_NOTE[stack.source]}</p>}
                   {stack.adoption_note && <p className="text-xs text-amber-300">{stack.adoption_note}</p>}
                 </div>
-                <div className="flex shrink-0 flex-wrap gap-1.5">
+                <div className="flex min-w-0 max-w-full flex-wrap gap-1.5">
                   {stack.source === "compose" && (
                     <Button small pressed={open?.project === stack.project && open.panel === "file"} onClick={() => void toggle(stack.project, "file")}>
                       Datei ansehen
@@ -679,6 +680,11 @@ export function StackList({ hostId }: { hostId: string }): JSX.Element {
                   {stack.adopted && !stack.is_self && (
                     <Button small pressed={open?.project === stack.project && open.panel === "edit"} onClick={() => void toggle(stack.project, "edit")}>
                       Bearbeiten
+                    </Button>
+                  )}
+                  {stack.adopted && !stack.is_self && (
+                    <Button small pressed={open?.project === stack.project && open.panel === "git"} onClick={() => void toggle(stack.project, "git")}>
+                      Aus Git
                     </Button>
                   )}
                   {stack.source === "compose" && !stack.adopted && stack.total > 0 && (
@@ -731,6 +737,8 @@ export function StackList({ hostId }: { hostId: string }): JSX.Element {
                     <PortainerPanel hostId={hostId} project={stack.project} onDone={(text, warn) => { setOpen(null); note(text, warn); setReload((n) => n + 1); }} />
                   ) : open.panel === "backups" ? (
                     <BackupsPanel hostId={hostId} project={stack.project} onDone={(text, warn) => { setOpen(null); note(text, warn); setReload((n) => n + 1); }} />
+                  ) : open.panel === "git" ? (
+                    <GitSourcePanel hostId={hostId} project={stack.project} onDone={(text, warn) => { setOpen(null); note(text, warn); setReload((n) => n + 1); }} />
                   ) : open.panel === "delete" ? (
                     <DeletePanel hostId={hostId} project={stack.project} onDone={(text, warn) => { setOpen(null); note(text, warn); setReload((n) => n + 1); }} />
                   ) : (

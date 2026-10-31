@@ -19,6 +19,7 @@ REPO_EXTENSIONS_DIR = Path(__file__).resolve().parents[2] / "extensions"
 
 PINNED = {
     ("docker", 1): "6106247478608e47ce207d1e4788994e6d22cbaa06ffd6b87b0b910487db3798",
+    ("docker", 2): "5f63ab05bc8dc3f55a3527363ab07cad9ff4863fcc0c3092e6e1e788db8cee36",
     ("shield", 1): "56f2bbd11188f6321d2ecca26d84db614bcf7c0814326f262d687b90264652ef",
     ("shield", 2): "06cbf646edf4ee9bc9e265b226b56d4d71822c2ee67d9a9d5d61c7f234c58d14",
     ("shield", 3): "40ba30ad425c6b28600a2838a844a122305911c9533f7df98784c4ae59ce004b",
@@ -33,12 +34,17 @@ PINNED = {
     ("shield", 12): "1dcd2653cde62af3ea611f97f268f0f421df5e488553f24d6a6daa23e095f886",
     ("shield", 13): "9b24a3da3355d3daf1a47370df5e8cf3912e85ac7540432e0940e736ff78b4cb",
     ("shield", 14): "d41c9c5a3fcc99f382843e39b0186f63759a3f57931528935a5bcd74ca0dff4e",
+    ("shield", 15): "d1a5a9963ab8196c9a57a44c916a723ca2d500dc34ffce2eb63a0bf1e01b3e70",
     ("system", 1): "dbae0a1432917b084dbe06cf43a155bfc0d7de38dfa06342267e545e09004368",
     ("system", 2): "116c19ce9b50057456f4cd1b35091564f6d7ce327aea086f9c965e3c2330c994",
 }
 """Prüfsumme je (Modul, Version). Ein Server mit Version n hat genau diesen Text; ein geänderter Text mit derselben Zahl
 würde dort nie als veraltet erkannt. Also: Text geändert → `HELPER_VERSION` im Skript und `version` in `extension.toml`
 um eins erhöhen und hier eine neue Zeile eintragen (alte Zeilen bleiben stehen)."""
+
+CALLS_ANY_VERSION_CHECKED = {"docker": 2}
+"""Module mit `calls_any_version` und die Version, bis zu der geprüft ist, dass jede ältere Fassung alle ihre Aufrufe
+beantwortet. Neue Version mit neuem Unterbefehl: Merkmal überdenken, dann hier eintragen."""
 
 USAGE_EXIT = 64
 
@@ -49,6 +55,15 @@ def _helpers() -> dict[str, RootHelperFile]:
     helpers = {d.id: read_root_helper(d) for d in with_spec}
     assert all(helpers.values()), f"vom Kern abgelehnt: {[k for k, v in helpers.items() if v is None]}"
     return helpers  # type: ignore[return-value]
+
+
+def test_every_module_calling_any_version_was_checked_at_its_current_version():
+    found = {ext_id: helper.version for ext_id, helper in _helpers().items() if helper.calls_any_version}
+    assert found == CALLS_ANY_VERSION_CHECKED
+
+
+def test_only_docker_works_without_the_full_rule_fallback():
+    assert {ext_id for ext_id, helper in _helpers().items() if not helper.sudo_fallback} == {"docker"}
 
 
 def _shells() -> list[str]:

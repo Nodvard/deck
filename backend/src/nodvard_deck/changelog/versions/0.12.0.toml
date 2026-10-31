@@ -1,0 +1,315 @@
+version = "0.12.0"
+date = "2026-10-31"
+title = "Docker-Stacks aus Git, Fail2ban in Nodvard Shield und engere Grenzen für Module und Anmeldungen"
+
+[[entries]]
+kind = "verbessert"
+text = "Erweiterungen von anderen Anbietern, die noch die alten Namen aus der Zeit vor Nodvard Deck nutzen (die Pakete lattice und lattice_sdk, die Klassen LatticeExtension und LatticeError oder die Entry-Point-Gruppe lattice.extensions), werden nicht mehr geladen. Ist so eine Erweiterung eingeschaltet, zeigt die Liste der Erweiterungen, woran es liegt und was hilft."
+
+[[entries]]
+kind = "verbessert"
+text = "Eigene Skripte, die Nodvard Deck noch unter dem alten Namen aufrufen (import lattice oder python -m lattice.…), brauchen jetzt den neuen Namen nodvard_deck."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die eingebaute Git-Bibliothek ist auf dem neuesten Stand und bricht bei absichtlich kaputten Git-Daten nicht mehr ab."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Oberfläche benutzt nur noch die Namen von Nodvard Deck. Ein Browser-Tab, der schon vor dem Update offen war, muss beim ersten Öffnen einer Modulseite einmal neu geladen werden; die Seite bietet dafür einen Knopf an."
+
+[[entries]]
+kind = "verbessert"
+text = "Erweiterungen von anderen Anbietern, deren Oberfläche noch die alten Namen aus der Zeit vor Nodvard Deck nutzt, zeigen ihre Seite nicht mehr an. Sie brauchen eine neue Fassung ihres Anbieters."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Lizenzliste der mitgelieferten Software nennt bei Paketen mit zwei Lizenzen die gewählte und führt jetzt auch die Programme des Betriebssystems im Image auf."
+
+[[entries]]
+kind = "sicherheit"
+text = "Will eine nachinstallierte Erweiterung die gespeicherten Daten eines entfernten Moduls übernehmen, startet sie erst, wenn ein Admin das unter Einstellungen → Erweiterungen erlaubt."
+
+[[entries]]
+kind = "verbessert"
+text = "Läuft Nodvard Deck noch mit Einstellungen unter dem alten Namen LATTICE_…, zeigt die Startseite dem Inhaber, welche das sind, wie sie künftig heißen und wo die Anleitung steht. Sie gelten noch, aber eine der nächsten Versionen, spätestens 1.0, liest sie nicht mehr."
+
+[[entries]]
+kind = "verbessert"
+text = "Längst abgelaufene oder beendete Anmeldungen samt Adresse und Browser löscht Nodvard Deck jetzt jede Nacht, statt sie für immer aufzubewahren."
+
+[[entries]]
+kind = "sicherheit"
+text = "Ein Modul kann im Protokoll und bei Vorschlägen nur noch die Person als Handelnde nennen, die gerade wirklich dabei ist: wer angemeldet die Anfrage stellt oder die Aktion vorgeschlagen oder freigegeben hat. Andere Namen stehen nur noch als Hinweis im Eintrag."
+
+[[entries]]
+kind = "verbessert"
+text = "Schlägt ein Modul eine Aktion im Namen der KI, eines Zeitplans oder einer Person vor, nennt das Protokoll jetzt auch das Modul."
+
+[[entries]]
+kind = "sicherheit"
+text = "Module kommen über ihren Datenbank-Zugang nur noch an ihre eigenen Tabellen, nicht mehr an Konten, Tresor oder Protokoll."
+
+[[entries]]
+kind = "sicherheit"
+text = "Darf ein Modul nur bestimmte Adressbereiche erreichen, kommt es über einen Rechnernamen nicht mehr an anderen Adressen vorbei."
+
+[[entries]]
+kind = "sicherheit"
+text = "Nach einer ausgeführten Aktion erfahren nur noch das Modul, das sie vorgeschlagen hat, und Module, die selbst Befehle ausführen dürfen, welcher Befehl lief."
+
+[[entries]]
+kind = "sicherheit"
+text = "Ein Modul kommt an ein Geheimnis aus dem Tresor nur noch mit dem Recht für genau dieses Geheimnis, auch nicht über Umwege, und nie an die Zwei-Faktor-Schlüssel der Konten."
+
+[[entries]]
+kind = "sicherheit"
+text = "Module lesen von den Einstellungen des Dashboards nur noch Zeitzone und Wartungsfenster, nicht mehr etwa die Freigabe-Regeln oder die Liste der vertrauenswürdigen Proxys."
+
+[[entries]]
+kind = "neu"
+text = "Einen Stand aus Git spielt Nodvard Deck jetzt nach Rückfrage und Freigabe in den Stack ein: Es schreibt die Dateien mit den Rechten des Besitzers des Stack-Ordners, prüft sie mit Compose und wendet den Stack an. Lehnt Compose den Stand ab, steht sofort wieder der alte auf dem Server."
+
+[[entries]]
+kind = "neu"
+text = "Von sich aus startet Nodvard Deck dabei nur die Dienste neu, die in der Freigabe stehen. Lesen weitere Dienste vielleicht noch den alten Stand, nennt es sie und bietet einen Knopf „Jetzt neu starten“ an, der eine eigene Freigabe braucht."
+
+[[entries]]
+kind = "neu"
+text = "„Zurück zum Stand davor“ holt die Dateien vor dem letzten Einspielen wieder. Entfernt werden nur Dateien, die Nodvard Deck selbst aus dem Repository geschrieben hat und die seitdem niemand geändert hat. Umgebungsdateien auf dem Server ersetzt Nodvard Deck nie; eine, die es selbst neu angelegt hat, nimmt nur „Zurück zum Stand davor“ wieder weg."
+
+[[entries]]
+kind = "neu"
+text = "Beim Einspielen aus Git lassen sich die Volumes des Stacks vorher sichern, wie beim Stack-Update: mit Größe und Platzprüfung, die Dienste, die sie nutzen, stehen dafür still. Zurückspielen geht im Reiter Stacks unter „Sicherungen“."
+
+[[entries]]
+kind = "neu"
+text = "Ein Stack, den Nodvard Deck verwaltet (in Deck angelegt oder übernommen), kann ein Git-Repository als Quelle bekommen. Nodvard Deck holt den Stand selbst und zeigt vor jeder Änderung, welche Dateien neu oder anders wären, mit dem Unterschied der Compose-Datei und Hinweisen auf alles, was nicht aus dem Repository kommt."
+
+[[entries]]
+kind = "neu"
+text = "Für private Repositorys gibt es Git-Zugänge in den Einstellungen des Moduls Docker. Das Token liegt im Tresor und geht nur an den eingetragenen Server."
+
+[[entries]]
+kind = "behoben"
+text = "Übersicht mit vielen Widgets: Sie lädt jetzt zuverlässig, statt nach einer halben Minute mit einem Datenbankfehler abzubrechen. Danke für die Meldung!"
+
+[[entries]]
+kind = "behoben"
+text = "qBittorrent und Synology DSM benutzen ein neues Passwort aus dem Tresor sofort: Die alte Anmeldung wird abgemeldet, und eine Pause nach einem falschen Passwort endet gleich. Bisher galt beides weiter, bis jemand die Einstellungen speicherte oder „Verbindung testen“ drückte."
+
+[[entries]]
+kind = "behoben"
+text = "Pi-hole und Nginx Proxy Manager melden sich nach einem neuen Passwort im Tresor sofort neu an, statt mit der alten Anmeldung weiterzulaufen."
+
+[[entries]]
+kind = "behoben"
+text = "Home Assistant, Jellyfin, Plex, Nextcloud und Uptime Kuma benutzen ein neues Token, einen neuen Schlüssel oder ein neues Passwort aus dem Tresor sofort. Bisher blieb je nach Modul bis zu 30 Minuten lang das Ergebnis mit dem alten Wert stehen, auch eine Pause nach einer abgelehnten Anmeldung lief weiter."
+
+[[entries]]
+kind = "verbessert"
+text = "Wer den Update-Helfer neu einrichtet oder aktualisiert, bekommt jetzt genau den geprüften Helfer: Die Datei dafür hängt an jeder Version auf GitHub und nennt seine Prüfsumme, die auch im Text der Version steht."
+
+[[entries]]
+kind = "behoben"
+text = "„Verbindung prüfen“ und die Übersicht sagen bei Docker jetzt richtig, dass ein älteres Hilfsskript bis zum Neueinrichten weiter benutzt wird."
+
+[[entries]]
+kind = "behoben"
+text = "Ein Server mit beiden Markierungen „docker“ und „docker-bedienen“ gilt als voller Docker-Server: Die Prüfungen für „Nur bedienen“ und das Hilfsskript für Docker entfallen dort."
+
+[[entries]]
+kind = "behoben"
+text = "Fehlt das Hilfsskript für Docker, melden Einrichtung, „Verbindung prüfen“ und Übersicht das jetzt als Problem: Docker kann den Server dann nicht bedienen, auch wenn der Zugang sonst alle Rechte hat."
+
+[[entries]]
+kind = "sicherheit"
+text = "Nodvard Deck sperrt im Browser Kamera, Mikrofon, Standort und andere Geräte, die es nie braucht, und fremde Seiten können außer Logo, Symbolen und der Erreichbarkeits-Prüfung nichts mehr von Deck einbinden."
+
+[[entries]]
+kind = "sicherheit"
+text = "Wer ein Passwort durchprobiert, wird gebremst: Ab 10 falschen Anmeldungen für einen Namen in 24 Stunden wartet jeder weitere Versuch aus demselben Netz doppelt so lange wie der vorige, höchstens 5 Minuten, und du bekommst eine Meldung. Aus deinem Heimnetz, über ein VPN und aus anderen Netzen kommst du weiter sofort hinein. Gegen Angreifer mit sehr vielen Adressen helfen weiter ein langes Passwort und Zwei-Faktor."
+
+[[entries]]
+kind = "neu"
+text = "Meldet sich der Inhaber über einen Proxy aus dem Heimnetz an, der nicht als vertrauenswürdig eingetragen ist, weisen ihn Übersicht und Einstellungen darauf hin, denn ohne Eintrag sieht Nodvard Deck die echten Adressen nicht."
+
+[[entries]]
+kind = "neu"
+text = "Nodvard Shield zeigt im Einbruchschutz je Server die von Fail2ban gesperrten Adressen zum Entsperren und kann dort auch eine Adresse von Hand sperren."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die IP-Adresse deines Browsers und die, über die Nodvard Deck einen Server erreicht, sperrt Shield nicht, damit sich niemand selbst aussperrt."
+
+[[entries]]
+kind = "neu"
+text = "Nodvard Shield: Die Update-Zentrale zeigt bei Ubuntu-Servern, wie viele Updates noch schrittweise verteilt werden („davon X durch Phasing verzögert“), mit einer kurzen Erklärung. Solche Updates spielt auch „Alle einspielen“ erst ein, wenn der Server an der Reihe ist; die Rückfrage davor sagt das jetzt."
+
+[[entries]]
+kind = "sicherheit"
+text = "Nodvard Shield verschiebt eine Datei auch ohne Hilfsskript, etwa bei Anmeldung als root, nur noch in die Quarantäne, wenn ClamAV sie dabei selbst noch einmal als Fund meldet. Ein Fund aus einer veränderten Sicherung kann so keine Systemdatei mehr wegsperren."
+
+[[entries]]
+kind = "sicherheit"
+text = "Vorfälle in Nodvard Shield bestätigen, verwerfen, erledigen oder wieder öffnen darf nur noch, wer Shield verwalten darf (Recht „soc.manage“); mit nur „soc.read“ in einer eigenen Rolle bleiben sie lesbar."
+
+[[entries]]
+kind = "verbessert"
+text = "Widgets auf der Startseite zeigen nur noch Knöpfe, für die du das Recht hast; vorher brach ein Klick darauf mit einer Fehlermeldung ab."
+
+[[entries]]
+kind = "verbessert"
+text = "Darf Nodvard Deck in den Ordner für Sicherungen nicht schreiben, zeigt es unter Einstellungen → System jetzt, als welcher Benutzer es läuft, wem der Ordner gehört und mit welchem Befehl du das behebst."
+
+[[entries]]
+kind = "sicherheit"
+text = "Scheitert eine Sicherung am fehlenden Schreibrecht, stehen Benutzernummer und Befehl nur in den Einstellungen unter System. Protokoll, Benachrichtigung und die Läufe der Sicherungs-Aufgabe, die auch Betrachter sehen, nennen nur den kurzen Grund."
+
+[[entries]]
+kind = "sicherheit"
+text = "Schon ausgestellte Anmelde-Tokens (Access-Tokens) gelten nur noch, solange ihre Anmeldung gilt: Nach dem Abmelden, einem Passwortwechsel (für die anderen Anmeldungen) oder wenn ein Konto deaktiviert und wieder aktiviert wurde, sind sie sofort ungültig, statt noch bis zu 15 Minuten zu gelten."
+
+[[entries]]
+kind = "sicherheit"
+text = "Mit einem aktuellen Update-Helfer spielt der Knopf „Jetzt aktualisieren“ nur die Fassung ein, die die Update-Suche geprüft hat. Hat sich das Update seitdem geändert, lädt er nichts und bittet, erneut nach Updates zu suchen."
+
+[[entries]]
+kind = "behoben"
+text = "Gibt eine ACL am Ordner der Hilfsskripte jemandem Schreibrecht, nennt die Einrichtung als Abhilfe jetzt „setfacl -b“ und danach „chmod g-w“. „setfacl -b“ allein ließ das Schreibrecht der Gruppe stehen, und die nächste Einrichtung brach wieder ab."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Oberfläche lädt Bilder, Daten und Verbindungen jetzt fest nur vom eigenen Server. Bisher hat der Browser fremde Adressen dort nur gemeldet, jetzt sperrt er sie."
+
+[[entries]]
+kind = "verbessert"
+text = "Nodvard Deck erkennt eine neue Fassung seiner Startseite jetzt am Inhalt statt an Größe und Uhrzeit der Datei und lässt dann sofort genau deren eingebettete Skripte zu."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Fehlt einem Server seit dem Vorschlag die Markierung „docker“, sagen auch Image-Update, Umwandeln in einen Stack, neuer Stack, Umzug von Portainer und die Anmeldung bei einer Registry jetzt den Grund und wie es weitergeht, statt nur „Kein Docker-Host.“"
+
+[[entries]]
+kind = "sicherheit"
+text = "Wird ein Server auf „Nur bedienen“ umgestellt, führt Nodvard Deck eine schon vorgeschlagene Docker-Aktion nach der Freigabe nicht mehr aus und nennt den Grund, außer Starten, Stoppen und Neustarten von Containern, die auch im Modus „Nur bedienen“ gehen."
+
+[[entries]]
+kind = "sicherheit"
+text = "Ist ein Server inzwischen gar nicht mehr als Docker-Server markiert, führt Nodvard Deck dort keine schon vorgeschlagene Docker-Aktion mehr aus und nennt den Grund."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Liefert eine Registry bei der Suche nach Image-Updates eine Antwort in unerwarteter Form, gilt nur dieses Image als nicht prüfbar. Bisher schlug die Prüfung für den ganzen Server fehl."
+
+[[entries]]
+kind = "sicherheit"
+text = "Docker: Im Modus „Nur bedienen“ greift Nodvard Deck immer auf Docker auf dem Server selbst zu, auch wenn root dort per DOCKER_HOST oder Docker-Kontext auf einen anderen Docker-Dienst zeigt. Das gilt, sobald du den Server neu einrichtest (Einrichtungsbefehl noch einmal ausführen); bis dahin bleibt alles wie bisher."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Bricht das Zurückspielen einer Volume-Sicherung ab, bevor die Daten getauscht werden, startet Deck den Stack wieder und räumt den halb entpackten Ordner weg. Bisher blieb der Stack ohne Hinweis gestoppt."
+
+[[entries]]
+kind = "behoben"
+text = "Docker: Bleibt ein Stack nach einem Abbruch beim Zurückspielen gestoppt, weil der Tausch der Daten schon begonnen hatte, das Zurückspielen noch läuft oder der Neustart scheitert, sagt eine Meldung jetzt den Grund und den nächsten Schritt. Bisher gab es dazu keinen Hinweis."
+
+[[entries]]
+kind = "verbessert"
+text = "Stacks aus Git: Nach „Dienste neu starten“ prüft Nodvard Deck jetzt wie bei den anderen Neustarts, ob die Dienste wieder stabil laufen, auch solche, die vorher gestoppt waren, und meldet es, wenn nicht."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield legt Dateien mit Rechten wie 044 oder 000 wieder aus der Quarantäne zurück; bisher scheiterte das mit der Meldung, es sei kein Ursprungsort hinterlegt. Dafür gibt es eine neue Version des Hilfsskripts. Server, die root-Rechte nur über das Hilfsskript bekommen, bitte danach neu einrichten; bis dahin lehnt Nodvard Shield dort Aktionen mit root-Rechten ab. Mit voller sudo-Regel oder als root geht alles ohne Neueinrichtung weiter."
+
+[[entries]]
+kind = "sicherheit"
+text = "Rückfrage und Freigabe beim Wiederherstellen sagen „an den hinterlegten Ort“ und nennen den Pfad aus dem Fund nur „laut Fund“. Danach nennt Shield im Ergebnis den Ort, an den die Datei wirklich ging."
+
+[[entries]]
+kind = "sicherheit"
+text = "Hilfsskripte legt Nodvard Deck nur noch in Ordner, in die außer root niemand schreiben darf, auch keine Gruppe. Sonst richtet die Einrichtung sie nicht ein und nennt Grund und Abhilfe, und „Verbindung prüfen“ warnt bei schon eingerichteten Servern."
+
+[[entries]]
+kind = "behoben"
+text = "Die Integritätsprüfung von Hyper Backup auf einer Synology erscheint nicht mehr als Fehler und löst keine Störungsmeldung mehr aus."
+
+[[entries]]
+kind = "sicherheit"
+text = "Mit jeder neuen Version kommen die aktuellen Sicherheitsupdates für die Texterkennung der Dokumente (Tesseract) und ihre Bausteine mit, auch wenn sich sonst nichts geändert hat."
+
+[[entries]]
+kind = "verbessert"
+text = "Ist Pi-hole oder Nginx Proxy Manager nicht erreichbar, steht auf der Seite und in der Kachel jetzt ein deutscher Satz mit Grund und nächstem Schritt (Verbindung abgelehnt, Name nicht gefunden, http und https vertauscht) statt einer englischen Fehlermeldung."
+
+[[entries]]
+kind = "behoben"
+text = "Hast du den Schlüssel von Nodvard Deck auf einem Server mit einem # davor abgeschaltet, trägt das erneute Einrichten wieder einen funktionierenden Schlüssel ein."
+
+[[entries]]
+kind = "sicherheit"
+text = "Nodvard Shield legt eine Datei aus der Quarantäne auch auf Servern ohne Hilfsskript nur dorthin zurück, wo sie vorher lag, und mit ihren alten Rechten; Angaben aus einer veränderten Sicherung zählen dabei nicht mehr."
+
+[[entries]]
+kind = "sicherheit"
+text = "Dateien, die mit Nodvard Deck 0.8 oder älter in die Quarantäne kamen, legt Shield nicht mehr per Knopf zurück, weil es sich nicht gemerkt hat, wo sie lagen; es sagt das beim Wiederherstellen, und man legt sie von Hand zurück oder löscht sie."
+
+[[entries]]
+kind = "verbessert"
+text = "Darf Nodvard Deck nicht in den Sicherungsordner schreiben, sagen Push-Nachricht und Job-Protokoll jetzt auch, wo die Hilfe dazu steht."
+
+[[entries]]
+kind = "behoben"
+text = "Abgelaufene Freigaben heißen jetzt „Abgelaufen“ und lassen sich nur noch verwerfen, statt Bestätigen anzubieten, das ohnehin nicht mehr geht."
+
+[[entries]]
+kind = "verbessert"
+text = "Stürzt ein Modul beim Start ab, steht der Grund verständlich da, und es gibt die Knöpfe „Neu starten“ und „Ausschalten“ statt eines Schalters."
+
+[[entries]]
+kind = "behoben"
+text = "Kleinere Anzeigefehler: Docker-Stacks mit vielen Knöpfen brechen um, Datum und Uhrzeit stehen immer auf Deutsch da, und Inventar und Proxy-Hinweis sagen es richtig."
+
+[[entries]]
+kind = "behoben"
+text = "„Verbindung testen“ bei Pi-hole und Nginx Proxy Manager meldet sich jetzt jedes Mal neu an. Bisher stand nach einem falschen neuen Passwort noch „Verbindung funktioniert“ da, solange die alte Anmeldung galt."
+
+[[entries]]
+kind = "verbessert"
+text = "Bei der Erst-Einrichtung lässt sich die Zwei-Faktor-Anmeldung jetzt auch nach „Jetzt einrichten“ mit „Später einrichten“ überspringen, bei der Passwortabfrage und neben „Bestätigen“."
+
+[[entries]]
+kind = "behoben"
+text = "Das tägliche Aufräumen alter Job-Läufe bricht nicht mehr ab, wenn eine eingespielte Sicherung einen unbrauchbaren Dateinamen für ein Lauf-Protokoll enthält."
+
+[[entries]]
+kind = "verbessert"
+text = "In der Anleitung steht jetzt eine Tabelle, was die Hilfsskripte auf dem Server als root dürfen, und bei „Überwachte Dateien“ im Datei-Wächter, was root von diesen Dateien liest."
+
+[[entries]]
+kind = "sicherheit"
+text = "Der Update-Helfer versteht jetzt signierte Freigaben: Ein Update mit Freigabe spielt er nur ein, wenn die Signatur zum Schlüssel des Projekts passt. Pflicht wird das mit Version 1.0."
+
+[[entries]]
+kind = "sicherheit"
+text = "Ein Update per Knopf gibt es nur noch, wenn die neue Version am Release freigegeben ist. Ein aktueller Update-Helfer prüft die Signatur dieser Freigabe, bevor er etwas einspielt."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Karte „Updates“ zeigt, ob eine neue Version schon freigegeben ist und ob dein Update-Helfer die Freigabe selbst prüft."
+
+[[entries]]
+kind = "verbessert"
+text = "„Verbindung prüfen“ und die Übersicht zeigen, wenn ein Server noch die volle sudo-Regel hat, obwohl die Hilfsskripte reichen, und sagen, wie man sie entfernt."
+
+[[entries]]
+kind = "neu"
+text = "Neues Häkchen beim Server: „Volle sudo-Regel gewollt“, für alle, die eigene Befehle mit sudo starten."
+
+[[entries]]
+kind = "neu"
+text = "Beim Einrichten eines Servers gibt es unter „Erweitert“ „Volle sudo-Regel entfernen“. Der Befehl prüft vorher und nachher jedes Hilfsskript und stellt die Regel sofort wieder her, wenn danach etwas nicht geht."
+
+[[entries]]
+kind = "verbessert"
+text = "Der Hinweis in der Übersicht zu einer unnötigen vollen sudo-Regel führt direkt zum passenden Einrichtungsbefehl."

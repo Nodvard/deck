@@ -27,7 +27,7 @@ function stubFetch(routes: Record<string, Reply[]>) {
 beforeEach(() => {
   vi.useFakeTimers();
   permissions = new Set(["actions.approve:medium"]);
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never,
     ReactDOM: undefined as never,
     ReactJsxRuntime: undefined as never,
@@ -88,16 +88,16 @@ describe("waitForAction", () => {
   });
 
   it("401, und der Server antwortet beim Erneuern nicht (Neustart): fragt weiter nach", async () => {
-    window.__lattice.refreshAccessTokenResult = vi.fn(async (): Promise<NodvardDeckTokenRefreshResult> => ({ status: "unavailable" }));
+    window.__nodvardDeck.refreshAccessTokenResult = vi.fn(async (): Promise<NodvardDeckTokenRefreshResult> => ({ status: "unavailable" }));
     stubFetch({ "/actions/a1": [{ status: 401, body: { detail: "Nicht authentifiziert." } }, { status: 200, body: { status: "succeeded" } }] });
     const done = waitForAction("a1");
     await vi.advanceTimersByTimeAsync(6000);
     await expect(done).resolves.toMatchObject({ status: "succeeded" });
-    expect(window.__lattice.refreshAccessTokenResult).toHaveBeenCalledTimes(1);
+    expect(window.__nodvardDeck.refreshAccessTokenResult).toHaveBeenCalledTimes(1);
   });
 
   it("401, und der Server lehnt die Anmeldung ab: bricht mit „Nicht authentifiziert.“ ab", async () => {
-    window.__lattice.refreshAccessTokenResult = vi.fn(async (): Promise<NodvardDeckTokenRefreshResult> => ({ status: "rejected" }));
+    window.__nodvardDeck.refreshAccessTokenResult = vi.fn(async (): Promise<NodvardDeckTokenRefreshResult> => ({ status: "rejected" }));
     stubFetch({ "/actions/a1": [{ status: 401, body: { detail: "Nicht authentifiziert." } }, { status: 200, body: { status: "succeeded" } }] });
     const caught = waitForAction("a1").catch((err: unknown) => err);
     await vi.advanceTimersByTimeAsync(3000);

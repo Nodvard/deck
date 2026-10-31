@@ -9,13 +9,14 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-from docker_stack_fakes import EXT_DIR, FakeExec, docker_on, ps, result, row  # noqa: F401 - Fixtures
+from docker_stack_fakes import EXT_DIR, FakeExec, FakeSettings, docker_on, ps, result, row  # noqa: F401 - Fixtures
 
 
-@pytest.fixture(autouse=True)
-def _ext_docker_on_path(monkeypatch):
-    monkeypatch.syspath_prepend(str(EXT_DIR / "src"))
-    yield
+@pytest.fixture(autouse=True, scope="module")
+def _ext_docker_on_path():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(EXT_DIR / "src"))
+        yield
     for name in list(sys.modules):
         if name.startswith("nodvard_deck_ext_docker"):
             del sys.modules[name]
@@ -123,8 +124,8 @@ def test_the_reason_is_the_last_error_line():
 def _executor(tmp_path, fake: FakeExec | None = None):
     adopt, stack_actions, stacks = _mods()
     fake = fake or FakeExec()
-    hosts = SimpleNamespace(get=lambda host_id: _async(SimpleNamespace(id=host_id) if host_id == "h1" else None))
-    ctx = SimpleNamespace(exec=fake, hosts=hosts)
+    hosts = SimpleNamespace(get=lambda host_id: _async(SimpleNamespace(id=host_id, tags=["docker"]) if host_id == "h1" else None))
+    ctx = SimpleNamespace(exec=fake, hosts=hosts, settings=FakeSettings())
     store = adopt.AdoptedStacks(tmp_path)
     return stack_actions.DockerStackExecutor(ctx, stacks.DockerStacks(ctx, store), store), store, fake
 

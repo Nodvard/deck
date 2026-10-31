@@ -46,7 +46,7 @@ beforeEach(() => {
   permissions = new Set(["hosts.read", "extensions.manage"]);
   urls = [];
   answer = () => ok(overviewOf(connection()));
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn(), promptDialog: vi.fn(),
     hasPermission: (p: string) => permissions.has(p),

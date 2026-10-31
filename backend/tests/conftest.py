@@ -85,6 +85,17 @@ def _isolate_timezone():
         time.tzset()
 
 
+@pytest.fixture
+def window_clock(monkeypatch):
+    """Die Wartungsfenster sehen `window_helpers.WINDOW_NOW` statt der echten Uhr; Fenster aus `window()` liegen damit
+    nie in einer Zeitumstellung."""
+    from nodvard_deck.core import maintenance
+    from window_helpers import WINDOW_NOW
+
+    monkeypatch.setattr(maintenance, "utcnow", lambda: WINDOW_NOW)
+    return WINDOW_NOW
+
+
 @pytest.fixture(autouse=True)
 def _reset_login_limit():
     """`core.login_limit` zaehlt Fehlversuche im Prozessspeicher -- ohne
@@ -101,13 +112,15 @@ def _reset_login_limit():
 
 @pytest.fixture(autouse=True)
 def _reset_trusted_proxies():
-    """Die Liste vertrauenswuerdiger Proxys liegt im Prozess (`core.trusted_proxies`): ein Test, der sie setzt, darf
-    sie nicht an den naechsten weitergeben (sonst saehe der eine falsche Client-Adresse)."""
-    from nodvard_deck.core import trusted_proxies
+    """Die Liste vertrauenswürdiger Proxys und die gemerkten fremden liegen im Prozess: Ein Test, der sie setzt, darf
+    sie nicht an den nächsten weitergeben."""
+    from nodvard_deck.core import trusted_proxies, untrusted_proxies
 
     trusted_proxies.reset()
+    untrusted_proxies.reset()
     yield
     trusted_proxies.reset()
+    untrusted_proxies.reset()
 
 
 @pytest_asyncio.fixture

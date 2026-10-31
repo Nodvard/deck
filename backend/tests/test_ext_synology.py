@@ -1118,7 +1118,7 @@ async def test_changed_details_of_the_device_end_its_pause(client, db_session, t
     headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers, password="falsch")
     assert (await _overview(client, headers))["state"] == "auth_failed"
-    await _set_password(client, headers, PASSWORD)
+    fake.password = "falsch"
     saved = await client.put(
         f"/api/v1/extensions/{EXT}/settings",
         json={"current_password": "correct-horse-battery", "values": {"connections": [_entry(DEVICE, tls_insecure_skip_verify=True)]}}, headers=headers,
@@ -1127,6 +1127,51 @@ async def test_changed_details_of_the_device_end_its_pause(client, db_session, t
     assert not saved.json().get("secrets_cleared"), "dieselbe Adresse: das Passwort bleibt"
     assert (await _overview(client, headers))["state"] == "ok"
     assert fake.logins == 1
+
+
+@pytest.mark.asyncio
+async def test_a_new_password_in_the_vault_ends_the_pause_at_once(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, password="falsch")
+    assert (await _overview(client, headers))["state"] == "auth_failed"
+    await _set_password(client, headers, PASSWORD)
+    assert (await _overview(client, headers))["state"] == "ok"
+    assert (fake.failed_logins, fake.logins) == (1, 1)
+
+
+@pytest.mark.asyncio
+async def test_a_new_password_in_the_vault_logs_the_old_session_out(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    assert (await _overview(client, headers))["state"] == "ok"
+    assert len(fake.sessions) == 1
+    await _set_password(client, headers, "falsch")
+    assert fake.sessions == set(), "die alte Sitzung ist abgemeldet"
+    assert (await _overview(client, headers))["state"] == "auth_failed", "nicht weiter mit der Sitzung von vorher"
+
+
+@pytest.mark.asyncio
+async def test_an_answer_with_the_old_password_is_not_kept(client, db_session, test_settings):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    service, loaded = _service(), get_extension_runtime().loaded[EXT]
+    load, entered, release, loads = service._load_bounded, asyncio.Event(), asyncio.Event(), []
+
+    async def slow(cfg, *args):
+        loads.append(cfg.name)
+        if len(loads) == 1:
+            entered.set()
+            await release.wait()
+        return await load(cfg, *args)
+
+    service._load_bounded = slow
+    first = asyncio.create_task(_overview(client, headers))
+    await entered.wait()
+    await loaded.instance.on_secret_changed(loaded.ctx, f"synology-password:{DEVICE}")
+    release.set()
+    await first
+    await _overview(client, headers)
+    assert loads == [DEVICE, DEVICE], "was die Abfrage mit dem alten Passwort einträgt, gilt nicht mehr"
 
 
 @pytest.mark.asyncio
@@ -2093,6 +2138,8 @@ def test_a_missed_run_or_a_long_time_without_success_is_overdue():
     weekly_ok = _status(last_run=datetime(2026, 10, 12, 3, 0), next_run=datetime(2026, 10, 19, 3, 0), last_success=datetime(2026, 10, 12, 4, 0))
     assert syn_backup.overdue_reason(weekly_ok, NOW) is None
     assert syn_backup.overdue_reason(_status(status="backup", next_run=datetime(2026, 10, 1, 3, 0)), NOW) is None, "läuft gerade"
+    checking = _status(state="error_detect", next_run=datetime(2026, 10, 1, 3, 0))
+    assert syn_backup.overdue_reason(checking, NOW) is None, "Integritätsprüfung läuft"
     assert syn_backup.overdue_reason(_status(next_run=None), NOW) is None, "ohne Zeitplan nie überfällig"
 
 
@@ -2106,6 +2153,12 @@ def test_a_missed_run_or_a_long_time_without_success_is_overdue():
         ({"last_result": "cancel"}, "Abgebrochen", "warn", None),
         ({"last_result": "none", "last_run": None, "last_success": None}, "Noch nie gelaufen", "neutral", None),
         ({"status": "backup", "last_result": "failed"}, "Läuft gerade", "neutral", None),
+        ({"state": "error_detect"}, "Integritätsprüfung läuft", "neutral", None),
+        (
+            {"state": "error_detect", "last_result": "failed"}, "Fehlgeschlagen", "danger",
+            "Der letzte Lauf ist fehlgeschlagen. (Lauf vom 17.10.2026, 03:00)",
+        ),
+        ({"state": "broken"}, "Erfolgreich", "danger", "Die Sicherung am Ziel ist beschädigt."),
         ({"last_result": "neu_in_dsm_8"}, "neu_in_dsm_8", "neutral", None),
     ],
 )
@@ -2381,6 +2434,11 @@ def test_backup_problems_have_one_key_each():
     assert [p.key for p in syn_problems.collect(
         system=None, storage=None, update=None, tasks=failed_and_late, alerts=_alerts(), now=NOW,
     )] == ["backup-failed:6"], "eine Ursache, eine Meldung"
+
+
+def test_the_integrity_check_of_hyper_backup_is_no_problem():
+    tasks = [(parse.TaskEntry("1", "Nacht"), _status(state="error_detect", next_run=datetime(2026, 10, 16, 3, 0)))]
+    assert syn_problems.collect(system=None, storage=None, update=None, tasks=tasks, alerts=_alerts(), now=NOW) == []
 
 
 @pytest.mark.asyncio
@@ -2764,6 +2822,45 @@ async def test_a_running_or_unreadable_task_is_no_all_clear(client, db_session, 
     await _service().clear()
     assert (await _watch())["notified"] == 0, "wieder fehlgeschlagen ist keine neue Meldung"
     assert [t for _s, t in await _notes(db_session)] == ["DS220+: Hyper Backup „Nacht“ fehlgeschlagen"]
+
+
+@pytest.mark.asyncio
+async def test_the_integrity_check_of_hyper_backup_is_no_alarm_and_no_all_clear(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    fake.data["SYNO.Core.Upgrade.Server"] = {"update": {"available": False}}
+    fake.install_hyper_backup({"1": ("Nacht", OK_TASK)})
+    await _configure(client, headers)
+    late = {**OK_TASK, "next_bkp_time": "2026/10/16 03:00"}
+    checking = {**late, "state": "error_detect"}
+
+    async def watch(status: dict[str, Any]) -> int:
+        fake.backups["1"]["status"] = status
+        await _service().clear()
+        return (await _watch())["notified"]
+
+    # `status` bleibt während der Prüfung `none`; ein Termin, der dabei verstreicht, gilt nicht als ausgeblieben.
+    assert [await watch(OK_TASK), await watch(checking)] == [0, 0]
+    task = (await _overview(client, headers))["backups"][0]
+    assert (task["result_label"], task["tone"], task["overdue"], task["problem"], task["running"]) == (
+        "Integritätsprüfung läuft", "neutral", False, None, True,
+    )
+    assert await watch(OK_TASK) == 0
+    assert await _notes(db_session) == []
+
+    # Eine offene Meldung bleibt während der Prüfung offen, die Entwarnung kommt erst danach.
+    assert [await watch(late), await watch(checking), await watch(OK_TASK)] == [1, 0, 1]
+    # Ein fehlgeschlagener Lauf bleibt während der Prüfung sichtbar; findet sie etwas, kommt „gestört“ dazu.
+    failed = {**OK_TASK, "last_bkp_result": "failed"}
+    assert [await watch(failed), await watch({**failed, "state": "error_detect"})] == [1, 0]
+    task = (await _overview(client, headers))["backups"][0]
+    assert (task["result_label"], task["tone"]) == ("Fehlgeschlagen", "danger")
+    assert await watch({**failed, "state": "broken"}) == 1
+    assert await _notes(db_session) == [
+        ("warning", "DS220+: Hyper Backup „Nacht“ überfällig"),
+        ("info", "DS220+: Hyper Backup „Nacht“ wieder in Ordnung"),
+        ("critical", "DS220+: Hyper Backup „Nacht“ fehlgeschlagen"),
+        ("warning", "DS220+: Hyper Backup „Nacht“ gestört"),
+    ]
 
 
 @pytest.mark.asyncio

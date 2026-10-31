@@ -1150,6 +1150,25 @@ async def test_token_ersetzen_ueber_einstellungs_endpunkt(client, db_session, te
 
 
 @pytest.mark.asyncio
+async def test_a_replaced_token_is_used_at_once_without_a_hook(client, db_session, test_settings, mock_backup_api):
+    base_url, _state = mock_backup_api
+    headers = _auth_header(await _setup_backups(client, db_session, test_settings, base_url))
+    loaded = get_extension_runtime().loaded["backups"]
+
+    async def replace(value: str) -> list[dict]:
+        body = {"label": "backups-token:primary", "value": value, "current_password": "correct-horse-battery"}
+        assert (await client.put("/api/v1/extensions/backups/secrets", json=body, headers=headers)).status_code == 204
+        return (await client.get("/api/v1/ext/backups/widgets/summary", headers=headers)).json()["data"]
+
+    rows = await replace("falsch-0000")
+    assert [r["last_status"] for r in rows] == ["unreachable"] and "HTTP 401" in rows[0]["error"]
+    assert (await loaded.instance.health(loaded.ctx)).healthy is False
+    rows = await replace(_TOKEN_SECRET)
+    assert {r["vmid"] for r in rows} == {"100", "102"}
+    assert (await loaded.instance.health(loaded.ctx)).healthy is True
+
+
+@pytest.mark.asyncio
 async def test_no_token_is_taken_while_two_connections_share_the_name(client, db_session, test_settings):
     test_settings.extensions_dir = REPO_EXTENSIONS_DIR
     await extensions_service.discover_and_sync(db_session, test_settings)
@@ -1403,16 +1422,10 @@ class _RecordingChannel:
 
 
 def _window(host_ids, *, minutes_ago: int) -> list[dict]:
-    """Fenster von 60 Minuten, Start vor `minutes_ago` Minuten (Ortszeit wie der Waehler):
-    5 -> laeuft gerade, 90 -> schon vorbei."""
-    from datetime import timedelta
-    from zoneinfo import ZoneInfo
+    """Fenster von 60 Minuten: Start vor 5 Minuten läuft gerade, vor 90 Minuten ist es schon vorbei."""
+    from window_helpers import window
 
-    from nodvard_deck.config import LOCAL_TIMEZONE
-    from nodvard_deck.db import utcnow
-
-    start = (utcnow() - timedelta(minutes=minutes_ago)).astimezone(ZoneInfo(LOCAL_TIMEZONE))
-    return [{"cron": f"{start.minute} {start.hour} * * *", "duration_minutes": 60, "host_ids": host_ids}]
+    return [window(host_ids, minutes_ago=minutes_ago)]
 
 
 async def _backup_window_setup(client, db_session, test_settings, base_url, state) -> tuple[str, _RecordingChannel]:
@@ -1454,7 +1467,7 @@ async def _backup_deliveries(db_session) -> list[tuple[str, str]]:
 
 @pytest.mark.asyncio
 async def test_backup_failure_in_the_window_is_announced_once_after_it_if_still_failed(
-    client, db_session, test_settings, mock_backup_api
+    client, db_session, test_settings, mock_backup_api, window_clock
 ):
     """Das Backup laeuft nachts im Fenster und schlaegt fehl: im Fenster ein stummer
     Eintrag (auch bei vielen Pruefungen), danach genau eine hoerbare Meldung."""
@@ -1482,7 +1495,7 @@ async def test_backup_failure_in_the_window_is_announced_once_after_it_if_still_
 
 @pytest.mark.asyncio
 async def test_backup_retried_successfully_in_the_window_brings_no_push_afterwards(
-    client, db_session, test_settings, mock_backup_api
+    client, db_session, test_settings, mock_backup_api, window_clock
 ):
     """Fehlschlag und erfolgreicher Wiederholungsversuch beide im Fenster: nur Verlauf,
     kein Push -- auch die Entwarnung nicht (sie gehoert jetzt ebenfalls zum Host)."""
@@ -1513,7 +1526,7 @@ _OK_TASK = {"upid": "UPID:pve2:3", "node": "pve2", "type": "vzdump", "id": "100"
 
 @pytest.mark.asyncio
 async def test_backup_all_clear_for_a_heard_failure_comes_after_the_window(
-    client, db_session, test_settings, mock_backup_api
+    client, db_session, test_settings, mock_backup_api, window_clock
 ):
     """Aus dem Review: der Fehlschlag kam hoerbar (kein Fenster), der erfolgreiche Lauf
     faellt ins Fenster. Im Fenster bleibt die Entwarnung still, danach kommt sie genau
@@ -1547,7 +1560,7 @@ async def test_backup_all_clear_for_a_heard_failure_comes_after_the_window(
 
 @pytest.mark.asyncio
 async def test_backup_push_from_after_the_window_is_closed_by_the_next_nights_success(
-    client, db_session, test_settings, mock_backup_api
+    client, db_session, test_settings, mock_backup_api, window_clock
 ):
     """Der Ablauf, den die Nachmeldung selbst erzeugt: Fehlschlag im Fenster (still), nach
     dem Fenster hoerbar nachgemeldet, der naechste nachtliche Lauf gelingt wieder im Fenster.
@@ -1572,7 +1585,7 @@ async def test_backup_push_from_after_the_window_is_closed_by_the_next_nights_su
 
 @pytest.mark.asyncio
 async def test_backup_pending_all_clear_is_dropped_when_the_job_fails_again(
-    client, db_session, test_settings, mock_backup_api
+    client, db_session, test_settings, mock_backup_api, window_clock
 ):
     base_url, state = mock_backup_api
     host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url, state)
@@ -1594,7 +1607,7 @@ async def test_backup_pending_all_clear_is_dropped_when_the_job_fails_again(
 
 @pytest.mark.asyncio
 async def test_backup_watch_runs_against_an_older_core_without_the_new_answers(
-    client, db_session, test_settings, mock_backup_api, monkeypatch
+    client, db_session, test_settings, mock_backup_api, monkeypatch, window_clock
 ):
     """Aelterer Kern: `send()` liefert nichts, `would_suppress()` gibt es nicht. Kein
     Absturz, der Waechter laeuft wie vor der Nachmeldung."""
@@ -2237,7 +2250,9 @@ async def test_backup_age_leaves_an_unreachable_connection_alone_and_keeps_its_s
 
 
 @pytest.mark.asyncio
-async def test_backup_age_message_in_the_window_comes_once_after_it_if_it_persists(client, db_session, test_settings, mock_backup_api):
+async def test_backup_age_message_in_the_window_comes_once_after_it_if_it_persists(
+    client, db_session, test_settings, mock_backup_api, window_clock
+):
     base_url, state = mock_backup_api
     host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url, state)
     state["tasks"] = [_vzdump(1, 100, ago=5 * DAY), _vzdump(2, 102, ago=3600)]
@@ -2260,7 +2275,9 @@ async def test_backup_age_message_in_the_window_comes_once_after_it_if_it_persis
 
 
 @pytest.mark.asyncio
-async def test_backup_age_resolved_within_the_window_brings_no_push_afterwards(client, db_session, test_settings, mock_backup_api):
+async def test_backup_age_resolved_within_the_window_brings_no_push_afterwards(
+    client, db_session, test_settings, mock_backup_api, window_clock
+):
     base_url, state = mock_backup_api
     host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url, state)
     state["tasks"] = [_vzdump(1, 100, ago=5 * DAY), _vzdump(2, 102, ago=3600)]
@@ -2275,7 +2292,9 @@ async def test_backup_age_resolved_within_the_window_brings_no_push_afterwards(c
 
 
 @pytest.mark.asyncio
-async def test_backup_age_all_clear_for_a_heard_message_comes_after_the_window(client, db_session, test_settings, mock_backup_api):
+async def test_backup_age_all_clear_for_a_heard_message_comes_after_the_window(
+    client, db_session, test_settings, mock_backup_api, window_clock
+):
     base_url, state = mock_backup_api
     host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url, state)
     await _end_window(db_session, host_id)

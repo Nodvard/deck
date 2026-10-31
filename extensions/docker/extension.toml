@@ -12,7 +12,7 @@ sort_order  = 30
 entrypoint  = "nodvard_deck_ext_docker:Extension"
 frontend    = "frontend/dist/index.js"
 # Hilfsskript für Server im Modus „Nur bedienen“ (inline, Regeln in nodvard_sdk.RootHelperSpec).
-root_helper = { file = "root-helper/docker-root.sh", version = 1 }
+root_helper = { file = "root-helper/docker-root.sh", version = 2, calls_any_version = true, sudo_fallback = false }
 
 permissions = [
   "hosts.read",
@@ -21,6 +21,7 @@ permissions = [
   "notify.send",
   "audit.write",
   "secrets.read:docker-registry-*",
+  "secrets.read:docker-git-*",
 ]
 
 [settings]

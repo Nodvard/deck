@@ -50,8 +50,21 @@ SETUP_RUN_KEY = "setup_run"
 """Schlüssel in `Host.host_metadata`: der letzte Lauf des Einrichtungsbefehls (`host_setup.setup_record`) für den
 Datei-Wächter."""
 
-CORE_METADATA_KEYS = (LOGIN_OK_KEY, SETUP_RUN_KEY)
+SUDO_FULL_WANTED_KEY = "sudo_full_wanted"
+"""Schlüssel in `Host.host_metadata`: Die volle sudo-Regel ist hier gewollt (eigene Befehle), „Verbindung prüfen“ und
+die Übersicht raten dann nicht, sie zu entfernen."""
+
+CORE_METADATA_KEYS = (LOGIN_OK_KEY, SETUP_RUN_KEY, SUDO_FULL_WANTED_KEY)
 """Was dem Kern gehört und beim Abgleich (`upsert_discovered`) nicht mit den Angaben des Anbieters überschrieben wird."""
+
+
+def full_sudo_wanted(host: Host) -> bool:
+    return (host.host_metadata or {}).get(SUDO_FULL_WANTED_KEY) is True
+
+
+def set_full_sudo_wanted(host: Host, wanted: bool) -> None:
+    rest = {k: v for k, v in (host.host_metadata or {}).items() if k != SUDO_FULL_WANTED_KEY}
+    host.host_metadata = {**rest, SUDO_FULL_WANTED_KEY: True} if wanted else rest
 
 
 def record_setup_run(

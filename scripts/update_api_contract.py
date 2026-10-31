@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Schreibt die Schnappschuesse des oeffentlichen Vertrags neu (Nodvard Link).
+"""Schreibt die Schnappschüsse des öffentlichen Vertrags neu (Nodvard Link).
 
     python scripts/update_api_contract.py                  # nachziehen, wenn nur etwas dazukam
     python scripts/update_api_contract.py --allow-breaking # Bruch, der in der Ausnahmeliste steht
 
-Schnappschuesse (werden mit eingecheckt):
+Schnappschüsse (werden mit eingecheckt):
   backend/tests/contract/api_v1.json      /api/v1 samt aller mitgelieferten Extensions
-  backend/tests/contract/sdk_public.json  oeffentliche Namen von nodvard_sdk (auch unter seinem alten Importnamen)
+  backend/tests/contract/sdk_public.json  öffentliche Namen von nodvard_sdk
 
-Regel (docs/04-API.md "Kompatibilitaet"): /api/v1 und nodvard_sdk aendern sich nur
-abwaertskompatibel. Das Skript verweigert das Schreiben, wenn dabei ein Bruch entstuende.
+Regel (docs/04-API.md "Kompatibilität"): /api/v1 und nodvard_sdk ändern sich nur
+abwärtskompatibel. Das Skript verweigert das Schreiben, wenn dabei ein Bruch entstünde.
 Mit --allow-breaking geht es nur, wenn JEDER Bruch in
 backend/tests/contract/breaking_exceptions.toml steht (mit Begruendung).
 

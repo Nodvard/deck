@@ -56,7 +56,6 @@ const STATUS_CLASS: Record<Status, string> = {
   error: "bg-red-500/20 text-red-300",
 };
 
-/** Neuer Name; der alte (`lattice.console.layout`) wird beim Start uebernommen (lib/legacyStorage.ts). */
 export const LAYOUT_STORAGE_KEY = "nodvard-deck.console.layout";
 
 function loadLayout(): LayoutId {

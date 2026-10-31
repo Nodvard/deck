@@ -50,6 +50,16 @@ beim Überschreiten mit `413` ab. `detail` nennt die erlaubte Größe
 (`NODVARD_DECK_FILES_MAX_UPLOAD_BYTES`, siehe „Dateien“). Erweiterungen erklären eine höhere Grenze mit `max_body_bytes`
 aus dem SDK ([02 §2](02-EXTENSION-API.md#routen-und-anmeldung)).
 
+Jede Antwort, auch eine der Notseite, trägt feste Sicherheits-Kopfzeilen, die eine Route nicht lockern kann:
+`X-Frame-Options: DENY` und `frame-ancestors 'none'` in der CSP (bei JSON ohne eigene CSP dazu `default-src 'none'`),
+`X-Content-Type-Options: nosniff`,
+`Referrer-Policy: same-origin`, `Cross-Origin-Opener-Policy: same-origin` (wirkt nur über https oder localhost),
+`Permissions-Policy` mit gesperrten Geräten (Kamera, Mikrofon, Standort, Bewegungssensoren, USB, seriell, HID,
+Bluetooth, MIDI, Bildschirmaufnahme, Bezahlen; Vollbild und Zwischenablage bleiben bei der Vorgabe des Browsers) und
+`Cross-Origin-Resource-Policy: same-origin`. Nur die öffentlichen Symbole (`/branding/logo`, `/branding/favicon`,
+`/app/icon-<Größe>.png`) und `/health` tragen `cross-origin`, damit eine Startseite wie Homarr Deck-Symbole zeigen und
+Deck anpingen kann.
+
 ---
 
 ## 2. Ohne Authentifizierung
@@ -81,6 +91,28 @@ POST /api/v1/auth/login          → {username, password}
                                    → 503 mit `Retry-After: 5`: gerade laufen zu viele Passwortprüfungen (höchstens
                                    2 zugleich, 16 wartend); zählt nicht als Fehlversuch. Wird das Konto während
                                    der Prüfung deaktiviert oder sein Passwort geändert: 401 wie bei falschem Passwort.
+                                   → 429 mit `Retry-After`, geprüft vor dem Passwort und ohne Datenbank: 10
+                                   Fehlversuche je Adresse und Name oder 30 je Adresse (IPv6 je /64) in 5 Minuten.
+                                   Dazu die Bremse je Name: Ab 10 Fehlversuchen für einen Namen in 24 Stunden, von
+                                   allen fremden Adressen zusammen, wartet jeder Versuch aus einem Netz (IPv4 je
+                                   Adresse, IPv6 je /64) doppelt so lange wie der vorige aus demselben Netz (2 s,
+                                   4 s, …, höchstens 5 Minuten); nach 24 Stunden ohne Versuch beginnt ein Netz von
+                                   vorn, eine gelungene Anmeldung setzt es zurück (mit Zwei-Faktor, sobald auch der
+                                   Code stimmt). Aus einem Netz, aus dem niemand rät, geht der erste Versuch sofort;
+                                   so kann niemand ein fremdes Konto aussperren. Wer das Netz mit dem Angreifer
+                                   teilt, wartet dort wie er. Wer für jeden Versuch eine neue Adresse nimmt, wird kaum
+                                   aufgehalten. Dafür braucht es kein Botnetz: Ein eigenes IPv6-Präfix, wie es viele
+                                   Anbieter vergeben, enthält viele /64-Netze (ein /56 256, ein /48 65 536). Dagegen
+                                   helfen ein langes Passwort und Zwei-Faktor. Lokale Netze (127.0.0.0/8, 10.0.0.0/8,
+                                   172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10, ::1, fc00::/7,
+                                   fe80::/10) und Anfragen ohne erkennbare Adresse (Unix-Socket) bremst sie nicht.
+                                   Unbekannte Namen werden genauso gebremst; die Namen teilen sich 4096 Plätze.
+                                   Beginnt die Bremse, steht `login.locked` im Protokoll (`scopes` enthält `name`), bei
+                                   einem bestehenden Konto kommt danach, nach der Antwort, die Meldung „Passwort wird
+                                   durchprobiert“. Alle Zähler liegen im Speicher und beginnen nach einem Neustart neu.
+                                   Hinter einem Reverse-Proxy ohne Eintrag unter „Vertrauenswürdiger Proxy“ sieht der
+                                   Server nur dessen Adresse; ist sie lokal, greift die Bremse nicht, und die Grenzen
+                                   je Adresse gelten für alle zusammen.
 POST /api/v1/auth/mfa            → {mfa_token, code} → wie 200 oben
                                    `code` = 6-stelliger Authenticator-Code ODER ein Wiederherstellungs-Code
                                    (`ABCDE-FGHJK`, Schreibweise egal); Letzterer wird dabei verbraucht.
@@ -136,6 +168,18 @@ eine Erweiterung bietet sie mit der Berechtigung `api.public` ausdrücklich ohne
 Web erhält den Refresh-Token als `HttpOnly; Secure; SameSite=Strict`-Cookie und **nicht**
 im Body. Android erhält ihn im Body und legt ihn in `flutter_secure_storage`. Der
 Access-Token-Pfad ist für beide identisch — das ist der Kern der „eine API"-Zusage.
+
+**Access-Token und Anmeldung.** Jeder Access-Token trägt im Claim `sid` die Anmeldung (Refresh-Token-Zeile), zu der er
+gehört. Bei jeder Anfrage prüft der Server, ob diese Anmeldung noch gilt; einer Erneuerung (`replaced_by_id`) folgt er
+dabei, ein älterer Token aus einem anderen Tab bleibt also gültig. Ist die Anmeldung beendet (Abmelden, „überall
+abmelden“, abgelaufen), gibt es 401, auch wenn der Token selbst noch nicht abgelaufen ist; der Client holt sich wie
+gewohnt per `POST /auth/refresh` einen neuen oder meldet sich neu an. Ein Token ohne `sid` (von älteren Versionen)
+gilt, solange das Konto irgendeine gültige Anmeldung hat, einer mit `sid` eines anderen Kontos nie.
+`POST /auth/logout` beendet die Anmeldung am Ende der Kette, auch mit einem schon erneuerten Refresh-Token, solange
+dessen Zeile noch steht: Das nächtliche Aufräumen löscht sie eine Refresh-Laufzeit nach dem Erneuern. Die Prüfung des
+Access-Tokens folgt höchstens 50 Erneuerungen (dahinter 401), Abmelden und das Abmelden der anderen Anmeldungen
+(Passwortwechsel, 2FA abschalten) höchstens 10 000; ist die Kette noch länger, enden zur Sicherheit alle Anmeldungen
+des Kontos, auch die eigene. Die Kette wird jeweils in einer einzigen Datenbankabfrage gelesen.
 
 **Name des Refresh-Cookies (Übergangszeit der Umbenennung).** Das Cookie heißt `nodvard_deck_refresh`
 (früher `lattice_refresh`), Pfad `/api/v1/auth`. Solange ein Rollback auf das alte Image möglich sein
@@ -243,11 +287,11 @@ POST   /me/recovery-codes           → {current_password, totp_code} → 200 {r
                                        `Retry-After` (auch mit richtigem Passwort); der Beginn der Sperre steht als
                                        `auth.password_check_locked` im Protokoll.
                                      → Abmelden (Passwortwechsel, Konto deaktivieren, 2FA abschalten/zurücksetzen,
-                                       Notfall-Befehl) widerruft die Refresh-Tokens sofort; bereits ausgestellte
-                                       Access-Tokens laufen aber noch bis zu 15 Minuten weiter (stateless JWT,
-                                       `access_token_ttl_seconds`). Ein deaktiviertes Konto bekommt trotzdem sofort
-                                       401. Bei `/ws` kann sich eine beendete Anmeldung nicht neu verbinden, offene
-                                       Verbindungen enden nach spätestens 30 s (siehe §4).
+                                       Notfall-Befehl) widerruft die Refresh-Tokens sofort. Ein schon ausgestellter
+                                       Access-Token gilt nur, solange seine Anmeldung (`sid`, auch nach Erneuerungen in
+                                       einem anderen Tab) gilt, und bekommt danach sofort 401 (Abschnitt
+                                       „Access-Token und Anmeldung“). Bei `/ws` kann sich eine beendete Anmeldung nicht
+                                       neu verbinden, offene Verbindungen enden nach spätestens 30 s (siehe §4).
                                        Terminal und Konsole einer abgemeldeten Anmeldung enden dagegen nach
                                        spätestens 15 s (siehe §4, „Terminal“).
 POST   /me/devices                  → Push-Registrierung der App
@@ -280,10 +324,9 @@ GET    /users        POST /users     GET/PATCH/DELETE /users/{id}
                                        ohne `password` braucht PATCH keine Bestätigung. Danach eine Meldung
                                        „Zugang von „<name>“ geändert“ (Stufe Warnung, Pfad `/settings/users`).
                                      → PATCH `is_active: false` (Owner → 409) und ein neues `password` melden den Nutzer
-                                       überall ab (alle Refresh-Tokens widerrufen). Nach dem Wieder-Aktivieren gilt keine
-                                       alte Anmeldung mehr, er muss sich neu anmelden; nur ein vorher ausgestellter, noch
-                                       nicht abgelaufener Access-Token gilt bei HTTP-Anfragen bis zu seinem Ablauf wieder
-                                       (nicht bei `/ws`, siehe §4).
+                                       überall ab (alle Refresh-Tokens widerrufen, seine Access-Tokens bekommen sofort
+                                       401). Nach dem Wieder-Aktivieren gilt keine alte Anmeldung mehr, er muss sich neu
+                                       anmelden.
                                      → Protokoll: `user.created`, `user.updated`, `user.deleted` (wer handelt,
                                        `target_id` = Konto). `detail` nennt `username`, Rollen, bei PATCH nur die
                                        Änderungen (`roles`/`is_active` mit altem und neuem Wert,
@@ -370,9 +413,8 @@ GET    /branding/custom-css         PUT /branding/custom-css
                                        `GET /branding` als `null` zurück.
                                      → PUT: `logo_url` und `favicon_url` nur als Pfad auf diesem Server (dieselbe
                                        Regel wie bei `url()` im eigenen CSS) oder `data:image/…`, sonst 422; leer =
-                                       `null`. Grund: Die App-Seite soll Bilder nur von dort laden (`img-src 'self'
-                                       data: blob:`, vorerst als `Content-Security-Policy-Report-Only`, also nur
-                                       gemeldet). Ein früher gespeicherter fremder Wert bleibt gespeichert und darf
+                                       `null`. Grund: Die App-Seite lädt Bilder nur von dort (`img-src 'self' data:
+                                       blob:`). Ein früher gespeicherter fremder Wert bleibt gespeichert und darf
                                        unverändert mitgeschickt werden, damit andere Felder speicherbar bleiben; die
                                        Oberfläche setzt ihn nicht ein und zeigt einen Hinweis zum Hochladen. Zeigt
                                        `logo_url` bzw. `favicon_url` danach nicht mehr auf die hochgeladene Datei
@@ -411,6 +453,8 @@ DELETE /extensions/{id}/secrets?label=…  → Geheimnis entfernen (idempotent, 
                                        Adresse, siehe `secrets_cleared`), gehören `current_password`/`totp_code` neben
                                        `values` in den Body
 POST   /extensions/{id}/test         → Verbindung prüfen, Body optional {"mode": "connection"|"message"}
+POST   /extensions/{id}/takeover     → {old_id}: Übernahme der Daten unter einer alten Kennung erlauben (`extensions.manage`),
+                                       siehe „Erweiterungen einrichten und testen“
 
 GET    /connectors                   POST /connectors
 GET/PATCH/DELETE /connectors/{id}    POST /connectors/{id}/test
@@ -509,6 +553,10 @@ Protokoll):
   Standard-Zugang abgelehnt bzw. einen anderen Server-Schlüssel gezeigt hat oder seit einer neuen Adresse oder einem
   neuen Standard-Zugang, jeweils bis zur nächsten gelungenen Anmeldung (Ausnahme: `make-default` nach frischer
   Prüfung, siehe unten).
+- `HostOut.sudo_full_wanted` (Standard `false`): Die volle sudo-Regel ist auf diesem Server gewollt, etwa für eigene
+  Befehle mit sudo in Skripten. „Verbindung prüfen“ und die Übersicht raten dann nicht, sie zu entfernen. `PATCH` setzt es
+  mit `sudo_full_wanted`; das Protokoll `host.updated` nennt die Änderung in `changed.sudo_full_wanted`. Der Abgleich
+  eines Anbieters (etwa Proxmox) überschreibt es nicht.
 - Für Gruppen und Plaketten („LXC auf pve1“) hat `HostOut` außerdem `category` (`server`, `vm` oder `lxc`, aus
   `kind`; ein Hypervisor-Knoten und ein von Hand angelegter Server ohne Art sind `server`), `parent_label` (bei einem
   Gast der Host, auf dem er läuft, wie der Anbieter ihn nennt, sonst `null`) und `power_state` (`running`, `stopped`,
@@ -546,7 +594,8 @@ Protokoll):
   Kontakt); fremde Namen sehen nur Nutzer mit `users.read` oder Freigaberecht, sonst steht `user/<id>` da.
 - `GET /hosts/{id}/requirements` (`hosts.read`) → `[{ext_id, id, label, check_command, ok_text, fail_hint,
   unix_group, needs_root, root_reason, order}]`: was Erweiterungen über `ctx.ui.register_host_requirement()` für diesen
-  Server melden (nach `tags` und `os_families` des Servers gefiltert, sortiert nach `order`). `unix_group` ist `null`,
+  Server melden (nach `tags` und `os_families` des Servers gefiltert, ohne die mit einem Tag des Servers in `skip_tags`,
+  sortiert nach `order`). `unix_group` ist `null`,
   wenn der Name nicht `^[a-z_][a-z0-9_-]{0,31}$` entspricht.
 - `POST /hosts/{id}/credentials/generate-key` `{username = "lattice", port = 22}` (`hosts.write`, `201`) erzeugt einen
   ed25519-Schlüssel nur für diesen Server (Kommentar `nodvard@<Kurzname>`). Der Standard `username = "lattice"` bleibt
@@ -557,8 +606,9 @@ Protokoll):
   Passwort) hat; sonst bleibt der bisherige Standard, bis `make-default` ihn umstellt. `username` und `port` werden wie
   bei `POST .../credentials` geprüft. Höchstens 10 Schlüssel je 5 Minuten und Nutzer, sonst `429` mit `Retry-After`.
   Protokoll `host.key_generated` (`credential_id`, `username`, `port`, `fingerprint`).
-- `GET /hosts/{id}/credentials/{cid}/setup?sudo=false&full_sudo=false&groups=` (`hosts.write`) → `{username,
-  public_key, fingerprint, one_liner, script, notes, groups, sudo, full_sudo, helpers}`: der Befehl, den man auf dem
+- `GET /hosts/{id}/credentials/{cid}/setup?sudo=false&full_sudo=false&drop_full_rule=false&groups=` (`hosts.write`) →
+  `{username, public_key, fingerprint, one_liner, script, notes, groups, sudo, full_sudo, drop_full_rule, helpers}`: der
+  Befehl, den man auf dem
   Server ausführt (als root direkt, sonst über `sudo`; `script` ist dasselbe lesbar). Der öffentliche Schlüssel wird serverseitig aus dem Tresor abgeleitet, mit dem
   Kommentar `nodvard@<Kurzname>` (nie dem im Schlüssel eingetragenen). Der Befehl legt den Benutzer an (falls es ihn
   nicht gibt, ohne Passwort-Anmeldung), trägt den Schlüssel als `restrict,pty …` ein, bei einem laufenden Dropbear als
@@ -581,7 +631,16 @@ Protokoll):
   kein Modul root, richtet `sudo=true` ohne `full_sudo` gar nichts mit sudo ein: `sudo` in der Antwort ist dann `false`,
   und `notes` sagt es. Ohne
   volle Regel ist ein Hilfsskript, das sich nicht einrichten lässt, ein `FEHLER` (der Befehl endet mit Fehler), mit
-  voller Regel ein Hinweis. Eine schon vorhandene volle Regel nimmt der Befehl nie zurück. Bei einem Benutzer außer `root` läuft alles,
+  voller Regel ein Hinweis, außer bei einem Modul, das ohne sein Skript nie die volle Regel nimmt
+  (`sudo_fallback = false` im Manifest, derzeit Docker): dann auch mit voller Regel ein `FEHLER`, und `notes` sagt es.
+  Eine schon vorhandene volle Regel nimmt der Befehl nur mit `drop_full_rule=true` zurück, und das geht nur ohne
+  `full_sudo`, dort, wo die Regeln der Hilfsskripte reichen, und nicht bei „Volle sudo-Regel gewollt“ (`sudo_full_wanted`,
+  sonst 422 mit Grund); `drop_full_rule` in der Antwort
+  sagt, ob es dabei ist. Dann löscht er nach allen Regeln der Skripte `nodvard-<benutzer>` und `lattice-<benutzer>`,
+  wenn sie Byte für Byte die eigene Regel sind (keine Links), und nur, wenn jedes Skript vorher über sudo seine Version
+  nennt; danach prüft er `visudo -c` und fragt jedes Skript noch einmal, sonst (und bei einem Abbruch) stellt er die Regel
+  wieder her und endet mit `FEHLER`. Je gelöschter Datei steht „Die volle sudo-Regel <name> wurde entfernt.“ in der Ausgabe. Bei einem
+  Benutzer außer `root` läuft alles,
   was `~/.ssh` und `authorized_keys` anfasst, **als dieser Benutzer** (`runuser`, sonst `su`), nie als root mit `chown`;
   ist `~/.ssh` oder `authorized_keys` ein Link, bricht der Befehl mit `FEHLER` ab, statt ihm zu folgen. Bei `root`
   (z. B. Proxmox, wo `authorized_keys` ein Link ins Cluster-Dateisystem ist) bleibt der Link unangetastet. Eine ältere
@@ -596,9 +655,10 @@ Protokoll):
   üblicher Linux-Name ist (`^[a-z_][a-z0-9_-]{0,31}$`), und einen nicht lesbaren Schlüssel. Ändert nichts (kein
   Protokolleintrag).
 - `POST /hosts/{id}/credentials/{cid}/setup-with-password` `{password, login_user = "root", sudo = false,
-  full_sudo = false, groups = [], sudo_password_same = true}` (`hosts.write` **und** `hosts.execute`) richtet den Server
+  full_sudo = false, drop_full_rule = false, groups = [], sudo_password_same = true}` (`hosts.write` **und**
+  `hosts.execute`) richtet den Server
   für diesen Schlüssel-Zugang ein, ohne dass jemand den Befehl selbst einfügt: Nodvard Deck meldet sich **einmal** mit
-  `login_user`/`password` an, führt genau den Befehl von `GET .../setup` aus (`sudo`, `full_sudo` und `groups` wie dort; als `root` direkt, sonst über
+  `login_user`/`password` an, führt genau den Befehl von `GET .../setup` aus (`sudo`, `full_sudo`, `drop_full_rule` und `groups` wie dort; als `root` direkt, sonst über
   `sudo -S`, das das Passwort über die Standardeingabe bekommt, mit `sudo_password_same = false` über `sudo -n`, das nur
   geht, wenn das Konto sudo ohne Passwort darf), schließt die Verbindung und prüft danach mit dem neuen Schlüssel wie
   `POST /hosts/{id}/check`. `login_user` ist das Konto für diese eine Anmeldung, nicht der Benutzer des Zugangs. Antwort
@@ -642,7 +702,7 @@ Protokoll):
   und je Nutzer 10 Versuche in 10 Minuten (als Versuch zählt jeder Lauf, bei dem das Passwort an den Server gehen
   könnte), dazu je Nutzer 30 Aufrufe in 5 Minuten, je Server nur ein Lauf gleichzeitig. Die Zähler liegen im Speicher.
   Protokoll `host.setup_with_password` (`target_type` `host`; `outcome` `success`/`failure`; `detail`: `credential_id`,
-  `username`, `login_user`, `sudo`, `full_sudo`, `groups`, `helpers`, `result` (`ok` oder der Fehlercode), bei Erfolg
+  `username`, `login_user`, `sudo`, `full_sudo`, `drop_full_rule`, `groups`, `helpers`, `result` (`ok` oder der Fehlercode), bei Erfolg
   zusätzlich `check_ok` und `made_default`; nie das Passwort), dazu `host.connection_checked` für die Prüfung und
   `host.credential_made_default`, wenn der Zugang Standard wurde. Eine Sperre (`rate_limited`) steht je Nutzer nur
   einmal im Zeitfenster im Protokoll; Fehler vor dem Lauf (`403`, `404`, `422`) gar nicht.
@@ -778,8 +838,8 @@ Schlüssel, Wert ungültig → `422`:
 - `system.update_check.*`: Schalter des täglichen Kern-Jobs `system-update-check` („Nach Updates suchen“, 04:41 Uhr in
   der eingestellten Zone) und welche Versionen zählen. Der Schalter plant den Job sofort neu; `PATCH`/`DELETE /jobs/{id}`
   und `POST /jobs/{id}/run` auf ihn → `409` (Knopf „Jetzt suchen“ = `POST /system/updates/check`, mit Minuten-Drossel; ein Weg
-  über die Jobs würde sie umgehen). Datenschutz: ghcr.io gehört zu GitHub, das bei jeder Prüfung die IP-Adresse und den Zeitpunkt
-  sieht, sonst nichts (der User-Agent `nodvard-deck` nennt keine Version); die tägliche Prüfung lässt sich abschalten. Siehe
+  über die Jobs würde sie umgehen). Datenschutz: ghcr.io und github.com (Freigabe am Release, Downloads über
+  `*.githubusercontent.com`) gehören zu GitHub, das bei jeder Prüfung die IP-Adresse und den Zeitpunkt sieht, sonst nichts (der User-Agent `nodvard-deck` nennt keine Version); die tägliche Prüfung lässt sich abschalten. Siehe
   „System und Sicherungen“.
 - `ssh.confirm_new_host_keys`: `true` = Terminal, Jobs und Status merken den Schlüssel eines Servers, für den noch
   keiner gemerkt ist, nicht still; die Verbindung scheitert, bevor Anmeldedaten gesendet werden, bis der Fingerabdruck
@@ -813,12 +873,12 @@ zusätzlich `totp_code`, den aktuellen sechsstelligen Code aus der App (Wiederhe
 | Methode, Pfad | Recht | Zweck |
 |---|---|---|
 | `GET /system/info` | `system.read` | `version`, `build` (genaue Version des Release-Images bzw. `NODVARD_DECK_BUILD`, sonst `null`), `image` (Herkunft ohne Tag, aus der Datei `/app/image-info.json` im Image bzw. `NODVARD_DECK_IMAGE`; `null` bei einem selbst gebauten Image), `timezone`, `data_dir`, `data_free_bytes`, `database` (`sqlite`/`postgresql`), `updater_available` (ein Update-Helfer ist eingerichtet und antwortet; dieselbe Quelle wie `present` in `GET /system/updates/helper`), `pre_update_copies[]` (die neuesten, höchstens drei **Kopien der Datenbank von vor einer Migration**, neueste zuerst: `name`, `created_at`, `from_version`, `to_version`, `size`; ohne Pfade; leer, solange es noch keine gibt) |
-| `GET /system/updates` | `system.read` | Stand von „Nach Updates suchen“, **ohne** Anfrage ins Netz (aus `<Datenordner>/update_check.json`): `current` (laufende Version: beim offiziellen Image dessen genaue Version aus `/app/image-info.json`, auch eine Vorabversion wie `0.6.0-rc1`; sonst `version`), `latest` (neueste Version im Kanal laut letzter gelungener Prüfung; `null`, wenn noch nie geprüft oder geprüft, aber keine passende Version gefunden – dann ist `checked_at` gesetzt), `latest_digest` (sha256 des Manifests, wenn bekannt), `available` (`latest` neuer als `current`, Semver), `channel` (`stable`/`beta`), `enabled` (tägliche Prüfung an), `checked_at` (letzte gelungene Prüfung), `attempted_at` (letzter Versuch), `source` (`cache`; `offline`, wenn der letzte Versuch scheiterte), `error` (dann „Konnte nicht prüfen (offline?).“; `latest`, `checked_at`, `attempted_at` und `error` gelten nur für den eingestellten Kanal), `official_image` (das Image stammt laut `image` genau aus `ghcr.io/nodvard/deck`), `image`, `official_image_name`, `helper` (wie `updater_available` in `GET /system/info`), `release_notes_url` (`https://github.com/nodvard/deck/blob/v<latest>/CHANGELOG.md`) |
+| `GET /system/updates` | `system.read` | Stand von „Nach Updates suchen“, **ohne** Anfrage ins Netz (aus `<Datenordner>/update_check.json`): `current` (laufende Version: beim offiziellen Image dessen genaue Version aus `/app/image-info.json`, auch eine Vorabversion wie `0.6.0-rc1`; sonst `version`), `latest` (neueste Version im Kanal laut letzter gelungener Prüfung; `null`, wenn noch nie geprüft oder geprüft, aber keine passende Version gefunden – dann ist `checked_at` gesetzt), `latest_digest` (sha256 des Manifests, wenn bekannt), `available` (`latest` neuer als `current`, Semver), `channel` (`stable`/`beta`), `enabled` (tägliche Prüfung an), `checked_at` (letzte gelungene Prüfung), `attempted_at` (letzter Versuch), `source` (`cache`; `offline`, wenn der letzte Versuch scheiterte), `error` (dann „Konnte nicht prüfen (offline?).“; `latest`, `checked_at`, `attempted_at` und `error` gelten nur für den eingestellten Kanal), `official_image` (das Image stammt laut `image` genau aus `ghcr.io/nodvard/deck`), `image`, `official_image_name`, `helper` (wie `updater_available` in `GET /system/info`), `release_notes_url` (`https://github.com/nodvard/deck/blob/v<latest>/CHANGELOG.md`), `approved` (zu `latest` und `latest_digest` liegt eine Freigabe in gültiger Form am Release, nur dann gibt es das Update per Knopf; die Signatur prüft der Update-Helfer), `approved_key` (Kennung des Schlüssels, den sie nennt) |
 | `POST /system/updates/check` | `system.read` | Jetzt nachsehen; Antwort wie `GET`, mit `source: live`. Scheitert die Abfrage (offline, `401`/`429`/`5xx` der Registry, kaputtes JSON, Zeitlimit), kommt **kein** Fehlercode, sondern der letzte Stand mit `source: offline` und `error`. Höchstens **einmal pro Minute** für alle zusammen, sonst `429` „Gerade erst nachgesehen …“ mit `Retry-After` |
-| `GET /system/updates/helper` | `system.read` | Zustand des Update-Helfers, ohne Anfrage ins Netz (siehe „Update-Helfer“ unten): `present` (eingerichtet und antwortet, Herzschlag höchstens 90 s alt), `reason` (warum nicht: `missing` nicht eingerichtet, `stale` antwortet nicht, `unsafe` Kanal nicht sicher, `proto` andere Protokollversion, `invalid` unlesbarer Status; sonst `null`), `ready` (könnte jetzt ein Update einspielen), `ready_reason` (fester Bezeichner des Helfers: warum er nicht bereit ist, oder ein Hinweis wie `channel_cluttered`; `finishing`: der letzte Vorgang ist entschieden, der Helfer räumt nur noch auf, `ready` ist dann `false` und `busy` `null`), `state` (`idle`/`busy`/`unsafe`/`error`), `helper_version`, `heartbeat_at`, `target` (`current_version`, `floating_tag` = `latest` oder `X.Y`, `null` bei fester Version; `pinned`: die Version steht fest in der Compose-Datei, `X.Y.Z` oder Digest), `busy` (`id`, `action` `update`/`rollback`, `step`, `since`), `previous` (Rückweg: `version`, `until`; nur solange er gilt; dazu `data_revert`: `true` = die laufende Version hat beim Start die Datenbank umgebaut, beim Rückweg geht alles seit `data_since` verloren und `accept_data_loss` ist Pflicht, `false` = die Daten bleiben, `null` = unklar, der Rückweg wird dann mit `data_unclear` abgelehnt – dieselbe Entscheidung wie bei `POST /system/updates/rollback`; `data_since`: Unix-Zeit des Umbaus, nur bei `data_revert: true`), `last_result` (`id`, `action`, `from`, `to`, `outcome`, `code`, `finished_at`), `pending` (eigene Anforderung ohne Ergebnis, höchstens 30 Minuten alt: `id`, `action`, `to`, `at`). Zeiten als Unix-Zeit in Sekunden, Gründe und Codes nur feste Bezeichner, nie Freitext. Ist `present` `false`, ist `ready` `false` und alle übrigen Felder außer `reason` sind `null`; nur `last_result` (bei `stale`) und `pending` können trotzdem gesetzt sein. Hält nebenbei neue Ergebnisse des Helfers im Protokoll fest |
-| `POST /system/updates/apply` | Owner [PW] [2FA] | `{version, current_password, totp_code?}`: Update auf `version` beim Update-Helfer anfordern → `202` `{request_id, action: "update", from, to, data_revert: false}` (`Cache-Control: no-store`); das Ergebnis steht danach in `GET /system/updates/helper`. `version` muss die neueste gefundene sein (`latest` aus `GET /system/updates`) und neuer als die laufende. `409`: Helfer fehlt oder antwortet nicht (`helper_missing`), räumt noch auf (`helper_finishing`), ist beschäftigt (`helper_busy`) oder nicht bereit (`helper_not_ready`), Kanal nicht sicher (`channel_unsafe`), schon eine Anforderung offen (`request_pending`), nicht das offizielle Image (`not_official_image`), Version in der Compose-Datei fest eingetragen (`pinned`); `422`: keine gültige Version (`bad_version`), Vorabversion (`prerelease`), nicht die neueste gefundene (`not_latest`), nicht neuer als die laufende (`not_newer`), passt nicht zum Tag der Compose-Datei (`tag_mismatch`); `429` (`rate_limited`) mit `Retry-After` |
+| `GET /system/updates/helper` | `system.read` | Zustand des Update-Helfers, ohne Anfrage ins Netz (siehe „Update-Helfer“ unten): `present` (eingerichtet und antwortet, Herzschlag höchstens 90 s alt), `reason` (warum nicht: `missing` nicht eingerichtet, `stale` antwortet nicht, `unsafe` Kanal nicht sicher, `proto` andere Protokollversion, `invalid` unlesbarer Status; sonst `null`), `ready` (könnte jetzt ein Update einspielen), `ready_reason` (fester Bezeichner des Helfers: warum er nicht bereit ist, oder ein Hinweis wie `channel_cluttered`; `finishing`: der letzte Vorgang ist entschieden, der Helfer räumt nur noch auf, `ready` ist dann `false` und `busy` `null`), `state` (`idle`/`busy`/`unsafe`/`error`), `helper_version`, `heartbeat_at`, `target` (`current_version`, `floating_tag` = `latest` oder `X.Y`, `null` bei fester Version; `pinned`: die Version steht fest in der Compose-Datei, `X.Y.Z` oder Digest), `busy` (`id`, `action` `update`/`rollback`, `step`, `since`), `previous` (Rückweg: `version`, `until`; nur solange er gilt; dazu `data_revert`: `true` = die laufende Version hat beim Start die Datenbank umgebaut, beim Rückweg geht alles seit `data_since` verloren und `accept_data_loss` ist Pflicht, `false` = die Daten bleiben, `null` = unklar, der Rückweg wird dann mit `data_unclear` abgelehnt – dieselbe Entscheidung wie bei `POST /system/updates/rollback`; `data_since`: Unix-Zeit des Umbaus, nur bei `data_revert: true`), `last_result` (`id`, `action`, `from`, `to`, `outcome`, `code`, `finished_at`), `pending` (eigene Anforderung ohne Ergebnis, höchstens 30 Minuten alt: `id`, `action`, `to`, `at`), `request_options` (was der Helfer in einer Anforderung zusätzlich annimmt; `["digest"]`: ein Update geht nur mit `latest_digest` aus `GET /system/updates`, ohne ihn zeigt die Oberfläche keinen Knopf, sondern bittet, erneut nach Updates zu suchen), `request_versions` (Versionen der Anforderung, die der Helfer versteht; mit `2` prüft er die Freigabe samt Signatur, sonst zeigt die Oberfläche den Hinweis, den Helfer zu erneuern). Zeiten als Unix-Zeit in Sekunden, Gründe und Codes nur feste Bezeichner, nie Freitext. Ist `present` `false`, ist `ready` `false`, `request_options` und `request_versions` leer und alle übrigen Felder außer `reason` sind `null`; nur `last_result` (bei `stale`) und `pending` können trotzdem gesetzt sein. Hält nebenbei neue Ergebnisse des Helfers im Protokoll fest |
+| `POST /system/updates/apply` | Owner [PW] [2FA] | `{version, current_password, totp_code?}`: Update auf `version` beim Update-Helfer anfordern → `202` `{request_id, action: "update", from, to, data_revert: false, digest, signed}` (`Cache-Control: no-store`); das Ergebnis steht danach in `GET /system/updates/helper`. `version` muss die neueste gefundene sein (`latest` aus `GET /system/updates`) und neuer als die laufende. Kann der Helfer einen Digest prüfen (sein Status nennt `request_options: ["digest"]`), schickt Deck den Digest aus der letzten Update-Suche mit. Der Helfer löst das bewegliche Tag trotzdem selbst auf und zieht nur, wenn es noch genau auf diesen Digest zeigt, sonst lehnt er mit `digest_changed` ab (erneut nach Updates suchen); so wird nie still etwas anderes eingespielt als das, was die Suche gezeigt hat. `digest` in der Antwort und im Protokoll (`system.update.requested`) nennt ihn, bei einem älteren Helfer ist er `null`. Die Freigabe aus der Update-Suche geht als Anforderung `v: 2` mit, wenn der Helfer sie kennt (`request_versions` enthält `2`); dann ist `signed` `true`. `409`: Helfer fehlt oder antwortet nicht (`helper_missing`), räumt noch auf (`helper_finishing`), ist beschäftigt (`helper_busy`) oder nicht bereit (`helper_not_ready`), Kanal nicht sicher (`channel_unsafe`), schon eine Anforderung offen (`request_pending`), nicht das offizielle Image (`not_official_image`), Version in der Compose-Datei fest eingetragen (`pinned`), kein Digest aus der Update-Suche, obwohl der Helfer einen ziehen könnte (`no_digest`, erneut nach Updates suchen), keine gültige Freigabe für diese Version am Release (`not_released`, von Hand geht das Update trotzdem); `422`: keine gültige Version (`bad_version`), Vorabversion (`prerelease`), nicht die neueste gefundene (`not_latest`), nicht neuer als die laufende (`not_newer`), passt nicht zum Tag der Compose-Datei (`tag_mismatch`); `429` (`rate_limited`) mit `Retry-After` |
 | `POST /system/updates/rollback` | Owner [PW] [2FA] | `{current_password, accept_data_loss?, totp_code?}`: Rückweg auf die Version vor dem letzten Update (`previous` in `GET /system/updates/helper`) anfordern → `202` wie bei `apply`, mit `action: "rollback"`. Hat die laufende Version beim Start die Datenbank umgebaut, gehen die Daten mit zurück (`data_revert: true`: alles seit dem Update geht für das Dashboard verloren, der ersetzte Stand liegt danach im Datenordner unter `restore/replaced-…`): dann ist `accept_data_loss: true` Pflicht (sonst `422` `accept_data_loss`), und vor der Anforderung wird die Vormerkung `.boot/rollback.json` geschrieben; scheitert danach das Schreiben der Anforderung oder endet der Rückweg mit `refused` oder `aborted`, wird sie wieder gelöscht. `409` wie bei `apply` außer `not_official_image` und `pinned`, dazu `no_previous` (kein Rückweg, oder er gilt nicht mehr), `data_unclear` (die Datenbank wurde umgebaut, aber der Eintrag passt nicht genau zu diesem Rückweg oder die Kopie fehlt), `marker_failed` (die Vormerkung ließ sich nicht speichern, nichts angefordert); `429` wie bei `apply` |
-| `GET /system/connection` | `system.read` | Wie diese Anfrage ankommt: `peer` (direkte Gegenstelle), `client` (verwendete Adresse), `scheme` (`http`/`https`), `via_trusted_proxy`, `forwarded_headers` (Anfrage trug `X-Forwarded-*`), `trusted_proxies`, `trusted_proxies_source` (`setting`/`env`) |
+| `GET /system/connection` | `system.read` | Wie diese Anfrage ankommt: `peer` (direkte Gegenstelle), `client` (verwendete Adresse), `scheme` (`http`/`https`), `via_trusted_proxy`, `forwarded_headers` (Anfrage trug `X-Forwarded-*`), `trusted_proxies`, `trusted_proxies_source` (`setting`/`env`), `untrusted_proxies` (`[{address, last_seen}]`: Gegenstellen aus dem Heimnetz, über die in den letzten 7 Tagen eine Anmeldung des Inhabers mit richtigem Passwort und `X-Forwarded-For` kam und die nicht eingetragen sind, zuletzt gesehene zuerst; nur Adresse und Zeit, höchstens 8, nur im Speicher; nur für den Inhaber gefüllt, sonst leer) |
 | `GET /system/openapi.json` | `system.read` | Das vollständige OpenAPI-Dokument (alle Endpunkte samt mitgelieferter Erweiterungen); ersetzt das öffentliche `/openapi.json`, das es nur im Entwicklungsmodus oder mit `NODVARD_DECK_API_DOCS=1` gibt |
 | `GET /system/backups` | `system.read` | `config`, `key` (`key_id`, `created_at` – nie Schlüssel oder Passwort), `target` (`dir`, `default_dir`, `external_root`, `external_available`, `same_storage_as_data`, `free_bytes`, `error`), `backups[]` (`name`, `size`, `created_at`, `app_version`, `key_id`, `mode`, `status` `ok`/`ungeprueft`/`beschaedigt`, `checked_at`, `check_ok`, `key_current`), `last_run`, `running`, `sqlite`, `limits` |
 | `PUT /system/backups/config` | Owner, [PW] nur bei gefährlicher Änderung | `{enabled, schedule, keep, dir, include_runs, current_password?}`; `current_password` ist **optional** und nur nötig, wenn `keep` kleiner wird als bisher, `enabled` von an auf aus geht oder `dir` sich ändert (sonst `403` mit Text, welche Änderung das Passwort braucht; falsch `400`, zu oft `429` wie bei den anderen [PW]-Endpunkten; geprüft **vor** der Eingabeprüfung, ohne dass ein Ordner angelegt wird); `keep` 1–60, `schedule` Cron, `dir` nur `<Datenordner>/backups` oder `/backups` bzw. darunter (absolut, kein `..`, kein Symlink, `realpath` gleich, beschreibbar) → sonst `422`; `enabled` ohne Sicherungspasswort → `409`. Antwort wie `GET /system/backups` |
@@ -852,15 +912,28 @@ zusätzlich `totp_code`, den aktuellen sechsstelligen Code aus der App (Wiederhe
   abgelehnt.
 - Protokoll: `system.backup.created`, `.failed`, `.config_changed`, `.key_set` (`key_id`), `.download_prepared`,
   `.downloaded`, `.verified`, `.deleted`. Eine fehlgeschlagene automatische Sicherung meldet sich zusätzlich als
-  Benachrichtigung („Sicherung fehlgeschlagen“, `payload.path` = `/settings/system`).
-- **Nach Updates suchen** (`core/updates.py`): einzige Quelle ist ghcr.io. Anonymes Token
+  Benachrichtigung („Sicherung fehlgeschlagen“, `payload.path` = `/settings/system`). Darf Nodvard Deck in den Ordner nicht
+  schreiben, nennen Protokolleintrag, Benachrichtigung und Job-Lauf (`GET /jobs/{id}/runs`, `GET /runs/{id}/output`, Kanal
+  `runs.<id>`; auch für Viewer lesbar) nur den kurzen Grund; Benachrichtigung und Job-Lauf sagen dazu, dass die Hilfe
+  unter Einstellungen → System bei „Sicherung“ steht. Der ganze Hinweis mit Benutzernummer und Befehl steht nur
+  in `last_run.error` und `target.error` von `GET /system/backups` (`system.read`) und in den `422`-Antworten der
+  Endpunkte unter `/system/backups`, die nur der Owner aufruft (Einstellungen speichern, Prüfen, Herunterladen, Löschen).
+- **Nach Updates suchen** (`core/updates.py`): Quelle ist ghcr.io, dazu die Freigabe am Release auf github.com. Anonymes Token
   (`GET https://ghcr.io/token?scope=repository:nodvard/deck:pull&service=ghcr.io`, klappt nur bei einem öffentlichen Paket),
   Tags (`GET /v2/nodvard/deck/tags/list?n=100`, weitere Seiten über den `Link`-Kopf, höchstens 10; eine Folgeseite auf einem anderen
   Host oder Pfad gilt als Fehler, der Token geht nur an ghcr.io). Es zählen nur Tags `1.2.3`, im Kanal `beta` auch `1.2.3-rc1`;
   verglichen wird nach Semver mit der laufenden Version (`current`); abweichend davon werden Teile einer Vorabversion mit Zahl am Ende
   natürlich sortiert (`rc1 < rc2 < rc9 < rc10`). Danach optional das Manifest der neuesten Version (OCI-Index),
   dessen sha256 `latest_digest` ist. Je Anfrage höchstens 5 s; Token und Tags zusammen höchstens 15 s, das Manifest bekommt nur die
-  restliche Zeit (reicht sie nicht, bleibt `latest_digest` `null`, die Prüfung gilt trotzdem). Jede Antwort wird ungepackt angefordert
+  restliche Zeit (reicht sie nicht, bleibt `latest_digest` `null`, die Prüfung gilt trotzdem). Mit Digest holt die Prüfung
+  in der Zeit, die dann noch bleibt, die Freigabe `freigabe.json` und ihre Signatur `freigabe.json.sig` am Release
+  `v<latest>` (`https://github.com/nodvard/deck/releases/download/…`, je höchstens 4 KiB, ohne Token; Weiterleitungen nur
+  per https zu `github.com`, `objects.githubusercontent.com` und `release-assets.githubusercontent.com`, höchstens 3).
+  Weiterleitungen nur auf Port 443 und ohne Benutzerangabe. Sie zählt nur, wenn Form, Repository, fertige Version und
+  Digest genau passen und sie gerade gilt; dann ist `approved` `true` und `approved_key` nennt den Schlüssel. Die
+  Signatur selbst prüft erst der Update-Helfer mit seinen eingebauten Schlüsseln. Fehlt die Freigabe oder passt sie
+  nicht, gilt die Prüfung trotzdem, nur `approved` bleibt `false`; scheitert nur ihr Abruf (Netz, Zeit), bleibt eine
+  schon gefundene Freigabe für dieselbe Version und denselben Digest stehen. Jede Antwort wird ungepackt angefordert
   (`Accept-Encoding: identity`, eine gepackte gilt als Fehler) und höchstens 1 MiB gelesen (eine größere `Content-Length` bricht vor dem
   Lesen ab). User-Agent `nodvard-deck`, ohne Version. Ein Proxy aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) gilt hier, anders als bei Erweiterungen (`ctx.http`). Es läuft immer nur eine Prüfung zur Zeit. Eine Antwort ohne Tag-Liste gilt als
   Fehler (der letzte Stand bleibt); eine vollständige Antwort ohne passende Version ist ein Ergebnis (`latest: null`). Täglich als
@@ -875,10 +948,29 @@ zusätzlich `totp_code`, den aktuellen sechsstelligen Code aus der App (Wiederhe
 - **Update-Helfer** (`services/update_helper.py`, `core/updater_client.py`): ein eigenes kleines Programm neben dem Dashboard, das
   Update und Rückweg selbst einspielt. Beide teilen sich nur einen Ordner (`/app/updater`, Einstellung `updater_dir`, nur für Tests
   ändern), ein eigenes Volume, das der Helfer einrichtet und das root gehört: `status.json` schreibt nur der Helfer, das Dashboard
-  legt Anforderungen (Aktion und Version) unter `requests/` ab. Fehlt der Ordner, gibt es keinen Helfer (`present: false`,
+  legt Anforderungen (Aktion, Version und, wenn der Helfer es annimmt, den Digest) unter `requests/` ab. Fehlt der Ordner, gibt es keinen Helfer (`present: false`,
   `reason: missing`). Eingeschaltet wird der Helfer mit einer eigenen Compose-Datei
   ([deploy/README „Update-Helfer“](../deploy/README.md#update-helfer)). Verbindlich entscheidet immer der Helfer;
-  was das Dashboard vorher prüft, sorgt für eine klare Antwort. Höchstens **eine Anforderung je 10 Minuten**, Update und Rückweg
+  was das Dashboard vorher prüft, sorgt für eine klare Antwort. Gezogen wird immer der Digest, auf den das bewegliche
+  Tag im offiziellen Repository gerade zeigt; ein Digest in der Anforderung muss derselbe sein (`digest_changed`), er
+  wählt nichts aus. Ein Update per Knopf gibt es nur mit Freigabe aus der Update-Suche (`approved`, sonst `409`
+  `not_released`); kennt der Helfer Anforderungen `v: 2` (`request_versions` in `GET /system/updates/helper`), geht sie
+  mit (`signed: true` in der Antwort und im Protokoll), ein älterer Helfer bekommt `v: 1`. Das Image gilt nur, wenn sein
+  Versions-Label genau die angeforderte Version ist, diese neuer als
+  die laufende ist und zur Reihe im Tag passt. Wer Dashboard oder Kanal in der Hand hat, kann so keine andere Version
+  aus der Registry einspielen, und ein Rückruf über das Zurücksetzen des Tags greift. Ein Update kann eine signierte
+  Freigabe mitbringen (Anforderung `v: 2`): Sie nennt Repository, Version und Digest, gilt nur in ihrem Zeitfenster und
+  muss mit einem Schlüssel signiert sein, der fest im Helfer steht (Ed25519); das Tag muss trotzdem auf den Digest zeigen.
+  Signiert sind genau die sieben Felder der Freigabe (`fmt`, `repo`, `version`, `digest`, `key_id`, `issued_at`,
+  `expires_at`) als sortiertes, kompaktes ASCII-JSON; die Signatur steht hexadezimal in `sig`, eine Freigabe gilt höchstens
+  366 Tage. Der Helfer rechnet die Signatur erst nach den Grenzen nach und höchstens einmal je Runde (weitere: `busy`).
+  In seinem Status nennt er `2` unter `request_versions` nur, wenn er mindestens einen Schlüssel eingebaut hat; ohne
+  Schlüssel bleibt es bei `v: 1`.
+  Eine abgelehnte Freigabe ändert nichts (`unknown_key`, `grant_mismatch`, `grant_expired`, `bad_signature`). Ohne
+  Freigabe nimmt der Helfer ein Update noch an, Pflicht wird sie mit 1.0 (dann `signature_required`). Der Rückweg kommt
+  ohne Signatur aus: Er setzt nur den Stand davor wieder ein, den der Helfer selbst gesichert hat. Eine Freigabe lässt
+  sich mit einer neuen Anforderung erneut verwenden; das bringt nur dieselbe Version, und die Grenze unten gilt
+  weiter. Höchstens **eine Anforderung je 10 Minuten**, Update und Rückweg
   zusammen, sonst `429` „Gerade erst angefordert …“ mit `Retry-After`; was nicht angefordert wurde (Kanal nicht sicher, Vormerkung
   nicht gespeichert) oder der Helfer abgelehnt hat (`refused`), zählt nicht. Ablehnungen von `apply`/`rollback` tragen neben
   `detail` einen festen `code` (siehe Tabelle, dazu `403` `not_owner`, `password_missing` und `totp_missing`), bei `helper_missing` und
@@ -968,7 +1060,7 @@ Zustand in `<Datenordner>/.boot/`, Kopien in `<Datenordner>/backups/vor-update/`
   `admin restore-backup` räumt dann keinen laufenden Upload der Anwendung weg. Wo `flock` nicht geht, gibt es eine Sperre ohne Wirkung.
 - **Kopie vor jeder Migration** (nur SQLite): Datenbank online kopieren (`sqlite3.backup`, danach `integrity_check`) nach
   `backups/vor-update/<Zeit>_<von>_<nach>.db` (+ `.json`), vorher mindestens das **1,2-fache** der Datenbank samt WAL frei, es bleiben **drei**.
-  **Ohne Kopie keine Migration** (`no_space`, `no_copy`). Notausgang `NODVARD_DECK_SKIP_PRE_MIGRATE_BACKUP=1` (alter Name `LATTICE_…` gilt weiter).
+  **Ohne Kopie keine Migration** (`no_space`, `no_copy`). Notausgang `NODVARD_DECK_SKIP_PRE_MIGRATE_BACKUP=1` (alter Name `LATTICE_…` gilt nur noch in dieser Version).
   Scheitert die Migration, geht die Datenbank auf die Kopie zurück (die Kopie wird dabei umbenannt, nicht kopiert); `state.json` hält
   `last_migration` vorher als `running` fest, ein Absturz mitten drin wird beim nächsten Start genauso behandelt. Den halben Stand verwirft der Rückweg im
   selben Start; nach einem Absturz legt er ihn nach `restore/replaced-…` (außer die Datenbank liegt auf einem anderen Laufwerk und im Datenordner fehlt der Platz).
@@ -1022,6 +1114,18 @@ Grenzen: Inhalt höchstens 4 KiB (sonst `413`), Anfragezeile und Kopfzeilen zusa
   `stage` im Manifest, siehe [02](02-EXTENSION-API.md#1-anatomie-einer-extension); fehlt es dort, steht `stable`). Auch jeder
   Eintrag von `GET /pages` trägt `stage` seiner Erweiterung. Die Oberfläche kennzeichnet `beta` mit einem Abzeichen; für
   Clients ist es nur eine Anzeige.
+- Jeder Eintrag von `GET /extensions` (und `GET /extensions/{id}`) enthält zusätzlich `takeover_requests`: Erweiterungen,
+  die die gespeicherten Daten dieser Zeile übernehmen wollen (gleiche oder frühere Kennung, siehe
+  [02](02-EXTENSION-API.md#erweiterung-umbenennen-legacy_ids)), je `{id, old_id, name, source, permissions, allowed}`;
+  `old_id` ist die Kennung, unter der die Daten liegen, und kann gleich `id` sein. Sie werden erst geladen, wenn das
+  jemand erlaubt; `allowed: true` heißt erlaubt, gilt aber erst nach dem nächsten Start. Ohne `extensions.manage` ist die
+  Liste leer.
+- `POST /extensions/{id}/takeover` mit `{old_id}` erlaubt der wartenden Erweiterung `id` die Übernahme (`extensions.manage`,
+  Protokoll `extension.takeover_allowed`). Antwort `{restart_needed: true, switched_off, extra_permissions}`: Die
+  Übernahme gilt ab dem nächsten Start, für die Quelle und die Rechte, die `id` jetzt hat. Wollte die neue mehr Rechte,
+  als die bisherige hatte, ist deren Zeile jetzt aus (`switched_off`), und `extra_permissions` nennt die zusätzlichen.
+  `404`, wenn `id` nicht auf `old_id` wartet; `409`, wenn `old_id` schon einer anderen Erweiterung gehört oder eine
+  andere sie schon übernehmen darf.
 - `POST /extensions/{id}/test` ruft `health()` der Erweiterung auf (bei
   Benachrichtigungskanälen zusätzlich `test()`); mit `{"mode": "message"}` sendet es stattdessen
   eine Testnachricht über den Kanal (`422`, wenn die Erweiterung keinen hat). Antwort
@@ -1619,6 +1723,9 @@ Ein Layout trägt neben `items` die Liste `groups` (`[{key, title, collapsed}]`,
 `groups` getrennt an, ein Feld ohne Angabe bleibt, wie es ist; doppelte oder unbekannte Gruppen ergeben 422. Fehlt eine
 Gruppe in der Liste, steht sie in der Vorgabe-Reihenfolge dahinter. Jedes Widget aus `/widgets` hat `group`.
 
+`GET /widgets` liefert nur Widgets, deren `permissions` die Person alle hat. Ebenso fehlen darin Knöpfe
+(`view.actions`, `view.item.actions`, `view.row_actions`), deren eigene `permissions` ihr nicht alle gehören.
+
 Ein Eintrag in `items` hat die Form `{widget_id, ext_id, x, y, w, h, config}`. Das Backend prüft nur, dass `items` eine
 Liste von JSON-Objekten ist, und speichert Felder und Werte, wie sie kommen. Selbst ändert der Kern die Einträge nur,
 wenn ein Modul die Widgets eines anderen übernimmt (`adopts`: neue `ext_id` und `widget_id`, doppelte fallen weg), und
@@ -1711,16 +1818,41 @@ Der Platzhalter kommt auch, wenn der Server antwortet, Docker aber nicht (Dienst
 App: nur `http://` oder `https://` mit Rechnername oder IP-Adresse, sonst `null` (kein `javascript:`, `data:` oder `//…`).
 
 Ebenfalls additiv: `helper_hints` – Server, die neu eingerichtet werden sollten, damit die Module mit engen Rechten
-laufen: `[{host_id, host_name, modules: [Anzeigename], checked_at, without_root}]`. Ein Eintrag kommt nur, wenn sudo auf einem
+laufen: `[{host_id, host_name, modules: [Anzeigename], checked_at, without_root, still_used, no_fallback}]`. Ein Eintrag kommt nur, wenn sudo auf einem
 Linux-Server Hilfsskripte ausführen lässt (volle Regel `NOPASSWD: ALL`, auch mit weiteren Angaben wie
 `NOPASSWD: SETENV: ALL`, oder die eigene Regel mindestens eines Skripts) und mindestens ein Hilfsskript eines eingeschalteten
 Moduls fehlt oder nicht das mitgelieferte ist (älter, verändert, unlesbar); nie für root und nie für Windows.
 `without_root` ist `true`, wenn dort keine volle Regel steht: Diese Module haben dann gerade gar kein root (sonst laufen
-sie über die volle Regel). Der Stand
+sie über die volle Regel). Ausnahme sind die Module in `still_used` (Teil von `modules`, sonst leer): Diese Module rufen
+ihr Skript in jeder Fassung auf (`calls_any_version` im Manifest, derzeit Docker) und laufen dort mit einer älteren
+weiter, solange deren Version lesbar ist, nur root sie ändern kann und sudo sie erlaubt. `no_fallback` (Teil von
+`modules`, sonst leer; fehlt bei älteren Kernen) nennt die Module, die ohne ihr Skript auch mit der vollen Regel kein root
+haben (`sudo_fallback = false` im Manifest, derzeit Docker); außer denen in `still_used` fehlt ihnen root also auch,
+wenn `without_root` `false` ist. Der Stand
 stammt aus „Verbindung prüfen“ (nur mit dem Standard-Zugang) und dem Kern-Job `helper-hints` (alle 6 Stunden ein
 lesender Befehl je Server, derselbe wie bei der Prüfung); `GET /overview` selbst fragt keinen Server ab.
 `POST /hosts/{id}/helper-hint/dismiss` (`hosts.write`, 204, 404 ohne Server) blendet den Hinweis für diesen Server aus,
 bis sich die fehlenden Skripte oder ihre mitgelieferten Versionen ändern (etwa durch ein Update).
+
+`full_rule_removable` (fehlt bei älteren Kernen) ist `true`, wenn dort die volle Regel steht, aber nicht nötig ist: Jedes
+eingeschaltete Modul, das dort root braucht, hat ein Hilfsskript, und jedes ist brauchbar und hat seine eigene Regel.
+`modules` ist dann leer, wenn kein Skript fehlt oder veraltet ist. So ein Eintrag kommt nicht, wenn die Regel beim Server
+gewollt ist (`HostOut.sudo_full_wanted`). Weggeklickt bleibt er weg, bis die volle Regel einmal nicht mehr da war.
+Dasselbe Feld steht in der Antwort von `POST /hosts/{id}/check`, dort auch dann, wenn die Regel gewollt ist; der Punkt
+`root` ist in dem Fall `ok`, sonst `warn` mit dem Befehl zum Entfernen im Hinweis.
+
+Ebenfalls additiv: `untrusted_proxies` – wie in `GET /system/connection`: Proxys, hinter denen Nodvard Deck die echten
+Adressen nicht sieht, weil sie nicht unter „Vertrauenswürdiger Proxy“ stehen. Gemerkt wird nur bei einer Anmeldung des
+Inhabers (Owner) mit richtigem Passwort (auch wenn danach noch der Zwei-Faktor-Code fehlt), die `X-Forwarded-For` trägt,
+und nur von einer Gegenstelle aus dem Heimnetz (privat, Loopback, Link-Local, `100.64.0.0/10`, `fc00::/7`); sonst
+könnte jedes Konto oder jeder aus dem Internet eine Adresse in den Hinweis schreiben. `Forwarded` allein zählt nicht,
+weil Deck nur `X-Forwarded-*` auswertet. Das Feld ist nur für den Inhaber gefüllt, der die Liste als Einziger ändern
+darf, sonst leer. Eingetragen wird nie etwas von selbst.
+
+Ebenfalls additiv: `legacy_env` (`[{old, new, new_set}]`) – alte Umgebungsvariablen (`LATTICE_<NAME>`), mit denen
+Nodvard Deck gestartet wurde, und ihr neuer Name (`NODVARD_DECK_<NAME>`), nach dem alten Namen sortiert. `new_set`: Der
+neue Name ist ebenfalls gesetzt und gewinnt, der alte kann einfach weg. Nur die Namen, nie die Werte. Die alten Namen
+gelten in dieser Version noch, ab 1.0 nicht mehr. Nur für den Inhaber gefüllt, sonst leer.
 
 ### Beispieldaten
 
@@ -1907,7 +2039,8 @@ ext.{ext_id}.{beliebig}    Extension-eigene Kanäle (ctx.ws.broadcast)
 Aktion (im Umschlag unter `payload.data.payload`) vollständig nur für Verbindungen mit `hosts.execute`;
 `actions.approve:<risiko>` reicht hier anders als bei der REST-Ressource nicht. Alle anderen bekommen dieselbe
 Nachricht mit den Kennungen wie in §3 „Aktionen“ und `payload.data.payload_hidden` (`true`, wenn etwas weggelassen
-wurde).
+wurde). `action.executed` nennt außerdem in `payload.data.ext_id` das Modul, das die Aktion vorgeschlagen hat (ältere
+Kerne ohne das Feld).
 
 Verhalten bei Verbindungsabbruch: der Client abonniert nach dem Reconnect neu und holt
 den verpassten Zustand per REST nach. Es gibt **keine** Nachrichten-Wiederholung über
@@ -2084,6 +2217,8 @@ wegfallen) und `make-default` mit `delete_previous`. Ohne Passwort kommt `403` m
 Ebenso nimmt `PUT /branding` für `logo_url` und `favicon_url` keine fremde Adresse mehr an (`422`), weil die Seite
 Bilder nur noch vom eigenen Server laden soll; ein schon gespeicherter Wert darf unverändert bleiben, und für das Favicon
 gibt es dafür `POST /branding/favicon` (siehe §3).
+Ebenso verlangen bei Nodvard Shield `POST /ext/shield/incidents/{id}/confirm`, `…/dismiss`, `…/resolve` und
+`…/reopen` `soc.manage` (früher genügte `soc.read`); Lesen bleibt bei `soc.read`.
 Und bei Erweiterungen: `ctx.http` folgt keiner Weiterleitung mehr, auch nicht mit `follow_redirects=True`, und
 `ctx.audit.log()` schreibt keine Kern-Einträge (`mfa.*`, `auth.*`, `login.*`, `system.*`, `user.*`); beides in
 [02 §2](02-EXTENSION-API.md#2-der-extensioncontext).

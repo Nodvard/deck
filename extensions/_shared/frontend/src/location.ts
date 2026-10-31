@@ -7,10 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { deckEventName, findDeck } from "./deck";
 
-/** Neuer Name des Ereignisses; der alte (`lattice:navigate`) gilt weiter (Übergang). Der Kern feuert beide. */
 export const NAVIGATE_EVENT = "nodvard-deck:navigate";
-/** Alter Name, gilt weiter (Übergang). */
-export const LEGACY_NAVIGATE_EVENT = "lattice:navigate";
 
 /**
  * Aktuelle Query als `URLSearchParams` und ein Setter (`null` = entfernen; per `replaceState`, also ohne neuen
@@ -34,7 +31,7 @@ export function useUrlParams(): [URLSearchParams, (changes: Record<string, strin
       if (!findDeck()?.navigateEvents) visit();
     };
     sync(); // zwischen erstem Render und diesem Schritt kann schon navigiert worden sein
-    const navigateEvent = deckEventName("navigate"); // genau eines, sonst zählte jede Navigation doppelt
+    const navigateEvent = deckEventName("navigate");
     window.addEventListener("popstate", onPopState);
     window.addEventListener(navigateEvent, visit);
     return () => {

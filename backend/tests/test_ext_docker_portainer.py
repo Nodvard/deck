@@ -13,10 +13,11 @@ import pytest
 from docker_stack_fakes import EXT_DIR, FakeExec, docker_on, ps, result, row  # noqa: F401 - Fixtures
 
 
-@pytest.fixture(autouse=True)
-def _ext_docker_on_path(monkeypatch):
-    monkeypatch.syspath_prepend(str(EXT_DIR / "src"))
-    yield
+@pytest.fixture(autouse=True, scope="module")
+def _ext_docker_on_path():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(EXT_DIR / "src"))
+        yield
     for name in list(sys.modules):
         if name.startswith("nodvard_deck_ext_docker"):
             del sys.modules[name]
@@ -626,8 +627,10 @@ async def test_deck_itself_old_compose_and_stopped_stacks(env, monkeypatch):
 @pytest.mark.asyncio
 async def test_only_on_docker_hosts(monkeypatch, tmp_path):
     e = _setup(monkeypatch, tmp_path, tags=())
+    from nodvard_deck_ext_docker.operate import NOT_DOCKER
+
     plan = {"folder": FOLDER, "portainer_id": "7"}
-    assert (await e.executor.execute(_request(plan))).error == "Kein Docker-Host."
+    assert (await e.executor.execute(_request(plan))).error == NOT_DOCKER
     e = _setup(monkeypatch, tmp_path, tags=("docker-bedienen",))
     assert (await e.executor.execute(_request(plan))).error.startswith("Auf diesem Server ist Docker im Modus „Nur bedienen“")
 

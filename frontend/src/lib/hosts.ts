@@ -58,6 +58,8 @@ export interface SetupOut {
   sudo: boolean;
   /** Ob zu `sudo` die volle Regel gehört (sonst nur die Regeln der Hilfsskripte). Fehlt bei älteren Servern: dann ja. */
   full_sudo?: boolean;
+  /** Ob der Befehl eine vorhandene volle Regel von Nodvard Deck entfernt. Fehlt bei älteren Servern. */
+  drop_full_rule?: boolean;
   /** Fehlt bei älteren Servern. */
   helpers?: SetupHelper[];
 }
@@ -120,6 +122,8 @@ export interface ConnectionCheck {
   host_key: HostKeyInfo | null;
   os: { pretty_name: string | null; arch: string | null; model: string | null } | null;
   credential_id: string | null;
+  /** Die volle sudo-Regel ist da, aber nicht nötig (auch wenn sie beim Server gewollt ist). Fehlt bei älteren Kernen. */
+  full_rule_removable?: boolean;
 }
 
 export interface KnownKeyOut {
@@ -238,16 +242,19 @@ export function useGroupMembers(groupIds: string[]): { members: Record<string, s
 
 /** Der Einrichtungsbefehl. Ändert nichts auf dem Server (GET); die Wahl von sudo und Gruppen steht im Key. */
 export function useSetup(
-  hostId: string, credentialId: string, options: { sudo: boolean; fullSudo?: boolean; groups: string[]; enabled: boolean },
+  hostId: string, credentialId: string,
+  options: { sudo: boolean; fullSudo?: boolean; dropFullRule?: boolean; groups: string[]; enabled: boolean },
 ) {
   const groups = [...options.groups].sort();
   const fullSudo = options.sudo && Boolean(options.fullSudo);
+  const dropFullRule = options.sudo && !fullSudo && Boolean(options.dropFullRule);
   const query = new URLSearchParams();
   query.set("sudo", String(options.sudo));
   if (fullSudo) query.set("full_sudo", "true");
+  if (dropFullRule) query.set("drop_full_rule", "true");
   for (const g of groups) query.append("groups", g);
   return useQuery({
-    queryKey: ["hosts", hostId, "credentials", credentialId, "setup", options.sudo, fullSudo, groups],
+    queryKey: ["hosts", hostId, "credentials", credentialId, "setup", options.sudo, fullSudo, dropFullRule, groups],
     queryFn: () => api.get<SetupOut>(`/hosts/${hostId}/credentials/${credentialId}/setup?${query.toString()}`),
     enabled: options.enabled,
     retry: false,

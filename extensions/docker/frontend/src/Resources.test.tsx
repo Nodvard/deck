@@ -70,7 +70,7 @@ const SERVICES = [
 ];
 
 function setDeck(permissions: (p: string) => boolean = () => true, confirm = true) {
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never,
     ReactDOM: undefined as never,
     ReactJsxRuntime: undefined as never,
@@ -144,7 +144,7 @@ describe("ResourceList", () => {
     render(<ResourceList hostId="h1" kind="volumes" />);
     fireEvent.click(await screen.findByRole("button", { name: "Volume löschen: leer" }));
     await screen.findByText("Volume löschen: Volume leer gelöscht.");
-    expect(window.__lattice?.confirmDialog).toHaveBeenCalledWith(expect.stringContaining("Die Daten darin sind dann weg"), expect.objectContaining({ danger: true }));
+    expect(window.__nodvardDeck?.confirmDialog).toHaveBeenCalledWith(expect.stringContaining("Die Daten darin sind dann weg"), expect.objectContaining({ danger: true }));
     const post = calls.find((c) => c.method === "POST" && c.url.includes("/actions/docker.volume_remove"));
     expect(post?.url).toBe("/api/v1/hosts/h1/actions/docker.volume_remove");
     expect(post?.body).toEqual({ payload: { volume: "leer" }, reason: "Volume löschen über die Docker-Seite." });
@@ -157,7 +157,7 @@ describe("ResourceList", () => {
     vi.stubGlobal("fetch", resourceFetch(calls));
     render(<ResourceList hostId="h1" kind="volumes" />);
     fireEvent.click(await screen.findByRole("button", { name: "Volume löschen: leer" }));
-    await waitFor(() => expect(window.__lattice?.confirmDialog).toHaveBeenCalled());
+    await waitFor(() => expect(window.__nodvardDeck?.confirmDialog).toHaveBeenCalled());
     expect(calls.some((c) => c.method === "POST")).toBe(false);
   });
 

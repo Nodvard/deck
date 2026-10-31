@@ -433,20 +433,11 @@ class _RecordingChannel:
 
 
 async def _set_window(db_session, host_id: str, *, minutes_ago: int) -> None:
-    """Fenster von 60 Minuten, Start vor `minutes_ago` Minuten (Ortszeit wie der Waehler):
-    5 -> laeuft gerade, 90 -> schon vorbei."""
-    from datetime import timedelta
-    from zoneinfo import ZoneInfo
-
-    from nodvard_deck.config import LOCAL_TIMEZONE
-    from nodvard_deck.db import utcnow
+    """Fenster von 60 Minuten: Start vor 5 Minuten läuft gerade, vor 90 Minuten ist es schon vorbei."""
     from nodvard_deck.services import settings as settings_service
+    from window_helpers import window
 
-    start = (utcnow() - timedelta(minutes=minutes_ago)).astimezone(ZoneInfo(LOCAL_TIMEZONE))
-    await settings_service.set_global(
-        db_session, "maintenance.windows",
-        [{"cron": f"{start.minute} {start.hour} * * *", "duration_minutes": 60, "host_ids": [host_id]}],
-    )
+    await settings_service.set_global(db_session, "maintenance.windows", [window([host_id], minutes_ago=minutes_ago)])
 
 
 def _provide_channel() -> _RecordingChannel:
@@ -470,7 +461,7 @@ async def _deliveries(db_session) -> list[tuple[str, str]]:
 
 @pytest.mark.asyncio
 async def test_watch_announces_a_stopped_server_from_the_window_once_after_it(
-    client, db_session, test_settings, local_ssh_server, fake_powershell
+    client, db_session, test_settings, local_ssh_server, fake_powershell, window_clock
 ):
     fake_powershell["status_json"] = _status()
     host, _headers = await _setup(client, db_session, test_settings, local_ssh_server)
@@ -497,7 +488,7 @@ async def test_watch_announces_a_stopped_server_from_the_window_once_after_it(
 
 @pytest.mark.asyncio
 async def test_watch_server_back_within_the_window_brings_no_push_afterwards(
-    client, db_session, test_settings, local_ssh_server, fake_powershell
+    client, db_session, test_settings, local_ssh_server, fake_powershell, window_clock
 ):
     fake_powershell["status_json"] = _status()
     host, _headers = await _setup(client, db_session, test_settings, local_ssh_server)
@@ -522,7 +513,7 @@ async def test_watch_server_back_within_the_window_brings_no_push_afterwards(
 
 @pytest.mark.asyncio
 async def test_watch_announces_a_join_code_from_the_window_once_after_it(
-    client, db_session, test_settings, local_ssh_server, fake_powershell
+    client, db_session, test_settings, local_ssh_server, fake_powershell, window_clock
 ):
     """Der Join-Code wechselt beim naechtlichen Neustart -- also mitten im Fenster. Gilt er
     nach dem Fenster noch, kommt er einmal als Push (sonst wuesste niemand den neuen)."""
@@ -548,7 +539,7 @@ async def test_watch_announces_a_join_code_from_the_window_once_after_it(
 
 @pytest.mark.asyncio
 async def test_watch_all_clear_for_a_heard_alarm_comes_after_the_window(
-    client, db_session, test_settings, local_ssh_server, fake_powershell
+    client, db_session, test_settings, local_ssh_server, fake_powershell, window_clock
 ):
     """Aus dem Review: der Ausfall kam hoerbar, "laeuft wieder" faellt ins Fenster. Im
     Fenster bleibt es still, nach dem Fenster kommt es genau einmal -- sonst bliebe der
@@ -582,7 +573,7 @@ async def test_watch_all_clear_for_a_heard_alarm_comes_after_the_window(
 
 @pytest.mark.asyncio
 async def test_watch_pending_all_clear_is_dropped_when_the_server_stops_again(
-    client, db_session, test_settings, local_ssh_server, fake_powershell
+    client, db_session, test_settings, local_ssh_server, fake_powershell, window_clock
 ):
     fake_powershell["status_json"] = _status()
     host, _headers = await _setup(client, db_session, test_settings, local_ssh_server)
@@ -609,7 +600,7 @@ async def test_watch_pending_all_clear_is_dropped_when_the_server_stops_again(
 
 @pytest.mark.asyncio
 async def test_watch_runs_against_an_older_core_without_the_new_answers(
-    client, db_session, test_settings, local_ssh_server, fake_powershell, monkeypatch
+    client, db_session, test_settings, local_ssh_server, fake_powershell, monkeypatch, window_clock
 ):
     """Aelterer Kern: `send()` liefert nichts, `would_suppress()` gibt es nicht. Kein
     Absturz, der Waechter laeuft wie vor der Nachmeldung."""

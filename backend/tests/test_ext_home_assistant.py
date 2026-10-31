@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import logging
 import re
@@ -13,25 +14,31 @@ from typing import Any
 
 import httpx
 import pytest
+from nodvard_deck.ext.runtime import get_extension_runtime
+from nodvard_deck.models import AuditEntry, ExtensionRecord
+from nodvard_deck.services import extensions as extensions_service
 from nodvard_sdk import CertificateMismatch
 from nodvard_sdk.errors import PermissionDenied
 from sqlalchemy import select
 
-from nodvard_deck.ext.runtime import get_extension_runtime
-from nodvard_deck.models import AuditEntry, ExtensionRecord
-from nodvard_deck.services import extensions as extensions_service
-
 REPO_EXTENSIONS_DIR = Path(__file__).resolve().parents[2] / "extensions"
-sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "home-assistant" / "src"))
 
-from nodvard_deck_ext_home_assistant import parse, transport
-from nodvard_deck_ext_home_assistant.config import (
-    normalize_base_url,
-    normalize_fingerprint,
-    read_connections,
-)
-from nodvard_deck_ext_home_assistant.service import AUTH_FAILED_TTL_S, CACHE_TTL_S
-from nodvard_deck_ext_home_assistant.widgets import MAX_ROWS, value_text
+
+class _ExtModule:
+    """Ein Modul der Erweiterung, geladen erst beim Zugriff im Test, wenn die Fixture den Pfad gesetzt hat."""
+
+    def __init__(self, name: str) -> None:
+        self._name = f"nodvard_deck_ext_home_assistant.{name}"
+
+    def __getattr__(self, attr: str) -> Any:
+        return getattr(importlib.import_module(self._name), attr)
+
+
+parse = _ExtModule("parse")
+transport = _ExtModule("transport")
+ha_config = _ExtModule("config")
+ha_service = _ExtModule("service")
+ha_widgets = _ExtModule("widgets")
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "home_assistant"
 BASE = "http://ha.example.com:8123"
@@ -46,10 +53,9 @@ ENTITIES = [
 
 
 @pytest.fixture(autouse=True)
-def _cleanup_sys_path():
-    before = list(sys.path)
+def _home_assistant_on_path(monkeypatch):
+    monkeypatch.syspath_prepend(str(REPO_EXTENSIONS_DIR / "home-assistant" / "src"))
     yield
-    sys.path[:] = before
     for name in list(sys.modules):
         if name.startswith(("nodvard_deck_ext_", "lattice_ext_")):
             del sys.modules[name]
@@ -153,17 +159,17 @@ def test_states_that_are_not_a_list_are_refused(body):
 @pytest.mark.parametrize(
     ("body", "expected"),
     [
-        ({"version": "2026.11.0b3", "location_name": "Haus"}, parse.HaConfig("2026.11.0b3", "Haus")),
-        ({"version": "2026.10.0.dev0"}, parse.HaConfig("2026.10.0.dev0", None)),
-        ({"version": 2026.1, "location_name": 5}, parse.HaConfig(None, None)),
-        ({"version": "<script>alert(1)</script>", "location_name": " "}, parse.HaConfig(None, None)),
-        ({"version": "9" * 80}, parse.HaConfig(None, None)),
-        ({}, parse.HaConfig(None, None)),
-        ({"location_name": "L" * 200}, parse.HaConfig(None, "L" * 79 + "…")),
+        ({"version": "2026.11.0b3", "location_name": "Haus"}, ("2026.11.0b3", "Haus")),
+        ({"version": "2026.10.0.dev0"}, ("2026.10.0.dev0", None)),
+        ({"version": 2026.1, "location_name": 5}, (None, None)),
+        ({"version": "<script>alert(1)</script>", "location_name": " "}, (None, None)),
+        ({"version": "9" * 80}, (None, None)),
+        ({}, (None, None)),
+        ({"location_name": "L" * 200}, (None, "L" * 79 + "…")),
     ],
 )
 def test_config_fields_are_read_defensively(body, expected):
-    assert parse.parse_config(body) == expected
+    assert parse.parse_config(body) == parse.HaConfig(*expected)
 
 
 @pytest.mark.parametrize("body", [[], "x", None, 3])
@@ -177,7 +183,7 @@ def test_status_answer(body, ok):
 
 
 def test_lists_are_collected_up_to_a_limit_but_counted_fully(monkeypatch):
-    monkeypatch.setattr(parse, "MAX_COLLECTED", 3)
+    monkeypatch.setattr("nodvard_deck_ext_home_assistant.parse.MAX_COLLECTED", 3)
     body = [_state(f"sensor.s{i}", "unavailable") for i in range(10)] + [
         _state(f"update.u{i}", "on", installed_version="1", latest_version="2") for i in range(10)
     ]
@@ -192,32 +198,32 @@ def test_lists_are_collected_up_to_a_limit_but_counted_fully(monkeypatch):
     [("21.5", "°C", "21,5 °C"), ("58", "%", "58 %"), ("on", None, "on"), ("-3.25", "K", "-3,25 K"), ("1.2.3", None, "1.2.3"), (None, "W", "–"), ("2026-10-13T05:51:12+00:00", None, "2026-10-13T05:51:12+00:00")],
 )
 def test_value_text(state, unit, expected):
-    assert value_text(state, unit) == expected
+    assert ha_widgets.value_text(state, unit) == expected
 
 
 def test_base_url_is_normalized_and_credentials_are_refused():
-    assert normalize_base_url("http://ha.example.com:8123/") == "http://ha.example.com:8123"
-    assert normalize_base_url(" https://ha.example.com/ha/ ") == "https://ha.example.com/ha"
-    assert normalize_base_url("http://203.0.113.10:8123/?x=1#y") == "http://203.0.113.10:8123"
-    assert normalize_base_url("http://203.0.113.10:8123/lovelace/0") == "http://203.0.113.10:8123"
-    assert normalize_base_url("http://203.0.113.10:8123/config/integrations/dashboard") == "http://203.0.113.10:8123"
-    assert normalize_base_url("http://203.0.113.10:8123/dashboard-haus/wohnzimmer") == "http://203.0.113.10:8123"
+    assert ha_config.normalize_base_url("http://ha.example.com:8123/") == "http://ha.example.com:8123"
+    assert ha_config.normalize_base_url(" https://ha.example.com/ha/ ") == "https://ha.example.com/ha"
+    assert ha_config.normalize_base_url("http://203.0.113.10:8123/?x=1#y") == "http://203.0.113.10:8123"
+    assert ha_config.normalize_base_url("http://203.0.113.10:8123/lovelace/0") == "http://203.0.113.10:8123"
+    assert ha_config.normalize_base_url("http://203.0.113.10:8123/config/integrations/dashboard") == "http://203.0.113.10:8123"
+    assert ha_config.normalize_base_url("http://203.0.113.10:8123/dashboard-haus/wohnzimmer") == "http://203.0.113.10:8123"
     for bad in ("ha.example.com:8123", "ftp://ha.example.com", "http://", "http://user:" + "pw@ha.example.com", "http://@ha.example.com", "http://ha.example.com:999999", ""):
         with pytest.raises(ValueError):
-            normalize_base_url(bad)
+            ha_config.normalize_base_url(bad)
 
 
 def test_fingerprint_is_normalized_or_refused():
-    assert normalize_fingerprint(None) is None and normalize_fingerprint("  ") is None
-    assert normalize_fingerprint("ab" * 32) == PIN
-    assert normalize_fingerprint(PIN.replace(":", " ").lower()) == PIN
+    assert ha_config.normalize_fingerprint(None) is None and ha_config.normalize_fingerprint("  ") is None
+    assert ha_config.normalize_fingerprint("ab" * 32) == PIN
+    assert ha_config.normalize_fingerprint(PIN.replace(":", " ").lower()) == PIN
     for bad in ("kaputt", "AB:CD", 5, "A" * 300, ["x"]):
         with pytest.raises(ValueError):
-            normalize_fingerprint(bad)
+            ha_config.normalize_fingerprint(bad)
 
 
 def test_read_connections_flags_unusable_entries_without_dropping_the_rest():
-    configs = read_connections({"connections": [
+    configs = ha_config.read_connections({"connections": [
         {"name": "a", "base_url": "http://a.example.com:8123/", "entities": ["sensor.x", " sensor.x ", "light.y", ""], "tls_insecure_skip_verify": True},
         {"name": "a", "base_url": "http://zweite.example.com"},
         {"name": "b", "base_url": "http://user:" + "pw@b.example.com"},
@@ -245,7 +251,7 @@ def test_read_connections_flags_unusable_entries_without_dropping_the_rest():
     assert (configs[7].pin, configs[7].problem) == (PIN, None)
     assert "Kurzname" in (configs[8].problem or "")
     assert "keine Liste" in (configs[9].problem or "")
-    assert read_connections({}) == [] and read_connections({"connections": "x"}) == []
+    assert ha_config.read_connections({}) == [] and ha_config.read_connections({"connections": "x"}) == []
 
 
 class _Http:
@@ -666,7 +672,7 @@ async def test_widget_shows_at_most_ten_rows_and_says_how_many_values_are_missin
     fake.states = [_state(i, str(n), unit_of_measurement="W", friendly_name=f"Sensor {n}") for n, i in enumerate(ids)]
     await _configure(client, headers, _connection(entities=ids))
     rows = (await _widget(client, headers))["data"]
-    assert len(rows) == MAX_ROWS
+    assert len(rows) == ha_widgets.MAX_ROWS
     assert [r["title"] for r in rows[2:9]] == [f"Sensor {n}" for n in range(7)]
     assert rows[-1] == {"title": "… und 5 weitere Werte", "subtitle": "Alle stehen auf der Seite „Home Assistant“.", "label": "–", "tone": "neutral"}
     # Die Seite bekommt sie alle.
@@ -675,7 +681,7 @@ async def test_widget_shows_at_most_ten_rows_and_says_how_many_values_are_missin
     # Passen alle genau, gibt es keine Schlusszeile.
     await _configure(client, headers, _connection(entities=ids[:8]))
     rows = (await _widget(client, headers))["data"]
-    assert len(rows) == MAX_ROWS and rows[-1]["title"] == "Sensor 7"
+    assert len(rows) == ha_widgets.MAX_ROWS and rows[-1]["title"] == "Sensor 7"
 
 
 @pytest.mark.asyncio
@@ -684,7 +690,7 @@ async def test_widget_with_many_connections_stays_within_ten_rows(client, db_ses
     names = [f"ha{i}" for i in range(7)]
     await _configure(client, headers, *[_connection(n, entities=["sensor.wohnzimmer_temperatur"]) for n in names])
     rows = (await _widget(client, headers))["data"]
-    assert len(rows) == MAX_ROWS
+    assert len(rows) == ha_widgets.MAX_ROWS
     assert rows[-1]["title"] == "… und 5 weitere Zeilen"
     assert len({r["subtitle"] for r in rows[:4]}) == 4, "je Verbindung eigene Zeilen"
 
@@ -773,7 +779,7 @@ async def test_wrong_token_is_rejected_by_the_server_and_shown_as_auth_failed(cl
 
 @pytest.mark.asyncio
 async def test_a_rejected_token_is_not_asked_again_for_half_an_hour(client, db_session, test_settings):
-    assert AUTH_FAILED_TTL_S == 1800.0
+    assert ha_service.AUTH_FAILED_TTL_S == 1800.0
     headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers, _connection(), token="falsch-falsch-0000")
     service = _service()
@@ -790,7 +796,7 @@ async def test_a_rejected_token_is_not_asked_again_for_half_an_hour(client, db_s
     assert _only(await _overview(client, headers, "?refresh=true"))["state"] == "auth_failed"
     assert len(fake.requests) == 1, "auch „Aktualisieren“ umgeht die Pause nicht"
 
-    now[0] += AUTH_FAILED_TTL_S
+    now[0] += ha_service.AUTH_FAILED_TTL_S
     await _overview(client, headers)
     assert len(fake.requests) == 2, "nach 30 Minuten wird wieder gefragt"
 
@@ -801,9 +807,8 @@ async def test_changed_settings_end_the_pause(client, db_session, test_settings)
     await _configure(client, headers, _connection(), token="falsch-falsch-0000")
     assert _only(await _overview(client, headers))["state"] == "auth_failed"
     assert len(fake.requests) == 1
-    # Neues Token und geänderte Einstellungen (hier: eine Entität mehr).
-    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": "home-assistant-token:ha", "value": TOKEN}, headers=headers)
-    assert res.status_code == 204
+    # Home Assistant nimmt das Token inzwischen an; geändert wird nur eine Entität mehr.
+    fake.token = "falsch-falsch-0000"
     saved = await client.put(f"/api/v1/extensions/{EXT}/settings", json={"current_password": "correct-horse-battery", "values": {"connections": [_connection(entities=["light.flur"])]}}, headers=headers)
     assert saved.status_code == 200, saved.text
     assert not saved.json().get("secrets_cleared"), "dieselbe Adresse: das Token bleibt"
@@ -812,16 +817,82 @@ async def test_changed_settings_end_the_pause(client, db_session, test_settings)
 
 @pytest.mark.asyncio
 async def test_testing_the_connection_ends_the_pause_and_asks_again(client, db_session, test_settings):
-    headers, _ = await _enable(client, db_session, test_settings)
+    headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers, _connection(), token="falsch-falsch-0000")
     assert _only(await _overview(client, headers))["state"] == "auth_failed"
-    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": "home-assistant-token:ha", "value": TOKEN}, headers=headers)
-    assert res.status_code == 204
+    fake.token = "falsch-falsch-0000"
     assert _only(await _overview(client, headers))["state"] == "auth_failed", "noch aus dem Zwischenspeicher"
 
     health = await _health()
     assert health.healthy is True
     assert _only(await _overview(client, headers))["state"] == "ok"
+
+
+async def _set_token(client, headers, value: str, name: str = "ha") -> None:
+    res = await client.put(
+        f"/api/v1/extensions/{EXT}/secrets",
+        json={"current_password": "correct-horse-battery", "label": f"home-assistant-token:{name}", "value": value}, headers=headers,
+    )
+    assert res.status_code == 204, res.text
+
+
+@pytest.mark.asyncio
+async def test_a_new_token_in_the_vault_ends_the_pause_at_once(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection(), token="falsch-falsch-0000")
+    assert _only(await _overview(client, headers))["state"] == "auth_failed"
+    await _set_token(client, headers, TOKEN)
+    assert _only(await _overview(client, headers))["state"] == "ok"
+    assert len(fake.requests) > 1 and fake.requests[-1].headers["Authorization"] == f"Bearer {TOKEN}"
+
+
+@pytest.mark.asyncio
+async def test_a_new_token_in_the_vault_is_used_at_once(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection())
+    assert _only(await _overview(client, headers))["state"] == "ok"
+    fake.token = "neu-neu-0000"
+    assert _only(await _overview(client, headers))["state"] == "ok", "aus dem Zwischenspeicher"
+    await _set_token(client, headers, "neu-neu-0000")
+    assert _only(await _overview(client, headers))["state"] == "ok"
+    assert fake.requests[-1].headers["Authorization"] == "Bearer neu-neu-0000"
+
+
+@pytest.mark.asyncio
+async def test_a_changed_secret_touches_only_its_own_connection(client, db_session, test_settings):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection(), _connection(name="ha2"))
+    await _overview(client, headers)
+    service, loaded = _service(), get_extension_runtime().loaded[EXT]
+    assert set(service._cache) == {"ha", "ha2"}
+    await loaded.instance.on_secret_changed(loaded.ctx, "home-assistant-token:ha2")
+    assert set(service._cache) == {"ha"}
+    await loaded.instance.on_secret_changed(loaded.ctx, "home-assistant-sonstwas")
+    assert set(service._cache) == {"ha"}
+
+
+@pytest.mark.asyncio
+async def test_an_answer_with_the_old_token_is_not_kept(client, db_session, test_settings):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection())
+    service, loaded = _service(), get_extension_runtime().loaded[EXT]
+    load, entered, release, loads = service._load_bounded, asyncio.Event(), asyncio.Event(), []
+
+    async def slow(cfg, has_token):
+        loads.append(cfg.name)
+        if len(loads) == 1:
+            entered.set()
+            await release.wait()
+        return await load(cfg, has_token)
+
+    service._load_bounded = slow
+    first = asyncio.create_task(_overview(client, headers))
+    await entered.wait()
+    await loaded.instance.on_secret_changed(loaded.ctx, "home-assistant-token:ha")
+    release.set()
+    await first
+    await _overview(client, headers)
+    assert loads == ["ha", "ha"], "was die Abfrage mit dem alten Token einträgt, gilt nicht mehr"
 
 
 @pytest.mark.asyncio
@@ -1093,7 +1164,7 @@ async def test_results_are_cached_for_a_short_time_and_the_token_is_read_only_wh
 
     await _overview(client, headers)
     assert len(fake.requests) == 4
-    now[0] += CACHE_TTL_S - 1
+    now[0] += ha_service.CACHE_TTL_S - 1
     await _overview(client, headers)
     assert len(fake.requests) == 4
     now[0] += 2.0

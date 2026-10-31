@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 // ../../../frontend/src/lib/deckGlobal.ts
 function findDeck() {
   if (typeof window === "undefined") return void 0;
-  return window.__nodvardDeck ?? window.__lattice;
+  return window.__nodvardDeck;
 }
 function deck() {
   return findDeck();

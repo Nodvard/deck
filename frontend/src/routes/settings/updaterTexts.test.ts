@@ -84,6 +84,16 @@ describe("Texte zum Update-Helfer", () => {
     expect(codeText("finishing")).toMatch(/räumt/);
   });
 
+  it("wo ein neuer Helfer hilft, steht der Weg für Tag 1 und für einen Digest", () => {
+    const texts = [PRESENCE_TEXTS.proto, ...["engine_unsupported", "bad_request", "not_implemented"].map((code) => HELPER_CODE_TEXTS[code])];
+    for (const text of texts) {
+      expect(text).toContain("„:1“, reichen „docker compose pull updater“");
+      expect(text).toContain("„@sha256:…“, übernimm die Zeile „image:“");
+      expect(text).toContain("github.com/nodvard/deck/releases/latest");
+      expect(text).toMatch(/[.“]$/);
+    }
+  });
+
   it("not_from_registry erklärt den häufigsten Grund (pull ohne up -d) und was hilft", () => {
     const text = HELPER_CODE_TEXTS.not_from_registry;
     expect(text).toContain("ghcr.io/nodvard/deck");

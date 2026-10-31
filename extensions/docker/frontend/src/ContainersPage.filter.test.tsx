@@ -24,7 +24,7 @@ function images(h2: Record<string, unknown> = {}) {
 
 function setup(body: unknown) {
   window.history.replaceState({}, "", "/ext/docker/matrix?host=h1");
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn(), promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(true),
   };
@@ -102,7 +102,7 @@ const MANY = [
 
 function setupMany(path: string, hosts: Record<string, unknown> = {}, restarts: Record<string, number> = {}) {
   window.history.replaceState({}, "", path);
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn(), promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(true),
   };

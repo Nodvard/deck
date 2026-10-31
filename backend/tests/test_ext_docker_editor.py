@@ -10,13 +10,14 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-from docker_stack_fakes import EXT_DIR, FakeExec, docker_on, ps, real_sftp, result, row  # noqa: F401 - Fixtures
+from docker_stack_fakes import EXT_DIR, FakeExec, FakeSettings, docker_on, ps, real_sftp, result, row  # noqa: F401 - Fixtures
 
 
-@pytest.fixture(autouse=True)
-def _ext_docker_on_path(monkeypatch):
-    monkeypatch.syspath_prepend(str(EXT_DIR / "src"))
-    yield
+@pytest.fixture(autouse=True, scope="module")
+def _ext_docker_on_path():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(EXT_DIR / "src"))
+        yield
     for name in list(sys.modules):
         if name.startswith("nodvard_deck_ext_docker"):
             del sys.modules[name]
@@ -313,8 +314,8 @@ def _setup(tmp_path, fake: FakeExec | None = None):
     fake = fake or FakeExec()
     fake.files[PATH] = OLD
     fake.sftp_server.owners[PATH] = (1000, 1000)
-    hosts = SimpleNamespace(get=lambda host_id: _async(SimpleNamespace(id=host_id) if host_id in ("h1", "h2") else None))
-    ctx = SimpleNamespace(exec=fake, hosts=hosts)
+    hosts = SimpleNamespace(get=lambda host_id: _async(SimpleNamespace(id=host_id, tags=["docker"]) if host_id in ("h1", "h2") else None))
+    ctx = SimpleNamespace(exec=fake, hosts=hosts, settings=FakeSettings())
     store = adopt.AdoptedStacks(tmp_path)
     actions = stack_actions.DockerStackExecutor(ctx, stacks.DockerStacks(ctx, store), store)
     ed = editor.StackEditor(ctx, actions, tmp_path)

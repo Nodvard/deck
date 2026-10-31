@@ -68,7 +68,7 @@ let permissions: Set<string>;
 beforeEach(() => {
   confirmDialog = vi.fn<(message: string) => Promise<boolean>>().mockResolvedValue(true);
   permissions = new Set(["hosts.read", "hosts.execute", "actions.approve:low", "actions.approve:medium", "extensions.manage"]);
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog, promptDialog: vi.fn(),
     hasPermission: (p: string) => permissions.has(p),

@@ -722,6 +722,8 @@ class DockerMaintenanceExecutor:
         self._locks = locks or StackLocks()
 
     async def execute(self, req: ActionRequest) -> ActionResult:
+        from .operate import still_full  # spät: operate hängt über image_apply an diesem Modul
+
         if req.action_type == "docker.stack_restart":
             project = str(req.payload.get("project") or "")
             if not COMPOSE_PROJECT_RE.match(project):
@@ -729,6 +731,8 @@ class DockerMaintenanceExecutor:
             host = await self._ctx.hosts.get(req.host_ref) if req.host_ref else None
             if host is None:
                 return ActionResult(success=False, error="Host nicht gefunden.")
+            if why := await still_full(self._ctx, host):
+                return ActionResult(success=False, error=why)
             with self._locks.hold(host.id, project, "Neustart") as busy:
                 if busy is not None:
                     return ActionResult(success=False, error=busy_text(busy))
@@ -741,6 +745,8 @@ class DockerMaintenanceExecutor:
         host = await self._ctx.hosts.get(req.host_ref)
         if host is None:
             return ActionResult(success=False, error=f"Host '{req.host_ref}' nicht gefunden.")
+        if why := await still_full(self._ctx, host):
+            return ActionResult(success=False, error=why)
         result = await self._ctx.exec.run(host, command, timeout_s=600)
         # Docker schließt mit "Total reclaimed space: 1.2GB": das ist die Nachricht.
         reclaimed = next((line for line in reversed(result.stdout.splitlines()) if "reclaimed" in line.lower()), None)
@@ -787,6 +793,8 @@ class DockerContainerExecutor:
         self._ctx = ctx
 
     async def execute(self, req: ActionRequest) -> ActionResult:
+        from .operate import still_docker, still_full  # spät: operate hängt über image_apply an diesem Modul
+
         verb = _VERBS.get(req.action_type)
         if verb is None:
             return ActionResult(success=False, error=f"Unbekannte Aktion '{req.action_type}'.")
@@ -798,6 +806,10 @@ class DockerContainerExecutor:
         host = await self._ctx.hosts.get(req.host_ref)
         if host is None:
             return ActionResult(success=False, error=f"Host '{req.host_ref}' nicht gefunden.")
+        # Löschen gehört nicht zu „Nur bedienen“; Starten, Stoppen und Neustarten gehen dort über das Hilfsskript.
+        check = still_full if verb == "rm" else still_docker
+        if why := await check(self._ctx, host):
+            return ActionResult(success=False, error=why)
 
         if verb == "stop":
             inspected = await self._ctx.exec.run(host, commands.container_id(name), timeout_s=15)

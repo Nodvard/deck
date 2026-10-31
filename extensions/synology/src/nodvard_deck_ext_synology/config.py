@@ -38,6 +38,12 @@ def password_label(name: str) -> str:
     return f"{PASSWORD_LABEL}:{name}"
 
 
+def device_of(label: str) -> str | None:
+    """Der Kurzname zu einem Passwort-Label, sonst `None` (auch für den alten Eintrag ohne Kurznamen)."""
+    prefix = f"{PASSWORD_LABEL}:"
+    return label.removeprefix(prefix) if label.startswith(prefix) else None
+
+
 def is_valid_name(name: str) -> bool:
     return _NAME.fullmatch(name) is not None
 

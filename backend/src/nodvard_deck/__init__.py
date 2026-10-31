@@ -1,7 +1,4 @@
-"""Nodvard Deck (Paket `nodvard_deck`, alter Name `lattice`): generischer Kern ohne Wissen über einzelne Erweiterungen.
-
-`scripts/check_core_purity.py` prüft das. Der alte Name bleibt als Alias-Paket mit Warnung (`sdk/python/_nodvard_alias.py`).
-"""
+"""Nodvard Deck: generischer Kern ohne Wissen über einzelne Erweiterungen (prüft `scripts/check_core_purity.py`)."""
 
 from .version import __version__
 

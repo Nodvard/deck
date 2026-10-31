@@ -31,6 +31,9 @@ export interface UpdateStatus {
   official_image_name: string;
   helper: boolean;
   release_notes_url?: string | null;
+  /** Zu `latest` liegt eine Freigabe in gültiger Form am Release; ohne sie gibt es kein Update per Knopf. */
+  approved?: boolean;
+  approved_key?: string | null;
 }
 
 /** Was die Karte aus `GET /system/info` nutzt (alles freiwillig). */
@@ -236,6 +239,15 @@ export function applyBlock(status: UpdateStatus, view: HelperView | null, isOwne
     };
   }
   if (!isOwner) return { ok: false, why: "Per Knopf aktualisieren kann nur der Inhaber dieser Installation (Owner)." };
+  if (view.request_options?.includes("digest") && !status.latest_digest) {
+    return { ok: false, why: "Bei der letzten Update-Suche kam keine Prüfsumme für diese Version an. Such erneut nach Updates." };
+  }
+  if (!status.approved) {
+    return {
+      ok: false,
+      why: `Für Version ${target} liegt noch keine gültige Freigabe vor, oder sie ließ sich bei der Suche nicht abrufen. Such später erneut nach Updates; von Hand geht es schon mit der Anleitung unten.`,
+    };
+  }
   const blockedUntil = blockedAfterRollback(view, target);
   if (blockedUntil !== null) {
     return {
@@ -244,6 +256,29 @@ export function applyBlock(status: UpdateStatus, view: HelperView | null, isOwne
     };
   }
   return { ok: true };
+}
+
+/** Die Kennung des Schlüssels in Vierergruppen, so liest sie sich leichter. */
+export function formatKeyId(keyId: string): string {
+  return keyId.match(/.{1,4}/g)?.join(" ") ?? keyId;
+}
+
+/** Wer die Freigabe prüft: der Helfer selbst (`v: 2`) oder, bei einem älteren Helfer, noch niemand. */
+function SignatureLine({ status, view }: { status: UpdateStatus; view: HelperView }) {
+  if (view.request_versions?.includes(2)) {
+    const key = status.approved_key ? ` (Schlüssel ${formatKeyId(status.approved_key)})` : "";
+    return (
+      <p className="text-xs text-white/55" data-testid="helper-signed">
+        Freigabe liegt vor{key}. Ob sie echt ist, prüft der Update-Helfer, bevor er etwas einspielt.
+      </p>
+    );
+  }
+  return (
+    <p className="text-xs text-amber-200/80" data-testid="helper-unsigned">
+      Dein Update-Helfer prüft die Freigabe noch nicht selbst. Hol seine aktuelle Version (Anleitung: deploy/README.md,
+      Abschnitt „Update-Helfer“), dann prüft er vor jedem Update die Signatur.
+    </p>
+  );
 }
 
 /** So lange sperrt der Helfer nach einem Rückweg die verlassene Version (`BLOCK_AFTER_ROLLBACK_S` im Helfer). */
@@ -290,6 +325,7 @@ function HelperSection({ status, sqlite, database }: { status: UpdateStatus; sql
           <ArrowUpCircle size={14} /> Jetzt aktualisieren auf {target}
         </Button>
       )}
+      {block.ok && <SignatureLine status={status} view={view} />}
       {!block.ok && block.why && <p className="text-xs text-white/55" data-testid="helper-why-not">{block.why}</p>}
       {block.ok && confirming && (
         <ConfirmForm
@@ -477,7 +513,7 @@ export function UpdatesCard(): JSX.Element {
               <div className="text-sm">
                 <p>Täglich automatisch nach Updates suchen</p>
                 <p className="mt-0.5 text-xs text-white/45">
-                  Dazu fragt Nodvard Deck einmal am Tag bei GitHub (ghcr.io, dort liegen die Images) nach, welche Versionen es gibt. GitHub sieht dabei
+                  Dazu fragt Nodvard Deck einmal am Tag bei GitHub (ghcr.io, dort liegen die Images, und github.com für die Freigabe) nach, welche Versionen es gibt. GitHub sieht dabei
                   die IP-Adresse deines Anschlusses und den Zeitpunkt; sonst wird nichts übertragen, auch nicht die installierte Version. Wenn du das
                   nicht möchtest, schalte die Suche hier ab. „Jetzt suchen“ geht auch dann, sieht GitHub aber ebenso.
                 </p>
@@ -500,7 +536,7 @@ export function UpdatesCard(): JSX.Element {
           </div>
         ) : (
           <p className="text-xs text-white/45">
-            Tägliche Suche: {status.enabled ? "an" : "aus"} · {CHANNEL_LABELS[status.channel]}. Bei jeder Suche sieht GitHub (ghcr.io) die
+            Tägliche Suche: {status.enabled ? "an" : "aus"} · {CHANNEL_LABELS[status.channel]}. Bei jeder Suche sieht GitHub (ghcr.io, github.com) die
             IP-Adresse und den Zeitpunkt, sonst nichts. Abschalten kann sie, wer Einstellungen ändern darf.
           </p>
         )}

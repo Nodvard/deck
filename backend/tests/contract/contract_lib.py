@@ -1,9 +1,9 @@
-"""Vergleichslogik fuer den oeffentlichen API-/SDK-Vertrag (Nodvard Link).
+"""Vergleichslogik für den öffentlichen API-/SDK-Vertrag (Nodvard Link).
 
-Regel (docs/04-API.md "Kompatibilitaet"): Aenderungen an
-`/api/v1` und am SDK `nodvard_sdk` (alter Name `lattice_sdk`, ein Alias) sind nur abwaertskompatibel.
+Regel (docs/04-API.md "Kompatibilität"): Änderungen an
+`/api/v1` und am SDK `nodvard_sdk` sind nur abwärtskompatibel.
 Dieses Modul baut aus `app.openapi()` bzw. `nodvard_sdk` einen kompakten, stabil sortierten Schnappschuss und
-vergleicht zwei Staende. Es kennt weder die echte App noch pytest -- dadurch lassen sich
+vergleicht zwei Stände. Es kennt weder die echte App noch pytest -- dadurch lassen sich
 alle Regeln mit kleinen Fake-Schemas testen (`test_contract_lib.py`).
 
 Ein Schnappschuss-Knoten (`node`) beschreibt einen Wert grob:
@@ -360,22 +360,10 @@ def _describe_sdk_obj(obj: Any) -> dict[str, Any]:
     return {"art": "konstante"}
 
 
-SDK_PACKAGES = ("nodvard_sdk", "lattice_sdk")
-"""Importnamen des SDK: der neue und der alte (`lattice_sdk` ist ein Alias, siehe sdk/python/lattice_sdk/).
-Beide kommen in den Schnappschuss: Der alte Name muss dieselbe Oberflaeche liefern wie vor der Umbenennung,
-und eine versehentlich entfernte Alias-Zeile faellt als Bruch auf (`sdk_name_entfernt`)."""
-
-
-def build_sdk_snapshot(packages: tuple[str, ...] = SDK_PACKAGES) -> dict[str, Any]:
-    """Oeffentliche Namen: `__all__` des Pakets sowie je Top-Level-Modul die dort
-    definierten oeffentlichen Klassen/Funktionen und GROSS geschriebene Konstanten --
-    unter jedem der Importnamen (`nodvard_sdk` und der alte Name `lattice_sdk`)."""
-    names: dict[str, Any] = {}
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)  # der alte Importname warnt absichtlich
-        for package in packages:
-            names.update(build_sdk_snapshot_from(importlib.import_module(package), label=package)["names"])
-    return {"format": FORMAT_VERSION, "names": dict(sorted(names.items()))}
+def build_sdk_snapshot() -> dict[str, Any]:
+    """Öffentliche Namen von `nodvard_sdk`: `__all__` des Pakets sowie je Top-Level-Modul die dort definierten
+    öffentlichen Klassen/Funktionen und GROSS geschriebene Konstanten."""
+    return build_sdk_snapshot_from(importlib.import_module("nodvard_sdk"))
 
 
 def _legacy_aliases(obj: Any) -> dict[str, str]:
@@ -390,18 +378,16 @@ def _silently(obj: Any, name: str) -> Any:
         return getattr(obj, name)
 
 
-def build_sdk_snapshot_from(pkg: Any, label: str | None = None) -> dict[str, Any]:
-    """`label`: unter welchem Importnamen das Paket aufgelistet wird (Standard: sein eigener Name). Beim Alias
-    `lattice_sdk` ist `pkg.__name__` der echte Name (`nodvard_sdk`), die Schluessel tragen aber den Alias-Namen:
-    So steht im Schnappschuss, was ueber den alten Importnamen erreichbar ist."""
-    label = label or pkg.__name__
+def build_sdk_snapshot_from(pkg: Any) -> dict[str, Any]:
+    """Der Schnappschuss eines SDK-Pakets, mit den alten Namen aus `_LEGACY_NAMES` seiner Module."""
+    label = pkg.__name__
     names: dict[str, Any] = {}
     for name in pkg.__all__:
         names[f"{label}.{name}"] = _describe_sdk_obj(_silently(pkg, name))
     for info in pkgutil.iter_modules(pkg.__path__):
-        if info.name.startswith("_"):  # privater Unterbau (z. B. `_legacy`) ist nicht Teil des Vertrags
+        if info.name.startswith("_"):  # privater Unterbau ist nicht Teil des Vertrags
             continue
-        mod = importlib.import_module(f"{label}.{info.name}")  # beim Alias geht das ueber den Alias-Finder
+        mod = importlib.import_module(f"{label}.{info.name}")
         for name, obj in vars(mod).items():
             if name.startswith("_"):
                 continue
@@ -462,10 +448,17 @@ def load_exceptions(path: Path = EXCEPTIONS_FILE) -> list[dict[str, str]]:
     return entries
 
 
+def _path_matches(pattern: str, brk: Break) -> bool:
+    """Gleicher Pfad; ein SDK-Pfad mit `.*` am Ende gilt für jeden Namen unter diesem Modul."""
+    if pattern == brk.pfad:
+        return True
+    return brk.methode == SDK_METHOD and pattern.endswith(".*") and brk.pfad.startswith(pattern[:-1])
+
+
 def is_excepted(brk: Break, exceptions: list[dict[str, str]]) -> bool:
     """Eine Ausnahme passt auf Pfad + Methode + Art; mit `ziel` nur auf genau dieses Ziel."""
     return any(
-        e["pfad"] == brk.pfad
+        _path_matches(e["pfad"], brk)
         and e["methode"].upper() == brk.methode
         and e["art"] == brk.art
         and e.get("ziel", brk.ziel) == brk.ziel

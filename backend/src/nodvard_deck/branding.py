@@ -78,8 +78,8 @@ def clean_support_url(value: str | None) -> str | None:
 
 
 def is_local_image_url(value: str) -> bool:
-    """Logo und Favicon: nur ein Bild von diesem Server oder `data:image/…`. Die App-Seite soll Bilder nur von dort
-    laden (`img-src 'self' data: blob:`, vorerst als `main.SPA_CSP_REPORT_ONLY` nur gemeldet)."""
+    """Logo und Favicon: nur ein Bild von diesem Server oder `data:image/…`, weil die App-Seite Bilder nur von dort lädt
+    (`img-src` in `main.SPA_CSP`)."""
     return is_local_url(value) and (value[:5].lower() != "data:" or value[5:11].lower() == "image/")
 
 

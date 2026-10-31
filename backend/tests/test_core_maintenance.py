@@ -1,25 +1,19 @@
-"""Wartungsfenster (docs/03-DATA-MODEL.md §9) -- die symmetrische
-Unterdrueckungspruefung, isoliert von services.notifications getestet."""
+"""Wartungsfenster (docs/03-DATA-MODEL.md §9): die symmetrische Unterdrückungsprüfung, ohne services.notifications."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
+from window_helpers import window
 
 from nodvard_deck.config import LOCAL_TIMEZONE
 from nodvard_deck.core import maintenance
-from nodvard_deck.db import utcnow
 from nodvard_deck.models import Job
 from nodvard_deck.services import settings as settings_service
 
-
-def _cron_for(dt) -> str:  # noqa: ANN001 - datetime
-    # Der Zeitplan-Waehler meint Ortszeit (wie bei Jobs), also den Cron aus der
-    # Berliner Uhrzeit bauen, nicht aus UTC.
-    local = dt.astimezone(ZoneInfo(LOCAL_TIMEZONE))
-    return f"{local.minute} {local.hour} * * *"
+pytestmark = pytest.mark.usefixtures("window_clock")
 
 
 @pytest.mark.asyncio
@@ -29,42 +23,26 @@ async def test_no_windows_configured_means_never_suppressed(db_session):
 
 @pytest.mark.asyncio
 async def test_currently_active_window_suppresses(db_session):
-    start = utcnow() - timedelta(minutes=10)
-    await settings_service.set_global(
-        db_session, "maintenance.windows",
-        [{"cron": _cron_for(start), "duration_minutes": 60, "host_ids": "all"}],
-    )
+    await settings_service.set_global(db_session, "maintenance.windows", [window(minutes_ago=10)])
     assert await maintenance.is_in_window(db_session, host_id="host-1") is True
 
 
 @pytest.mark.asyncio
 async def test_window_in_the_past_beyond_duration_does_not_suppress(db_session):
-    start = utcnow() - timedelta(minutes=120)
-    await settings_service.set_global(
-        db_session, "maintenance.windows",
-        [{"cron": _cron_for(start), "duration_minutes": 60, "host_ids": "all"}],
-    )
+    await settings_service.set_global(db_session, "maintenance.windows", [window(minutes_ago=120)])
     assert await maintenance.is_in_window(db_session, host_id="host-1") is False
 
 
 @pytest.mark.asyncio
 async def test_window_scoped_to_specific_hosts(db_session):
-    start = utcnow() - timedelta(minutes=5)
-    await settings_service.set_global(
-        db_session, "maintenance.windows",
-        [{"cron": _cron_for(start), "duration_minutes": 60, "host_ids": ["host-a"]}],
-    )
+    await settings_service.set_global(db_session, "maintenance.windows", [window(["host-a"])])
     assert await maintenance.is_in_window(db_session, host_id="host-a") is True
     assert await maintenance.is_in_window(db_session, host_id="host-b") is False
 
 
 @pytest.mark.asyncio
 async def test_notification_without_host_id_is_never_suppressed_even_during_all_window(db_session):
-    start = utcnow() - timedelta(minutes=5)
-    await settings_service.set_global(
-        db_session, "maintenance.windows",
-        [{"cron": _cron_for(start), "duration_minutes": 60, "host_ids": "all"}],
-    )
+    await settings_service.set_global(db_session, "maintenance.windows", [window()])
     assert await maintenance.is_in_window(db_session, host_id=None) is False
 
 
@@ -83,33 +61,20 @@ async def test_malformed_window_entries_do_not_crash_or_block(db_session):
 
 @pytest.mark.asyncio
 async def test_suppression_is_symmetric_regardless_of_notification_content(db_session):
-    """Der dokumentierte Bestandsfehler war eine Asymmetrie zwischen 'offline'- und
-    'online'-Meldungen -- `is_in_window()` kennt den INHALT der Benachrichtigung gar
-    nicht, kann sie also strukturell nicht unterschiedlich behandeln."""
-    start = utcnow() - timedelta(minutes=5)
-    await settings_service.set_global(
-        db_session, "maintenance.windows",
-        [{"cron": _cron_for(start), "duration_minutes": 60, "host_ids": "all"}],
-    )
-    # is_in_window() nimmt nur host_id entgegen -- "offline" vs. "online" existiert
-    # als Unterscheidung auf dieser Ebene schlicht nicht.
+    """`is_in_window()` kennt den Inhalt der Meldung nicht, behandelt „offline“ und „online“ also gleich."""
+    await settings_service.set_global(db_session, "maintenance.windows", [window()])
     assert await maintenance.is_in_window(db_session, host_id="host-1") is True
     assert await maintenance.is_in_window(db_session, host_id="host-1") is True
 
 
 async def _set_running_windows(db_session, *host_scopes) -> None:
-    """Je Eintrag ein gerade laufendes Fenster (vor 5 Minuten gestartet) fuer diese Server."""
-    start = utcnow() - timedelta(minutes=5)
-    await settings_service.set_global(
-        db_session, "maintenance.windows",
-        [{"cron": _cron_for(start), "duration_minutes": 60, "host_ids": scope} for scope in host_scopes],
-    )
+    """Je Eintrag ein gerade laufendes Fenster für diese Server."""
+    await settings_service.set_global(db_session, "maintenance.windows", [window(scope) for scope in host_scopes])
 
 
 @pytest.mark.asyncio
 async def test_collective_notification_is_silenced_only_when_every_host_is_in_a_running_window(db_session):
-    """Sammelmeldung ueber mehrere Server (`host_ids`): still nur, wenn JEDER Server
-    im Fenster liegt. Ein Server ausserhalb macht sie hoerbar."""
+    """Sammelmeldung über mehrere Server (`host_ids`): still nur, wenn jeder Server im Fenster liegt."""
     await _set_running_windows(db_session, ["host-a", "host-b"])
     assert await maintenance.is_in_window(db_session, host_id=None, host_ids=["host-a", "host-b"]) is True
     assert await maintenance.is_in_window(db_session, host_id=None, host_ids=["host-a"]) is True
@@ -131,17 +96,13 @@ async def test_collective_notification_under_an_all_hosts_window_is_silenced(db_
 
 @pytest.mark.asyncio
 async def test_collective_notification_outside_any_running_window_stays_audible(db_session):
-    start = utcnow() - timedelta(minutes=120)
-    await settings_service.set_global(
-        db_session, "maintenance.windows",
-        [{"cron": _cron_for(start), "duration_minutes": 60, "host_ids": "all"}],
-    )
+    await settings_service.set_global(db_session, "maintenance.windows", [window(minutes_ago=120)])
     assert await maintenance.is_in_window(db_session, host_id=None, host_ids=["host-a", "host-b"]) is False
 
 
 @pytest.mark.asyncio
 async def test_empty_host_list_is_never_suppressed(db_session):
-    """Ohne Server kein Bezug -- auch kein leeres `all([])`, das alles still schaltete."""
+    """Ohne Server kein Bezug, auch kein leeres `all([])`, das alles still schaltete."""
     await _set_running_windows(db_session, "all")
     assert await maintenance.is_in_window(db_session, host_id=None, host_ids=[]) is False
     assert await maintenance.is_in_window(db_session, host_id=None, host_ids=None) is False
@@ -156,8 +117,7 @@ async def test_single_host_id_takes_precedence_over_the_list(db_session):
 
 @pytest.mark.asyncio
 async def test_window_with_a_text_instead_of_a_host_list_covers_no_host(db_session):
-    """Ein kaputter Eintrag ('host_ids': 'some') darf nicht ueber Teilstring-Treffer
-    ('host-a' in 'some-host-a') einen Server erfassen."""
+    """Ein kaputter Eintrag (`'host_ids': 'some'`) erfasst keinen Server über einen Teilstring-Treffer."""
     await _set_running_windows(db_session, "some-host-a")
     assert await maintenance.is_in_window(db_session, host_id="host-a") is False
     assert await maintenance.is_in_window(db_session, host_id=None, host_ids=["host-a"]) is False

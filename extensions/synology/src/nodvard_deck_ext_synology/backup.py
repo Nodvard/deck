@@ -41,11 +41,13 @@ MILD_FAILURES = frozenset({"partial", "version_delete_failed"})
 BROKEN_STATES = {
     "unauth": "Das Ziel verlangt eine neue Anmeldung.",
     "broken": "Die Sicherung am Ziel ist beschädigt.",
-    "error_detect": "Hyper Backup hat am Ziel einen Fehler gefunden.",
     "relinkable": "Die Aufgabe muss in Hyper Backup neu mit dem Ziel verbunden werden.",
     "endofservice": "Der Dienst am Ziel wird nicht mehr angeboten.",
     "restore_only": "Die Aufgabe kann nur noch wiederherstellen, nicht mehr sichern.",
 }
+# Zustand, solange Hyper Backup die Aufgabe prüft -> Anzeige. `error_detect` ist laut Rückmeldung die
+# Integritätsprüfung (intern „error detection“); findet sie etwas, folgt `broken` oder `restore_only`.
+ACTIVE_STATES = {"error_detect": "Integritätsprüfung läuft"}
 
 # Ein geplanter Lauf gilt als ausgeblieben, wenn sein Termin so lange vorbei ist.
 MISSED_AFTER = timedelta(hours=6)
@@ -60,12 +62,21 @@ def date_text(moment: datetime) -> str:
     return moment.strftime("%d.%m.%Y, %H:%M")
 
 
+def _state(status: BackupStatus) -> str:
+    return (status.state or "").lower()
+
+
 def is_running(status: BackupStatus) -> bool:
     return (status.status not in (None, "none")) or status.last_result == "backingup"
 
 
+def is_checking(status: BackupStatus) -> bool:
+    """Ob Hyper Backup die Aufgabe gerade prüft; ein Fehler des letzten Laufs bleibt dabei bestehen."""
+    return _state(status) in ACTIVE_STATES
+
+
 def state_problem(status: BackupStatus) -> str | None:
-    return BROKEN_STATES.get((status.state or "").lower())
+    return BROKEN_STATES.get(_state(status))
 
 
 def failure_text(status: BackupStatus) -> str | None:
@@ -78,7 +89,7 @@ def failure_text(status: BackupStatus) -> str | None:
 
 def overdue_reason(status: BackupStatus, now: datetime, slack: timedelta = timedelta(0)) -> str | None:
     """Warum eine Aufgabe überfällig ist; `None`, wenn sie es nicht ist oder gerade läuft. `slack` verlängert die Fristen."""
-    if is_running(status):
+    if is_running(status) or is_checking(status):
         return None
     if status.next_run is not None and now - status.next_run > MISSED_AFTER + slack:
         return f"Der geplante Lauf vom {date_text(status.next_run)} hat nicht stattgefunden."
@@ -103,15 +114,20 @@ def build_task(entry: TaskEntry, status: BackupStatus | None, now: datetime, sla
     running = is_running(status)
     label, tone = RESULTS.get((status.last_result or "").lower(), (status.last_result or "Unbekannt", "neutral"))
     reason = overdue_reason(status, now, slack)
-    problem = state_problem(status) or failure_text(status) or reason
+    failure = failure_text(status)
+    problem = state_problem(status) or failure or reason
     if state_problem(status) is not None:
         tone = "danger"
     elif reason is not None and tone in ("good", "neutral"):
         tone = "warn"
     if running:
         label, tone = "Läuft gerade", "neutral"
+    elif is_checking(status) and failure is None:
+        label, tone = ACTIVE_STATES[_state(status)], "neutral"
+    # Für den Wächter zählt die Prüfung als laufend: Bis sie fertig ist, gibt es kein „überfällig“ und keine Entwarnung.
     return BackupTask(
-        id=entry.id, name=entry.name, state=status.state, running=running, last_result=status.last_result,
+        id=entry.id, name=entry.name, state=status.state, running=running or is_checking(status),
+        last_result=status.last_result,
         result_label=label, tone=tone, last_run=iso(status.last_run), last_success=iso(status.last_success),
         next_run=iso(status.next_run), overdue=reason is not None, problem=problem,
     )

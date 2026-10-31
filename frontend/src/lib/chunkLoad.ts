@@ -18,8 +18,6 @@ export function loadOnce<T>(load: () => Promise<T>): () => Promise<T> {
 }
 
 const RELOAD_KEY = "nodvard-deck:chunk-reload-at";
-/** Alter Name, gilt weiter (Übergang): ein Tab, der vor einem Update schon neu geladen hat, kennt nur ihn. */
-const LEGACY_RELOAD_KEY = "lattice:chunk-reload-at";
 /** So lange nach einem automatischen Neuladen wird nicht noch einmal neu geladen. */
 export const CHUNK_RELOAD_GUARD_MS = 60_000;
 
@@ -45,16 +43,9 @@ export function installChunkReload(
   const onPreloadError = () => {
     try {
       const store = storage();
-      // Beide Namen lesen (der jüngere gilt): Hat ein Tab mit dem alten Build kurz vorher schon neu geladen, steht die
-      // Sperre nur unter dem alten Namen. Beide schreiben, damit auch ein zurückgerollter alter Build sie sieht.
-      const last = Math.max(Number(store.getItem(RELOAD_KEY)) || 0, Number(store.getItem(LEGACY_RELOAD_KEY)) || 0);
+      const last = Number(store.getItem(RELOAD_KEY)) || 0;
       if (Math.abs(now() - last) < CHUNK_RELOAD_GUARD_MS) return;
       store.setItem(RELOAD_KEY, String(now()));
-      try {
-        store.setItem(LEGACY_RELOAD_KEY, String(now()));
-      } catch {
-        // Nur Zugabe für den Rollback; die Sperre unter dem neuen Namen steht.
-      }
     } catch {
       return;
     }

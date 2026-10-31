@@ -63,14 +63,12 @@ STARTED_OK_RETRY_S = 60.0
 
 
 SPA_CSP = (
-    "style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'"
+    "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; "
+    "frame-src blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
 )
-"""Stile und Schriften nur vom eigenen Server, auch wenn im CSS der Admins eine fremde Adresse stünde; keine
-Plugins, kein fremdes `<base>`. Dazu kommt `script-src` aus `spa_script_policy()`."""
-
-SPA_CSP_REPORT_ONLY = "img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; frame-src blob:"
-"""Bilder, Verbindungen und Worker nur vom eigenen Server, Rahmen nur für Vorschauen (`blob:`); nur gemeldet
-(Report-Only). Fremde Worker sperrt schon das durchgesetzte `script-src`."""
+"""Alles nur vom eigenen Server, auch wenn im CSS der Admins eine fremde Adresse stünde: Bilder auch aus `data:` und
+`blob:` (Vorschauen), Rahmen nur für die PDF-Vorschau, keine Plugins. `'unsafe-inline'` bei den Stilen braucht xterm
+(Konsole), das zur Laufzeit `<style>`-Elemente anlegt. Dazu kommt `script-src` aus `spa_script_policy()`."""
 
 
 # Auskommentierte Skripte zählen nicht: HTML-Kommentare überspringt der Parser selbst.
@@ -97,12 +95,17 @@ class _InlineScripts(HTMLParser):
 def spa_script_policy(index_html: Path) -> str:
     """`script-src` der App-Seite: nur eigene Dateien und die eingebetteten Skripte der `index.html` über ihre
     Prüfsumme."""
-    parser = _InlineScripts()
     try:
-        parser.feed(index_html.read_text(encoding="utf-8"))
-        parser.close()
+        return _script_policy(index_html.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError):
         return "script-src 'self'"
+
+
+def _script_policy(html: str) -> str:
+    parser = _InlineScripts()
+    # Der Browser rechnet die Prüfsumme über den Text mit LF als Zeilenende, auch wenn die Datei CRLF hat.
+    parser.feed(html.replace("\r\n", "\n").replace("\r", "\n"))
+    parser.close()
     hashes = {
         f"'sha256-{base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()}'"
         for script in parser.scripts
@@ -115,14 +118,24 @@ def spa_script_policy(index_html: Path) -> str:
 class _SpaStaticFiles(StaticFiles):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._policies: dict[str, tuple[int, int, str]] = {}
+        self._policies: dict[str, tuple[bytes, str]] = {}
 
-    def _policy_for(self, full_path: str, stat_result: os.stat_result) -> str:
+    def _policy_for(self, full_path: str) -> str:
+        # Nach dem Inhalt: Auch eine neue `index.html` mit gleicher Größe und Zeit bekommt ihre Prüfsumme.
+        try:
+            content = Path(full_path).read_bytes()
+        except OSError:
+            return f"{SPA_CSP}; script-src 'self'"
+        digest = hashlib.sha256(content).digest()
         known = self._policies.get(full_path)
-        if known is None or known[:2] != (stat_result.st_mtime_ns, stat_result.st_size):
-            known = (stat_result.st_mtime_ns, stat_result.st_size, f"{SPA_CSP}; {spa_script_policy(Path(full_path))}")
+        if known is None or known[0] != digest:
+            try:
+                script = _script_policy(content.decode("utf-8"))
+            except UnicodeDecodeError:
+                script = "script-src 'self'"
+            known = (digest, f"{SPA_CSP}; {script}")
             self._policies[full_path] = known
-        return known[2]
+        return known[1]
 
     def file_response(
         self, full_path: str | os.PathLike[str], stat_result: os.stat_result, scope: Scope, status_code: int = 200
@@ -130,8 +143,7 @@ class _SpaStaticFiles(StaticFiles):
         # Auch an die 304: Der Browser übernimmt deren Kopfzeilen in die gespeicherte Seite.
         response = super().file_response(full_path, stat_result, scope, status_code)
         if os.fspath(full_path).endswith(".html"):
-            response.headers["Content-Security-Policy"] = self._policy_for(os.fspath(full_path), stat_result)
-            response.headers["Content-Security-Policy-Report-Only"] = SPA_CSP_REPORT_ONLY
+            response.headers["Content-Security-Policy"] = self._policy_for(os.fspath(full_path))
         return response
 
     async def get_response(self, path: str, scope: Scope):

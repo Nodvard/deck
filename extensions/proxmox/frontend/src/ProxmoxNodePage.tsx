@@ -224,7 +224,7 @@ function SnapshotsPanel({
       {snaps.map((snap) => (
         <li key={snap.name} className="flex flex-wrap items-center gap-2">
           <span className="font-medium">{snap.name}</span>
-          <span className="opacity-60">{snap.snaptime ? new Date(snap.snaptime * 1000).toLocaleString() : ""}</span>
+          <span className="opacity-60">{snap.snaptime ? new Date(snap.snaptime * 1000).toLocaleString("de-DE") : ""}</span>
           {snap.with_ram && <span className="rounded bg-white/10 px-1 text-[10px]">mit RAM</span>}
           {snap.description && <span className="opacity-60">-- {snap.description}</span>}
           <span className="ml-auto flex gap-1.5">
@@ -313,7 +313,7 @@ function UpdatesSection({ nodes, shieldHref }: { nodes: NodeUpdates[]; shieldHre
             {!n.error && (
               <p className="text-xs opacity-60">
                 Proxmox {n.pve_version ?? "?"} · Kernel {n.running_kernel ?? "?"}
-                {n.last_check ? ` · zuletzt geprüft ${new Date(n.last_check * 1000).toLocaleString()}` : " · noch kein Prüflauf von Proxmox gefunden"}
+                {n.last_check ? ` · zuletzt geprüft ${new Date(n.last_check * 1000).toLocaleString("de-DE")}` : " · noch kein Prüflauf von Proxmox gefunden"}
               </p>
             )}
             {!n.error && n.last_check_ok === false && (
@@ -493,7 +493,7 @@ function TaskRow({ task }: { task: TaskOut }): JSX.Element {
   return (
     <>
       <tr className="cursor-pointer hover:bg-white/5" onClick={() => void toggle()} data-testid={`task-${task.upid}`}>
-        <td className="py-1 whitespace-nowrap opacity-70">{task.starttime ? new Date(task.starttime * 1000).toLocaleString() : ""}</td>
+        <td className="py-1 whitespace-nowrap opacity-70">{task.starttime ? new Date(task.starttime * 1000).toLocaleString("de-DE") : ""}</td>
         <td className="py-1">
           {task.type_label}
           {task.guest_name ? ` · ${task.guest_name}` : task.guest_id ? ` · ${task.guest_id}` : ""}
@@ -988,7 +988,7 @@ function NodeHealthPanel({ hostId }: { hostId: string }): JSX.Element {
             <span>{d.model}</span>
             <span className="opacity-60">
               {d.summary}
-              {d.power_on_hours != null ? ` · ${d.power_on_hours.toLocaleString()} Betriebsstunden` : ""}
+              {d.power_on_hours != null ? ` · ${d.power_on_hours.toLocaleString("de-DE")} Betriebsstunden` : ""}
             </span>
           </li>
         ))}
@@ -1100,7 +1100,7 @@ function MetricsPanel({ hostId }: { hostId: string }): JSX.Element {
       </div>
       <div>
         <dt className="opacity-60">Stand</dt>
-        <dd>{new Date(metrics.sampled_at).toLocaleTimeString()}</dd>
+        <dd>{new Date(metrics.sampled_at).toLocaleTimeString("de-DE")}</dd>
       </div>
     </dl>
   );

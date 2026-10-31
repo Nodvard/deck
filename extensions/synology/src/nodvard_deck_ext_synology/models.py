@@ -78,7 +78,7 @@ class BackupTask(BaseModel):
     id: str
     name: str
     state: str | None = Field(description="Zustand der Aufgabe in DSM, z. B. backupable, unauth, broken.")
-    running: bool = Field(description="Ob gerade gesichert wird.")
+    running: bool = Field(description="Ob gerade gesichert oder geprüft wird.")
     status_read: bool = Field(True, description="Ob sich der Stand der Aufgabe lesen ließ.")
     last_result: str | None = Field(description="Ergebnis des letzten Laufs in DSM, z. B. done, failed, partial.")
     result_label: str = Field(description="Ergebnis oder Zustand auf Deutsch.")

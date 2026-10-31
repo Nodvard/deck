@@ -26,7 +26,7 @@ function mockFetch() {
 beforeEach(() => {
   // Offene Logs und Filter stehen in der Adresszeile -- jeder Test beginnt ohne.
   window.history.replaceState({}, "", "/ext/docker/matrix");
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never,
     ReactDOM: undefined as never,
     ReactJsxRuntime: undefined as never,
@@ -232,7 +232,7 @@ describe("ContainersPage -- Container-Verwaltung", () => {
 
   it("ohne hosts.execute keine Konsole", async () => {
     vi.stubGlobal("fetch", managedFetch([]));
-    (window.__lattice.hasPermission as ReturnType<typeof vi.fn>).mockImplementation((p: string) => p !== "hosts.execute");
+    (window.__nodvardDeck.hasPermission as ReturnType<typeof vi.fn>).mockImplementation((p: string) => p !== "hosts.execute");
     render(<ContainersPage />);
     await screen.findByText("nginx");
     expect(screen.queryByRole("link", { name: "Konsole" })).toBeNull();
@@ -241,7 +241,7 @@ describe("ContainersPage -- Container-Verwaltung", () => {
   it("Löschen fragt nach (als Gefahr) und läuft über den Kern-Aktionsweg", async () => {
     const calls: { url: string; method: string; body?: unknown }[] = [];
     vi.stubGlobal("fetch", managedFetch(calls));
-    const confirm = window.__lattice.confirmDialog as ReturnType<typeof vi.fn>;
+    const confirm = window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>;
     confirm.mockResolvedValue(true);
     render(<ContainersPage />);
     await screen.findByText("worker");
@@ -262,7 +262,7 @@ describe("ContainersPage -- Container-Verwaltung", () => {
       if (url.includes("/widgets/matrix")) return new Response(JSON.stringify({ data: services, meta: {} }), { status: 200 });
       throw new Error(`Unerwarteter Fetch in diesem Test: ${url}`);
     }));
-    const confirm = window.__lattice.confirmDialog as ReturnType<typeof vi.fn>;
+    const confirm = window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>;
     confirm.mockResolvedValue(false);
     render(<ContainersPage />);
     await screen.findByText("worker");
@@ -274,18 +274,18 @@ describe("ContainersPage -- Container-Verwaltung", () => {
   it("ohne Bestätigung wird nichts gelöscht", async () => {
     const calls: { url: string; method: string }[] = [];
     vi.stubGlobal("fetch", managedFetch(calls));
-    (window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    (window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(false);
     render(<ContainersPage />);
     await screen.findByText("worker");
     fireEvent.click(screen.getByRole("button", { name: "Löschen" }));
-    await waitFor(() => expect(window.__lattice.confirmDialog).toHaveBeenCalled());
+    await waitFor(() => expect(window.__nodvardDeck.confirmDialog).toHaveBeenCalled());
     expect(calls.some((c) => c.url.includes("/actions/container.remove"))).toBe(false);
   });
 
   it("nach dem Neustart steht der Satz der Prüfung danach in der Meldung", async () => {
     const calls: { url: string; method: string; body?: unknown }[] = [];
     vi.stubGlobal("fetch", managedFetch(calls, undefined, { success: true, detail: { check: { ok: true, text: "Container läuft stabil." } } }));
-    (window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    (window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     render(<ContainersPage />);
     await screen.findByText("nginx");
     fireEvent.click(screen.getAllByRole("button", { name: "Neustart" })[0]);
@@ -295,7 +295,7 @@ describe("ContainersPage -- Container-Verwaltung", () => {
   it("Neustart geht ueber den Kern-Aktionsweg (Nutzer als Ausloeser) und wird bei Berechtigung freigegeben", async () => {
     const calls: { url: string; method: string; body?: unknown }[] = [];
     vi.stubGlobal("fetch", managedFetch(calls));
-    (window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    (window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     render(<ContainersPage />);
     await screen.findByText("nginx");
 
@@ -311,7 +311,7 @@ describe("ContainersPage -- Container-Verwaltung", () => {
   it("ohne Freigabe-Berechtigung bleibt es beim Vorschlag", async () => {
     const calls: { url: string; method: string }[] = [];
     vi.stubGlobal("fetch", managedFetch(calls));
-    (window.__lattice.hasPermission as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (window.__nodvardDeck.hasPermission as ReturnType<typeof vi.fn>).mockReturnValue(false);
     render(<ContainersPage />);
     await screen.findByText("worker");
 
@@ -503,7 +503,7 @@ describe("ContainersPage -- Container-Verwaltung", () => {
     const calls: { url: string; method: string }[] = [];
     vi.stubGlobal("fetch", dockerFetch(calls));
     const confirmDialog = vi.fn().mockResolvedValue(true);
-    window.__lattice.confirmDialog = confirmDialog;
+    window.__nodvardDeck.confirmDialog = confirmDialog;
     render(<ContainersPage />);
     await screen.findByText("nginx");
     fireEvent.click(screen.getByRole("button", { name: "Docker-Speicher" }));
@@ -519,7 +519,7 @@ describe("ContainersPage -- Container-Verwaltung", () => {
   });
 
   it("ohne hosts.execute kein Docker-Speicher-Knopf", async () => {
-    window.__lattice.hasPermission = vi.fn((p: string) => p !== "hosts.execute");
+    window.__nodvardDeck.hasPermission = vi.fn((p: string) => p !== "hosts.execute");
     vi.stubGlobal("fetch", dockerFetch([]));
     render(<ContainersPage />);
     await screen.findByText("nginx");
@@ -719,7 +719,7 @@ describe("ContainersPage -- Image-Updates", () => {
       expect(summarizeImages({ data, hosts: { h1: okHost } }, false, 1)).toContain("alles aktuell · 1 Server im Modus „Nur bedienen“ nicht geprüft");
       expect(summarizeImages({ data, hosts: { h1: okHost } }, false, 2)).toContain("· 2 Server im Modus „Nur bedienen“ nicht geprüft");
       expect(summarizeImages({ data: {}, hosts: { h1: okHost } }, false, 1)).toBe(
-        `Image-Updates geprüft ${new Date(at).toLocaleString()} · keine laufenden Container · 1 Server im Modus „Nur bedienen“ nicht geprüft`,
+        `Image-Updates geprüft ${new Date(at).toLocaleString("de-DE")} · keine laufenden Container · 1 Server im Modus „Nur bedienen“ nicht geprüft`,
       );
       expect(summarizeImages({ data, hosts: { h1: okHost } }, false)).not.toContain("Nur bedienen");
       expect(summarizeImages(null, false, 1)).toBeNull();
@@ -820,7 +820,7 @@ describe("ContainersPage -- Image-Updates", () => {
   });
 
   it("ohne hosts.execute nur lesen: Badges ja, Knöpfe nein", async () => {
-    window.__lattice.hasPermission = vi.fn((p: string) => p !== "hosts.execute");
+    window.__nodvardDeck.hasPermission = vi.fn((p: string) => p !== "hosts.execute");
     vi.stubGlobal("fetch", imageFetch([], { data: RESULTS, hosts: CHECKED }));
     render(<ContainersPage />);
     await screen.findByText("nginx");
@@ -908,7 +908,7 @@ describe("ContainersPage -- Image-Update einspielen", () => {
   });
 
   it("ohne hosts.execute kein Knopf", async () => {
-    window.__lattice.hasPermission = vi.fn((p: string) => p !== "hosts.execute");
+    window.__nodvardDeck.hasPermission = vi.fn((p: string) => p !== "hosts.execute");
     await open({ data: { "h1:nginx": UPDATE } });
     expect(screen.queryByRole("button", { name: "Einspielen" })).toBeNull();
   });
@@ -1047,7 +1047,7 @@ describe("ContainersPage -- Image-Update einspielen", () => {
   });
 
   it("ohne Freigabe-Recht bleibt es bei 'Vorschlagen' -- kein Freigeben", async () => {
-    window.__lattice.hasPermission = vi.fn((p: string) => !p.startsWith("actions.approve"));
+    window.__nodvardDeck.hasPermission = vi.fn((p: string) => !p.startsWith("actions.approve"));
     const calls = await open({ data: { "h1:nginx": UPDATE } });
     fireEvent.click(screen.getByRole("button", { name: "Einspielen" }));
     expect(await screen.findByText("Ein Admin muss unter „Aktionen“ freigeben.")).toBeInTheDocument();
@@ -1060,7 +1060,7 @@ describe("ContainersPage -- Image-Update einspielen", () => {
   });
 
   it("bei hohem Risiko wird das Freigabe-Recht für 'hoch' geprüft", async () => {
-    window.__lattice.hasPermission = vi.fn((p: string) => p === "hosts.execute" || p === "actions.approve:medium");
+    window.__nodvardDeck.hasPermission = vi.fn((p: string) => p === "hosts.execute" || p === "actions.approve:medium");
     await open({ data: { "h1:nginx": UPDATE }, plan: { ...PLAN, risk: "high" } });
     fireEvent.click(screen.getByRole("button", { name: "Einspielen" }));
     expect(await screen.findByRole("button", { name: "Vorschlagen" })).toBeInTheDocument();
@@ -1168,7 +1168,7 @@ describe("ContainersPage ohne Container", () => {
   });
 
   it("nennt die eingestellte Markierung; ohne Recht keine Links, aber der Text bleibt", async () => {
-    (window.__lattice.hasPermission as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (window.__nodvardDeck.hasPermission as ReturnType<typeof vi.fn>).mockReturnValue(false);
     emptyFetch("container");
     render(<ContainersPage />);
     expect(await screen.findByText(/Markierung „container“/)).toBeInTheDocument();

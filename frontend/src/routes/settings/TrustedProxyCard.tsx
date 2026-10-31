@@ -7,6 +7,7 @@ import { AlertTriangle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { api } from "../../lib/api";
+import { proxyHintText, type UntrustedProxy } from "../../lib/overview";
 import { useAuthStore } from "../../state/auth";
 import { Button, Card, Field, NoticeLine, errorText, inputClass, type Notice } from "./ui";
 
@@ -27,6 +28,8 @@ export interface ConnectionInfo {
   forwarded_headers: boolean;
   trusted_proxies: string[];
   trusted_proxies_source: "setting" | "env";
+  /** Proxys aus dem Heimnetz, die in den letzten 7 Tagen Anfragen weiterleiteten, aber nicht eingetragen sind. */
+  untrusted_proxies?: UntrustedProxy[];
 }
 
 /** Text des Feldes -> Liste (eine Adresse pro Zeile; Kommas und Leerzeichen trennen ebenso). */
@@ -81,6 +84,8 @@ export function connectionLine(info: ConnectionInfo): string {
   if (info.via_trusted_proxy && info.peer) {
     return `Deine Anfrage kommt gerade über deinen Proxy ${info.peer} über ${scheme}.`;
   }
+  // Mit Angaben eines Proxys ist sie nicht direkt, auch wenn er nicht eingetragen ist.
+  if (info.peer && info.forwarded_headers) return `Deine Anfrage kommt gerade von ${info.peer} über ${scheme} und trägt Angaben eines Proxys.`;
   if (info.peer) return `Deine Anfrage kommt gerade von ${info.peer} (direkt) über ${scheme}.`;
   return `Deine Anfrage kommt gerade über eine Verbindung ohne IP-Adresse über ${scheme}.`;
 }
@@ -119,6 +124,10 @@ export function TrustedProxyCard({ settings }: { settings: SettingRow[] }): JSX.
   // die Karte genau diese Adresse vor (ungespeichert).
   const suggest = Boolean(connection && peer && connection.forwarded_headers && !connection.via_trusted_proxy && !locked);
   const suggestedAlready = peer !== null && entries.includes(peer);
+  // Anmeldungen des Inhabers kamen über Proxys, die nicht eingetragen sind. Nur ein Hinweis: Eintragen muss er selbst.
+  const remembered = isOwner
+    ? (connection?.untrusted_proxies ?? []).map((p) => p.address).filter((a) => !(suggest && a === peer))
+    : [];
   const wide = wideNetworks(entries);
 
   async function save() {
@@ -170,6 +179,22 @@ export function TrustedProxyCard({ settings }: { settings: SettingRow[] }): JSX.
             ) : (
               <Button onClick={addPeer}>Diese Adresse eintragen</Button>
             )}
+          </div>
+        )}
+
+        {remembered.length > 0 && (
+          <div
+            role="note"
+            data-testid="untrusted-proxy-hint"
+            className="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100"
+          >
+            <AlertTriangle size={16} className="mt-0.5 flex-none" />
+            <p className="min-w-0 flex-1">
+              {proxyHintText(remembered)}{" "}
+              {fromEnv
+                ? "Die Liste kommt aus NODVARD_DECK_TRUSTED_PROXIES, eintragen geht nur dort."
+                : "Trag nur ein, was wirklich dein Proxy ist. Das Gateway eines Docker-Netzes (oft eine Adresse mit .1 am Ende) nur dann, wenn Port 8080 nicht nach außen freigegeben ist, sonst könnten andere Geräte ihre Adresse fälschen."}
+            </p>
           </div>
         )}
 

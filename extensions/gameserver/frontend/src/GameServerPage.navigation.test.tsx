@@ -41,7 +41,7 @@ beforeEach(() => {
   scrolled = [];
   Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this.id); };
   window.history.replaceState(null, "", "/ext/gameserver/gameservers");
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     // Betrachter: Details ohne Log von der einfachen Route, keine Knöpfe.
     getAccessToken: () => "tok", confirmDialog: vi.fn(), promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(false),

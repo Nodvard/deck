@@ -47,6 +47,64 @@ describe("Karte „Vertrauenswürdiger Proxy“", () => {
     expect(screen.queryByRole("button", { name: "Diese Adresse eintragen" })).not.toBeInTheDocument();
   });
 
+  it("nennt Proxys anderer Anfragen, die nicht eingetragen sind, ohne sie einzutragen", async () => {
+    const seen = new Date().toISOString();
+    mockHostsApi({
+      "GET /system/connection": connection({
+        peer: "192.168.2.40", client: "192.168.2.40",
+        untrusted_proxies: [{ address: "172.18.0.5", last_seen: seen }],
+      }),
+    });
+    render(<TrustedProxyCard settings={rows()} />);
+    const note = await screen.findByTestId("untrusted-proxy-hint");
+    expect(note.textContent).toContain("Anmeldungen kommen über einen Proxy (172.18.0.5), der nicht eingetragen ist.");
+    expect(note.textContent).toContain("Trag nur ein, was wirklich dein Proxy ist.");
+    expect(screen.getByLabelText(FIELD)).toHaveValue("");
+    expect(screen.queryByRole("button", { name: "Diese Adresse eintragen" })).not.toBeInTheDocument();
+  });
+
+  it("nennt die Gegenstelle, auch wenn die eigene Anfrage direkt kommt", async () => {
+    mockHostsApi({
+      "GET /system/connection": connection({ untrusted_proxies: [{ address: "172.18.0.5", last_seen: new Date().toISOString() }] }),
+    });
+    render(<TrustedProxyCard settings={rows()} />);
+    expect((await screen.findByTestId("untrusted-proxy-hint")).textContent).toContain("Proxy (172.18.0.5)");
+    expect(screen.queryByRole("button", { name: "Diese Adresse eintragen" })).not.toBeInTheDocument();
+  });
+
+  it("Hinweis bei einer Liste aus der Umgebungsvariable sagt, wo eingetragen wird", async () => {
+    mockHostsApi({
+      "GET /system/connection": connection({
+        trusted_proxies_source: "env", untrusted_proxies: [{ address: "192.168.2.1", last_seen: new Date().toISOString() }],
+      }),
+    });
+    render(<TrustedProxyCard settings={rows()} />);
+    const note = await screen.findByTestId("untrusted-proxy-hint");
+    expect(note.textContent).toContain("eintragen geht nur dort");
+    expect(note.textContent).not.toContain("Trag nur ein");
+  });
+
+  it("ohne Inhaber-Rechte kein Hinweis", async () => {
+    setUser(["*"], false);
+    mockHostsApi({
+      "GET /system/connection": connection({ untrusted_proxies: [{ address: "192.168.2.1", last_seen: new Date().toISOString() }] }),
+    });
+    render(<TrustedProxyCard settings={rows()} />);
+    expect(await screen.findByText("Deine Anfrage kommt gerade von 172.18.0.5 (direkt) über http.")).toBeInTheDocument();
+    expect(screen.queryByTestId("untrusted-proxy-hint")).not.toBeInTheDocument();
+  });
+
+  it("nennt den Proxy der eigenen Anfrage nicht doppelt", async () => {
+    mockHostsApi({
+      "GET /system/connection": connection({
+        forwarded_headers: true, untrusted_proxies: [{ address: "172.18.0.5", last_seen: new Date().toISOString() }],
+      }),
+    });
+    render(<TrustedProxyCard settings={rows()} />);
+    expect(await screen.findByRole("button", { name: "Diese Adresse eintragen" })).toBeInTheDocument();
+    expect(screen.queryByTestId("untrusted-proxy-hint")).not.toBeInTheDocument();
+  });
+
   it("zeigt die echte Adresse und den Proxy, wenn er eingetragen ist", async () => {
     mockHostsApi({
       "GET /system/connection": connection({ client: "192.168.2.40", scheme: "https", via_trusted_proxy: true, forwarded_headers: true, trusted_proxies: ["172.18.0.5"] }),
@@ -68,7 +126,8 @@ describe("Karte „Vertrauenswürdiger Proxy“", () => {
       },
     });
     render(<TrustedProxyCard settings={rows()} />);
-    expect(await screen.findByText("Deine Anfrage kommt gerade von 172.18.0.5 (direkt) über http.")).toBeInTheDocument();
+    expect(await screen.findByText("Deine Anfrage kommt gerade von 172.18.0.5 über http und trägt Angaben eines Proxys.")).toBeInTheDocument();
+    expect(screen.queryByText(/\(direkt\)/)).not.toBeInTheDocument();
     expect(screen.getByText(/über einen Proxy mit der Adresse 172.18.0.5/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Diese Adresse eintragen" }));
@@ -204,6 +263,10 @@ describe("Karte „Vertrauenswürdiger Proxy“", () => {
   it("Hilfsfunktionen: Liste aus dem Feld und Text der Zeile", () => {
     expect(parseEntries(" 172.18.0.5\n\n192.168.2.0/24, fd00::1 ")).toEqual(["172.18.0.5", "192.168.2.0/24", "fd00::1"]);
     expect(connectionLine(connection({ via_trusted_proxy: true }))).toBe("Deine Anfrage kommt gerade über deinen Proxy 172.18.0.5 über http.");
+    expect(connectionLine(connection())).toBe("Deine Anfrage kommt gerade von 172.18.0.5 (direkt) über http.");
+    expect(connectionLine(connection({ forwarded_headers: true }))).toBe(
+      "Deine Anfrage kommt gerade von 172.18.0.5 über http und trägt Angaben eines Proxys.",
+    );
     expect(connectionLine(connection({ peer: null, client: null, scheme: "https" }))).toBe(
       "Deine Anfrage kommt gerade über eine Verbindung ohne IP-Adresse über https.",
     );

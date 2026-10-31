@@ -4,7 +4,7 @@
     "connections": {
       "type": "array",
       "title": "Plex",
-      "description": "Die Plex-Server, deren Zustand angezeigt wird. Meist genügt einer. Nodvard Deck liest nur, ändert in Plex nichts und spricht nur mit dem hier eingetragenen Server, nie mit plex.tv.",
+      "description": "Die Plex-Server, deren Zustand angezeigt wird. Meist genügt einer. Nodvard Deck liest nur, ändert in Plex nichts und spricht nur mit dem hier eingetragenen Server, nie mit plex.tv. Datenschutz: Alle mit Zugriff auf diese Seiten sehen Benutzernamen, Geräte sowie abgespielte und zuletzt hinzugefügte Titel. Wer das nicht möchte, gibt nur passenden Rollen Zugriff (Nodvard Deck hat Benutzer, Rollen und Rechte).",
       "x-item-title": "Plex",
       "items": {
         "type": "object",

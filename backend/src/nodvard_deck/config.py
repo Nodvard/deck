@@ -27,11 +27,25 @@ ENV_PREFIX = "NODVARD_DECK_"
 """Präfix der Umgebungsvariablen (technischer Name des Dashboards: nodvard_deck)."""
 
 LEGACY_ENV_PREFIX = "LATTICE_"
-"""Alter Name, gilt als Rückfall weiter: Bestehende `.env`-Dateien, Compose-Dateien und Container mit `LATTICE_*` laufen
-unverändert. Ein neuer Name gewinnt immer."""
+"""Alter Name, gilt nur noch übergangsweise (spätestens bis 1.0) als Rückfall, mit Hinweis im Protokoll und für den
+Inhaber in der Übersicht. Ein neuer Name gewinnt immer."""
 
 _warned_legacy: set[str] = set()
 """Alte Namen, über die schon gewarnt wurde (einmal je Prozess und Name)."""
+
+_shadowed_legacy: set[str] = set()
+"""Alte Namen, deren neuer Name ebenfalls gesetzt ist; sie wirken schon jetzt nicht mehr."""
+
+
+def legacy_env_names() -> list[str]:
+    """Die alten Namen (`LATTICE_<FELD>`), die dieser Prozess gelesen hat, sortiert; nur Namen, nie Werte."""
+    return sorted(_warned_legacy)
+
+
+def legacy_env_shadowed() -> set[str]:
+    """Die alten Namen aus `legacy_env_names()`, neben denen schon der neue Name steht."""
+    return _shadowed_legacy & _warned_legacy
+
 
 LOCAL_TIMEZONE = "Europe/Berlin"
 """Rückfall für die Ortszeit, wenn weder Einstellung noch Umgebung eine nennen. Die eingestellte Zone
@@ -54,13 +68,17 @@ def _clean_zone(raw: str | None) -> str | None:
 
 
 class _LegacyNameCollector:
-    """Sammelt die Namen (nie Werte) alter Variablen aus beiden Rückfall-Quellen."""
+    """Sammelt die Namen (nie Werte) alter Variablen aus beiden Rückfall-Quellen und merkt sich, welche davon in der
+    Prozess-Umgebung stehen."""
 
     def __init__(self) -> None:
         self.names: list[str] = []
+        self.from_environment: set[str] = set()
 
-    def add(self, names: list[str]) -> None:
+    def add(self, names: list[str], *, environment: bool = False) -> None:
         self.names.extend(n for n in names if n not in self.names)
+        if environment:
+            self.from_environment.update(names)
 
 
 class _LegacyEnvSource(EnvSettingsSource):
@@ -71,7 +89,7 @@ class _LegacyEnvSource(EnvSettingsSource):
         self._collector = collector
 
     def __call__(self) -> dict[str, Any]:
-        self._collector.add(_present_names(self))
+        self._collector.add(_present_names(self), environment=True)
         return super().__call__()
 
 
@@ -140,24 +158,45 @@ class _SkipEmpty(PydanticBaseSettingsSource):
         return data
 
 
+def _set_under_new_name(name: str, sources: tuple[EnvSettingsSource, ...]) -> bool:
+    field = name.removeprefix(LEGACY_ENV_PREFIX).lower()
+    key = f"{ENV_PREFIX}{field}".lower()
+    for source in sources:
+        value = source.env_vars.get(key)
+        # Wie `_SkipEmpty`: Bei diesen Feldern lässt ein leerer neuer Name den alten weiter wirken.
+        if isinstance(value, str) and (field not in _EMPTY_MEANS_UNSET or value.strip()):
+            return True
+    return False
+
+
 class _LegacyNameReporter(PydanticBaseSettingsSource):
     """Steht als letzte Quelle und liefert nichts; meldet nur einmalig die alten Namen. Die Meldung enthält ausschließlich
     Variablennamen, Werte (z. B. `JWT_SECRET`) dürfen nie im Log landen."""
 
-    def __init__(self, settings_cls: type[BaseSettings], collector: _LegacyNameCollector) -> None:
+    def __init__(
+        self, settings_cls: type[BaseSettings], collector: _LegacyNameCollector, new: tuple[EnvSettingsSource, ...],
+    ) -> None:
         super().__init__(settings_cls)
         self._collector = collector
+        self._new = new
 
     def get_field_value(self, field: Any, field_name: str) -> tuple[Any, str, bool]:  # pragma: no cover
         return None, field_name, False
+
+    def _shadowed(self, name: str) -> bool:
+        # Einen alten Namen aus der Prozess-Umgebung schlägt nur ein neuer aus der Umgebung, nicht einer aus der `.env`.
+        environment, dotenv = self._new
+        sources = (environment,) if name in self._collector.from_environment else (environment, dotenv)
+        return _set_under_new_name(name, sources)
 
     def __call__(self) -> dict[str, Any]:
         new = [n for n in self._collector.names if n not in _warned_legacy]
         if new:
             _warned_legacy.update(new)
+            _shadowed_legacy.update(name for name in new if self._shadowed(name))
             _log.warning(
-                "Alte Umgebungsvariablen gefunden (gelten als Rueckfall weiter, bitte auf %s<NAME> "
-                "umbenennen): %s",
+                "Alte Umgebungsvariablen gefunden (gelten nur noch übergangsweise, spätestens bis 1.0, bitte auf "
+                "%s<NAME> umbenennen): %s",
                 ENV_PREFIX,
                 ", ".join(sorted(new)),
             )
@@ -190,7 +229,7 @@ class Settings(BaseSettings):
             _SkipEmpty(dotenv_settings),
             _SkipEmpty(_LegacyDotEnvSource(settings_cls, collector, dotenv_settings)),
             file_secret_settings,
-            _LegacyNameReporter(settings_cls, collector),
+            _LegacyNameReporter(settings_cls, collector, (env_settings, dotenv_settings)),
         )
 
     env: str = "prod"

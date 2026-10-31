@@ -312,6 +312,47 @@ async def test_a_symlinked_directory_inside_runs_dir_does_not_lead_outside(db_se
 
 
 @pytest.mark.asyncio
+async def test_only_files_directly_in_runs_dir_are_removed(db_session, tmp_path):
+    runs = tmp_path / "runs"
+    (runs / "ordner").mkdir(parents=True)
+    nested = runs / "ordner" / "x.log"
+    nested.write_text("bleibt", encoding="utf-8")
+    await _add(db_session, [_run(None, age_days=60, output_ref=str(nested))])
+
+    result = await _purge(db_session, runs)
+
+    assert result.runs_deleted == 1 and result.files_deleted == 0 and nested.exists()
+
+
+@pytest.mark.asyncio
+async def test_a_nul_in_a_stored_path_does_not_stop_the_purge(db_session, tmp_path):
+    runs = tmp_path / "runs"
+    row = _run(None, age_days=60)
+    path = _log(runs, row["id"])
+    row["output_ref"] = str(path)
+    await _add(db_session, [_run(None, age_days=60, output_ref=str(runs / "a\x00b.log")), row])
+
+    result = await _purge(db_session, runs)
+
+    assert result.runs_deleted == 2 and result.files_deleted == 1 and not path.exists()
+
+
+@pytest.mark.asyncio
+async def test_a_fifo_in_runs_dir_stays(db_session, tmp_path):
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("braucht FIFOs")
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    fifo = runs / "fifo.log"
+    os.mkfifo(fifo)
+    await _add(db_session, [_run(None, age_days=60, output_ref=str(fifo))])
+
+    result = await _purge(db_session, runs)
+
+    assert result.runs_deleted == 1 and result.files_deleted == 0 and fifo.exists()
+
+
+@pytest.mark.asyncio
 async def test_runs_dir_itself_may_be_a_symlink(db_session, tmp_path):
     real = tmp_path / "echt"
     real.mkdir()

@@ -1,11 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GlobalDialogs } from "../components/GlobalDialogs";
 import { useAuthStore } from "../state/auth";
 import { useDialogsStore } from "../state/dialogs";
-import { ActionsPage, expiryText, focusedActionId, RISK_LABEL } from "./ActionsPage";
+import { ActionsPage, expiryText, focusedActionId, isOverdue, RISK_LABEL } from "./ActionsPage";
 
 const HOSTS = [{ id: "h1", display_name: "Proxmox-Knoten pve2" }];
 
@@ -1198,6 +1198,37 @@ describe("Restzeit und Risiko auf Deutsch", () => {
     expect(await screen.findByTestId("expires-a1")).toHaveTextContent("läuft ab in 5 Std.");
     expect(screen.getByText("hoch")).toHaveAttribute("title", "high");
     expect(RISK_LABEL.critical).toBe("kritisch");
+  });
+
+  it("isOverdue gilt nur für offene Vorschläge mit verstrichener Frist", () => {
+    const now = Date.parse("2026-10-08T10:00:00Z");
+    expect(isOverdue({ status: "proposed", expires_at: "2026-10-08T09:59:00Z" }, now)).toBe(true);
+    expect(isOverdue({ status: "proposed", expires_at: "2026-10-08T10:01:00Z" }, now)).toBe(false);
+    expect(isOverdue({ status: "expired", expires_at: "2026-10-08T09:59:00Z" }, now)).toBe(false);
+    expect(isOverdue({ status: "proposed", expires_at: null }, now)).toBe(false);
+    expect(isOverdue({ status: "proposed", expires_at: "kaputt" }, now)).toBe(false);
+  });
+
+  it("ein abgelaufener, noch offener Vorschlag heißt „Abgelaufen“ und lässt sich nur noch verwerfen", async () => {
+    loginAsAdmin();
+    const past = new Date(Date.now() - 60000).toISOString();
+    vi.stubGlobal("fetch", mockFetch(undefined, [
+      { ...PROPOSED_ACTION, risk: "low", expires_at: past },
+      { ...PROPOSED_ACTION, id: "a2", risk: "low" },
+    ]));
+    render(<ActionsPage />);
+    const overdue = (await screen.findByTestId("expires-a1")).closest("tr")!;
+    expect(within(overdue).getByText("Abgelaufen")).toBeInTheDocument();
+    expect(within(overdue).queryByText("Wartet")).not.toBeInTheDocument();
+    expect(within(overdue).queryByRole("button", { name: "Bestätigen" })).not.toBeInTheDocument();
+    expect(within(overdue).queryByRole("button", { name: "Ablehnen" })).not.toBeInTheDocument();
+    expect(within(overdue).getByRole("button", { name: "Verwerfen" })).toBeEnabled();
+    const open = screen.getAllByRole("row").find((row) => row !== overdue && within(row).queryByText("Wartet"))!;
+    expect(within(open).getByRole("button", { name: "Bestätigen" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("Alle auswählen"));
+    expect(screen.getByRole("button", { name: "Ausgewählte freigeben (1)" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Ausgewählte verwerfen (2)" })).toBeEnabled();
   });
 
   it("die Restzeit läuft mit, ohne dass die Liste neu geladen wird", async () => {

@@ -544,8 +544,8 @@ async def test_password_change_with_stale_session_still_signs_out_other_devices(
 
 @pytest.mark.asyncio
 async def test_password_change_after_fresh_login_ends_a_rotated_foreign_chain(client):
-    """Grenze zu Nr. 3 (siehe `_live_session_head`): Wer eine Uebernahme vermutet und sich vor
-    dem Passwortwechsel neu anmeldet, beendet auch eine weitergedrehte fremde Kette."""
+    """Wer eine Übernahme vermutet und sich vor dem Passwortwechsel neu anmeldet, beendet auch eine weitergedrehte
+    fremde Kette (Grenze in `session_chain_end`)."""
     await client.post("/api/v1/auth/bootstrap", json={"username": "nico", "password": "correct-horse-battery", "setup_code": "TEST-CODE-2345"})
     stolen = await client.post(
         "/api/v1/auth/login",

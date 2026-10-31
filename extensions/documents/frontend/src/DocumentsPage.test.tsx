@@ -55,7 +55,7 @@ function mockFetch(overrides: { documents?: unknown[]; onUpload?: (filename: str
 }
 
 beforeEach(() => {
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never,
     ReactDOM: undefined as never,
     ReactJsxRuntime: undefined as never,
@@ -98,7 +98,7 @@ describe("DocumentsPage", () => {
     await screen.findByText("stromrechnung.pdf");
     fireEvent.click(screen.getByRole("button", { name: "Löschen" }));
 
-    await waitFor(() => expect(window.__lattice.confirmDialog).toHaveBeenCalledWith(expect.stringContaining("stromrechnung.pdf"), expect.anything()));
+    await waitFor(() => expect(window.__nodvardDeck.confirmDialog).toHaveBeenCalledWith(expect.stringContaining("stromrechnung.pdf"), expect.anything()));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/documents/doc-1"), expect.objectContaining({ method: "DELETE" })));
   });
 
@@ -231,7 +231,7 @@ describe("DocumentsPage", () => {
   it("benennt ein Dokument über die Rückfrage um", async () => {
     let renamed = "";
     vi.stubGlobal("fetch", mockFetch({ onRename: (n) => (renamed = n) }));
-    window.__lattice.promptDialog = vi.fn().mockResolvedValue("  Strom 2026.pdf ");
+    window.__nodvardDeck.promptDialog = vi.fn().mockResolvedValue("  Strom 2026.pdf ");
     render(<DocumentsPage />);
     await screen.findByText("stromrechnung.pdf");
     fireEvent.click(screen.getByRole("button", { name: "Umbenennen" }));

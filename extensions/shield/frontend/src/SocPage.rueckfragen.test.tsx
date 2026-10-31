@@ -36,7 +36,7 @@ function mockFetch(calls: Call[]) {
 let confirmDialog: Mock<(message: string, opts?: unknown) => Promise<boolean>>;
 beforeEach(() => {
   confirmDialog = vi.fn<(message: string, opts?: unknown) => Promise<boolean>>().mockResolvedValue(false);
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog, promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(true),
   };

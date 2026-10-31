@@ -15,17 +15,15 @@ function useUnmountSignal() {
 
 // ../../../frontend/src/lib/deckGlobal.ts
 var EVENT_PREFIX = "nodvard-deck:";
-var LEGACY_EVENT_PREFIX = "lattice:";
 function findDeck() {
   if (typeof window === "undefined") return void 0;
-  return window.__nodvardDeck ?? window.__lattice;
+  return window.__nodvardDeck;
 }
 function deck() {
   return findDeck();
 }
 function deckEventName(event) {
-  const modern = typeof window !== "undefined" && Boolean(window.__nodvardDeck);
-  return (modern ? EVENT_PREFIX : LEGACY_EVENT_PREFIX) + event;
+  return EVENT_PREFIX + event;
 }
 
 // ../../_shared/frontend/src/api.ts

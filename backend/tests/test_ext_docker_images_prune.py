@@ -2,8 +2,21 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
+from docker_stack_fakes import EXT_DIR
 from test_ext_docker_images import FakeDocker, dg, make
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _ext_docker_on_path():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(EXT_DIR / "src"))
+        yield
+    for name in list(sys.modules):
+        if name.startswith("nodvard_deck_ext_docker"):
+            del sys.modules[name]
 
 
 def _two_hosts(tmp_path):

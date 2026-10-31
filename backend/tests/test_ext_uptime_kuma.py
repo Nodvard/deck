@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import importlib
 import json
 import logging
 import sys
@@ -14,23 +15,28 @@ from typing import Any
 
 import httpx
 import pytest
-from sqlalchemy import select
-
 from nodvard_deck.ext.runtime import get_extension_runtime
 from nodvard_deck.models import AuditEntry, ExtensionRecord
 from nodvard_deck.services import extensions as extensions_service
+from sqlalchemy import select
 
 REPO_EXTENSIONS_DIR = Path(__file__).resolve().parents[2] / "extensions"
-sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "uptime-kuma" / "src"))
 
-from nodvard_deck_ext_uptime_kuma import metrics, statuspage, transport
-from nodvard_deck_ext_uptime_kuma.config import normalize_base_url, read_connections
-from nodvard_deck_ext_uptime_kuma.statuspage import (
-    MAX_OUTAGES,
-    parse_heartbeats,
-    parse_kuma_time,
-    parse_monitors,
-)
+
+class _ExtModule:
+    """Ein Modul der Erweiterung, geladen erst beim Zugriff im Test, wenn die Fixture den Pfad gesetzt hat."""
+
+    def __init__(self, name: str) -> None:
+        self._name = f"nodvard_deck_ext_uptime_kuma.{name}"
+
+    def __getattr__(self, attr: str) -> Any:
+        return getattr(importlib.import_module(self._name), attr)
+
+
+metrics = _ExtModule("metrics")
+statuspage = _ExtModule("statuspage")
+transport = _ExtModule("transport")
+kuma_config = _ExtModule("config")
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "uptime_kuma"
 BASE = "http://kuma.test:3001"
@@ -40,10 +46,9 @@ API = "/api/v1/ext/uptime-kuma"
 
 
 @pytest.fixture(autouse=True)
-def _cleanup_sys_path():
-    before = list(sys.path)
+def _uptime_kuma_on_path(monkeypatch):
+    monkeypatch.syspath_prepend(str(REPO_EXTENSIONS_DIR / "uptime-kuma" / "src"))
     yield
-    sys.path[:] = before
     for name in list(sys.modules):
         if name.startswith(("nodvard_deck_ext_", "lattice_ext_")):
             del sys.modules[name]
@@ -182,9 +187,9 @@ def test_safe_url_drops_credentials_and_query(url, expected):
 
 
 def _page():
-    monitors = parse_monitors(_json("status_page.json"))
+    monitors = statuspage.parse_monitors(_json("status_page.json"))
     assert monitors is not None
-    page = parse_heartbeats(_json("status_heartbeat.json"), monitors)
+    page = statuspage.parse_heartbeats(_json("status_heartbeat.json"), monitors)
     assert page is not None
     return page
 
@@ -212,14 +217,14 @@ def test_status_page_caps_outages_and_shortens_messages():
         beats.append({"status": 0, "time": f"2026-10-12 08:{2 * i:02d}:00.000", "msg": f"Fehler {i}", "ping": None})
         beats.append({"status": 1, "time": f"2026-10-12 08:{2 * i + 1:02d}:00.000", "msg": "", "ping": 5})
     beats[0]["msg"] = "  lang\n" + "x" * 500
-    page = parse_heartbeats({"heartbeatList": {"1": beats}, "uptimeList": {}}, monitors)
+    page = statuspage.parse_heartbeats({"heartbeatList": {"1": beats}, "uptimeList": {}}, monitors)
     assert page is not None
-    assert len(page.outages) == MAX_OUTAGES == 10
+    assert len(page.outages) == statuspage.MAX_OUTAGES == 10
     assert page.outages[0].message == "Fehler 14", "neueste zuerst"
     oldest_kept = page.outages[-1]
     assert oldest_kept.message == "Fehler 5"
     # Die Meldung des ersten Ausfalls wird gekürzt (der steht hier nicht mehr in den zehn neuesten).
-    short = parse_heartbeats({"heartbeatList": {"1": beats[:2]}, "uptimeList": {}}, monitors)
+    short = statuspage.parse_heartbeats({"heartbeatList": {"1": beats[:2]}, "uptimeList": {}}, monitors)
     assert short is not None and len(short.outages[0].message) == statuspage.MESSAGE_LIMIT
     assert short.outages[0].message.startswith("lang xxx")
 
@@ -231,7 +236,7 @@ def test_status_page_beats_are_sorted_even_if_the_server_sends_them_newest_first
         {"status": 0, "time": "2026-10-12 08:01:00.000", "msg": "weg", "ping": None},
         {"status": 1, "time": "2026-10-12 08:00:00.000", "msg": "", "ping": 8},
     ]
-    page = parse_heartbeats({"heartbeatList": {"1": beats}, "uptimeList": {}}, monitors)
+    page = statuspage.parse_heartbeats({"heartbeatList": {"1": beats}, "uptimeList": {}}, monitors)
     assert page is not None
     assert page.last_beat["1"].status == 1 and page.last_beat["1"].ping == 9
     assert [o.message for o in page.outages] == ["weg"]
@@ -240,7 +245,7 @@ def test_status_page_beats_are_sorted_even_if_the_server_sends_them_newest_first
 def test_status_page_uptime_is_clamped_and_garbage_is_ignored():
     monitors = [statuspage.PageMonitor(str(i), f"M{i}") for i in range(1, 6)]
     uptimes = {"1_24": 1.5, "2_24": -0.2, "3_24": float("nan"), "4_24": "kaputt", "5_24": 0.123456}
-    page = parse_heartbeats({"heartbeatList": {}, "uptimeList": uptimes}, monitors)
+    page = statuspage.parse_heartbeats({"heartbeatList": {}, "uptimeList": uptimes}, monitors)
     assert page is not None
     assert page.uptime_by_id == {"1": 100.0, "2": 0.0, "5": 12.35}
 
@@ -256,38 +261,38 @@ def test_status_page_uptime_is_clamped_and_garbage_is_ignored():
     ],
 )
 def test_kuma_time_is_read_as_utc(text, expected):
-    assert parse_kuma_time(text) == expected
+    assert statuspage.parse_kuma_time(text) == expected
 
 
 def test_status_page_rejects_answers_of_the_wrong_shape():
-    assert parse_monitors("kein objekt") is None
-    assert parse_monitors({"config": {}}) is None
-    assert parse_monitors({"publicGroupList": [{"monitorList": [{"id": True, "name": "x"}, "x", {"id": 3}]}, 5]}) == []
-    assert parse_heartbeats({"heartbeatList": []}, []) is None
-    assert parse_heartbeats(None, []) is None
+    assert statuspage.parse_monitors("kein objekt") is None
+    assert statuspage.parse_monitors({"config": {}}) is None
+    assert statuspage.parse_monitors({"publicGroupList": [{"monitorList": [{"id": True, "name": "x"}, "x", {"id": 3}]}, 5]}) == []
+    assert statuspage.parse_heartbeats({"heartbeatList": []}, []) is None
+    assert statuspage.parse_heartbeats(None, []) is None
 
 
 def test_base_url_is_normalized_and_credentials_are_refused():
-    assert normalize_base_url("http://kuma.test:3001/") == "http://kuma.test:3001"
-    assert normalize_base_url(" https://kuma.example.com/kuma/ ") == "https://kuma.example.com/kuma"
-    assert normalize_base_url("http://kuma.test:3001/?x=1#y") == "http://kuma.test:3001"
+    assert kuma_config.normalize_base_url("http://kuma.test:3001/") == "http://kuma.test:3001"
+    assert kuma_config.normalize_base_url(" https://kuma.example.com/kuma/ ") == "https://kuma.example.com/kuma"
+    assert kuma_config.normalize_base_url("http://kuma.test:3001/?x=1#y") == "http://kuma.test:3001"
     # Aus dem Browser kopiert: Seiten der Oberfläche fallen weg, ein Präfix hinter einem Proxy bleibt.
-    assert normalize_base_url("http://203.0.113.10:3001/dashboard") == "http://203.0.113.10:3001"
-    assert normalize_base_url("http://kuma.test/kuma") == "http://kuma.test/kuma"
-    assert normalize_base_url("http://kuma.test:3001/dashboard/12") == "http://kuma.test:3001"
-    assert normalize_base_url("http://kuma.test:3001/manage-status-page") == "http://kuma.test:3001"
-    assert normalize_base_url("http://kuma.test:3001/settings/notifications") == "http://kuma.test:3001"
-    assert normalize_base_url("http://kuma.test:3001/status/heim") == "http://kuma.test:3001"
-    assert normalize_base_url("http://kuma.test:3001/status-page/heim") == "http://kuma.test:3001"
-    assert normalize_base_url("http://kuma.test:3001/metrics") == "http://kuma.test:3001"
-    assert normalize_base_url("https://kuma.example.com/kuma/Dashboard/") == "https://kuma.example.com/kuma"
+    assert kuma_config.normalize_base_url("http://203.0.113.10:3001/dashboard") == "http://203.0.113.10:3001"
+    assert kuma_config.normalize_base_url("http://kuma.test/kuma") == "http://kuma.test/kuma"
+    assert kuma_config.normalize_base_url("http://kuma.test:3001/dashboard/12") == "http://kuma.test:3001"
+    assert kuma_config.normalize_base_url("http://kuma.test:3001/manage-status-page") == "http://kuma.test:3001"
+    assert kuma_config.normalize_base_url("http://kuma.test:3001/settings/notifications") == "http://kuma.test:3001"
+    assert kuma_config.normalize_base_url("http://kuma.test:3001/status/heim") == "http://kuma.test:3001"
+    assert kuma_config.normalize_base_url("http://kuma.test:3001/status-page/heim") == "http://kuma.test:3001"
+    assert kuma_config.normalize_base_url("http://kuma.test:3001/metrics") == "http://kuma.test:3001"
+    assert kuma_config.normalize_base_url("https://kuma.example.com/kuma/Dashboard/") == "https://kuma.example.com/kuma"
     for bad in ("kuma.test:3001", "ftp://kuma.test", "http://", "http://user:" + "pw@kuma.test", "http://@kuma.test", "http://kuma.test:999999", ""):
         with pytest.raises(ValueError):
-            normalize_base_url(bad)
+            kuma_config.normalize_base_url(bad)
 
 
 def test_read_connections_flags_unusable_entries_without_dropping_the_rest():
-    configs = read_connections({"connections": [
+    configs = kuma_config.read_connections({"connections": [
         {"name": "a", "base_url": "http://a.test:3001/", "status_page_slug": "heim", "tls_insecure_skip_verify": True},
         {"name": "a", "base_url": "http://zweite.test"},
         {"name": "b", "base_url": "http://user:" + "pw@b.test"},
@@ -302,7 +307,7 @@ def test_read_connections_flags_unusable_entries_without_dropping_the_rest():
     assert "mehrfach vergeben" in (configs[1].problem or "")
     assert "ungültig" in (configs[2].problem or "") and "pw" not in (configs[2].problem or "")
     assert "Status-Seite" in (configs[3].problem or "")
-    assert read_connections({}) == [] and read_connections({"connections": "x"}) == []
+    assert kuma_config.read_connections({}) == [] and kuma_config.read_connections({"connections": "x"}) == []
 
 
 class _Http:
@@ -722,6 +727,63 @@ async def test_wrong_key_is_rejected_by_the_server_and_shown_as_auth_failed(clie
     assert fake.requests[0].headers["Authorization"] == _basic("falscher-schluessel-0000")
     assert "falscher-schluessel-0000" not in json.dumps(connection)
     assert connection["monitors"] == [] and connection["summary"] is None
+
+
+async def _set_key(client, headers, value: str, name: str = "kuma") -> None:
+    res = await client.put(
+        f"/api/v1/extensions/{EXT}/secrets",
+        json={"current_password": "correct-horse-battery", "label": f"uptime-kuma-key:{name}", "value": value}, headers=headers,
+    )
+    assert res.status_code == 204, res.text
+
+
+@pytest.mark.asyncio
+async def test_a_new_key_in_the_vault_is_used_at_once(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection(slug=""), key="falscher-schluessel-0000")
+    assert _only(await _overview(client, headers))["state"] == "auth_failed"
+    await _set_key(client, headers, KEY)
+    assert _only(await _overview(client, headers))["state"] == "ok", "ohne „Aktualisieren“ und vor Ablauf der 20 Sekunden"
+    assert fake.requests[-1].headers["Authorization"] == _basic()
+
+
+@pytest.mark.asyncio
+async def test_a_changed_secret_touches_only_its_own_connection(client, db_session, test_settings):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection(), _connection(name="kuma2"))
+    await _overview(client, headers)
+    loaded = get_extension_runtime().loaded[EXT]
+    service = loaded.instance._service
+    assert set(service._cache) == {"kuma", "kuma2"}
+    await loaded.instance.on_secret_changed(loaded.ctx, "uptime-kuma-key:kuma2")
+    assert set(service._cache) == {"kuma"}
+    await loaded.instance.on_secret_changed(loaded.ctx, "uptime-kuma-sonstwas")
+    assert set(service._cache) == {"kuma"}
+
+
+@pytest.mark.asyncio
+async def test_an_answer_with_the_old_key_is_not_kept(client, db_session, test_settings):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection())
+    loaded = get_extension_runtime().loaded[EXT]
+    service = loaded.instance._service
+    load, entered, release, loads = service._load, asyncio.Event(), asyncio.Event(), []
+
+    async def slow(cfg, has_key):
+        loads.append(cfg.name)
+        if len(loads) == 1:
+            entered.set()
+            await release.wait()
+        return await load(cfg, has_key)
+
+    service._load = slow
+    first = asyncio.create_task(_overview(client, headers))
+    await entered.wait()
+    await loaded.instance.on_secret_changed(loaded.ctx, "uptime-kuma-key:kuma")
+    release.set()
+    await first
+    await _overview(client, headers)
+    assert loads == ["kuma", "kuma"], "was die Abfrage mit dem alten Schlüssel einträgt, gilt nicht mehr"
 
 
 @pytest.mark.asyncio

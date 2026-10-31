@@ -1,0 +1,18 @@
+@@pm
+apt
+@@list
+demo-foreign/unknown 1.1 i386 [upgradable from: 1.0]
+demo-held/unknown 1.1 all [upgradable from: 1.0]
+demo-keptback/unknown 1.1 all [upgradable from: 1.0]
+demo-normal/unknown 1.1 all [upgradable from: 1.0]
+demo-phased-full/unknown 1.1 all [upgradable from: 1.0]
+demo-phased-newdep/unknown 1.1 all [upgradable from: 1.0]
+demo-phased-two/unknown 1.1 all [upgradable from: 1.0]
+demo-phased/unknown 1.1 all [upgradable from: 1.0]
+@@phasing
+@@security
+@@reboot
+no
+@@unattended
+no
+@@end

@@ -75,6 +75,13 @@ async def session_scope() -> AsyncIterator[AsyncSession]:
             raise
 
 
+async def release_connection(session: AsyncSession) -> None:
+    """Beendet die Transaktion, damit die Pool-Verbindung vor einem langsamen Aufruf (Netz, SSH) frei wird; geladene
+    Objekte bleiben nutzbar. Committet auch Ausstehendes, gehört also hinter reines Lesen."""
+    if session.in_transaction():
+        await session.commit()
+
+
 async def get_session() -> AsyncIterator[AsyncSession]:
     """FastAPI-Dependency: `session: AsyncSession = Depends(get_session)`."""
     async with session_scope() as session:

@@ -235,6 +235,8 @@ def status_view_sync(settings: Settings, *, now: float | None = None) -> dict[st
         "previous": previous,
         "last_result": _last_result(status.doc),
         "pending": _pending(settings, status.doc, current),
+        "request_options": list(doc["request_options"]) if doc else [],
+        "request_versions": list(doc["request_versions"]) if doc else [],
     }
 
 
@@ -277,9 +279,10 @@ def _hit_window() -> None:
         )
 
 
-def _write(settings: Settings, *, action: str, version: str) -> dict[str, Any]:
+def _write(settings: Settings, *, action: str, version: str, digest: str | None = None,
+           grant: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
-        return client.write_request(settings.updater_dir, action=action, version=version)
+        return client.write_request(settings.updater_dir, action=action, version=version, digest=digest, grant=grant)
     except client.ChannelError as exc:
         _request_window.reset()  # es wurde nichts angefordert
         raise HelperRefused(409, "channel_unsafe", "Der Kanal zum Update-Helfer ist nicht sicher eingerichtet.",
@@ -307,8 +310,39 @@ def _check_update(settings: Settings, doc: dict[str, Any], version: str, cached:
     return current
 
 
+NO_DIGEST_TEXT = ("Bei der letzten Update-Suche kam keine Prüfsumme für diese Version an. Suche erneut nach Updates "
+                  "und versuche es dann noch einmal.")
+
+
+def _checked_digest(doc: dict[str, Any], cached: dict[str, Any]) -> str | None:
+    """Der Digest aus der Update-Suche, auf den das Tag beim Ziehen noch zeigen muss; `None` bei einem Helfer, der das
+    nicht prüfen kann (der löst dann nur das Tag auf)."""
+    if "digest" not in doc.get("request_options", []):
+        return None
+    digest = cached.get("latest_digest")
+    if not isinstance(digest, str) or not client.DIGEST_RE.fullmatch(digest):
+        raise HelperRefused(409, "no_digest", NO_DIGEST_TEXT)
+    return digest
+
+
+def _released_grant(settings: Settings, doc: dict[str, Any], version: str,
+                    cached: dict[str, Any]) -> dict[str, Any] | None:
+    """Die Freigabe, die mitgeht (`None` bei einem Helfer, der sie nicht prüft), sonst `409` `not_released` bzw.
+    `no_digest`."""
+    digest = cached.get("latest_digest")
+    if not isinstance(digest, str) or not client.DIGEST_RE.fullmatch(digest):
+        raise HelperRefused(409, "no_digest", NO_DIGEST_TEXT)
+    grant = updates.cached_grant(settings.data_dir, channel=cached.get("channel"), version=version, digest=digest)
+    if grant is None:
+        raise HelperRefused(409, "not_released",
+                            f"Für Version {version} liegt noch keine gültige Freigabe vor, oder sie ließ sich bei der "
+                            "Update-Suche nicht abrufen. Suche erneut nach Updates; von Hand lässt sich die Version "
+                            "schon einspielen.")
+    return grant if client.SIGNED_REQUEST_VERSION in doc["request_versions"] else None
+
+
 async def apply(session: AsyncSession, settings: Settings, *, version: str) -> dict[str, Any]:
-    """Fordert das Update auf `version` an und gibt `{request_id, action, from, to}` zurück oder wirft
+    """Fordert das Update auf `version` an und gibt `{request_id, action, from, to, digest, signed}` zurück oder wirft
     `HelperRefused`."""
     await record_results(settings)  # erst festhalten, was der Helfer schon entschieden hat
     async with _lock("request"):
@@ -316,14 +350,20 @@ async def apply(session: AsyncSession, settings: Settings, *, version: str) -> d
         doc = _require_ready(status)
         cached = await update_check_service.current_status(session, settings)
         current = _check_update(settings, doc, version, cached)
+        digest = _checked_digest(doc, cached)
+        grant = await asyncio.to_thread(_released_grant, settings, doc, version, cached)
+        if grant is not None:
+            digest = grant["grant"]["digest"]
         await asyncio.to_thread(_require_no_pending, settings)
         _hit_window()
-        request = await asyncio.to_thread(_write, settings, action="update", version=version)
+        request = await asyncio.to_thread(_write, settings, action="update", version=version, digest=digest,
+                                          grant=grant)
         entry = {"id": request["id"], "action": "update", "at": request["created_at"], "from": current, "to": version,
                  "data_revert": False, "copy": None}
         await _remember(settings, entry)
-        logger.info("update_requested id=%s to=%s", request["id"], version)
-        return {"request_id": request["id"], "action": "update", "from": current, "to": version}
+        logger.info("update_requested id=%s to=%s digest=%s signed=%s", request["id"], version, digest, bool(grant))
+        return {"request_id": request["id"], "action": "update", "from": current, "to": version, "digest": digest,
+                "signed": grant is not None}
 
 
 def data_plan(settings: Settings, previous_version: str) -> tuple[bool, str | None]:

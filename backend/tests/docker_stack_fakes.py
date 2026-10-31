@@ -30,6 +30,16 @@ def result(stdout: str = "", stderr: str = "", code: int = 0):
     return SimpleNamespace(stdout=stdout, stderr=stderr, exit_code=code, duration_ms=3)
 
 
+class FakeSettings:
+    """Einstellungen des Moduls; ohne Angaben gelten die Vorgaben (Markierung `docker`)."""
+
+    def __init__(self, values: dict | None = None) -> None:
+        self.values = values or {}
+
+    async def get(self) -> dict:
+        return dict(self.values)
+
+
 class FakeExec:
     """Antwortet auf die Befehle des Moduls wie ein Server mit den Stacks aus den Testdaten."""
 
@@ -51,6 +61,8 @@ class FakeExec:
         self.containers: list[dict] = []
         """Für die Mount-Prüfung beim Löschen: je Container `id`, `name`, `project` und `mounts`."""
         self.rm_probe = result("Usage: rm [OPTION]... [FILE]...\n")
+        self.login_uid = 1000
+        """Als wer sich Deck anmeldet (`id -u`); wie der Besitzer der Stack-Ordner in `FakeSftp`."""
         self.sftp_server = FakeSftp(self.files, links=self.links)
         self.modes = self.sftp_server.modes
 
@@ -76,6 +88,8 @@ class FakeExec:
             return result("".join(f"{c['id']}\n" for c in self.containers))
         if argv[:3] == ["docker", "container", "inspect"]:
             return result("".join(json.dumps({k: v for k, v in c.items() if k != "id"}) + "\n" for c in self.containers))
+        if argv == ["id", "-u"]:
+            return result(f"{self.login_uid}\n")
         if argv == ["rm", "--one-file-system", "--help"]:
             return self.rm_probe
         if argv[:2] == ["rm", "-rf"]:
@@ -132,6 +146,7 @@ class FakeSftp:
         self.links = {} if links is None else links
         self.dirs: set[str] = {"/opt", "/opt/stacks", "/opt/stacks/shop", "/home/deck"}
         self.dir_modes: dict[str, int] = {}
+        self.dir_owners: dict[str, tuple[int, int]] = {}
         self.posix_rename_missing = False
         self.chown_denied = False
         self.denied_paths: set[str] = set()
@@ -143,7 +158,8 @@ class FakeSftp:
 
     def _attrs(self, path, follow=False):
         if path in self.dirs:
-            return SimpleNamespace(size=4096, permissions=0o040000 | self.dir_modes.get(path, 0o755), uid=1000, gid=1000)
+            uid, gid = self.dir_owners.get(path, (1000, 1000))
+            return SimpleNamespace(size=4096, permissions=0o040000 | self.dir_modes.get(path, 0o755), uid=uid, gid=gid)
         if path not in self.files:
             raise FileNotFoundError(path)
         uid, gid = self.owners.get(path, (1000, 1000))

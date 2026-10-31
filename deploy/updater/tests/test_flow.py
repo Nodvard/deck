@@ -334,6 +334,34 @@ def test_wrong_pulled_image_changes_nothing(lab, prepare, code):
     assert lab.state().actions == []  # abgelehnt: zählt nicht für die Grenze
 
 
+def test_a_requested_digest_is_pulled_when_the_tag_points_to_it(lab):
+    checked, digest = lab.release("0.7.1")
+    assert outcome_of(lab.run(digest=digest)) == ("applied", None)
+    assert lab.only_deck()["Image"] == checked
+    assert [ref for _kind, ref in lab.mutations("pull")] == [digest]
+
+
+@pytest.mark.parametrize("prepare", [
+    lambda lab: lab.release("0.7.1", tag=None)[1],  # ein anderer Bau derselben Version
+    lambda lab: lab.release("0.7.1", tag=None, Architecture="arm64")[1],  # das Kind-Manifest für arm64
+    lambda lab: "sha256:" + "6" * 64,  # in der Registry unbekannt
+], ids=["anderer_bau", "andere_plattform", "unbekannt"])
+def test_a_requested_digest_the_tag_does_not_point_to_pulls_nothing(lab, prepare):
+    digest = prepare(lab)
+    lab.release("0.7.1")
+    assert outcome_of(lab.run(digest=digest)) == ("refused", policy.DIGEST_CHANGED)
+    assert lab.mutations() == [] and not lab.journal_left()
+    assert lab.only_deck()["Id"] == lab.old_id
+
+
+def test_a_digest_cannot_pick_a_version_the_tag_has_moved_past(lab):
+    _image, between = lab.release("0.7.1", tag=None)
+    lab.release("0.7.2")
+    assert outcome_of(lab.run(version="0.7.1", digest=between)) == ("refused", policy.DIGEST_CHANGED)
+    assert lab.mutations() == []
+    assert outcome_of(lab.run(version="0.7.1")) == ("refused", policy.TAG_NOT_ON_VERSION)
+
+
 @pytest.mark.parametrize("response", [
     Response(chunks=[b'{"status": "Pulling"}\r\n', b'{"errorDetail": {"message": "denied"}, "error": "denied"}\r\n']),
     Response(status=500, body={"message": "Get https://ghcr.io/v2/: dial tcp: i/o timeout"}),

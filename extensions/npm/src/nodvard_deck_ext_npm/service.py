@@ -88,6 +88,11 @@ class NpmService:
             self._npm[1].forget()
             self._npm = None
 
+    async def drop(self) -> None:
+        """Verwirft das gespeicherte Token; der nächste Aufruf meldet sich mit dem aktuellen Passwort neu an."""
+        async with self._npm_lock:
+            self._drop_npm()
+
     async def refresh(self) -> None:
         """Nach dem Speichern der Einstellungen: einen alten Client sofort verwerfen."""
         try:

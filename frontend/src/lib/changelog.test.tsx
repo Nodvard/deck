@@ -78,17 +78,14 @@ describe("Neu-Markierung (useChangelogNotice)", () => {
     expect(screen.getByTestId("probe")).not.toHaveTextContent("NEU");
   });
 
-  it("gemerkt wird unter nodvard-deck.changelogSeen, der alte Schluessel lattice.changelogSeen bleibt unberuehrt", async () => {
+  it("gemerkt wird unter nodvard-deck.changelogSeen", async () => {
     expect(SEEN_KEY).toBe("nodvard-deck.changelogSeen");
-    window.localStorage.setItem("lattice.changelogSeen", "0.3.0|0"); // noch nicht uebernommen (main.tsx macht das beim Start)
     serve(changelog("0.4.0", 1));
     renderProbe();
     await screen.findByText("v0.4.0");
-    // Die Seite liest nur den neuen Schluessel: ohne ihn gilt es als erster Besuch (keine Markierung)...
+    // Ohne gemerkten Stand gilt es als erster Besuch (keine Markierung).
     await waitFor(() => expect(window.localStorage.getItem("nodvard-deck.changelogSeen")).toBe("0.4.0|1"));
     expect(screen.getByTestId("probe")).not.toHaveTextContent("NEU");
-    // ... und den alten fasst sie nicht an.
-    expect(window.localStorage.getItem("lattice.changelogSeen")).toBe("0.3.0|0");
   });
 
   it("gleicher Stand wie beim letzten Besuch: keine Markierung", async () => {

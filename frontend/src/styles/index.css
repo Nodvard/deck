@@ -294,10 +294,9 @@ select option {
   background-color: color-mix(in srgb, var(--color-accent) 14%, transparent);
   color: var(--color-accent-text);
 }
-/* Ziel eines Sprungs von der Server-Seite (`?host=`). Outline statt Rahmen, damit sich die Tabelle nicht verschiebt.
-   `lattice-focus` ist der alte Name und Teil des Erweiterungs-Vertrags; beide stehen bewusst in EINER Regel. */
-.nodvard-deck-focus,
-.lattice-focus {
+/* Ziel eines Sprungs von der Server-Seite (`?host=`), Teil des Erweiterungs-Vertrags. Outline statt Rahmen, damit sich
+   die Tabelle nicht verschiebt. */
+.nodvard-deck-focus {
   background-color: color-mix(in srgb, var(--color-accent) 9%, transparent);
   outline: 1px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
   outline-offset: -1px;

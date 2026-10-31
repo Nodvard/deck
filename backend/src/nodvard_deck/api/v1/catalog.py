@@ -46,6 +46,17 @@ def _group_of(spec: WidgetSpec, category: str | None) -> WidgetGroup:
     return spec.group or _GROUP_BY_CATEGORY.get(category or "", "services")
 
 
+def _view_for(user, view: dict) -> dict:
+    """Die Ansicht ohne Knöpfe, für die der Person ein Recht fehlt (ein Klick darauf endete mit 403)."""
+    def allowed(actions: list[dict]) -> list[dict]:
+        return [action for action in actions if _visible(user, action["permissions"])]
+
+    view = {**view, **{key: allowed(view[key]) for key in ("actions", "row_actions") if key in view}}
+    if isinstance(view.get("item"), dict):
+        view["item"] = {**view["item"], "actions": allowed(view["item"]["actions"])}
+    return view
+
+
 @router.get("/pages")
 async def list_pages(user: CurrentUser) -> list[PageOut]:
     runtime = get_extension_runtime()
@@ -59,11 +70,13 @@ async def list_pages(user: CurrentUser) -> list[PageOut]:
 @router.get("/widgets")
 async def list_widgets(user: CurrentUser) -> list[WidgetOut]:
     runtime = get_extension_runtime()
-    return [
-        WidgetOut(
+    widgets = []
+    for ext_id, spec in runtime.ui.all_widgets():
+        if not _visible(user, spec.permissions):
+            continue
+        data = spec.model_dump()
+        widgets.append(WidgetOut(
             ext_id=ext_id, legacy_ext_ids=runtime.legacy_ids_of(ext_id),
-            **{**spec.model_dump(), "group": _group_of(spec, runtime.category_of(ext_id))},
-        )
-        for ext_id, spec in runtime.ui.all_widgets()
-        if _visible(user, spec.permissions)
-    ]
+            **{**data, "group": _group_of(spec, runtime.category_of(ext_id)), "view": _view_for(user, data["view"])},
+        ))
+    return widgets

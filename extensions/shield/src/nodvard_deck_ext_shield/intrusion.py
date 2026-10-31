@@ -616,6 +616,7 @@ class SetupRun:
     files: dict[str, Any]
     sudoers: dict[str, Any]
     legacy_sudoers: dict[str, Any]
+    removed_sudoers: dict[str, Any] = field(default_factory=dict)
 
 
 def _timestamp(value: Any) -> float:
@@ -641,6 +642,7 @@ def setup_run(metadata: dict[str, Any] | None) -> SetupRun | None:
         start=start, end=end, key=str(run["to"]), user=user if isinstance(user, str) else "",
         actions=frozenset(a for a in actions if isinstance(a, str)) if isinstance(actions, list) else frozenset(),
         files=mapping("files"), sudoers=mapping("sudoers"), legacy_sudoers=mapping("legacy_sudoers"),
+        removed_sudoers=mapping("removed_sudoers"),
     )
 
 
@@ -665,7 +667,8 @@ def adopted_by_setup(change: Change, entry: FileEntry | None, old: dict[str, Any
     """Stammt die Änderung nachweislich von der eigenen Einrichtung? Nur genau das, was der Befehl gemeldet hat:
     Konto-Dateien und die Schlüsseldatei mit dem Stand vorher und nachher (bestätigter Stand = vorher, jetzt = nachher)
     und der passenden Aktion, die eigenen sudo-Regeln mit genau dem Inhalt, den der Kern schreibt, die alte
-    `lattice-<Benutzer>` nur gelöscht. Was nur Rechte oder Besitzer ändert, übernimmt der Wächter nie still."""
+    `lattice-<Benutzer>` und die entfernte volle Regel nur gelöscht. Was nur Rechte oder Besitzer ändert, übernimmt der
+    Wächter nie still."""
     user, path = run.user, change.path
     if not _SETUP_USER_RE.fullmatch(user):
         return False
@@ -674,10 +677,15 @@ def adopted_by_setup(change: Change, entry: FileEntry | None, old: dict[str, Any
     name = path.rsplit("/", 1)[-1]
     if path.startswith("/etc/sudoers.d/"):
         if entry is None:
-            expected = run.legacy_sudoers.get(path)
+            if old is None:
+                return False
+            legacy = run.legacy_sudoers.get(path)
+            if name == f"lattice-{user}" and "legacy_rule_removed" in run.actions and isinstance(legacy, str):
+                return old.get("sha256") == legacy
+            removed = run.removed_sudoers.get(path)
             return (
-                name == f"lattice-{user}" and "legacy_rule_removed" in run.actions
-                and old is not None and isinstance(expected, str) and old.get("sha256") == expected
+                name in (f"nodvard-{user}", f"lattice-{user}") and "full_rule_removed" in run.actions
+                and isinstance(removed, str) and old.get("sha256") == removed
             )
         own = name == f"nodvard-{user}" or re.fullmatch(rf"nodvard_[a-z][a-z0-9-]{{1,63}}_{re.escape(user)}", name)
         expected = run.sudoers.get(path)
@@ -703,6 +711,11 @@ def file_entry_dict(e: FileEntry) -> dict[str, Any]:
 
 
 _JAIL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+# `fail2ban-client set <name> …` liest diese Namen als Einstellung des Servers, nicht als Jail:
+# `set logtarget banip <ip>` legt das Protokoll von Fail2ban auf die Datei `/banip` um.
+_FAIL2BAN_SETTINGS = frozenset({
+    "loglevel", "logtarget", "syslogsocket", "allowipv6", "dbfile", "dbpurgeage", "dbmaxmatches", "thread",
+})
 
 
 def ban_args(ip: str, jail: str = "sshd", *, unban: bool = False) -> list[str]:
@@ -712,9 +725,103 @@ def ban_args(ip: str, jail: str = "sshd", *, unban: bool = False) -> list[str]:
 
 
 def ban_command(ip: str, jail: str = "sshd", *, unban: bool = False) -> str:
-    """Läuft als root, deshalb IP und Jail streng prüfen und quoten."""
+    """Läuft als root, deshalb IP und Jail streng prüfen und quoten; gesperrt werden nur Adressen anderer Rechner."""
     if not _valid_ip(ip):
         raise ValueError("Ungültige IP-Adresse.")
-    if not _JAIL_RE.fullmatch(jail):
+    if not valid_jail(jail):
         raise ValueError("Ungültiger Jail-Name.")
+    if not unban and _never_ban(ipaddress.ip_address(ip)):
+        raise ValueError(BAN_SPECIAL_REFUSED)
     return f"fail2ban-client set {shlex.quote(jail)} {'unbanip' if unban else 'banip'} {shlex.quote(ip)}"
+
+
+BAN_SPECIAL_REFUSED = ("Das ist keine Adresse eines anderen Rechners (etwa 127.0.0.1 oder eine Sammeladresse), "
+                       "Fail2ban kann sie nicht sinnvoll sperren.")
+DECK_SELF_REFUSED = ("Über diese Adresse erreicht Nodvard Deck den Server. Eine Sperre würde Deck aussperren, und "
+                     "entsperren ginge dann nur noch direkt am Server.")
+DECK_ADDRESS_UNKNOWN = ("Nodvard Deck konnte nicht feststellen, über welche Adresse es mit dem Server verbunden ist. "
+                        "Ohne diese Angabe sperrt Shield keine Adresse, damit sich Deck nicht selbst aussperrt. "
+                        "Direkt am Server geht es mit „fail2ban-client set <Jail> banip <Adresse>“.")
+BROWSER_SELF_REFUSED = ("Von dieser Adresse aus nutzt du gerade Nodvard Deck. Eine Sperre könnte dich selbst "
+                        "aussperren, deshalb sperrt Shield sie nicht. Muss sie trotzdem gesperrt werden, dann von "
+                        "einem anderen Rechner aus.")
+NOT_BANNED_NOTE = "Die Adresse war schon nicht mehr gesperrt."
+JAILS_UNKNOWN = ("Shield weiß noch nicht, welche Jails Fail2ban auf diesem Server hat. Bitte zuerst "
+                 "„Alle jetzt prüfen“, dann sperren.")
+JAILS_NONE = "Fail2ban hat auf diesem Server keinen Jail eingeschaltet und kann deshalb nichts sperren."
+# Die Gegenstelle der SSH-Verbindung; OpenSSH führt `SSH_CLIENT` als veraltet, `SSH_CONNECTION` beginnt genauso.
+_SSH_PEER = "${SSH_CLIENT:-${SSH_CONNECTION:-}}"
+# Als angemeldeter Benutzer, nie über sudo: sudo setzt die Umgebung zurück, beide Variablen fehlen dort.
+DECK_ADDRESS_COMMAND = f'peer="{_SSH_PEER}"; printf "%s\\n" "${{peer%% *}}"'
+
+
+def _never_ban(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        # Je nach Python-Version prüft `ipaddress` die eingebettete IPv4-Adresse sonst nicht mit.
+        addr = addr.ipv4_mapped
+    return addr.is_loopback or addr.is_unspecified or addr.is_multicast or addr.is_reserved
+
+
+def canonical_ip(raw: str) -> str:
+    """Die Adresse in der Schreibweise, die Fail2ban und sshd ausgeben (IPv4 auch aus `::ffff:…`); sonst ValueError."""
+    text = raw.strip()
+    if not _valid_ip(text):
+        raise ValueError("Ungültige IP-Adresse.")
+    addr = ipaddress.ip_address(text)
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        return str(addr.ipv4_mapped)
+    return str(addr)
+
+
+def valid_jail(name: object) -> bool:
+    return isinstance(name, str) and _JAIL_RE.fullmatch(name) is not None and name.lower() not in _FAIL2BAN_SETTINGS
+
+
+def forwarded_hosts(values: list[str]) -> list[str]:
+    """Die Adressen aus `X-Forwarded-For` (Kopfzeilen, durch Kommas getrennt), ohne Port; Unlesbares bleibt stehen."""
+    hosts = []
+    for value in values:
+        for entry in (part.strip() for part in value.split(",")):
+            if entry.startswith("[") and "]" in entry:
+                entry = entry[1:entry.index("]")]
+            elif entry.count(":") == 1:
+                entry = entry.partition(":")[0]
+            if entry:
+                hosts.append(entry)
+    return hosts
+
+
+def same_address(a: str, b: str) -> bool:
+    """Ob zwei Adressen derselbe Rechner sind (IPv4 auch als `::ffff:…`); ungültige zählen nie als gleich."""
+    try:
+        return canonical_ip(a) == canonical_ip(b)
+    except ValueError:
+        return False
+
+
+def was_not_banned(exit_code: int | None, output: str) -> bool:
+    """Ob Fail2ban beim Entsperren nichts zu tun hatte: neuere Versionen melden `0` Adressen, ältere einen Fehler."""
+    return "is not banned" in output or (exit_code == 0 and output.strip() == "0")
+
+
+def is_deck_address(ip: str, output: str) -> bool:
+    """Ob `ip` die Adresse ist, über die Deck den Server erreicht (Ausgabe von `DECK_ADDRESS_COMMAND`)."""
+    return same_address(output.strip().partition("%")[0], ip)
+
+
+def deck_address_guard(ip: str) -> str:
+    """Shell-Vorspann vor sudo bzw. dem Hilfsskript: bricht ab, wenn `ip` die Adresse ist, über die Deck verbunden ist,
+    oder sich das nicht feststellen lässt."""
+    ip = canonical_ip(ip)
+    addr = ipaddress.ip_address(ip)
+    # Dropbear schreibt IPv4 bei Dual-Stack als `::ffff:…`, link-lokale IPv6 kommen mit Zone (`fe80::1%eth0`).
+    forms = [shlex.quote(ip)]
+    if addr.version == 4:
+        forms.append(shlex.quote(f"::ffff:{ip}"))
+    elif addr.is_link_local:
+        forms.append(shlex.quote(ip) + "%*")
+    return (
+        f'peer="{_SSH_PEER}"; '
+        f'case "$peer" in "") echo {shlex.quote(DECK_ADDRESS_UNKNOWN)} >&2; exit 5;; esac; '
+        f'case "${{peer%% *}}" in {"|".join(forms)}) echo {shlex.quote(DECK_SELF_REFUSED)} >&2; exit 5;; esac; '
+    )

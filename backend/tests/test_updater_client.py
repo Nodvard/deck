@@ -10,6 +10,7 @@ import stat
 import sys
 import threading
 import time
+import uuid
 
 import pytest
 from nodvard_deck.core import updater_client as client
@@ -252,8 +253,18 @@ def test_constants_match_the_helper_and_the_shared_vectors():
     policy = helper_module("policy")
     channel = helper_module("channel")
     assert client.PROTOCOL == proto["proto"] == policy.PROTOCOL
-    assert [client.REQUEST_VERSION] == proto["request_versions"] == list(policy.REQUEST_VERSIONS)
+    assert proto["request_versions"] == list(policy.REQUEST_VERSIONS)
+    assert [client.REQUEST_VERSION, client.SIGNED_REQUEST_VERSION] == proto["request_versions"]
+    assert list(client.SIGNED_REQUEST_KEYS) == proto["signed_request_keys"] == sorted(policy.SIGNED_REQUEST_KEYS)
+    assert updates.GRANT_KEYS == set(proto["grant_keys"]) == policy.GRANT_KEYS
+    assert updates.GRANT_FORMAT == proto["grant_format"] == policy.GRANT_FORMAT
+    assert updates._KEY_ID_RE.pattern == proto["key_id_pattern"] == policy.KEY_ID_RE.pattern
+    assert updates._SIGNATURE_RE.pattern == proto["signature_pattern"] == policy.SIGNATURE_RE.pattern
+    assert updates.GRANT_CLOCK_SLACK_S == policy.CLOCK_SLACK_S
+    assert updates.GRANT_MAX_S == proto["limits"]["grant_max_s"] == policy.GRANT_MAX_S
     assert list(client.REQUEST_KEYS) == proto["request_keys"] == sorted(policy.REQUEST_KEYS)
+    assert list(client.REQUEST_OPTIONS) == proto["request_options"] == list(policy.REQUEST_OPTIONS)
+    assert client.DIGEST_RE.pattern == policy.DIGEST_RE.pattern
     assert list(client.ACTIONS) == proto["actions"] == list(policy.ACTIONS)
     assert list(client.STATES) == proto["states"] == list(policy.STATES)
     assert list(client.OUTCOMES) == proto["outcomes"] == list(policy.OUTCOMES)
@@ -283,6 +294,36 @@ def test_constants_match_the_helper_and_the_shared_vectors():
     assert proto["repository"] == policy.REPOSITORY == updates.OFFICIAL_IMAGE
 
 
+def _signed_vector() -> tuple[dict, dict]:
+    data = vectors("requests")
+    return data, next(case for case in data["cases"] if case["name"] == "signiertes Update")
+
+
+def test_a_signed_request_is_written_as_the_helper_reads_it():
+    data, case = _signed_vector()
+    policy = helper_module("policy")
+    trust = helper_module("trust")
+    keys = tuple(trust.TrustedKey(key["role"], bytes.fromhex(key["public"])) for key in data["keys"])
+    expect = case["expect"]
+    raw = client.encode_request(request_id=expect["id"], action="update", version=expect["version"],
+                                created_at=expect["created_at"], digest=expect["digest"],
+                                grant={"grant": expect["grant"], "sig": expect["sig"]})
+    assert json.loads(raw) == json.loads(case["raw"])
+    request = policy.parse_request(raw, now=data["now"], file_id=data["file_id"], keys=keys)
+    assert request == policy.Request(**{**expect, "grant": policy.Grant(**expect["grant"])})
+
+
+@pytest.mark.parametrize("changes", [{"digest": "sha256:" + "5e" * 32}, {"digest": None}, {"version": "0.7.1"},
+                                     {"action": "rollback"}, {"sig": "AB" * 64}])
+def test_a_grant_that_does_not_fit_is_never_written(changes):
+    _data, case = _signed_vector()
+    expect = {**case["expect"], "action": "update", **changes}
+    with pytest.raises(ValueError):
+        client.encode_request(request_id=expect["id"], action=expect["action"], version=expect["version"],
+                              created_at=expect["created_at"], digest=expect["digest"],
+                              grant={"grant": expect["grant"], "sig": expect["sig"]})
+
+
 def test_version_vectors_agree():
     data = vectors("versions")
     policy = helper_module("policy")
@@ -308,6 +349,7 @@ def test_status_vectors_valid_are_read_the_same():
         for key in ("state", "ready", "reason", "target", "busy", "previous", "results", "heartbeat_at"):
             assert doc[key] == case["doc"][key], (case["name"], key)
         assert doc["helper_version"] == case["doc"]["helper_version"]
+        assert doc["request_options"] == case["doc"].get("request_options", []), case["name"]
 
 
 STATUS_TOLERATED = {
@@ -316,6 +358,8 @@ STATUS_TOLERATED = {
     # wird `None`, ein kaputtes Ergebnis faellt einzeln weg.
     "Zusatzfeld", "unbekannter Code", "seq negativ", "helper_version kaputt", "busy Schritt unbekannt",
     "Ergebnis outcome unbekannt", "Ergebnis mit Freitext", "Ergebnis Zusatzfeld",
+    # Ein neuerer Helfer darf weitere Felder der Anforderung nennen; das Dashboard schreibt nur die, die es kennt.
+    "request_options unbekannt", "request_options als Text",
 }
 STATUS_REJECTED = {
     "Freitext als Grund", "proto 2", "proto true", "heartbeat_at Kommazahl", "state unbekannt", "ready als Zahl",
@@ -339,6 +383,9 @@ def test_status_vectors_invalid_are_rejected_or_harmless():
             assert needle not in text, (case["name"], needle)
         assert doc["seq"] is None or doc["seq"] >= 0
         assert doc["helper_version"] is None or client.is_version(doc["helper_version"])
+        assert set(doc["request_options"]) <= set(client.REQUEST_OPTIONS)
+        if case["name"] == "request_options als Text":
+            assert doc["request_options"] == []
 
 
 def test_a_request_from_the_dashboard_is_accepted_by_the_real_helper_channel(channel):
@@ -355,9 +402,28 @@ def test_a_request_from_the_dashboard_is_accepted_by_the_real_helper_channel(cha
     assert os.listdir(channel / "requests") == [], "der Helfer hat sie abgeholt"
 
 
+def test_an_update_with_a_digest_is_read_by_the_real_helper_as_written():
+    policy = helper_module("policy")
+    digest = "sha256:" + "4f" * 32
+    data = client.encode_request(request_id=str(uuid.uuid4()), action="update", version="0.7.1", created_at=1790812395,
+                                 digest=digest)
+    assert policy.parse_request(data, now=1790812400).digest == digest
+
+
+@pytest.mark.parametrize(("action", "digest"), [
+    ("rollback", "sha256:" + "4f" * 32), ("update", "sha256:" + "4F" * 32), ("update", "4f" * 32), ("update", ""),
+])
+def test_a_digest_only_goes_with_an_update_and_in_its_exact_form(action, digest):
+    with pytest.raises(ValueError):
+        client.encode_request(request_id=str(uuid.uuid4()), action=action, version="0.7.1", created_at=1790812395,
+                              digest=digest)
+
+
 def test_the_status_written_by_the_real_helper_channel_is_read_back(channel):
     helper_channel = helper_module("channel")
-    doc = status_doc(results=[result()], previous={"version": "0.7.0", "until": int(time.time()) + 600})
+    versions = list(helper_module("policy").REQUEST_VERSIONS)
+    doc = status_doc(request_versions=versions, results=[result()],
+                     previous={"version": "0.7.0", "until": int(time.time()) + 600})
     with helper_channel.Channel(channel, expected_uid=os.getuid()) as writer:
         writer.setup()
         writer.write_status(doc)

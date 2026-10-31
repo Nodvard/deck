@@ -150,7 +150,7 @@ async function enterTotpPassword(password = "geheim123") {
 
 async function toBranding() {
   await toTotp();
-  fireEvent.click(screen.getByRole("button", { name: "Überspringen" }));
+  fireEvent.click(screen.getByRole("button", { name: "Später einrichten" }));
   await screen.findByText(/Schritt 5 von 6/);
 }
 
@@ -478,7 +478,7 @@ describe("SetupPage", () => {
       renderSetup();
       await toModules();
       fireEvent.click(screen.getByRole("switch", { name: "Terminal einschalten" }));
-      expect(await screen.findByText(/„Terminal“ ließ sich nicht einschalten: on_start\(\) fehlgeschlagen/)).toBeInTheDocument();
+      expect(await screen.findByText(/„Terminal“ ließ sich nicht einschalten: Beim Starten des Moduls ist ein Fehler aufgetreten/)).toBeInTheDocument();
       expect(screen.getByRole("switch", { name: "Terminal einschalten" })).toHaveAttribute("aria-checked", "false");
     });
 
@@ -523,8 +523,9 @@ describe("SetupPage", () => {
       expect(panel).toHaveTextContent("CCCCC-DDDDD");
       expect(backend.calls.find((c) => c.path === "/me/totp/confirm")?.body).toEqual({ code: "123456" });
       expect(backend.calls.find((c) => c.path === "/me/totp/setup")?.body).toEqual({ current_password: "geheim123" });
-      // Erst nach „Ich habe die Codes gesichert“ geht es weiter.
+      // Erst nach „Ich habe die Codes gesichert“ geht es weiter; Zwei-Faktor ist jetzt an, also kein „Später“.
       expect(progress()).toMatch(/Schritt 4 von 6/);
+      expect(screen.queryByRole("button", { name: "Später einrichten" })).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Ich habe die Codes gesichert" }));
       await screen.findByText(/Schritt 5 von 6/);
     });
@@ -546,23 +547,52 @@ describe("SetupPage", () => {
       expect(await screen.findByText("Der Code stimmt nicht.")).toBeInTheDocument();
       expect(screen.getByLabelText("Bestätigungscode")).toHaveValue("000000");
       expect(screen.queryByTestId("recovery-codes")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Später einrichten" })).toBeInTheDocument();
     });
 
     it("lässt sich überspringen, ohne etwas einzurichten", async () => {
       const backend = makeBackend();
       renderSetup();
-      await toBranding();
+      await toTotp();
+      expect(screen.getByText("Du kannst das jederzeit unter Einstellungen → Mein Konto nachholen.")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Später einrichten" }));
+      await screen.findByText(/Schritt 5 von 6/);
       expect(backend.count("POST", "/me/totp/setup")).toBe(0);
     });
 
-    it("Abbrechen während der Einrichtung geht zurück zur Auswahl, Zurück zu den Modulen", async () => {
+    it("„Später einrichten“ gibt es auch bei der Passwortabfrage und neben „Bestätigen“", async () => {
+      const backend = makeBackend();
+      renderSetup();
+      await toTotp();
+      fireEvent.click(screen.getByRole("button", { name: "Jetzt einrichten" }));
+      await screen.findByTestId("totp-password");
+      expect(screen.getByText(/jederzeit unter Einstellungen → Mein Konto nachholen/)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Abbrechen" })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Später einrichten" }));
+      await screen.findByText(/Schritt 5 von 6/);
+      expect(backend.count("POST", "/me/totp/setup")).toBe(0);
+
+      fireEvent.click(screen.getByRole("button", { name: "Zurück" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Jetzt einrichten" }));
+      await enterTotpPassword();
+      const row = (await screen.findByRole("button", { name: "Bestätigen" })).parentElement!;
+      expect(within(row).getByRole("button", { name: "Später einrichten" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Abbrechen" })).not.toBeInTheDocument();
+      fireEvent.click(within(row).getByRole("button", { name: "Später einrichten" }));
+      await screen.findByText(/Schritt 5 von 6/);
+      expect(backend.count("POST", "/me/totp/confirm")).toBe(0);
+      fireEvent.click(screen.getByRole("button", { name: "Überspringen" }));
+      expect(await screen.findByRole("link", { name: /Zwei-Faktor jetzt einrichten/ })).toBeInTheDocument();
+    });
+
+    it("Zurück während der Einrichtung geht zur Auswahl, dort Zurück zu den Modulen", async () => {
       makeBackend();
       renderSetup();
       await toTotp();
       fireEvent.click(screen.getByRole("button", { name: "Jetzt einrichten" }));
       await enterTotpPassword();
       await screen.findByTestId("totp-secret");
-      fireEvent.click(screen.getByRole("button", { name: "Abbrechen" }));
+      fireEvent.click(screen.getByRole("button", { name: "Zurück" }));
       expect(await screen.findByRole("button", { name: "Jetzt einrichten" })).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Zurück" }));
       await screen.findByTestId("setup-modules");
@@ -609,6 +639,7 @@ describe("SetupPage", () => {
       makeBackend();
       renderSetup();
       await toBranding();
+      expect(screen.getByText(/jederzeit unter Einstellungen → Darstellung ändern/)).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Überspringen" }));
       expect(await screen.findByText(/Schritt 6 von 6/)).toBeInTheDocument();
     });

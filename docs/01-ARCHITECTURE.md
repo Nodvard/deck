@@ -1,4 +1,4 @@
-# 01 — Architektur
+# 01: Architektur
 
 > Hinweis: Das Produkt heißt **Nodvard Deck**, im Code `nodvard_deck`. Früher hieß es „Lattice“;
 > welche alten Namen weiter gelten und welche bewusst bleiben, steht in [§ Alte und neue Namen](#alte-und-neue-namen).
@@ -31,7 +31,7 @@ Eine Extension importiert `nodvard_sdk`. Der Kern importiert **nie** eine Extens
 kennt keinen Extension-Namen. Der Kern kennt nur *Fähigkeiten* (Protokolle), nie
 *Anbieter*.
 
-Das ist maschinell prüfbar und wird geprüft — `scripts/check_core_purity.py` läuft in CI
+Das ist maschinell prüfbar und wird geprüft: `scripts/check_core_purity.py` läuft in CI
 und schlägt fehl, wenn im Code von `backend/src/nodvard_deck/` ein Wort aus einer Sperrliste
 (`proxmox`, `nexus`, `ollama`, `ntfy`, `nextcloud`, `truenas`, `syncthing`,
 `teleport`, `docker`, dazu `shield` als eigenes Wort) oder das Paket-Präfix der Extensions
@@ -39,7 +39,7 @@ und schlägt fehl, wenn im Code von `backend/src/nodvard_deck/` ein Wort aus ein
 Bindestrich wie `shield-check` nicht; jede dieser Ausnahmen ist in `backend/tests/test_core_purity.py`
 an ihrer Fundstelle belegt.
 Kommentare und Docstrings sind ausgenommen: verboten ist die *Abhängigkeit*, nicht die
-Erwähnung — ein Protokoll darf und soll in seiner Dokumentation Beispiele nennen.
+Erwähnung: ein Protokoll darf und soll in seiner Dokumentation Beispiele nennen.
 
 Die Prüfung läuft automatisch, weil eine Regel allein nicht reicht: Ohne sie erodiert
 die Grenze innerhalb weniger Wochen, weil "nur diese eine Sonderbehandlung" immer
@@ -55,7 +55,7 @@ Erweiterungen teilen, etwa die Server-Auswahl und den Zeitplan-Wähler, liegt im
 
 ## 2. Prozessmodell
 
-**Ein Prozess.** Extensions sind Python-Pakete, die in den Kern-Prozess geladen werden —
+**Ein Prozess.** Extensions sind Python-Pakete, die in den Kern-Prozess geladen werden:
 keine Sidecars, keine Subprozesse, kein gRPC.
 
 Begründung: Zielhardware ist ein Raspberry Pi oder ein kleiner x86-Rechner; ein Prozess pro Extension
@@ -65,7 +65,7 @@ Administrator, der alle Extensions selbst schreibt oder bewusst installiert.
 **Was dazu offen gesagt werden muss:** eine Extension läuft mit den
 vollen Rechten des Kerns. Das Berechtigungsmodell (Manifest-Permissions, siehe
 [02](02-EXTENSION-API.md)) ist eine *Struktur- und Nachvollziehbarkeitsmaßnahme*, keine
-Sandbox — es verhindert Versehen und macht Zugriffe im Audit sichtbar, es hält keinen
+Sandbox. Es verhindert Versehen und macht Zugriffe im Audit sichtbar, es hält keinen
 bösartigen Code auf. Das ist dieselbe Vertrauensposition wie bei WordPress-Plugins,
 Home-Assistant-Custom-Components oder Proxmox-Hooks. Sie muss benannt, nicht versteckt
 werden.
@@ -105,7 +105,8 @@ Context-Implementierung gegen einen RPC-Proxy aus, ohne dass eine Extension sich
 
 **Umgebungsvariablen (Schritt 1).** Jede Einstellung aus `config.py` heißt als Variable
 `NODVARD_DECK_<FELD>` (z. B. `NODVARD_DECK_ENV`, `NODVARD_DECK_DATABASE_URL`). Die früheren
-Namen `LATTICE_<FELD>` gelten als Rückfall weiter. Reihenfolge, vorne gewinnt: Argumente im
+Namen `LATTICE_<FELD>` gelten nur noch übergangsweise als Rückfall; eine der nächsten Versionen, spätestens 1.0, liest
+sie nicht mehr. Reihenfolge, vorne gewinnt: Argumente im
 Code, Umgebung (neu), Umgebung (alt), `.env` (neu), `.env` (alt), Secret-Dateien. Die Prozess-
 Umgebung schlägt also immer die `.env`, und der neue Name schlägt den alten. Beim Start
 steht einmalig eine Warnung im Log, welche alten Namen noch benutzt werden (nur die Namen,
@@ -113,12 +114,12 @@ nie die Werte).
 
 Schritt 5 vor Schritt 6 ist wichtig: das Manifest muss lesbar sein, **ohne** den
 Extension-Code auszuführen. Nur so kann eine deaktivierte oder inkompatible Extension in
-der Registry-UI erscheinen, ohne zu laufen — und nur so kann eine kaputte Extension den
+der Registry-UI erscheinen, ohne zu laufen, und nur so kann eine kaputte Extension den
 Start nicht verhindern.
 
 **Fehlerverhalten:** wirft eine Extension in `setup`/`on_start`, wird sie als
 `state=error` mit der Exception in der Registry markiert und **übersprungen**. Der Kern
-startet trotzdem. Eine defekte Erweiterung darf nie das Dashboard lahmlegen — ein
+startet trotzdem. Eine defekte Erweiterung darf nie das Dashboard lahmlegen: ein
 bekannter Fehlermodus von Dashboards, die Module per Iframe einbinden (ein Iframe-Fehler =
 ein toter Tab).
 
@@ -128,7 +129,7 @@ ein toter Tab).
 
 Jede zustandsverändernde Aktion einer Extension läuft durch **eine** Stelle im Kern.
 Das ist kein Feature von Nodvard Shield, sondern ein Kern-Dienst, den auch das
-Script-Repository, das Gameserver-Modul und der Dateimanager benutzen — es ist bewusst
+Script-Repository, das Gameserver-Modul und der Dateimanager benutzen. Es ist bewusst
 als generischer Baustein angelegt.
 
 ```
@@ -166,7 +167,7 @@ schreibt das Gate `executing` fest und startet den `ActionExecutor` als eigenen
 `asyncio.Task` mit eigener Datenbank-Session (`core/gate.py`, `start_execution`). Die
 HTTP-Anfrage wartet höchstens 20 s darauf und antwortet sonst mit `202 executing`; das
 Ergebnis samt Audit-Zeile schreibt der Task selbst. Er endet immer mit `succeeded` oder
-`failed` — auch wenn der Executor wirft, nach 60 min noch hängt (`EXECUTE_TIMEOUT_S`,
+`failed`, auch wenn der Executor wirft, nach 60 min noch hängt (`EXECUTE_TIMEOUT_S`,
 Notbremse über den Grenzen der Extensions) oder das Dashboard beendet wird. Was ein harter
 Absturz auf `executing` stehen lässt, setzt der Kern beim nächsten Start auf `failed`.
 `ctx.actions.propose()` wartet ohne Angabe bis zum Ende (Hintergrund-Jobs); Extension-Routen
@@ -216,7 +217,7 @@ die auseinanderdriften.
 ## 6. Branding als Konfigurationswert
 
 ```
-GET /api/v1/branding      (ohne Auth — die Login-Seite braucht es)
+GET /api/v1/branding      (ohne Auth, die Login-Seite braucht es)
 → { "product_name": "...", "short_name": "...", "logo_url": "...",
     "favicon_url": "...", "colors": { "accent": "#…", … },
     "login_subtitle": "...", "support_url": "..." }
@@ -229,10 +230,11 @@ Daten-Volume (`branding/`); andere Adressen nimmt `PUT /branding` dafür nur als
 eingebetteten Import-Map aus `index.html` gilt fest (`Content-Security-Policy`, auch auf der Antwort `304`), es läuft
 also kein `javascript:`-Link, kein `onclick=` aus eingeschleustem HTML und kein `eval`. Die Prüfsumme entsteht beim
 Ausliefern und wird neu berechnet, sobald sich `index.html` ändert; ein neues eingebettetes Skript braucht also keine
-Pflege. Bilder (`img-src 'self' data: blob:`), Verbindungen (`connect-src 'self'`, auch die WebSockets), Worker
-(`worker-src 'self'`) und Rahmen (`frame-src blob:`, nur die PDF-Vorschau in Dokumente) meldet der Browser vorerst
-nur (`Content-Security-Policy-Report-Only`), gesperrt wird später. Worker von fremden Adressen oder aus `blob:`
-sperrt schon `script-src`. Was das für Erweiterungs-Bundles heißt, steht in
+Pflege. Alles andere kommt ebenfalls nur vom eigenen Server (`default-src 'self'`, auch Verbindungen und WebSockets);
+Bilder dürfen zusätzlich `data:` und `blob:` sein (`img-src 'self' data: blob:`), Rahmen nur `blob:` (die
+PDF-Vorschau in Dokumente). Stile brauchen `'unsafe-inline'`, weil xterm (Konsole) zur Laufzeit `<style>`-Elemente
+anlegt; Bilder und Schriften aus fremden Adressen sind trotzdem gesperrt. JSON-Antworten ohne eigene Regeln bekommen
+`default-src 'none'`. Was das für Erweiterungs-Bundles heißt, steht in
 [02-EXTENSION-API.md](02-EXTENSION-API.md) unter „Frontend-Bundle laden“. Links aus Daten von
 Erweiterungen (App-Kacheln, Befehlspalette, Widgets, Erweiterungsseiten) nimmt die Oberfläche nur mit `http:` oder
 `https:`, Ziele von Meldungen nur als Pfad im Dashboard (`/…`, nicht `//…`).
@@ -274,21 +276,26 @@ gelten viele alte Namen **parallel** weiter; einige bleiben **bewusst** ganz ste
 wird. Er hat zwei Positivlisten, beide mit Begründung je Eintrag: `KEPT_NAMES` für „Lattice“ und
 `KEPT_SHIELD` für die alte Kennung von Nodvard Shield (dort nennt jeder Eintrag zusätzlich die Dateien, in denen er
 gilt; ein Test prüft, dass jede Angabe noch gebraucht wird). Diese beiden Listen sind maßgeblich. Für die alte Kennung
-des Moduls Docker braucht es keine Liste: Regel 4 verbietet nur das alte Paket und die alten Adressen.
+des Moduls Docker braucht es keine Liste: Die Prüfung auf alte Namen verbietet nur das alte Paket und die alten Adressen.
 
-**Umbenannt – der alte Name funktioniert weiter (Übergang):**
+**Umbenannt: der alte Name funktioniert weiter (Übergang):**
 
 | Neu | Alt | Wie der alte weiterlebt |
 |---|---|---|
-| Python-Paket `nodvard_deck` | `lattice` | `python -m lattice.admin`/`boot`/`migrate`/`rescue` starten weiter (kleine Startdateien) |
-| SDK `nodvard_sdk`, `NodvardExtension`, `NodvardError` | `lattice_sdk`, `LatticeExtension`, `LatticeError` | Alias: dieselben Objekte, `import lattice_sdk` geht weiter |
 | Erweiterungs-Pakete `nodvard_deck_ext_<id>` | `lattice_ext_<id>` | Kein Alias für die eingebauten (der `entrypoint` kommt frisch aus `extension.toml`); fremde Pakete mit altem Namen laden weiter |
-| Entry-Point-Gruppe `nodvard_deck.extensions` | `lattice.extensions` | Wird weiter gelesen |
-| Umgebungsvariablen `NODVARD_DECK_*` | `LATTICE_*` | Rückfall, wenn die neue nicht gesetzt ist |
+| Umgebungsvariablen `NODVARD_DECK_*` | `LATTICE_*` | Rückfall, wenn die neue nicht gesetzt ist; nur noch übergangsweise (spätestens bis 1.0), mit Hinweis für den Inhaber in der Übersicht |
 | Refresh-Cookie `nodvard_deck_refresh` | `lattice_refresh` | Beide werden geschrieben, gelesen und beim Abmelden gelöscht ([04-API](04-API.md)) |
-| Frontend: `window.__nodvardDeck`, Ereignisse `nodvard-deck:*`, CSS `.nodvard-deck-focus` | `window.__lattice`, `lattice:*`, `.lattice-focus` | Laufen parallel ([02-EXTENSION-API](02-EXTENSION-API.md)) |
-| Browser-Speicher `nodvard-deck.*` | `lattice.*` | Werden beim ersten Laden übernommen |
 | Image, Compose-Dienst, Container `nodvard-deck`, `deploy-nodvard-deck-1` | `lattice`, `deploy-lattice-1` | Beim ersten Deploy übernommen ([deploy/README](../deploy/README.md)) |
+
+**Entfernt mit 0.12 (vor dem Versprechen für 1.0):**
+
+| Neu | Alt | Was jetzt passiert |
+|---|---|---|
+| Python-Paket `nodvard_deck` | `lattice` | `import lattice` und `python -m lattice.…` gehen nicht mehr. Ein Image von vor der Umbenennung kennt dagegen nur den alten Namen ([deploy/README](../deploy/README.md), Rückweg) |
+| SDK `nodvard_sdk`, `NodvardExtension`, `NodvardError` | `lattice_sdk`, `LatticeExtension`, `LatticeError` | Eine Erweiterung, die einen alten Paket- oder Klassennamen importiert, lädt nicht. Ist sie eingeschaltet, nennt die Erweiterungsliste den Grund und den neuen Namen, sonst kommt derselbe Grund beim Einschalten (`ext/old_names.py`) |
+| Entry-Point-Gruppe `nodvard_deck.extensions` | `lattice.extensions` | Ein Paket, das sich nur unter der alten Gruppe anmeldet, wird nicht geladen. Den Grund nennt das Protokoll und, wenn die Erweiterung eingeschaltet war, ihre Zeile in der Liste |
+| Frontend: `window.__nodvardDeck`, Ereignisse `nodvard-deck:*`, CSS `.nodvard-deck-focus`, Import-Map `/nodvard-deck-shim/` | `window.__lattice`, `lattice:*`, `.lattice-focus`, `/lattice-shim/` | Bundles mit einem älteren UI-Kit, das nur die alten Namen kennt, finden die Kern-Shell nicht ([02-EXTENSION-API](02-EXTENSION-API.md)); ein alter Tab braucht einmal „Seite neu laden“ |
+| Browser-Speicher `nodvard-deck.*` | `lattice.*` | Wird nicht mehr übernommen; die Übernahme lief seit der Umbenennung bei jedem Start |
 
 **Bleiben bewusst:**
 
@@ -300,7 +307,6 @@ des Moduls Docker braucht es keine Liste: Regel 4 verbietet nur das alte Paket u
 | Linux-Benutzer `lattice` (UID 1000) im Container | Dateirechte im Datenordner |
 | Vorgabe `lattice` für `username` bei `POST /hosts/{id}/credentials/generate-key` (die Oberfläche schlägt beim Erzeugen `nodvard` vor und schickt den Namen immer mit); auf bestehenden Servern der Benutzer `lattice`, ältere Schlüssel mit Kommentar `lattice@<Name>` und alte sudo-Dateien `/etc/sudoers.d/lattice-<benutzer>` | Ältere Aufrufer der API schicken oft keinen Namen, ein anderer Standard wäre für sie eine stille Verhaltensänderung; bestehende Server sind so eingerichtet. Neue Schlüssel bekommen `nodvard@<Name>`, neue sudo-Regeln `/etc/sudoers.d/nodvard-<benutzer>`; eine alte Regel entfernt der Einrichtungsbefehl (mit sudo) nur, wenn sie genau die früher von Nodvard Deck angelegte ist |
 | Namen auf verwalteten Servern (systemd-Einheiten `lattice-upgrade-*`, Rollback-Tags, Zustandsordner) | Fortsetzen und Zurückrollen von Updates hängen daran |
-| Import-Map-Pfad `/lattice-shim/` | Alte Tabs verweisen darauf |
 | API-Wert `source: "lattice"` | Dokumentierter Wert, Clients werten ihn aus |
 
 ### Nodvard Shield: `nexus-soc` → `shield` (seit 0.7)
@@ -310,7 +316,7 @@ heißt sie `shield`, im Manifest steht `legacy_ids = ["nexus-soc"]` (Mechanik:
 [02 „Erweiterung umbenennen“](02-EXTENSION-API.md#erweiterung-umbenennen-legacy_ids)). Es gibt **keine Migration**:
 Gespeichertes wird weder kopiert noch umbenannt, ein Rückweg aufs alte Image findet alles unverändert vor.
 
-**Umbenannt – der alte Name funktioniert weiter (Übergang, in allen 1.x):**
+**Umbenannt: der alte Name funktioniert weiter (Übergang, in allen 1.x):**
 
 | Neu | Alt | Wie der alte weiterlebt |
 |---|---|---|
@@ -343,7 +349,7 @@ Das Modul **Docker** (bis 0.8 „Service-Matrix“) hatte die technische Kennung
 (das Modul hat keine Tabellen); auf bestehenden Installationen findet ein Rückweg aufs alte Image alles unverändert vor
 ([deploy/README](../deploy/README.md)).
 
-**Umbenannt – der alte Name funktioniert weiter (Übergang, in allen 1.x):**
+**Umbenannt: der alte Name funktioniert weiter (Übergang, in allen 1.x):**
 
 | Neu | Alt | Wie der alte weiterlebt |
 |---|---|---|

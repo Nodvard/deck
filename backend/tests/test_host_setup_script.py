@@ -25,6 +25,16 @@ from nodvard_deck.services import host_setup
 from nodvard_deck.services.host_setup import SetupError, build_setup_script
 
 needs_sh = pytest.mark.skipif(sys.platform == "win32" or shutil.which("sh") is None, reason="braucht eine echte POSIX-Shell")
+# BusyBox nimmt sein eigenes `chown` statt der Attrappe im PATH; `chown root:root` klappt nur als root. Die CI wählt
+# den Fall mit `-m needs_root` für ihren Lauf als root aus.
+_NOT_ROOT = not hasattr(os, "geteuid") or os.geteuid() != 0
+AS_ROOT_SHELLS = [
+    pytest.param(shell, marks=[
+        pytest.mark.needs_root,
+        pytest.mark.skipif(_NOT_ROOT, reason="BusyBox wechselt den Besitzer selbst, das geht nur als root"),
+    ]) if shell == "busybox" else shell
+    for shell in LOGIN_SHELLS
+]
 
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlatzhalterPlatzhalterPlatzhalterPlatzhalter lattice@bastel-pi"
 
@@ -894,6 +904,94 @@ def test_with_dropbear_the_old_own_line_is_replaced_and_nothing_else(tmp_path, s
     assert host_setup.setup_messages(again.stdout) == []
 
 
+COMMENTED_OUT = [f"# {OLD_LINE}", f"  #{OLD_LINE}", f"\t# {KEY}"]
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", SCRIPT_SHELLS)
+@pytest.mark.parametrize("user", ["lattice", "root"])
+@pytest.mark.parametrize("commented", COMMENTED_OUT, ids=["kommentar", "mit-leerzeichen", "mit-tab"])
+def test_a_commented_out_key_line_does_not_count_as_installed(tmp_path, shell, user, commented):
+    bin_dir, home, _ = _sandbox(tmp_path, user=user)
+    before = f"ssh-rsa AAAAold nico@pc\n{commented}\n"
+    authorized = _keys_file(home, before)
+    script = _script(user, processes=_processes(tmp_path, "sshd"))
+    done = _run_in(shell, script, bin_dir, tmp_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert authorized.read_text() == f"{before}{OLD_LINE}\n"
+    assert host_setup.setup_messages(done.stdout) == [host_setup.KEY_ADDED]
+
+    again = _run_in(shell, script, bin_dir, tmp_path)
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert authorized.read_text() == f"{before}{OLD_LINE}\n"
+    assert host_setup.setup_messages(again.stdout) == []
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", SCRIPT_SHELLS)
+@pytest.mark.parametrize("user", ["lattice", "root"])
+def test_with_dropbear_a_commented_out_old_line_stays_and_the_key_is_added(tmp_path, shell, user):
+    bin_dir, home, _ = _sandbox(tmp_path, user=user)
+    authorized = _keys_file(home, f"# {OLD_LINE}\n")
+    script = _script(user, processes=_processes(tmp_path, "dropbear"))
+    done = _run_in(shell, script, bin_dir, tmp_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert authorized.read_text() == f"# {OLD_LINE}\n{DROPBEAR_LINE}\n"
+    assert host_setup.setup_messages(done.stdout) == [host_setup.KEY_ADDED]
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", SCRIPT_SHELLS)
+def test_a_commented_out_line_next_to_the_bare_key_only_restricts_the_key(tmp_path, shell):
+    bin_dir, home, _ = _sandbox(tmp_path)
+    authorized = _keys_file(home, f"# {OLD_LINE}\n{KEY}\n")
+    done = _run_in(shell, _script(processes=_processes(tmp_path, "sshd")), bin_dir, tmp_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert authorized.read_text() == f"# {OLD_LINE}\n{OLD_LINE}\n"
+    assert host_setup.setup_messages(done.stdout) == [host_setup.KEY_RESTRICTED]
+
+
+@needs_sh
+@pytest.mark.parametrize("shell", LOGIN_SHELLS)
+@pytest.mark.parametrize(("text", "present"), [
+    *((f"{line}\n", False) for line in COMMENTED_OUT),
+    (f"{COMMENTED_OUT[0]}\r\n", False),
+    (f"{OLD_LINE}\n", True),
+    (f"{OLD_LINE}\r\n", True),
+    (f"# alt\n{KEY}\n", True),
+    (f'from="192.0.2.0/24" {KEY} # Notiz\n', True),
+    (f"{COMMENTED_OUT[0]}\n{OLD_LINE}", True),
+    ("ssh-rsa AAAAold nico@pc\n", False),
+    ("", False),
+    (f"{OLD_LINE}\n\0kaputt\n".encode(), True),
+    (f"{COMMENTED_OUT[0]}\n\0kaputt\n".encode(), False),
+    (f"{OLD_LINE[:-1]}".encode() + b"\xe9\n", True),
+    (f"{COMMENTED_OUT[0][:-1]}".encode() + b"\xe9\n", False),
+], ids=[
+    "kommentar", "mit-leerzeichen", "mit-tab", "kommentar-crlf", "eigene-zeile", "eigene-zeile-crlf",
+    "notiz-davor", "eigene-optionen", "kommentar-und-zeile", "fremder-schluessel", "leer",
+    "nul-byte-zeile", "nul-byte-kommentar", "latin1-zeile", "latin1-kommentar",
+])
+def test_only_a_key_line_that_is_no_comment_counts_in_every_login_shell(tmp_path, shell, text, present):
+    keys = tmp_path / "authorized_keys"
+    if isinstance(text, bytes):
+        keys.write_bytes(text)
+    else:
+        keys.write_text(text)
+    argv, path = login_shell(shell, tmp_path, path="/usr/bin:/bin")
+    if shell == "busybox":
+        (tmp_path / "busybox-bin" / "grep").symlink_to(argv[0])
+    snippet = "; ".join([
+        f'K="{KEY}"', 'B=$(echo "$K" | cut -d" " -f1,2)', f'A="{keys}"', host_setup._KEY_FIX_FUNCTION,
+        f"if {host_setup._key_present('')}; then echo da; else echo fehlt; fi",
+    ])
+    done = subprocess.run(
+        [*argv, "-c", snippet], capture_output=True, text=True, env={"PATH": path, "LC_ALL": "C.UTF-8"}, timeout=30,
+        check=False,
+    )
+    assert (done.stdout, done.stderr) == ("da\n" if present else "fehlt\n", "")
+
+
 def _detect_and_repair(shell: str, tmp_path: Path, keys: Path, processes: str) -> subprocess.CompletedProcess[str]:
     """Nur Erkennung und Reparatur aus dem Skript, in einer Login-Shell mit ihren eigenen Befehlen."""
     argv, path = login_shell(shell, tmp_path, path="/usr/bin:/bin")
@@ -1568,8 +1666,15 @@ def test_long_remote_run_with_sudo_n_stops_when_sudo_wants_a_password(tmp_path, 
     )
 
 
+def test_the_busybox_case_as_root_runs_in_the_root_run_of_the_ci():
+    marked = [p.values[0] for p in AS_ROOT_SHELLS if any(m.name == "needs_root" for m in getattr(p, "marks", ()))]
+    assert marked == ["busybox"]
+    ci = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert re.search(r"^\s*- run: sudo .*-m needs_root .*backend/tests/test_host_setup_script\.py", ci, re.MULTILINE)
+
+
 @needs_sh
-@pytest.mark.parametrize("shell", LOGIN_SHELLS)
+@pytest.mark.parametrize("shell", AS_ROOT_SHELLS)
 def test_long_remote_run_as_root_runs_the_script_directly(tmp_path, shell):
     bin_dir, home, _log = _sandbox(tmp_path, user="root")
     script = _script("root") + LONG_TAIL

@@ -15,7 +15,7 @@ cffi==2.1.1
 click==8.5.0
 cryptography==50.0.1
 defusedxml==0.7.1
-dulwich==1.2.15
+dulwich==1.2.19
 fastapi==0.141.1
 greenlet==3.5.6
 h11==0.16.0

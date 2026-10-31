@@ -276,19 +276,19 @@ def parse_manifest_inspect(text: str, platform: str) -> RemoteAnswer | None:
     matches: set[str] = set()
     first: str | None = None
     for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        descriptor = entry.get("Descriptor") or {}
-        plat = descriptor.get("platform") or {}
-        if plat and (plat.get("os") != want_os or plat.get("architecture") != want_arch):
+        descriptor = (entry.get("Descriptor") or {}) if isinstance(entry, dict) else None
+        plat = (descriptor.get("platform") or {}) if isinstance(descriptor, dict) else None
+        # Ein Eintrag in anderer Form zählt nicht: Er könnte zu einer fremden Plattform gehören.
+        if not isinstance(plat, dict) or (plat and (plat.get("os") != want_os or plat.get("architecture") != want_arch)):
             continue
         digest = descriptor.get("digest")
         if isinstance(digest, str) and _DIGEST_RE.match(digest):
             matches.add(digest)
             first = first or digest
         for key in ("SchemaV2Manifest", "OCIManifest"):
-            config = (entry.get(key) or {}).get("config") or {}
-            config_digest = config.get("digest")
+            manifest = entry.get(key)
+            config = manifest.get("config") if isinstance(manifest, dict) else None
+            config_digest = config.get("digest") if isinstance(config, dict) else None
             if isinstance(config_digest, str) and _DIGEST_RE.match(config_digest):
                 matches.add(config_digest)
     if not matches:

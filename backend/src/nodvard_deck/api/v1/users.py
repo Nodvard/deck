@@ -155,15 +155,14 @@ _CHANGE_TEXT = {
     "password": (
         "Zugang von „{target}“ geändert",
         (
-            "„{admin}“ hat für „{target}“ ein neues Passwort gesetzt. Die Anmeldungen dieses Kontos laufen damit aus "
-            "(spätestens nach 15 Minuten)."
+            "„{admin}“ hat für „{target}“ ein neues Passwort gesetzt. Die Anmeldungen dieses Kontos enden damit sofort."
         ),
     ),
     "2fa": (
         "Zugang von „{target}“ geändert",
         (
-            "„{admin}“ hat die Zwei-Faktor-Anmeldung von „{target}“ zurückgesetzt. Die Anmeldungen dieses Kontos laufen "
-            "damit aus (spätestens nach 15 Minuten)."
+            "„{admin}“ hat die Zwei-Faktor-Anmeldung von „{target}“ zurückgesetzt. Die Anmeldungen dieses Kontos enden "
+            "damit sofort."
         ),
     ),
     "admin_created": (

@@ -12,7 +12,8 @@ const BASE: UpdateStatus = {
   current: "0.5.0", latest: "0.6.0", latest_digest: null, available: true, channel: "stable", enabled: true,
   checked_at: "2026-10-01T04:41:00Z", attempted_at: "2026-10-01T04:41:00Z", source: "cache", error: null,
   official_image: true, image: "ghcr.io/nodvard/deck", official_image_name: "ghcr.io/nodvard/deck", helper: false,
-  release_notes_url: "https://github.com/nodvard/deck/blob/v0.6.0/CHANGELOG.md",
+  release_notes_url: "https://github.com/nodvard/deck/blob/v0.6.0/CHANGELOG.md", approved: true,
+  approved_key: "21fe31dfa154a261",
 };
 
 type Route = (body: unknown) => Response;
@@ -362,7 +363,7 @@ describe("Karte Updates", () => {
     await screen.findByText("Update verfügbar: Version 0.6.0");
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
     expect(screen.getByText(/Tägliche Suche: an/)).toHaveTextContent(
-      "Bei jeder Suche sieht GitHub (ghcr.io) die IP-Adresse und den Zeitpunkt, sonst nichts. Abschalten kann sie, wer Einstellungen ändern darf.",
+      "Bei jeder Suche sieht GitHub (ghcr.io, github.com) die IP-Adresse und den Zeitpunkt, sonst nichts. Abschalten kann sie, wer Einstellungen ändern darf.",
     );
     first.unmount();
 
@@ -375,7 +376,7 @@ describe("Karte Updates", () => {
     render(<UpdatesCard />);
     const toggle = await screen.findByRole("switch", { name: "Täglich automatisch nach Updates suchen" });
     expect(screen.getByText(/GitHub sieht dabei die IP-Adresse/)).toHaveTextContent(
-      "Dazu fragt Nodvard Deck einmal am Tag bei GitHub (ghcr.io, dort liegen die Images) nach, welche Versionen es gibt. GitHub sieht dabei die IP-Adresse deines Anschlusses und den Zeitpunkt; sonst wird nichts übertragen, auch nicht die installierte Version. Wenn du das nicht möchtest, schalte die Suche hier ab.",
+      "Dazu fragt Nodvard Deck einmal am Tag bei GitHub (ghcr.io, dort liegen die Images, und github.com für die Freigabe) nach, welche Versionen es gibt. GitHub sieht dabei die IP-Adresse deines Anschlusses und den Zeitpunkt; sonst wird nichts übertragen, auch nicht die installierte Version. Wenn du das nicht möchtest, schalte die Suche hier ab.",
     );
     expect(toggle).toHaveAttribute("aria-checked", "true");
     fireEvent.click(toggle);
@@ -544,6 +545,32 @@ describe("Karte Updates: Update-Helfer", () => {
     expect(screen.queryByTestId("helper-why-not")).not.toBeInTheDocument();
   });
 
+  it("Freigabe: der Helfer prüft die Signatur selbst", async () => {
+    setOwner();
+    mockApi({ "GET /system/updates": () => json(BASE), "GET /system/updates/helper": () => json(helperView({ request_versions: [1, 2] })) });
+    render(<UpdatesCard />);
+    expect(await screen.findByTestId("helper-signed")).toHaveTextContent("Freigabe liegt vor (Schlüssel 21fe 31df a154 a261). Ob sie echt ist, prüft der Update-Helfer");
+    expect(screen.queryByTestId("helper-unsigned")).not.toBeInTheDocument();
+  });
+
+  it("Freigabe: ein älterer Helfer bekommt den Hinweis, ihn zu erneuern, der Knopf bleibt", async () => {
+    setOwner();
+    mockApi({ "GET /system/updates": () => json(BASE), "GET /system/updates/helper": () => json(helperView({ request_versions: [1] })) });
+    render(<UpdatesCard />);
+    expect(await screen.findByTestId("helper-unsigned")).toHaveTextContent("prüft die Freigabe noch nicht selbst");
+    expect(screen.getByRole("button", { name: "Jetzt aktualisieren auf 0.6.0" })).toBeInTheDocument();
+  });
+
+  it("Knopf, wenn der Helfer eine Prüfsumme will und die Update-Suche eine hat", async () => {
+    setOwner();
+    mockApi({
+      "GET /system/updates": () => json({ ...BASE, latest_digest: "sha256:" + "4f".repeat(32) }),
+      "GET /system/updates/helper": () => json(helperView({ request_options: ["digest"] })),
+    });
+    render(<UpdatesCard />);
+    expect(await screen.findByRole("button", { name: "Jetzt aktualisieren auf 0.6.0" })).toBeInTheDocument();
+  });
+
   it.each([
     ["nicht der Owner", {}, {}, false, /nur der Inhaber/],
     ["Helfer nicht bereit", {}, { ready: false, ready_reason: "target_unhealthy" }, true, null],
@@ -553,6 +580,8 @@ describe("Karte Updates: Update-Helfer", () => {
     ["Vorabversion", { latest: "0.6.0-rc1" }, {}, true, /Vorabversionen spielt der Update-Helfer nicht ein/],
     ["Version fest eingetragen", {}, { target: { current_version: "0.5.0", floating_tag: null, pinned: true } }, true, /feste Version/],
     ["Reihe passt nicht", { latest: "0.6.0" }, { target: { current_version: "0.5.0", floating_tag: "0.5", pinned: false } }, true, /Reihe „:0\.5“, Version 0\.6\.0 kommt darüber nicht/],
+    ["Prüfsumme fehlt", { latest_digest: null }, { request_options: ["digest"] }, true, /keine Prüfsumme für diese Version an\. Such erneut nach Updates/],
+    ["noch nicht freigegeben", { approved: false, approved_key: null }, {}, true, /Für Version 0\.6\.0 liegt noch keine gültige Freigabe vor, oder sie ließ sich bei der Suche nicht abrufen/],
   ] as [string, Partial<UpdateStatus>, Partial<HelperView>, boolean, RegExp | null][])(
     "kein Knopf: %s", async (_name, statusPatch, viewPatch, owner, why) => {
       if (owner) setOwner();

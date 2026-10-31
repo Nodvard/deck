@@ -38,18 +38,18 @@ const host = (
 });
 
 const KEY_ROOT: PreviewCredential = { kind: "ssh_key", username: "root", port: 22 };
-const KEY_LATTICE: PreviewCredential = { kind: "ssh_key", username: "lattice", port: 22 };
+const KEY_OLD_USER: PreviewCredential = { kind: "ssh_key", username: "lattice", port: 22 };
 
 const HOSTS = [
   host("n-pve2", "pve2", "192.168.2.11", "hypervisor", "up", { credential: KEY_ROOT }),
   host("n-pve1", "pve1", "192.168.2.12", "hypervisor", "up", { credential: KEY_ROOT }),
-  host("g-docker", "docker", "192.168.2.21", "vm", "running", { credential: KEY_LATTICE }),
+  host("g-docker", "docker", "192.168.2.21", "vm", "running", { credential: KEY_OLD_USER }),
   host("g-monitoring", "monitoring", "192.168.2.22", "vm", "running", { credential: { kind: "ssh_password", username: "admin", port: 22 } }),
   host("g-ki", "ki-server", "192.168.2.43", "vm", "running"),
   host("g-valheim", "game-win", "192.168.2.24", "vm", "running", { os_family: "windows" }),
   host("g-dmini", "docker-lxc", "192.168.2.25", "lxc", "running"),
   host("g-bastion", "bastion", "192.168.2.26", "lxc", "running"),
-  host("h-pi", "Heimserver", "192.168.2.31", null, "up", { name: "heimserver", provider_ext_id: null, credential: KEY_LATTICE }),
+  host("h-pi", "Heimserver", "192.168.2.31", null, "up", { name: "heimserver", provider_ext_id: null, credential: KEY_OLD_USER }),
 ];
 
 const HOST_ID_BY_NAME: Record<string, string> = Object.fromEntries(HOSTS.map((h) => [h.display_name, h.id]));
@@ -906,6 +906,7 @@ function helperBase() {
   return {
     present: true, reason: null, ready: true, ready_reason: null, state: "idle", helper_version: "0.7.0", heartbeat_at: nowS() - 12,
     target: { current_version: "0.7.0", floating_tag: "latest", pinned: false }, busy: null, previous: null, last_result: null, pending: null,
+    request_versions: [1, 2],
   };
 }
 
@@ -989,6 +990,7 @@ function helperRoutes(p: string, method: string): { handled: boolean; value?: un
       handled: true,
       value: {
         current: after ? "0.7.1" : "0.7.0", latest: "0.7.1", latest_digest: null, available: !after, channel: "stable", enabled: true,
+        approved: true, approved_key: "21fe31dfa154a261",
         checked_at: "2026-10-03T04:41:00Z", attempted_at: "2026-10-03T04:41:00Z", source: "cache", error: null,
         official_image: true, image: "ghcr.io/nodvard/deck", official_image_name: "ghcr.io/nodvard/deck", helper: previewState.helper !== "nicht-eingerichtet",
         release_notes_url: "https://github.com/nodvard/deck/blob/v0.7.1/CHANGELOG.md",
@@ -1364,10 +1366,10 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   }
   if (p.startsWith("/ext/shield/defender/overview")) return {
     hosts: [
-      { host_id: "h-pi", host_name: "Heimserver", host_status: "up", reachable: true, clamav_installed: true, clamav_version: "1.0.7", signature_version: "27410", signature_date: "Thu Sep 25 07:12 2026", signature_age_days: 1, signature_stale: false, freshclam_active: true, lynis_installed: true, quarantine_files: 1,
+      { host_id: "h-pi", host_name: "Heimserver", host_status: "up", reachable: true, clamav_installed: true, clamav_version: "1.0.7", signature_version: "27410", signature_date: "Thu Sep 25 07:12 2026", signature_ts: Date.UTC(2026, 8, 25, 7, 12) / 1000, signature_age_days: 1, signature_stale: false, freshclam_active: true, lynis_installed: true, quarantine_files: 1,
         last_scan: { id: "s1", host_id: "h-pi", host_name: "Heimserver", kind: "quick", kind_label: "Schnellscan", paths: ["/tmp"], trigger: "schedule", status: "clean", files_scanned: 14210, infected: 0, error: null, output_tail: null, started_at: Date.now() / 1000 - 5400, finished_at: null },
         last_audit: { status: "ok", hardening_index: 71, warnings: 1, created_at: Date.now() / 1000 - 80000, error: null }, scanning: false, auditing: false },
-      { host_id: "h-pve2", host_name: "Proxmox-Knoten pve2", host_status: "up", reachable: true, clamav_installed: true, clamav_version: "1.0.7", signature_version: "27410", signature_date: "Thu Aug 20 06:40 2026", signature_age_days: 43, signature_stale: true, freshclam_active: false, lynis_installed: true, quarantine_files: 1,
+      { host_id: "h-pve2", host_name: "Proxmox-Knoten pve2", host_status: "up", reachable: true, clamav_installed: true, clamav_version: "1.0.7", signature_version: "27410", signature_date: "Thu Aug 20 06:40 2026", signature_ts: Date.UTC(2026, 7, 20, 6, 40) / 1000, signature_age_days: 43, signature_stale: true, freshclam_active: false, lynis_installed: true, quarantine_files: 1,
         last_scan: { id: "s2", host_id: "h-pve2", host_name: "pve2", kind: "quick", kind_label: "Schnellscan", paths: ["/tmp"], trigger: "schedule", status: "infected", files_scanned: 50311, infected: 1, error: null, output_tail: null, started_at: Date.now() / 1000 - 5000, finished_at: null },
         last_audit: { status: "ok", hardening_index: 62, warnings: 3, created_at: Date.now() / 1000 - 80000, error: null }, scanning: true, auditing: false,
         open_findings: 1, last_scan_outcome: "open" },
@@ -1674,8 +1676,8 @@ export function applyOhneProxmox(min: boolean, many = false): void {
     tags: (extra.tags ?? []) as never[], last_seen_at: (status === "up" ? new Date(Date.now() - 3 * 86_400_000).toISOString() : null) as never,
   });
   HOSTS.splice(0, HOSTS.length,
-    mk("m-pi", "Heimserver", "192.168.2.31", "up", { cred: KEY_LATTICE, tags: ["docker"] }),
-    mk("m-deb", "Debian-VM", "192.168.2.40", "unknown", { cred: KEY_LATTICE, tags: ["docker"] }),
+    mk("m-pi", "Heimserver", "192.168.2.31", "up", { cred: KEY_OLD_USER, tags: ["docker"] }),
+    mk("m-deb", "Debian-VM", "192.168.2.40", "unknown", { cred: KEY_OLD_USER, tags: ["docker"] }),
     mk("m-nas", "NAS", "192.168.2.20", "unknown", { cred: KEY_PW }),
     mk("m-win", "Spiele-PC", "192.168.2.50", "unknown", { os: "windows", cred: KEY_PW, tags: ["gameserver"] }),
   );
@@ -1758,7 +1760,7 @@ function addManyServers(): void {
     const offline = i === 5 || i === 17;
     HOSTS.push({
       ...host(id, name, `192.168.2.${100 + i}`, null, offline ? "down" : "up", {
-        name, provider_ext_id: null, os_family: windows ? "windows" : "linux", credential: KEY_LATTICE,
+        name, provider_ext_id: null, os_family: windows ? "windows" : "linux", credential: KEY_OLD_USER,
       }),
       tags: [] as never[], last_seen_at: new Date(Date.now() - 60_000).toISOString() as never,
     });

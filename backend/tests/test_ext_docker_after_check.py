@@ -3,23 +3,44 @@ wirklich -- und bleibt er laufen?"""
 
 from __future__ import annotations
 
-import importlib
 import json
 import sys
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "extensions" / "docker" / "src"))
-
-from nodvard_deck_ext_docker import after_check as ac
-from nodvard_deck_ext_docker import capabilities as caps
-from nodvard_deck_ext_docker import image_apply as ia
+from docker_stack_fakes import EXT_DIR, FakeSettings
 from nodvard_sdk import ActionRequest, Actor
 
 ID_A = "a" * 64
 ID_B = "b" * 64
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _ext_docker_on_path():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(EXT_DIR / "src"))
+        yield
+    for name in list(sys.modules):
+        if name.startswith("nodvard_deck_ext_docker"):
+            del sys.modules[name]
+
+
+def _ac():
+    from nodvard_deck_ext_docker import after_check
+
+    return after_check
+
+
+def _ia():
+    from nodvard_deck_ext_docker import image_apply
+
+    return image_apply
+
+
+def _caps():
+    from nodvard_deck_ext_docker import capabilities
+
+    return capabilities
 
 
 def _line(name: str, status: str = "running", *, code: int = 0, health: str | None = None, restarts: int = 0,
@@ -28,23 +49,15 @@ def _line(name: str, status: str = "running", *, code: int = 0, health: str | No
                        "health": health, "restarts": restarts, "started": started}) + "\n"
 
 
-def _snap(*lines: str) -> ia.Snapshot:
-    return ia.parse_verify("".join(lines))
-
-
-def _after_check_modules() -> list:
-    """`capabilities` importiert `after_check` erst beim Aufruf. Haben andere Tests die Erweiterung zwischendurch neu
-    geladen (`sys.modules`), ist das ein anderes Modul als `ac` -- die Konstanten müssen dann auch dort gesetzt werden,
-    sonst wartet die Prüfung echte 15 s (und liest sechsmal statt zweimal)."""
-    current = importlib.import_module("nodvard_deck_ext_docker.after_check")
-    return [ac] if current is ac else [ac, current]
+def _snap(*lines: str):
+    return _ia().parse_verify("".join(lines))
 
 
 @pytest.fixture(autouse=True)
-def _quick(monkeypatch):
-    for module in _after_check_modules():
-        monkeypatch.setattr(module, "CHECK_STABLE_S", 0)
-        monkeypatch.setattr(module, "CHECK_INTERVAL_S", 0)
+def _quick(monkeypatch, _ext_docker_on_path):
+    ac = _ac()
+    monkeypatch.setattr(ac, "CHECK_STABLE_S", 0)
+    monkeypatch.setattr(ac, "CHECK_INTERVAL_S", 0)
 
 
 @pytest.mark.parametrize(("lines", "final", "ok", "fragment"), [
@@ -54,17 +67,18 @@ def _quick(monkeypatch):
     ([_line("web", "exited", code=0)], False, True, "Bei einem Container für einmalige Aufgaben ist das normal"),
     ([_line("web", "dead", code=0)], False, False, "Container läuft nicht (beendet, Exit-Code 0)"),
     ([_line("web", health="unhealthy")], True, False, "meldet „ungesund“"),
-    ([_line("web", "restarting")], True, False, ia.CRASH_LOOP_TEXT),
+    ([_line("web", "restarting")], True, False, "startet immer wieder neu"),
     ([_line("web", health="starting")], True, True, "meldet aber noch „startet“"),
     ([_line("web", "paused")], True, False, "Zustand: paused"),
     ([], True, False, "Container nicht mehr vorhanden."),
 ])
 def test_judge_running(lines, final, ok, fragment):
-    verdict = ac.judge_running(_snap(*lines), final, expected=1)
+    verdict = _ac().judge_running(_snap(*lines), final, expected=1)
     assert verdict is not None and verdict.ok is ok and fragment in verdict.text
 
 
 def test_judge_running_waits_while_it_is_still_unclear():
+    ac = _ac()
     assert ac.judge_running(_snap(_line("web", "restarting")), False, expected=1) is None
     assert ac.judge_running(_snap(_line("web", health="starting")), False, expected=1) is None
     assert ac.judge_running(_snap(), False, expected=1) is None
@@ -73,6 +87,7 @@ def test_judge_running_waits_while_it_is_still_unclear():
 
 
 def test_judge_running_names_the_member_of_a_stack():
+    ac = _ac()
     verdict = ac.judge_running(_snap(_line("app"), _line("db", "exited", code=3)), False, expected=2)
     assert verdict is not None and not verdict.ok and verdict.text.startswith("db: Container läuft nicht")
     assert ac.judge_running(_snap(_line("app"), _line("db")), False, expected=2).text == "Alle 2 Container laufen stabil."
@@ -84,7 +99,7 @@ def test_judge_running_names_the_member_of_a_stack():
     job = ac.judge_running(_snap(_line("app"), _line("migrate", "exited", code=0)), False, expected=2)
     assert job is not None and job.ok and job.text == "1 von 2 Containern laufen stabil; ohne Fehler beendet (Exit-Code 0): migrate."
     looping = ac.judge_running(_snap(_line("app"), _line("db", "restarting")), True, expected=2)
-    assert looping is not None and looping.text == "db: " + ia.CRASH_LOOP_TEXT
+    assert looping is not None and looping.text == "db: " + _ia().CRASH_LOOP_TEXT
 
 
 def _reader(*answers):
@@ -101,6 +116,7 @@ def _reader(*answers):
 
 
 async def _settle(read, *, timeout_s=0.2):
+    ac = _ac()
     return await ac.wait_settled(read, lambda s, final: ac.judge_running(s, final, expected=1),
                                  timeout_s=timeout_s, interval_s=0, stable_s=0)
 
@@ -113,6 +129,7 @@ async def test_two_quiet_reads_are_a_success():
 
 @pytest.mark.asyncio
 async def test_a_new_start_between_the_reads_is_a_crash_loop():
+    ia = _ia()
     verdict, _ = await _settle(_reader(_snap(_line("web")), _snap(_line("web", started="2026-10-08T01:00:09Z"))))
     assert not verdict.ok and verdict.crashed and verdict.text == ia.CRASH_LOOP_TEXT
     verdict, _ = await _settle(_reader(_snap(_line("web")), _snap(_line("web", restarts=1))))
@@ -134,6 +151,7 @@ async def test_a_crash_after_the_first_good_read_is_reported():
 
 
 def test_state_commands_only_take_names_and_ids():
+    ac = _ac()
     assert ac.cmd_state(["web", ID_A]).endswith(f" web {ID_A}")
     for bad in (["x; reboot"], ["-f"], [], ["a b"], ["web\n"]):
         with pytest.raises(ValueError):
@@ -157,12 +175,12 @@ class _Exec:
 
 
 def _ctx(exec_handle: _Exec) -> SimpleNamespace:
-    host = SimpleNamespace(id="h1", name="docker", display_name=None)
+    host = SimpleNamespace(id="h1", name="docker", display_name=None, tags=["docker"])
 
     async def get(host_id):
         return host if host_id == "h1" else None
 
-    return SimpleNamespace(exec=exec_handle, hosts=SimpleNamespace(get=get))
+    return SimpleNamespace(exec=exec_handle, hosts=SimpleNamespace(get=get), settings=FakeSettings())
 
 
 def _req(action_type: str, payload: dict) -> ActionRequest:
@@ -176,7 +194,7 @@ async def test_a_restart_that_crashes_right_after_is_a_failure_with_the_reason()
         "docker restart web": [(0, "web\n", "")],
         "docker container inspect": [(0, _line("web"), ""), (0, _line("web", "exited", code=1), "")],
     })
-    result = await caps.DockerContainerExecutor(_ctx(exec_handle)).execute(_req("container.restart", {"container": "web"}))
+    result = await _caps().DockerContainerExecutor(_ctx(exec_handle)).execute(_req("container.restart", {"container": "web"}))
     assert result.success is False
     assert result.output == "Container 'web' neu gestartet."
     assert result.error == "Prüfung danach: Container läuft nicht (beendet, Exit-Code 1). Logs über den Knopf „Logs“."
@@ -186,7 +204,7 @@ async def test_a_restart_that_crashes_right_after_is_a_failure_with_the_reason()
 @pytest.mark.asyncio
 async def test_a_start_that_stays_up_says_so():
     exec_handle = _Exec({"docker start web": [(0, "web\n", "")], "docker container inspect": [(0, _line("web"), "")]})
-    result = await caps.DockerContainerExecutor(_ctx(exec_handle)).execute(_req("container.start", {"container": "web"}))
+    result = await _caps().DockerContainerExecutor(_ctx(exec_handle)).execute(_req("container.start", {"container": "web"}))
     assert result.success is True
     assert result.output == "Container 'web' gestartet.\nPrüfung danach: Container läuft stabil."
     assert sum(c.startswith("docker container inspect") for c in exec_handle.commands) == 2
@@ -196,7 +214,7 @@ async def test_a_start_that_stays_up_says_so():
 async def test_stop_and_a_failed_start_are_not_checked():
     exec_handle = _Exec({"docker start web": [(1, "", "Error: port is already allocated")], "docker stop web": [(0, "web\n", "")],
                          "docker inspect": [(0, "f" * 64 + "\n", "")]})
-    executor = caps.DockerContainerExecutor(_ctx(exec_handle))
+    executor = _caps().DockerContainerExecutor(_ctx(exec_handle))
     failed = await executor.execute(_req("container.start", {"container": "web"}))
     assert failed.success is False and failed.error == "Error: port is already allocated"
     assert (await executor.execute(_req("container.stop", {"container": "web"}))).success
@@ -210,7 +228,7 @@ async def test_a_stack_restart_checks_only_what_ran_before():
         "docker compose -p immich restart": [(0, "", "")],
         "docker container inspect": [(0, _line("immich-server") + _line("immich-db"), "")],
     })
-    result = await caps.DockerMaintenanceExecutor(_ctx(exec_handle)).execute(
+    result = await _caps().DockerMaintenanceExecutor(_ctx(exec_handle)).execute(
         _req("docker.stack_restart", {"project": "immich"}))
     assert result.success is True
     assert result.output == "Stack 'immich' neu gestartet.\nPrüfung danach: Alle 2 Container laufen stabil."
@@ -225,13 +243,14 @@ async def test_a_stack_member_that_dies_after_the_restart_fails_the_action():
         "docker compose -p immich restart": [(0, "", "")],
         "docker container inspect": [(0, _line("immich-server") + _line("immich-db", "exited", code=1), "")],
     })
-    result = await caps.DockerMaintenanceExecutor(_ctx(exec_handle)).execute(
+    result = await _caps().DockerMaintenanceExecutor(_ctx(exec_handle)).execute(
         _req("docker.stack_restart", {"project": "immich"}))
     assert result.success is False and result.error.startswith("Prüfung danach: immich-db: Container läuft nicht")
 
 
 @pytest.mark.asyncio
 async def test_a_stack_that_was_stopped_is_not_checked_and_says_so():
+    caps = _caps()
     exec_handle = _Exec({"docker ps -q --no-trunc": [(0, "", "")], "docker compose -p immich restart": [(0, "", "")]})
     result = await caps.DockerMaintenanceExecutor(_ctx(exec_handle)).execute(
         _req("docker.stack_restart", {"project": "immich"}))
@@ -244,7 +263,7 @@ async def test_a_stack_that_was_stopped_is_not_checked_and_says_so():
 
 
 def test_the_stack_list_leaves_out_compose_run_containers():
-    assert ac.cmd_stack_running("immich") == (
+    assert _ac().cmd_stack_running("immich") == (
         "docker ps -q --no-trunc --filter label=com.docker.compose.project=immich "
         "--filter label=com.docker.compose.oneoff=False"
     )
@@ -256,9 +275,9 @@ async def test_one_restart_after_the_start_is_tolerated_and_named():
         "docker restart web": [(0, "web\n", "")],
         "docker container inspect": [(0, _line("web"), ""), (0, _line("web", started="2026-10-08T01:00:05Z", restarts=1), "")],
     })
-    result = await caps.DockerContainerExecutor(_ctx(exec_handle)).execute(_req("container.restart", {"container": "web"}))
+    result = await _caps().DockerContainerExecutor(_ctx(exec_handle)).execute(_req("container.restart", {"container": "web"}))
     assert result.success is True
-    assert result.output == ("Container 'web' neu gestartet.\nPrüfung danach: Container läuft stabil." + ac.ONE_RESTART_NOTE)
+    assert result.output == ("Container 'web' neu gestartet.\nPrüfung danach: Container läuft stabil." + _ac().ONE_RESTART_NOTE)
 
 
 @pytest.mark.asyncio
@@ -272,10 +291,10 @@ async def test_a_second_restart_is_a_crash_loop_and_names_the_container_of_a_sta
             (0, _line("immich-server") + _line("immich-db", started="2026-10-08T01:00:09Z", restarts=2), ""),
         ],
     })
-    result = await caps.DockerMaintenanceExecutor(_ctx(exec_handle)).execute(
+    result = await _caps().DockerMaintenanceExecutor(_ctx(exec_handle)).execute(
         _req("docker.stack_restart", {"project": "immich"}))
     assert result.success is False
-    assert result.error == f"Prüfung danach: immich-db: {ia.CRASH_LOOP_TEXT}"
+    assert result.error == f"Prüfung danach: immich-db: {_ia().CRASH_LOOP_TEXT}"
 
 
 @pytest.mark.asyncio
@@ -287,14 +306,14 @@ async def test_a_healthcheck_that_turns_healthy_after_unhealthy_is_a_success():
             (0, _line("web", health="healthy"), ""),
         ],
     })
-    result = await caps.DockerContainerExecutor(_ctx(exec_handle)).execute(_req("container.start", {"container": "web"}))
+    result = await _caps().DockerContainerExecutor(_ctx(exec_handle)).execute(_req("container.start", {"container": "web"}))
     assert result.success is True and result.output.endswith("Prüfung danach: Container läuft und ist gesund.")
 
 
 @pytest.mark.asyncio
 async def test_docker_not_answering_is_not_a_missing_container(monkeypatch):
-    for module in _after_check_modules():
-        monkeypatch.setattr(module, "CHECK_TIMEOUT_S", 0.05)
+    caps = _caps()
+    monkeypatch.setattr(_ac(), "CHECK_TIMEOUT_S", 0.05)
     exec_handle = _Exec({"docker start web": [(0, "web\n", "")],
                          "docker container inspect": [(1, "", "Cannot connect to the Docker daemon")]})
     result = await caps.DockerContainerExecutor(_ctx(exec_handle)).execute(_req("container.start", {"container": "web"}))

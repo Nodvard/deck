@@ -72,7 +72,7 @@ const posts = (calls: Call[]) => calls.filter((c) => c.method === "POST");
 
 beforeEach(() => {
   window.history.replaceState({}, "", "/ext/docker/matrix");
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never,
     ReactDOM: undefined as never,
     ReactJsxRuntime: undefined as never,
@@ -115,17 +115,17 @@ describe("ContainersPage -- Alle Updates vorschlagen", () => {
   });
 
   it("ohne hosts.execute kein Knopf", async () => {
-    window.__lattice.hasPermission = vi.fn((p: string) => p !== "hosts.execute");
+    window.__nodvardDeck.hasPermission = vi.fn((p: string) => p !== "hosts.execute");
     await open({ data: ALL });
     expect(screen.queryByRole("button", { name: BUTTON })).toBeNull();
   });
 
   it("Klick fragt nach: Container stehen in der Bestätigung, bei Abbruch wird nichts angelegt", async () => {
-    (window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    (window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(false);
     const calls = await open({ data: ALL });
     fireEvent.click(screen.getByRole("button", { name: "Alle Updates vorschlagen (3)" }));
-    await waitFor(() => expect(window.__lattice.confirmDialog).toHaveBeenCalledTimes(1));
-    const message = (window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    await waitFor(() => expect(window.__nodvardDeck.confirmDialog).toHaveBeenCalledTimes(1));
+    const message = (window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
     expect(message).toContain("nginx");
     expect(message).toContain("redis");
     expect(message).toContain("postgres");
@@ -142,8 +142,8 @@ describe("ContainersPage -- Alle Updates vorschlagen", () => {
       plans: { postgres: planOf("postgres", { risk: "high", warnings: ["Datenbank-Container: Ein neues Image kann die Datenbank-Dateien umstellen. Vorher ein Backup machen."] }) },
     });
     fireEvent.click(screen.getByRole("button", { name: "Alle Updates vorschlagen (3)" }));
-    await waitFor(() => expect(window.__lattice.confirmDialog).toHaveBeenCalled());
-    const [message, options] = (window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mock.calls[0] as [string, { danger?: boolean }];
+    await waitFor(() => expect(window.__nodvardDeck.confirmDialog).toHaveBeenCalled());
+    const [message, options] = (window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mock.calls[0] as [string, { danger?: boolean }];
     expect(message).toMatch(/Datenbank/);
     expect(message).toMatch(/Backup/);
     expect(message).toContain("postgres");
@@ -153,8 +153,8 @@ describe("ContainersPage -- Alle Updates vorschlagen", () => {
   it("ohne Datenbank keine Datenbank-Warnung", async () => {
     await open({ data: ALL });
     fireEvent.click(screen.getByRole("button", { name: "Alle Updates vorschlagen (3)" }));
-    await waitFor(() => expect(window.__lattice.confirmDialog).toHaveBeenCalled());
-    expect((window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mock.calls[0][0]).not.toMatch(/Datenbank/);
+    await waitFor(() => expect(window.__nodvardDeck.confirmDialog).toHaveBeenCalled());
+    expect((window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mock.calls[0][0]).not.toMatch(/Datenbank/);
   });
 
   it("legt je Container einen Vorschlag an: nacheinander, mit der eigenen plan_id, ohne je freizugeben", async () => {
@@ -224,7 +224,7 @@ describe("ContainersPage -- Alle Updates vorschlagen", () => {
     expect(line.textContent).toContain("Keine Vorschläge angelegt");
     expect(line.textContent).toContain("nginx: nicht lesbar");
     expect(within(line).queryByRole("link")).toBeNull();
-    expect(window.__lattice.confirmDialog).not.toHaveBeenCalled();
+    expect(window.__nodvardDeck.confirmDialog).not.toHaveBeenCalled();
   });
 
   it("danach wird der Image-Stand neu geladen", async () => {

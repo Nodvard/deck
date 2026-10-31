@@ -47,7 +47,7 @@ let hasPermission: Mock<(permission: string) => boolean>;
 beforeEach(() => {
   confirmDialog = vi.fn<(message: string) => Promise<boolean>>().mockResolvedValue(true);
   hasPermission = vi.fn<(permission: string) => boolean>().mockReturnValue(true);
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never,
     ReactDOM: undefined as never,
     ReactJsxRuntime: undefined as never,
@@ -294,7 +294,7 @@ describe("BackupsPage ConnectionsPanel", () => {
       throw new Error(`Unerwarteter Fetch in diesem Test: ${method} ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
-    (window.__lattice.promptDialog as ReturnType<typeof vi.fn>).mockResolvedValue("neues-token");
+    (window.__nodvardDeck.promptDialog as ReturnType<typeof vi.fn>).mockResolvedValue("neues-token");
     render(<BackupsPage />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Token ersetzen" }));
@@ -326,7 +326,7 @@ describe("BackupsPage ConnectionsPanel", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Entfernen" }));
 
-    await waitFor(() => expect(window.__lattice.confirmDialog).toHaveBeenCalledWith(expect.stringContaining("pve2"), expect.anything()));
+    await waitFor(() => expect(window.__nodvardDeck.confirmDialog).toHaveBeenCalledWith(expect.stringContaining("pve2"), expect.anything()));
     await waitFor(() => expect(deleted).toBe(true));
   });
 
@@ -403,7 +403,7 @@ describe("BackupsPage ConnectionsPanel", () => {
       if (url.endsWith("/ext/backups/unprotected")) return new Response(JSON.stringify({ guests, errors: [] }), { status: 200 });
       return base(input, init);
     }));
-    (window.__lattice.promptDialog as ReturnType<typeof vi.fn>).mockResolvedValue("Risiko bewusst");
+    (window.__nodvardDeck.promptDialog as ReturnType<typeof vi.fn>).mockResolvedValue("Risiko bewusst");
     render(<BackupsPage />);
 
     const box = await screen.findByTestId("unprotected");
@@ -422,7 +422,7 @@ describe("BackupsPage ConnectionsPanel", () => {
   });
 
   it("ohne settings.write keine Entscheidungs-Knöpfe", async () => {
-    (window.__lattice.hasPermission as ReturnType<typeof vi.fn>).mockImplementation((p: string) => p !== "settings.write");
+    (window.__nodvardDeck.hasPermission as ReturnType<typeof vi.fn>).mockImplementation((p: string) => p !== "settings.write");
     vi.stubGlobal("fetch", mockFetch({
       unprotected: { guests: [{ connection: "pve2", vmid: "110", name: "game-win", host_id: null, kind: "VM" }], errors: [] },
     }));
@@ -493,7 +493,7 @@ describe("BackupsPage ConnectionsPanel", () => {
       return base(input, init);
     }));
     const confirm = vi.fn().mockResolvedValue(true);
-    window.__lattice.confirmDialog = confirm;
+    window.__nodvardDeck.confirmDialog = confirm;
     render(<BackupsPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Job bearbeiten" }));
     const form = await screen.findByTestId("job-edit-pve2--job1--100");

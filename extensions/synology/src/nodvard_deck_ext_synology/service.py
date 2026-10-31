@@ -43,6 +43,7 @@ TEST_DEVICE_TIMEOUT_S = 17.0  # alle Anfragen eines Geräts zusammen
 TEST_LOGOUT_TIMEOUT_S = 2.0
 CONNECTION_TIMEOUT_S = 50.0  # alle Abfragen eines Geräts zusammen
 LOGOUT_TIMEOUT_S = 5.0
+FORGET_LOGOUT_TIMEOUT_S = 2.0  # nach einem neuen Passwort; der Kern wartet höchstens 10 Sekunden auf das Modul
 
 NOT_CONFIGURED = f"{SERVICE} ist noch nicht eingerichtet. {SETTINGS_HINT}"
 MORE_TASKS = (
@@ -134,6 +135,8 @@ class SynologyService:
         self._paused: dict[str, _Pause] = {}
         self._boxes: dict[str, _Box] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        # Steht in jeder Kennung; nach einem neuen Passwort gilt so auch nichts, was eine laufende Abfrage noch einträgt.
+        self._generation: dict[str, int] = {}
 
     async def _log_out(self, boxes: list[_Box], limit_s: float = LOGOUT_TIMEOUT_S) -> None:
         """Meldet die Sitzungen ab; gibt nach `limit_s` Sekunden auf."""
@@ -161,6 +164,15 @@ class SynologyService:
             self._cache.pop(name, None)
             self._paused.pop(name, None)
         await self._log_out(boxes)
+
+    async def forget(self, name: str) -> None:
+        """Meldet die Sitzung eines Geräts ab und verwirft sein Zwischenergebnis und seine Pause, etwa nach einem neuen
+        Passwort im Tresor."""
+        self._generation[name] = self._generation.get(name, 0) + 1
+        self._cache.pop(name, None)
+        self._paused.pop(name, None)
+        box = self._boxes.pop(name, None)
+        await self._log_out([box] if box is not None else [], FORGET_LOGOUT_TIMEOUT_S)
 
     async def shutdown(self) -> None:
         await self.clear()
@@ -197,7 +209,7 @@ class SynologyService:
         return password
 
     def _session_box(self, cfg: DeviceConfig, has_password: bool) -> SessionBox:
-        fingerprint = (cfg, has_password)
+        fingerprint = (cfg, has_password, self._generation.get(cfg.name, 0))
         box = self._boxes.get(cfg.name)
         if box is None or box.fingerprint != fingerprint:
             box = self._boxes[cfg.name] = _Box(fingerprint, SessionBox())
@@ -306,7 +318,7 @@ class SynologyService:
             lock = self._locks.setdefault(cfg.name, asyncio.Lock())
             async with lock:
                 now = self._clock()
-                identity = (cfg, has_password)
+                identity = (cfg, has_password, self._generation.get(cfg.name, 0))
                 pause = self._paused.get(cfg.name)
                 if pause is not None and (pause.identity != identity or pause.until <= now):
                     del self._paused[cfg.name]
@@ -314,7 +326,7 @@ class SynologyService:
                 # „Aktualisieren“ umgeht den Zwischenspeicher, aber nicht die Pause nach einer abgelehnten Anmeldung.
                 if pause is not None:
                     return pause.overview
-                fingerprint = (cfg, has_password, alerts, many)
+                fingerprint = (*identity, alerts, many)
                 entry = self._cache.get(cfg.name)
                 if entry is not None and entry.fingerprint == fingerprint and entry.expires > now and not refresh:
                     return entry.overview

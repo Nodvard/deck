@@ -57,7 +57,7 @@ let confirmDialog: Mock<(message: string) => Promise<boolean>>;
 beforeEach(() => {
   window.history.replaceState(null, "", "/ext/shield/soc");
   confirmDialog = vi.fn<(message: string) => Promise<boolean>>().mockResolvedValue(true);
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog, promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(true),
   };

@@ -44,8 +44,8 @@ function niceMax(value: number): number {
 
 function timeLabel(ts: number, rangeSeconds: number): string {
   const d = new Date(ts * 1000);
-  if (rangeSeconds > 2 * 86400) return d.toLocaleDateString(undefined, { day: "2-digit", month: "2-digit" }) + " " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  if (rangeSeconds > 2 * 86400) return d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" }) + " " + d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
 }
 
 export function stats(values: (number | null)[]): { current: number | null; min: number | null; avg: number | null; max: number | null } {
@@ -174,7 +174,7 @@ export function TimeSeriesChart({ title, timestamps, series, format, yMax, heigh
             style={{ left: hoverX > width / 2 ? hoverX - 170 : hoverX + 12 }}
             role="tooltip"
           >
-            <p className="mb-1 text-[10px] text-white/50">{new Date(timestamps[hover] * 1000).toLocaleString()}</p>
+            <p className="mb-1 text-[10px] text-white/50">{new Date(timestamps[hover] * 1000).toLocaleString("de-DE")}</p>
             {series.map((s) => (
               <p key={s.key} className="flex items-center gap-2">
                 <span className="inline-block h-0.5 w-3 rounded" style={{ background: s.color }} />

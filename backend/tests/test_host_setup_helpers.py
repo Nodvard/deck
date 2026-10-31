@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -37,11 +38,11 @@ USER = "deck"
 
 
 def _helper_sandbox(
-    tmp_path: Path, *, stat_values: dict[tuple[str, str], str] | None = None, groups: str = USER,
-    writable: tuple[str, ...] = (), acls: dict[str, str] | None = None, **kw
+    tmp_path: Path, *, stat_values: dict[tuple[str, str], str] | None = None, writable: tuple[str, ...] = (),
+    acls: dict[str, str] | None = None, **kw
 ):
     """Wie `_sandbox` mit Ordner für die Hilfsskripte und `captured/` für sudoers-Dateien; `stat` (sonst root, Gruppe root, 755),
-    `id -Gn`, `runuser ... test -w` (der Test läuft womöglich als root) und `getfacl -c` antworten nach den Parametern."""
+    `runuser ... test -w` (der Test läuft womöglich als root) und `getfacl -c` antworten nach den Parametern."""
     bin_dir, _, log = _sandbox(tmp_path, user=USER, **kw)
     can_write = "".join(f"    {shlex.quote(path)}) exit 0;;\n" for path in writable)
     _stub(bin_dir / "runuser", f'''echo "runuser $*" >> "{log}"
@@ -78,7 +79,6 @@ esac
 ''')
     _stub(bin_dir / "id", f'''case "$1" in
   -gn) echo {USER};;
-  -Gn) echo {groups};;
   *) exit 0;;
 esac
 ''')
@@ -138,32 +138,58 @@ def test_a_damaged_helper_is_not_installed_and_gets_no_rule(tmp_path):
     assert (captured / "nodvard-deck").exists() and "Fertig." in done.stdout
 
 
+@needs_sh
+def test_a_helper_without_fallback_fails_the_setup_next_to_the_full_rule(tmp_path):
+    bin_dir, _, helper_dir, captured = _helper_sandbox(tmp_path)
+    docker = RootHelperFile(**{**_helper("docker").__dict__, "sha256": "0" * 64, "sudo_fallback": False})
+    done = _run(_script(helper_dir, docker, SHIELD), bin_dir)
+    assert done.returncode == 1, "ohne sein Skript hat das Modul auch mit der vollen Regel kein root"
+    assert (
+        "FEHLER: Das Hilfsskript docker-root wurde nicht eingerichtet: Die Datei ließ sich nicht prüfen oder nicht sicher "
+        "ablegen." in done.stdout
+    )
+    assert (captured / "nodvard-deck").exists() and (captured / "nodvard_shield_deck").exists()
+    assert not (captured / "nodvard_docker_deck").exists()
+
+
+@needs_sh
+def test_a_damaged_helper_with_fallback_stays_a_note_next_to_one_without(tmp_path):
+    bin_dir, _, helper_dir, captured = _helper_sandbox(tmp_path)
+    docker = RootHelperFile(**{**_helper("docker").__dict__, "sudo_fallback": False})
+    broken = RootHelperFile(**{**SHIELD.__dict__, "sha256": "0" * 64})
+    done = _run(_script(helper_dir, docker, broken), bin_dir)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "Hinweis: Das Hilfsskript shield-root wurde nicht eingerichtet" in done.stdout
+    assert "Hilfsskript docker-root (Version 1) eingerichtet, mit eigener sudo-Regel." in done.stdout
+    assert (captured / "nodvard_docker_deck").exists() and not (captured / "nodvard_shield_deck").exists()
+
+
 @pytest.mark.parametrize(
-    ("stat_values", "groups", "writable"),
+    ("stat_values", "writable"),
     [
-        ({("%u", "PARENT"): "1000"}, USER, ()),
-        ({("%a", "PARENT"): "777"}, USER, ()),
-        ({("%a", "PARENT"): "1777"}, USER, ()),
-        ({("%a", "PARENT"): "2775"}, f"{USER} root", ()),
-        ({("%a", "PARENT"): "2775", ("%g", "PARENT"): "50", ("%G", "PARENT"): "staff"}, USER, ()),
-        ({("%u", "/"): "1000"}, USER, ()),
-        ({("%a", "HELPERS"): "757"}, USER, ()),
-        ({("%u", "FILE"): "1000"}, USER, ()),
-        ({}, USER, ("PARENT",)),
+        ({("%u", "PARENT"): "1000"}, ()),
+        ({("%a", "PARENT"): "777"}, ()),
+        ({("%a", "PARENT"): "1777"}, ()),
+        ({("%a", "PARENT"): "2775"}, ()),
+        ({("%a", "PARENT"): "2775", ("%g", "PARENT"): "50", ("%G", "PARENT"): "staff"}, ()),
+        ({("%u", "/"): "1000"}, ()),
+        ({("%a", "HELPERS"): "757"}, ()),
+        ({("%u", "FILE"): "1000"}, ()),
+        ({}, ("PARENT",)),
     ],
     ids=[
-        "ordner-gehoert-benutzer", "ordner-fuer-alle", "ordner-sticky", "benutzer-in-gruppe-root", "fremde-gruppe", "wurzel",
+        "ordner-gehoert-benutzer", "ordner-fuer-alle", "ordner-sticky", "gruppe-root", "fremde-gruppe", "wurzel",
         "hilfsordner",
         "datei", "benutzer-darf-schreiben",
     ],
 )
 @needs_sh
-def test_helpers_are_skipped_unless_only_root_can_change_them(tmp_path, stat_values, groups, writable):
+def test_helpers_are_skipped_unless_only_root_can_change_them(tmp_path, stat_values, writable):
     """`benutzer-darf-schreiben`: Rechte, die man an den Bits nicht sieht (etwa eine ACL), zählen auch."""
     helper_dir = tmp_path / "usr-local-lib" / "nodvard-deck"
     paths = {"PARENT": str(helper_dir.parent), "HELPERS": str(helper_dir), "FILE": str(helper_dir / "shield-root"), "/": "/"}
     bin_dir, _, helper_dir, captured = _helper_sandbox(
-        tmp_path, stat_values={(fmt, paths[p]): v for (fmt, p), v in stat_values.items()}, groups=groups,
+        tmp_path, stat_values={(fmt, paths[p]): v for (fmt, p), v in stat_values.items()},
         writable=tuple(paths[p] for p in writable),
     )
     done = _run(_script(helper_dir, SHIELD), bin_dir)
@@ -183,7 +209,6 @@ def test_a_folder_another_group_may_write_skips_the_helpers_with_the_way_out(tmp
     parent = str(helper_dir.parent)
     bin_dir, _, helper_dir, captured = _helper_sandbox(
         tmp_path, stat_values={("%a", parent): "2775", ("%g", parent): "50", ("%G", parent): "staff"},
-        groups=f"{USER} docker",
     )
     helper_dir.parent.mkdir(parents=True)
     done = _run(_script(helper_dir, SHIELD), bin_dir)
@@ -201,32 +226,60 @@ def test_a_folder_another_group_may_write_skips_the_helpers_with_the_way_out(tmp
 
 
 @needs_sh
-def test_a_folder_the_root_group_may_write_is_fine(tmp_path):
-    helper_dir = tmp_path / "usr-local-lib" / "nodvard-deck"
-    bin_dir, _, helper_dir, captured = _helper_sandbox(
-        tmp_path, stat_values={("%a", str(helper_dir.parent)): "2775"}, groups=f"{USER} docker",
+def test_a_missing_tool_is_an_error_next_to_the_full_rule_when_a_helper_has_no_fallback(tmp_path):
+    bin_dir, _, helper_dir, captured = _helper_sandbox(tmp_path)
+    # Alle Werkzeuge außer base64, die Attrappen gehen vor.
+    only = tmp_path / "only"
+    only.mkdir()
+    for tool in bin_dir.iterdir():
+        (only / tool.name).symlink_to(tool)
+    for folder in (Path("/usr/bin"), Path("/bin")):
+        for tool in folder.iterdir() if folder.is_dir() else ():
+            if tool.name != "base64" and not (only / tool.name).exists() and not (only / tool.name).is_symlink():
+                (only / tool.name).symlink_to(tool)
+    docker = RootHelperFile(**{**_helper("docker").__dict__, "sudo_fallback": False})
+    done = subprocess.run(
+        [shutil.which("sh"), "-c", _script(helper_dir, docker)], capture_output=True, text=True,
+        env={"PATH": str(only), "LC_ALL": "C.UTF-8"}, timeout=30, check=False,
     )
-    done = _run(_script(helper_dir, SHIELD), bin_dir)
-    assert done.returncode == 0 and (captured / "nodvard_shield_deck").exists(), done.stdout
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert "FEHLER: base64, sha256sum oder stat fehlt hier, die Hilfsskripte wurden übersprungen." in done.stdout
+    assert (captured / "nodvard-deck").exists()
 
 
 @needs_sh
-def test_without_getfacl_the_note_names_the_acl_check(tmp_path):
+def test_a_skipped_folder_is_an_error_when_a_helper_has_no_fallback(tmp_path):
+    helper_dir = tmp_path / "usr-local-lib" / "nodvard-deck"
+    bin_dir, _, helper_dir, captured = _helper_sandbox(tmp_path, stat_values={("%u", str(helper_dir.parent)): "1000"})
+    docker = RootHelperFile(**{**_helper("docker").__dict__, "sudo_fallback": False})
+    done = _run(_script(helper_dir, docker, SHIELD), bin_dir)
+    assert done.returncode == 1, done.stdout
+    assert (
+        "FEHLER: Deshalb wurden die Hilfsskripte übersprungen, Modul shield nutzt die volle sudo-Regel, Modul docker hat "
+        "hier kein root." in done.stdout.splitlines()
+    )
+    assert SKIPPED not in done.stdout and (captured / "nodvard-deck").exists()
+
+
+@pytest.mark.parametrize("getfacl", [True, False], ids=["mit-getfacl", "ohne-getfacl"])
+@needs_sh
+def test_a_folder_the_root_group_may_write_skips_the_helpers(tmp_path, getfacl):
     helper_dir = tmp_path / "usr-local-lib" / "nodvard-deck"
     parent = str(helper_dir.parent)
     bin_dir, _, helper_dir, captured = _helper_sandbox(tmp_path, stat_values={("%a", parent): "2775"})
     helper_dir.parent.mkdir(parents=True)
-    _stub(bin_dir / "getfacl", "exit 127\n")
-    _stub(bin_dir / "ls", '[ "$1" = -ld ] || exit 1\necho "drwxrwsr-x    2 root     root          4096 Oct 21 12:00 $2"\n')
+    if not getfacl:
+        _stub(bin_dir / "getfacl", "exit 127\n")
     done = _run(_script(helper_dir, SHIELD), bin_dir)
     assert done.returncode == 0 and not (captured / "nodvard_shield_deck").exists(), done.stdout
     lines = done.stdout.splitlines()
-    assert (
-        f"Hinweis: Für den Ordner {parent} lässt sich ohne getfacl nicht prüfen, ob eine ACL (erweiterte Rechte) außer "
-        "root jemandem Schreibrecht gibt. Abhilfe als root: Paket acl installieren (apt install acl, auf Alpine apk add "
-        f"acl) oder chmod g-w {parent}"
-    ) in lines
-    assert SKIPPED in lines
+    assert lines[lines.index(host_setup.KEY_ADDED) + 1:-1] == [
+        (
+            f"Hinweis: Im Ordner {parent} darf die Gruppe root schreiben (Rechte 2775). Wer in ihr ist, könnte die "
+            f"Hilfsskripte austauschen und wäre damit root. Abhilfe als root: chmod g-w {parent}"
+        ),
+        SKIPPED,
+    ]
 
 
 @needs_sh

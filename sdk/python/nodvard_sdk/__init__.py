@@ -5,9 +5,6 @@ Eine Extension importiert nur von hier; der Kern importiert nie eine Extension.
 
 from __future__ import annotations
 
-import typing
-
-from ._legacy import legacy_getattr
 from .actions import (
     REQUEST_WAIT_S,
     ActionRequest,
@@ -60,6 +57,7 @@ from .extension import NodvardExtension
 from .http import max_body_bytes, sha256_fingerprint
 from .manifest import (
     KNOWN_PERMISSIONS,
+    RESERVED_EXTENSION_IDS,
     ROOT_HELPER_DIR,
     AdoptSpec,
     ExtensionManifest,
@@ -120,7 +118,6 @@ __all__ = [
     "API_VERSION",
     "is_compatible",
     "NodvardExtension",
-    "LatticeExtension",  # veraltet: dasselbe Objekt wie NodvardExtension (Alias mit DeprecationWarning)
     "ExtensionContext",
     "AdoptSpec",
     "ExtensionManifest",
@@ -130,6 +127,7 @@ __all__ = [
     "root_helper_path",
     "same_target",
     "KNOWN_PERMISSIONS",
+    "RESERVED_EXTENSION_IDS",
     "max_body_bytes",
     "sha256_fingerprint",
     "ConnectorType",
@@ -214,7 +212,6 @@ __all__ = [
     "LogView",
     # Fehler
     "NodvardError",
-    "LatticeError",  # veraltet: dasselbe Objekt wie NodvardError (Alias mit DeprecationWarning)
     "PermissionDenied",
     "ActionBlocked",
     "SecretUnavailable",
@@ -226,11 +223,3 @@ __all__ = [
     "InvalidRegistration",
     "CertificateMismatch",
 ]
-
-# Veraltete Namen `lattice_sdk`, `LatticeExtension` und `LatticeError`: dieselben Objekte, mit DeprecationWarning
-# (`lattice_sdk` ist ein Alias dieses Pakets, siehe _legacy.py). Entfernt wird nichts ohne angekündigte Major-Version.
-_LEGACY_NAMES = {"LatticeExtension": "NodvardExtension", "LatticeError": "NodvardError"}
-__getattr__ = legacy_getattr(__name__, _LEGACY_NAMES, globals())
-if typing.TYPE_CHECKING:
-    LatticeExtension = NodvardExtension
-    LatticeError = NodvardError

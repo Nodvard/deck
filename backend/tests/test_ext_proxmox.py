@@ -25,9 +25,7 @@ import ipaddress
 import json
 import socket
 import sys
-from datetime import timedelta
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pytest
 import pytest_asyncio
@@ -37,9 +35,8 @@ from fastapi.responses import JSONResponse
 from raw_http_helpers import BROKEN_ANSWERS, REDIRECT_ANSWERS, raw_http_server
 from nodvard_sdk.capabilities import NotificationChannel
 from sqlalchemy import select
+from window_helpers import window
 
-from nodvard_deck.config import LOCAL_TIMEZONE
-from nodvard_deck.db import utcnow
 from nodvard_deck.ext.runtime import get_extension_runtime
 from nodvard_deck.models import ExtensionRecord, Host
 from nodvard_deck.services import extensions as extensions_service
@@ -1775,6 +1772,25 @@ async def test_token_ersetzen_ueber_einstellungs_endpunkt(client, db_session, te
 
 
 @pytest.mark.asyncio
+async def test_a_replaced_token_is_used_at_once_without_a_hook(client, db_session, test_settings, mock_proxmox):
+    base_url, _state = mock_proxmox
+    headers = _auth_header(await _setup_proxmox(client, db_session, test_settings, base_url))
+    loaded = get_extension_runtime().loaded["proxmox"]
+
+    async def replace(value: str) -> list[dict]:
+        body = {"label": "proxmox-token:primary", "value": value, "current_password": "correct-horse-battery"}
+        assert (await client.put("/api/v1/extensions/proxmox/secrets", json=body, headers=headers)).status_code == 204
+        return (await client.get("/api/v1/ext/proxmox/widgets/storage", headers=headers)).json()["data"]
+
+    rows = await replace("falsch-0000")
+    assert [r["badge"] for r in rows] == ["nicht erreichbar"] and "HTTP 401" in rows[0]["summary"]
+    assert (await loaded.instance.health(loaded.ctx)).healthy is False
+    rows = await replace(_TOKEN_SECRET)
+    assert {r["storage"] for r in rows} == {"local-lvm", "local", "backup-pi"}
+    assert (await loaded.instance.health(loaded.ctx)).healthy is True
+
+
+@pytest.mark.asyncio
 async def test_no_token_is_taken_while_two_connections_share_the_name(client, db_session, test_settings):
     test_settings.extensions_dir = REPO_EXTENSIONS_DIR
     await extensions_service.discover_and_sync(db_session, test_settings)
@@ -3021,14 +3037,13 @@ class _RecordingChannel:
 
 
 def _window_now(host_ids) -> list[dict]:
-    """Wartungsfenster, das gerade laeuft (Start vor 5 Minuten, Ortszeit wie der Waehler)."""
-    start = (utcnow() - timedelta(minutes=5)).astimezone(ZoneInfo(LOCAL_TIMEZONE))
-    return [{"cron": f"{start.minute} {start.hour} * * *", "duration_minutes": 60, "host_ids": host_ids}]
+    """Wartungsfenster, das gerade läuft (Start vor 5 Minuten)."""
+    return [window(host_ids)]
 
 
 @pytest.mark.asyncio
 async def test_watch_message_is_silenced_end_to_end_by_the_maintenance_window_of_its_node(
-    client, db_session, test_settings, mock_proxmox
+    client, db_session, test_settings, mock_proxmox, window_clock
 ):
     from nodvard_deck.models import NotificationDelivery
 
@@ -3057,8 +3072,7 @@ async def test_watch_message_is_silenced_end_to_end_by_the_maintenance_window_of
 
 def _window_over(host_ids) -> list[dict]:
     """Dasselbe Fenster, aber schon vorbei (Start vor 90 Minuten, 60 Minuten lang)."""
-    start = (utcnow() - timedelta(minutes=90)).astimezone(ZoneInfo(LOCAL_TIMEZONE))
-    return [{"cron": f"{start.minute} {start.hour} * * *", "duration_minutes": 60, "host_ids": host_ids}]
+    return [window(host_ids, minutes_ago=90)]
 
 
 def _node_offline(state, bad: bool) -> None:
@@ -3109,7 +3123,7 @@ async def _watch_deliveries(db_session) -> list[tuple[str, str]]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("make_bad", "polls", "alert_title", "ok_title"), _WINDOW_CASES)
 async def test_watch_announces_a_problem_from_the_window_once_after_it_if_it_persists(
-    client, db_session, test_settings, mock_proxmox, make_bad, polls, alert_title, ok_title
+    client, db_session, test_settings, mock_proxmox, make_bad, polls, alert_title, ok_title, window_clock
 ):
     """PR #41, bekannte Grenze: faellt ein Knoten im Wartungsfenster aus und bleibt aus,
     kam danach nie eine Ausfallmeldung. Jetzt: im Fenster genau EIN stummer Eintrag (auch
@@ -3151,7 +3165,7 @@ async def test_watch_announces_a_problem_from_the_window_once_after_it_if_it_per
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("make_bad", "polls", "alert_title", "ok_title"), _WINDOW_CASES)
 async def test_watch_problem_resolved_within_the_window_is_not_announced_afterwards(
-    client, db_session, test_settings, mock_proxmox, make_bad, polls, alert_title, ok_title
+    client, db_session, test_settings, mock_proxmox, make_bad, polls, alert_title, ok_title, window_clock
 ):
     """Ausfall und Entwarnung beide im Fenster: beides steht still im Verlauf, nach dem
     Fenster kommt nichts nach."""
@@ -3178,7 +3192,7 @@ async def test_watch_problem_resolved_within_the_window_is_not_announced_afterwa
 
 @pytest.mark.asyncio
 async def test_watch_recovery_noticed_only_after_the_window_says_it_was_in_the_window(
-    client, db_session, test_settings, mock_proxmox
+    client, db_session, test_settings, mock_proxmox, window_clock
 ):
     """Grenzfall: stumm gemeldet, wieder gut erst zwischen letzter Pruefung im Fenster und
     erster danach bemerkt. Die Entwarnung laeuft wie jede Meldung durch die Fensterpruefung
@@ -3215,7 +3229,7 @@ async def _watch_with_channel(client, db_session, test_settings, mock_proxmox):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("make_bad", "polls", "alert_title", "ok_title"), _WINDOW_CASES)
 async def test_watch_all_clear_for_a_heard_alarm_comes_after_the_window(
-    client, db_session, test_settings, mock_proxmox, make_bad, polls, alert_title, ok_title
+    client, db_session, test_settings, mock_proxmox, make_bad, polls, alert_title, ok_title, window_clock
 ):
     """Aus dem Review: der Ausfall kam hoerbar, die Entwarnung faellt ins Fenster. Im Fenster
     bleibt sie still (niemand wird nachts geweckt), nach dem Fenster kommt sie genau
@@ -3249,7 +3263,7 @@ async def test_watch_all_clear_for_a_heard_alarm_comes_after_the_window(
 
 @pytest.mark.asyncio
 async def test_watch_pending_all_clear_is_dropped_when_the_problem_returns(
-    client, db_session, test_settings, mock_proxmox
+    client, db_session, test_settings, mock_proxmox, window_clock
 ):
     """Ausstehende Entwarnung, aber der Knoten faellt noch im Fenster wieder aus: keine
     Entwarnung mehr, sondern der neue Ausfall (still im Fenster, danach einmal hoerbar).
@@ -3278,7 +3292,7 @@ async def test_watch_pending_all_clear_is_dropped_when_the_problem_returns(
 
 @pytest.mark.asyncio
 async def test_watch_unreadable_hosts_do_not_end_the_window_early(
-    client, db_session, test_settings, mock_proxmox, monkeypatch
+    client, db_session, test_settings, mock_proxmox, monkeypatch, window_clock
 ):
     """Aus dem Review: sind die Hosts gerade nicht lesbar, fehlt die Host-Zuordnung. Die
     stumme Meldung darf deshalb nicht sofort hoerbar kommen -- das Fenster laeuft ja noch.
@@ -3311,7 +3325,7 @@ async def test_watch_unreadable_hosts_do_not_end_the_window_early(
 
 @pytest.mark.asyncio
 async def test_watch_after_window_message_that_lands_in_a_window_again_stays_muted(
-    client, db_session, test_settings, mock_proxmox, monkeypatch
+    client, db_session, test_settings, mock_proxmox, monkeypatch, window_clock
 ):
     """Faellt die Nachmeldung selbst in ein Fenster (ein zweites schliesst direkt an, oder
     es beginnt genau zwischen Frage und Versand), bleibt sie still und kommt erst nach
@@ -3357,7 +3371,7 @@ async def test_watch_after_window_message_that_lands_in_a_window_again_stays_mut
 
 @pytest.mark.asyncio
 async def test_watch_runs_against_an_older_core_without_the_new_answers(
-    client, db_session, test_settings, mock_proxmox, monkeypatch
+    client, db_session, test_settings, mock_proxmox, monkeypatch, window_clock
 ):
     """Aelterer Kern: `send()` liefert nichts, `would_suppress()` gibt es nicht. Der
     Waechter laeuft weiter wie vor der Nachmeldung (kein Absturz, nichts nachgeholt)."""

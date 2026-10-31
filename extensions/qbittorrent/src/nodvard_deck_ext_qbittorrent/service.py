@@ -34,6 +34,7 @@ AUTH_FAILED_TTL_S = AUTH_PAUSE_S
 # Die Liste aller Torrents ist die schwerste Abfrage; war sie zu groß, wird sie so lange nicht erneut geholt.
 TOO_LARGE_PAUSE_S = 600.0
 TEST_TIMEOUT_S = 20.0  # für „Verbindung testen“ (der Kern bricht nach 25 Sekunden ab)
+LOGOUT_TIMEOUT_S = 2.0  # nach einem neuen Passwort; der Kern wartet höchstens 10 Sekunden auf das Modul
 CONNECTION_TIMEOUT_S = 50.0  # alle Abfragen einer Verbindung zusammen
 
 TOO_LARGE_NOTE = (
@@ -81,12 +82,28 @@ class QbittorrentService:
         self._boxes: dict[str, _Box] = {}
         self._too_large: dict[str, float] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        # Steht in jeder Kennung; nach einem neuen Passwort gilt so auch nichts, was eine laufende Abfrage noch einträgt.
+        self._generation: dict[str, int] = {}
 
     def clear(self) -> None:
         """Verwirft alle Zwischenergebnisse, Pausen und Sitzungen."""
         self._cache.clear()
         self._boxes.clear()
         self._too_large.clear()
+
+    async def forget(self, name: str) -> None:
+        """Verwirft Zwischenergebnis, Pause und Sitzung einer Verbindung und meldet die Sitzung ab, etwa nach einem neuen
+        Passwort im Tresor."""
+        self._generation[name] = self._generation.get(name, 0) + 1
+        self._cache.pop(name, None)
+        box = self._boxes.pop(name, None)
+        if box is None:
+            return
+        try:
+            async with asyncio.timeout(LOGOUT_TIMEOUT_S):
+                await logout(self._ctx.http, box.session)
+        except Exception:  # noqa: BLE001 - Abmelden ist nur Höflichkeit; die Sitzung gilt bei Deck so oder so nicht mehr
+            logger.debug("qBittorrent %s: Abmelden der alten Sitzung unvollständig", name)
 
     async def shutdown(self) -> None:
         """Meldet alle Sitzungen ab; gibt nach fünf Sekunden auf."""
@@ -116,7 +133,7 @@ class QbittorrentService:
         return password
 
     def _session_box(self, cfg: ConnectionConfig, has_password: bool) -> SessionBox:
-        fingerprint = (cfg, has_password)
+        fingerprint = (cfg, has_password, self._generation.get(cfg.name, 0))
         box = self._boxes.get(cfg.name)
         if box is None or box.fingerprint != fingerprint:
             box = self._boxes[cfg.name] = _Box(fingerprint, SessionBox())
@@ -213,7 +230,7 @@ class QbittorrentService:
             has_password = False if cfg.problem else await self._ctx.secrets.exists(password_label(cfg.name))
             lock = self._locks.setdefault(cfg.name, asyncio.Lock())
             async with lock:
-                fingerprint = (cfg, has_password)
+                fingerprint = (cfg, has_password, self._generation.get(cfg.name, 0))
                 entry = self._cache.get(cfg.name)
                 fresh = entry is not None and entry.fingerprint == fingerprint and entry.expires > self._clock()
                 # „Aktualisieren“ umgeht den Zwischenspeicher, aber nicht die Pause nach einer abgelehnten Anmeldung.

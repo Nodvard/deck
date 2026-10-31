@@ -488,20 +488,15 @@ class _RecordingChannel:
 
 
 def _running_window(host_ids) -> list[dict]:
-    """Ein vor 5 Minuten gestartetes Wartungsfenster (Cron in Ortszeit wie der Waehler)."""
-    from datetime import timedelta
-    from zoneinfo import ZoneInfo
+    """Ein vor 5 Minuten gestartetes Wartungsfenster."""
+    from window_helpers import window
 
-    from nodvard_deck.config import LOCAL_TIMEZONE
-    from nodvard_deck.db import utcnow
-
-    start = (utcnow() - timedelta(minutes=5)).astimezone(ZoneInfo(LOCAL_TIMEZONE))
-    return [{"cron": f"{start.minute} {start.hour} * * *", "duration_minutes": 60, "host_ids": host_ids}]
+    return [window(host_ids)]
 
 
 @pytest.mark.asyncio
 async def test_incident_report_is_silenced_end_to_end_by_the_maintenance_window_of_its_host(
-    client, db_session, test_settings, mock_ollama
+    client, db_session, test_settings, mock_ollama, window_clock
 ):
     """Der Lagebericht zu Vorfaellen EINES Servers traegt dessen Host-ID --
     ein Wartungsfenster fuer diesen Server haelt den Push zurueck, eins fuer einen anderen
@@ -540,7 +535,7 @@ async def test_incident_report_is_silenced_end_to_end_by_the_maintenance_window_
 
 @pytest.mark.asyncio
 async def test_incident_report_over_several_hosts_is_silenced_only_when_all_are_in_the_window(
-    client, db_session, test_settings, mock_ollama
+    client, db_session, test_settings, mock_ollama, window_clock
 ):
     """Ein Lagebericht ueber Vorfaelle mehrerer Server ist ein Sammelbericht: er traegt
     alle Server (`host_ids`) und bleibt hoerbar, solange einer davon nicht im Fenster liegt."""
@@ -984,6 +979,61 @@ async def test_incidents_widget_offers_confirm_only_for_open_incidents(client, d
     assert reopened.status_code == 200, reopened.text
     rows = (await client.get("/api/v1/ext/shield/widgets/incidents", headers=_auth_header(token))).json()["data"]
     assert [(r["status"], r["can_confirm"]) for r in rows] == [("open", True)]
+
+
+async def _token_with(client, db_session, username: str, *permissions: str) -> str:
+    from nodvard_deck.core import security
+    from nodvard_deck.models import Role, RolePermission, User
+
+    role = Role(name=f"rolle-{username}", permissions=[RolePermission(permission=p) for p in permissions])
+    user = User(username=username, password_hash=security.hash_password("correct-horse-battery"), is_active=True)
+    user.roles.append(role)
+    db_session.add_all([role, user])
+    await db_session.commit()
+    login = await client.post("/api/v1/auth/login", json={"username": username, "password": "correct-horse-battery"})
+    assert login.status_code == 200, login.text
+    return login.json()["access_token"]
+
+
+@pytest.mark.asyncio
+async def test_soc_read_shows_incidents_but_only_soc_manage_changes_their_status(
+    client, db_session, test_settings, mock_ollama
+):
+    ollama_url, state = mock_ollama
+    owner = await _setup_shield(client, db_session, test_settings, ollama_url)
+    incident_id = await _record_incident(
+        client, owner, state, host_name="docker", target="nginx-proxy",
+        message="Container CRASH (Exited (1))", reply=_CRASH_REPLY,
+    )
+    reader = await _token_with(client, db_session, "leser", "soc.read")
+    manager = await _token_with(client, db_session, "verwalter", "soc.read", "soc.manage")
+
+    for path in ("history", "incidents", "widgets/incidents", "stats"):
+        assert (await client.get(f"/api/v1/ext/shield/{path}", headers=_auth_header(reader))).status_code == 200, path
+    for verb in ("confirm", "resolve", "reopen", "dismiss"):
+        denied = await client.post(f"/api/v1/ext/shield/incidents/{incident_id}/{verb}", headers=_auth_header(reader))
+        assert denied.status_code == 403, (verb, denied.text)
+    assert (await _incident_rows(client, owner))[0]["status"] == "proposed"
+
+    steps = (("confirm", "reviewed"), ("resolve", "resolved"), ("reopen", "open"), ("dismiss", "dismissed"))
+    for verb, expected in steps:
+        r = await client.post(f"/api/v1/ext/shield/incidents/{incident_id}/{verb}", headers=_auth_header(manager))
+        assert (r.status_code, r.json()["status"]) == (200, expected), verb
+
+
+@pytest.mark.asyncio
+async def test_incidents_widget_shows_its_buttons_only_with_soc_manage(client, db_session, test_settings, mock_ollama):
+    ollama_url, _state = mock_ollama
+    owner = await _setup_shield(client, db_session, test_settings, ollama_url)
+    reader = await _token_with(client, db_session, "leser", "soc.read")
+
+    async def actions_for(token: str) -> list[str]:
+        widgets = (await client.get("/api/v1/widgets", headers=_auth_header(token))).json()
+        spec = next(w for w in widgets if w["ext_id"] == "shield" and w["id"] == "incidents")
+        return [a["id"] for a in spec["view"]["item"]["actions"]]
+
+    assert await actions_for(reader) == []
+    assert await actions_for(owner) == ["confirm", "dismiss"]
 
 
 @pytest.mark.asyncio

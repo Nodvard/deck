@@ -18,6 +18,7 @@ from starlette.background import BackgroundTask
 from ...config import get_settings
 from ...core.error_text import describe_connection_error, is_expected_connection_error
 from ...core.ws_hub import get_ws_hub
+from ...db.session import release_connection
 from ...ext.runtime import get_extension_runtime
 from ...models import Host, User
 from ...services import audit as audit_service
@@ -258,6 +259,8 @@ async def list_places(host_id: str, user: CurrentUser, session: SessionDep) -> l
     host = await session.get(Host, host_id)
     if host is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
+    # Jede Server-Seite fragt die Orte ab, ein Anbieter darf dafür bis zu `PLACES_TIMEOUT_S` brauchen.
+    await release_connection(session)
     # Ohne Dateiquelle des Servers führten die Abkürzungen ins Leere und verrieten Ordner, die der Nutzer nicht sehen
     # darf.
     if not any(_source_host_id(s) == host.id and _may_use(user, s) for s in await _all_sources()):

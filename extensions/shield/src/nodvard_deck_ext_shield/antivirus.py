@@ -1008,56 +1008,51 @@ QUARANTINE_DIR_UNSAFE = ("Der Ordner der Quarantäne auf dem Server ist eine Ver
                          f"{QUARANTINE_DIR} und seine Unterordner auf dem Server prüfen.")
 
 
-def _quarantine_dirs_command(*dirs: str) -> str:
-    """sh: legt fehlende Ordner der Quarantäne mit 700 an (nie `mkdir -p`) und bricht ab, wenn einer eine Verknüpfung
-    ist, nicht dem Aufrufer gehört oder andere Rechte als 700 hat (wie `qdir_safe anlegen` im Hilfsskript)."""
-    return (
-        f"S=0; for d in {' '.join(_q(d) for d in dirs)}; do "
-        "if [ ! -e \"$d\" ] && [ ! -L \"$d\" ]; then mkdir -m 700 \"$d\" 2>/dev/null || { S=1; break; }; fi; "
-        "if [ ! -d \"$d\" ] || [ -L \"$d\" ]; then S=1; break; fi; "
-        "case \"$(stat -c %u:%a \"$d\" 2>/dev/null)\" in \"$(id -u):700\"|\"$(id -u):2700\") ;; *) S=1; break;; esac; "
-        f"done; [ \"$S\" = 0 ] || {{ echo {_q(QUARANTINE_DIR_UNSAFE)}; exit 5; }}; "
-    )
-
-
 def origin_record(quarantine_path: str) -> str:
     """Wo Rechte und Ursprungsort der Datei `quarantine_path` liegen (neben ihr, im Unterordner `.herkunft`)."""
     folder, _, name = quarantine_path.rpartition("/")
     return f"{folder}/{ORIGIN_DIR_NAME}/{name}"
 
 
-def quarantine_command(path: str, quarantine_name: str) -> str:
-    """Verschiebt die Datei in den Tresor, merkt sich die Rechte (Ausgabe) und macht sie unlesbar und unausführbar.
+QUARANTINE_HELPER_MISSING = ("In dieser Installation fehlt das mitgelieferte Hilfsskript von Nodvard Shield, ohne seine "
+                             "Prüfung wird nichts verschoben. Bitte Nodvard Deck neu einspielen (docker compose pull, "
+                             "dann docker compose up -d).")
+_QUARANTINE_FUNCTIONS = ("die", "check_qname", "confirm_finding", "mode4", "split_path", "qdir_safe", "put_back",
+                         "quarantine")
+_QNAME_RE = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")
 
-    Bricht ab, wenn die Datei nicht (mehr) existiert, ein Link im Weg ist oder die Datei weitere Hardlinks hat."""
-    # Symbolischen Links wird nie gefolgt: als root träfe `chmod 000` sonst das Linkziel (z. B. /etc/shadow); ebenso
-    # darf kein Ordner im Pfad ein Link sein. Darum `cd -P` in den Ordner (ein späterer Tausch ändert nichts), dort nur
-    # mit dem Dateinamen arbeiten und nach dem `mv` erneut prüfen (im Tresor kann nur root tauschen).
-    parent, _, name = path.rpartition("/")
+
+def _helper_functions(names: Sequence[str]) -> str | None:
+    """Die Shell-Funktionen `names` wörtlich aus dem mitgelieferten Hilfsskript, `None`, wenn eine fehlt."""
+    try:
+        text = HELPER_FILE.read_text(encoding="ascii")
+    except (OSError, UnicodeDecodeError):
+        return None
+    parts = []
+    for name in names:
+        match = re.search(rf"^{name}\(\) {{\n.*?^}}\n", text, re.MULTILINE | re.DOTALL)
+        if match is None:
+            return None
+        parts.append(match.group(0))
+    return "".join(parts)
+
+
+_QUARANTINE_SH = _helper_functions(_QUARANTINE_FUNCTIONS)
+
+
+def quarantine_command(path: str, quarantine_name: str) -> str:
+    """Wie `quarantine` im Hilfsskript, mit dessen eigenen Funktionen: Verschoben wird nur, was ClamAV am Ort und noch
+    einmal im Prüfordner selbst findet; Rechte und Ursprung kommen in die Ablage, die Datei wird unlesbar."""
+    # Auch ohne Hilfsskript (Anmeldung als root, volle sudo-Regel) zählt nicht, was in der Datenbank steht: Ein Fund aus
+    # einer veränderten Sicherung machte sonst jede Datei per Klick unlesbar.
+    _, _, name = path.rpartition("/")
     if not path.startswith("/") or name in ("", ".", ".."):
         raise ValueError("Ungültiger Dateipfad.")
-    parent = parent or "/"
-    here = _q("./" + name)
-    target = _q(f"{QUARANTINE_DIR}/{quarantine_name}")
-    origin = _q(origin_record(f"{QUARANTINE_DIR}/{quarantine_name}"))
-    # Hardlinks: `chmod` ändert den Inode für alle Namen; ein zwischen Prüfung und `mv` angehängter Hardlink auf eine
-    # Systemdatei machte sie mit `chmod 000` unlesbar. Hat die Datei im Tresor mehr als einen Namen, wird nur der
-    # Tresor-Name entfernt und der Befehl scheitert sichtbar; entscheidend ist die Prüfung nach dem `mv`.
-    return (
-        f"set -e; umask 077; cd -P {_q(parent)} 2>/dev/null || {{ echo 'Datei nicht mehr vorhanden'; exit 3; }}; "
-        f"[ \"$(pwd -P)\" = {_q(parent)} ] || {{ echo {_q(PATH_LINK_REFUSED)}; exit 5; }}; "
-        f"[ -L {here} ] && {{ echo {_q(SYMLINK_REFUSED)}; exit 5; }}; "
-        f"[ -f {here} ] || {{ echo 'Datei nicht mehr vorhanden'; exit 3; }}; "
-        f"[ \"$(stat -c %h {here})\" = 1 ] || {{ echo {_q(HARDLINK_REFUSED)}; exit 5; }}; "
-        # Dieselben Ordner wie beim Hilfsskript (dort prüft ClamAV im Prüfordner), mit denselben Bedingungen.
-        + _quarantine_dirs_command(QUARANTINE_DIR, f"{QUARANTINE_DIR}/{ORIGIN_DIR_NAME}", f"{QUARANTINE_DIR}/{CHECK_DIR_NAME}")
-        # Rechte und Ursprung kommen vor dem Verschieben in die Ablage: Das Hilfsskript legt später nur dorthin zurück.
-        + f"M=$(stat -c %a {here}); printf '%s\\n%s\\n' \"$M\" {_q(path)} > {origin}; "
-        f"mv -f {here} {target} || {{ rm -f {origin}; exit 1; }}; "
-        f"if [ -L {target} ]; then rm -f {target} {origin}; echo {_q(SYMLINK_SWAPPED)}; exit 5; fi; "
-        f"if [ \"$(stat -c %h {target})\" != 1 ]; then rm -f {target} {origin}; echo {_q(HARDLINK_SWAPPED)}; exit 5; fi; "
-        f"chmod 000 {target}; echo \"@@mode=$M\""
-    )
+    if not _QNAME_RE.fullmatch(quarantine_name):
+        raise ValueError("Ungültiger Name in der Quarantäne.")
+    if _QUARANTINE_SH is None:
+        raise ValueError(QUARANTINE_HELPER_MISSING)
+    return f"set -eu; QDIR={_q(QUARANTINE_DIR)}; {_QUARANTINE_SH}quarantine {_q(path)} {_q(quarantine_name)}"
 
 
 RESTORE_FOLDER_MISSING = "Der Ursprungsordner ist nicht mehr da oder nicht erreichbar – bitte zuerst auf dem Server wieder anlegen."
@@ -1067,9 +1062,9 @@ RESTORE_STAGE_FAILED = ("Im Ursprungsordner ließ sich kein geschützter Zwische
                         "Laufwerk ohne Dateirechte oder in einem schreibgeschützten Ordner) oder er wurde ausgetauscht – "
                         "aus Sicherheitsgründen nicht wiederhergestellt.")
 RESTORE_STUCK = "Die Datei ließ sich weder zurücklegen noch in die Quarantäne zurückholen. Sie liegt nur für root lesbar hier:"
-RESTORE_NO_ORIGIN = ("Für diese Datei ist auf dem Server kein Ursprungsort hinterlegt (sie kam vor diesem Update in die "
-                     "Quarantäne). Das Hilfsskript legt nur an hinterlegte Orte zurück; bitte auf dem Server von Hand "
-                     "zurücklegen oder die Datei löschen.")
+RESTORE_NO_ORIGIN = ("Für diese Datei gibt es auf dem Server keinen gültigen Eintrag zu Ort und Rechten (etwa weil "
+                     "sie mit Nodvard Deck 0.8 oder älter in die Quarantäne kam). Nodvard Shield legt nur an "
+                     "hinterlegte Orte zurück; bitte auf dem Server von Hand zurücklegen oder die Datei löschen.")
 QUARANTINE_NOT_FOUND = "ClamAV findet beim erneuten Prüfen nichts in der Datei – sie bleibt, wo sie ist."
 QUARANTINE_UNCHECKED = ("Die Datei ließ sich vor dem Verschieben nicht noch einmal prüfen (ClamAV fehlt oder antwortet "
                         "nicht) – sie bleibt, wo sie ist.")
@@ -1078,78 +1073,50 @@ QUARANTINE_CHECK_BUSY = ("Im Prüfordner der Quarantäne liegt noch eine Datei m
 QUARANTINE_KEPT = ("Die Datei kam nicht in die Quarantäne und ließ sich auch nicht an ihren Ort zurücklegen (dort liegt "
                    "inzwischen etwas anderes, oder sie wurde während des Verschiebens ausgetauscht). Sie liegt nur für "
                    "root zugänglich hier:")
-# Zwischenordner im Ursprungsordner (`mktemp -d`: neu, Rechte 700, gehört root). Mit gesetztem Gruppen-Bit erbt er es
-# und zeigt 2700: Das Bit gibt niemandem Zugriff, die Prüfung lässt es zu.
-RESTORE_STAGE_TEMPLATE = "./.nodvard-wiederherstellen.XXXXXX"
+
+_RESTORE_SH = _helper_functions(("die", "check_qname", "mode4", "split_path", "qdir_safe", "put_back", "restore"))
 
 
-def restore_command(quarantine_path: str, original_path: str, mode: str | None) -> str:
-    """Zurück an den Ursprungsort, wie beim Verschieben nie über einen Ordner, der inzwischen eine Verknüpfung ist.
-
-    Als root mit Besitzer und Rechten der Datei; ein untergeschobener Link legte sie sonst z. B. in /etc/profile.d ab."""
-    # Der Ursprungsordner gehört oft einem normalen Benutzer, der dort jederzeit `./name` anlegen kann. Auf einem
-    # anderen Dateisystem ist `mv` ein Kopieren, dessen Sicherheit vom Programm abhängt (BusyBox setzt Rechte über den
-    # Pfad, uutils vor 0.10 folgt Verknüpfungen beim Anlegen). Darum zwei Schritte.
-    if not _in_quarantine(quarantine_path):
+def restore_command(quarantine_path: str) -> str:
+    """Wie `restore` im Hilfsskript, mit dessen eigenen Funktionen: Ort und Rechte nur aus der Ablage der Quarantäne,
+    zurück nie über einen Ordner, der inzwischen eine Verknüpfung ist."""
+    # Ort und Rechte in der Datenbank können aus einer veränderten Sicherung stammen; root legte die Datei damit
+    # etwa nach /etc/profile.d.
+    name = _quarantine_name_of(quarantine_path)
+    if name is None:
         raise ValueError(_outside_quarantine("stellt Nodvard Shield sie nicht wieder her"))
-    safe_mode = mode if mode and re.fullmatch(r"[0-7]{3,4}", mode) else "644"
-    parent, _, name = original_path.rpartition("/")
-    if not original_path.startswith("/") or name in ("", ".", ".."):
-        raise ValueError("Ungültiger Dateipfad.")
-    parent = parent or "/"
-    here = _q("./" + name)
-    up = _q("../" + name)
-    source = _q(quarantine_path)
-    origin = _q(origin_record(quarantine_path))
-    # Schritt 1: Die Datei kommt in einen frischen Zwischenordner im Ursprungsordner (`mktemp -d`); nach `cd -P` hinein
-    # werden Pfad, Besitzer und Rechte geprüft, darin kann außer root niemand etwas anlegen. Scheitert eine Prüfung,
-    # wird der leere Zwischenordner entfernt (`rmdir` löst keine Verknüpfung auf).
-    stage = _q("" if parent == "/" else parent) + '/"${T#./}"'
-    leave = 'cd .. && rmdir "$T" 2>/dev/null || true'
-    # Nach gescheiterter Prüfung steht die Shell evtl. schon im Zwischenordner (oder, bei einem untergeschobenen Link,
-    # ganz woanders): zurück in den Ursprungsordner, dort nur den eigenen (leeren) Zwischenordner entfernen.
-    drop = f'cd {_q(parent)} 2>/dev/null && rmdir "$T" 2>/dev/null || true'
-    stage_failed = f"{{ {drop}; echo {_q(RESTORE_STAGE_FAILED)}; exit 5; }}"
-    # Schritt 2: Von dort ein Umbenennen im selben Ordner (`rename`, nie Kopieren): `mv -T -n ./name ../name`. `rename`
-    # folgt am letzten Pfadteil keiner Verknüpfung, `-T` behandelt das Ziel nie als Ordner, `-n` überschreibt nichts;
-    # einen root-Ordner ohne Schreibrecht kann der Benutzer nicht umhängen.
-    return (
-        f"set -e; [ -f {source} ] || {{ echo 'Nicht mehr in der Quarantäne'; exit 3; }}; "
-        f"cd -P {_q(parent)} 2>/dev/null || {{ echo {_q(RESTORE_FOLDER_MISSING)}; exit 3; }}; "
-        f"[ \"$(pwd -P)\" = {_q(parent)} ] || {{ echo {_q(RESTORE_LINK_REFUSED)}; exit 5; }}; "
-        f"if [ -e {here} ] || [ -L {here} ]; then echo 'Am Ursprungsort liegt inzwischen eine andere Datei'; exit 4; fi; "
-        f"T=$(mktemp -d {RESTORE_STAGE_TEMPLATE} 2>/dev/null) || {{ echo {_q(RESTORE_STAGE_FAILED)}; exit 5; }}; "
-        f"cd -P \"$T\" 2>/dev/null && [ \"$(pwd -P)\" = {stage} ] "
-        f"&& case \"$(stat -c %u:%a .)\" in \"$(id -u):700\"|\"$(id -u):2700\") true;; *) false;; esac "
-        f"|| {stage_failed}; "
-        # Ältere mv und BusyBox melden bei `-n` Erfolg, auch wenn nichts verschoben wurde: Entscheidend ist, ob die
-        # Quelle danach weg ist; klappt Schritt 2 nicht, geht die Datei zurück in die Quarantäne (wieder `000`). Rechte
-        # vorher dort setzen (`mv` behält sie), den Ursprungsordner nie anlegen (`mkdir -p` folgte Verknüpfungen).
-        f"chmod {safe_mode} {source}; mv -T -n {source} {here} 2>/dev/null || true; "
-        f"if [ -e {source} ] || [ -L {source} ]; then chmod 000 {source}; {leave}; echo {_q(RESTORE_NOT_MOVED)}; exit 4; fi; "
-        f"mv -T -n {here} {up} 2>/dev/null || true; "
-        f"if [ -e {here} ] || [ -L {here} ]; then mv -T -n {here} {source} 2>/dev/null || true; "
-        f"if [ -f {source} ]; then chmod 000 {source}; {leave}; echo {_q(RESTORE_TARGET_TAKEN)}; exit 4; fi; "
-        f"echo {_q(RESTORE_STUCK)} \"$(pwd -P)\"; exit 4; fi; "
-        f"{leave}; rm -f {origin}; echo ok"
-    )
+    if _RESTORE_SH is None:
+        raise ValueError(QUARANTINE_HELPER_MISSING)
+    return f"set -eu; umask 022; QDIR={_q(QUARANTINE_DIR)}; {_RESTORE_SH}restore {_q(name)}"
+
+
+_RESTORED_TO_RE = re.compile(r"^@@restored_to=(.*)\nok\n?\Z", re.MULTILINE | re.DOTALL)
+
+
+def parse_restored_to(output: str) -> str | None:
+    """Der Ort, an den `restore` die Datei zurückgelegt hat (aus der Ablage auf dem Server), sonst `None`."""
+    match = _RESTORED_TO_RE.search(output)
+    return match.group(1) if match else None
 
 
 QUARANTINE_STATES = ("quarantined", "checking", "absent")
+_MODE4_SH = _helper_functions(("mode4",))
 
 
 def quarantine_state_command(quarantine_name: str) -> str:
     """Nur lesend: liegt die Datei `quarantine_name` in der Quarantäne (`@@state=quarantined`, dazu `@@mode=` aus der
     Ablage), noch im Prüfordner (`checking`) oder nicht dort (`absent`)?"""
-    if not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]*", quarantine_name):
+    if not _QNAME_RE.fullmatch(quarantine_name):
         raise ValueError("Ungültiger Name in der Quarantäne.")
+    if _MODE4_SH is None:
+        raise ValueError(QUARANTINE_HELPER_MISSING)
     target = _q(f"{QUARANTINE_DIR}/{quarantine_name}")
     check = _q(f"{QUARANTINE_DIR}/{CHECK_DIR_NAME}/{quarantine_name}")
     origin = _q(origin_record(f"{QUARANTINE_DIR}/{quarantine_name}"))
     return (
-        f"if [ -f {target} ] && [ ! -L {target} ]; then echo '@@state=quarantined'; "
+        f"{_MODE4_SH}if [ -f {target} ] && [ ! -L {target} ]; then echo '@@state=quarantined'; "
         f"M=; if [ -f {origin} ] && [ ! -L {origin} ]; then M=$(sed -n 1p {origin} 2>/dev/null); fi; "
-        "case $M in [0-7][0-7][0-7] | [0-7][0-7][0-7][0-7]) echo \"@@mode=$M\" ;; esac; "
+        "if M=$(mode4 \"$M\"); then echo \"@@mode=$M\"; fi; "
         f"elif [ -e {check} ] || [ -L {check} ]; then echo '@@state=checking'; "
         "else echo '@@state=absent'; fi"
     )
@@ -1168,8 +1135,7 @@ def parse_quarantine_state(output: str) -> str | None:
 
 def _in_quarantine(quarantine_path: str) -> bool:
     # Der Pfad steht in der Datenbank, auch aus einer eingespielten Sicherung; root fasst sonst beliebige Dateien an.
-    # Dieselbe Regel wie im Hilfsskript, sonst fiele ein ungewöhnlicher Name auf den alten Weg mit Ort und Rechten von
-    # außen zurück.
+    # Dieselbe Regel wie im Hilfsskript.
     return _quarantine_name_of(quarantine_path) is not None
 
 
@@ -1234,7 +1200,7 @@ def _quarantine_name_of(quarantine_path: str) -> str | None:
     """Der Name in der Quarantäne, wenn der Pfad dort direkt liegt und der Name nur sichere Zeichen hat, sonst `None`."""
     prefix = QUARANTINE_DIR + "/"
     name = quarantine_path[len(prefix):] if quarantine_path.startswith(prefix) else ""
-    return name if re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]*", name) else None
+    return name if _QNAME_RE.fullmatch(name) else None
 
 
 def quarantine_args(path: str, quarantine_name: str) -> list[str]:
@@ -1243,10 +1209,9 @@ def quarantine_args(path: str, quarantine_name: str) -> list[str]:
     return ["quarantine", path, quarantine_name]
 
 
-def restore_args(quarantine_path: str, original_path: str, mode: str | None) -> list[str] | None:
-    """Aufruf des Hilfsskripts für dasselbe wie `restore_command`; `None`, wenn es dafür nicht taugt (dann der alte Weg).
-    Ort und Rechte nimmt das Skript aus der eigenen Ablage, nicht aus dem Aufruf."""
-    restore_command(quarantine_path, original_path, mode)
+def restore_args(quarantine_path: str) -> list[str] | None:
+    """Aufruf des Hilfsskripts für dasselbe wie `restore_command` (prüft den Pfad wie dort)."""
+    restore_command(quarantine_path)
     name = _quarantine_name_of(quarantine_path)
     return None if name is None else ["restore", name]
 
@@ -1264,8 +1229,10 @@ def parse_mode(output: str) -> str | None:
 
 
 def quarantine_name(finding_id: str, path: str) -> str:
+    # Die Kennung kommt aus der Datenbank (auch aus einer eingespielten Sicherung) und wird Teil des Pfads.
+    ident = re.sub(r"[^A-Za-z0-9_-]", "_", finding_id)[:64] or "fund"
     base = re.sub(r"[^A-Za-z0-9._-]", "_", path.rsplit("/", 1)[-1])[:80] or "datei"
-    return f"{finding_id}_{base}"
+    return f"{ident}_{base}"
 
 
 # --- Lynis --------------------------------------------------------------------

@@ -59,7 +59,15 @@ Vergleich. Auswertung in `core/rbac.py`, reine Funktionen, ohne DB testbar.
 | client_type | `web` \| `android` \| `cli` — steuert Cookie vs. Bearer |
 | device_name, user_agent, ip | für „Aktive Sitzungen" in den Einstellungen |
 | expires_at, revoked_at, last_used_at | |
-| replaced_by_id | Nachfolger-Sitzung, nur bei Rotation gesetzt (nicht bei Logout/Passwortwechsel), ohne Fremdschlüssel. Grundlage der 30-s-Gnadenfrist beim Erneuern: ein eben rotierter Token bekommt noch einen Access-Token der Nachfolger-Sitzung, aber keinen neuen Refresh-Token (zwei Tabs, App + Tab) |
+| replaced_by_id | Nachfolger-Sitzung, nur bei Rotation gesetzt (nicht bei Logout/Passwortwechsel), ohne Fremdschlüssel. Grundlage der 30-s-Gnadenfrist beim Erneuern: ein eben rotierter Token bekommt noch einen Access-Token der Nachfolger-Sitzung, aber keinen neuen Refresh-Token (zwei Tabs, App + Tab). Trägt außerdem die Prüfung der `sid` im Zugangs-Token (gilt, solange am Ende der Kette eine gültige Zeile steht) und das Abmelden der ganzen Kette (`logout` widerruft die Zeile am Ende, auch mit einem schon erneuerten Token, solange dessen Zeile noch steht, also bis eine Refresh-Laufzeit nach dem Erneuern, siehe „Aufräumen“). Gelesen wird die Kette in einer einzigen rekursiven Abfrage (`WITH RECURSIVE`, `services.auth.session_chain_end`), Grenzen in [04 §2](04-API.md#2-ohne-authentifizierung) „Access-Token und Anmeldung“ |
+
+**Aufräumen** (`services.auth.purge_old_logins`, Kern-Job `logins-retention`, nachts 03:50): Zeilen, deren `expires_at`
+oder `revoked_at` länger als `refresh_token_ttl_days` (Vorgabe 30) zurückliegt, werden gelöscht. Bis dahin bleiben auch
+erneuerte und beendete Zeilen stehen, denn die Kette über `replaced_by_id` braucht sie (Gnadenfrist, `sid` offener
+Terminal- und Live-Verbindungen). Ein Zugangs-Token zeigt nur während seiner Laufzeit (Vorgabe 15 Minuten) auf eine
+Zeile, eine Zeile geht erst eine Refresh-Laufzeit nach ihrem Ende. Weil die Erneuerungen einer Kette der Reihe nach
+enden, geht immer nur ihr ältester Teil; von jeder übrigen Zeile führt die Kette weiter bis zur laufenden Anmeldung
+(Abmelden, Prüfung offener Anmeldungen). Ohne den Job bliebe jede Erneuerung samt Adresse und Browser für immer liegen.
 
 ### `api_tokens`
 Für Automatisierung und die Android-App im Langzeitbetrieb.

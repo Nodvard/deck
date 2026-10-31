@@ -9,9 +9,15 @@ Hier steht alles, was der Helfer *entscheidet*, bevor er etwas verändert:
 * **Versionen:** `X.Y.Z` nur aus ASCII-Ziffern, ohne führende Nullen, je Teil höchstens 9 Stellen,
   ohne Vorabversion. So gibt es für jede Version genau eine Schreibweise, und `"0.6.\\u0661"` (arabische
   Ziffer) ist keine.
-* **Anforderung:** genau die fünf Schlüssel, doppelte Schlüssel abgelehnt, `v == 1`, `id` als UUID4,
-  Zeitfenster 600 s alt / 60 s Zukunft. Jede Ausnahme beim Lesen (auch `RecursionError`) betrifft nur diese
-  eine Anforderung.
+* **Anforderung:** genau die fünf Schlüssel (bei `update` dazu höchstens `digest`), doppelte Schlüssel abgelehnt,
+  `id` als UUID4, Zeitfenster 600 s alt / 60 s Zukunft, sonst `bad_request` bzw. `expired`. Jede Ausnahme beim Lesen
+  (auch `RecursionError`) betrifft nur diese eine Anforderung. Ein `digest` wählt nichts aus, er muss der sein, auf
+  den das bewegliche Tag gerade zeigt (`digest_changed`).
+* **Signierte Anforderung (`v: 2`, nur `update`):** dazu Pflicht `digest`, die Freigabe `grant` (höchstens
+  `GRANT_MAX_S` gültig) und ihre Ed25519-Signatur `sig` über `dumps(grant)`, geprüft gegen die Schlüssel in
+  `trust.py`. Die billigen Prüfungen in dieser Reihenfolge: `unknown_key`, `grant_mismatch`, `grant_expired`; die
+  Rechnung (`bad_signature`) kommt zuletzt und getrennt (`check_signature`). Erst wenn `UPDATE_REQUIRES_SIGNATURE`
+  gilt, lehnt der Helfer ein Update mit `v: 1` ab (`signature_required`); der Rückweg bleibt `v: 1`.
 * **Grenzen:** eine angenommene Aktion je 10 min, 24 h kein Update auf eine Version, von der aus
   zurückgegangen wurde, verarbeitete IDs 1 h gesperrt, Mindestversion `MIN_VERSION`.
 * **Rückweg-Slot:** genau ein Slot, nur für genau den installierten Container und genau die Version
@@ -28,6 +34,8 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
+
+from . import ed25519, trust
 
 # ---------------------------------------------------------------------------
 # Feste Werte
@@ -47,8 +55,17 @@ koennen eine Vorher-Kopie nicht selbst einspielen. Bis das Release feststeht, be
 
 PROTOCOL = 1
 """Version des Status (`status.json`, Feld `proto`)."""
-REQUEST_VERSIONS = (1,)
-"""Versionen der Anforderung, die dieser Helfer versteht (Feld `v`). Die Signatur kommt spaeter als `v: 2`."""
+REQUEST_VERSIONS = (1, 2)
+"""Versionen der Anforderung, die dieser Helfer versteht (Feld `v`); `2` ist ein signiertes Update."""
+REQUEST_OPTIONS = ("digest",)
+"""Zusätzliche Felder der Anforderung, die dieser Helfer versteht; der Status nennt sie (`request_options`)."""
+
+UPDATE_REQUIRES_SIGNATURE = False
+"""Ob ein Update nur noch signiert (`v: 2`) angenommen wird; sonst `signature_required`."""
+GRANT_FORMAT = 1
+"""Version der Freigabe (Feld `fmt`)."""
+GRANT_MAX_S = 366 * 24 * 3600
+"""Längste Gültigkeit einer Freigabe, damit eine alte nicht beliebig lange wieder verwendbar bleibt."""
 
 SERVICE_ENV = "NODVARD_DECK_UPDATER_SERVICE"
 """Die einzige Einstellung aus der Umgebung: Name des Compose-Dienstes des Dashboards."""
@@ -140,13 +157,27 @@ PLATFORM_MISMATCH = "platform_mismatch"
 PULL_FAILED = "pull_failed"
 NO_PREVIOUS = "no_previous"
 PREVIOUS_MISMATCH = "previous_mismatch"
+DIGEST_CHANGED = "digest_changed"
+"""Der Digest der Anforderung ist nicht der, auf den das bewegliche Tag gerade zeigt (neue Version oder Rückruf seit
+der Update-Suche)."""
 NOT_IMPLEMENTED = "not_implemented"
 """Die Anforderung ist gueltig, diese Helfer-Version fuehrt die Aktion aber nicht aus. Fuer Update und Rueckweg kommt
 er nicht vor (beides fuehrt der Helfer aus). Er bleibt im Protokoll, denn Codes kommen nur dazu und fallen nie weg:
 eine spaetere Protokoll-Funktion, die ein aelterer Helfer nicht kennt, beantwortet dieser damit."""
+SIGNATURE_REQUIRED = "signature_required"
+"""Ein Update ohne Signatur, aber dieser Helfer verlangt eine (`UPDATE_REQUIRES_SIGNATURE`)."""
+UNKNOWN_KEY = "unknown_key"
+"""Die Freigabe nennt einen Schlüssel, der nicht in `trust.TRUSTED_KEYS` steht."""
+GRANT_MISMATCH = "grant_mismatch"
+"""Die Freigabe gilt für ein anderes Repository, eine andere Version oder einen anderen Digest."""
+GRANT_EXPIRED = "grant_expired"
+"""Die Freigabe ist abgelaufen oder erst in der Zukunft ausgestellt."""
+BAD_SIGNATURE = "bad_signature"
+"""Die Signatur passt nicht zu Freigabe und Schlüssel."""
 REQUEST_CODES = (
     BAD_REQUEST, EXPIRED, REPLAY, BUSY, RATE_LIMITED, BLOCKED_VERSION, NOT_NEWER, TAG_NOT_ON_VERSION,
-    PLATFORM_MISMATCH, PULL_FAILED, NO_PREVIOUS, PREVIOUS_MISMATCH, NOT_IMPLEMENTED,
+    PLATFORM_MISMATCH, PULL_FAILED, NO_PREVIOUS, PREVIOUS_MISMATCH, NOT_IMPLEMENTED, DIGEST_CHANGED,
+    SIGNATURE_REQUIRED, UNKNOWN_KEY, GRANT_MISMATCH, GRANT_EXPIRED, BAD_SIGNATURE,
 )
 
 # Ablauf
@@ -210,6 +241,10 @@ UUID4_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 """Anforderungs-ID: UUID4, nur Kleinbuchstaben (eine Schreibweise je ID, sonst liefe der Replay-Schutz ins Leere)."""
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}", re.ASCII)
 """Digest bzw. Image-ID (`sha256:<64 hex>`)."""
+KEY_ID_RE = re.compile(r"[0-9a-f]{16}", re.ASCII)
+"""Kennung eines Schlüssels (`trust.key_id`)."""
+SIGNATURE_RE = re.compile(r"[0-9a-f]{128}", re.ASCII)
+"""Ed25519-Signatur (64 Byte) hexadezimal, nur Kleinbuchstaben: eine Schreibweise je Signatur."""
 CONTAINER_ID_RE = re.compile(r"[0-9a-f]{64}", re.ASCII)
 """Volle Container-ID; Kurz-IDs gibt es im Helfer nicht."""
 SERVICE_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}", re.ASCII)
@@ -470,26 +505,84 @@ def dumps(obj: Any) -> bytes:
 # ---------------------------------------------------------------------------
 
 REQUEST_KEYS = frozenset({"v", "id", "action", "version", "created_at"})
+SIGNED_REQUEST_KEYS = REQUEST_KEYS | {"digest", "grant", "sig"}
+"""Genau diese Schlüssel hat eine Anforderung mit `v: 2`."""
+GRANT_KEYS = frozenset({"fmt", "repo", "version", "digest", "key_id", "issued_at", "expires_at"})
+
+
+@dataclass(frozen=True)
+class Grant:
+    """Die Freigabe einer Version; signiert sind genau die Bytes von `signed_bytes()`."""
+
+    fmt: int
+    repo: str
+    version: str
+    digest: str
+    key_id: str
+    issued_at: int
+    expires_at: int
+
+    def signed_bytes(self) -> bytes:
+        return dumps({key: getattr(self, key) for key in GRANT_KEYS})
+
+
+def _grant_from(obj: object) -> Grant:
+    if not isinstance(obj, dict) or set(obj) != GRANT_KEYS:
+        raise Refusal(BAD_REQUEST)
+    grant = Grant(**obj)
+    if not _is_int(grant.fmt) or grant.fmt != GRANT_FORMAT:
+        raise Refusal(BAD_REQUEST)
+    if not isinstance(grant.repo, str) or not 0 < len(grant.repo) <= _MAX_REF_LENGTH or not grant.repo.isascii():
+        raise Refusal(BAD_REQUEST)
+    if not is_version(grant.version) or not is_digest(grant.digest):
+        raise Refusal(BAD_REQUEST)
+    if not isinstance(grant.key_id, str) or not KEY_ID_RE.fullmatch(grant.key_id):
+        raise Refusal(BAD_REQUEST)
+    if not all(_is_int(at) and at >= 0 for at in (grant.issued_at, grant.expires_at)):
+        raise Refusal(BAD_REQUEST)
+    if not grant.issued_at < grant.expires_at <= grant.issued_at + GRANT_MAX_S:
+        raise Refusal(BAD_REQUEST)
+    return grant
 
 
 @dataclass(frozen=True)
 class Request:
-    """Eine geprüfte Anforderung aus `requests/<id>.json`."""
+    """Eine geprüfte Anforderung aus `requests/<id>.json`; `digest` nur bei einem Update, `grant` und `sig` nur bei
+    `v: 2`."""
 
     v: int
     id: str
     action: str
     version: str
     created_at: int
+    digest: str | None = None
+    grant: Grant | None = None
+    sig: str | None = None
 
 
 def _request_from(raw: bytes, file_id: str | None) -> Request:
     obj = loads_strict(raw, max_bytes=REQUEST_MAX_BYTES)
-    if not isinstance(obj, dict) or set(obj) != REQUEST_KEYS:
+    if not isinstance(obj, dict):
         raise Refusal(BAD_REQUEST)
-    v, rid, action, version, created_at = (obj[k] for k in ("v", "id", "action", "version", "created_at"))
-    if not _is_int(v) or v not in REQUEST_VERSIONS:
+    v = obj.get("v")
+    grant = sig = None
+    if not _is_int(v):
         raise Refusal(BAD_REQUEST)
+    if v == 1:
+        if not REQUEST_KEYS <= set(obj) <= REQUEST_KEYS | set(REQUEST_OPTIONS):
+            raise Refusal(BAD_REQUEST)
+    elif v == 2:
+        if set(obj) != SIGNED_REQUEST_KEYS or obj["action"] != "update":
+            raise Refusal(BAD_REQUEST)
+        grant, sig = _grant_from(obj["grant"]), obj["sig"]
+        if not isinstance(sig, str) or not SIGNATURE_RE.fullmatch(sig):
+            raise Refusal(BAD_REQUEST)
+    else:
+        raise Refusal(BAD_REQUEST)
+    digest = obj.get("digest")
+    if "digest" in obj and (obj.get("action") != "update" or not is_digest(digest)):
+        raise Refusal(BAD_REQUEST)
+    rid, action, version, created_at = (obj[k] for k in ("id", "action", "version", "created_at"))
     if not is_request_id(rid) or (file_id is not None and rid != file_id):
         raise Refusal(BAD_REQUEST)
     if not isinstance(action, str) or action not in ACTIONS:
@@ -498,20 +591,68 @@ def _request_from(raw: bytes, file_id: str | None) -> Request:
         raise Refusal(BAD_REQUEST)
     if not _is_int(created_at):
         raise Refusal(BAD_REQUEST)
-    return Request(v=v, id=rid, action=action, version=version, created_at=created_at)
+    return Request(v=v, id=rid, action=action, version=version, created_at=created_at, digest=digest, grant=grant,
+                   sig=sig)
 
 
-def parse_request(raw: object, *, now: float, file_id: str | None = None) -> Request:
-    """Prüft eine Anforderung streng und gibt sie zurück, sonst `Refusal`.
+def check_grant(
+    request: Request, *, now: float, keys: tuple[trust.TrustedKey, ...], repository: str = REPOSITORY,
+) -> None:
+    """Die billigen Prüfungen der Freigabe einer Anforderung mit `v: 2`: Schlüssel, Ziel, Zeitfenster."""
+    grant = request.grant
+    if grant is None:
+        raise ValueError("check_grant nur fuer v: 2")
+    if trust.find(grant.key_id, keys) is None:
+        raise Refusal(UNKNOWN_KEY)
+    if (grant.repo, grant.version, grant.digest) != (repository, request.version, request.digest):
+        raise Refusal(GRANT_MISMATCH)
+    now_s = int(now)
+    if grant.issued_at > now_s + CLOCK_SLACK_S or now_s >= grant.expires_at:
+        raise Refusal(GRANT_EXPIRED)
 
-    * `bad_request`: kein UTF-8-JSON-Objekt bis 4096 Byte, nicht genau die fünf Schlüssel, doppelter
-      Schlüssel, falscher Typ (`true` ist keine Zahl, `1.0` auch nicht), `v != 1`, `id` keine UUID4 (oder nicht
-      gleich dem Dateinamen `file_id`), unbekannte `action`, ungültige `version`, `created_at` mehr als 60 s in
-      der Zukunft -- und **jede** andere Ausnahme beim Lesen (auch `RecursionError`).
-    * `expired`: `created_at` mehr als 600 s alt.
 
-    Die Ausnahme gilt nur für diese eine Anforderung; der Aufrufer macht mit der nächsten weiter.
-    """
+def check_signature(request: Request, *, keys: tuple[trust.TrustedKey, ...]) -> None:
+    """Rechnet die Ed25519-Signatur einer Anforderung mit `v: 2` nach, sonst `bad_signature`."""
+    grant, sig = request.grant, request.sig
+    if grant is None or sig is None:
+        raise ValueError("check_signature nur fuer v: 2")
+    key = trust.find(grant.key_id, keys)
+    if key is None:
+        raise Refusal(UNKNOWN_KEY)
+    if not ed25519.verify(key.public, grant.signed_bytes(), bytes.fromhex(sig)):
+        raise Refusal(BAD_SIGNATURE)
+
+
+def request_versions(keys: tuple[trust.TrustedKey, ...]) -> tuple[int, ...]:
+    """Was der Status nennt: `2` nur mit mindestens einem vertrauten Schlüssel, sonst lehnte jede `v: 2` ab."""
+    return REQUEST_VERSIONS if keys else (1,)
+
+
+def parse_request(
+    raw: object,
+    *,
+    now: float,
+    file_id: str | None = None,
+    keys: tuple[trust.TrustedKey, ...] = trust.TRUSTED_KEYS,
+    repository: str = REPOSITORY,
+) -> Request:
+    """Prüft eine Anforderung vollständig, samt Signatur, und gibt sie zurück, sonst `Refusal` (Regeln im Kopf des
+    Moduls); die Ausnahme gilt nur für diese eine Anforderung."""
+    request = read_request(raw, now=now, file_id=file_id, keys=keys, repository=repository)
+    if request.v == 2:
+        check_signature(request, keys=keys)
+    return request
+
+
+def read_request(
+    raw: object,
+    *,
+    now: float,
+    file_id: str | None = None,
+    keys: tuple[trust.TrustedKey, ...] = trust.TRUSTED_KEYS,
+    repository: str = REPOSITORY,
+) -> Request:
+    """Wie `parse_request`, aber ohne die Rechnung der Signatur: Die macht der Helfer erst nach den Grenzen."""
     try:
         request = _request_from(raw, file_id)  # type: ignore[arg-type]
     except Refusal:
@@ -523,6 +664,10 @@ def parse_request(raw: object, *, now: float, file_id: str | None = None) -> Req
         raise Refusal(BAD_REQUEST)
     if request.created_at < now_s - REQUEST_MAX_AGE_S:
         raise Refusal(EXPIRED)
+    if request.v == 2:
+        check_grant(request, now=now, keys=keys, repository=repository)
+    elif request.action == "update" and UPDATE_REQUIRES_SIGNATURE:
+        raise Refusal(SIGNATURE_REQUIRED)
     return request
 
 

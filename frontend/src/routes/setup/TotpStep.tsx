@@ -68,6 +68,9 @@ export function TotpStep({ username, onBack, onNext }: { username: string; onBac
     }
   }
 
+  // Ein schon angelegter, unbestätigter Schlüssel zählt nicht; „Mein Konto“ legt später einen neuen an.
+  const later = () => onNext(false);
+
   if (enabled === null) return <p className="text-sm text-white/50">Lade …</p>;
 
   // Frisch eingerichtet: erst die Codes, der Knopf darunter geht direkt weiter.
@@ -100,20 +103,26 @@ export function TotpStep({ username, onBack, onNext }: { username: string; onBac
     <div data-testid="setup-totp">
       <p className="text-sm text-white/70">
         Mit der Zwei-Faktor-Anmeldung fragt Nodvard Deck bei jeder Anmeldung zusätzlich nach einem Code aus einer App auf deinem Handy
-        (einer „Authenticator-App“). So bleibt dein Konto sicher, auch wenn jemand dein Passwort kennt. Das ist freiwillig und lässt sich
-        später unter Einstellungen → Mein Konto nachholen.
+        (einer „Authenticator-App“). So bleibt dein Konto sicher, auch wenn jemand dein Passwort kennt. Das ist freiwillig.
       </p>
       <NoticeLine notice={notice} />
       {setup ? (
-        <TotpEnroll setup={setup} busy={busy} onConfirm={(digits) => void confirm(digits)} onCancel={() => setSetup(null)} />
+        <TotpEnroll
+          setup={setup} busy={busy} onConfirm={(digits) => void confirm(digits)} onCancel={() => setSetup(null)} cancelLabel="Zurück"
+          onLater={later}
+        />
       ) : asking ? (
-        <TotpPasswordForm busy={busy} onSubmit={(password) => void start(password)} onCancel={() => { setAsking(false); setNotice(null); }} />
+        <TotpPasswordForm
+          busy={busy} onSubmit={(password) => void start(password)} onCancel={() => { setAsking(false); setNotice(null); }}
+          cancelLabel="Zurück" onLater={later}
+        />
       ) : (
         <StepNav onBack={onBack}>
-          <Button onClick={() => onNext(false)}>Überspringen</Button>
+          <Button onClick={later}>Später einrichten</Button>
           <Button variant="primary" onClick={() => setAsking(true)}>Jetzt einrichten</Button>
         </StepNav>
       )}
+      <p className="mt-3 text-xs text-white/50">Du kannst das jederzeit unter Einstellungen → Mein Konto nachholen.</p>
     </div>
   );
 }

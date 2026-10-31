@@ -16,6 +16,7 @@ from .capabilities import is_own_container
 from .compose_errors import scrub_compose_output
 from .image_apply import PROJECT_RE, is_self_image
 from .locks import StackLocks, busy_text
+from .operate import still_full
 from .stacks import DockerStacks, Stack, StackProblem, compose_argv
 
 VERBS: dict[str, tuple[str, ...]] = {
@@ -85,6 +86,11 @@ def cmd_verb(stack: Stack, action_type: str) -> list[str]:
 def cmd_services(stack: Stack) -> list[str]:
     """Die Dienste, die ohne Profil starten, gelesen im Ordner des Stacks (eine `.env` dort kann Profile setzen)."""
     return _in_folder(stack, "config", "--services")
+
+
+def cmd_all_services(stack: Stack) -> list[str]:
+    """Alle Dienste der Datei, auch die mit Profil, gelesen im Ordner des Stacks."""
+    return _in_folder(stack, "--profile", "*", "config", "--services")
 
 
 FAILURE_LIMIT = 300
@@ -166,6 +172,8 @@ class DockerStackExecutor:
         host = await self._ctx.hosts.get(host_ref) if host_ref else None
         if host is None:
             return "Server nicht gefunden."
+        if why := await still_full(self._ctx, host):
+            return why
         entry = self._adopted.for_host(host.id).get(project)
         if entry is None:
             return f"Der Stack „{project}“ ist nicht übernommen. Übernimm ihn zuerst im Reiter Stacks."

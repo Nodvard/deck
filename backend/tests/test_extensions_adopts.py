@@ -119,9 +119,10 @@ OLD_SETTINGS = {"teil": {"url": "http://pi.hole", "tls": False}, "anderes": {"ur
 
 async def _old_installation(
     db_session, *, state: str = "enabled", settings: dict | None = None, granted: list[str] | None = None,
+    source: str = "bundled",
 ) -> None:
     db_session.add(ExtensionRecord(
-        id="old-src", version="0.1.0", api_version="0.1", state=state, source="bundled",
+        id="old-src", version="0.1.0", api_version="0.1", state=state, source=source,
         settings=OLD_SETTINGS if settings is None else settings, manifest={"id": "old-src", "name": "Test old-src"},
         granted_permissions=granted or [],
     ))
@@ -398,7 +399,7 @@ async def test_installed_packages_take_over_nothing(tmp_path, db_session, test_s
     _write_ext(root, "new-mod", ADOPTS + 'secrets = ["old-teil-pw"]\n', permissions='["secrets.read:old-teil-*"]')
     _as_pip(monkeypatch, tmp_path, pip)
     settings = _settings(test_settings, tmp_path)
-    await _old_installation(db_session)
+    await _old_installation(db_session, source="pip" if pip == "old-src" else "bundled")
     await vault.create_secret(db_session, vault.load_keyring(test_settings), label="old-teil-pw", kind="generic",
                               plaintext="x", owner_ext_id="old-src")
     await db_session.commit()

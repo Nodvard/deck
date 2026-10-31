@@ -408,10 +408,13 @@ async def test_new_skipped_host_is_reported_alone_and_recovery_is_silent(tmp_pat
 async def test_manual_run_stays_silent_and_leaves_the_state_alone(tmp_path, db_session, settings_bound):
     from nodvard_sdk import Actor
 
+    from nodvard_deck.core.known_actors import known_while
+
     ctx, ext, _no_cred, _win = await _fleet_setup(tmp_path, db_session, settings_bound)
     from nodvard_deck_ext_scripts import run_script
 
-    await run_script(ctx, ext._repo, "fleet-script", param_overrides={}, actor=Actor.user("u1"))
+    with known_while([("user", "u1")]):
+        await run_script(ctx, ext._repo, "fleet-script", param_overrides={}, actor=Actor.user("u1"))
     assert await _skip_notifications(db_session) == []
     assert not (tmp_path / "data" / "skip-notices.json").exists()
     # Der erste Zeitplan-Lauf meldet trotzdem: ein Testlauf von Hand darf ihn nicht

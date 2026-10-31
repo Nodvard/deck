@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from fastapi import FastAPI
+from nodvard_deck.core.known_actors import known_while
 from nodvard_deck.ext.runtime import get_extension_runtime
 from nodvard_deck.models import Action
 from nodvard_deck.services import extensions as extensions_service
@@ -709,9 +710,11 @@ async def test_forged_payloads_fail_in_the_executor(client, db_session, test_set
     headers, host, commands = await _enable(client, db_session, test_settings, monkeypatch)
     ctx = get_extension_runtime().loaded["system"].ctx
     payload = {k: (host["id"] if v == "HOST" else v) for k, v in payload.items()}
-    decision = await ctx.actions.propose(ActionRequest(
-        action_type="system.service_restart", payload=payload, risk=Risk.MEDIUM, proposed_by=Actor.user("x", "x"), reason="Test",
-    ))
+    with known_while([("user", "x")]):
+        decision = await ctx.actions.propose(ActionRequest(
+            action_type="system.service_restart", payload=payload, risk=Risk.MEDIUM, proposed_by=Actor.user("x", "x"),
+            reason="Test",
+        ))
     approved = await client.post(f"/api/v1/actions/{decision.action_id}/approve", headers=headers)
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == "failed", approved.json()

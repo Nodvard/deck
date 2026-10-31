@@ -12,6 +12,7 @@ from docker_stack_fakes import (  # noqa: F401 - Fixtures
     EXT_DIR,
     HASHES,
     MARKER,
+    FakeSettings,
     docker_on,
     result,
 )
@@ -30,10 +31,11 @@ SHOWN = {"working_dir": "/opt/stacks/shop", "config_files": ["/opt/stacks/shop/c
 HIDDEN = "Den Inhalt zeigt Nodvard Deck nicht, er kann Passwörter enthalten."
 
 
-@pytest.fixture(autouse=True)
-def _ext_docker_on_path(monkeypatch):
-    monkeypatch.syspath_prepend(str(EXT_DIR / "src"))
-    yield
+@pytest.fixture(autouse=True, scope="module")
+def _ext_docker_on_path():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(EXT_DIR / "src"))
+        yield
     for name in list(sys.modules):
         if name.startswith("nodvard_deck_ext_docker"):
             del sys.modules[name]
@@ -175,9 +177,9 @@ async def test_a_stack_restart():
         return result("")
 
     async def get(host_id):
-        return SimpleNamespace(id=host_id, name="h1", address="192.0.2.1")
+        return SimpleNamespace(id=host_id, name="h1", address="192.0.2.1", tags=["docker"])
 
-    ctx = SimpleNamespace(exec=SimpleNamespace(run=run), hosts=SimpleNamespace(get=get))
+    ctx = SimpleNamespace(exec=SimpleNamespace(run=run), hosts=SimpleNamespace(get=get), settings=FakeSettings())
     req = ActionRequest(action_type="docker.stack_restart", payload={"project": "shop"}, host_ref="h1",
                         proposed_by=Actor.user("u1", "owner1"), reason="Test")
     done = await caps.DockerMaintenanceExecutor(ctx).execute(req)

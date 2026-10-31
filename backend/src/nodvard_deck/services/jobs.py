@@ -149,18 +149,45 @@ async def get_run(session: AsyncSession, run_id: str) -> JobRun | None:
     return await session.get(JobRun, run_id)
 
 
-def read_run_output(runs_dir: Path, ref: str | None) -> str:
-    """Inhalt der Lauf-Datei `ref`, nur wenn sie eine gewöhnliche Datei direkt in `runs_dir` ist (`output_ref` stammt aus
-    der Datenbank, auch aus einer eingespielten Sicherung), sonst leer."""
+def run_file(runs_dir: Path, ref: str | None) -> str | None:
+    """Pfad der Lauf-Datei `ref` (`output_ref`, auch aus einer eingespielten Sicherung), wenn sie direkt in `runs_dir`
+    liegt, sonst `None`; der Ordner wird mit `realpath` aufgelöst, der Name nie."""
     if not ref:
-        return ""
+        return None
     path = Path(ref)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
         root = os.path.realpath(runs_dir)
         if path.name in ("", ".", "..") or os.path.realpath(path.parent) != root:
-            return ""
-        fd = os.open(os.path.join(root, path.name), flags)
+            return None
+    except (OSError, ValueError):
+        return None
+    return os.path.join(root, path.name)
+
+
+def remove_run_file(runs_dir: Path, ref: str | None) -> bool:
+    """Löscht die Lauf-Datei `ref` (`run_file`), ein Symlink wird höchstens selbst entfernt; `True`, wenn etwas
+    entfernt wurde."""
+    target = run_file(runs_dir, ref)
+    if target is None:
+        return False
+    try:
+        mode = os.lstat(target).st_mode
+        if not (stat.S_ISREG(mode) or stat.S_ISLNK(mode)):
+            return False
+        os.unlink(target)
+        return True
+    except (OSError, ValueError):  # fehlt schon, keine Rechte, NUL im Namen: das Aufräumen darf daran nie scheitern
+        return False
+
+
+def read_run_output(runs_dir: Path, ref: str | None) -> str:
+    """Inhalt der Lauf-Datei `ref` (`run_file`), nur wenn sie eine gewöhnliche Datei ist, sonst leer."""
+    target = run_file(runs_dir, ref)
+    if target is None:
+        return ""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(target, flags)
     except (OSError, ValueError):
         return ""
     if not stat.S_ISREG(os.fstat(fd).st_mode):

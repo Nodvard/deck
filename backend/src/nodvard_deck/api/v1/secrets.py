@@ -16,6 +16,7 @@ from ...core import vault
 from ...ext.runtime import get_extension_runtime
 from ...models import Host, HostCredential, Secret, SecretUsage, User
 from ...services import audit as audit_service
+from ...services import extensions as extensions_service
 from ..deps import SessionDep, SettingsDep, require_permission
 from .auth import confirm_stored_secret_change
 
@@ -227,6 +228,7 @@ async def create_secret(
         expires_at=_as_utc(payload.expires_at),
     )
     await _audit(session, request, user, "secret.created", secret, kind=secret.kind)
+    await extensions_service.notify_secret_changed(session, [secret.label])
     return SecretOut.from_model(secret)
 
 
@@ -277,6 +279,7 @@ async def replace_secret_value(
         return refused
     await vault.replace_secret_value(session, vault.load_keyring(settings), secret_id, payload.value)
     await _audit(session, request, user, "secret.replaced", secret)
+    await extensions_service.notify_secret_changed(session, [secret.label])
     return None
 
 
@@ -340,6 +343,8 @@ async def delete_secret(
         return refused
     secret = await session.get(Secret, secret_id)
     if secret is not None:
+        label = secret.label
         await _audit(session, request, user, "secret.deleted", secret)
         await vault.delete_secret(session, secret_id)
+        await extensions_service.notify_secret_changed(session, [label])
     return None

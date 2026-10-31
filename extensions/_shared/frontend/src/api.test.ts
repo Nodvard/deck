@@ -22,7 +22,7 @@ beforeEach(() => {
     token = "neu";
     return token;
   });
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never,
     ReactDOM: undefined as never,
     ReactJsxRuntime: undefined as never,
@@ -136,7 +136,7 @@ describe("authedFetch", () => {
   });
 
   it("älterer Kern ohne refreshAccessTokenResult: erneuert über refreshAccessToken, null bleibt beim 401", async () => {
-    delete window.__lattice.refreshAccessTokenResult;
+    delete window.__nodvardDeck.refreshAccessTokenResult;
     const fetchMock = vi.fn(async (_url: string, init: RequestInit) =>
       new Response("{}", { status: new Headers(init.headers).get("Authorization") === "Bearer neu" ? 200 : 401 }),
     );
@@ -198,55 +198,13 @@ describe("authedFetch", () => {
   });
 
   it("kommt ohne Erneuern (ganz alter Kern) mit dem 401 zurecht", async () => {
-    delete window.__lattice.refreshAccessToken;
-    delete window.__lattice.refreshAccessTokenResult;
+    delete window.__nodvardDeck.refreshAccessToken;
+    delete window.__nodvardDeck.refreshAccessTokenResult;
     const fetchMock = vi.fn(async () => new Response("{}", { status: 401 }));
     vi.stubGlobal("fetch", fetchMock);
 
     expect((await authedFetch("/hosts")).status).toBe(401);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-});
-
-/**
- * Die Kern-Shell hat zwei Namen (`window.__nodvardDeck`, alt `window.__lattice`): das Kit findet
- * sie unter beiden -- auch ein neues Bundle in einem Tab mit älterem Kern (nur `__lattice`) und
- * ein Fremd-Kern, der nur den neuen Namen setzt.
- */
-describe("authedFetch findet die Kern-Shell unter beiden Namen", () => {
-  function renewing401() {
-    const fetchMock = vi.fn(async (_url: string, init: RequestInit) =>
-      new Response("{}", { status: new Headers(init.headers).get("Authorization") === "Bearer neu" ? 200 : 401 }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    return fetchMock;
-  }
-
-  it.each([
-    ["nur __lattice (aelterer Kern)", (shell: NodvardDeckShell) => { window.__lattice = shell; }],
-    ["nur __nodvardDeck", (shell: NodvardDeckShell) => { delete (window as Partial<Window>).__lattice; window.__nodvardDeck = shell; }],
-    ["beide Namen, dasselbe Objekt (neuer Kern)", (shell: NodvardDeckShell) => { window.__lattice = shell; window.__nodvardDeck = shell; }],
-  ])("%s: Bearer, Erneuern bei 401 und Wiederholen", async (_name, install) => {
-    install(window.__lattice);
-    const fetchMock = renewing401();
-
-    const res = await authedFetch("/hosts");
-
-    expect(res.status).toBe(200);
-    expect(auth(fetchMock.mock.calls[0] as unknown[])).toBe("Bearer alt");
-    expect(refresh).toHaveBeenCalledTimes(1);
-    expect(auth(fetchMock.mock.calls[1] as unknown[])).toBe("Bearer neu");
-  });
-
-  it("sind die Namen verschieden belegt (Fremd-Kern), gilt der neue", async () => {
-    const neu = { ...window.__lattice, getAccessToken: () => "vom-neuen" } as NodvardDeckShell;
-    window.__nodvardDeck = neu;
-    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await authedFetch("/hosts");
-
-    expect(auth(fetchMock.mock.calls[0] as unknown[])).toBe("Bearer vom-neuen");
   });
 });
 
@@ -260,9 +218,9 @@ describe("authedFetch mit dem Erneuern des Kerns", () => {
 
   beforeEach(() => {
     useAuthStore.setState({ accessToken: "alt", user: USER, status: "authenticated", mfaToken: null });
-    window.__lattice.getAccessToken = () => useAuthStore.getState().accessToken;
-    window.__lattice.refreshAccessToken = refreshAccessToken;
-    window.__lattice.refreshAccessTokenResult = refreshAccessTokenResult;
+    window.__nodvardDeck.getAccessToken = () => useAuthStore.getState().accessToken;
+    window.__nodvardDeck.refreshAccessToken = refreshAccessToken;
+    window.__nodvardDeck.refreshAccessTokenResult = refreshAccessTokenResult;
   });
 
   /** `/api/v1/hosts` braucht das Token "neu"; `/api/v1/auth/refresh` antwortet mit `refreshReply`. */
@@ -366,7 +324,7 @@ describe("authedFetchConfirmed", () => {
     const fetchMock = vi.fn(async (_url: string, init: RequestInit) => (String(init.body).includes("current_password") ? new Response(null, { status: 204 }) : confirmRequired()));
     vi.stubGlobal("fetch", fetchMock);
     const ask = vi.fn().mockResolvedValue({ current_password: "pw", totp_code: "123456" });
-    window.__lattice.confirmIdentity = ask;
+    window.__nodvardDeck.confirmIdentity = ask;
     const res = await authedFetchConfirmed("/extensions/proxmox/secrets", (c) => ({ method: "PUT", body: JSON.stringify({ label: "x", ...c }) }));
     expect(res?.status).toBe(204);
     expect(ask).toHaveBeenCalledWith("Bitte Passwort.", true);
@@ -376,7 +334,7 @@ describe("authedFetchConfirmed", () => {
   it("abgebrochen: null und kein zweiter Aufruf", async () => {
     const fetchMock = vi.fn(async () => confirmRequired());
     vi.stubGlobal("fetch", fetchMock);
-    window.__lattice.confirmIdentity = vi.fn().mockResolvedValue(null);
+    window.__nodvardDeck.confirmIdentity = vi.fn().mockResolvedValue(null);
     expect(await authedFetchConfirmed("/x", () => ({ method: "PUT", body: "{}" }))).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -386,9 +344,9 @@ describe("authedFetchConfirmed", () => {
     const res = await authedFetchConfirmed("/x", () => ({ method: "PUT", body: "{}" }));
     expect(res?.status).toBe(403);
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: "Keine Berechtigung." }), { status: 403 })));
-    window.__lattice.confirmIdentity = vi.fn();
+    window.__nodvardDeck.confirmIdentity = vi.fn();
     const other = await authedFetchConfirmed("/x", () => ({ method: "PUT", body: "{}" }));
     expect(other?.status).toBe(403);
-    expect(window.__lattice.confirmIdentity).not.toHaveBeenCalled();
+    expect(window.__nodvardDeck.confirmIdentity).not.toHaveBeenCalled();
   });
 });

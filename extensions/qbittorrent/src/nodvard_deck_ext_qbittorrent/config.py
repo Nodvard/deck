@@ -23,6 +23,12 @@ def password_label(name: str) -> str:
     return f"{PASSWORD_LABEL}:{name}"
 
 
+def connection_of(label: str) -> str | None:
+    """Der Kurzname zu einem Passwort-Label, sonst `None`."""
+    prefix = f"{PASSWORD_LABEL}:"
+    return label.removeprefix(prefix) if label.startswith(prefix) else None
+
+
 @dataclass(frozen=True)
 class ConnectionConfig:
     name: str

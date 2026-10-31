@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import inspect
 import json
 import logging
@@ -15,36 +16,32 @@ from urllib.parse import parse_qsl, urlsplit
 
 import httpx
 import pytest
+from nodvard_deck.ext.runtime import get_extension_runtime
+from nodvard_deck.models import AuditEntry, ExtensionRecord
+from nodvard_deck.services import extensions as extensions_service
 from nodvard_sdk import CertificateMismatch
 from nodvard_sdk.errors import PermissionDenied
 from sqlalchemy import select
 
-from nodvard_deck.ext.runtime import get_extension_runtime
-from nodvard_deck.models import AuditEntry, ExtensionRecord
-from nodvard_deck.services import extensions as extensions_service
-
 REPO_EXTENSIONS_DIR = Path(__file__).resolve().parents[2] / "extensions"
-sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "qbittorrent" / "src"))
 
-from nodvard_deck_ext_qbittorrent import client as qbt_client
-from nodvard_deck_ext_qbittorrent import parse, transport
-from nodvard_deck_ext_qbittorrent.config import (
-    normalize_base_url,
-    normalize_fingerprint,
-    normalize_username,
-    read_connections,
-)
-from nodvard_deck_ext_qbittorrent.service import (
-    AUTH_FAILED_TTL_S,
-    CACHE_TTL_S,
-    TOO_LARGE_PAUSE_S,
-)
-from nodvard_deck_ext_qbittorrent.widgets import (
-    MAX_ROWS,
-    duration_text,
-    size_text,
-    speed_text,
-)
+
+class _ExtModule:
+    """Ein Modul der Erweiterung, geladen erst beim Zugriff im Test, wenn die Fixture den Pfad gesetzt hat."""
+
+    def __init__(self, name: str) -> None:
+        self._name = f"nodvard_deck_ext_qbittorrent.{name}"
+
+    def __getattr__(self, attr: str) -> Any:
+        return getattr(importlib.import_module(self._name), attr)
+
+
+qbt_client = _ExtModule("client")
+qbt_config = _ExtModule("config")
+qbt_service = _ExtModule("service")
+qbt_widgets = _ExtModule("widgets")
+parse = _ExtModule("parse")
+transport = _ExtModule("transport")
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "qbittorrent"
 FIXTURE_FILES = ("transfer_info.json", "torrents_active.json", "maindata.json", "maindata_v4.json")
@@ -60,10 +57,9 @@ BANNED_TEXT = "Your IP address has been banned after too many failed authenticat
 
 
 @pytest.fixture(autouse=True)
-def _cleanup_sys_path():
-    before = list(sys.path)
+def _qbittorrent_on_path(monkeypatch):
+    monkeypatch.syspath_prepend(str(REPO_EXTENSIONS_DIR / "qbittorrent" / "src"))
     yield
-    sys.path[:] = before
     for name in list(sys.modules):
         if name.startswith(("nodvard_deck_ext_", "lattice_ext_")):
             del sys.modules[name]
@@ -259,22 +255,22 @@ def test_session_cookie_is_found_under_any_name(lines, expected):
 
 
 def test_base_url_is_normalized_and_credentials_are_refused():
-    assert normalize_base_url("http://qbt.example.com:8080/") == BASE
-    assert normalize_base_url(" https://qbt.example.com/qbt/ ") == "https://qbt.example.com/qbt"
-    assert normalize_base_url("http://203.0.113.20:8080/?x=1#y") == "http://203.0.113.20:8080"
-    assert normalize_base_url("http://203.0.113.20:8080/index.html") == "http://203.0.113.20:8080"
-    assert normalize_base_url("https://qbt.example.com/qbt/index.html") == "https://qbt.example.com/qbt"
+    assert qbt_config.normalize_base_url("http://qbt.example.com:8080/") == BASE
+    assert qbt_config.normalize_base_url(" https://qbt.example.com/qbt/ ") == "https://qbt.example.com/qbt"
+    assert qbt_config.normalize_base_url("http://203.0.113.20:8080/?x=1#y") == "http://203.0.113.20:8080"
+    assert qbt_config.normalize_base_url("http://203.0.113.20:8080/index.html") == "http://203.0.113.20:8080"
+    assert qbt_config.normalize_base_url("https://qbt.example.com/qbt/index.html") == "https://qbt.example.com/qbt"
     for bad in ("qbt.example.com:8080", "ftp://qbt.example.com", "http://", "http://user:" + "pw@qbt.example.com", "http://@qbt.example.com", "http://qbt.example.com:999999", ""):
         with pytest.raises(ValueError):
-            normalize_base_url(bad)
+            qbt_config.normalize_base_url(bad)
 
 
 def test_fingerprint_is_normalized_or_refused():
-    assert normalize_fingerprint(None) is None and normalize_fingerprint("  ") is None
-    assert normalize_fingerprint("ab" * 32) == PIN
+    assert qbt_config.normalize_fingerprint(None) is None and qbt_config.normalize_fingerprint("  ") is None
+    assert qbt_config.normalize_fingerprint("ab" * 32) == PIN
     for bad in ("kaputt", "AB:CD", 5, "A" * 300, ["x"]):
         with pytest.raises(ValueError):
-            normalize_fingerprint(bad)
+            qbt_config.normalize_fingerprint(bad)
 
 
 @pytest.mark.parametrize(
@@ -282,11 +278,11 @@ def test_fingerprint_is_normalized_or_refused():
     [("admin", "admin"), ("  admin ", "admin"), ("", ""), (None, ""), (5, ""), ("ad\nmin", ""), ("x" * 129, ""), ("Frau Müller", "Frau Müller")],
 )
 def test_username_is_trimmed_or_empty(value, expected):
-    assert normalize_username(value) == expected
+    assert qbt_config.normalize_username(value) == expected
 
 
 def test_read_connections_flags_unusable_entries_without_dropping_the_rest():
-    configs = read_connections({"connections": [
+    configs = qbt_config.read_connections({"connections": [
         {"name": "a", "base_url": "http://a.example.com:8080/", "username": " admin ", "tls_insecure_skip_verify": True},
         {"name": "a", "base_url": "http://zweite.example.com"},
         {"name": "b", "base_url": "http://user:" + "pw@b.example.com"},
@@ -306,15 +302,15 @@ def test_read_connections_flags_unusable_entries_without_dropping_the_rest():
     assert "nur für https://" in (configs[4].problem or "")
     assert (configs[5].pin, configs[5].problem) == (PIN, None)
     assert "Kurzname" in (configs[6].problem or "")
-    assert read_connections({}) == [] and read_connections({"connections": "x"}) == []
+    assert qbt_config.read_connections({}) == [] and qbt_config.read_connections({"connections": "x"}) == []
 
 
 def test_text_helpers_use_german_notation():
-    assert [size_text(n) for n in (0, 512, 1024, 1536, 10 * 1024, 3 * 1024**2 + 200 * 1024, 500 * 1024**3, 5 * 1024**4)] == [
+    assert [qbt_widgets.size_text(n) for n in (0, 512, 1024, 1536, 10 * 1024, 3 * 1024**2 + 200 * 1024, 500 * 1024**3, 5 * 1024**4)] == [
         "0 B", "512 B", "1,0 KB", "1,5 KB", "10 KB", "3,2 MB", "500 GB", "5,0 TB",
     ]
-    assert speed_text(2 * 1024**2) == "2,0 MB/s"
-    assert [duration_text(n) for n in (0, 59, 60, 3599, 3600, 4320, 86400, 90000, 3 * 86400 + 3600)] == [
+    assert qbt_widgets.speed_text(2 * 1024**2) == "2,0 MB/s"
+    assert [qbt_widgets.duration_text(n) for n in (0, 59, 60, 3599, 3600, 4320, 86400, 90000, 3 * 86400 + 3600)] == [
         "< 1 Min.", "< 1 Min.", "1 Min.", "59 Min.", "1 Std.", "1 Std. 12 Min.", "1 Tag", "1 Tag 1 Std.", "3 Tage 1 Std.",
     ]
 
@@ -802,7 +798,7 @@ async def test_the_session_is_reused_and_a_refresh_does_not_log_in_again(client,
 
     await _overview(client, headers)
     await _overview(client, headers, "?refresh=true")
-    now[0] += CACHE_TTL_S + 1
+    now[0] += qbt_service.CACHE_TTL_S + 1
     await _overview(client, headers)
     assert fake.logins == 1 and len(fake.posts()) == 1
     assert len(fake.requests) == 1 + 3 * 5, "ein Anmelden, dreimal fünf Lesezugriffe"
@@ -899,7 +895,7 @@ async def test_rejected_login_says_what_to_do_and_asks_only_once(client, db_sess
 
 @pytest.mark.asyncio
 async def test_a_rejected_login_pauses_for_thirty_minutes_even_on_refresh(client, db_session, test_settings):
-    assert AUTH_FAILED_TTL_S == 1800.0
+    assert qbt_service.AUTH_FAILED_TTL_S == 1800.0
     headers, fake = await _enable(client, db_session, test_settings)
     fake.max_failures = 100
     await _configure(client, headers, _connection(), password="falsch")
@@ -927,7 +923,7 @@ async def test_the_pause_keeps_the_dashboard_below_the_ban_limit_of_qbittorrent(
     now = [0.0]
     service._clock = lambda: now[0]
     for _ in range(40):
-        now[0] += CACHE_TTL_S + 1
+        now[0] += qbt_service.CACHE_TTL_S + 1
         await _overview(client, headers)
     assert fake.failed_logins == 1 and fake.banned is False
 
@@ -937,8 +933,7 @@ async def test_changed_settings_end_the_pause(client, db_session, test_settings)
     headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers, _connection(), password="falsch")
     assert _only(await _overview(client, headers))["state"] == "auth_failed"
-    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": "qbittorrent-password:qb", "value": PASSWORD}, headers=headers)
-    assert res.status_code == 204
+    fake.password = "falsch"
     saved = await client.put(f"/api/v1/extensions/{EXT}/settings", json={"current_password": "correct-horse-battery", "values": {"connections": [_connection(insecure=True)]}}, headers=headers)
     assert saved.status_code == 200, saved.text
     assert not saved.json().get("secrets_cleared"), "dieselbe Adresse: das Passwort bleibt"
@@ -948,16 +943,82 @@ async def test_changed_settings_end_the_pause(client, db_session, test_settings)
 
 @pytest.mark.asyncio
 async def test_testing_the_connection_ends_the_pause_and_logs_in_again(client, db_session, test_settings):
-    headers, _ = await _enable(client, db_session, test_settings)
+    headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers, _connection(), password="falsch")
     assert _only(await _overview(client, headers))["state"] == "auth_failed"
-    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": "qbittorrent-password:qb", "value": PASSWORD}, headers=headers)
-    assert res.status_code == 204
+    fake.password = "falsch"
     assert _only(await _overview(client, headers))["state"] == "auth_failed", "noch aus dem Zwischenspeicher"
 
     health = await _health()
     assert health.healthy is True
     assert _only(await _overview(client, headers))["state"] == "ok"
+
+
+async def _set_password(client, headers, value: str, name: str = "qb") -> None:
+    res = await client.put(
+        f"/api/v1/extensions/{EXT}/secrets",
+        json={"current_password": "correct-horse-battery", "label": f"qbittorrent-password:{name}", "value": value}, headers=headers,
+    )
+    assert res.status_code == 204, res.text
+
+
+@pytest.mark.asyncio
+async def test_a_new_password_in_the_vault_ends_the_pause_at_once(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection(), password="falsch")
+    assert _only(await _overview(client, headers))["state"] == "auth_failed"
+    await _set_password(client, headers, PASSWORD)
+    assert _only(await _overview(client, headers))["state"] == "ok"
+    assert fake.failed_logins == 1 and fake.logins == 1
+
+
+@pytest.mark.asyncio
+async def test_a_new_password_in_the_vault_drops_the_old_session(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection())
+    assert _only(await _overview(client, headers))["state"] == "ok"
+    assert len(fake.sessions) == 1
+    await _set_password(client, headers, "falsch")
+    assert fake.sessions == set(), "die alte Sitzung ist bei qBittorrent abgemeldet"
+    assert _only(await _overview(client, headers))["state"] == "auth_failed", "nicht weiter mit der Sitzung von vorher"
+    assert fake.failed_logins == 1
+
+
+@pytest.mark.asyncio
+async def test_a_changed_secret_touches_only_its_own_connection(client, db_session, test_settings):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection(), _connection(name="qb2"))
+    await _overview(client, headers)
+    service, loaded = _service(), get_extension_runtime().loaded[EXT]
+    assert set(service._cache) == {"qb", "qb2"}
+    await loaded.instance.on_secret_changed(loaded.ctx, "qbittorrent-password:qb2")
+    assert set(service._cache) == {"qb"} and set(service._boxes) == {"qb"}
+    await loaded.instance.on_secret_changed(loaded.ctx, "qbittorrent-sonstwas")
+    assert set(service._cache) == {"qb"}
+
+
+@pytest.mark.asyncio
+async def test_an_answer_with_the_old_password_is_not_kept(client, db_session, test_settings):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection())
+    service, loaded = _service(), get_extension_runtime().loaded[EXT]
+    load, entered, release, loads = service._load_bounded, asyncio.Event(), asyncio.Event(), []
+
+    async def slow(cfg, has_password):
+        loads.append(cfg.name)
+        if len(loads) == 1:
+            entered.set()
+            await release.wait()
+        return await load(cfg, has_password)
+
+    service._load_bounded = slow
+    first = asyncio.create_task(_overview(client, headers))
+    await entered.wait()
+    await loaded.instance.on_secret_changed(loaded.ctx, "qbittorrent-password:qb")
+    release.set()
+    await first
+    await _overview(client, headers)
+    assert loads == ["qb", "qb"], "was die Abfrage mit dem alten Passwort einträgt, gilt nicht mehr"
 
 
 @pytest.mark.asyncio
@@ -1286,7 +1347,7 @@ async def test_oversized_answers_are_refused_while_streaming(client, db_session,
 
 @pytest.mark.asyncio
 async def test_a_library_too_big_for_one_request_leaves_counts_and_free_space_unknown_without_an_error(client, db_session, test_settings):
-    assert transport.MAX_SYNC_BYTES == 8 * 1024 * 1024 and TOO_LARGE_PAUSE_S == 600.0
+    assert transport.MAX_SYNC_BYTES == 8 * 1024 * 1024 and qbt_service.TOO_LARGE_PAUSE_S == 600.0
     headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers, _connection())
     service = _service()
@@ -1314,11 +1375,11 @@ async def test_a_library_too_big_for_one_request_leaves_counts_and_free_space_un
 
     # Die schwere Abfrage wird danach nicht bei jeder Aktualisierung wiederholt.
     asked = sum(1 for r in fake.requests if r.url.path == "/api/v2/sync/maindata")
-    now[0] += CACHE_TTL_S + 1
+    now[0] += qbt_service.CACHE_TTL_S + 1
     again = _only(await _overview(client, headers, "?refresh=true"))
     assert again["notes"] == connection["notes"]
     assert sum(1 for r in fake.requests if r.url.path == "/api/v2/sync/maindata") == asked
-    now[0] += TOO_LARGE_PAUSE_S
+    now[0] += qbt_service.TOO_LARGE_PAUSE_S
     fake.overrides.pop("/api/v2/sync/maindata")
     recovered = _only(await _overview(client, headers))
     assert recovered["counts"]["total"] == 14 and recovered["notes"] == []
@@ -1468,7 +1529,7 @@ async def test_results_are_cached_for_a_short_time_and_the_password_is_read_only
     assert len(fake.requests) == 11, "der Knopf Aktualisieren umgeht den Zwischenspeicher, die Sitzung bleibt"
     assert reads == ["qbittorrent-password:qb"] * 2
 
-    now[0] += CACHE_TTL_S - 1
+    now[0] += qbt_service.CACHE_TTL_S - 1
     await _overview(client, headers)
     assert len(fake.requests) == 11
     now[0] += 2.0
@@ -1708,7 +1769,7 @@ async def test_widget_shows_at_most_ten_rows_and_says_how_many_torrents_are_miss
     await _configure(client, headers, _connection())
     fake.active = [_torrent(f"Torrent {i:02d}", dl=1000 - i) for i in range(30)]
     rows = (await _widget(client, headers))["data"]
-    assert len(rows) == MAX_ROWS and rows[0]["title"] == "qBittorrent v5.1.4"
+    assert len(rows) == qbt_widgets.MAX_ROWS and rows[0]["title"] == "qBittorrent v5.1.4"
     assert [r["title"] for r in rows[1:9]] == [f"Torrent {i:02d}" for i in range(8)]
     assert rows[9] == {"title": "… und 22 weitere aktive Torrents", "subtitle": "Alle stehen auf der Seite „qBittorrent“.", "label": "–", "tone": "neutral"}
 
@@ -1722,7 +1783,7 @@ async def test_widget_shows_at_most_ten_rows_and_says_how_many_torrents_are_miss
     fake.active = [_torrent(f"Torrent {i:02d}") for i in range(9)]
     _service().clear()
     rows = (await _widget(client, headers))["data"]
-    assert len(rows) == MAX_ROWS and rows[9]["title"] == "Torrent 08"
+    assert len(rows) == qbt_widgets.MAX_ROWS and rows[9]["title"] == "Torrent 08"
 
 
 @pytest.mark.asyncio
@@ -1740,13 +1801,13 @@ async def test_widget_with_several_connections_names_each_torrent_and_stays_with
     await _configure(client, headers, *[_connection(f"qb{i}") for i in range(7)])
     fake.active = [_torrent(f"T{i}") for i in range(4)]
     rows = (await _widget(client, headers))["data"]
-    assert len(rows) == MAX_ROWS
+    assert len(rows) == qbt_widgets.MAX_ROWS
     assert [r["subtitle"].split(" · ")[0] for r in rows[:7]] == [f"qb{i}" for i in range(7)]
     assert rows[9]["title"] == "… und 26 weitere aktive Torrents"
 
     await _configure(client, headers, *[_connection(f"qb{i}") for i in range(11)])
     rows = (await _widget(client, headers))["data"]
-    assert len(rows) == MAX_ROWS and rows[-1]["title"] == "… und 2 weitere Zeilen"
+    assert len(rows) == qbt_widgets.MAX_ROWS and rows[-1]["title"] == "… und 2 weitere Zeilen"
     assert not any(r["label"] == "lädt" for r in rows), "bei so vielen gibt es nur die Zusammenfassungen"
 
 

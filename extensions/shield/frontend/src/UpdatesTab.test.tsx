@@ -64,7 +64,7 @@ beforeEach(() => {
   // Gemerkte Läufe (Folgen über ein Neuladen hinweg) dürfen nicht in den nächsten Test wandern.
   window.sessionStorage.clear();
   confirmDialog = vi.fn<(message: string) => Promise<boolean>>().mockResolvedValue(true);
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog, promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(true),
   };
@@ -281,7 +281,7 @@ describe("Update-Zentrale", () => {
     it("die Stufe aus der Antwort der Route zählt: ohne Recht für „hoch“ wird nicht freigegeben, der Vorschlag bleibt offen", async () => {
       const calls: Call[] = [];
       stubWith(withOption(true), calls, { action_id: "a1", status: "proposed", risk: "high" });
-      window.__lattice.hasPermission = vi.fn((p: string) => p !== "actions.approve:high");
+      window.__nodvardDeck.hasPermission = vi.fn((p: string) => p !== "actions.approve:high");
       render(<UpdatesTab canManage />);
       fireEvent.click(within(await screen.findByTestId("updates-h-pi")).getByRole("button", { name: "Alle einspielen" }));
 
@@ -593,7 +593,7 @@ describe("Update-Zentrale", () => {
     const calls: Call[] = [];
     vi.stubGlobal("fetch", mockFetch(calls));
     const hasPermission = vi.fn((p: string) => p !== "actions.approve:high");
-    window.__lattice.hasPermission = hasPermission;
+    window.__nodvardDeck.hasPermission = hasPermission;
     render(<UpdatesTab canManage />);
     const pi = within(await screen.findByTestId("updates-h-pi"));
 
@@ -888,5 +888,86 @@ describe("Automatische Sicherheitsupdates einrichten", () => {
     await act(async () => { approve.resolve(new Response(JSON.stringify({ status: "succeeded", result: {} }), { status: 200 })); });
     expect(await screen.findByText("Raspberry Pi: Erledigt.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Einrichten" })).toBeEnabled();
+  });
+});
+
+describe("Updates, die Ubuntu wegen Phasing zurückhält", () => {
+  const ubuntu = (security: number, phased: number | undefined) => ({
+    ...DATA,
+    hosts: [{
+      ...DATA.hosts[0], host_id: "h-ubu", host_name: "ubuntu",
+      status: {
+        ...DATA.hosts[0].status!, reboot_required: false, reboot_reasons: [], count: 4, security_count: security, phased_count: phased,
+        packages: [
+          { name: "openssl", new_version: "3.0.14", current_version: "3.0.13", repo: "noble-security", security: security > 0 },
+          { name: "base-files", new_version: "13ubuntu10.2", current_version: "13ubuntu10.1", repo: "noble-updates", security: false },
+          { name: "python3-apt", new_version: "2.7.7ubuntu5", current_version: "2.7.7ubuntu4", repo: "noble-updates", security: false, phased: !!phased },
+          { name: "ubuntu-pro-client", new_version: "36", current_version: "35", repo: "noble-updates", security: false, phased: !!phased },
+        ],
+      },
+    }],
+  });
+  const stub = (data: UpdatesOverview) => vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(data), { status: 200 })));
+
+  it("nennt die Zahl, erklärt Phasing auf Klick und markiert die Pakete", async () => {
+    stub(ubuntu(0, 2));
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-h-ubu"));
+    const hint = row.getByRole("button", { name: "davon 2 durch Phasing verzögert" });
+    expect(hint).toHaveAttribute("title", expect.stringContaining("schrittweise"));
+    expect(row.queryByText(/hält apt das Update zurück/)).not.toBeInTheDocument();
+
+    fireEvent.click(hint);
+    expect(hint).toHaveAttribute("aria-expanded", "true");
+    expect(row.getByText(/Bis dieser Server an der Reihe ist, hält apt das Update zurück/)).toBeInTheDocument();
+
+    fireEvent.click(row.getByText("4 Pakete anzeigen"));
+    expect(row.getAllByText("verzögert")).toHaveLength(2);
+  });
+
+  it("steht daneben die Zahl der Sicherheitsupdates, nennt der Text die Gesamtzahl", async () => {
+    stub(ubuntu(1, 2));
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-h-ubu"));
+    expect(row.getByText("1 Sicherheitsupdate")).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "2 von 4 Updates durch Phasing verzögert" })).toBeInTheDocument();
+  });
+
+  it("ohne Phasing (Debian, ältere Stände) kein Hinweis", async () => {
+    stub(ubuntu(0, undefined));
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-h-ubu"));
+    expect(row.getByText("4 Updates")).toBeInTheDocument();
+    expect(row.queryByText(/Phasing/)).not.toBeInTheDocument();
+  });
+
+  it("während Prüfen oder Einspielen kein „davon“ neben dem Abzeichen", async () => {
+    const data = ubuntu(0, 2);
+    data.hosts[0] = { ...data.hosts[0], checking: true };
+    stub(data);
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-h-ubu"));
+    expect(row.getByText("prüft …")).toBeInTheDocument();
+    expect(row.queryByText(/durch Phasing verzögert/)).not.toBeInTheDocument();
+  });
+
+  it("hält Ubuntu alle Updates zurück, sagt die Rückfrage, dass Einspielen noch nichts bringt", async () => {
+    stub(ubuntu(0, 4));
+    confirmDialog.mockResolvedValue(false);
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-h-ubu"));
+    fireEvent.click(row.getByRole("button", { name: "Alle einspielen" }));
+    await waitFor(() => expect(confirmDialog).toHaveBeenCalled());
+    expect(String(confirmDialog.mock.calls[0][0])).toContain("Ubuntu hält diese Updates wegen Phasing noch zurück; einspielen lassen sie sich erst");
+  });
+
+  it("„Alle einspielen“ sagt vorher, dass diese Updates noch nicht kommen", async () => {
+    stub(ubuntu(0, 2));
+    confirmDialog.mockResolvedValue(false);
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-h-ubu"));
+    fireEvent.click(row.getByRole("button", { name: "Alle einspielen" }));
+    await waitFor(() => expect(confirmDialog).toHaveBeenCalled());
+    expect(String(confirmDialog.mock.calls[0][0])).toContain("2 davon hält Ubuntu wegen Phasing noch zurück");
   });
 });

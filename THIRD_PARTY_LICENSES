@@ -23,13 +23,13 @@ Inhalt
   APScheduler                        3.11.3         MIT
   argon2-cffi                        25.1.0         MIT
   argon2-cffi-bindings               26.1.0         MIT
-  asyncssh                           2.24.0         EPL-2.0 OR GPL-2.0-or-later
+  asyncssh                           2.24.0         EPL-2.0 OR GPL-2.0-or-later, genutzt als EPL-2.0
   certifi                            2026.10.19     MPL-2.0
   cffi                               2.1.1          MIT-0
   click                              8.5.0          BSD-3-Clause
-  cryptography                       50.0.1         Apache-2.0 OR BSD-3-Clause
+  cryptography                       50.0.1         Apache-2.0 OR BSD-3-Clause, genutzt als Apache-2.0
   defusedxml                         0.7.1          PSFL
-  dulwich                            1.2.15         Apache-2.0 OR GPL-2.0-or-later
+  dulwich                            1.2.19         Apache-2.0 OR GPL-2.0-or-later, genutzt als Apache-2.0
   fastapi                            0.141.1        MIT
   greenlet                           3.5.6          MIT AND PSF-2.0
   h11                                0.16.0         MIT
@@ -39,7 +39,7 @@ Inhalt
   idna                               3.20           BSD-3-Clause
   Mako                               1.4.3          MIT
   MarkupSafe                         3.0.3          BSD-3-Clause
-  packaging                          26.3           Apache-2.0 OR BSD-2-Clause
+  packaging                          26.3           Apache-2.0 OR BSD-2-Clause, genutzt als Apache-2.0
   pillow                             13.0.0         MIT-CMU
   pycparser                          3.0            BSD-3-Clause
   pydantic                           2.13.5         MIT
@@ -48,14 +48,14 @@ Inhalt
   PyJWT                              2.15.0         MIT
   PyOTP                              2.10.0         MIT
   pypdfium2                          5.13.0         BSD-3-Clause, Apache-2.0, dependency licenses
-  pyrage                             1.4.0          (keine Angabe)
+  pyrage                             1.4.0          MIT (laut Lizenzdatei, die Metadaten nennen keine)
   pytesseract                        0.3.13         Apache License 2.0
   python-dotenv                      1.2.3          BSD-3-Clause
   python-multipart                   0.0.32         Apache-2.0
   PyYAML                             6.0.3          MIT
   SQLAlchemy                         2.0.54         MIT
   starlette                          1.7.0          BSD-3-Clause
-  structlog                          26.1.0         MIT OR Apache-2.0
+  structlog                          26.1.0         MIT OR Apache-2.0, genutzt als MIT
   typing-inspection                  0.4.4          MIT
   typing_extensions                  4.16.0         PSF-2.0
   tzdata                             2026.4         Apache-2.0
@@ -134,6 +134,14 @@ Inhalt
   use-sidecar                        1.1.3          MIT
   yaml                               2.9.1          ISC
   zustand                            5.0.15         MIT
+
+Systempakete im Image
+------------------------------------------------------------------------------
+Das Image baut auf python:3.12-slim auf (Debian mit Python), dazu kommen die
+Debian-Pakete tesseract-ocr, tesseract-ocr-deu (nur in Images mit dem Modul
+documents). Diese Programme des Betriebssystems sind nicht Teil von Nodvard
+Deck und stehen unter ihren eigenen Lizenzen; den Text zu jedem Paket enthält
+das Image unter /usr/share/doc/<paket>/copyright.
 
 Hinweis zu MPL-2.0-Komponenten
 ------------------------------------------------------------------------------
@@ -361,7 +369,7 @@ SOFTWARE.
 
 ------------------------------------------------------------------------------
 asyncssh 2.24.0
-Lizenz: EPL-2.0 OR GPL-2.0-or-later
+Lizenz: EPL-2.0 OR GPL-2.0-or-later, genutzt als EPL-2.0
 ------------------------------------------------------------------------------
 Eclipse Public License - v 2.0
 
@@ -773,7 +781,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
 cryptography 50.0.1
-Lizenz: Apache-2.0 OR BSD-3-Clause
+Lizenz: Apache-2.0 OR BSD-3-Clause, genutzt als Apache-2.0
 ------------------------------------------------------------------------------
 [LICENSE]
 
@@ -1078,7 +1086,7 @@ Die vollständigen Texte der genannten Standardlizenzen stehen unter https://spd
 [Fest eingebaute Bibliothek: Rust-Standardbibliothek (std, core, alloc)]
 
 Rust-Standardbibliothek (std, core, alloc) ist in cryptography 50.0.1 fest eingebaut (statisch
-gelinkt), ebenso in dulwich 1.2.15, pydantic-core 2.46.5, pyrage 1.4.0, watchfiles 1.3.0. Das Wheel
+gelinkt), ebenso in dulwich 1.2.19, pydantic-core 2.46.5, pyrage 1.4.0, watchfiles 1.3.0. Das Wheel
 bringt dafür keinen eigenen Lizenztext mit, deshalb steht er hier (bei den anderen genannten Paketen
 steht nur ein Verweis hierher). Die Texte darunter stammen unverändert aus dem Quelltext.
 
@@ -1098,8 +1106,11 @@ steht nur ein Verweis hierher). Die Texte darunter stammen unverändert aus dem 
             ihre Funktionen (z. B. object::read::read_ref::ReadRef) in cryptography, dulwich und
             watchfiles; die Binaries von pydantic-core und pyrage sind ohne Symbole, enthalten aber
             dieselben Crates der Fehlerausgabe (addr2line, gimli). Die Version 0.37.3 steht in der
-            Cargo.lock der Standardbibliothek bei allen drei Compiler-Ständen, mit denen diese
-            Wheels gebaut sind.
+            Cargo.lock der Standardbibliothek bei allen drei Compiler-Ständen, mit denen die übrigen
+            Wheels gebaut sind (Rust 1.96.0, 1.98.0 und 1.98.1). dulwich ist mit Rust 1.99.1 gebaut;
+            dort stehen addr2line-0.27.1, gimli-0.34.0, miniz_oxide-0.9.1, rustc-demangle-0.1.28 und
+            hashbrown-0.17.1 im Binary, object hat laut Cargo.lock dieses Compilers die Version
+            0.39.1. Die Lizenzdateien dieser neueren Versionen sind Wort für Wort dieselben.
   Hinweis:  Eine feste Version gibt es nicht: Die Standardbibliothek kommt mit dem Compiler, mit dem
             das jeweilige Wheel gebaut wurde. Die Lizenztexte stammen aus dem Rust-Quelltext
             (Hauptzweig) und aus den genannten Crates (miniz_oxide steht unter 'MIT OR Zlib OR
@@ -1133,7 +1144,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[Lizenztext zu Rust-Standardbibliothek (std, core, alloc): LICENSE-MIT aus addr2line 0.25.1]
+[Lizenztext zu Rust-Standardbibliothek (std, core, alloc): LICENSE-MIT aus addr2line 0.25.1 (0.27.1 ist gleich)]
 
 Copyright (c) 2016-2018 The gimli Developers
 
@@ -1161,7 +1172,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[Lizenztext zu Rust-Standardbibliothek (std, core, alloc): LICENSE-MIT aus gimli 0.32.3]
+[Lizenztext zu Rust-Standardbibliothek (std, core, alloc): LICENSE-MIT aus gimli 0.32.3 (0.34.0 ist gleich)]
 
 Copyright (c) 2015 The Rust Project Developers
 
@@ -1189,7 +1200,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[Lizenztext zu Rust-Standardbibliothek (std, core, alloc): LICENSE-MIT aus object 0.37.3]
+[Lizenztext zu Rust-Standardbibliothek (std, core, alloc): LICENSE-MIT aus object 0.37.3 (0.39.1 ist gleich)]
 
 Copyright (c) 2015 The Gimli Developers
 
@@ -1217,7 +1228,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[Lizenztext zu Rust-Standardbibliothek (std, core, alloc): LICENSE aus miniz_oxide 0.8.9 (MIT)]
+[Lizenztext zu Rust-Standardbibliothek (std, core, alloc): LICENSE aus miniz_oxide 0.8.9 (MIT; 0.9.1 ist gleich)]
 
 MIT License
 
@@ -1245,7 +1256,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-[Lizenztext zu Rust-Standardbibliothek (std, core, alloc): LICENSE-MIT aus rustc-demangle 0.1.27]
+[Lizenztext zu Rust-Standardbibliothek (std, core, alloc): LICENSE-MIT aus rustc-demangle 0.1.27 (0.1.28 ist gleich)]
 
 Copyright (c) 2014 Alex Crichton
 
@@ -1355,8 +1366,8 @@ agrees to be bound by the terms and conditions of this License
 Agreement.
 
 ------------------------------------------------------------------------------
-dulwich 1.2.15
-Lizenz: Apache-2.0 OR GPL-2.0-or-later
+dulwich 1.2.19
+Lizenz: Apache-2.0 OR GPL-2.0-or-later, genutzt als Apache-2.0
 ------------------------------------------------------------------------------
 [COPYING]
 
@@ -1908,21 +1919,21 @@ consider it more useful to permit linking proprietary applications with the
 library.  If this is what you want to do, use the GNU Lesser General
 Public License instead of this License.
 
-[Fest eingebaute Bibliothek: pyo3 und pyo3-ffi (Rust-Crates) 0.29.2]
+[Fest eingebaute Bibliothek: pyo3 und pyo3-ffi (Rust-Crates) 0.30.1]
 
-pyo3 und pyo3-ffi (Rust-Crates) 0.29.2 ist in dulwich 1.2.15 fest eingebaut (statisch gelinkt). Das
+pyo3 und pyo3-ffi (Rust-Crates) 0.30.1 ist in dulwich 1.2.19 fest eingebaut (statisch gelinkt). Das
 Wheel bringt dafür keinen eigenen Lizenztext mit, deshalb steht er hier. Die Texte darunter stammen
 unverändert aus dem Quelltext genau dieser Version.
 
   Lizenz:   MIT OR Apache-2.0
   Urheber:  PyO3 Project and Contributors
-  Quelle:   https://crates.io/crates/pyo3/0.29.2
+  Quelle:   https://crates.io/crates/pyo3/0.30.1
   Erkannt:  Die drei Rust-Erweiterungen von dulwich (_objects, _pack, _diff_tree) bringen keine SBOM
-            mit. In allen dreien stehen die Crate-Pfade pyo3-0.29.2 und pyo3-ffi-0.29.2 (x86_64 und
+            mit. In allen dreien stehen die Crate-Pfade pyo3-0.30.1 und pyo3-ffi-0.30.1 (x86_64 und
             aarch64). Die Lizenzdateien beider Crates sind gleich; ausgegeben ist der MIT-Text (von
             'MIT OR Apache-2.0' gilt eine nach Wahl).
 
-[Lizenztext zu pyo3 und pyo3-ffi (Rust-Crates) 0.29.2: LICENSE-MIT]
+[Lizenztext zu pyo3 und pyo3-ffi (Rust-Crates) 0.30.1: LICENSE-MIT]
 
 Copyright (c) 2023-present PyO3 Project and Contributors.  https://github.com/PyO3
 
@@ -1952,7 +1963,7 @@ DEALINGS IN THE SOFTWARE.
 
 [Fest eingebaute Bibliothek: once_cell (Rust-Crate) 1.21.4]
 
-once_cell (Rust-Crate) 1.21.4 ist in dulwich 1.2.15 fest eingebaut (statisch gelinkt). Das Wheel
+once_cell (Rust-Crate) 1.21.4 ist in dulwich 1.2.19 fest eingebaut (statisch gelinkt). Das Wheel
 bringt dafür keinen eigenen Lizenztext mit, deshalb steht er hier. Die Texte darunter stammen
 unverändert aus dem Quelltext genau dieser Version.
 
@@ -1991,7 +2002,7 @@ DEALINGS IN THE SOFTWARE.
 
 [Fest eingebaute Bibliothek: similar (Rust-Crate) 3.2.0]
 
-similar (Rust-Crate) 3.2.0 ist in dulwich 1.2.15 fest eingebaut (statisch gelinkt). Das Wheel bringt
+similar (Rust-Crate) 3.2.0 ist in dulwich 1.2.19 fest eingebaut (statisch gelinkt). Das Wheel bringt
 dafür keinen eigenen Lizenztext mit, deshalb steht er hier. Die Texte darunter stammen unverändert
 aus dem Quelltext genau dieser Version.
 
@@ -2572,7 +2583,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
 packaging 26.3
-Lizenz: Apache-2.0 OR BSD-2-Clause
+Lizenz: Apache-2.0 OR BSD-2-Clause, genutzt als Apache-2.0
 ------------------------------------------------------------------------------
 [LICENSE]
 
@@ -7418,7 +7429,7 @@ Section 8 -- Interpretation.
 
 ------------------------------------------------------------------------------
 pyrage 1.4.0
-Lizenz: (keine Angabe)
+Lizenz: MIT (laut Lizenzdatei, die Metadaten nennen keine)
 ------------------------------------------------------------------------------
 [LICENSE]
 
@@ -8261,7 +8272,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
 structlog 26.1.0
-Lizenz: MIT OR Apache-2.0
+Lizenz: MIT OR Apache-2.0, genutzt als MIT
 ------------------------------------------------------------------------------
 [LICENSE-APACHE]
 

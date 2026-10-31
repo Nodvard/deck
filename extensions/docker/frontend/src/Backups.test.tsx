@@ -32,12 +32,12 @@ function serve(over: Record<string, (init?: RequestInit) => Response> = {}) {
   }));
 }
 
-const confirm = () => window.__lattice.confirmDialog as Mock;
+const confirm = () => window.__nodvardDeck.confirmDialog as Mock;
 
 beforeEach(() => {
   bodies.length = 0;
   requests.length = 0;
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn().mockResolvedValue(true), promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(true),
   };
@@ -78,7 +78,7 @@ describe("Sicherungen", () => {
   it("löschen wartet auf die Freigabe und sagt es", async () => {
     const onDone = vi.fn();
     serve();
-    window.__lattice.hasPermission = vi.fn((permission: string) => !permission.startsWith("actions.approve"));
+    window.__nodvardDeck.hasPermission = vi.fn((permission: string) => !permission.startsWith("actions.approve"));
     render(<BackupsPanel hostId="h1" project="shop" onDone={onDone} />);
     fireEvent.click(await screen.findByRole("button", { name: "Sicherung löschen" }));
     await waitFor(() => expect(onDone).toHaveBeenCalledWith("Vorgeschlagen. Es fehlt noch die Freigabe durch einen Admin, siehe „Aktionen“."));

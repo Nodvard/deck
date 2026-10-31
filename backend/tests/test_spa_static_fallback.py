@@ -13,7 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from nodvard_deck.main import SPA_CSP, SPA_CSP_REPORT_ONLY, _SpaStaticFiles
+from nodvard_deck.main import SPA_CSP, _SpaStaticFiles
 
 
 @pytest.fixture
@@ -100,14 +100,11 @@ def test_html_has_the_csp_assets_do_not(spa_client: TestClient):
         assert headers["content-security-policy"] == f"{SPA_CSP}; script-src 'self'"
         directives = {part.strip() for part in headers["content-security-policy"].split(";")}
         assert directives == {
-            "style-src 'self' 'unsafe-inline'", "font-src 'self' data:", "object-src 'none'", "base-uri 'self'",
-            "form-action 'self'", "script-src 'self'",
+            "default-src 'self'", "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:",
+            "font-src 'self' data:", "frame-src blob:", "object-src 'none'", "base-uri 'self'", "form-action 'self'",
+            "script-src 'self'",
         }
-        # Bilder, Verbindungen, Worker und Rahmen vorerst nur gemeldet.
-        assert headers["content-security-policy-report-only"] == SPA_CSP_REPORT_ONLY
-        assert {part.strip() for part in SPA_CSP_REPORT_ONLY.split(";")} == {
-            "img-src 'self' data: blob:", "connect-src 'self'", "worker-src 'self'", "frame-src blob:",
-        }
+        assert "content-security-policy-report-only" not in headers
     asset = spa_client.get("/assets/app.js").headers
     assert "content-security-policy" not in asset and "content-security-policy-report-only" not in asset
 
@@ -117,5 +114,4 @@ def test_a_revalidated_page_keeps_its_csp(spa_client: TestClient):
         first = spa_client.get(path)
         again = spa_client.get(path, headers={"If-None-Match": first.headers["etag"]})
         assert again.status_code == 304, path
-        for name in ("content-security-policy", "content-security-policy-report-only"):
-            assert again.headers[name] == first.headers[name], (path, name)
+        assert again.headers["content-security-policy"] == first.headers["content-security-policy"], path

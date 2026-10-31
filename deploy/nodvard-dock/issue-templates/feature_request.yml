@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest an idea or improvement for Nodvard Dock
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Which problem would this solve?
+      description: Describe the situation with your containers or servers where you miss this.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How could it look or work in Nodvard Dock?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other ways you have considered or tools that already do this.

@@ -3,6 +3,8 @@ DB-Schicht, siehe test_core_scheduler.py fuer die Ausfuehrung."""
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from nodvard_deck.models import JobRun
@@ -123,3 +125,44 @@ async def test_mark_interrupted_on_boot_only_touches_running_runs(db_session):
     assert rows[running.id].status == "interrupted"
     assert rows[running.id].finished_at is not None
     assert rows[already_done.id].status == "succeeded"
+
+
+@pytest.mark.parametrize(("ref", "inside"), [
+    ("{runs}/x.log", True),
+    ("{runs}/ordner/../x.log", True),
+    ("{runs}/ordner/x.log", False),
+    ("{base}/x.log", False),
+    ("{runs}/..", False),
+    ("{runs}/.", False),
+    ("{runs}/", False),
+    ("x.log", False),
+    ("{runs}/a\x00b/x.log", False),
+    ("", False),
+    (None, False),
+])
+def test_run_file_accepts_only_names_directly_in_runs_dir(tmp_path, ref, inside):
+    runs = tmp_path / "runs"
+    (runs / "ordner").mkdir(parents=True)
+    ref = ref.format(runs=runs, base=tmp_path) if ref else ref
+    expected = os.path.join(os.path.realpath(runs), "x.log") if inside else None
+    assert jobs_service.run_file(runs, ref) == expected
+
+
+def test_run_file_follows_a_symlinked_runs_dir_but_never_the_name(tmp_path):
+    real = tmp_path / "echt"
+    real.mkdir()
+    runs = tmp_path / "runs"
+    try:
+        runs.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlinks nicht möglich")
+    (real / "link.log").symlink_to(tmp_path / "geheim.txt")
+    assert jobs_service.run_file(runs, str(runs / "x.log")) == os.path.join(os.path.realpath(real), "x.log")
+    assert jobs_service.run_file(runs, str(runs / "link.log")) == os.path.join(os.path.realpath(real), "link.log")
+
+
+def test_run_file_refuses_a_name_that_is_the_folder_itself(tmp_path, monkeypatch):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    monkeypatch.chdir(runs)
+    assert jobs_service.run_file(runs, ".") is None

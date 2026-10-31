@@ -16,6 +16,7 @@ from nodvard_sdk.types import Risk
 
 from . import commands
 from .capabilities import _json_pattern, parse_size
+from .operate import still_full
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
@@ -301,6 +302,8 @@ class DockerResourceExecutor:
         host = await self._ctx.hosts.get(req.host_ref) if req.host_ref else None
         if host is None:
             return ActionResult(success=False, error="Server nicht gefunden.")
+        if why := await still_full(self._ctx, host):
+            return ActionResult(success=False, error=why)
         try:
             if req.action_type == "docker.image_remove":
                 target = str(req.payload.get("image") or "")

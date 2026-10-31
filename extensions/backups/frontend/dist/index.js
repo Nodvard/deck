@@ -3,17 +3,15 @@ import { Fragment as Fragment4, useCallback as useCallback2, useEffect as useEff
 
 // ../../../frontend/src/lib/deckGlobal.ts
 var EVENT_PREFIX = "nodvard-deck:";
-var LEGACY_EVENT_PREFIX = "lattice:";
 function findDeck() {
   if (typeof window === "undefined") return void 0;
-  return window.__nodvardDeck ?? window.__lattice;
+  return window.__nodvardDeck;
 }
 function deck() {
   return findDeck();
 }
 function deckEventName(event) {
-  const modern = typeof window !== "undefined" && Boolean(window.__nodvardDeck);
-  return (modern ? EVENT_PREFIX : LEGACY_EVENT_PREFIX) + event;
+  return EVENT_PREFIX + event;
 }
 
 // ../../_shared/frontend/src/api.ts
@@ -627,7 +625,7 @@ function formatBytes(n, options = {}) {
 // src/RestoreCopy.tsx
 import { Fragment as Fragment3, jsx as jsx5, jsxs as jsxs5 } from "react/jsx-runtime";
 function when(seconds) {
-  return seconds ? new Date(seconds * 1e3).toLocaleString() : "unbekannt";
+  return seconds ? new Date(seconds * 1e3).toLocaleString("de-DE") : "unbekannt";
 }
 async function getJson(path) {
   const res = await authedFetch(path);
@@ -1088,7 +1086,7 @@ var STATUS_CLASS = {
 };
 function formatEpoch(seconds) {
   if (!seconds) return "nie";
-  return new Date(seconds * 1e3).toLocaleString();
+  return new Date(seconds * 1e3).toLocaleString("de-DE");
 }
 async function postWithSpaceCheck(path, payload) {
   const send = (extra) => authedFetch(path, { method: "POST", body: JSON.stringify({ ...payload, ...extra }) });

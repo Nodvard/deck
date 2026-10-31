@@ -17,10 +17,11 @@ HELPER = "/usr/local/lib/nodvard-deck/docker-root"
 NAME, ID = "web-1", "a" * 64
 
 
-@pytest.fixture(autouse=True)
-def _ext_docker_on_path(monkeypatch):
-    monkeypatch.syspath_prepend(str(EXT_DIR / "src"))
-    yield
+@pytest.fixture(autouse=True, scope="module")
+def _ext_docker_on_path():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(EXT_DIR / "src"))
+        yield
     for name in list(sys.modules):
         if name.startswith("nodvard_deck_ext_docker"):
             del sys.modules[name]
@@ -365,8 +366,45 @@ async def test_setting_up_an_operate_host_allows_only_the_helper(client, db_sess
     assert [h["ext_id"] for h in narrow["helpers"]] == ["docker"]
     assert "NOPASSWD: ALL" not in narrow["script"]
     assert "/etc/sudoers.d/nodvard_docker_$U" in narrow["script"]
+    assert any("„Volle Rechte“ hilft bei docker-root nicht" in note for note in narrow["notes"])
+    assert "hilft hier nicht: Docker arbeitet nur über sein Hilfsskript." in narrow["script"]
     full = (await client.get(url, params={"sudo": "true", "full_sudo": "true"}, headers=docker_on.owner)).json()
     assert full["full_sudo"] is True and "NOPASSWD: ALL" in full["script"]
+    assert any("Ausnahme: docker-root." in note for note in full["notes"])
+
+
+@pytest.mark.asyncio
+async def test_a_host_with_both_tags_is_a_full_docker_host(client, db_session, docker_on):
+    from nodvard_deck.services import hosts as hosts_service
+
+    host = await hosts_service.create_host(db_session, name="beides", address="10.0.0.8", tags=["docker", "docker-bedienen"])
+    await db_session.commit()
+    listed = await client.get(f"/api/v1/hosts/{host.id}/requirements", headers=docker_on.owner)
+    ids = [item["id"] for item in listed.json() if item["ext_id"] == "docker"]
+    assert "docker-group" in ids and not any(i.startswith("docker-operate") for i in ids), ids
+    generated = await client.post(f"/api/v1/hosts/{host.id}/credentials/generate-key", json={"username": "deck"},
+                                  headers=docker_on.owner)
+    url = f"/api/v1/hosts/{host.id}/credentials/{generated.json()['credential']['id']}/setup"
+    setup = (await client.get(url, params={"sudo": "true", "groups": "docker"}, headers=docker_on.owner)).json()
+    assert setup["helpers"] == [] and setup["groups"] == ["docker"]
+
+
+@pytest.mark.asyncio
+async def test_own_tag_names_decide_which_host_is_full(client, db_session, docker_on):
+    from nodvard_deck.ext.runtime import get_extension_runtime
+    from nodvard_deck.services import hosts as hosts_service
+
+    await get_extension_runtime().loaded["docker"].ctx.settings.set({"docker_host_tag": "voll", "docker_operate_tag": "lesen"})
+    both = await hosts_service.create_host(db_session, name="beides", address="10.0.0.8", tags=["voll", "lesen"])
+    operate = await hosts_service.create_host(db_session, name="lesen", address="10.0.0.9", tags=["lesen", "docker"])
+    await db_session.commit()
+
+    async def ids(host) -> list[str]:
+        listed = await client.get(f"/api/v1/hosts/{host.id}/requirements", headers=docker_on.owner)
+        return [item["id"] for item in listed.json() if item["ext_id"] == "docker"]
+
+    assert "docker-group" in await ids(both) and not any(i.startswith("docker-operate") for i in await ids(both))
+    assert "docker-operate" in await ids(operate) and "docker-group" not in await ids(operate)
 
 
 def _with_fakes(tmp_path, groups="deck adm", docker_ok=False, sudo_lines=(), uid=1000, rootless=False, env=None):
@@ -457,7 +495,8 @@ async def test_an_operate_host_is_checked_for_leftover_root(client, docker_on):
     assert "„Verbindung prüfen“ meldet sich dafür neu an" in group.fail_hint
     assert "eigenen Benutzer statt root" in root.fail_hint and "gpasswd" not in root.fail_hint
     assert all("oder er ist root (dann gilt „Zugang ist nicht root“)" in spec.ok_text for spec in (group, sudo))
-    assert all(spec.fail_hint.startswith("Hat der Server auch die Markierung „docker“") for spec in (root, group, sudo))
+    assert all(spec.skip_tags == ["docker"] for spec in (root, group, sudo, specs["docker-operate"]))
+    assert not any("Markierung „docker“" in spec.fail_hint for spec in (root, group, sudo))
     assert not any(spec.needs_root or spec.unix_group for spec in (root, group, sudo)), "die Einrichtung bleibt, wie sie ist"
 
 
@@ -526,6 +565,10 @@ BODIES = {
     "POST /hosts/{host_id}/stacks/{project}/update": {"services": ["web"]},
     "POST /hosts/{host_id}/stacks/{project}/rollback": {"services": ["web"]},
     "POST /hosts/{host_id}/stacks/{project}/backups/{stamp}/restore": {"volumes": ["data"]},
+    "PUT /hosts/{host_id}/stacks/{project}/git": {"url": "https://github.com/team/stacks"},
+    "POST /hosts/{host_id}/stacks/{project}/git/apply": {"commit": "0" * 40},
+    "POST /hosts/{host_id}/stacks/{project}/git/rollback": {"previous": "0" * 32},
+    "POST /hosts/{host_id}/stacks/{project}/git/restart": {"services": ["web"]},
 }
 
 
@@ -590,7 +633,30 @@ def test_the_script_ignores_docker_settings_from_the_environment(tmp_path):
     copy = _script_with_fake_docker(tmp_path)
     fake = tmp_path / "bin" / "docker"
     fake.write_text(f'#!/bin/sh\nenv | grep "^DOCKER_" > {tmp_path / "calls"} || true\n', encoding="ascii")
-    env = {"PATH": "/usr/bin:/bin", "DOCKER_HOST": "tcp://203.0.113.9:2375", "DOCKER_CONTEXT": "fremd", "DOCKER_CONFIG": "/tmp/x"}
+    foreign = {"DOCKER_HOST": "tcp://203.0.113.9:2375", "DOCKER_CONTEXT": "fremd", "DOCKER_CONFIG": "/tmp/x"}
     for shell in _shells():
-        done = subprocess.run([shell, str(copy), "ps"], capture_output=True, text=True, timeout=30, check=False, env=env)
-        assert done.returncode == 0 and (tmp_path / "calls").read_text() == "", shell
+        # Ohne geerbte Werte zeigt sich auch ein vergessenes `export`.
+        for env in ({"PATH": "/usr/bin:/bin", **foreign}, {"PATH": "/usr/bin:/bin"}):
+            done = subprocess.run([shell, str(copy), "ps"], capture_output=True, text=True, timeout=30, check=False, env=env)
+            assert done.returncode == 0, shell
+            assert sorted((tmp_path / "calls").read_text().splitlines()) == [
+                "DOCKER_CONFIG=/usr/local/lib/nodvard-deck/docker-root-config", "DOCKER_HOST=unix:///var/run/docker.sock",
+            ], (shell, env)
+
+
+@pytest.mark.skipif(sys.platform == "win32" or shutil.which("docker") is None, reason="braucht die Docker-CLI unter Linux")
+def test_a_context_of_root_does_not_change_the_daemon(tmp_path):
+    shells = _shells()
+    home = tmp_path / "root"
+    home.mkdir()
+    cli = {"PATH": "/usr/bin:/bin", "HOME": str(home)}
+    for args in (["context", "create", "fremd", "--docker", "host=tcp://127.0.0.1:1"], ["context", "use", "fremd"]):
+        assert subprocess.run(["docker", *args], capture_output=True, timeout=30, check=False, env=cli).returncode == 0
+    copy = tmp_path / "docker-root.sh"
+    copy.write_text(SCRIPT.read_text(encoding="ascii")
+                    .replace("PATH=/usr/sbin:/usr/bin:/sbin:/bin", f"PATH={shutil.which('docker').rsplit('/', 1)[0]}:/usr/bin:/bin")
+                    .replace("HOME=/root", f"HOME={home}"), encoding="ascii")
+    for shell in shells:
+        done = subprocess.run([shell, str(copy), "ps"], capture_output=True, text=True, timeout=30, check=False, env={})
+        assert "127.0.0.1:1" not in done.stderr, shell
+        assert done.returncode == 0 or "unix:///var/run/docker.sock" in done.stderr, (shell, done.stderr)

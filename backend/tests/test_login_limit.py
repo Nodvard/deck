@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 import pyotp
@@ -552,3 +553,280 @@ async def test_ipv6_lock_names_the_network_and_logs_the_real_address(client, db_
     assert locked[0].detail["network"] == "2001:db8:5:6::/64"
     assert locked[0].ip == f"2001:db8:5:6::{login_limit.MAX_FAILURES_PER_IP:x}"
     assert "aus diesem Netz" in locked[0].reason
+
+
+def test_name_wait_doubles_up_to_the_cap():
+    assert [login_limit.name_wait(n) for n in range(5)] == [0, 2, 4, 8, 16]
+    assert login_limit.name_wait(40) == 5 * 60
+
+
+@pytest.mark.parametrize(
+    "ip",
+    ["127.0.0.1", "10.1.2.3", "172.20.0.5", "192.168.2.72", "169.254.1.1", "100.100.1.1", "::1", "fd00::1",
+     "fe80::1%eth0", "::ffff:192.168.1.5"],
+)
+def test_local_networks_are_not_foreign(ip):
+    assert not login_limit.is_foreign(ip)
+
+
+@pytest.mark.parametrize("ip", [None, "", "unbekannt", "testclient"])
+def test_without_a_known_address_nobody_is_braked(ip):
+    assert not login_limit.is_foreign(ip)
+
+
+@pytest.mark.parametrize("ip", ["203.0.113.5", "8.8.8.8", "2001:db8::1", "::ffff:203.0.113.5"])
+def test_other_networks_are_foreign(ip):
+    assert login_limit.is_foreign(ip)
+
+
+def test_name_brake_waits_per_network_and_forgets_after_a_day(clock):
+    for i in range(login_limit.NAME_FREE_FAILURES):
+        login_limit.failed(login_limit.begin(f"203.0.113.{i + 1}", "nico", brake_name=True))
+    with pytest.raises(login_limit.Locked) as err:
+        login_limit.begin("203.0.113.1", "nico", brake_name=True)
+    assert err.value.retry_after == login_limit.NAME_FIRST_WAIT_SECONDS
+    # Ein Netz, aus dem gerade niemand rät, kommt sofort dran.
+    assert login_limit.begin("198.51.100.1", "nico", brake_name=True).braked
+    assert not login_limit.begin("192.168.1.5", "nico").braked
+
+    clock[0] += login_limit.NAME_WINDOW_SECONDS
+    for _ in range(login_limit.NAME_FREE_FAILURES - 1):
+        login_limit.failed(login_limit.begin("203.0.113.1", "nico", brake_name=True))
+        clock[0] += login_limit.WINDOW_SECONDS
+    assert login_limit.begin("203.0.113.1", "nico", brake_name=True).braked
+
+
+def test_correct_password_does_not_count_for_the_name(clock):
+    for i in range(login_limit.NAME_FREE_FAILURES - 1):
+        login_limit.failed(login_limit.begin(f"203.0.113.{i + 1}", "nico", brake_name=True))
+    login_limit.succeeded(login_limit.begin("203.0.113.40", "nico", brake_name=True))
+    login_limit.release(login_limit.begin("203.0.113.41", "nico", brake_name=True))
+
+    login_limit.begin("203.0.113.1", "nico", brake_name=True)
+    assert login_limit.begin("203.0.113.40", "nico", brake_name=True).braked
+    assert login_limit.begin("203.0.113.41", "nico", brake_name=True).braked
+    with pytest.raises(login_limit.Locked):
+        login_limit.begin("203.0.113.2", "nico", brake_name=True)
+
+
+def test_taking_back_an_attempt_keeps_the_later_one_from_the_same_network(clock):
+    key = (login_limit._name_slot("nico"), "203.0.113.50")
+    first = login_limit.begin("203.0.113.50", "nico", brake_name=True)
+    clock[0] += 1
+    second = login_limit.begin("203.0.113.50", "nico", brake_name=True)
+
+    login_limit.release(first)
+    assert login_limit._name_nets[key] == (second.ts, 1)
+    login_limit.release(second)
+    assert key not in login_limit._name_nets
+
+
+def test_many_names_and_networks_fill_fixed_tables(clock, monkeypatch):
+    monkeypatch.setattr(login_limit, "_SWEEP_THRESHOLD", 10**9)
+    for i in range(3 * login_limit.NAME_NETWORKS):
+        try:
+            login_limit.begin(f"2001:db8:{i // 65536:x}:{i % 65536:x}::1", f"name{i}", brake_name=True)
+        except login_limit.Locked:
+            pass  # Namen auf einem schon vollen Platz
+    assert len(login_limit._by_name) <= login_limit.NAME_SLOTS
+    assert len(login_limit._name_nets) <= login_limit.NAME_NETWORKS
+
+
+async def _login_from(ip: str, username="nico", password=PASSWORD):
+    async with _other_ip_client(ip) as other:
+        return await _login(other, username=username, password=password)
+
+
+async def _guess(count: int, username="nico", first: int = 1):
+    for i in range(first, first + count):
+        assert (await _login_from(f"203.0.113.{i}", username=username, password="falsch")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_guessing_from_many_networks_brakes_each_of_them(client, db_session, clock):
+    from nodvard_deck.models import Notification
+
+    await _bootstrap(client)
+    await _guess(login_limit.NAME_FREE_FAILURES)
+
+    r = await _login_from("203.0.113.1")
+    assert r.status_code == 429
+    assert r.headers["Retry-After"] == str(login_limit.NAME_FIRST_WAIT_SECONDS)
+    locked = await _audit(db_session, "login.locked")
+    assert [e.detail["scopes"] for e in locked] == [["name"]]
+    assert locked[0].detail["window_seconds"] == login_limit.NAME_WINDOW_SECONDS
+    assert locked[0].reason.startswith("Anmeldung gebremst: ")
+    notes = (await db_session.execute(select(Notification))).scalars().all()
+    assert [n.title for n in notes] == ["Passwort wird durchprobiert"]
+    assert "schalte Zwei-Faktor ein" in notes[0].body
+
+    clock[0] += login_limit.NAME_FIRST_WAIT_SECONDS
+    assert (await _login_from("203.0.113.1", password="falsch")).status_code == 401
+    r = await _login_from("203.0.113.1")
+    assert r.status_code == 429
+    assert r.headers["Retry-After"] == str(2 * login_limit.NAME_FIRST_WAIT_SECONDS)
+    # Ein Eintrag und eine Meldung je Bremse, nicht je Versuch; nach dem Zeitfenster gibt es beides neu.
+    assert len(await _audit(db_session, "login.locked")) == 1
+    clock[0] += login_limit.NAME_WINDOW_SECONDS
+    await _guess(login_limit.NAME_FREE_FAILURES, first=120)
+    assert len(await _audit(db_session, "login.locked")) == 2
+    assert len((await db_session.execute(select(Notification))).scalars().all()) == 2
+
+
+@pytest.mark.asyncio
+async def test_nobody_can_lock_the_owner_out(client, clock):
+    await _bootstrap(client)
+    await _guess(login_limit.NAME_FREE_FAILURES)
+    for i in range(1, login_limit.NAME_FREE_FAILURES + 1):
+        assert (await _login_from(f"203.0.113.{i}")).status_code == 429
+
+    assert (await _login_from("198.51.100.7")).status_code == 200
+    assert (await _login_from("192.168.2.20")).status_code == 200
+    assert (await _login(client)).status_code == 200
+    # Vertippt er sich im fremden Netz, wartet er nur so lange, wie es seine eigenen Versuche dort ergeben.
+    assert (await _login_from("198.51.100.8", password="falsch")).status_code == 401
+    r = await _login_from("198.51.100.8")
+    assert r.status_code == 429
+    assert r.headers["Retry-After"] == str(login_limit.NAME_FIRST_WAIT_SECONDS)
+    clock[0] += login_limit.NAME_FIRST_WAIT_SECONDS
+    assert (await _login_from("198.51.100.8")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_local_networks_are_never_braked(client, db_session, clock):
+    await _bootstrap(client)
+    for i in range(1, login_limit.NAME_FREE_FAILURES + 2):
+        assert (await _login_from(f"192.168.2.{i}", password="falsch")).status_code == 401
+    assert (await _login_from("192.168.2.1", password="falsch")).status_code == 401
+    assert (await _login_from("192.168.2.1")).status_code == 200
+    assert await _audit(db_session, "login.locked") == []
+
+
+@pytest.mark.asyncio
+async def test_a_login_with_the_second_factor_clears_its_network(client, totp_clock):
+    secret = await _enable_totp(client, totp_clock[0])
+    ip = "203.0.113.30"
+    key = (login_limit._name_slot("nico"), login_limit.ip_bucket(ip))
+    for _ in range(3):
+        assert (await _login_from(ip, password="falsch")).status_code == 401
+
+    async with _other_ip_client(ip) as other:
+        mfa_token = await _mfa_token(other)
+        assert login_limit._name_nets[key][1] == 3
+        assert (await _mfa(other, mfa_token, pyotp.TOTP(secret).at(totp_clock[0]))).status_code == 200
+    assert key not in login_limit._name_nets
+
+
+@pytest.mark.asyncio
+async def test_right_password_of_a_2fa_account_and_busy_hashing_do_not_count(client, monkeypatch, clock):
+    from nodvard_deck.core import security
+
+    await _enable_totp(client)
+    await _guess(login_limit.NAME_FREE_FAILURES - 1)
+    assert (await _login_from("203.0.113.50")).status_code == 202
+
+    async def _busy(*_, **__):
+        raise security.HashingBusy
+
+    with monkeypatch.context() as m:
+        m.setattr(security, "verify_password_async", _busy)
+        assert (await _login_from("203.0.113.51", password="falsch")).status_code == 503
+    assert (await _login_from("203.0.113.52", password="falsch")).status_code == 401
+    assert (await _login_from("203.0.113.52")).status_code == 429
+    assert (await _login_from("203.0.113.50")).status_code == 202
+
+
+@pytest.mark.asyncio
+async def test_unknown_names_are_braked_the_same_way(client, db_session, clock):
+    from nodvard_deck.models import Notification
+
+    await _bootstrap(client)
+    await _guess(login_limit.NAME_FREE_FAILURES, username="niemand")
+    r = await _login_from("203.0.113.1", username="niemand", password="x")
+    assert r.status_code == 429
+    assert r.headers["Retry-After"] == str(login_limit.NAME_FIRST_WAIT_SECONDS)
+    assert (await db_session.execute(select(Notification))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_the_guessing_notice_comes_after_the_answer(client, db_session, test_settings, clock):
+    from nodvard_deck.models import Notification
+    from nodvard_deck.services import auth as auth_service
+
+    await _bootstrap(client)
+    await _guess(login_limit.NAME_FREE_FAILURES - 1)
+    with pytest.raises(auth_service.InvalidCredentials) as err:
+        await auth_service.login(db_session, test_settings, username="nico", password="falsch", ip="203.0.113.60")
+    assert (await db_session.execute(select(Notification))).scalars().all() == []
+    await err.value.after()
+    assert [n.title for n in (await db_session.execute(select(Notification))).scalars().all()] == [
+        "Passwort wird durchprobiert"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_the_answer_is_sent_before_the_guessing_notice(client, monkeypatch, clock):
+    from nodvard_deck.main import app
+    from nodvard_deck.services import notifications
+
+    await _bootstrap(client)
+    await _guess(login_limit.NAME_FREE_FAILURES - 1)
+    events: list = []
+
+    async def _notify(*_, **__):
+        events.append("meldung")
+
+    monkeypatch.setattr(notifications, "send", _notify)
+    body = b'{"username": "nico", "password": "falsch"}'
+    answered = asyncio.Event()
+    requests = [{"type": "http.request", "body": body, "more_body": False}]
+
+    async def receive():
+        if requests:
+            return requests.pop()
+        await answered.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        if message["type"] == "http.response.start":
+            events.append(message["status"])
+        elif message["type"] == "http.response.body" and not message.get("more_body"):
+            events.append("antwort")
+            answered.set()
+
+    scope = {
+        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST", "scheme": "http",
+        "path": "/api/v1/auth/login", "raw_path": b"/api/v1/auth/login", "root_path": "", "query_string": b"",
+        "headers": [(b"host", b"test"), (b"content-type", b"application/json"), (b"content-length", b"%d" % len(body))],
+        "client": ("203.0.113.60", 4711), "server": ("test", 80),
+    }
+    await app(scope, receive, send)
+    assert events == [401, "antwort", "meldung"]
+
+
+@pytest.mark.asyncio
+async def test_a_failing_guessing_notice_does_not_break_anything(monkeypatch):
+    from nodvard_deck.services import auth as auth_service
+
+    def _no_database():
+        raise RuntimeError("Datenbank weg")
+
+    monkeypatch.setattr(auth_service, "session_scope", _no_database)
+    await auth_service._report_password_guessing("irgendwer")
+
+
+@pytest.mark.asyncio
+async def test_a_braked_attempt_does_not_touch_the_database(client, test_settings, clock):
+    from nodvard_deck.services import auth as auth_service
+
+    class _NoDatabase:
+        def __getattr__(self, name):
+            raise AssertionError(f"Datenbank benutzt: {name}")
+
+    await _bootstrap(client)
+    for name, first in (("nico", 1), ("niemand", 30)):
+        await _guess(login_limit.NAME_FREE_FAILURES, username=name, first=first)
+        with pytest.raises(auth_service.TooManyAttempts):
+            await auth_service.login(
+                _NoDatabase(), test_settings, username=name, password="x", ip=f"203.0.113.{first}"
+            )

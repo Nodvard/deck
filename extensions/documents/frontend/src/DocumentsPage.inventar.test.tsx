@@ -17,7 +17,7 @@ let permissions: Set<string>;
 beforeEach(() => {
   calls = [];
   permissions = new Set(["documents.read", "documents.write", "inventory.read"]);
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn().mockResolvedValue(true), promptDialog: vi.fn(),
     hasPermission: vi.fn((p: string) => permissions.has(p)),

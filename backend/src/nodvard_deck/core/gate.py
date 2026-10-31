@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db import utcnow
 from ..db.session import session_scope
 from ..models import Action
-from . import deny_patterns
+from . import deny_patterns, known_actors
 from .action_output import audit_result
 from .events import get_event_bus
 from .flap import check_and_record as _flap_check_and_record
@@ -38,6 +38,13 @@ def _actor_from_row(action: Action) -> Actor:
     from nodvard_sdk import ActorType
 
     return Actor(type=ActorType(action.proposed_by_type), id=action.proposed_by_id)
+
+
+def _via(ext_id: str, proposer: Actor) -> dict[str, str]:
+    """Nennt im Protokoll das Modul, wenn der Vorschlag nicht unter dessen heutiger Kennung kommt."""
+    # `core` tragen die Aktionen aus der Oberfläche (api/v1/hosts.py); dahinter steht kein Modul.
+    own = ext_id == "core" or (proposer.type.value == "extension" and proposer.id == ext_id)
+    return {} if own else {"via": ext_id}
 
 
 def describe_error(exc: BaseException) -> str:
@@ -195,6 +202,9 @@ async def _run_action(action_id: str) -> None:
             if action is None or action.status != ActionStatus.EXECUTING.value:
                 return
             request = _request_from_row(action)
+            people = [(action.proposed_by_type, action.proposed_by_id)]
+            if action.approved_by_user_id:
+                people.append(("user", action.approved_by_user_id))
             # So ist auch während einer langen Ausführung sichtbar, seit wann sie läuft.
             action.executed_at = utcnow()
 
@@ -206,7 +216,8 @@ async def _run_action(action_id: str) -> None:
             deadline = asyncio.timeout(EXECUTE_TIMEOUT_S)
             try:
                 async with deadline:
-                    res = await executor.execute(request)
+                    with known_actors.known_while(people):
+                        res = await executor.execute(request)
                 outcome = (
                     ActionStatus.SUCCEEDED if res.success else ActionStatus.FAILED,
                     res.model_dump(mode="json"),
@@ -284,6 +295,7 @@ async def _record_outcome(
                 )
                 event_payload = {
                     "action_id": action.id,
+                    "ext_id": action.ext_id,
                     "action_type": action.action_type,
                     "host_id": action.host_id,
                     "payload": action.payload,
@@ -347,7 +359,7 @@ async def _persist_denied(
         target_type="action",
         target_id=row.id,
         reason=request.reason,
-        detail={"rule": rule, "gate_detail": detail},
+        detail={"rule": rule, "gate_detail": detail, **_via(ext_id, request.proposed_by)},
         correlation_id=request.correlation_id,
     )
     return GateDecision(
@@ -527,7 +539,7 @@ async def propose(
         target_type="action",
         target_id=row.id,
         reason=reason,
-        detail=gate_decision,
+        detail={**gate_decision, **_via(ext_id, request.proposed_by)},
         correlation_id=request.correlation_id,
     )
 

@@ -65,6 +65,7 @@ def _clean(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
             monkeypatch.delenv(key)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(config, "_warned_legacy", set())
+    monkeypatch.setattr(config, "_shadowed_legacy", set())
 
 
 def _dotenv(tmp_path: Path, lines: dict[str, str]) -> str:
@@ -208,6 +209,52 @@ def test_env_and_dotenv_old_names_give_a_single_warning(
     records = _warnings(caplog)
     assert len(records) == 1
     assert "LATTICE_ENV" in records[0].getMessage() and "LATTICE_LOG_JSON" in records[0].getMessage()
+
+
+def test_old_names_are_remembered_for_the_overview_without_values(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    secret = "Sup3r-Geheim-Wert-44"
+    monkeypatch.setenv("LATTICE_JWT_SECRET", secret)
+    Settings(_env_file=_dotenv(tmp_path, {"LATTICE_LOG_JSON": "true"}))
+    assert config.legacy_env_names() == ["LATTICE_JWT_SECRET", "LATTICE_LOG_JSON"]
+    assert secret not in repr(config._warned_legacy)
+
+
+def test_an_old_name_next_to_its_new_one_is_marked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    monkeypatch.setenv("NODVARD_DECK_LOG_JSON", "true")
+    monkeypatch.setenv("LATTICE_LOG_JSON", "false")
+    Settings(_env_file=_dotenv(tmp_path, {"LATTICE_ENV": "prod", "NODVARD_DECK_ENV": "dev"}))
+    assert config.legacy_env_names() == ["LATTICE_ENV", "LATTICE_LOG_JSON"]
+    assert config.legacy_env_shadowed() == {"LATTICE_ENV", "LATTICE_LOG_JSON"}
+
+
+def test_a_new_name_only_in_the_env_file_does_not_hide_an_old_one_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    monkeypatch.setenv("LATTICE_LOG_JSON", "true")
+    settings = Settings(_env_file=_dotenv(tmp_path, {"NODVARD_DECK_LOG_JSON": "false", "LATTICE_ENV": "dev"}))
+    # Der alte Name aus der Umgebung wirkt; wer ihn löscht, ändert also den Wert.
+    assert settings.log_json is True
+    assert config.legacy_env_names() == ["LATTICE_ENV", "LATTICE_LOG_JSON"]
+    assert config.legacy_env_shadowed() == set()
+
+
+def test_a_new_name_in_the_environment_hides_an_old_one_from_the_env_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    monkeypatch.setenv("NODVARD_DECK_LOG_JSON", "false")
+    settings = Settings(_env_file=_dotenv(tmp_path, {"LATTICE_LOG_JSON": "true"}))
+    assert settings.log_json is False
+    assert config.legacy_env_shadowed() == {"LATTICE_LOG_JSON"}
+
+
+def test_an_empty_new_name_does_not_hide_the_old_one_where_empty_means_unset(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("NODVARD_DECK_BUILD", " ")
+    monkeypatch.setenv("LATTICE_BUILD", "0.11.1")
+    monkeypatch.setenv("LATTICE_ENV", "prod")
+    settings = Settings()
+    assert settings.build == "0.11.1"
+    assert config.legacy_env_shadowed() == set()
+    assert config.legacy_env_names() == ["LATTICE_BUILD", "LATTICE_ENV"]
 
 
 def test_warning_is_shown_only_once(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture):

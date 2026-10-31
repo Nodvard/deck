@@ -35,7 +35,7 @@ function mockFetch() {
 let confirmDialog: Mock<(message: string) => Promise<boolean>>;
 beforeEach(() => {
   confirmDialog = vi.fn<(message: string) => Promise<boolean>>().mockResolvedValue(false);
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog, promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(true),
   };
@@ -99,7 +99,7 @@ describe("Knöpfe oben", () => {
   });
 
   it("ohne Verwaltungsrecht weder Knöpfe noch „Mehr“", async () => {
-    window.__lattice.hasPermission = vi.fn().mockReturnValue(false);
+    window.__nodvardDeck.hasPermission = vi.fn().mockReturnValue(false);
     openTab("updates");
     vi.stubGlobal("fetch", mockFetch());
     render(<SocPage />);
@@ -194,7 +194,7 @@ describe("Ergebnis einer Aktion", () => {
   });
 
   it("verweist auf die Freigabe, wenn der Nutzer nicht selbst freigeben darf", async () => {
-    window.__lattice.hasPermission = vi.fn((p: string) => p !== "actions.approve:medium");
+    window.__nodvardDeck.hasPermission = vi.fn((p: string) => p !== "actions.approve:medium");
     const calls = stubRoutes({ "/hosts/h-mini/install": () => json({ action_id: "a8", status: "proposed" }) });
     render(<SocPage />);
     fireEvent.click(await installButton());
@@ -253,7 +253,7 @@ describe("Ergebnis einer Aktion", () => {
     expect(within(alert).getByRole("link", { name: "Zugang einrichten" })).toHaveAttribute("href", "/settings/hosts");
     view.unmount();
 
-    window.__lattice.hasPermission = vi.fn((p: string) => p !== "hosts.write");
+    window.__nodvardDeck.hasPermission = vi.fn((p: string) => p !== "hosts.write");
     render(<SocPage />);
     fireEvent.click(await installButton());
     expect(await screen.findByRole("alert")).toHaveTextContent(ROOT_ERROR);
@@ -279,11 +279,36 @@ describe("Ergebnis einer Aktion", () => {
     expect(screen.getByText("„/home/x.sh“ wird wiederhergestellt …")).toBeInTheDocument();
     fireEvent.click(running);
     expect(confirmDialog).toHaveBeenCalledTimes(1);
+    expect(confirmDialog.mock.calls[0][0]).toMatch(/^Die Datei zurücklegen\? Laut Fund lag sie in „\/home\/x\.sh“; zurückgelegt wird an den Ort, den Shield beim Verschieben auf dem Server hinterlegt hat\./);
     expect(calls.filter((c) => c.method === "POST" && c.url.endsWith("/findings/f2/restore"))).toHaveLength(1);
 
     await act(async () => { approve.resolve(json({ status: "succeeded", result: {} })); });
     expect(await screen.findByText("„/home/x.sh“: Erledigt.")).toBeInTheDocument();
     expect(rows.getByRole("button", { name: "Wiederherstellen" })).toBeEnabled();
+  });
+
+  it("nennt nach dem Wiederherstellen den Ort, an den die Datei wirklich ging", async () => {
+    openTab("quarantine");
+    const note = "Zurückgelegt nach /srv/x.sh.";
+    stubRoutes({
+      "/defender/findings": () => json(FINDINGS),
+      "/findings/f2/restore": () => json({ action_id: "a13", status: "proposed" }),
+      "/actions/a13/approve": () => json({ status: "succeeded", result: { output: note, detail: { note, restored_to: "/srv/x.sh" } } }),
+    });
+    render(<SocPage />);
+    const rows = within(await screen.findByTestId("findings"));
+    fireEvent.click(await rows.findByRole("button", { name: "Wiederherstellen" }));
+
+    expect(await screen.findByText(`„/home/x.sh“: ${note}`)).toHaveClass("break-words");
+    expect(screen.queryByText("„/home/x.sh“: Erledigt.")).not.toBeInTheDocument();
+  });
+
+  it("bricht einen langen Ort im Hinweis am Fund um", async () => {
+    openTab("quarantine");
+    const note = `Zurückgelegt an den hinterlegten Ort /srv/${"a".repeat(300)}.sh (laut Fund: /home/x.sh).`;
+    stubRoutes({ "/defender/findings": () => json([{ ...FINDINGS[1], note }]) });
+    render(<SocPage />);
+    expect(await screen.findByText(note)).toHaveClass("break-words");
   });
 
   it("hält die Sperre über einen Reiterwechsel und zeigt danach den neuen Stand", async () => {

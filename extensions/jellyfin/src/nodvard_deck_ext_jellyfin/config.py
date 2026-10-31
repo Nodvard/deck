@@ -22,6 +22,12 @@ def key_label(name: str) -> str:
     return f"{KEY_LABEL}:{name}"
 
 
+def connection_of(label: str) -> str | None:
+    """Der Kurzname zu einem Label aus `key_label`, sonst `None`."""
+    prefix = f"{KEY_LABEL}:"
+    return label.removeprefix(prefix) if label.startswith(prefix) else None
+
+
 @dataclass(frozen=True)
 class ConnectionConfig:
     name: str

@@ -8,7 +8,7 @@ from __future__ import annotations
 import enum
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
 # Template-Ausdrücke
@@ -71,6 +71,8 @@ class WidgetAction(BaseModel):
     confirm_text: str | None = None
     style: Literal["primary", "secondary", "danger"] = "secondary"
     permissions: list[str] = Field(default_factory=list)
+    """Rechte, die der Knopf zusätzlich zu denen des Widgets braucht; fehlt eins, lässt der Kern ihn für diese Person
+    weg."""
     show_if: Template | None = None
     """Knopf nur zeigen, wenn das Template etwas "Wahres" ergibt (nicht leer, nicht
     "false"/"0"/"none") -- z. B. `{{ can_start }}`, damit ein laufender Dienst keinen
@@ -221,24 +223,6 @@ class WidgetSpec(BaseModel):
     """Gruppe auf der Startseite. Ohne Angabe folgt sie der Kategorie der Erweiterung (`security`, `servers`, sonst
     `services`); die Person kann ein Widget in eine andere Gruppe legen."""
 
-    @model_validator(mode="after")
-    def _check_action_permissions(self) -> "WidgetSpec":
-        """Widget-Aktionen dürfen keine Permission verlangen, die das Widget selbst
-        nicht hat — sonst sieht ein Nutzer Knöpfe, die für ihn immer scheitern."""
-        declared = set(self.permissions)
-        actions = getattr(self.view, "actions", None) or []
-        item = getattr(self.view, "item", None)
-        if item is not None:
-            actions = [*actions, *item.actions]
-        for action in actions:
-            missing = set(action.permissions) - declared
-            if missing:
-                raise ValueError(
-                    f"Widget '{self.id}': Aktion '{action.id}' verlangt {sorted(missing)}, "
-                    f"was das Widget nicht in `permissions` deklariert."
-                )
-        return self
-
 
 class MobileFallback(str, enum.Enum):
     WIDGETS = "widgets"   # Standard: die App zeigt die Widgets dieser Extension
@@ -275,7 +259,8 @@ class HostToolSpec(BaseModel):
 class HostRequirementSpec(BaseModel):
     """Was eine Extension auf einem Server braucht (Zugang, Rechte, Gruppen), damit der Kern es beim Einrichten des
     SSH-Zugangs anbieten und bei "Verbindung prüfen" prüfen kann. Passt zu einem Host, wenn `tags` leer ist oder
-    mindestens einer zutrifft UND sein `os_family` in `os_families` steht (Standard: nur Linux)."""
+    mindestens einer zutrifft, keiner aus `skip_tags` zutrifft UND sein `os_family` in `os_families` steht (Standard:
+    nur Linux)."""
 
     # `check_command`: nur lesend; Exit 0 = in Ordnung, 127 = nicht installiert.
     # `ok_text` / `fail_hint`: Texte für die Prüfung; `fail_hint` darf `{user}` enthalten.
@@ -283,6 +268,7 @@ class HostRequirementSpec(BaseModel):
     # `^[a-z_][a-z0-9_-]{0,31}$`, sonst ignoriert der Kern ihn).
     # `needs_root` / `root_reason`: die Extension braucht root ohne Passwort (sudo); `root_reason` nennt in einem kurzen
     # Satzteil, wofür.
+    # `skip_tags`: gilt nicht auf Servern mit einem dieser Tags (etwa „Nur bedienen“ auf einem vollen Docker-Server).
 
     id: str
     label: str
@@ -293,6 +279,7 @@ class HostRequirementSpec(BaseModel):
     needs_root: bool = False
     root_reason: str | None = None
     tags: list[str] = Field(default_factory=list)
+    skip_tags: list[str] = Field(default_factory=list)
     os_families: list[str] = Field(default_factory=lambda: ["linux"])
     order: int = 100
 

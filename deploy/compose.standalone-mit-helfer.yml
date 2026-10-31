@@ -3,6 +3,9 @@
 # Wie compose.standalone.yml, dazu der kleine Dienst "updater". Der Helfer laeuft nur, wenn du diese Datei nimmst.
 #   1. Diese Datei als compose.yml in den Ordner laden. Eine compose.yml aus compose.standalone.yml darfst du damit
 #      ersetzen (gleicher Projektname, gleiche Daten). Die alte vorher sichern:  cp compose.yml compose.yml.alt
+#        curl -fsSL -o compose.yml https://github.com/nodvard/deck/releases/latest/download/compose.standalone-mit-helfer.yml
+#      Die Datei am neuesten Release nennt den dort geprueften Helfer per Digest. Meldet curl 404, hat das Release sie
+#      noch nicht; dann die Datei aus dem Repository nehmen (Helfer mit Tag 1):
 #        curl -fsSL -o compose.yml https://raw.githubusercontent.com/nodvard/deck/main/deploy/compose.standalone-mit-helfer.yml
 #      Hattest du in der alten Datei etwas geaendert (Port, Sicherungsordner, DNS), trag es in die neue ein. Vor allem
 #      einen Ordner statt des Datenspeichers (z. B. ./daten:/app/data): Fehlt er, startet Nodvard Deck mit leeren Daten.
@@ -12,7 +15,10 @@
 #
 # ACHTUNG: Der Helfer bekommt Zugriff auf Docker, das ist so viel wie root auf diesem Rechner. Er hat kein Netz,
 # hoert auf keinem Port und tauscht nur Nodvard Deck gegen eine neuere offizielle Version (ghcr.io/nodvard/deck).
-# Helfer aktualisieren (nicht waehrend eines Updates):  docker compose pull updater && docker compose up -d updater
+# Helfer aktualisieren (nicht waehrend eines Updates), je nachdem, was beim Dienst updater steht:
+#   mit Digest (@sha256:...): die Zeile "image:" aus der Datei am neuesten Release uebernehmen, dann
+#     docker compose up -d updater
+#   mit Tag 1:  docker compose pull updater && docker compose up -d updater
 # Helfer wieder entfernen: zurueck zu compose.standalone.yml, dann  docker compose up -d --remove-orphans
 # Anderer Port: Umgebungsvariable NODVARD_DECK_PORT setzen (z. B. in einer Datei .env neben dieser Datei).
 
@@ -22,9 +28,13 @@ name: nodvard-deck
 services:
   # Genau wie in compose.standalone.yml, nur mit einer Zeile mehr unter volumes (Kanal zum Helfer).
   nodvard-deck:
+    # Lieber nicht automatisch auf die naechste Reihe? Statt "latest" ghcr.io/nodvard/deck:X.Y eintragen (die ersten
+    # beiden Zahlen deiner Version): Dann kommen nur noch Fehler- und Sicherheitskorrekturen dieser Reihe. Eine genaue
+    # Version (X.Y.Z) bleibt, bis du sie hier aenderst; dann gibt es kein Update per Knopf.
     image: ghcr.io/nodvard/deck:latest
     restart: unless-stopped
     ports:
+      # Der alte Name LATTICE_PORT gilt nur noch übergangsweise (spätestens bis 1.0).
       - "${NODVARD_DECK_PORT:-${LATTICE_PORT:-8080}}:8080"
     volumes:
       # Alle Daten (Datenbank, Schluessel, Dokumente). Ein benannter Datenspeicher braucht keine
@@ -64,8 +74,9 @@ services:
 
   # Der Update-Helfer. Er liest nur Auftraege aus dem Kanal, prueft sie selbst und spricht dann mit Docker.
   updater:
-    # Tag 1 bekommt alle Versionen des Helfers mit derselben Schnittstelle. Wer es genau festlegen will: zusaetzlich
-    # den Digest anhaengen (ghcr.io/nodvard/deck-updater:1@sha256:...), dann aendert sich der Helfer nur von Hand.
+    # Im Repository steht hier Tag 1 (alle Versionen des Helfers mit derselben Schnittstelle), in der Datei am
+    # GitHub-Release genau der dort gepruefte Helfer per Digest (deck-updater@sha256:...). Mit Digest aendert er sich
+    # nur, wenn du die Zeile aus einem neueren Release uebernimmst.
     image: ghcr.io/nodvard/deck-updater:1
     restart: unless-stopped
     # Kein Netz: Das Herunterladen der neuen Version macht Docker selbst, nicht der Helfer.

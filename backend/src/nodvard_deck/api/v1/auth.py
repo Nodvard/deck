@@ -9,16 +9,20 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from nodvard_sdk import max_body_bytes
 from pydantic import BaseModel, Field, field_validator
+from starlette.background import BackgroundTask
 
 from ...config import Settings, get_settings
 from ...core import restart as restart_service
-from ...core import setup_code
+from ...core import setup_code, untrusted_proxies
+from ...core.trusted_proxies import parse_address
 from ...db import utcnow
 from ...services import audit as audit_service
 from ...services import auth as auth_service
 from ...services import restore as restore_service
 from ..deps import SessionDep, SettingsDep
 from ..errors import CodedHTTPException
+from ..proxy_headers import SCOPE_KEY as FORWARDING_SCOPE_KEY
+from ..proxy_headers import Forwarding
 from .restore_common import (
     RestoreInspectIn,
     RestoreScheduleIn,
@@ -75,7 +79,7 @@ class LogoutRequest(BaseModel):
     refresh_token: str | None = None
 
 
-def _user_out(user) -> dict:  # noqa: ANN001 - User-ORM-Objekt
+def _user_out(user) -> dict:
     return {
         "id": user.id,
         "username": user.username,
@@ -143,6 +147,17 @@ def _client_ip(request: Request) -> str | None:
     herausrechnen). Hinter einem Proxy aus `system.trusted_proxies` hat `api/proxy_headers.py` `request.client` schon
     durch die echte Adresse ersetzt."""
     return request.client.host if request.client else None
+
+
+def _note_untrusted_proxy(request: Request, *, owner: bool) -> None:
+    """Kam eine Anmeldung des Inhabers mit richtigem Passwort samt `X-Forwarded-For` über eine Gegenstelle, die nicht
+    eingetragen ist, merkt `core.untrusted_proxies` sie sich für den Hinweis."""
+    # Nur der Inhaber darf die Liste ändern; ein anderes Konto soll ihm kein eigenes Gerät als Proxy vorschlagen können.
+    if not owner:
+        return
+    info = request.scope.get(FORWARDING_SCOPE_KEY)
+    if isinstance(info, Forwarding) and not info.trusted and "x-forwarded-for" in request.headers:
+        untrusted_proxies.note(parse_address(info.peer))
 
 
 def _cookie_tokens(request: Request) -> list[str]:
@@ -325,6 +340,7 @@ async def login(
             ip=_client_ip(request),
         )
     except auth_service.MfaRequired as exc:
+        _note_untrusted_proxy(request, owner=exc.is_owner)
         return Response(
             content=json.dumps({"mfa_required": True, "mfa_token": exc.mfa_token}),
             media_type="application/json",
@@ -333,8 +349,14 @@ async def login(
     except auth_service.TooManyAttempts as exc:
         raise _too_many_attempts(exc) from exc
     except auth_service.InvalidCredentials as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+        # Als Antwort statt als HTTPException, damit `after` erst nach dem Senden läuft.
+        return JSONResponse(
+            {"detail": str(exc)},
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            background=BackgroundTask(exc.after) if exc.after is not None else None,
+        )
 
+    _note_untrusted_proxy(request, owner=tokens.user.is_owner)
     return _tokens_response(tokens, secure=_cookie_secure(request, settings))
 
 

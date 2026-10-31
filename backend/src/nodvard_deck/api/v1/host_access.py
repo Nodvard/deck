@@ -86,12 +86,14 @@ class HostRequirementOut(BaseModel):
 
 def matching_requirements(host: Host) -> list[tuple[str, HostRequirementSpec]]:
     """Die zum Host passenden Meldungen der Extensions (`HostRequirementSpec`), sortiert nach `order`, dann Bezeichnung.
-    Passt: `tags` leer oder mindestens ein Tag gemeinsam, und der `os_family` des Hosts steht in `os_families`
-    (leer = jedes System)."""
+    Passt: `tags` leer oder mindestens ein Tag gemeinsam, keiner aus `skip_tags`, und der `os_family` des Hosts steht
+    in `os_families` (leer = jedes System)."""
     tags = {t.tag for t in host.tags}
     found: list[tuple[str, HostRequirementSpec]] = []
     for ext_id, spec in get_extension_runtime().ui.all_host_requirements():
         if spec.tags and not tags.intersection(spec.tags):
+            continue
+        if tags.intersection(spec.skip_tags):
             continue
         if spec.os_families and host.os_family not in spec.os_families:
             continue
@@ -242,6 +244,8 @@ class SetupOut(BaseModel):
     """Ob der Befehl root ohne Passwort einrichtet (nie für `root` selbst)."""
     full_sudo: bool = False
     """Ob dazu die volle sudo-Regel (`NOPASSWD: ALL`) gehört. `false` mit `sudo`: nur die Regeln der Hilfsskripte."""
+    drop_full_rule: bool = False
+    """Ob der Befehl eine vorhandene volle Regel von Nodvard Deck entfernt (nur ohne `full_sudo`)."""
     helpers: list[SetupHelperOut] = Field(default_factory=list)
     """Die Hilfsskripte, die der Befehl mitbringt (nur mit `sudo`), samt Text: Im Befehl stehen sie base64-kodiert."""
 
@@ -266,15 +270,16 @@ class _PreparedSetup:
     full_sudo: bool
     sudo_skipped: bool = False
     """`sudo` gewünscht, aber kein Modul braucht hier root: Der Befehl richtet kein sudo ein."""
+    drop_full_rule: bool = False
 
 
 async def _prepare_setup(
     session: SessionDep, settings: Settings, host_id: str, credential_id: str, *, sudo: bool, groups: list[str] | None,
-    report_state: bool = False, full_sudo: bool = False,
+    report_state: bool = False, full_sudo: bool = False, drop_full_rule: bool = False,
 ) -> _PreparedSetup:
     """Vorbedingungen und Skript für `GET .../setup` und `POST .../setup-with-password`, nur Linux mit SSH-Schlüssel.
     Die volle sudo-Regel gibt es nur mit `full_sudo` oder für ein Modul ohne Hilfsskript, sonst die Regeln der
-    Hilfsskripte; braucht kein Modul root, gar keine."""
+    Hilfsskripte; braucht kein Modul root, gar keine. `drop_full_rule` geht nur, wo die Skripte allein reichen."""
     host = await _load_host(session, host_id)
     credential = await session.get(HostCredential, credential_id)
     if credential is None or credential.host_id != host_id:
@@ -308,6 +313,13 @@ async def _prepare_setup(
     use_sudo = sudo and not is_root and (full_sudo or needs_root)
     helpers = root_helpers_for(host) if use_sudo else []
     use_full = use_sudo and (full_sudo or not helpers or not root_needs_helpers_only(host))
+    if drop_full_rule:
+        refusal = _drop_refusal(
+            is_root=is_root, sudo=sudo, full_sudo=full_sudo, use_sudo=use_sudo, use_full=use_full,
+            full_wanted=hosts_service.full_sudo_wanted(host),
+        )
+        if refusal:
+            raise HTTPException(status_code=422, detail=refusal)
 
     try:
         private_key = await vault.read_secret_plaintext(session, vault.load_keyring(settings), credential.secret_id)
@@ -316,7 +328,7 @@ async def _prepare_setup(
         del private_key
         script, one_liner = host_setup.build_setup_script(
             credential.username, info.public_key, groups=wanted, sudo=use_sudo, helpers=helpers, report_state=report_state,
-            full_sudo=use_full,
+            full_sudo=use_full, drop_full_rule=drop_full_rule,
         )
     except (SetupError, VaultError) as exc:
         detail = str(exc) if isinstance(exc, SetupError) else "Der gespeicherte Schlüssel lässt sich nicht lesen."
@@ -324,13 +336,41 @@ async def _prepare_setup(
     return _PreparedSetup(
         host=host, credential=credential, info=info, script=script, one_liner=one_liner, groups=wanted, sudo=use_sudo,
         helpers=helpers, full_sudo=use_full, sudo_skipped=sudo and not is_root and not use_sudo,
+        drop_full_rule=drop_full_rule,
     )
+
+
+def _drop_refusal(
+    *, is_root: bool, sudo: bool, full_sudo: bool, use_sudo: bool, use_full: bool, full_wanted: bool,
+) -> str:
+    """Warum sich die volle Regel mit diesem Befehl nicht entfernen lässt; leer, wenn es geht."""
+    if is_root:
+        return "Der Zugang meldet sich als root an, eine sudo-Regel gibt es da nicht."
+    if full_wanted:
+        return (
+            "Bei diesem Server ist „Volle sudo-Regel gewollt“ gesetzt. Nimm das Häkchen unter „Bearbeiten“, "
+            "„Erweitert“ zuerst heraus, wenn die Regel wirklich weg soll."
+        )
+    if full_sudo:
+        return "„Volle Rechte“ und „Volle sudo-Regel entfernen“ schließen sich aus."
+    if not sudo:
+        return "Die volle sudo-Regel lässt sich nur zusammen mit „Root-Rechte ohne Passwort“ entfernen."
+    if not use_sudo:
+        return "Kein eingeschaltetes Modul braucht auf diesem Server root, die Hilfsskripte kommen darum nicht mit."
+    if use_full:
+        return (
+            "Ein eingeschaltetes Modul braucht auf diesem Server root und hat noch kein Hilfsskript. Dafür bleibt die "
+            "volle sudo-Regel nötig."
+        )
+    return ""
 
 
 def _notes(prepared: _PreparedSetup) -> list[str]:
     notes = host_setup.setup_notes(
         prepared.credential.username, groups=prepared.groups, sudo=prepared.sudo,
         helpers=[f"{h.ext_id}-root" for h in prepared.helpers], full_sudo=prepared.full_sudo,
+        no_fallback=[f"{h.ext_id}-root" for h in prepared.helpers if not h.sudo_fallback],
+        drop_full_rule=prepared.drop_full_rule,
     )
     if prepared.sudo_skipped:
         notes.append(
@@ -351,18 +391,21 @@ async def credential_setup(
     sudo: bool = False,
     groups: Annotated[list[str] | None, Query()] = None,
     full_sudo: bool = False,
+    drop_full_rule: bool = False,
 ) -> SetupOut:
     """Der Befehl, den man auf dem Server ausführt, damit sich Nodvard Deck mit diesem Schlüssel anmelden kann. `groups`
     sind Wünsche (`?groups=docker` oder `?groups=a,b`), eingetragen werden nur Gruppen, die Erweiterungen verlangen;
-    `full_sudo` wünscht zu `sudo` die volle Regel. Ändert nichts, daher GET."""
+    `full_sudo` wünscht zu `sudo` die volle Regel, `drop_full_rule` entfernt sie. Ändert nichts, daher GET."""
     prepared = await _prepare_setup(
-        session, settings, host_id, credential_id, sudo=sudo, groups=groups, full_sudo=full_sudo
+        session, settings, host_id, credential_id, sudo=sudo, groups=groups, full_sudo=full_sudo,
+        drop_full_rule=drop_full_rule,
     )
     username = prepared.credential.username
     return SetupOut(
         username=username, public_key=prepared.info.public_key, fingerprint=prepared.info.fingerprint,
         one_liner=prepared.one_liner, script=prepared.script, notes=_notes(prepared), groups=prepared.groups,
-        sudo=prepared.sudo, full_sudo=prepared.full_sudo, helpers=[SetupHelperOut.from_file(h) for h in prepared.helpers],
+        sudo=prepared.sudo, full_sudo=prepared.full_sudo, drop_full_rule=prepared.drop_full_rule,
+        helpers=[SetupHelperOut.from_file(h) for h in prepared.helpers],
     )
 
 
@@ -380,6 +423,8 @@ class SetupWithPasswordIn(BaseModel):
     """Wie `GET .../setup`: root ohne Passwort für den Benutzer des Zugangs einrichten."""
     full_sudo: bool = False
     """Wie `GET .../setup`: zu `sudo` die volle Regel statt nur der Regeln der Hilfsskripte."""
+    drop_full_rule: bool = False
+    """Wie `GET .../setup`: eine vorhandene volle Regel von Nodvard Deck entfernen."""
     groups: list[str] = Field(default_factory=list, max_length=20)
     """Wie `GET .../setup`: nur Gruppen, die Erweiterungen für diesen Server verlangen, werden eingetragen."""
     sudo_password_same: bool = True
@@ -460,7 +505,7 @@ async def credential_setup_with_password(
     # `host_key_unconfirmed`). Grenzen: `services/one_time_password.py`.
     prepared = await _prepare_setup(
         session, settings, host_id, credential_id, sudo=payload.sudo, groups=payload.groups, report_state=True,
-        full_sudo=payload.full_sudo,
+        full_sudo=payload.full_sudo, drop_full_rule=payload.drop_full_rule,
     )
     host, credential = prepared.host, prepared.credential
     as_root = payload.login_user == "root"
@@ -470,8 +515,8 @@ async def credential_setup_with_password(
     )
     detail: dict[str, Any] = {
         "credential_id": credential.id, "username": credential.username, "login_user": payload.login_user,
-        "sudo": prepared.sudo, "full_sudo": prepared.full_sudo, "groups": prepared.groups,
-        "helpers": {h.ext_id: h.version for h in prepared.helpers},
+        "sudo": prepared.sudo, "full_sudo": prepared.full_sudo, "drop_full_rule": prepared.drop_full_rule,
+        "groups": prepared.groups, "helpers": {h.ext_id: h.version for h in prepared.helpers},
     }
 
     async def refuse(
@@ -513,7 +558,7 @@ async def credential_setup_with_password(
         # getan hat. Fehlt der Bericht, merkt der Wächter nur das Zeitfenster und übernimmt nichts still.
         record = host_setup.setup_record(
             credential.username, remote.extracted or {}, sudo=prepared.sudo, helpers=prepared.helpers,
-            full_sudo=prepared.full_sudo,
+            full_sudo=prepared.full_sudo, drop_full_rule=prepared.drop_full_rule,
         )
         hosts_service.record_setup_run(host, started, record=record)
     del remote

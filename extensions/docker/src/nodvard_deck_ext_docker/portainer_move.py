@@ -39,7 +39,7 @@ from .new_stack import (
     _undo,
     new_stack,
 )
-from .operate import not_full_host
+from .operate import still_full
 from .stack_actions import (
     FAILURE_LIMIT,
     _connection_error,
@@ -612,7 +612,7 @@ class DockerPortainerMoveExecutor:
         host = await self._ctx.hosts.get(req.host_ref) if req.host_ref else None
         if host is None:
             return ActionResult(success=False, error="Kein Docker-Host.")
-        if why := not_full_host(host, await self._ctx.settings.get()):
+        if why := await still_full(self._ctx, host):
             return ActionResult(success=False, error=why)
         with self._actions.locks.hold(host.id, project, "Umzug von Portainer") as busy:
             if busy is not None:

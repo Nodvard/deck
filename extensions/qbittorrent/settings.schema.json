@@ -4,7 +4,7 @@
     "connections": {
       "type": "array",
       "title": "qBittorrent",
-      "description": "Die qBittorrent-Programme, deren Zustand angezeigt wird. Meist genügt eines. Nodvard Deck liest nur und ändert in qBittorrent nichts.",
+      "description": "Die qBittorrent-Programme, deren Zustand angezeigt wird. Meist genügt eines. Nodvard Deck liest nur und ändert in qBittorrent nichts. Datenschutz: Alle mit Zugriff auf diese Seiten sehen die Namen der Torrents. Wer das nicht möchte, gibt nur passenden Rollen Zugriff (Nodvard Deck hat Benutzer, Rollen und Rechte).",
       "x-item-title": "qBittorrent",
       "items": {
         "type": "object",

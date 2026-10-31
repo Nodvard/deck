@@ -20,11 +20,11 @@ const block = (selector: string) => {
 };
 
 describe("index.css", () => {
-  it("kennt .nodvard-deck-focus und das alte .lattice-focus in EINER Regel", () => {
-    const rule = /(^|\n)([^{}]*\.lattice-focus[^{}]*)\{([^}]*)\}/.exec(css);
+  it("kennt .nodvard-deck-focus", () => {
+    const rule = /(^|\n)([^{}]*\.nodvard-deck-focus[^{}]*)\{([^}]*)\}/.exec(css);
     expect(rule).not.toBeNull();
     const selectors = rule![2].split(",").map((s) => s.trim());
-    expect(selectors).toEqual([".nodvard-deck-focus", ".lattice-focus"]);
+    expect(selectors).toEqual([".nodvard-deck-focus"]);
     // Dieselbe Regel hat die Markierung (und nicht nur einen leeren Block).
     expect(rule![3]).toContain("outline:");
     expect(rule![3]).toContain("background-color:");
@@ -81,13 +81,13 @@ describe("index.css", () => {
 });
 
 describe("index.html", () => {
-  it("die Import-Map zeigt unveraendert auf /lattice-shim/ (die Seite eines alten Tabs verweist darauf)", () => {
+  it("die Import-Map zeigt auf /nodvard-deck-shim/", () => {
     const map = /<script type="importmap">([\s\S]*?)<\/script>/.exec(html);
     expect(map).not.toBeNull();
     expect(JSON.parse(map![1]).imports).toEqual({
-      react: "/lattice-shim/react.js",
-      "react/jsx-runtime": "/lattice-shim/react-jsx-runtime.js",
-      "react-dom": "/lattice-shim/react-dom.js",
+      react: "/nodvard-deck-shim/react.js",
+      "react/jsx-runtime": "/nodvard-deck-shim/react-jsx-runtime.js",
+      "react-dom": "/nodvard-deck-shim/react-dom.js",
     });
   });
 });

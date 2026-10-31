@@ -394,6 +394,34 @@ async def test_a_new_installation_stores_everything_under_shield_and_the_old_add
     await _stop_process(db_session)
 
 
+@pytest.mark.asyncio
+async def test_the_old_addresses_change_an_incident_only_with_soc_manage(
+    client, db_session, test_settings, shield_models
+):
+    from nodvard_deck.core import security
+    from nodvard_deck.models import Role, RolePermission, User
+
+    owner = await _owner_headers(client)
+    test_settings.extensions_dir = REPO_EXTENSIONS_DIR
+    await extensions_service.discover_and_sync(db_session, test_settings)
+    assert (await client.post("/api/v1/extensions/shield/enable", headers=owner)).status_code == 200
+
+    role = Role(name="nur-lesen", permissions=[RolePermission(permission="soc.read")])
+    user = User(username="leser", password_hash=security.hash_password("correct-horse-battery"), is_active=True)
+    user.roles.append(role)
+    db_session.add_all([role, user])
+    await db_session.commit()
+    login = await client.post("/api/v1/auth/login", json={"username": "leser", "password": "correct-horse-battery"})
+    reader = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    assert (await client.get("/api/v1/ext/nexus-soc/history", headers=reader)).status_code == 200
+    for verb in ("confirm", "dismiss", "resolve", "reopen"):
+        path = f"/api/v1/ext/nexus-soc/incidents/gibt-es-nicht/{verb}"
+        assert (await client.post(path, headers=reader)).status_code == 403, verb
+        assert (await client.post(path, headers=owner)).status_code == 404, verb
+    await _stop_process(db_session)
+
+
 def test_the_manifest_of_the_real_extension_names_its_old_id_and_keeps_the_stored_names():
     """Die Eckdaten der Erweiterung, auf denen alles oben beruht: Kennung, alte Kennung, Einstiegspunkt, Rechte."""
     from nodvard_sdk import load_manifest

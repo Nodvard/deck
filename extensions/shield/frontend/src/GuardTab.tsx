@@ -5,7 +5,7 @@
  */
 import { useCallback, useContext, useEffect, useState } from "react";
 
-import { Badge, Button, Card, EmptyState, Icon, Notice, Stat, type Tone } from "../../../_shared/frontend/src/ui";
+import { Badge, Button, Card, EmptyState, Icon, Notice, Stat, inputClass, type Tone } from "../../../_shared/frontend/src/ui";
 import { API, HostFilter, ago, call, proposeAndApprove, track, useForHost, usePageActions, useReloadWhenSettled, when, type ActionResult } from "./api";
 import { deck } from "../../../_shared/frontend/src/deck";
 import { RunNotice, RunNotices, type PageNotice } from "./RunNotice";
@@ -109,7 +109,117 @@ const ACK_ONLY_IF: Record<string, string> = {
 const banKey = (hostId: string, ip: string) => `${hostId}:${ip}`;
 const fail2banKey = (hostId: string) => `${hostId}:fail2ban`;
 
-function EventDetail({ ev, onBan, banning }: { ev: SecurityEvent; onBan: (ip: string) => void; banning: (ip: string) => boolean }) {
+type Jails = GuardView["jails"];
+
+/** Der Jail für SSH-Angreifer: `sshd`, sonst ein anderer SSH-Jail; `undefined`, wenn keiner bekannt ist. */
+function sshJail(jails: Jails): string | undefined {
+  const names = Object.keys(jails).sort();
+  return names.includes("sshd") ? "sshd" : names.find((n) => n.includes("ssh"));
+}
+
+const defaultJail = (jails: Jails) => sshJail(jails) ?? Object.keys(jails).sort()[0];
+
+const jailOf = (jails: Jails, ip: string) => Object.keys(jails).sort().find((n) => jails[n].banned.includes(ip));
+
+const BANNED_SEARCH_FROM = 20;
+const BANNED_SHOWN_MAX = 200;
+const IP_LIKE = /^(?=.*[.:])[0-9A-Fa-f:.]{2,45}$/;
+
+function BannedList({ hostId, jails, canManage, busy, onUnban }: {
+  hostId: string; jails: Jails; canManage: boolean; busy: (ip: string) => boolean; onUnban: (ip: string, jail: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const names = Object.keys(jails).sort();
+  const total = names.reduce((n, name) => n + jails[name].banned.length, 0);
+  // Fail2ban schreibt Adressen klein. Ohne sichtbares Suchfeld filtert auch kein alter Suchtext mehr.
+  const q = total >= BANNED_SEARCH_FROM ? query.trim().toLowerCase() : "";
+  // Auf großen Servern sperrt Fail2ban Tausende Adressen; gezeigt wird nur ein Ausschnitt, der Rest über die Suche.
+  let left = BANNED_SHOWN_MAX;
+  let hidden = 0;
+  const groups: { name: string; shown: string[]; count: number }[] = [];
+  for (const name of names) {
+    const hits = jails[name].banned.filter((ip) => ip.includes(q));
+    const shown = hits.slice(0, left);
+    left -= shown.length;
+    hidden += hits.length - shown.length;
+    if (hits.length) groups.push({ name, shown, count: hits.length });
+  }
+  return (
+    <details data-testid={`banned-${hostId}`}>
+      <summary className="cursor-pointer text-xs text-white/55 hover:text-white">Gesperrte Adressen ({total})</summary>
+      <div className="mt-2 space-y-2 text-xs">
+        {total === 0 && <p className="text-white/50">Fail2ban sperrt gerade keine Adresse.</p>}
+        {total >= BANNED_SEARCH_FROM && (
+          <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Gesperrte Adresse suchen" placeholder="Adresse suchen" className={`${inputClass} w-56`} />
+        )}
+        {total > 0 && groups.length === 0 && <p className="text-white/50">Keine gesperrte Adresse passt zur Suche.</p>}
+        {groups.map((g) => (
+          <div key={g.name}>
+            <p className="mb-1 text-white/40">Jail {g.name} · {g.count}</p>
+            <ul className="space-y-1">
+              {g.shown.map((ip) => {
+                const label = busy(ip) ? "Entsperre …" : "Entsperren";
+                return (
+                  <li key={ip} className="flex flex-wrap items-center gap-2">
+                    <span className="w-56 font-mono">{ip}</span>
+                    {canManage && (
+                      <button
+                        type="button" disabled={busy(ip)} onClick={() => onUnban(ip, g.name)} aria-label={`${ip} ${label}`}
+                        className="text-white/45 hover:text-white disabled:opacity-50"
+                      >
+                        {label}
+                      </button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+        {hidden > 0 && <p className="text-white/50">… und {hidden} weitere, bitte über die Suche eingrenzen.</p>}
+      </div>
+    </details>
+  );
+}
+
+function BanForm({ hostId, jails, busy, onBan }: {
+  hostId: string; jails: Jails; busy: (ip: string) => boolean; onBan: (ip: string, jail: string) => Promise<boolean>;
+}) {
+  const names = Object.keys(jails).sort();
+  const [ip, setIp] = useState("");
+  const [jail, setJail] = useState(() => defaultJail(jails));
+  const value = ip.trim();
+  const valid = IP_LIKE.test(value);
+  const notAnAddress = /[^0-9A-Fa-f:.]/.test(value);
+  const submit = async () => {
+    if (valid && await onBan(value, names.includes(jail) ? jail : defaultJail(jails))) setIp("");
+  };
+  return (
+    <form data-testid={`ban-form-${hostId}`} className="mt-2 flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
+      <input
+        value={ip} onChange={(e) => setIp(e.target.value)} aria-label="Adresse von Hand sperren" placeholder="Adresse, z. B. 203.0.113.9"
+        autoCapitalize="off" spellCheck={false} className={`${inputClass} w-56`}
+      />
+      {names.length > 1 && (
+        <select value={jail} onChange={(e) => setJail(e.target.value)} aria-label="Jail" className={`${inputClass} w-36`}>
+          {names.map((n) => <option key={n} value={n}>{n}</option>)}
+        </select>
+      )}
+      <Button small type="submit" ariaLabel="Eingegebene Adresse sperren" disabled={!valid || busy(value)}>Sperren</Button>
+      {notAnAddress && (
+        <p className="w-full text-xs text-white/50">Nur eine einzelne IP-Adresse, keine Bereiche wie /24 und keine Namen.</p>
+      )}
+      <p className="w-full text-xs text-white/40">
+        Die Adresse, von der aus du Deck gerade nutzt, sperrt Shield nicht. Steht Deck hinter einem Reverse-Proxy, trag ihn
+        unter „Vertrauenswürdiger Proxy“ ein, damit Shield sie sicher erkennt.
+      </p>
+    </form>
+  );
+}
+
+function EventDetail({ ev, onBan, banning }: {
+  ev: SecurityEvent; onBan?: (ip: string) => void; banning: (ip: string) => boolean;
+}) {
   const d = ev.detail as {
     changes?: { path: string; change: string; severity: string; note: string }[];
     attackers?: { ip: string; count: number; users: string[] }[];
@@ -135,9 +245,15 @@ function EventDetail({ ev, onBan, banning }: { ev: SecurityEvent; onBan: (ip: st
             <li key={a.ip} className="flex flex-wrap items-center gap-2">
               <span className="font-mono">{a.ip}</span>
               <span className="text-white/50">{a.count}× · Benutzer: {a.users.join(", ") || "–"}</span>
-              <button type="button" disabled={banning(a.ip)} onClick={() => onBan(a.ip)} className="text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline">
-                {banning(a.ip) ? "Sperre …" : "Sperren"}
-              </button>
+              {onBan && (
+                <button
+                  type="button" disabled={banning(a.ip)} onClick={() => onBan(a.ip)}
+                  aria-label={`${a.ip} ${banning(a.ip) ? "Sperre …" : "Sperren"}`}
+                  className="text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline"
+                >
+                  {banning(a.ip) ? "Sperre …" : "Sperren"}
+                </button>
+              )}
             </li>
           ))}
         </ul>
@@ -242,19 +358,34 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
       );
     });
 
-  async function ban(hostId: string, hostName: string, ip: string, unban = false) {
+  const jailsOf = (hostId: string): Jails => data?.hosts.find((x) => x.host_id === hostId)?.view?.jails ?? {};
+
+  // Ohne angegebenen Jail: zum Entsperren der, in dem die Adresse steht, zum Sperren der SSH-Jail. Gibt zurück, ob der
+  // Vorschlag angenommen wurde.
+  async function ban(hostId: string, hostName: string, ip: string, unban = false, jail?: string): Promise<boolean> {
+    const jails = jailsOf(hostId);
+    const target = jail ?? (unban ? jailOf(jails, ip) ?? defaultJail(jails) : sshJail(jails));
+    if (!target) return false;
+    const inJail = target === "sshd" ? "" : ` (Jail „${target}“)`;
+    const blocked = target === "sshd"
+      ? "Von dieser Adresse ist dann keine SSH-Verbindung mehr möglich."
+      : `Diese Adresse erreicht dann nichts mehr, was der Jail „${target}“ schützt.`;
     const ok = await deck().confirmDialog(
-      unban ? `${ip} auf „${hostName}“ wieder freigeben?` : `${ip} auf „${hostName}“ per Fail2ban sperren? Von dieser Adresse ist dann keine SSH-Verbindung mehr möglich.`,
+      unban
+        ? `${ip} auf „${hostName}“ wieder freigeben${inJail}?`
+        : `${ip} auf „${hostName}“ per Fail2ban sperren${inJail}? ${blocked} Die Sperre endet meist nach der Sperrzeit des `
+          + "Jails von selbst; früher zurück geht es hier unter „Gesperrte Adressen“ mit „Entsperren“.",
       { confirmLabel: unban ? "Entsperren" : "Sperren", danger: !unban },
     );
-    if (!ok) return;
+    if (!ok) return false;
     const progress = unban ? `${ip} wird auf „${hostName}“ entsperrt …` : `${ip} wird auf „${hostName}“ gesperrt …`;
-    await track(page, banKey(hostId, ip), `${ip} ${unban ? "entsperren" : "sperren"}`, progress, async () => {
-      const result = await proposeAndApprove(`${API}/hosts/${hostId}/ban`, { ip, unban }, "low", unmountSignal());
+    const kind = await track(page, banKey(hostId, ip), `${ip} ${unban ? "entsperren" : "sperren"}`, progress, async () => {
+      const result = await proposeAndApprove(`${API}/hosts/${hostId}/ban`, { ip, jail: target, unban }, "low", unmountSignal());
       recheck(hostId);
       return result;
     });
     load();
+    return kind !== null && kind !== "error";
   }
 
   async function installFail2ban(h: GuardHost) {
@@ -340,7 +471,12 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
                   </button>
                   {canManage && !ev.acknowledged && <Button small onClick={() => void acknowledge(ev)} title={ACK_TAKES_OVER[ev.kind] ?? ACK_HINT_OTHER}>{ev.kind in ACK_TAKES_OVER ? "Ist in Ordnung" : "Zur Kenntnis genommen"}</Button>}
                 </div>
-                {open === ev.id && <EventDetail ev={ev} onBan={(ip) => void ban(ev.host_id, ev.host_name, ip)} banning={(ip) => acting.has(banKey(ev.host_id, ip))} />}
+                {open === ev.id && (
+                  <EventDetail
+                    ev={ev} banning={(ip) => acting.has(banKey(ev.host_id, ip))}
+                    onBan={canManage && sshJail(jailsOf(ev.host_id)) ? (ip) => void ban(ev.host_id, ev.host_name, ip) : undefined}
+                  />
+                )}
               </li>
             );
           })}
@@ -397,19 +533,32 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
                                 <>
                                   <Badge tone="good">gesperrt</Badge>
                                   {canManage && (
-                                    <button type="button" disabled={acting.has(banKey(h.host_id, a.ip))} onClick={() => void ban(h.host_id, h.host_name, a.ip, true)} className="text-white/45 hover:text-white disabled:opacity-50">
+                                    <button
+                                      type="button" disabled={acting.has(banKey(h.host_id, a.ip))} onClick={() => void ban(h.host_id, h.host_name, a.ip, true)}
+                                      aria-label={`${a.ip} ${acting.has(banKey(h.host_id, a.ip)) ? "Entsperre …" : "entsperren"}`}
+                                      className="text-white/45 hover:text-white disabled:opacity-50"
+                                    >
                                       {acting.has(banKey(h.host_id, a.ip)) ? "Entsperre …" : "entsperren"}
                                     </button>
                                   )}
                                 </>
-                              ) : canManage && f2b === "running" ? (
-                                <button type="button" disabled={acting.has(banKey(h.host_id, a.ip))} onClick={() => void ban(h.host_id, h.host_name, a.ip)} className="text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline">
+                              ) : canManage && f2b === "running" && sshJail(v.jails) ? (
+                                <button
+                                  type="button" disabled={acting.has(banKey(h.host_id, a.ip))} onClick={() => void ban(h.host_id, h.host_name, a.ip)}
+                                  aria-label={`${a.ip} ${acting.has(banKey(h.host_id, a.ip)) ? "Sperre …" : "Sperren"}`}
+                                  className="text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline"
+                                >
                                   {acting.has(banKey(h.host_id, a.ip)) ? "Sperre …" : "Sperren"}
                                 </button>
                               ) : null}
                             </li>
                           ))}
                         </ul>
+                      )}
+                      {canManage && f2b === "running" && !sshJail(v.jails) && v.attackers.some((a) => !a.banned) && (
+                        <p className="mt-2 text-xs text-white/50">
+                          Sperren lässt sich ein Angreifer hier erst, wenn Fail2ban einen Jail für SSH (meist „sshd“) eingeschaltet hat.
+                        </p>
                       )}
                       {canManage && f2b === "none" && (
                         <div className="mt-2">
@@ -419,6 +568,36 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
                         </div>
                       )}
                     </section>
+
+                    {f2b === "running" && (
+                      <section data-testid={`fail2ban-${h.host_id}`}>
+                        <p className="mb-1.5 text-xs text-white/40">Fail2ban</p>
+                        {Object.keys(v.jails).length > 0 && (
+                          <p className="mb-2 text-xs text-white/45">
+                            Ein Jail ist eine Schutzregel von Fail2ban für einen Dienst, etwa „sshd“ für SSH. Eine Sperre gilt meist
+                            nur für die Sperrzeit dieses Jails.
+                          </p>
+                        )}
+                        {Object.keys(v.jails).length === 0 ? (
+                          <p className="text-xs text-white/50">Fail2ban läuft, hat aber keinen Jail eingeschaltet und sperrt deshalb nichts.</p>
+                        ) : (
+                          <>
+                            <BannedList
+                              hostId={h.host_id} jails={v.jails} canManage={canManage}
+                              busy={(ip) => acting.has(banKey(h.host_id, ip))}
+                              onUnban={(ip, jail) => void ban(h.host_id, h.host_name, ip, true, jail)}
+                            />
+                            {canManage && (
+                              <BanForm
+                                hostId={h.host_id} jails={v.jails}
+                                busy={(ip) => acting.has(banKey(h.host_id, ip))}
+                                onBan={(ip, jail) => ban(h.host_id, h.host_name, ip, false, jail)}
+                              />
+                            )}
+                          </>
+                        )}
+                      </section>
+                    )}
 
                     {v.ssh_findings === null && (
                       <section data-testid={`sshd-${h.host_id}`}>

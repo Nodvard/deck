@@ -78,10 +78,12 @@ import each other anyway (other extensions are reached only through `ctx.events`
 ever imported a module of a bundled extension directly, use the new name.
 
 **SDK dependency (pip-installable extensions):** The SDK distribution is now called
-`nodvard-sdk` (import name `nodvard_sdk`). The old import name `lattice_sdk` lives in the same
-distribution and keeps working, but a distribution `lattice-sdk` no longer exists. If your
-`pyproject.toml` lists `lattice-sdk` as a dependency, switch it to `nodvard-sdk` (or drop it: the
-core brings the SDK along anyway).
+`nodvard-sdk` (import name `nodvard_sdk`), the entry point group `nodvard_deck.extensions`. The old
+import name `lattice_sdk` (including `LatticeExtension` and `LatticeError`), the old core package
+`lattice` and the old group `lattice.extensions` are gone since 0.12: an extension that still uses them
+is not loaded, and the extension list names the reason and the new name. If your `pyproject.toml`
+lists `lattice-sdk` as a dependency, switch it to `nodvard-sdk` (or drop it: the core brings the SDK
+along anyway).
 
 **`category` and `sort_order` (optional):** The setup wizard shows the installed modules as tiles,
 grouped by `category` (known: `servers`, `security`, `tools`, `connections`, `example`; anything
@@ -104,6 +106,11 @@ has ever switched it on or off on purpose** – a user who switched it off is le
 records `extension.auto_enabled`. On installations that already existed before this feature,
 extensions that were already created stay untouched; only newly added ones count as "untouched".
 
+**Reserved IDs:** `core` belongs to the core, which uses it as the `ext_id` of actions someone starts in the
+interface. If it appears as `id`, in `legacy_ids` or in `adopts.from`, the extension does not load (list:
+`RESERVED_EXTENSION_IDS` in the SDK): otherwise it would read these actions, command included, as its own through
+`ctx.actions.list()`.
+
 **Why the manifest is a file and not a Python constant:** The core must be able to read
 the manifests of all extensions — including disabled and broken ones — without importing
 their code. An import is code execution; a broken or switched-off extension must not run
@@ -121,16 +128,18 @@ legacy_ids = ["old-name"]
 ```
 
 After several renames, all earlier IDs are listed, the most recent first (`["middle-name", "old-name"]`). Without
-`legacy_ids` (the normal case) nothing changes.
+`legacy_ids` (the normal case) nothing changes. Only if data of another extension is still stored under its own
+`id` does the new one wait for an admin's consent (see "Conflicts" below).
 
 **Basic idea: the ID changes, the stored data does not.** Nothing is copied, renamed or migrated. A way back to the old
 image finds its data unchanged.
 
 **Rules in the manifest:** every old ID is a valid ID (`a-z`, `0-9`, `-`), none appears twice, and the extension's own
-`id` is not in the list. Otherwise the extension does not load.
+`id` is not in the list; reserved IDs such as `core` are not allowed either. Otherwise the extension does not load.
 
 **Storage ID.** The core looks for the registry row like this:
-1. If there is a row with the new ID, that one applies.
+1. If there is a row with the new ID, that one applies. If it belongs to another extension, the new one first
+   waits for an admin's consent (see "Conflicts" below).
 2. Otherwise the first existing row in the order of `legacy_ids` applies. The log says
    "Erweiterung 'neuer-name' nutzt den gespeicherten Stand von 'alter-name'." (extension 'new-name' uses the stored
    state of 'old-name').
@@ -181,6 +190,35 @@ notifications, audit entries, loggers and live channels.
   of the extension folders … are duplicated). The message is also on the rescue page. So empty `extensions/` before
   unpacking over an old state.
 - **Shared old ID:** if two extensions name the same old ID, neither is loaded.
+- **Data of another extension:** if data of another extension is already stored under one of the new extension's IDs
+  (its `id` or one from `legacy_ids`), the new one only takes it over once an admin (`extensions.manage`) allows it.
+  - "Data of another extension" means a registry row that has the ID as its `id`, as `id` in its stored manifest or in
+    that manifest's `legacy_ids`, and belongs to a different extension (a different `id` in the stored manifest, or a
+    package wants to replace a bundled module). For an earlier ID, actions and vault entries under it count too when
+    no row is left for them.
+  - Until then it is not loaded. The log says "Unter „…“ liegen noch gespeicherte Daten einer anderen Erweiterung. Die
+    neue übernimmt sie erst, wenn ein Admin das unter Einstellungen → Erweiterungen erlaubt." (stored data of another
+    extension is still under …; an admin has to allow the takeover first).
+  - It is allowed on the previous extension's card ("Übernahme erlauben", `POST /api/v1/extensions/<new>/takeover`);
+    the audit log then has `extension.takeover_allowed`. The takeover applies from the next start; until then the card
+    says it is allowed, and neither extension runs.
+  - The consent covers the ID, the source (package or folder) and the permissions the new one had when it was given,
+    not one particular package. If it later wants more permissions or comes from a different source, Deck asks again.
+    If it is missing at a start, the consent ends.
+  - If the new one wants more permissions than the previous one had, allowing it switches the previous row off, and no
+    occasion from `enable_on` switches it on by itself; the new one is then switched on deliberately, as with `adopts`.
+  - Going back to the previous extension after a takeover asks again too, because the row then carries the new one's
+    manifest.
+  - A rename applies without asking if nothing is stored under the ID, or if the new extension is bundled and all
+    affected rows are bundled too (like `docker` with `service-matrix`). A row that already carries the new one's
+    manifest is its own; what was taken over before this version stays taken over.
+  - Reason: otherwise an installed package with the ID of a removed module would get its row including state, settings,
+    actions and vault entries. If the module was switched on, the package would run on the next start with all
+    permissions from its own manifest, without anyone switching it on.
+  - A waiting extension does not count as a claim, so a package with an earlier ID of a bundled module (such as
+    `service-matrix`) does not push it out. If two packages want the same data, both wait.
+  - Data under an ID with neither a row nor actions or vault entries (only a data folder, say) is not recognized; that
+    only happens if someone deletes rows by hand.
 
 **Orphaned twin.** After "fresh install with the new ID → way back to the old image → new again", or with several old
 rows, only one row applies (order as above). Any other one stays untouched and is never loaded, never switched on
@@ -314,6 +352,12 @@ class Extension(NodvardExtension):
         """Optional. After every ctx.settings.set() -- after saving, get() already returns
         the new values. A set() in here does not trigger the hook again; an exception is
         logged and does not undo the save."""
+
+    async def on_secret_changed(self, ctx: ExtensionContext, label: str) -> None:
+        """Optional. A secret the extension may read (`secrets.read:<label>`) was created,
+        replaced or deleted via the vault or the module settings. Called after saving;
+        drop cached logins here. At most 10 seconds, an exception is logged. Not called for
+        changes via ctx.secrets or after a restore (the extension starts fresh then)."""
 ```
 
 The split into `setup` / `on_start` is not cosmetic: it lets the core collect **all**
@@ -334,20 +378,20 @@ permission-checked and writes to the audit log where needed.
 | `ctx.ui` | `register_page()`, `register_widget()`, `unregister_widget()`, `register_nav()` | — |
 | `ctx.connectors` | `register_type(ConnectorType)` | — |
 | `ctx.capabilities` | `provide(protocol_instance)` | per protocol |
-| `ctx.actions` | `register(ActionSpec)`, `propose(ActionRequest)` (optionally with `standing_approval`, see section 3), `check_standing_approval(granted_by_user_id, risk=…)` (would a standing approval by this person still apply today? `None` = yes, otherwise the reason), `waiting_count()` (how many proposals of all modules are waiting for approval, just the number) | `hosts.execute` and others; standing approval: `actions.standing_approval`; `waiting_count()`: `hosts.read` |
+| `ctx.actions` | `register(ActionSpec)`, `propose(ActionRequest)` (optionally with `standing_approval`, see section 3; as `proposed_by` a person counts only if the core knows them right now, an extension only under its own id, AI and schedule are free, otherwise `PermissionDenied`; older cores accepted anyone; if the extension itself is not the proposer, the audit log names it in `detail.via`; details in section 3, "Who proposes"), `check_standing_approval(granted_by_user_id, risk=…)` (would a standing approval by this person still apply today? `None` = yes, otherwise the reason), `waiting_count()` (how many proposals of all modules are waiting for approval, just the number) | `hosts.execute` and others; standing approval: `actions.standing_approval`; `waiting_count()`: `hosts.read` |
 | `ctx.hosts` | `list()`, `get()`, `upsert_discovered()`, `mark_gone(provider_refs)`: marks the extension's own servers (only those of this extension) as no longer present at the provider, such as a guest deleted in Proxmox; the interface shows them greyed out and offers "Entfernen". A server that is already marked keeps its first timestamp (`gone_since`), and a later `upsert_discovered()` with the same ID clears the mark. Call it only for areas that were just read completely, never for a connection that could not be reached. Returns how many servers were newly marked. Older cores do not have the method. `set_status(provider_refs, status)`: sets only the state of the extension's own servers without reporting all other fields again, such as `HostStatus.DOWN` for the nodes of a connection that could not be reached (the start page then shows them as "nicht erreichbar") or `HostStatus.UNKNOWN` for guests whose list could not be read. Servers in maintenance and servers marked as no longer present are left alone, and the method does not set `HostStatus.MAINTENANCE` (`ValueError`). The next `upsert_discovered()` sets the reported state again. Returns how many servers changed; it sends no notification and no event. Older cores do not have the method | `hosts.read` / `hosts.write` (`mark_gone()`, `set_status()` and `upsert_discovered()` need `hosts.write`) |
 | `ctx.exec` | `run(host, command)`, `stream(host, command)` (live output, e.g. live logs), `open_shell(host)`, `sftp(host)`. Also `run_argv(host, argv, stdin=None)` and `stream_argv(host, argv)`: the extension passes a list of words (`["docker", "compose", "-f", path, "config"]`), and the core joins them into the command line with POSIX quoting (`shlex.join`). A value from user input therefore never becomes shell syntax; for anything that is not fixed, this is the recommended way. Quoting does not protect against options: the program reads a value with a leading `-` as an option, so separate input values used as arguments from the rest with `--`. A string instead of a list, an empty `argv`, an empty first word, a first word like `NAME=value` (the shell would set it as a variable), a word that is not a string or a NUL character: `TypeError`/`ValueError` before any connection is made. Deny list and permission as with `run()`, checked against the joined line. `stdin` (text as UTF-8 or bytes) only goes to standard input, never onto the command line and never into the audit log; afterwards the process gets EOF, even for empty data (e.g. to check a file without writing it). The server's login shell has to be a POSIX shell (sh, bash, dash, zsh), as with `run()`. For `run()` and `run_argv()` without `stdin`, the core sends a command over 8000 bytes through standard input (except to Windows servers), because small SSH servers such as Dropbear otherwise drop the whole connection. Such a command must not contain a NUL character (`ValueError`). With `stdin` and for `stream()`, `stream_argv()` and `open_shell(command=…)` this is not possible (standard input belongs to the command, or the terminal would echo it): there a command over 8000 bytes fails before anything is sent, even to a server such as OpenSSH that would accept it, with an `SshError` whose text is a finished sentence (`readable = True`, „Der Befehl ist mit … Byte zu lang für eine SSH-Befehlszeile …“). Windows servers are exempt. Older cores do not have either method | `hosts.execute` |
-| `ctx.secrets` | `get_handle(label)`, `create()`, `delete(label)` (deletes the secret; `True` if there was one, otherwise `False`; audit log `extension.secret_removed`; older cores do not have it), `replace(label=, value=)` (new value in one step, the old one stays if it fails; `SecretUnavailable` if there is none; audit log `extension.secret_set`; older cores do not have it). An extension may replace or delete only its **own** secrets (created under its id or a former one, via `create()` or its settings page); otherwise `SecretNotOwned` (a kind of `PermissionDenied`) and the secret stays unchanged. Reading still follows the permission. No extension gets the two-factor secret of an account, not even for reading | `secrets.read:<label>` |
-| `ctx.vault_use` | context manager that materializes a value in memory only | same |
-| `ctx.db` | AsyncSession factory, **only** on `ext_<id>_*` tables (after a rename also on the prefixes of the old IDs, see section 1 "Renaming an extension") | — |
-| `ctx.settings` | `declare(schema)`, `get()`, `set()` | — |
-| `ctx.scheduler` | `register_job(JobSpec)`; `validate_schedule(schedule)` checks a cron expression exactly like `register_job()` does, without registering anything (`ValueError` with a German message): for schedules that an extension stores itself (such as a script's), check first, then store, because a stored broken schedule would make `register_job()` fail on the next start. Older cores do not have the method. If a job handler reports an expected failure with `NodvardError`, the run is shown as failed with that text, without a traceback (in the run log and in the container log); any other exception comes with a traceback | `schedule.register` |
-| `ctx.events` | `publish(Event)`, `subscribe(pattern, handler)` | — |
+| `ctx.secrets` | `get_handle(label)`, `exists(label)` (only with the permission for this label, a login secret counts as not present; older cores do not check this), `create()`, `delete(label)` (deletes the secret; `True` if there was one, otherwise `False`; audit log `extension.secret_removed`; older cores do not have it), `replace(label=, value=)` (new value in one step, the old one stays if it fails; `SecretUnavailable` if there is none; audit log `extension.secret_set`; older cores do not have it). An extension may replace or delete only its **own** secrets (created under its id or a former one, via `create()` or its settings page); otherwise `SecretNotOwned` (a kind of `PermissionDenied`) and the secret stays unchanged. Reading still follows the permission. No extension gets the two-factor secret of an account, not even for reading | `secrets.read:<label>` |
+| `ctx.vault_use` | context manager that materializes a value in memory only. Permission and login secret are checked on the stored secret for the handle's ID, not on the label in the handle: a handle the extension builds itself reaches nothing that `get_handle()` would not return as well (otherwise `PermissionDenied` or `SecretNotOwned`, both naming only the label from the handle; `SecretUnavailable` if the ID does not exist) | same |
+| `ctx.db` | AsyncSession factory, **only** on `ext_<id>_*` tables (after a rename also on the prefixes of the old IDs, see section 1 "Renaming an extension"). SQLite checks every statement: other tables (including `sqlite_master`), PRAGMA, ATTACH and schema changes end with `sqlalchemy.exc.DatabaseError` ("not authorized" or "access to … is prohibited") and a warning in the log. A session is valid only inside `async with`; afterwards every statement raises `RuntimeError` | — |
+| `ctx.settings` | `declare(schema)`, `get()`, `set()`, `core(key)` (reads only the core settings `system.timezone` and `maintenance.windows`, otherwise `PermissionDenied`; older cores returned any) | — |
+| `ctx.scheduler` | `register_job(JobSpec)`; `validate_schedule(schedule)` checks a cron expression exactly like `register_job()` does, without registering anything (`ValueError` with a German message): for schedules that an extension stores itself (such as a script's), check first, then store, because a stored broken schedule would make `register_job()` fail on the next start. Older cores do not have the method. If a job handler reports an expected failure with `NodvardError`, the run is shown as failed with that text, without a traceback (in the run log and in the container log); any other exception comes with a traceback. A scheduled run knows no person, even if the job was registered during a request; a manual run (`POST /jobs/{id}/run`) knows whoever started it (section 3, "Who proposes") | `schedule.register` |
+| `ctx.events` | `publish(Event)`, `subscribe(pattern, handler)`; a handler knows no person, not even whoever triggered the event (section 3, "Who proposes") | — |
 | `ctx.notify` | `send(Notification, raise_on_failure=False)` → `NotifyResult` (`notification_id`, `suppressed`, `delivered`) – with `raise_on_failure=True` it raises `NotificationNotDelivered` if there were channels and none delivered (for "try again"); `would_suppress(host_id=…, host_ids=…)` only asks whether a maintenance window would currently silence a notification (see below) | `notify.send` |
-| `ctx.audit` | `log(entry)`. Extensions write under their own name, for example `<id>.<event>`. Actions whose name starts with `mfa.`, `auth.`, `login.`, `system.` or `user.` (case and surrounding spaces do not matter) are written only by the core, because it reads them back and decides on them: the call then raises `ValueError` and writes nothing | `audit.write` |
-| `ctx.http` | preconfigured `httpx.AsyncClient` with target checking, plus `websocket(url, …)`. The target check only covers the start address: `websocket()` never follows redirects (3xx) during the handshake (`async with` then raises a `ConnectionError` with a German message, no second connection is made); `get()`, `post()`, `request()` and `stream()` never follow them either: a response with status 3xx comes back unchanged, and the extension queries the new address itself. `follow_redirects=True` (or any other true value) raises `ValueError` before a request goes out, also with `insecure_tls=True`; `follow_redirects=False` is still allowed. Reason: the check of allowed addresses (`net.outbound`) only knows the address of the call and would never see the target of a redirect. `ctx.http` never uses a proxy from the environment (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, for `websocket()` also `WS_PROXY`, `WSS_PROXY`, `SOCKS_PROXY`), every connection goes directly to the checked address; `SSL_CERT_FILE` and `SSL_CERT_DIR` still apply. `peer_certificate(url)` only reads the certificate of an `https://`/`wss://` target (SHA-256 fingerprint, `trusted`: valid according to the certificate authorities) without sending a request. `pinned_sha256=` on `get()`, `post()`, `request()`, `stream()` and `websocket()` accepts exactly the certificate with this fingerprint and otherwise aborts in the TLS handshake with `CertificateMismatch` before a single byte of the request is sent (for self-signed certificates when something secret goes out; like `insecure_tls` it needs `net.outbound.insecure_tls`); such calls never keep cookies set by the server | `net.outbound:<cidr>` |
+| `ctx.audit` | `log(entry)`. Extensions write under their own name, for example `<id>.<event>`. Actions whose name starts with `mfa.`, `auth.`, `login.`, `system.` or `user.` (case and surrounding spaces do not matter) are written only by the core, because it reads them back and decides on them: the call then raises `ValueError` and writes nothing. With `actor=` a person is the actor of the entry only if the core knows them right now: the user of the running request (the core remembers them when it checks the access token, for example via `Depends(ctx.api.current_actor)`) or, while the core runs an action, whoever proposed and approved it (section 3, "Who proposes"). Otherwise the core writes the entry under the extension and keeps the named actor only in `detail.on_behalf_of` (older cores took anyone) | `audit.write` |
+| `ctx.http` | preconfigured `httpx.AsyncClient` with target checking, plus `websocket(url, …)`. The target check only covers the start address: `websocket()` never follows redirects (3xx) during the handshake (`async with` then raises a `ConnectionError` with a German message, no second connection is made); `get()`, `post()`, `request()` and `stream()` never follow them either: a response with status 3xx comes back unchanged, and the extension queries the new address itself. `follow_redirects=True` (or any other true value) raises `ValueError` before a request goes out, also with `insecure_tls=True`; `follow_redirects=False` is still allowed. Reason: the check of allowed addresses (`net.outbound`) only knows the address of the call and would never see the target of a redirect. `ctx.http` never uses a proxy from the environment (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, for `websocket()` also `WS_PROXY`, `WSS_PROXY`, `SOCKS_PROXY`), every connection goes directly to the checked address; `SSL_CERT_FILE` and `SSL_CERT_DIR` still apply. `peer_certificate(url)` only reads the certificate of an `https://`/`wss://` target (SHA-256 fingerprint, `trusted`: valid according to the certificate authorities) without sending a request. `pinned_sha256=` on `get()`, `post()`, `request()`, `stream()` and `websocket()` accepts exactly the certificate with this fingerprint and otherwise aborts in the TLS handshake with `CertificateMismatch` before a single byte of the request is sent (for self-signed certificates when something secret goes out; like `insecure_tls` it needs `net.outbound.insecure_tls`); such calls never keep cookies set by the server. With only `net.outbound:<cidr>`, only IP addresses from those ranges work; a DNS name needs the free permission `net.outbound` (older cores let it through unchecked) | `net.outbound:<cidr>` |
 | `ctx.ws` | `broadcast(channel, payload)` on `ext.<id>.*` (after a rename also on `ext.<old>.*`) | — |
-| `ctx.spawn` | supervised background task with restart policy | — |
+| `ctx.spawn` | supervised background task with restart policy; it knows no person, even if it was started during a request (section 3, "Who proposes") | — |
 | `ctx.logger` | structured logger, pre-tagged with the extension ID | — |
 | `ctx.data_dir` | the extension's own writable folder (in the image `/app/data/ext/<id>/`; after a rename the folder of the storage ID, see section 1). Files belong here: the code in the image belongs to root and is read-only, including the extension's own package folder. New files are readable only by the user `lattice` | — |
 
@@ -621,6 +665,22 @@ in German), writes the audit entry and, if applicable, executes the action via t
 `reason` is anchored in the data type as a mandatory field — so the obligation to give a
 reason cannot be bypassed by accident.
 
+**Who proposes (`proposed_by`).** A person (`Actor.user`) counts only if the core knows them right now: the user of the
+running request (remembered when the core checks the access token, for example via `Depends(ctx.api.current_actor)`) or,
+while the core runs an action, whoever proposed and approved it. A task that a route or an executor starts with
+`asyncio.create_task` keeps knowing these people (for example a follow-up check that writes to the audit log later).
+Tasks from `ctx.spawn`, scheduled runs, `setup()`, `on_start()`, `on_stop()`, `on_settings_changed()` and
+`on_secret_changed()` (including tasks they start with `asyncio.create_task`) and handlers from
+`ctx.events.subscribe()`, on the other hand, start without any known person, even if they run during a request, for
+example when the module is enabled, when its settings are saved or after an approval; a manual run
+(`POST /jobs/{id}/run`) runs inside the request and knows whoever started it. Otherwise an extension proposes only under
+its own id (or one from `legacy_ids`), AI (`Actor.ai`) and schedule (`Actor.scheduler`) are free. If a proposal does not
+come under the extension's current id (including one from `legacy_ids`), the matching audit entry (`action.proposed`,
+`action.approved` when approved immediately, `action.denied` when the gate refuses it) names the extension in
+`detail.via`. Anything else raises `PermissionDenied`, and nothing is created (older cores accepted anyone). A proposal
+from `BackupProvider.retry()` carries `Actor.extension("backups")`; whoever passes it on sets `proposed_by` beforehand
+(their own id or the user of the request).
+
 If the core approves the action immediately (mode `full`), it runs in the background.
 By default `propose()` waits until it has finished — right for background jobs that need
 the result. An HTTP route passes `wait_s=REQUEST_WAIT_S` (20 s, from `nodvard_sdk`); if
@@ -641,8 +701,9 @@ empties the fields `output`, `stdout`, `stderr` and `command` for readers withou
 but not `reason` or any other field – so text from the server belongs neither in `reason` nor in
 other fields of `detail`, nor in notifications, and a command only in `detail.command` (users who
 may only read see notifications as well). In-process handlers (`ctx.events.subscribe`) receive
-`action.*` events (such as `action.executed` with the `payload`) in full; over the WebSocket, users
-without `hosts.execute` get only a shortened `payload`
+`action.executed` (with `ext_id` of the proposing extension) with the action's `payload` only if the action
+comes from their own extension or the extension has `hosts.execute`; otherwise the field is missing (older
+cores gave it to everyone). Over the WebSocket, users without `hosts.execute` get only a shortened `payload`
 ([API, section 4](../04-API.md#4-websocket), in German).
 
 **Standing approval (without a click).** A proposal can rely on an approval that a person gave in advance:
@@ -694,9 +755,11 @@ ctx.ui.register_widget(WidgetSpec(
             actions=[
                 WidgetAction(id="confirm", label="Bestätigen",          # "Confirm"
                              endpoint="incidents/{{ id }}/confirm",
-                             method="POST", confirm=True, style="primary"),
+                             method="POST", confirm=True, style="primary",
+                             permissions=["soc.manage"]),       # more than the widget itself
                 WidgetAction(id="dismiss", label="Verwerfen",           # "Dismiss"
-                             endpoint="incidents/{{ id }}/dismiss", method="POST"),
+                             endpoint="incidents/{{ id }}/dismiss", method="POST",
+                             permissions=["soc.manage"]),
             ],
         ),
         empty_text="Keine offenen Vorfälle",                            # "No open incidents"
@@ -721,6 +784,12 @@ acquired a second programming language.
 button only if the rendered value is truthy (not empty, not `false`/`0`/`none`). The
 decision is made by the BACKEND (it delivers `can_start` as a ready-made field) — this,
 too, is not a condition in the template, just a yes/no field.
+
+**Buttons by permission:** `WidgetSpec.permissions` decides who sees the widget,
+`WidgetAction.permissions` additionally who gets a button in it. If the person lacks a
+permission of the action, the core already leaves the button out of `GET /api/v1/widgets`;
+web and app do not have to check anything for that. The route behind it still checks the
+permission itself (`include_router(..., permission=...)`); the missing button is not a barrier.
 
 **Do not derive badge colors from the display text:** `| tone` guesses the color from
 keywords ("critical", "warning" …). For German display words, take the text from a
@@ -828,12 +897,16 @@ ctx.ui.register_host_requirement(HostRequirementSpec(
     fail_hint="Benutzer zur Gruppe docker hinzufügen: sudo usermod -aG docker {user}",   # "Add the user to the docker group: …"
     unix_group="docker",                  # the setup command offers "add to group"
     tags=["docker"],                      # only servers with one of these tags (empty = all)
+    skip_tags=[],                         # never on servers with one of these tags (default empty)
     os_families=["linux"],                # default; empty = any system
 ))
 ctx.ui.register_host_requirement(HostRequirementSpec(
     id="root", label="Root-Rechte", needs_root=True, root_reason="Updates einspielen, Quarantäne",
 ))                                        # "Root rights" / "apply updates, quarantine"
 ```
+
+`skip_tags` is for a tag that overrides another: the items for Docker in the "operate only" mode
+(`tags=["docker-bedienen"]`, `skip_tags=["docker"]`) do not apply to a server that also has `docker`.
 
 Registering the same `id` again **replaces** the declaration (so that it follows a configurable tag
 in `on_settings_changed`); when the extension is deactivated, it disappears. `unix_group` must
@@ -844,9 +917,8 @@ command). It also ignores privileged groups (`root`, `sudo`, `wheel`, `admin`, `
 
 The target page reads `?host=` via the `useUrlParams()` hook (below) and highlights the
 host or filters to it — with a visible, removable filter. For the highlighting there is
-the core class `nodvard-deck-focus`; the old name `lattice-focus` remains valid (transition),
-both are in the same CSS rule in the core. If the query changes from the router's point of view, the
-core also rebuilds the page.
+the core class `nodvard-deck-focus` (`FOCUS_CLASS` in the UI kit). If the query changes from the
+router's point of view, the core also rebuilds the page.
 
 A page cannot rely on that alone once it maintains its **own** address via
 `replaceState` (tabs in the tab strip ↔ `?tab=`, removing a filter, choosing another server):
@@ -854,9 +926,7 @@ from the router's point of view the query then does not change even though the a
 shows a different one, and a link to the same address does not rebuild anything. The core
 therefore fires the event `nodvard-deck:navigate` on `window` after every navigation within an
 extension page (`ExtensionPage.tsx`; the browser otherwise reports `pushState` to nobody),
-also after back/forward, and sets `window.__nodvardDeck.navigateEvents` for this. It keeps
-firing the old name `lattice:navigate` as well (transition, see "Names in the frontend
-contract" below). The `useUrlParams()` hook (`extensions/_shared/frontend/src/location.ts`) follows this event —
+also after back/forward, and sets `window.__nodvardDeck.navigateEvents` for this. The `useUrlParams()` hook (`extensions/_shared/frontend/src/location.ts`) follows this event —
 and only without this marker (tests, preview) additionally `popstate`: in the core shell
 the old page would otherwise briefly show the new address and query the server before the
 core rebuilds it. The hook returns the current query together with a setter (`replaceState`;
@@ -905,9 +975,8 @@ and that is the binding check.
 
 The bundle is an **ESM module**, built with React, ReactDOM and the SDK as `external`.
 The core serves it at `/api/v1/ext/<id>/frontend/index.js` and loads it via `import(url)`.
-Shared singletons hang off `window.__nodvardDeck` (old name `window.__lattice`, remains
-valid — transition); an import-map shim resolves `react`,
-`react/jsx-runtime` and `react-dom` to it.
+Shared singletons hang off `window.__nodvardDeck`; an import-map shim (`/nodvard-deck-shim/*.js`) resolves
+`react`, `react/jsx-runtime` and `react-dom` to it.
 
 The bundle runs under the Content Security Policy of the app page (`script-src 'self'`, see
 [01-ARCHITECTURE.md](../01-ARCHITECTURE.md), in German): code only from the Nodvard Deck server, no `eval` and no
@@ -915,27 +984,13 @@ The bundle runs under the Content Security Policy of the app page (`script-src '
 HTML, no loading from a CDN, no workers from `blob:` and no WebAssembly. The browser blocks anything that breaks
 these rules and names the reason in the console.
 
-**Names in the frontend contract (transition).** With the rename to Nodvard Deck, everything
-bundles hook into has a new name. The old names remain valid until a major version removes
-them explicitly:
-
-| New | Old (remains valid, transition) |
-|---|---|
-| `window.__nodvardDeck` | `window.__lattice` — **the same object**; a change through one is visible through the other |
-| event `nodvard-deck:navigate` | `lattice:navigate` |
-| event `nodvard-deck:timezone` | `lattice:timezone` |
-| CSS class `nodvard-deck-focus` | `lattice-focus` (both in one rule) |
-| TypeScript type `NodvardDeckTokenRefreshResult` | `LatticeTokenRefreshResult` (alias) |
-
-The core shell sets both names and fires every event under both names. A bundle or kit reads
-the object as `window.__nodvardDeck ?? window.__lattice` (the UI kit does this via `deck()` from
-`extensions/_shared/frontend/src/deck.ts`) and listens to **exactly one** event: to
-`nodvard-deck:…` if `window.__nodvardDeck` exists, otherwise to `lattice:…`. That way it never
-reacts twice. The reason for both: a browser tab that was open before an update loads new
-bundles into its old core (it only knows `__lattice`), and third-party extensions with an older
-UI kit run against a new core. The import-map shims (`/lattice-shim/react.js` etc.) read both
-names as well; their **path** `/lattice-shim/` stays unchanged, because the page of an old tab
-points to it.
+**Names in the frontend contract.** Bundles hook into `window.__nodvardDeck` (the UI kit reads it via `deck()` from
+`extensions/_shared/frontend/src/deck.ts`), the events `nodvard-deck:navigate` and `nodvard-deck:timezone`, the CSS
+class `nodvard-deck-focus` and the TypeScript type `NodvardDeckTokenRefreshResult`. The old names from before Nodvard
+Deck (`window.__lattice`, `lattice:*`, `lattice-focus`, `LatticeTokenRefreshResult`, import map `/lattice-shim/`) are
+gone since 0.12: a bundle with an older UI kit that only knows them does not find the core shell. A tab that was open
+before the update needs one "Reload page" („Seite neu laden“) when it opens an extension page for the first time
+afterwards (the extension page offers the button).
 
 For calls to the dashboard API, the pages of the bundled extensions share a UI kit
 (`extensions/_shared/frontend/src/`): `authedFetch` attaches the token from
@@ -1067,9 +1122,25 @@ host with a tag, not a JSON entry that quietly goes stale.
   The core checks this on load and otherwise refuses the extension.
 - Every extension has its **own Alembic branch**
   (`alembic upgrade heads` brings up the core plus all extensions).
-- `ctx.db` provides sessions whose access is restricted to the extension's own prefix.
-  Core data is never read directly, but through `ctx.hosts`, `ctx.audit` and so on —
-  otherwise the core's data model would be frozen as soon as the first extension exists.
+- `ctx.db` provides sessions whose access is restricted to the extension's own prefix. SQLite itself checks this for
+  every statement (authorizer), also for SQL text from `text()`, from the moment the connection is checked out (also
+  through `get_raw_connection()`). The guard is an extra layer against mistakes and injected SQL, not a sandbox:
+  extension code runs in the same process as the core and can get around it if it sets out to, for example with
+  `session.bind.execution_options(nodvard_table_guard=None)`, which returns an engine without the guard. A prefix is
+  the start of a name: next to an extension `inventory`, an extension `inventory-x` cannot reach `ext_inventory_*`,
+  but `inventory` can reach `ext_inventory_x_*`. So do not build a new ID from an existing one plus a hyphen.
+  Table-valued functions such as `json_each` or `pragma_table_info` are refused too (to SQLite they read other tables;
+  `json_extract` works), as are recursive `WITH` queries without your own prefix in their name
+  (`WITH RECURSIVE ext_<id>_n(...)` works) and foreign keys from your own tables to core tables (such as `hosts.id`):
+  SQLite reads the core table while checking, so inserts and deletes fail. Joins with `USING (…)` or `NATURAL` are
+  refused altogether, also between your own tables: SQLite never shows the columns it builds for them to the
+  authorizer. Write `JOIN … ON` instead (ORM and Core do anyway). The word counts anywhere in the SQL text, also
+  inside string literals, names and comments; pass values as parameters and do not name a column `using` or `natural`.
+  This check only sees statements that go through SQLAlchemy; what an extension runs directly on the driver through
+  `get_raw_connection()` is checked by the authorizer alone. Your own FTS5 tables work. The guard exists only for
+  SQLite so far; with another database every statement through `ctx.db` ends with `RuntimeError`. Core data is never
+  read directly, but through `ctx.hosts`, `ctx.audit` and so on — otherwise the core's data model would be frozen as
+  soon as the first extension exists.
 - Uninstallation: `state=uninstalling` → `on_stop` → optional
   `drop_data` hook → remove tables → delete the registry row.
 
@@ -1166,6 +1237,10 @@ list `sdk_public.json`; new names are brought up to date with `python scripts/up
 exceptions only with a justification in `backend/tests/contract/breaking_exceptions.toml`. The major
 version will be raised to `1.0` once the bundled extensions are stable; the rules of the table
 above then apply unchanged.
+
+**One-time exception in 0.12:** The old names from before Nodvard Deck (`lattice_sdk`, `LatticeExtension`,
+`LatticeError`, the entry point group `lattice.extensions`) are removed; they were marked as deprecated since the
+rename. An extension that still uses them does not load and gets a clear reason naming the new name.
 
 **Deliberately stricter for security reasons:** `ctx.api.include_router()` without `permission=` requires a login
 (such a route used to be reachable without one), and the core rejects WebSocket routes, `add_route()` and `mount()`

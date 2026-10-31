@@ -12,7 +12,6 @@ import { ExtensionPage } from "../../../../frontend/src/routes/ExtensionPage";
 export function navigateTo(url: string): void {
   act(() => {
     window.history.pushState(null, "", url);
-    // Wie die Kern-Shell: beide Namen (das Kit hört auf genau einen).
     dispatchDeckEvent("navigate");
   });
 }

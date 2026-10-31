@@ -16,7 +16,7 @@ from nodvard_sdk import (
     WidgetSpec,
 )
 
-from .config import DeviceConfig
+from .config import DeviceConfig, device_of
 from .legacy import adopt_single_device, forget_legacy_password
 from .models import DeviceList, Overview
 from .service import NOT_CONFIGURED, SynologyService, UnknownDevice
@@ -190,6 +190,13 @@ class Extension(NodvardExtension):
             logger.warning("Synology: der alte Passwort-Eintrag ließ sich nicht löschen.", exc_info=True)
         await service.settings_changed()
         self._sync_tiles(await service.configs())
+
+    async def on_secret_changed(self, ctx: ExtensionContext, label: str) -> None:
+        # Sitzung und Pause von vorher gälten sonst weiter, bis jemand die Angaben des Geräts ändert.
+        service = getattr(self, "_service", None)
+        name = device_of(label)
+        if service is not None and name is not None:
+            await service.forget(name)
 
     async def health(self, ctx: ExtensionContext) -> HealthReport:
         # „Verbindung testen“ meldet jedes Gerät neu an und leert den Zwischenspeicher samt Pausen.

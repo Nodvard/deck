@@ -256,9 +256,6 @@ async def test_schedule_writes_next_run_at_even_before_the_scheduler_is_started(
 
 @pytest.mark.asyncio
 async def test_schedule_writes_next_run_at(service, db_session):
-    """`Job.next_run_at`
-    wurde bisher NIE beschrieben -- `GET /jobs` zeigte das Feld dauerhaft als
-    `null`, obwohl APScheduler den Termin sofort nach `add_job()` kennt."""
     job = await _make_job(db_session)
     job_id = job.id
     assert job.next_run_at is None
@@ -268,10 +265,11 @@ async def test_schedule_writes_next_run_at(service, db_session):
 
     await service.schedule(job, handler)
 
-    db_session.expire_all()  # schedule() schreibt ueber eine ANDERE Session (session_scope())
+    db_session.expire_all()  # schedule() schreibt über eine eigene Session (session_scope())
     refreshed = await jobs_service.get_job(db_session, job_id)
     assert refreshed.next_run_at is not None
-    assert refreshed.next_run_at == service._scheduler.get_job(job_id).next_run_time
+    # Als Zeitstempel vergleichen: In der doppelten Stunde der Zeitumstellung sind zwei Zeitzonen sonst nie gleich.
+    assert refreshed.next_run_at.timestamp() == service._scheduler.get_job(job_id).next_run_time.timestamp()
 
 
 @pytest.mark.asyncio
@@ -295,9 +293,7 @@ async def test_schedule_with_enabled_false_clears_next_run_at(service, db_sessio
 
 @pytest.mark.asyncio
 async def test_a_run_refreshes_next_run_at_afterwards(service, db_session):
-    """APScheduler berechnet nach jedem Feuern intern den naechsten Termin neu --
-    die gespiegelte Spalte darf danach nicht auf dem urspruenglichen Wert
-    stehenbleiben."""
+    """Nach einem Lauf steht in `next_run_at` der neue Termin von APScheduler, nicht der alte."""
     job = await _make_job(db_session, schedule="* * * * *")
     job_id = job.id
 
@@ -314,10 +310,8 @@ async def test_a_run_refreshes_next_run_at_afterwards(service, db_session):
     db_session.expire_all()
     after = (await jobs_service.get_job(db_session, job_id)).next_run_at
     assert after is not None
-    assert after == service._scheduler.get_job(job_id).next_run_time
-    # Nicht zwingend ein ANDERER Wert (haengt vom Cron-Ausdruck/Timing ab), aber
-    # muss mit APSchedulers tatsaechlichem, aktuellem Termin uebereinstimmen --
-    # ohne den Fix bliebe `before` (der Wert von VOR dem Lauf) unveraendert stehen.
+    # Nicht zwingend ein anderer Wert als `before` (hängt vom Zeitplan ab), aber derselbe Termin wie bei APScheduler.
+    assert after.timestamp() == service._scheduler.get_job(job_id).next_run_time.timestamp()
     assert before is not None
 
 
@@ -577,3 +571,29 @@ async def test_a_slow_start_without_shutdown_runs_as_before(service, db_session,
     assert (run.status, run.exit_code, run.error) == ("succeeded", 0, None)
     assert "Ergebnis: 'fertig'" in Path(run.output_ref).read_text(encoding="utf-8")
     assert statuses == ["running", "succeeded"]
+
+
+@pytest.mark.asyncio
+async def test_scheduled_run_forgets_the_planning_request_manual_run_keeps_it(service, db_session):
+    from nodvard_sdk import current_job_trigger
+
+    from nodvard_deck.core import known_actors
+
+    job = await _make_job(db_session)
+    seen: dict[str, bool] = {}
+    scheduled = asyncio.Event()
+
+    async def handler(**kwargs):
+        seen[current_job_trigger()] = known_actors.is_known("user", "u-1")
+        if current_job_trigger() == "schedule":
+            scheduled.set()
+
+    async def request() -> None:
+        known_actors.add_user("u-1")
+        await service.trigger_now(job, handler)
+        _fire(service, job, handler)
+        await asyncio.wait_for(scheduled.wait(), timeout=2)
+
+    await asyncio.create_task(request())
+    await asyncio.wait_for(asyncio.gather(*service._runs), timeout=2)
+    assert seen == {"manual": True, "schedule": False}

@@ -42,7 +42,7 @@ function mockFetch(calls: string[], cause: Record<string, unknown> | ((url: stri
 }
 
 beforeEach(() => {
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never,
     ReactDOM: undefined as never,
     ReactJsxRuntime: undefined as never,

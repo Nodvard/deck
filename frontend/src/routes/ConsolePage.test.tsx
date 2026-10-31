@@ -160,12 +160,11 @@ describe("ConsolePage", () => {
     ]);
   });
 
-  it("merkt das Layout unter dem neuen Schluessel nodvard-deck.console.layout und fasst den alten nicht an", async () => {
+  it("merkt das Layout unter nodvard-deck.console.layout", async () => {
     expect(LAYOUT_STORAGE_KEY).toBe("nodvard-deck.console.layout");
     vi.stubGlobal("fetch", mockFetch());
     try {
-      window.localStorage.removeItem("lattice.console.layout");
-      window.localStorage.setItem(LAYOUT_STORAGE_KEY, "us"); // wie nach migrateLegacyStorage() (main.tsx)
+      window.localStorage.setItem(LAYOUT_STORAGE_KEY, "us");
       renderPage();
       await waitFor(() => expect(FakeRfb.instances).toHaveLength(1));
       act(() => FakeRfb.instances[0].emit("connect"));
@@ -177,7 +176,6 @@ describe("ConsolePage", () => {
 
       fireEvent.change(select, { target: { value: "de" } });
       expect(window.localStorage.getItem(LAYOUT_STORAGE_KEY)).toBe("de");
-      expect(window.localStorage.getItem("lattice.console.layout")).toBeNull();
     } finally {
       window.localStorage.removeItem(LAYOUT_STORAGE_KEY);
     }

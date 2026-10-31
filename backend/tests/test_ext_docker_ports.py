@@ -9,21 +9,28 @@ import sys
 from pathlib import Path
 
 import pytest
+from docker_stack_fakes import EXT_DIR
 from test_ext_docker import _FakeCtx, _FakeExecResult, _FakeHost, _ps_line
-
-SRC = Path(__file__).resolve().parents[2] / "extensions" / "docker" / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-
-from nodvard_deck_ext_docker.capabilities import (
-    DockerServiceCatalog,
-    parse_port_bindings,
-    published_ports,
-)
 
 ID_RUN = "aaaaaaaaaaaa"
 ID_STOP = "bbbbbbbbbbbb"
 ID_NEW = "cccccccccccc"
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _ext_docker_on_path():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(EXT_DIR / "src"))
+        yield
+    for name in list(sys.modules):
+        if name.startswith("nodvard_deck_ext_docker"):
+            del sys.modules[name]
+
+
+def _caps():
+    from nodvard_deck_ext_docker import capabilities
+
+    return capabilities
 
 
 @pytest.mark.parametrize(
@@ -42,11 +49,11 @@ ID_NEW = "cccccccccccc"
     ],
 )
 def test_published_ports_reads_what_docker_ps_shows(ports, expected):
-    assert published_ports(ports) == expected
+    assert _caps().published_ports(ports) == expected
 
 
 def test_a_huge_range_is_capped():
-    ports = published_ports("0.0.0.0:1-65535->1-65535/tcp")
+    ports = _caps().published_ports("0.0.0.0:1-65535->1-65535/tcp")
     assert len(ports) == 256 and ports[0] == 1
 
 
@@ -57,7 +64,7 @@ def test_parse_port_bindings_reads_the_container_config():
         "kaputt|{",
         "zzzz|{}",
     ])
-    assert parse_port_bindings(stdout) == {ID_STOP: [2283], ID_NEW: []}
+    assert _caps().parse_port_bindings(stdout) == {ID_STOP: [2283], ID_NEW: []}
 
 
 def test_parse_port_bindings_skips_what_is_not_a_usable_binding():
@@ -70,7 +77,7 @@ def test_parse_port_bindings_skips_what_is_not_a_usable_binding():
             "81/tcp": "kaputt",
         }),
     ])
-    assert parse_port_bindings(stdout) == {ID_STOP: [], ID_NEW: [8081, 65535]}
+    assert _caps().parse_port_bindings(stdout) == {ID_STOP: [], ID_NEW: [8081, 65535]}
 
 
 class _CountingExec:
@@ -100,7 +107,7 @@ async def test_rows_carry_address_and_ports_and_stopped_containers_are_inspected
     ])
     inspect = f"{ID_STOP}ffff|" + json.dumps({"2283/tcp": [{"HostIp": "", "HostPort": "2283"}]})
     exec_handle = _CountingExec(ps, inspect)
-    catalog = DockerServiceCatalog(_ctx(exec_handle))
+    catalog = _caps().DockerServiceCatalog(_ctx(exec_handle))
 
     rows = {r["name"]: r for r in await catalog.list_services()}
     assert rows["nginx"]["host_address"] == "10.0.0.5"
@@ -133,7 +140,7 @@ async def test_a_failing_inspect_keeps_the_listing_and_is_retried():
             return await super().run(host, command, timeout_s=timeout_s)
 
     exec_handle = _Failing(ps, "")
-    catalog = DockerServiceCatalog(_ctx(exec_handle))
+    catalog = _caps().DockerServiceCatalog(_ctx(exec_handle))
     rows = await catalog.list_services()
     assert [r["name"] for r in rows] == ["immich"] and rows[0]["published_ports"] == []
     await catalog.list_services()
@@ -161,7 +168,7 @@ async def test_readable_lines_count_even_if_one_container_vanished():
             return await super().run(host, command, timeout_s=timeout_s)
 
     exec_handle = _Partial(ps, "")
-    catalog = DockerServiceCatalog(_ctx(exec_handle))
+    catalog = _caps().DockerServiceCatalog(_ctx(exec_handle))
     rows = {r["name"]: r for r in await catalog.list_services()}
     assert rows["immich"]["published_ports"] == [2283]
     assert rows["loop"]["published_ports"] == [8088], "auch ein Container, der staendig neu startet, zeigt in ps keine Ports"
@@ -177,7 +184,7 @@ async def test_an_unreachable_server_keeps_its_address():
         async def run(self, host, command: str, *, timeout_s: int = 60):
             raise ConnectionError("weg")
 
-    rows = await DockerServiceCatalog(_ctx(_Down("", ""))).list_services()
+    rows = await _caps().DockerServiceCatalog(_ctx(_Down("", ""))).list_services()
     assert len(rows) == 1 and rows[0]["unreachable"] is True and rows[0]["host_address"] == "10.0.0.5"
 
 
@@ -186,8 +193,7 @@ def test_module_level_names_of_the_catalog_are_defined_once():
     still -- so wäre die Port-Prüfung gestoppter Container bei kurzen IDs nie gelaufen."""
     import ast
 
-    import nodvard_deck_ext_docker.capabilities as module
-
+    module = _caps()
     tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
     names: list[str] = []
     for node in tree.body:

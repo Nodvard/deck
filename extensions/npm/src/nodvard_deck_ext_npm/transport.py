@@ -6,6 +6,8 @@ Kopf gleich mit `transport.py` im Modul „Pi-hole“ (ein Test hält beide glei
 
 from __future__ import annotations
 
+import socket
+import ssl
 from typing import Any, Protocol
 
 import httpx
@@ -82,19 +84,61 @@ def unusable_exchange_text(exc: BaseException, url: str, service: str) -> str:
     return f"Die Anfrage an {service} ließ sich nicht senden. Prüfe die Einstellungen."
 
 
+_DNS_MARKERS = (
+    "name or service not known", "getaddrinfo", "name resolution", "nodename nor servname", "no address associated"
+)
+_CERT_MARKERS = ("certificate_verify_failed", "certificate verify failed")
+_BROKEN_OFF = (httpx.ReadError, httpx.WriteError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError)
+
+
+def _chain(exc: BaseException) -> list[BaseException]:
+    out: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen and len(out) < 6:
+        seen.add(id(current))
+        out.append(current)
+        current = current.__cause__ or current.__context__
+    return out
+
+
 def describe_transport_error(exc: BaseException, service: str) -> str:
-    text = str(exc)
-    if isinstance(exc, httpx.ProtocolError):
+    """Fester Satz zu einem Verbindungsfehler; der Text der Ausnahme wählt nur zwischen den Sätzen."""
+    if isinstance(exc, (httpx.ProtocolError, httpx.DecodingError)):
         return _protocol_text(exc, service)
-    if "CERTIFICATE_VERIFY_FAILED" in text or "certificate verify failed" in text.lower():
+    if isinstance(exc, httpx.UnsupportedProtocol):
+        return (
+            f"{service}: Die eingetragene Adresse ist ungültig, sie muss mit http:// oder https:// beginnen. "
+            "Bitte in den Einstellungen prüfen."
+        )
+    chain = _chain(exc)
+    texts = [str(link).lower() for link in chain]
+    if any(marker in text for text in texts for marker in _CERT_MARKERS):
         return (
             f"{service}: Das Zertifikat wurde nicht akzeptiert. Bei einem selbstsignierten Zertifikat in den "
             "Einstellungen „Selbstsigniertes Zertifikat erlauben“ einschalten."
         )
-    if isinstance(exc, httpx.TimeoutException):
-        return f"{service} antwortet nicht (Zeitüberschreitung)."
-    detail = _short(text) if text.strip() else type(exc).__name__
-    return f"{service} ist nicht erreichbar ({detail})."
+    if any(isinstance(link, ssl.SSLError) for link in chain) or any("[ssl" in text for text in texts):
+        # Meist spricht der Port nur http und die Adresse sagt https (oder umgekehrt); der Satz nennt genau das.
+        return _protocol_text(exc, service)
+    if any(isinstance(link, (httpx.TimeoutException, TimeoutError)) for link in chain):
+        return f"{service} antwortet nicht (Zeitüberschreitung). Prüfe Adresse und Port."
+    if any(isinstance(link, socket.gaierror) for link in chain) or any(
+        marker in text for text in texts for marker in _DNS_MARKERS
+    ):
+        return (
+            f"Die Adresse von {service} ließ sich nicht auflösen (Namensauflösung fehlgeschlagen). "
+            "Prüfe die Schreibweise der Adresse und das Netzwerk."
+        )
+    if any(isinstance(link, _BROKEN_OFF) for link in chain):
+        # Die Gegenstelle hat aufgelegt, oft weil http:// auf einen https-Port geht (oder umgekehrt).
+        return _protocol_text(exc, service)
+    if any(isinstance(link, (httpx.NetworkError, OSError)) for link in chain):
+        return (
+            f"{service} ist nicht erreichbar (Verbindung abgelehnt oder kein Weg dorthin). "
+            f"Läuft {service}, und stimmen Adresse und Port?"
+        )
+    return f"Die Verbindung zu {service} ist fehlgeschlagen ({type(exc).__name__})."
 
 
 async def send(

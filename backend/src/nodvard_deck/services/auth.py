@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import functools
 import hashlib
 import hmac
 import logging
@@ -14,14 +16,26 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import pyotp
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import (
+    Integer,
+    Select,
+    bindparam,
+    delete,
+    func,
+    literal_column,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 from sqlalchemy.orm.attributes import set_committed_value
 
 from ..config import Settings
 from ..core import login_limit, security, setup_code, vault
 from ..core.rbac import BUILTIN_ROLES, has_permission
 from ..db import new_id, refresh_relationships, utcnow
+from ..db.session import session_scope
 from ..models import AuditEntry, RecoveryCode, RefreshToken, Role, RolePermission, User
 from . import audit as audit_service
 from . import settings as settings_service
@@ -41,13 +55,15 @@ class AuthError(Exception):
 
 
 class InvalidCredentials(AuthError):
-    pass
+    after: Callable[[], Awaitable[None]] | None = None
+    """Was erst nach der Antwort laufen soll (die API-Schicht hängt es an die 401)."""
 
 
 class MfaRequired(AuthError):
-    def __init__(self, mfa_token: str) -> None:
+    def __init__(self, mfa_token: str, *, is_owner: bool = False) -> None:
         super().__init__("Zwei-Faktor-Code erforderlich")
         self.mfa_token = mfa_token
+        self.is_owner = is_owner
 
 
 class InvalidMfaCode(AuthError):
@@ -66,6 +82,18 @@ class TooManyAttempts(AuthError):
 REFRESH_GRACE_SECONDS = 30
 """Gnadenfrist: Ein gerade durch Rotation widerrufener Refresh-Token bekommt noch einen frischen Access-Token (zwei
 Tabs)."""
+
+SESSION_CHAIN_MAX_HOPS = 50
+"""So viele Erneuerungen verfolgt die Prüfung eines Zugangs-Tokens höchstens; dahinter gilt es als abgelaufen."""
+
+SESSION_CHAIN_LIMIT = 10_000
+"""So viele Erneuerungen verfolgen Abmelden und „andere abmelden“ höchstens (bei einer je Viertelstunde rund 100 Tage);
+hinter einer längeren Kette enden zur Sicherheit alle Anmeldungen des Kontos."""
+
+# Häppchen mit Commit und kurzer Pause: Der erste Lauf nach dem Update trifft ein halbes Jahr Erneuerungen, in einem
+# Stück hielte das den einzigen Schreiber von SQLite länger als `busy_timeout` fest (Anmeldung, Zeitpläne).
+PURGE_CHUNK_SIZE = 5000
+PURGE_CHUNK_PAUSE_SECONDS = 0.05
 
 SENSITIVE_ATTEMPT_KEY = "passwortabfrage"
 """Pseudo-Benutzername für die Drosselung falscher Passwörter bei empfindlichen Aktionen."""
@@ -93,9 +121,10 @@ def _begin_attempt(
     *,
     mfa_token: str | None = None,
     account: str | None = None,
+    brake_name: bool = False,
 ) -> login_limit.Attempt:
     try:
-        return login_limit.begin(ip, username, mfa_token=mfa_token, account=account)
+        return login_limit.begin(ip, username, mfa_token=mfa_token, account=account, brake_name=brake_name)
     except login_limit.MfaTokenUsed:
         raise InvalidMfaCode(MFA_TOKEN_USED_MESSAGE) from None
     except login_limit.MfaExhausted:
@@ -132,16 +161,20 @@ async def _verify_password(
 
 
 def _lock_windows(scopes: list[str]) -> dict[str, int]:
+    if scopes == [login_limit.SCOPE_NAME]:
+        return {"window_seconds": login_limit.NAME_WINDOW_SECONDS}
+    name = {"name_window_seconds": login_limit.NAME_WINDOW_SECONDS} if login_limit.SCOPE_NAME in scopes else {}
     # Die Grenze je Konto für den zweiten Faktor hat zwei Fenster; ist sie dabei, stehen beide immer drin, denn aus den
     # Scopes allein sieht man nicht, welches griff (auch zusammen mit einer anderen Grenze: Beim Anmelden erreichen
     # (Adresse, Name) und Konto ihre 10 mit demselben Versuch). Das kurze `window_seconds` gilt nur bei ihr allein.
     if login_limit.SCOPE_ACCOUNT not in scopes:
-        return {"window_seconds": login_limit.WINDOW_SECONDS}
+        return {"window_seconds": login_limit.WINDOW_SECONDS, **name}
     short = login_limit.ACCOUNT_WINDOW_SECONDS if scopes == [login_limit.SCOPE_ACCOUNT] else login_limit.WINDOW_SECONDS
     return {
         "window_seconds": short,
         "account_window_seconds": login_limit.ACCOUNT_WINDOW_SECONDS,
         "day_window_seconds": login_limit.ACCOUNT_DAY_SECONDS,
+        **name,
     }
 
 
@@ -207,6 +240,11 @@ async def _record_failure(
             f"({login_limit.MAX_MFA_FAILURES_PER_ACCOUNT} in {login_limit.ACCOUNT_WINDOW_SECONDS // 60} Minuten "
             f"oder {login_limit.MAX_MFA_FAILURES_PER_ACCOUNT_DAY} in 24 Stunden, von beliebigen Adressen)"
         ),
+        login_limit.SCOPE_NAME: (
+            f"{login_limit.NAME_FREE_FAILURES} Fehlversuche für diesen Benutzernamen in 24 Stunden aus fremden Netzen "
+            f"(alle Adressen zusammen); jeder Versuch aus einem Netz wartet jetzt doppelt so lange wie der vorige aus "
+            f"demselben Netz, höchstens {login_limit.NAME_MAX_WAIT_SECONDS // 60} Minuten"
+        ),
     }
     await audit_service.log(
         session,
@@ -214,7 +252,9 @@ async def _record_failure(
         actor_id=actor_id,
         action="login.locked",
         outcome="failure",
-        reason="Anmeldung vorübergehend gesperrt: " + "; ".join(reasons[s] for s in scopes) + ".",
+        reason=(
+            "Anmeldung gebremst: " if scopes == [login_limit.SCOPE_NAME] else "Anmeldung vorübergehend gesperrt: "
+        ) + "; ".join(reasons[s] for s in scopes) + ".",
         detail={
             "scopes": scopes,
             **(username_detail if username_detail is not None else {"username": attempt.username}),
@@ -619,7 +659,7 @@ async def login(
     if too_long:
         username = username[:MAX_USERNAME_LENGTH]
         password = password[:MAX_LOGIN_PASSWORD_LENGTH]
-    attempt = _begin_attempt(ip, username)
+    attempt = _begin_attempt(ip, username, brake_name=login_limit.is_foreign(ip))
     user = None
     if not too_long:
         result = await session.execute(select(User).where(func.lower(User.username) == username))
@@ -687,9 +727,13 @@ async def login(
             ip=ip,
             user_agent=user_agent,
         )
-        await _record_failure(session, attempt, actor_id=user.id, user_agent=user_agent)
+        scopes = await _record_failure(session, attempt, actor_id=user.id, user_agent=user_agent)
         await _commit_before_raising(session)
-        raise InvalidCredentials("Ungültiger Benutzername oder Passwort.")
+        exc = InvalidCredentials("Ungültiger Benutzername oder Passwort.")
+        if login_limit.SCOPE_NAME in scopes:
+            # Erst nach der Antwort: Die Meldung braucht Zeit, und die verriete sonst, dass es das Konto gibt.
+            exc.after = functools.partial(_report_password_guessing, user.id)
+        raise exc
 
     if new_hash is not None:
         await _store_rehash(session, user, old_hash=real_hash, new_hash=new_hash)
@@ -711,7 +755,7 @@ async def login(
         # Passwort stimmt: Dieser Versuch zählt nicht, die alten Fehlversuche bleiben aber stehen, bis auch der zweite
         # Faktor stimmt.
         login_limit.release(attempt)
-        raise MfaRequired(mfa_token)
+        raise MfaRequired(mfa_token, is_owner=user.is_owner)
 
     tokens = await _issue_tokens(
         session,
@@ -841,6 +885,37 @@ async def verify_mfa(
     if via_recovery:
         await report_recovery_use(session, user, ip=payload.get("ip"), user_agent=payload.get("user_agent"))
     return tokens
+
+
+async def _report_password_guessing(user_id: str) -> None:
+    """Meldet, dass die Bremse je Benutzername für ein Konto begonnen hat; läuft erst nach der Antwort."""
+    try:
+        from . import notifications as notifications_service
+
+        async with session_scope() as session:
+            user = await session.get(User, user_id)
+            if user is None:
+                return
+            advice = (
+                "Mit dem Passwort allein kommt wegen Zwei-Faktor niemand hinein; ist es kurz, ändere es trotzdem."
+                if two_factor_enabled(user)
+                else "Wer viele Adressen hat, kann trotzdem weiter raten. Wenn du das nicht warst, nimm ein langes "
+                "Passwort und schalte Zwei-Faktor ein."
+            )
+            await notifications_service.send(
+                session,
+                title="Passwort wird durchprobiert",
+                body=(
+                    f"Für „{user.username}“ gab es in 24 Stunden {login_limit.NAME_FREE_FAILURES} falsche Anmeldungen "
+                    "aus fremden Netzen. Jeder weitere Versuch aus einem dieser Netze wartet jetzt länger, bis zu "
+                    f"{login_limit.NAME_MAX_WAIT_SECONDS // 60} Minuten. Aus deinem Heimnetz, über ein VPN und aus "
+                    f"anderen Netzen kommst du weiter sofort hinein. {advice}"
+                ),
+                severity="warning",
+                payload={"path": "/settings/account", "tags": ["warning", "key"]},
+            )
+    except Exception:  # noqa: BLE001 - nach der Antwort wartet niemand mehr auf den Fehler
+        _log.warning("Meldung zum Durchprobieren des Passworts nicht zugestellt", exc_info=True)
 
 
 async def _report_mfa_guessing(session: AsyncSession, user: User) -> None:
@@ -1072,49 +1147,125 @@ async def _grace_successor(
     return successor
 
 
-async def _live_session_head(session: AsyncSession, user_id: str, token_id: str) -> str:
+@dataclass(frozen=True)
+class ChainEnd:
+    """Letzte Zeile einer Sitzungskette, so weit `session_chain_end` ihr gefolgt ist."""
+
+    id: str
+    revoked_at: datetime | None
+    expires_at: datetime
+    too_long: bool
+    """Die Kette hat mehr Erneuerungen als erlaubt; `id` ist dann nicht ihr Ende."""
+
+
+def _chain_end_query() -> Select:
+    """Die rekursive Abfrage für `session_chain_end`; Kennungen und Grenze kommen als Parameter."""
+    user_id = bindparam("user_id")
+    chain = (
+        select(
+            RefreshToken.id,
+            RefreshToken.revoked_at,
+            RefreshToken.replaced_by_id,
+            RefreshToken.expires_at,
+            literal_column("0", Integer).label("hops"),
+        )
+        .where(RefreshToken.id == bindparam("token_id"), RefreshToken.user_id == user_id)
+        .cte("chain", recursive=True)
+    )
+    step = aliased(RefreshToken)
+    # Ein Schritt über die Grenze hinaus zeigt, ob die Kette dort weitergeht.
+    chain = chain.union_all(
+        select(step.id, step.revoked_at, step.replaced_by_id, step.expires_at, chain.c.hops + 1)
+        .select_from(chain)
+        .join(step, step.id == chain.c.replaced_by_id)
+        .where(
+            chain.c.revoked_at.is_not(None),
+            step.user_id == user_id,
+            chain.c.hops <= bindparam("max_hops", type_=Integer),
+        )
+    )
+    end = select(chain.c.id, chain.c.revoked_at, chain.c.expires_at, chain.c.hops)
+    return end.order_by(chain.c.hops.desc()).limit(1)
+
+
+# Einmal gebaut: Die Prüfung offener Anmeldungen fragt bei jeder angemeldeten Anfrage danach.
+_CHAIN_END = _chain_end_query()
+
+
+async def session_chain_end(
+    session: AsyncSession, user_id: str, token_id: str, *, max_hops: int
+) -> ChainEnd | None:
+    """Folgt den Erneuerungen ab `token_id` innerhalb des Kontos in einer einzigen Abfrage; `None`, wenn `token_id`
+    fehlt oder einem anderen Konto gehört."""
     # Bekannte Grenze: Die Kette sagt nicht, wer erneuert hat. Hat jemand mit einem abgegriffenen Cookie die Kette
     # weitergedreht, bleibt dessen Sitzung erhalten, solange der Wechsel noch mit dem alten Zugangs-Token kommt
     # (höchstens `access_token_ttl_seconds`).
-    head = token_id
-    for _ in range(20):  # Schutz vor Schleifen in kaputten Daten
-        row = await session.get(RefreshToken, head)
-        if (
-            row is None
-            or row.user_id != user_id
-            or row.revoked_at is None
-            or row.replaced_by_id is None
-        ):
-            break
-        head = row.replaced_by_id
-    return head
+    # Eine Abfrage statt einer je Schritt: Abmelden braucht nur den Refresh-Token und hat keine Bremse, eine lange
+    # Kette darf es nicht teuer machen.
+    params = {"user_id": user_id, "token_id": token_id, "max_hops": max_hops}
+    end = (await session.execute(_CHAIN_END, params)).one_or_none()
+    if end is None:
+        return None
+    return ChainEnd(id=end.id, revoked_at=end.revoked_at, expires_at=end.expires_at, too_long=end.hops > max_hops)
+
+
+async def purge_old_logins(
+    session: AsyncSession, settings: Settings, *, chunk_size: int = PURGE_CHUNK_SIZE,
+    pause: float = PURGE_CHUNK_PAUSE_SECONDS,
+) -> int:
+    """Löscht Anmeldungen, die seit mehr als einer Refresh-Laufzeit abgelaufen oder beendet sind, und committet nach
+    jedem Häppchen."""
+    # Bis dahin braucht sie noch die Kette der Erneuerungen (Gnadenfrist, `sid` offener Verbindungen und älterer Tabs).
+    cutoff = utcnow() - timedelta(days=settings.refresh_token_ttl_days)
+    old = (
+        select(RefreshToken.id)
+        .where(or_(RefreshToken.expires_at < cutoff, RefreshToken.revoked_at < cutoff))
+        .limit(chunk_size)
+    )
+    deleted = 0
+    while True:
+        result = await session.execute(delete(RefreshToken).where(RefreshToken.id.in_(old)))
+        count = result.rowcount or 0
+        deleted += count
+        await session.commit()
+        if count < chunk_size:
+            return deleted
+        await asyncio.sleep(pause)
 
 
 async def revoke_refresh_tokens(
     session: AsyncSession, user_id: str, *, except_token_id: str | None = None
 ) -> int:
-    """Meldet alle Sitzungen eines Nutzers ab, `except_token_id` bleibt angemeldet; zurück kommt die Zahl der
-    abgemeldeten."""
+    """Meldet alle Sitzungen eines Nutzers ab, `except_token_id` bleibt angemeldet (außer hinter einer zu langen
+    Kette); zurück kommt die Zahl der abgemeldeten."""
     stmt = (
         update(RefreshToken)
         .where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
         .values(revoked_at=utcnow())
     )
-    if except_token_id is not None:
+    keep = except_token_id
+    if keep is not None:
         # Hat ein anderer Tab inzwischen erneuert, zeigt die `sid` im Zugangs-Token auf eine schon widerrufene Zeile:
         # Dann gilt die Sitzung am Ende der Kette, sonst würde die tatsächlich aktuelle mit abgemeldet.
-        # Grenze dieser Kulanz: siehe `_live_session_head`.
-        except_token_id = await _live_session_head(session, user_id, except_token_id)
-        stmt = stmt.where(RefreshToken.id != except_token_id)
+        # Grenze dieser Kulanz: siehe `session_chain_end`.
+        end = await session_chain_end(session, user_id, keep, max_hops=SESSION_CHAIN_LIMIT)
+        if end is not None:
+            # Hinter einer zu langen Kette ist das Ende unbekannt; dann endet auch die eigene Anmeldung.
+            keep = None if end.too_long else end.id
+    if keep is not None:
+        stmt = stmt.where(RefreshToken.id != keep)
         # Vorgänger der behaltenen Sitzung (durch Rotation widerrufen) sollen auch keine Gnadenfrist mehr bekommen,
-        # sonst käme ein alter Token 30 s lang trotz Passwortwechsel noch an einen Access-Token.
+        # sonst käme ein alter Token 30 s lang trotz Passwortwechsel noch an einen Access-Token. Die Kette bleibt,
+        # ältere Zugangs-Tokens dieser Sitzung (andere Tabs) gelten damit weiter.
+        grace_over = utcnow() - timedelta(seconds=REFRESH_GRACE_SECONDS + 1)
         await session.execute(
             update(RefreshToken)
             .where(
                 RefreshToken.user_id == user_id,
-                RefreshToken.replaced_by_id == except_token_id,
+                RefreshToken.replaced_by_id == keep,
+                RefreshToken.revoked_at > grace_over,
             )
-            .values(replaced_by_id=None)
+            .values(revoked_at=grace_over)
         )
     result = await session.execute(stmt)
     return result.rowcount or 0
@@ -1127,17 +1278,52 @@ async def logout(session: AsyncSession, *, raw_refresh_token: str) -> None:
         select(RefreshToken).where(RefreshToken.token_hash == token_hash)
     )
     token_row = result.scalar_one_or_none()
-    if token_row is not None and token_row.revoked_at is None:
-        token_row.revoked_at = utcnow()
-        await audit_service.log(
-            session,
-            actor_type="user",
-            actor_id=token_row.user_id,
-            action="logout.succeeded",
-            outcome="success",
-            target_type="user",
-            target_id=token_row.user_id,
+    if token_row is None:
+        return
+    user_id = token_row.user_id
+    if token_row.revoked_at is not None:
+        # Ohne offene Anmeldung des Kontos gibt es nichts zu beenden; ein alter Token läuft die Kette dann nicht ab.
+        still_open = await session.scalar(
+            select(RefreshToken.id).where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None)).limit(1)
         )
+        if still_open is None:
+            return
+    detail: dict | None = None
+    # Schon erneuert, etwa von einem anderen Tab oder ohne dass die Antwort ankam: Abgemeldet wird die Sitzung am Ende
+    # der Kette. Erneuert ein Tab genau dazwischen, ist das Ende beim Schreiben schon widerrufen; dann weiter von dort.
+    start = token_row.id
+    while True:
+        end = await session_chain_end(session, user_id, start, max_hops=SESSION_CHAIN_LIMIT)
+        if end is None:
+            return
+        if end.too_long:
+            # Wo die Kette endet, ist unbekannt; sicher ist nur, alle Anmeldungen des Kontos zu beenden.
+            revoked = await revoke_refresh_tokens(session, user_id)
+            if not revoked:
+                return
+            detail = {"signed_out_sessions": revoked}
+            break
+        if end.revoked_at is not None:
+            return
+        ended = await session.execute(
+            update(RefreshToken)
+            .where(RefreshToken.id == end.id, RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
+            .values(revoked_at=utcnow())
+            .execution_options(synchronize_session=False)
+        )
+        if ended.rowcount:
+            break
+        start = end.id
+    await audit_service.log(
+        session,
+        actor_type="user",
+        actor_id=user_id,
+        action="logout.succeeded",
+        outcome="success",
+        target_type="user",
+        target_id=user_id,
+        detail=detail,
+    )
 
 
 async def start_totp_setup(

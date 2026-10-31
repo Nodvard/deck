@@ -13,13 +13,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from docker_stack_fakes import EXT_DIR, HASHES, FakeExec, docker_on, result, row  # noqa: F401 - Fixtures
+from docker_stack_fakes import EXT_DIR, HASHES, FakeExec, FakeSettings, docker_on, result, row  # noqa: F401 - Fixtures
 
 
-@pytest.fixture(autouse=True)
-def _ext_docker_on_path(monkeypatch):
-    monkeypatch.syspath_prepend(str(EXT_DIR / "src"))
-    yield
+@pytest.fixture(autouse=True, scope="module")
+def _ext_docker_on_path():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(EXT_DIR / "src"))
+        yield
     for name in list(sys.modules):
         if name.startswith("nodvard_deck_ext_docker"):
             del sys.modules[name]
@@ -153,7 +154,7 @@ async def _setup(tmp_path, monkeypatch, *, verdicts=(True,), statuses=None):
     fake = FakeExec()
     docker = Docker(fake)
     hosts = SimpleNamespace(get=lambda host_id: _async(SimpleNamespace(id=host_id, tags=["docker"]) if host_id == "h1" else None))
-    ctx = SimpleNamespace(exec=fake, hosts=hosts)
+    ctx = SimpleNamespace(exec=fake, hosts=hosts, settings=FakeSettings())
     store = m.adopt.AdoptedStacks(tmp_path)
     st = m.stacks.DockerStacks(ctx, store)
     await store.add("h1", [s for s in m.stacks.parse_members(fake.list.stdout) if s.project == "shop"][0])

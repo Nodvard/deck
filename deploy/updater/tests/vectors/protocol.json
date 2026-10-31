@@ -2,7 +2,8 @@
  "_doc": "Konstanten des Protokolls zwischen Dashboard und Helfer. Der Helfer prueft sie in tests/test_policy.py, das Dashboard spaeter in seinem Gleichlauf-Test. Muster gelten fuer den ganzen Text (re.fullmatch, ASCII).",
  "proto": 1,
  "request_versions": [
-  1
+  1,
+  2
  ],
  "request_keys": [
   "action",
@@ -11,6 +12,31 @@
   "v",
   "version"
  ],
+ "request_options": [
+  "digest"
+ ],
+ "signed_request_keys": [
+  "action",
+  "created_at",
+  "digest",
+  "grant",
+  "id",
+  "sig",
+  "v",
+  "version"
+ ],
+ "grant_keys": [
+  "digest",
+  "expires_at",
+  "fmt",
+  "issued_at",
+  "key_id",
+  "repo",
+  "version"
+ ],
+ "grant_format": 1,
+ "key_id_pattern": "[0-9a-f]{16}",
+ "signature_pattern": "[0-9a-f]{128}",
  "actions": [
   "update",
   "rollback"
@@ -45,7 +71,7 @@
  "codes": {
   "setup": ["channel_unsafe", "channel_cluttered", "state_unsafe", "second_instance", "self_unknown", "not_compose", "engine_unreachable", "engine_unsupported", "api_too_old"],
   "target": ["no_target", "multiple_targets", "target_not_running", "target_unhealthy", "no_healthcheck", "swarm", "foreign_image", "pinned_version", "not_from_registry", "no_version_label", "version_too_old", "image_config_missing", "auto_remove", "custom_entrypoint", "unsafe_target", "channel_missing_in_target", "dependent_containers", "macvlan", "network_unclear", "unknown_field", "name_taken"],
-  "request": ["bad_request", "expired", "replay", "busy", "rate_limited", "blocked_version", "not_newer", "tag_not_on_version", "platform_mismatch", "pull_failed", "no_previous", "previous_mismatch", "not_implemented"],
+  "request": ["bad_request", "expired", "replay", "busy", "rate_limited", "blocked_version", "not_newer", "tag_not_on_version", "platform_mismatch", "pull_failed", "no_previous", "previous_mismatch", "not_implemented", "digest_changed", "signature_required", "unknown_key", "grant_mismatch", "grant_expired", "bad_signature"],
   "flow": ["create_failed", "clone_mismatch", "stop_failed", "start_failed", "exited", "restart_loop", "rescue_page", "timeout", "external_change", "rollback_failed"]
  },
  "code_pattern": "[a-z_]{1,40}",
@@ -67,7 +93,8 @@
   "action_interval_s": 600,
   "block_after_rollback_s": 86400,
   "seen_ttl_s": 3600,
-  "slot_ttl_s": 604800
+  "slot_ttl_s": 604800,
+  "grant_max_s": 31622400
  },
  "repository": "ghcr.io/nodvard/deck",
  "version_label": "org.opencontainers.image.version",

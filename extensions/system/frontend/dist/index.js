@@ -3,17 +3,15 @@ import { useCallback as useCallback3, useEffect as useEffect7, useMemo as useMem
 
 // ../../../frontend/src/lib/deckGlobal.ts
 var EVENT_PREFIX = "nodvard-deck:";
-var LEGACY_EVENT_PREFIX = "lattice:";
 function findDeck() {
   if (typeof window === "undefined") return void 0;
-  return window.__nodvardDeck ?? window.__lattice;
+  return window.__nodvardDeck;
 }
 function deck() {
   return findDeck();
 }
 function deckEventName(event) {
-  const modern = typeof window !== "undefined" && Boolean(window.__nodvardDeck);
-  return (modern ? EVENT_PREFIX : LEGACY_EVENT_PREFIX) + event;
+  return EVENT_PREFIX + event;
 }
 
 // ../../_shared/frontend/src/api.ts
@@ -898,7 +896,7 @@ function LiveView({ hostId, fetchLive }) {
     /* @__PURE__ */ jsx7("button", { type: "button", onClick: () => setPaused((p) => !p), className: "rounded bg-white/10 px-2 py-1 hover:bg-white/20", children: paused ? "Fortsetzen" : "Pausieren" }),
     /* @__PURE__ */ jsxs6("span", { className: "opacity-50", children: [
       paused ? "angehalten" : "aktualisiert alle 3 s",
-      updatedAt ? ` \xB7 Stand ${updatedAt.toLocaleTimeString()}` : ""
+      updatedAt ? ` \xB7 Stand ${updatedAt.toLocaleTimeString("de-DE")}` : ""
     ] }),
     error && /* @__PURE__ */ jsxs6("span", { className: "text-red-400", children: [
       "Fehler: ",

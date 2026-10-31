@@ -14,7 +14,7 @@ from nodvard_sdk.errors import HostUnreachable, SecretUnavailable
 from nodvard_sdk.types import Actor, Risk
 
 from .editor import StackEditor
-from .operate import not_full_host
+from .operate import still_full
 from .stack_actions import _connection_error, failure_line
 from .stacks import no_such_file
 
@@ -246,7 +246,7 @@ class DockerRegistryExecutor:
         host = await self._ctx.hosts.get(req.host_ref) if req.host_ref else None
         if host is None:
             return ActionResult(success=False, error="Server nicht gefunden.")
-        if why := not_full_host(host, await self._ctx.settings.get(), "Dieser Server ist kein Docker-Server (Markierung fehlt)."):
+        if why := await still_full(self._ctx, host):
             return ActionResult(success=False, error=why)
         if req.action_type == LOGOUT_ACTION:
             return await self._logout(host, registry)

@@ -12,9 +12,10 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings, get_settings
-from ..core import security
-from ..db.session import get_session
+from ..core import known_actors, security
+from ..db.session import get_session, release_connection
 from ..models import User
+from ..services import session_guard
 from ..services.auth import user_has_permission
 
 # `scope="function"`: Der Commit in `get_session()` läuft, bevor die Antwort rausgeht. Mit dem Default ("request")
@@ -31,9 +32,8 @@ async def get_current_user(
     settings: SettingsDep,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)],
 ) -> User:
-    """Prüft `Authorization: Bearer <access_token>`, für Web und Android gleich (docs/04-API.md §1).
-
-    Ein Refresh-Token wird hier nie akzeptiert: `decode_jwt(..., expected_type="access")` weist ihn zurück."""
+    """Prüft `Authorization: Bearer <access_token>` und ob die Anmeldung dahinter (`sid`) noch gilt, für Web und
+    Android gleich (docs/04-API.md §1). Ein Refresh-Token wird hier nie akzeptiert."""
     unauthorized = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Nicht authentifiziert.",
@@ -54,6 +54,16 @@ async def get_current_user(
     user = await session.get(User, payload["sub"])
     if user is None or not user.is_active:
         raise unauthorized
+    sid = payload.get("sid")
+    if sid is not None and not isinstance(sid, str):
+        raise unauthorized
+    # Abmelden, „überall abmelden“ und der Passwortwechsel wirken so sofort, nicht erst, wenn das Token abläuft.
+    if not await session_guard.login_is_live(session, user.id, sid):
+        raise unauthorized
+    known_actors.add_user(user.id)
+    # Die Route wartet danach oft auf einen Fremddienst; hielte die Anmeldung die Verbindung bis dahin, leerten viele
+    # Widgets zugleich den Pool (`QueuePool limit … reached`).
+    await release_connection(session)
     return user
 
 
@@ -84,7 +94,7 @@ async def get_current_session_id(
 CurrentSessionId = Annotated[str | None, Depends(get_current_session_id)]
 
 
-def require_permission(permission: str):  # noqa: ANN201 - gibt eine FastAPI-Dependency zurück
+def require_permission(permission: str):
     """Wiederverwendbare RBAC-Dependency, z. B. `dependencies=[Depends(require_permission("hosts.write"))]`.
 
     `is_owner` umgeht die Prüfung vollständig (docs/03-DATA-MODEL.md §1); das steckt in `user_has_permission()`.

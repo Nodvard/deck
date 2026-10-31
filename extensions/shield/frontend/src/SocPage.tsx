@@ -106,6 +106,8 @@ interface HostRow {
   clamav_version?: string | null;
   signature_version?: string | null;
   signature_date?: string | null;
+  /** Dasselbe Datum als Zeitstempel (Ortszeit des Servers, als UTC gelesen); `null`, wenn es unlesbar war. */
+  signature_ts?: number | null;
   freshclam_active?: boolean | null;
   /** Ganze Tage seit dem Bau der Signaturen; fehlt oder `null` = unbekannt. */
   signature_age_days?: number | null;
@@ -304,6 +306,17 @@ const FINDING_STATUS: Record<string, { label: string; tone: Tone }> = {
 function ageText(days: number): string {
   if (days >= 14) return `${Math.floor(days / 7)} Wochen`;
   return days === 1 ? "1 Tag" : `${days} Tage`;
+}
+
+/** Bauzeit der Signaturen auf Deutsch; ohne lesbaren Zeitstempel der Text von ClamAV. */
+export function signatureDateText(h: Pick<HostRow, "signature_date" | "signature_ts">): string {
+  if (h.signature_ts == null) return h.signature_date ?? "";
+  // Der Zeitstempel ist die Uhrzeit des Servers, als UTC gelesen: in UTC formatiert steht sie wieder so da. Nennt ClamAV
+  // keine Uhrzeit, steht auch keine da.
+  const withTime = /\d:\d{2}/.test(h.signature_date ?? "");
+  return new Date(h.signature_ts * 1000).toLocaleString("de-DE", {
+    day: "2-digit", month: "2-digit", year: "numeric", timeZone: "UTC", ...(withTime ? { hour: "2-digit", minute: "2-digit" } : {}),
+  });
 }
 
 /** Härtungs-Spalte: der Index des neuesten erfolgreichen Audits; ist das letzte Audit gescheitert, steht das mit
@@ -909,7 +922,7 @@ function OverviewTab({
                         <>
                           <Badge tone="good">ClamAV {h.clamav_version}</Badge>
                           <p className="mt-0.5 text-xs text-white/45">
-                            Signaturen {h.signature_version ?? "?"}{h.signature_date ? ` · ${h.signature_date}` : ""}
+                            Signaturen {h.signature_version ?? "?"}{signatureDateText(h) ? ` · ${signatureDateText(h)}` : ""}
                             {h.signature_stale === true && <span className="text-amber-300"> · {ageText(h.signature_age_days ?? 0)} alt</span>}
                             {h.signature_stale == null && <span className="text-amber-300"> · Alter unbekannt</span>}
                             {h.freshclam_active === false && <span className="text-amber-300"> · Auto-Update aus</span>}
@@ -1142,7 +1155,7 @@ function QuarantineTab({ canManage, onChanged }: { canManage: boolean; onChanged
       quarantine: `„${f.path}“ in Quarantäne verschieben?`,
       ignore: `Fund „${f.path}“ ignorieren? Die Datei bleibt, wo sie ist. ${KEPT_FOR_GOOD}`,
       reopen: `„${f.path}“ wieder als Fund beachten? Er steht dann wieder offen. Der nächste Scan meldet die Datei wieder und verschiebt sie, wenn die automatische Quarantäne an ist.`,
-      restore: `„${f.path}“ wiederherstellen? Nur tun, wenn sicher ist, dass es ein Fehlalarm war. ${KEPT_FOR_GOOD}`,
+      restore: `Die Datei zurücklegen? Laut Fund lag sie in „${f.path}“; zurückgelegt wird an den Ort, den Shield beim Verschieben auf dem Server hinterlegt hat. Nur tun, wenn sicher ist, dass es ein Fehlalarm war. ${KEPT_FOR_GOOD}`,
       delete: `„${f.path}“ endgültig löschen?`,
     };
     const ok = await deck().confirmDialog(questions[action], { danger: action !== "quarantine" && action !== "reopen", confirmLabel: FINDING_CONFIRM_LABEL[action] });
@@ -1196,7 +1209,7 @@ function QuarantineTab({ canManage, onChanged }: { canManage: boolean; onChanged
                   </p>
                   <p className="mt-0.5 truncate font-mono text-xs text-white/70">{f.host_name}: {f.path}</p>
                   <p className="text-xs text-white/40">gefunden {when(f.detected_at)}{f.status_changed_at ? ` · geändert ${when(f.status_changed_at)}` : ""}</p>
-                  {f.note && <p className="text-xs text-amber-300">{f.note}</p>}
+                  {f.note && <p className="break-words text-xs text-amber-300">{f.note}</p>}
                 </div>
                 {canManage && (
                   <div className="flex gap-1">

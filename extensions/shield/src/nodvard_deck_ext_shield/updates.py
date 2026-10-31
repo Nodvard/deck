@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from .antivirus import HELPER_READ_VERSION, via_helper
 from .detached import KEPT_BACK_MARK
 
-_SECURITY_RE = re.compile(r"security", re.I)
+_SECURITY_RE = re.compile(r"security", re.IGNORECASE)
 _PKG_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+._:~-]*$")
 
 
@@ -21,6 +21,16 @@ REFRESH_COMMAND = (
     "elif command -v apk >/dev/null 2>&1; then apk update -q 2>&1 | tail -n 5; fi"
 )
 """Paketlisten neu laden (braucht root); das Hilfsskript macht dasselbe mit `refresh-packages`."""
+
+
+# Was „Alle einspielen“ einspielen würde, einmal wie eingestellt und einmal mit allen schrittweise verteilten Updates:
+# Was nur im zweiten Lauf dabei ist, hält apt wegen Phasing zurück. Fest "C", nur simuliert, braucht kein root.
+PHASING_COMMAND = (
+    "echo @@phasing; if command -v apt-get >/dev/null 2>&1; then "
+    "LC_ALL=C apt-get -s upgrade --with-new-pkgs 2>/dev/null | awk '$1 == \"Inst\" { print \"inst \" $2 }'; "
+    "LC_ALL=C apt-get -s -o APT::Get::Always-Include-Phased-Updates=true upgrade --with-new-pkgs 2>/dev/null "
+    "| awk '$1 == \"Inst\" { print \"all \" $2 }'; fi; "
+)
 
 
 def status_command(*, refresh: bool) -> str:
@@ -38,7 +48,8 @@ def status_command(*, refresh: bool) -> str:
         + "echo @@list; if command -v apt-get >/dev/null 2>&1; then apt list --upgradable 2>/dev/null | grep -v '^Listing'; "
         "elif command -v dnf >/dev/null 2>&1; then dnf -q check-update 2>/dev/null; "
         "elif command -v apk >/dev/null 2>&1; then apk version -l '<' 2>/dev/null | tail -n +2; fi; "
-        "echo @@security; if command -v dnf >/dev/null 2>&1; then dnf -q updateinfo list --security 2>/dev/null; fi; "
+        + PHASING_COMMAND
+        + "echo @@security; if command -v dnf >/dev/null 2>&1; then dnf -q updateinfo list --security 2>/dev/null; fi; "
         "echo @@reboot; if [ -f /var/run/reboot-required ]; then echo yes; cat /var/run/reboot-required.pkgs 2>/dev/null; "
         "elif command -v needs-restarting >/dev/null 2>&1 && ! needs-restarting -r >/dev/null 2>&1; then echo yes; else echo no; fi; "
         "echo @@kernel; uname -r; "
@@ -57,10 +68,12 @@ class Package:
     current_version: str | None = None
     repo: str | None = None
     security: bool = False
+    phased: bool = False
+    """apt hält das Update auf diesem Rechner noch zurück, weil Ubuntu es schrittweise verteilt (Phasing)."""
 
     def as_dict(self) -> dict[str, object]:
         return {"name": self.name, "new_version": self.new_version, "current_version": self.current_version,
-                "repo": self.repo, "security": self.security}
+                "repo": self.repo, "security": self.security, "phased": self.phased}
 
 
 @dataclass
@@ -82,10 +95,14 @@ class UpdateStatus:
     def security_count(self) -> int:
         return sum(1 for p in self.packages if p.security)
 
+    @property
+    def phased_count(self) -> int:
+        return sum(1 for p in self.packages if p.phased)
+
     def as_dict(self) -> dict[str, object]:
         return {
             "manager": self.manager, "packages": [p.as_dict() for p in self.packages], "count": len(self.packages),
-            "security_count": self.security_count, "reboot_required": self.reboot_required,
+            "security_count": self.security_count, "phased_count": self.phased_count, "reboot_required": self.reboot_required,
             "reboot_reasons": self.reboot_reasons, "kernel": self.kernel, "latest_kernel": self.latest_kernel,
             "uptime_s": self.uptime_s, "unattended": self.unattended, "refresh_error": self.refresh_error, "error": self.error,
             "unsupported": self.unsupported,
@@ -113,6 +130,18 @@ _DNF_RE = re.compile(r"^(?P<name>[^\s]+)\.(?P<arch>[A-Za-z0-9_]+)\s+(?P<new>\S+)
 _APK_RE = re.compile(r"^(?P<full>\S+)\s+<\s+(?P<new>\S+)")
 
 
+def _phased_names(lines: list[str]) -> set[str]:
+    """Pakete, die nur der Lauf mit allen schrittweise verteilten Updates einspielen würde; ohne Architektur wie in
+    `apt list`."""
+    found: dict[str, set[str]] = {"inst": set(), "all": set()}
+    for line in lines:
+        kind, _, name = line.partition(" ")
+        name = name.split(":", 1)[0]
+        if kind in found and _PKG_NAME_RE.match(name):
+            found[kind].add(name)
+    return found["all"] - found["inst"]
+
+
 def _apk_name(full: str) -> tuple[str, str | None]:
     m = re.match(r"^(?P<name>.+?)-(?P<ver>\d[^-]*-r\d+)$", full)
     return (m.group("name"), m.group("ver")) if m else (full, None)
@@ -132,13 +161,14 @@ def parse_status(output: str) -> UpdateStatus:
         if len(parts) >= 3:
             security_names.add(re.sub(r"-\d.*$", "", parts[-1]))
 
+    phased = _phased_names(s.get("phasing", []))
     for line in s.get("list", []):
         if manager == "apt":
             m = _APT_RE.match(line)
             if m:
                 repo = m.group("repo")
                 packages.append(Package(name=m.group("name"), new_version=m.group("new"), current_version=m.group("old"),
-                                        repo=repo, security=bool(_SECURITY_RE.search(repo))))
+                                        repo=repo, security=bool(_SECURITY_RE.search(repo)), phased=m.group("name") in phased))
         elif manager == "dnf":
             if line.startswith(("Obsoleting", "Last metadata", "Security:")):
                 continue

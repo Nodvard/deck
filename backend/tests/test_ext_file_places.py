@@ -13,19 +13,32 @@ from enum import Enum
 from pathlib import Path
 
 import pytest
+from nodvard_sdk import FilePlace
+from nodvard_sdk.capabilities import FilePlaceProvider
 
 REPO_EXTENSIONS_DIR = Path(__file__).resolve().parents[2] / "extensions"
-for _ext in ("docker", "proxmox", "system"):
-    sys.path.insert(0, str(REPO_EXTENSIONS_DIR / _ext / "src"))
+_EXTENSIONS = ("docker", "proxmox", "system")
 
-import nodvard_deck_ext_proxmox.places as proxmox_places  # noqa: E402
-import nodvard_deck_ext_docker.capabilities as matrix_caps  # noqa: E402
-from nodvard_deck_ext_proxmox.places import ProxmoxFilePlaces, backup_folder, backup_places  # noqa: E402
-from nodvard_deck_ext_docker.capabilities import DockerServiceCatalog, parse_compose_dirs  # noqa: E402
-from nodvard_deck_ext_docker.places import DockerFilePlaces  # noqa: E402
-from nodvard_deck_ext_system import SystemFilePlaces  # noqa: E402
-from nodvard_sdk import FilePlace  # noqa: E402
-from nodvard_sdk.capabilities import FilePlaceProvider  # noqa: E402
+
+@pytest.fixture
+def ext(monkeypatch):
+    """Die drei Erweiterungen sind keine installierten Pakete: Pfad nur für diese Tests, danach sind die Module vergessen."""
+    for name in _EXTENSIONS:
+        monkeypatch.syspath_prepend(str(REPO_EXTENSIONS_DIR / name / "src"))
+    from nodvard_deck_ext_docker import capabilities as docker_caps
+    from nodvard_deck_ext_docker.places import DockerFilePlaces
+    from nodvard_deck_ext_proxmox import places as proxmox_places
+    from nodvard_deck_ext_system import SystemFilePlaces
+
+    yield types.SimpleNamespace(
+        docker_caps=docker_caps,
+        proxmox_places=proxmox_places,
+        DockerFilePlaces=DockerFilePlaces,
+        SystemFilePlaces=SystemFilePlaces,
+    )
+    for module in list(sys.modules):
+        if module.startswith(tuple(f"nodvard_deck_ext_{name}" for name in _EXTENSIONS)):
+            del sys.modules[module]
 
 
 class _Status(Enum):
@@ -93,12 +106,12 @@ def _ps(name: str, project: str = "", folder: str | None = "", ports: str = "") 
 # --- docker: Projektordner der Compose-Projekte --------------------------------------------------------
 
 
-def test_the_docker_ps_format_asks_for_the_project_folder_in_the_same_call():
-    assert 'com.docker.compose.project.working_dir' in matrix_caps.commands.PS_FORMAT
-    assert matrix_caps.commands.PS_FORMAT.count("|") == 7  # acht Felder, der Ordner steht ganz hinten
+def test_the_docker_ps_format_asks_for_the_project_folder_in_the_same_call(ext):
+    assert 'com.docker.compose.project.working_dir' in ext.docker_caps.commands.PS_FORMAT
+    assert ext.docker_caps.commands.PS_FORMAT.count("|") == 7  # acht Felder, der Ordner steht ganz hinten
 
 
-def test_compose_dirs_are_read_from_the_eighth_field():
+def test_compose_dirs_are_read_from_the_eighth_field(ext):
     text = "\n".join([
         _ps("web", "shop", "/srv/shop", ports="0.0.0.0:8080->80/tcp, :::8080->80/tcp"),
         _ps("db", "shop", "/srv/shop"),
@@ -106,10 +119,10 @@ def test_compose_dirs_are_read_from_the_eighth_field():
         _ps("solo", "", ""),
         _ps("alt", "shop-alt", None),  # altes Format: kein Ordner bekannt
     ])
-    assert parse_compose_dirs(text) == {"shop": "/srv/shop", "uptime-kuma": "/opt/stacks/kuma"}
+    assert ext.docker_caps.parse_compose_dirs(text) == {"shop": "/srv/shop", "uptime-kuma": "/opt/stacks/kuma"}
 
 
-def test_compose_dirs_skip_folders_that_do_not_exist_on_the_host():
+def test_compose_dirs_skip_folders_that_do_not_exist_on_the_host(ext):
     text = "\n".join([
         _ps("a", "von-portainer", "/data/compose/12"),
         _ps("b", "relativ", "stacks/b"),
@@ -118,22 +131,22 @@ def test_compose_dirs_skip_folders_that_do_not_exist_on_the_host():
         _ps("e", "gut", "/srv/gut"),
         _ps("f", "gut", "/srv/zweiter"),  # je Projekt zaehlt der erste Ordner
     ])
-    assert parse_compose_dirs(text) == {"gut": "/srv/gut"}
+    assert ext.docker_caps.parse_compose_dirs(text) == {"gut": "/srv/gut"}
 
 
-def test_a_pipe_in_the_folder_name_stays_in_the_folder():
-    assert parse_compose_dirs(_ps("a", "p", "/srv/a|b")) == {"p": "/srv/a|b"}
+def test_a_pipe_in_the_folder_name_stays_in_the_folder(ext):
+    assert ext.docker_caps.parse_compose_dirs(_ps("a", "p", "/srv/a|b")) == {"p": "/srv/a|b"}
 
 
 @pytest.mark.asyncio
-async def test_the_service_list_still_reads_all_formats_and_keeps_urls_and_projects():
+async def test_the_service_list_still_reads_all_formats_and_keeps_urls_and_projects(ext):
     host = _host()
     ctx = _ctx(host, outputs={"h1": _Result("\n".join([
         _ps("web", "shop", "/srv/shop", ports="0.0.0.0:8080->80/tcp"),
         _ps("alt", "shop-alt", None, ports="0.0.0.0:9000->9000/tcp"),
         "0123456789ab|sehr-alt|running|Up|img:latest|0.0.0.0:8070->8070/tcp",  # das erste Format mit sechs Feldern
     ]))})
-    rows = {s["name"]: s for s in await DockerServiceCatalog(ctx).list_services()}
+    rows = {s["name"]: s for s in await ext.docker_caps.DockerServiceCatalog(ctx).list_services()}
     assert (rows["web"]["compose_project"], rows["web"]["url"]) == ("shop", "http://192.168.2.30:8080")
     assert (rows["alt"]["compose_project"], rows["alt"]["url"]) == ("shop-alt", "http://192.168.2.30:9000")
     assert (rows["sehr-alt"]["compose_project"], rows["sehr-alt"]["url"]) == (None, "http://192.168.2.30:8070")
@@ -143,14 +156,14 @@ async def test_the_service_list_still_reads_all_formats_and_keeps_urls_and_proje
 
 
 @pytest.mark.asyncio
-async def test_the_places_come_from_the_state_the_service_list_already_read():
+async def test_the_places_come_from_the_state_the_service_list_already_read(ext):
     host = _host()
     ctx = _ctx(host, outputs={"h1": _Result(_ps("web", "shop", "/srv/shop") + "\n" + _ps("kuma", "uptime-kuma", "/opt/kuma"))})
-    catalog = DockerServiceCatalog(ctx)
+    catalog = ext.docker_caps.DockerServiceCatalog(ctx)
     await catalog.list_services()
     assert len(ctx.exec.commands) == 1
 
-    places = await DockerFilePlaces(ctx, catalog).places_for_host("h1")
+    places = await ext.DockerFilePlaces(ctx, catalog).places_for_host("h1")
 
     assert len(ctx.exec.commands) == 1  # kein zweiter Befehl auf dem Server
     assert [(p.label, p.path, p.icon) for p in places] == [
@@ -161,10 +174,10 @@ async def test_the_places_come_from_the_state_the_service_list_already_read():
 
 
 @pytest.mark.asyncio
-async def test_without_a_remembered_state_the_places_read_the_same_docker_ps_once(monkeypatch):
+async def test_without_a_remembered_state_the_places_read_the_same_docker_ps_once(monkeypatch, ext):
     host = _host()
     ctx = _ctx(host, outputs={"h1": _Result(_ps("web", "shop", "/srv/shop"))})
-    provider = DockerFilePlaces(ctx, DockerServiceCatalog(ctx))
+    provider = ext.DockerFilePlaces(ctx, ext.docker_caps.DockerServiceCatalog(ctx))
 
     first = await provider.places_for_host("h1")
     second = await provider.places_for_host("h1")
@@ -172,20 +185,20 @@ async def test_without_a_remembered_state_the_places_read_the_same_docker_ps_onc
     assert [p.path for p in first] == [p.path for p in second] == ["/srv/shop"]
     assert len(ctx.exec.commands) == 1  # der zweite Aufruf nimmt den gemerkten Stand
     command = ctx.exec.commands[0][1]
-    assert command == matrix_caps.commands.ps_all()  # derselbe Befehl wie in der Service-Liste
+    assert command == ext.docker_caps.commands.ps_all()  # derselbe Befehl wie in der Service-Liste
 
-    monkeypatch.setattr(matrix_caps, "COMPOSE_DIRS_TTL_S", 0.0)
+    monkeypatch.setattr(ext.docker_caps, "COMPOSE_DIRS_TTL_S", 0.0)
     await provider.places_for_host("h1")
     assert len(ctx.exec.commands) == 2  # ein zu alter Stand wird neu gelesen
 
 
 @pytest.mark.asyncio
-async def test_an_old_state_survives_a_host_that_stops_answering(monkeypatch):
+async def test_an_old_state_survives_a_host_that_stops_answering(monkeypatch, ext):
     host = _host()
     ctx = _ctx(host, outputs={"h1": _Result(_ps("web", "shop", "/srv/shop"))})
-    catalog = DockerServiceCatalog(ctx)
+    catalog = ext.docker_caps.DockerServiceCatalog(ctx)
     await catalog.list_services()
-    monkeypatch.setattr(matrix_caps, "COMPOSE_DIRS_TTL_S", 0.0)  # der Stand gilt als zu alt, also wird neu gelesen
+    monkeypatch.setattr(ext.docker_caps, "COMPOSE_DIRS_TTL_S", 0.0)  # der Stand gilt als zu alt, also wird neu gelesen
 
     ctx.exec.outputs["h1"] = TimeoutError("keine Antwort")
     assert await catalog.compose_dirs(host) == {"shop": "/srv/shop"}
@@ -195,28 +208,28 @@ async def test_an_old_state_survives_a_host_that_stops_answering(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_host_that_never_answered_gives_an_error_the_core_turns_into_a_log_line():
+async def test_a_host_that_never_answered_gives_an_error_the_core_turns_into_a_log_line(ext):
     host = _host()
     ctx = _ctx(host, outputs={"h1": TimeoutError("keine Antwort")})
     with pytest.raises(TimeoutError):
-        await DockerFilePlaces(ctx, DockerServiceCatalog(ctx)).places_for_host("h1")
+        await ext.DockerFilePlaces(ctx, ext.docker_caps.DockerServiceCatalog(ctx)).places_for_host("h1")
 
 
 @pytest.mark.asyncio
-async def test_a_switched_off_host_is_not_asked_at_all():
+async def test_a_switched_off_host_is_not_asked_at_all(ext):
     host = _host(status=_Status.DOWN)
     ctx = _ctx(host, outputs={"h1": _Result(_ps("web", "shop", "/srv/shop"))})
-    assert await DockerFilePlaces(ctx, DockerServiceCatalog(ctx)).places_for_host("h1") == []
+    assert await ext.DockerFilePlaces(ctx, ext.docker_caps.DockerServiceCatalog(ctx)).places_for_host("h1") == []
     assert ctx.exec.commands == []
 
 
 @pytest.mark.asyncio
-async def test_only_docker_hosts_get_docker_places():
+async def test_only_docker_hosts_get_docker_places(ext):
     other = _host("h2", tags=("proxmox",))
     custom = _host("h3", tags=("container",))
     ctx = _ctx(other, custom, outputs={"h2": _Result(_ps("web", "shop", "/srv/shop")), "h3": _Result(_ps("web", "shop", "/srv/shop"))},
                settings={"docker_host_tag": "container"})
-    provider = DockerFilePlaces(ctx, DockerServiceCatalog(ctx))
+    provider = ext.DockerFilePlaces(ctx, ext.docker_caps.DockerServiceCatalog(ctx))
 
     assert await provider.places_for_host("unbekannt") == []
     assert await provider.places_for_host("h2") == []  # nicht mit dem eingestellten Tag markiert
@@ -225,11 +238,11 @@ async def test_only_docker_hosts_get_docker_places():
 
 
 @pytest.mark.asyncio
-async def test_the_number_of_docker_places_is_limited():
-    lines = "\n".join(_ps(f"c{i}", f"projekt-{i:02d}", f"/srv/p{i}") for i in range(matrix_caps.MAX_COMPOSE_DIRS + 5))
+async def test_the_number_of_docker_places_is_limited(ext):
+    lines = "\n".join(_ps(f"c{i}", f"projekt-{i:02d}", f"/srv/p{i}") for i in range(ext.docker_caps.MAX_COMPOSE_DIRS + 5))
     ctx = _ctx(_host(), outputs={"h1": _Result(lines)})
-    places = await DockerFilePlaces(ctx, DockerServiceCatalog(ctx)).places_for_host("h1")
-    assert len(places) == matrix_caps.MAX_COMPOSE_DIRS
+    places = await ext.DockerFilePlaces(ctx, ext.docker_caps.DockerServiceCatalog(ctx)).places_for_host("h1")
+    assert len(places) == ext.docker_caps.MAX_COMPOSE_DIRS
 
 
 # --- proxmox: Sicherungsordner --------------------------------------------------------------------------------
@@ -255,11 +268,11 @@ def _pool(storage: str, kind: str, content: str = "backup,iso", **extra) -> dict
         ({"type": "nfs"}, None),
     ],
 )
-def test_the_backup_folder_is_only_named_where_proxmox_fixes_it(pool, folder):
-    assert backup_folder(pool) == folder
+def test_the_backup_folder_is_only_named_where_proxmox_fixes_it(pool, folder, ext):
+    assert ext.proxmox_places.backup_folder(pool) == folder
 
 
-def test_backup_places_need_the_backup_content_and_a_usable_storage():
+def test_backup_places_need_the_backup_content_and_a_usable_storage(ext):
     pools = [
         _pool("local", "dir", "iso,vztmpl,backup"),
         _pool("nas", "nfs", "images,rootdir"),  # nimmt keine Sicherungen auf
@@ -268,7 +281,7 @@ def test_backup_places_need_the_backup_content_and_a_usable_storage():
         _pool("usb", "dir", "backup"),
         _pool("netz", "nfs", "backup", active="1"),
     ]
-    places = backup_places(pools)
+    places = ext.proxmox_places.backup_places(pools)
     assert [(p.label, p.path, p.icon) for p in places] == [
         ("Sicherungen (local)", "/var/lib/vz/dump", "database-backup"),
         ("Sicherungen (netz)", "/mnt/pve/netz/dump", "database-backup"),
@@ -298,17 +311,17 @@ def _proxmox_ctx(*hosts, connector: _Connector, monkeypatch, known_connections=(
             raise RuntimeError(f"Proxmox-Verbindung '{name}' ist nicht (mehr) konfiguriert.")
         return connector
 
-    monkeypatch.setattr(proxmox_places, "build_connector", build_connector)
+    monkeypatch.setattr("nodvard_deck_ext_proxmox.places.build_connector", build_connector)
     return ctx, asked
 
 
 @pytest.mark.asyncio
-async def test_a_proxmox_node_gets_the_folders_of_its_backup_storages(monkeypatch):
+async def test_a_proxmox_node_gets_the_folders_of_its_backup_storages(monkeypatch, ext):
     node = _host("n1", provider_ext_id="proxmox", provider_ref="pve/node/pve1")
     connector = _Connector([_pool("local", "dir"), _pool("usb", "dir", "backup"), _pool("nas", "nfs", "backup")])
     ctx, asked = _proxmox_ctx(node, connector=connector, monkeypatch=monkeypatch)
 
-    places = await ProxmoxFilePlaces(ctx).places_for_host("n1")
+    places = await ext.proxmox_places.ProxmoxFilePlaces(ctx).places_for_host("n1")
 
     assert [p.path for p in places] == ["/var/lib/vz/dump", "/mnt/pve/nas/dump"]
     assert asked == ["pve"] and connector.nodes == ["pve1"]
@@ -325,19 +338,19 @@ async def test_a_proxmox_node_gets_the_folders_of_its_backup_storages(monkeypatc
         _host("k1", provider_ext_id="proxmox", provider_ref="kaputt"),
     ],
 )
-async def test_guests_and_foreign_servers_get_no_proxmox_places(host, monkeypatch):
+async def test_guests_and_foreign_servers_get_no_proxmox_places(host, monkeypatch, ext):
     connector = _Connector([_pool("local", "dir")])
     ctx, asked = _proxmox_ctx(host, connector=connector, monkeypatch=monkeypatch)
 
-    assert await ProxmoxFilePlaces(ctx).places_for_host(host.id) == []
+    assert await ext.proxmox_places.ProxmoxFilePlaces(ctx).places_for_host(host.id) == []
     assert asked == [] and connector.nodes == []
 
 
 @pytest.mark.asyncio
-async def test_an_unknown_host_and_a_missing_connection(monkeypatch):
+async def test_an_unknown_host_and_a_missing_connection(monkeypatch, ext):
     node = _host("n1", provider_ext_id="proxmox", provider_ref="alt/node/pve1")
     ctx, _ = _proxmox_ctx(node, connector=_Connector([]), monkeypatch=monkeypatch)
-    provider = ProxmoxFilePlaces(ctx)
+    provider = ext.proxmox_places.ProxmoxFilePlaces(ctx)
 
     assert await provider.places_for_host("gibt-es-nicht") == []
     with pytest.raises(RuntimeError, match="nicht .mehr. konfiguriert"):
@@ -352,9 +365,9 @@ async def test_an_unknown_host_and_a_missing_connection(monkeypatch):
     ("os_family", "has_credential", "expected"),
     [("linux", True, ["/var/log"]), ("windows", True, []), ("linux", False, [])],
 )
-async def test_system_names_the_log_folder_of_linux_servers_with_access(os_family, has_credential, expected):
+async def test_system_names_the_log_folder_of_linux_servers_with_access(os_family, has_credential, expected, ext):
     ctx = _ctx(_host("h1", os_family=os_family, has_credential=has_credential))
-    provider = SystemFilePlaces(ctx)
+    provider = ext.SystemFilePlaces(ctx)
 
     assert [p.path for p in await provider.places_for_host("h1")] == expected
     assert await provider.places_for_host("gibt-es-nicht") == []
@@ -362,19 +375,23 @@ async def test_system_names_the_log_folder_of_linux_servers_with_access(os_famil
 
 
 @pytest.mark.asyncio
-async def test_system_place_text():
-    (place,) = await SystemFilePlaces(_ctx(_host("h1", os_family="linux", has_credential=True))).places_for_host("h1")
+async def test_system_place_text(ext):
+    (place,) = await ext.SystemFilePlaces(_ctx(_host("h1", os_family="linux", has_credential=True))).places_for_host("h1")
     assert (place.label, place.icon, place.hint) == ("Protokolle", "file-text", "Systemprotokolle dieses Servers")
 
 
 # --- alle: erfuellen das Protokoll und lassen sich beim Kern anmelden -----------------------------------------
 
 
-def test_every_provider_is_a_file_place_provider_and_nothing_else_by_accident():
+def test_every_provider_is_a_file_place_provider_and_nothing_else_by_accident(ext):
     from nodvard_sdk import ALL_CAPABILITIES
 
     ctx = _ctx()
-    providers = [SystemFilePlaces(ctx), ProxmoxFilePlaces(ctx), DockerFilePlaces(ctx, DockerServiceCatalog(ctx))]
+    providers = [
+        ext.SystemFilePlaces(ctx),
+        ext.proxmox_places.ProxmoxFilePlaces(ctx),
+        ext.DockerFilePlaces(ctx, ext.docker_caps.DockerServiceCatalog(ctx)),
+    ]
     for provider in providers:
         matched = [proto for proto in ALL_CAPABILITIES if isinstance(provider, proto)]
         assert matched == [FilePlaceProvider], (provider, matched)

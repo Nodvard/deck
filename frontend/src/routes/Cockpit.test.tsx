@@ -244,6 +244,86 @@ describe("Cockpit", () => {
     expect(row.textContent).toContain("Heimserver: Server neu einrichten, sonst hat Nodvard Shield dort kein root");
   });
 
+  it("Volle sudo-Regel nicht nötig: Hinweis führt zum Einrichtungsbefehl mit „Volle sudo-Regel entfernen“", async () => {
+    const hint = {
+      host_id: "h-pi", host_name: "Heimserver", modules: [], checked_at: new Date().toISOString(), full_rule_removable: true,
+    };
+    const overview = { ...(respond("/api/v1/overview", "GET") as object), pending_actions: 0, attention: [], helper_hints: [hint] };
+    vi.stubGlobal("fetch", mockFetch({ "/overview": overview }));
+    renderCockpit();
+    const row = await screen.findByTestId("helper-hint");
+    expect(row.textContent).toContain("Heimserver: die volle sudo-Regel ist dort nicht nötig, die Hilfsskripte reichen");
+    expect(within(row).getByRole("link")).toHaveAttribute("href", "/settings/hosts/h-pi?befehl=regel-entfernen");
+  });
+
+  it("Proxy, der nicht eingetragen ist: dezenter Hinweis mit Link zur Einstellung", async () => {
+    const proxies = [{ address: "192.168.2.1", last_seen: new Date().toISOString() }];
+    const overview = { ...(respond("/api/v1/overview", "GET") as object), pending_actions: 0, attention: [], untrusted_proxies: proxies };
+    vi.stubGlobal("fetch", mockFetch({ "/overview": overview }));
+    renderCockpit();
+    const row = await screen.findByTestId("proxy-hint");
+    expect(row.textContent).toBe(
+      "Anmeldungen kommen über einen Proxy (192.168.2.1), der nicht eingetragen ist. Ohne Eintrag sieht Nodvard Deck die echte Adresse nicht.",
+    );
+    expect(within(row).getByRole("link")).toHaveAttribute("href", "/settings/system");
+    expect(screen.queryByText("Nichts offen.")).toBeNull();
+  });
+
+  it("alte Umgebungsvariablen: Hinweis mit altem und neuem Namen, ohne „Nichts offen“", async () => {
+    const legacy = [
+      { old: "LATTICE_DATA_DIR", new: "NODVARD_DECK_DATA_DIR" },
+      { old: "LATTICE_JWT_SECRET", new: "NODVARD_DECK_JWT_SECRET" },
+    ];
+    const overview = { ...(respond("/api/v1/overview", "GET") as object), pending_actions: 0, attention: [], legacy_env: legacy };
+    vi.stubGlobal("fetch", mockFetch({ "/overview": overview }));
+    renderCockpit();
+    const row = await screen.findByTestId("legacy-env-hint");
+    expect(row.textContent).toContain(
+      "2 Einstellungen stehen noch unter ihrem alten Namen. Eine der nächsten Versionen, spätestens 1.0, liest sie nicht mehr.",
+    );
+    expect(row.textContent).toContain("startet Nodvard Deck ohne diese Einstellung, im schlimmsten Fall leer");
+    expect(row.textContent).toContain("LATTICE_DATA_DIR → NODVARD_DECK_DATA_DIR");
+    expect(within(row).getByRole("link", { name: "Anleitung" })).toHaveAttribute(
+      "href", "https://github.com/nodvard/deck/blob/main/deploy/README.md#umgebungsvariablen-alte-namen-umbenennen",
+    );
+    expect(row.textContent).toContain("LATTICE_JWT_SECRET → NODVARD_DECK_JWT_SECRET");
+    expect(screen.queryByText("Nichts offen.")).toBeNull();
+    await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("Alles läuft rund"));
+  });
+
+  it("eine alte Umgebungsvariable: Satz in der Einzahl", async () => {
+    const overview = {
+      ...(respond("/api/v1/overview", "GET") as object), pending_actions: 0, attention: [],
+      legacy_env: [{ old: "LATTICE_ENV", new: "NODVARD_DECK_ENV" }],
+    };
+    vi.stubGlobal("fetch", mockFetch({ "/overview": overview }));
+    renderCockpit();
+    expect((await screen.findByTestId("legacy-env-hint")).textContent).toContain(
+      "Eine Einstellung steht noch unter ihrem alten Namen. Eine der nächsten Versionen, spätestens 1.0, liest ihn nicht mehr.",
+    );
+  });
+
+  it("alter Name neben dem neuen: nur löschen, nicht umbenennen", async () => {
+    const overview = {
+      ...(respond("/api/v1/overview", "GET") as object), pending_actions: 0, attention: [],
+      legacy_env: [{ old: "LATTICE_LOG_JSON", new: "NODVARD_DECK_LOG_JSON", new_set: true }],
+    };
+    vi.stubGlobal("fetch", mockFetch({ "/overview": overview }));
+    renderCockpit();
+    const row = await screen.findByTestId("legacy-env-hint");
+    expect(row.textContent).toContain("LATTICE_LOG_JSON löschen, NODVARD_DECK_LOG_JSON ist schon gesetzt");
+    expect(row.textContent).not.toContain("→");
+  });
+
+  it("Proxy-Hinweis mit mehreren Adressen in einem Satz", async () => {
+    const proxies = ["192.168.2.1", "172.18.0.5"].map((address) => ({ address, last_seen: new Date().toISOString() }));
+    const overview = { ...(respond("/api/v1/overview", "GET") as object), pending_actions: 0, attention: [], untrusted_proxies: proxies };
+    vi.stubGlobal("fetch", mockFetch({ "/overview": overview }));
+    renderCockpit();
+    const row = await screen.findByTestId("proxy-hint");
+    expect(row.textContent).toContain("über Proxys (192.168.2.1 und 172.18.0.5), die nicht eingetragen sind");
+  });
+
   it("alle Docker-Server nicht erreichbar: „unbekannt“ statt 0 von 3", async () => {
     const base = respond("/api/v1/overview", "GET") as { services: object[] };
     const dead = ["a", "b", "c"].map((h) => ({

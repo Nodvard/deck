@@ -64,6 +64,10 @@ export interface HelperView {
   previous: HelperPrevious | null;
   last_result: HelperResult | null;
   pending: HelperPending | null;
+  /** `digest`: Ein Update geht nur mit der Prüfsumme aus der letzten Update-Suche. */
+  request_options?: string[];
+  /** Mit `2` prüft der Helfer die Freigabe samt Signatur. */
+  request_versions?: number[];
 }
 
 export interface UpdateRequested {

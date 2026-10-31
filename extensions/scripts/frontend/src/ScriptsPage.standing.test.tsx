@@ -50,7 +50,7 @@ let hasPermission: Mock<(permission: string) => boolean>;
 beforeEach(() => {
   confirmDialog = vi.fn<(message: string) => Promise<boolean>>().mockResolvedValue(true);
   hasPermission = vi.fn<(permission: string) => boolean>().mockReturnValue(true);
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog, promptDialog: vi.fn(), hasPermission,
   };

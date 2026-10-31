@@ -1,18 +1,15 @@
-"""scripts/deploy_pi.sh: DNS-Werte neu (`NODVARD_DECK_DNS_*`) oder alt (`LATTICE_DNS_*`).
-
-Das Skript laeuft echt per Bash in einem Temp-Repository; `ssh`, `docker` und `curl`
-sind Attrappen im PATH (kein Netzwerk, kein Docker). Geprueft wird, was auf dem Ziel in
-`deploy/.env` landet: immer BEIDE Namen, damit Compose (neu, mit Rueckfall auf alt) und
-ein Rueckweg aufs alte Image dieselben Werte sehen.
-"""
+"""scripts/deploy_pi.sh, echt per Bash mit Attrappen für `ssh`, `docker` und `curl`: DNS-Werte landen unter beiden Namen
+(`NODVARD_DECK_DNS_*` und `LATTICE_DNS_*`) in `deploy/.env`, und der Bau bekommt seine Argumente."""
 
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import stat
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -50,6 +47,7 @@ exit 0
 """
 
 DOCKER_STUB = """#!/usr/bin/env bash
+echo "$*" >> "$STUB_DIR/docker_calls"
 case "$*" in
   *Architecture*) echo arm64 ;;
 esac
@@ -81,13 +79,15 @@ def deploy(tmp_path: Path):
     state = tmp_path / "state"
     state.mkdir()
 
-    def run(variables: dict[str, str], env_deploy: str | None = None) -> tuple[subprocess.CompletedProcess, str | None]:
+    def run(
+        variables: dict[str, str], env_deploy: str | None = None, *, build: bool = False
+    ) -> tuple[subprocess.CompletedProcess, str | None]:
         if env_deploy is not None:
             (repo / "deploy" / ".env.deploy").write_text(env_deploy, encoding="utf-8")
         clean = {k: v for k, v in env.items() if not k.upper().startswith(("NODVARD_DECK_", "LATTICE_", "PI_HOST"))}
         clean.update(PATH=f"{stubs}{os.pathsep}{clean['PATH']}", STUB_DIR=str(state), PI_HOST="admin@192.0.2.1", **variables)
         result = subprocess.run(
-            ["bash", str(repo / "scripts" / "deploy_pi.sh"), "--no-build"],
+            ["bash", str(repo / "scripts" / "deploy_pi.sh"), *([] if build else ["--no-build"])],
             cwd=repo,
             env=clean,
             stdin=subprocess.DEVNULL,
@@ -99,6 +99,7 @@ def deploy(tmp_path: Path):
         written = state / "env_written"
         return result, written.read_text(encoding="utf-8") if written.exists() else None
 
+    run.state = state
     return run
 
 
@@ -164,3 +165,24 @@ def test_nothing_is_written_without_any_dns_value(deploy):
     result, written = deploy({})
     assert result.returncode == 0, result.stdout + result.stderr
     assert written is None
+
+
+def test_the_pi_build_fetches_the_debian_packages_fresh_once_a_week(deploy):
+    before = date.today().isocalendar()
+    result, _ = deploy({}, build=True)
+    after = date.today().isocalendar()
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    (build,) = [c for c in (deploy.state / "docker_calls").read_text(encoding="utf-8").splitlines() if " build " in c]
+    assert build.startswith("buildx build --pull --platform linux/arm64 ")
+    refresh = re.search(r"--build-arg APT_REFRESH=(\S+)", build)
+    assert refresh is not None
+    assert refresh.group(1) in {f"{d.year}-W{d.week:02d}" for d in (before, after)}
+
+
+def test_the_readme_shows_the_build_line_of_the_script():
+    script = SCRIPT.read_text(encoding="utf-8")
+    readme = (SCRIPT.parents[1] / "deploy" / "README.md").read_text(encoding="utf-8")
+    argument = '--build-arg APT_REFRESH="$(date +%G-W%V)"'
+    assert argument in script
+    assert f"--platform linux/arm64 -f deploy/Dockerfile {argument} -t nodvard-deck:pi-<sha> --load ." in readme

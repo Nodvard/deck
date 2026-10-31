@@ -28,7 +28,7 @@ function mockFetch() {
 }
 
 beforeEach(() => {
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never,
     ReactDOM: undefined as never,
     ReactJsxRuntime: undefined as never,
@@ -70,7 +70,7 @@ describe("Wächter-Vorlagen", () => {
   });
 
   it("ohne das Recht, Einstellungen zu ändern, gibt es keinen Knopf zum Hinzufügen", async () => {
-    window.__lattice.hasPermission = vi.fn((perm: string) => perm !== "settings.write");
+    window.__nodvardDeck.hasPermission = vi.fn((perm: string) => perm !== "settings.write");
     vi.stubGlobal("fetch", mockFetch());
     render(<WatchTemplates />);
     fireEvent.click(screen.getByRole("button", { name: "Auf den Servern suchen" }));

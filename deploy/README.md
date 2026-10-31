@@ -21,8 +21,8 @@ docker compose up -d
 # dann im Browser http://<Adresse-des-Rechners>:8080 öffnen
 ```
 
-Port ändern: Umgebungsvariable `NODVARD_DECK_PORT` (Rückfall: `LATTICE_PORT`, sonst 8080). Die Daten liegen im
-Volume `nodvard-deck-data`; ein eingebundener Ordner (`./daten:/app/data`) geht auch, weil der Entrypoint die
+Port ändern: Umgebungsvariable `NODVARD_DECK_PORT` (sonst 8080; der alte Name `LATTICE_PORT` gilt nur noch in
+dieser Version). Die Daten liegen im Volume `nodvard-deck-data`; ein eingebundener Ordner (`./daten:/app/data`) geht auch, weil der Entrypoint die
 Besitzrechte selbst setzt (siehe unten). Das Image entsteht bei jedem Tag `v*` durch
 `.github/workflows/release.yml` (Tags `:<version>`, `:<major>.<minor>`, `:latest`).
 
@@ -120,8 +120,9 @@ scripts/deploy_pi.sh
 
 Was das Skript tut:
 
-1. `docker buildx build --pull --platform linux/arm64 -f deploy/Dockerfile -t nodvard-deck:pi-<sha> --load .`
-   (`--pull`: Basis-Images frisch holen, siehe „Bauen“).
+1. `docker buildx build --pull --platform linux/arm64 -f deploy/Dockerfile --build-arg APT_REFRESH="$(date +%G-W%V)" -t nodvard-deck:pi-<sha> --load .`
+   (`--pull`: Basis-Images frisch holen, siehe „Bauen“; `APT_REFRESH`: die Debian-Pakete wie Tesseract einmal je
+   Kalenderwoche frisch holen statt aus dem Cache, mit den Sicherheitsupdates seit dem letzten Bau).
    Die Frontend-Stufe läuft dank `FROM --platform=$BUILDPLATFORM` nativ, nur die
    Python-Stufe wird für arm64 gebaut (alle Wheels vorhanden, ~2 Min beim ersten Mal).
 2. `deploy/` (compose, entrypoint) per `git archive` auf den Pi kopieren.
@@ -277,7 +278,7 @@ Zurück auf einen **älteren Commit** nicht mit dem alten `deploy_pi.sh` auslief
 neuen Dienstnamen nicht und würde den alten Container neben dem neuen starten), sondern über
 `nodvard-deck:previous` zurückgehen.
 
-## Umgebungsvariablen: neue Namen, alte gelten weiter
+## Umgebungsvariablen: alte Namen umbenennen
 
 Alle Einstellungen des Dashboards heißen jetzt `NODVARD_DECK_<NAME>` (früher
 `LATTICE_<NAME>`), zum Beispiel `NODVARD_DECK_ENV`, `NODVARD_DECK_LOG_JSON`,
@@ -289,9 +290,20 @@ Logo, Dokumente und Bilder haben eigene Grenzen), `NODVARD_DECK_FILES_MAX_UPLOAD
 Dateimanager (Standard 10 GiB, `0` = keine Grenze; meldet das Ziel zu wenig freien Platz, lehnt der Dateimanager den
 Upload vorab mit `507` ab).
 
-- **Die alten Namen gelten weiter.** Eine vorhandene `.env`, eine eigene Compose-Datei oder
-  ein `docker run -e LATTICE_…` laufen unverändert. Beim Start steht einmalig eine Warnung
-  im Log, welche alten Namen noch benutzt werden (nur die Namen, nie die Werte).
+- **Die alten Namen gelten noch, aber nicht mehr lange: Eine der nächsten Versionen, spätestens 1.0, liest sie nicht
+  mehr.** Eine vorhandene
+  `.env`, eine eigene Compose-Datei oder ein `docker run -e LATTICE_…` laufen unverändert. Beim
+  Start steht einmalig eine Warnung im Log, welche alten Namen noch benutzt werden, und der
+  Inhaber sieht auf der Startseite einen Hinweis mit altem und neuem Namen (nur die Namen, nie die
+  Werte). Umbenennen heißt: in der Compose-Datei oder `.env` `LATTICE_` durch `NODVARD_DECK_`
+  ersetzen und den Container neu erstellen (`docker compose up -d`).
+- **Danach gelten nur noch die neuen Namen.** Steht eine wichtige Einstellung wie Datenordner, Datenbank oder
+  Schlüssel dann nur unter dem alten Namen, startet Nodvard Deck ohne sie, im schlimmsten Fall leer. Deshalb vorher
+  umbenennen.
+- **Nicht jeden alten Namen kann Deck selbst sehen.** `LATTICE_PORT` und `LATTICE_DNS_1`/`_2` liest nur Compose beim
+  Einsetzen in die Compose-Datei, der Container bekommt sie nie. Sie fallen genauso weg, ohne Hinweis auf der
+  Startseite: Steht einer davon in deiner `.env` oder deiner Umgebung, benenne ihn ebenfalls um, sonst läuft Deck
+  ab 1.0 wieder auf Port 8080 bzw. mit dem Resolver des Rechners.
 - **Der neue Name gewinnt.** Reihenfolge, vorne gewinnt: Umgebung (neu), Umgebung (alt),
   `.env` (neu), `.env` (alt). Die Umgebung schlägt also immer die `.env`.
 - **Achtung bei eigenen Überschreibungen des Images:** Das Image legt jetzt
@@ -429,7 +441,7 @@ Extension-Daten/Script-Repo — für einen vollständigen Restore-Punkt weiterhi
 ## Aktualisieren: Kopie vor der Migration, Notseite, Rückweg
 
 **Gibt es eine neue Version?** Steht unter Einstellungen → System → „Updates“. Das Dashboard fragt einmal am Tag bei ghcr.io nach
-(abschaltbar; ghcr.io gehört zu GitHub, das dabei die IP-Adresse und den Zeitpunkt sieht, sonst nichts, auch nicht die installierte Version), „Jetzt suchen“ geht
+(abschaltbar; ghcr.io und die Freigabe am Release auf github.com gehören zu GitHub, das dabei die IP-Adresse und den Zeitpunkt sieht, sonst nichts, auch nicht die installierte Version), „Jetzt suchen“ geht
 jederzeit. Dort stehen auch die Anleitungen für Docker Compose, Docker Desktop, Portainer, Synology, Unraid und `scripts/deploy_pi.sh`.
 Mit dem [Update-Helfer](#update-helfer) geht das Einspielen dort per Knopf; ohne ihn wie folgt von Hand.
 Mit dem fertigen Image (Datei `deploy/compose.standalone.yml`, bei der Installation als `compose.yml` abgelegt) reicht im Ordner der Datei:
@@ -535,15 +547,30 @@ Oberfläche: [docs/11-ERST-EINRICHTUNG.md §10.6](../docs/11-ERST-EINRICHTUNG.md
 > Dienst `nodvard-deck` im selben Compose-Projekt gegen eine neuere **offizielle** Version (`ghcr.io/nodvard/deck`).
 > Willst du das nicht, bleib bei `compose.standalone.yml` und aktualisiere von Hand (siehe oben).
 
-**Image:** `ghcr.io/nodvard/deck-updater:1`. Es entsteht bei jedem Versions-Tag im Job `updater-image` von
+**Image:** `ghcr.io/nodvard/deck-updater`. Es entsteht bei jedem Versions-Tag im Job `updater-image` von
 `.github/workflows/release.yml` (für `linux/amd64` und `linux/arm64`, Tag `:<version>`). Das Tag `1` bekommt eine Version
 erst, wenn ihr Selbsttest auf beiden Plattformen bestanden ist, und nie eine Vorabversion; es gilt für alle Helfer mit
 derselben Schnittstelle. Gebaut wird aus `deploy/updater/Dockerfile`, nur aus der Standardbibliothek von Python.
 
+**Welche Datei:** Am [GitHub-Release](https://github.com/nodvard/deck/releases/latest) einer fertigen Version hängt
+`compose.standalone-mit-helfer.yml`. Sie ist dieselbe Datei wie im Repository, nennt den Helfer aber genau per Digest
+(`ghcr.io/nodvard/deck-updater@sha256:…`), also genau den Bau, dessen Selbsttest bestanden ist und auf den in dem Moment
+`:1` zeigt. Den Digest nennt auch der Text des Releases. Nimm für neue Installationen und für Updates des Helfers diese
+Datei. Beim Versions-Tag kommt sie zunächst an einen Entwurf des Releases; abrufbar ist sie erst, wenn die Version auf
+GitHub veröffentlicht ist. Bis dahin liefert der Link auf das neueste Release noch die Datei der Version davor. Im
+Repository steht weiter `:1`, für Entwicklerstände und für alle, die immer den neuesten Helfer wollen. Ältere Releases
+haben die Datei noch nicht: Meldet `curl` unten 404, nimm die aus dem Repository,
+`https://raw.githubusercontent.com/nodvard/deck/main/deploy/compose.standalone-mit-helfer.yml`.
+
 **Was er kann:**
 - Update auf die neueste fertige Version, wenn Nodvard Deck mit dem offiziellen Image und beweglichem Tag läuft
   (`ghcr.io/nodvard/deck:latest` oder eine Reihe wie `:0.7`). Die Docker-Engine lädt die neue Version selbst, der Helfer
-  hat kein Netz.
+  hat kein Netz. Geladen wird genau das Image, das die Update-Suche gefunden hat (per Digest). Zeigt das Tag in der
+  Registry inzwischen auf etwas anderes, lädt er nichts und bittet, erneut nach Updates zu suchen.
+- Freigabe prüfen: Jede fertige Version bekommt am Release eine Freigabe (`freigabe.json`), die Nico mit seinem
+  Schlüssel signiert. Das Dashboard bietet ein Update per Knopf nur mit Freigabe an und schickt sie mit; der Helfer
+  prüft die Signatur mit den Schlüsseln, die fest in ihm stehen, und lehnt eine gefälschte oder fremde Freigabe ab.
+  Ein älterer Helfer kennt die Freigabe noch nicht; die Karte „Updates“ sagt dann, dass du ihn erneuern solltest.
 - Startet die neue Version nicht (beendet sich, startet immer wieder neu, zeigt die Notseite oder ist nach 15 Minuten
   nicht bereit), schaltet er von selbst auf die alte Version zurück.
 - Rückweg per Knopf auf die Version davor: einmal, 7 Tage lang. Hat die neue Version die Datenbank umgebaut, gehen die
@@ -554,12 +581,14 @@ derselben Schnittstelle. Gebaut wird aus `deploy/updater/Dockerfile`, nur aus de
 **Was er (noch) nicht kann:**
 - Nur Installationen mit Docker Compose (Kommandozeile, Docker Desktop, Portainer-Stack, Synology-Projekt, Unraid mit
   Compose-Plugin). Einzeln über eine Oberfläche angelegte Container gehen nicht.
-- Kein Update bei fester Version in der Compose-Datei (`:0.7.0`, `@sha256:…`), bei Vorabversionen und bei einem selbst
-  gebauten Image (etwa über `scripts/deploy_pi.sh`); die Karte sagt dann, warum der Knopf fehlt.
+- Kein Update bei fester Version des Dienstes `nodvard-deck` in der Compose-Datei (`:0.7.0`, `@sha256:…`), bei
+  Vorabversionen und bei einem selbst gebauten Image (etwa über `scripts/deploy_pi.sh`); die Karte sagt dann, warum der
+  Knopf fehlt.
 - Ziele erst ab Version 0.7.0: Das erste Update per Knopf geht von 0.7.0 auf die Version danach.
 - Sich selbst aktualisieren: Das machst du von Hand (siehe unten).
-- Die Aufträge des Dashboards sind noch nicht signiert; der Helfer prüft sie gegen seine eigenen Regeln und gegen das,
-  was er bei Docker vorfindet.
+- Die Freigabe ist noch nicht Pflicht: Ein älteres Dashboard, das keine mitschickt, bekommt ein Update weiter ohne
+  sie. Pflicht wird sie mit Version 1.0. Der Rückweg kommt ohne Freigabe aus, er setzt nur die Version davor wieder ein,
+  die der Helfer selbst gesichert hat.
 
 **Voraussetzungen**
 - Nodvard Deck ab 0.7.0, installiert wie unter „Installation ohne das Repo“.
@@ -574,7 +603,7 @@ derselben Schnittstelle. Gebaut wird aus `deploy/updater/Dockerfile`, nur aus de
    und starten:
 
    ```bash
-   curl -fsSL -o compose.yml https://raw.githubusercontent.com/nodvard/deck/main/deploy/compose.standalone-mit-helfer.yml
+   curl -fsSL -o compose.yml https://github.com/nodvard/deck/releases/latest/download/compose.standalone-mit-helfer.yml
    docker compose up -d
    ```
 
@@ -585,7 +614,7 @@ Rootless Docker: neben die `compose.yml` eine Datei `.env` mit `NODVARD_DECK_DOC
 legen (`echo $XDG_RUNTIME_DIR/docker.sock` zeigt deinen Pfad).
 
 **Einrichten – Portainer und Synology:** den Inhalt deines Stacks bzw. Projekts durch `compose.standalone-mit-helfer.yml`
-ersetzen, eigene Änderungen übernehmen (vor allem einen Ordner statt des Datenspeichers) und neu starten (Portainer:
+vom neuesten Release ersetzen, eigene Änderungen übernehmen (vor allem einen Ordner statt des Datenspeichers) und neu starten (Portainer:
 „Update the stack“). Der Helfer muss im **selben** Stack bzw. Projekt stehen, nicht als eigener. Anderer Socket: in
 Portainer unter „Environment variables“ `NODVARD_DECK_DOCKER_SOCKET` setzen.
 
@@ -599,11 +628,12 @@ docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-
 Aus dem Quellcode geht dasselbe im Ordner `deploy/updater` mit `python -m nodvard_deck_updater --selftest` (im Image läuft
 es als `python -I -m nodvard_deck_updater --selftest`).
 
-**Helfer aktualisieren** (nicht, während er gerade ein Update macht): `docker compose pull updater && docker compose up -d updater`
-(Synology: per SSH im Projektordner, mit `sudo` davor). Willst du genau festlegen, welcher Helfer läuft, häng den Digest
-an: `image: ghcr.io/nodvard/deck-updater:1@sha256:…` (Wert: `docker buildx imagetools inspect ghcr.io/nodvard/deck-updater:1`,
-Zeile „Digest“). Dann wechselt er nur, wenn du den Wert änderst. Das Modul Docker bietet für das Helfer-Image kein
-„Einspielen“ an.
+**Helfer aktualisieren** (nicht, während er gerade ein Update macht): Die Zeile `image:` beim Dienst `updater` aus
+`compose.standalone-mit-helfer.yml` vom [neuesten Release](https://github.com/nodvard/deck/releases/latest) in deine
+Compose-Datei übernehmen, dann `docker compose up -d updater` (Synology: per SSH im Projektordner, mit `sudo` davor;
+Portainer: Zeile im Stack ändern, „Update the stack“). Den Digest kannst du mit dem Text des Releases vergleichen. Steht
+bei dir noch `:1` (Datei aus dem Repository), reicht `docker compose pull updater && docker compose up -d updater`. Das
+Modul Docker bietet für das Helfer-Image kein „Einspielen“ an.
 
 **Helfer ausschalten oder entfernen**
 - Vorübergehend: `docker compose stop updater`. Die Karte zeigt dann „antwortet nicht“ und die Anleitung für Updates von

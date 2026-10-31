@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -16,12 +16,19 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...config import (
+    ENV_PREFIX,
+    LEGACY_ENV_PREFIX,
+    legacy_env_names,
+    legacy_env_shadowed,
+)
+from ...core import trusted_proxies, untrusted_proxies
 from ...ext.runtime import get_extension_runtime
 from ...models import Action, Notification
 from ...services import custom_apps as custom_apps_service
 from ...services import helper_hints as helper_hints_service
-from ..deps import SessionDep, require_permission
-from .host_access import root_helpers_for
+from ..deps import CurrentUser, SessionDep, require_permission
+from .host_access import root_helpers_for, root_needs_helpers_only
 
 router = APIRouter(prefix="/overview", tags=["overview"])
 
@@ -100,7 +107,47 @@ class HelperHintOut(BaseModel):
     checked_at: datetime
     without_root: bool = False
     """`true`: Dort gibt es keine volle sudo-Regel, diese Module haben gerade gar kein root. Sonst laufen sie über die
-    volle Regel."""
+    volle Regel, außer denen in `no_fallback`."""
+    still_used: list[str] = []
+    """Die Module aus `modules`, die ihr veraltetes Skript weiter aufrufen: Diese Module haben dort root, nur mit der alten
+    Fassung, auch wenn `without_root` gilt."""
+    no_fallback: list[str] = []
+    """Die Module aus `modules`, die ohne ihr Skript auch mit der vollen Regel kein root haben (außer `still_used`)."""
+    full_rule_removable: bool = False
+    """`true`: Dort gibt es die volle sudo-Regel, nötig ist sie aber nicht, die Hilfsskripte reichen. `modules` ist dann
+    leer, wenn kein Skript fehlt oder veraltet ist."""
+
+
+class UntrustedProxyOut(BaseModel):
+    """Eine Adresse aus dem Heimnetz, über die Anmeldungen kamen, die aber nicht als vertrauenswürdiger Proxy
+    eingetragen ist (`core.untrusted_proxies`)."""
+
+    address: str
+    last_seen: datetime
+
+
+def untrusted_proxy_hints() -> list[UntrustedProxyOut]:
+    return [
+        UntrustedProxyOut(address=address, last_seen=datetime.fromtimestamp(at, UTC))
+        for address, at in untrusted_proxies.recent(trusted_proxies.current())
+    ]
+
+
+class LegacyEnvOut(BaseModel):
+    """Eine alte Umgebungsvariable, die noch gilt, und der Name, unter dem sie künftig stehen muss."""
+
+    old: str
+    new: str
+    new_set: bool = False
+    """Der neue Name ist schon gesetzt und gewinnt; der alte kann einfach weg."""
+
+
+def legacy_env_hints() -> list[LegacyEnvOut]:
+    shadowed = legacy_env_shadowed()
+    return [
+        LegacyEnvOut(old=name, new=ENV_PREFIX + name.removeprefix(LEGACY_ENV_PREFIX), new_set=name in shadowed)
+        for name in legacy_env_names()
+    ]
 
 
 class OverviewOut(BaseModel):
@@ -119,6 +166,12 @@ class OverviewOut(BaseModel):
     helper_hints: list[HelperHintOut] = []
     """Server, die neu eingerichtet werden sollten, damit die Module mit engen Rechten laufen. Nur aus dem gemerkten
     Stand der letzten Prüfung, ohne SSH beim Abruf; weggeklickte fehlen."""
+    untrusted_proxies: list[UntrustedProxyOut] = []
+    """Proxys, die nicht eingetragen sind: Hinter ihnen sieht Nodvard Deck die echten Adressen nicht. Nur für den
+    Inhaber, der die Liste als Einziger ändern darf, sonst leer."""
+    legacy_env: list[LegacyEnvOut] = []
+    """Alte Umgebungsvariablen, mit denen Nodvard Deck gestartet wurde. Sie gelten in dieser Version noch, in der
+    nächsten nicht mehr. Nur für den Inhaber, sonst leer."""
     errors: list[str]
     generated_at: float
 
@@ -247,7 +300,7 @@ def reset_cache() -> None:
 
 
 @router.get("", dependencies=[Depends(require_permission("hosts.read"))])
-async def overview(session: SessionDep) -> OverviewOut:
+async def overview(session: SessionDep, user: CurrentUser) -> OverviewOut:
     expensive = await _expensive_part()
     pending = (await session.execute(select(func.count()).select_from(Action).where(Action.status == "proposed"))).scalar_one()
     unread_filter = Notification.read_at.is_(None)
@@ -274,10 +327,13 @@ async def overview(session: SessionDep) -> OverviewOut:
         helper_hints=[
             HelperHintOut(
                 host_id=h.host_id, host_name=h.host_name, modules=h.modules, checked_at=h.checked_at,
-                without_root=h.without_root,
+                without_root=h.without_root, still_used=h.still_used, no_fallback=h.no_fallback,
+                full_rule_removable=h.full_rule_removable,
             )
-            for h in await helper_hints_service.current_hints(session, root_helpers_for)
+            for h in await helper_hints_service.current_hints(session, root_helpers_for, root_needs_helpers_only)
         ],
+        untrusted_proxies=untrusted_proxy_hints() if user.is_owner else [],
+        legacy_env=legacy_env_hints() if user.is_owner else [],
         errors=expensive["errors"],
         generated_at=expensive["generated_at"],
     )

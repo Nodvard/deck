@@ -46,7 +46,7 @@ services:
       # pruefen"); "false" = wie frueher still merken. Ohne diese Zeile gilt die gespeicherte
       # Einstellung (neue Installationen: bestaetigen, bestehende: still merken). Nach "Schluessel
       # vergessen" ist die Bestaetigung immer noetig. Bereits gemerkte Schluessel sind nie betroffen.
-      # Alter Name: LATTICE_SSH_CONFIRM_NEW_HOST_KEYS.
+      # Der alte Name LATTICE_SSH_CONFIRM_NEW_HOST_KEYS gilt nur noch übergangsweise (spätestens bis 1.0).
       # NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS: "true"
     # DNS nur fuer DIESEN Container (Docker Compose `dns:`), nicht am Host geaendert.
     # Hintergrund: ohne dieses Feld erbt der Container den Host-Resolver. Zeigt der auf

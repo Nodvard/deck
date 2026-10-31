@@ -299,6 +299,59 @@ describe("Server-Detail: nur die Hilfsskripte oder volle Rechte", () => {
     expect(screen.getByTestId("setup-sudo-note").textContent).toContain("sudo sh -c");
   });
 
+  it("„Volle sudo-Regel entfernen“ steht unter „Erweitert“, lädt den Befehl neu und weicht „Volle Rechte“", async () => {
+    const calls = mockHostsApi(routes({ "GET /hosts/h1/credentials": [credentialFixture()], "GET /hosts/h1/credentials/c1/setup": withHelpers }));
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Einrichtungsbefehl zeigen" }));
+    await screen.findByLabelText("Einrichtungsbefehl");
+    const advanced = await screen.findByTestId("setup-advanced");
+    const drop = await within(advanced).findByRole("checkbox", { name: /Volle sudo-Regel entfernen/ });
+    expect(drop).not.toBeChecked();
+    fireEvent.click(drop);
+    const queries = () => calls.filter((c) => c.path === "/hosts/h1/credentials/c1/setup").map((c) => c.query);
+    await waitFor(() => expect(queries()).toContain("sudo=true&drop_full_rule=true&groups=docker"));
+    // Das Laden des neuen Befehls klappt „Erweitert“ nicht zu.
+    expect(screen.getByTestId("setup-advanced")).toBe(advanced);
+    fireEvent.click(within(advanced).getByRole("checkbox", { name: /Volle Rechte/ }));
+    await waitFor(() => expect(queries()).toContain("sudo=true&full_sudo=true&groups=docker"));
+    expect(within(advanced).queryByRole("checkbox", { name: /Volle sudo-Regel entfernen/ })).toBeNull();
+    expect(queries().filter((q) => q?.includes("full_sudo=true")).every((q) => !q?.includes("drop_full_rule"))).toBe(true);
+  });
+
+  it("aus der Übersicht (?befehl=regel-entfernen): Befehl offen und „Volle sudo-Regel entfernen“ schon angekreuzt", async () => {
+    const calls = mockHostsApi(routes({ "GET /hosts/h1/credentials": [credentialFixture()], "GET /hosts/h1/credentials/c1/setup": withHelpers }));
+    renderDetail("/settings/hosts/h1?befehl=regel-entfernen");
+    await screen.findByLabelText("Einrichtungsbefehl");
+    const drop = await within(await screen.findByTestId("setup-advanced")).findByRole("checkbox", { name: /Volle sudo-Regel entfernen/ });
+    expect(drop).toBeChecked();
+    expect(drop).toBeVisible();
+    const queries = calls.filter((c) => c.path === "/hosts/h1/credentials/c1/setup").map((c) => c.query);
+    expect(queries[0]).toBe("sudo=true&drop_full_rule=true&groups=docker");
+  });
+
+  it("ist beim Server „Volle sudo-Regel gewollt“ gesetzt, gibt es kein „Volle sudo-Regel entfernen“", async () => {
+    mockHostsApi(routes({
+      "GET /hosts/h1": hostFixture({ sudo_full_wanted: true }),
+      "GET /hosts/h1/credentials": [credentialFixture()], "GET /hosts/h1/credentials/c1/setup": withHelpers,
+    }));
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Einrichtungsbefehl zeigen" }));
+    await screen.findByLabelText("Einrichtungsbefehl");
+    const advanced = await screen.findByTestId("setup-advanced");
+    expect(within(advanced).getByRole("checkbox", { name: /Volle Rechte/ })).toBeInTheDocument();
+    expect(within(advanced).queryByRole("checkbox", { name: /Volle sudo-Regel entfernen/ })).toBeNull();
+  });
+
+  it("braucht ein Modul ohne Hilfsskript root, gibt es kein „Volle sudo-Regel entfernen“", async () => {
+    const forced = (call: Call) => ({ ...setupFixture(call), helpers: [helper], full_sudo: true, notes: [] });
+    mockHostsApi(routes({ "GET /hosts/h1/credentials": [credentialFixture()], "GET /hosts/h1/credentials/c1/setup": forced }));
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Einrichtungsbefehl zeigen" }));
+    await screen.findByLabelText("Einrichtungsbefehl");
+    const advanced = await screen.findByTestId("setup-advanced");
+    expect(within(advanced).queryByRole("checkbox", { name: /Volle sudo-Regel entfernen/ })).toBeNull();
+  });
+
   it("ohne Hilfsskripte gibt es den Schalter nicht", async () => {
     const calls = mockHostsApi(routes({ "GET /hosts/h1/credentials": [credentialFixture()] }));
     renderDetail();
@@ -308,6 +361,7 @@ describe("Server-Detail: nur die Hilfsskripte oder volle Rechte", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: /Root-Rechte ohne Passwort/ }));
     await waitFor(() => expect(screen.queryByTestId("setup-sudo-note")).toBeNull());
     expect(calls.every((c) => !(c.query ?? "").includes("full_sudo"))).toBe(true);
+    expect(calls.every((c) => !(c.query ?? "").includes("drop_full_rule"))).toBe(true);
   });
 });
 
@@ -739,6 +793,25 @@ describe("Server-Detail: bearbeiten und löschen", () => {
     fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
     await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
     expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ display_name: "Pi Wohnzimmer" });
+  });
+
+  it("„Volle sudo-Regel gewollt“ steht unter „Erweitert“ und geht nur geändert mit", async () => {
+    const calls = mockHostsApi(routes({ "PATCH /hosts/h1": hostFixture({ sudo_full_wanted: true }) }));
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Bearbeiten" }));
+    const toggle = screen.getByRole("switch", { name: "Volle sudo-Regel gewollt" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
+    expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ sudo_full_wanted: true });
+  });
+
+  it("bei Windows gibt es „Volle sudo-Regel gewollt“ nicht", async () => {
+    mockHostsApi(routes({ "GET /hosts/h1": hostFixture({ os_family: "windows" }) }));
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Bearbeiten" }));
+    expect(screen.queryByRole("switch", { name: "Volle sudo-Regel gewollt" })).toBeNull();
   });
 
   it("eine geänderte Adresse geht mit; Markierungen nur die manuellen", async () => {

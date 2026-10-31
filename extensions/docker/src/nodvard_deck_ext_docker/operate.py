@@ -43,6 +43,17 @@ def refused_text(full_tag: str = "docker") -> str:
 
 
 REFUSED = refused_text()
+
+
+def not_docker_text(full_tag: str = "docker") -> str:
+    """Warum eine freigegebene Aktion nicht lief, wenn dem Server seit dem Vorschlag die Docker-Markierung fehlt."""
+    return (
+        f"Der Server ist inzwischen kein Docker-Server mehr, ihm fehlt die Markierung „{full_tag}“; ausgeführt wurde nichts. "
+        "Gib ihm die Markierung unter Einstellungen, Server & Zugänge wieder und schlage die Aktion dann neu vor."
+    )
+
+
+NOT_DOCKER = not_docker_text()
 MISSING = (
     "Auf diesem Server fehlt das Hilfsskript docker-root, oder sudo erlaubt es dem Zugang nicht ohne Passwort. Was fehlt, zeigt "
     "die Anforderung „Docker nur bedienen“ unter Einstellungen, Server & Zugänge."
@@ -130,6 +141,19 @@ def is_operate_host(host: Any, settings: dict[str, Any]) -> bool:
 def is_docker_host(host: Any, settings: dict[str, Any]) -> bool:
     host_tags = getattr(host, "tags", None) or []
     return any(tag in host_tags for tag in tags(settings))
+
+
+async def still_full(ctx: Any, host: Any) -> str | None:
+    """Vor dem Ausführen einer Freigabe: der Grund, wenn `host` seit dem Vorschlag nur noch bedient werden darf oder kein
+    Docker-Server mehr ist."""
+    settings = await ctx.settings.get()
+    return not_full_host(host, settings, not_docker_text(tags(settings)[0]))
+
+
+async def still_docker(ctx: Any, host: Any) -> str | None:
+    """Wie `still_full`, aber für Starten, Stoppen und Neustarten, die auch im Modus „Nur bedienen“ gehen."""
+    settings = await ctx.settings.get()
+    return None if is_docker_host(host, settings) else not_docker_text(tags(settings)[0])
 
 
 def not_full_host(host: Any, settings: dict[str, Any], missing: str = "Kein Docker-Host.") -> str | None:

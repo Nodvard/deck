@@ -61,6 +61,14 @@ class PiholeService:
             self._pihole = None
             await client.logout()
 
+    async def drop(self) -> None:
+        """Meldet die gespeicherte Sitzung ab; der nächste Aufruf meldet sich mit dem aktuellen Passwort neu an."""
+        # Der Client bleibt: Eine Seite, die ihn gerade benutzt, meldet sich an ihm neu an, statt an einem verworfenen
+        # Client eine zweite Sitzung zu öffnen, die niemand mehr abmeldet.
+        async with self._lock:
+            if self._pihole is not None:
+                await self._pihole[1].logout()
+
     async def refresh(self) -> None:
         """Nach dem Speichern der Einstellungen: eine alte Sitzung sofort abmelden."""
         try:

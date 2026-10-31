@@ -13,10 +13,11 @@ EXT_DIR = Path(__file__).resolve().parents[2] / "extensions" / "docker"
 SRC = EXT_DIR / "src" / "nodvard_deck_ext_docker"
 
 
-@pytest.fixture(autouse=True)
-def _ext_docker_on_path(monkeypatch):
-    monkeypatch.syspath_prepend(str(EXT_DIR / "src"))
-    yield
+@pytest.fixture(autouse=True, scope="module")
+def _ext_docker_on_path():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(EXT_DIR / "src"))
+        yield
     for name in list(sys.modules):
         if name.startswith("nodvard_deck_ext_docker"):
             del sys.modules[name]
@@ -110,9 +111,11 @@ _CHANGING = {"container_verb", "compose_restart", "prune", "image_remove", "volu
 _CHANGING_ELSEWHERE = {
     "cmd_verb", "cmd_take_down", "cmd_remove_folder", "cmd_stack_pull", "cmd_stack_up", "cmd_tag", "cmd_untag", "cmd_archive", "cmd_stop_services",
     "cmd_start_services", "cmd_pull_backup_image", "cmd_stop_archive", "cmd_read", "cmd_move_up", "cmd_stop_old", "cmd_rename_old",
-    "cmd_start_old", "cmd_remove_old", "cmd_login", "cmd_logout", "cmd_restore",
+    "cmd_start_old", "cmd_remove_old", "cmd_login", "cmd_logout", "cmd_restore", "cmd_restart_services",
 }
 """Dasselbe für ändernde Bauer außerhalb von `commands.py` (Stack-Aktionen, Löschen und Update von Stacks)."""
+_OWNER_WRITES = {"cmd_owner_write", "cmd_owner_mkdir", "cmd_owner_remove", "cmd_owner_rmdir"}
+"""Schreiben mit den Rechten des Ordner-Besitzers: nur in `OwnerFiles`; wer deren Schreibmethoden aufruft, prüft der SFTP-Wächter."""
 _PASS_THROUGH = {"_exec", "_call"}
 """Hüllen, die ihren Befehl nur weiterreichen; ihre Aufrufer prüft der Wächter selbst."""
 
@@ -203,10 +206,13 @@ def _violations(tree: ast.Module) -> list[str]:
     executors = {
         id(n) for c in ast.walk(tree) if isinstance(c, ast.ClassDef) and c.name.endswith("Executor") for n in ast.walk(c)
     }
+    owner_files = {id(n) for c in ast.walk(tree) if isinstance(c, ast.ClassDef) and c.name == "OwnerFiles" for n in ast.walk(c)}
     for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
         owner, name = _callee(call)
         if ((owner == "commands" and name in _CHANGING) or name in _CHANGING_ELSEWHERE) and id(call) not in executors:
             found.append(f"Zeile {call.lineno}: ändernder Befehl {name} außerhalb eines Ausführers")
+        if name in _OWNER_WRITES and id(call) not in owner_files:
+            found.append(f"Zeile {call.lineno}: Schreibbefehl {name} außerhalb von OwnerFiles")
     return found
 
 
@@ -283,6 +289,10 @@ _SFTP_READING = {
     "getcwd", "glob", "statvfs", "getsize", "getatime", "getmtime",
 }
 """Erlaubnisliste: alles andere auf einem SFTP-Zugang zählt als Schreiben, auch Methoden, die es heute noch nicht gibt."""
+_FILE_CLASSES = {"SftpFiles", "OwnerFiles"}
+"""Schreiben Dateien im Auftrag der Ausführer über `self._sftp` oder feste Befehle; ihre Schreibmethoden heißen wie `_IO_WRITES`."""
+_IO_WRITES = {"write", "mkdir", "remove", "rmdir"}
+"""Schreibmethoden auf `io` bzw. `….io` (ein `SftpFiles` oder `OwnerFiles`): zählen wie Schreiben per SFTP."""
 
 
 def _sftp_names(tree: ast.AST) -> set[str]:
@@ -304,7 +314,14 @@ def _sftp_writes(node: ast.AST, names: set[str] | None = None) -> list[ast.Call]
     found = []
     for call in (n for n in ast.walk(node) if isinstance(n, ast.Call)):
         func = call.func
-        if not (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id in names):
+        if not isinstance(func, ast.Attribute):
+            continue
+        receiver = func.value
+        if (isinstance(receiver, ast.Name) and receiver.id == "io") or (isinstance(receiver, ast.Attribute) and receiver.attr == "io"):
+            if func.attr in _IO_WRITES:
+                found.append(call)
+            continue
+        if not ((isinstance(receiver, ast.Name) and receiver.id in names) or (isinstance(receiver, ast.Attribute) and receiver.attr == "_sftp")):
             continue
         if func.attr == "open":
             mode = call.args[1] if len(call.args) > 1 else next((k.value for k in call.keywords if k.arg in ("pflags_or_mode", "mode")), None)
@@ -321,7 +338,7 @@ def _sftp_violations(trees: dict[str, ast.Module]) -> list[str]:
     executors: set[int] = set()
     writers: dict[tuple[str, str], ast.AST] = {}
     for name, tree in trees.items():
-        for cls in (n for n in tree.body if isinstance(n, ast.ClassDef) and n.name.endswith("Executor")):
+        for cls in (n for n in tree.body if isinstance(n, ast.ClassDef) and (n.name.endswith("Executor") or n.name in _FILE_CLASSES)):
             executors.update(id(n) for n in ast.walk(cls))
         names = _sftp_names(tree)
         for fn in (n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
@@ -356,6 +373,98 @@ def _sftp_violations(trees: dict[str, ast.Module]) -> list[str]:
         elif not calls[(name, fn_name)]:
             found.append(f"{name} Zeile {fn.lineno}: {fn_name} schreibt per SFTP und wird von keinem Ausführer aufgerufen")
     return found
+
+
+_IO_MAKERS = {"owner_files", "SftpFiles", "OwnerFiles"}
+"""Liefern einen Schreibzugang; die beiden Klassen baut nur `owner_files`."""
+
+
+def _is_io(node: ast.AST) -> bool:
+    return (isinstance(node, ast.Name) and node.id == "io") or (isinstance(node, ast.Attribute) and node.attr == "io")
+
+
+def _io_violations(tree: ast.Module) -> list[str]:
+    """Ein Schreibzugang heißt überall `io` oder `….io`; sonst sähe `_sftp_writes` seine Schreibaufrufe nicht."""
+    parents = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    functions = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    placed: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
+                same = isinstance(target, ast.Tuple) and isinstance(node.value, ast.Tuple) and len(target.elts) == len(node.value.elts)
+                for t, v in zip(target.elts, node.value.elts) if same else [(target, node.value)]:
+                    if _is_io(t):
+                        placed.add(id(v.value if isinstance(v, ast.Await) else v))
+    if "owner_files" in functions:
+        placed.update(id(r.value) for r in ast.walk(functions["owner_files"]) if isinstance(r, ast.Return) and r.value is not None)
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _callee(node)[1] in _IO_MAKERS and id(node) not in placed:
+            found.append(f"Zeile {node.lineno}: {_callee(node)[1]} ohne Zuweisung an io")
+        if not (_is_io(node) and isinstance(node.ctx, ast.Load)) or id(node) in placed:
+            continue
+        parent = parents.get(id(node))
+        if isinstance(parent, ast.Attribute):
+            called = parents.get(id(parent))
+            if parent.attr in _IO_WRITES and not (isinstance(called, ast.Call) and called.func is parent):
+                found.append(f"Zeile {node.lineno}: io.{parent.attr} als Wert")
+            continue
+        call, key = (parents.get(id(parent)), parent.arg) if isinstance(parent, ast.keyword) else (parent, None)
+        if isinstance(call, ast.Call) and (key is not None or node in call.args) and _callee(call)[0] is None:
+            fn = functions.get(_callee(call)[1])
+            params = [a.arg for a in (*fn.args.posonlyargs, *fn.args.args, *fn.args.kwonlyargs)] if fn else []
+            name = key if key is not None else (params[call.args.index(node)] if call.args.index(node) < len(params) else None)
+            if fn is not None and name == "io" and "io" in params:
+                continue
+        alias = isinstance(parent, (ast.Assign, ast.AnnAssign)) or isinstance(parents.get(id(parent)), (ast.Assign, ast.AnnAssign))
+        found.append(f"Zeile {node.lineno}: Alias auf io" if alias else f"Zeile {node.lineno}: io weitergereicht, ohne dass es dort io heißt")
+    return found
+
+
+def test_writers_go_by_the_name_io_everywhere():
+    for path in sorted(SRC.glob("*.py")):
+        assert _io_violations(ast.parse(path.read_text(encoding="utf-8"))) == [], path.name
+
+
+def test_the_file_classes_have_only_the_known_methods():
+    tree = ast.parse((SRC / "git_apply.py").read_text(encoding="utf-8"))
+    for cls in (n for n in tree.body if isinstance(n, ast.ClassDef) and n.name in _FILE_CLASSES):
+        public = {f.name for f in cls.body if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and not f.name.startswith("_")}
+        assert public == {"read"} | _IO_WRITES, f"{cls.name}: neue Methode lesend? Sonst in _IO_WRITES aufnehmen"
+
+
+def test_the_io_guard_finds_detours():
+    found = _io_violations(ast.parse('''
+async def owner_files(ctx, host, sftp, attrs):
+    return SftpFiles(sftp, type(attrs))
+
+async def helper(fs, path):
+    await fs.write(path, 0o644, b"")
+
+async def proper(sftp, io, path):
+    await io.mkdir(path)
+
+class ApplyExecutor:
+    async def execute(self, plan, sftp, host, path):
+        fs = plan.io
+        w = plan.io.write
+        await helper(plan.io, path)
+        await proper(sftp, plan.io, path)
+        await proper(sftp, io=plan.io, path=path)
+        await (await owner_files(None, host, sftp, None)).write(path, 0o644, b"")
+        files = OwnerFiles(None, host, None)
+        plan.io = await owner_files(None, host, sftp, None)
+        ok, io = True, plan.io
+        return [plan.io]
+'''))
+    assert sorted(found) == [
+        "Zeile 13: Alias auf io",
+        "Zeile 14: io.write als Wert",
+        "Zeile 15: io weitergereicht, ohne dass es dort io heißt",
+        "Zeile 18: owner_files ohne Zuweisung an io",
+        "Zeile 19: OwnerFiles ohne Zuweisung an io",
+        "Zeile 22: io weitergereicht, ohne dass es dort io heißt",
+    ], found
 
 
 def test_sftp_writes_only_in_executors():
@@ -403,3 +512,48 @@ callbacks = [helper]
         "bad.py Zeile 19: sneaky schreibt per SFTP und wird von keinem Ausführer aufgerufen",
         "bad.py Zeile 26: route schreibt per SFTP und ist dekoriert",
     ], found
+
+
+def test_the_guards_know_the_writers_of_stacks_from_git():
+    commands = ast.parse('''
+class OwnerFiles:
+    async def write(self, path):
+        await self._call(self._host, cmd_owner_write(self.owner, path, 0o644, path))
+
+class Routes:
+    async def save(self, host, owner, stack, path):
+        await self._call(host, cmd_owner_remove(owner, path))
+        await self._ctx.exec.run_argv(host, cmd_restart_services(stack, ["web"]))
+''')
+    assert set(_violations(commands)) == {
+        "Zeile 8: Schreibbefehl cmd_owner_remove außerhalb von OwnerFiles",
+        "Zeile 9: ändernder Befehl cmd_restart_services außerhalb eines Ausführers",
+    }
+    files = ast.parse('''
+class SftpFiles:
+    async def remove(self, path):
+        await self._sftp.remove(path)
+
+class Helper:
+    async def drop(self, path):
+        await self._sftp.remove(path)
+
+async def make(io, path):
+    await io.mkdir(path)
+
+class Routes:
+    async def save(self, plan, path):
+        await plan.io.write(path, 0o644, b"")
+        await make(plan.io, path)
+        await plan.io.read(path, 10)
+
+class ApplyExecutor:
+    async def execute(self, io, path):
+        await make(io, path)
+        await io.write(path, 0o644, b"")
+''')
+    assert set(_sftp_violations({"bad.py": files})) == {
+        "bad.py Zeile 8: sftp.remove außerhalb eines Ausführers",
+        "bad.py Zeile 15: sftp.write außerhalb eines Ausführers",
+        "bad.py Zeile 16: make schreibt per SFTP und wird außerhalb eines Ausführers aufgerufen",
+    }

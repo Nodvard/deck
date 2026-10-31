@@ -75,7 +75,7 @@ function mockFetch(calls: Call[]) {
 let confirmDialog: Mock<(message: string) => Promise<boolean>>;
 beforeEach(() => {
   confirmDialog = vi.fn<(message: string) => Promise<boolean>>().mockResolvedValue(true);
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog, promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(true),
   };
@@ -92,7 +92,7 @@ describe("Einbruchschutz", () => {
     expect(await screen.findByText(/Linux-Server mit SSH-Zugang angelegt/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Zugang einrichten" })).toHaveAttribute("href", "/settings/hosts");
     view.unmount();
-    (window.__lattice.hasPermission as Mock).mockReturnValue(false);
+    (window.__nodvardDeck.hasPermission as Mock).mockReturnValue(false);
     render(<GuardTab canManage />);
     await screen.findByText(/Linux-Server mit SSH-Zugang angelegt/);
     expect(screen.queryByRole("link", { name: "Zugang einrichten" })).not.toBeInTheDocument();
@@ -249,10 +249,10 @@ describe("Einbruchschutz", () => {
     vi.stubGlobal("fetch", mockFetch(calls));
     render(<GuardTab canManage />);
     const pve2 = within(await screen.findByTestId("guard-h-pve2"));
-    fireEvent.click(pve2.getByRole("button", { name: "Sperren" }));
+    fireEvent.click(pve2.getByRole("button", { name: "203.0.113.9 Sperren" }));
     await waitFor(() => expect(screen.getByText("203.0.113.9 sperren: Erledigt.")).toBeInTheDocument());
     expect(confirmDialog).toHaveBeenCalledWith(expect.stringContaining("per Fail2ban sperren"), expect.objectContaining({ danger: true }));
-    expect(calls.find((c) => c.url.endsWith("/hosts/h-pve2/ban"))?.body).toEqual({ ip: "203.0.113.9", unban: false });
+    expect(calls.find((c) => c.url.endsWith("/hosts/h-pve2/ban"))?.body).toEqual({ ip: "203.0.113.9", jail: "sshd", unban: false });
   });
 
   it("startet die Prüfung und hakt alle Ereignisse ab", async () => {
@@ -325,7 +325,7 @@ describe("Einbruchschutz", () => {
     vi.stubGlobal("fetch", mockFetch([]));
     render(<GuardTab canManage={false} />);
     await screen.findByTestId("guard-h-pve2");
-    expect(screen.queryByRole("button", { name: "Sperren" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Sperren$/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "Ist in Ordnung" })).toBeNull();
   });
 });
@@ -394,11 +394,11 @@ describe("Ergebnis einer Aktion", () => {
     stubApprove(calls, () => approve.promise);
     render(<GuardTab canManage />);
     const pve2 = within(await screen.findByTestId("guard-h-pve2"));
-    fireEvent.click(pve2.getByRole("button", { name: "Sperren" }));
+    fireEvent.click(pve2.getByRole("button", { name: "203.0.113.9 Sperren" }));
 
-    const running = await pve2.findByRole("button", { name: "Sperre …" });
+    const running = await pve2.findByRole("button", { name: "203.0.113.9 Sperre …" });
     expect(running).toBeDisabled();
-    expect(pve2.getByRole("button", { name: "entsperren" })).toBeEnabled();
+    expect(pve2.getByRole("button", { name: "198.51.100.7 entsperren" })).toBeEnabled();
     expect(screen.getByText("203.0.113.9 wird auf „pve2“ gesperrt …")).toBeInTheDocument();
     fireEvent.click(running);
     expect(confirmDialog).toHaveBeenCalledTimes(1);
@@ -406,7 +406,7 @@ describe("Ergebnis einer Aktion", () => {
 
     await act(async () => { approve.resolve(new Response(JSON.stringify({ status: "succeeded", result: {} }), { status: 200 })); });
     expect(await screen.findByText("203.0.113.9 sperren: Erledigt.")).toBeInTheDocument();
-    expect(pve2.getByRole("button", { name: "Sperren" })).toBeEnabled();
+    expect(pve2.getByRole("button", { name: "203.0.113.9 Sperren" })).toBeEnabled();
   });
 
   it("zeigt nach einer abgebrochenen Rückfrage keinen Hinweis", async () => {
@@ -421,5 +421,236 @@ describe("Ergebnis einer Aktion", () => {
     expect(screen.queryByText(/abgebrochen/)).toBeNull();
     expect(screen.queryByText(/Fail2ban \(Raspberry Pi\)/)).toBeNull();
     expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+});
+
+describe("Fail2ban: gesperrte Adressen", () => {
+  type Jails = Record<string, { banned: string[] }>;
+
+  function withJails(jails: Jails, fail2ban: "running" | "noaccess" = "running"): GuardOverview {
+    const [pve2, pi] = OVERVIEW.hosts;
+    return { ...OVERVIEW, hosts: [{ ...pve2, view: { ...pve2.view!, jails, fail2ban } }, pi] };
+  }
+
+  function serve(
+    overview: GuardOverview | (() => GuardOverview), calls: Call[], approved: unknown = null,
+    { refuse = null, events = EVENTS }: { refuse?: string | null; events?: SecurityEvent[] } = {},
+  ) {
+    const inner = mockFetch(calls);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status });
+      if (url.endsWith("/defender/guard")) return json(typeof overview === "function" ? overview() : overview);
+      if (url.includes("/defender/events") && (init?.method ?? "GET") === "GET") return json(events);
+      if (refuse && url.endsWith("/hosts/h-pve2/ban")) {
+        calls.push({ url, method: "POST", body: JSON.parse(init!.body as string) });
+        return json({ detail: refuse }, 409);
+      }
+      if (approved && url.includes("/actions/") && url.endsWith("/approve")) return new Response(JSON.stringify(approved), { status: 200 });
+      return inner(input, init);
+    }));
+  }
+
+  const bans = (calls: Call[]) => calls.filter((c) => c.url.endsWith("/hosts/h-pve2/ban")).map((c) => c.body);
+
+  const ATTACK: SecurityEvent = {
+    id: "ev9", host_id: "h-pve2", host_name: "pve2", kind: "bruteforce", kind_label: "Angriff auf SSH", severity: "warning",
+    title: "40 fehlgeschlagene SSH-Anmeldungen von 1 Adresse(n)", acknowledged: false, created_at: now - 20,
+    detail: { attackers: [{ ip: "203.0.113.9", count: 40, users: ["root"] }] },
+  };
+
+  it("zeigt die Adressen je Jail und entsperrt im richtigen Jail", async () => {
+    const calls: Call[] = [];
+    serve(withJails({ sshd: { banned: ["198.51.100.7"] }, recidive: { banned: ["203.0.113.50"] } }), calls);
+    render(<GuardTab canManage />);
+    const list = within(await screen.findByTestId("banned-h-pve2"));
+    expect(list.getByText("Gesperrte Adressen (2)")).toBeInTheDocument();
+    expect(list.getByText("Jail recidive · 1")).toBeInTheDocument();
+    expect(within(screen.getByTestId("fail2ban-h-pve2")).getByText(/Ein Jail ist eine Schutzregel von Fail2ban/)).toBeInTheDocument();
+    expect(list.getByText("Jail sshd · 1")).toBeInTheDocument();
+    fireEvent.click(list.getByRole("button", { name: "203.0.113.50 Entsperren" }));
+    await waitFor(() => expect(bans(calls)).toEqual([{ ip: "203.0.113.50", jail: "recidive", unban: true }]));
+    expect(confirmDialog).toHaveBeenCalledWith("203.0.113.50 auf „pve2“ wieder freigeben (Jail „recidive“)?", expect.anything());
+  });
+
+  it("sagt ruhig, wenn die Adresse schon nicht mehr gesperrt war", async () => {
+    const calls: Call[] = [];
+    const note = "Die Adresse war schon nicht mehr gesperrt.";
+    serve(withJails({ sshd: { banned: ["198.51.100.7"] } }), calls, { status: "succeeded", result: { success: true, detail: { note } } });
+    render(<GuardTab canManage />);
+    const list = within(await screen.findByTestId("banned-h-pve2"));
+    fireEvent.click(list.getByRole("button", { name: "198.51.100.7 Entsperren" }));
+    expect(await screen.findByText(`198.51.100.7 entsperren: ${note}`)).toBeInTheDocument();
+  });
+
+  it("entsperrt einen Angreifer in dem Jail, in dem er steht", async () => {
+    const calls: Call[] = [];
+    serve(withJails({ recidive: { banned: ["198.51.100.7"] }, sshd: { banned: [] } }), calls);
+    render(<GuardTab canManage />);
+    const pve2 = within(await screen.findByTestId("guard-h-pve2"));
+    fireEvent.click(pve2.getByRole("button", { name: "198.51.100.7 entsperren" }));
+    await waitFor(() => expect(bans(calls)).toEqual([{ ip: "198.51.100.7", jail: "recidive", unban: true }]));
+  });
+
+  it("sucht ab 20 Adressen und zeigt höchstens 200", async () => {
+    const many = Array.from({ length: 250 }, (_, i) => `10.0.${Math.floor(i / 250)}.${i}`);
+    serve(withJails({ sshd: { banned: many } }), []);
+    render(<GuardTab canManage />);
+    const list = within(await screen.findByTestId("banned-h-pve2"));
+    expect(list.getAllByRole("button", { name: /Entsperren$/ })).toHaveLength(200);
+    expect(list.getByText("… und 50 weitere, bitte über die Suche eingrenzen.")).toBeInTheDocument();
+    fireEvent.change(list.getByRole("searchbox", { name: "Gesperrte Adresse suchen" }), { target: { value: "10.0.0.24" } });
+    expect(list.getAllByRole("button", { name: /Entsperren$/ }).map((b) => b.getAttribute("aria-label"))).toEqual(
+      ["10.0.0.24", ...Array.from({ length: 10 }, (_, i) => `10.0.0.24${i}`)].map((ip) => `${ip} Entsperren`),
+    );
+    fireEvent.change(list.getByRole("searchbox", { name: "Gesperrte Adresse suchen" }), { target: { value: "192." } });
+    expect(list.getByText("Keine gesperrte Adresse passt zur Suche.")).toBeInTheDocument();
+  });
+
+  it("sucht ohne Rücksicht auf Groß- und Kleinschreibung, ohne Suchfeld filtert kein alter Suchtext", async () => {
+    const twenty = Array.from({ length: 20 }, (_, i) => `2001:db8::${(i + 10).toString(16)}`);
+    let current = withJails({ sshd: { banned: twenty } });
+    serve(() => current, []);
+    render(<GuardTab canManage />);
+    const list = within(await screen.findByTestId("banned-h-pve2"));
+    fireEvent.change(list.getByRole("searchbox", { name: "Gesperrte Adresse suchen" }), { target: { value: "2001:DB8::A" } });
+    expect(list.getAllByRole("button", { name: /Entsperren$/ }).map((b) => b.getAttribute("aria-label"))).toEqual(["2001:db8::a Entsperren"]);
+
+    current = withJails({ sshd: { banned: twenty.slice(1) } });
+    fireEvent.click(list.getByRole("button", { name: "2001:db8::a Entsperren" }));
+    await waitFor(() => expect(list.getByText("Gesperrte Adressen (19)")).toBeInTheDocument());
+    expect(list.queryByRole("searchbox")).toBeNull();
+    expect(list.getAllByRole("button", { name: /Entsperren$/ })).toHaveLength(19);
+  });
+
+  it("zeigt bei wenigen Adressen keine Suche und sagt, wenn nichts gesperrt ist", async () => {
+    serve(withJails({ sshd: { banned: [] } }), []);
+    render(<GuardTab canManage />);
+    const list = within(await screen.findByTestId("banned-h-pve2"));
+    expect(list.getByText("Gesperrte Adressen (0)")).toBeInTheDocument();
+    expect(list.getByText("Fail2ban sperrt gerade keine Adresse.")).toBeInTheDocument();
+    expect(list.queryByRole("searchbox")).toBeNull();
+  });
+
+  it("sperrt eine Adresse von Hand im gewählten Jail und sagt, wie man zurückkommt", async () => {
+    const calls: Call[] = [];
+    serve(withJails({ sshd: { banned: [] }, nginx: { banned: [] } }), calls);
+    render(<GuardTab canManage />);
+    const form = within(await screen.findByTestId("ban-form-h-pve2"));
+    const submit = form.getByRole("button", { name: "Eingegebene Adresse sperren" });
+    const field = form.getByRole("textbox", { name: "Adresse von Hand sperren" });
+    expect(submit).toBeDisabled();
+    expect(form.getByText(/sperrt Shield nicht\. Steht Deck hinter einem Reverse-Proxy, trag ihn unter „Vertrauenswürdiger Proxy“ ein/)).toBeInTheDocument();
+    fireEvent.change(field, { target: { value: "kein-ip" } });
+    expect(submit).toBeDisabled();
+    expect((form.getByRole("combobox", { name: "Jail" }) as HTMLSelectElement).value).toBe("sshd");
+    fireEvent.change(field, { target: { value: " 2001:db8::7 " } });
+    fireEvent.change(form.getByRole("combobox", { name: "Jail" }), { target: { value: "nginx" } });
+    fireEvent.click(submit);
+    await waitFor(() => expect(bans(calls)).toEqual([{ ip: "2001:db8::7", jail: "nginx", unban: false }]));
+    expect(confirmDialog).toHaveBeenCalledWith(
+      "2001:db8::7 auf „pve2“ per Fail2ban sperren (Jail „nginx“)? Diese Adresse erreicht dann nichts mehr, was der Jail "
+        + "„nginx“ schützt. Die Sperre endet meist nach der Sperrzeit des Jails von selbst; früher zurück geht es hier unter "
+        + "„Gesperrte Adressen“ mit „Entsperren“.",
+      expect.objectContaining({ danger: true }),
+    );
+    await waitFor(() => expect(field).toHaveValue(""));
+  });
+
+  it("behält die Eingabe, wenn die Rückfrage abgelehnt wird", async () => {
+    confirmDialog.mockResolvedValue(false);
+    const calls: Call[] = [];
+    serve(withJails({ sshd: { banned: [] } }), calls);
+    render(<GuardTab canManage />);
+    const form = within(await screen.findByTestId("ban-form-h-pve2"));
+    expect(form.queryByRole("combobox", { name: "Jail" })).toBeNull();
+    fireEvent.change(form.getByRole("textbox", { name: "Adresse von Hand sperren" }), { target: { value: "203.0.113.77" } });
+    fireEvent.click(form.getByRole("button", { name: "Eingegebene Adresse sperren" }));
+    await waitFor(() => expect(confirmDialog).toHaveBeenCalledTimes(1));
+    expect(confirmDialog.mock.calls[0][0]).toContain("Von dieser Adresse ist dann keine SSH-Verbindung mehr möglich.");
+    expect(bans(calls)).toEqual([]);
+    expect(form.getByRole("textbox", { name: "Adresse von Hand sperren" })).toHaveValue("203.0.113.77");
+  });
+
+  it("behält die Eingabe, wenn das Sperren scheitert", async () => {
+    const calls: Call[] = [];
+    const refuse = "Von dieser Adresse aus nutzt du gerade Nodvard Deck.";
+    serve(withJails({ sshd: { banned: [] } }), calls, null, { refuse });
+    render(<GuardTab canManage />);
+    const form = within(await screen.findByTestId("ban-form-h-pve2"));
+    fireEvent.change(form.getByRole("textbox", { name: "Adresse von Hand sperren" }), { target: { value: "203.0.113.77" } });
+    fireEvent.click(form.getByRole("button", { name: "Eingegebene Adresse sperren" }));
+    expect(await screen.findByText(`203.0.113.77 sperren: ${refuse}`)).toBeInTheDocument();
+    expect(bans(calls)).toEqual([{ ip: "203.0.113.77", jail: "sshd", unban: false }]);
+    expect(form.getByRole("textbox", { name: "Adresse von Hand sperren" })).toHaveValue("203.0.113.77");
+  });
+
+  it("sagt, warum eine Eingabe keine Adresse zum Sperren ist", async () => {
+    serve(withJails({ sshd: { banned: [] } }), []);
+    render(<GuardTab canManage />);
+    const form = within(await screen.findByTestId("ban-form-h-pve2"));
+    const field = form.getByRole("textbox", { name: "Adresse von Hand sperren" });
+    const hint = "Nur eine einzelne IP-Adresse, keine Bereiche wie /24 und keine Namen.";
+    for (const value of ["203.0.113.0/24", "server.local"]) {
+      fireEvent.change(field, { target: { value } });
+      expect(form.getByText(hint)).toBeInTheDocument();
+      expect(form.getByRole("button", { name: "Eingegebene Adresse sperren" })).toBeDisabled();
+    }
+    fireEvent.change(field, { target: { value: "2001:DB8::7" } });
+    expect(form.queryByText(hint)).toBeNull();
+    expect(form.getByRole("button", { name: "Eingegebene Adresse sperren" })).toBeEnabled();
+  });
+
+  it("bietet ohne Jail für SSH bei Angreifern kein Sperren an und sagt, warum", async () => {
+    serve(withJails({ nginx: { banned: [] } }), [], null, { events: [ATTACK] });
+    render(<GuardTab canManage />);
+    const pve2 = within(await screen.findByTestId("guard-h-pve2"));
+    expect(pve2.queryByRole("button", { name: "203.0.113.9 Sperren" })).toBeNull();
+    expect(pve2.getByText(/erst, wenn Fail2ban einen Jail für SSH \(meist „sshd“\) eingeschaltet hat/)).toBeInTheDocument();
+    expect(pve2.getByRole("button", { name: "198.51.100.7 entsperren" })).toBeInTheDocument();
+    const ev = within(await screen.findByTestId("event-ev9"));
+    fireEvent.click(ev.getByRole("button", { name: "Details" }));
+    expect(ev.getByText("203.0.113.9")).toBeInTheDocument();
+    expect(ev.queryByRole("button", { name: "203.0.113.9 Sperren" })).toBeNull();
+  });
+
+  it("Sperren aus einem Ereignis nur mit Verwaltungsrecht und im SSH-Jail", async () => {
+    const calls: Call[] = [];
+    serve(withJails({ nginx: { banned: [] }, sshd: { banned: [] } }), calls, null, { events: [ATTACK] });
+    const view = render(<GuardTab canManage={false} />);
+    let ev = within(await screen.findByTestId("event-ev9"));
+    fireEvent.click(ev.getByRole("button", { name: "Details" }));
+    expect(ev.queryByRole("button", { name: "203.0.113.9 Sperren" })).toBeNull();
+    view.unmount();
+
+    render(<GuardTab canManage />);
+    ev = within(await screen.findByTestId("event-ev9"));
+    fireEvent.click(ev.getByRole("button", { name: "Details" }));
+    fireEvent.click(ev.getByRole("button", { name: "203.0.113.9 Sperren" }));
+    await waitFor(() => expect(bans(calls)).toEqual([{ ip: "203.0.113.9", jail: "sshd", unban: false }]));
+  });
+
+  it("ohne Verwaltungsrecht nur die Liste, ohne Knöpfe und Formular", async () => {
+    serve(withJails({ sshd: { banned: ["198.51.100.7"] } }), []);
+    render(<GuardTab canManage={false} />);
+    const list = within(await screen.findByTestId("banned-h-pve2"));
+    expect(list.getByText("198.51.100.7")).toBeInTheDocument();
+    expect(list.queryByRole("button", { name: /Entsperren$/ })).toBeNull();
+    expect(screen.queryByTestId("ban-form-h-pve2")).toBeNull();
+  });
+
+  it("zeigt nichts davon ohne lesbares Fail2ban und erklärt einen Fail2ban ohne Jail", async () => {
+    serve(withJails({}, "noaccess"), []);
+    const view = render(<GuardTab canManage />);
+    await screen.findByTestId("guard-h-pve2");
+    expect(screen.queryByTestId("fail2ban-h-pve2")).toBeNull();
+    expect(screen.queryByTestId("fail2ban-h-pi")).toBeNull();
+    view.unmount();
+    serve(withJails({}), []);
+    render(<GuardTab canManage />);
+    const section = within(await screen.findByTestId("fail2ban-h-pve2"));
+    expect(section.getByText("Fail2ban läuft, hat aber keinen Jail eingeschaltet und sperrt deshalb nichts.")).toBeInTheDocument();
+    expect(screen.queryByTestId("ban-form-h-pve2")).toBeNull();
+    expect(within(screen.getByTestId("guard-h-pve2")).queryByRole("button", { name: "203.0.113.9 Sperren" })).toBeNull();
   });
 });

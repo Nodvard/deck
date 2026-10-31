@@ -13,18 +13,34 @@ import time
 from pathlib import Path
 
 import pytest
-
-SRC = Path(__file__).resolve().parents[2] / "extensions" / "docker" / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-
+from docker_stack_fakes import EXT_DIR
 from nodvard_deck.core.deny_patterns import match_deny_patterns
-from nodvard_deck_ext_docker import detached as dt
-from nodvard_deck_ext_docker import image_apply as ia
 
 RID = "imgupd_0123456789abcdef"
 
 posix = pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _ext_docker_on_path():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(EXT_DIR / "src"))
+        yield
+    for name in list(sys.modules):
+        if name.startswith("nodvard_deck_ext_docker"):
+            del sys.modules[name]
+
+
+def _dt():
+    from nodvard_deck_ext_docker import detached
+
+    return detached
+
+
+def _ia():
+    from nodvard_deck_ext_docker import image_apply
+
+    return image_apply
 
 
 def _stub(bindir: Path, name: str, body: str) -> None:
@@ -42,7 +58,8 @@ def _jobs(home: Path) -> Path:
     return home / ".local" / "state" / "lattice-image-updates"
 
 
-def _poll(env: dict[str, str], *, run_id: str = RID, timeout: float = 20) -> dt.Poll:
+def _poll(env: dict[str, str], *, run_id: str = RID, timeout: float = 20):
+    dt = _dt()
     end = time.monotonic() + timeout
     while True:
         out = subprocess.run(["sh", "-c", dt.poll_command(run_id)], capture_output=True, text=True, timeout=10, env=env, check=False)
@@ -52,7 +69,8 @@ def _poll(env: dict[str, str], *, run_id: str = RID, timeout: float = 20) -> dt.
         time.sleep(0.2)
 
 
-def _launch(script: str, env: dict[str, str], *, run_id: str = RID) -> tuple[dt.Launch, float]:
+def _launch(script: str, env: dict[str, str], *, run_id: str = RID) -> tuple:
+    dt = _dt()
     t0 = time.monotonic()
     out = subprocess.run(["sh", "-c", dt.launch_command(run_id, script)], capture_output=True, text=True, timeout=30, env=env, check=False)
     assert out.returncode == 0, out.stdout + out.stderr
@@ -61,6 +79,7 @@ def _launch(script: str, env: dict[str, str], *, run_id: str = RID) -> tuple[dt.
 
 @posix
 def test_the_run_survives_when_the_launching_shell_and_its_channel_die(tmp_path):
+    dt = _dt()
     env = _env(tmp_path)
     script = 'echo @@step=pull; sleep 2; echo "Pulled"; echo @@step=up; echo "Recreated"; echo @@step=done'
     proc = subprocess.Popen(["sh", "-c", dt.launch_command(RID, script)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -100,8 +119,9 @@ def test_the_launch_returns_at_once_and_reports_the_running_step(tmp_path):
 
 
 @posix
-@pytest.mark.parametrize("rc", [ia.RC_PULL, ia.RC_UP])
-def test_failed_steps_keep_their_exit_code(tmp_path, rc):
+@pytest.mark.parametrize("step", ["RC_PULL", "RC_UP"])
+def test_failed_steps_keep_their_exit_code(tmp_path, step):
+    rc = getattr(_ia(), step)
     env = _env(tmp_path)
     launch, _ = _launch(f"echo @@step=pull; echo 'Error: kaputt'; exit {rc}", env)
     assert launch.started
@@ -156,6 +176,7 @@ def test_old_logs_are_cleaned_up_on_each_new_run(tmp_path):
 
 @posix
 def test_an_unusable_home_means_not_started(tmp_path):
+    dt = _dt()
     home = tmp_path / "keine-mappe"
     home.write_text("ich bin eine Datei")  # dort lässt sich kein Ordner anlegen
     out = subprocess.run(["sh", "-c", dt.launch_command(RID, "true")], capture_output=True, text=True, timeout=30,
@@ -164,6 +185,7 @@ def test_an_unusable_home_means_not_started(tmp_path):
 
 
 def test_commands_are_validated_and_pass_the_deny_list(tmp_path):
+    dt = _dt()
     launch = dt.launch_command(RID, "true")
     assert "nohup setsid /bin/sh -c" in launch and "-mtime +30" in launch and "lattice-image-updates" in launch
     for cmd in (launch, dt.poll_command(RID)):
@@ -176,6 +198,7 @@ def test_commands_are_validated_and_pass_the_deny_list(tmp_path):
 
 
 def test_poll_parsing_handles_every_state():
+    dt = _dt()
     assert dt.parse_poll("@@running\n@@step=up\n@@tail\nCreating web\n") == dt.Poll("running", progress="Creating web", step="up")
     done = dt.parse_poll("@@rc=20\n@@step=up\n@@tail\nErrors\nmore\n")
     assert (done.state, done.rc, done.step, done.output) == ("done", 20, "up", "Errors\nmore\n")
@@ -195,6 +218,7 @@ def test_poll_parsing_handles_every_state():
 def test_quoting_end_to_end_paths_with_spaces_reach_docker_exactly(tmp_path):
     """`apply_script` durch `launch_command` (sh -c in setsid): ein `docker`-Stub schreibt
     seine Argumente Zeile für Zeile auf -- sie müssen genau stimmen."""
+    ia = _ia()
     bindir = tmp_path / "bin"
     record = tmp_path / "argv"
     # `docker image inspect` meldet eine ANDERE ID als die laufende: der Pull hat etwas Neues gebracht.
@@ -225,6 +249,7 @@ def test_quoting_end_to_end_paths_with_spaces_reach_docker_exactly(tmp_path):
 
 @posix
 def test_a_failing_pull_stops_the_script_with_rc_10_and_never_recreates(tmp_path):
+    ia = _ia()
     bindir = tmp_path / "bin"
     record = tmp_path / "calls"
     _stub(bindir, "docker", f'echo "$*" >>{record}; case "$*" in *pull*) echo "toomanyrequests: rate limit" >&2; exit 1;; esac\n')
@@ -242,14 +267,15 @@ def test_a_failing_pull_stops_the_script_with_rc_10_and_never_recreates(tmp_path
 # --- Nachbesserungen: Sperre je Projekt auf dem Host, Sicherung erst nach dem Pull ---------------
 
 
-def _launch_out(script: str, env: dict[str, str], *, run_id: str, lock: str | None) -> tuple[dt.Launch, str]:
+def _launch_out(script: str, env: dict[str, str], *, run_id: str, lock: str | None) -> tuple:
+    dt = _dt()
     out = subprocess.run(["sh", "-c", dt.launch_command(run_id, script, lock)], capture_output=True, text=True, timeout=30, env=env, check=False)
     assert out.returncode == 0, out.stdout + out.stderr
     return dt.parse_launch(out.stdout), out.stdout
 
 
 def _busy_probe(env: dict[str, str], project: str = "web") -> bool:
-    out = subprocess.run(["sh", "-c", dt.busy_check_command(project)], capture_output=True, text=True, timeout=10, env=env, check=False)
+    out = subprocess.run(["sh", "-c", _dt().busy_check_command(project)], capture_output=True, text=True, timeout=10, env=env, check=False)
     return "@@busy" in out.stdout.splitlines()
 
 
@@ -311,6 +337,7 @@ def test_the_relaunch_of_the_same_run_is_not_reported_as_busy(tmp_path):
 
 
 def test_lock_names_are_checked():
+    dt = _dt()
     for bad in ("x; rm -rf /", "Web", "a b", "web\n", "-p", "../x", ""):
         with pytest.raises(ValueError):
             dt.launch_command(RID, "true", bad)
@@ -331,7 +358,8 @@ def _docker_stub(bindir: Path, record: Path, *, inspect_id: str, pull_rc: int = 
     ))
 
 
-def _run_script(tmp_path: Path, bindir: Path) -> dt.Poll:
+def _run_script(tmp_path: Path, bindir: Path):
+    ia = _ia()
     t = ia.ComposeTarget("web", "a" * 64, "nginx:1.27", "sha256:" + "1" * 64, "p", "web", "/opt/p", ("/opt/p/c.yml",), (), None)
     env = _env(tmp_path, bindir)
     _launch(ia.apply_script(t, old_image_id=t.image_id, rollback=ia.rollback_ref("web")), env)
@@ -360,5 +388,5 @@ def test_no_rollback_is_tagged_when_the_pull_brought_nothing_new_or_failed(tmp_p
     bindir2, record2 = tmp2 / "bin", tmp2 / "calls"
     _docker_stub(bindir2, record2, inspect_id="sha256:" + "9" * 64, pull_rc=1)  # Pull scheitert
     poll = _run_script(tmp2, bindir2)
-    assert poll.rc == ia.RC_PULL
+    assert poll.rc == _ia().RC_PULL
     assert not any(c.startswith("tag ") or " up " in f" {c} " for c in record2.read_text().splitlines())

@@ -844,16 +844,17 @@ class Lab:
         self.world.publish(digest, image, tag=tag)
         return image_id, digest
 
-    def request(self, action: str = "update", version: str = "0.7.1") -> HelperRequest:
-        return HelperRequest(v=1, id=str(uuid.uuid4()), action=action, version=version, created_at=int(self.clock.t))
+    def request(self, action: str = "update", version: str = "0.7.1", digest: str | None = None) -> HelperRequest:
+        return HelperRequest(v=1, id=str(uuid.uuid4()), action=action, version=version, created_at=int(self.clock.t),
+                             digest=digest)
 
     def state(self) -> State:
         return self.store.load_state(self.clock.t)
 
-    def run(self, action: str = "update", version: str = "0.7.1") -> Outcome:
+    def run(self, action: str = "update", version: str = "0.7.1", digest: str | None = None) -> Outcome:
         self.steps.clear()
         self.step_at.clear()
-        outcome = self.flow.run(self.request(action, version), self.state())
+        outcome = self.flow.run(self.request(action, version, digest), self.state())
         if outcome.outcome is not None:
             status_with([outcome.result(self.clock.t)])
         return outcome
@@ -898,7 +899,7 @@ class Lab:
 
 def status_with(results: list[dict[str, Any]]) -> dict[str, Any]:
     """Ein Status mit diesen Ergebnissen, geprüft wie `status.json` (nur feste Codes, die auch das Dashboard kennt)."""
-    doc = {"proto": 1, "helper_version": "0.7.0", "request_versions": [1], "seq": 1, "heartbeat_at": 1,
+    doc = {"proto": 1, "helper_version": "0.7.0", "request_versions": [1, 2], "seq": 1, "heartbeat_at": 1,
            "state": "idle", "ready": False, "reason": None, "target": None, "busy": None, "previous": None,
            "results": results}
     channel.validate_status(doc)

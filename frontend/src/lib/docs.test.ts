@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import { EXTENSION_GUIDE, GUIDE_PATH, GUIDE_SECTIONS, REPO_URL, guideUrl, repoFile } from "./docs";
+import { LEGACY_ENV_GUIDE } from "./overview";
 
 // Das Kern-Projekt hat keine Node-Typen, darum gehen `fs` und `path` über Importe mit zusammengesetztem Namen
 // (wie in lib/thirdParty.test.ts).
@@ -50,6 +51,13 @@ describe("githubAnchors", () => {
       "erst-einrichtung--schritt-für-schritt", "2-einrichtungsassistent-setup", "101-in-der-oberfläche-empfohlen",
       "52-ssh-zugang-einrichten--drei-wege", "doppelt", "doppelt-1",
     ]);
+  });
+});
+
+describe("Link zum Umbenennen alter Umgebungsvariablen", () => {
+  it("die Überschrift gibt es in deploy/README.md", () => {
+    const anchor = LEGACY_ENV_GUIDE.split("#")[1];
+    expect(githubAnchors(read("../../../deploy/README.md"))).toContain(anchor);
   });
 });
 

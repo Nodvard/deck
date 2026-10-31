@@ -65,6 +65,22 @@ def _effective_state(record: ExtensionRecord) -> str:
     return record.state
 
 
+class TakeoverRequestOut(BaseModel):
+    """Eine Erweiterung, die gespeicherte Daten einer anderen übernehmen will (gleiche oder frühere Kennung)."""
+
+    id: str
+    """Kennung der neuen Erweiterung; erlaubt wird über `POST /extensions/{id}/takeover`."""
+    old_id: str
+    """Die Kennung, unter der die Daten liegen; gleich `id`, wenn die neue genauso heißt wie die bisherige."""
+    name: str
+    source: str
+    """`pip` bei einem nachinstallierten Paket, `bundled` bei einem Ordner im Erweiterungsverzeichnis."""
+    permissions: list[str]
+    """Die Rechte aus ihrem Manifest."""
+    allowed: bool = False
+    """Schon erlaubt; die Übernahme gilt ab dem nächsten Start, bis dahin läuft keine der beiden."""
+
+
 class ExtensionOut(BaseModel):
     id: str
     version: str
@@ -101,6 +117,9 @@ class ExtensionOut(BaseModel):
     """Frühere Kennungen einer umbenannten Erweiterung (`legacy_ids` im Manifest). Adressen mit einer alten Kennung
     gelten weiter (als veraltet markiert) und meinen diese Erweiterung; `id` ist immer die heutige. Liegt unter einer
     alten Kennung noch ein verwaister Zwilling, ändern die Kern-Adressen über sie nichts (409)."""
+    takeover_requests: list[TakeoverRequestOut] = []
+    """Nur für Verwalter: Erweiterungen, die die Daten dieser hier übernehmen wollen. Sie werden erst geladen, wenn ein
+    Admin das erlaubt; leer für alle anderen."""
 
     @classmethod
     def from_model(cls, record: ExtensionRecord) -> "ExtensionOut":
@@ -142,6 +161,14 @@ async def _with_setup(
     out: list[ExtensionOut] = []
     for record in records:
         item = ExtensionOut.from_model(record)
+        if can_manage:
+            item.takeover_requests = [
+                TakeoverRequestOut(
+                    id=ext_id, old_id=old, name=found.manifest.name, source=found.source,
+                    permissions=list(found.manifest.permissions), allowed=allowed,
+                )
+                for ext_id, old, found, allowed in extensions_service.takeover_requests(record)
+            ]
         last = tests.get(record.id)
         item.last_test = last if (last is None or can_manage) else {"ok": last.get("ok"), "at": last.get("at")}
         if item.state == "enabled":
@@ -203,6 +230,32 @@ async def enable_extension(
     await extensions_service.record_user_choice(session, canonical)
     await _audit_toggle(session, user, "extension.enabled", canonical, record)
     return ExtensionOut.from_model(record)
+
+
+class TakeoverIn(BaseModel):
+    old_id: str
+
+
+class TakeoverOut(BaseModel):
+    restart_needed: bool = True
+    """Die Übernahme gilt ab dem nächsten Start von Nodvard Deck."""
+    switched_off: bool
+    """Die Zeile der alten Kennung war eingeschaltet und ist jetzt aus, weil die neue Erweiterung mehr Rechte will."""
+    extra_permissions: list[str]
+    """Diese Rechte hatte die alte Erweiterung nicht."""
+
+
+@router.post("/{ext_id}/takeover", dependencies=[Depends(require_permission("extensions.manage"))])
+async def allow_takeover(ext_id: str, payload: TakeoverIn, session: SessionDep, user: CurrentUser) -> TakeoverOut:
+    """Erlaubt der wartenden Erweiterung `ext_id`, die gespeicherten Daten unter `old_id` zu übernehmen, ab dem nächsten
+    Start. 404, wenn sie nicht darauf wartet; 409, wenn `old_id` schon einer anderen gehört."""
+    try:
+        extra = await extensions_service.allow_takeover(session, ext_id, payload.old_id, user_id=user.id)
+    except extensions_service.TakeoverConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except extensions_service.TakeoverError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return TakeoverOut(switched_off=bool(extra), extra_permissions=extra)
 
 
 @router.get("/{ext_id}/frontend/index.js")

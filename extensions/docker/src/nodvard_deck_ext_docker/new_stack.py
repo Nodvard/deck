@@ -33,7 +33,7 @@ from .editor import (
     sha256,
 )
 from .image_apply import PROJECT_RE, _valid_path
-from .operate import not_full_host
+from .operate import still_full
 from .stack_actions import IN_FOLDER, DockerStackExecutor, busy_text
 from .stacks import (
     MAX_FILE_BYTES,
@@ -418,7 +418,7 @@ class DockerStackCreateExecutor:
         host = await self._ctx.hosts.get(req.host_ref) if req.host_ref else None
         if host is None:
             return ActionResult(success=False, error="Kein Docker-Host.")
-        if why := not_full_host(host, await self._ctx.settings.get()):
+        if why := await still_full(self._ctx, host):
             return ActionResult(success=False, error=why)
         root = await self._new.root(host.id)
         stack = new_stack(name, root)

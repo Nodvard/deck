@@ -32,7 +32,6 @@ export function setDeckTimezone(zone: string | null): void {
 }
 
 function subscribe(onChange: () => void): () => void {
-  // Genau einen der beiden Namen (der Kern meldet beide): sonst zeichnet sich die Komponente doppelt neu.
   const name = deckEventName("timezone");
   window.addEventListener(name, onChange);
   return () => window.removeEventListener(name, onChange);

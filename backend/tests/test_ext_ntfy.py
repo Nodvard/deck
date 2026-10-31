@@ -136,6 +136,24 @@ async def test_send_includes_bearer_token_from_vault_when_configured(
 
 
 @pytest.mark.asyncio
+async def test_a_replaced_token_is_used_for_the_next_message_without_a_hook(
+    fake_ntfy_server, db_session, tmp_path, test_settings
+):
+    server_url, received, _ = fake_ntfy_server
+    runtime, ctx, _ext = await _setup_ntfy_extension(db_session, tmp_path, test_settings, server_url=server_url)
+    from nodvard_sdk import Notification, Severity
+    from nodvard_sdk.capabilities import NotificationChannel
+
+    channel = runtime.capabilities.query(NotificationChannel)[0]
+    await ctx.secrets.create(label="ntfy-token", kind="generic", value="erstes-token")
+    await channel.send(Notification(title="T", body="B", severity=Severity.INFO))
+    await ctx.secrets.replace(label="ntfy-token", value="zweites-token")
+    await channel.send(Notification(title="T", body="B", severity=Severity.INFO))
+
+    assert [r["authorization"] for r in received] == ["Bearer erstes-token", "Bearer zweites-token"]
+
+
+@pytest.mark.asyncio
 async def test_send_without_configuration_raises_clearly(db_session, tmp_path, test_settings):
     _runtime, ctx, _ext = await _setup_ntfy_extension(db_session, tmp_path, test_settings, server_url="http://127.0.0.1:1")
     await ctx.settings.set({})  # server_url/topic wieder entfernen

@@ -77,10 +77,12 @@ Kontext“ weiter unten). Wer doch einmal ein Modul einer mitgelieferten Erweite
 hat, nimmt den neuen Namen.
 
 **SDK-Abhängigkeit (pip-installierbare Erweiterungen):** Die SDK-Distribution heißt jetzt
-`nodvard-sdk` (Importname `nodvard_sdk`). Der alte Importname `lattice_sdk` steckt in derselben
-Distribution und funktioniert weiter, eine Distribution `lattice-sdk` gibt es aber nicht mehr. Wer in
-seiner `pyproject.toml` `lattice-sdk` als Abhängigkeit einträgt, stellt sie auf `nodvard-sdk` um
-(oder lässt sie weg: das SDK bringt der Kern ohnehin mit).
+`nodvard-sdk` (Importname `nodvard_sdk`), die Entry-Point-Gruppe `nodvard_deck.extensions`. Den alten
+Importnamen `lattice_sdk` (samt `LatticeExtension` und `LatticeError`), das alte Kern-Paket `lattice`
+und die alte Gruppe `lattice.extensions` gibt es seit 0.12 nicht mehr: Eine Erweiterung, die sie noch
+nutzt, wird nicht geladen, und die Erweiterungsliste nennt den Grund und den neuen Namen. Wer in seiner
+`pyproject.toml` `lattice-sdk` als Abhängigkeit einträgt, stellt sie auf `nodvard-sdk` um (oder lässt
+sie weg: das SDK bringt der Kern ohnehin mit).
 
 **`category` und `sort_order` (optional):** Der Einrichtungsassistent zeigt die installierten Module
 als Kacheln, gruppiert nach `category` (bekannt: `servers`, `security`, `tools`, `connections`,
@@ -104,6 +106,10 @@ Nutzer, der sie ausgeschaltet hat, bleibt unangetastet. Das Protokoll hält
 `extension.auto_enabled` fest. Bei Installationen, die es schon vor dieser Funktion gab, bleiben
 bereits angelegte Erweiterungen unberührt; nur neu hinzugekommene zählen als „unberührt“.
 
+**Gesperrte Kennungen:** `core` gehört dem Kern, er trägt sie als `ext_id` der Aktionen, die jemand in der
+Oberfläche startet. Steht sie als `id`, in `legacy_ids` oder in `adopts.from`, lädt die Erweiterung nicht (Liste:
+`RESERVED_EXTENSION_IDS` im SDK): Sonst läse sie diese Aktionen samt Befehl über `ctx.actions.list()` als eigene.
+
 **Warum das Manifest eine Datei und keine Python-Konstante ist:** Der Kern muss
 Manifeste aller — auch der deaktivierten und der kaputten — Extensions lesen können,
 ohne deren Code zu importieren. Ein Import ist Codeausführung; eine defekte oder
@@ -121,16 +127,20 @@ legacy_ids = ["alter-name"]
 ```
 
 Nach mehreren Umbenennungen stehen alle früheren Kennungen darin, die jüngste zuerst
-(`["mittlerer-name", "alter-name"]`). Ohne `legacy_ids` (der Normalfall) ändert sich nichts.
+(`["mittlerer-name", "alter-name"]`). Ohne `legacy_ids` (der Normalfall) ändert sich nichts. Nur wenn unter der
+eigenen `id` noch Daten einer anderen Erweiterung liegen, wartet die neue auf die Erlaubnis eines Admins (siehe
+„Konflikte“ unten).
 
 **Grundidee: Die Kennung wechselt, die gespeicherten Daten nicht.** Nichts wird kopiert, umbenannt oder migriert.
 Ein Rückweg aufs alte Image findet seine Daten unverändert vor.
 
 **Regeln im Manifest:** Jede alte Kennung ist eine gültige Kennung (`a-z`, `0-9`, `-`), keine kommt doppelt vor, und
-die eigene `id` steht nicht darin. Sonst lädt die Erweiterung nicht.
+die eigene `id` steht nicht darin; gesperrte Kennungen wie `core` sind ebenfalls nicht erlaubt. Sonst lädt die
+Erweiterung nicht.
 
 **Speicher-Kennung.** Der Kern sucht die Registry-Zeile so:
-1. Gibt es eine Zeile mit der neuen Kennung, gilt sie.
+1. Gibt es eine Zeile mit der neuen Kennung, gilt sie. Gehört sie einer anderen Erweiterung, wartet die neue erst
+   auf die Erlaubnis eines Admins (siehe „Konflikte“ unten).
 2. Sonst gilt die erste vorhandene Zeile in der Reihenfolge von `legacy_ids`. Das Protokoll meldet
    „Erweiterung 'neuer-name' nutzt den gespeicherten Stand von 'alter-name'.“
 3. Gibt es keine, entsteht wie bei jeder neuen Erweiterung eine Zeile mit der neuen Kennung.
@@ -180,6 +190,34 @@ Aktionen, Meldungen, Protokolleinträge, Logger und Live-Kanäle.
   alten Stand), bricht der Start mit „Die Migrationen der Erweiterungsordner „…“ und „…“ sind doppelt …“ ab. Die Meldung
   steht auch auf der Notseite. Vor dem Auspacken über einen alten Stand deshalb `extensions/` leeren.
 - **Gemeinsame alte Kennung:** Nennen zwei Erweiterungen dieselbe alte Kennung, werden beide nicht geladen.
+- **Daten einer anderen Erweiterung:** Liegen unter einer der Kennungen der neuen Erweiterung (ihrer `id` oder einer aus
+  `legacy_ids`) schon Daten einer anderen, übernimmt die neue sie erst, wenn ein Admin (`extensions.manage`) es erlaubt.
+  - „Daten einer anderen“ heißt: eine Registry-Zeile, die die Kennung als `id`, im gespeicherten Manifest als `id` oder
+    in dessen `legacy_ids` trägt und einer anderen Erweiterung gehört (andere `id` im gespeicherten Manifest, oder ein
+    Paket will ein mitgeliefertes Modul ersetzen). Bei einer früheren Kennung zählen auch Aktionen und
+    Tresor-Einträge unter ihr, für die es keine Zeile mehr gibt.
+  - Bis dahin wird sie nicht geladen. Im Protokoll steht „Unter „…“ liegen noch gespeicherte Daten einer anderen
+    Erweiterung. Die neue übernimmt sie erst, wenn ein Admin das unter Einstellungen → Erweiterungen erlaubt.“
+  - Erlaubt wird auf der Karte der bisherigen Erweiterung („Übernahme erlauben“,
+    `POST /api/v1/extensions/<neu>/takeover`), im Protokoll steht dann `extension.takeover_allowed`. Die Übernahme gilt
+    ab dem nächsten Start; bis dahin zeigt die Karte „Übernahme erlaubt“, und keine der beiden läuft.
+  - Die Erlaubnis gilt für Kennung, Quelle (Paket oder Ordner) und die Rechte, die die neue beim Erlauben hatte, nicht
+    für ein bestimmtes Paket. Will sie später mehr Rechte oder kommt sie aus einer anderen Quelle, fragt Deck neu. Fehlt
+    sie bei einem Start, verfällt die Erlaubnis.
+  - Will die neue mehr Rechte, als die bisherige hatte, schaltet das Erlauben deren Zeile aus, und kein Anlass aus
+    `enable_on` schaltet sie selbst ein; eingeschaltet wird die neue dann bewusst, wie bei `adopts`.
+  - Ein Rückweg auf die frühere Erweiterung nach einer Übernahme fragt ebenfalls, denn die Zeile trägt dann das
+    Manifest der neuen.
+  - Ohne Rückfrage gilt eine Umbenennung, wenn unter der Kennung nichts liegt, oder wenn die neue Erweiterung
+    mitgeliefert ist und alle betroffenen Zeilen ebenfalls (so wie `docker` mit `service-matrix`). Eine Zeile, die
+    schon das Manifest der neuen trägt, ist ihre eigene; was vor diesem Stand übernommen wurde, bleibt übernommen.
+  - Grund: Sonst bekäme ein nachinstalliertes Paket mit der Kennung eines entfernten Moduls dessen Zeile samt Zustand,
+    Einstellungen, Aktionen und Tresor-Einträgen. War das Modul eingeschaltet, liefe das Paket beim nächsten Start mit
+    allen Rechten aus seinem eigenen Manifest, ohne dass es jemand eingeschaltet hat.
+  - Eine wartende Erweiterung zählt nicht als Anspruch: Ein Paket mit einer früheren Kennung eines mitgelieferten
+    Moduls (etwa `service-matrix`) verdrängt dieses nicht. Wollen zwei Pakete dieselben Daten, warten beide.
+  - Nicht erkannt werden Daten unter einer Kennung, zu der es weder eine Zeile noch Aktionen oder Tresor-Einträge gibt
+    (etwa nur ein Datenordner); das kommt nur vor, wenn jemand Zeilen von Hand löscht.
 
 **Verwaister Zwilling.** Nach „Neuinstallation mit neuer Kennung → Rückweg aufs alte Image → wieder neu“ oder bei
 mehreren alten Zeilen gilt nur eine Zeile (Reihenfolge wie oben). Jede weitere bleibt unverändert liegen und wird nie
@@ -320,6 +358,13 @@ class Extension(NodvardExtension):
         """Optional. Nach jedem ctx.settings.set() -- nach dem Speichern, get() liefert
         schon die neuen Werte. Ein set() hier drin loest den Hook nicht erneut aus; eine
         Ausnahme wird geloggt und macht das Speichern nicht rueckgaengig."""
+
+    async def on_secret_changed(self, ctx: ExtensionContext, label: str) -> None:
+        """Optional. Ein Geheimnis, das die Extension lesen darf (`secrets.read:<label>`),
+        wurde über Tresor oder Modul-Einstellungen angelegt, ersetzt oder gelöscht. Kommt
+        nach dem Speichern; zwischengespeicherte Anmeldungen hier verwerfen. Höchstens
+        10 Sekunden, eine Ausnahme wird geloggt. Nicht bei Änderungen über ctx.secrets
+        und nicht nach einer Wiederherstellung (danach startet die Extension ohnehin neu)."""
 ```
 
 Die Trennung `setup` / `on_start` ist keine Kosmetik: sie erlaubt dem Kern, erst **alle**
@@ -340,20 +385,20 @@ permission-geprüft und schreibt bei Bedarf ins Audit-Log.
 | `ctx.ui` | `register_page()`, `register_widget()`, `unregister_widget()`, `register_nav()` | — |
 | `ctx.connectors` | `register_type(ConnectorType)` | — |
 | `ctx.capabilities` | `provide(protokoll_instanz)` | je Protokoll |
-| `ctx.actions` | `register(ActionSpec)`, `propose(ActionRequest)` (optional mit `standing_approval`, siehe §3), `check_standing_approval(granted_by_user_id, risk=…)` (gälte eine Dauerfreigabe dieser Person heute noch? `None` = ja, sonst der Grund), `waiting_count()` (wie viele Vorschläge aller Module auf eine Freigabe warten, nur die Zahl) | `hosts.execute` u. a.; Dauerfreigabe: `actions.standing_approval`; `waiting_count()`: `hosts.read` |
+| `ctx.actions` | `register(ActionSpec)`, `propose(ActionRequest)` (optional mit `standing_approval`, siehe §3; als `proposed_by` gilt ein Mensch nur, wenn der Kern ihn gerade kennt, eine Erweiterung nur unter ihrer eigenen Kennung, KI und Zeitplan frei, sonst `PermissionDenied`; ältere Kerne nahmen jeden; schlägt nicht die Erweiterung selbst vor, nennt sie das Protokoll in `detail.via`; Einzelheiten in §3, „Wer vorschlägt“), `check_standing_approval(granted_by_user_id, risk=…)` (gälte eine Dauerfreigabe dieser Person heute noch? `None` = ja, sonst der Grund), `waiting_count()` (wie viele Vorschläge aller Module auf eine Freigabe warten, nur die Zahl) | `hosts.execute` u. a.; Dauerfreigabe: `actions.standing_approval`; `waiting_count()`: `hosts.read` |
 | `ctx.hosts` | `list()`, `get()`, `upsert_discovered()`, `mark_gone(provider_refs)`: markiert eigene Server (nur die dieser Erweiterung) als beim Anbieter nicht mehr vorhanden, etwa einen in Proxmox gelöschten Gast; die Oberfläche zeigt sie grau und bietet „Entfernen“ an. Ein schon markierter Server behält den ersten Zeitpunkt (`gone_since`), ein späteres `upsert_discovered()` mit derselben Kennung hebt die Markierung auf. Nur für Bereiche aufrufen, die gerade vollständig gelesen wurden, nie für eine nicht erreichbare Verbindung. Gibt zurück, wie viele Server neu markiert wurden. Ältere Kerne haben die Methode nicht. `set_status(provider_refs, status)`: setzt nur den Zustand eigener Server, ohne die übrigen Felder neu zu melden, etwa `HostStatus.DOWN` für die Knoten einer nicht erreichbaren Verbindung (die Startseite zeigt sie dann als „nicht erreichbar“) oder `HostStatus.UNKNOWN` für Gäste, deren Liste nicht lesbar war. Server in Wartung und als nicht mehr vorhanden markierte bleiben unberührt, `HostStatus.MAINTENANCE` setzt die Methode nicht (`ValueError`). Der nächste `upsert_discovered()` setzt wieder den gemeldeten Zustand. Gibt zurück, wie viele Server sich geändert haben; keine Meldung und kein Ereignis. Ältere Kerne haben die Methode nicht | `hosts.read` / `hosts.write` (`mark_gone()`, `set_status()` und `upsert_discovered()` brauchen `hosts.write`) |
 | `ctx.exec` | `run(host, command)`, `stream(host, command)` (laufende Ausgabe, z. B. Live-Logs), `open_shell(host)`, `sftp(host)`. Dazu `run_argv(host, argv, stdin=None)` und `stream_argv(host, argv)`: Die Erweiterung gibt eine Liste von Wörtern (`["docker", "compose", "-f", pfad, "config"]`), der Kern setzt daraus mit POSIX-Quoting (`shlex.join`) die Kommandozeile zusammen. Ein Wert aus einer Eingabe wird so nie zu Shell-Syntax; für alles, was nicht feststeht, ist das der empfohlene Weg. Vor Optionen schützt das Quoting nicht: Ein Wert mit führendem `-` liest das Programm als Option, darum Eingabewerte, die als Argument dienen, mit `--` vom Rest trennen. Eine Zeichenkette statt einer Liste, ein leeres `argv`, ein leeres erstes Wort, ein erstes Wort wie `NAME=wert` (die Shell setzte es als Variable), ein Wort, das keine Zeichenkette ist, oder ein NUL-Zeichen: `TypeError`/`ValueError`, bevor eine Verbindung aufgebaut wird. Sperrliste und Recht wie bei `run()`, geprüft wird die zusammengesetzte Zeile. `stdin` (Text als UTF-8 oder Bytes) geht nur in die Standardeingabe, nie auf die Kommandozeile und nie ins Protokoll; danach bekommt der Prozess EOF, auch bei leeren Daten (etwa um eine Datei zu prüfen, ohne sie zu schreiben). Die Login-Shell des Servers muss eine POSIX-Shell sein (sh, bash, dash, zsh), wie bei `run()`. Einen Befehl über 8000 Byte schickt der Kern bei `run()` und `run_argv()` ohne `stdin` über die Standardeingabe (außer an Windows-Server), weil kleine SSH-Server wie Dropbear sonst die ganze Verbindung abbrechen. Ein solcher Befehl darf kein NUL-Zeichen enthalten (`ValueError`). Mit `stdin` und bei `stream()`, `stream_argv()` und `open_shell(command=…)` geht das nicht (die Standardeingabe gehört dem Befehl, oder das Terminal schriebe ihn zurück): Dort scheitert ein Befehl über 8000 Byte, bevor etwas gesendet wird, auch an einem Server wie OpenSSH, der ihn annähme, mit einem `SshError`, dessen Text ein fertiger Satz ist (`readable = True`, „Der Befehl ist mit … Byte zu lang für eine SSH-Befehlszeile …“). Windows-Server sind ausgenommen. Ältere Kerne haben beide Methoden nicht | `hosts.execute` |
-| `ctx.secrets` | `get_handle(label)`, `create()`, `delete(label)` (löscht das Geheimnis; `True`, wenn es eines gab, sonst `False`; Protokoll `extension.secret_removed`; ältere Kerne haben es nicht), `replace(label=, value=)` (neuer Wert in einem Schritt, scheitert es, bleibt der alte; `SecretUnavailable`, wenn es keines gibt; Protokoll `extension.secret_set`; ältere Kerne haben es nicht). Ersetzen und löschen darf eine Erweiterung nur ihre **eigenen** Geheimnisse (angelegt unter ihrer Kennung oder einer früheren, über `create()` oder ihre Einstellungsseite); sonst `SecretNotOwned` (eine Art `PermissionDenied`), und das Geheimnis bleibt unverändert. Lesen geht weiter nach dem Recht. Ein Geheimnis der Zwei-Faktor-Anmeldung eines Kontos bekommt keine Erweiterung, auch nicht zum Lesen | `secrets.read:<label>` |
-| `ctx.vault_use` | Context-Manager, der einen Wert nur im Speicher materialisiert | dito |
-| `ctx.db` | AsyncSession-Factory, **nur** auf `ext_<id>_*`-Tabellen (nach einer Umbenennung auch auf die Präfixe der alten Kennungen, siehe §1 „Erweiterung umbenennen“) | — |
-| `ctx.settings` | `declare(schema)`, `get()`, `set()` | — |
-| `ctx.scheduler` | `register_job(JobSpec)`; `validate_schedule(schedule)` prüft einen Cron-Ausdruck genau so wie `register_job()`, ohne etwas anzumelden (`ValueError` mit deutscher Meldung): für Zeitpläne, die eine Erweiterung selbst speichert (etwa den eines Skripts), erst prüfen, dann speichern, denn ein gespeicherter kaputter Zeitplan ließe `register_job()` beim nächsten Start scheitern. Ältere Kerne haben die Methode nicht. Meldet ein Job-Handler einen erwarteten Fehlschlag mit `NodvardError`, steht der Lauf als fehlgeschlagen mit diesem Text da, ohne Traceback (im Lauf-Protokoll und im Container-Log); jede andere Ausnahme kommt mit Traceback | `schedule.register` |
-| `ctx.events` | `publish(Event)`, `subscribe(pattern, handler)` | — |
+| `ctx.secrets` | `get_handle(label)`, `exists(label)` (nur mit dem Recht für dieses Label, ein Anmelde-Geheimnis gilt als nicht vorhanden; ältere Kerne prüfen das nicht), `create()`, `delete(label)` (löscht das Geheimnis; `True`, wenn es eines gab, sonst `False`; Protokoll `extension.secret_removed`; ältere Kerne haben es nicht), `replace(label=, value=)` (neuer Wert in einem Schritt, scheitert es, bleibt der alte; `SecretUnavailable`, wenn es keines gibt; Protokoll `extension.secret_set`; ältere Kerne haben es nicht). Ersetzen und löschen darf eine Erweiterung nur ihre **eigenen** Geheimnisse (angelegt unter ihrer Kennung oder einer früheren, über `create()` oder ihre Einstellungsseite); sonst `SecretNotOwned` (eine Art `PermissionDenied`), und das Geheimnis bleibt unverändert. Lesen geht weiter nach dem Recht. Ein Geheimnis der Zwei-Faktor-Anmeldung eines Kontos bekommt keine Erweiterung, auch nicht zum Lesen | `secrets.read:<label>` |
+| `ctx.vault_use` | Context-Manager, der einen Wert nur im Speicher materialisiert. Geprüft werden Recht und Anmelde-Geheimnis am gespeicherten Geheimnis zur ID des Handles, nicht am Label im Handle: Ein selbst gebautes Handle kommt so an nichts, was `get_handle()` nicht auch liefert (sonst `PermissionDenied` bzw. `SecretNotOwned`, beide nennen nur das Label aus dem Handle; `SecretUnavailable`, wenn es die ID nicht gibt) | dito |
+| `ctx.db` | AsyncSession-Factory, **nur** auf `ext_<id>_*`-Tabellen (nach einer Umbenennung auch auf die Präfixe der alten Kennungen, siehe §1 „Erweiterung umbenennen“). SQLite prüft jede Anweisung: Andere Tabellen (auch `sqlite_master`), PRAGMA, ATTACH und Schemaänderungen enden mit `sqlalchemy.exc.DatabaseError` („not authorized“ bzw. „access to … is prohibited“) und einer Warnung im Log. Eine Session gilt nur innerhalb von `async with`, danach wirft jede Anweisung `RuntimeError` | — |
+| `ctx.settings` | `declare(schema)`, `get()`, `set()`, `core(key)` (liest nur die Kern-Einstellungen `system.timezone` und `maintenance.windows`, sonst `PermissionDenied`; ältere Kerne lieferten jede) | — |
+| `ctx.scheduler` | `register_job(JobSpec)`; `validate_schedule(schedule)` prüft einen Cron-Ausdruck genau so wie `register_job()`, ohne etwas anzumelden (`ValueError` mit deutscher Meldung): für Zeitpläne, die eine Erweiterung selbst speichert (etwa den eines Skripts), erst prüfen, dann speichern, denn ein gespeicherter kaputter Zeitplan ließe `register_job()` beim nächsten Start scheitern. Ältere Kerne haben die Methode nicht. Meldet ein Job-Handler einen erwarteten Fehlschlag mit `NodvardError`, steht der Lauf als fehlgeschlagen mit diesem Text da, ohne Traceback (im Lauf-Protokoll und im Container-Log); jede andere Ausnahme kommt mit Traceback. Ein Lauf nach Zeitplan kennt keinen Menschen, auch wenn der Job in einer Anfrage angemeldet wurde; ein Lauf von Hand (`POST /jobs/{id}/run`) kennt den, der ihn auslöst (§3, „Wer vorschlägt“) | `schedule.register` |
+| `ctx.events` | `publish(Event)`, `subscribe(pattern, handler)`; ein Handler kennt keinen Menschen, auch nicht den, der das Ereignis ausgelöst hat (§3, „Wer vorschlägt“) | — |
 | `ctx.notify` | `send(Notification, raise_on_failure=False)` → `NotifyResult` (`notification_id`, `suppressed`, `delivered`) – mit `raise_on_failure=True` wirft `NotificationNotDelivered`, wenn es Kanäle gab und keiner zugestellt hat (für „erneut versuchen“); `would_suppress(host_id=…, host_ids=…)` fragt nur, ob ein Wartungsfenster gerade still schalten würde (siehe unten) | `notify.send` |
-| `ctx.audit` | `log(entry)`. Erweiterungen schreiben unter eigenem Namen, zum Beispiel `<kennung>.<ereignis>`. Aktionen, deren Name mit `mfa.`, `auth.`, `login.`, `system.` oder `user.` beginnt (Groß-/Kleinschreibung und Leerzeichen am Rand zählen nicht), schreibt nur der Kern, weil er sie wieder liest und danach entscheidet: Der Aufruf wirft dann `ValueError` und schreibt nichts | `audit.write` |
-| `ctx.http` | vorkonfigurierter `httpx.AsyncClient` mit Zielprüfung, dazu `websocket(url, …)`. Die Zielprüfung gilt nur für die Start-Adresse: `websocket()` folgt Weiterleitungen (3xx) beim Verbindungsaufbau nie (`async with` wirft dann ein `ConnectionError` mit deutschem Text, eine zweite Verbindung entsteht nicht); `get()`, `post()`, `request()` und `stream()` folgen ihnen ebenfalls nie: Eine Antwort mit Status 3xx kommt unverändert zurück, und die Erweiterung fragt die neue Adresse selbst ab. `follow_redirects=True` (oder ein anderer Wahrheitswert) wirft `ValueError`, bevor eine Anfrage hinausgeht, auch mit `insecure_tls=True`; `follow_redirects=False` bleibt erlaubt. Grund: Die Prüfung der erlaubten Adressen (`net.outbound`) kennt nur die Adresse des Aufrufs, das Ziel einer Weiterleitung sähe sie nie. Einen Proxy aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, bei `websocket()` auch `WS_PROXY`, `WSS_PROXY`, `SOCKS_PROXY`) benutzt `ctx.http` nie, jede Verbindung geht direkt an die geprüfte Adresse; `SSL_CERT_FILE` und `SSL_CERT_DIR` gelten weiter. `peer_certificate(url)` liest nur das Zertifikat eines `https://`-/`wss://`-Ziels (Fingerabdruck SHA-256, `trusted`: gilt nach den Zertifizierungsstellen), ohne eine Anfrage zu senden. `pinned_sha256=` an `get()`, `post()`, `request()`, `stream()` und `websocket()` nimmt genau das Zertifikat mit diesem Fingerabdruck an und bricht sonst im TLS-Handshake mit `CertificateMismatch` ab, bevor ein Byte der Anfrage gesendet ist (für selbstsignierte Zertifikate, wenn etwas Geheimes hinausgeht; braucht wie `insecure_tls` `net.outbound.insecure_tls`). Aufrufe mit `pinned_sha256` merken sich keine Cookies des Servers | `net.outbound:<cidr>` |
+| `ctx.audit` | `log(entry)`. Erweiterungen schreiben unter eigenem Namen, zum Beispiel `<kennung>.<ereignis>`. Aktionen, deren Name mit `mfa.`, `auth.`, `login.`, `system.` oder `user.` beginnt (Groß-/Kleinschreibung und Leerzeichen am Rand zählen nicht), schreibt nur der Kern, weil er sie wieder liest und danach entscheidet: Der Aufruf wirft dann `ValueError` und schreibt nichts. Mit `actor=` steht ein Mensch nur dann als Akteur im Eintrag, wenn der Kern ihn gerade kennt: den Nutzer der laufenden Anfrage (der Kern merkt ihn sich beim Prüfen des Zugangs-Tokens, etwa über `Depends(ctx.api.current_actor)`) oder, während der Kern eine Aktion ausführt, wer sie vorgeschlagen und wer sie freigegeben hat (§3, „Wer vorschlägt“). Sonst schreibt der Kern den Eintrag unter der Erweiterung und vermerkt den genannten Akteur nur in `detail.on_behalf_of` (ältere Kerne übernahmen jeden) | `audit.write` |
+| `ctx.http` | vorkonfigurierter `httpx.AsyncClient` mit Zielprüfung, dazu `websocket(url, …)`. Die Zielprüfung gilt nur für die Start-Adresse: `websocket()` folgt Weiterleitungen (3xx) beim Verbindungsaufbau nie (`async with` wirft dann ein `ConnectionError` mit deutschem Text, eine zweite Verbindung entsteht nicht); `get()`, `post()`, `request()` und `stream()` folgen ihnen ebenfalls nie: Eine Antwort mit Status 3xx kommt unverändert zurück, und die Erweiterung fragt die neue Adresse selbst ab. `follow_redirects=True` (oder ein anderer Wahrheitswert) wirft `ValueError`, bevor eine Anfrage hinausgeht, auch mit `insecure_tls=True`; `follow_redirects=False` bleibt erlaubt. Grund: Die Prüfung der erlaubten Adressen (`net.outbound`) kennt nur die Adresse des Aufrufs, das Ziel einer Weiterleitung sähe sie nie. Einen Proxy aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, bei `websocket()` auch `WS_PROXY`, `WSS_PROXY`, `SOCKS_PROXY`) benutzt `ctx.http` nie, jede Verbindung geht direkt an die geprüfte Adresse; `SSL_CERT_FILE` und `SSL_CERT_DIR` gelten weiter. `peer_certificate(url)` liest nur das Zertifikat eines `https://`-/`wss://`-Ziels (Fingerabdruck SHA-256, `trusted`: gilt nach den Zertifizierungsstellen), ohne eine Anfrage zu senden. `pinned_sha256=` an `get()`, `post()`, `request()`, `stream()` und `websocket()` nimmt genau das Zertifikat mit diesem Fingerabdruck an und bricht sonst im TLS-Handshake mit `CertificateMismatch` ab, bevor ein Byte der Anfrage gesendet ist (für selbstsignierte Zertifikate, wenn etwas Geheimes hinausgeht; braucht wie `insecure_tls` `net.outbound.insecure_tls`). Aufrufe mit `pinned_sha256` merken sich keine Cookies des Servers. Mit nur `net.outbound:<cidr>` gehen nur IP-Adressen aus diesen Bereichen; ein DNS-Name braucht das freie Recht `net.outbound` (ältere Kerne ließen ihn ungeprüft durch) | `net.outbound:<cidr>` |
 | `ctx.ws` | `broadcast(channel, payload)` auf `ext.<id>.*` (nach einer Umbenennung zusätzlich auf `ext.<alt>.*`) | — |
-| `ctx.spawn` | überwachter Hintergrundtask mit Neustart-Politik | — |
+| `ctx.spawn` | überwachter Hintergrundtask mit Neustart-Politik; er kennt keinen Menschen, auch wenn er in einer Anfrage gestartet wurde (§3, „Wer vorschlägt“) | — |
 | `ctx.logger` | strukturierter Logger, vorgetaggt mit der Extension-ID | — |
 | `ctx.data_dir` | eigener, beschreibbarer Ordner der Extension (im Image `/app/data/ext/<id>/`, nach einer Umbenennung der Ordner der Speicher-Kennung, siehe §1). Dateien gehören hierher: Der Code im Image gehört root und ist schreibgeschützt, auch der eigene Paketordner. Neue Dateien sind nur für den Benutzer `lattice` lesbar | — |
 
@@ -622,6 +667,22 @@ auditiert, und führt gegebenenfalls über den passenden `ActionExecutor` aus.
 `reason` ist im Datentyp als Pflichtfeld verankert — die Begründungspflicht
 lässt sich damit nicht versehentlich umgehen.
 
+**Wer vorschlägt (`proposed_by`).** Ein Mensch (`Actor.user`) gilt nur, wenn der Kern ihn gerade kennt: den Nutzer der
+laufenden Anfrage (gemerkt beim Prüfen des Zugangs-Tokens, etwa über `Depends(ctx.api.current_actor)`) oder, während der
+Kern eine Aktion ausführt, wer sie vorgeschlagen und wer sie freigegeben hat. Eine Aufgabe, die eine Route oder ein
+Ausführer mit `asyncio.create_task` startet, kennt diese Menschen weiter (etwa eine Nachschau, die später ins Protokoll
+schreibt). Ohne bekannten Menschen beginnen dagegen Aufgaben aus `ctx.spawn`, Läufe nach Zeitplan, `setup()`,
+`on_start()`, `on_stop()`, `on_settings_changed()` und `on_secret_changed()` (samt dort mit `asyncio.create_task`
+gestarteten Aufgaben) und Handler aus `ctx.events.subscribe()`, auch wenn sie in einer Anfrage laufen, etwa beim
+Einschalten des Moduls, beim Speichern seiner Einstellungen oder nach einer Freigabe; ein Lauf von Hand
+(`POST /jobs/{id}/run`) läuft in der Anfrage und kennt den, der ihn auslöst. Eine Erweiterung schlägt sonst nur unter
+ihrer eigenen Kennung vor (oder einer aus `legacy_ids`), KI (`Actor.ai`) und Zeitplan (`Actor.scheduler`) sind frei.
+Kommt ein Vorschlag nicht unter der heutigen Kennung der Erweiterung (auch bei einer aus `legacy_ids`), nennt der
+Protokolleintrag dazu (`action.proposed`, bei sofortiger Freigabe `action.approved`, bei Ablehnung durch das Gate
+`action.denied`) sie in `detail.via`. Alles andere wirft `PermissionDenied`, angelegt wird dann nichts (ältere Kerne
+nahmen jeden). Ein Vorschlag aus `BackupProvider.retry()` trägt `Actor.extension("backups")`; wer ihn weiterreicht,
+setzt `proposed_by` vorher selbst (eigene Kennung oder den Nutzer der Anfrage).
+
 Gibt der Kern die Aktion sofort frei (Modus `full`), läuft sie im Hintergrund.
 `propose()` wartet ohne weitere Angabe bis zum Ende — richtig für Hintergrund-Jobs, die
 das Ergebnis brauchen. Eine HTTP-Route gibt `wait_s=REQUEST_WAIT_S` (20 s, aus
@@ -641,8 +702,9 @@ den Grund selbst festlegt). Felder `output`, `stdout`, `stderr` und `command` in
 Einträge (`ctx.audit.log`) leert er für Leser ohne `hosts.execute`, `reason` und alle übrigen Felder
 nicht – Text vom Server gehört deshalb weder in `reason` noch in andere Felder von `detail` noch
 in Meldungen, ein Befehl nur in `detail.command` (Meldungen sieht auch, wer nur lesen darf).
-Ereignisse `action.*` (etwa `action.executed` mit dem `payload`) bekommen Handler im Prozess
-(`ctx.events.subscribe`) vollständig; über den WebSocket bekommen Nutzer ohne `hosts.execute` den
+`action.executed` (mit `ext_id` des vorschlagenden Moduls) bekommen Handler im Prozess (`ctx.events.subscribe`)
+mit dem `payload` der Aktion nur, wenn die Aktion vom eigenen Modul stammt oder das Modul `hosts.execute` hat; sonst
+fehlt das Feld (ältere Kerne lieferten es jedem). Über den WebSocket bekommen Nutzer ohne `hosts.execute` den
 `payload` nur gekürzt ([04 §4](04-API.md#4-websocket)).
 
 **Dauerfreigabe (ohne Klick).** Ein Vorschlag kann sich auf eine Freigabe berufen, die ein Mensch vorab
@@ -693,9 +755,11 @@ ctx.ui.register_widget(WidgetSpec(
             actions=[
                 WidgetAction(id="confirm", label="Bestätigen",
                              endpoint="incidents/{{ id }}/confirm",
-                             method="POST", confirm=True, style="primary"),
+                             method="POST", confirm=True, style="primary",
+                             permissions=["soc.manage"]),       # mehr als das Widget selbst
                 WidgetAction(id="dismiss", label="Verwerfen",
-                             endpoint="incidents/{{ id }}/dismiss", method="POST"),
+                             endpoint="incidents/{{ id }}/dismiss", method="POST",
+                             permissions=["soc.manage"]),
             ],
         ),
         empty_text="Keine offenen Vorfälle",
@@ -720,6 +784,12 @@ sich eine zweite Programmiersprache eingehandelt.
 Knopf nur, wenn der gerenderte Wert „wahr“ ist (nicht leer, nicht `false`/`0`/`none`).
 Die Entscheidung trifft das BACKEND (es liefert `can_start` als fertiges Feld) — auch
 das ist keine Bedingung im Template, nur ein Ja/Nein-Feld.
+
+**Knöpfe nach Rechten:** `WidgetSpec.permissions` entscheidet, wer das Widget sieht,
+`WidgetAction.permissions` zusätzlich, wer einen Knopf darin bekommt. Fehlt der Person ein
+Recht der Aktion, lässt der Kern den Knopf schon in `GET /api/v1/widgets` weg; Web und App
+müssen dafür nichts prüfen. Die Route dahinter prüft das Recht trotzdem selbst
+(`include_router(..., permission=...)`), der fehlende Knopf ist keine Schranke.
 
 **Badge-Farben nicht aus dem Anzeigetext ableiten:** `| tone` rät die Farbe aus
 Stichwörtern („critical“, „warning“ …). Für deutsche Anzeigewörter den Text aus einem
@@ -834,12 +904,16 @@ ctx.ui.register_host_requirement(HostRequirementSpec(
     fail_hint="Benutzer zur Gruppe docker hinzufügen: sudo usermod -aG docker {user}",
     unix_group="docker",                  # Einrichtungsbefehl bietet "zur Gruppe hinzufügen" an
     tags=["docker"],                      # nur Server mit einem dieser Tags (leer = alle)
+    skip_tags=[],                         # nie auf Servern mit einem dieser Tags (Standard leer)
     os_families=["linux"],                # Standard; leer = jedes System
 ))
 ctx.ui.register_host_requirement(HostRequirementSpec(
     id="root", label="Root-Rechte", needs_root=True, root_reason="Updates einspielen, Quarantäne",
 ))
 ```
+
+`skip_tags` braucht es, wenn ein Tag einen anderen überstimmt: Die Punkte für Docker im Modus „Nur bedienen“
+(`tags=["docker-bedienen"]`, `skip_tags=["docker"]`) gelten nicht auf einem Server, der auch `docker` trägt.
 
 Dieselbe `id` erneut zu registrieren **ersetzt** die Meldung (so folgt sie einem
 einstellbaren Tag in `on_settings_changed`); beim Deaktivieren der Extension verschwindet
@@ -851,9 +925,8 @@ passenden Meldungen. Additiv: `API_VERSION` bleibt.
 
 Die Zielseite liest `?host=` über den Hook `useUrlParams()` (unten) und hebt den Host
 hervor oder filtert auf ihn — mit sichtbarem, entfernbarem Filter. Für die Markierung gibt
-es die Kern-Klasse `nodvard-deck-focus`; der alte Name `lattice-focus` gilt weiter (Übergang),
-beide stehen im Kern in derselben CSS-Regel. Ändert sich die Query aus Sicht des Routers, baut der
-Kern die Seite außerdem neu auf.
+es die Kern-Klasse `nodvard-deck-focus` (im UI-Kit `FOCUS_CLASS`). Ändert sich die Query aus Sicht des
+Routers, baut der Kern die Seite außerdem neu auf.
 
 Darauf allein kann sich eine Seite nicht verlassen, sobald sie ihre **eigene** Adresse per
 `replaceState` pflegt (Reiter im Streifen ↔ `?tab=`, Filter entfernen, anderen Server
@@ -861,9 +934,7 @@ wählen): für den Router ändert sich die Query dann nicht, obwohl die Adressze
 andere ist, und ein Link auf dieselbe Adresse baut nichts neu auf. Der Kern feuert deshalb
 nach jeder Navigation innerhalb einer Erweiterungsseite das Ereignis `nodvard-deck:navigate` auf
 `window` (`ExtensionPage.tsx`; `pushState` meldet der Browser sonst bei niemandem), auch nach
-Zurück/Vor, und setzt dafür `window.__nodvardDeck.navigateEvents`. Den alten Namen
-`lattice:navigate` feuert er zusätzlich weiter (Übergang, siehe „Namen im Frontend-Vertrag“
-unten). Der Hook `useUrlParams()`
+Zurück/Vor, und setzt dafür `window.__nodvardDeck.navigateEvents`. Der Hook `useUrlParams()`
 (`extensions/_shared/frontend/src/location.ts`) folgt diesem Ereignis — und nur ohne diese
 Marke (Tests, Vorschau) zusätzlich `popstate`: in der Kern-Shell würde die alte Seite sonst
 kurz die neue Adresse zeigen und den Server abfragen, bevor der Kern sie neu aufbaut. Er
@@ -910,37 +981,24 @@ verbindliche Prüfung.
 
 Das Bundle ist ein **ESM-Modul**, gebaut mit React, ReactDOM und dem SDK als
 `external`. Der Kern liefert es unter `/api/v1/ext/<id>/frontend/index.js` aus und lädt
-es per `import(url)`. Geteilte Singletons hängen an `window.__nodvardDeck` (alter Name
-`window.__lattice`, gilt weiter — Übergang), ein Import-Map-Shim
-löst `react`, `react/jsx-runtime` und `react-dom` dorthin auf.
+es per `import(url)`. Geteilte Singletons hängen an `window.__nodvardDeck`, ein Import-Map-Shim
+(`/nodvard-deck-shim/*.js`) löst `react`, `react/jsx-runtime` und `react-dom` dorthin auf.
 
 Das Bundle läuft unter der Content-Security-Policy der App-Seite (`script-src 'self'`, siehe
 [01-ARCHITECTURE.md](01-ARCHITECTURE.md)): Code nur vom Server von Nodvard Deck, kein `eval` und kein
 `new Function` (auch nicht in Bibliotheken, etwa Vorlagen- oder Schema-Compiler), keine `on…=`-Attribute in
-eingefügtem HTML, kein Nachladen von einem CDN, keine Worker aus `blob:` und kein WebAssembly. Was dagegen verstößt,
-blockiert der Browser und nennt den Grund in der Konsole.
+eingefügtem HTML, kein Nachladen von einem CDN, keine Worker aus `blob:` und kein WebAssembly. Auch Abrufe,
+WebSockets, Bilder und Schriften gehen nur an den eigenen Server (`default-src 'self'`, Bilder zusätzlich `data:` und
+`blob:`); Daten fremder Dienste holt das Backend der Erweiterung. Was dagegen verstößt, blockiert der Browser und nennt
+den Grund in der Konsole.
 
-**Namen im Frontend-Vertrag (Übergang).** Mit der Umbenennung zu Nodvard Deck gibt es für alles,
-woran Bundles hängen, einen neuen Namen. Die alten gelten weiter, bis eine Major-Version sie
-ausdrücklich entfernt:
-
-| Neu | Alt (gilt weiter, Übergang) |
-|---|---|
-| `window.__nodvardDeck` | `window.__lattice` — **dasselbe Objekt**, Änderungen an einem sieht man am anderen |
-| Ereignis `nodvard-deck:navigate` | `lattice:navigate` |
-| Ereignis `nodvard-deck:timezone` | `lattice:timezone` |
-| CSS-Klasse `nodvard-deck-focus` | `lattice-focus` (beide in einer Regel) |
-| TypeScript-Typ `NodvardDeckTokenRefreshResult` | `LatticeTokenRefreshResult` (Alias) |
-
-Die Kern-Shell setzt beide Namen und feuert jedes Ereignis unter beiden Namen. Ein Bundle
-oder Kit liest das Objekt als `window.__nodvardDeck ?? window.__lattice` (das UI-Kit tut das über
-`deck()` aus `extensions/_shared/frontend/src/deck.ts`) und hört auf **genau ein** Ereignis:
-auf `nodvard-deck:…`, wenn `window.__nodvardDeck` existiert, sonst auf `lattice:…`. So reagiert es nie
-doppelt. Der Grund für beides: Ein Browser-Tab, der vor einem Update offen war, lädt neue Bundles
-in seinen alten Kern (er kennt nur `__lattice`), und Erweiterungen von Dritten mit älterem UI-Kit
-laufen an einem neuen Kern. Auch die Import-Map-Shims (`/lattice-shim/react.js` u. a.) lesen beide
-Namen; ihr **Pfad** `/lattice-shim/` bleibt unverändert, denn die Seite eines alten Tabs verweist
-darauf.
+**Namen im Frontend-Vertrag.** Bundles hängen an `window.__nodvardDeck` (das UI-Kit liest es über `deck()` aus
+`extensions/_shared/frontend/src/deck.ts`), an den Ereignissen `nodvard-deck:navigate` und `nodvard-deck:timezone`,
+an der CSS-Klasse `nodvard-deck-focus` und am TypeScript-Typ `NodvardDeckTokenRefreshResult`. Die alten Namen aus der
+Zeit vor Nodvard Deck (`window.__lattice`, `lattice:*`, `lattice-focus`, `LatticeTokenRefreshResult`, Import-Map
+`/lattice-shim/`) gibt es seit 0.12 nicht mehr: Ein Bundle mit einem älteren UI-Kit, das nur sie kennt, findet die
+Kern-Shell nicht. Ein Tab, der vor dem Update offen war, braucht einmal „Seite neu laden“, wenn er danach eine
+Erweiterungsseite zum ersten Mal öffnet (die Erweiterungsseite bietet den Knopf an).
 
 Für Aufrufe gegen die Dashboard-API haben die Seiten der mitgelieferten Erweiterungen
 ein gemeinsames UI-Kit (`extensions/_shared/frontend/src/`): `authedFetch` setzt das
@@ -1069,8 +1127,24 @@ Tag, nicht ein JSON-Eintrag, der unbemerkt veraltet.
   Der Kern prüft das beim Laden und verweigert die Extension sonst.
 - Jede Extension hat einen **eigenen Alembic-Branch**
   (`alembic upgrade heads` fährt Kern + alle Extensions hoch).
-- `ctx.db` liefert Sessions, deren Zugriff auf den eigenen Präfix beschränkt ist.
-  Kern-Daten werden nie direkt gelesen, sondern über `ctx.hosts`, `ctx.audit` usw. —
+- `ctx.db` liefert Sessions, deren Zugriff auf den eigenen Präfix beschränkt ist. Das prüft SQLite selbst bei jeder
+  Anweisung (Autorisierer), auch bei SQL-Text aus `text()` und schon ab dem Ausleihen der Verbindung (auch über
+  `get_raw_connection()`). Der Wächter ist eine zusätzliche Schicht gegen Fehler und eingeschleustes SQL, keine
+  Sandbox: Extension-Code läuft im selben Prozess wie der Kern und kommt daran vorbei, wenn er es darauf anlegt, etwa
+  mit `session.bind.execution_options(nodvard_table_guard=None)`, das eine Engine ohne Wächter liefert. Ein Präfix ist
+  der Anfang eines Namens: Neben einer Erweiterung `inventory` kommt eine Erweiterung `inventory-x` nicht an
+  `ext_inventory_*`, `inventory` aber an `ext_inventory_x_*`. Eine neue Kennung deshalb nicht aus einer bestehenden
+  plus Bindestrich bilden. Abgelehnt werden auch Tabellenfunktionen wie `json_each` oder `pragma_table_info` (für
+  SQLite ein Lesen fremder Tabellen; `json_extract` geht), rekursive `WITH`-Abfragen ohne den eigenen Präfix im Namen
+  (`WITH RECURSIVE ext_<id>_n(...)` geht) und Fremdschlüssel von eigenen auf Kern-Tabellen (etwa auf `hosts.id`):
+  SQLite liest beim Prüfen die Kern-Tabelle mit, Einfügen und Löschen scheitern dann. Verknüpfungen mit `USING (…)`
+  oder `NATURAL` lehnt der Wächter ganz ab, auch zwischen eigenen Tabellen: Die Spalten, die SQLite dafür selbst
+  bildet, legt es dem Autorisierer nicht vor. Stattdessen `JOIN … ON` schreiben (ORM und Core tun das ohnehin).
+  Geprüft wird das Wort im ganzen SQL-Text, auch in Zeichenketten, Namen und Kommentaren; Werte deshalb als Parameter
+  übergeben und keine Spalte `using` oder `natural` nennen. Diese Sperre sieht nur Anweisungen über SQLAlchemy; was
+  eine Extension über `get_raw_connection()` direkt am Treiber ausführt, prüft allein der Autorisierer. Eigene
+  FTS5-Tabellen gehen. Den Wächter gibt es bisher nur für SQLite; mit einer anderen Datenbank endet jede Anweisung
+  über `ctx.db` mit `RuntimeError`. Kern-Daten werden nie direkt gelesen, sondern über `ctx.hosts`, `ctx.audit` usw. —
   sonst wäre das Datenmodell des Kerns eingefroren, sobald die erste Extension existiert.
 - Deinstallation: `state=uninstalling` → `on_stop` → optionaler
   `drop_data`-Haken → Tabellen entfernen → Registry-Zeile löschen.
@@ -1168,6 +1242,11 @@ die eingecheckte Liste `sdk_public.json`; neue Namen werden mit
 `python scripts/update_api_contract.py` nachgezogen, Ausnahmen nur mit Begründung in
 `backend/tests/contract/breaking_exceptions.toml`. Die Major-Version wird auf `1.0` gehoben,
 wenn die mitgelieferten Extensions stabil sind; die Regeln der Tabelle oben gelten dann unverändert.
+
+**Einmalige Ausnahme in 0.12:** Die alten Namen aus der Zeit vor Nodvard Deck (`lattice_sdk`, `LatticeExtension`,
+`LatticeError`, die Entry-Point-Gruppe `lattice.extensions`) sind entfernt; seit der Umbenennung waren sie als veraltet
+markiert.
+Eine Erweiterung, die sie noch nutzt, lädt nicht und bekommt einen klaren Grund mit dem neuen Namen.
 
 **Bewusst strenger aus Sicherheitsgründen:** `ctx.api.include_router()` ohne `permission=` verlangt eine Anmeldung
 (früher war so eine Route ohne Anmeldung erreichbar), und WebSocket-Routen, `add_route()` und `mount()` lehnt der Kern

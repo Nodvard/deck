@@ -564,7 +564,7 @@ def test_commands_pass_the_deny_list_and_quote_paths():
         av.build_scan_command(["/"]),
         av.build_watch_command(["/tmp"], minutes=12),
         av.quarantine_command("/tmp/eicar.com", "f_1_eicar.com"),
-        av.restore_command("/var/lib/nexus-quarantine/f_1_eicar.com", "/tmp/eicar.com", "644"),
+        av.restore_command("/var/lib/nexus-quarantine/f_1_eicar.com"),
         av.delete_command("/var/lib/nexus-quarantine/f_1_eicar.com"),
         # Das Audit selbst (entkoppelt, `audit_job`); der alte Direktbefehl `LYNIS_COMMAND` ist weg.
         aj.lynis_command("audit_0123456789abcdef"),
@@ -579,6 +579,20 @@ def test_commands_pass_the_deny_list_and_quote_paths():
         av.delete_command("/etc/passwd")
 
 
+@pytest.mark.parametrize(("output", "place"), [
+    ("@@restored_to=/srv/x.sh\nok\n", "/srv/x.sh"),
+    ("@@restored_to=/srv/a\nb.sh\nok\n", "/srv/a\nb.sh"),
+    ("@@restored_to=/srv/a\nok\n@@restored_to=/etc/x\nok\n", "/srv/a\nok\n@@restored_to=/etc/x"),
+    ("@@restored_to=/srv/a\n@@msg=gone\nok", "/srv/a\n@@msg=gone"),
+    ("ok\n", None),
+    ("@@restored_to=/srv/x.sh\n", None),
+    ("@@msg=restore_no_origin\n", None),
+    ("@@restored_to=/srv/x.sh\nok\nnoch etwas\n", None),
+])
+def test_parse_restored_to(output, place):
+    assert av.parse_restored_to(output) == place
+
+
 @pytest.mark.parametrize("qpath", [
     "/etc/shadow", "/var/lib/nexus-quarantine/../../etc/shadow", "/var/lib/nexus-quarantine", "relativ/f1_x",
     "/var/lib/nexus-quarantine//f1_x", "/var/lib/nexus-quarantine/./f1_x", "/var/lib/nexus-quarantine/.herkunft/f1_x",
@@ -586,9 +600,20 @@ def test_commands_pass_the_deny_list_and_quote_paths():
 ])
 def test_restore_and_delete_only_take_files_directly_in_the_quarantine(qpath):
     with pytest.raises(ValueError, match="nicht in der Quarantäne"):
-        av.restore_command(qpath, "/tmp/leak", "644")
+        av.restore_command(qpath)
     with pytest.raises(ValueError, match="nicht in der Quarantäne"):
         av.delete_command(qpath)
+
+
+def _finds_everything(tmp_path: Path, *extra: Path) -> dict[str, str]:
+    """Umgebung mit einem clamscan, der in jeder Datei etwas findet (clamd antwortet nicht), wie bei einem echten Fund."""
+    tools = tmp_path / "scanner"
+    tools.mkdir(exist_ok=True)
+    (tools / "clamscan").write_text('#!/bin/sh\nfor a; do f=$a; done\necho "$f: Eicar-Test-Signature FOUND"\nexit 1\n')
+    (tools / "clamdscan").write_text("#!/bin/sh\nexit 2\n")
+    for name in ("clamscan", "clamdscan"):
+        (tools / name).chmod(0o755)
+    return {"PATH": ":".join([*(str(e) for e in extra), str(tools), "/usr/bin", "/bin"]), "LC_ALL": "C"}
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell (Git-Bash-sh scheitert an Windows-Pfaden)")
@@ -597,15 +622,16 @@ def test_quarantine_and_restore_roundtrip_on_a_real_shell(tmp_path, monkeypatch)
     victim = tmp_path / "evil.sh"
     victim.write_text("echo boom")
     victim.chmod(0o750)
-    out = subprocess.run(["sh", "-c", av.quarantine_command(str(victim), "f1_evil.sh")], capture_output=True, text=True)
-    assert out.returncode == 0, out.stderr
-    assert av.parse_mode(out.stdout) == "750"
+    out = subprocess.run(["sh", "-c", av.quarantine_command(str(victim), "f1_evil.sh")], capture_output=True, text=True,
+                         env=_finds_everything(tmp_path))
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert av.parse_mode(out.stdout) == "0750"
     assert not victim.exists()
     qfile = tmp_path / "q" / "f1_evil.sh"
     assert qfile.exists() and (qfile.stat().st_mode & 0o777) == 0
 
-    back = subprocess.run(["sh", "-c", av.restore_command(str(qfile), str(victim), "750")], capture_output=True, text=True)
-    assert back.returncode == 0, back.stderr
+    back = subprocess.run(["sh", "-c", av.restore_command(str(qfile))], capture_output=True, text=True)
+    assert (back.returncode, back.stdout) == (0, f"@@restored_to={victim}\nok\n"), back.stderr
     assert victim.read_text() == "echo boom" and (victim.stat().st_mode & 0o777) == 0o750
 
 
@@ -619,9 +645,10 @@ def test_quarantine_refuses_a_symlink_and_leaves_its_target_alone(tmp_path, monk
     system_file.chmod(0o640)
     link = tmp_path / "evil.sh"
     link.symlink_to(system_file)
-    out = subprocess.run(["sh", "-c", av.quarantine_command(str(link), "f1_evil.sh")], capture_output=True, text=True, check=False)
+    out = subprocess.run(["sh", "-c", av.quarantine_command(str(link), "f1_evil.sh")], capture_output=True, text=True,
+                         env=_finds_everything(tmp_path), check=False)
     assert out.returncode == 5
-    assert "Verknüpfung" in out.stdout
+    assert "Verknüpfung" in av.helper_text(out.stdout)
     assert (system_file.stat().st_mode & 0o777) == 0o640 and system_file.read_text() == "root:x:1\n"
     assert not os.path.lexists(tmp_path / "q" / "f1_evil.sh")
 
@@ -636,16 +663,19 @@ def test_quarantine_catches_a_file_swapped_for_a_symlink_right_before_mv(tmp_pat
     system_file.chmod(0o755)
     victim = tmp_path / "evil.sh"
     victim.write_text("echo boom")
-    # Ein mv, das vorher (wie ein Angreifer im richtigen Moment) die Datei gegen einen Link tauscht.
+    # Ein mv, das nach der Prüfung am Ort (wie ein Angreifer im richtigen Moment) die Datei gegen einen Link tauscht.
     bindir = tmp_path / "bin"
     bindir.mkdir()
-    (bindir / "mv").write_text(f'#!/bin/sh\nrm -f "$2"; ln -s "$VICTIM" "$2"\nexec {shutil.which("mv")} "$@"\n')
+    (bindir / "mv").write_text(
+        f'#!/bin/sh\nfor a; do [ "$a" = ./evil.sh ] && {{ rm -f ./evil.sh; ln -s "$VICTIM" ./evil.sh; }}; done\n'
+        f'exec {shutil.which("mv")} "$@"\n'
+    )
     (bindir / "mv").chmod(0o755)
-    env = {"PATH": f"{bindir}:/usr/bin:/bin", "VICTIM": str(system_file)}
+    env = {**_finds_everything(tmp_path, bindir), "VICTIM": str(system_file)}
     out = subprocess.run(["sh", "-c", av.quarantine_command(str(victim), "f1_evil.sh")], capture_output=True, text=True,
                          env=env, check=False)
     assert out.returncode == 5, out.stdout + out.stderr
-    assert "Verknüpfung" in out.stdout
+    assert av.helper_text(out.stdout).strip() == av.SYMLINK_SWAPPED
     assert (system_file.stat().st_mode & 0o777) == 0o755
     assert not os.path.lexists(tmp_path / "q" / "f1_evil.sh")
 
@@ -661,16 +691,20 @@ def test_quarantine_catches_a_file_swapped_for_a_hardlink_right_before_mv(tmp_pa
     system_file.chmod(0o640)
     victim = tmp_path / "evil.sh"
     victim.write_text("echo boom")
-    # Ein mv, das vorher (wie ein Angreifer im richtigen Moment) den Namen gegen einen Hardlink auf die Systemdatei tauscht.
+    # Ein mv, das nach der Prüfung am Ort (wie ein Angreifer im richtigen Moment) den Namen gegen einen Hardlink auf die
+    # Systemdatei tauscht.
     bindir = tmp_path / "bin"
     bindir.mkdir()
-    (bindir / "mv").write_text(f'#!/bin/sh\nrm -f "$2"; ln "$VICTIM" "$2"\nexec {shutil.which("mv")} "$@"\n')
+    (bindir / "mv").write_text(
+        f'#!/bin/sh\nfor a; do [ "$a" = ./evil.sh ] && {{ rm -f ./evil.sh; ln "$VICTIM" ./evil.sh; }}; done\n'
+        f'exec {shutil.which("mv")} "$@"\n'
+    )
     (bindir / "mv").chmod(0o755)
-    env = {"PATH": f"{bindir}:/usr/bin:/bin", "VICTIM": str(system_file)}
+    env = {**_finds_everything(tmp_path, bindir), "VICTIM": str(system_file)}
     out = subprocess.run(["sh", "-c", av.quarantine_command(str(victim), "f1_evil.sh")], capture_output=True, text=True,
                          env=env, check=False)
     assert out.returncode == 5, out.stdout + out.stderr
-    assert av.HARDLINK_SWAPPED in out.stdout and "@@mode" not in out.stdout
+    assert av.helper_text(out.stdout).strip() == av.HARDLINK_SWAPPED
     assert (system_file.stat().st_mode & 0o777) == 0o640 and system_file.read_text() == "root:x:1\n"  # nichts angefasst
     assert system_file.stat().st_nlink == 1  # der Name im Tresor ist wieder weg
     assert not os.path.lexists(tmp_path / "q" / "f1_evil.sh")
@@ -686,9 +720,10 @@ def test_quarantine_refuses_a_file_that_already_has_a_second_name(tmp_path, monk
     system_file.chmod(0o640)
     victim = tmp_path / "evil.sh"
     os.link(system_file, victim)
-    out = subprocess.run(["sh", "-c", av.quarantine_command(str(victim), "f1_evil.sh")], capture_output=True, text=True, check=False)
+    out = subprocess.run(["sh", "-c", av.quarantine_command(str(victim), "f1_evil.sh")], capture_output=True, text=True,
+                         env=_finds_everything(tmp_path), check=False)
     assert out.returncode == 5, out.stdout + out.stderr
-    assert av.HARDLINK_REFUSED in out.stdout
+    assert av.helper_text(out.stdout).strip() == av.HARDLINK_REFUSED
     assert victim.exists() and system_file.exists() and system_file.stat().st_nlink == 2
     assert (system_file.stat().st_mode & 0o777) == 0o640
     assert not os.path.lexists(tmp_path / "q" / "f1_evil.sh")
@@ -701,9 +736,10 @@ def test_quarantine_still_moves_a_file_with_a_single_name(tmp_path, monkeypatch)
     victim = tmp_path / "evil.sh"
     victim.write_text("echo boom")
     victim.chmod(0o751)
-    out = subprocess.run(["sh", "-c", av.quarantine_command(str(victim), "f1_evil.sh")], capture_output=True, text=True, check=False)
+    out = subprocess.run(["sh", "-c", av.quarantine_command(str(victim), "f1_evil.sh")], capture_output=True, text=True,
+                         env=_finds_everything(tmp_path), check=False)
     assert out.returncode == 0, out.stdout + out.stderr
-    assert av.parse_mode(out.stdout) == "751" and not victim.exists()
+    assert av.parse_mode(out.stdout) == "0751" and not victim.exists()
     assert ((tmp_path / "q" / "f1_evil.sh").stat().st_mode & 0o777) == 0
 
 
@@ -722,9 +758,10 @@ def test_quarantine_refuses_when_a_parent_folder_became_a_symlink(tmp_path, monk
     (home / "d").symlink_to(etc)
     found = home / "d" / "shadow"  # so hat clamscan den Fund gemeldet, als d noch ein Ordner war
     for shell in ("sh", "bash"):
-        out = subprocess.run([shell, "-c", av.quarantine_command(str(found), "f1_shadow")], capture_output=True, text=True, check=False)
+        out = subprocess.run([shell, "-c", av.quarantine_command(str(found), "f1_shadow")], capture_output=True, text=True,
+                             env=_finds_everything(tmp_path), check=False)
         assert out.returncode == 5, out.stdout + out.stderr
-        assert "Verknüpfung" in out.stdout
+        assert "Verknüpfung" in av.helper_text(out.stdout)
         assert shadow.read_text() == "root:x:1\n" and (shadow.stat().st_mode & 0o777) == 0o640
         assert not os.path.lexists(tmp_path / "q" / "f1_shadow")
 
@@ -733,6 +770,38 @@ def test_quarantine_command_rejects_paths_without_a_file_name():
     for bad in ("/tmp/", "/tmp/.", "/tmp/..", "tmp/x"):
         with pytest.raises(ValueError):
             av.quarantine_command(bad, "f1_x")
+
+
+@pytest.mark.parametrize("name", ["", ".herkunft", "../x", "a/b", "f1 x", "f1_x\n"])
+def test_quarantine_command_refuses_names_the_helper_refuses(name):
+    with pytest.raises(ValueError, match="Name in der Quarantäne"):
+        av.quarantine_command("/tmp/evil.sh", name)
+
+
+@pytest.mark.parametrize("finding_id", ["../../etc/cron.d/x", ".herkunft", "a/b", ""])
+def test_a_forged_finding_id_still_gives_a_name_inside_the_quarantine(finding_id):
+    name = av.quarantine_name(finding_id, "/tmp/evil.sh")
+    assert re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]*", name) and "/" not in name
+    av.quarantine_command("/tmp/evil.sh", name)
+
+
+@pytest.mark.parametrize("finding_id", ["f_0123456789abcdef", "019a1b2c-3d4e-7f80-9a1b-2c3d4e5f6a7b"])
+def test_a_finding_id_from_deck_stays_as_it_is(finding_id):
+    assert av.quarantine_name(finding_id, "/tmp/evil.sh") == f"{finding_id}_evil.sh"
+
+
+def test_without_the_bundled_helper_nothing_is_moved(monkeypatch, tmp_path):
+    monkeypatch.setattr(av, "_QUARANTINE_SH", None)
+    monkeypatch.setattr(av, "_RESTORE_SH", None)
+    with pytest.raises(ValueError, match="docker compose pull"):
+        av.quarantine_command("/tmp/evil.sh", "f_1_evil.sh")
+    with pytest.raises(ValueError, match="docker compose pull"):
+        av.restore_command(f"{av.QUARANTINE_DIR}/f_1_evil.sh")
+    cut = tmp_path / "shield-root.sh"
+    cut.write_text(av.HELPER_FILE.read_text(encoding="ascii").replace("\nconfirm_finding() {", "\nconfirm_finding_alt() {"))
+    monkeypatch.setattr(av, "HELPER_FILE", cut)
+    assert av._helper_functions(["die", "confirm_finding"]) is None
+    assert av._helper_functions(["die"]) is not None
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
@@ -750,17 +819,21 @@ def test_restore_refuses_when_the_original_folder_became_a_symlink(tmp_path):
     home.mkdir()
     (home / "d").symlink_to(profile_d)
     for shell in ("sh", "bash"):
-        out = subprocess.run([shell, "-c", _restore_command(qfile, home / "d" / "evil.sh", "755")],
-                             capture_output=True, text=True, check=False)
+        out = _run_restore(qfile, home / "d" / "evil.sh", shell=shell)
         assert out.returncode == 5, out.stdout + out.stderr
         assert "Verknüpfung" in out.stdout
         assert list(profile_d.iterdir()) == [] and qfile.exists()
 
 
 def _restore_command(qfile, target, mode):
-    """`restore_command` mit dem Ordner von `qfile` als Quarantäne."""
+    """`restore_command` mit dem Ordner von `qfile` als Quarantäne; Ort und Rechte stehen wie nach `quarantine` in deren
+    Ablage."""
+    qfile.parent.chmod(0o700)
+    record = qfile.parent / av.ORIGIN_DIR_NAME
+    record.mkdir(mode=0o700, exist_ok=True)
+    (record / qfile.name).write_text(f"{mode}\n{target}\n")
     with mock.patch.object(av, "QUARANTINE_DIR", str(qfile.parent)):
-        return av.restore_command(str(qfile), str(target), mode)
+        return av.restore_command(str(qfile))
 
 
 def _restore_setup(tmp_path, name="evil.sh"):
@@ -793,9 +866,11 @@ def _shim_bin(tmp_path, tool, body):
     return {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
 
 
-def _run_restore(qfile, target, env=None, mode="755"):
-    return subprocess.run(["sh", "-c", _restore_command(qfile, target, mode)],
+def _run_restore(qfile, target, env=None, mode="755", shell="sh"):
+    done = subprocess.run([shell, "-c", _restore_command(qfile, target, mode)],
                           capture_output=True, text=True, check=False, env=env)
+    done.stdout = av.helper_text(done.stdout)
+    return done
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
@@ -876,8 +951,7 @@ def test_restore_refuses_a_linked_parent_with_an_existing_subfolder(tmp_path, sh
     (elsewhere / "sub").mkdir(parents=True)
     (home / "d").symlink_to(elsewhere)
     target = home / "d" / "sub" / "evil.sh"
-    out = subprocess.run([shell, "-c", _restore_command(qfile, target, "755")],
-                         capture_output=True, text=True, check=False)
+    out = _run_restore(qfile, target, shell=shell)
     assert out.returncode == 5, out.stdout + out.stderr
     assert "Verknüpfung" in out.stdout
     assert list((elsewhere / "sub").iterdir()) == [] and [p.name for p in elsewhere.iterdir()] == ["sub"]
@@ -886,10 +960,21 @@ def test_restore_refuses_a_linked_parent_with_an_existing_subfolder(tmp_path, sh
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
+@pytest.mark.parametrize("session_umask", ["0177", "0277", "077"])
+def test_restore_does_not_depend_on_the_umask_of_the_session(tmp_path, session_umask):
+    """`mktemp -d` legt den Zwischenordner mit der umask an; ohne Leserecht für den Besitzer ging kein `cd` hinein."""
+    qfile, home = _restore_setup(tmp_path)
+    out = subprocess.run(["sh", "-c", f"umask {session_umask}; " + _restore_command(qfile, home / "evil.sh", "640")],
+                         capture_output=True, text=True, check=False)
+    assert out.returncode == 0 and av.parse_restored_to(out.stdout) == str(home / "evil.sh"), out.stdout + out.stderr
+    assert ((home / "evil.sh").stat().st_mode & 0o777) == 0o640
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
 def test_restore_sets_the_mode_and_keeps_the_content(tmp_path):
     qfile, home = _restore_setup(tmp_path)
     out = _run_restore(qfile, home / "evil.sh", mode="640")
-    assert out.returncode == 0 and out.stdout.split() == ["ok"], out.stdout + out.stderr
+    assert out.returncode == 0 and av.parse_restored_to(out.stdout) == str(home / "evil.sh"), out.stdout + out.stderr
     assert (home / "evil.sh").read_text() == "echo boom" and ((home / "evil.sh").stat().st_mode & 0o777) == 0o640
     assert not qfile.exists() and [p.name for p in home.iterdir()] == ["evil.sh"]
 
@@ -921,14 +1006,14 @@ def test_quarantine_and_restore_keep_odd_file_and_folder_names_intact(tmp_path, 
     for shell in ("sh", "bash"):
         qname = av.quarantine_name("f1", str(victim))
         out = subprocess.run([shell, "-c", av.quarantine_command(str(victim), qname)],
-                             capture_output=True, text=True, check=False, cwd=tmp_path)
+                             capture_output=True, text=True, check=False, cwd=tmp_path, env=_finds_everything(tmp_path))
         assert out.returncode == 0, out.stdout + out.stderr
-        assert av.parse_mode(out.stdout) == "750"
+        assert av.parse_mode(out.stdout) == "0750"
         assert not os.path.lexists(victim) and bystander.read_text() == "bleibt"
         qfile = tmp_path / "q" / qname
-        back = subprocess.run([shell, "-c", _restore_command(qfile, victim, "750")],
+        back = subprocess.run([shell, "-c", av.restore_command(str(qfile))],
                               capture_output=True, text=True, check=False, cwd=tmp_path)
-        assert back.returncode == 0 and back.stdout.split() == ["ok"], back.stdout + back.stderr
+        assert back.returncode == 0 and av.parse_restored_to(back.stdout) == str(victim), back.stdout + back.stderr
         assert victim.read_text() == "echo boom" and (victim.stat().st_mode & 0o777) == 0o750
         assert not qfile.exists()
         assert sorted(p.name for p in folder.iterdir()) == sorted([name, "daneben.txt"])
@@ -983,9 +1068,8 @@ def test_restore_works_in_a_setgid_folder(tmp_path, shell):
     probe.rmdir()
     if not inherited:
         pytest.skip("dieses Dateisystem vererbt das Gruppen-Bit nicht")
-    out = subprocess.run([shell, "-c", _restore_command(qfile, home / "evil.sh", "750")],
-                         capture_output=True, text=True, check=False)
-    assert out.returncode == 0 and out.stdout.split() == ["ok"], out.stdout + out.stderr
+    out = _run_restore(qfile, home / "evil.sh", mode="750", shell=shell)
+    assert out.returncode == 0 and av.parse_restored_to(out.stdout) == str(home / "evil.sh"), out.stdout + out.stderr
     assert (home / "evil.sh").read_text() == "echo boom" and ((home / "evil.sh").stat().st_mode & 0o777) == 0o750
     assert not qfile.exists() and [p.name for p in home.iterdir()] == ["evil.sh"]
 
@@ -1064,12 +1148,6 @@ def test_restore_is_safe_with_an_mv_that_copies_through_links(tmp_path):
     assert out.returncode == 4, out.stdout + out.stderr
     assert (home / "evil.sh").is_symlink() and sorted(p.name for p in home.iterdir()) == ["evil.sh"]
     _assert_still_quarantined(qfile)
-
-
-def test_restore_command_rejects_paths_without_a_file_name():
-    for bad in ("/tmp/", "/tmp/..", "tmp/x"):
-        with pytest.raises(ValueError):
-            av.restore_command("/var/lib/nexus-quarantine/f1_x", bad, "644")
 
 
 def test_watch_command_runs_without_clamav_hits(tmp_path):
@@ -1783,7 +1861,7 @@ async def test_scan_finding_is_quarantined_notified_and_audited():
         await conn.run_sync(Base.metadata.create_all)
     ctx = _FakeCtx(async_sessionmaker(engine, expire_on_commit=False), {
         "clamscan -r": CLAM_INFECTED,
-        "mv -f": "@@mode=755\n",
+        "confirm_finding": "@@mode=755\n",
     })
     defender = Defender(ctx)
     ids = await defender.start_scans(await defender.target_hosts(), "quick", paths=None, trigger="manual")
@@ -1798,7 +1876,7 @@ async def test_scan_finding_is_quarantined_notified_and_audited():
     findings = await defender.list_findings()
     assert {f["status"] for f in findings} == {"quarantined"}
     assert all(f["quarantine_path"].startswith("/var/lib/nexus-quarantine/") for f in findings)
-    assert sum("mv -f" in c for c in ctx.commands) == 2
+    assert sum("confirm_finding" in c for c in ctx.commands) == 2
     assert [a["action"] for a in ctx.audits].count("shield.quarantine") == 2
     assert "shield.malware_found" in [a["action"] for a in ctx.audits]
     assert ctx.notes and "2 in Quarantäne" in ctx.notes[0].body
@@ -1832,7 +1910,7 @@ def _slow_mover(ctx, states):
     run = ctx._run
 
     async def slow(host, command, timeout_s=60):
-        if "mv -f" in command:
+        if "confirm_finding" in command:
             ctx.commands.append(command)
             raise TimeoutError
         if "@@state=" in command:
@@ -1865,7 +1943,7 @@ async def test_a_quarantine_that_arrives_after_the_timeout_is_taken_over(monkeyp
 
     [finding] = await defender.list_findings()
     assert finding["status"] == "quarantined" and finding["quarantine_path"].endswith("_evil.sh")
-    assert sum("@@state=" in c for c in ctx.commands) == 3 and sum("mv -f" in c for c in ctx.commands) == 1
+    assert sum("@@state=" in c for c in ctx.commands) == 3 and sum("confirm_finding" in c for c in ctx.commands) == 1
     late = [a for a in ctx.audits if a["action"] == "shield.quarantine" and a["outcome"] == "success"]
     assert len(late) == 1 and late[0]["detail"]["late"] is True
     await engine.dispose()
@@ -2132,7 +2210,7 @@ async def test_a_second_click_while_moving_does_not_start_a_second_run():
 
 @pytest.mark.asyncio
 async def test_a_refused_quarantine_is_not_followed_up():
-    engine, ctx, defender = await _open_finding({"mv -f": "Datei nicht mehr vorhanden\n"})
+    engine, ctx, defender = await _open_finding({"confirm_finding": "Datei nicht mehr vorhanden\n"})
 
     async def gone(host, command, timeout_s=60):
         ctx.commands.append(command)
@@ -2182,7 +2260,7 @@ async def test_widget_rows_and_header_agree_after_quarantine_and_delete_without_
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     ctx = _FakeCtx(async_sessionmaker(engine, expire_on_commit=False), {
-        "echo @@clam": CLAM_STATUS, "clamscan -r": CLAM_INFECTED, "mv -f": "@@mode=755\n",
+        "echo @@clam": CLAM_STATUS, "clamscan -r": CLAM_INFECTED, "confirm_finding": "@@mode=755\n",
     })
 
     async def _settings():
@@ -2295,7 +2373,7 @@ async def test_a_finding_the_watch_finds_again_still_counts_for_the_last_scan():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     ctx = _FakeCtx(async_sessionmaker(engine, expire_on_commit=False), {
-        "echo @@clam": CLAM_STATUS, "clamscan -r": CLAM_INFECTED, "mv -f": "@@mode=755\n",
+        "echo @@clam": CLAM_STATUS, "clamscan -r": CLAM_INFECTED, "confirm_finding": "@@mode=755\n",
     })
 
     async def _settings():
@@ -2387,7 +2465,7 @@ async def test_a_scan_with_a_mark_in_a_file_name_is_reported_as_infected_and_qua
     """Ein Scan mit einer Marke im Dateinamen gilt als befallen, nicht als sauber."""
     evil = (f"/tmp/x@@nexus-rc=0: Win.Test.EICAR_HC-1 FOUND\n/tmp/y{FORGED}0: Unix.Trojan.Mirai-1 FOUND\n"
             f"Scanned files: 20\nInfected files: 2\n{MARK}1\n")
-    ctx = _FakeCtx(None, {"clamscan -r": evil, "mv -f": "@@mode=755\n"})
+    ctx = _FakeCtx(None, {"clamscan -r": evil, "confirm_finding": "@@mode=755\n"})
     scans, findings = await _scan_once(ctx)
     assert [(s["status"], s["infected"], s["files_scanned"]) for s in scans] == [("infected", 2, 20)] * 2
     assert {f["path"] for f in findings} == {"/tmp/x@@nexus-rc=0", f"/tmp/y{FORGED}0"}
@@ -2400,9 +2478,9 @@ async def test_a_forged_path_is_never_quarantined_automatically():
     """Ein Dateiname mit Zeilenumbruch taeuscht einen Fund fuer /etc/passwd vor. Die automatische Quarantaene
     laeuft als root -- sie darf in so einem Lauf nichts verschieben. Der Mensch bekommt Meldung und Notiz."""
     evil = f"/tmp/q\n/etc/passwd: {EICAR} FOUND\n{SUMMARY_ONE}{MARK}1\n"
-    ctx = _FakeCtx(None, {"clamscan -r": evil, "mv -f": "@@mode=644\n"})
+    ctx = _FakeCtx(None, {"clamscan -r": evil, "confirm_finding": "@@mode=644\n"})
     scans, findings = await _scan_once(ctx)
-    assert not any("mv -f" in c for c in ctx.commands), ctx.commands  # kein Verschieben
+    assert not any("confirm_finding" in c for c in ctx.commands), ctx.commands  # kein Verschieben
     assert [(s["status"], s["infected"]) for s in scans] == [("infected", 1)] * 2
     assert [(f["path"], f["status"]) for f in findings] == [("/etc/passwd", "detected")]
     assert findings[0]["note"].startswith("Der Pfad ist nicht gesichert")
@@ -2418,9 +2496,9 @@ async def test_a_finding_outside_the_scanned_folders_is_never_quarantined_automa
     """Selbst wenn alle Zahlen stimmen (wie im clamd-Modus ohne Zusammenfassung): Der Schnellscan prueft /tmp, /home ... --
     ein Fund fuer /etc/passwd kann nicht von ihm stammen. Nichts wird verschoben, der Mensch bekommt Meldung und Notiz."""
     out = f"/etc/passwd: {EICAR} FOUND\n{SUMMARY_ONE}{MARK}1\n"
-    ctx = _FakeCtx(None, {"clamscan -r": out, "mv -f": "@@mode=644\n"})
+    ctx = _FakeCtx(None, {"clamscan -r": out, "confirm_finding": "@@mode=644\n"})
     scans, findings = await _scan_once(ctx)
-    assert not any("mv -f" in c for c in ctx.commands), ctx.commands
+    assert not any("confirm_finding" in c for c in ctx.commands), ctx.commands
     assert [(f["path"], f["status"]) for f in findings] == [("/etc/passwd", "detected")]
     assert findings[0]["note"].startswith("Der Pfad ist nicht gesichert")
     assert "nicht eindeutig lesbar" in ctx.notes[0].body and "/etc/passwd" not in ctx.notes[0].body
@@ -2437,7 +2515,7 @@ async def test_a_custom_scan_folder_is_the_root_for_its_findings():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     out = f"/srv/data/a.sh: {EICAR} FOUND\n{SUMMARY_ONE}{MARK}1\n"
-    ctx = _FakeCtx(async_sessionmaker(engine, expire_on_commit=False), {"clamscan -r": out, "mv -f": "@@mode=755\n"})
+    ctx = _FakeCtx(async_sessionmaker(engine, expire_on_commit=False), {"clamscan -r": out, "confirm_finding": "@@mode=755\n"})
     defender = Defender(ctx)
     import asyncio
 
@@ -2448,7 +2526,7 @@ async def test_a_custom_scan_folder_is_the_root_for_its_findings():
             await asyncio.sleep(0.02)
             if not defender.is_running("h1", "custom"):
                 break
-        assert any("mv -f" in c for c in ctx.commands) is moved, folder
+        assert any("confirm_finding" in c for c in ctx.commands) is moved, folder
         for f in await defender.list_findings():
             await defender.apply_action_result(f["id"], "delete", True, "ok")  # fuer den naechsten Durchlauf freiraeumen
     await engine.dispose()
@@ -2458,22 +2536,22 @@ async def test_a_custom_scan_folder_is_the_root_for_its_findings():
 async def test_a_finding_without_a_readable_line_still_raises_the_alarm():
     """ClamAV endet mit Code 1, aber keine Zeile ist lesbar (Name mit Zeilenumbruch): Vorher "sauber" und
     still. Jetzt ein Fund ohne Pfad, mit Meldung."""
-    ctx = _FakeCtx(None, {"clamscan -r": f"/tmp/x\nyy: {EICAR} FOUND\n{SUMMARY_ONE}{MARK}1\n", "mv -f": "@@mode=644\n"})
+    ctx = _FakeCtx(None, {"clamscan -r": f"/tmp/x\nyy: {EICAR} FOUND\n{SUMMARY_ONE}{MARK}1\n", "confirm_finding": "@@mode=644\n"})
     scans, findings = await _scan_once(ctx)
     assert [(s["status"], s["infected"]) for s in scans] == [("infected", 1)] * 2 and findings == []
     assert len(ctx.notes) == 2 and "Schadsoftware" in ctx.notes[0].title
-    assert not any("mv -f" in c for c in ctx.commands)
+    assert not any("confirm_finding" in c for c in ctx.commands)
 
 
 @pytest.mark.asyncio
 async def test_a_control_character_in_a_name_is_quarantined_like_any_other_finding():
     """Wagenruecklauf im Namen ist eindeutig lesbar: normale automatische Quarantaene, wie bisher."""
     evil = f"/tmp/a\rb: {EICAR} FOUND\n{SUMMARY_ONE}{MARK}1\n"
-    ctx = _FakeCtx(None, {"clamscan -r": evil, "mv -f": "@@mode=644\n"})
+    ctx = _FakeCtx(None, {"clamscan -r": evil, "confirm_finding": "@@mode=644\n"})
     _scans, findings = await _scan_once(ctx)
     # Zwei Laeufe nacheinander: jeder findet die Datei neu (die erste liegt schon im Tresor) und verschiebt sie.
     assert [(f["path"], f["status"], f["note"]) for f in findings] == [("/tmp/a\rb", "quarantined", None)] * 2
-    assert sum("mv -f" in c for c in ctx.commands) == 2 and "1 in Quarantäne" in ctx.notes[0].body
+    assert sum("confirm_finding" in c for c in ctx.commands) == 2 and "1 in Quarantäne" in ctx.notes[0].body
 
 
 # Das Audit laeuft entkoppelt (audit_job.py): Antwort auf den Start und auf die Abfrage eines fertigen Laufs.
@@ -3516,9 +3594,9 @@ async def test_a_capped_watch_run_only_ever_replaces_a_watch_line():
 @pytest.mark.asyncio
 async def test_a_finding_in_a_capped_watch_run_is_not_quarantined_automatically_and_says_why():
     out = f"/tmp/evil.sh: {EICAR} FOUND\nScanned files: 2000\nInfected files: 1\nSkipped files: 7\n{MARK}1\n"
-    ctx = _FakeCtx(None, {"--file-list": out, "mv -f": "@@mode=755\n"})
+    ctx = _FakeCtx(None, {"--file-list": out, "confirm_finding": "@@mode=755\n"})
     scans, findings = await _scan_once(ctx, "watch")
-    assert not any("mv -f" in c for c in ctx.commands), ctx.commands
+    assert not any("confirm_finding" in c for c in ctx.commands), ctx.commands
     assert [(f["path"], f["status"]) for f in findings] == [("/tmp/evil.sh", "detected")]
     assert findings[0]["note"] is None  # der Pfad ist gesichert, nur der Lauf war unvollstaendig
     assert "2000 von 2007" in scans[0]["error"] and "nichts automatisch verschoben" in scans[0]["error"]
@@ -3534,9 +3612,9 @@ async def test_a_finding_in_a_capped_run_with_an_unsafe_path_names_both_reasons(
 
     out = (f"/tmp/evil.sh: {EICAR} FOUND\nScanned files: 2000\nInfected files: 1\n"
            f"Unusual file names: 1\nSkipped files: 7\n{MARK}1\n")
-    ctx = _FakeCtx(None, {"--file-list": out, "mv -f": "@@mode=755\n"})
+    ctx = _FakeCtx(None, {"--file-list": out, "confirm_finding": "@@mode=755\n"})
     scans, findings = await _scan_once(ctx, "watch")
-    assert not any("mv -f" in c for c in ctx.commands), ctx.commands
+    assert not any("confirm_finding" in c for c in ctx.commands), ctx.commands
     assert [(f["path"], f["status"], f["note"]) for f in findings] == [("/tmp/evil.sh", "detected", UNRELIABLE_NOTE)]
     for text in (scans[0]["error"], ctx.notes[0].body):
         assert "2000 von 2007" in text and "nicht eindeutig lesbar" in text and "nichts automatisch verschoben" in text
@@ -4335,7 +4413,7 @@ async def test_an_ignored_or_restored_finding_is_not_quarantined_again_by_the_ne
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     sm = async_sessionmaker(engine, expire_on_commit=False)
-    ctx = _FakeCtx(sm, {"clamscan -r": CLAM_INFECTED, "mv -f": "@@mode=755\n"})
+    ctx = _FakeCtx(sm, {"clamscan -r": CLAM_INFECTED, "confirm_finding": "@@mode=755\n"})
     defender = Defender(ctx)
 
     async def scan() -> str:
@@ -4353,11 +4431,11 @@ async def test_an_ignored_or_restored_finding_is_not_quarantined_again_by_the_ne
         (await session.get(FindingRecord, first["/tmp/eicar.com"]["id"])).status = "ignored"
         (await session.get(FindingRecord, first["/home/user/x.sh"]["id"])).status = "restored"
         await session.commit()
-    moves, notes = sum("mv -f" in c for c in ctx.commands), len(ctx.notes)
+    moves, notes = sum("confirm_finding" in c for c in ctx.commands), len(ctx.notes)
 
     second = await scan()
     assert sorted(f["status"] for f in await defender.list_findings()) == ["ignored", "restored"]  # keine neue Zeile
-    assert sum("mv -f" in c for c in ctx.commands) == moves and len(ctx.notes) == notes  # keine Quarantaene, kein Alarm
+    assert sum("confirm_finding" in c for c in ctx.commands) == moves and len(ctx.notes) == notes  # keine Quarantaene, kein Alarm
     async with sm() as session:
         rows = (await session.execute(select(FindingRecord))).scalars().all()
     assert {r.scan_id for r in rows} == {second}  # nur vermerkt, dass der Scan sie wieder gemeldet hat

@@ -264,7 +264,8 @@ class BackupProvider(Protocol):
         ...
     async def job_history(self, job_ref: str) -> list[dict[str, Any]]: ...
     async def retry(self, job_ref: str) -> ActionRequest:
-        """Gibt einen *Vorschlag* zurück, keine Ausführung — auch Retries gehen durchs Gate."""
+        """Gibt einen *Vorschlag* zurück, keine Ausführung; vor `ctx.actions.propose()` setzt der Aufrufer `proposed_by`
+        selbst (eigene Kennung oder Nutzer der Anfrage), sonst `PermissionDenied`."""
         ...
 
 

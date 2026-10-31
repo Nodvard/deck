@@ -77,6 +77,21 @@ describe("Einstellungen → Erweiterungen: Gruppen", () => {
     await screen.findByText("„Hello World“ ausgeschaltet.");
   });
 
+  it("ein beim Start abgestürztes Modul hat „Neu starten“ und „Ausschalten“ statt eines Schalters, der Grund steht auf Deutsch", async () => {
+    rows = rows.map((r) => (r.id === "proxmox"
+      ? { ...r, state: "error", last_error: "on_start() fehlgeschlagen: Verbindung abgelehnt" }
+      : r));
+    renderList();
+    const row = await screen.findByTestId("ext-proxmox");
+    expect(within(row).getByText("Beim Starten des Moduls ist ein Fehler aufgetreten: Verbindung abgelehnt")).toBeInTheDocument();
+    expect(within(row).queryByText(/on_start\(\)/)).not.toBeInTheDocument();
+    expect(within(row).queryByRole("switch")).not.toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Proxmox VE neu starten" })).toBeInTheDocument();
+    fireEvent.click(within(row).getByRole("button", { name: "Proxmox VE ausschalten" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Ausschalten" }));
+    await waitFor(() => expect(switchedOff).toEqual(["proxmox"]));
+  });
+
   it("ohne Beispiel-Modul gibt es die Gruppe „Für Entwickler“ nicht", async () => {
     rows = rows.filter((r) => r.id !== "hello-world");
     renderList();

@@ -6,9 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deckEventName, installDeckGlobal } from "../lib/deckGlobal";
 import { ExtensionPage } from "./ExtensionPage";
 
-// Die Seite der Erweiterung: liest die Adresszeile wie extensions/_shared/frontend/src/location.ts
-// (einmal beim Einhaengen und bei genau einem der beiden Navigations-Ereignisse: dem neuen, wenn
-// der Kern `__nodvardDeck` kennt, sonst dem alten `lattice:navigate`) und zaehlt Einhaengungen und Aufrufe.
+// Die Seite der Erweiterung: liest die Adresszeile wie extensions/_shared/frontend/src/location.ts (beim Einhängen und
+// bei jedem Navigations-Ereignis) und zählt Einhängungen und Aufrufe.
 let mounts = 0;
 let syncs = 0;
 function DemoPage() {
@@ -68,34 +67,25 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   delete (window as Partial<Window>).__nodvardDeck;
-  delete (window as Partial<Window>).__lattice;
 });
 
 describe("ExtensionPage meldet Navigationen", () => {
-  it("feuert nodvard-deck:navigate UND das alte lattice:navigate nach jedem Link innerhalb der Seite, je einmal", async () => {
+  it("feuert nodvard-deck:navigate nach jedem Link innerhalb der Seite, einmal", async () => {
     renderApp();
     expect(await screen.findByTestId("query")).toHaveTextContent("");
     const neu = vi.fn();
-    const alt = vi.fn();
     window.addEventListener("nodvard-deck:navigate", neu);
-    window.addEventListener("lattice:navigate", alt);
 
     fireEvent.click(screen.getByRole("link", { name: "Link Guard" }));
     await vi.waitFor(() => expect(neu).toHaveBeenCalled());
     expect(screen.getByTestId("query")).toHaveTextContent("?tab=guard");
     expect(neu).toHaveBeenCalledTimes(1);
-    expect(alt).toHaveBeenCalledTimes(1);
     window.removeEventListener("nodvard-deck:navigate", neu);
-    window.removeEventListener("lattice:navigate", alt);
   });
 
-  it.each([
-    ["neuer Kern (beide Namen)", true],
-    ["aelterer Kern (nur __lattice)", false],
-  ])("%s: die Seite hoert auf genau ein Ereignis und reagiert je Link einmal", async (_name, modern) => {
+  it("die Seite reagiert je Link einmal", async () => {
     const shell = { React: undefined as never, getAccessToken: () => null, hasPermission: () => true } as unknown as NodvardDeckShell;
-    if (modern) installDeckGlobal(shell);
-    else window.__lattice = shell;
+    installDeckGlobal(shell);
     renderApp();
     await screen.findByTestId("query");
     syncs = 0;
@@ -133,22 +123,9 @@ describe("ExtensionPage meldet Navigationen", () => {
     const router = createBrowserRouter([{ path: "/ext/:extId/*", element: <ExtensionPage /> }]);
     const { unmount } = render(<RouterProvider router={router} />);
     await screen.findByTestId("query");
-    // Beide Namen sind dasselbe Objekt: die Marke steht an beiden.
     expect(window.__nodvardDeck.navigateEvents).toBe(true);
-    expect(window.__lattice.navigateEvents).toBe(true);
     unmount();
     expect(window.__nodvardDeck.navigateEvents).toBe(false);
-    expect(window.__lattice.navigateEvents).toBe(false);
-  });
-
-  it("setzt navigateEvents auch, wenn nur der alte Name da ist", async () => {
-    window.__lattice = {} as NodvardDeckShell;
-    const router = createBrowserRouter([{ path: "/ext/:extId/*", element: <ExtensionPage /> }]);
-    const { unmount } = render(<RouterProvider router={router} />);
-    await screen.findByTestId("query");
-    expect(window.__lattice.navigateEvents).toBe(true);
-    unmount();
-    expect(window.__lattice.navigateEvents).toBe(false);
   });
 
   it("baut die Seite bei geänderter Query weiter neu auf", async () => {

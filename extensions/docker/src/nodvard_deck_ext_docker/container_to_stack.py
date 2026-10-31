@@ -32,7 +32,7 @@ from .new_stack import (
     _undo,
     new_stack,
 )
-from .operate import not_full_host
+from .operate import still_full
 from .stack_actions import (
     FAILURE_LIMIT,
     DockerStackExecutor,
@@ -570,7 +570,7 @@ class DockerContainerToStackExecutor:
         host = await self._ctx.hosts.get(req.host_ref) if req.host_ref else None
         if host is None:
             return ActionResult(success=False, error="Server nicht gefunden.")
-        if why := not_full_host(host, await self._ctx.settings.get()):
+        if why := await still_full(self._ctx, host):
             return ActionResult(success=False, error=why)
         project = stack_name(container)
         with self._actions.locks.hold(host.id, project, "Umwandeln in einen Stack") as busy:

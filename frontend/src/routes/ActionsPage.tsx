@@ -135,6 +135,13 @@ export function expiryText(expiresAt: string | null | undefined, nowMs: number):
   return { text: `läuft ab in ${Math.floor(hours / 24)} Tagen`, soon: false };
 }
 
+/** Offen, aber schon abgelaufen: Bestätigen lehnt der Kern ab, Ablehnen wird nicht mehr angeboten, Verwerfen reicht. */
+export function isOverdue(a: { status: string; expires_at?: string | null }, nowMs: number): boolean {
+  if (a.status !== "proposed" || !a.expires_at) return false;
+  const at = Date.parse(a.expires_at);
+  return !Number.isNaN(at) && at <= nowMs;
+}
+
 /** „Vorgeschlagen von“: der Name, den das Backend aufgelöst hat; sonst der rohe Wert. */
 function proposedByText(a: ActionOut): string {
   return a.proposed_by_label || `${a.proposed_by_type}/${a.proposed_by_id}`;
@@ -338,7 +345,7 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
   const hasSingleOnly = selectable.some((a) => SINGLE_APPROVAL_RISKS.includes(a.risk));
   const selectedActions = selectable.filter((a) => selected.has(a.id));
   // Hohe und kritische Risiken gibt es nur einzeln: so steht der Befehl vor jeder Freigabe vor Augen.
-  const approvable = selectedActions.filter((a) => !SINGLE_APPROVAL_RISKS.includes(a.risk));
+  const approvable = selectedActions.filter((a) => !SINGLE_APPROVAL_RISKS.includes(a.risk) && !isOverdue(a, nowMs));
   const allSelected = selectable.length > 0 && selectedActions.length === selectable.length;
   const anyBusy = busyIds.size > 0 || bulkBusy;
 
@@ -707,6 +714,8 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
                 const canDecide = hasPermission(`actions.approve:${a.risk}`);
                 const why = actionReason(a);
                 const decided = a.status === "proposed" ? null : decidedByText(a);
+                const overdue = isOverdue(a, nowMs);
+                const shownStatus = overdue ? "expired" : a.status;
                 const isFocus = a.id === focusId;
                 return (
                   <tr
@@ -733,7 +742,7 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
                         />
                       )}
                     </td>
-                    <td className="py-1.5 opacity-70">{new Date(a.created_at).toLocaleString()}</td>
+                    <td className="py-1.5 opacity-70">{new Date(a.created_at).toLocaleString("de-DE")}</td>
                     <td className="py-1.5">
                       {/* Die rohen Kennungen bleiben als Tooltip erreichbar, sobald Namen dastehen. */}
                       <span title={actionTitle(a) !== rawActionTitle(a) ? rawActionTitle(a) : undefined}>{actionTitle(a)}</span>
@@ -751,8 +760,8 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
                     <td className="py-1.5">{hostLabel(a.host_id)}</td>
                     <td className="py-1.5 opacity-70" title={a.risk}>{RISK_LABEL[a.risk] ?? a.risk}</td>
                     <td className="py-1.5">
-                      <span className={`rounded border px-1.5 py-0.5 text-xs ${STATUS_CLASS[a.status] ?? "bg-white/10 opacity-70"}`}>
-                        {STATUS_LABEL[a.status] ?? a.status}
+                      <span className={`rounded border px-1.5 py-0.5 text-xs ${STATUS_CLASS[shownStatus] ?? "bg-white/10 opacity-70"}`}>
+                        {STATUS_LABEL[shownStatus] ?? shownStatus}
                       </span>
                       {why && (
                         <p className={`mt-1 max-w-xs break-words text-xs ${describeActionOutcome(a).tone === "error" ? "text-red-300" : "opacity-70"}`}>
@@ -772,7 +781,7 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
                         return expiry && (
                           <p
                             className={`mt-1 text-xs ${expiry.soon ? "text-amber-300" : "opacity-60"}`}
-                            title={a.expires_at ? `Danach kann der Vorschlag nicht mehr bestätigt werden (${new Date(a.expires_at).toLocaleString()}).` : undefined}
+                            title={a.expires_at ? `Danach kann der Vorschlag nicht mehr bestätigt werden (${new Date(a.expires_at).toLocaleString("de-DE")}).` : undefined}
                             data-testid={`expires-${a.id}`}
                           >
                             {expiry.text}
@@ -790,23 +799,27 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
                     <td className="py-1.5">
                       {a.status === "proposed" && (
                         <div className="flex flex-wrap gap-1.5">
-                          <button
-                            type="button"
-                            disabled={busyIds.has(a.id) || bulkBusy || !canDecide}
-                            title={canDecide ? undefined : `Berechtigung 'actions.approve:${a.risk}' fehlt.`}
-                            onClick={() => void approve(a)}
-                            className="rounded bg-emerald-500/20 px-2 py-1 text-xs hover:bg-emerald-500/30 disabled:opacity-40"
-                          >
-                            Bestätigen
-                          </button>
-                          <button
-                            type="button"
-                            disabled={busyIds.has(a.id) || bulkBusy || !canDecide}
-                            onClick={() => void reject(a)}
-                            className="rounded bg-red-500/20 px-2 py-1 text-xs hover:bg-red-500/30 disabled:opacity-40"
-                          >
-                            Ablehnen
-                          </button>
+                          {!overdue && (
+                            <>
+                              <button
+                                type="button"
+                                disabled={busyIds.has(a.id) || bulkBusy || !canDecide}
+                                title={canDecide ? undefined : `Berechtigung 'actions.approve:${a.risk}' fehlt.`}
+                                onClick={() => void approve(a)}
+                                className="rounded bg-emerald-500/20 px-2 py-1 text-xs hover:bg-emerald-500/30 disabled:opacity-40"
+                              >
+                                Bestätigen
+                              </button>
+                              <button
+                                type="button"
+                                disabled={busyIds.has(a.id) || bulkBusy || !canDecide}
+                                onClick={() => void reject(a)}
+                                className="rounded bg-red-500/20 px-2 py-1 text-xs hover:bg-red-500/30 disabled:opacity-40"
+                              >
+                                Ablehnen
+                              </button>
+                            </>
+                          )}
                           <button
                             type="button"
                             disabled={busyIds.has(a.id) || bulkBusy || !canDecide}

@@ -13,7 +13,8 @@ from nodvard_sdk import Actor, ActorType, DiscoveredHost, HostStatus, Notificati
 from nodvard_sdk.actions import REQUEST_WAIT_S, ActionRequest, ActionSpec
 from nodvard_sdk.errors import PermissionDenied
 
-from nodvard_deck.ext.context import _PermissionChecker, build_context
+from nodvard_deck.core.known_actors import known_while
+from nodvard_deck.ext.context import OutboundNameDenied, _PermissionChecker, build_context
 from nodvard_deck.ext.runtime import ExtensionRuntime, LoadedExtension
 from nodvard_deck.models import Action, ExtensionRecord, Job, Notification as NotificationRow
 
@@ -341,11 +342,12 @@ async def test_actions_proposer_labels_name_the_proposer_of_own_rows_only(tmp_pa
 
     _, _, ctx = _build(tmp_path, permissions=["hosts.execute"])
     _, _, other_ctx = _build(tmp_path, ext_id="other-ext", permissions=["hosts.execute"])
-    for who in (Actor.user(user.id, "kollegin"), Actor(type=ActorType.EXTENSION, id="test-ext"), Actor.ai("qwen")):
-        await ctx.actions.propose(ActionRequest(action_type="shell.exec", proposed_by=who, reason="Test"))
-    await other_ctx.actions.propose(
-        ActionRequest(action_type="shell.exec", proposed_by=Actor.user(user.id, "kollegin"), reason="Fremd")
-    )
+    with known_while([("user", user.id)]):
+        for who in (Actor.user(user.id, "kollegin"), Actor(type=ActorType.EXTENSION, id="test-ext"), Actor.ai("qwen")):
+            await ctx.actions.propose(ActionRequest(action_type="shell.exec", proposed_by=who, reason="Test"))
+        await other_ctx.actions.propose(
+            ActionRequest(action_type="shell.exec", proposed_by=Actor.user(user.id, "kollegin"), reason="Fremd")
+        )
 
     own = await ctx.actions.list()
     foreign = await other_ctx.actions.list()
@@ -403,9 +405,10 @@ async def test_actions_of_a_renamed_extension_include_those_under_its_old_id(tmp
     def _request(reason: str) -> ActionRequest:
         return ActionRequest(action_type="shell.exec", proposed_by=Actor.user(user.id, "kollegin"), reason=reason)
 
-    old = await before.actions.propose(_request("vorher"))
-    other = await foreign.actions.propose(_request("fremd"))
-    new = await after.actions.propose(_request("nachher"))
+    with known_while([("user", user.id)]):
+        old = await before.actions.propose(_request("vorher"))
+        other = await foreign.actions.propose(_request("fremd"))
+        new = await after.actions.propose(_request("nachher"))
 
     rows = await after.actions.list()
     assert {row.id for row in rows} == {old.action_id, new.action_id}
@@ -539,9 +542,10 @@ async def test_actions_proposer_labels_ignore_hand_made_rows(tmp_path, db_sessio
 
     _, _, ctx = _build(tmp_path, permissions=[])
     _, _, other_ctx = _build(tmp_path, ext_id="other-ext", permissions=["hosts.execute"])
-    await other_ctx.actions.propose(
-        ActionRequest(action_type="shell.exec", proposed_by=Actor.user(user.id, "geheimer-admin"), reason="Fremd")
-    )
+    with known_while([("user", user.id)]):
+        await other_ctx.actions.propose(
+            ActionRequest(action_type="shell.exec", proposed_by=Actor.user(user.id, "geheimer-admin"), reason="Fremd")
+        )
     foreign = (await other_ctx.actions.list())[0]
 
     fake = Action(
@@ -568,6 +572,56 @@ async def test_secrets_and_vault_use_roundtrip_through_context(tmp_path, db_sess
 
     async with ctx.vault_use(handle) as value:
         assert value == "geheim"
+
+
+@pytest.mark.asyncio
+async def test_exists_needs_the_right_to_read_the_label(tmp_path, db_session):
+    _, _, ctx = _build(tmp_path, permissions=["secrets.read:demo-*"])
+    await _foreign_secret(db_session, tmp_path, label="fremd-token", owner="andere-ext")
+    with pytest.raises(PermissionDenied):
+        await ctx.secrets.exists("fremd-token")
+    assert await ctx.secrets.exists("demo-fehlt") is False
+
+
+@pytest.mark.asyncio
+async def test_a_login_secret_does_not_exist_for_an_extension(tmp_path, db_session):
+    from nodvard_deck.core import security
+    from nodvard_deck.models import User
+
+    _, _, wide = _build(tmp_path, permissions=["secrets.read:*"])
+    login = await _foreign_secret(db_session, tmp_path, label="anmeldung-vier", owner="test-ext")
+    db_session.add(User(username="zweifaktor4", password_hash=security.hash_password("whatever123"), totp_secret_id=login.id))
+    await db_session.commit()
+    await _foreign_secret(db_session, tmp_path, label="totp:nutzer-x", owner="andere-ext")
+    assert await wide.secrets.exists("anmeldung-vier") is False
+    assert await wide.secrets.exists("totp:nutzer-x") is False
+
+
+@pytest.mark.asyncio
+async def test_a_handle_built_by_the_extension_reaches_nothing_get_handle_would_refuse(tmp_path, db_session):
+    from nodvard_sdk.errors import SecretNotOwned, SecretUnavailable
+
+    from nodvard_deck.core import security, vault
+    from nodvard_deck.models import User
+
+    _, _, ctx = _build(tmp_path, permissions=["secrets.read:demo-*"])
+    foreign = await _foreign_secret(db_session, tmp_path, label="fremd-token", owner="andere-ext")
+    with pytest.raises(PermissionDenied) as denied:
+        async with ctx.vault_use(vault.SecretHandle(id=foreign.id, label="demo-tarnung", kind="generic")):
+            pass
+    assert "fremd-token" not in str(denied.value) and denied.value.permission == "secrets.read:demo-tarnung"
+    with pytest.raises(SecretUnavailable):
+        async with ctx.vault_use(vault.SecretHandle(id="gibt-es-nicht", label="demo-x", kind="generic")):
+            pass
+
+    _, _, wide = _build(tmp_path, permissions=["secrets.read:*"])
+    login = await _foreign_secret(db_session, tmp_path, label="anmeldung-drei", owner="test-ext")
+    db_session.add(User(username="zweifaktor", password_hash=security.hash_password("whatever123"), totp_secret_id=login.id))
+    await db_session.commit()
+    with pytest.raises(SecretNotOwned) as caught:
+        async with wide.vault_use(vault.SecretHandle(id=login.id, label="demo-tarnung", kind="generic")):
+            pass
+    assert caught.value.login_secret is True and "anmeldung-drei" not in str(caught.value)
 
 
 @pytest.mark.asyncio
@@ -718,6 +772,28 @@ async def test_two_factor_secrets_of_accounts_are_never_reachable_for_extensions
 
 
 @pytest.mark.asyncio
+async def test_only_released_core_settings_can_be_read(tmp_path, db_session):
+    from nodvard_deck.models import Setting
+
+    for key, value in (("system.timezone", "Asia/Tokyo"), ("autonomy.mode", "auto"), ("security.deny_patterns", ["x"])):
+        db_session.add(Setting(key=key, scope="global", user_id="", value={"value": value}))
+    await db_session.commit()
+    # Auch das Recht `settings.read` öffnet keine weitere Kern-Einstellung.
+    _, _, ctx = _build(tmp_path, permissions=["settings.read"])
+
+    assert await ctx.settings.core("system.timezone") == {"value": "Asia/Tokyo"}
+    assert await ctx.settings.core("maintenance.windows") is None
+    for key in ("autonomy.mode", "security.deny_patterns", "system.trusted_proxies"):
+        with pytest.raises(PermissionDenied) as denied:
+            await ctx.settings.core(key)
+        assert str(denied.value) == (
+            f"Extension 'test-ext' darf die Kern-Einstellung '{key}' nicht lesen. "
+            "Lesbar sind nur: maintenance.windows, system.timezone."
+        )
+        assert denied.value.permission == f"settings.core:{key}" and "Manifest" not in str(denied.value)
+
+
+@pytest.mark.asyncio
 async def test_settings_handle_get_set_roundtrip(tmp_path, db_session):
     db_session.add(ExtensionRecord(id="test-ext", version="0.1.0", api_version="0.1", state="enabled"))
     await db_session.commit()
@@ -757,6 +833,34 @@ async def test_settings_set_calls_on_settings_changed_after_commit(tmp_path, db_
     loaded.instance = _Broken()
     await ctx.settings.set({"docker_host_tag": "x"})
     assert await ctx.settings.get() == {"docker_host_tag": "x"}
+
+
+@pytest.mark.asyncio
+async def test_on_settings_changed_does_not_run_in_the_name_of_the_admin(tmp_path, db_session):
+    import asyncio
+
+    from nodvard_deck.core import known_actors
+
+    db_session.add(ExtensionRecord(id="test-ext", version="0.1.0", api_version="0.1", state="enabled"))
+    await db_session.commit()
+    _, loaded, ctx = _build(tmp_path, permissions=[])
+    seen: list[tuple[str, bool]] = []
+
+    class _Ext:
+        async def on_settings_changed(self, hook_ctx, values):
+            seen.append(("hook", known_actors.is_known("user", "u-admin")))
+
+            async def later():
+                seen.append(("task", known_actors.is_known("user", "u-admin")))
+
+            self.task = asyncio.create_task(later())
+
+    loaded.instance = _Ext()
+    with known_actors.known_while([("user", "u-admin")]):
+        await ctx.settings.set({"docker_host_tag": "container"})
+        assert known_actors.is_known("user", "u-admin")
+    await loaded.instance.task
+    assert seen == [("hook", False), ("task", False)]
 
 
 def test_register_host_tool_replaces_same_id():
@@ -982,6 +1086,87 @@ def test_http_handle_blocks_ip_outside_granted_cidr(tmp_path):
     with pytest.raises(PermissionDenied):
         ctx.http._require_target_allowed("http://10.0.0.5/status")
     ctx.http._require_target_allowed("http://192.168.1.42/status")  # darf nicht werfen
+
+
+@pytest.mark.parametrize("url", [
+    "http://nas.lan/status", "https://example.com/", "ws://router.fritz.box/x",
+    # Schreibweisen, die der Resolver als Adresse im Bereich lesen kann, `ipaddress` aber nicht.
+    "http://167772161/", "http://10.0.0.1./", "http://0x0a000001/",
+    "http:///x", "/relative",
+])
+def test_with_only_ranges_a_name_or_no_host_needs_the_free_permission(tmp_path, url):
+    _, _, limited = _build(tmp_path, permissions=["net.outbound:10.0.0.0/8"])
+    with pytest.raises(PermissionDenied):
+        limited.http._require_target_allowed(url)
+    limited.http._require_target_allowed("http://10.0.0.1/")
+    _, _, both = _build(tmp_path, ext_id="other-ext", permissions=["net.outbound", "net.outbound:10.0.0.0/8"])
+    both.http._require_target_allowed(url)
+
+
+def test_name_with_only_a_range_says_which_range_and_host(tmp_path):
+    _, _, ctx = _build(tmp_path, permissions=["net.outbound:10.0.0.0/8"])
+    with pytest.raises(OutboundNameDenied) as denied:
+        ctx.http._require_target_allowed("https://nas.lan:5001/status")
+    assert isinstance(denied.value, PermissionDenied) and denied.value.permission == "net.outbound"
+    assert str(denied.value) == (
+        "Für 'nas.lan' braucht die Erweiterung 'test-ext' das freie Recht net.outbound: Mit net.outbound:10.0.0.0/8 "
+        "geht nur eine IP-Adresse aus diesem Bereich."
+    )
+    assert "Manifest" not in str(denied.value)
+
+
+def test_name_with_several_ranges_lists_each_once(tmp_path):
+    permissions = ["net.outbound:10.0.0.0/8", "net.outbound:172.16.0.0/12", "net.outbound:10.0.0.0/8"]
+    _, _, ctx = _build(tmp_path, permissions=permissions)
+    with pytest.raises(OutboundNameDenied) as denied:
+        ctx.http._require_target_allowed("http://nas.lan/")
+    assert denied.value.ranges == ("10.0.0.0/8", "172.16.0.0/12")
+    assert "Mit net.outbound:10.0.0.0/8, net.outbound:172.16.0.0/12 geht nur eine IP-Adresse aus diesen Bereichen." in (
+        str(denied.value)
+    )
+
+
+def test_no_host_says_so_and_keeps_the_url_out(tmp_path):
+    _, _, ctx = _build(tmp_path, permissions=["net.outbound:10.0.0.0/8"])
+    with pytest.raises(OutboundNameDenied) as denied:
+        ctx.http._require_target_allowed("http:///geheim?token=abc")
+    assert str(denied.value) == (
+        "Die Erweiterung 'test-ext' hat eine Adresse ohne Rechner aufgerufen; mit net.outbound:10.0.0.0/8 geht nur "
+        "eine IP-Adresse aus diesem Bereich."
+    )
+
+
+@pytest.mark.parametrize("host", ["a\x1bxrot.lan", "\u202eevil.lan", "a" * 254])
+def test_an_unprintable_or_overlong_name_stays_out_of_the_message(tmp_path, host):
+    _, _, ctx = _build(tmp_path, permissions=["net.outbound:10.0.0.0/8"])
+    with pytest.raises(OutboundNameDenied) as denied:
+        ctx.http._require_target_allowed(f"http://{host}/")
+    assert str(denied.value).startswith("Für diese Adresse braucht die Erweiterung 'test-ext' das freie Recht")
+    assert host not in str(denied.value)
+
+
+def test_an_empty_range_falls_back_to_the_plain_permission_error(tmp_path):
+    _, _, ctx = _build(tmp_path, permissions=["net.outbound:"])
+    with pytest.raises(PermissionDenied) as denied:
+        ctx.http._require_target_allowed("http://nas.lan/")
+    assert type(denied.value) is PermissionDenied
+
+
+def test_ip_outside_the_range_keeps_the_plain_permission_error(tmp_path):
+    _, _, ctx = _build(tmp_path, permissions=["net.outbound:10.0.0.0/8"])
+    with pytest.raises(PermissionDenied) as denied:
+        ctx.http._require_target_allowed("http://192.0.2.7/")
+    assert type(denied.value) is PermissionDenied
+
+
+def test_outbound_name_denied_survives_copy_and_pickle():
+    import copy
+    import pickle
+
+    original = OutboundNameDenied("test-ext", ("10.0.0.0/8",), "nas.lan")
+    for clone in (copy.copy(original), pickle.loads(pickle.dumps(original))):
+        assert type(clone) is OutboundNameDenied
+        assert str(clone) == str(original) and clone.permission == "net.outbound" and clone.host == "nas.lan"
 
 
 def test_http_handle_requires_any_net_outbound_permission():
@@ -2281,6 +2466,140 @@ async def test_audit_handle_refuses_actions_only_the_core_writes(tmp_path, db_se
 
 
 @pytest.mark.asyncio
+async def test_an_actor_the_core_does_not_know_stays_in_the_detail_only(tmp_path, db_session):
+    _, _, ctx = _build(tmp_path, permissions=["audit.write"])
+    await ctx.audit.log(action="test-ext.done", outcome="success", actor=Actor.user("u-fremd", "fremd"))
+    [row] = [r for r in await _audit_rows(db_session) if r.action == "test-ext.done"]
+    assert (row.actor_type, row.actor_id) == ("extension", "test-ext")
+    assert row.detail == {"on_behalf_of": "user/u-fremd"}
+
+
+@pytest.mark.asyncio
+async def test_a_module_calling_current_actor_itself_makes_nobody_known(tmp_path, db_session):
+    from types import SimpleNamespace
+
+    _, _, ctx = _build(tmp_path, permissions=["audit.write"])
+    actor = await ctx.api.current_actor(user=SimpleNamespace(id="opfer", username="opfer"))
+    await ctx.audit.log(action="test-ext.done", outcome="success", actor=actor)
+    [row] = [r for r in await _audit_rows(db_session) if r.action == "test-ext.done"]
+    assert (row.actor_type, row.actor_id) == ("extension", "test-ext")
+    assert row.detail == {"on_behalf_of": "user/opfer"}
+
+
+@pytest.mark.asyncio
+async def test_the_user_of_a_real_request_is_the_actor(client, tmp_path, db_session):
+    import asyncio
+
+    from fastapi import APIRouter, Depends
+
+    from nodvard_deck.main import app
+
+    _, _, ctx = _build(tmp_path, permissions=["audit.write"])
+    router = APIRouter()
+
+    @router.post("/known")
+    async def known(actor: Actor = Depends(ctx.api.current_actor)) -> dict:  # noqa: B008
+        await ctx.audit.log(action="test-ext.done", outcome="success", actor=actor)
+        await ctx.audit.log(action="test-ext.other", outcome="success", actor=Actor.user("u-2", "andere"))
+        return {}
+
+    boot = await client.post(
+        "/api/v1/auth/bootstrap", json={"username": "owner1", "password": "correct-horse-battery", "setup_code": "TEST-CODE-2345"}
+    )
+    login = await client.post("/api/v1/auth/login", json={"username": "owner1", "password": "correct-horse-battery"})
+    before = list(app.router.routes)
+    app.include_router(router, prefix="/api/v1/test-known-actors")
+    try:
+        # Eigener Task wie bei uvicorn, das jede Anfrage in einem eigenen Task startet.
+        answer = await asyncio.create_task(client.post(
+            "/api/v1/test-known-actors/known", headers={"Authorization": f"Bearer {login.json()['access_token']}"}
+        ))
+    finally:
+        app.router.routes[:] = before
+    assert answer.status_code == 200, answer.text
+    rows = {r.action: r for r in await _audit_rows(db_session) if r.action.startswith("test-ext.")}
+    assert (rows["test-ext.done"].actor_type, rows["test-ext.done"].actor_id) == ("user", boot.json()["id"])
+    assert rows["test-ext.done"].detail == {"via": "test-ext"}
+    assert rows["test-ext.other"].actor_type == "extension"
+    await ctx.audit.log(action="test-ext.later", outcome="success", actor=Actor.user(boot.json()["id"], "owner1"))
+    [later] = [r for r in await _audit_rows(db_session) if r.action == "test-ext.later"]
+    assert later.actor_type == "extension"
+
+
+@pytest.mark.asyncio
+async def test_propose_only_for_known_people_and_the_extension_itself(tmp_path, db_session):
+    from sqlalchemy import select
+
+    from nodvard_deck.core import known_actors
+
+    _, _, ctx = _build(tmp_path, permissions=["hosts.execute"], legacy_ids=["alt-ext"])
+    for who in (Actor.user("opfer", "opfer"), Actor.extension("andere-ext"), Actor(type=ActorType.SYSTEM, id="kern")):
+        with pytest.raises(PermissionDenied, match="im Namen von"):
+            await ctx.actions.propose(ActionRequest(action_type="shell.exec", proposed_by=who, reason="Test"))
+    with known_actors.known_while([("user", "u-1")]):
+        await ctx.actions.propose(ActionRequest(action_type="shell.exec", proposed_by=Actor.user("u-1", "nico"), reason="A"))
+    for who in (Actor.extension("test-ext"), Actor.extension("alt-ext"), Actor.ai("modell"), Actor.scheduler("job-1")):
+        await ctx.actions.propose(ActionRequest(action_type="shell.exec", proposed_by=who, reason="B"))
+    rows = (await db_session.execute(select(Action))).scalars().all()
+    assert sorted((r.proposed_by_type, r.proposed_by_id) for r in rows) == [
+        ("ai", "modell"), ("extension", "alt-ext"), ("extension", "test-ext"), ("scheduler", "job-1"), ("user", "u-1"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_spawned_task_forgets_the_request_user_plain_task_keeps_it(tmp_path, db_session):
+    import asyncio
+
+    from nodvard_deck.core import known_actors
+
+    _, loaded, ctx = _build(tmp_path, permissions=["audit.write"])
+
+    async def note(action: str) -> None:
+        await ctx.audit.log(action=action, outcome="success", actor=Actor.user("u-owner", "owner"))
+
+    async def enable_request() -> asyncio.Task:
+        known_actors.add_user("u-owner")
+        ctx.spawn(lambda: note("test-ext.ticker"), name="ticker", restart=False)
+        return asyncio.create_task(note("test-ext.follow_up"))
+
+    follow_up = await asyncio.create_task(enable_request())
+    await asyncio.gather(follow_up, loaded.tasks[0].task)
+    rows = {r.action: (r.actor_type, r.actor_id) for r in await _audit_rows(db_session)}
+    assert rows["test-ext.ticker"] == ("extension", "test-ext")
+    assert rows["test-ext.follow_up"] == ("user", "u-owner")
+
+
+@pytest.mark.asyncio
+async def test_event_handler_does_not_act_in_the_name_of_the_publisher(tmp_path, db_session):
+    from nodvard_sdk.types import Event
+
+    from nodvard_deck.core import known_actors
+    from nodvard_deck.core.events import get_event_bus
+
+    _, _, ctx = _build(tmp_path, permissions=["hosts.execute"])
+    seen: list[object] = []
+
+    async def on_event(event: Event) -> None:
+        seen.append(known_actors.is_known("user", "u-1"))
+        try:
+            await ctx.actions.propose(
+                ActionRequest(action_type="shell.exec", proposed_by=Actor.user("u-1", "nico"), reason="Test")
+            )
+        except PermissionDenied:
+            seen.append("abgelehnt")
+
+    ctx.events.subscribe("demo.*", on_event)
+    try:
+        with known_actors.known_while([("user", "u-1")]):
+            await get_event_bus().publish(Event(name="demo.ping", payload={}))
+            assert known_actors.is_known("user", "u-1")
+    finally:
+        ctx.events.unsubscribe_all()
+    assert seen == [False, "abgelehnt"]
+    assert get_event_bus().matching_handlers("demo.ping") == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["mfa.failed", "system.update.requested"])
 async def test_audit_handle_refuses_core_actions_also_with_an_actor(tmp_path, db_session, action):
     """Auch mit `actor=` (der Mensch hinter dem Klick, aber auch ein von Hand gebautes `Actor`-Objekt, etwa als
@@ -2361,3 +2680,40 @@ async def test_forged_code_failures_of_an_extension_do_not_lock_the_owner_after_
         assert await auth_service.restore_code_limits(db_session) == 0
     finally:
         login_limit.reset()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("ext_id", "permissions", "names", "proposer", "sees_payload"), [
+    ("test-ext", [], {}, "terminal", False),
+    ("test-ext", ["hosts.execute"], {}, "terminal", True),
+    ("terminal", [], {}, "terminal", True),
+    ("docker", [], {"store_id": "service-matrix"}, "service-matrix", True),
+    ("renamed-ext", [], {"legacy_ids": ["old-ext"]}, "old-ext", True),
+    ("docker", [], {"store_id": "service-matrix"}, "terminal", False),
+], ids=["fremd", "darf-ausfuehren", "eigene-aktion", "eigene-unter-speicher-kennung", "eigene-unter-alter-kennung",
+        "fremd-trotz-speicher-kennung"])
+async def test_action_executed_carries_the_payload_only_for_those_who_may_see_it(tmp_path, ext_id, permissions, names,
+                                                                                  proposer, sees_payload):
+    from nodvard_sdk.types import Event
+
+    from nodvard_deck.core.events import get_event_bus
+
+    _, _, ctx = _build(tmp_path, ext_id=ext_id, permissions=permissions, **names)
+    received: list[Event] = []
+
+    async def on_event(event: Event) -> None:
+        received.append(event)
+
+    ctx.events.subscribe("action.*", on_event)
+    try:
+        payload = {"action_id": "a1", "ext_id": proposer, "action_type": "shell.exec", "host_id": "h1",
+                   "payload": {"command": "echo geheim"}, "outcome": "success"}
+        await get_event_bus().publish(Event(name="action.executed", payload=payload))
+        await get_event_bus().publish(Event(name="action.other", payload={"payload": {"x": 1}}))
+    finally:
+        ctx.events.unsubscribe_all()
+
+    executed, other = received
+    assert ("payload" in executed.payload) is sees_payload
+    assert executed.payload["outcome"] == "success" and executed.payload["host_id"] == "h1"
+    assert other.payload == {"payload": {"x": 1}}

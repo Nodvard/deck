@@ -388,7 +388,10 @@ async def test_setup_returns_one_liner_script_and_the_derived_public_key(client,
     r = await client.get(_setup_url(host["id"], cid), params={"sudo": "true", "groups": "docker"}, headers=_auth(token))
     assert r.status_code == 200, r.text
     body = r.json()
-    assert set(body) == {"username", "public_key", "fingerprint", "one_liner", "script", "notes", "groups", "sudo", "helpers", "full_sudo"}
+    assert set(body) == {
+        "username", "public_key", "fingerprint", "one_liner", "script", "notes", "groups", "sudo", "helpers",
+        "full_sudo", "drop_full_rule",
+    }
     assert body["helpers"] == [], "ohne eingeschaltete Erweiterung mit Hilfsskript bringt der Befehl keins mit"
     assert body["full_sudo"] is True, "ohne Hilfsskript bleibt nur die volle Regel"
     assert body["public_key"] == gen["public_key"] and body["fingerprint"] == gen["fingerprint"]

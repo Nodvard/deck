@@ -22,7 +22,7 @@ beforeEach(() => {
   broken = new Set();
   calls = [];
   window.history.replaceState({}, "", "/ext/gameserver/gameserver");
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn().mockResolvedValue(true), promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(true),
   };

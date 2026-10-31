@@ -300,9 +300,10 @@ class PiholeClient:
         return domain_errors(body)
 
     async def logout(self) -> None:
-        """Best effort: ein nicht erreichbares Pi-hole darf das Stoppen nicht aufhalten."""
+        """Meldet ab und vergisst eine abgelehnte Anmeldung; ein nicht erreichbares Pi-hole hält dabei nichts auf."""
         async with self._lock:
             sid, self._sid, self._authed = self._sid, None, False
+            self._login_error = self._login_failed_at = None
         if not sid:
             return
         try:

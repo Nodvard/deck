@@ -338,6 +338,8 @@ STATUS_KEYS = (
     "proto", "helper_version", "request_versions", "seq", "heartbeat_at", "state", "ready", "reason", "target",
     "busy", "previous", "results",
 )
+OPTIONAL_STATUS_KEYS = ("request_options",)
+"""Fehlt im Status älterer Helfer; dieser schreibt es immer."""
 TARGET_KEYS = ("current_version", "floating_tag", "pinned")
 BUSY_KEYS = ("id", "action", "step", "since")
 PREVIOUS_KEYS = ("version", "until")
@@ -366,11 +368,14 @@ def validate_status(doc: object) -> None:
     Jeder Text ist ein fester Code, eine Version, eine UUID4 oder ein bewegliches Tag -- Freitext (Fehler der
     Engine, Umgebung, Inhalte aus dem Kanal) kann so gar nicht in den Status gelangen.
     """
-    doc = _keys(doc, STATUS_KEYS, "Schluessel")
+    optional = tuple(key for key in OPTIONAL_STATUS_KEYS if isinstance(doc, dict) and key in doc)
+    doc = _keys(doc, STATUS_KEYS + optional, "Schluessel")
     _check(type(doc["proto"]) is int and doc["proto"] == policy.PROTOCOL, "proto")
     _check(policy.is_version(doc["helper_version"]), "helper_version")
-    _check(doc["request_versions"] == list(policy.REQUEST_VERSIONS)
+    _check(doc["request_versions"] in (list(policy.request_versions(())), list(policy.REQUEST_VERSIONS))
            and all(type(v) is int for v in doc["request_versions"]), "request_versions")
+    if "request_options" in doc:
+        _check(doc["request_options"] == list(policy.REQUEST_OPTIONS), "request_options")
     _int(doc["seq"], "seq")
     _int(doc["heartbeat_at"], "heartbeat_at")
     _check(isinstance(doc["state"], str) and doc["state"] in policy.STATES, "state")

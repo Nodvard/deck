@@ -38,6 +38,7 @@ from .auth import (
     confirm_current_totp,
     confirm_password_and_code,
 )
+from .overview import UntrustedProxyOut, untrusted_proxy_hints
 from .restore_common import (
     RestoreInspectIn,
     RestoreScheduleIn,
@@ -171,10 +172,13 @@ class ConnectionOut(BaseModel):
     """Die gerade gültige Liste."""
     trusted_proxies_source: Literal["setting", "env"]
     """`env`: die Liste kommt aus `NODVARD_DECK_TRUSTED_PROXIES` und ist in den Einstellungen nicht änderbar."""
+    untrusted_proxies: list[UntrustedProxyOut] = []
+    """Adressen aus dem Heimnetz, über die in den letzten 7 Tagen Anmeldungen des Inhabers mit `X-Forwarded-For` kamen
+    und die nicht eingetragen sind, die zuletzt gesehene zuerst. Nur für den Inhaber, sonst leer."""
 
 
 @router.get("/connection", dependencies=[Depends(require_permission("system.read"))])
-async def connection_info(request: Request, settings: SettingsDep) -> ConnectionOut:
+async def connection_info(request: Request, settings: SettingsDep, user: CurrentUser) -> ConnectionOut:
     """Gegenstelle, verwendete Client-Adresse und Schema dieser Anfrage (`api/proxy_headers.py`)."""
     info = request.scope.get(FORWARDING_SCOPE_KEY)
     if not isinstance(info, Forwarding):  # ohne die Middleware (nie im Betrieb): wie ohne Proxy
@@ -189,6 +193,7 @@ async def connection_info(request: Request, settings: SettingsDep) -> Connection
         forwarded_headers=info.forwarded_headers,
         trusted_proxies=list(trust.entries),
         trusted_proxies_source="env" if settings.trusted_proxies is not None else "setting",
+        untrusted_proxies=untrusted_proxy_hints() if user.is_owner else [],
     )
 
 
@@ -235,6 +240,11 @@ class UpdateStatusOut(BaseModel):
     helper: bool = False
     """Ein Update-Helfer, der das Update selbst einspielt, ist da und antwortet (`GET /system/updates/helper`; gleich
     `updater_available` in `GET /system/info`)."""
+    approved: bool = False
+    """Zu `latest` und `latest_digest` liegt eine Freigabe in gültiger Form am Release; die Signatur prüft der
+    Helfer."""
+    approved_key: str | None = None
+    """Kennung des Schlüssels, den die Freigabe nennt (16 Hex-Zeichen)."""
     release_notes_url: str | None = None
 
 
@@ -337,6 +347,11 @@ class UpdateHelperOut(BaseModel):
     last_result: HelperResultOut | None
     pending: HelperPendingOut | None
     """Eigene Anforderung dieses Dashboards, für die noch kein Ergebnis da ist."""
+    request_options: list[Literal["digest"]] = []
+    """Was der Helfer in einer Anforderung zusätzlich annimmt. `digest`: Ein Update geht nur mit der Prüfsumme aus der
+    letzten Update-Suche (`latest_digest` in `GET /system/updates`), sonst `409` `no_digest`."""
+    request_versions: list[int] = []
+    """Versionen der Anforderung, die der Helfer versteht; mit `2` prüft er die Freigabe samt Signatur."""
 
 
 class UpdateApplyIn(PasswordConfirm):
@@ -360,6 +375,11 @@ class UpdateRequestedOut(BaseModel):
     to: str
     data_revert: bool = False
     """Nur beim Rückweg: die Daten gehen mit auf den Stand vor dem Update zurück."""
+    digest: str | None = None
+    """Nur beim Update: der Digest aus der Update-Suche; der Helfer zieht nur, wenn das Tag noch auf ihn zeigt (`null`
+    bei einem älteren Helfer, der den Digest nicht prüft)."""
+    signed: bool = False
+    """Nur beim Update: die Freigabe ging mit (`v: 2`), der Helfer prüft ihre Signatur."""
 
 
 def _helper_refused(exc: update_helper_service.HelperRefused) -> JSONResponse:
@@ -418,9 +438,10 @@ async def update_helper_status(settings: SettingsDep) -> UpdateHelperOut:
 async def update_apply(
     payload: UpdateApplyIn, request: Request, user: CurrentUser, session: SessionDep, settings: SettingsDep
 ):
-    """Update auf `version` beim Update-Helfer anfordern (Owner, Passwort, ggf. Zwei-Faktor-Code); 202, Ergebnis später
-    unter `GET /system/updates/helper`. 403 Owner, Passwort oder Code fehlt, 400 falsch, 409 Helfer nicht bereit oder
-    Image/Tag unpassend, 422 Version ungültig oder nicht neuer, 429 höchstens einmal je 10 Min.; Fehler mit `code`."""
+    """Update auf `version` beim Helfer anfordern (Owner, Passwort, ggf. Zwei-Faktor-Code); 202, Ergebnis unter
+    `GET /system/updates/helper`. 403 Owner, Passwort oder Code fehlt, 400 falsch, 409 Helfer nicht bereit, Image/Tag
+    unpassend, ohne Digest oder noch nicht freigegeben, 422 Version ungültig oder nicht neuer, 429 höchstens einmal je
+    10 Min.; mit `code`."""
     # Nur eine gültige Version ins Protokoll, nie beliebiger Text des Aufrufers.
     detail = {"version": payload.version if updates.is_version(payload.version) else None}
     refused = await _confirm_helper_request(
@@ -436,7 +457,8 @@ async def update_apply(
                             detail={**detail, "code": exc.code})
         return _helper_refused(exc)
     await _helper_audit(session, request, user, "system.update.requested", outcome="success",
-                        detail={"request_id": result["request_id"], "from": result["from"], "to": result["to"]})
+                        detail={"request_id": result["request_id"], "from": result["from"], "to": result["to"],
+                                "digest": result["digest"], "signed": result["signed"]})
     return JSONResponse(UpdateRequestedOut.model_validate(result).model_dump(by_alias=True),
                         status_code=status.HTTP_202_ACCEPTED, headers=_NO_STORE)
 

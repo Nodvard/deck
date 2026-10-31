@@ -8,7 +8,6 @@ import contextlib
 import logging
 from dataclasses import dataclass
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
 from nodvard_sdk.types import Event
@@ -327,10 +326,7 @@ async def _prune_own_runs() -> None:
 
     def _unlink() -> None:
         for ref in refs:
-            path = Path(ref)
-            if path.parent == runs_dir:
-                with contextlib.suppress(OSError):
-                    path.unlink()
+            jobs_service.remove_run_file(runs_dir, ref)
 
     if refs:
         await asyncio.to_thread(_unlink)

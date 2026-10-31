@@ -91,6 +91,23 @@
     }
    }
   },
+  "DELETE /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/git": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "DELETE /api/v1/ext/documents/documents/{document_id}": {
    "params": {
     "path:document_id": {
@@ -247,6 +264,23 @@
    }
   },
   "DELETE /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/adopt": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "DELETE /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/git": {
    "params": {
     "path:host_id": {
      "required": true,
@@ -1710,6 +1744,57 @@
    }
   },
   "GET /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/from-portainer": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/git": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/git/applied": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/git/volume-plan": {
    "params": {
     "path:host_id": {
      "required": true,
@@ -4303,6 +4388,57 @@
     }
    }
   },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/git": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/git/applied": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/git/volume-plan": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/history": {
    "params": {
     "path:host_id": {
@@ -5602,6 +5738,35 @@
        "state": {
         "type": "string"
        },
+       "takeover_requests": {
+        "items": {
+         "fields": {
+          "allowed": {
+           "type": "boolean"
+          },
+          "id": {
+           "type": "string"
+          },
+          "name": {
+           "type": "string"
+          },
+          "old_id": {
+           "type": "string"
+          },
+          "permissions": {
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "source": {
+           "type": "string"
+          }
+         },
+         "type": "object"
+        },
+        "type": "array"
+       },
        "version": {
         "type": "string"
        }
@@ -5687,6 +5852,35 @@
       },
       "state": {
        "type": "string"
+      },
+      "takeover_requests": {
+       "items": {
+        "fields": {
+         "allowed": {
+          "type": "boolean"
+         },
+         "id": {
+          "type": "string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "old_id": {
+          "type": "string"
+         },
+         "permissions": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "source": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
       },
       "version": {
        "type": "string"
@@ -6134,6 +6328,9 @@
        "status": {
         "type": "string"
        },
+       "sudo_full_wanted": {
+        "type": "boolean"
+       },
        "tags": {
         "items": {
          "type": "string"
@@ -6251,6 +6448,9 @@
       },
       "status": {
        "type": "string"
+      },
+      "sudo_full_wanted": {
+       "type": "boolean"
       },
       "tags": {
        "items": {
@@ -6373,6 +6573,9 @@
      "required": true,
      "type": "string"
     },
+    "query:drop_full_rule": {
+     "type": "boolean"
+    },
     "query:full_sudo": {
      "type": "boolean"
     },
@@ -6389,6 +6592,9 @@
    "responses": {
     "200": {
      "fields": {
+      "drop_full_rule": {
+       "type": "boolean"
+      },
       "fingerprint": {
        "type": "string"
       },
@@ -7117,6 +7323,9 @@
          "checked_at": {
           "type": "string"
          },
+         "full_rule_removable": {
+          "type": "boolean"
+         },
          "host_id": {
           "type": "string"
          },
@@ -7129,8 +7338,37 @@
           },
           "type": "array"
          },
+         "no_fallback": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "still_used": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
          "without_root": {
           "type": "boolean"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "legacy_env": {
+       "items": {
+        "fields": {
+         "new": {
+          "type": "string"
+         },
+         "new_set": {
+          "type": "boolean"
+         },
+         "old": {
+          "type": "string"
          }
         },
         "type": "object"
@@ -7186,6 +7424,20 @@
       },
       "unread_notifications": {
        "type": "integer"
+      },
+      "untrusted_proxies": {
+       "items": {
+        "fields": {
+         "address": {
+          "type": "string"
+         },
+         "last_seen": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
       }
      },
      "type": "object"
@@ -7520,6 +7772,20 @@
        ],
        "type": "string"
       },
+      "untrusted_proxies": {
+       "items": {
+        "fields": {
+         "address": {
+          "type": "string"
+         },
+         "last_seen": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
       "via_trusted_proxy": {
        "type": "boolean"
       }
@@ -7553,6 +7819,12 @@
    "responses": {
     "200": {
      "fields": {
+      "approved": {
+       "type": "boolean"
+      },
+      "approved_key": {
+       "type": "null|string"
+      },
       "attempted_at": {
        "type": "null|string"
       },
@@ -7738,6 +8010,21 @@
         "unsafe"
        ],
        "type": "null|string"
+      },
+      "request_options": {
+       "items": {
+        "enum": [
+         "digest"
+        ],
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "request_versions": {
+       "items": {
+        "type": "integer"
+       },
+       "type": "array"
       },
       "state": {
        "enum": [
@@ -8506,6 +8793,9 @@
       "os_family": {
        "type": "null|string"
       },
+      "sudo_full_wanted": {
+       "type": "boolean|null"
+      },
       "tags": {
        "items": {
         "type": "string"
@@ -8604,6 +8894,9 @@
       },
       "status": {
        "type": "string"
+      },
+      "sudo_full_wanted": {
+       "type": "boolean"
       },
       "tags": {
        "items": {
@@ -10243,6 +10536,119 @@
    }
   },
   "POST /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/from-portainer": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/git/apply": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "backup": {
+       "type": "boolean"
+      },
+      "commit": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/git/fetch": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/git/restart": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "services": {
+       "items": {
+        "type": "string"
+       },
+       "required": true,
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/git/rollback": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "previous": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
    "params": {
     "path:host_id": {
      "required": true,
@@ -12394,6 +12800,119 @@
     }
    }
   },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/git/apply": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "backup": {
+       "type": "boolean"
+      },
+      "commit": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/git/fetch": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/git/restart": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "services": {
+       "items": {
+        "type": "string"
+       },
+       "required": true,
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/git/rollback": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "previous": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
   "POST /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/rollback": {
    "body": {
     "content_type": "application/json",
@@ -13093,6 +13612,35 @@
       "state": {
        "type": "string"
       },
+      "takeover_requests": {
+       "items": {
+        "fields": {
+         "allowed": {
+          "type": "boolean"
+         },
+         "id": {
+          "type": "string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "old_id": {
+          "type": "string"
+         },
+         "permissions": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "source": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
       "version": {
        "type": "string"
       }
@@ -13177,8 +13725,77 @@
       "state": {
        "type": "string"
       },
+      "takeover_requests": {
+       "items": {
+        "fields": {
+         "allowed": {
+          "type": "boolean"
+         },
+         "id": {
+          "type": "string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "old_id": {
+          "type": "string"
+         },
+         "permissions": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "source": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
       "version": {
        "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/extensions/{ext_id}/takeover": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "old_id": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:ext_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "extra_permissions": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "restart_needed": {
+       "type": "boolean"
+      },
+      "switched_off": {
+       "type": "boolean"
       }
      },
      "type": "object"
@@ -13630,6 +14247,9 @@
       "status": {
        "type": "string"
       },
+      "sudo_full_wanted": {
+       "type": "boolean"
+      },
       "tags": {
        "items": {
         "type": "string"
@@ -13790,6 +14410,9 @@
       },
       "credential_id": {
        "type": "null|string"
+      },
+      "full_rule_removable": {
+       "type": "boolean"
       },
       "host_key": {
        "fields": {
@@ -14061,6 +14684,9 @@
     "required": true,
     "schema": {
      "fields": {
+      "drop_full_rule": {
+       "type": "boolean"
+      },
       "full_sudo": {
        "type": "boolean"
       },
@@ -14107,6 +14733,9 @@
         },
         "credential_id": {
          "type": "null|string"
+        },
+        "full_rule_removable": {
+         "type": "boolean"
         },
         "host_key": {
          "fields": {
@@ -14781,11 +15410,17 @@
       "data_revert": {
        "type": "boolean"
       },
+      "digest": {
+       "type": "null|string"
+      },
       "from": {
        "type": "null|string"
       },
       "request_id": {
        "type": "string"
+      },
+      "signed": {
+       "type": "boolean"
       },
       "to": {
        "type": "string"
@@ -14799,6 +15434,12 @@
    "responses": {
     "200": {
      "fields": {
+      "approved": {
+       "type": "boolean"
+      },
+      "approved_key": {
+       "type": "null|string"
+      },
       "attempted_at": {
        "type": "null|string"
       },
@@ -14890,11 +15531,17 @@
       "data_revert": {
        "type": "boolean"
       },
+      "digest": {
+       "type": "null|string"
+      },
       "from": {
        "type": "null|string"
       },
       "request_id": {
        "type": "string"
+      },
+      "signed": {
+       "type": "boolean"
       },
       "to": {
        "type": "string"
@@ -15514,6 +16161,45 @@
     }
    }
   },
+  "PUT /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/git": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "access": {
+       "type": "null|string"
+      },
+      "path": {
+       "type": "string"
+      },
+      "ref": {
+       "type": "string"
+      },
+      "url": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "PUT /api/v1/ext/gameserver/servers/{host_id}/config": {
    "body": {
     "content_type": "application/json",
@@ -16096,6 +16782,45 @@
    },
    "params": {
     "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "PUT /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/git": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "access": {
+       "type": "null|string"
+      },
+      "path": {
+       "type": "string"
+      },
+      "ref": {
+       "type": "string"
+      },
+      "url": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
      "required": true,
      "type": "string"
     }

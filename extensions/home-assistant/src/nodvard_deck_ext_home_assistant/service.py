@@ -63,10 +63,17 @@ class HomeAssistantService:
         self._clock = clock
         self._cache: dict[str, _Entry] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        # Steht in jeder Kennung; nach einem neuen Geheimnis gilt so auch nichts, was eine laufende Abfrage noch einträgt.
+        self._generation: dict[str, int] = {}
 
     def clear(self) -> None:
         """Verwirft alle Zwischenergebnisse."""
         self._cache.clear()
+
+    def forget(self, name: str) -> None:
+        """Verwirft Zwischenergebnis und Pause einer Verbindung, etwa nach einem neuen Token im Tresor."""
+        self._generation[name] = self._generation.get(name, 0) + 1
+        self._cache.pop(name, None)
 
     async def read_token(self, name: str) -> str:
         label = token_label(name)
@@ -164,7 +171,7 @@ class HomeAssistantService:
             lock = self._locks.setdefault(cfg.name, asyncio.Lock())
             async with lock:
                 now = self._clock()
-                fingerprint = (cfg, has_token)
+                fingerprint = (cfg, has_token, self._generation.get(cfg.name, 0))
                 entry = self._cache.get(cfg.name)
                 fresh = entry is not None and entry.fingerprint == fingerprint and entry.expires > now
                 # "Aktualisieren" umgeht den Zwischenspeicher, aber nicht die Pause nach einem abgelehnten Token.

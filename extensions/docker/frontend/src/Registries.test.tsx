@@ -29,11 +29,11 @@ function serve(over: Record<string, (init?: RequestInit) => Response> = {}) {
   }));
 }
 
-const confirm = () => window.__lattice.confirmDialog as Mock;
+const confirm = () => window.__nodvardDeck.confirmDialog as Mock;
 
 beforeEach(() => {
   requests.length = 0;
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn().mockResolvedValue(true), promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(true),
   };
@@ -68,7 +68,7 @@ describe("Registries", () => {
 
   it("ohne sofortige Freigabe sagt es, dass sie fehlt", async () => {
     serve();
-    window.__lattice.hasPermission = vi.fn((permission: string) => !permission.startsWith("actions.approve"));
+    window.__nodvardDeck.hasPermission = vi.fn((permission: string) => !permission.startsWith("actions.approve"));
     render(<RegistryList hostId="h1" />);
     fireEvent.click(await screen.findByRole("button", { name: "Bei hub abmelden" }));
     await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Zum Abmelden vorgeschlagen"));

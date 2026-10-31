@@ -1,6 +1,6 @@
 # Nodvard Deck documentation
 
-> The user guides and the extension API are available in English under [en/](en/).
+> The user guides, the extension API, the architecture decisions, the architecture and the data model are available in English under [en/](en/).
 > The other documents are in German. If something is unclear, open an issue — see
 > [CONTRIBUTING.md](../CONTRIBUTING.md).
 
@@ -18,9 +18,9 @@
 
 | Document | Content |
 |---|---|
-| [00-DECISIONS.md](00-DECISIONS.md) | Architecture decisions and their reasons |
-| [01-ARCHITECTURE.md](01-ARCHITECTURE.md) | Overall architecture: core, extensions, gate, scheduler |
+| [en/DECISIONS.md](en/DECISIONS.md) · [Deutsch](00-DECISIONS.md) | Architecture decisions and their reasons |
+| [en/ARCHITECTURE.md](en/ARCHITECTURE.md) · [Deutsch](01-ARCHITECTURE.md) | Overall architecture: core, extensions, gate, scheduler |
 | [en/EXTENSION-API.md](en/EXTENSION-API.md) · [Deutsch](02-EXTENSION-API.md) | How to write an extension with `nodvard_sdk` |
-| [03-DATA-MODEL.md](03-DATA-MODEL.md) | Database tables and relations |
+| [en/DATA-MODEL.md](en/DATA-MODEL.md) · [Deutsch](03-DATA-MODEL.md) | Database tables and relations |
 | [04-API.md](04-API.md) | REST and WebSocket API reference |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Feedback and issues, notes for building it yourself |

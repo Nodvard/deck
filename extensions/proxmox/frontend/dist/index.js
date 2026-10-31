@@ -3,21 +3,19 @@ import { Fragment as Fragment3, useCallback as useCallback2, useEffect as useEff
 
 // ../../../frontend/src/lib/deckGlobal.ts
 var EVENT_PREFIX = "nodvard-deck:";
-var LEGACY_EVENT_PREFIX = "lattice:";
 function findDeck() {
   if (typeof window === "undefined") return void 0;
-  return window.__nodvardDeck ?? window.__lattice;
+  return window.__nodvardDeck;
 }
 function deck() {
   return findDeck();
 }
 function deckEventName(event) {
-  const modern = typeof window !== "undefined" && Boolean(window.__nodvardDeck);
-  return (modern ? EVENT_PREFIX : LEGACY_EVENT_PREFIX) + event;
+  return EVENT_PREFIX + event;
 }
 
 // ../../_shared/frontend/src/deck.ts
-var FOCUS_CLASS = "nodvard-deck-focus lattice-focus";
+var FOCUS_CLASS = "nodvard-deck-focus";
 
 // ../../_shared/frontend/src/api.ts
 var SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar \u2013 bitte gleich noch einmal versuchen.";
@@ -1191,7 +1189,7 @@ function SnapshotsPanel({
   if (snaps.length === 0) return /* @__PURE__ */ jsx8("p", { className: "text-xs opacity-60", children: "Keine Snapshots." });
   return /* @__PURE__ */ jsx8("ul", { className: "flex flex-col gap-1 text-xs", "data-testid": `snapshots-${hostId}`, children: snaps.map((snap) => /* @__PURE__ */ jsxs8("li", { className: "flex flex-wrap items-center gap-2", children: [
     /* @__PURE__ */ jsx8("span", { className: "font-medium", children: snap.name }),
-    /* @__PURE__ */ jsx8("span", { className: "opacity-60", children: snap.snaptime ? new Date(snap.snaptime * 1e3).toLocaleString() : "" }),
+    /* @__PURE__ */ jsx8("span", { className: "opacity-60", children: snap.snaptime ? new Date(snap.snaptime * 1e3).toLocaleString("de-DE") : "" }),
     snap.with_ram && /* @__PURE__ */ jsx8("span", { className: "rounded bg-white/10 px-1 text-[10px]", children: "mit RAM" }),
     snap.description && /* @__PURE__ */ jsxs8("span", { className: "opacity-60", children: [
       "-- ",
@@ -1231,7 +1229,7 @@ function UpdatesSection({ nodes, shieldHref }) {
         n.pve_version ?? "?",
         " \xB7 Kernel ",
         n.running_kernel ?? "?",
-        n.last_check ? ` \xB7 zuletzt gepr\xFCft ${new Date(n.last_check * 1e3).toLocaleString()}` : " \xB7 noch kein Pr\xFCflauf von Proxmox gefunden"
+        n.last_check ? ` \xB7 zuletzt gepr\xFCft ${new Date(n.last_check * 1e3).toLocaleString("de-DE")}` : " \xB7 noch kein Pr\xFCflauf von Proxmox gefunden"
       ] }),
       !n.error && n.last_check_ok === false && /* @__PURE__ */ jsxs8("p", { className: "text-xs text-amber-300", "data-testid": `updates-check-failed-${n.node}`, children: [
         "Die letzte Pr\xFCfung auf neue Pakete ist fehlgeschlagen",
@@ -1340,7 +1338,7 @@ function TaskRow({ task }) {
   const statusText = task.running ? "l\xE4uft" : task.ok ? "OK" : task.status ?? "Fehler";
   return /* @__PURE__ */ jsxs8(Fragment4, { children: [
     /* @__PURE__ */ jsxs8("tr", { className: "cursor-pointer hover:bg-white/5", onClick: () => void toggle(), "data-testid": `task-${task.upid}`, children: [
-      /* @__PURE__ */ jsx8("td", { className: "py-1 whitespace-nowrap opacity-70", children: task.starttime ? new Date(task.starttime * 1e3).toLocaleString() : "" }),
+      /* @__PURE__ */ jsx8("td", { className: "py-1 whitespace-nowrap opacity-70", children: task.starttime ? new Date(task.starttime * 1e3).toLocaleString("de-DE") : "" }),
       /* @__PURE__ */ jsxs8("td", { className: "py-1", children: [
         task.type_label,
         task.guest_name ? ` \xB7 ${task.guest_name}` : task.guest_id ? ` \xB7 ${task.guest_id}` : ""
@@ -1699,7 +1697,7 @@ function NodeHealthPanel({ hostId }) {
       /* @__PURE__ */ jsx8("span", { children: d.model }),
       /* @__PURE__ */ jsxs8("span", { className: "opacity-60", children: [
         d.summary,
-        d.power_on_hours != null ? ` \xB7 ${d.power_on_hours.toLocaleString()} Betriebsstunden` : ""
+        d.power_on_hours != null ? ` \xB7 ${d.power_on_hours.toLocaleString("de-DE")} Betriebsstunden` : ""
       ] })
     ] }, d.devpath)) }),
     ((h.zfs?.length ?? 0) > 0 || h.zfs_error) && /* @__PURE__ */ jsxs8(Fragment4, { children: [
@@ -1802,7 +1800,7 @@ function MetricsPanel({ hostId }) {
     ] }),
     /* @__PURE__ */ jsxs8("div", { children: [
       /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "Stand" }),
-      /* @__PURE__ */ jsx8("dd", { children: new Date(metrics.sampled_at).toLocaleTimeString() })
+      /* @__PURE__ */ jsx8("dd", { children: new Date(metrics.sampled_at).toLocaleTimeString("de-DE") })
     ] })
   ] });
 }

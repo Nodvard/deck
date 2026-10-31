@@ -133,6 +133,8 @@ QUARANTINE_LATE_CHECKING = (
     f"Die Datei liegt noch im Prüfordner der Quarantäne ({av.QUARANTINE_DIR}/{av.CHECK_DIR_NAME}). Bitte auf dem Server "
     "nachsehen."
 )
+RESTORED_ELSEWHERE = "Zurückgelegt an den hinterlegten Ort {place} (laut Fund: {path})."
+RESTORED_ELSEWHERE_MARK = RESTORED_ELSEWHERE.split("{place}")[0]
 QUARANTINE_LATE_UNKNOWN = (
     f"Ob die Datei in die Quarantäne kam, ließ sich nicht feststellen. Bitte auf dem Server unter {av.QUARANTINE_DIR} "
     "und am ursprünglichen Ort nachsehen."
@@ -630,7 +632,7 @@ class Defender:
             return await session.get(FindingRecord, finding_id)
 
     async def finding_record(self, finding_id: str) -> FindingRecord | None:
-        """Frische Zeile (u. a. mit original_mode) für den Befehlsbau der Aktionen."""
+        """Frische Zeile für den Befehlsbau der Aktionen."""
         return await self._finding(finding_id)
 
     async def quarantine(self, finding_id: str, *, actor: Actor | None) -> tuple[bool, str]:
@@ -790,8 +792,11 @@ class Defender:
         for task, _until in list(self._quarantine_follow.values()):
             task.cancel()
 
-    async def apply_action_result(self, finding_id: str, action: str, ok: bool, message: str) -> None:
-        """Zieht den Fund nach Wiederherstellen oder Löschen (über das Gate) nach."""
+    async def apply_action_result(
+        self, finding_id: str, action: str, ok: bool, message: str, *, restored_to: str | None = None,
+    ) -> None:
+        """Zieht den Fund nach Wiederherstellen oder Löschen (über das Gate) nach; `restored_to` ist der Ort aus der
+        Ablage auf dem Server."""
         async with self._ctx.db.session() as session:
             row = await session.get(FindingRecord, finding_id)
             if row is None:
@@ -799,6 +804,8 @@ class Defender:
             if ok:
                 row.status = "restored" if action == "restore" else "deleted"
                 row.note = None
+                if restored_to is not None and restored_to != row.path:
+                    row.note = RESTORED_ELSEWHERE.format(place=restored_to, path=row.path)
             else:
                 row.note = f"{'Wiederherstellen' if action == 'restore' else 'Löschen'} fehlgeschlagen: {message[-300:]}"
             row.status_changed_at = _now()
@@ -828,6 +835,9 @@ class Defender:
             if other is not None:
                 return False, ("Für diese Datei gibt es schon einen offenen Fund oder sie liegt in der Quarantäne. "
                                "Bitte den bei „Offen & in Quarantäne“ bearbeiten.")
+            # Wohin die Datei zurückgelegt wurde, gilt für den wieder offenen Fund nicht mehr.
+            if row.note and row.note.startswith(RESTORED_ELSEWHERE_MARK):
+                row.note = None
             row.status = "detected"
             row.status_changed_at = _now()
             # Eine Nachschau, die nicht mehr läuft, verspricht am wieder offenen Fund nichts mehr.

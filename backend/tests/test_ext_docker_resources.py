@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from docker_stack_fakes import FakeSettings
 
 EXT_DIR = Path(__file__).resolve().parents[2] / "extensions" / "docker"
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "docker"
@@ -26,10 +27,11 @@ TESTNETZ = "acc0ef96c6ffdd77c9956eec154f6583fa2ea6d0c5118fab7ba430259055f9e8"
 BRIDGE = "715a128f61f0d9e386366455ebd6c39c490995c87a89dc326b28353b484aa974"
 
 
-@pytest.fixture(autouse=True)
-def _ext_docker_on_path(monkeypatch):
-    monkeypatch.syspath_prepend(str(EXT_DIR / "src"))
-    yield
+@pytest.fixture(autouse=True, scope="module")
+def _ext_docker_on_path():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(EXT_DIR / "src"))
+        yield
     for name in list(sys.modules):
         if name.startswith("nodvard_deck_ext_docker"):
             del sys.modules[name]
@@ -63,11 +65,11 @@ class _Exec:
 
 class _Hosts:
     async def get(self, host_id):
-        return SimpleNamespace(id=host_id) if host_id == "h1" else None
+        return SimpleNamespace(id=host_id, tags=["docker"]) if host_id == "h1" else None
 
 
 def _ctx(answers: dict[str, object] | None = None):
-    return SimpleNamespace(exec=_Exec(answers), hosts=_Hosts())
+    return SimpleNamespace(exec=_Exec(answers), hosts=_Hosts(), settings=FakeSettings())
 
 
 HOST = SimpleNamespace(id="h1")

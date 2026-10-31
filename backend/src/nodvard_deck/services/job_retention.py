@@ -7,7 +7,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import stat
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -18,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db import utcnow
 from ..models import JobRun
 from . import settings as settings_service
+from .jobs import remove_run_file
 
 logger = logging.getLogger("nodvard_deck.job_retention")
 
@@ -66,30 +66,8 @@ async def effective_retention_days(session: AsyncSession) -> int:
     return stored if is_valid_retention(stored) else DEFAULT_RETENTION_DAYS
 
 
-def _safe_unlink(runs_dir: Path, ref: str) -> bool:
-    """Löscht die Datei `ref`, wenn sie in `runs_dir` liegt; `True`, wenn etwas entfernt wurde. `output_ref` steht in
-    der Datenbank und ist nicht vertrauenswürdig: Der Ordner wird mit `realpath` aufgelöst und muss in `runs_dir`
-    liegen, der letzte Namensteil wird nie verfolgt (`lstat`), ein Symlink höchstens selbst entfernt."""
-    if not ref:
-        return False
-    try:
-        root = os.path.realpath(runs_dir)
-        path = Path(ref)
-        parent = os.path.realpath(path.parent)
-        if parent != root and not parent.startswith(root.rstrip(os.sep) + os.sep):
-            return False
-        target = os.path.join(parent, path.name)
-        mode = os.lstat(target).st_mode
-        if not (stat.S_ISREG(mode) or stat.S_ISLNK(mode)):
-            return False
-        os.unlink(target)
-        return True
-    except OSError:  # fehlt schon, keine Rechte, ...: das Aufräumen darf daran nie scheitern
-        return False
-
-
 def _unlink_all(runs_dir: Path, refs: list[str]) -> int:
-    return sum(1 for ref in refs if _safe_unlink(runs_dir, ref))
+    return sum(1 for ref in refs if remove_run_file(runs_dir, ref))
 
 
 async def _purge_job(

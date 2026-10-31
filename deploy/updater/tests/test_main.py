@@ -35,12 +35,21 @@ from flow_support import (
     _hex,
 )
 from nodvard_deck_updater import __main__ as main
-from nodvard_deck_updater import __version__, channel, flow, policy
+from nodvard_deck_updater import __version__, channel, flow, policy, trust
 from nodvard_deck_updater.channel import Channel
 from nodvard_deck_updater.engine import PREVIOUS_REPOSITORY, Engine
 from nodvard_deck_updater.state import JOURNAL_NAME, State, StateStore, StateUnsafe
-from updater_support import NOW, UPDATER_DIR, load_vectors
+from updater_support import (
+    NOW,
+    OTHER_SEED,
+    SEED,
+    UPDATER_DIR,
+    load_vectors,
+    public_key,
+    sign,
+)
 
+SIGNING_KEY = trust.TrustedKey("current", public_key(SEED))
 ENGINE_TEXT = "GEHEIM-ENGINE-TEXT"
 """Steht in einer Fehlermeldung der Engine: darf ins bereinigte Helfer-Protokoll, nie in den Status."""
 
@@ -65,6 +74,7 @@ class Setup:
         self.helper_container = self.lab.helper
         self.target = self.lab.target
         self.logs: list[dict] = []
+        self.trusted_keys: tuple[trust.TrustedKey, ...] | None = (SIGNING_KEY,)
         self._make_helper(points)
 
     def _make_helper(self, points: Points | None) -> None:
@@ -75,7 +85,8 @@ class Setup:
         self.helper = main.Helper(channel=self.channel, store=self.store, engine=engine, service="nodvard-deck",
                                   own_id=lambda: self.helper_container["Id"], logger=self.log, clock=self.clock.time,
                                   monotonic=self.clock.monotonic, sleep=self.clock.sleep, uptime=self.lab.uptime,
-                                  checkpoint=None if points is None else points.checkpoint)
+                                  checkpoint=None if points is None else points.checkpoint,
+                                  **({} if self.trusted_keys is None else {"trusted_keys": self.trusted_keys}))
 
     def restart(self, points: Points | None = None) -> None:
         """Der Helfer startet neu: die Sperre fällt mit dem Prozess, der neue hat einen frischen Client (noch nichts
@@ -105,6 +116,17 @@ class Setup:
             {"v": 1, "id": rid, "action": action, "version": version, "created_at": created_at}).encode()
         (self.root / "requests" / f"{rid}.json").write_bytes(data)
         return rid
+
+    def signed_request(self, version="0.7.1", *, digest, rid=None, created_at=None, seed=SEED, grant=None,
+                       sig=None) -> str:
+        now = int(self.clock.t) if created_at is None else created_at
+        doc = {"fmt": 1, "repo": policy.REPOSITORY, "version": version, "digest": digest,
+               "key_id": trust.key_id(public_key(seed)), "issued_at": now - 60, "expires_at": now + 86400,
+               **(grant or {})}
+        rid = rid or str(uuid.uuid4())
+        request = {"v": 2, "id": rid, "action": "update", "version": version, "created_at": now, "digest": digest,
+                   "grant": doc, "sig": sig or sign(seed, policy.dumps(doc)).hex()}
+        return self.request(rid=rid, raw=json.dumps(request).encode())
 
     def pending(self) -> list[str]:
         return sorted(p.name for p in (self.root / "requests").iterdir())
@@ -197,7 +219,7 @@ def test_start_writes_a_ready_status(env):
     env.start()
     status = env.status()
     assert status["proto"] == policy.PROTOCOL and status["helper_version"] == __version__
-    assert status["request_versions"] == [1]
+    assert status["request_versions"] == [1, 2] and status["request_options"] == ["digest"]
     assert (status["state"], status["ready"], status["reason"]) == ("idle", True, None)
     assert status["target"] == {"current_version": "0.7.0", "floating_tag": "latest", "pinned": False}
     assert status["heartbeat_at"] == NOW and status["busy"] is None and status["previous"] is None
@@ -661,6 +683,139 @@ def test_rate_limit_after_an_update_and_a_second_update_later(env):
     assert env.lab.only_deck()["Image"] == newer
     assert env.status()["previous"]["version"] == "0.7.1"
     assert env.lab.protect("0.7.0") is None and env.lab.protect("0.7.1") is not None  # der ersetzte Slot gibt frei
+
+
+def test_a_signed_update_pulls_exactly_the_released_digest(env):
+    new_image, digest = env.lab.release("0.7.1")
+    env.start()
+    rid = env.signed_request(digest=digest)
+    env.tick(NOW + 5)
+    assert env.outcome(rid) == ("applied", None)
+    assert env.lab.only_deck()["Image"] == new_image
+    assert [ref for _kind, ref in env.mutations("pull")] == [digest]
+    assert rid in saved_state(env)["seen"] and len(saved_state(env)["actions"]) == 1
+
+
+def test_a_grant_for_a_build_the_tag_has_moved_past_changes_nothing(env):
+    _image, signed = env.lab.release("0.7.1")
+    env.lab.release("0.7.1")
+    env.start()
+    rid = env.signed_request(digest=signed)
+    env.tick(NOW + 5)
+    assert env.outcome(rid) == ("refused", policy.DIGEST_CHANGED)
+    assert env.world.mutations == [] and saved_state(env)["actions"] == []
+
+
+def test_forged_or_foreign_grants_change_nothing(env):
+    _image, digest = env.lab.release("0.7.1")
+    env.start()
+    expected = {
+        env.signed_request(digest=digest, seed=OTHER_SEED): policy.UNKNOWN_KEY,
+        env.signed_request(digest=digest, seed=OTHER_SEED, grant={"key_id": SIGNING_KEY.key_id}): policy.BAD_SIGNATURE,
+        env.signed_request(digest=digest, grant={"version": "0.7.2"}): policy.GRANT_MISMATCH,
+        env.signed_request(digest=digest, grant={"digest": "sha256:" + "5e" * 32}): policy.GRANT_MISMATCH,
+        env.signed_request(digest=digest, grant={"repo": "ghcr.io/nodvard/deck-updater"}): policy.GRANT_MISMATCH,
+        env.signed_request(digest=digest, grant={"expires_at": NOW}): policy.GRANT_EXPIRED,
+        env.signed_request(digest=digest, grant={"issued_at": NOW + 3600}): policy.GRANT_EXPIRED,
+    }
+    env.tick(NOW + 5)
+    assert {rid: env.outcome(rid) for rid in expected} == {rid: ("refused", code) for rid, code in expected.items()}
+    assert env.pending() == [] and env.world.mutations == []
+    assert saved_state(env)["actions"] == []
+    assert env.status()["ready"] is True
+
+
+def test_one_signature_per_round_the_next_waits(env, monkeypatch):
+    _image, digest = env.lab.release("0.7.1")
+    env.start()
+    checks = []
+    original = policy.check_signature
+    monkeypatch.setattr(policy, "check_signature", lambda *a, **kw: checks.append(1) or original(*a, **kw))
+    forged = [env.signed_request(digest=digest, sig=f"{n:x}" * 128) for n in range(3)]
+    env.tick(NOW + 5)
+    assert sorted(env.outcome(rid) for rid in forged) == [
+        ("refused", policy.BAD_SIGNATURE), ("refused", policy.BUSY), ("refused", policy.BUSY)]
+    assert len(checks) == 1 and saved_state(env)["seen"] == {}
+    rid = env.signed_request(digest=digest)
+    env.next_round()
+    assert env.outcome(rid) == ("applied", None) and len(checks) == 2
+
+
+def test_limits_come_before_the_signature(env, monkeypatch):
+    _image, digest = env.lab.release("0.7.1")
+    env.start()
+    first = env.signed_request(digest=digest)
+    env.tick(NOW + 5)
+    assert env.outcome(first) == ("applied", None)
+    monkeypatch.setattr(policy, "check_signature", lambda *a, **kw: pytest.fail("Signatur trotz Grenze"))
+    again = env.signed_request(digest=digest, sig="0" * 128)
+    env.next_round(60)
+    assert env.outcome(again) == ("refused", policy.RATE_LIMITED)
+
+
+def test_with_the_project_keys_a_test_grant_counts_for_nothing(env):
+    _image, digest = env.lab.release("0.7.1")
+    env.trusted_keys = None
+    env.restart()
+    env.start()
+    assert env.status()["request_versions"] == [1, 2]
+    rid = env.signed_request(digest=digest)
+    env.tick(NOW + 5)
+    assert env.outcome(rid) == ("refused", policy.UNKNOWN_KEY)
+    assert env.world.mutations == []
+
+
+def test_without_keys_the_helper_trusts_no_grant(env):
+    _image, digest = env.lab.release("0.7.1")
+    env.trusted_keys = ()
+    env.restart()
+    env.start()
+    assert env.status()["request_versions"] == [1], "ohne Schlüssel bietet er v: 2 gar nicht erst an"
+    rid = env.signed_request(digest=digest)
+    env.tick(NOW + 5)
+    assert env.outcome(rid) == ("refused", policy.UNKNOWN_KEY)
+    assert env.world.mutations == []
+
+
+def test_a_grant_used_again_with_a_new_id(env):
+    _image, digest = env.lab.release("0.7.1")
+    env.start()
+    first = env.signed_request(digest=digest)
+    env.tick(NOW + 5)
+    assert env.outcome(first) == ("applied", None)
+    again = env.signed_request(digest=digest)
+    env.next_round(60)
+    assert env.outcome(again) == ("refused", policy.RATE_LIMITED)
+    counted = saved_state(env)["actions"][-1]
+    later = env.signed_request(digest=digest, created_at=counted + policy.ACTION_INTERVAL_S)
+    env.tick(counted + policy.ACTION_INTERVAL_S)
+    assert env.outcome(later) == ("refused", policy.NOT_NEWER)
+
+
+def test_a_valid_grant_for_an_older_version_brings_nothing_back(env):
+    _image, digest = env.lab.release("0.6.9")
+    env.start()
+    rid = env.signed_request("0.6.9", digest=digest)
+    env.tick(NOW + 5)
+    assert env.outcome(rid) == ("refused", policy.NOT_NEWER)
+    assert env.world.mutations == []
+
+
+def test_once_required_an_unsigned_update_is_refused(env, monkeypatch):
+    monkeypatch.setattr(policy, "UPDATE_REQUIRES_SIGNATURE", True)
+    _image, digest = env.lab.release("0.7.1")
+    env.start()
+    unsigned = env.request()
+    with_digest = str(uuid.uuid4())
+    env.request(rid=with_digest, raw=json.dumps({"v": 1, "id": with_digest, "action": "update", "version": "0.7.1",
+                                                 "created_at": NOW, "digest": digest}).encode())
+    env.tick(NOW + 5)
+    assert env.outcome(unsigned) == ("refused", policy.SIGNATURE_REQUIRED)
+    assert env.outcome(with_digest) == ("refused", policy.SIGNATURE_REQUIRED)
+    assert env.world.mutations == []
+    signed = env.signed_request(digest=digest)
+    env.next_round()
+    assert env.outcome(signed) == ("applied", None)
 
 
 def test_at_most_one_flow_per_round(env):
@@ -1532,6 +1687,12 @@ CODE_TESTS = {
     policy.PULL_FAILED: "test_main.py::test_at_most_one_flow_per_round",
     policy.NO_PREVIOUS: "test_main.py::test_request_checks",
     policy.PREVIOUS_MISMATCH: "test_main.py::test_rollback_checks_against_the_slot",
+    policy.DIGEST_CHANGED: "test_flow.py::test_a_requested_digest_the_tag_does_not_point_to_pulls_nothing",
+    policy.SIGNATURE_REQUIRED: "test_main.py::test_once_required_an_unsigned_update_is_refused",
+    policy.UNKNOWN_KEY: "test_main.py::test_forged_or_foreign_grants_change_nothing",
+    policy.GRANT_MISMATCH: "test_main.py::test_forged_or_foreign_grants_change_nothing",
+    policy.GRANT_EXPIRED: "test_main.py::test_forged_or_foreign_grants_change_nothing",
+    policy.BAD_SIGNATURE: "test_main.py::test_forged_or_foreign_grants_change_nothing",
     # Ablauf
     policy.CREATE_FAILED: "test_main.py::test_status_holds_only_fixed_codes_never_the_text_of_the_engine",
     policy.CLONE_MISMATCH: "test_flow.py::test_tag_moved_in_between_is_caught_by_the_check",

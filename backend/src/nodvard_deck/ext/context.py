@@ -16,7 +16,7 @@ import shlex
 import ssl
 import unicodedata
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 import asyncssh
 import httpx
 from nodvard_sdk import (
+    Actor,
     ConnectorType,
     DiscoveredHost,
     Event,
@@ -50,15 +51,17 @@ from nodvard_sdk.errors import CertificateMismatch, HostUnreachable, PermissionD
 from nodvard_sdk.http import sha256_fingerprint
 from nodvard_sdk.types import PeerCertificate
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..core import rbac, ssh, vault
+from ..core import known_actors, rbac, ssh, vault
 from ..core.events import get_event_bus
 from ..db.base import refresh_relationships, utcnow
-from ..db.session import session_scope
+from ..db.session import get_engine, session_scope
 from ..models import Action, Host, HostTag, NotificationDelivery, Secret, Setting, User
 from ..services import audit as audit_service
 from ..services.hosts import host_to_sdk as _host_to_sdk
 from .runtime import ExtensionRuntime, LoadedExtension, SpawnTarget, SupervisedTask
+from .tables import GUARD_OPTION, TableGuard, validate_table_prefix
 
 logger = logging.getLogger("nodvard_deck.ext")
 
@@ -71,8 +74,11 @@ class _PermissionChecker:
         self.ext_id = ext_id
         self._granted = granted_permissions
 
+    def allows(self, permission: str) -> bool:
+        return rbac.has_permission(self._granted, permission)
+
     def require(self, permission: str) -> None:
-        if not rbac.has_permission(self._granted, permission):
+        if not self.allows(permission):
             raise PermissionDenied(self.ext_id, permission)
 
 
@@ -113,6 +119,7 @@ class ApiHandle:
 
         # `Depends` als Default statt `Annotated`: Mit `from __future__ import annotations` wäre ein lokal
         # importierter Typ für FastAPI nur ein String und damit ein Query-Parameter.
+        # Gemerkt wird der Nutzer in `get_current_user`, nicht hier: Diese Funktion kann eine Erweiterung selbst aufrufen.
         async def _current_actor(user: Any = Depends(get_current_user)) -> Actor:  # noqa: B008
             return Actor.user(user.id, user.username)
 
@@ -619,6 +626,18 @@ async def _is_login_secret(session: Any, secret: Secret) -> bool:
     return owner_of.first() is not None
 
 
+class ProposerDenied(PermissionDenied):
+    """`PermissionDenied` für `ctx.actions.propose` mit einem Vorschlagenden, den der Kern nicht zulässt."""
+
+    def __init__(self, ext_id: str, permission: str) -> None:
+        super().__init__(ext_id, permission)
+        message = (
+            f"Extension '{ext_id}' darf keinen Vorschlag im Namen von {permission} anlegen. Ein Mensch kommt nur aus der "
+            "laufenden Anfrage (Depends(ctx.api.current_actor)), eine Erweiterung nur unter ihrer eigenen Kennung."
+        )
+        self.args = (message,)
+
+
 class SecretsHandle:
     """Lesen nach `secrets.read:<label>`, ersetzen und löschen nur eigene Geheimnisse; Anmelde-Geheimnisse sind
     tabu (Authenticator-Austausch)."""
@@ -670,8 +689,30 @@ class SecretsHandle:
             return vault.SecretHandle(id=secret.id, label=secret.label, kind=secret.kind)
 
     async def exists(self, label: str) -> bool:
+        self._perm.require(f"secrets.read:{label}")
         async with session_scope() as session:
-            return await vault.get_handle(session, label) is not None
+            secret = (await session.execute(select(Secret).where(Secret.label == label))).scalar_one_or_none()
+            # Anmelde-Geheimnisse gibt es für Erweiterungen nicht, auch nicht als „vorhanden“.
+            return secret is not None and not await _is_login_secret(session, secret)
+
+    async def _usable(self, session: Any, handle: SecretHandleRef) -> SecretHandleRef:
+        """Das gespeicherte Geheimnis zu `handle.id`, wenn diese Erweiterung es lesen darf (ein Handle kann sie selbst
+        bauen); Fehler nennen nur das Label aus dem Handle."""
+        from nodvard_sdk.errors import SecretNotOwned, SecretUnavailable
+
+        secret = await session.get(Secret, handle.id)
+        if secret is None:
+            raise SecretUnavailable(f"Secret '{handle.label}' existiert nicht.")
+        try:
+            self._perm.require(f"secrets.read:{secret.label}")
+        except PermissionDenied:
+            raise PermissionDenied(self._ext_id, f"secrets.read:{handle.label}") from None
+        if await _is_login_secret(session, secret):
+            logger.warning(
+                "Erweiterung %s: Zugriff auf ein Anmelde-Geheimnis abgelehnt (%s)", self._ext_id, secret.label
+            )
+            raise SecretNotOwned(self._ext_id, handle.label, login_secret=True)
+        return vault.SecretHandle(id=secret.id, label=secret.label, kind=secret.kind)
 
     async def replace(self, *, label: str, value: str) -> SecretHandleRef:
         """Ersetzt den Wert in derselben Transaktion; im Protokoll steht wie über die Einstellungsseite nur das
@@ -706,6 +747,20 @@ class SecretsHandle:
                 outcome="success", target_type="extension", target_id=self._ext_id, detail={"label": label},
             )
             return True
+
+
+CORE_SETTINGS_FOR_EXTENSIONS = frozenset({"system.timezone", "maintenance.windows"})
+"""Kern-Einstellungen, die jede Erweiterung lesen darf, alle anderen (etwa Selbstständigkeit oder Proxys) keine."""
+
+
+class CoreSettingDenied(PermissionDenied):
+    """`PermissionDenied` für `ctx.settings.core`: Hier hilft kein Recht im Manifest, die Meldung nennt die lesbaren."""
+
+    def __init__(self, ext_id: str, permission: str) -> None:
+        super().__init__(ext_id, permission)
+        key = permission.removeprefix("settings.core:")
+        allowed = ", ".join(sorted(CORE_SETTINGS_FOR_EXTENSIONS))
+        self.args = (f"Extension '{ext_id}' darf die Kern-Einstellung '{key}' nicht lesen. Lesbar sind nur: {allowed}.",)
 
 
 class SettingsHandle:
@@ -743,13 +798,17 @@ class SettingsHandle:
             return
         self._notifying = True
         try:
-            await hook(self._loaded.ctx, dict(values))
+            # Wie beim Einschalten: Der Hook läuft nicht im Namen dessen, der speichert.
+            with known_actors.known_while(()):
+                await hook(self._loaded.ctx, dict(values))
         except Exception:
             logger.exception("on_settings_changed von %s ist fehlgeschlagen", self._ext_id)
         finally:
             self._notifying = False
 
     async def core(self, key: str) -> Any:
+        if key not in CORE_SETTINGS_FOR_EXTENSIONS:
+            raise CoreSettingDenied(self._ext_id, f"settings.core:{key}")
         async with session_scope() as session:
             result = await session.execute(
                 select(Setting).where(Setting.key == key, Setting.scope == "global", Setting.user_id == "")
@@ -820,16 +879,32 @@ class SchedulerHandle:
 
 
 class EventsHandle:
-    def __init__(self, ext_id: str) -> None:
+    def __init__(self, perm: _PermissionChecker, ext_id: str, *, own_ids: Sequence[str] = ()) -> None:
+        self._perm = perm
         self._ext_id = ext_id
+        self._own_ids = {ext_id, *own_ids}
         self._subscriptions: list[tuple[str, Callable[[Event], Awaitable[None]]]] = []
 
     async def publish(self, event: Event) -> None:
         await get_event_bus().publish(event)
 
     def subscribe(self, pattern: str, handler: Callable[[Event], Awaitable[None]]) -> None:
-        get_event_bus().subscribe(pattern, handler)
-        self._subscriptions.append((pattern, handler))
+        async def deliver(event: Event) -> None:
+            # Der Handler läuft nicht im Namen dessen, der das Ereignis ausgelöst oder die Aktion freigegeben hat.
+            with known_actors.known_while(()):
+                await handler(self._visible(event))
+
+        get_event_bus().subscribe(pattern, deliver)
+        self._subscriptions.append((pattern, deliver))
+
+    def _visible(self, event: Event) -> Event:
+        """`action.executed` ohne den Payload der Aktion (etwa einen Befehl), außer für das vorschlagende Modul und
+        Module, die selbst Befehle ausführen dürfen."""
+        if event.name != "action.executed" or "payload" not in event.payload:
+            return event
+        if event.payload.get("ext_id") in self._own_ids or self._perm.allows("hosts.execute"):
+            return event
+        return event.model_copy(update={"payload": {k: v for k, v in event.payload.items() if k != "payload"}})
 
     def unsubscribe_all(self) -> None:
         """Beim Entladen, sonst feuern die Handler der alten Instanz nach dem nächsten setup() doppelt."""
@@ -912,8 +987,9 @@ class AuditHandle:
         correlation_id: str | None = None,
         actor: Any | None = None,  # noqa: ANN401 - nodvard_sdk.Actor
     ) -> None:
-        """Schreibt einen Eintrag; mit `actor` steht der Mensch darin, Namen aus `CORE_AUDIT_PREFIXES` sind dem
-        Kern vorbehalten (`ValueError`)."""
+        """Schreibt einen Eintrag; mit `actor` steht der Mensch darin, wenn der Kern ihn gerade kennt
+        (`core.known_actors`), sonst nur in `detail.on_behalf_of`. Namen aus `CORE_AUDIT_PREFIXES` sind dem Kern
+        vorbehalten (`ValueError`)."""
         self._perm.require("audit.write")
         # Groß-/Kleinschreibung und Leerzeichen zählen nicht: Die Abfrage des Kerns unterscheidet sie teils nicht.
         if str(action).strip().casefold().startswith(CORE_AUDIT_PREFIXES):
@@ -924,9 +1000,12 @@ class AuditHandle:
             )
         actor_type, actor_id = "extension", self._ext_id
         if actor is not None and getattr(actor, "type", None) is not None:
-            actor_type = getattr(actor.type, "value", str(actor.type))
-            actor_id = actor.id
-            detail = {**(detail or {}), "via": self._ext_id}
+            claimed = (str(getattr(actor.type, "value", actor.type)), str(actor.id))
+            if known_actors.is_known(*claimed):
+                actor_type, actor_id = claimed
+                detail = {**(detail or {}), "via": self._ext_id}
+            else:
+                detail = {**(detail or {}), "on_behalf_of": f"{claimed[0]}/{claimed[1]}"}
         async with session_scope() as session:
             await audit_service.log(
                 session,
@@ -1008,6 +1087,7 @@ class ActionsHandle:
         """`wait_s` begrenzt bei Vollautonomie das Warten auf das Ergebnis; `None` wartet bis zum Ende."""
         from ..core import gate as gate_service
 
+        self._check_proposer(request.proposed_by)
         entry = self._runtime.actions.get(request.action_type)
         spec = entry[1] if entry is not None else None
         if spec is not None:
@@ -1027,6 +1107,18 @@ class ActionsHandle:
                 command_field=spec.command_field if spec is not None else None,
                 wait_s=wait_s,
             )
+
+    def _check_proposer(self, actor: Actor) -> None:
+        """Ein Mensch schlägt nur vor, wenn der Kern ihn gerade kennt (`core.known_actors`), eine Erweiterung nur unter
+        ihrer eigenen Kennung; KI und Zeitplan sind frei."""
+        kind = str(getattr(actor.type, "value", actor.type))
+        if (
+            (kind == "user" and known_actors.is_known(kind, str(actor.id)))
+            or (kind == "extension" and actor.id in self._own_ids)
+            or kind in ("ai", "scheduler")
+        ):
+            return
+        raise ProposerDenied(self._ext_id, f"{kind}/{actor.id}")
 
     async def check_standing_approval(self, granted_by_user_id: str, *, risk: Risk) -> str | None:
         """Ob eine Dauerfreigabe von `granted_by_user_id` heute für die Stufe `risk` gälte (`None` = ja, sonst der
@@ -1256,6 +1348,33 @@ class _NoCookies(http.cookiejar.DefaultCookiePolicy):
         return False
 
 
+class OutboundNameDenied(PermissionDenied):
+    """`PermissionDenied` für einen DNS-Namen bei nur bereichsgebundenem `net.outbound`: Hier hilft das freie Recht."""
+
+    def __init__(self, ext_id: str, ranges: tuple[str, ...], host: str | None) -> None:
+        super().__init__(ext_id, "net.outbound")
+        self.ranges = ranges
+        self.host = host
+        rights = ", ".join(f"net.outbound:{cidr}" for cidr in ranges)
+        scope = "diesem Bereich" if len(ranges) == 1 else "diesen Bereichen"
+        if host is None:
+            text = (
+                f"Die Erweiterung '{ext_id}' hat eine Adresse ohne Rechner aufgerufen; mit {rights} geht nur eine "
+                f"IP-Adresse aus {scope}."
+            )
+        else:
+            # Der Rat steht vorn, weil Transporte den Satz kürzen; Steuerzeichen im Namen kommen nicht ins Protokoll.
+            target = f"'{host}'" if host.isprintable() and len(host) <= 253 else "diese Adresse"
+            text = (
+                f"Für {target} braucht die Erweiterung '{ext_id}' das freie Recht net.outbound: Mit {rights} geht "
+                f"nur eine IP-Adresse aus {scope}."
+            )
+        self.args = (text,)
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return (self.__class__, (self.ext_id, self.ranges, self.host), dict(self.__dict__))
+
+
 class HttpHandle:
     """Ausgehende HTTP-Aufrufe einer Extension, geprüft gegen ihre `net.outbound`-Berechtigungen."""
 
@@ -1285,7 +1404,14 @@ class HttpHandle:
             ip = None
 
         if ip is None:
-            return  # DNS-Name wird nicht aufgelöst: Eine net.outbound-Berechtigung reicht (oben geprüft)
+            # Einen DNS-Namen prüft nur das freie Recht: Aufgelöst und gegen den Bereich geprüft, könnte er beim
+            # Verbinden schon auf eine andere Adresse zeigen.
+            if None in self._cidrs:
+                return
+            ranges = tuple(dict.fromkeys(c for c in self._cidrs if c))
+            if not ranges:
+                raise PermissionDenied(self._perm.ext_id, "net.outbound")
+            raise OutboundNameDenied(self._perm.ext_id, ranges, host or None)
 
         for cidr in self._cidrs:
             if cidr is None or ip in ipaddress.ip_network(cidr, strict=False):
@@ -1457,23 +1583,33 @@ class HttpHandle:
 
 
 class DbHandle:
-    """`ctx.db`: eine echte Session (`session_scope()` wie im Kern) und die Präfix-Prüfung für Tabellen."""
+    """`ctx.db`: Sessions, in denen SQLite jede Anweisung auf die Tabellen der Extension beschränkt."""
 
-    # `declare_tables()` ist eine Vertrauens-, keine Sandbox-Grenze: Einzelne Queries werden nicht durchleuchtet
-    # (docs/02 §3: Extensions sind vertrauenswürdiger Code).
+    # Schutz vor Fehlern und eingeschleustem SQL, keine Sandbox: Extension-Code läuft im selben Prozess.
 
     def __init__(self, ext_id: str, table_prefix: str | tuple[str, ...]) -> None:
         self._ext_id = ext_id
         self._table_prefix = table_prefix
 
-    def session(self):  # noqa: ANN201
-        return session_scope()
+    @asynccontextmanager
+    async def session(self) -> AsyncIterator[AsyncSession]:
+        prefixes = (self._table_prefix,) if isinstance(self._table_prefix, str) else tuple(self._table_prefix)
+        guard = TableGuard(self._ext_id, prefixes)
+        engine = get_engine().execution_options(**{GUARD_OPTION: guard})
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                try:
+                    yield session
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
+                    raise
+        finally:
+            guard.open = False
 
     def declare_tables(self, metadata: Any) -> None:
         """Prüft die `MetaData` der Extension gegen `ext_<id>_` und wirft bei Abweichung `TablePrefixViolation`,
         was das Laden verhindert."""
-        from .tables import validate_table_prefix
-
         validate_table_prefix(self._ext_id, metadata.tables.keys(), expected_prefix=self._table_prefix)
 
 
@@ -1508,8 +1644,9 @@ class Context:
         async def _cm():
             keyring = vault.load_keyring(self._app_settings)
             async with session_scope() as session:
+                checked = await self.secrets._usable(session, handle)
                 async with vault.vault_use(
-                    session, keyring, handle, actor_type="extension", actor_id=self.ext_id
+                    session, keyring, checked, actor_type="extension", actor_id=self.ext_id
                 ) as value:
                     yield value
 
@@ -1563,7 +1700,7 @@ def build_context(
         secrets=SecretsHandle(perm, manifest.id, settings, own_ids=[store, *manifest.legacy_ids]),
         settings=SettingsHandle(loaded, manifest.id, store_id=store),
         scheduler=SchedulerHandle(perm, manifest.id, runtime, store_id=store),
-        events=EventsHandle(manifest.id),
+        events=EventsHandle(perm, manifest.id, own_ids=[store, *manifest.legacy_ids]),
         notify=NotifyHandle(perm, manifest.id),
         audit=AuditHandle(perm, manifest.id),
         ws=WsHandle(manifest.id, lambda: runtime.legacy_ids_of(manifest.id)),

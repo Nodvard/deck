@@ -8,6 +8,7 @@ import json
 from datetime import datetime, timezone
 
 import pytest
+from nodvard_deck.core.known_actors import known_while
 from nodvard_deck.ext.runtime import get_extension_runtime, reset_extension_runtime
 from nodvard_deck.models import Action, AuditEntry
 from nodvard_deck.services import hosts as hosts_service
@@ -168,7 +169,8 @@ async def test_manual_runs_never_use_the_standing_approval(tmp_path, db_session,
     await _grant(ctx, ext, admin)
     commands = _capture_exec(monkeypatch, ctx)
 
-    by_hand = await run_script(ctx, ext._repo, "audit", param_overrides={}, actor=Actor.user(admin.id, "chefin"))
+    with known_while([("user", admin.id)]):
+        by_hand = await run_script(ctx, ext._repo, "audit", param_overrides={}, actor=Actor.user(admin.id, "chefin"))
     not_scheduled = await run_script(ctx, ext._repo, "audit", param_overrides={})
 
     assert {r["status"] for r in by_hand["results"] + not_scheduled["results"]} == {"proposed"}

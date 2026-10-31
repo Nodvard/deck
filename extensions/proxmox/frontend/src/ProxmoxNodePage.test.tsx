@@ -54,7 +54,7 @@ beforeEach(() => {
   confirmDialog = vi.fn<(message: string, options?: { danger?: boolean }) => Promise<boolean>>().mockResolvedValue(true);
   hasPermission = vi.fn<(permission: string) => boolean>().mockReturnValue(true);
   // Die Kern-Shell (frontend/src/main.tsx) wird hier gestubbt, wie sie jedes Extension-Bundle zur Laufzeit vorfindet.
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never,
     ReactDOM: undefined as never,
     ReactJsxRuntime: undefined as never,
@@ -348,7 +348,7 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
       throw new Error(`Unerwarteter Fetch in diesem Test: ${method} ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
-    window.__lattice.promptDialog = vi.fn().mockResolvedValue("geheimes-token");
+    window.__nodvardDeck.promptDialog = vi.fn().mockResolvedValue("geheimes-token");
     render(<ProxmoxNodePage />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Token setzen" }));
@@ -372,7 +372,7 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
       }
       throw new Error(`Unerwarteter Fetch in diesem Test: ${method} ${url}`);
     }));
-    window.__lattice.promptDialog = vi.fn().mockResolvedValue("neues-token");
+    window.__nodvardDeck.promptDialog = vi.fn().mockResolvedValue("neues-token");
     render(<ProxmoxNodePage />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Token ersetzen" }));
@@ -424,7 +424,7 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Entfernen" }));
 
-    await waitFor(() => expect(window.__lattice.confirmDialog).toHaveBeenCalledWith(expect.stringContaining("pve2"), expect.anything()));
+    await waitFor(() => expect(window.__nodvardDeck.confirmDialog).toHaveBeenCalledWith(expect.stringContaining("pve2"), expect.anything()));
     await waitFor(() => expect(deleted).toBe(true));
   });
 
@@ -768,11 +768,9 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
       expect(screen.getByRole("tab", { name: "Aufgabenverlauf" })).toHaveAttribute("aria-selected", "true");
       expect(window.location.search).toBe("?host=h-vm&tab=tasks");
 
-      // Im Reiter „VMs & LXC“ ist der Gast markiert (neuer und alter Klassenname: ein Tab mit älterem Kern kennt nur
-      // .lattice-focus) und aufgeklappt; nach dem Wechsel per Hand bleibt er offen.
+      // Im Reiter „VMs & LXC“ ist der Gast markiert und aufgeklappt; nach dem Wechsel per Hand bleibt er offen.
       const row = document.getElementById("host-h-vm")!;
       expect(row.className).toContain("nodvard-deck-focus");
-      expect(row.className).toContain("lattice-focus");
       fireEvent.click(screen.getByRole("tab", { name: "VMs & LXC" }));
       expect(row).toBeVisible();
       expect(within(row).getByRole("button", { name: "Details einklappen" })).toBeInTheDocument();
@@ -836,7 +834,6 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
       render(<ProxmoxNodePage />);
       expect(await screen.findByText(/AMD Ryzen 9 7940HS/)).toBeInTheDocument();
       expect(document.getElementById("host-h-node")?.className).toContain("nodvard-deck-focus");
-      expect(document.getElementById("host-h-node")?.className).toContain("lattice-focus");
     } finally {
       window.history.replaceState({}, "", "/");
     }

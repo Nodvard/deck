@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import copy
+import importlib
 import json
 import logging
 import sys
@@ -15,27 +16,30 @@ from typing import Any
 
 import httpx
 import pytest
-from nodvard_sdk.errors import PermissionDenied
-from sqlalchemy import select
-
 from nodvard_deck.ext.runtime import get_extension_runtime
 from nodvard_deck.models import AuditEntry
 from nodvard_deck.services import extensions as extensions_service
+from nodvard_sdk.errors import PermissionDenied
+from sqlalchemy import select
 
 REPO_EXTENSIONS_DIR = Path(__file__).resolve().parents[2] / "extensions"
-sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "nextcloud" / "src"))
 
-from nodvard_deck_ext_nextcloud import serverinfo, widgets  # noqa: E402
-from nodvard_deck_ext_nextcloud.config import (  # noqa: E402
-    normalize_base_url,
-    read_serverinfo_config,
-)
-from nodvard_deck_ext_nextcloud.models import ServerInfo  # noqa: E402
-from nodvard_deck_ext_nextcloud.service import (  # noqa: E402
-    AUTH_FAILED_TTL_S,
-    CACHE_TTL_S,
-    empty,
-)
+
+class _ExtModule:
+    """Ein Modul der Erweiterung, geladen erst beim Zugriff im Test, wenn die Fixture den Pfad gesetzt hat."""
+
+    def __init__(self, name: str) -> None:
+        self._name = f"nodvard_deck_ext_nextcloud.{name}"
+
+    def __getattr__(self, attr: str) -> Any:
+        return getattr(importlib.import_module(self._name), attr)
+
+
+serverinfo = _ExtModule("serverinfo")
+widgets = _ExtModule("widgets")
+nc_config = _ExtModule("config")
+nc_models = _ExtModule("models")
+nc_service = _ExtModule("service")
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "nextcloud"
 BASE = "https://cloud.example.com"
@@ -48,10 +52,9 @@ INFO_URL = f"{BASE}/ocs/v2.php/apps/serverinfo/api/v1/info?format=json&skipApps=
 
 
 @pytest.fixture(autouse=True)
-def _cleanup_sys_path():
-    before = list(sys.path)
+def _nextcloud_on_path(monkeypatch):
+    monkeypatch.syspath_prepend(str(REPO_EXTENSIONS_DIR / "nextcloud" / "src"))
     yield
-    sys.path[:] = before
     for name in list(sys.modules):
         if name.startswith(("nodvard_deck_ext_", "lattice_ext_")):
             del sys.modules[name]
@@ -69,11 +72,11 @@ def _basic(user: str = USER, password: str = PASSWORD) -> str:
     return "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
 
 
-def _info(mutate: Callable[[dict[str, Any]], None] | None = None, name: str = "serverinfo_current.json") -> ServerInfo:
+def _info(mutate: Callable[[dict[str, Any]], None] | None = None, name: str = "serverinfo_current.json") -> nc_models.ServerInfo:
     data = copy.deepcopy(_data(name))
     if mutate is not None:
         mutate(data)
-    return ServerInfo(state="ok", message=None, auth="token", **serverinfo.parse_info(data))
+    return nc_models.ServerInfo(state="ok", message=None, auth="token", **serverinfo.parse_info(data))
 
 
 def _system(data: dict[str, Any]) -> dict[str, Any]:
@@ -212,21 +215,21 @@ def test_broken_active_users_become_none(active):
 )
 def test_garbage_gives_nothing_but_no_error(data):
     parsed = serverinfo.parse_info(data)
-    info = ServerInfo(state="ok", message=None, auth=None, **parsed)
+    info = nc_models.ServerInfo(state="ok", message=None, auth=None, **parsed)
     assert info.version is None and info.storage.free_bytes is None and info.load.cpu_cores is None
     assert widgets.status_rows(info)[0]["tone"] == "neutral", "ohne Angaben bleibt es bei neutralen Zeilen"
 
 
 def test_base_url_is_normalized_and_credentials_are_refused():
-    assert normalize_base_url(" https://cloud.example.com/ ") == "https://cloud.example.com"
-    assert normalize_base_url("http://cloud.example.com:8080/nextcloud/?x=1#y") == "http://cloud.example.com:8080/nextcloud"
+    assert nc_config.normalize_base_url(" https://cloud.example.com/ ") == "https://cloud.example.com"
+    assert nc_config.normalize_base_url("http://cloud.example.com:8080/nextcloud/?x=1#y") == "http://cloud.example.com:8080/nextcloud"
     for bad in ("cloud.example.com", "ftp://cloud.example.com", "https://user:" + "pw@cloud.example.com", "https://cloud.example.com:99999", "https://", ""):
         with pytest.raises(ValueError):
-            normalize_base_url(bad)
-    cfg = read_serverinfo_config({"base_url": "https://u:" + "geheim@cloud.example.com", "username": "alice"})
+            nc_config.normalize_base_url(bad)
+    cfg = nc_config.read_serverinfo_config({"base_url": "https://u:" + "geheim@cloud.example.com", "username": "alice"})
     assert cfg.base_url is None and "ungültig" in (cfg.problem or "") and "geheim" not in (cfg.problem or "")
-    assert read_serverinfo_config({}) == read_serverinfo_config({"base_url": "  ", "username": ""})
-    assert read_serverinfo_config({"base_url": BASE, "username": "alice", "tls_insecure_skip_verify": "ja"}).insecure_tls is False
+    assert nc_config.read_serverinfo_config({}) == nc_config.read_serverinfo_config({"base_url": "  ", "username": ""})
+    assert nc_config.read_serverinfo_config({"base_url": BASE, "username": "alice", "tls_insecure_skip_verify": "ja"}).insecure_tls is False
 
 
 @pytest.mark.parametrize(
@@ -247,8 +250,8 @@ def test_base_url_is_normalized_and_credentials_are_refused():
     ],
 )
 def test_a_page_copied_from_the_browser_becomes_the_base_address(raw, expected):
-    assert normalize_base_url(raw) == expected
-    assert read_serverinfo_config({"base_url": raw, "username": "alice"}).base_url == expected
+    assert nc_config.normalize_base_url(raw) == expected
+    assert nc_config.read_serverinfo_config({"base_url": raw, "username": "alice"}).base_url == expected
 
 
 class _Http:
@@ -558,7 +561,7 @@ def test_sizes_and_numbers_are_written_the_german_way(value, text):
 
 
 def test_problem_rows():
-    not_configured = empty("not_configured", "Hinweis")
+    not_configured = nc_service.empty("not_configured", "Hinweis")
     assert widgets.status_rows(not_configured) == [
         {"title": "Nextcloud nicht eingerichtet", "subtitle": "Hinweis", "label": "nicht eingerichtet", "tone": "neutral"}
     ]
@@ -570,7 +573,7 @@ def test_problem_rows():
         "etwas-neues": ("Fehler", "warn"),
     }
     for state, (label, tone) in expected.items():
-        (row,) = widgets.status_rows(empty(state, f"Text {state}"))
+        (row,) = widgets.status_rows(nc_service.empty(state, f"Text {state}"))
         assert (row["label"], row["tone"], row["subtitle"]) == (label, tone, f"Text {state}")
 
 
@@ -914,7 +917,7 @@ async def test_results_are_cached_for_twenty_seconds_and_refresh_skips_the_cache
     assert len(fake.requests) == 2, "der Knopf Aktualisieren umgeht den Zwischenspeicher"
     assert reads == ["nextcloud-serverinfo-token"] * 2
 
-    now[0] += CACHE_TTL_S - 1
+    now[0] += nc_service.CACHE_TTL_S - 1
     await _serverinfo(client, headers)
     assert len(fake.requests) == 2
     now[0] += 2.0
@@ -946,23 +949,85 @@ async def test_a_rejected_login_is_not_repeated_every_minute(client, db_session,
     assert (await _serverinfo(client, headers, "?refresh=true"))["state"] == "auth_failed"
     assert len(fake.requests) == 2, "Aktualisieren fragt trotzdem"
 
-    now[0] += AUTH_FAILED_TTL_S + 1
+    now[0] += nc_service.AUTH_FAILED_TTL_S + 1
     await _serverinfo(client, headers)
     assert len(fake.requests) == 3
 
 
 @pytest.mark.asyncio
 async def test_testing_the_connection_makes_the_tile_ask_again(client, db_session, test_settings):
-    headers, _ = await _enable(client, db_session, test_settings)
+    headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers, password="falsch-falsch")
     assert (await _serverinfo(client, headers))["state"] == "auth_failed"
-    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": "nextcloud-app-password", "value": PASSWORD}, headers=headers)
-    assert res.status_code == 204
+    fake.admin = (USER, "falsch-falsch")
     assert (await _serverinfo(client, headers))["state"] == "auth_failed", "noch aus dem Zwischenspeicher"
 
     loaded = get_extension_runtime().loaded[EXT]
     await loaded.instance.health(loaded.ctx)
     assert (await _serverinfo(client, headers))["state"] == "ok"
+
+
+async def _set_secret(client, headers, label: str, value: str) -> None:
+    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": label, "value": value}, headers=headers)
+    assert res.status_code == 204, res.text
+
+
+@pytest.mark.asyncio
+async def test_a_new_app_password_in_the_vault_ends_the_pause_at_once(client, db_session, test_settings):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, password="falsch-falsch")
+    assert (await _serverinfo(client, headers))["state"] == "auth_failed"
+    await _set_secret(client, headers, "nextcloud-app-password", PASSWORD)
+    assert (await _serverinfo(client, headers))["state"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_a_new_token_in_the_vault_is_used_at_once(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, password=None, token=TOKEN)
+    assert (await _serverinfo(client, headers))["state"] == "ok"
+    fake.token = "neues-token-0000"
+    assert (await _serverinfo(client, headers))["state"] == "ok", "aus dem Zwischenspeicher"
+    await _set_secret(client, headers, "nextcloud-serverinfo-token", "neues-token-0000")
+    assert (await _serverinfo(client, headers))["state"] == "ok"
+    assert fake.requests[-1].headers["NC-Token"] == "neues-token-0000"
+
+
+@pytest.mark.asyncio
+async def test_only_the_secrets_of_the_tile_drop_its_result(client, db_session, test_settings):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    await _serverinfo(client, headers)
+    service, loaded = _service(), get_extension_runtime().loaded[EXT]
+    assert service._entry is not None
+    await loaded.instance.on_secret_changed(loaded.ctx, "nextcloud-sonstwas")
+    assert service._entry is not None
+    await loaded.instance.on_secret_changed(loaded.ctx, "nextcloud-serverinfo-token")
+    assert service._entry is None
+
+
+@pytest.mark.asyncio
+async def test_an_answer_with_the_old_password_is_not_kept(client, db_session, test_settings):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    service, loaded = _service(), get_extension_runtime().loaded[EXT]
+    load, entered, release, loads = service._load, asyncio.Event(), asyncio.Event(), []
+
+    async def slow(cfg, has_token, has_password):
+        loads.append(cfg.base_url)
+        if len(loads) == 1:
+            entered.set()
+            await release.wait()
+        return await load(cfg, has_token, has_password)
+
+    service._load = slow
+    first = asyncio.create_task(_serverinfo(client, headers))
+    await entered.wait()
+    await loaded.instance.on_secret_changed(loaded.ctx, "nextcloud-app-password")
+    release.set()
+    await first
+    await _serverinfo(client, headers)
+    assert loads == [BASE, BASE], "was die Abfrage mit dem alten Passwort einträgt, gilt nicht mehr"
 
 
 @pytest.mark.asyncio
@@ -1071,7 +1136,7 @@ async def test_settings_page_offers_the_optional_token(client, db_session, test_
 
 
 def test_openapi_describes_the_info_with_typed_fields():
-    schema = ServerInfo.model_json_schema()
+    schema = nc_models.ServerInfo.model_json_schema()
     assert set(schema["properties"]) == {"state", "message", "auth", "version", "updates", "storage", "active_users", "load"}
     assert set(schema["$defs"]["UpdateInfo"]["properties"]) == {"core_available", "core_version", "core_checked_at", "app_updates"}
     assert set(schema["$defs"]["StorageInfo"]["properties"]) == {"free_bytes", "files", "users"}

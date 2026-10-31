@@ -42,7 +42,7 @@ function defaults(): Record<string, Handler> {
 
 beforeEach(() => {
   window.history.replaceState({}, "", "/ext/scripts/scripts");
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn().mockResolvedValue(true), promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(true),
   };

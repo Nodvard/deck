@@ -34,6 +34,7 @@ import {
   formatBytes,
   formatUptime,
   hasConsole,
+  helperHintTarget,
   helperHintText,
   hostHealth,
   hostStatusText,
@@ -41,6 +42,10 @@ import {
   type HostOut,
   isNode,
   isUnchecked,
+  legacyEnvLine,
+  legacyEnvText,
+  LEGACY_ENV_GUIDE,
+  proxyHintText,
   relativeTime,
   useDismissHelperHint,
   useHostMetrics,
@@ -396,9 +401,12 @@ export function Cockpit() {
   const problemNames = new Set(problemHosts.map((h) => h.display_name));
   const servicesDownExtra = servicesDown.filter((name) => !problemNames.has(name));
   const attention = overview?.attention ?? [];
-  // Dezent: ein Hinweis, kein Problem. Er zählt nicht in `issues`, verdrängt aber das „Nichts offen“.
+  // Dezent: Hinweise, keine Probleme. Sie zählen nicht in `issues`, verdrängen aber das „Nichts offen“.
   const helperHints = overview?.helper_hints ?? [];
   const dismissHint = useDismissHelperHint();
+  // Nur für den Inhaber, der die Liste ändern darf (das filtert schon `GET /overview`).
+  const proxyAddresses = (overview?.untrusted_proxies ?? []).map((p) => p.address);
+  const legacyEnv = overview?.legacy_env ?? [];
   const issues = problemHosts.length + servicesDownExtra.length + (backups?.failed ?? 0) + backupsUnreachable.length + attention.length + (overview?.pending_actions ?? 0);
 
   // Eigene Apps und erkannte Dienste in einer Liste (`services` bleibt fuer die Kennzahl „Dienste“).
@@ -617,7 +625,8 @@ export function Cockpit() {
                       : "Vielleicht nicht vollständig: Ein Teil der Daten ließ sich gerade nicht laden."}
                   </p>
                 )}
-                {!loading && issues === 0 && helperHints.length === 0 && !hostsFailed && !overviewFailed && (stale ? (
+                {!loading && issues === 0 && helperHints.length === 0 && proxyAddresses.length === 0 && legacyEnv.length === 0 && !hostsFailed
+                  && !overviewFailed && (stale ? (
                   <p className="p-4 text-sm text-white/60" data-testid="attention-stale">
                     Zuletzt war nichts offen. Der Stand ist nicht aktuell.
                   </p>
@@ -661,12 +670,37 @@ export function Cockpit() {
                     </span>
                   </Link>
                 ))}
+                {proxyAddresses.length > 0 && (
+                  <div className="flex items-start gap-2 px-4 py-3 text-sm" data-testid="proxy-hint">
+                    <AlertTriangle size={15} className="mt-0.5 flex-none text-amber-300" aria-hidden />
+                    <Link to="/settings/system" className="min-w-0 flex-1 break-words hover:underline">{proxyHintText(proxyAddresses)}</Link>
+                  </div>
+                )}
+                {legacyEnv.length > 0 && (
+                  <div className="flex items-start gap-2 px-4 py-3 text-sm" data-testid="legacy-env-hint">
+                    <AlertTriangle size={15} className="mt-0.5 flex-none text-amber-300" aria-hidden />
+                    <span className="min-w-0 flex-1">
+                      <span className="block break-words">{legacyEnvText(legacyEnv.length)}</span>
+                      {legacyEnv.map((v) => (
+                        <span key={v.old} className="block break-all font-mono text-xs text-white/60">{legacyEnvLine(v)}</span>
+                      ))}
+                      <a href={LEGACY_ENV_GUIDE} target="_blank" rel="noopener noreferrer" className="text-xs text-white/60 underline underline-offset-2">
+                        Anleitung
+                      </a>
+                    </span>
+                  </div>
+                )}
                 {helperHints.map((hint) => (
                   <div key={`helper-hint-${hint.host_id}`} className="flex items-start gap-2 px-4 py-3 text-sm" data-testid="helper-hint">
                     <Info size={15} className="mt-0.5 flex-none text-white/45" aria-hidden />
                     <span className="min-w-0 flex-1 text-white/70">
                       {canWriteHosts ? (
-                        <Link to={`/settings/hosts/${hint.host_id}?befehl=1`} className="block break-words hover:underline">{helperHintText(hint)}</Link>
+                        <Link
+                          to={helperHintTarget(hint)}
+                          className="block break-words hover:underline"
+                        >
+                          {helperHintText(hint)}
+                        </Link>
                       ) : (
                         <span className="block break-words">{helperHintText(hint)}</span>
                       )}

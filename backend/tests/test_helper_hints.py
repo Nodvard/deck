@@ -258,3 +258,96 @@ async def test_dismiss_hides_the_hint_until_the_missing_scripts_change(client, d
     assert len(await _overview_hints(client, headers)) == 1
 
     assert (await client.post(DISMISS.format("gibt-es-nicht"), headers=headers)).status_code == 404
+
+
+def _tight_and_full() -> str:
+    return FULL_RULE + "".join(f"    (root) NOPASSWD: {helper.install_path}\n" for helper in (SHIELD, OTHER))
+
+
+@pytest.mark.asyncio
+async def test_an_unneeded_full_rule_is_yellow_until_it_is_wanted(client, modules, local_ssh_server, fake_probe):
+    _, port, *_ = local_ssh_server
+    headers = await _owner(client)
+    host_id = await _host_with_login(client, headers, port)
+    fake_probe[helper_check_command([SHIELD, OTHER])] = (
+        0, _answer(_present(SHIELD), _present(OTHER), sudo_list=_tight_and_full()), "",
+    )
+    body = (await client.post(CHECK.format(host_id), headers=headers)).json()
+    root = next(item for item in body["items"] if item["id"] == "root")
+    assert (root["status"], root["detail"]) == ("warn", host_check.FULL_RULE_NOT_NEEDED)
+    assert root["hint"] == host_check.FULL_RULE_HINT and "„Volle sudo-Regel entfernen“" in root["hint"]
+    assert body["full_rule_removable"] is True
+    hints = await _overview_hints(client, headers)
+    assert [(h["modules"], h["full_rule_removable"]) for h in hints] == [([], True)]
+
+    saved = await client.patch(f"/api/v1/hosts/{host_id}", json={"sudo_full_wanted": True}, headers=headers)
+    assert saved.status_code == 200 and saved.json()["sudo_full_wanted"] is True
+    assert await _overview_hints(client, headers) == []
+    body = (await client.post(CHECK.format(host_id), headers=headers)).json()
+    root = next(item for item in body["items"] if item["id"] == "root")
+    assert (root["status"], root["detail"]) == ("ok", host_check.FULL_RULE_WANTED)
+    assert body["full_rule_removable"] is True
+
+    saved = await client.patch(f"/api/v1/hosts/{host_id}", json={"sudo_full_wanted": False}, headers=headers)
+    assert saved.json()["sudo_full_wanted"] is False
+    assert [h["full_rule_removable"] for h in await _overview_hints(client, headers)] == [True]
+    audit = (await client.get("/api/v1/audit?action=host.updated", headers=headers)).json()
+    assert [e["detail"]["changed"]["sudo_full_wanted"]["to"] for e in audit] == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_dismissing_an_unneeded_full_rule_lasts_until_the_rule_was_gone(
+    client, modules, local_ssh_server, fake_probe,
+):
+    _, port, *_ = local_ssh_server
+    headers = await _owner(client)
+    host_id = await _host_with_login(client, headers, port)
+    query = helper_check_command([SHIELD, OTHER])
+    fake_probe[query] = (0, _answer(_present(SHIELD), _present(OTHER), sudo_list=_tight_and_full()), "")
+    await client.post(CHECK.format(host_id), headers=headers)
+    assert (await client.post(DISMISS.format(host_id), headers=headers)).status_code == 204
+    await client.post(CHECK.format(host_id), headers=headers)
+    assert await _overview_hints(client, headers) == []
+
+    tight = _tight_and_full().replace(FULL_RULE, "User testuser may run the following commands:\n")
+    fake_probe[query] = (0, _answer(_present(SHIELD), _present(OTHER), sudo_list=tight), "")
+    body = (await client.post(CHECK.format(host_id), headers=headers)).json()
+    assert body["full_rule_removable"] is False and await _overview_hints(client, headers) == []
+
+    fake_probe[query] = (0, _answer(_present(SHIELD), _present(OTHER), sudo_list=_tight_and_full()), "")
+    await client.post(CHECK.format(host_id), headers=headers)
+    assert [h["full_rule_removable"] for h in await _overview_hints(client, headers)] == [True]
+
+
+@pytest.mark.asyncio
+async def test_the_job_reports_an_unneeded_full_rule_only_when_every_module_has_a_script(
+    client, modules, local_ssh_server, fake_probe, monkeypatch, test_settings,
+):
+    from nodvard_deck import config
+
+    monkeypatch.setattr(config, "_settings", test_settings)
+    _, port, *_ = local_ssh_server
+    headers = await _owner(client)
+    await _host_with_login(client, headers, port)
+    fake_probe[helper_check_command([SHIELD, OTHER])] = (
+        0, _answer(_present(SHIELD), _present(OTHER), sudo_list=_tight_and_full()), "",
+    )
+    counts = await helper_hints.run_once(helpers_suffice=lambda _host: False)
+    assert counts["ok"] == 1 and await _overview_hints(client, headers) == []
+
+    counts = await helper_hints.run_once()
+    assert counts["hint"] == 1
+    assert [(h["modules"], h["full_rule_removable"]) for h in await _overview_hints(client, headers)] == [([], True)]
+
+
+@pytest.mark.parametrize(("sudo_list", "removable"), [
+    (_tight_and_full(), True),
+    (FULL_RULE + f"    (root) NOPASSWD: {SHIELD.install_path}\n", False),
+    (_tight_and_full().replace(FULL_RULE, "User testuser may run the following commands:\n"), False),
+])
+def test_the_full_rule_is_removable_only_with_a_rule_for_every_script(sudo_list, removable):
+    out = _answer(_present(SHIELD), _present(OTHER), sudo_list=sudo_list)
+    seen = host_check.parse_helper_check(out, [SHIELD, OTHER])
+    assert helper_hints.full_rule_removable([SHIELD, OTHER], host_check.split_sudo_lines(out), seen) is removable
+    seen[SHIELD.install_path].owner_ok = False
+    assert helper_hints.full_rule_removable([SHIELD, OTHER], host_check.split_sudo_lines(out), seen) is False

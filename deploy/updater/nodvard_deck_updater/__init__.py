@@ -29,7 +29,7 @@ Module:
   Anforderungen prüfen und mit `flow` ausführen, Status schreiben; dazu der Heartbeat (30 s) und `--selftest`.
 """
 
-__version__ = "0.11.1"
+__version__ = "0.12.0"
 """Version des Helfers (`status.helper_version`): dieselbe wie das Dashboard-Release, mit dem er gebaut wird.
 `scripts/release.py` hebt sie zusammen mit `version.py` an, und `backend/tests/test_release_script.py` sorgt dafuer,
 dass beide nie auseinanderlaufen. Von Hand nie aendern."""

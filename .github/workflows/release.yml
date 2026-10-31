@@ -13,7 +13,9 @@
 # landet in der GitHub-Container-Registry. Nutzer ziehen es mit der Datei
 # deploy/compose.standalone.yml, ohne das Repository zu kennen. Danach baut der Job `updater-image` das Image des
 # Update-Helfers (deploy/updater/Dockerfile) für deploy/compose.standalone-mit-helfer.yml und der Job `dock-image`
-# Nodvard Dock (nur das Modul docker) für deploy/nodvard-dock/compose.yml.
+# Nodvard Dock (nur das Modul docker) für deploy/nodvard-dock/compose.yml. Der Job `helper-release` legt zum Tag einen
+# Entwurf des GitHub-Releases an oder ergänzt ein vorhandenes, mit der Compose-Datei mit Helfer, die den geprüften Helfer
+# per Digest nennt. Veröffentlicht wird das Release immer von Hand („Publish release“).
 #
 # Die Actions sind auf eine Commit-SHA festgelegt (Version als Kommentar), damit ein verschobenes Tag
 # keinen fremden Code in den Lauf mit Schreibrecht auf die Registry bringt.
@@ -44,6 +46,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      newest: ${{ steps.newest.outputs.newest }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
@@ -85,6 +89,15 @@ jobs:
           fi
           echo "Tag v$VERSION passt zu version.py ($code)."
 
+      # `latest` und die Tags ohne Nummer gehören der höchsten fertigen Version: Ein Patch für eine ältere Reihe (etwa
+      # 0.12.2 nach 0.13.0, vom Zweig release/0.12) bekommt nur seine eigenen Tags. Ohne Liste bricht der Lauf ab. Ein
+      # Schritt ohne `shell:` läuft ohne pipefail; die Zuweisung bricht unter `-e` ab, eine Pipe nicht.
+      - name: Höchste fertige Version
+        id: newest
+        run: |
+          tags="$(git ls-remote --tags --refs origin 'v*')"
+          python3 scripts/release_newest.py "$VERSION" <<< "$tags" >> "$GITHUB_OUTPUT"
+
       # QEMU, damit der x86-Runner auch das arm64-Image bauen kann.
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3.7.0
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
@@ -100,13 +113,13 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5.10.0
         with:
           images: ${{ env.IMAGE_NAME }}
-          # latest nie automatisch: nur fuer fertige Versionen, nicht fuer Vorabversionen (v1.2.3-rc1).
+          # latest nie automatisch: nur für die höchste fertige Version, nie für Vorabversionen (v1.2.3-rc1).
           flavor: |
             latest=false
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+            type=raw,value=latest,enable=${{ steps.newest.outputs.newest == 'true' }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.licenses=PolyForm-Noncommercial-1.0.0
@@ -123,9 +136,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           # Herkunft und Version fuer "Nach Updates suchen" im Dashboard: landen als Datei /app/image-info.json im
           # Image (deploy/Dockerfile, nodvard_deck.image_info), nicht als Umgebungsvariable.
+          # APT_REFRESH holt die Debian-Pakete (Tesseract samt Abhängigkeiten) bei jedem Release frisch, mit den
+          # Sicherheitsupdates seit dem letzten Bau, statt sie aus dem Cache zu nehmen.
           build-args: |
             VERSION=${{ env.VERSION }}
             IMAGE=${{ env.IMAGE_NAME }}
+            APT_REFRESH=${{ github.run_id }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -133,13 +149,15 @@ jobs:
   # So gibt es keinen Helfer zu einem Tag, das der Schritt "Tag passt zu version.py" oben abgelehnt hat.
   # Getaggt mit der genauen Version und mit "1" (alle Helfer mit derselben Schnittstelle; das nimmt
   # deploy/compose.standalone-mit-helfer.yml). "1" wandert erst, wenn der Selbsttest auf beiden Plattformen am
-  # veroeffentlichten Digest bestanden ist, und nie fuer eine Vorabversion (wie `latest` beim Dashboard).
+  # veröffentlichten Digest bestanden ist, und nur für die höchste fertige Version (wie `latest` beim Dashboard).
   updater-image:
     needs: image
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
@@ -237,7 +255,7 @@ jobs:
           done
 
       - name: Tag 1 setzen
-        if: ${{ !contains(github.ref_name, '-') }}
+        if: ${{ needs.image.outputs.newest == 'true' }}
         env:
           IMAGE: ${{ env.IMAGE_NAME }}-updater
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -245,7 +263,7 @@ jobs:
 
   # Nodvard Dock: dasselbe Dockerfile, nur mit dem Modul docker. Erst nach dem Dashboard-Image (`needs`), also nur zu
   # einem Tag, das zu version.py passt. `latest` (das nimmt deploy/nodvard-dock/compose.yml) wandert erst, wenn die
-  # Prüfung am veröffentlichten Digest auf beiden Plattformen bestanden ist, und nie für eine Vorabversion.
+  # Prüfung am veröffentlichten Digest auf beiden Plattformen bestanden ist, und nur für die höchste fertige Version.
   dock-image:
     needs: image
     runs-on: ubuntu-latest
@@ -326,8 +344,62 @@ jobs:
           done
 
       - name: Tag latest setzen
-        if: ${{ !contains(github.ref_name, '-') }}
+        if: ${{ needs.image.outputs.newest == 'true' }}
         env:
           IMAGE: ${{ env.DOCK_IMAGE_NAME }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE@$DIGEST"
+
+  # Entwurf des GitHub-Releases zum Tag mit der Compose-Datei mit Helfer, fest auf den Digest, den der Selbsttest
+  # geprüft hat (scripts/release_helper_assets.py; bei der höchsten fertigen Version zeigt auch Tag 1 darauf). Im
+  # Repository bleibt `:1`, kein Commit nach dem Release. Nur für fertige Versionen, auch für Patches älterer Reihen.
+  # Der Job veröffentlicht nie und setzt nie „latest“: Den Entwurf prüft ein Mensch und klickt „Publish release“. Der
+  # einzige Job mit Schreibrecht auf das Repository, ohne Zugriff auf die Registry; der Token steht nur im letzten
+  # Schritt (dort laufen `gh` und `release_helper_assets.py merge` vom Tag) und nicht in der Arbeitskopie
+  # (`persist-credentials: false`). Titel und Text eines neuen Entwurfs kommen aus docs/release-notes/<version>.md im
+  # Tag.
+  helper-release:
+    needs: updater-image
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Version aus dem Tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: echo "VERSION=${REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Dateien fürs Release
+        env:
+          IMAGE: ${{ env.IMAGE_NAME }}-updater
+          DIGEST: ${{ needs.updater-image.outputs.digest }}
+        run: |
+          [ -f "docs/release-notes/$VERSION.md" ] || echo "::warning::docs/release-notes/$VERSION.md fehlt im Tag: Ein neuer Entwurf bekommt nur Titel und Digest."
+          python3 scripts/release_helper_assets.py files --version "$VERSION" --image "$IMAGE" --digest "$DIGEST" --out "$RUNNER_TEMP/release"
+
+      # Gibt es zum Tag schon einen Entwurf oder ein Release (von Hand vorbereitet oder ein zweiter Lauf), bleiben Titel,
+      # Status und Text bis auf den Abschnitt mit dem Digest; `gh release view` findet auch Entwürfe.
+      - name: Entwurf anlegen oder Release ergänzen
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          out="$RUNNER_TEMP/release"
+          if gh release view "$TAG" --json body --jq .body > "$out/current.md" 2> "$out/view.err"; then
+            python3 scripts/release_helper_assets.py merge --existing "$out/current.md" --section "$out/helper-digest.md" --out "$out/release-notes.md"
+            gh release upload "$TAG" "$out/compose.standalone-mit-helfer.yml" --clobber
+            gh release edit "$TAG" --notes-file "$out/release-notes.md"
+            echo "::notice::$TAG ergänzt: Datei angehängt, Abschnitt mit dem Digest gesetzt. Titel, übriger Text und Status bleiben."
+          elif grep -q "release not found" "$out/view.err"; then
+            gh release create "$TAG" --draft --verify-tag --title "$(cat "$out/release-title.txt")" --notes-file "$out/release-notes.md" "$out/compose.standalone-mit-helfer.yml"
+            echo "::notice::Entwurf für $TAG angelegt. Veröffentlichen: auf GitHub unter Releases den Entwurf prüfen, dann „Publish release“."
+          else
+            cat "$out/view.err" >&2
+            exit 1
+          fi

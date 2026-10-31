@@ -27,12 +27,12 @@ function serve(over: Record<string, (init?: RequestInit) => Response> = {}) {
   }));
 }
 
-const confirm = () => window.__lattice.confirmDialog as Mock;
+const confirm = () => window.__nodvardDeck.confirmDialog as Mock;
 
 beforeEach(() => {
   bodies.length = 0;
   requests.length = 0;
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn().mockResolvedValue(true), promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(true),
   };

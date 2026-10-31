@@ -51,7 +51,7 @@ function historyCalls(fetchMock: ReturnType<typeof mockFetch>): URLSearchParams[
 }
 
 beforeEach(() => {
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never,
     ReactDOM: undefined as never,
     ReactJsxRuntime: undefined as never,
@@ -158,6 +158,22 @@ describe("SocPage", () => {
     );
   });
 
+  it.each([
+    ["offen", INCIDENTS[0]],
+    ["abgeschlossen", { ...INCIDENTS[0], status: "dismissed", status_label: "Verworfen" }],
+  ])("ohne soc.manage: Vorfall %s ist zu sehen, aber ohne Knöpfe für den Status", async (_name, incident) => {
+    window.__nodvardDeck.hasPermission = vi.fn((p: string) => p !== "soc.manage");
+    vi.stubGlobal("fetch", mockFetch({ incidents: [incident] }));
+    render(<SocPage />);
+
+    const row = within(await screen.findByTestId("incident-inc-1"));
+    expect(row.getByText(/nginx-proxy/)).toBeInTheDocument();
+    for (const label of ["Bestätigen", "Erledigt", "Verwerfen", "Wieder öffnen"]) {
+      expect(row.queryByRole("button", { name: label })).not.toBeInTheDocument();
+    }
+    expect(row.getByRole("button", { name: /Verlauf/ })).toBeInTheDocument();
+  });
+
   it("durchsucht die Historie: Freitext, Status, Host und Zeitraum landen als Parameter", async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal("fetch", fetchMock);
@@ -216,7 +232,7 @@ describe("SocPage", () => {
   });
 
   it("ohne audit.read kein Verlauf-Knopf", async () => {
-    window.__lattice.hasPermission = vi.fn().mockReturnValue(false);
+    window.__nodvardDeck.hasPermission = vi.fn().mockReturnValue(false);
     vi.stubGlobal("fetch", mockFetch());
     render(<SocPage />);
     await screen.findByText(/nginx-proxy/);

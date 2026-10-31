@@ -297,6 +297,8 @@ describe("Einstellungen", () => {
     });
     render(<AccountSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Einrichten" }));
+    await screen.findByTestId("totp-password");
+    expect(screen.queryByRole("button", { name: "Später einrichten" })).not.toBeInTheDocument();
     await enterSetupPassword();
     expect(await screen.findByTestId("totp-secret")).toHaveTextContent("ABCD EFGH IJKL MNOP");
     // Der QR-Code kommt aus dem otpauth-Link des Servers und wird im Browser gezeichnet.
@@ -304,6 +306,9 @@ describe("Einstellungen", () => {
     expect(qr.tagName.toLowerCase()).toBe("svg");
     expect(qr.querySelector("path")?.getAttribute("d")?.length ?? 0).toBeGreaterThan(200);
     expect(screen.getByRole("link", { name: /in der App öffnen/ })).toHaveAttribute("href", "otpauth://totp/x?secret=ABCDEFGHIJKLMNOP");
+    // „Später einrichten“ gibt es nur im Assistenten, hier reicht „Abbrechen“.
+    expect(screen.queryByRole("button", { name: "Später einrichten" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Abbrechen" })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Bestätigungscode"), { target: { value: "123 456" } });
     fireEvent.click(screen.getByRole("button", { name: "Bestätigen" }));
     await screen.findByText("Zwei-Faktor-Anmeldung ist aktiv.");
@@ -877,13 +882,31 @@ describe("Einstellungen", () => {
     });
     render(<><ExtensionsSettings /><GlobalDialogs /></>, { wrapper: QueryWrapper });
     const row = within(await screen.findByTestId("ext-shield"));
-    // Der Schalter zeigt „aus“ und startet nur neu -- ausschalten geht ueber den eigenen Knopf.
-    fireEvent.click(row.getByRole("button", { name: "Ausschalten" }));
+    // Statt des Schalters zwei Knöpfe: „Neu starten“ und „Ausschalten“.
+    expect(row.queryByRole("switch")).toBeNull();
+    fireEvent.click(row.getByRole("button", { name: "Nodvard Shield ausschalten" }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Ausschalten" }));
     await screen.findByText("„Nodvard Shield“ ausgeschaltet.");
     expect(calls.some((c) => c.path === "/extensions/shield/disable")).toBe(true);
     expect(calls.some((c) => c.path === "/extensions/shield/enable")).toBe(false);
-    await waitFor(() => expect(within(screen.getByTestId("ext-shield")).queryByRole("button", { name: "Ausschalten" })).toBeNull());
+    await waitFor(() => expect(within(screen.getByTestId("ext-shield")).queryByRole("button", { name: "Nodvard Shield ausschalten" })).toBeNull());
+  });
+
+  it("Erweiterungen: „Neu starten“ schaltet eine Erweiterung im Fehlerstatus wieder ein", async () => {
+    let state = "error";
+    const calls = mockApi({
+      "GET /extensions": () => [{
+        id: "shield", version: "1.0.0", state, source: "bundled", name: "Nodvard Shield", description: null,
+        icon: "shield", granted_permissions: [], last_error: state === "error" ? "on_start() fehlgeschlagen: boom" : null,
+      }],
+      "POST /extensions/shield/enable": () => { state = "enabled"; return { id: "shield", state }; },
+    });
+    render(<><ExtensionsSettings /><GlobalDialogs /></>, { wrapper: QueryWrapper });
+    fireEvent.click(within(await screen.findByTestId("ext-shield")).getByRole("button", { name: "Nodvard Shield neu starten" }));
+    await screen.findByText("„Nodvard Shield“ eingeschaltet.");
+    expect(calls.some((c) => c.path === "/extensions/shield/enable")).toBe(true);
+    expect(calls.some((c) => c.path === "/extensions/shield/disable")).toBe(false);
+    expect(await within(screen.getByTestId("ext-shield")).findByRole("switch", { name: "Nodvard Shield ausschalten" })).toBeInTheDocument();
   });
 
   it("Erweiterungen: der Knopf „Ausschalten“ erscheint nur im Fehlerstatus", async () => {
@@ -893,9 +916,11 @@ describe("Einstellungen", () => {
     mockApi({ "GET /extensions": () => [row("aus", "disabled"), row("an", "enabled"), row("kaputt", "error")] });
     render(<><ExtensionsSettings /><GlobalDialogs /></>, { wrapper: QueryWrapper });
     await screen.findByTestId("ext-kaputt");
-    expect(within(screen.getByTestId("ext-kaputt")).getByRole("button", { name: "Ausschalten" })).toBeInTheDocument();
-    expect(within(screen.getByTestId("ext-aus")).queryByRole("button", { name: "Ausschalten" })).toBeNull();
-    expect(within(screen.getByTestId("ext-an")).queryByRole("button", { name: "Ausschalten" })).toBeNull();
+    expect(within(screen.getByTestId("ext-kaputt")).getByRole("button", { name: "kaputt ausschalten" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("ext-kaputt")).getByRole("button", { name: "kaputt neu starten" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("ext-aus")).queryByRole("button", { name: "aus ausschalten" })).toBeNull();
+    expect(within(screen.getByTestId("ext-an")).queryByRole("button", { name: "an ausschalten" })).toBeNull();
+    expect(within(screen.getByTestId("ext-an")).getByRole("switch", { name: "an ausschalten" })).toBeInTheDocument();
   });
 
   it("Erweiterungen: scheitert das Einschalten, steht der Grund da statt „eingeschaltet“", async () => {
@@ -914,7 +939,7 @@ describe("Einstellungen", () => {
     });
     render(<><ExtensionsSettings /><GlobalDialogs /></>, { wrapper: QueryWrapper });
     fireEvent.click(await screen.findByRole("switch", { name: "Nodvard Shield einschalten" }));
-    expect(await screen.findByText("„Nodvard Shield“ ließ sich nicht einschalten: setup() fehlgeschlagen: boom")).toBeInTheDocument();
+    expect(await screen.findByText("„Nodvard Shield“ ließ sich nicht einschalten: Beim Vorbereiten des Moduls ist ein Fehler aufgetreten: boom")).toBeInTheDocument();
     expect(screen.queryByText("„Nodvard Shield“ eingeschaltet.")).toBeNull();
     await waitFor(() => expect(within(screen.getByTestId("ext-shield")).getByText("Fehler")).toBeInTheDocument());
   });
@@ -1341,7 +1366,7 @@ describe("Protokoll: Namen statt Codes und Nummern", () => {
 
 describe("System: Zeit & Protokoll", () => {
   beforeEach(() => {
-    window.__lattice ??= {} as Window["__lattice"];
+    window.__nodvardDeck ??= {} as Window["__nodvardDeck"];
     setDeckTimezone(null);
     // Nur das Recht dieser Karte: die Karte „Sicherung“ (system.read) hat eigene Tests.
     setUser(["settings.write"]);

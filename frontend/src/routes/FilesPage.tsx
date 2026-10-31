@@ -741,7 +741,7 @@ export function FilesPage(): JSX.Element {
                       )}
                     </td>
                     <td className="py-1.5 whitespace-nowrap opacity-70">{entry.is_dir ? "" : formatSize(entry.size)}</td>
-                    <td className="py-1.5 whitespace-nowrap opacity-70">{entry.modified_at ? new Date(entry.modified_at).toLocaleString() : ""}</td>
+                    <td className="py-1.5 whitespace-nowrap opacity-70">{entry.modified_at ? new Date(entry.modified_at).toLocaleString("de-DE") : ""}</td>
                     <td className="py-1.5 whitespace-nowrap">
                       <div className="flex gap-1.5">
                         {canTransfer(entry) && previewKind(entry) && (

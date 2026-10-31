@@ -170,8 +170,10 @@ einem anderen Namen liegt (eigene Registry, Proxy-Cache)."""
 SELF_WHY = "Das ist Nodvard Deck selbst – Update über das Deploy-Skript (scripts/deploy_pi.sh)."
 SELF_WHY_OFFICIAL = "Das ist Nodvard Deck selbst – Updates findest du unter Einstellungen → System → Updates."
 SELF_WHY_HELPER = (
-    "Das ist der Update-Helfer von Nodvard Deck – ihn aktualisierst du auf dem Server mit "
-    "„docker compose pull updater“ und danach „docker compose up -d updater“."
+    "Das ist der Update-Helfer von Nodvard Deck – ihn aktualisierst du auf dem Server. Steht beim Dienst „updater“ das "
+    "Image mit „:1“: „docker compose pull updater“, danach „docker compose up -d updater“. Steht dort „@sha256:…“: die "
+    "Zeile „image:“ aus der Compose-Datei am neuesten Release (github.com/nodvard/deck/releases/latest) übernehmen, "
+    "danach „docker compose up -d updater“."
 )
 SELF_WHY_DOCK = (
     "Das ist Nodvard Dock selbst – du aktualisierst es auf dem Server im Ordner mit seiner compose.yml: erst "

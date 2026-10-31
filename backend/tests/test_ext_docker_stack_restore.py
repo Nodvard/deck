@@ -86,7 +86,10 @@ async def _env(tmp_path, monkeypatch, used_by=None, **kwargs):
     env.orphans: set[str] = set()
     """Dienste mit Container, die nicht mehr in der Compose-Datei stehen; `compose stop/start` lehnt sie ab."""
     env.leftovers: dict[str, object] = {}
-    """Je Volume der Exit-Code beim Nachsehen nach Resten im Volume (0 = keine) oder `lost`."""
+    """Je Volume der Exit-Code beim Nachsehen nach einem Abbruch, `beiseite` (alte Daten beiseite), `lost` oder `spät` (danach läuft
+    doch noch ein Hilfscontainer an)."""
+    env.sent: list = []
+    env.update._ctx.notify = SimpleNamespace(send=lambda note: _async(env.sent.append(note)))
     original = env.docker.run_argv
 
     async def run_argv(host, argv, **kwargs):
@@ -104,13 +107,20 @@ async def _env(tmp_path, monkeypatch, used_by=None, **kwargs):
             state = env.helper.get(argv[-1].removeprefix("nodvard-zurueck-"))
             if state == "fehler":
                 return result(stderr="Cannot connect to the Docker daemon at unix:///var/run/docker.sock\n", code=1)
+            if state == "kein-socket":
+                return result(stderr=("failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct "
+                                      "and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory\n"),
+                              code=1)
             return result(state + "\n") if state else result(stderr=f"Error: No such container: {argv[-1]}\n", code=1)
-        if argv[:2] == ["docker", "run"] and argv[-1] == m._LEFTOVER_SCRIPT:
+        if argv[:2] == ["docker", "run"] and argv[-1] == m._SETTLE_SCRIPT:
             env.docker.calls.append(list(argv))
-            answer = env.leftovers.get(argv[argv.index("-v") + 1].split(":", 1)[0], 0)
+            volume = argv[argv.index("-v") + 1].split(":", 1)[0]
+            answer = env.leftovers.get(volume, 0)
             if answer == "lost":
                 raise ConnectionError("Verbindung verloren")
-            return result(code=answer)
+            if answer == "spät":
+                env.helper[volume] = "true"
+            return result(code={"beiseite": m.MOVED_EXIT, "spät": 0}.get(answer, answer))
         if argv[:2] == ["docker", "run"] and any(a.endswith(":/backup:ro") for a in argv):
             env.docker.calls.append(list(argv))
             volume = argv[argv.index("-v") + 1].split(":", 1)[0]
@@ -151,7 +161,8 @@ def test_the_commands():
     assert argv[11:15] == ["-v", "shop_data:/data", "-v", f"{FOLDER}:/backup:ro"]
     assert argv[15] == "busybox:1.37" and argv[-4:] == ["sh", "shop_data.tar.gz", SHA, str(SIZE)]
     script = argv[argv.index("-c") + 1]
-    assert script.index("tar xzf") < script.index('mv -t "$o"') < script.index("mv -t /data") < script.rindex('rm -rf "$o"')
+    assert script.index("tar xzf") < script.index('mv -t "$o"') < script.index("mv -t /data") < script.index('rm -rf "$o"')
+    assert script.count('rm -rf "$o"') == 1
     check = m.cmd_check("shop_data", FOLDER)
     assert "--name" not in check and check[check.index("-v") + 1] == "shop_data:/data:ro" and "gzip -dc" in check[check.index("-c") + 1]
     assert m.cmd_helper_state("shop_data") == ["docker", "container", "inspect", "--format", "{{.State.Running}}", "nodvard-zurueck-shop_data"]
@@ -163,10 +174,10 @@ def test_the_commands():
     for sha, size in (("AB" * 32, SIZE), ("ab" * 31, SIZE), (SHA + "\n", SIZE), (SHA, -1), (SHA, "1234"), (SHA, True)):
         with pytest.raises(ValueError):
             m.cmd_restore("shop_data", FOLDER, sha, size)
-    leftovers = m.cmd_leftovers("shop_data")
-    assert leftovers[leftovers.index("-v") + 1] == "shop_data:/data:ro" and "--name" not in leftovers and "/backup" not in " ".join(leftovers)
+    settle = m.cmd_settle("shop_data")
+    assert settle[:5] == argv[:5] and settle[settle.index("-v") + 1] == "shop_data:/data" and "/backup" not in " ".join(settle)
     with pytest.raises(ValueError):
-        m.cmd_leftovers("a;b")
+        m.cmd_settle("a;b")
     assert m.stamp_text(STAMP) == "2026-10-16T04:15:00+00:00"
     assert m.valid_stamp(STAMP) and not m.valid_stamp("99999999-999999") and not m.valid_stamp("20261301-000000")
     assert m.valid_stamp("20000101-000000") and m.valid_stamp("20991231-235959")
@@ -389,16 +400,36 @@ def test_a_swap_during_the_check_does_not_mix_two_archives(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32" or not shutil.which("sh"), reason="braucht eine POSIX-Shell")
-@pytest.mark.parametrize(("folder", "code"), [(None, 0), (".nodvard-vorher", 1), (".nodvard-zurueck", 1)], ids=["sauber", "vorher", "zurueck"])
-def test_leftovers_in_the_volume_are_found(tmp_path, folder, code):
+@pytest.mark.parametrize(("folders", "moved", "left"), [
+    ((), False, []), ((".nodvard-zurueck",), False, []), ((".nodvard-vorher",), True, [".nodvard-vorher"]),
+    ((".nodvard-vorher", ".nodvard-zurueck"), True, [".nodvard-vorher", ".nodvard-zurueck"]),
+], ids=["sauber", "nur-entpackt", "vorher", "beides"])
+@pytest.mark.parametrize("shell", ["sh", BUSYBOX])
+def test_after_a_cancel_only_a_half_unpacked_folder_goes(tmp_path, folders, moved, left, shell):
     m = _mod()
     data = tmp_path / "data"
     data.mkdir()
     (data / "a.txt").write_text("x")
-    if folder:
+    for folder in folders:
         (data / folder).mkdir()
-    script = m._LEFTOVER_SCRIPT.replace("/data", str(data))
-    assert subprocess.run(["sh", "-c", script], capture_output=True, check=False).returncode == code
+        (data / folder / "inhalt").write_text("y")
+    cmd, env = _shell(shell, tmp_path)
+    done = subprocess.run([*cmd, "-c", m._SETTLE_SCRIPT.replace("/data", str(data))], capture_output=True, check=False, env=env)
+    assert done.returncode == (m.MOVED_EXIT if moved else 0)
+    assert sorted(p.name for p in data.iterdir()) == sorted(["a.txt", *left]) and (data / "a.txt").read_text() == "x"
+
+
+@pytest.mark.skipif(sys.platform == "win32" or not shutil.which("sh"), reason="braucht eine POSIX-Shell")
+def test_a_failed_cleanup_still_means_the_data_are_in_place(tmp_path):
+    m = _mod()
+    data, tools = tmp_path / "data", tmp_path / "werkzeug"
+    (data / ".nodvard-zurueck").mkdir(parents=True)
+    tools.mkdir()
+    (tools / "rm").write_text("#!/bin/sh\necho \"rm: can't remove: Device busy\" >&2\nexit 1\n")
+    (tools / "rm").chmod(0o755)
+    cmd, env = _shell("sh", tmp_path, tools)
+    done = subprocess.run([*cmd, "-c", m._SETTLE_SCRIPT.replace("/data", str(data))], capture_output=True, text=True, check=False, env=env)
+    assert done.returncode == 0 and "Device busy" in done.stderr and (data / ".nodvard-zurueck").is_dir()
 
 
 @pytest.mark.asyncio
@@ -601,6 +632,7 @@ async def test_the_check_before_stopping_changes_nothing(tmp_path, monkeypatch, 
                "shop_data nach, ob dort .nodvard-vorher liegt, entferne den Container mit „docker rm nodvard-zurueck-shop_data“ und "
                "versuch es dann noch einmal. Zurückgespielt und gestoppt wurde nichts.")),
     ("fehler", "Ob für shop_data noch ein Zurückspielen läuft, ließ sich nicht feststellen."),
+    ("kein-socket", "Ob für shop_data noch ein Zurückspielen läuft, ließ sich nicht feststellen."),
     ("komisch", "Ob für shop_data noch ein Zurückspielen läuft, ließ sich nicht feststellen."),
 ])
 async def test_a_restore_still_running_on_the_server_blocks_a_new_one(tmp_path, monkeypatch, state, error):
@@ -953,19 +985,66 @@ async def test_a_stopped_stack_names_a_user_that_runs_after_the_swap(tmp_path, m
     assert _verbs(env) == []
 
 
+@pytest.mark.skipif(sys.platform == "win32" or not shutil.which("sh"), reason="braucht eine POSIX-Shell")
+@pytest.mark.parametrize("shell", ["sh", BUSYBOX])
+def test_clearing_the_half_unpacked_folder_never_follows_a_symlink(tmp_path, shell):
+    m = _mod()
+    data, outside = tmp_path / "data", tmp_path / "draussen"
+    for folder in (data, outside / "tief"):
+        folder.mkdir(parents=True)
+    (data / "a.txt").write_text("x")
+    (outside / "wichtig.txt").write_text("bleibt")
+    (outside / "tief" / "auch.txt").write_text("bleibt")
+    script = m._SETTLE_SCRIPT.replace("/data", str(data))
+    cmd, env = _shell(shell, tmp_path)
+
+    (data / ".nodvard-zurueck").symlink_to(outside)
+    assert subprocess.run([*cmd, "-c", script], capture_output=True, check=False, env=env).returncode == 0
+    assert not (data / ".nodvard-zurueck").is_symlink() and sorted(p.name for p in outside.iterdir()) == ["tief", "wichtig.txt"]
+
+    (data / ".nodvard-zurueck").mkdir()
+    (data / ".nodvard-zurueck" / "link").symlink_to(outside)
+    (data / ".nodvard-zurueck" / "datei").symlink_to(outside / "wichtig.txt")
+    assert subprocess.run([*cmd, "-c", script], capture_output=True, check=False, env=env).returncode == 0
+    assert not (data / ".nodvard-zurueck").exists() and (outside / "wichtig.txt").read_text() == "bleibt"
+    assert (outside / "tief" / "auch.txt").read_text() == "bleibt" and (data / "a.txt").read_text() == "x"
+
+
+@pytest.mark.skipif(sys.platform == "win32" or not shutil.which("sh"), reason="braucht eine POSIX-Shell")
+@pytest.mark.parametrize("target", ["da", "weg"])
+@pytest.mark.parametrize("shell", ["sh", BUSYBOX])
+def test_old_data_behind_a_symlink_still_count_as_moved(tmp_path, target, shell):
+    m = _mod()
+    data = tmp_path / "data"
+    (data / ".nodvard-zurueck").mkdir(parents=True)
+    (tmp_path / "da").mkdir()
+    (data / ".nodvard-vorher").symlink_to(tmp_path / target)
+    cmd, env = _shell(shell, tmp_path)
+    done = subprocess.run([*cmd, "-c", m._SETTLE_SCRIPT.replace("/data", str(data))], capture_output=True, check=False, env=env)
+    assert done.returncode == m.MOVED_EXIT and (data / ".nodvard-zurueck").is_dir()
+
+
 @pytest.mark.asyncio
-async def test_a_cancel_in_a_stopped_stack_starts_nothing(tmp_path, monkeypatch):
+@pytest.mark.parametrize("leftovers", [0, "beiseite"])
+async def test_a_cancel_in_a_stopped_stack_starts_nothing(tmp_path, monkeypatch, leftovers):
     env = await _env(tmp_path, monkeypatch)
     env.docker.stopped.update({"web", "worker"})
     _backup(env.sftp)
     env.unpack["hang"] = 1
+    env.leftovers["shop_data"] = leftovers
     task = asyncio.create_task(env.executor.execute(_request()))
     await _until(lambda: env.restored)
     env.helper.clear()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+    for _ in range(20):
+        await asyncio.sleep(0)
     assert not _started(env) and env.update.actions.locks.held("h1", "shop") is None
+    assert any(c[-1] == _mod()._SETTLE_SCRIPT for c in env.docker.calls)
+    expected = [] if leftovers == 0 else [("Die Dienste mit diesen Volumes waren schon gestoppt und bleiben es. In shop_data hatte der "
+                                           "Tausch der Daten schon begonnen")]
+    assert [n.body.split(":")[0] for n in env.sent] == expected
 
 
 @pytest.mark.asyncio
@@ -991,10 +1070,79 @@ async def test_a_cancel_while_the_helper_runs_keeps_the_services_stopped(tmp_pat
     for _ in range(20):
         await asyncio.sleep(0)
     assert not _started(env) and env.update.actions.locks.held("h1", "shop") is None
+    (note,) = env.sent
+    assert note.title == "Zurückspielen in „shop“ auf h1 abgebrochen"
+    assert note.body.startswith("Der Dienst web bleibt gestoppt. Auf dem Server läuft das Zurückspielen vielleicht noch "
+                                "(nodvard-zurueck-shop_data).")
+    assert not any(c[-1] == _mod()._SETTLE_SCRIPT for c in env.docker.calls)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("leftovers", "starts"), [(0, True), (1, False), ("lost", False)], ids=["sauber", "reste", "keine-antwort"])
+@pytest.mark.parametrize("state", ["fehler", "kein-socket", "late"])
+async def test_a_cancel_starts_nothing_while_the_helper_may_still_run(tmp_path, monkeypatch, state):
+    env = await _env(tmp_path, monkeypatch)
+    _backup(env.sftp)
+    env.unpack["hang"] = 1
+    task = asyncio.create_task(env.executor.execute(_request()))
+    await _until(lambda: env.restored)
+    env.helper.clear()
+    if state == "late":
+        env.leftovers["shop_data"] = "spät"
+    else:
+        env.helper["shop_data"] = state
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert not _started(env) and any(c[-1] == _mod()._SETTLE_SCRIPT for c in env.docker.calls) is (state == "late")
+    (note,) = env.sent
+    assert note.body.startswith("Der Dienst web bleibt gestoppt. Auf dem Server läuft das Zurückspielen vielleicht noch")
+
+
+@pytest.mark.asyncio
+async def test_a_failed_start_after_a_cancel_is_reported(tmp_path, monkeypatch):
+    env = await _env(tmp_path, monkeypatch)
+    _backup(env.sftp)
+    env.unpack["hang"] = 1
+    task = asyncio.create_task(env.executor.execute(_request()))
+    await _until(lambda: env.restored)
+    env.helper.clear()
+    env.docker.fail["start"] = "Error: port is already allocated\n"
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    for _ in range(20):
+        await asyncio.sleep(0)
+    (note,) = env.sent
+    assert note.body == ("Der Dienst web bleibt gestoppt. Nach dem Abbruch scheiterte der Neustart. Starte den Stack im Reiter Stacks, dort "
+                         "siehst du bei einem Fehler den Grund.")
+    assert "allocated" not in note.body
+
+
+@pytest.mark.asyncio
+async def test_a_failed_note_after_a_cancel_changes_nothing(tmp_path, monkeypatch, caplog):
+    env = await _env(tmp_path, monkeypatch)
+    _backup(env.sftp)
+    env.unpack["hang"] = 1
+
+    async def broken(note):
+        raise RuntimeError("Kanal weg")
+
+    env.update._ctx.notify = SimpleNamespace(send=broken)
+    task = asyncio.create_task(env.executor.execute(_request()))
+    await _until(lambda: env.restored)
+    task.cancel()
+    with caplog.at_level("ERROR"), pytest.raises(asyncio.CancelledError):
+        await task
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert not _started(env) and any("docker_restore_notify_failed project=shop" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("leftovers", "starts"), [(0, True), ("beiseite", False), (1, False), (125, False), ("lost", False)],
+                         ids=["an-ihrem-platz", "beiseite", "docker-fehler", "name-belegt", "keine-antwort"])
 async def test_a_cancel_after_the_helper_ended_starts_again_only_without_leftovers(tmp_path, monkeypatch, leftovers, starts):
     env = await _env(tmp_path, monkeypatch)
     _backup(env.sftp)
@@ -1008,7 +1156,12 @@ async def test_a_cancel_after_the_helper_ended_starts_again_only_without_leftove
         await task
     for _ in range(20):
         await asyncio.sleep(0)
-    assert _started(env) is starts and any(c[-1] == _mod()._LEFTOVER_SCRIPT for c in env.docker.calls)
+    assert _started(env) is starts and any(c[-1] == _mod()._SETTLE_SCRIPT for c in env.docker.calls)
+    assert [n.body.split(". ")[0] for n in env.sent] == ([] if starts else ["Der Dienst web bleibt gestoppt"])
+    if leftovers == "beiseite":
+        assert "In shop_data hatte der Tausch der Daten schon begonnen: Die bisherigen Daten liegen" in env.sent[0].body
+    elif not starts:
+        assert "Ob der Tausch in shop_data schon begonnen hatte, ließ sich nicht prüfen; liegt dort .nodvard-vorher" in env.sent[0].body
 
 
 @pytest.mark.asyncio
@@ -1017,7 +1170,7 @@ async def test_a_cancel_with_leftovers_in_one_of_two_volumes_keeps_the_stack_sto
     env = await _env(tmp_path, monkeypatch)
     _backup(env.sftp, files=("shop_data.tar.gz", "shop_cache.tar.gz"))
     env.unpack["hang"] = 1
-    env.leftovers[dirty] = 1
+    env.leftovers[dirty] = "beiseite"
     task = asyncio.create_task(env.executor.execute(_request(volumes=("shop_data", "shop_cache"))))
     await _until(lambda: env.restored)
     env.helper.clear()
@@ -1026,7 +1179,8 @@ async def test_a_cancel_with_leftovers_in_one_of_two_volumes_keeps_the_stack_sto
         await task
     for _ in range(20):
         await asyncio.sleep(0)
-    assert not _started(env) and sum(c[-1] == _mod()._LEFTOVER_SCRIPT for c in env.docker.calls) == 2
+    assert not _started(env) and sum(c[-1] == _mod()._SETTLE_SCRIPT for c in env.docker.calls) == 2
+    assert env.sent[0].body.startswith(f"Die Dienste web, worker bleiben gestoppt. In {dirty} hatte der Tausch der Daten schon begonnen")
     assert any("docker_restore_kept_stopped project=shop" in r.getMessage() for r in caplog.records)
 
 

@@ -1,5 +1,5 @@
-"""Prüft, ob eine offene Verbindung (Terminal-Shell, Live-Aktualisierung) noch erlaubt ist, gelesen wird neu aus
-der Datenbank."""
+"""Prüft, ob eine Anmeldung noch gilt: bei jeder Anfrage und für offene Verbindungen (Terminal-Shell,
+Live-Aktualisierung), gelesen wird neu aus der Datenbank."""
 
 from __future__ import annotations
 
@@ -10,10 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import utcnow
 from ..models import RefreshToken, User
-from .auth import user_has_permission
-
-_MAX_HOPS = 50
-"""So viele Erneuerungen verfolgt eine Prüfung höchstens; der Stand wird gemerkt, es kommen kaum neue dazu."""
+from .auth import SESSION_CHAIN_MAX_HOPS, session_chain_end, user_has_permission
 
 LOGGED_OUT_MESSAGE = "Du wurdest abgemeldet."
 
@@ -54,6 +51,14 @@ class SessionWatch:
         return None
 
 
+async def login_is_live(session: AsyncSession, user_id: str, login_id: str | None) -> bool:
+    """Ob die Anmeldung hinter einem Zugangs-Token noch gilt, auch nach Erneuerungen; ohne `sid` reicht irgendeine
+    gültige Anmeldung des Kontos."""
+    if login_id is None:
+        return await _any_live_login(session, user_id)
+    return await _live_login_head(session, user_id, login_id) is not None
+
+
 async def _any_live_login(session: AsyncSession, user_id: str) -> bool:
     live = (
         await session.execute(
@@ -70,15 +75,7 @@ async def _any_live_login(session: AsyncSession, user_id: str) -> bool:
 
 
 async def _live_login_head(session: AsyncSession, user_id: str, login_id: str) -> str | None:
-    now = utcnow()
-    current = login_id
-    for _ in range(_MAX_HOPS):
-        row = await session.get(RefreshToken, current)
-        if row is None or row.user_id != user_id:
-            return None
-        if row.revoked_at is None:
-            return current if row.expires_at > now else None
-        if row.replaced_by_id is None:
-            return None
-        current = row.replaced_by_id
-    return None
+    end = await session_chain_end(session, user_id, login_id, max_hops=SESSION_CHAIN_MAX_HOPS)
+    if end is None or end.too_long or end.revoked_at is not None or end.expires_at <= utcnow():
+        return None
+    return end.id

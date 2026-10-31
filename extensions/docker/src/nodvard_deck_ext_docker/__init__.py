@@ -56,6 +56,9 @@ from .stack_update import DockerStackUpdateExecutor, StackBackups, StackUpdate, 
 from .locks import StackLocks
 from .stack_actions import DockerStackExecutor, stack_action_specs
 from .stacks import DockerStacks, stack_routes
+from .git_apply import DockerStackGitApplyExecutor, GitApply, apply_routes
+from .git_apply import action_specs as git_apply_specs
+from .git_source import GitStacks, git_routes
 from .container_to_stack import ContainerToStack, DockerContainerToStackExecutor, convert_action_spec, convert_routes
 from .registries import DockerRegistryExecutor, Registries, login_spec, registry_routes
 from .portainer_move import DockerPortainerMoveExecutor, PortainerMove, move_action_spec, move_routes
@@ -91,7 +94,7 @@ def _apply_docker_tag(ctx: ExtensionContext, settings: dict[str, Any]) -> None:
     tag, operate_tag = operate_tags(settings)
     _register_host_tool(ctx, [tag, operate_tag])
     _register_docker_requirement(ctx, tag)
-    _register_operate_requirement(ctx, operate_tag)
+    _register_operate_requirement(ctx, operate_tag, tag)
     _register_operate_limits(ctx, operate_tag, tag)
     for spec in container_action_specs(tag, operate_tag) + resource_action_specs(tag) + stack_action_specs(tag):
         ctx.actions.register(spec)
@@ -107,47 +110,47 @@ def _register_host_tool(ctx: ExtensionContext, tags: list[str]) -> None:
     ))
 
 
-def _register_operate_requirement(ctx: ExtensionContext, tag: str) -> None:
+def _register_operate_requirement(ctx: ExtensionContext, tag: str, full_tag: str) -> None:
     """Server im Modus „Nur bedienen“: statt der Gruppe docker das Hilfsskript `docker-root`, das die Einrichtung root-eigen
-    ablegt und per sudo nur dieses Skript erlaubt."""
+    ablegt und per sudo nur dieses Skript erlaubt; ein voller Docker-Server (beide Markierungen) braucht es nicht."""
     ctx.ui.register_host_requirement(HostRequirementSpec(
         id="docker-operate", label="Docker nur bedienen (ohne Gruppe docker)",
         check_command=f"sudo -n {OPERATE_HELPER} version", ok_text="Das Hilfsskript für Docker antwortet.",
         fail_hint="Den Zugang neu einrichten (Einstellungen, Server & Zugänge): Die Einrichtung legt das Hilfsskript ab und erlaubt "
         "es per sudo.",
         needs_root=True, root_reason="Container ansehen, starten, stoppen und Logs lesen, ohne Gruppe docker",
-        tags=[tag], order=31,
+        tags=[tag], skip_tags=[full_tag], order=31,
     ))
 
 
 def _register_operate_limits(ctx: ExtensionContext, tag: str, full_tag: str) -> None:
-    """Ein Zugang als root, mit Gruppe docker oder mit voller sudo-Regel darf auch im Modus „Nur bedienen“ alles."""
-    both = f"Hat der Server auch die Markierung „{full_tag}“, ist er ein voller Docker-Server und das so gewollt. "
+    """Ein Zugang als root, mit Gruppe docker oder mit voller sudo-Regel darf auch im Modus „Nur bedienen“ alles; auf einem
+    vollen Docker-Server (beide Markierungen) ist das gewollt und wird nicht geprüft."""
     ctx.ui.register_host_requirement(HostRequirementSpec(
         id="docker-operate-root", label="Nur bedienen: Zugang ist nicht root",
         check_command=ROOT_CHECK, ok_text="Der Zugang meldet sich nicht als root an.",
-        fail_hint=both + "Sonst: Der Zugang meldet sich als root an und darf hier ohnehin alles, „Nur bedienen“ schränkt ihn "
-        "also nicht ein. Richte den Zugang mit einem eigenen Benutzer statt root neu ein (Einstellungen, Server & Zugänge).",
-        tags=[tag], order=32,
+        fail_hint="Der Zugang meldet sich als root an und darf hier ohnehin alles, „Nur bedienen“ schränkt ihn also nicht "
+        "ein. Richte den Zugang mit einem eigenen Benutzer statt root neu ein (Einstellungen, Server & Zugänge).",
+        tags=[tag], skip_tags=[full_tag], order=32,
     ))
     ctx.ui.register_host_requirement(HostRequirementSpec(
         id="docker-operate-group", label="Nur bedienen: Zugang nicht in der Gruppe docker",
         check_command=GROUP_CHECK,
         ok_text="Der Zugang kommt ohne sudo nicht an Docker heran, oder er ist root (dann gilt „Zugang ist nicht root“).",
-        fail_hint=both + "Sonst: Der Zugang kann Docker noch ohne sudo benutzen, meist über die Gruppe docker, und ist damit "
-        "auf diesem Server praktisch root. Nimm ihn aus der Gruppe: sudo gpasswd -d {user} docker (gilt ab der nächsten "
-        "Anmeldung, „Verbindung prüfen“ meldet sich dafür neu an).",
-        tags=[tag], order=33,
+        fail_hint="Der Zugang kann Docker noch ohne sudo benutzen, meist über die Gruppe docker, und ist damit auf diesem "
+        "Server praktisch root. Nimm ihn aus der Gruppe: sudo gpasswd -d {user} docker (gilt ab der nächsten Anmeldung, "
+        "„Verbindung prüfen“ meldet sich dafür neu an).",
+        tags=[tag], skip_tags=[full_tag], order=33,
     ))
     ctx.ui.register_host_requirement(HostRequirementSpec(
         id="docker-operate-sudo", label="Nur bedienen: keine volle sudo-Regel",
         check_command=FULL_SUDO_CHECK,
         ok_text="sudo erlaubt dem Zugang nicht alles, oder er ist root (dann gilt „Zugang ist nicht root“).",
-        fail_hint=both + "Sonst: sudo erlaubt dem Zugang hier noch alles ohne Passwort, und die Einrichtung nimmt so eine Regel "
-        "nie zurück. Braucht kein anderes Modul hier volle Rechte, entferne sie, sobald das Hilfsskript antwortet und der "
+        fail_hint="sudo erlaubt dem Zugang hier noch alles ohne Passwort, und die Einrichtung nimmt so eine Regel nie "
+        "zurück. Braucht kein anderes Modul hier volle Rechte, entferne sie, sobald das Hilfsskript antwortet und der "
         "Zugang nicht mehr in der Gruppe docker ist (Erst-Einrichtung, Abschnitt 6). Welche Datei die Regel enthält, zeigt: "
         "sudo grep -rl NOPASSWD /etc/sudoers /etc/sudoers.d",
-        tags=[tag], order=34,
+        tags=[tag], skip_tags=[full_tag], order=34,
     ))
 
 
@@ -195,6 +198,8 @@ class Extension(NodvardExtension):
         for spec in restore_specs():
             ctx.actions.register(spec)
         for spec in stack_actions_specs():
+            ctx.actions.register(spec)
+        for spec in git_apply_specs():
             ctx.actions.register(spec)
         # Mit dem Standard-Tag; on_start meldet sie mit dem eingestellten Tag neu an.
         for spec in container_action_specs("docker", OPERATE_DEFAULT_TAG) + resource_action_specs() + stack_action_specs():
@@ -455,6 +460,13 @@ class Extension(NodvardExtension):
         delete = StackDelete(ctx, stacks, adopted, new, stack_executor)
         ctx.capabilities.provide(DockerStackDeleteExecutor(ctx, delete, adopted, update_executor.drop_backups))
         ctx.api.include_router(delete_routes(delete, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
+        self._git = git = GitStacks(ctx, stack_executor, adopted, Path(str(ctx.data_dir)))
+        adopted.on_remove = git.forget
+        ctx.api.include_router(git_routes(git, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
+        self._git_apply = git_apply = GitApply(ctx, git, stack_executor, Path(str(ctx.data_dir)), update, update_executor)
+        git.on_forget = git_apply.forget
+        ctx.capabilities.provide(DockerStackGitApplyExecutor(git_apply))
+        ctx.api.include_router(apply_routes(git_apply, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
 
         apps_router = APIRouter()
 

@@ -171,7 +171,7 @@ function newAccessQuestion(previous: CredentialOut | undefined): string {
 }
 
 function CredentialRow({
-  host, credential, previous, expanded, verified, onToggleSetup, onChecked, onChanged, onNotice,
+  host, credential, previous, expanded, verified, dropFullRule, onToggleSetup, onChecked, onChanged, onNotice,
 }: {
   host: HostOut;
   credential: CredentialOut;
@@ -179,6 +179,7 @@ function CredentialRow({
   previous: CredentialOut | undefined;
   expanded: boolean;
   verified: boolean;
+  dropFullRule: boolean;
   onToggleSetup: () => void;
   onChecked: (result: CheckResult) => void;
   onChanged: () => Promise<void>;
@@ -250,7 +251,9 @@ function CredentialRow({
       </div>
 
       {expanded && credential.kind === "ssh_key" && (
-        <div id={`einrichtungsbefehl-${credential.id}`} className="mt-4 scroll-mt-20 rounded-lg border border-white/[0.08] bg-black/10 p-4"><SetupCommand host={host} credential={credential} onChecked={onChecked} /></div>
+        <div id={`einrichtungsbefehl-${credential.id}`} className="mt-4 scroll-mt-20 rounded-lg border border-white/[0.08] bg-black/10 p-4">
+          <SetupCommand host={host} credential={credential} dropFullRule={dropFullRule} onChecked={onChecked} />
+        </div>
       )}
 
       {!credential.is_default && (
@@ -270,7 +273,7 @@ function CredentialRow({
 }
 
 export function AccessPanel({
-  host, credentials, autoOpen = false, showCommand = false,
+  host, credentials, autoOpen = false, showCommand = false, dropFullRule = false,
 }: {
   host: HostOut;
   credentials: CredentialOut[];
@@ -278,6 +281,8 @@ export function AccessPanel({
   autoOpen?: boolean;
   /** „Befehl ansehen“ (Erste Schritte): den Einrichtungsbefehl des Schlüssels gleich aufklappen. */
   showCommand?: boolean;
+  /** Dazu „Volle sudo-Regel entfernen“ ankreuzen (Hinweis in der Übersicht). */
+  dropFullRule?: boolean;
 }) {
   const queryClient = useQueryClient();
   const ssh = credentials.filter(isSshCredential);
@@ -338,7 +343,7 @@ export function AccessPanel({
           {ssh.map((c) => (
             <CredentialRow
               key={c.id} host={host} credential={c} previous={ssh.find((o) => o.is_default && o.id !== c.id)}
-              expanded={setupFor === c.id} verified={verified.includes(c.id)}
+              expanded={setupFor === c.id} verified={verified.includes(c.id)} dropFullRule={dropFullRule}
               onToggleSetup={() => setSetupFor(setupFor === c.id ? null : c.id)}
               onChecked={(r) => {
                 const ok = loginOutcome(r) === "ok";

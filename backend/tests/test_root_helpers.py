@@ -88,6 +88,18 @@ def test_a_good_helper_is_read_with_its_checksum_and_place(tmp_path, caplog):
     assert _rejections(caplog) == []
 
 
+@pytest.mark.parametrize(("extra", "fallback"), [("", True), (", sudo_fallback = true", True), (", sudo_fallback = false", False)])
+def test_the_helper_says_whether_the_module_falls_back_to_the_full_rule(tmp_path, extra, fallback):
+    _write_ext(tmp_path, "helper-ext", helper=f'file = "root-helper/x-root.sh", version = 2{extra}')
+    helper = read_root_helper(_found(tmp_path))
+    assert helper is not None and helper.sudo_fallback is fallback
+
+
+def test_sudo_fallback_must_be_a_real_bool(tmp_path):
+    _write_ext(tmp_path, "helper-ext", helper='file = "root-helper/x-root.sh", version = 2, sudo_fallback = "false"')
+    assert not [d for d in discovery.scan_directory(tmp_path) if d.ok and d.id == "helper-ext"]
+
+
 def test_without_root_helper_there_is_nothing_to_read(tmp_path, caplog):
     _write_ext(tmp_path, "helper-ext", helper=None, text=None)
     assert read_root_helper(_found(tmp_path)) is None
@@ -179,12 +191,13 @@ async def test_enabling_reads_the_helper_and_a_bad_one_does_not_stop_the_module(
     _write_ext(root, "helper-good")
     _write_ext(root, "helper-bad", text=GOOD.replace("HELPER_VERSION=2", "HELPER_VERSION=7"))
     _write_ext(root, "helper-none", helper=None, text=None)
+    _write_ext(root, "helper-strict", helper='file = "root-helper/x-root.sh", version = 2, sudo_fallback = false')
     settings = test_settings.model_copy(update={"extensions_dir": root, "ext_data_dir": tmp_path / "ext-data"})
 
     await _boot(db_session, settings)
 
     loaded = get_extension_runtime().loaded
-    assert sorted(loaded) == ["helper-bad", "helper-good", "helper-none"]
+    assert sorted(loaded) == ["helper-bad", "helper-good", "helper-none", "helper-strict"]
     assert loaded["helper-good"].root_helper is not None
     assert loaded["helper-good"].root_helper.install_path.endswith("/helper-good-root")
     assert loaded["helper-bad"].root_helper is None
@@ -197,6 +210,7 @@ async def test_enabling_reads_the_helper_and_a_bad_one_does_not_stop_the_module(
         r.id: r.manifest for r in (await db_session.execute(select(ExtensionRecord))).scalars()
     }
     assert stored["helper-good"]["root_helper"] == {"file": "root-helper/x-root.sh", "version": 2}
+    assert stored["helper-strict"]["root_helper"] == {"file": "root-helper/x-root.sh", "version": 2, "sudo_fallback": False}
     # Ohne Hilfsskript bleibt die Registry-Zeile, wie sie war.
     assert "root_helper" not in stored["helper-none"]
     assert {(r.state, r.last_error) for r in (await db_session.execute(select(ExtensionRecord))).scalars()} == {

@@ -343,13 +343,14 @@ async def test_a_confirmed_finding_is_quarantined_and_reported_like_the_watch_do
     ctx.answers = {
         "realtime-log": _log(0, ["ScanOnAccess: started", f"/tmp/eicar.com: {EICAR} FOUND"]),
         "realtime-confirm": f"/tmp/eicar.com: {EICAR} FOUND\n@@rc=1\n",
-        "mv -f": "@@mode=644\n",
+        "confirm_finding": "@@mode=644\n",
     }
     scan = await _watch(shield)
     assert (scan["kind"], scan["status"], scan["infected"]) == ("watch", "infected", 1)
     findings = await shield.defender.list_findings()
     assert [(f["path"], f["signature"], f["status"]) for f in findings] == [("/tmp/eicar.com", EICAR, "quarantined")]
     assert ctx.notes and "1 in Quarantäne" in ctx.notes[0].body
+    assert sum("confirm_finding" in c for c in ctx.commands) == 1
     assert await _position(shield) == 2
     assert _minute_runs(ctx) == 0
     av, rt = _av(), _rt()
@@ -381,7 +382,7 @@ async def test_a_line_that_the_confirmation_does_not_find_again_is_no_finding(sh
     scan = await _watch(shield)
     assert (scan["status"], scan["infected"]) == ("clean", 0)
     assert await shield.defender.list_findings() == []
-    assert not any("mv -f" in c for c in shield.ctx.commands) and shield.ctx.notes == []
+    assert not any("confirm_finding" in c for c in shield.ctx.commands) and shield.ctx.notes == []
 
 
 @pytest.mark.asyncio
@@ -396,7 +397,7 @@ async def test_findings_outside_the_watched_folders_are_kept_but_never_moved(shi
     await _watch(shield)
     findings = await shield.defender.list_findings()
     assert [(f["path"], f["status"]) for f in findings] == [("/srv/upload/a.exe", "detected")]
-    assert not any("mv -f" in c for c in shield.ctx.commands)
+    assert not any("confirm_finding" in c for c in shield.ctx.commands)
     assert findings[0]["note"] == REALTIME_OUTSIDE and shield.ctx.notes[0].body.endswith(REALTIME_OUTSIDE)
 
 
@@ -413,7 +414,7 @@ async def test_without_a_confirmation_the_findings_stay_with_a_note(shield):
     assert scan["status"] == "infected" and scan["error"] == REALTIME_UNCHECKED
     findings = await shield.defender.list_findings()
     assert [(f["path"], f["status"], f["note"]) for f in findings] == [("/tmp/eicar.com", "detected", REALTIME_UNCHECKED)]
-    assert not any("mv -f" in c for c in shield.ctx.commands)
+    assert not any("confirm_finding" in c for c in shield.ctx.commands)
 
 
 @pytest.mark.asyncio
@@ -434,7 +435,7 @@ async def test_many_findings_are_confirmed_in_batches(shield):
     shield.ctx.answers = {
         "realtime-log": _log(0, [f"{p}: {EICAR} FOUND" for p in paths]),
         "realtime-confirm": "".join(f"{p}: {EICAR} FOUND\n" for p in paths) + "@@rc=1\n",
-        "mv -f": "@@mode=644\n",
+        "confirm_finding": "@@mode=644\n",
     }
     scan = await _watch(shield)
     assert scan["infected"] == 60
@@ -512,7 +513,7 @@ async def test_lines_written_before_clamonacc_stopped_are_still_collected(shield
     shield.ctx.answers = {
         "realtime-log": _log(0, [f"/tmp/eicar.com: {EICAR} FOUND"], active=False),
         "realtime-confirm": f"/tmp/eicar.com: {EICAR} FOUND\n@@rc=1\n",
-        "mv -f": "@@mode=644\n",
+        "confirm_finding": "@@mode=644\n",
     }
     scan = await _watch(shield)
     assert scan["infected"] == 1 and _minute_runs(shield.ctx) == 0 and await _position(shield) == 1

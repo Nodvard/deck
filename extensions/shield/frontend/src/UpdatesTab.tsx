@@ -19,6 +19,8 @@ interface Pkg {
   current_version: string | null;
   repo: string | null;
   security: boolean;
+  /** apt hält das Update wegen Phasing noch zurück (fehlt bei älteren Ständen). */
+  phased?: boolean;
 }
 
 interface UpdateState {
@@ -26,6 +28,8 @@ interface UpdateState {
   packages: Pkg[];
   count: number;
   security_count: number;
+  /** Davon hält apt wegen Phasing noch zurück (fehlt bei älteren Ständen). */
+  phased_count?: number;
   reboot_required: boolean;
   reboot_reasons: string[];
   kernel: string | null;
@@ -181,6 +185,31 @@ export function deckRestartHint(st: UpdateState | null | undefined, mode: string
     : ` Dabei ${which}. Läuft hier Nodvard Deck, ist es danach kurz nicht erreichbar und lädt von selbst neu.`;
 }
 
+export const PHASING_HINT =
+  "Ubuntu verteilt manche Updates schrittweise: Erst bekommt sie ein Teil der Rechner, nach und nach alle. Bis dieser Server an " +
+  "der Reihe ist, hält apt das Update zurück, auch bei „Alle einspielen“. Das ist gewollt und kein Fehler, du musst nichts tun: " +
+  "Nodvard Deck prüft weiter, und sobald der Server dran ist, lässt sich das Update wie jedes andere einspielen. " +
+  "Sicherheitsupdates verteilt Ubuntu in der Regel sofort an alle.";
+
+/** Neben der Zahl der Updates; zeigt das Abzeichen die Sicherheitsupdates, sagt der Text, wovon er spricht. */
+export function phasingLabel(st: UpdateState): string {
+  const n = st.phased_count ?? 0;
+  return st.security_count > 0 ? `${n} von ${count(st.count, "Update", "Updates")} durch Phasing verzögert` : `davon ${n} durch Phasing verzögert`;
+}
+
+export function phasingNote(st: UpdateState | null | undefined): string {
+  const n = st?.phased_count ?? 0;
+  if (!n) return "";
+  if (n >= (st?.count ?? 0)) {
+    return n === 1
+      ? " Ubuntu hält dieses Update wegen Phasing noch zurück; einspielen lässt es sich erst, wenn der Server an der Reihe ist."
+      : " Ubuntu hält diese Updates wegen Phasing noch zurück; einspielen lassen sie sich erst, wenn der Server an der Reihe ist.";
+  }
+  return n === 1
+    ? " Ein Update davon hält Ubuntu wegen Phasing noch zurück; es lässt sich einspielen, sobald der Server an der Reihe ist."
+    : ` ${n} davon hält Ubuntu wegen Phasing noch zurück; sie lassen sich einspielen, sobald der Server an der Reihe ist.`;
+}
+
 const RUN_STATUS: Record<string, { label: string; tone: Tone }> = {
   running: { label: "läuft", tone: "info" },
   ok: { label: "erfolgreich", tone: "good" },
@@ -218,6 +247,7 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
   const page = usePageActions();
   const { keys: { busy: acting }, signal: pageSignal } = page;
   const [open, setOpen] = useState<string | null>(null);
+  const [phasingOpen, setPhasingOpen] = useState<string | null>(null);
   const [openRun, setOpenRun] = useState<string | null>(null);
   const [pending, setPending] = useState<Record<string, Mode>>({});
   const [proposing, setProposing] = useState<BulkMode | null>(null);
@@ -342,7 +372,7 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
       security: `${count(st?.security_count ?? 0, "Sicherheitsupdate", "Sicherheitsupdates")} auf „${h.host_name}“ jetzt einspielen?${deckRestartHint(st, "security")}`,
       all: `${(st?.count ?? 0) === 1 ? "Das Update" : `Alle ${st?.count ?? 0} Updates`} auf „${h.host_name}“ jetzt einspielen? Das kann einige Minuten dauern.${
         distUpgrade ? " Ist es ein Proxmox-Server, läuft dabei „apt-get dist-upgrade“ – das kann Pakete entfernen oder ersetzen." : ""
-      }${deckRestartHint(st, "all")}`,
+      }${phasingNote(st)}${deckRestartHint(st, "all")}`,
       cleanup: `Auf „${h.host_name}“ nicht mehr benötigte Pakete und alte Kernel entfernen und den Paket-Cache leeren?`,
       reboot: `„${h.host_name}“ jetzt neu starten? Der Server ist dann ein paar Minuten nicht erreichbar – alle Dienste darauf auch.`,
     };
@@ -481,6 +511,13 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
                   <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
                     {h.host_name}
                     <Badge tone={state.tone}>{state.label}</Badge>
+                    {!!st?.phased_count && !h.busy && !h.checking && (
+                      <button type="button" title={PHASING_HINT} aria-expanded={phasingOpen === h.host_id}
+                        onClick={() => setPhasingOpen(phasingOpen === h.host_id ? null : h.host_id)}
+                        className="text-xs font-normal text-white/55 underline decoration-dotted underline-offset-2 hover:text-white">
+                        {phasingLabel(st)}
+                      </button>
+                    )}
                     {needsReboot && !h.busy && <Badge tone="warn">Neustart nötig</Badge>}
                     {st?.unattended === true && <Badge tone="good">Auto-Sicherheitsupdates an</Badge>}
                   </p>
@@ -496,6 +533,7 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
                   )}
                   {st?.error && <p className={`mt-1 text-xs ${st.unsupported ? "text-white/50" : "text-amber-300"}`}>{st.error}</p>}
                   {st?.refresh_error && <p className="mt-1 text-xs text-amber-300/80">{st.refresh_error}</p>}
+                  {phasingOpen === h.host_id && !!st?.phased_count && <p className="mt-1 text-xs text-white/50">{PHASING_HINT}</p>}
                   {needsReboot && st.reboot_reasons.length > 0 && (
                     <p className="mt-1 text-xs text-white/50">Grund: {st.reboot_reasons.slice(0, 3).join(", ")}</p>
                   )}
@@ -538,7 +576,10 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
                           <td className="px-3 py-1.5 font-mono">{p.name}</td>
                           <td className="px-3 py-1.5 font-mono text-white/50">{p.current_version ?? "–"}</td>
                           <td className="px-3 py-1.5 font-mono">{p.new_version}</td>
-                          <td className="px-3 py-1.5 text-right">{p.security && <Badge tone="bad">Sicherheit</Badge>}</td>
+                          <td className="px-3 py-1.5 text-right">
+                            {p.security && <Badge tone="bad">Sicherheit</Badge>}
+                            {p.phased && <span title={PHASING_HINT}><Badge>verzögert</Badge></span>}
+                          </td>
                         </tr>
                       ))}
                     </tbody>

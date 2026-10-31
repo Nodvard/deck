@@ -14,7 +14,7 @@ export interface TotpSetup {
 }
 
 export function TotpEnroll({
-  setup, busy, onConfirm, onCancel, cancelLabel = "Abbrechen",
+  setup, busy, onConfirm, onCancel, cancelLabel = "Abbrechen", onLater,
 }: {
   setup: TotpSetup;
   busy: boolean;
@@ -22,10 +22,30 @@ export function TotpEnroll({
   onConfirm: (code: string) => void;
   onCancel: () => void;
   cancelLabel?: string;
+  /** Nur im Assistenten: „Später einrichten“ gleich neben „Bestätigen“. */
+  onLater?: () => void;
 }): JSX.Element {
   const [code, setCode] = useState("");
   const digits = code.replace(/\s/g, "");
   const secretGroups = setup.secret.match(/.{1,4}/g)?.join(" ");
+  const input = (
+    <input
+      aria-label="Bestätigungscode"
+      inputMode="numeric"
+      autoComplete="one-time-code"
+      maxLength={7}
+      placeholder="123 456"
+      value={code}
+      onChange={(e) => setCode(e.target.value)}
+      onKeyDown={(e) => { if (e.key === "Enter" && digits.length === 6 && !busy) onConfirm(digits); }}
+      className={`${inputClass} font-mono tracking-[0.3em]`}
+    />
+  );
+  const confirmButton = (
+    <Button variant="primary" busy={busy} disabled={digits.length !== 6} onClick={() => onConfirm(digits)}>
+      Bestätigen
+    </Button>
+  );
 
   return (
     <div className="mt-5 rounded-lg border border-white/10 bg-black/20 p-4" data-testid="totp-enroll">
@@ -52,22 +72,20 @@ export function TotpEnroll({
         </li>
         <li>
           Den sechsstelligen Code eingeben, den die App jetzt anzeigt:
-          <div className="mt-2 flex max-w-xs gap-2">
-            <input
-              aria-label="Bestätigungscode"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              maxLength={7}
-              placeholder="123 456"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && digits.length === 6 && !busy) onConfirm(digits); }}
-              className={`${inputClass} font-mono tracking-[0.3em]`}
-            />
-            <Button variant="primary" busy={busy} disabled={digits.length !== 6} onClick={() => onConfirm(digits)}>
-              Bestätigen
-            </Button>
-          </div>
+          {onLater ? (
+            <div className="mt-2 max-w-xs space-y-2">
+              {input}
+              <div className="flex flex-wrap gap-2">
+                {confirmButton}
+                <Button disabled={busy} onClick={onLater}>Später einrichten</Button>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-2 flex max-w-xs gap-2">
+              {input}
+              {confirmButton}
+            </div>
+          )}
         </li>
       </ol>
       <div className="mt-3 text-right">

@@ -742,3 +742,54 @@ async def test_boot_reconciliation_twice_does_not_register_twice(db_session, tes
     assert len(jobs) == 1
 
     await extensions_service.disable_extension(app, db_session, "hello-world")
+
+
+@pytest.mark.asyncio
+async def test_switching_on_and_off_does_not_run_in_the_admins_name(tmp_path, db_session, test_settings):
+    from nodvard_deck.core import known_actors
+
+    ext_dir = tmp_path / "extensions" / "seen-ext"
+    (ext_dir / "src" / "nodvard_deck_ext_seen").mkdir(parents=True)
+    (ext_dir / "extension.toml").write_text(
+        """
+        [extension]
+        id = "seen-ext"
+        name = "Seen"
+        version = "0.1.0"
+        api_version = "0.1"
+        entrypoint = "nodvard_deck_ext_seen:Extension"
+        """,
+        encoding="utf-8",
+    )
+    (ext_dir / "src" / "nodvard_deck_ext_seen" / "__init__.py").write_text(
+        "import asyncio\n"
+        "from nodvard_deck.core import known_actors\n"
+        "SEEN = []\n"
+        "def _note(what):\n"
+        "    SEEN.append((what, known_actors.is_known('user', 'u-admin')))\n"
+        "class Extension:\n"
+        "    async def setup(self, ctx):\n"
+        "        _note('setup')\n"
+        "        async def later():\n"
+        "            _note('task')\n"
+        "        self.task = asyncio.create_task(later())\n"
+        "    async def on_start(self, ctx):\n"
+        "        await self.task\n"
+        "        _note('start')\n"
+        "    async def on_stop(self, ctx):\n"
+        "        _note('stop')\n",
+        encoding="utf-8",
+    )
+    settings = test_settings.model_copy(update={"extensions_dir": tmp_path / "extensions"})
+    app = FastAPI()
+    app.state.ext_mount_index = len(app.router.routes)
+
+    await extensions_service.discover_and_sync(db_session, settings)
+    with known_actors.known_while([("user", "u-admin")]):
+        await extensions_service.enable_extension(app, db_session, settings, "seen-ext")
+        await extensions_service.disable_extension(app, db_session, "seen-ext")
+        assert known_actors.is_known("user", "u-admin")
+
+    assert sys.modules["nodvard_deck_ext_seen"].SEEN == [
+        ("setup", False), ("task", False), ("start", False), ("stop", False),
+    ]

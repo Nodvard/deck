@@ -72,6 +72,8 @@ ALLOWED_MODULES = frozenset({
     "typing", "dataclasses", "enum", "collections", "collections.abc", "contextlib", "functools", "itertools",
     # Text und Zahlen: Protokoll-JSON, Muster, isfinite
     "json", "re", "math",
+    # SHA-512 für die Prüfung von Ed25519-Signaturen, SHA-256 für die Kennung eines Schlüssels; nur Rechnen
+    "hashlib",
     # Dateien nur über os.open + dir_fd, Sperre (fcntl), Zufallsnamen für Temp-Dateien (secrets)
     "os", "os.path", "stat", "errno", "fcntl", "secrets",
     # Uhr, SIGTERM, Argumente/Ausgabe, Heartbeat-Thread
@@ -81,9 +83,8 @@ ALLOWED_MODULES = frozenset({
 })
 """Alles, was das Paket braucht oder fuer `engine`, `target`, `clone`, `flow` und `__main__` brauchen
 wird. Bewusst **nicht** dabei: `logging` (JSON-Zeilen laufen ueber `json` und `sys.stdout`; `logging.handlers`/
-`.config` und `FileHandler` koennen senden bzw. Code ausfuehren), `uuid`/`hashlib`/`base64` (die Signatur kommt
-spaeter mit `cryptography`), `datetime`, `argparse`, `select`, `copy`, `traceback`. Wer eins braucht, traegt es hier
-mit Begruendung ein."""
+`.config` und `FileHandler` koennen senden bzw. Code ausfuehren), `uuid`, `base64`, `datetime`, `argparse`,
+`select`, `copy`, `traceback`. Wer eins braucht, traegt es hier mit Begruendung ein."""
 
 FORBIDDEN_MODULES = frozenset({
     # Programme starten
@@ -141,8 +142,8 @@ ENGINE_FORBIDDEN_RE = re.compile(
     r"|\bv=(?:1|true)\b|\bforce=(?:1|true)\b",
     re.IGNORECASE,
 )
-PROTECTED_CONSTANTS = ("REPOSITORY", "SERVICE_ENV")
-"""Konstanten, die genau einmal als Text in `policy.py` gesetzt und nie neu gebunden werden."""
+PROTECTED_CONSTANTS = ("REPOSITORY", "SERVICE_ENV", "UPDATE_REQUIRES_SIGNATURE")
+"""Konstanten, die genau einmal als Literal in `policy.py` gesetzt und nie neu gebunden werden."""
 SHADOW_PROTECTED = ("os", "socket")
 """Namen, an denen die Regeln haengen: sie duerfen keine Variable und kein Parameter sein."""
 PATH_FUNCS_NEED_DIR_FD = {
@@ -241,7 +242,7 @@ def _is_module_attr(node: ast.AST, module: str, attr: str) -> bool:
 
 
 def _constant_text(tree: ast.AST, name: str) -> bool:
-    """`name` ist genau einmal gebunden, auf Modulebene, als Text mit dem Wert aus `policy`."""
+    """`name` ist genau einmal gebunden, auf Modulebene, als Literal mit dem Wert aus `policy`."""
     found = _bindings(tree, name)
     top = [node for node in tree.body if isinstance(node, ast.Assign) and len(node.targets) == 1
            and isinstance(node.targets[0], ast.Name) and node.targets[0].id == name] if isinstance(
@@ -842,7 +843,7 @@ BAD_WHY = {
     "sqlite3 laedt Erweiterungen": ("import sqlite3", "verbotenes Modul: sqlite3"),
     "unittest.mock": ("from unittest import mock", "verbotenes Modul: unittest"),
     "uuid nicht auf der Liste": ("import uuid", "Modul nicht auf der Erlaubnisliste: uuid"),
-    "hashlib nicht auf der Liste": ("from hashlib import sha256", "Modul nicht auf der Erlaubnisliste: hashlib"),
+    "uuid aus from-Import nicht auf der Liste": ("from uuid import uuid4", "Modul nicht auf der Erlaubnisliste: uuid"),
     "datetime nicht auf der Liste": ("import datetime", "Modul nicht auf der Erlaubnisliste: datetime"),
     "json.tool ist ein anderes Modul": ("import json.tool", "Modul nicht auf der Erlaubnisliste: json.tool"),
     "json.tool aus from-Import": ("from json import tool", "Modul nicht auf der Erlaubnisliste: json.tool"),

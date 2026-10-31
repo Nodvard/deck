@@ -25,7 +25,10 @@ _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
 
 class TargetNotAllowed(BackupError):
-    pass
+    def __init__(self, message: str, *, summary: str | None = None) -> None:
+        super().__init__(message)
+        self.summary = summary or message
+        """Der Grund ohne Benutzernummern und Befehle, für Protokoll und Meldungen, die auch Viewer lesen."""
 
 
 def default_dir(data_dir: Path) -> Path:
@@ -50,6 +53,36 @@ def _check_components(root: Path, target: Path, *, create: bool) -> None:
             raise TargetNotAllowed(f"{current} ist eine Verknüpfung (Symlink). Bitte einen echten Ordner angeben.")
         if not stat.S_ISDIR(st.st_mode):
             raise TargetNotAllowed(f"{current} ist kein Ordner.")
+
+
+def _not_writable(target: Path) -> str:
+    text = f"In {target} darf Nodvard Deck nicht schreiben."
+    if not hasattr(os, "getuid"):
+        return text
+    uid, gid = os.getuid(), os.getgid()
+    try:
+        owner: int | None = os.stat(target).st_uid
+    except OSError:
+        owner = None
+    # Darf schon root oder der Besitzer nicht schreiben, hilft `chown` nicht.
+    if uid == 0:
+        return (
+            f"{text} Es läuft als root und darf dort trotzdem nicht schreiben. Dann ist der Ordner meist nur lesend "
+            "eingebunden (`:ro` in der Compose-Datei), oder das NAS lässt root dort nicht schreiben."
+        )
+    if owner == uid:
+        return (
+            f"{text} Der Ordner gehört schon dem Benutzer {uid}, unter dem es läuft. Dann ist er meist nur lesend "
+            "eingebunden (`:ro` in der Compose-Datei), oder seine Rechte erlauben das Schreiben nicht."
+        )
+    owned_by = f", der Ordner gehört Benutzer {owner}" if owner is not None else ""
+    return (
+        f"{text} Es läuft als Benutzer {uid} (Gruppe {gid}){owned_by}. Gib dem Benutzer {uid} dort Schreibrechte, "
+        f"etwa mit „sudo chown {uid}:{gid} <Ordner>“ auf dem Rechner oder NAS, auf dem der Ordner wirklich liegt "
+        f"(dort heißt er meist anders als {target}). Bei NFS ändere die Rechte auf dem NAS, auf dem Rechner bringt "
+        "das meist nichts. War das NFS beim Start des Containers noch nicht eingehängt, steckt dort ein leerer Ordner "
+        "der eigenen Platte: dann erst einhängen und den Container neu erstellen."
+    )
 
 
 def resolve_target(raw: str | None, data_dir: Path, *, create: bool = True) -> Path:
@@ -78,7 +111,7 @@ def resolve_target(raw: str | None, data_dir: Path, *, create: bool = True) -> P
     if os.path.realpath(target) != str(target):
         raise TargetNotAllowed(f"{target} zeigt über eine Verknüpfung woandershin.")
     if not os.access(target, os.W_OK | os.X_OK):
-        raise TargetNotAllowed(f"In {target} darf Nodvard Deck nicht schreiben.")
+        raise TargetNotAllowed(_not_writable(target), summary=f"In {target} darf Nodvard Deck nicht schreiben.")
     if target == default:
         with contextlib.suppress(OSError):
             os.chmod(target, DIR_MODE)

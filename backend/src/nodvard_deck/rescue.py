@@ -609,6 +609,12 @@ _SECURITY_HEADERS = {
     # Nicht `no-referrer`: Browser schicken dann bei einem Formular `Origin: null`, und die Prüfung von `Origin` unten würde
     # jede Eingabe abweisen. `same-origin` schickt den Ursprung nur an die eigene Seite und sonst nichts.
     "Referrer-Policy": "same-origin",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Permissions-Policy": (
+        "accelerometer=(), bluetooth=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), hid=(), "
+        "magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=()"
+    ),
     "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
 }
 _LOG_ESCAPE = {c: f"\\x{c:02x}" for c in (*range(0x20), *range(0x7F, 0xA0))}

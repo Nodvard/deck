@@ -14,6 +14,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pyrage
 import pytest
@@ -605,3 +606,56 @@ def test_sweep_parts_only_removes_our_leftovers(tmp_path):
         (tmp_path / name).write_bytes(b"x")
     store.sweep_parts(tmp_path)
     assert sorted(p.name for p in tmp_path.iterdir()) == sorted(foreign)
+
+
+def _running_as(monkeypatch, store, uid: int, gid: int = 1000) -> None:
+    monkeypatch.setattr(store.os, "getuid", lambda: uid, raising=False)
+    monkeypatch.setattr(store.os, "getgid", lambda: gid, raising=False)
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="nur POSIX kennt Benutzernummern")
+def test_a_folder_without_write_access_names_the_user_to_give_rights(tmp_path, monkeypatch):
+    from nodvard_deck.core.backup import store
+
+    monkeypatch.setattr(store, "EXTERNAL_ROOT", tmp_path)
+    (tmp_path / "nas").mkdir()
+    owner = os.stat(tmp_path / "nas").st_uid
+    _running_as(monkeypatch, store, owner + 1)
+    monkeypatch.setattr(store.os, "access", lambda *_: False)
+
+    with pytest.raises(store.TargetNotAllowed) as err:
+        store.resolve_target(f"{tmp_path}/nas", tmp_path / "daten")
+    message = str(err.value)
+    assert message.startswith(f"In {tmp_path}/nas darf Nodvard Deck nicht schreiben.")
+    assert f"Benutzer {owner + 1} (Gruppe 1000), der Ordner gehört Benutzer {owner}" in message
+    assert f"sudo chown {owner + 1}:1000 <Ordner>" in message
+    assert "Bei NFS ändere die Rechte auf dem NAS" in message and "den Container neu erstellen" in message
+    assert err.value.summary == f"In {tmp_path}/nas darf Nodvard Deck nicht schreiben."
+
+
+@pytest.mark.parametrize(("uid", "owner", "says"), [
+    (0, 1000, "Es läuft als root"),
+    (4242, 4242, "gehört schon dem Benutzer 4242"),
+])
+def test_no_chown_when_root_or_the_owner_may_not_write(tmp_path, monkeypatch, uid, owner, says):
+    from nodvard_deck.core.backup import store
+
+    _running_as(monkeypatch, store, uid)
+    real_stat = os.stat
+
+    def stat(path, *args, **kwargs):
+        return SimpleNamespace(st_uid=owner) if path == tmp_path else real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(store.os, "stat", stat)
+    message = store._not_writable(tmp_path)
+    assert says in message and "nur lesend eingebunden" in message and "sudo chown" not in message
+
+
+def test_without_the_folder_or_user_numbers_the_message_stays_short(tmp_path, monkeypatch):
+    from nodvard_deck.core.backup import store
+
+    _running_as(monkeypatch, store, 4242)
+    message = store._not_writable(tmp_path / "fehlt")
+    assert "gehört" not in message and "sudo chown 4242:1000" in message
+    monkeypatch.delattr(store.os, "getuid")
+    assert store._not_writable(tmp_path) == f"In {tmp_path} darf Nodvard Deck nicht schreiben."

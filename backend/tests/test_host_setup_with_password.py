@@ -209,6 +209,8 @@ async def _run_setup(state: ServerState, launcher: str, script: str, stdin: byte
             f"{mark} before {'a' * 64} 644 root /etc/passwd\n{mark} before - - - {keys}\n"
             f"{host_setup.KEY_ADDED}\n{mark} after {'b' * 64} 644 root /etc/passwd\n{mark} after {'c' * 64} 600 {name} {keys}\n"
         )
+    if '"nodvard-$U" "lattice-$U"' in script:
+        report += host_setup.FULL_RULE_REMOVED.format(name=f"nodvard-{name}") + "\n"
     return started + f"Benutzer {name} angelegt.\n" + report + "Fertig. Jetzt im Dashboard „Verbindung prüfen“ drücken.\n", "", 0
 
 
@@ -435,6 +437,28 @@ async def test_only_helper_rules_unless_full_rights_are_asked_for(client, db_ses
     assert "NOPASSWD: ALL" not in narrow and "HS fake-a-root" in narrow
     assert "NOPASSWD: ALL" in full and "HS fake-a-root" in full
     assert [a.detail["full_sudo"] for a in await _audit(db_session)][1:] == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_the_full_rule_is_removed_only_when_asked_and_the_guard_hears_of_it(
+    client, db_session, setup_server, helper_modules,
+):
+    port, state, server_fp = setup_server
+    token = await _bootstrap_owner(client)
+    host, gen = await _key_host(client, token, port)
+    await _pin(db_session, host["id"], server_fp)
+
+    assert (await _setup(client, token, host, gen, sudo=True, full_sudo=True, drop_full_rule=True)).status_code == 422
+    assert state.runs == [], "abgelehnt, bevor das Passwort irgendwohin geht"
+    r = await _setup(client, token, host, gen, sudo=True, drop_full_rule=True)
+    assert r.status_code == 200, r.text
+    assert "Die volle sudo-Regel nodvard-nodvard wurde entfernt." in r.json()["messages"]
+    [row] = await _audit(db_session)
+    assert (row.detail["full_sudo"], row.detail["drop_full_rule"]) == (False, True)
+    run = await _setup_run(db_session, host["id"])
+    full_rule = hashlib.sha256(b"nodvard ALL=(root) NOPASSWD: ALL\n").hexdigest()
+    assert "full_rule_removed" in run["actions"] and run["sudoers"].get("/etc/sudoers.d/nodvard-nodvard") is None
+    assert run["removed_sudoers"] == {"/etc/sudoers.d/nodvard-nodvard": full_rule}
 
 
 @pytest.mark.asyncio

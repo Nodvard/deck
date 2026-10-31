@@ -47,6 +47,16 @@ KNOWN_PERMISSIONS = frozenset(
 )
 
 
+RESERVED_EXTENSION_IDS = frozenset({"core"})
+"""Kennungen, die der Kern selbst als `ext_id` vergibt (`core`: Aktionen aus der Oberfläche); eine Erweiterung darf sie
+weder als `id` noch in `legacy_ids` oder `adopts.from` nennen, sonst läse sie fremde Aktionen als eigene."""
+
+
+def _refuse_reserved(ext_id: str, field: str) -> None:
+    if ext_id in RESERVED_EXTENSION_IDS:
+        raise ValueError(f"{field}: Die Kennung {ext_id!r} ist dem Kern vorbehalten und darf hier nicht stehen.")
+
+
 KNOWN_STAGES = ("stable", "beta")
 """Reifegrad einer Erweiterung (`stage` im Manifest): `stable` (Vorgabe) oder `beta` (funktioniert, ist aber
 noch nicht so gründlich erprobt wie der Rest; die Oberfläche kennzeichnet sie)."""
@@ -85,6 +95,13 @@ class RootHelperSpec(BaseModel):
     file: str
     """Pfad relativ zum Ordner mit `extension.toml`, z. B. `root-helper/shield-root.sh`."""
     version: int = Field(ge=1, le=ROOT_HELPER_MAX_VERSION, strict=True)
+    calls_any_version: bool = Field(default=False, strict=True)
+    """Das Modul ruft das Skript ohne Vergleich von Version oder Prüfsumme auf; das stimmt nur, solange jede ältere
+    Fassung alle Aufrufe des Moduls beantwortet. Danach richten sich die Texte von „Verbindung prüfen“ und der
+    Übersicht."""
+    sudo_fallback: bool = Field(default=True, strict=True)
+    """Ohne sein Skript nimmt das Modul die volle sudo-Regel. `false`: Ohne Skript hat es kein root, auch mit voller
+    Regel; danach richten sich der Einrichtungsbefehl, „Verbindung prüfen“ und die Übersicht."""
 
     @field_validator("file")
     @classmethod
@@ -141,6 +158,7 @@ class AdoptSpec(BaseModel):
     def _valid_from(cls, v: str) -> str:
         if not ID_RE.fullmatch(v):
             raise ValueError(f"Ungueltige Kennung {v!r} in adopts.from.")
+        _refuse_reserved(v, "adopts.from")
         return v
 
     @field_validator("settings")
@@ -225,11 +243,12 @@ class ExtensionManifest(BaseModel):
     @field_validator("id")
     @classmethod
     def _valid_id(cls, v: str) -> str:
-        if not ID_RE.match(v):
+        if not ID_RE.fullmatch(v):
             raise ValueError(
                 f"Ungueltige Extension-ID {v!r}: nur a-z, 0-9 und '-', Beginn mit "
                 f"Buchstabe, 2-64 Zeichen."
             )
+        _refuse_reserved(v, "id")
         return v
 
     @field_validator("permissions")
@@ -267,11 +286,12 @@ class ExtensionManifest(BaseModel):
     @classmethod
     def _valid_legacy_ids(cls, v: list[str]) -> list[str]:
         for old in v:
-            if not ID_RE.match(old):
+            if not ID_RE.fullmatch(old):
                 raise ValueError(
                     f"Ungueltige alte Kennung {old!r} in legacy_ids: nur a-z, 0-9 und '-', Beginn mit "
                     f"Buchstabe, 2-64 Zeichen."
                 )
+            _refuse_reserved(old, "legacy_ids")
         if len(set(v)) != len(v):
             raise ValueError("legacy_ids nennt eine Kennung mehrfach.")
         return v

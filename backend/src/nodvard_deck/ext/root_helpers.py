@@ -36,6 +36,10 @@ class RootHelperFile:
     """Ort auf dem Server, z. B. `/usr/local/lib/nodvard-deck/<id>-root`."""
     text: str
     sha256: str
+    calls_any_version: bool = False
+    """Das Modul ruft auch eine ältere Fassung auf dem Server auf (`RootHelperSpec.calls_any_version`)."""
+    sudo_fallback: bool = True
+    """Ohne sein Skript nimmt das Modul die volle sudo-Regel (`RootHelperSpec.sudo_fallback`)."""
 
 
 def _reject(ext_id: str, reason: str) -> None:
@@ -114,4 +118,6 @@ def read_root_helper(discovered: DiscoveredExtension) -> RootHelperFile | None:
         install_path=install_path,
         text=text,
         sha256=hashlib.sha256(raw).hexdigest(),
+        calls_any_version=spec.calls_any_version,
+        sudo_fallback=spec.sudo_fallback,
     )

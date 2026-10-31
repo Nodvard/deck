@@ -25,6 +25,7 @@ from nodvard_deck.services import settings as settings_service
 from nodvard_sdk import Notification as SdkNotification
 from nodvard_sdk.capabilities import NotificationChannel
 from sqlalchemy import select
+from window_helpers import window
 
 
 @pytest.fixture(autouse=True)
@@ -326,16 +327,8 @@ async def test_a_down_state_set_elsewhere_is_not_announced_as_a_recovery(db_sess
 
 
 @pytest.mark.asyncio
-async def test_maintenance_window_mutes_the_message_but_updates_the_state(db_session, reach, channel):
-    from zoneinfo import ZoneInfo
-
-    from nodvard_deck.config import LOCAL_TIMEZONE
-
-    start = (utcnow() - timedelta(minutes=10)).astimezone(ZoneInfo(LOCAL_TIMEZONE))
-    await settings_service.set_global(
-        db_session, "maintenance.windows",
-        [{"cron": f"{start.minute} {start.hour} * * *", "duration_minutes": 120, "host_ids": "all"}],
-    )
+async def test_maintenance_window_mutes_the_message_but_updates_the_state(db_session, reach, channel, window_clock):
+    await settings_service.set_global(db_session, "maintenance.windows", [window(minutes_ago=10, duration=120)])
     host = await _host(db_session, status="up", last_seen_at=utcnow())
     host_id = host.id
     reach["10.0.0.5"] = False
@@ -364,16 +357,8 @@ async def test_a_muted_outage_is_announced_once_after_the_window(db_session, rea
 
 
 @pytest.mark.asyncio
-async def test_a_muted_outage_stays_quiet_while_the_window_runs(db_session, reach, channel):
-    from zoneinfo import ZoneInfo
-
-    from nodvard_deck.config import LOCAL_TIMEZONE
-
-    start = (utcnow() - timedelta(minutes=10)).astimezone(ZoneInfo(LOCAL_TIMEZONE))
-    await settings_service.set_global(
-        db_session, "maintenance.windows",
-        [{"cron": f"{start.minute} {start.hour} * * *", "duration_minutes": 120, "host_ids": "all"}],
-    )
+async def test_a_muted_outage_stays_quiet_while_the_window_runs(db_session, reach, channel, window_clock):
+    await settings_service.set_global(db_session, "maintenance.windows", [window(minutes_ago=10, duration=120)])
     host = await _host(db_session, status="down", last_seen_at=utcnow())
     await settings_service.set_global(db_session, reachability.KEY_STATE, {host.id: {"muted": True}})
     await db_session.commit()
@@ -705,3 +690,23 @@ async def test_the_job_handler_prunes_its_own_old_runs_and_logs(db_session, tmp_
 
     assert not log.exists()
     assert (await db_session.execute(select(JobRun))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_pruning_skips_unusable_paths_and_never_leaves_runs_dir(db_session, tmp_path, reach):
+    runs_dir = tmp_path / "runs"
+    get_scheduler_service().configure(runs_dir)
+    await reachability.sync_job()
+    job = await jobs_service.get_job_by_key(db_session, ext_id=None, ext_job_key=reachability.JOB_KEY)
+    outside = tmp_path / "draussen.log"
+    outside.write_text("bleibt", encoding="utf-8")
+    log = runs_dir / "alt.log"
+    log.write_text("alt", encoding="utf-8")
+    old = utcnow() - timedelta(days=2)
+    for ref in (str(runs_dir / "a\x00b.log"), str(runs_dir / ".." / "draussen.log"), str(log)):
+        db_session.add(JobRun(job_id=job.id, trigger="schedule", status="succeeded", started_at=old, output_ref=ref))
+    await db_session.commit()
+
+    await reachability._prune_own_runs()
+
+    assert not log.exists() and outside.read_text(encoding="utf-8") == "bleibt"

@@ -577,7 +577,7 @@ class DockerStackUpdateExecutor:
             return _fail(f"Sicherung der Volumes nicht möglich: {refusal} Aktualisiert wurde nichts; die Dienste laufen weiter mit der "
                          "alten Version. Aktualisiere ohne Sicherung.", started)
         if backup:
-            folder, problem, not_started = await self._save_volumes(host, stack, changed, volumes, started)
+            folder, problem, not_started = await self.save_volumes(host, stack, changed, volumes, started)
             if problem is not None:
                 after = ("die Dienste laufen weiter mit der alten Version." if not_started is None else
                          f"die Dienste ließen sich aber nicht wieder starten ({not_started}). Starte den Stack im Reiter Stacks.")
@@ -588,7 +588,7 @@ class DockerStackUpdateExecutor:
         except BaseException:
             # Gestoppt für die Sicherung: Auch bei einem Abbruch (Zeitgrenze der Freigabe, Neustart) laufen sie wieder an.
             if saved:
-                await asyncio.shield(self._start_again(host, stack, changed))
+                await asyncio.shield(self.start_again(host, stack, changed))
             raise
 
     async def _finish(
@@ -631,17 +631,20 @@ class DockerStackUpdateExecutor:
         """Nach einer Sicherung sind die Dienste gestoppt; bricht das Update danach ab, laufen sie wieder an."""
         if not saved:
             return ""
-        problem = await self._start_again(host, stack, services)
+        problem = await self.start_again(host, stack, services)
         return f" Die Dienste sind wieder gestartet.{saved}" if problem is None else f" {problem} Starte den Stack im Reiter Stacks.{saved}"
 
-    async def _start_again(self, host: Any, stack: Stack, services: list[str]) -> str | None:
+    async def start_again(self, host: Any, stack: Stack, services: list[str]) -> str | None:
+        """Startet Dienste, die für eine Sicherung gestoppt waren; `None`, wenn das geklappt hat, sonst der Grund."""
+        if not services:
+            return None
         return await self._exec(host, cmd_start_services(stack, services), STOP_TIMEOUT_S, "Wieder starten gescheitert")
 
-    async def _save_volumes(
+    async def save_volumes(
         self, host: Any, stack: Stack, services: list[str], volumes: list[str], started: float,
     ) -> tuple[str, str | None, str | None]:
-        """Stoppt die Dienste und packt ihre Volumes: (Ordner, Grund, falls es nicht ging, Grund, falls das Wiederstarten danach
-        scheiterte)."""
+        """Stoppt die Dienste und packt die Volumes, auch für das Einspielen aus Git: (Ordner, Grund, falls es nicht ging, Grund,
+        falls das Wiederstarten danach scheiterte)."""
         plan = await self._update.volumes.plan(host, stack.project, volumes)
         found = await self._update.volumes.home(host)
         if plan["error"] or found is None:
@@ -686,7 +689,8 @@ class DockerStackUpdateExecutor:
         packing: str | None = None
         packed: list[str] = []
         try:
-            problem = await self._exec(host, cmd_stop_services(stack, services), STOP_TIMEOUT_S, "Stoppen vor der Sicherung gescheitert")
+            problem = (await self._exec(host, cmd_stop_services(stack, services), STOP_TIMEOUT_S, "Stoppen vor der Sicherung gescheitert")
+                       if services else None)
             deadline = min(time.monotonic() + ARCHIVE_BUDGET_S, started + BACKUP_UNTIL_S)
             for volume in volumes if problem is None else ():
                 left = int(deadline - time.monotonic())
@@ -736,7 +740,7 @@ class DockerStackUpdateExecutor:
                 log.warning("docker_stack_archive_not_stopped folder=%s volume=%s", folder, packing, exc_info=True)
                 hint = _leftovers(folder, packing)
         try:
-            not_started = await self._start_again(host, stack, services)
+            not_started = await self.start_again(host, stack, services)
         finally:  # auch wenn das Starten wirft
             left = hint + await self._unfinished(host, folder, packed, hint)
         return left, not_started

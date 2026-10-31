@@ -110,6 +110,45 @@
           "username"
         ]
       }
+    },
+    "git_accesses": {
+      "type": "array",
+      "title": "Git-Zugänge",
+      "description": "Für private Repositorys, aus denen Stacks kommen. Nodvard Deck holt sie selbst über HTTPS; das Token verlässt Deck nur in Richtung des eingetragenen Servers.",
+      "x-item-title": "Zugang",
+      "x-advanced": true,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Kurzname",
+            "description": "Eindeutig und ohne Leerzeichen, z. B. „github“. Nach dem Einrichten nicht mehr ändern.",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+            "x-pattern-message": "Beginnt mit einem Buchstaben oder einer Zahl, danach Buchstaben, Zahlen, Punkt, Bindestrich oder Unterstrich, höchstens 64 Zeichen und keine Leerzeichen."
+          },
+          "host": {
+            "type": "string",
+            "title": "Server",
+            "description": "Name des Git-Servers ohne https://, mit Port, wenn er einen braucht, z. B. github.com oder git.example.org:3000.",
+            "pattern": "^(?!.*:80$)[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$",
+            "x-pattern-message": "Nur der Name des Servers in Kleinbuchstaben, ohne https:// und ohne Pfad, z. B. github.com; ein Port nach dem Doppelpunkt liegt zwischen 1 und 65535, Port 80 geht nicht."
+          },
+          "username": {
+            "type": "string",
+            "title": "Benutzername",
+            "description": "Bei GitHub und GitLab geht jeder Name, bei Gitea und Forgejo dein Benutzername.",
+            "pattern": "^[^\\s:]{1,255}$",
+            "x-pattern-message": "Ohne Leerzeichen und ohne Doppelpunkt."
+          }
+        },
+        "required": [
+          "name",
+          "host",
+          "username"
+        ]
+      }
     }
   },
   "x-secrets": [
@@ -122,6 +161,16 @@
       "per_item": "registries",
       "title": "Passwort oder Token",
       "description": "Am besten ein Token nur zum Lesen von Paketen, z. B. bei GitHub ein „Personal access token“ mit read:packages."
+    },
+    {
+      "label": "docker-git-token:{name}",
+      "x-secret-bound-to": [
+        "host",
+        "username"
+      ],
+      "per_item": "git_accesses",
+      "title": "Token",
+      "description": "Am besten ein Token nur zum Lesen dieses Repositorys, z. B. bei GitHub ein „Fine-grained token“ mit Contents: Read-only."
     }
   ]
 }

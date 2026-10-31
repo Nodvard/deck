@@ -86,7 +86,7 @@ beforeEach(() => {
   // Der gewählte Server steht in der Adresszeile -- jeder Test beginnt ohne, und ohne gemerkten Server.
   window.history.replaceState({}, "", "/ext/system/system");
   window.localStorage.clear();
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn(), promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(true),
   };
@@ -375,7 +375,7 @@ describe("Dienst neu starten", () => {
   beforeEach(() => {
     confirmDialog = vi.fn<(message: string) => Promise<boolean>>().mockResolvedValue(true);
     permissions = new Set(["hosts.execute", "actions.approve:medium"]);
-    window.__lattice = {
+    window.__nodvardDeck = {
       React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
       getAccessToken: () => "tok", confirmDialog, promptDialog: vi.fn(), hasPermission: (p: string) => permissions.has(p),
     };

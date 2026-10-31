@@ -4,7 +4,7 @@
     "connections": {
       "type": "array",
       "title": "Jellyfin",
-      "description": "Die Jellyfin-Server, deren Zustand angezeigt wird. Meist genügt einer. Nodvard Deck liest nur und ändert in Jellyfin nichts.",
+      "description": "Die Jellyfin-Server, deren Zustand angezeigt wird. Meist genügt einer. Nodvard Deck liest nur und ändert in Jellyfin nichts. Datenschutz: Alle mit Zugriff auf diese Seiten sehen Benutzernamen, Geräte sowie abgespielte und zuletzt hinzugefügte Titel. Wer das nicht möchte, gibt nur passenden Rollen Zugriff (Nodvard Deck hat Benutzer, Rollen und Rechte).",
       "x-item-title": "Jellyfin",
       "items": {
         "type": "object",

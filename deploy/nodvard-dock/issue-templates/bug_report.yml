@@ -1,0 +1,66 @@
+name: Bug report
+description: Something in Nodvard Dock does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Writing in German is fine, too. Please **do not** post security issues here, see SECURITY.md.
+        Remove passwords, tokens and internal addresses from logs before posting.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Click ...
+        3. See error ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Nodvard Dock version
+      description: The image tag you use, or the "version" field of /api/v1/health.
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform Nodvard Dock runs on
+      options:
+        - Docker on Raspberry Pi (arm64)
+        - Docker on x86-64
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Containers
+        - Logs
+        - Image updates
+        - Stacks
+        - Moving from Portainer
+        - Server setup
+        - Other
+  - type: input
+    id: docker
+    attributes:
+      label: Docker version on the affected server
+      description: Output of `docker version` (Server section), if the problem is on a managed server.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Output of `docker compose logs nodvard-dock` around the error.
+      render: text

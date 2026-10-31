@@ -34,9 +34,9 @@ from .widgets import HostRequirementSpec, HostToolSpec, PageSpec, WidgetSpec
 
 class ApiHandle(Protocol):
     current_actor: Any
-    """FastAPI-Dependency: `actor: Actor = Depends(ctx.api.current_actor)` in einer Extension-Route liefert
-    `Actor.user(...)` des angemeldeten Nutzers, für `proposed_by` und das Audit-Log (dort steht der klickende Mensch
-    statt der Extension)."""
+    """FastAPI-Dependency `Depends(ctx.api.current_actor)`: `Actor.user(...)` des Angemeldeten für `proposed_by` und das
+    Audit-Log, gültig nur in dieser Anfrage und in daraus mit `asyncio.create_task` gestarteten Tasks (alle Ausnahmen in
+    docs/02 §3, „Wer vorschlägt“)."""
 
     # Mit `permission` braucht die Extension keine eigene Auth-Abhängigkeit. Ohne `permission` verlangt der Kern
     # mindestens eine gültige Anmeldung (401 ohne Token, keine bestimmte Berechtigung nötig). Anmeldung ist keine
@@ -126,11 +126,13 @@ class CapabilitiesHandle(Protocol):
 class ActionsHandle(Protocol):
     def register(self, spec: ActionSpec) -> None: ...
 
-    # Die Extension führt nie selbst aus. Hintergrund-Jobs, die das Ergebnis brauchen, übergeben `wait_s=None`.
+    # Die Extension führt nie selbst aus. Eine sofort freigegebene Aktion (Modus `full`) läuft im Hintergrund:
+    # HTTP-Routen übergeben `REQUEST_WAIT_S` und bekommen danach ggf. `executing`, Hintergrund-Jobs mit Bedarf am
+    # Ergebnis `None`.
     async def propose(self, request: ActionRequest, *, wait_s: float | None = None) -> GateDecision:
-        """Der einzige Weg zu einer zustandsverändernden Aktion: `proposed`, `approved` oder `denied`, je nach Modus,
-        Risiko und Regelwerk. Eine sofort freigegebene Aktion (Modus `full`) läuft im Hintergrund; `wait_s=None` wartet
-        bis zum Ende, HTTP-Routen übergeben `REQUEST_WAIT_S` (Sekunden) und bekommen danach ggf. `executing`."""
+        """Der einzige Weg zu einer zustandsverändernden Aktion (`proposed`, `approved` oder `denied`); als
+        `proposed_by` gilt ein Mensch nur, wenn der Kern ihn gerade kennt, eine Erweiterung nur mit eigener Kennung, KI
+        und Zeitplan frei, sonst `PermissionDenied`."""
         ...
 
     async def result(self, action_id: str) -> Any: ...
@@ -239,7 +241,10 @@ class SecretsHandle(Protocol):
     async def create(
         self, *, label: str, kind: str, value: str, description: str | None = None
     ) -> SecretHandleRef: ...
-    async def exists(self, label: str) -> bool: ...
+    async def exists(self, label: str) -> bool:
+        """Ob es ein Geheimnis mit diesem Label gibt (Recht `secrets.read:<label>`, ältere Kerne prüfen es nicht)."""
+        ...
+
     # Anders als Löschen und neu Anlegen steht das Geheimnis nie zwischendurch leer da.
     async def replace(self, *, label: str, value: str) -> SecretHandleRef:
         """Ersetzt den Wert eines vorhandenen Geheimnisses in einem Schritt (Recht `secrets.read:<label>`, wie bei
@@ -260,7 +265,8 @@ class SettingsHandle(Protocol):
     async def get(self) -> dict[str, Any]: ...
     async def set(self, values: dict[str, Any]) -> None: ...
     async def core(self, key: str) -> Any:
-        """Lesender Zugriff auf freigegebene Kern-Einstellungen (z. B. maintenance.windows)."""
+        """Liest eine freigegebene Kern-Einstellung, `system.timezone` oder `maintenance.windows`; jede andere wirft
+        `PermissionDenied` (ältere Kerne lieferten jede)."""
         ...
 
 
@@ -304,7 +310,8 @@ class EventsHandle(Protocol):
     def subscribe(
         self, pattern: str, handler: Callable[[Event], Awaitable[None]]
     ) -> None:
-        """Pattern mit Stern als Platzhalter, z. B. action.* oder host.down."""
+        """Pattern mit Stern als Platzhalter, z. B. action.* oder host.down; `action.executed` trägt den `payload`
+        der Aktion nur für das vorschlagende Modul oder mit `hosts.execute`."""
         ...
 
 
@@ -341,7 +348,10 @@ class AuditHandle(Protocol):
         detail: dict[str, Any] | None = None,
         correlation_id: str | None = None,
         actor: Actor | None = None,
-    ) -> None: ...
+    ) -> None:
+        """Schreibt einen Eintrag unter der Erweiterung; `actor` gilt nur, wenn der Kern den Menschen gerade kennt
+        (Nutzer der Anfrage, Vorschlagende oder Freigebende der laufenden Aktion), sonst `detail.on_behalf_of`."""
+        ...
 
 
 class WsHandle(Protocol):
@@ -353,7 +363,8 @@ class WsHandle(Protocol):
 
 class DbHandle(Protocol):
     def session(self) -> AsyncContextManager[Any]:
-        """AsyncSession, beschränkt auf Tabellen mit dem Präfix der Extension."""
+        """AsyncSession nur innerhalb von `async with` und nur für Tabellen mit dem Präfix der Extension; andere Tabellen,
+        PRAGMA, ATTACH und Schemaänderungen lehnt SQLite ab (`sqlalchemy.exc.DatabaseError`)."""
         ...
 
 
@@ -374,9 +385,9 @@ class DbHandle(Protocol):
 # Aufrufe mit `pinned_sha256` merken sich keine Cookies des Servers (ein Cookie geht nur mit, wenn der Aufruf ihn selbst
 # setzt). Ältere Kerne kennen den Parameter nicht und lehnen den Aufruf ab (`TypeError`), statt ungeprüft zu senden.
 class HttpHandle(Protocol):
-    """Ausgehende HTTP-Aufrufe (Berechtigung `net.outbound`), jede Anfrage direkt an die geprüfte Adresse.
-    `insecure_tls=True` schaltet die Zertifikatsprüfung für genau diesen Aufruf ab (z. B. Proxmox VE mit
-    selbstsigniertem Zertifikat) und braucht zusätzlich `net.outbound.insecure_tls`, sonst `PermissionDenied`."""
+    """Ausgehende HTTP-Aufrufe mit `net.outbound`; mit nur `net.outbound:<cidr>` gehen nur IP-Adressen aus diesen
+    Bereichen, ein DNS-Name braucht das freie Recht, und `insecure_tls=True` (je Aufruf) braucht zusätzlich
+    `net.outbound.insecure_tls`, sonst `PermissionDenied`."""
 
     async def get(
         self, url: str, *, insecure_tls: bool = False, pinned_sha256: str | None = None, **kwargs: Any
@@ -456,8 +467,9 @@ class ExtensionContext(Protocol):
     logger: Any
 
     def vault_use(self, handle: SecretHandleRef) -> AsyncContextManager[str]:
-        """Materialisiert einen Secret-Wert nur innerhalb des Blocks (`async with ctx.vault_use(h) as key:`).
-        Die Nutzung wird protokolliert (ohne den Wert), je Secret und Modul höchstens einmal pro Stunde."""
+        """Materialisiert einen Secret-Wert nur innerhalb des Blocks (`async with ctx.vault_use(h) as key:`), mit dem
+        Recht `secrets.read:<label>` für das gespeicherte Geheimnis zu `h.id`. Die Nutzung wird protokolliert (ohne den
+        Wert), je Secret und Modul höchstens einmal pro Stunde."""
         ...
 
     def spawn(

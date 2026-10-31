@@ -54,6 +54,7 @@ export function HostForm({
   const [tagsText, setTagsText] = useState(manualTags.join(", "));
   const [enabled, setEnabled] = useState(host?.enabled ?? true);
   const [isManaged, setIsManaged] = useState(host?.is_managed ?? true);
+  const [fullSudoWanted, setFullSudoWanted] = useState(host?.sudo_full_wanted ?? false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<Notice>(null);
   const [busy, setBusy] = useState(false);
@@ -83,6 +84,7 @@ export function HostForm({
         if (osFamily !== host.os_family) changes.os_family = osFamily;
         if (enabled !== host.enabled) changes.enabled = enabled;
         if (isManaged !== host.is_managed) changes.is_managed = isManaged;
+        if (fullSudoWanted !== (host.sudo_full_wanted ?? false)) changes.sudo_full_wanted = fullSudoWanted;
         const tags = parseTags(tagsText);
         if (!sameList(tags, manualTags)) changes.tags = tags;
         if (Object.keys(changes).length === 0) {
@@ -178,6 +180,18 @@ export function HostForm({
               </div>
               <Toggle checked={isManaged} onChange={setIsManaged} label="Für Skripte und Nodvard Shield verwenden" />
             </div>
+            {osFamily === "linux" && (
+              <div className="flex items-start justify-between gap-3">
+                <div className="text-sm">
+                  <p>Volle sudo-Regel gewollt</p>
+                  <p className="text-xs text-white/40">
+                    Nur, wenn du über Nodvard Deck eigene Befehle mit sudo startest, etwa in Skripten. Dann rät „Verbindung prüfen“
+                    nicht mehr, die volle Regel zu entfernen. Sie entspricht root.
+                  </p>
+                </div>
+                <Toggle checked={fullSudoWanted} onChange={setFullSudoWanted} label="Volle sudo-Regel gewollt" />
+              </div>
+            )}
           </div>
         </details>
       )}

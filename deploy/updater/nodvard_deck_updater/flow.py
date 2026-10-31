@@ -14,7 +14,9 @@ und die Fake-Engine der Tests prüft dasselbe gegen die Datei auf der Platte.
 * `begin`: Journal anlegen, mit dem Digest des alten Images im Repository aus der Vorprüfung (für den Slot beim
   Commit; später nennt die Engine ihn womöglich nicht mehr). Beim containerd-Store kann das auch ein Digest sein, den
   nur dieser Rechner kennt (selbst gebautes Image, siehe `policy.require_registry_digest`); das Update selbst hängt
-  nicht davon ab. Das bewegliche Tag in der Registry auflösen (`/distribution`, ein Digest D), nach D ziehen, das
+  nicht davon ab. Das bewegliche Tag in der Registry auflösen (`/distribution`, ein Digest D). Nennt die Anforderung
+  einen Digest (`digest`, aus der Update-Suche des Dashboards), muss er D sein, sonst `digest_changed`: Das Tag bleibt
+  die Quelle und der Hebel für einen Rückruf, auch eine signierte Anforderung wählt nichts aus. Nach D ziehen, das
   Image per `<repository>@D` lesen: `RepoDigests` enthält D, das Versions-Label ist **genau** X (sonst
   `tag_not_on_version`), X ist neuer, Betriebssystem und Architektur wie beim laufenden Image (`platform_mismatch`).
   Scheitert das, ist nichts verändert außer einem gezogenen Image: Ergebnis `refused` (zählt nicht für die Grenze).
@@ -716,9 +718,10 @@ class Flow:
             raise Refusal(policy.STATE_UNSAFE, "journal_write") from None
 
     def _fetch_update(self, run: _Run) -> None:
-        """Bewegliches Tag auflösen, nach Digest ziehen, das gezogene Image prüfen; dann `pulled`."""
+        """Bewegliches Tag auflösen (ein Digest der Anforderung muss derselbe sein), nach Digest ziehen, das gezogene
+        Image prüfen; dann `pulled`."""
         journal = run.journal
-        assert journal is not None and run.target is not None
+        assert journal is not None and run.target is not None and run.request is not None
         try:
             info = self._engine.distribution(journal.floating_tag)
         except EngineError as exc:
@@ -728,6 +731,8 @@ class Flow:
         digest = descriptor.get("digest") if isinstance(descriptor, dict) else None
         if not policy.is_digest(digest):
             raise Refusal(policy.PULL_FAILED, "digest")
+        if run.request.digest is not None and run.request.digest != digest:
+            raise Refusal(policy.DIGEST_CHANGED)
         binding = self._engine.bind(journal, self._own_id, pull_digest=digest)
         ref = f"{self._repository}@{digest}"
         try:
@@ -746,7 +751,6 @@ class Flow:
             label = policy.image_version(labels)
         except Refusal:
             raise Refusal(policy.TAG_NOT_ON_VERSION, "no_label") from None
-        assert run.request is not None
         policy.check_label(label, run.request.version)
         policy.check_newer(label, journal.old.version)
         if _platform(image) != _platform(run.target.image) or not all(_platform(image)):

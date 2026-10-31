@@ -45,23 +45,13 @@ def test_the_script_exits_with_zero_on_the_repository():
     assert result.stdout.startswith("OK")
 
 
-def test_the_alias_folders_hold_only_the_alias_files():
-    """In die Alias-Ordner gehoert nichts Neues: ein Aenderungsprotokoll-Eintrag, der aus einem aelteren Zweig im alten Pfad
-    landet (`backend/src/lattice/changelog/unreleased/...`), wuerde still weder gelesen noch ins Wheel gepackt.
+def test_the_old_package_folders_stay_empty():
+    """Eine Datei, die aus einem älteren Zweig im alten Pfad landet, würde still weder gelesen noch ins Wheel gepackt.
 
-    Gezaehlt werden die Dateien, die Git kennt (versioniert oder neu), nicht der Ordnerinhalt: Nach dem Umstieg bleiben
-    in einer alten Arbeitskopie leere Ordner wie `backend/src/lattice/db/__pycache__/` stehen (Git loescht keine
-    ignorierten Dateien) -- die gehoeren zu niemandes Aenderung und sollen den Test nicht rot machen."""
-    files = guard.tracked_files()
-
-    def names(folder: str) -> set[str]:
-        prefix = folder + "/"
-        return {rel[len(prefix):].split("/")[0] for rel in files if rel.startswith(prefix)}
-
-    assert names("backend/src/lattice") == {"__init__.py", "migrate.py", "boot.py", "admin.py", "rescue.py"}, (
-        "neue Dateien gehoeren nach backend/src/nodvard_deck/ (Aenderungsprotokoll: backend/src/nodvard_deck/changelog/unreleased/)"
-    )
-    assert names("sdk/python/lattice_sdk") == {"__init__.py"}, "neue SDK-Dateien gehoeren nach sdk/python/nodvard_sdk/"
+    Gezählt wird, was Git kennt: Liegengebliebene `__pycache__`-Ordner einer alten Arbeitskopie zählen nicht."""
+    old = ("backend/src/lattice/", "sdk/python/lattice_sdk/", "sdk/python/_nodvard_alias.py")
+    stray = [rel for rel in guard.tracked_files() if rel.startswith(old)]
+    assert not stray, f"gehört nach backend/src/nodvard_deck/ bzw. sdk/python/nodvard_sdk/: {stray}"
 
 
 def test_every_entry_of_the_kept_list_is_still_needed():
@@ -179,21 +169,24 @@ def test_the_old_class_names_are_found(line):
     assert "klasse" in kinds(line) or "import" in kinds(line)
 
 
-def test_the_alias_packages_and_their_tests_may_use_the_old_names():
-    text = "from lattice_sdk import LatticeExtension\nimport lattice.db.base\n"
+def test_only_the_old_names_module_and_its_test_may_use_the_old_names():
+    for rel in (
+        "backend/src/nodvard_deck/ext/old_names.py",
+        "backend/tests/test_ext_old_package_names.py",
+        "backend/tests/test_wheel.py",
+    ):
+        assert guard.is_exempt(rel), rel
     for rel in (
         "backend/src/lattice/__init__.py",
         "sdk/python/lattice_sdk/__init__.py",
         "sdk/python/_nodvard_alias.py",
-        "sdk/python/tests/test_shim_sdk.py",
+        "sdk/python/nodvard_sdk/__init__.py",
         "backend/tests/test_shim_core.py",
-        "backend/tests/test_shim_anything.py",
+        "backend/tests/contract/sdk_public.json",
+        "backend/src/nodvard_deck/ext/discovery.py",
+        "backend/src/nodvard_deck/main.py",
     ):
-        assert guard.is_exempt(rel), rel
-    assert guard.find_violations(REPO_ROOT, files=[]) == []
-    assert not guard.is_exempt("backend/tests/test_something_else.py")
-    assert not guard.is_exempt("backend/src/nodvard_deck/main.py")
-    assert text  # (die Pruefung des Inhalts ist is_exempt; Alias-Dateien werden gar nicht gelesen)
+        assert not guard.is_exempt(rel), rel
 
 
 def test_a_new_file_with_an_old_import_is_a_finding(tmp_path):
@@ -226,12 +219,6 @@ def test_a_new_file_with_an_old_import_is_a_finding(tmp_path):
         'LEGACY_COOKIE_NAME = "lattice_refresh"',
         'COOKIE_NAMES = ("nodvard_deck_refresh", "lattice_refresh")',
         'client.cookies.set("lattice_refresh", value)',
-        # Frontend-Vertrag
-        "const shell = window.__lattice;",
-        'window.dispatchEvent(new Event("lattice:navigate"))',
-        ".lattice-focus { outline: 2px solid; }",
-        'const url = "/lattice-shim/react.js";',
-        'localStorage.getItem("lattice.changelogSeen")',
         # Namen auf fremden Rechnern und im Container
         "RUN groupadd --gid 1000 lattice && useradd --uid 1000 --gid lattice lattice",
         "chown -R lattice:lattice /app",
@@ -246,7 +233,6 @@ def test_a_new_file_with_an_old_import_is_a_finding(tmp_path):
         'source: Literal["provider", "lattice"]',
         'DENY_DASHBOARD = (frozenset({"nodvard"}), ("lattice", "nodvard-deck"))',
         "(\"lattice.service\", REFUSAL_DASHBOARD)",
-        'DEFAULT_ENTRY_POINT_GROUPS = ("nodvard_deck.extensions", "lattice.extensions")',
     ],
 )
 def test_names_that_stay_are_allowed(line):
@@ -263,6 +249,13 @@ def test_names_that_stay_are_allowed(line):
         "from_lattice_to_nodvard = 1",
         'token = request.cookies.get("lattice_session")',
         "docker run lattice/extra:1",
+        "const shell = window.__lattice;",
+        'window.dispatchEvent(new Event("lattice:navigate"))',
+        'window.dispatchEvent(new Event("lattice:timezone"))',
+        ".lattice-focus { outline: 2px solid; }",
+        'const url = "/lattice-shim/react.js";',
+        'localStorage.getItem("lattice.changelogSeen")',
+        'DEFAULT_ENTRY_POINT_GROUPS = ("nodvard_deck.extensions", "lattice.extensions")',
     ],
 )
 def test_a_new_use_of_the_old_name_is_found(line):
@@ -290,7 +283,7 @@ def test_documentation_published_changelogs_and_bundles_are_not_checked():
         "backend/src/nodvard_deck/changelog/versions/0.5.0.toml",
         "extensions/proxmox/frontend/dist/index.js",
         "frontend/package-lock.json",
-        "backend/tests/contract/sdk_public.json",
+        "backend/tests/contract/breaking_exceptions.toml",
         ".github/workflows/ci.yml",
     ):
         assert guard.is_exempt(rel), rel

@@ -1,5 +1,5 @@
-"""Nach Updates suchen: einzige Quelle ist die Container-Registry von GitHub (ghcr.io), die nur IP-Adresse und
-Zeitpunkt sieht."""
+"""Nach Updates suchen: Quelle ist die Container-Registry von GitHub (ghcr.io), dazu die Freigabe am Release auf
+github.com; beide sehen nur IP-Adresse und Zeitpunkt."""
 
 from __future__ import annotations
 
@@ -31,8 +31,21 @@ GitHub)."""
 
 REGISTRY_HOST = "ghcr.io"
 OFFICIAL_IMAGE = f"{REGISTRY_HOST}/{REPOSITORY}"
-# Release-Notizen: CHANGELOG.md im Stand des Tags (es gibt kein GitHub-Release, das Tag aber immer).
+# Release-Notizen: CHANGELOG.md im Stand des Tags. Das Tag gibt es sofort, die Release-Seite erst nach dem
+# Veröffentlichen.
 RELEASE_NOTES_URL = f"https://github.com/{REPOSITORY}/blob/v{{version}}/CHANGELOG.md"
+
+RELEASE_FILE_URL = f"https://github.com/{REPOSITORY}/releases/download/v{{version}}/{{name}}"
+GRANT_NAME = "freigabe.json"
+GRANT_SIG_NAME = "freigabe.json.sig"
+GRANT_MAX_BYTES = 4096
+GRANT_HOSTS = frozenset({"github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"})
+"""Downloads am Release leitet GitHub auf seine Speicher-Hosts weiter; jedes andere Ziel gilt als Fehler."""
+MAX_REDIRECTS = 3
+GRANT_KEYS = frozenset({"fmt", "repo", "version", "digest", "key_id", "issued_at", "expires_at"})
+GRANT_FORMAT = 1
+GRANT_MAX_S = 366 * 24 * 3600
+GRANT_CLOCK_SLACK_S = 60
 
 CHANNELS = ("stable", "beta")
 DEFAULT_CHANNEL = "stable"
@@ -65,6 +78,8 @@ _PRE_RE = re.compile(r"(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})-([0-
 _PRE_PART_RE = re.compile(r"([A-Za-z-]*?)([0-9]*)")
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _LENGTH_RE = re.compile(r"[0-9]{1,15}")
+_KEY_ID_RE = re.compile(r"[0-9a-f]{16}")
+_SIGNATURE_RE = re.compile(r"[0-9a-f]{128}")
 
 
 class CheckFailed(Exception):
@@ -158,23 +173,28 @@ def _make_client(transport: httpx.AsyncBaseTransport | None = None) -> httpx.Asy
     )
 
 
+async def _read_limited(response: httpx.Response, limit: int) -> bytes:
+    if response.status_code != 200:
+        raise CheckFailed(f"HTTP {response.status_code} von {response.url.path}")
+    encoding = response.headers.get("content-encoding", "").strip().lower()
+    if encoding not in ("", "identity"):
+        raise CheckFailed("gepackte Antwort")
+    # Eine zu große Content-Length bricht vor dem Lesen ab; sonst wird beim Lesen mitgezählt.
+    length = response.headers.get("content-length")
+    if length is not None and (not _LENGTH_RE.fullmatch(length.strip()) or int(length) > limit):
+        raise CheckFailed("Antwort zu gross")
+    body = bytearray()
+    async for chunk in response.aiter_bytes():  # ungepackt (oben geprüft), also gleich den Rohdaten
+        body += chunk
+        if len(body) > limit:
+            raise CheckFailed("Antwort zu gross")
+    return bytes(body)
+
+
 async def _get_limited(client: httpx.AsyncClient, url: str, **kwargs: Any) -> tuple[bytes, httpx.Response]:
     async with client.stream("GET", url, **kwargs) as response:
-        if response.status_code != 200:
-            raise CheckFailed(f"HTTP {response.status_code} von {httpx.URL(url).path}")
-        encoding = response.headers.get("content-encoding", "").strip().lower()
-        if encoding not in ("", "identity"):
-            raise CheckFailed("gepackte Antwort")
-        # Eine zu große Content-Length bricht vor dem Lesen ab; sonst wird beim Lesen mitgezählt.
-        length = response.headers.get("content-length")
-        if length is not None and (not _LENGTH_RE.fullmatch(length.strip()) or int(length) > MAX_BODY_BYTES):
-            raise CheckFailed("Antwort zu gross")
-        body = bytearray()
-        async for chunk in response.aiter_bytes():  # ungepackt (oben geprüft), also gleich den Rohdaten
-            body += chunk
-            if len(body) > MAX_BODY_BYTES:
-                raise CheckFailed("Antwort zu gross")
-    return bytes(body), response
+        body = await _read_limited(response, MAX_BODY_BYTES)
+    return body, response
 
 
 async def _get_json(client: httpx.AsyncClient, url: str, **kwargs: Any) -> tuple[Any, httpx.Response]:
@@ -240,13 +260,79 @@ async def _digest(client: httpx.AsyncClient, token: str, tag: str) -> str | None
     return "sha256:" + hashlib.sha256(body).hexdigest() if body else None
 
 
+async def _release_file(client: httpx.AsyncClient, version: str, name: str) -> bytes | None:
+    """Eine Datei am Release `v<version>`, `None`, solange es sie nicht gibt; Weiterleitungen nur zu `GRANT_HOSTS`."""
+    url = httpx.URL(RELEASE_FILE_URL.format(version=version, name=name))
+    for _ in range(MAX_REDIRECTS + 1):
+        async with client.stream("GET", url) as response:
+            if response.is_redirect:
+                url = url.join(response.headers.get("location", ""))
+                if url.scheme != "https" or url.host not in GRANT_HOSTS or url.port not in (None, 443) or url.userinfo:
+                    raise CheckFailed("Weiterleitung zeigt woanders hin")
+                continue
+            if response.status_code == 404:
+                return None
+            return await _read_limited(response, GRANT_MAX_BYTES)
+    raise CheckFailed("zu viele Weiterleitungen")
+
+
+def _no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result = dict(pairs)
+    if len(result) != len(pairs):
+        raise ValueError("doppelter Schluessel")
+    return result
+
+
+def parse_grant(raw: bytes, raw_sig: bytes, *, version: str, digest: str) -> dict[str, Any] | None:
+    """Freigabe und Signatur (`{"grant": ..., "sig": ...}`), wenn Form und Ziel passen; die Signatur prüft der
+    Helfer."""
+    try:
+        grant = json.loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicates)
+        sig = raw_sig.decode("ascii").strip()
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        return None
+    return {"grant": grant, "sig": sig} if grant_fits(grant, sig, version=version, digest=digest) else None
+
+
+def grant_fits(grant: Any, sig: Any, *, version: str, digest: str | None) -> bool:
+    """Ob `grant` und `sig` die Form einer Freigabe haben und genau zu Version (fertig, keine Vorabversion) und Digest
+    passen."""
+    if not isinstance(grant, dict) or set(grant) != GRANT_KEYS or not isinstance(sig, str):
+        return False
+    if not version.isascii() or _STABLE_RE.fullmatch(version) is None:
+        return False
+    times_ok = (all(type(grant[k]) is int and grant[k] >= 0 for k in ("issued_at", "expires_at"))
+                and grant["issued_at"] < grant["expires_at"] <= grant["issued_at"] + GRANT_MAX_S)
+    return (
+        type(grant["fmt"]) is int and grant["fmt"] == GRANT_FORMAT
+        and grant["repo"] == OFFICIAL_IMAGE and grant["version"] == version
+        and digest is not None and grant["digest"] == digest
+        and isinstance(grant["key_id"], str) and _KEY_ID_RE.fullmatch(grant["key_id"]) is not None
+        and times_ok and _SIGNATURE_RE.fullmatch(sig) is not None
+    )
+
+
+async def _fetch_grant(client: httpx.AsyncClient, version: str, digest: str) -> dict[str, Any] | None:
+    raw = await _release_file(client, version, GRANT_NAME)
+    raw_sig = await _release_file(client, version, GRANT_SIG_NAME) if raw is not None else None
+    if raw is None or raw_sig is None:
+        return None
+    found = parse_grant(raw, raw_sig, version=version, digest=digest)
+    if found is None:
+        logger.warning("update_check_grant_unusable version=%s", version)
+    return found
+
+
 async def _find_latest(client: httpx.AsyncClient, channel: str) -> tuple[str, str | None]:
     token = await _token(client)
     return token, pick_latest(await _tags(client, token), channel)
 
 
-async def fetch_latest(channel: str, *, transport: httpx.AsyncBaseTransport | None = None) -> tuple[str | None, str | None]:
-    """Neueste Version im Kanal und ihr Digest, wirft `CheckFailed`, wenn Token oder Tags nicht rechtzeitig kommen."""
+async def fetch_latest(
+    channel: str, *, transport: httpx.AsyncBaseTransport | None = None, previous_grant: Any = None,
+) -> tuple[str | None, str | None, dict[str, Any] | None]:
+    """Neueste Version im Kanal, ihr Digest und ihre Freigabe (bei einem Fehler beim Abruf `previous_grant`, wenn sie
+    passt); wirft `CheckFailed`, wenn Token oder Tags nicht rechtzeitig kommen."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + TOTAL_TIMEOUT_S
     async with _make_client(transport) as client:
@@ -264,7 +350,17 @@ async def fetch_latest(channel: str, *, transport: httpx.AsyncBaseTransport | No
                 digest = await asyncio.wait_for(_digest(client, token, latest), max(0.0, deadline - loop.time()))
             except TimeoutError:
                 logger.info("update_check_digest_skipped reason=Zeitlimit")
-    return latest, digest
+        # Wie der Digest nur eine Zugabe: Ohne Freigabe fehlt nur der Update-Knopf.
+        grant = None
+        if latest and digest:
+            try:
+                grant = await asyncio.wait_for(_fetch_grant(client, latest, digest), max(0.0, deadline - loop.time()))
+            except Exception as exc:  # noqa: BLE001 - die Freigabe ist nur eine Zugabe
+                logger.info("update_check_grant_skipped reason=%s", str(exc) or type(exc).__name__)
+                fits = isinstance(previous_grant, dict) and grant_fits(
+                    previous_grant.get("grant"), previous_grant.get("sig"), version=latest, digest=digest)
+                grant = previous_grant if fits else None
+    return latest, digest, grant
 
 
 def _now_iso() -> str:
@@ -334,6 +430,27 @@ def _str_or_none(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _usable_grant(cache: dict[str, Any], latest: str | None, digest: str | None, now: float) -> dict[str, Any] | None:
+    found = cache.get("grant")
+    if not latest or not isinstance(found, dict):
+        return None
+    grant, sig = found.get("grant"), found.get("sig")
+    if not grant_fits(grant, sig, version=latest, digest=digest):
+        return None
+    if grant["issued_at"] > now + GRANT_CLOCK_SLACK_S or now >= grant["expires_at"]:
+        return None
+    return {"grant": grant, "sig": sig}
+
+
+def cached_grant(data_dir: Path, *, channel: str | None, version: str, digest: str | None,
+                 now: float | None = None) -> dict[str, Any] | None:
+    """Die Freigabe aus der letzten Update-Suche, wenn sie genau zu Version und Digest passt und gerade gilt."""
+    cache = load_cache(data_dir)
+    if cache.get("channel") != normalize_channel(channel) or cache.get("latest") != version:
+        return None
+    return _usable_grant(cache, version, digest, time.time() if now is None else now)
+
+
 def _result(cache: dict[str, Any], *, channel: str, image: str | None, current: str, source: str) -> dict[str, Any]:
     # Alles im Cache gehört zu dem Kanal, in dem geprüft wurde, auch der Fehler eines Versuchs.
     own = cache if cache.get("channel") == channel else {}
@@ -346,6 +463,7 @@ def _result(cache: dict[str, Any], *, channel: str, image: str | None, current: 
     error = _str_or_none(own.get("error"))
     if source == "cache" and error:
         source = "offline"
+    grant = _usable_grant(own, latest, digest, time.time())
     return {
         "current": current,
         "latest": latest,
@@ -361,6 +479,8 @@ def _result(cache: dict[str, Any], *, channel: str, image: str | None, current: 
         "official_image_name": OFFICIAL_IMAGE,
         "helper": False,
         "release_notes_url": RELEASE_NOTES_URL.format(version=latest) if latest else None,
+        "approved": grant is not None,
+        "approved_key": grant["grant"]["key_id"] if grant else None,
     }
 
 
@@ -384,7 +504,8 @@ async def check(
         cache = await asyncio.to_thread(load_cache, data_dir)
         now = _now_iso()
         try:
-            latest, digest = await fetch_latest(channel, transport=transport)
+            previous = cache.get("grant") if cache.get("channel") == channel else None
+            latest, digest, grant = await fetch_latest(channel, transport=transport, previous_grant=previous)
         except Exception as exc:  # noqa: BLE001 - nie eine Ausnahme nach außen (CheckFailed, Zeitlimit, alles andere)
             logger.info("update_check_failed reason=%s", str(exc) or type(exc).__name__)
             # Der letzte gute Stand bleibt im Cache stehen, nur der Fehler kommt dazu.
@@ -395,7 +516,8 @@ async def check(
         else:
             # Auch "keine passende Version" (nur Vorabversionen im Kanal stable, noch keine Tags) ist ein gültiges
             # Ergebnis: `latest` ist leer, `checked_at` gesetzt, ein zuvor gefundener Stand wird bewusst ersetzt.
-            cache = {"channel": channel, "latest": latest, "latest_digest": digest, "checked_at": now, "attempted_at": now, "error": None}
+            cache = {"channel": channel, "latest": latest, "latest_digest": digest, "grant": grant, "checked_at": now,
+                     "attempted_at": now, "error": None}
             source = "live"
         try:
             await asyncio.to_thread(save_cache, data_dir, cache)

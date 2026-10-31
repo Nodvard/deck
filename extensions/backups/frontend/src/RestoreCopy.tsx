@@ -71,7 +71,7 @@ export interface RestoreOptions {
 }
 
 function when(seconds: number | null): string {
-  return seconds ? new Date(seconds * 1000).toLocaleString() : "unbekannt";
+  return seconds ? new Date(seconds * 1000).toLocaleString("de-DE") : "unbekannt";
 }
 
 async function getJson<T>(path: string): Promise<T> {

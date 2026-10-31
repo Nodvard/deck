@@ -42,9 +42,9 @@ describe("Zeitplan", () => {
 });
 
 describe("Zeitplan in der Zeitzone des Dashboards", () => {
-  // Die Kern-Shell legt window.__lattice an (main.tsx); hier nur die Zeitzone daraus.
+  // Die Kern-Shell legt window.__nodvardDeck an (main.tsx); hier nur die Zeitzone daraus.
   beforeAll(() => {
-    window.__lattice ??= {} as Window["__lattice"];
+    window.__nodvardDeck ??= {} as Window["__nodvardDeck"];
   });
   afterEach(() => setDeckTimezone(null));
 

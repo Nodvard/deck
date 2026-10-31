@@ -146,6 +146,17 @@ example:
 If the proxy already sends its headers but is not entered yet, the card shows a hint and the button **"Enter this
 address"** („Diese Adresse eintragen“). It copies exactly that one address into the field; then "Save" („Speichern“).
 
+If you logged in as the owner in the last 7 days through a proxy in your home network that is not entered, the card
+and "Needs attention" („Braucht Aufmerksamkeit“) on the overview name its address. Only you see the hint, because only
+the owner may change the list, and only your logins count. Nodvard Deck never enters the proxy by itself. Check that it
+really is your proxy, then enter it as above. There is no hint when the proxy reaches Nodvard Deck over a public
+address. If that is a single address, such as a proxy using an IPv6 address of your connection, enter it yourself.
+Cloudflare without a tunnel cannot be entered: its requests come from large networks (IPv4 up to /13), and the list
+accepts public networks only up to /24 (IPv6 up to /48), otherwise almost any computer could fake its address. Use
+Cloudflare Tunnel then (the proxy runs in your network, so the hint appears) or a proxy of your own in front. Nor is
+there a hint when the proxy only sends the `Forwarded` header; Nodvard Deck does not read that one, only
+`X-Forwarded-For` and `X-Forwarded-Proto`.
+
 What you see there depends on how the proxy and Nodvard Deck are connected:
 
 - **Proxy in the same Docker network** (e.g. the same Compose project): you see the proxy container's address, e.g.
@@ -202,6 +213,21 @@ safest choice (section 6).
 
 ## 6. Security: what to keep in mind
 
+- **If Nodvard Deck can be reached from the internet**, it slows down password guessing: from 10 failed sign-ins for
+  one user name within 24 hours on, every further attempt from a network waits twice as long as the one before from
+  the same network, at most 5 minutes. You then get the notification "Passwort wird durchprobiert" (password is being
+  guessed).
+  - Nobody can lock you out this way: from your home network, over a VPN like Tailscale and from any network nobody
+    guesses from, you get in right away. If you mistype there, you wait 2 seconds.
+  - If you share the network with the attacker (for example the same public Wi-Fi), you wait there like the attacker
+    does, even with the right password. Use another network or the VPN then.
+  - Someone who takes a new address for every attempt, for example through a botnet, is hardly held up by this. A long
+    password and two-factor authentication protect you against that; the notification tells you someone is guessing.
+- **Without an entry under "Trusted proxy"** Nodvard Deck only sees the proxy's address. It is usually local, and then
+  this brake does not apply. The limits per address remain, and they then count for everyone together: anyone sending a
+  few wrong passwords from outside locks everybody out for a few minutes, again and again. So enter your proxy under
+  Settings → System → Trusted proxy. The same happens when Docker does not pass on the real address at all, for example
+  with IPv6 through the userland proxy, with Docker Desktop or with rootless Docker.
 - **Never enter a whole network that ordinary devices also come from**, such as your home network `192.168.2.0/24`.
   Every entered device may tell Nodvard Deck any sender address it likes. That would allow bypassing the lock after
   failed sign-ins and would put wrong addresses into the audit log. Only enter your proxy, ideally as its single

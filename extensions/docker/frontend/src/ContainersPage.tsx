@@ -266,7 +266,7 @@ export function summarizeImages(images: ImageUpdates | null, checking: boolean, 
   const applying = Object.keys(images.applying ?? {}).length;
   const applyingText = applying === 1 ? "1 Update wird eingespielt" : `${applying} Updates werden eingespielt`;
   if (!lastCheck && failedHosts === 0) return applying > 0 ? `Image-Updates: ${applyingText}` : null;
-  const head = lastCheck ? `Image-Updates geprüft ${new Date(lastCheck).toLocaleString()}` : "Image-Updates";
+  const head = lastCheck ? `Image-Updates geprüft ${new Date(lastCheck).toLocaleString("de-DE")}` : "Image-Updates";
   const notChecked = operateServers > 0 ? ` · ${operateServers} Server im Modus „Nur bedienen“ nicht geprüft` : "";
 
   const count = (status: ImageResult["status"]) => results.filter((r) => r.status === status).length;
@@ -298,7 +298,7 @@ export function summarizeImages(images: ImageUpdates | null, checking: boolean, 
 /** Hinweis, wenn die Registry diesmal nicht geantwortet hat und die letzte Antwort gilt. */
 function StaleNote({ result }: { result: ImageResult }): JSX.Element | null {
   if (!result.stale) return null;
-  const at = result.registry_at ? ` Letzte Antwort der Registry: ${new Date(result.registry_at).toLocaleString()}.` : "";
+  const at = result.registry_at ? ` Letzte Antwort der Registry: ${new Date(result.registry_at).toLocaleString("de-DE")}.` : "";
   return <span className="mt-0.5 block text-[11px] opacity-60" title={`${result.reason ?? ""}${at}`}>alter Stand</span>;
 }
 
@@ -523,7 +523,7 @@ function DetailsPanel({ entry, onChanged }: { entry: ServiceEntry; onChanged?: (
     <div className="text-xs" data-testid={`inspect-${entry.id}`}>
       <dl className="grid grid-cols-2 gap-x-6 gap-y-1 opacity-85 sm:grid-cols-4">
         <div><dt className="opacity-60">Image</dt><dd className="break-words">{d.image ?? "?"}{d.image_id ? ` (${d.image_id})` : ""}</dd></div>
-        <div><dt className="opacity-60">{d.running ? "Läuft seit" : "Beendet"}</dt><dd>{since ? new Date(since).toLocaleString() : "–"}{!d.running && d.exit_code != null ? ` · Exit ${d.exit_code}` : ""}{d.oom_killed ? " · Speicher voll (OOM)" : ""}</dd></div>
+        <div><dt className="opacity-60">{d.running ? "Läuft seit" : "Beendet"}</dt><dd>{since ? new Date(since).toLocaleString("de-DE") : "–"}{!d.running && d.exit_code != null ? ` · Exit ${d.exit_code}` : ""}{d.oom_killed ? " · Speicher voll (OOM)" : ""}</dd></div>
         <div><dt className="opacity-60">Neustart-Regel</dt><dd>{RESTART_LABEL[d.restart_policy] ?? d.restart_policy}{d.restart_count ? ` · ${d.restart_count}× neu gestartet` : ""}</dd></div>
         <div><dt className="opacity-60">Zustand</dt><dd>{d.health ? HEALTH_LABEL[d.health] ?? d.health : "kein Healthcheck"}{d.privileged ? " · privilegiert" : ""}</dd></div>
         {d.compose && <div><dt className="opacity-60">Compose</dt><dd className="break-words">{d.compose.project}{d.compose.service ? ` / ${d.compose.service}` : ""}{d.compose.working_dir ? ` · ${d.compose.working_dir}` : ""}</dd></div>}

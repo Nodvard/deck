@@ -7,6 +7,7 @@ abgedeckt ist) -- gebaut gegen eine eigene, isolierte pve1-App statt der echten
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import timedelta
 
 import pytest
 import pytest_asyncio
@@ -16,7 +17,8 @@ from httpx import ASGITransport, AsyncClient
 from nodvard_deck.api.deps import get_session, require_permission
 from nodvard_deck.config import Settings, get_settings
 from nodvard_deck.core import security
-from nodvard_deck.models import User
+from nodvard_deck.db import utcnow
+from nodvard_deck.models import RefreshToken, User
 
 
 @pytest_asyncio.fixture
@@ -52,12 +54,18 @@ async def rbac_client(db_session, tmp_path) -> AsyncIterator[AsyncClient]:
         yield ac
 
 
-def _token_for(user: User, settings: Settings) -> str:
+async def _token_for(db_session, user: User, settings: Settings) -> str:
+    login = RefreshToken(
+        user_id=user.id, token_hash=security.hash_opaque_token(user.id), expires_at=utcnow() + timedelta(days=1)
+    )
+    db_session.add(login)
+    await db_session.flush()
     return security.create_jwt(
         subject=user.id,
         token_type="access",
         secret=settings.get_or_create_jwt_secret(),
         ttl_seconds=60,
+        extra_claims={"sid": login.id},
     )
 
 
@@ -72,7 +80,7 @@ async def test_operator_allowed_low_denied_high(db_session, rbac_client):
     await db_session.flush()
     await db_session.refresh(user, attribute_names=["roles"])
 
-    token = _token_for(user, rbac_client._nodvard_settings)
+    token = await _token_for(db_session, user, rbac_client._nodvard_settings)
     headers = {"Authorization": f"Bearer {token}"}
 
     r_low = await rbac_client.get("/needs-low", headers=headers)
@@ -88,7 +96,7 @@ async def test_owner_bypasses_every_check(db_session, rbac_client):
     db_session.add(user)
     await db_session.flush()
 
-    token = _token_for(user, rbac_client._nodvard_settings)
+    token = await _token_for(db_session, user, rbac_client._nodvard_settings)
     headers = {"Authorization": f"Bearer {token}"}
 
     assert (await rbac_client.get("/needs-low", headers=headers)).status_code == 200
@@ -106,7 +114,7 @@ async def test_viewer_denied_everything_that_needs_approval(db_session, rbac_cli
     await db_session.flush()
     await db_session.refresh(user, attribute_names=["roles"])
 
-    token = _token_for(user, rbac_client._nodvard_settings)
+    token = await _token_for(db_session, user, rbac_client._nodvard_settings)
     headers = {"Authorization": f"Bearer {token}"}
 
     assert (await rbac_client.get("/needs-low", headers=headers)).status_code == 403

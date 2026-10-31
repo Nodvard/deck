@@ -23,6 +23,7 @@ from ...ext.runtime import get_extension_runtime
 from ...models import ExtensionRecord, Secret
 from ...services import audit as audit_service
 from ...services import extension_setup, extension_test
+from ...services import extensions as extensions_service
 from ..deps import CurrentUser, SessionDep, SettingsDep, require_permission
 from .auth import confirm_stored_secret_change
 from .extensions import resolve_extension
@@ -298,6 +299,7 @@ async def put_extension_settings(
         target_type="extension", target_id=ext_id,
         detail={"changed": changed, **({"secrets_cleared": cleared} if cleared else {})},
     )
+    await extensions_service.notify_secret_changed(session, cleared)
     return await _settings_out(session, ext_id, merged, cleared)
 
 
@@ -349,6 +351,7 @@ async def put_extension_secret(
         session, actor_type="user", actor_id=user.id, action="extension.secret_set", outcome="success",
         target_type="extension", target_id=ext_id, detail={"label": payload.label, "replaced": existing is not None},
     )
+    await extensions_service.notify_secret_changed(session, [payload.label])
     return None
 
 
@@ -384,6 +387,8 @@ async def delete_extension_secret(
         session, actor_type="user", actor_id=user.id, action="extension.secret_removed", outcome="success",
         target_type="extension", target_id=ext_id, detail={"label": label, "existed": existing is not None},
     )
+    if existing is not None:
+        await extensions_service.notify_secret_changed(session, [label])
     return None
 
 

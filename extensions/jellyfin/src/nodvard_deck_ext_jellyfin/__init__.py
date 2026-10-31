@@ -18,7 +18,7 @@ from nodvard_sdk import (
     WidgetSpec,
 )
 
-from .config import SETTINGS_HINT
+from .config import SETTINGS_HINT, connection_of
 from .models import Overview
 from .service import JellyfinService
 from .suggestions import JellyfinAppSuggestions
@@ -114,6 +114,12 @@ class Extension(NodvardExtension):
 
     async def on_settings_changed(self, ctx: ExtensionContext, values: dict[str, Any]) -> None:
         self._service.clear()
+
+    async def on_secret_changed(self, ctx: ExtensionContext, label: str) -> None:
+        # Ein Ergebnis oder eine Pause mit dem alten Schlüssel gälte sonst bis zu 5 Minuten weiter.
+        name = connection_of(label)
+        if name is not None:
+            self._service.forget(name)
 
     async def health(self, ctx: ExtensionContext) -> HealthReport:
         # „Verbindung testen“ prüft jede Verbindung mit `GET /System/Info` und leert den Zwischenspeicher samt Pause.

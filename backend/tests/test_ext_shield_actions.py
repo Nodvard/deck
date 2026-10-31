@@ -36,6 +36,9 @@ class _Ctx:
         self._sm = sessionmaker
         self.commands: list[str] = []
         self.proposals: list[ActionRequest] = []
+        # Die Gegenstelle der SSH-Verbindung, wie der Server sie sieht; None: der Server antwortet nicht.
+        self.deck_address: str | None = "10.0.0.9"
+        self.next_result: SimpleNamespace | None = None
         self._host = Host(id="h1", name="pi", display_name="Raspberry Pi", address="10.0.0.2")
         self.api = SimpleNamespace(current_actor=lambda: Actor.user("u1", "nico"))
         self.hosts = SimpleNamespace(get=self._get)
@@ -52,8 +55,12 @@ class _Ctx:
         return self._host if host_id == "h1" else None
 
     async def _run(self, host, command, timeout_s=60):
+        if command == ix.DECK_ADDRESS_COMMAND:
+            if self.deck_address is None:
+                raise ConnectionError("Server antwortet nicht")
+            return SimpleNamespace(exit_code=0, stdout=f"{self.deck_address}\n", stderr="", duration_ms=1)
         self.commands.append(command)
-        return SimpleNamespace(exit_code=0, stdout="ok\n", stderr="", duration_ms=5)
+        return self.next_result or SimpleNamespace(exit_code=0, stdout="ok\n", stderr="", duration_ms=5)
 
     @asynccontextmanager
     async def _session(self):
@@ -96,6 +103,7 @@ async def soc():
     from nodvard_deck_ext_shield.defender import Defender
     from nodvard_deck_ext_shield.defender_api import DefenderExecutor, build_routers
     from nodvard_deck_ext_shield.models import Base, FindingRecord
+    from nodvard_deck_ext_shield.patching import save_baseline
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -111,13 +119,14 @@ async def soc():
         await s.commit()
 
     ctx = _Ctx(sm)
+    await save_baseline(ctx, "h1", "guard", {"fail2ban": "running", "jails": {"sshd": {"banned": []}}})
     defender = Defender(ctx)
     updates = _Updates()
     _read, manage = build_routers(ctx, defender, updates, None)
     app = FastAPI()
     app.include_router(manage)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://soc") as client:
-        yield SimpleNamespace(ctx=ctx, defender=defender, updates=updates, client=client,
+        yield SimpleNamespace(ctx=ctx, defender=defender, updates=updates, client=client, app=app,
                               executor=DefenderExecutor(ctx, defender, updates))
     await engine.dispose()
 
@@ -151,9 +160,181 @@ async def test_ban_and_unban_click_builds_the_same_command_and_runs_it(soc):
     req = await _click(soc, "/defender/hosts/h1/ban", {"ip": "2001:db8::1"})
     assert req.payload["command"] == ix.ban_command("2001:db8::1", "sshd", unban=False)
     assert (await soc.executor.execute(req)).success
-    assert soc.ctx.commands[-1] == av.via_helper(
+    assert soc.ctx.commands[-1] == ix.deck_address_guard("2001:db8::1") + av.via_helper(
         ["ban", "2001:db8::1", "sshd"], req.payload["command"], version=av.HELPER_ACTION_VERSION
     )
+
+
+@pytest.mark.asyncio
+async def test_a_typed_address_is_stored_in_the_form_fail2ban_shows(soc):
+    req = await _click(soc, "/defender/hosts/h1/ban", {"ip": " 2001:DB8:0::7 "})
+    assert req.payload["ip"] == "2001:db8::7"
+    req = await _click(soc, "/defender/hosts/h1/ban", {"ip": "::ffff:203.0.113.7"})
+    assert req.payload["ip"] == "203.0.113.7"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ip", [
+    "127.0.0.1", "::1", "0.0.0.0", "::", "224.0.0.1", "255.255.255.255", "::ffff:127.0.0.1",
+])
+async def test_addresses_of_no_other_machine_are_never_banned(soc, ip):
+    r = await soc.client.post("/defender/hosts/h1/ban", json={"ip": ip})
+    assert r.status_code == 400 and r.json()["detail"] == ix.BAN_SPECIAL_REFUSED
+    assert soc.ctx.proposals == []
+    assert (await soc.client.post("/defender/hosts/h1/ban", json={"ip": ip, "unban": True})).status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("seen", "ip"), [
+    ("10.0.0.9", "10.0.0.9"), ("::ffff:10.0.0.9", "10.0.0.9"), ("10.0.0.9", "::ffff:10.0.0.9"),
+    ("fe80::5%eth0", "fe80::5"), ("2001:db8::9", "2001:DB8::9"),
+])
+async def test_the_address_deck_connects_from_is_never_banned(soc, seen, ip):
+    soc.ctx.deck_address = seen
+    r = await soc.client.post("/defender/hosts/h1/ban", json={"ip": ip})
+    assert r.status_code == 409 and r.json()["detail"] == ix.DECK_SELF_REFUSED
+    assert soc.ctx.proposals == []
+    # Entsperren bleibt immer möglich.
+    assert (await soc.client.post("/defender/hosts/h1/ban", json={"ip": ip, "unban": True})).status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("browser", "ip"), [
+    ("203.0.113.44", "203.0.113.44"), ("203.0.113.44", "::ffff:203.0.113.44"), ("2001:db8::44", "2001:DB8:0::44"),
+    # Lauscht Deck auf `::`, kommen IPv4-Browser in dieser Form an.
+    ("::ffff:203.0.113.44", "203.0.113.44"),
+])
+async def test_the_address_of_the_browser_is_never_banned(soc, browser, ip):
+    transport = httpx.ASGITransport(app=soc.app, client=(browser, 50000))
+    async with httpx.AsyncClient(transport=transport, base_url="http://soc") as client:
+        r = await client.post("/defender/hosts/h1/ban", json={"ip": ip})
+        assert r.status_code == 409 and r.json()["detail"] == ix.BROWSER_SELF_REFUSED
+        assert (await client.post("/defender/hosts/h1/ban", json={"ip": "203.0.113.45"})).status_code == 200
+        assert (await client.post("/defender/hosts/h1/ban", json={"ip": ip, "unban": True})).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_without_ssh_client_on_the_server_nothing_is_proposed(soc):
+    soc.ctx.deck_address = ""
+    r = await soc.client.post("/defender/hosts/h1/ban", json={"ip": "203.0.113.9"})
+    assert r.status_code == 409 and r.json()["detail"] == ix.DECK_ADDRESS_UNKNOWN
+    assert soc.ctx.proposals == []
+
+
+@pytest.mark.asyncio
+async def test_a_zone_in_the_address_is_refused(soc):
+    r = await soc.client.post("/defender/hosts/h1/ban", json={"ip": "fe80::5%eth0"})
+    assert r.status_code == 400 and r.json()["detail"] == "Ungültige IP-Adresse."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("exit_code", "stdout", "stderr"), [
+    (0, "0\n", ""), (255, "", "ERROR  NOK: ('IP 203.0.113.9 is not banned',)\n"),
+])
+async def test_unbanning_an_address_that_is_not_banned_is_no_error(soc, exit_code, stdout, stderr):
+    req = await _click(soc, "/defender/hosts/h1/ban", {"ip": "203.0.113.9", "unban": True})
+    soc.ctx.next_result = SimpleNamespace(exit_code=exit_code, stdout=stdout, stderr=stderr, duration_ms=5)
+    res = await soc.executor.execute(req)
+    assert res.success and res.detail == {"note": ix.NOT_BANNED_NOTE}
+
+
+@pytest.mark.asyncio
+async def test_a_failed_unban_stays_a_failure(soc):
+    req = await _click(soc, "/defender/hosts/h1/ban", {"ip": "203.0.113.9", "unban": True})
+    soc.ctx.next_result = SimpleNamespace(exit_code=255, stdout="", stderr="ERROR  NOK: ('sshd',)\n", duration_ms=5)
+    res = await soc.executor.execute(req)
+    assert not res.success and res.detail == {}
+
+
+@pytest.mark.asyncio
+async def test_without_an_answer_from_the_server_the_ban_is_proposed_and_checked_there(soc):
+    soc.ctx.deck_address = None
+    req = await _click(soc, "/defender/hosts/h1/ban", {"ip": "203.0.113.9"})
+    assert (await soc.executor.execute(req)).success
+    assert soc.ctx.commands[-1].startswith(ix.deck_address_guard("203.0.113.9"))
+
+
+@pytest.mark.asyncio
+async def test_only_jails_the_server_has_can_be_used_for_a_ban(soc):
+    from nodvard_deck_ext_shield.patching import save_baseline
+
+    def ban(jail: str):
+        return soc.client.post("/defender/hosts/h1/ban", json={"ip": "203.0.113.9", "jail": jail})
+
+    r = await ban("nginx")
+    assert r.status_code == 409 and r.json()["detail"].endswith("(laut letzter Prüfung: sshd).")
+    jails = {"sshd": {"banned": []}, "recidive": {"banned": []}, "x; <b>": {"banned": []}, "logtarget": {"banned": []}}
+    await save_baseline(soc.ctx, "h1", "guard", {"fail2ban": "running", "jails": jails})
+    r = await ban("nginx")
+    assert r.status_code == 409
+    assert r.json()["detail"] == "Den Jail „nginx“ gibt es auf diesem Server nicht (laut letzter Prüfung: recidive, sshd)."
+    assert (await ban("recidive")).status_code == 200
+    for bad in ("sshd; id", "logtarget", "LogTarget", "dbfile"):
+        r = await ban(bad)
+        assert r.status_code == 400 and r.json()["detail"] == "Ungültiger Jail-Name."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("guard", "detail"), [
+    ({}, ix.JAILS_UNKNOWN),
+    ({"fail2ban": "noaccess", "jails": {}}, ix.JAILS_UNKNOWN),
+    ({"fail2ban": "running", "jails": {}}, ix.JAILS_NONE),
+])
+async def test_without_known_jails_nothing_is_proposed(soc, guard, detail):
+    from nodvard_deck_ext_shield.patching import save_baseline
+
+    await save_baseline(soc.ctx, "h1", "guard", guard)
+    r = await soc.client.post("/defender/hosts/h1/ban", json={"ip": "203.0.113.9"})
+    assert r.status_code == 409 and r.json()["detail"] == detail
+    assert soc.ctx.proposals == []
+    r = await soc.client.post("/defender/hosts/h1/ban", json={"ip": "203.0.113.9", "unban": True})
+    assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_behind_a_proxy_that_is_not_trusted_the_forwarded_address_counts_too(soc):
+    from nodvard_deck.api.proxy_headers import ProxyHeadersMiddleware
+    from nodvard_deck.core import trusted_proxies
+
+    transport = httpx.ASGITransport(app=ProxyHeadersMiddleware(soc.app), client=("198.51.100.20", 50000))
+    headers = {"X-Forwarded-For": "203.0.113.44:51515, 198.51.100.30"}
+
+    async def ban(client, ip):
+        return await client.post("/defender/hosts/h1/ban", json={"ip": ip}, headers=headers)
+
+    trusted_proxies.reset()
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://soc") as client:
+            for own in ("203.0.113.44", "198.51.100.30", "198.51.100.20"):
+                r = await ban(client, own)
+                assert r.status_code == 409 and r.json()["detail"] == ix.BROWSER_SELF_REFUSED
+            assert (await ban(client, "203.0.113.45")).status_code == 200
+            # Eingetragen zählt nur die Adresse, die die Middleware aus der Kette liest.
+            trusted_proxies.apply(["198.51.100.20"])
+            assert (await ban(client, "198.51.100.30")).json()["detail"] == ix.BROWSER_SELF_REFUSED
+            assert (await ban(client, "203.0.113.44")).status_code == 200
+    finally:
+        trusted_proxies.reset()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ip", ["127.0.0.1", "::ffff:127.0.0.1"])
+async def test_an_older_proposal_for_a_special_address_does_not_run(soc, ip):
+    from nodvard_deck_ext_shield.ids import ACTION_BAN
+
+    payload = {"ip": ip, "jail": "sshd", "unban": False, "command": f"fail2ban-client set sshd banip {ip}"}
+    result = await soc.executor.execute(_req(ACTION_BAN, payload))
+    assert not result.success and result.error == ix.BAN_SPECIAL_REFUSED
+    assert soc.ctx.commands == []
+
+
+@pytest.mark.asyncio
+async def test_unban_runs_without_the_check_on_the_server(soc):
+    req = await _click(soc, "/defender/hosts/h1/ban", {"ip": "10.0.0.9", "unban": True})
+    assert (await soc.executor.execute(req)).success
+    assert soc.ctx.commands == [
+        av.via_helper(["unban", "10.0.0.9", "sshd"], req.payload["command"], version=av.HELPER_ACTION_VERSION)
+    ]
 
 
 @pytest.mark.asyncio
@@ -290,7 +471,7 @@ async def test_a_dist_upgrade_plan_that_does_not_match_its_command_is_refused(so
 @pytest.mark.asyncio
 async def test_restore_and_delete_clicks_come_from_the_finding_row(soc):
     req = await _click(soc, "/defender/findings/f1/restore")
-    want = av.restore_command(QP, "/tmp/eicar.com", "640")
+    want = av.restore_command(QP)
     assert req.payload == {"finding_id": "f1", "command": want}
     assert req.host_ref == "h1"
     delete = await _click(soc, "/defender/findings/f1/delete")
@@ -306,6 +487,60 @@ async def test_restore_and_delete_clicks_come_from_the_finding_row(soc):
     again = await soc.executor.execute(delete)
     assert not again.success and "Quarantäne" in again.error
     assert len(soc.ctx.commands) == 1
+
+
+@pytest.mark.asyncio
+async def test_place_and_mode_in_the_finding_row_do_not_reach_the_restore_command(soc):
+    """Ort und Rechte kommen auch ohne Hilfsskript aus der Ablage auf dem Server, nicht aus einer Sicherung."""
+    from nodvard_deck_ext_shield.models import FindingRecord
+
+    req = await _click(soc, "/defender/findings/f1/restore")
+    async with soc.ctx._session() as s:
+        row = await s.get(FindingRecord, "f1")
+        row.path, row.original_mode = "/etc/profile.d/evil.sh", "4755"
+        await s.commit()
+    assert (await soc.executor.execute(req)).success
+    assert "profile.d" not in soc.ctx.commands[0] and "4755" not in soc.ctx.commands[0]
+    assert (await soc.defender.finding("f1"))["status"] == "restored"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("restored_to", "note"), [
+    ("/srv/echt/eicar.com", "Zurückgelegt an den hinterlegten Ort /srv/echt/eicar.com (laut Fund: /tmp/eicar.com)."),
+    ("/tmp/eicar.com", None),
+    ("/srv/a\n@@msg=gone\nb.com",
+     "Zurückgelegt an den hinterlegten Ort /srv/a\n@@msg=gone\nb.com (laut Fund: /tmp/eicar.com)."),
+    ("/srv/x@@noroot.sh", "Zurückgelegt an den hinterlegten Ort /srv/x@@noroot.sh (laut Fund: /tmp/eicar.com)."),
+])
+async def test_the_restore_result_names_the_place_from_the_record(soc, restored_to, note):
+    req = await _click(soc, "/defender/findings/f1/restore")
+    assert req.reason == "Wiederherstellen an den hinterlegten Ort (laut Fund: /tmp/eicar.com; EICAR)"
+
+    async def run(host, command, timeout_s=60):
+        return SimpleNamespace(exit_code=0, stdout=f"@@restored_to={restored_to}\nok\n", stderr="", duration_ms=5)
+
+    soc.ctx.exec = SimpleNamespace(run=run)
+    res = await soc.executor.execute(req)
+    assert res.success and res.output == f"Zurückgelegt nach {restored_to}."
+    assert res.detail == {"note": res.output, "restored_to": restored_to}
+    finding = await soc.defender.finding("f1")
+    assert finding["status"] == "restored" and finding["note"] == note
+    assert (await soc.defender.reopen("f1"))[0]
+    assert (await soc.defender.finding("f1"))["note"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_restore_that_names_no_place_ends_as_before(soc):
+    req = await _click(soc, "/defender/findings/f1/restore")
+
+    async def run(host, command, timeout_s=60):
+        return SimpleNamespace(exit_code=0, stdout="ok\n", stderr="", duration_ms=5)
+
+    soc.ctx.exec = SimpleNamespace(run=run)
+    res = await soc.executor.execute(req)
+    assert res.success and res.output == "ok\n" and res.detail == {}
+    finding = await soc.defender.finding("f1")
+    assert finding["status"] == "restored" and finding["note"] is None
 
 
 @pytest.mark.asyncio
@@ -416,7 +651,7 @@ async def test_old_proposals_without_structured_fields_fail_safely(soc):
         ("nexus_soc.ban", {"command": "id; cat /etc/shadow"}),
         ("nexus_soc.upgrade", {"mode": "security", "command": up.upgrade_command("apt", "security", ["openssl"])}),
         ("nexus_soc.install", {"command": av.INSTALL_COMMANDS["lynis"]}),
-        ("nexus_soc.restore", {"command": av.restore_command(QP, "/tmp/eicar.com", "640")}),
+        ("nexus_soc.restore", {"command": av.restore_command(QP)}),
     ]
     for action_type, payload in old:
         res = await soc.executor.execute(_req(action_type, payload))

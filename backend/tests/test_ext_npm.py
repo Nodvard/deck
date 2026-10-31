@@ -11,8 +11,9 @@ from pathlib import Path
 
 import httpx
 import pytest
+from nodvard_deck.core import vault
 from nodvard_deck.ext.runtime import get_extension_runtime
-from nodvard_deck.models import Action, AuditEntry, ExtensionRecord
+from nodvard_deck.models import Action, AuditEntry, ExtensionRecord, Secret
 from nodvard_deck.services import extensions as extensions_service
 from sqlalchemy import select
 
@@ -125,6 +126,12 @@ async def _configure(client, headers) -> None:
         "/api/v1/extensions/npm/secrets", json={"current_password": "correct-horse-battery", "label": "network-npm-password", "value": NPM_PASSWORD}, headers=headers,
     )
     assert res.status_code == 204, res.text
+
+
+async def _replace_unannounced(db_session, test_settings, value: str) -> None:
+    secret = (await db_session.execute(select(Secret).where(Secret.label == "network-npm-password"))).scalar_one()
+    await vault.replace_secret_value(db_session, vault.load_keyring(test_settings), secret.id, value)
+    await db_session.commit()
 
 
 async def _approve(client, headers, action_id: str) -> dict:
@@ -266,12 +273,15 @@ async def test_executor_rejects_forged_payloads(client, db_session, test_setting
     from nodvard_sdk import Actor, Risk
     from nodvard_sdk.actions import ActionRequest
 
+    from nodvard_deck.core.known_actors import known_while
+
     headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers)
     ctx = get_extension_runtime().loaded["npm"].ctx
-    decision = await ctx.actions.propose(ActionRequest(
-        action_type=action_type, payload=payload, risk=Risk.LOW, proposed_by=Actor.user("x", "x"), reason="Test",
-    ))
+    with known_while([("user", "x")]):
+        decision = await ctx.actions.propose(ActionRequest(
+            action_type=action_type, payload=payload, risk=Risk.LOW, proposed_by=Actor.user("x", "x"), reason="Test",
+        ))
     approved = await _approve(client, headers, decision.action_id)
     assert approved["status"] == "failed", approved
     assert error in approved["result"]["error"]
@@ -386,6 +396,35 @@ async def test_npm_disable_host_through_the_gate(client, db_session, test_settin
     approved = await _approve(client, headers, enable["action_id"])
     assert approved["status"] == "succeeded"
     assert fake.npm_calls == ["disable 2", "enable 2"]
+
+
+@pytest.mark.asyncio
+async def test_connection_test_checks_the_password_now_in_the_vault(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    assert (await client.get("/api/v1/ext/npm/summary", headers=headers)).json()["state"] == "ok"
+    await _replace_unannounced(db_session, test_settings, "falsch")
+    assert fake.npm_tokens == {"jwt-1"}, "das alte Token gilt bei NPM noch"
+
+    tested = (await client.post("/api/v1/extensions/npm/test", headers=headers)).json()
+    assert tested["ok"] is False and "Passwort" in tested["message"], tested
+
+    await _replace_unannounced(db_session, test_settings, NPM_PASSWORD)
+    tested = (await client.post("/api/v1/extensions/npm/test", headers=headers)).json()
+    assert tested["ok"] is True, tested
+    assert sum(1 for r in fake.requests if r.url.path == "/api/tokens") == 3
+
+
+@pytest.mark.asyncio
+async def test_a_new_password_in_the_vault_drops_the_old_token(client, db_session, test_settings):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    assert (await client.get("/api/v1/ext/npm/summary", headers=headers)).json()["state"] == "ok"
+    body = {"current_password": "correct-horse-battery", "label": "network-npm-password", "value": "falsch"}
+    assert (await client.put("/api/v1/extensions/npm/secrets", json=body, headers=headers)).status_code == 204
+
+    npm = (await client.get("/api/v1/ext/npm/summary", headers=headers)).json()
+    assert npm["state"] != "ok" and "Passwort" in npm["message"], npm
 
 
 @pytest.mark.asyncio

@@ -12,10 +12,11 @@ import pytest
 from docker_stack_fakes import EXT_DIR, FakeExec, SftpDenied, docker_on, real_sftp, result  # noqa: F401 - Fixtures
 
 
-@pytest.fixture(autouse=True)
-def _ext_docker_on_path(monkeypatch):
-    monkeypatch.syspath_prepend(str(EXT_DIR / "src"))
-    yield
+@pytest.fixture(autouse=True, scope="module")
+def _ext_docker_on_path():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(EXT_DIR / "src"))
+        yield
     for name in list(sys.modules):
         if name.startswith("nodvard_deck_ext_docker"):
             del sys.modules[name]
@@ -677,8 +678,10 @@ async def test_adopting_fails_after_writing(tmp_path):
 @pytest.mark.asyncio
 async def test_a_host_without_docker(tmp_path):
     env = _setup(tmp_path)
+    from nodvard_deck_ext_docker.operate import NOT_DOCKER
+
     env.ctx.hosts = SimpleNamespace(get=lambda host_id: _async(SimpleNamespace(id=host_id, tags=["web"])))
-    assert (await env.create.execute(_request(env))).error == "Kein Docker-Host."
+    assert (await env.create.execute(_request(env))).error == NOT_DOCKER
     env.ctx.hosts = SimpleNamespace(get=lambda host_id: _async(SimpleNamespace(id=host_id, tags=["docker-bedienen"])))
     assert (await env.create.execute(_request(env))).error.startswith("Auf diesem Server ist Docker im Modus „Nur bedienen“")
 

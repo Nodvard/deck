@@ -56,9 +56,16 @@ class ServerInfoService:
         self._clock = clock
         self._entry: _Entry | None = None
         self._lock = asyncio.Lock()
+        # Steht in der Kennung; nach einem neuen Geheimnis gilt so auch nichts, was eine laufende Abfrage noch einträgt.
+        self._generation = 0
 
     def clear(self) -> None:
         """Verwirft das Zwischenergebnis."""
+        self._entry = None
+
+    def forget(self) -> None:
+        """Verwirft Zwischenergebnis und Pause, etwa nach einem neuen Token oder App-Passwort im Tresor."""
+        self._generation += 1
         self._entry = None
 
     async def _read_secret(self, label: str, what: str) -> str:
@@ -114,9 +121,9 @@ class ServerInfoService:
             # Nur `exists`: die Geheimnisse liest erst `_load`, nie für eine Antwort aus dem Zwischenspeicher.
             has_token = await self._ctx.secrets.exists(TOKEN_LABEL)
             has_password = await self._ctx.secrets.exists(PASSWORD_LABEL)
-            # Ändert sich eines davon, wird neu gefragt.
-            fingerprint = (cfg, has_token, has_password)
             async with self._lock:
+                # Ändert sich eines davon, wird neu gefragt.
+                fingerprint = (cfg, has_token, has_password, self._generation)
                 entry = self._entry
                 if not refresh and entry is not None and entry.fingerprint == fingerprint and entry.expires > self._clock():
                     return entry.result

@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from nodvard_sdk import Notification, Severity
 from nodvard_sdk.actions import ActionRequest, ActionResult, ActionSpec, DryRunReport
 from nodvard_sdk.types import Actor, Risk
 from pydantic import BaseModel, ConfigDict, Field
@@ -53,6 +54,7 @@ LEFTOVER_EXIT = 5
 CLEANUP_EXIT = 6
 PREPARE_EXIT = 7
 CHANGED_EXIT = 8
+MOVED_EXIT = 9
 RESTORE_UNTIL_S = 2700
 """Spätestens so lange nach dem Start endet das Entpacken; danach bleibt bis zur Grenze der Freigabe Zeit für den Rest."""
 CHECK_TIMEOUT_S = 900
@@ -83,7 +85,9 @@ _RESTORE_SCRIPT = (
     f'rm -rf "$o" || exit {CLEANUP_EXIT}'
 )
 """Entpackt neben die alten Daten, legt die alten beiseite und tauscht erst dann; die alten Daten löscht es zuletzt."""
-_LEFTOVER_SCRIPT = f'[ -e /data/{ASIDE} ] || [ -e /data/{STAGING} ] && exit 1; exit 0'
+# `rm -rf` entfernt einen Symlink an dieser Stelle nur selbst und folgt darin keinem; scheitert es, liegen die Daten trotzdem an ihrem Platz.
+_SETTLE_SCRIPT = f'{{ [ -e /data/{ASIDE} ] || [ -L /data/{ASIDE} ]; }} && exit {MOVED_EXIT}; rm -rf /data/{STAGING}; exit 0'
+"""Nach einem Abbruch: Liegen alte Daten beiseite, hatte der Tausch begonnen; sonst fällt der halb entpackte Ordner weg."""
 _ARCHIVE_SUFFIX = ".tar.gz"
 _HARDENING = ["--network", "none", "--security-opt", "no-new-privileges", "--pids-limit", "64"]
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -117,11 +121,21 @@ def cmd_restore(volume: str, folder: str, sha256: str, size: int) -> list[str]:
             BACKUP_IMAGE, "sh", "-c", _RESTORE_SCRIPT, "sh", f"{volume}{_ARCHIVE_SUFFIX}", sha256, str(size)]
 
 
-def cmd_leftovers(volume: str) -> list[str]:
-    """Exit 0 nur, wenn im Volume weder alte Daten noch ein halbes Zurückspielen liegen; das Volume ist nur lesend eingebunden."""
-    if not VOLUME_NAME_RE.match(volume):
-        raise ValueError(f"Ungültiges Volume: {volume!r}")
-    return ["docker", "run", "--rm", *_HARDENING, "-v", f"{volume}:/data:ro", BACKUP_IMAGE, "sh", "-c", _LEFTOVER_SCRIPT]
+def cmd_settle(volume: str) -> list[str]:
+    """Läuft unter dem Namen des Hilfscontainers, also nie neben einem Zurückspielen; Exit MOVED_EXIT, wenn alte Daten beiseite liegen."""
+    return ["docker", "run", "--rm", "--name", helper_name(volume), *_HARDENING, "-v", f"{volume}:/data", BACKUP_IMAGE,
+            "sh", "-c", _SETTLE_SCRIPT]
+
+
+def _abort_reason(moved: list[str], unclear: list[str]) -> str | None:
+    parts = []
+    if moved:
+        parts.append(f"In {', '.join(moved)} hatte der Tausch der Daten schon begonnen: Die bisherigen Daten liegen ganz oder zum Teil "
+                     f"unter {ASIDE}, die aus der Sicherung unter {STAGING} oder schon an ihrem Platz.")
+    if unclear:
+        parts.append(f"Ob der Tausch in {', '.join(unclear)} schon begonnen hatte, ließ sich nicht prüfen; liegt dort {ASIDE}, hatte er "
+                     "begonnen.")
+    return f"{' '.join(parts)} Sieh im Volume nach, bevor du den Stack im Reiter Stacks wieder startest." if parts else None
 
 
 def cmd_helper_state(volume: str) -> list[str]:
@@ -344,7 +358,7 @@ class DockerStackRestoreExecutor:
         if result is None:
             return None
         if result.exit_code != 0:
-            return "absent" if "no such" in (result.stderr or "").lower() else None
+            return "absent" if "no such container" in (result.stderr or "").lower() else None
         return {"true": "running", "false": "stopped"}.get(result.stdout.strip())
 
     async def _helper_running(self, host: Any, volume: str) -> bool | None:
@@ -515,18 +529,52 @@ class DockerStackRestoreExecutor:
         return True, f" Die Dienste laufen wieder. Prüfung danach: {verdict.text}"
 
     async def _after_abort(self, host: Any, stack: Stack, services: list[str], volumes: list[str]) -> None:
-        if not services or not all([await self._helper_running(host, volume) is False for volume in volumes]):
-            return
-        # Der Hilfscontainer räumt sich selbst weg; ob er vor oder mitten im Tausch endete, zeigen nur die Ordner im Volume.
-        if all([await self._untouched(host, volume) for volume in volumes]):
-            await self._start_again(host, stack, services)
+        """Startet die Dienste wieder, wenn die Daten noch an ihrem Platz liegen; sonst bleibt der Stack gestoppt, mit Meldung."""
+        running = (f"Auf dem Server läuft das Zurückspielen vielleicht noch ({', '.join(helper_name(v) for v in volumes)}). Starte den "
+                   "Stack im Reiter Stacks erst, wenn der Container weg ist und die Daten stimmen.")
+        if not await self._helpers_gone(host, volumes):
+            why = running
         else:
-            log.warning("docker_restore_kept_stopped project=%s services=%s", stack.project, ",".join(services))
+            # Der Hilfscontainer räumt sich selbst weg; ob der Tausch schon begonnen hatte, zeigt nur der Ordner mit den alten Daten.
+            places = {volume: await self._settle(host, volume) for volume in volumes}
+            why = _abort_reason([v for v, place in places.items() if place is False], [v for v, place in places.items() if place is None])
+            if why is None:
+                if not services:
+                    return
+                # Ein verspätet angelegter Hilfscontainer könnte sonst unter den laufenden Diensten tauschen.
+                if not await self._helpers_gone(host, volumes):
+                    why = running
+                elif await self._start_again(host, stack, services) is None:
+                    return
+                else:
+                    # Die Meldung geht nach außen: kein Text vom Server, den Grund zeigt das Starten im Reiter Stacks.
+                    why = "Nach dem Abbruch scheiterte der Neustart. Starte den Stack im Reiter Stacks, dort siehst du bei einem Fehler den Grund."
+        log.warning("docker_restore_kept_stopped project=%s services=%s", stack.project, ",".join(services))
+        if not services:
+            held = "Die Dienste mit diesen Volumes waren schon gestoppt und bleiben es."
+        else:
+            held = f"Der Dienst {services[0]} bleibt gestoppt." if len(services) == 1 else f"Die Dienste {', '.join(services)} bleiben gestoppt."
+        await self._tell(host, stack, f"{held} {why}")
 
-    async def _untouched(self, host: Any, volume: str) -> bool:
-        """Liegen im Volume weder alte Daten noch ein halbes Zurückspielen? Im Zweifel nein."""
-        result, _ = await self._call(host, cmd_leftovers(volume), 120)
-        return result is not None and result.exit_code == 0
+    async def _helpers_gone(self, host: Any, volumes: list[str]) -> bool:
+        return all([await self._helper_running(host, volume) is False for volume in volumes])
+
+    async def _settle(self, host: Any, volume: str) -> bool | None:
+        """Liegen die Daten des Volumes noch an ihrem Platz (ein halb entpackter Ordner fällt dabei weg)? `None`, wenn unklar."""
+        result, _ = await self._call(host, cmd_settle(volume), 120)
+        if result is None:
+            return None
+        return {0: True, MOVED_EXIT: False}.get(result.exit_code)
+
+    async def _tell(self, host: Any, stack: Stack, text: str) -> None:
+        name = getattr(host, "display_name", None) or getattr(host, "name", None) or host.id
+        try:
+            await self._ctx.notify.send(Notification(
+                title=f"Zurückspielen in „{stack.project}“ auf {name} abgebrochen", body=text, severity=Severity.WARNING,
+                payload={"path": f"/ext/docker/matrix?host={host.id}", "tags": ["warning"]},
+            ))
+        except Exception:  # die Meldung ist ein Zusatz, der Grund steht schon im Log
+            log.exception("docker_restore_notify_failed project=%s", stack.project)
 
     async def _late_users(self, host: Any, stack: Stack, volumes: list[str]) -> str | None:
         others = await self._other_users(host, stack, volumes)

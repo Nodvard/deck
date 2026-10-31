@@ -341,7 +341,7 @@ export function SetupPage() {
                 className="mt-1 h-9 w-full rounded border border-white/20 bg-transparent px-1 py-1"
               />
             </label>
-            <p className="text-xs opacity-50">Logo, weitere Farben und Support-Link lassen sich später in den Einstellungen anpassen.</p>
+            <p className="text-xs opacity-50">Name, Untertitel und Farbe sowie Logo, weitere Farben und Support-Link kannst du jederzeit unter Einstellungen → Darstellung ändern.</p>
             {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
             <StepNav onBack={() => goTo("totp")}>
               <Button onClick={() => goTo("done")}>Überspringen</Button>

@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState } from "react";
 import { BetaBadge, BetaExplainer, isBeta } from "../../components/BetaBadge";
 import { Icon } from "../../components/Icon";
 import { api } from "../../lib/api";
+import { extensionErrorText } from "../../lib/extensionError";
 import { forEveryone, groupModules } from "../../lib/moduleGroups";
 import { Button, NoticeLine, Toggle, errorText, type Notice } from "../settings/ui";
 import { StepNav } from "./StepNav";
@@ -79,7 +80,7 @@ export function ModulesStep({ onBack, onNext }: { onBack: () => void; onNext: ()
       const result = await api.post<Partial<ExtensionRow> | undefined>(`/extensions/${ext.id}/${enable ? "enable" : "disable"}`);
       // Der Server antwortet auch dann mit 200, wenn das Modul beim Starten scheitert (state "error").
       if (enable && result?.state && result.state !== "enabled") {
-        setNotice({ kind: "error", text: `„${label}“ ließ sich nicht einschalten${result.last_error ? `: ${result.last_error}` : "."}` });
+        setNotice({ kind: "error", text: `„${label}“ ließ sich nicht einschalten${result.last_error ? `: ${extensionErrorText(result.last_error)}` : "."}` });
       }
     } catch (err) {
       setNotice({ kind: "error", text: errorText(err) });
@@ -141,7 +142,7 @@ export function ModulesStep({ onBack, onNext }: { onBack: () => void; onNext: ()
                               <AlertTriangle size={12} className="mt-0.5 flex-none" /> Braucht danach noch Angaben
                             </span>
                           )}
-                          {ext.state === "error" && ext.last_error && <span className="mt-1 block text-xs text-red-300">{ext.last_error}</span>}
+                          {ext.state === "error" && ext.last_error && <span className="mt-1 block text-xs text-red-300">{extensionErrorText(ext.last_error)}</span>}
                           {ext.state === "incompatible" && <span className="mt-1 block text-xs text-amber-200/90">Passt nicht zu dieser Version.</span>}
                         </span>
                         <Toggle

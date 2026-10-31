@@ -1,32 +1,32 @@
 #!/usr/bin/env python3
-"""Waechter fuer die Umbenennungen Lattice -> Nodvard Deck, `nexus-soc` -> `shield` und `service-matrix` -> `docker`.
+"""Wächter für die Umbenennungen Lattice -> Nodvard Deck, `nexus-soc` -> `shield` und `service-matrix` -> `docker`.
 
-Das Projekt hiess `lattice` (Python-Pakete `lattice` und `lattice_sdk`). Seit der Umbenennung heissen sie
-`nodvard_deck` und `nodvard_sdk`; die alten Namen leben nur noch als winzige Alias-Pakete (`backend/src/lattice/`,
-`sdk/python/lattice_sdk/`), damit Fremd-Extensions weiter laufen (`sdk/python/_nodvard_alias.py`). Dieser Waechter
-sorgt dafuer, dass im eigenen Code niemand versehentlich wieder den alten Namen benutzt.
+Das Projekt hieß `lattice` (Python-Pakete `lattice` und `lattice_sdk`). Seit der Umbenennung heißen sie
+`nodvard_deck` und `nodvard_sdk`; die alten Pakete gibt es nicht mehr, eine Erweiterung, die sie noch importiert,
+bekommt einen klaren Grund (`backend/src/nodvard_deck/ext/old_names.py`). Dieser Wächter sorgt dafür, dass im eigenen
+Code niemand versehentlich wieder den alten Namen benutzt.
 
     python scripts/check_legacy_names.py          # Exit 0 = sauber, 1 = Fund
-    python scripts/check_legacy_names.py --list   # alle Funde samt Datei und Zeile, auch die erlaubten (Uebersicht)
+    python scripts/check_legacy_names.py --list   # alle Funde samt Datei und Zeile, auch die erlaubten (Übersicht)
 
-**Regel 1 (hart; die Positivliste gilt hier nicht):** kein `import lattice`/`from lattice ...` und kein `lattice_sdk`-Import, auch nicht
-als Text in `patch("lattice....")`, `python -m lattice....`, `python -c "import lattice"`, `uvicorn lattice.main:app`,
-`getLogger("lattice")` oder `import_module(f"lattice.{name}")`, und die alten Klassennamen
-`LatticeExtension`/`LatticeError` stehen nirgends (ausser in den Alias-Dateien und ihren Tests). Dasselbe gilt fuer die alten
-Paketnamen der eingebauten Extensions (`lattice_ext_proxmox` heisst jetzt `nodvard_deck_ext_proxmox`): Sie stehen nur in den
-Kompatibilitaetstests (`test_shim_*`) und in der Doku; nur der nackte Praefix `"lattice_ext_"` darf in den Tests stehen
-(Positivliste, fuer das Aufraeumen von `sys.modules`).
+**Regel 1 (hart; die Positivliste gilt hier nicht):** kein `import lattice`/`from lattice ...` und kein
+`lattice_sdk`-Import, auch nicht als Text in `patch("lattice....")`, `python -m lattice....`,
+`python -c "import lattice"`, `uvicorn lattice.main:app`, `getLogger("lattice")` oder
+`import_module(f"lattice.{name}")`, und die alten Klassennamen `LatticeExtension`/`LatticeError` stehen nirgends (außer
+in `old_names.py` und seinem Test). Dasselbe gilt für die alten Paketnamen der eingebauten Extensions
+(`lattice_ext_proxmox` heißt jetzt `nodvard_deck_ext_proxmox`): Sie stehen nur in der Doku; nur der nackte Präfix
+`"lattice_ext_"` darf in den Tests stehen (Positivliste, für das Aufräumen von `sys.modules`).
 
 **Regel 2 (Positivliste):** jedes andere Vorkommen von `lattice` bzw. `LATTICE` muss zu einem Eintrag von `KEPT_NAMES`
-passen -- den Namen, die **bewusst bleiben** (mit Begruendung dort). Alles andere ist ein Fund. So faellt auf, wenn
-jemand einen neuen alten Namen einfuehrt. Wird ein Name spaeter umbenannt (die Eintraege "kommt in PR n" sagen, wann),
-fliegt sein Eintrag hier raus, und der Waechter schuetzt das Ergebnis.
+passen -- den Namen, die **bewusst bleiben** (mit Begründung dort). Alles andere ist ein Fund. So fällt auf, wenn
+jemand einen neuen alten Namen einführt. Wird ein Name später umbenannt, fliegt sein Eintrag hier raus, und der
+Wächter schützt das Ergebnis.
 
-Nicht geprueft: Markdown (Doku wird in einem eigenen Schritt umgestellt), `docs/`, `reference/`, `.github/`, gebaute
-Bundles (`extensions/*/frontend/dist/`), Lock-Dateien, veroeffentlichte Aenderungsprotokolle (`changelog/versions/`; was
-in einer veroeffentlichten Version stand, wird nicht umgeschrieben) und die Alias-Pakete samt ihrer Tests (`test_shim_*`).
-Fliesstext "Lattice" mit grossem L (Produktname in Kommentaren) gehoert zur Umbenennung der sichtbaren Namen, nicht
-hierher: geprueft werden nur die technischen Schreibweisen `lattice` und `LATTICE`.
+Nicht geprüft: Markdown (Doku wird in einem eigenen Schritt umgestellt), `docs/`, `reference/`, `.github/`, gebaute
+Bundles (`extensions/*/frontend/dist/`), Lock-Dateien und veröffentlichte Änderungsprotokolle
+(`changelog/versions/`; was in einer veröffentlichten Version stand, wird nicht umgeschrieben).
+Fließtext "Lattice" mit großem L (Produktname in Kommentaren) gehört zur Umbenennung der sichtbaren Namen, nicht
+hierher: geprüft werden nur die technischen Schreibweisen `lattice` und `LATTICE`.
 
 **Regel 3 (alte Shield-Kennung):** Nodvard Shield hiess bis 0.6 technisch `nexus-soc` (Paket `nodvard_deck_ext_nexus_soc`,
 Aktionsarten `nexus_soc.*`); seit 0.7 heisst die Kennung `shield`. Zwei harte Verbote ohne Positivliste: das Paket
@@ -61,22 +61,17 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# --------------------------------------------------------------------------- was nicht geprueft wird
+# --------------------------------------------------------------------------- was nicht geprüft wird
 
 EXEMPT_PREFIXES = (
-    # Die Alias-Pakete selbst: sie TRAGEN den alten Namen.
-    "backend/src/lattice/",
-    "sdk/python/lattice_sdk/",
-    "sdk/python/_nodvard_alias.py",
-    # Dateien, die die Alias-Namen DEFINIEREN bzw. die Alias-Pakete in die Distribution aufnehmen.
-    "sdk/python/nodvard_sdk/__init__.py",  # `LatticeExtension`/`LatticeError` als Aliase (Modul-__getattr__)
-    "sdk/python/nodvard_sdk/_legacy.py",
-    "sdk/python/nodvard_sdk/errors.py",
-    "sdk/python/nodvard_sdk/extension.py",
-    "sdk/python/pyproject.toml",  # packages.find: lattice_sdk*
-    "backend/pyproject.toml",  # packages.find: lattice*
-    "backend/tests/contract/contract_lib.py",  # SDK_PACKAGES: der Vertrags-Schnappschuss prueft auch den alten Importnamen
-    # Dieser Waechter und sein Test (sie nennen die alten Namen als Muster und Beispiele).
+    # Nennen die alten Paket- und Klassennamen und die alte Entry-Point-Gruppe, damit Erweiterungen damit einen
+    # klaren Grund bekommen.
+    "backend/src/nodvard_deck/ext/old_names.py",
+    "backend/tests/test_ext_old_package_names.py",
+    "backend/tests/test_wheel.py",  # prüft, dass die alten Pakete nicht mehr im Wheel stecken
+    # Prüft, dass die alten Namen im Frontend nicht mehr wirken.
+    "frontend/src/lib/oldNames.test.ts",
+    # Dieser Wächter und sein Test (sie nennen die alten Namen als Muster und Beispiele).
     "scripts/check_legacy_names.py",
     "backend/tests/test_legacy_names.py",
     # Doku und Fremdmaterial.
@@ -84,14 +79,12 @@ EXEMPT_PREFIXES = (
     "reference/",
     ".github/",
     "THIRD_PARTY_LICENSES",
-    # Veroeffentlichte Aenderungsprotokolle: was in einer Version stand, bleibt stehen.
+    # Veröffentlichte Änderungsprotokolle: was in einer Version stand, bleibt stehen.
     "backend/src/nodvard_deck/changelog/versions/",
-    # Der Vertrags-Schnappschuss nennt `lattice_sdk.*` absichtlich: der alte Importname muss dieselbe Oberflaeche
-    # liefern, und ein Entfernen faellt dort als Bruch auf (backend/tests/contract/contract_lib.py).
-    "backend/tests/contract/sdk_public.json",
+    # Die Ausnahmeliste der Vertragsbrüche nennt die entfernten alten Namen.
+    "backend/tests/contract/breaking_exceptions.toml",
 )
 EXEMPT_SUFFIXES = (".md", ".lock", "package-lock.json", ".png", ".ico", ".svg", ".jpg", ".woff2", ".pdf", ".gz", ".tar", ".whl", ".pyc")
-EXEMPT_FILE_RE = re.compile(r"(^|/)test_shim_[^/]*\.py$")  # Tests der Alias-Pakete
 EXEMPT_DIST_RE = re.compile(r"^extensions/[^/]+/frontend/dist/")  # gebaute Bundles (kommen aus dem Quellcode)
 
 
@@ -99,7 +92,6 @@ def is_exempt(rel: str) -> bool:
     return (
         rel.startswith(EXEMPT_PREFIXES)
         or rel.endswith(EXEMPT_SUFFIXES)
-        or bool(EXEMPT_FILE_RE.search(rel))
         or bool(EXEMPT_DIST_RE.match(rel))
     )
 
@@ -168,7 +160,8 @@ KEPT_NAMES: tuple[Kept, ...] = (
     # --- Umgebungsvariablen -----------------------------------------------------------------------------------------
     _k("Umgebungsvariablen", r"LATTICE_\w+|\bLATTICE_",
        "`LATTICE_*` sind die alten Namen der Einstellungen (Rueckfall: `config.py`, deploy_pi.sh, Compose). Neue Namen: "
-       "`NODVARD_DECK_*`; die alten gelten weiter, bis eine angekuendigte Major-Version sie entfernt."),
+       "`NODVARD_DECK_*`; die alten gelten nur noch übergangsweise (spätestens bis 1.0), mit Hinweis im Protokoll "
+       "und auf der Startseite."),
     _k("Umgebungsvariablen (klein geschrieben)", r"\blattice_env\b",
        "Test: Windows liest Umgebungsvariablen ohne Gross-/Kleinschreibung (`lattice_env` muss wie `LATTICE_ENV` wirken)."),
     # --- Cookie -----------------------------------------------------------------------------------------------------
@@ -178,21 +171,6 @@ KEPT_NAMES: tuple[Kept, ...] = (
        "niemanden ab, und nach einem Rollback aufs alte Image (es kennt nur `lattice_refresh`) bleibt man angemeldet. Faellt in "
        "einem Aufraeum-PR weg, fruehestens 30 Tage (Laufzeit des Refresh-Tokens) nach dem Deploy und wenn kein Rollback aufs "
        "alte Image mehr noetig ist."),
-    # --- Frontend-Vertrag (PR 5) ------------------------------------------------------------------------------------
-    _k("Frontend: globales Objekt", r"__lattice\b|\bwindow\.lattice\b|KEY_LATTICE\b",
-       "`window.__lattice` ist der Vertrag zwischen Shell und Extension-Bundles; beide Namen laufen parallel (Teil B, PR 5)."),
-    _k("Frontend: Ereignis", r"lattice:(?:navigate|chunk-reload-at|timezone|\.\.\.)(?![\w-])|[\"']lattice:[\"']",
-       "Browser-Ereignisse und sessionStorage-Schluessel des Frontends (Teil B, PR 5); dazu der alte Praefix `lattice:` "
-       "selbst (`deckGlobal.ts`), unter dem Shell und Kit im Uebergang weiter melden bzw. hoeren."),
-    _k("Frontend: Speicherschluessel", r"lattice\.(?:changelogSeen|console\.layout)\b",
-       "localStorage-Schluessel; `migrateLegacyStorage()` kopiert sie in Teil B, PR 5."),
-    _k("Frontend: CSS", r"lattice-(?:focus|glow|grid|pulse)\b",
-       "CSS-Klassen; `.lattice-focus` ist Teil des Vertrags mit den Bundles (Teil B, PR 5)."),
-    _k("Frontend: Shim-URL", r"lattice-shim\b",
-       "URL `/lattice-shim/*.js` (Import-Map fuer die Bundles) bleibt als URL bestehen (Teil B, PR 5)."),
-    _k("Frontend: Paketname und Typ", r"lattice-frontend\b|@lattice/extension-sdk\b|\bLatticeTokenRefreshResult\b|\blattice\.(?:refreshAccessToken(?:Result)?|getAccessToken|navigateEvents|hasPermission|confirmDialog|promptDialog|timezone|fetch|React\w*)\b",
-       "Das Shell-Objekt heisst im Frontend-Code lokal `lattice`, der TypeScript-Typ `LatticeTokenRefreshResult`, das npm-Paket "
-       "`lattice-frontend` (Teil B, PR 5)."),
     # --- Namen auf anderen Rechnern und im Container ----------------------------------------------------------------
     _k("Container-Benutzer und alter Schluesselkommentar und Proxmox-Namen", r"lattice:lattice\b|lattice@|!lattice\b|lattice-\{",
        "Der Linux-Benutzer `lattice` (UID 1000) im Container bleibt. Auf den verwalteten Servern heissen aeltere Zugaenge weiter "
@@ -200,26 +178,25 @@ KEPT_NAMES: tuple[Kept, ...] = (
        "der Einrichtungsbefehl erkennt alte Eintraege aber an Art und Schluesseltext, nicht am Kommentar (die Tests pruefen "
        "genau das mit `lattice@...`). Dazu das Proxmox-Token `...!lattice` und der Proxmox-Snapshot `lattice-<Zeitstempel>`: "
        "sie stehen auf fremden Rechnern, dort aendern wir nichts."),
-    _k("Alte sudo-Regel auf verwalteten Servern", r"/etc/sudoers\.d/lattice[-.]|lattice[-.]\$U|lattice-<Benutzer>|\blattice-lattice\b|\"lattice-\"|sudo-Regel lattice-[a-z_][a-z0-9_-]*",
+    _k("Alte sudo-Regel auf verwalteten Servern", r"/etc/sudoers\.d/lattice[-.]|lattice[-.]\$U|lattice-<Benutzer>|\blattice-(?:lattice|deck)\b|\"lattice-\"|sudo-Regel lattice-[a-z_][a-z0-9_-]*",
        "Neue Einrichtungen legen `/etc/sudoers.d/nodvard-<Benutzer>` an. Die alte Regel `/etc/sudoers.d/lattice-<Benutzer>` liegt auf "
        "bestehenden Servern und bleibt dort gueltig; der Einrichtungsbefehl entfernt sie nur, wenn sie genau der Regel entspricht, "
        "die Nodvard Deck frueher selbst angelegt hat, sonst bleibt sie mit Hinweis stehen. Deshalb nennen der Befehl (`$O`) und seine "
        "Tests den alten Dateinamen weiter (`lattice-lattice` = alte Regel fuer den Benutzer `lattice`). Nur dort: neuer Code "
-       "darf keine Regel unter dem alten Namen anlegen. Der Datei-Wächter von Nodvard Shield (`intrusion.py`) kennt den Namen, "
+       "darf keine Regel unter dem alten Namen anlegen. „Volle sudo-Regel entfernen“ löscht sie unter derselben Bedingung "
+       "(`lattice-deck` = alte Regel fuer den Benutzer `deck` in diesen Tests). Der Datei-Wächter von Nodvard Shield (`intrusion.py`) kennt den Namen, "
        "damit er das Wegräumen der alten Regel durch die eigene Einrichtung nicht als Einbruch meldet.",
        paths=r"^(?:backend/(?:src/nodvard_deck/services/host_setup\.py|tests/test_host_setup_script\.py|tests/test_ext_shield_guard\.py"
-             r"|tests/test_host_setup_with_password\.py|tests/test_host_setup_helpers_only\.py)"
+             r"|tests/test_host_setup_with_password\.py|tests/test_host_setup_helpers_only\.py"
+             r"|tests/test_host_setup_drop_full_rule\.py|tests/test_host_check_helpers\.py)"
              r"|extensions/shield/src/nodvard_deck_ext_shield/intrusion\.py)$"),
     _k("Systemd-Einheit des alten Dienstes", r"lattice(?:-backend)?\.service\b",
        "Die alte Dienst-Einheit `lattice.service` bleibt in der Sperrliste der system-Extension (das Dashboard darf sich nicht "
        "selbst anhalten, auch nicht unter dem alten Namen)."),
-    _k("Entry-Point-Gruppe", r"lattice\.extensions\b",
-       "Die alte Entry-Point-Gruppe `lattice.extensions` wird weiter gelesen (neu: `nodvard_deck.extensions`); Fremd-Extensions "
-       "tragen sie noch ein."),
     _k("Namen auf verwalteten Servern", r"lattice-(?:rollback|image-updates|upgrade-|backup\w*|sudo|pi-load\w*|pi-loadtest\w*|tools|test-|ext-bundle-check-)\w*|lattice_ed25519\w*|\.lattice-export|lattice-public|lattice-name|lattice-hub|lattice-previous|lattice-eintr\w*|\ba-lattice\b|\bmylattice\b|x-lattice-file-entry",
        "Namen auf fremden Hosts (Rollback-Tags, Zustandsordner der Image-Updates, systemd-Einheiten `lattice-upgrade-*`) und "
        "Skript-Ordner/-Dateien; Fortsetzung und Rollback haengen daran."),
-    _k("Deploy-Namen", r"(?:deploy-)?lattice-(?:1|deploy-test)\b|lattice-deploy-test\b|lattice\.tar\b|\blattice:(?:latest|previous|pi-[\w-]+|dev|1(?:\.2)?|timezone|\*)",
+    _k("Deploy-Namen", r"(?:deploy-)?lattice-(?:1|deploy-test)\b|lattice-deploy-test\b|lattice\.tar\b|\blattice:(?:latest|previous|pi-[\w-]+|dev|1(?:\.2)?|\*)",
        "Der alte Container `deploy-lattice-1`, die alten Image-Tags `lattice:latest`/`lattice:previous` (gestoppt bzw. "
        "gesichert, bis der Aufraeum-Schritt sie entfernt) und der Zielordner `~/lattice-deploy-test` (`DEPLOY_ROOT`) bleiben."),
     _k("Alter Image-Name", r"/lattice\b(?![\w.-])|\blattice\b(?=/)",
@@ -553,7 +530,7 @@ def main(argv: list[str] | None = None) -> int:
     shield_findings = [f for f in findings if f.rule.startswith("shield-")]
     docker_findings = [f for f in findings if f.rule.startswith("docker-")]
     if not findings:
-        print("OK: Der alte Name `lattice` kommt ausserhalb der Alias-Pakete und der Positivliste nicht vor.")
+        print("OK: Der alte Name `lattice` kommt ausserhalb der Positivliste nicht vor.")
         print("OK: Die alte Shield-Kennung `nexus-soc` kommt ausserhalb der Positivliste und der Alias-Tests nicht vor.")
         print("OK: Das alte Paket und die alten Adressen der Docker-Kennung `service-matrix` kommen außerhalb der Alias-Tests nicht vor.")
         return 0

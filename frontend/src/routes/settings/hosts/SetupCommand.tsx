@@ -1,8 +1,8 @@
 /**
  * Der Einrichtungsbefehl, den man auf dem Server einfügt: Benutzer anlegen, öffentlichen Schlüssel eintragen (der
  * private verlässt den Tresor nie), auf Wunsch Gruppe `docker` und sudo ohne Passwort. Die Erweiterungen belegen die
- * Haken vor. Reichen die Hilfsskripte der Module, erlaubt sudo nur sie; die volle Regel gibt es dann unter „Erweitert“.
- * „Mit Passwort einrichten“ führt denselben Befehl selbst aus (`PasswordSetup`).
+ * Haken vor. Reichen die Hilfsskripte der Module, erlaubt sudo nur sie; die volle Regel gibt es dann unter „Erweitert“,
+ * ebenso das Entfernen einer alten. „Mit Passwort einrichten“ führt denselben Befehl selbst aus (`PasswordSetup`).
  */
 import { useMemo, useRef, useState } from "react";
 
@@ -23,10 +23,12 @@ const WAY_LABEL: Record<Way, string> = {
 };
 
 export function SetupCommand({
-  host, credential, onChecked,
+  host, credential, dropFullRule = false, onChecked,
 }: {
   host: HostOut;
   credential: CredentialOut;
+  /** „Volle sudo-Regel entfernen“ schon angekreuzt (Link aus der Übersicht). */
+  dropFullRule?: boolean;
   /** Ergebnis der Prüfung nach „Mit Passwort einrichten“. */
   onChecked?: (result: CheckResult) => void;
 }) {
@@ -50,12 +52,15 @@ export function SetupCommand({
   // Vorbelegung: alles an, was eine Erweiterung verlangt. `null` = noch nicht angefasst.
   const [sudoChoice, setSudoChoice] = useState<boolean | null>(null);
   const [fullChoice, setFullChoice] = useState(false);
+  const [dropChoice, setDropChoice] = useState(dropFullRule);
   const [groupsOff, setGroupsOff] = useState<string[]>([]);
   const sudo = !isRoot && (sudoChoice ?? rootReasons.length > 0);
   const chosenGroups = isRoot ? [] : groups.map(([g]) => g).filter((g) => !groupsOff.includes(g));
 
   const ready = requirements.isSuccess || requirements.isError;
-  const setup = useSetup(host.id, credential.id, { sudo, fullSudo: fullChoice, groups: chosenGroups, enabled: ready });
+  const setup = useSetup(host.id, credential.id, {
+    sudo, fullSudo: fullChoice, dropFullRule: dropChoice, groups: chosenGroups, enabled: ready,
+  });
   // Welche Regel kommt, steht erst mit dem Befehl fest; vorher keinen der Hinweise dazu zeigen.
   const ruleKnown = sudo && setup.data !== undefined;
   // Braucht hier kein Modul root, richtet der Befehl trotz Haken kein sudo ein; nur „Volle Rechte“ ändert das.
@@ -65,6 +70,8 @@ export function SetupCommand({
   const offersHelpers = (setup.data?.helpers ?? []).length > 0;
   // Ein Modul braucht root ohne Hilfsskript: Dann gehört die volle Regel dazu, auch ohne Häkchen.
   const fullForced = sudo && !fullChoice && setup.data?.full_sudo === true;
+  // Entfernen geht nur, wo die Regeln der Hilfsskripte reichen und die volle Regel nicht gewollt ist.
+  const canDrop = sudo && !fullChoice && !fullForced && offersHelpers && !host.sudo_full_wanted;
 
   const area = useRef<HTMLTextAreaElement>(null);
   const [copyFailed, setCopyFailed] = useState(false);
@@ -118,8 +125,8 @@ export function SetupCommand({
               Skript darf, steht unter „Was macht der Befehl?“.
             </p>
           ))}
-          {sudo && (fullChoice || offersHelpers || noRootNeeded) && (
-            <details className="text-sm" data-testid="setup-advanced">
+          {sudo && (fullChoice || dropChoice || offersHelpers || noRootNeeded) && (
+            <details className="text-sm" data-testid="setup-advanced" open={dropFullRule || undefined}>
               <summary className="cursor-pointer text-xs text-white/55">Erweitert</summary>
               <label className="mt-2 flex cursor-pointer items-start gap-2.5">
                 <input
@@ -135,6 +142,21 @@ export function SetupCommand({
                   </span>
                 </span>
               </label>
+              {(canDrop || dropChoice) && !fullChoice && (
+                <label className="mt-2 flex cursor-pointer items-start gap-2.5">
+                  <input
+                    type="checkbox" className={CHECKBOX} checked={dropChoice} onChange={(e) => setDropChoice(e.target.checked)}
+                  />
+                  <span>
+                    Volle sudo-Regel entfernen
+                    <span className="text-white/50">
+                      {" "}(nur die von Nodvard Deck; geht danach ein Hilfsskript nicht, kommt sie sofort zurück. Danach
+                      gehen eigene Befehle mit sudo über Nodvard Deck nicht mehr, und nach einem Update mit neuen
+                      Hilfsskripten haben die Module erst nach dem nächsten Einrichten wieder root.)
+                    </span>
+                  </span>
+                </label>
+              )}
             </details>
           )}
         </div>
@@ -158,7 +180,8 @@ export function SetupCommand({
             // Bleibt stehen, während der Befehl nach einem Haken neu geladen wird (sonst wären die Eingaben weg). Die
             // Haken gelten hier genauso; das Backend baut daraus denselben Befehl wie oben.
             <PasswordSetup
-              host={host} credential={credential} sudo={sudo} fullSudo={fullChoice} groups={chosenGroups} ready={ready}
+              host={host} credential={credential} sudo={sudo} fullSudo={fullChoice} dropFullRule={dropChoice}
+              groups={chosenGroups} ready={ready}
               knownNotes={setup.data?.notes ?? []} onChecked={onChecked}
             />
           ) : loading ? (

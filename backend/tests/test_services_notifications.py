@@ -5,18 +5,15 @@ Wartungsfenster-Unterdrueckung."""
 from __future__ import annotations
 
 import sys
-from datetime import timedelta
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pytest
 from nodvard_sdk import Notification as SdkNotification
 from nodvard_sdk.capabilities import NotificationChannel
 from nodvard_sdk.errors import NotificationNotDelivered
 from sqlalchemy import select
+from window_helpers import window
 
-from nodvard_deck.config import LOCAL_TIMEZONE
-from nodvard_deck.db import utcnow
 from nodvard_deck.ext.runtime import get_extension_runtime, reset_extension_runtime
 from nodvard_deck.models import NotificationDelivery
 from nodvard_deck.services import notifications as notifications_service
@@ -130,18 +127,14 @@ async def test_raise_on_failure_only_when_no_channel_delivered(db_session):
 
 
 @pytest.mark.asyncio
-async def test_raise_on_failure_is_quiet_without_channels_and_in_maintenance_windows(db_session):
+async def test_raise_on_failure_is_quiet_without_channels_and_in_maintenance_windows(db_session, window_clock):
     # Kein Kanal eingerichtet: es gibt nichts, was ein erneuter Versuch bessern koennte.
     row = await notifications_service.send(db_session, title="T", body="B", raise_on_failure=True)
     assert row.id is not None
 
     # Wartungsfenster: absichtlich nicht zugestellt (suppressed) ist kein Fehler.
     _provide(_RecordingChannel("chan-a", fail=True))
-    start = (utcnow() - timedelta(minutes=5)).astimezone(ZoneInfo(LOCAL_TIMEZONE))
-    await settings_service.set_global(
-        db_session, "maintenance.windows",
-        [{"cron": f"{start.minute} {start.hour} * * *", "duration_minutes": 60, "host_ids": "all"}],
-    )
+    await settings_service.set_global(db_session, "maintenance.windows", [window()])
     row = await notifications_service.send(
         db_session, title="Host wieder da", body="B", payload={"host_id": "host-1"}, raise_on_failure=True
     )
@@ -223,16 +216,11 @@ async def test_notification_with_no_channels_still_creates_the_row(db_session):
 
 
 @pytest.mark.asyncio
-async def test_maintenance_window_suppresses_delivery_but_keeps_the_row_visible(db_session):
+async def test_maintenance_window_suppresses_delivery_but_keeps_the_row_visible(db_session, window_clock):
     channel = _RecordingChannel("chan-a")
     _provide(channel)
 
-    # Wartungsfenster meinen Ortszeit, darum Cron aus der Berliner Uhrzeit.
-    start = (utcnow() - timedelta(minutes=5)).astimezone(ZoneInfo(LOCAL_TIMEZONE))
-    await settings_service.set_global(
-        db_session, "maintenance.windows",
-        [{"cron": f"{start.minute} {start.hour} * * *", "duration_minutes": 60, "host_ids": "all"}],
-    )
+    await settings_service.set_global(db_session, "maintenance.windows", [window()])
 
     row = await notifications_service.send(
         db_session, title="Host wieder da", body="B", payload={"host_id": "host-1"}
@@ -248,15 +236,11 @@ async def test_maintenance_window_suppresses_delivery_but_keeps_the_row_visible(
 
 
 async def _running_window(db_session, host_ids) -> None:
-    start = (utcnow() - timedelta(minutes=5)).astimezone(ZoneInfo(LOCAL_TIMEZONE))
-    await settings_service.set_global(
-        db_session, "maintenance.windows",
-        [{"cron": f"{start.minute} {start.hour} * * *", "duration_minutes": 60, "host_ids": host_ids}],
-    )
+    await settings_service.set_global(db_session, "maintenance.windows", [window(host_ids)])
 
 
 @pytest.mark.asyncio
-async def test_collective_notification_is_suppressed_only_if_all_its_hosts_are_in_the_window(db_session):
+async def test_collective_notification_is_suppressed_only_if_all_its_hosts_are_in_the_window(db_session, window_clock):
     """Sammelmeldung (`payload.host_ids`): Fenster fuer beide Server -> still, fehlt einer
     -> geht raus. Der Verlaufseintrag bleibt in beiden Faellen."""
     channel = _RecordingChannel("chan-a")
@@ -283,7 +267,7 @@ async def test_collective_notification_is_suppressed_only_if_all_its_hosts_are_i
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("host_ids", [[], "host-1", ["host-1", 7], ["host-1", ""], {"host-1": True}])
-async def test_unusable_host_list_is_never_suppressed(db_session, host_ids):
+async def test_unusable_host_list_is_never_suppressed(db_session, host_ids, window_clock):
     """Eine leere oder kaputte Liste (auch mit nur einem schlechten Eintrag) macht die
     Meldung hoerbar, statt sie wegen der brauchbaren Eintraege still zu schalten."""
     channel = _RecordingChannel("chan-a")
@@ -301,7 +285,7 @@ async def _notification_count(db_session) -> int:
 
 
 @pytest.mark.asyncio
-async def test_would_suppress_follows_the_send_rule_and_creates_nothing(db_session):
+async def test_would_suppress_follows_the_send_rule_and_creates_nothing(db_session, window_clock):
     """Nachholen nach dem Wartungsfenster: ein Waechter fragt bei jeder Pruefung, ob das
     Fenster noch laeuft -- das darf keinen (stummen) Verlaufseintrag erzeugen."""
     assert await notifications_service.would_suppress(db_session, {"host_id": "host-1"}) is False
@@ -324,7 +308,7 @@ async def test_would_suppress_follows_the_send_rule_and_creates_nothing(db_sessi
 
 
 @pytest.mark.asyncio
-async def test_would_suppress_and_send_treat_a_tuple_of_hosts_alike(db_session):
+async def test_would_suppress_and_send_treat_a_tuple_of_hosts_alike(db_session, window_clock):
     """`would_suppress(host_ids=(...))` und `send()` mit demselben Tupel im Payload
     folgen derselben Regel -- sonst sagte die Frage "still", die Meldung kaeme aber laut."""
     from nodvard_deck.ext.context import NotifyHandle, _PermissionChecker
@@ -341,7 +325,7 @@ async def test_would_suppress_and_send_treat_a_tuple_of_hosts_alike(db_session):
 
 
 @pytest.mark.asyncio
-async def test_deliver_reports_whether_the_window_suppressed_the_push(db_session):
+async def test_deliver_reports_whether_the_window_suppressed_the_push(db_session, window_clock):
     channel = _RecordingChannel("chan-a")
     _provide(channel)
     await _running_window(db_session, ["host-1"])
@@ -358,7 +342,7 @@ async def test_deliver_reports_whether_the_window_suppressed_the_push(db_session
 
 
 @pytest.mark.asyncio
-async def test_notify_handle_returns_the_result_and_answers_would_suppress(db_session):
+async def test_notify_handle_returns_the_result_and_answers_would_suppress(db_session, window_clock):
     """SDK-Erweiterung (docs/02 §2): `send()` sagt, ob ein Fenster den Push unterdrueckt
     hat; `would_suppress()` fragt dieselbe Regel ab, ohne etwas anzulegen."""
     from nodvard_sdk import NotifyResult
@@ -605,7 +589,7 @@ async def test_channel_writing_via_own_session_is_not_blocked_by_the_notificatio
 
 
 @pytest.mark.asyncio
-async def test_notify_result_says_whether_a_channel_really_delivered(db_session):
+async def test_notify_result_says_whether_a_channel_really_delivered(db_session, window_clock):
     """`NotifyResult.delivered`: wahr nur, wenn mindestens ein Kanal zugestellt hat. Ohne Kanal,
     mit nur ausgefallenen Kanälen und im Wartungsfenster ist es falsch -- damit eine Seite nicht
     "gesendet" meldet, obwohl nichts aufs Handy geht."""

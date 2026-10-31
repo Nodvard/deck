@@ -53,6 +53,9 @@ DEFAULT_KEEP = 7
 KEEP_MIN, KEEP_MAX = 1, 60
 _SPACE_MARGIN = 32 * 1024 * 1024
 
+SEE_BACKUP_CARD = "Wie du das behebst, steht unter Einstellungen → System bei „Sicherung“."
+"""Nächster Schritt hinter dem kurzen Grund, wo die ausführliche Hilfe zum Zielordner nicht hingehört."""
+
 
 class BackupBusy(BackupError):
     def __init__(self, kind: str | None = None) -> None:
@@ -451,6 +454,9 @@ async def run_backup(
             deleted = await asyncio.to_thread(store.rotate, target, cfg.keep)
         except Exception as exc:
             await _record_failure(exc, trigger=trigger, user_id=user_id)
+            if isinstance(exc, store.TargetNotAllowed):
+                # Der Job-Lauf (Fehler, Ausgabe, Kanal `runs.<id>`) ist für Viewer lesbar: dort nur der kurze Grund.
+                raise store.TargetNotAllowed(f"{exc.summary} {SEE_BACKUP_CARD}") from None
             raise
         warnings = link_warnings(skipped)
         result = {"name": name, "size": size, "deleted": deleted, "warnings": warnings}
@@ -482,6 +488,10 @@ def _error_text(exc: Exception) -> str:
 
 async def _record_failure(exc: Exception, *, trigger: str, user_id: str | None) -> None:
     text = _error_text(exc)
+    # Protokoll und Meldung lesen auch Viewer, eine Meldung geht per ntfy nach draußen: dort nur der kurze Grund.
+    # Den ganzen Hinweis zeigt die Übersicht der Sicherungen (`last_run`).
+    reason = exc.summary if isinstance(exc, store.TargetNotAllowed) else text
+    body = f"{reason} {SEE_BACKUP_CARD}" if isinstance(exc, store.TargetNotAllowed) else reason
     logger.warning("backup_failed trigger=%s error=%s", trigger, type(exc).__name__, exc_info=not isinstance(exc, BackupError))
     with contextlib.suppress(Exception):
         async with session_scope() as session:
@@ -492,7 +502,7 @@ async def _record_failure(exc: Exception, *, trigger: str, user_id: str | None) 
             )
             await audit_service.log(
                 session, actor_type="user" if user_id else "system", actor_id=user_id or "backup",
-                action="system.backup.failed", outcome="failure", target_type="backup", reason=text,
+                action="system.backup.failed", outcome="failure", target_type="backup", reason=reason,
                 detail={"trigger": trigger},
             )
     from . import notifications as notifications_service
@@ -500,7 +510,7 @@ async def _record_failure(exc: Exception, *, trigger: str, user_id: str | None) 
     with contextlib.suppress(Exception):
         async with session_scope() as session:
             await notifications_service.send(
-                session, title="Sicherung fehlgeschlagen", body=text, severity="warning",
+                session, title="Sicherung fehlgeschlagen", body=body, severity="warning",
                 payload={"path": "/settings/system", "tags": ["floppy_disk"]},
             )
 

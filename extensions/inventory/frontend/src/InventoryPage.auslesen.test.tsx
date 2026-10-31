@@ -35,7 +35,7 @@ beforeEach(() => {
   items = [{ id: "i-old", name: "Alte Platte", serial_number: "wx1", product_url: "https://example.com/switch", images: [], quantity: 1 }];
   itemsFail = false;
   permissions = new Set(["hosts.execute"]);
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn().mockResolvedValue(true), promptDialog: vi.fn(),
     hasPermission: vi.fn((p: string) => permissions.has(p) || p.startsWith("inventory.")),

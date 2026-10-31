@@ -14,10 +14,12 @@
      nach jedem Vorgang sofort), und einen abgelaufenen Rückweg-Slot aufräumen (`Flow.drop_expired_slot`).
   4. Kanal lesen (`Channel.poll`), Anforderungen prüfen und ausführen, Status schreiben.
 
-* **Eine Anforderung** durchläuft: Format (`policy.parse_request`), die Grenzen aus `/state` (`StateStore.check`:
-  Wiederholung derselben ID, Sperre nach kaputtem Zustand, eine Aktion je 10 min, 24 h gesperrte Version). Dann wird die
-  ID gemerkt und gespeichert (auch für abgelehnte), dann: kein laufender Vorgang, eine frische Vorprüfung (höchstens
-  eine je Runde), Tag und Version bzw. der Rückweg-Slot. Erst dann führt `Flow.run` sie aus (Update oder Rückweg).
+* **Eine Anforderung** durchläuft: Format und bei `v: 2` die Freigabe ohne die Signatur (`policy.read_request`), die
+  Grenzen aus `/state` (`StateStore.check`: Wiederholung derselben ID, Sperre nach kaputtem Zustand, eine Aktion je
+  10 min, 24 h gesperrte Version), bei `v: 2` die Signatur (`policy.check_signature`, höchstens eine je Runde, weitere
+  bekommen `busy`). Dann wird die ID gemerkt und gespeichert (auch für abgelehnte), dann: kein laufender Vorgang, eine
+  frische Vorprüfung (höchstens eine je Runde), Tag und Version bzw. der Rückweg-Slot. Erst dann führt `Flow.run` sie
+  aus (Update oder Rückweg).
   **Höchstens ein Ablauf je Runde:** weitere Anforderungen derselben Runde bekommen `busy`.
 * **Ergebnisse** stehen in `state.json` (`State.results`: die letzten 10, eins je Anforderungs-ID) und von dort im
   Status, so überstehen sie einen Neustart des Helfers. Ablehnungen vor dem Ablauf trägt die Schleife ein, die
@@ -58,7 +60,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from . import __version__, clone, flow, policy, target
+from . import __version__, clone, flow, policy, target, trust
 from .channel import Channel, ChannelUnsafe, Incoming, encode_status
 from .engine import Engine, sanitize
 from .flow import Flow
@@ -108,6 +110,7 @@ class Helper:
     * `uptime`: Laufzeit des Rechners für den Ablauf (`flow.boot_uptime`; die Tests stellen eine eigene).
     * `checkpoint`: nur für Tests, im Betrieb leer. Geht unverändert an `Flow`: die Tests lassen den Ablauf damit an
       einer bestimmten Stelle "abstürzen" und starten den Helfer dann neu.
+    * `trusted_keys`: nur für Tests, im Betrieb `trust.TRUSTED_KEYS`.
     """
 
     def __init__(
@@ -125,6 +128,7 @@ class Helper:
         sleep: Callable[[float], None] = time.sleep,
         uptime: Callable[[], float | None] = flow.boot_uptime,
         checkpoint: Callable[[str, str], None] | None = None,
+        trusted_keys: tuple[trust.TrustedKey, ...] = trust.TRUSTED_KEYS,
     ) -> None:
         self._clock = clock
         self._uptime = uptime
@@ -137,6 +141,7 @@ class Helper:
         self._service = policy.service_name(service)
         self._own_id = own_id
         self._repository = repository
+        self._trusted_keys = trusted_keys
         self._log = logger
         self._lock = threading.RLock()
         self._seq = 0
@@ -155,6 +160,8 @@ class Helper:
         self._flow: Flow | None = None
         self._flow_in_round = False
         """In dieser Runde lief schon ein Ablauf: weitere Anforderungen derselben Runde bekommen `busy`."""
+        self._signature_in_round = False
+        """In dieser Runde wurde schon eine Signatur nachgerechnet: weitere mit `v: 2` bekommen `busy`."""
         self._results_dirty = False
         """Ein Ergebnis steht schon in `self._state`, aber noch nicht in `state.json`."""
         self._recover_waits = False
@@ -413,6 +420,7 @@ class Helper:
             return False
         self._cluttered = result.cluttered
         self._flow_in_round = False
+        self._signature_in_round = False
         for item in result.items:
             # Die Anforderungen sind schon aus dem Kanal genommen: ein Fehler an einer darf die übrigen dieser Runde
             # nicht mitreißen (jede Ausnahme gilt nur für diese eine).
@@ -428,7 +436,8 @@ class Helper:
             self._refuse(item.id, _guess_action(None), None, None, item.code or policy.BAD_REQUEST)
             return
         try:
-            request = policy.parse_request(item.raw, now=now, file_id=item.id)
+            request = policy.read_request(item.raw, now=now, file_id=item.id, keys=self._trusted_keys,
+                                          repository=self._repository)
         except Refusal as exc:
             self._refuse(item.id, _guess_action(item.raw), None, None, exc.code)
             return
@@ -444,6 +453,8 @@ class Helper:
         except Refusal as exc:
             self._refuse(request.id, request.action, known_version, to_version, exc.code)
             self._remember(state, request, now)
+            return
+        if request.v == 2 and not self._check_signature(request, known_version):
             return
         if not self._remember(state, request, now):
             self._refuse(request.id, request.action, known_version, to_version, policy.STATE_UNSAFE)
@@ -476,6 +487,20 @@ class Helper:
             return
         self._flow_in_round = True
         self._execute(current, request, state)
+
+    def _check_signature(self, request: policy.Request, known_version: str | None) -> bool:
+        # Die Rechnung kostet auf einem Raspberry Pi spürbar Zeit; eine Flut gefälschter Anforderungen bremst so nur
+        # sich selbst.
+        code = policy.BUSY if self._signature_in_round else None
+        self._signature_in_round = True
+        if code is None:
+            try:
+                policy.check_signature(request, keys=self._trusted_keys)
+            except Refusal as exc:
+                code = exc.code
+        if code is not None:
+            self._refuse(request.id, request.action, known_version, request.version, code)
+        return code is None
 
     def _execute(self, current: Flow, request: policy.Request, state: State) -> None:
         """Führt die Anforderung aus. Das Ergebnis hält der Ablauf selbst in `state.json` fest. Steht danach noch ein
@@ -557,7 +582,8 @@ class Helper:
             return {
                 "proto": policy.PROTOCOL,
                 "helper_version": __version__,
-                "request_versions": list(policy.REQUEST_VERSIONS),
+                "request_versions": list(policy.request_versions(self._trusted_keys)),
+                "request_options": list(policy.REQUEST_OPTIONS),
                 "seq": self._seq,
                 "heartbeat_at": max(0, int(now)),
                 "state": state_name,
@@ -666,6 +692,7 @@ def selftest() -> int:
         ("repository", lambda: policy.floating_tag(policy.REPOSITORY) == "latest"),
         ("version", lambda: policy.is_version(__version__) and not policy.is_version("0.7.١")),
         ("request", _selftest_request),
+        ("signed_request", _selftest_signed_request),
         ("status", _selftest_status),
         ("clone", _selftest_clone),
         ("flow", _selftest_flow),
@@ -695,10 +722,39 @@ def _selftest_request() -> bool:
     return False
 
 
+_SELFTEST_KEY = trust.TrustedKey(
+    "current", bytes.fromhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"),
+)
+"""Öffentlicher Schlüssel aus den Testvektoren von RFC 8032; gilt nur hier, nie für ein echtes Update."""
+_SELFTEST_SIG = (
+    "6927b02889f7d27e27efaf41878ec91d5d0dcd4a31fa3b86c507377934e015c7"
+    "cc9168016ad8d88fa206d3a2b7c2374662637b9cc90dc62efd9c88d88d2f5b06"
+)
+
+
+def _selftest_signed_request() -> bool:
+    """Die signierte Anforderung geht durch, mit gekippter Signatur oder ohne den Testschlüssel nicht."""
+    grant = {"fmt": 1, "repo": policy.REPOSITORY, "version": "0.7.1", "digest": "sha256:" + "4f" * 32,
+             "key_id": _SELFTEST_KEY.key_id, "issued_at": 1790812000, "expires_at": 1790900000}
+    request = {"v": 2, "id": "6f1c2b0e-9a4d-4c1e-8f00-1b2c3d4e5f60", "action": "update", "version": "0.7.1",
+               "created_at": 1790812345, "digest": grant["digest"], "grant": grant, "sig": _SELFTEST_SIG}
+    raw = policy.dumps(request)
+    forged = policy.dumps({**request, "sig": _SELFTEST_SIG[:-1] + "7"})
+    keys = (_SELFTEST_KEY,)
+    refused = []
+    for data, trusted in ((forged, keys), (raw, trust.TRUSTED_KEYS)):
+        try:
+            policy.parse_request(data, now=1790812400, keys=trusted)
+        except Refusal as exc:
+            refused.append(exc.code)
+    accepted = policy.parse_request(raw, now=1790812400, keys=keys).v == 2
+    return accepted and refused == [policy.BAD_SIGNATURE, policy.UNKNOWN_KEY]
+
+
 def _selftest_status() -> bool:
     doc = {"proto": policy.PROTOCOL, "helper_version": __version__, "request_versions": list(policy.REQUEST_VERSIONS),
-           "seq": 0, "heartbeat_at": 0, "state": "idle", "ready": False, "reason": None, "target": None,
-           "busy": None, "previous": None, "results": []}
+           "request_options": list(policy.REQUEST_OPTIONS), "seq": 0, "heartbeat_at": 0, "state": "idle",
+           "ready": False, "reason": None, "target": None, "busy": None, "previous": None, "results": []}
     return len(encode_status(doc)) < policy.STATUS_MAX_BYTES
 
 

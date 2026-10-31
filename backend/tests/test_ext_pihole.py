@@ -129,6 +129,12 @@ async def _configure(client, headers, url: str = PIHOLE_URL + "/admin/") -> None
     assert res.status_code == 204, res.text
 
 
+async def _replace_unannounced(db_session, test_settings, value: str) -> None:
+    secret = (await db_session.execute(select(Secret).where(Secret.label == SECRET))).scalar_one()
+    await vault.replace_secret_value(db_session, vault.load_keyring(test_settings), secret.id, value)
+    await db_session.commit()
+
+
 async def _approve(client, headers, action_id: str) -> dict:
     res = await client.post(f"/api/v1/actions/{action_id}/approve", headers=headers)
     assert res.status_code == 200, res.text
@@ -364,12 +370,15 @@ async def test_executor_rejects_forged_payloads(client, db_session, test_setting
     from nodvard_sdk import Actor, Risk
     from nodvard_sdk.actions import ActionRequest
 
+    from nodvard_deck.core.known_actors import known_while
+
     headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers)
     ctx = get_extension_runtime().loaded["pihole"].ctx
-    decision = await ctx.actions.propose(ActionRequest(
-        action_type=action_type, payload=payload, risk=Risk.LOW, proposed_by=Actor.user("x", "x"), reason="Test",
-    ))
+    with known_while([("user", "x")]):
+        decision = await ctx.actions.propose(ActionRequest(
+            action_type=action_type, payload=payload, risk=Risk.LOW, proposed_by=Actor.user("x", "x"), reason="Test",
+        ))
     approved = await _approve(client, headers, decision.action_id)
     assert approved["status"] == "failed", approved
     assert error in approved["result"]["error"]
@@ -433,6 +442,93 @@ async def test_changing_the_address_logs_the_old_session_out(client, db_session,
     assert saved.status_code == 200
     assert fake.sessions == set(), "Pi-hole hat nur wenige API-Plätze"
     assert (await client.get("/api/v1/ext/pihole/summary", headers=headers)).json()["state"] == "not_configured"
+
+
+@pytest.mark.asyncio
+async def test_connection_test_checks_the_password_now_in_the_vault(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    assert (await client.get("/api/v1/ext/pihole/summary", headers=headers)).json()["state"] == "ok"
+    await _replace_unannounced(db_session, test_settings, "falsch")
+    assert fake.sessions == {"sid-1"}, "die alte Sitzung gilt bei Pi-hole noch"
+
+    tested = (await client.post("/api/v1/extensions/pihole/test", headers=headers)).json()
+    assert tested["ok"] is False and "Passwort" in tested["message"], tested
+    assert fake.sessions == set(), "die alte Sitzung ist abgemeldet"
+
+    # Gleich wieder richtig: Die gerade abgelehnte Anmeldung blockiert den nächsten Test nicht.
+    await _replace_unannounced(db_session, test_settings, PASSWORD)
+    again = (await client.post("/api/v1/extensions/pihole/test", headers=headers)).json()
+    assert again["ok"] is True, again
+
+
+@pytest.mark.asyncio
+async def test_a_new_password_in_the_vault_ends_the_old_session(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    assert (await client.get("/api/v1/ext/pihole/summary", headers=headers)).json()["state"] == "ok"
+    body = {"current_password": "correct-horse-battery", "label": SECRET, "value": "falsch"}
+    assert (await client.put("/api/v1/extensions/pihole/secrets", json=body, headers=headers)).status_code == 204
+    assert fake.sessions == set(), "der Wechsel meldet die alte Sitzung ab"
+    assert (await client.get("/api/v1/ext/pihole/summary", headers=headers)).json()["state"] == "auth_failed"
+
+    secrets = (await client.get("/api/v1/secrets", headers=headers)).json()
+    secret_id = next(s["id"] for s in secrets if s["label"] == SECRET)
+    body = {"current_password": "correct-horse-battery", "value": PASSWORD}
+    assert (await client.put(f"/api/v1/secrets/{secret_id}/value", json=body, headers=headers)).status_code == 204
+    assert (await client.get("/api/v1/ext/pihole/summary", headers=headers)).json()["state"] == "ok"
+    assert len(fake.sessions) == 1, "Pi-hole hat nur wenige API-Plätze"
+
+    removed = await client.request(
+        "DELETE", f"/api/v1/extensions/pihole/secrets?label={SECRET}",
+        json={"current_password": "correct-horse-battery"}, headers=headers,
+    )
+    assert removed.status_code == 204, removed.text
+    assert fake.sessions == set(), "ohne Passwort gilt auch die Sitzung nicht mehr"
+
+
+@pytest.mark.asyncio
+async def test_a_new_address_drops_the_password_and_says_so(client, db_session, test_settings, monkeypatch):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    instance = get_extension_runtime().loaded["pihole"].instance
+    told: list[str] = []
+
+    async def spy(ctx, label):
+        told.append(label)
+
+    monkeypatch.setattr(instance, "on_secret_changed", spy)
+    body = {"current_password": "correct-horse-battery", "values": {"url": "http://anderes-pihole.test/admin/"}}
+    saved = await client.put("/api/v1/extensions/pihole/settings", json=body, headers=headers)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["secrets_cleared"] == [SECRET] and told == [SECRET]
+
+
+@pytest.mark.asyncio
+async def test_connection_test_logs_in_fresh_and_keeps_one_session(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    assert (await client.get("/api/v1/ext/pihole/summary", headers=headers)).json()["state"] == "ok"
+
+    tested = (await client.post("/api/v1/extensions/pihole/test", headers=headers)).json()
+    assert tested["ok"] is True, tested
+    auth = [r.method for r in fake.requests if r.url.path == "/api/auth"]
+    assert auth == ["POST", "DELETE", "POST"], auth
+    assert len(fake.sessions) == 1, "Pi-hole hat nur wenige API-Plätze"
+
+
+@pytest.mark.asyncio
+async def test_a_page_asking_during_the_connection_test_opens_no_second_session(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    service = get_extension_runtime().loaded["pihole"].instance._service
+    in_use = await service.client()
+    await in_use.summary()
+
+    await service.drop()
+    await in_use.summary()
+    assert (await service.status())["state"] == "ok"
+    assert len(fake.sessions) == 1, "Pi-hole hat nur wenige API-Plätze"
 
 
 @pytest.mark.asyncio

@@ -29,7 +29,7 @@ function urlFetch(calls: Call[], putStatus = 200, putBody: unknown = {}) {
 
 beforeEach(() => {
   window.history.replaceState({}, "", "/ext/docker/matrix");
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never,
     ReactDOM: undefined as never,
     ReactJsxRuntime: undefined as never,
@@ -92,7 +92,7 @@ describe("ContainersPage -- eigene Kachel-Adresse", () => {
 
   it("ohne apps.write kein Knopf", async () => {
     vi.stubGlobal("fetch", urlFetch([]));
-    (window.__lattice.hasPermission as ReturnType<typeof vi.fn>).mockImplementation((p: string) => p !== "apps.write");
+    (window.__nodvardDeck.hasPermission as ReturnType<typeof vi.fn>).mockImplementation((p: string) => p !== "apps.write");
     render(<ContainersPage />);
     await screen.findByTestId("row-h1:pihole");
     expect(screen.queryByRole("button", { name: /^Adresse/ })).toBeNull();

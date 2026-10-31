@@ -10,6 +10,187 @@ shown inside Nodvard Deck under *Settings → About Nodvard Deck*. This file is 
 
 ## [Unreleased]
 
+## [0.12.0] – 2026-10-31
+
+Docker stacks from Git, Fail2ban in Nodvard Shield and tighter limits for modules and logins.
+
+The web interface is in German only for now, so names of buttons and pages are given in German as they appear, with a
+translation in brackets.
+
+### Upgrade notes
+
+- Servers that get root rights only through helper scripts: run the setup command again. Until then, Nodvard Shield
+  blocks actions that need root on those servers. Servers with a full sudo rule or root login need no action.
+- Rename `LATTICE_*` variables to `NODVARD_DECK_*`. In the `.env` file next to the Compose file: `LATTICE_PORT` →
+  `NODVARD_DECK_PORT`, `LATTICE_DNS_1` → `NODVARD_DECK_DNS_1`, `LATTICE_DNS_2` → `NODVARD_DECK_DNS_2`.
+- Remove the old full sudo rule `<user> ALL=(root) NOPASSWD: ALL` where the overview suggests it. The release notes and
+  the setup guide, section 6, show how.
+- Check third-party extensions and your own scripts: the Python packages `lattice` and `lattice_sdk`, the classes
+  `LatticeExtension` and `LatticeError` and the entry point group `lattice.extensions` are gone. Change `import lattice`
+  or `python -m lattice.…` to `nodvard_deck`, and `window.__lattice` to `window.__nodvardDeck` in extension interfaces.
+- No database migration.
+
+### Added
+
+- Docker: a stack that Deck manages (created in Deck or adopted with “Übernehmen”) can use a Git repository as its
+  source (`https://` only).
+- Docker: before applying, you see which files would be new or changed, including the Compose diff and hints about
+  anything that does not come from the repository.
+- Docker: changes from Git are applied after a confirmation and an approval (“Freigabe”), with the permissions of the
+  stack folder's owner.
+- Docker: if Compose rejects the new files, the previous state is restored immediately.
+- Docker: “Zurück zum Stand davor” (back to previous state) restores the files from before the last apply and only
+  removes files Deck wrote itself that nobody has changed since.
+- Docker: Deck never replaces existing environment files such as `.env`, and only removes one it created itself when you
+  use “Zurück zum Stand davor” (back to previous state).
+- Docker: only the services named in the approval are restarted, and “Jetzt neu starten” (restart now) handles any
+  others with its own approval.
+- Docker: after a restart, Deck checks that the services keep running, including ones that were stopped before.
+- Docker: stack volumes can be backed up before applying, which stops the services using them during the backup.
+- Docker: those backups are restored in the Stacks tab under “Sicherungen” (backups).
+- Docker: Git credentials for private repositories, with the token kept in the vault (“Tresor”) and only sent to the
+  server it is for.
+- Nodvard Shield: the intrusion protection shows the addresses Fail2ban has banned on each server, and you can unban
+  them or ban addresses yourself.
+- Nodvard Shield: your browser's IP address and the address Deck uses to reach the server cannot be banned, so nobody
+  locks themselves out.
+- Nodvard Shield: the update centre shows how many Ubuntu updates are held back by phased rollout, with a short
+  explanation.
+- Nodvard Shield: “Alle einspielen” (install all) only installs those updates once the server's turn comes, and the
+  confirmation points this out beforehand.
+- Server setup: “Volle sudo-Regel entfernen” (remove full sudo rule) under “Erweitert” (advanced) checks every helper
+  script before and after, and restores the rule if anything breaks.
+- Servers: the new option “Volle sudo-Regel gewollt” (full sudo rule wanted) is for people who run their own sudo
+  commands through Deck.
+- Settings: a hint when the owner logs in through a home network proxy that is not listed as trusted, because without
+  that entry Deck cannot see the real addresses.
+
+### Changed
+
+- First setup: two-factor login can be skipped with “Später einrichten” (set up later), even after starting it.
+- Modules: a module that crashes on start shows the reason and offers “Neu starten” (restart) and “Ausschalten” (turn
+  off).
+- Updates: the “Updates” card shows whether a new version is approved and whether your update helper checks approvals
+  itself.
+- Update helper: its Compose file is attached to every release and names the checksum of the verified helper.
+- sudo: “Verbindung prüfen” (check connection) and the overview flag a full sudo rule that is no longer needed and link
+  to the right setup command.
+- Backups: if Deck cannot write to the backup folder, “Einstellungen → System” (Settings → System) shows the user, the
+  folder's owner and the command to fix it.
+- Backups: in that case, push notifications and job logs also say where to find help.
+- Pi-hole and Nginx Proxy Manager: when unreachable, they explain in plain German why and what to do next, instead of
+  showing an English error message.
+- Home page: widgets only show buttons you are allowed to use.
+- Home page: the owner sees which `LATTICE_*` settings are still in use and what they are called now.
+- Logins: logins that expired or ended long ago are deleted every night, including their address and browser.
+- Audit log: when a module proposes an action on behalf of the AI, a schedule or a person, the entry also names the
+  module.
+- Interface: Deck recognises a new version of its start page by its content instead of its file size and modification
+  time, and allows exactly its inline scripts right away.
+- Interface: only the Nodvard Deck names are used, so a browser tab opened before the update needs one reload when it
+  first opens a module page (the page offers a button).
+- Licences: the third-party licence list names the chosen licence for dual-licensed packages and includes the image's
+  operating system packages.
+- Docs: the setup guide has a table of what the helper scripts may do as root, and the file watcher section says what
+  root reads from watched files.
+
+### Deprecated
+
+- `LATTICE_*` environment variables still work in 0.12 and will be removed in one of the next versions, 1.0 at the
+  latest.
+
+### Removed
+
+- The Python packages `lattice` and `lattice_sdk`, the classes `LatticeExtension` and `LatticeError` and the entry point
+  group `lattice.extensions`: extensions that use them are no longer loaded, and the extension list shows which ones,
+  why and what helps.
+- Extensions whose interface uses the old names no longer show their page until their author ships a new version.
+- Your own scripts with `import lattice` or `python -m lattice.…` must be changed to use `nodvard_deck`.
+
+### Fixed
+
+- Overview: with many widgets it now loads reliably instead of failing with a database error after half a
+  minute. Thanks for the report!
+- Vault: a new password, token or key now takes effect immediately for qBittorrent, Synology DSM, Pi-hole, Nginx Proxy
+  Manager, Home Assistant, Jellyfin, Plex, Nextcloud and Uptime Kuma, and a pause after a rejected login ends right
+  away. Before, depending on the module, the old values stayed in use for up to 30 minutes or until someone saved the
+  settings or pressed “Verbindung testen” (test connection).
+- Pi-hole and Nginx Proxy Manager: “Verbindung testen” (test connection) logs in again every time, so a wrong new
+  password shows up.
+- Approvals: expired approvals are labelled “Abgelaufen” (expired) and can only be dismissed.
+- Docker: a server tagged both “docker” and “docker-bedienen” counts as a full Docker server.
+- Docker: setup, “Verbindung prüfen” (check connection) and the overview now report a missing Docker helper script as a
+  problem.
+- Docker: “Verbindung prüfen” and the overview now show correctly that an older Docker helper script keeps working until
+  the setup command runs again.
+- Docker: on a server that lost its “docker” tag, image updates, stack actions, Portainer migration and registry login
+  now say why instead of just “Kein Docker-Host.” (no Docker host).
+- Docker: if a volume restore aborts before the data swap, Deck starts the stack again and removes the half-extracted
+  folder.
+- Docker: if a stack stays stopped after such an abort, a message gives the reason and the next step.
+- Docker: an unexpected registry response only makes that image uncheckable, not the whole server.
+- Helper scripts: for an ACL on the helper script folder, setup now suggests `setfacl -b` followed by `chmod g-w`
+  (`setfacl -b` alone was not enough).
+- Nodvard Shield: files with permissions such as 044 or 000 can be restored from quarantine again (on servers with
+  helper scripts only, after running the setup command again).
+- Synology DSM: Hyper Backup integrity checks no longer show up as errors.
+- Server setup: if you disabled Deck's key on a server with a leading `#`, running the setup command again puts back a
+  working key.
+- Jobs: the nightly cleanup of old job runs no longer stops on an unusable file name from a restored backup.
+- Display: Docker stacks with many buttons wrap, dates and times are always in German, and the wording of inventory and
+  proxy hints is fixed.
+
+### Security
+
+- Updates: Deck only offers “Jetzt aktualisieren” (update now) for versions approved at their release with the
+  project's signing key.
+- Updates: a current update helper verifies the signature of that approval itself and rejects a wrong one. Until 1.0
+  the helper also accepts a request without an approval, for example from an older Deck version; from 1.0 the
+  signature is mandatory for every update.
+- Updates: with a current update helper, “Jetzt aktualisieren” (update now) installs exactly the version the update
+  check verified.
+- Updates: if the update has changed since, the button downloads nothing and asks you to check for updates again.
+- Logins: access tokens stop working immediately on logout, on password change (for the other logins) and when an
+  account is deactivated and activated again, instead of up to 15 minutes later.
+- Logins: after 10 failed logins for one user name within 24 hours, each further attempt from the same network waits
+  twice as long as the previous one, up to 5 minutes, and you get an alert.
+- Logins: the throttling applies per network, so you can still log in right away from your home network, a VPN or any
+  other network.
+- Logins: against attackers with very many addresses, a long password and two-factor login still help.
+- Browser: camera, microphone, location and other devices Deck never needs are blocked.
+- Browser: other sites can no longer embed Deck, except for the logo, icons and the reachability check.
+- Browser: the interface only loads images, data and connections from its own server, and the browser now blocks other
+  addresses instead of only reporting them.
+- Modules: database access only reaches each module's own tables, not accounts, the vault or the audit log.
+- Modules: a module only gets a vault secret with the right for that exact secret, not even indirectly, and never the
+  accounts' two-factor keys.
+- Modules: from the dashboard settings, modules only read the time zone and maintenance window, not for example the
+  approval rules or the list of trusted proxies.
+- Modules: a module limited to certain address ranges can no longer get around that through host names.
+- Modules: only the proposing module and modules allowed to run commands learn which command an action ran.
+- Modules: the audit log only names a person as the actor if they were actually involved.
+- Modules: an extension that wants to take over the data of a removed module needs an admin's permission under
+  “Einstellungen → Erweiterungen” (Settings → Extensions).
+- Helper scripts: they are only installed in folders that nobody but root can write to, not even a group.
+- Helper scripts: if the folder is too open, setup names the reason and the fix, and “Verbindung prüfen” (check
+  connection) warns about servers already set up.
+- Docker: a proposed action no longer runs once the server has been switched to “Nur bedienen” (operate only), except
+  starting, stopping and restarting containers.
+- Docker: a proposed Docker action no longer runs on a server that is no longer tagged as a Docker server.
+- Docker: after running the setup command again, “Nur bedienen” (operate only) always uses Docker on the server itself,
+  even if root points to a different Docker daemon there through `DOCKER_HOST` or a Docker context.
+- Nodvard Shield: without the helper script, a file is only quarantined if ClamAV reports it again at that moment.
+- Nodvard Shield: restore only puts a file back where it was, with its old permissions, also without the helper script.
+- Nodvard Shield: the confirmation and approval for a restore say “an den hinterlegten Ort” (to the stored location),
+  and the result names where the file actually went.
+- Nodvard Shield: files quarantined with Deck 0.8 or older have to be put back or deleted by hand, because their
+  original location is unknown.
+- Nodvard Shield: managing incidents requires the `soc.manage` right, and with only `soc.read` they stay readable.
+- Backups: the user ID and fix command for a failed backup only appear under “Einstellungen → System” (Settings →
+  System), not in logs and notifications.
+- Dependencies: document text recognition (Tesseract) gets the latest security updates with every release.
+- Dependencies: the bundled Git library is up to date and no longer crashes on deliberately broken Git data.
+
 ## [0.11.1] – 2026-10-24
 
 Security update: narrower rights during server setup and protection against modified backups.

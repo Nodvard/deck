@@ -142,6 +142,18 @@ Vertrauenswürdiger Proxy**. Oben steht, wie deine Anfrage gerade ankommt, zum B
 Schickt der Proxy schon seine Angaben mit, ist aber noch nicht eingetragen, zeigt die Karte einen Hinweis und den
 Knopf **„Diese Adresse eintragen“**. Er übernimmt genau diese eine Adresse in das Feld, danach „Speichern“.
 
+Hast du dich als Inhaber in den letzten 7 Tagen über einen Proxy aus deinem Heimnetz angemeldet, der nicht eingetragen
+ist, nennen die Karte und „Braucht Aufmerksamkeit“ in der Übersicht seine Adresse: „Anmeldungen kommen über einen Proxy
+(172.18.0.5), der nicht eingetragen ist.“ Den Hinweis siehst nur du, denn nur der Inhaber darf die Liste ändern, und
+nur deine Anmeldungen zählen. Nodvard Deck trägt den Proxy nie selbst ein. Prüf, ob das wirklich dein Proxy ist, und
+trag ihn dann wie oben ein. Kein Hinweis kommt, wenn der Proxy Nodvard Deck über eine öffentliche Adresse erreicht.
+Ist das eine einzelne Adresse, etwa ein Proxy über eine IPv6-Adresse deines Anschlusses, trägst du sie selbst ein.
+Cloudflare ohne Tunnel lässt sich nicht eintragen: Die Anfragen kommen aus großen Netzen (IPv4 bis /13), und
+öffentliche Netze nimmt die Liste nur bis /24 (IPv6 bis /48), sonst dürfte fast jeder Rechner seine Adresse fälschen.
+Nimm dann Cloudflare Tunnel (der Proxy läuft in deinem Netz, der Hinweis erscheint) oder einen eigenen Proxy davor.
+Ebenso kein Hinweis, wenn der Proxy nur die Kopfzeile `Forwarded` schickt; die versteht Nodvard Deck nicht, nur
+`X-Forwarded-For` und `X-Forwarded-Proto`.
+
 Was du dort siehst, hängt davon ab, wie Proxy und Nodvard Deck verbunden sind:
 
 - **Proxy im selben Docker-Netz** (z. B. im selben Compose-Projekt): Du siehst die Adresse des Proxy-Containers, etwa
@@ -201,6 +213,21 @@ deines Proxys (Abschnitt 6).
 
 ## 6. Sicherheit: was du beachten solltest
 
+- **Ist Nodvard Deck aus dem Internet erreichbar**, bremst es das Durchprobieren von Passwörtern: Ab 10 falschen
+  Anmeldungen für einen Benutzernamen innerhalb von 24 Stunden wartet jeder weitere Versuch aus einem Netz doppelt so
+  lange wie der vorige aus demselben Netz, höchstens 5 Minuten. Du bekommst dann die Meldung „Passwort wird
+  durchprobiert“.
+  - Aussperren kann dich so niemand: Aus deinem Heimnetz, über ein VPN wie Tailscale und aus jedem Netz, aus dem
+    nicht geraten wird, kommst du sofort hinein. Vertippst du dich dort, wartest du 2 Sekunden.
+  - Teilst du das Netz mit dem Angreifer (etwa dasselbe öffentliche WLAN), wartest du dort wie er, auch mit dem
+    richtigen Passwort. Nimm dann ein anderes Netz oder das VPN.
+  - Wer für jeden Versuch eine neue Adresse nimmt, etwa über ein Botnetz, wird so kaum aufgehalten. Dagegen helfen ein
+    langes Passwort und Zwei-Faktor; die Meldung sagt dir, dass jemand rät.
+- **Ohne Eintrag unter „Vertrauenswürdiger Proxy“** sieht Nodvard Deck nur die Adresse des Proxys. Die ist meist
+  lokal, und dann greift diese Bremse nicht. Es bleiben die Grenzen je Adresse, und die gelten dann für alle zusammen:
+  Wer von außen ein paar falsche Passwörter schickt, sperrt damit alle immer wieder für einige Minuten aus. Trag deinen
+  Proxy deshalb unter Einstellungen → System → Vertrauenswürdiger Proxy ein. Dasselbe passiert, wenn Docker die echte
+  Adresse gar nicht weitergibt, etwa bei IPv6 über den Userland-Proxy, bei Docker Desktop oder bei rootless Docker.
 - **Trag nie ein ganzes Netz ein, aus dem auch normale Geräte kommen**, also nicht dein Heimnetz wie
   `192.168.2.0/24`. Jedes eingetragene Gerät darf Nodvard Deck eine beliebige Absenderadresse vorgeben. Damit ließe
   sich die Sperre nach falschen Anmeldungen umgehen, und im Protokoll stünden falsche Adressen. Trag nur deinen Proxy

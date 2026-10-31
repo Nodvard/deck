@@ -1448,6 +1448,23 @@ def test_foreign_changes_are_never_adopted_even_right_after_the_setup():
     assert not _adopted(run, legacy, None, _entry(legacy, _full_rule("nodvard"), "440", "root"))
 
 
+def test_a_full_rule_removed_by_the_setup_is_adopted_only_as_reported():
+    from nodvard_deck.services import host_setup
+
+    out = "Die volle sudo-Regel nodvard-nodvard wurde entfernt.\n"
+    record = host_setup.setup_record(
+        "nodvard", host_setup.setup_report(out, user="nodvard"), sudo=True, full_sudo=False, drop_full_rule=True,
+    )
+    run = _setup_run(**record)
+    own, legacy = "/etc/sudoers.d/nodvard-nodvard", "/etc/sudoers.d/lattice-nodvard"
+    assert _adopted(run, own, _state(_full_rule("nodvard"), "440", "root"), None)
+    assert not _adopted(run, legacy, _state(_full_rule("nodvard"), "440", "root"), None), "nicht gemeldet"
+    assert not _adopted(run, own, _state(SHA_C, "440", "root"), None), "anderer Inhalt"
+    assert not _adopted(run, own, None, _entry(own, _full_rule("nodvard"), "440", "root")), "nie still angelegt"
+    unannounced = _setup_run(**{**record, "actions": []})
+    assert not _adopted(unannounced, own, _state(_full_rule("nodvard"), "440", "root"), None)
+
+
 def test_a_key_line_repaired_for_dropbear_is_adopted_like_an_added_key():
     from nodvard_deck.services import host_setup
 

@@ -21,7 +21,7 @@ let permissions: Set<string>;
 
 beforeEach(() => {
   permissions = new Set(["hosts.read", "extensions.manage"]);
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn(), promptDialog: vi.fn(),
     hasPermission: (p: string) => permissions.has(p),

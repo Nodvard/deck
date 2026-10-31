@@ -81,6 +81,9 @@ ENV PYTHONUNBUFFERED=1 \
 # Nur, wenn das Modul documents mitkommt (ohne Angabe kommen alle Module mit). Vor den
 # pip-Schritten, damit eine Aenderung am Backend apt nicht jedes Mal neu laufen laesst.
 ARG NODVARD_DECK_EXTENSIONS=""
+# Ein neuer Wert holt die Pakete frisch: Sonst bliebe diese Schicht samt ihrem Stand der Debian-Sicherheitsupdates im
+# Build-Cache, bis sich das Basis-Image ändert. Der Release-Job setzt die Nummer seines Laufs.
+ARG APT_REFRESH=""
 RUN case ",${NODVARD_DECK_EXTENSIONS:-documents}," in \
       *,documents,*) apt-get update && apt-get install --no-install-recommends -y \
           tesseract-ocr tesseract-ocr-deu \

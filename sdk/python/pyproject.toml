@@ -13,13 +13,6 @@ dependencies = [
     "pydantic>=2.7",
 ]
 
-# Eine Distribution, drei Importnamen: `nodvard_sdk` (der Vertrag), `lattice_sdk` (alter Name als Alias, siehe
-# lattice_sdk/__init__.py) und `_nodvard_alias` (der gemeinsame Unterbau der Alias-Pakete, nur Standardbibliothek;
-# der Kern-Alias `lattice` in der Distribution nodvard-deck nutzt ihn ebenfalls). Dadurch bleibt
-# `pip install -e sdk/python -e backend` der einzige Installationsbefehl.
-[tool.setuptools]
-py-modules = ["_nodvard_alias"]
-
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["nodvard_sdk*", "lattice_sdk*"]
+include = ["nodvard_sdk*"]

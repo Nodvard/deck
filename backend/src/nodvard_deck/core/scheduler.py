@@ -17,6 +17,7 @@ from ..db import utcnow
 from ..db.session import session_scope
 from ..models import Job, JobRun
 from ..services import jobs as jobs_service
+from . import known_actors
 from .cron import cron_trigger
 
 logger = logging.getLogger("nodvard_deck.scheduler")
@@ -122,6 +123,9 @@ class SchedulerService:
     ) -> str:
         current = asyncio.current_task()
         assert current is not None  # läuft immer als Aufgabe der Event-Loop
+        if trigger_kind == "schedule":
+            # APScheduler reicht jedem Lauf den Kontext dessen weiter, der ihn zuletzt geweckt hat, etwa einer Anfrage.
+            known_actors.forget()
         self._runs.add(current)
         try:
             return await self._execute_run(
@@ -239,6 +243,9 @@ JOB_RUNS_RETENTION_KEY = "job-runs-retention"
 NOTIFICATIONS_RETENTION_KEY = "notifications-retention"
 """`ext_job_key` des nächtlichen Kern-Jobs, der alte Meldungen samt Zustellprotokollen löscht."""
 
+LOGINS_RETENTION_KEY = "logins-retention"
+"""`ext_job_key` des nächtlichen Kern-Jobs, der längst beendete Anmeldungen (`refresh_tokens`) löscht."""
+
 _service: SchedulerService | None = None
 
 
@@ -298,7 +305,8 @@ async def register_core_jobs(runs_dir: Path) -> None:
 
     # Alte Meldungen samt Zustellprotokollen löschen (`services.notification_retention`): Aufbewahrung aus
     # `notifications.retention_days` (Vorgabe 90 Tage), nur ungelesene kritische bleiben. Eigene Minute (03:30), damit die
-    # Aufräum-Jobs (Protokoll 03:00, Job-Läufe 03:20, alte Stände 03:40) nicht gleichzeitig auf die Schreibsperre warten.
+    # Aufräum-Jobs (Protokoll 03:00, Job-Läufe 03:20, alte Stände 03:40, Anmeldungen 03:50) nicht gleichzeitig auf die
+    # Schreibsperre warten.
     from ..services import notification_retention as notification_retention_service
 
     async def _purge_notifications(**_: Any) -> dict[str, int]:
@@ -341,6 +349,21 @@ async def register_core_jobs(runs_dir: Path) -> None:
         )
     get_extension_runtime().scheduler.register(CORE_SCHEDULER_EXT_ID, "restore-cleanup", _cleanup_restore)
     await service.schedule(cleanup_job, _cleanup_restore)
+
+    # Ohne den Job bliebe jede Erneuerung einer Anmeldung als Zeile für immer liegen, samt Adresse und Browser.
+    from ..services import auth as auth_service
+
+    async def _purge_logins(**_: Any) -> dict[str, int]:
+        async with session_scope() as session:
+            return {"deleted": await auth_service.purge_old_logins(session, get_settings())}
+
+    async with session_scope() as session:
+        logins_job = await jobs_service.upsert_job(
+            session, ext_id=None, ext_job_key=LOGINS_RETENTION_KEY, name="Alte Anmeldungen aufräumen",
+            kind="core", schedule="50 3 * * *", params={}, enabled=True,
+        )
+    get_extension_runtime().scheduler.register(CORE_SCHEDULER_EXT_ID, LOGINS_RETENTION_KEY, _purge_logins)
+    await service.schedule(logins_job, _purge_logins)
 
     # Erreichbarkeit von Hand angelegter Server: Zeitplan und Schalter aus `hosts.reachability.*`.
     # Ein Fehler hier darf den Start nicht verhindern, er steht im Protokoll.

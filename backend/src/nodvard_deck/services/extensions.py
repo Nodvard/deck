@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import copy
 import importlib
@@ -11,6 +12,7 @@ import re
 import sys
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, FastAPI
 from nodvard_sdk import AdoptSpec, ExtensionManifest, is_compatible
@@ -22,14 +24,15 @@ from starlette.routing import BaseRoute
 from nodvard_sdk.types import Event
 
 from ..config import Settings
-from ..core import rbac
+from ..core import known_actors, rbac
 from ..core.events import get_event_bus
 from ..db import utcnow
 from ..ext.context import build_context
-from ..ext.discovery import DiscoveredExtension, discover_all, resolve_legacy
+from ..ext.discovery import LEGACY_BLOCKING_PERMISSIONS, DiscoveredExtension, discover_all, resolve_legacy
+from ..ext.old_names import old_import_error
 from ..ext.root_helpers import read_root_helper
 from ..ext.runtime import ExtensionRuntime, LoadedExtension, get_extension_runtime
-from ..models import DashboardLayout, ExtensionRecord, Secret, Setting
+from ..models import Action, DashboardLayout, ExtensionRecord, Secret, Setting
 from . import audit as audit_service
 from . import settings as settings_service
 
@@ -40,6 +43,10 @@ log = logging.getLogger(__name__)
 # ausgeschaltet. Nur dann darf der Kern die Erweiterung bei einem Anlass aus `enable_on` selbst einschalten; ältere
 # Erweiterungen haben den Eintrag nie und bleiben, wie jemand sie hinterlassen hat.
 UNTOUCHED_KEY_PREFIX = "extension.untouched."
+# Globale Einstellung `extension.takeover_allowed.<Kennung>:<frühere Kennung>` mit `{source, permissions}`: Ein Admin
+# hat erlaubt, dass die Erweiterung mit dieser Quelle und diesen Rechten die Daten unter der Kennung übernimmt (siehe
+# `_takeovers_awaiting_consent`).
+TAKEOVER_KEY_PREFIX = "extension.takeover_allowed."
 
 
 class ExtensionLoadError(Exception):
@@ -149,14 +156,19 @@ async def auto_enable_for(
 
 
 def _stored_manifest(manifest: ExtensionManifest) -> dict:
-    # Leere `legacy_ids`- und `adopts`-Listen und ein fehlendes `root_helper` bleiben weg, damit die Zeilen der
-    # übrigen Module unverändert bleiben.
+    # Leere `legacy_ids`- und `adopts`-Listen, ein fehlendes `root_helper` und die Vorgaben von `calls_any_version` und
+    # `sudo_fallback` bleiben weg, damit die Zeilen der übrigen Module unverändert bleiben.
     data = manifest.model_dump(mode="json", by_alias=True)
     for key in ("legacy_ids", "adopts"):
         if not data.get(key):
             data.pop(key, None)
     if data.get("root_helper") is None:
         data.pop("root_helper", None)
+    else:
+        if not data["root_helper"].get("calls_any_version"):
+            data["root_helper"].pop("calls_any_version", None)
+        if data["root_helper"].get("sudo_fallback", True):
+            data["root_helper"].pop("sudo_fallback", None)
     return data
 
 
@@ -284,6 +296,165 @@ async def _find_record(session: AsyncSession, d: DiscoveredExtension) -> Extensi
     return chosen
 
 
+def _takeover_key(ext_id: str, old: str) -> str:
+    return f"{TAKEOVER_KEY_PREFIX}{ext_id}:{old}"
+
+
+def _stored_id(record: ExtensionRecord) -> str:
+    # Eine von Hand verdorbene Zeile darf den Start nicht abbrechen; was unbrauchbar ist, zählt wie nicht vorhanden.
+    stored = record.manifest.get("id") if isinstance(record.manifest, dict) else None
+    return stored if isinstance(stored, str) and stored else record.id
+
+
+def _ids_of(record: ExtensionRecord) -> set[str]:
+    """Die Kennungen, unter denen die Zeile Daten hält: ihre `id` und die aus dem gespeicherten Manifest."""
+    legacy = record.manifest.get("legacy_ids") if isinstance(record.manifest, dict) else None
+    names = [record.id, _stored_id(record), *(legacy if isinstance(legacy, list) else [])]
+    return {name for name in names if isinstance(name, str)}
+
+
+def _foreign(record: ExtensionRecord, d: DiscoveredExtension) -> bool:
+    """Die Zeile gehört einer anderen Erweiterung als `d`, oder ein Paket will ein mitgeliefertes Modul ersetzen."""
+    return _stored_id(record) != d.id or (record.source == "bundled" and d.source != "bundled")
+
+
+def _consent_holds(value: object, d: DiscoveredExtension) -> bool:
+    # Erlaubt sind Kennung, Quelle und Rechte, kein bestimmtes Paket; eine andere Quelle oder mehr Rechte fragen neu.
+    if not isinstance(value, dict) or value.get("source") != d.source:
+        return False
+    allowed = value.get("permissions")
+    if not isinstance(allowed, list) or not all(isinstance(p, str) for p in allowed):
+        return False
+    assert d.manifest is not None  # nur für gültige Funde
+    return not _uncovered(d.manifest.permissions, allowed)
+
+
+async def _takeovers_awaiting_consent(
+    session: AsyncSession, found: list[DiscoveredExtension]
+) -> set[tuple[str, str]]:
+    """Paare (Kennung, frühere Kennung) mit Daten einer anderen Erweiterung, deren Übernahme kein Admin erlaubt hat;
+    eine Umbenennung unter mitgelieferten Modulen gilt ohne Rückfrage."""
+    records = (await session.execute(select(ExtensionRecord))).scalars().all()
+    consent_rows = (await session.execute(select(Setting).where(
+        Setting.scope == "global", Setting.user_id == "", Setting.key.startswith(TAKEOVER_KEY_PREFIX),
+    ))).scalars().all()
+    consents = {row.key: row.value.get("value") if isinstance(row.value, dict) else None for row in consent_rows}
+    # Aktionen und Tresor-Einträge tragen die Kennung auch ohne Zeile, etwa nach einer mehrfachen Umbenennung.
+    rowless = set((await session.execute(select(Action.ext_id).distinct())).scalars()) | set(
+        (await session.execute(select(Secret.owner_ext_id).distinct())).scalars()
+    )
+    ok_ids = {d.id for d in found if d.ok}
+    for row in consent_rows:
+        if row.key[len(TAKEOVER_KEY_PREFIX):].partition(":")[0] not in ok_ids:
+            # Paket entfernt: Ein späteres mit derselben Kennung fragt wieder.
+            await session.delete(row)
+    waiting: set[tuple[str, str]] = set()
+    for d in found:
+        if not d.ok:
+            continue
+        assert d.manifest is not None  # `d.ok` garantiert das
+        names = [d.id, *d.manifest.legacy_ids]
+        if d.manifest.legacy_ids and any(
+            p.split(":", 1)[0] in LEGACY_BLOCKING_PERMISSIONS for p in d.manifest.permissions
+        ):
+            names = [d.id]  # die Umbenennung lehnt `resolve_legacy` ohnehin ab, eine Erlaubnis änderte nichts
+        # Auch wenn die frühere Erweiterung noch da ist: Wartet sie selbst, zählt sie in `resolve_legacy` nicht als da.
+        for name in names:
+            if _consent_holds(consents.get(_takeover_key(d.id, name)), d):
+                continue
+            holders = [record for record in records if name in _ids_of(record) and _foreign(record, d)]
+            if not holders and (name == d.id or name not in rowless or any(name in _ids_of(r) for r in records)):
+                continue
+            if d.source == "bundled" and holders and all(record.source == "bundled" for record in holders):
+                continue
+            waiting.add((d.id, name))
+    return waiting
+
+
+def takeover_requests(record: ExtensionRecord) -> list[tuple[str, str, DiscoveredExtension, bool]]:
+    """Die Übernahmen der Daten dieser Zeile bis zum nächsten Start: (Kennung, frühere Kennung, Fund, erlaubt)."""
+    runtime = get_extension_runtime()
+    names = _ids_of(record)
+    pairs = [(pair, found, False) for pair, found in runtime.awaiting_consent.items()]
+    pairs += [(pair, found, True) for pair, found in runtime.takeovers_allowed.items()]
+    return [
+        (ext_id, old, found, allowed)
+        for (ext_id, old), found, allowed in sorted(pairs, key=lambda item: item[0])
+        if old in names and old not in runtime.legacy_owner and _foreign(record, found)
+    ]
+
+
+class TakeoverError(Exception):
+    pass
+
+
+class TakeoverConflict(TakeoverError):
+    pass
+
+
+async def _inherited_row(session: AsyncSession, d: DiscoveredExtension) -> ExtensionRecord | None:
+    # Dieselbe Wahl wie `_find_record`: Nur aus dieser Zeile erbt die Erweiterung Zustand und Einstellungen.
+    assert d.manifest is not None  # nur für gültige Funde
+    for candidate in (d.id, *d.manifest.legacy_ids):
+        record = await session.get(ExtensionRecord, candidate)
+        if record is not None:
+            return record if _foreign(record, d) else None
+    return None
+
+
+async def allow_takeover(session: AsyncSession, ext_id: str, old: str, *, user_id: str) -> list[str]:
+    """Erlaubt `ext_id`, die Daten unter `old` zu übernehmen, ab dem nächsten Start.
+
+    Gibt die Rechte zurück, die die bisherige Erweiterung nicht hatte; dann ist ihre Zeile jetzt ausgeschaltet."""
+    runtime = get_extension_runtime()
+    owner = runtime.legacy_owner.get(old)
+    if owner is not None and (ext_id, old) in runtime.awaiting_consent:
+        raise TakeoverConflict(f"„{old}“ gehört schon zu „{owner}“.")
+    other = next((new for new, taken in runtime.takeovers_allowed if taken == old and new != ext_id), None)
+    if other is not None and (ext_id, old) in runtime.awaiting_consent:
+        # Zwei Erlaubnisse für dieselben Daten: Beim Start lehnte Deck dann beide ab.
+        raise TakeoverConflict(f"Die Daten von „{old}“ übernimmt schon „{other}“ (erlaubt, gilt nach dem Neustart).")
+    # Vor dem ersten `await`: Eine zweite, gleichzeitige Erlaubnis für dasselbe Paar oder dieselben Daten scheitert
+    # dann an den Prüfungen oben.
+    found = runtime.awaiting_consent.pop((ext_id, old), None)
+    if found is None:
+        raise TakeoverError(f"„{ext_id}“ wartet nicht darauf, die Daten von „{old}“ zu übernehmen.")
+    runtime.takeovers_allowed[(ext_id, old)] = found
+    try:
+        assert found.manifest is not None  # nur für gültige Funde
+        await settings_service.set_global(
+            session, _takeover_key(ext_id, old),
+            {"source": found.source, "permissions": sorted(found.manifest.permissions)},
+        )
+        # Mehr Rechte, als die bisherige hatte, gibt es wie bei `adopts` nur durch bewusstes Einschalten.
+        record = await _inherited_row(session, found)
+        if record is None or old not in _ids_of(record):
+            record = None
+        extra = _uncovered(found.manifest.permissions, record.granted_permissions) if record is not None else []
+        switched_off = record is not None and record.state == "enabled" and bool(extra)
+        if record is not None and record.state == "enabled":
+            # Den Stand bis zum Neustart zeigt `takeover_requests`; der Grund „wartet auf Erlaubnis“ gilt nicht mehr.
+            record.last_error = None
+        if switched_off:
+            record.state = "disabled"
+        if record is not None and extra:
+            # Sonst schaltete ein Anlass aus `enable_on` die Erweiterung mit den zusätzlichen Rechten selbst ein.
+            await _clear_untouched(session, record.id)
+        await audit_service.log(
+            session, actor_type="user", actor_id=user_id, action="extension.takeover_allowed", outcome="success",
+            target_type="extension", target_id=ext_id,
+            detail={
+                "from": old, "source": found.source, "permissions": sorted(found.manifest.permissions),
+                "extra_permissions": extra, "switched_off": switched_off,
+            },
+        )
+    except BaseException:
+        runtime.takeovers_allowed.pop((ext_id, old), None)
+        runtime.awaiting_consent[(ext_id, old)] = found
+        raise
+    return extra if switched_off else []
+
+
 def _without_twins(found: list[DiscoveredExtension]) -> list[DiscoveredExtension]:
     # Es gilt der erste Fund (die mitgelieferten Module kommen vor den Paketen), sonst ersetzte ein nachinstalliertes
     # Paket ein mitgeliefertes Modul samt Einstellungen und Rechten.
@@ -306,8 +477,10 @@ def _without_twins(found: list[DiscoveredExtension]) -> list[DiscoveredExtension
 async def discover_and_sync(session: AsyncSession, settings: Settings) -> dict[str, DiscoveredExtension]:
     """Scannt, legt Zeilen für neue Funde an (`state=disabled`) und merkt sich das Ergebnis; die Zeile einer alten
     Kennung gilt weiter."""
-    resolution = resolve_legacy(_without_twins(discover_all(settings.extensions_dir)))
-    for refused in resolution.refused:
+    found = _without_twins(discover_all(settings.extensions_dir))
+    resolution = resolve_legacy(found, await _takeovers_awaiting_consent(session, found))
+    refused_all = [*resolution.refused, *(d for d in found if d.refused)]
+    for refused in refused_all:
         log.warning("Erweiterung '%s' wird nicht geladen: %s", refused.id, refused.error)
     by_id: dict[str, DiscoveredExtension] = {}
     store_ids: dict[str, str] = {}
@@ -348,8 +521,11 @@ async def discover_and_sync(session: AsyncSession, settings: Settings) -> dict[s
     runtime.discovered = by_id
     runtime.legacy_owner = resolution.owner
     runtime.store_ids = store_ids
-    runtime.refused = {d.id: d.error or "" for d in resolution.refused}
+    runtime.refused = {d.id: d.error or "" for d in refused_all}
     runtime.refused_old = resolution.refused_old
+    originals = {d.id: d for d in found if d.ok}
+    runtime.awaiting_consent = {pair: originals[pair[0]] for pair in resolution.awaiting_consent}
+    runtime.takeovers_allowed = {}
     return by_id
 
 
@@ -436,7 +612,9 @@ async def _enable_extension(
             )
         # Beim Start fehlt sie nur: `state` bleibt, damit ein Rückweg aufs alte Image die Entscheidung "eingeschaltet"
         # nicht löscht; die API meldet solange "error" (siehe `ExtensionOut.from_model`).
-        if refused:
+        if refused and any(old == ext_id != new for new, old in runtime.awaiting_consent):
+            record.last_error = refused  # nach der Erlaubnis lädt die neue, nicht diese
+        elif refused:
             # Die Warnung dazu steht schon im Protokoll (`discover_and_sync`).
             record.last_error = (
                 f"Die Erweiterung wird nicht geladen: {refused} "
@@ -484,7 +662,7 @@ async def _enable_extension(
         instance = extension_cls()
     except Exception as exc:  # noqa: BLE001 - Fehler-Isolation
         record.state = "error"
-        record.last_error = f"Import von '{manifest.entrypoint}' fehlgeschlagen: {exc}"
+        record.last_error = old_import_error(exc) or f"Import von '{manifest.entrypoint}' fehlgeschlagen: {exc}"
         record.last_error_at = utcnow()
         return
 
@@ -499,7 +677,9 @@ async def _enable_extension(
     # `session_scope()`-Sitzungen, und neben einer offenen Transaktion hier sperrt SQLite ("database is locked").
     await session.commit()
     try:
-        await instance.setup(ctx)
+        # Ein- und Ausschalten läuft nicht im Namen dessen, der schaltet, auch darin gestartete Tasks nicht.
+        with known_actors.known_while(()):
+            await instance.setup(ctx)
         # Auch Routen, die setup() erst nach include_router() angehängt hat.
         ctx.api.check_routes()
     except Exception as exc:  # noqa: BLE001
@@ -525,7 +705,8 @@ async def _enable_extension(
     await session.commit()
     start_error: Exception | None = None
     try:
-        await instance.on_start(ctx)
+        with known_actors.known_while(()):
+            await instance.on_start(ctx)
     except Exception as exc:  # noqa: BLE001
         start_error = exc
 
@@ -538,7 +719,8 @@ async def _enable_extension(
         record.last_error = f"on_start() hat Routen angehängt, die keine Anmeldung prüfen: {exc}"
         record.last_error_at = utcnow()
         try:
-            await instance.on_stop(ctx)
+            with known_actors.known_while(()):
+                await instance.on_stop(ctx)
         except Exception:  # Aufräumen darf nicht an einer kaputten Extension scheitern
             log.exception("on_stop() nach abgelehnten Routen von '%s' fehlgeschlagen", manifest.id)
         try:
@@ -655,6 +837,42 @@ def _data_dir(settings: Settings, manifest: ExtensionManifest, store_id: str) ->
     return settings.ext_data_dir / store_id
 
 
+SECRET_HOOK_TIMEOUT_S = 10.0
+"""So lange darf `on_secret_changed` einer Erweiterung die Anfrage aufhalten, die das Geheimnis geändert hat; alle
+Erweiterungen laufen nebeneinander."""
+
+
+async def notify_secret_changed(session: AsyncSession, labels: Iterable[str]) -> None:
+    """Ruft `on_secret_changed` bei jeder geladenen Erweiterung, die eines der Geheimnisse lesen darf."""
+    labels = list(dict.fromkeys(labels))
+    if not labels:
+        return
+    # Erst speichern: Meldet sich eine Erweiterung im Hook gleich neu an, läse sie sonst noch den alten Wert.
+    await session.commit()
+    calls = []
+    for loaded in list(get_extension_runtime().loaded.values()):
+        hook = getattr(loaded.instance, "on_secret_changed", None)
+        granted = loaded.granted_permissions
+        readable = [label for label in labels if rbac.has_permission(granted, f"secrets.read:{label}")]
+        if hook is not None and readable:
+            calls.append(_tell_secret_changed(loaded, hook, readable))
+    await asyncio.gather(*calls)
+
+
+async def _tell_secret_changed(loaded: LoadedExtension, hook: Any, labels: list[str]) -> None:
+    ext_id = loaded.manifest.id
+    with known_actors.known_while(()):
+        try:
+            async with asyncio.timeout(SECRET_HOOK_TIMEOUT_S):
+                for label in labels:
+                    try:
+                        await hook(loaded.ctx, label)
+                    except Exception:  # das Geheimnis ist gespeichert, ein kaputter Hook ändert daran nichts
+                        log.exception("on_secret_changed von '%s' ist fehlgeschlagen", ext_id)
+        except TimeoutError:
+            log.error("on_secret_changed von '%s' hat zu lange gebraucht", ext_id)
+
+
 async def _unload_extension(app: FastAPI, session: AsyncSession, ext_id: str) -> None:
     runtime = get_extension_runtime()
     loaded = runtime.loaded.pop(ext_id, None)
@@ -664,7 +882,8 @@ async def _unload_extension(app: FastAPI, session: AsyncSession, ext_id: str) ->
     # Wie in `enable_extension`: vor Extension-Code committen, ohne den Aufrufer zu prüfen.
     await session.commit()
     try:
-        await loaded.instance.on_stop(loaded.ctx)
+        with known_actors.known_while(()):
+            await loaded.instance.on_stop(loaded.ctx)
     except Exception:  # noqa: BLE001 - Aufräumen darf nicht an einer kaputten Extension scheitern
         pass
     await _cleanup_loaded(app, loaded)

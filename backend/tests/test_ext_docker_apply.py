@@ -10,15 +10,43 @@ import sys
 from pathlib import Path
 
 import pytest
-
-SRC = Path(__file__).resolve().parents[2] / "extensions" / "docker" / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-
+from docker_stack_fakes import EXT_DIR
 from nodvard_sdk.types import Risk
 
-from nodvard_deck_ext_docker import image_apply as ia
-from nodvard_deck_ext_docker.image_apply import ComposeTarget, NotUpdatable
+
+@pytest.fixture(autouse=True, scope="module")
+def _ext_docker_on_path():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(EXT_DIR / "src"))
+        yield
+    for name in list(sys.modules):
+        if name.startswith("nodvard_deck_ext_docker"):
+            del sys.modules[name]
+
+
+def _ia():
+    from nodvard_deck_ext_docker import image_apply
+
+    return image_apply
+
+
+def _iu():
+    from nodvard_deck_ext_docker import image_updates
+
+    return image_updates
+
+
+def _ap():
+    from nodvard_deck_ext_docker import applier
+
+    return applier
+
+
+def _dt():
+    from nodvard_deck_ext_docker import detached
+
+    return detached
+
 
 CID = "0123456789ab" + "0" * 52
 IMG_ID = "sha256:" + "1" * 64
@@ -48,30 +76,33 @@ def info(lbls=None, **over):
 L = lambda suffix: "com.docker.compose." + suffix
 
 
-def target(**over) -> ComposeTarget:
+def target(**over):
+    ia = _ia()
     result = ia.classify(info(), own=False)
-    assert isinstance(result, ComposeTarget), result
+    assert isinstance(result, ia.ComposeTarget), result
     fields = {**result.__dict__, **over}
-    return ComposeTarget(**fields)
+    return ia.ComposeTarget(**fields)
 
 
 # --- classify -----------------------------------------------------------------------------
 
 
 def test_a_normal_compose_container_is_updatable():
+    ia = _ia()
     t = ia.classify(info(), own=False)
-    assert t == ComposeTarget(
+    assert t == ia.ComposeTarget(
         container="nextcloud-app", container_id=CID, image="nextcloud:30-apache", image_id=IMG_ID, project="nextcloud", service="app",
         working_dir="/opt/nextcloud", config_files=("/opt/nextcloud/docker-compose.yml",), env_files=(), config_hash="a" * 64,
     )
 
 
 def test_relative_config_files_belong_to_the_project_directory_and_env_files_are_read():
+    ia = _ia()
     lbls = labels()
     lbls[L("project.config_files")] = "docker-compose.yml,./override.yml"
     lbls[L("project.environment_file")] = "/opt/nextcloud/prod.env"
     t = ia.classify(info(lbls), own=False)
-    assert isinstance(t, ComposeTarget)
+    assert isinstance(t, ia.ComposeTarget)
     assert t.config_files == ("/opt/nextcloud/docker-compose.yml", "/opt/nextcloud/override.yml")
     assert t.env_files == ("/opt/nextcloud/prod.env",)
 
@@ -105,52 +136,60 @@ def test_relative_config_files_belong_to_the_project_directory_and_env_files_are
     ],
 )
 def test_containers_that_get_no_button_say_why(case, kwargs, kind):
+    ia = _ia()
     kwargs = {**kwargs}
     lbls = kwargs.pop("lbls", "unset")
     data = info(**kwargs) if lbls == "unset" else info(lbls, **kwargs)
     result = ia.classify(data, own=False)
-    assert isinstance(result, NotUpdatable) and result.kind == kind and result.why, case
+    assert isinstance(result, ia.NotUpdatable) and result.kind == kind and result.why, case
 
 
 def test_the_container_the_dashboard_runs_in_is_never_updated_here():
+    ia = _ia()
     result = ia.classify(info(), own=True)
-    assert isinstance(result, NotUpdatable) and result.kind == "self" and "Deploy-Skript" in result.why
+    assert isinstance(result, ia.NotUpdatable) and result.kind == "self" and "Deploy-Skript" in result.why
 
 
 @pytest.mark.parametrize("image", ["ghcr.io/other/deck:1", "nodvard/deck-tools:1", "ghcr.io/nodvard/link:1", "deck:1", "ghcr.io/nodvard/decks:1",
                                    "ghcr.io/other/deck-updater:1", "deck-updater:1", "ghcr.io/nodvard/deck-updaters:1",
                                    "ghcr.io/other/dock:1", "dock:1", "ghcr.io/nodvard/docks:1", "nodvard-dock-tools:1"])
 def test_only_nodvard_deck_and_dock_are_the_dashboard_not_any_repo_with_that_name(image):
-    assert isinstance(ia.classify(info(image=image), own=False), ComposeTarget), image
+    ia = _ia()
+    assert isinstance(ia.classify(info(image=image), own=False), ia.ComposeTarget), image
 
 
 @pytest.mark.parametrize("image", ["ghcr.io/nodvard/deck-updater:1", "ghcr.io/nodvard/deck-updater:0.7.0@sha256:" + "c" * 64,
-                                   "registry.local:5000/nodvard/deck-updater"])
+                                   "ghcr.io/nodvard/deck-updater@sha256:" + "d" * 64, "registry.local:5000/nodvard/deck-updater"])
 def test_the_update_helper_is_never_updated_here_and_the_reason_says_how(image):
     """Der Update-Helfer hat Zugriff auf Docker; neu angelegt mitten in einem Update des Dashboards ließe er es halb
     fertig liegen. Kein Knopf, stattdessen der Weg auf dem Server."""
+    ia = _ia()
     result = ia.classify(info(image=image), own=False)
-    assert isinstance(result, NotUpdatable) and result.kind == "self", image
-    assert "Update-Helfer" in result.why and "docker compose pull updater" in result.why
+    assert isinstance(result, ia.NotUpdatable) and result.kind == "self", image
+    assert "Update-Helfer" in result.why and "docker compose up -d updater" in result.why
+    assert "„:1“: „docker compose pull updater“" in result.why and "„@sha256:…“" in result.why
+    assert "github.com/nodvard/deck/releases/latest" in result.why
     assert "deploy_pi" not in result.why
 
 
 @pytest.mark.parametrize("own", [False, True])
 @pytest.mark.parametrize(
-    ("image", "why"),
+    ("image", "why_name"),
     [
-        ("ghcr.io/nodvard/dock:latest", ia.SELF_WHY_DOCK),
-        ("ghcr.io/nodvard/dock:0.11.0", ia.SELF_WHY_DOCK),
-        ("ghcr.io/nodvard/dock@sha256:" + "e" * 64, ia.SELF_WHY_DOCK),
-        ("registry.local:5000/nodvard/dock:1", ia.SELF_WHY_DOCK),
-        ("nodvard-dock:selbst", ia.SELF_WHY_DOCK_BUILT),
+        ("ghcr.io/nodvard/dock:latest", "SELF_WHY_DOCK"),
+        ("ghcr.io/nodvard/dock:0.11.0", "SELF_WHY_DOCK"),
+        ("ghcr.io/nodvard/dock@sha256:" + "e" * 64, "SELF_WHY_DOCK"),
+        ("registry.local:5000/nodvard/dock:1", "SELF_WHY_DOCK"),
+        ("nodvard-dock:selbst", "SELF_WHY_DOCK_BUILT"),
     ],
 )
-def test_nodvard_dock_is_never_updated_here_and_the_reason_says_how(image, why, own):
+def test_nodvard_dock_is_never_updated_here_and_the_reason_says_how(image, why_name, own):
+    ia = _ia()
+    why = getattr(ia, why_name)
     # Die Update-Suche im Dashboard kennt nur das Image von Nodvard Deck: kein Verweis dorthin und keiner aufs Deploy-Skript.
     assert ia.is_self_image(image)
     result = ia.classify(info(image=image), own=own)
-    assert isinstance(result, NotUpdatable) and result.kind == "self", image
+    assert isinstance(result, ia.NotUpdatable) and result.kind == "self", image
     assert result.why == why and "„docker compose up -d“" in result.why
     assert "Einstellungen" not in result.why and "Deploy-Skript" not in result.why
     # Ein selbst gebautes Image liegt in keiner Registry, „pull“ scheiterte dort.
@@ -165,21 +204,24 @@ HELPER_TITLE = {"org.opencontainers.image.title": "Nodvard Deck Update-Helfer"}
 def test_a_mirrored_update_helper_is_recognised_by_the_title_of_its_image(image):
     """Unter einem anderen Namen gespiegelt (eigene Registry, Proxy-Cache) hilft der Name nicht. Docker übernimmt die
     Labels des Images in die des Containers: Der Titel aus deploy/updater/Dockerfile verrät den Helfer trotzdem."""
+    ia = _ia()
     result = ia.classify(info({**labels(), **HELPER_TITLE}, image=image), own=False)
-    assert isinstance(result, NotUpdatable) and result.kind == "self", image
-    assert "Update-Helfer" in result.why and "docker compose pull updater" in result.why
+    assert isinstance(result, ia.NotUpdatable) and result.kind == "self", image
+    assert "Update-Helfer" in result.why and "neuesten Release" in result.why and "docker compose up -d updater" in result.why
 
 
 @pytest.mark.parametrize("title", ["Nodvard Deck", "nodvard deck update-helfer", "Nodvard Deck Update-Helfer ", "Nextcloud"])
 def test_other_titles_keep_the_button(title):
+    ia = _ia()
     result = ia.classify(info({**labels(), "org.opencontainers.image.title": title}, image="registry.local:5000/spiegel/app:1"),
                          own=False)
-    assert isinstance(result, ComposeTarget), title
+    assert isinstance(result, ia.ComposeTarget), title
 
 
 def test_the_title_is_the_one_the_helper_image_really_carries():
     """Dieselbe Angabe in deploy/updater/Dockerfile und in release.yml (die Labels dort überschreiben die des
     Dockerfiles); ändert sich der Titel, muss die Erkennung mitziehen."""
+    ia = _ia()
     import re
 
     root = Path(__file__).resolve().parents[2]
@@ -197,24 +239,27 @@ def test_the_title_is_the_one_the_helper_image_really_carries():
 def test_the_official_image_points_to_the_updates_in_the_settings(image, own):
     """Wer das offizielle Image nutzt, aktualisiert unter Einstellungen -> System -> Updates, nicht mit dem
     Deploy-Skript (das gibt es nur für selbst gebaute Images)."""
+    ia = _ia()
     result = ia.classify(info(image=image), own=own)
-    assert isinstance(result, NotUpdatable) and result.kind == "self"
+    assert isinstance(result, ia.NotUpdatable) and result.kind == "self"
     assert "Einstellungen → System → Updates" in result.why and "deploy_pi" not in result.why
 
 
 @pytest.mark.parametrize("image", ["nodvard-deck:pi-abc1234", "lattice:latest", "registry.local:5000/nodvard/deck:1", "nodvard/deck:latest"])
 def test_self_built_or_mirrored_images_keep_the_deploy_script_hint(image):
+    ia = _ia()
     result = ia.classify(info(image=image), own=False)
-    assert isinstance(result, NotUpdatable) and result.kind == "self"
+    assert isinstance(result, ia.NotUpdatable) and result.kind == "self"
     assert result.why == ia.SELF_WHY and "Deploy-Skript" in result.why
 
 
 def test_compose_v1_with_an_explicit_container_name_stays_updatable():
+    ia = _ia()
     lbls = {**labels(), L("version"): "1.29.2"}
-    assert isinstance(ia.classify(info(lbls, name="/meine-app"), own=False), ComposeTarget)
-    assert isinstance(ia.classify(info(lbls, name="/nextcloud_app_1"), own=False), NotUpdatable)
+    assert isinstance(ia.classify(info(lbls, name="/meine-app"), own=False), ia.ComposeTarget)
+    assert isinstance(ia.classify(info(lbls, name="/nextcloud_app_1"), own=False), ia.NotUpdatable)
     # Compose v2 nennt Container auch `projekt-dienst-1` -- das ist kein v1.
-    assert isinstance(ia.classify(info(name="/nextcloud-app-1"), own=False), ComposeTarget)
+    assert isinstance(ia.classify(info(name="/nextcloud-app-1"), own=False), ia.ComposeTarget)
 
 
 PROJECTS = ["x; rm -rf /", "X", "-p", "a b", "abc\n", "$(id)", "", "a" * 70]
@@ -233,31 +278,35 @@ ENVS = ["/a.env,;", "/a b.env,/x$(id)", "rel/../x.env", ",".join(f"/e{i}.env" fo
     + [(L("project.environment_file"), v) for v in ENVS],
 )
 def test_hostile_label_values_never_reach_a_command(key, value):
+    ia = _ia()
     lbls = {**labels(), key: value}
     if key == L("project.working_dir") and not value:
         lbls.pop(key)
     result = ia.classify(info(lbls), own=False)
-    assert isinstance(result, NotUpdatable), (key, value)
+    assert isinstance(result, ia.NotUpdatable), (key, value)
     # `plain` (kein Projekt) und `portainer` gelten nur bei ihren eigenen Angaben; alles andere ist `labels`.
     assert result.kind == "labels", (key, value, result)
 
 
 @pytest.mark.parametrize("field, value", [("name", "/web\n"), ("name", "/x;y"), ("image", "nginx; id"), ("image", "nginx\n"), ("image_id", "sha256:abc"), ("id", "xyz")])
 def test_hostile_container_facts_are_blocked_too(field, value):
+    ia = _ia()
     result = ia.classify(info(**{field: value}), own=False)
-    assert isinstance(result, NotUpdatable) and result.kind == "labels"
+    assert isinstance(result, ia.NotUpdatable) and result.kind == "labels"
 
 
 def test_the_root_folder_alone_is_a_valid_project_folder():
+    ia = _ia()
     lbls = {**labels(), L("project.working_dir"): "/", L("project.config_files"): "/compose.yml"}
     t = ia.classify(info(lbls), own=False)
-    assert isinstance(t, ComposeTarget) and (t.working_dir, t.config_files) == ("/", ("/compose.yml",))
+    assert isinstance(t, ia.ComposeTarget) and (t.working_dir, t.config_files) == ("/", ("/compose.yml",))
     ia.check_target(t)
     argv = shlex.split(ia.pull_command(t))
     assert argv[argv.index("--project-directory") + 1] == "/"
 
 
 def test_builders_check_by_themselves_even_with_a_hand_built_bad_target():
+    ia = _ia()
     good = target()
     for bad in (
         target(project="x; rm -rf /"), target(service="a;b"), target(working_dir="/a b/$(id)"), target(config_files=("/a.yml\n",)),
@@ -291,6 +340,7 @@ def test_builders_check_by_themselves_even_with_a_hand_built_bad_target():
 
 
 def test_the_commands_reproduce_the_project_exactly():
+    ia = _ia()
     t = target()
     common = ["docker", "compose", "--ansi", "never", "-p", "nextcloud", "--project-directory", "/opt/nextcloud", "-f", "/opt/nextcloud/docker-compose.yml"]
     assert shlex.split(ia.pull_command(t)) == common + ["pull", "app"]
@@ -300,6 +350,7 @@ def test_the_commands_reproduce_the_project_exactly():
 
 
 def test_several_files_env_files_and_paths_with_spaces_are_quoted_exactly():
+    ia = _ia()
     t = target(
         working_dir="/opt/mein stack", config_files=("/opt/mein stack/a.yml", "/opt/mein stack/b override.yml"), env_files=("/opt/mein stack/x.env",),
     )
@@ -313,6 +364,7 @@ def test_several_files_env_files_and_paths_with_spaces_are_quoted_exactly():
 
 
 def test_the_rollback_name_is_a_valid_image_name_and_never_shared_between_containers():
+    ia = _ia()
     from nodvard_deck_ext_docker.image_updates import is_valid_ref
 
     assert ia.rollback_ref("My_App.1") == "lattice-rollback/my-app-1-dd7fff9a:previous"
@@ -325,6 +377,7 @@ def test_the_rollback_name_is_a_valid_image_name_and_never_shared_between_contai
 
 
 def test_a_backup_name_that_is_no_image_name_is_refused(monkeypatch):
+    ia = _ia()
     monkeypatch.setattr(ia, "is_valid_ref", lambda ref: False)
     with pytest.raises(ValueError, match="Sicherungs-Name"):
         ia.rollback_ref("nextcloud-app")
@@ -333,16 +386,18 @@ def test_a_backup_name_that_is_no_image_name_is_refused(monkeypatch):
 @pytest.mark.parametrize("bad", ["", "x; id", "a b", "-f", "nginx\n"], ids=["empty", "semicolon", "space", "option", "newline"])
 def test_the_verify_command_checks_the_backup_name_by_itself(bad):
     with pytest.raises(ValueError, match="Sicherungs-Name"):
-        ia.cmd_verify(target(), bad)
+        _ia().cmd_verify(target(), bad)
 
 
 def test_the_verify_command_reads_the_backup_image_only_when_given_one():
+    ia = _ia()
     backup = ia.rollback_ref("nextcloud-app")
     assert backup in ia.cmd_verify(target(), backup)
     assert "@@rollback=" in ia.cmd_verify(target(), backup) and "@@rollback=" not in ia.cmd_verify(target())
 
 
 def test_the_script_pulls_then_tags_only_a_really_new_image_then_recreates():
+    ia = _ia()
     t = target()
     script = ia.apply_script(t, old_image_id=IMG_ID, rollback="lattice-rollback/nextcloud-app-902344c2:previous")
     assert script.index("@@step=pull") < script.index("@@step=tag") < script.index("@@step=up") < script.index("@@step=done")
@@ -355,12 +410,13 @@ def test_the_script_pulls_then_tags_only_a_really_new_image_then_recreates():
 
 
 def test_rollback_commands_go_back_to_the_old_image():
-    lines = ia.rollback_commands(target(), "lattice-rollback/nextcloud-app-902344c2:previous").splitlines()
+    lines = _ia().rollback_commands(target(), "lattice-rollback/nextcloud-app-902344c2:previous").splitlines()
     assert lines[0] == "docker tag lattice-rollback/nextcloud-app-902344c2:previous nextcloud:30-apache"
     assert shlex.split(lines[1])[-5:] == ["up", "-d", "--no-deps", "--no-build", "app"]
 
 
 def test_generated_commands_pass_the_deny_list():
+    ia = _ia()
     from nodvard_deck.core.deny_patterns import match_deny_patterns
 
     t = target()
@@ -370,6 +426,7 @@ def test_generated_commands_pass_the_deny_list():
 
 
 def test_probe_command_quotes_every_path_and_reads_the_default_env_file_only_without_a_label():
+    ia = _ia()
     t = target(working_dir="/opt/a b", config_files=("/opt/a b/c.yml",))
     probe = ia.cmd_probe(t)
     assert "'/opt/a b'" in probe and "'/opt/a b/c.yml'" in probe and "'/opt/a b/.env'" in probe
@@ -391,6 +448,7 @@ def probe_out(version="2.29.1", dir_=True, **files):
 
 
 def test_probe_results_name_the_problem():
+    ia = _ia()
     t = target()
     ok = probe_out(ok="/opt/nextcloud/docker-compose.yml")
     assert ia.parse_probe(ok, t) is None
@@ -425,7 +483,7 @@ CONFIG_OK = json.dumps({"services": {"app": {"image": "nextcloud:30-apache", "en
     ],
 )
 def test_config_check(stdout, stderr, code, kind):
-    result = ia.check_config(stdout, stderr, code, target())
+    result = _ia().check_config(stdout, stderr, code, target())
     assert (result.kind if result else None) == kind
     if result:
         assert "GEHEIM" not in result.why
@@ -433,7 +491,7 @@ def test_config_check(stdout, stderr, code, kind):
 
 @pytest.mark.parametrize("service", [None, "nextcloud:30-apache", ["image"], 7], ids=["null", "text", "list", "number"])
 def test_a_service_that_is_no_object_counts_as_missing(service):
-    result = ia.check_config(json.dumps({"services": {"app": service}}), "", 0, target())
+    result = _ia().check_config(json.dumps({"services": {"app": service}}), "", 0, target())
     assert result is not None and result.kind == "service_missing" and "„app“" in result.why
 
 
@@ -443,12 +501,13 @@ def test_a_service_that_is_no_object_counts_as_missing(service):
     ids=["empty", "blank", "warning", "warnings"],
 )
 def test_a_config_error_without_a_line_names_the_exit_code(stderr):
-    result = ia.check_config("", stderr, 3, target())
+    result = _ia().check_config("", stderr, 3, target())
     assert result is not None and result.kind == "config"
     assert result.why == "docker compose config meldet einen Fehler: Exit-Code 3"
 
 
 def test_missing_variables_are_listed_and_config_errors_show_the_first_line():
+    ia = _ia()
     why = ia.check_config("", 'WARN The "DB_PASS" variable is not set.\nWARN The "TAG" variable is not set.', 0, target()).why
     assert "2 Variablen ohne Wert" in why and "von Hand" in why and "DB_PASS" not in why
     current = 'time="2026-10-17T07:00:00Z" level=warning msg="The \\"TAG\\" variable is not set. Defaulting to a blank string."'
@@ -457,6 +516,7 @@ def test_missing_variables_are_listed_and_config_errors_show_the_first_line():
 
 
 def test_members_and_config_hash_parsing():
+    ia = _ia()
     assert ia.parse_members("nextcloud-app|running\nnextcloud-app-2|exited\nmuell\n") == [("nextcloud-app", "running"), ("nextcloud-app-2", "exited")]
     assert ia.parse_config_hash("app " + "b" * 64 + "\n", "app") == "b" * 64
     assert ia.parse_config_hash("other " + "b" * 64, "app") is None and ia.parse_config_hash("app zz", "app") is None
@@ -476,6 +536,7 @@ def test_members_and_config_hash_parsing():
     ],
 )
 def test_databases_are_high_risk(image, service, db):
+    ia = _ia()
     assert ia.is_database_image(image, service) is db
     assert ia.risk_for(image, service) is (Risk.HIGH if db else Risk.MEDIUM)
 
@@ -483,7 +544,7 @@ def test_databases_are_high_risk(image, service, db):
 def warn(**over):
     args = dict(image="nextcloud:30-apache", service="app", affected=["nextcloud-app"], stopped=[], drift=False, stale=False, registry_at=None)
     args.update(over)
-    return ia.warnings_for(**args)
+    return _ia().warnings_for(**args)
 
 
 def test_warnings_are_specific_and_quiet_when_there_is_nothing_to_say():
@@ -509,6 +570,7 @@ def test_a_registry_time_that_is_no_date_is_shown_as_it_is(registry_at, shown):
 
 
 def test_reason_text_carries_the_essentials_for_the_actions_page():
+    ia = _ia()
     text = ia.reason_text("docker", "nextcloud-app", "nextcloud:30-apache", "nextcloud", "app", Risk.MEDIUM)
     for part in ("nextcloud-app", "docker", "nextcloud:30-apache", "„nextcloud“/„app“", "Kurz nicht erreichbar"):
         assert part in text
@@ -517,6 +579,7 @@ def test_reason_text_carries_the_essentials_for_the_actions_page():
 
 
 def test_plan_id_changes_with_every_input():
+    ia = _ia()
     base = ia.plan_id("cmd", IMG_ID, "sha256:" + "a" * 64)
     assert base == ia.plan_id("cmd", IMG_ID, "sha256:" + "a" * 64) and len(base) == 16
     assert len({base, ia.plan_id("cmd2", IMG_ID, "sha256:" + "a" * 64), ia.plan_id("cmd", "sha256:" + "2" * 64, "sha256:" + "a" * 64), ia.plan_id("cmd", IMG_ID, None)}) == 4
@@ -528,14 +591,20 @@ NEW_ID = "sha256:" + "9" * 64
 
 
 def member(name="nextcloud-app", image_id=NEW_ID, status="running", exit_code=0, health=None, restarts=None, started=None):
-    return ia.Member(name, image_id, status, exit_code, health, restarts, started)
+    return _ia().Member(name, image_id, status, exit_code, health, restarts, started)
 
 
 def snap(*members, tag=NEW_ID):
-    return ia.Snapshot(tuple(members), tag)
+    return _ia().Snapshot(tuple(members), tag)
+
+
+def spec(*args, **kwargs):
+    """Argumente für `member`, damit `parametrize` beim Sammeln noch kein Modul braucht."""
+    return args, kwargs
 
 
 def test_verify_output_parsing():
+    ia = _ia()
     line = json.dumps({"name": "/nextcloud-app", "image_id": NEW_ID, "status": "running", "exit_code": 0, "health": "healthy"})
     got = ia.parse_verify(f"{line}\nmuell\n@@image={NEW_ID}\n")
     assert got == ia.Snapshot((ia.Member("nextcloud-app", NEW_ID, "running", 0, "healthy"),), NEW_ID)
@@ -545,11 +614,12 @@ def test_verify_output_parsing():
 
 def test_verify_lines_with_broken_json_are_skipped():
     line = json.dumps({"name": "/nextcloud-app", "image_id": NEW_ID, "status": "running", "exit_code": 0, "health": None})
-    got = ia.parse_verify(f'{{kaputt\n{{"name": "/halb"\n{line}\n@@image={NEW_ID}\n')
+    got = _ia().parse_verify(f'{{kaputt\n{{"name": "/halb"\n{line}\n@@image={NEW_ID}\n')
     assert [m.name for m in got.members] == ["nextcloud-app"] and got.tag_image_id == NEW_ID
 
 
 def test_an_empty_snapshot_says_that_no_container_was_found():
+    ia = _ia()
     assert ia.describe_members(snap()) == "Kein Container des Dienstes gefunden."
     assert ia.describe_members(snap(member("a", health="healthy"), member("b", status="exited"))) == "a: running (healthy); b: exited"
 
@@ -557,28 +627,28 @@ def test_an_empty_snapshot_says_that_no_container_was_found():
 @pytest.mark.parametrize(
     "members, tag, final, ok, fragment",
     [
-        ([member()], NEW_ID, False, True, "läuft wieder"),
-        ([member(health="healthy")], NEW_ID, False, True, "(gesund)"),
-        ([member(health="starting")], NEW_ID, False, None, ""),
-        ([member(health="starting")], NEW_ID, True, True, "Healthcheck meldet noch „startet“"),
-        ([member(health="unhealthy")], NEW_ID, False, False, "ungesund"),
-        ([member(status="exited", exit_code=137)], NEW_ID, False, False, "Exit-Code 137"),
-        ([member(status="dead", exit_code=None)], NEW_ID, False, False, "beendet"),
-        ([member(status="restarting")], NEW_ID, False, None, ""),
-        ([member(status="restarting")], NEW_ID, True, False, "immer wieder"),
-        ([member(status="created")], NEW_ID, True, False, "created"),
+        ([spec()], NEW_ID, False, True, "läuft wieder"),
+        ([spec(health="healthy")], NEW_ID, False, True, "(gesund)"),
+        ([spec(health="starting")], NEW_ID, False, None, ""),
+        ([spec(health="starting")], NEW_ID, True, True, "Healthcheck meldet noch „startet“"),
+        ([spec(health="unhealthy")], NEW_ID, False, False, "ungesund"),
+        ([spec(status="exited", exit_code=137)], NEW_ID, False, False, "Exit-Code 137"),
+        ([spec(status="dead", exit_code=None)], NEW_ID, False, False, "beendet"),
+        ([spec(status="restarting")], NEW_ID, False, None, ""),
+        ([spec(status="restarting")], NEW_ID, True, False, "immer wieder"),
+        ([spec(status="created")], NEW_ID, True, False, "created"),
         ([], NEW_ID, False, None, ""),
         ([], NEW_ID, True, False, "Kein Container"),
         # Gleiches Image nach dem Pull: Multi-Arch-Grenze, kein Fehler.
-        ([member(image_id=IMG_ID)], IMG_ID, False, True, "Für diesen Host gibt es kein neueres Image"),
+        ([spec(image_id=IMG_ID)], IMG_ID, False, True, "Für diesen Host gibt es kein neueres Image"),
         # Neues Image geladen, Container nutzt es nicht.
-        ([member(image_id=IMG_ID)], NEW_ID, False, False, "nutzt es aber nicht"),
+        ([spec(image_id=IMG_ID)], NEW_ID, False, False, "nutzt es aber nicht"),
         # Mehrere Replikate, eines noch alt.
-        ([member("a", NEW_ID), member("b", IMG_ID)], NEW_ID, False, False, "nutzt es aber nicht"),
+        ([spec("a", NEW_ID), spec("b", IMG_ID)], NEW_ID, False, False, "nutzt es aber nicht"),
     ],
 )
 def test_the_verdict_after_the_run(members, tag, final, ok, fragment):
-    verdict = ia.judge_verify(snap(*members, tag=tag), old_image_id=IMG_ID, final=final)
+    verdict = _ia().judge_verify(snap(*(member(*args, **kwargs) for args, kwargs in members), tag=tag), old_image_id=IMG_ID, final=final)
     if ok is None:
         assert verdict is None
         return
@@ -590,6 +660,7 @@ def test_the_verdict_after_the_run(members, tag, final, ok, fragment):
 
 
 def test_pull_failures_are_explained_and_keep_the_good_news():
+    ia = _ia()
     assert ia.describe_pull_failure("toomanyrequests: You have reached your pull rate limit").startswith("Abruflimit der Registry erreicht")
     assert "Kein Platz mehr auf dem Host" in ia.describe_pull_failure("write /var/lib/docker/x: no space left on device")
     assert "Anmeldedaten" in ia.describe_pull_failure("error getting credentials - err: exec: docker-credential-pass: executable file not found")
@@ -600,6 +671,7 @@ def test_pull_failures_are_explained_and_keep_the_good_news():
 
 
 def test_the_public_pull_failure_text_never_quotes_a_line_from_the_host():
+    ia = _ia()
     log = "@@step=pull\n Image x Pulling\nError response from daemon: GEHEIM-AUS-DER-AUSGABE"
     assert "GEHEIM-AUS-DER-AUSGABE" in ia.describe_pull_failure(log)
     public = ia.describe_pull_failure(log, public=True)
@@ -611,6 +683,7 @@ def test_the_public_pull_failure_text_never_quotes_a_line_from_the_host():
 
 
 def test_result_texts_contain_ids_rollback_and_a_log_tail():
+    ia = _ia()
     t = target()
     verdict = ia.Verdict(True, "Container läuft wieder (gesund).", new_image_id=NEW_ID, health="healthy")
     out = ia.success_output(t, verdict, old_image_id=IMG_ID, rollback="lattice-rollback/nextcloud-app-902344c2:previous", log="Recreated\n")
@@ -637,11 +710,6 @@ def test_result_texts_contain_ids_rollback_and_a_log_tail():
 import asyncio  # noqa: E402
 from datetime import datetime, timedelta, timezone  # noqa: E402
 import hashlib  # noqa: E402
-
-from nodvard_deck_ext_docker import applier as ap  # noqa: E402
-from nodvard_deck_ext_docker import image_updates as iu  # noqa: E402
-from nodvard_deck_ext_docker.applier import ImageApplier  # noqa: E402
-from nodvard_deck_ext_docker.image_updates import ImageUpdateService  # noqa: E402
 
 
 def dg(char: str) -> str:
@@ -808,14 +876,14 @@ class Ctx:
 def pretend_own_container(monkeypatch, short_id: str) -> None:
     """Nodvard Deck läuft in diesem Container. Gesetzt wird dort, wo der Applier seine Funktion her hat:
     andere Tests laden die Extension neu, ein frisch importiertes `capabilities` wäre ein anderes Modul."""
-    monkeypatch.setitem(ap.is_own_container.__globals__, "_own_container_id", lambda: short_id)
+    monkeypatch.setitem(_ap().is_own_container.__globals__, "_own_container_id", lambda: short_id)
 
 
 def make_applier(tmp_path, docker: FakeApplyDocker | None = None):
     docker = docker or FakeApplyDocker()
     ctx = Ctx(tmp_path, docker)
-    service = ImageUpdateService(ctx)  # type: ignore[arg-type]
-    applier = ImageApplier(ctx, service)  # type: ignore[arg-type]
+    service = _iu().ImageUpdateService(ctx)  # type: ignore[arg-type]
+    applier = _ap().ImageApplier(ctx, service)  # type: ignore[arg-type]
     service.apply_hints = applier.hints
     return service, applier, ctx
 
@@ -844,7 +912,7 @@ async def test_check_marks_which_update_containers_can_be_applied_with_one_extra
     assert snap["h1:nextcloud-app"]["apply"] == {"mode": "compose", "project": "nextcloud", "service": "app"}
     assert snap["h1:pihole"]["apply"]["mode"] == "none" and snap["h1:pihole"]["apply"]["kind"] == "plain"
     assert "Compose" in snap["h1:pihole"]["apply"]["why"]
-    assert snap["h1:nginx"]["status"] == iu.CURRENT and "apply" not in snap["h1:nginx"]
+    assert snap["h1:nginx"]["status"] == _iu().CURRENT and "apply" not in snap["h1:nginx"]
     assert len(docker.calls_with('docker container inspect --format \'{"id"')) == 1
     inspected = shlex.split(docker.calls_with('docker container inspect --format \'{"id"')[0])[5:]
     assert sorted(inspected) == ["nextcloud-app", "pihole"]
@@ -852,6 +920,7 @@ async def test_check_marks_which_update_containers_can_be_applied_with_one_extra
 
 @pytest.mark.asyncio
 async def test_no_extra_call_without_updates_and_a_failing_hint_never_breaks_the_check(tmp_path):
+    iu = _iu()
     docker = FakeApplyDocker()
     docker.remote["nextcloud:30-apache"] = dg("a")  # aktuell
     service, _, _ = await checked(tmp_path, docker)
@@ -868,6 +937,7 @@ async def test_no_extra_call_without_updates_and_a_failing_hint_never_breaks_the
 
 @pytest.mark.asyncio
 async def test_recheck_merges_one_container_without_asking_the_registry_again(tmp_path):
+    iu = _iu()
     docker = FakeApplyDocker()
     docker.add("nginx", image="nginx:1.27", image_id=dg("3"), lbls={**labels(), L("service"): "web"})
     docker.images[dg("3")] = ["nginx@" + dg("e")]
@@ -891,6 +961,7 @@ async def test_recheck_merges_one_container_without_asking_the_registry_again(tm
 
 @pytest.mark.asyncio
 async def test_recheck_of_a_vanished_container_drops_its_entry_and_works_without_earlier_state(tmp_path):
+    iu = _iu()
     docker = FakeApplyDocker()
     service, _, ctx = await checked(tmp_path, docker)
     del docker.infos["nextcloud-app"]
@@ -900,13 +971,14 @@ async def test_recheck_of_a_vanished_container_drops_its_entry_and_works_without
     fresh_docker = FakeApplyDocker()
     fresh_docker.recreate_with_new_image()
     _, _, fresh_ctx = make_applier(tmp_path, fresh_docker)
-    fresh_service = ImageUpdateService(fresh_ctx)  # type: ignore[arg-type]
+    fresh_service = iu.ImageUpdateService(fresh_ctx)  # type: ignore[arg-type]
     fresh = await fresh_service.recheck_container(fresh_ctx.host, "nextcloud-app")
     assert fresh is not None and fresh["status"] == iu.CURRENT
     assert fresh_service.snapshot()["hosts"]["h1"]["checked_at"] is None
 
 
 def test_the_named_inspect_builder_checks_names_itself():
+    iu = _iu()
     assert shlex.split(iu.cmd_inspect_named(["a", "b.c"]))[3:] == ["--format", "{{.Name}}|{{.Config.Image}}|{{.Image}}", "a", "b.c"]
     for bad in ("x; id", "a b", "web\n", "-f", ""):
         with pytest.raises(ValueError):
@@ -918,10 +990,11 @@ def test_the_named_inspect_builder_checks_names_itself():
 
 @pytest.mark.asyncio
 async def test_the_plan_lists_what_will_happen(tmp_path):
+    ia = _ia()
     docker = FakeApplyDocker()
     service, applier, ctx = await checked(tmp_path, docker)
     plan = await applier.plan(ctx.host, "nextcloud-app")
-    assert isinstance(plan, ap.Plan)
+    assert isinstance(plan, _ap().Plan)
     body = plan.as_response()
     assert body["ok"] is True and body["risk"] == "medium"
     assert (body["container"], body["image"], body["project"], body["service"], body["affected"]) == (
@@ -945,7 +1018,7 @@ async def test_the_plan_never_contains_environment_values(tmp_path):
     assert GEHEIM not in json.dumps(plan.as_response()) and GEHEIM not in json.dumps(applier.snapshot())
     docker.config_stderr = 'WARN The "X" variable is not set.'
     blocked = await applier.plan(ctx.host, "nextcloud-app")
-    assert isinstance(blocked, NotUpdatable) and GEHEIM not in blocked.why
+    assert isinstance(blocked, _ia().NotUpdatable) and GEHEIM not in blocked.why
 
 
 @pytest.mark.asyncio
@@ -965,7 +1038,7 @@ async def test_blocked_containers_get_a_reason_and_no_further_calls(tmp_path, se
     setup(docker)
     docker.calls.clear()
     plan = await applier.plan(ctx.host, "nextcloud-app")
-    assert isinstance(plan, NotUpdatable) and plan.kind == kind and plan.why
+    assert isinstance(plan, _ia().NotUpdatable) and plan.kind == kind and plan.why
     assert len(docker.calls) == 1, "nach dem Inspect ist Schluss (kein Probe, keine Konfiguration)"
 
 
@@ -1010,7 +1083,7 @@ async def test_the_plan_names_what_is_missing_on_the_host(tmp_path, setup, kind,
     service, applier, ctx = await checked(tmp_path, docker)
     setup(docker)
     plan = await applier.plan(ctx.host, "nextcloud-app")
-    assert isinstance(plan, NotUpdatable) and plan.kind == kind and fragment in plan.why, plan
+    assert isinstance(plan, _ia().NotUpdatable) and plan.kind == kind and fragment in plan.why, plan
 
 
 @pytest.mark.asyncio
@@ -1064,7 +1137,7 @@ async def test_an_update_started_during_the_plan_blocks_the_apply(tmp_path, fast
 
     applier.plan = plan_then_busy
     result = await applier.apply(request_for(plan))
-    assert (result.success, result.error) == (False, ap.BUSY_MESSAGE)
+    assert (result.success, result.error) == (False, _ap().BUSY_MESSAGE)
     no_launch(docker)
     assert applier._busy == {"h1:nextcloud": "nextcloud-db"}, "die Sperre des anderen Laufs bleibt"
     assert applier.snapshot()["applying"] == {} and stored_runs(ctx) == {}
@@ -1093,8 +1166,6 @@ async def test_a_running_update_of_the_same_project_blocks_the_plan_and_ssh_erro
 # =============================================================================================
 
 from nodvard_sdk import REQUEST_WAIT_S, ActionRequest, Actor, Severity  # noqa: E402
-
-from nodvard_deck_ext_docker import detached as dt  # noqa: E402
 
 RUN_ID = "imgupd_0123456789abcdef"
 
@@ -1138,7 +1209,7 @@ class FlowDocker(FakeApplyDocker):
             if self.launch_error:
                 raise self.launch_error
             return FakeResult(stdout=self.launch_out)
-        if command.startswith('d="$HOME"') and "@@running" in command and ap.rollback_run_id(RUN_ID) in command:
+        if command.startswith('d="$HOME"') and "@@running" in command and _ap().rollback_run_id(RUN_ID) in command:
             if not self.rollback_launched and not self.rollback_running_before:
                 return FakeResult(stdout="@@unknown\n")  # kein Rückweg auf dem Host
             item = self.rollback_polls.pop(0) if len(self.rollback_polls) > 1 else self.rollback_polls[0]
@@ -1174,20 +1245,20 @@ class FlowDocker(FakeApplyDocker):
 
 
 @pytest.fixture
-def fast(monkeypatch):
+def fast(monkeypatch, _ext_docker_on_path):
     for name in ("POLL_INTERVAL_S", "VERIFY_INTERVAL_S", "VERIFY_STABLE_S"):
-        monkeypatch.setattr(ap, name, 0)
+        monkeypatch.setattr(_ap(), name, 0)
 
 
 async def flow(tmp_path, docker: FlowDocker | None = None, *, correlation_id: str | None = RUN_ID):
     docker = docker or FlowDocker()
     service, applier, ctx = await checked(tmp_path, docker)
     plan = await applier.plan(ctx.host, "nextcloud-app")
-    assert isinstance(plan, ap.Plan), plan
+    assert isinstance(plan, _ap().Plan), plan
     return docker, service, applier, ctx, plan
 
 
-def request_for(plan: ap.Plan, *, correlation_id: str | None = RUN_ID, **payload_over) -> ActionRequest:
+def request_for(plan, *, correlation_id: str | None = RUN_ID, **payload_over) -> ActionRequest:
     t = plan.target
     payload = {
         "container": t.container, "project": t.project, "service": t.service, "image": t.image, "old_image_id": t.image_id,
@@ -1208,7 +1279,7 @@ async def test_success_pulls_recreates_verifies_rechecks_and_audits(tmp_path, fa
     docker, service, applier, ctx, plan = await flow(tmp_path)
     phases: list[str] = []
     docker.on_poll = lambda: phases.append(next(iter(applier.snapshot()["applying"].values()))["phase"])
-    result = await ap.ImageUpdateExecutor(applier).execute(request_for(plan))
+    result = await _ap().ImageUpdateExecutor(applier).execute(request_for(plan))
 
     assert result.success is True and result.exit_code == 0 and result.error is None
     lines = result.output.splitlines()
@@ -1233,7 +1304,7 @@ async def test_success_pulls_recreates_verifies_rechecks_and_audits(tmp_path, fa
     assert applier.snapshot()["applying"] == {}
     applied = applier.snapshot()["applied"]["h1:nextcloud-app"]
     assert applied["ok"] is True and applied["summary"].startswith("„nextcloud-app“ aktualisiert")
-    assert service.snapshot()["data"]["h1:nextcloud-app"]["status"] == iu.CURRENT
+    assert service.snapshot()["data"]["h1:nextcloud-app"]["status"] == _iu().CURRENT
     assert "h1:nextcloud" not in applier._busy and applier._busy == {}
 
     (row,) = ctx.audit_rows
@@ -1263,11 +1334,11 @@ async def test_a_failing_pull_leaves_the_container_alone_and_always_pushes(tmp_p
     docker, service, applier, ctx, plan = await flow(tmp_path)
     docker.polls = ["@@rc=10\n@@step=pull\n@@tail\nError response from daemon: toomanyrequests: You have reached your pull rate limit\n"]
     result = await applier.apply(request_for(plan))
-    assert result.success is False and result.exit_code == ia.RC_PULL
+    assert result.success is False and result.exit_code == _ia().RC_PULL
     assert "Abruflimit" in result.error and "läuft unverändert weiter" in result.error
     assert "Zurück (auf dem Host)" not in result.output and "toomanyrequests" in result.output
     assert not docker.calls_with("ids=$(docker ps -aq"), "nach einem Pull-Fehler gibt es nichts zu pruefen"
-    assert service.snapshot()["data"]["h1:nextcloud-app"]["status"] == iu.UPDATE
+    assert service.snapshot()["data"]["h1:nextcloud-app"]["status"] == _iu().UPDATE
     assert applier.snapshot()["applied"]["h1:nextcloud-app"]["ok"] is False
     (note,) = ctx.sent
     assert note.severity is Severity.WARNING and note.title.endswith("fehlgeschlagen") and note.payload["tags"] == ["warning"]
@@ -1293,7 +1364,7 @@ async def test_a_pull_error_line_stays_in_the_action_output_but_not_in_log_summa
     secret = "GEHEIM-AUS-DER-AUSGABE"
     docker.polls = [f"@@rc=10\n@@step=pull\n@@tail\nError response from daemon: {secret}\n"]
     result = await applier.apply(request_for(plan))
-    assert result.success is False and result.exit_code == ia.RC_PULL
+    assert result.success is False and result.exit_code == _ia().RC_PULL
     assert secret in result.error and secret in result.output, "wer ausfuehren darf, sieht die ganze Zeile"
     assert_no_host_text(ctx, applier, secret)
     assert applier.snapshot()["applied"]["h1:nextcloud-app"]["summary"] == (
@@ -1328,11 +1399,11 @@ async def test_a_start_error_line_stays_in_the_action_output_but_not_in_log_summ
 @pytest.mark.asyncio
 async def test_a_failing_recreate_shows_the_rollback_and_reads_the_state_exactly_once(tmp_path, fast):
     docker, service, applier, ctx, plan = await flow(tmp_path)
-    ctx.settings_values[ap.AUTO_ROLLBACK_SETTING] = False  # hier: der Weg von Hand (automatisch: siehe unten)
+    ctx.settings_values[_ap().AUTO_ROLLBACK_SETTING] = False  # hier: der Weg von Hand (automatisch: siehe unten)
     docker.polls = ["@@rc=20\n@@step=up\n@@tail\nError: port already allocated\n"]
     docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
     result = await applier.apply(request_for(plan))
-    assert result.success is False and result.exit_code == ia.RC_UP
+    assert result.success is False and result.exit_code == _ia().RC_UP
     assert result.error.startswith("Neu erstellen fehlgeschlagen")
     assert "docker tag lattice-rollback/nextcloud-app-902344c2:previous nextcloud:30-apache" in result.output
     assert "Aktueller Zustand: nextcloud-app: exited" in result.output and "port already allocated" in result.output
@@ -1352,6 +1423,7 @@ async def test_a_failing_recreate_shows_the_rollback_and_reads_the_state_exactly
     ],
 )
 async def test_the_start_is_checked_after_the_run(tmp_path, fast, override, ok, fragment, monkeypatch):
+    ap = _ap()
     monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
     docker, service, applier, ctx, plan = await flow(tmp_path)
     ctx.settings_values[ap.AUTO_ROLLBACK_SETTING] = False  # hier: der Weg von Hand (automatisch: siehe unten)
@@ -1365,6 +1437,7 @@ async def test_the_start_is_checked_after_the_run(tmp_path, fast, override, ok, 
 
 @pytest.mark.asyncio
 async def test_a_healthcheck_that_stays_on_starting_is_a_success_with_a_note(tmp_path, fast, monkeypatch):
+    ap = _ap()
     monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
     monkeypatch.setattr(ap, "VERIFY_INTERVAL_S", 0.01)
     docker, service, applier, ctx, plan = await flow(tmp_path)
@@ -1429,7 +1502,7 @@ async def test_portainer_and_plain_containers_are_blocked_before_any_probe(tmp_p
 async def test_a_proposal_that_no_longer_fits_is_refused_without_a_launch(tmp_path, fast, over):
     docker, service, applier, ctx, plan = await flow(tmp_path)
     result = await applier.apply(request_for(plan, **over))
-    assert result.success is False and result.error == ap.STALE_MESSAGE
+    assert result.success is False and result.error == _ap().STALE_MESSAGE
     no_launch(docker)
 
 
@@ -1454,8 +1527,10 @@ async def test_a_server_switched_to_operate_only_says_so(tmp_path, fast):
     ctx.host.tags = ["docker-bedienen"]
     done = await applier.apply(request_for(plan))
     assert done.success is False and done.error.startswith("Auf diesem Server ist Docker im Modus „Nur bedienen“")
+    from nodvard_deck_ext_docker.operate import NOT_DOCKER
+
     ctx.host.tags = ["nas"]
-    assert (await applier.apply(request_for(plan))).error == "Kein Docker-Host."
+    assert (await applier.apply(request_for(plan))).error == NOT_DOCKER
 
 
 @pytest.mark.asyncio
@@ -1489,7 +1564,7 @@ async def test_a_second_update_of_the_same_project_is_refused_while_the_first_ru
     assert applier._busy == {"h1:nextcloud": "nextcloud-app"}
     assert applier.snapshot()["applying"]["h1:nextcloud-app"]["run_id"] == RUN_ID
     second = await applier.apply(request_for(plan, correlation_id="imgupd_ffffffffffffffff"))
-    assert second.success is False and second.error == ap.BUSY_MESSAGE
+    assert second.success is False and second.error == _ap().BUSY_MESSAGE
     assert len(docker.launched) == 1
     docker.poll_gate.set()
     assert (await first).success is True
@@ -1514,7 +1589,7 @@ async def test_a_failing_launch_call_does_not_mean_failure_when_the_run_exists(t
 
 @pytest.mark.asyncio
 async def test_a_launch_that_never_reached_the_host_ends_with_that_reason(tmp_path, fast, monkeypatch):
-    monkeypatch.setattr(ap, "REACH_GRACE_S", 0)
+    monkeypatch.setattr(_ap(), "REACH_GRACE_S", 0)
     docker, service, applier, ctx, plan = await flow(tmp_path)
     docker.launch_error = OSError("Connection refused")
     docker.polls = [OSError("Connection refused")]
@@ -1534,13 +1609,14 @@ async def test_a_launch_without_a_job_folder_says_not_started(tmp_path, fast):
 
 @pytest.mark.asyncio
 async def test_an_unknown_run_lost_runs_and_silence_end_with_clear_messages(tmp_path, fast, monkeypatch):
+    ap = _ap()
     docker, service, applier, ctx, plan = await flow(tmp_path)
     monkeypatch.setattr(ap, "UNKNOWN_GRACE_S", 0)
     docker.polls = ["@@unknown\n@@tail\n"]
     assert (await applier.apply(request_for(plan))).error == ap.NOT_STARTED
     docker.polls = ["@@lost\n@@step=pull\n@@tail\nletzte Zeile\n"]
     lost = await applier.apply(request_for(plan))
-    assert "unerwartet beendet" in lost.error and dt.log_path(RUN_ID) in lost.error and "Zurück (auf dem Host)" not in lost.output
+    assert "unerwartet beendet" in lost.error and _dt().log_path(RUN_ID) in lost.error and "Zurück (auf dem Host)" not in lost.output
     docker.polls = ["@@lost\n@@step=up\n@@tail\nletzte Zeile\n"]
     lost_in_up = await applier.apply(request_for(plan))
     assert "Zurück (auf dem Host)" in lost_in_up.output, "ab dem Neuerstellen kann schon etwas veraendert sein"
@@ -1581,7 +1657,7 @@ async def test_the_run_id_comes_from_the_proposal_or_is_made_new(tmp_path, fast)
         docker.tag_image_id = IMG_ID
         await service.check_host(ctx.host)
         plan = await applier.plan(ctx.host, "nextcloud-app")
-        assert isinstance(plan, ap.Plan)
+        assert isinstance(plan, _ap().Plan)
         await applier.apply(request_for(plan, correlation_id=bad))
         used = docker.launched[-1]
         assert RUN_ID not in used and "x; rm" not in used
@@ -1624,7 +1700,7 @@ async def test_propose_hands_the_gate_a_complete_request(tmp_path, fast):
     request, wait_s = seen[0]
     assert wait_s == REQUEST_WAIT_S
     assert (request.action_type, request.host_ref, request.risk) == ("container.image_update", "h1", Risk.MEDIUM)
-    assert request.proposed_by.id == "u1" and dt.RUN_ID_RE.match(request.correlation_id)
+    assert request.proposed_by.id == "u1" and _dt().RUN_ID_RE.match(request.correlation_id)
     assert request.payload == {
         "container": "nextcloud-app", "project": "nextcloud", "service": "app", "image": "nextcloud:30-apache", "old_image_id": IMG_ID,
         "remote_digest": dg("b"), "command": plan.command,
@@ -1633,6 +1709,7 @@ async def test_propose_hands_the_gate_a_complete_request(tmp_path, fast):
 
 
 def test_the_spec_is_not_bound_to_hosts_and_the_gate_checks_the_command():
+    ap = _ap()
     spec = ap.IMAGE_UPDATE_SPEC
     assert spec.action_type == "container.image_update" and spec.host_bound is False and spec.command_field == "command"
     assert spec.default_risk is Risk.MEDIUM and spec.permissions == ["hosts.execute"]
@@ -1645,6 +1722,7 @@ def test_the_spec_is_not_bound_to_hosts_and_the_gate_checks_the_command():
 
 
 def test_only_two_calm_reads_count_as_started_without_a_healthcheck():
+    ia = _ia()
     calm = snap(member(restarts=0, started="t1"))
     assert ia.needs_stability_check(calm) is True
     assert ia.needs_stability_check(snap(member(health="healthy"))) is False
@@ -1663,7 +1741,7 @@ def test_only_two_calm_reads_count_as_started_without_a_healthcheck():
 @pytest.mark.parametrize("second", [{"restarts": 1}, {"started": "2026-09-30T07:00:20Z"}, {"restarts": 2, "started": "x", "status": "restarting"}])
 async def test_a_crash_loop_without_healthcheck_is_a_failure_even_though_the_first_read_says_running(tmp_path, fast, second):
     docker, service, applier, ctx, plan = await flow(tmp_path)
-    ctx.settings_values[ap.AUTO_ROLLBACK_SETTING] = False  # hier: der Weg von Hand (automatisch: siehe unten)
+    ctx.settings_values[_ap().AUTO_ROLLBACK_SETTING] = False  # hier: der Weg von Hand (automatisch: siehe unten)
     docker.verify_overrides = [{}, second]  # erste Lesung: "running", zweite: neuer Start
     result = await applier.apply(request_for(plan))
     assert result.success is False and "startet immer wieder neu" in result.error
@@ -1673,6 +1751,7 @@ async def test_a_crash_loop_without_healthcheck_is_a_failure_even_though_the_fir
 
 @pytest.mark.asyncio
 async def test_success_without_healthcheck_needs_two_reads_and_waits_between_them(tmp_path, fast, monkeypatch):
+    ap = _ap()
     docker, service, applier, ctx, plan = await flow(tmp_path)
     monkeypatch.setattr(ap, "VERIFY_STABLE_S", 0.05)
     monkeypatch.setattr(ap, "VERIFY_INTERVAL_S", 0.01)
@@ -1688,14 +1767,16 @@ async def test_success_without_healthcheck_needs_two_reads_and_waits_between_the
 
 
 def test_the_dashboard_image_is_recognised_by_the_last_path_segment_too():
+    ia = _ia()
     for image in ("lattice:latest", "ghcr.io/nico/lattice:1.2", "nico/lattice", "registry.local:5000/team/x/lattice:dev"):
         result = ia.classify(info(image=image), own=False)
-        assert isinstance(result, NotUpdatable) and result.kind == "self", image
+        assert isinstance(result, ia.NotUpdatable) and result.kind == "self", image
     for image in ("ghcr.io/nico/lattice-tools:1", "nico/mylattice"):
-        assert isinstance(ia.classify(info(image=image), own=False), ComposeTarget), image
+        assert isinstance(ia.classify(info(image=image), own=False), ia.ComposeTarget), image
 
 
 def test_database_helpers_are_not_databases():
+    ia = _ia()
     for image in ("mongo-express:1", "mysql-ui:1", "ghcr.io/x/postgres-ui:1", "adminer", "postgres-admin:2", "prometheuscommunity/postgres-exporter:v0", "dpage/pgadmin4"):
         assert ia.is_database_image(image, "web") is False, image
     for image in ("mongo:7", "postgres:16", "mariadb:11", "mysql:8"):
@@ -1703,6 +1784,7 @@ def test_database_helpers_are_not_databases():
 
 
 def test_quoted_values_in_compose_errors_never_reach_the_text():
+    ia = _ia()
     stderr = 'WARN irgendwas\nerror while interpolating services.app.environment.PW: invalid interpolation format for "geheim$123" in \'auch$geheim\''
     why = ia.check_config("", stderr, 1, target()).why
     assert "geheim" not in why and why.endswith('in "…"') and "docker compose config meldet einen Fehler:" in why
@@ -1711,6 +1793,7 @@ def test_quoted_values_in_compose_errors_never_reach_the_text():
 
 
 def test_success_output_for_an_unchanged_container_has_the_plain_sentence_and_no_recreate_line():
+    ia = _ia()
     t = target()
     verdict = ia.Verdict(True, ia.UNCHANGED_TEXT, changed=False)
     out = ia.success_output(t, verdict, old_image_id=IMG_ID, rollback="lattice-rollback/x:previous", log="Log\n")
@@ -1721,6 +1804,7 @@ def test_success_output_for_an_unchanged_container_has_the_plain_sentence_and_no
 
 
 def test_probe_reports_a_running_update_of_the_project_from_the_host():
+    ia = _ia()
     t = target()
     assert "lock-nextcloud" in ia.cmd_probe(t) and "@@busy" in ia.cmd_probe(t)
     blocked = ia.parse_probe(probe_out(ok="/opt/nextcloud/docker-compose.yml") + "@@busy\n", t)
@@ -1749,6 +1833,7 @@ async def test_the_rollback_is_not_promised_when_tagging_failed(tmp_path, fast):
 
 @pytest.mark.asyncio
 async def test_only_a_human_with_a_big_enough_risk_level_may_start_an_update(tmp_path, fast):
+    ap = _ap()
     docker, service, applier, ctx, plan = await flow(tmp_path)
     base = request_for(plan)
     for actor in (Actor.ai("modell"), Actor.extension("docker"), Actor.scheduler("job")):
@@ -1770,8 +1855,8 @@ async def test_a_container_that_became_a_database_needs_the_higher_risk_again(tm
     docker.remote["postgres:16"] = dg("b")
     docker.config_stdout = json.dumps({"services": {"app": {"image": "postgres:16"}}})
     await service.check_host(ctx.host)
-    result = await applier.apply(request_for(plan, image="postgres:16", command=ia.display_command(target(image="postgres:16"))))
-    assert result.success is False and result.error == ap.RISK_TOO_LOW_MESSAGE
+    result = await applier.apply(request_for(plan, image="postgres:16", command=_ia().display_command(target(image="postgres:16"))))
+    assert result.success is False and result.error == _ap().RISK_TOO_LOW_MESSAGE
     no_launch(docker)
 
 
@@ -1793,8 +1878,8 @@ def stored_runs(ctx) -> dict:
 
 def new_dashboard(ctx):
     """Ein frisch gestartetes Dashboard: neuer Applier, derselbe Datenordner und derselbe Host."""
-    service = ImageUpdateService(ctx)  # type: ignore[arg-type]
-    applier = ImageApplier(ctx, service)  # type: ignore[arg-type]
+    service = _iu().ImageUpdateService(ctx)  # type: ignore[arg-type]
+    applier = _ap().ImageApplier(ctx, service)  # type: ignore[arg-type]
     service.apply_hints = applier.hints
     return service, applier
 
@@ -1821,17 +1906,18 @@ async def interrupt_update(tmp_path):
     return docker, ctx, plan
 
 
-def entry_from(plan: ap.Plan, **over) -> dict:
+def entry_from(plan, **over) -> dict:
     t = plan.target
     return {
         "run_id": RUN_ID, "host_id": "h1", "container": t.container, "project": t.project, "service": t.service, "image": t.image,
-        "old_image_id": t.image_id, "started_at": datetime.now(timezone.utc).isoformat(), "target": ap._target_to_json(t),
+        "old_image_id": t.image_id, "started_at": datetime.now(timezone.utc).isoformat(), "target": _ap()._target_to_json(t),
         "proposed_by": {"type": "user", "id": "u1", "label": "owner1"}, **over,
     }
 
 
 @pytest.fixture(autouse=True)
-def _no_active_runs_between_tests():
+def _no_active_runs_between_tests(_ext_docker_on_path):
+    ap = _ap()
     ap._ACTIVE_RUNS.clear()
     yield
     ap._ACTIVE_RUNS.clear()
@@ -1839,7 +1925,7 @@ def _no_active_runs_between_tests():
 
 @pytest.fixture
 def resume_fast(fast, monkeypatch):
-    monkeypatch.setattr(ap, "RESUME_DELAY_S", 0)
+    monkeypatch.setattr(_ap(), "RESUME_DELAY_S", 0)
 
 
 @pytest.mark.asyncio
@@ -1896,11 +1982,11 @@ async def test_after_the_restart_the_run_is_polled_verified_reported_and_forgott
     assert not docker.calls_with("echo @@launch"), "nichts wird ein zweites Mal gestartet"
     # Zwei Abfragen des Updates, dazu eine Nachfrage, ob vor dem Neustart schon ein Rückweg lief.
     assert len(docker.polls_made()) == 3 and docker.calls_with("ids=$(docker ps -aq")
-    assert docker.calls_with(ap.rollback_run_id(RUN_ID))
+    assert docker.calls_with(_ap().rollback_run_id(RUN_ID))
     assert stored_runs(ctx) == {} and applier._busy == {} and applier.snapshot()["applying"] == {}
     applied = applier.snapshot()["applied"]["h1:nextcloud-app"]
     assert applied["ok"] is True and applied["summary"].startswith("„nextcloud-app“ aktualisiert")
-    assert service.snapshot()["data"]["h1:nextcloud-app"]["status"] == iu.CURRENT, "der Stand der Seite wird neu bewertet"
+    assert service.snapshot()["data"]["h1:nextcloud-app"]["status"] == _iu().CURRENT, "der Stand der Seite wird neu bewertet"
 
     (row,) = ctx.audit_rows
     assert (row["action"], row["outcome"], row["target_id"], row["correlation_id"]) == ("service_matrix.image_update", "success", "h1:nextcloud-app", RUN_ID)
@@ -1934,6 +2020,7 @@ async def test_after_the_restart_the_same_stability_rules_apply(tmp_path, resume
 
 @pytest.mark.asyncio
 async def test_a_host_that_stays_silent_ends_with_the_timeout_message_at_the_deadline(tmp_path, resume_fast, monkeypatch):
+    ap = _ap()
     docker, ctx, plan = await interrupt_update(tmp_path)
     docker.down = OSError("Verbindung weg")
     monkeypatch.setattr(ap, "RUN_DEADLINE_S", 0)
@@ -1951,6 +2038,7 @@ async def test_a_host_that_stays_silent_ends_with_the_timeout_message_at_the_dea
 
 @pytest.mark.asyncio
 async def test_the_deadline_counts_from_the_start_but_is_at_least_five_minutes_from_now(tmp_path, resume_fast):
+    ap = _ap()
     docker, ctx, plan = await interrupt_update(tmp_path)
     waits: list[float] = []
     _service, applier = new_dashboard(ctx)
@@ -1991,7 +2079,7 @@ async def test_a_start_time_in_the_future_never_stretches_the_deadline(tmp_path,
     applier._wait = spy  # type: ignore[method-assign]
     docker.polls = [POLL_DONE]
     await applier.resume_interrupted()
-    assert waits and waits[0] <= ap.RUN_DEADLINE_S
+    assert waits and waits[0] <= _ap().RUN_DEADLINE_S
     assert stored_runs(ctx) == {}
 
 
@@ -2042,7 +2130,7 @@ async def test_a_run_this_process_still_looks_after_is_not_resumed_a_second_time
     docker.poll_gate.set()
     result = await task
     assert result.success is True and len(ctx.audit_rows) == 1 and ctx.sent == []
-    assert stored_runs(ctx) == {} and ap._ACTIVE_RUNS == set()
+    assert stored_runs(ctx) == {} and _ap()._ACTIVE_RUNS == set()
 
 
 @pytest.mark.asyncio
@@ -2066,7 +2154,7 @@ async def test_the_audit_after_the_restart_names_who_approved_and_ignores_a_bad_
 
     for bad in ({"type": "root", "id": "u1"}, {"type": "user", "id": ""}, {"type": "user", "id": "x" * 500}, {"type": "user", "id": "u", "label": 5}, "u1"):
         ctx.audit_rows.clear()
-        ap._ACTIVE_RUNS.clear()
+        _ap()._ACTIVE_RUNS.clear()
         applier = new_dashboard(ctx)[1]
         applier._store_run({**entry_from(plan), "proposed_by": bad})
         docker.polls = [POLL_DONE]
@@ -2130,7 +2218,7 @@ async def test_while_resuming_the_container_counts_as_applying_and_the_project_i
     assert applying["run_id"] == RUN_ID and applying["phase"] in {"start", "pull", "up"}
     assert applier._busy == {"h1:nextcloud": "nextcloud-app"}
     blocked = await applier.plan(ctx.host, "nextcloud-app")
-    assert isinstance(blocked, NotUpdatable) and blocked.kind == "busy"
+    assert isinstance(blocked, _ia().NotUpdatable) and blocked.kind == "busy"
     second = await applier.apply(request_for(plan, correlation_id="imgupd_aaaaaaaaaaaaaaaa"))
     assert second.success is False and second.error == blocked.why
     assert not docker.calls_with("echo @@launch")
@@ -2217,6 +2305,8 @@ BACK_TAG = "docker tag lattice-rollback/nextcloud-app-902344c2:previous nextclou
 
 
 def test_the_rollback_script_tags_back_and_recreates_only_this_service():
+    ap = _ap()
+    ia = _ia()
     t = target()
     script = ia.rollback_script(t, ia.rollback_ref(t.container))
     assert script.startswith("echo @@step=rollback; docker tag lattice-rollback/")
@@ -2224,12 +2314,13 @@ def test_the_rollback_script_tags_back_and_recreates_only_this_service():
     assert ia.up_command(t) in script and " pull " not in script
     with pytest.raises(ValueError):
         ia.rollback_script(t, "kaputt; rm -rf /")
-    assert ap.rollback_run_id(RUN_ID) != RUN_ID and dt.RUN_ID_RE.match(ap.rollback_run_id(RUN_ID))
-    assert ap.rollback_run_id(RUN_ID) == ap.rollback_run_id(RUN_ID), "fest abgeleitet: nach einem Neustart kein zweiter Rueckweg"
+    assert ap.rollback_run_id(RUN_ID) != RUN_ID and _dt().RUN_ID_RE.match(ap.rollback_run_id(RUN_ID))
+    assert _ap().rollback_run_id(RUN_ID) == _ap().rollback_run_id(RUN_ID), "fest abgeleitet: nach einem Neustart kein zweiter Rueckweg"
 
 
 @pytest.mark.asyncio
 async def test_a_crashing_new_version_is_rolled_back_automatically(tmp_path, fast, monkeypatch):
+    ap = _ap()
     monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
     docker, service, applier, ctx, plan = await flow(tmp_path)
     assert plan.auto_rollback is True and plan.as_response()["auto_rollback"] is True
@@ -2247,13 +2338,13 @@ async def test_a_crashing_new_version_is_rolled_back_automatically(tmp_path, fas
     assert "--- Automatischer Rückweg ---" in result.output
     assert docker.infos["nextcloud-app"]["image_id"] == IMG_ID
     assert result.detail["auto_rollback"] == {
-        "ok": True, "run_id": ap.rollback_run_id(RUN_ID), "log_path": dt.log_path(ap.rollback_run_id(RUN_ID)),
+        "ok": True, "run_id": ap.rollback_run_id(RUN_ID), "log_path": _dt().log_path(ap.rollback_run_id(RUN_ID)),
     }
     (note,) = ctx.sent
     assert note.title.endswith("fehlgeschlagen") and "Automatisch zurück" in note.body and "Zurück (auf dem Host)" not in note.body
     (row,) = ctx.audit_rows
     assert row["outcome"] == "failure" and row["detail"]["auto_rollback"]["ok"] is True
-    assert service.snapshot()["data"]["h1:nextcloud-app"]["status"] == iu.UPDATE, "das Update steht weiter aus"
+    assert service.snapshot()["data"]["h1:nextcloud-app"]["status"] == _iu().UPDATE, "das Update steht weiter aus"
 
 
 @pytest.mark.asyncio
@@ -2269,6 +2360,8 @@ async def test_a_failing_recreate_is_rolled_back_too(tmp_path, fast):
 
 @pytest.mark.asyncio
 async def test_no_automatic_rollback_when_switched_off_for_databases_or_after_a_pull_error(tmp_path, fast, monkeypatch):
+    ap = _ap()
+    ia = _ia()
     monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
     docker, service, applier, ctx, plan = await flow(tmp_path)
     ctx.settings_values[ap.AUTO_ROLLBACK_SETTING] = False
@@ -2296,7 +2389,7 @@ async def test_no_automatic_rollback_when_switched_off_for_databases_or_after_a_
 
 @pytest.mark.asyncio
 async def test_no_automatic_rollback_without_a_proven_backup_image(tmp_path, fast, monkeypatch):
-    monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(_ap(), "VERIFY_TIMEOUT_S", 0.05)
     docker, service, applier, ctx, plan = await flow(tmp_path)
     docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
     docker.rollback_tag_id = None  # das Sicherungs-Image fehlt (z. B. aufgeräumt)
@@ -2319,7 +2412,7 @@ async def test_no_automatic_rollback_without_a_proven_backup_image(tmp_path, fas
     ],
 )
 async def test_a_failing_rollback_says_so_and_shows_the_manual_way(tmp_path, fast, monkeypatch, polls, verify, fragment):
-    monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(_ap(), "VERIFY_TIMEOUT_S", 0.05)
     docker, service, applier, ctx, plan = await flow(tmp_path)
     docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
     docker.rollback_polls = polls
@@ -2334,6 +2427,7 @@ async def test_a_failing_rollback_says_so_and_shows_the_manual_way(tmp_path, fas
 
 @pytest.mark.asyncio
 async def test_a_still_held_project_lock_is_waited_out_briefly(tmp_path, fast, monkeypatch):
+    ap = _ap()
     monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
     monkeypatch.setattr(ap, "ROLLBACK_RETRY_S", 0)
     docker, service, applier, ctx, plan = await flow(tmp_path)
@@ -2345,6 +2439,7 @@ async def test_a_still_held_project_lock_is_waited_out_briefly(tmp_path, fast, m
 
 @pytest.mark.asyncio
 async def test_a_shutdown_during_the_rollback_wait_keeps_the_run(tmp_path, fast, monkeypatch):
+    ap = _ap()
     monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
     monkeypatch.setattr(ap, "ROLLBACK_RETRY_S", 60)
     docker, _service, applier, ctx, plan = await flow(tmp_path)
@@ -2369,14 +2464,14 @@ async def test_a_shutdown_during_the_rollback_wait_keeps_the_run(tmp_path, fast,
 
 @pytest.mark.asyncio
 async def test_a_rollback_that_cannot_start_shows_the_manual_way(tmp_path, fast, monkeypatch):
-    monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(_ap(), "VERIFY_TIMEOUT_S", 0.05)
     docker, _service, applier, _ctx, plan = await flow(tmp_path)
     docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
 
     def refuse(*_args, **_kwargs):
         raise RuntimeError("kaputt")
 
-    monkeypatch.setattr(ia, "rollback_script", refuse)
+    monkeypatch.setattr(_ia(), "rollback_script", refuse)
     result = await applier.apply(request_for(plan))
     assert result.success is False and docker.rollback_launched == []
     assert result.error.endswith("Der automatische Rückweg ließ sich nicht starten (kaputt) – siehe unten.")
@@ -2401,10 +2496,11 @@ async def test_a_restart_during_the_rollback_reports_the_failed_start_and_the_ro
     (row,) = ctx.audit_rows
     assert row["outcome"] == "failure" and row["detail"]["auto_rollback"]["ok"] is True and row["detail"]["resumed"] is True
     (note,) = ctx.sent
-    assert note.title.endswith("fehlgeschlagen") and ap.RESTARTED_LINE in note.body
+    assert note.title.endswith("fehlgeschlagen") and _ap().RESTARTED_LINE in note.body
 
 
 def test_data_stores_never_get_an_automatic_rollback():
+    ia = _ia()
     for image, service in [
         ("redis:7", "cache"), ("valkey/valkey:8", "kv"), ("mcr.microsoft.com/mssql/server:2022-latest", "sql"),
         ("percona/percona-server:8", "x"), ("minio/minio", "s3"), ("rabbitmq:3-management", "mq"), ("postgres:16", "db"),
@@ -2419,7 +2515,7 @@ def test_data_stores_never_get_an_automatic_rollback():
 @pytest.mark.asyncio
 async def test_unhealthy_alone_is_no_reason_for_an_automatic_rollback(tmp_path, fast, monkeypatch):
     """Eine App mitten in einer langen Datenumstellung kann "ungesund" melden -- sie abzubrechen wäre schlimmer."""
-    monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(_ap(), "VERIFY_TIMEOUT_S", 0.05)
     docker, service, applier, ctx, plan = await flow(tmp_path)
     docker.verify_overrides = [{"health": "unhealthy"}]
     result = await applier.apply(request_for(plan))
@@ -2428,6 +2524,7 @@ async def test_unhealthy_alone_is_no_reason_for_an_automatic_rollback(tmp_path, 
 
 
 def test_the_approver_sees_the_automatic_rollback_in_the_reason():
+    ia = _ia()
     text = ia.reason_text("docker", "web", "nginx:1.27", "web", "nginx", Risk.MEDIUM, auto_rollback=True)
     assert text.endswith(ia.AUTO_ROLLBACK_REASON)
     assert ia.AUTO_ROLLBACK_REASON not in ia.reason_text("docker", "web", "nginx:1.27", "web", "nginx", Risk.MEDIUM)
@@ -2452,7 +2549,7 @@ def test_results_leave_the_overview_after_the_keep_time(tmp_path):
     _service, applier, _ctx = make_applier(tmp_path)
     now = datetime.now(timezone.utc).timestamp()
     applier._applied = {"h1:alt": {"ok": True}, "h1:neu": {"ok": False}}
-    applier._applied_at = {"h1:alt": now - ap.APPLIED_KEEP_S - 60, "h1:neu": now}
+    applier._applied_at = {"h1:alt": now - _ap().APPLIED_KEEP_S - 60, "h1:neu": now}
     assert list(applier.snapshot()["applied"]) == ["h1:neu"]
     assert list(applier._applied_at) == ["h1:neu"]
 
@@ -2468,16 +2565,18 @@ async def test_a_failing_drift_check_gives_no_warning_and_does_not_block(tmp_pat
     docker.handle_extra = hash_fails
     _service, applier, ctx = await checked(tmp_path, docker)
     plan = await applier.plan(ctx.host, "nextcloud-app")
-    assert isinstance(plan, ap.Plan) and docker.calls_with(" config --hash ")
+    assert isinstance(plan, _ap().Plan) and docker.calls_with(" config --hash ")
     assert not any("seit dem letzten Start geändert" in w for w in plan.warnings)
 
 
 @pytest.mark.asyncio
 async def test_no_docker_tag_or_no_answer_starts_nothing(tmp_path, fast):
     docker, _service, applier, ctx, plan = await flow(tmp_path)
+    from nodvard_deck_ext_docker.operate import NOT_DOCKER
+
     ctx.host.tags = ["proxmox"]
     result = await applier.apply(request_for(plan))
-    assert (result.success, result.error) == (False, "Kein Docker-Host.")
+    assert (result.success, result.error) == (False, NOT_DOCKER)
 
     ctx.host.tags = ["docker"]
     docker.down = TimeoutError()
@@ -2512,7 +2611,7 @@ async def test_a_run_file_that_cannot_be_cleaned_up_is_only_logged(tmp_path, fas
 
     def break_the_disk() -> None:
         stored.append(RUN_ID in stored_runs(ctx))  # erst nach dem Eintrag scheitert das Schreiben
-        monkeypatch.setattr(ap, "_write_atomic", disk_full)
+        monkeypatch.setattr(_ap(), "_write_atomic", disk_full)
 
     docker.on_poll = break_the_disk
     with caplog.at_level("ERROR", logger="nodvard_deck.ext.docker"):
@@ -2526,6 +2625,7 @@ async def test_a_run_file_that_cannot_be_cleaned_up_is_only_logged(tmp_path, fas
 
 @pytest.mark.asyncio
 async def test_a_shutdown_in_the_wait_before_resuming_keeps_the_entry_and_frees_the_locks(tmp_path, fast):
+    ap = _ap()
     docker, ctx, _plan = await interrupt_update(tmp_path)
     _service, applier = new_dashboard(ctx)
     task = asyncio.ensure_future(applier.resume_interrupted())
@@ -2553,7 +2653,7 @@ async def test_an_error_while_resuming_drops_the_entry_so_it_does_not_return(tmp
     monkeypatch.setattr(applier, "_conclude", broken)
     with caplog.at_level("ERROR", logger="nodvard_deck.ext.docker"):
         assert await applier.resume_interrupted() == 1
-    assert stored_runs(ctx) == {} and RUN_ID not in ap._ACTIVE_RUNS
+    assert stored_runs(ctx) == {} and RUN_ID not in _ap()._ACTIVE_RUNS
     assert applier._busy == {} and applier.snapshot()["applying"] == {}
     assert any("image_update_resume_failed" in r.getMessage() for r in caplog.records)
 
@@ -2562,7 +2662,7 @@ async def test_an_error_while_resuming_drops_the_entry_so_it_does_not_return(tmp
 async def test_after_the_restart_no_answer_about_a_rollback_means_the_normal_check(tmp_path, resume_fast):
     docker, ctx, _plan = await interrupt_update(tmp_path)
     docker.polls = [POLL_DONE]
-    back_id = ap.rollback_run_id(RUN_ID)
+    back_id = _ap().rollback_run_id(RUN_ID)
 
     async def no_answer(command):
         if back_id in command:
@@ -2578,6 +2678,7 @@ async def test_after_the_restart_no_answer_about_a_rollback_means_the_normal_che
 
 @pytest.mark.asyncio
 async def test_a_rollback_whose_healthcheck_still_says_starting_is_named_so(tmp_path, fast, monkeypatch):
+    ap = _ap()
     monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
     monkeypatch.setattr(ap, "VERIFY_INTERVAL_S", 0.01)
     docker, _service, applier, _ctx, plan = await flow(tmp_path)
@@ -2590,7 +2691,7 @@ async def test_a_rollback_whose_healthcheck_still_says_starting_is_named_so(tmp_
 
 @pytest.mark.asyncio
 async def test_unreadable_settings_keep_the_automatic_rollback_on(tmp_path, fast, monkeypatch):
-    monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(_ap(), "VERIFY_TIMEOUT_S", 0.05)
     docker, _service, applier, ctx, plan = await flow(tmp_path)
     docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
     reads = 0
@@ -2632,6 +2733,6 @@ async def test_a_failing_audit_or_push_does_not_change_the_result(tmp_path, fast
 async def test_the_dry_run_names_the_update_without_asking_the_host(tmp_path, fast):
     docker, _service, applier, _ctx, plan = await flow(tmp_path)
     docker.calls.clear()
-    report = await ap.ImageUpdateExecutor(applier).dry_run(request_for(plan))
+    report = await _ap().ImageUpdateExecutor(applier).dry_run(request_for(plan))
     assert (report.would_change, report.summary) == (True, plan.reason_text())
     assert docker.calls == []

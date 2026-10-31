@@ -7,7 +7,7 @@ const realCreate = URL.createObjectURL;
 const realRevoke = URL.revokeObjectURL;
 
 beforeEach(() => {
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never,
     ReactDOM: undefined as never,
     ReactJsxRuntime: undefined as never,
@@ -48,8 +48,8 @@ describe("AuthImage", () => {
 
   it("erneuert bei 401 das Token und lädt das Bild danach", async () => {
     let token = "alt";
-    window.__lattice.getAccessToken = () => token;
-    window.__lattice.refreshAccessToken = vi.fn(async () => (token = "neu"));
+    window.__nodvardDeck.getAccessToken = () => token;
+    window.__nodvardDeck.refreshAccessToken = vi.fn(async () => (token = "neu"));
     const fetchMock = vi.fn(async (_url: string, init: RequestInit) =>
       new Response("png", { status: new Headers(init.headers).get("Authorization") === "Bearer neu" ? 200 : 401 }),
     );

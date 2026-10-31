@@ -8,12 +8,14 @@ import { useState } from "react";
 import { Button, Field, inputClass } from "./ui";
 
 export function TotpPasswordForm({
-  busy, onSubmit, onCancel, cancelLabel = "Abbrechen",
+  busy, onSubmit, onCancel, cancelLabel = "Abbrechen", onLater,
 }: {
   busy: boolean;
   onSubmit: (password: string) => void;
   onCancel: () => void;
   cancelLabel?: string;
+  /** Nur im Assistenten: „Später einrichten“ gleich neben „Weiter“. */
+  onLater?: () => void;
 }): JSX.Element {
   const [password, setPassword] = useState("");
 
@@ -37,6 +39,7 @@ export function TotpPasswordForm({
         />
       </Field>
       <Button type="submit" variant="primary" busy={busy} disabled={!password}>Weiter</Button>
+      {onLater && <Button disabled={busy} onClick={onLater}>Später einrichten</Button>}
       <Button variant="ghost" onClick={onCancel}>{cancelLabel}</Button>
     </form>
   );

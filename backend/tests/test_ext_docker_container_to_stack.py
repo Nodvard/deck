@@ -23,10 +23,11 @@ from docker_stack_fakes import (  # noqa: F401 - Fixtures
 )
 
 
-@pytest.fixture(autouse=True)
-def _ext_docker_on_path(monkeypatch):
-    monkeypatch.syspath_prepend(str(EXT_DIR / "src"))
-    yield
+@pytest.fixture(autouse=True, scope="module")
+def _ext_docker_on_path():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(EXT_DIR / "src"))
+        yield
     for name in list(sys.modules):
         if name.startswith("nodvard_deck_ext_docker"):
             del sys.modules[name]
@@ -500,8 +501,10 @@ async def test_a_compose_error_with_a_value_is_not_shown(env, stderr, shown):
 async def test_only_on_docker_hosts_and_only_the_planned_file(env):
     e = env()
     plan = await e.conv.plan(e.host, "plaintest")
+    from nodvard_deck_ext_docker.operate import NOT_DOCKER
+
     e.host.tags = []
-    assert (await e.executor.execute(_request(plan))).error == "Kein Docker-Host."
+    assert (await e.executor.execute(_request(plan))).error == NOT_DOCKER
     e.host.tags = ["docker-bedienen"]
     assert (await e.executor.execute(_request(plan))).error.startswith("Auf diesem Server ist Docker im Modus „Nur bedienen“")
     e.host.tags = ["docker"]

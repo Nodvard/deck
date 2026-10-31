@@ -24,7 +24,7 @@ function mockLimit(calls: Call[], own: number | null, put?: (body: { own_c: numb
 }
 
 function permit(...granted: string[]) {
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn(), promptDialog: vi.fn(), hasPermission: (p: string) => granted.includes(p),
   };

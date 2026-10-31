@@ -22,6 +22,7 @@ from ...core import ssh
 from ...core.error_text import describe_connection_error, is_expected_connection_error
 from ...core.metrics_history import resolve_metrics_provider
 from ...core.schema_check import SchemaError, check_value
+from ...db.session import release_connection
 from ...ext.runtime import get_extension_runtime
 from ...models import Action, Host, HostCredential, HostGroup, KnownHostKey, User
 from ...services import audit as audit_service
@@ -131,6 +132,9 @@ class HostOut(BaseModel):
     gone_since: datetime | None = None
     """Seit wann der Anbieter den Server nicht mehr kennt (etwa ein in Proxmox gelöschter Gast), sonst `null`. `status`
     wird dann nicht mehr nachgeführt; die Oberfläche bietet an, den Server zu entfernen."""
+    sudo_full_wanted: bool = False
+    """Die volle sudo-Regel ist hier gewollt (eigene Befehle mit sudo): „Verbindung prüfen“ und die Übersicht raten dann
+    nicht, sie zu entfernen."""
 
     @classmethod
     def from_model(cls, host: Host) -> "HostOut":
@@ -141,6 +145,7 @@ class HostOut(BaseModel):
             parent_label=_text_or_none(placement.get("parent_label")),
             power_state=_text_or_none(placement.get("power_state")),
             gone_since=_time_or_none(placement.get("gone_since")),
+            sudo_full_wanted=hosts_service.full_sudo_wanted(host),
             login_ok_at=hosts_service.login_confirmed_at(host, default),
             managed_tags=[t.tag for t in host.tags if t.managed_by_ext_id is not None],
             credential=(
@@ -264,6 +269,7 @@ class HostUpdate(BaseModel):
     is_managed: bool | None = None
     tags: list[str] | None = None
     """Setzt die MANUELLEN Markierungen exakt auf diese Liste; von Erweiterungen verwaltete bleiben unberührt."""
+    sudo_full_wanted: bool | None = None
     current_password: str = Field(default="", max_length=1024)
     """Nur nötig, wenn eine neue Adresse gespeicherte SSH-Passwörter löscht (sonst 403 `confirm_required`)."""
     totp_code: str = Field(default="", max_length=64)
@@ -464,11 +470,13 @@ async def patch_host(
     host_id: str, payload: HostUpdate, request: Request, session: SessionDep, settings: SettingsDep, user: WriteUser,
 ) -> HostOut | JSONResponse:
     fields = payload.model_dump(exclude_unset=True, exclude={"current_password", "totp_code"})
+    full_wanted = fields.pop("sudo_full_wanted", None)
     before = await session.get(Host, host_id)
     if before is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
     old = {key: getattr(before, key) for key in ("display_name", "address", "os_family", "kind", "enabled", "is_managed")}
     old["tags"] = _manual_tags(before)
+    old["sudo_full_wanted"] = hosts_service.full_sudo_wanted(before)
     password_credentials = {c.id for c in before.credentials if c.kind == "ssh_password"}
     if password_credentials and fields.get("address") is not None and fields["address"] != before.address:
         # Eine neue Adresse löscht die gespeicherten SSH-Passwörter (`forget_address_bound_access`): wie jedes Löschen
@@ -483,8 +491,12 @@ async def patch_host(
     host = await hosts_service.update_host(session, host_id, **fields)
     if host is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
+    if full_wanted is not None:
+        hosts_service.set_full_sudo_wanted(host, full_wanted)
+        await session.flush()
     new = {key: getattr(host, key) for key in ("display_name", "address", "os_family", "kind", "enabled", "is_managed")}
     new["tags"] = _manual_tags(host)
+    new["sudo_full_wanted"] = hosts_service.full_sudo_wanted(host)
     changed = {key: {"from": old[key], "to": new[key]} for key in old if old[key] != new[key]}
     removed = len(password_credentials - {c.id for c in host.credentials})
     if changed:
@@ -578,6 +590,7 @@ async def get_host_status(host_id: str, session: SessionDep, settings: SettingsD
             if provider is not None:
                 from ...db import utcnow
 
+                await release_connection(session)
                 try:
                     live_status = await provider.host_status(host.provider_ref)
                 except Exception as exc:  # noqa: BLE001 - ein Provider-Fehler ist kein Server-Fehler, nur unbekannter Status
@@ -634,6 +647,8 @@ async def get_host_metrics(host_id: str, session: SessionDep) -> HostMetricsOut:
     if host is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
     sdk_host = hosts_service.host_to_sdk(host)
+    # Das Cockpit fragt jeden Knoten alle 15 s; die Antwort des Anbieters kann Sekunden dauern.
+    await release_connection(session)
     provider = await resolve_metrics_provider(sdk_host, host.provider_ext_id)
     if provider is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kein MetricsProvider für diesen Host registriert.")
@@ -714,6 +729,7 @@ async def get_host_metrics_history(host_id: str, session: SessionDep, range: str
     if host is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
     sdk_host = hosts_service.host_to_sdk(host)
+    await release_connection(session)
     provider = await resolve_metrics_provider(sdk_host, host.provider_ext_id)
     if provider is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kein MetricsProvider für diesen Host registriert.")
@@ -767,6 +783,7 @@ async def list_host_actions(host_id: str, session: SessionDep) -> list[ActionSpe
     if host.provider_ext_id:
         provider = runtime.capabilities.provided_by(HostProvider, host.provider_ext_id)
         if provider is not None:
+            await release_connection(session)
             known = {s.action_type for s in specs}
             specs.extend(
                 ActionSpecOut.from_spec(s, source="host")
@@ -837,6 +854,8 @@ async def trigger_host_action(
     if host is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
 
+    # Die Aktion kann beim Anbieter nachgeschlagen werden, noch vor der Rechteprüfung.
+    await release_connection(session)
     spec = await _resolve_action_spec(host, action_type)
     if spec is None:
         raise HTTPException(

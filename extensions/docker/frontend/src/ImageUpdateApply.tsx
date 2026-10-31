@@ -64,7 +64,7 @@ const DOWNTIME_TEXT = "Der Container wird neu erstellt und ist dabei kurz nicht 
 
 function timeOf(iso: string): string {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
 }
 
 const BUTTON = "px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition disabled:opacity-40";
@@ -222,7 +222,7 @@ export function UpdatePanel({
               <dt className="opacity-60">Version</dt>
               <dd>
                 Image-ID {plan.current_short} · neue Version bei der Registry (Prüfsumme {plan.remote_short || "?"})
-                {plan.registry_at ? `, Stand ${new Date(plan.registry_at).toLocaleString()}` : ""}
+                {plan.registry_at ? `, Stand ${new Date(plan.registry_at).toLocaleString("de-DE")}` : ""}
               </dd>
             </div>
             <div><dt className="opacity-60">Compose</dt><dd className="break-words">{plan.project}/{plan.service}</dd></div>

@@ -32,7 +32,6 @@ import { HostsSettings } from "../routes/settings/HostsSettings";
 import { SettingsLayout } from "../routes/settings/SettingsLayout";
 import { SystemSettings } from "../routes/settings/SystemSettings";
 import { installDeckGlobal } from "../lib/deckGlobal";
-import { migrateLegacyStorage } from "../lib/legacyStorage";
 import { browserNavigation, restartProbe, uploadTransport } from "../lib/restore";
 import { AFTER_SUCCESS_PATH, updaterTiming } from "../lib/updater";
 import { useAuthStore } from "../state/auth";
@@ -91,8 +90,7 @@ browserNavigation.assign = (url: string) => {
   window.location.reload();
 };
 
-// Wie die echte Shell (main.tsx): Browser-Speicher uebernehmen, globales Objekt unter beiden Namen.
-migrateLegacyStorage();
+// Wie die echte Shell (main.tsx): das globale Objekt.
 installDeckGlobal({
   React,
   ReactDOM: ReactDOMClient as never,

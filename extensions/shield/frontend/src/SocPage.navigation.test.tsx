@@ -1,6 +1,6 @@
 /**
- * Ende-zu-Ende durch die echte Kette: Router (Browser-Verlauf) -> ExtensionPage (Kern, feuert `nodvard-deck:navigate` und
- * `lattice:navigate`) -> useUrlParams -> SocPage. Die Einzelteile haben eigene Tests; hier wird geprüft, dass sie zusammen
+ * Ende-zu-Ende durch die echte Kette: Router (Browser-Verlauf) -> ExtensionPage (Kern, feuert `nodvard-deck:navigate`)
+ * -> useUrlParams -> SocPage. Die Einzelteile haben eigene Tests; hier wird geprüft, dass sie zusammen
  * halten: Links aus Menü und Benachrichtigungen, Klicks im Reiterstreifen, Zurück/Vor.
  */
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -57,7 +57,7 @@ const click = (name: string) => fireEvent.click(screen.getByRole("link", { name 
 
 beforeEach(() => {
   window.history.replaceState(null, "", "/ext/shield/soc");
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn(), promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(true),
   };

@@ -11,9 +11,9 @@ import json
 import re
 
 import pytest
-from nodvard_deck_updater import policy
+from nodvard_deck_updater import ed25519, policy, trust
 from nodvard_deck_updater.policy import Refusal
-from updater_support import NOW, load_vectors
+from updater_support import NOW, OTHER_SEED, SEED, load_vectors, public_key, sign
 
 RID = "6f1c2b0e-9a4d-4c1e-8f00-1b2c3d4e5f60"
 RID2 = "0f1c2b0e-9a4d-4c1e-8f00-1b2c3d4e5f60"
@@ -73,6 +73,12 @@ def test_protocol_vector_matches_the_constants():
     assert vec["proto"] == policy.PROTOCOL
     assert vec["request_versions"] == list(policy.REQUEST_VERSIONS)
     assert set(vec["request_keys"]) == policy.REQUEST_KEYS
+    assert vec["request_options"] == list(policy.REQUEST_OPTIONS)
+    assert set(vec["signed_request_keys"]) == policy.SIGNED_REQUEST_KEYS
+    assert set(vec["grant_keys"]) == policy.GRANT_KEYS
+    assert vec["grant_format"] == policy.GRANT_FORMAT
+    assert vec["key_id_pattern"] == policy.KEY_ID_RE.pattern
+    assert vec["signature_pattern"] == policy.SIGNATURE_RE.pattern
     assert vec["actions"] == list(policy.ACTIONS)
     assert vec["states"] == list(policy.STATES)
     assert vec["outcomes"] == list(policy.OUTCOMES)
@@ -96,6 +102,7 @@ def test_protocol_vector_matches_the_constants():
         "block_after_rollback_s": policy.BLOCK_AFTER_ROLLBACK_S,
         "seen_ttl_s": policy.SEEN_TTL_S,
         "slot_ttl_s": policy.SLOT_TTL_S,
+        "grant_max_s": policy.GRANT_MAX_S,
     }
 
 
@@ -105,6 +112,7 @@ def test_limits_have_their_documented_values():
     assert (policy.ACTION_INTERVAL_S, policy.BLOCK_AFTER_ROLLBACK_S, policy.SEEN_TTL_S) == (600, 86400, 3600)
     assert policy.SLOT_TTL_S == 7 * 86400 and policy.DEADLINE_S == 900
     assert policy.STATUS_MAX_BYTES == 16 * 1024 and policy.RESULTS_MAX == 10
+    assert policy.GRANT_MAX_S == 366 * 86400
     assert policy.is_version(policy.MIN_VERSION)
 
 
@@ -221,6 +229,7 @@ def test_id_patterns():
 # ---------------------------------------------------------------------------
 
 REQUESTS = load_vectors("requests.json")
+VECTOR_KEYS = tuple(trust.TrustedKey(key["role"], bytes.fromhex(key["public"])) for key in REQUESTS["keys"])
 
 
 @pytest.mark.parametrize("case", REQUESTS["cases"], ids=lambda c: c["name"])
@@ -228,12 +237,19 @@ def test_request_vectors(case):
     raw = bytes.fromhex(case["raw_hex"]) if "raw_hex" in case else case["raw"].encode("utf-8")
     expect = case["expect"]
     try:
-        request = policy.parse_request(raw, now=REQUESTS["now"], file_id=REQUESTS["file_id"])
+        request = policy.parse_request(raw, now=REQUESTS["now"], file_id=REQUESTS["file_id"], keys=VECTOR_KEYS)
     except Refusal as exc:
         assert exc.code == expect
     else:
         assert isinstance(expect, dict), f"angenommen, erwartet {expect}"
+        if "grant" in expect:
+            expect = {**expect, "grant": policy.Grant(**expect["grant"])}
         assert request == policy.Request(**expect)
+
+
+def test_the_vector_key_is_never_trusted():
+    assert VECTOR_KEYS[0].public == public_key(SEED)
+    assert trust.find(VECTOR_KEYS[0].key_id) is None
 
 
 def test_request_without_file_id_only_checks_the_content():
@@ -294,6 +310,162 @@ def test_huge_integers_do_not_break_the_parser():
     # Über der Ziffern-Grenze von Python (4300) wirft int() -- auch das bleibt ein ValueError.
     with pytest.raises(ValueError):
         policy.loads_strict(b"9" * 5000, max_bytes=10_000)
+
+
+# ---------------------------------------------------------------------------
+# Signierte Anforderung
+# ---------------------------------------------------------------------------
+
+KEY = trust.TrustedKey("current", public_key(SEED))
+DIGEST = "sha256:" + "4f" * 32
+
+
+def grant_doc(**over) -> dict:
+    doc = {"fmt": 1, "repo": policy.REPOSITORY, "version": "0.7.1", "digest": DIGEST, "key_id": KEY.key_id,
+           "issued_at": NOW - 60, "expires_at": NOW + 86400}
+    doc.update(over)
+    return doc
+
+
+def signed_bytes(grant: dict | None = None, *, seed: bytes = SEED, **over) -> bytes:
+    grant = grant_doc() if grant is None else grant
+    doc = {"v": 2, "id": RID, "action": "update", "version": "0.7.1", "created_at": NOW, "digest": DIGEST,
+           "grant": grant, "sig": sign(seed, policy.dumps(grant)).hex()}
+    doc.update(over)
+    return json.dumps(doc).encode()
+
+
+def signed_code(raw: bytes, **kwargs) -> str | None:
+    return code_of(policy.parse_request, raw, now=NOW, **{"keys": (KEY,), **kwargs})
+
+
+def test_a_signed_update_carries_its_grant():
+    request = policy.parse_request(signed_bytes(), now=NOW, keys=(KEY,))
+    assert (request.v, request.action, request.digest) == (2, "update", DIGEST)
+    assert request.grant == policy.Grant(**grant_doc()) and len(request.sig) == 128
+    assert request.grant.signed_bytes() == policy.dumps(grant_doc())
+
+
+def test_without_a_trusted_key_no_grant_counts():
+    assert signed_code(signed_bytes(), keys=()) == policy.UNKNOWN_KEY
+    assert signed_code(signed_bytes(), keys=trust.TRUSTED_KEYS) == policy.UNKNOWN_KEY
+
+
+def test_with_the_project_keys_a_grant_needs_their_signature():
+    keys = (*trust.TRUSTED_KEYS, KEY)
+    assert signed_code(signed_bytes(), keys=keys) is None
+    for project in trust.TRUSTED_KEYS:
+        assert signed_code(signed_bytes(grant_doc(key_id=project.key_id)), keys=keys) == policy.BAD_SIGNATURE
+
+
+def test_both_roles_are_accepted_and_the_key_id_picks_the_key():
+    other = trust.TrustedKey("next", public_key(OTHER_SEED))
+    raw = signed_bytes(grant_doc(key_id=other.key_id), seed=OTHER_SEED)
+    assert signed_code(raw, keys=(KEY, other)) is None
+    assert signed_code(raw, keys=(KEY,)) == policy.UNKNOWN_KEY
+    # Die Kennung des einen Schlüssels, signiert mit dem anderen.
+    assert signed_code(signed_bytes(seed=OTHER_SEED), keys=(KEY, other)) == policy.BAD_SIGNATURE
+
+
+def test_the_signature_covers_the_content_not_its_spelling():
+    raw = signed_bytes().replace(b'"repo": "ghcr.io', b'"repo": "\\u0067hcr.io')
+    assert b"\\u0067" in raw and signed_code(raw) is None
+
+
+def test_the_grant_is_bound_to_repository_version_and_digest():
+    assert signed_code(signed_bytes(), repository="registry.test/deck") == policy.GRANT_MISMATCH
+    assert signed_code(signed_bytes(grant_doc(repo="registry.test/deck")), repository="registry.test/deck") is None
+    assert signed_code(signed_bytes(version="0.7.2")) == policy.GRANT_MISMATCH
+    assert signed_code(signed_bytes(digest="sha256:" + "5e" * 32)) == policy.GRANT_MISMATCH
+
+
+@pytest.mark.parametrize(("issued_at", "expires_at", "code"), [
+    (NOW + policy.CLOCK_SLACK_S, NOW + 86400, None),
+    (NOW + policy.CLOCK_SLACK_S + 1, NOW + 86400, policy.GRANT_EXPIRED),
+    (NOW - 86400, NOW + 1, None),
+    (NOW - 86400, NOW, policy.GRANT_EXPIRED),
+    (NOW - policy.GRANT_MAX_S + 1, NOW + 1, None),
+])
+def test_the_grant_holds_only_in_its_time_window(issued_at, expires_at, code):
+    assert signed_code(signed_bytes(grant_doc(issued_at=issued_at, expires_at=expires_at))) == code
+
+
+@pytest.mark.parametrize(("issued_at", "expires_at"), [
+    (NOW, NOW), (NOW, NOW - 1), (NOW - 60, NOW - 60 + policy.GRANT_MAX_S + 1), (0, 2**40),
+])
+def test_a_grant_never_holds_longer_than_the_limit(issued_at, expires_at):
+    assert signed_code(signed_bytes(grant_doc(issued_at=issued_at, expires_at=expires_at))) == policy.BAD_REQUEST
+
+
+@pytest.mark.parametrize("change", [{"v": 2.0}, {"v": True}, {"v": "2"}, {"v": 3}])
+def test_only_the_integer_two_is_a_signed_request(change):
+    assert signed_code(signed_bytes(**change)) == policy.BAD_REQUEST
+
+
+@pytest.mark.parametrize("field", ["issued_at", "expires_at", "fmt"])
+def test_true_is_no_number_in_the_grant(field):
+    assert signed_code(signed_bytes(grant_doc(**{field: True}))) == policy.BAD_REQUEST
+
+
+def test_read_request_leaves_the_signature_to_check_signature():
+    forged = signed_bytes(sig="0" * 128)
+    request = policy.read_request(forged, now=NOW, keys=(KEY,))
+    assert request.v == 2 and code_of(policy.check_signature, request, keys=(KEY,)) == policy.BAD_SIGNATURE
+    assert code_of(policy.check_signature, request, keys=()) == policy.UNKNOWN_KEY
+    assert policy.check_signature(policy.read_request(signed_bytes(), now=NOW, keys=(KEY,)), keys=(KEY,)) is None
+    assert code_of(policy.read_request, signed_bytes(), now=NOW, keys=()) == policy.UNKNOWN_KEY
+
+
+def test_every_flipped_bit_of_the_grant_or_signature_is_refused():
+    raw = signed_bytes()
+    start = raw.index(b'"grant"')
+    accepted = []
+    for index in range(start, len(raw) - 1):
+        for bit in range(8):
+            flipped = bytearray(raw)
+            flipped[index] ^= 1 << bit
+            if signed_code(bytes(flipped)) is None:
+                accepted.append((index, bit))
+    assert accepted == []
+
+
+def test_cheap_checks_come_before_the_signature(monkeypatch):
+    calls = []
+    verify = ed25519.verify
+    monkeypatch.setattr(ed25519, "verify", lambda *args: calls.append(args) or verify(*args))
+    cheap = [
+        (signed_bytes(grant_doc(key_id="0" * 16)), policy.UNKNOWN_KEY),
+        (signed_bytes(version="0.7.2"), policy.GRANT_MISMATCH),
+        (signed_bytes(grant_doc(expires_at=NOW)), policy.GRANT_EXPIRED),
+        (signed_bytes(created_at=NOW - policy.REQUEST_MAX_AGE_S - 1), policy.EXPIRED),
+        (signed_bytes(sig="0" * 127), policy.BAD_REQUEST),
+    ]
+    for raw, code in cheap * 32:
+        assert signed_code(raw) == code
+    assert calls == []
+    assert signed_code(signed_bytes(sig="0" * 128)) == policy.BAD_SIGNATURE and len(calls) == 1
+
+
+def test_the_rollback_stays_unsigned_and_a_signed_one_is_refused():
+    assert make_request(action="rollback", version="0.6.0").v == 1
+    assert signed_code(signed_bytes(action="rollback")) == policy.BAD_REQUEST
+
+
+def test_an_unsigned_update_is_still_accepted_until_the_signature_is_required(monkeypatch):
+    assert policy.UPDATE_REQUIRES_SIGNATURE is False
+    assert make_request().v == 1
+    monkeypatch.setattr(policy, "UPDATE_REQUIRES_SIGNATURE", True)
+    assert code_of(make_request) == policy.SIGNATURE_REQUIRED
+    assert code_of(make_request, digest=DIGEST) == policy.SIGNATURE_REQUIRED
+    assert make_request(action="rollback", version="0.6.0").v == 1
+    assert signed_code(signed_bytes()) is None
+
+
+def test_the_grant_checks_are_only_for_signed_requests():
+    with pytest.raises(ValueError):
+        policy.check_grant(make_request(), now=NOW, keys=(KEY,))
+    with pytest.raises(ValueError):
+        policy.check_signature(make_request(), keys=(KEY,))
 
 
 def test_loads_strict_rejects_duplicates_at_every_level():

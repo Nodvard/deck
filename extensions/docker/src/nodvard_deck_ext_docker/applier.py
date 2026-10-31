@@ -26,7 +26,7 @@ from .capabilities import CONTAINER_NAME_RE, is_own_container
 from .compose_errors import scrub_compose_output
 from .image_apply import ComposeTarget, NotUpdatable
 from .image_updates import UPDATE, ImageUpdateService, _write_atomic
-from .operate import not_full_host
+from .operate import still_full
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
@@ -382,7 +382,7 @@ class ImageApplier:
         host = await self._ctx.hosts.get(req.host_ref) if req.host_ref else None
         if host is None:
             return ActionResult(success=False, error="Host nicht gefunden.")
-        if why := not_full_host(host, await self._ctx.settings.get()):
+        if why := await still_full(self._ctx, host):
             return ActionResult(success=False, error=why)
         container = str(payload.get("container") or "")
         if not CONTAINER_NAME_RE.match(container):

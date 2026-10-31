@@ -15,7 +15,7 @@ const NOTICE_STYLE: Record<PageNotice["kind"], string> = {
 export function RunNotice({ notice, onClose }: { notice: PageNotice; onClose?: () => void }) {
   return (
     <div role={notice.kind === "error" ? "alert" : "status"} className={`mb-4 flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${NOTICE_STYLE[notice.kind]}`}>
-      <span className="min-w-0">
+      <span className="min-w-0 break-words">
         {notice.text}
         {notice.links?.map((l) => (
           <a key={l.href} href={l.href} className="ml-2 whitespace-nowrap underline underline-offset-2 hover:text-white">{l.label}</a>

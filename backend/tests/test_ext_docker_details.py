@@ -6,15 +6,26 @@ nur die Image-Liste gekürzt."""
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "extensions" / "docker" / "src"))
+import pytest
+from docker_stack_fakes import EXT_DIR
 
-from nodvard_deck_ext_docker.docker_details import (  # noqa: E402
-    parse_images,
-    parse_system_df,
-    summarize_inspect,
-)
+
+@pytest.fixture(autouse=True, scope="module")
+def _ext_docker_on_path():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(EXT_DIR / "src"))
+        yield
+    for name in list(sys.modules):
+        if name.startswith("nodvard_deck_ext_docker"):
+            del sys.modules[name]
+
+
+def _mod():
+    from nodvard_deck_ext_docker import docker_details
+
+    return docker_details
+
 
 DF = """{"Active":"5","Reclaimable":"393.1MB (10%)","Size":"3.866GB","TotalCount":"7","Type":"Images"}
 {"Active":"5","Reclaimable":"0B (0%)","Size":"131MB","TotalCount":"5","Type":"Containers"}
@@ -31,7 +42,7 @@ kaputte Zeile
 
 
 def test_system_df_shows_size_and_what_can_be_freed():
-    rows = {r["type"]: r for r in parse_system_df(DF)}
+    rows = {r["type"]: r for r in _mod().parse_system_df(DF)}
     assert rows["Build Cache"] == {
         "type": "Build Cache", "label": "Build-Cache", "total": 388, "active": 0,
         "size": 10_150_000_000, "reclaimable": 9_113_000_000,
@@ -42,12 +53,12 @@ def test_system_df_shows_size_and_what_can_be_freed():
 
 
 def test_images_unused_first_largest_first_and_old_docker_without_counts():
-    images = parse_images(IMAGES)
+    images = _mod().parse_images(IMAGES)
     assert [(i["name"], i["in_use"]) for i in images] == [
         (None, False), ("lattice:pi-test", False), ("alpine:latest", False), ("lattice:latest", True),
     ]
     assert images[0]["dangling"] is True and images[0]["size"] == 1_200_000_000
-    old = parse_images('{"Containers":"N/A","ID":"abc","Repository":"nginx","Size":"187MB","Tag":"1.27"}')
+    old = _mod().parse_images('{"Containers":"N/A","ID":"abc","Repository":"nginx","Size":"187MB","Tag":"1.27"}')
     assert old[0]["in_use"] is None
 
 
@@ -77,7 +88,7 @@ def test_inspect_is_a_whitelist_env_values_never_leave():
             {"Type": "bind", "Source": "/etc/localtime", "Destination": "/etc/localtime", "RW": False},
         ],
     }
-    out = summarize_inspect(raw)
+    out = _mod().summarize_inspect(raw)
     assert "GEHEIM" not in repr(out), "weder Env-Werte noch Befehlszeile duerfen die Extension verlassen"
     assert out["env_keys"] == ["DATABASE_URL", "PATH", "POSTGRES_PASSWORD", "TZ"]
     assert out["name"] == "nextcloud-db"
@@ -94,7 +105,7 @@ def test_inspect_is_a_whitelist_env_values_never_leave():
 
 
 def test_stopped_container_shows_exit_and_oom():
-    out = summarize_inspect({
+    out = _mod().summarize_inspect({
         "State": {"Running": False, "StartedAt": "2026-09-24T07:00:00Z", "FinishedAt": "2026-09-24T08:00:00Z", "ExitCode": 137, "OOMKilled": True},
         "Config": {}, "HostConfig": {}, "NetworkSettings": {},
     })

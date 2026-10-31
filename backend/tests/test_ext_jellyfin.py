@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import logging
 import re
@@ -13,32 +14,33 @@ from typing import Any
 
 import httpx
 import pytest
+from nodvard_deck.ext.runtime import get_extension_runtime
+from nodvard_deck.models import AuditEntry, ExtensionRecord
+from nodvard_deck.services import extensions as extensions_service
 from nodvard_sdk import CertificateMismatch
 from nodvard_sdk.errors import PermissionDenied
 from sqlalchemy import select
 
-from nodvard_deck.ext.runtime import get_extension_runtime
-from nodvard_deck.models import AuditEntry, ExtensionRecord
-from nodvard_deck.services import extensions as extensions_service
-
 REPO_EXTENSIONS_DIR = Path(__file__).resolve().parents[2] / "extensions"
-sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "jellyfin" / "src"))
 
-from nodvard_deck_ext_jellyfin import parse, transport
-from nodvard_deck_ext_jellyfin.client import LATEST_QUERY
-from nodvard_deck_ext_jellyfin.config import (
-    normalize_base_url,
-    normalize_fingerprint,
-    read_connections,
-)
-from nodvard_deck_ext_jellyfin.models import Media
-from nodvard_deck_ext_jellyfin.service import AUTH_FAILED_TTL_S, CACHE_TTL_S
-from nodvard_deck_ext_jellyfin.widgets import (
-    MAX_ROWS,
-    episode_code,
-    media_title,
-    number_text,
-)
+
+class _ExtModule:
+    """Ein Modul der Erweiterung, geladen erst beim Zugriff im Test, wenn die Fixture den Pfad gesetzt hat."""
+
+    def __init__(self, name: str) -> None:
+        self._name = f"nodvard_deck_ext_jellyfin.{name}"
+
+    def __getattr__(self, attr: str) -> Any:
+        return getattr(importlib.import_module(self._name), attr)
+
+
+parse = _ExtModule("parse")
+transport = _ExtModule("transport")
+jf_client = _ExtModule("client")
+jf_config = _ExtModule("config")
+jf_models = _ExtModule("models")
+jf_service = _ExtModule("service")
+jf_widgets = _ExtModule("widgets")
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "jellyfin"
 FIXTURE_FILES = ("system_info.json", "sessions.json", "item_counts.json", "latest_items.json")
@@ -51,10 +53,9 @@ AUTH_HEADER = f'MediaBrowser Token="{KEY}"'
 
 
 @pytest.fixture(autouse=True)
-def _cleanup_sys_path():
-    before = list(sys.path)
+def _jellyfin_on_path(monkeypatch):
+    monkeypatch.syspath_prepend(str(REPO_EXTENSIONS_DIR / "jellyfin" / "src"))
     yield
-    sys.path[:] = before
     for name in list(sys.modules):
         if name.startswith(("nodvard_deck_ext_", "lattice_ext_")):
             del sys.modules[name]
@@ -88,12 +89,12 @@ def test_system_info_fixture_gives_name_and_version():
 @pytest.mark.parametrize(
     ("body", "expected"),
     [
-        ({"ServerName": "Keller", "Version": "10.11.0-rc1"}, parse.ServerInfo("Keller", "10.11.0-rc1")),
-        ({"Id": "abc"}, parse.ServerInfo(None, None)),
-        ({"ServerName": 5, "Version": ["10"], "Id": "abc"}, parse.ServerInfo(None, None)),
-        ({"Version": "<script>alert(1)</script>"}, parse.ServerInfo(None, None)),
-        ({"ServerName": "N" * 200}, parse.ServerInfo("N" * 79 + "…", None)),
-        ({"Version": "9" * 80}, parse.ServerInfo(None, None)),
+        ({"ServerName": "Keller", "Version": "10.11.0-rc1"}, ("Keller", "10.11.0-rc1")),
+        ({"Id": "abc"}, (None, None)),
+        ({"ServerName": 5, "Version": ["10"], "Id": "abc"}, (None, None)),
+        ({"Version": "<script>alert(1)</script>"}, (None, None)),
+        ({"ServerName": "N" * 200}, ("N" * 79 + "…", None)),
+        ({"Version": "9" * 80}, (None, None)),
         ({"foo": "bar"}, None),
         ({}, None),
         ([], None),
@@ -102,7 +103,7 @@ def test_system_info_fixture_gives_name_and_version():
     ],
 )
 def test_system_info_is_read_defensively(body, expected):
-    assert parse.parse_system_info(body) == expected
+    assert parse.parse_system_info(body) == (None if expected is None else parse.ServerInfo(*expected))
 
 
 def test_sessions_fixture_lists_only_running_playbacks_with_who_what_and_how():
@@ -250,45 +251,45 @@ def test_latest_without_an_items_list_is_refused(body):
 
 
 def test_titles_for_the_tile():
-    def media(**over: Any) -> Media:
+    def media(**over: Any) -> jf_models.Media:
         base: dict[str, Any] = {"title": "T", "kind": "movie", "series": None, "season": None, "episode": None, "artist": None, "year": None}
-        return Media(**{**base, **over})
+        return jf_models.Media(**{**base, **over})
 
-    assert media_title(media()) == "T"
-    assert media_title(media(year=2019)) == "T (2019)"
-    assert media_title(media(kind="episode", series="Serie", season=1, episode=3)) == "Serie S01E03 · T"
-    assert media_title(media(kind="episode", series="Serie")) == "Serie · T"
-    assert media_title(media(kind="episode", season=2)) == "S02 · T"
-    assert media_title(media(kind="episode", episode=9)) == "E09 · T"
-    assert media_title(media(kind="audio", artist="Band")) == "Band – T"
-    assert media_title(media(kind="audio")) == "T"
-    assert (episode_code(None, None), episode_code(12, 104)) == ("", "S12E104")
-    assert [number_text(n) for n in (0, 999, 1000, 1296, 1234567)] == ["0", "999", "1.000", "1.296", "1.234.567"]
+    assert jf_widgets.media_title(media()) == "T"
+    assert jf_widgets.media_title(media(year=2019)) == "T (2019)"
+    assert jf_widgets.media_title(media(kind="episode", series="Serie", season=1, episode=3)) == "Serie S01E03 · T"
+    assert jf_widgets.media_title(media(kind="episode", series="Serie")) == "Serie · T"
+    assert jf_widgets.media_title(media(kind="episode", season=2)) == "S02 · T"
+    assert jf_widgets.media_title(media(kind="episode", episode=9)) == "E09 · T"
+    assert jf_widgets.media_title(media(kind="audio", artist="Band")) == "Band – T"
+    assert jf_widgets.media_title(media(kind="audio")) == "T"
+    assert (jf_widgets.episode_code(None, None), jf_widgets.episode_code(12, 104)) == ("", "S12E104")
+    assert [jf_widgets.number_text(n) for n in (0, 999, 1000, 1296, 1234567)] == ["0", "999", "1.000", "1.296", "1.234.567"]
 
 
 def test_base_url_is_normalized_and_credentials_are_refused():
-    assert normalize_base_url("http://jellyfin.example.com:8096/") == BASE
-    assert normalize_base_url(" https://jellyfin.example.com/jellyfin/ ") == "https://jellyfin.example.com/jellyfin"
-    assert normalize_base_url("http://203.0.113.20:8096/?x=1#y") == "http://203.0.113.20:8096"
-    assert normalize_base_url("http://203.0.113.20:8096/web/index.html#!/home.html") == "http://203.0.113.20:8096"
-    assert normalize_base_url("https://jellyfin.example.com/jellyfin/web/") == "https://jellyfin.example.com/jellyfin"
-    assert normalize_base_url("http://jellyfin.test/jellyfin") == "http://jellyfin.test/jellyfin"
+    assert jf_config.normalize_base_url("http://jellyfin.example.com:8096/") == BASE
+    assert jf_config.normalize_base_url(" https://jellyfin.example.com/jellyfin/ ") == "https://jellyfin.example.com/jellyfin"
+    assert jf_config.normalize_base_url("http://203.0.113.20:8096/?x=1#y") == "http://203.0.113.20:8096"
+    assert jf_config.normalize_base_url("http://203.0.113.20:8096/web/index.html#!/home.html") == "http://203.0.113.20:8096"
+    assert jf_config.normalize_base_url("https://jellyfin.example.com/jellyfin/web/") == "https://jellyfin.example.com/jellyfin"
+    assert jf_config.normalize_base_url("http://jellyfin.test/jellyfin") == "http://jellyfin.test/jellyfin"
     for bad in ("jellyfin.example.com:8096", "ftp://jellyfin.example.com", "http://", "http://user:" + "pw@jellyfin.example.com", "http://@jellyfin.example.com", "http://jellyfin.example.com:999999", ""):
         with pytest.raises(ValueError):
-            normalize_base_url(bad)
+            jf_config.normalize_base_url(bad)
 
 
 def test_fingerprint_is_normalized_or_refused():
-    assert normalize_fingerprint(None) is None and normalize_fingerprint("  ") is None
-    assert normalize_fingerprint("ab" * 32) == PIN
-    assert normalize_fingerprint(PIN.replace(":", " ").lower()) == PIN
+    assert jf_config.normalize_fingerprint(None) is None and jf_config.normalize_fingerprint("  ") is None
+    assert jf_config.normalize_fingerprint("ab" * 32) == PIN
+    assert jf_config.normalize_fingerprint(PIN.replace(":", " ").lower()) == PIN
     for bad in ("kaputt", "AB:CD", 5, "A" * 300, ["x"]):
         with pytest.raises(ValueError):
-            normalize_fingerprint(bad)
+            jf_config.normalize_fingerprint(bad)
 
 
 def test_read_connections_flags_unusable_entries_without_dropping_the_rest():
-    configs = read_connections({"connections": [
+    configs = jf_config.read_connections({"connections": [
         {"name": "a", "base_url": "http://a.example.com:8096/", "tls_insecure_skip_verify": True},
         {"name": "a", "base_url": "http://zweite.example.com"},
         {"name": "b", "base_url": "http://user:" + "pw@b.example.com"},
@@ -308,7 +309,7 @@ def test_read_connections_flags_unusable_entries_without_dropping_the_rest():
     assert "nur für https://" in (configs[4].problem or "")
     assert (configs[5].pin, configs[5].problem) == (PIN, None)
     assert "Kurzname" in (configs[6].problem or "")
-    assert read_connections({}) == [] and read_connections({"connections": "x"}) == []
+    assert jf_config.read_connections({}) == [] and jf_config.read_connections({"connections": "x"}) == []
 
 
 class _Http:
@@ -701,7 +702,7 @@ async def test_latest_media_are_asked_without_a_user_and_without_virtual_items(c
         "ExcludeLocationTypes": "Virtual", "Fields": "DateCreated", "EnableImages": "false", "EnableUserData": "false",
         "EnableTotalRecordCount": "false", "Limit": "10",
     }
-    assert LATEST_QUERY.startswith("?SortBy=DateCreated&SortOrder=Descending")
+    assert jf_client.LATEST_QUERY.startswith("?SortBy=DateCreated&SortOrder=Descending")
     assert not any("UserId" in r.url.params or "userId" in r.url.params for r in fake.requests)
     assert not any(r.url.path == "/Items/Latest" for r in fake.requests)
 
@@ -753,7 +754,7 @@ async def test_widget_shows_at_most_ten_rows_and_says_how_many_playbacks_are_mis
     await _configure(client, headers, _connection())
     fake.sessions = [_session(f"u{i:03d}", f"Film {i}") for i in range(120)]
     rows = (await _widget(client, headers))["data"]
-    assert len(rows) == MAX_ROWS
+    assert len(rows) == jf_widgets.MAX_ROWS
     assert [r["title"] for r in rows[:8]] == [f"Film {i}" for i in range(8)]
     assert rows[8] == {"title": "… und 112 weitere Wiedergaben", "subtitle": "Alle stehen auf der Seite „Jellyfin“.", "label": "–", "tone": "neutral"}
     assert rows[9]["title"] == "Jellyfin 10.10.7" and rows[9]["label"] == "120 laufen"
@@ -766,7 +767,7 @@ async def test_widget_shows_at_most_ten_rows_and_says_how_many_playbacks_are_mis
     fake.sessions = [_session(f"u{i}", f"Film {i}") for i in range(9)]
     _service().clear()
     rows = (await _widget(client, headers))["data"]
-    assert len(rows) == MAX_ROWS and rows[8]["title"] == "Film 8"
+    assert len(rows) == jf_widgets.MAX_ROWS and rows[8]["title"] == "Film 8"
 
 
 @pytest.mark.asyncio
@@ -774,14 +775,14 @@ async def test_widget_with_many_connections_stays_within_ten_rows(client, db_ses
     headers, _ = await _enable(client, db_session, test_settings)
     await _configure(client, headers, *[_connection(f"jf{i}") for i in range(7)])
     rows = (await _widget(client, headers))["data"]
-    assert len(rows) == MAX_ROWS
+    assert len(rows) == jf_widgets.MAX_ROWS
     assert [r["title"] for r in rows[:2]] == ["Der Beispielfilm (2019)", "Die Beispielserie S02E05 · Der Besuch"]
     assert rows[2]["title"] == "… und 12 weitere Wiedergaben"
     assert [r["subtitle"].split(" · ")[0] for r in rows[3:]] == [f"jf{i}" for i in range(7)]
 
     await _configure(client, headers, *[_connection(f"jf{i}") for i in range(11)])
     rows = (await _widget(client, headers))["data"]
-    assert len(rows) == MAX_ROWS and rows[-1]["title"] == "… und 2 weitere Zeilen"
+    assert len(rows) == jf_widgets.MAX_ROWS and rows[-1]["title"] == "… und 2 weitere Zeilen"
     assert not any(r["tone"] == "good" and r["label"] == "läuft" for r in rows), "bei so vielen gibt es nur die Zusammenfassungen"
 
 
@@ -861,7 +862,7 @@ async def test_wrong_key_is_rejected_by_the_server_and_shown_as_auth_failed(clie
 
 @pytest.mark.asyncio
 async def test_a_rejected_key_is_not_asked_again_for_five_minutes(client, db_session, test_settings):
-    assert AUTH_FAILED_TTL_S == 300.0
+    assert jf_service.AUTH_FAILED_TTL_S == 300.0
     headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers, _connection(), key="falsch0000")
     service = _service()
@@ -877,7 +878,7 @@ async def test_a_rejected_key_is_not_asked_again_for_five_minutes(client, db_ses
 
     assert _only(await _overview(client, headers, "?refresh=true"))["state"] == "auth_failed"
     assert len(fake.requests) == 1, "auch „Aktualisieren“ umgeht die Pause nicht"
-    now[0] += AUTH_FAILED_TTL_S
+    now[0] += jf_service.AUTH_FAILED_TTL_S
     await _overview(client, headers)
     assert len(fake.requests) == 2, "nach fünf Minuten wird wieder gefragt"
 
@@ -888,8 +889,7 @@ async def test_changed_settings_end_the_pause(client, db_session, test_settings)
     await _configure(client, headers, _connection(), key="falsch0000")
     assert _only(await _overview(client, headers))["state"] == "auth_failed"
     assert len(fake.requests) == 1
-    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": "jellyfin-key:jf", "value": KEY}, headers=headers)
-    assert res.status_code == 204
+    fake.key = "falsch0000"
     saved = await client.put(f"/api/v1/extensions/{EXT}/settings", json={"current_password": "correct-horse-battery", "values": {"connections": [_connection(insecure=True)]}}, headers=headers)
     assert saved.status_code == 200, saved.text
     assert not saved.json().get("secrets_cleared"), "dieselbe Adresse: der Schlüssel bleibt"
@@ -898,16 +898,82 @@ async def test_changed_settings_end_the_pause(client, db_session, test_settings)
 
 @pytest.mark.asyncio
 async def test_testing_the_connection_ends_the_pause_and_asks_again(client, db_session, test_settings):
-    headers, _ = await _enable(client, db_session, test_settings)
+    headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers, _connection(), key="falsch0000")
     assert _only(await _overview(client, headers))["state"] == "auth_failed"
-    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": "jellyfin-key:jf", "value": KEY}, headers=headers)
-    assert res.status_code == 204
+    fake.key = "falsch0000"
     assert _only(await _overview(client, headers))["state"] == "auth_failed", "noch aus dem Zwischenspeicher"
 
     health = await _health()
     assert health.healthy is True
     assert _only(await _overview(client, headers))["state"] == "ok"
+
+
+async def _set_key(client, headers, value: str, name: str = "jf") -> None:
+    res = await client.put(
+        f"/api/v1/extensions/{EXT}/secrets",
+        json={"current_password": "correct-horse-battery", "label": f"jellyfin-key:{name}", "value": value}, headers=headers,
+    )
+    assert res.status_code == 204, res.text
+
+
+@pytest.mark.asyncio
+async def test_a_new_key_in_the_vault_ends_the_pause_at_once(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection(), key="falsch0000")
+    assert _only(await _overview(client, headers))["state"] == "auth_failed"
+    await _set_key(client, headers, KEY)
+    assert _only(await _overview(client, headers))["state"] == "ok"
+    assert len(fake.requests) > 1 and fake.requests[-1].headers["Authorization"] == f'MediaBrowser Token="{KEY}"'
+
+
+@pytest.mark.asyncio
+async def test_a_new_key_in_the_vault_is_used_at_once(client, db_session, test_settings):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection())
+    assert _only(await _overview(client, headers))["state"] == "ok"
+    fake.key = "neuerschluessel0000"
+    assert _only(await _overview(client, headers))["state"] == "ok", "aus dem Zwischenspeicher"
+    await _set_key(client, headers, "neuerschluessel0000")
+    assert _only(await _overview(client, headers))["state"] == "ok"
+    assert fake.requests[-1].headers["Authorization"] == 'MediaBrowser Token="neuerschluessel0000"'
+
+
+@pytest.mark.asyncio
+async def test_a_changed_secret_touches_only_its_own_connection(client, db_session, test_settings):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection(), _connection(name="jf2"))
+    await _overview(client, headers)
+    service, loaded = _service(), get_extension_runtime().loaded[EXT]
+    assert set(service._cache) == {"jf", "jf2"}
+    await loaded.instance.on_secret_changed(loaded.ctx, "jellyfin-key:jf2")
+    assert set(service._cache) == {"jf"}
+    await loaded.instance.on_secret_changed(loaded.ctx, "jellyfin-sonstwas")
+    assert set(service._cache) == {"jf"}
+
+
+@pytest.mark.asyncio
+async def test_an_answer_with_the_old_key_is_not_kept(client, db_session, test_settings):
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection())
+    service, loaded = _service(), get_extension_runtime().loaded[EXT]
+    load, entered, release, loads = service._load_bounded, asyncio.Event(), asyncio.Event(), []
+
+    async def slow(cfg, has_key):
+        loads.append(cfg.name)
+        if len(loads) == 1:
+            entered.set()
+            await release.wait()
+        return await load(cfg, has_key)
+
+    service._load_bounded = slow
+    first = asyncio.create_task(_overview(client, headers))
+    await entered.wait()
+    await loaded.instance.on_secret_changed(loaded.ctx, "jellyfin-key:jf")
+    release.set()
+    await first
+    await _overview(client, headers)
+    assert loads == ["jf", "jf"], "was die Abfrage mit dem alten Schlüssel einträgt, gilt nicht mehr"
 
 
 @pytest.mark.asyncio
@@ -1185,7 +1251,7 @@ async def test_results_are_cached_for_a_short_time_and_the_key_is_read_only_when
 
     await _overview(client, headers)
     assert len(fake.requests) == 8
-    now[0] += CACHE_TTL_S - 1
+    now[0] += jf_service.CACHE_TTL_S - 1
     await _overview(client, headers)
     assert len(fake.requests) == 8
     now[0] += 2.0

@@ -4,14 +4,11 @@ from __future__ import annotations
 
 import functools
 import ssl
-import typing
 from typing import Any
-
-from ._legacy import legacy_getattr
 
 
 class NodvardError(Exception):
-    """Basis für alle SDK-Fehler (der alte Name `LatticeError` bleibt als veralteter Alias)."""
+    """Basis für alle SDK-Fehler."""
 
 
 class PermissionDenied(NodvardError):
@@ -138,10 +135,3 @@ class CertificateMismatch(NodvardError, ssl.SSLCertVerificationError):
     def __str__(self) -> str:
         # `ssl.SSLError` zeigt ohne `strerror` das Tupel der Argumente.
         return self._TEXT
-
-
-# Veralteter Name `LatticeError`: dasselbe Objekt, mit DeprecationWarning (siehe _legacy.py).
-_LEGACY_NAMES = {"LatticeError": "NodvardError"}
-__getattr__ = legacy_getattr(__name__, _LEGACY_NAMES, globals())
-if typing.TYPE_CHECKING:
-    LatticeError = NodvardError

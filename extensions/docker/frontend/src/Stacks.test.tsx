@@ -67,7 +67,7 @@ beforeEach(() => {
   requests.length = 0;
   bodies.length = 0;
   window.history.replaceState({}, "", "/ext/docker/matrix?tab=stacks");
-  window.__lattice = {
+  window.__nodvardDeck = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn(), promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(true),
   };
@@ -135,7 +135,7 @@ describe("Reiter Stacks", () => {
   });
 
   it("ohne hosts.execute gibt es den Reiter nicht", async () => {
-    (window.__lattice.hasPermission as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (window.__nodvardDeck.hasPermission as ReturnType<typeof vi.fn>).mockReturnValue(false);
     const urls = serve();
     render(<ContainersPage />);
     await screen.findByText("Noch kein Server mit Docker");
@@ -185,13 +185,13 @@ describe("Übernehmen", () => {
     expect(leer.textContent).not.toContain("geändert");
     expect(leer.textContent).not.toContain("Nicht geprüft");
     fireEvent.click(within(leer).getByRole("button", { name: "Übernahme aufheben" }));
-    await waitFor(() => expect(window.__lattice.confirmDialog).toHaveBeenCalled());
-    const question = String((window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    await waitFor(() => expect(window.__nodvardDeck.confirmDialog).toHaveBeenCalled());
+    const question = String((window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mock.calls[0][0]);
     expect(question).toContain("Container bleiben, wie sie sind");
     expect(question).toContain("verschwindet er danach aus der Liste");
     expect(requests.some((r) => r.startsWith("DELETE"))).toBe(false);
 
-    (window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    (window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     fireEvent.click(within(leer).getByRole("button", { name: "Übernahme aufheben" }));
     expect(await screen.findByText("Übernahme von „leer“ aufgehoben.")).toBeInTheDocument();
     expect(requests).toContain(`DELETE /api/v1/ext/docker/hosts/h1${adoptUrl("leer")}`);
@@ -234,9 +234,11 @@ describe("Stack-Aktionen", () => {
     render(<ContainersPage />);
     const app = await screen.findByTestId("stack-app");
     expect(within(app).getAllByRole("button").map((b) => b.textContent)).toEqual(
-      ["Datei ansehen", "Bearbeiten", "Anwenden", "Stoppen", "Herunterfahren", "Images holen", "Übernahme aufheben", "Update", "Sicherungen", "Löschen"],
+      ["Datei ansehen", "Bearbeiten", "Aus Git", "Anwenden", "Stoppen", "Herunterfahren", "Images holen", "Übernahme aufheben", "Update", "Sicherungen",
+        "Löschen"],
     );
     expect(within(screen.getByTestId("stack-media")).queryByRole("button", { name: "Bearbeiten" })).toBeNull();
+    expect(within(screen.getByTestId("stack-media")).queryByRole("button", { name: "Aus Git" })).toBeNull();
     const leer = screen.getByTestId("stack-leer");
     expect(within(leer).queryByRole("button", { name: "Stoppen: leer" })).toBeNull();
     expect(within(leer).queryByRole("button", { name: "Herunterfahren: leer" })).toBeNull();
@@ -246,7 +248,7 @@ describe("Stack-Aktionen", () => {
   });
 
   it("über die Freigabe, mit Rückfrage und Ergebnis", async () => {
-    (window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    (window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     serve({
       "/actions/docker.stack_down": () => Response.json({ id: "a1", status: "proposed", risk: "high" }, { status: 202 }),
       "/actions/a1/approve": () => Response.json({ id: "a1", status: "succeeded", result: { output: "Stack „app“ heruntergefahren." } }),
@@ -254,7 +256,7 @@ describe("Stack-Aktionen", () => {
     render(<ContainersPage />);
     fireEvent.click(within(await screen.findByTestId("stack-app")).getByRole("button", { name: "Herunterfahren: app" }));
     expect(await screen.findByText("Stack „app“ heruntergefahren.")).toBeInTheDocument();
-    const question = String((window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    const question = String((window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mock.calls[0][0]);
     expect(question).toMatch(/^Stack „app“ herunterfahren\? /);
     expect(question).toContain("Was nur im Container lag und nicht in einem Volume oder Ordner, ist danach weg.");
     expect(requests).toContain("POST /api/v1/hosts/h1/actions/docker.stack_down");
@@ -262,7 +264,7 @@ describe("Stack-Aktionen", () => {
   });
 
   it("Löschen: der Ordner nur angehakt, mit Warnung, über die Freigabe", async () => {
-    const confirm = window.__lattice.confirmDialog as ReturnType<typeof vi.fn>;
+    const confirm = window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>;
     confirm.mockResolvedValue(true);
     serve({
       "/stacks/app/delete": (init) => init?.method === "POST"
@@ -296,7 +298,7 @@ describe("Stack-Aktionen", () => {
   });
 
   it("Löschen: ein Fehler ohne Ergebnis bleibt im Bereich stehen", async () => {
-    (window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    (window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     serve({
       "/stacks/app/delete": (init) => init?.method === "POST"
         ? Response.json({ action_id: "d2", status: "proposed", risk: "high", detail: null }, { status: 202 })
@@ -311,7 +313,7 @@ describe("Stack-Aktionen", () => {
   });
 
   it("Löschen: ein Teilerfolg steht als Warnung über der Liste", async () => {
-    (window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    (window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     serve({
       "/stacks/app/delete": (init) => init?.method === "POST"
         ? Response.json({ action_id: "d3", status: "proposed", risk: "high", detail: null }, { status: 202 })
@@ -329,7 +331,7 @@ describe("Stack-Aktionen", () => {
   });
 
   it("Update: wählt die Dienste mit Update, nennt Datenspeicher und bietet den Rückweg an", async () => {
-    const confirm = window.__lattice.confirmDialog as ReturnType<typeof vi.fn>;
+    const confirm = window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>;
     confirm.mockResolvedValue(true);
     const plan = {
       services: [
@@ -360,7 +362,7 @@ describe("Stack-Aktionen", () => {
   });
 
   it("Update: Volumes vorher sichern, mit Größe, Platz und Grund, wenn es nicht geht", async () => {
-    (window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    (window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     const plan = {
       services: [
         { service: "web", container: "app-web-1", image: "nginx:1.27", status: "update", reason: null, data_store: false, backup: false, volumes: ["app_daten"] },
@@ -400,12 +402,12 @@ describe("Stack-Aktionen", () => {
   });
 
   it("Update: der Rückweg geht über die eigene Adresse", async () => {
-    (window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    (window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     serve({
       "/stacks/app/rollback": () => Response.json({ action_id: "r1", status: "proposed", risk: "high", detail: null }, { status: 202 }),
       "/stacks/app/update": () => Response.json({ services: [], updates: [], data_store: false, rollback: ["web"] }),
     });
-    window.__lattice.hasPermission = vi.fn((permission: string) => !permission.startsWith("actions.approve:"));
+    window.__nodvardDeck.hasPermission = vi.fn((permission: string) => !permission.startsWith("actions.approve:"));
     render(<ContainersPage />);
     fireEvent.click(within(await screen.findByTestId("stack-app")).getByRole("button", { name: "Update" }));
     const panel = await screen.findByTestId("update-app");
@@ -416,7 +418,7 @@ describe("Stack-Aktionen", () => {
   });
 
   it("Update: nicht angewendete Änderungen sperren, gleiche Images kommen mit, gestoppte bleiben", async () => {
-    const confirm = window.__lattice.confirmDialog as ReturnType<typeof vi.fn>;
+    const confirm = window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>;
     confirm.mockResolvedValue(true);
     let unapplied = ["web"];
     const plan = () => ({
@@ -456,7 +458,7 @@ describe("Stack-Aktionen", () => {
   });
 
   it("Umzug von Portainer: Ordner, Warnung und Freigabe", async () => {
-    const confirm = window.__lattice.confirmDialog as ReturnType<typeof vi.fn>;
+    const confirm = window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>;
     confirm.mockResolvedValue(true);
     serve({
       "/stacks/portainer/from-portainer": (init) => init?.method === "POST"
@@ -505,7 +507,7 @@ describe("Stack-Aktionen", () => {
   });
 
   it("Umzug von Portainer: ein gestoppter Stack wird vorher genannt", async () => {
-    const confirm = window.__lattice.confirmDialog as ReturnType<typeof vi.fn>;
+    const confirm = window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>;
     confirm.mockResolvedValue(false);
     serve({ "/stacks/portainer/from-portainer": () => Response.json({
       project: "portainer", folder: "/opt/stacks/portainer", portainer_id: "3", services: ["app"], stopped: true, problem: null,
@@ -521,20 +523,20 @@ describe("Stack-Aktionen", () => {
   });
 
   it("eine Freigabe, die noch aussteht, nennt den Stack", async () => {
-    (window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
-    (window.__lattice.hasPermission as ReturnType<typeof vi.fn>).mockImplementation((p: string) => !p.startsWith("actions.approve"));
+    (window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    (window.__nodvardDeck.hasPermission as ReturnType<typeof vi.fn>).mockImplementation((p: string) => !p.startsWith("actions.approve"));
     serve({ "/actions/docker.stack_pull": () => Response.json({ id: "a2", status: "proposed", risk: "medium" }, { status: 202 }) });
     render(<ContainersPage />);
     fireEvent.click(within(await screen.findByTestId("stack-app")).getByRole("button", { name: "Images holen: app" }));
     expect(await screen.findByText(/^Stack „app“, Images holen: vorgeschlagen/)).toBeInTheDocument();
-    expect(String((window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mock.calls[0][0])).toMatch(/^Images für den Stack „app“ neu holen\? /);
+    expect(String((window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mock.calls[0][0])).toMatch(/^Images für den Stack „app“ neu holen\? /);
   });
 
   it("nach „Abbrechen“ geht nichts raus", async () => {
     serve();
     render(<ContainersPage />);
     fireEvent.click(within(await screen.findByTestId("stack-app")).getByRole("button", { name: "Stoppen: app" }));
-    await waitFor(() => expect(window.__lattice.confirmDialog).toHaveBeenCalled());
+    await waitFor(() => expect(window.__nodvardDeck.confirmDialog).toHaveBeenCalled());
     expect(requests.some((r) => r.startsWith("POST"))).toBe(false);
   });
 });
@@ -560,7 +562,7 @@ describe("Bearbeiten", () => {
         { path: "/opt/stacks/x/compose.yaml", content: "services: {}\n", error: null, sha256: "a".repeat(64) },
       ] }),
     });
-    const confirm = window.__lattice.confirmDialog as ReturnType<typeof vi.fn>;
+    const confirm = window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>;
     confirm.mockResolvedValue(false);
     render(<ContainersPage />);
     const app = await screen.findByTestId("stack-app");

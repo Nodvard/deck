@@ -620,6 +620,7 @@ def test_checked_in_file_matches_a_fresh_full_run_when_the_environment_is_comple
     python_packages, npm_packages = tpl.collect_all(REPO)
     if any(p.problems for p in python_packages + npm_packages):
         pytest.skip("Umgebung nicht wie gepinnt (Paket fehlt/andere Version/node_modules fehlt): siehe `scripts/third_party_licenses.py --check`.")
+    tpl.explain_licenses(python_packages + npm_packages)
     fresh = tpl.render(python_packages, npm_packages)
     current = LICENSES_FILE.read_text(encoding="utf-8").replace("\r\n", "\n")
     assert current == fresh, "THIRD_PARTY_LICENSES ist veraltet -- neu erzeugen mit: python scripts/third_party_licenses.py"
@@ -888,7 +889,7 @@ def test_dulwich_rust_crates_are_listed_with_version_license_and_text():
     """dulwich hat keine SBOM; seine Rust-Erweiterungen enthalten pyo3, pyo3-ffi, once_cell und similar."""
     text = LICENSES_FILE.read_text(encoding="utf-8")
     section = _section(text, "dulwich")
-    assert "[Fest eingebaute Bibliothek: pyo3 und pyo3-ffi (Rust-Crates) 0.29.2]" in section
+    assert "[Fest eingebaute Bibliothek: pyo3 und pyo3-ffi (Rust-Crates) 0.30.1]" in section
     assert "[Fest eingebaute Bibliothek: once_cell (Rust-Crate) 1.21.4]" in section
     assert "[Fest eingebaute Bibliothek: similar (Rust-Crate) 3.2.0]" in section
     assert "Copyright (c) 2023-present PyO3 Project and Contributors." in section
@@ -905,8 +906,8 @@ def test_dulwich_rust_crates_are_listed_with_version_license_and_text():
 
 def test_dulwich_entries_are_checked_against_the_pin():
     versions = {lib.package_version for lib in tpl.embedded_for("dulwich")}
-    assert versions == {"1.2.15"}
-    assert tpl.embedded_version_problems("dulwich", "1.2.15") == []
+    assert versions == {"1.2.19"}
+    assert tpl.embedded_version_problems("dulwich", "1.2.19") == []
     problems = tpl.embedded_version_problems("dulwich", "1.3.0")
     assert len(problems) >= 4 and all("dulwich" in p and "1.3.0" in p and "_PY_EMBEDDED" in p for p in problems)
     pins = [pin for pin in tpl.read_constraints() if tpl.pep503(pin[0]) != "dulwich"]
@@ -915,9 +916,12 @@ def test_dulwich_entries_are_checked_against_the_pin():
 
 def test_installed_dulwich_really_contains_the_listed_crates():
     data = _installed_binary_bytes("dulwich", r"dulwich/_pack\..*\.(so|pyd)", _dulwich("pyo3").package_version)
-    for needle in (b"pyo3-0.29.2", b"pyo3-ffi-0.29.2", b"once_cell-1.21.4", b"similar-3.2.0"):
+    for needle in (b"pyo3-0.30.1", b"pyo3-ffi-0.30.1", b"once_cell-1.21.4", b"similar-3.2.0"):
         assert needle in data, f"{needle.decode()} steht nicht im Binary: Eintrag in _PY_EMBEDDED pruefen"
     assert b"memchr-2." not in data and b"bstr-" not in data
+    # Mit Rust 1.99.1 gebaut: neuere Crates der Fehlerausgabe als bei den übrigen Wheels, Lizenztexte gleich.
+    for needle in (b"addr2line-0.27.1", b"gimli-0.34.0", b"miniz_oxide-0.9.1", b"rustc-demangle-0.1.28", b"hashbrown-0.17.1"):
+        assert needle in data, f"{needle.decode()} steht nicht im Binary: Eintrag zur Rust-Standardbibliothek pruefen"
 
 
 def test_rust_standard_library_is_listed_once_with_texts_and_pointers_in_every_rust_wheel():
@@ -932,9 +936,9 @@ def test_rust_standard_library_is_listed_once_with_texts_and_pointers_in_every_r
     primary = _section(text, std.package)
     assert f"[{title}]" in primary and "Copyright (c) The Rust Project Contributors" in primary
     assert "Copyright (c) 2016-2018 The gimli Developers" in primary and "Copyright (c) 2016 Amanieu d'Antras" in primary
-    assert "Copyright (c) 2015 The Gimli Developers" in primary and "LICENSE-MIT aus object 0.37.3" in primary
+    assert "Copyright (c) 2015 The Gimli Developers" in primary and "LICENSE-MIT aus object 0.37.3 (0.39.1 ist gleich)" in primary
     assert "Copyright (c) 2014 Alex Crichton" in primary and "Copyright (c) 2017 Frommi" in primary
-    assert "ebenso in dulwich 1.2.15, pydantic-core 2.46.5, pyrage 1.4.0, watchfiles 1.3.0" in primary
+    assert "ebenso in dulwich 1.2.19, pydantic-core 2.46.5, pyrage 1.4.0, watchfiles 1.3.0" in primary
     shown = {tpl.pep503(name): name for name, _ in tpl.read_constraints()}  # Ueberschrift wie in constraints.txt
     for other in sorted(_RUST_WHEELS - {std.package}):
         section = _section(text, shown[other])
@@ -989,7 +993,7 @@ def test_installed_rust_wheels_really_contain_the_standard_library_crates():
 
 def test_object_crate_license_text_is_the_unchanged_mit_text_of_version_0_37_3():
     (std,) = [lib for lib in tpl._PY_EMBEDDED if lib.name.startswith("Rust-Standardbibliothek")]
-    assert ("LICENSE-MIT aus object 0.37.3", "object-0.37.3-LICENSE-MIT.txt") in std.texts
+    assert ("LICENSE-MIT aus object 0.37.3 (0.39.1 ist gleich)", "object-0.37.3-LICENSE-MIT.txt") in std.texts
     text = (tpl.EMBEDDED_DIR / "object-0.37.3-LICENSE-MIT.txt").read_text(encoding="utf-8")
     assert text.startswith("Copyright (c) 2015 The Gimli Developers\n")
     assert "Permission is hereby granted, free of charge, to any" in text
@@ -1049,3 +1053,42 @@ def test_license_guard_embedded_packages_are_clean_for_the_real_pins():
     assert all(not pkg.problems for pkg in packages)
     names = {pkg.name for pkg in packages}
     assert "Rust-Standardbibliothek (std, core, alloc) (eingebaut in cryptography, dulwich, pydantic-core, pyrage, watchfiles)" in names
+
+
+def test_a_choice_between_licenses_and_a_license_only_in_the_file_are_named():
+    dual = tpl.Package("python", "structlog", "26.1.0", "MIT OR Apache-2.0", "License-Expression")
+    unknown = tpl.Package("python", "neu-dual", "1.0", "MIT OR GPL-3.0", "License-Expression")
+    pyrage = tpl.Package("python", "pyrage", "1.4.0", "", "keine Angabe",
+                         texts=[("LICENSE", "The MIT License (MIT)\n…")])
+    problems = tpl.explain_licenses([dual, unknown, pyrage])
+    assert dual.shown_license == "MIT OR Apache-2.0, genutzt als MIT"
+    assert pyrage.shown_license.startswith("MIT (laut Lizenzdatei")
+    assert problems == ["neu-dual: 'MIT OR GPL-3.0' ohne gewählte Option in _CHOSEN_OPTION"]
+
+
+def test_a_license_from_the_file_is_checked_against_version_and_text():
+    newer = tpl.Package("python", "pyrage", "1.5.0", "", "keine Angabe", texts=[("LICENSE", "The MIT License")])
+    other = tpl.Package("python", "pyrage", "1.4.0", "", "keine Angabe", texts=[("LICENSE", "Apache License")])
+    gone = tpl.Package("python", "structlog", "27.0.0", "MIT", "License-Expression")
+    problems = tpl.explain_licenses([newer, other, gone])
+    assert not newer.shown_license and not other.shown_license
+    assert [p.split(":")[0] for p in problems] == ["pyrage", "pyrage", "structlog"]
+
+
+def test_the_system_packages_of_the_image_come_from_the_dockerfile():
+    base, extra = tpl.image_system_packages()
+    assert base.startswith("python:") and extra == {"documents": ["tesseract-ocr", "tesseract-ocr-deu"]}
+    text = " ".join(LICENSES_FILE.read_text(encoding="utf-8").split())
+    assert "tesseract-ocr-deu (nur in Images mit dem Modul documents)" in text
+    assert "Systempakete im Image" in text and "/usr/share/doc/<paket>/copyright" in text
+
+
+def test_a_system_package_without_a_module_branch_is_in_every_image(tmp_path):
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(
+        "FROM node:22 AS web\nRUN apt-get install -y git\n"
+        "FROM python:3.12-slim\nRUN apt-get update && apt-get install --no-install-recommends -y \\\n    tini \\\n"
+        "  && rm -rf /var/lib/apt/lists/*\n",
+        encoding="utf-8",
+    )
+    assert tpl.image_system_packages(dockerfile) == ("python:3.12-slim", {"": ["tini"]})

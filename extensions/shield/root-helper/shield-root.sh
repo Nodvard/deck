@@ -10,8 +10,10 @@
 #   detect-templates                       watch_templates.DETECT_SCRIPT (2)
 #   refresh-packages                       Teil @@refresh von updates.status_command (2)
 #   quarantine <datei> <name>              antivirus.quarantine_command (3); ab 8 nur echte Funde (confirm_finding,
-#                                          geprueft in $QDIR/.pruefen), Ursprung und Rechte in $QDIR/.herkunft/<name>
-#   restore <name>                         an den Ort aus $QDIR/.herkunft, sonst wie antivirus.restore_command (8)
+#                                          geprueft in $QDIR/.pruefen), Ursprung und Rechte in $QDIR/.herkunft/<name>;
+#                                          ab 15 Rechte vierstellig
+#   restore <name>                         an den Ort aus $QDIR/.herkunft, sonst wie antivirus.restore_command (8);
+#                                          ab 15 mit "@@restored_to=<ort>" vor "ok"
 #   delete <name>                          antivirus.delete_command (3)
 #   quarantine-state <name>                antivirus.quarantine_state_command (14); nur lesend
 #   ban|unban <ip> <jail>                  intrusion.ban_command (3)
@@ -42,7 +44,7 @@ IFS='
 '
 umask 022
 
-HELPER_VERSION=14
+HELPER_VERSION=15
 QDIR=/var/lib/nexus-quarantine
 JOBDIR=/var/lib/nexus-updates
 SELF=/usr/local/lib/nodvard-deck/shield-root
@@ -219,6 +221,17 @@ confirm_finding() {
     esac
 }
 
+# Rechte immer vierstellig: `stat -c %a` laesst fuehrende Nullen weg (aus 044 wird 44), aeltere Ablagen auch.
+mode4() {
+    case $1 in
+        [0-7]) echo "000$1" ;;
+        [0-7][0-7]) echo "00$1" ;;
+        [0-7][0-7][0-7]) echo "0$1" ;;
+        [0-7][0-7][0-7][0-7]) echo "$1" ;;
+        *) return 1 ;;
+    esac
+}
+
 split_path() {
     case $1 in
         /*) ;;
@@ -316,7 +329,7 @@ quarantine() {
     if [ -L "$check" ]; then rm -f "$check"; echo "@@msg=symlink_swapped"; exit 5; fi
     [ -f "$check" ] || { echo "@@msg=quarantine_kept $check"; exit 4; }
     if [ "$(stat -c %h "$check")" != 1 ]; then rm -f "$check"; echo "@@msg=hardlink_swapped"; exit 5; fi
-    M=$(stat -c %a "$check")
+    M=$(mode4 "$(stat -c %a "$check")")
     F=0
     confirm_finding "$check" || F=$?
     trap - TERM INT HUP
@@ -349,11 +362,7 @@ restore() {
     [ -e "$QDIR/.herkunft" ] || [ -L "$QDIR/.herkunft" ] || { echo "@@msg=restore_no_origin"; exit 3; }
     qdir_safe pruefen "$QDIR/.herkunft" || { echo "@@msg=quarantine_dir_unsafe"; exit 5; }
     [ -f "$origin" ] && [ ! -L "$origin" ] || { echo "@@msg=restore_no_origin"; exit 3; }
-    mode=$(sed -n 1p "$origin")
-    case $mode in
-        [0-7][0-7][0-7] | [0-7][0-7][0-7][0-7]) ;;
-        *) echo "@@msg=restore_no_origin"; exit 3 ;;
-    esac
+    mode=$(mode4 "$(sed -n 1p "$origin")") || { echo "@@msg=restore_no_origin"; exit 3; }
     original=$(sed 1d "$origin"; echo x)
     original=${original%x}
     original=${original%?}
@@ -375,6 +384,8 @@ restore() {
         *) echo "@@msg=restore_stuck $stuck"; exit 4 ;;
     esac
     rm -f "$origin"
+    # Der Ort aus der Ablage, nicht der aus der Datenbank des Dashboards; er kann Zeilenumbrueche enthalten.
+    printf '@@restored_to=%s\n' "$original"
     echo ok
 }
 
@@ -390,9 +401,7 @@ quarantine_state() {
         if [ -f "$QDIR/.herkunft/$1" ] && [ ! -L "$QDIR/.herkunft/$1" ]; then
             M=$(sed -n 1p "$QDIR/.herkunft/$1" 2>/dev/null)
         fi
-        case $M in
-            [0-7][0-7][0-7] | [0-7][0-7][0-7][0-7]) echo "@@mode=$M" ;;
-        esac
+        if M=$(mode4 "$M"); then echo "@@mode=$M"; fi
     elif [ -e "$QDIR/.pruefen/$1" ] || [ -L "$QDIR/.pruefen/$1" ]; then
         echo "@@state=checking"
     else

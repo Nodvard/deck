@@ -167,17 +167,15 @@ import { useCallback, useEffect as useEffect2, useMemo, useState } from "react";
 
 // ../../../frontend/src/lib/deckGlobal.ts
 var EVENT_PREFIX = "nodvard-deck:";
-var LEGACY_EVENT_PREFIX = "lattice:";
 function findDeck() {
   if (typeof window === "undefined") return void 0;
-  return window.__nodvardDeck ?? window.__lattice;
+  return window.__nodvardDeck;
 }
 function deck() {
   return findDeck();
 }
 function deckEventName(event) {
-  const modern = typeof window !== "undefined" && Boolean(window.__nodvardDeck);
-  return (modern ? EVENT_PREFIX : LEGACY_EVENT_PREFIX) + event;
+  return EVENT_PREFIX + event;
 }
 
 // ../../_shared/frontend/src/location.ts
@@ -495,8 +493,10 @@ async function proposeAndApprove(path, body, risk, signal) {
   const { action } = await runAction(path, { method: "POST", body: JSON.stringify(body) }, { risk, signal });
   const id = action.id ?? action.action_id;
   switch (action.status) {
-    case "succeeded":
-      return outcome("ok", "Erledigt.");
+    case "succeeded": {
+      const note = action.result?.detail?.note;
+      return outcome("ok", typeof note === "string" && note ? note : "Erledigt.");
+    }
     case "proposed":
       return outcome("warn", "Wartet auf Freigabe unter \u201EAktionen\u201C.", id ? [{ href: `/actions?action=${encodeURIComponent(id)}`, label: "Zur Freigabe" }] : []);
     case "failed":
@@ -544,13 +544,15 @@ function usePageActions() {
   return page ? { ...page, notices: null } : { keys, signal, report: own.report, notices: own.notices };
 }
 async function track(page, key, label, progress, fn) {
-  if (!page.keys.begin(key)) return;
+  if (!page.keys.begin(key)) return null;
   page.report(key, { kind: "info", text: progress });
   try {
     const result = await fn();
     page.report(key, { ...result, text: `${label}: ${result.text}` });
+    return result.kind;
   } catch (err) {
     page.report(key, { kind: "error", text: `${label}: ${err instanceof Error ? err.message : String(err)}` });
+    return "error";
   } finally {
     page.keys.end(key);
   }
@@ -626,7 +628,7 @@ var OUTCOME_LABELS = {
 };
 var PAGE_SIZE = 25;
 function formatTimestamp(unixSeconds) {
-  return new Date(unixSeconds * 1e3).toLocaleString();
+  return new Date(unixSeconds * 1e3).toLocaleString("de-DE");
 }
 function dayBoundary(day, end) {
   const d = /* @__PURE__ */ new Date(`${day}T${end ? "23:59:59.999" : "00:00:00"}`);
@@ -645,7 +647,7 @@ function AuditTrail({ incidentId }) {
   if (!entries) return /* @__PURE__ */ jsx3("p", { className: "text-xs opacity-60", children: "Lade Verlauf \u2026" });
   if (entries.length === 0) return /* @__PURE__ */ jsx3("p", { className: "text-xs opacity-60", children: "Kein Audit-Eintrag zu diesem Vorfall." });
   return /* @__PURE__ */ jsx3("ol", { className: "space-y-1 border-l border-white/10 pl-3 text-xs", "data-testid": `trail-${incidentId}`, children: entries.map((e) => /* @__PURE__ */ jsxs3("li", { children: [
-    /* @__PURE__ */ jsx3("span", { className: "opacity-50", children: new Date(e.ts).toLocaleString() }),
+    /* @__PURE__ */ jsx3("span", { className: "opacity-50", children: new Date(e.ts).toLocaleString("de-DE") }),
     " ",
     /* @__PURE__ */ jsx3("span", { className: "font-medium", children: auditActionLabel(e.action) }),
     " ",
@@ -674,6 +676,7 @@ function ContainerWatch() {
   const [offset, setOffset] = useState4(0);
   const [openTrail, setOpenTrail] = useState4(null);
   const canReadAudit = deck().hasPermission("audit.read");
+  const canManage = deck().hasPermission("soc.manage");
   const load = useCallback3(() => {
     const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
     if (appliedQuery) params.set("q", appliedQuery);
@@ -828,12 +831,12 @@ function ContainerWatch() {
             ] })
           ] }),
           /* @__PURE__ */ jsxs3("div", { className: "flex flex-wrap gap-1", children: [
-            active && /* @__PURE__ */ jsxs3(Fragment2, { children: [
+            canManage && active && /* @__PURE__ */ jsxs3(Fragment2, { children: [
               /* @__PURE__ */ jsx3(Button, { small: true, onClick: () => void changeStatus(incident.id, "confirm"), children: "Best\xE4tigen" }),
               /* @__PURE__ */ jsx3(Button, { small: true, onClick: () => void changeStatus(incident.id, "resolve"), children: "Erledigt" }),
               /* @__PURE__ */ jsx3(Button, { small: true, variant: "ghost", onClick: () => void changeStatus(incident.id, "dismiss"), children: "Verwerfen" })
             ] }),
-            !active && /* @__PURE__ */ jsx3(Button, { small: true, onClick: () => void changeStatus(incident.id, "reopen"), children: "Wieder \xF6ffnen" }),
+            canManage && !active && /* @__PURE__ */ jsx3(Button, { small: true, onClick: () => void changeStatus(incident.id, "reopen"), children: "Wieder \xF6ffnen" }),
             canReadAudit && /* @__PURE__ */ jsx3(
               "button",
               {
@@ -869,7 +872,7 @@ var NOTICE_STYLE = {
 };
 function RunNotice({ notice, onClose }) {
   return /* @__PURE__ */ jsxs4("div", { role: notice.kind === "error" ? "alert" : "status", className: `mb-4 flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${NOTICE_STYLE[notice.kind]}`, children: [
-    /* @__PURE__ */ jsxs4("span", { className: "min-w-0", children: [
+    /* @__PURE__ */ jsxs4("span", { className: "min-w-0 break-words", children: [
       notice.text,
       notice.links?.map((l) => /* @__PURE__ */ jsx4("a", { href: l.href, className: "ml-2 whitespace-nowrap underline underline-offset-2 hover:text-white", children: l.label }, l.href))
     ] }),
@@ -921,6 +924,105 @@ var ACK_ONLY_IF = {
 };
 var banKey = (hostId, ip) => `${hostId}:${ip}`;
 var fail2banKey = (hostId) => `${hostId}:fail2ban`;
+function sshJail(jails) {
+  const names = Object.keys(jails).sort();
+  return names.includes("sshd") ? "sshd" : names.find((n) => n.includes("ssh"));
+}
+var defaultJail = (jails) => sshJail(jails) ?? Object.keys(jails).sort()[0];
+var jailOf = (jails, ip) => Object.keys(jails).sort().find((n) => jails[n].banned.includes(ip));
+var BANNED_SEARCH_FROM = 20;
+var BANNED_SHOWN_MAX = 200;
+var IP_LIKE = /^(?=.*[.:])[0-9A-Fa-f:.]{2,45}$/;
+function BannedList({ hostId, jails, canManage, busy, onUnban }) {
+  const [query, setQuery] = useState5("");
+  const names = Object.keys(jails).sort();
+  const total = names.reduce((n, name) => n + jails[name].banned.length, 0);
+  const q = total >= BANNED_SEARCH_FROM ? query.trim().toLowerCase() : "";
+  let left = BANNED_SHOWN_MAX;
+  let hidden = 0;
+  const groups = [];
+  for (const name of names) {
+    const hits = jails[name].banned.filter((ip) => ip.includes(q));
+    const shown = hits.slice(0, left);
+    left -= shown.length;
+    hidden += hits.length - shown.length;
+    if (hits.length) groups.push({ name, shown, count: hits.length });
+  }
+  return /* @__PURE__ */ jsxs5("details", { "data-testid": `banned-${hostId}`, children: [
+    /* @__PURE__ */ jsxs5("summary", { className: "cursor-pointer text-xs text-white/55 hover:text-white", children: [
+      "Gesperrte Adressen (",
+      total,
+      ")"
+    ] }),
+    /* @__PURE__ */ jsxs5("div", { className: "mt-2 space-y-2 text-xs", children: [
+      total === 0 && /* @__PURE__ */ jsx6("p", { className: "text-white/50", children: "Fail2ban sperrt gerade keine Adresse." }),
+      total >= BANNED_SEARCH_FROM && /* @__PURE__ */ jsx6("input", { type: "search", value: query, onChange: (e) => setQuery(e.target.value), "aria-label": "Gesperrte Adresse suchen", placeholder: "Adresse suchen", className: `${inputClass} w-56` }),
+      total > 0 && groups.length === 0 && /* @__PURE__ */ jsx6("p", { className: "text-white/50", children: "Keine gesperrte Adresse passt zur Suche." }),
+      groups.map((g) => /* @__PURE__ */ jsxs5("div", { children: [
+        /* @__PURE__ */ jsxs5("p", { className: "mb-1 text-white/40", children: [
+          "Jail ",
+          g.name,
+          " \xB7 ",
+          g.count
+        ] }),
+        /* @__PURE__ */ jsx6("ul", { className: "space-y-1", children: g.shown.map((ip) => {
+          const label = busy(ip) ? "Entsperre \u2026" : "Entsperren";
+          return /* @__PURE__ */ jsxs5("li", { className: "flex flex-wrap items-center gap-2", children: [
+            /* @__PURE__ */ jsx6("span", { className: "w-56 font-mono", children: ip }),
+            canManage && /* @__PURE__ */ jsx6(
+              "button",
+              {
+                type: "button",
+                disabled: busy(ip),
+                onClick: () => onUnban(ip, g.name),
+                "aria-label": `${ip} ${label}`,
+                className: "text-white/45 hover:text-white disabled:opacity-50",
+                children: label
+              }
+            )
+          ] }, ip);
+        }) })
+      ] }, g.name)),
+      hidden > 0 && /* @__PURE__ */ jsxs5("p", { className: "text-white/50", children: [
+        "\u2026 und ",
+        hidden,
+        " weitere, bitte \xFCber die Suche eingrenzen."
+      ] })
+    ] })
+  ] });
+}
+function BanForm({ hostId, jails, busy, onBan }) {
+  const names = Object.keys(jails).sort();
+  const [ip, setIp] = useState5("");
+  const [jail, setJail] = useState5(() => defaultJail(jails));
+  const value = ip.trim();
+  const valid = IP_LIKE.test(value);
+  const notAnAddress = /[^0-9A-Fa-f:.]/.test(value);
+  const submit = async () => {
+    if (valid && await onBan(value, names.includes(jail) ? jail : defaultJail(jails))) setIp("");
+  };
+  return /* @__PURE__ */ jsxs5("form", { "data-testid": `ban-form-${hostId}`, className: "mt-2 flex flex-wrap items-center gap-2", onSubmit: (e) => {
+    e.preventDefault();
+    void submit();
+  }, children: [
+    /* @__PURE__ */ jsx6(
+      "input",
+      {
+        value: ip,
+        onChange: (e) => setIp(e.target.value),
+        "aria-label": "Adresse von Hand sperren",
+        placeholder: "Adresse, z. B. 203.0.113.9",
+        autoCapitalize: "off",
+        spellCheck: false,
+        className: `${inputClass} w-56`
+      }
+    ),
+    names.length > 1 && /* @__PURE__ */ jsx6("select", { value: jail, onChange: (e) => setJail(e.target.value), "aria-label": "Jail", className: `${inputClass} w-36`, children: names.map((n) => /* @__PURE__ */ jsx6("option", { value: n, children: n }, n)) }),
+    /* @__PURE__ */ jsx6(Button, { small: true, type: "submit", ariaLabel: "Eingegebene Adresse sperren", disabled: !valid || busy(value), children: "Sperren" }),
+    notAnAddress && /* @__PURE__ */ jsx6("p", { className: "w-full text-xs text-white/50", children: "Nur eine einzelne IP-Adresse, keine Bereiche wie /24 und keine Namen." }),
+    /* @__PURE__ */ jsx6("p", { className: "w-full text-xs text-white/40", children: "Die Adresse, von der aus du Deck gerade nutzt, sperrt Shield nicht. Steht Deck hinter einem Reverse-Proxy, trag ihn unter \u201EVertrauensw\xFCrdiger Proxy\u201C ein, damit Shield sie sicher erkennt." })
+  ] });
+}
 function EventDetail({ ev, onBan, banning }) {
   const d = ev.detail;
   return /* @__PURE__ */ jsxs5("div", { className: "mt-2 rounded-lg bg-black/25 p-3 text-xs", children: [
@@ -936,7 +1038,17 @@ function EventDetail({ ev, onBan, banning }) {
         "\xD7 \xB7 Benutzer: ",
         a.users.join(", ") || "\u2013"
       ] }),
-      /* @__PURE__ */ jsx6("button", { type: "button", disabled: banning(a.ip), onClick: () => onBan(a.ip), className: "text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline", children: banning(a.ip) ? "Sperre \u2026" : "Sperren" })
+      onBan && /* @__PURE__ */ jsx6(
+        "button",
+        {
+          type: "button",
+          disabled: banning(a.ip),
+          onClick: () => onBan(a.ip),
+          "aria-label": `${a.ip} ${banning(a.ip) ? "Sperre \u2026" : "Sperren"}`,
+          className: "text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline",
+          children: banning(a.ip) ? "Sperre \u2026" : "Sperren"
+        }
+      )
     ] }, a.ip)) }),
     d.logins && /* @__PURE__ */ jsx6("ul", { className: "space-y-1", children: d.logins.map((l) => /* @__PURE__ */ jsxs5("li", { children: [
       /* @__PURE__ */ jsxs5("span", { className: "font-mono", children: [
@@ -1035,19 +1147,26 @@ function GuardTab({ canManage }) {
       `${r.acknowledged} abgehakt, ${kept} ${kept === 1 ? "bleibt" : "bleiben"} offen, weil ein Server den Stand seiner Dateien gerade nicht geliefert hat. Bitte gleich noch einmal versuchen.`
     );
   });
-  async function ban(hostId, hostName, ip, unban = false) {
+  const jailsOf = (hostId) => data?.hosts.find((x) => x.host_id === hostId)?.view?.jails ?? {};
+  async function ban(hostId, hostName, ip, unban = false, jail) {
+    const jails = jailsOf(hostId);
+    const target = jail ?? (unban ? jailOf(jails, ip) ?? defaultJail(jails) : sshJail(jails));
+    if (!target) return false;
+    const inJail = target === "sshd" ? "" : ` (Jail \u201E${target}\u201C)`;
+    const blocked = target === "sshd" ? "Von dieser Adresse ist dann keine SSH-Verbindung mehr m\xF6glich." : `Diese Adresse erreicht dann nichts mehr, was der Jail \u201E${target}\u201C sch\xFCtzt.`;
     const ok = await deck().confirmDialog(
-      unban ? `${ip} auf \u201E${hostName}\u201C wieder freigeben?` : `${ip} auf \u201E${hostName}\u201C per Fail2ban sperren? Von dieser Adresse ist dann keine SSH-Verbindung mehr m\xF6glich.`,
+      unban ? `${ip} auf \u201E${hostName}\u201C wieder freigeben${inJail}?` : `${ip} auf \u201E${hostName}\u201C per Fail2ban sperren${inJail}? ${blocked} Die Sperre endet meist nach der Sperrzeit des Jails von selbst; fr\xFCher zur\xFCck geht es hier unter \u201EGesperrte Adressen\u201C mit \u201EEntsperren\u201C.`,
       { confirmLabel: unban ? "Entsperren" : "Sperren", danger: !unban }
     );
-    if (!ok) return;
+    if (!ok) return false;
     const progress = unban ? `${ip} wird auf \u201E${hostName}\u201C entsperrt \u2026` : `${ip} wird auf \u201E${hostName}\u201C gesperrt \u2026`;
-    await track(page, banKey(hostId, ip), `${ip} ${unban ? "entsperren" : "sperren"}`, progress, async () => {
-      const result = await proposeAndApprove(`${API}/hosts/${hostId}/ban`, { ip, unban }, "low", unmountSignal());
+    const kind = await track(page, banKey(hostId, ip), `${ip} ${unban ? "entsperren" : "sperren"}`, progress, async () => {
+      const result = await proposeAndApprove(`${API}/hosts/${hostId}/ban`, { ip, jail: target, unban }, "low", unmountSignal());
       recheck(hostId);
       return result;
     });
     load();
+    return kind !== null && kind !== "error";
   }
   async function installFail2ban(h) {
     const ok = await deck().confirmDialog(
@@ -1132,7 +1251,14 @@ function GuardTab({ canManage }) {
                 /* @__PURE__ */ jsx6("button", { type: "button", onClick: () => setOpen(open === ev.id ? null : ev.id), className: "text-xs text-white/50 hover:text-white", children: open === ev.id ? "weniger" : "Details" }),
                 canManage && !ev.acknowledged && /* @__PURE__ */ jsx6(Button, { small: true, onClick: () => void acknowledge(ev), title: ACK_TAKES_OVER[ev.kind] ?? ACK_HINT_OTHER, children: ev.kind in ACK_TAKES_OVER ? "Ist in Ordnung" : "Zur Kenntnis genommen" })
               ] }),
-              open === ev.id && /* @__PURE__ */ jsx6(EventDetail, { ev, onBan: (ip) => void ban(ev.host_id, ev.host_name, ip), banning: (ip) => acting.has(banKey(ev.host_id, ip)) })
+              open === ev.id && /* @__PURE__ */ jsx6(
+                EventDetail,
+                {
+                  ev,
+                  banning: (ip) => acting.has(banKey(ev.host_id, ip)),
+                  onBan: canManage && sshJail(jailsOf(ev.host_id)) ? (ip) => void ban(ev.host_id, ev.host_name, ip) : void 0
+                }
+              )
             ] }, ev.id);
           })
         ] })
@@ -1192,10 +1318,56 @@ function GuardTab({ canManage }) {
                   /* @__PURE__ */ jsx6("span", { className: "min-w-0 flex-1 truncate text-white/45", children: a.users.join(", ") }),
                   a.banned ? /* @__PURE__ */ jsxs5(Fragment4, { children: [
                     /* @__PURE__ */ jsx6(Badge, { tone: "good", children: "gesperrt" }),
-                    canManage && /* @__PURE__ */ jsx6("button", { type: "button", disabled: acting.has(banKey(h.host_id, a.ip)), onClick: () => void ban(h.host_id, h.host_name, a.ip, true), className: "text-white/45 hover:text-white disabled:opacity-50", children: acting.has(banKey(h.host_id, a.ip)) ? "Entsperre \u2026" : "entsperren" })
-                  ] }) : canManage && f2b === "running" ? /* @__PURE__ */ jsx6("button", { type: "button", disabled: acting.has(banKey(h.host_id, a.ip)), onClick: () => void ban(h.host_id, h.host_name, a.ip), className: "text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline", children: acting.has(banKey(h.host_id, a.ip)) ? "Sperre \u2026" : "Sperren" }) : null
+                    canManage && /* @__PURE__ */ jsx6(
+                      "button",
+                      {
+                        type: "button",
+                        disabled: acting.has(banKey(h.host_id, a.ip)),
+                        onClick: () => void ban(h.host_id, h.host_name, a.ip, true),
+                        "aria-label": `${a.ip} ${acting.has(banKey(h.host_id, a.ip)) ? "Entsperre \u2026" : "entsperren"}`,
+                        className: "text-white/45 hover:text-white disabled:opacity-50",
+                        children: acting.has(banKey(h.host_id, a.ip)) ? "Entsperre \u2026" : "entsperren"
+                      }
+                    )
+                  ] }) : canManage && f2b === "running" && sshJail(v.jails) ? /* @__PURE__ */ jsx6(
+                    "button",
+                    {
+                      type: "button",
+                      disabled: acting.has(banKey(h.host_id, a.ip)),
+                      onClick: () => void ban(h.host_id, h.host_name, a.ip),
+                      "aria-label": `${a.ip} ${acting.has(banKey(h.host_id, a.ip)) ? "Sperre \u2026" : "Sperren"}`,
+                      className: "text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline",
+                      children: acting.has(banKey(h.host_id, a.ip)) ? "Sperre \u2026" : "Sperren"
+                    }
+                  ) : null
                 ] }, a.ip)) }),
+                canManage && f2b === "running" && !sshJail(v.jails) && v.attackers.some((a) => !a.banned) && /* @__PURE__ */ jsx6("p", { className: "mt-2 text-xs text-white/50", children: "Sperren l\xE4sst sich ein Angreifer hier erst, wenn Fail2ban einen Jail f\xFCr SSH (meist \u201Esshd\u201C) eingeschaltet hat." }),
                 canManage && f2b === "none" && /* @__PURE__ */ jsx6("div", { className: "mt-2", children: /* @__PURE__ */ jsx6(Button, { small: true, disabled: acting.has(fail2banKey(h.host_id)), onClick: () => void installFail2ban(h), children: acting.has(fail2banKey(h.host_id)) ? "Installiere \u2026" : "Fail2ban installieren" }) })
+              ] }),
+              f2b === "running" && /* @__PURE__ */ jsxs5("section", { "data-testid": `fail2ban-${h.host_id}`, children: [
+                /* @__PURE__ */ jsx6("p", { className: "mb-1.5 text-xs text-white/40", children: "Fail2ban" }),
+                Object.keys(v.jails).length > 0 && /* @__PURE__ */ jsx6("p", { className: "mb-2 text-xs text-white/45", children: "Ein Jail ist eine Schutzregel von Fail2ban f\xFCr einen Dienst, etwa \u201Esshd\u201C f\xFCr SSH. Eine Sperre gilt meist nur f\xFCr die Sperrzeit dieses Jails." }),
+                Object.keys(v.jails).length === 0 ? /* @__PURE__ */ jsx6("p", { className: "text-xs text-white/50", children: "Fail2ban l\xE4uft, hat aber keinen Jail eingeschaltet und sperrt deshalb nichts." }) : /* @__PURE__ */ jsxs5(Fragment4, { children: [
+                  /* @__PURE__ */ jsx6(
+                    BannedList,
+                    {
+                      hostId: h.host_id,
+                      jails: v.jails,
+                      canManage,
+                      busy: (ip) => acting.has(banKey(h.host_id, ip)),
+                      onUnban: (ip, jail) => void ban(h.host_id, h.host_name, ip, true, jail)
+                    }
+                  ),
+                  canManage && /* @__PURE__ */ jsx6(
+                    BanForm,
+                    {
+                      hostId: h.host_id,
+                      jails: v.jails,
+                      busy: (ip) => acting.has(banKey(h.host_id, ip)),
+                      onBan: (ip, jail) => ban(h.host_id, h.host_name, ip, false, jail)
+                    }
+                  )
+                ] })
               ] }),
               v.ssh_findings === null && /* @__PURE__ */ jsxs5("section", { "data-testid": `sshd-${h.host_id}`, children: [
                 /* @__PURE__ */ jsx6("p", { className: "mb-1.5 text-xs text-white/40", children: "SSH-Einstellungen" }),
@@ -1432,6 +1604,19 @@ function deckRestartHint(st, mode) {
   const which = names.length === 1 ? `ist das Docker-Paket ${names[0]}` : `sind die Docker-Pakete ${names.join(", ")}`;
   return st?.deck_host ? ` Dabei ${which}, und hier l\xE4uft Nodvard Deck: Es ist danach kurz nicht erreichbar und l\xE4dt von selbst neu.` : ` Dabei ${which}. L\xE4uft hier Nodvard Deck, ist es danach kurz nicht erreichbar und l\xE4dt von selbst neu.`;
 }
+var PHASING_HINT = "Ubuntu verteilt manche Updates schrittweise: Erst bekommt sie ein Teil der Rechner, nach und nach alle. Bis dieser Server an der Reihe ist, h\xE4lt apt das Update zur\xFCck, auch bei \u201EAlle einspielen\u201C. Das ist gewollt und kein Fehler, du musst nichts tun: Nodvard Deck pr\xFCft weiter, und sobald der Server dran ist, l\xE4sst sich das Update wie jedes andere einspielen. Sicherheitsupdates verteilt Ubuntu in der Regel sofort an alle.";
+function phasingLabel(st) {
+  const n = st.phased_count ?? 0;
+  return st.security_count > 0 ? `${n} von ${count(st.count, "Update", "Updates")} durch Phasing verz\xF6gert` : `davon ${n} durch Phasing verz\xF6gert`;
+}
+function phasingNote(st) {
+  const n = st?.phased_count ?? 0;
+  if (!n) return "";
+  if (n >= (st?.count ?? 0)) {
+    return n === 1 ? " Ubuntu h\xE4lt dieses Update wegen Phasing noch zur\xFCck; einspielen l\xE4sst es sich erst, wenn der Server an der Reihe ist." : " Ubuntu h\xE4lt diese Updates wegen Phasing noch zur\xFCck; einspielen lassen sie sich erst, wenn der Server an der Reihe ist.";
+  }
+  return n === 1 ? " Ein Update davon h\xE4lt Ubuntu wegen Phasing noch zur\xFCck; es l\xE4sst sich einspielen, sobald der Server an der Reihe ist." : ` ${n} davon h\xE4lt Ubuntu wegen Phasing noch zur\xFCck; sie lassen sich einspielen, sobald der Server an der Reihe ist.`;
+}
 var RUN_STATUS = {
   running: { label: "l\xE4uft", tone: "info" },
   ok: { label: "erfolgreich", tone: "good" },
@@ -1465,6 +1650,7 @@ function UpdatesTab({ canManage }) {
   const page = usePageActions();
   const { keys: { busy: acting }, signal: pageSignal } = page;
   const [open, setOpen] = useState7(null);
+  const [phasingOpen, setPhasingOpen] = useState7(null);
   const [openRun, setOpenRun] = useState7(null);
   const [pending, setPending] = useState7({});
   const [proposing, setProposing] = useState7(null);
@@ -1565,7 +1751,7 @@ function UpdatesTab({ canManage }) {
     const distUpgrade = mode === "all" && st?.manager === "apt" && !!data?.config.proxmox_dist_upgrade;
     const questions = {
       security: `${count(st?.security_count ?? 0, "Sicherheitsupdate", "Sicherheitsupdates")} auf \u201E${h.host_name}\u201C jetzt einspielen?${deckRestartHint(st, "security")}`,
-      all: `${(st?.count ?? 0) === 1 ? "Das Update" : `Alle ${st?.count ?? 0} Updates`} auf \u201E${h.host_name}\u201C jetzt einspielen? Das kann einige Minuten dauern.${distUpgrade ? " Ist es ein Proxmox-Server, l\xE4uft dabei \u201Eapt-get dist-upgrade\u201C \u2013 das kann Pakete entfernen oder ersetzen." : ""}${deckRestartHint(st, "all")}`,
+      all: `${(st?.count ?? 0) === 1 ? "Das Update" : `Alle ${st?.count ?? 0} Updates`} auf \u201E${h.host_name}\u201C jetzt einspielen? Das kann einige Minuten dauern.${distUpgrade ? " Ist es ein Proxmox-Server, l\xE4uft dabei \u201Eapt-get dist-upgrade\u201C \u2013 das kann Pakete entfernen oder ersetzen." : ""}${phasingNote(st)}${deckRestartHint(st, "all")}`,
       cleanup: `Auf \u201E${h.host_name}\u201C nicht mehr ben\xF6tigte Pakete und alte Kernel entfernen und den Paket-Cache leeren?`,
       reboot: `\u201E${h.host_name}\u201C jetzt neu starten? Der Server ist dann ein paar Minuten nicht erreichbar \u2013 alle Dienste darauf auch.`
     };
@@ -1700,6 +1886,17 @@ function UpdatesTab({ canManage }) {
             /* @__PURE__ */ jsxs7("p", { className: "flex flex-wrap items-center gap-2 text-sm font-medium", children: [
               h.host_name,
               /* @__PURE__ */ jsx8(Badge, { tone: state.tone, children: state.label }),
+              !!st?.phased_count && !h.busy && !h.checking && /* @__PURE__ */ jsx8(
+                "button",
+                {
+                  type: "button",
+                  title: PHASING_HINT,
+                  "aria-expanded": phasingOpen === h.host_id,
+                  onClick: () => setPhasingOpen(phasingOpen === h.host_id ? null : h.host_id),
+                  className: "text-xs font-normal text-white/55 underline decoration-dotted underline-offset-2 hover:text-white",
+                  children: phasingLabel(st)
+                }
+              ),
               needsReboot && !h.busy && /* @__PURE__ */ jsx8(Badge, { tone: "warn", children: "Neustart n\xF6tig" }),
               st?.unattended === true && /* @__PURE__ */ jsx8(Badge, { tone: "good", children: "Auto-Sicherheitsupdates an" })
             ] }),
@@ -1711,6 +1908,7 @@ function UpdatesTab({ canManage }) {
             h.check_overdue && /* @__PURE__ */ jsx8("p", { className: "mt-1 text-xs text-amber-300", "data-testid": `updates-overdue-${h.host_id}`, children: "Die geplante Pr\xFCfung ist hier ausgeblieben (das Dashboard lief zur Pr\xFCfzeit nicht). Der Stand kann veraltet sein \u2013 \u201EPr\xFCfen\u201C holt ihn nach." }),
             st?.error && /* @__PURE__ */ jsx8("p", { className: `mt-1 text-xs ${st.unsupported ? "text-white/50" : "text-amber-300"}`, children: st.error }),
             st?.refresh_error && /* @__PURE__ */ jsx8("p", { className: "mt-1 text-xs text-amber-300/80", children: st.refresh_error }),
+            phasingOpen === h.host_id && !!st?.phased_count && /* @__PURE__ */ jsx8("p", { className: "mt-1 text-xs text-white/50", children: PHASING_HINT }),
             needsReboot && st.reboot_reasons.length > 0 && /* @__PURE__ */ jsxs7("p", { className: "mt-1 text-xs text-white/50", children: [
               "Grund: ",
               st.reboot_reasons.slice(0, 3).join(", ")
@@ -1759,7 +1957,10 @@ function UpdatesTab({ canManage }) {
             /* @__PURE__ */ jsx8("td", { className: "px-3 py-1.5 font-mono", children: p.name }),
             /* @__PURE__ */ jsx8("td", { className: "px-3 py-1.5 font-mono text-white/50", children: p.current_version ?? "\u2013" }),
             /* @__PURE__ */ jsx8("td", { className: "px-3 py-1.5 font-mono", children: p.new_version }),
-            /* @__PURE__ */ jsx8("td", { className: "px-3 py-1.5 text-right", children: p.security && /* @__PURE__ */ jsx8(Badge, { tone: "bad", children: "Sicherheit" }) })
+            /* @__PURE__ */ jsxs7("td", { className: "px-3 py-1.5 text-right", children: [
+              p.security && /* @__PURE__ */ jsx8(Badge, { tone: "bad", children: "Sicherheit" }),
+              p.phased && /* @__PURE__ */ jsx8("span", { title: PHASING_HINT, children: /* @__PURE__ */ jsx8(Badge, { children: "verz\xF6gert" }) })
+            ] })
           ] }, p.name)) })
         ] }) }),
         canManage && st?.manager === "apt" && /* @__PURE__ */ jsxs7("p", { className: "mt-2 flex flex-wrap items-center gap-2 text-xs text-white/50", children: [
@@ -2047,6 +2248,17 @@ var FINDING_STATUS = {
 function ageText(days) {
   if (days >= 14) return `${Math.floor(days / 7)} Wochen`;
   return days === 1 ? "1 Tag" : `${days} Tage`;
+}
+function signatureDateText(h) {
+  if (h.signature_ts == null) return h.signature_date ?? "";
+  const withTime = /\d:\d{2}/.test(h.signature_date ?? "");
+  return new Date(h.signature_ts * 1e3).toLocaleString("de-DE", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    timeZone: "UTC",
+    ...withTime ? { hour: "2-digit", minute: "2-digit" } : {}
+  });
 }
 function HardeningCell({ host: h }) {
   const shown = h.last_audit?.hardening_index != null ? h.last_audit : h.last_ok_audit?.hardening_index != null ? h.last_ok_audit : null;
@@ -2593,7 +2805,7 @@ function OverviewTab({
           /* @__PURE__ */ jsxs9("p", { className: "mt-0.5 text-xs text-white/45", children: [
             "Signaturen ",
             h.signature_version ?? "?",
-            h.signature_date ? ` \xB7 ${h.signature_date}` : "",
+            signatureDateText(h) ? ` \xB7 ${signatureDateText(h)}` : "",
             h.signature_stale === true && /* @__PURE__ */ jsxs9("span", { className: "text-amber-300", children: [
               " \xB7 ",
               ageText(h.signature_age_days ?? 0),
@@ -2803,7 +3015,7 @@ function QuarantineTab({ canManage, onChanged }) {
       quarantine: `\u201E${f.path}\u201C in Quarant\xE4ne verschieben?`,
       ignore: `Fund \u201E${f.path}\u201C ignorieren? Die Datei bleibt, wo sie ist. ${KEPT_FOR_GOOD}`,
       reopen: `\u201E${f.path}\u201C wieder als Fund beachten? Er steht dann wieder offen. Der n\xE4chste Scan meldet die Datei wieder und verschiebt sie, wenn die automatische Quarant\xE4ne an ist.`,
-      restore: `\u201E${f.path}\u201C wiederherstellen? Nur tun, wenn sicher ist, dass es ein Fehlalarm war. ${KEPT_FOR_GOOD}`,
+      restore: `Die Datei zur\xFCcklegen? Laut Fund lag sie in \u201E${f.path}\u201C; zur\xFCckgelegt wird an den Ort, den Shield beim Verschieben auf dem Server hinterlegt hat. Nur tun, wenn sicher ist, dass es ein Fehlalarm war. ${KEPT_FOR_GOOD}`,
       delete: `\u201E${f.path}\u201C endg\xFCltig l\xF6schen?`
     };
     const ok = await deck().confirmDialog(questions[action], { danger: action !== "quarantine" && action !== "reopen", confirmLabel: FINDING_CONFIRM_LABEL[action] });
@@ -2866,7 +3078,7 @@ function QuarantineTab({ canManage, onChanged }) {
                 when(f.detected_at),
                 f.status_changed_at ? ` \xB7 ge\xE4ndert ${when(f.status_changed_at)}` : ""
               ] }),
-              f.note && /* @__PURE__ */ jsx10("p", { className: "text-xs text-amber-300", children: f.note })
+              f.note && /* @__PURE__ */ jsx10("p", { className: "break-words text-xs text-amber-300", children: f.note })
             ] }),
             canManage && /* @__PURE__ */ jsxs9("div", { className: "flex gap-1", children: [
               f.status === "detected" && /* @__PURE__ */ jsx10(Button, { small: true, variant: "primary", disabled: !!running, onClick: () => void act(f, "quarantine"), children: label("quarantine", "In Quarant\xE4ne") }),
@@ -2969,5 +3181,6 @@ function HardeningTab({ canManage, hosts, onAudit }) {
 export {
   SocPage,
   findingsLast30Days,
-  hostScanBadge
+  hostScanBadge,
+  signatureDateText
 };

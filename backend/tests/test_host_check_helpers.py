@@ -1,5 +1,5 @@
 """„Verbindung prüfen“ mit Hilfsskripten: je Modul ein Punkt `helper:<kennung>`. Ein Modul ruft sein Skript nur auf,
-wenn es genau das mitgelieferte ist (sha256): `ok` dann, wenn das so ist und nur root es ändern kann. Fehlt es,
+wenn es genau das mitgelieferte ist (sha256), außer mit `calls_any_version`: `ok` dann, wenn das so ist und nur root es ändern kann. Fehlt es,
 `skipped`; veraltet, neuer oder für andere änderbar ist eine Warnung, ein verändertes Skript ein Fehler. Die Abfrage
 führt das Skript nie aus. Der Einrichtungsbefehl (`GET .../setup`) nennt die Skripte, die er mitbringt.
 
@@ -8,11 +8,14 @@ selbst in einer echten Shell."""
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
+import os
 import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -148,6 +151,71 @@ async def test_a_missing_helper_without_the_full_rule_is_only_skipped(client, mo
         assert items[item_id]["status"] == "skipped" and "Noch nicht auf dem Server" in items[item_id]["detail"]
 
 
+@pytest.fixture
+def strict_modules(client):
+    """`fake-a` hat ohne sein Skript kein root, auch nicht über die volle Regel; `fake-b` nimmt dann sie."""
+    yield from _fake_modules((("fake-a", dataclasses.replace(SHIELD, sudo_fallback=False)), ("fake-b", OTHER)))
+
+
+@pytest.mark.asyncio
+async def test_the_full_rule_does_not_help_a_module_without_fallback(client, strict_modules, local_ssh_server, fake_probe):
+    _, port, *_ = local_ssh_server
+    headers = await _owner(client)
+    host_id = await _host_with_login(client, headers, port)
+    fake_probe[host_check.SUDO_COMMAND] = (0, "", "")
+    full = "User testuser may run the following commands:\n    (root) NOPASSWD: ALL\n"
+    fake_probe[helper_check_command([SHIELD, OTHER])] = (0, _answer(_missing(SHIELD), _missing(OTHER), sudo_list=full), "")
+    items = await _items(client, headers, host_id)
+    assert items["root"]["status"] == "warn"
+    assert items["root"]["detail"] == (
+        "sudo ohne Passwort klappt, aber Modul fake-a hat hier kein brauchbares Hilfsskript und damit kein root.")
+    assert items["helper:fake-a"]["status"] == "warn"
+    assert items["helper:fake-a"]["detail"] == (
+        "Fehlt auf dem Server. Ohne das Skript hat dieses Modul hier kein root, auch nicht über die volle sudo-Regel.")
+    assert "volle sudo-Regel statt enger Rechte" in items["helper:fake-b"]["detail"]
+    hints = (await client.get("/api/v1/overview", headers=headers)).json()["helper_hints"]
+    assert [(h["modules"], h["without_root"], h["no_fallback"]) for h in hints] == [
+        (["Modul fake-a", "Modul fake-b"], False, ["Modul fake-a"])
+    ]
+
+    fake_probe[helper_check_command([SHIELD, OTHER])] = (0, _answer(_present(SHIELD), _missing(OTHER), sudo_list=full), "")
+    items = await _items(client, headers, host_id)
+    assert (items["root"]["status"], items["root"]["detail"]) == ("ok", "sudo ohne Passwort klappt.")
+
+
+@pytest.mark.parametrize(("answer", "any_version", "status"), [
+    (_present(SHIELD, owner="bad"), False, "warn"),
+    (_present(SHIELD, version="3", sha="3" * 64), False, "warn"),
+    (_present(SHIELD, version="1", sha="1" * 64), False, "warn"),
+    (_present(SHIELD, version="1", sha="1" * 64), True, "ok"),
+    (_present(SHIELD, version="1", sha="1" * 64, owner="bad"), True, "warn"),
+], ids=["besitzer", "neuer", "aelter", "aelter-jede-fassung", "aelter-jede-fassung-besitzer"])
+@pytest.mark.asyncio
+async def test_with_the_full_rule_root_counts_only_a_usable_script(
+    client, local_ssh_server, fake_probe, answer, any_version, status,
+):
+    helper = dataclasses.replace(SHIELD, sudo_fallback=False, calls_any_version=any_version)
+    for _ in _fake_modules((("fake-a", helper), ("fake-b", OTHER))):
+        _, port, *_ = local_ssh_server
+        headers = await _owner(client)
+        host_id = await _host_with_login(client, headers, port)
+        fake_probe[host_check.SUDO_COMMAND] = (0, "", "")
+        full = "User testuser may run the following commands:\n    (root) NOPASSWD: ALL\n"
+        fake_probe[helper_check_command([helper, OTHER])] = (0, _answer(answer, _missing(OTHER), sudo_list=full), "")
+        items = await _items(client, headers, host_id)
+        assert items["root"]["status"] == status, items["root"]
+
+
+def test_a_module_without_fallback_never_waits_for_the_full_rule():
+    state = host_check._State()  # sudo nicht geprüft
+    for helper in (dataclasses.replace(SHIELD, sudo_fallback=False), OTHER):
+        host_check._add_helper_item(state, helper, host_check._HelperSeen())
+    assert [i.detail for i in state.items] == [
+        "Noch nicht auf dem Server.",
+        "Noch nicht auf dem Server. Bis dahin nutzt Nodvard Deck für dieses Modul die volle sudo-Regel.",
+    ]
+
+
 UNUSED = " Nodvard Deck ruft es nicht auf."
 
 
@@ -161,7 +229,7 @@ UNUSED = " Nodvard Deck ruft es nicht auf."
         (_present(SHIELD, sha="0" * 64), "fail", f"Version 2, aber mit anderem Inhalt als hier.{UNUSED}"),
         (_present(SHIELD, owner="bad"), "warn",
          ("Liegt auf dem Server, aber nicht nur root kann es ändern (Datei oder ein Ordner darüber, etwa weil eine "
-          "andere Gruppe dort schreiben darf). Wer es ändern kann, kommt über seine sudo-Regel an root. Der "
+          "Gruppe dort schreiben darf). Wer es ändern kann, kommt über seine sudo-Regel an root. Der "
           "Einrichtungsbefehl nennt den Ordner und die Abhilfe.")),
         (_present(SHIELD, version="zwei", sha="0" * 64), "fail",
          f"Die Version lässt sich nicht lesen, der Inhalt ist unbekannt.{UNUSED}"),
@@ -266,6 +334,121 @@ async def test_helper_rules_alone_are_enough_when_every_module_has_one(client, h
     assert items["helper:fake-b"]["status"] == "ok" and r.json()["ok"] is True
 
 
+ANY_VERSION = dataclasses.replace(SHIELD, calls_any_version=True)
+
+
+@pytest.fixture
+def any_version_modules(client):
+    """Wie `helper_modules`, aber `fake-a` ruft sein Skript in jeder Fassung auf (wie Docker)."""
+    yield from _fake_modules((("fake-a", ANY_VERSION), ("fake-b", OTHER)))
+
+
+@pytest.mark.asyncio
+async def test_a_module_calling_any_version_keeps_root_with_its_old_script(
+    client, any_version_modules, local_ssh_server, fake_probe
+):
+    _, port, *_ = local_ssh_server
+    headers = await _owner(client)
+    host_id = await _host_with_login(client, headers, port)
+    fake_probe[host_check.SUDO_COMMAND] = NO_PASSWORDLESS_SUDO
+    fake_probe[helper_check_command([ANY_VERSION, OTHER])] = (
+        0, _answer(_present(ANY_VERSION, version="1", sha="1" * 64), _present(OTHER), sudo_list=_tight(ANY_VERSION, OTHER)),
+        "",
+    )
+    items = await _items(client, headers, host_id)
+    assert items["helper:fake-a"]["status"] == "warn"
+    assert items["helper:fake-a"]["detail"] == (
+        "Veraltet: Version 1 auf dem Server, dieses Dashboard bringt Version 2 mit. Modul fake-a ruft es trotzdem auf, "
+        "bis der Server neu eingerichtet ist."
+    )
+    assert (items["root"]["status"], items["root"]["detail"]) == ("ok", ENOUGH)
+
+    hints = (await client.get("/api/v1/overview", headers=headers)).json()["helper_hints"]
+    assert [(h["modules"], h["without_root"], h["still_used"]) for h in hints] == [
+        (["Modul fake-a"], True, ["Modul fake-a"])
+    ]
+
+
+@pytest.mark.asyncio
+async def test_without_its_own_rule_an_old_script_is_no_root(client, any_version_modules, local_ssh_server, fake_probe):
+    _, port, *_ = local_ssh_server
+    headers = await _owner(client)
+    host_id = await _host_with_login(client, headers, port)
+    fake_probe[host_check.SUDO_COMMAND] = NO_PASSWORDLESS_SUDO
+    fake_probe[helper_check_command([ANY_VERSION, OTHER])] = (
+        0, _answer(_present(ANY_VERSION, version="1", sha="1" * 64), _present(OTHER), sudo_list=_tight(OTHER)), "",
+    )
+    items = await _items(client, headers, host_id)
+    assert items["root"]["detail"] == f"{NOT_ENOUGH}Modul fake-a."
+    assert items["helper:fake-a"]["detail"] == (
+        "Veraltet: Version 1 auf dem Server, dieses Dashboard bringt Version 2 mit."
+    )
+    hints = (await client.get("/api/v1/overview", headers=headers)).json()["helper_hints"]
+    assert [(h["modules"], h["still_used"]) for h in hints] == [(["Modul fake-a"], [])]
+
+
+@pytest.mark.asyncio
+async def test_with_the_full_rule_an_old_script_is_still_used(client, any_version_modules, local_ssh_server, fake_probe):
+    _, port, *_ = local_ssh_server
+    headers = await _owner(client)
+    host_id = await _host_with_login(client, headers, port)
+    fake_probe[host_check.SUDO_COMMAND] = (0, "", "")
+    fake_probe[helper_check_command([ANY_VERSION, OTHER])] = (
+        0,
+        _answer(
+            _present(ANY_VERSION, version="1", sha="1" * 64), _present(OTHER),
+            sudo_list="User testuser may run the following commands:\n    (root) NOPASSWD: ALL\n",
+        ),
+        "",
+    )
+    items = await _items(client, headers, host_id)
+    assert items["helper:fake-a"]["detail"].endswith("Modul fake-a ruft es trotzdem auf, bis der Server neu eingerichtet ist.")
+    hints = (await client.get("/api/v1/overview", headers=headers)).json()["helper_hints"]
+    assert [(h["modules"], h["without_root"], h["still_used"]) for h in hints] == [
+        (["Modul fake-a"], False, ["Modul fake-a"])
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_old_script_others_can_change_is_never_ready(client, any_version_modules, local_ssh_server, fake_probe):
+    _, port, *_ = local_ssh_server
+    headers = await _owner(client)
+    host_id = await _host_with_login(client, headers, port)
+    fake_probe[host_check.SUDO_COMMAND] = NO_PASSWORDLESS_SUDO
+    fake_probe[helper_check_command([ANY_VERSION, OTHER])] = (
+        0,
+        _answer(
+            _present(ANY_VERSION, version="1", sha="1" * 64, owner="bad"), _present(OTHER),
+            sudo_list=_tight(ANY_VERSION, OTHER),
+        ),
+        "",
+    )
+    items = await _items(client, headers, host_id)
+    assert items["helper:fake-a"]["status"] == "warn"
+    assert items["root"]["detail"] == f"{NOT_ENOUGH}Modul fake-a."
+    hints = (await client.get("/api/v1/overview", headers=headers)).json()["helper_hints"]
+    assert [(h["modules"], h["still_used"]) for h in hints] == [(["Modul fake-a"], [])]
+
+
+@pytest.mark.parametrize("version", ["2", "3", "kaputt"], ids=["veraendert", "neuer", "unlesbar"])
+@pytest.mark.asyncio
+async def test_only_an_older_script_counts_as_still_used(client, any_version_modules, local_ssh_server, fake_probe,
+                                                         version):
+    _, port, *_ = local_ssh_server
+    headers = await _owner(client)
+    host_id = await _host_with_login(client, headers, port)
+    fake_probe[host_check.SUDO_COMMAND] = NO_PASSWORDLESS_SUDO
+    fake_probe[helper_check_command([ANY_VERSION, OTHER])] = (
+        0, _answer(_present(ANY_VERSION, version=version, sha="1" * 64), _present(OTHER),
+                   sudo_list=_tight(ANY_VERSION, OTHER)), "",
+    )
+    items = await _items(client, headers, host_id)
+    assert items["root"]["detail"] == f"{NOT_ENOUGH}Modul fake-a."
+    assert "ruft es trotzdem auf" not in items["helper:fake-a"]["detail"]
+    hints = (await client.get("/api/v1/overview", headers=headers)).json()["helper_hints"]
+    assert [(h["modules"], h["without_root"], h["still_used"]) for h in hints] == [(["Modul fake-a"], True, [])]
+
+
 @pytest.mark.asyncio
 async def test_helper_rules_are_not_enough_for_a_module_without_one(client, modules, local_ssh_server, fake_probe):
     _, port, *_ = local_ssh_server
@@ -344,6 +527,43 @@ async def test_setup_gives_only_helper_rules_when_they_cover_every_module(client
 
 
 @pytest.mark.asyncio
+async def test_setup_removes_the_full_rule_only_where_the_helpers_cover_every_module(client, helper_modules):
+    headers = await _owner(client)
+    host = (await client.post("/api/v1/hosts", json={"name": "pi", "address": "10.0.0.5"}, headers=headers)).json()
+    generated = (await client.post(GENERATE.format(host["id"]), json={}, headers=headers)).json()
+    url = f"/api/v1/hosts/{host['id']}/credentials/{generated['credential']['id']}/setup"
+
+    kept = (await client.get(url, params={"sudo": "true"}, headers=headers)).json()
+    assert kept["drop_full_rule"] is False and '"nodvard-$U"' not in kept["script"]
+    dropped = (await client.get(url, params={"sudo": "true", "drop_full_rule": "true"}, headers=headers)).json()
+    assert (dropped["sudo"], dropped["full_sudo"], dropped["drop_full_rule"]) == (True, False, True)
+    assert '"nodvard-$U" "lattice-$U"' in dropped["script"] and "HS fake-a-root" in dropped["script"]
+    assert any("stellt er sie sofort wieder her" in n for n in dropped["notes"])
+
+    for params, reason in (
+        ({"sudo": "true", "full_sudo": "true", "drop_full_rule": "true"}, "schließen sich aus"),
+        ({"drop_full_rule": "true"}, "„Root-Rechte ohne Passwort“"),
+    ):
+        refused = await client.get(url, params=params, headers=headers)
+        assert refused.status_code == 422 and reason in refused.json()["detail"], refused.text
+
+    r = await client.patch(f"/api/v1/hosts/{host['id']}", json={"sudo_full_wanted": True}, headers=headers)
+    assert r.status_code == 200, r.text
+    refused = await client.get(url, params={"sudo": "true", "drop_full_rule": "true"}, headers=headers)
+    assert refused.status_code == 422 and "„Volle sudo-Regel gewollt“" in refused.json()["detail"], refused.text
+
+
+@pytest.mark.asyncio
+async def test_setup_refuses_the_removal_for_a_module_without_helper(client, modules):
+    headers = await _owner(client)
+    host = (await client.post("/api/v1/hosts", json={"name": "pi", "address": "10.0.0.5"}, headers=headers)).json()
+    generated = (await client.post(GENERATE.format(host["id"]), json={}, headers=headers)).json()
+    url = f"/api/v1/hosts/{host['id']}/credentials/{generated['credential']['id']}/setup"
+    refused = await client.get(url, params={"sudo": "true", "drop_full_rule": "true"}, headers=headers)
+    assert refused.status_code == 422 and "noch kein Hilfsskript" in refused.json()["detail"], refused.text
+
+
+@pytest.mark.asyncio
 async def test_setup_keeps_the_full_rule_for_a_module_without_helper(client, modules):
     headers = await _owner(client)
     host = (await client.post("/api/v1/hosts", json={"name": "pi", "address": "10.0.0.5"}, headers=headers)).json()
@@ -390,43 +610,104 @@ def test_the_query_checks_every_folder_for_other_writers():
 
 
 @pytest.mark.parametrize(
-    ("mode", "gid", "acl", "ls", "verdict"),
+    ("mode", "verdict"),
     [
-        ("755", "0", None, None, "ok"),
-        ("2775", "0", "user::rwx\ngroup::rwx\nother::r-x\n", None, "ok"),
-        ("775", "0", "user::rwx\nuser:root:rwx\ngroup::r-x\ngroup:root:rwx\nmask::rwx\nother::r-x\n", None, "ok"),
-        ("755", "0", "user::rwx\ngroup::r-x\ngroup:staff:rwx\t#effective:r-x\nmask::r-x\nother::r-x\n", None, "ok"),
-        ("777", "0", None, None, "bad"),
-        ("1777", "0", None, None, "bad"),
-        ("2775", "50", None, None, "bad"),
-        ("3775", "100", None, None, "bad"),
-        ("775", "0", "user::rwx\ngroup::r-x\ngroup:staff:rwx\nmask::rwx\nother::r-x\n", None, "bad"),
-        ("775", "0", "user::rwx\nuser:bob:rwx\ngroup::r-x\nmask::rwx\nother::r-x\n", None, "bad"),
-        ("775", "0", "user::rwx\ngroup::r-x\ngroup:4711:rwx\nmask::rwx\nother::r-x\n", None, "bad"),
-        ("775", "0", "", "drwxrwxr-x+ 2 root root 4096 Oct 21 12:00 x", "bad"),
-        ("775", "0", "", "drwxrwxr-x 2 root root 4096 Oct 21 12:00 x", "ok"),
-        ("775", "0", "", "busybox", "bad"),
-    ],
-    ids=[
-        "nur-root", "gruppe-root", "acl-nur-root", "acl-maske-ohne-w", "alle", "sticky", "fremde-gruppe",
-        "fremde-gruppe-sonderbits", "acl-fremde-gruppe", "acl-anderer-benutzer", "acl-nummer", "ohne-getfacl-mit-plus",
-        "ohne-getfacl-coreutils", "ohne-getfacl-busybox",
+        ("755", "ok"), ("700", "ok"), ("705", "ok"), ("2755", "ok"), ("1755", "ok"), ("4755", "ok"),
+        ("2775", "bad"), ("775", "bad"), ("770", "bad"), ("570", "bad"), ("20", "bad"), ("1775", "bad"), ("3775", "bad"),
+        ("4775", "bad"), ("777", "bad"), ("1777", "bad"), ("757", "bad"), ("2", "bad"), ("", "bad"),
     ],
 )
 @pytest.mark.skipif(sys.platform == "win32" or shutil.which("sh") is None, reason="braucht eine echte POSIX-Shell")
-def test_a_folder_counts_as_safe_only_if_no_one_but_root_may_write(tmp_path: Path, mode, gid, acl, ls, verdict):
-    """Die Ordnerprüfung der Abfrage für sich, mit Attrappen für `stat`, `getfacl` (leer: fehlt) und `ls`."""
+def test_a_folder_counts_as_safe_only_if_no_one_but_root_may_write(tmp_path: Path, mode, verdict):
+    """Die Ordnerprüfung der Abfrage für sich; eine ACL zeigt sich über die Maske in den Gruppenbits."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    _stub(bin_dir / "stat", f'case "$2" in %a) echo {mode};; %g) echo {gid};; *) exit 2;; esac\n')
-    if acl is not None:
-        _stub(bin_dir / "getfacl", f"printf %s {shlex.quote(acl)}\n" if acl else "exit 127\n")
-    if ls == "busybox":
-        _stub(bin_dir / "ls", "exit 1\n")
-    elif ls is not None:
-        _stub(bin_dir / "ls", f'[ "$1" = --version ] && {{ echo "ls (GNU coreutils) 9.4"; exit 0; }}\necho {shlex.quote(ls)}\n')
+    _stub(bin_dir / "stat", f'case "$2" in %a) echo {shlex.quote(mode)};; *) exit 2;; esac\n')
     done = subprocess.run(
         ["sh", "-c", f'q=/x; s=ok; {host_check._FOLDER_WRITERS}echo "$s"'], capture_output=True, text=True, timeout=30,
         check=False, env={"PATH": f"{bin_dir}:/usr/bin:/bin", "LC_ALL": "C"},
     )
     assert (done.stdout.strip(), done.stderr) == (verdict, "")
+
+
+
+@pytest.fixture
+def chain():
+    """Ablage `<top>/lib/nodvard/fake-a-root`. Die Abfrage läuft als normaler Benutzer (als root über `setpriv`), damit
+    `-w` und `-L` echt geprüft werden; `stat` liefert Besitzer und Rechte aus `owners`, `dirname` endet bei `<top>`."""
+    if sys.platform == "win32" or shutil.which("sh") is None:
+        pytest.skip("braucht eine echte POSIX-Shell")
+    as_root = hasattr(os, "geteuid") and os.geteuid() == 0
+    if as_root and shutil.which("setpriv") is None:
+        pytest.skip("als root braucht der Test setpriv, sonst ist für root alles beschreibbar")
+    top = Path(tempfile.mkdtemp(prefix="nd-abfrage-"))
+    top.chmod(0o755)
+    folder = top / "lib" / "nodvard"
+    folder.mkdir(parents=True)
+    bin_dir = top / "bin"
+    bin_dir.mkdir()
+    text = "#!/bin/sh\nHELPER_VERSION=2\n"
+    helper = RootHelperFile(
+        **{**SHIELD.__dict__, "install_path": str(folder / "fake-a-root"), "text": text,
+           "sha256": hashlib.sha256(text.encode()).hexdigest()}
+    )
+    Path(helper.install_path).write_text(text)
+    _stub(bin_dir / "dirname", f'case "$1" in {shlex.quote(str(top))}) echo /;; *) exec {shutil.which("dirname")} "$1";; esac\n')
+    _stub(bin_dir / "sudo", "exit 1\n")
+    owners: dict[Path, tuple[str, str]] = {}
+    writable: set[Path] = set()
+    chain_paths = [Path(helper.install_path), folder, folder.parent, top]
+
+    def run() -> bool:
+        cases = "".join(f"{shlex.quote(str(p))}) u={u}; a={a};; " for p, (u, a) in owners.items())
+        _stub(bin_dir / "stat", f'case "$3" in {cases}*) u=0; a=755;; esac\ncase "$2" in %u) echo $u;; %a) echo $a;; esac\n')
+        for path in chain_paths:
+            if not path.is_symlink():
+                path.chmod((0o666 if path.is_file() else 0o777) if path in writable else (0o444 if path.is_file() else 0o555))
+        prefix = ["setpriv", "--reuid=65534", "--regid=65534", "--clear-groups"] if as_root else []
+        try:
+            done = subprocess.run(
+                [*prefix, "sh", "-c", helper_check_command([helper])], capture_output=True, text=True, timeout=30,
+                check=False, env={"PATH": f"{bin_dir}:/usr/bin:/bin", "LC_ALL": "C"},
+            )
+        finally:
+            for path in chain_paths:
+                if not path.is_symlink():
+                    path.chmod(0o644 if path.is_file() else 0o755)
+        seen = parse_helper_check(done.stdout, [helper])[helper.install_path]
+        assert seen.present and seen.version == 2, done.stdout + done.stderr
+        return seen.owner_ok
+
+    places = {"helper": Path(helper.install_path), "folder": folder, "parent": folder.parent, "top": top}
+    yield type("Chain", (), {"places": places, "owners": owners, "writable": writable, "run": staticmethod(run)})
+    shutil.rmtree(top, ignore_errors=True)
+
+
+def test_a_helper_only_root_can_change_is_safe(chain):
+    assert chain.run() is True
+
+
+@pytest.mark.parametrize("which", ["helper", "folder", "parent", "top"])
+def test_a_writable_helper_or_folder_is_not_safe(chain, which):
+    chain.writable.add(chain.places[which])
+    assert chain.run() is False
+
+
+@pytest.mark.parametrize("which", ["helper", "folder", "top"])
+def test_an_owner_other_than_root_up_to_the_top_is_not_safe(chain, which):
+    chain.owners[chain.places[which]] = ("1000", "755")
+    assert chain.run() is False
+
+
+@pytest.mark.parametrize("which", ["folder", "top"])
+def test_a_folder_a_group_may_write_is_not_safe(chain, which):
+    chain.owners[chain.places[which]] = ("0", "775")
+    assert chain.run() is False
+
+
+def test_a_link_in_the_folder_chain_is_not_safe(chain):
+    parent = chain.places["parent"]
+    real = parent.with_name("echt")
+    parent.rename(real)
+    parent.symlink_to(real)
+    assert chain.run() is False

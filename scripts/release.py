@@ -1,31 +1,33 @@
 #!/usr/bin/env python3
-"""Release-Skript: aus den Bruchstuecken unter `unreleased/` wird eine neue Version.
+"""Release-Skript: aus den Bruchstücken unter `unreleased/` wird eine neue Version.
 
     python scripts/release.py 0.5.0 [--title "Kurzer Titel"] [--date 2026-10-01] [--dry-run]
 
-Was passiert (alles oder nichts -- vorher wird alles geprueft, erst dann geschrieben):
+Was passiert (alles oder nichts – vorher wird alles geprüft, erst dann geschrieben):
 
 1. Alle `backend/src/nodvard_deck/changelog/unreleased/*.toml` werden STRENG gelesen (eine
    kaputte Datei bricht ab, statt still zu fehlen) und zu
    `backend/src/nodvard_deck/changelog/versions/<version>.toml` zusammengefasst, mit dem
    heutigen Datum (oder `--date`) und optional `--title`.
-2. Die Bruchstuecke werden geloescht (die README.md bleibt).
+2. Die Bruchstücke werden gelöscht (die README.md bleibt).
 3. Die Versionsnummer wird an allen Stellen angehoben: `backend/src/nodvard_deck/version.py`,
-   `backend/pyproject.toml`, `frontend/package.json`, die beiden Wurzel-Eintraege in
-   `frontend/package-lock.json` (sonst zeigt der naechste `npm install` einen Unterschied) und die
+   `backend/pyproject.toml`, `frontend/package.json`, die beiden Wurzel-Einträge in
+   `frontend/package-lock.json` (sonst zeigt der nächste `npm install` einen Unterschied) und die
    Version des Update-Helfers (`deploy/updater/nodvard_deck_updater/__init__.py`, er wird mit jedem
    Release zusammen gebaut und meldet dieselbe Nummer wie das Dashboard).
 
-Abgelehnt wird, wenn die Version nicht groesser ist als die aktuelle, wenn es keine
-Bruchstuecke gibt oder wenn die bisherigen Versionsnummern nicht im Gleichschritt sind
-(dafuer gibt es auch einen Test). Eine schon vorhandene Versionsdatei faellt unter
-"nicht groesser": die neueste Datei nennt immer die aktuelle Version.
+Abgelehnt wird, wenn die Version nicht größer ist als die aktuelle, wenn es keine
+Bruchstücke gibt oder wenn die bisherigen Versionsnummern nicht im Gleichschritt sind
+(dafür gibt es auch einen Test). Eine schon vorhandene Versionsdatei fällt unter
+"nicht größer": die neueste Datei nennt immer die aktuelle Version. Abgelehnt wird auch ein
+Bruchstück, dessen Eintrag schon in einer Versionsdatei steht (etwa nach einem Patch vom Release-Zweig).
 
-Versionsnummern: groessere Funktionsrunden erhoehen die mittlere Zahl (0.5.0 -> 0.6.0),
-reine Fehlerkorrekturen die letzte (0.5.0 -> 0.5.1).
+Versionsnummern: größere Funktionsrunden erhöhen die mittlere Zahl (0.5.0 -> 0.6.0),
+reine Fehlerkorrekturen die letzte (0.5.0 -> 0.5.1). Ein Patch bleibt in der Reihe der aktuellen
+Version und nimmt nur Einträge `behoben` und `sicherheit` auf; Ablauf in docs/VEROEFFENTLICHEN.md.
 
 Nur Standardbibliothek plus `nodvard_deck.changelog` (selbst nur Standardbibliothek); das
-Skript ruft kein git auf -- Commit und PR macht der Mensch bzw. die Sitzung danach.
+Skript ruft kein git auf – Commit und PR macht der Mensch bzw. die Sitzung danach.
 """
 
 from __future__ import annotations
@@ -41,18 +43,21 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# Vor dem Import: das Skript soll den Stand DIESES Repositorys pruefen, nicht ein
-# eventuell aelteres, installiertes `nodvard_deck`.
+# Vor dem Import: das Skript soll den Stand DIESES Repositorys prüfen, nicht ein
+# eventuell älteres, installiertes `nodvard_deck`.
 sys.path.insert(0, str(REPO_ROOT / "backend" / "src"))
 
 from nodvard_deck.changelog import (  # noqa: E402
     ChangelogError,
     Entry,
+    Release,
     parse_release,
     parse_version,
     read_fragment,
     read_release,
 )
+
+PATCH_KINDS = ("behoben", "sicherheit")
 
 
 class ReleaseError(Exception):
@@ -60,8 +65,8 @@ class ReleaseError(Exception):
 
 
 def today() -> str:
-    """Heute als JJJJ-MM-TT in deutscher Ortszeit (die Sitzung laeuft meist in UTC --
-    kurz nach Mitternacht waere sonst das Datum von gestern eingetragen)."""
+    """Heute als JJJJ-MM-TT in deutscher Ortszeit (die Sitzung läuft meist in UTC –
+    kurz nach Mitternacht wäre sonst das Datum von gestern eingetragen)."""
     try:
         return datetime.now(ZoneInfo("Europe/Berlin")).date().isoformat()
     except ZoneInfoNotFoundError:
@@ -70,8 +75,8 @@ def today() -> str:
 
 @dataclass(frozen=True)
 class Tree:
-    """Alle Pfade, die das Skript anfasst -- als Parameter, damit Tests auf einer
-    Kopie in einem Temp-Ordner laufen koennen."""
+    """Alle Pfade, die das Skript anfasst – als Parameter, damit Tests auf einer
+    Kopie in einem Temp-Ordner laufen können."""
 
     root: Path
 
@@ -94,6 +99,10 @@ class Tree:
     @property
     def updater_init(self) -> Path:
         return self.root / "deploy" / "updater" / "nodvard_deck_updater" / "__init__.py"
+
+    @property
+    def release_workflow(self) -> Path:
+        return self.root / ".github" / "workflows" / "release.yml"
 
     @property
     def pyproject(self) -> Path:
@@ -162,20 +171,27 @@ def read_versions(tree: Tree) -> dict[str, str | None]:
     return found
 
 
+def released_versions(tree: Tree) -> list[Release]:
+    """Alle Versionsdateien, streng gelesen."""
+    if not tree.versions_dir.is_dir():
+        return []
+    released = []
+    for path in sorted(tree.versions_dir.glob("*.toml")):
+        try:
+            released.append(read_release(path))
+        except ChangelogError as exc:
+            raise ReleaseError(f"Versionsdatei ungueltig: {exc}") from exc
+    return released
+
+
 def current_version(tree: Tree) -> str:
-    """Die aktuelle Version -- nur, wenn ALLE Stellen (auch die neueste Versionsdatei)
-    dieselbe nennen. Sonst weiss niemand, von welcher Nummer aus hochgezaehlt wird."""
+    """Die aktuelle Version – nur, wenn ALLE Stellen (auch die neueste Versionsdatei)
+    dieselbe nennen. Sonst weiß niemand, von welcher Nummer aus hochgezählt wird."""
     found = read_versions(tree)
-    if tree.versions_dir.is_dir():
-        released = []
-        for path in sorted(tree.versions_dir.glob("*.toml")):
-            try:
-                released.append(read_release(path))
-            except ChangelogError as exc:
-                raise ReleaseError(f"Versionsdatei ungueltig: {exc}") from exc
-        if released:
-            newest = max(released, key=lambda r: parse_version(r.version))
-            found[f"neueste Versionsdatei ({newest.version}.toml)"] = newest.version
+    released = released_versions(tree)
+    if released:
+        newest = max(released, key=lambda r: parse_version(r.version))
+        found[f"neueste Versionsdatei ({newest.version}.toml)"] = newest.version
     distinct = {v for v in found.values()}
     if len(distinct) != 1 or None in distinct:
         lines = "\n".join(f"  {where}: {value or 'nicht gefunden'}" for where, value in found.items())
@@ -232,7 +248,7 @@ def bumped_files(tree: Tree, version: str) -> dict[Path, str]:
 
 
 def toml_string(text: str) -> str:
-    """Text als TOML-Basisstring (JSON-Maskierung ist dafuer gueltig; DEL kommt dazu)."""
+    """Text als TOML-Basisstring (JSON-Maskierung ist dafür gültig; DEL kommt dazu)."""
     return json.dumps(text, ensure_ascii=False).replace("\x7f", "\\u007f")
 
 
@@ -261,33 +277,79 @@ class Plan:
     bumps: dict[Path, str]
 
 
+def _keeps_latest_on_newest(tree: Tree) -> bool:
+    workflow = tree.release_workflow
+    text = workflow.read_text(encoding="utf-8") if workflow.is_file() else ""
+    return "scripts/release_newest.py" in text and (tree.root / "scripts" / "release_newest.py").is_file()
+
+
 def plan_release(tree: Tree, version: str, *, title: str | None = None, day: str | None = None) -> Plan:
-    """Prueft alles und berechnet den neuen Stand -- schreibt nichts."""
+    """Prüft alles und berechnet den neuen Stand – schreibt nichts."""
     try:
         new_key = parse_version(version)
     except ChangelogError as exc:
         raise ReleaseError(str(exc)) from exc
 
     previous = current_version(tree)
-    if new_key <= parse_version(previous):
+    old_key = parse_version(previous)
+    if new_key <= old_key:
         raise ReleaseError(f"Die Version {version} ist nicht groesser als die aktuelle ({previous}).")
+    patch = new_key[2] > 0
+    if patch and new_key[:2] != old_key[:2]:
+        raise ReleaseError(
+            f"{version} ist ein Patch, gehoert aber nicht zur Reihe {old_key[0]}.{old_key[1]} der aktuellen Version "
+            f"{previous}. Eine neue Reihe beginnt mit .0."
+        )
+    # Der Tag startet die release.yml des getaggten Commits; ein älterer Zweig gäbe dem Patch sonst immer `latest`.
+    if patch and not _keeps_latest_on_newest(tree):
+        raise ReleaseError(
+            "Auf diesem Zweig ruft .github/workflows/release.yml scripts/release_newest.py nicht auf. Ohne den "
+            "Schritt bekaeme der Patch das Tag latest, auch wenn es schon eine hoehere Version gibt. Bitte die "
+            "Release-Werkzeuge zuerst von main per cherry-pick uebernehmen "
+            "(git log HEAD..origin/main -- .github/workflows/release.yml scripts/)."
+        )
 
     release_path = tree.versions_dir / f"{version}.toml"
 
     fragments = tuple(sorted(tree.unreleased_dir.glob("*.toml"))) if tree.unreleased_dir.is_dir() else ()
     if not fragments:
         raise ReleaseError("Es gibt keine Eintraege unter unreleased/ -- so ein Release waere leer.")
-    entries: list[Entry] = []
+    by_fragment: list[tuple[Path, tuple[Entry, ...]]] = []
     for path in fragments:
         try:
-            entries.extend(read_fragment(path))
+            by_fragment.append((path, tuple(read_fragment(path))))
         except ChangelogError as exc:
             raise ReleaseError(f"Bruchstueck ungueltig: {exc}") from exc
+    entries = [entry for _, found in by_fragment for entry in found]
+
+    if patch:
+        wrong = [
+            f"{path.name} ({', '.join(sorted({e.kind for e in found} - set(PATCH_KINDS)))})"
+            for path, found in by_fragment
+            if {e.kind for e in found} - set(PATCH_KINDS)
+        ]
+        if wrong:
+            raise ReleaseError(
+                f"Ein Patch nimmt nur Eintraege {' und '.join(PATCH_KINDS)} auf. Andere Arten stehen in: "
+                f"{', '.join(wrong)}. Die gehoeren in die naechste Funktionsversion."
+            )
+
+    # Ein Patch vom Release-Zweig steht danach auch auf main; seine Bruchstücke dürfen dort nicht noch einmal mitgehen.
+    published = {(e.kind, e.text): r.version for r in released_versions(tree) for e in r.entries}
+    twice = sorted({
+        f"{path.name} (schon in {published[(e.kind, e.text)]})"
+        for path, found in by_fragment for e in found if (e.kind, e.text) in published
+    })
+    if twice:
+        raise ReleaseError(
+            f"Schon veroeffentlicht: {', '.join(twice)}. Diese Bruchstuecke bitte loeschen, oder den Text aendern, "
+            "wenn der Eintrag wirklich neu ist."
+        )
 
     day = day or today()
     title = (title or "").strip() or None
     text = render_release(version, day, title, entries)
-    # Gegenprobe: was geschrieben wuerde, muss sich wieder einlesen lassen und gleich sein.
+    # Gegenprobe: was geschrieben würde, muss sich wieder einlesen lassen und gleich sein.
     try:
         parsed = parse_release(tomllib.loads(text))
     except (ChangelogError, tomllib.TOMLDecodeError) as exc:

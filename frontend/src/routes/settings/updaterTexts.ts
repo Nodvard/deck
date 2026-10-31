@@ -16,6 +16,12 @@ export const HELPER_GUIDE_LABEL = "Anleitung: deploy/README.md, Abschnitt „Upd
 /** Kurzer Satz in der Zeile „Update-Helfer: nicht eingerichtet.“, dahinter steht der Link zur Anleitung. */
 export const HELPER_MISSING_LEAD = "Mit ihm spielst du Updates hier per Knopf ein.";
 
+/** Wie der Helfer auf eine neue Version kommt, je nachdem, was in der Compose-Datei steht (deploy/README.md). */
+const HELPER_UPDATE_STEPS =
+  "Steht in deiner Compose-Datei beim Dienst „updater“ das Image mit „:1“, reichen „docker compose pull updater“ und " +
+  "danach „docker compose up -d updater“. Steht dort „@sha256:…“, übernimm die Zeile „image:“ aus der Compose-Datei am " +
+  "neuesten Release (github.com/nodvard/deck/releases/latest) und starte ihn mit „docker compose up -d updater“ neu.";
+
 /**
  * Warum der Helfer gar nicht da ist (`reason` in `GET /system/updates/helper`, `present: false`). Die Oberfläche nennt
  * davor schon den Zustand („Update-Helfer: antwortet nicht.“), der Text erklärt nur noch und sagt, was hilft.
@@ -27,7 +33,7 @@ export const PRESENCE_TEXTS: Record<PresenceReason, string> = {
   unsafe:
     "Besitzer oder Rechte des Ordners, über den Dashboard und Update-Helfer sprechen, stimmen nicht. Nimm dafür den Datenspeicher „nodvard-deck-updater“ aus der Compose-Datei der Anleitung, keinen eigenen Ordner.",
   proto:
-    "Hol die passende Version des Helfers: „docker compose pull updater“ und danach „docker compose up -d updater“.",
+    "Hol die passende Version des Helfers. " + HELPER_UPDATE_STEPS,
   invalid:
     "Starte ihn neu („docker compose restart updater“); hilft das nicht, zeigt „docker compose logs updater“ den Grund.",
 };
@@ -58,7 +64,7 @@ export const HELPER_CODE_TEXTS: Record<string, string> = {
   engine_unreachable:
     "Der Update-Helfer erreicht Docker nicht. Prüf, ob Docker läuft und der Docker-Socket wie in der Anleitung beim Helfer eingehängt ist.",
   engine_unsupported:
-    "Der Update-Helfer versteht die Antworten von Docker nicht. Aktualisiere Docker und den Helfer („docker compose pull updater“).",
+    "Der Update-Helfer versteht die Antworten von Docker nicht. Aktualisiere Docker und den Helfer. " + HELPER_UPDATE_STEPS,
   api_too_old: "Docker ist für den Update-Helfer zu alt. Aktualisiere Docker auf eine aktuelle Version.",
 
   // Ziel: der Container von Nodvard Deck (Vorprüfung)
@@ -107,7 +113,8 @@ export const HELPER_CODE_TEXTS: Record<string, string> = {
 
   // Auftrag (Ablehnung)
   bad_request:
-    "Der Update-Helfer konnte den Auftrag nicht lesen. Versuch es noch einmal; klappt es wieder nicht, hol die aktuelle Version des Helfers („docker compose pull updater“).",
+    "Der Update-Helfer konnte den Auftrag nicht lesen. Versuch es noch einmal; klappt es wieder nicht, hol die aktuelle Version des Helfers. " +
+    HELPER_UPDATE_STEPS,
   expired: "Der Auftrag war zu alt, als der Update-Helfer ihn gelesen hat (er lief wohl gerade nicht). Versuch es noch einmal.",
   replay: "Diesen Auftrag hatte der Update-Helfer schon einmal und hat ihn nicht noch einmal ausgeführt. Versuch es mit einem neuen Klick.",
   busy: "Der Update-Helfer ist gerade mit einem anderen Vorgang beschäftigt. Warte, bis er fertig ist, und versuch es dann noch einmal.",
@@ -120,13 +127,26 @@ export const HELPER_CODE_TEXTS: Record<string, string> = {
   platform_mismatch:
     "Die neue Version gibt es nicht für die Bauart dieses Rechners (z. B. arm64 beim Raspberry Pi). Warte auf die nächste Version.",
   pull_failed:
-    "Die neue Version ließ sich nicht herunterladen. Prüf die Internetverbindung und den freien Speicher des Servers und versuch es noch einmal.",
+    "Die neue Version ließ sich nicht herunterladen. Prüf die Internetverbindung und den freien Speicher des Servers. Vielleicht wurde die Version auch inzwischen ersetzt: Such erneut nach Updates und versuch es dann noch einmal.",
   no_previous:
     "Es gibt keine Version mehr, auf die der Update-Helfer zurückgehen kann (der Rückweg gilt 7 Tage). Wechsle von Hand nach der Anleitung unter „Updates“.",
+  digest_changed:
+    "Seit der letzten Update-Suche hat sich das Update geändert (neue Version oder zurückgezogen). Such erneut nach Updates und versuch es dann noch einmal.",
   previous_mismatch:
     "Der Container wurde seit dem Update verändert (etwa von Hand neu erstellt). Den Rückweg per Knopf gibt es deshalb nicht mehr; wechsle von Hand nach der Anleitung unter „Updates“.",
   not_implemented:
-    "Diese Aktion kennt der Update-Helfer in seiner Version noch nicht. Hol die aktuelle Version: „docker compose pull updater“ und „docker compose up -d updater“.",
+    "Diese Aktion kennt der Update-Helfer in seiner Version noch nicht. Hol die aktuelle Version. " + HELPER_UPDATE_STEPS,
+  signature_required:
+    "Dein Update-Helfer spielt nur noch Updates mit Freigabe ein, diese Version von Nodvard Deck schickt aber keine mit. Aktualisiere Nodvard Deck einmal von Hand nach der Anleitung unter „Updates“, danach geht es wieder per Knopf.",
+  unknown_key:
+    "Die Freigabe für dieses Update ist mit einem Schlüssel signiert, den dein Update-Helfer nicht kennt. Hol die aktuelle Version des Helfers. " +
+    HELPER_UPDATE_STEPS,
+  grant_mismatch:
+    "Die Freigabe gehört zu einer anderen Version oder einem anderen Image als dieses Update. Such erneut nach Updates und versuch es dann noch einmal.",
+  grant_expired:
+    "Die Freigabe für dieses Update ist abgelaufen, oder die Uhr des Servers geht falsch. Prüf die Uhrzeit, such erneut nach Updates und versuch es dann noch einmal.",
+  bad_signature:
+    "Die Signatur der Freigabe stimmt nicht, sie wurde vielleicht unterwegs verändert. Der Update-Helfer hat deshalb nichts eingespielt. Such erneut nach Updates; klappt es wieder nicht, aktualisiere von Hand nach der Anleitung unter „Updates“.",
 
   // Ablauf
   create_failed: "Der Container für die neue Version ließ sich nicht anlegen. Einzelheiten zeigt „docker compose logs updater“.",

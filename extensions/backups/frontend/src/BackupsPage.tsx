@@ -333,7 +333,7 @@ const STATUS_CLASS: Record<string, string> = {
 
 function formatEpoch(seconds: number | null): string {
   if (!seconds) return "nie";
-  return new Date(seconds * 1000).toLocaleString();
+  return new Date(seconds * 1000).toLocaleString("de-DE");
 }
 
 /**

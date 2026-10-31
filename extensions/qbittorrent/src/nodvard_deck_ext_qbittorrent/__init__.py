@@ -18,7 +18,7 @@ from nodvard_sdk import (
     WidgetSpec,
 )
 
-from .config import SETTINGS_HINT
+from .config import SETTINGS_HINT, connection_of
 from .models import Overview
 from .service import QbittorrentService
 from .suggestions import QbittorrentAppSuggestions
@@ -118,6 +118,12 @@ class Extension(NodvardExtension):
 
     async def on_settings_changed(self, ctx: ExtensionContext, values: dict[str, Any]) -> None:
         self._service.clear()
+
+    async def on_secret_changed(self, ctx: ExtensionContext, label: str) -> None:
+        # Sitzung und Pause von vorher gälten sonst weiter, bis jemand die Einstellungen speichert.
+        name = connection_of(label)
+        if name is not None:
+            await self._service.forget(name)
 
     async def health(self, ctx: ExtensionContext) -> HealthReport:
         # „Verbindung testen“ meldet jede Verbindung neu an und leert den Zwischenspeicher samt Pause.

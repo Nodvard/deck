@@ -18,6 +18,7 @@ from nodvard_sdk import (
     WidgetSpec,
 )
 
+from .config import connection_of
 from .models import Overview
 from .service import UptimeKumaService
 from .widgets import nothing_set_up, status_rows
@@ -104,6 +105,12 @@ class Extension(NodvardExtension):
 
     async def on_settings_changed(self, ctx: ExtensionContext, values: dict[str, Any]) -> None:
         self._service.clear()
+
+    async def on_secret_changed(self, ctx: ExtensionContext, label: str) -> None:
+        # Ein Ergebnis mit dem alten Schlüssel gälte sonst noch bis zu 20 Sekunden.
+        name = connection_of(label)
+        if name is not None:
+            self._service.forget(name)
 
     async def health(self, ctx: ExtensionContext) -> HealthReport:
         # „Verbindung testen“ fragt jetzt nach, nicht den Stand von vor ein paar Minuten.

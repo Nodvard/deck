@@ -97,8 +97,12 @@ say "Ziel erreichbar?"
 if [ "$BUILD" = 1 ]; then
   say "Image fuer linux/arm64 auf dem PC bauen ($LOCAL_TAG)"
   # --pull: Basis-Images (python, node) jedes Mal frisch holen. Sonst bleibt die einmal geladene Fassung im Cache
-  # liegen, und ihre Sicherheitsluecken (z. B. in libcurl) landen bei jedem Deploy wieder im Image.
-  docker buildx build --pull --platform linux/arm64 -f deploy/Dockerfile -t "$LOCAL_TAG" --load . \
+  # liegen, und ihre Sicherheitslücken (z. B. in libcurl) landen bei jedem Deploy wieder im Image.
+  # APT_REFRESH: Die Debian-Pakete (Tesseract samt Abhängigkeiten) einmal je Kalenderwoche frisch holen, sonst
+  # bleiben sie mit dem Stand des ersten Baus im Cache. Nicht bei jedem Bau: Ein neuer Wert baut den ganzen
+  # Laufzeit-Teil für arm64 unter QEMU neu.
+  docker buildx build --pull --platform linux/arm64 -f deploy/Dockerfile \
+    --build-arg APT_REFRESH="$(date +%G-W%V)" -t "$LOCAL_TAG" --load . \
     || fail "Build fehlgeschlagen."
 else
   docker image inspect "$LOCAL_TAG" >/dev/null 2>&1 || fail "Kein lokales Image $LOCAL_TAG; ohne --no-build aufrufen."

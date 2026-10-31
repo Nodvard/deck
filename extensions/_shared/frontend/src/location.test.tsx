@@ -3,7 +3,7 @@ import { useLayoutEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { dispatchDeckEvent, installDeckGlobal } from "../../../../frontend/src/lib/deckGlobal";
-import { LEGACY_NAVIGATE_EVENT, NAVIGATE_EVENT, useUrlParams } from "./location";
+import { NAVIGATE_EVENT, useUrlParams } from "./location";
 
 function Probe() {
   const [params, update, visits] = useUrlParams();
@@ -20,7 +20,6 @@ function Probe() {
 
 const clearGlobals = () => {
   delete (window as Partial<Window>).__nodvardDeck;
-  delete (window as Partial<Window>).__lattice;
 };
 beforeEach(() => window.history.replaceState({ usr: null, key: "abc", idx: 3 }, "", "/ext/x/page?host=h1"));
 afterEach(() => {
@@ -110,47 +109,17 @@ describe("useUrlParams", () => {
     expect(screen.getByTestId("visits")).toHaveTextContent("1");
   });
 
-  it("die Marke navigateEvents wird auch gefunden, wenn nur der alte Name da ist (aelterer Kern)", () => {
-    window.__lattice = { navigateEvents: true } as unknown as NodvardDeckShell;
-    render(<Probe />);
-    act(() => {
-      window.history.replaceState(null, "", "/ext/x/page?host=h2");
-      window.dispatchEvent(new PopStateEvent("popstate"));
-    });
-    expect(screen.getByTestId("visits")).toHaveTextContent("0");
-  });
-
-  it("die Ereignisnamen sind die, die die Kern-Shell feuert", () => {
+  it("das Ereignis heißt so, wie die Kern-Shell es feuert", () => {
     expect(NAVIGATE_EVENT).toBe("nodvard-deck:navigate");
-    expect(LEGACY_NAVIGATE_EVENT).toBe("lattice:navigate");
   });
 
-  describe("hört auf genau ein Navigations-Ereignis", () => {
-    it("neuer Kern (__nodvardDeck): nur nodvard-deck:navigate, der Kern-Schlag mit beiden zählt einmal", () => {
+  describe("hört auf das Navigations-Ereignis", () => {
+    it("nodvard-deck:navigate zählt einmal", () => {
       installDeckGlobal({} as NodvardDeckShell);
       render(<Probe />);
-      shellNavigates("/ext/x/page?tab=alt", [LEGACY_NAVIGATE_EVENT]);
-      expect(screen.getByTestId("visits")).toHaveTextContent("0"); // das alte hört dieses Kit nicht
       shellNavigates("/ext/x/page?tab=neu", [NAVIGATE_EVENT]);
       expect(screen.getByTestId("visits")).toHaveTextContent("1");
       expect(screen.getByTestId("tab")).toHaveTextContent("neu");
-      // So feuert ExtensionPage: beide Namen -- das Kit zählt genau einmal.
-      shellNavigates("/ext/x/page?tab=beide", [NAVIGATE_EVENT, LEGACY_NAVIGATE_EVENT]);
-      expect(screen.getByTestId("visits")).toHaveTextContent("2");
-      expect(screen.getByTestId("tab")).toHaveTextContent("beide");
-    });
-
-    it("neues Kit mit altem Kern (nur __lattice): hört auf lattice:navigate, der Kern-Schlag zählt einmal", () => {
-      window.__lattice = {} as NodvardDeckShell;
-      expect(window.__nodvardDeck).toBeUndefined();
-      render(<Probe />);
-      shellNavigates("/ext/x/page?tab=neu", [NAVIGATE_EVENT]);
-      expect(screen.getByTestId("visits")).toHaveTextContent("0"); // einen alten Kern gibt es mit diesem Namen nicht
-      shellNavigates("/ext/x/page?tab=alt", [LEGACY_NAVIGATE_EVENT]);
-      expect(screen.getByTestId("visits")).toHaveTextContent("1");
-      expect(screen.getByTestId("tab")).toHaveTextContent("alt");
-      shellNavigates("/ext/x/page?tab=beide", [NAVIGATE_EVENT, LEGACY_NAVIGATE_EVENT]);
-      expect(screen.getByTestId("visits")).toHaveTextContent("2");
     });
 
     it("beim Abmelden wird derselbe Name wieder entfernt, den das Kit angemeldet hat", () => {
