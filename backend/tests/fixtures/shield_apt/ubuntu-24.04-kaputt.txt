@@ -9,7 +9,14 @@ demo-phased-full/unknown 1.1 all [upgradable from: 1.0]
 demo-phased-newdep/unknown 1.1 all [upgradable from: 1.0]
 demo-phased-two/unknown 1.1 all [upgradable from: 1.0]
 demo-phased/unknown 1.1 all [upgradable from: 1.0]
+demo-transition/unknown 1.1 all [upgradable from: 1.0]
 @@phasing
+rc inst 100
+rc all 100
+@@held
+demo-held
+@@pve
+no
 @@security
 @@reboot
 no

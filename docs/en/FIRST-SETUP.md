@@ -2,7 +2,7 @@
 
 > The Nodvard Deck interface is currently available in German only; an English interface is planned. UI labels are given in English with the German original in quotes.
 
-As of 7 October 2026 (version 0.7). For a fresh installation, work through these steps in order. Where Nodvard
+As of version 0.12. For a fresh installation, work through these steps in order. Where Nodvard
 Deck still has a gap, the guide says so. Without the web interface (using only the API), see the
 [appendix](#appendix-without-the-interface).
 
@@ -1173,10 +1173,11 @@ login without a fresh check, the login counts as unconfirmed again until it work
 
 > **Note:** Whether Nodvard Deck remembers a new server key by itself on the very first connection (Terminal,
 > monitoring, …) is set under **Settings → Servers & access** in the card **New server keys** („Neue
-> Server-Schlüssel“). On new installations, **Only remember new server keys after my confirmation** („Neue
-> Server-Schlüssel erst nach meiner Bestätigung merken“) is on: Nodvard Deck then remembers a key only through
-> "Check connection", and no password and no key goes to the server before that. Installations that were set up
-> before this setting existed stay at "off" and keep remembering by themselves until you switch it on. The
+> Server-Schlüssel“). **Only remember new server keys after my confirmation** („Neue Server-Schlüssel erst nach
+> meiner Bestätigung merken“) is on, also on installations set up before this setting existed: Nodvard Deck then
+> remembers a key only through "Check connection", and no password and no key goes to the server before that. If
+> Deck does not know a server's key yet, press "Check connection" there once and confirm the fingerprint. "Off"
+> (not recommended) remembers new keys by itself again; that only applies if you set it that way explicitly. The
 > environment variable `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` (`true` or `false`; in the Compose file under
 > `environment:`, see the example in [2.](#2-setup-wizard-setup); the repository's `deploy/docker-compose.yml` has
 > the line prepared) overrides the switch: the card then shows the variable's value, and saving reports an error.
@@ -1651,10 +1652,27 @@ freigeben“); proposals with high risk (with "Proxmox: all updates as dist-upgr
 
 **Updates delayed by phasing (Ubuntu):** Ubuntu rolls out some updates gradually, first to a share of machines, then to
 all. Until a server's turn comes, apt holds the update back, also with "Apply all" („Alle einspielen“). The update center
-counts these updates and adds "of which X delayed by phasing" („davon X durch Phasing verzögert“); clicking it explains
+does not count these updates as installable and adds "X delayed by phasing" („X durch Phasing verzögert“); clicking it explains
 it, and the package list marks them as "delayed" („verzögert“). This is intended, not an error: once the server's turn
 comes, they install like any other update. The check needs no root and does not depend on the server's language; Debian and
-Proxmox have no phasing, so the note does not appear there.
+Proxmox have no phasing, so the note does not appear there. If the state shown still comes from a version without this
+check, it says "Phasing not checked yet" („Phasing noch nicht geprüft“) until "Check" („Prüfen“) or the daily check
+renews it. If apt cannot work out the trial installation (for example because of missing dependencies), it says
+"Phasing check not available" („Phasing-Prüfung nicht verfügbar“) instead of a number.
+
+**Kept-back and held updates:** "Apply all" („Alle einspielen“) also installs updates with new dependencies, but never
+removes a package. If an update needs that (for example when one package replaces another, like the camera packages of
+Raspberry Pi OS), apt keeps it back. The update center shows such updates as "kept back, needs full-upgrade"
+(„zurückgehalten, braucht full-upgrade“) and does not count them as installable. You can install them on the server with
+`sudo apt full-upgrade`; read the list apt shows first, because whatever is listed under "REMOVED" („ENTFERNT“ in German) will be removed. On
+Proxmox with the `dist-upgrade` setting, "Apply all" includes them. Packages held with `apt-mark hold` show as "held"
+(„gesperrt“); `sudo apt-mark unhold <package name>` lifts the hold. "Apply security updates" („Sicherheitsupdates
+einspielen“) leaves out all three kinds, including updates delayed by phasing: installed directly, a kept-back security
+update would remove another package, a held one would abort the whole run and a delayed one would bypass phasing. For
+this, the update center checks the server once more right before the run. If it says "Phasing check not available", it
+is unknown what apt keeps back; "Apply security updates" is then not offered until the next check gets through. If
+nothing is installable and several reasons are mixed, the badge says "not installable" („nicht einspielbar“), with each
+reason listed next to it.
 
 **Updates on the server that runs Nodvard Deck:** if the updates include a package that restarts Docker (`docker-ce`,
 `docker.io`, `containerd` and similar), the check also looks whether Nodvard Deck runs there. The confirmation before
@@ -2229,15 +2247,15 @@ Without a passphrase (`-N ""`), because Nodvard Deck does not ask for a passphra
 encrypted copy of the private key of its own; you only need the file on this machine for adding it and for testing.
 
 **Save the helper script** (once, on the same machine) – paste the whole block into the shell; it creates
-`~/lattice-server.py`. (The script's prompts and messages are in German, like the interface.)
+`~/nodvard-server.py`. (The script's prompts and messages are in German, like the interface.)
 
 ```bash
-cat > ~/lattice-server.py <<'EOF'
+cat > ~/nodvard-server.py <<'EOF'
 #!/usr/bin/env python3
 """Nodvard Deck: Server anlegen, Adresse korrigieren, SSH-Zugang hinterlegen (docs/11)."""
 import getpass, json, os, urllib.error, urllib.request
 
-API = os.environ.get("LATTICE_URL", "http://localhost:8080").rstrip("/") + "/api/v1"
+API = os.environ.get("NODVARD_DECK_URL", "http://localhost:8080").rstrip("/") + "/api/v1"
 token = None
 
 
@@ -2334,7 +2352,7 @@ EOF
 **Use it:**
 
 ```bash
-python3 ~/lattice-server.py
+python3 ~/nodvard-server.py
 ```
 
 Log in with a Nodvard Deck account that may manage servers (owner or `admin`). The script shows all servers with their
@@ -2344,7 +2362,7 @@ SSH login (key `~/.ssh/nodvard_ed25519` or password), with 4 you show the
 logins, and with 5 you forget a remembered server key (after the server has been reinstalled). The script does not
 confirm fingerprints. After forgetting (5), Nodvard Deck only connects again once you have pressed "Check connection" in
 the interface and confirmed the new fingerprint. The same applies to new servers as long as "Only remember new server
-keys after my confirmation" is on (on new installations from the start).
+keys after my confirmation" is on (always, unless you have turned it off).
 
 The key on the server is then added by hand, e.g. for a user of its own:
 

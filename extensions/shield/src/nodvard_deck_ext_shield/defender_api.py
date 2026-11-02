@@ -272,6 +272,16 @@ class DefenderExecutor:
         if req.action_type in (ACTION_UPGRADE, ACTION_REBOOT):
             if self._updates is None:
                 return ActionResult(success=False, error="Die Update-Zentrale ist nicht aktiv.")
+            # Nur apt bekommt Paketnamen: Nur dort kann ein gezielter Lauf etwas anderes tun, als die Seite zeigt.
+            if req.action_type == ACTION_UPGRADE and req.payload["mode"] == "security" and req.payload["manager"] == "apt":
+                try:
+                    blocked = await self._updates.blocked_packages(host)
+                except ValueError as exc:
+                    return ActionResult(success=False, error=_unchecked_message(exc))
+                hits = sorted(set(blocked) & set(req.payload["packages"]))
+                if hits:
+                    named = ", ".join(f"{name} ({blocked[name]})" for name in hits)
+                    return ActionResult(success=False, error=SECURITY_BLOCKED_MESSAGE.format(packages=named))
             mode = "reboot" if req.action_type == ACTION_REBOOT else str(req.payload["mode"])
             # `build` hat die Angaben schon geprüft. Der Plan ist derselbe Lauf für das Hilfsskript (`upgrade_args`).
             plan = None if req.action_type == ACTION_REBOOT else up.upgrade_args(
@@ -430,8 +440,25 @@ def _nothing_to_do(row: dict[str, Any], mode: str) -> str | None:
         return "Keine Sicherheitsupdates offen."
     if mode == "all" and not st.get("count"):
         return "Keine Updates offen."
+    if mode == "security" and not up.security_known(st):
+        return up.SECURITY_UNKNOWN_MESSAGE
+    if not up.runnable(st, mode, full_upgrade=bool(row.get("full_upgrade"))):
+        return up.held_back_message(st, mode, full_upgrade=bool(row.get("full_upgrade")))
     return None
 
+
+SECURITY_BLOCKED_MESSAGE = (
+    "Inzwischen nicht mehr gezielt einspielbar: {packages}. Nichts wurde eingespielt. "
+    "Bitte in der Update-Zentrale neu vorschlagen."
+)
+
+
+def _unchecked_message(exc: Exception) -> str:
+    reason = str(exc).strip()
+    if not reason.endswith((".", "!", "?")):
+        reason += "."
+    return (f"Der Update-Stand ließ sich vor dem Einspielen nicht prüfen: {reason} Nichts wurde eingespielt. "
+            "Bitte später erneut versuchen.")
 
 NOT_PROPOSED_MESSAGE = "Der Vorschlag konnte nicht angelegt werden (Einzelheiten im Protokoll)."
 """Was der Sammel-Vorschlag bei einer unerwarteten Ausnahme meldet. Der Ausnahmetext bleibt im Protokoll,

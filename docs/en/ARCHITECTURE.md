@@ -23,7 +23,7 @@
                      │  window.__nodvardDeck + UI kit (React contract)
 ┌────────────────────▼─────────────────────────────────────────┐
 │  EXTENSIONS: everything infrastructure-specific              │
-│  proxmox · shield · terminal · files · scripts ·             │
+│  proxmox · shield · terminal · nextcloud · scripts ·         │
 │  docker · backups · gameserver · …                           │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -81,7 +81,7 @@ context implementation for an RPC proxy without changing any extension.
 |---|---|
 | HTTP/WS | FastAPI on uvicorn, **one** worker |
 | Background loops (watchers) | `asyncio.Task`, managed by the extension host and cleanly cancelled on stop |
-| Scheduled jobs | a single APScheduler object, SQLAlchemy job store |
+| Scheduled jobs | a single APScheduler object, `MemoryJobStore`; only the `jobs` table is persistent |
 | Blocking work | `asyncio.to_thread` / dedicated executor, never in the loop |
 | SSH | one `asyncssh` connection pool, shared by Terminal, Scripts, and AI |
 
@@ -187,12 +187,11 @@ command as root on the server, but deliberately does not go through the gate: a 
 `hosts.write` and `hosts.execute`, the human triggers it by submitting, and every attempt is logged
 (`host.setup_with_password`, without the password).
 
-**Settings (global, overridable per extension):**
+**Settings (global only, no override per extension):**
 
 ```
-autonomy.mode          = "propose" | "full"        default: propose
-autonomy.max_risk      = "low" | "medium" | "high" default: low
-autonomy.window        = optional time window for "full"
+autonomy.mode          = "propose" | "full"                          default: propose
+autonomy.max_risk      = "low" | "medium" | "high" | "critical"      default: low
 ```
 
 ---
@@ -259,7 +258,7 @@ year range from 2027). Custom branding changes what the UI is called, not who ow
 | AI actions | From AI text, Nodvard Shield creates at most one fixed action: restarting a container whose crash the incident reports. The code builds the command and justification itself, and the server comes from the incident; everything else stays text, and the chat never creates an action. Container logs and Docker error messages go to the AI as foreign data (not instructions). In addition: blocklist for catastrophic patterns, mandatory justification, anti-flapping, default = confirmation, never via a standing approval. |
 | Secrets | Never in plaintext in the DB, a response, or a log. Extensions get handles; they replace and delete only their own, and never accounts' two-factor secrets. Access for another extension goes only through a capability (`ConnectionReceiver`), never over the event bus. |
 | SSH | One identity from the vault, known-hosts pinning instead of `StrictHostKeyChecking=no`. |
-| API | Everything authenticated except `/branding`, `/health`, `/auth/login`. Extension routes require login by default; without login only with `public=True` and the manifest permission `api.public` (logged when enabled). No endpoint gets to read more than 1 MiB of body, even without login (`413` above that; uploads have their own, higher limits). |
+| API | Everything authenticated except the endpoints listed in [API, section 2](API.md#2-without-authentication) (among them `/health`, `/branding`, `/capabilities`, `/auth/login`). Extension routes require login by default; without login only with `public=True` and the manifest permission `api.public` (logged when enabled). No endpoint gets to read more than 1 MiB of body, even without login (`413` above that; uploads have their own, higher limits). |
 | Audit | Append-only, every action, including rejected and merely proposed ones. |
 | Network | No outward-facing port needed (works behind DS-Lite/CGNAT too); access via reverse proxy on the LAN or a VPN such as Tailscale/WireGuard. |
 
@@ -360,7 +359,7 @@ The **Docker** module had a different name until 0.8 and the technical identifie
 | Pages `/ext/docker/matrix`, `/settings/extensions/docker` | `/ext/service-matrix/matrix`, `/settings/extensions/service-matrix` | The UI redirects (query and anchor are kept). Saved links in notifications and bookmarks keep working this way |
 | Dashboard tile "Container" under `docker` | Entry under `service-matrix` | Keeps position, size, and visibility (`legacy_ext_ids`) |
 | Component `ContainersPage` in the bundle | `ServiceMatrixPage` | Second export, for tabs that are open during the update |
-| `requires = ["docker"]` in other modules | `requires = ["service-matrix"]` | The core resolves the old identifier; the Network module still uses the old one |
+| `requires = ["docker"]` in other modules | `requires = ["service-matrix"]` | The core resolves the old identifier |
 | Logger `nodvard_deck.ext.docker`, links in new notifications (`/ext/docker/matrix`) | `…service-matrix…` | Old notifications keep their link, which keeps working |
 
 **Deliberately kept:**

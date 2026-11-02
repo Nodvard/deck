@@ -13,6 +13,7 @@ const DATA: UpdatesOverview = {
       status: {
         manager: "apt", count: 3, security_count: 2, reboot_required: true, reboot_reasons: ["neuer Kernel 6.8.12-10-pve (läuft: 6.8.12-4-pve)"],
         kernel: "6.8.12-4-pve", latest_kernel: "6.8.12-10-pve", uptime_s: 200000, unattended: false, refresh_error: null, error: null, checked_at: now - 120,
+        phased_count: 0, phasing: "checked",
         packages: [
           { name: "openssl", new_version: "3.0.14", current_version: "3.0.13", repo: "stable-security", security: true },
           { name: "libssl3", new_version: "3.0.14", current_version: "3.0.13", repo: "stable-security", security: true },
@@ -892,17 +893,22 @@ describe("Automatische Sicherheitsupdates einrichten", () => {
 });
 
 describe("Updates, die Ubuntu wegen Phasing zurückhält", () => {
-  const ubuntu = (security: number, phased: number | undefined) => ({
+  /** `older`: ein Stand von vor der Phasing-Prüfung, ohne `phasing` und `phased_count`. */
+  const ubuntu = (security: number, phased: number | null | "older", phasing: "checked" | "unavailable" = "checked") => ({
     ...DATA,
     hosts: [{
       ...DATA.hosts[0], host_id: "h-ubu", host_name: "ubuntu",
       status: {
-        ...DATA.hosts[0].status!, reboot_required: false, reboot_reasons: [], count: 4, security_count: security, phased_count: phased,
+        ...DATA.hosts[0].status!, reboot_required: false, reboot_reasons: [], count: 4, security_count: security,
+        ...(phased === "older"
+          ? { phased_count: undefined, phasing: undefined }
+          : { phased_count: phased, phasing, kept_back_count: phasing === "checked" ? 0 : null, held_count: 0,
+              installable_count: 4 - (phased ?? 0), installable_security_count: security }),
         packages: [
           { name: "openssl", new_version: "3.0.14", current_version: "3.0.13", repo: "noble-security", security: security > 0 },
           { name: "base-files", new_version: "13ubuntu10.2", current_version: "13ubuntu10.1", repo: "noble-updates", security: false },
-          { name: "python3-apt", new_version: "2.7.7ubuntu5", current_version: "2.7.7ubuntu4", repo: "noble-updates", security: false, phased: !!phased },
-          { name: "ubuntu-pro-client", new_version: "36", current_version: "35", repo: "noble-updates", security: false, phased: !!phased },
+          { name: "python3-apt", new_version: "2.7.7ubuntu5", current_version: "2.7.7ubuntu4", repo: "noble-updates", security: false, phased: typeof phased === "number" && phased > 0 },
+          { name: "ubuntu-pro-client", new_version: "36", current_version: "35", repo: "noble-updates", security: false, phased: typeof phased === "number" && phased > 0 },
         ],
       },
     }],
@@ -913,7 +919,8 @@ describe("Updates, die Ubuntu wegen Phasing zurückhält", () => {
     stub(ubuntu(0, 2));
     render(<UpdatesTab canManage />);
     const row = within(await screen.findByTestId("updates-h-ubu"));
-    const hint = row.getByRole("button", { name: "davon 2 durch Phasing verzögert" });
+    expect(row.getByText("2 Updates")).toBeInTheDocument();
+    const hint = row.getByRole("button", { name: "dazu 2 durch Phasing verzögert" });
     expect(hint).toHaveAttribute("title", expect.stringContaining("schrittweise"));
     expect(row.queryByText(/hält apt das Update zurück/)).not.toBeInTheDocument();
 
@@ -925,20 +932,78 @@ describe("Updates, die Ubuntu wegen Phasing zurückhält", () => {
     expect(row.getAllByText("verzögert")).toHaveLength(2);
   });
 
-  it("steht daneben die Zahl der Sicherheitsupdates, nennt der Text die Gesamtzahl", async () => {
+  it("neben den Sicherheitsupdates steht, was dazu verzögert ist", async () => {
     stub(ubuntu(1, 2));
     render(<UpdatesTab canManage />);
     const row = within(await screen.findByTestId("updates-h-ubu"));
     expect(row.getByText("1 Sicherheitsupdate")).toBeInTheDocument();
-    expect(row.getByRole("button", { name: "2 von 4 Updates durch Phasing verzögert" })).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "dazu 2 durch Phasing verzögert" })).toBeInTheDocument();
   });
 
-  it("ohne Phasing (Debian, ältere Stände) kein Hinweis", async () => {
-    stub(ubuntu(0, undefined));
+  it("geprüft und nichts zurückgehalten (etwa Debian): kein Hinweis", async () => {
+    stub(ubuntu(0, 0));
     render(<UpdatesTab canManage />);
     const row = within(await screen.findByTestId("updates-h-ubu"));
     expect(row.getByText("4 Updates")).toBeInTheDocument();
     expect(row.queryByText(/Phasing/)).not.toBeInTheDocument();
+  });
+
+  it("ein älterer Stand ohne Phasing-Prüfung sagt das, statt 0 anzunehmen", async () => {
+    stub(ubuntu(0, "older"));
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-h-ubu"));
+    const note = row.getByRole("button", { name: "Phasing noch nicht geprüft" });
+    expect(note).toHaveAttribute("title", expect.stringContaining("„Prüfen“"));
+    fireEvent.click(note);
+    expect(row.getByText(/zeigt erst die nächste Prüfung/)).toBeInTheDocument();
+  });
+
+  it("scheiterte die Phasing-Prüfung, steht das da statt 0", async () => {
+    stub(ubuntu(0, null, "unavailable"));
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-h-ubu"));
+    const note = row.getByRole("button", { name: "Phasing-Prüfung nicht verfügbar" });
+    expect(note).toHaveAttribute("title", expect.stringContaining("nicht durchrechnen"));
+    expect(row.queryByText(/durch Phasing verzögert/)).not.toBeInTheDocument();
+  });
+
+  it("ein älterer Stand bekommt den Phasing-Hinweis mit der nächsten Prüfung", async () => {
+    let current = ubuntu(0, "older");
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST" && String(input).endsWith("/updates/check")) {
+        current = ubuntu(0, 2);
+        return new Response(JSON.stringify({ hosts: 1 }), { status: 200 });
+      }
+      return new Response(JSON.stringify(current), { status: 200 });
+    }));
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-h-ubu"));
+    expect(row.getByRole("button", { name: "Phasing noch nicht geprüft" })).toBeInTheDocument();
+    fireEvent.click(row.getByRole("button", { name: "ubuntu prüfen" }));
+    expect(await row.findByRole("button", { name: "dazu 2 durch Phasing verzögert" })).toBeInTheDocument();
+    expect(row.queryByText("Phasing noch nicht geprüft")).not.toBeInTheDocument();
+  });
+
+  it("während der Prüfung steht kein „noch nicht geprüft“ daneben", async () => {
+    const data = ubuntu(0, "older");
+    data.hosts[0] = { ...data.hosts[0], checking: true };
+    stub(data);
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-h-ubu"));
+    expect(row.getByText("prüft …")).toBeInTheDocument();
+    expect(row.queryByText(/Phasing/)).not.toBeInTheDocument();
+  });
+
+  it("ohne Updates oder ohne apt kein Phasing-Hinweis, auch bei älteren Ständen", async () => {
+    const data = ubuntu(0, "older");
+    data.hosts = [
+      { ...data.hosts[0], host_id: "h-leer", host_name: "leer", status: { ...data.hosts[0].status!, count: 0, packages: [] } },
+      { ...data.hosts[0], host_id: "h-dnf", host_name: "fedora", status: { ...data.hosts[0].status!, manager: "dnf" } },
+    ];
+    stub(data);
+    render(<UpdatesTab canManage />);
+    await screen.findByTestId("updates-h-leer");
+    expect(screen.queryByText(/Phasing/)).not.toBeInTheDocument();
   });
 
   it("während Prüfen oder Einspielen kein „davon“ neben dem Abzeichen", async () => {
@@ -951,14 +1016,13 @@ describe("Updates, die Ubuntu wegen Phasing zurückhält", () => {
     expect(row.queryByText(/durch Phasing verzögert/)).not.toBeInTheDocument();
   });
 
-  it("hält Ubuntu alle Updates zurück, sagt die Rückfrage, dass Einspielen noch nichts bringt", async () => {
+  it("hält Ubuntu alle Updates zurück, gibt es kein „Alle einspielen“ und kein gelbes Abzeichen", async () => {
     stub(ubuntu(0, 4));
-    confirmDialog.mockResolvedValue(false);
     render(<UpdatesTab canManage />);
     const row = within(await screen.findByTestId("updates-h-ubu"));
-    fireEvent.click(row.getByRole("button", { name: "Alle einspielen" }));
-    await waitFor(() => expect(confirmDialog).toHaveBeenCalled());
-    expect(String(confirmDialog.mock.calls[0][0])).toContain("Ubuntu hält diese Updates wegen Phasing noch zurück; einspielen lassen sie sich erst");
+    expect(row.getByText("4 verzögert").className).not.toContain("amber");
+    expect(row.getByRole("button", { name: "durch Phasing verzögert" })).toBeInTheDocument();
+    expect(row.queryByRole("button", { name: "Alle einspielen" })).not.toBeInTheDocument();
   });
 
   it("„Alle einspielen“ sagt vorher, dass diese Updates noch nicht kommen", async () => {
@@ -968,6 +1032,247 @@ describe("Updates, die Ubuntu wegen Phasing zurückhält", () => {
     const row = within(await screen.findByTestId("updates-h-ubu"));
     fireEvent.click(row.getByRole("button", { name: "Alle einspielen" }));
     await waitFor(() => expect(confirmDialog).toHaveBeenCalled());
-    expect(String(confirmDialog.mock.calls[0][0])).toContain("2 davon hält Ubuntu wegen Phasing noch zurück");
+    const question = String(confirmDialog.mock.calls[0][0]);
+    expect(question).toContain("Alle 2 Updates auf „ubuntu“");
+    expect(question).toContain("Nicht dabei: 2 Pakete, die Ubuntu wegen Phasing noch zurückhält.");
+  });
+});
+
+describe("Updates, die „Alle einspielen“ nicht einspielt: zurückgehalten und gesperrt", () => {
+  type P = { name: string; security?: boolean; phased?: boolean; kept_back?: boolean; held?: boolean };
+  /** Ein Stand wie vom Server: die Zählung je Grund aus den Paketen. */
+  const state = (pkgs: P[], extra: object = {}) => {
+    const packages = pkgs.map((p) => ({ new_version: "2", current_version: "1", repo: "stable", security: false, phased: false, kept_back: false, held: false, ...p }));
+    const ok = (p: (typeof packages)[number]) => !p.phased && !p.kept_back && !p.held;
+    return {
+      ...DATA.hosts[0].status!, reboot_required: false, reboot_reasons: [], packages, count: packages.length, phasing: "checked" as const,
+      security_count: packages.filter((p) => p.security).length, phased_count: packages.filter((p) => p.phased).length,
+      kept_back_count: packages.filter((p) => p.kept_back).length, held_count: packages.filter((p) => p.held).length,
+      installable_count: packages.filter(ok).length, installable_security_count: packages.filter((p) => p.security && ok(p)).length,
+      ...extra,
+    };
+  };
+  const overview = (...rows: { id: string; st: ReturnType<typeof state>; full_upgrade?: boolean }[]): UpdatesOverview => ({
+    ...DATA,
+    summary: {
+      ...DATA.summary,
+      packages: rows.reduce((n, r) => n + r.st.count, 0), security: rows.reduce((n, r) => n + r.st.security_count, 0),
+      installable: rows.reduce((n, r) => n + r.st.installable_count + (r.full_upgrade ? r.st.kept_back_count : 0), 0),
+      installable_security: rows.reduce((n, r) => n + r.st.installable_security_count, 0),
+      not_installable: {
+        phased: rows.reduce((n, r) => n + r.st.phased_count, 0), held: rows.reduce((n, r) => n + r.st.held_count, 0),
+        kept_back: rows.reduce((n, r) => n + (r.full_upgrade ? 0 : r.st.kept_back_count), 0),
+      },
+      not_installable_security: {
+        phased: rows.reduce((n, r) => n + r.st.packages.filter((p) => p.security && p.phased).length, 0),
+        kept_back: rows.reduce((n, r) => n + r.st.packages.filter((p) => p.security && p.kept_back).length, 0),
+        held: rows.reduce((n, r) => n + r.st.packages.filter((p) => p.security && p.held).length, 0),
+      },
+    },
+    hosts: rows.map((r) => ({ ...DATA.hosts[0], host_id: r.id, host_name: r.id, status: r.st, full_upgrade: r.full_upgrade, last_run: null })),
+  });
+  const stub = (data: UpdatesOverview) => vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(data), { status: 200 })));
+  const camera = [{ name: "libcamera-ipa", kept_back: true }, { name: "librpicam-app1", kept_back: true }, { name: "rpicam-apps-core", kept_back: true }];
+
+  it("alle zurückgehalten (wie beim Pi des Nutzers): ehrliches Abzeichen, kein „Alle einspielen“, Hinweis auf full-upgrade", async () => {
+    stub(overview({ id: "pi", st: state(camera) }));
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-pi"));
+    const chip = row.getByText("3 zurückgehalten");
+    expect(chip.className).not.toContain("amber");
+    expect(row.queryByRole("button", { name: "Alle einspielen" })).not.toBeInTheDocument();
+    expect(row.queryByRole("button", { name: "Sicherheitsupdates einspielen" })).not.toBeInTheDocument();
+    const note = row.getByRole("button", { name: "braucht full-upgrade" });
+    expect(note).toHaveAttribute("title", expect.stringContaining("sudo apt full-upgrade"));
+    fireEvent.click(note);
+    expect(row.getByText(/Was dort unter „REMOVED“ \(deutsch „ENTFERNT“\) steht, wird entfernt/)).toBeInTheDocument();
+    fireEvent.click(row.getByText("3 Pakete anzeigen"));
+    expect(row.getAllByText("zurückgehalten")).toHaveLength(3);
+    expect(screen.getByText("davon 3 zurückgehalten")).toBeInTheDocument();
+  });
+
+  it("gemischt: zählt nur Einspielbares und sagt in der Rückfrage, was stehen bleibt", async () => {
+    stub(overview({ id: "pi", st: state([{ name: "base-files" }, { name: "tzdata" }, ...camera, { name: "openssh-server", held: true }]) }));
+    confirmDialog.mockResolvedValue(false);
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-pi"));
+    expect(row.getByText("2 Updates")).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "dazu 3 zurückgehalten, braucht full-upgrade" })).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "dazu 1 gesperrt" })).toBeInTheDocument();
+    fireEvent.click(row.getByRole("button", { name: "Alle einspielen" }));
+    await waitFor(() => expect(confirmDialog).toHaveBeenCalled());
+    const question = String(confirmDialog.mock.calls[0][0]);
+    expect(question).toContain("Alle 2 Updates auf „pi“");
+    expect(question).toContain("Nicht dabei: 3 zurückgehaltene Pakete, die „apt full-upgrade“ auf dem Server brauchen; 1 gesperrtes Paket.");
+  });
+
+  it("nur gesperrt: sagt, wie man die Sperre aufhebt", async () => {
+    stub(overview({ id: "pi", st: state([{ name: "openssh-server", held: true }]) }));
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-pi"));
+    expect(row.getByText("1 gesperrt")).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "mit apt-mark hold gesperrt" })).toHaveAttribute("title", expect.stringContaining("apt-mark unhold"));
+    expect(row.queryByRole("button", { name: "Alle einspielen" })).not.toBeInTheDocument();
+  });
+
+  it("ein zurückgehaltenes Sicherheitsupdate bleibt sichtbar, bekommt aber keinen Knopf, der Pakete entfernen könnte", async () => {
+    stub(overview({ id: "pi", st: state([{ name: "openssl", security: true, kept_back: true }]) }));
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-pi"));
+    expect(row.getByText("1 zurückgehalten").className).toContain("amber");
+    expect(row.getByRole("button", { name: "davon 1 Sicherheit, braucht full-upgrade" })).toBeInTheDocument();
+    expect(row.queryByRole("button", { name: "Sicherheitsupdates einspielen" })).not.toBeInTheDocument();
+    expect(screen.getAllByText("davon 1 zurückgehalten")).toHaveLength(2); // bei „Offene Updates“ und „Sicherheitsupdates“
+  });
+
+  it("„Sicherheitsupdates einspielen“ nennt nur, was kommt, und was stehen bleibt", async () => {
+    stub(overview({ id: "pi", st: state([{ name: "openssl", security: true }, { name: "openssh-server", security: true, held: true }]) }));
+    confirmDialog.mockResolvedValue(false);
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-pi"));
+    expect(row.getByText("1 Sicherheitsupdate")).toBeInTheDocument();
+    fireEvent.click(row.getByRole("button", { name: "Sicherheitsupdates einspielen" }));
+    await waitFor(() => expect(confirmDialog).toHaveBeenCalled());
+    expect(String(confirmDialog.mock.calls[0][0])).toContain("1 Sicherheitsupdate auf „pi“ jetzt einspielen? Ein weiteres ist nicht einspielbar (1 gesperrt) und bleibt stehen.");
+  });
+
+  it("ein verzögertes Sicherheitsupdate nennt die Rückfrage als verzögert, nicht als zurückgehalten", async () => {
+    stub(overview({ id: "pi", st: state([{ name: "openssl", security: true }, { name: "libc6", security: true, phased: true }]) }));
+    confirmDialog.mockResolvedValue(false);
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-pi"));
+    fireEvent.click(row.getByRole("button", { name: "Sicherheitsupdates einspielen" }));
+    await waitFor(() => expect(confirmDialog).toHaveBeenCalled());
+    expect(String(confirmDialog.mock.calls[0][0])).toContain("Ein weiteres ist nicht einspielbar (1 durch Phasing verzögert) und bleibt stehen.");
+    expect(screen.getAllByText("davon 1 durch Phasing verzögert")).toHaveLength(2);
+  });
+
+  it("nur Phasing: die Kopfzahl sagt „verzögert“, nicht „zurückgehalten“", async () => {
+    stub(overview({ id: "ubu", st: state([{ name: "python3-apt", phased: true }, { name: "tzdata", phased: true }]) }));
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-ubu"));
+    expect(row.getByText("2 verzögert")).toBeInTheDocument();
+    expect(screen.getByText("davon 2 durch Phasing verzögert")).toBeInTheDocument();
+    expect(screen.queryByText(/zurückgehalten/)).not.toBeInTheDocument();
+  });
+
+  it("mehrere Gründe und nichts einspielbar: „nicht einspielbar“, die Gründe einzeln", async () => {
+    stub(overview({ id: "pi", st: state([{ name: "tzdata", phased: true }, camera[0], { name: "openssh-server", held: true }]) }));
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-pi"));
+    expect(row.getByText("3 nicht einspielbar").className).not.toContain("amber");
+    expect(row.getByRole("button", { name: "1 durch Phasing verzögert" })).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "1 zurückgehalten, braucht full-upgrade" })).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "1 gesperrt" })).toBeInTheDocument();
+    expect(screen.getByText("davon 1 durch Phasing verzögert, 1 zurückgehalten, 1 gesperrt")).toBeInTheDocument();
+  });
+
+  it("auf Proxmox mit dist-upgrade kommen zurückgehaltene mit „Alle einspielen“ mit", async () => {
+    stub(overview({ id: "pve", st: state(camera), full_upgrade: true }));
+    confirmDialog.mockResolvedValue(false);
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-pve"));
+    expect(row.getByText("3 Updates")).toBeInTheDocument();
+    expect(row.queryByText(/full-upgrade/)).not.toBeInTheDocument();
+    fireEvent.click(row.getByRole("button", { name: "Alle einspielen" }));
+    await waitFor(() => expect(confirmDialog).toHaveBeenCalled());
+    expect(String(confirmDialog.mock.calls[0][0])).not.toContain("Nicht dabei");
+  });
+
+  it("auf Proxmox mit dist-upgrade bleibt ein zurückgehaltenes Sicherheitsupdate ein Sicherheitsupdate", async () => {
+    stub(overview({ id: "pve", st: state([{ name: "openssl", security: true, kept_back: true }, { name: "curl" }]), full_upgrade: true }));
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-pve"));
+    expect(row.getByText("1 Sicherheitsupdate")).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "Alle einspielen" })).toBeInTheDocument();
+    // „install --only-upgrade“ nimmt es nicht mit, nur dist-upgrade über „Alle einspielen“.
+    expect(row.queryByRole("button", { name: "Sicherheitsupdates einspielen" })).not.toBeInTheDocument();
+  });
+
+  it("ein Stand aus 0.12.0 (Phasing bekannt, Einteilung noch nicht) zählt die verzögerten nicht mit", async () => {
+    const { installable_count: _i, installable_security_count: _s, kept_back_count: _k, held_count: _h, ...older } =
+      state([{ name: "base-files" }, { name: "tzdata" }, { name: "python3-apt", phased: true }]);
+    stub({ ...DATA, hosts: [{ ...DATA.hosts[0], host_id: "pi", host_name: "pi", status: older, last_run: null }] });
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-pi"));
+    expect(row.getByText("2 Updates")).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "dazu 1 durch Phasing verzögert" })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["phased", { phased: true }, false],
+    ["held", { held: true }, false],
+    ["kept_back", { kept_back: true }, false],
+    ["mehrere Merkmale", { phased: true, held: true, kept_back: true }, true],
+  ])("alter Stand ohne installable_security_count: %s", async (_reason, flags, runnable) => {
+    const { installable_count: _i, installable_security_count: _s, ...older } = state([
+      { name: "libssl3", security: true, ...flags },
+      { name: "tzdata", phased: true },
+      ...(runnable ? [{ name: "openssl", security: true }] : []),
+    ]);
+    stub({ ...DATA, hosts: [{ ...DATA.hosts[0], host_id: "pi", host_name: "pi", status: older, last_run: null }] });
+    confirmDialog.mockResolvedValue(false);
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-pi"));
+    const button = row.queryByRole("button", { name: "Sicherheitsupdates einspielen" });
+    if (runnable) {
+      expect(button).toBeInTheDocument();
+      fireEvent.click(button!);
+      await waitFor(() => expect(confirmDialog).toHaveBeenCalled());
+      expect(String(confirmDialog.mock.calls[0][0])).toContain("1 Sicherheitsupdate auf");
+    } else {
+      expect(button).not.toBeInTheDocument();
+    }
+  });
+
+  it("ist unbekannt, was apt zurückhält, gibt es keinen gezielten Sicherheitslauf, das Sicherheitsupdate bleibt sichtbar", async () => {
+    const st = state([{ name: "openssl", security: true }, { name: "curl" }], { phasing: "unavailable", phased_count: null, kept_back_count: null });
+    const data = overview({ id: "pi", st });
+    // So liefert es der Server: kein gezielter Lauf, also nicht einspielbar, Grund „nicht prüfbar“.
+    stub({ ...data, summary: { ...data.summary, installable_security: 0, not_installable_security: { phased: 0, kept_back: 0, held: 0, unknown: 1 } } });
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-pi"));
+    expect(row.getByText("1 Sicherheitsupdate")).toBeInTheDocument();
+    expect(row.queryByRole("button", { name: "Sicherheitsupdates einspielen" })).not.toBeInTheDocument();
+    expect(row.getByRole("button", { name: "Alle einspielen" })).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "Phasing-Prüfung nicht verfügbar" })).toHaveAttribute("title", expect.stringContaining("„Sicherheitsupdates einspielen“ gibt es so lange nicht"));
+    expect(screen.queryByRole("button", { name: "Alle Sicherheitsupdates vorschlagen (1)" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Alle Updates vorschlagen (1)" })).toBeInTheDocument();
+    expect(screen.getByText("davon 1 nicht prüfbar")).toBeInTheDocument();
+  });
+
+  it("liefert der Server die Gründe zur Kopfzahl nicht mit, steht dort nur die Summe", async () => {
+    const data = overview({ id: "pi", st: state(camera) });
+    const { not_installable: _n, not_installable_security: _ns, ...summary } = data.summary;
+    stub({ ...data, summary });
+    render(<UpdatesTab canManage />);
+    await screen.findByTestId("updates-pi");
+    expect(screen.getByText("davon 3 nicht einspielbar")).toBeInTheDocument();
+  });
+
+  it("der Sammel-Vorschlag zählt Server mit nur Zurückgehaltenem nicht mit", async () => {
+    stub(overview({ id: "pi", st: state(camera) }, { id: "web", st: state([{ name: "curl" }]) }));
+    render(<UpdatesTab canManage />);
+    expect(await screen.findByRole("button", { name: "Alle Updates vorschlagen (1)" })).toBeInTheDocument();
+  });
+
+  it("ein Fehler bei der Prüfung lässt den alten Stand mit seinen Gründen stehen", async () => {
+    stub(overview({ id: "pi", st: state(camera, { error: "Zeitüberschreitung – der Vorgang hat zu lange gebraucht." }) }));
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-pi"));
+    expect(row.getByText("3 zurückgehalten")).toBeInTheDocument();
+    expect(row.getByText(/Zeitüberschreitung/)).toBeInTheDocument();
+  });
+
+  it("scheitern die Probeläufe, zählt alles außer dem Gesperrten als einspielbar und sagt, dass Phasing unbekannt ist", async () => {
+    const st = state([{ name: "base-files" }, { name: "openssh-server", held: true }], {
+      phasing: "unavailable", phased_count: null, kept_back_count: null,
+    });
+    stub(overview({ id: "pi", st }));
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-pi"));
+    expect(row.getByText("1 Update")).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "dazu 1 gesperrt" })).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "Phasing-Prüfung nicht verfügbar" })).toBeInTheDocument();
   });
 });

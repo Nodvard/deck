@@ -1308,7 +1308,8 @@ export function respond(path: string, method: string, body?: unknown): unknown {
     const t = Date.now() / 1000;
     const st = (count: number, sec: number, extra: object = {}) => ({
       manager: "apt", count, security_count: sec, reboot_required: false, reboot_reasons: [], kernel: "6.8.12-4-pve", latest_kernel: null,
-      uptime_s: 1_900_000, unattended: false, refresh_error: null, error: null, checked_at: t - 900,
+      uptime_s: 1_900_000, unattended: false, refresh_error: null, error: null, checked_at: t - 900, phased_count: 0, phasing: "checked",
+      kept_back_count: 0, held_count: 0, installable_count: count, installable_security_count: sec,
       packages: [
         ...Array.from({ length: sec }, (_, i) => ({ name: ["openssl", "libssl3", "openssh-server", "libc6"][i % 4], new_version: "3.0.14-1~deb12u2", current_version: "3.0.13-1~deb12u1", repo: "stable-security", security: true })),
         ...Array.from({ length: count - sec }, (_, i) => ({ name: ["base-files", "tzdata", "curl", "pve-manager", "proxmox-kernel-6.8"][i % 5], new_version: "12.4+deb12u7", current_version: "12.4+deb12u6", repo: "stable", security: false })),
@@ -1322,10 +1323,17 @@ export function respond(path: string, method: string, body?: unknown): unknown {
           status: st(5, 2, { reboot_required: true, reboot_reasons: ["neuer Kernel 6.8.12-10-pve (läuft: 6.8.12-4-pve)"], latest_kernel: "6.8.12-10-pve" }) },
         { host_id: "h-pi", host_name: "Heimserver", host_status: "up", checking: false, busy: null, last_run: null, status: st(3, 0, { kernel: "6.6.51+rpt-rpi-2712" }) },
         { host_id: "h-docker", host_name: "docker", host_status: "up", checking: false, busy: null, last_run: run, status: st(0, 0, { unattended: true, kernel: "6.1.0-25-amd64" }) },
+        // Raspberry Pi OS: alle drei offenen Updates kommen nur mit full-upgrade.
+        { host_id: "h-cam", host_name: "Kamera-Pi", host_status: "up", checking: false, busy: null, last_run: null,
+          status: st(0, 0, {
+            kernel: "6.12.47+rpt-rpi-v8", count: 3, kept_back_count: 3, installable_count: 0,
+            packages: ["libcamera-ipa", "librpicam-app1", "rpicam-apps-core"].map((name) => ({ name, new_version: "1.9.1-1", current_version: "1.9.0-1", repo: "stable", security: false, kept_back: true })),
+          }) },
         { host_id: "h-pve1", host_name: "Proxmox-Knoten pve1", host_status: "down", checking: false, busy: null, last_run: null,
           status: { ...st(0, 0), manager: null, error: "Zeitüberschreitung – der Vorgang hat zu lange gebraucht." } },
       ],
-      summary: { hosts: 4, checked: 3, up_to_date: 1, packages: 8, security: 2, reboot: 1, errors: 1 },
+      summary: { hosts: 5, checked: 4, up_to_date: 1, packages: 11, security: 2, installable: 8, installable_security: 2, reboot: 1, errors: 1,
+        not_installable: { phased: 0, kept_back: 3, held: 0 }, not_installable_security: { phased: 0, kept_back: 0, held: 0 } },
       runs: [run, { ...run, id: "r2", host_id: "h-pi", host_name: "Heimserver", mode: "all", mode_label: "Alle Updates", trigger: "manual", status: "error", upgraded: 0, summary: "E: dpkg was interrupted, you must manually run 'dpkg --configure -a'", started_at: t - 200000 }],
       config: { check_enabled: true, check_cron: "0 6 * * *", auto_enabled: true, auto_mode: "security", auto_cron: "30 3 * * *", auto_reboot: false, auto_tag: null },
     };

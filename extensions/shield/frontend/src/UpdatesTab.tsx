@@ -21,6 +21,10 @@ interface Pkg {
   security: boolean;
   /** apt hält das Update wegen Phasing noch zurück (fehlt bei älteren Ständen). */
   phased?: boolean;
+  /** Kommt nur mit „apt full-upgrade“, weil andere Pakete ersetzt oder entfernt werden müssten (fehlt bei älteren Ständen). */
+  kept_back?: boolean;
+  /** Auf dem Server mit apt-mark hold gesperrt (fehlt bei älteren Ständen). */
+  held?: boolean;
 }
 
 interface UpdateState {
@@ -28,8 +32,17 @@ interface UpdateState {
   packages: Pkg[];
   count: number;
   security_count: number;
-  /** Davon hält apt wegen Phasing noch zurück (fehlt bei älteren Ständen). */
-  phased_count?: number;
+  /** Davon hält apt wegen Phasing noch zurück; `null`, wenn die Prüfung nicht gelang (fehlt bei älteren Ständen). */
+  phased_count?: number | null;
+  /** `checked`: Phasing geprüft, `unavailable`: Prüfung gescheitert, `none`: kein apt (fehlt bei älteren Ständen). */
+  phasing?: "checked" | "unavailable" | "none";
+  /** Zurückgehalten, nur mit full-upgrade; `null`, wenn die Probeläufe nicht gelangen (fehlt bei älteren Ständen). */
+  kept_back_count?: number | null;
+  /** Mit apt-mark hold gesperrt (fehlt bei älteren Ständen). */
+  held_count?: number;
+  /** Was „Alle einspielen“ einspielen würde, ohne Verzögerte, Zurückgehaltene und Gesperrte (fehlt bei älteren Ständen). */
+  installable_count?: number;
+  installable_security_count?: number;
   reboot_required: boolean;
   reboot_reasons: string[];
   kernel: string | null;
@@ -76,12 +89,19 @@ interface HostUpdates {
   busy: string | null;
   /** Der letzte Prüfversuch liegt vor dem zuletzt fälligen Zeitpunkt des Zeitplans – die geplante Prüfung ist für diesen Server ausgeblieben. */
   check_overdue?: boolean;
+  /** „Alle einspielen“ nimmt hier vermutlich dist-upgrade (Proxmox, Einstellung an): Zurückgehaltene kommen dann mit. */
+  full_upgrade?: boolean;
   last_run: UpdateRun | null;
 }
 
 export interface UpdatesOverview {
   hosts: HostUpdates[];
-  summary: { hosts: number; checked: number; up_to_date: number; packages: number; security: number; reboot: number; errors: number };
+  summary: {
+    hosts: number; checked: number; up_to_date: number; packages: number; security: number; reboot: number; errors: number;
+    /** Davon mit den Knöpfen einspielbar und was nicht, je Grund (fehlt bei älteren Servern). */
+    installable?: number; installable_security?: number;
+    not_installable?: Reasons; not_installable_security?: Reasons;
+  };
   runs: UpdateRun[];
   config: {
     check_enabled: boolean; check_cron: string; auto_enabled: boolean; auto_mode: string; auto_cron: string;
@@ -191,23 +211,108 @@ export const PHASING_HINT =
   "Nodvard Deck prüft weiter, und sobald der Server dran ist, lässt sich das Update wie jedes andere einspielen. " +
   "Sicherheitsupdates verteilt Ubuntu in der Regel sofort an alle.";
 
-/** Neben der Zahl der Updates; zeigt das Abzeichen die Sicherheitsupdates, sagt der Text, wovon er spricht. */
-export function phasingLabel(st: UpdateState): string {
-  const n = st.phased_count ?? 0;
-  return st.security_count > 0 ? `${n} von ${count(st.count, "Update", "Updates")} durch Phasing verzögert` : `davon ${n} durch Phasing verzögert`;
+export const PHASING_UNCHECKED_HINT =
+  "Ob apt hier Updates zurückhält, weil Ubuntu sie schrittweise verteilt (Phasing), zeigt erst die nächste Prüfung. " +
+  "„Prüfen“ holt sie gleich nach. Auf Debian und Proxmox gibt es kein Phasing, dort verschwindet der Hinweis danach.";
+
+export const PHASING_UNAVAILABLE_HINT =
+  "apt konnte auf diesem Server nicht durchrechnen, welche Updates es einspielen würde, oft wegen fehlender oder kaputter " +
+  "Pakete. Deshalb ist unbekannt, ob Ubuntu Updates wegen Phasing zurückhält und ob apt welche zurückhält, die nur mit " +
+  "„apt full-upgrade“ kommen; „Alle einspielen“ kann daran scheitern, „Sicherheitsupdates einspielen“ gibt es so lange " +
+  "nicht. Den genauen Grund zeigt auf dem Server der Befehl „apt-get -s upgrade“; die nächste Prüfung versucht es erneut.";
+
+/** Ein apt-Server mit Updates, bei dem offen ist, ob Phasing etwas zurückhält: Text und Erklärung, sonst `null`. */
+export function phasingUnknown(st: UpdateState | null | undefined): { label: string; hint: string } | null {
+  if (!st || st.manager !== "apt" || !st.count || st.phased_count) return null;
+  if (st.phasing === "unavailable") return { label: "Phasing-Prüfung nicht verfügbar", hint: PHASING_UNAVAILABLE_HINT };
+  return st.phasing ? null : { label: "Phasing noch nicht geprüft", hint: PHASING_UNCHECKED_HINT };
 }
 
-export function phasingNote(st: UpdateState | null | undefined): string {
-  const n = st?.phased_count ?? 0;
-  if (!n) return "";
-  if (n >= (st?.count ?? 0)) {
-    return n === 1
-      ? " Ubuntu hält dieses Update wegen Phasing noch zurück; einspielen lässt es sich erst, wenn der Server an der Reihe ist."
-      : " Ubuntu hält diese Updates wegen Phasing noch zurück; einspielen lassen sie sich erst, wenn der Server an der Reihe ist.";
+export const KEPT_BACK_HINT =
+  "apt hält diese Updates zurück, weil dafür andere Pakete ersetzt oder entfernt werden müssten. „Alle einspielen“ entfernt " +
+  "nie Pakete und lässt sie deshalb stehen. Einspielen lassen sie sich auf dem Server mit „sudo apt full-upgrade“. Lies " +
+  "vorher die Liste, die apt zeigt: Was dort unter „REMOVED“ (deutsch „ENTFERNT“) steht, wird entfernt.";
+
+export const HELD_HINT =
+  "Diese Pakete sind auf dem Server gesperrt (apt-mark hold), apt spielt ihre Updates nie von selbst ein. War das Absicht, " +
+  "musst du nichts tun. Sonst hebt „sudo apt-mark unhold <Paketname>“ die Sperre auf.";
+
+/** Was „Alle einspielen“ hier einspielen würde; mit dist-upgrade (Proxmox) kommen die zurückgehaltenen mit. Ältere Stände
+ *  ohne Einteilung zählen alle außer den verzögerten. */
+export function installable(st: UpdateState, fullUpgrade = false): number {
+  return (st.installable_count ?? st.count - (st.phased_count ?? 0)) + (fullUpgrade ? st.kept_back_count ?? 0 : 0);
+}
+
+export function installableSecurity(st: UpdateState): number {
+  return st.installable_security_count ?? Math.max(0, st.security_count -
+    st.packages.filter((p) => p.security && (p.phased || p.held || p.kept_back)).length);
+}
+
+/** Was „Sicherheitsupdates einspielen“ hier einspielen würde: nichts, solange unbekannt ist, was apt zurückhält. */
+export function securityRunnable(st: UpdateState): number {
+  return st.phasing === "unavailable" ? 0 : installableSecurity(st);
+}
+
+export interface Reasons { phased: number; kept_back: number; held: number; unknown?: number }
+
+/** „2 durch Phasing verzögert, 3 zurückgehalten, 1 gesperrt“; leer, wenn nichts ausgelassen wird. */
+export function reasonsText(r: Reasons): string {
+  return [
+    r.phased ? `${r.phased} durch Phasing verzögert` : "",
+    r.kept_back ? `${r.kept_back} zurückgehalten` : "",
+    r.held ? `${r.held} gesperrt` : "",
+    r.unknown ? `${r.unknown} nicht prüfbar` : "",
+  ].filter(Boolean).join(", ");
+}
+
+/** Die Kopfzahl „davon …“: je Grund, bei einem älteren Server nur die Summe. */
+function leftOutHint(total: number, installable: number | undefined, reasons: Reasons | undefined): string | undefined {
+  const left = total - (installable ?? total);
+  if (left <= 0) return undefined;
+  return `davon ${(reasons && reasonsText(reasons)) || `${left} nicht einspielbar`}`;
+}
+
+/** Updates, die „Alle einspielen“ hier nicht einspielt, je Grund. */
+function heldBack(st: UpdateState, fullUpgrade = false): { phased: number; kept: number; held: number } {
+  return { phased: st.phased_count ?? 0, kept: fullUpgrade ? 0 : st.kept_back_count ?? 0, held: st.held_count ?? 0 };
+}
+
+/** Kurze Texte neben dem Abzeichen mit Erklärung auf Klick: was nicht mitkommt und warum, oder was offen ist. */
+export function updateNotes(st: UpdateState | null | undefined, fullUpgrade = false): { key: string; label: string; hint: string }[] {
+  if (!st) return [];
+  const { phased, kept, held } = heldBack(st, fullUpgrade);
+  // Ist nichts einspielbar und gibt es nur einen Grund, nennt das Abzeichen schon die Zahl: dann nur noch das Warum.
+  const alone = installable(st, fullUpgrade) === 0 && [phased, kept, held].filter(Boolean).length === 1;
+  const more = installable(st, fullUpgrade) > 0 ? "dazu " : "";
+  const security = (flag: "kept_back" | "held") => st.packages.filter((p) => p[flag] && p.security).length;
+  const ofWhich = (n: number) => (n ? `davon ${n} Sicherheit` : "");
+  const notes = [];
+  if (phased) notes.push({ key: "phased", label: alone ? "durch Phasing verzögert" : `${more}${phased} durch Phasing verzögert`, hint: PHASING_HINT });
+  if (kept) {
+    const label = alone ? [ofWhich(security("kept_back")), "braucht full-upgrade"] : [`${more}${kept} zurückgehalten`, ofWhich(security("kept_back")), "braucht full-upgrade"];
+    notes.push({ key: "kept", label: label.filter(Boolean).join(", "), hint: KEPT_BACK_HINT });
   }
-  return n === 1
-    ? " Ein Update davon hält Ubuntu wegen Phasing noch zurück; es lässt sich einspielen, sobald der Server an der Reihe ist."
-    : ` ${n} davon hält Ubuntu wegen Phasing noch zurück; sie lassen sich einspielen, sobald der Server an der Reihe ist.`;
+  if (held) {
+    const label = alone ? ["mit apt-mark hold gesperrt", ofWhich(security("held"))] : [`${more}${held} gesperrt`, ofWhich(security("held"))];
+    notes.push({ key: "held", label: label.filter(Boolean).join(", "), hint: HELD_HINT });
+  }
+  const unknown = phasingUnknown(st);
+  if (unknown) notes.push({ key: "unknown", ...unknown });
+  return notes;
+}
+
+/** Für die Rückfrage vor „Alle einspielen“: was dabei stehen bleibt. */
+export function notIncludedNote(st: UpdateState | null | undefined, fullUpgrade = false): string {
+  if (!st) return "";
+  const { phased, kept, held } = heldBack(st, fullUpgrade);
+  const parts = [
+    phased === 1 ? "1 Paket, das Ubuntu wegen Phasing noch zurückhält" : phased ? `${phased} Pakete, die Ubuntu wegen Phasing noch zurückhält` : "",
+    kept === 1 ? "1 zurückgehaltenes Paket, das „apt full-upgrade“ auf dem Server braucht"
+      : kept ? `${kept} zurückgehaltene Pakete, die „apt full-upgrade“ auf dem Server brauchen` : "",
+    held === 1 ? "1 gesperrtes Paket" : held ? `${held} gesperrte Pakete` : "",
+  ].filter(Boolean);
+  if (!parts.length) return "";
+  return ` Nicht dabei: ${parts.join("; ")}.`;
 }
 
 const RUN_STATUS: Record<string, { label: string; tone: Tone }> = {
@@ -234,8 +339,19 @@ function hostState(h: HostUpdates): { label: string; tone: Tone } {
   if (!st) return { label: "noch nicht geprüft", tone: "neutral" };
   if (st.unsupported) return { label: "nicht unterstützt", tone: "neutral" };
   if (st.error && !st.manager) return { label: "Fehler", tone: "warn" };
-  if (st.security_count > 0) return { label: `${st.security_count} Sicherheitsupdate${st.security_count === 1 ? "" : "s"}`, tone: "bad" };
-  if (st.count > 0) return { label: `${st.count} Update${st.count === 1 ? "" : "s"}`, tone: "warn" };
+  // Mit dist-upgrade kommen zurückgehaltene Sicherheitsupdates über „Alle einspielen“ mit; sie bleiben Sicherheitsupdates.
+  const keptSecurity = h.full_upgrade ? st.packages.filter((p) => p.kept_back && p.security).length : 0;
+  const sec = installableSecurity(st) + keptSecurity;
+  if (sec > 0) return { label: `${sec} Sicherheitsupdate${sec === 1 ? "" : "s"}`, tone: "bad" };
+  const n = installable(st, h.full_upgrade);
+  if (n > 0) return { label: `${n} Update${n === 1 ? "" : "s"}`, tone: "warn" };
+  if (st.count > 0) {
+    // Offen, aber „Alle einspielen“ brächte nichts: nicht gelb wie einspielbare Updates.
+    const { phased, held } = heldBack(st, h.full_upgrade);
+    const only = phased === st.count ? "verzögert" : held === st.count ? "gesperrt" : phased + held ? "nicht einspielbar" : "zurückgehalten";
+    // Ein zurückgehaltenes Sicherheitsupdate bleibt ein Risiko.
+    return { label: `${st.count} ${only}`, tone: st.security_count > 0 ? "warn" : "neutral" };
+  }
   return { label: "aktuell", tone: "good" };
 }
 
@@ -247,7 +363,7 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
   const page = usePageActions();
   const { keys: { busy: acting }, signal: pageSignal } = page;
   const [open, setOpen] = useState<string | null>(null);
-  const [phasingOpen, setPhasingOpen] = useState<string | null>(null);
+  const [noteOpen, setNoteOpen] = useState<string | null>(null);
   const [openRun, setOpenRun] = useState<string | null>(null);
   const [pending, setPending] = useState<Record<string, Mode>>({});
   const [proposing, setProposing] = useState<BulkMode | null>(null);
@@ -322,7 +438,7 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
   function proposable(mode: BulkMode): HostUpdates[] {
     return (data?.hosts ?? []).filter((h) => {
       const st = h.status;
-      return !!st && !st.unsupported && !!st.manager && !h.busy && (mode === "security" ? st.security_count : st.count) > 0;
+      return !!st && !st.unsupported && !!st.manager && !h.busy && (mode === "security" ? securityRunnable(st) : installable(st, h.full_upgrade)) > 0;
     });
   }
 
@@ -368,11 +484,21 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
     // „Alle Updates“ läuft auf Proxmox als dist-upgrade, wenn die Einstellung an ist; das kann Pakete entfernen und gilt als
     // „hoch“. Ob der Server Proxmox ist, weiß erst der Befehl selbst.
     const distUpgrade = mode === "all" && st?.manager === "apt" && !!data?.config.proxmox_dist_upgrade;
+    const sec = st ? installableSecurity(st) : 0;
+    const secLeft = (st?.security_count ?? 0) - sec;
+    const secPkgs = st?.packages.filter((p) => p.security) ?? [];
+    const secReasons = reasonsText({
+      phased: secPkgs.filter((p) => p.phased).length, kept_back: secPkgs.filter((p) => p.kept_back).length,
+      held: secPkgs.filter((p) => p.held).length,
+    });
+    const n = st ? installable(st, h.full_upgrade) : 0;
     const questions: Record<Mode, string> = {
-      security: `${count(st?.security_count ?? 0, "Sicherheitsupdate", "Sicherheitsupdates")} auf „${h.host_name}“ jetzt einspielen?${deckRestartHint(st, "security")}`,
-      all: `${(st?.count ?? 0) === 1 ? "Das Update" : `Alle ${st?.count ?? 0} Updates`} auf „${h.host_name}“ jetzt einspielen? Das kann einige Minuten dauern.${
+      security: `${count(sec, "Sicherheitsupdate", "Sicherheitsupdates")} auf „${h.host_name}“ jetzt einspielen?${
+        secLeft > 0 ? ` ${secLeft === 1 ? "Ein weiteres ist" : `${secLeft} weitere sind`} nicht einspielbar${secReasons ? ` (${secReasons})` : ""} und ${secLeft === 1 ? "bleibt" : "bleiben"} stehen.` : ""
+      }${deckRestartHint(st, "security")}`,
+      all: `${n === 1 ? "Das Update" : `Alle ${n} Updates`} auf „${h.host_name}“ jetzt einspielen? Das kann einige Minuten dauern.${
         distUpgrade ? " Ist es ein Proxmox-Server, läuft dabei „apt-get dist-upgrade“ – das kann Pakete entfernen oder ersetzen." : ""
-      }${phasingNote(st)}${deckRestartHint(st, "all")}`,
+      }${notIncludedNote(st, h.full_upgrade)}${deckRestartHint(st, "all")}`,
       cleanup: `Auf „${h.host_name}“ nicht mehr benötigte Pakete und alte Kernel entfernen und den Paket-Cache leeren?`,
       reboot: `„${h.host_name}“ jetzt neu starten? Der Server ist dann ein paar Minuten nicht erreichbar – alle Dienste darauf auch.`,
     };
@@ -456,8 +582,10 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
             sm.checked + unsupported < sm.hosts ? `${sm.hosts - sm.checked - unsupported} noch nicht geprüft` : "",
             unsupported ? `${unsupported} nicht unterstützt` : "",
           ].filter(Boolean).join(" · ") || undefined} />
-        <Stat label="Offene Updates" value={sm.packages} tone={sm.packages ? "warn" : "good"} />
-        <Stat label="Sicherheitsupdates" value={sm.security} tone={sm.security ? "bad" : "good"} />
+        <Stat label="Offene Updates" value={sm.packages} tone={(sm.installable ?? sm.packages) ? "warn" : sm.packages ? undefined : "good"}
+          hint={leftOutHint(sm.packages, sm.installable, sm.not_installable)} />
+        <Stat label="Sicherheitsupdates" value={sm.security} tone={sm.security ? "bad" : "good"}
+          hint={leftOutHint(sm.security, sm.installable_security, sm.not_installable_security)} />
         <Stat label="Neustart nötig" value={sm.reboot} tone={sm.reboot ? "warn" : undefined} hint={sm.errors ? `${count(sm.errors, "Prüfung", "Prüfungen")} fehlgeschlagen` : undefined} />
       </div>
 
@@ -504,6 +632,8 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
           const rebootSince = st?.reboot_pending_since;
           const needsReboot = !!st?.reboot_required && !rebootSince;
           const isOpen = open === h.host_id;
+          const notes = updateNotes(st, h.full_upgrade);
+          const openNote = notes.find((n) => `${h.host_id}:${n.key}` === noteOpen);
           return (
             <div key={h.host_id} className="panel px-4 py-3" data-testid={`updates-${h.host_id}`}>
               <div className="flex flex-wrap items-center gap-3">
@@ -511,13 +641,16 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
                   <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
                     {h.host_name}
                     <Badge tone={state.tone}>{state.label}</Badge>
-                    {!!st?.phased_count && !h.busy && !h.checking && (
-                      <button type="button" title={PHASING_HINT} aria-expanded={phasingOpen === h.host_id}
-                        onClick={() => setPhasingOpen(phasingOpen === h.host_id ? null : h.host_id)}
-                        className="text-xs font-normal text-white/55 underline decoration-dotted underline-offset-2 hover:text-white">
-                        {phasingLabel(st)}
-                      </button>
-                    )}
+                    {!h.busy && !h.checking && notes.map((n) => {
+                      const id = `${h.host_id}:${n.key}`;
+                      return (
+                        <button key={n.key} type="button" title={n.hint} aria-expanded={noteOpen === id}
+                          onClick={() => setNoteOpen(noteOpen === id ? null : id)}
+                          className="text-xs font-normal text-white/55 underline decoration-dotted underline-offset-2 hover:text-white">
+                          {n.label}
+                        </button>
+                      );
+                    })}
                     {needsReboot && !h.busy && <Badge tone="warn">Neustart nötig</Badge>}
                     {st?.unattended === true && <Badge tone="good">Auto-Sicherheitsupdates an</Badge>}
                   </p>
@@ -533,7 +666,7 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
                   )}
                   {st?.error && <p className={`mt-1 text-xs ${st.unsupported ? "text-white/50" : "text-amber-300"}`}>{st.error}</p>}
                   {st?.refresh_error && <p className="mt-1 text-xs text-amber-300/80">{st.refresh_error}</p>}
-                  {phasingOpen === h.host_id && !!st?.phased_count && <p className="mt-1 text-xs text-white/50">{PHASING_HINT}</p>}
+                  {openNote && <p className="mt-1 text-xs text-white/50">{openNote.hint}</p>}
                   {needsReboot && st.reboot_reasons.length > 0 && (
                     <p className="mt-1 text-xs text-white/50">Grund: {st.reboot_reasons.slice(0, 3).join(", ")}</p>
                   )}
@@ -549,8 +682,8 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
                 </div>
                 {canManage && (
                   <div className="flex flex-wrap gap-1">
-                    {!!st?.security_count && <Button small variant="primary" disabled={!!running} onClick={() => void apply(h, "security")}>Sicherheitsupdates einspielen</Button>}
-                    {!!st?.count && <Button small variant={st.security_count ? "secondary" : "primary"} disabled={!!running} onClick={() => void apply(h, "all")}>Alle einspielen</Button>}
+                    {!!st && securityRunnable(st) > 0 && <Button small variant="primary" disabled={!!running} onClick={() => void apply(h, "security")}>Sicherheitsupdates einspielen</Button>}
+                    {!!st && installable(st, h.full_upgrade) > 0 && <Button small variant={installableSecurity(st) ? "secondary" : "primary"} disabled={!!running} onClick={() => void apply(h, "all")}>Alle einspielen</Button>}
                     {needsReboot && <Button small variant="danger" disabled={!!running} onClick={() => void apply(h, "reboot")}>Neu starten</Button>}
                     <Button small variant="ghost" disabled={h.checking || !!running} onClick={() => void checkAll([h.host_id])} ariaLabel={`${h.host_name} prüfen`}>
                       <Icon name="refresh" size={12} /> Prüfen
@@ -579,6 +712,8 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
                           <td className="px-3 py-1.5 text-right">
                             {p.security && <Badge tone="bad">Sicherheit</Badge>}
                             {p.phased && <span title={PHASING_HINT}><Badge>verzögert</Badge></span>}
+                            {p.kept_back && !h.full_upgrade && <span title={KEPT_BACK_HINT}><Badge>zurückgehalten</Badge></span>}
+                            {p.held && <span title={HELD_HINT}><Badge>gesperrt</Badge></span>}
                           </td>
                         </tr>
                       ))}

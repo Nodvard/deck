@@ -12,6 +12,7 @@ import re
 import shlex
 import socket
 import time
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
@@ -179,6 +180,14 @@ def no_auto_reboot(host: Any, settings: dict[str, Any]) -> bool:
     Updates bekommt er trotzdem, nur der Neustart fällt weg."""
     names = _reboot_skip_names(settings)
     return bool(names & {host.id.lower(), host.name.lower(), (host.display_name or "").lower()})
+
+
+def _sum_reasons(counts: Iterable[dict[str, int]]) -> dict[str, int]:
+    total = {"phased": 0, "kept_back": 0, "held": 0, "unknown": 0}
+    for c in counts:
+        for key in total:
+            total[key] += c.get(key, 0)
+    return total
 
 
 def run_out(r: UpdateRunRecord) -> dict[str, Any]:
@@ -556,10 +565,12 @@ class UpdateCenter:
             rows.append({
                 "host_id": h.id, "host_name": h.display_name or h.name, "host_status": h.status.value,
                 "status": st, "checking": h.id in self._checking, "busy": self._busy.get(h.id),
+                "full_upgrade": up.full_upgrade_here(settings, st),
                 "check_overdue": hint and h.id not in self._checking and check_overdue(st, due),
                 "last_run": next((r for r in runs if r["host_id"] == h.id), None),
             })
-        checked = [r["status"] for r in rows if r["status"] and not r["status"].get("error")]
+        checked_rows = [r for r in rows if r["status"] and not r["status"].get("error")]
+        checked = [r["status"] for r in checked_rows]
         return {
             "hosts": rows,
             "summary": {
@@ -568,6 +579,12 @@ class UpdateCenter:
                 "up_to_date": sum(1 for s in checked if s.get("count") == 0),
                 "packages": sum(int(s.get("count") or 0) for s in checked),
                 "security": sum(int(s.get("security_count") or 0) for s in checked),
+                # Was sich davon mit den Knöpfen einspielen lässt, und was nicht, je Grund.
+                "installable": sum(up.runnable(r["status"], "all", full_upgrade=r["full_upgrade"]) for r in checked_rows),
+                "installable_security": sum(up.runnable(r["status"], "security") for r in checked_rows),
+                "not_installable": _sum_reasons(up.not_installable(r["status"], "all", full_upgrade=r["full_upgrade"])
+                                                for r in checked_rows),
+                "not_installable_security": _sum_reasons(up.not_installable(r["status"], "security") for r in checked_rows),
                 # Server mit gerade ausgelöstem Neustart zählen nicht mehr mit.
                 "reboot": sum(1 for s in checked if s.get("reboot_required") and not s.get("reboot_pending_since")),
                 "errors": sum(1 for r in rows if r["status"] and r["status"].get("error") and not r["status"].get("unsupported")),
@@ -595,12 +612,32 @@ class UpdateCenter:
 
         Beides landet im Payload der Aktion, der Befehl wird daraus gebaut (`defender_api.ActionCommands`)."""
         st = await load_baseline(self._ctx, host.id, "updates")
-        if not st or not st.get("manager"):
+        # Ein Stand ohne Einteilung (ältere Version) kennt keine zurückgehaltenen Pakete; die dürfen nie in den Sicherheitslauf.
+        if not st or not st.get("manager") or (mode == "security" and "installable_count" not in st):
             st = await self.check_host(host, refresh=True)
         if not st.get("manager"):
             raise ValueError(st.get("error") or "Update-Stand unbekannt.")
-        security = [p["name"] for p in st.get("packages", []) if p.get("security")] if mode == "security" else []
+        if mode == "security" and not up.security_known(st):
+            raise ValueError(up.SECURITY_UNKNOWN_MESSAGE)
+        security = up.security_names(st.get("packages", [])) if mode == "security" else []
+        if mode == "security" and not security and st.get("security_count"):
+            raise ValueError(up.held_back_message(st, "security"))
         return st["manager"], security
+
+    async def blocked_packages(self, host: Host) -> dict[str, str]:
+        """Pakete, die sich nach einer frischen Prüfung nicht gezielt einspielen lassen, mit Grund; ist das nicht
+        feststellbar, ValueError mit dem Grund."""
+        if host.id in self._busy:
+            raise ValueError(BUSY_MESSAGE)
+        st = await self.check_host(host, refresh=True)
+        if st.get("error") or not st.get("manager"):
+            raise ValueError(st.get("error") or "Update-Stand unbekannt.")
+        if not up.security_known(st):
+            raise ValueError("apt konnte die Probe-Installation nicht durchrechnen, ob ein Paket zurückgehalten ist, "
+                             "bleibt deshalb offen.")
+        # Der Parser vergibt je Paket höchstens eins der drei Merkmale.
+        return {p["name"]: up.REASON_LABEL[flag] for p in st.get("packages", [])
+                for flag in ("phased", "kept_back", "held") if p.get(flag)}
 
     async def command_for(self, host: Host, mode: str) -> str:
         """Der Befehl zum aktuellen Stand (siehe `plan`), immer ohne dist-upgrade.
@@ -812,7 +849,7 @@ class UpdateCenter:
         fresh = dict(zip((h.id for h in todo), results, strict=True))
         pairs = [(h, fresh[h.id] if h.id in fresh else await load_baseline(self._ctx, h.id, "updates") or {}) for h in hosts]
         settings = await self._ctx.settings.get()
-        title, body, level = build_update_report(pairs, zone=await schedule_zone(self._ctx))
+        title, body, level = build_update_report(pairs, zone=await schedule_zone(self._ctx), settings=settings)
         if settings.get("updates_notify", True) and level != "none":
             sev = Severity.WARNING if level == "warning" else Severity.INFO
             await self._ctx.notify.send(Notification(
@@ -854,13 +891,18 @@ class UpdateCenter:
                 lines.append(f"- {name}: Prüfung fehlgeschlagen ({st.get('error')})")
                 failed += 1
                 continue
-            todo = st.get("security_count") if mode == "security" else st.get("count")
+            todo = up.runnable(st, mode)
             update_ok = True
+            if mode == "security" and not up.security_known(st) and st.get("security_count"):
+                lines.append(f"- {name}: nichts eingespielt, apt konnte die Probe-Installation nicht durchrechnen "
+                             "(siehe Update-Zentrale)")
+                failed += 1
+                continue
             if todo:
                 try:
                     # Automatische Läufe nehmen nie dist-upgrade: das darf Pakete ersetzen oder entfernen
                     # und gehört nur in eine Aktion, die jemand freigibt.
-                    security = [p["name"] for p in st.get("packages", []) if p.get("security")]
+                    security = up.security_names(st.get("packages", []))
                     command = up.upgrade_command(st["manager"], mode, security)
                     plan = up.upgrade_args(st["manager"], mode, security)
                 except ValueError as exc:
@@ -873,7 +915,9 @@ class UpdateCenter:
                 lines.append(f"- {name}: {run.public}" if run.ok else f"- {name}: FEHLGESCHLAGEN – {run.public}")
                 st = await load_baseline(self._ctx, host.id, "updates") or st
             else:
-                lines.append(f"- {name}: aktuell")
+                reasons = up.reasons_text(up.not_installable(st, mode))
+                lines.append(f"- {name}: {reasons}, nichts eingespielt (siehe Update-Zentrale)" if reasons
+                             else f"- {name}: aktuell")
                 # Ein abgebrochener Lauf von gestern kann Pakete halb eingerichtet haben, ohne dass die Prüfung noch
                 # etwas zu tun findet.
                 update_ok = await last_run_ok(self._ctx, host.id)
@@ -967,7 +1011,8 @@ def _stamp(ts: float, zone: tzinfo) -> str:
     return text + " UTC" if zone is UTC else text
 
 
-def build_update_report(pairs: list[tuple[Any, dict[str, Any]]], zone: tzinfo = UTC) -> tuple[str, str, str]:
+def build_update_report(pairs: list[tuple[Any, dict[str, Any]]], zone: tzinfo = UTC, *,
+                        settings: dict[str, Any] | None = None) -> tuple[str, str, str]:
     """Kurzbericht nach der täglichen Prüfung; Stufe "none" = nichts zu melden.
 
     Ein Server mit fehlgeschlagener Prüfung steht als Fehler da, auch mit älterem Stand (dessen Zahlen zählen nicht)."""
@@ -984,11 +1029,13 @@ def build_update_report(pairs: list[tuple[Any, dict[str, Any]]], zone: tzinfo = 
             lines.append(f"- {name}: Prüfung fehlgeschlagen ({st['error']}){since}")
             continue
         count, sec = int(st.get("count") or 0), int(st.get("security_count") or 0)
+        reasons = up.reasons_text(up.not_installable(st, "all", full_upgrade=up.full_upgrade_here(settings or {}, st)))
         total += count
         security += sec
         parts = []
         if count:
-            parts.append(f"{count} Update(s)" + (f", davon {sec} Sicherheit" if sec else ""))
+            parts.append(f"{count} Update(s)" + (f", davon {sec} Sicherheit" if sec else "")
+                         + (f", nicht einspielbar: {reasons}" if reasons else ""))
         if st.get("reboot_required"):
             reboot += 1
             parts.append("Neustart nötig")

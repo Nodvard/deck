@@ -27,8 +27,8 @@ Dokumente verweisen mit der Kennung `D-<n>` darauf; die Nummern bleiben stabil.
 der Ablösung des Vorgängersystems, das ebenfalls in Python geschrieben war: bewährte
 Regex-Muster (z. B. die Sperrliste für Befehle), Prompts und Heuristiken (z. B. gegen
 Neustart-Schleifen) sind aus dem Vorgängersystem übernommen, statt in eine andere
-Sprache übersetzt zu werden. Das Ökosystem passt: `asyncssh`, `proxmoxer`, `docker`,
-`httpx`, `cryptography`, `pyotp`.
+Sprache übersetzt zu werden. Das Ökosystem passt: `asyncssh`, `httpx`,
+`cryptography`, `pyotp`.
 
 **Auflage 1: genau ein Worker-Prozess** (`uvicorn --workers 1`), kein
 Gunicorn-Multiprocessing. Der Kern hält prozessinternen Zustand, der nicht dupliziert
@@ -117,11 +117,11 @@ nie gespeichert.
   gespeist werden. Fertige Frameworks bringen eigene, teils zur Build-Zeit fixierte
   Theming-Systeme mit und arbeiten dagegen.
 - **Server-State: TanStack Query.** Client-State: Zustand. Kein Redux.
-- **Routing: React Router v6** mit Lazy-Routes — Extension-Seiten hängen sich dort ein.
-- **Terminal: xterm.js** + `@xterm/addon-fit`, `@xterm/addon-webgl`.
-- **Editor (Script-Repository): CodeMirror 6**, nicht Monaco. Monaco ist ~4 MB und zieht
-  Web-Worker nach; CodeMirror 6 ist modular und für ein auf einem Pi ausgeliefertes Bundle
-  spürbar günstiger. Der Funktionsumfang reicht für Shell, Python und YAML.
+- **Routing: React Router v7** mit Lazy-Routes — Extension-Seiten hängen sich dort ein.
+- **Terminal: xterm.js** + `@xterm/addon-fit`.
+- **Editor (Script-Repository): ein einfaches `<textarea>`**, kein Monaco und kein CodeMirror.
+  Monaco ist ~4 MB und zieht Web-Worker nach; auch CodeMirror 6 ist nicht eingebaut. So braucht
+  das Bundle der Erweiterung nur React über die Import-Map.
 - **Build-Ziel:** Das Frontend wird statisch gebaut und vom Backend ausgeliefert
   (`StaticFiles`), kein separater Webserver. Ein Port, ein Dienst, ein
   Reverse-Proxy-Eintrag.
@@ -171,9 +171,10 @@ Fehlerbild.
 **Sicherheitskorrektur gegenüber dem Vorgängersystem:** Dort lief SSH mit
 `-o StrictHostKeyChecking=no`. Der neue Layer pflegt eine eigene Known-Hosts-Tabelle
 (TOFU beim ersten Kontakt, danach Pinning; eine Änderung erzeugt eine sichtbare Warnung
-statt stiller Annahme). Neue Installationen verzichten standardmäßig auf TOFU: Ein neuer
-Schlüssel wird erst gemerkt, wenn jemand den Fingerabdruck bestätigt hat (Einstellung
-`ssh.confirm_new_host_keys`); nach dem Vergessen eines Schlüssels gilt das immer.
+statt stiller Annahme). Standardmäßig verzichtet Nodvard Deck auf TOFU, auch bei bestehenden
+Installationen: Ein neuer Schlüssel wird erst gemerkt, wenn jemand den Fingerabdruck bestätigt hat
+(Einstellung `ssh.confirm_new_host_keys`, nur ausdrücklich abschaltbar); nach dem Vergessen eines
+Schlüssels gilt das immer.
 
 **Eigene SSH-Schlüssel:** Zugangsdaten gehören in den Vault (D-06); Rotation und Widerruf
 sind Plattform-Funktionen, keine Handarbeit in `authorized_keys`. Nodvard Deck kann je
@@ -353,9 +354,9 @@ Singleton lautlos das Falsche liefert.
    Keyring-Datei. **Strukturell behoben:** `settings` wird explizit durch
    `build_context()` gereicht und auf `Context` gespeichert (siehe Docstring von
    `Context._app_settings`).
-2. **Verstreute Stellen im Kern** (`api/v1/auth.py::_cookies_require_https()`,
-   `db/session.py::get_engine()`, der Lifespan in `main.py`). Diese Stellen rufen
-   `get_settings()` weiterhin direkt auf — bewusst nicht einzeln umgebaut (siehe unten).
+2. **Verstreute Stellen im Kern** (`db/session.py::get_engine()`, der Lifespan in
+   `main.py`). Diese Stellen rufen `get_settings()` weiterhin direkt auf — bewusst nicht
+   einzeln umgebaut (siehe unten).
    Stattdessen setzt die Autouse-Fixture `_reset_settings_singleton` in
    `tests/conftest.py` `config._settings` vor UND nach jedem Test auf `None`, damit kein
    Test vom Singleton eines vorherigen Tests kontaminiert wird. **Nur abgeschirmt:** Das

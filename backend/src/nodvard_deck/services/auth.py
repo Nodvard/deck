@@ -573,9 +573,7 @@ async def bootstrap_owner(session: AsyncSession, *, username: str, password: str
     )
     session.add(user)
     await session.flush()
-    # Neue Installation: neue Server-Schlüssel nur nach Bestätigung merken (Einstellung `ssh.confirm_new_host_keys`).
-    # Bestehende Installationen haben den Wert nicht und behalten das alte Verhalten; die Umgebungsvariable übersteuert
-    # beides.
+    # Ausdrücklich speichern, damit ein älteres Image nach einem Rückweg nicht auf still Merken zurückfällt.
     await settings_service.set_global(session, "ssh.confirm_new_host_keys", True, updated_by_user_id=user.id)
     # Wer mit dem neuen Aussehen anfängt, braucht den Hinweis darauf nicht.
     await settings_service.set_user(session, user.id, settings_service.DESIGN_NOTICE_KEY, True)

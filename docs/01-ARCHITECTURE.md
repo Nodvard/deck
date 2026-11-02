@@ -21,7 +21,7 @@
                      │  window.__nodvardDeck + UI-Kit (React-Vertrag)
 ┌────────────────────▼─────────────────────────────────────────┐
 │  EXTENSIONS — alles Infrastruktur-Spezifische                │
-│  proxmox · shield · terminal · files · scripts ·             │
+│  proxmox · shield · terminal · nextcloud · scripts ·         │
 │  docker · backups · gameserver · …                           │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -81,7 +81,7 @@ Context-Implementierung gegen einen RPC-Proxy aus, ohne dass eine Extension sich
 |---|---|
 | HTTP/WS | FastAPI auf uvicorn, **ein** Worker |
 | Hintergrundschleifen (Watcher) | `asyncio.Task`, vom Extension-Host verwaltet und beim Stop sauber abgebrochen |
-| Geplante Jobs | ein APScheduler-Objekt, SQLAlchemy-Jobstore |
+| Geplante Jobs | ein APScheduler-Objekt, `MemoryJobStore`; dauerhaft ist nur die Tabelle `jobs` |
 | Blockierendes | `asyncio.to_thread` / dedizierter Executor, nie im Loop |
 | SSH | ein `asyncssh`-Verbindungspool, geteilt von Terminal, Scripts und KI |
 
@@ -187,12 +187,11 @@ Befehl als root auf dem Server aus, geht aber bewusst nicht durchs Gate: Ein Vor
 `hosts.write` und `hosts.execute`, der Mensch löst sie mit dem Absenden selbst aus, und jeder Versuch steht im Protokoll
 (`host.setup_with_password`, ohne Passwort).
 
-**Einstellungen (global, pro Extension überschreibbar):**
+**Einstellungen (nur global, keine Überschreibung pro Extension):**
 
 ```
-autonomy.mode          = "propose" | "full"        default: propose
-autonomy.max_risk      = "low" | "medium" | "high" default: low
-autonomy.window        = optional Zeitfenster für "full"
+autonomy.mode          = "propose" | "full"                          default: propose
+autonomy.max_risk      = "low" | "medium" | "high" | "critical"      default: low
 ```
 
 ---
@@ -259,7 +258,7 @@ Jahresspanne). Eigenes Branding ändert, wie die Oberfläche heißt, nicht, wem 
 | KI-Aktionen | Aus KI-Text legt Nodvard Shield höchstens eine feste Aktion an: den Neustart eines Containers, dessen Absturz der Vorfall meldet. Befehl und Begründung baut der Code selbst, der Server kommt aus dem Vorfall; alles andere bleibt Text, der Chat legt nie eine Aktion an. Container-Logs und Docker-Fehlermeldungen gehen als fremde Daten (keine Anweisungen) an die KI. Dazu: Sperrliste für katastrophale Muster, Begründungspflicht, Anti-Flapping, Default = Bestätigung, nie über eine Dauerfreigabe. |
 | Secrets | Nie im Klartext in DB, Antwort oder Log. Extensions bekommen Handles; ersetzen und löschen nur ihre eigenen, Zwei-Faktor-Geheimnisse von Konten gar nicht. Ein Zugang für eine andere Extension geht nur über eine Capability (`ConnectionReceiver`), nie über den Ereignis-Bus. |
 | SSH | Eine Identität aus dem Vault, Known-Hosts-Pinning statt `StrictHostKeyChecking=no`. |
-| API | Alles authentifiziert außer `/branding`, `/health`, `/auth/login`. Routen von Erweiterungen verlangen ohne Angabe eine Anmeldung; ohne Anmeldung nur mit `public=True` und der Manifest-Berechtigung `api.public` (steht beim Einschalten im Protokoll). Mehr als 1 MiB Body bekommt kein Endpunkt zu lesen, auch ohne Anmeldung nicht (darüber `413`; Uploads haben eigene, höhere Grenzen). |
+| API | Alles authentifiziert außer den Endpunkten in [04 §2](04-API.md#2-ohne-authentifizierung) (u. a. `/health`, `/branding`, `/capabilities`, `/auth/login`). Routen von Erweiterungen verlangen ohne Angabe eine Anmeldung; ohne Anmeldung nur mit `public=True` und der Manifest-Berechtigung `api.public` (steht beim Einschalten im Protokoll). Mehr als 1 MiB Body bekommt kein Endpunkt zu lesen, auch ohne Anmeldung nicht (darüber `413`; Uploads haben eigene, höhere Grenzen). |
 | Audit | Append-only, jede Aktion, auch die abgelehnten und die nur vorgeschlagenen. |
 | Netz | Kein Port nach außen nötig (geht auch hinter DS-Lite/CGNAT); Zugriff über Reverse-Proxy im LAN oder ein VPN wie Tailscale/WireGuard. |
 
@@ -360,7 +359,7 @@ Das Modul **Docker** (bis 0.8 „Service-Matrix“) hatte die technische Kennung
 | Seiten `/ext/docker/matrix`, `/settings/extensions/docker` | `/ext/service-matrix/matrix`, `/settings/extensions/service-matrix` | Die Oberfläche leitet weiter (Abfrage und Anker bleiben). Gespeicherte Links in Meldungen und Lesezeichen gehen so weiter |
 | Dashboard-Kachel „Container“ unter `docker` | Eintrag unter `service-matrix` | Behält Platz, Größe und Sichtbarkeit (`legacy_ext_ids`) |
 | Komponente `ContainersPage` im Bundle | `ServiceMatrixPage` | Zweiter Export, für Tabs, die während des Updates offen sind |
-| `requires = ["docker"]` in anderen Modulen | `requires = ["service-matrix"]` | Der Kern löst die alte Kennung auf; das Modul Netzwerk nutzt noch die alte |
+| `requires = ["docker"]` in anderen Modulen | `requires = ["service-matrix"]` | Der Kern löst die alte Kennung auf |
 | Logger `nodvard_deck.ext.docker`, Links in neuen Meldungen (`/ext/docker/matrix`) | `…service-matrix…` | Alte Meldungen behalten ihren Link, er funktioniert weiter |
 
 **Bleiben bewusst:**

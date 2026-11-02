@@ -13,22 +13,26 @@ Dieses Dokument ist die Spezifikation. Der zugehörige, importierbare Vertrag li
 ```
 extensions/shield/
 ├─ extension.toml            ← Manifest, ohne Code-Import lesbar
-├─ pyproject.toml            ← optional; für pip-installierbare Extensions
+├─ settings.schema.json      ← Einstellungen als JSON-Schema
+├─ root-helper/              ← Hilfsskript für Befehle als root
+├─ migrations/               ← eigener Alembic-Branch
 ├─ src/nodvard_deck_ext_shield/
 │  ├─ __init__.py            ← enthält  class Extension(NodvardExtension)
-│  ├─ api.py                 ← APIRouter
-│  ├─ connectors.py          ← Ollama-, ntfy-Connector-Typen
-│  ├─ capabilities.py        ← ActionExecutor, AIProvider …
-│  ├─ widgets.py             ← deklarative WidgetSpecs
-│  ├─ pipeline.py            ← Incident-Queue/Batching
-│  ├─ models.py              ← eigene Tabellen (Präfix ext_shield_; ältere: ext_nexus_soc_)
-│  └─ migrations/            ← eigener Alembic-Branch
+│  ├─ defender_api.py        ← APIRouter, Zeitpläne und ActionExecutor des Virenschutzes
+│  ├─ ollama.py              ← Connector-Typ und AIProvider für Ollama
+│  ├─ incident_queue.py      ← Vorfall-Warteschlange, übersteht einen Neustart
+│  └─ models.py              ← eigene Tabellen (Präfix ext_shield_; ältere: ext_nexus_soc_)
 └─ frontend/
-   ├─ package.json
-   └─ src/index.tsx          ← registerPage/registerWidget, ESM-Bundle
+   ├─ build.mjs              ← baut src/SocPage.tsx zum ESM-Bundle dist/index.js
+   └─ src/SocPage.tsx        ← die Seite, benannter Export des Bundles
 ```
 
+Eine Extension, die als eigenes Paket installiert wird, hat zusätzlich eine `pyproject.toml`.
+
 ### Manifest (`extension.toml`)
+
+Das Beispiel ist an das Manifest von Nodvard Shield angelehnt (`extensions/shield/extension.toml`). `requires`,
+`enable_on` und `stage` setzt Shield selbst nicht; sie zeigen nur die Schreibweise.
 
 ```toml
 [extension]
@@ -36,15 +40,15 @@ id          = "shield"             # stabil, kleinschreibung, Namensraum für al
 legacy_ids  = ["nexus-soc"]        # optional: frühere Kennungen, siehe „Erweiterung umbenennen“
 name        = "Nodvard Shield"
 version     = "0.1.0"
-api_version = "1.0"                # SemVer gegen nodvard_sdk.API_VERSION
+api_version = "0.1.0"              # SemVer gegen nodvard_sdk.API_VERSION
 author      = "…"
-description = "Autonome Diagnose und Remediation für die eigene Flotte."
-icon        = "shield-check"
+description = "Virenschutz für alle Server, dazu die KI-Container-Wache."
+icon        = "shield-alert"
 entrypoint  = "nodvard_deck_ext_shield:Extension"
 frontend    = "frontend/dist/index.js"    # optional
 requires    = ["terminal>=0.1"]           # andere Extensions, optional
 enable_on   = ["host_credential"]         # optional: siehe unten
-category    = "servers"                   # optional: Gruppe in der Modul-Auswahl des Einrichtungsassistenten
+category    = "security"                  # optional: Gruppe in der Modul-Auswahl des Einrichtungsassistenten
 sort_order  = 10                          # optional: Reihenfolge in der Gruppe (Standard 100)
 stage       = "beta"                      # optional: Reifegrad, "stable" (Standard) oder "beta"
 
@@ -53,11 +57,11 @@ stage       = "beta"                      # optional: Reifegrad, "stable" (Stand
 permissions = [
   "hosts.read",
   "hosts.execute",          # Befehle auf Hosts ausführen (nur über das Gate)
-  "secrets.read:ssh-fleet",
+  "secrets.read:nexus-soc-*",
   "audit.write",
   "notify.send",
   "schedule.register",
-  "net.outbound:192.168.1.0/24",
+  "net.outbound",
 ]
 
 [settings]                  # JSON-Schema; der Kern rendert daraus die Settings-Seite
@@ -522,7 +526,7 @@ ctx.capabilities.provide(ProxmoxHostProvider(ctx))
 | `TerminalTarget` | terminal (SSH), künftig serielle Shells | das Web-Terminal |
 | `ScopedTerminalTarget` | docker (`scope = "container"`, `docker exec`) | eine Shell **in** etwas auf einem Server, im selben Web-Terminal (`POST /terminal/sessions` mit `scope`/`ref`, [04 §4](04-API.md#4-websocket)); `ref` prüft der Anbieter selbst. Dafür nimmt `ctx.exec.open_shell(host, cols=, rows=, command=)` ein Kommando, das mit PTY statt der Login-Shell läuft, geprüft gegen dieselbe Sperrliste wie `run()` |
 | `ConsoleTarget` | proxmox (vncproxy/vncwebsocket) | die grafische Konsole (`/console/:hostId`, noVNC) |
-| `FileSource` | files-sftp, nextcloud, truenas, syncthing | den **einen** Dateimanager mit Seitenleiste |
+| `FileSource` | terminal (SFTP), nextcloud (WebDAV) | den **einen** Dateimanager mit Seitenleiste |
 | `FilePlaceProvider` | docker, proxmox, system | „Wichtige Orte“ eines Servers im Dateimanager |
 | `AppSuggestionProvider` | npm (Nginx Proxy Manager) | Vorschläge für App-Kacheln auf der Seite „Apps“ (`GET /apps/suggestions`): `app_suggestions()` → `[AppSuggestion(name, url, source, host?)]`, nur vorhandenes Wissen; der Kern prüft, entdoppelt und lässt Bestehendes weg |
 | `ActionExecutor` | terminal (SSH-Exec), proxmox (API-Aktionen) | die Ausführung hinter dem Gate |
@@ -586,7 +590,7 @@ Eine neue Quelle hinzufügen heißt: ein Objekt registrieren. Kein Kern-Code än
 
 `open_write` sollte das Ziel erst ersetzen, wenn alles angekommen ist, und es nie vorab abschneiden: sonst wäre
 bei einem Abbruch der alte Inhalt weg, und zeigen Quelle und Ziel auf dieselbe Datei, schnitte das Schreiben die
-Quelle selbst ab (`files-sftp` schreibt dafür, wo es geht, in eine Temp-Datei im Zielordner und benennt sie
+Quelle selbst ab (die SFTP-Quelle der terminal-Extension schreibt dafür, wo es geht, in eine Temp-Datei im Zielordner und benennt sie
 danach um).
 
 Optional, bewusst **kein** Pflichtmitglied des Protokolls: `async file_identity(path) -> dict | None`. Damit
@@ -1044,6 +1048,10 @@ beim Bauen die Teile in sich auf, die es einbindet. Darin stehen:
 | Datei | Inhalt |
 |---|---|
 | `ui.tsx` | Bausteine für Seiten: `Page`, `Card`, `Button`, `Badge`, `Stat`, `EmptyState`, `Notice`, `Field`, `SearchInput`, `Loading`, Symbole |
+| `loadError.tsx` | `fetchJson`, `errorMessage` und `LoadError`: ein Ladefehler zeigt Grund und „Erneut versuchen“ statt einer leeren Liste |
+| `format.ts` | Anzeige-Helfer, etwa `formatBytes` |
+| `AuthImage.tsx`, `links.tsx`, `menu.tsx` | ein Bild von einem geschützten Endpunkt (`AuthImage`), Knopf zur Einstellungsseite und Einstellungswert für Leerzustände (`SettingsLink`, `useSettingText`), das Menü „Mehr“ (`MoreMenu`) |
+| `hostKind.tsx`, `certificate.tsx`, `passwordWarning.tsx` | Art eines Servers (physisch, VM, LXC) für Gruppen und Plaketten, Zertifikat-Fingerabdruck einer Verbindung, Hinweis auf ein Passwort ohne HTTPS |
 | `api.ts`, `actions.ts` | `authedFetch` mit Token-Erneuerung und die Fehlertexte; `runAction` (Aktion vorschlagen, freigeben, abfragen, siehe oben) |
 | `deck.ts`, `location.ts`, `lifecycle.ts` | Zugang zu `window.__nodvardDeck`, `useUrlParams()` (folgt der Adresszeile), Abbruch beim Verlassen der Seite |
 | `HostPicker.tsx` | die Server-Auswahl (siehe unten) |
@@ -1178,23 +1186,23 @@ was ein Container ist.
 
 | Baustein | Umsetzung |
 |---|---|
-| Versionierung | eigenes Git-Repo unter `/data/ext/scripts/repo`, `pygit2`/`dulwich`; die Git-Einstellungen setzt die Extension bei jedem Start selbst, und Hooks, Filter und Signieren laufen nie (aus `.git` bringt eine Sicherung nur den Verlauf mit) |
-| Metadaten, Parameter | eigene Tabellen + JSON-Schema pro Skript. Im Skript stehen Parameter als `$name` oder `${name}`. Ersetzt werden nur deklarierte Parameter (Wert per `shlex.quote`), `$$` wird zu `$`, jedes andere `$` (`$HOME`, `"$f"`, `$(date)`) bleibt für die Shell; die Prozessnummer der Shell schreibt man deshalb `$$$$` |
+| Versionierung | eigenes Git-Repo unter `<Datenordner>/ext/scripts/repo`, mit `dulwich`; die Git-Einstellungen setzt die Extension bei jedem Start selbst, und Hooks, Filter und Signieren laufen nie (aus `.git` bringt eine Sicherung nur den Verlauf mit) |
+| Metadaten, Parameter | je Skript `script.sh` und `meta.json` im Git-Repository (keine eigenen Tabellen); die Parameter beschreibt `params_schema` in der `meta.json`. Im Skript stehen Parameter als `$name` oder `${name}`. Ersetzt werden nur deklarierte Parameter (Wert per `shlex.quote`), `$$` wird zu `$`, jedes andere `$` (`$HOME`, `"$f"`, `$(date)`) bleibt für die Shell; die Prozessnummer der Shell schreibt man deshalb `$$$$` |
 | „Jetzt ausführen" | `ctx.actions.propose(ActionSpec("script.run"))` → derselbe SSH-Layer wie das Terminal (kein zweiter Ausführungsweg) |
 | Fleet-weiter Zeitplan | `ctx.scheduler` — **eine** Ansicht, weil es **einen** Scheduler gibt |
 | Geplante Läufe ohne Klick | Dauerfreigabe je Skript, gespeichert in `ctx.data_dir` (nicht im Git-Repo: ein Zurücksetzen des Skripts belebt eine erloschene Freigabe nicht wieder). Nur echte Zeitplan-Läufe (`current_job_trigger() == "schedule"`) schicken sie als `ActionRequest.standing_approval` mit. Die Extension prüft vorher, ob Inhalt, Parameter, Ziel, Zeitplan sowie Konto, Adresse und SSH-Port der Server noch wie bei der Freigabe sind, das Kern-Gate, ob die freigebende Person noch darf |
 | Run-Historie | Kern-Tabellen `jobs`/`job_runs` + Audit |
 | Secrets | `ctx.secrets.get_handle(...)`, nie Klartext im Skript |
-| In-Browser-Editor | `register_page`, CodeMirror 6 |
+| In-Browser-Editor | `register_page` (`ScriptsPage`), ein einfaches `<textarea>` |
 | Sicherheits-Gate | dasselbe Kern-Gate wie bei Nodvard Shield — kein zweites Bestätigungs-UI |
 | KI „befördert" wiederkehrenden Fix | `ctx.events.subscribe("action.executed")` in der scripts-Extension; Vorschlag als Entwurf im Repo. Die beiden Extensions reden über den Event-Bus, nicht miteinander. |
 
 ### Dateimanager-Quellen
 
-Jede Quelle ist ein `FileSource`. `files-sftp` (Host-Admin-Zugriff) liegt in der
-terminal-Extension, weil sie den SSH-Layer schon hat; `nextcloud` (WebDAV),
-`truenas` (API + SMB/NFS), `syncthing` (REST) sind je eigene Extensions mit je einer
-Connector-Instanz pro Server. Der Kern rendert einen Explorer über alle.
+Jede Quelle ist ein `FileSource`. Die SFTP-Quelle (Host-Admin-Zugriff, je Server `ssh-sftp:<host-id>`) liegt in der
+terminal-Extension, weil sie den SSH-Layer schon hat; `nextcloud` (WebDAV) ist eine eigene Extension mit genau einer
+Instanz, die in ihren Einstellungen steht. TrueNAS oder Syncthing gibt es nicht; weitere Quellen wären eigene
+Extensions. Der Kern rendert einen Explorer über alle.
 
 ---
 

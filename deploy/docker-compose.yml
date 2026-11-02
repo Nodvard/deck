@@ -41,11 +41,11 @@ services:
       # Selbst-Antesten. Unveraendert `false` lassen fuer einen echten Einsatz --
       # siehe deploy/README.md fuer den aktuellen Umsetzungsstand dieses Schalters.
       NODVARD_DECK_DEMO_MODE: "false"
-      # Optional, uebersteuert die Einstellung unter Einstellungen -> Server & Zugaenge: "true" = neue
-      # Server-Schluessel werden nicht still gemerkt, sondern erst nach Bestaetigung ("Verbindung
-      # pruefen"); "false" = wie frueher still merken. Ohne diese Zeile gilt die gespeicherte
-      # Einstellung (neue Installationen: bestaetigen, bestehende: still merken). Nach "Schluessel
-      # vergessen" ist die Bestaetigung immer noetig. Bereits gemerkte Schluessel sind nie betroffen.
+      # Optional, übersteuert die Einstellung unter Einstellungen -> Server & Zugänge: "true" = neue
+      # Server-Schlüssel werden nicht still gemerkt, sondern erst nach Bestätigung ("Verbindung
+      # prüfen"); "false" = still merken (nicht empfohlen). Ohne diese Zeile gilt die gespeicherte
+      # Einstellung, und ohne gespeicherten Wert wird bestätigt. Nach "Schlüssel vergessen" ist die
+      # Bestätigung immer nötig. Bereits gemerkte Schlüssel sind nie betroffen.
       # Der alte Name LATTICE_SSH_CONFIRM_NEW_HOST_KEYS gilt nur noch übergangsweise (spätestens bis 1.0).
       # NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS: "true"
     # DNS nur fuer DIESEN Container (Docker Compose `dns:`), nicht am Host geaendert.

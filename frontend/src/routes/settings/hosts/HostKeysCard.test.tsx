@@ -39,16 +39,16 @@ describe("Karte „Neue Server-Schlüssel“", () => {
     expect(screen.getByRole("button", { name: "Speichern" })).toBeDisabled();
   });
 
-  it("zeigt bei einer bestehenden Installation (aus) den Schalter ausgeschaltet", async () => {
+  it("zeigt ausdrücklich abgeschaltet den Schalter aus", async () => {
     mockHostsApi({ "GET /settings": [{ key: "ssh.confirm_new_host_keys", value: false }] });
     renderCard();
     expect(await screen.findByRole("switch", { name: SWITCH })).toHaveAttribute("aria-checked", "false");
   });
 
-  it("ohne Wert in der Antwort gilt aus", async () => {
+  it("ohne Wert in der Antwort gilt an, wie auf dem Server", async () => {
     mockHostsApi({ "GET /settings": [] });
     renderCard();
-    expect(await screen.findByRole("switch", { name: SWITCH })).toHaveAttribute("aria-checked", "false");
+    expect(await screen.findByRole("switch", { name: SWITCH })).toHaveAttribute("aria-checked", "true");
   });
 
   it("speichert die Änderung mit dem Passwort des Inhabers", async () => {

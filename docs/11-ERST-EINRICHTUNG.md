@@ -1,6 +1,6 @@
 # Erst-Einrichtung – Schritt für Schritt
 
-Stand 07.10.2026 (Version 0.7). Für eine frische Installation, in dieser Reihenfolge. Wo Nodvard Deck noch
+Stand: Version 0.12. Für eine frische Installation, in dieser Reihenfolge. Wo Nodvard Deck noch
 eine Lücke hat, steht das dabei. Ohne Oberfläche (nur mit der API) geht es über den
 [Anhang](#anhang-ohne-oberfläche).
 
@@ -1192,11 +1192,12 @@ wieder als nicht bestätigt, bis sie das nächste Mal klappt.
 
 > **Hinweis:** Ob Nodvard Deck einen neuen Server-Schlüssel beim allerersten Verbinden (Terminal,
 > Überwachung, …) von allein merkt, stellst du unter **Einstellungen → Server & Zugänge** in der Karte
-> **„Neue Server-Schlüssel“** ein. Bei neuen Installationen ist **„Neue Server-Schlüssel erst nach meiner
-> Bestätigung merken“** an: Dann merkt sich Nodvard Deck einen Schlüssel nur über „Verbindung prüfen“,
-> vorher geht kein Passwort und kein Schlüssel an den Server. Installationen, die schon vor dieser
-> Einstellung eingerichtet waren, bleiben auf „aus“ und merken weiter von allein, bis du den Schalter
-> einschaltest. Die Umgebungsvariable `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` (`true` oder `false`; in der
+> **„Neue Server-Schlüssel“** ein. **„Neue Server-Schlüssel erst nach meiner Bestätigung merken“** ist an,
+> auch bei Installationen, die schon vor dieser Einstellung eingerichtet waren: Dann merkt sich Nodvard Deck einen
+> Schlüssel nur über „Verbindung prüfen“, vorher geht kein Passwort und kein Schlüssel an den Server. Kennt Deck
+> von einem Server noch keinen Schlüssel, drückst du dort einmal „Verbindung prüfen“ und bestätigst den
+> Fingerabdruck. „Aus“ (nicht empfohlen) merkt neue Schlüssel wieder von allein; das gilt nur, wenn du es
+> ausdrücklich so einstellst. Die Umgebungsvariable `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` (`true` oder `false`; in der
 > Compose-Datei unter `environment:`, siehe das Beispiel in [2.](#2-einrichtungsassistent-setup); in
 > `deploy/docker-compose.yml` des Repositorys ist die Zeile vorbereitet) übersteuert den Schalter: Dann
 > zeigt die Karte deren Wert, und Speichern meldet einen Fehler.
@@ -1695,10 +1696,26 @@ Risikostufe ohne Rückfrage an.
 
 **Durch Phasing verzögerte Updates (Ubuntu):** Ubuntu verteilt manche Updates schrittweise, erst an einen Teil der
 Rechner, nach und nach an alle. Bis ein Server an der Reihe ist, hält apt das Update zurück, auch bei „Alle einspielen“.
-Die Update-Zentrale zählt solche Updates mit und schreibt dazu „davon X durch Phasing verzögert“; ein Klick darauf erklärt
+Die Update-Zentrale zählt solche Updates nicht als einspielbar und schreibt dazu „X durch Phasing verzögert“; ein Klick darauf erklärt
 es, in der Paketliste stehen sie als „verzögert“. Das ist gewollt und kein Fehler: Sobald der Server an der Reihe ist,
 lassen sie sich wie jedes andere Update einspielen. Erkannt wird das ohne root und unabhängig von der Sprache des Servers; auf Debian und
-Proxmox gibt es kein Phasing, dort fehlt der Hinweis.
+Proxmox gibt es kein Phasing, dort fehlt der Hinweis. Stammt der angezeigte Stand noch von einer Version ohne diese
+Prüfung, steht dort „Phasing noch nicht geprüft“, bis „Prüfen“ oder die Tagesprüfung ihn erneuert. Kann apt die
+Probe-Installation nicht durchrechnen (etwa bei fehlenden Abhängigkeiten), steht dort „Phasing-Prüfung nicht verfügbar“
+statt einer Zahl.
+
+**Zurückgehaltene und gesperrte Updates:** „Alle einspielen“ spielt auch Updates mit neuen Abhängigkeiten ein, entfernt
+aber nie ein Paket. Braucht ein Update das (etwa wenn ein Paket ein anderes ersetzt, wie bei den Kamera-Paketen von
+Raspberry Pi OS), hält apt es zurück. Die Update-Zentrale zeigt solche Updates als „zurückgehalten, braucht full-upgrade“
+und zählt sie nicht als einspielbar. Einspielen lassen sie sich auf dem Server mit `sudo apt full-upgrade`; lies vorher die
+Liste, die apt zeigt, denn was dort unter „REMOVED“ (deutsch „ENTFERNT“) steht, wird entfernt. Auf Proxmox mit der Einstellung für
+`dist-upgrade` kommen sie mit „Alle einspielen“ mit. Mit `apt-mark hold` gesperrte Pakete stehen als „gesperrt“ da;
+`sudo apt-mark unhold <Paketname>` hebt die Sperre auf. „Sicherheitsupdates einspielen“ lässt alle drei Arten aus, auch
+die durch Phasing verzögerten: Gezielt eingespielt würde ein zurückgehaltenes Sicherheitsupdate ein anderes Paket
+entfernen, ein gesperrtes den ganzen Lauf abbrechen und ein verzögertes das Phasing übergehen. Vor dem Lauf prüft die
+Update-Zentrale den Server dafür noch einmal. Steht dort „Phasing-Prüfung nicht verfügbar“, ist unbekannt, was apt
+zurückhält; „Sicherheitsupdates einspielen“ gibt es dann nicht, bis die nächste Prüfung wieder durchkommt. Ist nichts
+einspielbar und sind mehrere Gründe gemischt, steht im Abzeichen „nicht einspielbar“, daneben jeder Grund einzeln.
 
 **Updates auf dem Server, auf dem Nodvard Deck läuft:** Ist unter den Updates ein Paket, das Docker neu startet
 (`docker-ce`, `docker.io`, `containerd` und ähnliche), sieht die Prüfung zusätzlich nach, ob dort Nodvard Deck läuft.
@@ -2255,15 +2272,15 @@ bekommt eine eigene, verschlüsselte Kopie des privaten Schlüssels; die Datei a
 brauchst du nur noch zum Eintragen und Testen.
 
 **Hilfsskript speichern** (einmal, auf demselben Rechner) – den ganzen Block in die Shell kopieren, er legt
-`~/lattice-server.py` an:
+`~/nodvard-server.py` an:
 
 ```bash
-cat > ~/lattice-server.py <<'EOF'
+cat > ~/nodvard-server.py <<'EOF'
 #!/usr/bin/env python3
 """Nodvard Deck: Server anlegen, Adresse korrigieren, SSH-Zugang hinterlegen (docs/11)."""
 import getpass, json, os, urllib.error, urllib.request
 
-API = os.environ.get("LATTICE_URL", "http://localhost:8080").rstrip("/") + "/api/v1"
+API = os.environ.get("NODVARD_DECK_URL", "http://localhost:8080").rstrip("/") + "/api/v1"
 token = None
 
 
@@ -2360,7 +2377,7 @@ EOF
 **Benutzen:**
 
 ```bash
-python3 ~/lattice-server.py
+python3 ~/nodvard-server.py
 ```
 
 Anmelden mit einem Nodvard-Deck-Konto, das Server verwalten darf (Inhaber oder `admin`). Das Skript
@@ -2371,7 +2388,7 @@ einen SSH-Zugang (Schlüssel `~/.ssh/nodvard_ed25519` oder Passwort), mit 4 zeig
 mit 5 vergisst du einen gemerkten Server-Schlüssel (nach einer Neuinstallation des Servers).
 Fingerabdrücke bestätigt das Skript nicht. Nach „Vergessen“ (5) verbindet sich Nodvard Deck erst wieder, wenn du in
 der Oberfläche „Verbindung prüfen“ gedrückt und den neuen Fingerabdruck bestätigt hast. Dasselbe gilt für neue Server,
-solange „Neue Server-Schlüssel erst nach meiner Bestätigung merken“ an ist (bei neuen Installationen von Anfang an).
+solange „Neue Server-Schlüssel erst nach meiner Bestätigung merken“ an ist (ohne eigene Einstellung immer).
 
 Der Schlüssel auf dem Server wird dann von Hand eingetragen, z. B. für einen eigenen Benutzer:
 

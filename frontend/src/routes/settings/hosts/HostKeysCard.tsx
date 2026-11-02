@@ -1,9 +1,9 @@
 /**
  * Karte „Neue Server-Schlüssel“ (Einstellungen → Server & Zugänge): Schalter, ob Nodvard Deck den Fingerabdruck eines
- * Servers beim ersten Kontakt still merken darf (`ssh.confirm_new_host_keys`, Recht `settings.write`). Neue
- * Installationen starten mit „an“ (erst bestätigen, bis dahin geht nichts an den Server), bestehende mit „aus“. Ändern
- * darf es nur der Inhaber, mit Passwort und, wenn Zwei-Faktor an ist, dem Code aus der App; andere sehen den Schalter
- * gesperrt.
+ * Servers beim ersten Kontakt still merken darf (`ssh.confirm_new_host_keys`, Recht `settings.write`). Ohne
+ * gespeicherten Wert gilt „an“ (erst bestätigen, bis dahin geht nichts an den Server); „aus“ ist die ausdrückliche
+ * Ausnahme. Ändern darf es nur der Inhaber, mit Passwort und, wenn Zwei-Faktor an ist, dem Code aus der App; andere
+ * sehen den Schalter gesperrt.
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -25,7 +25,7 @@ function HostKeysForm({ settings }: { settings: SettingRow[] }) {
   // Ist NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS gesetzt, zeigt die Karte deren Wert, und eine
   // Änderung meldet der Server als Fehler.
   const stored = settings.find((r) => r.key === KEY_CONFIRM_NEW_HOST_KEYS)?.value;
-  const initial = stored === true;
+  const initial = stored !== false;
   const isOwner = useAuthStore((s) => Boolean(s.user?.is_owner));
   const [saved, setSaved] = useState(initial);
   const [confirm, setConfirm] = useState(initial);
@@ -61,7 +61,7 @@ function HostKeysForm({ settings }: { settings: SettingRow[] }) {
         </div>
         <p className="text-xs text-white/40">
           An: Bei einem neuen Server zeigt „Verbindung prüfen“ den Fingerabdruck. Erst wenn du ihn bestätigst, schickt Nodvard Deck
-          Passwort oder Schlüssel an den Server. Das schützt davor, dass sich im Netzwerk jemand als dein Server ausgibt. Aus:
+          Passwort oder Schlüssel an den Server. Das schützt davor, dass sich im Netzwerk jemand als dein Server ausgibt. Aus (nicht empfohlen):
           Nodvard Deck merkt sich den Fingerabdruck beim ersten Verbinden von selbst. Bereits gemerkte Schlüssel bleiben, wie sie sind.
           Nach „Schlüssel vergessen“ musst du den neuen Fingerabdruck immer bestätigen, egal wie das hier eingestellt ist.
         </p>

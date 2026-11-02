@@ -1,7 +1,8 @@
 #!/bin/sh
 # Nimmt die Ausgabe von updates.status_command in Containern auf: Testpakete aus einer lokalen Paketquelle, darunter
 # welche mit "Phased-Update-Percentage" (auf Debian ohne das Feld, wie in den echten Debian-Quellen), eins mit neuer
-# Abhängigkeit, eins gesperrt (apt-mark hold) und eins für i386. Braucht Docker, kein Netz im Container. Aufruf im Repo-Wurzelordner, mit der Python-Umgebung des Backends:
+# Abhängigkeit, eins, das ein anderes Paket verdrängt (nur full-upgrade spielt es ein), eins gesperrt (apt-mark hold)
+# und eins für i386. Braucht Docker, kein Netz im Container. Aufruf im Repo-Wurzelordner, mit der Python-Umgebung des Backends:
 # PYTHON=.venv/bin/python sh backend/tests/fixtures/shield_apt/record.sh
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
@@ -21,11 +22,12 @@ mk() {
     mkdir -p "$d/DEBIAN"
     printf 'Package: %s\nVersion: %s\nArchitecture: %s\nMaintainer: Test <test@example.invalid>\nDescription: Testpaket\n' "$1" "$2" "$a" > "$d/DEBIAN/control"
     if [ -n "${3:-}" ]; then printf 'Depends: %s\n' "$3" >> "$d/DEBIAN/control"; fi
+    if [ -n "${5:-}" ]; then printf 'Conflicts: %s\n' "$5" >> "$d/DEBIAN/control"; fi
     dpkg-deb -b "$d" "/build/$1_$2_$a.deb" >/dev/null
 }
 entry() {
     f=/build/$1_$2_${4:-all}.deb
-    dpkg-deb -f "$f" Package Version Architecture Maintainer Depends Description | grep -v '^$' >> /repo/Packages
+    dpkg-deb -f "$f" Package Version Architecture Maintainer Depends Conflicts Description | grep -v '^$' >> /repo/Packages
     printf 'Filename: ./%s\nSize: %s\nSHA256: %s\n' "$(basename "$f")" "$(stat -c %s "$f")" "$(sha256sum "$f" | cut -d' ' -f1)" >> /repo/Packages
     if [ "$PHASED" = 1 ] && [ -n "${3:-}" ]; then printf 'Phased-Update-Percentage: %s\n' "$3" >> /repo/Packages; fi
     echo >> /repo/Packages
@@ -40,8 +42,14 @@ mk demo-newdep 1.0
 mk demo-newdep-two 1.0
 mk demo-foreign 1.0 "" i386
 mk demo-foreign 1.1 "" i386
+mk demo-oldlib 1.0
+mk demo-transition 1.0 demo-oldlib
+mk demo-transition 1.1 demo-newlib
+mk demo-newlib 1.0 "" all demo-oldlib
 for p in $plain; do dpkg -i "/build/${p}_1.0_all.deb" >/dev/null; done
 dpkg -i /build/demo-foreign_1.0_i386.deb >/dev/null
+dpkg -i /build/demo-oldlib_1.0_all.deb >/dev/null
+dpkg -i /build/demo-transition_1.0_all.deb >/dev/null
 apt-mark hold demo-held >/dev/null
 if [ "$BROKEN" = 1 ]; then mk demo-broken 1.0 demo-missing; dpkg -i --force-depends /build/demo-broken_1.0_all.deb >/dev/null 2>&1; fi
 : > /repo/Packages
@@ -55,6 +63,8 @@ entry demo-held 1.1 0
 entry demo-newdep 1.0
 entry demo-newdep-two 1.0
 entry demo-foreign 1.1 0 i386
+entry demo-transition 1.1
+entry demo-newlib 1.0
 rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*
 echo 'deb [trusted=yes] file:/repo ./' > /etc/apt/sources.list.d/test.list
 [ -s /etc/machine-id ] || echo 0123456789abcdef0123456789abcdef > /etc/machine-id

@@ -9,7 +9,9 @@ demo-phased-full/unknown 1.1 all [upgradable from: 1.0]
 demo-phased-newdep/unknown 1.1 all [upgradable from: 1.0]
 demo-phased-two/unknown 1.1 all [upgradable from: 1.0]
 demo-phased/unknown 1.1 all [upgradable from: 1.0]
+demo-transition/unknown 1.1 all [upgradable from: 1.0]
 @@phasing
+rc inst 0
 inst demo-foreign:i386
 inst demo-newdep
 inst demo-keptback
@@ -19,6 +21,7 @@ inst demo-phased
 inst demo-phased-full
 inst demo-phased-newdep
 inst demo-phased-two
+rc all 0
 all demo-foreign:i386
 all demo-newdep
 all demo-keptback
@@ -28,6 +31,10 @@ all demo-phased
 all demo-phased-full
 all demo-phased-newdep
 all demo-phased-two
+@@held
+demo-held
+@@pve
+no
 @@security
 @@reboot
 no

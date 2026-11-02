@@ -37,6 +37,15 @@ apt
 base-files/stable 12.4+deb12u7 amd64 [upgradable from: 12.4+deb12u6]
 openssl/stable-security 3.0.14-1~deb12u2 amd64 [upgradable from: 3.0.13-1~deb12u1]
 libssl3/bookworm-security 3.0.14-1~deb12u2 amd64 [upgradable from: 3.0.13-1~deb12u1]
+@@phasing
+rc inst 0
+inst base-files
+inst openssl
+inst libssl3
+rc all 0
+all base-files
+all openssl
+all libssl3
 @@security
 @@reboot
 no
@@ -219,6 +228,276 @@ def test_kept_back_packages_are_named_in_the_summary():
     # Bei einem Fehler zaehlt nur der Fehler
     bad = up.parse_upgrade_output(APT_KEPT_BACK + "E: Sub-process /usr/bin/dpkg returned an error code (1)\n", 100)
     assert not bad.ok and bad.kept_back == [] and bad.summary.startswith("E: Sub-process")
+
+
+# Ausgabe eines Nutzers (Raspberry Pi OS), Rechnername weggelassen.
+USER_KEPT_BACK = """NOTE: This is only a simulation!
+      apt-get needs root privileges for real execution.
+      Keep also in mind that locking is deactivated,
+      so don't depend on the relevance to the real current situation!
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+Calculating upgrade... Done
+The following packages have been kept back:
+  libcamera-ipa librpicam-app1 rpicam-apps-core
+0 upgraded, 0 newly installed, 0 to remove and 3 not upgraded.
+"""
+
+# Derselbe Stand in der Form der Prüfung: apt würde keins der drei einspielen, gesperrt ist keins.
+KEPT_ONLY_STATUS = """@@pm
+apt
+@@list
+libcamera-ipa/stable 0.5.2+rpt20250903-1 arm64 [upgradable from: 0.5.1+rpt20250722-1]
+librpicam-app1/stable 1.9.1-1 arm64 [upgradable from: 1.9.0-1]
+rpicam-apps-core/stable 1.9.1-1 arm64 [upgradable from: 1.9.0-1]
+@@phasing
+rc inst 0
+rc all 0
+@@held
+@@security
+@@reboot
+no
+@@kernel
+6.12.47+rpt-rpi-v8
+@@kernels
+6.12.47+rpt-rpi-v8
+@@uptime
+86400
+@@unattended
+no
+@@end
+"""
+
+
+def test_the_users_kept_back_packages_are_named_in_the_summary():
+    res = up.parse_upgrade_output(USER_KEPT_BACK, 0)
+    assert res.kept_back == ["libcamera-ipa", "librpicam-app1", "rpicam-apps-core"]
+    assert res.summary == "0 Paket(e) aktualisiert – 3 zurückgehalten (libcamera-ipa, librpicam-app1, rpicam-apps-core)"
+
+
+def test_a_state_with_only_kept_back_updates_has_nothing_to_install():
+    st = up.parse_status(KEPT_ONLY_STATUS).as_dict()
+    assert (st["count"], st["installable_count"], st["kept_back_count"], st["held_count"]) == (3, 0, 3, 0)
+    assert up.runnable(st, "all") == 0
+    assert up.runnable(st, "all", full_upgrade=True) == 3
+
+
+def test_report_says_how_many_updates_are_held_back():
+    from nodvard_deck_ext_shield.patching import build_update_report
+
+    pi = SimpleNamespace(name="pi", display_name="Pi")
+    st = up.parse_status(KEPT_ONLY_STATUS).as_dict()
+    title, body, level = build_update_report([(pi, st)])
+    assert body == "- Pi: 3 Update(s), nicht einspielbar: 3 zurückgehalten"
+    assert (title, level) == ("3 Update(s) offen", "info")
+    pve = {**st, "pve": True}
+    _t, body, _l = build_update_report([(pi, pve)], settings={"proxmox_dist_upgrade": True})
+    assert body == "- Pi: 3 Update(s)"  # „Alle einspielen“ nimmt sie dort mit dist-upgrade mit
+
+    mixed = KEPT_ONLY_STATUS.replace("rc all 0\n", "rc all 0\nall libcamera-ipa\n").replace("@@held\n", "@@held\nrpicam-apps-core\n")
+    _t, body, _l = build_update_report([(pi, up.parse_status(mixed).as_dict())])
+    assert body == "- Pi: 3 Update(s), nicht einspielbar: 1 durch Phasing verzögert, 1 zurückgehalten, 1 gesperrt"
+
+
+def test_proposals_skip_a_server_whose_updates_are_all_held_back():
+    from nodvard_deck_ext_shield.defender_api import _nothing_to_do
+
+    st = up.parse_status(KEPT_ONLY_STATUS).as_dict()
+    reason = _nothing_to_do({"status": st, "full_upgrade": False}, "all")
+    assert reason == ("Die offenen Updates lassen sich hier gerade nicht einspielen (3 zurückgehalten). "
+                      "Was zu tun ist, steht beim Server in der Update-Zentrale.")
+    assert _nothing_to_do({"status": st, "full_upgrade": True}, "all") is None  # dist-upgrade auf Proxmox nimmt sie mit
+    assert _nothing_to_do({"status": {"manager": "apt", "count": 3, "security_count": 0}}, "all") is None  # älterer Stand
+    unknown = {"manager": "apt", "count": 1, "security_count": 1, "installable_count": 1, "phasing": "unavailable"}
+    assert _nothing_to_do({"status": unknown}, "security") == up.SECURITY_UNKNOWN_MESSAGE
+    assert _nothing_to_do({"status": unknown}, "all") is None
+
+
+@pytest.mark.asyncio
+async def test_a_security_run_never_hands_over_kept_back_or_held_packages():
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.patching import UpdateCenter, save_baseline
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm)
+    center = UpdateCenter(ctx, Defender(ctx))
+    packages = [
+        {"name": "openssl", "security": True},
+        {"name": "libcamera-ipa", "security": True, "kept_back": True},
+        {"name": "openssh-server", "security": True, "held": True},
+        {"name": "libc6", "security": True, "phased": True},
+    ]
+    await save_baseline(ctx, "h1", "updates", {"manager": "apt", "count": 4, "security_count": 4, "installable_count": 1,
+                                               "packages": packages})
+    assert await center.plan(ctx._host, "security") == ("apt", ["openssl"])
+
+    await save_baseline(ctx, "h1", "updates", {"manager": "apt", "count": 3, "security_count": 3, "installable_count": 0,
+                                               "packages": packages[1:]})
+    with pytest.raises(ValueError, match=r"\(1 durch Phasing verzögert, 1 zurückgehalten, 1 gesperrt\)"):
+        await center.plan(ctx._host, "security")
+
+    unknown = {"manager": "apt", "count": 1, "security_count": 1, "installable_count": 1, "phasing": "unavailable",
+               "packages": packages[:1]}
+    await save_baseline(ctx, "h1", "updates", unknown)
+    with pytest.raises(ValueError, match="Probe-Installation nicht durchrechnen"):
+        await center.plan(ctx._host, "security")
+    assert await center.plan(ctx._host, "all") == ("apt", [])  # upgrade entfernt nie etwas, das geht weiter
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_the_automatic_run_leaves_a_server_with_only_kept_back_updates_alone():
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.patching import UpdateCenter
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, {"auto_updates_enabled": True, "auto_updates_mode": "all", "auto_updates_host_tag": "auto-update"})
+    ok_run = ctx._run
+
+    async def kept_only(host, command, timeout_s=60):
+        if "@@pm" in command:
+            ctx.commands.append(command)
+            return SimpleNamespace(exit_code=0, stdout=KEPT_ONLY_STATUS, stderr="", duration_ms=5)
+        return await ok_run(host, command, timeout_s)
+
+    ctx.exec = SimpleNamespace(run=kept_only)
+    await UpdateCenter(ctx, Defender(ctx)).auto_update()
+    assert not any("@@launch" in c for c in ctx.commands)
+    assert "Raspberry Pi: 3 zurückgehalten, nichts eingespielt" in ctx.notes[-1].body
+
+    phased_only = KEPT_ONLY_STATUS.replace("rc all 0\n", "rc all 0\nall libcamera-ipa\nall librpicam-app1\nall rpicam-apps-core\n")
+
+    async def phased(host, command, timeout_s=60):
+        if "@@pm" in command:
+            return SimpleNamespace(exit_code=0, stdout=phased_only, stderr="", duration_ms=5)
+        return await ok_run(host, command, timeout_s)
+
+    ctx.exec = SimpleNamespace(run=phased)
+    await UpdateCenter(ctx, Defender(ctx)).auto_update()
+    assert "Raspberry Pi: 3 durch Phasing verzögert, nichts eingespielt" in ctx.notes[-1].body
+
+    security_unknown = (KEPT_ONLY_STATUS.replace("rc all 0", "rc all 100")
+                        .replace("libcamera-ipa/stable", "libcamera-ipa/stable-security"))
+
+    async def unknown(host, command, timeout_s=60):
+        if "@@pm" in command:
+            return SimpleNamespace(exit_code=0, stdout=security_unknown, stderr="", duration_ms=5)
+        ctx.commands.append(command)
+        return await ok_run(host, command, timeout_s)
+
+    ctx._settings_value = {**ctx._settings_value, "auto_updates_mode": "security"}
+    ctx.commands.clear()
+    ctx.exec = SimpleNamespace(run=unknown)
+    await UpdateCenter(ctx, Defender(ctx)).auto_update()
+    assert not any("@@launch" in c for c in ctx.commands)
+    assert "Raspberry Pi: nichts eingespielt, apt konnte die Probe-Installation nicht durchrechnen" in ctx.notes[-1].body
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_an_older_state_is_checked_again_before_a_security_plan():
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.patching import UpdateCenter, save_baseline
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm)
+    center = UpdateCenter(ctx, Defender(ctx))
+    older = {"manager": "apt", "count": 1, "security_count": 1, "packages": [{"name": "openssl", "security": True}]}
+    await save_baseline(ctx, "h1", "updates", older)
+    assert await center.plan(ctx._host, "security") == ("apt", ["libssl3", "openssl"])
+    assert any("@@pm" in c for c in ctx.commands)  # erst neu geprüft
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_before_a_security_run_the_server_is_checked_again():
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.patching import UpdateCenter, save_baseline
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm)
+    center = UpdateCenter(ctx, Defender(ctx))
+    stale = {"manager": "apt", "count": 3, "security_count": 0, "installable_count": 3, "packages": [
+        {"name": n, "security": False} for n in ("libcamera-ipa", "librpicam-app1", "rpicam-apps-core")]}
+    await save_baseline(ctx, "h1", "updates", stale)
+
+    async def now_kept_back(host, command, timeout_s=60):
+        ctx.commands.append(command)
+        return SimpleNamespace(exit_code=0, stdout=KEPT_ONLY_STATUS, stderr="", duration_ms=5)
+
+    ctx.exec = SimpleNamespace(run=now_kept_back)
+    assert await center.blocked_packages(ctx._host) == dict.fromkeys(
+        ("libcamera-ipa", "librpicam-app1", "rpicam-apps-core"), "zurückgehalten")
+    assert ctx.commands == [up.status_command(refresh=True)]  # Paketlisten frisch, wie beim Lauf selbst
+
+    phased_only = KEPT_ONLY_STATUS.replace("rc all 0\n", "rc all 0\nall libcamera-ipa\n")
+
+    async def now_phased(host, command, timeout_s=60):
+        return SimpleNamespace(exit_code=0, stdout=phased_only, stderr="", duration_ms=5)
+
+    ctx.exec = SimpleNamespace(run=now_phased)
+    assert (await center.blocked_packages(ctx._host))["libcamera-ipa"] == "durch Phasing verzögert"
+
+    async def runs_fail(host, command, timeout_s=60):
+        return SimpleNamespace(exit_code=0, stdout=KEPT_ONLY_STATUS.replace("rc all 0", "rc all 100"), stderr="", duration_ms=5)
+
+    ctx.exec = SimpleNamespace(run=runs_fail)
+    with pytest.raises(ValueError, match="Probe-Installation"):
+        await center.blocked_packages(ctx._host)
+
+    center._busy["h1"] = "all"
+    ctx.commands.clear()
+    with pytest.raises(ValueError, match="läuft schon ein Update-Lauf"):
+        await center.blocked_packages(ctx._host)
+    assert ctx.commands == []  # kein apt-get update mitten in einen laufenden Lauf
+    center._busy.clear()
+
+    async def unreachable(host, command, timeout_s=60):
+        raise OSError("Verbindung abgelehnt")
+
+    ctx.exec = SimpleNamespace(run=unreachable)
+    with pytest.raises(ValueError, match="Verbindung abgelehnt"):
+        await center.blocked_packages(ctx._host)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_on_proxmox_with_dist_upgrade_held_back_updates_count_as_installable():
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.defender_api import _nothing_to_do
+    from nodvard_deck_ext_shield.patching import UpdateCenter
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, {"proxmox_dist_upgrade": True})
+    status = {"text": KEPT_ONLY_STATUS.replace("@@security", "@@pve\nyes\n@@security")}
+
+    async def run(host, command, timeout_s=60):
+        return SimpleNamespace(exit_code=0, stdout=status["text"], stderr="", duration_ms=5)
+
+    ctx.exec = SimpleNamespace(run=run)
+    center = UpdateCenter(ctx, Defender(ctx))
+    await center.check_host(ctx._host)
+    o = await center.overview()
+    assert o["hosts"][0]["full_upgrade"] is True
+    assert (o["summary"]["packages"], o["summary"]["installable"]) == (3, 3)
+    assert o["summary"]["not_installable"] == {"phased": 0, "kept_back": 0, "held": 0, "unknown": 0}
+    assert _nothing_to_do(o["hosts"][0], "all") is None
+
+    status["text"] = KEPT_ONLY_STATUS  # derselbe Kernel, aber ohne pveversion (etwa ein Backup Server): kein dist-upgrade
+    await center.check_host(ctx._host)
+    o = await center.overview()
+    assert o["hosts"][0]["full_upgrade"] is False and o["summary"]["installable"] == 0
+    assert o["summary"]["not_installable"] == {"phased": 0, "kept_back": 3, "held": 0, "unknown": 0}
+
+    # Ohne Probeläufe: das Sicherheitsupdate ist offen, aber kein gezielter Lauf; die Kopfzahl sagt warum.
+    status["text"] = KEPT_ONLY_STATUS.replace("rc all 0", "rc all 100").replace("libcamera-ipa/stable", "libcamera-ipa/stable-security")
+    await center.check_host(ctx._host)
+    s = (await center.overview())["summary"]
+    assert (s["security"], s["installable_security"]) == (1, 0)
+    assert s["not_installable_security"] == {"phased": 0, "kept_back": 0, "held": 0, "unknown": 1}
+    assert _nothing_to_do(o["hosts"][0], "all") is not None
+    await engine.dispose()
 
 
 def test_kept_back_names_ignore_anything_that_is_not_a_package_name():
@@ -466,7 +745,10 @@ async def test_check_then_security_upgrade_is_recorded_and_rechecked():
     [st] = await center.check([host])
     assert (st["count"], st["security_count"]) == (3, 2)
     o = await center.overview()
-    assert o["summary"] == {"hosts": 1, "checked": 1, "up_to_date": 0, "packages": 3, "security": 2, "reboot": 1, "errors": 0}
+    assert o["summary"] == {"hosts": 1, "checked": 1, "up_to_date": 0, "packages": 3, "security": 2, "installable": 3,
+                            "installable_security": 2, "reboot": 1, "errors": 0,
+                            "not_installable": {"phased": 0, "kept_back": 0, "held": 0, "unknown": 0},
+                            "not_installable_security": {"phased": 0, "kept_back": 0, "held": 0, "unknown": 0}}
 
     command = await center.command_for(host, "security")
     assert "install --only-upgrade libssl3 openssl" in command
@@ -958,6 +1240,34 @@ async def test_a_server_that_never_got_a_good_check_has_no_success_time():
     ctx.exec = SimpleNamespace(run=down)
     st = await UpdateCenter(ctx, Defender(ctx)).check_host(ctx._host)
     assert st["checked_at"] is None and st["attempted_at"] and st["error"]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_an_older_state_without_the_phasing_check_gets_it_with_the_next_check():
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.patching import UpdateCenter, save_baseline
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm)
+    older = up.parse_status(APT_STATUS).as_dict()
+    del older["phased_count"], older["phasing"]
+    for pkg in older["packages"]:
+        del pkg["phased"]
+    await save_baseline(ctx, "h1", "updates", {**older, "checked_at": 1.0, "attempted_at": 1.0})
+    center = UpdateCenter(ctx, Defender(ctx))
+    shown = (await center.overview())["hosts"][0]["status"]
+    assert "phasing" not in shown and "phased_count" not in shown
+
+    recording = (Path(__file__).parent / "fixtures" / "shield_apt" / "ubuntu-24.04.txt").read_text(encoding="utf-8")
+
+    async def ubuntu(host, command, timeout_s=60):
+        return SimpleNamespace(exit_code=0, stdout=recording, stderr="", duration_ms=5)
+
+    ctx.exec = SimpleNamespace(run=ubuntu)
+    await center.check_host(ctx._host)
+    shown = (await center.overview())["hosts"][0]["status"]
+    assert (shown["phasing"], shown["phased_count"], shown["count"]) == ("checked", 4, 9)
     await engine.dispose()
 
 
@@ -2201,10 +2511,11 @@ def test_docker_packages_names_only_what_restarts_the_docker_service():
 
 
 DOCKER_STATUS = APT_STATUS.replace(
-    "@@security\n",
+    "@@phasing\n",
     "docker-ce/bookworm-security 5:27.3.1-1~debian.12~bookworm amd64 [upgradable from: 5:27.3.0-1~debian.12~bookworm]\n"
-    "containerd.io/bookworm 1.7.22-1 amd64 [upgradable from: 1.7.21-1]\n@@security\n",
-)
+    "containerd.io/bookworm 1.7.22-1 amd64 [upgradable from: 1.7.21-1]\n@@phasing\n",
+).replace("rc inst 0\n", "rc inst 0\ninst docker-ce\ninst containerd.io\n").replace(
+    "rc all 0\n", "rc all 0\nall docker-ce\nall containerd.io\n")
 
 
 @pytest.mark.asyncio

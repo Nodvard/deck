@@ -798,7 +798,7 @@ Schlüssel, Wert ungültig → `422`:
 | `hosts.reachability.interval_minutes` | ganze Zahl 1 bis 60 | `2` |
 | `system.update_check.enabled` | `true` oder `false` | `true` |
 | `system.update_check.channel` | `stable` (nur fertige Versionen) oder `beta` (auch Vorabversionen) | `stable` |
-| `ssh.confirm_new_host_keys` | `true` oder `false` | `false`; neue Installationen `true` (gesetzt beim ersten Konto) |
+| `ssh.confirm_new_host_keys` | `true` oder `false` | `true` (ohne gespeicherten Wert, auch bei bestehenden Installationen) |
 | `system.trusted_proxies` | Liste von IP-Adressen/Netzen (CIDR, IPv4/IPv6), höchstens 20, öffentliche IPv4-Netze ab `/24` (private Bereiche bis zur Größe des Bereichs, höchstens `/8`), IPv6 ab `/48` | `[]` (niemandem vertrauen); `NODVARD_DECK_TRUSTED_PROXIES` gewinnt |
 
 - `system.timezone` ist die Zeitzone aller Zeitpläne (`Job.timezone`, auch die der Erweiterungen) und der
@@ -844,8 +844,8 @@ Schlüssel, Wert ungültig → `422`:
 - `ssh.confirm_new_host_keys`: `true` = Terminal, Jobs und Status merken den Schlüssel eines Servers, für den noch
   keiner gemerkt ist, nicht still; die Verbindung scheitert, bevor Anmeldedaten gesendet werden, bis der Fingerabdruck
   über `POST /hosts/{id}/check` und `POST /hosts/{id}/known-hosts` bestätigt ist. `false` = der Schlüssel wird beim
-  ersten Verbinden gemerkt. `POST /auth/bootstrap` (erstes Konto) speichert `true`; Installationen von davor haben
-  keinen Wert, es gilt `false`. Gemerkte Schlüssel betrifft das nie; nach `DELETE /hosts/{id}/known-hosts/{key_type}`
+  ersten Verbinden gemerkt, nur noch als ausdrückliches Abschalten. Ohne gespeicherten Wert gilt `true`, auch bei
+  Installationen, die vor der Einstellung angelegt wurden. Gemerkte Schlüssel betrifft das nie; nach `DELETE /hosts/{id}/known-hosts/{key_type}`
   ist die Bestätigung für diesen Server immer nötig. Ist `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` gesetzt
   (`true`/`false`, leer zählt als nicht gesetzt), meldet `GET /settings` deren Wert, und `PUT` antwortet mit `409`.
 - `system.trusted_proxies`: Nur von diesen Gegenstellen gelten `X-Forwarded-For` (rechteste Adresse, die selbst kein

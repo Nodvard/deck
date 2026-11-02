@@ -31,8 +31,8 @@ _HOST_STATUS_VALUES = {s.value for s in HostStatus}
 
 
 CONFIRM_NEW_KEYS_SETTING = "ssh.confirm_new_host_keys"
-"""Globale Einstellung: neue Server-Schlüssel nur nach Bestätigung merken; fehlt sie (bestehende Installation),
-gilt `False`."""
+"""Globale Einstellung: neue Server-Schlüssel nur nach Bestätigung merken; fehlt sie, gilt `True`, nur ein gespeichertes
+`False` schaltet ab."""
 
 # `core/ssh.connect` prüft den Merker zusätzlich direkt vor dem Verbindungsaufbau.
 HOST_KEY_CONFIRM_REQUIRED = ssh.HOST_KEY_CONFIRM_REQUIRED
@@ -441,13 +441,13 @@ async def resolve_connection_target(
 async def host_key_confirmation_required(session: AsyncSession, settings: Settings, host_id: str) -> bool:
     """Darf für diesen Server ein unbekannter Schlüssel nicht still gemerkt werden?"""
     # Die erste Antwort gilt: Merker am Server (nach "Schlüssel vergessen", auch gegen die Umgebungsvariable), dann
-    # `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` (`true`/`false`), dann die Einstellung `ssh.confirm_new_host_keys`
-    # (neue Installationen: an), sonst nein.
+    # `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` (`true`/`false`), dann die Einstellung `ssh.confirm_new_host_keys`.
+    # Abschalten geht nur ausdrücklich: Ohne gespeicherten Wert gilt ja, auch bei bestehenden Installationen.
     if await ssh.host_key_confirm_pending(session, host_id):
         return True
     if settings.ssh_confirm_new_host_keys is not None:
         return settings.ssh_confirm_new_host_keys
-    return await settings_service.get_global(session, CONFIRM_NEW_KEYS_SETTING, False) is True
+    return await settings_service.get_global(session, CONFIRM_NEW_KEYS_SETTING) is not False
 
 
 async def require_host_key_confirmation(session: AsyncSession, host_id: str) -> None:

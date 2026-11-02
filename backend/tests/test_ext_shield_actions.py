@@ -88,9 +88,15 @@ class _Updates:
         self.manager = "apt"
         self.runs: list[tuple[str, str]] = []
         self.plans: list[list[str] | None] = []
+        self.blocked: dict[str, str] | Exception = {}
 
     async def plan(self, host, mode):
         return self.manager, list(self.security) if mode == "security" else []
+
+    async def blocked_packages(self, host):
+        if isinstance(self.blocked, Exception):
+            raise self.blocked
+        return dict(self.blocked)
 
     async def execute(self, host, mode, *, command, trigger, plan=None):
         self.runs.append((mode, command))
@@ -382,6 +388,31 @@ async def test_upgrade_and_reboot_clicks_build_the_same_command(soc):
     soc.updates.security = []
     r = await soc.client.post("/defender/hosts/h1/upgrade", json={"mode": "security"})
     assert r.status_code == 409 and r.json()["detail"] == "Keine Sicherheitsupdates offen."
+
+
+async def test_a_security_proposal_is_not_run_once_one_of_its_packages_is_held_back(soc):
+    from nodvard_deck_ext_shield.defender_api import SECURITY_BLOCKED_MESSAGE
+
+    req = await _click(soc, "/defender/hosts/h1/upgrade", {"mode": "security"})
+    soc.updates.blocked = {"openssl": "durch Phasing verzögert", "curl": "gesperrt"}  # seit dem Vorschlag
+    result = await soc.executor.execute(req)
+    assert not result.success and result.error == SECURITY_BLOCKED_MESSAGE.format(packages="openssl (durch Phasing verzögert)")
+    assert soc.updates.runs == []
+    soc.updates.blocked = ValueError("Zeitüberschreitung – der Vorgang hat zu lange gebraucht.")
+    result = await soc.executor.execute(req)
+    assert not result.success and result.error == (
+        "Der Update-Stand ließ sich vor dem Einspielen nicht prüfen: Zeitüberschreitung – der Vorgang hat zu lange "
+        "gebraucht. Nichts wurde eingespielt. Bitte später erneut versuchen.")
+    assert soc.updates.runs == []
+    soc.updates.blocked = {"curl": "gesperrt"}
+    assert (await soc.executor.execute(req)).success
+
+
+async def test_a_security_run_without_package_names_needs_no_second_check(soc):
+    soc.updates.manager = "dnf"
+    req = await _click(soc, "/defender/hosts/h1/upgrade", {"mode": "security"})
+    soc.updates.blocked = ValueError("nicht erreichbar")  # würde den Lauf abbrechen, wenn er gefragt würde
+    assert (await soc.executor.execute(req)).success
 
 
 # --- dist-upgrade steht im Plan, Vorschlag und Ausfuehrung stimmen ueberein ----

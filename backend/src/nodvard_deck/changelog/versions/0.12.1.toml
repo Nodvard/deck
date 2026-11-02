@@ -1,0 +1,19 @@
+version = "0.12.1"
+date = "2026-11-02"
+title = "Strenger SSH-Host-Key, zurueckgehaltene Updates ehrlich, Phasing-Pruefung sauber"
+
+[[entries]]
+kind = "sicherheit"
+text = "Neue Server-Schlüssel merkt Nodvard Deck jetzt auch bei älteren Installationen erst nach deiner Bestätigung, damit niemand im Netzwerk dein Passwort abgreifen kann: Kennt Deck einen Server noch nicht, drückst du dort einmal „Verbindung prüfen“ und bestätigst den Fingerabdruck. Server, die Deck schon kennt, laufen weiter wie bisher, und still merken gibt es nur noch, wenn du die Bestätigung ausdrücklich ausschaltest, unter Einstellungen → Server & Zugänge oder über die Umgebungsvariable NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS (nicht empfohlen)."
+
+[[entries]]
+kind = "behoben"
+text = "Updates, die sich nicht mit „Alle einspielen“ einspielen lassen, zeigt die Update-Zentrale nicht mehr wie offene Updates, sondern als „zurückgehalten“ oder „gesperrt“, mit einer Erklärung, was zu tun ist."
+
+[[entries]]
+kind = "behoben"
+text = "„Sicherheitsupdates einspielen“ entfernt keine anderen Pakete mehr und hält sich an Phasing: Ein zurückgehaltenes Sicherheitsupdate konnte ein anderes Paket entfernen, ein gesperrtes ließ den Lauf scheitern, ein verzögertes kam vorzeitig. Alle drei bleiben jetzt stehen, und vor dem Lauf wird der Server noch einmal geprüft."
+
+[[entries]]
+kind = "behoben"
+text = "Die Update-Zentrale verschweigt durch Phasing verzögerte Ubuntu-Updates nicht mehr, nur weil diese Prüfung noch nicht lief oder nicht klappte: Dann steht beim Server jetzt „Phasing noch nicht geprüft“ oder „Phasing-Prüfung nicht verfügbar“."

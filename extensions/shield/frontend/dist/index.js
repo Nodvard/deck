@@ -1605,17 +1605,71 @@ function deckRestartHint(st, mode) {
   return st?.deck_host ? ` Dabei ${which}, und hier l\xE4uft Nodvard Deck: Es ist danach kurz nicht erreichbar und l\xE4dt von selbst neu.` : ` Dabei ${which}. L\xE4uft hier Nodvard Deck, ist es danach kurz nicht erreichbar und l\xE4dt von selbst neu.`;
 }
 var PHASING_HINT = "Ubuntu verteilt manche Updates schrittweise: Erst bekommt sie ein Teil der Rechner, nach und nach alle. Bis dieser Server an der Reihe ist, h\xE4lt apt das Update zur\xFCck, auch bei \u201EAlle einspielen\u201C. Das ist gewollt und kein Fehler, du musst nichts tun: Nodvard Deck pr\xFCft weiter, und sobald der Server dran ist, l\xE4sst sich das Update wie jedes andere einspielen. Sicherheitsupdates verteilt Ubuntu in der Regel sofort an alle.";
-function phasingLabel(st) {
-  const n = st.phased_count ?? 0;
-  return st.security_count > 0 ? `${n} von ${count(st.count, "Update", "Updates")} durch Phasing verz\xF6gert` : `davon ${n} durch Phasing verz\xF6gert`;
+var PHASING_UNCHECKED_HINT = "Ob apt hier Updates zur\xFCckh\xE4lt, weil Ubuntu sie schrittweise verteilt (Phasing), zeigt erst die n\xE4chste Pr\xFCfung. \u201EPr\xFCfen\u201C holt sie gleich nach. Auf Debian und Proxmox gibt es kein Phasing, dort verschwindet der Hinweis danach.";
+var PHASING_UNAVAILABLE_HINT = "apt konnte auf diesem Server nicht durchrechnen, welche Updates es einspielen w\xFCrde, oft wegen fehlender oder kaputter Pakete. Deshalb ist unbekannt, ob Ubuntu Updates wegen Phasing zur\xFCckh\xE4lt und ob apt welche zur\xFCckh\xE4lt, die nur mit \u201Eapt full-upgrade\u201C kommen; \u201EAlle einspielen\u201C kann daran scheitern, \u201ESicherheitsupdates einspielen\u201C gibt es so lange nicht. Den genauen Grund zeigt auf dem Server der Befehl \u201Eapt-get -s upgrade\u201C; die n\xE4chste Pr\xFCfung versucht es erneut.";
+function phasingUnknown(st) {
+  if (!st || st.manager !== "apt" || !st.count || st.phased_count) return null;
+  if (st.phasing === "unavailable") return { label: "Phasing-Pr\xFCfung nicht verf\xFCgbar", hint: PHASING_UNAVAILABLE_HINT };
+  return st.phasing ? null : { label: "Phasing noch nicht gepr\xFCft", hint: PHASING_UNCHECKED_HINT };
 }
-function phasingNote(st) {
-  const n = st?.phased_count ?? 0;
-  if (!n) return "";
-  if (n >= (st?.count ?? 0)) {
-    return n === 1 ? " Ubuntu h\xE4lt dieses Update wegen Phasing noch zur\xFCck; einspielen l\xE4sst es sich erst, wenn der Server an der Reihe ist." : " Ubuntu h\xE4lt diese Updates wegen Phasing noch zur\xFCck; einspielen lassen sie sich erst, wenn der Server an der Reihe ist.";
+var KEPT_BACK_HINT = "apt h\xE4lt diese Updates zur\xFCck, weil daf\xFCr andere Pakete ersetzt oder entfernt werden m\xFCssten. \u201EAlle einspielen\u201C entfernt nie Pakete und l\xE4sst sie deshalb stehen. Einspielen lassen sie sich auf dem Server mit \u201Esudo apt full-upgrade\u201C. Lies vorher die Liste, die apt zeigt: Was dort unter \u201EREMOVED\u201C (deutsch \u201EENTFERNT\u201C) steht, wird entfernt.";
+var HELD_HINT = "Diese Pakete sind auf dem Server gesperrt (apt-mark hold), apt spielt ihre Updates nie von selbst ein. War das Absicht, musst du nichts tun. Sonst hebt \u201Esudo apt-mark unhold <Paketname>\u201C die Sperre auf.";
+function installable(st, fullUpgrade = false) {
+  return (st.installable_count ?? st.count - (st.phased_count ?? 0)) + (fullUpgrade ? st.kept_back_count ?? 0 : 0);
+}
+function installableSecurity(st) {
+  return st.installable_security_count ?? Math.max(0, st.security_count - st.packages.filter((p) => p.security && (p.phased || p.held || p.kept_back)).length);
+}
+function securityRunnable(st) {
+  return st.phasing === "unavailable" ? 0 : installableSecurity(st);
+}
+function reasonsText(r) {
+  return [
+    r.phased ? `${r.phased} durch Phasing verz\xF6gert` : "",
+    r.kept_back ? `${r.kept_back} zur\xFCckgehalten` : "",
+    r.held ? `${r.held} gesperrt` : "",
+    r.unknown ? `${r.unknown} nicht pr\xFCfbar` : ""
+  ].filter(Boolean).join(", ");
+}
+function leftOutHint(total, installable2, reasons) {
+  const left = total - (installable2 ?? total);
+  if (left <= 0) return void 0;
+  return `davon ${reasons && reasonsText(reasons) || `${left} nicht einspielbar`}`;
+}
+function heldBack(st, fullUpgrade = false) {
+  return { phased: st.phased_count ?? 0, kept: fullUpgrade ? 0 : st.kept_back_count ?? 0, held: st.held_count ?? 0 };
+}
+function updateNotes(st, fullUpgrade = false) {
+  if (!st) return [];
+  const { phased, kept, held } = heldBack(st, fullUpgrade);
+  const alone = installable(st, fullUpgrade) === 0 && [phased, kept, held].filter(Boolean).length === 1;
+  const more = installable(st, fullUpgrade) > 0 ? "dazu " : "";
+  const security = (flag) => st.packages.filter((p) => p[flag] && p.security).length;
+  const ofWhich = (n) => n ? `davon ${n} Sicherheit` : "";
+  const notes = [];
+  if (phased) notes.push({ key: "phased", label: alone ? "durch Phasing verz\xF6gert" : `${more}${phased} durch Phasing verz\xF6gert`, hint: PHASING_HINT });
+  if (kept) {
+    const label = alone ? [ofWhich(security("kept_back")), "braucht full-upgrade"] : [`${more}${kept} zur\xFCckgehalten`, ofWhich(security("kept_back")), "braucht full-upgrade"];
+    notes.push({ key: "kept", label: label.filter(Boolean).join(", "), hint: KEPT_BACK_HINT });
   }
-  return n === 1 ? " Ein Update davon h\xE4lt Ubuntu wegen Phasing noch zur\xFCck; es l\xE4sst sich einspielen, sobald der Server an der Reihe ist." : ` ${n} davon h\xE4lt Ubuntu wegen Phasing noch zur\xFCck; sie lassen sich einspielen, sobald der Server an der Reihe ist.`;
+  if (held) {
+    const label = alone ? ["mit apt-mark hold gesperrt", ofWhich(security("held"))] : [`${more}${held} gesperrt`, ofWhich(security("held"))];
+    notes.push({ key: "held", label: label.filter(Boolean).join(", "), hint: HELD_HINT });
+  }
+  const unknown = phasingUnknown(st);
+  if (unknown) notes.push({ key: "unknown", ...unknown });
+  return notes;
+}
+function notIncludedNote(st, fullUpgrade = false) {
+  if (!st) return "";
+  const { phased, kept, held } = heldBack(st, fullUpgrade);
+  const parts = [
+    phased === 1 ? "1 Paket, das Ubuntu wegen Phasing noch zur\xFCckh\xE4lt" : phased ? `${phased} Pakete, die Ubuntu wegen Phasing noch zur\xFCckh\xE4lt` : "",
+    kept === 1 ? "1 zur\xFCckgehaltenes Paket, das \u201Eapt full-upgrade\u201C auf dem Server braucht" : kept ? `${kept} zur\xFCckgehaltene Pakete, die \u201Eapt full-upgrade\u201C auf dem Server brauchen` : "",
+    held === 1 ? "1 gesperrtes Paket" : held ? `${held} gesperrte Pakete` : ""
+  ].filter(Boolean);
+  if (!parts.length) return "";
+  return ` Nicht dabei: ${parts.join("; ")}.`;
 }
 var RUN_STATUS = {
   running: { label: "l\xE4uft", tone: "info" },
@@ -1638,8 +1692,16 @@ function hostState(h) {
   if (!st) return { label: "noch nicht gepr\xFCft", tone: "neutral" };
   if (st.unsupported) return { label: "nicht unterst\xFCtzt", tone: "neutral" };
   if (st.error && !st.manager) return { label: "Fehler", tone: "warn" };
-  if (st.security_count > 0) return { label: `${st.security_count} Sicherheitsupdate${st.security_count === 1 ? "" : "s"}`, tone: "bad" };
-  if (st.count > 0) return { label: `${st.count} Update${st.count === 1 ? "" : "s"}`, tone: "warn" };
+  const keptSecurity = h.full_upgrade ? st.packages.filter((p) => p.kept_back && p.security).length : 0;
+  const sec = installableSecurity(st) + keptSecurity;
+  if (sec > 0) return { label: `${sec} Sicherheitsupdate${sec === 1 ? "" : "s"}`, tone: "bad" };
+  const n = installable(st, h.full_upgrade);
+  if (n > 0) return { label: `${n} Update${n === 1 ? "" : "s"}`, tone: "warn" };
+  if (st.count > 0) {
+    const { phased, held } = heldBack(st, h.full_upgrade);
+    const only = phased === st.count ? "verz\xF6gert" : held === st.count ? "gesperrt" : phased + held ? "nicht einspielbar" : "zur\xFCckgehalten";
+    return { label: `${st.count} ${only}`, tone: st.security_count > 0 ? "warn" : "neutral" };
+  }
   return { label: "aktuell", tone: "good" };
 }
 function UpdatesTab({ canManage }) {
@@ -1650,7 +1712,7 @@ function UpdatesTab({ canManage }) {
   const page = usePageActions();
   const { keys: { busy: acting }, signal: pageSignal } = page;
   const [open, setOpen] = useState7(null);
-  const [phasingOpen, setPhasingOpen] = useState7(null);
+  const [noteOpen, setNoteOpen] = useState7(null);
   const [openRun, setOpenRun] = useState7(null);
   const [pending, setPending] = useState7({});
   const [proposing, setProposing] = useState7(null);
@@ -1714,7 +1776,7 @@ function UpdatesTab({ canManage }) {
   function proposable(mode) {
     return (data?.hosts ?? []).filter((h) => {
       const st = h.status;
-      return !!st && !st.unsupported && !!st.manager && !h.busy && (mode === "security" ? st.security_count : st.count) > 0;
+      return !!st && !st.unsupported && !!st.manager && !h.busy && (mode === "security" ? securityRunnable(st) : installable(st, h.full_upgrade)) > 0;
     });
   }
   async function proposeAll(mode) {
@@ -1749,9 +1811,18 @@ function UpdatesTab({ canManage }) {
   async function apply(h, mode) {
     const st = h.status;
     const distUpgrade = mode === "all" && st?.manager === "apt" && !!data?.config.proxmox_dist_upgrade;
+    const sec = st ? installableSecurity(st) : 0;
+    const secLeft = (st?.security_count ?? 0) - sec;
+    const secPkgs = st?.packages.filter((p) => p.security) ?? [];
+    const secReasons = reasonsText({
+      phased: secPkgs.filter((p) => p.phased).length,
+      kept_back: secPkgs.filter((p) => p.kept_back).length,
+      held: secPkgs.filter((p) => p.held).length
+    });
+    const n = st ? installable(st, h.full_upgrade) : 0;
     const questions = {
-      security: `${count(st?.security_count ?? 0, "Sicherheitsupdate", "Sicherheitsupdates")} auf \u201E${h.host_name}\u201C jetzt einspielen?${deckRestartHint(st, "security")}`,
-      all: `${(st?.count ?? 0) === 1 ? "Das Update" : `Alle ${st?.count ?? 0} Updates`} auf \u201E${h.host_name}\u201C jetzt einspielen? Das kann einige Minuten dauern.${distUpgrade ? " Ist es ein Proxmox-Server, l\xE4uft dabei \u201Eapt-get dist-upgrade\u201C \u2013 das kann Pakete entfernen oder ersetzen." : ""}${phasingNote(st)}${deckRestartHint(st, "all")}`,
+      security: `${count(sec, "Sicherheitsupdate", "Sicherheitsupdates")} auf \u201E${h.host_name}\u201C jetzt einspielen?${secLeft > 0 ? ` ${secLeft === 1 ? "Ein weiteres ist" : `${secLeft} weitere sind`} nicht einspielbar${secReasons ? ` (${secReasons})` : ""} und ${secLeft === 1 ? "bleibt" : "bleiben"} stehen.` : ""}${deckRestartHint(st, "security")}`,
+      all: `${n === 1 ? "Das Update" : `Alle ${n} Updates`} auf \u201E${h.host_name}\u201C jetzt einspielen? Das kann einige Minuten dauern.${distUpgrade ? " Ist es ein Proxmox-Server, l\xE4uft dabei \u201Eapt-get dist-upgrade\u201C \u2013 das kann Pakete entfernen oder ersetzen." : ""}${notIncludedNote(st, h.full_upgrade)}${deckRestartHint(st, "all")}`,
       cleanup: `Auf \u201E${h.host_name}\u201C nicht mehr ben\xF6tigte Pakete und alte Kernel entfernen und den Paket-Cache leeren?`,
       reboot: `\u201E${h.host_name}\u201C jetzt neu starten? Der Server ist dann ein paar Minuten nicht erreichbar \u2013 alle Dienste darauf auch.`
     };
@@ -1831,8 +1902,24 @@ function UpdatesTab({ canManage }) {
           ].filter(Boolean).join(" \xB7 ") || void 0
         }
       ),
-      /* @__PURE__ */ jsx8(Stat, { label: "Offene Updates", value: sm.packages, tone: sm.packages ? "warn" : "good" }),
-      /* @__PURE__ */ jsx8(Stat, { label: "Sicherheitsupdates", value: sm.security, tone: sm.security ? "bad" : "good" }),
+      /* @__PURE__ */ jsx8(
+        Stat,
+        {
+          label: "Offene Updates",
+          value: sm.packages,
+          tone: sm.installable ?? sm.packages ? "warn" : sm.packages ? void 0 : "good",
+          hint: leftOutHint(sm.packages, sm.installable, sm.not_installable)
+        }
+      ),
+      /* @__PURE__ */ jsx8(
+        Stat,
+        {
+          label: "Sicherheitsupdates",
+          value: sm.security,
+          tone: sm.security ? "bad" : "good",
+          hint: leftOutHint(sm.security, sm.installable_security, sm.not_installable_security)
+        }
+      ),
       /* @__PURE__ */ jsx8(Stat, { label: "Neustart n\xF6tig", value: sm.reboot, tone: sm.reboot ? "warn" : void 0, hint: sm.errors ? `${count(sm.errors, "Pr\xFCfung", "Pr\xFCfungen")} fehlgeschlagen` : void 0 })
     ] }),
     /* @__PURE__ */ jsxs7("div", { className: "mb-4 flex flex-wrap items-center gap-2", children: [
@@ -1880,23 +1967,29 @@ function UpdatesTab({ canManage }) {
       const rebootSince = st?.reboot_pending_since;
       const needsReboot = !!st?.reboot_required && !rebootSince;
       const isOpen = open === h.host_id;
+      const notes = updateNotes(st, h.full_upgrade);
+      const openNote = notes.find((n) => `${h.host_id}:${n.key}` === noteOpen);
       return /* @__PURE__ */ jsxs7("div", { className: "panel px-4 py-3", "data-testid": `updates-${h.host_id}`, children: [
         /* @__PURE__ */ jsxs7("div", { className: "flex flex-wrap items-center gap-3", children: [
           /* @__PURE__ */ jsxs7("div", { className: "min-w-0 flex-1", children: [
             /* @__PURE__ */ jsxs7("p", { className: "flex flex-wrap items-center gap-2 text-sm font-medium", children: [
               h.host_name,
               /* @__PURE__ */ jsx8(Badge, { tone: state.tone, children: state.label }),
-              !!st?.phased_count && !h.busy && !h.checking && /* @__PURE__ */ jsx8(
-                "button",
-                {
-                  type: "button",
-                  title: PHASING_HINT,
-                  "aria-expanded": phasingOpen === h.host_id,
-                  onClick: () => setPhasingOpen(phasingOpen === h.host_id ? null : h.host_id),
-                  className: "text-xs font-normal text-white/55 underline decoration-dotted underline-offset-2 hover:text-white",
-                  children: phasingLabel(st)
-                }
-              ),
+              !h.busy && !h.checking && notes.map((n) => {
+                const id = `${h.host_id}:${n.key}`;
+                return /* @__PURE__ */ jsx8(
+                  "button",
+                  {
+                    type: "button",
+                    title: n.hint,
+                    "aria-expanded": noteOpen === id,
+                    onClick: () => setNoteOpen(noteOpen === id ? null : id),
+                    className: "text-xs font-normal text-white/55 underline decoration-dotted underline-offset-2 hover:text-white",
+                    children: n.label
+                  },
+                  n.key
+                );
+              }),
               needsReboot && !h.busy && /* @__PURE__ */ jsx8(Badge, { tone: "warn", children: "Neustart n\xF6tig" }),
               st?.unattended === true && /* @__PURE__ */ jsx8(Badge, { tone: "good", children: "Auto-Sicherheitsupdates an" })
             ] }),
@@ -1908,7 +2001,7 @@ function UpdatesTab({ canManage }) {
             h.check_overdue && /* @__PURE__ */ jsx8("p", { className: "mt-1 text-xs text-amber-300", "data-testid": `updates-overdue-${h.host_id}`, children: "Die geplante Pr\xFCfung ist hier ausgeblieben (das Dashboard lief zur Pr\xFCfzeit nicht). Der Stand kann veraltet sein \u2013 \u201EPr\xFCfen\u201C holt ihn nach." }),
             st?.error && /* @__PURE__ */ jsx8("p", { className: `mt-1 text-xs ${st.unsupported ? "text-white/50" : "text-amber-300"}`, children: st.error }),
             st?.refresh_error && /* @__PURE__ */ jsx8("p", { className: "mt-1 text-xs text-amber-300/80", children: st.refresh_error }),
-            phasingOpen === h.host_id && !!st?.phased_count && /* @__PURE__ */ jsx8("p", { className: "mt-1 text-xs text-white/50", children: PHASING_HINT }),
+            openNote && /* @__PURE__ */ jsx8("p", { className: "mt-1 text-xs text-white/50", children: openNote.hint }),
             needsReboot && st.reboot_reasons.length > 0 && /* @__PURE__ */ jsxs7("p", { className: "mt-1 text-xs text-white/50", children: [
               "Grund: ",
               st.reboot_reasons.slice(0, 3).join(", ")
@@ -1929,8 +2022,8 @@ function UpdatesTab({ canManage }) {
             ] })
           ] }),
           canManage && /* @__PURE__ */ jsxs7("div", { className: "flex flex-wrap gap-1", children: [
-            !!st?.security_count && /* @__PURE__ */ jsx8(Button, { small: true, variant: "primary", disabled: !!running, onClick: () => void apply(h, "security"), children: "Sicherheitsupdates einspielen" }),
-            !!st?.count && /* @__PURE__ */ jsx8(Button, { small: true, variant: st.security_count ? "secondary" : "primary", disabled: !!running, onClick: () => void apply(h, "all"), children: "Alle einspielen" }),
+            !!st && securityRunnable(st) > 0 && /* @__PURE__ */ jsx8(Button, { small: true, variant: "primary", disabled: !!running, onClick: () => void apply(h, "security"), children: "Sicherheitsupdates einspielen" }),
+            !!st && installable(st, h.full_upgrade) > 0 && /* @__PURE__ */ jsx8(Button, { small: true, variant: installableSecurity(st) ? "secondary" : "primary", disabled: !!running, onClick: () => void apply(h, "all"), children: "Alle einspielen" }),
             needsReboot && /* @__PURE__ */ jsx8(Button, { small: true, variant: "danger", disabled: !!running, onClick: () => void apply(h, "reboot"), children: "Neu starten" }),
             /* @__PURE__ */ jsxs7(Button, { small: true, variant: "ghost", disabled: h.checking || !!running, onClick: () => void checkAll([h.host_id]), ariaLabel: `${h.host_name} pr\xFCfen`, children: [
               /* @__PURE__ */ jsx8(Icon, { name: "refresh", size: 12 }),
@@ -1959,7 +2052,9 @@ function UpdatesTab({ canManage }) {
             /* @__PURE__ */ jsx8("td", { className: "px-3 py-1.5 font-mono", children: p.new_version }),
             /* @__PURE__ */ jsxs7("td", { className: "px-3 py-1.5 text-right", children: [
               p.security && /* @__PURE__ */ jsx8(Badge, { tone: "bad", children: "Sicherheit" }),
-              p.phased && /* @__PURE__ */ jsx8("span", { title: PHASING_HINT, children: /* @__PURE__ */ jsx8(Badge, { children: "verz\xF6gert" }) })
+              p.phased && /* @__PURE__ */ jsx8("span", { title: PHASING_HINT, children: /* @__PURE__ */ jsx8(Badge, { children: "verz\xF6gert" }) }),
+              p.kept_back && !h.full_upgrade && /* @__PURE__ */ jsx8("span", { title: KEPT_BACK_HINT, children: /* @__PURE__ */ jsx8(Badge, { children: "zur\xFCckgehalten" }) }),
+              p.held && /* @__PURE__ */ jsx8("span", { title: HELD_HINT, children: /* @__PURE__ */ jsx8(Badge, { children: "gesperrt" }) })
             ] })
           ] }, p.name)) })
         ] }) }),

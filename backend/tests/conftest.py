@@ -231,10 +231,9 @@ def test_settings(tmp_path: Path):
         image_info_path=tmp_path / "image-info.json",
         # Nie der echte Kanal zum Update-Helfer (/app/updater), falls die Tests in einem Container laufen.
         updater_dir=tmp_path / "updater",
-        # Die vielen SSH-Tests gegen den lokalen Testserver verlassen sich darauf, dass der erste
-        # Schluessel still gemerkt wird (so wie bei bestehenden Installationen). Neue Installationen
-        # verlangen eine Bestaetigung; das pruefen die Tests in test_ssh_confirm_new_host_keys.py,
-        # indem sie die Uebersteuerung wieder auf `None` setzen.
+        # Die vielen SSH-Tests gegen den lokalen Testserver verlassen sich darauf, dass der erste Schlüssel still
+        # gemerkt wird. Ohne diese Übersteuerung verlangt Deck eine Bestätigung; das prüfen die Tests in
+        # test_ssh_confirm_new_host_keys.py, indem sie sie wieder auf `None` setzen.
         ssh_confirm_new_host_keys=False,
     )
 

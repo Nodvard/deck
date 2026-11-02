@@ -15,22 +15,26 @@ This document is the specification. The matching, importable contract lives in
 ```
 extensions/shield/
 ├─ extension.toml            ← manifest, readable without importing code
-├─ pyproject.toml            ← optional; for pip-installable extensions
+├─ settings.schema.json      ← settings as a JSON Schema
+├─ root-helper/              ← helper script for commands as root
+├─ migrations/               ← own Alembic branch
 ├─ src/nodvard_deck_ext_shield/
 │  ├─ __init__.py            ← contains  class Extension(NodvardExtension)
-│  ├─ api.py                 ← APIRouter
-│  ├─ connectors.py          ← Ollama and ntfy connector types
-│  ├─ capabilities.py        ← ActionExecutor, AIProvider …
-│  ├─ widgets.py             ← declarative WidgetSpecs
-│  ├─ pipeline.py            ← incident queue/batching
-│  ├─ models.py              ← own tables (prefix ext_shield_; older: ext_nexus_soc_)
-│  └─ migrations/            ← own Alembic branch
+│  ├─ defender_api.py        ← APIRouter, schedules and ActionExecutor of the antivirus
+│  ├─ ollama.py              ← connector type and AIProvider for Ollama
+│  ├─ incident_queue.py      ← incident queue, survives a restart
+│  └─ models.py              ← own tables (prefix ext_shield_; older: ext_nexus_soc_)
 └─ frontend/
-   ├─ package.json
-   └─ src/index.tsx          ← registerPage/registerWidget, ESM bundle
+   ├─ build.mjs              ← builds src/SocPage.tsx into the ESM bundle dist/index.js
+   └─ src/SocPage.tsx        ← the page, a named export of the bundle
 ```
 
+An extension that is installed as a package of its own also has a `pyproject.toml`.
+
 ### Manifest (`extension.toml`)
+
+The example is modeled on the manifest of Nodvard Shield (`extensions/shield/extension.toml`). Shield itself does not set
+`requires`, `enable_on` and `stage`; they only show the syntax.
 
 ```toml
 [extension]
@@ -38,15 +42,15 @@ id          = "shield"             # stable, lowercase, namespace for everything
 legacy_ids  = ["nexus-soc"]        # optional: earlier IDs, see "Renaming an extension"
 name        = "Nodvard Shield"
 version     = "0.1.0"
-api_version = "1.0"                # SemVer against nodvard_sdk.API_VERSION
+api_version = "0.1.0"              # SemVer against nodvard_sdk.API_VERSION
 author      = "…"
-description = "Autonomous diagnosis and remediation for your own fleet."
-icon        = "shield-check"
+description = "Antivirus for all servers, plus the AI container watch."
+icon        = "shield-alert"
 entrypoint  = "nodvard_deck_ext_shield:Extension"
 frontend    = "frontend/dist/index.js"    # optional
 requires    = ["terminal>=0.1"]           # other extensions, optional
 enable_on   = ["host_credential"]         # optional: see below
-category    = "servers"                   # optional: group in the module selection of the setup wizard
+category    = "security"                  # optional: group in the module selection of the setup wizard
 sort_order  = 10                          # optional: order within the group (default 100)
 stage       = "beta"                      # optional: maturity, "stable" (default) or "beta"
 
@@ -55,11 +59,11 @@ stage       = "beta"                      # optional: maturity, "stable" (defaul
 permissions = [
   "hosts.read",
   "hosts.execute",          # run commands on hosts (only through the gate)
-  "secrets.read:ssh-fleet",
+  "secrets.read:nexus-soc-*",
   "audit.write",
   "notify.send",
   "schedule.register",
-  "net.outbound:192.168.1.0/24",
+  "net.outbound",
 ]
 
 [settings]                  # JSON Schema; the core renders the settings page from it
@@ -520,7 +524,7 @@ ctx.capabilities.provide(ProxmoxHostProvider(ctx))
 | `HostProvider` | proxmox, docker, static inventory | the host list, node page, start/stop actions |
 | `TerminalTarget` | terminal (SSH), serial/container shells in the future | the web terminal |
 | `ConsoleTarget` | proxmox (vncproxy/vncwebsocket) | the graphical console (`/console/:hostId`, noVNC) |
-| `FileSource` | files-sftp, nextcloud, truenas, syncthing | the **one** file manager with sidebar |
+| `FileSource` | terminal (SFTP), nextcloud (WebDAV) | the **one** file manager with sidebar |
 | `FilePlaceProvider` | docker, proxmox, system | "Important places" of a server in the file manager |
 | `AppSuggestionProvider` | npm (Nginx Proxy Manager) | Suggestions for app tiles on the "Apps" page (`GET /apps/suggestions`): `app_suggestions()` → `[AppSuggestion(name, url, source, host?)]`, only knowledge the extension already has; the core checks, de-duplicates and drops existing ones |
 | `ActionExecutor` | terminal (SSH exec), proxmox (API actions) | execution behind the gate |
@@ -583,7 +587,7 @@ Adding a new source means: registering one object. No core code changes.
 
 `open_write` should replace the target only once everything has arrived and never truncate it up front: otherwise
 an abort would lose the old content, and if source and target are the same file, writing would truncate the source
-itself (`files-sftp` therefore writes, where possible, to a temp file in the target folder and renames it
+itself (the SFTP source of the terminal extension therefore writes, where possible, to a temp file in the target folder and renames it
 afterwards).
 
 Optional, deliberately **not** a required member of the protocol: `async file_identity(path) -> dict | None`. With
@@ -1038,6 +1042,10 @@ in, at build time, the parts it imports. It contains:
 | File | Contents |
 |---|---|
 | `ui.tsx` | Building blocks for pages: `Page`, `Card`, `Button`, `Badge`, `Stat`, `EmptyState`, `Notice`, `Field`, `SearchInput`, `Loading`, icons |
+| `loadError.tsx` | `fetchJson`, `errorMessage` and `LoadError`: a load error shows the reason and "Try again" („Erneut versuchen“) instead of an empty list |
+| `format.ts` | display helpers, such as `formatBytes` |
+| `AuthImage.tsx`, `links.tsx`, `menu.tsx` | an image from a protected endpoint (`AuthImage`), a button to the settings page and a setting value for empty states (`SettingsLink`, `useSettingText`), the "More" („Mehr“) menu (`MoreMenu`) |
+| `hostKind.tsx`, `certificate.tsx`, `passwordWarning.tsx` | the kind of a server (physical, VM, LXC) for groups and badges, the certificate fingerprint of a connection, a notice about a password without HTTPS |
 | `api.ts`, `actions.ts` | `authedFetch` with token renewal and the error texts; `runAction` (propose, approve and poll an action, see above) |
 | `deck.ts`, `location.ts`, `lifecycle.ts` | Access to `window.__nodvardDeck`, `useUrlParams()` (follows the address bar), abort when the page is left |
 | `HostPicker.tsx` | the server picker (see below) |
@@ -1173,23 +1181,23 @@ guests, what a container is.
 
 | Component | Implementation |
 |---|---|
-| Versioning | own Git repo under `/data/ext/scripts/repo`, `pygit2`/`dulwich`; the extension sets the Git settings itself on every start, and hooks, filters and signing never run (from `.git`, a backup only carries the history) |
-| Metadata, parameters | own tables + a JSON Schema per script. In the script, parameters are written as `$name` or `${name}`. Only declared parameters are replaced (value via `shlex.quote`), `$$` becomes `$`, every other `$` (`$HOME`, `"$f"`, `$(date)`) stays for the shell; so the shell's process ID is written `$$$$` |
+| Versioning | own Git repo under `<data folder>/ext/scripts/repo`, using `dulwich`; the extension sets the Git settings itself on every start, and hooks, filters and signing never run (from `.git`, a backup only carries the history) |
+| Metadata, parameters | per script a `script.sh` and a `meta.json` in the Git repository (no tables of its own); `params_schema` in the `meta.json` describes the parameters. In the script, parameters are written as `$name` or `${name}`. Only declared parameters are replaced (value via `shlex.quote`), `$$` becomes `$`, every other `$` (`$HOME`, `"$f"`, `$(date)`) stays for the shell; so the shell's process ID is written `$$$$` |
 | "Run now" | `ctx.actions.propose(ActionSpec("script.run"))` → the same SSH layer as the terminal (no second execution path) |
 | Fleet-wide schedule | `ctx.scheduler` — **one** view, because there is **one** scheduler |
 | Scheduled runs without a click | standing approval per script, stored in `ctx.data_dir` (not in the Git repo: resetting the script does not revive an expired approval). Only real scheduled runs (`current_job_trigger() == "schedule"`) send it as `ActionRequest.standing_approval`. Beforehand the extension checks that content, parameters, target, schedule and the servers' account, address and SSH port are still as they were when it was granted; the core gate checks that the person who granted it is still allowed to |
 | Run history | core tables `jobs`/`job_runs` + audit |
 | Secrets | `ctx.secrets.get_handle(...)`, never plaintext in the script |
-| In-browser editor | `register_page`, CodeMirror 6 |
+| In-browser editor | `register_page` (`ScriptsPage`), a plain `<textarea>` |
 | Security gate | the same core gate as in Nodvard Shield — no second confirmation UI |
 | AI "promotes" a recurring fix | `ctx.events.subscribe("action.executed")` in the scripts extension; the proposal is kept as a draft in the repo. The two extensions talk via the event bus, not to each other. |
 
 ### File manager sources
 
-Every source is a `FileSource`. `files-sftp` (host admin access) lives in the terminal
-extension because it already has the SSH layer; `nextcloud` (WebDAV), `truenas` (API +
-SMB/NFS) and `syncthing` (REST) are separate extensions, each with one connector instance
-per server. The core renders one explorer across all of them.
+Every source is a `FileSource`. The SFTP source (host admin access, `ssh-sftp:<host-id>` per server) lives in the
+terminal extension because it already has the SSH layer; `nextcloud` (WebDAV) is a separate extension with exactly one
+instance, which is set in its settings. There is no TrueNAS or Syncthing; further sources would be extensions of
+their own. The core renders one explorer across all of them.
 
 ---
 

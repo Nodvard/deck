@@ -380,8 +380,8 @@ class Settings(BaseSettings):
     ssh_confirm_new_host_keys: bool | None = None
     """NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS: Übersteuerung für alle Server. `true`: Neue Server-Schlüssel werden nicht still
     gemerkt (TOFU, core/ssh.py), die Verbindung scheitert mit `HostKeyUnknown`, bis jemand den Fingerabdruck bestätigt hat;
-    `false`: still merken. Nicht gesetzt gilt die gespeicherte Einstellung `ssh.confirm_new_host_keys` (neue Installationen
-    an, bestehende aus; `services.hosts.host_key_confirmation_required`)."""
+    `false`: still merken. Nicht gesetzt gilt die gespeicherte Einstellung `ssh.confirm_new_host_keys`, ohne gespeicherten
+    Wert an (`services.hosts.host_key_confirmation_required`)."""
     # Bereits gemerkte Schlüssel sind nie betroffen; "Schlüssel vergessen" verlangt immer Bestätigung.
 
     trusted_proxies: str | None = None

@@ -13,6 +13,7 @@ from .detached import KEPT_BACK_MARK
 
 _SECURITY_RE = re.compile(r"security", re.IGNORECASE)
 _PKG_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+._:~-]*$")
+_PHASING_RC_RE = re.compile(r"rc (inst|all) (\d+)")
 
 
 REFRESH_COMMAND = (
@@ -25,11 +26,13 @@ REFRESH_COMMAND = (
 
 # Was „Alle einspielen“ einspielen würde, einmal wie eingestellt und einmal mit allen schrittweise verteilten Updates:
 # Was nur im zweiten Lauf dabei ist, hält apt wegen Phasing zurück. Fest "C", nur simuliert, braucht kein root.
+# Jeder Lauf meldet seinen Exit-Code, denn ein gescheiterter Lauf liefert keine Zeilen und sähe sonst aus wie 0.
 PHASING_COMMAND = (
     "echo @@phasing; if command -v apt-get >/dev/null 2>&1; then "
-    "LC_ALL=C apt-get -s upgrade --with-new-pkgs 2>/dev/null | awk '$1 == \"Inst\" { print \"inst \" $2 }'; "
-    "LC_ALL=C apt-get -s -o APT::Get::Always-Include-Phased-Updates=true upgrade --with-new-pkgs 2>/dev/null "
-    "| awk '$1 == \"Inst\" { print \"all \" $2 }'; fi; "
+    "phasing_out=$(LC_ALL=C apt-get -s upgrade --with-new-pkgs 2>/dev/null); echo \"rc inst $?\"; "
+    "printf '%s\\n' \"$phasing_out\" | awk '$1 == \"Inst\" { print \"inst \" $2 }'; "
+    "phasing_out=$(LC_ALL=C apt-get -s -o APT::Get::Always-Include-Phased-Updates=true upgrade --with-new-pkgs "
+    "2>/dev/null); echo \"rc all $?\"; printf '%s\\n' \"$phasing_out\" | awk '$1 == \"Inst\" { print \"all \" $2 }'; fi; "
 )
 
 
@@ -49,7 +52,9 @@ def status_command(*, refresh: bool) -> str:
         "elif command -v dnf >/dev/null 2>&1; then dnf -q check-update 2>/dev/null; "
         "elif command -v apk >/dev/null 2>&1; then apk version -l '<' 2>/dev/null | tail -n +2; fi; "
         + PHASING_COMMAND
-        + "echo @@security; if command -v dnf >/dev/null 2>&1; then dnf -q updateinfo list --security 2>/dev/null; fi; "
+        + "echo @@held; if command -v apt-mark >/dev/null 2>&1; then apt-mark showhold 2>/dev/null; fi; "
+        "echo @@pve; if command -v pveversion >/dev/null 2>&1; then echo yes; else echo no; fi; "
+        "echo @@security; if command -v dnf >/dev/null 2>&1; then dnf -q updateinfo list --security 2>/dev/null; fi; "
         "echo @@reboot; if [ -f /var/run/reboot-required ]; then echo yes; cat /var/run/reboot-required.pkgs 2>/dev/null; "
         "elif command -v needs-restarting >/dev/null 2>&1 && ! needs-restarting -r >/dev/null 2>&1; then echo yes; else echo no; fi; "
         "echo @@kernel; uname -r; "
@@ -70,10 +75,19 @@ class Package:
     security: bool = False
     phased: bool = False
     """apt hält das Update auf diesem Rechner noch zurück, weil Ubuntu es schrittweise verteilt (Phasing)."""
+    kept_back: bool = False
+    """Kommt nur mit `full-upgrade`, weil dafür andere Pakete ersetzt oder entfernt werden müssten."""
+    held: bool = False
+    """Auf dem Server mit `apt-mark hold` gesperrt."""
+
+    @property
+    def installable(self) -> bool:
+        return not (self.phased or self.kept_back or self.held)
 
     def as_dict(self) -> dict[str, object]:
         return {"name": self.name, "new_version": self.new_version, "current_version": self.current_version,
-                "repo": self.repo, "security": self.security, "phased": self.phased}
+                "repo": self.repo, "security": self.security, "phased": self.phased, "kept_back": self.kept_back,
+                "held": self.held}
 
 
 @dataclass
@@ -90,14 +104,26 @@ class UpdateStatus:
     error: str | None = None
     unsupported: bool = False
     """Kein bekannter Paketmanager (z. B. ein NAS): kein Fehler, nur „nicht unterstützt“, ohne Warnung."""
+    phasing: str = "none"
+    """`checked`: beide Probeläufe von apt liefen durch; `unavailable`: einer scheiterte, die Zahl ist unbekannt; `none`: kein apt."""
+    pve: bool = False
+    """`pveversion` ist da: „Alle Updates“ kann hier dist-upgrade nehmen (Einstellung `proxmox_dist_upgrade`)."""
 
     @property
     def security_count(self) -> int:
         return sum(1 for p in self.packages if p.security)
 
     @property
-    def phased_count(self) -> int:
+    def phased_count(self) -> int | None:
+        if self.phasing == "unavailable":
+            return None
         return sum(1 for p in self.packages if p.phased)
+
+    @property
+    def kept_back_count(self) -> int | None:
+        if self.phasing == "unavailable":
+            return None
+        return sum(1 for p in self.packages if p.kept_back)
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -105,7 +131,10 @@ class UpdateStatus:
             "security_count": self.security_count, "phased_count": self.phased_count, "reboot_required": self.reboot_required,
             "reboot_reasons": self.reboot_reasons, "kernel": self.kernel, "latest_kernel": self.latest_kernel,
             "uptime_s": self.uptime_s, "unattended": self.unattended, "refresh_error": self.refresh_error, "error": self.error,
-            "unsupported": self.unsupported,
+            "unsupported": self.unsupported, "phasing": self.phasing, "pve": self.pve, "kept_back_count": self.kept_back_count,
+            "held_count": sum(1 for p in self.packages if p.held),
+            "installable_count": sum(1 for p in self.packages if p.installable),
+            "installable_security_count": sum(1 for p in self.packages if p.security and p.installable),
         }
 
 
@@ -130,8 +159,8 @@ _DNF_RE = re.compile(r"^(?P<name>[^\s]+)\.(?P<arch>[A-Za-z0-9_]+)\s+(?P<new>\S+)
 _APK_RE = re.compile(r"^(?P<full>\S+)\s+<\s+(?P<new>\S+)")
 
 
-def _phased_names(lines: list[str]) -> set[str]:
-    """Pakete, die nur der Lauf mit allen schrittweise verteilten Updates einspielen würde; ohne Architektur wie in
+def _run_names(lines: list[str]) -> dict[str, set[str]]:
+    """Was die beiden Probeläufe einspielen würden (`inst` wie eingestellt, `all` mit Phasing); ohne Architektur wie in
     `apt list`."""
     found: dict[str, set[str]] = {"inst": set(), "all": set()}
     for line in lines:
@@ -139,7 +168,25 @@ def _phased_names(lines: list[str]) -> set[str]:
         name = name.split(":", 1)[0]
         if kind in found and _PKG_NAME_RE.match(name):
             found[kind].add(name)
-    return found["all"] - found["inst"]
+    return found
+
+
+def _trial_runs(lines: list[str]) -> dict[str, set[str]] | None:
+    """Wie `_run_names`, aber `None`, wenn einer der beiden Probeläufe fehlt oder mit einem Fehler endete."""
+    codes: dict[str, str] = {}
+    for line in lines:
+        # Nur echte Leerzeichen: Ein Paketname mit anderem Leerraum könnte sonst eine eigene Zeile vortäuschen.
+        if m := _PHASING_RC_RE.fullmatch(line):
+            codes[m.group(1)] = m.group(2)
+    if codes.get("inst") != "0" or codes.get("all") != "0":
+        return None
+    return _run_names(lines)
+
+
+def _held_names(lines: list[str]) -> set[str]:
+    """Mit `apt-mark hold` gesperrte Pakete, ohne Architektur."""
+    names = {line.split(":", 1)[0] for line in lines}
+    return {n for n in names if _PKG_NAME_RE.match(n)}
 
 
 def _apk_name(full: str) -> tuple[str, str | None]:
@@ -154,28 +201,36 @@ def parse_status(output: str) -> UpdateStatus:
         return UpdateStatus(manager=None, error="Kein unterstützter Paketmanager (apt, dnf, apk) gefunden.", unsupported=True)
 
     packages: list[Package] = []
-    security_names: set[str] = set()
+    dnf_security: set[str] = set()
     for line in s.get("security", []):
         # "FEDORA-2024-1a2b3c Important/Sec. openssl-libs-1:3.2.1-2.fc40.x86_64"
         parts = line.split()
         if len(parts) >= 3:
-            security_names.add(re.sub(r"-\d.*$", "", parts[-1]))
+            dnf_security.add(re.sub(r"-\d.*$", "", parts[-1]))
 
-    phased = _phased_names(s.get("phasing", []))
+    runs = _trial_runs(s.get("phasing", [])) if manager == "apt" else None
+    inst, every = (runs["inst"], runs["all"]) if runs is not None else (set(), set())
+    held = _held_names(s.get("held", [])) if manager == "apt" else set()
     for line in s.get("list", []):
         if manager == "apt":
             m = _APT_RE.match(line)
             if m:
-                repo = m.group("repo")
-                packages.append(Package(name=m.group("name"), new_version=m.group("new"), current_version=m.group("old"),
-                                        repo=repo, security=bool(_SECURITY_RE.search(repo)), phased=m.group("name") in phased))
+                name, repo = m.group("name"), m.group("repo")
+                is_held = name in held
+                # Gesperrte zählen für sich. Von den übrigen ist verzögert, was nur der Lauf mit Phasing einspielt, und
+                # zurückgehalten, was keiner der beiden einspielt: Das bräuchte full-upgrade.
+                planned = runs is not None and not is_held and name not in inst
+                packages.append(Package(name=name, new_version=m.group("new"), current_version=m.group("old"),
+                                        repo=repo, security=bool(_SECURITY_RE.search(repo)),
+                                        phased=planned and name in every, kept_back=planned and name not in every,
+                                        held=is_held))
         elif manager == "dnf":
             if line.startswith(("Obsoleting", "Last metadata", "Security:")):
                 continue
             m = _DNF_RE.match(line)
             if m:
                 name = m.group("name")
-                packages.append(Package(name=name, new_version=m.group("new"), repo=m.group("repo"), security=name in security_names))
+                packages.append(Package(name=name, new_version=m.group("new"), repo=m.group("repo"), security=name in dnf_security))
         elif manager == "apk":
             m = _APK_RE.match(line)
             if m:
@@ -208,10 +263,14 @@ def parse_status(output: str) -> UpdateStatus:
         refresh_error = f"Nicht alle Paketquellen erreichbar: {bad[0][:200]}"
 
     packages.sort(key=lambda p: (not p.security, p.name))
+    if manager != "apt":
+        phasing = "none"
+    else:
+        phasing = "checked" if runs is not None else "unavailable"
     return UpdateStatus(
         manager=manager, packages=packages, reboot_required=reboot, reboot_reasons=reasons, kernel=kernel,
         latest_kernel=latest, uptime_s=uptime, unattended=True if unattended_raw == "yes" else False if unattended_raw == "no" else None,
-        refresh_error=refresh_error,
+        refresh_error=refresh_error, phasing=phasing, pve=manager == "apt" and (s.get("pve") or ["no"])[0] == "yes",
     )
 
 
@@ -259,6 +318,74 @@ UPGRADE_DONE = "@@upgrade-done"
 REBOOT_MARK = "@@reboot-required"
 
 _APT_OPTS = "-y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"
+
+
+def runnable(st: dict[str, Any], mode: str, *, full_upgrade: bool = False) -> int:
+    """Wie viele Updates ein Lauf dieser Art einspielen würde; mit `full_upgrade` (dist-upgrade) auch die zurückgehaltenen.
+    Ein Stand ohne Einteilung (ältere Version) zählt alle außer den verzögerten."""
+    if mode == "security":
+        if not security_known(st):
+            return 0
+        return int(st.get("installable_security_count", st.get("security_count")) or 0)
+    extra = int(st.get("kept_back_count") or 0) if full_upgrade else 0
+    if "installable_count" in st:
+        return int(st["installable_count"] or 0) + extra
+    return int(st.get("count") or 0) - int(st.get("phased_count") or 0) + extra
+
+
+def not_installable(st: dict[str, Any], mode: str, *, full_upgrade: bool = False) -> dict[str, int]:
+    """Was ein Lauf dieser Art auslässt, je Grund; zusammen mit `runnable` ergibt das alle offenen Updates der Art."""
+    if "installable_count" not in st:
+        # Ein älterer Stand kennt höchstens die Zahl der verzögerten, und die zählt nur für „Alle Updates“.
+        return {"phased": int(st.get("phased_count") or 0) if mode == "all" else 0, "kept_back": 0, "held": 0}
+    if mode == "security":
+        sec = [p for p in st.get("packages") or [] if p.get("security")]
+        counts = {flag: sum(1 for p in sec if p.get(flag)) for flag in ("phased", "kept_back", "held")}
+        if not security_known(st):
+            # Ohne Probeläufe ist jedes nicht gesperrte Sicherheitsupdate ungeklärt, ein gezielter Lauf entfällt.
+            counts["unknown"] = int(st.get("security_count") or len(sec)) - counts["held"]
+        return counts
+    return {"phased": int(st.get("phased_count") or 0), "kept_back": 0 if full_upgrade else int(st.get("kept_back_count") or 0),
+            "held": int(st.get("held_count") or 0)}
+
+
+def reasons_text(counts: dict[str, int]) -> str:
+    """„2 durch Phasing verzögert, 3 zurückgehalten, 1 gesperrt“; leer, wenn nichts ausgelassen wird."""
+    return ", ".join(f"{counts[key]} {label}" for key, label in REASON_LABEL.items() if counts.get(key))
+
+
+REASON_LABEL = {"phased": "durch Phasing verzögert", "kept_back": "zurückgehalten", "held": "gesperrt",
+                "unknown": "nicht prüfbar"}
+
+SECURITY_UNKNOWN_MESSAGE = (
+    "Sicherheitsupdates lassen sich hier gerade nicht gezielt einspielen: apt konnte die Probe-Installation nicht "
+    "durchrechnen, ob ein Paket zurückgehalten ist, bleibt deshalb offen. Den Grund zeigt „apt-get -s upgrade“ auf dem "
+    "Server, danach „Prüfen“."
+)
+
+
+def security_known(st: dict[str, Any]) -> bool:
+    """Lässt sich sagen, welche Sicherheitsupdates gezielt einspielbar sind? Nicht, wenn die Probeläufe von apt scheiterten."""
+    return st.get("phasing") != "unavailable"
+
+
+def held_back_message(st: dict[str, Any], mode: str, *, full_upgrade: bool = False) -> str:
+    what = "Sicherheitsupdates" if mode == "security" else "Updates"
+    reasons = reasons_text(not_installable(st, mode, full_upgrade=full_upgrade))
+    return (f"Die offenen {what} lassen sich hier gerade nicht einspielen" + (f" ({reasons})" if reasons else "")
+            + ". Was zu tun ist, steht beim Server in der Update-Zentrale.")
+
+
+def security_names(packages: list[dict[str, Any]]) -> list[str]:
+    """Sicherheitsupdates für `install --only-upgrade`, nur einspielbare: `install` würde Phasing übergehen, für ein
+    zurückgehaltenes Paket andere entfernen und bei einem gesperrten abbrechen."""
+    return [p["name"] for p in packages
+            if p.get("security") and not p.get("phased") and not p.get("kept_back") and not p.get("held")]
+
+
+def full_upgrade_here(settings: dict[str, Any], st: dict[str, Any] | None) -> bool:
+    """Nimmt „Alle Updates“ hier dist-upgrade? Dieselbe Bedingung wie im Befehl: Einstellung an und `pveversion` vorhanden."""
+    return bool(settings.get("proxmox_dist_upgrade")) and (st or {}).get("pve") is True
 
 
 def wants_dist_upgrade(settings: dict[str, Any], manager: str, mode: str) -> bool:

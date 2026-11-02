@@ -61,7 +61,7 @@ _DEFAULTS: dict[str, Any] = {
     "hosts.reachability.interval_minutes": reachability_service.DEFAULT_INTERVAL_MINUTES,
     "system.update_check.enabled": update_check_service.DEFAULT_ENABLED,
     "system.update_check.channel": update_check_service.DEFAULT_CHANNEL,
-    "ssh.confirm_new_host_keys": False,
+    "ssh.confirm_new_host_keys": True,
     "system.trusted_proxies": [],
 }
 """Feste Vorgaben; `system.timezone` und `audit.retention_days` kommen aus der Umgebung (`_default_for`)."""

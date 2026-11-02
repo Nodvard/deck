@@ -278,7 +278,7 @@ shows up in it as a duplicate row.
 (running|succeeded|failed|interrupted|skipped), started_at, finished_at, exit_code,
 host_id, output_ref, error, actor, correlation_id`
 
-`output_ref` points to a file under `/data/runs/<id>.log`, not into the DB:
+`output_ref` points to a file under `<data folder>/runs/<id>.log`, not into the DB:
 script output is unbounded in size, DB rows should not be.
 `interrupted` exists so that a restart in the middle of a run becomes visible instead of
 disappearing; likewise, a run that shutdown aborts or never starts at all ends this way.
@@ -326,15 +326,26 @@ Reserved keys:
 ```
 branding.product_name      branding.short_name     branding.logo_url
 branding.favicon_url       branding.colors         branding.login_subtitle
-autonomy.mode              autonomy.max_risk       autonomy.window
+branding.support_url
+autonomy.mode              autonomy.max_risk
 audit.retention_days       maintenance.windows     security.deny_patterns
 jobs.run_retention_days    notifications.retention_days
 locale.default             notifications.defaults     system.timezone
+system.update_check.enabled                        system.update_check.channel
+system.trusted_proxies
 backup.config              backup.key              backup.last_run
 system.instance_id         hosts.reachability.enabled
 hosts.reachability.interval_minutes                hosts.reachability.state
 ssh.confirm_new_host_keys  ssh.host_key_confirm_required
+demo.seeded_ids
+ui.custom_css              ui.theme                ui.first_steps_dismissed
+ui.design_notice_dismissed
 ```
+
+`ui.theme`, `ui.first_steps_dismissed` and `ui.design_notice_dismissed` apply per user (`scope = 'user'`), `ui.custom_css`
+(the admins' own CSS) globally. `demo.seeded_ids` remembers the rows of the sample data (see D-10 in
+[DECISIONS.md](DECISIONS.md)). `system.update_check.*` and `system.trusted_proxies` can be set via `PUT /settings/{key}`, see
+[04-API.md](../04-API.md), section 3, "Settings" („Einstellungen“), in German.
 
 Backups (`services/backups.py`, only via `/system/backups/...`, not via `/settings`; only the owner may change them):
 
@@ -361,9 +372,9 @@ maintenance window only in the history, caught up once audibly afterwards); it d
 The core job `host-reachability` is stored in `jobs` like the other core jobs (`ext_id` null); its runs in `job_runs`
 are kept for only 24 hours, because it runs up to 1440 times a day.
 
-Host keys (`services/hosts.py`): `ssh.confirm_new_host_keys` (global, default `false`) determines whether new
-host keys are remembered only after confirmation; creating the first account stores `true`, installations
-from before do not have the value. `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` overrides it (see [04-API.md](../04-API.md), section 3,
+Host keys (`services/hosts.py`): `ssh.confirm_new_host_keys` (global, default `true`) determines whether new
+host keys are remembered only after confirmation; creating the first account stores `true`, without a stored
+value `true` applies as well, only a stored `false` turns it off. `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` overrides it (see [04-API.md](../04-API.md), section 3,
 "Settings", in German). `ssh.host_key_confirm_required` is an internal marker per host (`scope = 'host'`, `user_id` =
 host ID): set when forgetting a remembered key (`DELETE /hosts/{id}/known-hosts/{key_type}`, in the same
 commit), removed only on confirmation (`POST /hosts/{id}/known-hosts`) and together with the host. As long as it exists, no

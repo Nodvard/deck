@@ -3,9 +3,8 @@ Terminal, Erweiterungen) mehr still einen neuen Server-Schlüssel -- das geht nu
 prüfen“ und Bestätigen.
 
 Reihenfolge, die erste Antwort gilt: (1) Merker am Server nach „Schlüssel vergessen“, (2) Umgebungsvariable
-NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS, (3) gespeicherte Einstellung `ssh.confirm_new_host_keys`
-(neue Installationen: an, gesetzt vom Bootstrap des ersten Kontos), (4) sonst aus -- bestehende
-Installationen behalten das alte Verhalten (TOFU).
+NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS, (3) gespeicherte Einstellung `ssh.confirm_new_host_keys`, (4) sonst an, auch
+bei bestehenden Installationen. Still merken (TOFU) gibt es nur noch als ausdrückliches Abschalten.
 
 Die Test-Einstellungen stellen die Umgebungsvariable auf `False` (siehe conftest); wer die Reihenfolge ab
 Punkt 3 prüfen will, setzt `ssh_confirm_new_host_keys = None`.
@@ -51,10 +50,16 @@ async def _host_with_password(client, token, port) -> dict:
 
 
 async def _make_existing_install(db_session, test_settings) -> None:
-    """So sieht eine Installation aus, die vor der Bestätigungspflicht angelegt wurde: ohne den
-    gespeicherten Wert und ohne Umgebungsvariable."""
+    """Eine Installation von vor der Bestätigungspflicht: ohne gespeicherten Wert und ohne Umgebungsvariable."""
     test_settings.ssh_confirm_new_host_keys = None
     await db_session.execute(delete(Setting).where(Setting.key == "ssh.confirm_new_host_keys"))
+    await db_session.commit()
+
+
+async def _opt_out(db_session, test_settings) -> None:
+    """Der Inhaber hat die Pflicht ausdrücklich abgeschaltet."""
+    await _make_existing_install(db_session, test_settings)
+    await settings_service.set_global(db_session, "ssh.confirm_new_host_keys", False)
     await db_session.commit()
 
 
@@ -97,13 +102,11 @@ async def test_resolve_connection_target_follows_the_variable(client, db_session
 
 
 @pytest.mark.asyncio
-async def test_default_keeps_background_tofu(client, db_session, local_ssh_server, test_settings):
-    """Bestehende Installation (kein gespeicherter Wert, keine Variable): der Status-Abruf merkt den
-    neuen Schlüssel still -- wie bisher."""
+async def test_an_explicit_opt_out_keeps_background_tofu(client, db_session, local_ssh_server, test_settings):
     _, port, *_ = local_ssh_server
     token = await _bootstrap_owner(client)
     host = await _host_with_password(client, token, port)
-    await _make_existing_install(db_session, test_settings)
+    await _opt_out(db_session, test_settings)
 
     r = await client.get(f"/api/v1/hosts/{host['id']}/status", headers=_auth(token))
     assert r.status_code == 200 and r.json()["status"] == "up", r.text
@@ -219,27 +222,64 @@ async def test_a_new_installation_requires_confirmation_by_default(
 
 
 @pytest.mark.asyncio
-async def test_an_existing_installation_keeps_the_old_behaviour(client, db_session, local_ssh_server, test_settings):
+async def test_an_existing_installation_sends_nothing_to_an_unconfirmed_key(
+    client, db_session, local_ssh_server, test_settings, ssh_server_stats
+):
     _, port, *_ = local_ssh_server
     token = await _bootstrap_owner(client)
     host = await _host_with_password(client, token, port)
     await _make_existing_install(db_session, test_settings)
     assert await _stored(db_session) is None
 
-    _, _, target = await _target_for(db_session, test_settings, host["id"])
-    assert target.allow_tofu is True
+    _, credential, target = await _target_for(db_session, test_settings, host["id"])
+    assert target.allow_tofu is False
+    with pytest.raises(ssh.HostKeyUnknown):
+        await ssh.get_ssh_pool().get(db_session, target, credential_id=credential.id)
+    body = (await client.get(f"/api/v1/hosts/{host['id']}/status", headers=_auth(token))).json()
+    assert body["status"] == "unknown" and "noch nicht bestätigt" in body["detail"]
+    assert await _known(db_session) == []
+    assert ssh_server_stats["begin_auth"] == 0 and ssh_server_stats["password_tries"] == 0, "kein Passwort gesendet"
+
+    await _pin_via_check(client, token, host["id"])
+    db_session.expire_all()
+    _, credential, target = await _target_for(db_session, test_settings, host["id"])
+    conn = await ssh.get_ssh_pool().get(db_session, target, credential_id=credential.id)
+    assert (await ssh.run(conn, "true"))[0] == 0
     assert (await client.get(f"/api/v1/hosts/{host['id']}/status", headers=_auth(token))).json()["status"] == "up"
-    [row] = await _known(db_session)
-    assert row.accepted_by_user_id is None
+    [pinned] = await _known(db_session)
+    assert pinned.accepted_by_user_id is not None, "bestätigt, nicht still gemerkt"
+
+
+@pytest.mark.asyncio
+async def test_an_existing_installation_keeps_its_known_keys(
+    client, db_session, local_ssh_server, test_settings, ssh_server_stats
+):
+    _, port, *_ = local_ssh_server
+    token = await _bootstrap_owner(client)
+    host = await _host_with_password(client, token, port)
+    await _make_existing_install(db_session, test_settings)
+    # Ein Schlüssel, den die Installation schon still gemerkt hat.
+    test_settings.ssh_confirm_new_host_keys = False
+    assert (await client.get(f"/api/v1/hosts/{host['id']}/status", headers=_auth(token))).json()["status"] == "up"
+    [before] = await _known(db_session)
+    await ssh.reset_ssh_pool()
+    auth_before = ssh_server_stats["begin_auth"]
+
+    test_settings.ssh_confirm_new_host_keys = None
+    body = (await client.get(f"/api/v1/hosts/{host['id']}/status", headers=_auth(token))).json()
+    assert body["status"] == "up" and body["detail"] is None
+    [after] = await _known(db_session)
+    assert (after.key_type, after.fingerprint) == (before.key_type, before.fingerprint)
+    assert ssh_server_stats["begin_auth"] > auth_before, "angemeldet mit dem gemerkten Schlüssel"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stored,override,expect_confirm", [
-    (True, None, True), (False, None, False), (None, None, False),
-    (True, False, False), (False, True, True), (None, True, True),
+    (True, None, True), (False, None, False), (None, None, True),
+    (True, False, False), (False, True, True), (None, True, True), (None, False, False),
 ])
 async def test_order_of_the_settings(client, db_session, test_settings, stored, override, expect_confirm):
-    """Umgebungsvariable (falls gesetzt) vor dem gespeicherten Wert, der vor dem Standard „aus“."""
+    """Umgebungsvariable (falls gesetzt) vor dem gespeicherten Wert, der vor dem Standard „an“."""
     token = await _bootstrap_owner(client)
     host = await _host_with_password(client, token, 22)
     await _make_existing_install(db_session, test_settings)
@@ -249,6 +289,18 @@ async def test_order_of_the_settings(client, db_session, test_settings, stored, 
     test_settings.ssh_confirm_new_host_keys = override
     _, _, target = await _target_for(db_session, test_settings, host["id"])
     assert target.allow_tofu is (not expect_confirm)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored", [{"value": None}, {"value": "false"}, {"value": 0}, {}])
+async def test_only_a_real_false_turns_confirmation_off(client, db_session, test_settings, stored):
+    token = await _bootstrap_owner(client)
+    host = await _host_with_password(client, token, 22)
+    await _make_existing_install(db_session, test_settings)
+    db_session.add(Setting(key="ssh.confirm_new_host_keys", scope="global", user_id="", value=stored))
+    await db_session.commit()
+    _, _, target = await _target_for(db_session, test_settings, host["id"])
+    assert target.allow_tofu is False
 
 
 async def _pin_via_check(client, token, host_id):
@@ -262,17 +314,19 @@ async def _pin_via_check(client, token, host_id):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("override", [False, None])
+@pytest.mark.parametrize("by_variable", [True, False])
 async def test_forgetting_a_key_blocks_silent_pinning_until_confirmed(
-    client, db_session, local_ssh_server, test_settings, ssh_server_stats, override
+    client, db_session, local_ssh_server, test_settings, ssh_server_stats, by_variable
 ):
-    """Auch bei „still merken“ (Variable false oder bestehende Installation): nach „vergessen“ geht die
+    """Auch bei „still merken“ (Variable false oder ausdrücklich abgeschaltet): nach „vergessen“ geht die
     Verbindung über den Pool nur noch nach ausdrücklicher Bestätigung, und es wird nichts gesendet."""
     _, port, *_ = local_ssh_server
     token = await _bootstrap_owner(client)
     host = await _host_with_password(client, token, port)
-    await _make_existing_install(db_session, test_settings)
-    test_settings.ssh_confirm_new_host_keys = override
+    await _opt_out(db_session, test_settings)
+    if by_variable:
+        await _make_existing_install(db_session, test_settings)
+        test_settings.ssh_confirm_new_host_keys = False
 
     # Wie bisher: der erste Kontakt merkt den Schlüssel still.
     assert (await client.get(f"/api/v1/hosts/{host['id']}/status", headers=_auth(token))).json()["status"] == "up"
@@ -303,7 +357,7 @@ async def test_forgetting_a_key_blocks_silent_pinning_until_confirmed(
     db_session.expire_all()
     assert await db_session.get(Setting, (hosts_service.HOST_KEY_CONFIRM_REQUIRED, "host", host["id"])) is None
     target, conn = await _connect()
-    assert target.allow_tofu is (override is not True) and (await ssh.run(conn, "true"))[0] == 0
+    assert target.allow_tofu is True and (await ssh.run(conn, "true"))[0] == 0
     assert len(await _known(db_session)) == 1
 
 
@@ -380,9 +434,9 @@ async def test_settings_api_shows_and_changes_the_switch(client, db_session, tes
     bad = await client.put("/api/v1/settings/ssh.confirm_new_host_keys", json={"value": "ja"}, headers=_auth(token))
     assert bad.status_code == 422
 
-    # Ohne gespeicherten Wert (bestehende Installation) steht dort „aus“.
+    # Ohne gespeicherten Wert (bestehende Installation) steht dort „an“.
     await _make_existing_install(db_session, test_settings)
-    assert _value((await client.get("/api/v1/settings", headers=_auth(token))).json()) is False
+    assert _value((await client.get("/api/v1/settings", headers=_auth(token))).json()) is True
 
 
 @pytest.mark.asyncio
@@ -404,7 +458,7 @@ async def test_a_target_resolved_just_before_forgetting_does_not_pin_silently(
     _, port, *_ = local_ssh_server
     token = await _bootstrap_owner(client)
     host = await _host_with_password(client, token, port)
-    await _make_existing_install(db_session, test_settings)
+    await _opt_out(db_session, test_settings)
     assert (await client.get(f"/api/v1/hosts/{host['id']}/status", headers=_auth(token))).json()["status"] == "up"
     [pinned] = await _known(db_session)
     await ssh.reset_ssh_pool()
