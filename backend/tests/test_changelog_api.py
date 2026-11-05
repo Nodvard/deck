@@ -1,10 +1,12 @@
-"""GET /api/v1/app/changelog -- Aenderungsprotokoll fuer jeden angemeldeten Nutzer."""
+"""Änderungsprotokoll für angemeldete Nutzer."""
 
 from __future__ import annotations
 
-import pytest
+from typing import Literal
 
+import pytest
 from nodvard_deck import __version__, changelog
+from pydantic import TypeAdapter
 
 
 async def _login(client, username="owner1", password="correct-horse-battery"):
@@ -99,6 +101,38 @@ async def test_empty_changelog_still_reports_the_running_version(client, own_dir
 
 
 @pytest.mark.asyncio
+async def test_documentation_entries_are_served(client, own_dir):
+    body = '[[entries]]\nkind = "dokumentation"\ntext = "Dock-Anleitungen ergänzt."\n'
+    (own_dir / "unreleased/dock-doku.toml").write_text(body, encoding="utf-8")
+    headers = await _login(client)
+    _release(own_dir, "0.1.0", body)
+    legacy = await client.get("/api/v1/app/changelog", headers=headers)
+    assert legacy.json()["unreleased"][0]["kind"] == "verbessert"
+    response = await client.get("/api/v1/app/changelog?include_documentation=true", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["unreleased"] == [
+        {"kind": "dokumentation", "text": "Dock-Anleitungen ergänzt.", "prs": []},
+    ]
+    assert response.json()["versions"][0]["entries"] == response.json()["unreleased"]
+    assert (await client.get("/api/v1/app/changelog", headers=headers)).json() == legacy.json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["", "?include_documentation=false"], ids=["default", "explicit"])
+async def test_documentation_remains_readable_with_an_old_kind_enum(client, own_dir, query):
+    body = '[[entries]]\nkind = "dokumentation"\ntext = "Anleitungen ergänzt."\nprs = [17]\n'
+    (own_dir / "unreleased/doku.toml").write_text(body, encoding="utf-8")
+    _release(own_dir, "0.1.0", body)
+    response = await client.get("/api/v1/app/changelog" + query, headers=await _login(client))
+    assert response.status_code == 200, response.text
+    data = response.json()
+    entries = [*data["unreleased"], *data["versions"][0]["entries"]]
+    old_kind = TypeAdapter(Literal["neu", "verbessert", "behoben", "sicherheit"])
+    assert [old_kind.validate_python(entry["kind"]) for entry in entries] == ["verbessert", "verbessert"]
+    assert all(entry == {"kind": "verbessert", "text": "Anleitungen ergänzt.", "prs": [17]} for entry in entries)
+
+
+@pytest.mark.asyncio
 async def test_build_id_comes_from_settings(client, own_dir, test_settings):
     headers = await _login(client)
     test_settings.build = "  a156da5  "
@@ -122,3 +156,26 @@ async def test_openapi_reports_the_running_version(client):
     headers = await _login(client)
     body = (await client.get("/api/v1/system/openapi.json", headers=headers)).json()
     assert body["info"]["version"] == __version__
+
+
+@pytest.mark.asyncio
+async def test_changelog_uses_the_running_edition(client, own_dir, test_settings, monkeypatch):
+    entries = (
+        '[[entries]]\nkind = "neu"\ntext = "Container."\nbereich = "docker"\n'
+        '[[entries]]\nkind = "neu"\ntext = "Virtuelle Maschinen."\nbereich = "proxmox"\n'
+        '[[entries]]\nkind = "behoben"\ntext = "Für alle."\n'
+    )
+    _release(own_dir, "0.5.0", entries)
+    (own_dir / "unreleased" / "module.toml").write_text(entries, encoding="utf-8")
+    headers = await _login(client)
+    for edition, expected in (
+        ("deck", ["Container.", "Virtuelle Maschinen.", "Für alle."]),
+        ("dock", ["Container.", "Für alle."]),
+        ("deck", ["Container.", "Virtuelle Maschinen.", "Für alle."]),
+    ):
+        monkeypatch.setattr(test_settings, "edition", edition)
+        response = await client.get("/api/v1/app/changelog", headers=headers)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [e["text"] for e in body["unreleased"]] == expected
+        assert [e["text"] for e in body["versions"][0]["entries"]] == expected

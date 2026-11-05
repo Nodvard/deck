@@ -10,6 +10,7 @@ import { api } from "../../lib/api";
 import { formatSize, formatWhen } from "../../lib/backups";
 import { requestRollback, useUpdateHelper, type HelperPrevious, type HelperView } from "../../lib/updater";
 import { useAuthStore } from "../../state/auth";
+import { useEdition, productText } from "../../state/edition";
 import { ConfirmForm, FollowPanel, formatUnix, useHelperView } from "./UpdateHelper";
 import { Button, Card } from "./ui";
 
@@ -124,9 +125,10 @@ function RollbackSection({ view, previous }: { view: HelperView; previous: Helpe
 }
 
 export function UpdateCopiesCard(): JSX.Element | null {
+  const edition = useEdition();
   const [copies, setCopies] = useState<PreUpdateCopy[] | null>(null);
   const [database, setDatabase] = useState<string | null>(null);
-  const { view, follow } = useHelperView();
+  const { view, follow } = useHelperView(edition.repo_tools);
   const previous = follow ? null : validPrevious(view);
   const rollbackRunning = follow?.action === "rollback" ? follow : null;
 
@@ -155,14 +157,14 @@ export function UpdateCopiesCard(): JSX.Element | null {
   // Nur bei SQLite (der Standard-Datenbank) legt Nodvard Deck Kopien an; die Karte „Updates“ sagt dasselbe.
   if (database !== null && database !== "sqlite") {
     return (
-      <Card title="Kopien vor Updates" description={`Bei dieser Datenbank (${database}) legt Nodvard Deck vor einem Update keine Kopie an.`}>
+      <Card title="Kopien vor Updates" description={`Bei dieser Datenbank (${database}) legt ${productText("Nodvard Deck")} vor einem Update keine Kopie an.`}>
         {helperPart}
         <p className="text-sm text-white/55">Bitte sichere die Datenbank vor einem Update selbst.</p>
       </Card>
     );
   }
   return (
-    <Card title="Kopien vor Updates" description="Vor jedem Update legt Nodvard Deck eine Kopie der Datenbank an. Die letzten drei bleiben liegen.">
+    <Card title="Kopien vor Updates" description={productText("Vor jedem Update legt Nodvard Deck eine Kopie der Datenbank an. Die letzten drei bleiben liegen.")}>
       {helperPart}
       {copies.length === 0 ? (
         <p className="text-sm text-white/55">Noch keine Kopie. Sie entsteht beim nächsten Update, das die Datenbank umbaut.</p>
@@ -182,7 +184,7 @@ export function UpdateCopiesCard(): JSX.Element | null {
         </ul>
       )}
       <p className="mt-3 text-xs text-white/45">
-        Gehst du nach einem misslungenen Update auf die alte Version zurück, spielt Nodvard Deck die Kopie von selbst wieder ein, solange die neue
+        Gehst du nach einem misslungenen Update auf die alte Version zurück, spielt {productText("Nodvard Deck")} die Kopie von selbst wieder ein, solange die neue
         Version nie erfolgreich gestartet ist. Sonst hilft die Notseite (der Notfallcode steht im Protokoll des Containers). Beides klappt erst ab
         einer Version, die diese Kopien schon anlegt.
       </p>

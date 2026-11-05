@@ -233,7 +233,7 @@ def test_trusted_peer_gives_the_client_from_forwarded_for():
     scope = _via([("X-Forwarded-For", "192.168.2.40"), ("X-Forwarded-Proto", "https")])
     assert scope["client"] == ("192.168.2.40", 0)
     assert scope["scheme"] == "https"
-    assert scope[SCOPE_KEY] == Forwarding(peer=PROXY, trusted=True, forwarded_headers=True)
+    assert scope[SCOPE_KEY] == Forwarding(peer=PROXY, trusted=True, forwarded_headers=True, client_forwarded=True)
 
 
 def test_rightmost_untrusted_address_counts_never_what_the_client_wrote():
@@ -556,6 +556,7 @@ async def test_a_change_takes_effect_without_restart(client, test_settings):
             "peer": PROXY, "client": "192.168.2.40", "scheme": "https", "via_trusted_proxy": True,
             "forwarded_headers": True, "trusted_proxies": [PROXY], "trusted_proxies_source": "setting",
             "untrusted_proxies": [],
+            "insecure_connection": False,
         }
 
         assert (await client.put("/api/v1/settings/system.trusted_proxies", json={"value": []}, headers=headers)).status_code == 200
@@ -595,6 +596,7 @@ async def test_connection_route_describes_a_direct_request(client, test_settings
     assert r.json() == {
         "peer": "127.0.0.1", "client": "127.0.0.1", "scheme": "http", "via_trusted_proxy": False,
         "forwarded_headers": False, "trusted_proxies": [], "trusted_proxies_source": "setting", "untrusted_proxies": [],
+        "insecure_connection": True,
     }
     test_settings.trusted_proxies = "172.18.0.9"
     assert (await client.get("/api/v1/system/connection", headers=headers)).json()["trusted_proxies_source"] == "env"

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { browserDownload, newPasswordProblem, protectedConfigChanges, recoveryKeyFile, type BackupOverview } from "../../lib/backups";
 import { useAuthStore } from "../../state/auth";
+import { DECK_EDITION, useEditionStore } from "../../state/edition";
 import { BackupCard } from "./BackupCard";
 import { SystemSettings } from "./SystemSettings";
 
@@ -156,7 +157,7 @@ describe("Karte Sicherung", () => {
     mockApi({ "GET /system/backups": () => overview() });
     render(<BackupCard />);
     const link = await screen.findByTestId("external-guide");
-    expect(link).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#101-in-der-oberfläche-empfohlen");
+    expect(link).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#61-in-der-oberfläche-empfohlen");
     expect(link).toHaveAttribute("target", "_blank");
   });
 
@@ -533,4 +534,22 @@ describe("Reiter System", () => {
     expect(screen.queryByText("Zeit & Protokoll")).not.toBeInTheDocument();
     expect(calls.some((c) => c.path === "/settings")).toBe(false);
   });
+});
+
+it("Dock erklärt die eigene Sicherung", async () => {
+  useEditionStore.setState({ edition: { ...DECK_EDITION, choose_modules: false } });
+  try {
+    mockApi({ "GET /system/backups": () => overview() });
+    render(<BackupCard />);
+    expect(await screen.findByText(/Alle Daten von Nodvard Dock verschlüsselt sichern/)).toBeInTheDocument();
+    expect(screen.queryAllByText(/Nodvard Deck/)).toHaveLength(0);
+  } finally {
+    useEditionStore.setState({ edition: DECK_EDITION });
+  }
+});
+
+it("Dock nennt sich in der Datei mit dem Wiederherstellungsschlüssel", () => {
+  const text = recoveryKeyFile({ key_id: "abc", recipient: "age1x", recovery_key: RECOVERY }, "Nodvard Dock");
+  expect(text).toContain("Notfall ohne Nodvard Dock:");
+  expect(text).not.toContain("Nodvard Deck");
 });

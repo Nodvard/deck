@@ -25,8 +25,8 @@ RESTORED = "FEHLER: Die volle sudo-Regel ist wieder da, weil"
 
 
 def _sandbox(tmp_path: Path, *, rules: dict[str, str] | None = None, **kw):
-    """`sudo -n BEFEHL` läuft nur mit der vollen Regel oder einer Regel genau für BEFEHL. Schalter sind Dateien in
-    `tmp_path`: `deaf-<name>`, `ignored-<name>`, `foreign`, `slow` (hängt ohne volle Regel), `rm-fails-<name>`."""
+    """`sudo -n BEFEHL` läuft nur mit der vollen Regel oder einer Regel genau für BEFEHL (mit passender Prüfsumme).
+    Schalter sind Dateien in `tmp_path`: `deaf-<name>`, `ignored-<name>`, `foreign`, `slow`, `rm-fails-<name>`."""
     bin_dir, log, helper_dir, _ = _helper_sandbox(tmp_path, **kw)
     sudoers = tmp_path / "sudoers.d"
     sudoers.mkdir()
@@ -45,6 +45,7 @@ full=0; ! grep -qsx "{USER} ALL=(root) NOPASSWD: ALL" "{sudoers}"/* || full=1
 if [ "$1" = -l ]; then
   [ ! -e "{tmp_path}/foreign" ] || echo "    (ALL : ALL) NOPASSWD: ALL"
   [ "$full" = 0 ] || echo "    (root) NOPASSWD: ALL"
+  grep -hs "^{USER} ALL=(root) NOPASSWD: [/s]" "{sudoers}"/* | sed "s|^{USER} ALL=(root) |    (root) |"
   exit 0
 fi
 name=$(basename "$1")
@@ -52,7 +53,14 @@ name=$(basename "$1")
 if [ "$full" = 0 ] && [ -e "{tmp_path}/slow" ]; then touch "{tmp_path}/waiting"; sleep 30; fi
 if [ "$full" = 0 ] && [ ! -e "{tmp_path}/foreign" ]; then
   [ ! -e "{tmp_path}/ignored-$name" ] || exit 1
-  grep -qsx "{USER} ALL=(root) NOPASSWD: $1" "{sudoers}"/* || exit 1
+  rule=$(grep -hs "^{USER} ALL=(root) NOPASSWD: .*$1\\$" "{sudoers}"/* | head -n 1)
+  case $rule in
+    "{USER} ALL=(root) NOPASSWD: $1") ;;
+    "{USER} ALL=(root) NOPASSWD: sha256:"*" $1")
+      want=${{rule#*sha256:}}
+      [ "$(sha256sum "$1" | cut -d" " -f1)" = "${{want%% *}}" ] || exit 1;;
+    *) exit 1;;
+  esac
 fi
 exec sh "$@"
 ''')
@@ -62,6 +70,10 @@ for a in "$@"; do last=$a; done
 exec /bin/rm "$@"
 ''')
     return bin_dir, log, helper_dir, sudoers
+
+
+def _sudo_calls(log: Path) -> list[str]:
+    return [line for line in log.read_text().splitlines() if line.startswith("sudo ")]
 
 
 def _drop(tmp_path: Path, helper_dir: Path, sudoers: Path, *helpers: RootHelperFile, bin_dir: Path):
@@ -244,7 +256,8 @@ def test_a_failed_helper_rule_stops_before_the_removal(tmp_path):
     done = _drop(tmp_path, helper_dir, sudoers, DOCKER, broken, bin_dir=bin_dir)
     assert done.returncode == 1
     assert (sudoers / "nodvard-deck").read_text() == FULL
-    assert "sudo -n" not in log.read_text(), "nach einem Fehler wird nichts mehr angefasst"
+    # Nur der Blick auf die Regel von docker-root beim Schreiben; nach dem Fehler wird nichts mehr angefasst.
+    assert _sudo_calls(log) == ["sudo -n -l"]
 
 
 def test_only_together_with_the_helper_rules():

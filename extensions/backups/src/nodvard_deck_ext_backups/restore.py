@@ -731,12 +731,11 @@ async def check_rights(
     """Die eigenen Rechte des Tokens vor dem Anlegen (`GET /access/permissions`).
 
     Fehlt eines sicher, wird gar nicht erst angelegt; ist die Abfrage nicht lesbar, gibt es nur einen Hinweis."""
-    # Fehlt ein Recht, entstünde die Kopie womöglich trotzdem, und ihre Netzwerkkarten ließen sich nicht trennen. Sicher
-    # fehlende Rechte bleiben ein Ablehnungsgrund, auch wenn sich ein weiteres nicht lesen lässt; Namen aus der Sicherung
-    # (Bridge, VLAN-Tag) kommen nur in einen Pfad, wenn `_acl_name_ok` sie durchlässt, sonst bleibt es bei einem Hinweis.
-    # Rechte für den neuen Gast gelten auf dem Pool `COPY_POOL`: Vor dem Anlegen steckt die neue Nummer in keinem Pool, und
-    # Proxmox prüft `VM.Allocate` bei gesetztem `pool` auf dem Pool (`create_vm`); Name, `onboot` und Netzwerkkarten prüft
-    # `check_vm_perm` ebenfalls zuerst dort.
+    # Fehlt ein Recht, entstünde die Kopie womöglich trotzdem, und ihre Netzwerkkarten ließen sich nicht trennen.
+    # Namen aus der Sicherung (Bridge, VLAN-Tag) kommen nur in einen Pfad, wenn `_acl_name_ok` sie durchlässt, sonst
+    # bleibt es bei einem Hinweis. Rechte für den neuen Gast gelten auf dem Pool `COPY_POOL`: Vor dem Anlegen steckt die
+    # neue Nummer in keinem Pool, und Proxmox prüft `VM.Allocate` bei gesetztem `pool` auf dem Pool (`create_vm`); Name,
+    # `onboot` und Netzwerkkarten prüft `check_vm_perm` ebenfalls zuerst dort.
     vm_rights = ["VM.Allocate", "VM.Audit", "VM.Config.Options"]
     if inp.link_down or kind == "lxc":  # Container: auch der neue Name (`hostname`) braucht VM.Config.Network
         vm_rights.append("VM.Config.Network")
@@ -1243,7 +1242,7 @@ def finish_problems(target: CopyTarget, config: dict[str, Any]) -> list[str]:
 
 
 async def finish_copy(connector: ProxmoxBackupConnector, target: CopyTarget) -> tuple[str | None, bool]:
-    """Richtet die neue Kopie fertig ein (nur ihre Nummer!) und liest nach. -> (None oder was nicht klappte,
+    """Richtet die neue Kopie fertig ein (nur ihre Nummer) und liest nach. -> (None oder was nicht klappte,
     ob ein weiterer Versuch sinnlos ist; 403: dem Zugang fehlt ein Recht)."""
     vmid = str(target.vmid)
     problem: str | None = None
@@ -1531,7 +1530,7 @@ async def _conclude(
         try:
             await ctx.notify.send(Notification(
                 title=title, body=body, severity=Severity.INFO if success else Severity.WARNING,
-                correlation_id=f"backups-restore:{target.key}", payload={"path": PAGE_PATH},
+                correlation_id=f"backups-restore:{target.key}", payload={"notification_type": "backups.restore", "path": PAGE_PATH},
             ))
         except Exception:  # noqa: BLE001 - dann bleibt der Vermerk, und die nächste Runde versucht es noch einmal
             log.exception("restore_conclude_notify_failed key=%s", target.key)

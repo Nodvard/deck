@@ -85,6 +85,12 @@ describe("AppsSection: Kacheln", () => {
     expect(screen.getByTestId("app-d2")).toBeInTheDocument();
   });
 
+  it("ein erkannter Dienst, den es schon als eigene App gibt, steht nur einmal da, auch nicht im Chip „Erkannt“", () => {
+    renderSection({ apps: [...APPS, detected("d3", "fritz", { url: "http://192.168.2.1:8080/admin/" })] });
+    expect(tileIds()).toEqual(["a1", "a2", "a3", "a4", "d1"]);
+    expect(screen.getByRole("button", { name: /Erkannt/ })).toHaveTextContent("1");
+  });
+
   it("eigene Links öffnen sicher: rel noopener noreferrer, neuer Tab nach Wahl, Untertitel Server oder Adresse", () => {
     renderSection();
     const fritz = within(screen.getByTestId("app-custom-a1")).getByRole("link");
@@ -119,11 +125,20 @@ describe("AppsSection: Kacheln", () => {
   });
 
   it("nimmt nur eine echte Farbe in den Stil (nie freien Text)", () => {
-    renderSection({ apps: [custom("c1", "Rot", { color: "#ef4444" }), custom("c2", "Böse", { color: "red;background:url(http://tracker.example/x)" })] });
-    expect((within(screen.getByTestId("app-custom-c1")).getByTestId("app-avatar") as HTMLElement).getAttribute("style")).toContain("rgb(239, 68, 68)");
-    const bad = (within(screen.getByTestId("app-custom-c2")).getByTestId("app-avatar") as HTMLElement).getAttribute("style") ?? "";
-    expect(bad).not.toContain("tracker");
-    expect(bad).not.toContain("color-mix");  // die Ersatzfarbe nach dem Namen, nicht die verlangte Farbe
+    renderSection({ apps: [
+      custom("c1", "Rot", { color: "#ef4444" }),
+      custom("c2", "Böse", { color: "red;background:url(http://tracker.example/x)" }),
+      custom("c3", "Böse"),
+    ] });
+    const avatar = (id: string) => within(screen.getByTestId(`app-custom-${id}`)).getByTestId("app-avatar");
+    expect(getComputedStyle(avatar("c1")).backgroundColor).toBe("rgb(239, 68, 68)");
+    for (const id of ["c1", "c2", "c3"]) expect(avatar(id)).not.toHaveAttribute("style");
+    const bad = getComputedStyle(avatar("c2"));
+    expect(bad.backgroundColor).toBe(getComputedStyle(avatar("c3")).backgroundColor);
+    expect(bad.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+    const rules = Array.from(document.styleSheets, (sheet) => Array.from(sheet.cssRules, (rule) => rule.cssText).join("\n")).join("\n");
+    expect(rules).not.toContain("tracker");
+    expect(rules).not.toContain("color-mix");
   });
 });
 

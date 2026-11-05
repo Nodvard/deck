@@ -3,7 +3,9 @@ beim Anbieter, Verdichtung, Aufbewahrung, Sammler und API."""
 
 from __future__ import annotations
 
+import asyncio
 import threading
+import time
 
 import pytest
 
@@ -164,7 +166,7 @@ async def test_collector_stores_hosts_without_provider_history_and_api_reads_the
 
 
 @pytest.mark.asyncio
-async def test_provider_with_own_history_is_asked_directly_and_never_collected(client, db_session, monkeypatch, tmp_path):
+async def test_provider_with_own_history_is_asked_directly_and_never_stored(client, db_session, monkeypatch, tmp_path):
     from contextlib import asynccontextmanager
 
     from nodvard_deck.ext.runtime import get_extension_runtime
@@ -188,4 +190,131 @@ async def test_provider_with_own_history_is_asked_directly_and_never_collected(c
     monkeypatch.setattr("nodvard_deck.db.session.session_scope", asynccontextmanager(_same_session_scope))
     collector = MetricsCollector(MetricsStore(tmp_path / "metrics.db"), interval_s=30, raw_retention_s=3600, rollup_retention_s=86400)
     assert await collector.collect_once() == 0
-    assert provider.calls == 0, "Anbieter mit eigener Historie wird nicht zusaetzlich abgefragt"
+    now = int(time.time())
+    assert collector.store.latest([host_id], now, max_age_s=600) == {}
+    assert provider.calls == 1
+    ts, cpu = collector.current([host_id], now, max_age_s=600)[host_id]["cpu_percent"]
+    assert cpu == 42.0
+    assert collector.current([host_id], ts + 601, max_age_s=600) == {}
+
+
+class _Bundled(_WithHistory):
+    def __init__(self) -> None:
+        super().__init__()
+        self.many: list[list[str]] = []
+        self.fail = False
+        self.hang = False
+        self.stopped: set[str] = set()
+
+    async def sample_many(self, hosts):
+        self.many.append(sorted(h.id for h in hosts))
+        if self.fail:
+            raise RuntimeError("Proxmox antwortet nicht")
+        if self.hang:
+            await asyncio.sleep(5)
+        values = {"cpu_percent": 7.0, "mem_used_bytes": 1024.0, "mem_total_bytes": 4096.0, "uptime_s": 600.0}
+        return {h.id: {} if h.id in self.stopped else values for h in hosts}
+
+
+class _Failing(_WithHistory):
+    async def sample(self, host):
+        raise RuntimeError("keine Antwort")
+
+
+@pytest.fixture
+def history_env(client, db_session, monkeypatch, tmp_path):
+    """Baut Hosts, einen Anbieter mit eigener Historie und einen Sammler; liefert (Sammler, Header, Host-IDs)."""
+    return lambda provider, names: _collector_with_hosts(client, db_session, monkeypatch, tmp_path, provider, names)
+
+
+async def _collector_with_hosts(client, db_session, monkeypatch, tmp_path, provider, names):
+    from contextlib import asynccontextmanager
+
+    from nodvard_deck.core import metrics_history
+    from nodvard_deck.ext.runtime import get_extension_runtime
+    from nodvard_sdk.capabilities import MetricsProvider
+
+    token = await _owner_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    ids = []
+    for i, name in enumerate(names):
+        r = await client.post("/api/v1/hosts", json={"name": name, "address": f"10.0.1.{i + 1}"}, headers=headers)
+        ids.append(r.json()["id"])
+    await db_session.commit()
+    get_extension_runtime().capabilities.provide("system", MetricsProvider, provider)
+
+    async def _same_session_scope():
+        yield db_session
+
+    monkeypatch.setattr("nodvard_deck.db.session.session_scope", asynccontextmanager(_same_session_scope))
+    collector = MetricsCollector(
+        MetricsStore(tmp_path / "metrics.db"), interval_s=30, raw_retention_s=3600, rollup_retention_s=86400,
+    )
+    monkeypatch.setattr(metrics_history, "_collector", collector)
+    return collector, headers, ids
+
+
+@pytest.mark.asyncio
+async def test_guests_come_in_one_call_and_show_up_in_latest(history_env, client):
+    provider = _Bundled()
+    collector, headers, ids = await history_env(provider, ["vm-a", "vm-b"])
+
+    assert await collector.collect_once() == 0
+    assert provider.many == [sorted(ids)]
+    assert provider.calls == 0
+
+    r = await client.get("/api/v1/hosts/metrics/latest", headers=headers)
+    assert r.status_code == 200, r.text
+    hosts = r.json()["hosts"]
+    assert set(hosts) == set(ids)
+    for host_id in ids:
+        assert hosts[host_id]["cpu"] == 7.0
+        assert hosts[host_id]["mem"] == 25.0
+        assert hosts[host_id]["uptime_s"] == 600.0
+        assert hosts[host_id]["disk"] is None
+        assert hosts[host_id]["stale"] is False
+    assert provider.many == [sorted(ids)], "die Übersicht selbst fragt den Anbieter nicht"
+    reset_metrics_collector()
+
+
+@pytest.mark.asyncio
+async def test_failed_or_hanging_round_keeps_the_value_and_removed_hosts_drop_out(history_env, client, db_session):
+    provider = _Bundled()
+    collector, headers, ids = await history_env(provider, ["vm-a", "vm-b"])
+    await collector.collect_once()
+    first = collector.current(ids, int(time.time()), max_age_s=600)
+
+    provider.fail = True
+    await collector.collect_once()
+    assert collector.current(ids, int(time.time()), max_age_s=600) == first
+
+    provider.fail, provider.hang = False, True
+    collector.sample_timeout_s = 0.05
+    await collector.collect_once()
+    assert collector.current(ids, int(time.time()), max_age_s=600) == first
+
+    r = await client.delete(f"/api/v1/hosts/{ids[0]}", headers=headers)
+    assert r.status_code in (200, 204), r.text
+    await db_session.commit()
+    await collector.collect_once()
+    assert set(collector.current(ids, int(time.time()), max_age_s=600)) == {ids[1]}
+    reset_metrics_collector()
+
+
+@pytest.mark.asyncio
+async def test_a_stopped_guest_loses_its_value_at_once(history_env):
+    provider = _Bundled()
+    collector, _, ids = await history_env(provider, ["vm-a", "vm-b"])
+    await collector.collect_once()
+    provider.stopped = {ids[0]}
+    await collector.collect_once()
+    assert set(collector.current(ids, int(time.time()), max_age_s=600)) == {ids[1]}
+    reset_metrics_collector()
+
+
+@pytest.mark.asyncio
+async def test_without_sample_many_each_host_is_asked_and_a_failure_is_a_gap(history_env):
+    collector, _, ids = await history_env(_Failing(), ["vm-a"])
+    assert await collector.collect_once() == 0
+    assert collector.current(ids, int(time.time()), max_age_s=600) == {}
+    reset_metrics_collector()

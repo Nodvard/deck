@@ -82,6 +82,7 @@ describe("Reiter Stacks", () => {
     serve();
     render(<ContainersPage />);
     const shop = await screen.findByTestId("stack-shop");
+    expect(shop).toHaveClass("rounded-lg", "sm:border-0");
     expect(within(shop).getByText("Datei geändert, noch nicht angewendet")).toBeInTheDocument();
     expect(shop.textContent).toContain("geändert: web · neu in der Datei: cache. Übernommen wird das erst");
     expect(shop.textContent).toContain("Container: shop-web-1, shop-worker-1 (ungesund)");
@@ -112,6 +113,25 @@ describe("Reiter Stacks", () => {
     expect(env.textContent).toBe("/opt/stacks/shop/.envVariablen: DB_PASSWORD, TZ");
     expect(missing.textContent).toBe("/opt/stacks/shop/fehlt.envDie Datei gibt es nicht mehr.");
     expect(file.textContent).toContain("Die Werte aus .env zeigt Nodvard Deck nicht");
+  });
+
+  it("die Datei eines Stacks wird zur eigenen Vorlage, nur die Compose-Datei", async () => {
+    const compose = "services:\n  web:\n    image: busybox:1.37\n";
+    serve({ "/own-templates": () => Response.json({ id: "a1b2c3d4e5f6a7b8", name: "Laden", summary: "", compose, updated_at: "2026-10-30T22:00:00+00:00" }, { status: 201 }) });
+    render(<ContainersPage />);
+    fireEvent.click(within(await screen.findByTestId("stack-shop")).getByRole("button", { name: "Datei ansehen" }));
+    const file = await screen.findByTestId("stack-file-shop");
+    expect(within(file).queryByRole("button", { name: "Als Vorlage speichern: /opt/stacks/shop/extra.yml" })).toBeNull();
+    fireEvent.click(within(file).getByRole("button", { name: "Als Vorlage speichern: /opt/stacks/shop/compose.yaml" }));
+    const name = within(file).getByRole("textbox", { name: "Name der Vorlage" }) as HTMLInputElement;
+    expect(name.value).toBe("shop");
+    expect(within(file).getByTestId("save-template").textContent).toContain("keine .env");
+    fireEvent.change(name, { target: { value: "Laden" } });
+    fireEvent.click(within(file).getByRole("button", { name: "Vorlage speichern" }));
+    expect(await within(file).findByRole("status")).toHaveTextContent("Als Vorlage „Laden“ gespeichert. Du findest sie unter „Neuer Stack“.");
+    expect(requests.filter((r) => r.startsWith("POST "))).toEqual(["POST /api/v1/ext/docker/own-templates"]);
+    expect(bodies.at(-1)).toEqual({ name: "Laden", summary: "", compose });
+    expect(within(file).queryByTestId("save-template")).toBeNull();
   });
 
   it("ein Ladefehler ist keine leere Liste, und eine geplatzte Prüfung wird genannt", async () => {
@@ -601,4 +621,13 @@ describe("changesText", () => {
       { name: "c", service: "c", state: "restarting", status: "Restarting (1)" },
     ])).toBe("a, b (gestoppt), c (startet neu)");
   });
+});
+
+it("Dock erklärt die Übernahme eines Stacks", async () => {
+  window.__nodvardDeck.getProductName = () => "Nodvard Dock";
+  serve({ "/stacks/media/adopt": () => Response.json({ ok: true, reasons: [], working_dir: "/opt/stacks/media", config_files: [], env_files: [] }) });
+  render(<ContainersPage />);
+  const row = await screen.findByTestId("stack-media");
+  fireEvent.click(within(row).getByRole("button", { name: "Übernehmen" }));
+  expect(await screen.findByText(/Übernehmen heißt: Nodvard Dock merkt sich/)).toBeInTheDocument();
 });

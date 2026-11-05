@@ -1,10 +1,10 @@
 /**
  * Befehlspalette: Strg+K / ⌘K
- * springt ueberall hin -- jede Seite (Kern und Extensions), jeder Host (Konsole,
- * Terminal), jede App mit Adresse. Eine Suche statt Menue-Klickerei.
+ * springt überall hin -- jede Seite (Kern und Extensions), jeder Host (Konsole,
+ * Terminal), jede App mit Adresse. Eine Suche statt Menü-Klickerei.
  *
  * Nur Navigation, keine Aktion mit Nebenwirkung: Starten/Stoppen bleibt auf den Seiten
- * mit Rueckfrage und Gate.
+ * mit Rückfrage und Gate.
  */
 import * as Dialog from "@radix-ui/react-dialog";
 import { ArrowRight, BookOpen, ExternalLink, Monitor, Search, Server, SquareTerminal } from "lucide-react";
@@ -15,7 +15,9 @@ import { safeHref } from "../lib/apps";
 import { usePages } from "../lib/catalog";
 import { guideUrl } from "../lib/docs";
 import { hasConsole, useHosts, useOverview, useTerminalHosts } from "../lib/overview";
-import { SECTIONS as SETTINGS_SECTIONS } from "../routes/settings/SettingsLayout";
+import { useVisibleSections } from "../routes/settings/SettingsLayout";
+import { editionPathAvailable } from "../lib/editionRoutes";
+import { useEdition } from "../state/edition";
 import { useAuthStore } from "../state/auth";
 import { Icon } from "./Icon";
 
@@ -29,7 +31,7 @@ export interface PaletteItem {
   run: () => void;
 }
 
-/** `permission` wie im Menue (AppShell.tsx): ohne Recht fehlt die Seite auch hier. */
+/** `permission` wie im Menü (AppShell.tsx): ohne Recht fehlt die Seite auch hier. */
 const CORE_PAGES: { path: string; title: string; icon: string; keywords: string; permission?: string | string[] }[] = [
   { path: "/", title: "Übersicht", icon: "layout-dashboard", keywords: "start dashboard home cockpit" },
   { path: "/apps", title: "Apps", icon: "boxes", keywords: "app launcher kacheln links lesezeichen", permission: "hosts.read" },
@@ -39,8 +41,8 @@ const CORE_PAGES: { path: string; title: string; icon: string; keywords: string;
   { path: "/actions", title: "Aktionen & Freigaben", icon: "shield-check", keywords: "gate vorschlaege freigabe approve" },
 ];
 
-/** Suchwoerter je Einstellungsbereich. Titel und noetiges Recht kommen aus SettingsLayout
- * (SECTIONS), damit Palette und Einstellungs-Menue dieselben Bereiche zeigen. */
+/** Suchwörter je Einstellungsbereich. Titel und nötiges Recht kommen aus SettingsLayout
+ * (SECTIONS), damit Palette und Einstellungs-Menü dieselben Bereiche zeigen. */
 const SETTINGS_KEYWORDS: Record<string, string> = {
   account: "settings profil passwort 2fa totp konto",
   appearance: "settings branding logo farben design anmeldeseite",
@@ -54,7 +56,7 @@ const SETTINGS_KEYWORDS: Record<string, string> = {
   about: "settings version changelog änderungsprotokoll neuigkeiten release über nodvard deck lattice",
 };
 
-/** Alle Suchbegriffe muessen vorkommen (Reihenfolge egal) -- "prox kno" findet "Proxmox-Knoten". */
+/** Alle Suchbegriffe müssen vorkommen (Reihenfolge egal) -- "prox kno" findet "Proxmox-Knoten". */
 export function matches(item: Pick<PaletteItem, "title" | "subtitle" | "keywords">, query: string): boolean {
   const haystack = `${item.title} ${item.subtitle ?? ""} ${item.keywords}`.toLowerCase();
   return query
@@ -65,6 +67,8 @@ export function matches(item: Pick<PaletteItem, "title" | "subtitle" | "keywords
 }
 
 function usePaletteItems(open: boolean): PaletteItem[] {
+  const edition = useEdition();
+  const sections = useVisibleSections();
   const navigate = useNavigate();
   const { data: pages } = usePages();
   const hasPermission = useAuthStore((s) => s.hasPermission);
@@ -73,19 +77,20 @@ function usePaletteItems(open: boolean): PaletteItem[] {
   const canReadHosts = useAuthStore((s) => s.hasPermission("hosts.read"));
   const canExecute = useAuthStore((s) => s.hasPermission("hosts.execute"));
   const { data: hosts } = useHosts(open && canReadHosts);
-  const { data: overview } = useOverview(open && canReadHosts);
-  const { data: terminalHosts } = useTerminalHosts(open && canExecute);
+  const { data: overview } = useOverview(open && canReadHosts && edition.choose_modules);
+  const { data: terminalHosts } = useTerminalHosts(open && canExecute && edition.choose_modules);
 
   return useMemo(() => {
     const items: PaletteItem[] = [];
     const allowed = (permission?: string | string[]) =>
       !permission || (Array.isArray(permission) ? permission : [permission]).some((p) => hasPermission(p));
-    const settingsPages = SETTINGS_SECTIONS.map((section) => ({
+    const settingsPages = sections.map((section) => ({
       path: `/settings/${section.path}`, title: `Einstellungen: ${section.label}`, icon: "settings",
       keywords: SETTINGS_KEYWORDS[section.path] ?? "settings", permission: section.permission,
     }));
     for (const page of [...CORE_PAGES, ...settingsPages]) {
-      if (!allowed(page.permission)) continue;
+      if (!allowed(page.permission) || !editionPathAvailable(page.path, edition.choose_modules)
+        || !edition.choose_modules && ["/", "/terminal"].includes(page.path)) continue;
       items.push({
         id: `page:${page.path}`, group: "Seiten", title: page.title, keywords: page.keywords,
         icon: <Icon name={page.icon} />, run: () => navigate(page.path),
@@ -109,16 +114,16 @@ function usePaletteItems(open: boolean): PaletteItem[] {
       items.push({
         id: `host:${host.id}`, group: "Server", title: host.display_name, subtitle: host.address,
         keywords: `${host.name} ${host.kind ?? ""} server seite einstellungen werkzeuge`, icon: <Server size={16} strokeWidth={1.8} />,
-        run: () => navigate(`/hosts/${host.id}`),
+        run: () => navigate(edition.choose_modules ? `/hosts/${host.id}` : `/settings/hosts/${host.id}`),
       });
-      if (hasConsole(host)) {
+      if (edition.choose_modules && hasConsole(host)) {
         items.push({
           id: `console:${host.id}`, group: "Server", title: `${host.display_name}: Konsole`, subtitle: host.address,
           keywords: `${host.name} ${host.kind ?? ""} bildschirm vnc`, icon: <Monitor size={16} strokeWidth={1.8} />,
           run: () => navigate(`/console/${host.id}`),
         });
       }
-      if (terminalIds.has(host.id)) {
+      if (edition.choose_modules && terminalIds.has(host.id)) {
         items.push({
           id: `terminal:${host.id}`, group: "Server", title: `${host.display_name}: Terminal`, subtitle: host.address,
           keywords: `${host.name} ssh shell`, icon: <SquareTerminal size={16} strokeWidth={1.8} />,
@@ -136,7 +141,7 @@ function usePaletteItems(open: boolean): PaletteItem[] {
       });
     }
     return items;
-  }, [pages, hosts, overview, terminalHosts, navigate, hasPermission, user]);
+  }, [pages, hosts, overview, terminalHosts, navigate, hasPermission, user, edition, sections]);
 }
 
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -232,7 +237,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   );
 }
 
-/** Strg+K / ⌘K oeffnet die Palette von ueberall. */
+/** Strg+K / ⌘K öffnet die Palette von überall. */
 export function useCommandPaletteHotkey(setOpen: (open: boolean) => void) {
   useEffect(() => {
     function onKey(event: KeyboardEvent) {

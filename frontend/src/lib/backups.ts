@@ -153,7 +153,7 @@ export function recoveryKeyFile(key: KeyResult, productName = "Nodvard Deck"): s
     "Damit lassen sich alle Sicherungen mit dieser Kennung öffnen, auch ohne das Sicherungspasswort.",
     "Gut aufbewahren (Passwortmanager, ausgedruckt im Schrank) und niemandem geben.",
     "",
-    "Notfall ohne Nodvard Deck: die ersten zwei Zeilen der .ndbak-Datei abschneiden und mit age öffnen:",
+    `Notfall ohne ${productName}: die ersten zwei Zeilen der .ndbak-Datei abschneiden und mit age öffnen:`,
     "  tail -n +3 sicherung.ndbak > sicherung.age",
     "  age -d -i diese-datei.txt -o sicherung.tar.gz sicherung.age",
     "",

@@ -201,7 +201,7 @@ async def _send(
     if path:
         payload["path"] = path
     result = await ctx.notify.send(Notification(
-        title=title, body=body, severity=severity, correlation_id=f"proxmox-watch:{key}", payload=payload,
+        title=title, body=body, severity=severity, correlation_id=f"proxmox-watch:{key}", payload={"notification_type": f"proxmox.{key.split(':', 1)[0]}", **payload},
     ))
     return getattr(result, "suppressed", False) is True
 

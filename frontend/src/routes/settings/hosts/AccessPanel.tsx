@@ -17,6 +17,7 @@ import { Badge, Button, NoticeLine, inputClass, type Notice } from "../ui";
 import { ConnectionCheck } from "./ConnectionCheck";
 import { FormField } from "./FormField";
 import { SetupCommand } from "./SetupCommand";
+import { useEditionStore, productText } from "../../../state/edition";
 
 type Mode = "generate" | "password" | "paste";
 
@@ -82,7 +83,7 @@ function NewAccessForm({
           out,
           mode === "password"
             ? "Zugang gespeichert. Prüfe jetzt die Verbindung."
-            : "Schlüssel gespeichert. Damit sich Nodvard Deck anmelden kann, muss der zugehörige öffentliche Schlüssel auf dem Server eingetragen sein – der Befehl unten macht das.",
+            : productText("Schlüssel gespeichert. Damit sich Nodvard Deck anmelden kann, muss der zugehörige öffentliche Schlüssel auf dem Server eingetragen sein – der Befehl unten macht das."),
         );
       }
     } catch (err) {
@@ -103,7 +104,9 @@ function NewAccessForm({
           label={mode === "generate" ? "Benutzer auf dem Server" : "Benutzer"}
           hint={
             mode === "generate"
-              ? "Ein eigener Benutzer nur für Nodvard Deck. Er wird angelegt, falls es ihn noch nicht gibt. Bei Proxmox-Knoten „root“ nehmen. Ältere Zugänge heißen vielleicht noch „lattice“ – sie laufen unverändert weiter."
+              ? (useEditionStore.getState().edition.choose_modules
+                ? productText("Ein eigener Benutzer nur für Nodvard Deck. Er wird angelegt, falls es ihn noch nicht gibt. Bei Proxmox-Knoten „root“ nehmen. Ältere Zugänge heißen vielleicht noch „lattice“ – sie laufen unverändert weiter.")
+                : "Ein eigener Benutzer nur für Nodvard Dock. Er wird angelegt, falls es ihn noch nicht gibt.")
               : "Ein Benutzer, der auf dem Server schon existiert."
           }
           error={errors.username}
@@ -165,9 +168,9 @@ function newAccessQuestion(previous: CredentialOut | undefined): string {
   const base = "Den neuen Zugang verwenden?";
   if (!previous) return base;
   if (previous.kind === "ssh_key") {
-    return `${base} Der bisherige Zugang wird in Nodvard Deck gelöscht. Sein Schlüssel bleibt auf dem Server eingetragen – dort bei Bedarf aus ~/.ssh/authorized_keys entfernen.`;
+    return `${base} Der bisherige Zugang wird in ${productText("Nodvard Deck")} gelöscht. Sein Schlüssel bleibt auf dem Server eingetragen – dort bei Bedarf aus ~/.ssh/authorized_keys entfernen.`;
   }
-  return `${base} Der bisherige Zugang (Passwort) wird in Nodvard Deck gelöscht. Auf dem Server ändert sich dadurch nichts.`;
+  return `${base} Der bisherige Zugang (Passwort) wird in ${productText("Nodvard Deck")} gelöscht. Auf dem Server ändert sich dadurch nichts.`;
 }
 
 function CredentialRow({
@@ -332,7 +335,7 @@ export function AccessPanel({
       {noAccess && (
         <>
           <p className="mb-4 text-sm text-white/65">
-            Noch kein Zugang hinterlegt. Am einfachsten: Nodvard Deck erzeugt einen eigenen Schlüssel nur für diesen Server.
+            Noch kein Zugang hinterlegt. Am einfachsten: {productText("Nodvard Deck")} erzeugt einen eigenen Schlüssel nur für diesen Server.
           </p>
           <ModeButtons onPick={setMode} />
         </>

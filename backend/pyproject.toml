@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nodvard-deck"
-version = "0.12.1"
+version = "0.13.0"
 description = "Nodvard Deck — generischer Kern einer modularen Self-Hosting-Plattform."
 requires-python = ">=3.12"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -64,6 +64,7 @@ include = ["nodvard_deck*"]
 # Docker-Image (`pip install ./backend` ist NICHT editierbar). `versions/` und
 # `unreleased/` sind keine Python-Pakete, deshalb hier per Muster.
 [tool.setuptools.package-data]
+"nodvard_deck" = ["changelog/editions.toml"]
 "nodvard_deck.changelog" = ["versions/*.toml", "unreleased/*.toml"]
 
 [tool.pytest.ini_options]

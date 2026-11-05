@@ -1,17 +1,20 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 
 import { GuideLink } from "../components/GuideLink";
+import { InsecureConnectionWarning } from "../components/InsecureConnectionWarning";
 import { apiFetch } from "../lib/api";
 import { SHORT_NAME_HINT, type Branding } from "../lib/branding";
 import { PASSWORD_HINT, USERNAME_HINT, passwordProblem, usernameProblem } from "../lib/credentials";
 import { useAuthStore } from "../state/auth";
 import { useBrandingStore } from "../state/branding";
+import { loadedEdition, useEdition } from "../state/edition";
+import { CopyButton } from "./settings/hosts/CopyButton";
 import { RestoreFlow } from "./settings/RestoreFlow";
 import { Button } from "./settings/ui";
 import { FinishStep, codeBlockClass } from "./setup/FinishStep";
-import { ModulesStep } from "./setup/ModulesStep";
+import { ModulesStep, switchOnAllModules } from "./setup/ModulesStep";
 import { StepNav } from "./setup/StepNav";
 import { TimezoneStep } from "./setup/TimezoneStep";
 import { TotpStep } from "./setup/TotpStep";
@@ -19,7 +22,7 @@ import { TotpStep } from "./setup/TotpStep";
 /**
  * Einrichtungs-Assistent einer frischen Installation, sechs Schritte, nur der erste (Konto oder Sicherung einspielen)
  * ist Pflicht. Die Seite erscheint nur, solange `GET /auth/bootstrap` ein Konto verlangt, sonst geht es auf /login
- * statt auf einen 409 beim Absenden.
+ * statt auf einen 409 beim Absenden. Stehen die Module mit dem Image fest (Nodvard Dock), entfällt die Frage nach ihnen.
  */
 type Step = "account" | "timezone" | "modules" | "totp" | "branding" | "done";
 
@@ -57,11 +60,13 @@ export function SetupPage() {
   const navigate = useNavigate();
   /** `null` = wird geprüft, `false` = nichts zu tun (-> /login). */
   const [needed, setNeeded] = useState<boolean | null>(null);
+  const [insecureConnection, setInsecureConnection] = useState(false);
   const bootstrap = useAuthStore((s) => s.bootstrap);
   const brandingLoaded = useBrandingStore((s) => s.loaded);
   const branding = useBrandingStore((s) => s.branding);
   const loadBranding = useBrandingStore((s) => s.load);
   const setAndApplyBranding = useBrandingStore((s) => s.setAndApply);
+  const edition = useEdition();
 
   const [step, setStep] = useState<Step>("account");
   const [setupCode, setSetupCode] = useState("");
@@ -75,6 +80,8 @@ export function SetupPage() {
   const [pending, setPending] = useState(false);
   /** Erster Schritt: statt eines neuen Kontos eine Sicherung einspielen. */
   const [restoring, setRestoring] = useState(false);
+  const [switchingOn, setSwitchingOn] = useState(false);
+  const switching = useRef(false);
 
   function goTo(next: Step) {
     setError(null);
@@ -88,7 +95,9 @@ export function SetupPage() {
       let isNeeded: boolean;
       try {
         const res = await fetch("/api/v1/auth/bootstrap");
-        isNeeded = ((await res.json()) as { needed: boolean }).needed;
+        const info = (await res.json()) as { needed: boolean; insecure_connection: boolean };
+        isNeeded = info.needed;
+        if (alive) setInsecureConnection(info.insecure_connection === true);
       } catch {
         isNeeded = false; // API nicht erreichbar: lieber /login zeigen als eine tote Seite
       }
@@ -195,6 +204,29 @@ export function SetupPage() {
     goTo("done");
   }
 
+  async function afterTimezone() {
+    // Ein spät fertiges Speichern der Zeitzone ruft das hier ein zweites Mal auf.
+    if (switching.current) return;
+    switching.current = true;
+    setError(null);
+    const loaded = await loadedEdition();
+    if (!loaded) {
+      switching.current = false;
+      setError("Die Ausgabe konnte nicht geladen werden. Bitte noch einmal versuchen.");
+      return;
+    }
+    if (loaded.choose_modules) {
+      switching.current = false;
+      return goTo("modules");
+    }
+    setSwitchingOn(true);
+    // Scheitert das Einschalten, zeigt der Schritt mit den Modulen den Grund und einen Schalter zum erneuten Versuch.
+    const ok = await switchOnAllModules();
+    switching.current = false;
+    setSwitchingOn(false);
+    goTo(ok ? "totp" : "modules");
+  }
+
   function finish() {
     // Clientseitige Navigation statt window.location.assign: Ein Hard-Reload verwürfe den Access-Token im Speicher und
     // zwänge RequireAuth zu einem stillen Refresh, der unter StrictMode den Refresh-Race auslöst (siehe state/auth.ts).
@@ -203,7 +235,8 @@ export function SetupPage() {
     navigate("/", { replace: true });
   }
 
-  const index = STEPS.findIndex((s) => s.id === step);
+  const steps = STEPS.filter((s) => s.id !== "modules" || edition.choose_modules || step === "modules");
+  const index = steps.findIndex((s) => s.id === step);
   const restoreView = step === "account" && restoring;
   const wide = step === "modules" || restoreView;
 
@@ -216,16 +249,17 @@ export function SetupPage() {
         ) : (
           <>
             <p className="text-sm opacity-60" data-testid="setup-progress">
-              Schritt {index + 1} von {STEPS.length} — {STEPS[index].title}
+              Schritt {index + 1} von {steps.length} — {steps[index].title}
             </p>
             <div className="mb-4 mt-2 flex gap-1" aria-hidden="true">
-              {STEPS.map((s, i) => (
+              {steps.map((s, i) => (
                 <span key={s.id} className={`h-1 flex-1 rounded-full ${i <= index ? "bg-[var(--color-accent)]" : "bg-white/10"}`} />
               ))}
             </div>
           </>
         )}
 
+        {step === "account" && <InsecureConnectionWarning insecure={insecureConnection} />}
         {restoreView ? (
           <RestoreFlow
             mode="setup"
@@ -241,22 +275,29 @@ export function SetupPage() {
           />
         ) : step === "account" ? (
           <form onSubmit={(e) => void handleAccountSubmit(e)} className="flex flex-col gap-3">
-            <label className="text-sm">
-              Einrichtungscode
-              <input
-                autoFocus
-                value={setupCode}
-                autoCapitalize="characters"
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="XXXX-XXXX-XXXX"
-                onChange={(e) => setSetupCode(e.target.value.toUpperCase())}
-                className="mt-1 w-full rounded border border-white/20 bg-transparent px-3 py-2 font-mono tracking-wider"
-              />
-              <span className="mt-1 block text-xs opacity-60">
-                Steht im Protokoll des Containers: <code>docker compose logs nodvard-deck</code>. Er schützt die Einrichtung davor, dass jemand anderes im Netz das erste Konto anlegt.
-              </span>
-            </label>
+            <div>
+              <label className="text-sm">
+                Einrichtungscode
+                <input
+                  autoFocus
+                  value={setupCode}
+                  autoCapitalize="characters"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="XXXX-XXXX-XXXX"
+                  aria-describedby="setup-code-hint setup-code-command"
+                  onChange={(e) => setSetupCode(e.target.value.toUpperCase())}
+                  className="mt-1 w-full rounded border border-white/20 bg-transparent px-3 py-2 font-mono tracking-wider"
+                />
+              </label>
+              {/* Neben dem Etikett statt darin: Der Kopierknopf gehört nicht in den Namen des Feldes. */}
+              <p id="setup-code-hint" className="mt-1 text-xs opacity-60">
+                Er schützt die Einrichtung davor, dass jemand anderes im Netz das erste Konto anlegt. Du findest ihn im Protokoll (Log) des Containers:
+              </p>
+              <div className="mt-1 text-xs">
+                <Command id="setup-code-command" text={`docker compose logs ${edition.service}`} />
+              </div>
+            </div>
             <CodeHelp />
             <label className="text-sm">
               Benutzername
@@ -299,18 +340,27 @@ export function SetupPage() {
               Konto anlegen
             </Button>
             <div className="mt-2 border-t border-white/10 pt-4">
-              <p className="mb-2 text-sm opacity-70">Du hast schon eine Sicherung von Nodvard Deck?</p>
+              <p className="mb-2 text-sm opacity-70">Du hast schon eine Sicherung von {edition.product_name}?</p>
               <Button onClick={() => { setError(null); setRestoring(true); }} className="w-full py-2">
-                Oder: Sicherung einspielen
+                Sicherung einspielen
               </Button>
             </div>
           </form>
+        ) : step === "timezone" && switchingOn ? (
+          <p className="text-sm opacity-60" role="status">Die Module werden eingeschaltet …</p>
         ) : step === "timezone" ? (
-          <TimezoneStep onNext={() => goTo("modules")} />
+          <>
+            {error && <p role="alert" className="mb-3 text-sm text-red-400">{error}</p>}
+            <TimezoneStep onNext={() => void afterTimezone()} />
+          </>
         ) : step === "modules" ? (
           <ModulesStep onBack={() => goTo("timezone")} onNext={() => goTo("totp")} />
         ) : step === "totp" ? (
-          <TotpStep username={username || useAuthStore.getState().user?.username || ""} onBack={() => goTo("modules")} onNext={() => goTo("branding")} />
+          <TotpStep
+            username={username || useAuthStore.getState().user?.username || ""}
+            onBack={() => goTo(edition.choose_modules ? "modules" : "timezone")}
+            onNext={() => goTo("branding")}
+          />
         ) : step === "branding" ? (
           <form onSubmit={(e) => void handleBrandingSubmit(e)} className="flex flex-col gap-3">
             <label className="text-sm">
@@ -356,9 +406,20 @@ export function SetupPage() {
   );
 }
 
+/** Befehl zum Abschreiben, mit Kopierknopf daneben. */
+function Command({ text, id }: { text: string; id?: string }) {
+  return (
+    <div className="flex items-start gap-2">
+      <code id={id} className={`${codeBlockClass} min-w-0 flex-1`}>{text}</code>
+      <CopyButton text={text} className="flex-none" />
+    </div>
+  );
+}
+
 /** Aufklappbare Anleitung: wo steht der Einrichtungscode? (Text im Protokoll: core/setup_code.py::banner) */
 function CodeHelp() {
   const [open, setOpen] = useState(false);
+  const { service } = useEdition();
   return (
     <div className="rounded border border-white/10 text-sm">
       <button
@@ -374,31 +435,31 @@ function CodeHelp() {
       {open && (
         <div id="setup-code-help" className="flex flex-col gap-3 border-t border-white/10 px-3 py-3 text-xs">
           <p className="opacity-70">
-            Der Code steht im <strong>Protokoll (Log)</strong> des Containers „nodvard-deck“: in einem Rahmen aus <code>=</code>-Zeichen, der Code
+            Der Code steht im <strong>Protokoll (Log)</strong> des Containers „{service}“: in einem Rahmen aus <code>=</code>-Zeichen, der Code
             ganz allein in einer Zeile, etwa <code>K7MQ-X2VD-H9PA</code>. Nach einem Neustart steht derselbe Code noch einmal weiter unten.
           </p>
           <div>
             <p className="font-medium">Befehlszeile</p>
             <p className="opacity-70">Im Ordner mit der Compose-Datei:</p>
-            <code className={codeBlockClass}>docker compose logs nodvard-deck | grep -A1 Einrichtungscode</code>
+            <Command text={`docker compose logs ${service} | grep -A1 Einrichtungscode`} />
             <p className="mt-1 opacity-70">Windows PowerShell hat kein grep, dort:</p>
-            <code className={codeBlockClass}>docker compose logs nodvard-deck | Select-String -Context 0,4 Einrichtungscode</code>
+            <Command text={`docker compose logs ${service} | Select-String -Context 0,4 Einrichtungscode`} />
           </div>
           <div>
             <p className="font-medium">Docker Desktop</p>
-            <p className="opacity-70">Links „Containers“ → „nodvard-deck“ anklicken → Reiter „Logs“.</p>
+            <p className="opacity-70">Links „Containers“ → „{service}“ anklicken → Reiter „Logs“.</p>
           </div>
           <div>
             <p className="font-medium">Portainer</p>
-            <p className="opacity-70">Containers → „nodvard-deck“ → Symbol „Logs“.</p>
+            <p className="opacity-70">Containers → „{service}“ → Symbol „Logs“.</p>
           </div>
           <div>
             <p className="font-medium">Synology Container Manager</p>
-            <p className="opacity-70">Container → „nodvard-deck“ auswählen → „Details“ → Reiter „Protokoll“.</p>
+            <p className="opacity-70">Container → „{service}“ auswählen → „Details“ → Reiter „Protokoll“.</p>
           </div>
           <div>
             <p className="font-medium">Unraid</p>
-            <p className="opacity-70">Reiter „Docker“ → Symbol von „nodvard-deck“ anklicken → „Logs“.</p>
+            <p className="opacity-70">Reiter „Docker“ → Symbol von „{service}“ anklicken → „Logs“.</p>
           </div>
           <p data-testid="setup-code-guide" className="opacity-70">
             Alle Schritte des Assistenten erklärt die <GuideLink section="assistant">Anleitung</GuideLink>.

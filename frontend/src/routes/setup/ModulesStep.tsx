@@ -37,8 +37,8 @@ interface ExtensionRow {
 }
 
 /**
- * Kurzfassung der Beschreibung fuer die Kachel: der erste Satz, und steht darin ein Doppelpunkt
- * („Virenschutz fuer alle Server: ClamAV-Scans, ...“), nur das davor. Abkuerzungen wie „z. B.“ oder
+ * Kurzfassung der Beschreibung für die Kachel: der erste Satz, und steht darin ein Doppelpunkt
+ * („Virenschutz für alle Server: ClamAV-Scans, ...“), nur das davor. Abkürzungen wie „z. B.“ oder
  * „d. h.“ (Punkt nach einem Einzelbuchstaben) beenden keinen Satz. Der volle Text bleibt im Tooltip.
  */
 export function shortDescription(text: string | null): string {
@@ -55,6 +55,24 @@ export function shortDescription(text: string | null): string {
   }
   const colon = first.indexOf(": ");
   return colon >= 20 ? `${first.slice(0, colon)}.` : first;
+}
+
+/**
+ * Für eine Ausgabe mit festen Modulen (Nodvard Dock): schaltet jedes installierte Modul ein, das aus ist. `false`, wenn
+ * die Liste nicht lädt oder ein Modul nicht startet; dann soll der Schritt mit den Modulen den Grund zeigen.
+ */
+export async function switchOnAllModules(): Promise<boolean> {
+  try {
+    const rows = forEveryone(await api.get<ExtensionRow[]>("/extensions"));
+    if (rows.some((r) => r.state === "error")) return false;
+    for (const ext of rows.filter((r) => r.state === "disabled")) {
+      const result = await api.post<Partial<ExtensionRow> | undefined>(`/extensions/${ext.id}/enable`);
+      if (result?.state && result.state !== "enabled") return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function ModulesStep({ onBack, onNext }: { onBack: () => void; onNext: () => void }) {

@@ -1,0 +1,56 @@
+{
+ "BuildCache": [],
+ "Containers": [
+  {
+   "Command": "\"/hallo\"",
+   "CreatedAt": "2026-11-01 02:33:36 +0000 UTC",
+   "HealthStatus": "none",
+   "ID": "aa220b764f9b54212c65e790236d24fee5a8b4623500bbfbce7b74cd26c05346",
+   "Image": "mini:1",
+   "Labels": "",
+   "LocalVolumes": "0",
+   "Mounts": "",
+   "Names": "zwei",
+   "Networks": "intern,testnetz,bridge",
+   "Platform": null,
+   "Ports": "",
+   "RunningFor": "52 seconds ago",
+   "Size": "0B",
+   "State": "created",
+   "Status": "Created"
+  },
+  {
+   "Command": "\"/hallo\"",
+   "CreatedAt": "2026-11-01 02:33:36 +0000 UTC",
+   "HealthStatus": "none",
+   "ID": "edf3a0e337d145aa6536b6caa1e5edbbf06a67e25ae5f60ab4bfb4546921ada3",
+   "Image": "mini:1",
+   "Labels": "",
+   "LocalVolumes": "0",
+   "Mounts": "",
+   "Names": "web",
+   "Networks": "testnetz",
+   "Platform": null,
+   "Ports": "",
+   "RunningFor": "52 seconds ago",
+   "Size": "0B",
+   "State": "created",
+   "Status": "Created"
+  }
+ ],
+ "Images": [
+  {
+   "Containers": "2",
+   "CreatedAt": "2026-11-01 02:33:36 +0000 UTC",
+   "CreatedSince": "52 seconds ago",
+   "Digest": "",
+   "ID": "sha256:b7c451d6303ba546be3e312b49b8fb66917cdfcc559371391e1a58cf996663d7",
+   "Repository": "mini",
+   "SharedSize": "0B",
+   "Size": "3B",
+   "Tag": "1",
+   "UniqueSize": "3B"
+  }
+ ],
+ "Volumes": []
+}

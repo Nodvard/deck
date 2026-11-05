@@ -3,14 +3,16 @@
  * über `/system/updates` (höchstens einmal pro Minute), der Knopf „Jetzt aktualisieren“ über den Update-Helfer
  * (`applyBlock`), für alle ohne Helfer gibt es Anleitungen je Umgebung.
  */
-import { ArrowUpCircle, CheckCircle2, ExternalLink, Info, RefreshCw, WifiOff } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { ArrowUpCircle, CheckCircle2, ExternalLink, Info, RefreshCw, ShieldAlert, WifiOff } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { api } from "../../lib/api";
 import { formatWhen } from "../../lib/backups";
 import { requestUpdate, tagFitsVersion, useUpdateHelper, type HelperView } from "../../lib/updater";
 import { useAuthStore } from "../../state/auth";
+import { DECK_EDITION, useEdition } from "../../state/edition";
 import type { PreUpdateCopy } from "./UpdateCopiesCard";
+import { OWNER_ONLY_HINT, OwnerConfirm, type OwnerProof } from "./OwnerConfirm";
 import { ConfirmForm, FollowPanel, HelperStatusLine, LastResultLine, formatUnix, useHelperView } from "./UpdateHelper";
 import { Button, Card, NoticeLine, Toggle, errorText, inputClass, type Notice } from "./ui";
 import { HELPER_CODE_TEXTS } from "./updaterTexts";
@@ -20,6 +22,13 @@ export interface UpdateStatus {
   latest: string | null;
   latest_digest?: string | null;
   available: boolean;
+  /** Der Inhaber hat zugestimmt, dass Deck Sicherheitsupdates selbst einspielt (wirkt erst mit signierten Anforderungen). */
+  auto_security?: boolean;
+  /** Arten bis `latest`: `sicherheit`, `behoben`, `verbessert`, `neu`, `dokumentation`.
+   * In Image-Annotationen wird Dokumentation für ältere Deck-Versionen als `verbessert` veröffentlicht. */
+  kinds?: string[];
+  /** `false`: Für mindestens eine dieser Versionen sind die Arten unbekannt. */
+  kinds_complete?: boolean;
   channel: "stable" | "beta";
   enabled: boolean;
   checked_at: string | null;
@@ -59,6 +68,10 @@ export interface GuideOptions {
   target: string | null;
   /** Die Version von vor dem Update, wenn sie sicher bekannt ist (Kopie vor dem Update hin zur laufenden Version). */
   previous?: string | null;
+  /** Name der laufenden Ausgabe, wie ihn Portainer, Synology und Unraid zeigen. */
+  product?: string;
+  /** Mit der Anleitung für `scripts/deploy_pi.sh` (nur Nodvard Deck). */
+  deployPi?: boolean;
 }
 
 /** Die Installation mit dem fertigen Image legt die Datei als `compose.yml` ab; Compose findet sie dann selbst. */
@@ -66,6 +79,99 @@ const compose = (command: string) => `docker compose ${command}`;
 
 function Cmd({ children }: { children: ReactNode }) {
   return <code className="rounded bg-black/30 px-1.5 py-0.5 text-[12px] text-white/85">{children}</code>;
+}
+
+const KIND_LABELS: [kind: string, label: string][] = [
+  ["sicherheit", "Sicherheitsupdate"],
+  ["behoben", "Fehlerbehebungen"],
+  ["neu", "Neue Funktionen"],
+  ["verbessert", "Verbesserungen"],
+  ["dokumentation", "Dokumentation"],
+];
+
+/** Was das Update bringt; fehlt etwas, sagt die Zeile das, statt das Update harmlos aussehen zu lassen. */
+function UpdateKinds({ kinds = [], complete = false }: { kinds?: string[]; complete?: boolean }) {
+  const shown = KIND_LABELS.filter(([kind]) => kinds.includes(kind));
+  if (shown.length === 0 && complete) return null;
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+      {shown.map(([kind, label]) =>
+        kind === "sicherheit" ? (
+          <span key={kind} className="inline-flex items-center gap-1 rounded-full border border-red-500/40 bg-red-500/15 px-2 py-0.5 font-medium text-red-100">
+            <ShieldAlert size={12} /> {label}
+          </span>
+        ) : (
+          <span key={kind} className="rounded-full border border-white/15 bg-white/[0.06] px-2 py-0.5 text-white/80">{label}</span>
+        ),
+      )}
+      {!complete && (
+        <span className="text-white/60">
+          {shown.length === 0
+            ? "Was dieses Update ändert, ist nicht bekannt. Es kann auch Sicherheitsupdates enthalten; schau unter „Was ist neu?“ nach."
+            : "Nicht für jede Version bis dahin ist bekannt, was sie ändert; schau unter „Was ist neu?“ nach."}
+        </span>
+      )}
+    </div>
+  );
+}
+
+export const KEY_AUTO_SECURITY = "system.update_check.auto_security";
+
+/** Zustimmung zum Einspielen ohne Klick. Sie wird schon gespeichert, wirkt aber erst mit signierten Anforderungen. */
+function AutoSecuritySwitch({
+  enabled,
+  locked,
+  confirmLocked,
+  onSaved,
+}: {
+  enabled: boolean;
+  locked: boolean;
+  confirmLocked: boolean;
+  onSaved: (value: boolean) => void;
+}) {
+  const isOwner = useAuthStore((s) => Boolean(s.user?.is_owner));
+  const [wanted, setWanted] = useState<boolean | null>(null);
+
+  async function send(proof: OwnerProof) {
+    await api.put(`/settings/${KEY_AUTO_SECURITY}`, { value: wanted, ...proof });
+  }
+
+  return (
+    <div>
+      <div className="flex items-start gap-3">
+        <Toggle
+          checked={wanted ?? enabled}
+          disabled={!isOwner || wanted !== null || locked}
+          label="Sicherheitsupdates selbst einspielen"
+          onChange={setWanted}
+        />
+        <div className="text-sm">
+          <p>Sicherheitsupdates selbst einspielen</p>
+          <p className="mt-0.5 text-xs text-white/45">
+            Noch nicht in dieser Version: Bis jetzt spielt Nodvard Deck kein Update von selbst ein. Findet die Update-Suche (die tägliche
+            oben oder „Jetzt suchen“) ein Sicherheitsupdate, meldet Deck das rot, mit eingerichtetem Meldungskanal auch als Push. Mit
+            Version 1.0 spielt es dann, wenn du hier zustimmst, Sicherheitsupdates derselben Reihe (etwa 1.0.1 auf 1.0.2) selbst ein, nur
+            im Kanal „Nur fertige Versionen“ und nur mit Update-Helfer.
+          </p>
+          {enabled && wanted === null && (
+            <p className="mt-1 text-xs text-amber-200/80">Zugestimmt. Bis Version 1.0 bleibt es beim Melden, einspielen musst du noch selbst.</p>
+          )}
+          {!isOwner && <p className="mt-1 text-xs text-white/55">{OWNER_ONLY_HINT}</p>}
+        </div>
+      </div>
+      {wanted !== null && (
+        <OwnerConfirm
+          disabled={confirmLocked}
+          send={send}
+          onDone={() => {
+            onSaved(wanted);
+            setWanted(null);
+          }}
+          onCancel={() => setWanted(null)}
+        />
+      )}
+    </div>
+  );
 }
 
 /** `0.6.0-rc1` -> `0.6` (die Reihe, die release.yml als Tag mit veröffentlicht). */
@@ -77,7 +183,11 @@ export function isPrerelease(version: string | null | undefined): boolean {
   return !!version && version.includes("-");
 }
 
-export function guides(image: string, current: string, { target, previous = null }: GuideOptions): Guide[] {
+export function guides(
+  image: string,
+  current: string,
+  { target, previous = null, product = "Nodvard Deck", deployPi = true }: GuideOptions,
+): Guide[] {
   const next = target ?? "<neue Version>";
   const pinned = (field: ReactNode) =>
     target !== null && isPrerelease(target) ? (
@@ -121,7 +231,7 @@ export function guides(image: string, current: string, { target, previous = null
       {keep}In der Compose-Datei bei <Cmd>image:</Cmd> {previousRef} eintragen und <Cmd>{compose("up -d")}</Cmd> ausführen.
     </>
   );
-  return [
+  const all: Guide[] = [
     {
       id: "compose",
       label: "Docker Compose",
@@ -148,7 +258,7 @@ export function guides(image: string, current: string, { target, previous = null
       id: "portainer",
       label: "Portainer",
       steps: [
-        <>Links „Stacks“ öffnen und den Stack mit Nodvard Deck anklicken.</>,
+        <>Links „Stacks“ öffnen und den Stack mit {product} anklicken.</>,
         <>Oben „Editor“ wählen. {pinned(imageField)}</>,
         <>Unten „Update the stack“ klicken, im Fenster „Re-pull image“ einschalten und bestätigen.</>,
       ],
@@ -164,7 +274,7 @@ export function guides(image: string, current: string, { target, previous = null
       steps: [
         <>Container Manager öffnen, links „Image“ wählen.</>,
         <>Steht bei <Cmd>{image}</Cmd> „Update verfügbar“, darauf klicken und „Aktualisieren“ bestätigen. Der Container startet danach mit der neuen Version.</>,
-        <>Läuft Nodvard Deck als „Projekt“: unter „Projekt“ das Projekt stoppen und über „Aktion“ → „Erstellen“ neu anlegen; dabei wird die neue Version geladen. {pinned(imageField)}</>,
+        <>Läuft {product} als „Projekt“: unter „Projekt“ das Projekt stoppen und über „Aktion“ → „Erstellen“ neu anlegen; dabei wird die neue Version geladen. {pinned(imageField)}</>,
       ],
       back: (
         <>
@@ -178,7 +288,7 @@ export function guides(image: string, current: string, { target, previous = null
       steps: [
         <>Oben den Reiter „Docker“ öffnen.</>,
         <>Unten „Check for Updates“ klicken.</>,
-        <>Bei Nodvard Deck erscheint „apply update“ – anklicken und mit „Apply update“ bestätigen.</>,
+        <>Bei {product} erscheint „apply update“ – anklicken und mit „Apply update“ bestätigen.</>,
       ],
       note: pinned(<>„Repository“ (Container bearbeiten: „Edit“, danach „Apply“)</>),
       back: (
@@ -202,6 +312,7 @@ export function guides(image: string, current: string, { target, previous = null
       ),
     },
   ];
+  return deployPi ? all : all.filter((guide) => guide.id !== "deploy-pi");
 }
 
 const CHANNEL_LABELS: Record<UpdateStatus["channel"], string> = {
@@ -357,19 +468,29 @@ function HelperSection({ status, sqlite, database }: { status: UpdateStatus; sql
 }
 
 export function UpdatesCard(): JSX.Element {
+  const edition = useEdition();
+  // Freigaben von github.com holt nur die Suche nach dem Image von Nodvard Deck.
+  const asksForGrant = edition.image === DECK_EDITION.image;
   const canWrite = useAuthStore((s) => s.hasPermission("settings.write"));
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [info, setInfo] = useState<SystemInfo | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const autoSecurityRevision = useRef(0);
+  const channelRevision = useRef(0);
   const [notice, setNotice] = useState<Notice>(null);
   const [tab, setTab] = useState<GuideId | null>(null);
+  const helperView = useUpdateHelper((s) => s.view);
+  const helperFollow = useUpdateHelper((s) => s.follow);
+  const isOwner = useAuthStore((s) => Boolean(s.user?.is_owner));
 
   useEffect(() => {
     let alive = true;
+    const revision = autoSecurityRevision.current;
+    const channel = channelRevision.current;
     api.get<UpdateStatus>("/system/updates")
-      .then((s) => alive && setStatus(s))
+      .then((s) => alive && receiveStatus(s, revision, channel))
       .catch((err: unknown) => alive && setLoadError(errorText(err)));
     // Nur eine Zugabe für die Anleitungen (Datenbank, Version von vorher): scheitert das, bleibt es still.
     api.get<SystemInfo>("/system/info")
@@ -380,11 +501,21 @@ export function UpdatesCard(): JSX.Element {
     };
   }, []);
 
+  function receiveStatus(loaded: UpdateStatus, revision: number, channel: number) {
+    setStatus((s) => {
+      if (channel !== channelRevision.current) return s;
+      return revision === autoSecurityRevision.current ? loaded : { ...loaded, auto_security: s?.auto_security };
+    });
+  }
+
   async function checkNow() {
+    const revision = autoSecurityRevision.current;
+    const channel = channelRevision.current;
     setBusy(true);
     setNotice(null);
     try {
-      setStatus(await api.post<UpdateStatus>("/system/updates/check"));
+      const checked = await api.post<UpdateStatus>("/system/updates/check");
+      receiveStatus(checked, revision, channel);
     } catch (err) {
       setNotice({ kind: "error", text: errorText(err) });
     } finally {
@@ -394,20 +525,22 @@ export function UpdatesCard(): JSX.Element {
 
   async function save(key: "enabled" | "channel", value: boolean | string) {
     if (!status) return;
+    const revision = autoSecurityRevision.current;
+    const channel = key === "channel" ? ++channelRevision.current : channelRevision.current;
     setSaving(true);
     setNotice(null);
     try {
       await api.put(`/settings/system.update_check.${key}`, { value });
       if (key === "channel") {
         // Der Kanal ändert, welche Version als neueste gilt: Stand neu laden (ohne Netz).
-        setStatus(await api.get<UpdateStatus>("/system/updates"));
+        receiveStatus(await api.get<UpdateStatus>("/system/updates"), revision, channel);
       } else {
         setStatus((s) => (s ? { ...s, enabled: value as boolean } : s));
       }
     } catch (err) {
-      setNotice({ kind: "error", text: errorText(err) });
+      if (channel === channelRevision.current) setNotice({ kind: "error", text: errorText(err) });
     } finally {
-      setSaving(false);
+      if (channel === channelRevision.current) setSaving(false);
     }
   }
 
@@ -424,8 +557,10 @@ export function UpdatesCard(): JSX.Element {
   const all = guides(status.official_image_name, status.current, {
     target,
     previous: target === null ? previousVersion(info, status.current) : null,
+    product: edition.product_name,
+    deployPi: edition.repo_tools,
   });
-  const activeId = tab ?? (status.official_image ? "compose" : "deploy-pi");
+  const activeId = tab ?? (status.official_image || !edition.repo_tools ? "compose" : "deploy-pi");
   const active = all.find((g) => g.id === activeId) ?? all[0];
   // Ohne Angabe gilt die Standard-Datenbank SQLite; nur bei ihr gibt es die Kopie vor dem Update.
   const sqlite = !info?.database || info.database === "sqlite";
@@ -437,7 +572,7 @@ export function UpdatesCard(): JSX.Element {
   return (
     <Card
       title="Updates"
-      description="Ob es eine neuere Version von Nodvard Deck gibt und wie du sie einspielst."
+      description={`Ob es eine neuere Version von ${edition.product_name} gibt und wie du sie einspielst.`}
       footer={
         <Button variant="primary" busy={busy} disabled={saving} onClick={() => void checkNow()}>
           <RefreshCw size={14} /> Jetzt suchen
@@ -456,18 +591,21 @@ export function UpdatesCard(): JSX.Element {
       </dl>
 
       {status.available && status.latest && (
-        <div role="status" className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-100">
-          <ArrowUpCircle size={16} className="flex-none" />
-          <span className="font-medium">
-            Update verfügbar: Version {status.latest}
-            {isPrerelease(status.latest) ? " (Vorabversion)" : ""}
-          </span>
-          {status.release_notes_url && (
-            <a href={status.release_notes_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 underline underline-offset-2">
-              Was ist neu? <ExternalLink size={12} />
-            </a>
-          )}
-        </div>
+        <>
+          <div role="status" className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-100">
+            <ArrowUpCircle size={16} className="flex-none" />
+            <span className="font-medium">
+              Update verfügbar: Version {status.latest}
+              {isPrerelease(status.latest) ? " (Vorabversion)" : ""}
+            </span>
+            {status.release_notes_url && (
+              <a href={status.release_notes_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 underline underline-offset-2">
+                Was ist neu? <ExternalLink size={12} />
+              </a>
+            )}
+          </div>
+          <UpdateKinds kinds={status.kinds} complete={status.kinds_complete} />
+        </>
       )}
       {!status.available && status.latest && !status.error && (
         <p className="mt-4 flex items-center gap-2 text-sm text-white/70">
@@ -491,12 +629,22 @@ export function UpdatesCard(): JSX.Element {
         </p>
       )}
 
-      <HelperSection status={status} sqlite={!info?.database || info.database === "sqlite"} database={info?.database} />
+      {/* Der Update-Helfer aktualisiert nur das Image von Nodvard Deck. */}
+      {edition.repo_tools && <HelperSection status={status} sqlite={!info?.database || info.database === "sqlite"} database={info?.database} />}
 
       {!status.official_image && (
         <p className="mt-4 text-xs text-white/55">
-          Dieses Dashboard läuft mit einem selbst gebauten Image. Aktualisiere es auf demselben Weg, auf dem du es gebaut hast – auf einem Raspberry
-          Pi z. B. mit <Cmd>scripts/deploy_pi.sh</Cmd>. Die anderen Anleitungen gelten für das fertige Image <Cmd>{status.official_image_name}</Cmd>.
+          {edition.repo_tools ? (
+            <>
+              Dieses Dashboard läuft mit einem selbst gebauten Image. Aktualisiere es auf demselben Weg, auf dem du es gebaut hast – auf einem Raspberry
+              Pi z. B. mit <Cmd>scripts/deploy_pi.sh</Cmd>. Die anderen Anleitungen gelten für das fertige Image <Cmd>{status.official_image_name}</Cmd>.
+            </>
+          ) : (
+            <>
+              Dieses Dashboard läuft mit einem selbst gebauten Image. Aktualisiere es auf demselben Weg, auf dem du es gebaut hast. Die Anleitungen
+              gelten für das fertige Image <Cmd>{status.official_image_name}</Cmd>.
+            </>
+          )}
         </p>
       )}
 
@@ -513,7 +661,7 @@ export function UpdatesCard(): JSX.Element {
               <div className="text-sm">
                 <p>Täglich automatisch nach Updates suchen</p>
                 <p className="mt-0.5 text-xs text-white/45">
-                  Dazu fragt Nodvard Deck einmal am Tag bei GitHub (ghcr.io, dort liegen die Images, und github.com für die Freigabe) nach, welche Versionen es gibt. GitHub sieht dabei
+                  Dazu fragt {edition.product_name} einmal am Tag bei GitHub (ghcr.io, dort liegen die Images{asksForGrant && ", und github.com für die Freigabe"}) nach, welche Versionen es gibt. GitHub sieht dabei
                   die IP-Adresse deines Anschlusses und den Zeitpunkt; sonst wird nichts übertragen, auch nicht die installierte Version. Wenn du das
                   nicht möchtest, schalte die Suche hier ab. „Jetzt suchen“ geht auch dann, sieht GitHub aber ebenso.
                 </p>
@@ -533,17 +681,27 @@ export function UpdatesCard(): JSX.Element {
                 ))}
               </select>
             </label>
+            {edition.repo_tools && (
+              <AutoSecuritySwitch
+                enabled={status.auto_security === true}
+                locked={locked}
+                confirmLocked={saving}
+                onSaved={(value) => {
+                  autoSecurityRevision.current += 1;
+                  setStatus((s) => (s ? { ...s, auto_security: value } : s));
+                }}
+              />
+            )}
           </div>
         ) : (
           <p className="text-xs text-white/45">
-            Tägliche Suche: {status.enabled ? "an" : "aus"} · {CHANNEL_LABELS[status.channel]}. Bei jeder Suche sieht GitHub (ghcr.io, github.com) die
+            Tägliche Suche: {status.enabled ? "an" : "aus"} · {CHANNEL_LABELS[status.channel]}. Bei jeder Suche sieht GitHub (ghcr.io{asksForGrant && ", github.com"}) die
             IP-Adresse und den Zeitpunkt, sonst nichts. Abschalten kann sie, wer Einstellungen ändern darf.
           </p>
         )}
       </div>
 
-      <div className="mt-5 border-t border-white/[0.06] pt-4">
-        <h4 className="mb-2 text-sm font-semibold">So spielst du ein Update ein</h4>
+      <ManualGuide collapsed={manualGuideFolded(status, helperView, Boolean(helperFollow), isOwner)}>
         <div role="tablist" aria-label="Anleitung für" className="mb-3 flex flex-wrap gap-1">
           {all.map((g) => (
             <button
@@ -571,12 +729,12 @@ export function UpdatesCard(): JSX.Element {
           {active.note && <p className="mt-2 text-xs text-white/55">{active.note}</p>}
           {sqlite ? (
             <p className="mt-3 text-xs text-white/55">
-              Vorher wird automatisch eine Kopie der Datenbank angelegt: Muss das Update die Datenbank umbauen, sichert Nodvard Deck sie beim Start
+              Vorher wird automatisch eine Kopie der Datenbank angelegt: Muss das Update die Datenbank umbauen, sichert {edition.product_name} sie beim Start
               zuerst (siehe „Kopien vor Updates“).
             </p>
           ) : (
             <p className="mt-3 text-xs text-white/55">
-              Bei dieser Datenbank ({info?.database}) legt Nodvard Deck vor einem Update keine Kopie an. Bitte sichere sie vorher selbst.
+              Bei dieser Datenbank ({info?.database}) legt {edition.product_name} vor einem Update keine Kopie an. Bitte sichere sie vorher selbst.
             </p>
           )}
           <p className="mt-2 text-xs text-white/55">
@@ -594,7 +752,33 @@ export function UpdatesCard(): JSX.Element {
             )}
           </p>
         </div>
-      </div>
+      </ManualGuide>
     </Card>
+  );
+}
+
+/** Die Anleitung von Hand wird nur eingeklappt, wenn der Helfer das Update übernimmt (Knopf da oder Vorgang läuft). */
+export function manualGuideFolded(
+  status: UpdateStatus, view: HelperView | null, following: boolean, isOwner: boolean,
+): boolean {
+  if (!view || !status.official_image) return false;
+  return following || view.state === "busy" || applyBlock(status, view, isOwner).ok;
+}
+
+/** Anleitung für Updates von Hand, eingeklappt, wenn der Knopf oben der Weg ist. */
+function ManualGuide({ collapsed, children }: { collapsed: boolean; children: ReactNode }): JSX.Element {
+  if (!collapsed) {
+    return (
+      <div className="mt-5 border-t border-white/[0.06] pt-4">
+        <h4 className="mb-2 text-sm font-semibold">So spielst du ein Update ein</h4>
+        {children}
+      </div>
+    );
+  }
+  return (
+    <details className="mt-5 border-t border-white/[0.06] pt-4" data-testid="manual-update-guide">
+      <summary className="mb-2 cursor-pointer text-sm font-semibold">Von Hand aktualisieren (ohne Update-Helfer)</summary>
+      {children}
+    </details>
   );
 }

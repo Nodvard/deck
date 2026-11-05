@@ -11,14 +11,14 @@ from urllib.parse import urlsplit, urlunsplit
 from nodvard_sdk import sha256_fingerprint
 
 # Das Passwort liegt je Gerät im Tresor unter `synology-password:<Kurzname>` (gebunden an die Adresse, siehe
-# `settings.schema.json`). Ohne Zusatz hieß der Eintrag, als es nur ein Gerät gab.
+# `settings.schema.json`). Ein Eintrag ohne Zusatz gehört zu den alten Einzelfeldern, `legacy.py` übernimmt ihn.
 PASSWORD_LABEL = "synology-password"
 SETTINGS_HINT = "Unter Einstellungen → Erweiterungen → Synology DSM eintragen."
 
-# So heißt das Gerät, das aus den früheren Einzelfeldern übernommen wird. Es behält die alten Kennungen (Kacheln,
-# Meldungen, Wächter-Stand), damit nichts doppelt oder verwaist dasteht.
+# Das aus den Einzelfeldern übernommene Gerät heißt so und behält die Kennungen von Kacheln, Meldungen und
+# Wächter-Stand, damit nichts doppelt oder verwaist dasteht.
 LEGACY_NAME = "synology"
-# Die Einzelfelder aus der Zeit mit nur einem Gerät.
+# Die Einzelfelder für ein einziges Gerät; `connections` ersetzt sie.
 LEGACY_FIELDS = ("base_url", "username", "tls_insecure_skip_verify", "tls_fingerprint_sha256")
 
 # Ab diesem Pfadteil beginnt die Oberfläche bzw. die Schnittstelle von DSM; wer die Adresse aus dem Browser kopiert
@@ -162,7 +162,7 @@ def read_devices(settings: dict[str, Any]) -> list[DeviceConfig]:
 
 
 def legacy_entry(settings: dict[str, Any]) -> dict[str, Any] | None:
-    """Das frühere Einzelgerät als Eintrag für `connections`; `None`, wenn keine Adresse eingetragen war."""
+    """Das Gerät aus den Einzelfeldern als Eintrag für `connections`; `None`, wenn keine Adresse eingetragen ist."""
     base_url = settings.get("base_url")
     if not isinstance(base_url, str) or not base_url.strip():
         return None

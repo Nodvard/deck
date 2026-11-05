@@ -1,4 +1,5 @@
 /** qBittorrent-Seite (PageSpec `component="QbittorrentPage"`): je Verbindung eine Karte, nur lesend. */
+import { styleRef } from "../../../_shared/frontend/src/csp";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
@@ -163,7 +164,7 @@ function TorrentRow({ torrent }: { torrent: Torrent }) {
         role="progressbar" aria-label={`Fortschritt von ${torrent.name}`} aria-valuemin={0} aria-valuemax={100}
         aria-valuenow={torrent.progress_percent} className="h-1 w-full overflow-hidden rounded bg-white/10"
       >
-        <div className="h-full rounded bg-[var(--color-accent)]" style={{ width: `${torrent.progress_percent}%` }} />
+        <div className="h-full rounded bg-[var(--color-accent)]" ref={styleRef({ width: `${torrent.progress_percent}%` })} />
       </div>
     </li>
   );
@@ -304,7 +305,7 @@ export function QbittorrentPage(): JSX.Element {
       description="Zeigt Geschwindigkeit, aktive Torrents, die Zahl je Zustand und den freien Platz. Nur lesend."
       actions={
         <>
-          {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("ghost")}>Einstellungen</a>}
+          {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("secondary")}>Einstellungen</a>}
           <Button onClick={reload} disabled={loading}>Aktualisieren</Button>
         </>
       }

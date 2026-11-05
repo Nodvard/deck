@@ -149,10 +149,12 @@ def make_source(root: Path) -> tuple[bytes, str]:
         assert state["status"] == "ready", state
         blob = httpx.get(f"http://127.0.0.1:{server.port}{ticket['url']}", timeout=60)
         assert blob.status_code == 200
-        refresh = logged.cookies.get("lattice_refresh") or ""
-        assert logged.cookies.get("nodvard_deck_refresh") == refresh, "ueber echtes HTTP: beide Cookies, gleicher Wert"
-        # Gegenprobe fuer spaeter: SOLANGE nichts eingespielt ist, gilt dieses Cookie (die Sicherung ist schon fertig).
-        assert httpx.post(f"{server.url}/auth/refresh", json={}, cookies={"lattice_refresh": refresh}, timeout=30).status_code == 200
+        refresh = logged.cookies.get("nodvard_deck_refresh") or ""
+        # Gegenprobe für später: Solange nichts eingespielt ist, gilt dieses Cookie (die Sicherung ist schon fertig).
+        before = httpx.post(
+            f"{server.url}/auth/refresh", json={}, cookies={"nodvard_deck_refresh": refresh}, timeout=30
+        )
+        assert before.status_code == 200
         return blob.content, refresh
     finally:
         server.stop()
@@ -212,10 +214,12 @@ def test_backup_restore_through_the_wizard_end_to_end(tmp_path):
         logged = login(server, "nico", OWNER_PW)
         assert logged.status_code == 200, logged.text
         headers = auth(logged)
-        assert httpx.get(f"{server.url}/auth/bootstrap", timeout=30).json() == {"needed": False}
+        assert httpx.get(f"{server.url}/auth/bootstrap", timeout=30).json() == {"needed": False, "insecure_connection": False}
         # ... die alte Anmeldung ist beendet ...
         assert old_refresh, "die Quelle hat eine Anmeldung (Cookie) bekommen"
-        stale = httpx.post(f"{server.url}/auth/refresh", json={}, cookies={"lattice_refresh": old_refresh}, timeout=30)
+        stale = httpx.post(
+            f"{server.url}/auth/refresh", json={}, cookies={"nodvard_deck_refresh": old_refresh}, timeout=30
+        )
         assert stale.status_code == 401, "Anmeldungen aus der Zeit der Sicherung muessen beendet sein"
         # ... das Ergebnis ist sichtbar und steht im Audit-Protokoll der eingespielten Datenbank.
         status = httpx.get(f"{server.url}/system/restore/status", headers=headers, timeout=30).json()

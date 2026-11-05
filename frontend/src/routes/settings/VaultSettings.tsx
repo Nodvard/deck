@@ -10,6 +10,7 @@ import { ApiError, api } from "../../lib/api";
 import { useAuthStore } from "../../state/auth";
 import { SecondFactorField, isTotpMissing, isTotpRejected, useTwoFactorEnabled } from "./SecondFactorField";
 import { Badge, Button, Card, Field, NoticeLine, PageHeader, errorText, inputClass, type Notice } from "./ui";
+import { useEdition, productText } from "../../state/edition";
 
 export interface SecretUsage {
   type: string;
@@ -78,6 +79,7 @@ function isLogin(entry: VaultEntry): boolean {
 type Pending = { id: string; kind: "replace" | "delete" | "edit" } | null;
 
 function NewEntry({ onDone }: { onDone: () => Promise<void> }) {
+  const edition = useEdition();
   const [open, setOpen] = useState(false);
   const [label, setLabel] = useState("");
   const [kind, setKind] = useState("password");
@@ -106,7 +108,7 @@ function NewEntry({ onDone }: { onDone: () => Promise<void> }) {
     return <Button variant="primary" onClick={() => setOpen(true)}><Plus size={14} /> Neuer Eintrag</Button>;
   }
   return (
-    <Card title="Neuer Eintrag" description="Zum Beispiel ein Token, das ein Skript oder ein Modul braucht. Der Wert lässt sich danach nicht mehr ansehen, nur ersetzen.">
+    <Card title="Neuer Eintrag" description={edition.choose_modules ? "Zum Beispiel ein Token, das ein Skript oder ein Modul braucht. Der Wert lässt sich danach nicht mehr ansehen, nur ersetzen." : "Zum Beispiel ein Passwort für eine private Registry. Der Wert lässt sich danach nicht mehr ansehen, nur ersetzen."}>
       <form data-testid="vault-new" className="grid gap-3 sm:grid-cols-2" onSubmit={(e) => void submit(e)}>
         <Field label="Name" hint="Eindeutig, z. B. backup-token.">
           <input value={label} onChange={(e) => setLabel(e.target.value)} maxLength={128} className={inputClass} required autoFocus />
@@ -309,7 +311,7 @@ export function VaultSettings(): JSX.Element {
     <div>
       <PageHeader
         title="Tresor"
-        description="Passwörter, Schlüssel und Tokens, die Nodvard Deck verschlüsselt aufbewahrt. Die Werte zeigt niemand an, auch nicht für dich."
+        description={productText("Passwörter, Schlüssel und Tokens, die Nodvard Deck verschlüsselt aufbewahrt. Die Werte zeigt niemand an, auch nicht für dich.")}
         actions={canWrite ? <NewEntry onDone={() => changed({ kind: "ok", text: "Eintrag gespeichert." })} /> : undefined}
       />
       <NoticeLine notice={notice} />

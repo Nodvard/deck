@@ -178,8 +178,10 @@ Aktionen, Meldungen, Protokolleinträge, Logger und Live-Kanäle.
 - **Live-Nachrichten:** `ctx.ws.broadcast` sendet zusätzlich auf `ext.<alt>.<kanal>`, damit offene Seiten mit altem
   Stand weiter Nachrichten bekommen.
 - **`requires`:** Nennt eine andere Erweiterung noch die alte Kennung, sieht sie die Fähigkeiten der umbenannten weiter.
-- **Datenordner:** `data/ext/<Speicher-Kennung>`. Fehlt er, gilt der erste vorhandene Ordner der neuen oder einer alten
-  Kennung. Gibt es keinen, wird `data/ext/<Speicher-Kennung>` angelegt. Verschoben wird nichts.
+- **Datenordner:** der erste nicht leere Ordner unter `data/ext/` in der Reihenfolge Speicher-Kennung, neue
+  Kennung, alte Kennungen. Ein leerer Ordner, den etwa ein früherer Start angelegt hat, verdeckt also keinen
+  gefüllten. Sind alle leer, gilt der erste vorhandene; gibt es keinen, wird `data/ext/<Speicher-Kennung>` angelegt.
+  Ein Ordner, der sich nicht lesen lässt, zählt als gefüllt. Verschoben wird nichts.
 - **Sicherungen:** Erweiterungen werden auch unter ihren alten Kennungen erkannt. Eine Sicherung mit der alten Zeile
   ergibt beim Einspielen keine Warnung „gibt es hier nicht“.
 - **Geheimnisse:** Gefunden werden sie über ihr Label. Labels und Rechte-Muster wie `secrets.read:alter-name-*` bleiben
@@ -376,6 +378,48 @@ Registrierungen einzusammeln (und damit Router, Navigation und Widget-Katalog in
 Rutsch zu bauen), bevor irgendein Hintergrundtask läuft und Ereignisse in einen noch
 halbfertigen Bus schiebt.
 
+### Änderungen im Tresor empfangen
+
+Eine Erweiterung registriert sich durch Überschreiben von `on_secret_changed(ctx, label)`
+in ihrer `NodvardExtension`-Klasse. Eine zusätzliche Registrierung ist nicht nötig.
+`label` ist der Schlüsselname, `ctx.ext_id` die Kennung des empfangenden Moduls.
+Der Klartext wird nicht mitgegeben. Alle geladenen Module mit einem passenden erteilten
+`secrets.read:<label>`-Recht bekommen den Aufruf, auch mit einem Muster wie `dienst-*`.
+Der Besitzer des Geheimnisses muss nicht das empfangende Modul sein.
+
+Der Kern speichert zuerst und wartet dann auf die Hooks. Ein erneutes Lesen im Hook
+liefert bereits den neuen Wert. Das gilt für Anlegen, Ersetzen und Löschen über den
+Tresor und die Modul-Einstellungen sowie für das automatische Entfernen eines an die
+Adresse gebundenen Geheimnisses. Reine Metadatenänderungen lösen keinen Aufruf aus.
+Die Hooks verschiedener Module laufen gleichzeitig, je Modul mit höchstens zehn Sekunden
+für alle betroffenen Labels. Fehler und Zeitüberschreitungen werden protokolliert;
+der gespeicherte Wert bleibt bestehen. Der Hook übernimmt keine Nutzeridentität.
+
+Im Hook Sitzungen, Ergebnisse und Pausen nach Anmeldefehlern der betroffenen Verbindung
+verwerfen. Eine noch laufende Abfrage darf danach keinen gültigen Cache oder eine neue
+gemeinsam genutzte Sitzung mit dem alten Wert hinterlassen. Die nächste Verbindung und
+„Verbindung testen“ lesen das Geheimnis erneut. Wer `ctx.secrets` selbst verändert, muss
+seinen Cache selbst verwerfen, da dieser Weg keinen Hook aufruft.
+
+Die mitgelieferten Module behandeln ihre Zugänge so:
+
+| Module | Verhalten beim Geheimniswechsel | Nachweis unter `backend/tests/` |
+|---|---|---|
+| Pi-hole, Nginx Proxy Manager | Gemeinsamer Hook verwirft die Sitzung; der Verbindungstest meldet frisch an | `test_ext_pihole.py`, `test_ext_npm.py` |
+| qBittorrent, Synology DSM | Hook verwirft Sitzung, Ergebnis und Anmeldepause je Verbindung | `test_ext_qbittorrent.py`, `test_ext_synology.py`, `test_ext_synology_devices.py` |
+| Home Assistant, Jellyfin, Plex, Uptime Kuma | Hook verwirft Ergebnis und Anmeldepause je Verbindung | `test_ext_home_assistant.py`, `test_ext_jellyfin.py`, `test_ext_plex.py`, `test_ext_uptime_kuma.py` |
+| Nextcloud | Hook verwirft Serverinfo-Ergebnis und Pause; WebDAV liest das App-Passwort je Verbindung | `test_ext_nextcloud.py`, `test_ext_nextcloud_serverinfo.py` |
+| Proxmox, Backups | Bauen ihre Connectoren bei jedem Aufruf mit dem aktuellen Token, ohne Zugangscache | `test_ext_proxmox.py`, `test_ext_backups.py` |
+| Docker | Git-Holen und Git-Abfragen lesen das Token je Auftrag; Registry-Anmeldung liest das Passwort je Anmeldung | `test_ext_docker_git.py`, `test_ext_docker_registries.py` |
+| Shield-Ollama | Anfrage, Modellliste und Verbindungstest lesen den Schlüssel je Aufruf | `test_ext_shield_models.py` |
+| ntfy | Versand und Verbindungstest lesen das Token je Aufruf; weitere Kanäle lesen ihre Adresse aus dem Tresor | `test_ext_ntfy.py`, `test_ext_ntfy_kanaele.py` |
+| Skripte | Liest geheime Parameter bei jeder Ausführung, auch nach einer Freigabe | `test_ext_scripts.py` |
+| Vaultwarden | Öffentliche Statusabfragen ohne Passwort oder Token; kein Zugangscache | `test_ext_vaultwarden.py` |
+
+Eine Registry-Anmeldung liegt zusätzlich auf dem Docker-Server. Ein Passwortwechsel
+im Tresor führt dort keine automatische Anmeldung aus; die nächste ausdrücklich
+ausgelöste Anmeldung nutzt das neue Passwort.
+
 ---
 
 ## 2. Der `ExtensionContext`
@@ -532,7 +576,7 @@ ctx.capabilities.provide(ProxmoxHostProvider(ctx))
 | `ActionExecutor` | terminal (SSH-Exec), proxmox (API-Aktionen) | die Ausführung hinter dem Gate |
 | `AIProvider` | shield (Ollama), künftig andere | Chat, Diagnose, Zusammenfassungen |
 | `NotificationChannel` | ntfy, E-Mail, Webhook | das Notification-Center |
-| `MetricsProvider` | proxmox, docker, node-exporter | Kacheln und Verlaufsgrafiken |
+| `MetricsProvider` | proxmox, docker, node-exporter | Kacheln und Verlaufsgrafiken; optional `sample_many()` für die Werte vieler Hosts in einem Aufruf (Übersicht im Cockpit) |
 | `ServiceCatalog` | docker (Docker-API) | den App-Launcher |
 | `BackupProvider` | backups (Proxmox-Jobs, restic …) | das Backup-Center |
 | `SearchProvider` | beliebig | die globale Suche |
@@ -1164,6 +1208,8 @@ Tag, nicht ein JSON-Eintrag, der unbemerkt veraltet.
 Das ist der Nachweis, dass die Schnittstelle für sie ausreicht.
 
 ### Nodvard Shield
+
+Unterstützte Systeme: Auf unveränderlichen rpm-ostree-Systemen wie Bazzite und Fedora Atomic zeigt Shield für fehlende Schutzprogramme einen Hinweis zur manuellen Installation mit `rpm-ostree install clamav clamav-update lynis fail2ban` und anschließendem Neustart; Deck installiert dort keine Pakete.
 
 | Baustein | Umsetzung gegen die Schnittstelle |
 |---|---|

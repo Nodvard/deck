@@ -81,21 +81,21 @@ BACKUP_READ_PRIVILEGES = ("Sys.Audit", "VM.Audit", "Datastore.Audit")
 # Wiederherstellen lesen), `Sys.Modify` (Backup-Jobs anlegen und ändern verlangt es auf `/`, ebenso ein Lauf mit
 # Bandbreitengrenze oder ionice und das Wiederherstellen eines privilegierten Containers), `Datastore.AllocateSpace`
 # (Zielspeicher beim Wiederherstellen als Kopie, Fleecing-Speicher eines Jobs) und `SDN.Use` (die Bridges der Kopie,
-# ab Proxmox VE 8). Wo Sicherungen liegen, gilt statt dessen die Speicher-Rolle (`STORE_PRIVILEGES`).
+# ab Proxmox VE 8). Wo Sicherungen liegen, gilt stattdessen die Speicher-Rolle (`STORE_PRIVILEGES`).
 BACKUP_CONTROL_PRIVILEGES = ("VM.Backup", "Sys.Modify", "Datastore.AllocateSpace", "SDN.Use")
 BACKUP_PRIVILEGES = {"read": BACKUP_READ_PRIVILEGES, "full": BACKUP_READ_PRIVILEGES + BACKUP_CONTROL_PRIVILEGES}
 STORE_ROLE = "NodvardDeckBackupStore"
-# NUR auf `/storage/<Speicher mit Inhalt backup>`: Proxmox verlangt `Datastore.Allocate` auf dem Speicher für Backup-Jobs
-# (anlegen, ändern) und für jeden Lauf mit Aufbewahrung (Proxmox-Backups schickt immer eine mit). Weil eine Berechtigung
-# auf einem tieferen Pfad die geerbte ersetzt, stecken `Datastore.Audit` und `Datastore.AllocateSpace` mit drin, so
-# behält auch der Proxmox-Token dort sein `Datastore.Audit`.
+# Nur auf `/storage/<Speicher mit Inhalt backup>`: Proxmox verlangt dort `Datastore.Allocate` für Backup-Jobs (anlegen,
+# ändern) und für jeden Lauf mit Aufbewahrung (Proxmox-Backups schickt immer eine mit). Eine Berechtigung auf einem
+# tieferen Pfad ersetzt die geerbte, darum stecken `Datastore.Audit` und `Datastore.AllocateSpace` mit drin; so behält
+# auch der Proxmox-Token dort sein `Datastore.Audit`.
 STORE_PRIVILEGES = ("Datastore.Audit", "Datastore.AllocateSpace", "Datastore.Allocate")
 RESTORE_POOL = "nodvard-kopien"
 RESTORE_POOL_COMMENT = "Nodvard Deck: wiederhergestellte Kopien"
 RESTORE_ROLE = "NodvardDeckRestore"
-# NUR auf `/pool/nodvard-kopien`: eine Kopie aus einer Sicherung anlegen, die in diesem Pool landet (Proxmox prüft
-# `VM.Allocate` dann auf dem Pool statt auf der neuen Nummer), und sie fertig einrichten (Name, Autostart, Netzwerkkarten
-# trennen). Für Gäste im Pool gilt die Rolle zusätzlich; Originale liegen nicht darin.
+# Nur auf `/pool/nodvard-kopien`: eine Kopie aus einer Sicherung anlegen, die in diesem Pool landet (Proxmox prüft
+# `VM.Allocate` dann auf dem Pool statt auf der neuen Nummer), und sie fertig einrichten (Name, Autostart,
+# Netzwerkkarten trennen). Für Gäste im Pool gilt die Rolle zusätzlich; Originale liegen nicht darin.
 RESTORE_PRIVILEGES = ("VM.Allocate", "VM.Audit", "VM.Config.Options", "VM.Config.Network")
 
 DEFAULT_PORT = 8006
@@ -342,7 +342,7 @@ def _throttle(user_id: str) -> None:
 
 def _claim_attempt(user_id: str, target_key: str, fingerprint: str) -> None:
     """Erst die Grenze des Nutzers: wer schon darüber ist, verbraucht nichts vom Budget des Ziels. Das Ziel zählt je
-    Adresse UND je Zertifikat: eine zweite Schreibweise (Rechnername statt IP, anderer DNS-Name) führt zum selben
+    Adresse und je Zertifikat: eine zweite Schreibweise (Rechnername statt IP, anderer DNS-Name) führt zum selben
     Zertifikat und damit an dieselbe Grenze."""
     for window, key in ((_per_user, user_id), (_per_target, target_key), (_per_target, f"zertifikat:{fingerprint}")):
         wait = window.hit(key)
@@ -449,7 +449,7 @@ class _Plan:
 
 
 def _plan(connections: list[dict[str, Any]], target: _Target, name: str | None) -> _Plan:
-    """Prüft VOR dem Senden des Passworts, ob Kurzname und Adresse zusammenpassen."""
+    """Prüft vor dem Senden des Passworts, ob Kurzname und Adresse zusammenpassen."""
     same = [c for c in connections if same_target(str(c.get("base_url") or ""), target.base_url)]
     wanted = name if name is not None else (str(same[0].get("name")) if same else None)
     # Bei zwei Verbindungen mit dem Namen hinge es von der Reihenfolge ab, welche das Token bekommt.
@@ -618,7 +618,7 @@ class _Pending:
     access: str
     backups: bool | None
     challenge: str = field(repr=False)
-    """Die Zwei-Faktor-Aufforderung von Proxmox (ein halbes Ticket) -- nie in `repr`."""
+    """Die Zwei-Faktor-Aufforderung von Proxmox (ein halbes Ticket), nie in `repr`."""
     kinds: tuple[str, ...]
     expires: float
 
@@ -702,9 +702,9 @@ async def certificate(ctx: Any, actor: Actor, base_url: str) -> dict[str, Any]:
 
 
 async def _guarded(ctx: Any, actor: Actor, run: _Run, step: Any) -> dict[str, Any]:
-    """Führt einen Schritt aus und macht aus JEDEM Fehler einen festen Code (nie ein 500 mit Traceback). Protokolliert wird
-    jeder Lauf, bei dem das Passwort oder ein Code hinausging, ein Zertifikatswechsel nach der Anmeldung und eine Sperre
-    einmal je Zeitfenster, nie mit Geheimem. Die Meldung nennt, was in Proxmox schon angelegt war."""
+    """Führt einen Schritt aus und macht aus jedem Fehler einen festen Code (nie ein 500 mit Traceback). Protokolliert
+    wird jeder Lauf, bei dem das Passwort oder ein Code hinausging, ein Zertifikatswechsel nach der Anmeldung und eine
+    Sperre einmal je Zeitfenster, nie mit Geheimem. Die Meldung nennt, was in Proxmox schon angelegt war."""
     problem: PasswordConnectError | None = None
     result: dict[str, Any] | None = None
     try:
@@ -956,7 +956,7 @@ async def _ensure_role(
 
 
 async def _read_acl(api: _Proxmox) -> set[tuple[str, str, str, str]]:
-    """Vorhandene Berechtigungen (Pfad, Art, Benutzer/Token, Rolle), damit nur NEUE im Ergebnis stehen. Lässt die Liste
+    """Vorhandene Berechtigungen (Pfad, Art, Benutzer/Token, Rolle), damit nur neue im Ergebnis stehen. Lässt die Liste
     sich nicht lesen, gilt sie als leer (gesetzt wird ohnehin mit `PUT`, das doppelt nichts anlegt)."""
     status, rows = await api.call("GET", "/access/acl")
     if status >= 400 or not isinstance(rows, list):
@@ -1040,7 +1040,7 @@ class _NewToken:
 async def _create_token(
     api: _Proxmox, user: str, name: str, *, comment: str, created: _Created, new_tokens: list[_NewToken],
 ) -> str:
-    """Neuer Token mit Privilegientrennung; liefert sein Geheimnis (nur im Speicher). Schon VOR dem Anlegen steht er in
+    """Neuer Token mit Privilegientrennung; liefert sein Geheimnis (nur im Speicher). Schon vor dem Anlegen steht er in
     `new_tokens` (unsicher), damit ein Abbruch ihn nicht vergisst."""
     entry = _NewToken(user, name, certain=False)
     new_tokens.append(entry)
@@ -1117,7 +1117,7 @@ async def _undo_tokens(
 
 
 async def _probe(ctx: Any, target: _Target, pin: str | None, token_id: str, token_value: str) -> list[str]:
-    """Einmal mit dem NEUEN Token lesen: Knotenliste und Status eines Knotens (braucht `Sys.Audit`)."""
+    """Einmal mit dem neuen Token lesen: Knotenliste und Status eines Knotens (braucht `Sys.Audit`)."""
     probe = _Proxmox(ctx, target.base_url, pin, auth={"Authorization": f"PVEAPIToken={token_id}={token_value}"})
     status, nodes = await probe.call("GET", "/nodes")
     names = [str(n.get("node")) for n in nodes if isinstance(n, dict) and n.get("node")] if isinstance(nodes, list) else []
@@ -1147,7 +1147,7 @@ async def _proxmox_name(api: _Proxmox) -> str:
 
 
 async def _clear_orphan_secret(ctx: Any, name: str, connections: Sequence[Any]) -> None:
-    """Eine NEUE Verbindung startet ohne Geheimnis, wie beim Anlegen von Hand (`add_connection`): ein Geheimnis unter
+    """Eine neue Verbindung startet ohne Geheimnis, wie beim Anlegen von Hand (`add_connection`): ein Geheimnis unter
     ihrem Label gehört zu einer inzwischen entfernten Verbindung und geht weg. Ein fremdes (etwa von Hand im Tresor) bricht
     den Ablauf ab, bevor etwas gespeichert ist (`secret_foreign`), beim angegebenen Kurznamen schon vor dem Passwort."""
     if any(isinstance(c, dict) and c.get("name") == name for c in connections):
@@ -1444,7 +1444,6 @@ async def _set_up(
     if deck_role.extra:
         run.detail["extra_privileges"] = deck_role.extra
 
-    # Benutzer ohne Passwort.
     users = await api.ok("GET", "/access/users")
     users = list(users) if isinstance(users, list) else []
     await _ensure_user(api, users, PVE_USER, comment="Nodvard Deck (nur API-Token)", created=created)
@@ -1498,7 +1497,7 @@ async def _set_up(
         token_value = await _create_token(
             api, PVE_USER, token_name, comment="Nodvard Deck", created=created, new_tokens=new_tokens,
         )
-        # Auch der Token bekommt die Rolle: mit Privilegientrennung darf er nur, was Benutzer UND Token haben.
+        # Auch der Token bekommt die Rolle: mit Privilegientrennung darf er nur, was Benutzer und Token haben.
         await _grant(api, acl, created, path="/", role=deck_role.name, token=full_token_id)
         # Erst wenn das Lesen mit dem neuen Token klappt, wird in Nodvard Deck etwas gespeichert.
         nodes = await _probe(ctx, target, api.pin, full_token_id, token_value)

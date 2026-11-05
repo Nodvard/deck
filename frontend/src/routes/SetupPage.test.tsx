@@ -1,10 +1,12 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { browserNavigation, restartProbe, restartTiming, uploadTransport } from "../lib/restore";
 import { useAuthStore } from "../state/auth";
+import { useConnectionWarningStore } from "../state/connectionWarning";
 import { useBrandingStore } from "../state/branding";
+import { DECK_EDITION, EDITION_WAIT_MS, useEditionStore } from "../state/edition";
 import { SetupPage } from "./SetupPage";
 
 const DEFAULT_BRANDING = {
@@ -27,7 +29,7 @@ const EXTENSIONS = [
 ];
 
 /** Ein kleines Attrappen-Backend: merkt sich Zustand und Aufrufe, wie es der echte Server täte. */
-function makeBackend(opts: { bootstrapNeeded?: boolean; refreshOk?: boolean; timezone?: string; totp?: boolean } = {}) {
+function makeBackend(opts: { bootstrapNeeded?: boolean; refreshOk?: boolean; timezone?: string; totp?: boolean; insecureConnection?: boolean } = {}) {
   const state = {
     bootstrapNeeded: opts.bootstrapNeeded ?? true,
     refreshOk: opts.refreshOk ?? false,
@@ -50,7 +52,7 @@ function makeBackend(opts: { bootstrapNeeded?: boolean; refreshOk?: boolean; tim
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
     calls.push({ method, path, body });
 
-    if (path === "/auth/bootstrap" && method === "GET") return json({ needed: state.bootstrapNeeded });
+    if (path === "/auth/bootstrap" && method === "GET") return json({ needed: state.bootstrapNeeded, insecure_connection: opts.insecureConnection ?? false });
     if (path === "/auth/bootstrap" && method === "POST") {
       state.bootstrapNeeded = false;
       return json({ id: "u1", username: "nico", is_owner: true }, 201);
@@ -83,6 +85,7 @@ function makeBackend(opts: { bootstrapNeeded?: boolean; refreshOk?: boolean; tim
       state.totp = true;
       return json({ recovery_codes: ["AAAAA-BBBBB", "CCCCC-DDDDD"] });
     }
+    if (path === "/edition") return json(DECK_EDITION);
     throw new Error(`Unerwarteter Fetch in diesem Test: ${method} ${url}`);
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -155,6 +158,7 @@ async function toBranding() {
 }
 
 beforeEach(() => {
+  useConnectionWarningStore.getState().reset();
   useAuthStore.setState({ accessToken: null, user: null, status: "unknown", mfaToken: null });
   useBrandingStore.setState({ branding: null, loaded: false });
   sessionStorage.clear();
@@ -166,12 +170,29 @@ afterEach(() => {
 });
 
 describe("SetupPage", () => {
+  it("warnt in Schritt 1 bei HTTP und verlinkt die Hilfe", async () => {
+    makeBackend({ insecureConnection: true });
+    renderSetup();
+    const warning = await screen.findByRole("alert");
+    expect(warning).toHaveTextContent("Diese Verbindung ist unverschlüsselt. Im Heimnetz kann dein Anmelde-Token mitgelesen werden.");
+    expect(within(warning).getByRole("link")).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#verbindung-absichern");
+    await createAccount();
+    expect(screen.queryByText(/Diese Verbindung ist unverschlüsselt/)).not.toBeInTheDocument();
+  });
+
+  it("zeigt ohne Verbindungswarnung keinen Balken", async () => {
+    makeBackend({ insecureConnection: false });
+    renderSetup();
+    await screen.findByText("Willkommen");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("leitet auf /login um, wenn bereits ein Nutzer existiert", async () => {
     makeBackend({ bootstrapNeeded: false });
     renderSetup();
     await waitFor(() => expect(screen.queryByText(/Lade/)).not.toBeInTheDocument());
     expect(screen.queryByText("Willkommen")).not.toBeInTheDocument();
-    expect(screen.getByTestId("where").textContent).toBe("/login");
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/login"));
   });
 
   it("legt den Owner an, loggt ein und geht zu Schritt 2 (Zeitzone)", async () => {
@@ -204,7 +225,7 @@ describe("SetupPage", () => {
     renderSetup();
 
     await screen.findByText("Willkommen");
-    expect(screen.getByText(/docker compose logs nodvard-deck/)).toBeInTheDocument();
+    expect(screen.getByText("docker compose logs nodvard-deck")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/^Benutzername/), { target: { value: "nico" } });
     fireEvent.change(screen.getByLabelText("Passwort"), { target: { value: "correct-horse-battery" } });
     fireEvent.change(screen.getByLabelText("Passwort bestätigen"), { target: { value: "correct-horse-battery" } });
@@ -323,6 +344,24 @@ describe("SetupPage", () => {
 
     fireEvent.click(toggle);
     expect(screen.queryByText("Docker Desktop")).not.toBeInTheDocument();
+  });
+
+  it("die Befehle zum Einrichtungscode lassen sich kopieren, das Feld heißt weiter nur „Einrichtungscode“", async () => {
+    makeBackend();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    try {
+      renderSetup();
+      await screen.findByText("Willkommen");
+      expect(screen.getByLabelText("Einrichtungscode")).toHaveAccessibleDescription(/Protokoll \(Log\) des Containers: docker compose logs nodvard-deck$/);
+      fireEvent.click(screen.getByRole("button", { name: "Wo finde ich den Code?" }));
+      const buttons = screen.getAllByRole("button", { name: "Kopieren" });
+      expect(buttons).toHaveLength(3);
+      fireEvent.click(buttons[1]);
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith("docker compose logs nodvard-deck | grep -A1 Einrichtungscode"));
+    } finally {
+      Reflect.deleteProperty(navigator, "clipboard");
+    }
   });
 
   it("die Hilfe zum Einrichtungscode verweist auf den Abschnitt zum Assistenten in der Anleitung", async () => {
@@ -658,7 +697,7 @@ describe("SetupPage", () => {
       expect(sessionStorage.getItem("deck.setup.step")).toBe("done");
       // Die Anleitung steht als Ganzes im Text oben und beim Notfall-Befehl am Abschnitt „Ausgesperrt?“.
       expect(screen.getByTestId("finish-guide")).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md");
-      expect(screen.getByRole("link", { name: /Ausgesperrt\? Notfall-Befehle/ })).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#12-ausgesperrt-notfall-befehle");
+      expect(screen.getByRole("link", { name: /Ausgesperrt\? Notfall-Befehle/ })).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#73-ausgesperrt-notfall-befehle");
 
       fireEvent.click(screen.getByRole("button", { name: "Weiter zum Dashboard" }));
       expect((await screen.findByTestId("where")).textContent).toBe("/");
@@ -730,6 +769,202 @@ describe("SetupPage", () => {
 });
 
 
+describe("Nodvard Dock", () => {
+  const DOCKER = { id: "docker", state: "disabled", name: "Docker", description: "Container verwalten.", icon: "box", last_error: null, category: "servers", sort_order: 30 };
+
+  const DOCK = { ...DECK_EDITION, id: "dock", product_name: "Nodvard Dock", service: "nodvard-dock", image: "ghcr.io/nodvard/dock", choose_modules: false, repo_tools: false };
+
+  beforeEach(() => {
+    useEditionStore.setState({ edition: DOCK, loaded: true });
+  });
+
+  afterEach(() => {
+    useEditionStore.setState({ edition: DECK_EDITION, loaded: false });
+  });
+
+  it("nennt beim Einrichtungscode den Dienst nodvard-dock", async () => {
+    makeBackend();
+    renderSetup();
+    await screen.findByText("Willkommen");
+    expect(screen.getByText(/docker compose logs nodvard-dock/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Wo finde ich den Code?" }));
+    expect(screen.getByText("docker compose logs nodvard-dock | grep -A1 Einrichtungscode")).toBeInTheDocument();
+    expect(screen.getByText("Du hast schon eine Sicherung von Nodvard Dock?")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("nodvard-deck");
+  });
+
+  it("kopiert alle Dock-Befehle und beschreibt das Codefeld mit dem richtigen Dienst", async () => {
+    makeBackend();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    try {
+      renderSetup();
+      await screen.findByText("Willkommen");
+      expect(screen.getByLabelText("Einrichtungscode")).toHaveAccessibleDescription(/Protokoll \(Log\) des Containers: docker compose logs nodvard-dock$/);
+      fireEvent.click(screen.getByRole("button", { name: "Wo finde ich den Code?" }));
+      const commands = [
+        "docker compose logs nodvard-dock",
+        "docker compose logs nodvard-dock | grep -A1 Einrichtungscode",
+        "docker compose logs nodvard-dock | Select-String -Context 0,4 Einrichtungscode",
+      ];
+      expect(screen.getAllByRole("button", { name: "Kopieren" })).toHaveLength(commands.length);
+      for (const command of commands) {
+        const row = screen.getByText(command).parentElement!;
+        fireEvent.click(within(row).getByRole("button", { name: "Kopieren" }));
+        await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(command));
+        expect(within(row).getByRole("button", { name: "Kopiert" })).toBeInTheDocument();
+      }
+    } finally {
+      Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("fragt nicht nach Modulen, sondern schaltet das Modul selbst ein", async () => {
+    const backend = makeBackend();
+    backend.state.extensions = [{ ...DOCKER }];
+    renderSetup();
+    await fillAccount();
+    fireEvent.click(screen.getByRole("button", { name: "Konto anlegen" }));
+    await screen.findByText("Schritt 2 von 5 — Zeitzone");
+    fireEvent.click(await screen.findByRole("button", { name: "Überspringen" }));
+
+    await screen.findByTestId("setup-totp");
+    expect(progress()).toBe("Schritt 3 von 5 — Zwei-Faktor-Anmeldung (optional)");
+    expect(backend.count("POST", "/extensions/docker/enable")).toBe(1);
+    fireEvent.click(await screen.findByRole("button", { name: "Zurück" }));
+    await screen.findByTestId("setup-timezone");
+  });
+
+  it("wartet nach der Zeitzone auf die Ausgabe, wenn sie beim Start noch nicht da war", async () => {
+    useEditionStore.setState({ edition: DECK_EDITION, loaded: false });
+    const backend = makeBackend();
+    backend.state.extensions = [{ ...DOCKER }];
+    const online = backend.fetchMock.getMockImplementation()!;
+    let answer: (response: Response) => void = () => {};
+    let asked = 0;
+    backend.fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) !== "/api/v1/edition") return online(input, init);
+      asked += 1;
+      // Die erste Abfrage beim Start scheitert, die zweite kommt erst, wenn der Assistent schon bei der Zeitzone ist.
+      if (asked === 1) throw new TypeError("Failed to fetch");
+      return new Promise<Response>((resolve) => { answer = resolve; });
+    });
+    void useEditionStore.getState().load();
+    renderSetup();
+    await fillAccount();
+    fireEvent.click(screen.getByRole("button", { name: "Konto anlegen" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Überspringen" }));
+
+    await waitFor(() => expect(asked).toBe(2));
+    expect(screen.queryByTestId("setup-modules")).not.toBeInTheDocument();
+    answer(new Response(JSON.stringify(DOCK), { status: 200 }));
+    await screen.findByTestId("setup-totp");
+    expect(backend.count("POST", "/extensions/docker/enable")).toBe(1);
+  });
+
+  it.each(["Weiter", "Überspringen"])("bleibt die Ausgabe aus, bleibt %s bei der Zeitzone und lässt es erneut versuchen", async (button) => {
+    useEditionStore.setState({ edition: DECK_EDITION, loaded: false });
+    const backend = makeBackend();
+    backend.state.extensions = [{ ...DOCKER }];
+    const online = backend.fetchMock.getMockImplementation()!;
+    let release: (response: Response) => void = () => {};
+    let firstSignal: AbortSignal | null | undefined;
+    let asked = 0;
+    backend.fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) !== "/api/v1/edition") return online(input, init);
+      if (++asked > 1) return new Response(JSON.stringify(DOCK), { status: 200 });
+      firstSignal = init?.signal;
+      return new Promise<Response>((resolve, reject) => {
+        release = resolve;
+        firstSignal?.addEventListener("abort", () => reject(new DOMException("Abgebrochen", "AbortError")), { once: true });
+      });
+    });
+    renderSetup();
+    await fillAccount();
+    fireEvent.click(screen.getByRole("button", { name: "Konto anlegen" }));
+    const next = await screen.findByRole("button", { name: button });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const firstLoad = useEditionStore.getState().load();
+    try {
+      fireEvent.click(next);
+      expect(asked).toBe(1);
+      await act(() => vi.advanceTimersByTimeAsync(EDITION_WAIT_MS - 100));
+      expect(screen.queryByTestId("setup-modules")).not.toBeInTheDocument();
+      await act(() => vi.advanceTimersByTimeAsync(200));
+      expect(await screen.findByRole("alert")).toHaveTextContent("Die Ausgabe konnte nicht geladen werden. Bitte noch einmal versuchen.");
+      expect(screen.getByTestId("setup-timezone")).toBeInTheDocument();
+      expect(screen.queryByTestId("setup-modules")).not.toBeInTheDocument();
+      expect(sessionStorage.getItem("deck.setup.step")).toBe("timezone");
+      expect(backend.count("POST", "/extensions/docker/enable")).toBe(0);
+      expect(useEditionStore.getState().loaded).toBe(false);
+
+      fireEvent.click(screen.getByRole("button", { name: button }));
+      await screen.findByTestId("setup-totp");
+      expect(asked).toBe(2);
+      expect(firstSignal?.aborted).toBe(true);
+      expect(backend.count("POST", "/extensions/docker/enable")).toBe(1);
+      expect(screen.queryByTestId("setup-modules")).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+      await act(async () => {
+        release(new Response("", { status: 503 }));
+        await firstLoad;
+      });
+    }
+  });
+
+  it("wechselt bei einem Ladefehler nicht zur Modulauswahl und fragt beim nächsten Versuch erneut", async () => {
+    useEditionStore.setState({ edition: DECK_EDITION, loaded: false });
+    const backend = makeBackend();
+    backend.state.extensions = [{ ...DOCKER }];
+    const online = backend.fetchMock.getMockImplementation()!;
+    let asked = 0;
+    backend.fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) !== "/api/v1/edition") return online(input, init);
+      return ++asked === 1 ? new Response("", { status: 503 }) : new Response(JSON.stringify(DOCK), { status: 200 });
+    });
+    renderSetup();
+    await createAccount();
+    fireEvent.click(await screen.findByRole("button", { name: "Überspringen" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Die Ausgabe konnte nicht geladen werden.");
+    expect(screen.getByTestId("setup-timezone")).toBeInTheDocument();
+    expect(screen.queryByTestId("setup-modules")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Überspringen" }));
+    await screen.findByTestId("setup-totp");
+    expect(asked).toBe(2);
+    expect(backend.count("POST", "/extensions/docker/enable")).toBe(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("steht das Modul schon auf Fehler, geht es nicht still weiter", async () => {
+    const backend = makeBackend();
+    backend.state.extensions = [{ ...DOCKER, state: "error", last_error: "on_start() fehlgeschlagen: kein Zugriff" }];
+    renderSetup();
+    await fillAccount();
+    fireEvent.click(screen.getByRole("button", { name: "Konto anlegen" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Überspringen" }));
+
+    await screen.findByTestId("setup-modules");
+    expect(await screen.findByText("Beim Starten des Moduls ist ein Fehler aufgetreten: kein Zugriff")).toBeInTheDocument();
+    expect(backend.count("POST", "/extensions/docker/enable")).toBe(0);
+  });
+
+  it("startet das Modul nicht, zeigt der Schritt mit den Modulen den Grund", async () => {
+    const backend = makeBackend();
+    backend.state.extensions = [{ ...DOCKER }];
+    backend.state.brokenModules.add("docker");
+    renderSetup();
+    await fillAccount();
+    fireEvent.click(screen.getByRole("button", { name: "Konto anlegen" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Überspringen" }));
+
+    await screen.findByTestId("setup-modules");
+    expect(progress()).toBe("Schritt 3 von 6 — Was willst du nutzen?");
+    expect(await screen.findByText("Beim Starten des Moduls ist ein Fehler aufgetreten: kein Zugriff")).toBeInTheDocument();
+  });
+});
+
 describe("Sicherung einspielen im Assistenten", () => {
   const RID = "b".repeat(32);
   const SUMMARY = {
@@ -772,11 +1007,11 @@ describe("Sicherung einspielen im Assistenten", () => {
 
   async function openRestore() {
     await screen.findByText("Willkommen");
-    fireEvent.click(screen.getByRole("button", { name: "Oder: Sicherung einspielen" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sicherung einspielen" }));
     await screen.findByTestId("setup-progress");
   }
 
-  it("bietet im ersten Schritt „Oder: Sicherung einspielen“ an und kommt wieder zurück", async () => {
+  it("bietet im ersten Schritt „Sicherung einspielen“ an und kommt wieder zurück", async () => {
     withRestore();
     renderSetup();
     await openRestore();

@@ -8,6 +8,8 @@ import contextlib
 import hashlib
 import logging
 import os
+import re
+import secrets
 import time
 from contextlib import asynccontextmanager
 from html.parser import HTMLParser
@@ -28,9 +30,11 @@ from starlette.types import Scope
 from .api import api_v1_router
 from .api.body_limit import BodyLimitMiddleware
 from .api.errors import install_coded_error_handler, install_validation_error_handler
+from .api.edition import unavailable_route
 from .api.proxy_headers import ProxyHeadersMiddleware
 from .api.security_headers import SecurityHeadersMiddleware
 from .config import get_settings
+from .edition import of
 from .core import bootstate, trusted_proxies
 from .core.demo_seed import DemoBlockedError, seed_demo_data
 from .core.error_text import describe_connection_error
@@ -63,12 +67,27 @@ STARTED_OK_RETRY_S = 60.0
 
 
 SPA_CSP = (
+    "default-src 'self'; style-src 'self' 'nonce-__DECK_CSP_NONCE__'; style-src-attr 'none'; "
+    "img-src 'self' data: blob:; font-src 'self'; connect-src 'self' __DECK_CSP_SOCKET__; "
+    "frame-src blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
+)
+"""Bilder aus Uploads und Blob-Vorschauen; Frames nur für die PDF-Vorschau in Dokumente."""
+LEGACY_SPA_CSP = (
     "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; "
     "frame-src blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
 )
-"""Alles nur vom eigenen Server, auch wenn im CSS der Admins eine fremde Adresse stünde: Bilder auch aus `data:` und
-`blob:` (Vorschauen), Rahmen nur für die PDF-Vorschau, keine Plugins. `'unsafe-inline'` bei den Stilen braucht xterm
-(Konsole), das zur Laufzeit `<style>`-Elemente anlegt. Dazu kommt `script-src` aus `spa_script_policy()`."""
+
+
+def _socket_source(scope: Scope) -> str:
+    url = Request(scope).url
+    # Nur die eigene Adresse, niemals Trennzeichen aus einem manipulierten Host-Header.
+    try:
+        host = url.netloc
+    except ValueError:
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9.\[\]:-]+", host):
+        return ""
+    return f"{'wss' if url.scheme == 'https' else 'ws'}://{host}"
 
 
 # Auskommentierte Skripte zählen nicht: HTML-Kommentare überspringt der Parser selbst.
@@ -116,35 +135,34 @@ def _script_policy(html: str) -> str:
 # `StaticFiles(html=True)` liefert `index.html` nicht für Tiefen-Links wie `/settings`; darum fällt jede 404 hier auf
 # `index.html` zurück, außer unter `/api/` (siehe `_is_api_path()`).
 class _SpaStaticFiles(StaticFiles):
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args, csp_legacy: bool = False, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._policies: dict[str, tuple[bytes, str]] = {}
-
-    def _policy_for(self, full_path: str) -> str:
-        # Nach dem Inhalt: Auch eine neue `index.html` mit gleicher Größe und Zeit bekommt ihre Prüfsumme.
-        try:
-            content = Path(full_path).read_bytes()
-        except OSError:
-            return f"{SPA_CSP}; script-src 'self'"
-        digest = hashlib.sha256(content).digest()
-        known = self._policies.get(full_path)
-        if known is None or known[0] != digest:
-            try:
-                script = _script_policy(content.decode("utf-8"))
-            except UnicodeDecodeError:
-                script = "script-src 'self'"
-            known = (digest, f"{SPA_CSP}; {script}")
-            self._policies[full_path] = known
-        return known[1]
+        self.csp_legacy = csp_legacy
+        if csp_legacy:
+            _boot_logger.warning("NODVARD_DECK_CSP_LEGACY ist aktiv: Die gelockerte CSP erlaubt eingebettete Stile.")
 
     def file_response(
         self, full_path: str | os.PathLike[str], stat_result: os.stat_result, scope: Scope, status_code: int = 200
     ) -> Response:
-        # Auch an die 304: Der Browser übernimmt deren Kopfzeilen in die gespeicherte Seite.
-        response = super().file_response(full_path, stat_result, scope, status_code)
         if os.fspath(full_path).endswith(".html"):
-            response.headers["Content-Security-Policy"] = self._policy_for(os.fspath(full_path))
-        return response
+            nonce = secrets.token_urlsafe(32)
+            html = Path(full_path).read_text(encoding="utf-8")
+            if "__DECK_CSP_NONCE__" not in html:
+                meta = f'<meta name="csp-nonce" content="{nonce}">'
+                html = html.replace("<head>", f"<head>{meta}", 1) if "<head>" in html else meta + html
+            html = html.replace("__DECK_CSP_NONCE__", nonce)
+            policy = LEGACY_SPA_CSP if self.csp_legacy else SPA_CSP
+            if not self.csp_legacy:
+                policy = policy.replace("__DECK_CSP_NONCE__", nonce).replace("__DECK_CSP_SOCKET__", _socket_source(scope))
+            policy = f"{policy}; {_script_policy(html)}"
+            content = html.encode("utf-8")
+            return Response(
+                content=b"" if scope["method"] == "HEAD" else content,
+                status_code=status_code,
+                media_type="text/html",
+                headers={"Content-Security-Policy": policy, "Content-Length": str(len(content))},
+            )
+        return super().file_response(full_path, stat_result, scope, status_code)
 
     async def get_response(self, path: str, scope: Scope):
         try:
@@ -161,7 +179,9 @@ class _SpaStaticFiles(StaticFiles):
                 raise
             response = await super().get_response("index.html", scope)
             path = "index.html"
-        response.headers["Cache-Control"] = _cache_policy_for(path)
+        response.headers["Cache-Control"] = (
+            "no-store" if response.headers.get("content-type", "").startswith("text/html") else _cache_policy_for(path)
+        )
         return response
 
 
@@ -370,7 +390,7 @@ def create_app() -> FastAPI:
     # für angemeldete Admins) – `openapi_url=None` schaltet nur die Route ab.
     docs_public = settings.api_docs_public
     app = FastAPI(
-        title="Nodvard Deck",
+        title=of(settings).product_name,
         # Fester Produktname im API-Dokument (technische Angabe, kein White-Label);
         # das Branding für Menschen kommt aus GET /api/v1/branding.
         version=__version__,
@@ -380,6 +400,14 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json" if docs_public else None,
     )
     app.include_router(api_v1_router)
+    if not of(settings).choose_modules:
+        original_openapi = app.openapi
+
+        def edition_openapi() -> dict:
+            schema = original_openapi()
+            return {**schema, "paths": {path: spec for path, spec in schema["paths"].items() if not unavailable_route(path)}}
+
+        app.openapi = edition_openapi
     install_validation_error_handler(app)
     install_coded_error_handler(app)
     app.add_middleware(BodyLimitMiddleware, max_body_bytes=settings.max_body_bytes)
@@ -458,7 +486,7 @@ def create_app() -> FastAPI:
     if frontend_dist.is_dir():
         # Produktionsauslieferung: ein Port, ein Dienst. Im Entwicklungsbetrieb läuft das Frontend über `npm run dev`
         # mit Proxy auf :8080, dann existiert `frontend/dist` noch nicht und das wird übersprungen.
-        app.mount("/", _SpaStaticFiles(directory=frontend_dist, html=True), name="frontend")
+        app.mount("/", _SpaStaticFiles(directory=frontend_dist, html=True, csp_legacy=settings.csp_legacy), name="frontend")
 
     return app
 

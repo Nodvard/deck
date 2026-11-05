@@ -217,8 +217,8 @@ deines Proxys (Abschnitt 6).
   Anmeldungen für einen Benutzernamen innerhalb von 24 Stunden wartet jeder weitere Versuch aus einem Netz doppelt so
   lange wie der vorige aus demselben Netz, höchstens 5 Minuten. Du bekommst dann die Meldung „Passwort wird
   durchprobiert“.
-  - Aussperren kann dich so niemand: Aus deinem Heimnetz, über ein VPN wie Tailscale und aus jedem Netz, aus dem
-    nicht geraten wird, kommst du sofort hinein. Vertippst du dich dort, wartest du 2 Sekunden.
+  - Aussperren kann dich so niemand: Aus deinem Heimnetz, über ein VPN wie [Tailscale](13-TAILSCALE.md) und aus jedem
+    Netz, aus dem nicht geraten wird, kommst du sofort hinein. Vertippst du dich dort, wartest du 2 Sekunden.
   - Teilst du das Netz mit dem Angreifer (etwa dasselbe öffentliche WLAN), wartest du dort wie er, auch mit dem
     richtigen Passwort. Nimm dann ein anderes Netz oder das VPN.
   - Wer für jeden Versuch eine neue Adresse nimmt, etwa über ein Botnetz, wird so kaum aufgehalten. Dagegen helfen ein

@@ -150,7 +150,7 @@ INVALID_FILE = (
 # Die Dateien kommen von Nutzern. Wird die Adresse direkt geöffnet, soll weder ein Skript laufen noch der Browser den Typ
 # erraten. Die Vorschau im Dashboard lädt die Datei als Blob und ist davon nicht betroffen.
 _UNTRUSTED_FILE_HEADERS = {
-    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    "Content-Security-Policy": "default-src 'none'; style-src 'none'; sandbox",
     "X-Content-Type-Options": "nosniff",
 }
 

@@ -38,12 +38,14 @@
  * Werte ergeben den normalen Start mit einem Hinweis, nie einen Fehler. Zu einer Server-Quelle zeigt die Seitenleiste
  * "Wichtige Orte" (`GET /files/places`).
  */
+import { styleRef } from "../../../extensions/_shared/frontend/src/csp";
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { osLabel, StatusDot } from "../../../extensions/_shared/frontend/src/HostPicker";
 import { isGone, isSwitchedOff } from "../../../extensions/_shared/frontend/src/hostKind";
 import { ButtonLink, EmptyState } from "../components/EmptyState";
+import { CARD_BODY, CARD_CELL, CARD_CELL_PLAIN, CARD_HEAD, CARD_ROW, CARD_TABLE } from "../components/cardTable";
 import { Icon } from "../components/Icon";
 import { FilePreview, previewKind, type PreviewKind } from "../components/FilePreview";
 import { FolderPickerDialog, type FolderChoice } from "../components/FolderPickerDialog";
@@ -659,7 +661,7 @@ export function FilesPage(): JSX.Element {
               '{uploadProgress.name}' wird hochgeladen … {uploadProgress.percent}%
             </p>
             <div role="progressbar" aria-valuenow={uploadProgress.percent} aria-valuemin={0} aria-valuemax={100} className="h-1.5 w-full overflow-hidden rounded bg-white/10">
-              <div className="h-full bg-[var(--color-accent)] transition-[width]" style={{ width: `${uploadProgress.percent}%` }} />
+              <div className="h-full bg-[var(--color-accent)] transition-[width]" ref={styleRef({ width: `${uploadProgress.percent}%` })} />
             </div>
           </div>
         )}
@@ -697,18 +699,18 @@ export function FilesPage(): JSX.Element {
         {entries && entries.length === 0 && <p className="text-sm opacity-60">Leer.</p>}
         {entries && entries.length > 0 && (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-white/10 text-left text-xs opacity-60">
-                  <th className="py-1 w-1/2">Name</th>
-                  <th className="py-1 whitespace-nowrap">Größe</th>
-                  <th className="py-1 whitespace-nowrap">Geändert</th>
-                  <th className="py-1 whitespace-nowrap">Aktionen</th>
+            <table role="table" className={CARD_TABLE}>
+              <thead role="rowgroup" className={CARD_HEAD}>
+                <tr role="row" className="border-b border-white/10 text-left text-xs opacity-60">
+                  <th role="columnheader" className="py-1 w-1/2">Name</th>
+                  <th role="columnheader" className="py-1 whitespace-nowrap">Größe</th>
+                  <th role="columnheader" className="py-1 whitespace-nowrap">Geändert</th>
+                  <th role="columnheader" className="py-1 whitespace-nowrap">Aktionen</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/5">
+              <tbody role="rowgroup" className={CARD_BODY}>
                 {entries.map((entry) => (
-                  <tr
+                  <tr role="row"
                     key={entry.path}
                     draggable={canTransfer(entry)}
                     onDragStart={(e) => onEntryDragStart(e, entry)}
@@ -718,6 +720,8 @@ export function FilesPage(): JSX.Element {
                     onDrop={entry.is_dir && sourceId ? (e) => void handleDrop(e, sourceId, entry.path) : undefined}
                     title={canTransfer(entry) ? "Ziehen, um in eine andere Quelle oder einen Ordner zu kopieren" : undefined}
                     className={[
+                      CARD_ROW,
+                      "bg-white/5 sm:bg-transparent",
                       canTransfer(entry) && "cursor-grab active:cursor-grabbing",
                       draggingPath === entry.path && "opacity-40",
                       dropTargetKey === `dir:${entry.path}` && "outline outline-2 outline-[var(--color-accent)]",
@@ -725,7 +729,7 @@ export function FilesPage(): JSX.Element {
                       .filter(Boolean)
                       .join(" ")}
                   >
-                    <td className="py-1.5 break-words">
+                    <td role="cell" className={`${CARD_CELL_PLAIN} py-1.5 break-words`}>
                       {entry.is_dir ? (
                         <button type="button" className="hover:underline" onClick={() => setPath(entry.path)}>
                           📁 {entry.name}
@@ -740,48 +744,50 @@ export function FilesPage(): JSX.Element {
                         </span>
                       )}
                     </td>
-                    <td className="py-1.5 whitespace-nowrap opacity-70">{entry.is_dir ? "" : formatSize(entry.size)}</td>
-                    <td className="py-1.5 whitespace-nowrap opacity-70">{entry.modified_at ? new Date(entry.modified_at).toLocaleString("de-DE") : ""}</td>
-                    <td className="py-1.5 whitespace-nowrap">
-                      <div className="flex gap-1.5">
-                        {canTransfer(entry) && previewKind(entry) && (
-                          <button
-                            type="button"
-                            aria-pressed={preview?.entry.path === entry.path}
-                            onClick={() => {
-                              const kind = previewKind(entry);
-                              setPreview(preview?.entry.path === entry.path || !kind ? null : { entry, kind });
-                            }}
-                            className="rounded bg-white/10 px-1.5 py-0.5 text-xs hover:bg-white/20"
-                          >
-                            Ansehen
-                          </button>
-                        )}
-                        {canTransfer(entry) && (
-                          <button type="button" disabled={busy} onClick={() => void download(entry)} className="rounded bg-white/10 px-1.5 py-0.5 text-xs hover:bg-white/20">
-                            Laden
-                          </button>
-                        )}
-                        {canTransfer(entry) && sourceId && (
-                          <button
-                            type="button"
-                            onClick={() => setPicker({ fromSourceId: sourceId, entry: { path: entry.path, name: entry.name, size: entry.size }, targetSourceId: null })}
-                            className="rounded bg-white/10 px-1.5 py-0.5 text-xs hover:bg-white/20"
-                          >
-                            Kopieren nach …
-                          </button>
-                        )}
-                        {activeSource?.caps.rename && (
-                          <button type="button" onClick={() => void rename(entry)} className="rounded bg-white/10 px-1.5 py-0.5 text-xs hover:bg-white/20">
-                            Umbenennen
-                          </button>
-                        )}
-                        {activeSource?.caps.remove && (
-                          <button type="button" onClick={() => void remove(entry)} className="rounded bg-red-500/20 px-1.5 py-0.5 text-xs hover:bg-red-500/30">
-                            Löschen
-                          </button>
-                        )}
-                      </div>
+                    <td role="cell" data-label="Größe" className={`${CARD_CELL} py-1.5 whitespace-nowrap opacity-70`}>{entry.is_dir ? "" : formatSize(entry.size)}</td>
+                    <td role="cell" data-label="Geändert" className={`${CARD_CELL} py-1.5 whitespace-nowrap opacity-70`}>{entry.modified_at ? new Date(entry.modified_at).toLocaleString("de-DE") : ""}</td>
+                    <td role="cell" className={`${CARD_CELL_PLAIN} py-1.5 whitespace-nowrap`}>
+                      {(canTransfer(entry) || activeSource?.caps.rename || activeSource?.caps.remove) && (
+                        <div className="flex flex-wrap gap-1.5 sm:flex-nowrap">
+                          {canTransfer(entry) && previewKind(entry) && (
+                            <button
+                              type="button"
+                              aria-pressed={preview?.entry.path === entry.path}
+                              onClick={() => {
+                                const kind = previewKind(entry);
+                                setPreview(preview?.entry.path === entry.path || !kind ? null : { entry, kind });
+                              }}
+                              className="rounded bg-white/10 px-1.5 py-0.5 text-xs hover:bg-white/20"
+                            >
+                              Ansehen
+                            </button>
+                          )}
+                          {canTransfer(entry) && (
+                            <button type="button" disabled={busy} onClick={() => void download(entry)} className="rounded bg-white/10 px-1.5 py-0.5 text-xs hover:bg-white/20">
+                              Laden
+                            </button>
+                          )}
+                          {canTransfer(entry) && sourceId && (
+                            <button
+                              type="button"
+                              onClick={() => setPicker({ fromSourceId: sourceId, entry: { path: entry.path, name: entry.name, size: entry.size }, targetSourceId: null })}
+                              className="rounded bg-white/10 px-1.5 py-0.5 text-xs hover:bg-white/20"
+                            >
+                              Kopieren nach …
+                            </button>
+                          )}
+                          {activeSource?.caps.rename && (
+                            <button type="button" onClick={() => void rename(entry)} className="rounded bg-white/10 px-1.5 py-0.5 text-xs hover:bg-white/20">
+                              Umbenennen
+                            </button>
+                          )}
+                          {activeSource?.caps.remove && (
+                            <button type="button" onClick={() => void remove(entry)} className="rounded bg-red-500/20 px-1.5 py-0.5 text-xs hover:bg-red-500/30">
+                              Löschen
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}

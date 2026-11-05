@@ -1,21 +1,5 @@
-"""deploy/pi_switch.sh (Schaltschritt auf dem Pi) und sein Zusammenspiel mit scripts/deploy_pi.sh.
-
-Die Skripte laufen echt per Bash; `docker` und `curl` sind nachgebaute Python-Programme im PATH,
-die Images und Container in einer JSON-Datei fuehren (kein Docker, kein Netzwerk). Geprueft wird
-vor allem der Uebergang vom alten Namen (Image `lattice:latest`, Container `deploy-lattice-1`)
-auf `nodvard-deck`:
-
-- erster Uebergang: der alte Container wird nur GESTOPPT, sein Image wird `nodvard-deck:previous`;
-  geloescht wird er erst von `cleanup`, nachdem alles geprueft ist;
-- Folge-Deploy, Rollback (auch ohne Compose), frische Maschine;
-- nichts veraendern, wenn Docker/Compose/Image nicht in Ordnung sind (Exit 3);
-- falsches (leeres) Volume, leere Daten, eine Waise, eine Neustart-Schleife: nie "OK", immer Rollback;
-- ein Rollback, der selbst nicht klappt, meldet ROLLBACK-FAIL.
-- die Zeile "Erweiterungen geladen: ..." im Protokoll (`pi_switch.sh loaded`): fehlt nach dem Umschalten eine Erweiterung, die
-  vorher geladen war, gilt das wie ein gescheiterter Datencheck (Rollback, ausser die Datenbank ist schon umgebaut).
-
-Die Compose-Datei selbst prueft backend/tests/test_deploy_compose.py.
-"""
+"""Die Deploy-Skripte (pi_switch.sh, deploy_pi.sh, backup.sh, restore.sh) echt per Bash, mit nachgebautem `docker`
+und `curl` im PATH, die Images und Container in einer JSON-Datei führen."""
 
 from __future__ import annotations
 
@@ -65,7 +49,11 @@ needs_gnu_tar = pytest.mark.skipif(not _has_gnu_tar(), reason="braucht GNU tar (
 
 OLD, NEW, BAD, MID, OLDER, LOOP = "sha256:old", "sha256:new", "sha256:bad", "sha256:mid", "sha256:older", "sha256:loop"
 VOL = "deploy_lattice_data"
-OLD_C, NEW_C = "deploy-lattice-1", "deploy-nodvard-deck-1"
+NEW_C = "deploy-nodvard-deck-1"
+PRE_RENAME_C = "deploy-lattice-1"
+UP = "compose -p deploy up -d --no-build"
+# backup.sh und restore.sh fragen das als Erstes ab; es liest nur, darum zählen die Tests die übrigen Aufrufe.
+PRE_RENAME_PROBE = f"container inspect -f {{{{.State.Status}}}} {PRE_RENAME_C}"
 
 # `docker`-Attrappe. Zustand: {"images": {ref: id}, "containers": {name: {"image", "running", ...}}}.
 DOCKER_STUB = r'''#!__PYTHON__
@@ -84,7 +72,6 @@ else:
 with open(STATE, encoding="utf-8") as fh:
     st = json.load(fh)
 args = sys.argv[1:]
-OLD_C = "deploy-lattice-1"
 NEW_C = "deploy-nodvard-deck-1"
 env = os.environ.get
 
@@ -354,26 +341,6 @@ elif cmd == "tag":
         sys.exit(1)
     st["images"][dst] = st["images"][src]
     save()
-elif cmd == "stop":
-    name = rest[-1]
-    if env("STUB_HUP_PARENT") == "1":
-        os.kill(os.getppid(), signal.SIGHUP)
-    if env("STUB_HUP_PID_FILE"):
-        # Leitungsabbruch: die aeussere Shell (ssh-Sitzung) bekommt SIGHUP.
-        with open(env("STUB_HUP_PID_FILE"), encoding="utf-8") as pid_fh:
-            os.kill(int(pid_fh.read().strip()), signal.SIGHUP)
-    # STUB_STICKY_OLD=1: der alte Container laesst sich nicht stoppen (haengt).
-    if name in st["containers"] and not (env("STUB_STICKY_OLD") == "1" and name == OLD_C):
-        st["containers"][name]["running"] = False
-        save()
-elif cmd == "start":
-    name = rest[-1]
-    if name not in st["containers"] or env("STUB_START_FAILS") == "1":
-        sys.stderr.write("Error: cannot start %s\n" % name)
-        sys.exit(1)
-    st["containers"][name]["running"] = True
-    st["containers"][name].pop("restarting", None)
-    save()
 elif cmd == "rm":
     st["containers"].pop(rest[-1], None)
     save()
@@ -409,23 +376,27 @@ elif cmd == "compose":
     elif rest and rest[0] == "config":
         sys.exit(1 if env("STUB_COMPOSE_CONFIG_FAIL") == "1" else 0)
     elif rest and rest[0] == "up":
+        if env("STUB_HUP_PARENT") == "1":
+            os.kill(os.getppid(), signal.SIGHUP)
+        if env("STUB_HUP_PID_FILE"):
+            # Leitungsabbruch: die aeussere Shell (ssh-Sitzung) bekommt SIGHUP.
+            with open(env("STUB_HUP_PID_FILE"), encoding="utf-8") as pid_fh:
+                os.kill(int(pid_fh.read().strip()), signal.SIGHUP)
         image = st["images"].get("nodvard-deck:latest")
         if image is None:
             sys.stderr.write("Error: pull access denied for nodvard-deck\n")
             sys.exit(1)
-        old = st["containers"].get(OLD_C)
-        port_taken = bool(old and old["running"])
-        c = {"image": image, "running": not port_taken, "volume": env("STUB_COMPOSE_VOLUME") or "deploy_lattice_data"}
-        if port_taken or image == "sha256:bad":
-            c["running"] = False
-            c["status"] = "created" if port_taken else "exited"
+        # STUB_UP_FAILS=<Image>: Compose scheitert mit diesem Image, bevor es den Container anfasst.
+        if image == env("STUB_UP_FAILS"):
+            sys.stderr.write("Error: failed to create container\n")
+            sys.exit(1)
+        c = {"image": image, "running": True, "volume": env("STUB_COMPOSE_VOLUME") or "deploy_lattice_data"}
+        if image == "sha256:bad":
+            c["running"], c["status"] = False, "exited"
         if image == "sha256:loop":
             c["running"], c["restarting"] = True, True
         st["containers"][NEW_C] = c
         save()
-        if port_taken and env("STUB_COMPOSE_EXIT0") != "1":
-            sys.stderr.write("Error: Bind for 0.0.0.0:8080 failed: port is already allocated\n")
-            sys.exit(1)
     else:
         sys.stderr.write("docker-Attrappe kennt nicht: compose %s\n" % " ".join(rest))
         sys.exit(99)
@@ -453,8 +424,8 @@ elif cmd == "cp":
     sys.stdout.buffer.write(buf.getvalue())
 elif cmd == "logs":
     # `docker logs [--since X] <Container>`: der Text kommt je Image des Containers aus STUB_LOGS (JSON {Image: Text}),
-    # ohne Eintrag ist das Protokoll leer. STUB_LOG_LATE="<Container>:<n>": die ersten n Aufrufe ohne --since zeigen die
-    # Zeile "Erweiterungen geladen" noch nicht (das Docker-Protokoll hinkt hinterher).
+    # ohne Eintrag ist das Protokoll leer. STUB_LOG_LATE="<Image>:<n>": die ersten n Aufrufe ohne --since zeigen bei
+    # diesem Image die Zeile "Erweiterungen geladen" noch nicht (das Docker-Protokoll hinkt hinterher).
     name = rest[-1]
     if name not in st["containers"]:
         sys.stderr.write("Error: No such container: %s\n" % name)
@@ -463,8 +434,9 @@ elif cmd == "logs":
     if "--tail" in rest:  # nur die letzten n Zeilen, wie bei Docker
         text = "".join(text.splitlines(True)[-int(rest[rest.index("--tail") + 1]):])
     late = env("STUB_LOG_LATE", "")
-    if late and "--since" not in rest and late.rsplit(":", 1)[0] == name:
-        counter = STATE + ".logcalls." + name
+    image = st["containers"][name]["image"]
+    if late and "--since" not in rest and late.rsplit(":", 1)[0] == image:
+        counter = STATE + ".logcalls." + image.replace(":", "_")
         done = int(open(counter).read()) if os.path.exists(counter) else 0
         with open(counter, "w") as fh:
             fh.write(str(done + 1))
@@ -502,21 +474,20 @@ def no_answer():
     sys.exit(7)
 
 
-restarted = False
-if os.environ.get("STUB_NO_HEALTH_AFTER_START") == "1":
-    with open(os.environ["STUB_STATE"] + ".calls", encoding="utf-8") as fh:
-        restarted = "start deploy-lattice-1" in fh.read().splitlines()
-if not running or os.environ.get("STUB_NO_HEALTH") == "1" or restarted:
+# Der zweite `compose up` ist der Rollback (der erste schaltet um).
+calls_file = os.environ["STUB_STATE"] + ".calls"
+calls = open(calls_file, encoding="utf-8").read().splitlines() if os.path.exists(calls_file) else []
+rolled_back = calls.count("compose -p deploy up -d --no-build") >= 2
+no_health_after_rollback = rolled_back and os.environ.get("STUB_NO_HEALTH_AFTER_ROLLBACK") == "1"
+if not running or os.environ.get("STUB_NO_HEALTH") == "1" or no_health_after_rollback:
     no_answer()
 name, c = sorted(running.items())[0]
 if os.environ.get("STUB_UNHEALTHY") == c["image"]:
     no_answer()
-# Notseite (nodvard_deck.rescue): STUB_RESCUE=<Image> -- dieses Image antwortet mit der Notseite; STUB_RESCUE_AFTER_START=1 --
-# der alte Container antwortet nach dem Zurueckstarten damit (seine Daten sind fuer ihn zu neu).
-rescue = os.environ.get("STUB_RESCUE") == c["image"]
-if os.environ.get("STUB_RESCUE_AFTER_START") == "1" and name == "deploy-lattice-1":
-    with open(os.environ["STUB_STATE"] + ".calls", encoding="utf-8") as fh:
-        rescue = "start deploy-lattice-1" in fh.read().splitlines()
+# Notseite (nodvard_deck.rescue): STUB_RESCUE=<Image> -- dieses Image antwortet mit der Notseite;
+# STUB_RESCUE_AFTER_ROLLBACK=1 -- der alte Stand antwortet nach dem Rollback damit (seine Daten sind fuer ihn zu neu).
+rescue_after_rollback = rolled_back and os.environ.get("STUB_RESCUE_AFTER_ROLLBACK") == "1"
+rescue = os.environ.get("STUB_RESCUE") == c["image"] or rescue_after_rollback
 if rescue:
     if url.endswith("/api/v1/health"):
         answer('{"status":"rescue"}', 503)
@@ -525,8 +496,8 @@ if rescue:
     sys.exit(0)
 if url.endswith("/api/v1/health"):
     answer('{"status":"ok"}')
-    # STUB_CRASH_AFTER_HEALTH=1: der neue Container stuerzt direkt nach seinem ersten Health-Ok ab.
-    if os.environ.get("STUB_CRASH_AFTER_HEALTH") == "1" and name == "deploy-nodvard-deck-1":
+    # STUB_CRASH_AFTER_HEALTH=1: das neue Image stuerzt direkt nach seinem ersten Health-Ok ab (der alte Stand nie).
+    if os.environ.get("STUB_CRASH_AFTER_HEALTH") == "1" and c["image"] != "sha256:old":
         st["containers"][name]["running"] = False
         st["containers"][name]["status"] = "exited"
         with open(os.environ["STUB_STATE"], "w", encoding="utf-8") as fh:
@@ -535,7 +506,8 @@ elif url.endswith("/api/v1/auth/bootstrap"):
     if os.environ.get("STUB_BOOTSTRAP_404") == c["image"]:
         answer('{"detail":"Not Found"}', 404)  # altes Image ohne den Endpunkt
     else:
-        empty = os.environ.get("STUB_EMPTY_DATA") == "1" and name == "deploy-nodvard-deck-1"
+        # STUB_EMPTY_DATA=1: jedes Image außer dem alten Stand findet leere Daten vor.
+        empty = os.environ.get("STUB_EMPTY_DATA") == "1" and c["image"] != "sha256:old"
         answer('{"needed":%s}' % ("true" if empty else "false"))
 else:
     sys.exit(22)
@@ -589,13 +561,25 @@ class Machine:
         return json.loads(self.state_file.read_text(encoding="utf-8"))["containers"]
 
     @property
-    def calls(self) -> list[str]:
+    def all_calls(self) -> list[str]:
         path = Path(str(self.state_file) + ".calls")
         return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
 
+    @property
+    def calls(self) -> list[str]:
+        return [c for c in self.all_calls if c != PRE_RENAME_PROBE]
+
     def env(self, **extra: str) -> dict[str, str]:
         base = {k: v for k, v in os.environ.items() if not k.startswith("STUB_") and k != "COMPOSE_PROJECT_NAME"}
-        return {**base, "PATH": f"{self.bin}{os.pathsep}{base['PATH']}", "STUB_STATE": str(self.state_file), "PI_SWITCH_LOG_DIR": str(self.tmp / "logs"), "RESTORE_LOG_DIR": str(self.tmp / "logs"), **extra}
+        return {
+            **base, "PATH": f"{self.bin}{os.pathsep}{base['PATH']}", "STUB_STATE": str(self.state_file),
+            "PI_SWITCH_LOG_DIR": str(self.tmp / "logs"), "RESTORE_LOG_DIR": str(self.tmp / "logs"),
+            "DEPLOY_ENV_FILE": str(self.env_file), **extra,
+        }
+
+    @property
+    def env_file(self) -> Path:
+        return self.tmp / "deploy.env"
 
     def switch(self, *args: str, **env: str) -> subprocess.CompletedProcess:
         return subprocess.run(["bash", str(SWITCH), *args], env=self.env(**env), capture_output=True, text=True, timeout=60, check=False)
@@ -629,57 +613,133 @@ def _running(image: str = OLD, **extra) -> dict:
 
 
 def _old_running() -> dict:
-    """Ausgangslage vor der Umbenennung: Image lattice:latest und Container deploy-lattice-1 laufen."""
-    return {OLD_C: _running(OLD)}
+    """Ausgangslage: der bisherige Stand läuft mit dem Image hinter nodvard-deck:latest."""
+    return {NEW_C: _running(OLD, volume=VOL)}
 
 
-def _first_transition(machine: Machine, new: str = NEW) -> None:
-    machine.set(images={"lattice:latest": OLD, "nodvard-deck:pi-abc": new}, containers=_old_running())
+def _deployed(machine: Machine, new: str = NEW) -> None:
+    machine.set(images={"nodvard-deck:latest": OLD, "nodvard-deck:pi-abc": new}, containers=_old_running())
 
 
 # ---------------------------------------------------------------------------
 # pi_switch.sh: switch
 # ---------------------------------------------------------------------------
 @needs_bash
-def test_a_first_transition_stops_the_old_container_but_keeps_it(machine):
-    _first_transition(machine)
+def test_a_deploy_keeps_the_running_image_as_the_way_back(machine):
+    _deployed(machine)
     result = machine.switch("switch", "nodvard-deck:pi-abc")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "Erster Uebergang" in result.stdout and "VERIFY-OK" in result.stdout
+    assert "VERIFY-OK" in result.stdout
     assert machine.images["nodvard-deck:previous"] == OLD
     assert machine.images["nodvard-deck:latest"] == NEW
-    assert machine.images["lattice:latest"] == OLD
-    # Der alte Container ist nur gestoppt, nicht geloescht; der neue laeuft mit dem alten Volume.
-    assert machine.containers[OLD_C]["running"] is False
-    assert machine.containers[NEW_C] == {"image": NEW, "running": True, "volume": VOL}
+    assert machine.containers == {NEW_C: {"image": NEW, "running": True, "volume": VOL}}
     calls = machine.calls
-    assert not any(c.startswith(("rm", "rmi")) for c in calls), "switch loescht nichts"
-    assert calls.index("tag lattice:latest nodvard-deck:previous") < calls.index("stop -t 30 deploy-lattice-1") < calls.index("compose -p deploy up -d --no-build")
-    # Keine Projekt-weiten Eingriffe, kein Compose ohne festes Projekt, nichts, was Daten beruehrt.
+    assert not any(c.startswith(("rm", "rmi", "stop", "start")) for c in calls), "switch löscht und stoppt nichts"
+    assert calls.index("tag nodvard-deck:latest nodvard-deck:previous") < calls.index(UP)
+    # Keine Projekt-weiten Eingriffe, kein Compose ohne festes Projekt, nichts, was Daten berührt.
     assert not any("--remove-orphans" in c or " down" in c or c.startswith("volume") or " -v" in c for c in calls), calls
     assert all(c.startswith("compose -p deploy ") for c in machine.compose_calls())
 
 
+OLD_ENV = (
+    "LATTICE_DNS_1=192.0.2.10\n"
+    "NODVARD_DECK_DNS_2=198.51.100.11\n"
+    "LATTICE_DNS_2=192.0.2.11\n"
+    "# LATTICE_DNS_1=192.0.2.99\n"
+    "COMPOSE_PROFILES=\n"
+)
+
+
 @needs_bash
-def test_a_cleanup_removes_the_old_container_but_keeps_the_old_images_while_they_are_the_way_back(machine):
-    _first_transition(machine)
-    assert machine.switch("switch", "nodvard-deck:pi-abc").returncode == 0
-    result = machine.switch("cleanup")
+def test_a_deploy_renames_old_names_in_the_env_file_and_keeps_a_copy(machine):
+    _deployed(machine)
+    machine.env_file.write_text(OLD_ENV, encoding="utf-8")
+    result = machine.switch("switch", "nodvard-deck:pi-abc")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "CLEANUP-OK" in result.stdout
-    assert OLD_C not in machine.containers and NEW_C in machine.containers
-    # nodvard-deck:previous ist noch dasselbe Image wie lattice:latest: die alten Tags bleiben.
-    assert machine.images["lattice:latest"] == OLD and machine.images["nodvard-deck:previous"] == OLD
-    assert "Alte lattice:*-Images bleiben" in result.stdout
-    # Die Tags hinter latest liegen bleiben (hier: pi-abc ist der neue Stand).
-    assert "nodvard-deck:pi-abc" in machine.images
+    assert machine.env_file.read_text(encoding="utf-8") == (
+        "NODVARD_DECK_DNS_1=192.0.2.10\nNODVARD_DECK_DNS_2=198.51.100.11\n"
+        "# LATTICE_DNS_1=192.0.2.99\nCOMPOSE_PROFILES=\n"
+    )
+    assert Path(f"{machine.env_file}.vor-umbenennung").read_text(encoding="utf-8") == OLD_ENV
+    assert not Path(f"{machine.env_file}.neu").exists()
+    assert "umbenannt" in result.stdout
 
 
 @needs_bash
-def test_a_cleanup_after_a_later_deploy_removes_old_images_and_unused_pi_tags(machine):
+def test_an_env_file_with_new_names_only_stays_as_it_is(machine):
+    _deployed(machine)
+    machine.env_file.write_text("NODVARD_DECK_DNS_1=192.0.2.10\n", encoding="utf-8")
+    result = machine.switch("switch", "nodvard-deck:pi-abc")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert machine.env_file.read_text(encoding="utf-8") == "NODVARD_DECK_DNS_1=192.0.2.10\n"
+    assert not Path(f"{machine.env_file}.vor-umbenennung").exists()
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    ("env", "tag"),
+    [
+        ({}, "nodvard-deck:pi-fehlt"),
+        ({"STUB_DOCKER_DOWN": "1"}, "nodvard-deck:pi-abc"),
+        ({"STUB_COMPOSE_CONFIG_FAIL": "1"}, "nodvard-deck:pi-abc"),
+    ],
+    ids=["image-fehlt", "docker-nicht-erreichbar", "compose-config-scheitert"],
+)
+def test_a_switch_that_stops_before_any_change_leaves_the_env_file_alone(machine, env, tag):
+    _deployed(machine)
+    machine.env_file.write_text(OLD_ENV, encoding="utf-8")
+    result = machine.switch("switch", tag, **env)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert machine.env_file.read_text(encoding="utf-8") == OLD_ENV
+    assert not Path(f"{machine.env_file}.vor-umbenennung").exists()
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ("NODVARD_DECK_DNS_1=\nLATTICE_DNS_1=192.0.2.10\n", "NODVARD_DECK_DNS_1=192.0.2.10\n"),
+        ('NODVARD_DECK_DNS_1=""\nLATTICE_DNS_1=192.0.2.10\n', "NODVARD_DECK_DNS_1=192.0.2.10\n"),
+        ("LATTICE_DNS_1=192.0.2.10\r\nNODVARD_DECK_DNS_1= \r\n", "NODVARD_DECK_DNS_1=192.0.2.10\r\n"),
+        ("LATTICE_DNS_1=192.0.2.10\nNODVARD_DECK_DNS_1=198.51.100.11\n", "NODVARD_DECK_DNS_1=198.51.100.11\n"),
+    ],
+    ids=["neuer-leer", "neuer-leer-in-anfuehrungszeichen", "neuer-leer-crlf", "neuer-mit-wert"],
+)
+def test_an_empty_new_name_gives_way_to_the_old_value(machine, before, after):
+    _deployed(machine)
+    machine.env_file.write_bytes(before.encode())
+    result = machine.switch("switch", "nodvard-deck:pi-abc")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert machine.env_file.read_bytes() == after.encode()
+
+
+@needs_bash
+def test_the_env_file_keeps_its_mode_and_an_odd_line_gets_a_warning(machine):
+    _deployed(machine)
+    machine.env_file.write_text("LATTICE_DNS_1=192.0.2.10\nLATTICE_DNS_2 = 192.0.2.11\n", encoding="utf-8")
+    machine.env_file.chmod(0o600)
+    result = machine.switch("switch", "nodvard-deck:pi-abc")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert machine.env_file.read_text(encoding="utf-8") == "NODVARD_DECK_DNS_1=192.0.2.10\nLATTICE_DNS_2 = 192.0.2.11\n"
+    assert machine.env_file.stat().st_mode & 0o777 == 0o600
+    assert "WARNUNG" in result.stdout and "nicht automatisch umbenannt" in result.stdout
+
+
+@needs_bash
+def test_only_odd_lines_make_no_copy_but_a_warning(machine):
+    _deployed(machine)
+    machine.env_file.write_text("export LATTICE_DNS_1=192.0.2.10\n", encoding="utf-8")
+    result = machine.switch("switch", "nodvard-deck:pi-abc")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert machine.env_file.read_text(encoding="utf-8") == "export LATTICE_DNS_1=192.0.2.10\n"
+    assert not Path(f"{machine.env_file}.vor-umbenennung").exists()
+    assert "umbenannt (vorher" not in result.stdout and "WARNUNG" in result.stdout
+
+
+@needs_bash
+def test_a_cleanup_removes_unused_pi_tags_and_keeps_latest_and_previous(machine):
     machine.set(
         images={
-            "lattice:latest": OLD, "lattice:previous": OLDER, "lattice:pi-x": OLDER,
             "nodvard-deck:latest": MID, "nodvard-deck:previous": OLDER, "nodvard-deck:pi-old": "sha256:weg",
             "nodvard-deck:pi-mid": MID, "nodvard-deck:pi-older": OLDER,
         },
@@ -687,6 +747,7 @@ def test_a_cleanup_after_a_later_deploy_removes_old_images_and_unused_pi_tags(ma
     )
     result = machine.switch("cleanup")
     assert result.returncode == 0, result.stdout + result.stderr
+    assert "CLEANUP-OK" in result.stdout
     assert machine.images == {
         "nodvard-deck:latest": MID, "nodvard-deck:previous": OLDER, "nodvard-deck:pi-mid": MID, "nodvard-deck:pi-older": OLDER,
     }
@@ -694,29 +755,38 @@ def test_a_cleanup_after_a_later_deploy_removes_old_images_and_unused_pi_tags(ma
 
 
 @needs_bash
-def test_cleanup_refuses_while_the_new_container_is_not_fine_and_keeps_the_old_one(machine):
+def test_a_cleanup_leaves_images_of_other_names_alone(machine):
     machine.set(
-        images={"lattice:latest": OLD, "nodvard-deck:latest": NEW, "nodvard-deck:previous": OLD},
-        containers={OLD_C: {"image": OLD, "running": False}, NEW_C: {"image": NEW, "running": False, "status": "exited", "volume": VOL}},
+        images={"nodvard-deck:latest": MID, "nodvard-deck:previous": OLDER, "lattice:latest": OLD, "anderes:pi-x": OLD},
+        containers={NEW_C: _running(MID, volume=VOL)},
+    )
+    assert machine.switch("cleanup").returncode == 0
+    assert machine.images["lattice:latest"] == OLD and machine.images["anderes:pi-x"] == OLD
+    assert not any(c.startswith("rmi") for c in machine.calls)
+
+
+@needs_bash
+def test_cleanup_refuses_while_the_new_container_is_not_fine(machine):
+    machine.set(
+        images={"nodvard-deck:latest": NEW, "nodvard-deck:previous": OLD, "nodvard-deck:pi-old": OLDER},
+        containers={NEW_C: {"image": NEW, "running": False, "status": "exited", "volume": VOL}},
     )
     result = machine.switch("cleanup")
     assert result.returncode != 0 and "FAIL" in result.stderr
-    assert OLD_C in machine.containers
     assert not any(c.startswith(("rm", "rmi")) for c in machine.calls)
 
 
 @needs_bash
 def test_b_follow_up_deploy(machine):
     machine.set(
-        images={"nodvard-deck:latest": MID, "nodvard-deck:previous": OLDER, "lattice:latest": OLD, "nodvard-deck:pi-def": NEW},
+        images={"nodvard-deck:latest": MID, "nodvard-deck:previous": OLDER, "nodvard-deck:pi-def": NEW},
         containers={NEW_C: _running(MID, volume=VOL)},
     )
     result = machine.switch("switch", "nodvard-deck:pi-def")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert machine.images["nodvard-deck:previous"] == MID, "nodvard-deck:latest wird zur Sicherung, nicht lattice:latest"
+    assert machine.images["nodvard-deck:previous"] == MID
     assert machine.images["nodvard-deck:latest"] == NEW
     assert machine.containers[NEW_C] == {"image": NEW, "running": True, "volume": VOL}
-    assert "tag lattice:latest nodvard-deck:previous" not in machine.calls
     assert not any(c.startswith(("stop", "rm")) for c in machine.calls)
 
 
@@ -752,33 +822,56 @@ def _nothing_changed(machine: Machine, before: dict) -> None:
     ids=["image-fehlt", "docker-nicht-erreichbar", "compose-config-scheitert"],
 )
 def test_c_switch_changes_nothing_and_exits_3_when_a_precondition_fails(machine, env, tag, message):
-    _first_transition(machine)
+    _deployed(machine)
     before = {"images": machine.images, "containers": machine.containers}
     result = machine.switch("switch", tag, **env)
     assert result.returncode == 3, result.stdout + result.stderr
     assert "FAIL" in result.stderr and message in result.stderr
     _nothing_changed(machine, before)
-    assert machine.containers[OLD_C]["running"] is True, "der alte Container laeuft unbeeinflusst weiter"
+    assert machine.containers[NEW_C]["running"] is True, "der bisherige Stand läuft unbeeinflusst weiter"
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    ("images", "old_container", "message"),
+    [
+        ({"lattice:latest": OLD}, _running(OLD, volume=VOL), "vor Version 0.6"),
+        ({"lattice:latest": OLD}, {"image": OLD, "running": False, "volume": VOL}, "vor Version 0.6"),
+        ({"nodvard-deck:latest": OLD}, _running(OLD, volume=VOL), "vor Version 0.6"),
+        ({"nodvard-deck:latest": OLD}, {"image": OLDER, "running": False}, "docker rm deploy-lattice-1"),
+    ],
+    ids=["laeuft-noch", "gestoppt-ohne-neuen-stand", "laeuft-neben-neuem-image", "gestoppter-rest"],
+)
+@pytest.mark.parametrize(
+    "command", [("switch", "nodvard-deck:pi-abc"), ("precheck",), ("oldname",)], ids=["switch", "precheck", "oldname"]
+)
+def test_c_a_state_from_before_0_6_is_refused_before_anything_changes(machine, images, old_container, message, command):
+    containers = {PRE_RENAME_C: old_container}
+    if "nodvard-deck:latest" in images and not old_container["running"]:
+        containers[NEW_C] = _running(OLD, volume=VOL)
+    machine.set(images={**images, "nodvard-deck:pi-abc": NEW}, containers=containers)
+    before = {"images": machine.images, "containers": machine.containers}
+    result = machine.switch(*command)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "FAIL" in result.stderr and message in result.stderr and "Nichts veraendert" in result.stderr
+    _nothing_changed(machine, before)
 
 
 # ---------------------------------------------------------------------------
 # Rollback
 # ---------------------------------------------------------------------------
 @needs_bash
-def test_c_failed_first_transition_rolls_back_by_starting_the_old_container_without_compose(machine):
-    _first_transition(machine, BAD)
+def test_c_failed_deploy_rolls_back_to_the_previous_image(machine):
+    _deployed(machine, BAD)
     failed = machine.switch("switch", "nodvard-deck:pi-abc")
     assert failed.returncode != 0
     assert "FAIL" in failed.stderr and "laeuft nicht" in failed.stderr
-    assert machine.containers[NEW_C]["running"] is False and machine.containers[OLD_C]["running"] is False
+    assert machine.containers[NEW_C]["running"] is False
 
-    compose_before = len(machine.compose_calls())
     back = machine.switch("rollback")
     assert back.returncode == 0, back.stdout + back.stderr
     assert "VERIFY-OK" in back.stdout
-    assert machine.containers == {OLD_C: {"image": OLD, "running": True}}, "neuer Container weg, alter laeuft wieder"
-    assert len(machine.compose_calls()) == compose_before, "der Rollback braucht Compose nicht"
-    assert "start deploy-lattice-1" in machine.calls
+    assert machine.containers == {NEW_C: {"image": OLD, "running": True, "volume": VOL}}
     assert machine.images["nodvard-deck:latest"] == OLD, "auch das Tag zeigt wieder auf den alten Stand"
 
 
@@ -795,11 +888,12 @@ def test_c_rollback_after_a_follow_up_deploy_returns_to_the_last_good_image_via_
 
 
 @needs_bash
-def test_c_old_container_that_cannot_be_started_makes_the_rollback_fail(machine):
-    _first_transition(machine, BAD)
+def test_c_a_rollback_that_compose_cannot_start_fails(machine):
+    _deployed(machine, BAD)
     assert machine.switch("switch", "nodvard-deck:pi-abc").returncode != 0
-    back = machine.switch("rollback", STUB_START_FAILS="1")
+    back = machine.switch("rollback", STUB_UP_FAILS=OLD)
     assert back.returncode != 0
+    assert "VERIFY-OK" not in back.stdout
 
 
 @needs_bash
@@ -822,48 +916,16 @@ def test_d_fresh_machine_without_any_image(machine):
 # Was "laeuft" wirklich heisst
 # ---------------------------------------------------------------------------
 @needs_bash
-def test_e_old_container_that_cannot_be_stopped_fails_the_switch_and_is_never_deleted(machine):
-    _first_transition(machine)
-    result = machine.switch("switch", "nodvard-deck:pi-abc", STUB_STICKY_OLD="1")
-    assert result.returncode != 0
-    assert OLD_C in machine.containers and machine.containers[OLD_C]["running"] is True
-    assert not any(c.startswith("rm") for c in machine.calls)
-
-
-@needs_bash
-def test_e_orphan_that_keeps_running_is_a_fail_even_if_compose_says_ok(machine):
-    # Der gefaehrliche Fall: compose meldet 0, der neue Container startet wegen des belegten
-    # Ports nicht, der alte antwortet weiter auf /api/v1/health.
-    _first_transition(machine)
-    result = machine.switch("switch", "nodvard-deck:pi-abc", STUB_STICKY_OLD="1", STUB_COMPOSE_EXIT0="1")
-    assert result.returncode != 0
-    assert "FAIL" in result.stderr and "Waise" in result.stderr
-    assert "VERIFY-OK" not in result.stdout
-
-
-@needs_bash
-def test_e_verify_fails_for_a_running_old_container_next_to_a_healthy_new_one(machine):
-    machine.set(images={"nodvard-deck:latest": NEW}, containers={NEW_C: _running(NEW, volume=VOL), OLD_C: _running(OLD)})
-    result = machine.switch("verify")
-    assert result.returncode != 0 and "Waise" in result.stderr
-
-
-@needs_bash
-def test_e_a_stopped_old_container_next_to_the_new_one_is_fine(machine):
-    machine.set(images={"nodvard-deck:latest": NEW}, containers={NEW_C: _running(NEW, volume=VOL), OLD_C: {"image": OLD, "running": False}})
-    assert machine.switch("verify").returncode == 0
-
-
-@needs_bash
-def test_f_running_with_the_wrong_volume_is_a_fail_and_rolls_back(machine):
-    # Leeres Volume (z. B. anderer Projektname): Container laeuft, Health waere ok, aber die Daten fehlen.
-    _first_transition(machine)
+def test_f_running_with_the_wrong_volume_is_a_fail(machine):
+    # Leeres Volume (z. B. anderer Projektname): Container läuft, Health wäre ok, aber die Daten fehlen.
+    _deployed(machine)
     result = machine.switch("switch", "nodvard-deck:pi-abc", STUB_COMPOSE_VOLUME="foo_lattice_data")
-    assert result.returncode != 0
+    assert result.returncode == 1
     assert "foo_lattice_data" in result.stderr and "deploy_lattice_data" in result.stderr and "leeres Volume" in result.stderr
+    assert "VERIFY-OK" not in result.stdout
     back = machine.switch("rollback")
     assert back.returncode == 0, back.stdout + back.stderr
-    assert machine.containers == {OLD_C: {"image": OLD, "running": True}}
+    assert machine.containers == {NEW_C: {"image": OLD, "running": True, "volume": VOL}}
 
 
 @needs_bash
@@ -889,15 +951,15 @@ def test_g_verify_needs_status_running_and_no_restart_loop(machine):
 
 @needs_bash
 def test_g_a_restart_loop_after_switch_fails_it(machine):
-    _first_transition(machine, LOOP)
+    _deployed(machine, LOOP)
     result = machine.switch("switch", "nodvard-deck:pi-abc")
     assert result.returncode != 0 and "restarting" in result.stderr
 
 
 @needs_bash
 def test_h_a_hangup_in_the_middle_does_not_kill_the_switch(machine):
-    # ssh bricht ab -> SIGHUP an die Shell, waehrend sie mitten im Umschalten ist.
-    _first_transition(machine)
+    # ssh bricht ab -> SIGHUP an die Shell, während sie mitten im Umschalten ist.
+    _deployed(machine)
     result = machine.switch("switch", "nodvard-deck:pi-abc", STUB_HUP_PARENT="1")
     assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
     assert "VERIFY-OK" in result.stdout
@@ -910,7 +972,7 @@ def test_unknown_subcommand_is_refused(machine):
 
 @needs_bash
 def test_compose_project_name_from_the_environment_cannot_override_the_project(machine):
-    _first_transition(machine)
+    _deployed(machine)
     env = machine.env(COMPOSE_PROJECT_NAME="foo")
     result = subprocess.run(["bash", str(SWITCH), "switch", "nodvard-deck:pi-abc"], env=env, capture_output=True, text=True, timeout=60, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -918,61 +980,18 @@ def test_compose_project_name_from_the_environment_cannot_override_the_project(m
 
 
 # ---------------------------------------------------------------------------
-# Liegen gebliebener alter Container, Aufraeumen, Vorabpruefung, abgekoppelter Aufruf
+# Aufräumen, Vorabprüfung, abgekoppelter Aufruf
 # ---------------------------------------------------------------------------
-@needs_bash
-def test_rollback_ignores_a_stale_old_container_with_another_image_and_uses_compose(machine):
-    # deploy-lattice-1 ist ein Ueberbleibsel (uraltes Image), nodvard-deck:previous ein anderer Stand.
-    machine.set(
-        images={"nodvard-deck:latest": BAD, "nodvard-deck:previous": MID},
-        containers={OLD_C: {"image": OLDER, "running": False}, NEW_C: {"image": BAD, "running": False, "status": "exited", "volume": VOL}},
-    )
-    back = machine.switch("rollback")
-    assert back.returncode == 0, back.stdout + back.stderr
-    assert "start deploy-lattice-1" not in machine.calls
-    assert machine.containers[OLD_C] == {"image": OLDER, "running": False}, "das Ueberbleibsel bleibt, wie es ist"
-    assert machine.containers[NEW_C] == {"image": MID, "running": True, "volume": VOL}
-    assert "compose -p deploy up -d --no-build" in machine.calls
-
-
-@needs_bash
-def test_switch_removes_a_stopped_old_container_when_the_transition_had_already_succeeded(machine):
-    machine.set(
-        images={"nodvard-deck:latest": MID, "nodvard-deck:previous": OLDER, "lattice:latest": OLD, "nodvard-deck:pi-def": NEW},
-        containers={OLD_C: {"image": OLD, "running": False}, NEW_C: _running(MID, volume=VOL)},
-    )
-    result = machine.switch("switch", "nodvard-deck:pi-def")
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "rm -f deploy-lattice-1" in machine.calls and OLD_C not in machine.containers
-    assert "Liegengebliebener" in result.stdout
-
-
-@needs_bash
-def test_switch_keeps_the_old_container_of_a_rolled_back_first_transition(machine):
-    # Erster Uebergang scheitert, der Rollback startet den alten Container wieder (laeuft, nodvard-deck:latest
-    # existiert jetzt). Der naechste Versuch darf ihn nicht als Ueberbleibsel loeschen.
-    _first_transition(machine, BAD)
-    assert machine.switch("switch", "nodvard-deck:pi-abc").returncode != 0
-    assert machine.switch("rollback").returncode == 0
-    machine.set(images={**machine.images, "nodvard-deck:pi-abc": NEW}, containers=machine.containers)
-    calls_before = len(machine.calls)
-    result = machine.switch("switch", "nodvard-deck:pi-abc")
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert not any(c.startswith("rm") for c in machine.calls[calls_before:])
-    assert machine.containers[OLD_C]["running"] is False and machine.containers[NEW_C]["image"] == NEW
-
-
 @needs_bash
 def test_cleanup_only_reports_removed_images_that_were_really_removed(machine):
     machine.set(
-        images={"nodvard-deck:latest": MID, "nodvard-deck:previous": OLDER, "nodvard-deck:pi-old": "sha256:weg", "lattice:latest": "sha256:alt"},
+        images={"nodvard-deck:latest": MID, "nodvard-deck:previous": OLDER, "nodvard-deck:pi-old": "sha256:weg"},
         containers={NEW_C: _running(MID, volume=VOL)},
     )
     result = machine.switch("cleanup", STUB_RMI_FAILS="1")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "entfernt." not in result.stdout
     assert "Hinweis: nodvard-deck:pi-old liess sich nicht entfernen" in result.stdout
-    assert "Hinweis: lattice:latest liess sich nicht entfernen" in result.stdout
 
 
 @needs_bash
@@ -993,7 +1012,7 @@ def test_precheck_tells_what_the_running_dashboard_says(machine, state, env, exp
         "none": {},
         "old": _old_running(),
         "new-empty": {NEW_C: _running(NEW, volume=VOL)},
-        "old-wrong-volume": {OLD_C: _running(OLD, volume="foo_lattice_data")},
+        "old-wrong-volume": {NEW_C: _running(OLD, volume="foo_lattice_data")},
     }[state]
     machine.set(images={}, containers=containers)
     result = machine.switch("precheck", BOOTSTRAP_RETRY_SLEEP_S="0", **env)
@@ -1011,7 +1030,7 @@ def test_precheck_retries_before_giving_up(machine):
 
 @needs_bash
 def test_detached_runs_like_the_plain_command_and_returns_its_output_and_exit_code(machine):
-    _first_transition(machine)
+    _deployed(machine)
     ok = machine.switch("detached", "switch", "nodvard-deck:pi-abc")
     assert ok.returncode == 0, ok.stdout + ok.stderr
     assert "VERIFY-OK" in ok.stdout
@@ -1022,9 +1041,9 @@ def test_detached_runs_like_the_plain_command_and_returns_its_output_and_exit_co
 
 @needs_bash
 def test_h_a_dropped_connection_does_not_stop_a_detached_switch(machine, tmp_path):
-    # Die aeussere Shell (die ssh-Sitzung) bekommt mitten im Umschalten SIGHUP und stirbt;
+    # Die äußere Shell (die ssh-Sitzung) bekommt mitten im Umschalten SIGHUP und stirbt;
     # der abgekoppelte Schritt muss trotzdem zu Ende laufen (Ergebnis in pi_switch.out).
-    _first_transition(machine)
+    _deployed(machine)
     pid_file = tmp_path / "outer.pid"
     # Wurde pytest mit ignoriertem SIGHUP gestartet (nohup, manche Hintergrund-/CI-Starter), erbt die
     # aeussere Shell das: eine beim Start ignorierte Abmeldung laesst sich in einer Shell nicht mehr
@@ -1088,52 +1107,62 @@ def deploy_run(tmp_path: Path, machine: Machine):
 
 
 def _deploy_state(machine: Machine, deploy_run, *, new: str = NEW, old: bool = True) -> None:
-    machine.set(images={"lattice:latest": OLD, deploy_run.local_tag: new} if old else {deploy_run.local_tag: new}, containers=_old_running() if old else {})
+    images = {"nodvard-deck:latest": OLD, deploy_run.local_tag: new} if old else {deploy_run.local_tag: new}
+    machine.set(images=images, containers=_old_running() if old else {})
+
+
+def _rolled_back(machine: Machine) -> bool:
+    """Der zweite `compose up` ist der Rollback (der erste schaltet um)."""
+    return machine.calls.count("compose -p deploy up -d --no-build") >= 2
 
 
 @needs_bash
-def test_deploy_pi_first_transition_end_to_end(machine, deploy_run):
+def test_deploy_pi_end_to_end(machine, deploy_run):
     _deploy_state(machine, deploy_run)
     result = deploy_run()
     assert result.returncode == 0, result.stdout + result.stderr
     assert "DEPLOY-OK" in result.stdout and "Datencheck ok" in result.stdout and "CLEANUP-OK" in result.stdout
     assert machine.images["nodvard-deck:previous"] == OLD and machine.images["nodvard-deck:latest"] == NEW
-    assert machine.containers == {NEW_C: {"image": NEW, "running": True, "volume": VOL}}, "der alte Container ist erst am Ende weg"
+    assert machine.containers == {NEW_C: {"image": NEW, "running": True, "volume": VOL}}
     calls = machine.calls
-    assert calls.index("stop -t 30 deploy-lattice-1") < calls.index("compose -p deploy up -d --no-build") < calls.index("rm -f deploy-lattice-1")
+    assert calls.index("tag nodvard-deck:latest nodvard-deck:previous") < calls.index(UP)
     assert not any("--remove-orphans" in c for c in calls)
     # deploy/ kam mit, und die Schaltdatei liegt im bisherigen Zielordner (DEPLOY_ROOT bleibt).
     assert (deploy_run.home / "lattice-deploy-test" / "deploy" / "pi_switch.sh").exists()
 
 
 @needs_bash
-def test_deploy_pi_failing_new_image_rolls_back_to_the_old_container(machine, deploy_run):
+def test_deploy_pi_failing_new_image_rolls_back_to_the_previous_image(machine, deploy_run):
     _deploy_state(machine, deploy_run, new=BAD)
     result = deploy_run()
     assert result.returncode != 0
     assert "DEPLOY-FAIL" in result.stderr and "Rollback ausgefuehrt" in result.stderr and "DEPLOY-OK" not in result.stdout
     assert "ROLLBACK-FAIL" not in result.stderr
-    assert machine.containers == {OLD_C: {"image": OLD, "running": True}}
-    assert not any(c.startswith("rm -f deploy-lattice-1") for c in machine.calls), "der alte Container wurde nie geloescht"
+    assert _rolled_back(machine) and machine.containers == _old_running()
 
 
 @needs_bash
-def test_deploy_pi_never_reports_ok_while_the_old_container_holds_the_port(machine, deploy_run):
-    # /health antwortet immer (wie der alte Container es taete).
-    _deploy_state(machine, deploy_run)
-    result = deploy_run(STUB_STICKY_OLD="1", STUB_COMPOSE_EXIT0="1")
-    assert result.returncode != 0
-    assert "DEPLOY-FAIL" in result.stderr and "DEPLOY-OK" not in result.stdout
-    assert machine.containers[OLD_C]["running"] is True
+def test_deploy_pi_refuses_a_state_from_before_0_6_before_sending_anything(machine, deploy_run):
+    machine.set(
+        images={"lattice:latest": OLD, deploy_run.local_tag: NEW}, containers={PRE_RENAME_C: _running(OLD, volume=VOL)}
+    )
+    before = {"images": machine.images, "containers": machine.containers}
+    result = deploy_run()
+    assert result.returncode != 0 and "DEPLOY-FAIL" in result.stderr and "DEPLOY-OK" not in result.stdout
+    assert "vor Version 0.6" in result.stderr and "v0.11.1" in result.stderr and "ROLLBACK" not in result.stderr
+    assert machine.containers == before["containers"] and machine.images == before["images"]
+    assert not any(c.startswith(("tag", "stop", "start", "rm", "load", "compose")) for c in machine.calls), machine.calls
+    assert not (deploy_run.home / "lattice-deploy-test").exists(), "deploy/ ging nicht auf den Pi"
 
 
 @needs_bash
-def test_deploy_pi_wrong_volume_is_rolled_back(machine, deploy_run):
+def test_deploy_pi_wrong_volume_is_never_ok_and_the_way_back_says_so(machine, deploy_run):
+    # Eine Compose-Datei mit falschem Volume gilt auch für den Rollback: der meldet dann ehrlich ROLLBACK-FAIL.
     _deploy_state(machine, deploy_run)
     result = deploy_run(STUB_COMPOSE_VOLUME="foo_lattice_data")
     assert result.returncode != 0 and "DEPLOY-OK" not in result.stdout
     assert "foo_lattice_data" in result.stderr
-    assert machine.containers == {OLD_C: {"image": OLD, "running": True}}
+    assert _rolled_back(machine) and "ROLLBACK-FAIL" in result.stderr
 
 
 @needs_bash
@@ -1143,7 +1172,7 @@ def test_deploy_pi_empty_data_is_rolled_back_even_if_container_and_volume_look_r
     result = deploy_run(STUB_EMPTY_DATA="1")
     assert result.returncode != 0 and "DEPLOY-OK" not in result.stdout
     assert "Datencheck" in result.stderr and "needed=true" in result.stderr
-    assert machine.containers == {OLD_C: {"image": OLD, "running": True}}
+    assert machine.containers == _old_running()
 
 
 @needs_bash
@@ -1159,8 +1188,8 @@ def test_deploy_pi_fresh_machine_may_need_setup(machine, deploy_run):
 @needs_bash
 def test_deploy_pi_reports_rollback_fail_when_the_old_state_does_not_answer(machine, deploy_run):
     _deploy_state(machine, deploy_run, new=BAD)
-    # Vorher antwortet der alte Dienst, nach dem Zurueckstarten nicht mehr.
-    result = deploy_run(STUB_NO_HEALTH_AFTER_START="1")
+    # Vorher antwortet der alte Stand, nach dem Rollback nicht mehr.
+    result = deploy_run(STUB_NO_HEALTH_AFTER_ROLLBACK="1")
     assert result.returncode != 0
     assert "ROLLBACK-FAIL" in result.stderr and "Rollback ausgefuehrt" not in result.stderr
 
@@ -1168,7 +1197,7 @@ def test_deploy_pi_reports_rollback_fail_when_the_old_state_does_not_answer(mach
 @needs_bash
 def test_deploy_pi_reports_rollback_fail_when_the_rollback_itself_fails(machine, deploy_run):
     _deploy_state(machine, deploy_run, new=BAD)
-    result = deploy_run(STUB_START_FAILS="1")
+    result = deploy_run(STUB_UP_FAILS=OLD)
     assert result.returncode != 0 and "ROLLBACK-FAIL" in result.stderr
 
 
@@ -1216,7 +1245,7 @@ def test_deploy_pi_old_image_without_the_endpoint_still_gets_the_data_check_afte
     _deploy_state(machine, deploy_run)
     result = deploy_run(STUB_BOOTSTRAP_404=OLD, STUB_EMPTY_DATA="1")
     assert result.returncode != 0 and "Datencheck" in result.stderr and "DEPLOY-OK" not in result.stdout
-    assert machine.containers == {OLD_C: {"image": OLD, "running": True}}
+    assert machine.containers == _old_running()
 
 
 @needs_bash
@@ -1225,8 +1254,8 @@ def test_deploy_pi_unclear_log_check_fails_without_an_automatic_rollback(machine
     result = deploy_run(STUB_SSH_FAIL="grep -c Traceback")
     assert result.returncode != 0 and "DEPLOY-FAIL" in result.stderr and "DEPLOY-OK" not in result.stdout
     assert "KEIN automatischer Rollback" in result.stderr and "auf dem Pi pruefen" in result.stderr
-    assert "start deploy-lattice-1" not in machine.calls, "kein Rollback bei unklarem Zustand"
-    assert machine.containers[NEW_C]["running"] is True and OLD_C in machine.containers, "nichts aufgeraeumt, nichts zurueckgeschaltet"
+    assert not _rolled_back(machine), "kein Rollback bei unklarem Zustand"
+    assert machine.containers[NEW_C] == _running(NEW, volume=VOL), "nicht zurückgeschaltet"
 
 
 def _bootstate(at: str, *, started_ok: bool = True, **extra: object) -> str:
@@ -1246,8 +1275,8 @@ def test_deploy_pi_does_not_roll_back_once_the_new_version_has_migrated_and_star
     assert result.returncode != 0 and "DEPLOY-FAIL" in result.stderr and "DEPLOY-OK" not in result.stdout
     assert "KEIN automatischer Rollback" in result.stderr and "2026-10-02T03:00:02Z" in result.stderr
     assert "Datencheck" in result.stderr
-    assert "start deploy-lattice-1" not in machine.calls and "Rollback ausgefuehrt" not in result.stderr
-    assert machine.containers[NEW_C]["running"] is True and OLD_C in machine.containers, "nichts aufgeraeumt, nichts zurueckgeschaltet"
+    assert not _rolled_back(machine) and "Rollback ausgefuehrt" not in result.stderr
+    assert machine.containers[NEW_C] == _running(NEW, volume=VOL), "nicht zurückgeschaltet"
 
 
 @needs_bash
@@ -1267,7 +1296,7 @@ def test_deploy_pi_still_rolls_back_when_the_old_version_can_take_the_data(machi
     result = deploy_run(STUB_EMPTY_DATA="1", **extra)
     assert result.returncode != 0 and "DEPLOY-OK" not in result.stdout, label
     assert "Rollback ausgefuehrt" in result.stderr and "KEIN automatischer Rollback" not in result.stderr, label
-    assert machine.containers == {OLD_C: {"image": OLD, "running": True}}, label
+    assert machine.containers == _old_running(), label
 
 
 @needs_bash
@@ -1283,8 +1312,8 @@ def test_deploy_pi_unknown_migration_state_fails_without_an_automatic_rollback(m
     result = deploy_run(STUB_EMPTY_DATA="1", **extra)
     assert result.returncode != 0 and "DEPLOY-FAIL" in result.stderr and "DEPLOY-OK" not in result.stdout, label
     assert "Zustand unklar" in result.stderr and "KEIN automatischer Rollback" in result.stderr, label
-    assert "start deploy-lattice-1" not in machine.calls and "Rollback ausgefuehrt" not in result.stderr, label
-    assert machine.containers[NEW_C]["running"] is True and OLD_C in machine.containers, label
+    assert not _rolled_back(machine) and "Rollback ausgefuehrt" not in result.stderr, label
+    assert machine.containers[NEW_C] == _running(NEW, volume=VOL), label
 
 
 @needs_bash
@@ -1302,8 +1331,8 @@ def test_deploy_pi_crash_after_a_migration_is_not_rolled_back(machine, deploy_ru
     result = deploy_run(STUB_CRASH_AFTER_HEALTH="1", **MIGRATED_NOW)
     assert result.returncode != 0 and "DEPLOY-FAIL" in result.stderr and "DEPLOY-OK" not in result.stdout
     assert "nicht mehr" in result.stderr and "KEIN automatischer Rollback" in result.stderr and "2026-10-02T03:00:02Z" in result.stderr
-    assert "start deploy-lattice-1" not in machine.calls and "Rollback ausgefuehrt" not in result.stderr
-    assert machine.containers[NEW_C]["running"] is False and OLD_C in machine.containers
+    assert not _rolled_back(machine) and "Rollback ausgefuehrt" not in result.stderr
+    assert machine.containers[NEW_C]["image"] == NEW and machine.containers[NEW_C]["running"] is False
 
 
 @needs_bash
@@ -1311,16 +1340,16 @@ def test_deploy_pi_crash_without_a_migration_is_rolled_back(machine, deploy_run)
     _deploy_state(machine, deploy_run)
     result = deploy_run(STUB_CRASH_AFTER_HEALTH="1")
     assert result.returncode != 0 and "Rollback ausgefuehrt" in result.stderr
-    assert machine.containers == {OLD_C: {"image": OLD, "running": True}}
+    assert machine.containers == _old_running()
 
 
 @needs_bash
-def test_deploy_pi_wrong_volume_is_rolled_back_even_after_a_migration(machine, deploy_run):
-    # Falsches Volume: die alten Daten sind unberuehrt, das alte Image kann sie weiter lesen.
+def test_deploy_pi_wrong_volume_tries_the_way_back_even_after_a_migration(machine, deploy_run):
+    # Falsches Volume: die alten Daten sind unberührt, das alte Image kann sie weiter lesen.
     _deploy_state(machine, deploy_run)
     result = deploy_run(STUB_COMPOSE_VOLUME="foo_lattice_data", **MIGRATED_NOW)
-    assert result.returncode != 0 and "Rollback ausgefuehrt" in result.stderr
-    assert machine.containers == {OLD_C: {"image": OLD, "running": True}}
+    assert result.returncode != 0 and "KEIN automatischer Rollback" not in result.stderr
+    assert _rolled_back(machine)
 
 
 @needs_bash
@@ -1331,7 +1360,7 @@ def test_deploy_pi_dropped_connection_while_checking_does_not_roll_back(machine,
     result = deploy_run(STUB_SSH_FAIL=step)
     assert result.returncode != 0 and "DEPLOY-FAIL" in result.stderr and "DEPLOY-OK" not in result.stdout
     assert "abgerissen" in result.stderr and "KEIN automatischer Rollback" in result.stderr
-    assert "start deploy-lattice-1" not in machine.calls and "ROLLBACK" not in result.stderr
+    assert not _rolled_back(machine) and "ROLLBACK" not in result.stderr
     assert machine.containers[NEW_C]["running"] is True
 
 
@@ -1345,11 +1374,11 @@ def test_deploy_pi_dropped_connection_while_switching_does_not_trigger_a_second_
     if step.endswith("switch"):
         assert not any(c.startswith(("tag", "stop", "start", "rm")) for c in machine.calls), "auf dem Pi wurde nichts angestossen"
     else:
-        assert "start deploy-lattice-1" not in machine.calls and "ROLLBACK-FAIL" not in result.stderr
+        assert not _rolled_back(machine) and "ROLLBACK-FAIL" not in result.stderr
 
 
 # ---------------------------------------------------------------------------
-# backup.sh / restore.sh: auch den alten Container anhalten
+# backup.sh / restore.sh
 # ---------------------------------------------------------------------------
 def _write_archive(path: Path, files: dict[str, bytes] | None = None) -> bytes:
     """Ein echtes tar.gz wie von backup.sh: restore.sh prueft die Datei vorab mit `tar tzf`."""
@@ -1438,17 +1467,64 @@ def _fail_for_partial_files(machine: Machine, tool: str, text: str) -> None:
 
 @needs_bash
 @pytest.mark.parametrize("script", ["backup.sh", "restore.sh"])
-def test_backup_and_restore_stop_a_still_running_old_container_and_start_it_again(machine, backup_env, tmp_path, script):
-    machine.set(images={"nodvard-deck:latest": OLD}, containers=_old_running())
+@pytest.mark.parametrize(
+    "images",
+    [{"lattice:latest": OLD}, {"lattice:latest": OLD, "nodvard-deck:latest": NEW}],
+    ids=["nur-alt", "auch-neu"],
+)
+def test_backup_and_restore_refuse_while_the_container_from_before_0_6_runs(
+    machine, backup_env, tmp_path, script, images
+):
+    machine.set(images=images, containers={PRE_RENAME_C: _running(OLD, volume=VOL)})
+    archive = tmp_path / "sicherung.tar.gz"
+    _write_archive(archive)
+    target = tmp_path / "neuer-zielordner"
+    args = (str(target),) if script == "backup.sh" else (str(archive),)
+    result = backup_env(script, *args, stdin="y\n")
+    assert result.returncode != 0
+    assert "vor Version 0.6" in result.stderr and "v0.11.1" in result.stderr
+    assert machine.containers[PRE_RENAME_C]["running"] is True
+    assert not any(c.startswith(("stop", "start", "compose")) for c in machine.calls), machine.calls
+    assert not target.exists(), "kein Zielordner angelegt"
+
+
+@needs_bash
+@pytest.mark.parametrize("script", ["backup.sh", "restore.sh"])
+def test_backup_and_restore_refuse_a_stopped_container_from_before_0_6_without_the_new_image(
+    machine, backup_env, tmp_path, script
+):
+    machine.set(images={"lattice:latest": OLD}, containers={PRE_RENAME_C: {"image": OLD, "running": False, "volume": VOL}})
+    archive = tmp_path / "sicherung.tar.gz"
+    _write_archive(archive)
+    args = (str(tmp_path),) if script == "backup.sh" else (str(archive),)
+    result = backup_env(script, *args, stdin="y\n")
+    assert result.returncode != 0 and "vor Version 0.6" in result.stderr
+    assert not any(c.startswith(("stop", "start", "compose")) for c in machine.calls), machine.calls
+
+
+@needs_bash
+def test_restore_refuses_an_ndbak_while_the_container_from_before_0_6_runs(machine, backup_env, tmp_path):
+    machine.set(images={"nodvard-deck:latest": NEW}, containers={PRE_RENAME_C: _running(OLD, volume=VOL)})
+    bundle = tmp_path / "sicherung.ndbak"
+    bundle.write_bytes(b"verschluesselt")
+    result = backup_env("restore.sh", str(bundle), stdin="y\n")
+    assert result.returncode != 0 and "vor Version 0.6" in result.stderr
+    assert not any(c.startswith(("stop", "start", "compose")) for c in machine.calls), machine.calls
+
+
+@needs_bash
+@pytest.mark.parametrize("script", ["backup.sh", "restore.sh"])
+def test_a_stopped_leftover_from_before_0_6_beside_the_new_image_does_not_block(machine, backup_env, tmp_path, script):
+    machine.set(
+        images={"nodvard-deck:latest": NEW, "lattice:latest": OLDER},
+        containers={NEW_C: _running(NEW, volume=VOL), PRE_RENAME_C: {"image": OLDER, "running": False, "volume": VOL}},
+    )
     archive = tmp_path / "sicherung.tar.gz"
     _write_archive(archive)
     args = (str(tmp_path),) if script == "backup.sh" else (str(archive),)
     result = backup_env(script, *args, stdin="y\n")
     assert result.returncode == 0, result.stdout + result.stderr
-    calls = machine.calls
-    assert calls.index("stop -t 30 deploy-lattice-1") < calls.index(_run_call(machine)) < calls.index("start deploy-lattice-1")
-    assert machine.containers[OLD_C]["running"] is True
-    assert "compose -p deploy start nodvard-deck" not in calls
+    assert machine.containers[PRE_RENAME_C]["running"] is False
 
 
 @needs_bash
@@ -1466,13 +1542,14 @@ def test_backup_and_restore_keep_their_old_behaviour_when_only_the_new_service_r
 
 
 @needs_bash
-def test_restore_that_fails_still_starts_the_old_container_again(machine, backup_env, tmp_path):
+def test_restore_that_fails_starts_the_service_again(machine, backup_env, tmp_path):
     machine.set(images={"nodvard-deck:latest": OLD}, containers=_old_running())
     archive = tmp_path / "sicherung.tar.gz"
     _write_archive(archive)
     result = backup_env("restore.sh", str(archive), stdin="y\n", STUB_RUN_FAILS="1")
     assert result.returncode != 0
-    assert machine.containers[OLD_C]["running"] is True
+    assert machine.containers[NEW_C]["running"] is True
+    assert "compose -p deploy start nodvard-deck" in machine.calls
 
 
 @needs_bash
@@ -1745,7 +1822,10 @@ def test_backup_without_the_image_stops_before_anything_is_changed(machine, back
     result = backup_env("backup.sh", str(out))
     assert result.returncode != 0 and "nodvard-deck:latest" in result.stderr and "nichts angehalten" in result.stderr
     assert "gibt es hier nicht" in result.stderr and "Docker antwortet nicht" not in result.stderr
-    assert machine.calls == ["image inspect nodvard-deck:latest", "info"], "nur Pruefungen: nichts gestoppt, nichts gestartet, nichts gebaut"
+    assert machine.all_calls[0] == PRE_RENAME_PROBE
+    assert machine.calls == ["image inspect nodvard-deck:latest", "info"], (
+        "nur Prüfungen: nichts gestoppt, nichts gestartet, nichts gebaut"
+    )
     assert machine.containers[NEW_C]["running"] is True
     assert _backups_in(out) == []
 
@@ -2067,16 +2147,6 @@ def test_restore_whose_swap_fails_does_not_start_the_service_on_half_data_and_a_
     assert again.returncode == 0, again.stdout + again.stderr
     assert _tree(vol) == NEW_DATA
     assert machine.containers[NEW_C]["running"] is True
-
-
-@needs_bash
-def test_restore_keeps_the_old_container_stopped_too_when_the_swap_fails(machine, backup_env, tmp_path):
-    machine.set(images={"nodvard-deck:latest": OLD}, containers=_old_running())
-    archive = tmp_path / "neu.tar.gz"
-    _write_archive(archive, NEW_DATA)
-    result = backup_env("restore.sh", str(archive), stdin="y\n", STUB_SWAP_FAILS="1")
-    assert result.returncode != 0 and "NICHT gestartet" in result.stderr
-    assert machine.containers[OLD_C]["running"] is False and f"start {OLD_C}" not in machine.calls
 
 
 @needs_bash
@@ -3089,7 +3159,7 @@ def test_deploy_pi_a_new_image_that_ends_in_the_rescue_page_is_rolled_back_witho
     assert "DEPLOY-OK" not in result.stdout and "DEPLOY-FAIL" in result.stderr
     assert "Notseite" in result.stdout + result.stderr, "benennt die Ursache"
     assert "Rollback ausgefuehrt" in result.stderr and "ROLLBACK-FAIL" not in result.stderr
-    assert machine.containers == {OLD_C: {"image": OLD, "running": True}}, "zurueck auf den alten Container"
+    assert machine.containers == _old_running(), "zurück auf den alten Stand"
     assert time.time() - started < 60, "die Notseite startet nie von selbst neu: die vollen 240 s abzuwarten waere sinnlos"
     assert 2 <= _health_calls(machine) <= 6
 
@@ -3107,9 +3177,9 @@ def test_deploy_pi_the_rescue_page_is_never_mistaken_for_a_healthy_dashboard(mac
 
 @needs_bash
 def test_deploy_pi_when_the_old_image_shows_the_rescue_page_after_the_rollback_the_hint_says_what_to_do(machine, deploy_run):
-    # Das neue Image startet nicht; das alte findet nach dem Zurueckstarten Daten, die ihm zu neu sind: Notseite.
+    # Das neue Image startet nicht; das alte findet nach dem Rollback Daten, die ihm zu neu sind: Notseite.
     _deploy_state(machine, deploy_run, new=BAD)
-    result = deploy_run(STUB_RESCUE_AFTER_START="1", ROLLBACK_HEALTH_TIMEOUT_S="10")
+    result = deploy_run(STUB_RESCUE_AFTER_ROLLBACK="1", ROLLBACK_HEALTH_TIMEOUT_S="10")
     assert result.returncode != 0 and "ROLLBACK-FAIL" in result.stderr and "DEPLOY-OK" not in result.stdout
     assert "Notfallmodus" in result.stderr and "Notfallcode" in result.stderr
     assert "Rollback ausgefuehrt" not in result.stderr
@@ -3242,17 +3312,10 @@ def test_pi_switch_loaded_only_compares_and_never_runs_what_the_log_says(machine
 
 @needs_bash
 def test_pi_switch_loaded_says_none_when_no_dashboard_runs(machine):
-    machine.set(images={}, containers={OLD_C: {"image": OLD, "running": False}})
+    machine.set(images={}, containers={NEW_C: {"image": OLD, "running": False, "volume": VOL}})
     result = machine.switch("loaded", **_same(f"{LOADED_LINE}a-ext\n"))
     assert result.returncode == 0 and result.stdout.strip() == "none"
-    assert _log_reads(machine, OLD_C) == [], "ein gestoppter Container wird nicht gelesen"
-
-
-@needs_bash
-def test_pi_switch_loaded_prefers_the_container_with_the_new_name_like_precheck(machine):
-    machine.set(images={}, containers={OLD_C: _running(OLD), NEW_C: _running(NEW, volume=VOL)})
-    result = machine.switch("loaded", **_logs({OLD: f"{LOADED_LINE}old-ext\n", NEW: f"{LOADED_LINE}new-ext\n"}))
-    assert result.stdout.strip() == "list=new-ext"
+    assert _log_reads(machine, NEW_C) == [], "ein gestoppter Container wird nicht gelesen"
 
 
 @needs_bash
@@ -3266,7 +3329,7 @@ def test_pi_switch_loaded_needs_docker_and_a_number_of_seconds(machine):
 @needs_bash
 def test_pi_switch_loaded_waits_for_a_line_that_the_docker_log_shows_late(machine):
     machine.set(images={}, containers={NEW_C: _running(NEW, volume=VOL)})
-    result = machine.switch("loaded", "30", LOADED_POLL_SLEEP_S="0", STUB_LOG_LATE=f"{NEW_C}:3", **_logs({NEW: f"{LOADED_LINE}a-ext\n"}))
+    result = machine.switch("loaded", "30", LOADED_POLL_SLEEP_S="0", STUB_LOG_LATE=f"{NEW}:3", **_logs({NEW: f"{LOADED_LINE}a-ext\n"}))
     assert result.returncode == 0 and result.stdout.strip() == "list=a-ext"
     assert len(_log_reads(machine, NEW_C)) == 4, "drei Versuche ohne Zeile, der vierte findet sie"
 
@@ -3277,7 +3340,7 @@ def test_pi_switch_loaded_gives_up_after_the_time_and_says_none(machine):
     # fast keine Wartezeit, und unter Last kam es nur zu einem Leseversuch (Test wackelte in der vollen Testreihe).
     machine.set(images={}, containers={NEW_C: _running(NEW, volume=VOL)})
     result = machine.switch(
-        "loaded", "3", LOADED_POLL_SLEEP_S="0.2", STUB_LOG_LATE=f"{NEW_C}:100000", **_logs({NEW: f"{LOADED_LINE}a-ext\n"}),
+        "loaded", "3", LOADED_POLL_SLEEP_S="0.2", STUB_LOG_LATE=f"{NEW}:100000", **_logs({NEW: f"{LOADED_LINE}a-ext\n"}),
     )
     assert result.returncode == 0 and result.stdout.strip() == "none"
     assert len(_log_reads(machine, NEW_C)) >= 2, "es wurde wiederholt"
@@ -3286,7 +3349,7 @@ def test_pi_switch_loaded_gives_up_after_the_time_and_says_none(machine):
 @needs_bash
 def test_pi_switch_loaded_without_a_wait_time_tries_once(machine):
     machine.set(images={}, containers={NEW_C: _running(NEW, volume=VOL)})
-    result = machine.switch("loaded", STUB_LOG_LATE=f"{NEW_C}:100000", **_logs({NEW: f"{LOADED_LINE}a-ext\n"}))
+    result = machine.switch("loaded", STUB_LOG_LATE=f"{NEW}:100000", **_logs({NEW: f"{LOADED_LINE}a-ext\n"}))
     assert result.stdout.strip() == "none"
     assert len(_log_reads(machine, NEW_C)) == 1
 
@@ -3308,9 +3371,9 @@ def test_deploy_pi_same_extensions_before_and_after_is_fine(machine, deploy_run)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Vorher geladene Erweiterungen: backups,shield" in result.stdout
     assert "Erweiterungen ok" in result.stdout and "DEPLOY-OK" in result.stdout
-    # Der alte Stand wird gelesen, BEVOR er gestoppt wird.
+    # Der alte Stand wird gelesen, BEVOR umgeschaltet wird.
     calls = machine.calls
-    assert calls.index(f"logs {OLD_C}") < calls.index("stop -t 30 deploy-lattice-1")
+    assert calls.index(f"logs {NEW_C}") < calls.index("compose -p deploy up -d --no-build")
 
 
 @needs_bash
@@ -3332,8 +3395,8 @@ def test_deploy_pi_a_missing_extension_fails_and_rolls_back(machine, deploy_run)
     assert "shield" in result.stderr and "Erweiterungen" in result.stderr
     assert DROP_ON_PURPOSE_HINT in result.stderr
     assert "Rollback ausgefuehrt" in result.stderr and "ROLLBACK-FAIL" not in result.stderr
-    assert machine.containers == {OLD_C: {"image": OLD, "running": True}}, "zurueck auf den alten Container"
-    assert not any(c.startswith("rm -f deploy-lattice-1") for c in machine.calls), "aufgeraeumt wird erst nach bestandener Pruefung"
+    assert machine.containers == _old_running(), "zurück auf den alten Stand"
+    assert "CLEANUP-OK" not in result.stdout, "aufgeräumt wird erst nach bestandener Prüfung"
 
 
 @needs_bash
@@ -3389,7 +3452,7 @@ def test_deploy_pi_an_old_state_without_the_line_only_gets_a_hint(machine, deplo
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'keine Zeile "Erweiterungen geladen"' in result.stdout and "nicht verglichen" in result.stdout
     assert "Erweiterungen ok" not in result.stdout and "DEPLOY-OK" in result.stdout
-    assert _log_reads(machine, NEW_C) == [], "ohne Vergleich wird das Protokoll des neuen Stands gar nicht gelesen"
+    assert len(_log_reads(machine, NEW_C)) == 1, "gelesen wird nur der alte Stand, ohne Vergleich nicht der neue"
 
 
 @needs_bash
@@ -3424,13 +3487,13 @@ def test_deploy_pi_a_new_state_without_the_line_counts_as_missing_when_the_old_o
     result = deploy_run(**FAST_LOADED, **_logs({OLD: f"{LOADED_LINE}a-ext\n", NEW: "INFO: Application startup complete\n"}))
     assert result.returncode != 0 and "DEPLOY-OK" not in result.stdout
     assert "keine lesbare Zeile" in result.stderr and "Rollback ausgefuehrt" in result.stderr
-    assert machine.containers == {OLD_C: {"image": OLD, "running": True}}
+    assert machine.containers == _old_running()
 
 
 @needs_bash
 def test_deploy_pi_a_line_that_shows_up_after_the_wait_time_counts_as_missing(machine, deploy_run):
     _deploy_state(machine, deploy_run)
-    result = deploy_run(LOADED_POLL_SLEEP_S="0", LOADED_WAIT_S="1", STUB_LOG_LATE=f"{NEW_C}:100000", **_same(f"{LOADED_LINE}a-ext\n"))
+    result = deploy_run(LOADED_POLL_SLEEP_S="0", LOADED_WAIT_S="1", STUB_LOG_LATE=f"{NEW}:100000", **_same(f"{LOADED_LINE}a-ext\n"))
     assert result.returncode != 0 and "DEPLOY-OK" not in result.stdout
     assert "Rollback ausgefuehrt" in result.stderr
 
@@ -3438,7 +3501,7 @@ def test_deploy_pi_a_line_that_shows_up_after_the_wait_time_counts_as_missing(ma
 @needs_bash
 def test_deploy_pi_waits_for_a_line_that_the_docker_log_shows_late(machine, deploy_run):
     _deploy_state(machine, deploy_run)
-    result = deploy_run(LOADED_POLL_SLEEP_S="0", LOADED_WAIT_S="20", STUB_LOG_LATE=f"{NEW_C}:3", **_same(f"{LOADED_LINE}a-ext\n"))
+    result = deploy_run(LOADED_POLL_SLEEP_S="0", LOADED_WAIT_S="20", STUB_LOG_LATE=f"{NEW}:3", **_same(f"{LOADED_LINE}a-ext\n"))
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Erweiterungen ok" in result.stdout
     assert len(_log_reads(machine, NEW_C)) >= 4
@@ -3471,8 +3534,8 @@ def test_deploy_pi_does_not_roll_back_a_missing_extension_once_the_new_version_h
     assert result.returncode != 0 and "DEPLOY-FAIL" in result.stderr and "DEPLOY-OK" not in result.stdout
     assert "KEIN automatischer Rollback" in result.stderr and "2026-10-02T03:00:02Z" in result.stderr
     assert "fehlen: b-ext" in result.stderr
-    assert "start deploy-lattice-1" not in machine.calls and "Rollback ausgefuehrt" not in result.stderr
-    assert machine.containers[NEW_C]["running"] is True and OLD_C in machine.containers, "nichts aufgeraeumt, nichts zurueckgeschaltet"
+    assert not _rolled_back(machine) and "Rollback ausgefuehrt" not in result.stderr
+    assert machine.containers[NEW_C] == _running(NEW, volume=VOL), "nicht zurückgeschaltet"
     # Der Rat passt auch hier, wo nichts zurueckgeschaltet wird: Er verspricht keinen Rueckweg und keinen Neustart.
     assert DROP_ON_PURPOSE_HINT in result.stderr
     assert "Rueckweg tut" not in result.stderr and "neu starten" not in result.stderr
@@ -3484,7 +3547,7 @@ def test_deploy_pi_a_missing_extension_with_an_unknown_migration_state_fails_wit
     result = deploy_run(**_logs({OLD: f"{LOADED_LINE}a-ext,b-ext\n", NEW: f"{LOADED_LINE}a-ext\n"}), STUB_BOOTSTATE="")
     assert result.returncode != 0 and "DEPLOY-FAIL" in result.stderr and "DEPLOY-OK" not in result.stdout
     assert "Zustand unklar" in result.stderr and "KEIN automatischer Rollback" in result.stderr
-    assert "start deploy-lattice-1" not in machine.calls and "Rollback ausgefuehrt" not in result.stderr
+    assert not _rolled_back(machine) and "Rollback ausgefuehrt" not in result.stderr
 
 
 @needs_bash
@@ -3493,7 +3556,7 @@ def test_deploy_pi_a_missing_extension_is_rolled_back_when_the_old_version_can_t
     _deploy_state(machine, deploy_run)
     result = deploy_run(**_logs({OLD: f"{LOADED_LINE}a-ext,b-ext\n", NEW: f"{LOADED_LINE}a-ext\n"}), STUB_BOOTSTATE=_bootstate("2026-09-01T10:00:00Z"))
     assert result.returncode != 0 and "Rollback ausgefuehrt" in result.stderr and "KEIN automatischer Rollback" not in result.stderr
-    assert machine.containers == {OLD_C: {"image": OLD, "running": True}}
+    assert machine.containers == _old_running()
 
 
 @needs_bash
@@ -3512,7 +3575,7 @@ def test_deploy_pi_a_dropped_connection_while_comparing_does_not_roll_back(machi
     result = deploy_run(STUB_SSH_FAIL="pi_switch.sh loaded 7", LOADED_WAIT_S="7", HEALTH_TIMEOUT_S="100", **_same(f"{LOADED_LINE}a-ext\n"))
     assert result.returncode != 0 and "DEPLOY-FAIL" in result.stderr and "DEPLOY-OK" not in result.stdout
     assert "abgerissen" in result.stderr and "KEIN automatischer Rollback" in result.stderr
-    assert "start deploy-lattice-1" not in machine.calls and "ROLLBACK" not in result.stderr
+    assert not _rolled_back(machine) and "ROLLBACK" not in result.stderr
     assert machine.containers[NEW_C]["running"] is True
 
 

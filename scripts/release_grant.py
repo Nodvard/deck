@@ -171,13 +171,19 @@ def write_files(out: Path, data: bytes, sig: str) -> tuple[Path, Path]:
 
 
 def upload(tag: str, files: tuple[Path, Path]) -> None:
-    command = ["gh", "release", "upload", tag, *map(str, files), "--clobber"]
+    command = ["gh", "release", "upload", tag, *map(str, files), "--clobber", "-R", REPOSITORY]
+    command_text = subprocess.list2cmdline(command)
     try:
-        done = subprocess.run(command, check=False)
+        done = subprocess.run(command, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, encoding="utf-8", errors="replace")
     except FileNotFoundError:
-        raise GrantError("„gh“ fehlt. Die beiden Dateien von Hand an den Entwurf hängen.") from None
+        raise GrantError("„gh“ fehlt. Die beiden Dateien von Hand an den Entwurf hängen.\n"
+                         f"Befehl: {command_text}") from None
     if done.returncode != 0:
-        raise GrantError(f"Hochladen gescheitert (gh {done.returncode}). Die Dateien liegen in {files[0].parent}.")
+        raise GrantError(f"Hochladen gescheitert (gh {done.returncode}). Die Dateien liegen in {files[0].parent}.\n"
+                         f"Befehl: {command_text}\nAusgabe von gh:\n{done.stdout}")
+    if done.stdout:
+        print(done.stdout, end="")
 
 
 def make_keys(out: Path, password: bytes) -> list[str]:

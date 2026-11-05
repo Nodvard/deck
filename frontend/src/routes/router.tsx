@@ -1,4 +1,5 @@
 import { createBrowserRouter, type RouteObject } from "react-router-dom";
+import { EditionRoutes } from "../lib/editionRoutes";
 
 import { ActionsPage } from "./ActionsPage";
 import { AppShell } from "./AppShell";
@@ -24,6 +25,7 @@ import { ExtensionConfigPage } from "./settings/ExtensionConfigPage";
 import { ExtensionsSettings } from "./settings/ExtensionsSettings";
 import { HostDetailSettings } from "./settings/HostDetailSettings";
 import { HostsSettings } from "./settings/HostsSettings";
+import { NotificationSettings } from "./settings/NotificationSettings";
 import { SettingsLayout } from "./settings/SettingsLayout";
 import { SystemSettings } from "./settings/SystemSettings";
 import { VaultSettings } from "./settings/VaultSettings";
@@ -49,6 +51,7 @@ export const routes: RouteObject[] = [
             children: [
               {
                 errorElement: <RouteErrorPage />,
+                element: <EditionRoutes />,
                 children: [
                   { path: "/", element: <DashboardPage /> },
                   // Kern-Seite wie Dashboard, keine PageSpec: Der Dateimanager kennt keine
@@ -77,6 +80,7 @@ export const routes: RouteObject[] = [
                       { path: "hosts/:hostId", element: <HostDetailSettings /> },
                       { path: "automation", element: <AutomationSettings /> },
                       { path: "system", element: <SystemSettings /> },
+                      { path: "notifications", element: <NotificationSettings /> },
                       { path: "extensions", element: <ExtensionsSettings /> },
                       { path: "extensions/:extId", element: <ExtensionConfigPage /> },
                       { path: "vault", element: <VaultSettings /> },

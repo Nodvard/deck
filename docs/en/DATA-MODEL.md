@@ -61,7 +61,7 @@ Evaluation happens in `core/rbac.py`, pure functions, testable without a DB.
 | client_type | `web` \| `android` \| `cli`, controls cookie vs. bearer |
 | device_name, user_agent, ip | for "Active sessions" („Aktive Sitzungen“) in the settings |
 | expires_at, revoked_at, last_used_at | |
-| replaced_by_id | successor session, set only on rotation (not on logout/password change), without a foreign key. Basis of the 30-second grace period on refresh: a token that was just rotated still gets an access token for the successor session, but no new refresh token (two tabs, app + tab). It also carries the check of the `sid` in the access token (valid as long as a valid row sits at the end of the chain) and logging out of the whole chain (`logout` revokes the row at the end, even with an already renewed token, as long as that token's row still exists, that is until one refresh lifetime after the renewal, see "Cleanup"). The chain is read in a single recursive query (`WITH RECURSIVE`, `services.auth.session_chain_end`); limits are in [API, section 2](../04-API.md#2-ohne-authentifizierung), "Access token and login" („Access-Token und Anmeldung“), in German |
+| replaced_by_id | successor session, set only on rotation (not on logout/password change), without a foreign key. Basis of the 30-second grace period on refresh: a token that was just rotated still gets an access token for the successor session, but no new refresh token (two tabs, app + tab). It also carries the check of the `sid` in the access token (valid as long as a valid row sits at the end of the chain) and logging out of the whole chain (`logout` revokes the row at the end, even with an already renewed token, as long as that token's row still exists, that is until one refresh lifetime after the renewal, see "Cleanup"). The chain is read in a single recursive query (`WITH RECURSIVE`, `services.auth.session_chain_end`); limits are in [API, section 2](API.md#2-without-authentication), "Access token and login" („Access-Token und Anmeldung“) |
 
 **Cleanup** (`services.auth.purge_old_logins`, core job `logins-retention`, nightly at 03:50): rows whose `expires_at`
 or `revoked_at` lies more than `refresh_token_ttl_days` ago (default 30) are deleted. Until then, renewed and ended rows
@@ -312,7 +312,7 @@ feedback, a channel that reports into the void may go unnoticed for weeks.
 read or unread. Only an **unread critical** notification (`severity` `critical`, `read_at` empty)
 stays until someone reads it. Deletion runs in chunks of 5000 rows with a commit in between. The delivery logs
 explicitly go with them (not just via `ON DELETE CASCADE`, because `PRAGMA foreign_keys` is per connection). Manual
-deletion works via `DELETE /notifications/{id}` and `POST /notifications/delete-read` ([04-API.md](../04-API.md), in German); a delivery
+deletion works via `DELETE /notifications/{id}` and `POST /notifications/delete-read` ([API.md](API.md)); a delivery
 that is currently in progress writes its log only as long as the notification still exists (`services.notifications._log_deliveries`).
 
 ---
@@ -345,7 +345,7 @@ ui.design_notice_dismissed
 `ui.theme`, `ui.first_steps_dismissed` and `ui.design_notice_dismissed` apply per user (`scope = 'user'`), `ui.custom_css`
 (the admins' own CSS) globally. `demo.seeded_ids` remembers the rows of the sample data (see D-10 in
 [DECISIONS.md](DECISIONS.md)). `system.update_check.*` and `system.trusted_proxies` can be set via `PUT /settings/{key}`, see
-[04-API.md](../04-API.md), section 3, "Settings" („Einstellungen“), in German.
+[API.md](API.md), section 3, "Settings" („Einstellungen“).
 
 Backups (`services/backups.py`, only via `/system/backups/...`, not via `/settings`; only the owner may change them):
 
@@ -357,13 +357,13 @@ Backups (`services/backups.py`, only via `/system/backups/...`, not via `/settin
 | `system.instance_id` | random identifier of this installation (included in the manifest of every backup) |
 
 `system.read` (Settings → View System, „Einstellungen → System ansehen“) is held only by `admin` via `*`; anything critical there requires the owner
-themselves, see [04-API.md](../04-API.md) (in German), "System and backups" („System und Sicherungen“).
+themselves, see [API.md](API.md), "System and backups" („System und Sicherungen“).
 
 `system.timezone` (IANA name, default from `NODVARD_DECK_TIMEZONE`/`TZ`, otherwise Europe/Berlin) and
 `audit.retention_days` (7–3650, falls back to the environment variable) and `jobs.run_retention_days` (1–3650, default 30;
 retention of job runs, see §7 `job_runs`) and `notifications.retention_days` (1–3650, default 90; retention of
 notifications, see §8) can be set via `PUT /settings/{key}`, see
-[04-API.md](../04-API.md), section 3, "Settings" („Einstellungen“), in German.
+[API.md](API.md), section 3, "Settings" („Einstellungen“).
 
 Reachability check (`services/reachability.py`): `hosts.reachability.enabled` (default `true`) and
 `hosts.reachability.interval_minutes` (1–60, default 2) can be set via `PUT /settings/{key}`. `hosts.reachability.state`
@@ -374,8 +374,8 @@ are kept for only 24 hours, because it runs up to 1440 times a day.
 
 Host keys (`services/hosts.py`): `ssh.confirm_new_host_keys` (global, default `true`) determines whether new
 host keys are remembered only after confirmation; creating the first account stores `true`, without a stored
-value `true` applies as well, only a stored `false` turns it off. `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` overrides it (see [04-API.md](../04-API.md), section 3,
-"Settings", in German). `ssh.host_key_confirm_required` is an internal marker per host (`scope = 'host'`, `user_id` =
+value `true` applies as well, only a stored `false` turns it off. `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` overrides it (see [API.md](API.md), section 3,
+"Settings"). `ssh.host_key_confirm_required` is an internal marker per host (`scope = 'host'`, `user_id` =
 host ID): set when forgetting a remembered key (`DELETE /hosts/{id}/known-hosts/{key_type}`, in the same
 commit), removed only on confirmation (`POST /hosts/{id}/known-hosts`) and together with the host. As long as it exists, no
 connection to this host silently remembers a key, not even against the environment variable; it does not appear in

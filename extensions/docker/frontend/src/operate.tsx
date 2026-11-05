@@ -1,3 +1,4 @@
+import { productText } from "./product";
 /** Texte zum Modus „Nur bedienen“; das Gegenstück im Backend ist `refused_text` in `operate.py`. */
 import { useSettingText } from "../../../_shared/frontend/src/links";
 
@@ -15,7 +16,7 @@ export function OperateBadge({ hostId }: { hostId: string }): JSX.Element {
   const fullTag = useSettingText("docker", "docker_host_tag", "docker");
   return (
     <span className="rounded bg-white/10 px-1.5 py-0.5 text-[11px] opacity-80" data-testid={`operate-${hostId}`}
-      title={`${OPERATE_CAN} Für alles andere ${operateUpgrade(fullTag)}`}>
+      title={`${productText(OPERATE_CAN)} Für alles andere ${operateUpgrade(fullTag)}`}>
       Nur bedienen
     </span>
   );
@@ -26,7 +27,7 @@ export function OperateNote({ hostId, name }: { hostId: string; name: string }):
   const fullTag = useSettingText("docker", "docker_host_tag", "docker");
   return (
     <p className="text-sm opacity-80" data-testid={`operate-${hostId}`}>
-      Auf {name} ist Docker im Modus „Nur bedienen“ eingerichtet: {OPERATE_CAN} Stacks, Images, Volumes, Netze und Registries
+      Auf {name} ist Docker im Modus „Nur bedienen“ eingerichtet: {productText(OPERATE_CAN)} Stacks, Images, Volumes, Netze und Registries
       gibt es dort nicht. Dafür {operateUpgrade(fullTag)}
     </p>
   );

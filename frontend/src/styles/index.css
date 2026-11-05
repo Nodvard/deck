@@ -207,6 +207,26 @@ body {
   background-attachment: local;
 }
 
+.login-page :is(input, button, a, [tabindex]):focus {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+.login-page input:focus {
+  border-color: var(--color-accent);
+}
+.login-page input[aria-invalid="true"] {
+  border-color: rgb(var(--red-400));
+}
+.login-submit {
+  background-color: color-mix(in srgb, var(--color-accent) 70%, #000);
+}
+.login-submit:not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--color-accent) 60%, #000);
+}
+.login-copyright {
+  color: rgb(var(--ink) / 0.65);
+}
+
 /* Markdown ohne das Typography-Plugin: eine kleine, handgeschriebene Regelmenge statt einer neuen Abhängigkeit. */
 .md-content :where(h3, h4, h5) {
   margin: 0.6em 0 0.3em;
@@ -349,3 +369,4 @@ input:-webkit-autofill:focus {
 .sr-only {
   left: 0;
 }
+.clipboard-copy-field { position: fixed; top: 0; left: -9999px; opacity: 0; }

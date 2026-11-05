@@ -1,0 +1,16 @@
+{
+  "shield.container_failed": "Auswertung der Container-Wache fehlgeschlagen",
+  "shield.container_report": "Lagebericht der Container-Wache",
+  "shield.malware": "Shield-Funde: Schadsoftware",
+  "shield.audit": "Härtungs-Audit mit Warnungen oder Fehlern",
+  "shield.briefing": "Shield-Lagebericht",
+  "shield.schedule": "Shield-Zeitplan ungültig",
+  "shield.guard": "Shield-Funde: Server-Wache",
+  "shield.update_result": "Server-Update eingespielt oder fehlgeschlagen",
+  "shield.updates_available": "Server-Updates verfügbar",
+  "shield.security_updates": "Sicherheitsupdates verfügbar",
+  "shield.reboot_required": "Server braucht einen Neustart",
+  "shield.update_check_failed": "Prüfung auf Server-Updates fehlgeschlagen",
+  "shield.auto_updates": "Automatische Server-Updates abgeschlossen",
+  "shield.reboot": "Neustart nach automatischen Updates"
+}

@@ -169,15 +169,18 @@ def columnar(rows: Iterable[tuple[str, int, float, float | None]], *, step: int,
 
 
 class MetricsCollector:
-    """Der einzige Schreiber in `metrics.db`: fragt alle `interval_s` jeden Host ohne eigene Historie ab."""
+    """Der einzige Schreiber in `metrics.db` (Hosts ohne eigene Historie, alle `interval_s`); von Hosts mit eigener
+    Anbieter-Historie hält er nur den aktuellen Wert im Speicher."""
 
     def __init__(self, store: MetricsStore, *, interval_s: int, raw_retention_s: int, rollup_retention_s: int) -> None:
         self.store = store
         self.interval_s = interval_s
         self.raw_retention_s = raw_retention_s
         self.rollup_retention_s = rollup_retention_s
+        self.sample_timeout_s: float = max(10, interval_s - 2)
         self._task: asyncio.Task[None] | None = None
         self._last_maintain = 0.0
+        self._current: dict[str, tuple[int, dict[str, float]]] = {}
 
     def start(self) -> None:
         if self.interval_s > 0 and self._task is None:
@@ -214,21 +217,37 @@ class MetricsCollector:
 
         semaphore = asyncio.Semaphore(4)
         now = int(time.time())
+        providers = await asyncio.gather(
+            *(resolve_metrics_provider(sdk_host, ext_id) for _, sdk_host, ext_id in targets),
+        )
+        own_history: dict[int, tuple[Any, list[Any]]] = {}
+        sampled: list[tuple[str, Any, Any]] = []
+        for (host_id, sdk_host, _), provider in zip(targets, providers, strict=True):
+            if provider is None:
+                continue
+            if getattr(provider, "history", None) is not None:
+                own_history.setdefault(id(provider), (provider, []))[1].append(sdk_host)
+            else:
+                sampled.append((host_id, sdk_host, provider))
 
-        async def _one(host_id: str, sdk_host: Any, provider_ext_id: str | None) -> bool:
-            provider = await resolve_metrics_provider(sdk_host, provider_ext_id)
-            if provider is None or getattr(provider, "history", None) is not None:
-                return False
+        async def _one(host_id: str, sdk_host: Any, provider: Any) -> bool:
             async with semaphore:
                 try:
-                    values = await asyncio.wait_for(provider.sample(sdk_host), timeout=max(10, self.interval_s - 2))
+                    values = await asyncio.wait_for(provider.sample(sdk_host), timeout=self.sample_timeout_s)
                 except Exception as exc:  # noqa: BLE001 - Lücke statt Absturz
                     logger.info("metrics_sample_failed host=%s error=%s", host_id, str(exc) or type(exc).__name__)
                     return False
             await asyncio.to_thread(self.store.insert, host_id, now, values)
             return True
 
-        stored = sum(await asyncio.gather(*(_one(*t) for t in targets)))
+        # Die Anbieter mit eigener Historie laufen neben den Einzelmessungen, damit langsame Server sie nicht aufhalten.
+        results = await asyncio.gather(
+            *(_one(*entry) for entry in sampled),
+            *(self._sample_current(provider, hosts, semaphore) for provider, hosts in own_history.values()),
+        )
+        stored = sum(1 for ok in results[: len(sampled)] if ok)
+        known = {host_id for host_id, _, _ in targets}
+        self._current = {host_id: entry for host_id, entry in self._current.items() if host_id in known}
         if time.monotonic() - self._last_maintain > ROLLUP_S:
             self._last_maintain = time.monotonic()
             await asyncio.to_thread(
@@ -236,6 +255,56 @@ class MetricsCollector:
                 raw_retention_s=self.raw_retention_s, rollup_retention_s=self.rollup_retention_s,
             )
         return stored
+
+    async def _sample_current(self, provider: Any, hosts: list[Any], semaphore: asyncio.Semaphore) -> None:
+        if getattr(provider, "sample_many", None) is not None:
+            await self._sample_bundled(provider, hosts)
+        else:
+            await asyncio.gather(*(self._sample_each(provider, host, semaphore) for host in hosts))
+
+    async def _sample_bundled(self, provider: Any, hosts: list[Any]) -> None:
+        try:
+            found = await asyncio.wait_for(provider.sample_many(hosts), timeout=self.sample_timeout_s)
+        except Exception as exc:  # noqa: BLE001 - Lücke statt Absturz
+            reason = str(exc) or type(exc).__name__
+            logger.info("metrics_sample_many_failed provider=%s error=%s", type(provider).__name__, reason)
+            return
+        now = int(time.time())
+        for host in hosts:
+            if host.id in found:
+                self._remember(host.id, now, found[host.id])
+
+    async def _sample_each(self, provider: Any, host: Any, semaphore: asyncio.Semaphore) -> None:
+        async with semaphore:
+            try:
+                values = await asyncio.wait_for(provider.sample(host), timeout=self.sample_timeout_s)
+            except Exception as exc:  # noqa: BLE001 - Lücke statt Absturz
+                logger.info("metrics_sample_failed host=%s error=%s", host.id, str(exc) or type(exc).__name__)
+                return
+        self._remember(host.id, int(time.time()), values)
+
+    def _remember(self, host_id: str, now: int, values: dict[str, float]) -> None:
+        # Ein leeres Ergebnis heißt „gerade kein Wert“ (Gast gestoppt): Der alte Wert darf dann nicht stehen bleiben.
+        if values:
+            self._current[host_id] = (now, values)
+        else:
+            self._current.pop(host_id, None)
+
+    def current(
+        self, host_ids: Iterable[str], now: int, *, max_age_s: int, metrics: Iterable[str] = LATEST_METRICS,
+    ) -> dict[str, dict[str, tuple[int, float]]]:
+        """Wie `MetricsStore.latest()`, für die Hosts mit eigener Anbieter-Historie."""
+        names = tuple(metrics)
+        found: dict[str, dict[str, tuple[int, float]]] = {}
+        for host_id in host_ids:
+            entry = self._current.get(host_id)
+            if entry is None or entry[0] < now - max_age_s:
+                continue
+            ts, values = entry
+            picked = {m: (ts, float(values[m])) for m in names if isinstance(values.get(m), (int, float))}
+            if picked:
+                found[host_id] = picked
+        return found
 
 
 async def resolve_metrics_provider(sdk_host: Any, provider_ext_id: str | None) -> Any | None:

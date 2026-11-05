@@ -83,7 +83,7 @@ async def fake_ntfy_server():
     @app.post("/")
     async def publish(request: Request, authorization: str | None = Header(default=None)):
         body = await request.json()
-        received.append({"body": body, "authorization": authorization})
+        received.append({"body": body, "authorization": authorization, "priority": request.headers.get("Priority")})
         return {"id": "fake-id"}
 
     @app.get("/v1/health")
@@ -151,6 +151,36 @@ async def test_a_replaced_token_is_used_for_the_next_message_without_a_hook(
     await channel.send(Notification(title="T", body="B", severity=Severity.INFO))
 
     assert [r["authorization"] for r in received] == ["Bearer erstes-token", "Bearer zweites-token"]
+
+
+@pytest.mark.asyncio
+async def test_connection_test_reads_the_current_token(fake_ntfy_server, db_session, tmp_path, test_settings, monkeypatch):
+    import httpx
+    from nodvard_sdk.capabilities import NotificationChannel
+
+    server_url, _, _ = fake_ntfy_server
+    runtime, ctx, _ext = await _setup_ntfy_extension(db_session, tmp_path, test_settings, server_url=server_url)
+    channel = runtime.capabilities.query(NotificationChannel)[0]
+    seen = []
+    expected = "Bearer erstes-token"
+
+    def answer(request):
+        seen.append(request.headers.get("authorization"))
+        assert request.method == "GET" and request.url.path == "/v1/health"
+        return httpx.Response(200 if seen[-1] == expected else 401)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
+        monkeypatch.setattr(ctx.http, "_client", http)
+        await ctx.secrets.create(label="ntfy-token", kind="generic", value="erstes-token")
+        assert (await channel.test()).ok is True
+        await ctx.secrets.replace(label="ntfy-token", value="falsch")
+        assert (await channel.test()).ok is False
+        expected = "Bearer zweites-token"
+        await ctx.secrets.replace(label="ntfy-token", value="zweites-token")
+        assert (await channel.test()).ok is True
+        await ctx.secrets.delete("ntfy-token")
+        assert (await channel.test()).ok is False
+    assert seen == ["Bearer erstes-token", "Bearer falsch", "Bearer zweites-token", None]
 
 
 @pytest.mark.asyncio

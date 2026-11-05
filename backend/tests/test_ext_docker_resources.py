@@ -161,6 +161,17 @@ def test_networks_with_users_and_builtins():
     assert [n["name"] for n in networks.values() if n["removable"]] == ["ungenutzt"]
 
 
+def test_a_container_on_several_networks_counts_for_each():
+    # Aufgenommen mit Docker 29.8.2 (API 1.56) und genau den Befehlen aus commands.py.
+    df = json.loads((FIXTURES / "system_df_v_docker29.json").read_text(encoding="utf-8"))
+    listed = (FIXTURES / "network_ls_docker29.jsonl").read_text(encoding="utf-8")
+    networks = {n["name"]: n for n in _res().parse_networks(listed, df)}
+    assert {name: n["used_by"] for name, n in networks.items()} == {
+        "bridge": ["zwei"], "host": [], "none": [], "intern": ["zwei"], "testnetz": ["web", "zwei"]}
+    assert networks["intern"]["internal"] is True and networks["intern"]["removable"] is False
+    assert [c["name"] for c in _res().parse_containers(df)] == ["web", "zwei"]
+
+
 def test_a_network_name_with_a_comma_still_finds_its_container():
     df = copy.deepcopy(DF)
     df["Containers"].append({"Names": "komma", "Image": "busybox:1.37", "Networks": "a,b", "Mounts": ""})

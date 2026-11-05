@@ -817,7 +817,7 @@ def parse_helper_check(out: str, helpers: Sequence[RootHelperFile]) -> dict[str,
         elif tag == "owner":
             current.owner_ok = value == "ok"
     for path, item in seen.items():
-        item.tight_rule = helper_hints.allows_helper(sudo_lines or [], path)
+        item.tight_rule = helper_hints.allows_helper(sudo_lines or [], path, item.sha256)
     return seen
 
 

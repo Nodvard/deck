@@ -148,7 +148,7 @@ async def _expire_standing(
                     ),
                     severity=Severity.INFO,
                     correlation_id=f"scripts-standing:{script_id}",
-                    payload={"path": "/ext/scripts/scripts"},
+                    payload={"notification_type": "scripts.approval", "path": "/ext/scripts/scripts"},
                 )
             )
         except Exception:  # noqa: BLE001 -- der Hinweis darf das Erlöschen nicht kippen
@@ -210,7 +210,7 @@ async def _notify_skipped(
                 ),
                 severity=Severity.INFO,
                 correlation_id=f"scripts-skip:{script_id}",
-                payload={"path": "/ext/scripts/scripts"},
+                payload={"notification_type": "scripts.skipped", "path": "/ext/scripts/scripts"},
             ),
             raise_on_failure=True,
         )
@@ -405,7 +405,7 @@ class _ScriptJobSpec:
                     ),
                     severity=Severity.WARNING,
                     correlation_id=f"scripts-failed:{self._script_id}",
-                    payload={"path": "/ext/scripts/scripts"},
+                    payload={"notification_type": "scripts.failed", "path": "/ext/scripts/scripts"},
                 )
             )
         except Exception:  # noqa: BLE001 -- der Lauf selbst ist wichtiger als die Meldung
@@ -760,7 +760,7 @@ class Extension(NodvardExtension):
                     ),
                     severity=Severity.WARNING,
                     correlation_id=f"scripts-schedule:{meta.id}",
-                    payload={"path": "/ext/scripts/scripts"},
+                    payload={"notification_type": "scripts.schedule", "path": "/ext/scripts/scripts"},
                 )
             )
         except Exception:  # noqa: BLE001 - eine ausgefallene Meldung darf den Start nicht stoppen
@@ -1206,7 +1206,7 @@ class Extension(NodvardExtension):
                         f"'{draft_id}' im Skript-Repository angelegt (deaktiviert)."
                     ),
                     severity=Severity.INFO,
-                    payload={"path": "/ext/scripts/scripts"},
+                    payload={"notification_type": "scripts.repair", "path": "/ext/scripts/scripts"},
                 )
             )
 

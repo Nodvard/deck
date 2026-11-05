@@ -1,4 +1,5 @@
 /** Synology-Seite (PageSpec `component="SynologyPage"`): Zustand eines oder mehrerer DSM mit Modell, Auslastung, Speicherpools, Volumes, Festplatten und Hyper Backup, nur lesend. */
+import { styleRef } from "../../../_shared/frontend/src/csp";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
@@ -228,7 +229,7 @@ function UsageBar({ volume }: { volume: Volume }) {
         role="progressbar" aria-label={`Belegung von ${volume.name}`} aria-valuemin={0} aria-valuemax={100}
         aria-valuenow={volume.percent} className="h-1.5 w-full overflow-hidden rounded bg-white/10"
       >
-        <div className={`h-full rounded ${full ? "bg-amber-400" : "bg-[var(--color-accent)]"}`} style={{ width: `${volume.percent}%` }} />
+        <div className={`h-full rounded ${full ? "bg-amber-400" : "bg-[var(--color-accent)]"}`} ref={styleRef({ width: `${volume.percent}%` })} />
       </div>
       <p className={`text-xs ${full ? "text-amber-300" : "text-white/60"}`}>{usageText(volume)}</p>
     </div>
@@ -698,7 +699,7 @@ export function SynologyPage(): JSX.Element {
       description="Zeigt den Zustand deiner Synology-Geräte: Auslastung, Speicherpools, Volumes, Festplatten, Hyper Backup und ob ein Update bereitsteht. Nur lesend."
       actions={
         <>
-          {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("ghost")}>Einstellungen</a>}
+          {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("secondary")}>Einstellungen</a>}
           <Button onClick={reload} disabled={loading}>Aktualisieren</Button>
         </>
       }

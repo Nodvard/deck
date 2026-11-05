@@ -143,9 +143,10 @@ def test_dockerfile_writes_the_build_args_into_a_file_not_the_environment():
     runtime = text[text.index("AS runtime"):]
     assert re.search(r'^ARG VERSION=""$', runtime, re.MULTILINE)
     assert re.search(r'^ARG IMAGE=""$', runtime, re.MULTILINE)
+    assert re.search(r'^ARG EDITION=""$', runtime, re.MULTILINE)
     run = f"RUN python -m nodvard_deck.image_info {image_info.PATH.as_posix()}"
     assert re.search(rf"^{re.escape(run)}$", runtime, re.MULTILINE)
-    assert runtime.index(run) > runtime.index("ARG IMAGE") > runtime.index("ARG VERSION")
+    assert runtime.index(run) > runtime.index("ARG EDITION") > runtime.index("ARG IMAGE") > runtime.index("ARG VERSION")
     code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
     assert "NODVARD_DECK_IMAGE" not in code and "NODVARD_DECK_BUILD" not in code and "LATTICE_BUILD" not in code
     # Erst nach den Paketen, sonst baut jede neue Version alles neu.
@@ -295,6 +296,58 @@ def test_newest_step_stops_when_git_fails(tmp_path, tags):
     done, output = _run_newest(tmp_path, "0.13.0", tags, git_exit=128)
     assert done.returncode != 0
     assert output == ""
+
+
+def test_kinds_are_read_after_the_tag_guard_and_annotate_only_the_dashboard_image():
+    guard_index, _ = _named("Tag passt zu version.py")
+    kinds_index, kinds = _named("Arten der Änderungen")
+    build_index = next(
+        i for i, s in enumerate(_steps()) if str(s.get("uses", "")).startswith("docker/build-push-action@")
+    )
+    assert guard_index < kinds_index < build_index
+    assert kinds["id"] == "kinds"
+    assert "${{" not in kinds["run"], "VERSION nur über die Umgebung, nie in den Befehl eingesetzt"
+    assert "if" not in kinds and "continue-on-error" not in kinds, "ohne Versionsdatei darf nichts gebaut werden"
+    assert _step("docker/build-push-action")["with"]["annotations"] == "${{ steps.kinds.outputs.annotation }}"
+
+
+def _run_kinds(tmp_path: Path, version: str):
+    import os
+    import shutil
+    import subprocess
+
+    bash = shutil.which("bash")
+    if bash is None or shutil.which("python3") is None:
+        pytest.skip("braucht bash und python3 (wie der Runner von GitHub)")
+    output = tmp_path / "output"
+    output.write_text("", encoding="utf-8")
+    _, step = _named("Arten der Änderungen")
+    env = {**os.environ, "VERSION": version, "GITHUB_OUTPUT": str(output)}
+    done = subprocess.run(
+        [bash, "-e", "-c", step["run"]], cwd=ROOT, env=env, capture_output=True, text=True, check=False,
+    )
+    return done, output.read_text(encoding="utf-8")
+
+
+def test_kinds_step_writes_the_annotation_of_a_released_version(tmp_path):
+    from nodvard_deck.changelog import load_changelog
+
+    release = load_changelog().versions[0]
+    done, output = _run_kinds(tmp_path, release.version)
+    assert done.returncode == 0, done.stderr
+    assert output.startswith("annotation=index:io.nodvard.deck.release.kinds=") and output.endswith("\n")
+
+
+def test_kinds_step_leaves_a_prerelease_without_annotation(tmp_path):
+    done, output = _run_kinds(tmp_path, "9.9.9-rc1")
+    assert done.returncode == 0, done.stderr
+    assert output == "annotation=\n"
+
+
+def test_kinds_step_stops_without_the_changelog_of_the_version(tmp_path):
+    done, output = _run_kinds(tmp_path, "9.9.9")
+    assert done.returncode != 0
+    assert output == "" and "9.9.9.toml fehlt" in done.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -845,10 +898,11 @@ def test_dock_image_is_the_dashboard_dockerfile_with_only_the_docker_module():
     assert dict(line.split("=", 1) for line in args["build-args"].strip().splitlines()) == {
         "VERSION": "${{ env.VERSION }}",
         "IMAGE": "${{ env.DOCK_IMAGE_NAME }}",
+        "EDITION": "dock",
         "NODVARD_DECK_EXTENSIONS": "docker",
     }
     ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
-    assert "--build-arg NODVARD_DECK_EXTENSIONS=docker -t ghcr.io/nodvard/dock:latest" in ci
+    assert "--build-arg NODVARD_DECK_EXTENSIONS=docker --build-arg EDITION=dock -t ghcr.io/nodvard/dock:latest" in ci
 
 
 def test_dock_image_reads_the_dashboard_cache_but_writes_its_own():

@@ -276,7 +276,8 @@ async def _send(message: _Message) -> None:
             await notifications_service.deliver(
                 session, title=title, body=body, severity=severity,
                 correlation_id=f"host-reachability:{target.host_id}",
-                payload=_payload(target.host_id, down=message.kind != "up"),
+                payload={"notification_type": "host.up" if message.kind == "up" else "host.down",
+                         **_payload(target.host_id, down=message.kind != "up")},
             )
     except Exception:  # noqa: BLE001 - eine Meldung darf den Durchlauf nie abbrechen
         logger.exception("reachability_notify_failed host=%s", target.host_id)

@@ -188,7 +188,7 @@ def disk_notification(kind: str, name: str, host_id: str, disk: dict[str, Any], 
     return Notification(
         title=title, body=f"{body}\n{note}" if note else body, severity=severity,
         correlation_id=f"system-warnung:{host_id}:disk:{disk['mount']}",
-        payload={"path": f"{PAGE_PATH}?host={host_id}", "tags": ["floppy_disk" if kind != "recover" else "white_check_mark"], "host_id": host_id},
+        payload={"notification_type": "system.disk", "path": f"{PAGE_PATH}?host={host_id}", "tags": ["floppy_disk" if kind != "recover" else "white_check_mark"], "host_id": host_id},
     )
 
 
@@ -209,7 +209,7 @@ def temp_notification(
     return Notification(
         title=title, body=f"{body}\n{note}" if note else body, severity=severity,
         correlation_id=f"system-warnung:{host_id}:temp:{temp['sensor']}",
-        payload={"path": f"{PAGE_PATH}?host={host_id}", "tags": ["fire" if kind != "recover" else "white_check_mark"], "host_id": host_id},
+        payload={"notification_type": "system.temperature", "path": f"{PAGE_PATH}?host={host_id}", "tags": ["fire" if kind != "recover" else "white_check_mark"], "host_id": host_id},
     )
 
 

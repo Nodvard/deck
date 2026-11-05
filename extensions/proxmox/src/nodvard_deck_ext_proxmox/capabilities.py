@@ -24,6 +24,9 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger("nodvard_deck.ext.proxmox")
 
+# Unter der kürzesten Frist des Sammlers (10 s): Eine hängende Verbindung kostet die übrigen sonst ihre Werte.
+SAMPLE_MANY_TIMEOUT_S = 8.0
+
 _VM_ACTION_SPECS = [
     ActionSpec(
         action_type="vm.start", label="Starten", icon="play",
@@ -445,7 +448,9 @@ class ProxmoxMetricsProvider:
     """Erfüllt `nodvard_sdk.capabilities.MetricsProvider`: eine Momentaufnahme, `sample()` fragt Proxmox bei jedem
     Aufruf frisch ab."""
 
-    _METRIC_NAMES = ["cpu_percent", "mem_used_bytes", "mem_total_bytes", "uptime_s"]
+    _METRIC_NAMES = [
+        "cpu_percent", "mem_used_bytes", "mem_total_bytes", "uptime_s", "root_used_bytes", "root_total_bytes",
+    ]
 
     def __init__(self, ctx: "ExtensionContext") -> None:
         self._ctx = ctx
@@ -461,14 +466,52 @@ class ProxmoxMetricsProvider:
             data = await connector.lxc_status(node, vmid)  # type: ignore[arg-type]
         else:
             data = await connector.qemu_status(node, vmid)  # type: ignore[arg-type]
-        # Knoten melden den RAM als memory.used/total, Gäste als mem/maxmem.
-        memory = data.get("memory") if isinstance(data.get("memory"), dict) else {}
-        return {
-            "cpu_percent": round(float(data.get("cpu") or 0.0) * 100, 1),
-            "mem_used_bytes": float(data.get("mem") or memory.get("used") or 0),
-            "mem_total_bytes": float(data.get("maxmem") or memory.get("total") or 0),
-            "uptime_s": float(data.get("uptime") or 0),
-        }
+        return _sample_values(data, kind)
+
+    async def sample_many(self, hosts: list[SdkHost]) -> dict[str, dict[str, float]]:
+        """Dasselbe wie `sample()` für viele Hosts, mit einer Abfrage von `/cluster/resources` je Verbindung, alle
+        gleichzeitig; ein gestoppter, fehlender oder nicht verbundener Host bekommt `{}`, eine Verbindung ohne Antwort
+        gar nichts."""
+        wanted: dict[str, list[tuple[SdkHost, tuple[str, str]]]] = {}
+        found: dict[str, dict[str, float]] = {}
+        for host in hosts:
+            if host.metadata.get("gone_since"):
+                found[host.id] = {}
+                continue
+            try:
+                connection, kind, node, vmid = _parse_ref(host.provider_ref or "")
+            except IndexError:
+                continue
+            # Gäste über die VMID, die im Cluster eindeutig ist: So findet sich auch ein umgezogener Gast.
+            wanted.setdefault(connection, []).append((host, (kind, node if vmid is None else vmid)))
+        if not wanted:
+            return found
+        connectors = await build_connectors(self._ctx)
+        asked = [(entries, connectors[connection], connection) for connection, entries in wanted.items()
+                 if connection in connectors]
+        answers = await asyncio.gather(*(_cluster_rows(connector, connection) for _, connector, connection in asked))
+        for (entries, _, connection), rows in zip(asked, answers, strict=True):
+            if rows is None:
+                continue
+            by_key: dict[tuple[str, str], dict[str, Any]] = {}
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                kind = row.get("type")
+                if kind == "node" and row.get("node"):
+                    by_key[("node", str(row["node"]))] = row
+                elif kind in ("qemu", "lxc") and row.get("vmid") is not None:
+                    by_key[(kind, str(row["vmid"]))] = row
+            for host, key in entries:
+                row = by_key.get(key) or {}
+                # Ein ausgefallener Knoten meldet nur seinen Status, ein gestoppter Gast lauter Nullen.
+                measured = row.get("status") in ("online", "running") and "cpu" in row and "maxmem" in row
+                try:
+                    found[host.id] = _sample_values(row, key[0]) if measured else {}
+                except (TypeError, ValueError, OverflowError):
+                    _log.info("Proxmox: unlesbare Messwerte für '%s' in der Verbindung '%s'", host.id, connection)
+                    found[host.id] = {}
+        return found
 
     async def metric_names(self) -> list[str]:
         return list(self._METRIC_NAMES)
@@ -482,6 +525,40 @@ class ProxmoxMetricsProvider:
         connector = await _connector_for(self._ctx, connection)
         rows = await connector.rrddata(node, kind, vmid, RRD_TIMEFRAME[range_name])
         return rrd_to_series(rows, RANGE_SECONDS[range_name], now=int(datetime.now(UTC).timestamp()))
+
+
+async def _cluster_rows(connector: ProxmoxConnector, connection: str) -> list[dict[str, Any]] | None:
+    try:
+        rows = await asyncio.wait_for(connector.cluster_resources(), timeout=SAMPLE_MANY_TIMEOUT_S)
+    except (ProxmoxApiError, TimeoutError) as exc:
+        _log.info("Proxmox: Messwerte der Verbindung '%s' nicht lesbar: %s", connection, str(exc) or type(exc).__name__)
+        return None
+    if not isinstance(rows, list):
+        _log.info("Proxmox: Messwerte der Verbindung '%s' nicht lesbar: keine Liste", connection)
+        return None
+    return rows
+
+
+def _sample_values(data: dict[str, Any], kind: str) -> dict[str, float]:
+    # Knoten melden RAM und Wurzel-Dateisystem im Status als memory/rootfs, Gäste und `/cluster/resources` als
+    # mem/maxmem und disk/maxdisk.
+    memory = data.get("memory") if isinstance(data.get("memory"), dict) else {}
+    values = {
+        "cpu_percent": round(float(data.get("cpu") or 0.0) * 100, 1),
+        "mem_used_bytes": float(data.get("mem") or memory.get("used") or 0),
+        "mem_total_bytes": float(data.get("maxmem") or memory.get("total") or 0),
+        "uptime_s": float(data.get("uptime") or 0),
+    }
+    # Bei VMs meldet Proxmox 0 als belegten Platz, das wäre eine falsche Null; ein gestoppter Container ebenso.
+    if kind != "qemu" and data.get("status") != "stopped":
+        rootfs = data.get("rootfs") if isinstance(data.get("rootfs"), dict) else {}
+        used, total = data.get("disk", rootfs.get("used")), data.get("maxdisk", rootfs.get("total"))
+        if isinstance(used, (int, float)) and isinstance(total, (int, float)) and total > 0:
+            values["root_used_bytes"] = float(used)
+            values["root_total_bytes"] = float(total)
+    if any(not math.isfinite(value) or value < 0 for value in values.values()):
+        raise ValueError("Ungültiger Proxmox-Messwert")
+    return values
 
 
 RANGE_SECONDS = {"1h": 3600, "6h": 6 * 3600, "24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400}

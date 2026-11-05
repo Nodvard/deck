@@ -49,6 +49,9 @@ COMMAND_TIMEOUT_S = 20.0
 
 _RUNAS_RE = re.compile(r"\(([^()]*)\)")
 _TAG_RE = re.compile(r"([A-Z_]+):")
+_DIGEST = r"(?:sha224|sha256|sha384|sha512):[0-9A-Za-z+/=]+"
+_DIGEST_RE = re.compile(_DIGEST)
+_DIGESTED_RE = re.compile(rf"({_DIGEST})\s+(\S+)")
 
 
 def _root_commands(line: str) -> list[str] | None:
@@ -71,10 +74,32 @@ def _is_full_rule(line: str) -> bool:
     return _root_commands(line) == ["ALL"]
 
 
-def allows_helper(sudo_lines: Sequence[str], path: str) -> bool:
-    """Ob eine Regel ohne Passwort genau dieses Skript für root erlaubt (`path` als eigener Eintrag der Liste, nicht als
-    Argument eines anderen Befehls)."""
-    return any(path in (_root_commands(line) or []) for line in sudo_lines)
+def _digested(commands: Sequence[str]) -> list[tuple[list[str], str]]:
+    """(Prüfsummen, Befehl) je Eintrag; mehrere Prüfsummen (`sha256:a,sha256:b /pfad`) trennt das Teilen an Kommas."""
+    found: list[tuple[list[str], str]] = []
+    pending: list[str] = []
+    for command in commands:
+        if _DIGEST_RE.fullmatch(command):
+            pending.append(command)
+            continue
+        match = _DIGESTED_RE.fullmatch(command)
+        found.append(([*pending, match.group(1)], match.group(2)) if match else (pending, command))
+        pending = []
+    return found
+
+
+def _fits(digests: Sequence[str], sha256: str | None) -> bool:
+    """Ohne Prüfsumme gilt die Regel für die Datei, mit Prüfsummen nur, wenn eine davon ihre sha256 ist."""
+    return not digests or (sha256 is not None and f"sha256:{sha256.lower()}" in {d.lower() for d in digests})
+
+
+def allows_helper(sudo_lines: Sequence[str], path: str, sha256: str | None = None) -> bool:
+    """Ob eine Regel ohne Passwort genau `path` (als eigenen Eintrag, nicht als Argument) für root erlaubt."""
+    return any(
+        command == path and _fits(digests, sha256)
+        for line in sudo_lines
+        for digests, command in _digested(_root_commands(line) or [])
+    )
 
 
 def has_full_rule(sudo_lines: Sequence[str]) -> bool:

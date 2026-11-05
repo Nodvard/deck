@@ -19,6 +19,18 @@ ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "deploy" / "docker-compose.yml"
 
 
+@pytest.mark.parametrize("filename", ["docker-compose.yml", "compose.standalone.yml", "compose.standalone-mit-helfer.yml"])
+def test_nas_backup_hint_points_to_the_dedicated_guide(filename):
+    text = (ROOT / "deploy" / filename).read_text(encoding="utf-8")
+    hint = '      # docs/16-SICHERUNG.md, Abschnitt "Sicherungen auf ein NAS oder NFS".'
+    intro = "      # NAS oder NFS: den eingehängten Ordner eintragen, Rechte für 1000 und Reihenfolge beim Start siehe"
+    assert text.count(hint) == 1
+    assert intro + "\n" + hint in text
+    assert "docs/11-ERST-EINRICHTUNG.md" not in text
+    guide = (ROOT / "docs" / "16-SICHERUNG.md").read_text(encoding="utf-8")
+    assert "## Sicherungen auf ein NAS oder NFS" in guide
+
+
 def _compose() -> dict:
     yaml = pytest.importorskip("yaml")
     return yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))

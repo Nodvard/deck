@@ -459,7 +459,7 @@ function HomeAssistantPage() {
       title: "Home Assistant",
       description: "Zeigt Version, bereitstehende Updates, nicht verf\xFCgbare Ger\xE4te und ausgew\xE4hlte Werte deines Home Assistant. Nur lesend.",
       actions: /* @__PURE__ */ jsxs3(Fragment2, { children: [
-        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx4("a", { href: SETTINGS_PATH, className: buttonClass("ghost"), children: "Einstellungen" }),
+        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx4("a", { href: SETTINGS_PATH, className: buttonClass("secondary"), children: "Einstellungen" }),
         /* @__PURE__ */ jsx4(Button, { onClick: reload, disabled: loading, children: "Aktualisieren" })
       ] }),
       children: [

@@ -1035,7 +1035,7 @@ async def test_dashboard_restart_mid_restore_is_finished_later_by_the_watch(prox
     assert _pending(tmp_path) == {}
     [note] = executor._ctx.notify.sent
     assert note.title == "Kopie fertig eingerichtet: VM 900 „web-kopie“"
-    assert note.severity.value == "info" and note.payload == {"path": "/ext/backups/backups"}
+    assert note.severity.value == "info" and note.payload == {"notification_type": "backups.restore", "path": "/ext/backups/backups"}
     assert "Netzwerkkarten sind getrennt" in note.body
     assert executor._ctx.audit.entries[-1]["detail"]["followup"] is True
     # Nur die neue Nummer: kein Aufruf auf das Original, kein Loeschen.
@@ -1927,7 +1927,10 @@ def test_a_record_with_oversized_or_odd_fields_is_dropped(change):
     assert restore.CopyTarget.from_record(_record(**change)) is None
 
 
-@pytest.mark.parametrize("created_at", [float("nan"), float("inf"), -float("inf"), time.time() + 10 * 86400, 10**400])
+@pytest.mark.parametrize(
+    "created_at", [float("nan"), float("inf"), -float("inf"), time.time() + 10 * 86400, 10**400],
+    ids=["nan", "positive-infinity", "negative-infinity", "future", "too-large"],
+)
 def test_a_record_needs_a_finite_time_that_is_not_in_the_future(created_at):
     """Eine Zeit in der Zukunft hielte den Vermerk für immer am Leben (die Frist von 24 Stunden liefe nie ab)."""
     restore = _restore_unit()

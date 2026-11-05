@@ -355,7 +355,7 @@ USB-Geräte ohne Zuordnung durchreichen.
 | `Sys.Modify` (auf `/`) | Kachel „Proxmox-Updates“, „Paketlisten aktualisieren“, Backup-Jobs anlegen/ändern, Backup jetzt starten / erneut versuchen bei Jobs mit Bandbreitengrenze oder ionice, bei VMs die Startreihenfolge | Updates-Kachel zeigt HTTP 403, diese Aktionen scheitern |
 | `VM.Console` | Konsole | keine Konsole |
 | `VM.Config.Disk` | Gast-Disks in der Speicher-Übersicht (Nodvard Deck liest nur – Proxmox erlaubt mit dem Recht aber auch Disks vergrößern/verschieben) | diese Liste fehlt |
-| `VM.GuestAgent.Audit` | echte IP-Adressen der VMs | Nodvard Deck trägt die Adresse des Proxmox-Servers als Platzhalter ein; die richtige Adresse dann von Hand setzen ([docs/11](11-ERST-EINRICHTUNG.md#5-server-und-ssh-zugang)) |
+| `VM.GuestAgent.Audit` | echte IP-Adressen der VMs | Nodvard Deck trägt die Adresse des Proxmox-Servers als Platzhalter ein; die richtige Adresse dann von Hand setzen ([docs/11](11-ERST-EINRICHTUNG.md#e3-adresse-korrigieren)) |
 
 Wer Sys.Modify oder die Rechte zum Ändern später nachrüsten will: Rolle ändern reicht,
 Token und Nodvard-Deck-Einstellungen bleiben, z. B.

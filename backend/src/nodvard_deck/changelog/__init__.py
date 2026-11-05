@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -22,7 +22,7 @@ logger = logging.getLogger("nodvard_deck.changelog")
 CHANGELOG_DIR = Path(__file__).resolve().parent
 """Ordner mit `versions/` und `unreleased/`. Tests biegen ihn per monkeypatch um."""
 
-KINDS = ("neu", "verbessert", "behoben", "sicherheit")
+KINDS = ("neu", "verbessert", "behoben", "sicherheit", "dokumentation")
 """Art einer Änderung; die Reihenfolge ist auch die Anzeigereihenfolge."""
 
 MAX_TEXT_LENGTH = 1000
@@ -32,7 +32,10 @@ _VERSION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
-_ENTRY_KEYS = {"kind", "text", "prs"}
+_ENTRY_KEYS = {"kind", "text", "prs", "bereich"}
+_BEREICH_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+with (CHANGELOG_DIR / "editions.toml").open("rb") as handle:
+    EDITION_BEREICHE = {edition: frozenset(areas) for edition, areas in tomllib.load(handle).items()}
 _RELEASE_KEYS = {"version", "date", "title", "entries"}
 _FRAGMENT_KEYS = {"entries"}
 
@@ -46,6 +49,7 @@ class Entry:
     kind: str
     text: str
     prs: tuple[int, ...] = ()
+    bereich: str | None = None
 
 
 @dataclass(frozen=True)
@@ -107,7 +111,10 @@ def parse_entries(data: object) -> tuple[Entry, ...]:
         # bool ist in Python ein int: `prs = [true]` wäre sonst "PR 1".
         if not isinstance(prs, list) or not all(isinstance(n, int) and not isinstance(n, bool) and n > 0 for n in prs):
             raise ChangelogError(f"{where}: prs muss eine Liste positiver Zahlen sein")
-        entries.append(Entry(kind=kind, text=text, prs=tuple(prs)))
+        bereich = raw.get("bereich")
+        if "bereich" in raw and (not isinstance(bereich, str) or not _BEREICH_RE.fullmatch(bereich)):
+            raise ChangelogError(f"{where}: bereich muss eine Modul-Kennung oder ein Bereich wie kern sein")
+        entries.append(Entry(kind=kind, text=text, prs=tuple(prs), bereich=bereich))
     return tuple(entries)
 
 
@@ -182,16 +189,25 @@ def read_fragment(path: Path) -> tuple[Entry, ...]:
 # --- Laden --------------------------------------------------------------------------
 
 
-# Die `parse_*`/`read_*`-Funktionen sind streng (werfen `ChangelogError`, Release-Skript und Tests brauchen das);
-# `load_changelog()` überspringt kaputte Dateien und protokolliert sie, damit ein Tippfehler nie das Dashboard lahmlegt.
-def load_changelog(root: Path | None = None) -> Changelog:
-    """Lädt alle Dateien; ungültige werden übersprungen und protokolliert."""
+def filter_entries(entries: tuple[Entry, ...], edition: str = "deck") -> tuple[Entry, ...]:
+    """Filtert nach den Bereichen der Ausgabe; Einträge ohne Bereich gelten für alle."""
+    areas = EDITION_BEREICHE.get(edition)
+    if areas is None:
+        return entries
+    return tuple(entry for entry in entries if entry.bereich is None or entry.bereich in areas)
+
+
+def load_changelog(root: Path | None = None, *, edition: str = "deck") -> Changelog:
+    """Lädt die Einträge einer Ausgabe; ungültige Dateien werden übersprungen und protokolliert."""
     base = root if root is not None else CHANGELOG_DIR
 
     releases: list[Release] = []
     for path in sorted((base / "versions").glob("*.toml")):
         try:
-            releases.append(read_release(path))
+            release = read_release(path)
+            entries = filter_entries(release.entries, edition)
+            if entries:
+                releases.append(replace(release, entries=entries))
         except ChangelogError as exc:
             logger.warning("Aenderungsprotokoll: Datei wird ignoriert: %s", exc)
     releases.sort(key=lambda r: parse_version(r.version), reverse=True)
@@ -199,7 +215,7 @@ def load_changelog(root: Path | None = None) -> Changelog:
     unreleased: list[Entry] = []
     for path in sorted((base / "unreleased").glob("*.toml")):
         try:
-            unreleased.extend(read_fragment(path))
+            unreleased.extend(filter_entries(read_fragment(path), edition))
         except ChangelogError as exc:
             logger.warning("Aenderungsprotokoll: Datei wird ignoriert: %s", exc)
 
@@ -207,13 +223,13 @@ def load_changelog(root: Path | None = None) -> Changelog:
 
 
 @lru_cache(maxsize=8)
-def _load_cached(root: Path) -> Changelog:
-    return load_changelog(root)
+def _load_cached(root: Path, edition: str) -> Changelog:
+    return load_changelog(root, edition=edition)
 
 
-def get_changelog() -> Changelog:
+def get_changelog(edition: str = "deck") -> Changelog:
     """Wie `load_changelog()`, aber einmal pro Prozess gelesen (die Dateien ändern sich nur mit einem neuen Image)."""
-    return _load_cached(CHANGELOG_DIR)
+    return _load_cached(CHANGELOG_DIR, edition)
 
 
 def clear_cache() -> None:

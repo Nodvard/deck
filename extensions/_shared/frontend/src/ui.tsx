@@ -1,8 +1,8 @@
 /**
- * Gemeinsame Bausteine fuer die Seiten der mitgelieferten Erweiterungen, damit
+ * Gemeinsame Bausteine für die Seiten der mitgelieferten Erweiterungen, damit
  * Inventar, Dokumente, Skripte & Co. genauso aussehen wie der Kern (Einstellungen).
  * Wird von jedem Extension-Bundle per esbuild mit eingebunden -- deshalb bewusst
- * ohne Abhaengigkeiten ausser React (Icons als kleine Inline-SVGs).
+ * ohne Abhängigkeiten außer React (Icons als kleine Inline-SVGs).
  */
 import type { ReactNode } from "react";
 

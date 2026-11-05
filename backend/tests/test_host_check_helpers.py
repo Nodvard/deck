@@ -334,6 +334,28 @@ async def test_helper_rules_alone_are_enough_when_every_module_has_one(client, h
     assert items["helper:fake-b"]["status"] == "ok" and r.json()["ok"] is True
 
 
+@pytest.mark.asyncio
+async def test_a_rule_with_the_checksum_counts_only_for_that_content(
+    client, helper_modules, local_ssh_server, fake_probe,
+):
+    _, port, *_ = local_ssh_server
+    headers = await _owner(client)
+    host_id = await _host_with_login(client, headers, port)
+    fake_probe[host_check.SUDO_COMMAND] = NO_PASSWORDLESS_SUDO
+    pinned = "".join(f"    (root) NOPASSWD: sha256:{h.sha256} {h.install_path}\n" for h in (SHIELD, OTHER))
+    check = helper_check_command([SHIELD, OTHER])
+    fake_probe[check] = (0, _answer(_present(SHIELD), _present(OTHER), sudo_list=pinned), "")
+    items = await _items(client, headers, host_id)
+    assert (items["root"]["status"], items["root"]["detail"]) == ("ok", ENOUGH)
+    assert items["helper:fake-a"]["detail"].endswith("Eigene sudo-Regel vorhanden.")
+
+    # Die Regel gehört zu einem anderen Inhalt: sudo würde das Skript nicht starten.
+    other = pinned.replace(SHIELD.sha256, "1" * 64)
+    fake_probe[check] = (0, _answer(_present(SHIELD), _present(OTHER), sudo_list=other), "")
+    items = await _items(client, headers, host_id)
+    assert (items["root"]["status"], items["root"]["detail"]) == ("warn", f"{NOT_ENOUGH}Modul fake-a.")
+
+
 ANY_VERSION = dataclasses.replace(SHIELD, calls_any_version=True)
 
 

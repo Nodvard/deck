@@ -25,8 +25,10 @@ def _no_release(_url: httpx.URL) -> httpx.Response:
 
 def _registry(tags_pages: list[list[str]], *, token_status: int = 200, tags_status: int = 200, manifest: bytes | None = b'{"schemaVersion":2}',
               next_links: list[str | None] | None = None, calls: list[httpx.Request] | None = None,
-              release=_no_release):
+              manifests: dict[str, bytes] | None = None,
+              repository: str = "nodvard/deck", release=_no_release):
     """Attrappe für ghcr.io: Token, Tag-Seiten (Link-Header), Manifest; Dateien am Release beantwortet `release`."""
+    tags_path = f"/v2/{repository}/tags/list"
 
     def handler(request: httpx.Request) -> httpx.Response:
         if calls is not None:
@@ -37,25 +39,31 @@ def _registry(tags_pages: list[list[str]], *, token_status: int = 200, tags_stat
         if url.host != "ghcr.io":
             raise AssertionError(f"fremder Host: {url}")
         if url.path == "/token":
-            assert url.params["scope"] == "repository:nodvard/deck:pull"
+            assert url.params["scope"] == f"repository:{repository}:pull"
             assert url.params["service"] == "ghcr.io"
             if token_status != 200:
                 return httpx.Response(token_status, json={"errors": []})
             return httpx.Response(200, json={"token": "anon-token"})
         assert request.headers.get("authorization") == "Bearer anon-token"
-        if url.path == TAGS_PATH:
+        if url.path == tags_path:
             if tags_status != 200:
                 return httpx.Response(tags_status, text="kaputt")
             page = int(url.params.get("page", "0"))
             headers = {}
             links = next_links if next_links is not None else [
-                f'<{TAGS_PATH}?n=100&last=x&page={i + 1}>; rel="next"' if i + 1 < len(tags_pages) else None for i in range(len(tags_pages))
+                f'<{tags_path}?n=100&last=x&page={i + 1}>; rel="next"' if i + 1 < len(tags_pages) else None for i in range(len(tags_pages))
             ]
             if links[page]:
                 headers["Link"] = links[page]
-            return httpx.Response(200, json={"name": "nodvard/deck", "tags": tags_pages[page]}, headers=headers)
-        if url.path.startswith("/v2/nodvard/deck/manifests/"):
+            return httpx.Response(200, json={"name": repository, "tags": tags_pages[page]}, headers=headers)
+        if url.path.startswith(f"/v2/{repository}/manifests/"):
             assert "application/vnd.oci.image.index.v1+json" in request.headers["accept"]
+            if manifests is not None:
+                body = manifests.get(url.path.rsplit("/", 1)[-1])
+                if body is None:
+                    return httpx.Response(404)
+                index_type = {"Content-Type": "application/vnd.oci.image.index.v1+json"}
+                return httpx.Response(200, content=body, headers=index_type)
             if manifest is None:
                 return httpx.Response(404)
             return httpx.Response(200, content=manifest, headers={"Content-Type": "application/vnd.oci.image.index.v1+json"})
@@ -131,6 +139,12 @@ def test_official_image_only_for_the_exact_repository():
         assert not updates.is_official_image(other), other
 
 
+def test_official_image_belongs_to_the_edition():
+    assert updates.is_official_image("ghcr.io/nodvard/dock", "nodvard/dock")
+    assert not updates.is_official_image("ghcr.io/nodvard/dock")
+    assert not updates.is_official_image("ghcr.io/nodvard/deck", "nodvard/dock")
+
+
 # ---------------------------------------------------------------------------
 # Live-Abfrage
 # ---------------------------------------------------------------------------
@@ -150,14 +164,28 @@ async def test_live_check_uses_anonymous_token_and_finds_the_newest_version(tmp_
     assert result["helper"] is False
     assert result["checked_at"]
     assert result["release_notes_url"] == "https://github.com/nodvard/deck/blob/v0.6.0/CHANGELOG.md"
-    import hashlib
-
     assert result["latest_digest"] == "sha256:" + hashlib.sha256(b'{"schemaVersion":2}').hexdigest()
     assert calls[0].url.path == "/token"
     assert calls[1].url.path == TAGS_PATH and calls[1].url.params["n"] == "100"
-    assert calls[2].url.path == "/v2/nodvard/deck/manifests/0.6.0"
-    assert [c.url.path for c in calls[3:]] == ["/nodvard/deck/releases/download/v0.6.0/freigabe.json"]
+    assert calls[2].url.path == "/v2/nodvard/deck/manifests/0.6.0", "die neueste zuerst, für den Digest"
+    assert [c.url.path for c in calls[3:]] == [
+        "/nodvard/deck/releases/download/v0.6.0/freigabe.json", "/v2/nodvard/deck/manifests/0.5.0",
+    ]
     assert result["approved"] is False and result["approved_key"] is None
+
+
+@pytest.mark.asyncio
+async def test_dock_searches_its_own_image(tmp_path):
+    calls: list[httpx.Request] = []
+    transport = _registry([["0.5.0", "0.6.0"]], calls=calls, repository="nodvard/dock")
+    result = await updates.check(
+        tmp_path, channel="stable", image="ghcr.io/nodvard/dock", current="0.5.0", repository="nodvard/dock", transport=transport,
+    )
+    assert result["source"] == "live" and result["latest"] == "0.6.0" and result["latest_digest"]
+    assert result["official_image"] is True and result["official_image_name"] == "ghcr.io/nodvard/dock"
+    assert result["release_notes_url"] == "https://github.com/nodvard/deck/blob/v0.6.0/CHANGELOG.md"
+    assert [c.url.path for c in calls] == ["/token", "/v2/nodvard/dock/tags/list", "/v2/nodvard/dock/manifests/0.6.0",
+                                           "/v2/nodvard/dock/manifests/0.5.0"]
 
 
 @pytest.mark.asyncio
@@ -433,6 +461,15 @@ async def test_cache_of_another_channel_is_not_used(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_cache_of_another_image_is_not_used(tmp_path):
+    await _check(tmp_path, _registry([["0.6.0"]]))
+    cached = updates.status(tmp_path, channel="stable", image=None, current="0.5.0", repository="nodvard/dock")
+    assert cached["latest"] is None and cached["checked_at"] is None
+    await _check(tmp_path, _registry([["0.6.0"]], tags_status=503))
+    assert updates.status(tmp_path, channel="stable", image=None, current="0.5.0", repository="nodvard/dock")["error"] is None
+
+
+@pytest.mark.asyncio
 async def test_failure_of_another_channel_is_not_shown(tmp_path):
     """Stabil gescheitert, dann auf Beta umgestellt: fuer Beta wurde noch nie geprueft -- kein "offline"."""
     await _check(tmp_path, _registry([["0.6.0"]]))
@@ -614,8 +651,8 @@ def test_check_lock_is_one_slot_per_loop_and_does_not_keep_old_loops_alive():
 
 
 class _Settings:
-    def __init__(self, image=None, build=None, image_info_path=None):
-        self.image, self.build, self.image_info_path = image, build, image_info_path
+    def __init__(self, image=None, build=None, image_info_path=None, edition=None):
+        self.image, self.build, self.image_info_path, self.edition = image, build, image_info_path, edition
 
 
 def test_running_version_of_the_official_image_comes_from_the_file(tmp_path):
@@ -635,6 +672,14 @@ def test_running_version_of_the_official_image_comes_from_the_file(tmp_path):
     assert updates.running_version(_Settings(updates.OFFICIAL_IMAGE, "0.6.0", info)) == "0.6.0"
 
 
+def test_running_version_of_dock_comes_from_the_file_only_for_its_own_image(tmp_path):
+    info = tmp_path / "image-info.json"
+    info.write_text(json.dumps({"version": "0.6.0-rc2"}), encoding="utf-8")
+    assert updates.running_version(_Settings("ghcr.io/nodvard/dock", None, info, "dock")) == "0.6.0-rc2"
+    assert updates.running_version(_Settings(updates.OFFICIAL_IMAGE, None, info, "dock")) == updates.__version__
+    assert updates.running_version(_Settings("ghcr.io/nodvard/dock", None, info)) == updates.__version__
+
+
 @pytest.mark.parametrize("image", [None, "", "nodvard-deck", "ghcr.io/fremd/deck"])
 def test_running_version_of_other_images_is_the_code_version(tmp_path, image):
     info = tmp_path / "image-info.json"
@@ -649,11 +694,186 @@ async def test_unwritable_data_dir_does_not_raise(tmp_path):
     assert result["source"] == "live" and result["latest"] == "0.6.0"
 
 
-def test_repository_is_one_constant():
+def test_repository_is_one_constant_and_matches_the_edition_table():
     import inspect
 
+    from nodvard_deck import edition
+
     source = inspect.getsource(updates)
-    assert source.count('"nodvard/deck"') == 1
+    assert source.count('"nodvard/deck"') == 1 and '"nodvard/dock"' not in source
+    assert updates.REPOSITORY == edition.DECK.repository
+
+
+# ---------------------------------------------------------------------------
+# Arten der Änderungen (Annotation am Image-Index)
+# ---------------------------------------------------------------------------
+
+
+def _index(kinds: str | None) -> bytes:
+    body: dict = {"schemaVersion": 2, "manifests": []}
+    if kinds is not None:
+        body["annotations"] = {updates.KINDS_ANNOTATION: kinds}
+    return json.dumps(body).encode()
+
+
+def test_documentation_is_a_known_update_kind():
+    assert updates.kinds_of(_index("dokumentation")) == (["dokumentation"], True)
+
+
+def _manifest_calls(calls: list[httpx.Request]) -> list[str]:
+    return [c.url.path.rsplit("/", 1)[-1] for c in calls if "/manifests/" in c.url.path]
+
+
+@pytest.mark.asyncio
+async def test_kinds_of_all_versions_since_the_running_one_are_collected(tmp_path):
+    calls: list[httpx.Request] = []
+    manifests = {"0.6.0": _index("neu,behoben"), "0.5.1": _index("sicherheit"), "0.5.0": _index("neu")}
+    result = await _check(tmp_path, _registry([["0.5.0", "0.5.1", "0.6.0"]], calls=calls, manifests=manifests))
+    assert result["kinds"] == ["sicherheit", "behoben", "neu"] and result["kinds_complete"] is True
+    assert _manifest_calls(calls) == ["0.6.0", "0.5.1", "0.5.0"]
+    assert result["latest_digest"] == "sha256:" + hashlib.sha256(manifests["0.6.0"]).hexdigest()
+    assert updates.status(tmp_path, channel="stable", image=None, current="0.5.0")["kinds"] == result["kinds"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("more_pages", [True, False], ids=["abgeschnitten", "vollständig"])
+async def test_kinds_at_the_tag_page_limit(tmp_path, more_pages):
+    tags = ["0.10.0"] + [f"0.10.0-rc{i}" for i in range(1, 1000)]
+    pages = [tags[i:i + 100] for i in range(0, len(tags), 100)]
+    if more_pages:
+        pages.append(["0.9.0"])
+    manifests = {"0.10.0": _index("behoben"), "0.9.0": _index("sicherheit")}
+    calls: list[httpx.Request] = []
+    result = await _check(tmp_path, _registry(pages, calls=calls, manifests=manifests), current="0.8.0")
+    assert result["source"] == "live" and result["latest"] == "0.10.0"
+    assert result["latest_digest"] == "sha256:" + hashlib.sha256(manifests["0.10.0"]).hexdigest()
+    assert len([c for c in calls if c.url.path == TAGS_PATH]) == 10
+    assert _manifest_calls(calls) == ["0.10.0"]
+    for view in (result, updates.status(tmp_path, channel="stable", image=None, current="0.8.0")):
+        assert view["kinds"] == ["behoben"]
+        assert view["kinds_complete"] is (not more_pages)
+
+
+@pytest.mark.asyncio
+async def test_a_version_without_kinds_makes_them_incomplete(tmp_path):
+    manifests = {"0.6.0": _index("behoben"), "0.5.1": _index(None)}
+    result = await _check(tmp_path, _registry([["0.5.0", "0.5.1", "0.6.0"]], manifests=manifests))
+    assert result["kinds"] == ["behoben"] and result["kinds_complete"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_missing_manifest_makes_the_kinds_incomplete_and_keeps_the_digest_empty(tmp_path):
+    result = await _check(tmp_path, _registry([["0.5.0", "0.6.0"]], manifests={}))
+    assert result["available"] is True and result["latest_digest"] is None
+    assert result["kinds"] == [] and result["kinds_complete"] is False
+
+
+@pytest.mark.asyncio
+async def test_at_most_ten_versions_are_asked_the_rest_stays_unknown(tmp_path):
+    tags = ["0.5.0"] + [f"0.5.{i}" for i in range(1, 13)]
+    manifests = {tag: _index("behoben") for tag in tags}
+    calls: list[httpx.Request] = []
+    result = await _check(tmp_path, _registry([tags], calls=calls, manifests=manifests))
+    assert _manifest_calls(calls) == [f"0.5.{i}" for i in range(12, 2, -1)]
+    assert result["kinds"] == ["behoben"] and result["kinds_complete"] is False
+
+
+@pytest.mark.asyncio
+async def test_without_an_update_there_are_no_kinds(tmp_path):
+    manifests = {"0.5.0": _index("sicherheit"), "0.4.0": _index("neu")}
+    result = await _check(tmp_path, _registry([["0.4.0", "0.5.0"]], manifests=manifests), current="0.5.0")
+    assert result["available"] is False and result["kinds"] == [] and result["kinds_complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_the_registry_cannot_tell_the_running_version_from_the_requests(tmp_path):
+    tags = [["0.4.0", "0.5.0", "0.5.1", "0.6.0"]]
+    manifests = {tag: _index("behoben") for tag in tags[0]}
+    asked = []
+    for current in ("0.4.0", "0.5.0", "0.5.1", "0.6.0"):
+        calls: list[httpx.Request] = []
+        (tmp_path / current).mkdir()
+        await _check(tmp_path / current, _registry(tags, calls=calls, manifests=manifests), current=current)
+        asked.append([(c.method, str(c.url), c.headers.get("user-agent")) for c in calls])
+    assert all(requests == asked[0] for requests in asked)
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_kind_shows_the_known_ones_but_counts_as_incomplete(tmp_path):
+    manifests = {"0.6.0": _index("sicherheit,kritisch")}
+    result = await _check(tmp_path, _registry([["0.5.0", "0.6.0"]], manifests=manifests))
+    assert result["kinds"] == ["sicherheit"] and result["kinds_complete"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_slow_manifest_leaves_the_kinds_incomplete_and_keeps_the_digest(tmp_path, monkeypatch):
+    monkeypatch.setattr(updates, "TOTAL_TIMEOUT_S", 0.3)
+    latest = _index("behoben")
+    digest = "sha256:" + hashlib.sha256(latest).hexdigest()
+    registry = _registry(
+        [["0.5.0", "0.5.1", "0.6.0"]], manifests={"0.6.0": latest},
+        release=_release(_files(_grant(digest=digest))),
+    )
+
+    async def slow_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/0.5.1"):
+            await asyncio.sleep(5)
+        return registry.handler(request)
+
+    started = time.monotonic()
+    result = await _check(tmp_path, httpx.MockTransport(slow_handler))
+    assert time.monotonic() - started < 2
+    assert result["latest_digest"] == digest
+    assert result["approved"] is True
+    assert result["kinds"] == ["behoben"] and result["kinds_complete"] is False
+
+
+@pytest.mark.asyncio
+async def test_stable_skips_prereleases_beta_asks_them_too(tmp_path):
+    manifests = {"0.6.0": _index("neu"), "0.6.0-rc1": _index("sicherheit")}
+    tags = [["0.5.0", "0.6.0-rc1", "0.6.0"]]
+    stable = await _check(tmp_path / "s", _registry(tags, manifests=manifests))
+    beta = await _check(tmp_path / "b", _registry(tags, manifests=manifests), channel="beta")
+    assert stable["kinds"] == ["neu"] and stable["kinds_complete"] is True
+    assert beta["kinds"] == ["sicherheit", "neu"] and beta["kinds_complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_beta_with_a_prerelease_as_latest_still_collects_kinds(tmp_path):
+    manifests = {"0.6.0-rc2": _index("behoben"), "0.6.0-rc1": _index("sicherheit")}
+    result = await _check(tmp_path, _registry([["0.5.0", "0.6.0-rc1", "0.6.0-rc2"]], manifests=manifests),
+                          channel="beta")
+    assert result["latest"] == "0.6.0-rc2"
+    assert result["kinds"] == ["sicherheit", "behoben"] and result["kinds_complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_kinds_found_for_another_running_version_are_unknown(tmp_path):
+    manifests = {"0.6.0": _index("neu"), "0.5.1": _index("neu")}
+    await _check(tmp_path, _registry([["0.5.0", "0.5.1", "0.6.0"]], manifests=manifests))
+    after_update = updates.status(tmp_path, channel="stable", image=None, current="0.5.1")
+    assert after_update["available"] is True
+    assert after_update["kinds"] == [] and after_update["kinds_complete"] is False
+
+
+def test_a_cache_without_kinds_counts_as_unknown(tmp_path):
+    updates.save_cache(tmp_path, {"channel": "stable", "latest": "0.6.0", "checked_at": "2026-10-28T10:00:00+00:00"})
+    result = updates.status(tmp_path, channel="stable", image=None, current="0.5.0")
+    assert result["available"] is True and result["kinds"] == [] and result["kinds_complete"] is False
+
+
+@pytest.mark.parametrize(("body", "kinds"), [
+    (_index("sicherheit, behoben"), (["sicherheit", "behoben"], True)),
+    (_index("neu,wartung"), (["neu"], False)),
+    (_index(""), ([], False)),
+    (_index(None), None),
+    (b"kein json", None),
+    (b"[" * 100_000 + b"]" * 100_000, None),
+    (json.dumps({"annotations": {updates.KINDS_ANNOTATION: ["neu"]}}).encode(), None),
+    (json.dumps({"annotations": "neu"}).encode(), None),
+], ids=["zwei", "unbekannte-art", "leer", "ohne", "kaputt", "zu-tief", "liste", "keine-tabelle"])
+def test_kinds_are_read_only_from_a_text_annotation(body, kinds):
+    assert updates.kinds_of(body) == kinds
 
 
 # ---------------------------------------------------------------------------
@@ -688,6 +908,41 @@ def _release(files: dict[str, bytes], *, via: str | None = "release-assets.githu
 
 def _files(grant: dict | None = None, sig: str = SIG + "\n") -> dict[str, bytes]:
     return {"freigabe.json": json.dumps(grant or _grant()).encode(), "freigabe.json.sig": sig.encode()}
+
+
+@pytest.mark.asyncio
+async def test_kinds_and_grant_are_kept_together_in_the_cache(tmp_path):
+    manifests = {"0.6.0": _index("neu"), "0.5.1": _index("sicherheit"), "0.5.0": _index("behoben")}
+    digest = "sha256:" + hashlib.sha256(manifests["0.6.0"]).hexdigest()
+    grant = _grant(digest=digest)
+    result = await _check(tmp_path, _registry(
+        [["0.5.0", "0.5.1", "0.6.0"]], manifests=manifests, release=_release(_files(grant)),
+    ))
+    for view in (result, updates.status(tmp_path, channel="stable", image=None, current="0.5.0")):
+        assert view["kinds"] == ["sicherheit", "neu"] and view["kinds_complete"] is True
+        assert view["approved"] is True and view["approved_key"] == KEY_ID
+        assert view["latest_digest"] == digest
+    assert updates.cached_grant(tmp_path, channel="stable", version="0.6.0", digest=digest) == {
+        "grant": grant, "sig": SIG,
+    }
+
+
+@pytest.mark.asyncio
+async def test_dock_collects_its_own_kinds_without_a_grant(tmp_path):
+    calls: list[httpx.Request] = []
+    manifests = {"0.6.0": _index("behoben"), "0.5.1": _index("sicherheit")}
+    result = await updates.check(
+        tmp_path, channel="stable", image="ghcr.io/nodvard/dock", current="0.5.0", repository="nodvard/dock",
+        transport=_registry([["0.5.1", "0.6.0"]], repository="nodvard/dock", manifests=manifests, calls=calls),
+    )
+    assert result["source"] == "live" and result["official_image"] is True
+    assert result["kinds"] == ["sicherheit", "behoben"] and result["kinds_complete"] is True
+    assert result["approved"] is False and result["approved_key"] is None
+    assert [c.url.path for c in calls] == [
+        "/token", "/v2/nodvard/dock/tags/list",
+        "/v2/nodvard/dock/manifests/0.6.0", "/v2/nodvard/dock/manifests/0.5.1",
+    ]
+    assert updates.status(tmp_path, channel="stable", image=None, current="0.5.0")["kinds"] == []
 
 
 @pytest.mark.asyncio
@@ -777,6 +1032,18 @@ async def test_endless_redirects_stop(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_other_editions_ask_for_no_grant(tmp_path):
+    calls: list[httpx.Request] = []
+    transport = _registry([["0.6.0"]], calls=calls, repository="nodvard/dock", release=_release(_files()))
+    result = await updates.check(
+        tmp_path, channel="stable", image="ghcr.io/nodvard/dock", current="0.5.0", repository="nodvard/dock", transport=transport,
+    )
+    assert result["latest"] == "0.6.0" and result["approved"] is False
+    assert {c.url.host for c in calls} == {"ghcr.io"}
+    assert updates.cached_grant(tmp_path, channel="stable", version="0.6.0", digest=MANIFEST_DIGEST) is None
+
+
+@pytest.mark.asyncio
 async def test_a_prerelease_never_counts_as_approved(tmp_path):
     files = _files(_grant(version="0.6.1-rc1"))
     result = await _check(tmp_path, _registry([["0.6.0", "0.6.1-rc1"]], release=_release(files)), channel="beta")
@@ -798,6 +1065,20 @@ async def test_a_failed_fetch_keeps_the_approval_already_found_a_missing_one_dro
     assert (await _check(tmp_path, _registry([["0.6.0"]], release=_no_release)))["approved"] is False
 
 
+@pytest.mark.asyncio
+async def test_a_grant_counts_only_after_a_search_for_deck(tmp_path):
+    updates.save_cache(tmp_path, {"channel": "stable", "repository": "nodvard/dock", "latest": "0.6.0", "latest_digest": MANIFEST_DIGEST,
+                                  "grant": {"grant": _grant(), "sig": SIG}})
+    assert updates.cached_grant(tmp_path, channel="stable", version="0.6.0", digest=MANIFEST_DIGEST) is None
+    dock = updates.status(tmp_path, channel="stable", image="ghcr.io/nodvard/dock", current="0.5.0", repository="nodvard/dock")
+    assert dock["latest"] == "0.6.0" and dock["approved"] is False
+
+    def broken(url: httpx.URL) -> httpx.Response:
+        raise httpx.ConnectError("github.com nicht erreichbar")
+
+    assert (await _check(tmp_path, _registry([["0.6.0"]], release=broken)))["approved"] is False
+
+
 def test_the_cached_grant_belongs_to_channel_version_and_digest(tmp_path):
     updates.save_cache(tmp_path, {"channel": "stable", "latest": "0.6.0", "latest_digest": MANIFEST_DIGEST,
                                   "grant": {"grant": _grant(), "sig": SIG}})
@@ -807,4 +1088,3 @@ def test_the_cached_grant_belongs_to_channel_version_and_digest(tmp_path):
     assert updates.cached_grant(tmp_path, channel="stable", version="0.6.0", digest="sha256:" + "5e" * 64) is None
     assert updates.cached_grant(tmp_path, channel="stable", version="0.6.0", digest=None) is None
     assert updates.status(tmp_path, channel="stable", image=None, current="0.5.0")["approved"] is True
-

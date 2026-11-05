@@ -153,7 +153,8 @@ def test_a_trailing_newline_in_a_watched_file_is_dropped():
 
 
 def _routing_world(
-    tmp_path: Path, *, helper_version: int | None, full_rule: bool, installed: bool = True, extra: str = ""
+    tmp_path: Path, *, helper_version: int | None, full_rule: bool, installed: bool = True, extra: str = "",
+    uid: int = 1000,
 ):
     """`sudo` als Attrappe: erlaubt das Hilfsskript (mit `helper_version`) und, bei `full_rule`, `true` und `sh -c`.
     Als mitgeliefert gilt die Kopie mit Version 2 (`HELPER_BUNDLED`); jede andere Version oder `extra` ist ein anderer
@@ -162,7 +163,7 @@ def _routing_world(
     bin_dir.mkdir()
     log = tmp_path / "calls.log"
     log.write_text("")
-    _stub(bin_dir / "id", 'if [ "$1" = -u ]; then echo 1000; else exec /usr/bin/id "$@"; fi\n')
+    _stub(bin_dir / "id", f'if [ "$1" = -u ]; then echo {uid}; else exec /usr/bin/id "$@"; fi\n')
     _av().HELPER_BUNDLED = (2, hashlib.sha256(_copy_text(bin_dir, 2).encode("ascii")).hexdigest())
     helper = _helper_copy(tmp_path, bin_dir, version=helper_version or 2, installed=installed, extra=extra)
     allowed = "1" if helper_version is not None else ""
@@ -253,6 +254,84 @@ def test_an_unreadable_helper_gets_its_own_marker_and_message(tmp_path):
     assert done.stdout.splitlines() == [av.NO_ROOT, av.NO_ROOT_HELPER_UNREADABLE]
     assert av.no_root_message(done.stdout).startswith("Das Hilfsskript auf dem Server lässt sich nicht lesen,")
     assert not any(av.HELPER in c for c in log.read_text().splitlines())
+
+
+def test_helper_only_and_the_old_command_do_not_mix():
+    av = _av()
+    with pytest.raises(ValueError):
+        av.via_helper(["version"], "echo alt", version=2, helper_only=True)
+    with pytest.raises(ValueError):
+        av.via_helper(["version"], None, version=2)
+
+
+def test_helper_only_needs_a_shipped_helper_that_can_do_it(monkeypatch):
+    av = _av()
+    monkeypatch.setattr(av, "HELPER_BUNDLED", (2, "0" * 64))
+    with pytest.raises(ValueError, match="mitgelieferte Hilfsskript"):
+        av.via_helper(["version"], None, version=3, helper_only=True)
+    monkeypatch.setattr(av, "HELPER_BUNDLED", None)
+    with pytest.raises(ValueError, match="mitgelieferte Hilfsskript"):
+        av.via_helper(["version"], None, version=2, helper_only=True)
+
+
+def test_helper_only_has_no_old_way_in_the_command():
+    av = _av()
+    cmd = av.via_helper(["ban", "203.0.113.9", "my jail"], None, version=2, helper_only=True)
+    assert "sh -c" not in cmd and "sudo -n true" not in cmd
+    assert f"sudo -n {av.HELPER} ban 203.0.113.9 'my jail';" in cmd
+
+
+@needs_sh
+@pytest.mark.parametrize("uid", [1000, 0], ids=["benutzer", "root"])
+def test_helper_only_runs_the_shipped_helper(tmp_path, uid):
+    av = _av()
+    bin_dir, log = _routing_world(tmp_path, helper_version=2, full_rule=True, uid=uid)
+    done = _sh(av.via_helper(["version"], None, version=2, helper_only=True), bin_dir)
+    assert (done.returncode, done.stdout) == (0, "2\n")
+    sudo = [] if uid == 0 else [f"sudo -n {av.HELPER} version"] * 2
+    assert log.read_text().splitlines() == sudo
+
+
+@needs_sh
+@pytest.mark.parametrize("uid", [1000, 0], ids=["benutzer", "root"])
+@pytest.mark.parametrize(
+    ("helper_version", "installed", "extra"),
+    [(1, True, ""), (3, True, ""), (2, True, 'touch "$0.lief"'), (2, False, "")],
+    ids=["alt", "neuer", "veraendert", "nicht-ausfuehrbar"],
+)
+def test_helper_only_never_takes_the_old_way(tmp_path, uid, helper_version, installed, extra):
+    av = _av()
+    bin_dir, log = _routing_world(
+        tmp_path, helper_version=helper_version, full_rule=True, installed=installed, extra=extra, uid=uid
+    )
+    done = _sh(av.via_helper(["version"], None, version=2, helper_only=True), bin_dir)
+    assert done.returncode == 126 and done.stdout.splitlines()[0] == av.NO_ROOT
+    assert av.no_root_message(done.stdout).startswith("Das Hilfsskript auf dem Server ")
+    assert log.read_text() == ""
+    assert not Path(f"{av.HELPER}.lief").exists()
+
+
+@needs_sh
+@pytest.mark.parametrize("uid", [1000, 0], ids=["benutzer", "root"])
+def test_helper_only_names_a_missing_helper(tmp_path, uid):
+    av = _av()
+    bin_dir, log = _routing_world(tmp_path, helper_version=2, full_rule=True, uid=uid)
+    Path(av.HELPER).unlink()
+    done = _sh(av.via_helper(["version"], None, version=2, helper_only=True), bin_dir)
+    assert (done.returncode, done.stdout.splitlines()) == (126, [av.NO_ROOT, av.NO_ROOT_HELPER_MISSING])
+    assert av.no_root_message(done.stdout) == av.HELPER_MISSING_MESSAGE
+    assert len(av.HELPER_MISSING_MESSAGE) <= 200
+    assert log.read_text() == ""
+
+
+@needs_sh
+def test_helper_only_without_sudo_for_the_helper_says_no_root(tmp_path):
+    av = _av()
+    bin_dir, log = _routing_world(tmp_path, helper_version=None, full_rule=False)
+    done = _sh(av.via_helper(["version"], None, version=2, helper_only=True), bin_dir)
+    assert (done.returncode, done.stdout.splitlines()) == (126, [av.NO_ROOT])
+    assert av.no_root_message(done.stdout) == av.NO_ROOT_MESSAGE
+    assert log.read_text().splitlines() == [f"sudo -n {av.HELPER} version"]
 
 
 def test_the_message_believes_only_a_plain_version_number():

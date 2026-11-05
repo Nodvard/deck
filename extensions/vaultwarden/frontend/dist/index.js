@@ -338,8 +338,8 @@ function VaultwardenPage() {
       title: "Vaultwarden",
       description: "Dein Passwort-Manager. Die Bitwarden-Apps sprechen direkt mit Vaultwarden.",
       actions: /* @__PURE__ */ jsxs2(Fragment2, { children: [
-        webVault && /* @__PURE__ */ jsx3("a", { href: `${webVault}/`, target: "_blank", rel: "noreferrer", className: buttonClass("ghost"), children: "Web-Tresor \xF6ffnen" }),
-        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx3("a", { href: SETTINGS_PATH, className: buttonClass("ghost"), children: "Einstellungen" }),
+        webVault && /* @__PURE__ */ jsx3("a", { href: `${webVault}/`, target: "_blank", rel: "noreferrer", className: buttonClass("secondary"), children: "Web-Tresor \xF6ffnen" }),
+        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx3("a", { href: SETTINGS_PATH, className: buttonClass("secondary"), children: "Einstellungen" }),
         /* @__PURE__ */ jsx3(Button, { onClick: load, children: "Aktualisieren" })
       ] }),
       children: [

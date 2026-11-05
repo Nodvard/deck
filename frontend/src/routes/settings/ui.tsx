@@ -1,6 +1,6 @@
 /**
- * Bausteine fuer alle Einstellungs-Bereiche, damit jede Unterseite gleich aussieht:
- * Kopfzeile, Karten mit Titel/Beschreibung, Formularfelder und Rueckmeldungen.
+ * Bausteine für alle Einstellungs-Bereiche, damit jede Unterseite gleich aussieht:
+ * Kopfzeile, Karten mit Titel/Beschreibung, Formularfelder und Rückmeldungen.
  */
 import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -108,8 +108,8 @@ export function Badge({ children, tone = "neutral" }: { children: ReactNode; ton
 
 /**
  * Zustand einer Erweiterung aus models/platform.py (enabled | disabled | error |
- * incompatible | uninstalling). "failed" bleibt als alter Name fuer "error" erhalten.
- * Frueher stand alles ausser "enabled" als "Aus" da, auch eine abgestuerzte
+ * incompatible | uninstalling). "failed" bleibt als alter Name für "error" erhalten.
+ * Früher stand alles außer "enabled" als "Aus" da, auch eine abgestürzte
  * Erweiterung.
  */
 export function ExtensionStateBadge({ state }: { state: string }) {

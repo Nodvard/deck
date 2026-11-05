@@ -10,6 +10,58 @@ shown inside Nodvard Deck under *Settings → About Nodvard Deck*. This file is 
 
 ## [Unreleased]
 
+## [0.13.0] – 2026-11-05
+
+Docker expansion, a phone-friendly interface and stricter security. Nodvard Dock ships as its own Docker-only edition.
+
+### Upgrade notes
+
+- Run the server setup command once more on every server: sudo now starts the Nodvard Deck helper scripts only in
+  the exact version that arrived during setup (not with sudo-rs, the default from Ubuntu 25.10). Servers keep working
+  until then.
+- Log in again if you updated from a version before 0.6.2 or did not reload Deck since: the browser login now uses only
+  the Nodvard Deck cookie.
+- Git servers on your own network (for example Gitea): enable "Git-Server im eigenen Netz erlauben" in the Docker
+  module settings under "Erweitert". Behind a proxy, Deck fetches from numeric addresses only; add named Git servers to
+  `NO_PROXY`.
+- Old variable names in `deploy/.env`: `deploy_pi.sh` renames `LATTICE_*` to `NODVARD_DECK_*` on the target host
+  and keeps a copy of the file. Rename them yourself if you deploy by hand.
+
+### Added
+
+- Docker: create networks and connect or disconnect containers, pull images by name and tag, save your own stack
+  templates, scheduled checks for new commits in Git-backed stacks.
+- Updates: a found security update is reported once in red and as a push message; the owner can approve automatic
+  security updates with password and second factor; each new version shows what kind of changes it brings.
+- Push messages about security updates can be switched on or off per kind and get their own priority.
+
+### Security
+
+- Stricter content security policy for the web interface; uploaded SVG logos keep their colours, oversized or overly
+  styled logos are rejected with a clear message.
+- Helper scripts are pinned by checksum in the sudo rule; the Shield helper is shipped with the setup again.
+- Git-backed stacks resolve the server name first and connect only to that address; the plain-HTTP warning also appears
+  behind a local proxy; responses with credentials are no longer cacheable; changed secrets apply at once in all modules.
+
+### Fixed
+
+- Phone layout: Docker, Shield, inventory, game servers, messages, actions, files and the overview show cards instead of
+  cut-off tables; the browser bar no longer hides the end of a page.
+- Proxmox guests show CPU, memory and uptime instead of dashes and keep the console button; nodes and LXC containers show the disk; invalid metrics
+  affect only the server concerned.
+- Nginx Proxy Manager lists an expired certificate once, with the time since expiry.
+- Update centre: approved updates stay installable while older version data loads slowly; switching between stable and
+  beta does not repeat security notices.
+- Nodvard Dock shows its own name everywhere, locks unavailable features even on direct calls and checks for its own
+  image.
+
+### Changed
+
+- Login page with field-level errors and better keyboard support; containers can be sorted by state, status, CPU or
+  memory; CPU clock with average, minimum and maximum; service
+  pages with buttons instead of links; collapsed time zone list; shorter setup command; immutable systems such as
+  Bazzite get instructions instead of an error; new guides for first setup, Tailscale and Nodvard Dock.
+
 ## [0.12.0] – 2026-10-31
 
 Docker stacks from Git, Fail2ban in Nodvard Shield and tighter limits for modules and logins.

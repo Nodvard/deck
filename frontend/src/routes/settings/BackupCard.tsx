@@ -26,6 +26,7 @@ import { copyText } from "../../lib/clipboard";
 import { useAuthStore } from "../../state/auth";
 import { SecondFactorField, isTotpMissing, isTotpRejected, useTwoFactorEnabled } from "./SecondFactorField";
 import { Badge, Button, Card, Field, NoticeLine, Toggle, errorText, inputClass, type Notice } from "./ui";
+import { useEditionStore, productText } from "../../state/edition";
 
 const RUNNING_POLL_MS = 2000;
 
@@ -93,7 +94,7 @@ export function BackupCard(): JSX.Element {
   return (
     <Card
       title="Sicherung"
-      description="Alle Daten von Nodvard Deck verschlüsselt sichern: Einstellungen, Server, Zugangsdaten und die Daten der Erweiterungen."
+      description={productText("Alle Daten von Nodvard Deck verschlüsselt sichern: Einstellungen, Server, Zugangsdaten und die Daten der Erweiterungen.")}
     >
       <NoticeLine notice={notice} />
       {loadError && <NoticeLine notice={{ kind: "error", text: loadError }} />}
@@ -191,11 +192,11 @@ function KeySection({ overview, isOwner, onChanged }: { overview: BackupOverview
       {overview.key ? (
         <p className="text-sm text-white/70">
           Eingerichtet am {formatWhen(overview.key.created_at)} <span className="text-white/40">(Kennung {overview.key.key_id.slice(0, 8)})</span>.
-          Automatische Sicherungen werden damit verschlüsselt; Nodvard Deck selbst kennt das Passwort nicht.
+          Automatische Sicherungen werden damit verschlüsselt; {productText("Nodvard Deck")} selbst kennt das Passwort nicht.
         </p>
       ) : (
         <p className="text-sm text-white/70">
-          Noch nicht festgelegt. Die Sicherungen werden mit diesem Passwort verschlüsselt. Nodvard Deck speichert es nicht – darum
+          Noch nicht festgelegt. Die Sicherungen werden mit diesem Passwort verschlüsselt. {productText("Nodvard Deck")} speichert es nicht – darum
           bleiben die Sicherungen auch dann sicher, wenn jemand sie in die Hände bekommt.
         </p>
       )}
@@ -266,7 +267,7 @@ function RecoveryKeyPanel({ result, onDone }: { result: KeyResult; onDone: () =>
   }
 
   function save() {
-    const url = URL.createObjectURL(new Blob([recoveryKeyFile(result)], { type: "text/plain;charset=utf-8" }));
+    const url = URL.createObjectURL(new Blob([recoveryKeyFile(result, useEditionStore.getState().edition.product_name)], { type: "text/plain;charset=utf-8" }));
     browserDownload.start(url, `nodvard-deck-wiederherstellungsschluessel-${result.key_id.slice(0, 8)}.txt`);
     URL.revokeObjectURL(url);
   }
@@ -372,7 +373,7 @@ function ScheduleSection({ overview, onSaved }: { overview: BackupOverview; onSa
       {!overview.target.external_available && (
         <p className="mt-2 text-xs text-white/50" data-testid="external-not-mounted">
           Der Ordner {overview.target.external_root} ist hier nicht eingebunden, darum ist der zweite Knopf gesperrt. Um Sicherungen auf einem anderen Laufwerk oder einem NAS abzulegen, muss dieser Ordner in
-          der Compose-Datei von Nodvard Deck unter „volumes“ eingebunden werden. Bis dahin bleibt „Im Datenordner“.{" "}
+          der Compose-Datei von {productText("Nodvard Deck")} unter „volumes“ eingebunden werden. Bis dahin bleibt „Im Datenordner“.{" "}
           <GuideLink section="backup" testId="external-guide">Wie das geht, steht in der Anleitung.</GuideLink>
         </p>
       )}

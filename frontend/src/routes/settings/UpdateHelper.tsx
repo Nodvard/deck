@@ -43,22 +43,22 @@ export function formatUnix(seconds: number | null | undefined): string {
 }
 
 /** Zustand laden, sobald eine Karte ihn braucht; beide Karten teilen ihn. */
-export function useHelperView(): { view: HelperView | null; follow: FollowState | null } {
+export function useHelperView(enabled = true): { view: HelperView | null; follow: FollowState | null } {
   const view = useUpdateHelper((s) => s.view);
   const loaded = useUpdateHelper((s) => s.loaded);
   const follow = useUpdateHelper((s) => s.follow);
   const load = useUpdateHelper((s) => s.load);
   useEffect(() => {
-    if (!loaded) void load();
-  }, [loaded, load]);
+    if (enabled && !loaded) void load();
+  }, [enabled, loaded, load]);
   // Räumt der Helfer nach dem letzten Vorgang noch auf, gleich noch einmal nachsehen.
   const finishing = view?.ready_reason === "finishing" && !follow;
   useEffect(() => {
-    if (!finishing) return;
+    if (!enabled || !finishing) return;
     const timer = setTimeout(() => void load(), 5000);
     return () => clearTimeout(timer);
-  }, [finishing, view, load]);
-  return { view, follow };
+  }, [enabled, finishing, view, load]);
+  return enabled ? { view, follow } : { view: null, follow: null };
 }
 
 /** Text einer abgelehnten Anforderung: der Satz vom Server, dazu der Grund des Helfers, falls er einen nennt. */

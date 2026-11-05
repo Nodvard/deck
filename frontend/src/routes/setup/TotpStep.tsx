@@ -7,6 +7,7 @@ import { ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api } from "../../lib/api";
+import { useEdition } from "../../state/edition";
 import { RecoveryCodesPanel } from "../settings/RecoveryCodesPanel";
 import { TotpEnroll, type TotpSetup } from "../settings/TotpEnroll";
 import { TotpPasswordForm } from "../settings/TotpPasswordForm";
@@ -16,6 +17,7 @@ import { StepNav } from "./StepNav";
 export function TotpStep({ username, onBack, onNext }: { username: string; onBack: () => void; onNext: (enabled: boolean) => void }) {
   /** `null` = noch nicht geladen. */
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  const productName = useEdition().product_name;
   const [setup, setSetup] = useState<TotpSetup | null>(null);
   const [asking, setAsking] = useState(false);
   const [codes, setCodes] = useState<string[] | null>(null);
@@ -102,7 +104,7 @@ export function TotpStep({ username, onBack, onNext }: { username: string; onBac
   return (
     <div data-testid="setup-totp">
       <p className="text-sm text-white/70">
-        Mit der Zwei-Faktor-Anmeldung fragt Nodvard Deck bei jeder Anmeldung zusätzlich nach einem Code aus einer App auf deinem Handy
+        Mit der Zwei-Faktor-Anmeldung fragt {productName} bei jeder Anmeldung zusätzlich nach einem Code aus einer App auf deinem Handy
         (einer „Authenticator-App“). So bleibt dein Konto sicher, auch wenn jemand dein Passwort kennt. Das ist freiwillig.
       </p>
       <NoticeLine notice={notice} />

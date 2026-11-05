@@ -32,6 +32,7 @@ from .adopt import AdoptedStacks, StoreProblem
 from .editor import EditProblem, _read_plain, _stack_key
 from .git_fetch import (
     MAX_PROBLEMS,
+    PRIVATE_SETTING,
     Fetched,
     GitProblem,
     Limits,
@@ -106,7 +107,8 @@ def check_url(raw: str) -> str:
 def _host_problem(host: str) -> str | None:
     """Warum Deck von diesem Server nicht holt: er zeigt auf Deck selbst, in kein echtes Netz oder ist eine verkappte Zahl."""
     local = ("Die Adresse zeigt auf Deck selbst oder in kein echtes Netz (etwa 127.0.0.1 oder 169.254.x.x). Trag den Server so "
-             "ein, wie andere Rechner im Netz ihn erreichen, etwa git.example.org oder 192.168.1.10.")
+             "ein, wie andere Rechner im Netz ihn erreichen, etwa git.example.org, oder im eigenen Netz 192.168.1.10 (dafür "
+             f"unter Einstellungen → Docker (Erweitert) {PRIVATE_SETTING} einschalten).")
     if host in _LOCAL_NAMES or host.endswith(".localhost"):
         return local
     if not _NUMBER_LABEL_RE.match(host.rsplit(".", 1)[-1]):
@@ -252,6 +254,9 @@ class GitSources:
 
     def get(self, host_id: str, project: str) -> Source | None:
         return self._read().get(host_id, {}).get(project)
+
+    def all(self) -> list[tuple[str, str, Source]]:
+        return [(host_id, project, source) for host_id, projects in self._read().items() for project, source in projects.items()]
 
     async def put(self, host_id: str, project: str, source: Source) -> None:
         async with self._lock:
@@ -408,6 +413,18 @@ async def run_worker(request: dict[str, Any], limits: Limits) -> dict[str, Any]:
     return out
 
 
+def parse_head(answer: dict[str, Any]) -> tuple[str, str]:
+    """Die Antwort auf `mode: head`: Commit und Art, sonst der Grund als `GitProblem`."""
+    if answer.get("ok") is not True:
+        if answer.get("error"):
+            log.warning("docker_git_head_error error=%r", answer["error"])
+        raise GitProblem(_shown(str(answer.get("problem") or UNREADABLE), 500))
+    commit, kind = answer.get("commit"), answer.get("ref_kind")
+    if not isinstance(commit, str) or not re.match(r"^[0-9a-f]{40}\Z", commit) or kind not in ("branch", "tag"):
+        raise GitProblem(UNREADABLE)
+    return commit, kind
+
+
 def parse_answer(answer: dict[str, Any], limits: Limits) -> Fetched:
     """Die Antwort des Prozesses, noch einmal geprüft: Pfade, Rechte und Größen wie beim Lesen aus dem Repository."""
     if answer.get("ok") is not True:
@@ -469,6 +486,9 @@ class GitStacks:
     async def accesses(self) -> dict[str, Access]:
         return accesses(await self.ctx.settings.get())
 
+    async def private_allowed(self) -> bool:
+        return (await self.ctx.settings.get()).get("git_private_networks") is True
+
     async def forget(self, host_id: str, project: str) -> None:
         """Nach dem Aufheben der Übernahme oder dem Löschen des Stacks: Quelle und Geholtes fallen weg."""
         try:
@@ -481,32 +501,54 @@ class GitStacks:
             if self.on_forget is not None:
                 await self.on_forget(host_id, project)
 
+    def is_adopted(self, host_id: str, project: str) -> bool:
+        return self._adopted.for_host(host_id).get(project) is not None
+
+    async def _credentials(self, stack: contextlib.AsyncExitStack, source: Source) -> tuple[str, str] | None:
+        """Benutzername und Token für den Zugang der Quelle, gültig solange `stack` offen ist; ohne Zugang `None`."""
+        if source.access is None:
+            return None
+        access = (await self.accesses()).get(source.access)
+        if access is None:
+            raise GitProblem(f"Den Zugang „{source.access}“ gibt es nicht (mehr) in den Einstellungen.")
+        if access.host != host_of(source.url):
+            raise GitProblem(f"Der Zugang „{access.name}“ gilt für {access.host}, das Repository liegt aber auf {host_of(source.url)}.")
+        try:
+            handle = await self.ctx.secrets.get_handle(access.secret_label)
+            token = str(await stack.enter_async_context(self.ctx.vault_use(handle)) or "")
+        except (LookupError, SecretUnavailable):
+            token = ""
+        except Exception as exc:  # noqa: BLE001 - nie den Text der Ausnahme weitergeben, er könnte das Geheimnis betreffen
+            raise GitProblem(f"Das Token für „{access.name}“ ließ sich nicht aus dem Tresor lesen ({type(exc).__name__}).") from None
+        if not token:
+            raise GitProblem(f"Für „{access.name}“ ist kein Token im Tresor. Trag es unter Einstellungen → Docker ein.")
+        return (access.username, token)
+
+    async def head(self, host_id: str, project: str, source: Source, known: tuple[str, ...] = ()) -> tuple[str, str]:
+        """Commit und Art (`branch`, `tag`), auf die die Quelle gerade zeigt; schreibt nichts. Bei einem Tag, der nicht auf
+        einen der `known` Commits zeigt, sieht der Arbeiter einmal nach, ob dahinter ein Commit steht."""
+        async with contextlib.AsyncExitStack() as stack:
+            credentials = await self._credentials(stack, source)
+            if self.sources.get(host_id, project) != source:
+                raise GitProblem(CHANGED)
+            request = {"mode": "head", "url": source.url, "ref": source.ref, "known": list(known),
+                       "credentials": list(credentials) if credentials else None, "limits": asdict(self.limits),
+                       "allow_private": await self.private_allowed()}
+            async with self._slots:
+                answer = await self.run_fetch(request, self.limits)
+        return parse_head(answer)
+
     async def fetch(self, host_id: str, project: str, source: Source) -> Fetched:
         async with contextlib.AsyncExitStack() as stack:
-            credentials = None
-            if source.access is not None:
-                access = (await self.accesses()).get(source.access)
-                if access is None:
-                    raise GitProblem(f"Den Zugang „{source.access}“ gibt es nicht (mehr) in den Einstellungen.")
-                if access.host != host_of(source.url):
-                    raise GitProblem(f"Der Zugang „{access.name}“ gilt für {access.host}, das Repository liegt aber auf {host_of(source.url)}.")
-                try:
-                    handle = await self.ctx.secrets.get_handle(access.secret_label)
-                    token = str(await stack.enter_async_context(self.ctx.vault_use(handle)) or "")
-                except (LookupError, SecretUnavailable):
-                    token = ""
-                except Exception as exc:  # noqa: BLE001 - nie den Text der Ausnahme weitergeben, er könnte das Geheimnis betreffen
-                    raise GitProblem(f"Das Token für „{access.name}“ ließ sich nicht aus dem Tresor lesen ({type(exc).__name__}).") from None
-                if not token:
-                    raise GitProblem(f"Für „{access.name}“ ist kein Token im Tresor. Trag es unter Einstellungen → Docker ein.")
-                credentials = (access.username, token)
+            credentials = await self._credentials(stack, source)
             async with self._lock(host_id, project):
                 # Zwischen Lesen der Quelle und der Sperre kann jemand sie geändert oder vergessen haben.
                 if self.sources.get(host_id, project) != source:
                     raise GitProblem(CHANGED)
                 self._root.mkdir(mode=0o700, parents=True, exist_ok=True)
                 request = {"url": source.url, "ref": source.ref, "path": source.path, "store": str(self.repo_dir(host_id, project)),
-                           "credentials": list(credentials) if credentials else None, "limits": asdict(self.limits)}
+                           "credentials": list(credentials) if credentials else None, "limits": asdict(self.limits),
+                           "allow_private": await self.private_allowed()}
                 async with self._slots:
                     return parse_answer(await self.run_fetch(request, self.limits), self.limits)
 

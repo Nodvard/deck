@@ -507,7 +507,7 @@ function UptimeKumaPage() {
       title: "Uptime Kuma",
       description: "Zeigt, welche Dienste laut Uptime Kuma laufen und welche ausgefallen sind.",
       actions: /* @__PURE__ */ jsxs3(Fragment2, { children: [
-        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx4("a", { href: SETTINGS_PATH, className: buttonClass("ghost"), children: "Einstellungen" }),
+        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx4("a", { href: SETTINGS_PATH, className: buttonClass("secondary"), children: "Einstellungen" }),
         /* @__PURE__ */ jsx4(Button, { onClick: reload, disabled: loading, children: "Aktualisieren" })
       ] }),
       children: [

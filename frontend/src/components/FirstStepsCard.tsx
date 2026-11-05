@@ -1,12 +1,13 @@
 /**
- * Karte „Erste Schritte“ oben im Cockpit: Checkliste mit Haekchen und Direktlink je Schritt.
- * Sie verschwindet von selbst, wenn alles erledigt ist, und laesst sich je Benutzer ausblenden
- * (`GET/PATCH /me/preferences`, gilt also auf jedem Geraet). Die Schritte kommen aus
- * `lib/firstSteps.ts` -- nur solche, fuer die der Nutzer das Recht hat.
+ * Karte „Erste Schritte“ oben im Cockpit: Checkliste mit Häkchen und Direktlink je Schritt.
+ * Sie verschwindet von selbst, wenn alles erledigt ist, und lässt sich je Benutzer ausblenden
+ * (`GET/PATCH /me/preferences`, gilt also auf jedem Gerät). Die Schritte kommen aus
+ * `lib/firstSteps.ts` -- nur solche, für die der Nutzer das Recht hat.
  *
  * Solange noch Daten laden, bleibt die Karte weg: ein kurzes Aufblitzen offener Schritte bei
- * jemandem, der laengst fertig ist, waere schlimmer als eine Karte, die einen Moment spaeter kommt.
+ * jemandem, der längst fertig ist, wäre schlimmer als eine Karte, die einen Moment später kommt.
  */
+import { styleRef } from "../../../extensions/_shared/frontend/src/csp";
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, ShieldCheck } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -96,19 +97,19 @@ export function FirstStepsCard() {
     });
   }, [can, hosts.data, extensions.data, widgets.data, layout, layoutError]);
 
-  // Mit Beispieldaten waere die Liste irrefuehrend ("Server angelegt"): das Band oben fuehrt dann zurueck.
+  // Mit Beispieldaten wäre die Liste irreführend ("Server angelegt"): das Band oben führt dann zurück.
   if (loading || demo.data?.active || preferences.data?.first_steps_dismissed || steps.length === 0 || steps.every((s) => s.done)) return null;
 
   const done = steps.filter((s) => s.done).length;
 
   async function dismiss() {
     setSaving(true);
-    // Sofort ausblenden; scheitert das Speichern, kommt die Karte beim naechsten Laden eben wieder.
+    // Sofort ausblenden; scheitert das Speichern, kommt die Karte beim nächsten Laden eben wieder.
     queryClient.setQueryData<Preferences>(["me", "preferences"], (old) => ({ ...old, first_steps_dismissed: true }));
     try {
       await api.patch<Preferences>("/me/preferences", { first_steps_dismissed: true });
     } catch {
-      // nichts weiter: die Karte ist hier ausgeblendet, beim naechsten Mal wird neu gefragt.
+      // nichts weiter: die Karte ist hier ausgeblendet, beim nächsten Mal wird neu gefragt.
     } finally {
       setSaving(false);
     }
@@ -133,7 +134,7 @@ export function FirstStepsCard() {
       </p>
       <div className="mt-3 flex items-center gap-3">
         <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/10" aria-hidden>
-          <div className="accent-gradient h-full rounded-full transition-all" style={{ width: `${(done / steps.length) * 100}%` }} />
+          <div className="accent-gradient h-full rounded-full transition-all" ref={styleRef({ width: `${(done / steps.length) * 100}%` })} />
         </div>
         <p className="flex-none text-xs tabular-nums text-white/60">{done} von {steps.length} erledigt</p>
       </div>

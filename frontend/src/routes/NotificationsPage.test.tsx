@@ -108,7 +108,7 @@ describe("NotificationsPage", () => {
     vi.stubGlobal("fetch", mockFetch([]));
     renderPage();
     await screen.findByTestId("notification-n1");
-    expect(screen.queryByRole("button", { name: "Gelesen" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Meldung .* als gelesen markieren$/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /Alle als gelesen/ })).toBeNull();
     // Löschen betrifft alle Benutzer und braucht dasselbe Recht wie das Markieren.
     expect(screen.queryByRole("button", { name: /löschen/ })).toBeNull();
@@ -127,6 +127,17 @@ describe("NotificationsPage", () => {
     expect(first.querySelector("p")?.className).toContain("line-clamp-4");
     fireEvent.click(within(first).getByRole("button", { name: "Mehr anzeigen" }));
     expect(first.querySelector("p")?.className).not.toContain("line-clamp-4");
+  });
+
+  it("am Handy behält der Titel eine Grundbreite, Datum und Knöpfe rutschen in die nächste Zeile", async () => {
+    vi.stubGlobal("fetch", mockFetch([]));
+    renderPage();
+    const item = await screen.findByTestId("notification-n1");
+    const title = item.querySelector("span.break-words")!;
+    // jsdom rechnet kein Layout, daher die Klasse: Grundbreite 10rem statt 0, sonst wird der Titel zur Buchstabensäule.
+    expect(title).toHaveClass("flex-[1_1_10rem]");
+    expect(title).not.toHaveClass("flex-1");
+    expect(title.parentElement).toHaveClass("flex-wrap");
   });
 
   it("Meldungen mit der alten Kennung einer umbenannten Erweiterung zeigen trotzdem deren Namen", async () => {
@@ -169,16 +180,29 @@ describe("NotificationsPage", () => {
     expect(within(await screen.findByTestId("notification-n2")).queryByRole("link")).toBeNull();
   });
 
+  it("ungelesene Meldungen sind hervorgehoben, gelesene nicht", async () => {
+    vi.stubGlobal("fetch", mockFetch([]));
+    renderPage();
+    const unread = await screen.findByTestId("notification-n1");
+    expect(unread).toHaveAttribute("data-unread", "true");
+    expect(within(unread).getByText("Ungelesen:", { exact: false })).toHaveClass("sr-only");
+    expect(within(unread).getByRole("button", { name: "Meldung „Lagebericht der Container-Wache (2 Ereignisse)“ als gelesen markieren" })).toBeInTheDocument();
+    expect(unread.className).toContain("border-l-[var(--color-accent)]");
+    const read = screen.getByTestId("notification-n3");
+    expect(read).not.toHaveAttribute("data-unread");
+    expect(read.className).not.toContain("border-l-[var(--color-accent)]");
+  });
+
   it("einzeln und alle als gelesen markieren", async () => {
     const calls: { url: string; method: string; body?: unknown }[] = [];
     vi.stubGlobal("fetch", mockFetch(calls));
     renderPage();
     const first = await screen.findByTestId("notification-n1");
 
-    fireEvent.click(within(first).getByRole("button", { name: "Gelesen" }));
+    fireEvent.click(within(first).getByRole("button", { name: /^Meldung .* als gelesen markieren$/ }));
     await waitFor(() => expect(calls.some((c) => c.url.endsWith("/notifications/read"))).toBe(true));
     expect(calls.find((c) => c.url.endsWith("/notifications/read"))?.body).toEqual({ ids: ["n1"] });
-    await waitFor(() => expect(within(screen.getByTestId("notification-n1")).queryByRole("button", { name: "Gelesen" })).toBeNull());
+    await waitFor(() => expect(within(screen.getByTestId("notification-n1")).queryByRole("button", { name: /^Meldung .* als gelesen markieren$/ })).toBeNull());
 
     fireEvent.click(screen.getByRole("button", { name: "Alle als gelesen markieren" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Alle als gelesen markieren" })).toBeNull());

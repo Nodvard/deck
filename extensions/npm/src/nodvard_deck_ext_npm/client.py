@@ -74,13 +74,14 @@ def certificate_state(expires_at: datetime | None, now: datetime, *, warn_days: 
 
 
 def days_text(status: str, days: int | None) -> str:
+    """Die Frist in Worten; bei `expired` ohne das Wort „abgelaufen“, das steht schon in `status_label`."""
     if days is None:
         return "Ablaufdatum unbekannt"
     if status == "expired":
         ago = -days - 1 if days < 0 else 0
         if ago <= 0:
-            return "heute abgelaufen"
-        return f"seit {ago} Tag{'en' if ago != 1 else ''} abgelaufen"
+            return "seit heute"
+        return f"seit {ago} Tag{'en' if ago != 1 else ''}"
     if days <= 0:
         return "läuft heute ab"
     return f"noch {days} Tag{'e' if days != 1 else ''}"

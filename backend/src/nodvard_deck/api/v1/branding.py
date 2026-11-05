@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from nodvard_sdk import max_body_bytes
 from pydantic import BaseModel, Field
 
+from ... import edition
 from ...branding import (
     FAVICON_CONTENT_TYPES,
     FAVICON_PATH,
@@ -54,7 +55,7 @@ async def put_branding(payload: Branding, session: SessionDep, settings: Setting
         payload.support_url = cleaned
     else:
         payload.support_url = None
-    current = await load_branding(session)
+    current = await load_branding(session, edition.of(settings))
     for field, label in (("logo_url", "Das Logo"), ("favicon_url", "Das Favicon")):
         value = (getattr(payload, field) or "").strip() or None
         # Ein schon gespeicherter fremder Wert bleibt erlaubt, damit das Speichern anderer Felder nicht scheitert.
@@ -70,14 +71,14 @@ async def put_branding(payload: Branding, session: SessionDep, settings: Setting
     for value, path, stem in ((payload.logo_url, LOGO_PATH, "logo"), (payload.favicon_url, FAVICON_PATH, "favicon")):
         if value != path:
             remove_image_file(settings.data_dir, stem)
-    return await load_branding(session)
+    return await load_branding(session, edition.of(settings))
 
 
 async def _read_image(request: Request, types: dict[str, str], max_bytes: int, label: str) -> tuple[bytes, str]:
-    """Rohkoerper-Upload wie `POST /files/{source_id}/upload` (api/v1/files.py) --
-    dieselbe Konvention statt zusaetzlich `multipart/form-data` einzufuehren. Der
-    Content-Type-Header traegt hier (anders als bei Dateien) tatsaechliche Bedeutung:
-    er entscheidet ueber die Dateiendung und wird gegen die Allowlist geprueft."""
+    """Rohkörper-Upload wie `POST /files/{source_id}/upload` (api/v1/files.py) --
+    dieselbe Konvention statt zusätzlich `multipart/form-data` einzuführen. Der
+    Content-Type-Header trägt hier (anders als bei Dateien) tatsächliche Bedeutung:
+    er entscheidet über die Dateiendung und wird gegen die Allowlist geprüft."""
     content_type = (request.headers.get("content-type") or "").split(";")[0].strip()
     extension = types.get(content_type)
     if extension is None:
@@ -113,10 +114,10 @@ async def upload_logo(request: Request, session: SessionDep, settings: SettingsD
     content, extension = await _read_image(request, LOGO_CONTENT_TYPES, MAX_LOGO_BYTES, "Logo")
     save_logo_file(settings.data_dir, content, extension)
 
-    branding = await load_branding(session)
+    branding = await load_branding(session, edition.of(settings))
     branding.logo_url = LOGO_PATH
     await save_branding(session, branding, updated_by_user_id=user.id)
-    return await load_branding(session)
+    return await load_branding(session, edition.of(settings))
 
 
 @router.post("/favicon", response_model=Branding)
@@ -127,10 +128,10 @@ async def upload_favicon(request: Request, session: SessionDep, settings: Settin
     content, extension = await _read_image(request, FAVICON_CONTENT_TYPES, MAX_FAVICON_BYTES, "Favicon")
     save_favicon_file(settings.data_dir, content, extension)
 
-    branding = await load_branding(session)
+    branding = await load_branding(session, edition.of(settings))
     branding.favicon_url = FAVICON_PATH
     await save_branding(session, branding, updated_by_user_id=user.id)
-    return await load_branding(session)
+    return await load_branding(session, edition.of(settings))
 
 
 class CustomCss(BaseModel):

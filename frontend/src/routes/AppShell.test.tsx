@@ -9,6 +9,7 @@ import { applyTheme } from "../lib/theme";
 import { previewState, respond } from "../preview/fixtures";
 import { useWsSubscription } from "../lib/ws";
 import { useAuthStore } from "../state/auth";
+import { DECK_EDITION, useEditionStore } from "../state/edition";
 import type { PageOut } from "../widgets/types";
 import { AppShell, groupPagesBySection } from "./AppShell";
 import { AboutSettings } from "./settings/AboutSettings";
@@ -87,6 +88,12 @@ describe("AppShell: Token vorab erneuern", () => {
     expect(refreshes).toHaveLength(1);
   });
 
+  it("die Höhe folgt dem sichtbaren Bereich, sonst verdeckt die Browserleiste am Handy das Seitenende", async () => {
+    renderShell("visible");
+    await screen.findByText("Nico");
+    expect(document.querySelector(".h-screen")).toHaveClass("supports-[height:100dvh]:h-dvh");
+  });
+
   it("Hintergrund-Tab erneuert nicht (das Refresh-Token wird ohne Gnadenfrist rotiert)", async () => {
     const refreshes = renderShell("hidden");
     await screen.findByText("Nico");
@@ -108,11 +115,15 @@ describe("AppShell: Version und Änderungsprotokoll", () => {
     vi.unstubAllGlobals();
   });
 
-  function renderShell(changelogStatus = 200) {
+  function renderShell(changelogStatus = 200, current?: string) {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input).replace(/^https?:\/\/[^/]+/, "");
-      if (path === "/api/v1/app/changelog" && changelogStatus !== 200) {
+      const route = path.split("?")[0];
+      if (route === "/api/v1/app/changelog" && changelogStatus !== 200) {
         return new Response(JSON.stringify({ detail: "kaputt" }), { status: changelogStatus });
+      }
+      if (route === "/api/v1/app/changelog" && current) {
+        return new Response(JSON.stringify({ ...respond(path, "GET") as object, current }), { status: 200 });
       }
       return new Response(JSON.stringify(respond(path, init?.method ?? "GET") ?? {}), { status: 200 });
     }));
@@ -141,9 +152,27 @@ describe("AppShell: Version und Änderungsprotokoll", () => {
     renderShell();
     const link = await screen.findByRole("link", { name: "v0.4.0" });
     expect(link).toHaveAttribute("href", "/settings/about");
-    expect(link).toHaveAttribute("title", "Änderungsprotokoll öffnen");
-    // Es ist dieselbe Seitenleiste wie im Handy-Menü -- der Link liegt also auch dort.
+    expect(link).toHaveAttribute("title", "Über Nodvard Deck");
+    // Die Seitenleiste wird auch im Handy-Menü verwendet.
     expect(link.closest("aside")).toHaveAttribute("id", "hauptmenue");
+    fireEvent.click(link);
+    expect(await screen.findByRole("heading", { name: "Über Nodvard Deck" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Diese Installation" })).toBeInTheDocument();
+  });
+
+  it("verweist in Dock auf „Über Nodvard Dock“", async () => {
+    const previous = useEditionStore.getState();
+    useEditionStore.setState({ edition: { ...DECK_EDITION, id: "dock", product_name: "Nodvard Dock" }, loaded: true });
+    const view = renderShell();
+    try {
+      const link = await screen.findByRole("link", { name: "v0.4.0" });
+      expect(link).toHaveAttribute("title", "Über Nodvard Dock");
+      fireEvent.click(link);
+      expect(await screen.findByRole("heading", { name: "Über Nodvard Dock" })).toBeInTheDocument();
+    } finally {
+      view.unmount();
+      useEditionStore.setState(previous);
+    }
   });
 
   it("beim ersten Besuch keine Neu-Markierung, der Stand wird still gemerkt", async () => {
@@ -151,6 +180,19 @@ describe("AppShell: Version und Änderungsprotokoll", () => {
     await screen.findByRole("link", { name: "v0.4.0" });
     await waitFor(() => expect(window.localStorage.getItem(SEEN_KEY)).toBe(CURRENT_STAMP));
     expect(screen.queryByTestId("changelog-neu")).not.toBeInTheDocument();
+  });
+
+  it("übernimmt die Versionsnummer vom Server und hält den Link unter der Navigation", async () => {
+    renderShell(200, "0.13.0");
+    const link = await screen.findByRole("link", { name: "v0.13.0" });
+    expect(link).toHaveAttribute("href", "/settings/about");
+    const sidebar = link.closest("aside")!;
+    expect(sidebar.lastElementChild).toContainElement(link);
+    const nav = screen.getByRole("navigation", { name: "Hauptnavigation" });
+    expect(nav.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(link);
+    const installation = (await screen.findByRole("heading", { name: "Diese Installation" })).closest("section")!;
+    expect(installation).toHaveTextContent("0.13.0");
   });
 
   it("neuer Stand: „Neu“ am Link, und die Seite „Über Nodvard Deck“ räumt es ab", async () => {

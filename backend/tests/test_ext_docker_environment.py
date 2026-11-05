@@ -158,7 +158,7 @@ async def test_measure_names_the_limits_of_an_lxc_container(ext):
 
     ctx.calls.clear()
     await catalog.measure()
-    assert [c for c in ctx.calls if c[0] == "lxc" and _kind(c[1]) not in ("stats", "restarts")] == [], "die Umgebung gilt zehn Minuten"
+    assert [c for c in ctx.calls if c[0] == "lxc" and _kind(c[1]) not in ("stats", "restarts", "container")] == [], "die Umgebung gilt zehn Minuten"
 
 
 @pytest.mark.asyncio
@@ -208,3 +208,34 @@ def test_restart_counts_in_one_call(ext):
     # Die ersten beiden Zeilen wie bei Docker 29.8.2 (`absturz` mit `--restart always`), danach ungültige.
     text = "/absturz|8\n/web|0\n/x;id|3\n/kaputt|viele\n/hoch|²\n/lang|" + "9" * 5000 + "\nohne-strich\n"
     assert capabilities.parse_restart_counts(text) == {"absturz": 8}
+
+
+@pytest.mark.asyncio
+async def test_measure_reads_start_times_without_an_extra_call_per_container(ext):
+    capabilities, _ = ext
+    ctx = _Ctx({
+        ("lxc", "stats"): _Result(0, "web|1%|1MiB / 4GiB|1%\njob|0%|2MiB / 4GiB|1%\nx;id|0%|0B / 0B|0%\n"),
+        ("lxc", "container"): _Result(1, '\n'.join([
+            json.dumps({"name": "/web", "started": "2026-11-01T10:00:00Z"}),
+            json.dumps({"name": "/job", "started": "2026-11-02T08:00:00Z"}),
+            json.dumps({"name": "/fremd", "started": "2026-11-02T08:00:00Z"}),
+        ])),
+    })
+    measured = await capabilities.DockerServiceCatalog(ctx).measure()
+    assert measured["started_at"] == {"lxc:web": "2026-11-01T10:00:00Z", "lxc:job": "2026-11-02T08:00:00Z"}
+    calls = [command for _, command in ctx.calls if command.startswith("docker container inspect")]
+    assert len(calls) == 1
+    assert ".State.StartedAt" in calls[0] and calls[0].endswith(" web job")
+    assert "x;id" not in calls[0]
+
+
+@pytest.mark.asyncio
+async def test_measure_keeps_stats_when_start_times_are_unavailable(ext):
+    capabilities, _ = ext
+    ctx = _Ctx({
+        ("lxc", "stats"): _Result(0, "web|1%|1MiB / 4GiB|1%\n"),
+        ("lxc", "container"): OSError("Keine Verbindung"),
+    })
+    measured = await capabilities.DockerServiceCatalog(ctx).measure()
+    assert measured["started_at"] == {}
+    assert measured["data"]["lxc:web"]["cpu_percent"] == 1

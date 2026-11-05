@@ -15,6 +15,7 @@ import {
 import { Button, NoticeLine, inputClass, type Notice } from "../ui";
 import { CheckResultList, KeyChanged, KeyConfirm } from "./ConnectionCheck";
 import { FormField } from "./FormField";
+import { productText } from "../../../state/edition";
 
 const CHECKBOX = "mt-0.5 h-4 w-4 flex-none accent-[var(--color-accent)]";
 
@@ -42,7 +43,7 @@ function Failure({
   if (failure.code === "host_key_unconfirmed" && key) {
     const item: CheckItem = {
       id: "host_key", label: "Server-Schlüssel", status: "confirm",
-      detail: "Nodvard Deck kennt diesen Server noch nicht. Dein Passwort wurde nicht gesendet.",
+      detail: productText("Nodvard Deck kennt diesen Server noch nicht. Dein Passwort wurde nicht gesendet."),
       hint: `Zum Vergleichen auf dem Server: ssh-keygen -lf ${hostKeyFile(key.key_type)}`,
     };
     return (
@@ -151,7 +152,7 @@ export function PasswordSetup({
   return (
     <form onSubmit={(e) => void submit(e)} noValidate className="space-y-4" data-testid="password-setup">
       <p className="text-sm text-white/70">
-        Nodvard Deck meldet sich einmal mit einem Konto an, das sich per SSH anmelden darf (root oder ein Konto mit sudo),
+        {productText("Nodvard Deck")} meldet sich einmal mit einem Konto an, das sich per SSH anmelden darf (root oder ein Konto mit sudo),
         führt genau den Befehl aus und vergisst das Passwort sofort. Es wird nirgends gespeichert.
       </p>
       {inClear && (
@@ -198,7 +199,7 @@ export function PasswordSetup({
         <div className="space-y-3" data-testid="password-setup-result">
           <p role="status" className={`text-sm ${result.ok ? "text-emerald-300" : "text-amber-200"}`}>
             {result.ok
-              ? "Eingerichtet. Nodvard Deck meldet sich jetzt mit dem neuen Schlüssel an."
+              ? productText("Eingerichtet. Nodvard Deck meldet sich jetzt mit dem neuen Schlüssel an.")
               : "Der Befehl ist gelaufen, aber die Prüfung zeigt noch etwas – siehe unten."}
             {result.made_default ? " Der Zugang ist jetzt der Standard." : ""}
           </p>

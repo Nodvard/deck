@@ -8,6 +8,7 @@ import contextlib
 import copy
 import importlib
 import logging
+import os
 import re
 import sys
 from collections.abc import Iterable
@@ -829,12 +830,21 @@ def _mount_routes(
 
 
 def _data_dir(settings: Settings, manifest: ExtensionManifest, store_id: str) -> Path:
-    # Dort liegen die Dateien zu den Tabellenzeilen, die alle Kennungen teilen; verschoben wird nie etwas, ein Rückweg
-    # aufs alte Image findet auch neue Dateien.
-    for name in dict.fromkeys((store_id, manifest.id, *manifest.legacy_ids)):
-        if (settings.ext_data_dir / name).is_dir():
-            return settings.ext_data_dir / name
-    return settings.ext_data_dir / store_id
+    # Dort liegen die Dateien zu den Tabellenzeilen, die alle Kennungen teilen; verschoben wird nie etwas. Ein leerer
+    # Ordner, den ein Start nur angelegt hat, verdeckt keinen gefüllten.
+    names = dict.fromkeys((store_id, manifest.id, *manifest.legacy_ids))
+    found = [settings.ext_data_dir / name for name in names if (settings.ext_data_dir / name).is_dir()]
+    filled = [path for path in found if not _is_empty(path)]
+    return (filled or found or [settings.ext_data_dir / store_id])[0]
+
+
+def _is_empty(path: Path) -> bool:
+    # Was sich nicht lesen lässt, gilt als belegt: lieber der bisherige Ordner als ein falscher leerer.
+    try:
+        with os.scandir(path) as entries:
+            return next(entries, None) is None
+    except OSError:
+        return False
 
 
 SECRET_HOOK_TIMEOUT_S = 10.0

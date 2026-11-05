@@ -1,8 +1,9 @@
 /**
- * Bestätigung des Inhabers für Einstellungen, die nur er ändern darf (Selbstständigkeit, neue Server-Schlüssel): sein
- * Passwort und, wenn Zwei-Faktor an ist, der Code aus der App. Das Codefeld steht gleich da, wenn bekannt ist, dass
- * Zwei-Faktor an ist (`useTwoFactorEnabled`), sonst nach der Rückfrage des Servers (`totp_missing`). Fehlt nur der Code
- * oder stimmt er nicht, bleibt das Passwort stehen; ein Code gilt nur einmal und wird nach jedem Versuch geleert.
+ * Bestätigung des Inhabers für Einstellungen, die nur er ändern darf (Selbstständigkeit, neue Server-Schlüssel,
+ * Sicherheitsupdates selbst einspielen): sein Passwort und, wenn Zwei-Faktor an ist, der Code aus der App. Das Codefeld
+ * steht gleich da, wenn bekannt ist, dass Zwei-Faktor an ist (`useTwoFactorEnabled`), sonst nach der Rückfrage des
+ * Servers (`totp_missing`). Fehlt nur der Code oder stimmt er nicht, bleibt das Passwort stehen; ein Code gilt nur
+ * einmal und wird nach jedem Versuch geleert.
  */
 import { useState } from "react";
 
@@ -17,12 +18,13 @@ export interface OwnerProof {
 export const OWNER_ONLY_HINT = "Das ändert nur der Inhaber, mit seinem Passwort und, wenn Zwei-Faktor an ist, dem Code aus der App.";
 
 export function OwnerConfirm({
-  send, onDone, onCancel, submitLabel = "Bestätigen und speichern",
+  send, onDone, onCancel, submitLabel = "Bestätigen und speichern", disabled = false,
 }: {
   send: (proof: OwnerProof) => Promise<void>;
   onDone: () => void;
   onCancel: () => void;
   submitLabel?: string;
+  disabled?: boolean;
 }): JSX.Element {
   const twoFactor = useTwoFactorEnabled();
   const [password, setPassword] = useState("");
@@ -31,7 +33,7 @@ export function OwnerConfirm({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const needsCode = askedForCode || twoFactor === true;
-  const ready = !!password && (!needsCode || !!code.trim()) && !busy;
+  const ready = !!password && (!needsCode || !!code.trim()) && !busy && !disabled;
 
   async function submit() {
     const typed = password;

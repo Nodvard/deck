@@ -54,6 +54,12 @@ class MetricsProvider(Protocol):
     # "max"}` mit einer Werteliste je Metrik (`None` = Lücke). Ohne `history` sammelt der Kern selbst über `sample()`
     # in einen eigenen Speicher (nicht die relationale DB).
 
+    # Optional: `async def sample_many(self, hosts: list[Host]) -> dict[str, dict[str, float]]` liefert dasselbe wie
+    # `sample()` für viele Hosts in einem Aufruf, Schlüssel ist `Host.id`. `{}` heißt „gerade kein Wert“ (z. B.
+    # gestoppt), ein fehlender Host „nicht gefragt oder nicht erreichbar“. Für Anbieter mit `history` holt der Kern
+    # alle `interval_s` den aktuellen Wert ihrer Hosts für die Übersicht: mit `sample_many`, sonst je Host `sample()`.
+    # Anbieter ohne `history` fragt er nie über `sample_many`.
+
     # Optional: `async def supports(self, host: Host) -> bool`. Hat ein Host keinen
     # eigenen Anbieter (kein provider_ext_id, z. B. ein Raspberry Pi), fragt der Kern
     # die Anbieter, die das anbieten -- etwa einen, der per SSH misst.

@@ -59,3 +59,12 @@ async def test_api_schnappschuss_ist_aktuell(current):
 async def test_extension_routen_sind_im_schnappschuss(current):
     """Der Vertrag schliesst /api/v1/ext/<id>/... ein, nicht nur den Kern."""
     assert any("/api/v1/ext/" in key for key in current["endpoints"])
+
+
+async def test_push_arten_und_einstellungen_sind_im_vertrag(current):
+    endpoint = current["endpoints"]["GET /api/v1/settings/notification-types"]
+    assert endpoint["responses"]["200"] == {
+        "type": "array", "items": {"type": "object", "fields": {"id": {"type": "string"}, "label": {"type": "string"}}},
+    }
+    keys = current["endpoints"]["PUT /api/v1/settings/{key}"]["params"]["path:key"]["enum"]
+    assert "notifications.push_types" in keys

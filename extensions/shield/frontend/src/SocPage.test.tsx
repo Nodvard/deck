@@ -64,6 +64,27 @@ beforeEach(() => {
 });
 
 describe("Nodvard Shield Virenschutz", () => {
+  it.each([false, true])("rpm-ostree zeigt die manuelle Installation, ClamAV vorhanden: %s", async (clamavInstalled) => {
+    const fallback = mockFetch([]);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (input.toString().includes("/defender/overview")) {
+        return new Response(JSON.stringify({
+          ...OVERVIEW,
+          hosts: [{ ...OVERVIEW.hosts[1], rpm_ostree: true, clamav_installed: clamavInstalled }],
+          summary: { ...OVERVIEW.summary, open_threats: 0 },
+        }), { status: 200 });
+      }
+      return fallback(input, init);
+    }));
+    render(<SocPage />);
+    const host = within(await screen.findByTestId("host-h-docker"));
+    expect(host.getByText("unveränderliches System (rpm-ostree): Installation von Hand, dann Neustart")).toBeInTheDocument();
+    expect(host.getByText("rpm-ostree install clamav clamav-update lynis fail2ban")).toBeInTheDocument();
+    if (!clamavInstalled) expect(host.getByText("nicht installiert")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "ClamAV installieren" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Lynis installieren" })).toBeNull();
+  });
+
   it("ohne Server: führt zu „Server & Zugänge“ statt zu einer Seite, die es nicht gibt", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
@@ -156,6 +177,7 @@ describe("Nodvard Shield Virenschutz", () => {
     fireEvent.click(screen.getByRole("tab", { name: /Quarantäne/ }));
     const list = within(await screen.findByTestId("findings"));
     expect(list.getByText("Win.Test.EICAR_HC-1")).toBeInTheDocument();
+    expect(list.getByTestId("finding-text-f1")).toHaveClass("flex-[1_1_14rem]");
     fireEvent.click(list.getByRole("button", { name: "In Quarantäne" }));
     await waitFor(() => expect(calls.some((c) => c.url.endsWith("/findings/f1/quarantine"))).toBe(true));
 

@@ -305,6 +305,30 @@ describe("FilesPage Handy-Layout", () => {
     expect(sidebar.parentElement).toHaveClass("flex-col", "lg:flex-row");
     expect(screen.getByRole("table").parentElement).toHaveClass("overflow-x-auto");
   });
+
+  it("unter 640 px wird jede Zeile zur Karte mit allen Knöpfen, ab sm bleibt es die Tabelle", async () => {
+    vi.stubGlobal("fetch", mockFetch());
+    render(<FilesPage />);
+
+    const card = (await screen.findByText("⠿ notes.txt")).closest("tr")!;
+    // Karte: Zeile gestapelt; Tabelle, Kopf und Zeile kehren ab `sm` zur Tabelle zurück.
+    expect(card).toHaveClass("flex", "flex-col", "sm:table-row");
+    expect(screen.getByRole("table")).toHaveClass("block", "sm:table");
+    expect(screen.getByRole("table").querySelector("thead")).toHaveClass("hidden", "sm:table-header-group");
+    // Laden, Kopieren, Umbenennen und Löschen sind in der Karte erreichbar; die Knöpfe dürfen umbrechen.
+    for (const name of ["Laden", "Kopieren nach …", "Umbenennen", "Löschen"]) {
+      expect(within(card).getByRole("button", { name })).toBeEnabled();
+    }
+    const buttons = within(card).getByRole("button", { name: "Löschen" }).parentElement!;
+    expect(buttons).toHaveClass("flex-wrap");
+    expect(buttons.closest("td")).toHaveClass("block", "sm:table-cell");
+    // Werte tragen ihre Beschriftung; bei einem Ordner ist die Größe leer, die leere Zelle fällt auf dem Handy weg.
+    expect([...card.querySelectorAll("td[data-label]")].map((td) => td.getAttribute("data-label"))).toEqual(["Größe", "Geändert"]);
+    const folderSize = screen.getByText("📁 docs").closest("tr")!.querySelector("td[data-label='Größe']")!;
+    expect(folderSize).toBeEmptyDOMElement();
+    expect(folderSize).toHaveClass("empty:hidden", "sm:empty:table-cell");
+    expect(card).toHaveAttribute("role", "row");
+  });
 });
 
 describe("FilesPage Dialoge (Umbenennen/Löschen/Neuer-Ordner)", () => {

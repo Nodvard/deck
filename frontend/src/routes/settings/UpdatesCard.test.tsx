@@ -4,12 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { browserNavigation, restartTiming } from "../../lib/restore";
 import { resetUpdateHelper, updaterTiming, type HelperResult, type HelperView } from "../../lib/updater";
 import { useAuthStore } from "../../state/auth";
+import { DECK_EDITION, useEditionStore } from "../../state/edition";
 import { SystemSettings } from "./SystemSettings";
-import { UpdatesCard, type UpdateStatus } from "./UpdatesCard";
+import { UpdatesCard, manualGuideFolded, type UpdateStatus } from "./UpdatesCard";
 import { FAILED_MANUAL_STEPS, HELPER_CODE_TEXTS, HELPER_GUIDE_URL, PRESENCE_TEXTS, STEP_TEXTS, outcomeTitle } from "./updaterTexts";
 
 const BASE: UpdateStatus = {
-  current: "0.5.0", latest: "0.6.0", latest_digest: null, available: true, channel: "stable", enabled: true,
+  current: "0.5.0", latest: "0.6.0", latest_digest: null, available: true, kinds: [], kinds_complete: true,
+  channel: "stable", enabled: true,
   checked_at: "2026-10-01T04:41:00Z", attempted_at: "2026-10-01T04:41:00Z", source: "cache", error: null,
   official_image: true, image: "ghcr.io/nodvard/deck", official_image_name: "ghcr.io/nodvard/deck", helper: false,
   release_notes_url: "https://github.com/nodvard/deck/blob/v0.6.0/CHANGELOG.md", approved: true,
@@ -69,6 +71,13 @@ afterEach(() => {
 });
 
 describe("Karte Updates", () => {
+  it("kennzeichnet ein Update mit Dokumentationsänderungen", async () => {
+    mockApi({ "GET /system/updates": () => json({ ...BASE, kinds: ["dokumentation"], kinds_complete: true }) });
+    render(<UpdatesCard />);
+    expect(await screen.findByText("Dokumentation")).toBeInTheDocument();
+    expect(screen.queryByText(/nicht bekannt/)).not.toBeInTheDocument();
+  });
+
   it("zeigt „Update verfügbar“ mit Version und Link zu den Neuerungen", async () => {
     mockApi({ "GET /system/updates": () => json(BASE) });
     render(<UpdatesCard />);
@@ -76,6 +85,44 @@ describe("Karte Updates", () => {
     expect(hint.closest("[role=status]")).not.toBeNull();
     expect(screen.getByText("Version 0.5.0")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Was ist neu/ })).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/v0.6.0/CHANGELOG.md");
+  });
+
+  it("nennt die Arten der Änderungen, ein Sicherheitsupdate zuerst", async () => {
+    mockApi({ "GET /system/updates": () => json({ ...BASE, kinds: ["neu", "sicherheit", "behoben"], kinds_complete: true }) });
+    render(<UpdatesCard />);
+    await screen.findByText("Update verfügbar: Version 0.6.0");
+    const labels = ["Sicherheitsupdate", "Fehlerbehebungen", "Neue Funktionen"].map((label) => screen.getByText(label));
+    expect(labels[0].compareDocumentPosition(labels[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(labels[1].compareDocumentPosition(labels[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText("Verbesserungen")).not.toBeInTheDocument();
+    expect(screen.queryByText(/nicht bekannt/)).not.toBeInTheDocument();
+  });
+
+  it("unbekannte Arten: nie als harmlos darstellen", async () => {
+    mockApi({ "GET /system/updates": () => json({ ...BASE, kinds: [], kinds_complete: false }) });
+    const { unmount } = render(<UpdatesCard />);
+    expect(await screen.findByText(/Was dieses Update ändert, ist nicht bekannt\. Es kann auch Sicherheitsupdates enthalten/)).toBeInTheDocument();
+    unmount();
+
+    mockApi({ "GET /system/updates": () => json({ ...BASE, kinds: ["behoben"], kinds_complete: false }) });
+    render(<UpdatesCard />);
+    expect(await screen.findByText("Fehlerbehebungen")).toBeInTheDocument();
+    expect(screen.getByText(/Nicht für jede Version bis dahin ist bekannt/)).toBeInTheDocument();
+  });
+
+  it("ohne Angabe zu den Arten gilt das Update als unbekannt, nicht als harmlos", async () => {
+    const { kinds: _kinds, kinds_complete: _complete, ...withoutKinds } = BASE;
+    mockApi({ "GET /system/updates": () => json(withoutKinds) });
+    render(<UpdatesCard />);
+    expect(await screen.findByText(/Was dieses Update ändert, ist nicht bekannt/)).toBeInTheDocument();
+  });
+
+  it("ohne Update keine Arten, auch nicht aus einem alten Stand", async () => {
+    mockApi({ "GET /system/updates": () => json({ ...BASE, latest: "0.5.0", available: false, kinds: ["sicherheit"], kinds_complete: false }) });
+    render(<UpdatesCard />);
+    await screen.findByText(/Du bist auf dem neuesten Stand/);
+    expect(screen.queryByText("Sicherheitsupdate")).not.toBeInTheDocument();
+    expect(screen.queryByText(/nicht bekannt/)).not.toBeInTheDocument();
   });
 
   it("sagt, wenn alles aktuell ist", async () => {
@@ -380,12 +427,207 @@ describe("Karte Updates", () => {
     );
     expect(toggle).toHaveAttribute("aria-checked", "true");
     fireEvent.click(toggle);
-    await vi.waitFor(() => expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "false"));
+    await vi.waitFor(() => expect(screen.getByRole("switch", { name: "Täglich automatisch nach Updates suchen" })).toHaveAttribute("aria-checked", "false"));
     expect(calls.find((c) => c.method === "PUT")).toEqual({ method: "PUT", path: "/settings/system.update_check.enabled", body: { value: false } });
 
     fireEvent.change(screen.getByRole("combobox", { name: "Welche Versionen" }), { target: { value: "beta" } });
     await vi.waitFor(() => expect(calls.some((c) => c.path === "/settings/system.update_check.channel")).toBe(true));
     expect(calls.find((c) => c.path === "/settings/system.update_check.channel")?.body).toEqual({ value: "beta" });
+  });
+
+  it("Sicherheitsupdates selbst einspielen: nur der Inhaber, mit Passwort, und ehrlich, dass es erst mit 1.0 wirkt", async () => {
+    setUser(["system.read", "settings.write"]);
+    mockApi({ "GET /system/updates": () => json(BASE) });
+    const first = render(<UpdatesCard />);
+    const locked = await screen.findByRole("switch", { name: "Sicherheitsupdates selbst einspielen" });
+    expect(locked).toBeDisabled();
+    expect(screen.getByText(/Das ändert nur der Inhaber/)).toBeInTheDocument();
+    expect(screen.getByText(/Noch nicht in dieser Version: Bis jetzt spielt Nodvard Deck kein Update von selbst ein/)).toBeInTheDocument();
+    expect(screen.getByText(/mit eingerichtetem Meldungskanal auch als Push/)).toBeInTheDocument();
+    first.unmount();
+
+    useAuthStore.setState((s) => ({ user: s.user ? { ...s.user, is_owner: true } : s.user }));
+    const calls = mockApi({
+      "GET /system/updates": () => json(BASE),
+      "GET /me": () => json({ totp_enabled: false }),
+      "PUT /settings/system.update_check.auto_security": (body) => json({ key: "system.update_check.auto_security", value: (body as { value: boolean }).value }),
+    });
+    render(<UpdatesCard />);
+    const toggle = await screen.findByRole("switch", { name: "Sicherheitsupdates selbst einspielen" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    fireEvent.change(await screen.findByLabelText("Anmeldepasswort zur Bestätigung"), { target: { value: "pw-inhaber" } });
+    fireEvent.click(screen.getByRole("button", { name: "Bestätigen und speichern" }));
+    expect(await screen.findByText(/Zugestimmt\. Bis Version 1\.0 bleibt es beim Melden/)).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Sicherheitsupdates selbst einspielen" })).toHaveAttribute("aria-checked", "true");
+    expect(calls.filter((c) => c.method === "PUT").map((c) => [c.path, c.body])).toEqual([
+      ["/settings/system.update_check.auto_security", { value: true, current_password: "pw-inhaber", totp_code: "" }],
+    ]);
+  });
+
+  it("Sicherheitsupdates selbst einspielen: Abbrechen lässt alles, wie es war", async () => {
+    setUser(["system.read", "settings.write"]);
+    useAuthStore.setState((s) => ({ user: s.user ? { ...s.user, is_owner: true } : s.user }));
+    const calls = mockApi({
+      "GET /system/updates": () => json({ ...BASE, auto_security: true }),
+      "GET /me": () => json({ totp_enabled: false }),
+    });
+    render(<UpdatesCard />);
+    const toggle = await screen.findByRole("switch", { name: "Sicherheitsupdates selbst einspielen" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(toggle);
+    expect(screen.getByRole("switch", { name: "Sicherheitsupdates selbst einspielen" })).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(await screen.findByRole("button", { name: "Abbrechen" }));
+    expect(screen.getByRole("switch", { name: "Sicherheitsupdates selbst einspielen" })).toHaveAttribute("aria-checked", "true");
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+  });
+
+  it.each(["Suche zuerst", "Speichern zuerst"])("Zustimmung bleibt bei überlappenden Antworten erhalten: %s", async (order) => {
+    setOwner();
+    let finishCheck!: (r: Response) => void;
+    let finishSave!: (r: Response) => void;
+    const check = new Promise<Response>((resolve) => { finishCheck = resolve; });
+    const save = new Promise<Response>((resolve) => { finishSave = resolve; });
+    const calls = mockApi({
+      "GET /system/updates": () => json({ ...BASE, auto_security: false }),
+      "GET /me": () => json({ totp_enabled: false }),
+      "POST /system/updates/check": () => check as unknown as Response,
+      "PUT /settings/system.update_check.auto_security": () => save as unknown as Response,
+    });
+    render(<UpdatesCard />);
+    const toggle = await screen.findByRole("switch", { name: "Sicherheitsupdates selbst einspielen" });
+    fireEvent.click(toggle);
+    fireEvent.change(await screen.findByLabelText("Anmeldepasswort zur Bestätigung"), { target: { value: "pw-inhaber" } });
+    fireEvent.click(screen.getByRole("button", { name: "Jetzt suchen" }));
+    expect(screen.getByRole("form", { name: "Änderung bestätigen" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Bestätigen und speichern" }));
+    await vi.waitFor(() => expect(calls.filter((c) => c.method === "PUT")).toHaveLength(1));
+
+    const checked = json({ ...BASE, latest: "0.7.0", source: "live", auto_security: false });
+    const saved = json({ key: "system.update_check.auto_security", value: true });
+    if (order === "Suche zuerst") {
+      await act(async () => { finishCheck(checked); });
+      expect(await screen.findByText("Update verfügbar: Version 0.7.0")).toBeInTheDocument();
+      await act(async () => { finishSave(saved); });
+    } else {
+      await act(async () => { finishSave(saved); });
+      expect(await screen.findByText(/Zugestimmt\. Bis Version 1\.0/)).toBeInTheDocument();
+      await act(async () => { finishCheck(checked); });
+    }
+    expect(await screen.findByText("Update verfügbar: Version 0.7.0")).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText(/Zugestimmt\. Bis Version 1\.0/)).toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "Änderung bestätigen" })).not.toBeInTheDocument();
+    expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ value: true, current_password: "pw-inhaber", totp_code: "" });
+  });
+
+  it("sperrt eine geöffnete Bestätigung während des Neuladens nach einem Kanalwechsel", async () => {
+    setOwner();
+    let finishStatus!: (r: Response) => void;
+    const status = new Promise<Response>((resolve) => { finishStatus = resolve; });
+    let loads = 0;
+    const calls = mockApi({
+      "GET /system/updates": () => ++loads === 1 ? json(BASE) : status as unknown as Response,
+      "GET /system/updates/helper": () => json(ABSENT("missing")),
+      "GET /me": () => json({ totp_enabled: false }),
+      "PUT /settings/system.update_check.channel": () => json({ value: "beta" }),
+      "PUT /settings/system.update_check.auto_security": () => json({ value: true }),
+    });
+    render(<UpdatesCard />);
+    fireEvent.click(await screen.findByRole("switch", { name: "Sicherheitsupdates selbst einspielen" }));
+    fireEvent.change(await screen.findByLabelText("Anmeldepasswort zur Bestätigung"), { target: { value: "pw-inhaber" } });
+    const submit = screen.getByRole("button", { name: "Bestätigen und speichern" });
+    expect(submit).not.toBeDisabled();
+    fireEvent.change(screen.getByRole("combobox", { name: "Welche Versionen" }), { target: { value: "beta" } });
+    await vi.waitFor(() => expect(loads).toBe(2));
+    expect(submit).toBeDisabled();
+    fireEvent.click(submit);
+    fireEvent.submit(screen.getByRole("form", { name: "Änderung bestätigen" }));
+    expect(calls.some((c) => c.path === "/settings/system.update_check.auto_security")).toBe(false);
+
+    await act(async () => { finishStatus(json({ ...BASE, channel: "beta" })); });
+    expect(submit).not.toBeDisabled();
+    fireEvent.click(submit);
+    expect(await screen.findByText(/Zugestimmt\. Bis Version 1\.0/)).toBeInTheDocument();
+  });
+
+  it.each(["Status zuerst", "Speichern zuerst"])("Zustimmung bleibt beim Neuladen nach einem Kanalwechsel erhalten: %s", async (order) => {
+    setOwner();
+    let finishStatus!: (r: Response) => void;
+    let finishSave!: (r: Response) => void;
+    const status = new Promise<Response>((resolve) => { finishStatus = resolve; });
+    const save = new Promise<Response>((resolve) => { finishSave = resolve; });
+    let loads = 0;
+    const calls = mockApi({
+      "GET /system/updates": () => ++loads === 1 ? json({ ...BASE, auto_security: false }) : status as unknown as Response,
+      "GET /system/updates/helper": () => json(ABSENT("missing")),
+      "GET /me": () => json({ totp_enabled: false }),
+      "PUT /settings/system.update_check.channel": () => json({ value: "beta" }),
+      "PUT /settings/system.update_check.auto_security": () => save as unknown as Response,
+    });
+    render(<UpdatesCard />);
+    const toggle = await screen.findByRole("switch", { name: "Sicherheitsupdates selbst einspielen" });
+    fireEvent.click(toggle);
+    fireEvent.change(await screen.findByLabelText("Anmeldepasswort zur Bestätigung"), { target: { value: "pw-inhaber" } });
+    fireEvent.click(screen.getByRole("button", { name: "Bestätigen und speichern" }));
+    await vi.waitFor(() => expect(calls.some((c) => c.path === "/settings/system.update_check.auto_security")).toBe(true));
+    fireEvent.change(screen.getByRole("combobox", { name: "Welche Versionen" }), { target: { value: "beta" } });
+    await vi.waitFor(() => expect(loads).toBe(2));
+
+    const loaded = json({ ...BASE, channel: "beta", latest: "0.7.0-beta1", auto_security: false });
+    const saved = json({ value: true });
+    if (order === "Status zuerst") {
+      await act(async () => { finishStatus(loaded); });
+      await act(async () => { finishSave(saved); });
+    } else {
+      await act(async () => { finishSave(saved); });
+      expect(await screen.findByText(/Zugestimmt\. Bis Version 1\.0/)).toBeInTheDocument();
+      await act(async () => { finishStatus(loaded); });
+    }
+    expect(screen.getByRole("combobox", { name: "Welche Versionen" })).toHaveValue("beta");
+    expect(screen.getByText("Update verfügbar: Version 0.7.0-beta1 (Vorabversion)")).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText(/Zugestimmt\. Bis Version 1\.0/)).toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "Änderung bestätigen" })).not.toBeInTheDocument();
+  });
+
+  it.each(["Alte Antwort zuerst", "Neue Antwort zuerst"])("verwirft Statusantworten eines vorherigen Kanals: %s", async (order) => {
+    setOwner();
+    let finishBeta!: (r: Response) => void;
+    let finishStable!: (r: Response) => void;
+    const beta = new Promise<Response>((resolve) => { finishBeta = resolve; });
+    const stable = new Promise<Response>((resolve) => { finishStable = resolve; });
+    let loads = 0;
+    mockApi({
+      "GET /system/updates": () => {
+        loads += 1;
+        return loads === 1 ? json(BASE) : (loads === 2 ? beta : stable) as unknown as Response;
+      },
+      "GET /system/updates/helper": () => json(ABSENT("missing")),
+      "PUT /settings/system.update_check.channel": (body) => json(body),
+    });
+    render(<UpdatesCard />);
+    const select = await screen.findByRole("combobox", { name: "Welche Versionen" });
+    fireEvent.change(select, { target: { value: "beta" } });
+    await vi.waitFor(() => expect(loads).toBe(2));
+    // Ein weiterer Kanalwechsel überholt die noch offene Antwort.
+    fireEvent.change(select, { target: { value: "stable" } });
+    await vi.waitFor(() => expect(loads).toBe(3));
+    const older = json({ ...BASE, channel: "beta", latest: "0.7.0-beta1" });
+    const newer = json({ ...BASE, channel: "stable", latest: "0.6.1" });
+    if (order === "Alte Antwort zuerst") {
+      await act(async () => { finishBeta(older); });
+      expect(select).toBeDisabled();
+      expect(select).toHaveValue("stable");
+      await act(async () => { finishStable(newer); });
+    } else {
+      await act(async () => { finishStable(newer); });
+      await act(async () => { finishBeta(older); });
+    }
+    expect(select).not.toBeDisabled();
+    expect(select).toHaveValue("stable");
+    expect(screen.getByText("Update verfügbar: Version 0.6.1")).toBeInTheDocument();
+    expect(screen.queryByText(/Update verfügbar: Version 0\.7\.0/)).not.toBeInTheDocument();
   });
 
   it("während „Jetzt suchen“ sind Schalter und Kanal gesperrt (keine Antwort überschreibt eine neuere)", async () => {
@@ -410,6 +652,24 @@ describe("Karte Updates", () => {
     expect(select).not.toBeDisabled();
   });
 
+  it("während „Jetzt suchen“ ist auch die Zustimmung zu Sicherheitsupdates gesperrt", async () => {
+    setUser(["system.read", "settings.write"]);
+    useAuthStore.setState((s) => ({ user: s.user ? { ...s.user, is_owner: true } : s.user }));
+    let finish: (r: Response) => void = () => undefined;
+    mockApi({
+      "GET /system/updates": () => json(BASE),
+      "GET /me": () => json({ totp_enabled: false }),
+      "POST /system/updates/check": () => new Promise<Response>((resolve) => (finish = resolve)) as unknown as Response,
+    });
+    render(<UpdatesCard />);
+    const toggle = await screen.findByRole("switch", { name: "Sicherheitsupdates selbst einspielen" });
+    expect(toggle).not.toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /Jetzt suchen/ }));
+    await vi.waitFor(() => expect(toggle).toBeDisabled());
+    finish(json({ ...BASE, source: "live" }));
+    await vi.waitFor(() => expect(toggle).not.toBeDisabled());
+  });
+
   it("während gespeichert wird, ist „Jetzt suchen“ gesperrt; der Schalter überschreibt kein neueres Ergebnis", async () => {
     setUser(["system.read", "settings.write"]);
     let finish: (r: Response) => void = () => undefined;
@@ -425,7 +685,7 @@ describe("Karte Updates", () => {
     fireEvent.click(button);
     expect(calls.some((c) => c.method === "POST")).toBe(false);
     finish(json({ key: "system.update_check.enabled", value: false }));
-    await vi.waitFor(() => expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "false"));
+    await vi.waitFor(() => expect(screen.getByRole("switch", { name: "Täglich automatisch nach Updates suchen" })).toHaveAttribute("aria-checked", "false"));
     expect(button).not.toBeDisabled();
     expect(screen.getByText("Update verfügbar: Version 0.6.0")).toBeInTheDocument();
   });
@@ -535,6 +795,41 @@ describe("Karte Updates: Update-Helfer", () => {
     expect(state).toHaveTextContent("Update-Helfer: antwortet nicht.");
     expect(state).toHaveTextContent(PRESENCE_TEXTS.stale);
     expect(screen.queryByRole("button", { name: /Jetzt aktualisieren/ })).not.toBeInTheDocument();
+  });
+
+  it("mit Knopf ist die Anleitung von Hand eingeklappt, ohne Knopf steht sie offen da", async () => {
+    setOwner();
+    mockApi({ "GET /system/updates": () => json(BASE), "GET /system/updates/helper": () => json(helperView()) });
+    const { unmount } = render(<UpdatesCard />);
+    await screen.findByRole("button", { name: "Jetzt aktualisieren auf 0.6.0" });
+    const guide = screen.getByTestId("manual-update-guide");
+    expect(guide).not.toHaveAttribute("open");
+    expect(within(guide).getByText("Von Hand aktualisieren (ohne Update-Helfer)")).toBeInTheDocument();
+    unmount();
+
+    // Helfer bereit, aber die Version ist festgepinnt: kein Knopf, die Anleitung ist der Weg.
+    resetUpdateHelper();
+    const pinned = helperView({ target: { current_version: "0.5.0", floating_tag: "0.5.0", pinned: true } });
+    mockApi({ "GET /system/updates": () => json(BASE), "GET /system/updates/helper": () => json(pinned) });
+    const second = render(<UpdatesCard />);
+    expect(await screen.findByTestId("helper-why-not")).toBeInTheDocument();
+    expect(screen.getByText("So spielst du ein Update ein")).toBeInTheDocument();
+    expect(screen.queryByTestId("manual-update-guide")).not.toBeInTheDocument();
+    second.unmount();
+
+    resetUpdateHelper();
+    mockApi({ "GET /system/updates": () => json(BASE), "GET /system/updates/helper": () => json(ABSENT("missing")) });
+    render(<UpdatesCard />);
+    expect(await screen.findByText("So spielst du ein Update ein")).toBeInTheDocument();
+    expect(screen.queryByTestId("manual-update-guide")).not.toBeInTheDocument();
+  });
+
+  it("manualGuideFolded: auch während eines Vorgangs zu, bei selbst gebautem Image oder ohne Helfer offen", () => {
+    expect(manualGuideFolded(BASE, busyView("pull"), false, true)).toBe(true);
+    expect(manualGuideFolded(BASE, helperView({ ready: false, ready_reason: "finishing" }), true, true)).toBe(true);
+    expect(manualGuideFolded({ ...BASE, official_image: false }, helperView(), false, true)).toBe(false);
+    expect(manualGuideFolded(BASE, null, false, true)).toBe(false);
+    expect(manualGuideFolded({ ...BASE, available: false, latest: "0.5.0" }, helperView(), false, true)).toBe(false);
   });
 
   it("Knopf, wenn alles passt: Helfer bereit, Update, offizielles Image, fertige Version, nicht fest, Owner", async () => {
@@ -1015,5 +1310,62 @@ describe("Karte Updates: Update-Helfer", () => {
     const box = await screen.findByTestId("helper-result");
     expect(box).toHaveTextContent("Abgebrochen: von außen geändert");
     expect(box).toHaveTextContent("docker compose ps");
+  });
+});
+
+describe("Karte Updates: Nodvard Dock", () => {
+  const DOCK: UpdateStatus = { ...BASE, image: "ghcr.io/nodvard/dock", official_image_name: "ghcr.io/nodvard/dock" };
+
+  beforeEach(() => {
+    useEditionStore.setState({
+      edition: { ...DECK_EDITION, id: "dock", product_name: "Nodvard Dock", service: "nodvard-dock", image: "ghcr.io/nodvard/dock", choose_modules: false, repo_tools: false },
+    });
+  });
+
+  afterEach(() => {
+    useEditionStore.setState({ edition: DECK_EDITION });
+  });
+
+  it("zeigt keinen Schalter zum selbstständigen Einspielen von Sicherheitsupdates", async () => {
+    setOwner();
+    mockApi({ "GET /system/updates": () => json(DOCK) });
+    render(<UpdatesCard />);
+    await screen.findByText("Update verfügbar: Version 0.6.0");
+    expect(screen.queryByRole("switch", { name: "Sicherheitsupdates selbst einspielen" })).not.toBeInTheDocument();
+  });
+
+  it("Anleitungen für das eigene Image, ohne deploy_pi.sh und ohne Update-Helfer", async () => {
+    setOwner();
+    const calls = mockApi({ "GET /system/updates": () => json(DOCK) });
+    render(<UpdatesCard />);
+    const tab = await openTabs("Update verfügbar: Version 0.6.0");
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(ALL_TABS.filter((name) => name !== "deploy_pi.sh"));
+    expect(tab("Docker Compose")).toHaveTextContent("ghcr.io/nodvard/dock:0.5.0");
+    expect(tab("Portainer")).toHaveTextContent("den Stack mit Nodvard Dock anklicken");
+    expect(screen.getByText(/neuere Version von Nodvard Dock/)).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/nodvard\/deck|deploy_pi|Nodvard Deck/);
+    expect(calls.some((c) => c.path === "/system/updates/helper")).toBe(false);
+  });
+
+  it("nennt nur ghcr.io, weil es für Dock keine Freigabe von github.com gibt", async () => {
+    mockApi({ "GET /system/updates": () => json(DOCK) });
+    const first = render(<UpdatesCard />);
+    expect(await screen.findByText(/Tägliche Suche: an/)).toHaveTextContent("Bei jeder Suche sieht GitHub (ghcr.io) die IP-Adresse");
+    first.unmount();
+
+    setOwner();
+    render(<UpdatesCard />);
+    expect(await screen.findByText(/einmal am Tag bei GitHub/)).toHaveTextContent("(ghcr.io, dort liegen die Images) nach");
+    expect(document.body.textContent).not.toContain("github.com");
+  });
+
+  it("selbst gebaut: Hinweis ohne deploy_pi.sh, Docker Compose vorne", async () => {
+    mockApi({ "GET /system/updates": () => json({ ...DOCK, official_image: false, image: null }) });
+    render(<UpdatesCard />);
+    expect(await screen.findByText(/läuft mit einem selbst gebauten Image/)).toHaveTextContent(
+      "Die Anleitungen gelten für das fertige Image ghcr.io/nodvard/dock.",
+    );
+    expect(screen.getByRole("tab", { name: "Docker Compose" })).toHaveAttribute("aria-selected", "true");
+    expect(document.body.textContent).not.toContain("deploy_pi");
   });
 });

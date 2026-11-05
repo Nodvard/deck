@@ -19,7 +19,7 @@ const CERT_WARN = {
 };
 const CERT_EXPIRED = {
   id: 13, name: "Altes Zertifikat", domains: ["alt.home.example"], provider: "other", provider_label: "eigenes Zertifikat",
-  expires_at: "2026-09-26T00:00:00+00:00", days_left: -4, status: "expired" as const, status_label: "abgelaufen", days_text: "seit 3 Tagen abgelaufen",
+  expires_at: "2026-09-26T00:00:00+00:00", days_left: -4, status: "expired" as const, status_label: "abgelaufen", days_text: "seit 3 Tagen",
 };
 
 const NPM: NpmStatus = {
@@ -107,8 +107,58 @@ describe("Seite „Nginx Proxy Manager“", () => {
 
     const urgent = within(screen.getByTestId("urgent-certificates"));
     expect(urgent.getByText("Altes Zertifikat")).toBeInTheDocument();
-    expect(urgent.getByText("abgelaufen · seit 3 Tagen abgelaufen")).toBeInTheDocument();
+    expect(urgent.getByText("abgelaufen · seit 3 Tagen")).toBeInTheDocument();
     expect(urgent.queryByText("cloud.home.example")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["seit heute", "abgelaufen · seit heute"],
+    ["seit 1 Tag", "abgelaufen · seit 1 Tag"],
+    ["seit 3 Tagen", "abgelaufen · seit 3 Tagen"],
+    ["abgelaufen", "abgelaufen"],
+    ["heute abgelaufen", "heute abgelaufen"],
+    ["seit 3 Tagen abgelaufen", "seit 3 Tagen abgelaufen"],
+  ])(
+    "zeigt bei abgelaufenen Zertifikaten nur einmal den Status: %s",
+    async (daysText, expected) => {
+      const certificate = { ...CERT_EXPIRED, days_text: daysText };
+      const npm: NpmStatus = {
+        ...NPM,
+        certificates: [certificate],
+        hosts: [{ ...NPM.hosts[2], certificate }],
+        summary: { hosts: 1, hosts_enabled: 0, certificates: 1, certificates_warn: 0, certificates_expired: 1 },
+      };
+      vi.stubGlobal("fetch", mockFetch([], { npm }));
+      render(<NpmPage />);
+
+      const row = await screen.findByTestId("cert-13");
+      expect(within(row).getByText(/Ablaufdatum: 26\.09\.2026/)).toBeInTheDocument();
+      for (const item of [row, screen.getByTestId("host-3")]) {
+        expect(within(item).getByText(expected)).toBeInTheDocument();
+        expect(item.textContent?.match(/abgelaufen/g)).toHaveLength(1);
+        expect(item).not.toHaveTextContent(/läuft ab am|gültig bis/);
+      }
+    },
+  );
+
+  it("zeigt für bald ablaufende Zertifikate Datum und Restzeit", async () => {
+    vi.stubGlobal("fetch", mockFetch([], { npm: NPM }));
+    render(<NpmPage />);
+
+    const row = within(await screen.findByTestId("cert-12"));
+    expect(row.getByText(/läuft ab am 04\.10\.2026/)).toBeInTheDocument();
+    expect(row.getByText("läuft bald ab · noch 5 Tage")).toBeInTheDocument();
+    expect(within(screen.getByTestId("host-2")).getByText("läuft bald ab · noch 5 Tage")).toBeInTheDocument();
+  });
+
+  it("zeigt für gültige Zertifikate weiterhin das Ablaufdatum", async () => {
+    vi.stubGlobal("fetch", mockFetch([], { npm: NPM }));
+    render(<NpmPage />);
+
+    const host = within(await screen.findByTestId("host-1"));
+    expect(host.getByText("gültig bis 01.12.2026")).toBeInTheDocument();
+    expect(host.queryByText(/abgelaufen|läuft bald ab/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("cert-11")).not.toBeInTheDocument();
   });
 
   it("Ausschalten eines Proxy-Hosts warnt, dass die Seite offline geht, und wartet ohne Recht auf Freigabe", async () => {

@@ -195,10 +195,9 @@ class NotifyResult(BaseModel):
 
     notification_id: str
     suppressed: bool = False
-    # `delivered`: `True`, wenn mindestens ein Kanal die Meldung wirklich zugestellt hat. `False`, wenn keiner es getan
-    # hat: kein Kanal, alle ausgefallen oder noch nicht eingerichtet, oder ein Wartungsfenster hat den Push unterdrückt
-    # (`suppressed`). `None`: unbekannt (ältere Kerne). So kann eine Seite ehrlich sagen, ob etwas auf dem Handy
-    # ankommt.
+    # `delivered`: `True`, wenn mindestens ein Kanal zugestellt hat; `False` ohne Kanal, bei nur ausgefallenen oder
+    # nicht eingerichteten Kanälen und bei unterdrücktem Push (`suppressed`); `None` bei älteren Kernen. So kann eine
+    # Seite ehrlich sagen, ob etwas auf dem Handy ankommt.
     delivered: bool | None = None
     skipped: bool | None = None
     """`True`, wenn kein Kanal zugestellt hat, mindestens einer die Meldung bewusst übersprungen hat
@@ -239,10 +238,9 @@ class PeerCertificate(BaseModel):
     `sha256`: Fingerabdruck über das ganze Zertifikat (Großbuchstaben, Paare durch Doppelpunkte getrennt).
     `trusted`: gilt nach den Zertifizierungsstellen eines normalen `ctx.http`-Aufrufs und passt zum Rechnernamen."""
 
-    # `sha256` ist derselbe Wert wie bei `openssl x509 -fingerprint -sha256` und in vielen Oberflächen (z. B. Proxmox VE
-    # unter Knoten -> System -> Zertifikate). Bei `trusted=True` klappt ein Aufruf ohne `insecure_tls` und ohne
-    # `pinned_sha256`. Die übrigen Felder sind nur zum Anzeigen (vom Server, ungeprüft, gekürzt): Inhaber, Aussteller,
-    # Ablauf (ISO 8601, UTC) und weitere Namen.
+    # `sha256` entspricht `openssl x509 -fingerprint -sha256` und der Anzeige z. B. in Proxmox VE (Knoten -> System ->
+    # Zertifikate). Bei `trusted=True` klappt ein Aufruf ohne `insecure_tls` und `pinned_sha256`. Die übrigen Felder
+    # sind nur zum Anzeigen (vom Server, ungeprüft, gekürzt): Inhaber, Aussteller, Ablauf (ISO 8601, UTC), Namen.
 
     model_config = {"frozen": True}
 

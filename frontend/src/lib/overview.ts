@@ -51,7 +51,10 @@ export interface HostOut {
 }
 
 export interface MetricsOut {
-  values: { cpu_percent?: number; mem_used_bytes?: number; mem_total_bytes?: number; uptime_s?: number };
+  values: {
+    cpu_percent?: number; mem_used_bytes?: number; mem_total_bytes?: number; uptime_s?: number;
+    root_used_bytes?: number; root_total_bytes?: number;
+  };
   sampled_at: string;
 }
 
@@ -73,7 +76,7 @@ export interface HostLatestMetrics {
 }
 
 export interface LatestMetricsOut {
-  /** Nur Server mit einem Messwert der letzten Minuten; Hypervisor-Knoten fehlen (sie werden live gefragt). */
+  /** Nur Server mit einem Messwert der letzten Minuten, auch Hypervisor-Knoten und ihre laufenden Gäste. */
   hosts: Record<string, HostLatestMetrics>;
   stale_after_s: number;
 }

@@ -2,6 +2,7 @@
  * Inventar-Seite (Inventar-Modul im Stil von Homebox, PageSpec `component="InventoryPage"`) über die
  * `/ext/inventory/...`-Endpunkte, dazu `GET /hosts` für die Auswahl „Gehört zu Server“.
  */
+import { styleRef } from "../../../_shared/frontend/src/csp";
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
@@ -502,7 +503,7 @@ function RacksPanel({ items, onChanged }: { items: Item[]; onChanged: () => void
                 <li
                   key={`d-${row.item.id}`}
                   className="flex items-center gap-2 border-b border-white/[0.06] bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] px-2 text-xs"
-                  style={{ minHeight: `${(row.top - row.bottom + 1) * 1.75}rem` }}
+                  ref={styleRef({ minHeight: `${(row.top - row.bottom + 1) * 1.75}rem` })}
                   data-testid={`rack-device-${row.item.id}`}
                 >
                   <span className="w-14 flex-none tabular-nums text-white/45">{row.top === row.bottom ? `HE ${row.top}` : `HE ${row.bottom}–${row.top}`}</span>
@@ -1523,7 +1524,7 @@ export function InventoryPage(): JSX.Element {
                       <span className="grid h-11 w-11 flex-none place-items-center rounded-lg bg-white/[0.05] text-white/35"><Icon name="package" size={18} /></span>
                     )}
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{item.name}</p>
+                      <p className="line-clamp-2 break-words text-sm font-medium sm:line-clamp-none sm:truncate">{item.name}</p>
                       <p className="truncate text-xs text-white/50">
                         {[item.manufacturer, item.model].filter(Boolean).join(" ") || categoryName(item.category_id)} · {locationName(item.location_id)} · Menge {item.quantity}
                         {hostName(item.host_id) && <> · {hostName(item.host_id)}</>}
@@ -1539,6 +1540,12 @@ export function InventoryPage(): JSX.Element {
                       <Button small variant="danger" onClick={() => void removeItem(item)} title="Löschen"><Icon name="trash" size={13} /><span className="sr-only sm:not-sr-only"> Löschen</span></Button>
                     </div>
                   </div>
+                  {(item.purchase_price_cents != null || item.warranty_until) && (
+                    <p className="ml-10 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs sm:hidden" data-testid={`price-mobile-${item.id}`}>
+                      <span className="tabular-nums">{formatPrice(item.purchase_price_cents)}</span>
+                      {item.warranty_until && <Badge tone={WARRANTY_BADGE[ws].tone}>{WARRANTY_BADGE[ws].label(item.warranty_until)}</Badge>}
+                    </p>
+                  )}
                   {isExpanded && (
                     <div className="ml-10 mt-3 rounded-lg border border-white/[0.06] bg-black/15 p-4 text-sm">
                       {item.description && <p className="mb-3 text-white/80">{item.description}</p>}

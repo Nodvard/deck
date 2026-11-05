@@ -4,6 +4,7 @@
  */
 
 import { syncThemeColor } from "./theme";
+import { styleRef } from "../../../extensions/_shared/frontend/src/csp";
 
 export interface BrandingColors {
   accent: string;
@@ -26,7 +27,6 @@ export interface Branding {
 /** Werkseinstellung der Akzentfarbe: steht sie im Branding, gilt die Farbe des Themes. */
 export const DEFAULT_ACCENT = "#0ea5e9";
 
-const ACCENT_VARS = ["--color-accent", "--color-accent-strong", "--color-accent-text"];
 
 /** Werte der Akzent-Variablen für eine eigene Farbe; die kräftige Stufe (Hover, Gedrückt) ist 15 % dunkler. */
 export function accentVars(accent: string): Record<string, string> {
@@ -76,14 +76,15 @@ export async function fetchBranding(): Promise<Branding> {
 }
 
 /** Schreibt Branding in DOM/CSS, beim Start und nach jedem Speichern, ohne Neuladen. */
+let clearAccent: ReturnType<typeof styleRef> | undefined;
+
 export function applyBranding(branding: Branding): void {
   const root = document.documentElement;
   const accent = brandAccent(branding);
   const values = accent ? accentVars(accent) : {};
-  for (const name of ACCENT_VARS) {
-    if (accent) root.style.setProperty(name, values[name]);
-    else root.style.removeProperty(name);
-  }
+  clearAccent?.(null);
+  clearAccent = styleRef(values);
+  clearAccent(root);
 
   document.title = branding.product_name;
   syncThemeColor();
@@ -99,16 +100,17 @@ export function applyBranding(branding: Branding): void {
 }
 
 /** Rechteinhaber und Name der Software. Beides bleibt auch bei eigenem Branding (Produktname, Logo) stehen:
- * das Branding aendert, wie die Oberflaeche heisst, nicht, wem die Software gehoert und wie sie heisst. */
+ * das Branding ändert, wie die Oberfläche heißt, nicht, wem die Software gehört und wie sie heißt. */
 export const COPYRIGHT_HOLDER = "Nico Benks";
 export const SOFTWARE_NAME = "Nodvard Deck";
 const COPYRIGHT_FIRST_YEAR = 2026;
 
-/** Zeile „© 2026 Nico Benks · Nodvard Deck“ (ab 2027 „© 2026–2027 ...“) fuer die Anmeldeseite. */
-export function copyrightLine(now: Date = new Date()): string {
+/** Zeile „© 2026 Nico Benks · Nodvard Deck“ (ab 2027 „© 2026–2027 ...“) für die Anmeldeseite; `software` ist der Name
+ * der laufenden Ausgabe (Nodvard Deck oder Nodvard Dock), nie der aus dem Branding. */
+export function copyrightLine(now: Date = new Date(), software: string = SOFTWARE_NAME): string {
   const year = now.getFullYear();
   const years = year > COPYRIGHT_FIRST_YEAR ? `${COPYRIGHT_FIRST_YEAR}–${year}` : `${COPYRIGHT_FIRST_YEAR}`;
-  return `© ${years} ${COPYRIGHT_HOLDER} · ${SOFTWARE_NAME}`;
+  return `© ${years} ${COPYRIGHT_HOLDER} · ${software}`;
 }
 
 /** Erklärt den „Untertitel“: derselbe Wert (`short_name`) ist auch der Name der App auf dem Handy (Web-App-Manifest). */

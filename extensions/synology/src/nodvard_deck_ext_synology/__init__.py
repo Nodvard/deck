@@ -69,7 +69,7 @@ class Extension(NodvardExtension):
         self._service = SynologyService(ctx)
         service = self._service
 
-        # Das Einzelgerät von früher wird das erste Gerät; scheitert das, bleibt das Modul trotzdem ladbar.
+        # Ein vorhandenes Einzelgerät wird das erste Gerät; scheitert das, bleibt das Modul trotzdem ladbar.
         try:
             await adopt_single_device(ctx)
         except Exception:  # setup() darf daran nicht scheitern
@@ -136,7 +136,7 @@ class Extension(NodvardExtension):
                     return {"data": gone_rows(device[:40]), "meta": {"state": "not_configured"}}
                 return build(data, await service.many())
 
-            # Der Name der Route bleibt der von früher, damit die Kennung in der OpenAPI-Beschreibung dieselbe bleibt.
+            # Die Routennamen sind fest, damit die Kennungen in der OpenAPI-Beschreibung stabil bleiben.
             router.add_api_route(f"/widgets/{kind}", first_device, methods=["GET"], name=f"{kind}_widget")
             router.add_api_route(f"/widgets/{kind}/{{device}}", named_device, methods=["GET"], name=f"{kind}_widget_of_device")
 

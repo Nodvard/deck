@@ -292,6 +292,7 @@ class _NtfyChannel:
     # lassen sich nur beim Start anmelden, die Liste in den Einstellungen ändert sich aber jederzeit.
     channel_id = "ntfy"
     label = "Push-Nachrichten"
+    uses_push_preferences = True
 
     def __init__(self, ctx: ExtensionContext) -> None:
         self._ctx = ctx
@@ -419,6 +420,10 @@ class _NtfyChannel:
         server_url, topic = self._config(settings)
         headers = await self._auth_header()
         body = build_message(notification, topic, self._dashboard_url(settings), priorities_from_settings(settings))
+        priority = (notification.payload or {}).get("_push_priority")
+        number = {"min": 1, "low": 2, "default": 3, "high": 4, "urgent": 5}.get(priority, body["priority"])
+        body["priority"] = number
+        headers["Priority"] = str(number)
         response = await self._request("POST", server_url + "/", json=body, headers=headers)
         problem = status_error(response.status_code)
         if problem:
@@ -434,7 +439,7 @@ class _NtfyChannel:
         except RuntimeError as exc:
             return ConnectorHealth(ok=False, message=str(exc))
         try:
-            response = await self._request("GET", server_url + "/v1/health")
+            response = await self._request("GET", server_url + "/v1/health", headers=await self._auth_header())
         except Exception as exc:  # noqa: BLE001 - Health-Check darf nie werfen, nur melden
             return ConnectorHealth(ok=False, message=str(exc))
         problem = status_error(response.status_code)

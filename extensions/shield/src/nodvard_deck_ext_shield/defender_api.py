@@ -126,7 +126,7 @@ async def _register_job(ctx: ExtensionContext, job: _JobSpec) -> None:
                     ),
                     severity=Severity.WARNING,
                     correlation_id=f"shield-schedule:{job.id}",
-                    payload={"path": SOC_PATH, "tags": ["shield"]},
+                    payload={"notification_type": "shield.schedule", "path": SOC_PATH, "tags": ["shield"]},
                 ))
             except Exception:  # noqa: BLE001 - eine ausgefallene Meldung darf den Start nicht stoppen
                 logging.getLogger(LOGGER).warning("shield_schedule_notice_failed job=%s", job.id)
@@ -212,7 +212,7 @@ class ActionCommands:
         return av.delete_command(row.quarantine_path)
 
     async def helper_args(self, action_type: str, host: Any, payload: dict[str, Any]) -> list[str] | None:
-        """Derselbe Auftrag als Aufruf des Hilfsskripts, oder `None` (dann läuft der Befehl aus `build` wie bisher).
+        """Derselbe Auftrag als Aufruf des Hilfsskripts, oder `None` (dann läuft der Befehl aus `build` direkt).
         Erst beim Ausführen gefragt: `payload.command` und damit freigegebene Aktionen bleiben unverändert."""
         if action_type == ACTION_BAN:
             return ix.ban_args(payload["ip"], payload["jail"], unban=payload["unban"])
@@ -298,6 +298,8 @@ class DefenderExecutor:
             ACTION_DELETE: av.HELPER_QUARANTINE_VERSION,
         }.get(req.action_type, av.HELPER_ACTION_VERSION)
         wrapped = av.via_helper(args, command, version=version) if args else av.as_root(command)
+        if req.action_type == ACTION_INSTALL and req.payload["package"] in ("clamav", "lynis", "fail2ban"):
+            wrapped = av.RPM_OSTREE_GUARD + wrapped
         if req.action_type == ACTION_BAN and not req.payload["unban"]:
             # Der Server prüft selbst vor sudo: Deck kann seit dem Vorschlag über eine andere Adresse verbunden sein.
             wrapped = ix.deck_address_guard(req.payload["ip"]) + wrapped
@@ -307,6 +309,9 @@ class DefenderExecutor:
         if req.action_type == ACTION_INSTALL:
             # Sonst bote die Seite mit dem gemerkten Stand (bis 10 Minuten) das gerade Installierte erneut an.
             self._defender.forget_status(host.id)
+            if not ok and av.RPM_OSTREE_MESSAGE in (stdout or ""):
+                return ActionResult(success=False, exit_code=result.exit_code, error=av.RPM_OSTREE_MESSAGE,
+                                    output=stdout, duration_ms=result.duration_ms)
         if req.action_type == ACTION_REALTIME:
             # Auch nach einem Fehlschlag: clamd kann schon laufen, die gemerkte Eignung stimmt dann nicht mehr.
             self._defender.forget_readiness(host.id)
@@ -483,10 +488,9 @@ def _already_open_reason(action: Any) -> str:
 
 
 def _realtime_state(state: dict[str, Any], down: dict[str, Any], readiness: dict[str, Any]) -> dict[str, Any]:
-    """Wie der Wächter auf einem Server läuft. `realtime_requested`: eingeschaltet. `realtime_on`: läuft auch wirklich in
-    Echtzeit, also weder meldet der Server clamonacc als gestoppt, noch hat der Wächter-Lauf auf den Minuten-Takt
-    zurückgeschaltet (`realtime_down_since`, Zeitpunkt des Rückfalls). Ein Rückfall zählt nur für das aktuelle Einschalten
-    (`down`: Zeile `rt.DOWN_KIND`)."""
+    """Wie der Wächter auf einem Server läuft: `realtime_requested` heißt eingeschaltet, `realtime_on` auch wirklich
+    in Echtzeit (clamonacc nicht als gestoppt gemeldet, kein Rückfall auf den Minuten-Takt; `realtime_down_since` ist
+    der Zeitpunkt des Rückfalls). Ein Rückfall (`down`, Zeile `rt.DOWN_KIND`) gilt nur für dieses Einschalten."""
     requested = bool(state.get("enabled", False))
     since = down.get("since")
     current = down.get("changed_at") == state.get("changed_at")

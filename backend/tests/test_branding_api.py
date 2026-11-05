@@ -5,6 +5,10 @@ Router (api/v1/branding.py), eigene Berechtigung `branding.write` -- nicht
 
 from __future__ import annotations
 
+import base64
+import hashlib
+from xml.etree import ElementTree
+
 import pytest
 
 
@@ -144,15 +148,123 @@ async def test_logo_upload_rejects_oversized_payload(client):
 
 
 @pytest.mark.asyncio
-async def test_second_logo_upload_replaces_the_first_not_adds_to_it(client, test_settings):
-    """Regressionstest fuer save_logo_file()s Aufraeum-Schritt: ein zweiter Upload mit
-    ANDERER Endung (svg statt png) darf nicht beide Dateien nebeneinander stehen
-    lassen -- find_logo_file() muesste sonst nichtdeterministisch eine von zwei
-    Dateien liefern."""
-    token = await _bootstrap_owner(client)
-    await client.post("/api/v1/branding/logo", content=_TINY_PNG, headers={**_auth_header(token), "Content-Type": "image/png"})
+@pytest.mark.parametrize("kind", ["logo", "favicon"])
+@pytest.mark.parametrize("extension", ["svg", "png"])
+@pytest.mark.parametrize("extra", [0, 1])
+async def test_stored_branding_images_respect_size_limit(client, test_settings, kind, extension, extra):
+    from nodvard_deck.branding import MAX_FAVICON_BYTES, MAX_LOGO_BYTES, logo_dir
 
-    svg = b"<svg xmlns='http://www.w3.org/2000/svg'></svg>"
+    limit = MAX_LOGO_BYTES if kind == "logo" else MAX_FAVICON_BYTES
+    content = b'<svg xmlns="http://www.w3.org/2000/svg"/>' if extension == "svg" else _TINY_PNG
+    content += b" " * (limit + extra - len(content))
+    directory = logo_dir(test_settings.data_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{kind}.{extension}").write_bytes(content)
+
+    response = await client.get(f"/api/v1/branding/{kind}")
+    assert response.status_code == (413 if extra else 200), response.text
+    if not extra:
+        if extension == "svg":
+            assert ElementTree.fromstring(response.content).tag == "{http://www.w3.org/2000/svg}svg"
+        else:
+            assert response.content == content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["logo", "favicon"])
+async def test_stored_svg_read_is_bounded(client, test_settings, monkeypatch, kind):
+    from pathlib import Path
+    from unittest.mock import mock_open
+
+    from nodvard_deck.branding import MAX_FAVICON_BYTES, MAX_LOGO_BYTES, logo_dir
+
+    limit = MAX_LOGO_BYTES if kind == "logo" else MAX_FAVICON_BYTES
+    path = logo_dir(test_settings.data_dir) / f"{kind}.svg"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = b'<svg xmlns="http://www.w3.org/2000/svg"/>'
+    path.write_bytes(content)
+    original_open = Path.open
+    reader = mock_open(read_data=content)
+
+    def open_file(file, *args, **kwargs):
+        return reader(*args, **kwargs) if file == path else original_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_file)
+    assert (await client.get(f"/api/v1/branding/{kind}")).status_code == 200
+    reader().read.assert_called_once_with(limit + 1)
+
+
+def _svg_with_styles(count):
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg">'
+        + "".join(f'<rect style="fill:#{i:06x}"/>' for i in range(count))
+        + '</svg>'
+    ).encode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["logo", "favicon"])
+@pytest.mark.parametrize("count", [73, 74, 5000])
+async def test_svg_upload_respects_csp_limit(client, test_settings, kind, count):
+    from nodvard_deck.branding import MAX_FAVICON_BYTES, logo_dir
+
+    token = await _bootstrap_owner(client)
+    url = f"/api/v1/branding/{kind}"
+    first = await client.post(url, content=_TINY_PNG, headers={**_auth_header(token), "Content-Type": "image/png"})
+    assert first.status_code == 200, first.text
+    content = _svg_with_styles(count)
+    assert len(content) < MAX_FAVICON_BYTES
+    response = await client.post(url, content=content, headers={**_auth_header(token), "Content-Type": "image/svg+xml"})
+    assert response.status_code == (200 if count == 73 else 422), response.text
+    image = await client.get(url)
+    assert image.status_code == 200
+    assert len(image.headers["content-security-policy"].encode("ascii")) <= 4096
+    if count == 73:
+        assert len(ElementTree.fromstring(image.content)) == count
+        assert image.headers["content-security-policy"].count("'sha256-") == count
+        assert (logo_dir(test_settings.data_dir) / f"{kind}.svg").read_bytes() == content
+    else:
+        assert "zu viele unterschiedliche Stile" in response.json()["detail"]
+        assert image.content == _TINY_PNG
+        assert not (logo_dir(test_settings.data_dir) / f"{kind}.svg").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["logo", "favicon"])
+@pytest.mark.parametrize("count", [73, 74, 5000])
+async def test_stored_svg_respects_csp_limit(client, test_settings, kind, count):
+    from nodvard_deck.branding import MAX_FAVICON_BYTES, logo_dir
+
+    content = _svg_with_styles(count)
+    assert len(content) < MAX_FAVICON_BYTES
+    directory = logo_dir(test_settings.data_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{kind}.svg"
+    path.write_bytes(content)
+    response = await client.get(f"/api/v1/branding/{kind}")
+    assert response.status_code == (200 if count == 73 else 422), response.text
+    assert len(response.headers["content-security-policy"].encode("ascii")) <= 4096
+    if count == 73:
+        assert len(ElementTree.fromstring(response.content)) == count
+        assert response.headers["content-security-policy"].count("'sha256-") == count
+    else:
+        assert "zu viele unterschiedliche Stile" in response.json()["detail"]
+        assert path.read_bytes() == content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("svg", [
+    b"<svg xmlns='http://www.w3.org/2000/svg'></svg>",
+    b'<svg xmlns="http://www.w3.org/2000/svg"><title>Logo</title><rect width="10" height="8"/></svg>',
+])
+async def test_second_logo_upload_replaces_the_first_not_adds_to_it(client, test_settings, svg):
+    """Ein neuer Upload ersetzt die alte Datei und liefert denselben XML-Inhalt."""
+    token = await _bootstrap_owner(client)
+    first = await client.post(
+        "/api/v1/branding/logo", content=_TINY_PNG, headers={**_auth_header(token), "Content-Type": "image/png"},
+    )
+    assert first.status_code == 200
+
     r = await client.post("/api/v1/branding/logo", content=svg, headers={**_auth_header(token), "Content-Type": "image/svg+xml"})
     assert r.status_code == 200
 
@@ -160,10 +272,16 @@ async def test_second_logo_upload_replaces_the_first_not_adds_to_it(client, test
 
     remaining = sorted(logo_dir(test_settings.data_dir).glob("logo.*"))
     assert [p.name for p in remaining] == ["logo.svg"]
+    assert remaining[0].read_bytes() == svg
 
     logo = await client.get("/api/v1/branding/logo")
+    assert logo.status_code == 200
     assert logo.headers["content-type"] == "image/svg+xml"
-    assert logo.content == svg
+    expected = ElementTree.fromstring(svg)
+    actual = ElementTree.fromstring(logo.content)
+    assert [(el.tag, el.attrib, el.text, el.tail) for el in actual.iter()] == [
+        (el.tag, el.attrib, el.text, el.tail) for el in expected.iter()
+    ]
 
 
 @pytest.mark.asyncio
@@ -222,8 +340,8 @@ _HARMLOSES_SVG = (
     b"<?xml version='1.0' encoding='UTF-8'?>"
     b"<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' viewBox='0 0 10 10'>"
     b"<defs><linearGradient id='a'><stop offset='0' stop-color='#fff'/></linearGradient>"
-    b"<style>.k{fill:url(#a)}</style></defs>"
-    b"<title>Logo</title><g><rect width='10' height='10' style='fill:url(#a)'/><use xlink:href='#a'/>"
+    b"<style>.k{fill:url(#a)}#r{fill:red}</style></defs>"
+    b"<title>Logo</title><g><rect id='r' width='10' height='10' style='fill:url(#a)'/><use xlink:href='#a'/>"
     b"<path d='M0 0L10 10' fill='url(#a)'/></g></svg>"
 )
 
@@ -236,6 +354,51 @@ async def test_logo_upload_accepts_a_harmless_svg(client):
         headers={**_auth_header(token), "Content-Type": "image/svg+xml"},
     )
     assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["logo", "favicon"])
+async def test_svg_styles_keep_their_values_with_a_fresh_nonce(client, test_settings, kind):
+    import re
+
+    from nodvard_deck.branding import save_favicon_file, save_logo_file
+
+    save = save_logo_file if kind == "logo" else save_favicon_file
+    save(test_settings.data_dir, _HARMLOSES_SVG, "svg")
+    responses = [await client.get(f"/api/v1/branding/{kind}") for _ in range(2)]
+    nonces = []
+    digest = base64.b64encode(hashlib.sha256(b"fill:url(#a)").digest()).decode()
+    for response in responses:
+        policy = response.headers["content-security-policy"]
+        nonce = re.search(r"'nonce-([^']+)'", policy)[1]
+        nonces.append(nonce)
+        assert policy == (
+            f"default-src 'none'; style-src 'nonce-{nonce}'; "
+            f"style-src-attr 'unsafe-hashes' 'sha256-{digest}'; sandbox; frame-ancestors 'none'"
+        )
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+        svg = ElementTree.fromstring(response.content)
+        styles = svg.findall(".//{http://www.w3.org/2000/svg}style")
+        assert len(styles) == 1
+        assert all(style.get("nonce") == nonce for style in styles)
+        assert styles[0].text == ".k{fill:url(#a)}#r{fill:red}"
+        assert svg.find(".//{http://www.w3.org/2000/svg}rect").attrib == {
+            "id": "r", "width": "10", "height": "10", "style": "fill:url(#a)",
+        }
+    assert nonces[0] != nonces[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["logo", "favicon"])
+async def test_svg_without_style_attributes_keeps_them_blocked(client, test_settings, kind):
+    from nodvard_deck.branding import save_favicon_file, save_logo_file
+
+    save = save_logo_file if kind == "logo" else save_favicon_file
+    save(test_settings.data_dir, b'<svg xmlns="http://www.w3.org/2000/svg"><rect fill="blue"/></svg>', "svg")
+    response = await client.get(f"/api/v1/branding/{kind}")
+    assert response.status_code == 200
+    assert "style-src-attr 'none';" in response.headers["content-security-policy"]
 
 
 @pytest.mark.asyncio

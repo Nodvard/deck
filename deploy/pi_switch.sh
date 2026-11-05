@@ -1,60 +1,58 @@
 #!/usr/bin/env bash
-# Schaltschritt auf dem Zielrechner (Pi): neues Image in Betrieb nehmen, Rueckweg sichern,
-# pruefen, notfalls zurueckschalten. Wird von scripts/deploy_pi.sh per ssh aufgerufen und
+# Schaltschritt auf dem Zielrechner (Pi): neues Image in Betrieb nehmen, Rückweg sichern,
+# prüfen, notfalls zurückschalten. Wird von scripts/deploy_pi.sh per ssh aufgerufen und
 # liegt deshalb im deploy/-Ordner, der ohnehin mitgeschickt wird. Eigene Datei, damit sich
-# der Ablauf mit einem nachgebauten `docker` testen laesst (backend/tests/test_deploy_switch.py).
+# der Ablauf mit einem nachgebauten `docker` testen lässt (backend/tests/test_deploy_switch.py).
 #
-#   ./pi_switch.sh switch <image-tag>   # pruefen, sichern, alten Container STOPPEN, compose up, verify
-#   ./pi_switch.sh verify               # laeuft der neue Container, mit dem neuen Image und dem alten Volume?
-#   ./pi_switch.sh cleanup              # erst NACH verify, Health und Datencheck: alten Container und alte Images entfernen
-#   ./pi_switch.sh rollback             # zurueck auf den alten Stand, pruefen
-#   ./pi_switch.sh precheck             # Stand VOR dem Umschalten: laeuft ein Dashboard, ist es eingerichtet?
+#   ./pi_switch.sh switch <image-tag>   # prüfen, sichern, compose up, verify
+#   ./pi_switch.sh verify               # läuft der neue Container, mit dem neuen Image und dem alten Volume?
+#   ./pi_switch.sh cleanup              # erst NACH verify, Health und Datencheck: alte Images entfernen
+#   ./pi_switch.sh rollback             # zurück auf den alten Stand, prüfen
+#   ./pi_switch.sh precheck             # Stand VOR dem Umschalten: läuft ein Dashboard, ist es eingerichtet?
 #   ./pi_switch.sh bootstrap [versuche] # needed=false|needed=true|http=<code>|noanswer (GET /api/v1/auth/bootstrap)
 #   ./pi_switch.sh loaded [sekunden]    # none|invalid|list=<kennungen>: welche Erweiterungen hat das laufende Dashboard geladen?
 #   ./pi_switch.sh detached <unterbefehl> ...   # wie der Unterbefehl, aber von der ssh-Leitung abgekoppelt
+#   ./pi_switch.sh oldname              # nur: liegt hier noch ein Stand von vor 0.6? (Exit 3 = ja)
 #
-# Exit 3 = es wurde nichts veraendert (Docker nicht erreichbar, Image fehlt, Compose-Datei
-# nicht lesbar); der Aufrufer darf dann NICHT zurueckschalten.
-# Exit 4 = der Container hat das richtige Volume, laeuft aber nicht (mehr) oder haengt in der
+# Exit 3 = es wurde nichts verändert (Docker nicht erreichbar, Image fehlt, Compose-Datei
+# nicht lesbar, Stand von vor 0.6); der Aufrufer darf dann NICHT zurückschalten.
+# Exit 4 = der Container hat das richtige Volume, läuft aber nicht (mehr) oder hängt in der
 # Neustart-Schleife. War er vorher schon gesund, kann er die Datenbank bereits umgebaut haben.
 #
-# Die Namen sind ueberschreibbar (Tests), Standard ist der echte Betrieb:
+# Die Namen sind überschreibbar (Tests), Standard ist der echte Betrieb:
 #   DECK_IMAGE=nodvard-deck  CONTAINER=deploy-nodvard-deck-1
-#   OLD_IMAGE=lattice        OLD_CONTAINER=deploy-lattice-1
 #   PROJECT=deploy           VOLUME=deploy_lattice_data
 #
-# Warum es den alten Container gibt: Bis zur Umbenennung hiess der Compose-Dienst `lattice`
-# (Container `deploy-lattice-1`, Image `lattice:latest`). Er belegt Port 8080 und muss vor dem
-# neuen weg. Er wird aber nur GESTOPPT, nicht geloescht: Scheitert das Hochfahren, startet der
-# Rollback genau diesen Container wieder (`docker start`), das geht auch, wenn Compose selbst
-# das Problem ist. Geloescht wird er erst in `cleanup`, wenn der neue Stand gesund ist.
-# Das Volume (`deploy_lattice_data`) bleibt immer unberuehrt; `verify` prueft, dass der neue
-# Container wirklich dieses Volume unter /app/data eingebunden hat (sonst waere es leer).
-# Bewusst KEIN `--remove-orphans`: das wirkt auf das ganze Projekt und loescht Container, die
-# nicht zu diesem Dienst gehoeren.
+# Das Volume (`deploy_lattice_data`) bleibt immer unberührt; `verify` prüft, dass der neue
+# Container wirklich dieses Volume unter /app/data eingebunden hat (sonst wäre es leer).
+# Bewusst KEIN `--remove-orphans`: das wirkt auf das ganze Projekt und löscht Container, die
+# nicht zu diesem Dienst gehören.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Bricht die ssh-Verbindung mitten im Umschalten ab (WLAN, Zeitueberschreitung), bekommt die
-# Shell ein SIGHUP. Das hier schuetzt nur die Shell selbst (und wird von den docker-Aufrufen
+# Bricht die ssh-Verbindung mitten im Umschalten ab (WLAN, Zeitüberschreitung), bekommt die
+# Shell ein SIGHUP. Das hier schützt nur die Shell selbst (und wird von den docker-Aufrufen
 # geerbt), NICHT vor einem geschlossenen Ausgabe-Rohr (SIGPIPE, `printf` scheitert, docker
-# stirbt). Dafuer gibt es `detached`: Ausgabe in Dateien, eigene Sitzung (setsid).
+# stirbt). Dafür gibt es `detached`: Ausgabe in Dateien, eigene Sitzung (setsid).
 trap '' HUP
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
 DECK_IMAGE="${DECK_IMAGE:-nodvard-deck}"
-OLD_IMAGE="${OLD_IMAGE:-lattice}"
 CONTAINER="${CONTAINER:-deploy-nodvard-deck-1}"
-OLD_CONTAINER="${OLD_CONTAINER:-deploy-lattice-1}"
 PROJECT="${PROJECT:-deploy}"
 VOLUME="${VOLUME:-deploy_lattice_data}"
+# So hieß der Container vor Version 0.6. Den Umstieg von dort liefert nur noch Version 0.11 aus.
+PRE_RENAME_CONTAINER="deploy-lattice-1"
+# Compose liest seine Variablen aus der .env neben der Compose-Datei; dort gelten die alten Namen LATTICE_* nur noch
+# in dieser Version.
+DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-.env}"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 die_unchanged() { printf 'FAIL: %s\n' "$*" >&2; exit 3; }
 
-# Projektname immer mitgeben: COMPOSE_PROJECT_NAME in der Umgebung oder in .env wuerde sonst
-# ein anderes Projekt (und damit ein anderes, leeres Volume) waehlen.
+# Projektname immer mitgeben: COMPOSE_PROJECT_NAME in der Umgebung oder in .env würde sonst
+# ein anderes Projekt (und damit ein anderes, leeres Volume) wählen.
 compose() { docker compose -p "$PROJECT" "$@"; }
 
 has_image() { docker image inspect "$1" >/dev/null 2>&1; }
@@ -66,15 +64,14 @@ need_docker() {
   docker info >/dev/null 2>&1 || die_unchanged "Docker ist nicht erreichbar (laeuft der Dienst? Hat dieser Benutzer Docker-Rechte?). Nichts veraendert."
 }
 
-# Laeuft der Container gerade (und belegt dann z. B. Port 8080)?
+# Läuft der Container gerade (und belegt dann z. B. Port 8080)?
 container_running() {
   has_container "$1" && [ "$(inspect_container "$1" '{{.State.Status}}')" = "running" ]
 }
 
-# Rueckweg sichern: nodvard-deck:latest -> nodvard-deck:previous. Gibt es das noch nicht
-# (erster Uebergang), wird das alte lattice:latest zu nodvard-deck:previous. Wurde dasselbe
-# Image schon in Betrieb genommen (erneuter Aufruf nach einem Abbruch), bleibt der Rueckweg,
-# wie er ist, damit er nicht mit dem fraglichen Stand ueberschrieben wird.
+# Rückweg sichern: nodvard-deck:latest -> nodvard-deck:previous. Wurde dasselbe Image schon in
+# Betrieb genommen (erneuter Aufruf nach einem Abbruch), bleibt der Rückweg, wie er ist, damit er
+# nicht mit dem fraglichen Stand überschrieben wird.
 backup_previous() {
   local new_id="$1" cur_id
   if has_image "$DECK_IMAGE:latest"; then
@@ -85,15 +82,12 @@ backup_previous() {
       docker tag "$DECK_IMAGE:latest" "$DECK_IMAGE:previous"
       say "Sicherung: $DECK_IMAGE:latest -> $DECK_IMAGE:previous."
     fi
-  elif has_image "$OLD_IMAGE:latest"; then
-    docker tag "$OLD_IMAGE:latest" "$DECK_IMAGE:previous"
-    say "Erster Uebergang: $OLD_IMAGE:latest -> $DECK_IMAGE:previous."
   else
     say "Frische Maschine: kein altes Image, keine Sicherung moeglich."
   fi
 }
 
-# Laeuft der Container wirklich (Status running, nicht im Neustart-Kreislauf) und haengt
+# Läuft der Container wirklich (Status running, nicht im Neustart-Kreislauf) und hängt
 # /app/data am Volume mit den alten Daten?
 check_container() {
   local name="$1" status restarting vol
@@ -107,14 +101,10 @@ check_container() {
   fi
 }
 
-# Traegt der neue Container das Image von nodvard-deck:latest, laeuft er, hat er das richtige
-# Volume? Und laeuft der alte Container NICHT mehr? Ein "gesund" von /api/v1/health allein
-# beweist das nicht (kann der alte Container sein).
+# Trägt der neue Container das Image von nodvard-deck:latest, läuft er, hat er das richtige
+# Volume? Ein "gesund" von /api/v1/health allein beweist das nicht.
 verify() {
   local want have
-  if container_running "$OLD_CONTAINER"; then
-    die "Der alte Container $OLD_CONTAINER laeuft noch (Waise, belegt vermutlich Port 8080)."
-  fi
   want="$(image_id "$DECK_IMAGE:latest")" || die "Image $DECK_IMAGE:latest fehlt."
   has_container "$CONTAINER" || die "Container $CONTAINER existiert nicht."
   have="$(inspect_container "$CONTAINER" '{{.Image}}')"
@@ -123,44 +113,73 @@ verify() {
   say "VERIFY-OK: $CONTAINER laeuft mit $DECK_IMAGE:latest ($want), Volume $VOLUME."
 }
 
+# Gibt es den Container von vor 0.6 noch, bricht das vor jeder Änderung ab (Exit 3): Er hätte
+# dasselbe Volume offen, und sein Image wäre kein Rückweg, den `rollback` kennt.
+refuse_pre_rename() {
+  has_container "$PRE_RENAME_CONTAINER" || return 0
+  if container_running "$PRE_RENAME_CONTAINER" || ! has_image "$DECK_IMAGE:latest"; then
+    die_unchanged "Hier liegt noch Nodvard Deck von vor Version 0.6 (Container $PRE_RENAME_CONTAINER). Den Umstieg liefert nur Version 0.11 aus: git checkout v0.11.1, scripts/deploy_pi.sh, danach diese Version. Nichts veraendert."
+  fi
+  die_unchanged "Der alte Container $PRE_RENAME_CONTAINER liegt noch gestoppt auf dem Rechner. Entfernen mit 'docker rm $PRE_RENAME_CONTAINER', dann erneut ausliefern. Nichts veraendert."
+}
+
+# Alte Namen in der .env auf die neuen umbenennen, die Datei vorher als Kopie behalten. Hat der neue Name schon einen
+# Wert, fällt die alte Zeile weg; ein leerer neuer weicht dem alten Wert, wie bei `${NEU:-${ALT:-}}` in Compose.
+rename_old_env() {
+  [ -f "$DEPLOY_ENV_FILE" ] || return 0
+  if grep -q '^LATTICE_[A-Za-z0-9_]*=' "$DEPLOY_ENV_FILE"; then
+    local copy="$DEPLOY_ENV_FILE.vor-umbenennung" next="$DEPLOY_ENV_FILE.neu"
+    cp -p "$DEPLOY_ENV_FILE" "$copy" || die_unchanged "Kopie von $DEPLOY_ENV_FILE ging nicht. Nichts veraendert."
+    # umask 077: Die Zwischendatei enthält dieselben Werte wie die .env und soll nicht kurz für alle lesbar sein.
+    if ! (umask 077 && awk -v q="'" '
+          function key(line) { sub(/=.*/, "", line); return line }
+          function filled(line,  v) {
+            v = substr(line, index(line, "=") + 1); sub(/^[ \t]+/, "", v); sub(/[ \t\r]+$/, "", v)
+            return v != "" && v != "\"\"" && v != q q
+          }
+          NR == FNR {
+            if ($0 ~ /^NODVARD_DECK_[A-Za-z0-9_]*=/ && filled($0)) set[key($0)] = 1
+            if ($0 ~ /^LATTICE_[A-Za-z0-9_]*=/) old["NODVARD_DECK_" substr(key($0), 9)] = 1
+            next
+          }
+          /^NODVARD_DECK_[A-Za-z0-9_]*=/ && !filled($0) && (key($0) in old) && !(key($0) in set) { next }
+          /^LATTICE_[A-Za-z0-9_]*=/ { line = "NODVARD_DECK_" substr($0, 9); if (!(key(line) in set)) print line; next }
+          { print }' "$copy" "$copy" > "$next") || ! cat "$next" > "$DEPLOY_ENV_FILE"; then
+      rm -f "$next"
+      die_unchanged "$DEPLOY_ENV_FILE liess sich nicht umbenennen (vorher: $copy). Nichts veraendert."
+    fi
+    rm -f "$next"
+    say "$DEPLOY_ENV_FILE: alte Namen LATTICE_* auf NODVARD_DECK_* umbenannt (vorher: $copy)."
+  fi
+  if grep -q '^[^#]*LATTICE_' "$DEPLOY_ENV_FILE"; then
+    say "WARNUNG: In $DEPLOY_ENV_FILE stehen noch Zeilen mit LATTICE_, die nicht automatisch umbenannt werden konnten. Bitte von Hand auf NODVARD_DECK_ umstellen, ab Version 1.0 gelten sie nicht mehr."
+  fi
+}
+
 cmd_switch() {
   local new_tag="${1:?Nutzung: pi_switch.sh switch <image-tag>}" new_id
-  # Alles, was schieflaufen kann, BEVOR etwas angefasst wird (Exit 3 = nichts veraendert).
+  # Alles, was schieflaufen kann, BEVOR etwas angefasst wird (Exit 3 = nichts verändert).
   need_docker
+  refuse_pre_rename
   has_image "$new_tag" || die_unchanged "Image $new_tag ist auf diesem Rechner nicht vorhanden."
   compose config -q >/dev/null 2>&1 || die_unchanged "Die Compose-Datei ist nicht lesbar (docker compose config scheitert; zu alte Compose-Version?). Nichts veraendert."
+  rename_old_env
   new_id="$(image_id "$new_tag")"
-  # Ein gestoppter alter Container, obwohl nodvard-deck:latest schon vor diesem Deploy existierte:
-  # der Uebergang war frueher schon gelungen, nur das Aufraeumen ist gescheitert. Er waere beim
-  # naechsten Rollback ein uraltes Image -- weg damit.
-  if has_image "$DECK_IMAGE:latest" && has_container "$OLD_CONTAINER" && ! container_running "$OLD_CONTAINER"; then
-    say "Liegengebliebener alter Container $OLD_CONTAINER (Uebergang war schon gelungen) wird entfernt."
-    docker rm -f "$OLD_CONTAINER" >/dev/null 2>&1 || true
-  fi
   backup_previous "$new_id"
   docker tag "$new_tag" "$DECK_IMAGE:latest"
-  # Alter Container: nur stoppen, nicht loeschen (Rueckweg, siehe Kopf).
-  if container_running "$OLD_CONTAINER"; then
-    say "Alter Container $OLD_CONTAINER wird gestoppt (bleibt fuer den Rueckweg erhalten)."
-    docker stop -t 30 "$OLD_CONTAINER" >/dev/null 2>&1 || true
-  fi
   compose up -d --no-build
   verify
 }
 
-# Erst aufrufen, wenn verify, Health und Datencheck bestanden sind: den alten Container und
-# alte Images entfernen. Das Volume wird nie angefasst.
+# Erst aufrufen, wenn verify, Health und Datencheck bestanden sind: alte Images entfernen. Das
+# Volume wird nie angefasst.
 cmd_cleanup() {
   need_docker
   verify
-  if has_container "$OLD_CONTAINER"; then
-    say "Alter Container $OLD_CONTAINER wird entfernt."
-    docker rm -f "$OLD_CONTAINER" >/dev/null 2>&1 || say "Hinweis: $OLD_CONTAINER liess sich nicht entfernen."
-  fi
   local latest_id prev_id="" tag
   latest_id="$(image_id "$DECK_IMAGE:latest")"
   if has_image "$DECK_IMAGE:previous"; then prev_id="$(image_id "$DECK_IMAGE:previous")"; fi
-  # Gelieferte Tags nodvard-deck:pi-<sha>, ausser den Staenden hinter latest/previous.
+  # Gelieferte Tags nodvard-deck:pi-<sha>, außer den Ständen hinter latest/previous.
   for tag in $(docker images "$DECK_IMAGE" --format '{{.Tag}}' 2>/dev/null); do
     case "$tag" in
       pi-*)
@@ -174,19 +193,6 @@ cmd_cleanup() {
         ;;
     esac
   done
-  # Alte lattice:*-Tags erst, wenn nodvard-deck:previous ein eigener Stand ist (nicht mehr
-  # dasselbe Image wie lattice:latest). Vorher ist lattice:latest der einzige alte Stand.
-  if [ -n "$prev_id" ] && { ! has_image "$OLD_IMAGE:latest" || [ "$(image_id "$OLD_IMAGE:latest")" != "$prev_id" ]; }; then
-    for tag in $(docker images "$OLD_IMAGE" --format '{{.Tag}}' 2>/dev/null); do
-      if docker rmi "$OLD_IMAGE:$tag" >/dev/null 2>&1; then
-        say "Altes Image $OLD_IMAGE:$tag entfernt."
-      else
-        say "Hinweis: $OLD_IMAGE:$tag liess sich nicht entfernen."
-      fi
-    done
-  else
-    say "Alte lattice:*-Images bleiben (nodvard-deck:previous ist noch derselbe Stand wie lattice:latest)."
-  fi
   say "CLEANUP-OK"
 }
 
@@ -196,42 +202,27 @@ cmd_rollback() {
     docker tag "$DECK_IMAGE:previous" "$DECK_IMAGE:latest"
     say "Rollback: $DECK_IMAGE:previous -> $DECK_IMAGE:latest."
   fi
-  # Den alten Container nur nehmen, wenn er wirklich der Stand hinter nodvard-deck:previous ist.
-  # Ein liegen gebliebener aus einem frueheren Deploy waere ein uraltes Image: dann per Compose.
-  if has_container "$OLD_CONTAINER" && has_image "$DECK_IMAGE:previous" \
-     && [ "$(inspect_container "$OLD_CONTAINER" '{{.Image}}')" = "$(image_id "$DECK_IMAGE:previous")" ]; then
-    # Erster Uebergang, noch nicht aufgeraeumt: den neuen Container weg, den alten wieder starten.
-    # Braucht weder Compose noch das neue Image.
-    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-    docker start "$OLD_CONTAINER" >/dev/null
-    check_container "$OLD_CONTAINER"
-    say "VERIFY-OK: alter Container $OLD_CONTAINER laeuft wieder, Volume $VOLUME."
-    return 0
-  fi
-  has_image "$DECK_IMAGE:previous" || die "Kein $DECK_IMAGE:previous und kein alter Container vorhanden, nichts zum Zurueckschalten."
+  has_image "$DECK_IMAGE:previous" || die "Kein $DECK_IMAGE:previous vorhanden, nichts zum Zurueckschalten."
   compose up -d --no-build
   verify
 }
 
 # Stand vor dem Umschalten. Gibt genau eine Zeile aus:
-#   none            kein Dashboard-Container laeuft (frische Maschine oder aus)
-#   needed=false    laeuft und ist eingerichtet
-#   needed=true     laeuft, aber noch nicht eingerichtet
-#   http=<code>     laeuft und antwortet, kennt den Endpunkt aber nicht (z. B. 404 beim alten Image)
-#   noanswer        ein Container laeuft, antwortet aber auch nach mehreren Versuchen nicht
+#   none            kein Dashboard-Container läuft (frische Maschine oder aus)
+#   needed=false    läuft und ist eingerichtet
+#   needed=true     läuft, aber noch nicht eingerichtet
+#   http=<code>     läuft und antwortet, kennt den Endpunkt aber nicht (z. B. 404 beim alten Image)
+#   noanswer        ein Container läuft, antwortet aber auch nach mehreren Versuchen nicht
 cmd_precheck() {
   need_docker
-  local name running=""
-  for name in "$CONTAINER" "$OLD_CONTAINER"; do
-    if container_running "$name"; then running="$name"; break; fi
-  done
-  if [ -z "$running" ]; then say "none"; return 0; fi
+  refuse_pre_rename
+  if ! container_running "$CONTAINER"; then say "none"; return 0; fi
   local answer
   answer="$(cmd_bootstrap 5)"
   case "$answer" in
     http=*)
-      # Ohne eine Antwort vom Endpunkt zaehlt als "eingerichtet" nur, wer wirklich das alte Volume hat.
-      if [ "$(inspect_container "$running" '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}')" = "$VOLUME" ]; then
+      # Ohne eine Antwort vom Endpunkt zählt als "eingerichtet" nur, wer wirklich das alte Volume hat.
+      if [ "$(inspect_container "$CONTAINER" '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}')" = "$VOLUME" ]; then
         say "$answer"
       else
         say "noanswer"
@@ -261,20 +252,20 @@ cmd_bootstrap() {
 # Welche Erweiterungen hat das laufende Dashboard geladen? Jeder Start und jedes Ein- oder Ausschalten danach schreibt
 # eine Zeile
 #   Erweiterungen geladen: <Speicher-Kennungen, sortiert, durch Komma getrennt>      oder      ... (keine)
-# ins Protokoll (backend/src/nodvard_deck/services/extensions.py, `_announce_loaded`; ein Test haelt den Text
-# gleich), die letzte sagt, was gerade laeuft. scripts/deploy_pi.sh vergleicht die Zeile des alten mit der des neuen Containers: Eine Erweiterung,
+# ins Protokoll (backend/src/nodvard_deck/services/extensions.py, `_announce_loaded`; ein Test hält den Text
+# gleich), die letzte sagt, was gerade läuft. scripts/deploy_pi.sh vergleicht die Zeile des alten mit der des neuen Containers: Eine Erweiterung,
 # die vorher geladen war und nachher fehlt, gilt als Fehler -- auch wenn nichts sonst meldet, dass sie nicht
-# laeuft (z. B. die Zeile der Erweiterung bleibt "eingeschaltet", der Dienst findet sie aber nicht mehr).
+# läuft (z. B. die Zeile der Erweiterung bleibt "eingeschaltet", der Dienst findet sie aber nicht mehr).
 LOADED_MARKER='Erweiterungen geladen: '
 
 # Liest ein Protokoll von stdin, nimmt die LETZTE Zeile mit dem Text (ein Neustart oder ein Ein-/Ausschalten schreibt
 # eine neue) und gibt aus:
 #   none            keine solche Zeile
-#   invalid         die Zeile ist nicht lesbar (keine gueltige Liste hinter dem Text)
+#   invalid         die Zeile ist nicht lesbar (keine gültige Liste hinter dem Text)
 #   list=<a,b,c>    die Kennungen; `list=` ohne etwas dahinter: es war keine Erweiterung geladen ("(keine)")
 # Vor der Zeile darf alles stehen (Zeitstempel, Ebene, Farbcodes). Dahinter muss genau die Liste folgen: Kennungen
-# (a-z, 0-9, Bindestrich; Anfang a-z), durch Kommas getrennt, danach Ende der Zeile, Leerraum oder ein Anfuehrungs-/
-# Klammerzeichen (falls einmal als JSON geschrieben). Alles andere ist `invalid`, nie eine verkuerzte Liste. Nichts davon
+# (a-z, 0-9, Bindestrich; Anfang a-z), durch Kommas getrennt, danach Ende der Zeile, Leerraum oder ein Anführungs-/
+# Klammerzeichen (falls einmal als JSON geschrieben). Alles andere ist `invalid`, nie eine verkürzte Liste. Nichts davon
 # wird je als Befehl oder Muster ausgewertet, es wird nur verglichen.
 loaded_from_log() {
   local LC_ALL=C line rest esc re_none re_list
@@ -294,32 +285,29 @@ loaded_from_log() {
   fi
 }
 
-# `loaded [sekunden]`: Antwort fuer das gerade laufende Dashboard (neuer Name vor altem, wie bei `precheck`), ohne
-# etwas zu veraendern. Laeuft keins, oder steht noch keine Zeile im Protokoll, wird bis zu `sekunden` gewartet
-# (Standard 0 = ein Versuch; die Zeile steht vor dem ersten Health-Ok im Protokoll, das Warten faengt nur die
-# Verzoegerung des Docker-Protokolls ab), danach `none`. Das ganze Protokoll wird gelesen (Docker begrenzt es auf
-# 3 x 10 MB): der Start liegt oft weit zurueck, und jede Anfrage steht auch darin.
+# `loaded [sekunden]`: Antwort für das gerade laufende Dashboard, ohne etwas zu verändern. Läuft keins, oder steht
+# noch keine Zeile im Protokoll, wird bis zu `sekunden` gewartet (Standard 0 = ein Versuch; die Zeile steht vor dem
+# ersten Health-Ok im Protokoll, das Warten fängt nur die Verzögerung des Docker-Protokolls ab), danach `none`. Das
+# ganze Protokoll wird gelesen (Docker begrenzt es auf 3 x 10 MB): Der Start liegt oft weit zurück, und jede Anfrage
+# steht auch darin.
 cmd_loaded() {
   need_docker
-  local secs="${1:-0}" name="" candidate answer deadline
+  local secs="${1:-0}" answer deadline
   case "$secs" in ''|*[!0-9]*) echo "Nutzung: $0 loaded [sekunden]" >&2; exit 2 ;; esac
-  for candidate in "$CONTAINER" "$OLD_CONTAINER"; do
-    if container_running "$candidate"; then name="$candidate"; break; fi
-  done
-  if [ -z "$name" ]; then say none; return 0; fi
+  if ! container_running "$CONTAINER"; then say none; return 0; fi
   deadline=$((SECONDS + secs))
   while :; do
-    answer="$(docker logs "$name" 2>&1 | loaded_from_log || true)"
+    answer="$(docker logs "$CONTAINER" 2>&1 | loaded_from_log || true)"
     [ "$answer" = none ] || break
     [ "$SECONDS" -lt "$deadline" ] || break
-    container_running "$name" || break
+    container_running "$CONTAINER" || break
     sleep "${LOADED_POLL_SLEEP_S:-2}"
   done
   say "${answer:-none}"
 }
 
 # Wie der Unterbefehl, aber von der ssh-Leitung abgekoppelt: eigene Sitzung (setsid), Ein-/Ausgabe
-# in Dateien. Reisst die Verbindung ab, laeuft der Schaltschritt auf dem Pi zu Ende (Ergebnis in
+# in Dateien. Reisst die Verbindung ab, läuft der Schaltschritt auf dem Pi zu Ende (Ergebnis in
 # pi_switch.out/.err/.log). Bleibt die Verbindung, wird die Ausgabe am Ende ausgegeben.
 cmd_detached() {
   local rc=0 dir="${PI_SWITCH_LOG_DIR:-.}"
@@ -342,6 +330,7 @@ case "${1:-}" in
   loaded) shift; cmd_loaded "$@" ;;
   switch) shift; cmd_switch "$@" ;;
   verify) need_docker; verify ;;
+  oldname) need_docker; refuse_pre_rename ;;
   cleanup) cmd_cleanup ;;
   rollback) cmd_rollback ;;
   *) echo "Nutzung: $0 switch <image-tag> | verify | cleanup | rollback | precheck | bootstrap | loaded" >&2; exit 2 ;;

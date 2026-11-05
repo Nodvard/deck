@@ -6,6 +6,7 @@
 import { isRouteErrorResponse, useRouteError } from "react-router-dom";
 
 import { ButtonLink, EmptyState } from "../components/EmptyState";
+import { productText } from "../state/edition";
 
 const reloadClass =
   "inline-flex items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-1.5 text-sm font-medium text-white transition hover:bg-white/[0.12]";
@@ -56,7 +57,7 @@ export function RouteErrorPage({ fullScreen = false }: { fullScreen?: boolean })
         title={outdated ? "Die Seite konnte nicht geladen werden" : "Hier ist etwas schiefgegangen"}
         text={
           outdated
-            ? "Wahrscheinlich wurde Nodvard Deck gerade aktualisiert. Lade die Seite neu, dann klappt es meistens."
+            ? productText("Wahrscheinlich wurde Nodvard Deck gerade aktualisiert. Lade die Seite neu, dann klappt es meistens.")
             : "Die Seite konnte nicht angezeigt werden. Lade sie neu oder gehe zurück zur Übersicht. Wenn es bleibt, hilft ein Blick ins Protokoll des Servers."
         }
         action={

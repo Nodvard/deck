@@ -108,6 +108,19 @@
     }
    }
   },
+  "DELETE /api/v1/ext/docker/own-templates/{template_id}": {
+   "params": {
+    "path:template_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "DELETE /api/v1/ext/documents/documents/{document_id}": {
    "params": {
     "path:document_id": {
@@ -287,6 +300,19 @@
      "type": "string"
     },
     "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "DELETE /api/v1/ext/service-matrix/own-templates/{template_id}": {
+   "params": {
+    "path:template_id": {
      "required": true,
      "type": "string"
     }
@@ -750,6 +776,11 @@
    }
   },
   "GET /api/v1/app/changelog": {
+   "params": {
+    "query:include_documentation": {
+     "type": "boolean"
+    }
+   },
    "responses": {
     "200": {
      "fields": {
@@ -765,6 +796,7 @@
          "kind": {
           "enum": [
            "behoben",
+           "dokumentation",
            "neu",
            "sicherheit",
            "verbessert"
@@ -797,6 +829,7 @@
             "kind": {
              "enum": [
               "behoben",
+              "dokumentation",
               "neu",
               "sicherheit",
               "verbessert"
@@ -1338,6 +1371,33 @@
     }
    }
   },
+  "GET /api/v1/edition": {
+   "responses": {
+    "200": {
+     "fields": {
+      "choose_modules": {
+       "type": "boolean"
+      },
+      "id": {
+       "type": "string"
+      },
+      "image": {
+       "type": "string"
+      },
+      "product_name": {
+       "type": "string"
+      },
+      "repo_tools": {
+       "type": "boolean"
+      },
+      "service": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/backups/connections": {
    "responses": {
     "200": {
@@ -1811,6 +1871,23 @@
     }
    }
   },
+  "GET /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/git/watch": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/history": {
    "params": {
     "path:host_id": {
@@ -1880,6 +1957,26 @@
    }
   },
   "GET /api/v1/ext/docker/image-updates": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/own-templates": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/own-templates/{template_id}": {
+   "params": {
+    "path:template_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
    "responses": {
     "200": {
      "type": "object"
@@ -4439,6 +4536,23 @@
     }
    }
   },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/git/watch": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/history": {
    "params": {
     "path:host_id": {
@@ -4508,6 +4622,26 @@
    }
   },
   "GET /api/v1/ext/service-matrix/image-updates": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/own-templates": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/own-templates/{template_id}": {
+   "params": {
+    "path:template_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
    "responses": {
     "200": {
      "type": "object"
@@ -7697,6 +7831,24 @@
     }
    }
   },
+  "GET /api/v1/settings/notification-types": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "id": {
+        "type": "string"
+       },
+       "label": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
   "GET /api/v1/system/backups": {
    "responses": {
     "200": {
@@ -7751,6 +7903,9 @@
        "type": "null|string"
       },
       "forwarded_headers": {
+       "type": "boolean"
+      },
+      "insecure_connection": {
        "type": "boolean"
       },
       "peer": {
@@ -7828,6 +7983,9 @@
       "attempted_at": {
        "type": "null|string"
       },
+      "auto_security": {
+       "type": "boolean"
+      },
       "available": {
        "type": "boolean"
       },
@@ -7855,6 +8013,15 @@
       },
       "image": {
        "type": "null|string"
+      },
+      "kinds": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "kinds_complete": {
+       "type": "boolean"
       },
       "latest": {
        "type": "null|string"
@@ -10585,6 +10752,23 @@
     }
    }
   },
+  "POST /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/git/check": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "POST /api/v1/ext/docker/hosts/{host_id}/stacks/{project}/git/fetch": {
    "params": {
     "path:host_id": {
@@ -10789,6 +10973,33 @@
    },
    "responses": {
     "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/own-templates": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "compose": {
+       "required": true,
+       "type": "string"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      },
+      "summary": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "201": {
      "type": "object"
     }
    }
@@ -12833,6 +13044,23 @@
     }
    }
   },
+  "POST /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/git/check": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:project": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "POST /api/v1/ext/service-matrix/hosts/{host_id}/stacks/{project}/git/fetch": {
    "params": {
     "path:host_id": {
@@ -13037,6 +13265,33 @@
    },
    "responses": {
     "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/service-matrix/own-templates": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "compose": {
+       "required": true,
+       "type": "string"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      },
+      "summary": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "201": {
      "type": "object"
     }
    }
@@ -15443,6 +15698,9 @@
       "attempted_at": {
        "type": "null|string"
       },
+      "auto_security": {
+       "type": "boolean"
+      },
       "available": {
        "type": "boolean"
       },
@@ -15470,6 +15728,15 @@
       },
       "image": {
        "type": "null|string"
+      },
+      "kinds": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "kinds_complete": {
+       "type": "boolean"
       },
       "latest": {
        "type": "null|string"
@@ -16200,6 +16467,39 @@
     }
    }
   },
+  "PUT /api/v1/ext/docker/own-templates/{template_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "compose": {
+       "required": true,
+       "type": "string"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      },
+      "summary": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:template_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "PUT /api/v1/ext/gameserver/servers/{host_id}/config": {
    "body": {
     "content_type": "application/json",
@@ -16831,6 +17131,39 @@
     }
    }
   },
+  "PUT /api/v1/ext/service-matrix/own-templates/{template_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "compose": {
+       "required": true,
+       "type": "string"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      },
+      "summary": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:template_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "PUT /api/v1/ext/system/hosts/{host_id}/temp-limit": {
    "body": {
     "content_type": "application/json",
@@ -17061,11 +17394,13 @@
       "hosts.reachability.interval_minutes",
       "jobs.run_retention_days",
       "maintenance.windows",
+      "notifications.push_types",
       "notifications.retention_days",
       "security.deny_patterns",
       "ssh.confirm_new_host_keys",
       "system.timezone",
       "system.trusted_proxies",
+      "system.update_check.auto_security",
       "system.update_check.channel",
       "system.update_check.enabled"
      ],

@@ -23,7 +23,8 @@ from ...services import audit as audit_service
 from ...services import hosts as hosts_service
 from ...services import session_guard
 from ...services.hosts import host_to_sdk
-from ..deps import CurrentSessionId, CurrentUser, SessionDep, require_permission
+from ...edition import of
+from ..deps import CurrentSessionId, CurrentUser, SessionDep, SettingsDep, require_permission
 
 # Eigener Socket statt Multiplex-Hub: Eingaben sind latenzkritisch, Ausgaben binär und groß,
 # das würde dessen Steuerkanal verstopfen.
@@ -56,8 +57,10 @@ class TerminalSessionOut(BaseModel):
 
 @router.post("/terminal/sessions", dependencies=[Depends(require_permission("hosts.execute"))])
 async def create_terminal_session(
-    payload: TerminalSessionCreate, session: SessionDep, user: CurrentUser, login_id: CurrentSessionId
+    payload: TerminalSessionCreate, session: SessionDep, user: CurrentUser, login_id: CurrentSessionId, settings: SettingsDep
 ) -> TerminalSessionOut:
+    if not of(settings).choose_modules and payload.scope is None:
+        raise HTTPException(404, "Diese Funktion ist in dieser Ausgabe nicht verfügbar.")
     host = await session.get(Host, payload.host_id)
     if host is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")

@@ -1,14 +1,20 @@
+import { productText } from "./product";
 /** Images, Volumes und Netze eines Docker-Servers als Reiter der Docker-Seite; Löschen nur über die Freigabe. */
 import { useEffect, useState, type ReactNode } from "react";
 
+import { describeActionOutcome } from "../../../_shared/frontend/src/actions";
 import { deck } from "../../../_shared/frontend/src/deck";
 import { formatBytes } from "../../../_shared/frontend/src/format";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { LoadError, errorMessage, fetchJson } from "../../../_shared/frontend/src/loadError";
 import { Badge, Button } from "../../../_shared/frontend/src/ui";
 
+import { CARD_ITEM, CARD_LIST } from "./cardList";
 import { hostAction } from "./hostAction";
+import { ImagePull } from "./ImagePull";
+import { NetworkCreate, NetworkLinks, linkable, type HostContainer } from "./NetworkTools";
 import { OperateNote } from "./operate";
+import { usePendingActions } from "./pendingActions";
 
 export type ResourceKind = "images" | "volumes" | "networks";
 
@@ -34,6 +40,8 @@ interface Row {
   removable: boolean;
   /** Warum etwas Unbenutztes trotzdem keinen Löschen-Knopf hat. */
   kept?: string;
+  /** Netz, an das sich Container von Hand hängen lassen. */
+  linkable?: boolean;
   payload: Record<string, string>;
 }
 
@@ -63,7 +71,8 @@ const TEXT: Record<ResourceKind, KindText> = {
   networks: {
     what: "Die Liste der Netze", noun: "Netze", action: "docker.network_remove", label: "Netz löschen",
     empty: "Auf diesem Server gibt es keine Netze.",
-    hint: "Die eingebauten Netze von Docker bleiben immer. Ein Netz, an dem noch ein Container hängt, auch ein gestoppter, bleibt ebenfalls.",
+    hint: "Die eingebauten Netze von Docker bleiben immer. Ein Netz, an dem noch ein Container hängt, auch ein gestoppter, bleibt ebenfalls. "
+      + "Anlegen, Verbinden und Trennen gehen über die Freigabe.",
     confirm: (title) => `Netz „${title}“ löschen? Ein Compose-Projekt legt es beim nächsten Start wieder an.`,
   },
 };
@@ -87,7 +96,7 @@ function imageRow(i: ImageOut): Row {
 
 function keptImage(i: ImageOut): string {
   if (i.rollback) {
-    return "Bleibt als Rückweg für Nodvard Deck: Ohne dieses Image gibt es nach einem misslungenen Update kein Zurück.";
+    return productText("Bleibt als Rückweg für Nodvard Deck: Ohne dieses Image gibt es nach einem misslungenen Update kein Zurück.");
   }
   if (i.names.length > 1) {
     return `Hat mehrere Namen; Docker löscht es erst, wenn nur noch einer übrig ist. Einen Namen entfernst du im Terminal mit: docker rmi ${i.names[0]}`;
@@ -108,6 +117,7 @@ function networkRow(n: NetworkOut): Row {
     key: n.id, title: n.name, muted: n.builtin,
     facts: [n.driver ?? "?", ...(n.compose_project ? [`Stack ${n.compose_project}`] : []), ...(n.internal ? ["nur intern"] : [])],
     builtin: n.builtin, usedBy: n.used_by, inUse: n.in_use || n.builtin, removable: n.removable, payload: { network: n.id },
+    linkable: linkable(n.name, n.driver),
   };
 }
 
@@ -133,20 +143,53 @@ export function ResourceList({ hostId, kind }: { hostId: string; kind: ResourceK
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [waiting, setWaiting] = useState<ReadonlySet<string>>(new Set());
+  const [messages, setMessages] = useState<ReadonlyMap<string, string>>(new Map());
   const [reload, setReload] = useState(0);
+  const [containers, setContainers] = useState<HostContainer[]>([]);
+  const [links, setLinks] = useState<string | null>(null);
   const text = TEXT[kind];
+
+  function setMessage(key: string, message: string | null) {
+    setMessages((previous) => {
+      const next = new Map(previous);
+      if (message === null) next.delete(key);
+      else next.set(key, message);
+      return next;
+    });
+  }
+
+  const waiting = usePendingActions((completed) => {
+    for (const [key, action] of completed) {
+      const label = key.startsWith("anlegen:") ? "Netz anlegen" : key.startsWith("holen:") ? "Image holen" : text.label;
+      const outcome = action
+        ? (action.status === "succeeded" && action.result?.output) || describeActionOutcome(action).text
+        : "Aktion nicht mehr verfügbar.";
+      setMessage(key, `${label}: ${outcome}`);
+    }
+    setReload((n) => n + 1);
+  });
+  const linkWaiting = usePendingActions((completed) => {
+    for (const [key, action] of completed) {
+      const label = key.endsWith(":connect") ? "Verbinden" : "Trennen";
+      const outcome = action
+        ? (action.status === "succeeded" && action.result?.output) || describeActionOutcome(action).text
+        : "Aktion nicht mehr verfügbar.";
+      setMessage(key, `${label}: ${outcome}`);
+    }
+    setReload((n) => n + 1);
+  });
 
   useEffect(() => {
     const controller = new AbortController();
-    setRows(null);
     setError(null);
     fetchJson<Record<string, unknown>>(`/ext/docker/hosts/${encodeURIComponent(hostId)}/${kind}`, { signal: controller.signal })
       .then((body) => {
         if (controller.signal.aborted) return;
         if (kind === "networks" && typeof body.error === "string" && body.error) setError(body.error);
-        else setRows(toRows(kind, body));
+        else {
+          setRows(toRows(kind, body));
+          setContainers((body.containers ?? []) as HostContainer[]);
+        }
       })
       .catch((err: unknown) => { if (!controller.signal.aborted) setError(errorMessage(err)); });
     return () => controller.abort();
@@ -156,50 +199,87 @@ export function ResourceList({ hostId, kind }: { hostId: string; kind: ResourceK
     const ok = await deck().confirmDialog(text.confirm(row.title), { title: text.label, danger: true, confirmLabel: "Löschen" });
     if (!ok) return;
     setBusy(row.key);
-    setMessage(null);
+    setMessage(row.key, null);
     try {
       const result = await hostAction(hostId, text.action, `${text.label} über die Docker-Seite.`, unmountSignal(), row.payload);
-      setMessage(`${text.label}: ${result.text}`);
-      if (result.waiting) setWaiting((keys) => new Set(keys).add(row.key));
+      setMessage(row.key, `${text.label}: ${result.text}`);
+      if (result.waiting) waiting.add(row.key, result.actionId);
       setReload((n) => n + 1);
     } catch (err) {
-      setMessage(`Fehler: ${errorMessage(err)}`);
+      setMessage(row.key, `Fehler: ${errorMessage(err)}`);
     } finally {
       setBusy(null);
     }
   }
 
-  if (error) return <LoadError what={text.what} error={error} onRetry={() => setReload((n) => n + 1)} />;
-  if (!rows) return <p className="text-sm opacity-60">Lade die {text.noun} … Das dauert ein paar Sekunden.</p>;
+  function started(message: string, waitingFor?: string) {
+    const key = `${kind === "images" ? "holen" : "anlegen"}:${waitingFor ?? message}`;
+    setMessage(key, message);
+    if (waitingFor) waiting.add(key, waitingFor);
+    setReload((n) => n + 1);
+  }
+
   const canRemove = deck().hasPermission("hosts.execute");
+  const buttons = (row: Row) => canRemove && ((kind === "networks" && row.linkable) || row.removable);
   return (
     <div data-testid={`resources-${kind}`}>
-      <p className="mb-2 text-xs opacity-60">{text.hint}</p>
-      {message && <p className="mb-2 text-sm opacity-90" role="status">{message}</p>}
-      {rows.length === 0 && <p className="text-sm opacity-70">{text.empty}</p>}
-      <ul className="divide-y divide-white/5 text-sm">
-        {rows.map((row) => (
-          <li key={row.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2" data-testid={`resource-${row.key}`}>
-            <div className="min-w-0 flex-1">
-              <p className={`break-words ${row.muted ? "opacity-70" : ""}`}>
-                {row.title} {row.builtin && <Badge>eingebaut</Badge>}
-              </p>
-              <p className="text-xs opacity-60">{row.facts.join(" · ")}</p>
-            </div>
-            <p className="text-xs opacity-80 md:w-64">{usage(row)}</p>
-            {canRemove && (
-              <div className="w-20 shrink-0 text-right">
-                {row.removable && waiting.has(row.key) && <span className="text-xs opacity-70">wartet auf Freigabe</span>}
-                {row.removable && !waiting.has(row.key) && (
-                  <Button small variant="danger" disabled={busy !== null} onClick={() => void remove(row)} ariaLabel={`${text.label}: ${row.title}`}>
-                    {busy === row.key ? "…" : "Löschen"}
-                  </Button>
+      {messages.size > 0 && <p className="mb-2 text-sm opacity-90" role="status">{[...messages.values()].join(" ")}</p>}
+      {error ? (
+        <LoadError what={text.what} error={error} onRetry={() => setReload((n) => n + 1)} />
+      ) : !rows ? (
+        <p className="text-sm opacity-60">Lade die {text.noun} … Das dauert ein paar Sekunden.</p>
+      ) : (
+        <>
+          <p className="mb-2 text-xs opacity-60">{text.hint}</p>
+          {kind === "images" && canRemove && <ImagePull hostId={hostId} onDone={started} />}
+          {kind === "networks" && canRemove && <NetworkCreate hostId={hostId} onDone={started} />}
+          {rows.length === 0 && <p className="text-sm opacity-70">{text.empty}</p>}
+          <ul className={CARD_LIST}>
+            {rows.map((row) => (
+              <li key={row.key} className={`${CARD_ITEM} flex flex-col gap-1 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3 sm:gap-y-1`}
+                data-testid={`resource-${row.key}`}>
+                <div className="min-w-0 flex-1">
+                  <p className={`break-words ${row.muted ? "opacity-70" : ""}`}>
+                    {row.title} {row.builtin && <Badge>eingebaut</Badge>}
+                  </p>
+                  <p className="text-xs opacity-60">{row.facts.join(" · ")}</p>
+                </div>
+                <p className="text-xs opacity-80 max-sm:empty:hidden md:w-64">{usage(row)}</p>
+                {/* Unter sm stehen die Knöpfe in einer eigenen Zeile. */}
+                <div className={`${buttons(row) ? "flex" : "hidden"} flex-wrap items-center gap-1.5 sm:contents`} data-testid={`resource-buttons-${row.key}`}>
+                  {kind === "networks" && canRemove && row.linkable && (
+                    <Button small pressed={links === row.key} onClick={() => setLinks(links === row.key ? null : row.key)} ariaLabel={`Container: ${row.title}`}>
+                      Container
+                    </Button>
+                  )}
+                  {canRemove && (
+                    <div className="empty:hidden sm:w-20 sm:shrink-0 sm:text-right sm:empty:block">
+                      {row.removable && waiting.keys.has(row.key) && <span className="text-xs opacity-70">wartet auf Freigabe</span>}
+                      {row.removable && !waiting.keys.has(row.key) && (
+                        <Button small variant="danger" disabled={busy !== null} onClick={() => void remove(row)} ariaLabel={`${text.label}: ${row.title}`}>
+                          {busy === row.key ? "…" : "Löschen"}
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {kind === "networks" && links === row.key && (
+                  <NetworkLinks hostId={hostId} network={row.payload.network} title={row.title} usedBy={row.usedBy} containers={containers}
+                    actionSignal={unmountSignal}
+                    networksOf={(name) => rows.filter((r) => r.usedBy.includes(name)).length}
+                    pending={new Set([...linkWaiting.keys].filter((k) => k.startsWith(`${row.key}:`)).map((k) => k.slice(row.key.length + 1)))}
+                    onDone={(m, outcome) => {
+                      setMessage(`${row.key}:${outcome.key}`, m);
+                      if (outcome.waiting) linkWaiting.add(`${row.key}:${outcome.key}`, outcome.actionId);
+                      if (!outcome.failed) setLinks(null);
+                      setReload((n) => n + 1);
+                    }} />
                 )}
-              </div>
-            )}
-          </li>
-        ))}
-      </ul>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 }

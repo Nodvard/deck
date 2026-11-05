@@ -1,3 +1,4 @@
+import { styleRef } from "../../../../extensions/_shared/frontend/src/csp";
 import { useState } from "react";
 
 import { minMax } from "../../lib/minMax";
@@ -140,11 +141,11 @@ export function ChartView({ view, data }: { view: ChartViewSpec; data: unknown }
         {hoverIdx !== null && (
           <div
             className="pointer-events-none absolute top-1 rounded border border-white/10 bg-[var(--color-surface)] px-2 py-1 text-xs shadow"
-            style={{ left: `${Math.min(85, (hoverX! / WIDTH) * 100)}%` }}
+            ref={styleRef({ left: `${Math.min(85, (hoverX! / WIDTH) * 100)}%` })}
           >
             {view.series.map((series) => (
               <div key={series.field} className="whitespace-nowrap">
-                <span style={{ color: TONE_STROKE[series.tone] }}>{series.label}</span>: {formatValue(numberAt(rows[hoverIdx], series.field))}
+                <span ref={styleRef({ color: TONE_STROKE[series.tone] })}>{series.label}</span>: {formatValue(numberAt(rows[hoverIdx], series.field))}
               </div>
             ))}
           </div>
@@ -153,7 +154,7 @@ export function ChartView({ view, data }: { view: ChartViewSpec; data: unknown }
       <div className="mt-1 flex flex-wrap gap-3 text-xs opacity-70">
         {view.series.map((series) => (
           <span key={series.field} className="inline-flex items-center gap-1">
-            <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: TONE_STROKE[series.tone] }} />
+            <span className="inline-block h-2 w-2 rounded-full" ref={styleRef({ backgroundColor: TONE_STROKE[series.tone] })} />
             {series.label}
           </span>
         ))}

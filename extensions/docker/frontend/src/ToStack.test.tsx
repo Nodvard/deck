@@ -84,3 +84,13 @@ describe("In Stack umwandeln", () => {
     expect(await screen.findByText(/Die Vorschau/)).toBeInTheDocument();
   });
 });
+
+it("Dock nennt sich beim Umwandeln eines Containers", async () => {
+  window.__nodvardDeck.getProductName = () => "Nodvard Dock";
+  serve();
+  render(<ToStackPanel hostId="h1" container="plaintest" onDone={vi.fn()} />);
+  expect(await screen.findByText(/Den alten Container löscht Dock/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Umwandeln" }));
+  await waitFor(() => expect(confirm()).toHaveBeenCalled());
+  expect(String(confirm().mock.calls[0][0])).toContain("löscht Dock den alten Container");
+});

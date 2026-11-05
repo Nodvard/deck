@@ -35,11 +35,11 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install --no-install-recommends -y tesseract-ocr tesseract-ocr-deu
       - run: pip install -c deploy/constraints.txt -e sdk/python -e "backend[dev]"
       - run: pytest sdk/python/tests backend/tests
-      # Die Tests von deploy/backup.sh und deploy/restore.sh mit echten Besitzern und Rechten sowie der Test des
-      # Einrichtungsbefehls unter BusyBox als root (Marker needs_root) brauchen root und werden oben nur uebersprungen:
-      # hier noch einmal als root, mit Grund fuer jeden uebersprungenen (-rs). backup.sh und restore.sh laufen dabei aus
-      # einer Kopie im Temp-Ordner. Kein Cache und kein Bytecode, damit nichts root-Eigenes im Checkout liegen bleibt.
-      - run: sudo -E env "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -rs -p no:cacheprovider -m needs_root backend/tests/test_deploy_switch.py backend/tests/test_host_setup_script.py
+      # Sicherungen mit fremden Dateibesitzern, Einrichtung unter BusyBox und die Scansperre von Shield brauchen root.
+      # Im normalen Lauf werden diese Fälle übersprungen. Hier laufen sie als root, mit Grund für weitere Skips (-rs).
+      # backup.sh und restore.sh laufen aus einer Kopie im Temp-Ordner. Kein Cache und kein Bytecode, damit nichts
+      # root-Eigenes im Checkout liegen bleibt.
+      - run: sudo -E env "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -rs -p no:cacheprovider -m needs_root backend/tests/test_deploy_switch.py backend/tests/test_host_setup_script.py backend/tests/test_ext_shield_root_helper_scan.py
       # Update-Helfer (deploy/updater): nur Standardbibliothek, ohne Installation und ohne Backend-conftest -- eigener Aufruf.
       - run: python -m pytest deploy/updater/tests
       # Dieselben Tests noch einmal als root (der Runner hat sudo ohne Passwort): nur dann koennen Dateien einem anderen
@@ -84,7 +84,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Image bauen
-        run: docker build -f deploy/Dockerfile --build-arg NODVARD_DECK_EXTENSIONS=docker -t ghcr.io/nodvard/dock:latest .
+        run: docker build -f deploy/Dockerfile --build-arg NODVARD_DECK_EXTENSIONS=docker --build-arg EDITION=dock -t ghcr.io/nodvard/dock:latest .
       - name: Nur das Modul docker im Image
         run: |
           found="$(docker run --rm --entrypoint sh ghcr.io/nodvard/dock:latest -c 'cd /app/extensions && ls -d */ | tr -d / | tr "\n" " "')"
@@ -114,10 +114,17 @@ jobs:
         working-directory: deploy/nodvard-dock
         run: |
           api=http://127.0.0.1:8080/api/v1
+          edition="$(curl -fsS "$api/edition" | python3 -c 'import json, sys; print(json.load(sys.stdin)["id"])')"
+          if [ "$edition" != "dock" ]; then
+            echo "Das Image meldet sich als $edition, nicht als dock." >&2
+            exit 1
+          fi
           code="$(docker compose logs --no-color nodvard-dock | grep -o 'Einrichtungscode: [A-Z0-9-]*' | tail -n 1 | cut -d' ' -f2)"
           password="$(openssl rand -hex 16)"
           curl -fsS -H 'Content-Type: application/json' -d "{\"username\":\"ci-owner\",\"password\":\"$password\",\"setup_code\":\"$code\"}" "$api/auth/bootstrap" >/dev/null
           token="$(curl -fsS -H 'Content-Type: application/json' -d "{\"username\":\"ci-owner\",\"password\":\"$password\"}" "$api/auth/login" | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')"
+          echo "::add-mask::$token"
+          echo "DOCK_SMOKE_TOKEN=$token" >> "$GITHUB_ENV"
           known="$(curl -fsS -H "Authorization: Bearer $token" "$api/extensions" | python3 -c 'import json, sys; print(" ".join(sorted(e["id"] for e in json.load(sys.stdin))))')"
           if [ "$known" != "docker" ]; then
             echo "Erwartet war nur das Modul docker, gefunden: $known" >&2
@@ -139,6 +146,18 @@ jobs:
           if docker compose logs --no-color nodvard-dock | grep -q Traceback; then
             exit 1
           fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - name: EDITION-Rauchtest
+        working-directory: frontend
+        env:
+          DOCK_SMOKE_URL: http://127.0.0.1:8080
+        run: npm test -- smoke/dock.test.tsx
       # Gemessen wie beim Update-Helfer: alle Dateien entpackt, mit du im Container. Der Speicher nach dem Start steht
       # nur in der Zusammenfassung; er schwankt mit dem Runner und taugt nicht als Grenze.
       - name: Größe unter 350 MB, Speicher nach dem Start
@@ -179,6 +198,10 @@ jobs:
       - run: npm test
         working-directory: frontend
       - run: npm run test:extensions
+        working-directory: frontend
+      - run: npm run test:csp:install -- --with-deps
+        working-directory: frontend
+      - run: npm run test:csp
         working-directory: frontend
       - run: npm run build
         working-directory: frontend

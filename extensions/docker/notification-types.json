@@ -1,0 +1,7 @@
+{
+  "docker.image_result": "Image-Update abgeschlossen",
+  "docker.images_available": "Image-Updates verfügbar",
+  "docker.git_available": "Neuer Stand für Stacks aus Git",
+  "docker.git_failed": "Prüfung der Stacks aus Git fehlgeschlagen",
+  "docker.restore_failed": "Zurückspielen eines Stacks abgebrochen"
+}

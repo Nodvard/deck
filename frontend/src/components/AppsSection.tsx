@@ -1,7 +1,7 @@
 /**
- * Bereich „Apps“ im Cockpit: eigene Kacheln („+ App hinzufuegen“) und die automatisch erkannten Dienste in einem
- * Raster, mit Suche, Gruppen-Filter und -- nur mit dem Recht `apps.write` -- Knopf zum Hinzufuegen und einem kleinen
- * Menue an jeder eigenen Kachel (Bearbeiten, nach vorn/hinten, Loeschen).
+ * Bereich „Apps“ im Cockpit: eigene Kacheln („+ App hinzufügen“) und die automatisch erkannten Dienste in einem
+ * Raster, mit Suche, Gruppen-Filter und -- nur mit dem Recht `apps.write` -- Knopf zum Hinzufügen und einem kleinen
+ * Menü an jeder eigenen Kachel (Bearbeiten, nach vorn/hinten, Löschen).
  *
  * Wer nichts angelegt hat und nichts erkannt wird, sieht (mit Recht) einen Leerzustand mit dem Knopf; ohne Recht
  * bleibt der Bereich dann ganz weg (wie bisher ohne Dienste).
@@ -17,13 +17,14 @@ import {
   type GroupFilter,
   groupChips,
   useAppActions,
+  withoutAdopted,
 } from "../lib/apps";
 import { confirmDialog } from "../state/dialogs";
 import { AppDialog } from "./AppDialog";
 import { AppTile, CustomAppTile } from "./AppTile";
 import { EmptyState } from "./EmptyState";
 
-/** Aus der Kachel das Dienst-Objekt fuer `AppTile` (der erkannte Dienst sieht aus wie bisher). */
+/** Aus der Kachel das Dienst-Objekt für `AppTile` (der erkannte Dienst sieht aus wie bisher). */
 function asService(tile: AppTileOut) {
   return {
     id: tile.id, name: tile.name, host: tile.host, host_id: tile.host_id, state: tile.state, tone: tile.tone,
@@ -34,7 +35,8 @@ function asService(tile: AppTileOut) {
 const ADD_BUTTON =
   "inline-flex flex-none items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium accent-gradient text-on-accent transition hover:bg-accent-strong";
 
-export function AppsSection({ apps, hosts, canWrite }: { apps: AppTileOut[]; hosts: HostOut[]; canWrite: boolean }) {
+export function AppsSection({ apps: all, hosts, canWrite }: { apps: AppTileOut[]; hosts: HostOut[]; canWrite: boolean }) {
+  const apps = useMemo(() => withoutAdopted(all), [all]);
   const actions = useAppActions();
   const [query, setQuery] = useState("");
   const [showAll, setShowAll] = useState(false);
@@ -43,11 +45,11 @@ export function AppsSection({ apps, hosts, canWrite }: { apps: AppTileOut[]; hos
   const [error, setError] = useState<string | null>(null);
   const section = useRef<HTMLDivElement>(null);
   const addRef = useRef<HTMLButtonElement>(null);
-  /** Wer den Dialog geoeffnet hat (Menue-Knopf einer Kachel oder „App hinzufuegen“): dorthin geht der Fokus zurueck. */
+  /** Wer den Dialog geöffnet hat (Menü-Knopf einer Kachel oder „App hinzufügen“): dorthin geht der Fokus zurück. */
   const returnFocus = useRef<HTMLElement | null>(null);
 
   const hasHidden = apps.some((a) => a.source === "detected" && !a.url);
-  // Ein Filter, den es nicht mehr gibt (letzte App der Gruppe geloescht), gilt als „Alle“.
+  // Ein Filter, den es nicht mehr gibt (letzte App der Gruppe gelöscht), gilt als „Alle“.
   const baseVisible = useMemo(() => filterApps(apps, { query, filter: FILTER_ALL, showAll }), [apps, query, showAll]);
   const chips = useMemo(() => groupChips(apps, baseVisible, showAll), [apps, baseVisible, showAll]);
   const activeFilter = chips.some((c) => c.key === filter) ? filter : FILTER_ALL;
@@ -63,8 +65,8 @@ export function AppsSection({ apps, hosts, canWrite }: { apps: AppTileOut[]; hos
     setDialog({ app });
   }
 
-  /** Fokus an eine sinnvolle Stelle, wenn die Aktion ihn verloren hat (Kachel verschoben oder geloescht): der
-   * Menue-Knopf der Kachel, sonst „App hinzufuegen“. Hat die Person den Fokus inzwischen woanders, bleibt er dort. */
+  /** Fokus an eine sinnvolle Stelle, wenn die Aktion ihn verloren hat (Kachel verschoben oder gelöscht): der
+   * Menü-Knopf der Kachel, sonst „App hinzufügen“. Hat die Person den Fokus inzwischen woanders, bleibt er dort. */
   function keepFocus(appId: string | null) {
     setTimeout(() => {
       const active = document.activeElement;
@@ -77,7 +79,7 @@ export function AppsSection({ apps, hosts, canWrite }: { apps: AppTileOut[]; hos
   }
 
   function restoreDialogFocus(event: Event) {
-    event.preventDefault(); // sonst setzt Radix den Fokus auf den (nicht vorhandenen) Ausloeser, also auf <body>
+    event.preventDefault(); // sonst setzt Radix den Fokus auf den (nicht vorhandenen) Auslöser, also auf <body>
     const target = returnFocus.current?.isConnected ? returnFocus.current : addRef.current;
     target?.focus();
   }
@@ -102,7 +104,7 @@ export function AppsSection({ apps, hosts, canWrite }: { apps: AppTileOut[]; hos
     }
   }
 
-  /** Eine Stelle nach vorn/hinten: tauscht mit der naechsten SICHTBAREN eigenen App (bei aktivem Filter die der Gruppe). */
+  /** Eine Stelle nach vorn/hinten: tauscht mit der nächsten SICHTBAREN eigenen App (bei aktivem Filter die der Gruppe). */
   async function move(app: AppTileOut, direction: "up" | "down") {
     const at = visibleCustomIds.indexOf(app.id);
     const neighbour = visibleCustomIds[direction === "up" ? at - 1 : at + 1];

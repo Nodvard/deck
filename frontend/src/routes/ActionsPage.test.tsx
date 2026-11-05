@@ -379,6 +379,31 @@ describe("ActionsPage", () => {
     expect(approveBtn.parentElement).toHaveClass("flex-wrap");
   });
 
+  it("Handy: unter 640 px wird jede Zeile zur Karte mit allen Knöpfen, ab sm bleibt es die Tabelle", async () => {
+    loginAsAdmin();
+    vi.stubGlobal("fetch", mockFetch());
+    render(<ActionsPage />);
+
+    const approveBtn = await screen.findByRole("button", { name: "Bestätigen" });
+    const card = approveBtn.closest("tr")!;
+    // Karte: Zeile gestapelt; Tabelle, Kopf, Zeile und Zellen kehren ab `sm` zur Tabelle zurück.
+    expect(card).toHaveClass("flex", "flex-col", "sm:table-row");
+    expect(screen.getByRole("table")).toHaveClass("block", "sm:table");
+    expect(screen.getByRole("table").querySelector("thead")).toHaveClass("hidden", "sm:table-header-group");
+    expect(approveBtn.closest("td")).toHaveClass("block", "sm:table-cell");
+    // Alle Knöpfe stehen in der Karte (in einer eigenen Zeile, sie dürfen umbrechen).
+    for (const name of ["Bestätigen", "Ablehnen", "Verwerfen"]) {
+      expect(within(card).getByRole("button", { name })).toBeEnabled();
+    }
+    // Die Spaltenköpfe fehlen auf dem Handy: jeder Wert trägt seine Beschriftung.
+    const labels = [...card.querySelectorAll("td[data-label]")].map((td) => td.getAttribute("data-label"));
+    expect(labels).toEqual(["Zeit", "Server", "Risiko", "Status", "Vorgeschlagen von", "Begründung"]);
+    // Der Titel steht oben in der Karte, die Rollen erhalten die Tabelle für Vorlese-Programme.
+    expect(within(card).getByText(/./, { selector: "td.order-first > span" })).toBeInTheDocument();
+    expect(card).toHaveAttribute("role", "row");
+    expect(approveBtn.closest("td")).toHaveAttribute("role", "cell");
+  });
+
   it("wechselt den Statusfilter und fragt erneut ab", async () => {
     useAuthStore.setState({ accessToken: "tok", status: "authenticated", mfaToken: null, user: { id: "u1", username: "admin", display_name: null, email: null, is_owner: true, locale: "de", permissions: [] } });
     const calledUrls: string[] = [];

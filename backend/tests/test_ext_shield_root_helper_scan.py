@@ -119,6 +119,7 @@ def test_a_scan_behaves_like_the_old_command(tmp_path, kind):
     assert out.endswith(f"Scanned files: 2\n{MARK}0\n") and old[0] == 0
 
 
+@pytest.mark.needs_root
 @needs_sh
 @needs_root
 def test_a_busy_server_makes_the_scan_wait_and_give_up_like_before(tmp_path):
@@ -193,6 +194,16 @@ def test_the_watch_over_clamd_behaves_like_the_old_command(tmp_path, clamd):
     old, new = _watch_both(tmp_path, [str(tree / "b")], skip=[], use_clamd=True, tools={"clamdscan": clamd})
     assert new == old
     assert ("Scanned files: 1\n" in old[1]) == ("FOUND" in clamd)
+
+
+@pytest.mark.needs_root
+@needs_sh
+@needs_root
+def test_the_watch_never_waits_for_the_lock(tmp_path):
+    flock = 'case "$1" in --version) echo "flock from util-linux";; *) echo "flock $*";; esac\n'
+    tree = _tree(tmp_path)
+    old, new = _watch_both(tmp_path, [str(tree / "b")], skip=[], tools={"flock": flock})
+    assert new == old and "flock -n 9\n" in old[1]
 
 
 @needs_sh

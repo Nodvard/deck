@@ -23,6 +23,7 @@ def _clean(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
             monkeypatch.delenv(key)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(config, "_warned_legacy", set())
+    monkeypatch.delenv("EDITION", raising=False)
 
 
 def _info(tmp_path: Path, content: object) -> Path:
@@ -46,7 +47,14 @@ def test_file_fills_image_and_build(tmp_path):
 
 def test_without_file_and_variables_both_stay_none(tmp_path):
     s = _settings(tmp_path / "gibt-es-nicht.json")
-    assert s.image is None and s.build is None
+    assert s.image is None and s.build is None and s.edition is None
+
+
+def test_file_names_the_edition(tmp_path, monkeypatch):
+    path = _info(tmp_path, {"image": "ghcr.io/nodvard/dock", "version": "0.12.1", "edition": "dock"})
+    assert _settings(path).edition == "dock"
+    monkeypatch.setenv("NODVARD_DECK_EDITION", "deck")
+    assert _settings(path).edition == "deck"
 
 
 def test_default_path_is_in_the_app_folder():
@@ -141,6 +149,23 @@ def test_main_without_build_arguments_writes_no_file(tmp_path, monkeypatch):
     assert not target.exists()
 
 
+def test_main_writes_the_edition(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAGE", "ghcr.io/nodvard/dock")
+    monkeypatch.setenv("VERSION", "0.12.1")
+    monkeypatch.setenv("EDITION", "dock")
+    target = tmp_path / "image-info.json"
+    assert image_info.main([str(target)]) == 0
+    assert image_info.read(target) == {"image": "ghcr.io/nodvard/dock", "version": "0.12.1", "edition": "dock"}
+
+
+def test_main_refuses_an_unknown_edition(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAGE", "ghcr.io/nodvard/dock")
+    monkeypatch.setenv("EDITION", "Dock")
+    target = tmp_path / "image-info.json"
+    assert image_info.main([str(target)]) == 1
+    assert not target.exists()
+
+
 def test_main_refuses_unusable_values(tmp_path, monkeypatch):
     monkeypatch.setenv("IMAGE", "ghcr.io/nodvard/deck")
     monkeypatch.setenv("VERSION", "0.6.0\n0.7.0")
@@ -150,7 +175,7 @@ def test_main_refuses_unusable_values(tmp_path, monkeypatch):
 
 
 def test_module_runs_with_python_dash_m_like_in_the_dockerfile(tmp_path):
-    env = {k: v for k, v in os.environ.items() if k not in ("IMAGE", "VERSION")}
+    env = {k: v for k, v in os.environ.items() if k not in ("IMAGE", "VERSION", "EDITION")}
     env.update(IMAGE="ghcr.io/nodvard/deck", VERSION="0.6.0")
     target = tmp_path / "image-info.json"
     done = subprocess.run(

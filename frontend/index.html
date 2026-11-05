@@ -2,6 +2,7 @@
 <html lang="de">
   <head>
     <meta charset="UTF-8" />
+    <meta name="csp-nonce" content="__DECK_CSP_NONCE__" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!--
       Kein Produktname/Titel hier hartkodiert -- src/lib/branding.ts setzt document.title
@@ -19,16 +20,8 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black" />
-  </head>
-  <body>
-    <div id="root"></div>
-    <!--
-      Import-Map-Shim (docs/02-EXTENSION-API.md §5): loest "react"/"react-dom"/
-      "react/jsx-runtime" fuer JEDES per import() nachgeladene Extension-Bundle auf
-      window.__nodvardDeck auf (siehe main.tsx + public/nodvard-deck-shim/*.js). MUSS vor jedem
-      <script type="module"> stehen -- Import-Maps gelten nur fuer danach geparste Modul-Graphen.
-    -->
-    <script type="importmap">
+    <!-- Import-Map für Erweiterungs-Bundles, vor allen Modulskripten (docs/02-EXTENSION-API.md §5). -->
+    <script type="importmap" nonce="__DECK_CSP_NONCE__">
       {
         "imports": {
           "react": "/nodvard-deck-shim/react.js",
@@ -37,6 +30,9 @@
         }
       }
     </script>
+  </head>
+  <body>
+    <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

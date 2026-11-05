@@ -6,10 +6,12 @@
 import { AlertTriangle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { InsecureConnectionWarning } from "../../components/InsecureConnectionWarning";
 import { api } from "../../lib/api";
 import { proxyHintText, type UntrustedProxy } from "../../lib/overview";
 import { useAuthStore } from "../../state/auth";
 import { Button, Card, Field, NoticeLine, errorText, inputClass, type Notice } from "./ui";
+import { productText } from "../../state/edition";
 
 export const KEY_TRUSTED_PROXIES = "system.trusted_proxies";
 export const ENV_TRUSTED_PROXIES = "NODVARD_DECK_TRUSTED_PROXIES";
@@ -24,6 +26,7 @@ export interface ConnectionInfo {
   peer: string | null;
   client: string | null;
   scheme: string;
+  insecure_connection: boolean;
   via_trusted_proxy: boolean;
   forwarded_headers: boolean;
   trusted_proxies: string[];
@@ -66,7 +69,7 @@ export function wideNetworks(entries: string[]): string[] {
 
 export function wideNetworkWarning(entry: string): string {
   return (
-    `„${entry}“ umfasst mehr als ${WIDE_NETWORK_ADDRESSES} Adressen. Jedes Gerät darin könnte Nodvard Deck eine falsche ` +
+    `„${entry}“ umfasst mehr als ${WIDE_NETWORK_ADDRESSES} Adressen. Jedes Gerät darin könnte ${productText("Nodvard Deck")} eine falsche ` +
     "Adresse vorgeben. Trag besser nur die Adresse deines Proxys ein."
   );
 }
@@ -155,9 +158,10 @@ export function TrustedProxyCard({ settings }: { settings: SettingRow[] }): JSX.
   return (
     <Card
       title="Vertrauenswürdiger Proxy"
-      description="Nur nötig, wenn du Nodvard Deck über einen Reverse-Proxy wie Nginx Proxy Manager, Traefik oder Caddy aufrufst. Dann zählen die echten Adressen deiner Geräte und HTTPS."
+      description={productText("Nur nötig, wenn du Nodvard Deck über einen Reverse-Proxy wie Nginx Proxy Manager, Traefik oder Caddy aufrufst. Dann zählen die echten Adressen deiner Geräte und HTTPS.")}
       footer={<Button variant="primary" busy={busy} disabled={!dirty || locked} onClick={() => void save()}>Speichern</Button>}
     >
+      <InsecureConnectionWarning insecure={connection?.insecure_connection === true} />
       <NoticeLine notice={notice} />
 
       <div className="space-y-4">
@@ -235,7 +239,7 @@ export function TrustedProxyCard({ settings }: { settings: SettingRow[] }): JSX.
           <p className="text-xs text-white/50">Ändern kann diese Liste nur der Inhaber (Owner) dieser Installation.</p>
         )}
         <p className="text-xs text-white/40">
-          Nur von diesen Adressen glaubt Nodvard Deck die Angaben, wer wirklich anfragt und ob die Verbindung verschlüsselt
+          Nur von diesen Adressen glaubt {productText("Nodvard Deck")} die Angaben, wer wirklich anfragt und ob die Verbindung verschlüsselt
           war. Das braucht die Sperre nach zu vielen falschen Anmeldungen, das Protokoll und die Anmeldung über HTTPS. Trag
           nie ein ganzes Netz ein, aus dem auch normale Geräte kommen: Jedes eingetragene Gerät könnte sich sonst als ein
           anderes ausgeben.

@@ -133,7 +133,9 @@ async def _assert_same_state(db_session, state: dict, *, settings: dict) -> None
     assert (rows[OLD_ID].state, rows[OLD_ID].last_error) == ("enabled", None)
     assert rows[OLD_ID].settings == settings
     assert not [r for r in rows.values() if r.state == "error"]
-    assert await _ext_jobs(db_session) == {(OLD_ID, "image-updates"): state["job"]}
+    jobs = await _ext_jobs(db_session)
+    assert set(jobs) == {(OLD_ID, "image-updates"), (OLD_ID, "git-watch")}
+    assert jobs[(OLD_ID, "image-updates")] == state["job"]
 
 
 def _openapi_paths() -> dict:

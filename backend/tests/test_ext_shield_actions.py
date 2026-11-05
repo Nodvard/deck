@@ -344,12 +344,14 @@ async def test_unban_runs_without_the_check_on_the_server(soc):
 
 
 @pytest.mark.asyncio
-async def test_install_click_uses_the_package_key(soc):
-    req = await _click(soc, "/defender/hosts/h1/install", {"package": "lynis"})
-    assert req.payload == {"package": "lynis", "command": av.INSTALL_COMMANDS["lynis"]}
+@pytest.mark.parametrize("package", ["clamav", "lynis", "fail2ban"])
+async def test_install_click_uses_the_package_key(soc, package):
+    req = await _click(soc, "/defender/hosts/h1/install", {"package": package})
+    assert req.payload == {"package": package, "command": av.INSTALL_COMMANDS[package]}
     assert (await soc.executor.execute(req)).success
     assert soc.ctx.commands == [
-        av.via_helper(["install", "lynis"], av.INSTALL_COMMANDS["lynis"], version=av.HELPER_ACTION_VERSION)
+        av.RPM_OSTREE_GUARD
+        + av.via_helper(["install", package], av.INSTALL_COMMANDS[package], version=av.HELPER_ACTION_VERSION)
     ]
     sig = await _click(soc, "/defender/hosts/h1/install", {"package": "signatures"})
     assert sig.risk == Risk.LOW and sig.payload["command"] == av.INSTALL_COMMANDS["signatures"]

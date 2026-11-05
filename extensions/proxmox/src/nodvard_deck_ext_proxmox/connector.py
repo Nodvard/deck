@@ -156,6 +156,9 @@ class ProxmoxConnector:
     async def list_nodes(self) -> list[dict[str, Any]]:
         return await self._request("GET", "/nodes") or []
 
+    async def cluster_resources(self) -> list[dict[str, Any]]:
+        return await self._request("GET", "/cluster/resources") or []
+
     async def node_status(self, node: str) -> dict[str, Any]:
         return await self._request("GET", f"/nodes/{node}/status") or {}
 

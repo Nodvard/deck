@@ -1,3 +1,5 @@
+import { useEditionStore } from "../state/edition";
+
 /**
  * Adressen der Anleitung im öffentlichen Quellcode. Alle Links der Oberfläche zur Doku laufen hierüber, damit sich
  * die Adresse an einer Stelle ändern lässt. Verlinkt wird nur die deutsche Doku (docs/11-ERST-EINRICHTUNG.md).
@@ -25,38 +27,47 @@ export const GUIDE_PATH = "docs/11-ERST-EINRICHTUNG.md";
  * Überschrift dort umbenannt, schlägt er fehl und sagt, welcher Link ins Leere ginge.
  */
 export const GUIDE_SECTIONS = {
-  /** 1. Container starten */
-  start: "1-container-starten",
+  secureConnection: "verbindung-absichern",
+  /** 1. Schnellstart */
+  start: "1-schnellstart",
   /** 2. Einrichtungsassistent (/setup) */
   assistant: "2-einrichtungsassistent-setup",
   /** 4. Erweiterungen einschalten */
   modules: "4-erweiterungen-einschalten",
-  /** 5. Server und SSH-Zugang */
-  servers: "5-server-und-ssh-zugang",
-  /** 6. Root-Rechte ohne Passwort und Gruppe docker */
-  rootRights: "6-root-rechte-ohne-passwort-und-gruppe-docker",
-  /** 7. Proxmox verbinden */
-  proxmox: "7-proxmox-verbinden",
-  /** 8. Push-Nachrichten (ntfy) */
-  ntfy: "8-push-nachrichten-ntfy",
-  /** 9. Automatik und Wartungsfenster */
-  automation: "9-automatik-und-wartungsfenster",
-  /** 10.1 In der Oberfläche (empfohlen) */
-  backup: "101-in-der-oberfläche-empfohlen",
-  /** 10.2 Wiederherstellen (Sicherung einspielen) */
-  restore: "102-wiederherstellen-sicherung-einspielen",
-  /** 10.5 Neue Version finden und einspielen */
-  updates: "105-neue-version-finden-und-einspielen",
-  /** 11. Wenn etwas hakt */
-  troubleshooting: "11-wenn-etwas-hakt",
-  /** 12. Ausgesperrt? Notfall-Befehle */
-  locked: "12-ausgesperrt-notfall-befehle",
+  /** 3. Den ersten Server verbinden */
+  servers: "3-den-ersten-server-verbinden",
+  /** F. Root-Rechte ohne Passwort und Gruppe docker (Anhang) */
+  rootRights: "f-root-rechte-ohne-passwort-und-gruppe-docker",
+  /** 4.2 Proxmox verbinden */
+  proxmox: "42-proxmox-verbinden",
+  /** 5. Push-Nachrichten (ntfy) */
+  ntfy: "5-push-nachrichten-ntfy",
+  /** H. Automatik und Wartungsfenster (Anhang) */
+  automation: "h-automatik-und-wartungsfenster",
+  /** 6.1 In der Oberfläche (empfohlen) */
+  backup: "61-in-der-oberfläche-empfohlen",
+  /** 6.2 Wiederherstellen (Sicherung einspielen) */
+  restore: "62-wiederherstellen-sicherung-einspielen",
+  /** I.1 Neue Version finden und einspielen (Anhang) */
+  updates: "i1-neue-version-finden-und-einspielen",
+  /** 7. Typische Stolpersteine */
+  troubleshooting: "7-typische-stolpersteine",
+  /** 7.3 Ausgesperrt? Notfall-Befehle */
+  locked: "73-ausgesperrt-notfall-befehle",
 } as const;
 
 export type GuideSection = keyof typeof GUIDE_SECTIONS;
 
 /** Adresse der Anleitung, ohne Angabe ganz oben, sonst direkt am passenden Abschnitt. */
 export function guideUrl(section?: GuideSection): string {
+  if (!useEditionStore.getState().edition.choose_modules) {
+    const anchors: Partial<Record<GuideSection, string>> = {
+      servers: "3-server-verbinden-auch-den-eigenen", assistant: "2-einrichten",
+      backup: "sichern-und-entfernen", restore: "sichern-und-entfernen", updates: "1-starten",
+      rootRights: "sicherheit-und-datenschutz-auf-einen-blick",
+    };
+    return repoFile("deploy/nodvard-dock/README.md", section ? anchors[section] : undefined);
+  }
   return repoFile(GUIDE_PATH, section ? GUIDE_SECTIONS[section] : undefined);
 }
 

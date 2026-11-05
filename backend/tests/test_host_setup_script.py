@@ -1889,9 +1889,16 @@ def test_setup_record_counts_only_installed_helpers_that_were_offered():
         "Hinweis: Das Hilfsskript docker-root wurde nicht eingerichtet.\n"
     )
     record = host_setup.setup_record("deck", host_setup.setup_report(out, user="deck"), sudo=True, helpers=[helper])
-    expected = hashlib.sha256(f"deck ALL=(root) NOPASSWD: {ROOT_HELPER_DIR}/shield-root\n".encode()).hexdigest()
-    assert record["sudoers"]["/etc/sudoers.d/nodvard_shield_deck"] == expected
+    rule = f"deck ALL=(root) NOPASSWD: sha256:{'0' * 64} {ROOT_HELPER_DIR}/shield-root\n"
+    assert record["sudoers"]["/etc/sudoers.d/nodvard_shield_deck"] == hashlib.sha256(rule.encode()).hexdigest()
     assert set(record["sudoers"]) == {"/etc/sudoers.d/nodvard-deck", "/etc/sudoers.d/nodvard_shield_deck"}
+
+    # Ohne Prüfsumme in der Regel (sudo-rs, älteres sudo) zählt die Zeile, die das Skript dann schreibt.
+    report = host_setup.setup_report(out.replace("sudo-Regel.\n", "sudo-Regel ohne Prüfsumme.\n"), user="deck")
+    assert report["plain_rules"] == ["fremd", "shield"] == report["helpers"]
+    record = host_setup.setup_record("deck", report, sudo=True, helpers=[helper])
+    rule = f"deck ALL=(root) NOPASSWD: {ROOT_HELPER_DIR}/shield-root\n"
+    assert record["sudoers"]["/etc/sudoers.d/nodvard_shield_deck"] == hashlib.sha256(rule.encode()).hexdigest()
 
 
 def test_setup_report_takes_only_fixed_forms():

@@ -75,6 +75,18 @@ describe("Cockpit: Auslastung der Linux-Server", () => {
     expect(screen.queryByTestId("machine-m-win-hint")).toBeNull();
   });
 
+  it("am Handy steht die Zahl über dem Balken, damit Messwerte und Knöpfe auf den Schirm passen", async () => {
+    vi.stubGlobal("fetch", mockFetch());
+    renderCockpit();
+    const nas = await screen.findByTestId("server-m-nas");
+    const meter = within(nas).getByRole("img", { name: "CPU 1 %" }).parentElement!;
+    expect(meter).toHaveClass("flex-col-reverse", "sm:flex-row");
+    // CPU hat keine absolute Angabe, bekommt aber dieselbe zweite Zeile wie RAM, damit die Balken gleich hoch stehen.
+    expect(meter.nextElementSibling).toHaveClass("2xl:block", "invisible");
+    expect(within(nas).getByRole("img", { name: "RAM 18 %" }).parentElement!.nextElementSibling).not.toHaveClass("invisible");
+    expect(screen.getByTestId("server-m-nas-uptime")).toHaveClass("2xl:table-cell");
+  });
+
   it("holt die Werte aller Server in EINER Abfrage und fragt keinen Server einzeln", async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal("fetch", fetchMock);
@@ -95,6 +107,16 @@ describe("Cockpit: Auslastung der Linux-Server", () => {
     expect(screen.getByTestId("server-m-nas-note").textContent).toBe("veraltet · letzte Messung vor 5 min");
     expect(within(nas).getByRole("img", { name: "Platte 78 %" })).toBeInTheDocument(); // Zahl bleibt sichtbar, ist aber als veraltet gekennzeichnet
     expect(screen.getByTestId("server-m-pi")).toHaveAttribute("data-state", "live");
+  });
+
+  it("ohne Plattenwert (etwa eine VM): „–“ statt eines Balkens „Platte unbekannt“", async () => {
+    const latest = latestOf();
+    const pi = { ...latest.hosts["m-pi"], disk: null, disk_used_bytes: null, disk_total_bytes: null };
+    vi.stubGlobal("fetch", mockFetch({ "/hosts/metrics/latest": { ...latest, hosts: { ...latest.hosts, "m-pi": pi } } }));
+    renderCockpit();
+    const row = await screen.findByTestId("server-m-pi");
+    expect(within(row).getByRole("img", { name: /^CPU \d+ %$/ })).toBeInTheDocument();
+    expect(within(row).queryByRole("img", { name: /Platte/ })).toBeNull();
   });
 
   it("nicht erreichbarer Server: keine alten Werte als aktuell, dafür der Grund", async () => {
@@ -174,7 +196,7 @@ describe("Cockpit: Hypervisor-Knoten und Linux-Server sehen gleich aus", () => {
     previewState.ohneProxmox = false;
   });
 
-  it("gleiche Karte, gleiche Ringe; nur Knoten haben (noch) keine Platte", async () => {
+  it("gleiche Karte, gleiche Ringe; ohne Plattenwert bleibt die Platte beim Knoten leer", async () => {
     // Knoten und Server in einem Raster: aus den Testdaten des Szenarios ein Knoten dazu.
     const hosts = (respond("/api/v1/hosts", "GET") as Record<string, unknown>[]).concat([
       { ...(respond("/api/v1/hosts", "GET") as Record<string, unknown>[])[0], id: "n-pve9", display_name: "pve9", kind: "hypervisor", status: "up", provider_ext_id: "proxmox" },
@@ -192,6 +214,22 @@ describe("Cockpit: Hypervisor-Knoten und Linux-Server sehen gleich aus", () => {
     expect(within(node).getByRole("img", { name: "RAM 83 %" })).toBeInTheDocument();
     expect(within(node).queryByRole("img", { name: /Platte/ })).toBeNull();
     expect(within(server).getByRole("img", { name: /Platte/ })).toBeInTheDocument();
+  });
+
+  it("Knoten mit Wurzel-Dateisystem zeigen die Platte", async () => {
+    const hosts = (respond("/api/v1/hosts", "GET") as Record<string, unknown>[]).concat([
+      { ...(respond("/api/v1/hosts", "GET") as Record<string, unknown>[])[0], id: "n-pve9", display_name: "pve9", kind: "hypervisor", status: "up", provider_ext_id: "proxmox" },
+    ]);
+    vi.stubGlobal("fetch", mockFetch({
+      "/hosts": hosts,
+      "/hosts/n-pve9/metrics": {
+        values: { cpu_percent: 5, mem_used_bytes: 1024 ** 3, mem_total_bytes: 4 * 1024 ** 3, uptime_s: 60, root_used_bytes: 30 * 1024 ** 3, root_total_bytes: 100 * 1024 ** 3 },
+        sampled_at: "",
+      },
+    }));
+    renderCockpit();
+    const node = await screen.findByTestId("node-n-pve9");
+    await waitFor(() => expect(within(node).getByRole("img", { name: "Platte 30 %" })).toBeInTheDocument());
   });
 });
 

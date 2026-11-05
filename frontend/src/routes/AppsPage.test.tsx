@@ -136,6 +136,18 @@ describe("Seite „Apps“", () => {
     expect(screen.getByDisplayValue("cloud.example.org")).toBeInTheDocument();
   });
 
+  it("ein erkannter Dienst, den es schon als eigene App gibt, steht nicht noch einmal unter „Erkannte Dienste“", async () => {
+    APPS.push({ ...APPS[4], id: "d2", name: "pihole", url: "https://a2.example.org/" });
+    try {
+      renderPage();
+      const detected = await screen.findByTestId("detected");
+      expect(within(detected).getByText("grafana")).toBeInTheDocument();
+      expect(within(detected).queryByText("pihole")).toBeNull();
+    } finally {
+      APPS.pop();
+    }
+  });
+
   it("ein erkannter Dienst steht nicht noch einmal unter Vorschläge, er wird an seiner Kachel übernommen", async () => {
     renderPage();
     const list = await screen.findByTestId("suggestions");

@@ -417,6 +417,18 @@ async def test_a_failing_channel_does_not_stop_the_others_and_the_test_message_n
 
 
 @pytest.mark.asyncio
+async def test_a_replaced_channel_address_is_used_for_the_next_message(fake_services, db_session, tmp_path, test_settings):
+    host, received, _answer = fake_services
+    channel, ctx, _ext = await _extension(db_session, tmp_path, test_settings, {
+        "channels": [{"name": "gotify", "min_severity": "info"}],
+    }, {"push-kanal:gotify": f"gotify://{host}/ErstesToken123"})
+    await channel.send(_note())
+    await ctx.secrets.replace(label="push-kanal:gotify", value=f"gotify://{host}/ZweitesToken456")
+    await channel.send(_note())
+    assert [r["headers"]["x-gotify-key"] for r in received] == ["ErstesToken123", "ZweitesToken456"]
+
+
+@pytest.mark.asyncio
 async def test_nothing_set_up_is_still_an_error(db_session, tmp_path, test_settings):
     channel, _ctx, extension = await _extension(db_session, tmp_path, test_settings, {"channels": []}, {})
     with pytest.raises(RuntimeError, match="noch nicht eingerichtet"):

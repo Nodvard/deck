@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .custom_css import is_local_url
+from .edition import DECK, Edition
 
 SETTINGS_KEY_PREFIX = "branding."
 
@@ -52,7 +53,7 @@ def image_matches_type(content: bytes, extension: str) -> bool:
     return any(content.startswith(signature) for signature in _SIGNATURES.get(extension, ()))
 
 UNTRUSTED_FILE_HEADERS = {
-    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    "Content-Security-Policy": "default-src 'none'; style-src 'none'; sandbox",
     "X-Content-Type-Options": "nosniff",
 }
 """Header für alles, was Nutzer hochladen und im selben Origin wie das Dashboard ausgeliefert wird: `sandbox` gibt dem
@@ -159,19 +160,24 @@ class Branding(BaseModel):
 
 
 DEFAULT_BRANDING = Branding(
-    product_name="Nodvard Deck",
-    short_name="Nodvard Deck",
+    product_name=DECK.product_name,
+    short_name=DECK.product_name,
     login_subtitle="Homelab-Kommandozentrale",
     colors=BrandingColors(),
 )
 """Vorgabe, die nur greift, solange `settings` keinen eigenen Wert hat."""
 
 
+def default_branding(edition: Edition) -> Branding:
+    """`DEFAULT_BRANDING` mit dem Namen der laufenden Ausgabe."""
+    return DEFAULT_BRANDING.model_copy(update={"product_name": edition.product_name, "short_name": edition.product_name})
+
+
 _FIELD_NAMES = tuple(Branding.model_fields.keys())
 
 
-async def load_branding(session: AsyncSession) -> Branding:
-    """Liest `settings` (scope='global', key='branding.<feld>') und füllt Lücken aus `DEFAULT_BRANDING`."""
+async def load_branding(session: AsyncSession, edition: Edition) -> Branding:
+    """Liest `settings` (scope='global', key='branding.<feld>') und füllt Lücken aus `default_branding`."""
     # Lokal importiert, um einen Zirkelimport mit `models` zu vermeiden.
     from .models import Setting
 
@@ -187,7 +193,7 @@ async def load_branding(session: AsyncSession) -> Branding:
         if field in _FIELD_NAMES:
             overrides[field] = row.value
 
-    data = DEFAULT_BRANDING.model_dump()
+    data = default_branding(edition).model_dump()
     data.update(overrides)
     # Ein gespeicherter, ungültiger Wert (z. B. `javascript:`) wird nicht als Link angezeigt.
     data["support_url"] = clean_support_url(data.get("support_url"))

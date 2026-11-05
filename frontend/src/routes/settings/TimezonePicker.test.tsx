@@ -80,6 +80,25 @@ describe("TimezonePicker", () => {
     expect(onChange).toHaveBeenCalledWith("Europe/Vienna");
   });
 
+  it("zuklappbar: Liste erst nach „Zeitzone ändern“, nach der Wahl wieder zu", () => {
+    const onChange = vi.fn();
+    render(<TimezonePicker value="Europe/Berlin" savedZone="Europe/Berlin" onChange={onChange} collapsible />);
+    expect(screen.queryByRole("listbox", { name: "Zeitzonen" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Zeitzone ändern" }));
+    fireEvent.change(screen.getByLabelText("Zeitzone suchen"), { target: { value: "wien" } });
+    fireEvent.click(within(screen.getByRole("listbox", { name: "Zeitzonen" })).getByRole("button", { name: /^Europe\/Vienna/ }));
+    expect(onChange).toHaveBeenCalledWith("Europe/Vienna");
+    expect(screen.queryByRole("listbox", { name: "Zeitzonen" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Zeitzone ändern" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Zeitzone ändern" }));
+    expect(screen.getByLabelText("Zeitzone suchen")).toHaveValue("");
+    fireEvent.change(screen.getByLabelText("Zeitzone suchen"), { target: { value: "tokyo" } });
+    fireEvent.click(screen.getByRole("button", { name: "Liste schließen" }));
+    expect(screen.queryByRole("listbox", { name: "Zeitzonen" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Zeitzone ändern" }));
+    expect(screen.getByLabelText("Zeitzone suchen")).toHaveValue("");
+  });
+
   it("ohne Suche steht die gewählte Zone oben, danach Wien und Zürich statt Afrika", () => {
     render(<TimezonePicker value="Europe/Berlin" savedZone="Europe/Berlin" onChange={() => {}} />);
     const options = within(screen.getByRole("listbox", { name: "Zeitzonen" })).getAllByRole("option");

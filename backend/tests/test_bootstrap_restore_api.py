@@ -95,7 +95,7 @@ async def test_with_an_existing_account_every_call_is_409(client, rapi, tmp_path
             assert r.status_code == 409, (method, url, r.status_code)
     assert not restore.list_ids(rapi.layout)
     status = await client.get(BASE)
-    assert status.json() == {"needed": False}
+    assert status.json() == {"needed": False, "insecure_connection": True}
 
 
 @pytest.mark.asyncio
@@ -140,12 +140,12 @@ async def test_wizard_status_reports_a_failed_restore_only_without_accounts(clie
     restore.write_result(rapi.layout, {"ok": False, "at": "2026-10-01T03:00:00Z", "message": "Migration kaputt", "source": "bootstrap",
                                        "actor": {"ip": "10.1.2.3"}, "backup": {}})
     body = (await client.get(BASE)).json()
-    assert body == {"needed": True, "restore": {"ok": False, "message": "Migration kaputt", "at": "2026-10-01T03:00:00Z"}}
+    assert body == {"needed": True, "insecure_connection": True, "restore": {"ok": False, "message": "Migration kaputt", "at": "2026-10-01T03:00:00Z"}}
     # Ergebnisse anderer Herkunft oder erfolgreiche zeigt der Assistent nicht.
     restore.write_result(rapi.layout, {"ok": True, "at": "x", "message": "ok", "source": "bootstrap", "actor": {}, "backup": {}})
-    assert (await client.get(BASE)).json() == {"needed": True}
+    assert (await client.get(BASE)).json() == {"needed": True, "insecure_connection": True}
     restore.write_result(rapi.layout, {"ok": False, "at": "x", "message": "x", "source": "owner", "actor": {}, "backup": {}})
-    assert (await client.get(BASE)).json() == {"needed": True}
+    assert (await client.get(BASE)).json() == {"needed": True, "insecure_connection": True}
 
 
 @pytest.mark.asyncio

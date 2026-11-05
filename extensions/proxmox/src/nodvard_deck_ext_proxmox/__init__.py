@@ -145,7 +145,7 @@ class _ConnectionOut(BaseModel):
     tls_fingerprint_sha256: str | None = None
     """Der gemerkte Fingerabdruck (`AB:CD:...`), sonst `None`."""
     tls_fingerprint_invalid: bool = False
-    """Im Feld steht etwas, das kein Fingerabdruck ist -- die Verbindung ist dann gesperrt, bis es stimmt."""
+    """Im Feld steht kein Fingerabdruck; die Verbindung bleibt gesperrt, bis es stimmt."""
 
 
 class Extension(NodvardExtension):

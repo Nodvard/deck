@@ -45,7 +45,7 @@ BROKEN_STATES = {
     "endofservice": "Der Dienst am Ziel wird nicht mehr angeboten.",
     "restore_only": "Die Aufgabe kann nur noch wiederherstellen, nicht mehr sichern.",
 }
-# Zustand, solange Hyper Backup die Aufgabe prüft -> Anzeige. `error_detect` ist laut Rückmeldung die
+# Zustand, solange Hyper Backup die Aufgabe prüft -> Anzeige. `error_detect` ist, soweit bekannt, die
 # Integritätsprüfung (intern „error detection“); findet sie etwas, folgt `broken` oder `restore_only`.
 ACTIVE_STATES = {"error_detect": "Integritätsprüfung läuft"}
 

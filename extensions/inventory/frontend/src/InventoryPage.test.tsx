@@ -75,6 +75,23 @@ describe("InventoryPage", () => {
     expect(screen.getByText(/Elektronik.*Keller.*Menge 2/)).toBeInTheDocument();
   });
 
+  it("am Handy stehen Preis und Garantie unter dem Namen, statt ausgeblendet zu sein", async () => {
+    vi.stubGlobal("fetch", mockFetch({ items: [{ ...ITEMS[0], warranty_until: "2001-01-01" }] }));
+    render(<InventoryPage />);
+    await screen.findByText("Bohrmaschine");
+    const line = screen.getByTestId(`price-mobile-${ITEMS[0].id}`);
+    expect(line).toHaveClass("sm:hidden");
+    expect(line.textContent).toContain("89,99");
+    expect(line.textContent).toMatch(/Garantie abgelaufen/);
+  });
+
+  it("ohne Preis und Garantie bleibt die Zeile am Handy weg", async () => {
+    vi.stubGlobal("fetch", mockFetch({ items: [{ ...ITEMS[0], purchase_price_cents: null, warranty_until: null }] }));
+    render(<InventoryPage />);
+    await screen.findByText("Bohrmaschine");
+    expect(screen.queryByTestId(`price-mobile-${ITEMS[0].id}`)).toBeNull();
+  });
+
   it("legt einen neuen Gegenstand ueber das Formular an", async () => {
     let created: unknown = null;
     vi.stubGlobal("fetch", mockFetch({ onCreate: (body) => (created = body) }));

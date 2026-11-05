@@ -117,6 +117,7 @@ async def test_each_stage_comes_once_and_far_or_missing_dates_stay_quiet(db_sess
     ]
     assert "in 14 Tagen" in notes[0].body and "in 3 Tagen" in notes[1].body
     assert [n.payload["tags"] for n in notes] == [["key"], ["warning", "key"], ["warning", "key"]]
+    assert [n.payload["notification_type"] for n in notes] == ["secret.soon", "secret.due", "secret.expired"]
     assert all(n.source_ext_id is None for n in notes)
 
     await db_session.refresh(secret)

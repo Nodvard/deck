@@ -7,6 +7,7 @@ from __future__ import annotations
 # Notseite nie mitreißen. Auch kein Import aus `nodvard_deck.core`; was sie davon braucht, steht hier als eigener Code
 # (Gleichlauf prüft `tests/test_rescue.py`). Die Seite ist HTML mit eingebettetem Stil, ohne Skript, Schrift, Bild.
 import argparse
+import base64
 import hashlib
 import html
 import http.client
@@ -390,6 +391,7 @@ ol,ul{padding-left:1.3rem;margin:.4rem 0}li{margin:.35rem 0}
 code,pre{background:var(--code);border-radius:6px;font:.88rem ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 code{padding:.1rem .35rem}
 pre{padding:.7rem;overflow:auto;max-height:22rem;white-space:pre-wrap;word-break:break-word}
+.restore-doc{word-break:break-all}
 label{display:block;font-weight:600;margin:0 0 .3rem}
 input[type=text]{width:100%;max-width:22rem;padding:.6rem .7rem;font:1.05rem ui-monospace,Menlo,Consolas,monospace;letter-spacing:.08em;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
 button{font:inherit;font-weight:600;padding:.6rem 1rem;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
@@ -401,6 +403,7 @@ details summary{cursor:pointer;font-weight:600}
 dl{display:grid;grid-template-columns:max-content 1fr;gap:.2rem 1rem;margin:.4rem 0}dt{color:var(--muted)}dd{margin:0}
 @media (max-width:480px){dl{grid-template-columns:1fr}dt{margin-top:.4rem}}
 """
+_CSS_HASH = base64.b64encode(hashlib.sha256(_CSS.encode()).digest()).decode()
 
 
 def _e(value: object) -> str:
@@ -420,7 +423,7 @@ _BACK_STEP = (
     "und starte den Container neu."
 )
 _RETRY_STEP = "Behebe den Grund (siehe Protokoll) und wähle dann „Neu versuchen“."
-_RESTORE_DOC_URL = "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#102-wiederherstellen-sicherung-einspielen"
+_RESTORE_DOC_URL = "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#62-wiederherstellen-sicherung-einspielen"
 _NEEDS_FEATURE = (
     "Der Rückweg auf eine ältere Version klappt nur, wenn diese Version selbst schon die Kopie vor dem Update und diese Notseite "
     "kennt. Ältere Versionen können eine Kopie nicht selbst wieder einspielen."
@@ -494,8 +497,10 @@ def _kind_text(kind: str, failure: dict[str, Any], rollback: dict[str, Any] | No
             "Das Einspielen einer Sicherung ist nicht sauber zu Ende gegangen",
             "Der alte Stand liegt noch im Datenordner unter <code>restore/replaced-…</code>. Bitte nichts löschen.",
             [
-                "Die Schritte stehen in der Anleitung, Abschnitt 10.2 „Wiederherstellen (Sicherung einspielen)“: "
-                f'<a href="{_RESTORE_DOC_URL}" rel="noreferrer" style="word-break:break-all">{_RESTORE_DOC_URL}</a>.',
+                (
+                    "Die Schritte stehen in der Anleitung, Abschnitt 6.2 „Wiederherstellen (Sicherung einspielen)“: "
+                    f'<a href="{_RESTORE_DOC_URL}" rel="noreferrer" class="restore-doc">{_RESTORE_DOC_URL}</a>.'
+                ),
                 "Zum Zurücksetzen von Hand wird der Inhalt dieses Ordners wieder in den Datenordner kopiert.",
             ],
         )
@@ -615,7 +620,10 @@ _SECURITY_HEADERS = {
         "accelerometer=(), bluetooth=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), hid=(), "
         "magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=()"
     ),
-    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    "Content-Security-Policy": (
+        f"default-src 'none'; style-src 'sha256-{_CSS_HASH}'; style-src-attr 'none'; "
+        "form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+    ),
 }
 _LOG_ESCAPE = {c: f"\\x{c:02x}" for c in (*range(0x20), *range(0x7F, 0xA0))}
 """Steuerzeichen fürs Protokoll maskieren wie die Standardbibliothek in ihrem `log_message` (gh-100001), das hier ersetzt

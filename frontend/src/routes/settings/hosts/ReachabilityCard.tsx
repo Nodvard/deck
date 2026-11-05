@@ -9,6 +9,7 @@ import { useState } from "react";
 import { api } from "../../../lib/api";
 import { useAuthStore } from "../../../state/auth";
 import { Button, Card, Field, NoticeLine, Toggle, errorText, inputClass, type Notice } from "../ui";
+import { useEdition, productText } from "../../../state/edition";
 
 export const KEY_ENABLED = "hosts.reachability.enabled";
 export const KEY_INTERVAL = "hosts.reachability.interval_minutes";
@@ -26,6 +27,7 @@ export function intervalLabel(minutes: number): string {
 }
 
 function ReachabilityForm({ settings }: { settings: SettingRow[] }) {
+  const edition = useEdition();
   const queryClient = useQueryClient();
   const stored = Object.fromEntries(settings.map((r) => [r.key, r.value]));
   const savedEnabled = typeof stored[KEY_ENABLED] === "boolean" ? (stored[KEY_ENABLED] as boolean) : true;
@@ -68,7 +70,7 @@ function ReachabilityForm({ settings }: { settings: SettingRow[] }) {
   return (
     <Card
       title="Erreichbarkeit prüfen"
-      description="Nodvard Deck schaut regelmäßig nach, ob deine von Hand angelegten Server noch antworten, und meldet es, wenn einer ausfällt oder wieder da ist."
+      description={productText("Nodvard Deck schaut regelmäßig nach, ob deine von Hand angelegten Server noch antworten, und meldet es, wenn einer ausfällt oder wieder da ist.")}
       footer={<Button variant="primary" busy={busy} disabled={!dirty} onClick={() => void save()}>Speichern</Button>}
     >
       <NoticeLine notice={notice} />
@@ -95,8 +97,9 @@ function ReachabilityForm({ settings }: { settings: SettingRow[] }) {
           Geprüft wird nur, ob der SSH-Port des Servers (Standard 22, sonst der Port des Zugangs) eine Verbindung annimmt – ganz
           ohne Anmeldung, auch für Server ohne Zugang. Ein Server gilt erst nach zwei Fehlversuchen hintereinander als nicht
           erreichbar, bei „wieder da“ sofort. Meldungen gibt es nur bei einem Wechsel, im Wartungsfenster nur im Verlauf, und für einen
-          Server, der noch nie geantwortet hat, nur den Zustand. Server, die ein Modul selbst einliest (z. B. über Proxmox),
-          und Beispiel-Server werden hier nicht geprüft.
+          Server, der noch nie geantwortet hat, nur den Zustand.
+          {edition.choose_modules && <> Nicht geprüft werden Server, die ein Modul selbst einliest
+          (z. B. über Proxmox), und die Server aus „Mit Beispieldaten ansehen“.</>}
         </p>
       </div>
     </Card>

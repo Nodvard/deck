@@ -11,7 +11,7 @@ Schnappschüsse (werden mit eingecheckt):
 Regel (docs/04-API.md "Kompatibilität"): /api/v1 und nodvard_sdk ändern sich nur
 abwärtskompatibel. Das Skript verweigert das Schreiben, wenn dabei ein Bruch entstünde.
 Mit --allow-breaking geht es nur, wenn JEDER Bruch in
-backend/tests/contract/breaking_exceptions.toml steht (mit Begruendung).
+backend/tests/contract/breaking_exceptions.toml steht (mit Begründung).
 
 Exit-Code 0 = ok, 1 = verweigert (Bruch), 2 = Aufrufproblem.
 """
@@ -85,7 +85,7 @@ def main() -> int:
         print(f"FEHLER: {exc}", file=sys.stderr)
         return 2
 
-    # Extension-Hintergrundaufgaben finden hier keine eigenen Tabellen und loggen Fehler -- Laerm.
+    # Extension-Hintergrundaufgaben finden hier keine eigenen Tabellen und loggen Fehler -- Lärm.
     logging.disable(logging.CRITICAL)
     new_api = cl.build_api_snapshot(asyncio.run(_current_api_doc()))
     logging.disable(logging.NOTSET)

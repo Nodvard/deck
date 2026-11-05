@@ -31,7 +31,7 @@ from ...services import update_helper as update_helper_service
 from ...version import __version__
 from ..deps import CurrentUser, OwnerUser, SessionDep, SettingsDep, require_permission
 from ..proxy_headers import SCOPE_KEY as FORWARDING_SCOPE_KEY
-from ..proxy_headers import Forwarding
+from ..proxy_headers import Forwarding, is_insecure_connection
 from .auth import (
     TotpMissing,
     confirm_current_password,
@@ -163,6 +163,8 @@ class ConnectionOut(BaseModel):
     """Die Adresse, die Nodvard Deck für diese Anfrage verwendet (Login-Drossel, Protokoll)."""
     scheme: str
     """`http` oder `https`, wie Nodvard Deck die Anfrage sieht (entscheidet über `Secure` am Anmelde-Cookie)."""
+    insecure_connection: bool
+    """HTTP ohne Verschlüsselung, außer bei Zugriff über localhost oder eine Loopback-Adresse."""
     via_trusted_proxy: bool
     """Die Gegenstelle ist ein eingetragener Proxy, seine `X-Forwarded-*` gelten."""
     forwarded_headers: bool
@@ -189,6 +191,7 @@ async def connection_info(request: Request, settings: SettingsDep, user: Current
         peer=str(peer_ip) if peer_ip is not None else info.peer,
         client=request.client.host if request.client else None,
         scheme="https" if request.url.scheme in ("https", "wss") else "http",
+        insecure_connection=is_insecure_connection(request),
         via_trusted_proxy=info.trusted,
         forwarded_headers=info.forwarded_headers,
         trusted_proxies=list(trust.entries),
@@ -221,6 +224,14 @@ class UpdateStatusOut(BaseModel):
     """sha256 des Manifests der neuesten Version, wenn bekannt."""
     available: bool
     """`latest` ist neuer als `current`."""
+    auto_security: bool = False
+    """Der Inhaber hat zugestimmt, dass Deck Sicherheitsupdates selbst einspielt (`system.update_check.auto_security`).
+    Eingespielt wird erst mit signierten Anforderungen an den Helfer; bis dahin meldet Deck sie nur."""
+    kinds: list[str] = []
+    """Arten der Änderungen aller Versionen nach `current` bis `latest` (`sicherheit`, `behoben`, `verbessert`,
+    `neu`, `dokumentation`), leer ohne Update. Dokumentation wird in Image-Annotationen als `verbessert` veröffentlicht."""
+    kinds_complete: bool = True
+    """`false`: Für mindestens eine dieser Versionen sind die Arten unbekannt; `kinds` heißt dann nie „harmlos“."""
     channel: Literal["stable", "beta"]
     enabled: bool
     """Tägliche Prüfung an (`system.update_check.enabled`)."""

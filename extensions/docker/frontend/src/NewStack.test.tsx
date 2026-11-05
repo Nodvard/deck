@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { EXAMPLE, NewStack } from "./NewStack";
+import { neededValues, stackNameOf } from "./OwnTemplates";
 
 const PLACE = { root: "/opt/stacks", default: "/opt/stacks", root_state: "dir", root_problem: null, setting_problem: null, home: "/home/deck" };
 const OK = { ok: true, error: null, unverified: null, warnings: [], services: ["app"], folder: "/opt/stacks/neu", conflict: null };
@@ -13,10 +14,14 @@ const TEMPLATES = [
     note: "Weboberfläche unter Port 3000.", ports: ["3000", "2222"] },
 ];
 
+const OWN = { id: "a1b2c3d4e5f6a7b8", name: "Mein Web", summary: "nginx für alles", updated_at: "2026-10-30T22:00:00+00:00",
+  compose: "services:\n  web:\n    image: nginx:1.27\n" };
+const { compose: _ownCompose, ...OWN_LISTED } = OWN;
+
 const requests: string[] = [];
 const bodies: Record<string, unknown>[] = [];
 
-function serve(over: Record<string, (init?: RequestInit) => Response> = {}) {
+function serve(over: Record<string, (init?: RequestInit) => Response | Promise<Response>> = {}) {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     requests.push(`${init?.method ?? "GET"} ${url.replace(/^.*\/hosts\/h1/, "")}`);
@@ -25,6 +30,7 @@ function serve(over: Record<string, (init?: RequestInit) => Response> = {}) {
       if (url.includes(part)) return answer(init);
     }
     if (url.endsWith("/stack-templates")) return Response.json({ templates: TEMPLATES });
+    if (url.endsWith("/own-templates")) return Response.json({ templates: [], max: 100 });
     if (url.endsWith("/new-stack/check")) return Response.json(OK);
     if (url.endsWith("/new-stack")) return Response.json(PLACE);
     throw new Error(url);
@@ -129,6 +135,149 @@ describe("Neuer Stack", () => {
     expect(await screen.findByText(/Die Vorlagen/)).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Vorlage" })).toBeNull();
     expect(screen.getByRole("textbox", { name: "Compose-Datei des neuen Stacks" })).toBeInTheDocument();
+  });
+
+  it("eigene Vorlagen stehen vor dem Katalog und füllen Name und Datei", async () => {
+    serve({ "/own-templates/": () => Response.json(OWN), "/own-templates": () => Response.json({ templates: [OWN_LISTED], max: 100 }) });
+    render(<NewStack hostId="h1" onClose={vi.fn()} />);
+    const box = await screen.findByRole("combobox", { name: "Vorlage" });
+    await waitFor(() => expect([...box.querySelectorAll("optgroup")].map((g) => g.label)).toEqual(["Eigene Vorlagen", "Katalog"]));
+    fireEvent.change(box, { target: { value: `own:${OWN.id}` } });
+    await waitFor(() => expect((nameBox() as HTMLInputElement).value).toBe("mein-web"));
+    expect((screen.getByRole("textbox", { name: "Compose-Datei des neuen Stacks" }) as HTMLTextAreaElement).value).toBe(OWN.compose);
+    const note = screen.getByTestId("own-template-note");
+    expect(note.textContent).toContain("nginx für alles");
+    expect(note.textContent).toContain("Eigene Vorlage, zuletzt gespeichert");
+    expect(screen.queryByTestId("template-note")).toBeNull();
+    expect(requests).toContain(`GET /api/v1/ext/docker/own-templates/${OWN.id}`);
+  });
+
+  it.each(["Text", "Name"])("%s während des Vorlagenabrufs bleibt erhalten", async (field) => {
+    let finish!: (response: Response) => void;
+    const response = new Promise<Response>((resolve) => { finish = resolve; });
+    serve({
+      "/own-templates/": () => response,
+      "/own-templates": () => Response.json({ templates: [OWN_LISTED], max: 100 }),
+    });
+    render(<NewStack hostId="h1" onClose={vi.fn()} />);
+    const box = await screen.findByRole("combobox", { name: "Vorlage" });
+    await screen.findByRole("option", { name: OWN.name });
+    fireEvent.change(box, { target: { value: `own:${OWN.id}` } });
+    await waitFor(() => expect(requests).toContain(`GET /api/v1/ext/docker/own-templates/${OWN.id}`));
+    expect(box).toBeDisabled();
+    const area = screen.getByRole("textbox", { name: "Compose-Datei des neuen Stacks" });
+    const changed = field === "Text" ? EXAMPLE.replace("1.27", "1.28") : "mein-stack";
+    const input = field === "Text" ? area : nameBox();
+    expect(input).toBeEnabled();
+    fireEvent.change(input, { target: { value: changed } });
+
+    await act(async () => { finish(Response.json(OWN)); });
+    await waitFor(() => expect(box).toBeEnabled());
+    expect(input).toHaveValue(changed);
+    expect(area).toHaveValue(field === "Text" ? changed : EXAMPLE);
+    expect(nameBox()).toHaveValue(field === "Name" ? changed : "");
+    expect(box).toHaveValue("");
+    expect(screen.queryByTestId("own-template-note")).toBeNull();
+    expect(confirm()).not.toHaveBeenCalled();
+  });
+
+  it("als Vorlage speichern schickt nur die Compose-Datei und nennt eine Ablehnung", async () => {
+    let refuse = true;
+    serve({
+      "/own-templates": (init) => {
+        if (init?.method !== "POST") return Response.json({ templates: refuse ? [] : [OWN_LISTED], max: 100 });
+        if (refuse) return Response.json({ detail: "Vorlagen speichern keine Passwörter, Tokens oder Schlüssel." }, { status: 400 });
+        return Response.json({ ...OWN, compose: EXAMPLE }, { status: 201 });
+      },
+    });
+    render(<NewStack hostId="h1" onClose={vi.fn()} />);
+    await screen.findByRole("combobox", { name: "Vorlage" });
+    fireEvent.change(nameBox(), { target: { value: "web" } });
+    fireEvent.click(screen.getByRole("button", { name: "Als Vorlage speichern" }));
+    expect((screen.getByRole("textbox", { name: "Name der Vorlage" }) as HTMLInputElement).value).toBe("web");
+    fireEvent.change(screen.getByRole("textbox", { name: "Name der Vorlage" }), { target: { value: "Mein Web" } });
+    fireEvent.click(screen.getByRole("button", { name: "Vorlage speichern" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Vorlagen speichern keine Passwörter");
+    expect(bodies.at(-1)).toEqual({ name: "Mein Web", summary: "", compose: EXAMPLE });
+    refuse = false;
+    fireEvent.click(screen.getByRole("button", { name: "Vorlage speichern" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Vorlage „Mein Web“ gespeichert.");
+    expect(screen.queryByTestId("save-template")).toBeNull();
+    await waitFor(() => expect(requests.filter((r) => r === "GET /api/v1/ext/docker/own-templates")).toHaveLength(2));
+    expect((screen.getByRole("combobox", { name: "Vorlage" }) as HTMLSelectElement).value).toBe(`own:${OWN.id}`);
+  });
+
+  it("eine gewählte eigene Vorlage ersetzen und löschen, der Text bleibt", async () => {
+    serve({
+      "/own-templates/": (init) => init?.method === "PUT" ? Response.json({ ...OWN, compose: JSON.parse(String(init.body)).compose })
+        : init?.method === "DELETE" ? Response.json({ deleted: true }) : Response.json(OWN),
+      "/own-templates": () => Response.json({ templates: [OWN_LISTED], max: 100 }),
+    });
+    render(<NewStack hostId="h1" onClose={vi.fn()} />);
+    const box = await screen.findByRole("combobox", { name: "Vorlage" });
+    await waitFor(() => expect(box.querySelector("optgroup")).not.toBeNull());
+    fireEvent.change(box, { target: { value: `own:${OWN.id}` } });
+    const area = () => screen.getByRole("textbox", { name: "Compose-Datei des neuen Stacks" }) as HTMLTextAreaElement;
+    await waitFor(() => expect(area().value).toBe(OWN.compose));
+    const changed = OWN.compose.replace("1.27", "1.28");
+    fireEvent.change(area(), { target: { value: changed } });
+    expect(screen.getByTestId("own-template-note").textContent).toContain("Mit „Als Vorlage speichern“ kannst du die Vorlage ersetzen.");
+    fireEvent.click(screen.getByRole("button", { name: "Als Vorlage speichern" }));
+    fireEvent.click(screen.getByRole("button", { name: "Vorlage „Mein Web“ ersetzen" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Vorlage „Mein Web“ gespeichert.");
+    expect(requests).toContain(`PUT /api/v1/ext/docker/own-templates/${OWN.id}`);
+    expect(bodies.at(-1)).toEqual({ name: "Mein Web", summary: "nginx für alles", compose: changed });
+    expect(screen.getByTestId("own-template-note").textContent).not.toContain("Du hast die Datei geändert");
+
+    confirm().mockResolvedValueOnce(true);
+    fireEvent.click(screen.getByRole("button", { name: "Vorlage löschen" }));
+    expect(await screen.findByText("Vorlage „Mein Web“ gelöscht. Der Text unten bleibt stehen.")).toBeInTheDocument();
+    expect(confirm()).toHaveBeenCalledWith("Vorlage „Mein Web“ löschen? Stacks, die daraus angelegt wurden, bleiben, wie sie sind.", { confirmLabel: "Löschen" });
+    expect(requests).toContain(`DELETE /api/v1/ext/docker/own-templates/${OWN.id}`);
+    expect(screen.queryByTestId("own-template-note")).toBeNull();
+    expect(area().value).toBe(changed);
+  });
+
+  it("eine nicht mehr vorhandene Vorlage nennt den Grund und lädt die Liste neu", async () => {
+    serve({
+      "/own-templates/": () => Response.json({ detail: "Diese Vorlage gibt es nicht (mehr)." }, { status: 404 }),
+      "/own-templates": () => Response.json({ templates: [OWN_LISTED], max: 100 }),
+    });
+    render(<NewStack hostId="h1" onClose={vi.fn()} />);
+    const box = await screen.findByRole("combobox", { name: "Vorlage" });
+    await waitFor(() => expect(box.querySelector("optgroup")).not.toBeNull());
+    fireEvent.change(box, { target: { value: `own:${OWN.id}` } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Die Vorlage ließ sich nicht laden: Diese Vorlage gibt es nicht (mehr).");
+    await waitFor(() => expect(requests.filter((r) => r === "GET /api/v1/ext/docker/own-templates")).toHaveLength(2));
+    expect((screen.getByRole("textbox", { name: "Compose-Datei des neuen Stacks" }) as HTMLTextAreaElement).value).toBe(EXAMPLE);
+  });
+
+  it("eine beschädigte Ablage wird genannt statt still leer zu sein", async () => {
+    serve({ "/own-templates": () => Response.json({ templates: [], max: 100, problem: "Die Datei mit den eigenen Vorlagen ist beschädigt." }) });
+    render(<NewStack hostId="h1" onClose={vi.fn()} />);
+    expect(await screen.findByText("Die Datei mit den eigenen Vorlagen ist beschädigt.")).toBeInTheDocument();
+  });
+
+  it("nennt Werte, die der Stack noch aus einer .env braucht", async () => {
+    serve();
+    render(<NewStack hostId="h1" onClose={vi.fn()} />);
+    const area = await screen.findByRole("textbox", { name: "Compose-Datei des neuen Stacks" });
+    expect(screen.queryByTestId("needed-values")).toBeNull();
+    fireEvent.change(area, { target: { value: "services:\n  db:\n    environment:\n      A: ${DB_PASSWORD}\n      B: $$INNEN\n      C: ${TZ:-UTC}\n" } });
+    expect(screen.getByTestId("needed-values").textContent).toContain("einen Wert für DB_PASSWORD.");
+    expect(screen.queryByTestId("required-values")).toBeNull();
+    fireEvent.change(area, { target: { value: "services:\n  db:\n    environment:\n      A: ${DB_PASSWORD:?fehlt}\n" } });
+    expect(screen.queryByTestId("needed-values")).toBeNull();
+    expect(screen.getByTestId("required-values").textContent).toContain("DB_PASSWORD ist mit „:?“ als Pflicht markiert.");
+    expect(screen.getByTestId("required-values").textContent).toContain("${DB_PASSWORD} ohne „:?“");
+  });
+
+  it("fehlen die eigenen Vorlagen, steht der Grund da und der Katalog bleibt", async () => {
+    serve({ "/own-templates": () => Response.json({ detail: "Die eigenen Vorlagen ließen sich gerade nicht lesen." }, { status: 503 }) });
+    render(<NewStack hostId="h1" onClose={vi.fn()} />);
+    expect(await screen.findByText(/Die eigenen Vorlagen/)).toBeInTheDocument();
+    const box = screen.getByRole("combobox", { name: "Vorlage" });
+    expect([...box.querySelectorAll("optgroup")].map((g) => g.label)).toEqual(["Katalog"]);
   });
 
   it("legt über die Freigabe an und nennt riskante Einstellungen vorher", async () => {
@@ -305,5 +454,37 @@ describe("Neuer Stack", () => {
     serve({ "/new-stack": () => Response.json({ detail: "Kein Docker-Host." }, { status: 404 }) });
     render(<NewStack hostId="h1" onClose={vi.fn()} />);
     expect((await screen.findByTestId("load-error")).textContent).toContain("Kein Docker-Host.");
+  });
+});
+
+it("Dock nennt sich beim Anlegen eines Stacks", async () => {
+  window.__nodvardDeck.getProductName = () => "Nodvard Dock";
+  serve();
+  render(<NewStack hostId="h1" onClose={vi.fn()} />);
+  expect(await screen.findByText(/Nodvard Dock legt ihn erst nach der Freigabe an/)).toBeInTheDocument();
+});
+
+it("Dock lässt eigene Ordnernamen in der Freigabe unverändert", async () => {
+  window.__nodvardDeck.getProductName = () => "Nodvard Dock";
+  confirm().mockResolvedValue(false);
+  serve({ "/new-stack/check": () => Response.json({ ...OK, folder: "/opt/Deck/neu" }) });
+  render(<NewStack hostId="h1" onClose={vi.fn()} />);
+  await screen.findByTestId("new-stack");
+  fireEvent.change(nameBox(), { target: { value: "neu" } });
+  fireEvent.click(screen.getByRole("button", { name: "Anlegen" }));
+  await waitFor(() => expect(confirm()).toHaveBeenCalled());
+  expect(String(confirm().mock.calls[0][0])).toContain("/opt/Deck/neu");
+  expect(String(confirm().mock.calls[0][0])).toContain("Nodvard Dock legt den Ordner an");
+});
+
+describe("Hilfen für eigene Vorlagen", () => {
+  it("bildet aus dem Namen einen Stack-Namen", () => {
+    expect(stackNameOf("Mein Web")).toBe("mein-web");
+    expect(stackNameOf("Größe & Übung")).toBe("grosse-ubung");
+    expect(stackNameOf("!!!")).toBe("");
+  });
+
+  it("findet nur Variablen ohne Vorgabe, nicht die des Containers", () => {
+    expect(neededValues("A: ${X}\nB: $Y\nC: $$Z\nD: $${W}\nE: ${V:-a}\nF: ${U-}\nG: ${X}\nH: ${T:?fehlt}\n")).toEqual({ open: ["X", "Y"], required: ["T"] });
   });
 });

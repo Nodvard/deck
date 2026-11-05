@@ -8,14 +8,14 @@ import json
 import re
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from nodvard_sdk.actions import ActionRequest, ActionResult, ActionSpec, DryRunReport
 from nodvard_sdk.types import Risk
 
 from . import commands
-from .capabilities import _json_pattern, parse_size
+from .capabilities import _json_pattern, is_own_container, parse_size
 from .operate import still_full
 
 if TYPE_CHECKING:
@@ -41,6 +41,8 @@ class Snapshot:
     volumes: list[dict[str, Any]]
     networks: list[dict[str, Any]]
     network_error: str | None = None
+    containers: list[dict[str, Any]] = field(default_factory=list)
+    """Alle Container des Servers mit Name und Stack, damit sich einer mit einem Netz verbinden lässt."""
 
 
 def _labels(text: str) -> dict[str, str]:
@@ -174,6 +176,16 @@ def parse_networks(text: str, df: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(networks, key=lambda n: (not n["builtin"], n["name"]))
 
 
+def parse_containers(df: dict[str, Any]) -> list[dict[str, Any]]:
+    found = {}
+    for row in _rows(df.get("Containers")):
+        name = str(row.get("Names") or "")
+        if commands.CONTAINER_NAME_RE.match(name):
+            found[name] = {"name": name, "compose_project": _labels(row.get("Labels") or "").get(_PROJECT_LABEL) or None,
+                           "self": is_own_container(str(row.get("ID") or ""))}
+    return sorted(found.values(), key=lambda c: c["name"])
+
+
 def _first_line(text: str) -> str:
     return next((line.strip() for line in (text or "").splitlines() if line.strip()), "")
 
@@ -221,7 +233,7 @@ class DockerResources:
                 networks = parse_networks(listed.stdout, data)
             else:
                 network_error = _first_line(listed.stderr) or f"docker network ls endete mit {listed.exit_code}."
-        return Snapshot(parse_images(data), parse_volumes(data), networks, network_error)
+        return Snapshot(parse_images(data), parse_volumes(data), networks, network_error, parse_containers(data))
 
     def forget(self, host_id: str) -> None:
         self._cache.pop(host_id, None)

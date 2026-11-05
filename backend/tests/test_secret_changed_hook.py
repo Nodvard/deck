@@ -67,6 +67,27 @@ async def test_only_extensions_that_may_read_the_secret_hear_of_it_after_saving(
 
 
 @pytest.mark.asyncio
+async def test_each_reader_receives_each_unique_label_with_its_own_context(load):
+    seen = []
+
+    class Reader:
+        async def on_secret_changed(self, ctx, label):
+            seen.append((ctx, label))
+
+    load("eins", Reader(), ["secrets.read:dienst-*"])
+    load("zwei", Reader(), ["secrets.read:dienst-token:zwei"])
+    runtime = get_extension_runtime()
+    await extensions_service.notify_secret_changed(_Session([]), [
+        "dienst-token:eins", "dienst-token:zwei", "dienst-token:eins", "fremdes-token",
+    ])
+    assert seen == [
+        (runtime.loaded["eins"].ctx, "dienst-token:eins"),
+        (runtime.loaded["eins"].ctx, "dienst-token:zwei"),
+        (runtime.loaded["zwei"].ctx, "dienst-token:zwei"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_a_broken_or_hanging_hook_stops_neither_the_others_nor_the_caller(load, monkeypatch, caplog):
     monkeypatch.setattr(extensions_service, "SECRET_HOOK_TIMEOUT_S", 0.05)
     seen: list[str] = []

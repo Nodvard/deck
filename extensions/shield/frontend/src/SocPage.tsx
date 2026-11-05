@@ -2,9 +2,11 @@
  * Nodvard Shield (Erweiterung `shield`, PageSpec `component="SocPage"`): Schutzstatus je Server, Scans (ClamAV), Quarantäne,
  * Härtung (Lynis) und Container-Wache, alles über `/ext/shield/defender/...`.
  */
+import { styleRef } from "../../../_shared/frontend/src/csp";
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge, Button, Card, EmptyState, Icon, Notice, Page, Stat, buttonClass, inputClass, type Tone } from "../../../_shared/frontend/src/ui";
+import { CARD_BODY, CARD_CELL, CARD_CELL_PLAIN, CARD_HEAD, CARD_ROW, CARD_TABLE } from "../../../_shared/frontend/src/cardTable";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { useUrlParams } from "../../../_shared/frontend/src/location";
 import { describeSchedule } from "../../../_shared/frontend/src/SchedulePicker";
@@ -96,11 +98,15 @@ interface AttentionItem {
   action_label: string;
 }
 
+const RPM_OSTREE_HINT = "unveränderliches System (rpm-ostree): Installation von Hand, dann Neustart";
+const RPM_OSTREE_INSTALL = "rpm-ostree install clamav clamav-update lynis fail2ban";
+
 interface HostRow {
   host_id: string;
   host_name: string;
   host_status: string;
   reachable?: boolean;
+  rpm_ostree?: boolean;
   error?: string;
   clamav_installed: boolean;
   clamav_version?: string | null;
@@ -330,7 +336,7 @@ function HardeningCell({ host: h }: { host: HostRow }) {
         <div className="w-28">
           <div className="flex justify-between text-xs"><span>{shown.hardening_index}</span><span className="text-white/40">{shown.warnings} Warn.</span></div>
           <div className="mt-1 h-1.5 rounded-full bg-white/10">
-            <div className="h-1.5 rounded-full" style={{ width: `${shown.hardening_index}%`, background: shown.hardening_index >= 70 ? "rgb(var(--emerald-400))" : "rgb(var(--amber-400))" }} />
+            <div className="h-1.5 rounded-full" ref={styleRef({ width: `${shown.hardening_index}%`, background: shown.hardening_index >= 70 ? "rgb(var(--emerald-400))" : "rgb(var(--amber-400))" })} />
           </div>
         </div>
       )}
@@ -416,7 +422,7 @@ function ScoreRing({ score, reasons = [] }: { score: number; reasons?: string[] 
       </svg>
       <div className="min-w-0 flex-1 basis-48">
         <p className="text-xs text-white/45">Schutzwert</p>
-        <p className="text-lg font-semibold" style={{ color: tone }}>{label}</p>
+        <p className="text-lg font-semibold" ref={styleRef({ color: tone })}>{label}</p>
         <p className="mt-1 max-w-[16rem] text-xs text-white/45">Berechnet aus: Virenscanner installiert (ClamAV), aktuelle Signaturen und Scans, offene Funde, wie sicher die Server eingestellt sind (Härtung), offene Sicherheitsupdates, Fail2ban, SSH-Einstellungen und offene Sicherheitsereignisse.</p>
         {reasons.length > 0 && (
           <ul className="mt-2 max-w-[20rem] space-y-0.5 text-xs text-amber-200/80" data-testid="score-reasons" aria-label="Was den Schutzwert senkt">
@@ -702,6 +708,7 @@ function nextStep(
   const reachable = hosts.filter((h) => h.reachable !== false);
   const noClam = reachable.find((h) => !h.clamav_installed);
   if (noClam) {
+    if (noClam.rpm_ostree) return { text: `„${noClam.host_name}“: ${RPM_OSTREE_HINT}. Auf dem Server ausführen: ${RPM_OSTREE_INSTALL}. Danach neu starten.` };
     const more = reachable.filter((h) => !h.clamav_installed).length - 1;
     return { text: `Installiere ClamAV (den Virenscanner) auf „${noClam.host_name}“${more > 0 ? ` und ${more} weiteren Server${more > 1 ? "n" : ""}` : ""}. Ohne ihn wird dort nichts geprüft.`,
       action: canManage ? { label: "ClamAV installieren", run: () => on.install(noClam, "clamav"), busyKey: installKey(noClam.host_id, "clamav") } : undefined };
@@ -713,6 +720,7 @@ function nextStep(
   }
   const noLynis = reachable.find((h) => !h.lynis_installed);
   if (noLynis) {
+    if (noLynis.rpm_ostree) return { text: `„${noLynis.host_name}“: ${RPM_OSTREE_HINT}. Auf dem Server ausführen: ${RPM_OSTREE_INSTALL}. Danach neu starten.` };
     return { text: `Installiere Lynis auf „${noLynis.host_name}“. Es prüft, wie sicher der Server eingestellt ist (Härtung).`,
       action: canManage ? { label: "Lynis installieren", run: () => on.install(noLynis, "lynis"), busyKey: installKey(noLynis.host_id, "lynis") } : undefined };
   }
@@ -834,7 +842,8 @@ function OverviewTab({
                 return (
                   <li key={`${a.kind}-${a.host_id}`} className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm">
                     <span aria-hidden="true" className={`h-2 w-2 flex-none rounded-full ${a.tone === "warn" ? "bg-amber-300" : "bg-white/40"}`} />
-                    <div className="min-w-0 flex-1">
+                    {/* `flex-1` hätte Grundbreite 0: Der Knopf bliebe am Handy daneben und quetschte den Text. */}
+                    <div className="min-w-0 flex-[1_1_14rem]" data-testid={`attention-text-${a.kind}-${a.host_id}`}>
                       <p className="break-words font-medium">{a.title}</p>
                       <p className="text-xs text-white/50">{a.hint}</p>
                     </div>
@@ -899,25 +908,31 @@ function OverviewTab({
             .
           </p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="text-xs text-white/40">
-                <tr className="border-b border-white/[0.06]">
-                  <th className="px-5 py-2.5 font-medium">Server</th>
-                  <th className="px-3 py-2.5 font-medium" title="ClamAV ist der Virenscanner auf dem Server">Virenschutz</th>
-                  <th className="px-3 py-2.5 font-medium">Letzter Scan</th>
-                  <th className="px-3 py-2.5 font-medium" title="Wie sicher der Server eingestellt ist (geprüft von Lynis), 0 bis 100">Härtung</th>
-                  <th className="px-3 py-2.5 font-medium" />
+          <div className="overflow-x-auto p-3 sm:p-0">
+            <table role="table" className={`${CARD_TABLE} text-left`}>
+              <thead role="rowgroup" className={`${CARD_HEAD} text-xs text-white/40`}>
+                <tr role="row" className="border-b border-white/[0.06]">
+                  <th role="columnheader" className="px-5 py-2.5 font-medium">Server</th>
+                  <th role="columnheader" className="px-3 py-2.5 font-medium" title="ClamAV ist der Virenscanner auf dem Server">Virenschutz</th>
+                  <th role="columnheader" className="px-3 py-2.5 font-medium">Letzter Scan</th>
+                  <th role="columnheader" className="px-3 py-2.5 font-medium" title="Wie sicher der Server eingestellt ist (geprüft von Lynis), 0 bis 100">Härtung</th>
+                  <th role="columnheader" className="px-3 py-2.5 font-medium"><span className="sr-only">Aktionen</span></th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/[0.04]">
+              <tbody role="rowgroup" className={CARD_BODY}>
                 {hosts.map((h) => (
-                  <tr key={h.host_id} data-testid={`host-${h.host_id}`}>
-                    <td className="px-5 py-3">
+                  <tr role="row" key={h.host_id} data-testid={`host-${h.host_id}`} className={CARD_ROW}>
+                    <td role="cell" className={`${CARD_CELL_PLAIN} pb-1 sm:px-5 sm:py-3`}>
                       <p className="font-medium">{h.host_name}</p>
+                      {h.rpm_ostree && h.reachable !== false && (!h.clamav_installed || !h.lynis_installed) && (
+                        <div className="mt-1 text-xs text-amber-300">
+                          <p>{RPM_OSTREE_HINT}</p>
+                          <p>Auf dem Server ausführen: <code className="break-all">{RPM_OSTREE_INSTALL}</code>. Danach neu starten.</p>
+                        </div>
+                      )}
                       {h.reachable === false && <p className="text-xs text-amber-300">nicht erreichbar{h.error ? ` – ${h.error}` : ""}</p>}
                     </td>
-                    <td className="px-3 py-3">
+                    <td role="cell" data-label="Virenschutz" className={`${CARD_CELL} py-1 sm:px-3 sm:py-3`}>
                       {h.clamav_installed ? (
                         <>
                           <Badge tone="good">ClamAV {h.clamav_version}</Badge>
@@ -930,27 +945,27 @@ function OverviewTab({
                         </>
                       ) : h.reachable === false ? <Badge>unbekannt</Badge> : <Badge tone="bad">nicht installiert</Badge>}
                     </td>
-                    <td className="px-3 py-3">
+                    <td role="cell" data-label="Letzter Scan" className={`${CARD_CELL} py-1 sm:px-3 sm:py-3`}>
                       <ScanCell host={h} />
                     </td>
-                    <td className="px-3 py-3">
+                    <td role="cell" data-label="Härtung" className={`${CARD_CELL} py-1 sm:px-3 sm:py-3`}>
                       {h.auditing ? <AuditRunning run={h.audit_run} /> : <HardeningCell host={h} />}
                     </td>
-                    <td className="px-3 py-3">
+                    <td role="cell" className={`${CARD_CELL_PLAIN} sm:px-3 sm:py-3`}>
                       {canManage && (
-                        <div className="flex flex-wrap justify-end gap-1">
+                        <div className="mt-2 flex flex-wrap gap-1 sm:mt-0 sm:justify-end">
                           {h.clamav_installed && <Button small onClick={() => onScan(h)} disabled={h.scanning}>Scannen</Button>}
                           {h.clamav_installed && (
                             <Button small variant="ghost" title="Die Liste bekannter Schadprogramme jetzt aktualisieren" disabled={installRunning(h.host_id, "signatures")} onClick={() => onInstall(h, "signatures")}>
                               {installRunning(h.host_id, "signatures") ? installRunningLabel("signatures") : "Signaturen"}
                             </Button>
                           )}
-                          {!h.clamav_installed && h.reachable !== false && (
+                          {!h.clamav_installed && !h.rpm_ostree && h.reachable !== false && (
                             <Button small variant="primary" title="ClamAV ist ein kostenloser Virenscanner. Er wird auf dem Server installiert." disabled={installRunning(h.host_id, "clamav")} onClick={() => onInstall(h, "clamav")}>
                               {installRunning(h.host_id, "clamav") ? installRunningLabel("clamav") : "ClamAV installieren"}
                             </Button>
                           )}
-                          {!h.lynis_installed && h.reachable !== false && (
+                          {!h.lynis_installed && !h.rpm_ostree && h.reachable !== false && (
                             <Button small title="Lynis prüft, wie sicher der Server eingestellt ist." disabled={installRunning(h.host_id, "lynis")} onClick={() => onInstall(h, "lynis")}>
                               {installRunning(h.host_id, "lynis") ? installRunningLabel("lynis") : "Lynis installieren"}
                             </Button>
@@ -1202,7 +1217,7 @@ function QuarantineTab({ canManage, onChanged }: { canManage: boolean; onChanged
             const label = (action: FindingAction, text: string) => (running === action ? FINDING_RUNNING_LABEL[action] : text);
             return (
               <li key={f.id} className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm">
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-[1_1_14rem]" data-testid={`finding-text-${f.id}`}>
                   <p className="flex flex-wrap items-center gap-2">
                     <Badge tone={st.tone}>{st.label}</Badge>
                     <span className="font-medium text-red-200">{f.signature}</span>

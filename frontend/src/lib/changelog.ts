@@ -8,7 +8,7 @@ import { useEffect, useSyncExternalStore } from "react";
 
 import { api } from "./api";
 
-export type ChangeKind = "neu" | "verbessert" | "behoben" | "sicherheit";
+export type ChangeKind = "neu" | "verbessert" | "behoben" | "sicherheit" | "dokumentation";
 
 export interface ChangelogEntry {
   kind: ChangeKind;
@@ -33,19 +33,20 @@ export interface Changelog {
 }
 
 /** Anzeigereihenfolge und deutsche Namen (dieselbe Reihenfolge wie im Backend). */
-export const KIND_ORDER: ChangeKind[] = ["neu", "verbessert", "behoben", "sicherheit"];
+export const KIND_ORDER: ChangeKind[] = ["neu", "verbessert", "behoben", "sicherheit", "dokumentation"];
 export const KIND_LABELS: Record<ChangeKind, string> = {
   neu: "Neu",
   verbessert: "Verbessert",
   behoben: "Behoben",
   sicherheit: "Sicherheit",
+  dokumentation: "Dokumentation",
 };
 
-/** GET /api/v1/app/changelog: für jeden angemeldeten Nutzer. Ändert sich nur mit einem Update. */
+/** Fordert die eigene Dokumentationsgruppe an; ältere Leser erhalten sie als „Verbessert“. */
 export function useChangelog() {
   return useQuery({
     queryKey: ["changelog"],
-    queryFn: () => api.get<Changelog>("/app/changelog"),
+    queryFn: () => api.get<Changelog>("/app/changelog?include_documentation=true"),
     staleTime: 60_000,
   });
 }

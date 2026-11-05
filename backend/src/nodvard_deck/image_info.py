@@ -1,5 +1,5 @@
-"""Herkunft des laufenden Images (Image ohne Tag und Version) aus einer Datei, die beim Bauen angelegt wird. Nur
-Standardbibliothek, weil das Modul auch beim Bauen des Images läuft."""
+"""Herkunft des laufenden Images (Image ohne Tag, Version und Ausgabe) aus einer Datei, die beim Bauen angelegt wird.
+Nur Standardbibliothek, weil das Modul auch beim Bauen des Images läuft."""
 
 from __future__ import annotations
 
@@ -9,14 +9,16 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .edition import EDITIONS
+
 # Bewusst eine Datei im Image statt `ENV` im Dockerfile: Docker übernimmt die ENV eines Images in die Einstellungen
 # jedes Containers. Wer einen Container mit dessen Einstellungen neu anlegt und nur das Image tauscht (Portainer
 # "Recreate", klonende Update-Helfer), nähme sonst die alte Version mit.
 PATH = Path("/app/image-info.json")
-"""Ort der Datei im Image (`{"image": ..., "version": ...}`, `deploy/Dockerfile`). Ein selbst gebautes Image ohne die
+"""Ort der Datei im Image (`{"image": ..., "version": ..., "edition": ...}`, `deploy/Dockerfile`). Ein selbst gebautes Image ohne die
 Build-Argumente hat keine. Überschreibbar mit `NODVARD_DECK_IMAGE_INFO_PATH`, nur für Tests."""
 
-FIELDS = ("image", "version")
+FIELDS = ("image", "version", "edition")
 MAX_BYTES = 4096
 MAX_VALUE_LENGTH = 200
 
@@ -50,9 +52,10 @@ def read(path: Path | str = PATH) -> dict[str, str]:
     return {key: value for key in FIELDS if (value := clean(data.get(key))) is not None}
 
 
-def write(path: Path | str, *, image: str | None, version: str | None) -> bool:
+def write(path: Path | str, *, image: str | None, version: str | None, edition: str | None = None) -> bool:
     """Schreibt die Datei mit den nicht leeren Angaben. Ohne Angaben keine Datei (`False`)."""
-    info = {key: value for key, value in (("image", clean(image)), ("version", clean(version))) if value is not None}
+    given = (("image", image), ("version", version), ("edition", edition))
+    info = {key: value for key, raw in given if (value := clean(raw)) is not None}
     if not info:
         return False
     Path(path).write_text(json.dumps(info, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -60,8 +63,9 @@ def write(path: Path | str, *, image: str | None, version: str | None) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Beim Bauen des Images: `python -m nodvard_deck.image_info [PFAD]`, mit `IMAGE` (z. B. `ghcr.io/nodvard/deck`) und
-    `VERSION` (z. B. `0.6.0-rc1`) aus den Build-Argumenten. Eine gesetzte, aber unbrauchbare Angabe bricht den Build ab."""
+    """Beim Bauen des Images: `python -m nodvard_deck.image_info [PFAD]`, mit `IMAGE` (z. B. `ghcr.io/nodvard/deck`),
+    `VERSION` (z. B. `0.6.0-rc1`) und `EDITION` (`deck` oder `dock`) aus den Build-Argumenten. Eine gesetzte, aber
+    unbrauchbare Angabe bricht den Build ab."""
     args = sys.argv[1:] if argv is None else argv
     path = Path(args[0]) if args else PATH
     given = {key: os.environ.get(key.upper(), "") for key in FIELDS}
@@ -69,7 +73,11 @@ def main(argv: list[str] | None = None) -> int:
     if bad:
         print(f"image-info: unbrauchbare Angabe in {', '.join(bad)} (zu lang oder mit Steuerzeichen).", file=sys.stderr)
         return 1
-    if write(path, image=given["image"], version=given["version"]):
+    edition = given["edition"].strip()
+    if edition and edition not in EDITIONS:
+        print(f"image-info: unbekannte Ausgabe in EDITION, erlaubt: {', '.join(EDITIONS)}.", file=sys.stderr)
+        return 1
+    if write(path, image=given["image"], version=given["version"], edition=edition):
         print(f"image-info: {path} geschrieben.")
     else:
         print("image-info: keine Angaben (selbst gebautes Image), keine Datei.")

@@ -23,6 +23,20 @@ from nodvard_deck_ext_shield import updates as up  # noqa: E402
 BERLIN = ZoneInfo("Europe/Berlin")
 
 
+@pytest.mark.parametrize(("states", "expected"), [
+    ([{"count": 3, "security_count": 2}], "shield.security_updates"),
+    ([{"count": 3, "security_count": 0}], "shield.updates_available"),
+    ([{"count": 0, "reboot_required": True}], "shield.reboot_required"),
+    ([{"error": "Nicht erreichbar", "count": 3, "security_count": 2}], "shield.update_check_failed"),
+    ([{"unsupported": True, "security_count": 2}, {"error": "Nicht erreichbar"}], "shield.update_check_failed"),
+    ([{"error": "Nicht erreichbar", "security_count": 2}, {"count": 1}], "shield.updates_available"),
+])
+def test_update_report_type_uses_the_current_readable_state(states, expected):
+    from nodvard_deck_ext_shield.patching import update_report_type
+
+    assert update_report_type([(None, state) for state in states]) == expected
+
+
 def _berlin(hour: int, minute: int = 0, day: int = 2) -> float:
     """Unix-Zeit von `day`. Oktober 2026, `hour:minute` Uhr Berlin (Sommerzeit)."""
     return datetime(2026, 10, day, hour, minute, tzinfo=BERLIN).timestamp()
@@ -1119,6 +1133,7 @@ async def test_daily_check_skips_a_server_that_is_being_checked_but_still_report
 
     res = await center.scheduled_check()
     assert res["title"] == "2 Sicherheitsupdate(s) offen"
+    assert ctx.notes[-1].payload["notification_type"] == "shield.security_updates"
     body = ctx.notes[-1].body
     assert "- Raspberry Pi: 3 Update(s), davon 2 Sicherheit, Neustart nötig" in body
     assert "- pve2: 1 Update(s), Neustart nötig" in body  # aus dem zuletzt gespeicherten Stand
@@ -1167,6 +1182,7 @@ async def test_daily_report_keeps_naming_a_server_that_is_down_after_one_good_ch
         res = await center.scheduled_check()
         note = ctx.notes[-1]
         assert res["title"] == note.title == "Update-Prüfung: 1 Fehler"
+        assert note.payload["notification_type"] == "shield.update_check_failed"
         assert note.severity == Severity.WARNING
         assert note.body.startswith("- Raspberry Pi: Prüfung fehlgeschlagen (")
         assert "Server nicht erreichbar" in note.body
@@ -1961,7 +1977,7 @@ async def test_after_a_dashboard_restart_the_run_is_resumed_and_reported_once():
     assert note.title == "Sicherheitsupdates auf Raspberry Pi: fertig"
     assert note.body == "2 Paket(e) aktualisiert\nDas Dashboard wurde währenddessen neu gestartet."
     # Mit Server-Bezug, sonst kann ein Wartungsfenster die Meldung nie stummschalten.
-    assert note.payload == {"path": "/ext/shield/soc?tab=updates", "tags": ["package"], "host_id": "h1"}
+    assert note.payload == {"notification_type": "shield.update_result", "path": "/ext/shield/soc?tab=updates", "tags": ["package"], "host_id": "h1"}
     assert (await center.overview())["hosts"][0]["status"]["security_count"] == 0  # neu geprueft
     await engine.dispose()
 

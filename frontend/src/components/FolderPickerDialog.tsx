@@ -1,12 +1,12 @@
 /**
- * Ordner-Auswahl fuer Transfers zwischen Quellen. Ohne diesen Dialog gaebe es fuer
+ * Ordner-Auswahl für Transfers zwischen Quellen. Ohne diesen Dialog gäbe es für
  * eine ANDERE Quelle nur deren Wurzel `/` als Ziel (siehe FilesPage.tsx-
  * Modul-Docstring: "ohne zweites Panel gibt es keinen Weg, einen tieferen Zielordner
- * einer anderen Quelle zu waehlen"). Dieser Dialog ist das zweite Panel: Quelle
- * waehlen, durch deren Ordner navigieren, bei Bedarf einen neuen anlegen, bestaetigen.
+ * einer anderen Quelle zu wählen"). Dieser Dialog ist das zweite Panel: Quelle
+ * wählen, durch deren Ordner navigieren, bei Bedarf einen neuen anlegen, bestätigen.
  *
  * Zeigt nur Ordner (Dateien sind kein Ziel) und nur beschreibbare Quellen. Der Name
- * der Datei bleibt erhalten -- gewaehlt wird der Zielordner, nicht der Zieldateiname.
+ * der Datei bleibt erhalten -- gewählt wird der Zielordner, nicht der Zieldateiname.
  */
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useState } from "react";
@@ -54,7 +54,7 @@ export function FolderPickerDialog({
   sources: PickerSource[];
   fileName: string;
   initialSourceId: string | null;
-  /** Nur, wenn die Herkunftsquelle Loeschen kann -- sonst waere "Verschieben" gelogen. */
+  /** Nur, wenn die Herkunftsquelle Löschen kann -- sonst wäre "Verschieben" gelogen. */
   allowMove: boolean;
   onConfirm: (choice: FolderChoice) => void;
 }) {
@@ -73,7 +73,7 @@ export function FolderPickerDialog({
     setPath("/");
     setMove(false);
     setNewFolder(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- nur beim Oeffnen neu setzen
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- nur beim Öffnen neu setzen
   }, [open, initialSourceId]);
 
   useEffect(() => {

@@ -7,12 +7,12 @@ selbst."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
 from nodvard_deck.main import SPA_CSP, _SpaStaticFiles
 
 
@@ -60,7 +60,7 @@ def test_index_html_must_be_revalidated_but_hashed_assets_are_immutable(spa_clie
     Dateinamen) darf dauerhaft gecacht werden."""
     for path in ("/", "/settings", "/ext/proxmox/nodes"):
         res = spa_client.get(path)
-        assert res.headers["cache-control"] == "no-cache", path
+        assert res.headers["cache-control"] == "no-store", path
 
     asset = spa_client.get("/assets/app.js")
     assert asset.headers["cache-control"] == "public, max-age=31536000, immutable"
@@ -77,7 +77,7 @@ def test_a_missing_asset_still_falls_back_not_a_raw_404(spa_client: TestClient):
     # Der Fallback liefert HTML unter einer `assets/`-URL aus -- darf deshalb NICHT
     # die `immutable`-Policy der echten Assets bekommen, sonst saesse genau diese
     # Fehlantwort ein Jahr lang im Browser-Cache fest.
-    assert res.headers["cache-control"] == "no-cache"
+    assert res.headers["cache-control"] == "no-store"
 
 
 def test_an_unknown_api_path_is_an_honest_404_not_the_app(spa_client: TestClient):
@@ -97,11 +97,13 @@ def test_html_has_the_csp_assets_do_not(spa_client: TestClient):
     for path in ("/", "/settings/appearance"):
         headers = spa_client.get(path).headers
         # Ohne eingebettete Skripte bleibt für Skripte nur der eigene Server.
-        assert headers["content-security-policy"] == f"{SPA_CSP}; script-src 'self'"
+        nonce = re.search(r"'nonce-([^']+)'", headers["content-security-policy"])[1]
+        expected = SPA_CSP.replace("__DECK_CSP_NONCE__", nonce).replace("__DECK_CSP_SOCKET__", "ws://testserver")
+        assert headers["content-security-policy"] == f"{expected}; script-src 'self'"
         directives = {part.strip() for part in headers["content-security-policy"].split(";")}
         assert directives == {
-            "default-src 'self'", "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:",
-            "font-src 'self' data:", "frame-src blob:", "object-src 'none'", "base-uri 'self'", "form-action 'self'",
+            "default-src 'self'", f"style-src 'self' 'nonce-{nonce}'", "style-src-attr 'none'", "img-src 'self' data: blob:",
+            "font-src 'self'", "connect-src 'self' ws://testserver", "frame-src blob:", "object-src 'none'", "base-uri 'self'", "form-action 'self'",
             "script-src 'self'",
         }
         assert "content-security-policy-report-only" not in headers
@@ -112,6 +114,8 @@ def test_html_has_the_csp_assets_do_not(spa_client: TestClient):
 def test_a_revalidated_page_keeps_its_csp(spa_client: TestClient):
     for path in ("/", "/settings"):
         first = spa_client.get(path)
-        again = spa_client.get(path, headers={"If-None-Match": first.headers["etag"]})
-        assert again.status_code == 304, path
-        assert again.headers["content-security-policy"] == first.headers["content-security-policy"], path
+        again = spa_client.get(path, headers={"If-None-Match": "*", "If-Modified-Since": "Wed, 04 Nov 2026 00:00:00 GMT"})
+        assert again.status_code == 200, path
+        assert again.headers["cache-control"] == "no-store"
+        assert "etag" not in again.headers
+        assert again.headers["content-security-policy"] != first.headers["content-security-policy"], path

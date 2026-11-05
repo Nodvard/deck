@@ -68,7 +68,7 @@ describe("Cockpit", () => {
     expect(screen.getByTestId("stat-Freigaben").textContent).toContain("warten auf dich");
     const attention = screen.getByTestId("attention");
     expect(attention.textContent).toContain("Eine Aktion wartet auf Freigabe");
-    expect(attention.textContent).toContain("Datenträger auf pve1: 28 % Rest");
+    expect(attention.textContent).toContain("Speicher local-lvm auf pve2 fast voll: 95 %");
   });
 
   it("Infrastruktur: Knoten mit Live-Auslastung, Maschinen mit Konsole/Terminal", async () => {
@@ -90,6 +90,32 @@ describe("Cockpit", () => {
     expect(screen.queryByTestId("machine-h-pi")).toBeNull();
     expect(within(pi).queryByRole("link", { name: /Konsole/ })).toBeNull();
     await waitFor(() => expect(within(pi).getByRole("link", { name: "Terminal Heimserver" })).toHaveAttribute("href", "/terminal?host=h-pi"));
+  });
+
+  it.each([
+    ["g-valheim", "game-win"],
+    ["g-bastion", "bastion"],
+  ])("laufender Gast %s behält mit Messwerten seinen Konsolenlink", async (id, name) => {
+    const hosts = (respond("/api/v1/hosts", "GET") as { id: string }[]).map((h) =>
+      h.id === id ? { ...h, status: "running", power_state: "running" } : h);
+    vi.stubGlobal("fetch", mockFetch({
+      "/hosts": hosts,
+      "/hosts/metrics/latest": {
+        hosts: {
+          [id]: {
+            cpu: 25, mem: 50, disk: null, mem_used_bytes: 1024 ** 3, mem_total_bytes: 2 * 1024 ** 3,
+            disk_used_bytes: null, disk_total_bytes: null, uptime_s: 3600,
+            at: new Date().toISOString(), age_s: 8, stale: false,
+          },
+        },
+        stale_after_s: 120,
+      },
+    }));
+    renderCockpit();
+    const row = await screen.findByTestId(`server-${id}`);
+    expect(within(row).getByRole("img", { name: "CPU 25 %" })).toBeInTheDocument();
+    expect(within(row).getByRole("img", { name: "RAM 50 %" })).toBeInTheDocument();
+    expect(within(row).getByRole("link", { name: `Konsole ${name}` })).toHaveAttribute("href", `/console/${id}`);
   });
 
   it("Apps: nur mit Web-Oberfläche, auf Wunsch alle, filterbar", async () => {
@@ -133,7 +159,7 @@ describe("Cockpit", () => {
   it("Gast, dessen Zustand Proxmox gerade nicht liefert: „unbekannt“, nicht „noch nicht geprüft“", async () => {
     const calm = { ...(respond("/api/v1/overview", "GET") as object), pending_actions: 0, attention: [] };
     const hosts = (respond("/api/v1/hosts", "GET") as { id: string }[]).map((h) =>
-      h.id === "g-bastion" ? { ...h, status: "unknown" } : h);
+      h.id === "g-bastion" ? { ...h, status: "unknown", power_state: "running" } : h);
     vi.stubGlobal("fetch", mockFetch({ "/overview": calm, "/hosts": hosts }));
     renderCockpit();
     await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("Keine Störung bekannt."));

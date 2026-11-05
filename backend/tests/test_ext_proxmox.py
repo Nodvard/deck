@@ -2995,7 +2995,14 @@ async def test_watch_messages_carry_the_host_of_their_node(client, db_session, t
         "Knoten pve1 offline", "Knoten pve1 wieder online",
         "Proxmox 'primary' nicht erreichbar", "Proxmox 'primary' wieder erreichbar",
     }
-    assert all(p == {"host_id": node_id} for p in payloads.values()), payloads
+    assert payloads == {
+        "Datenträger auf pve1: SMART: FAILED": {"notification_type": "proxmox.disk", "host_id": node_id},
+        "Datenträger auf pve1 wieder unauffällig": {"notification_type": "proxmox.disk", "host_id": node_id},
+        "Knoten pve1 offline": {"notification_type": "proxmox.node", "host_id": node_id},
+        "Knoten pve1 wieder online": {"notification_type": "proxmox.node", "host_id": node_id},
+        "Proxmox 'primary' nicht erreichbar": {"notification_type": "proxmox.conn", "host_id": node_id},
+        "Proxmox 'primary' wieder erreichbar": {"notification_type": "proxmox.conn", "host_id": node_id},
+    }
 
 
 @pytest.mark.asyncio
@@ -3009,7 +3016,7 @@ async def test_watch_messages_without_a_known_node_host_stay_without_host_id(
     state["disks"][1]["health"] = "FAILED"
     await _run_watch()
 
-    assert await _watch_payloads(db_session) == {"Datenträger auf pve1: SMART: FAILED": {}}
+    assert await _watch_payloads(db_session) == {"Datenträger auf pve1: SMART: FAILED": {"notification_type": "proxmox.disk"}}
 
 
 def test_connection_host_id_only_when_the_connection_has_exactly_one_node():
@@ -3101,9 +3108,16 @@ _WINDOW_CASES = [
     ),
 ]
 
+_WINDOW_TYPES = {
+    _node_offline: "proxmox.node",
+    _disk_failed: "proxmox.disk",
+    _api_down: "proxmox.conn",
+    _storage_full: "proxmox.storage",
+}
+
 
 def _host_part(payload: dict) -> dict:
-    """Der Teil der Meldung, den das Wartungsfenster liest (`host_id`); `path` (Sprungziel) ist Zugabe."""
+    """Server und Meldungsart ohne das Sprungziel."""
     return {k: v for k, v in payload.items() if k != "path"}
 
 
@@ -3150,7 +3164,9 @@ async def test_watch_announces_a_problem_from_the_window_once_after_it_if_it_per
         assert (await _run_watch())["notified"] == 0, "nach dem Fenster genau einmal"
     assert [n.title for n in channel.received] == [f"{alert_title} (seit dem Wartungsfenster)"]
     assert "Wartungsfenster" in channel.received[0].body
-    assert _host_part(channel.received[0].payload) == {"host_id": node_id}
+    assert _host_part(channel.received[0].payload) == {
+        "host_id": node_id, "notification_type": _WINDOW_TYPES[make_bad],
+    }
 
     make_bad(state, False)
     await _run_watch()
@@ -3253,7 +3269,9 @@ async def test_watch_all_clear_for_a_heard_alarm_comes_after_the_window(
     for _ in range(2):
         assert (await _run_watch())["notified"] == 0, "nach dem Fenster genau einmal"
     assert [n.title for n in channel.received][1:] == [f"{ok_title} (im Wartungsfenster)"]
-    assert _host_part(channel.received[1].payload) == {"host_id": node_id}
+    assert _host_part(channel.received[1].payload) == {
+        "host_id": node_id, "notification_type": _WINDOW_TYPES[make_bad],
+    }
     assert await _watch_deliveries(db_session) == [
         (alert_title, "sent"),
         (ok_title, "suppressed"),
@@ -3319,7 +3337,7 @@ async def test_watch_unreadable_hosts_do_not_end_the_window_early(
     assert (await _run_watch())["notified"] == 1
     late = channel.received[0]
     assert late.title == "Proxmox 'primary' nicht erreichbar (seit dem Wartungsfenster)"
-    assert late.payload == {"host_id": node_id}
+    assert late.payload == {"notification_type": "proxmox.conn", "host_id": node_id}
     assert "Minuten" not in late.body and "Keine Antwort" in late.body
 
 
@@ -3446,7 +3464,7 @@ async def test_storage_watch_reports_a_full_pool_once_and_the_all_clear_only_5_p
     assert await _watch_notifications(db_session) == [("warning", title)]
     payload = (await _watch_payloads(db_session))[title]
     # Der Link oeffnet den Reiter "Speicher" und markiert dort die Pools des Knotens.
-    assert payload == {"host_id": node_id, "path": f"/ext/proxmox/nodes?tab=storage&host={node_id}"}
+    assert payload == {"notification_type": "proxmox.storage", "host_id": node_id, "path": f"/ext/proxmox/nodes?tab=storage&host={node_id}"}
     from nodvard_deck.models import Notification as NotificationRow
 
     body = (await db_session.execute(select(NotificationRow.body).where(NotificationRow.title == title))).scalar_one()
@@ -3652,7 +3670,7 @@ async def test_storage_watch_without_a_node_host_sends_the_page_without_a_host(c
     _pool_used(state, 920)
     for _ in range(2):
         await _run_watch()
-    assert await _watch_payloads(db_session) == {"Speicher local-lvm auf pve1 fast voll: 92 %": {"path": "/ext/proxmox/nodes?tab=storage"}}
+    assert await _watch_payloads(db_session) == {"Speicher local-lvm auf pve1 fast voll: 92 %": {"notification_type": "proxmox.storage", "path": "/ext/proxmox/nodes?tab=storage"}}
 
 
 def test_storage_watch_setting_and_pool_helpers():

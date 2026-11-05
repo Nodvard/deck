@@ -1,3 +1,4 @@
+import { productText } from "./product";
 /** Neuer Stack: Name, Ordner und Compose-Datei aus einer Vorlage, einem Beispiel, eingefügtem Text oder einer Datei; angelegt wird über die Freigabe. */
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 
@@ -6,6 +7,8 @@ import { deck } from "../../../_shared/frontend/src/deck";
 import { LoadError, errorMessage, fetchJson } from "../../../_shared/frontend/src/loadError";
 import { Button } from "../../../_shared/frontend/src/ui";
 
+import { when } from "./Backups";
+import { OWN_URL, SaveTemplate, neededValues, stackNameOf, type OwnList, type OwnListed, type OwnTemplate } from "./OwnTemplates";
 import { CheckResult, JSON_HEADERS, withResult, type CheckOut } from "./StackEditor";
 import { StackForm } from "./StackForm";
 
@@ -19,6 +22,8 @@ interface Place {
 }
 type NewCheck = CheckOut & { folder: string; conflict: string | null };
 export interface StackTemplate { id: string; name: string; summary: string; compose: string; note: string; ports: string[] }
+/** Gewählte Vorlage; `value` ist die Kennung aus dem Katalog oder `own:<id>`. */
+interface Picked { value: string; compose: string; stackName: string; catalog?: StackTemplate; own?: OwnTemplate }
 
 export const EXAMPLE = `services:
   app:
@@ -47,7 +52,13 @@ export function NewStack({ hostId, onClose }: { hostId: string; onClose: (messag
   const [templates, setTemplates] = useState<StackTemplate[] | null>(null);
   const [templateError, setTemplateError] = useState<string | null>(null);
   const [templateReload, setTemplateReload] = useState(0);
-  const [picked, setPicked] = useState<StackTemplate | null>(null);
+  const [own, setOwn] = useState<OwnListed[] | null>(null);
+  const [ownError, setOwnError] = useState<string | null>(null);
+  const [ownProblem, setOwnProblem] = useState<string | null>(null);
+  const [ownReload, setOwnReload] = useState(0);
+  const [picked, setPicked] = useState<Picked | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const checkRun = useRef(0);
   const life = useRef<AbortController | null>(null);
 
@@ -75,9 +86,23 @@ export function NewStack({ hostId, onClose }: { hostId: string; onClose: (messag
     return () => controller.abort();
   }, [templateReload]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    setOwnError(null);
+    fetchJson<OwnList>(OWN_URL, { signal: controller.signal })
+      .then((body) => {
+        if (controller.signal.aborted) return;
+        setOwn(body.templates);
+        setOwnProblem(body.problem ?? null);
+      })
+      .catch((err: unknown) => { if (!controller.signal.aborted) setOwnError(errorMessage(err)); });
+    return () => controller.abort();
+  }, [ownReload]);
+
   if (error) return <LoadError what="Der Ordner für neue Stacks" error={error} onRetry={() => setReload((n) => n + 1)} compact />;
   if (!place) return <p className="text-xs opacity-60">Lade …</p>;
   const nameOk = NAME_RE.test(name);
+  const needed = neededValues(text);
   const changed = name !== "" || text !== EXAMPLE;
 
   function edit(next: { name?: string; text?: string }) {
@@ -88,13 +113,57 @@ export function NewStack({ hostId, onClose }: { hostId: string; onClose: (messag
     setProblem(null);
   }
 
-  async function pick(id: string) {
-    const template = templates?.find((t) => t.id === id);
-    if (!template) return;
+  async function pick(value: string) {
+    let next: Picked;
+    if (value.startsWith("own:")) {
+      const run = checkRun.current;
+      setBusy(true);
+      try {
+        const template = await fetchJson<OwnTemplate>(`${OWN_URL}/${encodeURIComponent(value.slice(4))}`);
+        if (run !== checkRun.current) return;
+        next = { value, compose: template.compose, stackName: stackNameOf(template.name), own: template };
+      } catch (err) {
+        setProblem(`Die Vorlage ließ sich nicht laden: ${errorMessage(err)}`);
+        setOwnReload((n) => n + 1);
+        return;
+      } finally {
+        setBusy(false);
+      }
+    } else {
+      const template = templates?.find((t) => t.id === value);
+      if (!template) return;
+      next = { value, compose: template.compose, stackName: template.id, catalog: template };
+    }
     const untouched = text === EXAMPLE || text === picked?.compose || text.trim() === "";
     if (!untouched && !(await deck().confirmDialog("Den bisherigen Text durch die Vorlage ersetzen?", { confirmLabel: "Ersetzen" }))) return;
-    setPicked(template);
-    edit({ text: template.compose, ...(name === "" || name === picked?.id ? { name: template.id } : {}) });
+    setPicked(next);
+    setSaving(false);
+    setNotice(null);
+    edit({ text: next.compose, ...(name === "" || name === picked?.stackName ? { name: next.stackName } : {}) });
+  }
+
+  function saved(template: OwnTemplate) {
+    setSaving(false);
+    setOwnReload((n) => n + 1);
+    setPicked({ value: `own:${template.id}`, compose: template.compose, stackName: stackNameOf(template.name), own: template });
+    setNotice(`Vorlage „${template.name}“ gespeichert.`);
+  }
+
+  async function removeOwn(template: OwnTemplate) {
+    const question = `Vorlage „${template.name}“ löschen? Stacks, die daraus angelegt wurden, bleiben, wie sie sind.`;
+    if (!(await deck().confirmDialog(question, { confirmLabel: "Löschen" }))) return;
+    setBusy(true);
+    setProblem(null);
+    try {
+      await fetchJson(`${OWN_URL}/${encodeURIComponent(template.id)}`, { method: "DELETE" });
+      setPicked(null);
+      setOwnReload((n) => n + 1);
+      setNotice(`Vorlage „${template.name}“ gelöscht. Der Text unten bleibt stehen.`);
+    } catch (err) {
+      setProblem(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function leave() {
@@ -124,7 +193,7 @@ export function NewStack({ hostId, onClose }: { hostId: string; onClose: (messag
     if (!result?.ok || result.conflict) return;
     const risky = result.warnings.length ? ` Riskant: ${result.warnings.join(" ")} ${RISKY_NOTE}` : "";
     const then = start ? " und starten" : "";
-    const question = `Stack „${name}“ in ${result.folder} anlegen${then}? Nodvard Deck legt den Ordner an, schreibt compose.yaml und übernimmt den Stack.${risky}`;
+    const question = `Stack „${name}“ in ${result.folder} anlegen${then}? ${productText("Nodvard Deck")} legt den Ordner an, schreibt compose.yaml und übernimmt den Stack.${risky}`;
     if (!(await deck().confirmDialog(question, { confirmLabel: start ? "Anlegen und starten" : "Anlegen" }))) return;
     setBusy(true);
     const signal = (life.current ?? new AbortController()).signal;
@@ -183,7 +252,7 @@ export function NewStack({ hostId, onClose }: { hostId: string; onClose: (messag
   return (
     <div className="flex flex-col gap-2 text-xs" data-testid="new-stack">
       <p className="opacity-70">
-        Ein neuer Stack bekommt einen eigenen Ordner. Nodvard Deck legt ihn erst nach der Freigabe an, schreibt darin compose.yaml und überschreibt
+        Ein neuer Stack bekommt einen eigenen Ordner. {productText("Nodvard Deck")} legt ihn erst nach der Freigabe an, schreibt darin compose.yaml und überschreibt
         nie einen bestehenden Ordner.
       </p>
       {rootDraft === null ? (
@@ -206,24 +275,47 @@ export function NewStack({ hostId, onClose }: { hostId: string; onClose: (messag
       )}
       {place.setting_problem && <p className="text-amber-300" role="status">{place.setting_problem}</p>}
       {place.root_problem && <p className="text-amber-300" role="status">{place.root_problem}</p>}
-      {templateError ? <LoadError what="Die Vorlagen" error={templateError} onRetry={() => setTemplateReload((n) => n + 1)} compact /> : templates && (
+      {templateError && <LoadError what="Die Vorlagen" error={templateError} onRetry={() => setTemplateReload((n) => n + 1)} compact />}
+      {ownError && <LoadError what="Die eigenen Vorlagen" error={ownError} onRetry={() => setOwnReload((n) => n + 1)} compact />}
+      {ownProblem && <p className="text-amber-300" role="status">{ownProblem}</p>}
+      {(templates?.length || own?.length) ? (
         <label className="flex flex-col gap-1">
           <span>Vorlage</span>
-          <select aria-label="Vorlage" value={picked?.id ?? ""} disabled={busy} onChange={(e) => void pick(e.target.value)}
+          <select aria-label="Vorlage" value={picked?.value ?? ""} disabled={busy} onChange={(e) => void pick(e.target.value)}
             className="rounded border border-white/10 bg-black/25 px-2 py-1 outline-none focus:border-[var(--color-accent)]">
             <option value="" disabled>Ohne Vorlage</option>
-            {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            {own && own.length > 0 && (
+              <optgroup label="Eigene Vorlagen">
+                {own.map((t) => <option key={t.id} value={`own:${t.id}`}>{t.name}</option>)}
+              </optgroup>
+            )}
+            {templates && templates.length > 0 && (
+              <optgroup label="Katalog">
+                {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </optgroup>
+            )}
           </select>
         </label>
-      )}
-      {picked && (
+      ) : null}
+      {picked?.catalog && (
         <div className="flex flex-col gap-1 rounded border border-white/10 bg-white/[0.03] p-2" data-testid="template-note">
-          <p>{picked.summary}</p>
-          <p className="opacity-70">{picked.note}</p>
-          <p className="opacity-70">Belegt auf dem Server {picked.ports.length === 1 ? "den Port" : "die Ports"} {picked.ports.join(", ")}.</p>
+          <p>{picked.catalog.summary}</p>
+          <p className="opacity-70">{picked.catalog.note}</p>
+          <p className="opacity-70">Belegt auf dem Server {picked.catalog.ports.length === 1 ? "den Port" : "die Ports"} {picked.catalog.ports.join(", ")}.</p>
           {text !== picked.compose && <p className="text-amber-300">Du hast die Datei geändert; die Angaben oben gelten für die Vorlage, wie sie war.</p>}
         </div>
       )}
+      {picked?.own && (
+        <div className="flex flex-col gap-1 rounded border border-white/10 bg-white/[0.03] p-2" data-testid="own-template-note">
+          {picked.own.summary && <p>{picked.own.summary}</p>}
+          <p className="flex flex-wrap items-center gap-2 opacity-70">
+            <span className="flex-1">Eigene Vorlage{picked.own.updated_at ? `, zuletzt gespeichert ${when(picked.own.updated_at)}` : ""}.</span>
+            <Button small variant="danger" disabled={busy} onClick={() => void removeOwn(picked.own!)}>Vorlage löschen</Button>
+          </p>
+          {text !== picked.compose && <p className="text-amber-300">Du hast die Datei geändert. Mit „Als Vorlage speichern“ kannst du die Vorlage ersetzen.</p>}
+        </div>
+      )}
+      {notice && <p className="opacity-90" role="status">{notice}</p>}
       <label className="flex flex-col gap-1">
         <span>Name</span>
         <input aria-label="Name des Stacks" value={name} onChange={(e) => edit({ name: e.target.value.trim() })} placeholder="zum Beispiel vaultwarden"
@@ -233,6 +325,7 @@ export function NewStack({ hostId, onClose }: { hostId: string; onClose: (messag
       {nameOk && <p className="break-all opacity-70">Ordner: <span className="font-mono">{place.root}/{name}</span></p>}
       <div className="flex flex-wrap gap-1.5">
         <Button small onClick={() => { setPicked(null); edit({ text: EXAMPLE }); }}>Beispiel einfügen</Button>
+        <Button small pressed={saving} disabled={busy || text.trim() === ""} onClick={() => { setSaving(!saving); setNotice(null); }}>Als Vorlage speichern</Button>
         <label className="cursor-pointer rounded-lg border border-white/10 bg-white/[0.06] px-2 py-1 hover:bg-white/[0.12]">
           Datei hochladen
           <input type="file" accept=".yml,.yaml,text/yaml" className="hidden" aria-label="Compose-Datei hochladen" onChange={upload} />
@@ -241,10 +334,26 @@ export function NewStack({ hostId, onClose }: { hostId: string; onClose: (messag
         <Button small pressed={!asForm} onClick={() => setAsForm(false)}>Text</Button>
         <Button small pressed={asForm} onClick={() => setAsForm(true)}>Formular</Button>
       </div>
+      {saving && (
+        <SaveTemplate compose={text} current={picked?.own ?? null} suggested={name} onSaved={saved} onCancel={() => setSaving(false)} />
+      )}
       {asForm ? <StackForm text={text} onChange={(next) => edit({ text: next })} disabled={busy} /> : (
         <textarea aria-label="Compose-Datei des neuen Stacks" value={text} spellCheck={false} wrap="off" rows={16}
           className="w-full resize-y rounded bg-black/60 p-2 font-mono text-[11px] leading-snug outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
           onChange={(e) => edit({ text: e.target.value })} />
+      )}
+      {needed.open.length > 0 && (
+        <p className="text-amber-300" data-testid="needed-values">
+          Die Datei erwartet {needed.open.length === 1 ? "einen Wert" : "Werte"} für {needed.open.join(", ")}. Leg den Stack mit „Anlegen“
+          an, trag {needed.open.length === 1 ? "ihn" : "sie"} in eine .env in seinem Ordner ein (etwa über „Dateien“) und starte ihn erst
+          dann. Sonst {needed.open.length === 1 ? "bleibt er" : "bleiben sie"} leer.
+        </p>
+      )}
+      {needed.required.length > 0 && (
+        <p className="text-amber-300" data-testid="required-values">
+          {needed.required.join(", ")} {needed.required.length === 1 ? "ist" : "sind"} mit „:?“ als Pflicht markiert. Ohne .env bricht
+          deshalb schon das Anlegen ab. Schreib dort zum Beispiel {"${"}{needed.required[0]}{"}"} ohne „:?“ und trag den Wert danach ein.
+        </p>
       )}
       {checked?.conflict && <p className="text-red-400" role="alert">{checked.conflict}</p>}
       <CheckResult checked={checked} note={RISKY_NOTE} />

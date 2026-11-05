@@ -28,8 +28,7 @@ class PiholeConfig:
 
 UI_PATHS = ("admin", "api/docs")
 """Seiten der Weboberfläche von Pi-hole (`/admin/queries`, `/admin/settings/dns`) und der API-Beschreibung. Wer die
-Adresse aus dem Browser kopiert, hat oft eine davon dabei; die Anfragen gehören aber an die Grundadresse. Ein Eintrag
-mit `/` gilt nur, wenn beide Teile hintereinander stehen."""
+Adresse aus dem Browser kopiert, hat oft eine davon dabei; die Anfragen gehören aber an die Grundadresse."""
 
 
 def strip_ui_path(path: str) -> str:

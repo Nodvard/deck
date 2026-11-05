@@ -8,7 +8,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any
 
-from nodvard_sdk import Notification as SdkNotification, Severity
+from nodvard_sdk import Notification as SdkNotification
+from nodvard_sdk import Severity
 from nodvard_sdk.capabilities import NotificationChannel
 from nodvard_sdk.errors import NotificationNotDelivered, NotificationSkipped
 from sqlalchemy import Text, delete, insert, literal, select
@@ -17,6 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..core import maintenance
 from ..db import new_id
 from ..models import Notification, NotificationDelivery
+from . import notification_types
+from . import settings as settings_service
 
 _DELETE_BATCH = 500
 """Zeilen je `DELETE ... IN (...)`: bleibt weit unter dem Variablen-Limit alter SQLite-Versionen (999)."""
@@ -75,6 +78,7 @@ async def deliver(
     notification_id = row.id
 
     suppressed = await would_suppress(session, payload)
+    preferences = await settings_service.get_global(session, notification_types.SETTING_KEY, {})
     # Vor den Kanälen committen: Der flush hielte sonst die SQLite-Schreibsperre für die ganze Dauer des Push-Aufrufs,
     # und ein Kanal, der selbst schreibt (Token aus dem Tresor, Audit über eine eigene Verbindung), scheiterte mit
     # "database is locked". Einziger Aufrufer ist `NotifyHandle.send()` mit frischer `session_scope()`: der
@@ -87,6 +91,11 @@ async def deliver(
     # Ohne Beschränkung auf Extensions: Das Notification-Center ist Kern-Code.
     channels = runtime.capabilities.query(NotificationChannel, allowed_ext_ids=None)
 
+    kind = payload.get("notification_type")
+    preference = preferences.get(kind, {}) if isinstance(kind, str) else {}
+    push_payload = {k: v for k, v in payload.items() if k != "_push_priority"}
+    if preference.get("priority") is not None and payload.get("test") is not True:
+        push_payload["_push_priority"] = preference["priority"]
     sdk_notification = SdkNotification(
         title=title, body=body, severity=Severity(severity), correlation_id=correlation_id, payload=payload,
     )
@@ -97,8 +106,17 @@ async def deliver(
         if suppressed:
             outcomes.append((channel.channel_id, "suppressed", None))
             continue
+        uses_push_preferences = getattr(channel, "uses_push_preferences", False)
+        if uses_push_preferences and preference.get("enabled") is False and payload.get("test") is not True:
+            outcomes.append((channel.channel_id, "skipped", None))
+            continue
         try:
-            await channel.send(sdk_notification)
+            message = sdk_notification
+            if uses_push_preferences:
+                message = SdkNotification(
+                    title=title, body=body, severity=Severity(severity), correlation_id=correlation_id, payload=push_payload,
+                )
+            await channel.send(message)
             outcomes.append((channel.channel_id, "sent", None))
         except NotificationSkipped:
             # Bewusst nicht weitergegeben (z. B. unter der Mindest-Stufe des Kanals): weder zugestellt noch Fehler.

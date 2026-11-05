@@ -1,3 +1,4 @@
+import { productText } from "./product";
 /**
  * Image-Updates einspielen: der Knopf in der Spalte „Image-Update“ und die Übersicht davor (`GET .../image-update/plan`,
  * nur lesend). Erst „Jetzt einspielen“ legt die Gate-Aktion `container.image_update` an (`POST .../image-update`); wer
@@ -232,7 +233,7 @@ export function UpdatePanel({
             <p>{DOWNTIME_TEXT}</p>
             {plan.auto_rollback && (
               <p className="mt-1">
-                Stürzt die neue Version beim Start ab oder lässt sich der Container nicht erstellen, geht Nodvard Deck in der
+                Stürzt die neue Version beim Start ab oder lässt sich der Container nicht erstellen, geht {productText("Nodvard Deck")} in der
                 Regel automatisch auf die alte zurück.
               </p>
             )}

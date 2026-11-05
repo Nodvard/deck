@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Erzeugt `THIRD_PARTY_LICENSES` im Repo-Root: je ausgeliefertem Fremdpaket Name,
-Version, Lizenz und den vollstaendigen Lizenztext.
+Version, Lizenz und den vollständigen Lizenztext.
 
 Was einbezogen wird
 -------------------
@@ -14,39 +14,39 @@ Was einbezogen wird
   (z. B. uvloop unter Windows: `uvicorn[standard]` verlangt es nur mit dem Marker
   `sys_platform != "win32"`). Das erkennt `platform_skip_reason` an den Requires-Dist-
   Markern der installierten Pakete; solche Pakete gelten als "uebersprungen", nicht als
-  fehlend. Weil die Datei dann nicht vollstaendig erzeugt werden kann, schreibt/druckt
-  das Skript dort nichts (Exit-Code 2); `--check` prueft nur noch die Paketliste.
+  fehlend. Weil die Datei dann nicht vollständig erzeugt werden kann, schreibt/druckt
+  das Skript dort nichts (Exit-Code 2); `--check` prüft nur noch die Paketliste.
   Bringt ein Wheel eine SBOM mit (`*.dist-info/sboms/*.json`, CycloneDX), werden die darin
   genannten einkompilierten Bestandteile (Rust-Crates, statisch gelinktes OpenSSL ...) mit
-  Name, Version, Lizenz und Urheber angehaengt, samt Lizenztext, wenn die SBOM einen hat
+  Name, Version, Lizenz und Urheber angehängt, samt Lizenztext, wenn die SBOM einen hat
   (`_python_sbom_texts`, Ausnahmen in `_SBOM_SKIP`).
   Bibliotheken, die ein Wheel statisch eingebaut hat, ohne ihren Lizenztext beizulegen (uvloop:
   libuv, cffi: libffi, dulwich: einige Rust-Crates, alle Rust-Wheels: die Rust-Standardbibliothek),
-  stehen von Hand gepflegt in `_PY_EMBEDDED`, die Texte unveraendert unter
-  `scripts/embedded_licenses/`. Ein Eintrag gilt nur fuer die dort genannten Paketversionen: aendert
+  stehen von Hand gepflegt in `_PY_EMBEDDED`, die Texte unverändert unter
+  `scripts/embedded_licenses/`. Ein Eintrag gilt nur für die dort genannten Paketversionen: ändert
   sich eine davon in `deploy/constraints.txt`, meldet das Skript (Exit-Code 2) und ein Test, dass
-  der Eintrag zu pruefen ist (`scripts/check_licenses.py` meldet es ebenfalls).
+  der Eintrag zu prüfen ist (`scripts/check_licenses.py` meldet es ebenfalls).
 * npm: die Production-Dependencies des Frontends samt allen transitiven
-  Abhaengigkeiten (aus `frontend/package-lock.json`, keine devDependencies), dazu
+  Abhängigkeiten (aus `frontend/package-lock.json`, keine devDependencies), dazu
   alles, was in die Extension-Bundles (`extensions/*/frontend/dist/index.js`)
   einkompiliert ist oder von ihnen importiert wird, und Build-Werkzeuge, deren Code im
-  Ergebnis landet (`_NPM_BUILD_OUTPUT`, ohne deren Abhaengigkeiten). Lizenztexte kommen aus
+  Ergebnis landet (`_NPM_BUILD_OUTPUT`, ohne deren Abhängigkeiten). Lizenztexte kommen aus
   `frontend/node_modules/<paket>/`: die Lizenzdateien im Paketordner, die in Unterordnern
-  (mitgelieferter Fremdcode, z. B. noVNC `vendor/pako/LICENSE`) und die Lizenzkoepfe der
+  (mitgelieferter Fremdcode, z. B. noVNC `vendor/pako/LICENSE`) und die Lizenzköpfe der
   Dateien aus `_NPM_FILE_NOTICES` (im verkleinerten Bundle fehlen diese Kommentare).
 
-Lizenzdateien, die kein gueltiges UTF-8 sind, werden als Latin-1 gelesen (`_read_text`).
+Lizenzdateien, die kein gültiges UTF-8 sind, werden als Latin-1 gelesen (`_read_text`).
 
-Die Ausgabe ist deterministisch (nach Oekosystem und Name sortiert, Zeilenenden und
+Die Ausgabe ist deterministisch (nach Ökosystem und Name sortiert, Zeilenenden und
 Leerraum normalisiert, keine Zeitstempel).
 
 Benutzung (Repo-Root)
 ---------------------
     python scripts/third_party_licenses.py            # schreibt THIRD_PARTY_LICENSES
-    python scripts/third_party_licenses.py --check    # prueft, ob die Datei aktuell ist
+    python scripts/third_party_licenses.py --check    # prüft, ob die Datei aktuell ist
     python scripts/third_party_licenses.py --print    # nur auf stdout
 
-Exit-Code 0 = ok, 1 = Datei veraltet (nur --check), 2 = Umgebung unvollstaendig
+Exit-Code 0 = ok, 1 = Datei veraltet (nur --check), 2 = Umgebung unvollständig
 (Paket fehlt, falsche Version, node_modules fehlt, Lizenztext nicht gefunden) bzw. Datei
 wegen plattformfremder Pakete hier nicht erzeugbar.
 """
@@ -90,11 +90,11 @@ _CHOSEN_OPTION: dict[tuple[str, str], str] = {
 
 # Lizenzdateien im Paketverzeichnis (npm) bzw. in der dist-info (Python).
 _LICENSE_FILE_RE = re.compile(r"^(licen[cs]e|licen[cs]es|copying|copyright|notice|unlicense)([.\-_].*)?$", re.IGNORECASE)
-# Laenger als das ist es keine Lizenzangabe, sondern ein eingebetteter Lizenztext.
+# Länger als das ist es keine Lizenzangabe, sondern ein eingebetteter Lizenztext.
 _MAX_LICENSE_FIELD = 120
 
-# Plattformabhaengige Unterordner in Wheels (pypdfium2: licenses/data/linux_x64/...):
-# fuer die Beschriftung vereinheitlichen, damit die Ausgabe auf x86_64 und arm64 gleich ist.
+# Plattformabhängige Unterordner in Wheels (pypdfium2: licenses/data/linux_x64/...):
+# für die Beschriftung vereinheitlichen, damit die Ausgabe auf x86_64 und arm64 gleich ist.
 _PLATFORM_DIR_RE = re.compile(r"(^|/)data/[^/]+/")
 
 
@@ -104,7 +104,7 @@ class Package:
     name: str
     version: str
     license: str  # so, wie das Paket es selbst angibt
-    license_source: str  # woher die Angabe stammt (nur fuer Fehlermeldungen)
+    license_source: str  # woher die Angabe stammt (nur für Fehlermeldungen)
     texts: list[tuple[str, str]] = field(default_factory=list)  # (Beschriftung, Text)
     source_url: str = ""
     download_url: str = ""  # genau diese Version im Paketregister (npm: "resolved" aus dem Lockfile)
@@ -122,14 +122,14 @@ class Package:
 
 def normalize_text(text: str) -> str:
     """Zeilenenden vereinheitlichen, Leerraum am Zeilenende und um den Text entfernen --
-    sonst waere die Datei je nach Checkout (CRLF) und Paketstand verschieden."""
+    sonst wäre die Datei je nach Checkout (CRLF) und Paketstand verschieden."""
     lines = [line.rstrip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
     return "\n".join(lines).strip("\n")
 
 
 def decode_text(raw: bytes) -> str:
-    """UTF-8, sonst Latin-1. Aeltere Lizenzdateien sind oft Latin-1 (pypdfium2:
-    FreeType-Zeile "copyright \\xa9 <year>"); mit `errors="replace"` stuende dort ein
+    """UTF-8, sonst Latin-1. Ältere Lizenzdateien sind oft Latin-1 (pypdfium2:
+    FreeType-Zeile "copyright \\xa9 <year>"); mit `errors="replace"` stünde dort ein
     Ersatzzeichen statt des (c)-Zeichens. Latin-1 kann jedes Byte lesen, scheitert also nie."""
     try:
         return raw.decode("utf-8")
@@ -177,7 +177,7 @@ def read_constraints(path: Path = CONSTRAINTS) -> list[tuple[str, str]]:
 
 def python_declared_license(meta) -> tuple[str, str]:
     """(Lizenzangabe, Quelle). Reihenfolge: License-Expression (SPDX), dann das kurze
-    License-Feld, dann die Trove-Classifier (mehrere gelten als UND: alle muessen erlaubt sein)."""
+    License-Feld, dann die Trove-Classifier (mehrere gelten als UND: alle müssen erlaubt sein)."""
     expression = (meta.get("License-Expression") or "").strip()
     if expression:
         return expression, "License-Expression"
@@ -220,7 +220,7 @@ def _python_license_files(dist) -> list[tuple[str, str]]:
     return _dedupe(files)
 
 
-# SBOMs, die NICHT beschreiben, was im Wheel steckt -- mit Begruendung, Schluessel: Paketname nach PEP 503.
+# SBOMs, die NICHT beschreiben, was im Wheel steckt -- mit Begründung, Schlüssel: Paketname nach PEP 503.
 _SBOM_SKIP: dict[str, str] = {
     "pillow": (
         "Pillows eigene SBOM beschreibt die Quell-Optionen, auch nicht gebuendelte (libimagequant, FriBiDi), "
@@ -230,7 +230,7 @@ _SBOM_SKIP: dict[str, str] = {
 }
 
 # Fehlt einer Komponente in der SBOM die Lizenzangabe, aber sie ist eindeutig bekannt.
-# (Name klein, ab welcher Hauptversion) -> (Lizenz, Begruendung, die mit ausgegeben wird)
+# (Name klein, ab welcher Hauptversion) -> (Lizenz, Begründung, die mit ausgegeben wird)
 _SBOM_KNOWN_LICENSES: dict[str, tuple[int, str, str]] = {
     "openssl": (3, "Apache-2.0", "OpenSSL ab Version 3.0; die SBOM nennt keine Lizenz"),
 }
@@ -251,7 +251,7 @@ def _version_major(version: str) -> int:
 
 
 def _sbom_license(component: dict) -> tuple[str, list[str]]:
-    """(Lizenzangabe als ein Ausdruck, [Lizenztexte aus der SBOM]). Mehrere Eintraege gelten
+    """(Lizenzangabe als ein Ausdruck, [Lizenztexte aus der SBOM]). Mehrere Einträge gelten
     gemeinsam (UND), so meint es CycloneDX (Pillow: libjpeg-turbo = IJG und BSD-3-Clause)."""
     parts: list[str] = []
     texts: list[str] = []
@@ -300,7 +300,7 @@ def _sbom_distribution_url(component: dict) -> str:
 
 
 def sbom_texts(sbom: dict, label: str) -> list[tuple[str, str]]:
-    """Ein SBOM-Dokument als Textbloecke: die Liste der Bestandteile, danach je Bestandteil mit
+    """Ein SBOM-Dokument als Textblöcke: die Liste der Bestandteile, danach je Bestandteil mit
     eigenem Lizenztext in der SBOM dieser Text. Deterministisch (sortiert, ohne Zeitstempel,
     Build-Pfade und Architektur -- die stehen nur in Feldern, die hier nicht ausgegeben werden)."""
     rows: dict[tuple[str, str], tuple[str, str]] = {}
@@ -343,7 +343,7 @@ def sbom_texts(sbom: dict, label: str) -> list[tuple[str, str]]:
 
 
 def _python_sbom_texts(dist, package_name: str) -> tuple[list[tuple[str, str]], list[str]]:
-    """(Textbloecke, Probleme) fuer alle SBOMs in der dist-info des Pakets."""
+    """(Textblöcke, Probleme) für alle SBOMs in der dist-info des Pakets."""
     if pep503(package_name) in _SBOM_SKIP:
         return [], []
     found: list[tuple[str, Path]] = []
@@ -389,18 +389,18 @@ class EmbeddedLibrary:
     Lizenztext mitzuliefern."""
 
     package: str  # Python-Paket, in dem sie steckt (Name nach PEP 503); dort stehen auch die Lizenztexte
-    package_version: str  # NUR fuer diese Paketversion geprueft; muss zu deploy/constraints.txt passen
+    package_version: str  # NUR für diese Paketversion geprüft; muss zu deploy/constraints.txt passen
     name: str
     version: str  # leer, wenn sie keine feste Version hat (Rust-Standardbibliothek: kommt mit dem Compiler)
-    license: str  # SPDX-Ausdruck fuer alles, was davon im Binary landet
+    license: str  # SPDX-Ausdruck für alles, was davon im Binary landet
     holders: str  # Urheber laut Quelltext
     source_url: str  # Quelltext genau dieser Version
     evidence: str  # woran man erkennt, dass und in welcher Version sie eingebaut ist
     texts: tuple[tuple[str, str], ...]  # (Beschriftung, Dateiname unter scripts/embedded_licenses/)
-    # Weitere Pakete (Name nach PEP 503, geprueft fuer diese Version), in denen dieselbe Bibliothek steckt.
+    # Weitere Pakete (Name nach PEP 503, geprüft für diese Version), in denen dieselbe Bibliothek steckt.
     # Ihre Texte stehen nur einmal, bei `package`; bei den anderen Paketen steht ein Verweis.
     also_in: tuple[tuple[str, str], ...] = ()
-    note: str = ""  # zusaetzlicher Hinweis fuer den Leser (optional)
+    note: str = ""  # zusätzlicher Hinweis für den Leser (optional)
 
     @property
     def title(self) -> str:
@@ -408,20 +408,20 @@ class EmbeddedLibrary:
 
     @property
     def pins(self) -> tuple[tuple[str, str], ...]:
-        """Alle Pakete samt Version, fuer die der Eintrag gilt (zuerst das Paket mit den Texten)."""
+        """Alle Pakete samt Version, für die der Eintrag gilt (zuerst das Paket mit den Texten)."""
         return ((self.package, self.package_version),) + self.also_in
 
 
 # Wie ein Eintrag entsteht: Quelltext (sdist) des Pakets von PyPI holen, dort die Lizenzdateien der
-# Bibliothek lesen und mit `nm`/`readelf` bzw. `strings` am Wheel pruefen, was davon im Binary steht
+# Bibliothek lesen und mit `nm`/`readelf` bzw. `strings` am Wheel prüfen, was davon im Binary steht
 # (bei Rust-Erweiterungen stehen die Crates mit Name und Version in den Pfaden, z. B. `similar-3.2.0/src/`).
-# Die Texte liegen UNVERAENDERT im Repo (das Skript laeuft offline). Neue Paketversion: pruefen, ob
+# Die Texte liegen UNVERAENDERT im Repo (das Skript läuft offline). Neue Paketversion: prüfen, ob
 # dieselbe Bibliothek in derselben Version drinsteckt; wenn ja, nur `package_version` anheben, sonst
-# Eintrag und Texte erneuern. Ein Eintrag fuer mehrere Pakete (`also_in`) gilt nur, solange JEDE der
+# Eintrag und Texte erneuern. Ein Eintrag für mehrere Pakete (`also_in`) gilt nur, solange JEDE der
 # genannten Paketversionen zu deploy/constraints.txt passt.
 #
 # Nicht eingetragen, weil nichts fehlt: PyYAML (libyaml: gleiche Urheber und MIT-Text wie PyYAML selbst)
-# und argon2-cffi-bindings (libargon2 unter "CC0-1.0 OR Apache-2.0"; mit der CC0-Wahl ist kein Hinweis noetig).
+# und argon2-cffi-bindings (libargon2 unter "CC0-1.0 OR Apache-2.0"; mit der CC0-Wahl ist kein Hinweis nötig).
 # Nicht eingetragen, weil nicht im Binary: memchr, bstr, portable-atomic und libc stehen zwar in der
 # Cargo.lock des dulwich-Quelltexts, tauchen aber nicht als Crate in den Erweiterungen auf (die
 # memchr-Routinen dort stammen aus der Rust-Standardbibliothek).
@@ -569,18 +569,18 @@ _PY_EMBEDDED: tuple[EmbeddedLibrary, ...] = (
 
 
 def embedded_for(package_name: str, table: tuple[EmbeddedLibrary, ...] | None = None) -> list[EmbeddedLibrary]:
-    """Eintraege, deren Texte bei diesem Paket stehen."""
+    """Einträge, deren Texte bei diesem Paket stehen."""
     return [lib for lib in (_PY_EMBEDDED if table is None else table) if lib.package == pep503(package_name)]
 
 
 def embedded_shared_for(package_name: str, table: tuple[EmbeddedLibrary, ...] | None = None) -> list[EmbeddedLibrary]:
-    """Eintraege, die auch in diesem Paket stecken, deren Texte aber bei einem anderen Paket stehen."""
+    """Einträge, die auch in diesem Paket stecken, deren Texte aber bei einem anderen Paket stehen."""
     target = pep503(package_name)
     return [lib for lib in (_PY_EMBEDDED if table is None else table) if any(pkg == target for pkg, _ in lib.also_in)]
 
 
 def embedded_version_problems(name: str, version: str, table: tuple[EmbeddedLibrary, ...] | None = None) -> list[str]:
-    """Der Eintrag gilt nur fuer die Paketversionen, fuer die er geprueft wurde."""
+    """Der Eintrag gilt nur für die Paketversionen, für die er geprüft wurde."""
     target = pep503(name)
     return [
         f"Eintrag für fest eingebaute Bibliothek prüfen: {lib.title} ist für {pkg} "
@@ -594,8 +594,8 @@ def embedded_version_problems(name: str, version: str, table: tuple[EmbeddedLibr
 
 
 def embedded_table_problems(pins: list[tuple[str, str]], table: tuple[EmbeddedLibrary, ...] | None = None) -> list[str]:
-    """Eintraege fuer Pakete, die gar nicht mehr in den constraints stehen (sonst bliebe die Bibliothek
-    fuer immer in der Liste)."""
+    """Einträge für Pakete, die gar nicht mehr in den constraints stehen (sonst bliebe die Bibliothek
+    für immer in der Liste)."""
     pinned = {pep503(pin_name) for pin_name, _ in pins}
     problems = []
     for lib in _PY_EMBEDDED if table is None else table:
@@ -644,7 +644,7 @@ def _embedded_overview(lib: EmbeddedLibrary) -> str:
 def embedded_texts(
     name: str, table: tuple[EmbeddedLibrary, ...] | None = None, directory: Path = EMBEDDED_DIR
 ) -> tuple[list[tuple[str, str]], list[str]]:
-    """(Textbloecke, Probleme) der fest eingebauten Bibliotheken von Paket `name`."""
+    """(Textblöcke, Probleme) der fest eingebauten Bibliotheken von Paket `name`."""
     blocks: list[tuple[str, str]] = []
     problems: list[str] = []
     for lib in embedded_for(name, table):
@@ -674,18 +674,18 @@ def _python_source_url(meta) -> str:
 
 
 def platform_skip_reason(name: str, environment: dict[str, str] | None = None) -> str:
-    """Nicht-leerer Text, wenn `name` auf dieser Plattform gar nicht installiert wuerde.
+    """Nicht-leerer Text, wenn `name` auf dieser Plattform gar nicht installiert würde.
 
-    Begruendung der Loesung: Eine feste Liste "plattformgebundener Pakete" wuerde veralten und
-    koennte ein wirklich fehlendes Paket verdecken. Stattdessen wird gefragt, ob irgendein
+    Begründung der Lösung: Eine feste Liste "plattformgebundener Pakete" würde veralten und
+    könnte ein wirklich fehlendes Paket verdecken. Stattdessen wird gefragt, ob irgendein
     installiertes Paket `name` per `Requires-Dist` verlangt -- und ob JEDE dieser Anforderungen
     hier zu False ausgewertet wird (Marker wie `sys_platform != "win32"`). Ein Paket, das niemand
     verlangt oder dessen Marker hier zutrifft, bleibt "fehlt" (Umgebung kaputt).
 
-    Extras: `uvloop ; extra == "standard" and sys_platform != "win32"` haengt an einem Extra,
-    das wir nicht kennen. Darum wird der Marker fuer jedes Extra des verlangenden Pakets (und
+    Extras: `uvloop ; extra == "standard" and sys_platform != "win32"` hängt an einem Extra,
+    das wir nicht kennen. Darum wird der Marker für jedes Extra des verlangenden Pakets (und
     ohne Extra) ausgewertet; trifft er in einem Fall zu, gilt das Paket als verlangt.
-    `environment` ueberschreibt die Umgebungswerte (Tests: {"sys_platform": "win32"}).
+    `environment` überschreibt die Umgebungswerte (Tests: {"sys_platform": "win32"}).
     """
     target = pep503(name)
     base = {**default_environment(), **(environment or {})}
@@ -751,9 +751,9 @@ def collect_python(pins: list[tuple[str, str]], environment: dict[str, str] | No
 # ---------------------------------------------------------------------------
 
 # Manche npm-Pakete nennen ihre Lizenz nur in package.json/README und liefern keine
-# Lizenzdatei mit (z. B. react-remove-scroll-bar). Fuer den haeufigsten Fall (MIT) wird
-# dann der Standardtext ergaenzt und als solcher gekennzeichnet; fuer jede andere
-# Lizenz bleibt es ein Problem, das der Mensch klaeren muss.
+# Lizenzdatei mit (z. B. react-remove-scroll-bar). Für den häufigsten Fall (MIT) wird
+# dann der Standardtext ergänzt und als solcher gekennzeichnet; für jede andere
+# Lizenz bleibt es ein Problem, das der Mensch klären muss.
 _MIT_STANDARD_TEXT = """Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
@@ -788,7 +788,7 @@ def load_lock(path: Path = LOCKFILE) -> dict[str, dict]:
 
 
 def _resolve(packages: dict[str, dict], from_path: str, dep: str) -> str | None:
-    """Wie Node: erst <paket>/node_modules/<dep>, dann jeweils eine Ebene hoeher."""
+    """Wie Node: erst <paket>/node_modules/<dep>, dann jeweils eine Ebene höher."""
     base = from_path
     while True:
         candidate = f"{base}/node_modules/{dep}" if base else f"node_modules/{dep}"
@@ -856,7 +856,7 @@ def npm_root_names(repo: Path = REPO_ROOT) -> set[str]:
 
 
 # Build-Werkzeuge (devDependencies), deren eigener Code im ausgelieferten Frontend landet. Nur das
-# Paket selbst, NICHT seine Abhaengigkeiten (die laufen nur beim Bauen). Wert: was davon im Bundle steckt.
+# Paket selbst, NICHT seine Abhängigkeiten (die laufen nur beim Bauen). Wert: was davon im Bundle steckt.
 _NPM_BUILD_OUTPUT: dict[str, str] = {
     "tailwindcss": (
         "Build-Werkzeug. Im ausgelieferten CSS stecken seine Grundstile (Preflight, `@tailwind base`, "
@@ -866,18 +866,18 @@ _NPM_BUILD_OUTPUT: dict[str, str] = {
 }
 
 # Dateien mit EIGENEM Lizenzkopf (fremder Code im Paket oder weitere Urheber), die im Bundle landen.
-# Das verkleinerte Bundle enthaelt keine Kommentare mehr, deshalb stehen die Koepfe hier. Ermittelt mit
+# Das verkleinerte Bundle enthält keine Kommentare mehr, deshalb stehen die Köpfe hier. Ermittelt mit
 # einem Build mit Quellkarten (`npx vite build --sourcemap`, Liste `sources`): genau diese Dateien
-# werden gebuendelt. Fehlt eine Datei nach einem Update, meldet das Skript ein Problem.
+# werden gebündelt. Fehlt eine Datei nach einem Update, meldet das Skript ein Problem.
 _NPM_FILE_NOTICES: dict[str, tuple[str, ...]] = {
-    # DES fuer die VNC-Anmeldung, aus Acme.Crypto/Flashlight-VNC uebernommen (BSD-artige Lizenzen).
+    # DES für die VNC-Anmeldung, aus Acme.Crypto/Flashlight-VNC übernommen (BSD-artige Lizenzen).
     "@novnc/novnc": ("core/crypto/des.js", "core/decoders/tight.js"),
     # Teile aus jslinux (Fabrice Bellard) und aus VS Code (Microsoft, MIT).
     "@xterm/xterm": ("lib/xterm.mjs",),
     "@xterm/addon-fit": ("lib/addon-fit.mjs",),
     # Liefert keine Lizenzdatei; der Kopf nennt Urheber und Lizenz (und den Markenhinweis "QR Code").
     "qrcode-generator": ("dist/qrcode.mjs",),
-    # Enthaelt einen Ausschnitt aus Modernizr (MIT).
+    # Enthält einen Ausschnitt aus Modernizr (MIT).
     "react-dom": ("cjs/react-dom.production.min.js",),
 }
 
@@ -957,7 +957,7 @@ def _npm_repo_url(data: dict) -> str:
 
 def collect_npm(repo: Path = REPO_ROOT, node_modules: Path | None = None, with_texts: bool = True) -> list[Package]:
     """Die ausgelieferten npm-Pakete. Name, Version und Lizenzangabe kommen aus dem
-    Lockfile (umgebungsunabhaengig); die Lizenztexte aus node_modules (nur `with_texts`)."""
+    Lockfile (umgebungsunabhängig); die Lizenztexte aus node_modules (nur `with_texts`)."""
     node_modules = node_modules or (repo / "frontend" / "node_modules")
     lock = load_lock(repo / "frontend" / "package-lock.json")
     paths, problems = npm_closure(lock, npm_root_names(repo))
@@ -1026,8 +1026,8 @@ _MPL_NOTE = (
 )
 
 # Je MPL-Komponente: Adresse des Quelltexts GENAU dieser Version (`{version}` wird ersetzt, leer =
-# keine bekannt) und wo die Dateien im Image stecken. MPL-2.0 Abschnitt 3.2: wer die ausfuehrbare
-# Form weitergibt (hier: gebuendelt und verkleinert), muss sagen, wie man an den Quelltext kommt.
+# keine bekannt) und wo die Dateien im Image stecken. MPL-2.0 Abschnitt 3.2: wer die ausführbare
+# Form weitergibt (hier: gebündelt und verkleinert), muss sagen, wie man an den Quelltext kommt.
 _MPL_DETAILS: dict[tuple[str, str], tuple[str, str]] = {
     ("npm", "@novnc/novnc"): (
         "https://github.com/novnc/noVNC/tree/v{version}",
@@ -1175,8 +1175,8 @@ def render(python_packages: list[Package], npm_packages: list[Package]) -> str:
 
 
 def parse_index(text: str) -> dict[str, list[tuple[str, str]]]:
-    """Liest den Inhaltsabschnitt der Datei zurueck: {"Python": [(name, version)], "npm": [...]}.
-    Damit prueft der Test, ob die eingecheckte Datei zu constraints/Lockfile passt."""
+    """Liest den Inhaltsabschnitt der Datei zurück: {"Python": [(name, version)], "npm": [...]}.
+    Damit prüft der Test, ob die eingecheckte Datei zu constraints/Lockfile passt."""
     result: dict[str, list[tuple[str, str]]] = {}
     current = None
     for line in text.replace("\r\n", "\n").split("\n"):
@@ -1251,8 +1251,8 @@ def main(argv: list[str] | None = None) -> int:
         names = ", ".join(f"{pkg.name} {pkg.version}" for pkg in skipped)
         print(f"Übersprungen (nicht für diese Plattform): {names}")
         if args.check:
-            # Vollvergleich geht nicht (Lizenztexte der uebersprungenen Pakete fehlen); die Paketliste
-            # der Datei wird trotzdem gegen constraints/Lockfile geprueft, den Rest macht Linux/CI.
+            # Vollvergleich geht nicht (Lizenztexte der übersprungenen Pakete fehlen); die Paketliste
+            # der Datei wird trotzdem gegen constraints/Lockfile geprüft, den Rest macht Linux/CI.
             current = args.output.read_text(encoding="utf-8") if args.output.is_file() else ""
             if parse_index(current) != {k: list(v) for k, v in expected_index().items()}:
                 print(f"{args.output.name} ist veraltet. Neu erzeugen mit: python scripts/third_party_licenses.py (unter Linux)", file=sys.stderr)

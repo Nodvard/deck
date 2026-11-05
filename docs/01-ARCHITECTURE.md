@@ -226,13 +226,16 @@ Das Frontend schreibt die Farben beim Start in CSS-Custom-Properties auf `:root`
 Kein Rebuild, kein Neustart, keine Umgebungsvariable. Logo und Favicon liegen als Upload im
 Daten-Volume (`branding/`); andere Adressen nimmt `PUT /branding` dafür nur als eigenen Pfad oder
 `data:image/…` an. Skripte lädt die App-Seite nur vom eigenen Server: `script-src 'self'` plus die Prüfsumme der
-eingebetteten Import-Map aus `index.html` gilt fest (`Content-Security-Policy`, auch auf der Antwort `304`), es läuft
+eingebetteten Import-Map aus `index.html` gilt fest (`Content-Security-Policy`), es läuft
 also kein `javascript:`-Link, kein `onclick=` aus eingeschleustem HTML und kein `eval`. Die Prüfsumme entsteht beim
 Ausliefern und wird neu berechnet, sobald sich `index.html` ändert; ein neues eingebettetes Skript braucht also keine
-Pflege. Alles andere kommt ebenfalls nur vom eigenen Server (`default-src 'self'`, auch Verbindungen und WebSockets);
+Pflege. Alles andere kommt ebenfalls nur vom eigenen Server (`default-src 'self'`); `connect-src` erlaubt die eigene API
+und WebSockets nur an der eigenen Adresse;
 Bilder dürfen zusätzlich `data:` und `blob:` sein (`img-src 'self' data: blob:`), Rahmen nur `blob:` (die
-PDF-Vorschau in Dokumente). Stile brauchen `'unsafe-inline'`, weil xterm (Konsole) zur Laufzeit `<style>`-Elemente
-anlegt; Bilder und Schriften aus fremden Adressen sind trotzdem gesperrt. JSON-Antworten ohne eigene Regeln bekommen
+PDF-Vorschau in Dokumente). Die CSP wird ohne Wildcards und ohne `unsafe-inline` erzwungen: Dynamische Stile und
+xterm-Stylesheets erhalten eine frische Nonce je nicht cachebarer HTML-Antwort, Stilattribute sind gesperrt, Schriften
+kommen nur vom eigenen Server; `NODVARD_DECK_CSP_LEGACY=1` aktiviert im Notfall die bisherige Stilfreigabe mit Logwarnung.
+JSON-Antworten ohne eigene Regeln bekommen
 `default-src 'none'`. Was das für Erweiterungs-Bundles heißt, steht in
 [02-EXTENSION-API.md](02-EXTENSION-API.md) unter „Frontend-Bundle laden“. Links aus Daten von
 Erweiterungen (App-Kacheln, Befehlspalette, Widgets, Erweiterungsseiten) nimmt die Oberfläche nur mit `http:` oder
@@ -283,8 +286,6 @@ des Moduls Docker braucht es keine Liste: Die Prüfung auf alte Namen verbietet 
 |---|---|---|
 | Erweiterungs-Pakete `nodvard_deck_ext_<id>` | `lattice_ext_<id>` | Kein Alias für die eingebauten (der `entrypoint` kommt frisch aus `extension.toml`); fremde Pakete mit altem Namen laden weiter |
 | Umgebungsvariablen `NODVARD_DECK_*` | `LATTICE_*` | Rückfall, wenn die neue nicht gesetzt ist; nur noch übergangsweise (spätestens bis 1.0), mit Hinweis für den Inhaber in der Übersicht |
-| Refresh-Cookie `nodvard_deck_refresh` | `lattice_refresh` | Beide werden geschrieben, gelesen und beim Abmelden gelöscht ([04-API](04-API.md)) |
-| Image, Compose-Dienst, Container `nodvard-deck`, `deploy-nodvard-deck-1` | `lattice`, `deploy-lattice-1` | Beim ersten Deploy übernommen ([deploy/README](../deploy/README.md)) |
 
 **Entfernt mit 0.12 (vor dem Versprechen für 1.0):**
 
@@ -293,8 +294,10 @@ des Moduls Docker braucht es keine Liste: Die Prüfung auf alte Namen verbietet 
 | Python-Paket `nodvard_deck` | `lattice` | `import lattice` und `python -m lattice.…` gehen nicht mehr. Ein Image von vor der Umbenennung kennt dagegen nur den alten Namen ([deploy/README](../deploy/README.md), Rückweg) |
 | SDK `nodvard_sdk`, `NodvardExtension`, `NodvardError` | `lattice_sdk`, `LatticeExtension`, `LatticeError` | Eine Erweiterung, die einen alten Paket- oder Klassennamen importiert, lädt nicht. Ist sie eingeschaltet, nennt die Erweiterungsliste den Grund und den neuen Namen, sonst kommt derselbe Grund beim Einschalten (`ext/old_names.py`) |
 | Entry-Point-Gruppe `nodvard_deck.extensions` | `lattice.extensions` | Ein Paket, das sich nur unter der alten Gruppe anmeldet, wird nicht geladen. Den Grund nennt das Protokoll und, wenn die Erweiterung eingeschaltet war, ihre Zeile in der Liste |
+| Refresh-Cookie `nodvard_deck_refresh` | `lattice_refresh` | Wird weder gelesen noch geschrieben; wer nur das alte hatte, meldet sich einmal neu an ([04-API](04-API.md)) |
 | Frontend: `window.__nodvardDeck`, Ereignisse `nodvard-deck:*`, CSS `.nodvard-deck-focus`, Import-Map `/nodvard-deck-shim/` | `window.__lattice`, `lattice:*`, `.lattice-focus`, `/lattice-shim/` | Bundles mit einem älteren UI-Kit, das nur die alten Namen kennt, finden die Kern-Shell nicht ([02-EXTENSION-API](02-EXTENSION-API.md)); ein alter Tab braucht einmal „Seite neu laden“ |
 | Browser-Speicher `nodvard-deck.*` | `lattice.*` | Wird nicht mehr übernommen; die Übernahme lief seit der Umbenennung bei jedem Start |
+| Image, Compose-Dienst, Container `nodvard-deck`, `deploy-nodvard-deck-1` | `lattice`, `deploy-lattice-1` | Bei einem Stand von vor 0.6 brechen `deploy_pi.sh`, `pi_switch.sh`, `backup.sh` und `restore.sh` ab und ändern nichts; den Umstieg liefert nur noch 0.11 aus ([deploy/README](../deploy/README.md#stand-von-vor-06)) |
 
 **Bleiben bewusst:**
 

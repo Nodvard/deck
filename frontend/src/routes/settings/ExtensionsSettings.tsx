@@ -1,6 +1,6 @@
 /**
- * Erweiterungen ein- und ausschalten. Ausgeschaltete Module verschwinden aus Menue,
- * Uebersicht und Suche; ihre Daten bleiben erhalten.
+ * Erweiterungen ein- und ausschalten. Ausgeschaltete Module verschwinden aus Menü,
+ * Übersicht und Suche; ihre Daten bleiben erhalten.
  */
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Settings2 } from "lucide-react";
@@ -45,9 +45,9 @@ interface ExtensionRow {
   stage?: string;
   /** Frühere Kennungen einer umbenannten Erweiterung (stehen in eingelesenen Servern, die älter sind als die Umbenennung). */
   legacy_ids?: string[];
-  /** Mit Nodvard Deck ausgeliefert: die eigene `version` wird bis zur 1.0 nicht gepflegt, es gilt die Programmversion. Fehlt bei aelteren Servern. */
+  /** Mit Nodvard Deck ausgeliefert: die eigene `version` wird bis zur 1.0 nicht gepflegt, es gilt die Programmversion. Fehlt bei älteren Servern. */
   bundled?: boolean;
-  /** Programmversion (mitgeliefert) oder eigene Version (nachinstalliert). Fehlt bei aelteren Servern. */
+  /** Programmversion (mitgeliefert) oder eigene Version (nachinstalliert). Fehlt bei älteren Servern. */
   display_version?: string | null;
   /** Nur bei eingeschalteten Modulen: Pflichtangaben fehlen oder der letzte Test schlug fehl. */
   needs_setup?: boolean;

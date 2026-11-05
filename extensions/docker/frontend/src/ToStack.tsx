@@ -1,3 +1,4 @@
+import { productText } from "./product";
 /** Einen ohne Compose gestarteten Container in einen Stack umwandeln: Vorschau der Datei, Gründe dagegen, dann über die Freigabe. */
 import { useEffect, useState } from "react";
 
@@ -40,7 +41,7 @@ export function ToStackPanel({ hostId, container, onDone }: { hostId: string; co
   async function convert(folder: string) {
     const risky = plan?.warnings.length ? ` Riskant: ${plan.warnings.join(" ")}` : "";
     const question = `„${container}“ in einen Stack in ${folder} umwandeln? Der Container wird gestoppt und aus der neuen Compose-Datei neu erstellt; `
-      + `Volumes und Ordner bleiben. Klappt das, löscht Deck den alten Container; was nur in ihm lag und nicht in einem Volume oder Ordner, ist `
+      + productText(`Volumes und Ordner bleiben. Klappt das, löscht Deck den alten Container; was nur in ihm lag und nicht in einem Volume oder Ordner, ist `)
       + `dann weg. Klappt es nicht, startet der alte wieder.${risky}`;
     if (!(await deck().confirmDialog(question, { confirmLabel: "Umwandeln" }))) return;
     setBusy(true);
@@ -70,9 +71,9 @@ export function ToStackPanel({ hostId, container, onDone }: { hostId: string; co
   return (
     <div className="mt-2 flex flex-col gap-2 text-xs" data-testid={`to-stack-${container}`}>
       <p className="opacity-70">
-        Deck schreibt für diesen Container eine Compose-Datei{plan.folder ? <> nach <span className="break-all font-mono">{plan.folder}</span></> : null},
+        {productText("Deck")} schreibt für diesen Container eine Compose-Datei{plan.folder ? <> nach <span className="break-all font-mono">{plan.folder}</span></> : null},
         stoppt ihn und startet ihn daraus neu. Volumes und Ordner bleiben dieselben; danach lässt er sich wie jeder Stack bearbeiten und aktualisieren.
-        Den alten Container löscht Deck, sobald der neue läuft; was nur in ihm lag und nicht in einem Volume oder Ordner, geht dabei verloren.
+        Den alten Container löscht {productText("Deck")}, sobald der neue läuft; was nur in ihm lag und nicht in einem Volume oder Ordner, geht dabei verloren.
       </p>
       {plan.compose && (
         <pre className="max-h-64 overflow-auto rounded bg-black/60 p-2 font-mono text-[11px] leading-snug" aria-label="Compose-Datei des neuen Stacks">{plan.compose}</pre>

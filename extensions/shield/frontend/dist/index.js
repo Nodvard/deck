@@ -1,3 +1,69 @@
+// ../../_shared/frontend/src/csp.ts
+function cspNonce() {
+  return document.querySelector('meta[name="csp-nonce"]')?.content ?? "";
+}
+function createStyle() {
+  const element = document.createElement("style");
+  element.nonce = cspNonce();
+  return element;
+}
+var UNITLESS = /* @__PURE__ */ new Set([
+  "animationIterationCount",
+  "aspectRatio",
+  "columnCount",
+  "fillOpacity",
+  "flex",
+  "flexGrow",
+  "flexShrink",
+  "fontWeight",
+  "gridArea",
+  "gridColumn",
+  "gridColumnEnd",
+  "gridColumnStart",
+  "gridRow",
+  "gridRowEnd",
+  "gridRowStart",
+  "lineHeight",
+  "opacity",
+  "order",
+  "orphans",
+  "scale",
+  "strokeDasharray",
+  "strokeDashoffset",
+  "strokeMiterlimit",
+  "strokeOpacity",
+  "strokeWidth",
+  "tabSize",
+  "widows",
+  "zIndex",
+  "zoom"
+]);
+function styleRef(values, ref) {
+  let style;
+  return (node) => {
+    style?.remove();
+    style = void 0;
+    if (node && values) {
+      const id = Array.from(crypto.getRandomValues(new Uint32Array(4))).join("-");
+      node.setAttribute("data-deck-style", id);
+      style = createStyle();
+      document.head.appendChild(style);
+      const sheet = style.sheet;
+      const selector = `${node === document.documentElement ? ":root" : ""}[data-deck-style="${id}"]`;
+      sheet.insertRule(`${selector} {}`);
+      const declaration = sheet.cssRules[0].style;
+      for (const [key, value] of Object.entries(values)) {
+        if (value == null || typeof value === "boolean") continue;
+        const name = key.startsWith("--") ? key : key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`).replace(/^ms-/, "-ms-");
+        const unit = typeof value === "number" && value !== 0 && !key.startsWith("--") && !UNITLESS.has(key) ? "px" : "";
+        declaration.setProperty(name, `${value}${unit}`);
+      }
+    }
+    if (typeof ref === "function") ref(node);
+    else if (ref) ref.current = node;
+  };
+}
+
 // src/SocPage.tsx
 import { useCallback as useCallback6, useContext as useContext4, useEffect as useEffect8, useMemo as useMemo2, useRef as useRef3, useState as useState9 } from "react";
 
@@ -149,6 +215,14 @@ function Notice({ text, kind = "error", onClose }) {
     onClose && /* @__PURE__ */ jsx("button", { type: "button", "aria-label": "Hinweis schlie\xDFen", onClick: onClose, className: "opacity-60 hover:opacity-100", children: /* @__PURE__ */ jsx(Icon, { name: "x", size: 14 }) })
   ] });
 }
+
+// ../../_shared/frontend/src/cardTable.ts
+var CARD_TABLE = "block w-full text-sm sm:table";
+var CARD_HEAD = "hidden sm:table-header-group";
+var CARD_BODY = "block sm:table-row-group sm:divide-y sm:divide-white/5";
+var CARD_ROW = "relative mb-3 flex flex-col rounded-lg border border-white/10 p-3 sm:static sm:mb-0 sm:table-row sm:rounded-none sm:border-0 sm:p-0";
+var CARD_CELL_PLAIN = "block empty:hidden sm:table-cell sm:empty:table-cell";
+var CARD_CELL = `${CARD_CELL_PLAIN} before:mb-0.5 before:block before:text-xs before:opacity-60 before:content-[attr(data-label)] sm:before:hidden`;
 
 // ../../_shared/frontend/src/lifecycle.ts
 import { useEffect, useRef } from "react";
@@ -1971,7 +2045,7 @@ function UpdatesTab({ canManage }) {
       const openNote = notes.find((n) => `${h.host_id}:${n.key}` === noteOpen);
       return /* @__PURE__ */ jsxs7("div", { className: "panel px-4 py-3", "data-testid": `updates-${h.host_id}`, children: [
         /* @__PURE__ */ jsxs7("div", { className: "flex flex-wrap items-center gap-3", children: [
-          /* @__PURE__ */ jsxs7("div", { className: "min-w-0 flex-1", children: [
+          /* @__PURE__ */ jsxs7("div", { className: "min-w-0 flex-[1_1_14rem]", children: [
             /* @__PURE__ */ jsxs7("p", { className: "flex flex-wrap items-center gap-2 text-sm font-medium", children: [
               h.host_name,
               /* @__PURE__ */ jsx8(Badge, { tone: state.tone, children: state.label }),
@@ -2181,7 +2255,7 @@ function WatchTemplates() {
         message && /* @__PURE__ */ jsx9("p", { role: message.ok ? "status" : "alert", className: message.ok ? "text-emerald-300" : "text-red-300", children: message.text }),
         data && data.suggestions.length === 0 && /* @__PURE__ */ jsx9("p", { className: "text-white/55", children: "Keine Freigaben und keine Nextcloud gefunden. Ohne root bzw. \u201Esudo\u201C ohne Passwort fehlt auf einem Server meist die Nextcloud." }),
         data && data.suggestions.length > 0 && /* @__PURE__ */ jsx9("ul", { className: "divide-y divide-white/[0.06]", children: data.suggestions.map((s) => /* @__PURE__ */ jsxs8("li", { className: "flex flex-wrap items-center gap-2 py-2", children: [
-          /* @__PURE__ */ jsxs8("div", { className: "min-w-0 flex-1", children: [
+          /* @__PURE__ */ jsxs8("div", { className: "min-w-0 flex-[1_1_14rem]", children: [
             /* @__PURE__ */ jsx9("p", { className: "break-all font-mono text-xs", children: s.path }),
             /* @__PURE__ */ jsxs8("p", { className: "text-xs text-white/50", children: [
               s.kinds.map((k) => KIND_LABEL[k] ?? k).join(", "),
@@ -2233,6 +2307,8 @@ function auditStartNotice(r) {
   if (fresh.length) parts.push(`${AUDIT_DURATION_HINT} Das Ergebnis erscheint dann unter \u201EH\xE4rtung\u201C.`);
   return { kind: "info", text: parts.join(" ") };
 }
+var RPM_OSTREE_HINT = "unver\xE4nderliches System (rpm-ostree): Installation von Hand, dann Neustart";
+var RPM_OSTREE_INSTALL = "rpm-ostree install clamav clamav-update lynis fail2ban";
 var TABS = [
   { id: "overview", label: "\xDCbersicht" },
   { id: "scans", label: "Scans" },
@@ -2367,7 +2443,7 @@ function HardeningCell({ host: h }) {
           " Warn."
         ] })
       ] }),
-      /* @__PURE__ */ jsx10("div", { className: "mt-1 h-1.5 rounded-full bg-white/10", children: /* @__PURE__ */ jsx10("div", { className: "h-1.5 rounded-full", style: { width: `${shown.hardening_index}%`, background: shown.hardening_index >= 70 ? "rgb(var(--emerald-400))" : "rgb(var(--amber-400))" } }) })
+      /* @__PURE__ */ jsx10("div", { className: "mt-1 h-1.5 rounded-full bg-white/10", children: /* @__PURE__ */ jsx10("div", { className: "h-1.5 rounded-full", ref: styleRef({ width: `${shown.hardening_index}%`, background: shown.hardening_index >= 70 ? "rgb(var(--emerald-400))" : "rgb(var(--amber-400))" }) }) })
     ] }),
     failed && /* @__PURE__ */ jsxs9("p", { className: `${shown ? "mt-1 " : ""}text-xs text-amber-300`, title: failed.error ?? void 0, "data-testid": "audit-failed", children: [
       "Letztes Audit fehlgeschlagen (",
@@ -2449,7 +2525,7 @@ function ScoreRing({ score, reasons = [] }) {
     ] }),
     /* @__PURE__ */ jsxs9("div", { className: "min-w-0 flex-1 basis-48", children: [
       /* @__PURE__ */ jsx10("p", { className: "text-xs text-white/45", children: "Schutzwert" }),
-      /* @__PURE__ */ jsx10("p", { className: "text-lg font-semibold", style: { color: tone }, children: label }),
+      /* @__PURE__ */ jsx10("p", { className: "text-lg font-semibold", ref: styleRef({ color: tone }), children: label }),
       /* @__PURE__ */ jsx10("p", { className: "mt-1 max-w-[16rem] text-xs text-white/45", children: "Berechnet aus: Virenscanner installiert (ClamAV), aktuelle Signaturen und Scans, offene Funde, wie sicher die Server eingestellt sind (H\xE4rtung), offene Sicherheitsupdates, Fail2ban, SSH-Einstellungen und offene Sicherheitsereignisse." }),
       reasons.length > 0 && /* @__PURE__ */ jsx10("ul", { className: "mt-2 max-w-[20rem] space-y-0.5 text-xs text-amber-200/80", "data-testid": "score-reasons", "aria-label": "Was den Schutzwert senkt", children: reasons.map((r2) => /* @__PURE__ */ jsxs9("li", { children: [
         "\u2013 ",
@@ -2701,6 +2777,7 @@ function nextStep(hosts, openThreats, canManage, on) {
   const reachable = hosts.filter((h) => h.reachable !== false);
   const noClam = reachable.find((h) => !h.clamav_installed);
   if (noClam) {
+    if (noClam.rpm_ostree) return { text: `\u201E${noClam.host_name}\u201C: ${RPM_OSTREE_HINT}. Auf dem Server ausf\xFChren: ${RPM_OSTREE_INSTALL}. Danach neu starten.` };
     const more = reachable.filter((h) => !h.clamav_installed).length - 1;
     return {
       text: `Installiere ClamAV (den Virenscanner) auf \u201E${noClam.host_name}\u201C${more > 0 ? ` und ${more} weiteren Server${more > 1 ? "n" : ""}` : ""}. Ohne ihn wird dort nichts gepr\xFCft.`,
@@ -2716,6 +2793,7 @@ function nextStep(hosts, openThreats, canManage, on) {
   }
   const noLynis = reachable.find((h) => !h.lynis_installed);
   if (noLynis) {
+    if (noLynis.rpm_ostree) return { text: `\u201E${noLynis.host_name}\u201C: ${RPM_OSTREE_HINT}. Auf dem Server ausf\xFChren: ${RPM_OSTREE_INSTALL}. Danach neu starten.` };
     return {
       text: `Installiere Lynis auf \u201E${noLynis.host_name}\u201C. Es pr\xFCft, wie sicher der Server eingestellt ist (H\xE4rtung).`,
       action: canManage ? { label: "Lynis installieren", run: () => on.install(noLynis, "lynis"), busyKey: installKey(noLynis.host_id, "lynis") } : void 0
@@ -2823,7 +2901,7 @@ function OverviewTab({
       const host = overview.hosts.find((h) => h.host_id === a.host_id);
       return /* @__PURE__ */ jsxs9("li", { className: "flex flex-wrap items-center gap-3 px-5 py-3 text-sm", children: [
         /* @__PURE__ */ jsx10("span", { "aria-hidden": "true", className: `h-2 w-2 flex-none rounded-full ${a.tone === "warn" ? "bg-amber-300" : "bg-white/40"}` }),
-        /* @__PURE__ */ jsxs9("div", { className: "min-w-0 flex-1", children: [
+        /* @__PURE__ */ jsxs9("div", { className: "min-w-0 flex-[1_1_14rem]", "data-testid": `attention-text-${a.kind}-${a.host_id}`, children: [
           /* @__PURE__ */ jsx10("p", { className: "break-words font-medium", children: a.title }),
           /* @__PURE__ */ jsx10("p", { className: "text-xs text-white/50", children: a.hint })
         ] }),
@@ -2876,23 +2954,31 @@ function OverviewTab({
       " ",
       deck().hasPermission("hosts.write") ? /* @__PURE__ */ jsx10("a", { href: "/settings/hosts", className: "underline underline-offset-2 hover:text-white", children: "Einstellungen \u2192 Server & Zug\xE4nge" }) : "Einstellungen \u2192 Server & Zug\xE4nge",
       "."
-    ] }) : /* @__PURE__ */ jsx10("div", { className: "overflow-x-auto", children: /* @__PURE__ */ jsxs9("table", { className: "w-full text-left text-sm", children: [
-      /* @__PURE__ */ jsx10("thead", { className: "text-xs text-white/40", children: /* @__PURE__ */ jsxs9("tr", { className: "border-b border-white/[0.06]", children: [
-        /* @__PURE__ */ jsx10("th", { className: "px-5 py-2.5 font-medium", children: "Server" }),
-        /* @__PURE__ */ jsx10("th", { className: "px-3 py-2.5 font-medium", title: "ClamAV ist der Virenscanner auf dem Server", children: "Virenschutz" }),
-        /* @__PURE__ */ jsx10("th", { className: "px-3 py-2.5 font-medium", children: "Letzter Scan" }),
-        /* @__PURE__ */ jsx10("th", { className: "px-3 py-2.5 font-medium", title: "Wie sicher der Server eingestellt ist (gepr\xFCft von Lynis), 0 bis 100", children: "H\xE4rtung" }),
-        /* @__PURE__ */ jsx10("th", { className: "px-3 py-2.5 font-medium" })
+    ] }) : /* @__PURE__ */ jsx10("div", { className: "overflow-x-auto p-3 sm:p-0", children: /* @__PURE__ */ jsxs9("table", { role: "table", className: `${CARD_TABLE} text-left`, children: [
+      /* @__PURE__ */ jsx10("thead", { role: "rowgroup", className: `${CARD_HEAD} text-xs text-white/40`, children: /* @__PURE__ */ jsxs9("tr", { role: "row", className: "border-b border-white/[0.06]", children: [
+        /* @__PURE__ */ jsx10("th", { role: "columnheader", className: "px-5 py-2.5 font-medium", children: "Server" }),
+        /* @__PURE__ */ jsx10("th", { role: "columnheader", className: "px-3 py-2.5 font-medium", title: "ClamAV ist der Virenscanner auf dem Server", children: "Virenschutz" }),
+        /* @__PURE__ */ jsx10("th", { role: "columnheader", className: "px-3 py-2.5 font-medium", children: "Letzter Scan" }),
+        /* @__PURE__ */ jsx10("th", { role: "columnheader", className: "px-3 py-2.5 font-medium", title: "Wie sicher der Server eingestellt ist (gepr\xFCft von Lynis), 0 bis 100", children: "H\xE4rtung" }),
+        /* @__PURE__ */ jsx10("th", { role: "columnheader", className: "px-3 py-2.5 font-medium", children: /* @__PURE__ */ jsx10("span", { className: "sr-only", children: "Aktionen" }) })
       ] }) }),
-      /* @__PURE__ */ jsx10("tbody", { className: "divide-y divide-white/[0.04]", children: hosts.map((h) => /* @__PURE__ */ jsxs9("tr", { "data-testid": `host-${h.host_id}`, children: [
-        /* @__PURE__ */ jsxs9("td", { className: "px-5 py-3", children: [
+      /* @__PURE__ */ jsx10("tbody", { role: "rowgroup", className: CARD_BODY, children: hosts.map((h) => /* @__PURE__ */ jsxs9("tr", { role: "row", "data-testid": `host-${h.host_id}`, className: CARD_ROW, children: [
+        /* @__PURE__ */ jsxs9("td", { role: "cell", className: `${CARD_CELL_PLAIN} pb-1 sm:px-5 sm:py-3`, children: [
           /* @__PURE__ */ jsx10("p", { className: "font-medium", children: h.host_name }),
+          h.rpm_ostree && h.reachable !== false && (!h.clamav_installed || !h.lynis_installed) && /* @__PURE__ */ jsxs9("div", { className: "mt-1 text-xs text-amber-300", children: [
+            /* @__PURE__ */ jsx10("p", { children: RPM_OSTREE_HINT }),
+            /* @__PURE__ */ jsxs9("p", { children: [
+              "Auf dem Server ausf\xFChren: ",
+              /* @__PURE__ */ jsx10("code", { className: "break-all", children: RPM_OSTREE_INSTALL }),
+              ". Danach neu starten."
+            ] })
+          ] }),
           h.reachable === false && /* @__PURE__ */ jsxs9("p", { className: "text-xs text-amber-300", children: [
             "nicht erreichbar",
             h.error ? ` \u2013 ${h.error}` : ""
           ] })
         ] }),
-        /* @__PURE__ */ jsx10("td", { className: "px-3 py-3", children: h.clamav_installed ? /* @__PURE__ */ jsxs9(Fragment6, { children: [
+        /* @__PURE__ */ jsx10("td", { role: "cell", "data-label": "Virenschutz", className: `${CARD_CELL} py-1 sm:px-3 sm:py-3`, children: h.clamav_installed ? /* @__PURE__ */ jsxs9(Fragment6, { children: [
           /* @__PURE__ */ jsxs9(Badge, { tone: "good", children: [
             "ClamAV ",
             h.clamav_version
@@ -2910,13 +2996,13 @@ function OverviewTab({
             h.freshclam_active === false && /* @__PURE__ */ jsx10("span", { className: "text-amber-300", children: " \xB7 Auto-Update aus" })
           ] })
         ] }) : h.reachable === false ? /* @__PURE__ */ jsx10(Badge, { children: "unbekannt" }) : /* @__PURE__ */ jsx10(Badge, { tone: "bad", children: "nicht installiert" }) }),
-        /* @__PURE__ */ jsx10("td", { className: "px-3 py-3", children: /* @__PURE__ */ jsx10(ScanCell, { host: h }) }),
-        /* @__PURE__ */ jsx10("td", { className: "px-3 py-3", children: h.auditing ? /* @__PURE__ */ jsx10(AuditRunning, { run: h.audit_run }) : /* @__PURE__ */ jsx10(HardeningCell, { host: h }) }),
-        /* @__PURE__ */ jsx10("td", { className: "px-3 py-3", children: canManage && /* @__PURE__ */ jsxs9("div", { className: "flex flex-wrap justify-end gap-1", children: [
+        /* @__PURE__ */ jsx10("td", { role: "cell", "data-label": "Letzter Scan", className: `${CARD_CELL} py-1 sm:px-3 sm:py-3`, children: /* @__PURE__ */ jsx10(ScanCell, { host: h }) }),
+        /* @__PURE__ */ jsx10("td", { role: "cell", "data-label": "H\xE4rtung", className: `${CARD_CELL} py-1 sm:px-3 sm:py-3`, children: h.auditing ? /* @__PURE__ */ jsx10(AuditRunning, { run: h.audit_run }) : /* @__PURE__ */ jsx10(HardeningCell, { host: h }) }),
+        /* @__PURE__ */ jsx10("td", { role: "cell", className: `${CARD_CELL_PLAIN} sm:px-3 sm:py-3`, children: canManage && /* @__PURE__ */ jsxs9("div", { className: "mt-2 flex flex-wrap gap-1 sm:mt-0 sm:justify-end", children: [
           h.clamav_installed && /* @__PURE__ */ jsx10(Button, { small: true, onClick: () => onScan(h), disabled: h.scanning, children: "Scannen" }),
           h.clamav_installed && /* @__PURE__ */ jsx10(Button, { small: true, variant: "ghost", title: "Die Liste bekannter Schadprogramme jetzt aktualisieren", disabled: installRunning(h.host_id, "signatures"), onClick: () => onInstall(h, "signatures"), children: installRunning(h.host_id, "signatures") ? installRunningLabel("signatures") : "Signaturen" }),
-          !h.clamav_installed && h.reachable !== false && /* @__PURE__ */ jsx10(Button, { small: true, variant: "primary", title: "ClamAV ist ein kostenloser Virenscanner. Er wird auf dem Server installiert.", disabled: installRunning(h.host_id, "clamav"), onClick: () => onInstall(h, "clamav"), children: installRunning(h.host_id, "clamav") ? installRunningLabel("clamav") : "ClamAV installieren" }),
-          !h.lynis_installed && h.reachable !== false && /* @__PURE__ */ jsx10(Button, { small: true, title: "Lynis pr\xFCft, wie sicher der Server eingestellt ist.", disabled: installRunning(h.host_id, "lynis"), onClick: () => onInstall(h, "lynis"), children: installRunning(h.host_id, "lynis") ? installRunningLabel("lynis") : "Lynis installieren" }),
+          !h.clamav_installed && !h.rpm_ostree && h.reachable !== false && /* @__PURE__ */ jsx10(Button, { small: true, variant: "primary", title: "ClamAV ist ein kostenloser Virenscanner. Er wird auf dem Server installiert.", disabled: installRunning(h.host_id, "clamav"), onClick: () => onInstall(h, "clamav"), children: installRunning(h.host_id, "clamav") ? installRunningLabel("clamav") : "ClamAV installieren" }),
+          !h.lynis_installed && !h.rpm_ostree && h.reachable !== false && /* @__PURE__ */ jsx10(Button, { small: true, title: "Lynis pr\xFCft, wie sicher der Server eingestellt ist.", disabled: installRunning(h.host_id, "lynis"), onClick: () => onInstall(h, "lynis"), children: installRunning(h.host_id, "lynis") ? installRunningLabel("lynis") : "Lynis installieren" }),
           h.lynis_installed && /* @__PURE__ */ jsx10(
             Button,
             {
@@ -3158,7 +3244,7 @@ function QuarantineTab({ canManage, onChanged }) {
           const running = FINDING_ACTIONS.find((a) => busy.has(findingKey(f.id, a)));
           const label = (action, text) => running === action ? FINDING_RUNNING_LABEL[action] : text;
           return /* @__PURE__ */ jsxs9("li", { className: "flex flex-wrap items-center gap-3 px-5 py-3 text-sm", children: [
-            /* @__PURE__ */ jsxs9("div", { className: "min-w-0 flex-1", children: [
+            /* @__PURE__ */ jsxs9("div", { className: "min-w-0 flex-[1_1_14rem]", "data-testid": `finding-text-${f.id}`, children: [
               /* @__PURE__ */ jsxs9("p", { className: "flex flex-wrap items-center gap-2", children: [
                 /* @__PURE__ */ jsx10(Badge, { tone: st.tone, children: st.label }),
                 /* @__PURE__ */ jsx10("span", { className: "font-medium text-red-200", children: f.signature })

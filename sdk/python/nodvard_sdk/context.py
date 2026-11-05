@@ -38,23 +38,21 @@ class ApiHandle(Protocol):
     Audit-Log, gültig nur in dieser Anfrage und in daraus mit `asyncio.create_task` gestarteten Tasks (alle Ausnahmen in
     docs/02 §3, „Wer vorschlägt“)."""
 
-    # Mit `permission` braucht die Extension keine eigene Auth-Abhängigkeit. Ohne `permission` verlangt der Kern
-    # mindestens eine gültige Anmeldung (401 ohne Token, keine bestimmte Berechtigung nötig). Anmeldung ist keine
-    # Berechtigung: Routen, die Daten zeigen oder etwas ändern, setzen `permission=` oder prüfen selbst.
+    # Ohne `permission` verlangt der Kern nur eine gültige Anmeldung (401 ohne Token), keine bestimmte Berechtigung.
+    # Routen, die Daten zeigen oder etwas ändern, setzen deshalb `permission=` oder prüfen selbst.
     #
-    # `public=True` ist die ausdrückliche Ausnahme für Routen, die bewusst für jeden erreichbar sein sollen (z. B. ein
-    # Webhook): dann prüft der Kern nichts. Dafür braucht die Erweiterung die Manifest-Berechtigung `api.public` (sonst
-    # `PermissionDenied`); der Host schreibt die öffentlichen Präfixe beim Einschalten ins Protokoll. `public=True` und
-    # `permission` zusammen sind ein Fehler (`InvalidRegistration`).
+    # `public=True` ist die Ausnahme für Routen, die bewusst jeder erreichen soll (z. B. ein Webhook): Der Kern prüft
+    # dann nichts. Es braucht die Manifest-Berechtigung `api.public` (sonst `PermissionDenied`), und der Host schreibt
+    # die öffentlichen Präfixe beim Einschalten ins Protokoll. Zusammen mit `permission` ist es ein Fehler
+    # (`InvalidRegistration`).
     #
     # Die Anmeldeprüfung greift nur bei normalen FastAPI-Routen (`@router.get` usw.). WebSocket-Routen,
     # `router.add_route()` und `router.mount()` (z. B. StaticFiles) lehnt der Kern ohne `public=True` mit
-    # `InvalidRegistration` ab; mit `public=True` muss die Erweiterung sie selbst absichern (z. B. Einmal-Ticket wie das
-    # Terminal).
+    # `InvalidRegistration` ab; mit `public=True` muss die Erweiterung sie selbst absichern (z. B. mit einem
+    # Einmal-Ticket wie das Terminal).
     #
-    # Der Host prüft die Router nach `setup()` und nach `on_start()`. Was eine Erweiterung erst später zur Laufzeit an
-    # einen schon montierten Router hängt (etwa aus einem Hintergrundtask), sieht er nicht mehr: solche Routen müssen
-    # sich selbst absichern.
+    # Der Host prüft die Router nach `setup()` und `on_start()`. Was später zur Laufzeit an einen montierten Router
+    # kommt (etwa aus einem Hintergrundtask), sieht er nicht: Solche Routen sichern sich selbst ab.
     def include_router(
         self,
         router: Any,
@@ -65,7 +63,7 @@ class ApiHandle(Protocol):
         public: bool = False,
     ) -> None:
         """Montiert einen FastAPI-Router unter /api/v1/ext/<ext_id><prefix>. Mit `permission` übernimmt der Kern
-        Bearer-Anmeldung und RBAC-Prüfung dieser Berechtigung für ALLE Routen des Routers, ohne sie verlangt er
+        Bearer-Anmeldung und RBAC-Prüfung dieser Berechtigung für alle Routen des Routers, ohne sie verlangt er
         mindestens eine gültige Anmeldung. `public=True` nimmt Routen von der Prüfung aus und braucht `api.public`."""
         ...
 
@@ -86,9 +84,9 @@ class UiHandle(Protocol):
         ...
 
     def register_host_requirement(self, spec: HostRequirementSpec) -> None:
-        """Meldet, was diese Extension auf passenden Servern braucht (Gruppe, root ohne
-        Passwort, ein lesender Prüfbefehl) -- siehe HostRequirementSpec. Dieselbe `id`
-        erneut registrieren ersetzt die Meldung (z. B. in `on_settings_changed`)."""
+        """Meldet, was diese Extension auf passenden Servern braucht (Gruppe, root ohne Passwort, ein lesender
+        Prüfbefehl), siehe `HostRequirementSpec`. Wer dieselbe `id` erneut meldet, ersetzt die alte Meldung (z. B.
+        in `on_settings_changed`)."""
         ...
 
 
@@ -118,8 +116,7 @@ class CapabilitiesHandle(Protocol):
         ...
 
     async def query(self, protocol: type) -> list[Any]:
-        """Fragt Implementierungen *anderer* Extensions ab — nur für in `requires`
-        deklarierte Abhängigkeiten."""
+        """Fragt Implementierungen anderer Extensions ab, nur für in `requires` deklarierte Abhängigkeiten."""
         ...
 
 
@@ -144,14 +141,14 @@ class ActionsHandle(Protocol):
         ...
 
     async def list(self, *, correlation_id: str | None = None, limit: int = 20) -> list[Any]:
-        """Jüngste eigene Aktionen (Zeilen mit status/result/proposed_by_*/created_at),
-        optional nur zu einer correlation_id -- z. B. die Läufe eines Skripts."""
+        """Jüngste eigene Aktionen (Zeilen mit status/result/proposed_by_*/created_at), optional nur zu einer
+        correlation_id, z. B. die Läufe eines Skripts."""
         ...
 
     async def waiting_count(self) -> int:
-        """Wie viele Aktionen (aller Erweiterungen und des Kerns) gerade auf eine Freigabe warten -- dieselbe Zahl wie
-        die Kachel "wartet auf Freigabe" der Übersicht. Nur die Zahl, nichts über fremde Aktionen (etwa für einen
-        Lagebericht: vergessene Freigaben fallen so auf). Braucht die Berechtigung `hosts.read`."""
+        """Wie viele Aktionen (aller Erweiterungen und des Kerns) auf eine Freigabe warten, dieselbe Zahl wie die Kachel
+        „wartet auf Freigabe“; nur die Zahl, nichts über fremde Aktionen (etwa für einen Lagebericht über vergessene
+        Freigaben). Braucht die Berechtigung `hosts.read`."""
         ...
 
     # Ob eine Zeile zur eigenen Extension gehört, entscheidet die Datenbank, nicht die übergebene Zeile.
@@ -172,10 +169,9 @@ class HostsHandle(Protocol):
         """Gleicht entdeckte Hosts gegen die Kern-Tabelle ab (Schlüssel: ext + ref)."""
         ...
     async def mark_gone(self, provider_refs: list[str]) -> int:
-        """Markiert eigene Hosts (Schlüssel: ext + ref) als beim Anbieter nicht mehr vorhanden, etwa einen in Proxmox
-        gelöschten Gast; die Oberfläche bietet dann an, ihn zu entfernen. Nur für Bereiche aufrufen, die gerade
-        vollständig gelesen wurden, nie für eine nicht erreichbare Verbindung. Ein späteres `upsert_discovered` mit
-        derselben Kennung hebt die Markierung auf. Gibt zurück, wie viele Hosts neu markiert wurden."""
+        """Markiert eigene Hosts (Schlüssel: ext + ref) als beim Anbieter nicht mehr vorhanden; die Oberfläche bietet
+        an, sie zu entfernen. Nur für vollständig gelesene Bereiche, nie für eine nicht erreichbare Verbindung. Ein
+        späteres `upsert_discovered` mit derselben Kennung hebt es auf. Gibt die Zahl neu markierter Hosts zurück."""
         ...
     async def set_status(self, provider_refs: list[str], status: HostStatus) -> int:
         """Setzt nur den Zustand eigener Hosts (Schlüssel: ext + ref) und gibt die Zahl der geänderten zurück; Hosts in
@@ -327,7 +323,7 @@ class NotifyHandle(Protocol):
     # Für Wächter, die eine im Fenster stumme Meldung nach dem Fenster einmal hörbar nachholen wollen, ohne bei jeder
     # Prüfung einen Verlaufseintrag zu erzeugen.
     async def would_suppress(self, *, host_id: str | None = None, host_ids: Sequence[str] | None = None) -> bool:
-        """Würde eine Meldung mit diesem Host-Bezug (`payload["host_id"]` bzw. `payload["host_ids"]`) JETZT still
+        """Würde eine Meldung mit diesem Host-Bezug (`payload["host_id"]` bzw. `payload["host_ids"]`) jetzt still
         geschaltet? Dieselbe Regel wie `send()`, legt aber nichts an; ohne Host-Bezug immer `False`."""
         ...
 
@@ -363,27 +359,26 @@ class WsHandle(Protocol):
 
 class DbHandle(Protocol):
     def session(self) -> AsyncContextManager[Any]:
-        """AsyncSession nur innerhalb von `async with` und nur für Tabellen mit dem Präfix der Extension; andere Tabellen,
-        PRAGMA, ATTACH und Schemaänderungen lehnt SQLite ab (`sqlalchemy.exc.DatabaseError`)."""
+        """AsyncSession nur innerhalb von `async with` und nur für Tabellen mit dem Präfix der Extension; andere
+        Tabellen, PRAGMA, ATTACH und Schemaänderungen lehnt SQLite ab (`sqlalchemy.exc.DatabaseError`)."""
         ...
 
 
-# Proxys aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) werden nie benutzt: jede Anfrage geht direkt an die
+# Proxys aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) werden nie benutzt: Jede Anfrage geht direkt an die
 # geprüfte Adresse, auch mit `insecure_tls=True`. `SSL_CERT_FILE` und `SSL_CERT_DIR` gelten weiter.
 #
-# Weiterleitungen (3xx) werden nie verfolgt: Eine Antwort mit Status 3xx kommt unverändert zurück, die Erweiterung fragt
-# die neue Adresse selbst ab. `follow_redirects=True` wirft `ValueError` (die Zielprüfung kennt nur die Adresse des
-# Aufrufs, nicht das Ziel einer Weiterleitung), auch mit `insecure_tls` und bei `stream()`; `False` ist erlaubt.
+# Weiterleitungen (3xx) werden nie verfolgt: Die Antwort kommt unverändert zurück, die Erweiterung fragt die neue
+# Adresse selbst ab. `follow_redirects=True` wirft `ValueError` (die Zielprüfung kennt nur die Adresse des Aufrufs,
+# nicht das Ziel einer Weiterleitung), auch mit `insecure_tls` und bei `stream()`; `False` ist erlaubt.
 #
-# `pinned_sha256` (ein SHA-256-Fingerabdruck, Schreibweise wie `sha256_fingerprint()` sie annimmt) bindet den Aufruf an
-# GENAU dieses eine Zertifikat: Der Kern vergleicht den Fingerabdruck des Zertifikats, das der Server im TLS-Handshake
-# zeigt, und bricht mit `CertificateMismatch` ab, bevor ein Byte der Anfrage gesendet ist. Die Prüfung über
-# Zertifizierungsstellen und Rechnernamen entfällt dabei (das gepinnte Zertifikat ersetzt sie), deshalb braucht auch das
-# die Berechtigung `net.outbound.insecure_tls`. Für `http://`-Adressen wirft es `ValueError` (dort gibt es kein
-# Zertifikat), zusammen mit `insecure_tls=True` ebenfalls. Woher der Fingerabdruck kommt (z. B. ein Mensch hat ihn mit
-# dem auf dem Server verglichen), entscheidet die Erweiterung; `peer_certificate()` liefert ihn, ohne etwas zu senden.
-# Aufrufe mit `pinned_sha256` merken sich keine Cookies des Servers (ein Cookie geht nur mit, wenn der Aufruf ihn selbst
-# setzt). Ältere Kerne kennen den Parameter nicht und lehnen den Aufruf ab (`TypeError`), statt ungeprüft zu senden.
+# `pinned_sha256` (SHA-256-Fingerabdruck, Schreibweise wie bei `sha256_fingerprint()`) bindet den Aufruf an genau
+# dieses Zertifikat: Der Kern vergleicht es mit dem, das der Server im TLS-Handshake zeigt, und bricht vor dem ersten
+# Byte der Anfrage mit `CertificateMismatch` ab. Weil das gepinnte Zertifikat die Prüfung über Zertifizierungsstellen
+# und Rechnernamen ersetzt, braucht es ebenfalls `net.outbound.insecure_tls`. Für `http://`-Adressen (dort gibt es kein
+# Zertifikat) und zusammen mit `insecure_tls=True` wirft es `ValueError`. Woher der Fingerabdruck kommt (etwa von einem
+# Menschen mit dem Server verglichen), entscheidet die Erweiterung; `peer_certificate()` liefert ihn, ohne etwas zu
+# senden. Solche Aufrufe merken sich keine Cookies des Servers (ein Cookie geht nur mit, wenn der Aufruf ihn selbst
+# setzt). Ältere Kerne lehnen den Parameter mit `TypeError` ab, statt ungeprüft zu senden.
 class HttpHandle(Protocol):
     """Ausgehende HTTP-Aufrufe mit `net.outbound`; mit nur `net.outbound:<cidr>` gehen nur IP-Adressen aus diesen
     Bereichen, ein DNS-Name braucht das freie Recht, und `insecure_tls=True` (je Aufruf) braucht zusätzlich

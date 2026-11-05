@@ -9,6 +9,7 @@ import { SchedulePicker } from "../../../../extensions/_shared/frontend/src/Sche
 import { LoadError } from "../../components/LoadError";
 import { api } from "../../lib/api";
 import { useAuthStore } from "../../state/auth";
+import { useEdition } from "../../state/edition";
 import { OWNER_ONLY_HINT, OwnerConfirm, type OwnerProof } from "./OwnerConfirm";
 import { Button, Card, Field, NoticeLine, PageHeader, errorText, inputClass, type Notice } from "./ui";
 
@@ -91,6 +92,7 @@ async function putSetting(key: string, value: unknown) {
  * Zwischenstand, und ein Code reicht für beide Werte.
  */
 function AutonomyCard({ mode: initialMode, maxRisk: initialRisk }: { mode: string; maxRisk: string }) {
+  const edition = useEdition();
   const isOwner = useAuthStore((s) => Boolean(s.user?.is_owner));
   const [mode, setMode] = useState(initialMode);
   const [maxRisk, setMaxRisk] = useState(initialRisk);
@@ -114,6 +116,7 @@ function AutonomyCard({ mode: initialMode, maxRisk: initialRisk }: { mode: strin
     <Card
       title="Selbstständigkeit"
       description="Gilt für Aktionen, die von Regeln, Skripten oder Nodvard KI vorgeschlagen werden."
+      {...(edition.choose_modules ? {} : { description: "Gilt für Änderungen an Containern und Stacks." })}
       footer={isOwner && !confirming ? (
         <Button variant="primary" disabled={!dirty} onClick={() => { setNotice(null); setConfirming(true); }}>Speichern</Button>
       ) : undefined}

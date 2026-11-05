@@ -1,3 +1,4 @@
+import { styleRef } from "../../../extensions/_shared/frontend/src/csp";
 import { useQueries } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from "react";
@@ -638,7 +639,7 @@ export function DashboardPage() {
                     {[...entries]
                       .sort((a, b) => a.item.y - b.item.y || a.item.x - b.item.x)
                       .map((entry) => (
-                        <div key={itemKey(entry.item)} style={{ height: rowsToPx(entry.size.h) }}>
+                        <div key={itemKey(entry.item)} ref={styleRef({ height: rowsToPx(entry.size.h) })}>
                           {renderCard(entry, false)}
                         </div>
                       ))}

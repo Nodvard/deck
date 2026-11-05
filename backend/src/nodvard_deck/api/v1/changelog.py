@@ -11,6 +11,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from ...changelog import Entry, get_changelog
+from ...edition import of
 from ...version import __version__
 from ..deps import CurrentUser, SettingsDep
 
@@ -18,7 +19,7 @@ router = APIRouter(prefix="/app", tags=["app"])
 
 
 class ChangelogEntryOut(BaseModel):
-    kind: Literal["neu", "verbessert", "behoben", "sicherheit"]
+    kind: Literal["neu", "verbessert", "behoben", "sicherheit", "dokumentation"]
     text: str
     prs: list[int]
 
@@ -46,9 +47,19 @@ def _entry_out(entry: Entry) -> ChangelogEntryOut:
     return ChangelogEntryOut(kind=entry.kind, text=entry.text, prs=list(entry.prs))  # type: ignore[arg-type]
 
 
-@router.get("/changelog")
+@router.get("/changelog", name="read_changelog")
+async def changelog_response(_user: CurrentUser, settings: SettingsDep, include_documentation: bool = False) -> ChangelogOut:
+    response = await read_changelog(_user, settings)
+    if not include_documentation:
+        entries = [*response.unreleased, *(entry for release in response.versions for entry in release.entries)]
+        for entry in entries:
+            if entry.kind == "dokumentation":
+                entry.kind = "verbessert"
+    return response
+
+
 async def read_changelog(_user: CurrentUser, settings: SettingsDep) -> ChangelogOut:
-    data = get_changelog()
+    data = get_changelog(of(settings).id)
     return ChangelogOut(
         current=__version__,
         build=(settings.build or "").strip() or None,
@@ -57,7 +68,7 @@ async def read_changelog(_user: CurrentUser, settings: SettingsDep) -> Changelog
             ChangelogVersionOut(
                 version=release.version,
                 date=release.date,
-                title=release.title,
+                title=release.title if of(settings).choose_modules else None,
                 entries=[_entry_out(e) for e in release.entries],
             )
             for release in data.versions

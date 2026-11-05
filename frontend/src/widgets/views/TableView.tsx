@@ -1,3 +1,4 @@
+import { styleRef } from "../../../../extensions/_shared/frontend/src/csp";
 import { renderTemplate, resolvePath } from "../template";
 import type { TableView as TableViewSpec } from "../types";
 import { ActionButton } from "./ActionButton";
@@ -25,7 +26,7 @@ export function TableView({
         <thead>
           <tr className="border-b border-white/10 text-xs opacity-60">
             {view.columns.map((col) => (
-              <th key={col.field} className={`px-2 py-1 font-medium ${ALIGN_CLASS[col.align]}`} style={col.width ? { width: col.width } : undefined}>
+              <th key={col.field} className={`px-2 py-1 font-medium ${ALIGN_CLASS[col.align]}`} ref={styleRef(col.width ? { width: col.width } : undefined)}>
                 {col.label}
               </th>
             ))}

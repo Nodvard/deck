@@ -82,6 +82,22 @@ esac
   *) exit 0;;
 esac
 ''')
+    # `sudo -n -l` wie das klassische sudo: listet die Regeln aus `captured/`. Mit `sudo-ohne-pruefsumme` fehlen die
+    # Regeln mit Prüfsumme (sudo-rs übergeht sie), mit `sudo-kaputt` listet es nichts.
+    _stub(bin_dir / "sudo", f'''echo "sudo $*" >> "{log}"
+[ "$1" = -n ] && [ "$2" = -l ] || exit 1
+[ ! -e "{tmp_path}/sudo-kaputt" ] || exit 1
+echo "User {USER} may run the following commands:"
+for f in "{captured}"/*; do
+  [ -e "$f" ] || continue
+  rule=$(sed -n "s|^{USER} ALL=(root) NOPASSWD: ||p" "$f")
+  case $rule in
+    "") continue;;
+    sha256:*) [ ! -e "{tmp_path}/sudo-ohne-pruefsumme" ] || continue;;
+  esac
+  echo "    (root) NOPASSWD: $rule"
+done
+''')
     acl_cases = "".join(f"  {shlex.quote(path)}) printf %s {shlex.quote(text)};;\n" for path, text in (acls or {}).items())
     _stub(bin_dir / "getfacl", f'''[ "$1" = -c ] || exit 2
 case "$2" in
@@ -103,8 +119,10 @@ def test_helpers_are_installed_with_their_own_rule_next_to_the_full_one(tmp_path
     assert (helper_dir / "shield-root").read_text() == SHIELD.text
     assert (helper_dir / "system-root").read_text() == SYSTEM.text
     assert (captured / "nodvard-deck").read_text() == "deck ALL=(root) NOPASSWD: ALL\n"
-    assert (captured / "nodvard_shield_deck").read_text() == f"deck ALL=(root) NOPASSWD: {helper_dir}/shield-root\n"
-    assert (captured / "nodvard_system_deck").read_text() == f"deck ALL=(root) NOPASSWD: {helper_dir}/system-root\n"
+    assert (captured / "nodvard_shield_deck").read_text() == (
+        f"deck ALL=(root) NOPASSWD: sha256:{SHIELD.sha256} {helper_dir}/shield-root\n"
+    )
+    assert (captured / "nodvard_system_deck").read_text() == host_setup.helper_rule("deck", SYSTEM, str(helper_dir))
     calls = log.read_text()
     assert "install -m 0755 -o root -g root " in calls and f" {helper_dir}/shield-root" in calls
     assert f"install -d -m 0755 -o root -g root {helper_dir}" in calls
@@ -403,3 +421,61 @@ def test_notes_name_the_helpers():
     assert not any(word in n for n in notes for word in ("noch nicht", "schon", "Später", "weiter über"))
     assert not any("Hilfsskripte" in n for n in host_setup.setup_notes(USER, groups=[], sudo=True))
     assert not any("Hilfsskripte" in n for n in host_setup.setup_notes(USER, groups=[], sudo=False, helpers=["x-root"]))
+
+
+def _visudo_without_digests(bin_dir: Path, log: Path) -> None:
+    """visudo wie vor sudo 1.8.7 oder von sudo-rs: Eine Datei mit `sha256:` gilt als Fehler."""
+    _stub(bin_dir / "visudo", f'''echo "visudo $*" >> "{log}"
+for a in "$@"; do f=$a; done
+case "$*" in *-f*) ! grep -q "sha256:" "$f";; *) exit 0;; esac
+''')
+
+
+@needs_sh
+def test_the_rule_carries_the_checksum_or_says_why_not(tmp_path):
+    bin_dir, log, helper_dir, captured = _helper_sandbox(tmp_path)
+    done = _run(_script(helper_dir, SHIELD), bin_dir)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert f"sha256:{SHIELD.sha256} " in (captured / "nodvard_shield_deck").read_text()
+    assert "Prüfsumme" not in done.stdout
+
+    (tmp_path / "alt").mkdir()
+    bin_dir, log, helper_dir, captured = _helper_sandbox(tmp_path / "alt")
+    _visudo_without_digests(bin_dir, log)
+    done = _run(_script(helper_dir, SHIELD), bin_dir)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (captured / "nodvard_shield_deck").read_text() == f"deck ALL=(root) NOPASSWD: {helper_dir}/shield-root\n"
+    assert host_setup.setup_messages(done.stdout)[-1] == host_setup.PLAIN_RULE
+    assert host_setup.setup_report(done.stdout, user="deck")["plain_rules"] == ["shield"]
+
+
+def _narrow(helper_dir: Path, *helpers: RootHelperFile) -> str:
+    return build_setup_script(USER, KEY, sudo=True, helpers=helpers, helper_dir=str(helper_dir), full_sudo=False)[0]
+
+
+@needs_sh
+def test_a_checksum_that_sudo_does_not_list_falls_back_to_the_plain_rule(tmp_path):
+    # Auch neben der vollen Regel, mit der jeder Startversuch klappen würde.
+    bin_dir, _, helper_dir, captured = _helper_sandbox(tmp_path)
+    (tmp_path / "sudo-ohne-pruefsumme").write_text("")
+    done = _run(_script(helper_dir, SHIELD, SYSTEM), bin_dir)
+    assert done.returncode == 0, done.stdout + done.stderr
+    rule = (captured / "nodvard_shield_deck").read_text()
+    assert rule == host_setup.helper_rule(USER, SHIELD, str(helper_dir), digest=False)
+    messages = host_setup.setup_messages(done.stdout)
+    assert "Hilfsskript shield-root (Version 1) eingerichtet, mit eigener sudo-Regel ohne Prüfsumme." in messages
+    assert done.stdout.count(host_setup.PLAIN_RULE) == 1, "ein Hinweis für alle Skripte"
+    report = host_setup.setup_report(done.stdout, user=USER)
+    assert report["plain_rules"] == ["shield", "system"]
+    record = host_setup.setup_record(USER, report, sudo=True, helpers=[SHIELD, SYSTEM], helper_dir=str(helper_dir))
+    assert record["sudoers"]["/etc/sudoers.d/nodvard_shield_deck"] == hashlib.sha256(rule.encode()).hexdigest()
+
+
+@needs_sh
+def test_the_checksum_stays_when_sudo_lists_nothing(tmp_path):
+    bin_dir, log, helper_dir, captured = _helper_sandbox(tmp_path)
+    (tmp_path / "sudo-kaputt").write_text("")
+    done = _run(_narrow(helper_dir, SHIELD), bin_dir)
+    assert (captured / "nodvard_shield_deck").read_text() == host_setup.helper_rule(USER, SHIELD, str(helper_dir))
+    assert "Prüfsumme" not in done.stdout
+    assert [line for line in log.read_text().splitlines() if line.startswith("sudo ")] == ["sudo -n -l"]

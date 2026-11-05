@@ -234,8 +234,10 @@ def test_certificate_state_and_texts():
     assert days_text("warn", 6) == "noch 6 Tage"
     assert days_text("warn", 1) == "noch 1 Tag"
     assert days_text("warn", 0) == "läuft heute ab"
-    assert days_text("expired", -3) == "seit 2 Tagen abgelaufen"
-    assert days_text("expired", -1) == "heute abgelaufen"
+    assert days_text("expired", -3) == "seit 2 Tagen"
+    assert days_text("expired", -2) == "seit 1 Tag"
+    assert days_text("expired", -1) == "seit heute"
+    assert days_text("expired", 0) == "seit heute"
     assert parse_datetime("2026-10-04 08:00:00") == datetime(2026, 10, 4, 8, 0, tzinfo=timezone.utc)
     assert parse_datetime("kaputt") is None
 

@@ -1,3 +1,69 @@
+// ../../_shared/frontend/src/csp.ts
+function cspNonce() {
+  return document.querySelector('meta[name="csp-nonce"]')?.content ?? "";
+}
+function createStyle() {
+  const element = document.createElement("style");
+  element.nonce = cspNonce();
+  return element;
+}
+var UNITLESS = /* @__PURE__ */ new Set([
+  "animationIterationCount",
+  "aspectRatio",
+  "columnCount",
+  "fillOpacity",
+  "flex",
+  "flexGrow",
+  "flexShrink",
+  "fontWeight",
+  "gridArea",
+  "gridColumn",
+  "gridColumnEnd",
+  "gridColumnStart",
+  "gridRow",
+  "gridRowEnd",
+  "gridRowStart",
+  "lineHeight",
+  "opacity",
+  "order",
+  "orphans",
+  "scale",
+  "strokeDasharray",
+  "strokeDashoffset",
+  "strokeMiterlimit",
+  "strokeOpacity",
+  "strokeWidth",
+  "tabSize",
+  "widows",
+  "zIndex",
+  "zoom"
+]);
+function styleRef(values, ref) {
+  let style;
+  return (node) => {
+    style?.remove();
+    style = void 0;
+    if (node && values) {
+      const id = Array.from(crypto.getRandomValues(new Uint32Array(4))).join("-");
+      node.setAttribute("data-deck-style", id);
+      style = createStyle();
+      document.head.appendChild(style);
+      const sheet = style.sheet;
+      const selector = `${node === document.documentElement ? ":root" : ""}[data-deck-style="${id}"]`;
+      sheet.insertRule(`${selector} {}`);
+      const declaration = sheet.cssRules[0].style;
+      for (const [key, value] of Object.entries(values)) {
+        if (value == null || typeof value === "boolean") continue;
+        const name = key.startsWith("--") ? key : key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`).replace(/^ms-/, "-ms-");
+        const unit = typeof value === "number" && value !== 0 && !key.startsWith("--") && !UNITLESS.has(key) ? "px" : "";
+        declaration.setProperty(name, `${value}${unit}`);
+      }
+    }
+    if (typeof ref === "function") ref(node);
+    else if (ref) ref.current = node;
+  };
+}
+
 // src/SystemPage.tsx
 import { useCallback as useCallback3, useEffect as useEffect7, useMemo as useMemo3, useRef as useRef4, useState as useState6 } from "react";
 
@@ -818,16 +884,17 @@ function Spark({ values, max, color = BLUE }) {
     ] })
   ] });
 }
-function Tile({ label, value, sub, spark }) {
+function Tile({ label, value, sub, spark, children }) {
   return /* @__PURE__ */ jsxs6("div", { className: "panel p-3", children: [
     /* @__PURE__ */ jsx7("p", { className: "text-xs opacity-50", children: label }),
     /* @__PURE__ */ jsx7("p", { className: "text-xl font-semibold tabular-nums", children: value }),
     sub && /* @__PURE__ */ jsx7("p", { className: "truncate text-[11px] opacity-60", children: sub }),
+    children,
     spark
   ] });
 }
 function Meter({ percent }) {
-  return /* @__PURE__ */ jsx7("div", { className: "h-1.5 w-full overflow-hidden rounded bg-white/10", children: /* @__PURE__ */ jsx7("div", { className: "h-full rounded", style: { width: `${Math.min(100, Math.max(0, percent))}%`, background: barColor(percent) } }) });
+  return /* @__PURE__ */ jsx7("div", { className: "h-1.5 w-full overflow-hidden rounded bg-white/10", children: /* @__PURE__ */ jsx7("div", { className: "h-full rounded", ref: styleRef({ width: `${Math.min(100, Math.max(0, percent))}%`, background: barColor(percent) }) }) });
 }
 function Section({ title, children, extra }) {
   return /* @__PURE__ */ jsxs6("section", { className: "panel p-4", children: [
@@ -918,6 +985,7 @@ function LiveView({ hostId, fetchLive }) {
   const hottest = data.temperatures.length ? Math.max(...data.temperatures.map((t) => t.celsius)) : null;
   const procs = [...data.processes].sort((a, b) => procSort === "cpu" ? b.cpu_percent - a.cpu_percent || b.mem_bytes - a.mem_bytes : b.mem_bytes - a.mem_bytes);
   const freqs = cpu.per_core.map((c) => c.freq_mhz).filter((f) => f != null);
+  const frequencySummary = freqs.length ? `Takt: Durchschnitt ${Math.round(freqs.reduce((sum, f) => sum + f, 0) / freqs.length)} MHz, min ${Math.round(Math.min(...freqs))}, max ${Math.round(Math.max(...freqs))}` : "Takt nicht verf\xFCgbar";
   return /* @__PURE__ */ jsxs6("div", { className: "space-y-4", "data-testid": "live-view", children: [
     controls,
     data.throttled && data.throttled.flags.length > 0 && /* @__PURE__ */ jsxs6("p", { className: "panel px-3 py-2 text-sm text-amber-300", "data-testid": "throttled", children: [
@@ -928,7 +996,7 @@ function LiveView({ hostId, fetchLive }) {
       ") \u2013 meist ein zu schwaches Netzteil oder Hitze."
     ] }),
     /* @__PURE__ */ jsxs6("div", { className: "grid grid-cols-2 gap-3 lg:grid-cols-5", children: [
-      /* @__PURE__ */ jsx7(Tile, { label: "CPU", value: pct(cpu.total?.percent), sub: freqs.length ? `${Math.max(...freqs)} MHz \xB7 ${cpu.cores} Kerne` : `${cpu.cores} Kerne`, spark: /* @__PURE__ */ jsx7(Spark, { values: history.cpu, max: 100 }) }),
+      /* @__PURE__ */ jsx7(Tile, { label: "CPU", value: pct(cpu.total?.percent), sub: `${cpu.cores} Kerne`, spark: /* @__PURE__ */ jsx7(Spark, { values: history.cpu, max: 100 }), children: /* @__PURE__ */ jsx7("p", { className: "mt-1 text-sm tabular-nums", children: frequencySummary }) }),
       /* @__PURE__ */ jsx7(Tile, { label: "Arbeitsspeicher", value: memory ? pct(100 * memory.used / memory.total) : "\u2013", sub: memory ? `${formatBytes(memory.used)} von ${formatBytes(memory.total)}` : void 0, spark: /* @__PURE__ */ jsx7(Spark, { values: history.mem, max: 100 }) }),
       /* @__PURE__ */ jsx7(Tile, { label: "Datentr\xE4ger aktiv", value: pct(diskBusy), sub: data.disks.map((d) => d.name).join(", ") || "keine", spark: /* @__PURE__ */ jsx7(Spark, { values: history.disk, max: 100 }) }),
       /* @__PURE__ */ jsx7(Tile, { label: "Netzwerk", value: rate(netIn + netOut), sub: `\u2193 ${rate(netIn)} \xB7 \u2191 ${rate(netOut)}`, spark: /* @__PURE__ */ jsx7(Spark, { values: history.netIn, color: BLUE }) }),
@@ -958,7 +1026,7 @@ function LiveView({ hostId, fetchLive }) {
             /* @__PURE__ */ jsx7("span", { className: "font-semibold tabular-nums", children: pct(core.percent) })
           ] }),
           /* @__PURE__ */ jsx7(Meter, { percent: core.percent ?? 0 }),
-          core.freq_mhz != null && /* @__PURE__ */ jsxs6("p", { className: "mt-1 text-[10px] tabular-nums opacity-50", children: [
+          core.freq_mhz != null && /* @__PURE__ */ jsxs6("p", { className: "mt-1 text-sm tabular-nums", children: [
             core.freq_mhz,
             " MHz"
           ] })
@@ -966,28 +1034,28 @@ function LiveView({ hostId, fetchLive }) {
       ] }),
       /* @__PURE__ */ jsx7(Section, { title: "Arbeitsspeicher", children: memory ? /* @__PURE__ */ jsxs6(Fragment4, { children: [
         /* @__PURE__ */ jsxs6("div", { className: "mb-2 flex h-3 w-full overflow-hidden rounded bg-white/10", "data-testid": "mem-bar", "aria-label": "Aufteilung des Arbeitsspeichers", children: [
-          /* @__PURE__ */ jsx7("div", { style: { width: `${100 * memory.used / memory.total}%`, background: BLUE }, title: "belegt" }),
-          /* @__PURE__ */ jsx7("div", { style: { width: `${100 * (memory.cached ?? 0) / memory.total}%`, background: "#199e70" }, title: "Cache" }),
-          /* @__PURE__ */ jsx7("div", { style: { width: `${100 * (memory.buffers ?? 0) / memory.total}%`, background: "#c98500" }, title: "Puffer" })
+          /* @__PURE__ */ jsx7("div", { ref: styleRef({ width: `${100 * memory.used / memory.total}%`, background: BLUE }), title: "belegt" }),
+          /* @__PURE__ */ jsx7("div", { ref: styleRef({ width: `${100 * (memory.cached ?? 0) / memory.total}%`, background: "#199e70" }), title: "Cache" }),
+          /* @__PURE__ */ jsx7("div", { ref: styleRef({ width: `${100 * (memory.buffers ?? 0) / memory.total}%`, background: "#c98500" }), title: "Puffer" })
         ] }),
         /* @__PURE__ */ jsxs6("dl", { className: "grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3", children: [
           /* @__PURE__ */ jsxs6("div", { children: [
             /* @__PURE__ */ jsxs6("dt", { className: "opacity-50", children: [
-              /* @__PURE__ */ jsx7("span", { className: "mr-1 inline-block h-2 w-2 rounded-sm", style: { background: BLUE } }),
+              /* @__PURE__ */ jsx7("span", { className: "mr-1 inline-block h-2 w-2 rounded-sm", ref: styleRef({ background: BLUE }) }),
               "belegt"
             ] }),
             /* @__PURE__ */ jsx7("dd", { className: "tabular-nums", children: formatBytes(memory.used) })
           ] }),
           /* @__PURE__ */ jsxs6("div", { children: [
             /* @__PURE__ */ jsxs6("dt", { className: "opacity-50", children: [
-              /* @__PURE__ */ jsx7("span", { className: "mr-1 inline-block h-2 w-2 rounded-sm", style: { background: "#199e70" } }),
+              /* @__PURE__ */ jsx7("span", { className: "mr-1 inline-block h-2 w-2 rounded-sm", ref: styleRef({ background: "#199e70" }) }),
               "Cache"
             ] }),
             /* @__PURE__ */ jsx7("dd", { className: "tabular-nums", children: formatBytes(memory.cached) })
           ] }),
           /* @__PURE__ */ jsxs6("div", { children: [
             /* @__PURE__ */ jsxs6("dt", { className: "opacity-50", children: [
-              /* @__PURE__ */ jsx7("span", { className: "mr-1 inline-block h-2 w-2 rounded-sm", style: { background: "#c98500" } }),
+              /* @__PURE__ */ jsx7("span", { className: "mr-1 inline-block h-2 w-2 rounded-sm", ref: styleRef({ background: "#c98500" }) }),
               "Puffer"
             ] }),
             /* @__PURE__ */ jsx7("dd", { className: "tabular-nums", children: formatBytes(memory.buffers) })
@@ -1175,7 +1243,7 @@ function tileState(row) {
 var TONE_TEXT = { good: "text-emerald-300", warn: "text-amber-300", danger: "text-red-300" };
 var TONE_BAR = { good: "bg-emerald-400/70", warn: "bg-amber-400/80", danger: "bg-red-400/80" };
 function Bar({ percent, tone }) {
-  return /* @__PURE__ */ jsx8("div", { className: "h-1.5 w-full overflow-hidden rounded bg-white/10", children: /* @__PURE__ */ jsx8("div", { className: `h-full ${TONE_BAR[tone] ?? TONE_BAR.good}`, style: { width: `${Math.min(100, Math.max(0, percent))}%` } }) });
+  return /* @__PURE__ */ jsx8("div", { className: "h-1.5 w-full overflow-hidden rounded bg-white/10", children: /* @__PURE__ */ jsx8("div", { className: `h-full ${TONE_BAR[tone] ?? TONE_BAR.good}`, ref: styleRef({ width: `${Math.min(100, Math.max(0, percent))}%` }) }) });
 }
 function Stat({ label, value, sub, tone }) {
   return /* @__PURE__ */ jsxs7("div", { className: "panel p-3", children: [

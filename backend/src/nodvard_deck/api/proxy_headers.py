@@ -5,8 +5,9 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+from starlette.requests import Request
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..core import trusted_proxies
@@ -24,6 +25,20 @@ _HTTP_SCHEMES = {"http": "http", "https": "https", "ws": "http", "wss": "https"}
 _WS_SCHEMES = {"http": "ws", "https": "wss", "ws": "ws", "wss": "wss"}
 
 
+def is_insecure_connection(request: Request) -> bool:
+    """HTTP außerhalb des lokalen Rechners, nach Prüfung der Proxy-Angaben."""
+    if request.url.scheme != "http":
+        return False
+    forwarding = request.scope.get(SCOPE_KEY)
+    if isinstance(forwarding, Forwarding) and forwarding.forwarded_headers and not forwarding.client_forwarded:
+        return True
+    host = (request.url.hostname or "").lower().rstrip(".")
+    address = parse_address(host)
+    local_host = host == "localhost" or (address is not None and address.is_loopback)
+    client = parse_address(request.client.host if request.client else None)
+    return not (local_host and client is not None and client.is_loopback)
+
+
 @dataclass(frozen=True)
 class Forwarding:
     peer: str | None
@@ -32,6 +47,7 @@ class Forwarding:
     """Die Gegenstelle steht in der Liste: ihre Kopfzeilen wurden ausgewertet."""
     forwarded_headers: bool
     """Die Anfrage trug `X-Forwarded-For` oder `X-Forwarded-Proto` (egal, ob sie galten)."""
+    client_forwarded: bool = False
 
 
 def _split_values(values: list[bytes]) -> list[str]:
@@ -117,6 +133,8 @@ def apply_forwarding(scope: Scope, trust: TrustedProxies) -> Forwarding:
         return info
     if found is not None:
         scope["client"] = found
+        info = replace(info, client_forwarded=True)
+        scope[SCOPE_KEY] = info
     if scheme is not None:
         scope["scheme"] = scheme
     return info

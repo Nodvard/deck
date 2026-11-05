@@ -236,6 +236,8 @@ class Settings(BaseSettings):
     """NODVARD_DECK_ENV: `prod` (Standard) oder `dev`. Nur `dev` schaltet Hilfen für die Entwicklung ein (API-Doku ohne
     Anmeldung, `api_docs_public`); gesetzt wird es nur in der Entwicklung (`.env` aus `.env.example`, Tests)."""
     log_json: bool = False
+    csp_legacy: bool = False
+    """NODVARD_DECK_CSP_LEGACY=1 erlaubt im Notfall wieder eingebettete Stile und erzeugt eine Logwarnung."""
 
     data_dir: Path = Path("./data")
     """Alles Zustandsbehaftete lebt hier: Datenbank, Master-Key, Extension-Daten, Protokolle der Läufe."""
@@ -309,10 +311,14 @@ class Settings(BaseSettings):
     der Datei im Image (`image_info`), sonst `None` = selbst gebaut. Nur daran erkennt die Update-Suche
     (`core.updates.is_official_image`) das offizielle Image."""
 
+    edition: str | None = None
+    """NODVARD_DECK_EDITION: welche Ausgabe läuft (`deck` oder `dock`, `nodvard_deck.edition`). Ohne (nicht leere) Variable
+    gilt die Angabe aus der Datei im Image (`image_info`, Build-Argument `EDITION`), sonst `None` = Nodvard Deck."""
+
     image_info_path: Path = image_info.PATH
     """Datei mit Herkunft und Version des Images (`image_info`). Nur für Tests ändern."""
 
-    @field_validator("build", "image", mode="before")
+    @field_validator("build", "image", "edition", mode="before")
     @classmethod
     def _strip_or_none(cls, value: Any) -> Any:
         """Leerraum am Rand weg, leer = nicht gesetzt (nie `""`)."""
@@ -322,13 +328,15 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _image_info_fallback(self) -> Settings:
-        """`image` und `build` ohne Variable aus der Datei im Image (fehlt sie oder ist sie kaputt: `None`)."""
-        if self.image is None or self.build is None:
+        """`image`, `build` und `edition` ohne Variable aus der Datei im Image (fehlt sie oder ist sie kaputt: `None`)."""
+        if self.image is None or self.build is None or self.edition is None:
             info = image_info.read(self.image_info_path)
             if self.image is None:
                 self.image = info.get("image")
             if self.build is None:
                 self.build = info.get("version")
+            if self.edition is None:
+                self.edition = info.get("edition")
         return self
 
     extensions_dir: Path = Path("./extensions")

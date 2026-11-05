@@ -55,7 +55,7 @@ def _join_code_notification(name: str, host_id: str, code: str, *, after_window:
         body=f"{body}\nDer Neustart lag im Wartungsfenster (dort nur im Verlauf, ohne Push)." if after_window else body,
         severity=Severity.INFO,
         correlation_id=f"gameserver-joincode:{host_id}",
-        payload={"host_id": host_id, "join_code": code},
+        payload={"notification_type": "gameserver.join_code", "host_id": host_id, "join_code": code},
     )
 
 
@@ -64,7 +64,7 @@ def _down_notification(name: str, host_id: str, service_state: Any, *, after_win
     return Notification(
         title=f"{name}: Gameserver läuft nicht" + (AFTER_WINDOW_TITLE if after_window else ""),
         body=f"{body}\n{AFTER_WINDOW_NOTE}" if after_window else body,
-        severity=Severity.WARNING, correlation_id=f"gameserver-down:{host_id}", payload={"host_id": host_id},
+        severity=Severity.WARNING, correlation_id=f"gameserver-down:{host_id}", payload={"notification_type": "gameserver.down", "host_id": host_id},
     )
 
 
@@ -72,7 +72,7 @@ def _up_notification(name: str, host_id: str, body: str, *, after_window: bool =
     return Notification(
         title=f"{name} läuft wieder" + (IN_WINDOW_TITLE if after_window else ""),
         body=f"{body}\nSchon im Wartungsfenster wieder gestartet (dort nur im Verlauf, ohne Push)." if after_window else body,
-        severity=Severity.INFO, correlation_id=f"gameserver-down:{host_id}", payload={"host_id": host_id},
+        severity=Severity.INFO, correlation_id=f"gameserver-down:{host_id}", payload={"notification_type": "gameserver.up", "host_id": host_id},
     )
 
 

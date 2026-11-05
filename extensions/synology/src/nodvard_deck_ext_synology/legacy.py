@@ -1,4 +1,4 @@
-"""Übernimmt das Einzelgerät aus der Zeit vor den mehreren Geräten als erstes Gerät."""
+"""Übernimmt das Gerät aus den alten Einzelfeldern als erstes Gerät."""
 
 from __future__ import annotations
 

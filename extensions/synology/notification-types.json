@@ -1,0 +1,11 @@
+{
+  "synology.pool": "Synology: Speicherpool",
+  "synology.volume": "Synology: Volume",
+  "synology.disk": "Synology: Laufwerk",
+  "synology.disk-temp": "Synology: Laufwerkstemperatur",
+  "synology.temperature": "Synology: Temperatur",
+  "synology.update": "Synology: DSM-Update",
+  "synology.backup-state": "Synology: Backup-Status",
+  "synology.backup-failed": "Synology: Backup fehlgeschlagen",
+  "synology.backup-overdue": "Synology: Backup überfällig"
+}

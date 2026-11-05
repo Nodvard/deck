@@ -13,6 +13,7 @@ import { ButtonLink, EmptyState } from "../components/EmptyState";
 import { api } from "../lib/api";
 import { loadOnce } from "../lib/chunkLoad";
 import { useAuthStore } from "../state/auth";
+import { useEdition } from "../state/edition";
 
 interface HostOut {
   id: string;
@@ -298,6 +299,7 @@ function NoTerminalHosts({
 }
 
 export function TerminalPage() {
+  const edition = useEdition();
   const [searchParams, setSearchParams] = useSearchParams();
   const [hosts, setHosts] = useState<HostOut[] | null>(null);
   const [terminalIds, setTerminalIds] = useState<Set<string>>(new Set());
@@ -313,8 +315,8 @@ export function TerminalPage() {
   useEffect(() => {
     Promise.all([
       api.get<HostOut[]>("/hosts"),
-      api.get<string[]>("/terminal/hosts"),
-      api.get<string[]>("/console/hosts").catch(() => [] as string[]),
+      edition.choose_modules ? api.get<string[]>("/terminal/hosts") : Promise.resolve([] as string[]),
+      edition.choose_modules ? api.get<string[]>("/console/hosts").catch(() => [] as string[]) : Promise.resolve([] as string[]),
     ])
       .then(([allHosts, terminal, consoles]) => {
         setHosts(allHosts);
@@ -322,7 +324,7 @@ export function TerminalPage() {
         setConsoleIds(new Set(consoles));
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
-  }, []);
+  }, [edition.choose_modules]);
 
   const openTab = useCallback((host: HostOut, inside?: ShellScope) => {
     counter.current += 1;
@@ -345,7 +347,7 @@ export function TerminalPage() {
     if (!inside && (searchParams.has("scope") || searchParams.has("ref"))) {
       // Ein halber oder ungültiger Link auf eine Shell in etwas: nichts öffnen, nie stattdessen die Shell des Servers.
       setLinkError("Der Link auf diese Konsole ist unvollständig oder ungültig. Es wurde nichts geöffnet.");
-    } else if (host && (inside || terminalIds.has(host.id))) {
+    } else if (host && (inside || edition.choose_modules && terminalIds.has(host.id))) {
       openTab(host, inside ?? undefined);
     }
     setSearchParams((prev) => {
@@ -355,7 +357,7 @@ export function TerminalPage() {
       next.delete("ref");
       return next;
     }, { replace: true });
-  }, [hosts, terminalIds, searchParams, setSearchParams, openTab]);
+  }, [hosts, terminalIds, searchParams, setSearchParams, openTab, edition.choose_modules]);
 
   const closeTab = (key: string) => {
     const index = tabs.findIndex((t) => t.key === key);
@@ -383,13 +385,13 @@ export function TerminalPage() {
   if (error) return <p className="p-6 text-sm text-red-400">Fehler: {error}</p>;
 
   return (
-    // Handy: Hostliste über dem Terminal statt 240 px daneben; die Liste scrollt dort in sich, das Terminal behält eine
-    // brauchbare Mindesthöhe.
-    <div className="flex h-full flex-col gap-4 p-4 lg:flex-row">
+    // Handy: Hostliste über dem Terminal; die Liste scrollt in sich, die Seite bis zum Terminal.
+    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4 sm:overflow-visible lg:flex-row">
       <aside className="flex w-full shrink-0 flex-col gap-2 lg:w-60">
-        <h2 className="text-lg font-semibold">Terminal</h2>
+        <h2 className="text-lg font-semibold">{edition.choose_modules ? "Terminal" : "Container-Konsole"}</h2>
+        {!edition.choose_modules && <p className="text-sm text-white/60">Öffne die Konsole beim gewünschten Container. <Link to="/ext/docker/matrix" className="underline">Docker öffnen</Link></p>}
         {linkError && <p role="alert" className="text-sm text-red-400">{linkError}</p>}
-        {hosts && !hasUsable && (
+        {edition.choose_modules && hosts && !hasUsable && (
           <NoTerminalHosts
             hasHosts={hosts.length > 0}
             hasAccess={hosts.some((h) => h.credential)}
@@ -403,7 +405,10 @@ export function TerminalPage() {
             <b className="font-medium text-white/70">Konsole</b>: Bildschirm des Gasts über Proxmox, geht auch ohne SSH.
           </p>
         )}
-        <div className="max-h-48 min-h-0 overflow-auto lg:max-h-none">
+        <div
+          className={`min-h-0 overflow-auto lg:max-h-none ${tabs.length === 0 ? "max-h-[60dvh] sm:max-h-48" : "max-h-48"}`}
+          data-testid="terminal-hostlist"
+        >
           <HostPicker
             hosts={tiles}
             value={null}
@@ -463,7 +468,7 @@ export function TerminalPage() {
           ))}
         </div>
         {tabs.length === 0 && (
-          <p className="text-sm opacity-60">Links einen Server wählen – jede Sitzung öffnet sich als eigener Tab.</p>
+          <p className="text-sm opacity-60" data-testid="terminal-hint">{edition.choose_modules ? "Einen Server wählen – jede Sitzung öffnet sich als eigener Tab." : "Die Konsole öffnet sich über die Docker-Seite."}</p>
         )}
         {tabs.map((t) => (
           <TerminalView

@@ -103,7 +103,11 @@ async def test_scope_and_ref_are_checked_before_a_ticket_exists(running_app, db_
 
 
 @pytest.mark.asyncio
-async def test_a_scoped_session_opens_inside_and_is_audited_with_scope_and_ref(running_app, db_session, shell):
+@pytest.mark.parametrize("edition_id", ["deck", "dock"])
+async def test_a_scoped_session_opens_inside_and_is_audited_with_scope_and_ref(
+    running_app, db_session, shell, test_settings, monkeypatch, edition_id,
+):
+    monkeypatch.setattr(test_settings, "edition", edition_id)
     import websockets
 
     http_base, ws_base = running_app

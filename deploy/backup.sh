@@ -3,61 +3,61 @@
 # Extension-Daten, Script-Git-Repo) in eine einzelne Datei.
 # Siehe docs/00-DECISIONS.md D-10.
 #
-# Verschluesselung: Ist in Nodvard Deck ein Sicherungsschluessel eingerichtet (Einstellungen -> Sicherung), entsteht
-# eine verschluesselte Sicherung wie aus der Oberflaeche (`nodvard-deck-backup-<Zeit>.ndbak`, `python -m nodvard_deck.admin
+# Verschlüsselung: Ist in Nodvard Deck ein Sicherungsschlüssel eingerichtet (Einstellungen -> Sicherung), entsteht
+# eine verschlüsselte Sicherung wie aus der Oberfläche (`nodvard-deck-backup-<Zeit>.ndbak`, `python -m nodvard_deck.admin
 # create-backup` im Hilfscontainer). restore.sh spielt sie ein und fragt dabei das Sicherungspasswort oder den
-# Wiederherstellungsschluessel ab. Ohne Schluessel (oder mit einem Image, das den Befehl noch nicht kennt) bleibt es beim
-# unverschluesselten tar.gz, mit deutlicher WARNUNG: Es enthaelt den Master-Key, wer es hat, entschluesselt den Tresor.
+# Wiederherstellungsschlüssel ab. Ohne Schlüssel (oder mit einem Image, das den Befehl noch nicht kennt) bleibt es beim
+# unverschlüsselten tar.gz, mit deutlicher WARNUNG: Es enthält den Master-Key, wer es hat, entschlüsselt den Tresor.
 #
-# Stoppt den Dienst kurz fuer eine garantiert konsistente Kopie -- fuer die in D-02
+# Stoppt den Dienst kurz für eine garantiert konsistente Kopie -- für die in D-02
 # beschriebene Last (eine Handvoll Nutzer, ein paar Dutzend Hosts) ist das einfacher
 # und sicherer als ein Live-Kopiertrick gegen eine offene SQLite-WAL-Datei. Ein Weg
 # ohne Ausfallzeit steht in deploy/README.md ("Backup ohne Stopp").
 #
 # Einige Dinge sind hier bewusst so:
-# - `--entrypoint tar`: ohne das laeuft der Hilfscontainer durch /entrypoint.sh und
+# - `--entrypoint tar`: ohne das läuft der Hilfscontainer durch /entrypoint.sh und
 #   damit durch `python -m nodvard_deck.migrate` -- ein "Vorher-Backup" nach einem
-#   `docker compose build` waere dann schon auf das NEUE Schema migriert und taugt
-#   nicht mehr fuer ein Zurueck auf die alte Version.
+#   `docker compose build` wäre dann schon auf das NEUE Schema migriert und taugt
+#   nicht mehr für ein Zurück auf die alte Version.
 # - `--user 1000:1000`: Das Image startet als root (der Entrypoint gibt die Rechte selbst ab). Dieser
-#   Hilfscontainer umgeht den Entrypoint und laeuft deshalb ausdruecklich als `lattice`.
-# - tar schreibt nach STDOUT (`czf -`), die Datei legt DIESE Shell an (`> Datei`). Frueher wurde der
+#   Hilfscontainer umgeht den Entrypoint und läuft deshalb ausdrücklich als `lattice`.
+# - tar schreibt nach STDOUT (`czf -`), die Datei legt DIESE Shell an (`> Datei`). Früher wurde der
 #   Zielordner in den Container eingebunden und der Container (als 1000) schrieb hinein: wer das Skript
-#   wie dokumentiert mit `sudo` startete, hatte einen Zielordner, der root gehoert -- der Container
+#   wie dokumentiert mit `sudo` startete, hatte einen Zielordner, der root gehört -- der Container
 #   durfte dort nicht schreiben. So schreibt immer der Aufrufer selbst, mit seinen Rechten.
-#   Dafuer ist `-T` (kein Pseudo-Terminal) Pflicht: ein TTY wuerde die Binaerdaten verfaelschen.
+#   Dafür ist `-T` (kein Pseudo-Terminal) Pflicht: ein TTY würde die Binärdaten verfälschen.
 #   Auf stdout darf nichts anderes als die tar-Daten stehen; Compose meldet auf stderr, und die
-#   fertige Datei wird trotzdem noch einmal als tar.gz geprueft.
+#   fertige Datei wird trotzdem noch einmal als tar.gz geprüft.
 # - Die Datei entsteht zuerst unter einem Zwischennamen `<name>.partial.<Zufall>` (angelegt mit `mktemp`:
-#   exklusiv, immer mit Rechten 0600, der Name ist nicht vorhersehbar -- sie enthaelt den Master-Key) und
-#   wird erst nach allen Pruefungen (Exit-Code, Mindestgroesse, tar-Test) umbenannt (`mv -fT`: ein dort
-#   vorab abgelegter Link wird ersetzt, nie verfolgt). Bei jedem Fehler wird die halbe Datei geloescht;
-#   scheitert schon das Loeschen, bleibt der Dienst trotzdem nicht gestoppt (nur ein Hinweis). Ob in den
+#   exklusiv, immer mit Rechten 0600, der Name ist nicht vorhersehbar -- sie enthält den Master-Key) und
+#   wird erst nach allen Prüfungen (Exit-Code, Mindestgröße, tar-Test) umbenannt (`mv -fT`: ein dort
+#   vorab abgelegter Link wird ersetzt, nie verfolgt). Bei jedem Fehler wird die halbe Datei gelöscht;
+#   scheitert schon das Löschen, bleibt der Dienst trotzdem nicht gestoppt (nur ein Hinweis). Ob in den
 #   Zielordner geschrieben werden kann, zeigt sich schon VOR dem Stoppen des Dienstes.
 # - `trap ... EXIT`: scheitert das tar (volle SD-Karte, fehlende Rechte), bleibt der
-#   Dienst trotzdem nicht gestoppt zurueck.
+#   Dienst trotzdem nicht gestoppt zurück.
 # - Ist ein Einspielen mit restore.sh mitten im Austausch stehen geblieben (Marke `/app/data/.restore-austausch`), ist
-#   der Datenbestand unvollstaendig und der Dienst absichtlich gestoppt: dann bricht das Skript VOR jeder Aenderung ab,
+#   der Datenbestand unvollständig und der Dienst absichtlich gestoppt: dann bricht das Skript VOR jeder Änderung ab,
 #   sichert nichts und startet auch nichts. Die Arbeitsordner von restore.sh (`.restore-neu`, `.restore-alt*`) und die
 #   Marke kommen nie mit in die Sicherung.
 #
 # - Sperre: backup.sh und restore.sh halten dieselbe Sperre (`flock` auf `.backup-restore.lock` neben dem Skript) bis zum
-#   Ende; laeuft schon eine Sicherung oder ein Einspielen (z. B. Cron-Sicherung waehrend eines Einspielens), wird dieser Lauf
-#   abgewiesen, ohne etwas zu veraendern. Deskriptor 9 bleibt Docker verschlossen (`9>&-`): ein haengender Hilfsprozess haelt
-#   die Sperre sonst ueber das Skript hinaus. Fehlt `flock` (Paket util-linux), gibt es eine Warnung, und es laeuft ohne Sperre.
+#   Ende; läuft schon eine Sicherung oder ein Einspielen (z. B. Cron-Sicherung während eines Einspielens), wird dieser Lauf
+#   abgewiesen, ohne etwas zu verändern. Deskriptor 9 bleibt Docker verschlossen (`9>&-`): ein hängender Hilfsprozess hält
+#   die Sperre sonst über das Skript hinaus. Fehlt `flock` (Paket util-linux), gibt es eine Warnung, und es läuft ohne Sperre.
 #
 # Exit-Codes (3 bis 5: es wurde nichts gesichert, nichts angehalten und nichts gestartet): 0 fertig, 1 Fehler (je nach Meldung),
-# 3 ein unterbrochenes Einspielen liegt noch (Marke; erst mit restore.sh abschliessen), 4 es laeuft schon eine Sicherung oder
-# ein Einspielen (Sperre), 5 die Marke ist leer oder beschaedigt (die Meldung nennt den Weg von Hand).
+# 3 ein unterbrochenes Einspielen liegt noch (Marke; erst mit restore.sh abschließen), 4 es läuft schon eine Sicherung oder
+# ein Einspielen (Sperre), 5 die Marke ist leer oder beschädigt (die Meldung nennt den Weg von Hand).
 #
-# Mit `sudo` gestartet gehoert die fertige Datei (und ein dabei neu angelegter Zielordner) dem Benutzer,
+# Mit `sudo` gestartet gehört die fertige Datei (und ein dabei neu angelegter Zielordner) dem Benutzer,
 # der sudo aufgerufen hat (SUDO_UID), nicht root: so kommt er ohne weiteres sudo an die Sicherung. Als root
 # ohne sudo (z. B. aus der root-Crontab) bekommt sie der Besitzer des Zielordners, wenn der nicht root ist:
-# er kann dort ohnehin Dateien loeschen und ersetzen, und kann sie z. B. per scp mit seinem Konto abholen.
+# er kann dort ohnehin Dateien löschen und ersetzen, und kann sie z. B. per scp mit seinem Konto abholen.
 #
-# Dienstname in Compose: `nodvard-deck` (frueher `lattice`); das Volume heisst weiter
-# `deploy_lattice_data`. Aeltere Sicherungen (`lattice-backup-*.tar.gz`) sind einfache
-# tar.gz des Datenordners und lassen sich mit restore.sh unveraendert einspielen.
+# Dienstname in Compose: `nodvard-deck` (früher `lattice`); das Volume heißt weiter
+# `deploy_lattice_data`. Ältere Sicherungen (`lattice-backup-*.tar.gz`) sind einfache
+# tar.gz des Datenordners und lassen sich mit restore.sh unverändert einspielen.
 #
 # Nutzung (aus deploy/):  ./backup.sh [zielverzeichnis]      (auch:  sudo ./backup.sh ~/nodvard-deck-backups)
 # Auf der Standardausgabe steht bei Erfolg die Zeile `Fertig: <Pfad der Sicherung>`.
@@ -72,20 +72,20 @@ acquire_lock() {
     echo "WARNUNG: 'flock' fehlt (Paket util-linux). Es laeuft ohne Sperre weiter: Achte selbst darauf, dass nicht gleichzeitig eine Sicherung oder ein Einspielen laeuft." >&2
     return 0
   fi
-  # Nie einem Link folgen: als root wuerde sonst eine Datei an dessen Ziel angelegt und auf 0644 gesetzt (oder an einer
-  # Pipe gewartet). Angelegt wird exklusiv (noclobber), ein vorhandener Name wird nie ueberschrieben.
+  # Nie einem Link folgen: als root würde sonst eine Datei an dessen Ziel angelegt und auf 0644 gesetzt (oder an einer
+  # Pipe gewartet). Angelegt wird exklusiv (noclobber), ein vorhandener Name wird nie überschrieben.
   if [ -L "$LOCK_FILE" ] || { [ -e "$LOCK_FILE" ] && [ ! -f "$LOCK_FILE" ]; }; then
     echo "FEHLER: ${LOCK_FILE} ist keine gewoehnliche Datei (ein Link oder Aehnliches) und wird nicht benutzt. Bitte von Hand entfernen: rm ${LOCK_FILE} -- danach legt das Skript sie selbst neu an. Es wurde nichts veraendert." >&2
     exit 1
   fi
   if [ ! -e "$LOCK_FILE" ] && ( set -C; : > "$LOCK_FILE" ) 2>/dev/null; then
     chmod 0644 "$LOCK_FILE" 2>/dev/null || true
-    # Nach `sudo` gehoert die Datei dem Aufrufer (SUDO_UID), nicht root.
+    # Nach `sudo` gehört die Datei dem Aufrufer (SUDO_UID), nicht root.
     if [ "$(id -u)" = 0 ] && [ -n "${SUDO_UID:-}" ] && [ "$SUDO_UID" != 0 ]; then
       chown -h "${SUDO_UID}:${SUDO_GID:-$SUDO_UID}" "$LOCK_FILE" 2>/dev/null || true
     fi
   fi
-  # Nur lesend oeffnen: flock geht auch so, und es klappt, wenn die Datei einem anderen Benutzer (z. B. root) gehoert.
+  # Nur lesend öffnen: flock geht auch so, und es klappt, wenn die Datei einem anderen Benutzer (z. B. root) gehört.
   if ! { exec 9< "$LOCK_FILE"; } 2>/dev/null; then
     echo "WARNUNG: Die Sperrdatei ${LOCK_FILE} laesst sich nicht oeffnen. Es laeuft ohne Sperre weiter: Achte selbst darauf, dass nicht gleichzeitig eine Sicherung oder ein Einspielen laeuft." >&2
     return 0
@@ -107,6 +107,17 @@ dk() {
   docker "$@" 9>&-
 }
 
+# So hieß der Container vor Version 0.6. Läuft er noch oder fehlt das neue Image, kennen diesen Stand nur noch die
+# Skripte aus Version 0.11: Abbruch, bevor etwas angelegt oder angehalten wird. Ein gestoppter Rest neben dem neuen
+# Image stört nicht.
+PRE_RENAME_CONTAINER="deploy-lattice-1"
+pre_rename_status="$(dk container inspect -f '{{.State.Status}}' "$PRE_RENAME_CONTAINER" 2>/dev/null || true)"
+if [ -n "$pre_rename_status" ] \
+  && { [ "$pre_rename_status" = running ] || ! dk image inspect nodvard-deck:latest >/dev/null 2>&1; }; then
+  echo "FEHLER: Hier liegt noch Nodvard Deck von vor Version 0.6 (Container $PRE_RENAME_CONTAINER). Erst mit Version 0.11 umstellen (git checkout v0.11.1, scripts/deploy_pi.sh), danach mit dieser Version sichern. Vorher sichern geht nur von Hand (deploy/README.md, Abschnitt Backup / Restore). Es wurde nichts angehalten." >&2
+  exit 1
+fi
+
 OUT_DIR="${1:-.}"
 DIR_CREATED=0
 [ -d "$OUT_DIR" ] || DIR_CREATED=1
@@ -115,7 +126,7 @@ OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 OUT_FILE="nodvard-deck-backup-${TIMESTAMP}.tar.gz"
 TMP_FILE=""
-# Eine echte Sicherung (Datenbank, Schluessel) ist deutlich groesser; ein leerer Ordner ergibt nur ~100 Bytes.
+# Eine echte Sicherung (Datenbank, Schlüssel) ist deutlich größer; ein leerer Ordner ergibt nur ~100 Bytes.
 MIN_BYTES=1024
 
 # fail [<exit-code>] <meldung>: ohne Code Exit 1.
@@ -126,9 +137,9 @@ fail() {
   exit "$code"
 }
 
-# uid:gid, dem die fertige Datei (bzw. ein neu angelegter Zielordner) gehoeren soll; leer = nichts aendern.
-# Nur als root gibt es etwas zu tun, sonst gehoert alles ohnehin dem Aufrufer.
-# - per sudo gestartet: der sudo-Aufrufer (SUDO_UID), sonst gehoert die Sicherung root und er kommt nicht heran;
+# uid:gid, dem die fertige Datei (bzw. ein neu angelegter Zielordner) gehören soll; leer = nichts ändern.
+# Nur als root gibt es etwas zu tun, sonst gehört alles ohnehin dem Aufrufer.
+# - per sudo gestartet: der sudo-Aufrufer (SUDO_UID), sonst gehört die Sicherung root und er kommt nicht heran;
 # - als root ohne sudo (etwa aus der root-Crontab): der Besitzer des Zielordners, wenn der nicht root ist.
 target_owner() {
   local owner
@@ -144,7 +155,7 @@ target_owner() {
   esac
 }
 
-# give_to <uid:gid> <pfad>... : `-h`, damit ein untergeschobener Link selbst und nicht sein Ziel umgehaengt wird.
+# give_to <uid:gid> <pfad>... : `-h`, damit ein untergeschobener Link selbst und nicht sein Ziel umgehängt wird.
 give_to() {
   local owner="$1"
   shift
@@ -154,7 +165,7 @@ give_to() {
   return 0
 }
 
-# Darf nie scheitern: laeuft im EXIT-Trap, und ein Fehler dort wuerde den Neustart des Dienstes verhindern
+# Darf nie scheitern: läuft im EXIT-Trap, und ein Fehler dort würde den Neustart des Dienstes verhindern
 # (z. B. bei einem nur noch lesbaren oder veralteten Zielordner).
 cleanup_partial() {
   [ -n "$TMP_FILE" ] || return 0
@@ -164,14 +175,14 @@ cleanup_partial() {
 }
 trap cleanup_partial EXIT
 
-# Fehlt das Image, wuerde `compose run` es erst bauen (auf dem Pi sehr lange, bei gestopptem Dienst) und das
+# Fehlt das Image, würde `compose run` es erst bauen (auf dem Pi sehr lange, bei gestopptem Dienst) und das
 # Bauprotokoll mitten in die Sicherungsdatei schreiben. Der Name steht so in docker-compose.yml.
 # Antwortet Docker gar nicht (kein Zugriff, Dienst gestoppt), ist das etwas anderes als ein fehlendes Image: dann steht
 # Dockers eigene Meldung in der Fehlermeldung.
 if ! dk image inspect nodvard-deck:latest >/dev/null 2>&1; then
   if ! docker_err="$(dk info 2>&1 >/dev/null)"; then
     docker_err="$(printf '%s' "$docker_err" | tr '\n' ' ')"
-    # Als root (etwa schon mit sudo gestartet) fehlt kein Recht: dann laeuft der Docker-Dienst nicht.
+    # Als root (etwa schon mit sudo gestartet) fehlt kein Recht: dann läuft der Docker-Dienst nicht.
     if [ "$(id -u)" = 0 ]; then
       fail "Docker antwortet nicht (${docker_err:-keine Meldung}). Laeuft der Docker-Dienst? Es wurde nichts angehalten."
     fi
@@ -180,17 +191,17 @@ if ! dk image inspect nodvard-deck:latest >/dev/null 2>&1; then
   fail "Das Image nodvard-deck:latest gibt es hier nicht (noch nicht gebaut oder ausgeliefert). Erst starten bzw. ausliefern, dann sichern. Es wurde nichts angehalten."
 fi
 
-# Vorab pruefen, ob hier ueberhaupt geschrieben werden kann -- VOR dem Stoppen des Dienstes.
+# Vorab prüfen, ob hier überhaupt geschrieben werden kann -- VOR dem Stoppen des Dienstes.
 # Die leere Zwischendatei entsteht sofort, exklusiv und mit 0600.
 if ! TMP_FILE="$(mktemp "${OUT_DIR}/${OUT_FILE}.partial.XXXXXX" 2>/dev/null)"; then
   TMP_FILE=""
   fail "In ${OUT_DIR} laesst sich nicht schreiben (Rechte, volles oder schreibgeschuetztes Laufwerk?). Es wurde nichts angehalten."
 fi
 
-# Steht ein Einspielen mitten im Austausch (siehe restore.sh)? Vor jeder Aenderung pruefen: Dann den Dienst weder
-# anhalten noch (am Ende) starten -- er ist absichtlich gestoppt, der Datenbestand ist unvollstaendig.
+# Steht ein Einspielen mitten im Austausch (siehe restore.sh)? Vor jeder Änderung prüfen: Dann den Dienst weder
+# anhalten noch (am Ende) starten -- er ist absichtlich gestoppt, der Datenbestand ist unvollständig.
 check_rc=0
-# shellcheck disable=SC2016 # laeuft im Container
+# shellcheck disable=SC2016 # läuft im Container
 CHECK_SCRIPT='M=/app/data/.restore-austausch
 if [ -e "$M" ] || [ -L "$M" ]; then
   p=$(cat "$M" 2>/dev/null) || exit 5
@@ -205,8 +216,8 @@ case "$check_rc" in
   *) fail "Der Datenordner liess sich nicht pruefen (Docker meldete einen Fehler, siehe oben). Es wurde nichts angehalten." ;;
 esac
 
-# Gibt es einen Sicherungsschluessel? Die Antwort landet kurz in der (noch leeren, privaten) Zwischendatei, die Meldungen
-# von Compose in `key_err`. Ein Image ohne den Befehl (aelter als dieses Skript) kennt `backup-key` nicht: dann tar.gz.
+# Gibt es einen Sicherungsschlüssel? Die Antwort landet kurz in der (noch leeren, privaten) Zwischendatei, die Meldungen
+# von Compose in `key_err`. Ein Image ohne den Befehl (älter als dieses Skript) kennt `backup-key` nicht: dann tar.gz.
 ENCRYPT=0
 UNENCRYPTED_REASON=""
 key_rc=0
@@ -240,27 +251,12 @@ warn_unencrypted() {
 }
 [ "$ENCRYPT" = 1 ] || warn_unencrypted
 
-# Lief vor dem Umschalten (oder nach einem Rollback) noch der alte Container `deploy-lattice-1`
-# (Dienst `lattice` vor der Umbenennung), hat er dasselbe Volume offen: ihn ebenfalls stoppen und
-# am Ende wieder starten, sonst wuerde er mitten im Betrieb gesichert bzw. geleert.
-OLD_CONTAINER="deploy-lattice-1"
-OLD_WAS_RUNNING=0
-if [ "$(dk container inspect -f '{{.State.Status}}' "$OLD_CONTAINER" 2>/dev/null || true)" = "running" ]; then
-  OLD_WAS_RUNNING=1
-  echo "Stoppe den alten Container $OLD_CONTAINER (hat dasselbe Volume offen) ..."
-  dk stop -t 30 "$OLD_CONTAINER" >/dev/null
-fi
 restart_services() {
-  if [ "$OLD_WAS_RUNNING" = 1 ]; then
-    echo "Starte den alten Container $OLD_CONTAINER wieder ..." || true
-    dk start "$OLD_CONTAINER" >/dev/null || echo "WARNUNG: $OLD_CONTAINER liess sich nicht starten." >&2
-  else
-    # Die Meldung darf den Start nicht verhindern (z. B. wenn das Terminal schon weg ist).
-    echo "Starte den nodvard-deck-Dienst wieder ..." || true
-    dk compose -p deploy start nodvard-deck
-  fi
+  # Die Meldung darf den Start nicht verhindern (z. B. wenn das Terminal schon weg ist).
+  echo "Starte den nodvard-deck-Dienst wieder ..." || true
+  dk compose -p deploy start nodvard-deck
 }
-# Erst die halbe Datei loeschen, dann den Dienst wieder starten.
+# Erst die halbe Datei löschen, dann den Dienst wieder starten.
 trap 'cleanup_partial; restart_services' EXIT
 
 echo "Stoppe den nodvard-deck-Dienst (fuer eine konsistente Kopie) ..."
@@ -283,8 +279,8 @@ size=$(( $(wc -c < "$TMP_FILE") ))
 if [ "$size" -lt "$MIN_BYTES" ]; then
   fail "Die Sicherung ist mit ${size} Bytes zu klein, vermutlich ist das Datenvolume leer oder tar hat nichts geliefert. Die Datei wurde geloescht."
 fi
-# Ist es wirklich ein tar.gz bzw. eine Sicherung von Nodvard Deck? (faengt auch Fremdausgabe auf stdout oder eine
-# abgeschnittene Datei ab; den Inhalt einer verschluesselten Sicherung prueft erst restore.sh mit dem Passwort)
+# Ist es wirklich ein tar.gz bzw. eine Sicherung von Nodvard Deck? (fängt auch Fremdausgabe auf stdout oder eine
+# abgeschnittene Datei ab; den Inhalt einer verschlüsselten Sicherung prüft erst restore.sh mit dem Passwort)
 if [ "$ENCRYPT" = 1 ]; then
   first_line="$(head -n 1 "$TMP_FILE" 2>/dev/null | head -c 64 || true)"
   if [ "$first_line" != "NODVARD-DECK-BACKUP/1" ]; then
@@ -297,9 +293,9 @@ fi
 # Rechte 0600 hat die Zwischendatei schon von mktemp. Erst den Besitzer setzen, dann umbenennen: `mv -fT` ersetzt
 # einen unter dem Endnamen abgelegten Link, statt ihm zu folgen (oder die Datei in einen gleichnamigen Ordner zu legen).
 give_to "$(target_owner)" "$TMP_FILE"
-# Erst auf den Datentraeger, dann unter dem Endnamen: sonst kann ein Stromausfall kurz danach eine leere Datei mit dem
-# fertigen Namen hinterlassen. Aeltere `sync`-Versionen kennen keine Dateiangabe, dann gilt das ganze System; ein Fehler
-# dabei haelt die Sicherung nicht auf.
+# Erst auf den Datenträger, dann unter dem Endnamen: sonst kann ein Stromausfall kurz danach eine leere Datei mit dem
+# fertigen Namen hinterlassen. Ältere `sync`-Versionen kennen keine Dateiangabe, dann gilt das ganze System; ein Fehler
+# dabei hält die Sicherung nicht auf.
 sync -- "$TMP_FILE" 2>/dev/null || sync 2>/dev/null || true
 mv -fT -- "$TMP_FILE" "${OUT_DIR}/${OUT_FILE}"
 if [ "$DIR_CREATED" = 1 ]; then give_to "$(target_owner)" "$OUT_DIR"; fi

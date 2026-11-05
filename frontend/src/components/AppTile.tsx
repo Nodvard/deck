@@ -1,11 +1,12 @@
 /**
- * Kacheln im Bereich „Apps“ des Cockpits: `AppTile` fuer einen erkannten Dienst (Container, wie bisher) und
- * `CustomAppTile` fuer eine von Hand angelegte App („+ App hinzufuegen“). Beide sehen gleich aus; die eigene hat
- * dazu Symbol/Farbe nach Wahl und -- nur mit Schreibrecht -- ein kleines Menue (Bearbeiten, Verschieben, Loeschen).
+ * Kacheln im Bereich „Apps“ des Cockpits: `AppTile` für einen erkannten Dienst (Container, wie bisher) und
+ * `CustomAppTile` für eine von Hand angelegte App („+ App hinzufügen“). Beide sehen gleich aus; die eigene hat
+ * dazu Symbol/Farbe nach Wahl und -- nur mit Schreibrecht -- ein kleines Menü (Bearbeiten, Verschieben, Löschen).
  *
- * Links oeffnen mit `rel="noopener noreferrer"`. Eine eigene App zeigt nie einen Zustand: der Server fragt ihre
- * Adresse nicht ab (kein „laeuft/laeuft nicht“), sie ist nur ein Link.
+ * Links öffnen mit `rel="noopener noreferrer"`. Eine eigene App zeigt nie einen Zustand: der Server fragt ihre
+ * Adresse nicht ab (kein „läuft/läuft nicht“), sie ist nur ein Link.
  */
+import { styleRef } from "../../../extensions/_shared/frontend/src/csp";
 import { ArrowDown, ArrowUp, ExternalLink, MoreVertical, Pencil, Trash2 } from "lucide-react";
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 
@@ -13,7 +14,7 @@ import { appIconComponent } from "../lib/appIcons";
 import { safeHref, urlHost } from "../lib/apps";
 import { type AppTileOut, hueFor, type ServiceOut } from "../lib/overview";
 
-/** Anfangsbuchstaben fuer eine Kachel ohne Symbol. */
+/** Anfangsbuchstaben für eine Kachel ohne Symbol. */
 function initials(name: string): string {
   return name.replace(/[^\p{L}\p{N}]/gu, "").slice(0, 2) || "?";
 }
@@ -26,13 +27,13 @@ export function AppTile({ service }: { service: ServiceOut }) {
   const running = service.state === "running";
   const inner = (
     <>
-      <span className={AVATAR} style={{ background: `hsl(${hue} 55% 45%)` }}>
+      <span className={AVATAR} ref={styleRef({ background: `hsl(${hue} 55% 45%)` })}>
         {service.name.replace(/[^a-z0-9]/gi, "").slice(0, 2) || "?"}
       </span>
       <span className="min-w-0 flex-1">
         <span className="block break-words text-sm font-medium">{service.name}</span>
         <span className="flex items-center gap-1.5 text-[11px] text-white/45">
-          <span className={`status-dot ${running ? "online" : "stopped"}`} style={{ width: "0.4rem", height: "0.4rem" }} />
+          <span className={`status-dot ${running ? "online" : "stopped"}`} ref={styleRef({ width: "0.4rem", height: "0.4rem" })} />
           <span className="min-w-0 break-words">{service.host ?? "–"}</span>
         </span>
       </span>
@@ -51,7 +52,7 @@ export function AppTile({ service }: { service: ServiceOut }) {
   );
 }
 
-/** Farbe der Kachel: die gewaehlte (nur ein echter `#rrggbb`-Wert kommt in den Stil) oder eine nach dem Namen. */
+/** Farbe der Kachel: die gewählte (nur ein echter `#rrggbb`-Wert kommt in den Stil) oder eine nach dem Namen. */
 function avatarBackground(app: Pick<AppTileOut, "name" | "color">): string {
   if (app.color && /^#[0-9a-f]{6}$/i.test(app.color)) {
     return app.color;
@@ -62,7 +63,7 @@ function avatarBackground(app: Pick<AppTileOut, "name" | "color">): string {
 export function AppAvatar({ app }: { app: Pick<AppTileOut, "name" | "icon" | "color"> }) {
   const Component = appIconComponent(app.icon);
   return (
-    <span className={AVATAR} style={{ background: avatarBackground(app) }} data-testid="app-avatar">
+    <span className={AVATAR} ref={styleRef({ background: avatarBackground(app) })} data-testid="app-avatar">
       {Component ? (
         <Component size={18} strokeWidth={1.8} aria-hidden />
       ) : app.icon ? (
@@ -84,8 +85,8 @@ export interface TileMenuActions {
 
 const ITEM = "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-white/[0.08] focus:bg-white/[0.08] focus:outline-none disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent";
 
-/** Kleines Menue an der Kachel. Schliesst per Escape, Klick daneben und nach jeder Auswahl. `open` liegt bei der
- * Kachel, damit sie waehrend das Menue offen ist ueber ihren Nachbarn liegt (sonst ragen deren Knoepfe hinein). */
+/** Kleines Menü an der Kachel. Schließt per Escape, Klick daneben und nach jeder Auswahl. `open` liegt bei der
+ * Kachel, damit sie während das Menü offen ist über ihren Nachbarn liegt (sonst ragen deren Knöpfe hinein). */
 function TileMenu({ name, actions, open, setOpen }: { name: string; actions: TileMenuActions; open: boolean; setOpen: (open: boolean) => void }) {
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -111,7 +112,7 @@ function TileMenu({ name, actions, open, setOpen }: { name: string; actions: Til
     };
   }, [open, setOpen]);
 
-  // Beim Oeffnen landet der Fokus auf dem ersten Eintrag; mit Pfeil hoch/runter geht es durch die Eintraege.
+  // Beim Öffnen landet der Fokus auf dem ersten Eintrag; mit Pfeil hoch/runter geht es durch die Einträge.
   useEffect(() => {
     if (open) root.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus();
   }, [open]);
@@ -125,8 +126,8 @@ function TileMenu({ name, actions, open, setOpen }: { name: string; actions: Til
     items[next]?.focus();
   }
 
-  // Der Fokus geht zuerst auf den Menue-Knopf: der fokussierte Eintrag verschwindet mit dem Menue, und der Fokus
-  // landete sonst auf <body> (wer mit der Tastatur arbeitet, muesste von oben neu tabben).
+  // Der Fokus geht zuerst auf den Menü-Knopf: der fokussierte Eintrag verschwindet mit dem Menü, und der Fokus
+  // landete sonst auf <body> (wer mit der Tastatur arbeitet, müsste von oben neu tabben).
   const choose = (run: () => void) => () => {
     button.current?.focus();
     setOpen(false);
@@ -171,7 +172,7 @@ function TileMenu({ name, actions, open, setOpen }: { name: string; actions: Til
   );
 }
 
-/** Eine eigene App. `actions` nur mit Schreibrecht (`apps.write`) -- ohne gibt es kein Menue. */
+/** Eine eigene App. `actions` nur mit Schreibrecht (`apps.write`) -- ohne gibt es kein Menü. */
 export function CustomAppTile({ app, actions }: { app: AppTileOut; actions?: TileMenuActions }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const href = safeHref(app.url);

@@ -1,10 +1,11 @@
 /**
- * „+ App hinzufuegen“ / „App bearbeiten“: Formular im Dialog (Name, Adresse, Symbol, Farbe, Gruppe, Server,
- * Tab-Verhalten). Prueft beim Speichern mit denselben Regeln wie das Backend (lib/apps.ts) und zeigt Fehler am
+ * „+ App hinzufügen“ / „App bearbeiten“: Formular im Dialog (Name, Adresse, Symbol, Farbe, Gruppe, Server,
+ * Tab-Verhalten). Prüft beim Speichern mit denselben Regeln wie das Backend (lib/apps.ts) und zeigt Fehler am
  * Feld; was der Server trotzdem ablehnt (422), landet ebenfalls am passenden Feld.
  *
  * Symbol: nur aus der festen Auswahl (lib/appIcons.ts) oder ein einzelnes Emoji -- keine Bild-Adressen.
  */
+import { styleRef } from "../../../extensions/_shared/frontend/src/csp";
 import * as Dialog from "@radix-ui/react-dialog";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 
@@ -53,13 +54,13 @@ export function AppDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Beim Schliessen: wohin der Fokus zurueckgeht (der Dialog hat keinen eigenen Ausloeser, Radix wuesste es sonst nicht). */
+  /** Beim Schließen: wohin der Fokus zurückgeht (der Dialog hat keinen eigenen Auslöser, Radix wüsste es sonst nicht). */
   onCloseAutoFocus?: (event: Event) => void;
   /** Gesetzt = bearbeiten, sonst neu anlegen. */
   app?: AppTileOut | null;
   /** Nur beim Anlegen: vorbelegte Werte (z. B. aus einem Vorschlag auf der Seite „Apps“). */
   initial?: Partial<AppFormValues>;
-  /** Gruppen, die es schon gibt (Vorschlaege). */
+  /** Gruppen, die es schon gibt (Vorschläge). */
   groups: string[];
   hosts: HostOut[];
 }) {
@@ -70,14 +71,14 @@ export function AppDialog({
   const [busy, setBusy] = useState(false);
   const form = useRef<HTMLFormElement>(null);
 
-  // Beim Oeffnen frisch starten: leer (neu) oder mit den Werten der App (bearbeiten).
+  // Beim Öffnen frisch starten: leer (neu) oder mit den Werten der App (bearbeiten).
   useEffect(() => {
     if (!open) return;
     setValues(app ? formFromApp(app) : { ...EMPTY_FORM, ...initial });
     setErrors({});
     setFailure(null);
     setBusy(false);
-    // `initial` gilt nur beim Oeffnen; ein neues Objekt bei jedem Rendern soll die Eingaben nicht zuruecksetzen.
+    // `initial` gilt nur beim Öffnen; ein neues Objekt bei jedem Rendern soll die Eingaben nicht zurücksetzen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, app]);
 
@@ -87,7 +88,7 @@ export function AppDialog({
     setFailure(null);
   }
 
-  /** Springt zum ersten Feld mit Fehler -- auf dem Handy liegt es sonst womoeglich ausserhalb des sichtbaren Bereichs. */
+  /** Springt zum ersten Feld mit Fehler -- auf dem Handy liegt es sonst womöglich außerhalb des sichtbaren Bereichs. */
   function focusFirstError() {
     setTimeout(() => form.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus(), 0);
   }
@@ -246,7 +247,7 @@ export function AppDialog({
                         aria-label={c.label}
                         title={c.label}
                         onClick={() => set("color", c.value)}
-                        style={{ background: c.value }}
+                        ref={styleRef({ background: c.value })}
                         className={`h-7 w-7 rounded-full border-2 ${values.color === c.value ? "border-white" : "border-transparent hover:border-white/50"}`}
                       />
                     ))}
@@ -296,8 +297,8 @@ export function AppDialog({
               </div>
             </div>
 
-            {/* Fester Fussbereich: eine Meldung ohne Feldbezug (Obergrenze, App weg, Server nicht erreichbar) steht
-                hier, wo man sie sieht -- im scrollenden Teil laege sie auf dem Handy unter dem Bildschirmrand. */}
+            {/* Fester Fußbereich: eine Meldung ohne Feldbezug (Obergrenze, App weg, Server nicht erreichbar) steht
+                hier, wo man sie sieht -- im scrollenden Teil läge sie auf dem Handy unter dem Bildschirmrand. */}
             <div className="flex-none border-t border-white/[0.08] px-4 py-3" data-testid="app-form-footer">
               {failure && (
                 <p role="alert" className="mb-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">

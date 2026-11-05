@@ -1,87 +1,44 @@
 # First-Time Setup – Step by Step
 
 > The Nodvard Deck interface is currently available in German only; an English interface is planned. UI labels are given in English with the German original in quotes.
+>
+> Deutsche Fassung: [../11-ERST-EINRICHTUNG.md](../11-ERST-EINRICHTUNG.md)
 
-As of version 0.12. For a fresh installation, work through these steps in order. Where Nodvard
-Deck still has a gap, the guide says so. Without the web interface (using only the API), see the
-[appendix](#appendix-without-the-interface).
+As of version 0.12.
 
-1. [Start the container](#1-start-the-container)
-2. [Setup wizard](#2-setup-wizard-setup)
-3. [Additional users](#3-additional-users)
-4. [Enable extensions](#4-enable-extensions)
-5. [Servers and SSH access](#5-servers-and-ssh-access)
-6. [Root rights without a password and the docker group](#6-root-rights-without-a-password-and-the-docker-group)
-7. [Connect Proxmox](#7-connect-proxmox) (only with Proxmox)
-8. [Push notifications (ntfy)](#8-push-notifications-ntfy)
-9. [Automation and maintenance windows](#9-automation-and-maintenance-windows)
-10. [Back up the dashboard itself](#10-back-up-the-dashboard-itself)
-11. [When something goes wrong](#11-when-something-goes-wrong)
-12. [Locked out? Emergency commands](#12-locked-out-emergency-commands)
-13. [Nodvard Deck does not start: the rescue page](#13-nodvard-deck-does-not-start-the-rescue-page)
-14. [Appendix: Without the interface](#appendix-without-the-interface)
+From zero to a running dashboard in a few minutes. All you need is a machine with Docker that keeps running: a Raspberry
+Pi, a NAS, a small server or a VM. Sections 1 to 7 walk you through the setup in this order. Technical details, special
+cases and everything for looking things up are in the [appendix](#appendix) and in separate guides.
 
-## 1. Start the container
+In the dashboard, **"Guide"** („Anleitung“) opens the German version of this page in a new tab: at the bottom of the
+settings navigation and via the search (Ctrl+K, „Anleitung“, „Hilfe“ or „Doku“). Many places link straight to the
+matching section.
 
-### 1.1 Installation without the repo
+<!-- The <a id="…"></a> markers keep links from older versions working (they link to this file on main). Do not remove. -->
 
-If you only have Docker and do not know the repository, you need a single file:
-[`deploy/compose.standalone.yml`](../../deploy/compose.standalone.yml). The ready-made image comes from the
-GitHub Container Registry (`ghcr.io/nodvard/deck`, for x86 machines and the Raspberry Pi); nothing is built.
-The ways below are grouped by kind: in a terminal, with a web interface, on a NAS and on particular
-machines. Pick one and expand it.
+**Setting up**
 
-#### Good to know, whichever way you pick
+1. [Quick start](#1-quick-start): start Nodvard Deck with three commands
+2. [Setup wizard](#2-setup-wizard-setup): create the account, time zone, modules
+3. [Connect your first server](#3-connect-your-first-server): add a server, SSH access, check the connection
+4. [Enable extensions](#4-enable-extensions): a good start, with or without [Proxmox](#42-connect-proxmox)
+5. [Push notifications (ntfy)](#5-push-notifications-ntfy): messages on your phone
+6. [Back up the dashboard itself](#6-back-up-the-dashboard-itself): encrypted and on a schedule
+7. [Common stumbling blocks](#7-common-stumbling-blocks), including
+   [Locked out? Emergency commands](#73-locked-out-emergency-commands)
 
-- **First start:** The image (just under 400 MB) is downloaded, then the container creates its database.
-  Interfaces such as Portainer or the container section of a NAS show it as "starting" during that time, or
-  not yet as "healthy". Up to five minutes of this is normal. If it says "unhealthy" after that, the log
-  tells you why.
-- **Port:** Inside the container Nodvard Deck answers on port 8080. If 8080 is already taken on the machine,
-  change only the number **left** of the colon (`"8081:8080"`); the right-hand side always stays `8080`. Some
-  NAS systems use 8080 out of the box; the ways below say which.
-- **Data:** Everything lives in the Docker volume `nodvard-deck-data`. That is the recommended way on a NAS
-  too, because it needs no permission settings. Prefer a folder (`<folder>:/app/data`)? Then the container
-  makes the user with the number **1000** the owner of that folder at startup and runs as that user
-  afterwards. The number does not have to belong to a user of the NAS. On a normal disk this works without
-  any help from you. On NAS shares with their own access rules (ACLs) or on a network drive it can fail: the
-  log then says "Die Besitzrechte an /app/data liessen sich nicht setzen" (the ownership of /app/data could
-  not be set), and user 1000 needs write access to the folder (hints per NAS below). If it works, only user
-  1000 and root can read the folder afterwards; file managers or backup tools running as a different user
-  can no longer read the files. So back up Nodvard Deck with its built-in backup
-  ([section 10](#10-back-up-the-dashboard-itself)).
-- **Setup code:** It is in the container's log, inside a frame of `=` characters. The log line is in German
-  and starts with "Einrichtungscode" (setup code). Each way says where to find the log.
+**Looking things up:** [Appendix](#appendix) A to M and the separate guides
+[Installation per platform](INSTALLATION.md), [Root rights and helper scripts](ROOT-RIGHTS.md),
+[Synology DSM](SYNOLOGY-DSM.md), [Backups in detail](BACKUP.md), [Without the interface](WITHOUT-INTERFACE.md),
+[Proxmox token](PROXMOX-TOKEN.md) and [Reverse proxy](REVERSE-PROXY.md).
 
-#### Short version for web interfaces
+## 1. Quick start
 
-`compose.standalone.yml` reads the port from a variable (`${NODVARD_DECK_PORT:-${LATTICE_PORT:-8080}}`). Not
-every interface understands this nested form. For the NAS ways there is this version without variables;
-change the port directly in the line under `ports:`:
+<a id="1-start-the-container"></a>
 
-```yaml
-services:
-  nodvard-deck:
-    image: ghcr.io/nodvard/deck:latest
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-    volumes:
-      - nodvard_deck_data:/app/data
-
-volumes:
-  nodvard_deck_data:
-    name: nodvard-deck-data
-```
-
-The health check is built into the image, so nothing is missing here.
-
-#### In a terminal
-
-<details>
-<summary><b>Docker Compose in a terminal</b></summary>
-
-Download the file as `compose.yml` into an empty folder and start it there:
+Nodvard Deck runs as a Docker container. The finished image comes from the GitHub Container Registry
+(`ghcr.io/nodvard/deck`, for x86 machines and Raspberry Pi); nothing is built. On a machine with Docker and Docker
+Compose it takes three commands:
 
 ```bash
 mkdir ~/nodvard-deck && cd ~/nodvard-deck
@@ -89,436 +46,715 @@ curl -fsSL -o compose.yml https://raw.githubusercontent.com/nodvard/deck/main/de
 docker compose up -d
 ```
 
-On Windows these are commands for a Linux shell (also WSL or Git Bash); in PowerShell, write `curl.exe`
-instead of `curl` and run the commands one by one.
+Then open **`http://<address-of-the-machine>:8080`** in your browser, e.g. **http://192.168.1.10:8080** (on the same
+machine **http://localhost:8080**). The setup wizard is waiting there ([section 2](#2-setup-wizard-setup)).
+It first asks for a setup code from the container's log; [2.1](#21-finding-the-setup-code) shows where to find it.
 
-To check it afterwards, on the same machine:
+- **First start:** The image (just under 400 MB) is downloaded, then the container creates the database. Up to five
+  minutes is normal. To check on the same machine: `curl -s http://localhost:8080/api/v1/health` shows
+  `"status":"ok"`.
+- **No Docker yet?** [Docker's own guide](https://docs.docker.com/engine/install/) shows how to install it on your
+  system; Docker Compose is part of it.
+- **"permission denied" on Linux:** Put `sudo` in front of `docker`. If your user is in the `docker` group, it works
+  without. The examples in this guide write `sudo docker …`.
+- **Windows or macOS for trying it out:** install and start [Docker Desktop](https://docs.docker.com/desktop/), then
+  enter the three commands in a terminal (Windows: PowerShell, macOS: Terminal). In PowerShell write `curl.exe` instead
+  of `curl` and run the commands one by one. For continuous use a machine that is always on is better.
+- **Port 8080 already taken?** (message "port is already allocated" or "address already in use"): Put a file `.env`
+  with the line `NODVARD_DECK_PORT=8081` next to `compose.yml` and run `docker compose up -d` again. The address is
+  then `…:8081`, also for the check above.
+- **Updating:** in the same folder `docker compose pull && docker compose up -d`. Your data is kept
+  ([appendix I](#i-updates)).
 
-```bash
-curl -s http://localhost:8080/api/v1/health      # expected: "status":"ok"
-```
+All further commands in this guide (setup code, log, emergency commands, restore) are run in the folder with
+`compose.yml`, here after `cd ~/nodvard-deck`.
 
-- **Open:** `http://<address-of-the-machine>:8080`, e.g. **http://192.168.1.10:8080**.
-- **Port already in use?** (message "port is already allocated" or "address already in use"): put a file
-  `.env` with the line `NODVARD_DECK_PORT=8081` next to `compose.yml` and run `docker compose up -d` again.
-  The address is then `…:8081`, also for the check above.
-- **Setup code:** `docker compose logs nodvard-deck | grep -A1 Einrichtungscode` in the same folder (more
-  in [section 2](#2-setup-wizard-setup)). The log line is in German and starts with "Einrichtungscode".
-- **Updating:** in the same folder, `docker compose pull && docker compose up -d`. Your data is kept.
+### 1.1 Other ways: NAS, Portainer and more
 
-</details>
+<a id="11-installation-without-the-repo"></a>
+<a id="in-a-terminal"></a>
+<a id="with-a-web-interface"></a>
+<a id="on-a-nas"></a>
+<a id="raspberry-pi-proxmox-and-docker-desktop"></a>
 
-<details>
-<summary><b>A single <code>docker run</code> command (no Compose)</b></summary>
+No terminal at hand, or do you already run an interface for containers? Each of these ways has a step-by-step guide of
+its own in **[Installation per platform](INSTALLATION.md)**, each with opening the page, another port, the setup code
+and updating:
 
-```bash
-docker run -d --name nodvard-deck --restart unless-stopped \
-  -p 8080:8080 \
-  -v nodvard-deck-data:/app/data \
-  --log-opt max-size=10m --log-opt max-file=3 \
-  ghcr.io/nodvard/deck:latest
-```
+| You have … | Guide |
+|---|---|
+| a web interface for containers | [Portainer](INSTALLATION.md#portainer-way-1-from-the-repository), [Dockge](INSTALLATION.md#dockge) |
+| a NAS | [Synology](INSTALLATION.md#synology-container-manager-dsm-72-or-newer), [UGREEN](INSTALLATION.md#ugreen-ugos-pro-docker-app), [QNAP](INSTALLATION.md#qnap-container-station-3), [Unraid](INSTALLATION.md#unraid), [TrueNAS SCALE](INSTALLATION.md#truenas-scale-2410-or-newer), [OpenMediaVault](INSTALLATION.md#openmediavault-compose-plugin), [ZimaOS and CasaOS](INSTALLATION.md#zimaos-and-casaos) |
+| a particular device | [Raspberry Pi](INSTALLATION.md#raspberry-pi), [Proxmox (VM or LXC)](INSTALLATION.md#proxmox-vm-or-lxc-container), [Docker Desktop](INSTALLATION.md#docker-desktop-windows-macos-for-trying-it-out) |
+| Docker without Compose, or Podman | [`docker run`](INSTALLATION.md#a-single-docker-run-command-no-compose), [Podman](INSTALLATION.md#podman) |
 
-The volume has the same name as in the Compose way, `nodvard-deck-data`; the health check is built into the image.
+With Portainer or a NAS interface there is no folder with `compose.yml`: you find the log and restart with the
+container in the interface, and you enter commands such as the emergency commands in its console
+([7.3](#73-locked-out-emergency-commands)). Data in a folder of your own and building it yourself:
+[appendix A](#a-installation-in-detail).
 
-- **Open:** `http://<address-of-the-machine>:8080`. Check on the same machine:
-  `curl -s http://localhost:8080/api/v1/health` shows `"status":"ok"`.
-- **Port already in use?** Write `-p 8081:8080` in the command. If the container is already running, first
-  `docker stop nodvard-deck && docker rm nodvard-deck`, then run the command again; the data stays in the volume.
-- **Setup code:** `docker logs nodvard-deck 2>&1 | grep -A1 Einrichtungscode`
-- **Update:**
+### Secure your connection
+
+Access through `http://<computer-IP>:8080` is unencrypted. Someone on your home network could read your
+login token. A warning therefore appears in step 1 of setup and under **Settings → System → Trusted
+proxy** („Einstellungen → System → Vertrauenswürdiger Proxy“). You can dismiss it for the session.
+It returns at the next login while you still use HTTP. It does not appear with HTTPS or when accessing
+Deck through `localhost`, `127.0.0.1` or `::1`.
+
+There are two ways to protect the connection:
+
+- **HTTPS through a reverse proxy:** Set up a certificate and HTTPS with **Nginx Proxy Manager** or
+  **Caddy**, then access Deck only through the HTTPS address. Add your proxy's address under
+  **Settings → System → Trusted proxy** (`system.trusted_proxies`) so Deck recognises its HTTPS
+  information. The [reverse proxy guide](REVERSE-PROXY.md) covers both options. Restrict direct access
+  to port 8080 to the proxy so other devices cannot keep using the unencrypted route.
+- **Access only through Tailscale or a VPN:** Allow access to Deck exclusively through the encrypted
+  network and block direct connections to port 8080 from your home network and the internet. Then
+  use the Tailscale or VPN address. When using HTTP inside the tunnel, the warning remains visible
+  because Deck cannot detect the VPN protection.
+
+## 2. Setup wizard (/setup)
+
+As long as there is no user yet, the login page automatically redirects to `/setup`. The wizard has six steps; only the
+first is mandatory, everything else can be skipped and done later in the settings.
+
+**Already have a backup?** The first step offers "Restore a backup" („Sicherung einspielen“): upload the
+file, enter the password, check the summary, restore – after that you log in with the account from the
+backup and do not need to set anything up again ([6.2](#62-restore-import-a-backup)). The setup code (below) is
+required there as well.
+
+### 2.1 Finding the setup code
+
+So that not just anyone on the network who opens the page first gets the first account (and with it the owner role),
+`/setup` asks for a **setup code** („Einrichtungscode“). Nodvard Deck generates it at startup and writes it to the
+**container's log**: in a frame of `=` characters, the code additionally on a line of its own, e.g. `K7MQ-X2VD-H9PA`.
+Upper/lower case, dashes and spaces do not matter when you type it. In the wizard, "Where do I find the code?" („Wo
+finde ich den Code?“) unfolds the same help.
+
+- **In a terminal** (in the folder with `compose.yml`):
 
   ```bash
-  docker pull ghcr.io/nodvard/deck:latest
-  docker stop nodvard-deck && docker rm nodvard-deck
+  sudo docker compose logs nodvard-deck | grep -A1 Einrichtungscode
+  # Einrichtungscode: K7MQ-X2VD-H9PA – im Browser eingeben
   ```
 
-  and then the same `docker run` command as above. Your data is kept.
-- **Commands in this guide:** Where it says `docker compose logs nodvard-deck`, use `docker logs nodvard-deck`;
-  `docker compose exec nodvard-deck …` becomes `docker exec nodvard-deck …`.
+  (The log line is in German: "Einrichtungscode" = setup code, "im Browser eingeben" = enter in the browser.) Windows
+  PowerShell has no `grep`; there use
+  `docker compose logs nodvard-deck | Select-String -Context 0,4 Einrichtungscode`. It also works without any filter:
+  `docker compose logs nodvard-deck` shows the whole log, and the code is in the frame.
+- **Docker Desktop:** on the left **Containers** → select the Nodvard Deck container → **Logs** tab.
+- **Portainer:** **Containers** → `nodvard-deck-nodvard-deck-1` (in general `<stack-name>-nodvard-deck-1`) → **Logs**.
+- **Synology Container Manager:** **Container** → select the Nodvard Deck container → **Action** → **Details** →
+  **Log**.
+- **Unraid:** container icon → **Logs**.
+- **Other NAS systems and interfaces:** see the matching way in [Installation per platform](INSTALLATION.md).
 
-</details>
+The code stays the same across restarts and disappears once the first account has been created. After a restart the
+same code appears once more further down in the log.
 
-<details>
-<summary><b>Podman</b></summary>
-
-Podman does not need Compose. The command is the same as with Docker:
-
-```bash
-podman run -d --name nodvard-deck --restart always \
-  -p 8080:8080 \
-  -v nodvard-deck-data:/app/data \
-  ghcr.io/nodvard/deck:latest
-```
-
-- **Without root (rootless):** works. A normal user may not open ports below 1024, so 8080 is fine.
-- **After the machine reboots:** Podman does not restart containers by itself; the `podman-restart.service` unit
-  does, and reliably only for containers with `--restart always` (that is why it says so above instead of
-  `unless-stopped`). Enable it once, as root:
-  `sudo systemctl enable --now podman-restart.service`; rootless, as your user:
-  `systemctl --user enable --now podman-restart.service` plus `loginctl enable-linger $USER`, so the unit also
-  starts without a login.
-- **With Compose:** `podman compose up -d` in the folder with the `compose.yml` from the terminal way. This only
-  works if a Compose program is installed (`docker-compose` or `podman-compose`); `podman compose` just calls it.
-  In the `compose.yml`, set `restart: always` instead of `restart: unless-stopped`, otherwise the container does
-  not come back after the machine reboots. If it reports an error in the `ports` line, use the
-  [short version](#short-version-for-web-interfaces).
-- **A folder instead of a volume** on a system with SELinux (Fedora, RHEL and relatives): append `:Z` to the
-  line, e.g. `-v ./data:/app/data:Z`.
-- **Open:** `http://<address-of-the-machine>:8080`
-- **Port already in use?** Write `-p 8081:8080` in the command (remove an existing container first with
-  `podman stop nodvard-deck && podman rm nodvard-deck`; the data stays).
-- **Setup code:** `podman logs nodvard-deck 2>&1 | grep -A1 Einrichtungscode`
-- **Update:** `podman pull ghcr.io/nodvard/deck:latest`, then `podman stop nodvard-deck && podman rm nodvard-deck`
-  and the `podman run` command from above once more.
-- **Commands in this guide:** replace `docker` with `podman`; `docker compose exec nodvard-deck …` becomes
-  `podman exec nodvard-deck …`.
-
-</details>
-
-#### With a web interface
-
-<details>
-<summary><b>Portainer, way 1: from the repository</b></summary>
-
-1. **Stacks → Add stack**, name e.g. `nodvard-deck` (lowercase letters, digits, `-` and `_` only).
-2. Choose **Repository** as the build method and enter:
-   - **Repository URL:** `https://github.com/nodvard/deck`
-   - **Repository reference:** `refs/heads/main`
-   - **Compose path:** `deploy/compose.standalone.yml`
-
-   You do not need to log in; the repository is public.
-3. **Deploy the stack**.
-
-- **Open:** `http://<address-of-the-machine>:8080`. As a check,
-  `http://<address-of-the-machine>:8080/api/v1/health` shows `"status":"ok"` in the browser.
-- **Port already in use?** Under **Environment variables**, add the variable `NODVARD_DECK_PORT` with e.g.
-  `8081`: for a new stack before "Deploy the stack", for an existing one followed by a redeploy
-  ("Pull and redeploy"). The address is then `…:8081`.
-- **Setup code:** **Containers** → `nodvard-deck-nodvard-deck-1` (in general
-  `<stack-name>-nodvard-deck-1`) → **Logs**; the line starts with "Einrichtungscode".
-- **Updating:** in the stack, **Pull and redeploy** with **Re-pull image** switched on. You can optionally
-  switch on Portainer's automatic updates ("Automatic updates", in newer versions "GitOps updates"): they
-  pick up changes to the Compose file in the repository on their own. A new version of Nodvard Deck,
-  however, is a new image and not a change to the file; you get it with "Pull and redeploy".
-
-</details>
-
-<details>
-<summary><b>Portainer, way 2: web editor</b></summary>
-
-1. Open the file [`deploy/compose.standalone.yml`](../../deploy/compose.standalone.yml)
-   ([as plain text](https://raw.githubusercontent.com/nodvard/deck/main/deploy/compose.standalone.yml))
-   and copy its **entire content**. It starts with `# Nodvard Deck ohne das Repository installieren` and
-   contains `services:` further down.
-2. **Stacks → Add stack**, name e.g. `nodvard-deck`, choose **Web editor** as the build method, paste the
-   content, **Deploy the stack**.
-
-Do **not** paste the three commands from the terminal way (`mkdir …`, `curl …`, `docker compose up -d`).
-They are shell commands, not a Compose file; Portainer then reports "top-level object must be a mapping".
-
-- **Open:** `http://<address-of-the-machine>:8080`. As a check,
-  `http://<address-of-the-machine>:8080/api/v1/health` shows `"status":"ok"` in the browser.
-- **Port already in use?** Under **Environment variables**, add the variable `NODVARD_DECK_PORT` with e.g.
-  `8081`: for a new stack before "Deploy the stack", for an existing one followed by "Update the stack".
-  The address is then `…:8081`.
-- **Setup code:** **Containers** → `nodvard-deck-nodvard-deck-1` (in general
-  `<stack-name>-nodvard-deck-1`) → **Logs**; the line starts with "Einrichtungscode".
-- **Updating:** open the stack → **Editor** → **Update the stack** with **Re-pull image and redeploy**
-  switched on. You do not need to change anything in the editor for that.
-
-</details>
-
-<details>
-<summary><b>Dockge</b></summary>
-
-1. At the top, **+ Compose**.
-2. Under **Stack Name** enter e.g. `nodvard-deck` (lowercase only).
-3. Paste the whole content of [`deploy/compose.standalone.yml`](../../deploy/compose.standalone.yml)
-   ([as plain text](https://raw.githubusercontent.com/nodvard/deck/main/deploy/compose.standalone.yml)) into the
-   editor.
-4. **Deploy**.
-
-Dockge stores the file as `compose.yaml` in its stacks folder (default `/opt/stacks/nodvard-deck/`); you can also
-use `docker compose` there.
-
-- **Open:** `http://<address-of-the-machine>:8080`
-- **Port already in use?** In the stack choose **Edit**, enter the line `NODVARD_DECK_PORT=8081` in the **.env**
-  field, then **Deploy**. The address is then `…:8081`.
-- **Setup code:** On the stack's page the log runs under **Terminal**; the line starts with "Einrichtungscode".
-- **Update:** On the stack's page, **Update**. Dockge pulls the new image and restarts the stack; your data is kept.
-
-</details>
-
-#### On a NAS
-
-Menu names are given as they appear in the vendor's English interface and documentation.
-
-<details>
-<summary><b>Synology (Container Manager, DSM 7.2 or newer)</b></summary>
-
-1. Install the **Container Manager** package (from DSM 7.2; there it replaces the old "Docker" package).
-2. In Container Manager, **Project** → **Create**.
-3. **Project Name** e.g. `nodvard-deck`; for **Path** pick or create an empty folder.
-4. For **Source**, create a new `docker-compose.yml` and paste the
-   [short version](#short-version-for-web-interfaces).
-5. Continue to **Done** (you can skip the web portal step).
-
-- **Open:** `http://<address-of-the-NAS>:8080`. DSM itself uses 5000 and 5001, so 8080 is normally free.
-- **Port already in use?** Select the project → **YAML Configurations**, change the left number under
-  `ports:` and start the project with the new settings.
-- **Setup code:** **Container** → select the Nodvard Deck container → **Action** → **Details** → **Log**.
-- **Update:** **Image** → select `ghcr.io/nodvard/deck` → **Action** → **Update**. Settings → About
-  Nodvard Deck („Einstellungen → Über Nodvard Deck“) then shows whether the new version is running.
-- **Careful with "Clean":** According to Synology this project action also removes the project's volumes,
-  i.e. Nodvard Deck's data. Back up first ([section 10](#10-back-up-the-dashboard-itself)).
-- **Data:** in the volume `nodvard-deck-data`. Prefer a folder, e.g. `/volume1/docker/nodvard-deck:/app/data`?
-  If the container reports "Die Besitzrechte an /app/data liessen sich nicht setzen", give **Everyone** the
-  **Read & Write** permission on just that folder in File Station. That is Synology's advice for containers
-  that cannot write to their folder. But then every user of the NAS can reach the folder, and it also holds
-  keys; the volume is the better way.
-
-</details>
-
-<details>
-<summary><b>UGREEN (UGOS Pro, "Docker" app)</b></summary>
-
-1. Install the **Docker** app from the **App Center**.
-2. In the app, **Project** → **Create**.
-3. Project name e.g. `nodvard-deck`; keep the suggested storage path.
-4. Paste the [short version](#short-version-for-web-interfaces) → **Deploy**.
-
-- **Open:** `http://<address-of-the-NAS>:8080`
-- **Port already in use?** Change the left number in the project (not on the container; containers that
-  belong to a project cannot be edited there) and **Deploy** again.
-- **Setup code:** **Container** → select the Nodvard Deck container → **Log**.
-- **Update:** When there is a newer version of the image, UGOS shows it in the project list; update the
-  project from there. Your data stays in the volume.
-- **Data:** in the volume `nodvard-deck-data`. Prefer a folder? It must exist before **Deploy**, otherwise
-  UGOS aborts. A relative path such as `./data:/app/data` ends up in the project's storage path.
-
-</details>
-
-<details>
-<summary><b>QNAP (Container Station 3)</b></summary>
-
-Container Station 3 needs QTS 5.1.0 or QuTS hero h5.1.0 or newer and is installed from the **App Center**.
-
-**Important:** The QTS web interface itself uses port **8080**. So pick another, free port, e.g.
-`"8090:8080"` instead of `"8080:8080"` in the short version.
-
-1. In Container Station, **Applications** → **Create**.
-2. Name e.g. `nodvard-deck` (only `a`–`z`, `0`–`9`, `-` and `_`, at most 32 characters).
-3. Paste the [short version](#short-version-for-web-interfaces) with the changed port, optionally
-   **Validate**, then **Create**.
-
-- **Open:** `http://<address-of-the-NAS>:8090` (i.e. with the port you entered on the left).
-- **Change the port:** **Applications** → the application → menu next to **Edit** → **Recreate**, change the
-  left number, **Update**. Recreating keeps only what is in volumes or folders; Nodvard Deck's data is in
-  the volume, so it stays.
-- **Setup code:** **Containers** → open the Nodvard Deck container → **Logs** tab (not "Event Logs", which is
-  Container Station's own log).
-- **Update:** **Images** → **Pull**, enter `ghcr.io/nodvard/deck:latest`. Then, as for the port:
-  **Recreate** → **Update**.
-- **Data:** in the volume `nodvard-deck-data`. Prefer a folder (`/share/<share>/…`)? According to QNAP the
-  **Advanced Folder Permissions** (under **Shared Folders**) can interfere with containers. If the warning
-  about the ownership appears, check there.
-
-</details>
-
-<details>
-<summary><b>Unraid</b></summary>
-
-Unraid ships Docker but not Docker Compose. The easiest way is a template of your own:
-
-1. **Docker** tab → at the very bottom, **Add Container**.
-2. **Name** `nodvard-deck`, **Repository** `ghcr.io/nodvard/deck:latest`, **Network Type** `Bridge`.
-3. **Add another Path, Port, Variable, Label or Device** → **Config Type** `Port`, **Container Port** `8080`,
-   **Host Port** `8080` → **Add**.
-4. Again **Add another Path, Port, Variable, Label or Device** → **Config Type** `Path`, **Container Path**
-   `/app/data`, **Host Path** `/mnt/user/appdata/nodvard-deck` → **Add**.
-5. **Apply**.
-
-- **Open:** `http://<address-of-the-server>:8080`
-- **Port already in use?** Click the container's icon → **Edit**, change only the **Host Port** (the
-  Container Port stays 8080) → **Apply**.
-- **Setup code:** the container's icon → **Logs**.
-- **Update:** switch to **Advanced View** at the top right, then **force update** on the container.
-- **Data:** in the folder `/mnt/user/appdata/nodvard-deck`. At startup the container makes user 1000 the
-  owner. If one of Unraid's permission tools resets the owners later, the container sets them again at the
-  next start.
-- **Prefer Compose?** The **Compose Manager Plus** plugin (search for it in the **Apps** tab) brings Docker
-  Compose. There, under **Docker** → **Compose**, create a stack with **Add Stack**, paste the
-  [short version](#short-version-for-web-interfaces) and choose **Compose Up** in the stack's menu; the log is
-  under **View Logs**. **Update** updates it; the button only shows when there is a newer version, otherwise it
-  is called **Force Update**.
-
-</details>
-
-<details>
-<summary><b>TrueNAS SCALE (24.10 or newer)</b></summary>
-
-1. **Apps** → **Discover Apps** → ⋮ menu → **Install via YAML**.
-2. **Name** `nodvard-deck` (lowercase letters, digits and `-`, starting with a letter).
-3. Paste the [short version](#short-version-for-web-interfaces) into **Custom Config** → **Save**.
-
-TrueNAS only checks the YAML syntax, not the content. Use the short version here, not the file with
-variables.
-
-- **Open:** `http://<address-of-the-NAS>:8080`. TrueNAS itself uses 80 and 443.
-- **Port already in use?** **Apps** → **Installed** → the app → **Edit**, change the left number, save.
-- **Setup code:** **Apps** → **Installed** → the app → **View Logs** on the **Workloads** card.
-- **Update:** When the app shows **Update available**, choose **Update** in the ⋮ menu of the **Application
-  Info** card.
-- **Data:** in the volume `nodvard-deck-data`, which lives in the hidden `ix-apps` dataset of the apps pool.
-  TrueNAS recommends separate datasets for app data; for that, use the line
-  `- /mnt/<pool>/<dataset>:/app/data` instead of `- nodvard_deck_data:/app/data`. If the warning about the
-  ownership then appears, give the user with the number 1000 write access under **Datasets** → the dataset →
-  **Permissions** card → **Edit**.
-
-</details>
-
-<details>
-<summary><b>OpenMediaVault ("compose" plugin)</b></summary>
-
-The plugin comes from **omv-extras**. Set up omv-extras, the `openmediavault-compose` plugin and Docker
-following the [omv-extras guide](https://wiki.omv-extras.org/). Then:
-
-1. **Services** → **Compose** → **Settings**: under **Compose Files** pick a **Shared folder** (the plugin
-   stores its files there) and save.
-2. **Services** → **Compose** → **Files** → **Add** → **Add**: **Name** `nodvard-deck`, paste the
-   [short version](#short-version-for-web-interfaces) into **File**, **Save**.
-3. Select the file in the list → **up**.
-
-- **Open:** `http://<address-of-the-NAS>:8080`
-- **Port already in use?** Select the file → **Edit**, change the left number, **Save**, then **up**.
-- **Setup code:** Select the file → **Tools** (cog) → **logs**.
-- **Update:** Select the file → **pull**, then **up**.
-- **Data:** in the volume `nodvard-deck-data`, i.e. in the NAS's Docker storage (default `/var/lib/docker`,
-  configurable under **Settings** → **Docker storage**).
-
-</details>
-
-<details>
-<summary><b>ZimaOS and CasaOS</b></summary>
-
-On import, the interface turns a named volume into a folder mapping and cannot handle the entry under
-`volumes:`. So use this version with a fixed folder here:
+**Choosing the code yourself:** If you would rather set the code (at least 8 characters), add it to the Compose file as
+**`NODVARD_DECK_SETUP_CODE: "…"`** under `environment:`. The `compose.yml` from [section 1](#1-quick-start) has no
+`environment:` block yet; add one under `nodvard-deck:` (same indentation as `image:`) and apply it with
+`docker compose up -d`:
 
 ```yaml
-name: nodvard-deck
-services:
-  nodvard-deck:
-    image: ghcr.io/nodvard/deck:latest
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-    volumes:
-      - /DATA/AppData/nodvard-deck:/app/data
+    environment:
+      NODVARD_DECK_SETUP_CODE: "my-own-setup-code"
 ```
 
-1. In the **Apps** area, **+** → **Install a customized app**.
-2. At the top, **Import**, tab **Docker Compose**, paste the version above → **Submit**.
-3. Check the values it took over → **Install**.
+The repository's `deploy/docker-compose.yml` already has the block. Without this setting Nodvard Deck generates one
+itself. More about the code (failed attempts, where it is stored): [appendix B.1](#b1-the-setup-code).
 
-- **Open:** `http://<address-of-the-device>:8080`
-- **Port already in use?** In the app's menu, **Settings**, change the left port number, **Save**.
-- **Setup code:** In the app's menu, **Settings** → **Terminal and Logs** at the top → **Logs** tab.
-- **Update:** In the app's menu, **Check then update**.
-- **Data:** in the folder `/DATA/AppData/nodvard-deck`. At startup the container makes user 1000 the owner.
+### 2.2 The six steps
 
-</details>
+1. **Create the administrator account** (mandatory): setup code, username (at least 3 characters, only lowercase
+   letters, digits and `.`, `-` and `_`, e.g. `admin`) and a password with at least 8 characters. This first account is
+   the **owner** („Inhaber“). The owner may always do everything, even if roles are changed later – so you cannot lock
+   yourself out.
+2. **Time zone:** The time zone of your device is preselected. Schedules (such as the morning briefing) and maintenance
+   windows follow it.
+3. **What do you want to use?** Switch modules on with a click; none is mandatory. Which ones are worth it for a start
+   is in [section 4](#4-enable-extensions). Modules marked "Needs more details afterwards" („Braucht danach noch
+   Angaben“) are set up after the wizard under Settings → Extensions.
+4. **Two-factor login** (optional, but recommended): "Set up now" („Jetzt einrichten“), confirm your password, scan
+   the QR code with your authenticator app and enter the six-digit code. Then the **recovery codes** appear **exactly
+   once**: copy them or save them as a text file, ideally in your password manager or on paper. You can do this later
+   under Settings → My account ([appendix C](#c-two-factor-login-and-recovery-codes)).
+5. **Appearance** (optional): product name, subtitle and accent colour. Logo, theme and more are available later under
+   Settings → Appearance.
+6. **Done:** This step shows the emergency command for a forgotten password ([7.3](#73-locked-out-emergency-commands)).
+   "Continue to the dashboard" opens the cockpit.
 
-#### Raspberry Pi, Proxmox and Docker Desktop
+Each step in detail, including custom CSS and its emergency exit: [appendix B](#b-setup-wizard-in-detail).
 
-<details>
-<summary><b>Raspberry Pi</b></summary>
+**The "First steps" card:** On the start page (cockpit), a checklist at the top walks you through exactly these
+steps – create a server, store an SSH login, check the connection, set up modules, push notifications, first
+widget – each with a button to the right place. Nodvard Deck ticks the boxes itself, based on what is already set up.
+**"Store an SSH login"** („SSH-Zugang hinterlegen“) only counts a key once Nodvard Deck has actually logged in with it
+(a password counts right away); until then, **"View command"** („Befehl ansehen“) leads to the server's page with the
+setup command already expanded. **"Check the connection"** („Verbindung prüfen“) is only ticked once a login is
+confirmed: the server merely answering is not enough.
+Only steps for which you have the privilege are shown. The card disappears by itself when everything is done; with
+**"Hide"** („Ausblenden“) you remove it earlier (applies to your account on every device). Empty pages (Terminal,
+Files, server page, Docker, Game servers, Proxmox) now also say what is missing and offer the button for the
+next step.
 
-- A Raspberry Pi 4 or 5 with 4 GB RAM and a **64-bit system** (`uname -m` shows `aarch64`); the image is
-  available for `linux/arm64`. When idle, Nodvard Deck needs about 100 MB of memory; the image is just
-  under 400 MB. Docker with Docker Compose has to be installed.
-- An SD card can die: do not keep backups only on the Pi ([section 10](#10-back-up-the-dashboard-itself));
-  a USB SSD lasts longer than an SD card.
-- If Portainer runs on the Pi, the two Portainer ways above work the same.
+## 3. Connect your first server
+
+<a id="5-servers-and-ssh-access"></a>
+
+For Nodvard Deck to monitor and operate a server, you add it and give it SSH access. Everything for this is on one
+page: **Settings → Servers & access** („Einstellungen → Server & Zugänge“). There you create servers, set up their
+SSH access and check that the connection works. The page is designed for phones and only visible to users with the
+privilege `hosts.write` (owner and `admin`).
+
+- You add the **machine Nodvard Deck runs on** (e.g. a Raspberry Pi) by hand in the same way, unless it is a Proxmox
+  guest.
+- **Proxmox nodes, VMs and containers** are read in automatically by the "Proxmox VE" module
+  ([4.2](#42-connect-proxmox)).
+- Terminal, Server status, Docker, Nodvard Shield, Game servers and Scripts need an **SSH login** for each server (user +
+  key or password). Nodvard Deck stores it encrypted; the private key never leaves the vault and is never shown
+  anywhere.
+
+**No server at hand yet?** In the cockpit, **"View with sample data"** („Mit Beispieldaten ansehen“) shows made-up
+servers so you can see what everything looks like when filled ([appendix E.2](#e2-sample-data)).
+
+### 3.1 Create a server
+
+1. Press **"Add server"** („Server hinzufügen“) (on an empty list the button is also in the middle). If you come via
+   "Add server" in the cockpit or in the "First steps" card, the form is already open.
+2. **Short name** („Kurzname“) – lowercase, no spaces, e.g. `pi`. It can **not** be changed later (Nodvard Shield and
+   other extensions recognize the server by it).
+3. **Display name** („Anzeigename“) (what the server is called in the lists; empty = short name) and **Address**
+   („Adresse“) (IP or host name, without `http://` and without a port, e.g. `192.168.1.30`).
+4. **Operating system** („Betriebssystem“): Linux or Windows. For Windows servers there is no setup command and no
+   privilege check. Really choose Windows for a Windows server (such as a game server): otherwise Nodvard Deck sends
+   long commands the Linux way, and they fail on Windows.
+5. **Tags** („Markierungen“) (comma-separated): `docker` if Docker runs there – the Docker module (setting "Server
+   tag" – „Server-Markierung“) and the AI container watch of Nodvard Shield ("Monitored servers" – „Überwachte Server“)
+   take exactly the servers with this tag. Game servers appear only with the tag `gameserver`. Tags can be changed at
+   any time, also for Proxmox VMs (the ones set by Proxmox stay; they cannot be changed).
+6. **"Create"** („Anlegen“). The new server's page opens and immediately offers the next step.
+
+Wrong input is reported right at the field, in German (e.g. „Kurzname: nur Kleinbuchstaben, Ziffern, - und _ …“,
+meaning "Short name: only lowercase letters, digits, - and _ …").
+
+Correcting the address later (e.g. for Proxmox VMs without a guest agent): [appendix E.3](#e3-correcting-the-address).
+
+### 3.2 Set up SSH access – three ways
+
+On the server's page, card **SSH access** („SSH-Zugang“):
+
+- **Generate SSH key (recommended)** („SSH-Schlüssel erzeugen“). Nodvard Deck generates a key of its own just for this
+  server. You only specify the **user on the server** (default `nodvard`, a user of its own just for Nodvard
+  Deck; it is created if it does not exist yet –
+  for Proxmox nodes use `root`) and the port (22). Afterwards the page shows the **setup command** (3.3).
+- **Enter password** („Passwort eingeben“). For a user that already exists on the server. The password is stored
+  encrypted and never shown again. A key is more secure.
+- **Paste your own key** („Eigenen Schlüssel einfügen“). Paste the private key (text beginning with `-----BEGIN …`,
+  **without a passphrase**). Afterwards there is also a setup command for the server.
+
+Whatever you type or paste is cleared from the form when you submit it.
+
+### 3.3 Run the setup command on the server
+
+The command is **a single one-liner**. Copy it to the clipboard with **"Copy"** („Kopieren“) (this also works on
+`http://`, without a secure context), log in to the server (via `ssh`, at the screen, or via the console of your VM
+management), paste it, press Enter. It
+
+- creates the user if necessary (without a password, login only with the key),
+- adds the public key to `~/.ssh/authorized_keys` (with `restrict,pty`: terminal, files and commands work,
+  forwardings do not; Dropbear gets matching options, see [appendix E.4](#e4-what-the-setup-command-does-exactly)),
+- optionally sets up **root rights without a password** and the **docker group** (see
+  [appendix F](#f-root-rights-without-a-password-and-the-docker-group)).
+
+Under "What does the command do?" („Was macht der Befehl?“) the same sequence is shown in readable form, line by line.
+The command runs directly as root, otherwise via `sudo` – so it works on Proxmox (no sudo) as well as on Debian or the
+Pi. It can safely be run several times.
+
+**Root rights and the docker group:** You do not have to change the command by hand for this. The page sets the tick
+boxes "Root rights without a password" („Root-Rechte ohne Passwort“) and "Add to the docker group" („Zur Gruppe docker
+hinzufügen“) itself, because the switched-on modules report what they need. Without either tick box you get the **lean
+variant**: a user of its own, key only, no root rights. That is enough for Terminal, Files and Scripts. What the tick
+boxes allow: [appendix F](#f-root-rights-without-a-password-and-the-docker-group).
+
+#### Set up with a password (Nodvard Deck runs the command)
+
+You do not have to paste the command yourself: in the box **"Set up the server for this key"** („Server für diesen
+Schlüssel einrichten“) you choose, instead of "Paste the command yourself" („Befehl selbst einfügen“), the second way,
+**"Set up with a password (Nodvard Deck runs the command)"** („Mit Passwort einrichten (Nodvard Deck führt den Befehl
+aus)“). This exists for logins with a key (generated or your own) on Linux servers. It is something different from the
+login "Enter password" in [3.2](#32-set-up-ssh-access--three-ways): here you need the password only for this one
+setup, and it is never stored. Afterwards Nodvard Deck logs in with the key.
+
+- **What you enter:** once the account (default `root`) and its password. The account must be allowed to log in via
+  SSH with a password: `root` or an account with sudo. Debian and Ubuntu usually do not let `root` in with a password;
+  then use an account with sudo (the form says so at the field). For an account other than `root`, sudo uses the same
+  password; if you untick "Use the same password for sudo" („Für sudo dasselbe Passwort nehmen“), the account must be
+  allowed to use sudo without a password.
+- **What happens:** Nodvard Deck logs in with it **once**, runs **exactly the same command** as in 3.3 (the tick boxes
+  "Root rights without a password" and "docker group" above apply here too), closes the connection and then checks
+  with the new key like "Check connection" ([3.4](#34-check-the-connection)). Below you see the command's messages and
+  the result of the check. If the server had no default login yet, this login becomes the default. When replacing a
+  login ([appendix E.7](#e7-replace-access-delete-groups)), the check counts like "Check new login" („Neuen Zugang prüfen“);
+  afterwards you can press "Use new login" („Neuen Zugang verwenden“).
+- **The password is never stored:** not in the database, not in the vault, not in the audit log and not in the log.
+  The field is cleared the moment you submit, and the browser is told not to remember it. The audit log records that
+  there was an attempt ("Server mit Passwort einrichten", `host.setup_with_password`) with server, account and result
+  – never the password.
+- **The server key must be known.** The password never goes to a server whose fingerprint Nodvard Deck does not know
+  yet or which has changed. If Nodvard Deck does not know it yet, the form shows the fingerprint to compare and
+  confirm (as in [3.4](#34-check-the-connection)); afterwards you enter the password once more. With a changed key
+  there is only the warning, without a confirm button.
+
+Limits, the warning without HTTPS and what is not possible yet:
+[appendix E.5](#e5-set-up-with-a-password-limits-and-security).
+
+### 3.4 Check the connection
+
+Card **Check connection** („Verbindung prüfen“) (up to 30 seconds). The page shows point by point what works and
+what does not – with a hint on what to do:
+
+1. **Server reachable** – address, port, firewall, is SSH running?
+2. **Server key** – see below.
+3. **Login** – does the server accept the key or the password?
+4. **Root rights** – does `sudo` work without a password? (Only a hint, not an error: the lean variant without root
+   rights is allowed.)
+5. **What extensions need** – e.g. Docker without sudo for the Docker module.
+6. **Operating system** – e.g. "Debian 12 · aarch64 · Raspberry Pi 4 Model B".
+
+**The server key (fingerprint):** Every SSH server has a fingerprint of its own.
+
+- **New:** The first time, the check shows the fingerprint and stops. Until then, **no password and no key** has gone
+  to the server. Compare the fingerprint with the one on the server (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`;
+  the page shows the command to copy) and press **"Fingerprint matches – confirm"** („Fingerabdruck stimmt –
+  bestätigen“). The page then continues checking right away. In your own home network and for a freshly set up
+  server, confirming is fine; for a server on the internet, really compare the fingerprint.
+- **Changed:** If the server later shows a different fingerprint, a clear warning appears – **without** a confirm
+  button. This happens after a reinstallation of the server, but also when someone puts themselves in between. If it
+  was a reinstallation: card **Server key** („Server-Schlüssel“) → **Forget** („Vergessen“), then check again and
+  confirm the new fingerprint. If not: first find out why.
+- Too many checks in a row slow the page down ("Zu viele Prüfungen. Bitte in N Minuten …" – too many checks, please
+  wait N minutes).
+
+From the list it is also quicker: **Check** („Prüfen“) next to each server shows the result briefly ("4 of 5 OK" –
+„4 von 5 in Ordnung“), and the server page (`/hosts/<ID>`) has a card **Access** („Zugang“) with "Check
+connection".
+
+When the access badge turns green and how new server keys are remembered:
+[appendix E.6](#e6-server-keys-and-the-green-badge). Replacing or deleting access, groups, deleting a server:
+[appendix E.7](#e7-replace-access-delete-groups).
+
+**Testing:** In the "Terminal" menu the server now appears (the Terminal extension switches itself on with the first
+SSH login, unless you had switched it off yourself). Open a session – if the login works, it works for all the other
+extensions too. A terminal session without any input or output closes by itself after 30 minutes.
+
+## 4. Enable extensions
+
+On a fresh installation, **all extensions are off** – with one exception: **Terminal switches
+itself on** as soon as you give the first server an SSH login (generate a key, password or your
+own key; see [3.2](#32-set-up-ssh-access--three-ways)). The audit log records it
+(„Erweiterung automatisch eingeschaltet“). This only happens as long as nobody has ever switched
+Terminal on or off themselves: if you switch it off on purpose, it stays off. Existing
+installations are not affected.
+
+In the setup wizard (step 3, see [2.](#2-setup-wizard-setup)) you switch on the modules you want to use with a
+click. Later you can do that at any time under Settings → Extensions („Einstellungen → Erweiterungen“), with the
+switch on the right; "Configure" („Konfigurieren“) opens the extension's settings ("Setup required" –
+„Einrichtung nötig“ – means that details are still missing or that the last connection test failed). If you open
+the page of a module that is switched off (for example via a bookmark), it says so, and **"Switch on"** („Einschalten“)
+switches it on right there (without the privilege for that, it says that an administrator can switch it on). A good
+start for almost any home network: Terminal, Server status, Nodvard Shield and Push notifications, plus the Docker module if
+Docker runs on a server, and Game servers if a game server runs there. **You only need Proxmox VE and Proxmox-Backups if
+you use Proxmox** – otherwise leave them off (see [4.1](#41-without-proxmox)). The rest as needed.
+
+**Update server rights:** Switching on a module alone does not add rights on the server. If you enable Docker or
+Nodvard Shield after setting up SSH, the docker group and helper scripts may be missing. Under **Settings → Servers & Access**
+(„Einstellungen → Server & Zugänge“), open the existing login and, for each affected server with an existing key login,
+run the newly displayed setup command again ([3.3](#33-run-the-setup-command-on-the-server)).
+Then check the connection again ([3.4](#34-check-the-connection)).
+
+**"Beta":** Game servers, Home Assistant, Jellyfin, Network, Nginx Proxy Manager, Pi-hole, Plex, qBittorrent, Synology DSM,
+Uptime Kuma and Vaultwarden carry a "Beta" badge (in the settings, in the wizard, in the menu and above the module's
+page). They work, but are not yet as thoroughly tested as the rest. Feedback helps.
+
+**Synology DSM** (beta, read-only) shows the state, storage, drives and Hyper Backup of one or several Synology devices.
+Create a separate DSM account just for Nodvard Deck for it (in the "administrators" group for most details) and enter
+each device under Settings → Extensions → Synology DSM with a short name, address and account; the password goes into
+the vault. Everything else (two-factor, certificate, several devices, notifications, Hyper Backup):
+[Synology DSM](SYNOLOGY-DSM.md).
+
+**Credentials belong to their address.** In an extension's settings, first enter the address and click "Save"
+(„Speichern“), then store the token or password in the "Connection" card („Verbindung“) – Nodvard Deck does not
+accept them before that. If you change the address later (for example the ntfy server or a Proxmox address),
+Nodvard Deck deletes the matching credentials when saving, and you enter them again; the page tells you
+beforehand. A different spelling of the same address (upper/lower case in the host name, default port, trailing `/`,
+missing `http://`) does not count as a change.
+
+More about individual modules (Docker, Nodvard Shield, apps, files, the address check in Nginx Proxy Manager, widgets) is
+in [appendix G](#g-modules-in-detail).
+
+### 4.1 Without Proxmox
+
+Nodvard Deck does not need Proxmox. A Raspberry Pi, a Debian VM, a NAS or a few Docker hosts are enough. What is
+different then:
+
+- **You create servers by hand** ([3.1](#31-create-a-server)) and give each one an SSH login
+  ([3.2](#32-set-up-ssh-access--three-ways)). The modules Proxmox VE and Proxmox-Backups stay off; their entries then appear
+  neither in the menu nor in the cockpit.
+- **Online or offline:** Nodvard Deck checks servers created by hand by itself every 2 minutes. If one goes down or
+  comes back, you get a notification, a push message too if you like.
+- **Utilization and history** (CPU, memory, disk, network, temperature) come from the **Server status** module
+  („Server-Zustand“) via SSH, for Linux servers with an SSH login.
+- **Docker containers** are started, stopped and updated with the **Docker** module, for servers with the tag `docker`.
+- **Updates, antivirus, intrusion protection:** Nodvard Shield, for all Linux servers with an SSH login.
+- **Tiles of your own** for the router, the NAS interface or Pi-hole are created in the "Apps" area of the cockpit with
+  **+ Add app** („+ App hinzufügen“).
+- **Console in the browser** (a guest's screen) exists only for Proxmox guests. For every other server you use the
+  **Terminal**.
+
+Everything in detail: [appendix G.1](#g1-without-proxmox-in-detail).
+
+### 4.2 Connect Proxmox
+
+<a id="7-connect-proxmox"></a>
+
+**Only if you use Proxmox – otherwise skip this section** (see [4.1](#41-without-proxmox)).
+
+1. Switch on the **"Proxmox VE"** extension.
+2. On the **"Proxmox"** page click **"Connect with password"** („Mit Passwort verbinden“). You need admin rights in
+   Nodvard Deck for this.
+3. Enter the address (`https://…:8006`) and the password of a Proxmox administrator (default `root@pam`). If Proxmox has
+   a self-issued certificate, compare its fingerprint first and confirm it.
+
+Nodvard Deck creates user, role and token in Proxmox itself, reads in nodes, VMs and containers right away and forgets
+the password at once. It remembers the fingerprint and checks it on every later request. If "Proxmox-Backups" is on, it
+gets its own access at the same time ("Also connect Proxmox backups", „Auch Proxmox-Backups verbinden“). Once per
+Proxmox server.
+
+Step by step, with two-factor, or rather with a token of your own with exactly defined privileges:
+**[PROXMOX-TOKEN.md](PROXMOX-TOKEN.md)**. The manual way in brief and what the modules report by themselves:
+[appendix G.2](#g2-proxmox-in-detail).
+
+## 5. Push notifications (ntfy)
+
+<a id="8-push-notifications-ntfy"></a>
+
+Turn on Settings → Extensions → **"Push notifications"** („Einstellungen → Erweiterungen → Push-Nachrichten“, formerly
+„ntfy-Benachrichtigungen“) → "Configure" („Konfigurieren“). For ntfy:
+
+- **ntfy server** („ntfy-Server“): e.g. `https://ntfy.sh` or your own. Nodvard Deck always connects to it directly, never
+  through a proxy from the environment (`HTTP_PROXY`, `HTTPS_PROXY`). If the machine running Nodvard Deck only reaches the
+  internet through a proxy, `ntfy.sh` cannot be reached; then use an ntfy server in your own network.
+- **Topic** („Thema (Topic)“): the channel you subscribe to in the ntfy app. On ntfy.sh choose one that is hard to
+  guess, because there anyone who knows the name can read along. The **"Choose randomly"** button („Zufällig wählen“)
+  next to the field enters a random name.
+- **Dashboard address (optional)** („Adresse des Dashboards (optional)“): `http://192.168.1.10:8080`. Then tapping a
+  notification opens the matching page directly. It must start with `http://` or `https://`, otherwise it is ignored.
+- **Minimum level for push notifications** („Mindest-Stufe für Push-Nachrichten“): "Everything (info, warning, critical)"
+  („Alles (Info, Warnung, Kritisch)“) is the default. With "From warning" („Ab Warnung“) or "Critical only"
+  („Nur Kritisch“), smaller messages no longer reach the phone; they stay under "Notifications" („Meldungen“). The test
+  message always arrives.
+- **Volume for info, warning and critical** („Lautstärke bei Info, Warnung und Kritisch“): how noticeable a message of
+  that level is on the phone, from "1 – no sound" to "5 – very loud". Whether level 5 also gets through "Do not
+  disturb" is decided by your phone.
+- "Save" („Speichern“).
+- **Credentials → "Access token (optional)"** („Zugangsdaten → Zugriffstoken (optional)“): only if your ntfy server
+  requires login.
+
+In the ntfy app on your phone, subscribe to the same server and the same topic. You can skip typing: after saving, the
+page shows a **QR code** below the settings. Point your phone's camera at it, then the ntfy app opens and offers to
+subscribe to the topic. The code contains only server and topic, never the access token.
+
+**Testing:** "Nodvard Shield" page → "Send briefing" („Briefing senden“). Creating it can take up to half a minute if a
+server does not respond. Afterwards the page tells you whether the status report („Lagebericht – …“) was also delivered
+as a push notification. If not, ntfy is not set up yet or the ntfy server cannot be reached. All messages are also in
+the dashboard under "Notifications" („Meldungen“) – even if the push notification does not arrive. There you can delete
+a message with the bin icon or tidy up with „Alle gelesenen löschen“ (delete all read ones). Nodvard Deck deletes
+messages older than 90 days on its own every night (unread critical messages stay until you read them); you change
+the number under Settings → System → „Zeit & Protokoll“ (time & log).
+
+**What the status report contains:** servers, protection score, threats, hardening, updates, intrusion protection and –
+if any – how many proposals (from all modules) wait for your confirmation under "Actions" and which containers crashed
+in the last 24 hours. A waiting approval or a crash that is still open turns it into „es gibt etwas zu tun“ (something to
+do). It also arrives when everything is fine; if it does not arrive, Deck itself is probably down.
+
+If you set the minimum level to "From warning" or "Critical only", test with "Send test message" („Testnachricht senden“,
+"Connection" card under the ntfy settings) instead: a briefing without problems is only an info message and then does not
+reach the phone.
+
+### More channels (Telegram, Discord, Gotify, Pushover, Matrix, Slack, Mattermost)
+
+Instead of ntfy or in addition (up to 10 channels): under **"More channels"** („Weitere Kanäle“) click "Add channel"
+(„Kanal hinzufügen“), choose a **short name** (e.g. `telegram`), the **minimum level** (default "From warning") and
+whether it is **active** → "Save". Then, under **Credentials**, enter the address in the entry "Channel address"
+(„Adresse des Kanals“) with that short name. It contains credentials (bot token, webhook key) and is therefore kept only
+in the vault. If you rename a channel, its address is gone and has to be entered again. It is written like in Apprise:
+
+| Service | Address |
+|---|---|
+| Telegram | `tgram://BOT-TOKEN/CHAT-ID` (several chats separated by `/`; channels as `@name`) |
+| Discord | `discord://WEBHOOK-ID/WEBHOOK-TOKEN` or the webhook URL Discord shows |
+| Gotify | `gotifys://SERVER/APP-TOKEN` (`gotify://` without HTTPS, port with `:`) |
+| Pushover | `pover://USER-KEY@APP-TOKEN` (optionally `/DEVICE`) |
+| Matrix | `matrixs://ACCESS-TOKEN@SERVER/!ROOM-ID:SERVER` or `…/#roomname` (access token only, no password) |
+| Slack | `slack://T…/B…/X…` or Slack's webhook URL |
+| Mattermost | `mmosts://SERVER/WEBHOOK-ID` |
+| anything else | `apprises://SERVER/KEY` – your own [Apprise API](https://github.com/caronc/apprise-api) (separate container), which forwards to every service Apprise supports |
+
+Nodvard Deck sends the messages itself, directly to the service (no extra software, no proxy from the environment, no
+redirects). Telegram, Discord, Slack and Pushover need direct internet access for this, and the text of each message
+(e.g. server names, file paths, addresses) goes to that service. Group pings like `@everyone`, `@channel`, `@all` or
+`@room` from a message stay plain text. If the "Dashboard address" above is set, each message ends with a link to it.
+
+- **"Send test message"** sends to ntfy and all active channels at the same time and names each one that failed.
+- **"Test connection"** asks each service without sending anything: for Telegram, Discord, Pushover, Matrix and an
+  Apprise API this checks the token or key, for Telegram also whether the bot may post in each group and channel, for
+  Matrix whether the account is in each room. Slack, Gotify and Mattermost do not allow that (nor do private Telegram
+  chats); there you see a note, and an error from the last sending counts as well.
+- The short name "ntfy" is not available; it stands for the ntfy server above.
+- If one channel (or one chat of a channel) fails for a normal message, the others still get it.
+
+## 6. Back up the dashboard itself
+
+<a id="10-back-up-the-dashboard-itself"></a>
+
+Nodvard Deck backs itself up: encrypted, on a schedule and, if you like, to another drive or a NAS. Set this up right at
+the start; without the password and the recovery key no backup can be opened any more.
+
+### 6.1 In the interface (recommended)
+
+<a id="101-in-the-interface-recommended"></a>
+
+**Settings → System → Backup** („Einstellungen → System → Sicherung“). Only the owner can change anything there.
+
+1. **Set a backup password** („Sicherungspasswort festlegen“) (at least 12 characters, enter it twice, confirm with
+   the login password). Nodvard Deck does not store the password, only a public key. Afterwards the *recovery key*
+   (`AGE-SECRET-KEY-1…`) appears **once**: copy it or save it as a file and keep it safe.
+   **Password and key gone = backups worthless.** Nobody can open them any more.
+2. Turn on **Back up automatically** („Automatisch sichern“), choose the time and set how many backups should be kept
+   (1 to 60, older ones are deleted).
+3. **Folder** („Ordner“): the default is `/app/data/backups` in the data folder. That protects against operating
+   mistakes, but not against a broken SD card. It is better to mount a folder from another drive or a NAS: the
+   Compose file (`compose.yml` from [section 1](#1-quick-start), or `deploy/docker-compose.yml` for an
+   installation from the repository) already contains the line `# - ./sicherungen:/backups` under `volumes:`. Remove
+   the `#` (or enter a NAS path instead of `./sicherungen`), run `mkdir sicherungen && sudo chown 1000:1000 sicherungen`
+   in the same folder (the folder must belong to the user with the number 1000), apply it with `docker compose up -d`
+   and choose `/backups` as the folder in the interface. For a NAS or NFS see
+   [Backups to a NAS or NFS](#backups-to-a-nas-or-nfs).
+4. **Check** („Prüfen“) compares a backup with its checksum (detects broken files, without a password).
+   **Download** („Herunterladen“) fetches a backup to your PC, **Download backup** („Sicherung herunterladen“) creates
+   a fresh one immediately – either with the backup password or with a one-time password of your own just for this
+   file.
+
+#### Backups to a NAS or NFS
+
+Nodvard Deck only accepts `/app/data/backups` in the data folder or the mounted folder `/backups` and its subfolders
+(e.g. `/backups/deck`) as a target. This always means the path **inside the container**, not the one on the host or the
+NAS. In brief: mount the NAS folder on the host (with NFS so that it is ready before Docker), mount it into the container
+as `/backups` in the Compose file, give user 1000 write access, test it and choose `/backups` in the interface. Step by
+step, with the line for `/etc/fstab`, the permissions and the error messages when saving:
+[Backups in detail](BACKUP.md#backups-to-a-nas-or-nfs).
+
+### 6.2 Restore (import a backup)
+
+<a id="102-restore-import-a-backup"></a>
+
+Two ways, same procedure: **Settings → System → Restore** („Einstellungen → System → Wiederherstellen“) (owner only,
+with the login password) or, on a **fresh installation**, in the setup wizard under **"Restore a backup"**
+(„Sicherung einspielen“) (there, instead of an account, with the **setup code** from the container's log – as
+when creating the first account).
+
+1. **Choose the file** (`.ndbak`) and upload it. There is a progress indicator; the file is streamed to disk, not held
+   in memory. Upper limit 4 GiB (`NODVARD_DECK_RESTORE_MAX_UPLOAD_BYTES`).
+2. Enter the **password or recovery key** (for a file "with its own one-time password", only the one-time password).
+   Nodvard Deck decrypts and checks everything in a separate staging folder; the backup's database is only read and
+   never executed.
+3. **Look at the summary:** created on, version, identifier of the installation, name of the owner, number of users and
+   servers, extensions, warnings. **age does not verify who created a backup** – anyone who knows the password can
+   build one. Only restore backups that you created yourself.
+4. **"Restore and restart"** („Einspielen und neu starten“). This replaces **everything, including the accounts**;
+   afterwards everyone logs in again (with the accounts from the backup). Nodvard Deck shuts down and restarts; the
+   restore happens at startup, then it migrates as usual. The page waits and then leads to the login.
+
+Good to know:
+
+- **A restart policy is required.** The restart only works if the container has a restart policy
+  (`restart: unless-stopped`; the bundled Compose files have it). With `docker run` without `--restart`, it stays off
+  afterwards: start it by hand (`docker start …`), the backup is restored at startup.
+- **The old state is kept** under `restore/replaced-<time>` in the data folder (with old accounts and keys), exactly
+  one, and is **deleted automatically after 30 days** (the card names the day). Under *Restore* you can delete it
+  earlier with the login password.
+- **If the old installation is still running**, for example on another device, both have the same keys and
+  credentials. After that, run only one.
+- **If something fails** (broken or too new backup, error while moving, migration fails), the old state comes back and
+  the card names the reason. A crash in the middle of restoring is rolled back at the next start. A backup from a
+  **newer** version or with an extension that is missing here is rejected with a notice. A pending restore request is
+  valid for one hour; an abandoned intermediate state is deleted after one hour.
+- What is not in the backup (measurements, the extensions' Git settings, a login secret from the environment):
+  [Backups in detail](BACKUP.md#what-is-not-in-the-backup).
+
+**Emergency without the interface:** in the folder with the Compose file
 
 ```bash
-mkdir ~/nodvard-deck && cd ~/nodvard-deck
-curl -fsSL -o compose.yml https://raw.githubusercontent.com/nodvard/deck/main/deploy/compose.standalone.yml
-sudo docker compose up -d
-curl -s http://localhost:8080/api/v1/health      # expected: "status":"ok"
+cd ~/nodvard-deck
+sudo docker compose exec nodvard-deck python -m nodvard_deck.admin restore-backup /app/data/backups/nodvard-deck-sicherung-….ndbak
+sudo docker compose restart nodvard-deck      # the restore happens at startup
 ```
 
-If your user is in the `docker` group, leave out `sudo`. The first start takes a while because the image
-has to be downloaded first.
+(The file must be visible inside the container; the command asks for the password and shows the summary. `compose exec`
+runs in the existing container; a `compose run` alongside it would be rejected by the data folder's lock, see
+[appendix I.3](#i3-the-copy-before-the-migration).) With an installation from the repository,
+`deploy/restore.sh sicherung.ndbak` does the same in one step
+([Backing up with the script](BACKUP.md#with-the-script-installation-from-the-repository-only)).
+If nothing works at all, the old state is still under `restore/replaced-…`:
+[Backups in detail](BACKUP.md#if-nothing-works-at-all). In an emergency a `.ndbak` file can also be opened entirely
+without Nodvard Deck: [Backups in detail](BACKUP.md#emergency-opening-a-backup-without-nodvard-deck).
 
-- **Open:** `http://<address-of-the-pi>:8080`
-- **Port already in use?** Put a file `.env` with the line `NODVARD_DECK_PORT=8081` next to `compose.yml`
-  and run `sudo docker compose up -d` again. The address is then `…:8081`.
-- **Setup code:** `sudo docker compose logs nodvard-deck | grep -A1 Einrichtungscode` in the same folder.
-- **Updating:** in the same folder, `sudo docker compose pull && sudo docker compose up -d`. Your data is
-  kept.
+## 7. Common stumbling blocks
 
-</details>
+The most common hurdles at the start, each with the next step. All other error messages (Proxmox, modules, login) are in
+[appendix J](#j-when-something-goes-wrong).
 
-<details>
-<summary><b>Proxmox (VM or LXC container)</b></summary>
+### 7.1 The dashboard cannot be reached
 
-Docker does not run directly on the Proxmox host but in a VM or an LXC container. Install Docker there
-([Docker's guide for Debian](https://docs.docker.com/engine/install/debian/)) and then follow **Docker Compose in a
-terminal** above.
+- **Right after the start:** The first start takes up to five minutes (downloading the image, creating the database).
+  Until then, interfaces such as Portainer or a NAS's container area show the container as "starting" or not yet as
+  "healthy".
+- **"port is already allocated" or "address already in use":** Port 8080 is already taken. Use another one
+  ([section 1](#1-quick-start); for interfaces and NAS systems it is described with each way in
+  [Installation per platform](INSTALLATION.md)). On a QNAP, the NAS's own interface uses port 8080.
+- **"unhealthy", or the container does not start:** The log names the reason, in the folder with `compose.yml`:
+  `sudo docker compose logs --since 15m nodvard-deck` (in interfaces under "Logs" for the container). If the browser
+  shows a **rescue page** instead of the dashboard, see [appendix K](#k-nodvard-deck-does-not-start-the-rescue-page).
+- **Is it running at all?** On the machine running Nodvard Deck, `curl -s http://localhost:8080/api/v1/health` shows
+  `"status":"ok"`, and `sudo docker compose ps` shows the state of the container. If that works there but not from
+  another device, the address or the port is usually wrong.
+- **"Server nicht erreichbar – bitte gleich noch einmal versuchen." (server not reachable, please try again shortly)
+  at login:** The dashboard does not respond; the same checks as above. If it says **"Server meldet: …"** (server
+  reports) instead (also when reloading the page), the dashboard responds and names the reason, e.g. that the disk is
+  full – then fix that. You are not logged out by this.
+- **The setup code is not accepted:** It is in the container's log ([2.1](#21-finding-the-setup-code)). Wrongly entered
+  codes are slowed down: after 10 failed attempts there is a pause of a few minutes.
+- **"Die Seite konnte nicht geladen werden" (the page could not be loaded)** usually appears right after an update:
+  reload the page (F5).
 
-- **VM (the safe way):** Proxmox itself recommends a VM for application containers such as Docker when isolation
-  and live migration matter. A small Debian VM is enough; Nodvard Deck itself needs about 100 MB of RAM when idle.
-- **LXC container:** leaner, but needs two switches. Docker runs in an **unprivileged** container (the default
-  when creating one) only with **Nesting** and **keyctl**:
-  - **Nesting** is already ticked when you create the container with **Create CT**.
-  - Enable **keyctl** afterwards: select the container → **Options** → **Features** → tick **keyctl**.
-  - Or in the shell of the Proxmox host: `pct set <CT-ID> --features nesting=1,keyctl=1`
-  - Then restart the container.
-- **Open, port, setup code, update:** as in the terminal way, inside the VM or container (in the container's
-  **Console** or via SSH). The address is that of the VM or container, not that of the Proxmox host.
+### 7.2 The server will not connect
 
-</details>
+**"Check connection"** („Verbindung prüfen“) on the server's page shows point by point what is wrong
+([3.4](#34-check-the-connection)). The most common messages:
 
-<details>
-<summary><b>Docker Desktop (Windows, macOS) for trying it out</b></summary>
+**"Der Server hat den Schlüssel nicht akzeptiert." (the server did not accept the key):** Usually the setup command has
+not been run on the server yet ([3.3](#33-run-the-setup-command-on-the-server)); running it is safe, even several
+times. If Dropbear runs there and the server was set up with an older version:
+[appendix E.4](#e4-what-the-setup-command-does-exactly).
 
-For a test on your own computer. For continuous use a machine that is always on (NAS, Raspberry Pi, small server)
-is better.
+**Server missing in Terminal / "Noch kein Server prüfbar" (no server checkable yet) or "Keine Linux-Server mit SSH-Zugang
+gefunden" (no Linux servers with an SSH login found) in Nodvard Shield:**
+No SSH login stored: Settings → Servers & access ([3.2](#32-set-up-ssh-access--three-ways)). Nodvard Shield also takes only
+servers that are entered as `linux` and – if "Only servers with tag" („Nur Server mit Markierung“) is filled in in its
+settings – only servers with that tag.
 
-1. Install and start [Docker Desktop](https://docs.docker.com/desktop/).
-2. Open a terminal (Windows: PowerShell, macOS: Terminal) and run:
+**"Keine root-Rechte …" (no root rights):** sudo without a password is missing
+([appendix F](#f-root-rights-without-a-password-and-the-docker-group)). The "Check connection" card shows it under "Root
+rights" („Root-Rechte“).
 
-   ```bash
-   mkdir nodvard-deck
-   cd nodvard-deck
-   curl -fsSL -o compose.yml https://raw.githubusercontent.com/nodvard/deck/main/deploy/compose.standalone.yml
-   docker compose up -d
-   ```
+**"Der Server-Schlüssel von diesem Server ist noch nicht bestätigt." (the server key of this server has not been
+confirmed yet):** Nodvard Deck does not know this server's fingerprint yet (a new server while "Only remember new
+server keys after my confirmation" is on), or you forgot it. Under Servers & access, press "Check connection" for the
+server and confirm the fingerprint ([3.4](#34-check-the-connection)).
 
-   In PowerShell write `curl.exe` instead of `curl`.
+**"Host-Schlüssel … hat sich geändert" (host key … has changed):** Server reinstalled? Then, under Servers & access, on
+the server's "Server key" card, forget the old one, check again and confirm the new fingerprint. If not: first find out
+why – it can also be an attack.
 
-- **Open:** **http://localhost:8080**
-- **Port already in use?** As in the terminal way: a file `.env` with `NODVARD_DECK_PORT=8081` next to
-  `compose.yml`, then `docker compose up -d` again.
-- **Setup code:** In Docker Desktop, **Containers** on the left → select the Nodvard Deck container → **Logs** tab.
-- **Update:** in the same folder `docker compose pull` and `docker compose up -d`.
+**"Server antwortet nicht (Zeitüberschreitung …)" (server not answering, timeout), "Der Server lehnt die Verbindung ab
+…" (the server refuses the connection), "Kein Weg zum Server …" (no route to the server) or "Den Namen … kennt das Netz
+nicht." (the network does not know the name)** in the terminal or file manager (there with "Zugriff auf die Quelle
+fehlgeschlagen:" (access to the source failed) in front): Nodvard Deck cannot reach the server. The sentence usually
+names address and port. Check that the server is on, that the address under Servers & access is correct and that SSH
+runs there. There is no traceback about it in the log.
 
-</details>
+### 7.3 Locked out? Emergency commands
 
-The database is created or updated automatically when the container starts; there is nothing to do for
-that. The setup code (next section) is shown by the wizard together with instructions on where to find it
-(command line, Docker Desktop, Portainer, Synology, Unraid).
+<a id="12-locked-out-emergency-commands"></a>
 
-**All further commands in this guide** (setup code, log, emergency commands, restore) are run in the
-folder that contains `compose.yml`, so here after `cd ~/nodvard-deck`. The examples use `sudo docker …`;
-if your user is in the `docker` group (or you use Docker Desktop), leave out `sudo`. **With Portainer or a
-NAS interface** there is no such folder: you find the log and the restart for the container in the
-interface, and you enter commands such as the emergency commands in its console
-([section 12](#12-locked-out-emergency-commands)). For `docker run` and Podman, each way says what the
-commands look like there.
+If someone – above all the owner – has lost their password or two-factor login and cannot get in through the web
+interface any more either, there are commands **on the machine Nodvard Deck runs on** (e.g. the Raspberry Pi), run in
+the folder with the Compose file. Anyone who can run them has access to everything in the data directory anyway; that
+is why no login is needed, but every change is recorded in the audit log (actor `system/cli`).
 
-### 1.2 Building from the repository (developers)
+```bash
+cd ~/nodvard-deck
+sudo docker compose exec nodvard-deck python -m nodvard_deck.admin list-users
+sudo docker compose exec nodvard-deck python -m nodvard_deck.admin reset-password admin
+sudo docker compose exec nodvard-deck python -m nodvard_deck.admin disable-2fa admin
+```
+
+(`admin` stands for the username that `list-users` shows; an older name with spaces goes in quotation marks. With an
+installation from the repository, change to the repository's `deploy/` folder instead of `cd ~/nodvard-deck`.)
+
+- **`list-users`** shows username, owner/user, locked or active, and whether two-factor is on.
+- **`reset-password <username>`** sets a new, random password and **prints it** (e.g. `k7mq-x2vd-h9pa-tn4c`). All of
+  this user's existing logins are ended. Nothing else changes (two-factor stays). After logging in, set a password of
+  your own under My account.
+- **`disable-2fa <username>`** turns off two-factor login, deletes the recovery codes and ends all logins.
+  Afterwards login works with the password only; two-factor can be set up again under My account.
+
+On errors (user does not exist, database not reachable) an understandable message is shown. The command changes only
+users – no servers, no keys, no settings.
+
+**Without a command line** (Portainer, Docker Desktop, NAS): open the console of the Nodvard Deck container and enter
+the command there **without** `sudo docker compose exec nodvard-deck` in front, e.g.
+`python -m nodvard_deck.admin reset-password admin`. You recognize the container by "nodvard-deck" in its name; it is
+usually called `nodvard-deck-nodvard-deck-1`. This is where the console is:
+
+- **Portainer:** Containers → the Nodvard Deck container → "Exec Console" icon → "Connect".
+- **Docker Desktop:** "Containers" → expand the group "nodvard-deck" → click the container in it → "Exec" tab.
+- **Synology Container Manager:** Container → select the Nodvard Deck one → "Details" → "Terminal" tab → "Create".
+- **Unraid:** "Docker" tab → icon of the Nodvard Deck container → "Console".
+
+The same instructions are on the login page under "Forgot password?" („Passwort vergessen?“).
+
+**Good to know:** When Nodvard Deck "signs someone out everywhere" (password changed, two-factor reset or turned off,
+emergency command) or you sign out, the login ends immediately, also for an access key already issued in the browser:
+the next request with it is refused. Open terminal and console sessions of an ended login close after at most
+15 seconds, the live updates after at most 30 seconds.
+
+## Appendix
+
+For looking things up: technical details, special cases and anything you do not need for the start.
+
+| | Section | What it is about |
+|---|---|---|
+| A | [Installation in detail](#a-installation-in-detail) | data in a folder of your own, building from the repository |
+| B | [Setup wizard in detail](#b-setup-wizard-in-detail) | setup code, every step, custom CSS |
+| C | [Two-factor login and recovery codes](#c-two-factor-login-and-recovery-codes) | using, switching off, lock after failed attempts |
+| D | [Additional users](#d-additional-users) | roles, resetting two-factor, deactivating accounts |
+| E | [Servers and access in detail](#e-servers-and-access-in-detail) | small SSH servers, sample data, server keys, replacing access |
+| F | [Root rights without a password and the docker group](#f-root-rights-without-a-password-and-the-docker-group) | what the tick boxes allow |
+| G | [Modules in detail](#g-modules-in-detail) | without Proxmox, Proxmox by hand, address check, widgets |
+| H | [Automation and maintenance windows](#h-automation-and-maintenance-windows) | approvals, scripts without a click, automatic updates |
+| I | [Updates](#i-updates) | new version, update with one button, copy before the migration |
+| J | [When something goes wrong](#j-when-something-goes-wrong) | error messages from Proxmox, modules and login |
+| K | [Nodvard Deck does not start: the rescue page](#k-nodvard-deck-does-not-start-the-rescue-page) | rescue code, state before the update |
+| L | [Without the interface](#l-without-the-interface) | setting up servers through the API |
+| M | [Old names on older installations](#m-old-names-on-older-installations) | why "lattice" still shows up here and there |
+
+## A. Installation in detail
+
+Every way per platform (terminal, web interface, NAS, Raspberry Pi, Proxmox, Docker Desktop) and the short Compose
+version for web interfaces: [Installation per platform](INSTALLATION.md).
+
+### A.1 Data: volume or your own folder
+
+The default is the Docker volume `nodvard-deck-data`. It needs no permission settings, not even on a NAS. A folder of
+your own (`<folder>:/app/data`) works too: the container then makes the user with the number 1000 the owner of that
+folder at startup. When that fails on NAS shares and what helps then:
+[Installation per platform, "Good to know"](INSTALLATION.md#good-to-know-whichever-way-you-pick). The database is
+created or updated automatically when the container starts; there is nothing to do.
+
+### A.2 Building from the repository (developers)
 
 If you clone the repository and build the image yourself, you start it in the repository's `deploy/`
 folder (`docker compose build --pull && docker compose up -d`; `--pull` fetches fresh base images). Building, delivering to a Raspberry Pi (`scripts/deploy_pi.sh`),
@@ -528,47 +764,18 @@ afterwards is the same as above (`curl -s http://localhost:8080/api/v1/health`).
 With this installation, the commands in this guide are run in the repository's `deploy/` folder (e.g.
 `cd ~/deck/deploy`) instead of `~/nodvard-deck`. Sections that only apply to this route say so.
 
-## 2. Setup wizard (/setup)
+## B. Setup wizard in detail
 
-As long as there is no user yet, the login page automatically redirects to `/setup`.
-
-**Already have a backup?** The first step offers "Or: restore a backup" („Oder: Sicherung einspielen“): upload the
-file, enter the password, check the summary, restore – after that you log in with the account from the
-backup and do not need to set anything up again ([10.2](#102-restore-import-a-backup)). The setup code (below) is
-required there as well.
-
-**Setup code:** So that not just anyone on the network who opens the page first gets the first account
-(and with it the owner role), `/setup` asks for a code. Nodvard Deck generates it at startup
-and writes it to the log – at **every** start until the first account has been created:
-
-```bash
-cd ~/nodvard-deck && sudo docker compose logs nodvard-deck | grep -A1 Einrichtungscode
-# Einrichtungscode: K7MQ-X2VD-H9PA – im Browser eingeben
-```
-
-(The log line is in German: "Einrichtungscode" = setup code, "im Browser eingeben" = enter in the browser.)
+### B.1 The setup code
 
 - Upper/lower case, dashes and spaces do not matter.
 - The code stays the same across restarts (it is stored as `setup_code.txt` in the data directory,
   readable only by Nodvard Deck) and is deleted once the account has been created.
 - Wrongly entered codes are slowed down like wrong passwords (after 10 failed attempts a pause of a few
   minutes) and appear in the log as "Einrichtungscode falsch" (setup code wrong).
-- If you would rather choose the code yourself (at least 8 characters), add it to the Compose file as
-  **`NODVARD_DECK_SETUP_CODE: "…"`** under `environment:`. The `compose.yml` from
-  [1.1](#11-installation-without-the-repo) has no `environment:` block yet; add one under
-  `nodvard-deck:` (same indentation as `image:`) and apply it with `docker compose up -d`:
-
-  ```yaml
-      environment:
-        NODVARD_DECK_SETUP_CODE: "my-own-setup-code"
-  ```
-
-  The repository's `deploy/docker-compose.yml` already has the block. Without this setting Nodvard Deck
-  generates one itself.
 - Existing installations that already have an account are not affected.
 
-The log also shows the code large and on a line of its own (between blank lines, in a frame of `=`
-characters). In the wizard, "Where do I find the code?" („Wo finde ich den Code?“) unfolds instructions.
+### B.2 The steps one by one
 
 The wizard has **six steps** and shows "Step X of 6" („Schritt X von 6“) at the top. Only the first is
 mandatory; everything else can be skipped and done later in the settings. "Back" („Zurück“) is available
@@ -576,7 +783,7 @@ from step 3.
 
 **Step 1 of 6 — Create the administrator account** („Administrator-Konto anlegen“)
 
-- **Setup code** („Einrichtungscode“): see above.
+- **Setup code** („Einrichtungscode“): see [2.1](#21-finding-the-setup-code).
 - **Username** („Benutzername“): at least 3 characters, only lowercase letters, digits and `.`, `-` and `_`,
   no spaces, starting with a letter or a digit (e.g. `admin`). Uppercase letters are converted automatically.
 - **Password** („Passwort“) and **Confirm password** („Passwort bestätigen“): at least
@@ -616,7 +823,7 @@ reminds you (see [4.](#4-enable-extensions)). Order and group come from the modu
 shows a **QR code** for the authenticator app (it is drawn in the browser,
 nothing is sent to an external service) plus the key as text in case scanning does not work. Enter the
 six-digit code from the app and press "Confirm" („Bestätigen“). The **recovery codes** („Wiederherstellungs-Codes“;
-the interface also calls them „Rettungscodes“, see [2.1](#21-two-factor-login-and-recovery-codes)) are then shown
+the interface also calls them „Rettungscodes“, see [appendix C](#c-two-factor-login-and-recovery-codes)) are then shown
 **exactly once**: copy them or save them as a text file, then press "I have saved the codes" („Ich habe die Codes
 gesichert“). "Set up later" („Später einrichten“) is there at the choice, at the password prompt and next to
 "Confirm", sets nothing up and goes on to step 5; you can do it later under Settings → My account
@@ -640,7 +847,7 @@ on). Everyone else keeps the CSS until you fix and save it.
 **Step 6 of 6 — Done** („Fertig“)
 
 A pointer to the "First steps" card in the cockpit and the emergency command (see
-[12.](#12-locked-out-emergency-commands)); the same command is shown on the login page behind "Forgot
+[7.3](#73-locked-out-emergency-commands)); the same command is shown on the login page behind "Forgot
 password?" („Passwort vergessen?“). If you skipped two-factor login, you get the link to do it later here.
 "Continue to the dashboard" („Weiter zum Dashboard“) opens the cockpit.
 
@@ -652,7 +859,9 @@ you create new ones under My account („Mein Konto“).
 
 After that, `/setup` is gone (it only leads to the login page).
 
-### 2.1 Two-factor login and recovery codes
+## C. Two-factor login and recovery codes
+
+<a id="21-two-factor-login-and-recovery-codes"></a>
 
 In the wizard (step 4) or later under Settings → My account → "Two-factor login"
 („Einstellungen → Mein Konto → Zwei-Faktor-Anmeldung“) → "Set up" („Einrichten“): enter your current password
@@ -692,9 +901,11 @@ printed out, **not** only on the phone, because the phone is exactly what is sup
 - If you had already set up two-factor login before this feature existed, you do not have codes yet:
   generate them once under My account with "Generate new recovery codes" (with your password and the code from the
   app).
-- If someone loses their phone **and** the codes: see [12.](#12-locked-out-emergency-commands).
+- If someone loses their phone **and** the codes: see [7.3](#73-locked-out-emergency-commands).
 
-## 3. Additional users
+## D. Additional users
+
+<a id="3-additional-users"></a>
 
 Settings → Users → **"New user"** („Einstellungen → Benutzer → Neuer Benutzer“):
 
@@ -726,7 +937,7 @@ an account that role. The person is signed out everywhere, the audit log records
 did it, and "Notifications" shows "Access of … changed" („Zugang von … geändert“). Afterwards, login works with
 the password only, and the person can set up two-factor again. **This does not work for the owner** – the
 owner's two-factor login can only be turned off by the owner personally (under My account) or by the
-emergency command on the server ([12.](#12-locked-out-emergency-commands)).
+emergency command on the server ([7.3](#73-locked-out-emergency-commands)).
 
 **Deactivating a user:** Under Settings → Users → **"Deactivate"** („Deaktivieren“), a user with the
 privilege `users.write` blocks another person's account (the list then shows "Blocked" („Gesperrt“); there
@@ -734,132 +945,181 @@ is no such button for the owner or for your own account). The person is signed o
 is already open stops getting live updates after half a minute at most. After **"Activate"** („Aktivieren“),
 old devices do not sign in again by themselves; the person has to sign in again.
 
-## 4. Enable extensions
+## E. Servers and access in detail
 
-On a fresh installation, **all extensions are off** – with one exception: **Terminal switches
-itself on** as soon as you give the first server an SSH login (generate a key, password or your
-own key; see [5.2](#52-set-up-ssh-access--three-ways)). The audit log records it
-(„Erweiterung automatisch eingeschaltet“). This only happens as long as nobody has ever switched
-Terminal on or off themselves: if you switch it off on purpose, it stays off. Existing
-installations are not affected.
+### E.1 Where servers come from
 
-In the setup wizard (step 3, see [2.](#2-setup-wizard-setup)) you switch on the modules you want to use with a
-click. Later you can do that at any time under Settings → Extensions („Einstellungen → Erweiterungen“), with the
-switch on the right; "Configure" („Konfigurieren“) opens the extension's settings ("Setup required" –
-„Einrichtung nötig“ – means that details are still missing or that the last connection test failed). If you open
-the page of a module that is switched off (for example via a bookmark), it says so, and **"Switch on"** („Einschalten“)
-switches it on right there (without the privilege for that, it says that an administrator can switch it on). A good
-start for almost any home network: Terminal, Server status, Nodvard Shield and Push notifications, plus the Docker module if
-Docker runs on a server, and Game servers if a game server runs there. **You only need Proxmox VE and Proxmox-Backups if
-you use Proxmox** – otherwise leave them off (see [4.1](#41-without-proxmox)). The rest as needed.
+- Proxmox nodes, VMs and containers are read in **automatically** by the "Proxmox VE" extension
+  (every 5 minutes, see [4.2](#42-connect-proxmox)). They appear in the list with the note "Read in
+  automatically" („Automatisch eingelesen“).
+- Everything else – above all the **machine Nodvard Deck runs on** (e.g. a Raspberry Pi), if it is not
+  a Proxmox guest – you create by hand.
+- Terminal, Server status, Docker, Nodvard Shield, Game servers and Scripts need an **SSH login** (user + key or
+  password) for every server. Nodvard Deck stores it encrypted; the private key never leaves the vault and is
+  never displayed anywhere.
+- **Small SSH servers** such as Dropbear from version 2015.68 on (e.g. on DietPi, routers and some NAS devices) work
+  too: Nodvard Deck sends long commands (over 8000 bytes, e.g. the setup and the updates, hardening audit and
+  intrusion check of Nodvard Shield) through standard input instead of as a command line. For that, the account's
+  login shell has to be a POSIX shell (sh, bash, dash or BusyBox ash); with fish or tcsh as the login shell, these
+  long commands do not work. Where standard input is not possible (console, live logs), Nodvard Deck reports a command
+  that is too long in plain words beforehand and does not send it. Older Dropbear versions (e.g. on OpenWrt 15.05)
+  only accept commands up to 1024 bytes, so many commands fail there.
 
-**"Beta":** Game servers, Home Assistant, Jellyfin, Network, Nginx Proxy Manager, Pi-hole, Plex, qBittorrent, Synology DSM,
-Uptime Kuma and Vaultwarden carry a "Beta" badge (in the settings, in the wizard, in the menu and above the module's
-page). They work, but are not yet as thoroughly tested as the rest. Feedback helps.
+### E.2 Sample data
 
-**Address check (Nginx Proxy Manager):** On the "Nginx Proxy Manager" page each proxy host shows which Docker container
-it leads to and whether it runs, e.g. „Führt zum Container immich_server auf docker – der ist gestoppt.“ (leads to the
-container immich_server on docker, which is stopped). If it is stopped, the button „Container starten“ starts it through
-the approval (for users with `hosts.execute`). The mapping uses the server address with port (also for stopped
-containers; ports bound only to `127.0.0.1` do not count), `host.docker.internal` on the server Nginx Proxy Manager
-itself runs on (`localhost` only if it runs in host network mode, otherwise that is Nginx Proxy Manager itself), and the
-container name or Compose service.
-Names only count on the server of Nginx Proxy Manager (Docker resolves them only in its own network); if that server is
-unknown, the result says „vermutlich“ (probably), without red and without a button. The Docker module must be switched
-on for this, it knows the containers. A target that matches no container (e.g. the Proxmox web UI) is shown in grey and
-is not an error. Not detected: containers in host network mode (they show no ports), network aliases and additional
-locations of a proxy host.
+**No server at hand yet?** On a fresh installation without servers, the cockpit (and this page) offers the button
+**"View with sample data"** („Mit Beispieldaten ansehen“). One click creates five made-up servers (addresses from
+`192.0.2.x`, nothing is ever contacted), a few notifications, three sample apps and – if modules bring widgets – a
+sample dashboard, so you can see what everything looks like when filled. A yellow banner **"You are viewing sample
+data"** („Du siehst Beispieldaten“) then appears at the top; **"Delete sample data"** („Beispieldaten löschen“)
+(after confirmation) removes exactly these things again, restores your dashboard layout and leaves everything real
+untouched. Only the owner and administrators see the button (`hosts.write` and `settings.write`). As soon as you
+have created a real server, the button is gone; you can still delete the sample data at any time.
 
-**Synology DSM (Beta, read-only):** The "Synology DSM" page shows, for one or several Synology devices, model, DSM
-version, load, temperature, storage pools, volumes, drives (with SMART), the Hyper Backup tasks and whether a DSM update
-is available. Nodvard Deck only reads and changes nothing on the Synology. It asks DSM which version of each interface to
-use, so DSM 7.1 to 7.4 work, also side by side. So far this has been tried against recreated DSM answers; feedback from
-real devices helps.
+### E.3 Correcting the address
 
-- **Several devices:** Under Settings → Extensions → Synology DSM, enter each device on its own (up to ten): with a short
-  name (e.g. "ds920" or "keller"), address, its own account, its own password in the vault and its own certificate
-  settings. The short name appears in notifications and on the tiles so you can tell the devices apart; do not change it
-  after setting up, because the password belongs to the name and would have to be entered again. The page shows a picker
-  of all devices with their state at the top. If a device cannot be queried, its reason and "Try again" („Erneut
-  versuchen“) show up at that device and the others are left alone. On the home page each device has its three tiles
-  (state, storage, Hyper Backup), with the short name in the title when there are several; new tiles show up under
-  "Manage widgets" („Widgets verwalten“). Notifications are separate too: with several devices their title names the short
-  name (with a single device, the model), and a problem or all-clear on one device does not touch the other. If a short
-  name appears twice (upper and lower case do not matter), Nodvard Deck queries none of those entries. If the spelling is
-  exactly the same, a password stored for that name is deleted when you save (after confirmation), so it never ends up at
-  another entry's address, and a new one is only accepted once one of the entries has been renamed and saved. If the names
-  differ only in upper and lower case, the password stays with the existing entry but is not used until one of the names
-  is changed.
-- **From one device to several:** If you already set the module up with one device, you enter nothing again. On the first
-  start with this version the existing device is adopted as the device „synology“: address, account, certificate
-  settings, the password (copied in the vault to „synology-password:synology“), the tiles on the home page and the state
-  of the notifications. Problems that were already reported therefore do not come again. The old single fields and the
-  old vault entry „synology-password“ stay as they were, so a step back to the older version still finds the device. As
-  long as the device „synology“ is in the list, the old entry stays in the vault; it belongs to the module and cannot be
-  deleted there on its own. If you later remove the device „synology“ or rename it, Nodvard Deck deletes the old entry
-  with it, and there is no way back to the older version after that. From now on you enter a new password at the device
-  „synology“. More devices simply get added.
+**Correcting the address:** Proxmox VMs without a running guest agent get the address of the Proxmox server as a
+placeholder. Then, on the server's page, enter the real IP under **General → Edit** („Allgemein → Bearbeiten“) –
+Nodvard Deck no longer overwrites an address set by hand with the placeholder, only with an address that the guest
+itself reports. For Proxmox *nodes*, the extension overwrites the address again at the next sync.
 
-- **Account:** Create a separate DSM account just for Nodvard Deck (Control Panel → User & Group) and enter it in the
-  module's settings; the password goes into the vault. To be honest: DSM only hands out storage, load, updates and
-  Hyper Backup to accounts in the **"administrators"** group. An account outside that group works, but the page then
-  only shows what it may read and says for each part that rights are missing. Since the account is an administrator,
-  give it a long password of its own that you use nowhere else.
-- **Two-factor does not work:** Nodvard Deck cannot use an account with two-factor sign-in, it does not have the code from
-  the app; the page then says „Dieses Konto verlangt Zwei-Faktor“ (this account requires two-factor). So use the separate
-  account without two-factor. If DSM enforces two-factor for all administrators, that includes this account; then limit
-  the requirement to specific accounts in DSM's security settings.
-- **Wrong password:** DSM blocks addresses automatically after several failed attempts. After a rejected sign-in Nodvard
-  Deck therefore does not ask again for 30 minutes, unless you press "Test connection" („Verbindung testen“), which lifts
-  the pause of all devices, or change that device's address, account or certificate settings. The pause applies only to
-  the device whose sign-in was rejected; the other devices are still queried. Saving other settings, or adding or removing
-  a device, does not change the pause. If you only replaced the password in the vault, press "Test connection".
-- **Certificate:** DSM often has a self-signed certificate. Then, in your own network, switch on „Selbstsigniertes
-  Zertifikat erlauben“ (allow self-signed certificate), or better enter the certificate's fingerprint under "Advanced"
-  (only with https://): Nodvard Deck then only talks to exactly that certificate.
-- **Notifications:** Every five minutes Nodvard Deck checks each device and reports when a storage pool or volume is not okay (e.g.
-  „Eingeschränkt“, degraded, after a drive failure), a drive warns (SMART, bad sectors, remaining life), the device or a
-  drive gets too hot, or Hyper Backup fails or is overdue. The message shows under "Needs attention" („Braucht
-  Aufmerksamkeit“) and reaches your phone through the configured channels; once everything is fine again, an all-clear
-  follows. Only changes are reported, not every check, and once more when it gets worse (e.g. from „Eingeschränkt“ to
-  „Ausgefallen“, crashed). A temperature only after it lasts 10 to 15 minutes (drive limit
-  under "Advanced", default 55 °C for hard drives, 65 °C for SSDs, 70 °C for NVMe). Repairing, expanding or scrubbing a
-  pool or volume does not count as a problem, nor does a state Nodvard Deck does not know; if it was reported before,
-  the all-clear only comes once it is „Normal“ again. While a pool is not „Normal“, its volumes report nothing of their
-  own. If a volume crashes, its pool's message names it when the pool has a message of its own (such as „Eingeschränkt“,
-  degraded) and becomes urgent; without a pool message (for example during a repair) the volume reports itself. A new DSM update arrives once per version as a quiet hint (level "info", not under
-  "Needs attention"). Both can be switched off in the module's settings. If the Synology cannot be reached or the
-  sign-in is rejected, the watch reports nothing new; the page and the tile show that.
-- **Hyper Backup:** Each task shows its result, last and next run, in the Synology's local time. Overdue means: a
-  scheduled run has been missing for more than six hours, or there has been no successful run for two intervals between
-  runs plus six hours (54 hours for a daily backup). This is measured with the Synology's clock; if DSM does not provide
-  it, 14 extra hours allow for a different time zone. A backup or integrity check that is running is not overdue; during
-  the check the page shows „Integritätsprüfung läuft“ (integrity check running), but a failed last run stays visible. If
-  Hyper Backup is not installed, a quiet hint says so and the rest of the page stays. Nodvard Deck reads up to 64 tasks;
-  if Hyper Backup has more, the page says so. Hyper Backup gets 25 seconds for the list and the states together, counted
-  from the start of the query. If the list does not arrive in time, Hyper Backup shows „Hyper Backup hat nicht
-  rechtzeitig geantwortet“ (did not answer in time); if not all states arrive, the remaining tasks show „Stand
-  unbekannt“ (state unknown), with neither a message nor an all-clear. In both cases the rest of the page stays. Not yet
-  confirmed on real devices (beta): that DSM reports a task that is not backing up with the state `status: none`. If a
-  task keeps showing „Läuft gerade“ (running) although nothing runs, please let us know. Likewise, that the state
-  `error_detect` is the running integrity check comes from a user report, not from a description by Synology; if a task
-  shows „Integritätsprüfung läuft“ for days, please let us know as well.
+If the server has a stored **SSH password**, changing the address deletes it; you enter it again afterwards. SSH
+keys stay. This also applies when an extension's sync changes the address (e.g. of a Proxmox node); for VMs and
+containers that report their address themselves and whose server key is already remembered, the password stays.
 
-**Credentials belong to their address.** In an extension's settings, first enter the address and click "Save"
-(„Speichern“), then store the token or password in the "Connection" card („Verbindung“) – Nodvard Deck does not
-accept them before that. If you change the address later (for example the ntfy server or a Proxmox address),
-Nodvard Deck deletes the matching credentials when saving, and you enter them again; the page tells you
-beforehand. A different spelling of the same address (upper/lower case in the host name, default port, trailing `/`,
-missing `http://`) does not count as a change.
+### E.4 What the setup command does exactly
 
-### 4.1 Without Proxmox
+If Dropbear runs on the server (e.g. on DietPi), the command adds the key with
+`no-port-forwarding,no-agent-forwarding,no-X11-forwarding` instead of `restrict,pty`: Dropbear does not know `pty` and
+would otherwise discard the whole line.
 
-Nodvard Deck does not need Proxmox. A Raspberry Pi, a Debian VM, a NAS or a few Docker hosts are enough. What is
-different then:
+It recognizes a key that is already there, even with the older comment `lattice@…`
+([appendix M](#m-old-names-on-older-installations)), and does not add it twice. A commented-out line (`# …`) does not count: if you locked Nodvard Deck out
+that way, setting it up again adds a valid line, and the commented one stays. If the key is in the file without
+restrictions (for example added by hand), the command puts `restrict,pty` or the options for Dropbear in front of it
+and reports „Der schon eingetragene Schlüssel für Nodvard Deck ist jetzt eingeschränkt …“ (the key already there is
+now restricted). Lines with options of their own, such as `from="…"`, stay as they are. To check what it wrote, it
+needs `cmp` (package diffutils); if that is missing, it changes nothing and names the fix.
 
-- **You create servers by hand** ([5.1](#51-create-a-server)) and give each one an SSH login
-  ([5.2](#52-set-up-ssh-access--three-ways)). The modules Proxmox VE and Proxmox-Backups stay off; their entries then appear
-  neither in the menu nor in the cockpit.
+If you set up a server with Dropbear with an older version and "Check connection" („Verbindung prüfen“) reports that
+the server did not accept the key („Der Server hat den Schlüssel nicht akzeptiert“), simply set it up again (with a
+password or with the command). The command then replaces exactly its own old line `restrict,pty …` with the line for
+Dropbear (message „Schlüssel für Dropbear angepasst.“); other lines with the same key and options of their own stay as
+they are.
+
+### E.5 Set up with a password: limits and security
+
+- **Limits:** You need the privileges `hosts.write` **and** `hosts.execute`, because the command runs on the server as
+  root, like the terminal. Nodvard Deck slows attempts down: at most 5 per address and port, 10 per user in 10 minutes
+  (plus 30 calls per user in 5 minutes), and only one setup runs per server at a time; then you see "Zu viele Versuche
+  mit Passwort …" (too many attempts with a password) or "Für diesen Server läuft gerade schon eine Einrichtung …" (a
+  setup is already running for this server). The counters live in memory and start over after a restart. The command
+  gets up to 90 seconds. If the connection drops or the time runs out, the command may still have run partly on the
+  server: "Check connection" shows what is already there, and trying again is harmless because the command can be run
+  several times.
+- **Without HTTPS** the form warns you before you submit the password: it then travels unencrypted from your browser
+  to Nodvard Deck. On your own home network that is usually fine, on a foreign network it is not; "Paste the command
+  yourself" is safer then. When you open the page directly on the machine (`localhost`) the warning does not appear.
+  Nothing is blocked.
+- **Not possible yet:** Proxmox with a password, Windows servers (there is no setup command for them) and the setup
+  wizard.
+
+### E.6 Server keys and the green badge
+
+**When the access turns green:** In the list and on the server page, the SSH access badge only turns green once the
+server answers and Nodvard Deck has actually logged in there with this login, for example via "Check connection" or
+when a module queries the server via SSH. The server answering only means that its SSH port is open. Until then the
+badge stays grey, with a yellow note next to it saying what is missing: „noch nicht geprüft“ (not checked yet), „noch
+keine Verbindung“ (no connection yet: the server has never answered), „Anmeldung noch nicht bestätigt“ (login not
+confirmed yet: with a key, the setup command is usually still missing), „keine Antwort“ (no answer) or „Anmeldung
+klappt nicht“ (login does not work). After a new address, a rejected login, a changed server key or a new default
+login without a fresh check, the login counts as unconfirmed again until it works the next time.
+
+> **Note:** Whether Nodvard Deck remembers a new server key by itself on the very first connection (Terminal,
+> monitoring, …) is set under **Settings → Servers & access** in the card **New server keys** („Neue
+> Server-Schlüssel“). **Only remember new server keys after my confirmation** („Neue Server-Schlüssel erst nach
+> meiner Bestätigung merken“) is on, also on installations set up before this setting existed: Nodvard Deck then
+> remembers a key only through "Check connection", and no password and no key goes to the server before that. If
+> Deck does not know a server's key yet, press "Check connection" there once and confirm the fingerprint. "Off"
+> (not recommended) remembers new keys by itself again; that only applies if you set it that way explicitly. The
+> environment variable `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` (`true` or `false`; in the Compose file under
+> `environment:`, see the example in [2.1](#21-finding-the-setup-code); the repository's `deploy/docker-compose.yml` has
+> the line prepared) overrides the switch: the card then shows the variable's value, and saving reports an error.
+> After **Forget** („Vergessen“) you always have to confirm the new fingerprint, no matter how this is set – until
+> then Nodvard Deck no longer connects to the server.
+> Keys that have already been remembered are never affected. The cleaner way is always: check and confirm first.
+
+### E.7 Replace access, delete, groups
+
+- **Replace:** Card SSH access → **Replace** („Ersetzen“) creates a *new* login (generate key, password or your own
+  key); the old one stays the default. Run the new login's command on the server, press **Check new access**
+  („Neuen Zugang prüfen“) and then **Use new access** („Neuen Zugang verwenden“). Only after a successful, fresh check
+  (at most 10 minutes old) is the old login deleted – that way you do not lock yourself out. If the old login was a
+  key, **its public key stays on the server in `~/.ssh/authorized_keys`**; remove it there yourself if needed. For a
+  password, nothing changes on the server. Checking the new login does not change the confirmation of the old one
+  (3.4); only once you use the new one does its check count.
+- **Delete access:** Terminal, updates and monitoring then no longer reach the server. A key stays registered on the
+  server; for a password, nothing changes there.
+- **Groups:** On the list under **Groups** („Gruppen“) you create, rename and delete them; on the server's page you
+  assign them with a tick. "Scripts" („Skripte“) can run a script on all servers of a group.
+- **Delete server:** Card "Danger zone" („Gefahrenbereich“) (or "Delete" („Löschen“) on the server page). For safety,
+  type the short name. The SSH login and the remembered server key are deleted as well; histories in Nodvard Shield stay
+  with the old name. Servers read in from Proxmox reappear at the next sync – then without an SSH login. If an
+  action is currently running on the server, deletion is not possible.
+
+## F. Root rights without a password and the docker group
+
+<a id="6-root-rights-without-a-password-and-the-docker-group"></a>
+
+If Nodvard Deck does **not** log in to a server as root (e.g. on the Pi), it runs root commands via `sudo -n`, that is,
+without a password prompt. If sudo asks for a password, the function fails with "Keine root-Rechte: Das Dashboard
+ist auf diesem Server nicht als root angemeldet und darf sudo nicht ohne Passwort nutzen." (no root rights: the
+dashboard is not logged in as root on this server and may not use sudo without a password).
+
+You do **not** have to change the setup command ([3.3](#33-run-the-setup-command-on-the-server)) by hand for this: the page sets the appropriate tick
+boxes itself, because the extensions report what they need. The same tick boxes apply when you set up the server with
+a password (Nodvard Deck then runs the same command).
+
+- **"Root rights without a password"** („Root-Rechte ohne Passwort“) – needed for (the page names it behind the tick
+  box): parts of Nodvard Shield (moving files into quarantine, restoring or deleting them, the hardening audit with
+  Lynis, installing tools such as ClamAV and Fail2ban, installing updates and rebooting, blocking addresses with
+  Fail2ban; without root, intrusion protection and the file watcher can read only partly), restarting services (Server
+  status) and Docker in "operate only" mode (servers with the tag `docker-bedienen`).
+- **"Add to the docker group"** („Zur Gruppe docker hinzufügen“) – needed for the Docker module and the AI container
+  watch of Nodvard Shield; they call `docker` without sudo. The group is only entered if it exists on the server. For a
+  server tagged only `docker-bedienen` the page does not offer the group; the helper script is enough there.
+
+Without either tick box you get the **lean variant**: its own user, key only, no root rights. That is enough for
+Terminal, Files and Scripts.
+
+**What the "Root rights" tick box sets up:** By default only the modules' helper scripts (Nodvard Shield, Server status
+and Docker in "operate only" mode), each with a narrow sudo rule of its own; there is no full sudo rule then. The full
+rule (`<user> ALL=(root) NOPASSWD: ALL`) is only added if a module needs root and has no helper script, or if you tick
+"Full rights" („Volle Rechte“) under "Advanced" („Erweitert“). If no module needs root on the server, the tick box
+sets up no sudo at all.
+
+**This is practically root – and the page tells you so too:** Anyone who is in the `docker` group or has the full
+sudo rule can do practically anything on the server. Without a helper script Nodvard Deck starts some root commands as
+`sudo -n sh -c '…'`, so it then needs the full sudo rule, and anyone who may start `sh` as root may do anything. The
+security comes from the fact that **only** this one user gets the rights, can log in **only with the key**, and the key
+is stored encrypted in Nodvard Deck.
+
+**Proxmox nodes:** There, Nodvard Deck is easiest to log in directly as `root` (enter user `root` when generating).
+Then it needs neither sudo nor tick boxes. The key ends up in `/root/.ssh/authorized_keys`, which on Proxmox is a link
+into the cluster folder – so it then applies on **all nodes of the cluster**.
+
+**Using an existing user** (on the Pi e.g. `admin`): enter that name instead of `nodvard` when generating. Running
+`sudo -n true && echo geht-schon` on the server shows whether it may already use sudo without a password (on
+Raspberry Pi OS this is often the case for the first user).
+
+Everything in detail – what each module does as root, what the helper scripts may do (with a table), how the sudo rule
+is checked, how to get rid of a full rule again, switching Docker to "operate only" and what the file watcher reports
+after the setup: **[Root rights and helper scripts](ROOT-RIGHTS.md)**.
+
+## G. Modules in detail
+
+### G.1 Without Proxmox in detail
+
 - **Status (online/offline):** Nodvard Deck checks servers created by hand **by itself every 2 minutes**
   (Settings → Servers & access → "Check reachability" („Einstellungen → Server & Zugänge → Erreichbarkeit prüfen“);
   switch and interval from 1 to 60 minutes). It only checks whether the server's SSH port (default 22, otherwise the
@@ -889,7 +1149,10 @@ different then:
   than 2 minutes, it says "stale" („veraltet“) with the age underneath and the rings are muted; after 10 minutes
   without a measurement the server becomes a plain row again. A server that is "unreachable" does not show old values
   as current. Servers without measurements (Windows, no SSH login, Server status module off, measurements turned off for the
-  server) stay a single row, with a note on why where that fits.
+  server) stay a single row, with a note on why where that fits. Running Proxmox guests (VMs and LXC) show CPU, memory
+  and "running since" („Läuft seit“). LXC containers and Proxmox nodes also show the disk. For VMs it stays empty,
+  because Proxmox reports no used space for them. Stopped guests stay a single row. The collector fetches the values
+  every 30 seconds with one query per Proxmox connection.
 - **Docker containers:** Docker module, for servers with the tag `docker`. There you start, stop and delete
   containers (only stopped ones are deleted; volumes and the image stay), read their logs live, open a shell in the
   container with "Console" („Konsole“) and apply newer images ("Apply" – „Einspielen“, only for Docker Compose
@@ -951,7 +1214,7 @@ different then:
 - **Console in the browser** (a guest's screen) exists only for Proxmox guests. For every other server you use the
   **Terminal**.
 - **Backups:** The Proxmox-Backups module shows only the backups of your Proxmox servers. You back up the dashboard itself under Settings →
-  System ([10.](#10-back-up-the-dashboard-itself)).
+  System ([6.](#6-back-up-the-dashboard-itself)).
   With „Als Kopie wiederherstellen“ (restore as a copy) you get a guest back from a backup there: as a new guest with a
   new number that does not start by itself; the original stays untouched. Every copy is created in the pool
   `nodvard-kopien` (only there does the token need the privilege to create guests; VMs need Proxmox VE 7.2 or later).
@@ -959,517 +1222,11 @@ different then:
   reports back). The pool and the token privileges are in
   [PROXMOX-TOKEN](PROXMOX-TOKEN.md#restore-as-a-copy-backups).
 
-**The "First steps" card:** On the start page (cockpit), a checklist at the top walks you through exactly these
-steps – create a server, store an SSH login, check the connection, set up modules, push notifications, first
-widget – each with a button to the right place. Nodvard Deck ticks the boxes itself, based on what is already set up.
-**"Store an SSH login"** („SSH-Zugang hinterlegen“) only counts a key once Nodvard Deck has actually logged in with it
-(a password counts right away); until then, **"View command"** („Befehl ansehen“) leads to the server's page with the
-setup command already expanded. **"Check the connection"** („Verbindung prüfen“) is only ticked once a login is
-confirmed: the server merely answering is not enough.
-Only steps for which you have the privilege are shown. The card disappears by itself when everything is done; with
-**"Hide"** („Ausblenden“) you remove it earlier (applies to your account on every device). Empty pages (Terminal,
-Files, server page, Docker, Game servers, Proxmox) now also say what is missing and offer the button for the
-next step.
+### G.2 Proxmox in detail
 
-**The widgets on the start page:** Modules bring their widgets along; they are arranged in groups (Servers and Proxmox,
-Security, Docker and apps, Backups, Services – „Server und Proxmox“, „Sicherheit“, „Docker und Apps“, „Backups“,
-„Dienste“). Clicking a group's name collapses it; a coloured dot next to it then reports a warning, a fault or a widget
-that currently does not load. With **"Edit"** („Bearbeiten“) above the widgets you arrange everything: drag cards by their
-handle, choose height (Automatic, Small, Medium, Large – „Automatisch“, „Klein“, „Mittel“, „Groß“), width (Narrow, Wide)
-and group, remove widgets and rename groups. Only **"Done"** („Fertig“) saves everything at once, **"Cancel"**
-(„Abbrechen“) discards the changes; you bring a removed widget back via **"Manage widgets"** („Widgets verwalten“). On a
-phone the cards are stacked: height, group and removing work there too, moving and width only on a larger screen.
-
-## 5. Servers and SSH access
-
-Everything about this is on one page: **Settings → Servers & access** („Einstellungen → Server & Zugänge“). There
-you create servers, set up their SSH login and check that the connection works. The page is designed for
-the phone and is visible only to users with the privilege `hosts.write` (owner and `admin`).
-
-**Where servers come from:**
-
-- Proxmox nodes, VMs and containers are read in **automatically** by the "Proxmox VE" extension
-  (every 5 minutes, see [7.](#7-connect-proxmox)). They appear in the list with the note "Read in
-  automatically" („Automatisch eingelesen“).
-- Everything else – above all the **machine Nodvard Deck runs on** (e.g. a Raspberry Pi), if it is not
-  a Proxmox guest – you create by hand.
-- Terminal, Server status, Docker, Nodvard Shield, Game servers and Scripts need an **SSH login** (user + key or
-  password) for every server. Nodvard Deck stores it encrypted; the private key never leaves the vault and is
-  never displayed anywhere.
-- **Small SSH servers** such as Dropbear from version 2015.68 on (e.g. on DietPi, routers and some NAS devices) work
-  too: Nodvard Deck sends long commands (over 8000 bytes, e.g. the setup and the updates, hardening audit and
-  intrusion check of Nodvard Shield) through standard input instead of as a command line. For that, the account's
-  login shell has to be a POSIX shell (sh, bash, dash or BusyBox ash); with fish or tcsh as the login shell, these
-  long commands do not work. Where standard input is not possible (console, live logs), Nodvard Deck reports a command
-  that is too long in plain words beforehand and does not send it. Older Dropbear versions (e.g. on OpenWrt 15.05)
-  only accept commands up to 1024 bytes, so many commands fail there.
-
-**No server at hand yet?** On a fresh installation without servers, the cockpit (and this page) offers the button
-**"View with sample data"** („Mit Beispieldaten ansehen“). One click creates five made-up servers (addresses from
-`192.0.2.x`, nothing is ever contacted), a few notifications, three sample apps and – if modules bring widgets – a
-sample dashboard, so you can see what everything looks like when filled. A yellow banner **"You are viewing sample
-data"** („Du siehst Beispieldaten“) then appears at the top; **"Delete sample data"** („Beispieldaten löschen“)
-(after confirmation) removes exactly these things again, restores your dashboard layout and leaves everything real
-untouched. Only the owner and administrators see the button (`hosts.write` and `settings.write`). As soon as you
-have created a real server, the button is gone; you can still delete the sample data at any time.
-
-### 5.1 Create a server
-
-1. Press **"Add server"** („Server hinzufügen“) (on an empty list the button is also in the middle). If you come via
-   "Add server" in the cockpit or in the "First steps" card, the form is already open.
-2. **Short name** („Kurzname“) – lowercase, no spaces, e.g. `pi`. It can **not** be changed later (Nodvard Shield and
-   other extensions recognize the server by it).
-3. **Display name** („Anzeigename“) (what the server is called in the lists; empty = short name) and **Address**
-   („Adresse“) (IP or host name, without `http://` and without a port, e.g. `192.168.1.30`).
-4. **Operating system** („Betriebssystem“): Linux or Windows. For Windows servers there is no setup command and no
-   privilege check. Really choose Windows for a Windows server (such as a game server): otherwise Nodvard Deck sends
-   long commands the Linux way, and they fail on Windows.
-5. **Tags** („Markierungen“) (comma-separated): `docker` if Docker runs there – the Docker module (setting "Server
-   tag" – „Server-Markierung“) and the AI container watch of Nodvard Shield ("Monitored servers" – „Überwachte Server“)
-   take exactly the servers with this tag. Game servers appear only with the tag `gameserver`. Tags can be changed at
-   any time, also for Proxmox VMs (the ones set by Proxmox stay; they cannot be changed).
-6. **"Create"** („Anlegen“). The new server's page opens and immediately offers the next step.
-
-Wrong input is reported right at the field, in German (e.g. „Kurzname: nur Kleinbuchstaben, Ziffern, - und _ …“,
-meaning "Short name: only lowercase letters, digits, - and _ …").
-
-**Correcting the address:** Proxmox VMs without a running guest agent get the address of the Proxmox server as a
-placeholder. Then, on the server's page, enter the real IP under **General → Edit** („Allgemein → Bearbeiten“) –
-Nodvard Deck no longer overwrites an address set by hand with the placeholder, only with an address that the guest
-itself reports. For Proxmox *nodes*, the extension overwrites the address again at the next sync.
-
-If the server has a stored **SSH password**, changing the address deletes it; you enter it again afterwards. SSH
-keys stay. This also applies when an extension's sync changes the address (e.g. of a Proxmox node); for VMs and
-containers that report their address themselves and whose server key is already remembered, the password stays.
-
-### 5.2 Set up SSH access – three ways
-
-On the server's page, card **SSH access** („SSH-Zugang“):
-
-- **Generate SSH key (recommended)** („SSH-Schlüssel erzeugen“). Nodvard Deck generates a key of its own just for this
-  server. You only specify the **user on the server** (default `nodvard`, a user of its own just for Nodvard
-  Deck; it is created if it does not exist yet –
-  for Proxmox nodes use `root`) and the port (22). Older logins may still be called `lattice`; they keep working
-  unchanged. Afterwards the page shows the **setup command** (5.3).
-- **Enter password** („Passwort eingeben“). For a user that already exists on the server. The password is stored
-  encrypted and never shown again. A key is more secure.
-- **Paste your own key** („Eigenen Schlüssel einfügen“). Paste the private key (text beginning with `-----BEGIN …`,
-  **without a passphrase**). Afterwards there is also a setup command for the server.
-
-Whatever you type or paste is cleared from the form when you submit it.
-
-### 5.3 Run the setup command on the server
-
-The command is **a single one-liner**. Copy it to the clipboard with **"Copy"** („Kopieren“) (this also works on
-`http://`, without a secure context), log in to the server (via `ssh`, at the screen, or via the console of your VM
-management), paste it, press Enter. It
-
-- creates the user if necessary (without a password, login only with the key),
-- adds the public key to `~/.ssh/authorized_keys` (with `restrict,pty`: terminal, files and commands work,
-  forwardings do not). If Dropbear runs on the server (e.g. on DietPi), it uses
-  `no-port-forwarding,no-agent-forwarding,no-X11-forwarding` instead: Dropbear does not know `pty` and would otherwise
-  discard the whole line,
-- optionally sets up **root rights without a password** and the **docker group** (see
-  [6.](#6-root-rights-without-a-password-and-the-docker-group)).
-
-Under "What does the command do?" („Was macht der Befehl?“) the same sequence is shown in readable form, line by line.
-The command runs directly as root, otherwise via `sudo` – so it works on Proxmox (no sudo) as well as on Debian or the
-Pi. It can safely be run several times: it recognizes a key that is already there, even with the older comment
-`lattice@…`, and does not add it twice. A commented-out line (`# …`) does not count: if you locked Nodvard Deck out
-that way, setting it up again adds a valid line, and the commented one stays. If the key is in the file without
-restrictions (for example added by hand), the command puts `restrict,pty` or the options for Dropbear in front of it
-and reports „Der schon eingetragene Schlüssel für Nodvard Deck ist jetzt eingeschränkt …“ (the key already there is
-now restricted). Lines with options of their own, such as `from="…"`, stay as they are. To check what it wrote, it
-needs `cmp` (package diffutils); if that is missing, it changes nothing and names the fix.
-
-If you set up a server with Dropbear with an older version and "Check connection" („Verbindung prüfen“) reports that
-the server did not accept the key („Der Server hat den Schlüssel nicht akzeptiert“), simply set it up again (with a
-password or with the command). The command then replaces exactly its own old line `restrict,pty …` with the line for
-Dropbear (message „Schlüssel für Dropbear angepasst.“); other lines with the same key and options of their own stay as
-they are.
-
-#### Set up with a password (Nodvard Deck runs the command)
-
-You do not have to paste the command yourself: in the box **"Set up the server for this key"** („Server für diesen
-Schlüssel einrichten“) you choose, instead of "Paste the command yourself" („Befehl selbst einfügen“), the second way,
-**"Set up with a password (Nodvard Deck runs the command)"** („Mit Passwort einrichten (Nodvard Deck führt den Befehl
-aus)“). This exists for logins with a key (generated or your own) on Linux servers. It is something different from the
-login "Enter password" in [5.2](#52-set-up-ssh-access--three-ways): here you need the password only for this one
-setup, and it is never stored. Afterwards Nodvard Deck logs in with the key.
-
-- **What you enter:** once the account (default `root`) and its password. The account must be allowed to log in via
-  SSH with a password: `root` or an account with sudo. Debian and Ubuntu usually do not let `root` in with a password;
-  then use an account with sudo (the form says so at the field). For an account other than `root`, sudo uses the same
-  password; if you untick "Use the same password for sudo" („Für sudo dasselbe Passwort nehmen“), the account must be
-  allowed to use sudo without a password.
-- **What happens:** Nodvard Deck logs in with it **once**, runs **exactly the same command** as in 5.3 (the tick boxes
-  "Root rights without a password" and "docker group" above apply here too), closes the connection and then checks
-  with the new key like "Check connection" ([5.4](#54-check-the-connection)). Below you see the command's messages and
-  the result of the check. If the server had no default login yet, this login becomes the default. When replacing a
-  login ([5.5](#55-replace-access-delete-groups)), the check counts like "Check new login" („Neuen Zugang prüfen“);
-  afterwards you can press "Use new login" („Neuen Zugang verwenden“).
-- **The password is never stored:** not in the database, not in the vault, not in the audit log and not in the log.
-  The field is cleared the moment you submit, and the browser is told not to remember it. The audit log records that
-  there was an attempt ("Server mit Passwort einrichten", `host.setup_with_password`) with server, account and result
-  – never the password.
-- **The server key must be known.** The password never goes to a server whose fingerprint Nodvard Deck does not know
-  yet or which has changed. If Nodvard Deck does not know it yet, the form shows the fingerprint to compare and
-  confirm (as in [5.4](#54-check-the-connection)); afterwards you enter the password once more. With a changed key
-  there is only the warning, without a confirm button.
-- **Limits:** You need the privileges `hosts.write` **and** `hosts.execute`, because the command runs on the server as
-  root, like the terminal. Nodvard Deck slows attempts down: at most 5 per address and port, 10 per user in 10 minutes
-  (plus 30 calls per user in 5 minutes), and only one setup runs per server at a time; then you see "Zu viele Versuche
-  mit Passwort …" (too many attempts with a password) or "Für diesen Server läuft gerade schon eine Einrichtung …" (a
-  setup is already running for this server). The counters live in memory and start over after a restart. The command
-  gets up to 90 seconds. If the connection drops or the time runs out, the command may still have run partly on the
-  server: "Check connection" shows what is already there, and trying again is harmless because the command can be run
-  several times.
-- **Without HTTPS** the form warns you before you submit the password: it then travels unencrypted from your browser
-  to Nodvard Deck. On your own home network that is usually fine, on a foreign network it is not; "Paste the command
-  yourself" is safer then. When you open the page directly on the machine (`localhost`) the warning does not appear.
-  Nothing is blocked.
-- **Not possible yet:** Proxmox with a password, Windows servers (there is no setup command for them) and the setup
-  wizard.
-
-### 5.4 Check the connection
-
-Card **Check connection** („Verbindung prüfen“) (up to 30 seconds). The page shows point by point what works and
-what does not – with a hint on what to do:
-
-1. **Server reachable** – address, port, firewall, is SSH running?
-2. **Server key** – see below.
-3. **Login** – does the server accept the key or the password?
-4. **Root rights** – does `sudo` work without a password? (Only a hint, not an error: the lean variant without root
-   rights is allowed.)
-5. **What extensions need** – e.g. Docker without sudo for the Docker module.
-6. **Operating system** – e.g. "Debian 12 · aarch64 · Raspberry Pi 4 Model B".
-
-**The server key (fingerprint):** Every SSH server has a fingerprint of its own.
-
-- **New:** The first time, the check shows the fingerprint and stops. Until then, **no password and no key** has gone
-  to the server. Compare the fingerprint with the one on the server (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`;
-  the page shows the command to copy) and press **"Fingerprint matches – confirm"** („Fingerabdruck stimmt –
-  bestätigen“). The page then continues checking right away. In your own home network and for a freshly set up
-  server, confirming is fine; for a server on the internet, really compare the fingerprint.
-- **Changed:** If the server later shows a different fingerprint, a clear warning appears – **without** a confirm
-  button. This happens after a reinstallation of the server, but also when someone puts themselves in between. If it
-  was a reinstallation: card **Server key** („Server-Schlüssel“) → **Forget** („Vergessen“), then check again and
-  confirm the new fingerprint. If not: first find out why.
-- Too many checks in a row slow the page down ("Zu viele Prüfungen. Bitte in N Minuten …" – too many checks, please
-  wait N minutes).
-
-From the list it is also quicker: **Check** („Prüfen“) next to each server shows the result briefly ("4 of 5 OK" –
-„4 von 5 in Ordnung“), and the server page (`/hosts/<ID>`) has a card **Access** („Zugang“) with "Check
-connection".
-
-**When the access turns green:** In the list and on the server page, the SSH access badge only turns green once the
-server answers and Nodvard Deck has actually logged in there with this login, for example via "Check connection" or
-when a module queries the server via SSH. The server answering only means that its SSH port is open. Until then the
-badge stays grey, with a yellow note next to it saying what is missing: „noch nicht geprüft“ (not checked yet), „noch
-keine Verbindung“ (no connection yet: the server has never answered), „Anmeldung noch nicht bestätigt“ (login not
-confirmed yet: with a key, the setup command is usually still missing), „keine Antwort“ (no answer) or „Anmeldung
-klappt nicht“ (login does not work). After a new address, a rejected login, a changed server key or a new default
-login without a fresh check, the login counts as unconfirmed again until it works the next time.
-
-> **Note:** Whether Nodvard Deck remembers a new server key by itself on the very first connection (Terminal,
-> monitoring, …) is set under **Settings → Servers & access** in the card **New server keys** („Neue
-> Server-Schlüssel“). **Only remember new server keys after my confirmation** („Neue Server-Schlüssel erst nach
-> meiner Bestätigung merken“) is on, also on installations set up before this setting existed: Nodvard Deck then
-> remembers a key only through "Check connection", and no password and no key goes to the server before that. If
-> Deck does not know a server's key yet, press "Check connection" there once and confirm the fingerprint. "Off"
-> (not recommended) remembers new keys by itself again; that only applies if you set it that way explicitly. The
-> environment variable `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` (`true` or `false`; in the Compose file under
-> `environment:`, see the example in [2.](#2-setup-wizard-setup); the repository's `deploy/docker-compose.yml` has
-> the line prepared) overrides the switch: the card then shows the variable's value, and saving reports an error.
-> After **Forget** („Vergessen“) you always have to confirm the new fingerprint, no matter how this is set – until
-> then Nodvard Deck no longer connects to the server.
-> Keys that have already been remembered are never affected. The cleaner way is always: check and confirm first.
-
-### 5.5 Replace access, delete, groups
-
-- **Replace:** Card SSH access → **Replace** („Ersetzen“) creates a *new* login (generate key, password or your own
-  key); the old one stays the default. Run the new login's command on the server, press **Check new access**
-  („Neuen Zugang prüfen“) and then **Use new access** („Neuen Zugang verwenden“). Only after a successful, fresh check
-  (at most 10 minutes old) is the old login deleted – that way you do not lock yourself out. If the old login was a
-  key, **its public key stays on the server in `~/.ssh/authorized_keys`**; remove it there yourself if needed. For a
-  password, nothing changes on the server. Checking the new login does not change the confirmation of the old one
-  (5.4); only once you use the new one does its check count.
-- **Delete access:** Terminal, updates and monitoring then no longer reach the server. A key stays registered on the
-  server; for a password, nothing changes there.
-- **Groups:** On the list under **Groups** („Gruppen“) you create, rename and delete them; on the server's page you
-  assign them with a tick. "Scripts" („Skripte“) can run a script on all servers of a group.
-- **Delete server:** Card "Danger zone" („Gefahrenbereich“) (or "Delete" („Löschen“) on the server page). For safety,
-  type the short name. The SSH login and the remembered server key are deleted as well; histories in Nodvard Shield stay
-  with the old name. Servers read in from Proxmox reappear at the next sync – then without an SSH login. If an
-  action is currently running on the server, deletion is not possible.
-
-**Testing:** In the "Terminal" menu the server now appears (the Terminal extension switches itself on with the first
-SSH login, unless you had switched it off yourself). Open a session – if the login works, it works for all the other
-extensions too. A terminal session without any input or output closes by itself after 30 minutes.
-
-## 6. Root rights without a password and the docker group
-
-If Nodvard Deck does **not** log in to a server as root (e.g. on the Pi), it runs root commands via `sudo -n`, that is,
-without a password prompt. If sudo asks for a password, the function fails with "Keine root-Rechte: Das Dashboard
-ist auf diesem Server nicht als root angemeldet und darf sudo nicht ohne Passwort nutzen." (no root rights: the
-dashboard is not logged in as root on this server and may not use sudo without a password).
-
-You do **not** have to change the setup command (5.3) by hand for this: the page sets the appropriate tick
-boxes itself, because the extensions report what they need. The same tick boxes apply when you set up the server with
-a password (Nodvard Deck then runs the same command).
-
-- **"Root rights without a password"** („Root-Rechte ohne Passwort“) – needed for (the page names it behind the
-  tick box):
-  - **Nodvard Shield, antivirus:** move a file to quarantine, restore or delete it, Lynis hardening audit, install tools
-    (ClamAV, Lynis, signatures, Fail2ban, automatic updates). Scans also run without root, but then only check files
-    that the user may read. Nodvard Shield detects whether ClamAV and Lynis are installed without root as well (on
-    Debian and the Pi's operating system, Lynis lives in `/usr/sbin`); after an installation it asks the server again right
-    away. The **hardening audit** runs in the background on the server with low priority and can take from a few
-    minutes to over an hour, depending on the server (limit 3 hours). Right after the click the server shows
-    "Audit running since …" („Audit läuft seit …“), a second click does not start a second audit, and the dashboard
-    may restart in the meantime. The most common Lynis findings get a German title in the result; a click shows what it
-    means and what you can do (much of it is deliberately not needed in a home network, and the text says so). At the top,
-    "Deine wichtigsten Baustellen" lists at most five findings with the biggest effect on the servers shown. The logs
-    are kept on the server under `/var/lib/nodvard-shield-audit/`. Scans and the
-    real-time guard never run at the same time on a server; for this lock Shield creates a small folder there:
-    `/run/nodvard-shield` (as root) or `~/.nodvard-shield`. A file only goes into quarantine if ClamAV itself reports
-    it again while it is moved, first where it is and then in a check folder only root can write to; this applies with
-    and without the helper script. If ClamAV is missing or does not answer, the file stays where it is. A restore only
-    puts the file back where Shield recorded it on the server when moving it, with the permissions it had (special ones
-    such as `4755` or `044` included), again with and without the helper script. The question and the approval
-    therefore name the path from the finding only "according to the finding" („laut Fund“); after the restore Shield
-    names the place the file really went to, and if it differs from the finding, that is noted at the finding too. If
-    the record is missing or invalid (for example for a file that went into quarantine with Nodvard Deck 0.8 or older),
-    the file stays there, and you put it back or delete it on the server by hand. A finding that
-    you ignored or restored is not moved to quarantine again by the next scan (unless ClamAV reports the same file
-    with a different signature). To undo
-    this, open "Findings & quarantine" („Funde & Quarantäne“), choose the filter "All, including done" („Alle, inkl.
-    erledigt“) and click "Watch again" („Wieder beachten“): the finding is open again and the next scan reports the
-    file again.
-  - **Protection score** (0 to 100, on the overview): counts the antivirus (ClamAV, signatures, scans, open findings),
-    the hardening and also open security updates, pending reboots, Fail2ban, the SSH settings (root or password login,
-    in proportion to the number of affected servers) and open critical security events (5 points each, at most 15).
-    Below it you see what currently lowers it and by how many points. If a server's last update or intrusion check
-    failed or is older than three days, its old state does not count; it is then listed as „zuletzt nicht geprüft
-    (ohne Abzug)“ (not checked recently, no deduction).
-  - **Update center:** apply updates and reboot. Reloading the package lists before the check needs root – without
-    it, you stay at the most recently loaded state. Updates run in the background on the server (with systemd as
-    `lattice-upgrade-…`, otherwise via `setsid`) and keep running even if the connection drops or the dashboard
-    restarts. The log of every run is kept for 30 days under `/var/lib/nexus-updates/`. The dashboard waits 45
-    minutes for the result; if a run takes longer, it initially shows as "No response" („Keine Rückmeldung“) (it is
-    never terminated), but the dashboard keeps asking for up to about 3 hours, then corrects the entry and reports the
-    result by push. If the dashboard restarts during that time, the entry stays as it is – then look in the log on the
-    server.
-  - **Intrusion protection and file watcher:** SSH log, Fail2ban status, processes behind open ports, SSH settings,
-    checksums of files such as `/etc/shadow`. Only limited without root – Nodvard Deck says so, instead of falsely
-    giving the all-clear. Blocking/unblocking IP addresses via Fail2ban works only with root.
-    While Fail2ban runs, every server lists the banned IPs under "Banned addresses" („Gesperrte Adressen“), sorted by
-    jail (the protection rule for one service, such as `sshd` for SSH), with "Unban" („Entsperren“) next to each
-    address. From 20 addresses on there is a search; at most 200 are shown at once. Below it you ban a single address
-    by hand, in the jail `sshd` or another one the server has; Shield knows which ones only after checking the server.
-    A ban usually ends on its own after the jail's ban time. Shield does not ban addresses that belong to no other
-    machine (such as `127.0.0.1`), the address of your browser (behind a reverse proxy reliably only once it is listed
-    under "Trusted proxy", „Vertrauenswürdiger Proxy“; otherwise Shield also compares what the proxy wrote into
-    `X-Forwarded-For`), nor the address Nodvard Deck uses to reach the server; otherwise you would lock yourself out. The server checks the last
-    one itself as well before it bans (from `SSH_CLIENT` or `SSH_CONNECTION`); if it cannot tell, it bans nothing. If
-    the server has no jail for SSH, Shield offers no "Ban" („Sperren“) for attackers. If an address was already free
-    when you unban it, Shield says so instead of reporting an error.
-    Intrusion protection reports each new open port on its own ("New open port", „Neuer offener Port“). Programs that
-    pick random ports on every start or for every request (NFS, Tailscale, Pi-hole and other DNS services) count as one
-    entry. For a program with a port range of its own, such as a game server, enter the program, protocol and range
-    under Settings → Extensions → "Nodvard Shield" → "Advanced" („Erweitert“) → "Own port ranges per program"
-    („Eigene Portbereiche je Programm“). New ports in that range are then no longer reported one by one. Any program
-    can give itself any name, malware included: only enter programs you trust and keep the ranges small. Ports below
-    1024 only count with the tick box "Also ports below 1024" („Auch Ports unter 1024“). A range covers at most 1000
-    ports (a larger one only counts up to there), more only with the tick box "Wide range" („Breiter Bereich“); a wide
-    range always starts at 1024 at the earliest, so SSH and other fixed services stay visible. At most 50 ranges count.
-  - **Server status:** restart services (systemd). Afterwards Deck checks for up to 45 seconds whether the service runs and
-    keeps running (twice, 10 seconds apart, without a new start; the check needs no root). If it fails right away or
-    keeps restarting, the action counts as failed and says so.
-  - **Docker in the "operate only" mode** („Nur bedienen“, servers tagged only `docker-bedienen`): view containers, read
-    logs, start, stop and restart them through the helper script `docker-root`, without the docker group.
-- **"Add to the docker group"** („Zur Gruppe docker hinzufügen“) – needed for the Docker module and the AI container
-  watch of Nodvard Shield; they call `docker` without sudo. The group is only entered if it exists on the server. For a
-  server tagged only `docker-bedienen` the page does not offer the group; the helper script is enough there.
-
-Without either tick box you get the **lean variant**: its own user, key only, no root rights. That is enough for
-Terminal, Files and Scripts.
-
-**What the "Root rights" tick box does exactly:** That depends on which modules need root on this server.
-
-- **Only the helper scripts (default):** If at least one module needs root here and each of them has a helper script
-  (Nodvard Shield, Server status and Docker in the "operate only" mode have one), the tick box sets up only those
-  scripts (see "Helper scripts" below). Each gets its own rule
-  `<user> ALL=(root) NOPASSWD: /usr/local/lib/nodvard-deck/<module>-root`; there is no full sudo rule. The user may
-  start exactly these scripts with sudo, and what they do is written in the scripts themselves (such as installing
-  updates, quarantine, restarting services). Under "Was macht der Befehl?" (what does the command do?) you can read
-  every script. First the command checks that the scripts can be set up safely: `sudo`, `base64`, `sha256sum` and
-  `stat` must be present, every folder above `/usr/local/lib/nodvard-deck` must be a real folder owned by root that
-  nobody but root may write to: no group, not even the root group, and nobody else. An ACL can only grant writing if
-  the group bits allow it (they are then the mask), so looking at them is enough. If `/usr/local/lib/nodvard-deck`
-  already exists, the same applies to it (otherwise the command creates it). If that fails, it changes **nothing**,
-  names the folder, the reason and the fix (such as `chmod g-w /usr/local/lib` or `mkdir -p /usr/local/lib`) and ends
-  with an error; "Mit Passwort einrichten" (set up with password) shows the same
-  lines. Older Debian lets the group staff write to `/usr/local` and `/usr/local/lib`; there, as root,
-  `chmod g-w /usr/local /usr/local/lib` helps. Fix the reason or, unless sudo is missing, choose "Volle
-  Rechte" and set up again. "Volle Rechte" does not help Docker in the "operate only" mode: it works only through its
-  helper script, and the command says so.
-- **Full rights:** If a module needs root and has no helper script, or if you tick "Volle Rechte" (full rights) under
-  "Erweitert" (advanced), the full rule is added. You only need that tick box if you start your own commands with sudo
-  through Nodvard Deck, for example in scripts.
-- **No module needs root:** Then the tick box sets up no sudo at all, not even the full rule. The page says so below the
-  tick box. If you still want sudo, for example for your own commands in scripts, tick "Volle Rechte" under "Erweitert".
-
-The command only takes back a full rule that is already there if you explicitly ask for it: a server that has one
-keeps running as before, even if you run the command there again. To get rid of it, run the command once more first and
-press "Verbindung prüfen". Once every helper script has its own rule, "Root-Rechte" turns yellow with "sudo ohne
-Passwort für alles ist hier nicht nötig. Die Hilfsskripte reichen." (sudo without a password for everything is not
-needed here; the helper scripts are enough), and a subtle hint appears under "Braucht Aufmerksamkeit" on the overview
-(checked every 6 hours, hidden with ×). The hint leads to the setup command, where "Volle sudo-Regel entfernen" (remove
-the full sudo rule) is already ticked under "Erweitert". Run the command (paste it yourself or use "Mit Passwort
-einrichten") and check again: "Root-Rechte" then says "sudo erlaubt nur die Hilfsskripte der Module, keine volle Regel.
-Das reicht." (sudo allows only the modules' helper scripts, no full rule; that is enough).
-
-This is how the command goes about it, so you do not lock yourself out:
-
-- It first sets up the helper scripts and their rules as always. If anything goes wrong there, it leaves the full rule
-  alone.
-- If there is no rule from Nodvard Deck (only links, other content or none at all), it says so and changes nothing.
-- It only deletes `/etc/sudoers.d/nodvard-<user>` and `lattice-<user>`, and only if the file contains exactly the line
-  `<user> ALL=(root) NOPASSWD: ALL`. Links and files with other content stay, with a hint.
-- Before that it asks every script for its version through sudo. That only shows that it runs (still with the full
-  rule); if one does not answer, the full rule stays.
-- After deleting, it checks the sudo configuration with `visudo -c` (if it was fine before) and asks every script
-  again, now without the full rule. If any of that fails or the run is cut off (for example because the connection
-  drops), it puts the rule back right away. It never changes the key or the login.
-- If the user can still do everything through a rule from somewhere else (for example `010_pi-nopasswd` on Raspberry Pi
-  OS or the group `sudo` with NOPASSWD), it says so. That rule stays; whether it can go is your call. As long as it
-  applies, the check cannot show whether the helper scripts are enough on their own.
-
-Afterwards your own commands with sudo through Nodvard Deck no longer work. If an update of Nodvard Deck brings new
-helper scripts, the modules only get root there again once you set the server up once more; the overview tells you.
-
-If you want the full rule back, set the server up again with "Volle Rechte". If you need it for your own commands with
-sudo, tick "Volle sudo-Regel gewollt" (full sudo rule wanted) under "Bearbeiten", "Erweitert" for that server:
-"Root-Rechte" then stays green and the hint does not appear. If no module needs root on the server at all, the command
-brings no helper scripts and therefore cannot remove the rule. If you then do not need sudo for your own commands through
-Nodvard Deck, delete it yourself (`sudo rm /etc/sudoers.d/nodvard-<user>`, on older servers `lattice-<user>`).
-"Verbindung prüfen" then shows under "Root-Rechte": "Kein eingeschaltetes Modul braucht hier root, sudo ohne Passwort
-ist nicht nötig." (no enabled module needs root here, sudo without a password is not needed).
-
-The full rule is `/etc/sudoers.d/nodvard-<user>` with the line
-`<user> ALL=(root) NOPASSWD: ALL`. The line is first written to a trial file and checked with `visudo -c`; only then
-does it move into place with permissions `0440` (root). Afterwards `visudo` checks the installed file and the whole
-configuration once more. On an error the file is removed again immediately ("sudo-Regel zurückgenommen" – sudo rule
-withdrawn), followed by what `visudo` reports. If `visudo -c` already reports an error in someone else's file
-**before** the setup (e.g. "bad permissions, should be mode 0440" because a file in `/etc/sudoers.d` has permissions
-`0644`), only the check of the command's own files counts. The command then names that file in a hint;
-`sudo chmod 0440 <file>` and `sudo chown root:root <file>` fix it. The command deletes an
-older rule `lattice-<user>` only after this check and only if it consists of exactly the line above; otherwise it
-stays in place and you get a hint. If `sudo` is not
-installed at all, the command says so (as root `apt install sudo`; on Proxmox best log in as `root` right away).
-
-**This is practically root – and the page tells you so too:** Anyone who is in the `docker` group or has the full
-sudo rule can do practically anything on the server. Without a helper script Nodvard Deck starts some root commands as
-`sudo -n sh -c '…'`, so it then needs the full sudo rule, and anyone who may start `sh` as root may do anything. The
-security comes from the fact that **only** this one user gets the rights, can log in **only with the key**, and the key
-is stored encrypted in Nodvard Deck.
-
-**Helper scripts:** With the "root rights" tick box the command puts the modules' helper scripts (Nodvard Shield,
-Server status and Docker in the "operate only" mode) into `/usr/local/lib/nodvard-deck` and allows each one with its own narrow sudo rule. If that fails
-for a script, the command names the reason (folder or file not safe, tool missing, or `visudo` rejected the rule). With
-the full rule that is a hint, and the module then uses the full rule; only Docker never does, so for `docker-root` it
-is always an error. Without the full rule it is an error, because the module would then have no root at all: there the
-pre-check covers folders and tools before anything changes (see above); a damaged script or a rejected rule is reported along the way with "FEHLER: …" and at the end "Nicht alles hat
-geklappt" (not everything worked). The
-modules call a script only if the one on the server is byte for byte the one that ships with Nodvard Deck. The
-exception is Docker: it also calls an older version. If only root can change it and sudo allows it, Docker keeps root
-with it until you run the setup again ("Veraltet" then comes with "Docker ruft es trotzdem auf …", Docker still calls
-it).
-"Verbindung prüfen" (check connection) shows for each script whether it matches, and under "Root-Rechte" it says
-"sudo erlaubt nur die Hilfsskripte der Module, keine volle Regel. Das reicht." (sudo allows only the modules' helper
-scripts, no full rule; that is enough) when all of them match. If a script is missing, it shows "Fehlt auf dem Server"
-(missing on the server, yellow); without the full rule, and for Docker always, it adds that the module has no root
-here. If `docker-root` is missing next to the full rule, "Root-Rechte" is yellow too.
-After an update that brings a new script it says "Veraltet" (outdated): then run the setup command once more.
-You do not have to spot this yourself: if a script is missing or outdated while sudo may run scripts there (full rule
-or a script's own rule), the overview shows a quiet hint under "Braucht Aufmerksamkeit" (needs attention) with a link
-to the setup. Nodvard Deck checks this
-every 6 hours and on every "Verbindung prüfen". The × hides the hint for that server until an update brings newer
-scripts.
-
-**What the helper scripts may do:** The dashboard's user can run these subcommands as root through sudo, also without
-going through the dashboard. Each one checks its own arguments and stops on anything else before it does anything. A
-test runs every script in `sh` and `dash` with more than 200 invalid inputs (options instead of names, spaces, line
-breaks, `;`, `$(…)`, `..`, relative paths, overlong values) and requires that no program with side effects starts.
-The full sudo rule, in contrast, allows everything.
-
-| Script | Subcommand | What it does as root | Limits |
-|---|---|---|---|
-| all | `version` | prints the version | no arguments |
-| `system-root` | `service-restart` | restarts a systemd service and reports its state | only `.service`, `.socket`, `.timer`; never SSH, D-Bus, `systemd-*`, `networking`, `NetworkManager`, `dhcpcd`, `wpa_supplicant` or Nodvard Deck; other network services such as `firewalld` or `wg-quick@…` are allowed. Docker and containerd on the dashboard's own machine are blocked by the dashboard only; the script cannot tell which machine that is |
-| `docker-root` | `ps`, `stats` | lists containers and their load | no arguments |
-| `docker-root` | `inspect`, `id`, `id-state`, `state`, `ports` | reads container details in fixed formats | only valid names or IDs, at most 200 |
-| `docker-root` | `logs` | reads a container's log | at most 5000 lines at the start, then following on request; time span only in minutes or hours |
-| `docker-root` | `start`, `stop`, `restart` | starts, stops or restarts a container | exactly one valid name; there is no delete |
-| `shield-root` | `guard` | reads logins from the SSH log, the effective sshd settings (port, root login, password and key login and similar), Fail2ban, open ports with the range for outgoing connections and the checksum, mode, owner, modification time and size of the watched files and programs | read only; absolute paths without `..`, `*` only for files |
-| `shield-root` | `detect-templates`, `refresh-packages` | reads the Samba, NFS and Nextcloud settings or refreshes the package list | no arguments |
-| `shield-root` | `quarantine`, `restore`, `delete`, `quarantine-state` | moves a file reported by ClamAV into quarantine, puts it back, deletes it there or reports its state | ClamAV checks the file again first; back only to the place the script noted itself; no links |
-| `shield-root` | `ban`, `unban` | bans or unbans an address in Fail2ban | address only hex digits, `:` and `.`, at most 45 characters; jail only letters, digits, `_`, `.` and `-`, at most 64 characters. Fail2ban rejects anything that is not a valid address |
-| `shield-root` | `install` | installs ClamAV, Lynis, Fail2ban or unattended-upgrades, fetches new virus signatures | only these five |
-| `shield-root` | `reboot` | restarts the server in one minute (after 5 seconds without `shutdown`) | no arguments |
-| `shield-root` | `upgrade-start`, `upgrade-run`, `upgrade-poll` | installs updates with apt, dnf or apk and reports progress | fixed kinds; single packages only for security updates with apt, names from a fixed character set |
-| `shield-root` | `audit-start`, `audit-run`, `audit-poll`, `audit-stop` | starts, follows or stops a Lynis audit | run ID in a fixed form, fixed time limit, stops only its own run |
-| `shield-root` | `scan`, `watch` (internally `scan-run`, `watch-run`, `odd-scan`) | scans folders with ClamAV | absolute paths, numbers with an upper limit, one run at a time, time limit |
-| `shield-root` | `realtime-on`, `realtime-off`, `realtime-log`, `realtime-confirm` | turns ClamAV's real-time protection on or off, reads its log, checks reported files again | writes only fixed files under `/etc/clamav` and a systemd drop-in; folders absolute without `..`, at most 50 files |
-
-Which files `guard` reads comes from the settings of Nodvard Shield's file watcher ("Überwachte Dateien", watched
-files). Whoever may change that setting also decides for which files root reads the checksum, mode, owner, modification time
-and size. The script never prints the content of those files.
-
-**Switching Docker to "operate only":** If a server that is already set up with the docker group or the full sudo rule
-gets the tag `docker-bedienen` instead of `docker`, it keeps both. The setup command takes back neither the group nor the
-rule, so the login is still practically root there. "Verbindung prüfen" shows this in the items "Nur bedienen: Zugang nicht
-in der Gruppe docker" and "Nur bedienen: keine volle sudo-Regel" (yellow). If the login is `root`, "operate only"
-restricts nothing; then "Nur bedienen: Zugang ist nicht root" is yellow, and the login needs a user of its own. If a server
-has both tags (`docker` and `docker-bedienen`), it is a full Docker server: the items "Nur bedienen: …" and the helper
-script `docker-root` do not apply there, Docker runs through the docker group.
-To switch:
-
-1. Run the setup command once more with "root rights without a password". It puts `docker-root` in place and no longer
-   offers the docker group.
-2. "Verbindung prüfen": "Docker nur bedienen" must say that the helper script answers.
-3. Take the login out of the group: `sudo gpasswd -d <user> docker` (takes effect at the next login).
-4. If no other module needs full rights here, remove the full rule as described above.
-5. "Verbindung prüfen" once more: the check logs in afresh for this, so the "Nur bedienen: …" items turn green right
-   away, and from then on Nodvard Deck uses only new connections elsewhere too.
-
-Back to a full Docker server: set the tag `docker` again and run the setup command with "Add to the docker group".
-
-**Proxmox nodes:** There, Nodvard Deck is easiest to log in directly as `root` (enter user `root` when generating).
-Then it needs neither sudo nor tick boxes. The key ends up in `/root/.ssh/authorized_keys`, which on Proxmox is a link
-into the cluster folder – so it then applies on **all nodes of the cluster**.
-
-**Using an existing user** (on the Pi e.g. `admin`): enter that name instead of `nodvard` when generating. Running
-`sudo -n true && echo geht-schon` on the server shows whether it may already use sudo without a password (on
-Raspberry Pi OS this is often the case for the first user).
-
-Do not be surprised: the file watcher of Nodvard Shield reports the new sudo file and the new `authorized_keys` once –
-that was you. The same applies if you run the command again with the "Root rights" tick box on a server that still
-has the old rule `lattice-<user>`: `nodvard-<user>` is added, and the old one goes away if it is unchanged (see above).
-
-## 7. Connect Proxmox
-
-**Only if you use Proxmox – otherwise skip this section** (see [4.1](#41-without-proxmox)). In detail in
-**[PROXMOX-TOKEN.md](PROXMOX-TOKEN.md)**.
-
-Easiest: turn on "Proxmox VE", then on the **"Proxmox"** page click **"Connect with password"** („Mit Passwort
-verbinden“), enter address and the password of `root@pam` and compare the certificate fingerprint (Nodvard Deck
-remembers it and checks it on every later request) – Nodvard Deck creates
-user, role and token in Proxmox itself, reads everything in right away and forgets the password at once
-([quick way](PROXMOX-TOKEN.md#quick-way-connect-with-a-password)). If "Backups" is on, it gets its own access at the
-same time ("Also connect Proxmox backups", „Auch Proxmox-Backups verbinden“) – step 3 below is then not needed. Once per
-Proxmox server. By hand:
+In detail in **[PROXMOX-TOKEN.md](PROXMOX-TOKEN.md)**, the way with a password there under
+[quick way](PROXMOX-TOKEN.md#quick-way-connect-with-a-password). If you connected with a password and left "Also connect
+Proxmox backups" on, step 3 below is not needed. By hand:
 
 1. On every Proxmox server (in the example pve1 **and** pve2), create a user `nodvard@pve` with token `dashboard`
    and a suitable role.
@@ -1480,7 +1237,7 @@ Proxmox server. By hand:
 3. Do the same under "Proxmox-Backups", with the same short names.
 4. After 5 minutes at the latest, nodes, VMs and containers are there. VMs without a guest agent get the Proxmox
    address as a placeholder – enter the correct IP under Settings → Servers & access
-   („Einstellungen → Server & Zugänge“) ([5.1](#51-create-a-server)).
+   („Einstellungen → Server & Zugänge“) ([3.1](#31-create-a-server)).
 5. The modules also raise an alert on their own when a storage is almost full (Proxmox VE, from 90 %, adjustable) and
    when the last successful backup of a VM is older than 3 days (Backups, adjustable, at least 2 days); both under
    "Configure" („Konfigurieren“) of the module. If the backup job of a VM runs less often (for example only on
@@ -1490,81 +1247,47 @@ Proxmox server. By hand:
    from 65 °C, NVMe from 70 °C, adjustable under "Advanced"). A pool that disappears completely (for example not imported
    after a reboot) is reported as well. The ZFS pools also appear on the node under "Node details".
 
-## 8. Push notifications (ntfy)
+### G.3 Managing extensions
 
-Turn on Settings → Extensions → **"Push notifications"** („Einstellungen → Erweiterungen → Push-Nachrichten“, formerly
-„ntfy-Benachrichtigungen“) → "Configure" („Konfigurieren“). For ntfy:
+Under Settings → Extensions the modules are listed in the same groups as in the wizard; the sample modules for
+developers ("Hello World") are at the very bottom under "For developers" („Für Entwickler“). If a module has read in
+servers (Proxmox, for example), the confirmation when switching it off names their number: the servers stay in the
+list, in the cockpit they carry "Module off" („Modul aus“), and their state is no longer updated. You can delete them
+under Settings → Servers & access.
 
-- **ntfy server** („ntfy-Server“): e.g. `https://ntfy.sh` or your own. Nodvard Deck always connects to it directly, never
-  through a proxy from the environment (`HTTP_PROXY`, `HTTPS_PROXY`). If the machine running Nodvard Deck only reaches the
-  internet through a proxy, `ntfy.sh` cannot be reached; then use an ntfy server in your own network.
-- **Topic** („Thema (Topic)“): the channel you subscribe to in the ntfy app. On ntfy.sh choose one that is hard to
-  guess, because there anyone who knows the name can read along. The **"Choose randomly"** button („Zufällig wählen“)
-  next to the field enters a random name.
-- **Dashboard address (optional)** („Adresse des Dashboards (optional)“): `http://192.168.1.10:8080`. Then tapping a
-  notification opens the matching page directly. It must start with `http://` or `https://`, otherwise it is ignored.
-- **Minimum level for push notifications** („Mindest-Stufe für Push-Nachrichten“): "Everything (info, warning, critical)"
-  („Alles (Info, Warnung, Kritisch)“) is the default. With "From warning" („Ab Warnung“) or "Critical only"
-  („Nur Kritisch“), smaller messages no longer reach the phone; they stay under "Notifications" („Meldungen“). The test
-  message always arrives.
-- **Volume for info, warning and critical** („Lautstärke bei Info, Warnung und Kritisch“): how noticeable a message of
-  that level is on the phone, from "1 – no sound" to "5 – very loud". Whether level 5 also gets through "Do not
-  disturb" is decided by your phone.
-- "Save" („Speichern“).
-- **Credentials → "Access token (optional)"** („Zugangsdaten → Zugriffstoken (optional)“): only if your ntfy server
-  requires login.
+### G.4 Address check (Nginx Proxy Manager)
 
-In the ntfy app on your phone, subscribe to the same server and the same topic. You can skip typing: after saving, the
-page shows a **QR code** below the settings. Point your phone's camera at it, then the ntfy app opens and offers to
-subscribe to the topic. The code contains only server and topic, never the access token.
+On the "Nginx Proxy Manager" page each proxy host shows which Docker container
+it leads to and whether it runs, e.g. „Führt zum Container immich_server auf docker – der ist gestoppt.“ (leads to the
+container immich_server on docker, which is stopped). If it is stopped, the button „Container starten“ starts it through
+the approval (for users with `hosts.execute`). The mapping uses the server address with port (also for stopped
+containers; ports bound only to `127.0.0.1` do not count), `host.docker.internal` on the server Nginx Proxy Manager
+itself runs on (`localhost` only if it runs in host network mode, otherwise that is Nginx Proxy Manager itself), and the
+container name or Compose service.
+Names only count on the server of Nginx Proxy Manager (Docker resolves them only in its own network); if that server is
+unknown, the result says „vermutlich“ (probably), without red and without a button. The Docker module must be switched
+on for this, it knows the containers. A target that matches no container (e.g. the Proxmox web UI) is shown in grey and
+is not an error. Not detected: containers in host network mode (they show no ports), network aliases and additional
+locations of a proxy host.
 
-**Testing:** "Nodvard Shield" page → "Send briefing" („Briefing senden“). Creating it can take up to half a minute if a
-server does not respond. Afterwards the page tells you whether the status report („Lagebericht – …“) was also delivered
-as a push notification. If not, ntfy is not set up yet or the ntfy server cannot be reached. All messages are also in
-the dashboard under "Notifications" („Meldungen“) – even if the push notification does not arrive.
+### G.5 Synology DSM
 
-**What the status report contains:** servers, protection score, threats, hardening, updates, intrusion protection and –
-if any – how many proposals (from all modules) wait for your confirmation under "Actions" and which containers crashed
-in the last 24 hours. A waiting approval or a crash that is still open turns it into „es gibt etwas zu tun“ (something to
-do). It also arrives when everything is fine; if it does not arrive, Deck itself is probably down.
+Setting up, several devices, notifications and Hyper Backup: [Synology DSM](SYNOLOGY-DSM.md).
 
-If you set the minimum level to "From warning" or "Critical only", test with "Send test message" („Testnachricht senden“,
-"Connection" card under the ntfy settings) instead: a briefing without problems is only an info message and then does not
-reach the phone.
+### G.6 The widgets on the start page
 
-### More channels (Telegram, Discord, Gotify, Pushover, Matrix, Slack, Mattermost)
+Modules bring their widgets along; they are arranged in groups (Servers and Proxmox,
+Security, Docker and apps, Backups, Services – „Server und Proxmox“, „Sicherheit“, „Docker und Apps“, „Backups“,
+„Dienste“). Clicking a group's name collapses it; a coloured dot next to it then reports a warning, a fault or a widget
+that currently does not load. With **"Edit"** („Bearbeiten“) above the widgets you arrange everything: drag cards by their
+handle, choose height (Automatic, Small, Medium, Large – „Automatisch“, „Klein“, „Mittel“, „Groß“), width (Narrow, Wide)
+and group, remove widgets and rename groups. Only **"Done"** („Fertig“) saves everything at once, **"Cancel"**
+(„Abbrechen“) discards the changes; you bring a removed widget back via **"Manage widgets"** („Widgets verwalten“). On a
+phone the cards are stacked: height, group and removing work there too, moving and width only on a larger screen.
 
-Instead of ntfy or in addition (up to 10 channels): under **"More channels"** („Weitere Kanäle“) click "Add channel"
-(„Kanal hinzufügen“), choose a **short name** (e.g. `telegram`), the **minimum level** (default "From warning") and
-whether it is **active** → "Save". Then, under **Credentials**, enter the address in the entry "Channel address"
-(„Adresse des Kanals“) with that short name. It contains credentials (bot token, webhook key) and is therefore kept only
-in the vault. If you rename a channel, its address is gone and has to be entered again. It is written like in Apprise:
+## H. Automation and maintenance windows
 
-| Service | Address |
-|---|---|
-| Telegram | `tgram://BOT-TOKEN/CHAT-ID` (several chats separated by `/`; channels as `@name`) |
-| Discord | `discord://WEBHOOK-ID/WEBHOOK-TOKEN` or the webhook URL Discord shows |
-| Gotify | `gotifys://SERVER/APP-TOKEN` (`gotify://` without HTTPS, port with `:`) |
-| Pushover | `pover://USER-KEY@APP-TOKEN` (optionally `/DEVICE`) |
-| Matrix | `matrixs://ACCESS-TOKEN@SERVER/!ROOM-ID:SERVER` or `…/#roomname` (access token only, no password) |
-| Slack | `slack://T…/B…/X…` or Slack's webhook URL |
-| Mattermost | `mmosts://SERVER/WEBHOOK-ID` |
-| anything else | `apprises://SERVER/KEY` – your own [Apprise API](https://github.com/caronc/apprise-api) (separate container), which forwards to every service Apprise supports |
-
-Nodvard Deck sends the messages itself, directly to the service (no extra software, no proxy from the environment, no
-redirects). Telegram, Discord, Slack and Pushover need direct internet access for this, and the text of each message
-(e.g. server names, file paths, addresses) goes to that service. Group pings like `@everyone`, `@channel`, `@all` or
-`@room` from a message stay plain text. If the "Dashboard address" above is set, each message ends with a link to it.
-
-- **"Send test message"** sends to ntfy and all active channels at the same time and names each one that failed.
-- **"Test connection"** asks each service without sending anything: for Telegram, Discord, Pushover, Matrix and an
-  Apprise API this checks the token or key, for Telegram also whether the bot may post in each group and channel, for
-  Matrix whether the account is in each room. Slack, Gotify and Mattermost do not allow that (nor do private Telegram
-  chats); there you see a note, and an error from the last sending counts as well.
-- The short name "ntfy" is not available; it stands for the ntfy server above.
-- If one channel (or one chat of a channel) fails for a normal message, the others still get it.
-
-## 9. Automation and maintenance windows
+<a id="9-automation-and-maintenance-windows"></a>
 
 Settings → **Automation & security** („Einstellungen → Automatik & Sicherheit“):
 
@@ -1682,193 +1405,96 @@ after a reload. Under "Actions" („Aktionen“) the action then shows as "inter
 in the update center's history and in the push message. While Nodvard Deck is unreachable, the tab says so and retries
 on its own every few seconds.
 
-## 10. Back up the dashboard itself
+## I. Updates
 
-### 10.1 In the interface (recommended)
+### I.1 Finding and installing a new version
 
-**Settings → System → Backup** („Einstellungen → System → Sicherung“). Only the owner can change anything there.
+<a id="105-finding-and-installing-a-new-version"></a>
 
-1. **Set a backup password** („Sicherungspasswort festlegen“) (at least 12 characters, enter it twice, confirm with
-   the login password). Nodvard Deck does not store the password, only a public key. Afterwards the *recovery key*
-   (`AGE-SECRET-KEY-1…`) appears **once**: copy it or save it as a file and keep it safe.
-   **Password and key gone = backups worthless.** Nobody can open them any more.
-2. Turn on **Back up automatically** („Automatisch sichern“), choose the time and set how many backups should be kept
-   (1 to 60, older ones are deleted).
-3. **Folder** („Ordner“): the default is `/app/data/backups` in the data folder. That protects against operating
-   mistakes, but not against a broken SD card. It is better to mount a folder from another drive or a NAS: the
-   Compose file (`compose.yml` from [1.1](#11-installation-without-the-repo), or `deploy/docker-compose.yml` for an
-   installation from the repository) already contains the line `# - ./sicherungen:/backups` under `volumes:`. Remove
-   the `#` (or enter a NAS path instead of `./sicherungen`), run `mkdir sicherungen && sudo chown 1000:1000 sicherungen`
-   in the same folder (the folder must belong to the user with the number 1000), apply it with `docker compose up -d`
-   and choose `/backups` as the folder in the interface. For a NAS or NFS see
-   [Backups to a NAS or NFS](#backups-to-a-nas-or-nfs).
-4. **Check** („Prüfen“) compares a backup with its checksum (detects broken files, without a password).
-   **Download** („Herunterladen“) fetches a backup to your PC, **Download backup** („Sicherung herunterladen“) creates
-   a fresh one immediately – either with the backup password or with a one-time password of your own just for this
-   file.
+Under **Settings → System → "Updates"** („Einstellungen → System → Updates“) you can see which version is running and
+which one is the newest. Nodvard Deck looks **once a day** at ghcr.io to see which images exist; **"Search now"**
+(„Jetzt suchen“) does it right away (at most once a minute).
 
-#### Backups to a NAS or NFS
+- **Privacy:** ghcr.io belongs to **GitHub**, and so does github.com, where the search fetches the approval of a version
+  (downloads go through `objects.githubusercontent.com` or `release-assets.githubusercontent.com`; if you filter,
+  allow these addresses). On every search, GitHub sees the IP address of your connection and the
+  time; nothing else is sent, not even the installed version. **You can turn the search off:** switch off "Search for
+  updates automatically every day" („Täglich automatisch nach Updates suchen“; permission `settings.write`), and the
+  dashboard never looks on its own. "Search now" still asks when the switch is off – anyone with the permission
+  `system.read` can press it, and GitHub sees that request too.
+- **Which versions:** "Only finished versions" (default) or "Also pre-releases (beta)". Pre-releases (e.g. `0.7.0-rc1`)
+  are not under `:latest`: to install one, put exactly `ghcr.io/nodvard/deck:0.7.0-rc1` at `image:`.
+- **Without internet** the card says "Couldn't check (offline?)" and shows the last known state; that is not an error.
+  "None found" („Keine gefunden“) means the query worked, but there is no version in the chosen channel yet.
+- **Installing** is done by your environment, not by the dashboard, unless you use the update helper (one button, see
+  [appendix I.2](#i2-update-with-one-button-update-helper)). The card has instructions as tabs: Docker Compose, Docker
+  Desktop, Portainer ("Update the stack" with "Re-pull image"), Synology Container Manager, Unraid ("Check for
+  Updates" → "Apply update") and `scripts/deploy_pi.sh`. With Compose (installed as in [section 1](#1-quick-start)),
+  in the folder with your `compose.yml`:
 
-**Which folder works:** Nodvard Deck only accepts `/app/data/backups` in the data folder or the mounted folder
-`/backups` including subfolders (such as `/backups/deck`). This is always the path **inside the container**, not the
-one on the host or on the NAS.
-
-**How to:**
-
-1. Mount the NAS folder on the machine Nodvard Deck runs on, for example at `/srv/backup/deck`. For NFS in
-   `/etc/fstab`:
-
-   ```
-   nas:/volume1/backup/deck  /srv/backup/deck  nfs  defaults,_netdev,x-systemd.before=docker.service  0  0
-   ```
-
-   The NFS share has to be mounted before Docker starts. Otherwise Docker mounts the empty folder on the local disk,
-   and the backups end up there instead of on the NAS. `_netdev` tells the system it is a network drive,
-   `x-systemd.before=docker.service` makes Docker wait for it.
-2. In the Compose file under `volumes:`, uncomment the prepared line and enter the path:
-   `- /srv/backup/deck:/backups`. Apply it with `docker compose up -d`. In Portainer: edit the stack and
-   "Update the stack".
-3. **Write access for user 1000:** Inside the container Nodvard Deck runs as user and group 1000. The folder on the
-   NAS has to be writable for 1000:
-   - `chown 1000:1000` for the folder on the NAS, or
-   - map all access to 1000 in the NFS export: `all_squash,anonuid=1000,anongid=1000`.
-
-   With NFS a `chown` on the host usually does nothing, because the NAS does not let root through (`root_squash`).
-4. **Test** before you save in the interface (`docker ps` shows the container's name):
-
-   ```bash
-   docker exec -u 1000 <container> sh -c 'touch /backups/.test && rm /backups/.test && echo ok'
-   ```
-
-   If it prints `ok`, choose `/backups` (or a subfolder) as the folder in the interface.
-
-**Error messages when saving** (shown in German):
-
-| Message | What helps |
-|---|---|
-| „Der Ordner /backups existiert nicht (ist er eingebunden?).“ (the folder does not exist, is it mounted?) | The line `- …:/backups` is missing or still commented out, or the container was not recreated afterwards (`docker compose up -d`, in Portainer "Update the stack"). |
-| „Sicherungen dürfen nur nach /app/data/backups oder in den eingebundenen Ordner /backups geschrieben werden.“ (backups may only go to …) | Enter the path inside the container (`/backups` or `/backups/…`), not the path on the host such as `/srv/backup/…`. |
-| „In /backups darf Nodvard Deck nicht schreiben.“ (Nodvard Deck may not write to /backups) | Write access for 1000 is missing (step 3), or the NFS share was not mounted yet when Docker started (step 1). |
-
-Emergency without Nodvard Deck: A `.ndbak` file is an ordinary [age](https://age-encryption.org) file with two lines in
-front of it.
-
-```bash
-tail -n +3 nodvard-deck-sicherung-20261001-023000.ndbak > sicherung.age
-age -d -i wiederherstellungsschluessel.txt -o sicherung.tar.gz sicherung.age   # or: age -d (one-time password)
-tar -xzf sicherung.tar.gz    # db/lattice.db, files/master.key, files/ext/ …
-```
-
-To restore: see [10.2](#102-restore-import-a-backup).
-
-### 10.2 Restore (import a backup)
-
-Two ways, same procedure: **Settings → System → Restore** („Einstellungen → System → Wiederherstellen“) (owner only,
-with the login password) or, on a **fresh installation**, in the setup wizard under **"Or: restore a backup"**
-(„Oder: Sicherung einspielen“) (there, instead of an account, with the **setup code** from the container's log – as
-when creating the first account).
-
-1. **Choose the file** (`.ndbak`) and upload it. There is a progress indicator; the file is streamed to disk, not held
-   in memory. Upper limit 4 GiB (`NODVARD_DECK_RESTORE_MAX_UPLOAD_BYTES`).
-2. Enter the **password or recovery key** (for a file "with its own one-time password", only the one-time password).
-   Nodvard Deck decrypts and checks everything in a separate staging folder; the backup's database is only read and
-   never executed.
-3. **Look at the summary:** created on, version, identifier of the installation, name of the owner, number of users and
-   servers, extensions, warnings. **age does not verify who created a backup** – anyone who knows the password can
-   build one. Only restore backups that you created yourself.
-4. **"Restore and restart"** („Einspielen und neu starten“). This replaces **everything, including the accounts**;
-   afterwards everyone logs in again (with the accounts from the backup). Nodvard Deck shuts down and restarts; the
-   restore happens at startup, then it migrates as usual. The page waits and then leads to the login.
-
-Good to know:
-
-- **A restart policy is required.** The restart only works if the container has a restart policy
-  (`restart: unless-stopped`; the bundled Compose files have it). With `docker run` without `--restart`, it stays off
-  afterwards: start it by hand (`docker start …`), the backup is restored at startup.
-- **The old state is kept** under `restore/replaced-<time>` in the data folder (with old accounts and keys), exactly
-  one, and is **deleted automatically after 30 days** (the card names the day). Under *Restore* you can delete it
-  earlier with the login password.
-- **If the old installation is still running**, for example on another device, both have the same keys and
-  credentials. After that, run only one.
-- **If something fails** (broken or too new backup, error while moving, migration fails), the old state comes back and
-  the card names the reason. A crash in the middle of restoring is rolled back at the next start. A backup from a
-  **newer** version or with an extension that is missing here is rejected with a notice. A pending restore request is
-  valid for one hour; an abandoned intermediate state is deleted after one hour.
-- With the environment variable `NODVARD_DECK_JWT_SECRET`, no login secret is in the backup.
-- The history of the measurements (`metrics.db`) is not part of the backup and stays as it is.
-- **Git settings** in the extensions' data (for example in "Scripts" („Skripte“)) are not part of the backup either, but
-  the history of your scripts is; the extension creates the settings anew itself. If an older backup still contains some,
-  they are skipped during the restore, and the summary names their number among the warnings.
-
-**Emergency without the interface:** in the folder with the Compose file
-
-```bash
-cd ~/nodvard-deck
-sudo docker compose exec nodvard-deck python -m nodvard_deck.admin restore-backup /app/data/backups/nodvard-deck-sicherung-….ndbak
-sudo docker compose restart nodvard-deck      # the restore happens at startup
-```
-
-(The file must be visible inside the container; the command asks for the password and shows the summary. `compose exec`
-runs in the existing container; a `compose run` alongside it would be rejected by the data folder's lock, see
-[10.4](#104-updates-the-copy-before-the-migration).) With an installation from the repository,
-`deploy/restore.sh sicherung.ndbak` does the same in one step
-([10.3](#103-with-the-script-installation-from-the-repository-only)). If nothing works at all, the old state is under
-`restore/replaced-…`: stop the container, copy its contents (`lattice.db`, `master.key`, `ext/` …) back into the data
-folder, start.
-
-### 10.3 With the script (installation from the repository only)
-
-The scripts `deploy/backup.sh` and `deploy/restore.sh` belong to the installation from the repository
-([1.2](#12-building-from-the-repository-developers)): they call Compose with the project name of
-`deploy/docker-compose.yml` and do not work with the `compose.yml` from [1.1](#11-installation-without-the-repo).
-There you back up through the interface ([10.1](#101-in-the-interface-recommended)).
-
-`deploy/backup.sh` briefly stops the container and packs the entire data folder into one file: database,
-`master.key`, `jwt_secret.key`, keyring, data of the extensions, scripts repository. Details and restoring:
-[deploy/README.md](../../deploy/README.md#backup--restore) (German).
-
-In the repository's `deploy/` folder (here, as an example, under `~/deck`):
-
-```bash
-cd ~/deck/deploy
-sudo ./backup.sh ~/nodvard-deck-backups
-```
-
-To restore: `sudo ./restore.sh ~/nodvard-deck-backups/nodvard-deck-backup-<timestamp>.tar.gz`
-(asks first).
-
-If your user is in the `docker` group, leave out `sudo`. Without access to Docker, both scripts abort before they stop
-or change anything (`backup.sh` reports "Docker is not responding" („Docker antwortet nicht …“)). Started with `sudo`,
-the backup still belongs to you, not root, and only you can read it.
-
-How restoring works:
-
-- `restore.sh` checks the file, first unpacks it **next to** the current data and then swaps it in. For a short time
-  this needs twice the space. If unpacking fails (disk full, Ctrl+C), Nodvard Deck keeps running on the old state.
-- If the swap itself breaks off (for example due to a power failure), Nodvard Deck stays stopped. Then run the same
-  command with the same file again: it finishes the swap and starts Nodvard Deck. Do not start it by hand before that;
-  `backup.sh` refuses to run in the meantime.
-- If the SSH connection drops after the confirmation, restoring carries on. How it ended is in `deploy/restore.log`.
-- If a backup or a restore is already running, a second run stops without changing anything.
-
-Important:
-
-- **The backup contains the keys** (`master.key`, `vault_keyring.json`). With them, all passwords, SSH keys and
-  tokens stored in Nodvard Deck can be decrypted – so lock the file away as carefully as the passwords themselves. Conversely:
-  without these key files, the secrets are gone.
-- The backup does **not** belong only on the same machine (an SD card can die). Fetch it from your PC:
-  `scp admin@192.168.1.10:~/nodvard-deck-backups/*.tar.gz .`
-- Regularly, e.g. Sundays at 04:30 (via `sudo crontab -e`, one line):
-
-  ```
-  30 4 * * 0 cd /home/admin/deck/deploy && ./backup.sh /home/admin/nodvard-deck-backups >> /home/admin/nodvard-deck-backup.log 2>&1
+  ```bash
+  docker compose pull
+  docker compose up -d
   ```
 
-  The file then belongs to the owner of the target folder if that is not root (if the first `sudo ./backup.sh`
-  created it, that is you), so fetching it with `scp` as above works. If a backup or a restore is already running,
-  the run stops without changing anything (message in the log).
+  On Linux you may need `sudo` in front. If your file has a different name (e.g. `compose.standalone.yml` from an older guide), add `-f`
+  and the file name (`docker compose -f compose.standalone.yml pull`).
 
-### 10.4 Updates: the copy before the migration
+  If a fixed version (e.g. `:0.5.0`) or a series like `:0.5` is set at `image:` instead of `:latest`, put the new
+  version there first.
+- **Going back:** write down the current version before the update (it is shown on the card). To go back, put it at
+  `image:` again and restart (`docker compose up -d`). Before rebuilding the database, Nodvard Deck automatically makes
+  a copy at start (only with SQLite, the default database). If the new version never started properly, the old one
+  restores this copy by itself. If the new version already ran and rebuilt the database, the old one shows a
+  **rescue page**: there, with the emergency code (in the container's log), choose „Stand vor dem Update
+  wiederherstellen“ (restore the state before the update); whatever was changed since the update is lost. Or put the
+  new version back. Details in [appendix I.3](#i3-the-copy-before-the-migration) and
+  [appendix K](#k-nodvard-deck-does-not-start-the-rescue-page).
+- If a **self-built** image is running (e.g. from the PC via `scripts/deploy_pi.sh`), the card says so; it is then
+  updated the same way.
+
+### I.2 Update with one button (update helper)
+
+<a id="106-update-with-one-button-update-helper"></a>
+
+With the **update helper** you install updates under Settings → System → "Updates" („Einstellungen → System →
+Updates“) with one button and can go back once within 7 days, also with one button. The helper is a small service of
+its own in the same Compose file, which you switch on deliberately. It has access to Docker, which is as much as root on
+this machine. Setting it up, updating and removing it: [deploy/README.md, section "Update-Helfer"](../../deploy/README.md#update-helfer)
+(in German).
+
+- **State:** the "Updates" card shows "Update helper: not set up" („Update-Helfer: nicht eingerichtet“, with a link to
+  the guide), "ready" („bereit“, with version and last sign of life), "not ready" („nicht bereit“, with the reason and
+  what helps) or "not responding" („antwortet nicht“).
+- **Requirements for the button:** the helper is ready, a newer finished version exists, the official image
+  `ghcr.io/nodvard/deck` runs with `:latest` or a matching series such as `:0.7` (not a fixed version), and you are the
+  owner of the installation. The helper only accepts versions from 0.7.0 on, so the first update with the button goes
+  from 0.7.0 to the version after it. If something is missing, the card says why, where that helps.
+- **Release approval:** the button only offers a version that is approved at its release (signed with the project's
+  key); until then the card says there is no valid approval for version X yet („Für Version X liegt noch keine gültige
+  Freigabe vor …“), and updating by hand still works. A current helper checks the signature itself, the card then shows
+  that an approval is present („Freigabe liegt vor (Schlüssel …)“). With an older helper the card asks you to renew it.
+- **Update:** "Update now to X" („Jetzt aktualisieren auf X“), then enter your password and, if two-factor login is on,
+  the code from the app. If the new version rebuilds the database, Nodvard Deck makes a copy first as always
+  ([appendix I.3](#i3-the-copy-before-the-migration)). The card shows the steps; you can close the page, the helper
+  keeps working without it. While switching over, the dashboard is gone for a few minutes; the page keeps asking and
+  reloads after success. If it takes longer than 30 minutes (slow download), the card keeps asking and shows the result
+  as soon as it is there.
+- **If it fails** (the new version exits, keeps restarting, shows the rescue page or is not ready after 15 minutes), the
+  helper switches back to the old version by itself. The card says why and what you can do; important results also
+  arrive as a notification.
+- **Going back:** for 7 days the "Copies before updates" („Kopien vor Updates“) card shows "Back to version X"
+  („Zurück zu Version X“), once. If the new version rebuilt the database, the data goes back too: the card first names
+  the time since which everything is lost and asks for a checkbox. The replaced state stays under `restore/replaced-…`
+  for 30 days. If it is unclear what happens to the data, there is no button, only the explanation. After going back,
+  the helper does not install the version you left for 24 hours; the card says from when it works again. If a way back
+  that should have taken the data along failed, the notification (bell) says whether the database had already been reset.
+- Update and way back together work at most once in 10 minutes. Without the helper, the guides from
+  [appendix I.1](#i1-finding-and-installing-a-new-version) apply.
+
+### I.3 The copy before the migration
+
+<a id="104-updates-the-copy-before-the-migration"></a>
 
 Before every update that rebuilds the database (a **migration**), Nodvard Deck automatically makes **a copy of the
 database** at startup: `backups/vor-update/<time>_<from>_<to>.db` in the data folder. The **three newest** are kept.
@@ -1876,7 +1502,7 @@ You can see them under **Settings → System → "Copies before updates"** („E
 
 - **No copy, no migration.** If there is not enough space (a good 1.2 times the size of the database is needed),
   Nodvard Deck does not start but shows the rescue page with the amount that is missing (see
-  [13](#13-nodvard-deck-does-not-start-the-rescue-page)). Free up space, press "Try again" („Neu versuchen“).
+  [appendix K](#k-nodvard-deck-does-not-start-the-rescue-page)). Free up space, press "Try again" („Neu versuchen“).
 - **If the migration fails,** Nodvard Deck resets the database to the copy by itself. Afterwards the rescue page runs;
   the data is as it was before the update. The half-finished state is discarded in the process; it contains nothing
   that is not also in the copy.
@@ -1898,7 +1524,7 @@ You can see them under **Settings → System → "Copies before updates"** („E
   version with "copy before every migration" for the way back to be open. The first update **to** this version already
   makes the copy.
 - **Not in the copy** are files outside the database (data of the extensions, keys). Migrations do not touch them. For
-  everything else there is the backup ([10.1](#101-in-the-interface-recommended)).
+  everything else there is the backup ([6.1](#61-in-the-interface-recommended)).
 - **Emergency exit** (not recommended): `NODVARD_DECK_SKIP_PRE_MIGRATE_BACKUP=1` in the Compose file turns the copy off,
   so that migration also runs when there is too little space. If the migration then fails, there is no way back.
 - What was put aside (`restore/replaced-…`: the old state from a restore, or a database that a rollback replaced) is
@@ -1911,76 +1537,12 @@ You can see them under **Settings → System → "Copies before updates"** („E
   and exactly the old state with its keys applies again. It is never replaced by the backup afterwards.
 - With a database other than SQLite there is no copy (please back up yourself beforehand).
 
-### 10.5 Finding and installing a new version
+## J. When something goes wrong
 
-Under **Settings → System → "Updates"** („Einstellungen → System → Updates“) you can see which version is running and
-which one is the newest. Nodvard Deck looks **once a day** at ghcr.io to see which images exist; **"Search now"**
-(„Jetzt suchen“) does it right away (at most once a minute).
+<a id="11-when-something-goes-wrong"></a>
 
-- **Privacy:** ghcr.io belongs to **GitHub**, and so does github.com, where the search fetches the approval of a version
-  (downloads go through `objects.githubusercontent.com` or `release-assets.githubusercontent.com`; if you filter,
-  allow these addresses). On every search, GitHub sees the IP address of your connection and the
-  time; nothing else is sent, not even the installed version. **You can turn the search off:** switch off "Search for
-  updates automatically every day" („Täglich automatisch nach Updates suchen“; permission `settings.write`), and the
-  dashboard never looks on its own. "Search now" still asks when the switch is off – anyone with the permission
-  `system.read` can press it, and GitHub sees that request too.
-- **Which versions:** "Only finished versions" (default) or "Also pre-releases (beta)". Pre-releases (e.g. `0.7.0-rc1`)
-  are not under `:latest`: to install one, put exactly `ghcr.io/nodvard/deck:0.7.0-rc1` at `image:`.
-- **Without internet** the card says "Couldn't check (offline?)" and shows the last known state; that is not an error.
-- **Installing** is done by your environment, not by the dashboard, unless you use the update helper (one button, see
-  [10.6](#106-update-with-one-button-update-helper)). With Compose (installed as in
-  [1.1](#11-installation-without-the-repo)), in the folder with your `compose.yml`:
-
-  ```bash
-  docker compose pull
-  docker compose up -d
-  ```
-
-  On Linux you may need `sudo` in front. If your file has a different name (e.g. `compose.standalone.yml` from an older guide), add `-f`
-  and the file name (`docker compose -f compose.standalone.yml pull`).
-
-  If a fixed version (e.g. `:0.5.0`) is set at `image:`, put the new version there first.
-- **Going back:** write down the current version before the update (it is shown on the card). To go back, put it at
-  `image:` again and restart. Details and the rescue page: [10.4](#104-updates-the-copy-before-the-migration).
-
-### 10.6 Update with one button (update helper)
-
-With the **update helper** you install updates under Settings → System → "Updates" („Einstellungen → System →
-Updates“) with one button and can go back once within 7 days, also with one button. The helper is a small service of
-its own in the same Compose file, which you switch on deliberately. It has access to Docker, which is as much as root on
-this machine. Setting it up, updating and removing it: [deploy/README.md, section "Update-Helfer"](../../deploy/README.md#update-helfer)
-(in German).
-
-- **State:** the "Updates" card shows "Update helper: not set up" („Update-Helfer: nicht eingerichtet“, with a link to
-  the guide), "ready" („bereit“, with version and last sign of life), "not ready" („nicht bereit“, with the reason and
-  what helps) or "not responding" („antwortet nicht“).
-- **Requirements for the button:** the helper is ready, a newer finished version exists, the official image
-  `ghcr.io/nodvard/deck` runs with `:latest` or a matching series such as `:0.7` (not a fixed version), and you are the
-  owner of the installation. The helper only accepts versions from 0.7.0 on, so the first update with the button goes
-  from 0.7.0 to the version after it. If something is missing, the card says why, where that helps.
-- **Release approval:** the button only offers a version that is approved at its release (signed with the project's
-  key); until then the card says there is no valid approval for version X yet („Für Version X liegt noch keine gültige
-  Freigabe vor …“), and updating by hand still works. A current helper checks the signature itself, the card then shows
-  that an approval is present („Freigabe liegt vor (Schlüssel …)“). With an older helper the card asks you to renew it.
-- **Update:** "Update now to X" („Jetzt aktualisieren auf X“), then enter your password and, if two-factor login is on,
-  the code from the app. If the new version rebuilds the database, Nodvard Deck makes a copy first as always
-  ([10.4](#104-updates-the-copy-before-the-migration)). The card shows the steps; you can close the page, the helper
-  keeps working without it. While switching over, the dashboard is gone for a few minutes; the page keeps asking and
-  reloads after success. If it takes longer than 30 minutes (slow download), the card keeps asking and shows the result
-  as soon as it is there.
-- **If it fails** (the new version exits, keeps restarting, shows the rescue page or is not ready after 15 minutes), the
-  helper switches back to the old version by itself. The card says why and what you can do; important results also
-  arrive as a notification.
-- **Going back:** for 7 days the "Copies before updates" („Kopien vor Updates“) card shows "Back to version X"
-  („Zurück zu Version X“), once. If the new version rebuilt the database, the data goes back too: the card first names
-  the time since which everything is lost and asks for a checkbox. The replaced state stays under `restore/replaced-…`
-  for 30 days. If it is unclear what happens to the data, there is no button, only the explanation. After going back,
-  the helper does not install the version you left for 24 hours; the card says from when it works again. If a way back
-  that should have taken the data along failed, the notification (bell) says whether the database had already been reset.
-- Update and way back together work at most once in 10 minutes. Without the helper, the guides from
-  [10.5](#105-finding-and-installing-a-new-version) apply.
-
-## 11. When something goes wrong
+The most common hurdles at the start (dashboard not reachable, server will not connect, locked out) are in
+[section 7](#7-common-stumbling-blocks). This is the rest.
 
 **"HTTP 401" or "Not authenticated" („Nicht authentifiziert“) on an extension page** (Proxmox, Proxmox-Backups, Scripts …): In
 the visible tab, Nodvard Deck renews the login by itself. Extension pages, downloading and uploading on the Files page,
@@ -2100,39 +1662,6 @@ under "Watched folders" in the settings. The guard checks new and changed files,
 modification time (Samba, Nextcloud sync, `cp -p`, `rsync -a`): besides the modification time it also looks at when the
 file was created there.
 
-**Server missing in Terminal / "Noch kein Server prüfbar" (no server checkable yet) or "Keine Linux-Server mit SSH-Zugang
-gefunden" (no Linux servers with an SSH login found) in Nodvard Shield:**
-No SSH login stored: Settings → Servers & access ([5.2](#52-set-up-ssh-access--three-ways)). Nodvard Shield also takes only
-servers that are entered as `linux` and – if "Only servers with tag" („Nur Server mit Markierung“) is filled in in its
-settings – only servers with that tag.
-
-**"Keine root-Rechte …" (no root rights):** sudo without a password is missing
-([6.](#6-root-rights-without-a-password-and-the-docker-group)). The "Check connection" card shows it under "Root
-rights" („Root-Rechte“).
-
-**"Der Server-Schlüssel von diesem Server ist noch nicht bestätigt." (the server key of this server has not been
-confirmed yet):** Nodvard Deck does not know this server's fingerprint yet (a new server while "Only remember new
-server keys after my confirmation" is on), or you forgot it. Under Servers & access, press "Check connection" for the
-server and confirm the fingerprint ([5.4](#54-check-the-connection)).
-
-**"Host-Schlüssel … hat sich geändert" (host key … has changed):** Server reinstalled? Then, under Servers & access, on
-the server's "Server key" card, forget the old one, check again and confirm the new fingerprint. If not: first find out
-why – it can also be an attack.
-
-**"Server antwortet nicht (Zeitüberschreitung …)" (server not answering, timeout), "Der Server lehnt die Verbindung ab
-…" (the server refuses the connection), "Kein Weg zum Server …" (no route to the server) or "Den Namen … kennt das Netz
-nicht." (the network does not know the name)** in the terminal or file manager (there with "Zugriff auf die Quelle
-fehlgeschlagen:" (access to the source failed) in front): Nodvard Deck cannot reach the server. The sentence usually
-names address and port. Check that the server is on, that the address under Servers & access is correct and that SSH
-runs there. There is no traceback about it in the log.
-
-**"Server nicht erreichbar – bitte gleich noch einmal versuchen." (server unreachable – please try again in a moment) at
-login:** The dashboard is not answering. On the machine running Nodvard Deck, check
-`curl -s http://localhost:8080/api/v1/health` and, in the folder with the Compose file, `sudo docker compose ps`.
-If **"Server meldet: …"** (server reports: …) appears instead (also when reloading the page), the dashboard is
-answering and names the reason, e.g. that the disk is full – then fix that reason. You are not signed out in the
-process.
-
 **"Gerade sind viele Anmeldungen gleichzeitig im Gange. Bitte versuche es in ein paar Sekunden noch einmal." (many
 logins are in progress at the same time, please try again in a few seconds) at login:** Nodvard Deck checks only a few
 passwords at the same time, so that many login attempts at once do not slow the dashboard down. Wait a few seconds and
@@ -2142,51 +1671,9 @@ does not exist, the "Who" column („Wer“) only shows "not signed in · unknow
 the input itself (it could be a password typed into the name field). Only the owner sees an identifier (`username_ref`)
 and the length of the input when expanding the row; the same input has the same identifier.
 
-## 12. Locked out? Emergency commands
+## K. Nodvard Deck does not start: the rescue page
 
-If someone – above all the owner – has lost their password or two-factor login and cannot get in through the web
-interface any more either, there are commands **on the machine Nodvard Deck runs on** (e.g. the Raspberry Pi), run in
-the folder with the Compose file. Anyone who can run them has access to everything in the data directory anyway; that
-is why no login is needed, but every change is recorded in the audit log (actor `system/cli`).
-
-```bash
-cd ~/nodvard-deck
-sudo docker compose exec nodvard-deck python -m nodvard_deck.admin list-users
-sudo docker compose exec nodvard-deck python -m nodvard_deck.admin reset-password admin
-sudo docker compose exec nodvard-deck python -m nodvard_deck.admin disable-2fa admin
-```
-
-(`admin` stands for the username that `list-users` shows; an older name with spaces goes in quotation marks. With an
-installation from the repository, change to the repository's `deploy/` folder instead of `cd ~/nodvard-deck`.)
-
-- **`list-users`** shows username, owner/user, locked or active, and whether two-factor is on.
-- **`reset-password <username>`** sets a new, random password and **prints it** (e.g. `k7mq-x2vd-h9pa-tn4c`). All of
-  this user's existing logins are ended. Nothing else changes (two-factor stays). After logging in, set a password of
-  your own under My account.
-- **`disable-2fa <username>`** turns off two-factor login, deletes the recovery codes and ends all logins.
-  Afterwards login works with the password only; two-factor can be set up again under My account.
-
-On errors (user does not exist, database not reachable) an understandable message is shown. The command changes only
-users – no servers, no keys, no settings.
-
-**Without a command line** (Portainer, Docker Desktop, NAS): open the console of the Nodvard Deck container and enter
-the command there **without** `sudo docker compose exec nodvard-deck` in front, e.g.
-`python -m nodvard_deck.admin reset-password admin`. You recognize the container by "nodvard-deck" in its name; it is
-usually called `nodvard-deck-nodvard-deck-1`. This is where the console is:
-
-- **Portainer:** Containers → the Nodvard Deck container → "Exec Console" icon → "Connect".
-- **Docker Desktop:** "Containers" → expand the group "nodvard-deck" → click the container in it → "Exec" tab.
-- **Synology Container Manager:** Container → select the Nodvard Deck one → "Details" → "Terminal" tab → "Create".
-- **Unraid:** "Docker" tab → icon of the Nodvard Deck container → "Console".
-
-The same instructions are on the login page under "Forgot password?" („Passwort vergessen?“).
-
-**Good to know:** When Nodvard Deck "signs someone out everywhere" (password changed, two-factor reset or turned off,
-emergency command) or you sign out, the login ends immediately, also for an access key already issued in the browser:
-the next request with it is refused. Open terminal and console sessions of an ended login close after at most
-15 seconds, the live updates after at most 30 seconds.
-
-## 13. Nodvard Deck does not start: the rescue page
+<a id="13-nodvard-deck-does-not-start-the-rescue-page"></a>
 
 If startup fails (the migration, not enough space for the copy, data newer than the version, an unexpected error),
 Nodvard Deck does **not** start; instead a small **rescue page** runs on the same port (e.g.
@@ -2215,7 +1702,7 @@ name such as `localhost`), only locally on `127.0.0.1` – just like uvicorn its
      intact copy exists): marks the way back and restarts; at startup, the copy is restored.
      Changes since the update are lost.
    - **Back to the old version:** set the image version in the Compose file back and restart the container (see
-     [10.4](#104-updates-the-copy-before-the-migration)).
+     [appendix I.3](#i3-the-copy-before-the-migration)).
 4. `GET /api/v1/health` answers on the rescue page with **503** `{"status":"rescue"}`; the container's healthcheck
    therefore shows "unhealthy". If you deliver from the repository with `scripts/deploy_pi.sh`, this makes the script
    switch back to the old image automatically (without the full waiting time).
@@ -2229,166 +1716,30 @@ Important: A second container with the same data folder (`docker compose run` al
 nothing; `nodvard_deck.boot` exits there with code 75, because the running application (or the rescue page) holds the
 data folder's lock.
 
-## Appendix: Without the interface
+## L. Without the interface
 
-Normally you use the "Servers & access" page (5.). Only if the interface is not reachable (e.g. during the first setup
-over SSH on the machine running Nodvard Deck) can everything also be done through the Nodvard Deck API with this small
-helper script. There is no setup command and no connection check – you generate the key yourself, and you add the public part by hand to
-`~/.ssh/authorized_keys`.
+<a id="appendix-without-the-interface"></a>
 
-**Generate a key** (once, on the machine running Nodvard Deck):
+Normally you use the "Servers & access" page ([section 3](#3-connect-your-first-server)). If the interface is not
+reachable (e.g. during the first setup over SSH on the machine running Nodvard Deck), everything can also be done
+through the API with a small helper script: create a server, change the address, store an SSH login, show the logins and
+forget a remembered server key. Script, key and setting up the server by hand:
+**[Without the interface](WITHOUT-INTERFACE.md)**.
 
-```bash
-ssh-keygen -t ed25519 -N "" -f ~/.ssh/nodvard_ed25519 -C nodvard
-cat ~/.ssh/nodvard_ed25519.pub        # this one line goes onto the servers
-```
+## M. Old names on older installations
 
-Without a passphrase (`-N ""`), because Nodvard Deck does not ask for a passphrase when connecting. Nodvard Deck gets an
-encrypted copy of the private key of its own; you only need the file on this machine for adding it and for testing.
+Nodvard Deck used to be called "Lattice". A few old names still show up, mostly on installations and servers that have
+been running for a while. They stay on purpose, because existing setups and the way back to an older version depend on
+them:
 
-**Save the helper script** (once, on the same machine) – paste the whole block into the shell; it creates
-`~/nodvard-server.py`. (The script's prompts and messages are in German, like the interface.)
+| Name | Where | Why it stays |
+|---|---|---|
+| User `lattice` | SSH logins created by an older version | The servers are set up that way, the logins keep working unchanged. For new keys the page suggests `nodvard` |
+| Comment `lattice@…` | older keys in `~/.ssh/authorized_keys` | The setup command recognizes it and does not add the key twice. New keys get `nodvard@…` |
+| `/etc/sudoers.d/lattice-<user>` | older full sudo rule on servers | The setup command replaces it with `nodvard-<user>` if it is exactly the one Nodvard Deck created earlier ([Root rights](ROOT-RIGHTS.md#the-full-sudo-rule)) |
+| systemd units `lattice-upgrade-…` | Nodvard Shield updates on your servers | Resuming and rolling back updates depend on them |
+| Folders `/var/lib/nexus-updates` and `/var/lib/nexus-quarantine` | on your servers (Nodvard Shield had a different identifier up to 0.6) | The paths are stored in saved findings, and running updates are resumed via the folder |
+| Database file `lattice.db` (in backups `db/lattice.db`) | data folder | Renaming it would need a migration; after a way back an older image would otherwise open an empty database |
+| `LATTICE_PORT` and the other `LATTICE_*` variables | Compose file, `.env` | Fallback if the new name `NODVARD_DECK_*` is not set, only for a transition period (until 1.0 at the latest). Nodvard Deck points the owner to it in the overview |
 
-```bash
-cat > ~/nodvard-server.py <<'EOF'
-#!/usr/bin/env python3
-"""Nodvard Deck: Server anlegen, Adresse korrigieren, SSH-Zugang hinterlegen (docs/11)."""
-import getpass, json, os, urllib.error, urllib.request
-
-API = os.environ.get("NODVARD_DECK_URL", "http://localhost:8080").rstrip("/") + "/api/v1"
-token = None
-
-
-class Fehler(Exception):
-    pass
-
-
-def call(method, path, body=None):
-    headers = {"Content-Type": "application/json"}
-    if token:
-        headers["Authorization"] = "Bearer " + token
-    data = None if body is None else json.dumps(body).encode()
-    req = urllib.request.Request(API + path, data=data, method=method, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as res:
-            raw = res.read()
-            return res.status, (json.loads(raw) if raw else None)
-    except urllib.error.HTTPError as err:
-        raise Fehler(f"HTTP {err.code}: {err.read().decode(errors='replace')[:300]}") from None
-
-
-def ask(text, default=""):
-    value = input(f"{text}{f' [{default}]' if default else ''}: ").strip()
-    return value or default
-
-
-try:
-    status, data = call("POST", "/auth/login", {
-        "username": ask("Nodvard-Deck-Benutzer").lower(),
-        "password": getpass.getpass("Passwort: "),
-        "client_type": "cli",
-    })
-    if status == 202:  # Zwei-Faktor-Anmeldung ist eingeschaltet
-        status, data = call("POST", "/auth/mfa", {"mfa_token": data["mfa_token"], "code": ask("Code aus der App")})
-except Fehler as exc:
-    raise SystemExit(f"Anmeldung fehlgeschlagen: {exc}")
-token = data["access_token"]
-
-while True:
-    try:
-        _, hosts = call("GET", "/hosts")
-    except Fehler as exc:
-        raise SystemExit(f"{exc} -- nach 15 Minuten läuft die Anmeldung ab, dann Skript neu starten.")
-    print()
-    for h in sorted(hosts, key=lambda h: h["name"]):
-        print(f"  {h['id']}  {h['name']:<26} {h['address']:<16} {h['os_family']}")
-    print("\n1 = Server anlegen  2 = Adresse ändern  3 = SSH-Zugang hinterlegen  4 = SSH-Zugänge zeigen")
-    print("5 = gemerkten SSH-Host-Schlüssel vergessen  q = Ende")
-    choice = ask("Auswahl", "q")
-    try:
-        if choice == "1":
-            name = ask("Kurzname, klein und ohne Leerzeichen (z. B. pi-host)")
-            _, h = call("POST", "/hosts", {
-                "name": name,
-                "display_name": ask("Anzeigename", name),
-                "address": ask("IP-Adresse"),
-                "os_family": ask("Betriebssystem (linux/windows)", "linux"),
-                "tags": [t.strip() for t in ask("Markierungen mit Komma (z. B. docker), leer = keine").split(",") if t.strip()],
-            })
-            print("Angelegt, ID:", h["id"])
-        elif choice == "2":
-            host_id = ask("ID des Servers")
-            call("PATCH", f"/hosts/{host_id}", {"address": ask("Neue IP-Adresse")})
-            print("Gespeichert.")
-        elif choice == "3":
-            host_id = ask("ID des Servers")
-            user = ask("SSH-Benutzer", "nodvard")
-            port = int(ask("SSH-Port", "22"))
-            if ask("Anmeldung mit Schlüssel (s) oder Passwort (p)?", "s") == "p":
-                kind, secret = "ssh_password", getpass.getpass("SSH-Passwort: ")
-            else:
-                with open(os.path.expanduser(ask("Privater Schlüssel", "~/.ssh/nodvard_ed25519"))) as f:
-                    kind, secret = "ssh_key", f.read()
-            call("POST", f"/hosts/{host_id}/credentials",
-                 {"kind": kind, "username": user, "port": port, "secret_value": secret, "is_default": True})
-            print("SSH-Zugang gespeichert und ab jetzt der Standard für diesen Server.")
-        elif choice == "4":
-            _, creds = call("GET", f"/hosts/{ask('ID des Servers')}/credentials")
-            for c in creds:
-                print(f"  {c['kind']:<13} {c['username']} Port {c['port']}{'  (Standard)' if c['is_default'] else ''}")
-            if not creds:
-                print("  Noch kein SSH-Zugang hinterlegt.")
-        elif choice == "5":
-            host_id = ask("ID des Servers")
-            call("DELETE", f"/hosts/{host_id}/known-hosts/{ask('Schlüsseltyp aus der Fehlermeldung', 'ssh-ed25519')}")
-            print("Vergessen. Jetzt in der Oberfläche „Verbindung prüfen“ drücken und den neuen Fingerabdruck bestätigen – vorher verbindet sich Nodvard Deck nicht mehr mit dem Server.")
-        elif choice.lower() == "q":
-            break
-    except (Fehler, OSError, ValueError) as exc:
-        print("Fehler:", exc)
-EOF
-```
-
-**Use it:**
-
-```bash
-python3 ~/nodvard-server.py
-```
-
-Log in with a Nodvard Deck account that may manage servers (owner or `admin`). The script shows all servers with their
-**ID** (which is also in the browser address of a server page: `/hosts/<ID>`). With 1 you create a server, with 2 you
-change the address (a stored SSH password is deleted in the process; store it again with 3), with 3 you store an
-SSH login (key `~/.ssh/nodvard_ed25519` or password), with 4 you show the
-logins, and with 5 you forget a remembered server key (after the server has been reinstalled). The script does not
-confirm fingerprints. After forgetting (5), Nodvard Deck only connects again once you have pressed "Check connection" in
-the interface and confirmed the new fingerprint. The same applies to new servers as long as "Only remember new server
-keys after my confirmation" is on (always, unless you have turned it off).
-
-The key on the server is then added by hand, e.g. for a user of its own:
-
-```bash
-sudo adduser --disabled-password --gecos "Nodvard Deck" nodvard
-sudo install -d -m 700 -o nodvard -g nodvard /home/nodvard/.ssh
-echo 'PASTE THE LINE FROM nodvard_ed25519.pub HERE' | sudo tee /home/nodvard/.ssh/authorized_keys
-sudo chown nodvard:nodvard /home/nodvard/.ssh/authorized_keys
-sudo chmod 600 /home/nodvard/.ssh/authorized_keys
-sudo usermod -aG docker nodvard        # only where Docker runs
-```
-
-For root rights without a password (see [6.](#6-root-rights-without-a-password-and-the-docker-group) – practically
-root!):
-
-```bash
-echo 'nodvard ALL=(root) NOPASSWD: ALL' > /tmp/nodvard-sudo
-sudo visudo -cf /tmp/nodvard-sudo && sudo install -m 0440 -o root -g root /tmp/nodvard-sudo /etc/sudoers.d/nodvard-nodvard
-rm /tmp/nodvard-sudo
-sudo visudo -c
-```
-
-If the last `visudo -c` reports an error, delete the file again **immediately**
-(`sudo rm /etc/sudoers.d/nodvard-nodvard`) – a broken sudo file can disable sudo. The file name must not contain a
-dot, otherwise sudo ignores the file. To test, from the machine running Nodvard Deck:
-
-```bash
-ssh -i ~/.ssh/nodvard_ed25519 nodvard@SERVER-IP 'sudo -n true && echo sudo-ok; docker ps >/dev/null && echo docker-ok'
-```
+The complete list with all reasons is in [ARCHITECTURE.md, "Old and new names"](ARCHITECTURE.md#old-and-new-names).

@@ -1,0 +1,7 @@
+{
+  "scripts.approval": "Dauerfreigabe für Skript erloschen",
+  "scripts.skipped": "Skript überspringt Server",
+  "scripts.failed": "Skript fehlgeschlagen",
+  "scripts.schedule": "Skript-Zeitplan ungültig",
+  "scripts.repair": "Wiederkehrende Reparatur erkannt"
+}

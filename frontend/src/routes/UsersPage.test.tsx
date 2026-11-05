@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GlobalDialogs } from "../components/GlobalDialogs";
 import { useAuthStore } from "../state/auth";
+import { DECK_EDITION, useEditionStore } from "../state/edition";
 import { UsersPage, roleLabel } from "./UsersPage";
 
 const ROLES = [
@@ -79,6 +80,21 @@ function renderPage() {
 }
 
 describe("UsersPage", () => {
+  it("Dock erklärt die Bedienerrolle für Container und Stacks", async () => {
+    useEditionStore.setState({ edition: { ...DECK_EDITION, choose_modules: false } });
+    try {
+      vi.stubGlobal("fetch", mockFetch());
+      renderPage();
+      await screen.findByText("owner1");
+      fireEvent.click(screen.getByRole("button", { name: "Neuer Benutzer" }));
+      const operator = screen.getByLabelText("Bediener").closest("label")!;
+      expect(operator.textContent).toContain("Container und Stacks bedienen");
+      expect(operator.textContent).not.toMatch(/Befehle ausführen|sudo-Regel/);
+    } finally {
+      useEditionStore.setState({ edition: DECK_EDITION });
+    }
+  });
+
   it("zeigt geladene Nutzer mit Rollen, Owner-Badge und ohne Loeschen-Knopf fuer sich selbst", async () => {
     vi.stubGlobal("fetch", mockFetch());
     renderPage();

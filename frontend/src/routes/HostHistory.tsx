@@ -1,9 +1,9 @@
 /**
- * Metrik-Verlauf auf der Server-Seite: CPU, RAM, Last, Netz, Datentraeger, Temperatur
- * ueber einen waehlbaren Zeitraum (`GET /hosts/{id}/metrics/history`). Die Quelle
+ * Metrik-Verlauf auf der Server-Seite: CPU, RAM, Last, Netz, Datenträger, Temperatur
+ * über einen wählbaren Zeitraum (`GET /hosts/{id}/metrics/history`). Die Quelle
  * entscheidet der Kern: von einem Modul eingelesene Server (z. B. Proxmox) aus dessen eigenen Daten, alle anderen
- * aus dem Sammler von Nodvard Deck (alle 30 s). Es erscheinen nur Diagramme, fuer die der Host
- * tatsaechlich Werte liefert.
+ * aus dem Sammler von Nodvard Deck (alle 30 s). Es erscheinen nur Diagramme, für die der Host
+ * tatsächlich Werte liefert.
  */
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
@@ -32,7 +32,7 @@ const RANGES = [
   { value: "30d", label: "30 Tage", seconds: 30 * 86400 },
 ];
 
-// Kategoriale Farben fuer dunkle Flaechen (validierte Reihenfolge: Blau, Orange, Tuerkis).
+// Kategoriale Farben für dunkle Flächen (validierte Reihenfolge: Blau, Orange, Türkis).
 const C1 = "#3987e5";
 const C2 = "#d95926";
 const C3 = "#199e70";
@@ -75,7 +75,7 @@ type HistoryHost = Pick<HostOut, "status" | "last_seen_at"> & Partial<Pick<HostO
 function EmptyHistory({ source, host, canCheck }: { source: HistoryOut["source"]; host?: HistoryHost; canCheck: boolean }) {
   const health = host ? hostHealthOf(host) : "online";
   if (host && health !== "online" && source !== "provider") {
-    // Der Server hat (noch) nicht geantwortet: „in ein paar Minuten“ waere falsch, es wird so nichts kommen.
+    // Der Server hat (noch) nicht geantwortet: „in ein paar Minuten“ wäre falsch, es wird so nichts kommen.
     const never = neverAnswered(host);
     return (
       <p className="text-sm text-white/60" data-testid="history-no-connection">
@@ -116,7 +116,7 @@ export function HostHistory({ hostId, host, canCheck = false }: {
   hostId: string;
   /** Zustand des Servers: ohne Antwort steht statt „in ein paar Minuten“ ein klarer Hinweis. */
   host?: HistoryHost;
-  /** Darf die Person die Verbindung pruefen (Zugangs-Karte vorhanden)? Dann fuehrt der Hinweis dorthin. */
+  /** Darf die Person die Verbindung prüfen (Zugangs-Karte vorhanden)? Dann führt der Hinweis dorthin. */
   canCheck?: boolean;
 }): JSX.Element | null {
   const [range, setRange] = useState("1h");
@@ -133,7 +133,7 @@ export function HostHistory({ hostId, host, canCheck = false }: {
   const { data: extensions } = useExtensions(Boolean(providerId));
   const providerName = providerId ? findExtension(extensions, providerId)?.name : undefined;
 
-  if (error && (error as { status?: number }).status === 404) return null; // kein Anbieter fuer diesen Host
+  if (error && (error as { status?: number }).status === 404) return null; // kein Anbieter für diesen Host
 
   const panels = data
     ? PANELS.map((panel) => {

@@ -48,7 +48,7 @@ COMPOSE_IMAGE_LABEL = "com.docker.compose.image"
 
 CONFIG_COPY = ("Domainname", "AttachStdin", "AttachStdout", "AttachStderr", "Tty", "OpenStdin", "StdinOnce",
                "StopTimeout")
-"""Config-Felder, die unveraendert uebernommen werden."""
+"""Config-Felder, die unverändert übernommen werden."""
 CONFIG_SUBTRACT = ("User", "WorkingDir", "StopSignal")
 """Config-Felder, die herausgerechnet werden (weglassen, wenn gleich dem Wert im alten Image)."""
 CONFIG_DROP = ("MacAddress", "OnBuild", "ArgsEscaped", "Shell")
@@ -78,22 +78,22 @@ HOST_COPY = (
     "BlkioWeight", "BlkioWeightDevice", "BlkioDeviceReadBps", "BlkioDeviceWriteBps", "BlkioDeviceReadIOps",
     "BlkioDeviceWriteIOps", "IOMaximumBandwidth", "IOMaximumIOps",
 )
-"""HostConfig-Felder, die unveraendert uebernommen werden."""
+"""HostConfig-Felder, die unverändert übernommen werden."""
 HOST_DROP = ("KernelMemory", "KernelMemoryTCP", "ContainerIDFile")
 """HostConfig-Felder, die wegfallen (entfernt bzw. nur Ausgabe)."""
 HOST_PATHS = ("MaskedPaths", "ReadonlyPaths")
-"""Weglassen, damit der Daemon seine Standardliste setzt; nur ein ausdruecklich leeres Feld (`[]`) eines nicht
+"""Weglassen, damit der Daemon seine Standardliste setzt; nur ein ausdrücklich leeres Feld (`[]`) eines nicht
 privilegierten Containers wird mitgeschickt. Die Nachkontrolle vergleicht sie eigens (`_paths_kept`)."""
 HOST_SPECIAL = ("Links", "AutoRemove")
 
 CREATE_CONFIG_KEYS = frozenset({*CONFIG_SPECIAL, *CONFIG_COPY, *CONFIG_SUBTRACT, "HostConfig", "NetworkingConfig"}
                                - {"Entrypoint", "NetworkDisabled"})
-"""Die Schluessel, die `build` im `create`-Body senden kann (oberste Ebene). Der Engine-Client laesst im Body nur
-diese in genau dieser Schreibweise zu: der Docker-Dienst ordnet JSON-Schluessel ohne Beachtung der Gross- und
-Kleinschreibung zu (bei Doppelten gewinnt der letzte), eine Pruefung auf einzelne Namen liesse `entrypoint` oder ein
+"""Die Schlüssel, die `build` im `create`-Body senden kann (oberste Ebene). Der Engine-Client laesst im Body nur
+diese in genau dieser Schreibweise zu: der Docker-Dienst ordnet JSON-Schlüssel ohne Beachtung der Groß- und
+Kleinschreibung zu (bei Doppelten gewinnt der letzte), eine Prüfung auf einzelne Namen ließe `entrypoint` oder ein
 zweites `image` durch."""
 CREATE_HOST_KEYS = frozenset({*HOST_COPY, *HOST_PATHS, "Links"})
-"""Dasselbe fuer `HostConfig`."""
+"""Dasselbe für `HostConfig`."""
 
 ENDPOINT_COPY = ("IPAMConfig", "Aliases", "Links", "DriverOpts", "GwPriority")
 ENDPOINT_DROP = ("NetworkID", "EndpointID", "Gateway", "IPAddress", "IPPrefixLen", "IPv6Gateway",
@@ -104,7 +104,7 @@ GW_PRIORITY_API = (1, 48)
 DATA_PATH = "/app/data"
 CHANNEL_PATH = "/app/updater"
 REQUIRED_MOUNTS = (DATA_PATH, CHANNEL_PATH)
-"""Diese Ziele muessen beim alten und beim neuen Container gleich eingehaengt sein (Daten und Kanal)."""
+"""Diese Ziele müssen beim alten und beim neuen Container gleich eingehängt sein (Daten und Kanal)."""
 
 _DETAIL_RE = re.compile(r"(?<!^)(?=[A-Z])")
 

@@ -1,11 +1,4 @@
-"""Baut einen `NextcloudConnector` frisch aus den aktuellen Einstellungen +
-Vault-Secret -- wie `nodvard_deck_ext_proxmox.config.build_connector()`, KEIN einmalig in
-`setup()` gebauter, dauerhaft gehaltener Connector.
-
-**Unterschied zu proxmox:** gibt `None` zurueck statt zu werfen, wenn unkonfiguriert
--- `NextcloudFileSourceProvider.file_sources()` (siehe `capabilities.py`) will eine
-unkonfigurierte Extension einfach STILL aus dem Dateimanager weglassen, nicht bei
-jeder `GET /files/sources`-Anfrage eine Exception durchreichen."""
+"""Einstellungen der Nextcloud lesen und daraus den Connector bauen."""
 
 from __future__ import annotations
 
@@ -24,6 +17,8 @@ SETTINGS_HINT = "Unter Einstellungen → Erweiterungen → Nextcloud eintragen."
 
 
 async def build_connector(ctx: "ExtensionContext") -> NextcloudConnector | None:
+    """Bei jedem Aufruf frisch, damit geänderte Einstellungen und Passwörter sofort gelten; unkonfiguriert `None`,
+    damit der Dateimanager die Quelle still weglässt."""
     settings = await ctx.settings.get()
     base_url = settings.get("base_url")
     username = settings.get("username")

@@ -185,7 +185,7 @@ class ProxmoxBackupConnector:
         return await self._request("POST", "/cluster/backup", json=params)
 
     async def update_job(self, job_id: str, params: dict[str, Any]) -> Any:
-        """Nur mit Parametern aus job_edit.build_job_update -- nie mit Nutzereingaben direkt."""
+        """Nur mit Parametern aus job_edit.build_job_update, nie mit Nutzereingaben direkt."""
         return await self._request("PUT", f"/cluster/backup/{job_id}", json=params)
 
     async def run_vzdump(

@@ -37,8 +37,7 @@ async def _me(client, token: str) -> int:
 
 
 def _browser_holds(client, value: str) -> None:
-    for name in ("nodvard_deck_refresh", "lattice_refresh"):
-        client.cookies.set(name, value)
+    client.cookies.set("nodvard_deck_refresh", value)
 
 
 def _token(settings, user_id: str, **claims) -> str:

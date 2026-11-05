@@ -58,6 +58,60 @@ async def test_every_kind_of_answer_of_the_real_app_carries_the_headers(client):
     for name, res in answers.items():
         _assert_fixed_headers(res.headers, resources="cross-origin" if name == "ok" else "same-origin")
         assert res.headers.get_list("content-security-policy") == [f"default-src 'none'; {FRAME_ANCESTORS}"], name
+        assert res.headers.get_list("cache-control") == ["no-store"], name
+
+
+@pytest.mark.asyncio
+async def test_tokens_and_account_data_are_not_stored(client, test_settings):
+    credentials = {"username": "demo", "password": "test-password-123"}
+    bootstrap = await client.post(
+        "/api/v1/auth/bootstrap", json={**credentials, "setup_code": test_settings.setup_code},
+    )
+    assert bootstrap.status_code == 201
+    login = await client.post("/api/v1/auth/login", json=credentials)
+    assert login.status_code == 200
+    assert bool(login.json().get("access_token"))
+    authorization = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    account = await client.get("/api/v1/me", headers=authorization)
+    assert account.status_code == 200
+    assert account.json()["username"] == "demo"
+    setup = await client.post(
+        "/api/v1/me/totp/setup", headers=authorization,
+        json={"current_password": credentials["password"]},
+    )
+    assert setup.status_code == 200
+    assert bool(setup.json().get("secret"))
+    refresh = await client.post("/api/v1/auth/refresh", json={})
+    assert refresh.status_code == 200
+    assert bool(refresh.json().get("access_token"))
+    for response in (bootstrap, login, account, setup, refresh):
+        assert response.headers.get_list("cache-control") == ["no-store"], response.request.url.path
+
+
+@pytest.mark.parametrize("path", ["/api", "/api/v1/me", "/api/v1/ext/demo/download"])
+def test_api_cache_default_also_covers_downloads(path: str):
+    headers = dict(secure_headers([(b"content-type", b"application/octet-stream")], path))
+    assert headers.get(b"cache-control") == b"no-store"
+
+
+@pytest.mark.parametrize(("path", "policy"), [
+    ("/api/v1/branding/custom.css", b"no-cache"),
+    ("/api/v1/app/manifest.webmanifest", b"no-cache"),
+    ("/api/v1/extensions/demo/bundle.js", b"no-cache"),
+    ("/api/v1/app/icon-192.png", b"public, max-age=3600"),
+    ("/api/v1/system/backups", b"no-store"),
+])
+def test_explicit_api_cache_policies_are_preserved(path: str, policy: bytes):
+    headers = secure_headers([(b"Cache-Control", policy)], path)
+    assert [(name, value) for name, value in headers if name.lower() == b"cache-control"] == [
+        (b"Cache-Control", policy),
+    ]
+
+
+@pytest.mark.parametrize("path", ["/", "/settings", "/assets/app.js", "/apis"])
+def test_api_cache_default_does_not_apply_to_frontend_paths(path: str):
+    headers = dict(secure_headers([], path))
+    assert b"cache-control" not in headers
 
 
 def _app() -> FastAPI:

@@ -20,8 +20,11 @@ describe("copyrightLine", () => {
 
   it("Rechteinhaber und Softwarename sind fest und hängen nicht vom Branding ab", () => {
     expect(COPYRIGHT_HOLDER).toBe("Nico Benks");
-    expect(copyrightLine.length).toBeLessThanOrEqual(1); // kein Parameter für einen eigenen Produktnamen
     expect(copyrightLine(new Date("2026-10-01T12:00:00Z"))).toBe("© 2026 Nico Benks · Nodvard Deck");
+  });
+
+  it("Nodvard Dock nennt sich selbst", () => {
+    expect(copyrightLine(new Date("2026-10-01T12:00:00Z"), "Nodvard Dock")).toBe("© 2026 Nico Benks · Nodvard Dock");
   });
 });
 
@@ -35,10 +38,11 @@ describe("applyBranding: eigene Akzentfarbe", () => {
     support_url: null,
     colors: { accent, accent_strong: accent, background: "#000000", surface: "#000000", text: "#ffffff" },
   });
-  const style = () => document.documentElement.style;
+  const style = () => getComputedStyle(document.documentElement);
 
   it("die kräftige Stufe ist dunkler als der Akzent, sonst hätte Hover keine Wirkung", () => {
     applyBranding(branding("#e11d48"));
+    expect(document.documentElement).not.toHaveAttribute("style");
     expect(style().getPropertyValue("--color-accent")).toBe("#e11d48");
     expect(style().getPropertyValue("--color-accent-strong")).toBe("color-mix(in srgb, #e11d48 85%, black)");
     expect(style().getPropertyValue("--color-accent-strong")).not.toBe(style().getPropertyValue("--color-accent"));

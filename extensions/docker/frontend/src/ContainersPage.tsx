@@ -1,3 +1,4 @@
+import { productText } from "./product";
 /**
  * Docker-Seite: Start, Stopp, Neustart und Live-Logs je Container, damit man dafür weder Portainer noch SSH braucht.
  *
@@ -9,6 +10,7 @@ import { Fragment, useCallback, useEffect, useState, type ReactNode } from "reac
 
 import { ACTION_STATUS_LABEL, runAction } from "../../../_shared/frontend/src/actions";
 import { authedFetch, errorText } from "../../../_shared/frontend/src/api";
+import * as cardTable from "../../../_shared/frontend/src/cardTable";
 import { formatBytes } from "../../../_shared/frontend/src/format";
 import { LoadError, errorMessage, fetchJson } from "../../../_shared/frontend/src/loadError";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
@@ -26,6 +28,7 @@ import { RegistriesSection } from "./Registries";
 import { RESOURCE_TABS, ResourcesSection, type ResourceKind } from "./Resources";
 import { StacksSection } from "./Stacks";
 import { ToStackPanel } from "./ToStack";
+import { naechsteSortierung, sortieren, type Sortierung } from "./sortieren";
 
 interface ServiceEntry {
   id: string;
@@ -48,6 +51,22 @@ interface ServiceEntry {
 }
 
 type Verb = "start" | "stop" | "restart" | "remove";
+type Sortierspalte = "name" | "state" | "uptime" | "cpu" | "ram";
+
+function Sortierkopf({ spalte, label, sortierung, onSort, className = "" }: {
+  spalte: Sortierspalte; label: string; sortierung: Sortierung<Sortierspalte>;
+  onSort: (spalte: Sortierspalte) => void; className?: string;
+}) {
+  const richtung = sortierung?.spalte === spalte ? sortierung.richtung : undefined;
+  return (
+    <th scope="col" className={`py-1 whitespace-nowrap ${className}`} aria-sort={richtung}>
+      <button type="button" className="rounded text-left hover:underline focus-visible:outline focus-visible:outline-2"
+        onClick={() => onSort(spalte)}>
+        {label}{richtung && <span aria-hidden="true"> {richtung === "ascending" ? "↑" : "↓"}</span>}
+      </button>
+    </th>
+  );
+}
 
 interface ContainerStats {
   cpu_percent: number | null;
@@ -320,7 +339,7 @@ export function ImageUpdateBadge({ result, checking = false, running = true, ope
   running?: boolean;
   operateOnly?: boolean;
 }): JSX.Element {
-  if (operateOnly) return <span className="text-xs opacity-40" title={OPERATE_NO_IMAGE_CHECK}>–</span>;
+  if (operateOnly) return <span className="text-xs opacity-40" title={productText(OPERATE_NO_IMAGE_CHECK)}>–</span>;
   if (!result) {
     return checking
       ? <span className="text-xs opacity-60">prüft …</span>
@@ -447,19 +466,20 @@ function StoragePanel({ hostId }: { hostId: string }): JSX.Element {
       )}
       {message && <p className="mb-2 opacity-90" role="status">{message}</p>}
       {data.images.length > 0 && (
-        <table className="w-full">
-          <thead>
+        // Ohne CARD_TABLE: dessen text-sm würde die Tabelle am Desktop größer machen als den Rest der Tafel.
+        <table className="block w-full sm:table" data-testid={`storage-images-${hostId}`}>
+          <thead className={cardTable.CARD_HEAD}>
             <tr className="border-b border-white/10 text-left opacity-60">
               <th className="py-1">Image</th><th className="py-1">Größe</th><th className="py-1">Erstellt</th><th className="py-1">Genutzt</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/5">
+          <tbody className={cardTable.CARD_BODY}>
             {data.images.map((img) => (
-              <tr key={img.id}>
-                <td className="py-1 break-words">{img.name ?? <span className="opacity-60">ohne Namen ({img.id})</span>}</td>
-                <td className="py-1 whitespace-nowrap">{img.size != null ? formatBytes(img.size) : "?"}</td>
-                <td className="py-1 opacity-70">{img.created ?? ""}</td>
-                <td className={`py-1 ${img.in_use === false ? "text-amber-300" : "opacity-70"}`}>
+              <tr key={img.id} className={`${cardTable.CARD_ROW} max-sm:flex-row max-sm:flex-wrap max-sm:gap-x-5`}>
+                <td className={`${cardTable.CARD_CELL_PLAIN} break-words pb-1 max-sm:w-full sm:py-1`}>{img.name ?? <span className="opacity-60">ohne Namen ({img.id})</span>}</td>
+                <td data-label="Größe" className={`${cardTable.CARD_CELL} whitespace-nowrap py-0.5 sm:py-1`}>{img.size != null ? formatBytes(img.size) : "?"}</td>
+                <td data-label="Erstellt" className={`${cardTable.CARD_CELL} py-0.5 opacity-70 sm:py-1`}>{img.created ?? ""}</td>
+                <td data-label="Genutzt" className={`${cardTable.CARD_CELL} py-0.5 sm:py-1 ${img.in_use === false ? "text-amber-300" : "opacity-70"}`}>
                   {img.in_use == null ? "?" : img.in_use ? "ja" : "nein"}
                 </td>
               </tr>
@@ -588,7 +608,7 @@ function UrlPanel({ entry, onSaved, onClose }: { entry: ServiceEntry; onSaved: (
           className="w-full rounded border border-white/10 bg-black/30 px-2 py-1.5 sm:max-w-md" />
       </label>
       <p className="opacity-60">
-        {entry.url_detected ? `Erkannt: ${entry.url_detected}` : "Nodvard Deck hat für diesen Container keine Weboberfläche erkannt."}
+        {entry.url_detected ? `Erkannt: ${entry.url_detected}` : productText("Nodvard Deck hat für diesen Container keine Weboberfläche erkannt.")}
       </p>
       {error && <p role="alert" className="text-red-400">{error}</p>}
       <div className="flex flex-wrap gap-1.5">
@@ -689,6 +709,8 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
   const [updateFor, setUpdateFor] = useState<string | null>(null);
   const [storageFor, setStorageFor] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [sortierung, setSortierung] = useState<Sortierung<Sortierspalte>>(null);
+  const [startedAt, setStartedAt] = useState<Record<string, string>>({});
   const [stats, setStats] = useState<Record<string, ContainerStats>>({});
   const [environments, setEnvironments] = useState<Record<string, HostEnvironment>>({});
   const [restarts, setRestarts] = useState<Record<string, number>>({});
@@ -748,11 +770,12 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
     const loadStats = () =>
       authedFetch("/ext/docker/stats")
         .then((res) => (res.ok
-          ? (res.json() as Promise<{ data: Record<string, ContainerStats>; hosts?: Record<string, HostEnvironment>; restarts?: Record<string, number> }>)
-          : { data: {}, hosts: undefined, restarts: undefined }))
+          ? (res.json() as Promise<{ data: Record<string, ContainerStats>; hosts?: Record<string, HostEnvironment>; restarts?: Record<string, number>; started_at?: Record<string, string> }>)
+          : { data: {}, hosts: undefined, restarts: undefined, started_at: undefined }))
         .then((body) => {
           if (cancelled) return;
           setStats(body.data);
+          setStartedAt(body.started_at ?? {});
           if (body.hosts) setEnvironments(body.hosts);
           if (body.restarts) setRestarts(body.restarts);
           setStatsLoaded(true);
@@ -770,7 +793,7 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
     const text = VERB_TEXT[verb];
     if (text.confirm) {
       const extra = entry.is_self && verb === "restart"
-        ? " Das ist Nodvard Deck selbst – die Oberfläche ist kurz weg."
+        ? productText(" Das ist Nodvard Deck selbst – die Oberfläche ist kurz weg.")
         : verb === "remove" && entry.compose_project
           ? ` Er gehört zum Compose-Projekt „${entry.compose_project}“: Beim nächsten „docker compose up“ (auch beim Einspielen eines Updates) legt Docker ihn wieder an.`
           : "";
@@ -827,7 +850,7 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
     const members = (services ?? []).filter((s) => s.host_id === entry.host_id && s.compose_project === project);
     const self = members.some((s) => s.is_self);
     const ok = await deck().confirmDialog(
-      `Stack "${project}" neu starten (${members.map((s) => s.name).join(", ")})? Die Dienste sind kurz nicht erreichbar.${self ? " Darin läuft Nodvard Deck selbst – die Oberfläche ist kurz weg." : ""}`,
+      `Stack "${project}" neu starten (${members.map((s) => s.name).join(", ")})? Die Dienste sind kurz nicht erreichbar.${self ? productText(" Darin läuft Nodvard Deck selbst – die Oberfläche ist kurz weg.") : ""}`,
       { confirmLabel: "Neu starten" },
     );
     if (!ok) return;
@@ -892,6 +915,19 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
   const stackOptions: [string, string][] = [...[...stacks].sort().map((p): [string, string] => [p, p]), [NO_STACK, "Ohne Stack"]];
   const filtered = Boolean(hostFilter || stackFilter || stateFilter);
   const onlyOperate = scoped.length > 0 && scoped.every((s) => s.operate_only);
+  const onSort = (spalte: Sortierspalte) => setSortierung((aktuell) => naechsteSortierung(aktuell, spalte));
+  const sortierwert = (s: ServiceEntry) => {
+    switch (sortierung?.spalte) {
+      case "name": return s.name;
+      case "state": return STATE_LABEL[s.state] ?? s.state;
+      case "cpu": return stats[s.id]?.cpu_percent;
+      case "ram": return stats[s.id]?.mem_used;
+      // Eine spätere Startzeit bedeutet eine kürzere Laufzeit.
+      case "uptime": return ["running", "paused", "restarting"].includes(s.state) && startedAt[s.id]
+        && !startedAt[s.id].startsWith("0001-") ? -Date.parse(startedAt[s.id]) : null;
+      default: return null;
+    }
+  };
 
   return (
     <div className="mx-auto w-full max-w-7xl p-4 sm:p-6">
@@ -1001,17 +1037,17 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
           <table role="table" className="w-full text-sm max-md:block">
             <thead className="max-md:hidden">
               <tr className="border-b border-white/10 text-left text-xs opacity-60">
-                <th className="py-1 w-1/4">Container</th>
-                <th className="py-1 whitespace-nowrap">Zustand</th>
-                <th className="py-1">Status</th>
+                <Sortierkopf spalte="name" label="Container" sortierung={sortierung} onSort={onSort} className="w-1/4" />
+                <Sortierkopf spalte="state" label="Zustand" sortierung={sortierung} onSort={onSort} />
+                <Sortierkopf spalte="uptime" label="Status/Laufzeit" sortierung={sortierung} onSort={onSort} />
                 <th className="py-1 whitespace-nowrap">Image-Update</th>
-                <th className="py-1 whitespace-nowrap">CPU</th>
-                <th className="py-1 whitespace-nowrap">RAM</th>
+                <Sortierkopf spalte="cpu" label="CPU" sortierung={sortierung} onSort={onSort} />
+                <Sortierkopf spalte="ram" label="RAM" sortierung={sortierung} onSort={onSort} />
                 <th className="py-1">Aktionen</th>
               </tr>
             </thead>
             <tbody role="rowgroup" className="divide-y divide-white/5 max-md:block max-md:space-y-2 max-md:divide-y-0">
-              {entries.map((s) => {
+              {(sortierung ? sortieren(entries, sortierwert, sortierung.richtung) : entries).map((s) => {
                 const manageable = Boolean(s.host_id && s.container) && s.state !== "error";
                 const isRunning = s.state === "running" || s.state === "restarting";
                 const logsOpen = logsFor === s.id;
@@ -1023,7 +1059,7 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
                     <tr role="row" className={CARD_ROW} data-testid={`row-${s.id}`}>
                       <td role="cell" className="py-1.5 break-words max-md:w-full max-md:py-0 max-md:text-base">
                         {s.name}
-                        {s.is_self && <span className="ml-1.5 rounded bg-white/10 px-1 text-[10px] opacity-70">Nodvard Deck</span>}
+                        {s.is_self && <span className="ml-1.5 rounded bg-white/10 px-1 text-[10px] opacity-70">{productText("Nodvard Deck")}</span>}
                         {s.compose_project && s.operate_only && (
                           <span className="ml-1.5 rounded bg-sky-500/15 px-1 text-[10px] text-sky-300" title="Docker-Compose-Projekt">{s.compose_project}</span>
                         )}
@@ -1115,7 +1151,7 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
                           )}
                           {manageable && isRunning && (
                             <button type="button" disabled={busy("stop") || s.is_self} onClick={() => void trigger(s, "stop")}
-                              title={s.is_self ? "Das ist Nodvard Deck selbst – Stoppen nur direkt auf dem Server." : undefined}
+                              title={s.is_self ? productText("Das ist Nodvard Deck selbst – Stoppen nur direkt auf dem Server.") : undefined}
                               className={`rounded bg-red-500/20 px-2 py-1 text-xs text-red-300 hover:bg-red-500/30 disabled:opacity-40 ${TOUCH}`}>
                               {busy("stop") ? "…" : "Stoppen"}
                             </button>

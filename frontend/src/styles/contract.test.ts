@@ -8,8 +8,8 @@ import { describe, expect, it } from "vitest";
 // Die Dateien werden gelesen, nicht importiert (ein CSS-Import ist im Test leer). Das Kern-Projekt hat
 // keine Node-Typen, darum geht `fs` ueber einen Import mit zusammengesetztem Namen (Typ: any).
 const nodeFs = "node:" + "fs";
-const { readFileSync } = (await import(/* @vite-ignore */ nodeFs)) as { readFileSync: (file: string, encoding: "utf-8") => string };
-const readNextToTest = (relative: string) => readFileSync(decodeURIComponent(new URL(relative, import.meta.url).pathname), "utf-8");
+const { readFileSync } = (await import(/* @vite-ignore */ nodeFs)) as { readFileSync: (file: URL, encoding: "utf-8") => string };
+const readNextToTest = (relative: string) => readFileSync(new URL(relative, import.meta.url), "utf-8");
 const cssSource = readNextToTest("./index.css");
 const html = readNextToTest("../../index.html");
 const css = cssSource.replace(/\/\*[\s\S]*?\*\//g, ""); // ohne Kommentare
@@ -82,12 +82,15 @@ describe("index.css", () => {
 
 describe("index.html", () => {
   it("die Import-Map zeigt auf /nodvard-deck-shim/", () => {
-    const map = /<script type="importmap">([\s\S]*?)<\/script>/.exec(html);
-    expect(map).not.toBeNull();
-    expect(JSON.parse(map![1]).imports).toEqual({
+    const page = new DOMParser().parseFromString(html, "text/html");
+    const maps = page.querySelectorAll('script[type="importmap"]');
+    expect(maps).toHaveLength(1);
+    expect(maps[0].getAttribute("nonce")).toBe("__DECK_CSP_NONCE__");
+    expect(JSON.parse(maps[0].textContent!).imports).toEqual({
       react: "/nodvard-deck-shim/react.js",
       "react/jsx-runtime": "/nodvard-deck-shim/react-jsx-runtime.js",
       "react-dom": "/nodvard-deck-shim/react-dom.js",
     });
+    expect(page.querySelector("script")).toBe(maps[0]);
   });
 });

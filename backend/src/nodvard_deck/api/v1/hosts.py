@@ -677,17 +677,19 @@ def _percent(used: float | None, total: float | None) -> float | None:
 @router.get("/hosts/metrics/latest", dependencies=[Depends(require_permission("hosts.read"))])
 async def get_hosts_latest_metrics(session: SessionDep) -> HostsLatestMetricsOut:
     """Letzte Messwerte ALLER Server in einer Abfrage, für die Auslastungs-Karten im Cockpit. Nur Server mit einem Wert
-    der letzten `LATEST_WINDOW_S` Sekunden stehen drin, `stale` ab `STALE_AFTER_S`; Server, deren Anbieter eine eigene
-    Historie führt (Hypervisor-Knoten), fehlen hier, sie werden live gefragt."""
-    # Liest nur den Verlauf (`metrics.db`, Sammler alle 30 s), nie per SSH: Das Cockpit löst so keine Messung aus und
-    # wird mit mehr Servern nicht langsamer.
+    der letzten `LATEST_WINDOW_S` Sekunden stehen drin, `stale` ab `STALE_AFTER_S`."""
+    # Liest nur, was der Sammler (alle 30 s) schon hat: den Verlauf in `metrics.db` und den aktuellen Wert der Hosts mit
+    # eigener Anbieter-Historie. Das Cockpit löst so keine Messung aus und wird mit mehr Servern nicht langsamer.
     import time as _time
 
     from ...core.metrics_history import LATEST_WINDOW_S, STALE_AFTER_S, get_metrics_collector
 
     host_ids = list((await session.execute(select(Host.id).where(Host.enabled.is_(True)))).scalars().all())
     now = int(_time.time())
-    found = await asyncio.to_thread(get_metrics_collector().store.latest, host_ids, now, max_age_s=LATEST_WINDOW_S)
+    collector = get_metrics_collector()
+    found = await asyncio.to_thread(collector.store.latest, host_ids, now, max_age_s=LATEST_WINDOW_S)
+    for host_id, values in collector.current(host_ids, now, max_age_s=LATEST_WINDOW_S).items():
+        found.setdefault(host_id, values)
     out: dict[str, HostLatestMetricsOut] = {}
     for host_id, values in found.items():
         at = max(ts for ts, _ in values.values())

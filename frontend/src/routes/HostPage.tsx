@@ -1,5 +1,5 @@
 /**
- * Server-Seite (aehnlich wie in Plesk): alles zu EINEM Host an einer Stelle -- Zustand,
+ * Server-Seite (ähnlich wie in Plesk): alles zu EINEM Host an einer Stelle -- Zustand,
  * Schnellzugriff (Konsole/Terminal), Aktionen, Live-Auslastung, Werkzeuge &
  * Einstellungen, Dienste, Meldungen.
  *
@@ -124,12 +124,12 @@ function useHostData(hostId: string) {
 }
 
 /** Meldung einer Aktion an die Seite. `run` ist die Nummer aus `onStart`; ein
- * Zwischenstand (`interim`, "Laeuft im Hintergrund") ist kein Ergebnis. */
+ * Zwischenstand (`interim`, "Läuft im Hintergrund") ist kein Ergebnis. */
 type ActionReport = (message: ActionOutcome, run: number, interim?: boolean) => void;
 type SayFn = (message: ActionOutcome, interim?: boolean) => void;
 /** Die Meldung einer Aktion auf der Seite; `done` false = Zwischenstand, es kommt noch etwas. */
 type RunMessage = { run: number; outcome: ActionOutcome; done: boolean };
-/** So viele Meldungen (die der letzten Aktionen) stehen hoechstens untereinander. */
+/** So viele Meldungen (die der letzten Aktionen) stehen höchstens untereinander. */
 const MAX_MESSAGES = 3;
 
 function ActionControl({ hostId, spec, onStart, onDone }: { hostId: string; spec: ActionSpecOut; onStart: () => number; onDone: ActionReport }) {
@@ -142,12 +142,12 @@ function ActionControl({ hostId, spec, onStart, onDone }: { hostId: string; spec
   // es schon vor der Freigabe-Antwort.
   const unmountSignal = useUnmountSignal();
 
-  /** Laeuft die Aktion nach der Antwort noch (202 'executing'), Zwischenstand melden
+  /** Läuft die Aktion nach der Antwort noch (202 'executing'), Zwischenstand melden
    * und bis zum Ende nachfragen. */
   async function settle(source: ActionOutcomeSource, actionId: string, say: SayFn): Promise<ActionOutcomeSource> {
     if (!isActionRunning(source.status)) return source;
     const signal = unmountSignal();
-    throwIfAborted(signal); // Seite schon verlassen, waehrend die Freigabe noch wartete
+    throwIfAborted(signal); // Seite schon verlassen, während die Freigabe noch wartete
     say({ tone: "pending", text: `${spec.label}: ${RUNNING_IN_BACKGROUND_TEXT}` }, true);
     return waitForAction<ActionOutcomeSource>(actionId, { signal });
   }
@@ -163,15 +163,15 @@ function ActionControl({ hostId, spec, onStart, onDone }: { hostId: string; spec
     }
     if (spec.default_risk !== "low" || spec.confirm_text) {
       const ok = await confirmDialog(spec.confirm_text ?? `${spec.label}?`, { danger: spec.default_risk !== "low", confirmLabel: spec.label });
-      // Waehrend die Rueckfrage offen war, kann man die Seite verlassen haben (Zurueck,
+      // Während die Rückfrage offen war, kann man die Seite verlassen haben (Zurück,
       // Strg+K, anderer Server): der globale Dialog bleibt dann offen. Wer jetzt noch
-      // bestaetigt, soll nichts mehr in einem anderen Kontext ausloesen.
+      // bestätigt, soll nichts mehr in einem anderen Kontext auslösen.
       if (!ok || unmountSignal().aborted) return;
     }
     setBusy(true);
     const runId = onStart();
     const say: SayFn = (message, interim) => onDone(message, runId, interim);
-    // Deutscher Text samt Grund (result.error / Sperr-Begruendung) statt
+    // Deutscher Text samt Grund (result.error / Sperr-Begründung) statt
     // des englischen Rohworts, siehe lib/actionOutcome.ts.
     const report = (source: ActionOutcomeSource) => {
       const outcome = describeActionOutcome(source);
@@ -303,7 +303,7 @@ function Metrics({ host, canWriteHosts, canManageExtensions }: { host: HostOut; 
 }
 
 function TagEditor({ hostId, tags, managed, onSaved }: { hostId: string; tags: string[]; managed: string[]; onSaved: () => void }) {
-  // Markierungen einer Erweiterung lassen sich von Hand nicht aendern -- sie stehen nur zur Info da.
+  // Markierungen einer Erweiterung lassen sich von Hand nicht ändern -- sie stehen nur zur Info da.
   const editable = tags.filter((t) => !managed.includes(t));
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
@@ -363,7 +363,7 @@ function TagEditor({ hostId, tags, managed, onSaved }: { hostId: string; tags: s
 }
 
 /** Die Route `/hosts/:hostId` bleibt beim Wechsel zu einem anderen Server dieselbe --
- * ohne `key` behielten Meldung, "Beschaeftigt"-Merker und laufende Nachfragen des alten
+ * ohne `key` behielten Meldung, "Beschäftigt"-Merker und laufende Nachfragen des alten
  * Servers ihren Zustand und tauchten beim neuen auf. */
 export function HostPage() {
   const { hostId = "" } = useParams();
@@ -390,16 +390,16 @@ function HostView({ hostId }: { hostId: string }) {
     enabled: canReadNotifications,
   });
   // Jede gestartete Aktion bekommt eine Nummer und ihre eigene Meldung. Die Freigabe
-  // wartet bis zu 20 s auf die Antwort, in der Zeit sind die anderen Knoepfe weiter
-  // frei: das spaete Ergebnis der aelteren Aktion darf die Meldung der neueren (z. B.
+  // wartet bis zu 20 s auf die Antwort, in der Zeit sind die anderen Knöpfe weiter
+  // frei: das späte Ergebnis der älteren Aktion darf die Meldung der neueren (z. B.
   // einen Fehlschlag) nicht ersetzen -- die Server-Seite hat keine Statusspalte, wo man
-  // ihn nachlesen koennte.
+  // ihn nachlesen könnte.
   const [messages, setMessages] = useState<RunMessage[]>([]);
   const startedRuns = useRef(0);
 
   function onActionStart(): number {
     startedRuns.current += 1;
-    // Neue Aktion: fertige Meldungen frueherer Aktionen verschwinden, die Meldungen noch laufender Aktionen bleiben.
+    // Neue Aktion: fertige Meldungen früherer Aktionen verschwinden, die Meldungen noch laufender Aktionen bleiben.
     setMessages((prev) => prev.filter((m) => !m.done));
     return startedRuns.current;
   }
@@ -411,8 +411,8 @@ function HostView({ hostId }: { hostId: string }) {
 
   if (host.isLoading) return <p className="p-6 text-sm opacity-60">Lade Server …</p>;
   if (!host.data) {
-    // Nur 404 heisst "nicht gefunden". Ein anderer Fehler (Server kurz weg, Datenbank gesperrt) ist keine Auskunft
-    // darueber, ob es den Server gibt. Scheitert nur ein Neuladen, bleibt die Seite mit dem letzten Stand stehen.
+    // Nur 404 heißt "nicht gefunden". Ein anderer Fehler (Server kurz weg, Datenbank gesperrt) ist keine Auskunft
+    // darüber, ob es den Server gibt. Scheitert nur ein Neuladen, bleibt die Seite mit dem letzten Stand stehen.
     if (host.error && !(host.error instanceof ApiError && host.error.status === 404)) {
       return <div className="p-4 sm:p-6"><LoadError what="Der Server" error={host.error} onRetry={() => void host.refetch()} /></div>;
     }
@@ -439,13 +439,13 @@ function HostView({ hostId }: { hostId: string }) {
       ...(tools.data ?? []).filter((t) => t.category === category).map((t) => ({ key: `${t.ext_id}:${t.id}`, title: t.title, description: t.description, icon: t.icon, href: t.href })),
     ],
   })).filter((g) => g.items.length > 0);
-  // Wie der Kern beim Ausloesen: ohne eigene Rechte-Angabe gilt hosts.execute.
+  // Wie der Kern beim Auslösen: ohne eigene Rechte-Angabe gilt hosts.execute.
   const allowed = (actions.data ?? [])
     .filter((a) => (a.permissions.length ? a.permissions : ["hosts.execute"]).every((p) => hasPermission(p)))
     // Pflichtfelder vom Typ Objekt/Liste (z. B. "Hardware ändern") haben ihr eigenes
-    // Formular in der Extension -- hier gaebe es nur ein Textfeld fuer rohes JSON.
+    // Formular in der Extension -- hier gäbe es nur ein Textfeld für rohes JSON.
     .filter((a) => inputFields(a).every((f) => ["string", "number", "integer", undefined].includes(a.params_schema?.properties?.[f]?.type)));
-  // Knoepfe: was der Host selbst anbietet und alles ohne Eingabe. Allgemeine Aktionen
+  // Knöpfe: was der Host selbst anbietet und alles ohne Eingabe. Allgemeine Aktionen
   // mit Eingabefeld (Shell-Befehl, Container-Name ...) liegen eingeklappt darunter.
   const quickActions = allowed.filter((a) => a.source === "host" || inputFields(a).length === 0);
   const moreActions = allowed.filter((a) => !quickActions.includes(a));

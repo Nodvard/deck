@@ -60,7 +60,7 @@ function tempLimitAnswer(url: string, init?: RequestInit): Response | null {
   return new Response(JSON.stringify({ host_id: match[1], own_c: own, global_c: 75, effective_c: own ?? 75 }), { status: 200 });
 }
 
-function mockFetch(calls: string[], infoStatus = 200, info: SystemInfo = INFO) {
+function mockFetch(calls: string[], infoStatus = 200, info: SystemInfo = INFO, live: LiveData = LIVE) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     calls.push(url);
@@ -72,7 +72,7 @@ function mockFetch(calls: string[], infoStatus = 200, info: SystemInfo = INFO) {
         { id: "g-valheim", display_name: "game-win", address: "192.168.1.92", os_family: "windows", status: "running" },
       ]), { status: 200 });
     }
-    if (url.includes("/ext/system/hosts/h-pi/live")) return new Response(JSON.stringify(LIVE), { status: 200 });
+    if (url.includes("/ext/system/hosts/h-pi/live")) return new Response(JSON.stringify(live), { status: 200 });
     if (url.includes("/ext/system/hosts/h-pi/info")) {
       return infoStatus === 200
         ? new Response(JSON.stringify(info), { status: 200 })
@@ -93,6 +93,50 @@ beforeEach(() => {
 });
 
 describe("SystemPage", () => {
+  it.each([
+    { frequencies: [1800.7, 600.2, null, 1200.9], expected: "Takt: Durchschnitt 1201 MHz, min 600, max 1801" },
+    { frequencies: [1000.4, 1000.4, 1001.4, null], expected: "Takt: Durchschnitt 1001 MHz, min 1000, max 1001" },
+    { frequencies: [1800.5, null], expected: "Takt: Durchschnitt 1801 MHz, min 1801, max 1801" },
+  ])("CPU-Takt fasst vorhandene Werte gerundet zusammen: $frequencies", async ({ frequencies, expected }) => {
+    const per_core = frequencies.map((freq_mhz, id) => ({ id, percent: 10, freq_mhz }));
+    const live = { ...LIVE, cpu: { ...LIVE.cpu, cores: per_core.length, per_core } };
+    window.history.replaceState({}, "", "/ext/system/system?host=h-pi");
+    vi.stubGlobal("fetch", mockFetch([], 200, INFO, live));
+    render(<SystemPage />);
+    await screen.findByTestId("cores");
+    const tile = screen.getByText("CPU", { selector: "p" }).parentElement!;
+    expect(within(tile).getByText(expected)).toBeInTheDocument();
+    expect(within(tile).getByText(`${per_core.length} Kerne`)).toBeInTheDocument();
+    expect(within(tile).queryByText("Takt nicht verfügbar")).toBeNull();
+  });
+
+  it.each([{ frequencies: [] }, { frequencies: [null, null] }])("CPU-Takt fehlt ohne Messwerte: $frequencies", async ({ frequencies }) => {
+    const per_core = frequencies.map((freq_mhz, id) => ({ id, percent: 10, freq_mhz }));
+    const live = { ...LIVE, cpu: { ...LIVE.cpu, cores: per_core.length, per_core } };
+    window.history.replaceState({}, "", "/ext/system/system?host=h-pi");
+    vi.stubGlobal("fetch", mockFetch([], 200, INFO, live));
+    render(<SystemPage />);
+    const cores = await screen.findByTestId("cores");
+    const tile = screen.getByText("CPU", { selector: "p" }).parentElement!;
+    expect(within(tile).getByText("Takt nicht verfügbar")).toBeInTheDocument();
+    expect(within(tile).queryByText(/Takt: Durchschnitt/)).toBeNull();
+    expect(within(cores).queryByText(/MHz/)).toBeNull();
+  });
+
+  it("CPU-Takt je Kern hat normale Schriftgröße und volle Deckkraft", async () => {
+    window.history.replaceState({}, "", "/ext/system/system?host=h-pi");
+    vi.stubGlobal("fetch", mockFetch([]));
+    render(<SystemPage />);
+    const cores = await screen.findByTestId("cores");
+    const frequencies = within(cores).getAllByText(/MHz$/);
+    expect(frequencies).toHaveLength(4);
+    for (const frequency of frequencies) {
+      expect(frequency).toHaveClass("text-sm");
+      expect(frequency).not.toHaveClass("opacity-50");
+      expect(frequency).not.toHaveClass("text-[10px]");
+    }
+  });
+
   it("Sprung von der Server-Seite (?host=): Befunde zuerst, Platten, Dienste, Updates", async () => {
     window.history.replaceState({}, "", "/ext/system/system?host=h-pi");
     try {

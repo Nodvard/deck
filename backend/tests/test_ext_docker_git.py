@@ -46,6 +46,34 @@ def _gf():
     return git_fetch
 
 
+# Der Prozess holt wie sonst, nur 127.0.0.x ist für die Testserver erlaubt; `-I` lässt den Ordner des Skripts außen vor.
+LOOPBACK_WORKER = """import importlib.util, sys
+spec = importlib.util.spec_from_file_location("git_fetch", {path!r})
+gf = sys.modules["git_fetch"] = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gf)
+check = gf.target_addresses
+gf.target_addresses = lambda host, port, allow_private: [host] if host.startswith("127.") else check(host, port, allow_private)
+sys.exit(gf.main())
+"""
+
+
+@pytest.fixture(scope="module")
+def _loopback_worker(tmp_path_factory):
+    path = tmp_path_factory.mktemp("worker") / "git_fetch.py"
+    path.write_text(LOOPBACK_WORKER.format(path=str(_gs().WORKER)), encoding="utf-8")
+    return path
+
+
+@pytest.fixture(autouse=True)
+def _servers_on_loopback(monkeypatch, _loopback_worker):
+    """Die Testserver laufen auf 127.0.0.1, das Deck sonst nie fragt; die Prüfung der Ziel-Adresse steht in
+    test_ext_docker_git_target.py."""
+    check = _gf().target_addresses
+    monkeypatch.setattr(_gf(), "target_addresses",
+                        lambda host, port, allow_private: [host] if host.startswith("127.") else check(host, port, allow_private))
+    monkeypatch.setattr(_gs(), "WORKER", _loopback_worker)
+
+
 URL = "https://git.example.org/team/stacks"
 COMPOSE = b"services:\n  web:\n    image: busybox:1.37\n"
 SHOWN = {"working_dir": "/opt/stacks/shop", "config_files": ["/opt/stacks/shop/compose.yaml"]}
@@ -1309,7 +1337,8 @@ async def test_a_private_repository_with_a_token_from_the_vault(client, docker_o
 
 
 @pytest.mark.asyncio
-async def test_a_replaced_token_is_used_for_the_next_fetch_without_a_hook(client, docker_on, tmp_path):
+@pytest.mark.parametrize("operation", ["fetch", "head"])
+async def test_a_replaced_token_is_used_for_the_next_request_without_a_hook(client, docker_on, tmp_path, operation):
     url = await _adopted(client, docker_on)
     origin = tmp_path / "origin"
     _commit(origin, {"shop": {"compose.yaml": COMPOSE}})
@@ -1321,11 +1350,20 @@ async def test_a_replaced_token_is_used_for_the_next_fetch_without_a_hook(client
     body = {"url": "https://git.example.org/team/stacks", "path": "shop/compose.yaml", "access": "team"}
     assert (await client.put(url, headers=docker_on.owner, json=body)).status_code == 200
 
-    assert (await client.post(f"{url}/fetch", headers=docker_on.owner)).status_code == 200
+    async def read():
+        if operation == "fetch":
+            assert (await client.post(f"{url}/fetch", headers=docker_on.owner)).status_code == 200
+        else:
+            git = _git(docker_on)
+            source = git.sources.get(docker_on.host, "shop")
+            commit, kind = await git.head(docker_on.host, "shop", source)
+            assert len(commit) == 40 and kind == "branch"
+
+    await read()
     replaced = await client.put("/api/v1/extensions/docker/secrets", headers=docker_on.owner,
                                 json={"current_password": "correct-horse-battery", "label": "docker-git-token:team", "value": second})
     assert replaced.status_code == 204, replaced.text
-    assert (await client.post(f"{url}/fetch", headers=docker_on.owner)).status_code == 200
+    await read()
     assert seen == [("deck", first), ("deck", second)]
 
 
@@ -1439,12 +1477,41 @@ async def test_forget_clears_store_and_rests_even_when_the_list_fails(tmp_path, 
     assert list(store.parent.iterdir()) == []
 
 
+def _settings(values):
+    async def get():
+        return values
+
+    return SimpleNamespace(settings=SimpleNamespace(get=get))
+
+
+@pytest.mark.asyncio
+async def test_the_worker_hears_whether_private_networks_are_allowed(tmp_path):
+    from nodvard_deck_ext_docker import adopt
+
+    gs = _gs()
+    values: dict = {}
+    git = gs.GitStacks(_settings(values), None, adopt.AdoptedStacks(tmp_path), tmp_path)
+    seen: list = []
+
+    async def remember(request, limits):
+        seen.append(request["allow_private"])
+        return GOOD
+
+    git.run_fetch = remember
+    source = gs.Source(URL, "main", "compose.yaml", None, "1")
+    await git.sources.put("h1", "shop", source)
+    for setting in (None, True, "true", False):
+        values["git_private_networks"] = setting
+        await git.fetch("h1", "shop", source)
+    assert seen == [False, True, False, False]
+
+
 @pytest.mark.asyncio
 async def test_at_most_two_fetches_run_at_once(tmp_path):
     from nodvard_deck_ext_docker import adopt
 
     gs = _gs()
-    git = gs.GitStacks(SimpleNamespace(), None, adopt.AdoptedStacks(tmp_path), tmp_path)
+    git = gs.GitStacks(_settings({}), None, adopt.AdoptedStacks(tmp_path), tmp_path)
     running, peak = 0, 0
 
     async def slow(request, limits):
@@ -1461,6 +1528,12 @@ async def test_at_most_two_fetches_run_at_once(tmp_path):
         await git.sources.put("h1", f"s{i}", source)
     await asyncio.gather(*(git.fetch("h1", f"s{i}", source) for i, source in enumerate(sources)))
     assert peak == gs.PARALLEL == 2
+
+
+def test_private_networks_are_off_unless_switched_on():
+    setting = json.loads((EXT_DIR / "settings.schema.json").read_text(encoding="utf-8"))["properties"]["git_private_networks"]
+    assert (setting["type"], setting["default"], setting["x-advanced"]) == ("boolean", False, True)
+    assert setting["title"] == _gf().PRIVATE_SETTING.strip("„“")
 
 
 def test_the_settings_refuse_port_80_for_a_git_access():

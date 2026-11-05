@@ -1,11 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SEEN_KEY, type Changelog } from "../../lib/changelog";
 import { NOVNC_VERSION } from "../../lib/thirdParty";
 import { useAuthStore } from "../../state/auth";
+import { useBrandingStore } from "../../state/branding";
+import { DECK_EDITION, useEditionStore } from "../../state/edition";
 import { AboutSettings } from "./AboutSettings";
 import { SettingsLayout } from "./SettingsLayout";
 
@@ -50,6 +52,15 @@ afterEach(() => {
 });
 
 describe("Über Nodvard Deck", () => {
+  it("zeigt Dokumentation als eigene Gruppe im Änderungsprotokoll", async () => {
+    serve({ ...DATA, unreleased: [{ kind: "dokumentation", text: "Dock-Anleitungen ergänzt.", prs: [] }] });
+    renderPage();
+    const group = await screen.findByRole("region", { name: "Dokumentation" });
+    expect(fetch).toHaveBeenCalledWith("/api/v1/app/changelog?include_documentation=true", expect.any(Object));
+    expect(within(group).getByText("Dock-Anleitungen ergänzt.")).toBeInTheDocument();
+    expect(within(group).getByText("Dokumentation")).toHaveClass("text-white");
+  });
+
   it("zeigt Version, Build und jede Version als Karte mit Datum und Titel", async () => {
     serve(DATA);
     renderPage();
@@ -59,6 +70,7 @@ describe("Über Nodvard Deck", () => {
     expect(within(card).getByText("a156da5")).toBeInTheDocument();
 
     expect(screen.getByRole("heading", { name: /Version 0\.5\.0 · 02\.10\.2026/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Alle Versionen" }));
     expect(screen.getByRole("heading", { name: /Version 0\.4\.0 · 30\.09\.2026/ })).toBeInTheDocument();
     expect(screen.getByText("Neuer Stand")).toBeInTheDocument();
     expect(screen.getByText("Läuft gerade")).toBeInTheDocument(); // genau eine Karte, die laufende
@@ -111,7 +123,7 @@ describe("Über Nodvard Deck", () => {
   it("nennt Discord, GitHub, den Entwickler und die Lizenzen der Bibliotheken, auch wenn das Protokoll fehlt", async () => {
     serve({ detail: "Nicht authentifiziert" }, 403);
     renderPage();
-    const card = screen.getByRole("heading", { name: "Community und Credits" }).closest("section")!;
+    const card = screen.getByRole("heading", { name: "Hilfe und Austausch" }).closest("section")!;
     const links: [string, string][] = [
       ["Discord von Nodvard", "https://discord.gg/gTTs7qMabt"],
       ["Diskussionen", "https://github.com/nodvard/deck/discussions"],
@@ -130,14 +142,35 @@ describe("Über Nodvard Deck", () => {
     await screen.findByRole("alert");
   });
 
-  it("Community und Credits steht zwischen den Versionen und der Lizenz", async () => {
+  it("Hilfe und Lizenz stehen direkt nach der Installation vor dem Änderungsprotokoll", async () => {
     serve(DATA);
     renderPage();
-    const oldest = await screen.findByRole("heading", { name: /Version 0\.4\.0/ });
-    const community = screen.getByRole("heading", { name: "Community und Credits" });
-    const marken = screen.getByRole("heading", { name: "Lizenz und Marken" });
-    expect(oldest.compareDocumentPosition(community) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(community.compareDocumentPosition(marken) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const installation = (await screen.findByRole("heading", { name: "Diese Installation" })).closest("section")!;
+    const help = screen.getByRole("heading", { name: "Hilfe und Austausch" }).closest("section")!;
+    const license = screen.getByRole("heading", { name: "Lizenz und Marken" }).closest("section")!;
+    const changelog = screen.getByRole("region", { name: "Änderungsprotokoll" });
+    fireEvent.click(within(changelog).getByRole("button", { name: "Alle Versionen" }));
+    const unreleased = screen.getByRole("heading", { name: "Noch ohne Versionsnummer" }).closest("details")!;
+    const newest = screen.getByRole("heading", { name: /Version 0\.5\.0/ });
+    const oldest = screen.getByRole("heading", { name: /Version 0\.4\.0/ });
+    const row = installation.nextElementSibling!;
+    expect(Array.from(row.children)).toEqual([help, license]);
+    expect(row.nextElementSibling).toBe(changelog);
+    expect(changelog).toContainElement(unreleased);
+    for (const heading of [unreleased, newest, oldest]) {
+      expect(help.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(license.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+
+  it("ordnet Hilfe und Lizenz am Handy in einer Spalte und auf breiten Bildschirmen in zwei Spalten an", async () => {
+    serve(DATA);
+    renderPage();
+    await screen.findByRole("heading", { name: "Diese Installation" });
+    const help = screen.getByRole("heading", { name: "Hilfe und Austausch" }).closest("section")!;
+    const license = screen.getByRole("heading", { name: "Lizenz und Marken" }).closest("section")!;
+    expect(help.parentElement).toBe(license.parentElement);
+    expect(help.parentElement).toHaveClass("grid", "grid-cols-1", "xl:grid-cols-2");
   });
 
   it("die Karte zu Lizenz und Marken steht unter der Versionsangabe", async () => {
@@ -160,23 +193,69 @@ describe("Über Nodvard Deck", () => {
     expect(security.textContent).not.toContain("#");
   });
 
-  it("nur die neueste Version ist aufgeklappt", async () => {
+  it("zeigt zunächst nur die laufende Version und blendet ältere Versionen per Knopf ein und aus", async () => {
     serve(DATA);
     renderPage();
     const newest = (await screen.findByRole("heading", { name: /Version 0\.5\.0/ })).closest("details")!;
-    const older = screen.getByRole("heading", { name: /Version 0\.4\.0/ }).closest("details")!;
     expect(newest.open).toBe(true);
+    expect(screen.queryByRole("heading", { name: /Version 0\.4\.0/ })).not.toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: "Alle Versionen" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    const history = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+    expect(history).toHaveAttribute("hidden");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveAccessibleName("Weniger Versionen");
+    const older = screen.getByRole("heading", { name: /Version 0\.4\.0/ }).closest("details")!;
+    expect(history).toContainElement(older);
     expect(older.open).toBe(false);
     expect(within(older).getByText("Ältere Neuerung.")).toBeInTheDocument(); // steht im Dokument, nur zugeklappt
+    fireEvent.click(toggle);
+    expect(history).toHaveAttribute("hidden");
+    expect(screen.queryByRole("heading", { name: /Version 0\.4\.0/ })).not.toBeInTheDocument();
+    expect(newest.open).toBe(true);
+  });
+
+  it("öffnet die laufende Version auch dann, wenn eine neuere Version im Protokoll steht", async () => {
+    serve({ ...DATA, current: "0.4.0" });
+    renderPage();
+    const current = (await screen.findByRole("heading", { name: /Version 0\.4\.0/ })).closest("details")!;
+    expect(current.open).toBe(true);
+    expect(within(current).getByText("Läuft gerade")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /Version 0\.5\.0/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Alle Versionen" }));
+    expect(screen.getByRole("heading", { name: /Version 0\.5\.0/ }).closest("details")!.open).toBe(false);
+  });
+
+  it("hält alle Versionen eingeklappt, wenn die laufende Version noch keinen Eintrag hat", async () => {
+    serve({ ...DATA, current: "0.6.0" });
+    renderPage();
+    await screen.findByRole("heading", { name: "Diese Installation" });
+    expect(screen.queryByRole("heading", { name: /Version 0\./ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Alle Versionen" }));
+    for (const heading of screen.getAllByRole("heading", { name: /Version 0\./ })) {
+      expect(heading.closest("details")!.open).toBe(false);
+    }
+  });
+
+  it("zeigt bei nur einer laufenden Version keinen Knopf für weitere Versionen", async () => {
+    serve({ ...DATA, versions: [DATA.versions[0]] });
+    renderPage();
+    await screen.findByRole("heading", { name: /Version 0\.5\.0/ });
+    expect(screen.queryByRole("button", { name: "Alle Versionen" })).not.toBeInTheDocument();
   });
 
   it("zeigt „Noch ohne Versionsnummer“ nur, wenn es solche Einträge gibt", async () => {
     serve(DATA);
     const first = renderPage();
     const heading = await screen.findByRole("heading", { name: "Noch ohne Versionsnummer" });
-    const card = heading.closest("section")!;
+    const card = heading.closest("details")!;
+    expect(card.open).toBe(false);
     expect(within(card).getByText("Noch ohne Nummer eingebaut.")).toBeInTheDocument();
     expect(within(card).getByText("#60")).toBeInTheDocument();
+    fireEvent.click(heading.closest("summary")!);
+    expect(card.open).toBe(true);
+    expect(within(card).getByRole("region", { name: "Verbessert" })).toBeVisible();
     first.unmount();
 
     serve({ ...DATA, unreleased: [] });
@@ -203,6 +282,7 @@ describe("Über Nodvard Deck", () => {
     serve({ ...DATA, unreleased: [], versions: [] });
     renderPage();
     expect(await screen.findByText("Es gibt noch keine Einträge im Änderungsprotokoll.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Alle Versionen" })).not.toBeInTheDocument();
   });
 
   it("merkt sich beim Öffnen den Stand (Version und Zahl unveröffentlichter Einträge)", async () => {
@@ -237,5 +317,43 @@ describe("Einstellungen: Eintrag „Über Nodvard Deck“", () => {
     );
     const nav = within(screen.getByRole("navigation", { name: "Einstellungen" }));
     expect(nav.getByRole("link", { name: /Über Nodvard Deck/ })).toHaveAttribute("href", "/settings/about");
+  });
+
+  it("lädt Dock aus der API und nennt es im Titel, Menü und auf der Über-Seite", async () => {
+    const edition = useEditionStore.getState();
+    const branding = useBrandingStore.getState();
+    const title = document.title;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      const data = path === "/api/v1/edition"
+        ? { ...DECK_EDITION, id: "dock", product_name: "Nodvard Dock", choose_modules: false, repo_tools: false }
+        : path === "/api/v1/branding"
+          ? { product_name: "Nodvard Dock", colors: { accent: "#0ea5e9" } }
+          : DATA;
+      return new Response(JSON.stringify(data));
+    }));
+    try {
+      await useEditionStore.getState().load();
+      await useBrandingStore.getState().load();
+      expect(document.title).toBe("Nodvard Dock");
+      render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <MemoryRouter initialEntries={["/settings/about"]}>
+            <Routes><Route path="/settings" element={<SettingsLayout />}><Route path="about" element={<AboutSettings />} /></Route></Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      expect(screen.getByRole("heading", { name: "Über Nodvard Dock" })).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: /Über Nodvard Dock/ })).toHaveAttribute("href", "/settings/about");
+      expect(screen.getByText(/Nodvard Dock baut auf vielen freien Bibliotheken auf/)).toBeInTheDocument();
+      expect(screen.getByText(/Nodvard Dock steht unter der PolyForm Noncommercial License/)).toBeInTheDocument();
+      expect(screen.getByText(/Nodvard Dock steht in keiner Verbindung zu ihnen/)).toBeInTheDocument();
+      await screen.findByRole("heading", { name: "Diese Installation" });
+    } finally {
+      cleanup();
+      useEditionStore.setState(edition);
+      useBrandingStore.setState(branding);
+      document.title = title;
+    }
   });
 });

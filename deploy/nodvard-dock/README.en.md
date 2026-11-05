@@ -4,9 +4,9 @@
 
 **Docker management for your servers: over SSH, without an agent.**
 
-Self-hosted · Source available (PolyForm Noncommercial) · free for personal use
+Self-hosted, source available (PolyForm Noncommercial), free for personal use
 
-[Deutsch](README.md) · [Getting started](#getting-started) · [Moving from Portainer](#moving-from-portainer) · [Discord](https://discord.gg/gTTs7qMabt)
+[Deutsch](README.md) · [Getting started](#getting-started) · [Documentation](../../docs/en/dock/README.md) · [Moving from Portainer](#moving-from-portainer) · [Discord](https://discord.gg/gTTs7qMabt)
 
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-blue)](../../LICENSE)
 ![Status: Beta](https://img.shields.io/badge/Status-Beta-orange)
@@ -18,43 +18,34 @@ Self-hosted · Source available (PolyForm Noncommercial) · free for personal us
 
 ---
 
-Nodvard Dock manages the containers and Compose stacks on your servers from one web interface. It talks to every
-server over SSH: no agent runs on your servers, and the Nodvard Dock container gets no Docker socket. You start
-anything that changes something yourself or release it through an **approval**, and everything is logged. It is made
-for homelabs with one or more servers, including people moving away from Portainer CE.
+## What Dock is: the difference from Deck in five sentences
 
-Nodvard Dock is the Docker module of [Nodvard Deck](https://github.com/nodvard/deck), as an image of its own. If you
-later want Proxmox, backups or security in the same place, take Nodvard Deck.
+Nodvard Dock is the Docker edition of [Nodvard Deck](../../README.en.md), built with `EDITION=dock` and `NODVARD_DECK_EXTENSIONS=docker`.
+Dock provides only Docker management for containers, images, volumes, networks and Compose stacks.
+It connects to Docker hosts over SSH, without an agent on the hosts or a Docker socket in the Dock container.
+The shared core provides accounts, the vault, approvals, the audit log and backups of Dock settings.
+Server modules such as Proxmox, Server-Zustand and Nodvard Shield belong to Deck and are not included in Dock.
+
+The [edition overview with code references](../../docs/en/dock/README.md#edition-and-scope) also explains the fixed module selection and update method.
 
 > **Status:** Beta. Interfaces and data formats may still change. The ready-made image `ghcr.io/nodvard/dock` is
 > available for regular PCs and NAS (amd64) and for the Raspberry Pi (arm64).
-
-## At a glance
-
-| | Nodvard Dock | Portainer CE |
-|---|---|---|
-| **Further servers** | over SSH with a user of its own, no agent | Portainer Agent, Edge Agent or Docker API per server |
-| **Docker socket in the interface container** | no | yes, for the machine Portainer runs on |
-| **Where Compose files live** | in a folder on the server (default `/opt/stacks/<name>`) | in Portainer's data volume |
-| **Interface language** | German | English |
-| **License** | PolyForm Noncommercial: free for personal use, source available | zlib (open source) |
-
-The details on Portainer CE come from its public documentation and license (as of October 2026).
 
 ## What it does
 
 - **All containers on one page:** state, start, stop, restart, console and details. Logs with time range, search and
   download. Stopped containers can be deleted.
 - **Image updates with a way back:** Nodvard Dock finds new images and applies them to Compose services. The old image
-  is kept as a backup. If the new container crashes on start, it goes back to the old one on its own, except for
-  databases and other data stores (can be turned off in the module settings).
+  is kept as a backup. If the new container crashes on start, Dock attempts automatic rollback, except for
+  detected databases and other data stores (can be turned off in the module settings).
 - **Stacks stay folders on the server:** you adopt existing stacks with one click, nothing changes on the server.
   After that you can apply them, stop them, take them down (volumes stay) and pull their images.
 - **Compose editor with checks and history:** edit as text or in a form that only touches the changed spot. Docker
   Compose checks the file on the server before saving, and the latest versions stay in the history.
-- **New stacks from templates:** Uptime Kuma, Vaultwarden, Nginx Proxy Manager and Gitea, or a file of your own. Every
-  new stack gets a folder of its own (default `/opt/stacks`). Deleting a stack takes it down; Nodvard Dock deletes the
-  folder only if you tick that box.
+- **New stacks from templates:** Uptime Kuma, Vaultwarden, Nginx Proxy Manager and Gitea, or a file of your own. A
+  Compose file can also be saved as a template of your own: the file only, without `.env` and without hard-coded
+  passwords. Every new stack gets a folder of its own (default `/opt/stacks`). Deleting a stack takes it down; Nodvard
+  Dock deletes the folder only if you tick that box.
 - **Stack updates with a backup:** the old images are kept, and "Zurück zur vorigen Version" (back to the previous
   version) is ready afterwards. On request Nodvard Dock backs up the volumes first, after checking the free space; you
   can restore or delete them in the Stacks tab under "Sicherungen" (backups).
@@ -88,8 +79,12 @@ The details on Portainer CE come from its public documentation and license (as o
 
 ## Getting started
 
+### Quick start in 5 minutes
+
 **You need** a computer with Docker and Docker Compose, for example a Raspberry Pi 4/5 with a 64-bit system or an
-x86-64 machine.
+x86-64 machine, a Linux Docker host reachable over SSH and a prepared HTTPS Git repository containing a Compose file.
+The five minutes assume Docker, SSH and the repository are ready; downloading the image may take longer.
+The commands use a Linux shell; in PowerShell use `curl.exe` and run each command separately.
 
 ### 1. Start
 
@@ -103,15 +98,21 @@ docker compose up -d
 - **Setup code:** `docker compose logs nodvard-dock` in the same folder, the line starts with "Einrichtungscode".
 - **Port already in use?** Put a file `.env` next to `compose.yml` with the line `NODVARD_DOCK_PORT=8081` and run
   `docker compose up -d` again.
-- **Update:** `docker compose pull && docker compose up -d`. Your data stays.
 
-### 2. Set up
+### 2. Set up and first login
 
-In the browser, an assistant takes you through three steps:
+In the browser, enter the setup code from the container log. There is no default password.
+Setup covers the account, time zone and further settings:
 
-1. **Administrator-Konto anlegen** (create the administrator account) and pick the time zone.
-2. **Was willst du nutzen?** (what do you want to use): switch on the **Docker** module here.
-3. **Zwei-Faktor-Anmeldung** (two-factor sign-in): optional, but strongly recommended.
+1. **Administrator-Konto anlegen** (create the administrator account): choose a username and your own password.
+   This signs you in.
+2. **Zeitzone** (time zone): choose the time zone. Dock then enables the **Docker** module automatically.
+3. **Zwei-Faktor-Anmeldung (optional)** (two-factor sign-in): optional, but strongly recommended.
+4. **Aussehen (optional)** (appearance): adjust the product name, short name and accent color, or skip this step.
+5. **Fertig** (done): choose **Weiter zum Dashboard** to open Dock.
+
+If enabling Docker fails, an extra module step offers a retry.
+Use the account you created for later sign-ins.
 
 ### 3. Connect servers, including this one
 
@@ -124,15 +125,27 @@ Nodvard Dock uses no Docker socket. So it connects to every server over SSH, inc
    creates its own user with an SSH key, adds it to the `docker` group and forgets the password.
 3. The **Docker** page now shows the containers of this server.
 
+### 4. Deploy your first stack from Git
+
+1. Open **Docker → Stacks → Neuer Stack** (new stack), choose a name such as `meine-app` and paste the Compose file
+   from your repository. For **Ordner für neue Stacks** (folder for new stacks), first choose **Ändern** (change) →
+   **Im Heimatordner** (in the home folder) → **Übernehmen** (save). This uses the SSH user's writable home folder
+   instead of `/opt/stacks`. Then choose **Prüfen** (check), then **Anlegen** (create) and confirm the approval. This does not
+   start the stack yet. For this first attempt, use a Compose file that needs no additional files.
+2. Open **Aus Git** (from Git) on the stack. Enter the repository HTTPS URL, **Branch oder Tag** (branch or tag,
+   such as `main`) and the Compose file path (such as `compose.yaml`), then choose **Eintragen und holen** (save and fetch).
+3. Review the file comparison. If all files match, start the stack with **Anwenden** (apply); otherwise choose
+   **Einspielen** (apply from Git). Confirm the approval and check the result under **Aktionen** (actions);
+   the stack should then appear under **Stacks** with its containers.
+
+For private repositories, first store a token under **Einstellungen → Erweiterungen → Docker → Erweitert → Git-Zugänge**
+(Settings → Extensions → Docker → Advanced → Git access). Details and limits: [Stacks from Git](../../docs/en/dock/stacks-from-git.md).
+
 **Its own data volume:** Nodvard Dock has its own volume `nodvard-dock-data`. It cannot take over the data volume of
 a Nodvard Deck, because that holds data of modules Dock does not know.
 
-> **Known in this beta:**
-> - In some places the interface still calls itself "Nodvard Deck".
-> - The setup page shows the command for the setup code with `nodvard-deck`. The right one is
->   `docker compose logs nodvard-dock`.
-> - The page Einstellungen → System → Updates (Settings → System → Updates) does not fit Dock yet. Update with the
->   command under "Start".
+> **Known in this beta:** If the title or sign-in page still says "Nodvard Deck", an older beta saved that name:
+> change it under Einstellungen → Darstellung (Settings → Appearance).
 
 ## Moving from Portainer
 
@@ -151,14 +164,30 @@ Portainer would remove the new containers or replace them with its old file. Jus
 several files (for example from Git) or does not match the running services. Nodvard Dock then says why, for relative
 paths also where the data is.
 
+## Difference to Deck
+
+| Feature | Nodvard Dock | Nodvard Deck |
+|---|---|---|
+| Purpose | Docker and Compose management | Dashboard for more areas of your homelab |
+| Modules in the official image | Only `docker` | Additional modules, such as Proxmox, Backups, Server-Zustand and Shield |
+| Edition | `EDITION=dock` | `EDITION=deck` |
+| Image | `ghcr.io/nodvard/dock` | `ghcr.io/nodvard/deck` |
+| Data volume in the supplied Compose file | `nodvard-dock-data` | `nodvard-deck-data` |
+| Setup | Enable Docker automatically | Choose the modules you need |
+
+Use [Nodvard Deck](https://github.com/nodvard/deck) if you want additional modules.
+Keep a separate data volume for each installation. This guide does not assume a shared volume or automatic
+data migration when switching editions.
+
 ## Security and privacy at a glance
 
-- **No telemetry:** Nodvard Dock sends no usage or crash data anywhere.
-- **The only thing that goes out on its own** is the update search: once a day Nodvard Dock asks GitHub for a new
-  version, and GitHub sees your IP address and the time (can be turned off under Einstellungen → System → Updates).
-  Everything else only goes where you set it up: your servers over SSH and the registries and Git repositories you
-  enter. If you turn on the search for new images (off by default), your Docker servers ask the registries of their
-  containers. Nodvard Dock contacts a Git repository only when you trigger it.
+- **No telemetry by default:** Nodvard Dock sends no usage or crash data by default.
+- **By default, the only automatic outgoing connection** is the update search: once a day Nodvard Dock asks `ghcr.io` for a new
+  version, and the registry sees your IP address and the time (can be turned off under Einstellungen → System → Updates).
+  Other connections go to the configured servers over SSH, registries and Git repositories. If you turn on image
+  checks (off by default), your Docker servers contact their containers' registries. The optional scheduled Git check
+  is also off by default; it reports new commits and does not apply them. Without a schedule, Dock contacts the Git
+  repository when you click.
 - **No Docker socket in the container:** whoever has the socket is root on the machine, and that would be anyone who
   gets into the interface. So Nodvard Dock works over SSH with a user of its own.
 - **The `docker` group is as good as root:** whoever controls Docker can mount any folder of the machine into a
@@ -169,7 +198,7 @@ paths also where the data is.
   back during setup with "Volle sudo-Regel entfernen" (remove the full sudo rule) under "Erweitert" (advanced).
   "Verbindung prüfen" (check connection) shows this, as well as a login as `root`. `sudo gpasswd -d <user> docker`
   takes the login out of the group; the rest is in
-  [first setup, section 6](../../docs/en/FIRST-SETUP.md#6-root-rights-without-a-password-and-the-docker-group).
+  [guide to root rights](../../docs/en/ROOT-RIGHTS.md#switching-docker-to-operate-only).
 - **Keys in the vault:** the SSH keys are stored encrypted in Nodvard Dock. Whoever can use Nodvard Dock can control
   your servers. So: a strong password, two-factor on, and do not expose Nodvard Dock to the internet. Behind a
   reverse proxy with HTTPS: [docs/en/REVERSE-PROXY.md](../../docs/en/REVERSE-PROXY.md).
@@ -181,14 +210,36 @@ paths also where the data is.
 
 Please do **not** report security issues publicly; see [SECURITY.md](SECURITY.md).
 
-## Backing up and removing
+## Updating Dock
+
+Before updating, download a Dock backup and read the release notes. In the folder containing `compose.yml`:
+
+```bash
+docker compose pull
+docker compose up -d
+docker compose ps
+docker compose logs --tail=100 nodvard-dock
+```
+
+Short form: `docker compose pull && docker compose up -d`. The data volume `nodvard-dock-data` is preserved.
+Einstellungen → System → Updates (Settings → System → Updates) shows available Dock versions. Dock uses neither the
+Deck update helper nor `scripts/deploy_pi.sh`. A container image alone does not undo a database migration; keep
+the backup and its matching image version for recovery.
+Updating your applications is covered separately: [Image updates](../../docs/en/dock/image-updates.md).
+
+## Backup and restore
 
 - **Back up Nodvard Dock itself** under **Einstellungen → System → Sicherung** (Settings → System → Backup):
   encrypted, on a schedule if you like, and as a download. It holds accounts, settings, the vault with the SSH keys
   and the list of adopted stacks. For a folder outside the data volume (another drive, a NAS), uncomment the line
   `- ./sicherungen:/backups` in `compose.yml`; what else is needed is written there.
 - **Restore** under **Einstellungen → System → Wiederherstellen** (Settings → System → Restore), or on a fresh
-  installation in the first step of the setup assistant with **Oder: Sicherung einspielen** (or: restore a backup).
+  installation in the first step of the setup assistant with **Sicherung einspielen** (restore a backup).
+- **Verify recovery:** keep the backup file and its backup password or recovery key outside the Dock volume.
+  A download encrypted with a one-time password requires that exact password. After restoring,
+  sign in with the restored account, check host connections and the stack list. Dock backups do not contain
+  application data from Docker hosts; back up their volumes and bind mounts separately. Details on encrypted
+  backups: [Backup guide](../../docs/en/BACKUP.md).
 - **The volume backups taken before a stack update** are kept on the server in question, in the home folder of the
   Nodvard Dock user (default `nodvard`) under `nodvard-sicherungen/<stack>/<time>/`, one `.tar.gz` per volume. Apart
   from root, only that user can read them. Nodvard Dock does not delete them on its own; plan the space for them.
@@ -197,15 +248,35 @@ Please do **not** report security issues publicly; see [SECURITY.md](SECURITY.md
   first. Your containers, stacks and volumes on the servers stay as they are either way. The user Nodvard Dock created
   on the servers is yours to remove there if you no longer need it.
 
+## Limits
+
+- Beta, interface currently in German only; no server modules or free module selection in Dock.
+- Every Docker host needs SSH and Docker Compose for stacks. The `docker-bedienen` tag allows only viewing,
+  logs, start, stop and restart, without stacks, image updates or the console.
+- Git supports HTTPS with a branch or tag, without SSH Git URLs, submodules or Git LFS files.
+  The optional check reports new commits; applying them needs your action and approval.
+- An image rollback or Git rollback does not restore application data. Automatic image rollback is excluded
+  for detected databases and data stores and does not replace a backup.
+- The `docker` group grants extensive host privileges. Dock backups and application backups are separate tasks.
+- The image check compares the digest under the same tag and does not look for higher version tags. Automatic
+  rollback does not apply to a bare `unhealthy` status or to detected databases and data stores such as Redis or MinIO.
+- Bind mounts, that is data in host folders, are not included in the volume backup before a stack update.
+- Logs load at most 5000 lines, and the search covers only those. The Compose editor history keeps up to 20 older
+  versions per stack.
+
+Further reading: [Stacks from Git](../../docs/en/dock/stacks-from-git.md), [Image updates](../../docs/en/dock/image-updates.md),
+[Templates](../../docs/en/dock/templates.md), [Troubleshooting](../../docs/en/dock/troubleshooting.md).
+
 ## Build it yourself
 
 In a clone of [nodvard/deck](https://github.com/nodvard/deck), preferably on a PC (on a Raspberry Pi the build takes
 very long):
 
 ```bash
-docker build -f deploy/Dockerfile --build-arg NODVARD_DECK_EXTENSIONS=docker -t nodvard-dock:selbst .
+docker build -f deploy/Dockerfile --build-arg NODVARD_DECK_EXTENSIONS=docker --build-arg EDITION=dock -t nodvard-dock:selbst .
 ```
 
+`EDITION=dock` sets the edition, `NODVARD_DECK_EXTENSIONS=docker` the module selection.
 Then change the `image:` line in `compose.yml` to `nodvard-dock:selbst` and run `docker compose up -d`.
 
 ## Source code and bugs
@@ -215,11 +286,23 @@ Then change the `image:` line in `compose.yml` to `nodvard-dock:selbst` and run 
 - **Bugs and ideas:** please open an issue in [nodvard/dock](https://github.com/nodvard/dock/issues).
 - **More about Nodvard:** [nodvard.com](https://nodvard.com)
 
+## Contributing
+
+Report bugs, feature requests and unclear documentation using the [issue templates](https://github.com/nodvard/dock/issues).
+Include the version, your installation method and steps to reproduce.
+External pull requests or patches are not accepted. Describe suggestions in words in an issue.
+Private modifications and builds are allowed under the PolyForm Noncommercial License terms.
+See [CONTRIBUTING.md](../../CONTRIBUTING.md) for the policy.
+
+## Support
+
+For setup questions and community discussion, visit the help forum on
+[Discord](https://discord.gg/gTTs7qMabt). More about Nodvard: [nodvard.com](https://nodvard.com).
+
 ## License
 
 Same as Nodvard Deck: **PolyForm Noncommercial License 1.0.0**, see [LICENSE](../../LICENSE). In short (only the
 license text is binding): free for personal and other non-commercial use. Companies and paid services need separate
-permission. Inquiries: **kontakt@nodvard.com**. The source code is open to read, but Nodvard Dock is not open source
-software in the strict sense.
+permission. Inquiries: **kontakt@nodvard.com**. The source code is available to read.
 
 Docker and Portainer are trademarks of their respective owners. Nodvard Dock is not affiliated with them.

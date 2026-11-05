@@ -66,7 +66,7 @@ def test_only_the_helper_rule_is_written_and_an_old_full_rule_stays(tmp_path):
     done = _run(_narrow(helper_dir, DOCKER, SHIELD), bin_dir)
     assert done.returncode == 0, done.stdout + done.stderr
     assert sorted(p.name for p in captured.iterdir()) == ["nodvard_docker_deck", "nodvard_shield_deck"]
-    assert (captured / "nodvard_docker_deck").read_text() == f"deck ALL=(root) NOPASSWD: {helper_dir}/docker-root\n"
+    assert (captured / "nodvard_docker_deck").read_text() == host_setup.helper_rule("deck", DOCKER, str(helper_dir))
     calls = log.read_text()
     assert "/etc/sudoers.d/nodvard-deck" not in calls and "/etc/sudoers.d/lattice-deck" not in calls, "eine vorhandene volle Regel bleibt"
     assert host_setup.setup_messages(done.stdout) == [
@@ -504,6 +504,6 @@ def test_setup_record_knows_only_the_helper_rules():
     record = host_setup.setup_record(
         USER, host_setup.setup_report(out, user=USER), sudo=True, helpers=[DOCKER], full_sudo=False,
     )
-    rule = f"{USER} ALL=(root) NOPASSWD: {host_setup.ROOT_HELPER_DIR}/docker-root\n"
+    rule = f"{USER} ALL=(root) NOPASSWD: sha256:{DOCKER.sha256} {host_setup.ROOT_HELPER_DIR}/docker-root\n"
     assert record["sudoers"] == {"/etc/sudoers.d/nodvard_docker_deck": hashlib.sha256(rule.encode()).hexdigest()}
     assert record["legacy_sudoers"] == {}

@@ -2,6 +2,7 @@
  * Darstellung: das Theme gilt je Konto; Name, Logo, Anmeldeseite und Akzentfarbe gelten für alle und brauchen
  * `branding.write`. Branding-Änderungen sind sofort als Vorschau zu sehen; ohne Speichern gilt beim Verlassen wieder das alte.
  */
+import { styleRef } from "../../../../extensions/_shared/frontend/src/csp";
 import { Check, ImageUp, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -12,6 +13,7 @@ import { THEMES, applyTheme, currentTheme, type ThemeId } from "../../lib/theme"
 import { useAuthStore } from "../../state/auth";
 import { useBrandingStore } from "../../state/branding";
 import { Button, Card, Field, NoticeLine, PageHeader, errorText, inputClass, type Notice } from "./ui";
+import { productText } from "../../state/edition";
 
 const LOGO_CONTENT_TYPES = ["image/png", "image/jpeg", "image/svg+xml", "image/webp"];
 const FAVICON_CONTENT_TYPES = ["image/png", "image/x-icon", "image/vnd.microsoft.icon", "image/svg+xml"];
@@ -23,7 +25,7 @@ function ForeignImageHint({ what, url, className }: { what: string; url: string;
   return (
     <p role="status" className={`text-amber-200 ${className}`}>
       {what} liegt auf einer fremden Adresse (<span className="break-all">{shown}</span>) und wird nicht mehr geladen,
-      weil Deck Bilder nur noch vom eigenen Server lädt. Bitte als Datei hochladen.
+      weil {productText("Deck")} Bilder nur noch vom eigenen Server lädt. Bitte als Datei hochladen.
     </p>
   );
 }
@@ -49,7 +51,7 @@ export function AppearanceSettings(): JSX.Element {
   const canBrand = useAuthStore((s) => s.hasPermission("branding.write"));
   return (
     <div>
-      <PageHeader title="Darstellung" description="Wie Nodvard Deck aussieht: dein Theme und, für Admins, das Branding für alle." />
+      <PageHeader title="Darstellung" description={productText("Wie Nodvard Deck aussieht: dein Theme und, für Admins, das Branding für alle.")} />
       <ThemeCard />
       {canBrand && <BrandingSettings />}
       {canBrand && <CustomCssCard />}
@@ -88,11 +90,11 @@ function ThemeCard(): JSX.Element {
               onClick={() => void choose(theme.id)}
               className={`rounded-lg border p-2 text-left transition ${active ? "border-[var(--color-accent)]" : "border-white/10 hover:border-white/25"}`}
             >
-              <span aria-hidden className="flex h-16 gap-1.5 overflow-hidden rounded-md border border-white/10 p-1.5" style={{ background }}>
-                <span className="w-1/4 rounded-sm" style={{ background: panel }} />
+              <span aria-hidden className="flex h-16 gap-1.5 overflow-hidden rounded-md border border-white/10 p-1.5" ref={styleRef({ background })}>
+                <span className="w-1/4 rounded-sm" ref={styleRef({ background: panel })} />
                 <span className="flex flex-1 flex-col gap-1.5">
-                  <span className="h-2 w-1/2 rounded-sm" style={{ background: accent }} />
-                  <span className="flex-1 rounded-sm" style={{ background: panel }} />
+                  <span className="h-2 w-1/2 rounded-sm" ref={styleRef({ background: accent })} />
+                  <span className="flex-1 rounded-sm" ref={styleRef({ background: panel })} />
                 </span>
               </span>
               <span className="mt-2 flex items-center gap-1.5 text-sm font-medium">
@@ -349,7 +351,7 @@ function BrandingSettings(): JSX.Element {
                 <span
                   aria-hidden
                   className="h-5 w-5 flex-none rounded-md border border-white/10"
-                  style={{ background: preset.accent === DEFAULT_ACCENT ? "var(--color-accent)" : preset.accent }}
+                  ref={styleRef({ background: preset.accent === DEFAULT_ACCENT ? "var(--color-accent)" : preset.accent })}
                 />
                 {preset.name}
               </button>

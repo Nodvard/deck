@@ -1,13 +1,13 @@
 /**
  * "Widgets verwalten": neben der automatischen Platzierung
- * (`appendMissingWidgets()` in DashboardPage.tsx, laeuft beim Aktivieren einer
+ * (`appendMissingWidgets()` in DashboardPage.tsx, läuft beim Aktivieren einer
  * Extension) der Weg, ein Widget manuell zu entfernen oder ein zuvor entferntes
- * wieder hinzuzufuegen, ohne die Extension selbst zu deaktivieren. Dieser Dialog
- * macht `DashboardLayoutItem[]` direkt bearbeitbar: ein Haekchen pro bekanntem Widget (`GET /widgets`-Katalog),
- * "aktiv" heisst "steht aktuell im gespeicherten Layout".
+ * wieder hinzuzufügen, ohne die Extension selbst zu deaktivieren. Dieser Dialog
+ * macht `DashboardLayoutItem[]` direkt bearbeitbar: ein Häkchen pro bekanntem Widget (`GET /widgets`-Katalog),
+ * "aktiv" heißt "steht aktuell im gespeicherten Layout".
  *
- * Platzierung beim Hinzufuegen folgt derselben simplen Zeilen-Logik wie
- * `appendMissingWidgets()` (an die naechste freie Zeile anhaengen) --
+ * Platzierung beim Hinzufügen folgt derselben simplen Zeilen-Logik wie
+ * `appendMissingWidgets()` (an die nächste freie Zeile anhängen) --
  * bewusst keine gemeinsame Funktion daraus gemacht, um DashboardPage.tsx's
  * Auto-Platzierungs-Effekt nicht an eine UI-Komponente zu koppeln.
  */
@@ -47,8 +47,8 @@ export function WidgetPickerDialog({ widgets, items, onChange, open, onOpenChang
   function toggle(widget: WidgetOut, placed: boolean) {
     const key = itemKey({ ext_id: widget.ext_id, widget_id: widget.id });
     if (placed) {
-      // Ausblenden statt loeschen (sonst kaemen entfernte Widgets beim
-      // naechsten Laden zurueck, weil die Auto-Platzierung sie fuer neu hielt).
+      // Ausblenden statt löschen (sonst kämen entfernte Widgets beim
+      // nächsten Laden zurück, weil die Auto-Platzierung sie für neu hielt).
       onChange(items.map((i) => (itemKey(i) === key ? { ...i, config: { ...i.config, hidden: true } } : i)));
       return;
     }

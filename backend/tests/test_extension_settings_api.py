@@ -526,8 +526,8 @@ async def test_valid_schedules_empty_and_null_still_save(client, db_session, sch
 
 @pytest.mark.asyncio
 async def test_every_schedule_field_of_the_shipped_extensions_is_checked(client, db_session):
-    """Gegen die echten Schemas: jede der sechs Shield-Einstellungen mit Zeitplan und die der
-    Docker-Modul lehnt einen ungueltigen Wert ab."""
+    """Gegen die echten Schemas: jede der sechs Shield-Einstellungen mit Zeitplan und die beiden des
+    Docker-Moduls lehnen einen ungültigen Wert ab."""
     import json
     from pathlib import Path
 
@@ -552,7 +552,7 @@ async def test_every_schedule_field_of_the_shipped_extensions_is_checked(client,
     finally:
         runtime.discovered.pop("shield", None)
         runtime.discovered.pop("docker", None)
-    assert found == 7  # sechs bei Shield, eine beim Docker-Modul
+    assert found == 8  # sechs bei Shield, zwei beim Docker-Modul
 
 
 NUMBER_SCHEMA = {

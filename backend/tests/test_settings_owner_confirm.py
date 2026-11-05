@@ -1,7 +1,8 @@
-"""Selbstständigkeit (`autonomy.mode`, `autonomy.max_risk`) und die Regel für neue Server-Schlüssel
-(`ssh.confirm_new_host_keys`) ändert nur der Inhaber, mit seinem Passwort und, wenn Zwei-Faktor an ist, dem Code aus der
-App. Eine gestohlene Sitzung allein reicht nicht, die eines Admins auch mit Passwort nicht. `PUT /settings/autonomy` setzt
-Modus und Risikostufe mit einer Bestätigung (ein Code gilt nur einmal)."""
+"""Selbstständigkeit (`autonomy.mode`, `autonomy.max_risk`), die Regel für neue Server-Schlüssel
+(`ssh.confirm_new_host_keys`) und das Einspielen von Sicherheitsupdates ändert nur der Inhaber, mit seinem Passwort
+und, wenn Zwei-Faktor an ist, dem Code aus der App. Eine gestohlene Sitzung allein reicht nicht, die eines Admins
+auch mit Passwort nicht. `PUT /settings/autonomy` setzt Modus und Risikostufe mit einer Bestätigung (ein Code gilt
+nur einmal)."""
 
 from __future__ import annotations
 
@@ -16,7 +17,10 @@ from totp_helpers import setup_confirm_code
 
 OWNER_PW = "correct-horse-battery"
 ADMIN_PW = "admin-passwort-123"
-PROTECTED = [("autonomy.mode", "full"), ("autonomy.max_risk", "high"), ("ssh.confirm_new_host_keys", False)]
+PROTECTED = [
+    ("autonomy.mode", "full"), ("autonomy.max_risk", "high"), ("ssh.confirm_new_host_keys", False),
+    ("system.update_check.auto_security", True),
+]
 
 
 def _h(token: str) -> dict:
@@ -149,6 +153,20 @@ async def test_with_two_factor_the_code_from_the_app_is_needed_too(client, clock
     assert again.status_code == 400, again.text
     assert again.json()["code"] == "totp_used"
     assert (await _values(client, owner))["autonomy.mode"] == "propose"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("key", "value"), PROTECTED)
+async def test_each_one_needs_the_code_with_two_factor(client, clock, host_keys_from_settings, key, value):
+    owner = await _owner(client)
+    secret = await _enable_totp(client, owner)
+    body = {"value": value, "current_password": OWNER_PW}
+    missing = await client.put(f"/api/v1/settings/{key}", json=body, headers=_h(owner))
+    assert missing.status_code == 403 and missing.json()["code"] == "totp_missing", missing.text
+    body["totp_code"] = pyotp.TOTP(secret).at(clock[0])
+    ok = await client.put(f"/api/v1/settings/{key}", json=body, headers=_h(owner))
+    assert ok.status_code == 200, ok.text
+    assert (await _values(client, owner))[key] == value
 
 
 @pytest.mark.asyncio

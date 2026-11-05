@@ -122,3 +122,10 @@ describe("Registries", () => {
     expect(await screen.findByRole("button", { name: /Erneut versuchen/ })).toBeInTheDocument();
   });
 });
+
+it("Dock erklärt den Speicherort der Registry-Anmeldung", async () => {
+  window.__nodvardDeck.getProductName = () => "Nodvard Dock";
+  serve();
+  render(<RegistryList hostId="h1" />);
+  expect(await screen.findByText(/Zugangs von Nodvard Dock/)).toBeInTheDocument();
+});

@@ -511,6 +511,9 @@ describe("ContainersPage -- Container-Verwaltung", () => {
     expect(storage.textContent).toContain("Build-Cache (0/388 aktiv)");
     expect(storage.textContent).toContain("8.5 GB frei machbar");
     expect(storage.textContent).toContain("ohne Namen (bbb222)");
+    const cells = within(within(storage).getByTestId("storage-images-h1")).getAllByRole("cell");
+    expect(cells.map((c) => c.getAttribute("data-label"))).toEqual([null, "Größe", "Erstellt", "Genutzt"]);
+    expect(cells[0].closest("tr")).toHaveClass("rounded-lg", "sm:table-row");
 
     fireEvent.click(within(storage).getByRole("button", { name: "Build-Cache leeren" }));
     await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Build-Cache leeren: Freigegeben: 9.113GB"));
@@ -925,6 +928,13 @@ describe("ContainersPage -- Image-Update einspielen", () => {
     expect(screen.getByRole("button", { name: "Einspielen" })).toBeInTheDocument();
   });
 
+  it("Dock erklärt den automatischen Rückweg mit seinem Namen", async () => {
+    await open({ data: { "h1:nginx": UPDATE }, plan: { ...PLAN, auto_rollback: true } });
+    window.__nodvardDeck.getProductName = () => "Nodvard Dock";
+    fireEvent.click(screen.getByRole("button", { name: "Einspielen" }));
+    expect(await screen.findByText(/geht Nodvard Dock in der/)).toBeInTheDocument();
+  });
+
   it("mit automatischem Rückweg steht das in der Übersicht", async () => {
     await open({ data: { "h1:nginx": UPDATE }, plan: { ...PLAN, auto_rollback: true } });
     fireEvent.click(screen.getByRole("button", { name: "Einspielen" }));
@@ -1214,4 +1224,11 @@ describe("statusText (Docker-Status auf Deutsch)", () => {
     expect(statusText("")).toBe("");
     expect(statusText(null)).toBe("");
   });
+});
+
+it("Dock kennzeichnet seinen eigenen Container", async () => {
+  window.__nodvardDeck.getProductName = () => "Nodvard Dock";
+  vi.stubGlobal("fetch", mockFetch());
+  render(<ContainersPage />);
+  expect(await screen.findByText("Nodvard Dock")).toBeInTheDocument();
 });

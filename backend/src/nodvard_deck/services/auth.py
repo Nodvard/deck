@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm.attributes import set_committed_value
 
+from .. import edition
 from ..config import Settings
 from ..core import login_limit, security, setup_code, vault
 from ..core.rbac import BUILTIN_ROLES, has_permission
@@ -517,7 +518,7 @@ async def prepare_setup_code(session: AsyncSession, settings: Settings) -> str |
     code, _created = setup_code.ensure(settings.data_dir, settings.setup_code)
     # `print` statt Logging: Der Code muss sichtbar sein, auch wenn niemand Logging konfiguriert hat (uvicorn tut das
     # nur für seine eigenen Logger).
-    print(setup_code.banner(code), flush=True)
+    print(setup_code.banner(code, edition.of(settings).product_name), flush=True)
     return code
 
 
@@ -536,7 +537,7 @@ async def verify_setup_code(
     # dann, denn der Anrufer kennt ihn nicht.
     created_code, created = setup_code.ensure(settings.data_dir, settings.setup_code)
     if created:
-        print(setup_code.banner(created_code), flush=True)
+        print(setup_code.banner(created_code, edition.of(settings).product_name), flush=True)
     if not setup_code.verify(settings.data_dir, code, settings.setup_code):
         who = ip or "unbekannt"
         await audit_service.log(
@@ -910,7 +911,7 @@ async def _report_password_guessing(user_id: str) -> None:
                     f"anderen Netzen kommst du weiter sofort hinein. {advice}"
                 ),
                 severity="warning",
-                payload={"path": "/settings/account", "tags": ["warning", "key"]},
+                payload={"notification_type": "account.password_attempts", "path": "/settings/account", "tags": ["warning", "key"]},
             )
     except Exception:  # noqa: BLE001 - nach der Antwort wartet niemand mehr auf den Fehler
         _log.warning("Meldung zum Durchprobieren des Passworts nicht zugestellt", exc_info=True)
@@ -931,7 +932,7 @@ async def _report_mfa_guessing(session: AsyncSession, user: User) -> None:
                 "für ein Update) gehen erst wieder, wenn die Sperre vorbei ist."
             ),
             severity="warning",
-            payload={"path": "/settings/account", "tags": ["warning", "key"]},
+            payload={"notification_type": "account.totp_attempts", "path": "/settings/account", "tags": ["warning", "key"]},
         )
     except Exception:  # noqa: BLE001 - die Antwort an den Anrufer geht vor
         _log.warning("Meldung zum Durchprobieren des 2FA-Codes nicht zugestellt", exc_info=True)
@@ -1019,7 +1020,7 @@ async def report_recovery_use(
                 f"Warst du das nicht, {advice}."
             ),
             severity="warning",
-            payload={"path": "/settings/account", "tags": ["warning", "key"]},
+            payload={"notification_type": "account.recovery_used", "path": "/settings/account", "tags": ["warning", "key"]},
         )
     except Exception:  # noqa: BLE001 - die Aktion selbst ist längst gelungen
         _log.warning("Meldung zum Wiederherstellungs-Code nicht zugestellt", exc_info=True)
@@ -1030,9 +1031,6 @@ async def refresh_access_token(
 ) -> IssuedTokens:
     """Rotation: Der eingelöste Refresh-Token wird sofort widerrufen und ein neuer ausgegeben, ein zweiter
     Einlösungsversuch scheitert."""
-    # Vertrag für `refresh_with_candidates`: Hier gibt es keine Erkennung von Wiederverwendung mit Widerruf der ganzen
-    # Kette, und ein ungültiger Token löst `InvalidCredentials` aus, bevor etwas geschrieben wurde. Wer das ändert, muss
-    # `refresh_with_candidates` mitändern (sonst beendet ein veralteter Cookie-Wert die Sitzung im anderen).
     token_hash = security.hash_opaque_token(raw_refresh_token)
     result = await session.execute(
         select(RefreshToken).where(RefreshToken.token_hash == token_hash)
@@ -1082,24 +1080,6 @@ async def refresh_access_token(
         .execution_options(synchronize_session=False)
     )
     return tokens
-
-
-async def refresh_with_candidates(
-    session: AsyncSession, settings: Settings, *, raw_refresh_tokens: Sequence[str]
-) -> IssuedTokens:
-    """Wie `refresh_access_token`, aber mit mehreren möglichen Werten, nacheinander versucht; der erste Erfolg
-    gilt."""
-    # Gebraucht, solange der alte und der neue Cookie-Name im Browser nebeneinander stehen; nach einem Rollback aufs
-    # alte Image kann der eine veraltet sein, der andere aktuell. Das schwächt die Erkennung von Wiederverwendung nicht:
-    # Ein Fehlversuch ändert nichts in der Datenbank, und pro Aufruf wird nie mehr als ein Wert eingelöst.
-    first_error: InvalidCredentials | None = None
-    for raw in raw_refresh_tokens:
-        try:
-            return await refresh_access_token(session, settings, raw_refresh_token=raw)
-        except InvalidCredentials as exc:
-            if first_error is None:
-                first_error = exc
-    raise first_error or InvalidCredentials("Refresh-Token ungültig, widerrufen oder abgelaufen.")
 
 
 async def _grace_tokens(
@@ -1355,7 +1335,7 @@ async def start_totp_setup(
     await session.flush()
 
     otpauth_uri = pyotp.TOTP(raw_secret).provisioning_uri(
-        name=user.username, issuer_name="Nodvard Deck"
+        name=user.username, issuer_name=edition.of(settings).product_name
     )
     return raw_secret, otpauth_uri
 

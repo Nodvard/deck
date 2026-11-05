@@ -121,6 +121,24 @@ describe("DocumentsPage", () => {
     );
   });
 
+  it("„+ Tag“ in der Zeile öffnet die Details und setzt den Fokus auf die Tag-Auswahl", async () => {
+    const untagged = { ...DOCUMENTS[0], id: "doc-2", original_filename: "garantie-scan.jpg", tags: [] };
+    vi.stubGlobal("fetch", mockFetch({ documents: [DOCUMENTS[0], untagged] }));
+    render(<DocumentsPage />);
+
+    await screen.findByText("garantie-scan.jpg");
+    // Hat ein Dokument schon alle Tags, gibt es nichts zu wählen.
+    expect(screen.queryByRole("button", { name: "+ Tag für stromrechnung.pdf" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "+ Tag für garantie-scan.jpg" }));
+    const select = await screen.findByRole("combobox", { name: "Tag zu garantie-scan.jpg hinzufügen" });
+    await waitFor(() => expect(select).toHaveFocus());
+
+    // Ist die Zeile schon offen, springt der Fokus trotzdem wieder hin.
+    select.blur();
+    fireEvent.click(screen.getByRole("button", { name: "+ Tag für garantie-scan.jpg" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Tag zu garantie-scan.jpg hinzufügen" })).toHaveFocus());
+  });
+
   it("entfernt einen Tag von einem Dokument", async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal("fetch", fetchMock);

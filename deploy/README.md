@@ -147,23 +147,17 @@ Was das Skript tut:
    Rollback; bitte auf dem Pi nachsehen (`docker ps -a`, `cat pi_switch.out`, `bash pi_switch.sh verify`):
    - **vorab prüfen, ohne etwas zu ändern** (sonst Abbruch mit Exit 3, `DEPLOY-FAIL`, kein
      Rollback nötig): Docker erreichbar (`docker info`), das Image vorhanden,
-     `docker compose -p deploy config -q` läuft durch (zu alte Compose-Version fällt hier auf);
-   - das bisherige `nodvard-deck:latest` als `nodvard-deck:previous` sichern; gibt es das noch
-     nicht (**erster Übergang** vom alten Namen), wird das alte `lattice:latest` zu
-     `nodvard-deck:previous`;
-   - gab es `nodvard-deck:latest` schon vorher und liegt ein **gestoppter** `deploy-lattice-1` herum
-     (früherer Übergang, Aufräumen war gescheitert), wird er entfernt: Er wäre beim nächsten
-     Rollback ein uraltes Image;
+     `docker compose -p deploy config -q` läuft durch (zu alte Compose-Version fällt hier auf), und es gibt keinen
+     Container `deploy-lattice-1` mehr (siehe [Stand von vor 0.6](#stand-von-vor-06));
+   - das bisherige `nodvard-deck:latest` als `nodvard-deck:previous` sichern;
    - das neue Image als `nodvard-deck:latest` taggen;
-   - den alten Container `deploy-lattice-1` (Dienst `lattice` vor der Umbenennung) nur
-     **stoppen, nicht löschen** – er belegt sonst Port 8080, bleibt aber als Rückweg erhalten;
    - `docker compose -p deploy up -d --no-build` (Projekt immer fest `deploy`; kein
      `--remove-orphans`, das wirkt auf das ganze Projekt);
    - prüfen (`verify`): `deploy-nodvard-deck-1` hat den Status `running` (keine
      Neustart-Schleife), trägt das Image von `nodvard-deck:latest` und hat unter `/app/data` das
-     Volume `deploy_lattice_data` (ein anderes wäre leer); der alte Container läuft nicht mehr.
+     Volume `deploy_lattice_data` (ein anderes wäre leer).
 6. Bis zu 4 Minuten auf `"status":"ok"` von `/api/v1/health` warten, dann `verify` noch einmal
-   („gesund“ allein könnte ein alter Container sein), dann den **Datencheck**: War der Dienst
+   („gesund“ allein beweist nicht, dass das neue Image läuft), dann den **Datencheck**: War der Dienst
    vorher eingerichtet, muss `/api/v1/auth/bootstrap` weiter `"needed":false` liefern (sonst sind
    die Daten weg). Dann der **Erweiterungen-Vergleich**: Jede Erweiterung, die vorher geladen war, muss im neuen
    Container wieder geladen sein (neue dazu sind in Ordnung). Das Skript wartet dafür bis zu 30 Sekunden auf die Zeile des
@@ -174,10 +168,8 @@ Was das Skript tut:
    diese Log-Prüfung selbst (Verbindung weg), ist der Zustand unklar: `DEPLOY-FAIL`, ebenfalls ohne automatischen
    Rollback.
 7. Scheitert einer der Schritte, wird **automatisch zurückgeschaltet** (`pi_switch.sh rollback`):
-   Beim ersten Übergang wird der neue Container entfernt und der alte mit `docker start`
-   wieder gestartet (ohne Compose), aber nur, wenn sein Image dasselbe ist wie
-   `nodvard-deck:previous`; sonst, und bei späteren Deploys, läuft `nodvard-deck:previous` per Compose.
-   Danach wartet das Skript, bis `/api/v1/health` wieder antwortet. Klappt das nicht, steht
+   `nodvard-deck:previous` wird wieder `nodvard-deck:latest` und läuft per Compose. Ist die neue Compose-Datei selbst
+   falsch (etwa ein anderes Volume), gilt sie auch für den Rückweg: Dann steht `ROLLBACK-FAIL` da. Danach wartet das Skript, bis `/api/v1/health` wieder antwortet. Klappt das nicht, steht
    **`ROLLBACK-FAIL`** in der Ausgabe (Dienst vermutlich aus), sonst `DEPLOY-FAIL: Rollback
    ausgeführt`. Gibt es nichts zum Zurückschalten (frische Maschine), steht das ehrlich dort.
 
@@ -194,18 +186,14 @@ Was das Skript tut:
    Änderungen seit dem Update gehen dabei verloren. Das klappt nur, wenn die alte Version
    (`nodvard-deck:previous`) die Notseite schon kennt. Sonst die neue Version laufen lassen und den
    Fehler dort beheben. Bei falschem Volume
-   oder falschem Image wird weiter automatisch zurückgeschaltet, dann sind die alten Daten unberührt.
-8. Erst wenn alles gestimmt hat, räumt `pi_switch.sh cleanup` auf: den alten Container
-   `deploy-lattice-1` löschen, alte `nodvard-deck:pi-*`-Tags (außer den Ständen hinter
-   `latest`/`previous`) und die alten `lattice:*`-Images. Die `lattice:*`-Images bleiben, solange
-   `nodvard-deck:previous` noch derselbe Stand wie `lattice:latest` ist, also bis zum zweiten
-   Deploy; im Zweifel bleiben sie stehen. Danach `docker image prune -f`. Das Volume wird nie
-   angefasst.
+   oder falschem Image versucht das Skript weiter den automatischen Rückweg; die alten Daten bleiben dabei unberührt.
+8. Erst wenn alles gestimmt hat, räumt `pi_switch.sh cleanup` auf: alte `nodvard-deck:pi-*`-Tags (außer den Ständen
+   hinter `latest`/`previous`). Danach `docker image prune -f`. Das Volume wird nie angefasst. Images von vor 0.6
+   (`lattice:*`) lässt es liegen; die lassen sich mit `docker rmi` von Hand löschen.
 
-Solange noch nicht aufgeräumt ist (oder wenn Docker/ssh mittendrin abbricht), belegt der alte
-Stand auf dem Pi ein paar hundert MB: Die alten `lattice:*`-Images und der gestoppte Container
-kosten Platz (ein Image pro Stand), sie verschwinden mit dem zweiten erfolgreichen Deploy
-bzw. per `bash pi_switch.sh cleanup`.
+Solange noch nicht aufgeräumt ist (oder wenn Docker/ssh mittendrin abbricht), liegen alte `nodvard-deck:pi-*`-Images
+auf dem Pi (ein paar hundert MB je Stand). Sie verschwinden mit dem nächsten erfolgreichen Deploy oder per
+`bash pi_switch.sh cleanup`.
 
 **Was bewusst gleich bleibt:** Das Volume heißt weiter `deploy_lattice_data` (in der
 Compose-Datei fest mit `name: deploy_lattice_data` eingetragen, Compose-Projekt fest `name: deploy`,
@@ -215,10 +203,16 @@ von `DEPLOY_ROOT` ist `lattice-deploy-test` (ein Name aus der Zeit vor der Umben
 ein Vorgabewert, frei wählbar). Dort liegt auch die `.env`. Den Dienst nicht mit
 `container_name:`/`hostname:` festnageln: das Dashboard erkennt sich an Hostname = Container-ID.
 
-**Umbenennung und Migration nicht im selben Deploy.** Der Rollback setzt nur das Image zurück,
-Migrationen bleiben. Ein Stand mit neuer Migration lässt sich daher nicht mehr auf das alte
-Image zurückschalten. Wer von einem Stand vor der Umbenennung (`lattice:*`) kommt, liefert
-deshalb zuerst die Umbenennung allein aus und die Migration danach (vorher sichern).
+<a id="stand-von-vor-06"></a>**Stand von vor 0.6.** Vor Version 0.6 hieß der Container `deploy-lattice-1` (Image `lattice:latest`). Den Umstieg davon
+kann seit 0.12 nur noch Version 0.11 ausliefern. `scripts/deploy_pi.sh` prüft das, bevor es etwas auf den Pi überträgt;
+`pi_switch.sh`, `backup.sh` und `restore.sh` brechen ebenso ab, solange dieser Container läuft oder `nodvard-deck:latest`
+fehlt, und ändern nichts. Der Weg: erst von Hand sichern (Befehl unter [Backup / Restore](#backup--restore)), dann mit
+dem Stand von 0.11 ausliefern (`git checkout v0.11.1`, `scripts/deploy_pi.sh`), danach zurück auf `main` und diese
+Version ausliefern. Liegt nur noch ein gestoppter `deploy-lattice-1` neben `nodvard-deck:latest` (der Umstieg ist schon
+gelungen), stört er beim Sichern und Einspielen nicht; vor dem nächsten Deploy reicht `docker rm deploy-lattice-1`.
+
+**Migration und Rückweg.** Der Rollback setzt nur das Image zurück, Migrationen bleiben. Ein Stand mit neuer Migration
+lässt sich daher nicht mehr auf das alte Image zurückschalten; vorher `deploy/backup.sh` laufen lassen.
 
 Vorher gehört die komplette Test-Suite grün (siehe [README.md, Entwicklung](../README.md#entwicklung), ~6 Min) – das Skript
 prüft das bewusst nicht selbst. `scripts/deploy_pi.sh --no-build` liefert das zuletzt
@@ -242,11 +236,12 @@ des Hosts, eine Vorgabe gibt es nicht (früher: Cloudflare 1.1.1.1/1.0.0.1). Wer
 öffentlichen Resolver will, trägt ihn genauso ein. Braucht er einen lokalen Resolver (z. B. einen
 Pi-hole, der interne Namen wie `cloud.home.example` auflöst), setzt man
 `NODVARD_DECK_DNS_1` (und optional `NODVARD_DECK_DNS_2`) in `deploy/.env.deploy`. Die
-alten Namen `LATTICE_DNS_1`/`LATTICE_DNS_2` gelten weiter (sind beide gesetzt, gewinnt der
-neue). Das Skript legt die Werte beim Ausliefern als `deploy/.env` auf dem Zielrechner ab
-(unter **beiden** Namen), wo `docker compose` sie liest; eine bestehende `deploy/.env` mit nur
-`LATTICE_DNS_*` funktioniert unverändert weiter, weil Compose auf den alten Namen zurückfällt. Ohne Skript (Rückfallweg) legt man `deploy/.env` dort
-selbst an.
+alten Namen `LATTICE_DNS_1`/`LATTICE_DNS_2` gelten nur noch übergangsweise, spätestens bis 1.0 (sind beide gesetzt,
+gewinnt der neue). Das Skript legt die Werte beim Ausliefern unter dem neuen Namen als `deploy/.env` auf dem
+Zielrechner ab, wo `docker compose` sie liest. Stehen in einer bestehenden `deploy/.env` noch Zeilen
+mit `LATTICE_`, benennt `pi_switch.sh switch` sie vor dem Umschalten auf `NODVARD_DECK_` um (steht
+der neue Name schon da, fällt die alte Zeile weg) und behält die Datei vorher als
+`deploy/.env.vor-umbenennung`. Ohne Skript (Rückfallweg) legt man `deploy/.env` dort selbst an.
 
 **Rückfallweg, falls Docker Desktop nicht läuft** (baut auf dem Pi, dauert ~10 Min und
 belastet ihn stark):
@@ -257,19 +252,18 @@ belastet ihn stark):
 # extensions/shield liegen, und Nodvard Deck startet wegen doppelter Migrationen nicht.
 git archive -o /tmp/nodvard-deck.tar HEAD && scp /tmp/nodvard-deck.tar "$PI_HOST":~/nodvard-deck.tar
 # Erst bauen (mit frisch geholten Basis-Images), dann umschalten: Das alte Dashboard läuft während des Baus weiter.
+# `docker tag … previous` sichert den Rückweg; auf einem Rechner ohne bisherigen Stand diesen Schritt weglassen.
 ssh "$PI_HOST" 'rm -rf ~/lattice-deploy-test/extensions && tar -xf ~/nodvard-deck.tar -C ~/lattice-deploy-test \
-  && cd ~/lattice-deploy-test/deploy && docker compose -p deploy build --pull \
-  && { docker stop deploy-lattice-1 2>/dev/null || true; } && docker compose -p deploy up -d --no-build'
+  && cd ~/lattice-deploy-test/deploy && docker tag nodvard-deck:latest nodvard-deck:previous \
+  && docker compose -p deploy build --pull && docker compose -p deploy up -d --no-build'
 # danach bis zu 4 Min: curl -s localhost:8080/api/v1/health  ->  "status":"ok"
 # und: curl -s localhost:8080/api/v1/auth/bootstrap  ->  {"needed":false}  (sonst: Daten fehlen!)
-# Klappt es: docker rm deploy-lattice-1   (der alte Container, nur noch Altlast)
-# Klappt es nicht: docker rm -f deploy-nodvard-deck-1 && docker start deploy-lattice-1
+# Klappt es nicht: bash pi_switch.sh rollback   (nodvard-deck:previous wieder in Betrieb)
 # aufräumen: docker builder prune -f --reserved-space 2gb; docker image prune -f
 ```
 
-Nach dem Bauen auf dem Pi trägt das Image den Namen `nodvard-deck:latest` (aus der Compose-Datei).
-Den alten Container `deploy-lattice-1` vorher stoppen (er belegt sonst Port 8080), aber nicht
-mit `--remove-orphans` wegräumen lassen: das wirkt auf das ganze Projekt.
+Nach dem Bauen auf dem Pi trägt das Image den Namen `nodvard-deck:latest` (aus der Compose-Datei). Nicht mit
+`--remove-orphans` aufräumen lassen: das wirkt auf das ganze Projekt.
 
 Kaputter Stand nach einem Deploy: auf dem Pi im Deploy-Ordner
 `bash pi_switch.sh rollback` (oder von Hand
@@ -323,14 +317,14 @@ Ziele, die der Rechner direkt erreicht (z. B. im eigenen Netz), gehen weiter.
 
 **Sicherungen in der Oberfläche** (Einstellungen → System → Sicherung): verschlüsselt (age),
 ohne Anhalten des Dienstes, automatisch nach Zeitplan, mit Rotation und Download. Anleitung in
-[docs/11-ERST-EINRICHTUNG.md §10.1](../docs/11-ERST-EINRICHTUNG.md#101-in-der-oberfläche-empfohlen).
+[docs/11-ERST-EINRICHTUNG.md §6.1](../docs/11-ERST-EINRICHTUNG.md#61-in-der-oberfläche-empfohlen).
 Für einen Ordner außerhalb des Datenvolumes die vorbereitete Zeile `- ./sicherungen:/backups` in
 der Compose-Datei (`compose.yml` bzw. `deploy/docker-compose.yml`) einkommentieren, für ein NAS oder NFS
-siehe [Sicherungen auf ein NAS oder NFS](../docs/11-ERST-EINRICHTUNG.md#sicherungen-auf-ein-nas-oder-nfs). Die Skripte
+siehe [Sicherungen auf ein NAS oder NFS](../docs/16-SICHERUNG.md#sicherungen-auf-ein-nas-oder-nfs). Die Skripte
 unten bleiben und funktionieren wie bisher.
 
 **Wiederherstellen** geht ebenfalls in der Oberfläche (Einstellungen → System → Wiederherstellen) und im
-Einrichtungsassistenten einer frischen Installation („Oder: Sicherung einspielen“, mit dem Einrichtungscode).
+Einrichtungsassistenten einer frischen Installation („Sicherung einspielen“, mit dem Einrichtungscode).
 Die Datei wird hochgeladen, geprüft und erst nach einer Bestätigung **beim nächsten Start** eingespielt:
 `entrypoint.sh` ruft dafür `python -m nodvard_deck.boot` auf (es spielt eine vorgemerkte Sicherung ein und
 migriert danach wie bisher). Der Dienst beendet sich zum Neustart mit dem Rückgabewert 75 – dafür braucht der
@@ -350,10 +344,9 @@ oder mehr als 200 000 Dateien (`…_MAX_ENTRIES`) wird abgelehnt; entpackt dürf
 (`…_MAX_UNPACKED_BYTES`) und nie mehr als der freie Platz sein. Zusätzlich verlangt das Verschieben, dass der
 Datenordner (Datenbank, Schlüssel, `ext`, `branding`, `runs`) auf **einem** Laufwerk liegt (`rename`).
 
-Der Dienst heißt in Compose jetzt `nodvard-deck` (früher `lattice`). Wer **vor dem ersten
-Deploy mit dem neuen Namen** noch sichern will, nimmt dafür das `backup.sh` des alten Stands
-(beim Deploy wird `deploy/` auf dem Pi ersetzt) oder sichert direkt:
-`docker run --rm --user 1000:1000 -v deploy_lattice_data:/data -v "$PWD":/backup --entrypoint tar <image> czf /backup/vorher.tar.gz -C /data .`
+Der Dienst heißt in Compose `nodvard-deck` (vor 0.6 `lattice`). Für einen Stand von vor 0.6 (Container
+`deploy-lattice-1`) gibt es kein passendes `backup.sh` mehr; dort wird von Hand gesichert, bei angehaltenem Dienst:
+`docker stop deploy-lattice-1 && docker run --rm --user 1000:1000 -v deploy_lattice_data:/data -v "$PWD":/backup --entrypoint tar lattice:latest czf /backup/vorher.tar.gz -C /data . ; docker start deploy-lattice-1`
 
 ```bash
 cd deploy
@@ -373,8 +366,8 @@ unverschlüsselte Mails), oder richte den Sicherungsschlüssel ein. Lässt sich 
 gibt (Datenbank unlesbar), bricht `backup.sh` ab, bevor es etwas anhält. Bei Erfolg steht in der Ausgabe die Zeile
 `Fertig: <Pfad der Sicherung>`.
 
-Läuft noch (oder nach einem Rollback wieder) der alte Container `deploy-lattice-1`, hat er
-dasselbe Volume offen: beide Skripte stoppen ihn dann ebenfalls und starten ihn am Ende wieder.
+Liegt noch ein Stand von vor 0.6 auf dem Rechner (`deploy-lattice-1` läuft, oder `nodvard-deck:latest` fehlt), brechen
+beide Skripte ab, bevor sie etwas anlegen oder anhalten (siehe [Stand von vor 0.6](#stand-von-vor-06)).
 
 Beide stoppen den Dienst kurz für eine garantiert konsistente Kopie des gesamten
 `/app/data`-Baums (SQLite inkl. WAL/SHM, `master.key`, `jwt_secret.key`,
@@ -455,7 +448,8 @@ Heißt die Datei anders (z. B. noch `compose.standalone.yml`), `-f <Dateiname>` 
 in der Karte), für den Rückweg unten. Vorabversionen (`0.7.0-rc1`, Kanal „Beta“) gibt es nicht unter `:latest`, nur unter ihrem genauen Tag.
 
 Das Release-Image trägt die Datei `/app/image-info.json` mit Herkunft und genauer Version (`{"image": "ghcr.io/nodvard/deck",
-"version": "<Version>"}`, aus den Build-Argumenten `IMAGE` und `VERSION`, geschrieben von `python -m nodvard_deck.image_info`). Ein selbst
+"version": "<Version>"}`, aus den Build-Argumenten `IMAGE` und `VERSION`, geschrieben von `python -m nodvard_deck.image_info`). Das Image
+von Nodvard Dock trägt zusätzlich `"edition": "dock"` (Build-Argument `EDITION`): Name, Dienstname und Update-Suche richten sich danach. Ein selbst
 gebautes Image (z. B. über `deploy_pi.sh`) hat sie nicht; die Oberfläche zeigt dann den Weg über `deploy_pi.sh`. Bewusst eine Datei und
 keine Umgebungsvariable im Image: Die käme beim Neuanlegen eines Containers mit dessen alten Einstellungen (Portainer „Recreate“,
 Update-Helfer) in den neuen Container mit und zeigte dort die alte Version. Eine gesetzte Variable `NODVARD_DECK_IMAGE` bzw.
@@ -539,7 +533,7 @@ Mit dem Update-Helfer spielst du Updates unter Einstellungen → System → „U
 lang einmal per Knopf zurück (Karte „Kopien vor Updates“). Der Helfer ist ein kleiner eigener Dienst `updater` in
 derselben Compose-Datei wie Nodvard Deck. Er läuft nur, wenn du ihn **bewusst einschaltest**: mit
 [`compose.standalone-mit-helfer.yml`](compose.standalone-mit-helfer.yml) statt `compose.standalone.yml`. Bedienung in der
-Oberfläche: [docs/11-ERST-EINRICHTUNG.md §10.6](../docs/11-ERST-EINRICHTUNG.md#106-update-per-knopf-update-helfer).
+Oberfläche: [docs/11-ERST-EINRICHTUNG.md, Anhang I.2](../docs/11-ERST-EINRICHTUNG.md#i2-update-per-knopf-update-helfer).
 
 > **Achtung:** Der Helfer bekommt Zugriff auf Docker (den Docker-Socket). Das ist so viel wie root auf diesem Rechner.
 > Darum ist er streng gebaut: kein Netz, kein offener Port, nur lesbar, ohne Sonderrechte, mit Speicher- und
@@ -662,7 +656,7 @@ Knopf „Mit Beispieldaten ansehen“ im Cockpit (D-10): fünf Beispiel-Server a
 solange es noch keinen echten Server gibt, und nur einmal. In der Seitenleiste steht „Demo-Modus“, oben
 ein Band mit „Beispieldaten löschen“. Wer das Image nur zum Ansehen braucht, setzt das Flag; alle anderen
 brauchen es nicht – den Knopf gibt es auf jeder frischen Installation. Siehe
-[docs/11-ERST-EINRICHTUNG.md](../docs/11-ERST-EINRICHTUNG.md#5-server-und-ssh-zugang).
+[docs/11-ERST-EINRICHTUNG.md, Anhang E.2](../docs/11-ERST-EINRICHTUNG.md#e2-beispieldaten).
 
 ## Hardware
 

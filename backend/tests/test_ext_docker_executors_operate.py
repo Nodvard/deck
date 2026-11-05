@@ -48,6 +48,10 @@ FULL_ONLY = [
     ("docker.image_remove", {"image": "sha256:" + "a" * 64}),
     ("docker.volume_remove", {"volume": "daten"}),
     ("docker.network_remove", {"network": "b" * 64}),
+    ("docker.network_create", {"name": "intern"}),
+    ("docker.image_pull", {"image": "nginx:1.27"}),
+    ("docker.network_connect", {"network": "b" * 64, "container": "shop-web-1"}),
+    ("docker.network_disconnect", {"network": "b" * 64, "container": "shop-web-1"}),
 ]
 ANY_DOCKER = [
     ("container.restart", {"container": "shop-web-1"}),
@@ -80,6 +84,10 @@ EVERY_ACTION = {
     "docker.image_remove": {"image": "sha256:" + "a" * 64},
     "docker.volume_remove": {"volume": "daten"},
     "docker.network_remove": {"network": "b" * 64},
+    "docker.network_create": {"name": "intern", "internal": True},
+    "docker.image_pull": {"image": "nginx:1.27"},
+    "docker.network_connect": {"network": "b" * 64, "container": "shop-web-1"},
+    "docker.network_disconnect": {"network": "b" * 64, "container": "shop-web-1"},
     "docker.registry_login": {"registry": "ghcr", "address": "ghcr.io", "username": "nico"},
     "docker.registry_logout": {"registry": "ghcr", "address": "ghcr.io", "username": "nico"},
     "docker.stack_up": {"project": "shop"},

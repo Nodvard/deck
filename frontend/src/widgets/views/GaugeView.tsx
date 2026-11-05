@@ -1,3 +1,4 @@
+import { styleRef } from "../../../../extensions/_shared/frontend/src/csp";
 import { renderTemplate, resolvePath } from "../template";
 import type { GaugeView as GaugeViewSpec } from "../types";
 
@@ -25,7 +26,7 @@ export function GaugeView({ view, data }: { view: GaugeViewSpec; data: unknown }
             strokeDasharray={circumference}
             strokeDashoffset={circumference * (1 - ratio)}
             strokeLinecap="round"
-            style={{ transition: "stroke-dashoffset 0.6s ease" }}
+            ref={styleRef({ transition: "stroke-dashoffset 0.6s ease" })}
           />
         </svg>
         <p className="absolute inset-0 grid place-items-center text-xl font-semibold tabular-nums">

@@ -7,13 +7,13 @@ Create Date: 2026-09-23 18:00:00.000000
 Erste Revision der inventory-Extension -- eigener, vom Kern-Branch UNABHAENGIGER
 Alembic-Kopf (`down_revision=None`, eigener `branch_labels`-Wert), wie
 docs/02-EXTENSION-API.md §7 es vorsieht. `python -m nodvard_deck.migrate` (backend/src/
-nodvard_deck/migrate.py) findet dieses Verzeichnis automatisch und faehrt es zusammen mit
+nodvard_deck/migrate.py) findet dieses Verzeichnis automatisch und fährt es zusammen mit
 dem Kern-Branch auf den jeweils neuesten Stand ("upgrade heads", Mehrzahl).
 
-Tabellennamen zwingend mit `ext_inventory_` praefixiert (docs/02 §7,
-`ExtensionManifest.table_prefix`) -- zusaetzlich zur Migration selbst validiert
+Tabellennamen zwingend mit `ext_inventory_` präfixiert (docs/02 §7,
+`ExtensionManifest.table_prefix`) -- zusätzlich zur Migration selbst validiert
 `DbHandle.declare_tables()` das beim `setup()`-Aufruf noch einmal gegen die
-tatsaechlich deklarierten ORM-Modelle (siehe nodvard_deck_ext_inventory/models.py).
+tatsächlich deklarierten ORM-Modelle (siehe nodvard_deck_ext_inventory/models.py).
 """
 from __future__ import annotations
 

@@ -1,5 +1,71 @@
+// ../../_shared/frontend/src/csp.ts
+function cspNonce() {
+  return document.querySelector('meta[name="csp-nonce"]')?.content ?? "";
+}
+function createStyle() {
+  const element = document.createElement("style");
+  element.nonce = cspNonce();
+  return element;
+}
+var UNITLESS = /* @__PURE__ */ new Set([
+  "animationIterationCount",
+  "aspectRatio",
+  "columnCount",
+  "fillOpacity",
+  "flex",
+  "flexGrow",
+  "flexShrink",
+  "fontWeight",
+  "gridArea",
+  "gridColumn",
+  "gridColumnEnd",
+  "gridColumnStart",
+  "gridRow",
+  "gridRowEnd",
+  "gridRowStart",
+  "lineHeight",
+  "opacity",
+  "order",
+  "orphans",
+  "scale",
+  "strokeDasharray",
+  "strokeDashoffset",
+  "strokeMiterlimit",
+  "strokeOpacity",
+  "strokeWidth",
+  "tabSize",
+  "widows",
+  "zIndex",
+  "zoom"
+]);
+function styleRef(values, ref) {
+  let style;
+  return (node) => {
+    style?.remove();
+    style = void 0;
+    if (node && values) {
+      const id = Array.from(crypto.getRandomValues(new Uint32Array(4))).join("-");
+      node.setAttribute("data-deck-style", id);
+      style = createStyle();
+      document.head.appendChild(style);
+      const sheet = style.sheet;
+      const selector = `${node === document.documentElement ? ":root" : ""}[data-deck-style="${id}"]`;
+      sheet.insertRule(`${selector} {}`);
+      const declaration = sheet.cssRules[0].style;
+      for (const [key, value] of Object.entries(values)) {
+        if (value == null || typeof value === "boolean") continue;
+        const name = key.startsWith("--") ? key : key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`).replace(/^ms-/, "-ms-");
+        const unit = typeof value === "number" && value !== 0 && !key.startsWith("--") && !UNITLESS.has(key) ? "px" : "";
+        declaration.setProperty(name, `${value}${unit}`);
+      }
+    }
+    if (typeof ref === "function") ref(node);
+    else if (ref) ref.current = node;
+  };
+}
+
 // src/ProxmoxNodePage.tsx
-import { Fragment as Fragment3, useCallback as useCallback2, useEffect as useEffect7, useRef as useRef3, useState as useState7 } from "react";
+import { Fragment as Fragment4, useCallback as useCallback3, useEffect as useEffect8, useRef as useRef3, useState as useState8 } from "react";
 
 // ../../../frontend/src/lib/deckGlobal.ts
 var EVENT_PREFIX = "nodvard-deck:";
@@ -528,20 +594,96 @@ function MoreMenu({
   );
 }
 
+// ../../_shared/frontend/src/scrollRow.tsx
+import { useCallback as useCallback2, useEffect as useEffect5, useState as useState4 } from "react";
+import { Fragment as Fragment2, jsx as jsx5, jsxs as jsxs4 } from "react/jsx-runtime";
+var FADE_PX = 40;
+function useScrollRow(active) {
+  const [row, setRow] = useState4(null);
+  const [edges, setEdges] = useState4({ left: false, right: false });
+  const measure = useCallback2(() => {
+    if (!row) return;
+    const max = row.scrollWidth - row.clientWidth;
+    const left = row.scrollLeft > 1;
+    const right = row.scrollLeft < max - 1;
+    setEdges((old) => old.left === left && old.right === right ? old : { left, right });
+  }, [row]);
+  useEffect5(() => {
+    if (!row) return;
+    measure();
+    row.addEventListener("scroll", measure, { passive: true });
+    window.addEventListener("resize", measure);
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    for (const el of [row, ...Array.from(row.children)]) observer?.observe(el);
+    return () => {
+      row.removeEventListener("scroll", measure);
+      window.removeEventListener("resize", measure);
+      observer?.disconnect();
+    };
+  }, [row, measure]);
+  useEffect5(() => {
+    const item = row?.querySelector('[aria-selected="true"], [aria-current="page"]');
+    if (!row || !item) return;
+    const box = row.getBoundingClientRect();
+    const own = item.getBoundingClientRect();
+    if (own.left < box.left + FADE_PX || own.right > box.right - FADE_PX) {
+      row.scrollLeft += own.left - box.left - (box.width - own.width) / 2;
+    }
+    measure();
+  }, [active, row, measure]);
+  return { ref: setRow, row, edges };
+}
+function fadeStyle(edges) {
+  if (!edges.left && !edges.right) return void 0;
+  const mask = `linear-gradient(to right, ${edges.left ? `transparent, #000 ${FADE_PX}px` : "#000"}, ${edges.right ? `#000 calc(100% - ${FADE_PX}px), transparent` : "#000"})`;
+  return { maskImage: mask, WebkitMaskImage: mask };
+}
+function ScrollArrows({ edges, row }) {
+  function go(direction) {
+    const calm = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    row?.scrollBy({ left: direction * row.clientWidth * 0.7, behavior: calm ? "auto" : "smooth" });
+  }
+  const arrow = "absolute top-0 bottom-0 flex w-8 items-center text-white/70 hover:text-white";
+  return /* @__PURE__ */ jsxs4(Fragment2, { children: [
+    edges.left && /* @__PURE__ */ jsx5(
+      "button",
+      {
+        type: "button",
+        tabIndex: -1,
+        "aria-label": "Nach links bl\xE4ttern",
+        onClick: () => go(-1),
+        className: `${arrow} left-0 justify-start`,
+        children: /* @__PURE__ */ jsx5(Icon, { name: "chevron-right", size: 16, className: "rotate-180" })
+      }
+    ),
+    edges.right && /* @__PURE__ */ jsx5(
+      "button",
+      {
+        type: "button",
+        tabIndex: -1,
+        "aria-label": "Nach rechts bl\xE4ttern",
+        onClick: () => go(1),
+        className: `${arrow} right-0 justify-end`,
+        children: /* @__PURE__ */ jsx5(Icon, { name: "chevron-right", size: 16 })
+      }
+    )
+  ] });
+}
+
 // ../../_shared/frontend/src/certificate.tsx
-import { useEffect as useEffect5, useState as useState4 } from "react";
-import { jsx as jsx5, jsxs as jsxs4 } from "react/jsx-runtime";
+import { useEffect as useEffect6, useState as useState5 } from "react";
+import { jsx as jsx6, jsxs as jsxs5 } from "react/jsx-runtime";
 function CertificateStatus({ connection }) {
   if (connection.tls_fingerprint_invalid) {
-    return /* @__PURE__ */ jsx5("span", { className: "text-red-300", children: "Fingerabdruck ung\xFCltig" });
+    return /* @__PURE__ */ jsx6("span", { className: "text-red-300", children: "Fingerabdruck ung\xFCltig" });
   }
   if (connection.tls_fingerprint_sha256) {
-    return /* @__PURE__ */ jsx5("span", { className: "text-emerald-300", title: connection.tls_fingerprint_sha256, children: "Fingerabdruck gemerkt" });
+    return /* @__PURE__ */ jsx6("span", { className: "text-emerald-300", title: connection.tls_fingerprint_sha256, children: "Fingerabdruck gemerkt" });
   }
   if (connection.tls_insecure_skip_verify) {
-    return /* @__PURE__ */ jsx5("span", { className: "text-amber-300", children: "wird nicht gepr\xFCft" });
+    return /* @__PURE__ */ jsx6("span", { className: "text-amber-300", children: "wird nicht gepr\xFCft" });
   }
-  return /* @__PURE__ */ jsx5("span", { className: "opacity-70", children: "normal gepr\xFCft" });
+  return /* @__PURE__ */ jsx6("span", { className: "opacity-70", children: "normal gepr\xFCft" });
 }
 function formatDate(iso) {
   if (!iso) return null;
@@ -556,13 +698,13 @@ function ConnectionCertificate({
   hint = PROXMOX_FINGERPRINT_HINT,
   unchecked = false
 }) {
-  const [info, setInfo] = useState4(null);
-  const [error, setError] = useState4(null);
-  const [confirmed, setConfirmed] = useState4(false);
-  const [busy, setBusy] = useState4(false);
-  const [message, setMessage] = useState4(null);
+  const [info, setInfo] = useState5(null);
+  const [error, setError] = useState5(null);
+  const [confirmed, setConfirmed] = useState5(false);
+  const [busy, setBusy] = useState5(false);
+  const [message, setMessage] = useState5(null);
   const path = `/ext/${extId}/connections/${encodeURIComponent(connection)}/certificate`;
-  useEffect5(() => {
+  useEffect6(() => {
     let active = true;
     setInfo(null);
     setError(null);
@@ -605,38 +747,38 @@ function ConnectionCertificate({
   }
   const until = formatDate(info?.not_after);
   const changed = Boolean(info && info.stored && !info.matches);
-  return /* @__PURE__ */ jsxs4("section", { className: "mb-3 space-y-2 rounded-lg border border-white/10 p-3 text-xs", "aria-label": `Zertifikat \u2013 ${connection}`, children: [
-    /* @__PURE__ */ jsxs4("h4", { className: "font-medium", children: [
+  return /* @__PURE__ */ jsxs5("section", { className: "mb-3 space-y-2 rounded-lg border border-white/10 p-3 text-xs", "aria-label": `Zertifikat \u2013 ${connection}`, children: [
+    /* @__PURE__ */ jsxs5("h4", { className: "font-medium", children: [
       "Zertifikat \u2013 ",
       connection
     ] }),
-    !info && !error && /* @__PURE__ */ jsx5("p", { className: "opacity-60", children: "Lese das Zertifikat \u2026" }),
-    error && /* @__PURE__ */ jsx5("p", { role: "alert", className: "text-red-300", children: error }),
-    message && /* @__PURE__ */ jsx5("p", { role: "status", className: "text-emerald-300", children: message }),
-    info && info.matches && /* @__PURE__ */ jsx5("p", { className: "text-emerald-300", "data-testid": "certificate-matches", children: "Der gemerkte Fingerabdruck passt zum Zertifikat des Servers." }),
-    info && !info.matches && /* @__PURE__ */ jsxs4("div", { className: "space-y-2", "data-testid": "certificate-to-confirm", children: [
-      changed && /* @__PURE__ */ jsx5("p", { className: "text-amber-300", "data-testid": "certificate-changed", children: "Der Server zeigt ein anderes Zertifikat als das gemerkte. Bis du den neuen Fingerabdruck best\xE4tigst, spricht Nodvard Deck nicht mit ihm." }),
-      info.stored_invalid && /* @__PURE__ */ jsx5("p", { className: "text-red-300", children: "Der eingetragene Fingerabdruck ist ung\xFCltig \u2013 bis er stimmt, spricht Nodvard Deck nicht mit dem Server." }),
-      !info.stored && !info.stored_invalid && /* @__PURE__ */ jsx5("p", { className: info.trusted ? "opacity-80" : "text-amber-300", children: info.trusted ? "Das Zertifikat ist von einer anerkannten Stelle best\xE4tigt, Merken ist nicht n\xF6tig. Erneuert es sich regelm\xE4\xDFig (z. B. Let's Encrypt), merk es dir besser nicht \u2013 sonst musst du nach jeder Erneuerung neu best\xE4tigen." : unchecked ? "Das Zertifikat wird bisher nicht gepr\xFCft. Merk dir den Fingerabdruck, dann spricht Nodvard Deck nur mit genau diesem Server." : "Das Zertifikat ist nicht von einer anerkannten Stelle best\xE4tigt, deshalb klappt die Verbindung noch nicht. Merk dir den Fingerabdruck, dann spricht Nodvard Deck nur mit genau diesem Server." }),
-      /* @__PURE__ */ jsx5("p", { className: "opacity-80", children: hint }),
-      /* @__PURE__ */ jsxs4("div", { children: [
-        /* @__PURE__ */ jsxs4("p", { className: "opacity-60", children: [
+    !info && !error && /* @__PURE__ */ jsx6("p", { className: "opacity-60", children: "Lese das Zertifikat \u2026" }),
+    error && /* @__PURE__ */ jsx6("p", { role: "alert", className: "text-red-300", children: error }),
+    message && /* @__PURE__ */ jsx6("p", { role: "status", className: "text-emerald-300", children: message }),
+    info && info.matches && /* @__PURE__ */ jsx6("p", { className: "text-emerald-300", "data-testid": "certificate-matches", children: "Der gemerkte Fingerabdruck passt zum Zertifikat des Servers." }),
+    info && !info.matches && /* @__PURE__ */ jsxs5("div", { className: "space-y-2", "data-testid": "certificate-to-confirm", children: [
+      changed && /* @__PURE__ */ jsx6("p", { className: "text-amber-300", "data-testid": "certificate-changed", children: "Der Server zeigt ein anderes Zertifikat als das gemerkte. Bis du den neuen Fingerabdruck best\xE4tigst, spricht Nodvard Deck nicht mit ihm." }),
+      info.stored_invalid && /* @__PURE__ */ jsx6("p", { className: "text-red-300", children: "Der eingetragene Fingerabdruck ist ung\xFCltig \u2013 bis er stimmt, spricht Nodvard Deck nicht mit dem Server." }),
+      !info.stored && !info.stored_invalid && /* @__PURE__ */ jsx6("p", { className: info.trusted ? "opacity-80" : "text-amber-300", children: info.trusted ? "Das Zertifikat ist von einer anerkannten Stelle best\xE4tigt, Merken ist nicht n\xF6tig. Erneuert es sich regelm\xE4\xDFig (z. B. Let's Encrypt), merk es dir besser nicht \u2013 sonst musst du nach jeder Erneuerung neu best\xE4tigen." : unchecked ? "Das Zertifikat wird bisher nicht gepr\xFCft. Merk dir den Fingerabdruck, dann spricht Nodvard Deck nur mit genau diesem Server." : "Das Zertifikat ist nicht von einer anerkannten Stelle best\xE4tigt, deshalb klappt die Verbindung noch nicht. Merk dir den Fingerabdruck, dann spricht Nodvard Deck nur mit genau diesem Server." }),
+      /* @__PURE__ */ jsx6("p", { className: "opacity-80", children: hint }),
+      /* @__PURE__ */ jsxs5("div", { children: [
+        /* @__PURE__ */ jsxs5("p", { className: "opacity-60", children: [
           changed ? "Neuer Fingerabdruck" : "Fingerabdruck",
           " (SHA-256)"
         ] }),
-        /* @__PURE__ */ jsx5("p", { className: "break-all rounded bg-black/30 px-2 py-1.5 font-mono", "aria-label": "Fingerabdruck des Servers", children: info.sha256 })
+        /* @__PURE__ */ jsx6("p", { className: "break-all rounded bg-black/30 px-2 py-1.5 font-mono", "aria-label": "Fingerabdruck des Servers", children: info.sha256 })
       ] }),
-      changed && info.stored && /* @__PURE__ */ jsxs4("div", { children: [
-        /* @__PURE__ */ jsx5("p", { className: "opacity-60", children: "Bisher gemerkt" }),
-        /* @__PURE__ */ jsx5("p", { className: "break-all rounded bg-black/20 px-2 py-1.5 font-mono opacity-60", "aria-label": "Bisher gemerkt", children: info.stored })
+      changed && info.stored && /* @__PURE__ */ jsxs5("div", { children: [
+        /* @__PURE__ */ jsx6("p", { className: "opacity-60", children: "Bisher gemerkt" }),
+        /* @__PURE__ */ jsx6("p", { className: "break-all rounded bg-black/20 px-2 py-1.5 font-mono opacity-60", "aria-label": "Bisher gemerkt", children: info.stored })
       ] }),
-      (info.subject || until) && /* @__PURE__ */ jsxs4("p", { className: "text-white/55", children: [
+      (info.subject || until) && /* @__PURE__ */ jsxs5("p", { className: "text-white/55", children: [
         info.subject ? `Ausgestellt f\xFCr ${info.subject}` : "",
         info.subject && until ? " \xB7 " : "",
         until ? `g\xFCltig bis ${until}` : ""
       ] }),
-      /* @__PURE__ */ jsxs4("label", { className: "flex cursor-pointer items-start gap-2", children: [
-        /* @__PURE__ */ jsx5(
+      /* @__PURE__ */ jsxs5("label", { className: "flex cursor-pointer items-start gap-2", children: [
+        /* @__PURE__ */ jsx6(
           "input",
           {
             type: "checkbox",
@@ -645,22 +787,22 @@ function ConnectionCertificate({
             onChange: (e) => setConfirmed(e.target.checked)
           }
         ),
-        /* @__PURE__ */ jsx5("span", { children: "Der Fingerabdruck stimmt mit dem in Proxmox \xFCberein." })
+        /* @__PURE__ */ jsx6("span", { children: "Der Fingerabdruck stimmt mit dem in Proxmox \xFCberein." })
       ] }),
-      /* @__PURE__ */ jsx5("p", { className: "text-white/45", children: "Stimmt er nicht, best\xE4tige nichts: Dann antwortet unter dieser Adresse vielleicht ein anderer Rechner." }),
-      /* @__PURE__ */ jsx5(Button, { small: true, variant: "primary", disabled: !confirmed || busy, onClick: () => void save(), children: busy ? "Speichere \u2026" : changed ? "Neuen Fingerabdruck best\xE4tigen" : "Fingerabdruck merken" })
+      /* @__PURE__ */ jsx6("p", { className: "text-white/45", children: "Stimmt er nicht, best\xE4tige nichts: Dann antwortet unter dieser Adresse vielleicht ein anderer Rechner." }),
+      /* @__PURE__ */ jsx6(Button, { small: true, variant: "primary", disabled: !confirmed || busy, onClick: () => void save(), children: busy ? "Speichere \u2026" : changed ? "Neuen Fingerabdruck best\xE4tigen" : "Fingerabdruck merken" })
     ] })
   ] });
 }
 
 // src/OldTokens.tsx
-import { useEffect as useEffect6, useState as useState5 } from "react";
-import { jsx as jsx6, jsxs as jsxs5 } from "react/jsx-runtime";
+import { useEffect as useEffect7, useState as useState6 } from "react";
+import { jsx as jsx7, jsxs as jsxs6 } from "react/jsx-runtime";
 function canCopy() {
   return typeof navigator !== "undefined" && Boolean(navigator.clipboard?.writeText) && Boolean(window.isSecureContext);
 }
 function OldTokenList({ tokens }) {
-  const [copied, setCopied] = useState5(false);
+  const [copied, setCopied] = useState6(false);
   if (tokens.length === 0) return null;
   const commands = tokens.map((t) => t.command).join("\n");
   async function copy() {
@@ -671,22 +813,22 @@ function OldTokenList({ tokens }) {
       setCopied(false);
     }
   }
-  return /* @__PURE__ */ jsxs5("div", { className: "space-y-1.5 text-xs", "data-testid": "old-tokens", children: [
-    /* @__PURE__ */ jsxs5("p", { className: "text-white/70", children: [
+  return /* @__PURE__ */ jsxs6("div", { className: "space-y-1.5 text-xs", "data-testid": "old-tokens", children: [
+    /* @__PURE__ */ jsxs6("p", { className: "text-white/70", children: [
       "Diese Tokens hat Nodvard Deck fr\xFCher angelegt, benutzt werden sie hier nicht mehr:",
       " ",
       tokens.map((t) => t.token_id).join(", "),
       ". Braucht sie nichts anderes mehr (etwa ein zweites Nodvard Deck), l\xF6sch sie in Proxmox unter Rechenzentrum \u2192 Rechte \u2192 API-Token oder auf dem Server mit:"
     ] }),
-    /* @__PURE__ */ jsx6("pre", { className: "select-all overflow-x-auto rounded bg-black/30 px-2 py-1.5 font-mono", "aria-label": "Befehle zum L\xF6schen", children: commands }),
-    canCopy() && /* @__PURE__ */ jsx6(Button, { small: true, variant: "ghost", onClick: () => void copy(), children: copied ? "Kopiert" : "Befehle kopieren" }),
-    /* @__PURE__ */ jsx6("p", { className: "text-white/45", children: "Nodvard Deck l\xF6scht sie nicht selbst: Daf\xFCr br\xE4uchte sein Zugang in Proxmox das Recht, Benutzer zu \xE4ndern \u2013 und damit k\xF6nnte er sich alle Rechte seines Benutzers geben." })
+    /* @__PURE__ */ jsx7("pre", { className: "select-all overflow-x-auto rounded bg-black/30 px-2 py-1.5 font-mono", "aria-label": "Befehle zum L\xF6schen", children: commands }),
+    canCopy() && /* @__PURE__ */ jsx7(Button, { small: true, variant: "ghost", onClick: () => void copy(), children: copied ? "Kopiert" : "Befehle kopieren" }),
+    /* @__PURE__ */ jsx7("p", { className: "text-white/45", children: "Nodvard Deck l\xF6scht sie nicht selbst: Daf\xFCr br\xE4uchte sein Zugang in Proxmox das Recht, Benutzer zu \xE4ndern \u2013 und damit k\xF6nnte er sich alle Rechte seines Benutzers geben." })
   ] });
 }
 function OldTokens({ connection }) {
-  const [data, setData] = useState5(null);
-  const [error, setError] = useState5(null);
-  useEffect6(() => {
+  const [data, setData] = useState6(null);
+  const [error, setError] = useState6(null);
+  useEffect7(() => {
     let active = true;
     setData(null);
     setError(null);
@@ -701,20 +843,20 @@ function OldTokens({ connection }) {
       active = false;
     };
   }, [connection]);
-  return /* @__PURE__ */ jsxs5("section", { className: "mb-3 space-y-1.5 rounded-lg border border-white/10 p-3", "aria-label": `Alte Tokens \u2013 ${connection}`, children: [
-    /* @__PURE__ */ jsxs5("h4", { className: "text-xs font-medium", children: [
+  return /* @__PURE__ */ jsxs6("section", { className: "mb-3 space-y-1.5 rounded-lg border border-white/10 p-3", "aria-label": `Alte Tokens \u2013 ${connection}`, children: [
+    /* @__PURE__ */ jsxs6("h4", { className: "text-xs font-medium", children: [
       "Alte Tokens \u2013 ",
       connection
     ] }),
-    !data && !error && /* @__PURE__ */ jsx6("p", { className: "text-xs opacity-60", children: "Lade \u2026" }),
-    error && /* @__PURE__ */ jsxs5("p", { role: "alert", className: "text-xs text-red-300", children: [
+    !data && !error && /* @__PURE__ */ jsx7("p", { className: "text-xs opacity-60", children: "Lade \u2026" }),
+    error && /* @__PURE__ */ jsxs6("p", { role: "alert", className: "text-xs text-red-300", children: [
       "Nicht lesbar: ",
       error
     ] }),
-    data && data.tokens.length === 0 && /* @__PURE__ */ jsx6("p", { className: "text-xs opacity-70", children: "In Proxmox liegen keine alten Tokens von Nodvard Deck." }),
-    data && /* @__PURE__ */ jsx6(OldTokenList, { tokens: data.tokens }),
-    data && !data.backups_checked && /* @__PURE__ */ jsx6("p", { className: "text-xs text-white/45", children: "Proxmox-Backups ist aus \u2013 dessen Tokens (nodvard-backup@pve) z\xE4hlen deshalb nie als alt." }),
-    data && data.privsep_off.length > 0 && /* @__PURE__ */ jsxs5("p", { className: "text-xs text-amber-300", children: [
+    data && data.tokens.length === 0 && /* @__PURE__ */ jsx7("p", { className: "text-xs opacity-70", children: "In Proxmox liegen keine alten Tokens von Nodvard Deck." }),
+    data && /* @__PURE__ */ jsx7(OldTokenList, { tokens: data.tokens }),
+    data && !data.backups_checked && /* @__PURE__ */ jsx7("p", { className: "text-xs text-white/45", children: "Proxmox-Backups ist aus \u2013 dessen Tokens (nodvard-backup@pve) z\xE4hlen deshalb nie als alt." }),
+    data && data.privsep_off.length > 0 && /* @__PURE__ */ jsxs6("p", { className: "text-xs text-amber-300", children: [
       "Ohne Privilegientrennung (darf alles, was sein Benutzer darf): ",
       data.privsep_off.join(", "),
       ". Brauchst du ihn nicht, l\xF6sch ihn in Proxmox."
@@ -723,10 +865,10 @@ function OldTokens({ connection }) {
 }
 
 // src/ProxmoxConnect.tsx
-import { useId, useState as useState6 } from "react";
+import { useId, useState as useState7 } from "react";
 
 // ../../_shared/frontend/src/passwordWarning.tsx
-import { Fragment as Fragment2, jsxs as jsxs6 } from "react/jsx-runtime";
+import { Fragment as Fragment3, jsxs as jsxs7 } from "react/jsx-runtime";
 function sendsInClear(location) {
   if (location.protocol === "https:") return false;
   const host = location.hostname.replace(/^\[|\]$/g, "").toLowerCase();
@@ -738,9 +880,9 @@ function PasswordInClearWarning({
 }) {
   const page = location ?? (typeof window === "undefined" ? void 0 : window.location);
   if (!page || !sendsInClear(page)) return null;
-  return /* @__PURE__ */ jsxs6("p", { role: "note", "data-testid": "password-in-clear", className: "rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200", children: [
+  return /* @__PURE__ */ jsxs7("p", { role: "note", "data-testid": "password-in-clear", className: "rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200", children: [
     "Achtung: Diese Seite l\xE4uft ohne HTTPS. Das Passwort geht unverschl\xFCsselt bis zu Nodvard Deck \u2013 im eigenen Heimnetz meist in Ordnung, in einem fremden Netz nicht.",
-    alternative ? /* @__PURE__ */ jsxs6(Fragment2, { children: [
+    alternative ? /* @__PURE__ */ jsxs7(Fragment3, { children: [
       " ",
       alternative
     ] }) : null
@@ -748,7 +890,7 @@ function PasswordInClearWarning({
 }
 
 // src/ProxmoxConnect.tsx
-import { jsx as jsx7, jsxs as jsxs7 } from "react/jsx-runtime";
+import { jsx as jsx8, jsxs as jsxs8 } from "react/jsx-runtime";
 var TFA_LABELS = {
   totp: "Code aus der App",
   recovery: "Wiederherstellungsschl\xFCssel",
@@ -784,29 +926,29 @@ function CertificateBox({
   onConfirm
 }) {
   if (cert.trusted) {
-    return /* @__PURE__ */ jsx7("p", { className: "rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200", "data-testid": "certificate-trusted", children: "Das Zertifikat ist von einer anerkannten Stelle best\xE4tigt. Dein Passwort geht verschl\xFCsselt und gepr\xFCft an diesen Server." });
+    return /* @__PURE__ */ jsx8("p", { className: "rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200", "data-testid": "certificate-trusted", children: "Das Zertifikat ist von einer anerkannten Stelle best\xE4tigt. Dein Passwort geht verschl\xFCsselt und gepr\xFCft an diesen Server." });
   }
   const until = formatDate2(cert.not_after);
-  return /* @__PURE__ */ jsxs7("div", { className: "space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] p-3 text-sm", "data-testid": "certificate-confirm", children: [
-    /* @__PURE__ */ jsxs7("p", { children: [
+  return /* @__PURE__ */ jsxs8("div", { className: "space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] p-3 text-sm", "data-testid": "certificate-confirm", children: [
+    /* @__PURE__ */ jsxs8("p", { children: [
       "Proxmox nutzt ein eigenes Zertifikat. Vergleiche den Fingerabdruck, bevor du dein Passwort eingibst: In Proxmox links den Knoten anklicken \u2192 ",
-      /* @__PURE__ */ jsx7("strong", { children: "System" }),
+      /* @__PURE__ */ jsx8("strong", { children: "System" }),
       " \u2192 ",
-      /* @__PURE__ */ jsx7("strong", { children: "Zertifikate" }),
+      /* @__PURE__ */ jsx8("strong", { children: "Zertifikate" }),
       ", Spalte \u201EFingerabdruck\u201C \u2013 bei ",
-      /* @__PURE__ */ jsx7("code", { children: "pveproxy-ssl.pem" }),
+      /* @__PURE__ */ jsx8("code", { children: "pveproxy-ssl.pem" }),
       ", falls es die Zeile gibt, sonst bei ",
-      /* @__PURE__ */ jsx7("code", { children: "pve-ssl.pem" }),
+      /* @__PURE__ */ jsx8("code", { children: "pve-ssl.pem" }),
       "."
     ] }),
-    /* @__PURE__ */ jsx7("p", { className: "break-all rounded bg-black/30 px-2 py-1.5 font-mono text-xs", "aria-label": "Fingerabdruck (SHA-256)", children: cert.sha256 }),
-    (cert.subject || until) && /* @__PURE__ */ jsxs7("p", { className: "text-xs text-white/55", children: [
+    /* @__PURE__ */ jsx8("p", { className: "break-all rounded bg-black/30 px-2 py-1.5 font-mono text-xs", "aria-label": "Fingerabdruck (SHA-256)", children: cert.sha256 }),
+    (cert.subject || until) && /* @__PURE__ */ jsxs8("p", { className: "text-xs text-white/55", children: [
       cert.subject ? `Ausgestellt f\xFCr ${cert.subject}` : "",
       cert.subject && until ? " \xB7 " : "",
       until ? `g\xFCltig bis ${until}` : ""
     ] }),
-    /* @__PURE__ */ jsxs7("label", { className: "flex cursor-pointer items-start gap-2.5", children: [
-      /* @__PURE__ */ jsx7(
+    /* @__PURE__ */ jsxs8("label", { className: "flex cursor-pointer items-start gap-2.5", children: [
+      /* @__PURE__ */ jsx8(
         "input",
         {
           type: "checkbox",
@@ -815,9 +957,9 @@ function CertificateBox({
           onChange: (e) => onConfirm(e.target.checked)
         }
       ),
-      /* @__PURE__ */ jsx7("span", { children: "Der Fingerabdruck stimmt mit dem in Proxmox \xFCberein." })
+      /* @__PURE__ */ jsx8("span", { children: "Der Fingerabdruck stimmt mit dem in Proxmox \xFCberein." })
     ] }),
-    /* @__PURE__ */ jsx7("p", { className: "text-xs text-white/55", children: "Stimmt er nicht, gib hier nichts ein: Dann antwortet unter dieser Adresse vielleicht ein anderer Rechner. Stimmt er, merkt sich Nodvard Deck den Fingerabdruck und spricht auch sp\xE4ter nur mit genau diesem Server." })
+    /* @__PURE__ */ jsx8("p", { className: "text-xs text-white/55", children: "Stimmt er nicht, gib hier nichts ein: Dann antwortet unter dieser Adresse vielleicht ein anderer Rechner. Stimmt er, merkt sich Nodvard Deck den Fingerabdruck und spricht auch sp\xE4ter nur mit genau diesem Server." })
   ] });
 }
 function LabeledField({
@@ -827,10 +969,10 @@ function LabeledField({
 }) {
   const id = useId();
   const hintId = `${id}-hinweis`;
-  return /* @__PURE__ */ jsxs7("div", { className: "block text-sm", children: [
-    /* @__PURE__ */ jsx7("label", { htmlFor: id, className: "mb-1.5 block text-white/70", children: label }),
+  return /* @__PURE__ */ jsxs8("div", { className: "block text-sm", children: [
+    /* @__PURE__ */ jsx8("label", { htmlFor: id, className: "mb-1.5 block text-white/70", children: label }),
     children({ id, "aria-describedby": hint ? hintId : void 0 }),
-    hint && /* @__PURE__ */ jsx7("p", { id: hintId, className: "mt-1 text-xs text-white/45", children: hint })
+    hint && /* @__PURE__ */ jsx8("p", { id: hintId, className: "mt-1 text-xs text-white/45", children: hint })
   ] });
 }
 function ProxmoxConnect({
@@ -838,23 +980,23 @@ function ProxmoxConnect({
   onClose,
   pageLocation
 }) {
-  const [step, setStep] = useState6("address");
-  const [address, setAddress] = useState6("");
-  const [baseUrl, setBaseUrl] = useState6("");
-  const [cert, setCert] = useState6(null);
-  const [confirmed, setConfirmed] = useState6(false);
-  const [username, setUsername] = useState6("root@pam");
-  const [password, setPassword] = useState6("");
-  const [name, setName] = useState6("");
-  const [access, setAccess] = useState6("full");
-  const [backupsAvailable, setBackupsAvailable] = useState6(false);
-  const [withBackups, setWithBackups] = useState6(true);
-  const [tfa, setTfa] = useState6(null);
-  const [tfaKind, setTfaKind] = useState6("totp");
-  const [code, setCode] = useState6("");
-  const [busy, setBusy] = useState6(false);
-  const [error, setError] = useState6(null);
-  const [result, setResult] = useState6(null);
+  const [step, setStep] = useState7("address");
+  const [address, setAddress] = useState7("");
+  const [baseUrl, setBaseUrl] = useState7("");
+  const [cert, setCert] = useState7(null);
+  const [confirmed, setConfirmed] = useState7(false);
+  const [username, setUsername] = useState7("root@pam");
+  const [password, setPassword] = useState7("");
+  const [name, setName] = useState7("");
+  const [access, setAccess] = useState7("full");
+  const [backupsAvailable, setBackupsAvailable] = useState7(false);
+  const [withBackups, setWithBackups] = useState7(true);
+  const [tfa, setTfa] = useState7(null);
+  const [tfaKind, setTfaKind] = useState7("totp");
+  const [code, setCode] = useState7("");
+  const [busy, setBusy] = useState7(false);
+  const [error, setError] = useState7(null);
+  const [result, setResult] = useState7(null);
   function showFailure(failure) {
     setError(failure.detail);
     if (failure.certificate && CERTIFICATE_CODES.has(failure.code)) {
@@ -937,16 +1079,16 @@ function ProxmoxConnect({
       setBusy(false);
     }
   }
-  return /* @__PURE__ */ jsxs7("section", { className: "mb-6 space-y-4 p-4 panel", "data-testid": "proxmox-connect", "aria-label": "Mit Passwort verbinden", children: [
-    /* @__PURE__ */ jsxs7("div", { className: "flex flex-wrap items-start justify-between gap-2", children: [
-      /* @__PURE__ */ jsxs7("div", { children: [
-        /* @__PURE__ */ jsx7("h3", { className: "text-sm font-semibold", children: "Proxmox mit Passwort verbinden" }),
-        /* @__PURE__ */ jsx7("p", { className: "mt-0.5 max-w-2xl text-xs text-white/55", children: "Du gibst einmal Adresse und Passwort ein, Nodvard Deck legt in Proxmox einen eigenen Zugang an (Benutzer nodvard@pve mit API-Token und passenden Rechten) und vergisst das Passwort sofort. Es wird nirgends gespeichert." })
+  return /* @__PURE__ */ jsxs8("section", { className: "mb-6 space-y-4 p-4 panel", "data-testid": "proxmox-connect", "aria-label": "Mit Passwort verbinden", children: [
+    /* @__PURE__ */ jsxs8("div", { className: "flex flex-wrap items-start justify-between gap-2", children: [
+      /* @__PURE__ */ jsxs8("div", { children: [
+        /* @__PURE__ */ jsx8("h3", { className: "text-sm font-semibold", children: "Proxmox mit Passwort verbinden" }),
+        /* @__PURE__ */ jsx8("p", { className: "mt-0.5 max-w-2xl text-xs text-white/55", children: "Du gibst einmal Adresse und Passwort ein, Nodvard Deck legt in Proxmox einen eigenen Zugang an (Benutzer nodvard@pve mit API-Token und passenden Rechten) und vergisst das Passwort sofort. Es wird nirgends gespeichert." })
       ] }),
-      /* @__PURE__ */ jsx7(Button, { small: true, variant: "ghost", onClick: onClose, children: step === "done" ? "Schlie\xDFen" : "Abbrechen" })
+      /* @__PURE__ */ jsx8(Button, { small: true, variant: "ghost", onClick: onClose, children: step === "done" ? "Schlie\xDFen" : "Abbrechen" })
     ] }),
-    step === "address" && /* @__PURE__ */ jsxs7("form", { onSubmit: (e) => void checkCertificate(e), className: "flex flex-wrap items-end gap-2", noValidate: true, children: [
-      /* @__PURE__ */ jsx7("div", { className: "min-w-[16rem] flex-1", children: /* @__PURE__ */ jsx7(LabeledField, { label: "Adresse des Proxmox-Servers", children: (p) => /* @__PURE__ */ jsx7(
+    step === "address" && /* @__PURE__ */ jsxs8("form", { onSubmit: (e) => void checkCertificate(e), className: "flex flex-wrap items-end gap-2", noValidate: true, children: [
+      /* @__PURE__ */ jsx8("div", { className: "min-w-[16rem] flex-1", children: /* @__PURE__ */ jsx8(LabeledField, { label: "Adresse des Proxmox-Servers", children: (p) => /* @__PURE__ */ jsx8(
         "input",
         {
           ...p,
@@ -960,21 +1102,21 @@ function ProxmoxConnect({
           autoComplete: "off"
         }
       ) }) }),
-      /* @__PURE__ */ jsx7(Button, { type: "submit", variant: "primary", disabled: busy || !address.trim(), children: busy ? "Pr\xFCfe \u2026" : "Weiter" })
+      /* @__PURE__ */ jsx8(Button, { type: "submit", variant: "primary", disabled: busy || !address.trim(), children: busy ? "Pr\xFCfe \u2026" : "Weiter" })
     ] }),
-    step === "login" && cert && /* @__PURE__ */ jsxs7("form", { onSubmit: (e) => void connect(e), className: "space-y-4", noValidate: true, children: [
-      /* @__PURE__ */ jsxs7("p", { className: "text-xs text-white/55", children: [
+    step === "login" && cert && /* @__PURE__ */ jsxs8("form", { onSubmit: (e) => void connect(e), className: "space-y-4", noValidate: true, children: [
+      /* @__PURE__ */ jsxs8("p", { className: "text-xs text-white/55", children: [
         "Server: ",
-        /* @__PURE__ */ jsx7("span", { className: "font-mono", children: baseUrl }),
+        /* @__PURE__ */ jsx8("span", { className: "font-mono", children: baseUrl }),
         " ",
-        /* @__PURE__ */ jsx7("button", { type: "button", className: "underline hover:text-white", onClick: () => {
+        /* @__PURE__ */ jsx8("button", { type: "button", className: "underline hover:text-white", onClick: () => {
           setStep("address");
           setError(null);
         }, children: "\xE4ndern" })
       ] }),
-      /* @__PURE__ */ jsx7(CertificateBox, { cert, confirmed, onConfirm: setConfirmed }),
-      /* @__PURE__ */ jsxs7("div", { className: "grid gap-4 sm:grid-cols-2", children: [
-        /* @__PURE__ */ jsx7(LabeledField, { label: "Benutzer", hint: "Mit Bereich, meist root@pam. Das Konto muss Benutzer und Rechte anlegen d\xFCrfen.", children: (p) => /* @__PURE__ */ jsx7(
+      /* @__PURE__ */ jsx8(CertificateBox, { cert, confirmed, onConfirm: setConfirmed }),
+      /* @__PURE__ */ jsxs8("div", { className: "grid gap-4 sm:grid-cols-2", children: [
+        /* @__PURE__ */ jsx8(LabeledField, { label: "Benutzer", hint: "Mit Bereich, meist root@pam. Das Konto muss Benutzer und Rechte anlegen d\xFCrfen.", children: (p) => /* @__PURE__ */ jsx8(
           "input",
           {
             ...p,
@@ -988,7 +1130,7 @@ function ProxmoxConnect({
             placeholder: "root@pam"
           }
         ) }),
-        /* @__PURE__ */ jsx7(LabeledField, { label: "Passwort", hint: "Nur f\xFCr diese eine Anmeldung.", children: (p) => /* @__PURE__ */ jsx7(
+        /* @__PURE__ */ jsx8(LabeledField, { label: "Passwort", hint: "Nur f\xFCr diese eine Anmeldung.", children: (p) => /* @__PURE__ */ jsx8(
           "input",
           {
             ...p,
@@ -999,7 +1141,7 @@ function ProxmoxConnect({
             autoComplete: "new-password"
           }
         ) }),
-        /* @__PURE__ */ jsx7(LabeledField, { label: "Kurzname (freiwillig)", hint: "Leer lassen: Nodvard Deck nimmt den Namen aus Proxmox.", children: (p) => /* @__PURE__ */ jsx7(
+        /* @__PURE__ */ jsx8(LabeledField, { label: "Kurzname (freiwillig)", hint: "Leer lassen: Nodvard Deck nimmt den Namen aus Proxmox.", children: (p) => /* @__PURE__ */ jsx8(
           "input",
           {
             ...p,
@@ -1013,23 +1155,23 @@ function ProxmoxConnect({
             autoComplete: "off"
           }
         ) }),
-        /* @__PURE__ */ jsxs7("fieldset", { className: "text-sm", children: [
-          /* @__PURE__ */ jsx7("legend", { className: "mb-1.5 text-white/70", children: "Was darf Nodvard Deck?" }),
-          /* @__PURE__ */ jsxs7("label", { className: "flex cursor-pointer items-start gap-2", children: [
-            /* @__PURE__ */ jsx7("input", { type: "radio", name: "access", className: "mt-1", checked: access === "full", onChange: () => setAccess("full") }),
-            /* @__PURE__ */ jsxs7("span", { children: [
+        /* @__PURE__ */ jsxs8("fieldset", { className: "text-sm", children: [
+          /* @__PURE__ */ jsx8("legend", { className: "mb-1.5 text-white/70", children: "Was darf Nodvard Deck?" }),
+          /* @__PURE__ */ jsxs8("label", { className: "flex cursor-pointer items-start gap-2", children: [
+            /* @__PURE__ */ jsx8("input", { type: "radio", name: "access", className: "mt-1", checked: access === "full", onChange: () => setAccess("full") }),
+            /* @__PURE__ */ jsxs8("span", { children: [
               "Ansehen und steuern ",
-              /* @__PURE__ */ jsx7("span", { className: "text-white/45", children: "(Starten, Herunterfahren, Snapshots, Konsole \u2026)" })
+              /* @__PURE__ */ jsx8("span", { className: "text-white/45", children: "(Starten, Herunterfahren, Snapshots, Konsole \u2026)" })
             ] })
           ] }),
-          /* @__PURE__ */ jsxs7("label", { className: "mt-1 flex cursor-pointer items-start gap-2", children: [
-            /* @__PURE__ */ jsx7("input", { type: "radio", name: "access", className: "mt-1", checked: access === "read", onChange: () => setAccess("read") }),
-            /* @__PURE__ */ jsx7("span", { children: "Nur ansehen" })
+          /* @__PURE__ */ jsxs8("label", { className: "mt-1 flex cursor-pointer items-start gap-2", children: [
+            /* @__PURE__ */ jsx8("input", { type: "radio", name: "access", className: "mt-1", checked: access === "read", onChange: () => setAccess("read") }),
+            /* @__PURE__ */ jsx8("span", { children: "Nur ansehen" })
           ] })
         ] })
       ] }),
-      backupsAvailable && /* @__PURE__ */ jsxs7("label", { className: "flex cursor-pointer items-start gap-2.5 text-sm", children: [
-        /* @__PURE__ */ jsx7(
+      backupsAvailable && /* @__PURE__ */ jsxs8("label", { className: "flex cursor-pointer items-start gap-2.5 text-sm", children: [
+        /* @__PURE__ */ jsx8(
           "input",
           {
             type: "checkbox",
@@ -1038,18 +1180,18 @@ function ProxmoxConnect({
             onChange: (e) => setWithBackups(e.target.checked)
           }
         ),
-        /* @__PURE__ */ jsxs7("span", { children: [
+        /* @__PURE__ */ jsxs8("span", { children: [
           "Auch Proxmox-Backups verbinden",
-          /* @__PURE__ */ jsx7("span", { className: "block text-xs text-white/45", children: access === "full" ? "Mit eigenem Zugang (Benutzer nodvard-backup@pve): Backups ansehen, starten und Jobs \xE4ndern, als Kopie wiederherstellen (nur in den Pool \u201Enodvard-kopien\u201C). Proxmox erlaubt diesem Zugang auch, Sicherungen zu l\xF6schen und einen Gast aus einer Sicherung zu \xFCberschreiben \u2013 Nodvard Deck tut beides nie." : "Mit eigenem Zugang (Benutzer nodvard-backup@pve), der Backups nur ansieht." })
+          /* @__PURE__ */ jsx8("span", { className: "block text-xs text-white/45", children: access === "full" ? "Mit eigenem Zugang (Benutzer nodvard-backup@pve): Backups ansehen, starten und Jobs \xE4ndern, als Kopie wiederherstellen (nur in den Pool \u201Enodvard-kopien\u201C). Proxmox erlaubt diesem Zugang auch, Sicherungen zu l\xF6schen und einen Gast aus einer Sicherung zu \xFCberschreiben \u2013 Nodvard Deck tut beides nie." : "Mit eigenem Zugang (Benutzer nodvard-backup@pve), der Backups nur ansieht." })
         ] })
       ] }),
-      /* @__PURE__ */ jsx7(PasswordInClearWarning, { alternative: "Sicherer ist dann der Weg mit API-Token aus der Anleitung.", location: pageLocation }),
-      /* @__PURE__ */ jsx7(Button, { type: "submit", variant: "primary", disabled: busy || !password || !username.trim() || !cert.trusted && !confirmed, children: busy ? "Verbinde \u2026" : "Verbinden" })
+      /* @__PURE__ */ jsx8(PasswordInClearWarning, { alternative: "Sicherer ist dann der Weg mit API-Token aus der Anleitung.", location: pageLocation }),
+      /* @__PURE__ */ jsx8(Button, { type: "submit", variant: "primary", disabled: busy || !password || !username.trim() || !cert.trusted && !confirmed, children: busy ? "Verbinde \u2026" : "Verbinden" })
     ] }),
-    step === "tfa" && tfa && /* @__PURE__ */ jsxs7("form", { onSubmit: (e) => void sendCode(e), className: "space-y-3", noValidate: true, "data-testid": "proxmox-connect-tfa", children: [
-      /* @__PURE__ */ jsx7("p", { className: "text-sm", children: "Proxmox verlangt einen zweiten Faktor. Gib den Code ein \u2013 dein Passwort geht dabei nicht noch einmal hinaus." }),
-      tfa.kinds.length > 1 && /* @__PURE__ */ jsx7("div", { className: "max-w-xs", children: /* @__PURE__ */ jsx7(LabeledField, { label: "Art", children: (p) => /* @__PURE__ */ jsx7("select", { ...p, className: inputClass, value: tfaKind, onChange: (e) => setTfaKind(e.target.value), children: tfa.kinds.map((kind) => /* @__PURE__ */ jsx7("option", { value: kind, children: TFA_LABELS[kind] ?? kind }, kind)) }) }) }),
-      /* @__PURE__ */ jsx7("div", { className: "max-w-xs", children: /* @__PURE__ */ jsx7(LabeledField, { label: TFA_LABELS[tfaKind] ?? "Code", children: (p) => /* @__PURE__ */ jsx7(
+    step === "tfa" && tfa && /* @__PURE__ */ jsxs8("form", { onSubmit: (e) => void sendCode(e), className: "space-y-3", noValidate: true, "data-testid": "proxmox-connect-tfa", children: [
+      /* @__PURE__ */ jsx8("p", { className: "text-sm", children: "Proxmox verlangt einen zweiten Faktor. Gib den Code ein \u2013 dein Passwort geht dabei nicht noch einmal hinaus." }),
+      tfa.kinds.length > 1 && /* @__PURE__ */ jsx8("div", { className: "max-w-xs", children: /* @__PURE__ */ jsx8(LabeledField, { label: "Art", children: (p) => /* @__PURE__ */ jsx8("select", { ...p, className: inputClass, value: tfaKind, onChange: (e) => setTfaKind(e.target.value), children: tfa.kinds.map((kind) => /* @__PURE__ */ jsx8("option", { value: kind, children: TFA_LABELS[kind] ?? kind }, kind)) }) }) }),
+      /* @__PURE__ */ jsx8("div", { className: "max-w-xs", children: /* @__PURE__ */ jsx8(LabeledField, { label: TFA_LABELS[tfaKind] ?? "Code", children: (p) => /* @__PURE__ */ jsx8(
         "input",
         {
           ...p,
@@ -1063,10 +1205,10 @@ function ProxmoxConnect({
           spellCheck: false
         }
       ) }) }),
-      /* @__PURE__ */ jsx7(Button, { type: "submit", variant: "primary", disabled: busy || !code.trim(), children: busy ? "Pr\xFCfe \u2026" : "Best\xE4tigen" })
+      /* @__PURE__ */ jsx8(Button, { type: "submit", variant: "primary", disabled: busy || !code.trim(), children: busy ? "Pr\xFCfe \u2026" : "Best\xE4tigen" })
     ] }),
-    step === "done" && result && /* @__PURE__ */ jsxs7("div", { className: "space-y-2 text-sm", "data-testid": "proxmox-connect-done", children: [
-      /* @__PURE__ */ jsxs7("p", { role: "status", className: "text-emerald-300", children: [
+    step === "done" && result && /* @__PURE__ */ jsxs8("div", { className: "space-y-2 text-sm", "data-testid": "proxmox-connect-done", children: [
+      /* @__PURE__ */ jsxs8("p", { role: "status", className: "text-emerald-300", children: [
         "Verbunden als \u201E",
         result.connection.name,
         "\u201C (",
@@ -1075,26 +1217,26 @@ function ProxmoxConnect({
         " ",
         result.discovery === "started" ? "Nodvard Deck liest Knoten, VMs und LXC jetzt ein \u2013 das dauert meist nur einen Moment." : "Nodvard Deck liest Knoten, VMs und LXC in den n\xE4chsten Minuten ein."
       ] }),
-      result.backups && /* @__PURE__ */ jsxs7("p", { className: "text-emerald-300", "data-testid": "proxmox-connect-backups", children: [
+      result.backups && /* @__PURE__ */ jsxs8("p", { className: "text-emerald-300", "data-testid": "proxmox-connect-backups", children: [
         "Proxmox-Backups ist als \u201E",
         result.backups.name,
         "\u201C verbunden (",
         result.backups.token_id,
         ")."
       ] }),
-      result.created.length > 0 && /* @__PURE__ */ jsxs7("div", { children: [
-        /* @__PURE__ */ jsx7("p", { className: "text-xs text-white/55", children: "In Proxmox angelegt:" }),
-        /* @__PURE__ */ jsx7("ul", { className: "ml-4 list-disc text-xs text-white/70", children: result.created.map((line) => /* @__PURE__ */ jsx7("li", { children: line }, line)) })
+      result.created.length > 0 && /* @__PURE__ */ jsxs8("div", { children: [
+        /* @__PURE__ */ jsx8("p", { className: "text-xs text-white/55", children: "In Proxmox angelegt:" }),
+        /* @__PURE__ */ jsx8("ul", { className: "ml-4 list-disc text-xs text-white/70", children: result.created.map((line) => /* @__PURE__ */ jsx8("li", { children: line }, line)) })
       ] }),
-      result.notes.map((note) => /* @__PURE__ */ jsx7("p", { className: "text-xs text-white/55", children: note }, note)),
-      /* @__PURE__ */ jsx7(OldTokenList, { tokens: result.old_tokens ?? [] })
+      result.notes.map((note) => /* @__PURE__ */ jsx8("p", { className: "text-xs text-white/55", children: note }, note)),
+      /* @__PURE__ */ jsx8(OldTokenList, { tokens: result.old_tokens ?? [] })
     ] }),
-    error && /* @__PURE__ */ jsx7("p", { role: "alert", className: "text-sm text-red-300", children: error })
+    error && /* @__PURE__ */ jsx8("p", { role: "alert", className: "text-sm text-red-300", children: error })
   ] });
 }
 
 // src/ProxmoxNodePage.tsx
-import { Fragment as Fragment4, jsx as jsx8, jsxs as jsxs8 } from "react/jsx-runtime";
+import { Fragment as Fragment5, jsx as jsx9, jsxs as jsxs9 } from "react/jsx-runtime";
 var RELOAD_AFTER_CONNECT_MS = 5e3;
 var HOST_STATUS_LABEL = { up: "l\xE4uft", down: "gestoppt", unknown: "unbekannt", maintenance: "Wartung" };
 var KIND_LABEL = { vm: "VM", lxc: "LXC", hypervisor: "Knoten" };
@@ -1169,9 +1311,9 @@ function SnapshotsPanel({
   onAction,
   isPending
 }) {
-  const [snaps, setSnaps] = useState7(null);
-  const [error, setError] = useState7(null);
-  useEffect7(() => {
+  const [snaps, setSnaps] = useState8(null);
+  const [error, setError] = useState8(null);
+  useEffect8(() => {
     let cancelled = false;
     authedFetch(`/ext/proxmox/guests/${hostId}/snapshots`).then(async (res) => {
       if (!res.ok) throw new Error(await errorText(res));
@@ -1181,23 +1323,23 @@ function SnapshotsPanel({
       cancelled = true;
     };
   }, [hostId, refreshKey]);
-  if (error) return /* @__PURE__ */ jsxs8("p", { className: "text-xs text-red-400", children: [
+  if (error) return /* @__PURE__ */ jsxs9("p", { className: "text-xs text-red-400", children: [
     "Snapshots nicht abrufbar: ",
     error
   ] });
-  if (!snaps) return /* @__PURE__ */ jsx8("p", { className: "text-xs opacity-60", children: "Lade Snapshots \u2026" });
-  if (snaps.length === 0) return /* @__PURE__ */ jsx8("p", { className: "text-xs opacity-60", children: "Keine Snapshots." });
-  return /* @__PURE__ */ jsx8("ul", { className: "flex flex-col gap-1 text-xs", "data-testid": `snapshots-${hostId}`, children: snaps.map((snap) => /* @__PURE__ */ jsxs8("li", { className: "flex flex-wrap items-center gap-2", children: [
-    /* @__PURE__ */ jsx8("span", { className: "font-medium", children: snap.name }),
-    /* @__PURE__ */ jsx8("span", { className: "opacity-60", children: snap.snaptime ? new Date(snap.snaptime * 1e3).toLocaleString("de-DE") : "" }),
-    snap.with_ram && /* @__PURE__ */ jsx8("span", { className: "rounded bg-white/10 px-1 text-[10px]", children: "mit RAM" }),
-    snap.description && /* @__PURE__ */ jsxs8("span", { className: "opacity-60", children: [
+  if (!snaps) return /* @__PURE__ */ jsx9("p", { className: "text-xs opacity-60", children: "Lade Snapshots \u2026" });
+  if (snaps.length === 0) return /* @__PURE__ */ jsx9("p", { className: "text-xs opacity-60", children: "Keine Snapshots." });
+  return /* @__PURE__ */ jsx9("ul", { className: "flex flex-col gap-1 text-xs", "data-testid": `snapshots-${hostId}`, children: snaps.map((snap) => /* @__PURE__ */ jsxs9("li", { className: "flex flex-wrap items-center gap-2", children: [
+    /* @__PURE__ */ jsx9("span", { className: "font-medium", children: snap.name }),
+    /* @__PURE__ */ jsx9("span", { className: "opacity-60", children: snap.snaptime ? new Date(snap.snaptime * 1e3).toLocaleString("de-DE") : "" }),
+    snap.with_ram && /* @__PURE__ */ jsx9("span", { className: "rounded bg-white/10 px-1 text-[10px]", children: "mit RAM" }),
+    snap.description && /* @__PURE__ */ jsxs9("span", { className: "opacity-60", children: [
       "-- ",
       snap.description
     ] }),
-    /* @__PURE__ */ jsxs8("span", { className: "ml-auto flex gap-1.5", children: [
-      /* @__PURE__ */ jsx8("button", { type: "button", disabled: isPending("vm.snapshot_rollback", snap.name), onClick: () => onAction("vm.snapshot_rollback", snap.name), className: "rounded bg-amber-500/20 px-2 py-0.5 text-amber-300 hover:bg-amber-500/30 disabled:opacity-40", children: "Zur\xFCckrollen" }),
-      /* @__PURE__ */ jsx8("button", { type: "button", disabled: isPending("vm.snapshot_delete", snap.name), onClick: () => onAction("vm.snapshot_delete", snap.name), className: "px-2 py-0.5 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition disabled:opacity-40", children: "L\xF6schen" })
+    /* @__PURE__ */ jsxs9("span", { className: "ml-auto flex gap-1.5", children: [
+      /* @__PURE__ */ jsx9("button", { type: "button", disabled: isPending("vm.snapshot_rollback", snap.name), onClick: () => onAction("vm.snapshot_rollback", snap.name), className: "rounded bg-amber-500/20 px-2 py-0.5 text-amber-300 hover:bg-amber-500/30 disabled:opacity-40", children: "Zur\xFCckrollen" }),
+      /* @__PURE__ */ jsx9("button", { type: "button", disabled: isPending("vm.snapshot_delete", snap.name), onClick: () => onAction("vm.snapshot_delete", snap.name), className: "px-2 py-0.5 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition disabled:opacity-40", children: "L\xF6schen" })
     ] })
   ] }, snap.name)) });
 }
@@ -1215,42 +1357,42 @@ function shieldUpdatesHref(tools) {
   return url.pathname + url.search;
 }
 function UpdatesSection({ nodes, shieldHref }) {
-  return /* @__PURE__ */ jsx8("div", { children: /* @__PURE__ */ jsx8("ul", { className: "space-y-2", children: nodes.map((n) => {
+  return /* @__PURE__ */ jsx9("div", { children: /* @__PURE__ */ jsx9("ul", { className: "space-y-2", children: nodes.map((n) => {
     const href = !n.error && (n.count ?? 0) > 0 ? shieldHref?.(n) : void 0;
-    return /* @__PURE__ */ jsxs8("li", { className: "text-sm", "data-testid": `updates-${n.node}`, children: [
-      /* @__PURE__ */ jsxs8("div", { className: "flex flex-wrap items-center gap-2", children: [
-        /* @__PURE__ */ jsx8("span", { className: "font-medium", children: n.node }),
-        /* @__PURE__ */ jsx8("span", { className: `rounded px-1.5 py-0.5 text-xs ${BADGE_TONE[n.tone] ?? BADGE_TONE.neutral}`, children: n.badge }),
-        /* @__PURE__ */ jsx8("span", { className: "opacity-80", children: n.summary }),
-        href && /* @__PURE__ */ jsx8("a", { href, className: "ml-auto text-xs underline underline-offset-2 hover:text-white", "data-testid": `updates-shield-${n.node}`, children: "In Shield einspielen" })
+    return /* @__PURE__ */ jsxs9("li", { className: "text-sm", "data-testid": `updates-${n.node}`, children: [
+      /* @__PURE__ */ jsxs9("div", { className: "flex flex-wrap items-center gap-2", children: [
+        /* @__PURE__ */ jsx9("span", { className: "font-medium", children: n.node }),
+        /* @__PURE__ */ jsx9("span", { className: `rounded px-1.5 py-0.5 text-xs ${BADGE_TONE[n.tone] ?? BADGE_TONE.neutral}`, children: n.badge }),
+        /* @__PURE__ */ jsx9("span", { className: "opacity-80", children: n.summary }),
+        href && /* @__PURE__ */ jsx9("a", { href, className: "ml-auto text-xs underline underline-offset-2 hover:text-white", "data-testid": `updates-shield-${n.node}`, children: "In Shield einspielen" })
       ] }),
-      !n.error && /* @__PURE__ */ jsxs8("p", { className: "text-xs opacity-60", children: [
+      !n.error && /* @__PURE__ */ jsxs9("p", { className: "text-xs opacity-60", children: [
         "Proxmox ",
         n.pve_version ?? "?",
         " \xB7 Kernel ",
         n.running_kernel ?? "?",
         n.last_check ? ` \xB7 zuletzt gepr\xFCft ${new Date(n.last_check * 1e3).toLocaleString("de-DE")}` : " \xB7 noch kein Pr\xFCflauf von Proxmox gefunden"
       ] }),
-      !n.error && n.last_check_ok === false && /* @__PURE__ */ jsxs8("p", { className: "text-xs text-amber-300", "data-testid": `updates-check-failed-${n.node}`, children: [
+      !n.error && n.last_check_ok === false && /* @__PURE__ */ jsxs9("p", { className: "text-xs text-amber-300", "data-testid": `updates-check-failed-${n.node}`, children: [
         "Die letzte Pr\xFCfung auf neue Pakete ist fehlgeschlagen",
         n.last_check_status ? `: ${n.last_check_status}` : "",
         ". Die Liste kann veraltet sein."
       ] }),
-      !n.error && n.last_check_stale && /* @__PURE__ */ jsxs8("p", { className: "text-xs text-amber-300", "data-testid": `updates-check-stale-${n.node}`, children: [
+      !n.error && n.last_check_stale && /* @__PURE__ */ jsxs9("p", { className: "text-xs text-amber-300", "data-testid": `updates-check-stale-${n.node}`, children: [
         "Der n\xE4chtliche Pr\xFCflauf von Proxmox ist seit ",
         n.last_check_age_s ? `${Math.floor(n.last_check_age_s / 3600)} Stunden` : "\xFCber 36 Stunden",
         " nicht gelaufen. Die Liste kann veraltet sein; auf dem Knoten \u201Esystemctl status pve-daily-update.timer\u201C ansehen."
       ] }),
-      n.packages.length > 0 && /* @__PURE__ */ jsxs8("details", { className: "mt-1", children: [
-        /* @__PURE__ */ jsxs8("summary", { className: "cursor-pointer text-xs opacity-70", children: [
+      n.packages.length > 0 && /* @__PURE__ */ jsxs9("details", { className: "mt-1", children: [
+        /* @__PURE__ */ jsxs9("summary", { className: "cursor-pointer text-xs opacity-70", children: [
           "Pakete anzeigen (",
           n.packages.length,
           ")"
         ] }),
-        /* @__PURE__ */ jsx8("table", { className: "mt-1 w-full text-xs", children: /* @__PURE__ */ jsx8("tbody", { className: "divide-y divide-white/5", children: n.packages.map((pkg) => /* @__PURE__ */ jsxs8("tr", { children: [
-          /* @__PURE__ */ jsx8("td", { className: "py-0.5 pr-2 font-mono", children: pkg.package }),
-          /* @__PURE__ */ jsx8("td", { className: "py-0.5 pr-2 whitespace-nowrap font-mono", children: pkg.new_package ? `neu: ${pkg.version}` : `${pkg.old_version} \u2192 ${pkg.version}` }),
-          /* @__PURE__ */ jsx8("td", { className: "py-0.5 opacity-60", children: pkg.title })
+        /* @__PURE__ */ jsx9("table", { className: "mt-1 w-full text-xs", children: /* @__PURE__ */ jsx9("tbody", { className: "divide-y divide-white/5", children: n.packages.map((pkg) => /* @__PURE__ */ jsxs9("tr", { children: [
+          /* @__PURE__ */ jsx9("td", { className: "py-0.5 pr-2 font-mono", children: pkg.package }),
+          /* @__PURE__ */ jsx9("td", { className: "py-0.5 pr-2 whitespace-nowrap font-mono", children: pkg.new_package ? `neu: ${pkg.version}` : `${pkg.old_version} \u2192 ${pkg.version}` }),
+          /* @__PURE__ */ jsx9("td", { className: "py-0.5 opacity-60", children: pkg.title })
         ] }, pkg.package)) }) })
       ] })
     ] }, n.node);
@@ -1272,35 +1414,35 @@ function UnreachableHint({
     }
   }
   if (lines.size === 0) return null;
-  return /* @__PURE__ */ jsx8("div", { className: "mt-3 space-y-1 text-sm text-amber-300", "data-testid": testId, children: [...lines].map(([rest, whats]) => /* @__PURE__ */ jsx8("p", { children: `${whats.join(" und ")} ${rest}` }, rest)) });
+  return /* @__PURE__ */ jsx9("div", { className: "mt-3 space-y-1 text-sm text-amber-300", "data-testid": testId, children: [...lines].map(([rest, whats]) => /* @__PURE__ */ jsx9("p", { children: `${whats.join(" und ")} ${rest}` }, rest)) });
 }
 function StorageSection({ pools, focusNode = null }) {
-  return /* @__PURE__ */ jsx8("div", { children: /* @__PURE__ */ jsxs8("table", { className: "w-full text-sm", children: [
-    /* @__PURE__ */ jsx8("thead", { children: /* @__PURE__ */ jsxs8("tr", { className: "border-b border-white/10 text-left text-xs opacity-60", children: [
-      /* @__PURE__ */ jsx8("th", { className: "py-1 w-1/5", children: "Pool" }),
-      /* @__PURE__ */ jsx8("th", { className: "py-1", children: "Inhalt" }),
-      /* @__PURE__ */ jsx8("th", { className: "py-1 w-1/3", children: "Belegung" })
+  return /* @__PURE__ */ jsx9("div", { children: /* @__PURE__ */ jsxs9("table", { className: "w-full text-sm", children: [
+    /* @__PURE__ */ jsx9("thead", { children: /* @__PURE__ */ jsxs9("tr", { className: "border-b border-white/10 text-left text-xs opacity-60", children: [
+      /* @__PURE__ */ jsx9("th", { className: "py-1 w-1/5", children: "Pool" }),
+      /* @__PURE__ */ jsx9("th", { className: "py-1", children: "Inhalt" }),
+      /* @__PURE__ */ jsx9("th", { className: "py-1 w-1/3", children: "Belegung" })
     ] }) }),
-    /* @__PURE__ */ jsx8("tbody", { className: "divide-y divide-white/5", children: pools.map((pool) => /* @__PURE__ */ jsxs8("tr", { "data-testid": `pool-${pool.storage}`, className: focusNode && pool.node === focusNode ? FOCUS_CLASS : void 0, children: [
-      /* @__PURE__ */ jsxs8("td", { className: "py-1.5 align-top", children: [
-        /* @__PURE__ */ jsx8("span", { className: "font-medium", children: pool.storage }),
-        /* @__PURE__ */ jsxs8("span", { className: "block text-xs opacity-60", children: [
+    /* @__PURE__ */ jsx9("tbody", { className: "divide-y divide-white/5", children: pools.map((pool) => /* @__PURE__ */ jsxs9("tr", { "data-testid": `pool-${pool.storage}`, className: focusNode && pool.node === focusNode ? FOCUS_CLASS : void 0, children: [
+      /* @__PURE__ */ jsxs9("td", { className: "py-1.5 align-top", children: [
+        /* @__PURE__ */ jsx9("span", { className: "font-medium", children: pool.storage }),
+        /* @__PURE__ */ jsxs9("span", { className: "block text-xs opacity-60", children: [
           pool.type,
           pool.shared ? " \xB7 geteilt" : ""
         ] })
       ] }),
-      /* @__PURE__ */ jsxs8("td", { className: "py-1.5 align-top text-xs", children: [
-        /* @__PURE__ */ jsx8("span", { className: "opacity-70", children: pool.content_labels.join(", ") }),
-        (pool.volumes ?? []).length > 0 && /* @__PURE__ */ jsxs8("span", { className: "block", children: [
+      /* @__PURE__ */ jsxs9("td", { className: "py-1.5 align-top text-xs", children: [
+        /* @__PURE__ */ jsx9("span", { className: "opacity-70", children: pool.content_labels.join(", ") }),
+        (pool.volumes ?? []).length > 0 && /* @__PURE__ */ jsxs9("span", { className: "block", children: [
           "Gast-Disks:",
           " ",
           (pool.volumes ?? []).map((v) => `${v.name} (${formatBytes2(v.size ?? 0)})`).join(", ")
         ] }),
-        Object.values(pool.other ?? {}).length > 0 && /* @__PURE__ */ jsx8("span", { className: "block opacity-60", children: Object.values(pool.other ?? {}).map((o) => `${o.count} ${o.label} (${formatBytes2(o.size)})`).join(", ") })
+        Object.values(pool.other ?? {}).length > 0 && /* @__PURE__ */ jsx9("span", { className: "block opacity-60", children: Object.values(pool.other ?? {}).map((o) => `${o.count} ${o.label} (${formatBytes2(o.size)})`).join(", ") })
       ] }),
-      /* @__PURE__ */ jsxs8("td", { className: "py-1.5 align-top text-xs", children: [
-        /* @__PURE__ */ jsx8("div", { className: "h-1.5 w-full overflow-hidden rounded bg-white/10", role: "progressbar", "aria-valuenow": pool.used_percent ?? 0, "aria-valuemin": 0, "aria-valuemax": 100, children: /* @__PURE__ */ jsx8("div", { className: `h-full ${BAR_TONE[pool.tone] ?? BAR_TONE.neutral}`, style: { width: `${Math.min(100, pool.used_percent ?? 0)}%` } }) }),
-        /* @__PURE__ */ jsxs8("span", { className: "opacity-70", children: [
+      /* @__PURE__ */ jsxs9("td", { className: "py-1.5 align-top text-xs", children: [
+        /* @__PURE__ */ jsx9("div", { className: "h-1.5 w-full overflow-hidden rounded bg-white/10", role: "progressbar", "aria-valuenow": pool.used_percent ?? 0, "aria-valuemin": 0, "aria-valuemax": 100, children: /* @__PURE__ */ jsx9("div", { className: `h-full ${BAR_TONE[pool.tone] ?? BAR_TONE.neutral}`, ref: styleRef({ width: `${Math.min(100, pool.used_percent ?? 0)}%` }) }) }),
+        /* @__PURE__ */ jsxs9("span", { className: "opacity-70", children: [
           formatBytes2(pool.used ?? 0),
           " / ",
           formatBytes2(pool.total ?? 0),
@@ -1317,9 +1459,9 @@ function formatDuration(seconds) {
   return minutes < 60 ? `${minutes}m ${seconds % 60}s` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 function TaskRow({ task }) {
-  const [lines, setLines] = useState7(null);
-  const [open, setOpen] = useState7(false);
-  const [error, setError] = useState7(null);
+  const [lines, setLines] = useState8(null);
+  const [open, setOpen] = useState8(false);
+  const [error, setError] = useState8(null);
   async function toggle() {
     const next = !open;
     setOpen(next);
@@ -1336,35 +1478,35 @@ function TaskRow({ task }) {
   }
   const statusClass = task.running ? "text-amber-300" : task.ok ? "text-emerald-300" : "text-red-300";
   const statusText = task.running ? "l\xE4uft" : task.ok ? "OK" : task.status ?? "Fehler";
-  return /* @__PURE__ */ jsxs8(Fragment4, { children: [
-    /* @__PURE__ */ jsxs8("tr", { className: "cursor-pointer hover:bg-white/5", onClick: () => void toggle(), "data-testid": `task-${task.upid}`, children: [
-      /* @__PURE__ */ jsx8("td", { className: "py-1 whitespace-nowrap opacity-70", children: task.starttime ? new Date(task.starttime * 1e3).toLocaleString("de-DE") : "" }),
-      /* @__PURE__ */ jsxs8("td", { className: "py-1", children: [
+  return /* @__PURE__ */ jsxs9(Fragment5, { children: [
+    /* @__PURE__ */ jsxs9("tr", { className: "cursor-pointer hover:bg-white/5", onClick: () => void toggle(), "data-testid": `task-${task.upid}`, children: [
+      /* @__PURE__ */ jsx9("td", { className: "py-1 whitespace-nowrap opacity-70", children: task.starttime ? new Date(task.starttime * 1e3).toLocaleString("de-DE") : "" }),
+      /* @__PURE__ */ jsxs9("td", { className: "py-1", children: [
         task.type_label,
         task.guest_name ? ` \xB7 ${task.guest_name}` : task.guest_id ? ` \xB7 ${task.guest_id}` : ""
       ] }),
-      /* @__PURE__ */ jsx8("td", { className: "py-1 opacity-70", children: task.user }),
-      /* @__PURE__ */ jsx8("td", { className: `py-1 break-words ${statusClass}`, children: statusText }),
-      /* @__PURE__ */ jsx8("td", { className: "py-1 whitespace-nowrap opacity-70", children: formatDuration(task.duration_s) })
+      /* @__PURE__ */ jsx9("td", { className: "py-1 opacity-70", children: task.user }),
+      /* @__PURE__ */ jsx9("td", { className: `py-1 break-words ${statusClass}`, children: statusText }),
+      /* @__PURE__ */ jsx9("td", { className: "py-1 whitespace-nowrap opacity-70", children: formatDuration(task.duration_s) })
     ] }),
-    open && /* @__PURE__ */ jsx8("tr", { children: /* @__PURE__ */ jsxs8("td", { colSpan: 5, className: "bg-black/30 p-2", children: [
-      error && /* @__PURE__ */ jsx8("p", { className: "text-red-400", children: error }),
-      !error && !lines && /* @__PURE__ */ jsx8("p", { className: "opacity-60", children: "Lade Protokoll \u2026" }),
-      lines && /* @__PURE__ */ jsx8("pre", { className: "max-h-64 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px]", children: lines.join("\n") || "(leer)" })
+    open && /* @__PURE__ */ jsx9("tr", { children: /* @__PURE__ */ jsxs9("td", { colSpan: 5, className: "bg-black/30 p-2", children: [
+      error && /* @__PURE__ */ jsx9("p", { className: "text-red-400", children: error }),
+      !error && !lines && /* @__PURE__ */ jsx9("p", { className: "opacity-60", children: "Lade Protokoll \u2026" }),
+      lines && /* @__PURE__ */ jsx9("pre", { className: "max-h-64 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px]", children: lines.join("\n") || "(leer)" })
     ] }) })
   ] });
 }
 function TasksTable({ tasks }) {
-  if (tasks.length === 0) return /* @__PURE__ */ jsx8("p", { className: "text-xs opacity-60", children: "Keine Aufgaben in letzter Zeit." });
-  return /* @__PURE__ */ jsx8("div", { className: "overflow-x-auto", children: /* @__PURE__ */ jsxs8("table", { className: "w-full min-w-[32rem] text-xs", children: [
-    /* @__PURE__ */ jsx8("thead", { children: /* @__PURE__ */ jsxs8("tr", { className: "border-b border-white/10 text-left opacity-60", children: [
-      /* @__PURE__ */ jsx8("th", { className: "py-1", children: "Zeit" }),
-      /* @__PURE__ */ jsx8("th", { className: "py-1", children: "Aufgabe" }),
-      /* @__PURE__ */ jsx8("th", { className: "py-1", children: "Benutzer" }),
-      /* @__PURE__ */ jsx8("th", { className: "py-1", children: "Status" }),
-      /* @__PURE__ */ jsx8("th", { className: "py-1", children: "Dauer" })
+  if (tasks.length === 0) return /* @__PURE__ */ jsx9("p", { className: "text-xs opacity-60", children: "Keine Aufgaben in letzter Zeit." });
+  return /* @__PURE__ */ jsx9("div", { className: "overflow-x-auto", children: /* @__PURE__ */ jsxs9("table", { className: "w-full min-w-[32rem] text-xs", children: [
+    /* @__PURE__ */ jsx9("thead", { children: /* @__PURE__ */ jsxs9("tr", { className: "border-b border-white/10 text-left opacity-60", children: [
+      /* @__PURE__ */ jsx9("th", { className: "py-1", children: "Zeit" }),
+      /* @__PURE__ */ jsx9("th", { className: "py-1", children: "Aufgabe" }),
+      /* @__PURE__ */ jsx9("th", { className: "py-1", children: "Benutzer" }),
+      /* @__PURE__ */ jsx9("th", { className: "py-1", children: "Status" }),
+      /* @__PURE__ */ jsx9("th", { className: "py-1", children: "Dauer" })
     ] }) }),
-    /* @__PURE__ */ jsx8("tbody", { className: "divide-y divide-white/5", children: tasks.map((task) => /* @__PURE__ */ jsx8(TaskRow, { task }, task.upid)) })
+    /* @__PURE__ */ jsx9("tbody", { className: "divide-y divide-white/5", children: tasks.map((task) => /* @__PURE__ */ jsx9(TaskRow, { task }, task.upid)) })
   ] }) });
 }
 function formatMb(mb) {
@@ -1429,8 +1571,8 @@ function editChanges(kind, before, after) {
 function GuestEditForm({ hostId, details, onDone }) {
   const unmountSignal = useUnmountSignal();
   const initial = toEditValues(details);
-  const [values, setValues] = useState7(initial);
-  const [busy, setBusy] = useState7(false);
+  const [values, setValues] = useState8(initial);
+  const [busy, setBusy] = useState8(false);
   const changes = editChanges(details.kind, initial, values);
   const changed = Object.keys(changes);
   async function save(e) {
@@ -1461,15 +1603,15 @@ function GuestEditForm({ hostId, details, onDone }) {
       setBusy(false);
     }
   }
-  return /* @__PURE__ */ jsxs8("form", { onSubmit: (e) => void save(e), className: "mt-2 rounded border border-white/10 bg-black/20 p-2", "data-testid": `edit-${hostId}`, children: [
-    /* @__PURE__ */ jsxs8("div", { className: "flex flex-wrap items-end gap-3", children: [
+  return /* @__PURE__ */ jsxs9("form", { onSubmit: (e) => void save(e), className: "mt-2 rounded border border-white/10 bg-black/20 p-2", "data-testid": `edit-${hostId}`, children: [
+    /* @__PURE__ */ jsxs9("div", { className: "flex flex-wrap items-end gap-3", children: [
       EDIT_KEYS[details.kind].map(
-        (key) => key === "onboot" ? /* @__PURE__ */ jsxs8("label", { className: "flex items-center gap-1 pb-1", children: [
-          /* @__PURE__ */ jsx8("input", { type: "checkbox", checked: values.onboot, onChange: (e) => setValues({ ...values, onboot: e.target.checked }) }),
+        (key) => key === "onboot" ? /* @__PURE__ */ jsxs9("label", { className: "flex items-center gap-1 pb-1", children: [
+          /* @__PURE__ */ jsx9("input", { type: "checkbox", checked: values.onboot, onChange: (e) => setValues({ ...values, onboot: e.target.checked }) }),
           EDIT_LABEL[key]
-        ] }, key) : /* @__PURE__ */ jsxs8("label", { className: "flex flex-col gap-0.5", children: [
-          /* @__PURE__ */ jsx8("span", { className: "opacity-60", children: EDIT_LABEL[key] }),
-          /* @__PURE__ */ jsx8(
+        ] }, key) : /* @__PURE__ */ jsxs9("label", { className: "flex flex-col gap-0.5", children: [
+          /* @__PURE__ */ jsx9("span", { className: "opacity-60", children: EDIT_LABEL[key] }),
+          /* @__PURE__ */ jsx9(
             "input",
             {
               type: "number",
@@ -1482,19 +1624,19 @@ function GuestEditForm({ hostId, details, onDone }) {
           )
         ] }, key)
       ),
-      /* @__PURE__ */ jsx8("button", { type: "submit", disabled: busy || changed.length === 0, className: "rounded bg-white/15 px-3 py-1 hover:bg-white/25 disabled:opacity-40", children: busy ? "\u2026" : "Speichern" }),
-      /* @__PURE__ */ jsx8("button", { type: "button", onClick: () => onDone(null), className: "rounded px-2 py-1 opacity-70 hover:opacity-100", children: "Abbrechen" })
+      /* @__PURE__ */ jsx9("button", { type: "submit", disabled: busy || changed.length === 0, className: "rounded bg-white/15 px-3 py-1 hover:bg-white/25 disabled:opacity-40", children: busy ? "\u2026" : "Speichern" }),
+      /* @__PURE__ */ jsx9("button", { type: "button", onClick: () => onDone(null), className: "rounded px-2 py-1 opacity-70 hover:opacity-100", children: "Abbrechen" })
     ] }),
-    details.kind === "qemu" && /* @__PURE__ */ jsx8("p", { className: "mt-1 opacity-50", children: "Ballon-Minimum 0 schaltet Ballooning ab. Kerne und RAM greifen bei laufender VM meist erst nach einem Neustart." })
+    details.kind === "qemu" && /* @__PURE__ */ jsx9("p", { className: "mt-1 opacity-50", children: "Ballon-Minimum 0 schaltet Ballooning ab. Kerne und RAM greifen bei laufender VM meist erst nach einem Neustart." })
   ] });
 }
 function GuestDetailsPanel({ hostId }) {
-  const [details, setDetails] = useState7(null);
-  const [error, setError] = useState7(null);
-  const [editing, setEditing] = useState7(false);
-  const [editMessage, setEditMessage] = useState7(null);
-  const [reloadKey, setReloadKey] = useState7(0);
-  useEffect7(() => {
+  const [details, setDetails] = useState8(null);
+  const [error, setError] = useState8(null);
+  const [editing, setEditing] = useState8(false);
+  const [editMessage, setEditMessage] = useState8(null);
+  const [reloadKey, setReloadKey] = useState8(0);
+  useEffect8(() => {
     let cancelled = false;
     authedFetch(`/ext/proxmox/guests/${hostId}/details`).then(async (res) => {
       if (!res.ok) throw new Error(await errorText(res));
@@ -1508,21 +1650,21 @@ function GuestDetailsPanel({ hostId }) {
       cancelled = true;
     };
   }, [hostId, reloadKey]);
-  if (error) return /* @__PURE__ */ jsxs8("p", { className: "mt-2 text-xs text-red-400", children: [
+  if (error) return /* @__PURE__ */ jsxs9("p", { className: "mt-2 text-xs text-red-400", children: [
     "Details nicht verf\xFCgbar: ",
     error
   ] });
-  if (!details) return /* @__PURE__ */ jsx8("p", { className: "mt-2 text-xs opacity-60", children: "Lade Details \u2026" });
+  if (!details) return /* @__PURE__ */ jsx9("p", { className: "mt-2 text-xs opacity-60", children: "Lade Details \u2026" });
   const d = details;
   const agent = d.kind === "qemu" ? agentText(d) : null;
   const cpu = d.kind === "qemu" ? `${d.cores * (d.sockets ?? 1)} vCPU${d.cpu_type ? ` (${d.cpu_type})` : ""}` : `${d.cores} Kerne`;
   const memory = d.kind === "qemu" ? `${formatMb(d.memory_mb)}${d.balloon_mb ? `, Ballooning ab ${formatMb(d.balloon_mb)}` : ""}` : `${formatMb(d.memory_mb)}${d.swap_mb ? ` + ${formatMb(d.swap_mb)} Swap` : ""}`;
-  return /* @__PURE__ */ jsxs8("div", { className: "mt-2 text-xs", "data-testid": `details-${hostId}`, children: [
-    deck().hasPermission("hosts.execute") && !editing && /* @__PURE__ */ jsx8("button", { type: "button", onClick: () => {
+  return /* @__PURE__ */ jsxs9("div", { className: "mt-2 text-xs", "data-testid": `details-${hostId}`, children: [
+    deck().hasPermission("hosts.execute") && !editing && /* @__PURE__ */ jsx9("button", { type: "button", onClick: () => {
       setEditMessage(null);
       setEditing(true);
     }, className: "mb-2 px-2 py-1 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: "Hardware \xE4ndern" }),
-    editing && /* @__PURE__ */ jsx8(
+    editing && /* @__PURE__ */ jsx9(
       GuestEditForm,
       {
         hostId,
@@ -1534,54 +1676,54 @@ function GuestDetailsPanel({ hostId }) {
         }
       }
     ),
-    editMessage && /* @__PURE__ */ jsx8("p", { className: "mb-2 opacity-90", role: "status", children: editMessage }),
-    /* @__PURE__ */ jsxs8("dl", { className: "grid grid-cols-2 gap-x-6 gap-y-1 opacity-80 sm:grid-cols-4", children: [
-      /* @__PURE__ */ jsxs8("div", { children: [
-        /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "Prozessor" }),
-        /* @__PURE__ */ jsx8("dd", { children: cpu })
+    editMessage && /* @__PURE__ */ jsx9("p", { className: "mb-2 opacity-90", role: "status", children: editMessage }),
+    /* @__PURE__ */ jsxs9("dl", { className: "grid grid-cols-2 gap-x-6 gap-y-1 opacity-80 sm:grid-cols-4", children: [
+      /* @__PURE__ */ jsxs9("div", { children: [
+        /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "Prozessor" }),
+        /* @__PURE__ */ jsx9("dd", { children: cpu })
       ] }),
-      /* @__PURE__ */ jsxs8("div", { children: [
-        /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "Arbeitsspeicher" }),
-        /* @__PURE__ */ jsx8("dd", { children: memory })
+      /* @__PURE__ */ jsxs9("div", { children: [
+        /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "Arbeitsspeicher" }),
+        /* @__PURE__ */ jsx9("dd", { children: memory })
       ] }),
-      /* @__PURE__ */ jsxs8("div", { children: [
-        /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "System" }),
-        /* @__PURE__ */ jsxs8("dd", { children: [
+      /* @__PURE__ */ jsxs9("div", { children: [
+        /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "System" }),
+        /* @__PURE__ */ jsxs9("dd", { children: [
           d.os ?? "?",
           d.kind === "qemu" ? ` \xB7 ${d.bios} \xB7 ${d.machine}` : d.unprivileged ? " \xB7 unprivilegiert" : " \xB7 privilegiert"
         ] })
       ] }),
-      /* @__PURE__ */ jsxs8("div", { children: [
-        /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "Autostart" }),
-        /* @__PURE__ */ jsx8("dd", { children: d.onboot ? `ja${d.startup_order != null ? ` (Reihenfolge ${d.startup_order})` : ""}` : "nein" })
+      /* @__PURE__ */ jsxs9("div", { children: [
+        /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "Autostart" }),
+        /* @__PURE__ */ jsx9("dd", { children: d.onboot ? `ja${d.startup_order != null ? ` (Reihenfolge ${d.startup_order})` : ""}` : "nein" })
       ] }),
-      agent && /* @__PURE__ */ jsxs8("div", { children: [
-        /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "Gast-Agent" }),
-        /* @__PURE__ */ jsx8("dd", { className: agent.className, children: agent.text })
+      agent && /* @__PURE__ */ jsxs9("div", { children: [
+        /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "Gast-Agent" }),
+        /* @__PURE__ */ jsx9("dd", { className: agent.className, children: agent.text })
       ] }),
-      d.features && d.features.length > 0 && /* @__PURE__ */ jsxs8("div", { children: [
-        /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "Funktionen" }),
-        /* @__PURE__ */ jsx8("dd", { children: d.features.join(", ") })
+      d.features && d.features.length > 0 && /* @__PURE__ */ jsxs9("div", { children: [
+        /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "Funktionen" }),
+        /* @__PURE__ */ jsx9("dd", { children: d.features.join(", ") })
       ] }),
-      d.passthrough.length > 0 && /* @__PURE__ */ jsxs8("div", { children: [
-        /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "Durchgereicht" }),
-        /* @__PURE__ */ jsx8("dd", { children: d.passthrough.join(", ") })
+      d.passthrough.length > 0 && /* @__PURE__ */ jsxs9("div", { children: [
+        /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "Durchgereicht" }),
+        /* @__PURE__ */ jsx9("dd", { children: d.passthrough.join(", ") })
       ] }),
-      d.tags.length > 0 && /* @__PURE__ */ jsxs8("div", { children: [
-        /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "Tags" }),
-        /* @__PURE__ */ jsx8("dd", { children: d.tags.join(", ") })
+      d.tags.length > 0 && /* @__PURE__ */ jsxs9("div", { children: [
+        /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "Tags" }),
+        /* @__PURE__ */ jsx9("dd", { children: d.tags.join(", ") })
       ] })
     ] }),
-    /* @__PURE__ */ jsx8("p", { className: "mt-2 mb-1 font-medium opacity-60", children: "Laufwerke" }),
-    /* @__PURE__ */ jsx8("ul", { className: "space-y-0.5", children: d.disks.map((disk) => /* @__PURE__ */ jsxs8("li", { className: disk.kind === "unused" ? "text-amber-300" : "opacity-80", children: [
-      /* @__PURE__ */ jsx8("span", { className: "font-mono opacity-60", children: disk.slot }),
+    /* @__PURE__ */ jsx9("p", { className: "mt-2 mb-1 font-medium opacity-60", children: "Laufwerke" }),
+    /* @__PURE__ */ jsx9("ul", { className: "space-y-0.5", children: d.disks.map((disk) => /* @__PURE__ */ jsxs9("li", { className: disk.kind === "unused" ? "text-amber-300" : "opacity-80", children: [
+      /* @__PURE__ */ jsx9("span", { className: "font-mono opacity-60", children: disk.slot }),
       " ",
       diskLabel(disk)
     ] }, disk.slot)) }),
-    /* @__PURE__ */ jsx8("p", { className: "mt-2 mb-1 font-medium opacity-60", children: "Netzwerk" }),
-    /* @__PURE__ */ jsxs8("ul", { className: "space-y-0.5", children: [
-      d.networks.map((nic) => /* @__PURE__ */ jsxs8("li", { className: "opacity-80", children: [
-        /* @__PURE__ */ jsx8("span", { className: "font-mono opacity-60", children: nic.slot }),
+    /* @__PURE__ */ jsx9("p", { className: "mt-2 mb-1 font-medium opacity-60", children: "Netzwerk" }),
+    /* @__PURE__ */ jsxs9("ul", { className: "space-y-0.5", children: [
+      d.networks.map((nic) => /* @__PURE__ */ jsxs9("li", { className: "opacity-80", children: [
+        /* @__PURE__ */ jsx9("span", { className: "font-mono opacity-60", children: nic.slot }),
         " ",
         nic.name ? `${nic.name} \xB7 ` : "",
         nic.bridge ?? "?",
@@ -1589,12 +1731,12 @@ function GuestDetailsPanel({ hostId }) {
         " \xB7 ",
         nic.model ?? "?",
         " \xB7 ",
-        /* @__PURE__ */ jsx8("span", { className: "font-mono", children: nic.mac ?? "?" }),
+        /* @__PURE__ */ jsx9("span", { className: "font-mono", children: nic.mac ?? "?" }),
         nic.firewall ? " \xB7 Firewall" : "",
         nic.link_down ? " \xB7 getrennt" : "",
         nic.ips.length > 0 ? ` \xB7 ${nic.ips.join(", ")}` : nic.configured_ip ? ` \xB7 ${nic.configured_ip === "dhcp" ? "DHCP" : nic.configured_ip}` : ""
       ] }, nic.slot)),
-      d.other_ips.length > 0 && /* @__PURE__ */ jsxs8("li", { className: "opacity-60", children: [
+      d.other_ips.length > 0 && /* @__PURE__ */ jsxs9("li", { className: "opacity-60", children: [
         "Weitere Adressen im Gast: ",
         d.other_ips.join(", ")
       ] })
@@ -1602,9 +1744,9 @@ function GuestDetailsPanel({ hostId }) {
   ] });
 }
 function NodeHealthPanel({ hostId }) {
-  const [health, setHealth] = useState7(null);
-  const [error, setError] = useState7(null);
-  useEffect7(() => {
+  const [health, setHealth] = useState8(null);
+  const [error, setError] = useState8(null);
+  useEffect8(() => {
     let cancelled = false;
     authedFetch(`/ext/proxmox/nodes/${hostId}/health`).then(async (res) => {
       if (!res.ok) throw new Error(await errorText(res));
@@ -1618,18 +1760,18 @@ function NodeHealthPanel({ hostId }) {
       cancelled = true;
     };
   }, [hostId]);
-  if (error) return /* @__PURE__ */ jsxs8("p", { className: "mt-2 text-xs text-red-400", children: [
+  if (error) return /* @__PURE__ */ jsxs9("p", { className: "mt-2 text-xs text-red-400", children: [
     "Knotendaten nicht verf\xFCgbar: ",
     error
   ] });
-  if (!health) return /* @__PURE__ */ jsx8("p", { className: "mt-2 text-xs opacity-60", children: "Lade Knotendaten \u2026" });
+  if (!health) return /* @__PURE__ */ jsx9("p", { className: "mt-2 text-xs opacity-60", children: "Lade Knotendaten \u2026" });
   const h = health;
   const memUsed = h.mem_total != null && h.mem_available != null ? h.mem_total - h.mem_available : null;
-  return /* @__PURE__ */ jsxs8("div", { className: "mt-2 text-xs", "data-testid": `node-health-${hostId}`, children: [
-    /* @__PURE__ */ jsxs8("dl", { className: "grid grid-cols-2 gap-x-6 gap-y-1 opacity-80 sm:grid-cols-4", children: [
-      /* @__PURE__ */ jsxs8("div", { className: "col-span-2", children: [
-        /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "Prozessor" }),
-        /* @__PURE__ */ jsxs8("dd", { children: [
+  return /* @__PURE__ */ jsxs9("div", { className: "mt-2 text-xs", "data-testid": `node-health-${hostId}`, children: [
+    /* @__PURE__ */ jsxs9("dl", { className: "grid grid-cols-2 gap-x-6 gap-y-1 opacity-80 sm:grid-cols-4", children: [
+      /* @__PURE__ */ jsxs9("div", { className: "col-span-2", children: [
+        /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "Prozessor" }),
+        /* @__PURE__ */ jsxs9("dd", { children: [
           h.cpu_model ?? "?",
           " (",
           h.cpu_cores ?? "?",
@@ -1638,47 +1780,47 @@ function NodeHealthPanel({ hostId }) {
           " Threads)"
         ] })
       ] }),
-      /* @__PURE__ */ jsxs8("div", { children: [
-        /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "Last (1/5/15 min)" }),
-        /* @__PURE__ */ jsxs8("dd", { children: [
+      /* @__PURE__ */ jsxs9("div", { children: [
+        /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "Last (1/5/15 min)" }),
+        /* @__PURE__ */ jsxs9("dd", { children: [
           h.loadavg.map((l) => l.toFixed(2)).join(" / "),
           " \xB7 IO-Wartezeit ",
           h.io_wait_percent,
           " %"
         ] })
       ] }),
-      /* @__PURE__ */ jsxs8("div", { children: [
-        /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "L\xE4uft seit" }),
-        /* @__PURE__ */ jsx8("dd", { children: formatUptime(h.uptime_s ?? 0) })
+      /* @__PURE__ */ jsxs9("div", { children: [
+        /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "L\xE4uft seit" }),
+        /* @__PURE__ */ jsx9("dd", { children: formatUptime(h.uptime_s ?? 0) })
       ] }),
-      /* @__PURE__ */ jsxs8("div", { children: [
-        /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "RAM belegt" }),
-        /* @__PURE__ */ jsxs8("dd", { children: [
+      /* @__PURE__ */ jsxs9("div", { children: [
+        /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "RAM belegt" }),
+        /* @__PURE__ */ jsxs9("dd", { children: [
           memUsed != null ? formatBytes2(memUsed) : "?",
           " / ",
           formatBytes2(h.mem_total ?? 0),
           h.ksm_shared ? ` \xB7 KSM teilt ${formatBytes2(h.ksm_shared)}` : ""
         ] })
       ] }),
-      /* @__PURE__ */ jsxs8("div", { children: [
-        /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "Swap belegt" }),
-        /* @__PURE__ */ jsxs8("dd", { children: [
+      /* @__PURE__ */ jsxs9("div", { children: [
+        /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "Swap belegt" }),
+        /* @__PURE__ */ jsxs9("dd", { children: [
           formatBytes2(h.swap_used ?? 0),
           " / ",
           formatBytes2(h.swap_total ?? 0)
         ] })
       ] }),
-      /* @__PURE__ */ jsxs8("div", { children: [
-        /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "Systemplatte" }),
-        /* @__PURE__ */ jsxs8("dd", { children: [
+      /* @__PURE__ */ jsxs9("div", { children: [
+        /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "Systemplatte" }),
+        /* @__PURE__ */ jsxs9("dd", { children: [
           formatBytes2(h.rootfs_used ?? 0),
           " / ",
           formatBytes2(h.rootfs_total ?? 0)
         ] })
       ] }),
-      /* @__PURE__ */ jsxs8("div", { children: [
-        /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "System" }),
-        /* @__PURE__ */ jsxs8("dd", { children: [
+      /* @__PURE__ */ jsxs9("div", { children: [
+        /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "System" }),
+        /* @__PURE__ */ jsxs9("dd", { children: [
           "Proxmox ",
           h.pve_version ?? "?",
           " \xB7 Kernel ",
@@ -1687,29 +1829,29 @@ function NodeHealthPanel({ hostId }) {
         ] })
       ] })
     ] }),
-    /* @__PURE__ */ jsx8("p", { className: "mt-2 mb-1 font-medium opacity-60", children: "Datentr\xE4ger" }),
-    h.disks_error && /* @__PURE__ */ jsxs8("p", { className: "text-red-400", children: [
+    /* @__PURE__ */ jsx9("p", { className: "mt-2 mb-1 font-medium opacity-60", children: "Datentr\xE4ger" }),
+    h.disks_error && /* @__PURE__ */ jsxs9("p", { className: "text-red-400", children: [
       "Nicht abrufbar: ",
       h.disks_error
     ] }),
-    /* @__PURE__ */ jsx8("ul", { className: "space-y-0.5", children: h.disks.map((d) => /* @__PURE__ */ jsxs8("li", { className: "flex flex-wrap items-center gap-2 opacity-90", children: [
-      /* @__PURE__ */ jsx8("span", { className: `rounded px-1.5 py-0.5 ${BADGE_TONE[d.tone] ?? BADGE_TONE.neutral}`, children: d.badge }),
-      /* @__PURE__ */ jsx8("span", { children: d.model }),
-      /* @__PURE__ */ jsxs8("span", { className: "opacity-60", children: [
+    /* @__PURE__ */ jsx9("ul", { className: "space-y-0.5", children: h.disks.map((d) => /* @__PURE__ */ jsxs9("li", { className: "flex flex-wrap items-center gap-2 opacity-90", children: [
+      /* @__PURE__ */ jsx9("span", { className: `rounded px-1.5 py-0.5 ${BADGE_TONE[d.tone] ?? BADGE_TONE.neutral}`, children: d.badge }),
+      /* @__PURE__ */ jsx9("span", { children: d.model }),
+      /* @__PURE__ */ jsxs9("span", { className: "opacity-60", children: [
         d.summary,
         d.power_on_hours != null ? ` \xB7 ${d.power_on_hours.toLocaleString("de-DE")} Betriebsstunden` : ""
       ] })
     ] }, d.devpath)) }),
-    ((h.zfs?.length ?? 0) > 0 || h.zfs_error) && /* @__PURE__ */ jsxs8(Fragment4, { children: [
-      /* @__PURE__ */ jsx8("p", { className: "mt-2 mb-1 font-medium opacity-60", children: "ZFS-Pools" }),
-      h.zfs_error && /* @__PURE__ */ jsxs8("p", { className: "text-red-400", children: [
+    ((h.zfs?.length ?? 0) > 0 || h.zfs_error) && /* @__PURE__ */ jsxs9(Fragment5, { children: [
+      /* @__PURE__ */ jsx9("p", { className: "mt-2 mb-1 font-medium opacity-60", children: "ZFS-Pools" }),
+      h.zfs_error && /* @__PURE__ */ jsxs9("p", { className: "text-red-400", children: [
         "Nicht abrufbar: ",
         h.zfs_error
       ] }),
-      /* @__PURE__ */ jsx8("ul", { className: "space-y-0.5", "data-testid": "zfs-pools", children: (h.zfs ?? []).map((p) => /* @__PURE__ */ jsxs8("li", { className: "flex flex-wrap items-center gap-2 opacity-90", children: [
-        /* @__PURE__ */ jsx8("span", { className: `rounded px-1.5 py-0.5 ${BADGE_TONE[p.tone] ?? BADGE_TONE.neutral}`, children: p.badge }),
-        /* @__PURE__ */ jsx8("span", { children: p.name }),
-        /* @__PURE__ */ jsx8("span", { className: "opacity-60", children: p.summary })
+      /* @__PURE__ */ jsx9("ul", { className: "space-y-0.5", "data-testid": "zfs-pools", children: (h.zfs ?? []).map((p) => /* @__PURE__ */ jsxs9("li", { className: "flex flex-wrap items-center gap-2 opacity-90", children: [
+        /* @__PURE__ */ jsx9("span", { className: `rounded px-1.5 py-0.5 ${BADGE_TONE[p.tone] ?? BADGE_TONE.neutral}`, children: p.badge }),
+        /* @__PURE__ */ jsx9("span", { children: p.name }),
+        /* @__PURE__ */ jsx9("span", { className: "opacity-60", children: p.summary })
       ] }, p.name)) })
     ] })
   ] });
@@ -1721,12 +1863,12 @@ function NodeCard({
   updates,
   onOpenUpdates
 }) {
-  const [open, setOpen] = useState7(focused);
-  useEffect7(() => {
+  const [open, setOpen] = useState8(focused);
+  useEffect8(() => {
     if (focused) setOpen(true);
   }, [focused, visit]);
-  return /* @__PURE__ */ jsxs8("div", { id: `host-${node.id}`, className: `mb-2 rounded border border-white/10 p-2 text-sm ${focused ? FOCUS_CLASS : ""}`, children: [
-    /* @__PURE__ */ jsx8(
+  return /* @__PURE__ */ jsxs9("div", { id: `host-${node.id}`, className: `mb-2 rounded border border-white/10 p-2 text-sm ${focused ? FOCUS_CLASS : ""}`, children: [
+    /* @__PURE__ */ jsx9(
       "button",
       {
         type: "button",
@@ -1736,13 +1878,13 @@ function NodeCard({
         children: open ? "\u25BE" : "\u25B8"
       }
     ),
-    /* @__PURE__ */ jsx8("span", { className: "font-medium", children: node.display_name }),
+    /* @__PURE__ */ jsx9("span", { className: "font-medium", children: node.display_name }),
     " ",
-    /* @__PURE__ */ jsxs8("span", { className: "opacity-60", children: [
+    /* @__PURE__ */ jsxs9("span", { className: "opacity-60", children: [
       "(Knoten) \u2013 ",
       HOST_STATUS_LABEL[node.status] ?? node.status
     ] }),
-    updates && !updates.error && updates.tone !== "good" && /* @__PURE__ */ jsx8(
+    updates && !updates.error && updates.tone !== "good" && /* @__PURE__ */ jsx9(
       "button",
       {
         type: "button",
@@ -1752,13 +1894,13 @@ function NodeCard({
         children: updates.badge
       }
     ),
-    open && /* @__PURE__ */ jsx8(NodeHealthPanel, { hostId: node.id })
+    open && /* @__PURE__ */ jsx9(NodeHealthPanel, { hostId: node.id })
   ] });
 }
 function MetricsPanel({ hostId }) {
-  const [metrics, setMetrics] = useState7(null);
-  const [error, setError] = useState7(null);
-  useEffect7(() => {
+  const [metrics, setMetrics] = useState8(null);
+  const [error, setError] = useState8(null);
+  useEffect8(() => {
     let cancelled = false;
     authedFetch(`/hosts/${hostId}/metrics`).then((res) => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1772,35 +1914,35 @@ function MetricsPanel({ hostId }) {
       cancelled = true;
     };
   }, [hostId]);
-  if (error) return /* @__PURE__ */ jsxs8("p", { className: "text-xs text-red-400", children: [
+  if (error) return /* @__PURE__ */ jsxs9("p", { className: "text-xs text-red-400", children: [
     "Metriken nicht verf\xFCgbar: ",
     error
   ] });
-  if (!metrics) return /* @__PURE__ */ jsx8("p", { className: "text-xs opacity-60", children: "Lade Metriken \u2026" });
+  if (!metrics) return /* @__PURE__ */ jsx9("p", { className: "text-xs opacity-60", children: "Lade Metriken \u2026" });
   const v = metrics.values;
-  return /* @__PURE__ */ jsxs8("dl", { className: "grid grid-cols-2 gap-x-6 gap-y-1 text-xs opacity-80 sm:grid-cols-4", children: [
-    /* @__PURE__ */ jsxs8("div", { children: [
-      /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "CPU" }),
-      /* @__PURE__ */ jsxs8("dd", { children: [
+  return /* @__PURE__ */ jsxs9("dl", { className: "grid grid-cols-2 gap-x-6 gap-y-1 text-xs opacity-80 sm:grid-cols-4", children: [
+    /* @__PURE__ */ jsxs9("div", { children: [
+      /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "CPU" }),
+      /* @__PURE__ */ jsxs9("dd", { children: [
         v.cpu_percent?.toFixed(1) ?? "?",
         " %"
       ] })
     ] }),
-    /* @__PURE__ */ jsxs8("div", { children: [
-      /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "RAM" }),
-      /* @__PURE__ */ jsxs8("dd", { children: [
+    /* @__PURE__ */ jsxs9("div", { children: [
+      /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "RAM" }),
+      /* @__PURE__ */ jsxs9("dd", { children: [
         formatBytes2(v.mem_used_bytes ?? 0),
         " / ",
         formatBytes2(v.mem_total_bytes ?? 0)
       ] })
     ] }),
-    /* @__PURE__ */ jsxs8("div", { children: [
-      /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "Laufzeit" }),
-      /* @__PURE__ */ jsx8("dd", { children: formatUptime(v.uptime_s ?? 0) })
+    /* @__PURE__ */ jsxs9("div", { children: [
+      /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "Laufzeit" }),
+      /* @__PURE__ */ jsx9("dd", { children: formatUptime(v.uptime_s ?? 0) })
     ] }),
-    /* @__PURE__ */ jsxs8("div", { children: [
-      /* @__PURE__ */ jsx8("dt", { className: "opacity-60", children: "Stand" }),
-      /* @__PURE__ */ jsx8("dd", { children: new Date(metrics.sampled_at).toLocaleTimeString("de-DE") })
+    /* @__PURE__ */ jsxs9("div", { children: [
+      /* @__PURE__ */ jsx9("dt", { className: "opacity-60", children: "Stand" }),
+      /* @__PURE__ */ jsx9("dd", { children: new Date(metrics.sampled_at).toLocaleTimeString("de-DE") })
     ] })
   ] });
 }
@@ -1809,25 +1951,25 @@ function ConnectionsPanel({
   version = 0,
   bare = false
 }) {
-  const [connections, setConnections] = useState7(null);
-  const [error, setError] = useState7(null);
-  const [message, setMessage] = useState7(null);
-  const [showAddForm, setShowAddForm] = useState7(false);
-  const [newName, setNewName] = useState7("");
-  const [newBaseUrl, setNewBaseUrl] = useState7("");
-  const [newTokenId, setNewTokenId] = useState7("");
-  const [newTlsInsecure, setNewTlsInsecure] = useState7(false);
-  const [pending, setPending] = useState7(null);
-  const [oldTokensFor, setOldTokensFor] = useState7(null);
-  const [certificateFor, setCertificateFor] = useState7(null);
-  const load = useCallback2(() => {
+  const [connections, setConnections] = useState8(null);
+  const [error, setError] = useState8(null);
+  const [message, setMessage] = useState8(null);
+  const [showAddForm, setShowAddForm] = useState8(false);
+  const [newName, setNewName] = useState8("");
+  const [newBaseUrl, setNewBaseUrl] = useState8("");
+  const [newTokenId, setNewTokenId] = useState8("");
+  const [newTlsInsecure, setNewTlsInsecure] = useState8(false);
+  const [pending, setPending] = useState8(null);
+  const [oldTokensFor, setOldTokensFor] = useState8(null);
+  const [certificateFor, setCertificateFor] = useState8(null);
+  const load = useCallback3(() => {
     setError(null);
     authedFetch("/ext/proxmox/connections").then((res) => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     }).then(setConnections).catch((err) => setError(err instanceof Error ? err.message : String(err)));
   }, []);
-  useEffect7(() => {
+  useEffect8(() => {
     load();
   }, [load, version]);
   async function addConnection(e) {
@@ -1924,28 +2066,28 @@ function ConnectionsPanel({
       setPending(null);
     }
   }
-  if (error) return /* @__PURE__ */ jsxs8("p", { className: "mb-4 text-xs text-red-400", children: [
+  if (error) return /* @__PURE__ */ jsxs9("p", { className: "mb-4 text-xs text-red-400", children: [
     "Verbindungen nicht ladbar: ",
     error
   ] });
-  const content = /* @__PURE__ */ jsxs8("div", { className: bare ? "" : "mt-3", children: [
-    message && /* @__PURE__ */ jsx8("p", { className: "mb-2 text-xs opacity-80", children: message }),
-    connections && connections.length === 0 && /* @__PURE__ */ jsx8("p", { className: "mb-2 text-xs opacity-60", children: "Noch keine Verbindung konfiguriert." }),
-    connections && connections.length > 0 && /* @__PURE__ */ jsxs8("table", { className: "mb-3 w-full text-xs", children: [
-      /* @__PURE__ */ jsx8("thead", { children: /* @__PURE__ */ jsxs8("tr", { className: "border-b border-white/10 text-left opacity-60", children: [
-        /* @__PURE__ */ jsx8("th", { className: "py-1 w-1/6", children: "Name" }),
-        /* @__PURE__ */ jsx8("th", { className: "py-1 w-1/3", children: "Adresse" }),
-        /* @__PURE__ */ jsx8("th", { className: "py-1 whitespace-nowrap", children: "Zertifikat" }),
-        /* @__PURE__ */ jsx8("th", { className: "py-1 whitespace-nowrap", children: "Token" }),
-        /* @__PURE__ */ jsx8("th", { className: "py-1 whitespace-nowrap", children: "Aktiv" }),
-        /* @__PURE__ */ jsx8("th", { className: "py-1 whitespace-nowrap", children: "Aktionen" })
+  const content = /* @__PURE__ */ jsxs9("div", { className: bare ? "" : "mt-3", children: [
+    message && /* @__PURE__ */ jsx9("p", { className: "mb-2 text-xs opacity-80", children: message }),
+    connections && connections.length === 0 && /* @__PURE__ */ jsx9("p", { className: "mb-2 text-xs opacity-60", children: "Noch keine Verbindung konfiguriert." }),
+    connections && connections.length > 0 && /* @__PURE__ */ jsxs9("table", { className: "mb-3 w-full text-xs", children: [
+      /* @__PURE__ */ jsx9("thead", { children: /* @__PURE__ */ jsxs9("tr", { className: "border-b border-white/10 text-left opacity-60", children: [
+        /* @__PURE__ */ jsx9("th", { className: "py-1 w-1/6", children: "Name" }),
+        /* @__PURE__ */ jsx9("th", { className: "py-1 w-1/3", children: "Adresse" }),
+        /* @__PURE__ */ jsx9("th", { className: "py-1 whitespace-nowrap", children: "Zertifikat" }),
+        /* @__PURE__ */ jsx9("th", { className: "py-1 whitespace-nowrap", children: "Token" }),
+        /* @__PURE__ */ jsx9("th", { className: "py-1 whitespace-nowrap", children: "Aktiv" }),
+        /* @__PURE__ */ jsx9("th", { className: "py-1 whitespace-nowrap", children: "Aktionen" })
       ] }) }),
-      /* @__PURE__ */ jsx8("tbody", { className: "divide-y divide-white/5", children: connections.map((c) => /* @__PURE__ */ jsxs8("tr", { children: [
-        /* @__PURE__ */ jsx8("td", { className: "py-1.5 break-words", children: c.name }),
-        /* @__PURE__ */ jsx8("td", { className: "py-1.5 break-all opacity-70", children: c.base_url }),
-        /* @__PURE__ */ jsx8("td", { className: "py-1.5 whitespace-nowrap", children: /* @__PURE__ */ jsx8(CertificateStatus, { connection: c }) }),
-        /* @__PURE__ */ jsx8("td", { className: "py-1.5 whitespace-nowrap", children: c.has_token ? "gesetzt" : /* @__PURE__ */ jsx8("span", { className: "text-amber-400", children: "fehlt" }) }),
-        /* @__PURE__ */ jsx8("td", { className: "py-1.5", children: /* @__PURE__ */ jsx8(
+      /* @__PURE__ */ jsx9("tbody", { className: "divide-y divide-white/5", children: connections.map((c) => /* @__PURE__ */ jsxs9("tr", { children: [
+        /* @__PURE__ */ jsx9("td", { className: "py-1.5 break-words", children: c.name }),
+        /* @__PURE__ */ jsx9("td", { className: "py-1.5 break-all opacity-70", children: c.base_url }),
+        /* @__PURE__ */ jsx9("td", { className: "py-1.5 whitespace-nowrap", children: /* @__PURE__ */ jsx9(CertificateStatus, { connection: c }) }),
+        /* @__PURE__ */ jsx9("td", { className: "py-1.5 whitespace-nowrap", children: c.has_token ? "gesetzt" : /* @__PURE__ */ jsx9("span", { className: "text-amber-400", children: "fehlt" }) }),
+        /* @__PURE__ */ jsx9("td", { className: "py-1.5", children: /* @__PURE__ */ jsx9(
           "button",
           {
             type: "button",
@@ -1955,8 +2097,8 @@ function ConnectionsPanel({
             children: c.enabled ? "aktiv" : "deaktiviert"
           }
         ) }),
-        /* @__PURE__ */ jsx8("td", { className: "py-1.5", children: /* @__PURE__ */ jsxs8("div", { className: "flex gap-1.5", children: [
-          /* @__PURE__ */ jsx8(
+        /* @__PURE__ */ jsx9("td", { className: "py-1.5", children: /* @__PURE__ */ jsxs9("div", { className: "flex gap-1.5", children: [
+          /* @__PURE__ */ jsx9(
             "button",
             {
               type: "button",
@@ -1966,7 +2108,7 @@ function ConnectionsPanel({
               children: c.has_token ? "Token ersetzen" : "Token setzen"
             }
           ),
-          /* @__PURE__ */ jsx8(
+          /* @__PURE__ */ jsx9(
             "button",
             {
               type: "button",
@@ -1976,7 +2118,7 @@ function ConnectionsPanel({
               children: "Zertifikat"
             }
           ),
-          /* @__PURE__ */ jsx8(
+          /* @__PURE__ */ jsx9(
             "button",
             {
               type: "button",
@@ -1986,7 +2128,7 @@ function ConnectionsPanel({
               children: "Alte Tokens"
             }
           ),
-          /* @__PURE__ */ jsx8(
+          /* @__PURE__ */ jsx9(
             "button",
             {
               type: "button",
@@ -1999,7 +2141,7 @@ function ConnectionsPanel({
         ] }) })
       ] }, c.name)) })
     ] }),
-    certificateFor && connections?.some((c) => c.name === certificateFor) && /* @__PURE__ */ jsx8(
+    certificateFor && connections?.some((c) => c.name === certificateFor) && /* @__PURE__ */ jsx9(
       ConnectionCertificate,
       {
         extId: "proxmox",
@@ -2008,9 +2150,9 @@ function ConnectionsPanel({
         unchecked: connections?.find((c) => c.name === certificateFor)?.tls_insecure_skip_verify ?? false
       }
     ),
-    oldTokensFor && connections?.some((c) => c.name === oldTokensFor) && /* @__PURE__ */ jsx8(OldTokens, { connection: oldTokensFor }),
-    !showAddForm && /* @__PURE__ */ jsxs8("div", { className: "flex flex-wrap gap-2", children: [
-      onConnectWithPassword && /* @__PURE__ */ jsx8(
+    oldTokensFor && connections?.some((c) => c.name === oldTokensFor) && /* @__PURE__ */ jsx9(OldTokens, { connection: oldTokensFor }),
+    !showAddForm && /* @__PURE__ */ jsxs9("div", { className: "flex flex-wrap gap-2", children: [
+      onConnectWithPassword && /* @__PURE__ */ jsx9(
         "button",
         {
           type: "button",
@@ -2019,7 +2161,7 @@ function ConnectionsPanel({
           children: "Mit Passwort verbinden"
         }
       ),
-      /* @__PURE__ */ jsx8(
+      /* @__PURE__ */ jsx9(
         "button",
         {
           type: "button",
@@ -2029,14 +2171,14 @@ function ConnectionsPanel({
         }
       )
     ] }),
-    showAddForm && /* @__PURE__ */ jsxs8("form", { onSubmit: (e) => void addConnection(e), className: "flex flex-wrap items-end gap-2 text-xs", children: [
-      /* @__PURE__ */ jsxs8("label", { className: "flex flex-col gap-1", children: [
+    showAddForm && /* @__PURE__ */ jsxs9("form", { onSubmit: (e) => void addConnection(e), className: "flex flex-wrap items-end gap-2 text-xs", children: [
+      /* @__PURE__ */ jsxs9("label", { className: "flex flex-col gap-1", children: [
         "Name",
-        /* @__PURE__ */ jsx8("input", { required: true, value: newName, onChange: (e) => setNewName(e.target.value), className: "px-2 py-1 rounded-lg border border-white/10 bg-black/25 outline-none focus:border-[var(--color-accent)]" })
+        /* @__PURE__ */ jsx9("input", { required: true, value: newName, onChange: (e) => setNewName(e.target.value), className: "px-2 py-1 rounded-lg border border-white/10 bg-black/25 outline-none focus:border-[var(--color-accent)]" })
       ] }),
-      /* @__PURE__ */ jsxs8("label", { className: "flex flex-col gap-1", children: [
+      /* @__PURE__ */ jsxs9("label", { className: "flex flex-col gap-1", children: [
         "Adresse (URL)",
-        /* @__PURE__ */ jsx8(
+        /* @__PURE__ */ jsx9(
           "input",
           {
             required: true,
@@ -2047,9 +2189,9 @@ function ConnectionsPanel({
           }
         )
       ] }),
-      /* @__PURE__ */ jsxs8("label", { className: "flex flex-col gap-1", children: [
+      /* @__PURE__ */ jsxs9("label", { className: "flex flex-col gap-1", children: [
         "Token-ID",
-        /* @__PURE__ */ jsx8(
+        /* @__PURE__ */ jsx9(
           "input",
           {
             required: true,
@@ -2060,22 +2202,22 @@ function ConnectionsPanel({
           }
         )
       ] }),
-      /* @__PURE__ */ jsxs8("label", { className: "flex items-center gap-1", title: "Veraltet: besser nach dem Anlegen unter \u201EZertifikat\u201C den Fingerabdruck merken.", children: [
-        /* @__PURE__ */ jsx8("input", { type: "checkbox", checked: newTlsInsecure, onChange: (e) => setNewTlsInsecure(e.target.checked) }),
+      /* @__PURE__ */ jsxs9("label", { className: "flex items-center gap-1", title: "Veraltet: besser nach dem Anlegen unter \u201EZertifikat\u201C den Fingerabdruck merken.", children: [
+        /* @__PURE__ */ jsx9("input", { type: "checkbox", checked: newTlsInsecure, onChange: (e) => setNewTlsInsecure(e.target.checked) }),
         "Zertifikat nicht pr\xFCfen (veraltet)"
       ] }),
-      /* @__PURE__ */ jsx8("button", { type: "submit", disabled: pending === "add", className: "px-2 py-1 disabled:opacity-40 accent-gradient text-on-accent rounded-lg hover:bg-accent-strong font-medium", children: "Anlegen" }),
-      /* @__PURE__ */ jsx8("button", { type: "button", onClick: () => setShowAddForm(false), className: "px-2 py-1 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: "Abbrechen" })
+      /* @__PURE__ */ jsx9("button", { type: "submit", disabled: pending === "add", className: "px-2 py-1 disabled:opacity-40 accent-gradient text-on-accent rounded-lg hover:bg-accent-strong font-medium", children: "Anlegen" }),
+      /* @__PURE__ */ jsx9("button", { type: "button", onClick: () => setShowAddForm(false), className: "px-2 py-1 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: "Abbrechen" })
     ] })
   ] });
   if (bare) {
-    return /* @__PURE__ */ jsxs8("div", { className: "mb-6 p-3 panel", children: [
-      /* @__PURE__ */ jsx8("h3", { className: "mb-3 text-sm font-medium", children: "Verbindungen verwalten" }),
+    return /* @__PURE__ */ jsxs9("div", { className: "mb-6 p-3 panel", children: [
+      /* @__PURE__ */ jsx9("h3", { className: "mb-3 text-sm font-medium", children: "Verbindungen verwalten" }),
       content
     ] });
   }
-  return /* @__PURE__ */ jsxs8("details", { className: "mb-6 p-3 panel", open: connections?.length === 0, children: [
-    /* @__PURE__ */ jsx8("summary", { className: "cursor-pointer text-sm font-medium", children: "Verbindungen verwalten" }),
+  return /* @__PURE__ */ jsxs9("details", { className: "mb-6 p-3 panel", open: connections?.length === 0, children: [
+    /* @__PURE__ */ jsx9("summary", { className: "cursor-pointer text-sm font-medium", children: "Verbindungen verwalten" }),
     content
   ] });
 }
@@ -2086,74 +2228,74 @@ function ProxmoxNodePage() {
   const focusTasks = urlParams.get("tasks") === "1";
   const tabParam = urlParams.get("tab");
   const tab = isTab(tabParam) ? tabParam : focusTasks ? "tasks" : "guests";
-  const setTab = useCallback2((id) => updateUrl({ tab: id, host: null, tasks: null }), [updateUrl]);
-  const [hosts, setHosts] = useState7(null);
-  const [error, setError] = useState7(null);
-  const [pending, setPending] = useState7(() => /* @__PURE__ */ new Set());
-  const [actionMessages, setActionMessages] = useState7(() => /* @__PURE__ */ new Map());
-  const [expanded, setExpanded] = useState7(focusHost);
+  const setTab = useCallback3((id) => updateUrl({ tab: id, host: null, tasks: null }), [updateUrl]);
+  const [hosts, setHosts] = useState8(null);
+  const [error, setError] = useState8(null);
+  const [pending, setPending] = useState8(() => /* @__PURE__ */ new Set());
+  const [actionMessages, setActionMessages] = useState8(() => /* @__PURE__ */ new Map());
+  const [expanded, setExpanded] = useState8(focusHost);
   const expandedFor = useRef3(visits);
-  useEffect7(() => {
+  useEffect8(() => {
     if (expandedFor.current === visits) return;
     expandedFor.current = visits;
     setExpanded(focusHost);
   }, [visits, focusHost]);
   const taskFocus = focusTasks ? focusHost : null;
-  const [snapshotRefresh, setSnapshotRefresh] = useState7(0);
-  const [storage, setStorage] = useState7(null);
-  const [tasks, setTasks] = useState7(null);
-  const [updates, setUpdates] = useState7(null);
-  const [updatesErrors, setUpdatesErrors] = useState7([]);
-  const [storageErrors, setStorageErrors] = useState7([]);
-  const [updatesLoadError, setUpdatesLoadError] = useState7(null);
-  const [tasksLoadError, setTasksLoadError] = useState7(null);
-  const [storageLoadError, setStorageLoadError] = useState7(null);
+  const [snapshotRefresh, setSnapshotRefresh] = useState8(0);
+  const [storage, setStorage] = useState8(null);
+  const [tasks, setTasks] = useState8(null);
+  const [updates, setUpdates] = useState8(null);
+  const [updatesErrors, setUpdatesErrors] = useState8([]);
+  const [storageErrors, setStorageErrors] = useState8([]);
+  const [updatesLoadError, setUpdatesLoadError] = useState8(null);
+  const [tasksLoadError, setTasksLoadError] = useState8(null);
+  const [storageLoadError, setStorageLoadError] = useState8(null);
   const canConnect = deck().hasPermission("secrets.write");
-  const [connectOpen, setConnectOpen] = useState7(false);
-  const [connectionsVersion, setConnectionsVersion] = useState7(0);
-  const [connectedAt, setConnectedAt] = useState7(0);
-  const loadUpdates = useCallback2(() => {
+  const [connectOpen, setConnectOpen] = useState8(false);
+  const [connectionsVersion, setConnectionsVersion] = useState8(0);
+  const [connectedAt, setConnectedAt] = useState8(0);
+  const loadUpdates = useCallback3(() => {
     setUpdatesLoadError(null);
     fetchJson("/ext/proxmox/updates").then((body) => {
       setUpdates(body.nodes ?? []);
       setUpdatesErrors(body.errors ?? []);
     }).catch((err) => setUpdatesLoadError(errorMessage(err)));
   }, []);
-  useEffect7(() => {
+  useEffect8(() => {
     loadUpdates();
   }, [loadUpdates]);
-  const [showConsoleTasks, setShowConsoleTasks] = useState7(false);
-  const loadTasks = useCallback2(() => {
+  const [showConsoleTasks, setShowConsoleTasks] = useState8(false);
+  const loadTasks = useCallback3(() => {
     setTasksLoadError(null);
     fetchJson(`/ext/proxmox/tasks?limit=100${showConsoleTasks ? "&include_console=true" : ""}`).then((body) => setTasks(body.tasks ?? [])).catch((err) => setTasksLoadError(errorMessage(err)));
   }, [showConsoleTasks]);
-  useEffect7(() => {
+  useEffect8(() => {
     loadTasks();
   }, [loadTasks, snapshotRefresh]);
-  const loadStorage = useCallback2(() => {
+  const loadStorage = useCallback3(() => {
     setStorageLoadError(null);
     fetchJson("/ext/proxmox/storage").then((body) => {
       setStorage(body.pools ?? []);
       setStorageErrors(body.errors ?? []);
     }).catch((err) => setStorageLoadError(errorMessage(err)));
   }, []);
-  useEffect7(() => {
+  useEffect8(() => {
     loadStorage();
   }, [loadStorage]);
-  const load = useCallback2(() => {
+  const load = useCallback3(() => {
     setError(null);
     fetchJson("/hosts?tag=proxmox").then(setHosts).catch((err) => setError(errorMessage(err)));
   }, []);
-  useEffect7(() => {
+  useEffect8(() => {
     load();
   }, [load]);
-  useEffect7(() => {
+  useEffect8(() => {
     if (!connectedAt) return void 0;
     const timer = window.setTimeout(load, RELOAD_AFTER_CONNECT_MS);
     return () => window.clearTimeout(timer);
   }, [connectedAt, load]);
   const scrolledFor = useRef3(null);
-  useEffect7(() => {
+  useEffect8(() => {
     if (!hosts || !focusHost || scrolledFor.current === visits) return;
     const target = hosts.find((h) => h.id === focusHost);
     if (!target) return;
@@ -2163,9 +2305,9 @@ function ProxmoxNodePage() {
     const { connection } = parseProviderRef(target.provider_ref);
     scrollToElement(tab === "tasks" ? `tasks-${connection}` : tab === "storage" ? `storage-${connection}` : `host-${target.id}`);
   }, [hosts, tasks, storage, focusHost, tab, visits]);
-  const [shieldLinks, setShieldLinks] = useState7({});
+  const [shieldLinks, setShieldLinks] = useState8({});
   const nodeIds = (hosts ?? []).filter((h) => h.kind === "hypervisor" || h.kind === "node").map((h) => h.id).join(",");
-  useEffect7(() => {
+  useEffect8(() => {
     if (tab !== "updates" || !nodeIds) return;
     let cancelled = false;
     void Promise.all(nodeIds.split(",").map(async (id) => {
@@ -2221,9 +2363,9 @@ function ProxmoxNodePage() {
       return next;
     });
   }
-  if (!hosts && !error) return /* @__PURE__ */ jsx8("div", { className: "p-6 text-sm opacity-60", children: "Lade \u2026" });
+  if (!hosts && !error) return /* @__PURE__ */ jsx9("div", { className: "p-6 text-sm opacity-60", children: "Lade \u2026" });
   if (error) {
-    return /* @__PURE__ */ jsx8("div", { className: "mx-auto w-full max-w-7xl p-4 sm:p-6", children: /* @__PURE__ */ jsx8(LoadError, { what: "Die Liste der Proxmox-Server", error, onRetry: load }) });
+    return /* @__PURE__ */ jsx9("div", { className: "mx-auto w-full max-w-7xl p-4 sm:p-6", children: /* @__PURE__ */ jsx9(LoadError, { what: "Die Liste der Proxmox-Server", error, onRetry: load }) });
   }
   const nodes = (hosts ?? []).filter((h) => h.kind === "hypervisor" || h.kind === "node");
   const guests = (hosts ?? []).filter((h) => h.kind === "vm" || h.kind === "lxc");
@@ -2252,11 +2394,11 @@ function ProxmoxNodePage() {
   };
   const ownUpdates = (updates ?? []).filter((u) => connections.includes(u.connection));
   const ownPools = (storage ?? []).filter((p) => connections.includes(p.connection));
-  return /* @__PURE__ */ jsxs8("div", { className: "mx-auto w-full max-w-7xl p-4 sm:p-6", children: [
-    /* @__PURE__ */ jsx8("h2", { className: "font-semibold text-xl tracking-tight", children: "Proxmox" }),
-    /* @__PURE__ */ jsx8("p", { className: "mb-4 text-sm opacity-60", children: "Deine Proxmox-Server mit allen VMs und LXC: starten, herunterfahren, Snapshots, Speicher und Updates." }),
-    empty && /* @__PURE__ */ jsx8(ConnectionsPanel, { onConnectWithPassword: canConnect ? () => setConnectOpen(true) : void 0, version: connectionsVersion }),
-    empty && connectOpen && /* @__PURE__ */ jsx8(
+  return /* @__PURE__ */ jsxs9("div", { className: "mx-auto w-full max-w-7xl p-4 sm:p-6", children: [
+    /* @__PURE__ */ jsx9("h2", { className: "font-semibold text-xl tracking-tight", children: "Proxmox" }),
+    /* @__PURE__ */ jsx9("p", { className: "mb-4 text-sm opacity-60", children: "Deine Proxmox-Server mit allen VMs und LXC: starten, herunterfahren, Snapshots, Speicher und Updates." }),
+    empty && /* @__PURE__ */ jsx9(ConnectionsPanel, { onConnectWithPassword: canConnect ? () => setConnectOpen(true) : void 0, version: connectionsVersion }),
+    empty && connectOpen && /* @__PURE__ */ jsx9(
       ProxmoxConnect,
       {
         onClose: () => setConnectOpen(false),
@@ -2267,20 +2409,20 @@ function ProxmoxNodePage() {
         }
       }
     ),
-    empty && !connectOpen && /* @__PURE__ */ jsx8(
+    empty && !connectOpen && /* @__PURE__ */ jsx9(
       EmptyState,
       {
         icon: "refresh",
         title: "Noch keine Proxmox-Server gefunden",
         text: canConnect ? "Am einfachsten: \u201EMit Passwort verbinden\u201C \u2013 Adresse und Passwort deines Proxmox-Servers eingeben, Nodvard Deck legt dort einen eigenen Zugang an. Oder trag einen API-Token von Hand ein (oben unter \u201EVerbindungen verwalten\u201C oder in den Moduleinstellungen). Danach liest Nodvard Deck alle 5 Minuten alle Knoten, VMs und LXC von selbst ein." : "Trag daf\xFCr die Adresse deines Proxmox-Servers und einen API-Token ein (oben unter \u201EVerbindungen verwalten\u201C oder in den Moduleinstellungen). Danach liest Nodvard Deck alle 5 Minuten alle Knoten, VMs und LXC von selbst ein.",
-        action: /* @__PURE__ */ jsxs8("div", { className: "flex flex-wrap items-center justify-center gap-2", children: [
-          canConnect && /* @__PURE__ */ jsx8(Button, { variant: "primary", onClick: () => setConnectOpen(true), children: "Mit Passwort verbinden" }),
-          /* @__PURE__ */ jsx8(SettingsLink, { to: "/settings/extensions/proxmox", permission: "extensions.manage", children: "Proxmox einrichten" })
+        action: /* @__PURE__ */ jsxs9("div", { className: "flex flex-wrap items-center justify-center gap-2", children: [
+          canConnect && /* @__PURE__ */ jsx9(Button, { variant: "primary", onClick: () => setConnectOpen(true), children: "Mit Passwort verbinden" }),
+          /* @__PURE__ */ jsx9(SettingsLink, { to: "/settings/extensions/proxmox", permission: "extensions.manage", children: "Proxmox einrichten" })
         ] })
       }
     ),
-    !empty && /* @__PURE__ */ jsxs8(Fragment4, { children: [
-      /* @__PURE__ */ jsx8(
+    !empty && /* @__PURE__ */ jsxs9(Fragment5, { children: [
+      /* @__PURE__ */ jsx9(
         Summary,
         {
           nodes,
@@ -2293,7 +2435,7 @@ function ProxmoxNodePage() {
           onOpen: setTab
         }
       ),
-      /* @__PURE__ */ jsx8(
+      /* @__PURE__ */ jsx9(
         TabBar,
         {
           active: tab,
@@ -2304,10 +2446,10 @@ function ProxmoxNodePage() {
           }
         }
       ),
-      [...actionMessages].map(([key, text]) => /* @__PURE__ */ jsx8("p", { className: "mb-3 text-sm opacity-80", children: text }, key)),
-      /* @__PURE__ */ jsx8(TabPanel, { id: "guests", active: tab, children: connections.map((connection) => /* @__PURE__ */ jsxs8("section", { className: "mb-6", children: [
-        /* @__PURE__ */ jsx8("h3", { className: "mb-2 text-sm font-medium opacity-60", children: connection }),
-        nodes.filter((n) => parseProviderRef(n.provider_ref).connection === connection).map((node) => /* @__PURE__ */ jsx8(
+      [...actionMessages].map(([key, text]) => /* @__PURE__ */ jsx9("p", { className: "mb-3 text-sm opacity-80", children: text }, key)),
+      /* @__PURE__ */ jsx9(TabPanel, { id: "guests", active: tab, children: connections.map((connection) => /* @__PURE__ */ jsxs9("section", { className: "mb-6", children: [
+        /* @__PURE__ */ jsx9("h3", { className: "mb-2 text-sm font-medium opacity-60", children: connection }),
+        nodes.filter((n) => parseProviderRef(n.provider_ref).connection === connection).map((node) => /* @__PURE__ */ jsx9(
           NodeCard,
           {
             node,
@@ -2318,22 +2460,22 @@ function ProxmoxNodePage() {
           },
           node.id
         )),
-        /* @__PURE__ */ jsxs8("table", { className: "w-full text-sm", children: [
-          /* @__PURE__ */ jsx8("thead", { children: /* @__PURE__ */ jsxs8("tr", { className: "border-b border-white/10 text-left text-xs opacity-60", children: [
-            /* @__PURE__ */ jsx8("th", { className: "py-1 w-6" }),
-            /* @__PURE__ */ jsx8("th", { className: "py-1 sm:w-1/2", children: "Name" }),
-            /* @__PURE__ */ jsx8("th", { className: "hidden py-1 whitespace-nowrap sm:table-cell sm:w-28", children: "Status" }),
-            /* @__PURE__ */ jsx8("th", { className: "py-1 text-right", children: "Aktionen" })
+        /* @__PURE__ */ jsxs9("table", { className: "w-full text-sm", children: [
+          /* @__PURE__ */ jsx9("thead", { children: /* @__PURE__ */ jsxs9("tr", { className: "border-b border-white/10 text-left text-xs opacity-60", children: [
+            /* @__PURE__ */ jsx9("th", { className: "py-1 w-6" }),
+            /* @__PURE__ */ jsx9("th", { className: "py-1 sm:w-1/2", children: "Name" }),
+            /* @__PURE__ */ jsx9("th", { className: "hidden py-1 whitespace-nowrap sm:table-cell sm:w-28", children: "Status" }),
+            /* @__PURE__ */ jsx9("th", { className: "py-1 text-right", children: "Aktionen" })
           ] }) }),
-          /* @__PURE__ */ jsx8("tbody", { className: "divide-y divide-white/5", children: guests.filter((g) => parseProviderRef(g.provider_ref).connection === connection).map((host) => {
+          /* @__PURE__ */ jsx9("tbody", { className: "divide-y divide-white/5", children: guests.filter((g) => parseProviderRef(g.provider_ref).connection === connection).map((host) => {
             const { node } = parseProviderRef(host.provider_ref);
             const isExpanded = expanded === host.id;
             const visible = VM_ACTIONS.filter((a) => !a.showWhen || a.showWhen(host.status));
             const runAction2 = (action) => void trigger(host.id, host.display_name, action.type, action.confirm, {}, action.dangerConfirm);
             const isBusy = (type) => pending.has(`${host.id}:${type}`);
-            return /* @__PURE__ */ jsxs8(Fragment3, { children: [
-              /* @__PURE__ */ jsxs8("tr", { id: `host-${host.id}`, className: host.id === focusHost ? FOCUS_CLASS : void 0, children: [
-                /* @__PURE__ */ jsx8("td", { className: "py-1.5 align-top", children: /* @__PURE__ */ jsx8(
+            return /* @__PURE__ */ jsxs9(Fragment4, { children: [
+              /* @__PURE__ */ jsxs9("tr", { id: `host-${host.id}`, className: host.id === focusHost ? FOCUS_CLASS : void 0, children: [
+                /* @__PURE__ */ jsx9("td", { className: "py-1.5 align-top", children: /* @__PURE__ */ jsx9(
                   "button",
                   {
                     type: "button",
@@ -2343,18 +2485,18 @@ function ProxmoxNodePage() {
                     children: isExpanded ? "\u25BE" : "\u25B8"
                   }
                 ) }),
-                /* @__PURE__ */ jsxs8("td", { className: "py-1.5 break-words", children: [
-                  /* @__PURE__ */ jsx8("span", { className: "font-medium", children: host.display_name }),
-                  /* @__PURE__ */ jsxs8("span", { className: "block text-xs opacity-60", children: [
+                /* @__PURE__ */ jsxs9("td", { className: "py-1.5 break-words", children: [
+                  /* @__PURE__ */ jsx9("span", { className: "font-medium", children: host.display_name }),
+                  /* @__PURE__ */ jsxs9("span", { className: "block text-xs opacity-60", children: [
                     KIND_LABEL[host.kind ?? ""] ?? host.kind,
                     " \xB7 ",
                     node
                   ] }),
-                  /* @__PURE__ */ jsx8("span", { className: `block text-xs sm:hidden ${STATUS_TONE[host.status] ?? ""}`, children: HOST_STATUS_LABEL[host.status] ?? host.status })
+                  /* @__PURE__ */ jsx9("span", { className: `block text-xs sm:hidden ${STATUS_TONE[host.status] ?? ""}`, children: HOST_STATUS_LABEL[host.status] ?? host.status })
                 ] }),
-                /* @__PURE__ */ jsx8("td", { className: `hidden py-1.5 whitespace-nowrap sm:table-cell ${STATUS_TONE[host.status] ?? ""}`, children: HOST_STATUS_LABEL[host.status] ?? host.status }),
-                /* @__PURE__ */ jsx8("td", { className: "py-1.5", children: /* @__PURE__ */ jsxs8("div", { className: "flex flex-wrap justify-end gap-1.5", children: [
-                  host.status === "up" ? /* @__PURE__ */ jsx8(
+                /* @__PURE__ */ jsx9("td", { className: `hidden py-1.5 whitespace-nowrap sm:table-cell ${STATUS_TONE[host.status] ?? ""}`, children: HOST_STATUS_LABEL[host.status] ?? host.status }),
+                /* @__PURE__ */ jsx9("td", { className: "py-1.5", children: /* @__PURE__ */ jsxs9("div", { className: "flex flex-wrap justify-end gap-1.5", children: [
+                  host.status === "up" ? /* @__PURE__ */ jsx9(
                     "a",
                     {
                       href: `/console/${host.id}`,
@@ -2363,7 +2505,7 @@ function ProxmoxNodePage() {
                       className: "accent-soft rounded-lg px-2.5 py-1 text-xs hover:brightness-125",
                       children: "Konsole"
                     }
-                  ) : /* @__PURE__ */ jsx8(
+                  ) : /* @__PURE__ */ jsx9(
                     "span",
                     {
                       title: "Nur f\xFCr laufende VMs/LXC verf\xFCgbar.",
@@ -2371,7 +2513,7 @@ function ProxmoxNodePage() {
                       children: "Konsole"
                     }
                   ),
-                  visible.filter((a) => a.main).map((action) => /* @__PURE__ */ jsx8(
+                  visible.filter((a) => a.main).map((action) => /* @__PURE__ */ jsx9(
                     "button",
                     {
                       type: "button",
@@ -2382,7 +2524,7 @@ function ProxmoxNodePage() {
                     },
                     action.type
                   )),
-                  visible.some((a) => !a.main) && /* @__PURE__ */ jsx8(
+                  visible.some((a) => !a.main) && /* @__PURE__ */ jsx9(
                     MoreMenu,
                     {
                       small: true,
@@ -2401,13 +2543,13 @@ function ProxmoxNodePage() {
                   )
                 ] }) })
               ] }),
-              isExpanded && /* @__PURE__ */ jsxs8("tr", { children: [
-                /* @__PURE__ */ jsx8("td", {}),
-                /* @__PURE__ */ jsxs8("td", { colSpan: 3, className: "bg-black/20 py-2", children: [
-                  /* @__PURE__ */ jsx8(MetricsPanel, { hostId: host.id }),
-                  /* @__PURE__ */ jsx8(GuestDetailsPanel, { hostId: host.id }),
-                  /* @__PURE__ */ jsx8("p", { className: "mt-2 mb-1 text-xs font-medium opacity-60", children: "Snapshots" }),
-                  /* @__PURE__ */ jsx8(
+              isExpanded && /* @__PURE__ */ jsxs9("tr", { children: [
+                /* @__PURE__ */ jsx9("td", {}),
+                /* @__PURE__ */ jsxs9("td", { colSpan: 3, className: "bg-black/20 py-2", children: [
+                  /* @__PURE__ */ jsx9(MetricsPanel, { hostId: host.id }),
+                  /* @__PURE__ */ jsx9(GuestDetailsPanel, { hostId: host.id }),
+                  /* @__PURE__ */ jsx9("p", { className: "mt-2 mb-1 text-xs font-medium opacity-60", children: "Snapshots" }),
+                  /* @__PURE__ */ jsx9(
                     SnapshotsPanel,
                     {
                       hostId: host.id,
@@ -2427,47 +2569,47 @@ function ProxmoxNodePage() {
             ] }, host.id);
           }) })
         ] }),
-        /* @__PURE__ */ jsx8(UnreachableHint, { connection, sources: [["Updates", updatesErrors], ["Speicher", storageErrors]] })
+        /* @__PURE__ */ jsx9(UnreachableHint, { connection, sources: [["Updates", updatesErrors], ["Speicher", storageErrors]] })
       ] }, connection)) }),
-      /* @__PURE__ */ jsxs8(TabPanel, { id: "storage", active: tab, children: [
-        storageLoadError && /* @__PURE__ */ jsx8(LoadError, { what: "Die Liste der Speicher", error: storageLoadError, onRetry: loadStorage }),
-        !storage && !storageLoadError && /* @__PURE__ */ jsx8("p", { className: "text-sm opacity-60", children: "Lade Speicher \u2026" }),
-        connections.map((connection) => /* @__PURE__ */ jsxs8("section", { id: `storage-${connection}`, className: "mb-6", children: [
-          /* @__PURE__ */ jsx8("h3", { className: "mb-2 text-sm font-medium opacity-60", children: connection }),
-          storage && !storage.some((p) => p.connection === connection) && !storageErrors.some((e) => e.connection === connection) && /* @__PURE__ */ jsx8("p", { className: "text-xs opacity-60", children: "Keine Speicher gefunden." }),
-          storage && storage.some((p) => p.connection === connection) && /* @__PURE__ */ jsx8(
+      /* @__PURE__ */ jsxs9(TabPanel, { id: "storage", active: tab, children: [
+        storageLoadError && /* @__PURE__ */ jsx9(LoadError, { what: "Die Liste der Speicher", error: storageLoadError, onRetry: loadStorage }),
+        !storage && !storageLoadError && /* @__PURE__ */ jsx9("p", { className: "text-sm opacity-60", children: "Lade Speicher \u2026" }),
+        connections.map((connection) => /* @__PURE__ */ jsxs9("section", { id: `storage-${connection}`, className: "mb-6", children: [
+          /* @__PURE__ */ jsx9("h3", { className: "mb-2 text-sm font-medium opacity-60", children: connection }),
+          storage && !storage.some((p) => p.connection === connection) && !storageErrors.some((e) => e.connection === connection) && /* @__PURE__ */ jsx9("p", { className: "text-xs opacity-60", children: "Keine Speicher gefunden." }),
+          storage && storage.some((p) => p.connection === connection) && /* @__PURE__ */ jsx9(
             StorageSection,
             {
               pools: storage.filter((p) => p.connection === connection),
               focusNode: storageRef?.connection === connection ? storageRef.node : null
             }
           ),
-          /* @__PURE__ */ jsx8(UnreachableHint, { connection, sources: [["Speicher", storageErrors]], testId: `unreachable-storage-${connection}` })
+          /* @__PURE__ */ jsx9(UnreachableHint, { connection, sources: [["Speicher", storageErrors]], testId: `unreachable-storage-${connection}` })
         ] }, connection))
       ] }),
-      /* @__PURE__ */ jsxs8(TabPanel, { id: "updates", active: tab, children: [
-        updatesLoadError && /* @__PURE__ */ jsx8(LoadError, { what: "Die Liste der Updates", error: updatesLoadError, onRetry: loadUpdates }),
-        !updates && !updatesLoadError && /* @__PURE__ */ jsx8("p", { className: "text-sm opacity-60", children: "Lade Updates \u2026" }),
-        updates && /* @__PURE__ */ jsx8("p", { className: "mb-3 text-xs opacity-60", children: "Hier steht, was auf den Knoten wartet. Einspielen kannst du die Updates in Nodvard Shield unter \u201EUpdates\u201C (daf\xFCr braucht der Knoten einen SSH-Zugang) oder wie gewohnt in der Proxmox-Oberfl\xE4che." }),
-        connections.map((connection) => /* @__PURE__ */ jsxs8("section", { className: "mb-6", children: [
-          /* @__PURE__ */ jsx8("h3", { className: "mb-2 text-sm font-medium opacity-60", children: connection }),
-          updates && updates.some((u) => u.connection === connection) && /* @__PURE__ */ jsx8(UpdatesSection, { nodes: updates.filter((u) => u.connection === connection), shieldHref: shieldHrefFor }),
-          updates && !updates.some((u) => u.connection === connection) && !updatesErrors.some((e) => e.connection === connection) && /* @__PURE__ */ jsx8("p", { className: "text-xs opacity-60", children: "Keine Knoten gefunden." }),
-          /* @__PURE__ */ jsx8(UnreachableHint, { connection, sources: [["Updates", updatesErrors]], testId: `unreachable-updates-${connection}` })
+      /* @__PURE__ */ jsxs9(TabPanel, { id: "updates", active: tab, children: [
+        updatesLoadError && /* @__PURE__ */ jsx9(LoadError, { what: "Die Liste der Updates", error: updatesLoadError, onRetry: loadUpdates }),
+        !updates && !updatesLoadError && /* @__PURE__ */ jsx9("p", { className: "text-sm opacity-60", children: "Lade Updates \u2026" }),
+        updates && /* @__PURE__ */ jsx9("p", { className: "mb-3 text-xs opacity-60", children: "Hier steht, was auf den Knoten wartet. Einspielen kannst du die Updates in Nodvard Shield unter \u201EUpdates\u201C (daf\xFCr braucht der Knoten einen SSH-Zugang) oder wie gewohnt in der Proxmox-Oberfl\xE4che." }),
+        connections.map((connection) => /* @__PURE__ */ jsxs9("section", { className: "mb-6", children: [
+          /* @__PURE__ */ jsx9("h3", { className: "mb-2 text-sm font-medium opacity-60", children: connection }),
+          updates && updates.some((u) => u.connection === connection) && /* @__PURE__ */ jsx9(UpdatesSection, { nodes: updates.filter((u) => u.connection === connection), shieldHref: shieldHrefFor }),
+          updates && !updates.some((u) => u.connection === connection) && !updatesErrors.some((e) => e.connection === connection) && /* @__PURE__ */ jsx9("p", { className: "text-xs opacity-60", children: "Keine Knoten gefunden." }),
+          /* @__PURE__ */ jsx9(UnreachableHint, { connection, sources: [["Updates", updatesErrors]], testId: `unreachable-updates-${connection}` })
         ] }, connection))
       ] }),
-      /* @__PURE__ */ jsxs8(TabPanel, { id: "tasks", active: tab, children: [
-        tasksLoadError && /* @__PURE__ */ jsx8(LoadError, { what: "Der Aufgabenverlauf", error: tasksLoadError, onRetry: loadTasks }),
-        !tasks && !tasksLoadError && /* @__PURE__ */ jsx8("p", { className: "text-sm opacity-60", children: "Lade Aufgabenverlauf \u2026" }),
-        /* @__PURE__ */ jsxs8("div", { className: "mb-3 flex flex-wrap items-center gap-3 text-xs opacity-80", children: [
-          /* @__PURE__ */ jsxs8("label", { className: "flex items-center gap-1", children: [
-            /* @__PURE__ */ jsx8("input", { type: "checkbox", checked: showConsoleTasks, onChange: () => setShowConsoleTasks((v) => !v) }),
+      /* @__PURE__ */ jsxs9(TabPanel, { id: "tasks", active: tab, children: [
+        tasksLoadError && /* @__PURE__ */ jsx9(LoadError, { what: "Der Aufgabenverlauf", error: tasksLoadError, onRetry: loadTasks }),
+        !tasks && !tasksLoadError && /* @__PURE__ */ jsx9("p", { className: "text-sm opacity-60", children: "Lade Aufgabenverlauf \u2026" }),
+        /* @__PURE__ */ jsxs9("div", { className: "mb-3 flex flex-wrap items-center gap-3 text-xs opacity-80", children: [
+          /* @__PURE__ */ jsxs9("label", { className: "flex items-center gap-1", children: [
+            /* @__PURE__ */ jsx9("input", { type: "checkbox", checked: showConsoleTasks, onChange: () => setShowConsoleTasks((v) => !v) }),
             "Konsolen-\xD6ffnungen anzeigen"
           ] }),
-          taskHost && /* @__PURE__ */ jsxs8("span", { className: "accent-soft flex items-center gap-1 rounded px-2 py-0.5", children: [
+          taskHost && /* @__PURE__ */ jsxs9("span", { className: "accent-soft flex items-center gap-1 rounded px-2 py-0.5", children: [
             "Nur ",
             taskHost.display_name,
-            /* @__PURE__ */ jsx8(
+            /* @__PURE__ */ jsx9(
               "button",
               {
                 type: "button",
@@ -2481,15 +2623,15 @@ function ProxmoxNodePage() {
         ] }),
         tasks && taskConnections.map((connection) => {
           const list = tasksFor(connection);
-          return /* @__PURE__ */ jsxs8("section", { id: `tasks-${connection}`, className: "mb-6", children: [
-            /* @__PURE__ */ jsx8("h3", { className: "mb-1 text-sm font-medium opacity-60", children: connection }),
-            list.length > 0 && /* @__PURE__ */ jsx8("p", { className: "mb-1 text-xs opacity-60", "data-testid": `tasks-count-${connection}`, children: list.length === 1 ? "1 Aufgabe" : `${list.length} Aufgaben` }),
-            /* @__PURE__ */ jsx8(TasksTable, { tasks: list })
+          return /* @__PURE__ */ jsxs9("section", { id: `tasks-${connection}`, className: "mb-6", children: [
+            /* @__PURE__ */ jsx9("h3", { className: "mb-1 text-sm font-medium opacity-60", children: connection }),
+            list.length > 0 && /* @__PURE__ */ jsx9("p", { className: "mb-1 text-xs opacity-60", "data-testid": `tasks-count-${connection}`, children: list.length === 1 ? "1 Aufgabe" : `${list.length} Aufgaben` }),
+            /* @__PURE__ */ jsx9(TasksTable, { tasks: list })
           ] }, connection);
         })
       ] }),
-      /* @__PURE__ */ jsxs8(TabPanel, { id: "connections", active: tab, children: [
-        connectOpen && /* @__PURE__ */ jsx8(
+      /* @__PURE__ */ jsxs9(TabPanel, { id: "connections", active: tab, children: [
+        connectOpen && /* @__PURE__ */ jsx9(
           ProxmoxConnect,
           {
             onClose: () => setConnectOpen(false),
@@ -2500,7 +2642,7 @@ function ProxmoxNodePage() {
             }
           }
         ),
-        /* @__PURE__ */ jsx8(ConnectionsPanel, { bare: true, onConnectWithPassword: canConnect ? () => setConnectOpen(true) : void 0, version: connectionsVersion })
+        /* @__PURE__ */ jsx9(ConnectionsPanel, { bare: true, onConnectWithPassword: canConnect ? () => setConnectOpen(true) : void 0, version: connectionsVersion })
       ] })
     ] })
   ] });
@@ -2517,14 +2659,7 @@ function isTab(value) {
 }
 function TabBar({ active, onSelect, badges }) {
   const refs = useRef3({});
-  const bar = useRef3(null);
-  useEffect7(() => {
-    const tab = refs.current[active];
-    if (!tab || !bar.current) return;
-    const t = tab.getBoundingClientRect();
-    const b = bar.current.getBoundingClientRect();
-    if (t.left < b.left || t.right > b.right) bar.current.scrollLeft += t.left - b.left - 16;
-  }, [active]);
+  const { ref: bar, row, edges } = useScrollRow(active);
   function onKeyDown(e) {
     const index = TABS.findIndex((t) => t.id === active);
     const next = e.key === "ArrowRight" ? (index + 1) % TABS.length : e.key === "ArrowLeft" ? (index - 1 + TABS.length) % TABS.length : e.key === "Home" ? 0 : e.key === "End" ? TABS.length - 1 : -1;
@@ -2533,37 +2668,49 @@ function TabBar({ active, onSelect, badges }) {
     onSelect(TABS[next].id);
     refs.current[TABS[next].id]?.focus();
   }
-  return /* @__PURE__ */ jsx8("div", { ref: bar, role: "tablist", "aria-label": "Bereiche", className: "mb-4 flex gap-1 overflow-x-auto border-b border-white/[0.08] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", children: TABS.map((t) => {
-    const badge = badges[t.id];
-    return /* @__PURE__ */ jsxs8(
-      "button",
+  return /* @__PURE__ */ jsxs9("div", { className: "relative mb-4", children: [
+    /* @__PURE__ */ jsx9(
+      "div",
       {
-        ref: (el) => {
-          refs.current[t.id] = el;
-        },
-        type: "button",
-        role: "tab",
-        id: `pve-tab-${t.id}`,
-        "aria-selected": active === t.id,
-        "aria-controls": `pve-panel-${t.id}`,
-        tabIndex: active === t.id ? 0 : -1,
-        onClick: () => onSelect(t.id),
-        onKeyDown,
-        className: `-mb-px whitespace-nowrap border-b-2 px-3.5 py-2 text-sm transition ${active === t.id ? "border-[var(--color-accent)] text-white" : "border-transparent text-white/55 hover:text-white"}`,
-        children: [
-          t.label,
-          badge && /* @__PURE__ */ jsxs8("span", { className: "ml-1.5 rounded-full bg-amber-500/80 px-1.5 text-[10px] text-black", title: badge.label, children: [
-            /* @__PURE__ */ jsx8("span", { "aria-hidden": "true", children: badge.text }),
-            /* @__PURE__ */ jsx8("span", { className: "sr-only", children: `: ${badge.label}` })
-          ] })
-        ]
-      },
-      t.id
-    );
-  }) });
+        role: "tablist",
+        "aria-label": "Bereiche",
+        ref: styleRef(fadeStyle(edges), bar),
+        className: "flex gap-1 overflow-x-auto border-b border-white/[0.08] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+        children: TABS.map((t) => {
+          const badge = badges[t.id];
+          return /* @__PURE__ */ jsxs9(
+            "button",
+            {
+              ref: (el) => {
+                refs.current[t.id] = el;
+              },
+              type: "button",
+              role: "tab",
+              id: `pve-tab-${t.id}`,
+              "aria-selected": active === t.id,
+              "aria-controls": `pve-panel-${t.id}`,
+              tabIndex: active === t.id ? 0 : -1,
+              onClick: () => onSelect(t.id),
+              onKeyDown,
+              className: `-mb-px whitespace-nowrap border-b-2 px-3.5 py-2 text-sm transition ${active === t.id ? "border-[var(--color-accent)] text-white" : "border-transparent text-white/55 hover:text-white"}`,
+              children: [
+                t.label,
+                badge && /* @__PURE__ */ jsxs9("span", { className: "ml-1.5 rounded-full bg-amber-500/80 px-1.5 text-[10px] text-black", title: badge.label, children: [
+                  /* @__PURE__ */ jsx9("span", { "aria-hidden": "true", children: badge.text }),
+                  /* @__PURE__ */ jsx9("span", { className: "sr-only", children: `: ${badge.label}` })
+                ] })
+              ]
+            },
+            t.id
+          );
+        })
+      }
+    ),
+    /* @__PURE__ */ jsx9(ScrollArrows, { edges, row })
+  ] });
 }
 function TabPanel({ id, active, children }) {
-  return /* @__PURE__ */ jsx8("div", { role: "tabpanel", id: `pve-panel-${id}`, "aria-labelledby": `pve-tab-${id}`, hidden: active !== id, tabIndex: 0, className: "outline-none", children });
+  return /* @__PURE__ */ jsx9("div", { role: "tabpanel", id: `pve-panel-${id}`, "aria-labelledby": `pve-tab-${id}`, hidden: active !== id, tabIndex: 0, className: "outline-none", children });
 }
 function updatesCount(nodes) {
   return nodes.reduce((sum, n) => sum + (n.count ?? 0), 0);
@@ -2571,10 +2718,10 @@ function updatesCount(nodes) {
 var STATUS_TONE = { up: "text-emerald-300", down: "opacity-60", maintenance: "text-amber-300" };
 var TILE_TONE = { good: "text-emerald-300", warn: "text-amber-300", bad: "text-red-300", neutral: "text-white" };
 function Tile({ label, value, hint, tone = "neutral", onClick, testId }) {
-  return /* @__PURE__ */ jsxs8("button", { type: "button", onClick, "data-testid": testId, className: "panel px-4 py-3 text-left transition hover:bg-white/[0.04]", children: [
-    /* @__PURE__ */ jsx8("span", { className: "block text-xs text-white/50", children: label }),
-    /* @__PURE__ */ jsx8("span", { className: `mt-1 block text-xl font-semibold tabular-nums ${TILE_TONE[tone]}`, children: value }),
-    /* @__PURE__ */ jsx8("span", { className: "mt-0.5 block text-[11px] text-white/40", children: hint })
+  return /* @__PURE__ */ jsxs9("button", { type: "button", onClick, "data-testid": testId, className: "panel px-4 py-3 text-left transition hover:bg-white/[0.04]", children: [
+    /* @__PURE__ */ jsx9("span", { className: "block text-xs text-white/50", children: label }),
+    /* @__PURE__ */ jsx9("span", { className: `mt-1 block text-xl font-semibold tabular-nums ${TILE_TONE[tone]}`, children: value }),
+    /* @__PURE__ */ jsx9("span", { className: "mt-0.5 block text-[11px] text-white/40", children: hint })
   ] });
 }
 function Summary({ nodes, guests, connections, updates, pools, updatesIncomplete, storageIncomplete, onOpen }) {
@@ -2613,8 +2760,8 @@ function Summary({ nodes, guests, connections, updates, pools, updatesIncomplete
       if (storageTile.tone === "good") storageTile.tone = "warn";
     }
   }
-  return /* @__PURE__ */ jsxs8("div", { className: "mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4", "data-testid": "pve-summary", children: [
-    /* @__PURE__ */ jsx8(
+  return /* @__PURE__ */ jsxs9("div", { className: "mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4", "data-testid": "pve-summary", children: [
+    /* @__PURE__ */ jsx9(
       Tile,
       {
         testId: "tile-nodes",
@@ -2625,7 +2772,7 @@ function Summary({ nodes, guests, connections, updates, pools, updatesIncomplete
         onClick: () => onOpen("guests")
       }
     ),
-    /* @__PURE__ */ jsx8(
+    /* @__PURE__ */ jsx9(
       Tile,
       {
         testId: "tile-guests",
@@ -2635,8 +2782,8 @@ function Summary({ nodes, guests, connections, updates, pools, updatesIncomplete
         onClick: () => onOpen("guests")
       }
     ),
-    /* @__PURE__ */ jsx8(Tile, { testId: "tile-updates", label: "Updates", ...updatesTile, onClick: () => onOpen("updates") }),
-    /* @__PURE__ */ jsx8(Tile, { testId: "tile-storage", label: "Speicher", ...storageTile, onClick: () => onOpen("storage") })
+    /* @__PURE__ */ jsx9(Tile, { testId: "tile-updates", label: "Updates", ...updatesTile, onClick: () => onOpen("updates") }),
+    /* @__PURE__ */ jsx9(Tile, { testId: "tile-storage", label: "Speicher", ...storageTile, onClick: () => onOpen("storage") })
   ] });
 }
 export {

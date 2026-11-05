@@ -22,7 +22,7 @@ from ...services import restore as restore_service
 from ..deps import SessionDep, SettingsDep
 from ..errors import CodedHTTPException
 from ..proxy_headers import SCOPE_KEY as FORWARDING_SCOPE_KEY
-from ..proxy_headers import Forwarding
+from ..proxy_headers import Forwarding, is_insecure_connection
 from .restore_common import (
     RestoreInspectIn,
     RestoreScheduleIn,
@@ -35,11 +35,7 @@ from .restore_common import http_error as restore_http_error
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# Der Refresh-Token steht in beiden Cookies (gleicher Wert, Pfad und Attribute), damit man nach einem Rollback aufs
-# alte Image, das nur `lattice_refresh` kennt, angemeldet bleibt. Lesereihenfolge: neuer Name zuerst.
 COOKIE_NAME = "nodvard_deck_refresh"
-LEGACY_COOKIE_NAME = "lattice_refresh"
-COOKIE_NAMES = (COOKIE_NAME, LEGACY_COOKIE_NAME)
 COOKIE_PATH = "/api/v1/auth"
 
 # Web bekommt den Refresh-Token nur als Cookie, Android/CLI nur im Body; ohne Angabe gilt "web" (der sichere Standard).
@@ -121,16 +117,15 @@ def _tokens_response(tokens: auth_service.IssuedTokens, *, secure: bool) -> Resp
         and tokens.refresh_expires_at is not None
     ):
         max_age = max(1, int((tokens.refresh_expires_at - utcnow()).total_seconds()))
-        for name in COOKIE_NAMES:
-            response.set_cookie(
-                key=name,
-                value=tokens.refresh_token,
-                max_age=max_age,
-                path=COOKIE_PATH,
-                httponly=True,
-                samesite="strict",
-                secure=secure,
-            )
+        response.set_cookie(
+            key=COOKIE_NAME,
+            value=tokens.refresh_token,
+            max_age=max_age,
+            path=COOKIE_PATH,
+            httponly=True,
+            samesite="strict",
+            secure=secure,
+        )
     return response
 
 
@@ -160,25 +155,9 @@ def _note_untrusted_proxy(request: Request, *, owner: bool) -> None:
         untrusted_proxies.note(parse_address(info.peer))
 
 
-def _cookie_tokens(request: Request) -> list[str]:
-    """Die Werte der Refresh-Cookies in Lesereihenfolge (`COOKIE_NAMES`), ohne leere und doppelte."""
-    values: list[str] = []
-    for name in COOKIE_NAMES:
-        value = request.cookies.get(name)
-        if value and value not in values:
-            values.append(value)
-    return values
-
-
-def _refresh_candidates(request: Request, body_token: str | None) -> list[str]:
-    """Ein Token im Body (Android/CLI) gilt allein, sonst die Cookie-Werte in Lesereihenfolge."""
-    tokens = [body_token] if body_token else _cookie_tokens(request)
-    if not tokens:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Kein Refresh-Token angegeben (weder Cookie noch Body).",
-        )
-    return tokens
+def _refresh_token(request: Request, body_token: str | None) -> str | None:
+    """Ein Token im Body (Android/CLI) gilt allein, sonst der Wert des Cookies."""
+    return body_token or request.cookies.get(COOKIE_NAME) or None
 
 
 async def confirm_current_password(
@@ -265,11 +244,11 @@ async def confirm_stored_secret_change(
 
 
 @router.get("/bootstrap")
-async def bootstrap_status(session: SessionDep, settings: SettingsDep) -> dict:
+async def bootstrap_status(request: Request, session: SessionDep, settings: SettingsDep) -> dict:
     """Ob die Erstinbetriebnahme noch offen ist (`needed`), ohne Anmeldung erreichbar; ohne Konto zusätzlich `restore`
     mit dem Ergebnis einer fehlgeschlagenen Wiederherstellung aus dem Assistenten."""
     needed = await auth_service.needs_bootstrap(session)
-    body: dict = {"needed": needed}
+    body: dict = {"needed": needed, "insecure_connection": is_insecure_connection(request)}
     if needed:
         result = await restore_service.failed_result(settings)
         if result is not None:
@@ -384,11 +363,14 @@ async def mfa(
 async def refresh(
     payload: RefreshRequest, request: Request, session: SessionDep, settings: SettingsDep
 ) -> Response:
-    candidates = _refresh_candidates(request, payload.refresh_token)
-    try:
-        tokens = await auth_service.refresh_with_candidates(
-            session, settings, raw_refresh_tokens=candidates
+    raw_token = _refresh_token(request, payload.refresh_token)
+    if not raw_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Kein Refresh-Token angegeben (weder Cookie noch Body).",
         )
+    try:
+        tokens = await auth_service.refresh_access_token(session, settings, raw_refresh_token=raw_token)
     except auth_service.InvalidCredentials as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
@@ -399,19 +381,16 @@ async def refresh(
 async def logout(
     payload: LogoutRequest, request: Request, session: SessionDep, settings: SettingsDep
 ) -> Response:
-    # Ein Token im Body gilt allein (Android/CLI); sonst werden die Tokens aller Cookies widerrufen,
-    # auch wenn sie verschieden sind (z. B. nach einem Rollback).
-    for raw_token in [payload.refresh_token] if payload.refresh_token else _cookie_tokens(request):
+    raw_token = _refresh_token(request, payload.refresh_token)
+    if raw_token:
         await auth_service.logout(session, raw_refresh_token=raw_token)
 
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
-    # Beide Cookies, mit denselben Attributen wie beim Setzen, sonst überschreibt der
-    # Browser das bestehende Cookie u. U. nicht.
-    for name in COOKIE_NAMES:
-        response.delete_cookie(
-            name, path=COOKIE_PATH, httponly=True, samesite="strict",
-            secure=_cookie_secure(request, settings),
-        )
+    # Mit denselben Attributen wie beim Setzen, sonst überschreibt der Browser das bestehende Cookie u. U. nicht.
+    response.delete_cookie(
+        COOKIE_NAME, path=COOKIE_PATH, httponly=True, samesite="strict",
+        secure=_cookie_secure(request, settings),
+    )
     return response
 
 

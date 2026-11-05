@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetUpdateHelper, type HelperView } from "../../lib/updater";
 import { useAuthStore } from "../../state/auth";
+import { DECK_EDITION, useEditionStore } from "../../state/edition";
 import { SystemSettings } from "./SystemSettings";
 import { UpdateCopiesCard, type PreUpdateCopy } from "./UpdateCopiesCard";
 
@@ -356,4 +357,17 @@ describe("Karte Kopien vor Updates: Rückweg", () => {
     await screen.findByText("Kopien vor Updates", { selector: "h3" });
     expect(screen.queryByTestId("rollback-section")).not.toBeInTheDocument();
   });
+});
+
+it("Dock lädt für seine Datenbank-Kopien keinen Update-Helfer", async () => {
+  useEditionStore.setState({ edition: { ...DECK_EDITION, choose_modules: false, repo_tools: false } });
+  try {
+    const calls = mockAll(helperView(null));
+    render(<UpdateCopiesCard />);
+    await screen.findByText(`backups/vor-update/${COPY.name}`);
+    expect(screen.queryAllByText(/Nodvard Deck/)).toHaveLength(0);
+    expect(calls.some((call) => call.path === "/system/updates/helper")).toBe(false);
+  } finally {
+    useEditionStore.setState({ edition: DECK_EDITION });
+  }
 });

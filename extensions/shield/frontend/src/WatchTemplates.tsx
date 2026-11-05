@@ -91,7 +91,7 @@ export function WatchTemplates() {
           <ul className="divide-y divide-white/[0.06]">
             {data.suggestions.map((s) => (
               <li key={s.path} className="flex flex-wrap items-center gap-2 py-2">
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-[1_1_14rem]">
                   <p className="break-all font-mono text-xs">{s.path}</p>
                   <p className="text-xs text-white/50">
                     {s.kinds.map((k) => KIND_LABEL[k] ?? k).join(", ")} · auf {s.hosts.join(", ")}

@@ -1,8 +1,8 @@
 /**
  * „Erste Schritte“ im Cockpit: die Checkliste, die einen Neuling von der leeren Installation bis
- * zum laufenden Dashboard fuehrt. Alles hier ist abgeleitet aus Daten, die es ohnehin gibt
- * (Server, Erweiterungen, Dashboard-Layout) -- es gibt keine eigene Buchfuehrung, die vom Zustand
- * abweichen koennte. Wo es keine verlaessliche Quelle gibt (Sicherung), steht nur ein Hinweis.
+ * zum laufenden Dashboard führt. Alles hier ist abgeleitet aus Daten, die es ohnehin gibt
+ * (Server, Erweiterungen, Dashboard-Layout) -- es gibt keine eigene Buchführung, die vom Zustand
+ * abweichen könnte. Wo es keine verlässliche Quelle gibt (Sicherung), steht nur ein Hinweis.
  *
  * Ein Schritt erscheint nur, wenn der Nutzer das Recht hat, ihn zu erledigen, und die Daten dazu
  * geladen werden konnten (kein Raten bei einem Fehler).
@@ -13,8 +13,8 @@ import { api } from "./api";
 import { isSshCredential } from "./hosts";
 import { type HostOut } from "./overview";
 
-/** Die Erweiterung fuer Push-Nachrichten. Der Kern weiss sonst nichts ueber einzelne Erweiterungen;
- * hier gibt es (noch) keine allgemeine Kennzeichnung ueber die API. */
+/** Die Erweiterung für Push-Nachrichten. Der Kern weiß sonst nichts über einzelne Erweiterungen;
+ * hier gibt es (noch) keine allgemeine Kennzeichnung über die API. */
 export const PUSH_EXTENSION_ID = "ntfy";
 
 export interface ExtensionInfo {
@@ -66,7 +66,7 @@ export interface FirstStepsInput {
   extensions: ExtensionInfo[] | undefined;
   /** Zahl der Widgets, die auf dem Dashboard stehen (nicht ausgeblendet, im Katalog bekannt). */
   placedWidgets: number | undefined;
-  /** Zahl der Widgets, die es ueberhaupt gibt (Katalog). */
+  /** Zahl der Widgets, die es überhaupt gibt (Katalog). */
   catalogWidgets: number | undefined;
 }
 
@@ -99,7 +99,7 @@ export function buildFirstSteps({ can, hosts, extensions, placedWidgets, catalog
       text: "Trag den ersten Rechner ein, den Nodvard Deck im Blick behalten soll, zum Beispiel den Raspberry Pi.",
     });
     const noAccess = preferManual(hosts.filter((h) => !h.credential || !isSshCredential(h.credential)));
-    // Ein Schluessel allein reicht nicht: solange sich Nodvard Deck damit nie angemeldet hat, fehlt vermutlich
+    // Ein Schlüssel allein reicht nicht: solange sich Nodvard Deck damit nie angemeldet hat, fehlt vermutlich
     // der Befehl auf dem Server. Dass der Server antwortet, belegt das nicht (der SSH-Port ist offen, mehr nicht).
     const confirmed = withAccess.filter((h) => h.credential!.kind !== "ssh_key" || !!h.login_ok_at);
     const waitingKey = preferManual(withAccess.filter((h) => !confirmed.includes(h)));

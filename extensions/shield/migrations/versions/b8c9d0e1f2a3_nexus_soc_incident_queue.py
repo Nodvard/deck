@@ -1,9 +1,9 @@
-"""nexus-soc: Vorfaelle des Sammelfensters dauerhaft merken
+"""nexus-soc: Vorfälle des Sammelfensters dauerhaft merken
 
 Ein Vorfall lag bisher bis zum Ende des Sammelfensters nur im Speicher; ein Neustart
 des Dashboards in dieser Zeit hat ihn still verloren. Jetzt steht er sofort in dieser
 Tabelle ("offen") und wird nach der Verarbeitung auf "verarbeitet" gesetzt; beim Start
-werden offene Eintraege wieder aufgenommen. `attempts`/`action_id`/`ai_summary` begrenzen
+werden offene Einträge wieder aufgenommen. `attempts`/`action_id`/`ai_summary` begrenzen
 Wiederholungen und verhindern einen zweiten Aktionsvorschlag.
 
 Revision ID: b8c9d0e1f2a3

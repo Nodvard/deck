@@ -41,7 +41,7 @@ async def test_zu_kurzes_passwort_kommt_auf_deutsch_und_ohne_eingabe_zurueck(cli
     # Nichts von der Eingabe (und nichts vom Pruefungs-Zusatz) darf zurueckkommen.
     assert set(item) == {"type", "loc", "msg"}
     assert "kurz" not in res.text
-    assert (await client.get("/api/v1/auth/bootstrap")).json() == {"needed": True}
+    assert (await client.get("/api/v1/auth/bootstrap")).json() == {"needed": True, "insecure_connection": True}
 
 
 @pytest.mark.asyncio

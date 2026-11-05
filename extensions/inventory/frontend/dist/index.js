@@ -1,3 +1,69 @@
+// ../../_shared/frontend/src/csp.ts
+function cspNonce() {
+  return document.querySelector('meta[name="csp-nonce"]')?.content ?? "";
+}
+function createStyle() {
+  const element = document.createElement("style");
+  element.nonce = cspNonce();
+  return element;
+}
+var UNITLESS = /* @__PURE__ */ new Set([
+  "animationIterationCount",
+  "aspectRatio",
+  "columnCount",
+  "fillOpacity",
+  "flex",
+  "flexGrow",
+  "flexShrink",
+  "fontWeight",
+  "gridArea",
+  "gridColumn",
+  "gridColumnEnd",
+  "gridColumnStart",
+  "gridRow",
+  "gridRowEnd",
+  "gridRowStart",
+  "lineHeight",
+  "opacity",
+  "order",
+  "orphans",
+  "scale",
+  "strokeDasharray",
+  "strokeDashoffset",
+  "strokeMiterlimit",
+  "strokeOpacity",
+  "strokeWidth",
+  "tabSize",
+  "widows",
+  "zIndex",
+  "zoom"
+]);
+function styleRef(values, ref) {
+  let style;
+  return (node) => {
+    style?.remove();
+    style = void 0;
+    if (node && values) {
+      const id = Array.from(crypto.getRandomValues(new Uint32Array(4))).join("-");
+      node.setAttribute("data-deck-style", id);
+      style = createStyle();
+      document.head.appendChild(style);
+      const sheet = style.sheet;
+      const selector = `${node === document.documentElement ? ":root" : ""}[data-deck-style="${id}"]`;
+      sheet.insertRule(`${selector} {}`);
+      const declaration = sheet.cssRules[0].style;
+      for (const [key, value] of Object.entries(values)) {
+        if (value == null || typeof value === "boolean") continue;
+        const name = key.startsWith("--") ? key : key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`).replace(/^ms-/, "-ms-");
+        const unit = typeof value === "number" && value !== 0 && !key.startsWith("--") && !UNITLESS.has(key) ? "px" : "";
+        declaration.setProperty(name, `${value}${unit}`);
+      }
+    }
+    if (typeof ref === "function") ref(node);
+    else if (ref) ref.current = node;
+  };
+}
+
 // src/InventoryPage.tsx
 import { useCallback, useEffect as useEffect4, useState as useState4 } from "react";
 
@@ -1112,7 +1178,7 @@ function RacksPanel({ items, onChanged }) {
           "li",
           {
             className: "flex items-center gap-2 border-b border-white/[0.06] bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] px-2 text-xs",
-            style: { minHeight: `${(row.top - row.bottom + 1) * 1.75}rem` },
+            ref: styleRef({ minHeight: `${(row.top - row.bottom + 1) * 1.75}rem` }),
             "data-testid": `rack-device-${row.item.id}`,
             children: [
               /* @__PURE__ */ jsx6("span", { className: "w-14 flex-none tabular-nums text-white/45", children: row.top === row.bottom ? `HE ${row.top}` : `HE ${row.bottom}\u2013${row.top}` }),
@@ -2095,7 +2161,7 @@ function InventoryPage() {
                   ),
                   item.images[0] ? /* @__PURE__ */ jsx6(AuthImage, { src: item.images[0].url, alt: "", className: "h-11 w-11 flex-none rounded-lg object-cover" }) : /* @__PURE__ */ jsx6("span", { className: "grid h-11 w-11 flex-none place-items-center rounded-lg bg-white/[0.05] text-white/35", children: /* @__PURE__ */ jsx6(Icon, { name: "package", size: 18 }) }),
                   /* @__PURE__ */ jsxs4("div", { className: "min-w-0 flex-1", children: [
-                    /* @__PURE__ */ jsx6("p", { className: "truncate text-sm font-medium", children: item.name }),
+                    /* @__PURE__ */ jsx6("p", { className: "line-clamp-2 break-words text-sm font-medium sm:line-clamp-none sm:truncate", children: item.name }),
                     /* @__PURE__ */ jsxs4("p", { className: "truncate text-xs text-white/50", children: [
                       [item.manufacturer, item.model].filter(Boolean).join(" ") || categoryName(item.category_id),
                       " \xB7 ",
@@ -2122,6 +2188,10 @@ function InventoryPage() {
                       /* @__PURE__ */ jsx6("span", { className: "sr-only sm:not-sr-only", children: " L\xF6schen" })
                     ] })
                   ] })
+                ] }),
+                (item.purchase_price_cents != null || item.warranty_until) && /* @__PURE__ */ jsxs4("p", { className: "ml-10 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs sm:hidden", "data-testid": `price-mobile-${item.id}`, children: [
+                  /* @__PURE__ */ jsx6("span", { className: "tabular-nums", children: formatPrice(item.purchase_price_cents) }),
+                  item.warranty_until && /* @__PURE__ */ jsx6(Badge, { tone: WARRANTY_BADGE[ws].tone, children: WARRANTY_BADGE[ws].label(item.warranty_until) })
                 ] }),
                 isExpanded && /* @__PURE__ */ jsxs4("div", { className: "ml-10 mt-3 rounded-lg border border-white/[0.06] bg-black/15 p-4 text-sm", children: [
                   item.description && /* @__PURE__ */ jsx6("p", { className: "mb-3 text-white/80", children: item.description }),

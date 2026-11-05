@@ -1,4 +1,4 @@
-"""nexus-soc: Update-Zentrale, Einbruchschutz und Datei-Waechter
+"""nexus-soc: Update-Zentrale, Einbruchschutz und Datei-Wächter
 
 Revision ID: f6a7b8c9d0e1
 Revises: e5f6a7b8c9d0

@@ -149,7 +149,7 @@ class OllamaProvider:
         if not cfg["url"]:
             return ConnectorHealth(ok=False, message="Kein Server für Nodvard KI eingetragen (optional).")
         try:
-            response = await self._ctx.http.get(f"{cfg['url'].rstrip('/')}/api/tags")
+            response = await self._ctx.http.get(f"{cfg['url'].rstrip('/')}/api/tags", headers=await _auth_headers(self._ctx))
         except Exception as exc:  # noqa: BLE001 - Health-Check darf nie werfen, nur melden
             return ConnectorHealth(ok=False, message=_unreachable_text(exc))
         if 300 <= response.status_code < 400:

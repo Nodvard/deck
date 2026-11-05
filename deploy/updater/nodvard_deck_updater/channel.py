@@ -71,18 +71,18 @@ REQUEST_MODE = 0o644
 """Modus der Anforderungen des Dashboards (nur zur Abstimmung in `vectors/protocol.json`): root ohne
 `CAP_DAC_OVERRIDE` kann eine `0600`-Datei von uid 1000 nicht lesen."""
 MAX_SCAN = 1000
-"""Hoechstens so viele Dateien (keine Ordner) je Runde ansehen; der Rest bleibt fuer die naechste Runde liegen."""
+"""Höchstens so viele Dateien (keine Ordner) je Runde ansehen; der Rest bleibt für die nächste Runde liegen."""
 MAX_HANDLE = 32
-"""Hoechstens so viele Anforderungen je Runde bearbeiten; der Rest bleibt fuer die naechste Runde liegen."""
+"""Höchstens so viele Anforderungen je Runde bearbeiten; der Rest bleibt für die nächste Runde liegen."""
 MAX_READ = 20_000
-"""Hoechstens so viele Verzeichniseintraege (Ordner eingeschlossen) je Runde durchlesen. Ordner zaehlen nicht auf
-`MAX_SCAN`/`MAX_HANDLE`; diese Grenze haelt nur die Rundendauer beschraenkt."""
+"""Höchstens so viele Verzeichniseinträge (Ordner eingeschlossen) je Runde durchlesen. Ordner zählen nicht auf
+`MAX_SCAN`/`MAX_HANDLE`; diese Grenze hält nur die Rundendauer beschränkt."""
 MAX_RMDIR = MAX_SCAN
-"""Hoechstens so viele `rmdir`-Versuche je Runde. Ein voller Ordner lehnt `rmdir` ab, kostet aber trotzdem einen
-Systemaufruf (rund 6 us): 100 000 davon dauerten 0,6 s je Runde. Was darueber liegt, bleibt fuer die naechste Runde
-und zaehlt als stehen geblieben (`Poll.directories`)."""
+"""Höchstens so viele `rmdir`-Versuche je Runde. Ein voller Ordner lehnt `rmdir` ab, kostet aber trotzdem einen
+Systemaufruf (rund 6 us): 100 000 davon dauerten 0,6 s je Runde. Was darüber liegt, bleibt für die nächste Runde
+und zählt als stehen geblieben (`Poll.directories`)."""
 TMP_GRACE_S = 600
-"""So lange bleibt eine halb geschriebene Anforderung des Dashboards liegen (danach waere sie ohnehin abgelaufen)."""
+"""So lange bleibt eine halb geschriebene Anforderung des Dashboards liegen (danach wäre sie ohnehin abgelaufen)."""
 
 REQUEST_NAME_RE = re.compile(rf"({policy.UUID4_RE.pattern})\.json", re.ASCII)
 DASHBOARD_TMP_RE = re.compile(rf"\.(?:{policy.UUID4_RE.pattern})\.tmp", re.ASCII)

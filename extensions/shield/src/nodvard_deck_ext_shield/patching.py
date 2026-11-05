@@ -366,7 +366,7 @@ class UpdateCenter:
                 title=f"{up.MODE_LABEL.get(mode, mode)} auf {name}: " + ("fertig" if result.ok else "fehlgeschlagen"),
                 body=f"{result.public}\nDas Dashboard wurde währenddessen neu gestartet.",
                 severity=Severity.INFO if result.ok else Severity.WARNING,
-                payload={"path": f"{SOC_PATH}?tab=updates", "tags": ["package"], **host_scope([host.id])},
+                payload={"notification_type": "shield.update_result", "path": f"{SOC_PATH}?tab=updates", "tags": ["package"], **host_scope([host.id])},
             ))
         except Exception:
             logging.getLogger(LOGGER).exception("shield_update_resume_failed run_id=%s", run_id)
@@ -406,7 +406,7 @@ class UpdateCenter:
                 title=f"{up.MODE_LABEL.get(mode, mode)} auf {name}: " + ("fertig" if result.ok else "fehlgeschlagen"),
                 body=f"{result.public}\nDer Lauf hat länger gedauert, als das Dashboard gewartet hat.",
                 severity=Severity.INFO if result.ok else Severity.WARNING,
-                payload={"path": f"{SOC_PATH}?tab=updates", "tags": ["package"], **host_scope([host.id])},
+                payload={"notification_type": "shield.update_result", "path": f"{SOC_PATH}?tab=updates", "tags": ["package"], **host_scope([host.id])},
             ))
         except Exception:
             logging.getLogger(LOGGER).exception("shield_update_follow_failed run_id=%s", run_id)
@@ -429,9 +429,8 @@ class UpdateCenter:
             now = _now().timestamp()
             old = await load_baseline(self._ctx, host.id, "updates")
             if status.error and not status.unsupported:
-                # Letzten guten Stand samt Zeitpunkt der letzten erfolgreichen Prüfung (`checked_at`)
-                # behalten; dazu kommen der Fehler und der Zeitpunkt dieses Versuchs (`attempted_at`).
-                # Ohne guten Stand gibt es keine erfolgreiche Prüfung.
+                # Den letzten guten Stand samt `checked_at` behalten und Fehler und Zeitpunkt des Versuchs
+                # (`attempted_at`) ergänzen; ohne guten Stand gibt es keine erfolgreiche Prüfung.
                 if old and old.get("manager"):
                     data = {**old, "error": status.error, "attempted_at": now}
                 else:
@@ -651,9 +650,8 @@ class UpdateCenter:
     async def execute(self, host: Host, mode: str, *, command: str, trigger: str,
                       plan: list[str] | None = None) -> tuple[bool, str, str, int | None]:
         """Führt einen Einspiel-Lauf aus, protokolliert ihn und prüft neu: (ok, Zusammenfassung, Ausgabe, Rückgabecode).
-
-        Sie kann eine Server-Zeile enthalten und gehört nicht in Meldungen (dafür `_execute`, `UpgradeResult.public`).
-        `plan`: derselbe Lauf als `updates.upgrade_args`, für das Hilfsskript (siehe `launch_as_root`)."""
+        Zusammenfassung und Ausgabe können Zeilen vom Server enthalten und gehören nicht in Meldungen (dafür
+        `_execute`, `UpgradeResult.public`). `plan`: derselbe Lauf als `updates.upgrade_args` fürs Hilfsskript."""
         result, output, exit_code = await self._execute(host, mode, command=command, trigger=trigger, plan=plan)
         return result.ok, result.summary, output, exit_code
 
@@ -854,7 +852,10 @@ class UpdateCenter:
             sev = Severity.WARNING if level == "warning" else Severity.INFO
             await self._ctx.notify.send(Notification(
                 title=title, body=body, severity=sev,
-                payload={"path": f"{SOC_PATH}?tab=updates", "tags": ["package"], **host_scope(h.id for h, _ in pairs)},
+                payload={
+                    "notification_type": update_report_type(pairs),
+                    "path": f"{SOC_PATH}?tab=updates", "tags": ["package"], **host_scope(h.id for h, _ in pairs),
+                },
             ))
         return {"hosts": len(pairs), "title": title}
 
@@ -865,11 +866,10 @@ class UpdateCenter:
             return {"hosts": 0, "failed": 0, "skipped": AUTO_UPDATES_OFF}
         mode = settings.get("auto_updates_mode") or "security"
         hosts = auto_update_hosts(await self._defender.target_hosts(), settings)
-        # Der Server mit dem Dashboard kommt zuletzt, sein Neustart erst nach der Zusammenfassung: Sonst bräche die
-        # Schleife bei einem Neustart mittendrin ab (oder ein Docker-Update beendete den Container), die übrigen
-        # Server bekämen nichts, und die Zusammenfassung käme nie. Als gewöhnlicher Server gilt nur, wo Docker antwortet
-        # und den Container nicht kennt; ist das nicht feststellbar (Docker nur mit sudo erreichbar, kein Docker), behandeln
-        # wir den Server vorsichtshalber genauso. Der Neustart verschiebt sich dann nur, er fällt nicht weg.
+        # Der Server mit dem Dashboard kommt zuletzt, sein Neustart erst nach der Zusammenfassung: Ein Neustart oder ein
+        # Docker-Update dort bräche die Schleife sonst ab, und die übrigen Server und die Zusammenfassung blieben aus.
+        # Als gewöhnlicher Server gilt nur, wo Docker antwortet und den Container nicht kennt; ist das nicht
+        # feststellbar, gilt er vorsichtshalber als Dashboard-Server, der Neustart verschiebt sich dann nur.
         states = {h.id: await self._is_dashboard_host(h) for h in hosts}
         own_ids = {hid for hid, state in states.items() if state is not False}
         sure_ids = {hid for hid, state in states.items() if state is True}
@@ -947,7 +947,7 @@ class UpdateCenter:
             title = f"Automatische Updates: {len(hosts) - skipped} Server" + (f", {failed} Fehler" if failed else "")
             await self._ctx.notify.send(Notification(
                 title=title, body="\n".join(lines), severity=Severity.WARNING if failed or held else Severity.INFO,
-                payload={"path": f"{SOC_PATH}?tab=updates", "tags": ["package"], **host_scope(h.id for h in hosts)},
+                payload={"notification_type": "shield.auto_updates", "path": f"{SOC_PATH}?tab=updates", "tags": ["package"], **host_scope(h.id for h in hosts)},
             ))
         for host in reboot_last:
             # Erst jetzt: Die Zusammenfassung ist raus, die anderen Server sind durch.
@@ -962,7 +962,7 @@ class UpdateCenter:
                 title=f"Automatische Updates: Neustart von {name}",
                 body=f"- {name}: {run.public}\n{here}",
                 severity=Severity.INFO if run.ok else Severity.WARNING,
-                payload={"path": f"{SOC_PATH}?tab=updates", "tags": ["package"], **host_scope([host.id])},
+                payload={"notification_type": "shield.reboot", "path": f"{SOC_PATH}?tab=updates", "tags": ["package"], **host_scope([host.id])},
             ))
         return {"hosts": len(hosts), "failed": failed}
 
@@ -1009,6 +1009,17 @@ def own_container_probe(container_id: str) -> str:
 def _stamp(ts: float, zone: tzinfo) -> str:
     text = datetime.fromtimestamp(ts, zone).strftime("%d.%m.%Y %H:%M")
     return text + " UTC" if zone is UTC else text
+
+
+def update_report_type(pairs: list[tuple[Any, dict[str, Any]]]) -> str:
+    readable = [st for _, st in pairs if not st.get("error") and not st.get("unsupported")]
+    if any(int(st.get("security_count") or 0) for st in readable):
+        return "shield.security_updates"
+    if any(int(st.get("count") or 0) for st in readable):
+        return "shield.updates_available"
+    if any(st.get("reboot_required") for st in readable):
+        return "shield.reboot_required"
+    return "shield.update_check_failed"
 
 
 def build_update_report(pairs: list[tuple[Any, dict[str, Any]]], zone: tzinfo = UTC, *,

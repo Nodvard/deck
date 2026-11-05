@@ -236,9 +236,7 @@ def enable_command(
 ) -> str:
     """Shell-Befehl (als root), der clamonacc für die Ordner einrichtet und startet; installiert nichts. Gelungen ist es
     erst, wenn clamonacc nach `settle_s` Sekunden noch mit derselben PID läuft. Sonst räumt er wie `disable_command` auf.
-
-    Dasselbe macht `shield-root realtime-on`; `etc`, `systemd_dir`, `wait_s`, `settle_s` und `log_path` ändern nur die
-    Tests."""
+    Dasselbe macht `shield-root realtime-on`; `etc`, `systemd_dir`, `wait_s`, `settle_s`, `log_path` sind für Tests."""
     watch, exclude = _checked(watch, exclude, max_filesize_mb)
     q = shlex.quote
     options = ["-F", "--fdpass", "--config-file=$conf", "--watch-list=$watch_file"]
@@ -268,9 +266,9 @@ def enable_command(
         "    if systemctl is-enabled --quiet clamav-daemon; then echo clamd_enabled=yes; else echo clamd_enabled=no; fi",
         '  } > "$state"',
         "fi",
-        # Funde sperren nichts (`OnAccessPrevention no`) und verschieben nichts; sie landen nur im eigenen Protokoll.
-        # Neue und verschobene Dateien prüft clamonacc gleich (`OnAccessExtraScanning`), nicht erst beim Öffnen. Das
-        # Protokoll ohne Größengrenze: Sonst hörte clamonacc nach 1 MB auf zu schreiben, und Funde gingen verloren.
+        # Funde sperren nichts (`OnAccessPrevention no`) und verschieben nichts, sie landen nur im eigenen Protokoll.
+        # `OnAccessExtraScanning` prüft neue und verschobene Dateien gleich, nicht erst beim Öffnen. Ohne
+        # `LogFileMaxSize 0` hörte clamonacc nach 1 MB auf zu schreiben, und Funde gingen verloren.
         _write("conf", '"LocalSocket $sock"', "'OnAccessExcludeUname clamav'", q(f"OnAccessMaxFileSize {max_filesize_mb}M"),
                "'OnAccessPrevention no'", "'OnAccessExtraScanning yes'", "'LogFileMaxSize 0'"),
         _write("watch_file", *map(q, watch)),
@@ -373,10 +371,9 @@ _LINES_RE = re.compile(r"^@@lines=(\d{1,12})-(\d{1,12})$")
 
 
 def parse_log(output: str) -> LogChunk | None:
-    """Liest die Antwort von `log_command`; `None`, wenn sie nicht vollständig ist.
-
-    Kopf sind die ersten beiden Zeilen, Ende die letzte `@@end`: Eine Zeile im Protokoll (ein Dateiname) kann beides
-    vortäuschen, aber nicht vor dem Kopf oder nach dem letzten Ende stehen."""
+    """Liest die Antwort von `log_command`; `None`, wenn sie nicht vollständig ist. Kopf sind die ersten beiden Zeilen,
+    Ende die letzte `@@end`: Eine Zeile im Protokoll (ein Dateiname) kann beides vortäuschen, aber nicht davor oder
+    dahinter stehen."""
     lines = output.split("\n")
     while lines and lines[-1] == "":
         lines.pop()

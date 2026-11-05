@@ -88,7 +88,7 @@ class Extension(NodvardExtension):
                     title="Testmeldung von hello-world",
                     body="Ausgelöst über POST /notify-test",
                     severity=Severity.WARNING,
-                    payload={"host_id": host_id} if host_id else {},
+                    payload={"notification_type": "hello.test", **({"host_id": host_id} if host_id else {})},
                 )
             )
             return {"sent": True}

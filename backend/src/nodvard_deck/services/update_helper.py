@@ -540,7 +540,7 @@ async def _log_result(session: AsyncSession, settings: Settings, result: dict[st
         try:
             await notifications_service.send(
                 session, title=title, body=body, severity=severity, correlation_id=result["id"],
-                payload={"path": "/settings/system", "tags": ["update"]},
+                payload={"notification_type": "deck.update_result", "path": "/settings/system", "tags": ["update"]},
             )
         except Exception:
             logger.warning("update_helper_notification_failed id=%s", result["id"], exc_info=True)

@@ -985,6 +985,33 @@ async def test_a_new_password_in_the_vault_drops_the_old_session(client, db_sess
 
 
 @pytest.mark.asyncio
+async def test_password_rotation_during_vault_read_cannot_restore_the_old_session(client, db_session, test_settings, monkeypatch):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection())
+    service = _service()
+    read_password = service.read_password
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_read(name):
+        password = await read_password(name)
+        entered.set()
+        await release.wait()
+        return password
+
+    monkeypatch.setattr(service, "read_password", slow_read)
+    first = asyncio.create_task(_overview(client, headers))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        await _set_password(client, headers, "falsch")
+    finally:
+        release.set()
+        body = await asyncio.wait_for(first, 10)
+    assert _only(body)["state"] == "ok"
+    assert _only(await _overview(client, headers))["state"] == "auth_failed"
+    assert (fake.logins, fake.failed_logins) == (1, 1)
+
+
+@pytest.mark.asyncio
 async def test_a_changed_secret_touches_only_its_own_connection(client, db_session, test_settings):
     headers, _ = await _enable(client, db_session, test_settings)
     await _configure(client, headers, _connection(), _connection(name="qb2"))

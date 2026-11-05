@@ -89,6 +89,13 @@ jobs:
           fi
           echo "Tag v$VERSION passt zu version.py ($code)."
 
+      # Die Arten der Änderungen aus `changelog/versions/<version>.toml` als Annotation am Image-Index: Die Update-Suche
+      # im Dashboard zeigt damit „Sicherheitsupdate“ usw. Eine Vorabversion bekommt keine und gilt dort als unbekannt;
+      # fehlt die Datei einer fertigen Version, bricht der Lauf vor dem Bauen ab.
+      - name: Arten der Änderungen
+        id: kinds
+        run: python3 scripts/release_kinds.py "$VERSION" >> "$GITHUB_OUTPUT"
+
       # `latest` und die Tags ohne Nummer gehören der höchsten fertigen Version: Ein Patch für eine ältere Reihe (etwa
       # 0.12.2 nach 0.13.0, vom Zweig release/0.12) bekommt nur seine eigenen Tags. Ohne Liste bricht der Lauf ab. Ein
       # Schritt ohne `shell:` läuft ohne pipefail; die Zuweisung bricht unter `-e` ab, eine Pipe nicht.
@@ -134,6 +141,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.kinds.outputs.annotation }}
           # Herkunft und Version fuer "Nach Updates suchen" im Dashboard: landen als Datei /app/image-info.json im
           # Image (deploy/Dockerfile, nodvard_deck.image_info), nicht als Umgebungsvariable.
           # APT_REFRESH holt die Debian-Pakete (Tesseract samt Abhängigkeiten) bei jedem Release frisch, mit den
@@ -319,6 +327,7 @@ jobs:
           build-args: |
             VERSION=${{ env.VERSION }}
             IMAGE=${{ env.DOCK_IMAGE_NAME }}
+            EDITION=dock
             NODVARD_DECK_EXTENSIONS=docker
           cache-from: |
             type=gha

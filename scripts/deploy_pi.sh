@@ -2,14 +2,14 @@
 # Nodvard Deck auf einen Raspberry Pi (oder einen anderen Linux-Server) ausliefern, OHNE dort
 # zu bauen.
 #
-# Warum: Der Pi hat 3,7 GB RAM. Ein Docker-Build dort treibt die Last auf 18, laesst
-# den Container ueber 90 s lang starten und hat schon zu falschen "DEPLOY-FAIL"-
-# Meldungen gefuehrt. Das Image wird deshalb hier auf dem PC gebaut (Docker Desktop
-# mit QEMU fuer linux/arm64; die Frontend-Stufe laeuft nativ, siehe deploy/Dockerfile
+# Warum: Der Pi hat 3,7 GB RAM. Ein Docker-Build dort treibt die Last auf 18, lässt
+# den Container über 90 s lang starten und hat schon zu falschen "DEPLOY-FAIL"-
+# Meldungen geführt. Das Image wird deshalb hier auf dem PC gebaut (Docker Desktop
+# mit QEMU für linux/arm64; die Frontend-Stufe läuft nativ, siehe deploy/Dockerfile
 # `FROM --platform=$BUILDPLATFORM`) und fertig auf den Pi kopiert.
 #
 # Aufruf aus dem Repository-Root (Git Bash):
-#   scripts/deploy_pi.sh                 # HEAD bauen, ausliefern, pruefen
+#   scripts/deploy_pi.sh                 # HEAD bauen, ausliefern, prüfen
 #   scripts/deploy_pi.sh --no-build      # zuletzt gebautes Image erneut ausliefern
 #   PI_HOST=admin@192.168.1.50 scripts/deploy_pi.sh
 #
@@ -17,33 +17,32 @@
 # lokalen, git-ignorierten Datei deploy/.env.deploy (Vorlage: deploy/.env.deploy.example):
 #   PI_HOST=benutzer@adresse      # SSH-Ziel, Pflicht (ohne bricht das Skript ab)
 #   DEPLOY_ROOT=lattice-deploy-test
-#   NODVARD_DECK_DNS_1=... NODVARD_DECK_DNS_2=...   # optional: Resolver fuer den Container,
+#   NODVARD_DECK_DNS_1=... NODVARD_DECK_DNS_2=...   # optional: Resolver für den Container,
 #                                         # wird als deploy/.env auf dem Ziel abgelegt.
-#                                         # Die alten Namen LATTICE_DNS_1/2 gelten weiter;
-#                                         # sind beide gesetzt, gewinnt der neue.
+#                                         # Die alten Namen LATTICE_DNS_1/2 gelten nur noch
+#                                         # übergangsweise, spätestens bis 1.0; sind beide
+#                                         # gesetzt, gewinnt der neue.
 #
-# Voraussetzung: Die komplette Test-Suite ist gruen (siehe deploy/README.md). Das
-# Skript prueft das NICHT selbst, es dauert ~6 Minuten und gehoert vor den Aufruf.
+# Voraussetzung: Die komplette Test-Suite ist grün (siehe deploy/README.md). Das
+# Skript prüft das NICHT selbst, es dauert ~6 Minuten und gehört vor den Aufruf.
 #
 # Ablauf: bauen -> docker save | gzip | ssh 'gunzip | docker load' -> auf dem Pi
-# `deploy/pi_switch.sh switch` (vorab: Docker erreichbar? Compose-Datei lesbar? Dann altes Image
-# als nodvard-deck:previous sichern, beim ersten Uebergang aus lattice:latest; den alten
-# Container deploy-lattice-1 nur STOPPEN; compose up --no-build; pruefen, dass der neue Container
-# mit dem neuen Image und dem alten Volume laeuft) -> bis zu 4 Minuten auf /api/v1/health
-# warten -> Image/Volume-Pruefung wiederholen -> Datencheck (/api/v1/auth/bootstrap muss
+# `deploy/pi_switch.sh switch` (vorab: Docker erreichbar? Compose-Datei lesbar? Kein Stand von vor 0.6?
+# Dann altes Image als nodvard-deck:previous sichern; compose up --no-build; prüfen, dass der neue Container
+# mit dem neuen Image und dem alten Volume läuft) -> bis zu 4 Minuten auf /api/v1/health
+# warten -> Image/Volume-Prüfung wiederholen -> Datencheck (/api/v1/auth/bootstrap muss
 # needed=false bleiben, wenn es vorher so war) -> Erweiterungen vergleichen (jeder Start und jedes Ein- oder Ausschalten
-# schreibt die Zeile "Erweiterungen geladen: <Kennungen>" ins Protokoll, die letzte zaehlt; fehlt nachher eine
+# schreibt die Zeile "Erweiterungen geladen: <Kennungen>" ins Protokoll, die letzte zählt; fehlt nachher eine
 # Erweiterung, die vorher geladen war, ist das ein Fehler wie ein gescheiterter Datencheck, auch wenn sonst nichts
-# meldet, dass sie nicht laeuft; kennt der alte Stand die Zeile noch nicht, gibt es nur einen Hinweis) -> Logs auf
-# Tracebacks pruefen. Scheitert der Start des neuen Images
+# meldet, dass sie nicht läuft; kennt der alte Stand die Zeile noch nicht, gibt es nur einen Hinweis) -> Logs auf
+# Tracebacks prüfen. Scheitert der Start des neuen Images
 # (Migration), antwortet statt der Anwendung die Notseite mit 503 `{"status":"rescue"}`: nie "ok", also Rollback
-# (und ohne die volle Wartezeit). Schlaegt etwas
-# fehl, wird automatisch zurueckgeschaltet (`pi_switch.sh rollback`) und geprueft, dass der
+# (und ohne die volle Wartezeit). Schlägt etwas
+# fehl, wird automatisch zurückgeschaltet (`pi_switch.sh rollback`) und geprüft, dass der
 # alte Stand wieder antwortet, sonst ROLLBACK-FAIL. Ausnahme: Hat der neue Container die Datenbank schon
-# umgebaut und war gestartet (oder laesst sich das nicht feststellen), gibt es KEINEN automatischen
-# Rollback (das alte Image wuerde die Daten ablehnen), nur DEPLOY-FAIL mit Hinweisen. Erst wenn alles stimmt, raeumt
-# `pi_switch.sh cleanup` den alten Container und alte Images weg. Rueckfallweg (tar + Build auf
-# dem Pi): deploy/README.md.
+# umgebaut und war gestartet (oder lässt sich das nicht feststellen), gibt es KEINEN automatischen
+# Rollback (das alte Image würde die Daten ablehnen), nur DEPLOY-FAIL mit Hinweisen. Erst wenn alles stimmt, räumt
+# `pi_switch.sh cleanup` alte Images weg. Rückfallweg (tar + Build auf dem Pi): deploy/README.md.
 set -euo pipefail
 
 # Lokale Einstellungen (git-ignoriert) laden; bereits gesetzte Umgebungsvariablen
@@ -69,7 +68,7 @@ COMPOSE_DIR="$DEPLOY_ROOT/deploy"
 CONTAINER="${CONTAINER:-deploy-nodvard-deck-1}"
 HEALTH_TIMEOUT_S="${HEALTH_TIMEOUT_S:-240}"
 ROLLBACK_HEALTH_TIMEOUT_S="${ROLLBACK_HEALTH_TIMEOUT_S:-120}"
-LOADED_WAIT_S="${LOADED_WAIT_S:-30}"   # so lange hoechstens auf die Zeile "Erweiterungen geladen" des neuen Stands warten
+LOADED_WAIT_S="${LOADED_WAIT_S:-30}"   # so lange höchstens auf die Zeile "Erweiterungen geladen" des neuen Stands warten
 BUILD=1
 for arg in "$@"; do
   case "$arg" in
@@ -93,6 +92,16 @@ fi
 
 say "Ziel erreichbar?"
 "${SSH[@]}" 'hostname; cat /proc/loadavg' || fail "Ziel nicht erreichbar ($PI_HOST). PI_HOST gesetzt? (siehe Kopf dieser Datei)"
+
+say "Stand von vor 0.6?"
+# Vor jeder Übertragung: Ein Abbruch hier lässt den Pi wirklich unverändert.
+old_rc=0
+git show HEAD:deploy/pi_switch.sh | "${SSH[@]}" 'bash -s -- oldname' || old_rc=$?
+case "$old_rc" in
+  0) ;;
+  3) fail "Abbruch vor jeder Uebertragung (Grund oben); es wurde nichts veraendert." ;;
+  *) fail "Pruefung auf einen Stand von vor 0.6 gescheitert (ssh/pi_switch.sh, Exit $old_rc); es wurde nichts veraendert." ;;
+esac
 
 if [ "$BUILD" = 1 ]; then
   say "Image fuer linux/arm64 auf dem PC bauen ($LOCAL_TAG)"
@@ -119,29 +128,27 @@ DNS_1="${NODVARD_DECK_DNS_1:-${LATTICE_DNS_1:-}}"
 DNS_2="${NODVARD_DECK_DNS_2:-${LATTICE_DNS_2:-}}"
 if [ -n "$DNS_1" ] || [ -n "$DNS_2" ]; then
   say "DNS-Einstellung fuer den Container auf dem Ziel ablegen (deploy/.env)"
-  # BEIDE Namen schreiben: Compose liest den neuen, ein Rueckweg aufs alte Image oder eine
-  # alte Compose-Datei den alten. Ein nicht gesetzter Wert bleibt leer (keine Vorgabe, Compose
-  # laesst den Eintrag weg).
-  printf 'NODVARD_DECK_DNS_1=%s\nNODVARD_DECK_DNS_2=%s\nLATTICE_DNS_1=%s\nLATTICE_DNS_2=%s\n' \
-    "$DNS_1" "$DNS_2" "$DNS_1" "$DNS_2" \
+  # Nur die neuen Namen: Auch der Rückweg auf das vorige Image startet mit dieser Compose-Datei, und die liest sie.
+  # Ein nicht gesetzter Wert bleibt leer (keine Vorgabe, Compose lässt den Eintrag weg).
+  printf 'NODVARD_DECK_DNS_1=%s\nNODVARD_DECK_DNS_2=%s\n' "$DNS_1" "$DNS_2" \
     | "${SSH[@]}" "cat > ~/$COMPOSE_DIR/.env" || fail "deploy/.env konnte nicht geschrieben werden."
 fi
 
 say "Image uebertragen (docker save | gzip | ssh | docker load)"
 docker save "$LOCAL_TAG" | gzip -1 | "${SSH[@]}" 'gunzip | docker load' || fail "Image-Transfer fehlgeschlagen."
 
-# --- Hilfen fuer den Schaltschritt -----------------------------------------------------------
+# --- Hilfen für den Schaltschritt -----------------------------------------------------------
 # Aufruf eines Unterbefehls von deploy/pi_switch.sh auf dem Pi (Schritte dort, getestet).
 pi_switch() { "${SSH[@]}" "cd ~/$COMPOSE_DIR && CONTAINER='$CONTAINER' bash pi_switch.sh $*"; }
-# Umschalten und Zurueckschalten laufen auf dem Pi von der ssh-Leitung abgekoppelt (setsid, Ausgabe
-# in Dateien, Ergebnis danach hier ausgegeben): reisst die Verbindung ab, laeuft der Schritt dort zu
+# Umschalten und Zurückschalten laufen auf dem Pi von der ssh-Leitung abgekoppelt (setsid, Ausgabe
+# in Dateien, Ergebnis danach hier ausgegeben): reißt die Verbindung ab, läuft der Schritt dort zu
 # Ende, statt halb getan zu sterben. Exit 255 = Verbindung abgerissen, Zustand auf dem Pi unklar.
 pi_switch_detached() { pi_switch detached "$@"; }
 
 # Antwortet /api/v1/health mit "ok"? Wartet bis zu $1 Sekunden. Setzt HEALTHY=0/1 und RESCUE_SEEN=0/1.
 #
-# Die Notseite (`nodvard_deck.rescue`, laeuft statt der Anwendung, wenn der Start scheitert) antwortet mit 503
-# `{"status":"rescue"}` -- nie mit "ok", das Muster unten trifft sie also nie, und der Rueckweg greift. Sie startet
+# Die Notseite (`nodvard_deck.rescue`, läuft statt der Anwendung, wenn der Start scheitert) antwortet mit 503
+# `{"status":"rescue"}` -- nie mit "ok", das Muster unten trifft sie also nie, und der Rückweg greift. Sie startet
 # aber auch nie von selbst wieder: Meldet sie sich zweimal hintereinander, wird nicht die ganze Wartezeit abgewartet.
 wait_health() {
   local limit="$1" i max BODY rescue_polls=0
@@ -170,7 +177,7 @@ wait_health() {
   return 1
 }
 
-# Zurueck auf den alten Stand, und PRUEFEN, dass er wirklich wieder antwortet. Endet immer
+# Zurück auf den alten Stand, und PRUEFEN, dass er wirklich wieder antwortet. Endet immer
 # mit fail: entweder "Rollback ausgefuehrt" oder ROLLBACK-FAIL.
 rollback_and_fail() {
   echo "$1 -- Rollback auf den alten Stand." >&2
@@ -194,8 +201,8 @@ rollback_and_fail() {
 
 # Stand vor dem Umschalten (auf dem Pi gemessen, bis zu 5 Versuche): Hat der laufende Dienst schon
 # Nutzer? Dann muss der neue dieselben Daten sehen. Auf einer frischen Maschine (kein Container
-# laeuft) ist "Einrichtung noetig" dagegen richtig. Laeuft ein Dashboard, antwortet aber nicht,
-# ist der Stand unklar: dann lieber abbrechen, solange noch nichts veraendert ist.
+# läuft) ist "Einrichtung nötig" dagegen richtig. Läuft ein Dashboard, antwortet aber nicht,
+# ist der Stand unklar: dann lieber abbrechen, solange noch nichts verändert ist.
 say "Stand vor dem Umschalten pruefen"
 PRE="$(pi_switch precheck)" || fail "Stand vor dem Umschalten nicht pruefbar (ssh/pi_switch.sh precheck gescheitert); es wurde nichts veraendert."
 echo "Vorher: ${PRE:-<leer>}"
@@ -206,7 +213,7 @@ case "$PRE" in
   noanswer) fail "Nichts veraendert: Auf dem Pi laeuft ein Dashboard-Container, antwortet aber nicht. Erst klaeren (docker ps, docker logs), damit der Datencheck moeglich ist." ;;
 esac
 
-# Antwort von `pi_switch.sh loaded`: nur `none`, `invalid` oder `list=<Kennungen>` mit gueltigen Kennungen (a-z, 0-9,
+# Antwort von `pi_switch.sh loaded`: nur `none`, `invalid` oder `list=<Kennungen>` mit gültigen Kennungen (a-z, 0-9,
 # Bindestrich, Anfang a-z, durch Komma getrennt; leer = keine). Alles andere gilt als `invalid`, damit nichts
 # Unerwartetes aus der Verbindung je weiterverarbeitet oder ausgegeben wird.
 clean_loaded_answer() {
@@ -218,8 +225,8 @@ clean_loaded_answer() {
 }
 
 # Kennungen, die in $1 stehen, aber nicht in $2 (beide durch Komma getrennt, nur a-z, 0-9, Bindestrich), durch Komma
-# getrennt auf stdout. Wird nur verglichen, nie als Befehl oder Muster ausgewertet; was nicht dem Muster entspricht, zaehlt
-# als fehlend (lieber ein Fehlalarm als eine uebersehene Erweiterung).
+# getrennt auf stdout. Wird nur verglichen, nie als Befehl oder Muster ausgewertet; was nicht dem Muster entspricht, zählt
+# als fehlend (lieber ein Fehlalarm als eine übersehene Erweiterung).
 missing_ids() {
   local before="$1" now=",$2," id out="" ids
   local re='^[a-z0-9,-]*$'
@@ -234,8 +241,8 @@ missing_ids() {
 # Migrationsstand nach dem Umschalten: Hat das neue Image die Datenbank umgebaut und ist gestartet (started_ok),
 # lehnt das alte Image die Daten ab, und ein automatischer Rollback endete auf der Notseite. Ausgabe von boot_state:
 # erste Zeile = Erstellzeit des Containers (UTC), danach .boot/state.json (vom Dienst mit indent=1 und sortierten
-# Schluesseln geschrieben: "at" ist die erste Zeile in "last_migration", Schluessel der obersten Ebene haben genau
-# ein Leerzeichen Einrueckung). `docker cp` liest das Volume auch, wenn der Container nicht (mehr) laeuft.
+# Schlüsseln geschrieben: "at" ist die erste Zeile in "last_migration", Schlüssel der obersten Ebene haben genau
+# ein Leerzeichen Einrückung). `docker cp` liest das Volume auch, wenn der Container nicht (mehr) läuft.
 # Exit 255 = Verbindung abgerissen.
 boot_state() {
   "${SSH[@]}" "docker container inspect -f '{{.Created}}' $CONTAINER 2>/dev/null; docker cp $CONTAINER:/app/data/.boot/state.json - 2>/dev/null | tar -xOf - 2>/dev/null; true" 2>/dev/null
@@ -244,8 +251,8 @@ mig_at() { sed -n '/"last_migration"/,/}/{/"at"/{s/.*"at": *"\([^"]*\)".*/\1/p;q
 
 # Welche Erweiterungen hat der laufende Dienst geladen (letzte Zeile "Erweiterungen geladen: ..." in seinem Protokoll)?
 # Nach dem Umschalten muss jede davon wieder geladen sein. Kennt der alte Stand die Zeile noch nicht (erster Lauf mit
-# dieser Pruefung) oder ist sie aus dem Protokoll herausgerollt (Docker behaelt nur 3 x 10 MB), gibt es nichts zu
-# vergleichen: dann nur ein Hinweis, kein Fehler. Auf einer frischen Maschine (nichts laeuft) entfaellt es ganz.
+# dieser Prüfung) oder ist sie aus dem Protokoll herausgerollt (Docker behält nur 3 x 10 MB), gibt es nichts zu
+# vergleichen: dann nur ein Hinweis, kein Fehler. Auf einer frischen Maschine (nichts läuft) entfällt es ganz.
 PRE_LOADED=""   # leer = kein Vergleich
 if [ "$PRE" != none ]; then
   PRE_LOADED_RC=0
@@ -263,7 +270,7 @@ if [ "$PRE" != none ]; then
 fi
 
 say "Auf dem Pi umschalten"
-# Exit 3 von pi_switch.sh = nichts veraendert (Docker nicht erreichbar, Image fehlt,
+# Exit 3 von pi_switch.sh = nichts verändert (Docker nicht erreichbar, Image fehlt,
 # Compose-Datei nicht lesbar): kein Rollback. Sonst ist der Dienst ggf. schon unten.
 SWITCH_RC=0
 pi_switch_detached switch "'$LOCAL_TAG'" || SWITCH_RC=$?
@@ -283,7 +290,7 @@ if [ "${RESCUE_SEEN:-0}" = 1 ] && [ "$HEALTHY" != 1 ]; then
   echo "Ein Grund steht im Protokoll auf dem Pi: docker logs $CONTAINER." >&2
 fi
 
-# "gesund" allein reicht nicht (koennte ein alter Container sein, oder ein leeres Volume):
+# "gesund" allein reicht nicht (könnte ein alter Container sein, oder ein leeres Volume):
 # Der Container muss das neue Image tragen, laufen und das alte Volume haben ...
 # CRASHED=1 (Exit 4): richtiges Volume, aber nach dem Health-Ok nicht mehr laufend (Absturz, Neustart-Schleife).
 IMAGE_OK=0
@@ -300,7 +307,7 @@ if [ "$HEALTHY" = 1 ]; then
   fi
 fi
 
-# Hat dieser Container die Datenbank umgebaut (Migration nicht aelter als der Container) und ist gestartet?
+# Hat dieser Container die Datenbank umgebaut (Migration nicht älter als der Container) und ist gestartet?
 # BOOT_UNKNOWN=1: nicht feststellbar (Verbindung abgerissen oder state.json nicht lesbar).
 MIGRATED=0
 MIG_AFTER=""
@@ -323,8 +330,8 @@ if [ "$HEALTHY" = 1 ]; then
   fi
 fi
 
-# ... und die Daten muessen da sein: war der Dienst vorher eingerichtet, darf er es jetzt
-# nicht als "Einrichtung noetig" melden.
+# ... und die Daten müssen da sein: war der Dienst vorher eingerichtet, darf er es jetzt
+# nicht als "Einrichtung nötig" melden.
 DATA_OK=1
 if [ "$HEALTHY" = 1 ] && [ "$PRE_NEEDED" = false ]; then
   BOOTSTRAP_RC=0
@@ -341,9 +348,9 @@ if [ "$HEALTHY" = 1 ] && [ "$PRE_NEEDED" = false ]; then
 fi
 
 # Erweiterungen: Jede, die vorher geladen war, muss auch im neuen Container geladen sein (neue dazu sind in Ordnung).
-# Die Zeile steht schon vor dem ersten Health-Ok im Protokoll; gewartet wird nur auf die Verzoegerung des Docker-Protokolls:
-# hoechstens LOADED_WAIT_S, nie ueber den Rest der Health-Wartezeit hinaus (mindestens 5 s). Fehlt die Zeile ganz, obwohl der alte
-# Stand eine hatte, gilt das wie eine fehlende Erweiterung: Der Vergleich ist dann nicht moeglich, und genau so sieht ein
+# Die Zeile steht schon vor dem ersten Health-Ok im Protokoll; gewartet wird nur auf die Verzögerung des Docker-Protokolls:
+# höchstens LOADED_WAIT_S, nie über den Rest der Health-Wartezeit hinaus (mindestens 5 s). Fehlt die Zeile ganz, obwohl der alte
+# Stand eine hatte, gilt das wie eine fehlende Erweiterung: Der Vergleich ist dann nicht möglich, und genau so sieht ein
 # Stand aus, der seine Erweiterungen nicht mehr meldet.
 LOADED_OK=1
 LOADED_MISSING=""
@@ -387,8 +394,8 @@ if [ "$HEALTHY" = 1 ] && [ "$IMAGE_OK" = 1 ] && [ "$DATA_OK" = 1 ]; then
 fi
 
 if [ "$HEALTHY" != 1 ] || [ "$IMAGE_OK" != 1 ] || [ "$DATA_OK" != 1 ] || [ "$LOADED_OK" != 1 ] || [ "${TRACEBACKS:-0}" -gt 0 ]; then
-  # Nur wenn der neue Container mit richtigem Image und Volume lief (IMAGE_OK) oder danach abgestuerzt ist (CRASHED):
-  # bei falschem Image oder Volume sind die alten Daten unberuehrt, der Rollback ist sicher.
+  # Nur wenn der neue Container mit richtigem Image und Volume lief (IMAGE_OK) oder danach abgestürzt ist (CRASHED):
+  # bei falschem Image oder Volume sind die alten Daten unberührt, der Rollback ist sicher.
   if [ "$HEALTHY" = 1 ] && { [ "$IMAGE_OK" = 1 ] || [ "$CRASHED" = 1 ]; }; then
     PROBLEM="Datencheck=$DATA_OK, Tracebacks=${TRACEBACKS:-0}, Erweiterungen=$LOADED_OK"
     [ "$LOADED_OK" = 1 ] || PROBLEM="$PROBLEM (fehlen: $LOADED_MISSING)"
@@ -404,8 +411,8 @@ if [ "$HEALTHY" != 1 ] || [ "$IMAGE_OK" != 1 ] || [ "$DATA_OK" != 1 ] || [ "$LOA
   rollback_and_fail "Neuer Stand ist nicht in Ordnung (healthy=$HEALTHY, Image/Volume-Pruefung=$IMAGE_OK, Datencheck=$DATA_OK, Tracebacks=$TRACEBACKS, Erweiterungen=$LOADED_OK${LOADED_MISSING:+, fehlen: $LOADED_MISSING})"
 fi
 
-say "Aufraeumen (alter Container, alte Images)"
-# Erst jetzt, wo alles geprueft ist. Ein Fehler hier laesst den Deploy nicht scheitern.
+say "Aufraeumen (alte Images)"
+# Erst jetzt, wo alles geprüft ist. Ein Fehler hier lässt den Deploy nicht scheitern.
 pi_switch cleanup || echo "Hinweis: Aufraeumen auf dem Pi war nicht vollstaendig (pi_switch.sh cleanup)." >&2
 "${SSH[@]}" "docker image prune -f >/dev/null; docker images nodvard-deck --format '{{.Repository}}:{{.Tag}} {{.ID}} {{.Size}}'; cat /proc/loadavg; free -m | sed -n 2p"
 

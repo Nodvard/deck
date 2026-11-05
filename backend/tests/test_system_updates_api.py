@@ -23,10 +23,11 @@ NEWER = _bump(__version__)
 @pytest.fixture
 def registry(monkeypatch):
     """ghcr.io-Attrappe; `state["tags"]` und `state["fail"]` steuern die Antworten, `state["calls"]` zaehlt."""
-    state: dict = {"tags": [__version__, NEWER, f"{_bump(NEWER)}-rc1", "latest"], "fail": False, "calls": 0}
+    state: dict = {"tags": [__version__, NEWER, f"{_bump(NEWER)}-rc1", "latest"], "fail": False, "calls": 0, "paths": []}
 
     def handler(request: httpx.Request) -> httpx.Response:
         state["calls"] += 1
+        state["paths"].append(request.url.path)
         if state["fail"]:
             raise httpx.ConnectError("offline", request=request)
         if request.url.path == "/token":
@@ -86,6 +87,18 @@ async def test_get_without_a_check_shows_the_current_version_only(client, regist
     assert body["official_image_name"] == "ghcr.io/nodvard/deck"
     assert body["helper"] is False
     assert registry["calls"] == 0
+
+
+@pytest.mark.asyncio
+async def test_dock_searches_its_own_image(client, registry, test_settings, monkeypatch):
+    monkeypatch.setattr(test_settings, "edition", "dock")
+    monkeypatch.setattr(test_settings, "image", "ghcr.io/nodvard/dock")
+    owner = await _owner(client)
+    body = (await client.post("/api/v1/system/updates/check", headers=owner)).json()
+    assert body["latest"] == NEWER and body["available"] is True
+    assert body["official_image"] is True and body["official_image_name"] == "ghcr.io/nodvard/dock"
+    assert "/v2/nodvard/dock/tags/list" in registry["paths"]
+    assert not any("/nodvard/deck/" in path for path in registry["paths"])
 
 
 @pytest.mark.asyncio

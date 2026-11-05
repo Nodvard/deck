@@ -35,6 +35,9 @@ PINNED = {
     ("shield", 13): "9b24a3da3355d3daf1a47370df5e8cf3912e85ac7540432e0940e736ff78b4cb",
     ("shield", 14): "d41c9c5a3fcc99f382843e39b0186f63759a3f57931528935a5bcd74ca0dff4e",
     ("shield", 15): "d1a5a9963ab8196c9a57a44c916a723ca2d500dc34ffce2eb63a0bf1e01b3e70",
+    ("shield", 16): "3cce326a354a17f5be53a36f79a53503e2685b704b7ab64cee2cfd5ab7e22370",
+    ("shield", 17): "0e87b96d55042c35c721fceeb4fd2b643b490fa5ab2cc15ec31acdfb93784022",
+    ("shield", 18): "18b2428d10d3924e630063807aeee20c54459b63183633fab2c4ce38538bc5a2",
     ("system", 1): "dbae0a1432917b084dbe06cf43a155bfc0d7de38dfa06342267e545e09004368",
     ("system", 2): "116c19ce9b50057456f4cd1b35091564f6d7ce327aea086f9c965e3c2330c994",
 }
@@ -87,6 +90,17 @@ def test_every_helper_is_pinned_to_its_version():
         )
 
 
+def test_shield_setup_includes_the_bundled_helper_without_full_sudo():
+    from nodvard_deck.services.host_setup import build_setup_script
+
+    helper = _helpers()["shield"]
+    key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlatzhalterPlatzhalterPlatzhalterPlatzhalter deck@pi"
+    script, _ = build_setup_script("deck", key, sudo=True, full_sudo=False, helpers=[helper])
+    assert "shield-root" in script
+    assert helper.sha256 in script
+    assert "NOPASSWD: ALL" not in script
+
+
 def test_all_helpers_fit_into_one_setup_command():
     """Alle Skripte reisen base64-kodiert in einem Einrichtungsbefehl mit, der als ein Argument an `sh -c` geht (Linux
     erlaubt 128 KiB je Argument). Mit etwas Luft für weitere Unterbefehle."""
@@ -96,6 +110,20 @@ def test_all_helpers_fit_into_one_setup_command():
     _, one_liner = build_setup_script("deck", key, sudo=True, helpers=list(_helpers().values()))
     assert len(one_liner.encode()) <= MAX_ONE_LINER * 0.8
     assert all(len(h.text) <= MAX_HELPER_BYTES for h in _helpers().values())
+
+
+@pytest.mark.parametrize("full_sudo", [True, False], ids=["volle-regel", "nur-hilfsskripte"])
+def test_setup_command_length_with_shield(capsys, full_sudo):
+    from nodvard_deck.services.host_setup import build_setup_script
+
+    helpers = _helpers()
+    assert "shield" in helpers
+    key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlatzhalterPlatzhalterPlatzhalterPlatzhalter deck@pi"
+    _, command = build_setup_script("deck", key, sudo=True, full_sudo=full_sudo, helpers=list(helpers.values()))
+    size = len(command.encode("utf-8"))
+    with capsys.disabled():
+        print(f"Einrichtungsbefehl (full_sudo={full_sudo}): {len(command)} Zeichen, {size} Bytes (UTF-8)")
+    assert size <= 77_000
 
 
 def test_the_file_name_matches_the_place_on_the_server():

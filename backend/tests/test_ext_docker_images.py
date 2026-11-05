@@ -1151,7 +1151,7 @@ async def test_daily_job_sends_one_message_and_repeats_it_only_when_the_set_chan
     assert note.title == "Image-Updates: 2 Container mit neuer Version"
     assert "- docker: web (nginx:1.27)" in note.body and "- pi-host: db (postgres:16)" in note.body
     assert "redis" not in note.body
-    assert note.payload == {"path": "/ext/docker/matrix", "tags": ["package"]}
+    assert note.payload == {"notification_type": "docker.images_available", "path": "/ext/docker/matrix", "tags": ["package"]}
 
     # Nächster Tag, nichts Neues: still.
     assert (await service.scheduled_check())["notified"] is False

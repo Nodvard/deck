@@ -157,7 +157,12 @@ function Problem({ title, state, message, onRetry, testId }: { title: string; st
 
 function CertBadge({ cert }: { cert: Certificate | null }) {
   if (!cert) return <Badge>ohne Zertifikat</Badge>;
-  return <Badge tone={CERT_TONE[cert.status]}>{cert.status === "ok" ? `gültig bis ${date(cert.expires_at)}` : `${cert.status_label} · ${cert.days_text}`}</Badge>;
+  const text = cert.status === "ok"
+    ? `gültig bis ${date(cert.expires_at)}`
+    : cert.status === "expired" && cert.days_text.includes(cert.status_label)
+      ? cert.days_text
+      : `${cert.status_label} · ${cert.days_text}`;
+  return <Badge tone={CERT_TONE[cert.status]}>{text}</Badge>;
 }
 
 function hostUrl(host: ProxyHost): string | null {
@@ -247,9 +252,9 @@ function NpmSection({ data, canAct, busy, onToggle, onRetry, checks, checking, o
               <li key={c.id} data-testid={`cert-${c.id}`} className="flex flex-wrap items-center justify-between gap-2 py-2 first:pt-0 last:pb-0">
                 <div className="min-w-0">
                   <p className="break-words text-sm font-medium">{c.name}</p>
-                  <p className="break-words text-xs text-white/50">{c.domains.join(", ")} · {c.provider_label} · {c.status === "expired" ? "abgelaufen am" : "läuft ab am"} {date(c.expires_at)}</p>
+                  <p className="break-words text-xs text-white/50">{c.domains.join(", ")} · {c.provider_label} · {c.status === "expired" ? "Ablaufdatum:" : "läuft ab am"} {date(c.expires_at)}</p>
                 </div>
-                <Badge tone={CERT_TONE[c.status]}>{c.status_label} · {c.days_text}</Badge>
+                <CertBadge cert={c} />
               </li>
             ))}
           </ul>
@@ -391,7 +396,7 @@ export function NpmPage(): JSX.Element {
       description="Proxy-Hosts, Zertifikate und wohin die Adressen führen."
       actions={
         <>
-          {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("ghost")}>Einstellungen</a>}
+          {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("secondary")}>Einstellungen</a>}
           <Button onClick={loadAll}>Aktualisieren</Button>
         </>
       }

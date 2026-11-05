@@ -1,3 +1,4 @@
+import { productText } from "./product";
 /** Reiter „Stacks“: die Compose-Projekte eines Servers, auch fremde, mit Zustand, Verbrauch und der Datei zum Ansehen. */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
@@ -9,10 +10,12 @@ import { LoadError, errorMessage, fetchJson } from "../../../_shared/frontend/sr
 import { Badge, Button, type Tone } from "../../../_shared/frontend/src/ui";
 
 import { BackupsPanel } from "./Backups";
+import { CARD_ITEM, CARD_LIST } from "./cardList";
 import { GitSourcePanel } from "./GitSource";
 import { hostAction } from "./hostAction";
 import { HostSection } from "./Resources";
 import { NewStack } from "./NewStack";
+import { SaveTemplate } from "./OwnTemplates";
 import { JSON_HEADERS, StackEditor, withResult } from "./StackEditor";
 
 interface StackContainer { name: string; service: string | null; state: string; status: string }
@@ -79,6 +82,8 @@ function StackFile({ hostId, project }: { hostId: string; project: string }): JS
   const [env, setEnv] = useState<EnvOut[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -99,9 +104,24 @@ function StackFile({ hostId, project }: { hostId: string; project: string }): JS
   return (
     <div className="flex flex-col gap-3" data-testid={`stack-file-${project}`}>
       <p className="text-xs opacity-60">Nur zum Ansehen. So steht die Datei gerade auf dem Server.</p>
+      {saved && <p className="text-xs opacity-90" role="status">{saved}</p>}
       {files.map((file) => (
         <div key={file.path}>
-          <p className="mb-1 break-all font-mono text-xs opacity-80">{file.path}</p>
+          <p className="mb-1 flex flex-wrap items-center gap-2">
+            <span className="flex-1 break-all font-mono text-xs opacity-80">{file.path}</span>
+            {file.content != null && (
+              <Button small pressed={saving === file.path} onClick={() => { setSaving(saving === file.path ? null : file.path); setSaved(null); }}
+                ariaLabel={`Als Vorlage speichern: ${file.path}`}>
+                Als Vorlage speichern
+              </Button>
+            )}
+          </p>
+          {saving === file.path && file.content != null && (
+            <div className="mb-1">
+              <SaveTemplate compose={file.content} suggested={project} onCancel={() => setSaving(null)}
+                onSaved={(template) => { setSaving(null); setSaved(`Als Vorlage „${template.name}“ gespeichert. Du findest sie unter „Neuer Stack“.`); }} />
+            </div>
+          )}
           {file.content != null ? (
             <pre className="max-h-96 overflow-auto rounded bg-black/60 p-2 font-mono text-[11px] leading-snug">{file.content}</pre>
           ) : (
@@ -120,7 +140,7 @@ function StackFile({ hostId, project }: { hostId: string; project: string }): JS
           {file.note && <p className="text-xs text-amber-300">{file.note}</p>}
         </div>
       ))}
-      {env.length > 0 && <p className="text-xs opacity-60">Die Werte aus .env zeigt Nodvard Deck nicht, weil darin oft Passwörter stehen.</p>}
+      {env.length > 0 && <p className="text-xs opacity-60">Die Werte aus .env zeigt {productText("Nodvard Deck")} nicht, weil darin oft Passwörter stehen.</p>}
     </div>
   );
 }
@@ -170,7 +190,7 @@ function AdoptPanel({ hostId, project, onDone }: { hostId: string; project: stri
   if (!check) return <p className="text-xs opacity-60">Prüfe, ob sich der Stack übernehmen lässt …</p>;
   return (
     <div className="flex flex-col gap-2 text-xs" data-testid={`adopt-${project}`}>
-      <p className="opacity-70">{ADOPT_TEXT}</p>
+      <p className="opacity-70">{productText(ADOPT_TEXT)}</p>
       {check.ok ? (
         <>
           <p className="break-words">
@@ -245,7 +265,7 @@ function DeletePanel({ hostId, project, onDone }: { hostId: string; project: str
   if (!check) return <p className="text-xs opacity-60">Prüfe, was sich löschen lässt …</p>;
   return (
     <div className="flex flex-col gap-2 text-xs" data-testid={`delete-${project}`}>
-      <p className="opacity-70">{DELETE_TEXT}</p>
+      <p className="opacity-70">{productText(DELETE_TEXT)}</p>
       <label className="flex items-start gap-2">
         <input type="checkbox" checked={withFolder} disabled={busy || check.folder_refusal !== null} onChange={(e) => setWithFolder(e.target.checked)} />
         <span className="break-all">Auch den Ordner {check.folder} mit allen Dateien darin löschen</span>
@@ -316,7 +336,7 @@ function PortainerPanel({ hostId, project, onDone }: { hostId: string; project: 
   return (
     <div className="flex flex-col gap-2 text-xs" data-testid={`portainer-${project}`}>
       <p className="opacity-70">
-        Nodvard Deck holt Datei und Variablen dieses Stacks aus Portainer in den Ordner <span className="break-all font-mono">{plan.folder}</span> und
+        {productText("Nodvard Deck")} holt Datei und Variablen dieses Stacks aus Portainer in den Ordner <span className="break-all font-mono">{plan.folder}</span> und
         rollt ihn dort unter demselben Namen neu aus. Die Container werden dabei einmal neu erstellt, die Volumes mit den Daten bleiben; was nur in
         den alten Containern lag und nicht in einem Volume oder Ordner, geht dabei verloren. Danach bearbeitest du ihn hier.
       </p>
@@ -450,14 +470,14 @@ function UpdatePanel({ hostId, project, onDone }: { hostId: string; project: str
       </ul>
       {plan.updates.length === 0 && <p className="opacity-70">Für keinen Dienst meldet die Image-Prüfung gerade ein Update.</p>}
       {plan.services.some((s) => s.stopped && s.status === "update") && (
-        <p className="opacity-70">Gestoppte Dienste aktualisiert Deck hier nicht, weil sie dabei starten würden; sie bekommen das Update beim nächsten Anwenden.</p>
+        <p className="opacity-70">Gestoppte Dienste aktualisiert {productText("Deck")} hier nicht, weil sie dabei starten würden; sie bekommen das Update beim nächsten Anwenden.</p>
       )}
       {sharers.length > 0 && (
         <p className="opacity-70">{sharers.join(", ")} {sharers.length === 1 ? "nutzt" : "nutzen"} dasselbe Image und {sharers.length === 1 ? "kommt" : "kommen"} mit.</p>
       )}
       {stored.length > 0 && (
         <p className="text-amber-300">
-          Dabei ist ein Datenspeicher ({stored.join(", ")}): Geht etwas schief, springt Deck nicht von selbst zurück, und die Freigabe braucht die hohe Stufe.
+          Dabei ist ein Datenspeicher ({stored.join(", ")}): Geht etwas schief, springt {productText("Deck")} nicht von selbst zurück, und die Freigabe braucht die hohe Stufe.
           Lege vorher eine Sicherung der Daten an.
         </p>
       )}
@@ -599,7 +619,7 @@ export function StackList({ hostId }: { hostId: string }): JSX.Element {
   async function release(stack: StackOut) {
     const project = stack.project;
     const ok = await deck().confirmDialog(
-      `Übernahme von „${project}“ aufheben? Nodvard Deck vergisst nur Ordner und Dateien; Stack, Datei und Container bleiben, wie sie sind.${
+      `Übernahme von „${project}“ aufheben? ${productText("Nodvard Deck")} vergisst nur Ordner und Dateien; Stack, Datei und Container bleiben, wie sie sind.${
         stack.total ? "" : " Weil gerade keiner seiner Container existiert, verschwindet er danach aus der Liste."}`,
       { confirmLabel: "Übernahme aufheben" },
     );
@@ -637,7 +657,7 @@ export function StackList({ hostId }: { hostId: string }): JSX.Element {
       )}
       {checkError && <p className="mb-2 text-xs text-amber-300">Ob Dateien seit dem letzten Start geändert wurden, ließ sich nicht prüfen: {checkError}</p>}
       {stacks.length === 0 && <p className="text-sm opacity-70">Auf diesem Server läuft kein Compose-Projekt.</p>}
-      <ul className="divide-y divide-white/5 text-sm">
+      <ul className={CARD_LIST}>
         {stacks.map((stack) => {
           const state = STATE[stack.state];
           const pending = stack.changes ? changesText(stack.changes) : "";
@@ -647,14 +667,14 @@ export function StackList({ hostId }: { hostId: string }): JSX.Element {
             usageText(usage[stack.project], measured, stack.running),
           ].filter(Boolean);
           return (
-            <li key={stack.project} className="py-2" data-testid={`stack-${stack.project}`}>
+            <li key={stack.project} className={CARD_ITEM} data-testid={`stack-${stack.project}`}>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <div className="min-w-[16rem] flex-1 max-md:min-w-0 max-md:basis-full">
                   <p className="flex flex-wrap items-center gap-1.5 break-words">
                     <span className="font-medium">{stack.project}</span>
                     <Badge tone={state.tone}>{state.label}</Badge>
                     {stack.problems > 0 && <Badge tone="bad">{stack.problems === 1 ? "1 Container mit Problemen" : `${stack.problems} Container mit Problemen`}</Badge>}
-                    {stack.is_self && <Badge>Nodvard Deck</Badge>}
+                    {stack.is_self && <Badge>{productText("Nodvard Deck")}</Badge>}
                     {stack.source === "portainer" && <Badge tone="info">Portainer</Badge>}
                     {stack.adopted && <Badge tone="accent">übernommen</Badge>}
                     {stack.changed && <Badge tone="warn">Datei geändert, noch nicht angewendet</Badge>}
@@ -668,7 +688,7 @@ export function StackList({ hostId }: { hostId: string }): JSX.Element {
                     </p>
                   )}
                   {stack.check_error && <p className="text-xs opacity-70">{stack.check_error}</p>}
-                  {SOURCE_NOTE[stack.source] && <p className="text-xs opacity-70">{SOURCE_NOTE[stack.source]}</p>}
+                  {productText(SOURCE_NOTE[stack.source]) && <p className="text-xs opacity-70">{productText(SOURCE_NOTE[stack.source])}</p>}
                   {stack.adoption_note && <p className="text-xs text-amber-300">{stack.adoption_note}</p>}
                 </div>
                 <div className="flex min-w-0 max-w-full flex-wrap gap-1.5">

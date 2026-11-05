@@ -245,6 +245,13 @@ export function DocumentsPage(): JSX.Element {
   const [tagFilter, setTagFilter] = useState("");
   const [showTags, setShowTags] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
+  // „+ Tag“ in der Zeile klappt die Details auf; danach bekommt die Tag-Auswahl dort den Fokus.
+  const [tagPickerFor, setTagPickerFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (!tagPickerFor || expanded !== tagPickerFor) return;
+    document.getElementById(`tag-select-${tagPickerFor}`)?.focus();
+    setTagPickerFor(null);
+  }, [tagPickerFor, expanded]);
   const [preview, setPreview] = useState<{ id: string; url: string; kind: "image" | "pdf" } | null>(null);
   // Gibt die Blob-URL frei, sobald eine andere Vorschau kommt oder die Seite verlassen wird.
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview.url); }, [preview]);
@@ -529,6 +536,16 @@ export function DocumentsPage(): JSX.Element {
                             </Badge>
                           );
                         })}
+                        {attachableTags.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => { setExpanded(doc.id); setTagPickerFor(doc.id); }}
+                            aria-label={`+ Tag für ${doc.original_filename}`}
+                            className="rounded-full border border-dashed border-white/25 px-2 py-0.5 text-[11px] text-white/60 hover:border-white/50 hover:text-white"
+                          >
+                            + Tag
+                          </button>
+                        )}
                       </div>
                     </div>
                     <div className="flex w-full flex-wrap items-center gap-1 sm:w-auto sm:flex-none">
@@ -557,6 +574,7 @@ export function DocumentsPage(): JSX.Element {
                       {doc.ocr_error && <p className="text-amber-300">Texterkennung: {doc.ocr_error}</p>}
                       <div className="flex max-w-md items-center gap-2">
                         <select
+                          id={`tag-select-${doc.id}`}
                           value={attachTagId[doc.id] ?? ""} aria-label={`Tag zu ${doc.original_filename} hinzufügen`}
                           onChange={(e) => setAttachTagId({ ...attachTagId, [doc.id]: e.target.value })}
                           className={inputClass}

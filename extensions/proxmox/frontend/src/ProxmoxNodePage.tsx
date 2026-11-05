@@ -3,6 +3,7 @@
  * `/hosts/{id}/actions/{type}`), gruppiert nach `provider_ref = "<connection>/<kind>/<node>/<vmid>"`. Einen Vorschlag
  * bestätigt die Seite nur selbst, wenn der Nutzer `actions.approve:<risk>` hat (der Dialog davor ist die Freigabe).
  */
+import { styleRef } from "../../../_shared/frontend/src/csp";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 
@@ -14,6 +15,7 @@ import { errorMessage, fetchJson, LoadError } from "../../../_shared/frontend/sr
 import { SettingsLink } from "../../../_shared/frontend/src/links";
 import { useUrlParams } from "../../../_shared/frontend/src/location";
 import { MoreMenu } from "../../../_shared/frontend/src/menu";
+import { fadeStyle, ScrollArrows, useScrollRow } from "../../../_shared/frontend/src/scrollRow";
 import { Button, EmptyState } from "../../../_shared/frontend/src/ui";
 import { FOCUS_CLASS, deck } from "../../../_shared/frontend/src/deck";
 
@@ -430,7 +432,7 @@ function StorageSection({ pools, focusNode = null }: { pools: StoragePool[]; foc
               </td>
               <td className="py-1.5 align-top text-xs">
                 <div className="h-1.5 w-full overflow-hidden rounded bg-white/10" role="progressbar" aria-valuenow={pool.used_percent ?? 0} aria-valuemin={0} aria-valuemax={100}>
-                  <div className={`h-full ${BAR_TONE[pool.tone] ?? BAR_TONE.neutral}`} style={{ width: `${Math.min(100, pool.used_percent ?? 0)}%` }} />
+                  <div className={`h-full ${BAR_TONE[pool.tone] ?? BAR_TONE.neutral}`} ref={styleRef({ width: `${Math.min(100, pool.used_percent ?? 0)}%` })} />
                 </div>
                 <span className="opacity-70">
                   {formatBytes(pool.used ?? 0)} / {formatBytes(pool.total ?? 0)}
@@ -1962,15 +1964,7 @@ function TabBar({ active, onSelect, badges }: {
   badges: Partial<Record<TabId, { text: string; label: string }>>;
 }): JSX.Element {
   const refs = useRef<Partial<Record<TabId, HTMLButtonElement | null>>>({});
-  const bar = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    // Nur die Leiste waagerecht schieben, nicht die Seite: die scrollt ein Link gleich zu seinem Ziel.
-    const tab = refs.current[active];
-    if (!tab || !bar.current) return;
-    const t = tab.getBoundingClientRect();
-    const b = bar.current.getBoundingClientRect();
-    if (t.left < b.left || t.right > b.right) bar.current.scrollLeft += t.left - b.left - 16;
-  }, [active]);
+  const { ref: bar, row, edges } = useScrollRow<HTMLDivElement>(active);
   function onKeyDown(e: KeyboardEvent<HTMLButtonElement>) {
     const index = TABS.findIndex((t) => t.id === active);
     const next = e.key === "ArrowRight" ? (index + 1) % TABS.length
@@ -1984,35 +1978,43 @@ function TabBar({ active, onSelect, badges }: {
     refs.current[TABS[next].id]?.focus();
   }
   return (
-    <div ref={bar} role="tablist" aria-label="Bereiche" className="mb-4 flex gap-1 overflow-x-auto border-b border-white/[0.08] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      {TABS.map((t) => {
-        const badge = badges[t.id];
-        return (
-          <button
-            key={t.id}
-            ref={(el) => { refs.current[t.id] = el; }}
-            type="button"
-            role="tab"
-            id={`pve-tab-${t.id}`}
-            aria-selected={active === t.id}
-            aria-controls={`pve-panel-${t.id}`}
-            tabIndex={active === t.id ? 0 : -1}
-            onClick={() => onSelect(t.id)}
-            onKeyDown={onKeyDown}
-            className={`-mb-px whitespace-nowrap border-b-2 px-3.5 py-2 text-sm transition ${
-              active === t.id ? "border-[var(--color-accent)] text-white" : "border-transparent text-white/55 hover:text-white"
-            }`}
-          >
-            {t.label}
-            {badge && (
-              <span className="ml-1.5 rounded-full bg-amber-500/80 px-1.5 text-[10px] text-black" title={badge.label}>
-                <span aria-hidden="true">{badge.text}</span>
-                <span className="sr-only">{`: ${badge.label}`}</span>
-              </span>
-            )}
-          </button>
-        );
-      })}
+    <div className="relative mb-4">
+      <div
+        role="tablist"
+        aria-label="Bereiche"
+        ref={styleRef(fadeStyle(edges), bar)}
+        className="flex gap-1 overflow-x-auto border-b border-white/[0.08] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
+        {TABS.map((t) => {
+          const badge = badges[t.id];
+          return (
+            <button
+              key={t.id}
+              ref={(el) => { refs.current[t.id] = el; }}
+              type="button"
+              role="tab"
+              id={`pve-tab-${t.id}`}
+              aria-selected={active === t.id}
+              aria-controls={`pve-panel-${t.id}`}
+              tabIndex={active === t.id ? 0 : -1}
+              onClick={() => onSelect(t.id)}
+              onKeyDown={onKeyDown}
+              className={`-mb-px whitespace-nowrap border-b-2 px-3.5 py-2 text-sm transition ${
+                active === t.id ? "border-[var(--color-accent)] text-white" : "border-transparent text-white/55 hover:text-white"
+              }`}
+            >
+              {t.label}
+              {badge && (
+                <span className="ml-1.5 rounded-full bg-amber-500/80 px-1.5 text-[10px] text-black" title={badge.label}>
+                  <span aria-hidden="true">{badge.text}</span>
+                  <span className="sr-only">{`: ${badge.label}`}</span>
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      <ScrollArrows edges={edges} row={row} />
     </div>
   );
 }

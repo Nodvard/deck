@@ -74,7 +74,7 @@ function renderConfig(extId = "demo") {
 }
 
 describe("Anleitung zur Erweiterung", () => {
-  it.each([["proxmox", "7-proxmox-verbinden"], ["ntfy", "8-push-nachrichten-ntfy"]])("%s: Link zum passenden Abschnitt der Anleitung", async (id, anchor) => {
+  it.each([["proxmox", "42-proxmox-verbinden"], ["ntfy", "5-push-nachrichten-ntfy"]])("%s: Link zum passenden Abschnitt der Anleitung", async (id, anchor) => {
     mockApi({
       [`GET /extensions/${id}`]: () => ext({ id, name: "Das Modul" }),
       [`GET /extensions/${id}/settings`]: () => settings(),

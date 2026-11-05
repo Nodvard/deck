@@ -114,10 +114,9 @@ class InvalidRegistration(NodvardError):
     """Eine Registrierung verletzt eine Regel der Schnittstelle."""
 
 
-# Entsteht im TLS-Handshake, bevor ein Byte der Anfrage (Kopf, Zugangsdaten, Körper) gesendet wurde. Die HTTP-Schicht
-# reicht sie meist eingepackt weiter (bei `httpx` als `__cause__`/`__context__` eines `ConnectError`); wer sie erkennen
-# will, sucht in der Kette danach. Zugleich ein `ssl.SSLCertVerificationError` (damit ein `ssl.SSLError`): nur so
-# behandeln die TLS-Schichten von asyncio und anyio sie als gescheiterten Handshake.
+# Entsteht im TLS-Handshake, bevor etwas von der Anfrage gesendet wurde. httpx reicht sie meist eingepackt weiter
+# (`__cause__`/`__context__` eines `ConnectError`); wer sie erkennen will, sucht in der Kette. Ein
+# `ssl.SSLCertVerificationError` ist sie, weil asyncio und anyio nur so den Handshake als gescheitert behandeln.
 class CertificateMismatch(NodvardError, ssl.SSLCertVerificationError):
     """Ein Aufruf mit `pinned_sha256` (`ctx.http`) traf auf ein anderes Zertifikat als das bestätigte; es wurde vorher
     nichts gesendet. `expected`/`actual`: Fingerabdrücke (`AB:CD:...`), `actual` ist leer, wenn der Server kein

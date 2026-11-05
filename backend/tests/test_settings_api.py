@@ -4,6 +4,7 @@ api/v1/settings.py Modul-Docstring fuer die volle Begruendung."""
 from __future__ import annotations
 
 import pytest
+from nodvard_deck.services.notification_types import defaults as push_defaults
 
 
 async def _bootstrap_owner(client, username="owner1", password="correct-horse-battery"):
@@ -37,10 +38,12 @@ async def test_list_settings_returns_defaults_when_unset(client):
         "jobs.run_retention_days": 30,
         # Meldungen: 90 Tage.
         "notifications.retention_days": 90,
+        "notifications.push_types": push_defaults(),
         # Erreichbarkeitspruefung: an, alle 2 Minuten.
         "hosts.reachability.enabled": True, "hosts.reachability.interval_minutes": 2,
         # Nach Updates suchen: an, nur fertige Versionen.
         "system.update_check.enabled": True, "system.update_check.channel": "stable",
+        "system.update_check.auto_security": False,
         # Neue Server-Schluessel bestaetigen: die Test-Einstellungen legen die Umgebungsvariable auf aus fest.
         "ssh.confirm_new_host_keys": False,
         # Vertrauenswuerdige Proxys: keine, wie vor der Einstellung.
@@ -60,6 +63,31 @@ async def test_put_and_get_roundtrip(client):
     listed = await client.get("/api/v1/settings", headers=_auth_header(token))
     by_key = {row["key"]: row["value"] for row in listed.json()}
     assert by_key["autonomy.mode"] == "full"
+
+
+@pytest.mark.asyncio
+async def test_push_preferences_and_security_updates_roundtrip(client):
+    token = await _bootstrap_owner(client)
+    preferences = push_defaults()
+    preferences["host.down"] = {"enabled": False, "priority": "high"}
+    values = {
+        "notifications.push_types": preferences,
+        "system.update_check.auto_security": True,
+    }
+    for key, value in values.items():
+        response = await client.put(
+            f"/api/v1/settings/{key}",
+            json={"value": value, "current_password": "correct-horse-battery"},
+            headers=_auth_header(token),
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == {"key": key, "value": value}
+
+    listed = await client.get("/api/v1/settings", headers=_auth_header(token))
+    assert listed.status_code == 200, listed.text
+    by_key = {row["key"]: row["value"] for row in listed.json()}
+    for key, value in values.items():
+        assert by_key[key] == value
 
 
 @pytest.mark.asyncio
@@ -171,8 +199,8 @@ async def test_list_settings_survives_saved_branding(client):
         "autonomy.mode", "autonomy.max_risk", "security.deny_patterns", "maintenance.windows",
         "system.timezone", "audit.retention_days", "jobs.run_retention_days", "notifications.retention_days",
         "hosts.reachability.enabled", "hosts.reachability.interval_minutes",
-        "system.update_check.enabled", "system.update_check.channel", "ssh.confirm_new_host_keys",
-        "system.trusted_proxies",
+        "system.update_check.enabled", "system.update_check.channel", "system.update_check.auto_security",
+        "ssh.confirm_new_host_keys", "system.trusted_proxies", "notifications.push_types",
     }
 
 

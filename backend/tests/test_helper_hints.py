@@ -182,6 +182,34 @@ def test_a_helper_rule_must_name_the_script_itself():
         assert not helper_hints.allows_helper([line], path), line
 
 
+def test_a_helper_rule_with_a_checksum_counts_only_for_that_file():
+    path, sha = SHIELD.install_path, SHIELD.sha256
+    pinned = f"(root) NOPASSWD: sha256:{sha} {path}"
+    assert helper_hints.allows_helper([pinned], path, sha)
+    assert helper_hints.allows_helper([f"(root) NOPASSWD: sha256:{sha.upper()} {path}"], path, sha)
+    assert not helper_hints.allows_helper([pinned], path, "0" * 64), "anderer Inhalt: sudo lehnt das Skript ab"
+    assert not helper_hints.allows_helper([pinned], path), "Inhalt auf dem Server unbekannt"
+    for line in (
+        f"(root) NOPASSWD: sha512:{sha} {path}", f"(root) NOPASSWD: sha256:{sha} {path}.alt",
+        f"(root) PASSWD: sha256:{sha} {path}",
+    ):
+        assert not helper_hints.allows_helper([line], path, sha), line
+    assert not helper_hints.has_full_rule([pinned])
+
+
+def test_one_of_several_checksums_is_enough():
+    path, sha, other = SHIELD.install_path, SHIELD.sha256, "1" * 64
+    for line in (
+        f"(root) NOPASSWD: sha256:{other},sha256:{sha} {path}", f"(root) NOPASSWD: sha256:{sha}, sha256:{other} {path}",
+        f"(root) NOPASSWD: /bin/true, sha256:{sha} {path}",
+    ):
+        assert helper_hints.allows_helper([line], path, sha), line
+    assert not helper_hints.allows_helper([f"(root) NOPASSWD: sha256:{other},sha256:{'2' * 64} {path}"], path, sha)
+    # Die Prüfsumme vor `.alt` gehört nur zu diesem Eintrag.
+    split = f"(root) NOPASSWD: sha256:{sha},{path}.alt, sha256:{other} {path}"
+    assert not helper_hints.allows_helper([split], path, sha)
+
+
 @pytest.mark.asyncio
 async def test_the_check_records_nothing_for_root():
     """„Verbindung prüfen“ als root: kein Hilfsskript nötig, der Merker wird geleert (`{}`), ohne Abfrage."""

@@ -2,12 +2,15 @@
  * Einstellungen mit Seitennavigation. Jeder Bereich ist eine eigene Unterseite
  * (/settings/<bereich>); Bereiche ohne passende Berechtigung werden nicht angezeigt.
  */
+import { styleRef } from "../../../../extensions/_shared/frontend/src/csp";
 import { BookOpen, Blocks, Bot, ExternalLink, HardDrive, History, Info, KeyRound, Palette, Server, UserCircle, Users } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { Bell, type LucideIcon } from "lucide-react";
 import { NavLink, Navigate, Outlet, useLocation } from "react-router-dom";
 
+import { fadeStyle, ScrollArrows, useScrollRow } from "../../../../extensions/_shared/frontend/src/scrollRow";
 import { guideUrl } from "../../lib/docs";
 import { useAuthStore } from "../../state/auth";
+import { useEdition } from "../../state/edition";
 
 interface Section {
   path: string;
@@ -25,6 +28,7 @@ export const SECTIONS: Section[] = [
   { path: "hosts", label: "Server & Zugänge", description: "Server anlegen, SSH-Zugang, Prüfung", icon: Server, permission: "hosts.write" },
   { path: "vault", label: "Tresor", description: "Passwörter, Schlüssel, Tokens", icon: KeyRound, permission: "secrets.read" },
   { path: "automation", label: "Automatik & Sicherheit", description: "Freigaben, Sperrliste, Wartung", icon: Bot, permission: "settings.write" },
+  { path: "notifications", label: "Benachrichtigungen", description: "Push-Meldungen und Prioritäten", icon: Bell, permission: "settings.write" },
   // `system.read` zeigt die Sicherung, `settings.write` die Karte „Zeit & Protokoll“ -- eines reicht für den Reiter.
   { path: "system", label: "System", description: "Sicherung, Zeit, Protokoll", icon: HardDrive, permission: ["system.read", "settings.write"] },
   { path: "extensions", label: "Erweiterungen", description: "Module ein- und ausschalten", icon: Blocks, permission: "extensions.manage" },
@@ -33,11 +37,18 @@ export const SECTIONS: Section[] = [
   { path: "about", label: "Über Nodvard Deck", description: "Version und Änderungsprotokoll", icon: Info },
 ];
 
+export function editionSections(chooseModules: boolean, productName: string): Section[] {
+  return SECTIONS.map((section) => section.path === "about" ? { ...section, label: `Über ${productName}` }
+    : section.path === "extensions" && !chooseModules
+      ? { ...section, path: "extensions/docker", label: "Docker", description: "Einstellungen" } : section);
+}
+
 export function useVisibleSections(): Section[] {
+  const edition = useEdition();
   const hasPermission = useAuthStore((s) => s.hasPermission);
   // `user` abonnieren, damit sich die Liste nach dem Laden der Rechte aktualisiert.
   useAuthStore((s) => s.user);
-  return SECTIONS.filter((s) => {
+  return editionSections(edition.choose_modules, edition.product_name).filter((s) => {
     if (!s.permission) return true;
     const wanted = Array.isArray(s.permission) ? s.permission : [s.permission];
     return wanted.some((p) => hasPermission(p));
@@ -47,6 +58,7 @@ export function useVisibleSections(): Section[] {
 export function SettingsLayout(): JSX.Element {
   const sections = useVisibleSections();
   const location = useLocation();
+  const { ref: bar, row, edges } = useScrollRow<HTMLUListElement>(location.pathname);
 
   if (location.pathname.replace(/\/$/, "") === "/settings") {
     return <Navigate to="/settings/account" replace />;
@@ -56,49 +68,52 @@ export function SettingsLayout(): JSX.Element {
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:flex-row">
       <nav aria-label="Einstellungen" className="lg:w-60 lg:flex-none">
         <h1 className="mb-3 px-2 text-xs font-semibold text-white/40">Einstellungen</h1>
-        <ul className="flex gap-1 overflow-x-auto lg:flex-col">
-          {sections.map(({ path, label, description, icon: Icon }) => (
-            <li key={path}>
-              <NavLink
-                to={`/settings/${path}`}
-                className={({ isActive }) =>
-                  `flex items-start gap-3 whitespace-nowrap rounded-lg px-3 py-2 text-sm transition ${
-                    isActive ? "bg-white/[0.08] text-white" : "text-white/60 hover:bg-white/[0.04] hover:text-white"
-                  }`
-                }
+        <div className="relative">
+          <ul ref={styleRef(fadeStyle(edges), bar)} className="flex gap-1 overflow-x-auto lg:flex-col">
+            {sections.map(({ path, label, description, icon: Icon }) => (
+              <li key={path}>
+                <NavLink
+                  to={`/settings/${path}`}
+                  className={({ isActive }) =>
+                    `flex items-start gap-3 whitespace-nowrap rounded-lg px-3 py-2 text-sm transition lg:whitespace-normal ${
+                      isActive ? "bg-white/[0.08] text-white" : "text-white/60 hover:bg-white/[0.04] hover:text-white"
+                    }`
+                  }
+                >
+                  {({ isActive }) => (
+                    <>
+                      <Icon size={17} className={`mt-0.5 flex-none ${isActive ? "text-[var(--color-accent)]" : ""}`} />
+                      <span>
+                        <span className="block font-medium">{label}</span>
+                        <span className="hidden text-xs text-white/40 lg:block">{description}</span>
+                      </span>
+                    </>
+                  )}
+                </NavLink>
+              </li>
+            ))}
+            {/* Verlässt das Dashboard: die Anleitung liegt im Quellcode und öffnet in einem neuen Tab. */}
+            <li>
+              <a
+                href={guideUrl()}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="settings-guide-link"
+                className="flex items-start gap-3 whitespace-nowrap rounded-lg px-3 py-2 text-sm text-white/60 transition hover:bg-white/[0.04] hover:text-white lg:whitespace-normal"
               >
-                {({ isActive }) => (
-                  <>
-                    <Icon size={17} className={`mt-0.5 flex-none ${isActive ? "text-[var(--color-accent)]" : ""}`} />
-                    <span>
-                      <span className="block font-medium">{label}</span>
-                      <span className="hidden text-xs text-white/40 lg:block">{description}</span>
-                    </span>
-                  </>
-                )}
-              </NavLink>
-            </li>
-          ))}
-          {/* Verlässt das Dashboard: die Anleitung liegt im Quellcode und öffnet in einem neuen Tab. */}
-          <li>
-            <a
-              href={guideUrl()}
-              target="_blank"
-              rel="noopener noreferrer"
-              data-testid="settings-guide-link"
-              className="flex items-start gap-3 whitespace-nowrap rounded-lg px-3 py-2 text-sm text-white/60 transition hover:bg-white/[0.04] hover:text-white"
-            >
-              <BookOpen size={17} className="mt-0.5 flex-none" />
-              <span>
-                <span className="flex items-center gap-1.5 font-medium">
-                  Anleitung <ExternalLink size={12} aria-hidden className="flex-none opacity-70" />
-                  <span className="sr-only">(öffnet in neuem Tab)</span>
+                <BookOpen size={17} className="mt-0.5 flex-none" />
+                <span>
+                  <span className="flex items-center gap-1.5 font-medium">
+                    Anleitung <ExternalLink size={12} aria-hidden className="flex-none opacity-70" />
+                    <span className="sr-only">(öffnet in neuem Tab)</span>
+                  </span>
+                  <span className="hidden text-xs text-white/40 lg:block">Schritt für Schritt erklärt</span>
                 </span>
-                <span className="hidden text-xs text-white/40 lg:block">Schritt für Schritt erklärt</span>
-              </span>
-            </a>
-          </li>
-        </ul>
+              </a>
+            </li>
+          </ul>
+          <ScrollArrows edges={edges} row={row} />
+        </div>
       </nav>
       <div className="min-w-0 flex-1">
         <Outlet />

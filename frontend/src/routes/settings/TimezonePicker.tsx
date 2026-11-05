@@ -4,7 +4,7 @@
  * bekommt die Wahl über `onChange` und ruft `PUT /settings/system.timezone` auf.
  */
 import { Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { browserTimeZone } from "../../lib/deckTimezone";
 import { COMMON_ZONES, foldForSearch, germanZoneLabel, germanZoneTerms } from "./timezoneNames";
@@ -63,15 +63,19 @@ function timeIn(zone: string): string | null {
 }
 
 export function TimezonePicker({
-  value, savedZone, onChange,
+  value, savedZone, onChange, collapsible = false,
 }: {
   /** Aktuell gewählte Zone. */
   value: string;
   /** Zone, die der Server gerade hat; weicht `value` davon ab, steht "nicht gespeichert" da. */
   savedZone: string;
   onChange: (zone: string) => void;
+  /** Suche und Liste erst nach „Zeitzone ändern“ zeigen und nach der Wahl wieder zuklappen. */
+  collapsible?: boolean;
 }): JSX.Element {
   const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(!collapsible);
+  const toggleRef = useRef<HTMLButtonElement>(null);
   const zones = useMemo(() => timezoneOptions([savedZone, value]), [savedZone, value]);
   // Ohne Suche steht die gewählte Zone ganz oben, sonst läge sie irgendwo in der langen Liste.
   const matches = useMemo(() => {
@@ -80,50 +84,80 @@ export function TimezonePicker({
   const device = browserTimeZone();
   const suggestDevice = device !== value && zones.includes(device);
 
+  function choose(zone: string): void {
+    onChange(zone);
+    if (collapsible && open) {
+      setOpen(false);
+      setQuery("");
+      // Die gewählte Zeile verschwindet mit der Liste; ohne das stünde der Tastatur-Fokus am Seitenanfang.
+      toggleRef.current?.focus();
+    }
+  }
+
+  function toggle(): void {
+    if (open) setQuery("");
+    setOpen(!open);
+  }
+
   return (
     <div>
       <p className="mb-2 flex flex-wrap items-center gap-2 text-sm">
         <span className="font-medium">{value}</span>
         {timeIn(value) && <span className="text-white/45">· dort ist es jetzt {timeIn(value)} Uhr</span>}
         {value !== savedZone && <Badge tone="warn">nicht gespeichert</Badge>}
+        {collapsible && (
+          <button
+            ref={toggleRef}
+            type="button"
+            aria-expanded={open}
+            onClick={toggle}
+            className="text-[var(--color-accent)] underline underline-offset-2 hover:brightness-125"
+          >
+            {open ? "Liste schließen" : "Zeitzone ändern"}
+          </button>
+        )}
       </p>
-      <div className="relative">
-        <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/35" />
-        <input
-          type="search"
-          aria-label="Zeitzone suchen"
-          placeholder="Zeitzone suchen, z. B. Wien oder Berlin"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          className={`${inputClass} pl-9`}
-        />
-      </div>
-      <ul
-        role="listbox"
-        aria-label="Zeitzonen"
-        className="mt-2 max-h-52 overflow-y-auto rounded-lg border border-white/10 bg-black/20"
-      >
-        {matches.slice(0, 200).map((z) => (
-          <li key={z} role="option" aria-selected={z === value}>
-            <button
-              type="button"
-              onClick={() => onChange(z)}
-              className={`block w-full px-3 py-1.5 text-left text-sm transition ${
-                z === value ? "bg-white/[0.1] font-medium text-white" : "text-white/70 hover:bg-white/[0.06] hover:text-white"
-              }`}
-            >
-              {z}
-              {germanZoneLabel(z) && <span className="ml-2 text-xs font-normal text-white/45">{germanZoneLabel(z)}</span>}
-            </button>
-          </li>
-        ))}
-        {matches.length === 0 && <li className="px-3 py-2 text-sm text-white/45">Keine Zeitzone gefunden.</li>}
-        {matches.length > 200 && <li className="px-3 py-2 text-xs text-white/40">Weitere Treffer: Suche eingrenzen.</li>}
-      </ul>
+      {open && (
+        <>
+          <div className="relative">
+            <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/35" />
+            <input
+              type="search"
+              aria-label="Zeitzone suchen"
+              placeholder="Zeitzone suchen, z. B. Wien oder Berlin"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className={`${inputClass} pl-9`}
+            />
+          </div>
+          <ul
+            role="listbox"
+            aria-label="Zeitzonen"
+            className="mt-2 max-h-52 overflow-y-auto rounded-lg border border-white/10 bg-black/20"
+          >
+            {matches.slice(0, 200).map((z) => (
+              <li key={z} role="option" aria-selected={z === value}>
+                <button
+                  type="button"
+                  onClick={() => choose(z)}
+                  className={`block w-full px-3 py-1.5 text-left text-sm transition ${
+                    z === value ? "bg-white/[0.1] font-medium text-white" : "text-white/70 hover:bg-white/[0.06] hover:text-white"
+                  }`}
+                >
+                  {z}
+                  {germanZoneLabel(z) && <span className="ml-2 text-xs font-normal text-white/45">{germanZoneLabel(z)}</span>}
+                </button>
+              </li>
+            ))}
+            {matches.length === 0 && <li className="px-3 py-2 text-sm text-white/45">Keine Zeitzone gefunden.</li>}
+            {matches.length > 200 && <li className="px-3 py-2 text-xs text-white/40">Weitere Treffer: Suche eingrenzen.</li>}
+          </ul>
+        </>
+      )}
       {suggestDevice && (
         <p className="mt-2 text-sm text-white/60">
           Dieses Gerät steht in <span className="text-white">{device}</span>.{" "}
-          <button type="button" onClick={() => onChange(device)} className="text-[var(--color-accent)] underline underline-offset-2 hover:brightness-125">
+          <button type="button" onClick={() => choose(device)} className="text-[var(--color-accent)] underline underline-offset-2 hover:brightness-125">
             Diese Zone übernehmen
           </button>
         </p>

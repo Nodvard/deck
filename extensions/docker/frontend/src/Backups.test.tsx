@@ -185,3 +185,10 @@ describe("Sicherungen", () => {
     expect(screen.queryByText("Für diesen Stack gibt es noch keine Sicherung.")).toBeNull();
   });
 });
+
+it("Dock erklärt die Prüfung beim Zurückspielen", async () => {
+  window.__nodvardDeck.getProductName = () => "Nodvard Dock";
+  serve();
+  render(<BackupsPanel hostId="h1" project="shop" onDone={vi.fn()} />);
+  expect(await screen.findByText(/Dock prüft vorher das Archiv/)).toBeInTheDocument();
+});

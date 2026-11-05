@@ -42,8 +42,10 @@ from .capabilities import (
 from .applier import IMAGE_UPDATE_SPEC, ImageApplier, ImageUpdateExecutor
 from .docker_details import parse_images, parse_system_df, summarize_inspect
 from .image_apply import NotUpdatable
+from .image_pull import DockerImagePullExecutor, image_pull_specs
 from .image_updates import ImageUpdateService, register_job
 from .places import DockerFilePlaces
+from .network_actions import DockerNetworkExecutor, network_action_specs
 from .resources import DockerResourceExecutor, DockerResources, ResourceProblem, resource_action_specs
 from .shell import ContainerShell
 from .adopt import AdoptedStacks, adopt_routes
@@ -59,9 +61,11 @@ from .stacks import DockerStacks, stack_routes
 from .git_apply import DockerStackGitApplyExecutor, GitApply, apply_routes
 from .git_apply import action_specs as git_apply_specs
 from .git_source import GitStacks, git_routes
+from .git_watch import GitWatch, register_watch_job, watch_routes
 from .container_to_stack import ContainerToStack, DockerContainerToStackExecutor, convert_action_spec, convert_routes
 from .registries import DockerRegistryExecutor, Registries, login_spec, registry_routes
 from .portainer_move import DockerPortainerMoveExecutor, PortainerMove, move_action_spec, move_routes
+from .own_templates import OwnTemplates, own_template_routes
 from .templates import template_routes
 from .operate import DEFAULT_TAG as OPERATE_DEFAULT_TAG
 from .operate import FULL_SUDO_CHECK, GROUP_CHECK, ROOT_CHECK
@@ -96,7 +100,8 @@ def _apply_docker_tag(ctx: ExtensionContext, settings: dict[str, Any]) -> None:
     _register_docker_requirement(ctx, tag)
     _register_operate_requirement(ctx, operate_tag, tag)
     _register_operate_limits(ctx, operate_tag, tag)
-    for spec in container_action_specs(tag, operate_tag) + resource_action_specs(tag) + stack_action_specs(tag):
+    specs = container_action_specs(tag, operate_tag) + resource_action_specs(tag) + image_pull_specs(tag) + network_action_specs(tag)
+    for spec in specs + stack_action_specs(tag):
         ctx.actions.register(spec)
 
 
@@ -148,7 +153,7 @@ def _register_operate_limits(ctx: ExtensionContext, tag: str, full_tag: str) -> 
         ok_text="sudo erlaubt dem Zugang nicht alles, oder er ist root (dann gilt „Zugang ist nicht root“).",
         fail_hint="sudo erlaubt dem Zugang hier noch alles ohne Passwort, und die Einrichtung nimmt so eine Regel nie "
         "zurück. Braucht kein anderes Modul hier volle Rechte, entferne sie, sobald das Hilfsskript antwortet und der "
-        "Zugang nicht mehr in der Gruppe docker ist (Erst-Einrichtung, Abschnitt 6). Welche Datei die Regel enthält, zeigt: "
+        "Zugang nicht mehr in der Gruppe docker ist (Erst-Einrichtung, Anhang F). Welche Datei die Regel enthält, zeigt: "
         "sudo grep -rl NOPASSWD /etc/sudoers /etc/sudoers.d",
         tags=[tag], skip_tags=[full_tag], order=34,
     ))
@@ -185,6 +190,8 @@ class Extension(NodvardExtension):
         ctx.capabilities.provide(ContainerShell(ctx))
         self._resources = DockerResources(ctx)
         ctx.capabilities.provide(DockerResourceExecutor(ctx, self._resources))
+        ctx.capabilities.provide(DockerImagePullExecutor(ctx, self._resources))
+        ctx.capabilities.provide(DockerNetworkExecutor(ctx, self._resources))
         # Nicht in `container_action_specs` (die hängen am Docker-Tag): den Befehl baut immer die Extension, die Aktion
         # kommt nur über die Route unten, nie über die Server-Seite.
         ctx.actions.register(IMAGE_UPDATE_SPEC)
@@ -202,7 +209,8 @@ class Extension(NodvardExtension):
         for spec in git_apply_specs():
             ctx.actions.register(spec)
         # Mit dem Standard-Tag; on_start meldet sie mit dem eingestellten Tag neu an.
-        for spec in container_action_specs("docker", OPERATE_DEFAULT_TAG) + resource_action_specs() + stack_action_specs():
+        specs = container_action_specs("docker", OPERATE_DEFAULT_TAG) + resource_action_specs() + image_pull_specs() + network_action_specs()
+        for spec in specs + stack_action_specs():
             ctx.actions.register(spec)
 
         ctx.settings.declare(
@@ -215,6 +223,8 @@ class Extension(NodvardExtension):
                     "image_updates_enabled": {"type": "boolean"},
                     "image_updates_cron": {"type": "string"},
                     "image_update_auto_rollback": {"type": "boolean"},
+                    "git_watch_enabled": {"type": "boolean"},
+                    "git_watch_cron": {"type": "string"},
                     "url_overrides": {"type": "object", "additionalProperties": {"type": "string"}},
                 },
             }
@@ -416,9 +426,9 @@ class Extension(NodvardExtension):
 
         @resources_router.get("/hosts/{host_id}/networks")
         async def list_networks(host_id: str) -> dict:
-            """Netze des Servers mit den Containern daran; `error`, wenn nur diese Liste nicht lesbar war."""
+            """Netze des Servers mit den Containern daran, dazu alle Container; `error`, wenn nur die Netze nicht lesbar waren."""
             snapshot = await _resources(host_id)
-            return {"host_id": host_id, "networks": snapshot.networks, "error": snapshot.network_error}
+            return {"host_id": host_id, "networks": snapshot.networks, "error": snapshot.network_error, "containers": snapshot.containers}
 
         # Lesend, aber jeder Abruf öffnet SSH und lässt Docker den Speicher zählen, deshalb wie `/hosts/{id}/docker`.
         ctx.api.include_router(resources_router, permission="hosts.execute")
@@ -450,6 +460,7 @@ class Extension(NodvardExtension):
         ctx.api.include_router(registry_routes(known_registries, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
         ctx.api.include_router(new_routes(new, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
         ctx.api.include_router(template_routes(), permission="hosts.execute")
+        ctx.api.include_router(own_template_routes(OwnTemplates(Path(str(ctx.data_dir)))), permission="hosts.execute")
         update = StackUpdate(ctx, stacks, self._images, stack_executor, StackBackups(Path(str(ctx.data_dir))), VolumeBackup(ctx, self._resources))
         update_executor = DockerStackUpdateExecutor(ctx, update, self._images)
         ctx.capabilities.provide(update_executor)
@@ -464,9 +475,18 @@ class Extension(NodvardExtension):
         adopted.on_remove = git.forget
         ctx.api.include_router(git_routes(git, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
         self._git_apply = git_apply = GitApply(ctx, git, stack_executor, Path(str(ctx.data_dir)), update, update_executor)
-        git.on_forget = git_apply.forget
         ctx.capabilities.provide(DockerStackGitApplyExecutor(git_apply))
         ctx.api.include_router(apply_routes(git_apply, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
+        self._git_watch = watch = GitWatch(ctx, git, lambda host_id, project: git_apply.state.written(host_id, project)[0], Path(str(ctx.data_dir)))
+        ctx.api.include_router(watch_routes(watch, _full_docker_host), permission="hosts.execute")
+
+        async def forget_git(host_id: str, project: str) -> None:
+            try:
+                await git_apply.forget(host_id, project)
+            finally:
+                await watch.forget(host_id, project)
+
+        git.on_forget = forget_git
 
         apps_router = APIRouter()
 
@@ -544,6 +564,7 @@ class Extension(NodvardExtension):
         settings = await ctx.settings.get()
         _apply_docker_tag(ctx, settings)
         await register_job(ctx, self._images, settings)
+        await register_watch_job(ctx, self._git_watch, settings)
         # Ein Update, das beim letzten Beenden noch auf dem Host lief, wird hier weiterverfolgt und gemeldet.
         # Kein Neustart der Aufgabe: sie wartet bis zur Frist des Laufs und meldet dann selbst.
         ctx.spawn(self._applier.resume_interrupted(), name="docker-image-update-resume", restart=False)
@@ -553,4 +574,6 @@ class Extension(NodvardExtension):
 
     async def on_settings_changed(self, ctx: ExtensionContext, values: dict[str, Any]) -> None:
         _apply_docker_tag(ctx, values)
-        await register_job(ctx, self._images, await ctx.settings.get())
+        settings = await ctx.settings.get()
+        await register_job(ctx, self._images, settings)
+        await register_watch_job(ctx, self._git_watch, settings)

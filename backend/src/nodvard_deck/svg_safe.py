@@ -3,6 +3,8 @@ Auslieferung schützt zusätzlich mit einer Sandbox (`UNTRUSTED_FILE_HEADERS` in
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import re
 from xml.parsers import expat
 
@@ -11,6 +13,7 @@ from defusedxml import ElementTree as SafeET
 SVG_NS = "http://www.w3.org/2000/svg"
 XLINK_NS = "http://www.w3.org/1999/xlink"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
+MAX_SVG_CSP_BYTES = 4096
 
 # Namensräume, die Zeichenprogramme (Inkscape, Illustrator) mitschreiben. Sie werden
 # nirgends ausgewertet; nur die Elemente und Attribute selbst sind harmlos.
@@ -59,6 +62,42 @@ _CONTROL = re.compile(r"[\x00-\x20\x7f]+")
 
 class UnsafeSvg(ValueError):
     """Das SVG enthält etwas, das beim Hochladen nicht erlaubt ist (Text auf Deutsch)."""
+
+
+def svg_csp(nonce: str, hashes: list[str]) -> str:
+    attributes = "'unsafe-hashes' " + " ".join(hashes) if hashes else "'none'"
+    policy = (
+        f"default-src 'none'; style-src 'nonce-{nonce}'; style-src-attr {attributes}; "
+        "sandbox; frame-ancestors 'none'"
+    )
+    if len(policy.encode("ascii")) > MAX_SVG_CSP_BYTES:
+        raise UnsafeSvg("Das SVG enthält zu viele unterschiedliche Stile für die Auslieferung.")
+    return policy
+
+
+def _style_hashes(root, nonce: str) -> list[str]:
+    hashes = set()
+    for element in root.iter():
+        value = element.get("style")
+        if value is not None:
+            digest = base64.b64encode(hashlib.sha256(value.encode("utf-8")).digest()).decode("ascii")
+            hashes.add(f"'sha256-{digest}'")
+    result = sorted(hashes)
+    svg_csp(nonce, result)
+    return result
+
+
+def nonce_svg(content: bytes, nonce: str) -> tuple[bytes, list[str]] | None:
+    """SVG-Stile mit Nonce und Hashes für unveränderte Stilattribute freigeben."""
+    try:
+        root = SafeET.fromstring(content, forbid_dtd=False, forbid_entities=True, forbid_external=True)
+    except (SafeET.ParseError, ValueError, UnicodeError, LookupError):
+        return None
+    hashes = _style_hashes(root, nonce)
+    for element in root.iter():
+        if element.tag == f"{{{SVG_NS}}}style":
+            element.set("nonce", nonce)
+    return SafeET.tostring(root, encoding="utf-8"), hashes
 
 
 def _local(name: str) -> tuple[str, str]:
@@ -147,3 +186,4 @@ def check_svg(content: bytes) -> None:
             _check_attribute(attr, value)
         if local == "style" and ns == SVG_NS:
             _check_css("".join(el.itertext()), "Das SVG")
+    _style_hashes(root, "x" * 43)

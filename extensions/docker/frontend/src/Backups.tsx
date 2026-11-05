@@ -1,3 +1,4 @@
+import { productText } from "./product";
 /** Volume-Sicherungen eines Stacks: Liste, Zurückspielen und Löschen, beides nur über die Freigabe. */
 import { useEffect, useState } from "react";
 
@@ -90,8 +91,8 @@ export function BackupsPanel({ hostId, project, onDone }: { hostId: string; proj
     if (idle.length > 0 && services.length === 0) question += ` ${named(idle, "ist gestoppt und bleibt", "sind gestoppt und bleiben")} es.`;
     else if (idle.length > 0) {
       question += idle.length === 1
-        ? ` ${idle[0]} ist gestoppt. Deck startet ihn nicht; Compose kann ihn aber mitstarten, wenn ein laufender Dienst ihn braucht, etwa als Einmal-Dienst für Migrationen.`
-        : ` ${idle.join(", ")} sind gestoppt. Deck startet sie nicht; Compose kann sie aber mitstarten, wenn ein laufender Dienst sie braucht, etwa als Einmal-Dienst für Migrationen.`;
+        ? ` ${idle[0]} ist gestoppt. ${productText("Deck")} startet ihn nicht; Compose kann ihn aber mitstarten, wenn ein laufender Dienst ihn braucht, etwa als Einmal-Dienst für Migrationen.`
+        : ` ${idle.join(", ")} sind gestoppt. ${productText("Deck")} startet sie nicht; Compose kann sie aber mitstarten, wenn ein laufender Dienst sie braucht, etwa als Einmal-Dienst für Migrationen.`;
     }
     const gaps = notContained(backup);
     if (gaps.length > 0) {
@@ -114,7 +115,7 @@ export function BackupsPanel({ hostId, project, onDone }: { hostId: string; proj
     <div className="flex flex-col gap-2 text-xs" data-testid={`backups-${project}`}>
       <p className="opacity-70">
         Sicherungen entstehen beim Update mit dem Haken „Volumes vorher sichern“ und liegen in <span className="break-all font-mono">{list.folder ?? "…"}</span>.
-        Zurückspielen ersetzt die Daten im Volume durch den Stand der Sicherung. Deck prüft vorher das Archiv und den freien Platz; ist etwas
+        Zurückspielen ersetzt die Daten im Volume durch den Stand der Sicherung. {productText("Deck")} prüft vorher das Archiv und den freien Platz; ist etwas
         nicht in Ordnung, bleiben die Daten, wie sie sind.
       </p>
       {list.note && <p className="text-amber-300" role="status">{list.note}</p>}
@@ -154,7 +155,7 @@ export function BackupsPanel({ hostId, project, onDone }: { hostId: string; proj
               </ul>
               {backup.volumes.length === 0 && <p className="opacity-70">Diese Sicherung enthält keine Archive.</p>}
               {gaps.length > 0 && (list.busy ? (
-                <p className="opacity-70">Noch nicht fertig: {gaps.join(", ")}. Vielleicht packt Deck gerade daran.</p>
+                <p className="opacity-70">Noch nicht fertig: {gaps.join(", ")}. Vielleicht packt {productText("Deck")} gerade daran.</p>
               ) : (
                 <p className="text-amber-300">
                   Nicht enthalten: {gaps.join(", ")}. Die Sicherung ist unvollständig, etwa weil das Packen abbrach; spielst du nur einen Teil

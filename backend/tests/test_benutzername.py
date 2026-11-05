@@ -38,7 +38,7 @@ async def test_einrichtung_lehnt_unzulaessige_benutzernamen_ab(client, name):
     assert item["msg"].startswith("Benutzername: Nur Kleinbuchstaben, Ziffern sowie . - und _ erlaubt")
     assert "Leerzeichen" in item["msg"]
     # Es wurde kein Konto angelegt, der Assistent kann es noch einmal versuchen.
-    assert (await client.get("/api/v1/auth/bootstrap")).json() == {"needed": True}
+    assert (await client.get("/api/v1/auth/bootstrap")).json() == {"needed": True, "insecure_connection": True}
 
 
 @pytest.mark.asyncio

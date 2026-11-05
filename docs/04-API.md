@@ -68,6 +68,8 @@ Deck anpingen kann.
 GET  /api/v1/health              → {status, version, uptime_s}
                                    (Notseite statt Anwendung: 503 {"status":"rescue"} – nie "ok", siehe „Kopie vor jeder Migration“)
 GET  /api/v1/branding            → Name, Logo, Farben (Login-Seite braucht es)
+GET  /api/v1/edition             → welche Ausgabe läuft: {id (`deck` oder `dock`), product_name, service, image,
+                                   choose_modules, repo_tools}; festgelegt beim Bauen (`EDITION`, `nodvard_deck/edition.py`)
 GET  /api/v1/branding/logo       → das hochgeladene Logo (404, wenn keins da ist). Antwortet mit
                                    `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`
                                    und `X-Content-Type-Options: nosniff`: Wer die Adresse direkt öffnet, bekommt kein
@@ -157,7 +159,7 @@ PUT/POST/DELETE /api/v1/auth/bootstrap/restore/…, POST /api/v1/auth/bootstrap/
 POST /api/v1/auth/refresh        → neuer Access-Token (+ rotierter Refresh-Token; in den 30 s nach
                                    einer Rotation liefert derselbe alte Token nur einen Access-Token,
                                    ohne Cookie und ohne `refresh_token` im Body)
-POST /api/v1/auth/logout         → Refresh-Token widerrufen (bei Web: die Tokens beider Cookies) und beide Cookies löschen
+POST /api/v1/auth/logout         → Refresh-Token widerrufen (bei Web: den des Cookies) und das Cookie löschen
 GET  /api/v1/capabilities        → was dieser Server kann
 ```
 
@@ -181,28 +183,12 @@ Access-Tokens folgt höchstens 50 Erneuerungen (dahinter 401), Abmelden und das 
 (Passwortwechsel, 2FA abschalten) höchstens 10 000; ist die Kette noch länger, enden zur Sicherheit alle Anmeldungen
 des Kontos, auch die eigene. Die Kette wird jeweils in einer einzigen Datenbankabfrage gelesen.
 
-**Name des Refresh-Cookies (Übergangszeit der Umbenennung).** Das Cookie heißt `nodvard_deck_refresh`
-(früher `lattice_refresh`), Pfad `/api/v1/auth`. Solange ein Rollback auf das alte Image möglich sein
-soll, gilt für Web-Clients (der Browser muss dafür nichts tun, das Cookie ist `HttpOnly` und wird nur
-vom Server gelesen):
-
-- **Setzen** (Login, 2FA-Abschluss, Refresh mit neuem Token): beide Cookies, mit gleichem Wert und
-  gleichen Attributen (`HttpOnly`, `SameSite=Strict`, `Path`, `Max-Age`, `Secure` wie bisher). In der
-  Gnadenfrist (siehe oben) gibt es keinen neuen Token: dann kommt **kein** `Set-Cookie`, und es wird
-  auch nichts gelöscht.
-- **Lesen** (`POST /auth/refresh`): erst `nodvard_deck_refresh`, dann `lattice_refresh`; leere und
-  doppelte Werte entfallen, der erste Wert, der gilt, gewinnt. Ein Fehlversuch ändert nichts in der
-  Datenbank und widerruft keine Sitzungskette (eine Erkennung von Wiederverwendung mit Widerruf der
-  Kette gibt es nicht): ein veralteter Wert in einem der beiden Cookies, etwa nach einem Rollback,
-  meldet also niemanden ab. Ein `refresh_token` im Body (Android/CLI) gilt weiter allein; die Cookies
-  werden dann nicht gelesen.
-- **Abmelden** (`POST /auth/logout`): die Tokens aller Cookies werden widerrufen (gleiche Werte nur
-  einmal), beide Cookies gelöscht, mit denselben Attributen wie beim Setzen. Ein `refresh_token` im
-  Body gilt auch hier allein.
-
-`lattice_refresh` fällt in einem späteren Aufräum-Schritt weg, frühestens 30 Tage (Laufzeit des
-Refresh-Tokens) nach dem Deploy mit beiden Cookies und wenn kein Rollback auf ein älteres Image mehr
-nötig ist. Für Android/CLI (Token im Body) ändert sich nichts.
+**Refresh-Cookie.** Das Cookie heißt `nodvard_deck_refresh`, Pfad `/api/v1/auth`, `HttpOnly`, `SameSite=Strict`,
+`Secure` über HTTPS. Gesetzt wird es beim Login, beim Abschluss der Zwei-Faktor-Anmeldung und bei jedem Refresh mit neuem
+Token; in der Gnadenfrist (siehe oben) gibt es keinen neuen Token, dann kommt **kein** `Set-Cookie`, und es wird auch
+nichts gelöscht. Abmelden widerruft den Token des Cookies und löscht es mit denselben Attributen. Ein `refresh_token` im
+Body (Android/CLI) gilt allein, das Cookie wird dann nicht gelesen. Das alte Cookie `lattice_refresh` liest und schreibt
+Nodvard Deck seit 0.12 nicht mehr; wer bis dahin nur dieses hatte, meldet sich einmal neu an.
 
 `capabilities` listet aktivierte Extensions, verfügbare View-Typen, API-Version und
 Feature-Flags. Die Android-App fragt das beim Verbinden ab und blendet aus, was der
@@ -298,6 +284,10 @@ POST   /me/devices                  → Push-Registrierung der App
 
 GET    /app/changelog               → {current, build, unreleased[], versions[]}: Änderungsprotokoll
                                        (jeder angemeldete Nutzer; Dateien unter backend/src/nodvard_deck/changelog/)
+                                     → Einträge enthalten kind, text und prs. Ohne weitere Angaben ist kind weiterhin
+                                       neu, verbessert, behoben oder sicherheit; Dokumentation erscheint als verbessert.
+                                     → Mit include_documentation=true wird zusätzlich kind=dokumentation geliefert.
+                                       Neue Leser fordern diese eigene Gruppe ausdrücklich an; ältere Aufrufe bleiben lesbar.
 
 GET    /users        POST /users     GET/PATCH/DELETE /users/{id}
                                      → Verwaltungsrollen (`manages_users` in GET /roles: die Rolle hat `users.write` oder
@@ -624,7 +614,9 @@ Protokoll):
   `staff`, `lxd`, `libvirt`, `kvm` – ignoriert der Kern und protokolliert das im Log; `docker` ist bewusst erlaubt und
   bedeutet praktisch root); für `root` gibt es weder Gruppen noch `sudo`. Mit `sudo=true` bringt der Befehl die
   Hilfsskripte der eingeschalteten Module mit, die für diesen Server root brauchen (`helpers`: `[{ext_id, module, path,
-  version, sha256, text}]`), jedes mit eigener Regel `/etc/sudoers.d/nodvard_<ext_id>_<benutzer>` nur für sein Skript.
+  version, sha256, text}]`), jedes mit eigener Regel `/etc/sudoers.d/nodvard_<ext_id>_<benutzer>` nur für sein Skript, mit dessen Prüfsumme
+  (`NOPASSWD: sha256:<sha256> <pfad>`; kennt `visudo` die Form nicht oder zeigt `sudo -l` die Regel danach nicht mit
+  ihr, ohne sie und mit einem Hinweis).
   Nur diese Regeln gibt es, wenn mindestens ein eingeschaltetes Modul auf diesem Server root braucht und jedes davon ein
   Hilfsskript hat. Braucht ein Modul root ohne Hilfsskript, oder mit `full_sudo=true`, kommt die volle Regel
   (`/etc/sudoers.d/nodvard-<benutzer>`, `NOPASSWD: ALL`) dazu; `full_sudo` in der Antwort sagt, ob sie dabei ist. Braucht
@@ -794,10 +786,12 @@ Schlüssel, Wert ungültig → `422`:
 | `audit.retention_days` | ganze Zahl 7 bis 3650 | `NODVARD_DECK_AUDIT_RETENTION_DAYS` (90) |
 | `jobs.run_retention_days` | ganze Zahl 1 bis 3650 | `30` |
 | `notifications.retention_days` | ganze Zahl 1 bis 3650 | `90` |
+| `notifications.push_types` | Objekt mit Push-Regeln je Meldungsart, siehe unten | alle eingeschaltet, bisherige Prioritäten |
 | `hosts.reachability.enabled` | `true` oder `false` (nur echte Wahrheitswerte) | `true` |
 | `hosts.reachability.interval_minutes` | ganze Zahl 1 bis 60 | `2` |
 | `system.update_check.enabled` | `true` oder `false` | `true` |
 | `system.update_check.channel` | `stable` (nur fertige Versionen) oder `beta` (auch Vorabversionen) | `stable` |
+| `system.update_check.auto_security` | `true` oder `false` | `false` |
 | `ssh.confirm_new_host_keys` | `true` oder `false` | `true` (ohne gespeicherten Wert, auch bei bestehenden Installationen) |
 | `system.trusted_proxies` | Liste von IP-Adressen/Netzen (CIDR, IPv4/IPv6), höchstens 20, öffentliche IPv4-Netze ab `/24` (private Bereiche bis zur Größe des Bereichs, höchstens `/8`), IPv6 ab `/48` | `[]` (niemandem vertrauen); `NODVARD_DECK_TRUSTED_PROXIES` gewinnt |
 
@@ -819,6 +813,26 @@ Schlüssel, Wert ungültig → `422`:
   docs/03-DATA-MODEL.md §7). Das eigene, schärfere Aufräumen von `host-reachability` (24 Stunden) bleibt bestehen.
   Der Lauf meldet `{retention_days, runs_deleted, files_deleted, orphans_deleted, chunks}`. Ein gespeicherter Wert
   außerhalb von 1 bis 3650 zählt als nicht gesetzt (Vorgabe 30).
+- `notifications.push_types`: Zuordnung von Meldungsart zu `{"enabled": true, "priority": null}`.
+  `GET /settings/notification-types` liefert die vollständige Liste aus dem Code als `[{"id": "host.down",
+  "label": "Server nicht erreichbar"}, ...]`, ebenfalls mit `settings.write`. Die Tabelle unter
+  Einstellungen → Benachrichtigungen verwendet diese Liste. `enabled` ist ein echter Wahrheitswert;
+  `priority` ist `min`, `low`, `default`, `high`, `urgent` oder `null`. Fehlende Arten und Felder erhalten
+  `enabled: true` und `priority: null`; `GET /settings` und die PUT-Antwort liefern den vollständigen Stand.
+  PUT ersetzt die Zuordnung. Unbekannte Arten, zusätzliche Felder und ungültige Werte ergeben `422`, ohne
+  den gespeicherten Stand zu ändern. Beispiel:
+  `PUT /settings/notifications.push_types` mit `{"value": {"host.down": {"enabled": false, "priority": "urgent"}}}`.
+  Die Absender kennzeichnen ihre Art mit `payload.notification_type`. Eine ausgeschaltete Art wird am Kanal
+  für Push-Nachrichten einschließlich seiner weiteren Push-Kanäle übersprungen (`skipped`), bleibt aber im Meldungsverlauf.
+  Der Katalog enthält die Meldungsarten des Kerns und die Einträge der installierten Erweiterungen aus deren
+  `notification-types.json` (`{"kennung": "Bezeichnung"}`). Ein Kanal berücksichtigt die Push-Regeln mit
+  `uses_push_preferences = true`; die Priorität erhält er dann über `payload._push_priority`.
+  Eine explizite Priorität übersteuert für ntfy die Zuordnung nach Schweregrad; sie steht als Zahl 1 bis 5
+  im Header `Priority` und im JSON-Feld `priority`. `null` erhält die bisherigen Einstellungen der Erweiterung
+  (`priority_info`, `priority_warning`, `priority_critical`, ohne Anpassung 3/4/5).
+  Mindest-Stufen und Wartungsfenster gelten weiter. Testnachrichten umgehen die Regeln je Art.
+  Meldungen ohne bekannte Art werden wie bisher versandt. Die Speicherung nutzt das vorhandene JSON-Feld
+  des Settings-Modells, ohne Datenbankmigration. Änderungen stehen unter `system.settings.changed` im Protokoll.
 - `notifications.retention_days`: Der nächtliche Kern-Job `notifications-retention` (03:30 Uhr in der eingestellten
   Zone, eigene Minute neben den anderen Aufräum-Jobs) löscht Meldungen, die vor mehr als so vielen Tagen entstanden
   (`notifications.ts`), gelesen oder ungelesen, samt ihren Zustellprotokollen (`notification_deliveries`). **Eine
@@ -828,7 +842,7 @@ Schlüssel, Wert ungültig → `422`:
   gespeicherter Wert außerhalb von 1 bis 3650 zählt als nicht gesetzt (Vorgabe 90). Wer Meldungen länger behalten
   will, stellt die Zahl hoch; ein einmal gelöschtes lässt sich nicht zurückholen.
 - `hosts.reachability.*`: Schalter und Abstand des Kern-Jobs `host-reachability` (Erreichbarkeitsprüfung, siehe
-  docs/11-ERST-EINRICHTUNG.md §4.1). Jede Änderung plant den Job sofort neu (`Job.schedule` = `*/N * * * *` ab
+  docs/11-ERST-EINRICHTUNG.md, Anhang G.1). Jede Änderung plant den Job sofort neu (`Job.schedule` = `*/N * * * *` ab
   voller Stunde, 60 = stündlich; aus = der Job ist abgemeldet, die Zustände der Server bleiben stehen). Der Job gehört
   der Einstellung: `PATCH`/`DELETE /jobs/{id}` auf ihn antworten mit `409`. Geprüft werden nur Server, deren Zustand
   kein Modul pflegt (`provider_ext_id` leer), nie Beispiel-Server. Ein Wechsel erzeugt das Ereignis
@@ -841,6 +855,11 @@ Schlüssel, Wert ungültig → `422`:
   über die Jobs würde sie umgehen). Datenschutz: ghcr.io und github.com (Freigabe am Release, Downloads über
   `*.githubusercontent.com`) gehören zu GitHub, das bei jeder Prüfung die IP-Adresse und den Zeitpunkt sieht, sonst nichts (der User-Agent `nodvard-deck` nennt keine Version); die tägliche Prüfung lässt sich abschalten. Siehe
   „System und Sicherungen“.
+- `system.update_check.auto_security`: Zustimmung des Inhabers, dass Deck Sicherheitsupdates derselben Reihe selbst
+  einspielt. In dieser Version spielt Deck noch nichts selbst ein; das kommt erst mit signierten Anforderungen an den
+  Update-Helfer. Ändern darf nur der Inhaber, mit `current_password` und, wenn Zwei-Faktor an ist, `totp_code` (wie bei
+  `ssh.confirm_new_host_keys`); andere bekommen `403`, der Versuch steht als `denied` im Protokoll. Gezeigt in
+  `GET /system/updates` (`auto_security`).
 - `ssh.confirm_new_host_keys`: `true` = Terminal, Jobs und Status merken den Schlüssel eines Servers, für den noch
   keiner gemerkt ist, nicht still; die Verbindung scheitert, bevor Anmeldedaten gesendet werden, bis der Fingerabdruck
   über `POST /hosts/{id}/check` und `POST /hosts/{id}/known-hosts` bestätigt ist. `false` = der Schlüssel wird beim
@@ -873,7 +892,7 @@ zusätzlich `totp_code`, den aktuellen sechsstelligen Code aus der App (Wiederhe
 | Methode, Pfad | Recht | Zweck |
 |---|---|---|
 | `GET /system/info` | `system.read` | `version`, `build` (genaue Version des Release-Images bzw. `NODVARD_DECK_BUILD`, sonst `null`), `image` (Herkunft ohne Tag, aus der Datei `/app/image-info.json` im Image bzw. `NODVARD_DECK_IMAGE`; `null` bei einem selbst gebauten Image), `timezone`, `data_dir`, `data_free_bytes`, `database` (`sqlite`/`postgresql`), `updater_available` (ein Update-Helfer ist eingerichtet und antwortet; dieselbe Quelle wie `present` in `GET /system/updates/helper`), `pre_update_copies[]` (die neuesten, höchstens drei **Kopien der Datenbank von vor einer Migration**, neueste zuerst: `name`, `created_at`, `from_version`, `to_version`, `size`; ohne Pfade; leer, solange es noch keine gibt) |
-| `GET /system/updates` | `system.read` | Stand von „Nach Updates suchen“, **ohne** Anfrage ins Netz (aus `<Datenordner>/update_check.json`): `current` (laufende Version: beim offiziellen Image dessen genaue Version aus `/app/image-info.json`, auch eine Vorabversion wie `0.6.0-rc1`; sonst `version`), `latest` (neueste Version im Kanal laut letzter gelungener Prüfung; `null`, wenn noch nie geprüft oder geprüft, aber keine passende Version gefunden – dann ist `checked_at` gesetzt), `latest_digest` (sha256 des Manifests, wenn bekannt), `available` (`latest` neuer als `current`, Semver), `channel` (`stable`/`beta`), `enabled` (tägliche Prüfung an), `checked_at` (letzte gelungene Prüfung), `attempted_at` (letzter Versuch), `source` (`cache`; `offline`, wenn der letzte Versuch scheiterte), `error` (dann „Konnte nicht prüfen (offline?).“; `latest`, `checked_at`, `attempted_at` und `error` gelten nur für den eingestellten Kanal), `official_image` (das Image stammt laut `image` genau aus `ghcr.io/nodvard/deck`), `image`, `official_image_name`, `helper` (wie `updater_available` in `GET /system/info`), `release_notes_url` (`https://github.com/nodvard/deck/blob/v<latest>/CHANGELOG.md`), `approved` (zu `latest` und `latest_digest` liegt eine Freigabe in gültiger Form am Release, nur dann gibt es das Update per Knopf; die Signatur prüft der Update-Helfer), `approved_key` (Kennung des Schlüssels, den sie nennt) |
+| `GET /system/updates` | `system.read` | Stand von „Nach Updates suchen“, **ohne** Anfrage ins Netz (aus `<Datenordner>/update_check.json`): `current` (laufende Version: beim offiziellen Image dessen genaue Version aus `/app/image-info.json`, auch eine Vorabversion wie `0.6.0-rc1`; sonst `version`), `latest` (neueste Version im Kanal laut letzter gelungener Prüfung; `null`, wenn noch nie geprüft oder geprüft, aber keine passende Version gefunden; dann ist `checked_at` gesetzt), `latest_digest` (sha256 des Manifests, wenn bekannt), `available` (`latest` neuer als `current`, Semver), `auto_security` (Einstellung `system.update_check.auto_security`), `kinds` (Arten der Änderungen aller Versionen nach `current` bis `latest`, Teilmenge von `sicherheit`, `behoben`, `verbessert`, `neu`, `dokumentation` in dieser Reihenfolge; für ältere Deck-Versionen wird `dokumentation` bei der Veröffentlichung als `verbessert` in die Image-Annotation geschrieben; leer ohne Update), `kinds_complete` (`false`, wenn für mindestens eine dieser Versionen die Arten unbekannt sind: ältere Images ohne Annotation, Abruf gescheitert, mehr als 10 Versionen, oder seit der Suche läuft eine andere Version; `kinds` sagt dann nicht, dass nichts Wichtiges dabei ist), `channel` (`stable`/`beta`), `enabled` (tägliche Prüfung an), `checked_at` (letzte gelungene Prüfung), `attempted_at` (letzter Versuch), `source` (`cache`; `offline`, wenn der letzte Versuch scheiterte), `error` (dann „Konnte nicht prüfen (offline?).“; `latest`, `checked_at`, `attempted_at` und `error` gelten nur für den eingestellten Kanal), `official_image` (das Image stammt laut `image` genau aus `ghcr.io/nodvard/deck`), `image`, `official_image_name`, `helper` (wie `updater_available` in `GET /system/info`), `release_notes_url` (`https://github.com/nodvard/deck/blob/v<latest>/CHANGELOG.md`), `approved` (zu `latest` und `latest_digest` liegt eine Freigabe in gültiger Form am Release, nur dann gibt es das Update per Knopf; die Signatur prüft der Update-Helfer), `approved_key` (Kennung des Schlüssels, den sie nennt) |
 | `POST /system/updates/check` | `system.read` | Jetzt nachsehen; Antwort wie `GET`, mit `source: live`. Scheitert die Abfrage (offline, `401`/`429`/`5xx` der Registry, kaputtes JSON, Zeitlimit), kommt **kein** Fehlercode, sondern der letzte Stand mit `source: offline` und `error`. Höchstens **einmal pro Minute** für alle zusammen, sonst `429` „Gerade erst nachgesehen …“ mit `Retry-After` |
 | `GET /system/updates/helper` | `system.read` | Zustand des Update-Helfers, ohne Anfrage ins Netz (siehe „Update-Helfer“ unten): `present` (eingerichtet und antwortet, Herzschlag höchstens 90 s alt), `reason` (warum nicht: `missing` nicht eingerichtet, `stale` antwortet nicht, `unsafe` Kanal nicht sicher, `proto` andere Protokollversion, `invalid` unlesbarer Status; sonst `null`), `ready` (könnte jetzt ein Update einspielen), `ready_reason` (fester Bezeichner des Helfers: warum er nicht bereit ist, oder ein Hinweis wie `channel_cluttered`; `finishing`: der letzte Vorgang ist entschieden, der Helfer räumt nur noch auf, `ready` ist dann `false` und `busy` `null`), `state` (`idle`/`busy`/`unsafe`/`error`), `helper_version`, `heartbeat_at`, `target` (`current_version`, `floating_tag` = `latest` oder `X.Y`, `null` bei fester Version; `pinned`: die Version steht fest in der Compose-Datei, `X.Y.Z` oder Digest), `busy` (`id`, `action` `update`/`rollback`, `step`, `since`), `previous` (Rückweg: `version`, `until`; nur solange er gilt; dazu `data_revert`: `true` = die laufende Version hat beim Start die Datenbank umgebaut, beim Rückweg geht alles seit `data_since` verloren und `accept_data_loss` ist Pflicht, `false` = die Daten bleiben, `null` = unklar, der Rückweg wird dann mit `data_unclear` abgelehnt – dieselbe Entscheidung wie bei `POST /system/updates/rollback`; `data_since`: Unix-Zeit des Umbaus, nur bei `data_revert: true`), `last_result` (`id`, `action`, `from`, `to`, `outcome`, `code`, `finished_at`), `pending` (eigene Anforderung ohne Ergebnis, höchstens 30 Minuten alt: `id`, `action`, `to`, `at`), `request_options` (was der Helfer in einer Anforderung zusätzlich annimmt; `["digest"]`: ein Update geht nur mit `latest_digest` aus `GET /system/updates`, ohne ihn zeigt die Oberfläche keinen Knopf, sondern bittet, erneut nach Updates zu suchen), `request_versions` (Versionen der Anforderung, die der Helfer versteht; mit `2` prüft er die Freigabe samt Signatur, sonst zeigt die Oberfläche den Hinweis, den Helfer zu erneuern). Zeiten als Unix-Zeit in Sekunden, Gründe und Codes nur feste Bezeichner, nie Freitext. Ist `present` `false`, ist `ready` `false`, `request_options` und `request_versions` leer und alle übrigen Felder außer `reason` sind `null`; nur `last_result` (bei `stale`) und `pending` können trotzdem gesetzt sein. Hält nebenbei neue Ergebnisse des Helfers im Protokoll fest |
 | `POST /system/updates/apply` | Owner [PW] [2FA] | `{version, current_password, totp_code?}`: Update auf `version` beim Update-Helfer anfordern → `202` `{request_id, action: "update", from, to, data_revert: false, digest, signed}` (`Cache-Control: no-store`); das Ergebnis steht danach in `GET /system/updates/helper`. `version` muss die neueste gefundene sein (`latest` aus `GET /system/updates`) und neuer als die laufende. Kann der Helfer einen Digest prüfen (sein Status nennt `request_options: ["digest"]`), schickt Deck den Digest aus der letzten Update-Suche mit. Der Helfer löst das bewegliche Tag trotzdem selbst auf und zieht nur, wenn es noch genau auf diesen Digest zeigt, sonst lehnt er mit `digest_changed` ab (erneut nach Updates suchen); so wird nie still etwas anderes eingespielt als das, was die Suche gezeigt hat. `digest` in der Antwort und im Protokoll (`system.update.requested`) nennt ihn, bei einem älteren Helfer ist er `null`. Die Freigabe aus der Update-Suche geht als Anforderung `v: 2` mit, wenn der Helfer sie kennt (`request_versions` enthält `2`); dann ist `signed` `true`. `409`: Helfer fehlt oder antwortet nicht (`helper_missing`), räumt noch auf (`helper_finishing`), ist beschäftigt (`helper_busy`) oder nicht bereit (`helper_not_ready`), Kanal nicht sicher (`channel_unsafe`), schon eine Anforderung offen (`request_pending`), nicht das offizielle Image (`not_official_image`), Version in der Compose-Datei fest eingetragen (`pinned`), kein Digest aus der Update-Suche, obwohl der Helfer einen ziehen könnte (`no_digest`, erneut nach Updates suchen), keine gültige Freigabe für diese Version am Release (`not_released`, von Hand geht das Update trotzdem); `422`: keine gültige Version (`bad_version`), Vorabversion (`prerelease`), nicht die neueste gefundene (`not_latest`), nicht neuer als die laufende (`not_newer`), passt nicht zum Tag der Compose-Datei (`tag_mismatch`); `429` (`rate_limited`) mit `Retry-After` |
@@ -925,7 +944,15 @@ zusätzlich `totp_code`, den aktuellen sechsstelligen Code aus der App (Wiederhe
   verglichen wird nach Semver mit der laufenden Version (`current`); abweichend davon werden Teile einer Vorabversion mit Zahl am Ende
   natürlich sortiert (`rc1 < rc2 < rc9 < rc10`). Danach optional das Manifest der neuesten Version (OCI-Index),
   dessen sha256 `latest_digest` ist. Je Anfrage höchstens 5 s; Token und Tags zusammen höchstens 15 s, das Manifest bekommt nur die
-  restliche Zeit (reicht sie nicht, bleibt `latest_digest` `null`, die Prüfung gilt trotzdem). Mit Digest holt die Prüfung
+  restliche Zeit (reicht sie nicht, bleibt `latest_digest` `null`, die Prüfung gilt trotzdem). In derselben Zeit holt sie
+  die Manifeste der übrigen neuesten Versionen im Kanal, die neueste zuerst, höchstens 10 insgesamt, und liest daraus die
+  Annotation `io.nodvard.deck.release.kinds` (`kinds`, `kinds_complete`; geschrieben von `release.yml`). Gefragt werden
+  immer dieselben Versionen, egal welche läuft: Sonst verriete die älteste Anfrage ghcr.io die laufende Version. In
+  `kinds` zählen nur die Versionen nach `current`; eine leere Annotation oder eine unbekannte Art macht `kinds_complete`
+  `false`. Ist darunter `sicherheit`, kommt nach der Suche einmal je Version die Meldung „Sicherheitsupdate verfügbar“
+  (`severity` `critical`, `payload.path` `/settings/system`) über alle eingerichteten Meldungskanäle (etwa Push); welche Version
+  schon gemeldet ist, merkt sich `system.update_check.security_notified` (nicht in `GET /settings`).
+  Mit Digest holt die Prüfung
   in der Zeit, die dann noch bleibt, die Freigabe `freigabe.json` und ihre Signatur `freigabe.json.sig` am Release
   `v<latest>` (`https://github.com/nodvard/deck/releases/download/…`, je höchstens 4 KiB, ohne Token; Weiterleitungen nur
   per https zu `github.com`, `objects.githubusercontent.com` und `release-assets.githubusercontent.com`, höchstens 3).
@@ -937,10 +964,13 @@ zusätzlich `totp_code`, den aktuellen sechsstelligen Code aus der App (Wiederhe
   (`Accept-Encoding: identity`, eine gepackte gilt als Fehler) und höchstens 1 MiB gelesen (eine größere `Content-Length` bricht vor dem
   Lesen ab). User-Agent `nodvard-deck`, ohne Version. Ein Proxy aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) gilt hier, anders als bei Erweiterungen (`ctx.http`). Es läuft immer nur eine Prüfung zur Zeit. Eine Antwort ohne Tag-Liste gilt als
   Fehler (der letzte Stand bleibt); eine vollständige Antwort ohne passende Version ist ein Ergebnis (`latest: null`). Täglich als
-  Kern-Job `system-update-check` (Schalter `system.update_check.enabled`), dazu der Knopf „Jetzt suchen“. Das Repository steht als eine Konstante im Kern
-  (`core.updates.REPOSITORY`). Das Release-Image trägt Herkunft und Version als Datei `/app/image-info.json` (Build-Argumente
-  `IMAGE` und `VERSION` in `release.yml`/`deploy/Dockerfile`, `nodvard_deck.image_info`; keine Umgebungsvariable, die beim Neuanlegen
-  eines Containers mitwandern könnte). Daran erkennt die Oberfläche ein selbst gebautes Image. Vorrang für `image` und `build`
+  Kern-Job `system-update-check` (Schalter `system.update_check.enabled`), dazu der Knopf „Jetzt suchen“. Gefragt wird das Repository der laufenden Ausgabe
+  (`nodvard_deck/edition.py`: Nodvard Deck `nodvard/deck`, gleich `core.updates.REPOSITORY`; Nodvard Dock `nodvard/dock`), Token,
+  Tag-Liste, Folgeseiten und Manifest immer für dasselbe. Eine Freigabe holt nur die Suche für `nodvard/deck`; bei Nodvard Dock
+  fragt sie nur ghcr.io, `approved` bleibt dort `false`, und ein Ergebnis im Cache gilt nur für die Ausgabe, die gesucht hat. Das Release-Image trägt Herkunft, Version und Ausgabe als Datei
+  `/app/image-info.json` (Build-Argumente `IMAGE`, `VERSION` und `EDITION` in `release.yml`/`deploy/Dockerfile`,
+  `nodvard_deck.image_info`; keine Umgebungsvariable, die beim Neuanlegen eines Containers mitwandern könnte; `NODVARD_DECK_EDITION`
+  geht der Datei vor, ohne Angabe gilt Nodvard Deck). Daran erkennt die Oberfläche ein selbst gebautes Image. Vorrang für `image` und `build`
   in `GET /system/info`: nicht leere Variable `NODVARD_DECK_IMAGE`/`NODVARD_DECK_BUILD` (alt `LATTICE_*`), dann die Datei, sonst `null`.
   `current` der Update-Suche (und `from_version`/`to_version` der Kopien vor Updates) nimmt beim offiziellen Image dagegen zuerst die
   Version aus der Datei, dann `build` (jeweils nur, wenn es eine Version ist), sonst `version`: eine veraltete Variable verfälscht den

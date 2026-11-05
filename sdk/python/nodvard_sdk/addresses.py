@@ -11,13 +11,9 @@ from urllib.parse import urlsplit
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
-# Die Oberfläche rechnet dieselbe Form (`frontend/src/lib/targetAddress.ts`); beide Seiten prüfen dieselben Beispiele
-# (`sdk/python/tests/vectors/same_target.json`).
-# Gleich bleiben: Groß-/Kleinschreibung von Schema und Rechnername, der Standardport (`:80` bei http, `:443` bei
-# https), Schrägstriche am Ende des Pfads, ein Fragment (`#...`) und ein fehlendes Schema (`pi.hole` gilt wie
-# `http://pi.hole`). NICHT gleich: ein anderer Pfad, eine andere Abfrage (`?...`) oder andere Anmeldedaten in der
-# Adresse. Was sich nicht als Adresse lesen lässt, bleibt (nur ohne Leerraum an den Rändern) und gilt im Zweifel als
-# verschieden.
+# Gegenstück zu `frontend/src/lib/targetAddress.ts`; beide prüfen `sdk/python/tests/vectors/same_target.json`.
+# Gleich bleiben Groß-/Kleinschreibung von Schema und Rechner, Standardport, Schrägstrich am Pfadende, Fragment und
+# fehlendes Schema; Pfad, Abfrage und Anmeldedaten unterscheiden. Unlesbares gilt im Zweifel als verschieden.
 def target_form(value: Any) -> Any:
     """Vergleichsform einer Zieladresse; gleiche Form heißt: dasselbe Ziel.
 

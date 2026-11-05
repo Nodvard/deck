@@ -143,16 +143,52 @@ def test_keys_are_made_once_encrypted_and_only_for_the_owner(tool, tmp_path):
         tool.make_keys(tmp_path / "neu", b"kurz")
 
 
-def test_upload_hangs_both_files_on_the_draft(tool, monkeypatch, tmp_path):
+def test_upload_hangs_both_files_on_the_draft(tool, monkeypatch, tmp_path, capsys):
     calls = []
 
     class Done:
         returncode = 0
+        stdout = "Freigabe hochgeladen\n"
 
-    monkeypatch.setattr(tool.subprocess, "run", lambda command, check: calls.append(command) or Done())
+    monkeypatch.setattr(tool.subprocess, "run", lambda command, **kwargs: calls.append(command) or Done())
     files = (tmp_path / tool.GRANT_NAME, tmp_path / tool.SIG_NAME)
     tool.upload("v0.12.0", files)
-    assert calls == [["gh", "release", "upload", "v0.12.0", str(files[0]), str(files[1]), "--clobber"]]
+    assert calls == [["gh", "release", "upload", "v0.12.0", str(files[0]), str(files[1]), "--clobber",
+                      "-R", "nodvard/deck"]]
+    assert capsys.readouterr().out == "Freigabe hochgeladen\n"
+
+
+def test_upload_failure_shows_the_command_and_gh_output(tool, monkeypatch, tmp_path, capsys):
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return tool.subprocess.CompletedProcess(command, 1, stdout="Upload wird versucht\nrelease not found\n")
+
+    monkeypatch.setattr(tool.subprocess, "run", run)
+    code, _, _, out = _sign_cli(tool, monkeypatch, tmp_path, "--expect-digest", INDEX_DIGEST, "--upload")
+    err = capsys.readouterr().err
+    assert code == 1
+    command, kwargs = calls[0]
+    assert tool.subprocess.list2cmdline(command) in err
+    assert "Upload wird versucht\nrelease not found" in err
+    assert "Hochladen gescheitert (gh 1)" in err and str(out) in err
+    assert kwargs["stdout"] == tool.subprocess.PIPE and kwargs["stderr"] == tool.subprocess.STDOUT
+
+
+def test_missing_gh_shows_the_command(tool, monkeypatch, tmp_path):
+    calls = []
+
+    def missing(command, **kwargs):
+        calls.append(command)
+        raise FileNotFoundError("gh")
+
+    monkeypatch.setattr(tool.subprocess, "run", missing)
+    files = (tmp_path / tool.GRANT_NAME, tmp_path / tool.SIG_NAME)
+    with pytest.raises(tool.GrantError) as caught:
+        tool.upload("v0.12.0", files)
+    assert "„gh“ fehlt" in str(caught.value)
+    assert tool.subprocess.list2cmdline(calls[0]) in str(caught.value)
 
 
 def test_trust_never_holds_a_private_key():

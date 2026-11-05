@@ -1,9 +1,9 @@
 /**
- * Die tatsaechliche UI zu state/dialogs.ts -- genau EINMAL in AppShell.tsx gemountet,
- * siehe dortigen Docstring fuer die Begruendung (Singleton statt Hook pro Aufrufer).
+ * Die tatsächliche UI zu state/dialogs.ts -- genau EINMAL in AppShell.tsx gemountet,
+ * siehe dortigen Docstring für die Begründung (Singleton statt Hook pro Aufrufer).
  *
  * Bewusst zwei getrennte `Dialog.Root`s (Confirm/Prompt) statt eines gemeinsamen --
- * beide koennen unabhaengig offen sein (in der Praxis nie gleichzeitig, aber nichts
+ * beide können unabhängig offen sein (in der Praxis nie gleichzeitig, aber nichts
  * erzwingt das), und die JSX bleibt so einfacher als mit einer Union aus zwei
  * Payload-Formen in einem Root.
  */
@@ -55,7 +55,7 @@ export function GlobalDialogs() {
       </Dialog.Root>
 
       <PromptDialogContent
-        // Wechselt der Schluessel (neue Anfrage), montiert React die Komponente
+        // Wechselt der Schlüssel (neue Anfrage), montiert React die Komponente
         // komplett neu -- ihr `useState(defaultValue)` startet dadurch automatisch
         // wieder frisch, ohne einen manuellen Abgleich in einem Effekt/Render-Zweig.
         key={promptPending ? `${promptPending.message}:${promptPending.defaultValue}` : "closed"}

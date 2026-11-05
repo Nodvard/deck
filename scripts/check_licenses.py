@@ -327,7 +327,7 @@ def check_packages(packages: list[tpl.Package], exceptions: dict[tuple[str, str]
 
 
 def embedded_packages(pins: list[tuple[str, str]]) -> list[tpl.Package]:
-    """Fest eingebaute Bibliotheken (`_PY_EMBEDDED`) als eigene Eintraege, damit auch ihre Lizenz geprüft wird.
+    """Fest eingebaute Bibliotheken (`_PY_EMBEDDED`) als eigene Einträge, damit auch ihre Lizenz geprüft wird.
 
     Gilt der Eintrag für eine andere Paketversion als die in `deploy/constraints.txt` (oder steht das Paket
     dort nicht mehr), wird das wie bei `scripts/third_party_licenses.py` als Problem der Umgebung gemeldet

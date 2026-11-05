@@ -112,16 +112,16 @@ API_MAX = (1, 54)
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 CALL_TIMEOUT_S = 60.0
 STOP_GRACE_S = 30
-"""Zusaetzlich zu `t`: so lange wartet der Helfer auf die Antwort von `stop`."""
+"""Zusätzlich zu `t`: so lange wartet der Helfer auf die Antwort von `stop`."""
 PULL_TIMEOUT_S = 30 * 60.0
 PULL_IDLE_S = 300.0
 """So lange darf der Pull-Strom schweigen (Entpacken auf dem Pi)."""
 PULL_STREAM_MAX_BYTES = 256 * 1024 * 1024
-"""Obergrenze fuer den ganzen Pull-Strom (Fortschrittsmeldungen); gespeichert wird davon nichts."""
+"""Obergrenze für den ganzen Pull-Strom (Fortschrittsmeldungen); gespeichert wird davon nichts."""
 STREAM_OBJECT_MAX_BYTES = 1024 * 1024
 MESSAGE_MAX_CHARS = 200
 PREVIOUS_REPOSITORY = "nodvard-deck-previous"
-"""Repository des Schutz-Tags fuer das alte Image."""
+"""Repository des Schutz-Tags für das alte Image."""
 MAX_STOP_T = 3600
 
 _CHUNK = 64 * 1024
@@ -148,12 +148,12 @@ ENDPOINTS: dict[str, tuple[str, str]] = {
     "remove_protect_tag": ("DELETE", "/images/{protect}:{version}"),
 }
 """Die Allowlist: Name -> (Methode, Pfadmuster). Nur diese Paare gehen an die Engine; jedes
-Pfadmuster steht genau hier (Code-Waechter: Engine-Pfade gibt es nur in dieser Tabelle)."""
+Pfadmuster steht genau hier (Code-Wächter: Engine-Pfade gibt es nur in dieser Tabelle)."""
 _ALLOWED = {value: name for name, value in ENDPOINTS.items()}
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
 BOUND_ENDPOINTS = frozenset(name for name, (method, _pattern) in ENDPOINTS.items() if method != "GET")
-"""Die aendernden Endpunkte: jeder ausser `GET` verlangt eine Bindung (`Binding`). Ein neuer Endpunkt, der etwas
-aendert, faellt so von selbst darunter -- und wird abgelehnt, bis `Engine._check_binding` eine Regel fuer ihn hat."""
+"""Die ändernden Endpunkte: jeder außer `GET` verlangt eine Bindung (`Binding`). Ein neuer Endpunkt, der etwas
+ändert, fällt so von selbst darunter -- und wird abgelehnt, bis `Engine._check_binding` eine Regel für ihn hat."""
 
 
 class NotAllowed(Exception):

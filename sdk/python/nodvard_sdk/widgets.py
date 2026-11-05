@@ -13,9 +13,8 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 # Template-Ausdrücke
 # ---------------------------------------------------------------------------
-# Absichtlich winzig und ohne Logik: "{{ feld.pfad | filter }}".
-# Keine Bedingungen, keine Schleifen, keine Ausdrücke — sonst bräuchte die Flutter-Seite
-# einen Interpreter, und man hätte sich eine zweite Programmiersprache eingehandelt.
+# Bewusst winzig, "{{ feld.pfad | filter }}" ohne Bedingungen, Schleifen und Ausdrücke: Sonst bräuchte die Flutter-Seite
+# einen Interpreter.
 
 Template = str
 
@@ -74,9 +73,8 @@ class WidgetAction(BaseModel):
     """Rechte, die der Knopf zusätzlich zu denen des Widgets braucht; fehlt eins, lässt der Kern ihn für diese Person
     weg."""
     show_if: Template | None = None
-    """Knopf nur zeigen, wenn das Template etwas "Wahres" ergibt (nicht leer, nicht
-    "false"/"0"/"none") -- z. B. `{{ can_start }}`, damit ein laufender Dienst keinen
-    "Starten"-Knopf anbietet. Fehlt das Feld, ist der Knopf immer da."""
+    """Knopf nur zeigen, wenn das Template etwas „Wahres“ ergibt (nicht leer, nicht "false"/"0"/"none"), z. B.
+    `{{ can_start }}`, damit ein laufender Dienst keinen „Starten“-Knopf anbietet. Fehlt das Feld, ist er immer da."""
 
 
 class Badge(BaseModel):
@@ -238,8 +236,8 @@ HostToolCategory = Literal["control", "monitoring", "services", "data", "setting
 # `permissions` (der Nutzer hat alle).
 class HostToolSpec(BaseModel):
     """Ein Werkzeug auf der Server-Seite eines Hosts; der Kern zeigt es als Kachel, wenn der Host passt.
-    `path` führt auf eine Seite DIESER Extension (wie `PageSpec.path`), `{host_id}` wird durch die Host-ID ersetzt.
-    Passt, wenn ALLE gesetzten Bedingungen zutreffen (`kinds`, `tags`, `own_hosts_only`, `permissions`)."""
+    `path` führt auf eine Seite dieser Extension (wie `PageSpec.path`), `{host_id}` wird durch die Host-ID ersetzt.
+    Passt, wenn alle gesetzten Bedingungen zutreffen (`kinds`, `tags`, `own_hosts_only`, `permissions`)."""
 
     id: str
     title: str
@@ -257,17 +255,15 @@ class HostToolSpec(BaseModel):
 
 
 class HostRequirementSpec(BaseModel):
-    """Was eine Extension auf einem Server braucht (Zugang, Rechte, Gruppen), damit der Kern es beim Einrichten des
-    SSH-Zugangs anbieten und bei "Verbindung prüfen" prüfen kann. Passt zu einem Host, wenn `tags` leer ist oder
-    mindestens einer zutrifft, keiner aus `skip_tags` zutrifft UND sein `os_family` in `os_families` steht (Standard:
-    nur Linux)."""
+    """Was eine Extension auf einem Server braucht (Zugang, Rechte, Gruppen); der Kern bietet es beim Einrichten des
+    SSH-Zugangs an und prüft es bei „Verbindung prüfen“. Gilt, wenn `tags` leer ist oder mindestens eines zutrifft,
+    `skip_tags` keines trifft und `os_family` in `os_families` steht (Standard: nur Linux)."""
 
     # `check_command`: nur lesend; Exit 0 = in Ordnung, 127 = nicht installiert.
     # `ok_text` / `fail_hint`: Texte für die Prüfung; `fail_hint` darf `{user}` enthalten.
     # `unix_group`: der Einrichtungsbefehl bietet an, den SSH-Benutzer dieser Gruppe hinzuzufügen (Name nach
     # `^[a-z_][a-z0-9_-]{0,31}$`, sonst ignoriert der Kern ihn).
-    # `needs_root` / `root_reason`: die Extension braucht root ohne Passwort (sudo); `root_reason` nennt in einem kurzen
-    # Satzteil, wofür.
+    # `needs_root` / `root_reason`: root ohne Passwort (sudo); `root_reason` nennt in einem Satzteil, wofür.
     # `skip_tags`: gilt nicht auf Servern mit einem dieser Tags (etwa „Nur bedienen“ auf einem vollen Docker-Server).
 
     id: str

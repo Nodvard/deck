@@ -12,6 +12,7 @@ import { api } from "../../../lib/api";
 import { useAuthStore } from "../../../state/auth";
 import { OWNER_ONLY_HINT, OwnerConfirm, type OwnerProof } from "../OwnerConfirm";
 import { Button, Card, NoticeLine, Toggle, type Notice } from "../ui";
+import { productText } from "../../../state/edition";
 
 export const KEY_CONFIRM_NEW_HOST_KEYS = "ssh.confirm_new_host_keys";
 
@@ -46,7 +47,7 @@ function HostKeysForm({ settings }: { settings: SettingRow[] }) {
   return (
     <Card
       title="Neue Server-Schlüssel"
-      description="Jeder Server zeigt beim ersten Kontakt einen Fingerabdruck. Hier legst du fest, ob Nodvard Deck ihn von selbst merken darf oder ob du ihn erst bestätigen musst."
+      description={productText("Jeder Server zeigt beim ersten Kontakt einen Fingerabdruck. Hier legst du fest, ob Nodvard Deck ihn von selbst merken darf oder ob du ihn erst bestätigen musst.")}
       footer={isOwner && !confirming ? (
         <Button variant="primary" disabled={confirm === saved} onClick={() => { setNotice(null); setConfirming(true); }}>Speichern</Button>
       ) : undefined}
@@ -60,9 +61,9 @@ function HostKeysForm({ settings }: { settings: SettingRow[] }) {
           <Toggle checked={confirm} onChange={setConfirm} label="Neue Server-Schlüssel erst nach meiner Bestätigung merken" disabled={!isOwner || confirming} />
         </div>
         <p className="text-xs text-white/40">
-          An: Bei einem neuen Server zeigt „Verbindung prüfen“ den Fingerabdruck. Erst wenn du ihn bestätigst, schickt Nodvard Deck
+          An: Bei einem neuen Server zeigt „Verbindung prüfen“ den Fingerabdruck. Erst wenn du ihn bestätigst, schickt {productText("Nodvard Deck")}{" "}
           Passwort oder Schlüssel an den Server. Das schützt davor, dass sich im Netzwerk jemand als dein Server ausgibt. Aus (nicht empfohlen):
-          Nodvard Deck merkt sich den Fingerabdruck beim ersten Verbinden von selbst. Bereits gemerkte Schlüssel bleiben, wie sie sind.
+          {" "}{productText("Nodvard Deck")} merkt sich den Fingerabdruck beim ersten Verbinden von selbst. Bereits gemerkte Schlüssel bleiben, wie sie sind.
           Nach „Schlüssel vergessen“ musst du den neuen Fingerabdruck immer bestätigen, egal wie das hier eingestellt ist.
         </p>
       </div>

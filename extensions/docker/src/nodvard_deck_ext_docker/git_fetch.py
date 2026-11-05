@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import functools
+import ipaddress
 import json
 import logging
 import os
@@ -13,13 +15,15 @@ import re
 import secrets
 import shutil
 import signal
+import socket
 import stat as statmod
 import sys
 import time
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from pathlib import Path
 from tempfile import SpooledTemporaryFile
 from typing import Any
@@ -34,7 +38,11 @@ from dulwich.client import (
 )
 from dulwich.errors import GitProtocolError, HangupException, NotGitRepository
 from dulwich.objects import Blob, Commit, Tag, Tree
-from dulwich.repo import Repo
+from dulwich.repo import MemoryRepo, Repo
+from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
+from urllib3.exceptions import ConnectTimeoutError, NewConnectionError
+from urllib3.util import connection as urllib3_connection
 
 FETCHED_REF = b"refs/nodvard/fetched"
 LFS_POINTER = b"version https://git-lfs.github.com/spec/"
@@ -47,6 +55,12 @@ _GITLINK = 0o160000
 MEMORY = "Holen brauchte mehr Speicher, als Deck dafür hergibt. Ist das Repository ungewöhnlich groß?"
 _NAME_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._+@=-][A-Za-z0-9._+@= -]{0,254}\Z")
 """Dieselben Zeichen, die Deck in Pfaden auf dem Server zulässt, ohne Leerzeichen am Rand."""
+PRIVATE_SETTING = "„Git-Server im eigenen Netz erlauben“"
+# Neben Loopback, Link-Local und Co.: 0.0.0.0/8 meint unter Linux den eigenen Rechner, in 192.0.0.0/24 und fec0::/10 liegt kein
+# Git-Server, die übrigen sind Metadaten-Dienste von Clouds außerhalb von 169.254.0.0/16 (sie geben Zugangsdaten heraus).
+_NEVER = tuple(ipaddress.ip_network(net) for net in (
+    "0.0.0.0/8", "192.0.0.0/24", "fec0::/10", "100.100.100.200/32", "168.63.129.16/32", "fd00:ec2::254/128"))
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
 
 
 @dataclass(frozen=True)
@@ -71,6 +85,10 @@ class GitProblem(Exception):
 
 class _Broken(GitProblem):
     """Ein Objekt fehlt oder hat die falsche Art."""
+
+
+NOT_A_COMMIT = "Der Tag zeigt nicht auf einen Commit."
+_SHA_RE = re.compile(r"^[0-9a-f]{40}\Z")
 
 
 class _StoreDamaged(Exception):
@@ -146,6 +164,92 @@ class _SameOrigin:
         raise GitProblem("Der Server leitet zu oft weiter.")
 
 
+def _inner_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """Eine in IPv6 verpackte IPv4-Adresse (::ffff:…, NAT64, 6to4) zählt wie das Ziel, das sie meint."""
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped:
+            return ip.ipv4_mapped
+        if ip in _NAT64:
+            return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+        if ip.sixtofour:
+            return ip.sixtofour
+    return ip
+
+
+def address_problem(host: str, ip: ipaddress.IPv4Address | ipaddress.IPv6Address, allow_private: bool) -> str | None:
+    """Warum Deck sich nicht mit dieser Adresse des Servers verbindet, sonst None."""
+    who = host if host == str(ip) else f"{_shown(host)} ({ip})"
+    inner = _inner_ip(ip)
+    if (inner.is_loopback or inner.is_link_local or inner.is_unspecified or inner.is_multicast or inner.is_reserved
+            or any(inner in net for net in _NEVER)):
+        return (f"Der Server {who} ist Deck selbst, liegt in keinem echten Netz oder ist ein Metadaten-Dienst einer Cloud. "
+                "Von dort holt Deck nie; prüf die Adresse.")
+    if not allow_private and not inner.is_global:
+        return (f"Der Server {who} liegt im eigenen Netz. Von dort holt Deck erst, wenn du es erlaubst: unter Einstellungen → "
+                f"Docker (Erweitert) {PRIVATE_SETTING} einschalten.")
+    return None
+
+
+def _is_ip(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+def target_addresses(host: str, port: int, allow_private: bool) -> list[str]:
+    """Löst den Server auf und liefert die Adressen für die Verbindung. Ist eine davon gesperrt, holt Deck gar nicht: Ein
+    Name kann sonst abwechselnd auf ein erlaubtes und ein internes Ziel zeigen."""
+    try:
+        found = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError) as exc:
+        raise GitProblem("Den Namen des Servers kennt das Netz nicht. Prüf die Adresse.") from exc
+    addresses: list[str] = []
+    for family, _, _, _, sockaddr in found:
+        if family not in (socket.AF_INET, socket.AF_INET6):
+            continue
+        ip = ipaddress.ip_address(str(sockaddr[0]).split("%", 1)[0])
+        if problem := address_problem(host, ip, allow_private):
+            raise GitProblem(problem)
+        if str(ip) not in addresses:
+            addresses.append(str(ip))
+    if not addresses:
+        raise GitProblem("Den Namen des Servers kennt das Netz nicht. Prüf die Adresse.")
+    return addresses
+
+
+class _Pinned(HTTPConnection):
+    """Verbindet sich nur mit den vorab geprüften Adressen, der Reihe nach, ohne den Namen noch einmal aufzulösen
+    (DNS-Rebinding); Zertifikat, SNI und Host-Kopf gelten weiter dem Namen."""
+
+    addresses: tuple[str, ...] = ()
+
+    def _new_conn(self) -> socket.socket:
+        failed: Exception = GitProblem("Für den Server gibt es keine geprüfte Adresse.")
+        for address in self.addresses:
+            try:
+                sock = urllib3_connection.create_connection((address, self.port), self.timeout, source_address=self.source_address,
+                                                            socket_options=self.socket_options)
+            except TimeoutError:
+                failed = ConnectTimeoutError(self, f"Connection to {self.host} timed out. (connect timeout={self.timeout})")
+            except OSError as exc:
+                failed = NewConnectionError(self, f"Failed to establish a new connection: {exc}")
+            else:
+                return sock
+        raise failed
+
+
+class _PinnedManager(urllib3.PoolManager):
+    def __init__(self, addresses: list[str], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        pinned = {"addresses": tuple(addresses)}
+        http = type("PinnedHTTPConnection", (_Pinned,), pinned)
+        https = type("PinnedHTTPSConnection", (_Pinned, HTTPSConnection), pinned)
+        self.pool_classes_by_scheme = {"http": type("PinnedHTTPPool", (HTTPConnectionPool,), {"ConnectionCls": http}),
+                                       "https": type("PinnedHTTPSPool", (HTTPSConnectionPool,), {"ConnectionCls": https})}
+
+
 class _SmartOnly(Urllib3HttpGitClient):
     """Nur Server mit dem Git-Protokoll über HTTP: Beim alten Abruf einzelner Dateien („dumb“) lädt dulwich alles ohne
     Grenze in den Speicher."""
@@ -161,9 +265,20 @@ class _SmartOnly(Urllib3HttpGitClient):
                              "nimm die Adresse, die der Git-Server zum Klonen anzeigt.")
 
 
-def http_client(url: str, credentials: tuple[str, str] | None, limits: Limits) -> tuple[Any, str]:
-    """dulwich über HTTPS ohne Einstellungen aus Git-Konfigurationen; der Zugang geht nur an die eingetragene Adresse."""
-    pool = _SameOrigin(default_urllib3_manager(None, base_url=url), url, limits)
+def http_client(url: str, credentials: tuple[str, str] | None, limits: Limits, *, allow_private: bool = False) -> tuple[Any, str]:
+    """dulwich über HTTPS ohne Einstellungen aus Git-Konfigurationen; der Zugang geht nur an die eingetragene Adresse und
+    jede Verbindung an eine vorab geprüfte IP-Adresse."""
+    _, host, port = _origin(url)
+    manager = default_urllib3_manager(None, base_url=url, pool_manager_cls=lambda **kwargs: _PinnedManager(
+        target_addresses(host, port, allow_private), **kwargs))
+    if isinstance(manager, urllib3.ProxyManager):
+        # Einen Namen schlägt der Proxy beim Verbinden selbst nach, an die geprüfte Adresse binden lässt er sich nicht.
+        if not _is_ip(host):
+            raise GitProblem(f"Über den Proxy (HTTPS_PROXY) holt Deck nicht von {_shown(host)}: Der Proxy schlägt den Namen "
+                             "selbst nach, und Deck kann nicht prüfen, wohin er dann verbindet. Trag den Git-Server in der "
+                             "Umgebung von Deck unter NO_PROXY ein, dann verbindet sich Deck direkt und prüft die Adresse.")
+        target_addresses(host, port, allow_private)
+    pool = _SameOrigin(manager, url, limits)
     username, password = credentials if credentials else (None, None)
     client = _SmartOnly(
         url, pool_manager=pool, username=username, password=password,  # type: ignore[arg-type]
@@ -199,6 +314,8 @@ _NETWORK_TEXTS = (
     ("NameResolutionError", "Den Namen des Servers kennt das Netz nicht. Prüf die Adresse."),
     ("Name or service not known", "Den Namen des Servers kennt das Netz nicht. Prüf die Adresse."),
     ("ConnectTimeoutError", "Der Server antwortet nicht. Prüf die Adresse und ob Deck ihn erreichen kann."),
+    ("connect timeout=", "Der Server antwortet nicht. Prüf die Adresse und ob Deck ihn erreichen kann."),
+    ("read timeout=", "Der Server hat zu lange nicht geantwortet."),
     ("Connection refused", "Der Server nimmt keine Verbindung an. Prüf Adresse und Port."),
     ("Failed to establish a new connection", "Der Server ist nicht erreichbar. Prüf Adresse und Port und ob Deck ihn erreichen kann."),
     ("ReadTimeoutError", "Der Server hat zu lange nicht geantwortet."),
@@ -316,7 +433,7 @@ def _peel(repo: Any, sha: bytes) -> Any:
         if isinstance(obj, Commit):
             return obj
         obj = _object(repo, obj.object[1], (Commit, Tag))
-    raise GitProblem("Der Tag zeigt nicht auf einen Commit.")
+    raise GitProblem(NOT_A_COMMIT)
 
 
 def _when(commit: Any) -> str:
@@ -592,11 +709,77 @@ def fetch(url: str, ref: str, path: str, store: Path, credentials: tuple[str, st
         return _fetch_into(url, ref, path, store, credentials, client_for or http_client, limits, None)
 
 
+def _commit_behind(client: Any, path: str, tip: bytes, limits: Limits) -> bytes:
+    """Holt nur das Objekt hinter einem Tag (ohne Bäume, wo der Server den Filter kennt) und löst es bis zum Commit auf."""
+    received = bytearray()
+    deadline = time.monotonic() + limits.seconds
+
+    def write(chunk: bytes) -> int:
+        if len(received) + len(chunk) > limits.pack_bytes:
+            raise GitProblem(f"Das Repository ist größer als {_mb(limits.pack_bytes)}; so große holt Deck nicht.")
+        if time.monotonic() > deadline:
+            raise GitProblem(f"Die Abfrage hat länger als {limits.seconds:g} Sekunden gedauert.")
+        received.extend(chunk)
+        return len(chunk)
+
+    client.fetch_pack(path, lambda refs, depth=None: [tip], _NoHaves(), write, depth=1, filter_spec=b"tree:0")
+    repo = MemoryRepo()
+    if received:
+        repo.object_store.add_thin_pack(BytesIO(bytes(received)).read, None)
+    sha = tip
+    for _ in range(10):
+        try:
+            obj = repo[sha]
+        except KeyError:
+            raise GitProblem("Der Server hat das Ziel des Tags nicht mitgeschickt.") from None
+        if isinstance(obj, Commit):
+            return obj.id
+        if not isinstance(obj, Tag):
+            break
+        sha = obj.object[1]
+    raise GitProblem(NOT_A_COMMIT)
+
+
+def head(url: str, ref: str, credentials: tuple[str, str] | None = None,
+         client_for: Callable[..., tuple[Any, str]] | None = None, limits: Limits | None = None,
+         known: Collection[str] = ()) -> tuple[str, str]:
+    """Der Commit, auf den Branch oder Tag gerade zeigt (wie `git ls-remote`), samt Art. Nur ein neuer Tag-Stand wird
+    einmal nachgesehen, ob er auf einen Commit zeigt; Dateien lädt das nie."""
+    limits = limits or Limits()
+    names = ((b"refs/heads/" + ref.encode(), "branch"), (b"refs/tags/" + ref.encode(), "tag"))
+    try:
+        client, path = (client_for or http_client)(url, credentials, limits)
+        result = client.get_refs(path, ref_prefix=[name for name, _ in names])
+    except Exception as exc:
+        raise _fetch_problem(exc, url, credentials is not None) from exc
+    if result.object_format and result.object_format != "sha1":
+        raise GitProblem("Das Repository nutzt SHA-256; solche Repositorys holt Deck noch nicht.")
+    for name, kind in names:
+        tip = result.refs.get(name)
+        if not tip:
+            continue
+        # Ein annotiertes Tag zeigt erst über `^{}` auf sein Ziel. Ein Branch ist immer ein Commit, Git nimmt dort nichts
+        # anderes an; ein Tag kann auch auf einen Baum oder eine Datei zeigen.
+        sha = result.refs.get(name + b"^{}") or tip
+        if kind == "tag" and sha.decode() not in known:
+            try:
+                sha = _commit_behind(client, path, tip, limits)
+            except Exception as exc:
+                raise _fetch_problem(exc, url, credentials is not None) from exc
+        return sha.decode(), kind
+    raise GitProblem(f"Im Repository gibt es keinen Branch und kein Tag „{ref}“.")
+
+
 def handle(request: dict[str, Any], client_for: Callable[..., tuple[Any, str]] | None = None) -> dict[str, Any]:
-    """Ein Auftrag als Zuordnung, die Antwort ebenso; jeder Fehler wird zu einem Satz."""
+    """Ein Auftrag als Zuordnung (mit `mode: head` nur der neueste Commit), die Antwort ebenso; jeder Fehler wird zu einem Satz."""
     limits = Limits(**request.get("limits") or {})
     credentials = tuple(request["credentials"]) if request.get("credentials") else None
+    client_for = client_for or functools.partial(http_client, allow_private=request.get("allow_private") is True)
     try:
+        if request.get("mode") == "head":
+            known = [k for k in request.get("known") or [] if isinstance(k, str) and _SHA_RE.match(k)]
+            commit, kind = head(request["url"], request["ref"], credentials, client_for, limits, known)  # type: ignore[arg-type]
+            return {"ok": True, "commit": commit, "ref_kind": kind}
         fetched = fetch(request["url"], request["ref"], request["path"], Path(request["store"]), credentials,  # type: ignore[arg-type]
                         client_for, limits)
     except GitProblem as exc:

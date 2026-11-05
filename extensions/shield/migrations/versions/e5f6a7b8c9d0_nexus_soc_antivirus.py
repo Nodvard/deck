@@ -1,4 +1,4 @@
-"""nexus-soc: Virenschutz-Tabellen (Scans, Funde/Quarantaene, Haertungs-Audits)
+"""nexus-soc: Virenschutz-Tabellen (Scans, Funde/Quarantäne, Härtungs-Audits)
 
 Revision ID: e5f6a7b8c9d0
 Revises: c4d5e6f7a8b9

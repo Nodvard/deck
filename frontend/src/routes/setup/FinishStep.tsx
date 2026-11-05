@@ -7,6 +7,7 @@ import { Link } from "react-router-dom";
 
 import { GuideLink } from "../../components/GuideLink";
 import { api } from "../../lib/api";
+import { useEdition } from "../../state/edition";
 import { Button } from "../settings/ui";
 import { StepNav } from "./StepNav";
 
@@ -15,6 +16,7 @@ export const codeBlockClass = "block select-all overflow-x-auto rounded bg-black
 export function FinishStep({ onBack, onFinish }: { onBack: () => void; onFinish: () => void }) {
   /** `null` = unbekannt (dann kein Hinweis auf die Zwei-Faktor-Anmeldung). */
   const [totp, setTotp] = useState<boolean | null>(null);
+  const edition = useEdition();
 
   useEffect(() => {
     let alive = true;
@@ -28,10 +30,12 @@ export function FinishStep({ onBack, onFinish }: { onBack: () => void; onFinish:
   return (
     <div className="flex flex-col gap-4" data-testid="setup-access">
       <div>
-        <h2 className="text-sm font-semibold">Fertig – Nodvard Deck ist startklar</h2>
+        <h2 className="text-sm font-semibold">Fertig – {edition.product_name} ist startklar</h2>
         <p className="mt-1 text-sm text-white/70">
-          Im Cockpit zeigt dir die Karte „Erste Schritte“ als Nächstes, was noch fehlt: einen Server anlegen, seinen Zugang hinterlegen und
-          die Module einrichten, die noch Angaben brauchen. Jeder Schritt steht in der <GuideLink testId="finish-guide">Anleitung</GuideLink>.
+          {edition.choose_modules
+            ? "Im Cockpit zeigt dir die Karte „Erste Schritte“ als Nächstes, was noch fehlt: einen Server anlegen, seinen Zugang hinterlegen und die Module einrichten, die noch Angaben brauchen."
+            : "Lege unter Einstellungen, Server & Zugänge einen Server mit der Markierung docker an und richte seinen SSH-Zugang ein. Danach zeigt die Docker-Seite seine Container."}{" "}
+          Jeder Schritt steht in der <GuideLink testId="finish-guide">Anleitung</GuideLink>.
         </p>
         {totp === false && (
           <p className="mt-2 text-sm text-white/70">
@@ -49,7 +53,7 @@ export function FinishStep({ onBack, onFinish }: { onBack: () => void; onFinish:
           Auf dem Server, im Ordner mit der Compose-Datei, setzt dieser Befehl ein neues Passwort. Statt
           <code> &lt;benutzername&gt;</code> schreibst du deinen eigenen Benutzernamen, zum Beispiel <code>admin</code>:
         </p>
-        <code className={`${codeBlockClass} mt-1`}>docker compose exec nodvard-deck python -m nodvard_deck.admin reset-password &lt;benutzername&gt;</code>
+        <code className={`${codeBlockClass} mt-1`}>docker compose exec {edition.service} python -m nodvard_deck.admin reset-password &lt;benutzername&gt;</code>
         <p className="mt-1 opacity-70">Er steht auch auf der Anmeldeseite unter „Passwort vergessen?“.</p>
         <p className="mt-1 opacity-70">
           Mehr dazu: <GuideLink section="locked">Anleitung, Abschnitt „Ausgesperrt? Notfall-Befehle“</GuideLink>

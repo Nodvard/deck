@@ -1151,6 +1151,33 @@ async def test_a_new_password_in_the_vault_logs_the_old_session_out(client, db_s
 
 
 @pytest.mark.asyncio
+async def test_password_rotation_during_vault_read_cannot_restore_the_old_session(client, db_session, test_settings, monkeypatch):
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    service = _service()
+    read_password = service.read_password
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_read(cfg):
+        password = await read_password(cfg)
+        entered.set()
+        await release.wait()
+        return password
+
+    monkeypatch.setattr(service, "read_password", slow_read)
+    first = asyncio.create_task(_overview(client, headers))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        await _set_password(client, headers, "falsch")
+    finally:
+        release.set()
+        body = await asyncio.wait_for(first, 10)
+    assert body["state"] == "ok"
+    assert (await _overview(client, headers))["state"] == "auth_failed"
+    assert (fake.logins, fake.failed_logins) == (1, 1)
+
+
+@pytest.mark.asyncio
 async def test_an_answer_with_the_old_password_is_not_kept(client, db_session, test_settings):
     headers, _ = await _enable(client, db_session, test_settings)
     await _configure(client, headers)
@@ -2319,21 +2346,36 @@ async def test_a_slow_task_list_uses_up_the_same_time_limit_and_the_rest_of_the_
 async def test_the_time_limit_for_hyper_backup_already_runs_while_connecting(client, db_session, test_settings, monkeypatch):
     headers, fake = await _enable(client, db_session, test_settings)
     fake.install_hyper_backup({"1": ("Nacht", OK_TASK)})
+    await _configure(client, headers)
+    loop = asyncio.get_running_loop()
+    now = loop.time()
+    cancelled = False
 
     async def slow_connect_and_list(request: httpx.Request) -> None:
+        nonlocal now, cancelled
         params = FakeDsm.params(request)
         if params.get("api") == "SYNO.API.Info":
-            await asyncio.sleep(0.8)
+            now += syn_client.BACKUP_TIMEOUT_S - 1
         elif params.get("method") == "list":
-            await asyncio.sleep(300)
+            now += 2
+            reply = asyncio.Event()
+            # Fällige Timer müssen vor der Antwort auslösen.
+            loop.call_later(0, reply.set)
+            try:
+                await reply.wait()
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
 
     fake.before = slow_connect_and_list
-    monkeypatch.setattr("nodvard_deck_ext_synology.client.BACKUP_TIMEOUT_S", 0.8)
-    monkeypatch.setattr("nodvard_deck_ext_synology.service.CONNECTION_TIMEOUT_S", 1.4)
-    await _configure(client, headers)
-    body = await _overview(client, headers)
+    # Nur die Uhr ist ersetzt; die Timer und der Abbruch der Anfrage bleiben echt.
+    with monkeypatch.context() as clock:
+        clock.setattr(loop, "time", lambda: now)
+        body = await _overview(client, headers)
+    assert cancelled, "die Frist muss die laufende Listenabfrage abbrechen"
     assert body["state"] == "ok", body["message"]
     assert body["volumes"] and body["system"] and body["update"]
+    assert body["backups"] is None
     assert body["backup_note"]["message"].startswith("Hyper Backup hat nicht rechtzeitig geantwortet.")
 
 

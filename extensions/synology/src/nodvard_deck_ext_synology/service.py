@@ -218,10 +218,12 @@ class SynologyService:
     async def client(self, cfg: DeviceConfig, *, total_timeout_s: float = TOTAL_TIMEOUT_S) -> tuple[SynologyClient, str]:
         """Der Client samt Passwort; wirft `DsmError`, wenn Adresse, Benutzername oder Passwort nicht reichen."""
         assert cfg.base_url is not None
+        # Ein Passwortwechsel während des Lesens muss auch diese Sitzung verwerfen können.
+        box = self._session_box(cfg, True)
         password = await self.read_password(cfg)
         client = SynologyClient(
             self._ctx.http, base_url=cfg.base_url, username=cfg.username, password=password,
-            box=self._session_box(cfg, True), insecure_tls=cfg.insecure_tls, pin=cfg.pin, total_timeout_s=total_timeout_s,
+            box=box, insecure_tls=cfg.insecure_tls, pin=cfg.pin, total_timeout_s=total_timeout_s,
         )
         return client, password
 

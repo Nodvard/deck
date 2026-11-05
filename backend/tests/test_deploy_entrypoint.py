@@ -223,7 +223,9 @@ def test_already_owned_files_are_not_touched_again(setup):
 def test_image_user_numbers_fall_back_to_1000_and_never_to_root(setup):
     result = setup.run(uid=0, STUB_NO_IMAGE_USER="1")
     assert result.returncode == 0, result.stderr
-    assert setup.lines("chown") and all(c.startswith("-h 1000:1000 ") for c in setup.lines("chown"))
+    if os.getuid() != 1000 or os.getgid() != 1000:
+        assert setup.lines("chown")
+    assert all(c.startswith("-h 1000:1000 ") for c in setup.lines("chown"))
     assert setup.lines("steps")[-1] == "app uid=1000 --port 8080"
     root_result = setup.run(uid=0, STUB_IMG_UID="0")
     assert root_result.returncode != 0 and "app uid=0" not in "".join(setup.lines("steps"))

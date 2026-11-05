@@ -46,7 +46,7 @@ _BACKUP_KINDS = ("backup-state", "backup-failed", "backup-overdue")
 
 
 def state_path(data_dir: Path, name: str) -> Path:
-    """Der Stand eines Geräts; das übernommene Gerät behält die Datei aus der Zeit mit nur einem Gerät."""
+    """Datei mit dem Stand eines Geräts; für das übernommene Gerät bleibt es `alerts.json`."""
     return data_dir / (STATE_FILE if name == LEGACY_NAME else f"{STATE_PREFIX}{name}.json")
 
 
@@ -112,10 +112,9 @@ def _existing(overview: Overview) -> set[str]:
 
 
 def _undecided(overview: Overview) -> set[str]:
-    """Kennungen, über die diese Prüfung nichts sagt; ihr gemerkter Stand bleibt, wie er ist.
-
-    Das sind laufende oder unlesbare Sicherungen, Laufwerke ohne Temperatur, Pools und Volumes, die gerade repariert oder
-    geprüft werden oder einen unbekannten Zustand haben, und Volumes, die ein Pool mitzieht, der nicht „Normal“ ist."""
+    """Kennungen, über die diese Prüfung nichts sagt, sodass ihr gemerkter Stand bleibt: laufende oder unlesbare
+    Sicherungen, Laufwerke ohne Temperatur, Pools und Volumes in Reparatur, Prüfung oder unbekanntem Zustand sowie
+    Volumes, die ein Pool mitzieht, der nicht „Normal“ ist."""
     found: set[str] = set()
     for task in overview.backups or []:
         if task.running or not task.status_read:
@@ -147,7 +146,7 @@ async def _send(ctx: ExtensionContext, severity: Severity, title: str, body: str
     """Ob die Meldung angelegt wurde; scheitert sie, bleibt der Stand, und sie kommt bei der nächsten Prüfung."""
     try:
         await ctx.notify.send(Notification(
-            title=title, body=body, severity=severity, correlation_id=correlation_id(name, key), payload={"path": path},
+            title=title, body=body, severity=severity, correlation_id=correlation_id(name, key), payload={"notification_type": f"synology.{_kind(key)}", "path": path},
         ))
     except Exception:  # noqa: BLE001 - eine fehlgeschlagene Meldung darf die übrigen nicht verhindern
         _log.warning("Synology-Wächter: Meldung %s von %s ließ sich nicht anlegen.", key, name, exc_info=True)

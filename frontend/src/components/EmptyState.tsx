@@ -1,9 +1,9 @@
 /**
  * Leere Seite mit Hilfe: sagt in einem Satz, was fehlt und was zu tun ist, und bietet den Knopf
- * zum naechsten Schritt an. Gegenstueck zu `EmptyState` im Erweiterungs-UI-Kit
+ * zum nächsten Schritt an. Gegenstück zu `EmptyState` im Erweiterungs-UI-Kit
  * (extensions/_shared/frontend/src/ui.tsx) -- gleiche Optik, damit Kern und Module gleich wirken.
  *
- * Der Knopf (`action`) gehoert nur hinein, wenn der Nutzer das Recht fuer das Ziel hat
+ * Der Knopf (`action`) gehört nur hinein, wenn der Nutzer das Recht für das Ziel hat
  * (`hosts.write`, `extensions.manage`, ...) -- sonst nur den Text zeigen.
  */
 import type { ReactNode } from "react";

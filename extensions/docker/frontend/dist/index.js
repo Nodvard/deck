@@ -1,6 +1,3 @@
-// src/ContainersPage.tsx
-import { Fragment as Fragment11, useCallback as useCallback3, useEffect as useEffect14, useState as useState15 } from "react";
-
 // ../../../frontend/src/lib/deckGlobal.ts
 var EVENT_PREFIX = "nodvard-deck:";
 function findDeck() {
@@ -13,6 +10,15 @@ function deck() {
 function deckEventName(event) {
   return EVENT_PREFIX + event;
 }
+
+// src/product.ts
+function productText(text) {
+  if (!text || findDeck()?.getProductName?.() !== "Nodvard Dock") return text;
+  return text.replace(/Nodvard Deck/g, "Nodvard Dock").replace(/\bDeck\b/g, "Dock");
+}
+
+// src/ContainersPage.tsx
+import { Fragment as Fragment11, useCallback as useCallback3, useEffect as useEffect15, useState as useState19 } from "react";
 
 // ../../_shared/frontend/src/api.ts
 var SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar \u2013 bitte gleich noch einmal versuchen.";
@@ -214,6 +220,13 @@ async function runAction(path, init = {}, options = {}) {
   if (!res.ok) throw new Error(errorFromBody(body, res.status));
   return settleAction(body, options);
 }
+
+// ../../_shared/frontend/src/cardTable.ts
+var CARD_HEAD = "hidden sm:table-header-group";
+var CARD_BODY = "block sm:table-row-group sm:divide-y sm:divide-white/5";
+var CARD_ROW = "relative mb-3 flex flex-col rounded-lg border border-white/10 p-3 sm:static sm:mb-0 sm:table-row sm:rounded-none sm:border-0 sm:p-0";
+var CARD_CELL_PLAIN = "block empty:hidden sm:table-cell sm:empty:table-cell";
+var CARD_CELL = `${CARD_CELL_PLAIN} before:mb-0.5 before:block before:text-xs before:opacity-60 before:content-[attr(data-label)] sm:before:hidden`;
 
 // ../../_shared/frontend/src/format.ts
 function formatBytes(n, options = {}) {
@@ -582,19 +595,26 @@ function BulkProposeButton({
 }
 
 // src/hostAction.ts
+var FAILED = /* @__PURE__ */ new Set(["failed", "denied", "expired", "dismissed"]);
 async function hostAction(hostId, actionType, reason, signal, payload = {}) {
-  const { action, approved } = await runAction(
+  const { action } = await runAction(
     `/hosts/${hostId}/actions/${actionType}`,
     { method: "POST", body: JSON.stringify({ payload, reason }) },
     { signal }
   );
   const status2 = action.status ?? "?";
-  if (!approved) {
-    if (status2 === "proposed") return { text: `vorgeschlagen \u2013 Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".`, waiting: true };
-    return { text: action.result?.output ?? ACTION_STATUS_LABEL[status2] ?? status2, waiting: false };
+  if (status2 === "proposed") {
+    return { text: `vorgeschlagen: Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".`, waiting: true, failed: false, actionId: action.id ?? action.action_id };
   }
-  if (status2 === "succeeded") return { text: action.result?.output ?? "erledigt", waiting: false };
-  return { text: `${ACTION_STATUS_LABEL[status2] ?? status2}${action.result?.error ? ` (${action.result.error})` : ""}`, waiting: false };
+  if (isActionRunning(status2)) {
+    return { text: describeActionOutcome(action).text, waiting: true, failed: false, actionId: action.id ?? action.action_id };
+  }
+  if (status2 === "succeeded") return { text: action.result?.output ?? "erledigt", waiting: false, failed: false };
+  return {
+    text: describeActionOutcome(action).text,
+    waiting: false,
+    failed: FAILED.has(status2)
+  };
 }
 async function runHostAction(hostId, actionType, reason, signal, payload = {}) {
   return (await hostAction(hostId, actionType, reason, signal, payload)).text;
@@ -790,7 +810,11 @@ function UpdatePanel({
       ] }),
       /* @__PURE__ */ jsxs4("div", { className: "rounded border border-amber-500/40 bg-amber-500/10 p-2 text-amber-200", children: [
         /* @__PURE__ */ jsx5("p", { children: DOWNTIME_TEXT }),
-        plan.auto_rollback && /* @__PURE__ */ jsx5("p", { className: "mt-1", children: "St\xFCrzt die neue Version beim Start ab oder l\xE4sst sich der Container nicht erstellen, geht Nodvard Deck in der Regel automatisch auf die alte zur\xFCck." }),
+        plan.auto_rollback && /* @__PURE__ */ jsxs4("p", { className: "mt-1", children: [
+          "St\xFCrzt die neue Version beim Start ab oder l\xE4sst sich der Container nicht erstellen, geht ",
+          productText("Nodvard Deck"),
+          " in der Regel automatisch auf die alte zur\xFCck."
+        ] }),
         plan.warnings.length > 0 && /* @__PURE__ */ jsx5("ul", { className: "mt-1 list-disc space-y-0.5 pl-4", children: plan.warnings.map((w) => /* @__PURE__ */ jsx5("li", { className: w.startsWith("Datenbank") ? "font-medium text-red-300" : void 0, children: w }, w)) })
       ] }),
       /* @__PURE__ */ jsxs4("details", { open: true, children: [
@@ -1014,7 +1038,7 @@ function OperateBadge({ hostId }) {
     {
       className: "rounded bg-white/10 px-1.5 py-0.5 text-[11px] opacity-80",
       "data-testid": `operate-${hostId}`,
-      title: `${OPERATE_CAN} F\xFCr alles andere ${operateUpgrade(fullTag)}`,
+      title: `${productText(OPERATE_CAN)} F\xFCr alles andere ${operateUpgrade(fullTag)}`,
       children: "Nur bedienen"
     }
   );
@@ -1025,18 +1049,271 @@ function OperateNote({ hostId, name }) {
     "Auf ",
     name,
     " ist Docker im Modus \u201ENur bedienen\u201C eingerichtet: ",
-    OPERATE_CAN,
+    productText(OPERATE_CAN),
     " Stacks, Images, Volumes, Netze und Registries gibt es dort nicht. Daf\xFCr ",
     operateUpgrade(fullTag)
   ] });
 }
 
 // src/Registries.tsx
-import { useEffect as useEffect8, useState as useState9 } from "react";
+import { useEffect as useEffect9, useState as useState12 } from "react";
 
 // src/Resources.tsx
-import { useEffect as useEffect6, useState as useState6 } from "react";
-import { Fragment as Fragment6, jsx as jsx8, jsxs as jsxs7 } from "react/jsx-runtime";
+import { useEffect as useEffect7, useState as useState9 } from "react";
+
+// src/cardList.ts
+var CARD_LIST = "text-sm sm:divide-y sm:divide-white/5";
+var CARD_ITEM = "mb-3 rounded-lg border border-white/10 p-3 sm:mb-0 sm:rounded-none sm:border-0 sm:p-0 sm:py-2";
+
+// src/ImagePull.tsx
+import { useState as useState6 } from "react";
+import { jsx as jsx8, jsxs as jsxs7 } from "react/jsx-runtime";
+var NAME = "[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*";
+var LABEL = "[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?";
+var DOMAIN = `${LABEL}(?:\\.${LABEL})*(?::[0-9]{1,5})?`;
+var IMAGE_RE = new RegExp(`^(?:${DOMAIN}/)?${NAME}(?:/${NAME})*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?$`);
+var MAX_LENGTH = 255;
+function validImage(image) {
+  return image.length <= MAX_LENGTH && IMAGE_RE.test(image);
+}
+function withoutTag(image) {
+  if (image.includes("@")) return false;
+  return !(image.split("/").pop() ?? "").includes(":");
+}
+function ImagePull({ hostId, onDone }) {
+  const unmountSignal = useUnmountSignal();
+  const [open, setOpen] = useState6(false);
+  const [image, setImage] = useState6("");
+  const [busy, setBusy] = useState6(false);
+  const [error, setError] = useState6(null);
+  const valid = validImage(image);
+  async function pull() {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await hostAction(hostId, "docker.image_pull", "Image \xFCber die Docker-Seite holen.", unmountSignal(), { image });
+      if (result.failed) {
+        setError(result.text);
+        return;
+      }
+      setOpen(false);
+      setImage("");
+      onDone(`Image holen: ${result.text}`, result.waiting ? result.actionId : void 0);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (!open) return /* @__PURE__ */ jsx8("div", { className: "mb-2", children: /* @__PURE__ */ jsx8(Button, { small: true, onClick: () => setOpen(true), children: "Image holen" }) });
+  return /* @__PURE__ */ jsxs7("div", { className: "mb-3 flex flex-col gap-2 bg-black/20 p-2 text-xs panel", "data-testid": "image-pull", children: [
+    /* @__PURE__ */ jsxs7("label", { className: "flex flex-col gap-1", children: [
+      /* @__PURE__ */ jsx8("span", { children: "Name des Images mit Tag" }),
+      /* @__PURE__ */ jsx8(
+        "input",
+        {
+          "aria-label": "Name des Images",
+          value: image,
+          maxLength: MAX_LENGTH,
+          onChange: (e) => setImage(e.target.value.trim()),
+          placeholder: "zum Beispiel nginx:1.27 oder ghcr.io/besitzer/app:1.0",
+          className: "rounded border border-white/10 bg-black/25 px-2 py-1 outline-none focus:border-[var(--color-accent)]"
+        }
+      )
+    ] }),
+    image && !valid && /* @__PURE__ */ jsx8("p", { className: "text-amber-300", children: "So hei\xDFt kein Image. Erlaubt sind Kleinbuchstaben, Ziffern, \u201E.\u201C, \u201E_\u201C, \u201E-\u201C und \u201E/\u201C, davor auf Wunsch die Registry und dahinter \u201E:\u201C mit dem Tag, etwa ghcr.io/besitzer/app:1.0." }),
+    valid && withoutTag(image) && /* @__PURE__ */ jsx8("p", { className: "text-amber-300", children: "Ohne Tag holt Docker \u201Elatest\u201C, also den Stand, der gerade bei der Registry liegt. F\xFCr Stacks besser eine feste Version wie nginx:1.27." }),
+    /* @__PURE__ */ jsx8("p", { className: "opacity-70", children: "Private Images holt Docker mit der Anmeldung unter \u201ERegistries\u201C. Das Holen kann ein paar Minuten dauern und braucht Platz auf dem Server; die Seite darf dabei offen bleiben oder verlassen werden. Laufende Container \xE4ndern sich nicht." }),
+    error && /* @__PURE__ */ jsx8("p", { role: "alert", className: "text-red-400", children: error }),
+    /* @__PURE__ */ jsxs7("div", { className: "flex flex-wrap gap-1.5", children: [
+      /* @__PURE__ */ jsx8(Button, { small: true, variant: "primary", disabled: busy || !valid, onClick: () => void pull(), children: busy ? "\u2026" : "Holen" }),
+      /* @__PURE__ */ jsx8(Button, { small: true, disabled: busy, onClick: () => setOpen(false), children: "Abbrechen" })
+    ] })
+  ] });
+}
+
+// src/NetworkTools.tsx
+import { useState as useState7 } from "react";
+import { jsx as jsx9, jsxs as jsxs8 } from "react/jsx-runtime";
+var NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/;
+var RESERVED = /* @__PURE__ */ new Set(["bridge", "host", "none", "default"]);
+var FIXED_NETWORKS = /* @__PURE__ */ new Set(["host", "none", "ingress", "docker_gwbridge"]);
+var LINKABLE_DRIVERS = /* @__PURE__ */ new Set(["bridge", "macvlan", "ipvlan"]);
+function linkable(name, driver) {
+  return !FIXED_NETWORKS.has(name) && LINKABLE_DRIVERS.has(driver ?? "");
+}
+function NetworkCreate({ hostId, onDone }) {
+  const unmountSignal = useUnmountSignal();
+  const [open, setOpen] = useState7(false);
+  const [name, setName] = useState7("");
+  const [internal, setInternal] = useState7(false);
+  const [busy, setBusy] = useState7(false);
+  const [error, setError] = useState7(null);
+  const valid = NAME_RE.test(name) && !RESERVED.has(name);
+  async function create() {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await hostAction(hostId, "docker.network_create", "Netz \xFCber die Docker-Seite anlegen.", unmountSignal(), { name, internal });
+      if (result.failed) {
+        setError(result.text);
+        return;
+      }
+      setOpen(false);
+      setName("");
+      setInternal(false);
+      onDone(`Netz anlegen: ${result.text}`, result.waiting ? result.actionId : void 0);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (!open) return /* @__PURE__ */ jsx9("div", { className: "mb-2", children: /* @__PURE__ */ jsx9(Button, { small: true, onClick: () => setOpen(true), children: "Netz anlegen" }) });
+  return /* @__PURE__ */ jsxs8("div", { className: "mb-3 flex flex-col gap-2 bg-black/20 p-2 text-xs panel", "data-testid": "network-create", children: [
+    /* @__PURE__ */ jsxs8("label", { className: "flex flex-col gap-1", children: [
+      /* @__PURE__ */ jsx9("span", { children: "Name des Netzes" }),
+      /* @__PURE__ */ jsx9(
+        "input",
+        {
+          "aria-label": "Name des Netzes",
+          value: name,
+          maxLength: 63,
+          onChange: (e) => setName(e.target.value.trim()),
+          placeholder: "zum Beispiel intern",
+          className: "rounded border border-white/10 bg-black/25 px-2 py-1 outline-none focus:border-[var(--color-accent)]"
+        }
+      )
+    ] }),
+    name && !valid && /* @__PURE__ */ jsx9("p", { className: "text-amber-300", children: "Nur Buchstaben, Ziffern, \u201E_\u201C, \u201E.\u201C und \u201E-\u201C, am Anfang ein Buchstabe oder eine Ziffer, nicht bridge, host, none oder default." }),
+    /* @__PURE__ */ jsxs8("label", { className: "flex items-start gap-2", children: [
+      /* @__PURE__ */ jsx9("input", { type: "checkbox", checked: internal, onChange: (e) => setInternal(e.target.checked), className: "mt-0.5" }),
+      /* @__PURE__ */ jsx9("span", { children: "Nur intern: Container erreichen sich in diesem Netz gegenseitig, \xFCber dieses Netz aber weder das Internet noch das Heimnetz." })
+    ] }),
+    error && /* @__PURE__ */ jsx9("p", { role: "alert", className: "text-red-400", children: error }),
+    /* @__PURE__ */ jsxs8("div", { className: "flex flex-wrap gap-1.5", children: [
+      /* @__PURE__ */ jsx9(Button, { small: true, variant: "primary", disabled: busy || !valid, onClick: () => void create(), children: busy ? "\u2026" : "Anlegen" }),
+      /* @__PURE__ */ jsx9(Button, { small: true, disabled: busy, onClick: () => setOpen(false), children: "Abbrechen" })
+    ] })
+  ] });
+}
+function stackNote(container, connect) {
+  if (!container?.compose_project) return "";
+  return connect ? ` Er geh\xF6rt zum Stack \u201E${container.compose_project}\u201C: Erstellt Compose ihn neu, etwa nach einer \xC4nderung oder einem Update, ist die Verbindung wieder weg. Dauerhaft geh\xF6rt das Netz in die Compose-Datei.` : ` Er geh\xF6rt zum Stack \u201E${container.compose_project}\u201C: Erstellt Compose ihn neu, h\xE4ngt er wieder an den Netzen aus der Compose-Datei.`;
+}
+var CONTAINER_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$/;
+function NetworkLinks({ hostId, network, title, usedBy, containers, networksOf, pending, actionSignal, onDone }) {
+  const [pick, setPick] = useState7("");
+  const [busy, setBusy] = useState7(null);
+  const known = new Map(containers.map((c) => [c.name, c]));
+  const free = containers.filter((c) => !usedBy.includes(c.name) && !c.self);
+  async function link(container, connect) {
+    const question = connect ? `\u201E${container}\u201C mit dem Netz \u201E${title}\u201C verbinden? Der Container kann danach die anderen Container in diesem Netz erreichen und sie ihn.` : `\u201E${container}\u201C vom Netz \u201E${title}\u201C trennen? Dienste, die ihn \xFCber dieses Netz erreichen, finden ihn danach nicht mehr.`;
+    const last = !connect && networksOf(container) === 1 ? " Es ist sein einziges Netz: Danach hat er kein Netz mehr, keine ver\xF6ffentlichten Ports und keinen Zugang ins Internet." : "";
+    const ok = await deck().confirmDialog(question + last + stackNote(known.get(container), connect), {
+      title: connect ? "Mit Netz verbinden" : "Vom Netz trennen",
+      danger: !connect,
+      confirmLabel: connect ? "Verbinden" : "Trennen"
+    });
+    if (!ok) return;
+    setBusy(container);
+    const key = `${container}:${connect ? "connect" : "disconnect"}`;
+    try {
+      const action = connect ? "docker.network_connect" : "docker.network_disconnect";
+      const reason = connect ? "Container \xFCber die Docker-Seite mit einem Netz verbinden." : "Container \xFCber die Docker-Seite von einem Netz trennen.";
+      const result = await hostAction(hostId, action, reason, actionSignal(), { network, container });
+      onDone(`${connect ? "Verbinden" : "Trennen"}: ${result.text}`, { waiting: result.waiting, failed: result.failed, key, actionId: result.actionId });
+      if (!result.failed) setPick("");
+    } catch (err) {
+      onDone(`Fehler: ${errorMessage(err)}`, { waiting: false, failed: true, key });
+    } finally {
+      setBusy(null);
+    }
+  }
+  return /* @__PURE__ */ jsxs8("div", { className: "mt-1 flex w-full flex-col gap-1.5 bg-black/20 p-2 text-xs panel", "data-testid": `network-links-${title}`, children: [
+    usedBy.length === 0 && /* @__PURE__ */ jsx9("p", { className: "opacity-70", children: "An diesem Netz h\xE4ngt noch kein Container." }),
+    usedBy.map((name) => {
+      const entry = known.get(name);
+      return /* @__PURE__ */ jsxs8("p", { className: "flex flex-wrap items-center gap-2", children: [
+        /* @__PURE__ */ jsxs8("span", { className: "min-w-0 flex-1 break-words", children: [
+          name,
+          entry?.compose_project ? ` (Stack ${entry.compose_project})` : "",
+          entry?.self ? productText(" \u2013 Nodvard Deck selbst, bleibt verbunden") : ""
+        ] }),
+        pending.has(`${name}:disconnect`) ? /* @__PURE__ */ jsx9("span", { className: "opacity-70", children: "wartet auf Freigabe" }) : !entry?.self && CONTAINER_RE.test(name) && /* @__PURE__ */ jsx9(Button, { small: true, disabled: busy !== null, onClick: () => void link(name, false), ariaLabel: `Trennen: ${name}`, children: busy === name ? "\u2026" : "Trennen" })
+      ] }, name);
+    }),
+    containers.length === 0 ? /* @__PURE__ */ jsx9("p", { className: "opacity-70", children: "Auf diesem Server gibt es keine Container." }) : free.length > 0 ? /* @__PURE__ */ jsxs8("div", { className: "flex flex-wrap items-center gap-2", children: [
+      /* @__PURE__ */ jsxs8(
+        "select",
+        {
+          "aria-label": `Container f\xFCr ${title}`,
+          value: pick,
+          onChange: (e) => setPick(e.target.value),
+          disabled: busy !== null,
+          className: "min-w-0 flex-1 rounded border border-white/10 bg-black/25 px-2 py-1 outline-none focus:border-[var(--color-accent)]",
+          children: [
+            /* @__PURE__ */ jsx9("option", { value: "", disabled: true, children: "Container w\xE4hlen \u2026" }),
+            free.map((c) => /* @__PURE__ */ jsxs8("option", { value: c.name, children: [
+              c.name,
+              c.compose_project ? ` (Stack ${c.compose_project})` : ""
+            ] }, c.name))
+          ]
+        }
+      ),
+      pick && pending.has(`${pick}:connect`) ? /* @__PURE__ */ jsx9("span", { className: "opacity-70", children: "wartet auf Freigabe" }) : /* @__PURE__ */ jsx9(Button, { small: true, disabled: busy !== null || !pick, onClick: () => void link(pick, true), children: busy === pick && pick ? "\u2026" : "Verbinden" })
+    ] }) : /* @__PURE__ */ jsx9("p", { className: "opacity-70", children: "Alle \xFCbrigen Container dieses Servers h\xE4ngen schon an diesem Netz." })
+  ] });
+}
+
+// src/pendingActions.ts
+import { useEffect as useEffect6, useRef as useRef3, useState as useState8 } from "react";
+var OPEN = /* @__PURE__ */ new Set(["proposed", "approved", "executing"]);
+function usePendingActions(onSettled) {
+  const [pending, setPending] = useState8(/* @__PURE__ */ new Map());
+  const settled = useRef3(onSettled);
+  settled.current = onSettled;
+  useEffect6(() => {
+    const watched = [...pending].filter((entry) => Boolean(entry[1]));
+    if (watched.length === 0) return;
+    const controller = new AbortController();
+    let asking = false;
+    const timer = setInterval(() => {
+      if (asking || document.hidden) return;
+      asking = true;
+      void (async () => {
+        const done = /* @__PURE__ */ new Map();
+        for (const [key, id] of watched) {
+          try {
+            const res = await authedFetch(`/actions/${encodeURIComponent(id)}`, { signal: controller.signal });
+            const body = res.ok ? await res.json() : null;
+            if (res.status === 404 || body && !OPEN.has(body.status ?? "")) done.set(key, body);
+          } catch {
+          }
+        }
+        asking = false;
+        if (done.size === 0 || controller.signal.aborted) return;
+        setPending((map2) => {
+          const next = new Map(map2);
+          for (const key of done.keys()) next.delete(key);
+          return next;
+        });
+        settled.current(done);
+      })();
+    }, ACTION_POLL_INTERVAL_MS);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+    };
+  }, [pending]);
+  return {
+    keys: new Set(pending.keys()),
+    add: (key, actionId) => setPending((map2) => new Map(map2).set(key, actionId))
+  };
+}
+
+// src/Resources.tsx
+import { Fragment as Fragment6, jsx as jsx10, jsxs as jsxs9 } from "react/jsx-runtime";
 var RESOURCE_TABS = [
   { kind: "images", label: "Images" },
   { kind: "volumes", label: "Volumes" },
@@ -1067,7 +1344,7 @@ var TEXT = {
     action: "docker.network_remove",
     label: "Netz l\xF6schen",
     empty: "Auf diesem Server gibt es keine Netze.",
-    hint: "Die eingebauten Netze von Docker bleiben immer. Ein Netz, an dem noch ein Container h\xE4ngt, auch ein gestoppter, bleibt ebenfalls.",
+    hint: "Die eingebauten Netze von Docker bleiben immer. Ein Netz, an dem noch ein Container h\xE4ngt, auch ein gestoppter, bleibt ebenfalls. Anlegen, Verbinden und Trennen gehen \xFCber die Freigabe.",
     confirm: (title) => `Netz \u201E${title}\u201C l\xF6schen? Ein Compose-Projekt legt es beim n\xE4chsten Start wieder an.`
   }
 };
@@ -1092,7 +1369,7 @@ function imageRow(i) {
 }
 function keptImage(i) {
   if (i.rollback) {
-    return "Bleibt als R\xFCckweg f\xFCr Nodvard Deck: Ohne dieses Image gibt es nach einem misslungenen Update kein Zur\xFCck.";
+    return productText("Bleibt als R\xFCckweg f\xFCr Nodvard Deck: Ohne dieses Image gibt es nach einem misslungenen Update kein Zur\xFCck.");
   }
   if (i.names.length > 1) {
     return `Hat mehrere Namen; Docker l\xF6scht es erst, wenn nur noch einer \xFCbrig ist. Einen Namen entfernst du im Terminal mit: docker rmi ${i.names[0]}`;
@@ -1122,15 +1399,16 @@ function networkRow(n) {
     usedBy: n.used_by,
     inUse: n.in_use || n.builtin,
     removable: n.removable,
-    payload: { network: n.id }
+    payload: { network: n.id },
+    linkable: linkable(n.name, n.driver)
   };
 }
 function usage(row) {
   if (row.usedBy.length) return `benutzt von ${row.usedBy.join(", ")}`;
   if (row.inUse) return row.builtin ? "" : "von einem Container benutzt";
-  return /* @__PURE__ */ jsxs7(Fragment6, { children: [
-    /* @__PURE__ */ jsx8("span", { className: "text-amber-300", children: "von keinem Container benutzt" }),
-    row.kept && /* @__PURE__ */ jsx8("span", { className: "block opacity-70", children: row.kept })
+  return /* @__PURE__ */ jsxs9(Fragment6, { children: [
+    /* @__PURE__ */ jsx10("span", { className: "text-amber-300", children: "von keinem Container benutzt" }),
+    row.kept && /* @__PURE__ */ jsx10("span", { className: "block opacity-70", children: row.kept })
   ] });
 }
 function toRows(kind, body) {
@@ -1140,21 +1418,48 @@ function toRows(kind, body) {
 }
 function ResourceList({ hostId, kind }) {
   const unmountSignal = useUnmountSignal();
-  const [rows, setRows] = useState6(null);
-  const [error, setError] = useState6(null);
-  const [busy, setBusy] = useState6(null);
-  const [message, setMessage] = useState6(null);
-  const [waiting, setWaiting] = useState6(/* @__PURE__ */ new Set());
-  const [reload, setReload] = useState6(0);
+  const [rows, setRows] = useState9(null);
+  const [error, setError] = useState9(null);
+  const [busy, setBusy] = useState9(null);
+  const [messages, setMessages] = useState9(/* @__PURE__ */ new Map());
+  const [reload, setReload] = useState9(0);
+  const [containers, setContainers] = useState9([]);
+  const [links, setLinks] = useState9(null);
   const text = TEXT[kind];
-  useEffect6(() => {
+  function setMessage(key, message) {
+    setMessages((previous) => {
+      const next = new Map(previous);
+      if (message === null) next.delete(key);
+      else next.set(key, message);
+      return next;
+    });
+  }
+  const waiting = usePendingActions((completed) => {
+    for (const [key, action] of completed) {
+      const label = key.startsWith("anlegen:") ? "Netz anlegen" : key.startsWith("holen:") ? "Image holen" : text.label;
+      const outcome = action ? action.status === "succeeded" && action.result?.output || describeActionOutcome(action).text : "Aktion nicht mehr verf\xFCgbar.";
+      setMessage(key, `${label}: ${outcome}`);
+    }
+    setReload((n) => n + 1);
+  });
+  const linkWaiting = usePendingActions((completed) => {
+    for (const [key, action] of completed) {
+      const label = key.endsWith(":connect") ? "Verbinden" : "Trennen";
+      const outcome = action ? action.status === "succeeded" && action.result?.output || describeActionOutcome(action).text : "Aktion nicht mehr verf\xFCgbar.";
+      setMessage(key, `${label}: ${outcome}`);
+    }
+    setReload((n) => n + 1);
+  });
+  useEffect7(() => {
     const controller = new AbortController();
-    setRows(null);
     setError(null);
     fetchJson(`/ext/docker/hosts/${encodeURIComponent(hostId)}/${kind}`, { signal: controller.signal }).then((body) => {
       if (controller.signal.aborted) return;
       if (kind === "networks" && typeof body.error === "string" && body.error) setError(body.error);
-      else setRows(toRows(kind, body));
+      else {
+        setRows(toRows(kind, body));
+        setContainers(body.containers ?? []);
+      }
     }).catch((err) => {
       if (!controller.signal.aborted) setError(errorMessage(err));
     });
@@ -1164,54 +1469,93 @@ function ResourceList({ hostId, kind }) {
     const ok = await deck().confirmDialog(text.confirm(row.title), { title: text.label, danger: true, confirmLabel: "L\xF6schen" });
     if (!ok) return;
     setBusy(row.key);
-    setMessage(null);
+    setMessage(row.key, null);
     try {
       const result = await hostAction(hostId, text.action, `${text.label} \xFCber die Docker-Seite.`, unmountSignal(), row.payload);
-      setMessage(`${text.label}: ${result.text}`);
-      if (result.waiting) setWaiting((keys) => new Set(keys).add(row.key));
+      setMessage(row.key, `${text.label}: ${result.text}`);
+      if (result.waiting) waiting.add(row.key, result.actionId);
       setReload((n) => n + 1);
     } catch (err) {
-      setMessage(`Fehler: ${errorMessage(err)}`);
+      setMessage(row.key, `Fehler: ${errorMessage(err)}`);
     } finally {
       setBusy(null);
     }
   }
-  if (error) return /* @__PURE__ */ jsx8(LoadError, { what: text.what, error, onRetry: () => setReload((n) => n + 1) });
-  if (!rows) return /* @__PURE__ */ jsxs7("p", { className: "text-sm opacity-60", children: [
-    "Lade die ",
-    text.noun,
-    " \u2026 Das dauert ein paar Sekunden."
-  ] });
+  function started(message, waitingFor) {
+    const key = `${kind === "images" ? "holen" : "anlegen"}:${waitingFor ?? message}`;
+    setMessage(key, message);
+    if (waitingFor) waiting.add(key, waitingFor);
+    setReload((n) => n + 1);
+  }
   const canRemove = deck().hasPermission("hosts.execute");
-  return /* @__PURE__ */ jsxs7("div", { "data-testid": `resources-${kind}`, children: [
-    /* @__PURE__ */ jsx8("p", { className: "mb-2 text-xs opacity-60", children: text.hint }),
-    message && /* @__PURE__ */ jsx8("p", { className: "mb-2 text-sm opacity-90", role: "status", children: message }),
-    rows.length === 0 && /* @__PURE__ */ jsx8("p", { className: "text-sm opacity-70", children: text.empty }),
-    /* @__PURE__ */ jsx8("ul", { className: "divide-y divide-white/5 text-sm", children: rows.map((row) => /* @__PURE__ */ jsxs7("li", { className: "flex flex-wrap items-center gap-x-3 gap-y-1 py-2", "data-testid": `resource-${row.key}`, children: [
-      /* @__PURE__ */ jsxs7("div", { className: "min-w-0 flex-1", children: [
-        /* @__PURE__ */ jsxs7("p", { className: `break-words ${row.muted ? "opacity-70" : ""}`, children: [
-          row.title,
-          " ",
-          row.builtin && /* @__PURE__ */ jsx8(Badge, { children: "eingebaut" })
-        ] }),
-        /* @__PURE__ */ jsx8("p", { className: "text-xs opacity-60", children: row.facts.join(" \xB7 ") })
-      ] }),
-      /* @__PURE__ */ jsx8("p", { className: "text-xs opacity-80 md:w-64", children: usage(row) }),
-      canRemove && /* @__PURE__ */ jsxs7("div", { className: "w-20 shrink-0 text-right", children: [
-        row.removable && waiting.has(row.key) && /* @__PURE__ */ jsx8("span", { className: "text-xs opacity-70", children: "wartet auf Freigabe" }),
-        row.removable && !waiting.has(row.key) && /* @__PURE__ */ jsx8(Button, { small: true, variant: "danger", disabled: busy !== null, onClick: () => void remove(row), ariaLabel: `${text.label}: ${row.title}`, children: busy === row.key ? "\u2026" : "L\xF6schen" })
-      ] })
-    ] }, row.key)) })
+  const buttons = (row) => canRemove && (kind === "networks" && row.linkable || row.removable);
+  return /* @__PURE__ */ jsxs9("div", { "data-testid": `resources-${kind}`, children: [
+    messages.size > 0 && /* @__PURE__ */ jsx10("p", { className: "mb-2 text-sm opacity-90", role: "status", children: [...messages.values()].join(" ") }),
+    error ? /* @__PURE__ */ jsx10(LoadError, { what: text.what, error, onRetry: () => setReload((n) => n + 1) }) : !rows ? /* @__PURE__ */ jsxs9("p", { className: "text-sm opacity-60", children: [
+      "Lade die ",
+      text.noun,
+      " \u2026 Das dauert ein paar Sekunden."
+    ] }) : /* @__PURE__ */ jsxs9(Fragment6, { children: [
+      /* @__PURE__ */ jsx10("p", { className: "mb-2 text-xs opacity-60", children: text.hint }),
+      kind === "images" && canRemove && /* @__PURE__ */ jsx10(ImagePull, { hostId, onDone: started }),
+      kind === "networks" && canRemove && /* @__PURE__ */ jsx10(NetworkCreate, { hostId, onDone: started }),
+      rows.length === 0 && /* @__PURE__ */ jsx10("p", { className: "text-sm opacity-70", children: text.empty }),
+      /* @__PURE__ */ jsx10("ul", { className: CARD_LIST, children: rows.map((row) => /* @__PURE__ */ jsxs9(
+        "li",
+        {
+          className: `${CARD_ITEM} flex flex-col gap-1 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3 sm:gap-y-1`,
+          "data-testid": `resource-${row.key}`,
+          children: [
+            /* @__PURE__ */ jsxs9("div", { className: "min-w-0 flex-1", children: [
+              /* @__PURE__ */ jsxs9("p", { className: `break-words ${row.muted ? "opacity-70" : ""}`, children: [
+                row.title,
+                " ",
+                row.builtin && /* @__PURE__ */ jsx10(Badge, { children: "eingebaut" })
+              ] }),
+              /* @__PURE__ */ jsx10("p", { className: "text-xs opacity-60", children: row.facts.join(" \xB7 ") })
+            ] }),
+            /* @__PURE__ */ jsx10("p", { className: "text-xs opacity-80 max-sm:empty:hidden md:w-64", children: usage(row) }),
+            /* @__PURE__ */ jsxs9("div", { className: `${buttons(row) ? "flex" : "hidden"} flex-wrap items-center gap-1.5 sm:contents`, "data-testid": `resource-buttons-${row.key}`, children: [
+              kind === "networks" && canRemove && row.linkable && /* @__PURE__ */ jsx10(Button, { small: true, pressed: links === row.key, onClick: () => setLinks(links === row.key ? null : row.key), ariaLabel: `Container: ${row.title}`, children: "Container" }),
+              canRemove && /* @__PURE__ */ jsxs9("div", { className: "empty:hidden sm:w-20 sm:shrink-0 sm:text-right sm:empty:block", children: [
+                row.removable && waiting.keys.has(row.key) && /* @__PURE__ */ jsx10("span", { className: "text-xs opacity-70", children: "wartet auf Freigabe" }),
+                row.removable && !waiting.keys.has(row.key) && /* @__PURE__ */ jsx10(Button, { small: true, variant: "danger", disabled: busy !== null, onClick: () => void remove(row), ariaLabel: `${text.label}: ${row.title}`, children: busy === row.key ? "\u2026" : "L\xF6schen" })
+              ] })
+            ] }),
+            kind === "networks" && links === row.key && /* @__PURE__ */ jsx10(
+              NetworkLinks,
+              {
+                hostId,
+                network: row.payload.network,
+                title: row.title,
+                usedBy: row.usedBy,
+                containers,
+                actionSignal: unmountSignal,
+                networksOf: (name) => rows.filter((r) => r.usedBy.includes(name)).length,
+                pending: new Set([...linkWaiting.keys].filter((k) => k.startsWith(`${row.key}:`)).map((k) => k.slice(row.key.length + 1))),
+                onDone: (m, outcome) => {
+                  setMessage(`${row.key}:${outcome.key}`, m);
+                  if (outcome.waiting) linkWaiting.add(`${row.key}:${outcome.key}`, outcome.actionId);
+                  if (!outcome.failed) setLinks(null);
+                  setReload((n) => n + 1);
+                }
+              }
+            )
+          ]
+        },
+        row.key
+      )) })
+    ] })
   ] });
 }
 function ResourcesSection({ kind, hostId, onHost, empty }) {
-  return /* @__PURE__ */ jsx8(HostSection, { hostId, onHost, empty, children: (id) => /* @__PURE__ */ jsx8(ResourceList, { hostId: id, kind }, `${id}:${kind}`) });
+  return /* @__PURE__ */ jsx10(HostSection, { hostId, onHost, empty, children: (id) => /* @__PURE__ */ jsx10(ResourceList, { hostId: id, kind }, `${id}:${kind}`) });
 }
 function HostSection({ hostId, onHost, empty, children }) {
-  const [hosts, setHosts] = useState6(null);
-  const [error, setError] = useState6(null);
-  const [reload, setReload] = useState6(0);
-  useEffect6(() => {
+  const [hosts, setHosts] = useState9(null);
+  const [error, setError] = useState9(null);
+  const [reload, setReload] = useState9(0);
+  useEffect7(() => {
     const controller = new AbortController();
     setError(null);
     fetchJson("/ext/docker/hosts", { signal: controller.signal }).then((body) => {
@@ -1221,32 +1565,32 @@ function HostSection({ hostId, onHost, empty, children }) {
     });
     return () => controller.abort();
   }, [reload]);
-  if (error) return /* @__PURE__ */ jsx8(LoadError, { what: "Die Liste der Docker-Server", error, onRetry: () => setReload((n) => n + 1) });
-  if (!hosts) return /* @__PURE__ */ jsx8("p", { className: "text-sm opacity-60", children: "Lade die Docker-Server \u2026" });
+  if (error) return /* @__PURE__ */ jsx10(LoadError, { what: "Die Liste der Docker-Server", error, onRetry: () => setReload((n) => n + 1) });
+  if (!hosts) return /* @__PURE__ */ jsx10("p", { className: "text-sm opacity-60", children: "Lade die Docker-Server \u2026" });
   const current = hosts.find((h) => h.id === hostId) ?? hosts[0];
-  if (!current) return /* @__PURE__ */ jsx8(Fragment6, { children: empty });
-  return /* @__PURE__ */ jsxs7("section", { children: [
-    hosts.length > 1 && /* @__PURE__ */ jsxs7("label", { className: "mb-3 flex items-center gap-2 text-sm", children: [
+  if (!current) return /* @__PURE__ */ jsx10(Fragment6, { children: empty });
+  return /* @__PURE__ */ jsxs9("section", { children: [
+    hosts.length > 1 && /* @__PURE__ */ jsxs9("label", { className: "mb-3 flex items-center gap-2 text-sm", children: [
       "Server",
-      /* @__PURE__ */ jsx8(
+      /* @__PURE__ */ jsx10(
         "select",
         {
           value: current.id,
           onChange: (e) => onHost(e.target.value),
           className: "rounded-lg border border-white/10 bg-black/25 px-2 py-1 text-sm outline-none focus:border-[var(--color-accent)]",
-          children: hosts.map((h) => /* @__PURE__ */ jsxs7("option", { value: h.id, children: [
+          children: hosts.map((h) => /* @__PURE__ */ jsxs9("option", { value: h.id, children: [
             h.name,
             h.mode === "operate" ? " (nur bedienen)" : ""
           ] }, h.id))
         }
       )
     ] }),
-    current.mode === "operate" ? /* @__PURE__ */ jsx8(OperateNote, { hostId: current.id, name: current.name }) : children(current.id)
+    current.mode === "operate" ? /* @__PURE__ */ jsx10(OperateNote, { hostId: current.id, name: current.name }) : children(current.id)
   ] });
 }
 
 // src/StackEditor.tsx
-import { useEffect as useEffect7, useRef as useRef4, useState as useState8 } from "react";
+import { useEffect as useEffect8, useRef as useRef5, useState as useState11 } from "react";
 
 // src/DiffView.tsx
 import { useMemo as useMemo3 } from "react";
@@ -1326,29 +1670,29 @@ function hunks(lines, context = 2) {
 }
 
 // src/DiffView.tsx
-import { jsx as jsx9, jsxs as jsxs8 } from "react/jsx-runtime";
+import { jsx as jsx11, jsxs as jsxs10 } from "react/jsx-runtime";
 var TONE = { "+": "bg-emerald-500/15 text-emerald-200", "-": "bg-red-500/15 text-red-200", " ": "opacity-70" };
 function DiffView({ before, after, open }) {
   const diff = useMemo3(() => lineDiff(before, after), [before, after]);
   if (!diff.added && !diff.removed) return null;
-  return /* @__PURE__ */ jsxs8("details", { open, "data-testid": "stack-diff", children: [
-    /* @__PURE__ */ jsxs8("summary", { className: "cursor-pointer select-none opacity-80", children: [
+  return /* @__PURE__ */ jsxs10("details", { open, "data-testid": "stack-diff", children: [
+    /* @__PURE__ */ jsxs10("summary", { className: "cursor-pointer select-none opacity-80", children: [
       "Unterschied zur Datei auf dem Server: +",
       diff.added,
       " \u2212",
       diff.removed,
       " Zeilen"
     ] }),
-    diff.lines ? /* @__PURE__ */ jsx9("pre", { className: "mt-1 max-h-72 overflow-auto rounded bg-black/60 p-2 font-mono text-[11px] leading-snug", children: hunks(diff.lines).map((line, index) => line ? /* @__PURE__ */ jsxs8("div", { className: TONE[line.kind], children: [
+    diff.lines ? /* @__PURE__ */ jsx11("pre", { className: "mt-1 max-h-72 overflow-auto rounded bg-black/60 p-2 font-mono text-[11px] leading-snug", children: hunks(diff.lines).map((line, index) => line ? /* @__PURE__ */ jsxs10("div", { className: TONE[line.kind], children: [
       line.kind,
       " ",
       line.text
-    ] }, index) : /* @__PURE__ */ jsx9("div", { className: "opacity-40", children: "\u2026" }, index)) }) : /* @__PURE__ */ jsx9("p", { className: "opacity-70", children: "So viele \xC4nderungen lassen sich hier nicht Zeile f\xFCr Zeile zeigen." })
+    ] }, index) : /* @__PURE__ */ jsx11("div", { className: "opacity-40", children: "\u2026" }, index)) }) : /* @__PURE__ */ jsx11("p", { className: "opacity-70", children: "So viele \xC4nderungen lassen sich hier nicht Zeile f\xFCr Zeile zeigen." })
   ] });
 }
 
 // src/StackForm.tsx
-import { useMemo as useMemo4, useRef as useRef3, useState as useState7 } from "react";
+import { useMemo as useMemo4, useRef as useRef4, useState as useState10 } from "react";
 
 // ../../../frontend/node_modules/yaml/browser/dist/nodes/identity.js
 var ALIAS = /* @__PURE__ */ Symbol.for("yaml.alias");
@@ -8049,7 +8393,7 @@ ${indent}${" ".repeat(unit)}${key.text}: ${value.text}
 }
 
 // src/StackForm.tsx
-import { Fragment as Fragment7, jsx as jsx10, jsxs as jsxs9 } from "react/jsx-runtime";
+import { Fragment as Fragment7, jsx as jsx12, jsxs as jsxs11 } from "react/jsx-runtime";
 var RESTART = [
   ["", "Kein Eintrag (startet nicht von selbst neu)"],
   ["unless-stopped", "Neu starten, au\xDFer von Hand gestoppt"],
@@ -8063,8 +8407,8 @@ var LISTS = [
 ];
 var small = `${inputClass} !px-2 !py-1 !text-xs`;
 function EditField({ label, value, placeholder, disabled, onEdit, onStart, onEnd }) {
-  const [draft, setDraft] = useState7(null);
-  return /* @__PURE__ */ jsx10(
+  const [draft, setDraft] = useState10(null);
+  return /* @__PURE__ */ jsx12(
     "input",
     {
       "aria-label": label,
@@ -8089,14 +8433,14 @@ function EditField({ label, value, placeholder, disabled, onEdit, onStart, onEnd
   );
 }
 function Locked({ reason }) {
-  return /* @__PURE__ */ jsx10("p", { className: "text-amber-300/90", children: reason });
+  return /* @__PURE__ */ jsx12("p", { className: "text-amber-300/90", children: reason });
 }
 function StackForm({ text, onChange, disabled }) {
   const form = useMemo4(() => readForm(text), [text]);
-  const [problem, setProblem] = useState7(null);
-  const [adding, setAdding] = useState7({});
-  const [service, setService] = useState7({ name: "", image: "" });
-  const base = useRef3(null);
+  const [problem, setProblem] = useState10(null);
+  const [adding, setAdding] = useState10({});
+  const [service, setService] = useState10({ name: "", image: "" });
+  const base = useRef4(null);
   function run(op, fromBase = false) {
     const out = applyOp(fromBase && base.current != null ? base.current : text, op);
     if ("error" in out) {
@@ -8112,7 +8456,7 @@ function StackForm({ text, onChange, disabled }) {
   }, onEnd: () => {
     base.current = null;
   }, disabled };
-  if (form.locked) return /* @__PURE__ */ jsx10(Locked, { reason: form.locked });
+  if (form.locked) return /* @__PURE__ */ jsx12(Locked, { reason: form.locked });
   function addTo(key, op) {
     if (run(op)) setAdding((all) => ({ ...all, [key]: "" }));
   }
@@ -8120,11 +8464,11 @@ function StackForm({ text, onChange, disabled }) {
     const data = svc[field];
     const key = `${svc.name}/${field}`;
     const draft = adding[key] ?? "";
-    return /* @__PURE__ */ jsxs9("div", { className: "flex flex-col gap-1", children: [
-      /* @__PURE__ */ jsx10("span", { className: "opacity-70", children: label }),
-      data.locked ? /* @__PURE__ */ jsx10(Locked, { reason: data.locked }) : /* @__PURE__ */ jsxs9(Fragment7, { children: [
-        data.items.map((item, index) => /* @__PURE__ */ jsxs9("div", { className: "flex items-center gap-1.5", children: [
-          item.editable ? /* @__PURE__ */ jsx10(
+    return /* @__PURE__ */ jsxs11("div", { className: "flex flex-col gap-1", children: [
+      /* @__PURE__ */ jsx12("span", { className: "opacity-70", children: label }),
+      data.locked ? /* @__PURE__ */ jsx12(Locked, { reason: data.locked }) : /* @__PURE__ */ jsxs11(Fragment7, { children: [
+        data.items.map((item, index) => /* @__PURE__ */ jsxs11("div", { className: "flex items-center gap-1.5", children: [
+          item.editable ? /* @__PURE__ */ jsx12(
             EditField,
             {
               label: `${label} ${index + 1} von ${svc.name}`,
@@ -8132,8 +8476,8 @@ function StackForm({ text, onChange, disabled }) {
               ...typing,
               onEdit: (value) => run({ op: "setItem", service: svc.name, field, index, value }, true)
             }
-          ) : /* @__PURE__ */ jsx10("span", { className: "flex-1 break-all font-mono opacity-80", title: "Ausf\xFChrlich geschrieben, bitte im Text \xE4ndern.", children: item.value }),
-          /* @__PURE__ */ jsx10(
+          ) : /* @__PURE__ */ jsx12("span", { className: "flex-1 break-all font-mono opacity-80", title: "Ausf\xFChrlich geschrieben, bitte im Text \xE4ndern.", children: item.value }),
+          /* @__PURE__ */ jsx12(
             Button,
             {
               small: true,
@@ -8144,8 +8488,8 @@ function StackForm({ text, onChange, disabled }) {
             }
           )
         ] }, index)),
-        /* @__PURE__ */ jsxs9("div", { className: "flex items-center gap-1.5", children: [
-          /* @__PURE__ */ jsx10(
+        /* @__PURE__ */ jsxs11("div", { className: "flex items-center gap-1.5", children: [
+          /* @__PURE__ */ jsx12(
             "input",
             {
               "aria-label": `${label} f\xFCr ${svc.name} hinzuf\xFCgen`,
@@ -8157,9 +8501,9 @@ function StackForm({ text, onChange, disabled }) {
               onChange: (event) => setAdding((all) => ({ ...all, [key]: event.target.value }))
             }
           ),
-          /* @__PURE__ */ jsx10(Button, { small: true, disabled: disabled || !draft.trim(), onClick: () => addTo(key, { op: "addItem", service: svc.name, field, value: draft.trim() }), children: "Hinzuf\xFCgen" })
+          /* @__PURE__ */ jsx12(Button, { small: true, disabled: disabled || !draft.trim(), onClick: () => addTo(key, { op: "addItem", service: svc.name, field, value: draft.trim() }), children: "Hinzuf\xFCgen" })
         ] }),
-        /* @__PURE__ */ jsx10("span", { className: "opacity-60", children: hint })
+        /* @__PURE__ */ jsx12("span", { className: "opacity-60", children: hint })
       ] })
     ] }, field);
   }
@@ -8168,12 +8512,12 @@ function StackForm({ text, onChange, disabled }) {
     const keyDraft = adding[`${svc.name}/env-key`] ?? "";
     const valueDraft = adding[`${svc.name}/env-value`] ?? "";
     const keyOk = ENV_KEY_RE.test(keyDraft);
-    return /* @__PURE__ */ jsxs9("div", { className: "flex flex-col gap-1", children: [
-      /* @__PURE__ */ jsx10("span", { className: "opacity-70", children: "Umgebungsvariablen" }),
-      env.locked ? /* @__PURE__ */ jsx10(Locked, { reason: env.locked }) : /* @__PURE__ */ jsxs9(Fragment7, { children: [
-        env.entries.map((entry, index) => /* @__PURE__ */ jsxs9("div", { className: "flex items-center gap-1.5", children: [
-          /* @__PURE__ */ jsx10("span", { className: "w-2/5 shrink-0 break-all font-mono", children: entry.key }),
-          entry.editable ? /* @__PURE__ */ jsx10(
+    return /* @__PURE__ */ jsxs11("div", { className: "flex flex-col gap-1", children: [
+      /* @__PURE__ */ jsx12("span", { className: "opacity-70", children: "Umgebungsvariablen" }),
+      env.locked ? /* @__PURE__ */ jsx12(Locked, { reason: env.locked }) : /* @__PURE__ */ jsxs11(Fragment7, { children: [
+        env.entries.map((entry, index) => /* @__PURE__ */ jsxs11("div", { className: "flex items-center gap-1.5", children: [
+          /* @__PURE__ */ jsx12("span", { className: "w-2/5 shrink-0 break-all font-mono", children: entry.key }),
+          entry.editable ? /* @__PURE__ */ jsx12(
             EditField,
             {
               label: `Wert von ${entry.key} in ${svc.name}`,
@@ -8181,8 +8525,8 @@ function StackForm({ text, onChange, disabled }) {
               ...typing,
               onEdit: (value) => run({ op: "setEnv", service: svc.name, key: entry.key, value }, true)
             }
-          ) : /* @__PURE__ */ jsx10("span", { className: "flex-1 break-all font-mono opacity-80", title: "Besonders geschrieben, bitte im Text \xE4ndern.", children: entry.value }),
-          /* @__PURE__ */ jsx10(
+          ) : /* @__PURE__ */ jsx12("span", { className: "flex-1 break-all font-mono opacity-80", title: "Besonders geschrieben, bitte im Text \xE4ndern.", children: entry.value }),
+          /* @__PURE__ */ jsx12(
             Button,
             {
               small: true,
@@ -8193,8 +8537,8 @@ function StackForm({ text, onChange, disabled }) {
             }
           )
         ] }, `${entry.key}-${index}`)),
-        /* @__PURE__ */ jsxs9("div", { className: "flex items-center gap-1.5", children: [
-          /* @__PURE__ */ jsx10(
+        /* @__PURE__ */ jsxs11("div", { className: "flex items-center gap-1.5", children: [
+          /* @__PURE__ */ jsx12(
             "input",
             {
               "aria-label": `Name der neuen Variable f\xFCr ${svc.name}`,
@@ -8206,7 +8550,7 @@ function StackForm({ text, onChange, disabled }) {
               onChange: (event) => setAdding((all) => ({ ...all, [`${svc.name}/env-key`]: event.target.value }))
             }
           ),
-          /* @__PURE__ */ jsx10(
+          /* @__PURE__ */ jsx12(
             "input",
             {
               "aria-label": `Wert der neuen Variable f\xFCr ${svc.name}`,
@@ -8218,7 +8562,7 @@ function StackForm({ text, onChange, disabled }) {
               onChange: (event) => setAdding((all) => ({ ...all, [`${svc.name}/env-value`]: event.target.value }))
             }
           ),
-          /* @__PURE__ */ jsx10(
+          /* @__PURE__ */ jsx12(
             Button,
             {
               small: true,
@@ -8230,26 +8574,26 @@ function StackForm({ text, onChange, disabled }) {
             }
           )
         ] }),
-        env.list && /* @__PURE__ */ jsx10("span", { className: "opacity-60", children: "Steht in der Datei als Liste \u201ENAME=Wert\u201C und bleibt so." })
+        env.list && /* @__PURE__ */ jsx12("span", { className: "opacity-60", children: "Steht in der Datei als Liste \u201ENAME=Wert\u201C und bleibt so." })
       ] })
     ] });
   }
   const nameTaken = form.services.some((s) => s.name === service.name);
-  return /* @__PURE__ */ jsxs9("div", { className: "flex flex-col gap-3", "data-testid": "stack-form", children: [
-    /* @__PURE__ */ jsx10("p", { className: "opacity-70", children: "Das Formular \xE4ndert nur die Stellen, die du hier bearbeitest. Kommentare und der Rest der Datei bleiben, wie sie sind; alles Weitere geht im Text." }),
-    form.notes.map((note) => /* @__PURE__ */ jsx10("p", { className: "opacity-70", children: note }, note)),
-    problem && /* @__PURE__ */ jsx10("p", { className: "text-red-400", role: "alert", children: problem }),
-    form.services.length === 0 && /* @__PURE__ */ jsx10("p", { className: "opacity-70", children: "Noch kein Dienst in der Datei." }),
-    form.services.map((svc) => /* @__PURE__ */ jsxs9("section", { className: "flex flex-col gap-2 rounded border border-white/10 p-2", "aria-label": `Dienst ${svc.name}`, children: [
-      /* @__PURE__ */ jsxs9("h4", { className: "font-semibold", children: [
+  return /* @__PURE__ */ jsxs11("div", { className: "flex flex-col gap-3", "data-testid": "stack-form", children: [
+    /* @__PURE__ */ jsx12("p", { className: "opacity-70", children: "Das Formular \xE4ndert nur die Stellen, die du hier bearbeitest. Kommentare und der Rest der Datei bleiben, wie sie sind; alles Weitere geht im Text." }),
+    form.notes.map((note) => /* @__PURE__ */ jsx12("p", { className: "opacity-70", children: note }, note)),
+    problem && /* @__PURE__ */ jsx12("p", { className: "text-red-400", role: "alert", children: problem }),
+    form.services.length === 0 && /* @__PURE__ */ jsx12("p", { className: "opacity-70", children: "Noch kein Dienst in der Datei." }),
+    form.services.map((svc) => /* @__PURE__ */ jsxs11("section", { className: "flex flex-col gap-2 rounded border border-white/10 p-2", "aria-label": `Dienst ${svc.name}`, children: [
+      /* @__PURE__ */ jsxs11("h4", { className: "font-semibold", children: [
         "Dienst \u201E",
         svc.name,
         "\u201C"
       ] }),
-      svc.locked ? /* @__PURE__ */ jsx10(Locked, { reason: svc.locked }) : /* @__PURE__ */ jsxs9(Fragment7, { children: [
-        /* @__PURE__ */ jsxs9("label", { className: "flex flex-col gap-1", children: [
-          /* @__PURE__ */ jsx10("span", { className: "opacity-70", children: "Image" }),
-          svc.imageLocked ? /* @__PURE__ */ jsx10(Locked, { reason: svc.imageLocked }) : /* @__PURE__ */ jsx10(
+      svc.locked ? /* @__PURE__ */ jsx12(Locked, { reason: svc.locked }) : /* @__PURE__ */ jsxs11(Fragment7, { children: [
+        /* @__PURE__ */ jsxs11("label", { className: "flex flex-col gap-1", children: [
+          /* @__PURE__ */ jsx12("span", { className: "opacity-70", children: "Image" }),
+          svc.imageLocked ? /* @__PURE__ */ jsx12(Locked, { reason: svc.imageLocked }) : /* @__PURE__ */ jsx12(
             EditField,
             {
               label: `Image von ${svc.name}`,
@@ -8260,9 +8604,9 @@ function StackForm({ text, onChange, disabled }) {
             }
           )
         ] }),
-        /* @__PURE__ */ jsxs9("label", { className: "flex flex-col gap-1", children: [
-          /* @__PURE__ */ jsx10("span", { className: "opacity-70", children: "Neustart" }),
-          svc.restartLocked ? /* @__PURE__ */ jsx10(Locked, { reason: svc.restartLocked }) : /* @__PURE__ */ jsxs9(
+        /* @__PURE__ */ jsxs11("label", { className: "flex flex-col gap-1", children: [
+          /* @__PURE__ */ jsx12("span", { className: "opacity-70", children: "Neustart" }),
+          svc.restartLocked ? /* @__PURE__ */ jsx12(Locked, { reason: svc.restartLocked }) : /* @__PURE__ */ jsxs11(
             "select",
             {
               "aria-label": `Neustart von ${svc.name}`,
@@ -8271,8 +8615,8 @@ function StackForm({ text, onChange, disabled }) {
               disabled,
               onChange: (event) => run(event.target.value ? { op: "set", service: svc.name, field: "restart", value: event.target.value } : { op: "unset", service: svc.name, field: "restart" }),
               children: [
-                svc.restart && !RESTART.some(([v]) => v === svc.restart) && /* @__PURE__ */ jsx10("option", { value: svc.restart, children: svc.restart }),
-                RESTART.map(([value, label]) => /* @__PURE__ */ jsx10("option", { value, children: label }, value))
+                svc.restart && !RESTART.some(([v]) => v === svc.restart) && /* @__PURE__ */ jsx12("option", { value: svc.restart, children: svc.restart }),
+                RESTART.map(([value, label]) => /* @__PURE__ */ jsx12("option", { value, children: label }, value))
               ]
             }
           )
@@ -8281,8 +8625,8 @@ function StackForm({ text, onChange, disabled }) {
         environment(svc)
       ] })
     ] }, svc.name)),
-    /* @__PURE__ */ jsxs9("div", { className: "flex flex-wrap items-center gap-1.5", children: [
-      /* @__PURE__ */ jsx10(
+    /* @__PURE__ */ jsxs11("div", { className: "flex flex-wrap items-center gap-1.5", children: [
+      /* @__PURE__ */ jsx12(
         "input",
         {
           "aria-label": "Name des neuen Dienstes",
@@ -8294,7 +8638,7 @@ function StackForm({ text, onChange, disabled }) {
           onChange: (event) => setService((s) => ({ ...s, name: event.target.value }))
         }
       ),
-      /* @__PURE__ */ jsx10(
+      /* @__PURE__ */ jsx12(
         "input",
         {
           "aria-label": "Image des neuen Dienstes",
@@ -8306,7 +8650,7 @@ function StackForm({ text, onChange, disabled }) {
           onChange: (event) => setService((s) => ({ ...s, image: event.target.value }))
         }
       ),
-      /* @__PURE__ */ jsx10(
+      /* @__PURE__ */ jsx12(
         Button,
         {
           small: true,
@@ -8317,13 +8661,13 @@ function StackForm({ text, onChange, disabled }) {
           children: "Dienst hinzuf\xFCgen"
         }
       ),
-      nameTaken && /* @__PURE__ */ jsx10("span", { className: "text-amber-300", children: "Den Namen gibt es schon." })
+      nameTaken && /* @__PURE__ */ jsx12("span", { className: "text-amber-300", children: "Den Namen gibt es schon." })
     ] })
   ] });
 }
 
 // src/StackEditor.tsx
-import { Fragment as Fragment8, jsx as jsx11, jsxs as jsxs10 } from "react/jsx-runtime";
+import { Fragment as Fragment8, jsx as jsx13, jsxs as jsxs12 } from "react/jsx-runtime";
 var JSON_HEADERS = { "Content-Type": "application/json" };
 var RISKY_NOTE = "Kommt so eine Einstellung neu dazu, braucht das Speichern eine Freigabe mit hohem Risiko.";
 var WAITING = "Zum Speichern vorgeschlagen. Es fehlt noch die Freigabe durch einen Admin, siehe \u201EAktionen\u201C.";
@@ -8348,50 +8692,50 @@ async function withResult(action, signal) {
 }
 function CheckResult({ checked, note }) {
   if (!checked) return null;
-  if (checked.error) return /* @__PURE__ */ jsxs10("p", { className: "text-red-400", role: "alert", children: [
+  if (checked.error) return /* @__PURE__ */ jsxs12("p", { className: "text-red-400", role: "alert", children: [
     "Compose lehnt die Datei ab: ",
     checked.error
   ] });
-  if (checked.unverified) return /* @__PURE__ */ jsxs10("p", { className: "text-amber-300", role: "alert", children: [
+  if (checked.unverified) return /* @__PURE__ */ jsxs12("p", { className: "text-amber-300", role: "alert", children: [
     "Nicht gepr\xFCft: ",
     checked.unverified
   ] });
-  return /* @__PURE__ */ jsxs10(Fragment8, { children: [
-    /* @__PURE__ */ jsxs10("p", { className: "text-emerald-300", role: "status", children: [
+  return /* @__PURE__ */ jsxs12(Fragment8, { children: [
+    /* @__PURE__ */ jsxs12("p", { className: "text-emerald-300", role: "status", children: [
       "Compose kann die Datei lesen",
       checked.services.length ? ` (Dienste: ${checked.services.join(", ")})` : "",
       "."
     ] }),
-    checked.warnings.length > 0 && /* @__PURE__ */ jsxs10("div", { className: "text-amber-300", "data-testid": "stack-editor-warnings", children: [
-      /* @__PURE__ */ jsx11("p", { children: "Riskante Einstellungen:" }),
-      /* @__PURE__ */ jsx11("ul", { className: "list-disc pl-5", children: checked.warnings.map((w) => /* @__PURE__ */ jsx11("li", { className: "break-words", children: w }, w)) }),
-      /* @__PURE__ */ jsx11("p", { children: note })
+    checked.warnings.length > 0 && /* @__PURE__ */ jsxs12("div", { className: "text-amber-300", "data-testid": "stack-editor-warnings", children: [
+      /* @__PURE__ */ jsx13("p", { children: "Riskante Einstellungen:" }),
+      /* @__PURE__ */ jsx13("ul", { className: "list-disc pl-5", children: checked.warnings.map((w) => /* @__PURE__ */ jsx13("li", { className: "break-words", children: w }, w)) }),
+      /* @__PURE__ */ jsx13("p", { children: note })
     ] })
   ] });
 }
 function StackEditor({ hostId, project, onClose, onDirty }) {
   const base = `/ext/docker/hosts/${encodeURIComponent(hostId)}/stacks/${encodeURIComponent(project)}`;
-  const [files, setFiles] = useState8(null);
-  const [error, setError] = useState8(null);
-  const [reload, setReload] = useState8(0);
-  const [index, setIndex] = useState8(0);
-  const [text, setText] = useState8("");
-  const [checked, setChecked] = useState8(null);
-  const [busy, setBusy] = useState8(false);
-  const [problem, setProblem] = useState8(null);
-  const [note, setNote] = useState8(null);
-  const [history, setHistory] = useState8(null);
-  const [historyError, setHistoryError] = useState8(null);
-  const [asForm, setAsForm] = useState8(false);
-  const keep = useRef4(null);
-  const checkRun = useRef4(0);
-  const life = useRef4(null);
-  useEffect7(() => {
+  const [files, setFiles] = useState11(null);
+  const [error, setError] = useState11(null);
+  const [reload, setReload] = useState11(0);
+  const [index, setIndex] = useState11(0);
+  const [text, setText] = useState11("");
+  const [checked, setChecked] = useState11(null);
+  const [busy, setBusy] = useState11(false);
+  const [problem, setProblem] = useState11(null);
+  const [note, setNote] = useState11(null);
+  const [history, setHistory] = useState11(null);
+  const [historyError, setHistoryError] = useState11(null);
+  const [asForm, setAsForm] = useState11(false);
+  const keep = useRef5(null);
+  const checkRun = useRef5(0);
+  const life = useRef5(null);
+  useEffect8(() => {
     const controller = new AbortController();
     life.current = controller;
     return () => controller.abort();
   }, []);
-  useEffect7(() => {
+  useEffect8(() => {
     const controller = new AbortController();
     setFiles(null);
     setError(null);
@@ -8412,18 +8756,18 @@ function StackEditor({ hostId, project, onClose, onDirty }) {
   }, [base, reload]);
   const file = files?.[index];
   const dirty = editable(file) && forServer(text, file.content) !== file.content;
-  useEffect7(() => {
+  useEffect8(() => {
     onDirty?.(dirty);
   }, [dirty, onDirty]);
-  if (error) return /* @__PURE__ */ jsx11(LoadError, { what: "Die Compose-Datei", error, onRetry: () => setReload((n) => n + 1), compact: true });
-  if (!files) return /* @__PURE__ */ jsx11("p", { className: "text-xs opacity-60", children: "Lade die Datei \u2026" });
+  if (error) return /* @__PURE__ */ jsx13(LoadError, { what: "Die Compose-Datei", error, onRetry: () => setReload((n) => n + 1), compact: true });
+  if (!files) return /* @__PURE__ */ jsx13("p", { className: "text-xs opacity-60", children: "Lade die Datei \u2026" });
   if (!editable(file)) {
-    return /* @__PURE__ */ jsxs10("div", { className: "flex flex-col gap-2 text-xs", children: [
-      /* @__PURE__ */ jsxs10("p", { className: "text-amber-300", children: [
+    return /* @__PURE__ */ jsxs12("div", { className: "flex flex-col gap-2 text-xs", children: [
+      /* @__PURE__ */ jsxs12("p", { className: "text-amber-300", children: [
         "Diese Datei l\xE4sst sich hier nicht bearbeiten: ",
         file?.edit_error ?? file?.error ?? "Docker nennt keine lesbare Datei."
       ] }),
-      /* @__PURE__ */ jsx11("div", { children: /* @__PURE__ */ jsx11(Button, { small: true, onClick: () => onClose(null), children: "Schlie\xDFen" }) })
+      /* @__PURE__ */ jsx13("div", { children: /* @__PURE__ */ jsx13(Button, { small: true, onClick: () => onClose(null), children: "Schlie\xDFen" }) })
     ] });
   }
   const current = file;
@@ -8533,9 +8877,9 @@ ${outcome.text}`.trim());
     setReload((n) => n + 1);
   }
   const switchable = files.map((f, i) => ({ f, i })).filter(({ f }) => editable(f));
-  return /* @__PURE__ */ jsxs10("div", { className: "flex flex-col gap-2 text-xs", "data-testid": `stack-editor-${project}`, children: [
-    /* @__PURE__ */ jsx11("p", { className: "opacity-70", children: "Auf den Server kommt die \xC4nderung erst mit \u201ESpeichern\u201C und der Freigabe. Vorher pr\xFCft Compose die Datei; die alte Fassung bleibt im Verlauf." }),
-    switchable.length > 1 && /* @__PURE__ */ jsx11("div", { className: "flex flex-wrap gap-1.5", children: switchable.map(({ f, i }) => /* @__PURE__ */ jsx11(
+  return /* @__PURE__ */ jsxs12("div", { className: "flex flex-col gap-2 text-xs", "data-testid": `stack-editor-${project}`, children: [
+    /* @__PURE__ */ jsx13("p", { className: "opacity-70", children: "Auf den Server kommt die \xC4nderung erst mit \u201ESpeichern\u201C und der Freigabe. Vorher pr\xFCft Compose die Datei; die alte Fassung bleibt im Verlauf." }),
+    switchable.length > 1 && /* @__PURE__ */ jsx13("div", { className: "flex flex-wrap gap-1.5", children: switchable.map(({ f, i }) => /* @__PURE__ */ jsx13(
       Button,
       {
         small: true,
@@ -8548,12 +8892,12 @@ ${outcome.text}`.trim());
       },
       f.path
     )) }),
-    /* @__PURE__ */ jsxs10("div", { className: "flex flex-wrap items-center gap-1.5", children: [
-      /* @__PURE__ */ jsx11("span", { className: "flex-1 break-all font-mono opacity-80", children: current.path }),
-      /* @__PURE__ */ jsx11(Button, { small: true, pressed: !asForm, onClick: () => setAsForm(false), children: "Text" }),
-      /* @__PURE__ */ jsx11(Button, { small: true, pressed: asForm, onClick: () => setAsForm(true), children: "Formular" })
+    /* @__PURE__ */ jsxs12("div", { className: "flex flex-wrap items-center gap-1.5", children: [
+      /* @__PURE__ */ jsx13("span", { className: "flex-1 break-all font-mono opacity-80", children: current.path }),
+      /* @__PURE__ */ jsx13(Button, { small: true, pressed: !asForm, onClick: () => setAsForm(false), children: "Text" }),
+      /* @__PURE__ */ jsx13(Button, { small: true, pressed: asForm, onClick: () => setAsForm(true), children: "Formular" })
     ] }),
-    asForm ? /* @__PURE__ */ jsx11(StackForm, { text, onChange: edit, disabled: busy }) : /* @__PURE__ */ jsx11(
+    asForm ? /* @__PURE__ */ jsx13(StackForm, { text, onChange: edit, disabled: busy }) : /* @__PURE__ */ jsx13(
       "textarea",
       {
         "aria-label": `Inhalt von ${name}`,
@@ -8565,27 +8909,27 @@ ${outcome.text}`.trim());
         onChange: (event) => edit(event.target.value)
       }
     ),
-    /* @__PURE__ */ jsx11(DiffView, { before: current.content.replace(/\r\n/g, "\n"), after: text, open: asForm }, `${current.path}-${asForm}`),
-    /* @__PURE__ */ jsx11(CheckResult, { checked, note: `${RISKY_NOTE} Was schon in der Datei auf dem Server steht, z\xE4hlt dabei nicht noch einmal.` }),
-    note && /* @__PURE__ */ jsx11("p", { className: "opacity-80", role: "status", children: note }),
-    problem && /* @__PURE__ */ jsxs10("div", { className: "flex flex-wrap items-center gap-2", children: [
-      /* @__PURE__ */ jsx11("p", { className: "break-words text-red-400", role: "alert", children: problem }),
-      /* @__PURE__ */ jsx11(Button, { small: true, onClick: reloadKeeping, children: "Stand vom Server holen, meine Fassung behalten" }),
-      /* @__PURE__ */ jsx11(Button, { small: true, onClick: () => void leave(() => setReload((n) => n + 1)), children: "Datei neu laden" })
+    /* @__PURE__ */ jsx13(DiffView, { before: current.content.replace(/\r\n/g, "\n"), after: text, open: asForm }, `${current.path}-${asForm}`),
+    /* @__PURE__ */ jsx13(CheckResult, { checked, note: `${RISKY_NOTE} Was schon in der Datei auf dem Server steht, z\xE4hlt dabei nicht noch einmal.` }),
+    note && /* @__PURE__ */ jsx13("p", { className: "opacity-80", role: "status", children: note }),
+    problem && /* @__PURE__ */ jsxs12("div", { className: "flex flex-wrap items-center gap-2", children: [
+      /* @__PURE__ */ jsx13("p", { className: "break-words text-red-400", role: "alert", children: problem }),
+      /* @__PURE__ */ jsx13(Button, { small: true, onClick: reloadKeeping, children: "Stand vom Server holen, meine Fassung behalten" }),
+      /* @__PURE__ */ jsx13(Button, { small: true, onClick: () => void leave(() => setReload((n) => n + 1)), children: "Datei neu laden" })
     ] }),
-    /* @__PURE__ */ jsxs10("div", { className: "flex flex-wrap gap-1.5", children: [
-      /* @__PURE__ */ jsx11(Button, { small: true, disabled: busy, onClick: () => void check(), children: "Pr\xFCfen" }),
-      /* @__PURE__ */ jsx11(Button, { small: true, variant: "primary", disabled: busy || !dirty, onClick: () => void save(false), children: "Speichern" }),
-      /* @__PURE__ */ jsx11(Button, { small: true, disabled: busy || !dirty, onClick: () => void save(true), children: "Speichern und anwenden" }),
-      /* @__PURE__ */ jsx11(Button, { small: true, pressed: history !== null, onClick: () => void toggleHistory(), children: "Verlauf" }),
-      /* @__PURE__ */ jsx11(Button, { small: true, onClick: () => void leave(() => onClose(null)), children: "Schlie\xDFen" })
+    /* @__PURE__ */ jsxs12("div", { className: "flex flex-wrap gap-1.5", children: [
+      /* @__PURE__ */ jsx13(Button, { small: true, disabled: busy, onClick: () => void check(), children: "Pr\xFCfen" }),
+      /* @__PURE__ */ jsx13(Button, { small: true, variant: "primary", disabled: busy || !dirty, onClick: () => void save(false), children: "Speichern" }),
+      /* @__PURE__ */ jsx13(Button, { small: true, disabled: busy || !dirty, onClick: () => void save(true), children: "Speichern und anwenden" }),
+      /* @__PURE__ */ jsx13(Button, { small: true, pressed: history !== null, onClick: () => void toggleHistory(), children: "Verlauf" }),
+      /* @__PURE__ */ jsx13(Button, { small: true, onClick: () => void leave(() => onClose(null)), children: "Schlie\xDFen" })
     ] }),
-    historyError && /* @__PURE__ */ jsx11(LoadError, { what: "Der Verlauf", error: historyError, onRetry: () => {
+    historyError && /* @__PURE__ */ jsx13(LoadError, { what: "Der Verlauf", error: historyError, onRetry: () => {
       setHistory(null);
       void toggleHistory();
     }, compact: true }),
-    history && /* @__PURE__ */ jsx11("div", { "data-testid": "stack-editor-history", children: history.length === 0 ? /* @__PURE__ */ jsx11("p", { className: "opacity-70", children: "Noch keine alte Fassung: Der Verlauf f\xFCllt sich mit jedem Speichern." }) : /* @__PURE__ */ jsx11("ul", { className: "divide-y divide-white/5", children: history.map((entry) => /* @__PURE__ */ jsxs10("li", { className: "flex flex-wrap items-center gap-2 py-1", children: [
-      /* @__PURE__ */ jsxs10("span", { className: "flex-1 break-all", children: [
+    history && /* @__PURE__ */ jsx13("div", { "data-testid": "stack-editor-history", children: history.length === 0 ? /* @__PURE__ */ jsx13("p", { className: "opacity-70", children: "Noch keine alte Fassung: Der Verlauf f\xFCllt sich mit jedem Speichern." }) : /* @__PURE__ */ jsx13("ul", { className: "divide-y divide-white/5", children: history.map((entry) => /* @__PURE__ */ jsxs12("li", { className: "flex flex-wrap items-center gap-2 py-1", children: [
+      /* @__PURE__ */ jsxs12("span", { className: "flex-1 break-all", children: [
         savedAt(entry.saved_at),
         " \xB7 ",
         baseName(entry.path),
@@ -8593,29 +8937,29 @@ ${outcome.text}`.trim());
         entry.size,
         " Bytes"
       ] }),
-      /* @__PURE__ */ jsx11(Button, { small: true, onClick: () => void loadOld(entry), children: "In den Editor laden" })
+      /* @__PURE__ */ jsx13(Button, { small: true, onClick: () => void loadOld(entry), children: "In den Editor laden" })
     ] }, entry.id)) }) })
   ] });
 }
 
 // src/Registries.tsx
-import { jsx as jsx12, jsxs as jsxs11 } from "react/jsx-runtime";
+import { jsx as jsx14, jsxs as jsxs13 } from "react/jsx-runtime";
 var WAITING2 = {
   login: "Zum Anmelden vorgeschlagen. Es fehlt noch die Freigabe durch einen Admin, siehe \u201EAktionen\u201C.",
   logout: "Zum Abmelden vorgeschlagen. Es fehlt noch die Freigabe durch einen Admin, siehe \u201EAktionen\u201C."
 };
 function status(r) {
-  if (r.logged_in === null) return /* @__PURE__ */ jsx12(Badge, { children: "unbekannt" });
-  return r.logged_in ? /* @__PURE__ */ jsx12(Badge, { tone: "good", children: "angemeldet" }) : /* @__PURE__ */ jsx12(Badge, { children: "nicht angemeldet" });
+  if (r.logged_in === null) return /* @__PURE__ */ jsx14(Badge, { children: "unbekannt" });
+  return r.logged_in ? /* @__PURE__ */ jsx14(Badge, { tone: "good", children: "angemeldet" }) : /* @__PURE__ */ jsx14(Badge, { children: "nicht angemeldet" });
 }
 function RegistryList({ hostId }) {
-  const [state, setState] = useState9(null);
-  const [error, setError] = useState9(null);
-  const [message, setMessage] = useState9(null);
-  const [busy, setBusy] = useState9(null);
-  const [reload, setReload] = useState9(0);
+  const [state, setState] = useState12(null);
+  const [error, setError] = useState12(null);
+  const [message, setMessage] = useState12(null);
+  const [busy, setBusy] = useState12(null);
+  const [reload, setReload] = useState12(0);
   const base = `/ext/docker/hosts/${encodeURIComponent(hostId)}/registries`;
-  useEffect8(() => {
+  useEffect9(() => {
     const controller = new AbortController();
     setError(null);
     fetchJson(base, { signal: controller.signal }).then((body) => {
@@ -8649,59 +8993,60 @@ function RegistryList({ hostId }) {
       setBusy(null);
     }
   }
-  if (error) return /* @__PURE__ */ jsx12(LoadError, { what: "Die Registries", error, onRetry: () => setReload((n) => n + 1) });
-  if (!state) return /* @__PURE__ */ jsx12("p", { className: "text-sm opacity-60", children: "Lese die Anmeldungen von Docker \u2026" });
-  const settings = /* @__PURE__ */ jsx12(SettingsLink, { to: "/settings/extensions/docker", permission: "extensions.manage", variant: "secondary", children: "Moduleinstellungen" });
-  const warnings = (state.warnings ?? []).map((w) => /* @__PURE__ */ jsx12("p", { className: "text-sm text-amber-300", role: "alert", children: w }, w));
+  if (error) return /* @__PURE__ */ jsx14(LoadError, { what: "Die Registries", error, onRetry: () => setReload((n) => n + 1) });
+  if (!state) return /* @__PURE__ */ jsx14("p", { className: "text-sm opacity-60", children: "Lese die Anmeldungen von Docker \u2026" });
+  const settings = /* @__PURE__ */ jsx14(SettingsLink, { to: "/settings/extensions/docker", permission: "extensions.manage", variant: "secondary", children: "Moduleinstellungen" });
+  const warnings = (state.warnings ?? []).map((w) => /* @__PURE__ */ jsx14("p", { className: "text-sm text-amber-300", role: "alert", children: w }, w));
   if (state.registries.length === 0) {
-    return /* @__PURE__ */ jsxs11("div", { className: "flex flex-col items-start gap-2 text-sm", "data-testid": "registries", children: [
+    return /* @__PURE__ */ jsxs13("div", { className: "flex flex-col items-start gap-2 text-sm", "data-testid": "registries", children: [
       warnings,
-      warnings.length === 0 && /* @__PURE__ */ jsx12("p", { className: "opacity-70", children: "Noch keine private Registry eingetragen. Brauchst du Images, die nur mit Anmeldung zu holen sind (etwa private Pakete auf ghcr.io), trag die Registry in den Einstellungen des Moduls unter \u201EErweitert\u201C ein, mit Passwort oder Token f\xFCr den Tresor." }),
+      warnings.length === 0 && /* @__PURE__ */ jsx14("p", { className: "opacity-70", children: "Noch keine private Registry eingetragen. Brauchst du Images, die nur mit Anmeldung zu holen sind (etwa private Pakete auf ghcr.io), trag die Registry in den Einstellungen des Moduls unter \u201EErweitert\u201C ein, mit Passwort oder Token f\xFCr den Tresor." }),
       settings
     ] });
   }
   const canChange = deck().hasPermission("hosts.execute");
-  return /* @__PURE__ */ jsxs11("div", { className: "flex flex-col gap-2", "data-testid": "registries", children: [
-    /* @__PURE__ */ jsxs11("p", { className: "text-xs opacity-60", children: [
-      "Angemeldet wird je Server. Docker speichert die Anmeldung dort in ~/.docker/config.json des Zugangs von Nodvard Deck",
+  return /* @__PURE__ */ jsxs13("div", { className: "flex flex-col gap-2", "data-testid": "registries", children: [
+    /* @__PURE__ */ jsxs13("p", { className: "text-xs opacity-60", children: [
+      "Angemeldet wird je Server. Docker speichert die Anmeldung dort in ~/.docker/config.json des Zugangs von ",
+      productText("Nodvard Deck"),
       state.creds_store ? ` \xFCber das Hilfsprogramm \u201E${state.creds_store}\u201C` : ", nur umkodiert, nicht verschl\xFCsselt",
       ", wie bei docker login von Hand."
     ] }),
     warnings,
-    state.error && /* @__PURE__ */ jsx12(LoadError, { what: "Die Anmeldungen", error: state.error, onRetry: () => setReload((n) => n + 1), compact: true }),
-    message && /* @__PURE__ */ jsx12("p", { className: `whitespace-pre-line break-words text-sm ${message.warn ? "text-red-400" : "opacity-90"}`, role: "status", children: message.text }),
-    /* @__PURE__ */ jsx12("ul", { className: "divide-y divide-white/5 text-sm", children: state.registries.map((r) => /* @__PURE__ */ jsxs11("li", { className: "flex flex-wrap items-center gap-x-3 gap-y-1 py-2", "data-testid": `registry-${r.name}`, children: [
-      /* @__PURE__ */ jsxs11("div", { className: "min-w-0 flex-1", children: [
-        /* @__PURE__ */ jsxs11("p", { className: "break-words", children: [
+    state.error && /* @__PURE__ */ jsx14(LoadError, { what: "Die Anmeldungen", error: state.error, onRetry: () => setReload((n) => n + 1), compact: true }),
+    message && /* @__PURE__ */ jsx14("p", { className: `whitespace-pre-line break-words text-sm ${message.warn ? "text-red-400" : "opacity-90"}`, role: "status", children: message.text }),
+    /* @__PURE__ */ jsx14("ul", { className: "divide-y divide-white/5 text-sm", children: state.registries.map((r) => /* @__PURE__ */ jsxs13("li", { className: "flex flex-wrap items-center gap-x-3 gap-y-1 py-2", "data-testid": `registry-${r.name}`, children: [
+      /* @__PURE__ */ jsxs13("div", { className: "min-w-0 flex-1", children: [
+        /* @__PURE__ */ jsxs13("p", { className: "break-words", children: [
           r.name,
           " ",
           status(r)
         ] }),
-        /* @__PURE__ */ jsxs11("p", { className: "break-all text-xs opacity-60", children: [
+        /* @__PURE__ */ jsxs13("p", { className: "break-all text-xs opacity-60", children: [
           r.address,
           " \xB7 als ",
           r.username
         ] }),
-        !r.secret_set && /* @__PURE__ */ jsx12("p", { className: "text-xs text-amber-300", children: "Kein Passwort im Tresor. Trag es in den Einstellungen des Moduls ein." })
+        !r.secret_set && /* @__PURE__ */ jsx14("p", { className: "text-xs text-amber-300", children: "Kein Passwort im Tresor. Trag es in den Einstellungen des Moduls ein." })
       ] }),
-      canChange && /* @__PURE__ */ jsxs11("div", { className: "flex shrink-0 gap-1.5", children: [
-        r.logged_in !== true && /* @__PURE__ */ jsx12(Button, { small: true, variant: "primary", disabled: busy !== null || !r.secret_set, onClick: () => void run(r, "login"), ariaLabel: `Bei ${r.name} anmelden`, children: busy === r.name ? "\u2026" : "Anmelden" }),
-        r.logged_in !== false && /* @__PURE__ */ jsx12(Button, { small: true, variant: "secondary", disabled: busy !== null, onClick: () => void run(r, "logout"), ariaLabel: `Bei ${r.name} abmelden`, children: "Abmelden" })
+      canChange && /* @__PURE__ */ jsxs13("div", { className: "flex shrink-0 gap-1.5", children: [
+        r.logged_in !== true && /* @__PURE__ */ jsx14(Button, { small: true, variant: "primary", disabled: busy !== null || !r.secret_set, onClick: () => void run(r, "login"), ariaLabel: `Bei ${r.name} anmelden`, children: busy === r.name ? "\u2026" : "Anmelden" }),
+        r.logged_in !== false && /* @__PURE__ */ jsx14(Button, { small: true, variant: "secondary", disabled: busy !== null, onClick: () => void run(r, "logout"), ariaLabel: `Bei ${r.name} abmelden`, children: "Abmelden" })
       ] })
     ] }, r.name)) }),
-    /* @__PURE__ */ jsx12("div", { children: settings })
+    /* @__PURE__ */ jsx14("div", { children: settings })
   ] });
 }
 function RegistriesSection({ hostId, onHost, empty }) {
-  return /* @__PURE__ */ jsx12(HostSection, { hostId, onHost, empty, children: (id) => /* @__PURE__ */ jsx12(RegistryList, { hostId: id }, id) });
+  return /* @__PURE__ */ jsx14(HostSection, { hostId, onHost, empty, children: (id) => /* @__PURE__ */ jsx14(RegistryList, { hostId: id }, id) });
 }
 
 // src/Stacks.tsx
-import { useCallback as useCallback2, useEffect as useEffect12, useRef as useRef7, useState as useState13 } from "react";
+import { useCallback as useCallback2, useEffect as useEffect13, useRef as useRef8, useState as useState17 } from "react";
 
 // src/Backups.tsx
-import { useEffect as useEffect9, useState as useState10 } from "react";
-import { jsx as jsx13, jsxs as jsxs12 } from "react/jsx-runtime";
+import { useEffect as useEffect10, useState as useState13 } from "react";
+import { jsx as jsx15, jsxs as jsxs14 } from "react/jsx-runtime";
 var WAITING3 = "Vorgeschlagen. Es fehlt noch die Freigabe durch einen Admin, siehe \u201EAktionen\u201C.";
 function named(names, one, many) {
   return `${names.join(", ")} ${names.length === 1 ? one : many}`;
@@ -8713,14 +9058,14 @@ function when(iso) {
   return new Date(iso).toLocaleString("de-DE", { day: "numeric", month: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 function BackupsPanel({ hostId, project, onDone }) {
-  const [list, setList] = useState10(null);
-  const [error, setError] = useState10(null);
-  const [failed, setFailed] = useState10(null);
-  const [chosen, setChosen] = useState10({});
-  const [busy, setBusy] = useState10(false);
-  const [reload, setReload] = useState10(0);
+  const [list, setList] = useState13(null);
+  const [error, setError] = useState13(null);
+  const [failed, setFailed] = useState13(null);
+  const [chosen, setChosen] = useState13({});
+  const [busy, setBusy] = useState13(false);
+  const [reload, setReload] = useState13(0);
   const base = `/ext/docker/hosts/${encodeURIComponent(hostId)}/stacks/${encodeURIComponent(project)}/backups`;
-  useEffect9(() => {
+  useEffect10(() => {
     const controller = new AbortController();
     setList(null);
     setError(null);
@@ -8764,7 +9109,7 @@ function BackupsPanel({ hostId, project, onDone }) {
     question += services.length > 0 ? ` ${named(services, "stoppt", "stoppen")} daf\xFCr, bis das Zur\xFCckspielen fertig ist; bei gro\xDFen Volumes kann das dauern.` : " Bei gro\xDFen Volumes kann das dauern.";
     if (idle.length > 0 && services.length === 0) question += ` ${named(idle, "ist gestoppt und bleibt", "sind gestoppt und bleiben")} es.`;
     else if (idle.length > 0) {
-      question += idle.length === 1 ? ` ${idle[0]} ist gestoppt. Deck startet ihn nicht; Compose kann ihn aber mitstarten, wenn ein laufender Dienst ihn braucht, etwa als Einmal-Dienst f\xFCr Migrationen.` : ` ${idle.join(", ")} sind gestoppt. Deck startet sie nicht; Compose kann sie aber mitstarten, wenn ein laufender Dienst sie braucht, etwa als Einmal-Dienst f\xFCr Migrationen.`;
+      question += idle.length === 1 ? ` ${idle[0]} ist gestoppt. ${productText("Deck")} startet ihn nicht; Compose kann ihn aber mitstarten, wenn ein laufender Dienst ihn braucht, etwa als Einmal-Dienst f\xFCr Migrationen.` : ` ${idle.join(", ")} sind gestoppt. ${productText("Deck")} startet sie nicht; Compose kann sie aber mitstarten, wenn ein laufender Dienst sie braucht, etwa als Einmal-Dienst f\xFCr Migrationen.`;
     }
     const gaps = notContained(backup);
     if (gaps.length > 0) {
@@ -8776,34 +9121,36 @@ function BackupsPanel({ hostId, project, onDone }) {
     const question = `Sicherung vom ${when(backup.at)} l\xF6schen? Sie l\xE4sst sich danach nicht mehr zur\xFCckspielen.`;
     void send(`${encodeURIComponent(backup.stamp)}/delete`, {}, question, "L\xF6schen", true);
   }
-  if (error) return /* @__PURE__ */ jsx13(LoadError, { what: "Die Sicherungen", error, onRetry: () => setReload((n) => n + 1), compact: true });
-  if (!list) return /* @__PURE__ */ jsx13("p", { className: "text-xs opacity-60", children: "Lade die Sicherungen \u2026" });
-  if (list.error) return /* @__PURE__ */ jsx13(LoadError, { what: "Die Sicherungen", error: list.error, onRetry: () => setReload((n) => n + 1), compact: true });
+  if (error) return /* @__PURE__ */ jsx15(LoadError, { what: "Die Sicherungen", error, onRetry: () => setReload((n) => n + 1), compact: true });
+  if (!list) return /* @__PURE__ */ jsx15("p", { className: "text-xs opacity-60", children: "Lade die Sicherungen \u2026" });
+  if (list.error) return /* @__PURE__ */ jsx15(LoadError, { what: "Die Sicherungen", error: list.error, onRetry: () => setReload((n) => n + 1), compact: true });
   const canChange = deck().hasPermission("hosts.execute");
-  return /* @__PURE__ */ jsxs12("div", { className: "flex flex-col gap-2 text-xs", "data-testid": `backups-${project}`, children: [
-    /* @__PURE__ */ jsxs12("p", { className: "opacity-70", children: [
+  return /* @__PURE__ */ jsxs14("div", { className: "flex flex-col gap-2 text-xs", "data-testid": `backups-${project}`, children: [
+    /* @__PURE__ */ jsxs14("p", { className: "opacity-70", children: [
       "Sicherungen entstehen beim Update mit dem Haken \u201EVolumes vorher sichern\u201C und liegen in ",
-      /* @__PURE__ */ jsx13("span", { className: "break-all font-mono", children: list.folder ?? "\u2026" }),
-      ". Zur\xFCckspielen ersetzt die Daten im Volume durch den Stand der Sicherung. Deck pr\xFCft vorher das Archiv und den freien Platz; ist etwas nicht in Ordnung, bleiben die Daten, wie sie sind."
+      /* @__PURE__ */ jsx15("span", { className: "break-all font-mono", children: list.folder ?? "\u2026" }),
+      ". Zur\xFCckspielen ersetzt die Daten im Volume durch den Stand der Sicherung. ",
+      productText("Deck"),
+      " pr\xFCft vorher das Archiv und den freien Platz; ist etwas nicht in Ordnung, bleiben die Daten, wie sie sind."
     ] }),
-    list.note && /* @__PURE__ */ jsx13("p", { className: "text-amber-300", role: "status", children: list.note }),
-    list.busy && /* @__PURE__ */ jsxs12("div", { className: "flex flex-wrap items-center gap-2 text-amber-300", role: "status", children: [
-      /* @__PURE__ */ jsxs12("span", { children: [
+    list.note && /* @__PURE__ */ jsx15("p", { className: "text-amber-300", role: "status", children: list.note }),
+    list.busy && /* @__PURE__ */ jsxs14("div", { className: "flex flex-wrap items-center gap-2 text-amber-300", role: "status", children: [
+      /* @__PURE__ */ jsxs14("span", { children: [
         "Am Stack l\xE4uft gerade etwas (",
         list.busy,
         "). Zur\xFCckspielen und L\xF6schen gehen erst danach."
       ] }),
-      /* @__PURE__ */ jsx13(Button, { small: true, onClick: () => setReload((n) => n + 1), children: "Neu laden" })
+      /* @__PURE__ */ jsx15(Button, { small: true, onClick: () => setReload((n) => n + 1), children: "Neu laden" })
     ] }),
-    list.backups.length === 0 && /* @__PURE__ */ jsx13("p", { className: "opacity-70", children: "F\xFCr diesen Stack gibt es noch keine Sicherung." }),
-    /* @__PURE__ */ jsx13("ul", { className: "flex flex-col gap-2", children: list.backups.map((backup) => {
+    list.backups.length === 0 && /* @__PURE__ */ jsx15("p", { className: "opacity-70", children: "F\xFCr diesen Stack gibt es noch keine Sicherung." }),
+    /* @__PURE__ */ jsx15("ul", { className: "flex flex-col gap-2", children: list.backups.map((backup) => {
       const picked = chosen[backup.stamp] ?? [];
       const unfinished = backup.unfinished ?? [];
       const gaps = notContained(backup);
-      return /* @__PURE__ */ jsxs12("li", { className: "flex flex-col gap-1 rounded border border-white/10 p-2", "data-testid": `backup-${backup.stamp}`, children: [
-        /* @__PURE__ */ jsx13("p", { className: "font-medium", children: when(backup.at) }),
-        /* @__PURE__ */ jsx13("ul", { className: "flex flex-col gap-0.5", children: backup.volumes.map((v) => /* @__PURE__ */ jsxs12("li", { className: "flex flex-wrap items-center gap-2", children: [
-          v.restorable ? /* @__PURE__ */ jsx13(
+      return /* @__PURE__ */ jsxs14("li", { className: "flex flex-col gap-1 rounded border border-white/10 p-2", "data-testid": `backup-${backup.stamp}`, children: [
+        /* @__PURE__ */ jsx15("p", { className: "font-medium", children: when(backup.at) }),
+        /* @__PURE__ */ jsx15("ul", { className: "flex flex-col gap-0.5", children: backup.volumes.map((v) => /* @__PURE__ */ jsxs14("li", { className: "flex flex-wrap items-center gap-2", children: [
+          v.restorable ? /* @__PURE__ */ jsx15(
             "input",
             {
               type: "checkbox",
@@ -8815,36 +9162,38 @@ function BackupsPanel({ hostId, project, onDone }) {
                 [backup.stamp]: e.target.checked ? [...picked, v.name] : picked.filter((x) => x !== v.name)
               }))
             }
-          ) : /* @__PURE__ */ jsx13("span", { className: "w-[13px]" }),
-          /* @__PURE__ */ jsx13("span", { className: "font-mono", children: v.name }),
-          /* @__PURE__ */ jsx13("span", { className: "opacity-60", children: v.size_bytes != null ? formatBytes(v.size_bytes) : "Gr\xF6\xDFe unbekannt" }),
-          v.restorable ? /* @__PURE__ */ jsx13("span", { className: "opacity-60", children: v.services.map((s) => v.stopped_services?.includes(s) ? `${s} (gestoppt)` : s).join(", ") }) : /* @__PURE__ */ jsx13(Badge, { children: "nutzt der Stack nicht mehr" })
+          ) : /* @__PURE__ */ jsx15("span", { className: "w-[13px]" }),
+          /* @__PURE__ */ jsx15("span", { className: "font-mono", children: v.name }),
+          /* @__PURE__ */ jsx15("span", { className: "opacity-60", children: v.size_bytes != null ? formatBytes(v.size_bytes) : "Gr\xF6\xDFe unbekannt" }),
+          v.restorable ? /* @__PURE__ */ jsx15("span", { className: "opacity-60", children: v.services.map((s) => v.stopped_services?.includes(s) ? `${s} (gestoppt)` : s).join(", ") }) : /* @__PURE__ */ jsx15(Badge, { children: "nutzt der Stack nicht mehr" })
         ] }, v.name)) }),
-        backup.volumes.length === 0 && /* @__PURE__ */ jsx13("p", { className: "opacity-70", children: "Diese Sicherung enth\xE4lt keine Archive." }),
-        gaps.length > 0 && (list.busy ? /* @__PURE__ */ jsxs12("p", { className: "opacity-70", children: [
+        backup.volumes.length === 0 && /* @__PURE__ */ jsx15("p", { className: "opacity-70", children: "Diese Sicherung enth\xE4lt keine Archive." }),
+        gaps.length > 0 && (list.busy ? /* @__PURE__ */ jsxs14("p", { className: "opacity-70", children: [
           "Noch nicht fertig: ",
           gaps.join(", "),
-          ". Vielleicht packt Deck gerade daran."
-        ] }) : /* @__PURE__ */ jsxs12("p", { className: "text-amber-300", children: [
+          ". Vielleicht packt ",
+          productText("Deck"),
+          " gerade daran."
+        ] }) : /* @__PURE__ */ jsxs14("p", { className: "text-amber-300", children: [
           "Nicht enthalten: ",
           gaps.join(", "),
           ". Die Sicherung ist unvollst\xE4ndig, etwa weil das Packen abbrach; spielst du nur einen Teil zur\xFCck, passen die Daten der Dienste vielleicht nicht zusammen.",
           unfinished.length > 0 && ` Von ${unfinished.join(", ")} liegt noch ein halbes Archiv im Ordner; \u201ESicherung l\xF6schen\u201C nimmt die Reste mit.`
         ] })),
-        backup.contents_error && /* @__PURE__ */ jsx13("p", { className: "text-amber-300", children: backup.contents_error }),
-        canChange && /* @__PURE__ */ jsxs12("div", { className: "flex flex-wrap gap-1.5", children: [
-          /* @__PURE__ */ jsx13(Button, { small: true, variant: "danger", disabled: busy || Boolean(list.busy) || picked.length === 0, onClick: () => restore(backup), children: busy ? "\u2026" : "Zur\xFCckspielen" }),
-          /* @__PURE__ */ jsx13(Button, { small: true, disabled: busy || Boolean(list.busy), onClick: () => drop(backup), children: "Sicherung l\xF6schen" })
+        backup.contents_error && /* @__PURE__ */ jsx15("p", { className: "text-amber-300", children: backup.contents_error }),
+        canChange && /* @__PURE__ */ jsxs14("div", { className: "flex flex-wrap gap-1.5", children: [
+          /* @__PURE__ */ jsx15(Button, { small: true, variant: "danger", disabled: busy || Boolean(list.busy) || picked.length === 0, onClick: () => restore(backup), children: busy ? "\u2026" : "Zur\xFCckspielen" }),
+          /* @__PURE__ */ jsx15(Button, { small: true, disabled: busy || Boolean(list.busy), onClick: () => drop(backup), children: "Sicherung l\xF6schen" })
         ] })
       ] }, backup.stamp);
     }) }),
-    failed && /* @__PURE__ */ jsx13("p", { className: "break-words text-red-400", role: "alert", children: failed })
+    failed && /* @__PURE__ */ jsx15("p", { className: "break-words text-red-400", role: "alert", children: failed })
   ] });
 }
 
 // src/GitSource.tsx
-import { useEffect as useEffect10, useRef as useRef5, useState as useState11 } from "react";
-import { jsx as jsx14, jsxs as jsxs13 } from "react/jsx-runtime";
+import { useEffect as useEffect11, useRef as useRef6, useState as useState14 } from "react";
+import { jsx as jsx16, jsxs as jsxs15 } from "react/jsx-runtime";
 var FIELD2 = "rounded border border-white/10 bg-black/25 px-2 py-1 outline-none focus:border-[var(--color-accent)]";
 var STATE = {
   new: { label: "neu", tone: "info" },
@@ -8869,10 +9218,10 @@ function when2(iso) {
 }
 function PreviewView({ preview, source }) {
   const { commit } = preview;
-  return /* @__PURE__ */ jsxs13("div", { className: "flex flex-col gap-2", "data-testid": "git-preview", children: [
-    /* @__PURE__ */ jsxs13("p", { className: "break-words", children: [
+  return /* @__PURE__ */ jsxs15("div", { className: "flex flex-col gap-2", "data-testid": "git-preview", children: [
+    /* @__PURE__ */ jsxs15("p", { className: "break-words", children: [
       "Stand ",
-      /* @__PURE__ */ jsx14("span", { className: "font-mono", children: commit.short }),
+      /* @__PURE__ */ jsx16("span", { className: "font-mono", children: commit.short }),
       " (",
       commit.ref_kind === "tag" ? "Tag" : "Branch",
       " ",
@@ -8884,36 +9233,77 @@ function PreviewView({ preview, source }) {
       when2(commit.date),
       commit.message ? `: ${commit.message}` : ""
     ] }),
-    preview.problems.length > 0 && /* @__PURE__ */ jsxs13("div", { role: "alert", children: [
-      /* @__PURE__ */ jsx14("p", { className: "text-red-400", children: "So lie\xDFe sich dieser Stand nicht einspielen:" }),
-      /* @__PURE__ */ jsx14("ul", { className: "list-disc pl-5 text-red-300", children: preview.problems.map((line, i) => /* @__PURE__ */ jsx14("li", { className: "break-words", children: line }, i)) })
+    preview.problems.length > 0 && /* @__PURE__ */ jsxs15("div", { role: "alert", children: [
+      /* @__PURE__ */ jsx16("p", { className: "text-red-400", children: "So lie\xDFe sich dieser Stand nicht einspielen:" }),
+      /* @__PURE__ */ jsx16("ul", { className: "list-disc pl-5 text-red-300", children: preview.problems.map((line, i) => /* @__PURE__ */ jsx16("li", { className: "break-words", children: line }, i)) })
     ] }),
-    preview.warnings.length > 0 && /* @__PURE__ */ jsxs13("div", { children: [
-      /* @__PURE__ */ jsx14("p", { className: "text-amber-300", children: "Darauf solltest du achten:" }),
-      /* @__PURE__ */ jsx14("ul", { className: "list-disc pl-5 text-amber-200", children: preview.warnings.map((line, i) => /* @__PURE__ */ jsx14("li", { className: "break-words", children: line }, i)) })
+    preview.warnings.length > 0 && /* @__PURE__ */ jsxs15("div", { children: [
+      /* @__PURE__ */ jsx16("p", { className: "text-amber-300", children: "Darauf solltest du achten:" }),
+      /* @__PURE__ */ jsx16("ul", { className: "list-disc pl-5 text-amber-200", children: preview.warnings.map((line, i) => /* @__PURE__ */ jsx16("li", { className: "break-words", children: line }, i)) })
     ] }),
-    preview.unchanged && /* @__PURE__ */ jsx14("p", { className: "text-emerald-300", children: "Auf dem Server steht schon genau dieser Stand." }),
-    preview.files.length > 0 && /* @__PURE__ */ jsx14("ul", { className: "flex flex-col gap-0.5", "aria-label": "Dateien aus dem Repository", children: preview.files.map((file) => /* @__PURE__ */ jsxs13("li", { className: "flex flex-wrap items-center gap-1.5 break-all", children: [
-      /* @__PURE__ */ jsx14(Badge, { tone: shownState(file).tone, children: shownState(file).label }),
-      /* @__PURE__ */ jsx14("span", { className: "font-mono", children: file.server_path })
+    preview.unchanged && /* @__PURE__ */ jsx16("p", { className: "text-emerald-300", children: "Auf dem Server steht schon genau dieser Stand." }),
+    preview.files.length > 0 && /* @__PURE__ */ jsx16("ul", { className: "flex flex-col gap-0.5", "aria-label": "Dateien aus dem Repository", children: preview.files.map((file) => /* @__PURE__ */ jsxs15("li", { className: "flex flex-wrap items-center gap-1.5 break-all", children: [
+      /* @__PURE__ */ jsx16(Badge, { tone: shownState(file).tone, children: shownState(file).label }),
+      /* @__PURE__ */ jsx16("span", { className: "font-mono", children: file.server_path })
     ] }, file.path)) }),
-    preview.compose && preview.compose.old !== null && !preview.compose.same && /* @__PURE__ */ jsx14(DiffView, { before: preview.compose.old.replace(/\r\n/g, "\n"), after: preview.compose.new, open: true })
+    preview.compose && preview.compose.old !== null && !preview.compose.same && /* @__PURE__ */ jsx16(DiffView, { before: preview.compose.old.replace(/\r\n/g, "\n"), after: preview.compose.new, open: true })
+  ] });
+}
+function WatchLine({ watch }) {
+  const checked = watch.checked_at ? when2(watch.checked_at) : "unbekannt";
+  if (watch.problem) {
+    return /* @__PURE__ */ jsxs15("p", { className: "break-words text-amber-300", "data-testid": "git-watch", children: [
+      "Die Pr\xFCfung am ",
+      checked,
+      " ist gescheitert: ",
+      watch.problem
+    ] });
+  }
+  if (watch.new) {
+    return /* @__PURE__ */ jsxs15("p", { className: "flex flex-wrap items-center gap-1.5 break-words", "data-testid": "git-watch", children: [
+      /* @__PURE__ */ jsx16(Badge, { tone: "info", children: "Neuer Stand in Git" }),
+      /* @__PURE__ */ jsxs15("span", { children: [
+        "Im Repository steht ",
+        /* @__PURE__ */ jsx16("span", { className: "font-mono", children: watch.short }),
+        ", eingespielt ist",
+        " ",
+        /* @__PURE__ */ jsx16("span", { className: "font-mono", children: watch.applied?.slice(0, 7) }),
+        " (gepr\xFCft am ",
+        checked,
+        "). Ob sich der Ordner dieses Stacks \xE4ndert, zeigt \u201EHolen und ansehen\u201C."
+      ] })
+    ] });
+  }
+  if (!watch.applied) {
+    return /* @__PURE__ */ jsxs15("p", { className: "opacity-70", "data-testid": "git-watch", children: [
+      "Im Repository steht ",
+      /* @__PURE__ */ jsx16("span", { className: "font-mono", children: watch.short }),
+      " (gepr\xFCft am ",
+      checked,
+      "). Aus Git ist hier noch nichts eingespielt."
+    ] });
+  }
+  return /* @__PURE__ */ jsxs15("p", { className: "opacity-70", "data-testid": "git-watch", children: [
+    "Kein neuer Stand in Git (gepr\xFCft am ",
+    checked,
+    ")."
   ] });
 }
 function GitSourcePanel({ hostId, project, onDone }) {
-  const [state, setState] = useState11(null);
-  const [error, setError] = useState11(null);
-  const [reload, setReload] = useState11(0);
-  const [draft, setDraft] = useState11({ url: "", ref: "main", path: "compose.yaml", access: "" });
-  const [preview, setPreview] = useState11(null);
-  const [failed, setFailed] = useState11(null);
-  const [busy, setBusy] = useState11(null);
-  const [stale, setStale] = useState11(null);
-  const [applied, setApplied] = useState11(null);
-  const [backup, setBackup] = useState11(NO_BACKUP);
-  const planRequest = useRef5(0);
+  const [state, setState] = useState14(null);
+  const [error, setError] = useState14(null);
+  const [reload, setReload] = useState14(0);
+  const [draft, setDraft] = useState14({ url: "", ref: "main", path: "compose.yaml", access: "" });
+  const [preview, setPreview] = useState14(null);
+  const [failed, setFailed] = useState14(null);
+  const [busy, setBusy] = useState14(null);
+  const [stale, setStale] = useState14(null);
+  const [applied, setApplied] = useState14(null);
+  const [watch, setWatch] = useState14(null);
+  const [backup, setBackup] = useState14(NO_BACKUP);
+  const planRequest = useRef6(0);
   const url = `/ext/docker/hosts/${encodeURIComponent(hostId)}/stacks/${encodeURIComponent(project)}/git`;
-  useEffect10(() => {
+  useEffect11(() => {
     const controller = new AbortController();
     setState(null);
     setError(null);
@@ -8925,8 +9315,28 @@ function GitSourcePanel({ hostId, project, onDone }) {
     }).catch((err) => {
       if (!controller.signal.aborted) setError(errorMessage(err));
     });
+    void loadWatch(controller.signal);
     return () => controller.abort();
   }, [url, reload]);
+  async function loadWatch(signal) {
+    try {
+      const body = await fetchJson(`${url}/watch`, { signal });
+      if (!signal?.aborted) setWatch(body.watch);
+    } catch {
+      if (!signal?.aborted) setWatch(null);
+    }
+  }
+  async function checkNow() {
+    setBusy("check");
+    setFailed(null);
+    try {
+      setWatch((await fetchJson(`${url}/check`, { method: "POST" })).watch);
+    } catch (err) {
+      setFailed(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
   async function send(kind, init) {
     setBusy(kind);
     setFailed(null);
@@ -8947,6 +9357,8 @@ function GitSourcePanel({ hostId, project, onDone }) {
     if (!saved || !state) return;
     setState({ ...state, source: saved.source });
     setPreview(null);
+    setWatch(null);
+    await loadWatch();
     await fetchNow();
   }
   async function fetchNow() {
@@ -8958,6 +9370,7 @@ function GitSourcePanel({ hostId, project, onDone }) {
       setApplied(await fetchJson(`${url}/applied`));
     } catch {
     }
+    await loadWatch();
   }
   async function propose(kind, path, body, waiting) {
     setBusy(kind);
@@ -8988,7 +9401,7 @@ ${outcome.text}`.trim(), true);
       setBusy(null);
     }
   }
-  useEffect10(() => {
+  useEffect11(() => {
     planRequest.current += 1;
     setBackup(NO_BACKUP);
   }, [preview]);
@@ -9012,14 +9425,14 @@ ${outcome.text}`.trim(), true);
     const stops = backup.plan?.services ?? [];
     const volumes = saving ? `Vorher sichert es die Volumes${stops.length > 0 ? `; ${stops.join(", ")} ${stops.length === 1 ? "steht" : "stehen"} daf\xFCr still` : ""}. ` : "Volumes werden vorher nicht gesichert. ";
     const ok = await deck().confirmDialog(
-      `Stand ${shown2.commit.short} in Stack \u201E${project}\u201C einspielen? Nodvard Deck schreibt ${count("new")} neue und ${count("changed")} ge\xE4nderte Dateien auf den Server, Compose wendet den Stack danach an, und Dienste, die ge\xE4nderte Dateien einlesen, starten neu (die Freigabe nennt sie). Dateien, die es fr\xFCher aus diesem Repository geschrieben hat und die jetzt fehlen, entfernt es nur, wenn sie auf dem Server unver\xE4ndert sind. Umgebungsdateien wie .env auf dem Server ersetzt es nie. ${volumes}Der Stand davor bleibt f\xFCr einen Schritt zur\xFCck.`,
+      `Stand ${shown2.commit.short} in Stack \u201E${project}\u201C einspielen? ${productText("Nodvard Deck")} schreibt ${count("new")} neue und ${count("changed")} ge\xE4nderte Dateien auf den Server, Compose wendet den Stack danach an, und Dienste, die ge\xE4nderte Dateien einlesen, starten neu (die Freigabe nennt sie). Dateien, die es fr\xFCher aus diesem Repository geschrieben hat und die jetzt fehlen, entfernt es nur, wenn sie auf dem Server unver\xE4ndert sind. Umgebungsdateien wie .env auf dem Server ersetzt es nie. ${volumes}Der Stand davor bleibt f\xFCr einen Schritt zur\xFCck.`,
       { confirmLabel: "Einspielen" }
     );
     if (ok) await propose("apply", "apply", { commit: shown2.commit.id, backup: saving }, WAITING4);
   }
   async function back(previous) {
     const ok = await deck().confirmDialog(
-      `Stack \u201E${project}\u201C zur\xFCck auf den Stand vor ${previous.commit.slice(0, 7)}? Nodvard Deck stellt die Dateien wieder her, die das letzte Einspielen ersetzt oder entfernt hat, und nimmt neu angelegte wieder weg, auch eine dabei neu angelegte .env. Was seitdem auf dem Server ge\xE4ndert wurde, bleibt, wie es ist. Compose wendet den Stack danach an, und Dienste, die zur\xFCckgestellte Dateien einlesen, starten neu (die Freigabe nennt sie). Volumes werden vorher nicht gesichert.`,
+      `Stack \u201E${project}\u201C zur\xFCck auf den Stand vor ${previous.commit.slice(0, 7)}? ${productText("Nodvard Deck")} stellt die Dateien wieder her, die das letzte Einspielen ersetzt oder entfernt hat, und nimmt neu angelegte wieder weg, auch eine dabei neu angelegte .env. Was seitdem auf dem Server ge\xE4ndert wurde, bleibt, wie es ist. Compose wendet den Stack danach an, und Dienste, die zur\xFCckgestellte Dateien einlesen, starten neu (die Freigabe nennt sie). Volumes werden vorher nicht gesichert.`,
       { confirmLabel: "Zur\xFCckholen" }
     );
     if (ok) await propose("back", "rollback", { previous: previous.id }, WAITING_BACK);
@@ -9033,28 +9446,28 @@ ${outcome.text}`.trim(), true);
   }
   async function remove() {
     const ok = await deck().confirmDialog(
-      `Repository von \u201E${project}\u201C vergessen? Nodvard Deck l\xF6scht nur die Angaben und den geholten Stand; Stack und Dateien auf dem Server bleiben, wie sie sind.`,
+      `Repository von \u201E${project}\u201C vergessen? ${productText("Nodvard Deck")} l\xF6scht nur die Angaben und den geholten Stand; Stack und Dateien auf dem Server bleiben, wie sie sind.`,
       { confirmLabel: "Vergessen" }
     );
     if (!ok) return;
     if (await send("remove", { method: "DELETE" })) onDone(`Das Repository von \u201E${project}\u201C ist vergessen.`);
   }
-  if (error) return /* @__PURE__ */ jsx14(LoadError, { what: "Die Angaben zum Repository", error, onRetry: () => setReload((n) => n + 1), compact: true });
-  if (!state) return /* @__PURE__ */ jsx14("p", { className: "text-xs opacity-60", children: "Lade die Angaben zum Repository \u2026" });
+  if (error) return /* @__PURE__ */ jsx16(LoadError, { what: "Die Angaben zum Repository", error, onRetry: () => setReload((n) => n + 1), compact: true });
+  if (!state) return /* @__PURE__ */ jsx16("p", { className: "text-xs opacity-60", children: "Lade die Angaben zum Repository \u2026" });
   const source = state.source;
   if (state.layout_problem) {
-    return /* @__PURE__ */ jsxs13("div", { className: "flex flex-col gap-2 text-xs", "data-testid": `git-${project}`, children: [
-      /* @__PURE__ */ jsx14("p", { className: "text-amber-300", children: state.layout_problem }),
-      source && /* @__PURE__ */ jsx14("div", { children: /* @__PURE__ */ jsx14(Button, { small: true, variant: "danger", disabled: busy !== null, onClick: () => void remove(), children: "Repository vergessen" }) }),
-      failed && /* @__PURE__ */ jsx14("p", { className: "break-words text-red-400", role: "alert", children: failed })
+    return /* @__PURE__ */ jsxs15("div", { className: "flex flex-col gap-2 text-xs", "data-testid": `git-${project}`, children: [
+      /* @__PURE__ */ jsx16("p", { className: "text-amber-300", children: state.layout_problem }),
+      source && /* @__PURE__ */ jsx16("div", { children: /* @__PURE__ */ jsx16(Button, { small: true, variant: "danger", disabled: busy !== null, onClick: () => void remove(), children: "Repository vergessen" }) }),
+      failed && /* @__PURE__ */ jsx16("p", { className: "break-words text-red-400", role: "alert", children: failed })
     ] });
   }
   const dirty = !source || source.url !== draft.url.trim() || source.ref !== (draft.ref.trim() || "main") || source.path !== draft.path.trim() || (source.access ?? "") !== draft.access;
-  return /* @__PURE__ */ jsxs13("div", { className: "flex flex-col gap-2 text-xs", "data-testid": `git-${project}`, children: [
-    /* @__PURE__ */ jsx14("p", { className: "opacity-70", children: INTRO }),
-    /* @__PURE__ */ jsxs13("label", { className: "flex flex-col gap-1", children: [
-      /* @__PURE__ */ jsx14("span", { children: "Adresse des Repositorys" }),
-      /* @__PURE__ */ jsx14(
+  return /* @__PURE__ */ jsxs15("div", { className: "flex flex-col gap-2 text-xs", "data-testid": `git-${project}`, children: [
+    /* @__PURE__ */ jsx16("p", { className: "opacity-70", children: productText(INTRO) }),
+    /* @__PURE__ */ jsxs15("label", { className: "flex flex-col gap-1", children: [
+      /* @__PURE__ */ jsx16("span", { children: "Adresse des Repositorys" }),
+      /* @__PURE__ */ jsx16(
         "input",
         {
           "aria-label": "Adresse des Repositorys",
@@ -9065,14 +9478,14 @@ ${outcome.text}`.trim(), true);
         }
       )
     ] }),
-    /* @__PURE__ */ jsxs13("div", { className: "flex flex-wrap gap-2", children: [
-      /* @__PURE__ */ jsxs13("label", { className: "flex min-w-[8rem] flex-1 flex-col gap-1", children: [
-        /* @__PURE__ */ jsx14("span", { children: "Branch oder Tag" }),
-        /* @__PURE__ */ jsx14("input", { "aria-label": "Branch oder Tag", value: draft.ref, onChange: (e) => setDraft({ ...draft, ref: e.target.value }), className: `${FIELD2} font-mono` })
+    /* @__PURE__ */ jsxs15("div", { className: "flex flex-wrap gap-2", children: [
+      /* @__PURE__ */ jsxs15("label", { className: "flex min-w-[8rem] flex-1 flex-col gap-1", children: [
+        /* @__PURE__ */ jsx16("span", { children: "Branch oder Tag" }),
+        /* @__PURE__ */ jsx16("input", { "aria-label": "Branch oder Tag", value: draft.ref, onChange: (e) => setDraft({ ...draft, ref: e.target.value }), className: `${FIELD2} font-mono` })
       ] }),
-      /* @__PURE__ */ jsxs13("label", { className: "flex min-w-[12rem] flex-[2] flex-col gap-1", children: [
-        /* @__PURE__ */ jsx14("span", { children: "Compose-Datei im Repository" }),
-        /* @__PURE__ */ jsx14(
+      /* @__PURE__ */ jsxs15("label", { className: "flex min-w-[12rem] flex-[2] flex-col gap-1", children: [
+        /* @__PURE__ */ jsx16("span", { children: "Compose-Datei im Repository" }),
+        /* @__PURE__ */ jsx16(
           "input",
           {
             "aria-label": "Compose-Datei im Repository",
@@ -9084,71 +9497,148 @@ ${outcome.text}`.trim(), true);
         )
       ] })
     ] }),
-    /* @__PURE__ */ jsxs13("label", { className: "flex flex-col gap-1", children: [
-      /* @__PURE__ */ jsx14("span", { children: "Zugang" }),
-      /* @__PURE__ */ jsxs13("select", { "aria-label": "Zugang", value: draft.access, onChange: (e) => setDraft({ ...draft, access: e.target.value }), className: FIELD2, children: [
-        /* @__PURE__ */ jsx14("option", { value: "", children: "\xD6ffentlich, ohne Anmeldung" }),
-        state.accesses.map((a) => /* @__PURE__ */ jsxs13("option", { value: a.name, children: [
+    /* @__PURE__ */ jsxs15("label", { className: "flex flex-col gap-1", children: [
+      /* @__PURE__ */ jsx16("span", { children: "Zugang" }),
+      /* @__PURE__ */ jsxs15("select", { "aria-label": "Zugang", value: draft.access, onChange: (e) => setDraft({ ...draft, access: e.target.value }), className: FIELD2, children: [
+        /* @__PURE__ */ jsx16("option", { value: "", children: "\xD6ffentlich, ohne Anmeldung" }),
+        state.accesses.map((a) => /* @__PURE__ */ jsxs15("option", { value: a.name, children: [
           a.name,
           " (",
           a.host,
           ")"
         ] }, a.name)),
-        draft.access && !state.accesses.some((a) => a.name === draft.access) && /* @__PURE__ */ jsxs13("option", { value: draft.access, children: [
+        draft.access && !state.accesses.some((a) => a.name === draft.access) && /* @__PURE__ */ jsxs15("option", { value: draft.access, children: [
           draft.access,
           " (nicht mehr in den Einstellungen)"
         ] })
       ] })
     ] }),
-    state.accesses.length === 0 && /* @__PURE__ */ jsx14("p", { className: "opacity-70", children: "F\xFCr ein privates Repository tr\xE4gst du zuerst einen Zugang mit Token ein: Einstellungen \u2192 Erweiterungen \u2192 Docker, unter \u201EErweitert\u201C bei \u201EGit-Zug\xE4nge\u201C." }),
-    /* @__PURE__ */ jsx14("p", { className: "opacity-70", children: "Abgeglichen wird der Ordner, in dem die Compose-Datei im Repository liegt, mit dem Ordner des Stacks; die Compose-Datei selbst mit der des Stacks." }),
-    /* @__PURE__ */ jsxs13("div", { className: "flex flex-wrap gap-1.5", children: [
-      /* @__PURE__ */ jsx14(Button, { small: true, variant: "primary", disabled: busy !== null || !draft.url.trim() || !draft.path.trim() || !dirty, onClick: () => void save(), children: busy === "save" ? "\u2026" : source ? "Speichern und holen" : "Eintragen und holen" }),
-      source && !dirty && /* @__PURE__ */ jsx14(Button, { small: true, disabled: busy !== null, onClick: () => void fetchNow(), children: busy === "fetch" ? "Hole \u2026" : "Holen und ansehen" }),
-      source && /* @__PURE__ */ jsx14(Button, { small: true, variant: "danger", disabled: busy !== null, onClick: () => void remove(), children: "Repository vergessen" })
+    state.accesses.length === 0 && /* @__PURE__ */ jsx16("p", { className: "opacity-70", children: "F\xFCr ein privates Repository tr\xE4gst du zuerst einen Zugang mit Token ein: Einstellungen \u2192 Erweiterungen \u2192 Docker, unter \u201EErweitert\u201C bei \u201EGit-Zug\xE4nge\u201C." }),
+    /* @__PURE__ */ jsx16("p", { className: "opacity-70", children: "Abgeglichen wird der Ordner, in dem die Compose-Datei im Repository liegt, mit dem Ordner des Stacks; die Compose-Datei selbst mit der des Stacks." }),
+    /* @__PURE__ */ jsxs15("div", { className: "flex flex-wrap gap-1.5", children: [
+      /* @__PURE__ */ jsx16(Button, { small: true, variant: "primary", disabled: busy !== null || !draft.url.trim() || !draft.path.trim() || !dirty, onClick: () => void save(), children: busy === "save" ? "\u2026" : source ? "Speichern und holen" : "Eintragen und holen" }),
+      source && !dirty && /* @__PURE__ */ jsx16(Button, { small: true, disabled: busy !== null, onClick: () => void fetchNow(), children: busy === "fetch" ? "Hole \u2026" : "Holen und ansehen" }),
+      source && !dirty && /* @__PURE__ */ jsx16(Button, { small: true, disabled: busy !== null, onClick: () => void checkNow(), children: busy === "check" ? "Pr\xFCfe \u2026" : "Auf neuen Stand pr\xFCfen" }),
+      source && /* @__PURE__ */ jsx16(Button, { small: true, variant: "danger", disabled: busy !== null, onClick: () => void remove(), children: "Repository vergessen" })
     ] }),
-    applied?.applied && /* @__PURE__ */ jsxs13("p", { className: "opacity-70", "data-testid": "git-applied", children: [
+    applied?.applied && /* @__PURE__ */ jsxs15("p", { className: "opacity-70", "data-testid": "git-applied", children: [
       "Zuletzt eingespielt: Stand ",
-      /* @__PURE__ */ jsx14("span", { className: "font-mono", children: applied.applied.commit.slice(0, 7) }),
+      /* @__PURE__ */ jsx16("span", { className: "font-mono", children: applied.applied.commit.slice(0, 7) }),
       ", ",
       when2(applied.applied.at),
       "."
     ] }),
-    applied?.previous && /* @__PURE__ */ jsx14("div", { children: /* @__PURE__ */ jsx14(Button, { small: true, disabled: busy !== null, onClick: () => void back(applied.previous), children: busy === "back" ? "\u2026" : "Zur\xFCck zum Stand davor" }) }),
-    stale && /* @__PURE__ */ jsxs13("div", { className: `space-y-1.5 rounded border p-2 ${stale.warn ? "border-amber-500/50" : "border-white/10"}`, role: "status", "data-testid": "git-stale", children: [
-      /* @__PURE__ */ jsx14("p", { className: "whitespace-pre-line break-words", children: stale.text }),
-      /* @__PURE__ */ jsxs13("div", { className: "flex flex-wrap gap-1.5", children: [
-        /* @__PURE__ */ jsx14(Button, { small: true, variant: "primary", disabled: busy !== null, onClick: () => void restartNow(stale.services), children: busy === "restart" ? "\u2026" : "Jetzt neu starten" }),
-        /* @__PURE__ */ jsx14(Button, { small: true, disabled: busy !== null, onClick: () => onDone(stale.text, stale.warn), children: "Sp\xE4ter" })
+    source && !dirty && watch && /* @__PURE__ */ jsx16(WatchLine, { watch }),
+    applied?.previous && /* @__PURE__ */ jsx16("div", { children: /* @__PURE__ */ jsx16(Button, { small: true, disabled: busy !== null, onClick: () => void back(applied.previous), children: busy === "back" ? "\u2026" : "Zur\xFCck zum Stand davor" }) }),
+    stale && /* @__PURE__ */ jsxs15("div", { className: `space-y-1.5 rounded border p-2 ${stale.warn ? "border-amber-500/50" : "border-white/10"}`, role: "status", "data-testid": "git-stale", children: [
+      /* @__PURE__ */ jsx16("p", { className: "whitespace-pre-line break-words", children: stale.text }),
+      /* @__PURE__ */ jsxs15("div", { className: "flex flex-wrap gap-1.5", children: [
+        /* @__PURE__ */ jsx16(Button, { small: true, variant: "primary", disabled: busy !== null, onClick: () => void restartNow(stale.services), children: busy === "restart" ? "\u2026" : "Jetzt neu starten" }),
+        /* @__PURE__ */ jsx16(Button, { small: true, disabled: busy !== null, onClick: () => onDone(stale.text, stale.warn), children: "Sp\xE4ter" })
       ] })
     ] }),
-    busy === "fetch" && /* @__PURE__ */ jsx14("p", { className: "opacity-70", role: "status", children: "Hole den Stand aus dem Repository und vergleiche ihn mit dem Server \u2026" }),
-    failed && /* @__PURE__ */ jsx14("p", { className: "break-words text-red-400", role: "alert", children: failed }),
-    preview && source && /* @__PURE__ */ jsx14(PreviewView, { preview, source }),
-    preview && source && preview.ok && !preview.unchanged && !dirty && !stale && /* @__PURE__ */ jsxs13("div", { className: "flex flex-col gap-1.5", children: [
-      /* @__PURE__ */ jsxs13("label", { className: "flex items-start gap-2", children: [
-        /* @__PURE__ */ jsx14("input", { type: "checkbox", checked: backup.on, disabled: busy !== null, onChange: (e) => void chooseBackup(e.target.checked) }),
-        /* @__PURE__ */ jsxs13("span", { className: "break-all", children: [
+    busy === "fetch" && /* @__PURE__ */ jsx16("p", { className: "opacity-70", role: "status", children: "Hole den Stand aus dem Repository und vergleiche ihn mit dem Server \u2026" }),
+    failed && /* @__PURE__ */ jsx16("p", { className: "break-words text-red-400", role: "alert", children: failed }),
+    preview && source && /* @__PURE__ */ jsx16(PreviewView, { preview, source }),
+    preview && source && preview.ok && !preview.unchanged && !dirty && !stale && /* @__PURE__ */ jsxs15("div", { className: "flex flex-col gap-1.5", children: [
+      /* @__PURE__ */ jsxs15("label", { className: "flex items-start gap-2", children: [
+        /* @__PURE__ */ jsx16("input", { type: "checkbox", checked: backup.on, disabled: busy !== null, onChange: (e) => void chooseBackup(e.target.checked) }),
+        /* @__PURE__ */ jsxs15("span", { className: "break-all", children: [
           "Volumes vorher sichern",
           backup.on && backup.plan ? ` (${Object.keys(backup.plan.volumes).join(", ")}: ${sizeOf(backup.plan)}${backup.plan.free_bytes != null ? `, frei ${formatBytes(backup.plan.free_bytes)}` : ""})` : ""
         ] })
       ] }),
-      backup.on && !backup.plan && /* @__PURE__ */ jsx14("p", { className: "opacity-70", role: "status", children: "Lese die Volumes und den freien Platz \u2026" }),
-      backup.problem && /* @__PURE__ */ jsx14("p", { className: "opacity-70", children: backup.problem }),
-      backup.on && backup.plan && /* @__PURE__ */ jsxs13("p", { className: "opacity-70", children: [
+      backup.on && !backup.plan && /* @__PURE__ */ jsx16("p", { className: "opacity-70", role: "status", children: "Lese die Volumes und den freien Platz \u2026" }),
+      backup.problem && /* @__PURE__ */ jsx16("p", { className: "opacity-70", children: backup.problem }),
+      backup.on && backup.plan && /* @__PURE__ */ jsxs15("p", { className: "opacity-70", children: [
         backup.plan.services.length > 0 && `${backup.plan.services.join(", ")} ${backup.plan.services.length === 1 ? "steht" : "stehen"} daf\xFCr still, bis Compose den Stack anwendet. `,
         "Die Archive kommen nach ",
         backup.plan.folder ?? "\u2026",
         "; zur\xFCckspielen lassen sie sich im Reiter Stacks unter \u201ESicherungen\u201C."
       ] }),
-      /* @__PURE__ */ jsx14("div", { children: /* @__PURE__ */ jsx14(Button, { small: true, variant: "primary", disabled: busy !== null || backup.on && !backup.plan, onClick: () => void apply(preview), children: busy === "apply" ? "Spiele ein \u2026" : "Einspielen" }) })
+      /* @__PURE__ */ jsx16("div", { children: /* @__PURE__ */ jsx16(Button, { small: true, variant: "primary", disabled: busy !== null || backup.on && !backup.plan, onClick: () => void apply(preview), children: busy === "apply" ? "Spiele ein \u2026" : "Einspielen" }) })
     ] })
   ] });
 }
 
 // src/NewStack.tsx
-import { useEffect as useEffect11, useRef as useRef6, useState as useState12 } from "react";
-import { jsx as jsx15, jsxs as jsxs14 } from "react/jsx-runtime";
+import { useEffect as useEffect12, useRef as useRef7, useState as useState16 } from "react";
+
+// src/OwnTemplates.tsx
+import { useState as useState15 } from "react";
+import { jsx as jsx17, jsxs as jsxs16 } from "react/jsx-runtime";
+var OWN_URL = "/ext/docker/own-templates";
+var NAME_RE2 = /^[a-z0-9][a-z0-9_-]{0,62}$/;
+var SAVE_NOTE = "Gespeichert wird nur diese Compose-Datei, keine .env. Feste Passw\xF6rter, Tokens und Schl\xFCssel werden abgelehnt, soweit sie sich erkennen lassen. Eigene Vorlagen sehen alle, die Stacks anlegen d\xFCrfen.";
+function neededValues(compose) {
+  const required = new Set([...compose.matchAll(/(?<!\$)\$\{([A-Za-z_][A-Za-z0-9_]*):?\?/g)].map((m) => m[1]));
+  const names = [...compose.matchAll(/(?<!\$)\$\{([A-Za-z_][A-Za-z0-9_]*)(?![A-Za-z0-9_]|:?-)|(?<!\$)\$([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1] ?? m[2]);
+  return { open: [...new Set(names)].filter((n) => !required.has(n)), required: [...required] };
+}
+function stackNameOf(name) {
+  const slug = name.toLowerCase().replace(/ß/g, "ss").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9_-]+/g, "-").replace(/^[-_]+/, "").replace(/-+$/, "").slice(0, 63);
+  return NAME_RE2.test(slug) ? slug : "";
+}
+function SaveTemplate({ compose, current, suggested, onSaved, onCancel }) {
+  const [name, setName] = useState15(current?.name ?? suggested ?? "");
+  const [summary, setSummary] = useState15(current?.summary ?? "");
+  const [busy, setBusy] = useState15(false);
+  const [problem, setProblem] = useState15(null);
+  const ready = !busy && name.trim() !== "" && compose.trim() !== "";
+  async function save(replace) {
+    setBusy(true);
+    setProblem(null);
+    try {
+      const url = replace && current ? `${OWN_URL}/${encodeURIComponent(current.id)}` : OWN_URL;
+      onSaved(await fetchJson(url, { method: replace && current ? "PUT" : "POST", headers: JSON_HEADERS, body: JSON.stringify({ name, summary, compose }) }));
+    } catch (err) {
+      setProblem(errorMessage(err));
+      setBusy(false);
+    }
+  }
+  return /* @__PURE__ */ jsxs16("div", { className: "flex flex-col gap-1.5 rounded border border-white/10 bg-white/[0.03] p-2 text-xs", "data-testid": "save-template", children: [
+    /* @__PURE__ */ jsx17("p", { className: "opacity-70", children: SAVE_NOTE }),
+    /* @__PURE__ */ jsxs16("label", { className: "flex flex-col gap-1", children: [
+      /* @__PURE__ */ jsx17("span", { children: "Name der Vorlage" }),
+      /* @__PURE__ */ jsx17(
+        "input",
+        {
+          "aria-label": "Name der Vorlage",
+          value: name,
+          maxLength: 60,
+          onChange: (e) => setName(e.target.value),
+          className: "rounded border border-white/10 bg-black/25 px-2 py-1 outline-none focus:border-[var(--color-accent)]"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ jsxs16("label", { className: "flex flex-col gap-1", children: [
+      /* @__PURE__ */ jsx17("span", { children: "Beschreibung (freiwillig)" }),
+      /* @__PURE__ */ jsx17(
+        "input",
+        {
+          "aria-label": "Beschreibung der Vorlage",
+          value: summary,
+          maxLength: 300,
+          onChange: (e) => setSummary(e.target.value),
+          className: "rounded border border-white/10 bg-black/25 px-2 py-1 outline-none focus:border-[var(--color-accent)]"
+        }
+      )
+    ] }),
+    problem && /* @__PURE__ */ jsx17("p", { className: "break-words text-red-400", role: "alert", children: problem }),
+    /* @__PURE__ */ jsxs16("div", { className: "flex flex-wrap gap-1.5", children: [
+      current && /* @__PURE__ */ jsxs16(Button, { small: true, variant: "primary", disabled: !ready, onClick: () => void save(true), children: [
+        "Vorlage \u201E",
+        current.name,
+        "\u201C ersetzen"
+      ] }),
+      /* @__PURE__ */ jsx17(Button, { small: true, variant: current ? "secondary" : "primary", disabled: !ready, onClick: () => void save(false), children: current ? "Als neue Vorlage speichern" : "Vorlage speichern" }),
+      /* @__PURE__ */ jsx17(Button, { small: true, disabled: busy, onClick: onCancel, children: "Abbrechen" })
+    ] })
+  ] });
+}
+
+// src/NewStack.tsx
+import { jsx as jsx18, jsxs as jsxs17 } from "react/jsx-runtime";
 var EXAMPLE = `services:
   app:
     image: nginx:1.27
@@ -9156,34 +9646,40 @@ var EXAMPLE = `services:
     ports:
       - "8080:80"
 `;
-var NAME_RE = /^[a-z0-9][a-z0-9_-]{0,62}$/;
+var NAME_RE3 = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 var MAX_BYTES = 256 * 1024;
 var RISKY_NOTE2 = "Das Anlegen braucht daf\xFCr eine Freigabe mit hohem Risiko.";
 var WAITING5 = "Zum Anlegen vorgeschlagen. Es fehlt noch die Freigabe durch einen Admin, siehe \u201EAktionen\u201C.";
 function NewStack({ hostId, onClose }) {
   const base = `/ext/docker/hosts/${encodeURIComponent(hostId)}`;
-  const [place, setPlace] = useState12(null);
-  const [error, setError] = useState12(null);
-  const [reload, setReload] = useState12(0);
-  const [name, setName] = useState12("");
-  const [text, setText] = useState12(EXAMPLE);
-  const [checked, setChecked] = useState12(null);
-  const [busy, setBusy] = useState12(false);
-  const [problem, setProblem] = useState12(null);
-  const [rootDraft, setRootDraft] = useState12(null);
-  const [asForm, setAsForm] = useState12(false);
-  const [templates, setTemplates] = useState12(null);
-  const [templateError, setTemplateError] = useState12(null);
-  const [templateReload, setTemplateReload] = useState12(0);
-  const [picked, setPicked] = useState12(null);
-  const checkRun = useRef6(0);
-  const life = useRef6(null);
-  useEffect11(() => {
+  const [place, setPlace] = useState16(null);
+  const [error, setError] = useState16(null);
+  const [reload, setReload] = useState16(0);
+  const [name, setName] = useState16("");
+  const [text, setText] = useState16(EXAMPLE);
+  const [checked, setChecked] = useState16(null);
+  const [busy, setBusy] = useState16(false);
+  const [problem, setProblem] = useState16(null);
+  const [rootDraft, setRootDraft] = useState16(null);
+  const [asForm, setAsForm] = useState16(false);
+  const [templates, setTemplates] = useState16(null);
+  const [templateError, setTemplateError] = useState16(null);
+  const [templateReload, setTemplateReload] = useState16(0);
+  const [own, setOwn] = useState16(null);
+  const [ownError, setOwnError] = useState16(null);
+  const [ownProblem, setOwnProblem] = useState16(null);
+  const [ownReload, setOwnReload] = useState16(0);
+  const [picked, setPicked] = useState16(null);
+  const [saving, setSaving] = useState16(false);
+  const [notice, setNotice] = useState16(null);
+  const checkRun = useRef7(0);
+  const life = useRef7(null);
+  useEffect12(() => {
     const controller = new AbortController();
     life.current = controller;
     return () => controller.abort();
   }, []);
-  useEffect11(() => {
+  useEffect12(() => {
     const controller = new AbortController();
     setError(null);
     fetchJson(`${base}/new-stack`, { signal: controller.signal }).then((body) => {
@@ -9193,7 +9689,7 @@ function NewStack({ hostId, onClose }) {
     });
     return () => controller.abort();
   }, [base, reload]);
-  useEffect11(() => {
+  useEffect12(() => {
     const controller = new AbortController();
     setTemplateError(null);
     fetchJson("/ext/docker/stack-templates", { signal: controller.signal }).then((body) => {
@@ -9203,9 +9699,22 @@ function NewStack({ hostId, onClose }) {
     });
     return () => controller.abort();
   }, [templateReload]);
-  if (error) return /* @__PURE__ */ jsx15(LoadError, { what: "Der Ordner f\xFCr neue Stacks", error, onRetry: () => setReload((n) => n + 1), compact: true });
-  if (!place) return /* @__PURE__ */ jsx15("p", { className: "text-xs opacity-60", children: "Lade \u2026" });
-  const nameOk = NAME_RE.test(name);
+  useEffect12(() => {
+    const controller = new AbortController();
+    setOwnError(null);
+    fetchJson(OWN_URL, { signal: controller.signal }).then((body) => {
+      if (controller.signal.aborted) return;
+      setOwn(body.templates);
+      setOwnProblem(body.problem ?? null);
+    }).catch((err) => {
+      if (!controller.signal.aborted) setOwnError(errorMessage(err));
+    });
+    return () => controller.abort();
+  }, [ownReload]);
+  if (error) return /* @__PURE__ */ jsx18(LoadError, { what: "Der Ordner f\xFCr neue Stacks", error, onRetry: () => setReload((n) => n + 1), compact: true });
+  if (!place) return /* @__PURE__ */ jsx18("p", { className: "text-xs opacity-60", children: "Lade \u2026" });
+  const nameOk = NAME_RE3.test(name);
+  const needed = neededValues(text);
   const changed = name !== "" || text !== EXAMPLE;
   function edit(next) {
     checkRun.current += 1;
@@ -9214,13 +9723,55 @@ function NewStack({ hostId, onClose }) {
     setChecked(null);
     setProblem(null);
   }
-  async function pick(id) {
-    const template = templates?.find((t) => t.id === id);
-    if (!template) return;
+  async function pick(value) {
+    let next;
+    if (value.startsWith("own:")) {
+      const run = checkRun.current;
+      setBusy(true);
+      try {
+        const template = await fetchJson(`${OWN_URL}/${encodeURIComponent(value.slice(4))}`);
+        if (run !== checkRun.current) return;
+        next = { value, compose: template.compose, stackName: stackNameOf(template.name), own: template };
+      } catch (err) {
+        setProblem(`Die Vorlage lie\xDF sich nicht laden: ${errorMessage(err)}`);
+        setOwnReload((n) => n + 1);
+        return;
+      } finally {
+        setBusy(false);
+      }
+    } else {
+      const template = templates?.find((t) => t.id === value);
+      if (!template) return;
+      next = { value, compose: template.compose, stackName: template.id, catalog: template };
+    }
     const untouched = text === EXAMPLE || text === picked?.compose || text.trim() === "";
     if (!untouched && !await deck().confirmDialog("Den bisherigen Text durch die Vorlage ersetzen?", { confirmLabel: "Ersetzen" })) return;
-    setPicked(template);
-    edit({ text: template.compose, ...name === "" || name === picked?.id ? { name: template.id } : {} });
+    setPicked(next);
+    setSaving(false);
+    setNotice(null);
+    edit({ text: next.compose, ...name === "" || name === picked?.stackName ? { name: next.stackName } : {} });
+  }
+  function saved(template) {
+    setSaving(false);
+    setOwnReload((n) => n + 1);
+    setPicked({ value: `own:${template.id}`, compose: template.compose, stackName: stackNameOf(template.name), own: template });
+    setNotice(`Vorlage \u201E${template.name}\u201C gespeichert.`);
+  }
+  async function removeOwn(template) {
+    const question = `Vorlage \u201E${template.name}\u201C l\xF6schen? Stacks, die daraus angelegt wurden, bleiben, wie sie sind.`;
+    if (!await deck().confirmDialog(question, { confirmLabel: "L\xF6schen" })) return;
+    setBusy(true);
+    setProblem(null);
+    try {
+      await fetchJson(`${OWN_URL}/${encodeURIComponent(template.id)}`, { method: "DELETE" });
+      setPicked(null);
+      setOwnReload((n) => n + 1);
+      setNotice(`Vorlage \u201E${template.name}\u201C gel\xF6scht. Der Text unten bleibt stehen.`);
+    } catch (err) {
+      setProblem(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
   }
   async function leave() {
     if (changed && !await deck().confirmDialog("Der neue Stack ist noch nicht angelegt. Verwerfen?", { confirmLabel: "Verwerfen" })) return;
@@ -9247,7 +9798,7 @@ function NewStack({ hostId, onClose }) {
     if (!result?.ok || result.conflict) return;
     const risky = result.warnings.length ? ` Riskant: ${result.warnings.join(" ")} ${RISKY_NOTE2}` : "";
     const then = start ? " und starten" : "";
-    const question = `Stack \u201E${name}\u201C in ${result.folder} anlegen${then}? Nodvard Deck legt den Ordner an, schreibt compose.yaml und \xFCbernimmt den Stack.${risky}`;
+    const question = `Stack \u201E${name}\u201C in ${result.folder} anlegen${then}? ${productText("Nodvard Deck")} legt den Ordner an, schreibt compose.yaml und \xFCbernimmt den Stack.${risky}`;
     if (!await deck().confirmDialog(question, { confirmLabel: start ? "Anlegen und starten" : "Anlegen" })) return;
     setBusy(true);
     const signal = (life.current ?? new AbortController()).signal;
@@ -9301,17 +9852,21 @@ ${outcome.text}`.trim());
       setBusy(false);
     }
   }
-  return /* @__PURE__ */ jsxs14("div", { className: "flex flex-col gap-2 text-xs", "data-testid": "new-stack", children: [
-    /* @__PURE__ */ jsx15("p", { className: "opacity-70", children: "Ein neuer Stack bekommt einen eigenen Ordner. Nodvard Deck legt ihn erst nach der Freigabe an, schreibt darin compose.yaml und \xFCberschreibt nie einen bestehenden Ordner." }),
-    rootDraft === null ? /* @__PURE__ */ jsxs14("p", { className: "flex flex-wrap items-center gap-2", children: [
-      /* @__PURE__ */ jsxs14("span", { className: "break-all", children: [
+  return /* @__PURE__ */ jsxs17("div", { className: "flex flex-col gap-2 text-xs", "data-testid": "new-stack", children: [
+    /* @__PURE__ */ jsxs17("p", { className: "opacity-70", children: [
+      "Ein neuer Stack bekommt einen eigenen Ordner. ",
+      productText("Nodvard Deck"),
+      " legt ihn erst nach der Freigabe an, schreibt darin compose.yaml und \xFCberschreibt nie einen bestehenden Ordner."
+    ] }),
+    rootDraft === null ? /* @__PURE__ */ jsxs17("p", { className: "flex flex-wrap items-center gap-2", children: [
+      /* @__PURE__ */ jsxs17("span", { className: "break-all", children: [
         "Ordner f\xFCr neue Stacks: ",
-        /* @__PURE__ */ jsx15("span", { className: "font-mono", children: place.root }),
+        /* @__PURE__ */ jsx18("span", { className: "font-mono", children: place.root }),
         place.root_state === "missing" && " (gibt es noch nicht, wird mit angelegt)"
       ] }),
-      /* @__PURE__ */ jsx15(Button, { small: true, onClick: () => setRootDraft(place.root), children: "\xC4ndern" })
-    ] }) : /* @__PURE__ */ jsxs14("div", { className: "flex flex-wrap items-center gap-2", children: [
-      /* @__PURE__ */ jsx15(
+      /* @__PURE__ */ jsx18(Button, { small: true, onClick: () => setRootDraft(place.root), children: "\xC4ndern" })
+    ] }) : /* @__PURE__ */ jsxs17("div", { className: "flex flex-wrap items-center gap-2", children: [
+      /* @__PURE__ */ jsx18(
         "input",
         {
           "aria-label": "Ordner f\xFCr neue Stacks",
@@ -9320,49 +9875,66 @@ ${outcome.text}`.trim());
           className: "min-w-0 flex-1 rounded border border-white/10 bg-black/25 px-2 py-1 font-mono outline-none focus:border-[var(--color-accent)]"
         }
       ),
-      /* @__PURE__ */ jsx15(Button, { small: true, variant: "primary", disabled: busy, onClick: () => void saveRoot(rootDraft.trim()), children: "\xDCbernehmen" }),
-      place.root !== place.default && /* @__PURE__ */ jsxs14(Button, { small: true, disabled: busy, onClick: () => void saveRoot(null), children: [
+      /* @__PURE__ */ jsx18(Button, { small: true, variant: "primary", disabled: busy, onClick: () => void saveRoot(rootDraft.trim()), children: "\xDCbernehmen" }),
+      place.root !== place.default && /* @__PURE__ */ jsxs17(Button, { small: true, disabled: busy, onClick: () => void saveRoot(null), children: [
         "Vorgabe (",
         place.default,
         ")"
       ] }),
-      place.home && /* @__PURE__ */ jsx15(Button, { small: true, disabled: busy, onClick: () => setRootDraft(`${place.home}/stacks`), children: "Im Heimatordner" }),
-      /* @__PURE__ */ jsx15(Button, { small: true, onClick: () => setRootDraft(null), children: "Abbrechen" })
+      place.home && /* @__PURE__ */ jsx18(Button, { small: true, disabled: busy, onClick: () => setRootDraft(`${place.home}/stacks`), children: "Im Heimatordner" }),
+      /* @__PURE__ */ jsx18(Button, { small: true, onClick: () => setRootDraft(null), children: "Abbrechen" })
     ] }),
-    place.setting_problem && /* @__PURE__ */ jsx15("p", { className: "text-amber-300", role: "status", children: place.setting_problem }),
-    place.root_problem && /* @__PURE__ */ jsx15("p", { className: "text-amber-300", role: "status", children: place.root_problem }),
-    templateError ? /* @__PURE__ */ jsx15(LoadError, { what: "Die Vorlagen", error: templateError, onRetry: () => setTemplateReload((n) => n + 1), compact: true }) : templates && /* @__PURE__ */ jsxs14("label", { className: "flex flex-col gap-1", children: [
-      /* @__PURE__ */ jsx15("span", { children: "Vorlage" }),
-      /* @__PURE__ */ jsxs14(
+    place.setting_problem && /* @__PURE__ */ jsx18("p", { className: "text-amber-300", role: "status", children: place.setting_problem }),
+    place.root_problem && /* @__PURE__ */ jsx18("p", { className: "text-amber-300", role: "status", children: place.root_problem }),
+    templateError && /* @__PURE__ */ jsx18(LoadError, { what: "Die Vorlagen", error: templateError, onRetry: () => setTemplateReload((n) => n + 1), compact: true }),
+    ownError && /* @__PURE__ */ jsx18(LoadError, { what: "Die eigenen Vorlagen", error: ownError, onRetry: () => setOwnReload((n) => n + 1), compact: true }),
+    ownProblem && /* @__PURE__ */ jsx18("p", { className: "text-amber-300", role: "status", children: ownProblem }),
+    templates?.length || own?.length ? /* @__PURE__ */ jsxs17("label", { className: "flex flex-col gap-1", children: [
+      /* @__PURE__ */ jsx18("span", { children: "Vorlage" }),
+      /* @__PURE__ */ jsxs17(
         "select",
         {
           "aria-label": "Vorlage",
-          value: picked?.id ?? "",
+          value: picked?.value ?? "",
           disabled: busy,
           onChange: (e) => void pick(e.target.value),
           className: "rounded border border-white/10 bg-black/25 px-2 py-1 outline-none focus:border-[var(--color-accent)]",
           children: [
-            /* @__PURE__ */ jsx15("option", { value: "", disabled: true, children: "Ohne Vorlage" }),
-            templates.map((t) => /* @__PURE__ */ jsx15("option", { value: t.id, children: t.name }, t.id))
+            /* @__PURE__ */ jsx18("option", { value: "", disabled: true, children: "Ohne Vorlage" }),
+            own && own.length > 0 && /* @__PURE__ */ jsx18("optgroup", { label: "Eigene Vorlagen", children: own.map((t) => /* @__PURE__ */ jsx18("option", { value: `own:${t.id}`, children: t.name }, t.id)) }),
+            templates && templates.length > 0 && /* @__PURE__ */ jsx18("optgroup", { label: "Katalog", children: templates.map((t) => /* @__PURE__ */ jsx18("option", { value: t.id, children: t.name }, t.id)) })
           ]
         }
       )
-    ] }),
-    picked && /* @__PURE__ */ jsxs14("div", { className: "flex flex-col gap-1 rounded border border-white/10 bg-white/[0.03] p-2", "data-testid": "template-note", children: [
-      /* @__PURE__ */ jsx15("p", { children: picked.summary }),
-      /* @__PURE__ */ jsx15("p", { className: "opacity-70", children: picked.note }),
-      /* @__PURE__ */ jsxs14("p", { className: "opacity-70", children: [
+    ] }) : null,
+    picked?.catalog && /* @__PURE__ */ jsxs17("div", { className: "flex flex-col gap-1 rounded border border-white/10 bg-white/[0.03] p-2", "data-testid": "template-note", children: [
+      /* @__PURE__ */ jsx18("p", { children: picked.catalog.summary }),
+      /* @__PURE__ */ jsx18("p", { className: "opacity-70", children: picked.catalog.note }),
+      /* @__PURE__ */ jsxs17("p", { className: "opacity-70", children: [
         "Belegt auf dem Server ",
-        picked.ports.length === 1 ? "den Port" : "die Ports",
+        picked.catalog.ports.length === 1 ? "den Port" : "die Ports",
         " ",
-        picked.ports.join(", "),
+        picked.catalog.ports.join(", "),
         "."
       ] }),
-      text !== picked.compose && /* @__PURE__ */ jsx15("p", { className: "text-amber-300", children: "Du hast die Datei ge\xE4ndert; die Angaben oben gelten f\xFCr die Vorlage, wie sie war." })
+      text !== picked.compose && /* @__PURE__ */ jsx18("p", { className: "text-amber-300", children: "Du hast die Datei ge\xE4ndert; die Angaben oben gelten f\xFCr die Vorlage, wie sie war." })
     ] }),
-    /* @__PURE__ */ jsxs14("label", { className: "flex flex-col gap-1", children: [
-      /* @__PURE__ */ jsx15("span", { children: "Name" }),
-      /* @__PURE__ */ jsx15(
+    picked?.own && /* @__PURE__ */ jsxs17("div", { className: "flex flex-col gap-1 rounded border border-white/10 bg-white/[0.03] p-2", "data-testid": "own-template-note", children: [
+      picked.own.summary && /* @__PURE__ */ jsx18("p", { children: picked.own.summary }),
+      /* @__PURE__ */ jsxs17("p", { className: "flex flex-wrap items-center gap-2 opacity-70", children: [
+        /* @__PURE__ */ jsxs17("span", { className: "flex-1", children: [
+          "Eigene Vorlage",
+          picked.own.updated_at ? `, zuletzt gespeichert ${when(picked.own.updated_at)}` : "",
+          "."
+        ] }),
+        /* @__PURE__ */ jsx18(Button, { small: true, variant: "danger", disabled: busy, onClick: () => void removeOwn(picked.own), children: "Vorlage l\xF6schen" })
+      ] }),
+      text !== picked.compose && /* @__PURE__ */ jsx18("p", { className: "text-amber-300", children: "Du hast die Datei ge\xE4ndert. Mit \u201EAls Vorlage speichern\u201C kannst du die Vorlage ersetzen." })
+    ] }),
+    notice && /* @__PURE__ */ jsx18("p", { className: "opacity-90", role: "status", children: notice }),
+    /* @__PURE__ */ jsxs17("label", { className: "flex flex-col gap-1", children: [
+      /* @__PURE__ */ jsx18("span", { children: "Name" }),
+      /* @__PURE__ */ jsx18(
         "input",
         {
           "aria-label": "Name des Stacks",
@@ -9373,29 +9945,34 @@ ${outcome.text}`.trim());
         }
       )
     ] }),
-    name && !nameOk && /* @__PURE__ */ jsx15("p", { className: "text-amber-300", children: "Nur Kleinbuchstaben, Ziffern, \u201E-\u201C und \u201E_\u201C, am Anfang ein Buchstabe oder eine Ziffer." }),
-    nameOk && /* @__PURE__ */ jsxs14("p", { className: "break-all opacity-70", children: [
+    name && !nameOk && /* @__PURE__ */ jsx18("p", { className: "text-amber-300", children: "Nur Kleinbuchstaben, Ziffern, \u201E-\u201C und \u201E_\u201C, am Anfang ein Buchstabe oder eine Ziffer." }),
+    nameOk && /* @__PURE__ */ jsxs17("p", { className: "break-all opacity-70", children: [
       "Ordner: ",
-      /* @__PURE__ */ jsxs14("span", { className: "font-mono", children: [
+      /* @__PURE__ */ jsxs17("span", { className: "font-mono", children: [
         place.root,
         "/",
         name
       ] })
     ] }),
-    /* @__PURE__ */ jsxs14("div", { className: "flex flex-wrap gap-1.5", children: [
-      /* @__PURE__ */ jsx15(Button, { small: true, onClick: () => {
+    /* @__PURE__ */ jsxs17("div", { className: "flex flex-wrap gap-1.5", children: [
+      /* @__PURE__ */ jsx18(Button, { small: true, onClick: () => {
         setPicked(null);
         edit({ text: EXAMPLE });
       }, children: "Beispiel einf\xFCgen" }),
-      /* @__PURE__ */ jsxs14("label", { className: "cursor-pointer rounded-lg border border-white/10 bg-white/[0.06] px-2 py-1 hover:bg-white/[0.12]", children: [
+      /* @__PURE__ */ jsx18(Button, { small: true, pressed: saving, disabled: busy || text.trim() === "", onClick: () => {
+        setSaving(!saving);
+        setNotice(null);
+      }, children: "Als Vorlage speichern" }),
+      /* @__PURE__ */ jsxs17("label", { className: "cursor-pointer rounded-lg border border-white/10 bg-white/[0.06] px-2 py-1 hover:bg-white/[0.12]", children: [
         "Datei hochladen",
-        /* @__PURE__ */ jsx15("input", { type: "file", accept: ".yml,.yaml,text/yaml", className: "hidden", "aria-label": "Compose-Datei hochladen", onChange: upload })
+        /* @__PURE__ */ jsx18("input", { type: "file", accept: ".yml,.yaml,text/yaml", className: "hidden", "aria-label": "Compose-Datei hochladen", onChange: upload })
       ] }),
-      /* @__PURE__ */ jsx15("span", { className: "flex-1" }),
-      /* @__PURE__ */ jsx15(Button, { small: true, pressed: !asForm, onClick: () => setAsForm(false), children: "Text" }),
-      /* @__PURE__ */ jsx15(Button, { small: true, pressed: asForm, onClick: () => setAsForm(true), children: "Formular" })
+      /* @__PURE__ */ jsx18("span", { className: "flex-1" }),
+      /* @__PURE__ */ jsx18(Button, { small: true, pressed: !asForm, onClick: () => setAsForm(false), children: "Text" }),
+      /* @__PURE__ */ jsx18(Button, { small: true, pressed: asForm, onClick: () => setAsForm(true), children: "Formular" })
     ] }),
-    asForm ? /* @__PURE__ */ jsx15(StackForm, { text, onChange: (next) => edit({ text: next }), disabled: busy }) : /* @__PURE__ */ jsx15(
+    saving && /* @__PURE__ */ jsx18(SaveTemplate, { compose: text, current: picked?.own ?? null, suggested: name, onSaved: saved, onCancel: () => setSaving(false) }),
+    asForm ? /* @__PURE__ */ jsx18(StackForm, { text, onChange: (next) => edit({ text: next }), disabled: busy }) : /* @__PURE__ */ jsx18(
       "textarea",
       {
         "aria-label": "Compose-Datei des neuen Stacks",
@@ -9407,20 +9984,41 @@ ${outcome.text}`.trim());
         onChange: (e) => edit({ text: e.target.value })
       }
     ),
-    checked?.conflict && /* @__PURE__ */ jsx15("p", { className: "text-red-400", role: "alert", children: checked.conflict }),
-    /* @__PURE__ */ jsx15(CheckResult, { checked, note: RISKY_NOTE2 }),
-    problem && /* @__PURE__ */ jsx15("p", { className: "break-words text-red-400", role: "alert", children: problem }),
-    /* @__PURE__ */ jsxs14("div", { className: "flex flex-wrap gap-1.5", children: [
-      /* @__PURE__ */ jsx15(Button, { small: true, disabled: busy || !nameOk, onClick: () => void check(), children: "Pr\xFCfen" }),
-      /* @__PURE__ */ jsx15(Button, { small: true, variant: "primary", disabled: busy || !nameOk, onClick: () => void create(false), children: "Anlegen" }),
-      /* @__PURE__ */ jsx15(Button, { small: true, disabled: busy || !nameOk, onClick: () => void create(true), children: "Anlegen und starten" }),
-      /* @__PURE__ */ jsx15(Button, { small: true, onClick: () => void leave(), children: "Schlie\xDFen" })
+    needed.open.length > 0 && /* @__PURE__ */ jsxs17("p", { className: "text-amber-300", "data-testid": "needed-values", children: [
+      "Die Datei erwartet ",
+      needed.open.length === 1 ? "einen Wert" : "Werte",
+      " f\xFCr ",
+      needed.open.join(", "),
+      ". Leg den Stack mit \u201EAnlegen\u201C an, trag ",
+      needed.open.length === 1 ? "ihn" : "sie",
+      " in eine .env in seinem Ordner ein (etwa \xFCber \u201EDateien\u201C) und starte ihn erst dann. Sonst ",
+      needed.open.length === 1 ? "bleibt er" : "bleiben sie",
+      " leer."
+    ] }),
+    needed.required.length > 0 && /* @__PURE__ */ jsxs17("p", { className: "text-amber-300", "data-testid": "required-values", children: [
+      needed.required.join(", "),
+      " ",
+      needed.required.length === 1 ? "ist" : "sind",
+      " mit \u201E:?\u201C als Pflicht markiert. Ohne .env bricht deshalb schon das Anlegen ab. Schreib dort zum Beispiel ",
+      "${",
+      needed.required[0],
+      "}",
+      " ohne \u201E:?\u201C und trag den Wert danach ein."
+    ] }),
+    checked?.conflict && /* @__PURE__ */ jsx18("p", { className: "text-red-400", role: "alert", children: checked.conflict }),
+    /* @__PURE__ */ jsx18(CheckResult, { checked, note: RISKY_NOTE2 }),
+    problem && /* @__PURE__ */ jsx18("p", { className: "break-words text-red-400", role: "alert", children: problem }),
+    /* @__PURE__ */ jsxs17("div", { className: "flex flex-wrap gap-1.5", children: [
+      /* @__PURE__ */ jsx18(Button, { small: true, disabled: busy || !nameOk, onClick: () => void check(), children: "Pr\xFCfen" }),
+      /* @__PURE__ */ jsx18(Button, { small: true, variant: "primary", disabled: busy || !nameOk, onClick: () => void create(false), children: "Anlegen" }),
+      /* @__PURE__ */ jsx18(Button, { small: true, disabled: busy || !nameOk, onClick: () => void create(true), children: "Anlegen und starten" }),
+      /* @__PURE__ */ jsx18(Button, { small: true, onClick: () => void leave(), children: "Schlie\xDFen" })
     ] })
   ] });
 }
 
 // src/Stacks.tsx
-import { Fragment as Fragment9, jsx as jsx16, jsxs as jsxs15 } from "react/jsx-runtime";
+import { Fragment as Fragment9, jsx as jsx19, jsxs as jsxs18 } from "react/jsx-runtime";
 var STATE2 = {
   running: { label: "l\xE4uft", tone: "good" },
   partial: { label: "l\xE4uft teilweise", tone: "warn" },
@@ -9452,11 +10050,13 @@ function changesText(changes) {
   ].filter(Boolean).join(" \xB7 ");
 }
 function StackFile({ hostId, project }) {
-  const [files, setFiles] = useState13(null);
-  const [env, setEnv] = useState13([]);
-  const [error, setError] = useState13(null);
-  const [reload, setReload] = useState13(0);
-  useEffect12(() => {
+  const [files, setFiles] = useState17(null);
+  const [env, setEnv] = useState17([]);
+  const [error, setError] = useState17(null);
+  const [reload, setReload] = useState17(0);
+  const [saving, setSaving] = useState17(null);
+  const [saved, setSaved] = useState17(null);
+  useEffect13(() => {
     const controller = new AbortController();
     setFiles(null);
     setError(null);
@@ -9469,34 +10069,66 @@ function StackFile({ hostId, project }) {
     });
     return () => controller.abort();
   }, [hostId, project, reload]);
-  if (error) return /* @__PURE__ */ jsx16(LoadError, { what: "Die Compose-Datei", error, onRetry: () => setReload((n) => n + 1) });
-  if (!files) return /* @__PURE__ */ jsx16("p", { className: "text-xs opacity-60", children: "Lade die Datei \u2026" });
-  return /* @__PURE__ */ jsxs15("div", { className: "flex flex-col gap-3", "data-testid": `stack-file-${project}`, children: [
-    /* @__PURE__ */ jsx16("p", { className: "text-xs opacity-60", children: "Nur zum Ansehen. So steht die Datei gerade auf dem Server." }),
-    files.map((file) => /* @__PURE__ */ jsxs15("div", { children: [
-      /* @__PURE__ */ jsx16("p", { className: "mb-1 break-all font-mono text-xs opacity-80", children: file.path }),
-      file.content != null ? /* @__PURE__ */ jsx16("pre", { className: "max-h-96 overflow-auto rounded bg-black/60 p-2 font-mono text-[11px] leading-snug", children: file.content }) : /* @__PURE__ */ jsx16("p", { className: "text-xs text-red-400", children: file.error })
+  if (error) return /* @__PURE__ */ jsx19(LoadError, { what: "Die Compose-Datei", error, onRetry: () => setReload((n) => n + 1) });
+  if (!files) return /* @__PURE__ */ jsx19("p", { className: "text-xs opacity-60", children: "Lade die Datei \u2026" });
+  return /* @__PURE__ */ jsxs18("div", { className: "flex flex-col gap-3", "data-testid": `stack-file-${project}`, children: [
+    /* @__PURE__ */ jsx19("p", { className: "text-xs opacity-60", children: "Nur zum Ansehen. So steht die Datei gerade auf dem Server." }),
+    saved && /* @__PURE__ */ jsx19("p", { className: "text-xs opacity-90", role: "status", children: saved }),
+    files.map((file) => /* @__PURE__ */ jsxs18("div", { children: [
+      /* @__PURE__ */ jsxs18("p", { className: "mb-1 flex flex-wrap items-center gap-2", children: [
+        /* @__PURE__ */ jsx19("span", { className: "flex-1 break-all font-mono text-xs opacity-80", children: file.path }),
+        file.content != null && /* @__PURE__ */ jsx19(
+          Button,
+          {
+            small: true,
+            pressed: saving === file.path,
+            onClick: () => {
+              setSaving(saving === file.path ? null : file.path);
+              setSaved(null);
+            },
+            ariaLabel: `Als Vorlage speichern: ${file.path}`,
+            children: "Als Vorlage speichern"
+          }
+        )
+      ] }),
+      saving === file.path && file.content != null && /* @__PURE__ */ jsx19("div", { className: "mb-1", children: /* @__PURE__ */ jsx19(
+        SaveTemplate,
+        {
+          compose: file.content,
+          suggested: project,
+          onCancel: () => setSaving(null),
+          onSaved: (template) => {
+            setSaving(null);
+            setSaved(`Als Vorlage \u201E${template.name}\u201C gespeichert. Du findest sie unter \u201ENeuer Stack\u201C.`);
+          }
+        }
+      ) }),
+      file.content != null ? /* @__PURE__ */ jsx19("pre", { className: "max-h-96 overflow-auto rounded bg-black/60 p-2 font-mono text-[11px] leading-snug", children: file.content }) : /* @__PURE__ */ jsx19("p", { className: "text-xs text-red-400", children: file.error })
     ] }, file.path)),
-    env.map((file) => /* @__PURE__ */ jsxs15("div", { "data-testid": "stack-env", children: [
-      /* @__PURE__ */ jsx16("p", { className: "mb-1 break-all font-mono text-xs opacity-80", children: file.path }),
-      file.error ? /* @__PURE__ */ jsx16("p", { className: "text-xs text-red-400", children: file.error }) : /* @__PURE__ */ jsx16("p", { className: "break-words text-xs", children: file.names.length ? /* @__PURE__ */ jsxs15(Fragment9, { children: [
+    env.map((file) => /* @__PURE__ */ jsxs18("div", { "data-testid": "stack-env", children: [
+      /* @__PURE__ */ jsx19("p", { className: "mb-1 break-all font-mono text-xs opacity-80", children: file.path }),
+      file.error ? /* @__PURE__ */ jsx19("p", { className: "text-xs text-red-400", children: file.error }) : /* @__PURE__ */ jsx19("p", { className: "break-words text-xs", children: file.names.length ? /* @__PURE__ */ jsxs18(Fragment9, { children: [
         "Variablen: ",
-        /* @__PURE__ */ jsx16("span", { className: "font-mono", children: file.names.join(", ") })
+        /* @__PURE__ */ jsx19("span", { className: "font-mono", children: file.names.join(", ") })
       ] }) : "Keine Variablen." }),
-      file.note && /* @__PURE__ */ jsx16("p", { className: "text-xs text-amber-300", children: file.note })
+      file.note && /* @__PURE__ */ jsx19("p", { className: "text-xs text-amber-300", children: file.note })
     ] }, file.path)),
-    env.length > 0 && /* @__PURE__ */ jsx16("p", { className: "text-xs opacity-60", children: "Die Werte aus .env zeigt Nodvard Deck nicht, weil darin oft Passw\xF6rter stehen." })
+    env.length > 0 && /* @__PURE__ */ jsxs18("p", { className: "text-xs opacity-60", children: [
+      "Die Werte aus .env zeigt ",
+      productText("Nodvard Deck"),
+      " nicht, weil darin oft Passw\xF6rter stehen."
+    ] })
   ] });
 }
 var ADOPT_TEXT = "\xDCbernehmen hei\xDFt: Nodvard Deck merkt sich Ordner und Dateien dieses Stacks. Am Server \xE4ndert sich dabei nichts, kein Container wird neu erstellt. Vorerst bleibt ein \xFCbernommener Stack dadurch in der Liste, auch wenn gerade keiner seiner Container existiert, und seine Datei l\xE4sst sich weiter ansehen.";
 function AdoptPanel({ hostId, project, onDone }) {
-  const [check, setCheck] = useState13(null);
-  const [error, setError] = useState13(null);
-  const [failed, setFailed] = useState13(null);
-  const [busy, setBusy] = useState13(false);
-  const [reload, setReload] = useState13(0);
+  const [check, setCheck] = useState17(null);
+  const [error, setError] = useState17(null);
+  const [failed, setFailed] = useState17(null);
+  const [busy, setBusy] = useState17(false);
+  const [reload, setReload] = useState17(0);
   const url = `/ext/docker/hosts/${encodeURIComponent(hostId)}/stacks/${encodeURIComponent(project)}/adopt`;
-  useEffect12(() => {
+  useEffect13(() => {
     const controller = new AbortController();
     setCheck(null);
     setError(null);
@@ -9524,45 +10156,45 @@ function AdoptPanel({ hostId, project, onDone }) {
       setBusy(false);
     }
   }
-  if (error) return /* @__PURE__ */ jsx16(LoadError, { what: "Die Pr\xFCfung", error, onRetry: () => setReload((n) => n + 1), compact: true });
-  if (!check) return /* @__PURE__ */ jsx16("p", { className: "text-xs opacity-60", children: "Pr\xFCfe, ob sich der Stack \xFCbernehmen l\xE4sst \u2026" });
-  return /* @__PURE__ */ jsxs15("div", { className: "flex flex-col gap-2 text-xs", "data-testid": `adopt-${project}`, children: [
-    /* @__PURE__ */ jsx16("p", { className: "opacity-70", children: ADOPT_TEXT }),
-    check.ok ? /* @__PURE__ */ jsxs15(Fragment9, { children: [
-      /* @__PURE__ */ jsxs15("p", { className: "break-words", children: [
+  if (error) return /* @__PURE__ */ jsx19(LoadError, { what: "Die Pr\xFCfung", error, onRetry: () => setReload((n) => n + 1), compact: true });
+  if (!check) return /* @__PURE__ */ jsx19("p", { className: "text-xs opacity-60", children: "Pr\xFCfe, ob sich der Stack \xFCbernehmen l\xE4sst \u2026" });
+  return /* @__PURE__ */ jsxs18("div", { className: "flex flex-col gap-2 text-xs", "data-testid": `adopt-${project}`, children: [
+    /* @__PURE__ */ jsx19("p", { className: "opacity-70", children: productText(ADOPT_TEXT) }),
+    check.ok ? /* @__PURE__ */ jsxs18(Fragment9, { children: [
+      /* @__PURE__ */ jsxs18("p", { className: "break-words", children: [
         "Alles bereit. Gemerkt werden der Ordner ",
         check.working_dir,
         " und ",
         [...check.config_files, ...check.env_files].join(", "),
         "."
       ] }),
-      /* @__PURE__ */ jsx16("div", { children: /* @__PURE__ */ jsx16(Button, { small: true, variant: "primary", disabled: busy, onClick: () => void adopt(check), children: busy ? "\u2026" : "Jetzt \xFCbernehmen" }) }),
-      failed && /* @__PURE__ */ jsxs15("div", { className: "flex flex-wrap items-center gap-2", children: [
-        /* @__PURE__ */ jsxs15("p", { className: "text-red-400", role: "alert", children: [
+      /* @__PURE__ */ jsx19("div", { children: /* @__PURE__ */ jsx19(Button, { small: true, variant: "primary", disabled: busy, onClick: () => void adopt(check), children: busy ? "\u2026" : "Jetzt \xFCbernehmen" }) }),
+      failed && /* @__PURE__ */ jsxs18("div", { className: "flex flex-wrap items-center gap-2", children: [
+        /* @__PURE__ */ jsxs18("p", { className: "text-red-400", role: "alert", children: [
           "\xDCbernehmen hat nicht geklappt: ",
           failed
         ] }),
-        /* @__PURE__ */ jsx16(Button, { small: true, onClick: () => {
+        /* @__PURE__ */ jsx19(Button, { small: true, onClick: () => {
           setFailed(null);
           setReload((n) => n + 1);
         }, children: "Pr\xFCfung neu laden" })
       ] })
-    ] }) : /* @__PURE__ */ jsxs15(Fragment9, { children: [
-      /* @__PURE__ */ jsx16("p", { className: "text-amber-300", children: "So l\xE4sst sich der Stack nicht \xFCbernehmen:" }),
-      /* @__PURE__ */ jsx16("ul", { className: "list-disc pl-5", children: check.reasons.map((reason) => /* @__PURE__ */ jsx16("li", { className: "break-words", children: reason }, reason)) })
+    ] }) : /* @__PURE__ */ jsxs18(Fragment9, { children: [
+      /* @__PURE__ */ jsx19("p", { className: "text-amber-300", children: "So l\xE4sst sich der Stack nicht \xFCbernehmen:" }),
+      /* @__PURE__ */ jsx19("ul", { className: "list-disc pl-5", children: check.reasons.map((reason) => /* @__PURE__ */ jsx19("li", { className: "break-words", children: reason }, reason)) })
     ] })
   ] });
 }
 var DELETE_TEXT = "L\xF6schen f\xE4hrt den Stack herunter: Container und Netze sind danach weg, und mit ihnen alles, was nur im Container lag. Die Volumes bleiben. Nodvard Deck vergisst den Stack; sein Ordner mit der Compose-Datei bleibt, au\xDFer du hakst unten das L\xF6schen an.";
 function DeletePanel({ hostId, project, onDone }) {
-  const [check, setCheck] = useState13(null);
-  const [error, setError] = useState13(null);
-  const [failed, setFailed] = useState13(null);
-  const [withFolder, setWithFolder] = useState13(false);
-  const [busy, setBusy] = useState13(false);
-  const [reload, setReload] = useState13(0);
+  const [check, setCheck] = useState17(null);
+  const [error, setError] = useState17(null);
+  const [failed, setFailed] = useState17(null);
+  const [withFolder, setWithFolder] = useState17(false);
+  const [busy, setBusy] = useState17(false);
+  const [reload, setReload] = useState17(0);
   const url = `/ext/docker/hosts/${encodeURIComponent(hostId)}/stacks/${encodeURIComponent(project)}/delete`;
-  useEffect12(() => {
+  useEffect13(() => {
     const controller = new AbortController();
     setCheck(null);
     setError(null);
@@ -9597,33 +10229,33 @@ ${outcome.text}`, true);
       setBusy(false);
     }
   }
-  if (error) return /* @__PURE__ */ jsx16(LoadError, { what: "Die Pr\xFCfung", error, onRetry: () => setReload((n) => n + 1), compact: true });
-  if (!check) return /* @__PURE__ */ jsx16("p", { className: "text-xs opacity-60", children: "Pr\xFCfe, was sich l\xF6schen l\xE4sst \u2026" });
-  return /* @__PURE__ */ jsxs15("div", { className: "flex flex-col gap-2 text-xs", "data-testid": `delete-${project}`, children: [
-    /* @__PURE__ */ jsx16("p", { className: "opacity-70", children: DELETE_TEXT }),
-    /* @__PURE__ */ jsxs15("label", { className: "flex items-start gap-2", children: [
-      /* @__PURE__ */ jsx16("input", { type: "checkbox", checked: withFolder, disabled: busy || check.folder_refusal !== null, onChange: (e) => setWithFolder(e.target.checked) }),
-      /* @__PURE__ */ jsxs15("span", { className: "break-all", children: [
+  if (error) return /* @__PURE__ */ jsx19(LoadError, { what: "Die Pr\xFCfung", error, onRetry: () => setReload((n) => n + 1), compact: true });
+  if (!check) return /* @__PURE__ */ jsx19("p", { className: "text-xs opacity-60", children: "Pr\xFCfe, was sich l\xF6schen l\xE4sst \u2026" });
+  return /* @__PURE__ */ jsxs18("div", { className: "flex flex-col gap-2 text-xs", "data-testid": `delete-${project}`, children: [
+    /* @__PURE__ */ jsx19("p", { className: "opacity-70", children: productText(DELETE_TEXT) }),
+    /* @__PURE__ */ jsxs18("label", { className: "flex items-start gap-2", children: [
+      /* @__PURE__ */ jsx19("input", { type: "checkbox", checked: withFolder, disabled: busy || check.folder_refusal !== null, onChange: (e) => setWithFolder(e.target.checked) }),
+      /* @__PURE__ */ jsxs18("span", { className: "break-all", children: [
         "Auch den Ordner ",
         check.folder,
         " mit allen Dateien darin l\xF6schen"
       ] })
     ] }),
-    check.folder_refusal && /* @__PURE__ */ jsx16("p", { className: "opacity-70", children: check.folder_refusal }),
-    withFolder && /* @__PURE__ */ jsx16("p", { className: "text-red-400", children: "Darin liegen oft die Daten des Stacks, etwa in Unterordnern wie ./daten. Sie sind danach weg, ein Zur\xFCck gibt es nicht." }),
-    failed && /* @__PURE__ */ jsx16("p", { className: "break-words text-red-400", role: "alert", children: failed }),
-    /* @__PURE__ */ jsx16("div", { children: /* @__PURE__ */ jsx16(Button, { small: true, variant: "danger", disabled: busy, onClick: () => void remove(check.folder), children: busy ? "\u2026" : "Stack l\xF6schen" }) })
+    check.folder_refusal && /* @__PURE__ */ jsx19("p", { className: "opacity-70", children: check.folder_refusal }),
+    withFolder && /* @__PURE__ */ jsx19("p", { className: "text-red-400", children: "Darin liegen oft die Daten des Stacks, etwa in Unterordnern wie ./daten. Sie sind danach weg, ein Zur\xFCck gibt es nicht." }),
+    failed && /* @__PURE__ */ jsx19("p", { className: "break-words text-red-400", role: "alert", children: failed }),
+    /* @__PURE__ */ jsx19("div", { children: /* @__PURE__ */ jsx19(Button, { small: true, variant: "danger", disabled: busy, onClick: () => void remove(check.folder), children: busy ? "\u2026" : "Stack l\xF6schen" }) })
   ] });
 }
 var KEEP_IN_PORTAINER = "L\xF6sche den Stack danach nicht in Portainer und rolle ihn dort nicht neu aus: Er hat denselben Projektnamen, Portainer w\xFCrde die neuen Container entfernen oder mit seiner alten Datei ersetzen.";
 function PortainerPanel({ hostId, project, onDone }) {
-  const [plan, setPlan] = useState13(null);
-  const [error, setError] = useState13(null);
-  const [failed, setFailed] = useState13(null);
-  const [busy, setBusy] = useState13(false);
-  const [reload, setReload] = useState13(0);
+  const [plan, setPlan] = useState17(null);
+  const [error, setError] = useState17(null);
+  const [failed, setFailed] = useState17(null);
+  const [busy, setBusy] = useState17(false);
+  const [reload, setReload] = useState17(0);
   const url = `/ext/docker/hosts/${encodeURIComponent(hostId)}/stacks/${encodeURIComponent(project)}/from-portainer`;
-  useEffect12(() => {
+  useEffect13(() => {
     const controller = new AbortController();
     setPlan(null);
     setError(null);
@@ -9659,22 +10291,23 @@ ${outcome.text}`, true);
       setBusy(false);
     }
   }
-  if (error) return /* @__PURE__ */ jsx16(LoadError, { what: "Die Pr\xFCfung", error, onRetry: () => setReload((n) => n + 1), compact: true });
-  if (!plan) return /* @__PURE__ */ jsx16("p", { className: "text-xs opacity-60", children: "Pr\xFCfe, ob der Umzug geht \u2026" });
-  return /* @__PURE__ */ jsxs15("div", { className: "flex flex-col gap-2 text-xs", "data-testid": `portainer-${project}`, children: [
-    /* @__PURE__ */ jsxs15("p", { className: "opacity-70", children: [
-      "Nodvard Deck holt Datei und Variablen dieses Stacks aus Portainer in den Ordner ",
-      /* @__PURE__ */ jsx16("span", { className: "break-all font-mono", children: plan.folder }),
+  if (error) return /* @__PURE__ */ jsx19(LoadError, { what: "Die Pr\xFCfung", error, onRetry: () => setReload((n) => n + 1), compact: true });
+  if (!plan) return /* @__PURE__ */ jsx19("p", { className: "text-xs opacity-60", children: "Pr\xFCfe, ob der Umzug geht \u2026" });
+  return /* @__PURE__ */ jsxs18("div", { className: "flex flex-col gap-2 text-xs", "data-testid": `portainer-${project}`, children: [
+    /* @__PURE__ */ jsxs18("p", { className: "opacity-70", children: [
+      productText("Nodvard Deck"),
+      " holt Datei und Variablen dieses Stacks aus Portainer in den Ordner ",
+      /* @__PURE__ */ jsx19("span", { className: "break-all font-mono", children: plan.folder }),
       " und rollt ihn dort unter demselben Namen neu aus. Die Container werden dabei einmal neu erstellt, die Volumes mit den Daten bleiben; was nur in den alten Containern lag und nicht in einem Volume oder Ordner, geht dabei verloren. Danach bearbeitest du ihn hier."
     ] }),
-    /* @__PURE__ */ jsxs15("p", { className: "text-amber-300", children: [
+    /* @__PURE__ */ jsxs18("p", { className: "text-amber-300", children: [
       KEEP_IN_PORTAINER,
       " Lass den Eintrag stehen oder schalte Portainer ganz ab, wenn alle Stacks umgezogen sind."
     ] }),
-    plan.stopped && /* @__PURE__ */ jsx16("p", { className: "text-amber-300", children: "Der Stack ist gerade gestoppt; der Umzug startet ihn. Dienste f\xFCr einmalige Aufgaben laufen dabei noch einmal." }),
-    plan.problem && /* @__PURE__ */ jsx16("p", { className: "break-words text-red-400", role: "alert", children: plan.problem }),
-    failed && /* @__PURE__ */ jsx16("p", { className: "break-words text-red-400", role: "alert", children: failed }),
-    /* @__PURE__ */ jsx16("div", { children: /* @__PURE__ */ jsx16(Button, { small: true, variant: "primary", disabled: busy || plan.problem !== null, onClick: () => void move(plan.folder), children: busy ? "\u2026" : "Umziehen" }) })
+    plan.stopped && /* @__PURE__ */ jsx19("p", { className: "text-amber-300", children: "Der Stack ist gerade gestoppt; der Umzug startet ihn. Dienste f\xFCr einmalige Aufgaben laufen dabei noch einmal." }),
+    plan.problem && /* @__PURE__ */ jsx19("p", { className: "break-words text-red-400", role: "alert", children: plan.problem }),
+    failed && /* @__PURE__ */ jsx19("p", { className: "break-words text-red-400", role: "alert", children: failed }),
+    /* @__PURE__ */ jsx19("div", { children: /* @__PURE__ */ jsx19(Button, { small: true, variant: "primary", disabled: busy || plan.problem !== null, onClick: () => void move(plan.folder), children: busy ? "\u2026" : "Umziehen" }) })
   ] });
 }
 var IMAGE_STATUS = {
@@ -9693,15 +10326,15 @@ function backupDate(plan) {
   return new Date(Math.max(...dates.map((d) => d.getTime()))).toLocaleDateString("de-DE");
 }
 function UpdatePanel2({ hostId, project, onDone }) {
-  const [plan, setPlan] = useState13(null);
-  const [error, setError] = useState13(null);
-  const [failed, setFailed] = useState13(null);
-  const [chosen, setChosen] = useState13([]);
-  const [saveVolumes, setSaveVolumes] = useState13(false);
-  const [busy, setBusy] = useState13(false);
-  const [reload, setReload] = useState13(0);
+  const [plan, setPlan] = useState17(null);
+  const [error, setError] = useState17(null);
+  const [failed, setFailed] = useState17(null);
+  const [chosen, setChosen] = useState17([]);
+  const [saveVolumes, setSaveVolumes] = useState17(false);
+  const [busy, setBusy] = useState17(false);
+  const [reload, setReload] = useState17(0);
   const base = `/ext/docker/hosts/${encodeURIComponent(hostId)}/stacks/${encodeURIComponent(project)}`;
-  useEffect12(() => {
+  useEffect13(() => {
     const controller = new AbortController();
     setPlan(null);
     setError(null);
@@ -9740,8 +10373,8 @@ function UpdatePanel2({ hostId, project, onDone }) {
       setBusy(false);
     }
   }
-  if (error) return /* @__PURE__ */ jsx16(LoadError, { what: "Die \xDCbersicht", error, onRetry: () => setReload((n) => n + 1), compact: true });
-  if (!plan) return /* @__PURE__ */ jsx16("p", { className: "text-xs opacity-60", children: "Lade die \xDCbersicht \u2026" });
+  if (error) return /* @__PURE__ */ jsx19(LoadError, { what: "Die \xDCbersicht", error, onRetry: () => setReload((n) => n + 1), compact: true });
+  if (!plan) return /* @__PURE__ */ jsx19("p", { className: "text-xs opacity-60", children: "Lade die \xDCbersicht \u2026" });
   const together = withSharers(plan, chosen);
   const sharers = together.filter((s) => !chosen.includes(s));
   const stored = plan.services.filter((s) => together.includes(s.service) && s.data_store).map((s) => s.service);
@@ -9757,10 +10390,10 @@ function UpdatePanel2({ hostId, project, onDone }) {
   const size2 = sizes.every((v) => v != null) ? formatBytes(sizes.reduce((sum, v) => sum + (v ?? 0), 0)) : "Gr\xF6\xDFe unbekannt";
   const canSave = !!volumePlan && !volumePlan.error && volumes.length > 0;
   const withBackup = saveVolumes && canSave;
-  return /* @__PURE__ */ jsxs15("div", { className: "flex flex-col gap-2 text-xs", "data-testid": `update-${project}`, children: [
-    /* @__PURE__ */ jsx16("p", { className: "opacity-70", children: "Das Update holt die neuen Images, beh\xE4lt die alten als Sicherung und erstellt nur die gew\xE4hlten Dienste neu. Startet einer danach nicht, geht es von selbst zur alten Version zur\xFCck, au\xDFer bei Datenbanken und anderen Datenspeichern." }),
-    /* @__PURE__ */ jsx16("ul", { className: "flex flex-col gap-1", children: plan.services.map((s) => /* @__PURE__ */ jsxs15("li", { className: "flex flex-wrap items-center gap-2", children: [
-      s.status === "update" && !s.stopped && !s.mixed ? /* @__PURE__ */ jsx16(
+  return /* @__PURE__ */ jsxs18("div", { className: "flex flex-col gap-2 text-xs", "data-testid": `update-${project}`, children: [
+    /* @__PURE__ */ jsx19("p", { className: "opacity-70", children: "Das Update holt die neuen Images, beh\xE4lt die alten als Sicherung und erstellt nur die gew\xE4hlten Dienste neu. Startet einer danach nicht, geht es von selbst zur alten Version zur\xFCck, au\xDFer bei Datenbanken und anderen Datenspeichern." }),
+    /* @__PURE__ */ jsx19("ul", { className: "flex flex-col gap-1", children: plan.services.map((s) => /* @__PURE__ */ jsxs18("li", { className: "flex flex-wrap items-center gap-2", children: [
+      s.status === "update" && !s.stopped && !s.mixed ? /* @__PURE__ */ jsx19(
         "input",
         {
           type: "checkbox",
@@ -9769,18 +10402,22 @@ function UpdatePanel2({ hostId, project, onDone }) {
           disabled: busy,
           onChange: (e) => setChosen((all) => e.target.checked ? [...all, s.service] : all.filter((x) => x !== s.service))
         }
-      ) : /* @__PURE__ */ jsx16("span", { className: "w-[13px]" }),
-      /* @__PURE__ */ jsx16("span", { className: "font-mono", children: s.service }),
-      /* @__PURE__ */ jsx16("span", { className: "break-all opacity-60", children: s.image }),
-      /* @__PURE__ */ jsx16(Badge, { tone: s.status === "update" ? "warn" : "neutral", children: IMAGE_STATUS[s.status ?? ""] ?? "noch nicht gepr\xFCft" }),
-      s.data_store && /* @__PURE__ */ jsx16(Badge, { tone: "info", children: "Datenspeicher" }),
-      s.stopped && /* @__PURE__ */ jsx16(Badge, { tone: "neutral", children: "gestoppt" }),
-      s.mixed && /* @__PURE__ */ jsx16(Badge, { tone: "warn", children: "Container mit verschiedenen Images" }),
-      s.reason && /* @__PURE__ */ jsx16("span", { className: "opacity-60", children: s.reason })
+      ) : /* @__PURE__ */ jsx19("span", { className: "w-[13px]" }),
+      /* @__PURE__ */ jsx19("span", { className: "font-mono", children: s.service }),
+      /* @__PURE__ */ jsx19("span", { className: "break-all opacity-60", children: s.image }),
+      /* @__PURE__ */ jsx19(Badge, { tone: s.status === "update" ? "warn" : "neutral", children: IMAGE_STATUS[s.status ?? ""] ?? "noch nicht gepr\xFCft" }),
+      s.data_store && /* @__PURE__ */ jsx19(Badge, { tone: "info", children: "Datenspeicher" }),
+      s.stopped && /* @__PURE__ */ jsx19(Badge, { tone: "neutral", children: "gestoppt" }),
+      s.mixed && /* @__PURE__ */ jsx19(Badge, { tone: "warn", children: "Container mit verschiedenen Images" }),
+      s.reason && /* @__PURE__ */ jsx19("span", { className: "opacity-60", children: s.reason })
     ] }, s.service)) }),
-    plan.updates.length === 0 && /* @__PURE__ */ jsx16("p", { className: "opacity-70", children: "F\xFCr keinen Dienst meldet die Image-Pr\xFCfung gerade ein Update." }),
-    plan.services.some((s) => s.stopped && s.status === "update") && /* @__PURE__ */ jsx16("p", { className: "opacity-70", children: "Gestoppte Dienste aktualisiert Deck hier nicht, weil sie dabei starten w\xFCrden; sie bekommen das Update beim n\xE4chsten Anwenden." }),
-    sharers.length > 0 && /* @__PURE__ */ jsxs15("p", { className: "opacity-70", children: [
+    plan.updates.length === 0 && /* @__PURE__ */ jsx19("p", { className: "opacity-70", children: "F\xFCr keinen Dienst meldet die Image-Pr\xFCfung gerade ein Update." }),
+    plan.services.some((s) => s.stopped && s.status === "update") && /* @__PURE__ */ jsxs18("p", { className: "opacity-70", children: [
+      "Gestoppte Dienste aktualisiert ",
+      productText("Deck"),
+      " hier nicht, weil sie dabei starten w\xFCrden; sie bekommen das Update beim n\xE4chsten Anwenden."
+    ] }),
+    sharers.length > 0 && /* @__PURE__ */ jsxs18("p", { className: "opacity-70", children: [
       sharers.join(", "),
       " ",
       sharers.length === 1 ? "nutzt" : "nutzen",
@@ -9788,20 +10425,22 @@ function UpdatePanel2({ hostId, project, onDone }) {
       sharers.length === 1 ? "kommt" : "kommen",
       " mit."
     ] }),
-    stored.length > 0 && /* @__PURE__ */ jsxs15("p", { className: "text-amber-300", children: [
+    stored.length > 0 && /* @__PURE__ */ jsxs18("p", { className: "text-amber-300", children: [
       "Dabei ist ein Datenspeicher (",
       stored.join(", "),
-      "): Geht etwas schief, springt Deck nicht von selbst zur\xFCck, und die Freigabe braucht die hohe Stufe. Lege vorher eine Sicherung der Daten an."
+      "): Geht etwas schief, springt ",
+      productText("Deck"),
+      " nicht von selbst zur\xFCck, und die Freigabe braucht die hohe Stufe. Lege vorher eine Sicherung der Daten an."
     ] }),
-    (blockedUpdate.length > 0 || blockedBack.length > 0) && /* @__PURE__ */ jsxs15("p", { className: "text-amber-300", role: "alert", children: [
+    (blockedUpdate.length > 0 || blockedBack.length > 0) && /* @__PURE__ */ jsxs18("p", { className: "text-amber-300", role: "alert", children: [
       "In der Datei steht f\xFCr ",
       [.../* @__PURE__ */ new Set([...blockedUpdate, ...blockedBack])].join(", "),
       " etwas anderes, als gerade l\xE4uft. Ein Update oder der R\xFCckweg w\xFCrde das mit anwenden. Wende den Stack zuerst an oder nimm die \xC4nderung zur\xFCck."
     ] }),
-    plan.updates.length > 0 && volumes.length > 0 && /* @__PURE__ */ jsxs15("div", { className: "flex flex-col gap-1", children: [
-      /* @__PURE__ */ jsxs15("label", { className: "flex items-start gap-2", children: [
-        /* @__PURE__ */ jsx16("input", { type: "checkbox", checked: withBackup, disabled: busy || !canSave, onChange: (e) => setSaveVolumes(e.target.checked) }),
-        /* @__PURE__ */ jsxs15("span", { className: "break-all", children: [
+    plan.updates.length > 0 && volumes.length > 0 && /* @__PURE__ */ jsxs18("div", { className: "flex flex-col gap-1", children: [
+      /* @__PURE__ */ jsxs18("label", { className: "flex items-start gap-2", children: [
+        /* @__PURE__ */ jsx19("input", { type: "checkbox", checked: withBackup, disabled: busy || !canSave, onChange: (e) => setSaveVolumes(e.target.checked) }),
+        /* @__PURE__ */ jsxs18("span", { className: "break-all", children: [
           "Volumes vorher sichern (",
           volumes.join(", "),
           ": ",
@@ -9810,16 +10449,16 @@ function UpdatePanel2({ hostId, project, onDone }) {
           ")"
         ] })
       ] }),
-      volumePlan?.error ? /* @__PURE__ */ jsx16("p", { className: "opacity-70", children: volumePlan.error }) : /* @__PURE__ */ jsxs15("p", { className: "opacity-70", children: [
+      volumePlan?.error ? /* @__PURE__ */ jsx19("p", { className: "opacity-70", children: volumePlan.error }) : /* @__PURE__ */ jsxs18("p", { className: "opacity-70", children: [
         "Die Dienste sind w\xE4hrend der Sicherung gestoppt. Die Archive kommen nach ",
         volumePlan?.folder ?? "\u2026",
         "; nur sie bringen auch Daten zur\xFCck, die die neue Version umbaut."
       ] })
     ] }),
-    checkError && /* @__PURE__ */ jsx16("p", { className: "text-amber-300", role: "alert", children: checkError }),
-    failed && /* @__PURE__ */ jsx16("p", { className: "break-words text-red-400", role: "alert", children: failed }),
-    /* @__PURE__ */ jsxs15("div", { className: "flex flex-wrap gap-1.5", children: [
-      plan.updates.length > 0 && /* @__PURE__ */ jsx16(
+    checkError && /* @__PURE__ */ jsx19("p", { className: "text-amber-300", role: "alert", children: checkError }),
+    failed && /* @__PURE__ */ jsx19("p", { className: "break-words text-red-400", role: "alert", children: failed }),
+    /* @__PURE__ */ jsxs18("div", { className: "flex flex-wrap gap-1.5", children: [
+      plan.updates.length > 0 && /* @__PURE__ */ jsx19(
         Button,
         {
           small: true,
@@ -9829,7 +10468,7 @@ function UpdatePanel2({ hostId, project, onDone }) {
           children: busy ? "\u2026" : "Jetzt aktualisieren"
         }
       ),
-      plan.rollback.length > 0 && /* @__PURE__ */ jsxs15(
+      plan.rollback.length > 0 && /* @__PURE__ */ jsxs18(
         Button,
         {
           small: true,
@@ -9884,18 +10523,18 @@ function usageText(usage2, measured, running) {
   return `CPU ${cpu} \xB7 RAM ${usage2.mem_used != null ? formatBytes(usage2.mem_used) : "n.\xA0v."}`;
 }
 function StackList({ hostId }) {
-  const [stacks, setStacks] = useState13(null);
-  const [checkError, setCheckError] = useState13(null);
-  const [error, setError] = useState13(null);
-  const [usage2, setUsage] = useState13({});
-  const [measured, setMeasured] = useState13(false);
-  const [open, setOpen] = useState13(null);
-  const [message, setMessage] = useState13(null);
+  const [stacks, setStacks] = useState17(null);
+  const [checkError, setCheckError] = useState17(null);
+  const [error, setError] = useState17(null);
+  const [usage2, setUsage] = useState17({});
+  const [measured, setMeasured] = useState17(false);
+  const [open, setOpen] = useState17(null);
+  const [message, setMessage] = useState17(null);
   const note = (text, warn2 = false) => setMessage(text === null ? null : { text, warn: warn2 });
-  const [busy, setBusy] = useState13(null);
-  const [reload, setReload] = useState13(0);
-  const [creating, setCreating] = useState13(false);
-  useEffect12(() => {
+  const [busy, setBusy] = useState17(null);
+  const [reload, setReload] = useState17(0);
+  const [creating, setCreating] = useState17(false);
+  useEffect13(() => {
     const controller = new AbortController();
     const base = `/ext/docker/hosts/${encodeURIComponent(hostId)}/stacks`;
     setStacks(null);
@@ -9917,7 +10556,7 @@ function StackList({ hostId }) {
     });
     return () => controller.abort();
   }, [hostId, reload]);
-  const editorDirty = useRef7(false);
+  const editorDirty = useRef8(false);
   const markDirty = useCallback2((dirty) => {
     editorDirty.current = dirty;
   }, []);
@@ -9945,7 +10584,7 @@ function StackList({ hostId }) {
   async function release(stack) {
     const project = stack.project;
     const ok = await deck().confirmDialog(
-      `\xDCbernahme von \u201E${project}\u201C aufheben? Nodvard Deck vergisst nur Ordner und Dateien; Stack, Datei und Container bleiben, wie sie sind.${stack.total ? "" : " Weil gerade keiner seiner Container existiert, verschwindet er danach aus der Liste."}`,
+      `\xDCbernahme von \u201E${project}\u201C aufheben? ${productText("Nodvard Deck")} vergisst nur Ordner und Dateien; Stack, Datei und Container bleiben, wie sie sind.${stack.total ? "" : " Weil gerade keiner seiner Container existiert, verschwindet er danach aus der Liste."}`,
       { confirmLabel: "\xDCbernahme aufheben" }
     );
     if (!ok) return;
@@ -9959,24 +10598,24 @@ function StackList({ hostId }) {
       note(`Fehler: ${errorMessage(err)}`, true);
     }
   }
-  if (error) return /* @__PURE__ */ jsx16(LoadError, { what: "Die Liste der Stacks", error, onRetry: () => setReload((n) => n + 1) });
-  if (!stacks) return /* @__PURE__ */ jsx16("p", { className: "text-sm opacity-60", children: "Lade die Stacks \u2026" });
-  return /* @__PURE__ */ jsxs15("div", { "data-testid": "stacks", children: [
-    /* @__PURE__ */ jsx16("p", { className: "mb-2 text-xs opacity-60", children: "Ein Stack ist ein Compose-Projekt: Container, die zusammen aus einer Compose-Datei gestartet wurden. Hier stehen alle, auch die von Hand oder mit anderen Werkzeugen angelegten. Ma\xDFgeblich ist immer die Datei auf dem Server." }),
-    message && /* @__PURE__ */ jsx16("p", { className: `mb-2 whitespace-pre-line text-sm ${message.warn ? "text-red-400" : "opacity-90"}`, role: message.warn ? "alert" : "status", children: message.text }),
-    creating ? /* @__PURE__ */ jsx16("div", { className: "mb-3 bg-black/20 p-2 panel", children: /* @__PURE__ */ jsx16(NewStack, { hostId, onClose: (text) => {
+  if (error) return /* @__PURE__ */ jsx19(LoadError, { what: "Die Liste der Stacks", error, onRetry: () => setReload((n) => n + 1) });
+  if (!stacks) return /* @__PURE__ */ jsx19("p", { className: "text-sm opacity-60", children: "Lade die Stacks \u2026" });
+  return /* @__PURE__ */ jsxs18("div", { "data-testid": "stacks", children: [
+    /* @__PURE__ */ jsx19("p", { className: "mb-2 text-xs opacity-60", children: "Ein Stack ist ein Compose-Projekt: Container, die zusammen aus einer Compose-Datei gestartet wurden. Hier stehen alle, auch die von Hand oder mit anderen Werkzeugen angelegten. Ma\xDFgeblich ist immer die Datei auf dem Server." }),
+    message && /* @__PURE__ */ jsx19("p", { className: `mb-2 whitespace-pre-line text-sm ${message.warn ? "text-red-400" : "opacity-90"}`, role: message.warn ? "alert" : "status", children: message.text }),
+    creating ? /* @__PURE__ */ jsx19("div", { className: "mb-3 bg-black/20 p-2 panel", children: /* @__PURE__ */ jsx19(NewStack, { hostId, onClose: (text) => {
       setCreating(false);
       if (text) {
         note(text);
         setReload((n) => n + 1);
       }
-    } }) }) : /* @__PURE__ */ jsx16("div", { className: "mb-2", children: /* @__PURE__ */ jsx16(Button, { small: true, onClick: () => setCreating(true), children: "Neuer Stack" }) }),
-    checkError && /* @__PURE__ */ jsxs15("p", { className: "mb-2 text-xs text-amber-300", children: [
+    } }) }) : /* @__PURE__ */ jsx19("div", { className: "mb-2", children: /* @__PURE__ */ jsx19(Button, { small: true, onClick: () => setCreating(true), children: "Neuer Stack" }) }),
+    checkError && /* @__PURE__ */ jsxs18("p", { className: "mb-2 text-xs text-amber-300", children: [
       "Ob Dateien seit dem letzten Start ge\xE4ndert wurden, lie\xDF sich nicht pr\xFCfen: ",
       checkError
     ] }),
-    stacks.length === 0 && /* @__PURE__ */ jsx16("p", { className: "text-sm opacity-70", children: "Auf diesem Server l\xE4uft kein Compose-Projekt." }),
-    /* @__PURE__ */ jsx16("ul", { className: "divide-y divide-white/5 text-sm", children: stacks.map((stack) => {
+    stacks.length === 0 && /* @__PURE__ */ jsx19("p", { className: "text-sm opacity-70", children: "Auf diesem Server l\xE4uft kein Compose-Projekt." }),
+    /* @__PURE__ */ jsx19("ul", { className: CARD_LIST, children: stacks.map((stack) => {
       const state = STATE2[stack.state];
       const pending = stack.changes ? changesText(stack.changes) : "";
       const facts = [
@@ -9984,38 +10623,38 @@ function StackList({ hostId }) {
         ...stack.working_dir && stack.source === "compose" ? [stack.working_dir] : [],
         usageText(usage2[stack.project], measured, stack.running)
       ].filter(Boolean);
-      return /* @__PURE__ */ jsxs15("li", { className: "py-2", "data-testid": `stack-${stack.project}`, children: [
-        /* @__PURE__ */ jsxs15("div", { className: "flex flex-wrap items-center gap-x-3 gap-y-1", children: [
-          /* @__PURE__ */ jsxs15("div", { className: "min-w-[16rem] flex-1 max-md:min-w-0 max-md:basis-full", children: [
-            /* @__PURE__ */ jsxs15("p", { className: "flex flex-wrap items-center gap-1.5 break-words", children: [
-              /* @__PURE__ */ jsx16("span", { className: "font-medium", children: stack.project }),
-              /* @__PURE__ */ jsx16(Badge, { tone: state.tone, children: state.label }),
-              stack.problems > 0 && /* @__PURE__ */ jsx16(Badge, { tone: "bad", children: stack.problems === 1 ? "1 Container mit Problemen" : `${stack.problems} Container mit Problemen` }),
-              stack.is_self && /* @__PURE__ */ jsx16(Badge, { children: "Nodvard Deck" }),
-              stack.source === "portainer" && /* @__PURE__ */ jsx16(Badge, { tone: "info", children: "Portainer" }),
-              stack.adopted && /* @__PURE__ */ jsx16(Badge, { tone: "accent", children: "\xFCbernommen" }),
-              stack.changed && /* @__PURE__ */ jsx16(Badge, { tone: "warn", children: "Datei ge\xE4ndert, noch nicht angewendet" })
+      return /* @__PURE__ */ jsxs18("li", { className: CARD_ITEM, "data-testid": `stack-${stack.project}`, children: [
+        /* @__PURE__ */ jsxs18("div", { className: "flex flex-wrap items-center gap-x-3 gap-y-1", children: [
+          /* @__PURE__ */ jsxs18("div", { className: "min-w-[16rem] flex-1 max-md:min-w-0 max-md:basis-full", children: [
+            /* @__PURE__ */ jsxs18("p", { className: "flex flex-wrap items-center gap-1.5 break-words", children: [
+              /* @__PURE__ */ jsx19("span", { className: "font-medium", children: stack.project }),
+              /* @__PURE__ */ jsx19(Badge, { tone: state.tone, children: state.label }),
+              stack.problems > 0 && /* @__PURE__ */ jsx19(Badge, { tone: "bad", children: stack.problems === 1 ? "1 Container mit Problemen" : `${stack.problems} Container mit Problemen` }),
+              stack.is_self && /* @__PURE__ */ jsx19(Badge, { children: productText("Nodvard Deck") }),
+              stack.source === "portainer" && /* @__PURE__ */ jsx19(Badge, { tone: "info", children: "Portainer" }),
+              stack.adopted && /* @__PURE__ */ jsx19(Badge, { tone: "accent", children: "\xFCbernommen" }),
+              stack.changed && /* @__PURE__ */ jsx19(Badge, { tone: "warn", children: "Datei ge\xE4ndert, noch nicht angewendet" })
             ] }),
-            /* @__PURE__ */ jsx16("p", { className: "break-words text-xs opacity-60", children: facts.join(" \xB7 ") }),
-            stack.containers.length > 0 && /* @__PURE__ */ jsxs15("p", { className: "break-words text-xs opacity-60", children: [
+            /* @__PURE__ */ jsx19("p", { className: "break-words text-xs opacity-60", children: facts.join(" \xB7 ") }),
+            stack.containers.length > 0 && /* @__PURE__ */ jsxs18("p", { className: "break-words text-xs opacity-60", children: [
               "Container: ",
               membersText(stack.containers)
             ] }),
-            stack.changed && /* @__PURE__ */ jsxs15("p", { className: "text-xs text-amber-300", children: [
+            stack.changed && /* @__PURE__ */ jsxs18("p", { className: "text-xs text-amber-300", children: [
               pending,
               ". \xDCbernommen wird das erst, wenn der Stack neu angewendet wird (docker compose up -d). Kommt das unerwartet, wurde der Stack vielleicht mit eigenen Umgebungsvariablen gestartet."
             ] }),
-            stack.check_error && /* @__PURE__ */ jsx16("p", { className: "text-xs opacity-70", children: stack.check_error }),
-            SOURCE_NOTE[stack.source] && /* @__PURE__ */ jsx16("p", { className: "text-xs opacity-70", children: SOURCE_NOTE[stack.source] }),
-            stack.adoption_note && /* @__PURE__ */ jsx16("p", { className: "text-xs text-amber-300", children: stack.adoption_note })
+            stack.check_error && /* @__PURE__ */ jsx19("p", { className: "text-xs opacity-70", children: stack.check_error }),
+            productText(SOURCE_NOTE[stack.source]) && /* @__PURE__ */ jsx19("p", { className: "text-xs opacity-70", children: productText(SOURCE_NOTE[stack.source]) }),
+            stack.adoption_note && /* @__PURE__ */ jsx19("p", { className: "text-xs text-amber-300", children: stack.adoption_note })
           ] }),
-          /* @__PURE__ */ jsxs15("div", { className: "flex min-w-0 max-w-full flex-wrap gap-1.5", children: [
-            stack.source === "compose" && /* @__PURE__ */ jsx16(Button, { small: true, pressed: open?.project === stack.project && open.panel === "file", onClick: () => void toggle(stack.project, "file"), children: "Datei ansehen" }),
-            stack.adopted && !stack.is_self && /* @__PURE__ */ jsx16(Button, { small: true, pressed: open?.project === stack.project && open.panel === "edit", onClick: () => void toggle(stack.project, "edit"), children: "Bearbeiten" }),
-            stack.adopted && !stack.is_self && /* @__PURE__ */ jsx16(Button, { small: true, pressed: open?.project === stack.project && open.panel === "git", onClick: () => void toggle(stack.project, "git"), children: "Aus Git" }),
-            stack.source === "compose" && !stack.adopted && stack.total > 0 && /* @__PURE__ */ jsx16(Button, { small: true, pressed: open?.project === stack.project && open.panel === "adopt", onClick: () => void toggle(stack.project, "adopt"), children: stack.adoption_note ? "Neu \xFCbernehmen" : "\xDCbernehmen" }),
-            stack.source === "portainer" && stack.total > 0 && !stack.is_self && /* @__PURE__ */ jsx16(Button, { small: true, pressed: open?.project === stack.project && open.panel === "portainer", onClick: () => void toggle(stack.project, "portainer"), children: "Von Portainer \xFCbernehmen" }),
-            stack.adopted && VERBS.filter((verb) => verb.when(stack)).map((verb) => /* @__PURE__ */ jsx16(
+          /* @__PURE__ */ jsxs18("div", { className: "flex min-w-0 max-w-full flex-wrap gap-1.5", children: [
+            stack.source === "compose" && /* @__PURE__ */ jsx19(Button, { small: true, pressed: open?.project === stack.project && open.panel === "file", onClick: () => void toggle(stack.project, "file"), children: "Datei ansehen" }),
+            stack.adopted && !stack.is_self && /* @__PURE__ */ jsx19(Button, { small: true, pressed: open?.project === stack.project && open.panel === "edit", onClick: () => void toggle(stack.project, "edit"), children: "Bearbeiten" }),
+            stack.adopted && !stack.is_self && /* @__PURE__ */ jsx19(Button, { small: true, pressed: open?.project === stack.project && open.panel === "git", onClick: () => void toggle(stack.project, "git"), children: "Aus Git" }),
+            stack.source === "compose" && !stack.adopted && stack.total > 0 && /* @__PURE__ */ jsx19(Button, { small: true, pressed: open?.project === stack.project && open.panel === "adopt", onClick: () => void toggle(stack.project, "adopt"), children: stack.adoption_note ? "Neu \xFCbernehmen" : "\xDCbernehmen" }),
+            stack.source === "portainer" && stack.total > 0 && !stack.is_self && /* @__PURE__ */ jsx19(Button, { small: true, pressed: open?.project === stack.project && open.panel === "portainer", onClick: () => void toggle(stack.project, "portainer"), children: "Von Portainer \xFCbernehmen" }),
+            stack.adopted && VERBS.filter((verb) => verb.when(stack)).map((verb) => /* @__PURE__ */ jsx19(
               Button,
               {
                 small: true,
@@ -10026,10 +10665,10 @@ function StackList({ hostId }) {
               },
               verb.type
             )),
-            (stack.adopted || stack.adoption_note) && /* @__PURE__ */ jsx16(Button, { small: true, onClick: () => void release(stack), children: "\xDCbernahme aufheben" }),
-            stack.adopted && !stack.is_self && stack.total > 0 && /* @__PURE__ */ jsx16(Button, { small: true, pressed: open?.project === stack.project && open.panel === "update", onClick: () => void toggle(stack.project, "update"), children: "Update" }),
-            stack.adopted && !stack.is_self && /* @__PURE__ */ jsx16(Button, { small: true, pressed: open?.project === stack.project && open.panel === "backups", onClick: () => void toggle(stack.project, "backups"), children: "Sicherungen" }),
-            stack.adopted && !stack.is_self && /* @__PURE__ */ jsx16(
+            (stack.adopted || stack.adoption_note) && /* @__PURE__ */ jsx19(Button, { small: true, onClick: () => void release(stack), children: "\xDCbernahme aufheben" }),
+            stack.adopted && !stack.is_self && stack.total > 0 && /* @__PURE__ */ jsx19(Button, { small: true, pressed: open?.project === stack.project && open.panel === "update", onClick: () => void toggle(stack.project, "update"), children: "Update" }),
+            stack.adopted && !stack.is_self && /* @__PURE__ */ jsx19(Button, { small: true, pressed: open?.project === stack.project && open.panel === "backups", onClick: () => void toggle(stack.project, "backups"), children: "Sicherungen" }),
+            stack.adopted && !stack.is_self && /* @__PURE__ */ jsx19(
               Button,
               {
                 small: true,
@@ -10041,7 +10680,7 @@ function StackList({ hostId }) {
             )
           ] })
         ] }),
-        open?.project === stack.project && /* @__PURE__ */ jsx16("div", { className: "mt-2 bg-black/20 p-2 panel", children: open.panel === "file" ? /* @__PURE__ */ jsx16(StackFile, { hostId, project: stack.project }) : open.panel === "edit" ? /* @__PURE__ */ jsx16(
+        open?.project === stack.project && /* @__PURE__ */ jsx19("div", { className: "mt-2 bg-black/20 p-2 panel", children: open.panel === "file" ? /* @__PURE__ */ jsx19(StackFile, { hostId, project: stack.project }) : open.panel === "edit" ? /* @__PURE__ */ jsx19(
           StackEditor,
           {
             hostId,
@@ -10056,27 +10695,27 @@ function StackList({ hostId }) {
               }
             }
           }
-        ) : open.panel === "update" ? /* @__PURE__ */ jsx16(UpdatePanel2, { hostId, project: stack.project, onDone: (text, warn2) => {
+        ) : open.panel === "update" ? /* @__PURE__ */ jsx19(UpdatePanel2, { hostId, project: stack.project, onDone: (text, warn2) => {
           setOpen(null);
           note(text, warn2);
           setReload((n) => n + 1);
-        } }) : open.panel === "portainer" ? /* @__PURE__ */ jsx16(PortainerPanel, { hostId, project: stack.project, onDone: (text, warn2) => {
+        } }) : open.panel === "portainer" ? /* @__PURE__ */ jsx19(PortainerPanel, { hostId, project: stack.project, onDone: (text, warn2) => {
           setOpen(null);
           note(text, warn2);
           setReload((n) => n + 1);
-        } }) : open.panel === "backups" ? /* @__PURE__ */ jsx16(BackupsPanel, { hostId, project: stack.project, onDone: (text, warn2) => {
+        } }) : open.panel === "backups" ? /* @__PURE__ */ jsx19(BackupsPanel, { hostId, project: stack.project, onDone: (text, warn2) => {
           setOpen(null);
           note(text, warn2);
           setReload((n) => n + 1);
-        } }) : open.panel === "git" ? /* @__PURE__ */ jsx16(GitSourcePanel, { hostId, project: stack.project, onDone: (text, warn2) => {
+        } }) : open.panel === "git" ? /* @__PURE__ */ jsx19(GitSourcePanel, { hostId, project: stack.project, onDone: (text, warn2) => {
           setOpen(null);
           note(text, warn2);
           setReload((n) => n + 1);
-        } }) : open.panel === "delete" ? /* @__PURE__ */ jsx16(DeletePanel, { hostId, project: stack.project, onDone: (text, warn2) => {
+        } }) : open.panel === "delete" ? /* @__PURE__ */ jsx19(DeletePanel, { hostId, project: stack.project, onDone: (text, warn2) => {
           setOpen(null);
           note(text, warn2);
           setReload((n) => n + 1);
-        } }) : /* @__PURE__ */ jsx16(AdoptPanel, { hostId, project: stack.project, onDone: (text) => {
+        } }) : /* @__PURE__ */ jsx19(AdoptPanel, { hostId, project: stack.project, onDone: (text) => {
           setOpen(null);
           note(text);
           setReload((n) => n + 1);
@@ -10086,20 +10725,20 @@ function StackList({ hostId }) {
   ] });
 }
 function StacksSection({ hostId, onHost, empty }) {
-  return /* @__PURE__ */ jsx16(HostSection, { hostId, onHost, empty, children: (id) => /* @__PURE__ */ jsx16(StackList, { hostId: id }, id) });
+  return /* @__PURE__ */ jsx19(HostSection, { hostId, onHost, empty, children: (id) => /* @__PURE__ */ jsx19(StackList, { hostId: id }, id) });
 }
 
 // src/ToStack.tsx
-import { useEffect as useEffect13, useState as useState14 } from "react";
-import { Fragment as Fragment10, jsx as jsx17, jsxs as jsxs16 } from "react/jsx-runtime";
+import { useEffect as useEffect14, useState as useState18 } from "react";
+import { Fragment as Fragment10, jsx as jsx20, jsxs as jsxs19 } from "react/jsx-runtime";
 function ToStackPanel({ hostId, container, onDone }) {
-  const [plan, setPlan] = useState14(null);
-  const [error, setError] = useState14(null);
-  const [failed, setFailed] = useState14(null);
-  const [busy, setBusy] = useState14(false);
-  const [reload, setReload] = useState14(0);
+  const [plan, setPlan] = useState18(null);
+  const [error, setError] = useState18(null);
+  const [failed, setFailed] = useState18(null);
+  const [busy, setBusy] = useState18(false);
+  const [reload, setReload] = useState18(0);
   const url = `/ext/docker/hosts/${encodeURIComponent(hostId)}/containers/${encodeURIComponent(container)}/to-stack`;
-  useEffect13(() => {
+  useEffect14(() => {
     const controller = new AbortController();
     setPlan(null);
     setError(null);
@@ -10112,7 +10751,7 @@ function ToStackPanel({ hostId, container, onDone }) {
   }, [url, reload]);
   async function convert(folder) {
     const risky = plan?.warnings.length ? ` Riskant: ${plan.warnings.join(" ")}` : "";
-    const question = `\u201E${container}\u201C in einen Stack in ${folder} umwandeln? Der Container wird gestoppt und aus der neuen Compose-Datei neu erstellt; Volumes und Ordner bleiben. Klappt das, l\xF6scht Deck den alten Container; was nur in ihm lag und nicht in einem Volume oder Ordner, ist dann weg. Klappt es nicht, startet der alte wieder.${risky}`;
+    const question = `\u201E${container}\u201C in einen Stack in ${folder} umwandeln? Der Container wird gestoppt und aus der neuen Compose-Datei neu erstellt; ` + productText(`Volumes und Ordner bleiben. Klappt das, l\xF6scht Deck den alten Container; was nur in ihm lag und nicht in einem Volume oder Ordner, ist `) + `dann weg. Klappt es nicht, startet der alte wieder.${risky}`;
     if (!await deck().confirmDialog(question, { confirmLabel: "Umwandeln" })) return;
     setBusy(true);
     setFailed(null);
@@ -10134,37 +10773,73 @@ function ToStackPanel({ hostId, container, onDone }) {
       setBusy(false);
     }
   }
-  if (error) return /* @__PURE__ */ jsx17(LoadError, { what: "Die Vorschau", error, onRetry: () => setReload((n) => n + 1), compact: true });
-  if (!plan) return /* @__PURE__ */ jsx17("p", { className: "text-xs opacity-60", children: "Lese den Container \u2026" });
+  if (error) return /* @__PURE__ */ jsx20(LoadError, { what: "Die Vorschau", error, onRetry: () => setReload((n) => n + 1), compact: true });
+  if (!plan) return /* @__PURE__ */ jsx20("p", { className: "text-xs opacity-60", children: "Lese den Container \u2026" });
   const blocked = plan.refused.length > 0 || !plan.folder;
-  return /* @__PURE__ */ jsxs16("div", { className: "mt-2 flex flex-col gap-2 text-xs", "data-testid": `to-stack-${container}`, children: [
-    /* @__PURE__ */ jsxs16("p", { className: "opacity-70", children: [
-      "Deck schreibt f\xFCr diesen Container eine Compose-Datei",
-      plan.folder ? /* @__PURE__ */ jsxs16(Fragment10, { children: [
+  return /* @__PURE__ */ jsxs19("div", { className: "mt-2 flex flex-col gap-2 text-xs", "data-testid": `to-stack-${container}`, children: [
+    /* @__PURE__ */ jsxs19("p", { className: "opacity-70", children: [
+      productText("Deck"),
+      " schreibt f\xFCr diesen Container eine Compose-Datei",
+      plan.folder ? /* @__PURE__ */ jsxs19(Fragment10, { children: [
         " nach ",
-        /* @__PURE__ */ jsx17("span", { className: "break-all font-mono", children: plan.folder })
+        /* @__PURE__ */ jsx20("span", { className: "break-all font-mono", children: plan.folder })
       ] }) : null,
-      ", stoppt ihn und startet ihn daraus neu. Volumes und Ordner bleiben dieselben; danach l\xE4sst er sich wie jeder Stack bearbeiten und aktualisieren. Den alten Container l\xF6scht Deck, sobald der neue l\xE4uft; was nur in ihm lag und nicht in einem Volume oder Ordner, geht dabei verloren."
+      ", stoppt ihn und startet ihn daraus neu. Volumes und Ordner bleiben dieselben; danach l\xE4sst er sich wie jeder Stack bearbeiten und aktualisieren. Den alten Container l\xF6scht ",
+      productText("Deck"),
+      ", sobald der neue l\xE4uft; was nur in ihm lag und nicht in einem Volume oder Ordner, geht dabei verloren."
     ] }),
-    plan.compose && /* @__PURE__ */ jsx17("pre", { className: "max-h-64 overflow-auto rounded bg-black/60 p-2 font-mono text-[11px] leading-snug", "aria-label": "Compose-Datei des neuen Stacks", children: plan.compose }),
-    plan.env_names.length > 0 && /* @__PURE__ */ jsxs16("p", { className: "opacity-70", children: [
+    plan.compose && /* @__PURE__ */ jsx20("pre", { className: "max-h-64 overflow-auto rounded bg-black/60 p-2 font-mono text-[11px] leading-snug", "aria-label": "Compose-Datei des neuen Stacks", children: plan.compose }),
+    plan.env_names.length > 0 && /* @__PURE__ */ jsxs19("p", { className: "opacity-70", children: [
       "Die Umgebungsvariablen (",
       plan.env_names.join(", "),
       ") kommen in die Datei container.env daneben, nur f\xFCr den Zugang lesbar. Startbefehl, Labels und Healthcheck stehen dagegen so in der Compose-Datei oben; auch sie ist auf dem Server nur f\xFCr den Zugang lesbar."
     ] }),
-    plan.warnings.length > 0 && /* @__PURE__ */ jsxs16("p", { className: "text-amber-300", children: [
+    plan.warnings.length > 0 && /* @__PURE__ */ jsxs19("p", { className: "text-amber-300", children: [
       "Riskant: ",
       plan.warnings.join(" "),
       " Die Freigabe braucht die hohe Stufe."
     ] }),
-    plan.refused.length > 0 && /* @__PURE__ */ jsx17("ul", { className: "list-disc pl-4 text-red-400", role: "alert", children: plan.refused.map((why) => /* @__PURE__ */ jsx17("li", { className: "break-words", children: why }, why)) }),
-    failed && /* @__PURE__ */ jsx17("p", { className: "break-words text-red-400", role: "alert", children: failed }),
-    /* @__PURE__ */ jsx17("div", { children: /* @__PURE__ */ jsx17(Button, { small: true, variant: "primary", disabled: busy || blocked, onClick: () => void convert(plan.folder), children: busy ? "\u2026" : "Umwandeln" }) })
+    plan.refused.length > 0 && /* @__PURE__ */ jsx20("ul", { className: "list-disc pl-4 text-red-400", role: "alert", children: plan.refused.map((why) => /* @__PURE__ */ jsx20("li", { className: "break-words", children: why }, why)) }),
+    failed && /* @__PURE__ */ jsx20("p", { className: "break-words text-red-400", role: "alert", children: failed }),
+    /* @__PURE__ */ jsx20("div", { children: /* @__PURE__ */ jsx20(Button, { small: true, variant: "primary", disabled: busy || blocked, onClick: () => void convert(plan.folder), children: busy ? "\u2026" : "Umwandeln" }) })
   ] });
 }
 
+// src/sortieren.ts
+function naechsteSortierung(aktuell, spalte) {
+  if (aktuell?.spalte !== spalte) return { spalte, richtung: "ascending" };
+  return aktuell.richtung === "ascending" ? { spalte, richtung: "descending" } : null;
+}
+function sortieren(zeilen, wert, richtung) {
+  const fehlt = (v) => v == null || typeof v === "number" && !Number.isFinite(v);
+  return zeilen.map((zeile, index) => ({ zeile, index, wert: wert(zeile) })).sort((a, b) => {
+    const aFehlt = fehlt(a.wert), bFehlt = fehlt(b.wert);
+    if (aFehlt || bFehlt) return aFehlt === bFehlt ? a.index - b.index : aFehlt ? 1 : -1;
+    const vergleich = typeof a.wert === "number" && typeof b.wert === "number" ? a.wert - b.wert : String(a.wert).localeCompare(String(b.wert), "de");
+    return (richtung === "ascending" ? vergleich : -vergleich) || a.index - b.index;
+  }).map(({ zeile }) => zeile);
+}
+
 // src/ContainersPage.tsx
-import { jsx as jsx18, jsxs as jsxs17 } from "react/jsx-runtime";
+import { jsx as jsx21, jsxs as jsxs20 } from "react/jsx-runtime";
+function Sortierkopf({ spalte, label, sortierung, onSort, className = "" }) {
+  const richtung = sortierung?.spalte === spalte ? sortierung.richtung : void 0;
+  return /* @__PURE__ */ jsx21("th", { scope: "col", className: `py-1 whitespace-nowrap ${className}`, "aria-sort": richtung, children: /* @__PURE__ */ jsxs20(
+    "button",
+    {
+      type: "button",
+      className: "rounded text-left hover:underline focus-visible:outline focus-visible:outline-2",
+      onClick: () => onSort(spalte),
+      children: [
+        label,
+        richtung && /* @__PURE__ */ jsxs20("span", { "aria-hidden": "true", children: [
+          " ",
+          richtung === "ascending" ? "\u2191" : "\u2193"
+        ] })
+      ]
+    }
+  ) });
+}
 var MEASURING_HINT = "CPU/RAM werden gemessen \u2013 das braucht je Server ein paar Sekunden.";
 var MEM_UNKNOWN_HINT = "Der Server meldet keinen Speicherverbrauch je Container (auf dem Raspberry Pi ist die cgroup-Speicherabrechnung standardm\xE4\xDFig aus).";
 var TONE_CLASS = {
@@ -10173,7 +10848,7 @@ var TONE_CLASS = {
   danger: "bg-red-500/15 text-red-300 border-red-500/40",
   neutral: "bg-white/10 opacity-70"
 };
-var CARD_ROW = "max-md:flex max-md:flex-wrap max-md:items-center max-md:gap-x-3 max-md:gap-y-2 max-md:rounded-lg max-md:border max-md:border-white/10 max-md:bg-white/[0.03] max-md:p-3";
+var CARD_ROW2 = "max-md:flex max-md:flex-wrap max-md:items-center max-md:gap-x-3 max-md:gap-y-2 max-md:rounded-lg max-md:border max-md:border-white/10 max-md:bg-white/[0.03] max-md:p-3";
 var CARD_LABEL = "max-md:before:mr-1 max-md:before:opacity-60 max-md:before:content-[attr(data-label)]";
 var TOUCH = "max-md:px-3 max-md:py-2";
 var STATE_LABEL = {
@@ -10226,7 +10901,7 @@ function environmentText(env) {
   return { text: limits, title: "So viel CPU und RAM sieht Docker auf diesem Server." };
 }
 function FilterSelect({ label, all, value, options, onChange, testId }) {
-  return /* @__PURE__ */ jsxs17(
+  return /* @__PURE__ */ jsxs20(
     "select",
     {
       "aria-label": label,
@@ -10235,8 +10910,8 @@ function FilterSelect({ label, all, value, options, onChange, testId }) {
       "data-testid": testId,
       className: "max-w-[12rem] px-2 py-1 text-sm rounded-lg border border-white/10 bg-black/25 outline-none focus:border-[var(--color-accent)]",
       children: [
-        /* @__PURE__ */ jsx18("option", { value: "", children: all }),
-        options.map(([v, text]) => /* @__PURE__ */ jsx18("option", { value: v, children: text }, v))
+        /* @__PURE__ */ jsx21("option", { value: "", children: all }),
+        options.map(([v, text]) => /* @__PURE__ */ jsx21("option", { value: v, children: text }, v))
       ]
     }
   );
@@ -10335,29 +11010,29 @@ function summarizeImages(images, checking, operateServers = 0) {
 function StaleNote({ result }) {
   if (!result.stale) return null;
   const at = result.registry_at ? ` Letzte Antwort der Registry: ${new Date(result.registry_at).toLocaleString("de-DE")}.` : "";
-  return /* @__PURE__ */ jsx18("span", { className: "mt-0.5 block text-[11px] opacity-60", title: `${result.reason ?? ""}${at}`, children: "alter Stand" });
+  return /* @__PURE__ */ jsx21("span", { className: "mt-0.5 block text-[11px] opacity-60", title: `${result.reason ?? ""}${at}`, children: "alter Stand" });
 }
 function NeutralBadge({ label, reason }) {
-  return /* @__PURE__ */ jsxs17("span", { title: reason ?? void 0, children: [
-    /* @__PURE__ */ jsx18("span", { className: `rounded border px-1.5 py-0.5 text-xs ${TONE_CLASS.neutral}`, children: label }),
-    reason && /* @__PURE__ */ jsx18("span", { className: "mt-0.5 block max-w-[15rem] whitespace-normal break-words text-[11px] opacity-60", children: reason })
+  return /* @__PURE__ */ jsxs20("span", { title: reason ?? void 0, children: [
+    /* @__PURE__ */ jsx21("span", { className: `rounded border px-1.5 py-0.5 text-xs ${TONE_CLASS.neutral}`, children: label }),
+    reason && /* @__PURE__ */ jsx21("span", { className: "mt-0.5 block max-w-[15rem] whitespace-normal break-words text-[11px] opacity-60", children: reason })
   ] });
 }
 function ImageUpdateBadge({ result, checking = false, running = true, operateOnly = false }) {
-  if (operateOnly) return /* @__PURE__ */ jsx18("span", { className: "text-xs opacity-40", title: OPERATE_NO_IMAGE_CHECK, children: "\u2013" });
+  if (operateOnly) return /* @__PURE__ */ jsx21("span", { className: "text-xs opacity-40", title: productText(OPERATE_NO_IMAGE_CHECK), children: "\u2013" });
   if (!result) {
-    return checking ? /* @__PURE__ */ jsx18("span", { className: "text-xs opacity-60", children: "pr\xFCft \u2026" }) : /* @__PURE__ */ jsx18("span", { className: "text-xs opacity-40", title: running ? "Noch nicht gepr\xFCft." : "Gestoppte Container werden nicht gepr\xFCft.", children: "\u2013" });
+    return checking ? /* @__PURE__ */ jsx21("span", { className: "text-xs opacity-60", children: "pr\xFCft \u2026" }) : /* @__PURE__ */ jsx21("span", { className: "text-xs opacity-40", title: running ? "Noch nicht gepr\xFCft." : "Gestoppte Container werden nicht gepr\xFCft.", children: "\u2013" });
   }
   if (result.status === "current") {
-    return /* @__PURE__ */ jsxs17("span", { children: [
-      /* @__PURE__ */ jsx18("span", { className: `rounded border px-1.5 py-0.5 text-xs ${TONE_CLASS.good}`, title: result.image, children: "aktuell" }),
-      /* @__PURE__ */ jsx18(StaleNote, { result })
+    return /* @__PURE__ */ jsxs20("span", { children: [
+      /* @__PURE__ */ jsx21("span", { className: `rounded border px-1.5 py-0.5 text-xs ${TONE_CLASS.good}`, title: result.image, children: "aktuell" }),
+      /* @__PURE__ */ jsx21(StaleNote, { result })
     ] });
   }
   if (result.status === "update") {
     const short = result.remote_digest?.replace("sha256:", "").slice(0, 12);
-    return /* @__PURE__ */ jsxs17("span", { children: [
-      /* @__PURE__ */ jsx18(
+    return /* @__PURE__ */ jsxs20("span", { children: [
+      /* @__PURE__ */ jsx21(
         "span",
         {
           className: `rounded border px-1.5 py-0.5 text-xs ${TONE_CLASS.warn}`,
@@ -10365,10 +11040,10 @@ function ImageUpdateBadge({ result, checking = false, running = true, operateOnl
           children: "Update verf\xFCgbar"
         }
       ),
-      /* @__PURE__ */ jsx18(StaleNote, { result })
+      /* @__PURE__ */ jsx21(StaleNote, { result })
     ] });
   }
-  return /* @__PURE__ */ jsx18(NeutralBadge, { label: result.status === "local" ? "selbst gebaut" : "nicht pr\xFCfbar", reason: result.reason });
+  return /* @__PURE__ */ jsx21(NeutralBadge, { label: result.status === "local" ? "selbst gebaut" : "nicht pr\xFCfbar", reason: result.reason });
 }
 function afterCheckText(action) {
   const check = action.result?.detail?.check;
@@ -10395,12 +11070,12 @@ var PRUNE_ACTIONS = [
 ];
 function StoragePanel({ hostId }) {
   const unmountSignal = useUnmountSignal();
-  const [data, setData] = useState15(null);
-  const [error, setError] = useState15(null);
-  const [busy, setBusy] = useState15(null);
-  const [message, setMessage] = useState15(null);
-  const [reload, setReload] = useState15(0);
-  useEffect14(() => {
+  const [data, setData] = useState19(null);
+  const [error, setError] = useState19(null);
+  const [busy, setBusy] = useState19(null);
+  const [message, setMessage] = useState19(null);
+  const [reload, setReload] = useState19(0);
+  useEffect15(() => {
     let cancelled = false;
     setError(null);
     authedFetch(`/ext/docker/hosts/${hostId}/docker`).then(async (res) => {
@@ -10429,25 +11104,25 @@ function StoragePanel({ hostId }) {
       setBusy(null);
     }
   }
-  if (error) return /* @__PURE__ */ jsxs17("p", { className: "text-xs text-red-400", children: [
+  if (error) return /* @__PURE__ */ jsxs20("p", { className: "text-xs text-red-400", children: [
     "Docker-Speicher nicht abrufbar: ",
     error
   ] });
-  if (!data) return /* @__PURE__ */ jsx18("p", { className: "text-xs opacity-60", children: "Lade Docker-Speicher \u2026 (docker system df braucht ein paar Sekunden)" });
+  if (!data) return /* @__PURE__ */ jsx21("p", { className: "text-xs opacity-60", children: "Lade Docker-Speicher \u2026 (docker system df braucht ein paar Sekunden)" });
   const canRun = deck().hasPermission("hosts.execute");
-  return /* @__PURE__ */ jsxs17("div", { className: "text-xs", "data-testid": `storage-${hostId}`, children: [
-    /* @__PURE__ */ jsx18("div", { className: "mb-2 flex flex-wrap gap-2", children: data.disk.map((d) => /* @__PURE__ */ jsxs17("div", { className: "px-2.5 py-1.5 panel", children: [
-      /* @__PURE__ */ jsxs17("span", { className: "block opacity-60", children: [
+  return /* @__PURE__ */ jsxs20("div", { className: "text-xs", "data-testid": `storage-${hostId}`, children: [
+    /* @__PURE__ */ jsx21("div", { className: "mb-2 flex flex-wrap gap-2", children: data.disk.map((d) => /* @__PURE__ */ jsxs20("div", { className: "px-2.5 py-1.5 panel", children: [
+      /* @__PURE__ */ jsxs20("span", { className: "block opacity-60", children: [
         d.label,
         d.total != null ? ` (${d.active ?? "?"}/${d.total} aktiv)` : ""
       ] }),
-      /* @__PURE__ */ jsx18("span", { className: "text-sm font-medium", children: d.size != null ? formatBytes(d.size) : "?" }),
-      d.reclaimable ? /* @__PURE__ */ jsxs17("span", { className: "ml-1.5 text-amber-300", children: [
+      /* @__PURE__ */ jsx21("span", { className: "text-sm font-medium", children: d.size != null ? formatBytes(d.size) : "?" }),
+      d.reclaimable ? /* @__PURE__ */ jsxs20("span", { className: "ml-1.5 text-amber-300", children: [
         formatBytes(d.reclaimable),
         " frei machbar"
       ] }) : null
     ] }, d.type)) }),
-    canRun && /* @__PURE__ */ jsx18("div", { className: "mb-2 flex flex-wrap gap-1.5", children: PRUNE_ACTIONS.map((a) => /* @__PURE__ */ jsx18(
+    canRun && /* @__PURE__ */ jsx21("div", { className: "mb-2 flex flex-wrap gap-1.5", children: PRUNE_ACTIONS.map((a) => /* @__PURE__ */ jsx21(
       "button",
       {
         type: "button",
@@ -10458,23 +11133,24 @@ function StoragePanel({ hostId }) {
       },
       a.type
     )) }),
-    message && /* @__PURE__ */ jsx18("p", { className: "mb-2 opacity-90", role: "status", children: message }),
-    data.images.length > 0 && /* @__PURE__ */ jsxs17("table", { className: "w-full", children: [
-      /* @__PURE__ */ jsx18("thead", { children: /* @__PURE__ */ jsxs17("tr", { className: "border-b border-white/10 text-left opacity-60", children: [
-        /* @__PURE__ */ jsx18("th", { className: "py-1", children: "Image" }),
-        /* @__PURE__ */ jsx18("th", { className: "py-1", children: "Gr\xF6\xDFe" }),
-        /* @__PURE__ */ jsx18("th", { className: "py-1", children: "Erstellt" }),
-        /* @__PURE__ */ jsx18("th", { className: "py-1", children: "Genutzt" })
+    message && /* @__PURE__ */ jsx21("p", { className: "mb-2 opacity-90", role: "status", children: message }),
+    data.images.length > 0 && // Ohne CARD_TABLE: dessen text-sm würde die Tabelle am Desktop größer machen als den Rest der Tafel.
+    /* @__PURE__ */ jsxs20("table", { className: "block w-full sm:table", "data-testid": `storage-images-${hostId}`, children: [
+      /* @__PURE__ */ jsx21("thead", { className: CARD_HEAD, children: /* @__PURE__ */ jsxs20("tr", { className: "border-b border-white/10 text-left opacity-60", children: [
+        /* @__PURE__ */ jsx21("th", { className: "py-1", children: "Image" }),
+        /* @__PURE__ */ jsx21("th", { className: "py-1", children: "Gr\xF6\xDFe" }),
+        /* @__PURE__ */ jsx21("th", { className: "py-1", children: "Erstellt" }),
+        /* @__PURE__ */ jsx21("th", { className: "py-1", children: "Genutzt" })
       ] }) }),
-      /* @__PURE__ */ jsx18("tbody", { className: "divide-y divide-white/5", children: data.images.map((img) => /* @__PURE__ */ jsxs17("tr", { children: [
-        /* @__PURE__ */ jsx18("td", { className: "py-1 break-words", children: img.name ?? /* @__PURE__ */ jsxs17("span", { className: "opacity-60", children: [
+      /* @__PURE__ */ jsx21("tbody", { className: CARD_BODY, children: data.images.map((img) => /* @__PURE__ */ jsxs20("tr", { className: `${CARD_ROW} max-sm:flex-row max-sm:flex-wrap max-sm:gap-x-5`, children: [
+        /* @__PURE__ */ jsx21("td", { className: `${CARD_CELL_PLAIN} break-words pb-1 max-sm:w-full sm:py-1`, children: img.name ?? /* @__PURE__ */ jsxs20("span", { className: "opacity-60", children: [
           "ohne Namen (",
           img.id,
           ")"
         ] }) }),
-        /* @__PURE__ */ jsx18("td", { className: "py-1 whitespace-nowrap", children: img.size != null ? formatBytes(img.size) : "?" }),
-        /* @__PURE__ */ jsx18("td", { className: "py-1 opacity-70", children: img.created ?? "" }),
-        /* @__PURE__ */ jsx18("td", { className: `py-1 ${img.in_use === false ? "text-amber-300" : "opacity-70"}`, children: img.in_use == null ? "?" : img.in_use ? "ja" : "nein" })
+        /* @__PURE__ */ jsx21("td", { "data-label": "Gr\xF6\xDFe", className: `${CARD_CELL} whitespace-nowrap py-0.5 sm:py-1`, children: img.size != null ? formatBytes(img.size) : "?" }),
+        /* @__PURE__ */ jsx21("td", { "data-label": "Erstellt", className: `${CARD_CELL} py-0.5 opacity-70 sm:py-1`, children: img.created ?? "" }),
+        /* @__PURE__ */ jsx21("td", { "data-label": "Genutzt", className: `${CARD_CELL} py-0.5 sm:py-1 ${img.in_use === false ? "text-amber-300" : "opacity-70"}`, children: img.in_use == null ? "?" : img.in_use ? "ja" : "nein" })
       ] }, img.id)) })
     ] })
   ] });
@@ -10487,10 +11163,10 @@ var RESTART_LABEL = {
 };
 var HEALTH_LABEL = { healthy: "gesund", unhealthy: "ungesund", starting: "startet" };
 function DetailsPanel({ entry, onChanged }) {
-  const [data, setData] = useState15(null);
-  const [error, setError] = useState15(null);
-  const [toStack, setToStack] = useState15(false);
-  useEffect14(() => {
+  const [data, setData] = useState19(null);
+  const [error, setError] = useState19(null);
+  const [toStack, setToStack] = useState19(false);
+  useEffect15(() => {
     let cancelled = false;
     authedFetch(`/ext/docker/containers/${entry.host_id}/${encodeURIComponent(entry.container)}/inspect`).then(async (res) => {
       if (!res.ok) throw new Error(await errorText(res));
@@ -10504,64 +11180,64 @@ function DetailsPanel({ entry, onChanged }) {
       cancelled = true;
     };
   }, [entry.host_id, entry.container]);
-  if (error) return /* @__PURE__ */ jsxs17("p", { className: "text-xs text-red-400", children: [
+  if (error) return /* @__PURE__ */ jsxs20("p", { className: "text-xs text-red-400", children: [
     "Details nicht abrufbar: ",
     error
   ] });
-  if (!data) return /* @__PURE__ */ jsx18("p", { className: "text-xs opacity-60", children: "Lade Details \u2026" });
+  if (!data) return /* @__PURE__ */ jsx21("p", { className: "text-xs opacity-60", children: "Lade Details \u2026" });
   const d = data;
   const since = d.running ? d.started_at : d.finished_at;
-  return /* @__PURE__ */ jsxs17("div", { className: "text-xs", "data-testid": `inspect-${entry.id}`, children: [
-    /* @__PURE__ */ jsxs17("dl", { className: "grid grid-cols-2 gap-x-6 gap-y-1 opacity-85 sm:grid-cols-4", children: [
-      /* @__PURE__ */ jsxs17("div", { children: [
-        /* @__PURE__ */ jsx18("dt", { className: "opacity-60", children: "Image" }),
-        /* @__PURE__ */ jsxs17("dd", { className: "break-words", children: [
+  return /* @__PURE__ */ jsxs20("div", { className: "text-xs", "data-testid": `inspect-${entry.id}`, children: [
+    /* @__PURE__ */ jsxs20("dl", { className: "grid grid-cols-2 gap-x-6 gap-y-1 opacity-85 sm:grid-cols-4", children: [
+      /* @__PURE__ */ jsxs20("div", { children: [
+        /* @__PURE__ */ jsx21("dt", { className: "opacity-60", children: "Image" }),
+        /* @__PURE__ */ jsxs20("dd", { className: "break-words", children: [
           d.image ?? "?",
           d.image_id ? ` (${d.image_id})` : ""
         ] })
       ] }),
-      /* @__PURE__ */ jsxs17("div", { children: [
-        /* @__PURE__ */ jsx18("dt", { className: "opacity-60", children: d.running ? "L\xE4uft seit" : "Beendet" }),
-        /* @__PURE__ */ jsxs17("dd", { children: [
+      /* @__PURE__ */ jsxs20("div", { children: [
+        /* @__PURE__ */ jsx21("dt", { className: "opacity-60", children: d.running ? "L\xE4uft seit" : "Beendet" }),
+        /* @__PURE__ */ jsxs20("dd", { children: [
           since ? new Date(since).toLocaleString("de-DE") : "\u2013",
           !d.running && d.exit_code != null ? ` \xB7 Exit ${d.exit_code}` : "",
           d.oom_killed ? " \xB7 Speicher voll (OOM)" : ""
         ] })
       ] }),
-      /* @__PURE__ */ jsxs17("div", { children: [
-        /* @__PURE__ */ jsx18("dt", { className: "opacity-60", children: "Neustart-Regel" }),
-        /* @__PURE__ */ jsxs17("dd", { children: [
+      /* @__PURE__ */ jsxs20("div", { children: [
+        /* @__PURE__ */ jsx21("dt", { className: "opacity-60", children: "Neustart-Regel" }),
+        /* @__PURE__ */ jsxs20("dd", { children: [
           RESTART_LABEL[d.restart_policy] ?? d.restart_policy,
           d.restart_count ? ` \xB7 ${d.restart_count}\xD7 neu gestartet` : ""
         ] })
       ] }),
-      /* @__PURE__ */ jsxs17("div", { children: [
-        /* @__PURE__ */ jsx18("dt", { className: "opacity-60", children: "Zustand" }),
-        /* @__PURE__ */ jsxs17("dd", { children: [
+      /* @__PURE__ */ jsxs20("div", { children: [
+        /* @__PURE__ */ jsx21("dt", { className: "opacity-60", children: "Zustand" }),
+        /* @__PURE__ */ jsxs20("dd", { children: [
           d.health ? HEALTH_LABEL[d.health] ?? d.health : "kein Healthcheck",
           d.privileged ? " \xB7 privilegiert" : ""
         ] })
       ] }),
-      d.compose && /* @__PURE__ */ jsxs17("div", { children: [
-        /* @__PURE__ */ jsx18("dt", { className: "opacity-60", children: "Compose" }),
-        /* @__PURE__ */ jsxs17("dd", { className: "break-words", children: [
+      d.compose && /* @__PURE__ */ jsxs20("div", { children: [
+        /* @__PURE__ */ jsx21("dt", { className: "opacity-60", children: "Compose" }),
+        /* @__PURE__ */ jsxs20("dd", { className: "break-words", children: [
           d.compose.project,
           d.compose.service ? ` / ${d.compose.service}` : "",
           d.compose.working_dir ? ` \xB7 ${d.compose.working_dir}` : ""
         ] })
       ] }),
-      d.memory_limit ? /* @__PURE__ */ jsxs17("div", { children: [
-        /* @__PURE__ */ jsx18("dt", { className: "opacity-60", children: "RAM-Limit" }),
-        /* @__PURE__ */ jsx18("dd", { children: formatBytes(d.memory_limit) })
+      d.memory_limit ? /* @__PURE__ */ jsxs20("div", { children: [
+        /* @__PURE__ */ jsx21("dt", { className: "opacity-60", children: "RAM-Limit" }),
+        /* @__PURE__ */ jsx21("dd", { children: formatBytes(d.memory_limit) })
       ] }) : null
     ] }),
-    /* @__PURE__ */ jsx18("p", { className: "mt-2 mb-0.5 font-medium opacity-60", children: "Ports" }),
-    /* @__PURE__ */ jsx18("p", { className: "opacity-85", children: d.ports.length === 0 ? d.network_mode === "host" ? "Host-Netz (alle Ports direkt)" : "keine" : d.ports.map((p) => `${p.published.length ? p.published.join(", ") : "intern"} \u2192 ${p.container}`).join(" \xB7 ") }),
-    /* @__PURE__ */ jsx18("p", { className: "mt-2 mb-0.5 font-medium opacity-60", children: "Speicher" }),
-    /* @__PURE__ */ jsxs17("ul", { className: "space-y-0.5 opacity-85", children: [
-      d.mounts.length === 0 && /* @__PURE__ */ jsx18("li", { children: "keine Mounts" }),
-      d.mounts.map((m) => /* @__PURE__ */ jsxs17("li", { className: "break-words", children: [
-        /* @__PURE__ */ jsx18("span", { className: "opacity-60", children: m.type === "volume" ? "Volume" : m.type === "bind" ? "Ordner" : m.type }),
+    /* @__PURE__ */ jsx21("p", { className: "mt-2 mb-0.5 font-medium opacity-60", children: "Ports" }),
+    /* @__PURE__ */ jsx21("p", { className: "opacity-85", children: d.ports.length === 0 ? d.network_mode === "host" ? "Host-Netz (alle Ports direkt)" : "keine" : d.ports.map((p) => `${p.published.length ? p.published.join(", ") : "intern"} \u2192 ${p.container}`).join(" \xB7 ") }),
+    /* @__PURE__ */ jsx21("p", { className: "mt-2 mb-0.5 font-medium opacity-60", children: "Speicher" }),
+    /* @__PURE__ */ jsxs20("ul", { className: "space-y-0.5 opacity-85", children: [
+      d.mounts.length === 0 && /* @__PURE__ */ jsx21("li", { children: "keine Mounts" }),
+      d.mounts.map((m) => /* @__PURE__ */ jsxs20("li", { className: "break-words", children: [
+        /* @__PURE__ */ jsx21("span", { className: "opacity-60", children: m.type === "volume" ? "Volume" : m.type === "bind" ? "Ordner" : m.type }),
         " ",
         m.source,
         " \u2192 ",
@@ -10569,17 +11245,17 @@ function DetailsPanel({ entry, onChanged }) {
         m.read_only ? " (nur lesen)" : ""
       ] }, `${m.destination}`))
     ] }),
-    /* @__PURE__ */ jsx18("p", { className: "mt-2 mb-0.5 font-medium opacity-60", children: "Netze" }),
-    /* @__PURE__ */ jsx18("p", { className: "opacity-85", children: d.networks.map((n) => `${n.name}${n.ip ? ` (${n.ip})` : ""}`).join(" \xB7 ") || "keine" }),
-    /* @__PURE__ */ jsxs17("p", { className: "mt-2 mb-0.5 font-medium opacity-60", children: [
+    /* @__PURE__ */ jsx21("p", { className: "mt-2 mb-0.5 font-medium opacity-60", children: "Netze" }),
+    /* @__PURE__ */ jsx21("p", { className: "opacity-85", children: d.networks.map((n) => `${n.name}${n.ip ? ` (${n.ip})` : ""}`).join(" \xB7 ") || "keine" }),
+    /* @__PURE__ */ jsxs20("p", { className: "mt-2 mb-0.5 font-medium opacity-60", children: [
       "Umgebungsvariablen (",
       d.env_keys.length,
       ")"
     ] }),
-    /* @__PURE__ */ jsx18("p", { className: "break-words opacity-70", title: "Werte werden bewusst nicht angezeigt \u2013 dort stehen oft Passw\xF6rter.", children: d.env_keys.join(", ") || "keine" }),
-    !d.compose && !entry.operate_only && entry.host_id && entry.container && onChanged && deck().hasPermission("hosts.execute") && /* @__PURE__ */ jsxs17("div", { className: "mt-2", children: [
-      /* @__PURE__ */ jsx18(Button, { small: true, pressed: toStack, onClick: () => setToStack((open) => !open), children: "In Stack umwandeln" }),
-      toStack && /* @__PURE__ */ jsx18(ToStackPanel, { hostId: entry.host_id, container: entry.container, onDone: (text, warn2) => {
+    /* @__PURE__ */ jsx21("p", { className: "break-words opacity-70", title: "Werte werden bewusst nicht angezeigt \u2013 dort stehen oft Passw\xF6rter.", children: d.env_keys.join(", ") || "keine" }),
+    !d.compose && !entry.operate_only && entry.host_id && entry.container && onChanged && deck().hasPermission("hosts.execute") && /* @__PURE__ */ jsxs20("div", { className: "mt-2", children: [
+      /* @__PURE__ */ jsx21(Button, { small: true, pressed: toStack, onClick: () => setToStack((open) => !open), children: "In Stack umwandeln" }),
+      toStack && /* @__PURE__ */ jsx21(ToStackPanel, { hostId: entry.host_id, container: entry.container, onDone: (text, warn2) => {
         setToStack(false);
         onChanged(text, warn2);
       } })
@@ -10588,9 +11264,9 @@ function DetailsPanel({ entry, onChanged }) {
 }
 function UrlPanel({ entry, onSaved, onClose }) {
   const current = entry.url_custom ? entry.url ?? "" : "";
-  const [value, setValue] = useState15(current);
-  const [busy, setBusy] = useState15(false);
-  const [error, setError] = useState15(null);
+  const [value, setValue] = useState19(current);
+  const [busy, setBusy] = useState19(false);
+  const [error, setError] = useState19(null);
   const save = async (url) => {
     setBusy(true);
     setError(null);
@@ -10609,13 +11285,13 @@ function UrlPanel({ entry, onSaved, onClose }) {
       setBusy(false);
     }
   };
-  return /* @__PURE__ */ jsxs17("form", { className: "space-y-2 text-xs", onSubmit: (e) => {
+  return /* @__PURE__ */ jsxs20("form", { className: "space-y-2 text-xs", onSubmit: (e) => {
     e.preventDefault();
     if (value.trim() !== current) void save(value.trim() || null);
   }, children: [
-    /* @__PURE__ */ jsxs17("label", { className: "block", children: [
-      /* @__PURE__ */ jsx18("span", { className: "mb-1 block opacity-70", children: "Adresse, die \u201E\xD6ffnen\u201C und die Kachel aufrufen" }),
-      /* @__PURE__ */ jsx18(
+    /* @__PURE__ */ jsxs20("label", { className: "block", children: [
+      /* @__PURE__ */ jsx21("span", { className: "mb-1 block opacity-70", children: "Adresse, die \u201E\xD6ffnen\u201C und die Kachel aufrufen" }),
+      /* @__PURE__ */ jsx21(
         "input",
         {
           type: "url",
@@ -10626,31 +11302,31 @@ function UrlPanel({ entry, onSaved, onClose }) {
         }
       )
     ] }),
-    /* @__PURE__ */ jsx18("p", { className: "opacity-60", children: entry.url_detected ? `Erkannt: ${entry.url_detected}` : "Nodvard Deck hat f\xFCr diesen Container keine Weboberfl\xE4che erkannt." }),
-    error && /* @__PURE__ */ jsx18("p", { role: "alert", className: "text-red-400", children: error }),
-    /* @__PURE__ */ jsxs17("div", { className: "flex flex-wrap gap-1.5", children: [
-      /* @__PURE__ */ jsx18("button", { type: "submit", disabled: busy || value.trim() === current, className: `rounded bg-emerald-500/20 px-2 py-1 text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-40 ${TOUCH}`, children: busy ? "\u2026" : "Speichern" }),
-      entry.url_custom && /* @__PURE__ */ jsx18("button", { type: "button", disabled: busy, onClick: () => void save(null), className: `rounded bg-white/10 px-2 py-1 hover:bg-white/20 disabled:opacity-40 ${TOUCH}`, children: "Erkannte nehmen" }),
-      /* @__PURE__ */ jsx18("button", { type: "button", onClick: onClose, className: `rounded px-2 py-1 opacity-70 hover:opacity-100 ${TOUCH}`, children: "Abbrechen" })
+    /* @__PURE__ */ jsx21("p", { className: "opacity-60", children: entry.url_detected ? `Erkannt: ${entry.url_detected}` : productText("Nodvard Deck hat f\xFCr diesen Container keine Weboberfl\xE4che erkannt.") }),
+    error && /* @__PURE__ */ jsx21("p", { role: "alert", className: "text-red-400", children: error }),
+    /* @__PURE__ */ jsxs20("div", { className: "flex flex-wrap gap-1.5", children: [
+      /* @__PURE__ */ jsx21("button", { type: "submit", disabled: busy || value.trim() === current, className: `rounded bg-emerald-500/20 px-2 py-1 text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-40 ${TOUCH}`, children: busy ? "\u2026" : "Speichern" }),
+      entry.url_custom && /* @__PURE__ */ jsx21("button", { type: "button", disabled: busy, onClick: () => void save(null), className: `rounded bg-white/10 px-2 py-1 hover:bg-white/20 disabled:opacity-40 ${TOUCH}`, children: "Erkannte nehmen" }),
+      /* @__PURE__ */ jsx21("button", { type: "button", onClick: onClose, className: `rounded px-2 py-1 opacity-70 hover:opacity-100 ${TOUCH}`, children: "Abbrechen" })
     ] })
   ] });
 }
 function OpenLink({ url }) {
   const href = safeHref(url);
   if (!href) return null;
-  return /* @__PURE__ */ jsx18("a", { href, target: "_blank", rel: "noreferrer", className: "px-1 py-1 text-xs opacity-70 hover:opacity-100 hover:underline max-md:px-2 max-md:py-2", children: "\xD6ffnen" });
+  return /* @__PURE__ */ jsx21("a", { href, target: "_blank", rel: "noreferrer", className: "px-1 py-1 text-xs opacity-70 hover:opacity-100 hover:underline max-md:px-2 max-md:py-2", children: "\xD6ffnen" });
 }
 function NoContainers() {
   const tag = useSettingText("docker", "docker_host_tag", "docker");
-  return /* @__PURE__ */ jsx18(
+  return /* @__PURE__ */ jsx21(
     EmptyState,
     {
       icon: "package",
       title: "Noch kein Server mit Docker",
       text: `Lege unter Server & Zug\xE4nge einen Server an und gib ihm die Markierung \u201E${tag}\u201C. L\xE4uft dort Docker, erscheinen seine Container hier von selbst. Die Markierung l\xE4sst sich in den Einstellungen des Moduls \xE4ndern.`,
-      action: /* @__PURE__ */ jsxs17("div", { className: "flex flex-wrap justify-center gap-2", children: [
-        /* @__PURE__ */ jsx18(SettingsLink, { to: "/settings/hosts", permission: "hosts.write", children: "Server & Zug\xE4nge \xF6ffnen" }),
-        /* @__PURE__ */ jsx18(SettingsLink, { to: "/settings/extensions/docker", permission: "extensions.manage", variant: "secondary", children: "Moduleinstellungen" })
+      action: /* @__PURE__ */ jsxs20("div", { className: "flex flex-wrap justify-center gap-2", children: [
+        /* @__PURE__ */ jsx21(SettingsLink, { to: "/settings/hosts", permission: "hosts.write", children: "Server & Zug\xE4nge \xF6ffnen" }),
+        /* @__PURE__ */ jsx21(SettingsLink, { to: "/settings/extensions/docker", permission: "extensions.manage", variant: "secondary", children: "Moduleinstellungen" })
       ] })
     }
   );
@@ -10660,7 +11336,7 @@ function ContainersPage() {
   const [urlParams, updateUrl] = useUrlParams();
   const resourcesAllowed = deck().hasPermission("hosts.execute");
   const tab = resourcesAllowed && TABS.find((t) => t.kind === urlParams.get("tab"))?.kind || null;
-  const tabs = resourcesAllowed && /* @__PURE__ */ jsx18("nav", { className: "mb-4 flex flex-wrap gap-1.5", "aria-label": "Bereiche der Docker-Seite", children: [{ kind: null, label: "Container" }, ...TABS].map((t) => /* @__PURE__ */ jsx18(
+  const tabs = resourcesAllowed && /* @__PURE__ */ jsx21("nav", { className: "mb-4 flex flex-wrap gap-1.5", "aria-label": "Bereiche der Docker-Seite", children: [{ kind: null, label: "Container" }, ...TABS].map((t) => /* @__PURE__ */ jsx21(
     Button,
     {
       small: true,
@@ -10671,36 +11347,38 @@ function ContainersPage() {
     },
     t.label
   )) });
-  if (!tab) return /* @__PURE__ */ jsx18(ContainerList, { tabs });
-  return /* @__PURE__ */ jsxs17("div", { className: "mx-auto w-full max-w-7xl p-4 sm:p-6", children: [
-    /* @__PURE__ */ jsx18("h2", { className: "mb-4 font-semibold text-xl tracking-tight", children: "Docker" }),
+  if (!tab) return /* @__PURE__ */ jsx21(ContainerList, { tabs });
+  return /* @__PURE__ */ jsxs20("div", { className: "mx-auto w-full max-w-7xl p-4 sm:p-6", children: [
+    /* @__PURE__ */ jsx21("h2", { className: "mb-4 font-semibold text-xl tracking-tight", children: "Docker" }),
     tabs,
-    tab === "stacks" ? /* @__PURE__ */ jsx18(StacksSection, { hostId: urlParams.get("host") || null, onHost: (id) => updateUrl({ host: id }), empty: /* @__PURE__ */ jsx18(NoContainers, {}) }) : tab === "registries" ? /* @__PURE__ */ jsx18(RegistriesSection, { hostId: urlParams.get("host") || null, onHost: (id) => updateUrl({ host: id }), empty: /* @__PURE__ */ jsx18(NoContainers, {}) }) : /* @__PURE__ */ jsx18(ResourcesSection, { kind: tab, hostId: urlParams.get("host") || null, onHost: (id) => updateUrl({ host: id }), empty: /* @__PURE__ */ jsx18(NoContainers, {}) })
+    tab === "stacks" ? /* @__PURE__ */ jsx21(StacksSection, { hostId: urlParams.get("host") || null, onHost: (id) => updateUrl({ host: id }), empty: /* @__PURE__ */ jsx21(NoContainers, {}) }) : tab === "registries" ? /* @__PURE__ */ jsx21(RegistriesSection, { hostId: urlParams.get("host") || null, onHost: (id) => updateUrl({ host: id }), empty: /* @__PURE__ */ jsx21(NoContainers, {}) }) : /* @__PURE__ */ jsx21(ResourcesSection, { kind: tab, hostId: urlParams.get("host") || null, onHost: (id) => updateUrl({ host: id }), empty: /* @__PURE__ */ jsx21(NoContainers, {}) })
   ] });
 }
 function ContainerList({ tabs }) {
   const unmountSignal = useUnmountSignal();
-  const [services, setServices] = useState15(null);
-  const [error, setError] = useState15(null);
-  const [message, setMessage] = useState15(null);
-  const [pending, setPending] = useState15(null);
+  const [services, setServices] = useState19(null);
+  const [error, setError] = useState19(null);
+  const [message, setMessage] = useState19(null);
+  const [pending, setPending] = useState19(null);
   const [urlParams, updateUrl] = useUrlParams();
   const logsFor = urlParams.get("logs") || null;
   const setLogsFor = (id) => updateUrl({ logs: id });
   const hostFilter = urlParams.get("host") || null;
   const stackFilter = urlParams.get("stack") || null;
   const stateFilter = urlParams.get("state") || null;
-  const [detailsFor, setDetailsFor] = useState15(null);
-  const [urlFor, setUrlFor] = useState15(null);
-  const [updateFor, setUpdateFor] = useState15(null);
-  const [storageFor, setStorageFor] = useState15(null);
-  const [query, setQuery] = useState15("");
-  const [stats, setStats] = useState15({});
-  const [environments, setEnvironments] = useState15({});
-  const [restarts, setRestarts] = useState15({});
-  const [statsLoaded, setStatsLoaded] = useState15(false);
-  const [images, setImages] = useState15(null);
-  const [imageMessage, setImageMessage] = useState15(null);
+  const [detailsFor, setDetailsFor] = useState19(null);
+  const [urlFor, setUrlFor] = useState19(null);
+  const [updateFor, setUpdateFor] = useState19(null);
+  const [storageFor, setStorageFor] = useState19(null);
+  const [query, setQuery] = useState19("");
+  const [sortierung, setSortierung] = useState19(null);
+  const [startedAt, setStartedAt] = useState19({});
+  const [stats, setStats] = useState19({});
+  const [environments, setEnvironments] = useState19({});
+  const [restarts, setRestarts] = useState19({});
+  const [statsLoaded, setStatsLoaded] = useState19(false);
+  const [images, setImages] = useState19(null);
+  const [imageMessage, setImageMessage] = useState19(null);
   const loadImages = useCallback3(async (signal) => {
     try {
       const res = await authedFetch("/ext/docker/image-updates", { signal });
@@ -10718,7 +11396,7 @@ function ContainerList({ tabs }) {
       setError(null);
     }).catch((err) => setError(errorMessage(err)));
   }, [loadImages, unmountSignal]);
-  useEffect14(() => {
+  useEffect15(() => {
     load();
     const interval = setInterval(load, 3e4);
     return () => clearInterval(interval);
@@ -10726,7 +11404,7 @@ function ContainerList({ tabs }) {
   const visibleImages = scopeImages(images, hostFilter);
   const imagesChecking = Object.values(visibleImages?.hosts ?? {}).some((h) => h.checking);
   const imagesBusy = imagesChecking || Object.keys(visibleImages?.applying ?? {}).length > 0;
-  useEffect14(() => {
+  useEffect15(() => {
     if (!imagesBusy) return;
     const controller = new AbortController();
     const interval = setInterval(() => void loadImages(controller.signal), IMAGE_POLL_MS);
@@ -10735,11 +11413,12 @@ function ContainerList({ tabs }) {
       controller.abort();
     };
   }, [imagesBusy, loadImages]);
-  useEffect14(() => {
+  useEffect15(() => {
     let cancelled = false;
-    const loadStats = () => authedFetch("/ext/docker/stats").then((res) => res.ok ? res.json() : { data: {}, hosts: void 0, restarts: void 0 }).then((body) => {
+    const loadStats = () => authedFetch("/ext/docker/stats").then((res) => res.ok ? res.json() : { data: {}, hosts: void 0, restarts: void 0, started_at: void 0 }).then((body) => {
       if (cancelled) return;
       setStats(body.data);
+      setStartedAt(body.started_at ?? {});
       if (body.hosts) setEnvironments(body.hosts);
       if (body.restarts) setRestarts(body.restarts);
       setStatsLoaded(true);
@@ -10754,7 +11433,7 @@ function ContainerList({ tabs }) {
   async function trigger(entry, verb) {
     const text = VERB_TEXT[verb];
     if (text.confirm) {
-      const extra = entry.is_self && verb === "restart" ? " Das ist Nodvard Deck selbst \u2013 die Oberfl\xE4che ist kurz weg." : verb === "remove" && entry.compose_project ? ` Er geh\xF6rt zum Compose-Projekt \u201E${entry.compose_project}\u201C: Beim n\xE4chsten \u201Edocker compose up\u201C (auch beim Einspielen eines Updates) legt Docker ihn wieder an.` : "";
+      const extra = entry.is_self && verb === "restart" ? productText(" Das ist Nodvard Deck selbst \u2013 die Oberfl\xE4che ist kurz weg.") : verb === "remove" && entry.compose_project ? ` Er geh\xF6rt zum Compose-Projekt \u201E${entry.compose_project}\u201C: Beim n\xE4chsten \u201Edocker compose up\u201C (auch beim Einspielen eines Updates) legt Docker ihn wieder an.` : "";
       const ok = await deck().confirmDialog(`"${entry.name}" ${text.confirm}${extra}`, {
         danger: verb === "stop" || verb === "remove",
         confirmLabel: text.label
@@ -10804,7 +11483,7 @@ function ContainerList({ tabs }) {
     const members = (services ?? []).filter((s) => s.host_id === entry.host_id && s.compose_project === project);
     const self = members.some((s) => s.is_self);
     const ok = await deck().confirmDialog(
-      `Stack "${project}" neu starten (${members.map((s) => s.name).join(", ")})? Die Dienste sind kurz nicht erreichbar.${self ? " Darin l\xE4uft Nodvard Deck selbst \u2013 die Oberfl\xE4che ist kurz weg." : ""}`,
+      `Stack "${project}" neu starten (${members.map((s) => s.name).join(", ")})? Die Dienste sind kurz nicht erreichbar.${self ? productText(" Darin l\xE4uft Nodvard Deck selbst \u2013 die Oberfl\xE4che ist kurz weg.") : ""}`,
       { confirmLabel: "Neu starten" }
     );
     if (!ok) return;
@@ -10832,13 +11511,13 @@ function ContainerList({ tabs }) {
       setPending(null);
     }
   }
-  if (!services && !error) return /* @__PURE__ */ jsxs17("div", { className: "p-4 sm:p-6", children: [
+  if (!services && !error) return /* @__PURE__ */ jsxs20("div", { className: "p-4 sm:p-6", children: [
     tabs,
-    /* @__PURE__ */ jsx18("p", { className: "text-sm opacity-60", children: "Lade \u2026" })
+    /* @__PURE__ */ jsx21("p", { className: "text-sm opacity-60", children: "Lade \u2026" })
   ] });
-  if (error && !services) return /* @__PURE__ */ jsxs17("div", { className: "p-4 sm:p-6", children: [
+  if (error && !services) return /* @__PURE__ */ jsxs20("div", { className: "p-4 sm:p-6", children: [
     tabs,
-    /* @__PURE__ */ jsx18(LoadError, { what: "Die Liste der Container", error, onRetry: load })
+    /* @__PURE__ */ jsx21(LoadError, { what: "Die Liste der Container", error, onRetry: load })
   ] });
   const scoped = (services ?? []).filter((s) => !hostFilter || hostIdOf(s) === hostFilter);
   const operateServers = new Set(scoped.filter((s) => s.operate_only).map((s) => hostIdOf(s))).size;
@@ -10867,10 +11546,28 @@ function ContainerList({ tabs }) {
   const stackOptions = [...[...stacks].sort().map((p) => [p, p]), [NO_STACK, "Ohne Stack"]];
   const filtered = Boolean(hostFilter || stackFilter || stateFilter);
   const onlyOperate = scoped.length > 0 && scoped.every((s) => s.operate_only);
-  return /* @__PURE__ */ jsxs17("div", { className: "mx-auto w-full max-w-7xl p-4 sm:p-6", children: [
-    /* @__PURE__ */ jsxs17("div", { className: "mb-4 flex flex-wrap items-center gap-3", children: [
-      /* @__PURE__ */ jsx18("h2", { className: "font-semibold text-xl tracking-tight", children: "Docker" }),
-      /* @__PURE__ */ jsx18(
+  const onSort = (spalte) => setSortierung((aktuell) => naechsteSortierung(aktuell, spalte));
+  const sortierwert = (s) => {
+    switch (sortierung?.spalte) {
+      case "name":
+        return s.name;
+      case "state":
+        return STATE_LABEL[s.state] ?? s.state;
+      case "cpu":
+        return stats[s.id]?.cpu_percent;
+      case "ram":
+        return stats[s.id]?.mem_used;
+      // Eine spätere Startzeit bedeutet eine kürzere Laufzeit.
+      case "uptime":
+        return ["running", "paused", "restarting"].includes(s.state) && startedAt[s.id] && !startedAt[s.id].startsWith("0001-") ? -Date.parse(startedAt[s.id]) : null;
+      default:
+        return null;
+    }
+  };
+  return /* @__PURE__ */ jsxs20("div", { className: "mx-auto w-full max-w-7xl p-4 sm:p-6", children: [
+    /* @__PURE__ */ jsxs20("div", { className: "mb-4 flex flex-wrap items-center gap-3", children: [
+      /* @__PURE__ */ jsx21("h2", { className: "font-semibold text-xl tracking-tight", children: "Docker" }),
+      /* @__PURE__ */ jsx21(
         "input",
         {
           value: query,
@@ -10880,8 +11577,8 @@ function ContainerList({ tabs }) {
           className: "w-56 px-2 py-1 text-sm rounded-lg border border-white/10 bg-black/25 outline-none focus:border-[var(--color-accent)]"
         }
       ),
-      /* @__PURE__ */ jsx18("button", { type: "button", onClick: load, className: "px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: "Aktualisieren" }),
-      deck().hasPermission("hosts.execute") && (services ?? []).length > 0 && !onlyOperate && /* @__PURE__ */ jsx18(
+      /* @__PURE__ */ jsx21("button", { type: "button", onClick: load, className: "px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: "Aktualisieren" }),
+      deck().hasPermission("hosts.execute") && (services ?? []).length > 0 && !onlyOperate && /* @__PURE__ */ jsx21(
         "button",
         {
           type: "button",
@@ -10894,8 +11591,8 @@ function ContainerList({ tabs }) {
       )
     ] }),
     tabs,
-    (services ?? []).length > 0 && /* @__PURE__ */ jsxs17("div", { className: "mb-4 flex flex-wrap items-center gap-2", "data-testid": "filters", children: [
-      (hostOptions.size > 1 || hostFilter) && /* @__PURE__ */ jsx18(
+    (services ?? []).length > 0 && /* @__PURE__ */ jsxs20("div", { className: "mb-4 flex flex-wrap items-center gap-2", "data-testid": "filters", children: [
+      (hostOptions.size > 1 || hostFilter) && /* @__PURE__ */ jsx21(
         FilterSelect,
         {
           label: "Server",
@@ -10906,8 +11603,8 @@ function ContainerList({ tabs }) {
           onChange: (v) => updateUrl({ host: v, stack: null })
         }
       ),
-      (stacks.size > 0 || stackFilter) && /* @__PURE__ */ jsx18(FilterSelect, { label: "Stack", all: "Alle Stacks", value: stackFilter, options: stackOptions, onChange: (v) => updateUrl({ stack: v }) }),
-      /* @__PURE__ */ jsx18(
+      (stacks.size > 0 || stackFilter) && /* @__PURE__ */ jsx21(FilterSelect, { label: "Stack", all: "Alle Stacks", value: stackFilter, options: stackOptions, onChange: (v) => updateUrl({ stack: v }) }),
+      /* @__PURE__ */ jsx21(
         FilterSelect,
         {
           label: "Zustand",
@@ -10917,7 +11614,7 @@ function ContainerList({ tabs }) {
           onChange: (v) => updateUrl({ state: v })
         }
       ),
-      filtered && /* @__PURE__ */ jsx18(
+      filtered && /* @__PURE__ */ jsx21(
         "button",
         {
           type: "button",
@@ -10927,12 +11624,12 @@ function ContainerList({ tabs }) {
         }
       )
     ] }),
-    error && /* @__PURE__ */ jsx18(LoadError, { what: "Der aktuelle Stand", error, onRetry: load, hint: "Die Tabelle zeigt den letzten bekannten Stand." }),
-    message && /* @__PURE__ */ jsx18("p", { className: "mb-3 text-sm opacity-80", children: message }),
-    (imageSummary || imageMessage) && /* @__PURE__ */ jsxs17("p", { className: "mb-3 flex flex-wrap items-center gap-x-3 text-xs opacity-80", "aria-live": "polite", "data-testid": "image-summary", children: [
-      imageSummary && /* @__PURE__ */ jsx18("span", { children: imageSummary }),
-      imageMessage && /* @__PURE__ */ jsx18("span", { className: "text-red-400", children: imageMessage }),
-      !imagesChecking && imageSummary && deck().hasPermission("hosts.execute") && /* @__PURE__ */ jsx18(
+    error && /* @__PURE__ */ jsx21(LoadError, { what: "Der aktuelle Stand", error, onRetry: load, hint: "Die Tabelle zeigt den letzten bekannten Stand." }),
+    message && /* @__PURE__ */ jsx21("p", { className: "mb-3 text-sm opacity-80", children: message }),
+    (imageSummary || imageMessage) && /* @__PURE__ */ jsxs20("p", { className: "mb-3 flex flex-wrap items-center gap-x-3 text-xs opacity-80", "aria-live": "polite", "data-testid": "image-summary", children: [
+      imageSummary && /* @__PURE__ */ jsx21("span", { children: imageSummary }),
+      imageMessage && /* @__PURE__ */ jsx21("span", { className: "text-red-400", children: imageMessage }),
+      !imagesChecking && imageSummary && deck().hasPermission("hosts.execute") && /* @__PURE__ */ jsx21(
         "button",
         {
           type: "button",
@@ -10943,14 +11640,14 @@ function ContainerList({ tabs }) {
         }
       )
     ] }),
-    (services ?? []).length === 0 && /* @__PURE__ */ jsx18(NoContainers, {}),
-    (services ?? []).length > 0 && byHost.size === 0 && /* @__PURE__ */ jsx18("p", { className: "mb-3 text-sm opacity-70", "data-testid": "no-match", children: needle ? "Kein Container passt zu deiner Suche." : "F\xFCr diesen Filter gibt es keine Container." }),
-    [...byHost.entries()].map(([host, entries]) => /* @__PURE__ */ jsxs17("section", { className: "mb-6 overflow-x-auto", children: [
-      /* @__PURE__ */ jsxs17("div", { className: "mb-2 flex flex-wrap items-center gap-3", children: [
-        /* @__PURE__ */ jsx18("h3", { className: "text-sm font-medium opacity-60", children: host }),
-        entries[0]?.host_id && environments[entries[0].host_id] && /* @__PURE__ */ jsx18("span", { className: "text-xs opacity-60", title: environmentText(environments[entries[0].host_id]).title, "data-testid": `environment-${entries[0].host_id}`, children: environmentText(environments[entries[0].host_id]).text }),
-        entries[0]?.operate_only && entries[0].host_id && /* @__PURE__ */ jsx18(OperateBadge, { hostId: entries[0].host_id }),
-        entries[0]?.host_id && entries[0].state !== "error" && !entries[0].operate_only && deck().hasPermission("hosts.execute") && /* @__PURE__ */ jsx18(
+    (services ?? []).length === 0 && /* @__PURE__ */ jsx21(NoContainers, {}),
+    (services ?? []).length > 0 && byHost.size === 0 && /* @__PURE__ */ jsx21("p", { className: "mb-3 text-sm opacity-70", "data-testid": "no-match", children: needle ? "Kein Container passt zu deiner Suche." : "F\xFCr diesen Filter gibt es keine Container." }),
+    [...byHost.entries()].map(([host, entries]) => /* @__PURE__ */ jsxs20("section", { className: "mb-6 overflow-x-auto", children: [
+      /* @__PURE__ */ jsxs20("div", { className: "mb-2 flex flex-wrap items-center gap-3", children: [
+        /* @__PURE__ */ jsx21("h3", { className: "text-sm font-medium opacity-60", children: host }),
+        entries[0]?.host_id && environments[entries[0].host_id] && /* @__PURE__ */ jsx21("span", { className: "text-xs opacity-60", title: environmentText(environments[entries[0].host_id]).title, "data-testid": `environment-${entries[0].host_id}`, children: environmentText(environments[entries[0].host_id]).text }),
+        entries[0]?.operate_only && entries[0].host_id && /* @__PURE__ */ jsx21(OperateBadge, { hostId: entries[0].host_id }),
+        entries[0]?.host_id && entries[0].state !== "error" && !entries[0].operate_only && deck().hasPermission("hosts.execute") && /* @__PURE__ */ jsx21(
           "button",
           {
             type: "button",
@@ -10960,7 +11657,7 @@ function ContainerList({ tabs }) {
             children: "Docker-Speicher"
           }
         ),
-        entries[0]?.host_id && !entries[0].operate_only && deck().hasPermission("hosts.execute") && /* @__PURE__ */ jsx18(
+        entries[0]?.host_id && !entries[0].operate_only && deck().hasPermission("hosts.execute") && /* @__PURE__ */ jsx21(
           BulkProposeButton,
           {
             hostId: entries[0].host_id,
@@ -10970,34 +11667,34 @@ function ContainerList({ tabs }) {
           }
         )
       ] }),
-      entries[0]?.host_id && images?.hosts[entries[0].host_id]?.error && /* @__PURE__ */ jsxs17("p", { className: "mb-2 text-xs text-red-400", "data-testid": `image-error-${entries[0].host_id}`, children: [
+      entries[0]?.host_id && images?.hosts[entries[0].host_id]?.error && /* @__PURE__ */ jsxs20("p", { className: "mb-2 text-xs text-red-400", "data-testid": `image-error-${entries[0].host_id}`, children: [
         "Image-Pr\xFCfung: ",
         images.hosts[entries[0].host_id].error
       ] }),
-      storageFor && storageFor === entries[0]?.host_id && /* @__PURE__ */ jsx18("div", { className: "mb-3 bg-black/20 p-2 panel", children: /* @__PURE__ */ jsx18(StoragePanel, { hostId: storageFor }) }),
-      /* @__PURE__ */ jsxs17("table", { role: "table", className: "w-full text-sm max-md:block", children: [
-        /* @__PURE__ */ jsx18("thead", { className: "max-md:hidden", children: /* @__PURE__ */ jsxs17("tr", { className: "border-b border-white/10 text-left text-xs opacity-60", children: [
-          /* @__PURE__ */ jsx18("th", { className: "py-1 w-1/4", children: "Container" }),
-          /* @__PURE__ */ jsx18("th", { className: "py-1 whitespace-nowrap", children: "Zustand" }),
-          /* @__PURE__ */ jsx18("th", { className: "py-1", children: "Status" }),
-          /* @__PURE__ */ jsx18("th", { className: "py-1 whitespace-nowrap", children: "Image-Update" }),
-          /* @__PURE__ */ jsx18("th", { className: "py-1 whitespace-nowrap", children: "CPU" }),
-          /* @__PURE__ */ jsx18("th", { className: "py-1 whitespace-nowrap", children: "RAM" }),
-          /* @__PURE__ */ jsx18("th", { className: "py-1", children: "Aktionen" })
+      storageFor && storageFor === entries[0]?.host_id && /* @__PURE__ */ jsx21("div", { className: "mb-3 bg-black/20 p-2 panel", children: /* @__PURE__ */ jsx21(StoragePanel, { hostId: storageFor }) }),
+      /* @__PURE__ */ jsxs20("table", { role: "table", className: "w-full text-sm max-md:block", children: [
+        /* @__PURE__ */ jsx21("thead", { className: "max-md:hidden", children: /* @__PURE__ */ jsxs20("tr", { className: "border-b border-white/10 text-left text-xs opacity-60", children: [
+          /* @__PURE__ */ jsx21(Sortierkopf, { spalte: "name", label: "Container", sortierung, onSort, className: "w-1/4" }),
+          /* @__PURE__ */ jsx21(Sortierkopf, { spalte: "state", label: "Zustand", sortierung, onSort }),
+          /* @__PURE__ */ jsx21(Sortierkopf, { spalte: "uptime", label: "Status/Laufzeit", sortierung, onSort }),
+          /* @__PURE__ */ jsx21("th", { className: "py-1 whitespace-nowrap", children: "Image-Update" }),
+          /* @__PURE__ */ jsx21(Sortierkopf, { spalte: "cpu", label: "CPU", sortierung, onSort }),
+          /* @__PURE__ */ jsx21(Sortierkopf, { spalte: "ram", label: "RAM", sortierung, onSort }),
+          /* @__PURE__ */ jsx21("th", { className: "py-1", children: "Aktionen" })
         ] }) }),
-        /* @__PURE__ */ jsx18("tbody", { role: "rowgroup", className: "divide-y divide-white/5 max-md:block max-md:space-y-2 max-md:divide-y-0", children: entries.map((s) => {
+        /* @__PURE__ */ jsx21("tbody", { role: "rowgroup", className: "divide-y divide-white/5 max-md:block max-md:space-y-2 max-md:divide-y-0", children: (sortierung ? sortieren(entries, sortierwert, sortierung.richtung) : entries).map((s) => {
           const manageable = Boolean(s.host_id && s.container) && s.state !== "error";
           const isRunning = s.state === "running" || s.state === "restarting";
           const logsOpen = logsFor === s.id;
           const busy = (verb) => pending === `${s.id}:${verb}`;
           const imageShown = Boolean(images?.data[s.id]) || Boolean(s.host_id && images?.hosts[s.host_id]?.checking);
-          return /* @__PURE__ */ jsxs17(Fragment11, { children: [
-            /* @__PURE__ */ jsxs17("tr", { role: "row", className: CARD_ROW, "data-testid": `row-${s.id}`, children: [
-              /* @__PURE__ */ jsxs17("td", { role: "cell", className: "py-1.5 break-words max-md:w-full max-md:py-0 max-md:text-base", children: [
+          return /* @__PURE__ */ jsxs20(Fragment11, { children: [
+            /* @__PURE__ */ jsxs20("tr", { role: "row", className: CARD_ROW2, "data-testid": `row-${s.id}`, children: [
+              /* @__PURE__ */ jsxs20("td", { role: "cell", className: "py-1.5 break-words max-md:w-full max-md:py-0 max-md:text-base", children: [
                 s.name,
-                s.is_self && /* @__PURE__ */ jsx18("span", { className: "ml-1.5 rounded bg-white/10 px-1 text-[10px] opacity-70", children: "Nodvard Deck" }),
-                s.compose_project && s.operate_only && /* @__PURE__ */ jsx18("span", { className: "ml-1.5 rounded bg-sky-500/15 px-1 text-[10px] text-sky-300", title: "Docker-Compose-Projekt", children: s.compose_project }),
-                s.compose_project && !s.operate_only && /* @__PURE__ */ jsx18(
+                s.is_self && /* @__PURE__ */ jsx21("span", { className: "ml-1.5 rounded bg-white/10 px-1 text-[10px] opacity-70", children: productText("Nodvard Deck") }),
+                s.compose_project && s.operate_only && /* @__PURE__ */ jsx21("span", { className: "ml-1.5 rounded bg-sky-500/15 px-1 text-[10px] text-sky-300", title: "Docker-Compose-Projekt", children: s.compose_project }),
+                s.compose_project && !s.operate_only && /* @__PURE__ */ jsx21(
                   "button",
                   {
                     type: "button",
@@ -11008,12 +11705,12 @@ function ContainerList({ tabs }) {
                     children: s.compose_project
                   }
                 ),
-                s.image && /* @__PURE__ */ jsx18("span", { className: "block text-xs opacity-50", children: s.image })
+                s.image && /* @__PURE__ */ jsx21("span", { className: "block text-xs opacity-50", children: s.image })
               ] }),
-              /* @__PURE__ */ jsx18("td", { role: "cell", className: "py-1.5 max-md:py-0", children: /* @__PURE__ */ jsx18("span", { className: `rounded border px-1.5 py-0.5 text-xs ${TONE_CLASS[s.tone] ?? TONE_CLASS.neutral}`, children: STATE_LABEL[s.state] ?? s.state }) }),
-              /* @__PURE__ */ jsxs17("td", { role: "cell", className: "py-1.5 break-words opacity-70 max-md:min-w-0 max-md:flex-1 max-md:py-0 max-md:text-xs", title: s.status !== statusText(s.status) ? s.status : void 0, children: [
+              /* @__PURE__ */ jsx21("td", { role: "cell", className: "py-1.5 max-md:py-0", children: /* @__PURE__ */ jsx21("span", { className: `rounded border px-1.5 py-0.5 text-xs ${TONE_CLASS[s.tone] ?? TONE_CLASS.neutral}`, children: STATE_LABEL[s.state] ?? s.state }) }),
+              /* @__PURE__ */ jsxs20("td", { role: "cell", className: "py-1.5 break-words opacity-70 max-md:min-w-0 max-md:flex-1 max-md:py-0 max-md:text-xs", title: s.status !== statusText(s.status) ? s.status : void 0, children: [
                 statusText(s.status),
-                restarts[s.id] > 0 && /* @__PURE__ */ jsxs17(
+                restarts[s.id] > 0 && /* @__PURE__ */ jsxs20(
                   "span",
                   {
                     className: `ml-1 whitespace-nowrap ${restartsAreAProblem(restarts[s.id], s.status) ? "text-amber-300" : ""}`,
@@ -11027,8 +11724,8 @@ function ContainerList({ tabs }) {
                   }
                 )
               ] }),
-              /* @__PURE__ */ jsxs17("td", { role: "cell", className: `py-1.5 text-xs max-md:w-full max-md:py-0 ${imageShown ? "" : "max-md:hidden"}`, children: [
-                /* @__PURE__ */ jsx18("div", { "data-testid": `image-${s.id}`, children: manageable && /* @__PURE__ */ jsx18(
+              /* @__PURE__ */ jsxs20("td", { role: "cell", className: `py-1.5 text-xs max-md:w-full max-md:py-0 ${imageShown ? "" : "max-md:hidden"}`, children: [
+                /* @__PURE__ */ jsx21("div", { "data-testid": `image-${s.id}`, children: manageable && /* @__PURE__ */ jsx21(
                   ImageUpdateBadge,
                   {
                     result: images?.data[s.id],
@@ -11037,7 +11734,7 @@ function ContainerList({ tabs }) {
                     operateOnly: s.operate_only
                   }
                 ) }),
-                manageable && /* @__PURE__ */ jsx18(
+                manageable && /* @__PURE__ */ jsx21(
                   ImageUpdateAction,
                   {
                     entryId: s.id,
@@ -11050,10 +11747,10 @@ function ContainerList({ tabs }) {
                   }
                 )
               ] }),
-              /* @__PURE__ */ jsx18("td", { role: "cell", "data-label": "CPU", className: `py-1.5 whitespace-nowrap text-xs opacity-80 max-md:py-0 ${CARD_LABEL}`, "data-testid": `cpu-${s.id}`, children: !statsLoaded ? /* @__PURE__ */ jsx18("span", { title: MEASURING_HINT, children: "\u2026" }) : stats[s.id]?.cpu_percent != null ? `${stats[s.id].cpu_percent.toFixed(1)} %` : "\u2013" }),
-              /* @__PURE__ */ jsx18("td", { role: "cell", "data-label": "RAM", className: `py-1.5 whitespace-nowrap text-xs opacity-80 max-md:py-0 ${CARD_LABEL}`, "data-testid": `mem-${s.id}`, children: !statsLoaded ? /* @__PURE__ */ jsx18("span", { title: MEASURING_HINT, children: "\u2026" }) : stats[s.id] ? stats[s.id].mem_used != null ? formatBytes(stats[s.id].mem_used) : /* @__PURE__ */ jsx18("span", { title: MEM_UNKNOWN_HINT, children: "n. v." }) : "\u2013" }),
-              /* @__PURE__ */ jsx18("td", { role: "cell", className: "py-1.5 max-md:w-full max-md:py-0", children: /* @__PURE__ */ jsxs17("div", { className: "flex flex-wrap gap-1.5", children: [
-                manageable && !isRunning && /* @__PURE__ */ jsx18(
+              /* @__PURE__ */ jsx21("td", { role: "cell", "data-label": "CPU", className: `py-1.5 whitespace-nowrap text-xs opacity-80 max-md:py-0 ${CARD_LABEL}`, "data-testid": `cpu-${s.id}`, children: !statsLoaded ? /* @__PURE__ */ jsx21("span", { title: MEASURING_HINT, children: "\u2026" }) : stats[s.id]?.cpu_percent != null ? `${stats[s.id].cpu_percent.toFixed(1)} %` : "\u2013" }),
+              /* @__PURE__ */ jsx21("td", { role: "cell", "data-label": "RAM", className: `py-1.5 whitespace-nowrap text-xs opacity-80 max-md:py-0 ${CARD_LABEL}`, "data-testid": `mem-${s.id}`, children: !statsLoaded ? /* @__PURE__ */ jsx21("span", { title: MEASURING_HINT, children: "\u2026" }) : stats[s.id] ? stats[s.id].mem_used != null ? formatBytes(stats[s.id].mem_used) : /* @__PURE__ */ jsx21("span", { title: MEM_UNKNOWN_HINT, children: "n. v." }) : "\u2013" }),
+              /* @__PURE__ */ jsx21("td", { role: "cell", className: "py-1.5 max-md:w-full max-md:py-0", children: /* @__PURE__ */ jsxs20("div", { className: "flex flex-wrap gap-1.5", children: [
+                manageable && !isRunning && /* @__PURE__ */ jsx21(
                   "button",
                   {
                     type: "button",
@@ -11063,7 +11760,7 @@ function ContainerList({ tabs }) {
                     children: busy("start") ? "\u2026" : "Starten"
                   }
                 ),
-                manageable && REMOVABLE_STATES.has(s.state) && !s.is_self && !s.operate_only && /* @__PURE__ */ jsx18(
+                manageable && REMOVABLE_STATES.has(s.state) && !s.is_self && !s.operate_only && /* @__PURE__ */ jsx21(
                   "button",
                   {
                     type: "button",
@@ -11073,7 +11770,7 @@ function ContainerList({ tabs }) {
                     children: busy("remove") ? "\u2026" : "L\xF6schen"
                   }
                 ),
-                manageable && isRunning && /* @__PURE__ */ jsx18(
+                manageable && isRunning && /* @__PURE__ */ jsx21(
                   "button",
                   {
                     type: "button",
@@ -11083,18 +11780,18 @@ function ContainerList({ tabs }) {
                     children: busy("restart") ? "\u2026" : "Neustart"
                   }
                 ),
-                manageable && isRunning && /* @__PURE__ */ jsx18(
+                manageable && isRunning && /* @__PURE__ */ jsx21(
                   "button",
                   {
                     type: "button",
                     disabled: busy("stop") || s.is_self,
                     onClick: () => void trigger(s, "stop"),
-                    title: s.is_self ? "Das ist Nodvard Deck selbst \u2013 Stoppen nur direkt auf dem Server." : void 0,
+                    title: s.is_self ? productText("Das ist Nodvard Deck selbst \u2013 Stoppen nur direkt auf dem Server.") : void 0,
                     className: `rounded bg-red-500/20 px-2 py-1 text-xs text-red-300 hover:bg-red-500/30 disabled:opacity-40 ${TOUCH}`,
                     children: busy("stop") ? "\u2026" : "Stoppen"
                   }
                 ),
-                manageable && /* @__PURE__ */ jsx18(
+                manageable && /* @__PURE__ */ jsx21(
                   "button",
                   {
                     type: "button",
@@ -11105,7 +11802,7 @@ function ContainerList({ tabs }) {
                   }
                 ),
                 manageable && isRunning && !s.is_self && !s.operate_only && s.host_id && s.container && deck().hasPermission("hosts.execute") && // Shell im Container über das Terminal des Kerns (scope/ref, siehe shell.py).
-                /* @__PURE__ */ jsx18(
+                /* @__PURE__ */ jsx21(
                   "a",
                   {
                     href: consoleHref(s.host_id, s.container),
@@ -11113,7 +11810,7 @@ function ContainerList({ tabs }) {
                     children: "Konsole"
                   }
                 ),
-                manageable && /* @__PURE__ */ jsx18(
+                manageable && /* @__PURE__ */ jsx21(
                   "button",
                   {
                     type: "button",
@@ -11123,8 +11820,8 @@ function ContainerList({ tabs }) {
                     children: "Logs"
                   }
                 ),
-                /* @__PURE__ */ jsx18(OpenLink, { url: s.url }),
-                manageable && s.host_id && s.container && deck().hasPermission("apps.write") && /* @__PURE__ */ jsx18(
+                /* @__PURE__ */ jsx21(OpenLink, { url: s.url }),
+                manageable && s.host_id && s.container && deck().hasPermission("apps.write") && /* @__PURE__ */ jsx21(
                   "button",
                   {
                     type: "button",
@@ -11137,13 +11834,13 @@ function ContainerList({ tabs }) {
                 )
               ] }) })
             ] }),
-            urlFor === s.id && s.host_id && s.container && /* @__PURE__ */ jsx18("tr", { role: "row", className: "max-md:block", children: /* @__PURE__ */ jsx18("td", { role: "cell", colSpan: 7, className: "bg-black/20 p-2 max-md:block", children: /* @__PURE__ */ jsx18(UrlPanel, { entry: s, onSaved: load, onClose: () => setUrlFor(null) }) }) }),
-            detailsFor === s.id && /* @__PURE__ */ jsx18("tr", { role: "row", className: "max-md:block", children: /* @__PURE__ */ jsx18("td", { role: "cell", colSpan: 7, className: "bg-black/20 p-2 max-md:block", children: /* @__PURE__ */ jsx18(DetailsPanel, { entry: s, onChanged: (text) => {
+            urlFor === s.id && s.host_id && s.container && /* @__PURE__ */ jsx21("tr", { role: "row", className: "max-md:block", children: /* @__PURE__ */ jsx21("td", { role: "cell", colSpan: 7, className: "bg-black/20 p-2 max-md:block", children: /* @__PURE__ */ jsx21(UrlPanel, { entry: s, onSaved: load, onClose: () => setUrlFor(null) }) }) }),
+            detailsFor === s.id && /* @__PURE__ */ jsx21("tr", { role: "row", className: "max-md:block", children: /* @__PURE__ */ jsx21("td", { role: "cell", colSpan: 7, className: "bg-black/20 p-2 max-md:block", children: /* @__PURE__ */ jsx21(DetailsPanel, { entry: s, onChanged: (text) => {
               setDetailsFor(null);
               setMessage(text);
               load();
             } }) }) }),
-            updateFor === s.id && s.host_id && s.container && /* @__PURE__ */ jsx18("tr", { role: "row", className: "max-md:block", children: /* @__PURE__ */ jsx18("td", { role: "cell", colSpan: 7, className: "bg-black/20 p-2 max-md:block", children: /* @__PURE__ */ jsx18(
+            updateFor === s.id && s.host_id && s.container && /* @__PURE__ */ jsx21("tr", { role: "row", className: "max-md:block", children: /* @__PURE__ */ jsx21("td", { role: "cell", colSpan: 7, className: "bg-black/20 p-2 max-md:block", children: /* @__PURE__ */ jsx21(
               UpdatePanel,
               {
                 hostId: s.host_id,
@@ -11154,7 +11851,7 @@ function ContainerList({ tabs }) {
                 onClose: () => setUpdateFor(null)
               }
             ) }) }),
-            logsOpen && /* @__PURE__ */ jsx18("tr", { role: "row", className: "max-md:block", children: /* @__PURE__ */ jsx18("td", { role: "cell", colSpan: 7, className: "bg-black/20 p-2 max-md:block", children: /* @__PURE__ */ jsx18(LogPanel, { entry: s, onClose: () => setLogsFor(null) }) }) })
+            logsOpen && /* @__PURE__ */ jsx21("tr", { role: "row", className: "max-md:block", children: /* @__PURE__ */ jsx21("td", { role: "cell", colSpan: 7, className: "bg-black/20 p-2 max-md:block", children: /* @__PURE__ */ jsx21(LogPanel, { entry: s, onClose: () => setLogsFor(null) }) }) })
           ] }, s.id);
         }) })
       ] })

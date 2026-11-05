@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""CI-Waechter: der Kern kennt keine Extension.
+"""CI-Wächter: der Kern kennt keine Extension.
 
 Docs: docs/01-ARCHITECTURE.md §1.
 
-Durchsucht `backend/src/nodvard_deck/**/*.py` nach Woertern, die auf eine konkrete
+Durchsucht `backend/src/nodvard_deck/**/*.py` nach Wörtern, die auf eine konkrete
 Extension/Fremdsoftware hindeuten (Proxmox, Shield, Ollama, ntfy, Nextcloud, TrueNAS,
 Syncthing, Teleport, Docker als Produktbegriff, dazu der alte Produktname in der
-Schreibweise "nexus") und nach dem Praefix `nodvard_deck_ext_` der Extension-Pakete:
+Schreibweise "nexus") und nach dem Präfix `nodvard_deck_ext_` der Extension-Pakete:
 der Kern importiert keine Extension. "Shield" gilt nur als eigenes Wort ohne `-` oder
 `(` dahinter: `asyncio.shield(...)` und Symbolnamen wie "shield-check" (Icon-Auswahl)
-sind keine Abhaengigkeit von Nodvard Shield. Kommentare und
+sind keine Abhängigkeit von Nodvard Shield. Kommentare und
 String-Literal-Anweisungen (Modul-/Klassen-/Funktions-Docstrings UND die in diesem
-Codebase durchgaengig genutzten "Attribut-Docstrings" -- ein freistehender
+Codebase durchgängig genutzten "Attribut-Docstrings" -- ein freistehender
 Dreifach-String direkt nach einer Feldzuweisung) sind ausgenommen: verboten ist die
-*Abhaengigkeit* (ein Import, ein API-Aufruf, ein hartcodierter Connector), nicht die
-*Erwaehnung* in Prosa, die zum Erklaeren des generischen Mechanismus oft noetig ist.
+*Abhängigkeit* (ein Import, ein API-Aufruf, ein hartcodierter Connector), nicht die
+*Erwähnung* in Prosa, die zum Erklären des generischen Mechanismus oft nötig ist.
 
 Der Standard-Produktname in `branding.py` ("Nodvard Deck") steht nicht auf der Sperrliste.
 
@@ -49,11 +49,11 @@ FORBIDDEN_PATTERNS: dict[str, str] = {
     # mit Bindestrich wie "shield-check" (Icons in services/custom_apps.py und core/demo_seed.py). Jede dieser Ausnahmen ist
     # in backend/tests/test_core_purity.py an der echten Fundstelle belegt.
     "shield": r"\bshield\b(?![-(])",
-    # Python-Pakete der Extensions heissen `nodvard_deck_ext_<id>`: der Kern importiert und nennt keine.
+    # Python-Pakete der Extensions heißen `nodvard_deck_ext_<id>`: der Kern importiert und nennt keine.
     "nodvard_deck_ext_": r"\bnodvard_deck_ext_",
 }
 
-# Datei -> Woerter, die dort ausdruecklich erlaubt sind (mit Begruendung im Docstring
+# Datei -> Wörter, die dort ausdrücklich erlaubt sind (mit Begründung im Docstring
 # der jeweiligen Datei).
 ALLOWLIST: dict[str, set[str]] = {}
 
@@ -64,12 +64,12 @@ RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
 
 
 def _code_only(source: str) -> str:
-    """Neutralisiert jede bare String-Literal-Anweisung, damit sie nicht mitgeprueft
+    """Neutralisiert jede bare String-Literal-Anweisung, damit sie nicht mitgeprüft
     wird -- nicht nur klassische Modul-/Klassen-/Funktions-Docstrings, sondern auch die
-    in diesem Codebase durchgaengig genutzten Attribut-Docstrings (`feld: Mapped[...] =
+    in diesem Codebase durchgängig genutzten Attribut-Docstrings (`feld: Mapped[...] =
     ...` gefolgt von einem freistehenden Dreifach-String, wie Sphinx/griffe sie
     interpretieren). Eine freistehende String-Anweisung hat nie eine Laufzeitwirkung --
-    sie ist per Definition Dokumentation, niemals eine echte Abhaengigkeit.
+    sie ist per Definition Dokumentation, niemals eine echte Abhängigkeit.
     """
     try:
         tree = ast.parse(source)
@@ -97,13 +97,13 @@ def _code_only(source: str) -> str:
 
 
 def _strip_comments(line: str) -> str:
-    """Grobe Heuristik: alles ab einem `#` ignorieren. Reicht fuer diesen Codebase-Stil
-    (kein `#` in String-Literalen, die relevante Woerter enthalten koennten)."""
+    """Grobe Heuristik: alles ab einem `#` ignorieren. Reicht für diesen Codebase-Stil
+    (kein `#` in String-Literalen, die relevante Wörter enthalten könnten)."""
     return line.split("#", 1)[0]
 
 
 def check_file(path: Path) -> list[tuple[int, str, str]]:
-    """Gibt Liste von (Zeilennummer, Zeile, gefundenes Wort) zurueck."""
+    """Gibt Liste von (Zeilennummer, Zeile, gefundenes Wort) zurück."""
     source = path.read_text(encoding="utf-8")
     allowed = ALLOWLIST.get(path.name, set())
     code = _code_only(source)

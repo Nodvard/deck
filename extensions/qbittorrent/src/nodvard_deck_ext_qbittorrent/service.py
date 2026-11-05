@@ -144,14 +144,16 @@ class QbittorrentService:
     ) -> tuple[QbittorrentClient, str]:
         """Der Client samt Passwort (leer, wenn es keines gibt); wirft `QbtError`, wenn die Zugangsdaten nicht reichen."""
         assert cfg.base_url is not None
+        if has_password and not cfg.username:
+            raise LoginRequired(f"Für {cfg.name} fehlt der Benutzername. {SETTINGS_HINT}")
+        # Ein Passwortwechsel während des Lesens muss auch diese Sitzung verwerfen können.
+        box = self._session_box(cfg, has_password)
         password = ""
         if has_password:
-            if not cfg.username:
-                raise LoginRequired(f"Für {cfg.name} fehlt der Benutzername. {SETTINGS_HINT}")
             password = await self.read_password(cfg.name)
         client = QbittorrentClient(
             self._ctx.http, name=cfg.name, base_url=cfg.base_url, username=cfg.username, password=password or None,
-            box=self._session_box(cfg, has_password), insecure_tls=cfg.insecure_tls, pin=cfg.pin, total_timeout_s=total_timeout_s,
+            box=box, insecure_tls=cfg.insecure_tls, pin=cfg.pin, total_timeout_s=total_timeout_s,
         )
         return client, password
 
@@ -245,7 +247,8 @@ class QbittorrentService:
             return self._failed(cfg, "error", f"Bei der Abfrage von {cfg.name} ist ein unerwarteter Fehler aufgetreten.")
 
     async def _test_one(self, cfg: ConnectionConfig) -> dict[str, Any]:
-        """Prüft eine Verbindung mit Anmeldung und `GET /api/v2/app/version`; das Ergebnis ist ein Eintrag für `HealthReport.details`."""
+        """Prüft eine Verbindung mit Anmeldung und `GET /api/v2/app/version`; das Ergebnis ist ein Eintrag für
+        `HealthReport.details`."""
         def bad(text: str) -> dict[str, Any]:
             # `verbatim`: der Kern übersetzt den Satz nicht.
             return {"healthy": False, "error": text, "verbatim": True}
@@ -259,7 +262,7 @@ class QbittorrentService:
             await client.version()
         except QbtError as exc:
             return bad(_clean(exc, password))
-        except Exception:  # "Verbindung testen" darf nie als 500 enden
+        except Exception:  # „Verbindung testen“ darf nie als 500 enden
             logger.exception("qBittorrent %s: unerwarteter Fehler beim Testen", cfg.name)
             return bad(f"Beim Testen von {cfg.name} ist ein unerwarteter Fehler aufgetreten.")
         return {"healthy": True}

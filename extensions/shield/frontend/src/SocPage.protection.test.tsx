@@ -97,6 +97,22 @@ describe("Nodvard Shield: Signaturen und Härtung", () => {
     await waitFor(() => expect(calls.some((c) => c.endsWith("/actions/a1/approve"))).toBe(true));
   });
 
+  it("am Handy: Server als Karten mit Beschriftungen", async () => {
+    stubFetch([]);
+    render(<SocPage />);
+    const row = await screen.findByTestId("host-h-pi");
+    expect(row).toHaveClass("flex-col", "sm:table-row");
+    const labels = within(row).getAllByRole("cell").map((c) => c.getAttribute("data-label"));
+    expect(labels).toEqual([null, "Virenschutz", "Letzter Scan", "Härtung", null]);
+    expect(within(row).getByRole("button", { name: "Audit" })).toBeInTheDocument();
+  });
+
+  it("am Handy: Hinweistext mit Grundbreite, damit der Knopf darunter rutscht", async () => {
+    stubFetch([]);
+    render(<SocPage />);
+    expect(await screen.findByTestId("attention-text-signatures-h-pi")).toHaveClass("flex-[1_1_14rem]");
+  });
+
   it("nennt beim Schutzwert, was ihn senkt (Updates, Fail2ban, SSH …), und ohne Gründe keine Liste", async () => {
     const reasons = ["Sicherheitsupdates offen auf 1 von 3 Servern (−5)", "Fail2ban fehlt oder läuft nicht auf 2 von 3 Servern (−7)"];
     stubFetch([], { ...OVERVIEW, summary: { ...OVERVIEW.summary, score_reasons: reasons } });

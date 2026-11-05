@@ -215,10 +215,6 @@ def test_a_new_file_with_an_old_import_is_a_finding(tmp_path):
         # Umgebungsvariablen (Rueckfall)
         'LEGACY_ENV_PREFIX = "LATTICE_"',
         "export LATTICE_DNS_1=1.1.1.1",
-        # Cookie (Rueckfall neben `nodvard_deck_refresh`)
-        'LEGACY_COOKIE_NAME = "lattice_refresh"',
-        'COOKIE_NAMES = ("nodvard_deck_refresh", "lattice_refresh")',
-        'client.cookies.set("lattice_refresh", value)',
         # Namen auf fremden Rechnern und im Container
         "RUN groupadd --gid 1000 lattice && useradd --uid 1000 --gid lattice lattice",
         "chown -R lattice:lattice /app",
@@ -249,6 +245,8 @@ def test_names_that_stay_are_allowed(line):
         "from_lattice_to_nodvard = 1",
         'token = request.cookies.get("lattice_session")',
         "docker run lattice/extra:1",
+        'LEGACY_COOKIE_NAME = "lattice_refresh"',
+        'client.cookies.set("lattice_refresh", value)',
         "const shell = window.__lattice;",
         'window.dispatchEvent(new Event("lattice:navigate"))',
         'window.dispatchEvent(new Event("lattice:timezone"))',

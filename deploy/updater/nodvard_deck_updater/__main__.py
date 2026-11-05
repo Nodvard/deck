@@ -78,10 +78,10 @@ POLL_INTERVAL_S = 5.0
 HEARTBEAT_INTERVAL_S = 30.0
 PREFLIGHT_INTERVAL_S = 300.0
 PREFLIGHT_RETRY_S = 30.0
-"""Solange die Vorpruefung nicht bereit ist (z. B. das Dashboard startet gerade), oefter nachsehen."""
+"""Solange die Vorprüfung nicht bereit ist (z. B. das Dashboard startet gerade), öfter nachsehen."""
 RETRY_SETUP_S = 30.0
 SLOT_RETRY_S = 30.0
-"""Scheitert das Aufraeumen eines abgelaufenen Slots an der Engine, so lange bis zum naechsten Versuch."""
+"""Scheitert das Aufräumen eines abgelaufenen Slots an der Engine, so lange bis zum nächsten Versuch."""
 LOGGED_IDS_MAX = 1024
 
 _UNSAFE_REASONS = frozenset({policy.CHANNEL_UNSAFE, policy.STATE_UNSAFE, policy.UNSAFE_TARGET})

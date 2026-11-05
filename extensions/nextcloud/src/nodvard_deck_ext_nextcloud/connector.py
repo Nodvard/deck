@@ -1,23 +1,6 @@
-"""Duenner WebDAV-Client gegen die Nextcloud-API (docs/02-EXTENSION-API.md
-Paragraph 4/7 -- Dateimanager-Quellen), analog zu `nodvard_deck_ext_proxmox.connector`:
-nutzt ausschliesslich `ctx.http` (nie einen eigenen `httpx`-Client), damit die
-`net.outbound`-Pruefung greift.
-
-WebDAV-Pfad-Konvention: `{base_url}/remote.php/dav/files/{username}/{pfad}`
-(Nextclouds eigene, nicht generisches WebDAV). Authentifizierung ueber HTTP Basic
-mit Benutzername + App-Passwort (kein OAuth in dieser Runde -- ein App-Passwort ist
-in Nextcloud selbst erzeugbar, jederzeit widerrufbar, ohne das Hauptpasswort im
-Vault zu halten).
-
-Streaming ueber `ctx.http.stream()` (WP-11-Ergaenzung in `ext/context.py` -- fehlte
-bis dahin komplett, siehe dortiger Docstring) fuer Downloads; Uploads streamen ueber
-`ctx.http.request(..., content=<async iterator>)`, das httpx nativ unterstuetzt.
-
-**`tls_insecure_skip_verify` (Nachtrag, live gegen das echte cloud.home.example
-gefunden):** dasselbe Problem wie bei proxmox/backups (WP-8) -- `cloud.home.example`
-sitzt hinter einem selbstsignierten/lokalen Zertifikat (Nginx Proxy Manager),
-`ctx.http`s Standard-Client verifiziert TLS strikt und lehnt das ab. Identischer
-Opt-in ueber `net.outbound.insecure_tls` wie bei `ProxmoxConnector`."""
+"""WebDAV-Client für Nextcloud (`{base_url}/remote.php/dav/files/{username}/…`, HTTP Basic mit App-Passwort), nur
+über `ctx.http`, damit die `net.outbound`-Prüfung greift. Selbstsignierte Zertifikate nur mit
+`net.outbound.insecure_tls`."""
 
 from __future__ import annotations
 
@@ -46,9 +29,9 @@ class WebDavError(Exception):
 
 
 def redirect_text(status_code: int | None = None) -> str:
-    """Der Satz fuer jede Weiterleitung. Der `Location`-Header kommt vom fremden Server und steht
-    darum nirgends im Text, auch nicht als Adressvorschlag: ein Angreifer koennte sich sonst eine
-    Adresse aussuchen, die die Person dann in die Einstellungen uebernimmt."""
+    """Der Satz für jede Weiterleitung. Der `Location`-Header kommt vom fremden Server und steht
+    darum nirgends im Text, auch nicht als Adressvorschlag: ein Angreifer könnte sich sonst eine
+    Adresse aussuchen, die die Person dann in die Einstellungen übernimmt."""
     code = f" (HTTP {status_code})" if status_code else ""
     return (
         f"Nextcloud leitet auf eine andere Adresse um{code}. "
@@ -60,7 +43,7 @@ def redirect_text(status_code: int | None = None) -> str:
 
 def _url_is_valid(url: str) -> bool:
     try:
-        _ = httpx.URL(url).host  # `.host` entschluesselt Punycode und scheitert an einem kaputten Namen
+        _ = httpx.URL(url).host  # `.host` entschlüsselt Punycode und scheitert an einem kaputten Namen
     except (httpx.InvalidURL, ValueError):
         return False
     return True
@@ -74,7 +57,7 @@ _REDIRECT_STEPS = frozenset(
 
 def _came_from_redirect(exc: BaseException) -> bool:
     """Ob `exc` beim Zusammenbauen einer Weiterleitung entstand (erkannt an der Stelle im Traceback,
-    ersatzweise am Wort "location" im Text). Waehlt nur zwischen festen Saetzen."""
+    ersatzweise am Wort "location" im Text). Wählt nur zwischen festen Sätzen."""
     tb = exc.__traceback__
     while tb is not None:
         if tb.tb_frame.f_code.co_name in _REDIRECT_STEPS:
@@ -85,19 +68,16 @@ def _came_from_redirect(exc: BaseException) -> bool:
 
 def _quotes_the_answer(exc: BaseException) -> bool:
     """Ob der Text von `exc` die fremde Antwort (oder den eigenen Header samt Wert) zitieren kann. Solche
-    Ausnahmen haengen nie als Ursache an einer Meldung: wer die Ursachenkette abschreibt, truege ihren Text
+    Ausnahmen hängen nie als Ursache an einer Meldung: wer die Ursachenkette abschreibt, trüge ihren Text
     sonst weiter."""
     return isinstance(exc, (httpx.ProtocolError, httpx.InvalidURL, ValueError))
 
 
 def _transport_problem(method: str, path: str, url: str, exc: BaseException) -> str:
-    """Satz zu einem Fehler beim Senden oder Empfangen. httpx baut eine Weiterleitung auch dann, wenn es
-    ihr nicht folgt, und scheitert an einem kaputten `Location`-Header mit `InvalidURL` (keine
-    `HTTPError`), mit einem Punycode-Fehler (`ValueError`) oder, schon beim Lesen der Kopfzeilen, mit
-    einem `ProtocolError`. Deren Text zitiert die fremde Antwort (bzw. den eigenen Header samt Wert) und
-    kommt darum nie in den Satz."""
+    """Satz zu einem Fehler beim Senden oder Empfangen. Bei `InvalidURL`, `ValueError` und `ProtocolError` steht der
+    Text der Ausnahme nie darin, er zitiert bei einer kaputten Weiterleitung die fremde Antwort."""
     if isinstance(exc, (httpx.TimeoutException, TimeoutError)):
-        # httpx-Zeitueberschreitungen haben keinen Text: ohne diesen Zweig stuende nur "PROPFIND / -> ".
+        # httpx-Zeitüberschreitungen haben keinen Text: ohne diesen Zweig stünde nur "PROPFIND / -> ".
         return "Nextcloud antwortet nicht (Zeitüberschreitung)."
     if isinstance(exc, httpx.ProtocolError):
         if _came_from_redirect(exc):
@@ -118,10 +98,8 @@ def _transport_problem(method: str, path: str, url: str, exc: BaseException) -> 
 
 
 def _status_problem(method: str, path: str, status_code: int) -> str | None:
-    """`None` bei 2xx. Eine 3xx-Antwort ist nie ein Erfolg (PUT, MKCOL, MOVE und DELETE wuerden sonst als
-    erledigt gelten, obwohl nichts passiert ist), und sie nennt nie ihr Ziel. Feste Saetze ohne den
-    Antworttext: der kommt vom Server, und ein Satz wie "Neue Adresse: ... bitte eintragen" darin stuende
-    sonst unveraendert im Dateimanager."""
+    """`None` bei 2xx, sonst ein fester Satz, nie der Antworttext: Der kommt vom Server und stünde sonst unverändert
+    im Dateimanager. Auch 3xx gilt nie als Erfolg, sonst sähen PUT, MKCOL, MOVE und DELETE erledigt aus."""
     if 200 <= status_code < 300:
         return None
     if 300 <= status_code < 400:
@@ -151,24 +129,21 @@ def _status_problem(method: str, path: str, status_code: int) -> str | None:
 
 
 class InvalidPathError(WebDavError, FileNotFoundError):
-    """Der Pfad wuerde den eigenen Dateibereich verlassen (`..`, Backslash, NUL,
+    """Der Pfad würde den eigenen Dateibereich verlassen (`..`, Backslash, NUL,
     kodierte Trenner). Es geht keine Anfrage raus. Als `FileNotFoundError` wird das im
     Dateimanager der Kern zu einer 404-Antwort."""
 
 
 def _clean_segments(path: str) -> list[str]:
-    """Zerlegt einen logischen Pfad in seine Teile und lehnt alles ab, womit sich ein
-    Pfad aus dem Dateibereich des Benutzers herausschieben liesse: ein `.`- oder
-    `..`-Teil (auch kodiert, z. B. `%2e%2e`), Backslash, NUL und kodierte
-    Schraegstriche. Leere Teile (`a//b`, fuehrender/abschliessender Schraegstrich)
-    fallen weg."""
+    """Teile eines logischen Pfads; lehnt `.`/`..` (auch kodiert), Backslash, NUL und kodierte Schrägstriche ab,
+    damit kein Pfad aus dem Dateibereich des Benutzers führt. Leere Teile fallen weg."""
     if "\x00" in path or "\\" in path:
         raise InvalidPathError("Ungültiger Pfad.")
     segments: list[str] = []
     for segment in path.split("/"):
         if not segment:
             continue
-        # Auch mehrfach kodierte Formen pruefen (%2e%2e, %252e%252e, %2F, %5C ...).
+        # Auch mehrfach kodierte Formen prüfen (%2e%2e, %252e%252e, %2F, %5C ...).
         decoded = segment
         for _ in range(5):
             if decoded in (".", "..") or any(c in decoded for c in ("/", "\\", "\x00")):
@@ -194,22 +169,10 @@ class WebDavEntry:
 
 
 def _parse_propfind(body: bytes, *, skip_href: str | None, strip_prefix: str) -> list[WebDavEntry]:
-    """`skip_href`, falls gesetzt, wird uebersprungen -- PROPFIND mit `Depth: 1`
-    liefert IMMER zuerst einen Eintrag fuer die angefragte Ressource SELBST, bevor
-    die Kind-Eintraege folgen (WebDAV-Standardverhalten, kein Nextcloud-Sonderfall).
-    Bei `Depth: 0` gibt es dagegen NUR den Eintrag der Ressource selbst -- den soll
-    `stat_one()` gerade NICHT ueberspringen, deshalb `skip_href=None` dort.
-
-    **Live gefunden (WP-11-Boot-Test im echten Browser):** `entry.path` enthielt
-    bisher den ROHEN `href` aus der XML-Antwort, also inklusive des WebDAV-Praefixes
-    `/remote.php/dav/files/<username>` -- ein Klick auf einen Ordner im Explorer
-    schickte diesen (falschen, doppelt-praefigierten) Pfad an `list_dir()` zurueck,
-    `_dav_url()` haengte den Praefix ein ZWEITES Mal an, und die Anfrage ging gegen
-    einen nicht existierenden, doppelt verschachtelten Pfad (404). `strip_prefix`
-    macht `entry.path` zum LOGISCHEN, wurzel-relativen Pfad, den auch `stat()`/
-    `list_dir()`/`open_read()` etc. selbst entgegennehmen -- rundtrip-faehig."""
+    """Einträge einer PROPFIND-Antwort; `skip_href` lässt die angefragte Ressource weg (bei `Depth: 1` steht sie
+    zuerst), `strip_prefix` macht aus dem `href` den wurzel-relativen Pfad, den `list_dir()` und `stat()` annehmen."""
     # defusedxml: Die Antwort kommt vom Server aus den Einstellungen, dem vertrauen wir nicht blind. Eine WebDAV-Antwort
-    # hat nie eine DTD oder Entitaeten; so etwas (XXE, Entity-Bombe) lehnt der Parser ab, statt es aufzuloesen.
+    # hat nie eine DTD oder Entitäten; so etwas (XXE, Entity-Bombe) lehnt der Parser ab, statt es aufzulösen.
     root = SafeET.fromstring(body, forbid_dtd=True)
     entries: list[WebDavEntry] = []
     for response in root.findall(f"{_DAV}response"):
@@ -217,9 +180,8 @@ def _parse_propfind(body: bytes, *, skip_href: str | None, strip_prefix: str) ->
         if href_el is None or href_el.text is None:
             continue
         href = href_el.text.rstrip("/")
-        # Der href kommt URL-kodiert (Leerzeichen -> %20, Umlaute -> %C3%A4), skip_href
-        # ist unkodiert -- nur fuer den Vergleich dekodieren, sonst erscheint ein Ordner
-        # wie "My scripts (Homelab)" in sich selbst.
+        # Der href kommt URL-kodiert (Leerzeichen als %20, Umlaute als %C3%A4), skip_href unkodiert: Nur für den
+        # Vergleich dekodieren, sonst erscheint ein Ordner wie "My scripts (Homelab)" in sich selbst.
         if skip_href is not None and _unquote_path_segment(href) == skip_href.rstrip("/"):
             continue
 
@@ -264,10 +226,8 @@ def _unquote_path_segment(value: str) -> str:
 
 
 class Download:
-    """Die geoeffnete Datei aus `NextcloudConnector.open_read()`. `aiter_bytes()` uebersetzt Fehler beim
-    Lesen (Verbindung weg, kaputter Koerper) in `WebDavError`. Das geschieht hier und nicht im
-    Context-Manager: dort liefe die Ausnahme durch `__aexit__`, und die neue Meldung truege die alte (samt
-    Teilen der fremden Antwort im Text) als `__context__` mit."""
+    """Geöffnete Datei aus `open_read()`; `aiter_bytes()` übersetzt Lesefehler hier in `WebDavError` und nicht im
+    Context-Manager, sonst hinge die alte Ausnahme samt fremdem Antworttext als `__context__` an der neuen."""
 
     def __init__(self, response: Any, path: str, url: str) -> None:
         self._response = response
@@ -318,7 +278,7 @@ class NextcloudConnector:
         user_part = f"{self._base_url}/remote.php/dav/files/{quote(self._username, safe='')}/"
         url = f"{user_part}{encoded}"
         # Zweite Absicherung: die fertige Adresse muss im Dateibereich des Benutzers
-        # bleiben, so wie der Server sie sieht (einmal dekodiert, `.`/`..` aufgeloest).
+        # bleiben, so wie der Server sie sieht (einmal dekodiert, `.`/`..` aufgelöst).
         expected = posixpath.normpath(unquote(urlsplit(user_part).path))
         parts = urlsplit(url)
         resolved = posixpath.normpath(unquote(parts.path))
@@ -327,13 +287,12 @@ class NextcloudConnector:
         return url
 
     def _dav_prefix(self) -> str:
-        """Der WebDAV-Praefix vor jedem LOGISCHEN Pfad -- gebraucht, um ihn aus einem
-        `href` wieder herauszurechnen (siehe `_parse_propfind()`s Docstring)."""
+        """WebDAV-Präfix vor jedem logischen Pfad; `_parse_propfind()` rechnet ihn aus dem `href` wieder heraus."""
         return f"/remote.php/dav/files/{self._username}"
 
     def _dav_href_path(self, path: str) -> str:
-        """Der `href`, den Nextcloud in PROPFIND-Antworten fuer `path` zurueckgibt --
-        gebraucht, um den Selbst-Eintrag beim Parsen zu erkennen und zu ueberspringen."""
+        """Der `href`, den Nextcloud für `path` in PROPFIND-Antworten liefert; daran erkennt das Parsen den Eintrag
+        der angefragten Ressource selbst."""
         clean = "/".join(_clean_segments(path))
         return f"{self._dav_prefix()}/{clean}".rstrip("/")
 
@@ -353,7 +312,7 @@ class NextcloudConnector:
         else:
             problem = _status_problem(method, path, response.status_code)
         if problem is not None:
-            # Ausserhalb des `except`-Blocks: sonst hinge die Ausnahme von httpx (mit Teilen der fremden
+            # Außerhalb des `except`-Blocks: sonst hinge die Ausnahme von httpx (mit Teilen der fremden
             # Antwort im Text) als `__context__` an der Meldung.
             raise WebDavError(problem)
         return response
@@ -390,8 +349,8 @@ class NextcloudConnector:
 
     @asynccontextmanager
     async def open_read(self, path: str, *, offset: int = 0) -> AsyncIterator[Download]:
-        """Streamt die Datei. Die Antwort wird erst geprueft, dann herausgegeben: eine Fehlerseite oder
-        eine Weiterleitung waere sonst der "Inhalt" der Datei. Fehler beim Lesen uebersetzt `Download`."""
+        """Streamt die Datei. Die Antwort wird erst geprüft, dann herausgegeben: eine Fehlerseite oder
+        eine Weiterleitung wäre sonst der "Inhalt" der Datei. Fehler beim Lesen übersetzt `Download`."""
         url = self._dav_url(path)
         headers = {"Range": f"bytes={offset}-"} if offset else {}
         problem: str | None = None
@@ -411,7 +370,7 @@ class NextcloudConnector:
             else:
                 problem = _status_problem("GET", path, response.status_code)
             if problem is not None:
-                # Ausserhalb des `except`-Blocks, aus demselben Grund wie in `_request`.
+                # Außerhalb des `except`-Blocks, aus demselben Grund wie in `_request`.
                 raise WebDavError(problem)
             yield Download(response, path, url)
 

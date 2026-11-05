@@ -218,6 +218,19 @@ def helper_sudoers_file(ext_id: str) -> str:
     return f"/etc/sudoers.d/nodvard_{ext_id}_$U"
 
 
+PLAIN_RULE = (
+    "Hinweis: sudo auf diesem Server prüft nicht mit, ob die Hilfsskripte unverändert sind (so bei sudo-rs, dem "
+    "Standard ab Ubuntu 25.10). Du musst nichts tun: Die Skripte kann weiter nur root ändern."
+)
+"""Zeile, wenn mindestens eine Regel eines Hilfsskripts ohne `sha256:` gilt."""
+
+
+def helper_rule(user: str, helper: RootHelperFile, helper_dir: str = ROOT_HELPER_DIR, *, digest: bool = True) -> str:
+    """Die Zeile der sudo-Regel für ein Hilfsskript, wie der Einrichtungsbefehl sie schreibt."""
+    command = f"{helper_dir}/{helper.ext_id}-root"
+    return f"{user} ALL=(root) NOPASSWD: {f'sha256:{helper.sha256} ' if digest else ''}{command}\n"
+
+
 HELPERS_BLOCKED = (
     "FEHLER: Die Hilfsskripte lassen sich hier nicht sicher einrichten, und ohne sie gibt dieser Befehl den Modulen kein "
     "root. Darum hat er nichts geändert."
@@ -267,7 +280,7 @@ def _helper_functions(helper_dir: str, helpers: Sequence[RootHelperFile]) -> lis
     rescue = _full_rights_help(helpers)
     link_help = f". {rescue}" if rescue else "; hier hilft nur „Volle Rechte“."
     return [
-        f'D="{_dq(helper_dir)}"; HX=; WL=FEHLER',
+        f'D="{_dq(helper_dir)}"; HX=; HN=; WL=FEHLER',
         # WA: für die Meldung der erste benannte ACL-Eintrag außer root, der schreiben darf (AN).
         (
             'WA() { AN=; AL=$(getfacl -c "$1" 2>/dev/null) || return 0; for AE in $AL; do '
@@ -311,10 +324,27 @@ def _helper_functions(helper_dir: str, helpers: Sequence[RootHelperFile]) -> lis
             'HS() { Y=$(mktemp) || return 1; if printf %s "$3" | base64 -d > "$Y" 2>/dev/null && [ "$(sha256sum "$Y" | cut -d" " -f1)" = "$2" ] '
             '&& install -m 0755 -o root -g root "$Y" "$D/$1" && W "$D/$1"; then rm -f "$Y"; return 0; fi; rm -f "$Y"; return 1; }'
         ),
+        # HW: schreibt die Regel für Skript $1 nach $2, davor die Prüfsumme $3 (leer: ohne). Kennt visudo die Form nicht
+        # (sudo vor 1.8.7, sudo-rs), gilt sie ohne (HQ).
         (
-            'HR() { Z=$(mktemp) || return 1; echo "$U ALL=(root) NOPASSWD: $D/$1" > "$Z"; '
-            'if visudo -c -q -f "$Z" && install -m 0440 -o root -g root "$Z" "$2"; then rm -f "$Z"; VC "$2" && return 0; rm -f "$2"; return 1; fi; '
+            'HW() { Z=$(mktemp) || return 1; echo "$U ALL=(root) NOPASSWD: $3$D/$1" > "$Z"; '
+            'if [ -n "$3" ] && ! visudo -c -q -f "$Z" >/dev/null 2>&1; then '
+            'HQ=1; echo "$U ALL=(root) NOPASSWD: $D/$1" > "$Z"; fi; '
+            'if visudo -c -q -f "$Z" && install -m 0440 -o root -g root "$Z" "$2"; then '
+            'rm -f "$Z"; VC "$2" && return 0; rm -f "$2"; return 1; fi; '
             'rm -f "$Z"; return 1; }'
+        ),
+        # HV: 0, wenn `sudo -l` die Regel mit Prüfsumme zeigt, 1 ohne sie, 2, wenn sudo gar nichts auflistet.
+        (
+            'HV() { HL=$(R sudo -n -l 2>/dev/null) || return 2; case "$HL" in *"sha256:$2 $D/$1"*) return 0;; esac; '
+            'return 1; }'
+        ),
+        # HR: die Regel mit der Prüfsumme des Skripts, damit sudo nur genau diese Bytes startet. Lässt visudo sie durch,
+        # zeigt sudo sie danach aber nicht (sudo-rs mit einem anderen visudo, ältere Versionen), gilt sie ohne; das
+        # sieht man auch neben einer Regel für alles. Listet sudo gar nichts, bleibt sie.
+        (
+            'HR() { HQ=; HW "$1" "$2" "sha256:$3 " || return 1; [ -z "$HQ" ] || return 0; HV "$1" "$3"; '
+            '[ $? = 1 ] || return 0; HQ=1; HW "$1" "$2" ""; }'
         ),
     ]
 
@@ -376,12 +406,13 @@ def _helper_lines(helpers: Sequence[RootHelperFile], *, strict: bool = False) ->
         name = f"{helper.ext_id}-root"
         blob = base64.b64encode(helper.text.encode("ascii")).decode("ascii")
         own, own_fail = ("FEHLER", " F=1;") if strict or not helper.sudo_fallback else ("Hinweis", "")
+        done = f"Hilfsskript {name} (Version {helper.version}) eingerichtet, mit eigener sudo-Regel"
         lines.append(
             f'if [ -z "$HX" ]; then if ! HS {name} {helper.sha256} "{blob}"; '
             f'then echo "{own}: Das Hilfsskript {name} wurde nicht eingerichtet: Die Datei ließ sich nicht prüfen oder nicht sicher ablegen.";{own_fail} '
-            f'elif ! HR {name} "{helper_sudoers_file(helper.ext_id)}"; '
+            f'elif ! HR {name} "{helper_sudoers_file(helper.ext_id)}" {helper.sha256}; '
             f'then echo "{own}: Das Hilfsskript {name} wurde nicht eingerichtet: Seine sudo-Regel hat die Prüfung mit visudo nicht bestanden.";{own_fail} '
-            f'else echo "Hilfsskript {name} (Version {helper.version}) eingerichtet, mit eigener sudo-Regel."; fi; fi'
+            f'elif [ -z "$HQ" ]; then echo "{done}."; else HN=1; echo "{done} ohne Prüfsumme."; fi; fi'
         )
     return lines
 
@@ -587,6 +618,7 @@ def build_setup_script(
             )
     if with_helpers:
         lines += _helper_lines(helpers, strict=narrow)
+        lines.append(f'[ -z "$HN" ] || echo "{PLAIN_RULE}"')
     if drop_full_rule:
         lines += _drop_full_rule_lines(helpers)
     if report_state:
@@ -910,7 +942,10 @@ _STATE_LINE_RE = re.compile(
     rf"{re.escape(STATE_MARK)} (before|after) (?:([0-9a-f]{{64}}) ([0-7]{{3,4}}) ([A-Za-z0-9_][A-Za-z0-9_.-]{{0,31}})|- - -) (/.+)"
 )
 _KEYS_PATH_RE = re.compile(r"(?:/[A-Za-z0-9_][A-Za-z0-9_.-]*)+/\.ssh/authorized_keys")
-_HELPER_DONE_RE = re.compile(r"Hilfsskript ([a-z][a-z0-9-]{1,63})-root \(Version \d{1,4}\) eingerichtet, mit eigener sudo-Regel\.")
+_HELPER_DONE_RE = re.compile(
+    r"Hilfsskript ([a-z][a-z0-9-]{1,63})-root \(Version \d{1,4}\) eingerichtet, "
+    r"mit eigener sudo-Regel( ohne Prüfsumme)?\."
+)
 
 
 def setup_report(stdout: str, *, user: str) -> dict[str, Any]:
@@ -921,6 +956,7 @@ def setup_report(stdout: str, *, user: str) -> dict[str, Any]:
     actions: set[str] = set()
     helpers: set[str] = set()
     removed: set[str] = set()
+    plain: set[str] = set()
     files: dict[str, dict[str, Any]] = {}
     for raw in stdout.splitlines():
         line = raw.strip()
@@ -939,10 +975,15 @@ def setup_report(stdout: str, *, user: str) -> dict[str, Any]:
             removed.add(line.split()[3])
         elif m := _HELPER_DONE_RE.fullmatch(line):
             helpers.add(m.group(1))
+            if m.group(2):
+                plain.add(m.group(1))
         elif (m := _STATE_LINE_RE.fullmatch(line)) and _reported_path(m.group(5)):
             state = None if m.group(2) is None else {"sha256": m.group(2), "mode": m.group(3), "owner": m.group(4)}
             files.setdefault(m.group(5), {})[m.group(1)] = state
-    return {"actions": sorted(actions), "helpers": sorted(helpers), "removed_rules": sorted(removed), "files": files}
+    return {
+        "actions": sorted(actions), "helpers": sorted(helpers), "plain_rules": sorted(plain),
+        "removed_rules": sorted(removed), "files": files,
+    }
 
 
 def _reported_path(path: str) -> bool:
@@ -964,7 +1005,7 @@ def setup_record(
     legacy: dict[str, str] = {}
     removed: dict[str, str] = {}
     if sudo and user != "root":
-        # Wie im Skript: `echo "$U ALL=(root) NOPASSWD: ALL"` und für ein Hilfsskript `... NOPASSWD: $D/<name>`.
+        # Wie im Skript: `echo "$U ALL=(root) NOPASSWD: ALL"`, für ein Hilfsskript `helper_rule`.
         full_rule = _sha256(f"{user} ALL=(root) NOPASSWD: ALL\n")
         if full_sudo:
             sudoers[f"/etc/sudoers.d/nodvard-{user}"] = full_rule
@@ -973,11 +1014,13 @@ def setup_record(
             for name in report.get("removed_rules", []):
                 if name in (f"nodvard-{user}", f"lattice-{user}"):
                     removed[f"/etc/sudoers.d/{name}"] = full_rule
-        offered = {helper.ext_id for helper in helpers}
+        offered = {helper.ext_id: helper for helper in helpers}
+        plain = set(report.get("plain_rules", []))
         for ext_id in report.get("helpers", []):
             if ext_id in offered:
                 path = helper_sudoers_file(ext_id).replace("$U", user)
-                sudoers[path] = _sha256(f"{user} ALL=(root) NOPASSWD: {helper_dir}/{ext_id}-root\n")
+                rule = helper_rule(user, offered[ext_id], helper_dir, digest=ext_id not in plain)
+                sudoers[path] = _sha256(rule)
     return {
         "user": user, "actions": list(report.get("actions", [])), "files": dict(report.get("files", {})),
         "sudoers": sudoers, "legacy_sudoers": legacy, "removed_sudoers": removed,

@@ -54,6 +54,7 @@ def secure_headers(headers: Iterable[tuple[bytes, bytes]], path: str = "") -> li
     """Die Kopfzeilen einer Antwort auf `path` samt den festen Sicherheits-Kopfzeilen."""
     result: list[tuple[bytes, bytes]] = []
     has_policy = False
+    has_cache_policy = False
     is_json = False
     for name, value in headers:
         lower = name.lower()
@@ -64,7 +65,11 @@ def secure_headers(headers: Iterable[tuple[bytes, bytes]], path: str = "") -> li
             value = with_frame_ancestors(value.decode("latin-1")).encode("latin-1")
         elif lower == CONTENT_TYPE:
             is_json = _is_json(value)
+        elif lower == b"cache-control":
+            has_cache_policy = True
         result.append((name, value))
+    if (path == "/api" or path.startswith("/api/")) and not has_cache_policy:
+        result.append((b"cache-control", b"no-store"))
     result.extend(FIXED_HEADERS.items())
     result.append((CORP_HEADER, resource_policy(path)))
     if not has_policy:

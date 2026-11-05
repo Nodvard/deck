@@ -3,6 +3,7 @@
  * fehlgeschlagenen Diensten und Updates. Erreichbar über die Kachel „Server-Zustand“ auf der Server-Seite (`?host=`)
  * oder direkt mit Host-Auswahl.
  */
+import { styleRef } from "../../../_shared/frontend/src/csp";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { isActionRunning, runAction, RUNNING_IN_BACKGROUND } from "../../../_shared/frontend/src/actions";
@@ -92,7 +93,7 @@ const TONE_BAR: Record<string, string> = { good: "bg-emerald-400/70", warn: "bg-
 function Bar({ percent, tone }: { percent: number; tone: string }): JSX.Element {
   return (
     <div className="h-1.5 w-full overflow-hidden rounded bg-white/10">
-      <div className={`h-full ${TONE_BAR[tone] ?? TONE_BAR.good}`} style={{ width: `${Math.min(100, Math.max(0, percent))}%` }} />
+      <div className={`h-full ${TONE_BAR[tone] ?? TONE_BAR.good}`} ref={styleRef({ width: `${Math.min(100, Math.max(0, percent))}%` })} />
     </div>
   );
 }

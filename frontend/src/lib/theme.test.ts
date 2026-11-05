@@ -60,7 +60,7 @@ describe("Theme", () => {
 describe("Branding und Theme", () => {
   it("die Werkseinstellung der Akzentfarbe überlässt dem Theme die Farben", () => {
     applyBranding(BRANDING);
-    const style = document.documentElement.style;
+    const style = getComputedStyle(document.documentElement);
     for (const name of ["--color-accent", "--color-background", "--color-surface", "--color-text"]) {
       expect(style.getPropertyValue(name)).toBe("");
     }
@@ -68,9 +68,9 @@ describe("Branding und Theme", () => {
 
   it("eine eigene Akzentfarbe gilt in jedem Theme, eine Rückkehr zur Werkseinstellung nimmt sie wieder weg", () => {
     applyBranding({ ...BRANDING, colors: { ...BRANDING.colors, accent: "#E11D48" } });
-    expect(document.documentElement.style.getPropertyValue("--color-accent")).toBe("#e11d48");
-    expect(document.documentElement.style.getPropertyValue("--color-background")).toBe("");
+    expect(getComputedStyle(document.documentElement).getPropertyValue("--color-accent")).toBe("#e11d48");
+    expect(getComputedStyle(document.documentElement).getPropertyValue("--color-background")).toBe("");
     applyBranding(BRANDING);
-    expect(document.documentElement.style.getPropertyValue("--color-accent")).toBe("");
+    expect(getComputedStyle(document.documentElement).getPropertyValue("--color-accent")).toBe("");
   });
 });

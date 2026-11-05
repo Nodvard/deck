@@ -81,10 +81,18 @@ def test_readme_uses_the_same_commands_and_names(readme):
     assert f"curl -fsSL -o compose.yml {RAW_URL}" in text
     assert "docker compose logs nodvard-dock" in text
     assert "NODVARD_DOCK_PORT=8081" in text
-    assert "--build-arg NODVARD_DECK_EXTENSIONS=docker" in text
+    assert "--build-arg NODVARD_DECK_EXTENSIONS=docker --build-arg EDITION=dock" in text
     assert "PolyForm Noncommercial License 1.0.0" in text
     assert "](../../LICENSE)" in text
     assert (FOLDER / "../../LICENSE").resolve().is_file()
+
+
+@pytest.mark.parametrize("readme, obsolete", [
+    (README, "Einige Hilfetexte nennen noch Nodvard Deck."),
+    (README_EN, "Some help texts still mention Nodvard Deck."),
+], ids=["deutsch", "englisch"])
+def test_readme_does_not_list_resolved_help_errors(readme, obsolete):
+    assert obsolete not in readme.read_text(encoding="utf-8")
 
 
 def _source(path: str) -> str:
@@ -107,12 +115,12 @@ def test_readme_names_backups_and_screens_as_the_code_does():
     assert '{ path: "system", label: "System"' in _source("frontend/src/routes/settings/SettingsLayout.tsx")
     assert '<Card title="Sicherung">' in _source("frontend/src/routes/settings/BackupCard.tsx")
     assert '<Card title="Wiederherstellen"' in _source("frontend/src/routes/settings/RestoreCard.tsx")
-    assert "Oder: Sicherung einspielen" in _source("frontend/src/routes/SetupPage.tsx")
+    assert re.search(r">\s*Sicherung einspielen\s*</Button>", _source("frontend/src/routes/SetupPage.tsx"))
     for text in (german, english):
         assert text.count("`- ./sicherungen:/backups`") == 1
         for screen in ("Sicherung", "Wiederherstellen"):
             assert text.count(f"**Einstellungen → System → {screen}**") == 1, screen
-        assert text.count("**Oder: Sicherung einspielen**") == 1
+        assert text.count("**Sicherung einspielen**") == 1
 
 
 @pytest.mark.parametrize("readme", [README, README_EN], ids=["deutsch", "englisch"])
@@ -127,6 +135,60 @@ def test_readme_anchors_have_a_heading(readme):
 def test_both_languages_link_to_each_other():
     assert "[English](README.en.md)" in README.read_text(encoding="utf-8")
     assert "[Deutsch](README.md)" in README_EN.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("readme", "intro", "quickstart", "update", "backup", "limits", "header"),
+    [
+        (README, "Was Dock ist: der Unterschied zu Deck in fünf Sätzen", "Schnellstart in 5 Minuten",
+         "Dock aktualisieren", "Sicherung und Wiederherstellung", "Grenzen",
+         "Self-hosted, Quelltext einsehbar (PolyForm Noncommercial), kostenlos für private Nutzung"),
+        (README_EN, "What Dock is: the difference from Deck in five sentences", "Quick start in 5 minutes",
+         "Updating Dock", "Backup and restore", "Limits",
+         "Self-hosted, source available (PolyForm Noncommercial), free for personal use"),
+    ],
+    ids=["deutsch", "englisch"],
+)
+def test_readme_explains_scope_setup_and_recovery(readme, intro, quickstart, update, backup, limits, header):
+    text = readme.read_text(encoding="utf-8")
+    assert header in text.split("</div>", 1)[0]
+    paragraph = text.split(f"## {intro}\n\n", 1)[1].split("\n\n", 1)[0]
+    assert len(re.split(r"(?<=[.!?])\s+", paragraph)) == 5
+    for fact in ("EDITION=dock", "NODVARD_DECK_EXTENSIONS=docker", "SSH", "Proxmox", "Server-Zustand", "Nodvard Shield"):
+        assert fact in paragraph
+    setup = text.split(f"### {quickstart}\n", 1)[1].split("\n## ", 1)[0]
+    assert re.findall(r"^### ([1-4])\. ", setup, re.MULTILINE) == ["1", "2", "3", "4"]
+    for step in (
+        "docker compose up -d", "docker compose logs nodvard-dock", "Einrichtungscode",
+        "**Einstellungen → Server & Zugänge**", "`docker`", "`localhost`",
+        "Neuer Stack", "**Anlegen**", "**Aus Git**", "**Branch oder Tag**",
+        "**Eintragen und holen**", "**Anwenden**", "**Einspielen**", "**Aktionen**", "Git-Zugänge",
+    ):
+        assert step in setup, step
+    updating = text.split(f"## {update}\n", 1)[1].split("\n## ", 1)[0]
+    for command in ("docker compose pull", "docker compose up -d", "docker compose ps", "docker compose logs --tail=100 nodvard-dock"):
+        assert command in updating
+    assert "`scripts/deploy_pi.sh`" in updating
+    restoring = text.split(f"## {backup}\n", 1)[1].split("\n## ", 1)[0]
+    assert "Sicherungspasswort" in restoring or "backup password" in restoring
+    assert "Wiederherstellungsschlüssel" in restoring or "recovery key" in restoring
+    assert "Einmal-Passwort" in restoring or "one-time password" in restoring
+    assert "Bind-Mounts" in restoring or "bind mounts" in restoring
+    assert "## " + limits in text
+    assert not re.search(r"open[\s-]+source", text, re.IGNORECASE)
+
+
+@pytest.mark.parametrize("readme", [README, README_EN], ids=["deutsch", "englisch"])
+def test_readme_explains_optional_scheduled_git_connections(readme):
+    text = " ".join(readme.read_text(encoding="utf-8").split())
+    source = _source("extensions/docker/src/nodvard_deck_ext_docker/git_watch.py")
+    assert 'settings.get("git_watch_enabled", False)' in source
+    assert "Git-Prüfung nach Zeitplan" in text or "scheduled Git check" in text
+    assert "standardmäßig aus" in text or "off by default" in text
+    assert "Standardmäßig nach außen" in text or "By default, the only automatic outgoing connection" in text
+    assert "versucht Dock automatisch" in text or "Dock attempts automatic rollback" in text
+    assert "nur, wenn du es auslöst" not in text
+    assert "only when you trigger it" not in text
 
 
 @pytest.mark.parametrize("readme", [README, README_EN], ids=["deutsch", "englisch"])
@@ -151,8 +213,20 @@ def test_issue_templates_and_security_policy_for_the_dock_repository():
 def test_ci_job_starts_the_image_of_this_file():
     job = _load(CI)["jobs"]["dock-image"]
     runs = "\n".join(step.get("run", "") for step in job["steps"])
-    assert f"--build-arg NODVARD_DECK_EXTENSIONS=docker -t {_service()['image']} ." in runs
+    assert f"--build-arg NODVARD_DECK_EXTENSIONS=docker --build-arg EDITION=dock -t {_service()['image']} ." in runs
     assert any(step.get("working-directory") == "deploy/nodvard-dock" for step in job["steps"])
+
+
+def test_ci_runs_the_edition_smoke_test_against_its_image():
+    steps = _load(CI)["jobs"]["dock-image"]["steps"]
+    smoke, = [step for step in steps if step.get("name") == "EDITION-Rauchtest"]
+    assert smoke["working-directory"] == "frontend"
+    assert smoke["env"] == {"DOCK_SMOKE_URL": "http://127.0.0.1:8080"}
+    assert smoke["run"] == "npm test -- smoke/dock.test.tsx"
+    setup, = [step for step in steps if "DOCK_SMOKE_TOKEN=" in step.get("run", "")]
+    assert steps.index(setup) < steps.index(smoke)
+    assert 'echo "DOCK_SMOKE_TOKEN=$token" >> "$GITHUB_ENV"' in setup["run"]
+    assert any(step.get("run") == "npm ci" and step.get("working-directory") == "frontend" for step in steps[:steps.index(smoke)])
 
 
 def _config(tmp_path, env=None):

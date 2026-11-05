@@ -12,10 +12,7 @@ function copyViaTextarea(text: string): boolean {
   area.readOnly = true;
   area.setAttribute("aria-hidden", "true");
   // Außerhalb des Bildes, aber nicht `display:none` (dann lässt sich nichts markieren).
-  area.style.position = "fixed";
-  area.style.top = "0";
-  area.style.left = "-9999px";
-  area.style.opacity = "0";
+  area.className = "clipboard-copy-field";
   document.body.appendChild(area);
   try {
     area.focus();

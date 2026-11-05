@@ -1324,7 +1324,7 @@ async def test_a_long_success_is_pushed_without_a_host_id(tmp_path, fast):
     assert result.success and result.duration_ms >= 100_000
     (note,) = ctx.sent
     assert note.severity is Severity.INFO and note.title == "Image-Update „nextcloud-app“ auf docker: fertig"
-    assert note.payload == {"path": "/ext/docker/matrix?host=h1", "tags": ["package"]}
+    assert note.payload == {"notification_type": "docker.image_result", "path": "/ext/docker/matrix?host=h1", "tags": ["package"]}
     assert "host_id" not in note.payload and "host_ids" not in note.payload
     assert note.body.splitlines()[0] == "„nextcloud-app“ aktualisiert: nextcloud:30-apache"
 
@@ -2276,8 +2276,10 @@ async def test_on_start_resumes_in_the_background_without_restarting_the_task(mo
 
     monkeypatch.setattr(pkg, "_apply_docker_tag", lambda *_a: None)
     monkeypatch.setattr(pkg, "register_job", no_job)
+    monkeypatch.setattr(pkg, "register_watch_job", no_job)
     ext = pkg.Extension()
     ext._images = object()  # type: ignore[attr-defined]
+    ext._git_watch = object()  # type: ignore[attr-defined]
     ext._applier = type("A", (), {"resume_interrupted": staticmethod(resume)})()  # type: ignore[attr-defined]
     await ext.on_start(_Ctx())  # type: ignore[arg-type]
     ((coro, name, restart),) = spawned

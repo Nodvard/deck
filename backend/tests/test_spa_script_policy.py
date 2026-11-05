@@ -5,16 +5,21 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import re
 from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
 from nodvard_deck.main import SPA_CSP, _SpaStaticFiles, spa_script_policy
 
 REPO = Path(__file__).resolve().parents[2]
 IMPORT_MAP = '\n      {\n        "imports": { "react": "/nodvard-deck-shim/react.js" }\n      }\n    '
+
+
+def _base_policy(headers) -> str:
+    nonce = re.search(r"'nonce-([^']+)'", headers["content-security-policy"])[1]
+    return SPA_CSP.replace("__DECK_CSP_NONCE__", nonce).replace("__DECK_CSP_SOCKET__", "ws://testserver")
 
 
 def _sha(text: str) -> str:
@@ -63,7 +68,7 @@ def test_the_app_page_blocks_inline_scripts_and_javascript_links(tmp_path):
     app.mount("/", _SpaStaticFiles(directory=tmp_path, html=True), name="frontend")
     headers = TestClient(app).get("/settings").headers
     script = f"script-src 'self' {_sha(IMPORT_MAP)}"
-    assert headers["content-security-policy"] == f"{SPA_CSP}; {script}"
+    assert headers["content-security-policy"] == f"{_base_policy(headers)}; {script}"
     assert "script-src" not in SPA_CSP
     assert not {"'unsafe-inline'", "'unsafe-eval'", "'strict-dynamic'"} & set(script.split())
 
@@ -84,7 +89,7 @@ def test_a_changed_index_html_gets_its_new_hash_without_a_restart(tmp_path: Path
     before = client.get("/").headers["content-security-policy"]
     index.write_text(f'<html><script type="importmap">{IMPORT_MAP}</script></html>', encoding="utf-8")
     after = client.get("/").headers["content-security-policy"]
-    assert before != after and after == f"{SPA_CSP}; script-src 'self' {_sha(IMPORT_MAP)}"
+    assert before != after and after == f"{_base_policy({'content-security-policy': after})}; script-src 'self' {_sha(IMPORT_MAP)}"
 
 
 def test_a_new_index_html_of_the_same_size_and_time_still_gets_its_hash(tmp_path: Path):
@@ -98,7 +103,7 @@ def test_a_new_index_html_of_the_same_size_and_time_still_gets_its_hash(tmp_path
     index.write_text(f'<html><script type="importmap">{new_map}</script></html>', encoding="utf-8")
     os.utime(index, ns=(times.st_atime_ns, times.st_mtime_ns))
     after = client.get("/").headers["content-security-policy"]
-    assert before != after and after == f"{SPA_CSP}; script-src 'self' {_sha(new_map)}"
+    assert before != after and after == f"{_base_policy({'content-security-policy': after})}; script-src 'self' {_sha(new_map)}"
 
 
 def test_windows_line_endings_get_the_hash_the_browser_computes(tmp_path: Path):
@@ -108,4 +113,5 @@ def test_windows_line_endings_get_the_hash_the_browser_computes(tmp_path: Path):
     assert spa_script_policy(index) == expected
     app = FastAPI()
     app.mount("/", _SpaStaticFiles(directory=tmp_path, html=True), name="frontend")
-    assert TestClient(app).get("/").headers["content-security-policy"] == f"{SPA_CSP}; {expected}"
+    headers = TestClient(app).get("/").headers
+    assert headers["content-security-policy"] == f"{_base_policy(headers)}; {expected}"

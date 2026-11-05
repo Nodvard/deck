@@ -1,4 +1,5 @@
 /** Jellyfin-Seite (PageSpec `component="JellyfinPage"`): je Verbindung eine Karte, nur lesend. */
+import { styleRef } from "../../../_shared/frontend/src/csp";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
@@ -144,7 +145,7 @@ function PlaybackRow({ playback }: { playback: Playback }) {
           role="progressbar" aria-label={`Fortschritt von ${playback.title}`} aria-valuemin={0} aria-valuemax={100}
           aria-valuenow={playback.progress_percent} className="h-1 w-full overflow-hidden rounded bg-white/10"
         >
-          <div className="h-full rounded bg-[var(--color-accent)]" style={{ width: `${playback.progress_percent}%` }} />
+          <div className="h-full rounded bg-[var(--color-accent)]" ref={styleRef({ width: `${playback.progress_percent}%` })} />
         </div>
       )}
     </li>
@@ -294,7 +295,7 @@ export function JellyfinPage(): JSX.Element {
       description="Zeigt, was gerade läuft, wie groß die Bibliotheken sind und was zuletzt hinzugekommen ist. Nur lesend."
       actions={
         <>
-          {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("ghost")}>Einstellungen</a>}
+          {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("secondary")}>Einstellungen</a>}
           <Button onClick={reload} disabled={loading}>Aktualisieren</Button>
         </>
       }

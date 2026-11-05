@@ -15,6 +15,8 @@ Was passiert (alles oder nichts – vorher wird alles geprüft, erst dann geschr
    `frontend/package-lock.json` (sonst zeigt der nächste `npm install` einen Unterschied) und die
    Version des Update-Helfers (`deploy/updater/nodvard_deck_updater/__init__.py`, er wird mit jedem
    Release zusammen gebaut und meldet dieselbe Nummer wie das Dashboard).
+4. `docs/release-notes/dock-<version>.md` wird aus den passenden Einträgen erzeugt.
+   Vorhandene Dock-Release-Notes werden nicht überschrieben.
 
 Abgelehnt wird, wenn die Version nicht größer ist als die aktuelle, wenn es keine
 Bruchstücke gibt oder wenn die bisherigen Versionsnummern nicht im Gleichschritt sind
@@ -50,7 +52,9 @@ sys.path.insert(0, str(REPO_ROOT / "backend" / "src"))
 from nodvard_deck.changelog import (  # noqa: E402
     ChangelogError,
     Entry,
+    KINDS,
     Release,
+    filter_entries,
     parse_release,
     parse_version,
     read_fragment,
@@ -91,6 +95,10 @@ class Tree:
     @property
     def unreleased_dir(self) -> Path:
         return self.changelog_dir / "unreleased"
+
+    @property
+    def release_notes_dir(self) -> Path:
+        return self.root / "docs" / "release-notes"
 
     @property
     def version_py(self) -> Path:
@@ -260,6 +268,26 @@ def render_release(version: str, day: str, title: str | None, entries: list[Entr
         lines += ["", "[[entries]]", f"kind = {toml_string(entry.kind)}", f"text = {toml_string(entry.text)}"]
         if entry.prs:
             lines.append(f"prs = [{', '.join(str(n) for n in entry.prs)}]")
+        if entry.bereich is not None:
+            lines.append(f"bereich = {toml_string(entry.bereich)}")
+    return "\n".join(lines) + "\n"
+
+
+def render_dock_notes(release: Release) -> str:
+    lines = [f"# Nodvard Dock {release.version}", "", release.date]
+    if release.title:
+        lines += ["", release.title]
+    entries = filter_entries(release.entries, "dock")
+    labels = {"neu": "Neu", "verbessert": "Verbessert", "behoben": "Behoben", "sicherheit": "Sicherheit", "dokumentation": "Dokumentation"}
+    for kind in KINDS:
+        items = [entry for entry in entries if entry.kind == kind]
+        if items:
+            lines += ["", f"## {labels[kind]}", ""]
+            for entry in items:
+                prs = " " + " ".join(f"#{number}" for number in entry.prs) if entry.prs else ""
+                lines.append(f"- {entry.text}{prs}")
+    if not entries:
+        lines += ["", "Für Nodvard Dock gibt es in dieser Version keine eigenen Änderungen."]
     return "\n".join(lines) + "\n"
 
 
@@ -272,6 +300,8 @@ class Plan:
     previous: str
     release_path: Path
     release_text: str
+    dock_notes_path: Path
+    dock_notes_text: str
     fragments: tuple[Path, ...]
     entry_count: int
     bumps: dict[Path, str]
@@ -310,6 +340,9 @@ def plan_release(tree: Tree, version: str, *, title: str | None = None, day: str
         )
 
     release_path = tree.versions_dir / f"{version}.toml"
+    dock_notes_path = tree.release_notes_dir / f"dock-{version}.md"
+    if dock_notes_path.exists():
+        raise ReleaseError(f"Die Dock-Release-Notes bestehen bereits: {dock_notes_path}")
 
     fragments = tuple(sorted(tree.unreleased_dir.glob("*.toml"))) if tree.unreleased_dir.is_dir() else ()
     if not fragments:
@@ -362,6 +395,8 @@ def plan_release(tree: Tree, version: str, *, title: str | None = None, day: str
         previous=previous,
         release_path=release_path,
         release_text=text,
+        dock_notes_path=dock_notes_path,
+        dock_notes_text=render_dock_notes(parsed),
         fragments=fragments,
         entry_count=len(entries),
         bumps=bumped_files(tree, version),
@@ -369,6 +404,8 @@ def plan_release(tree: Tree, version: str, *, title: str | None = None, day: str
 
 
 def apply_plan(plan: Plan) -> None:
+    plan.dock_notes_path.parent.mkdir(parents=True, exist_ok=True)
+    _write(plan.dock_notes_path, plan.dock_notes_text)
     plan.release_path.parent.mkdir(parents=True, exist_ok=True)
     _write(plan.release_path, plan.release_text)
     for path, text in plan.bumps.items():
@@ -401,6 +438,7 @@ def main(argv: list[str] | None = None, *, root: Path | None = None) -> int:
     print(f"{'Wuerde anlegen' if args.dry_run else 'Angelegt'}: {rel(plan.release_path)} "
           f"({plan.entry_count} Eintraege aus {len(plan.fragments)} Bruchstuecken, {plan.previous} -> {plan.version})")
     print(f"{'Wuerde anheben' if args.dry_run else 'Angehoben'}: " + ", ".join(rel(p) for p in plan.bumps))
+    print(f"{'Würde anlegen' if args.dry_run else 'Angelegt'}: {rel(plan.dock_notes_path)}")
     print(f"{'Wuerde loeschen' if args.dry_run else 'Geloescht'}: " + ", ".join(rel(p) for p in plan.fragments))
     if not args.dry_run:
         print("Als Naechstes: alles committen und als eigenen kleinen PR anlegen.")

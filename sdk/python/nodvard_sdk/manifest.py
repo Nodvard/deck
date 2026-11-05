@@ -29,19 +29,15 @@ KNOWN_PERMISSIONS = frozenset(
         "files.provide",
         "settings.read",
         "net.outbound",
-        # Erlaubt ctx.http, die TLS-Zertifikatsprüfung für einen einzelnen Aufruf abzuschalten
-        # (insecure_tls=True) oder ein Zertifikat zu pinnen (pinned_sha256) -- getrennt von
-        # net.outbound, damit ein Admin diese deutlich riskantere Fähigkeit separat
-        # sieht und bestätigt (siehe HttpHandle).
+        # Schaltet die TLS-Prüfung je Aufruf ab (insecure_tls=True) oder pinnt ein Zertifikat (pinned_sha256). Getrennt
+        # von net.outbound, damit ein Admin diese riskantere Fähigkeit eigens sieht und bestätigt (siehe HttpHandle).
         "net.outbound.insecure_tls",
-        # Erlaubt `ctx.api.include_router(..., public=True)`: Routen, die OHNE Anmeldung
-        # erreichbar sind (z. B. für Webhooks). Eigene Berechtigung, damit ein Admin sieht,
-        # dass eine Erweiterung Adressen für jeden öffnet; der Kern schreibt die
+        # Erlaubt `ctx.api.include_router(..., public=True)`: Routen ohne Anmeldung (z. B. für Webhooks). Eigene
+        # Berechtigung, damit ein Admin sieht, dass eine Erweiterung Adressen für jeden öffnet; der Kern schreibt die
         # öffentlichen Präfixe beim Einschalten ins Protokoll.
         "api.public",
-        # Darf Vorschläge mit einer Dauerfreigabe (ActionRequest.standing_approval) einreichen.
-        # Eigene Berechtigung, damit im Manifest sichtbar ist, welche Erweiterung etwas ohne Klick
-        # starten kann; das Gate prüft die Freigabe trotzdem selbst.
+        # Darf Vorschläge mit Dauerfreigabe (ActionRequest.standing_approval) einreichen. Eigene Berechtigung, damit im
+        # Manifest sichtbar ist, wer etwas ohne Klick starten kann; das Gate prüft die Freigabe trotzdem selbst.
         "actions.standing_approval",
     }
 )
@@ -79,14 +75,9 @@ def root_helper_path(ext_id: str) -> str:
 
 
 class RootHelperSpec(BaseModel):
-    """Das Hilfsskript eines Moduls für root-Befehle (`root_helper = { file = "...", version = 1 }` in `[extension]`).
-
-    Ein festes POSIX-sh-Skript mit einem Unterbefehl je Aufgabe, das jedes Argument selbst prüft. Die Einrichtung legt
-    es root-eigen unter `root_helper_path(id)` ab und erlaubt dem Server-Benutzer per sudo genau dieses Skript, statt
-    `ALL`. `version` ist eine ganze Zahl und muss mit der Zeile `HELPER_VERSION=<n>` im Skript übereinstimmen, die
-    `<skript> version` ausgibt; jede Änderung am Skript braucht eine höhere Zahl. Der Kern liest die Datei selbst (ohne
-    den Code des Moduls zu importieren) und prüft sie; ist etwas nicht in Ordnung, gibt es für dieses Modul kein
-    Hilfsskript und es gilt die bisherige Regel."""
+    """Hilfsskript eines Moduls für root-Befehle (`root_helper = { file = "...", version = 1 }` in `[extension]`): ein
+    festes POSIX-sh-Skript, das jedes Argument selbst prüft und per sudo statt `ALL` erlaubt wird. Besteht es die
+    Prüfung des Kerns nicht, bekommt das Modul kein Hilfsskript und die vorhandene sudo-Regel gilt weiter."""
 
     # Unbekannte Schlüssel sind ein Fehler: Als Abschnitt `[extension.root_helper]` geschrieben, landeten die folgenden
     # Zeilen (etwa `permissions`) sonst still hier statt im Manifest.
@@ -95,6 +86,8 @@ class RootHelperSpec(BaseModel):
     file: str
     """Pfad relativ zum Ordner mit `extension.toml`, z. B. `root-helper/shield-root.sh`."""
     version: int = Field(ge=1, le=ROOT_HELPER_MAX_VERSION, strict=True)
+    """Muss zur Zeile `HELPER_VERSION=<n>` im Skript passen (`<skript> version` gibt sie aus); jede Änderung am Skript
+    braucht eine höhere Zahl."""
     calls_any_version: bool = Field(default=False, strict=True)
     """Das Modul ruft das Skript ohne Vergleich von Version oder Prüfsumme auf; das stimmt nur, solange jede ältere
     Fassung alle Aufrufe des Moduls beantwortet. Danach richten sich die Texte von „Verbindung prüfen“ und der
@@ -214,8 +207,8 @@ class ExtensionManifest(BaseModel):
     settings_schema: dict[str, Any] | None = None
     source: str = "local"
     enable_on: list[str] = Field(default_factory=list)
-    """Wann der Kern die Erweiterung von selbst einschaltet (siehe `KNOWN_ENABLE_TRIGGERS`) --
-    nur, solange niemand sie je bewusst ein- oder ausgeschaltet hat. Leer = nie automatisch."""
+    """Wann der Kern die Erweiterung von selbst einschaltet (siehe `KNOWN_ENABLE_TRIGGERS`), nur solange niemand sie
+    je bewusst ein- oder ausgeschaltet hat. Leer = nie automatisch."""
     category: str | None = None
     """Gruppe in der Modul-Auswahl des Einrichtungsassistenten, z. B. `servers`, `security`,
     `tools`, `connections`, `example`. Die Oberfläche kennt die Namen; ein unbekannter oder
@@ -319,8 +312,8 @@ class ExtensionManifest(BaseModel):
 
     @property
     def table_prefixes(self) -> tuple[str, ...]:
-        """Alle erlaubten Tabellen-Präfixe: der eigene zuerst (Standard für neue Tabellen), danach
-        die der alten Kennungen (`legacy_ids`) -- deren Tabellen behalten ihren Namen."""
+        """Alle erlaubten Tabellen-Präfixe: der eigene zuerst (Standard für neue Tabellen), danach die der alten
+        Kennungen (`legacy_ids`), deren Tabellen ihren Namen behalten."""
         return (self.table_prefix, *(_table_prefix(old) for old in self.legacy_ids))
 
     @property

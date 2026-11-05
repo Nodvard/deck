@@ -1,0 +1,373 @@
+version = "0.13.0"
+date = "2026-11-05"
+title = "Docker-Ausbau, Handy-Oberfläche, strengere Sicherheit"
+
+[[entries]]
+kind = "verbessert"
+text = "Die Anmeldeseite zeigt Fehler direkt an den betroffenen Feldern, ist mit der Tastatur leichter bedienbar und bietet besser lesbare Texte. Die Passwort-Hilfe öffnet sich unter der Karte, damit der Anmelden-Knopf sichtbar bleibt."
+
+[[entries]]
+kind = "sicherheit"
+text = "Antworten mit Anmeldedaten und Kontoinformationen verbieten jetzt die Speicherung im Browser-Cache."
+
+[[entries]]
+kind = "sicherheit"
+text = "Bei unverschlüsseltem Zugriff im Heimnetz warnt die Einrichtung und die Systemeinstellung davor, dass dein Anmelde-Token mitgelesen werden kann, und zeigt Wege zu einer geschützten Verbindung."
+
+[[entries]]
+kind = "behoben"
+text = "Das Signierwerkzeug hängt die Freigabe jetzt immer an den richtigen Release an."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Anmeldung im Browser nutzt nur noch das Cookie von Nodvard Deck. Wer von einer Version vor 0.6.2 aktualisiert oder Nodvard Deck seitdem im Browser nicht mehr geöffnet hat, meldet sich einmal neu an."
+
+[[entries]]
+kind = "verbessert"
+text = "Ausliefern, Sichern und Einspielen brechen ab, solange auf dem Rechner noch Nodvard Deck von vor Version 0.6 liegt, und sagen, wie es weitergeht."
+
+[[entries]]
+kind = "verbessert"
+text = "Nodvard Shield: Das Hilfsskript auf den Servern ist kleiner und übersichtlicher geworden und macht dasselbe wie vorher. Server, die root-Rechte nur über das Hilfsskript bekommen, bitte nach dem Update neu einrichten; bis dahin lehnt Nodvard Shield dort Aktionen mit root-Rechten ab. Mit voller sudo-Regel oder als root geht alles ohne Neueinrichtung weiter."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Live-Ansicht im Server-Zustand zeigt den CPU-Takt mit Durchschnitt, Minimum und Maximum. Die MHz-Angaben je Kern sind besser lesbar; ohne Messwerte steht in der CPU-Kachel „Takt nicht verfügbar“."
+
+[[entries]]
+kind = "behoben"
+text = "Nginx Proxy Manager zeigt bei abgelaufenen Zertifikaten den Status nur noch einmal an. Ablaufdatum und Restzeit gültiger Zertifikate bleiben sichtbar."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Docker-Container lassen sich per Klick auf Container, Zustand, Status/Laufzeit, CPU oder RAM sortieren. Ein zweiter Klick kehrt die Reihenfolge um, ein dritter stellt die Standardreihenfolge wieder her. Die Laufzeit richtet sich nach der tatsächlichen Startzeit."
+
+[[entries]]
+kind = "behoben"
+text = "Die Container-Sortierung verwendet ausschließlich Dateien des Docker-Moduls und bleibt damit unabhängig vom Kern der Oberfläche."
+
+[[entries]]
+kind = "behoben"
+text = "Push-Meldungen zu Deck-Sicherheitsupdates lassen sich je Meldungsart abschalten und mit einer eigenen Priorität versehen."
+
+[[entries]]
+kind = "verbessert"
+text = "Unter Einstellungen, Über Nodvard Deck stehen Hilfe und Austausch sowie Lizenz und Marken direkt unter der Installation vor dem Änderungsprotokoll. Auf breiten Bildschirmen stehen die Karten nebeneinander, am Handy untereinander. Die Versionsnummer in der Seitenleiste führt zur Über-Seite."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Warnung vor unverschlüsseltem Zugriff erscheint auch dann, wenn ein Proxy Deck über eine lokale Adresse anspricht, selbst wenn er noch nicht als vertrauenswürdig eingetragen ist."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Warnung vor unverschlüsseltem Zugriff erscheint auch bei einem eingetragenen lokalen Proxy, wenn die ursprüngliche Geräteadresse fehlt oder unlesbar ist."
+
+[[entries]]
+kind = "sicherheit"
+text = "Der Shield-Helfer wird bei der Server-Einrichtung wieder mitgeliefert, sodass eingeschränkte sudo-Rechte nicht unnötig erweitert werden."
+
+[[entries]]
+kind = "behoben"
+text = "Hochgeladene SVG-Logos und Seitensymbole behalten unter der strengeren Sicherheitsrichtlinie ihre ursprünglichen Farben und Stile."
+
+[[entries]]
+kind = "sicherheit"
+text = "Zu große Logos und Seitensymbole aus Sicherungen werden beim Abrufen abgelehnt."
+
+[[entries]]
+kind = "behoben"
+text = "SVG-Logos und Seitensymbole mit zu vielen unterschiedlichen Stilen werden beim Hochladen und Abrufen verständlich abgelehnt."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Oberfläche sperrt fremde Quellen und nicht freigegebene Skripte und Stile jetzt mit einer strengeren Sicherheitsrichtlinie. Konsole, Erweiterungen und Dateivorschauen bleiben nutzbar."
+
+[[entries]]
+kind = "verbessert"
+text = "Die deutsche und englische Anleitung für Nodvard Dock beschreibt Einrichtung, Funktionen, Grenzen und Lizenz genauer."
+
+[[entries]]
+kind = "dokumentation"
+text = "Nodvard Dock hat jetzt eine deutsche und englische Anleitung vom ersten Start bis zur Fehlerbehebung."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Dock öffnet direkt die Docker-Verwaltung und zeigt nur die passenden Seiten, Einstellungen und Hilfetexte."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Dock sperrt nicht verfügbare Funktionen auch bei direkten Aufrufen und lässt seine fest eingebauten Module nicht mehr ausschalten."
+
+[[entries]]
+kind = "behoben"
+text = "Die Container-Konsole von Nodvard Dock zeigt keine allgemeine Serverauswahl mehr."
+
+[[entries]]
+kind = "verbessert"
+text = "Nodvard Dock zeigt seinen Namen auch auf der Über-Seite und erhält ein passendes Änderungsprotokoll sowie eigene Release-Notes."
+bereich = "kern"
+
+[[entries]]
+kind = "verbessert"
+text = "Die Anleitung zur Erst-Einrichtung ist neu gegliedert: vorn ein Schnellstart mit drei Befehlen und die Schritte bis zur ersten Sicherung, Technik und Sonderfälle im Anhang und in eigenen Anleitungen, etwa zur Installation auf dem NAS."
+
+[[entries]]
+kind = "verbessert"
+text = "Eine neue Anleitung erklärt, wie du Server über Tailscale an Nodvard Deck anbindest, die Verbindung prüfst und häufige Fehler behebst."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Einrichtungsanleitung erklärt für Jellyfin, Plex und qBittorrent, welche Daten die Module abrufen, wo Zugangsdaten gespeichert werden und wer die Angaben sehen kann."
+
+[[entries]]
+kind = "verbessert"
+text = "Beim Ausliefern mit deploy_pi.sh benennt das Skript alte Namen LATTICE_… in deploy/.env auf dem Zielrechner auf NODVARD_DECK_… um und behält die Datei vorher als Kopie."
+
+[[entries]]
+kind = "neu"
+text = "Stacks aus Git: Auf Wunsch prüft Docker nach Zeitplan, ob es im Repository einen neuen Stand gibt, und schickt dann eine Nachricht. Scheitert die Prüfung dreimal hintereinander, kommt eine Warnung. Eingespielt wird weiter nur per Klick mit Freigabe."
+
+[[entries]]
+kind = "neu"
+text = "Stacks aus Git: Im Bereich „Aus Git“ steht, ob es einen neuen Stand gibt, und ein Knopf prüft das sofort."
+
+[[entries]]
+kind = "neu"
+text = "Docker: Im Reiter Images gibt es „Image holen“. Name und Tag eingeben, Docker lädt das Image über die Freigabe herunter, private Images mit der Anmeldung unter Registries. Scheitert es, steht der Grund da, etwa Abrufgrenze von Docker Hub, falsch geschriebener Name oder fehlender Platz."
+
+[[entries]]
+kind = "neu"
+text = "Im Reiter Netze legst du ein neues Netz an, auf Wunsch nur intern ohne Zugang nach außen, und verbindest Container damit oder trennst sie davon. Alles läuft über die Freigabe."
+
+[[entries]]
+kind = "neu"
+text = "Die Rückfrage warnt, wenn ein Container danach ohne Netz wäre oder zu einem Stack gehört, dessen Neuerstellen die Änderung zurücknimmt. Die Netze von Nodvard Deck selbst ändert das Modul nie."
+
+[[entries]]
+kind = "behoben"
+text = "Beim Verbinden und Trennen von Containern zeigt die Docker-Seite das Ergebnis samt Fehlergrund auch nach dem Zuklappen des Containerbereichs. Fehler beim automatischen Anlegen eines Netzes erscheinen mit ihrem Grund im Formular."
+
+[[entries]]
+kind = "neu"
+text = "Eigene Vorlagen für neue Stacks: Unter „Neuer Stack“ oder in der Datei eines Stacks speicherst du die Compose-Datei als Vorlage. Sie steht dann neben dem Katalog bereit und lässt sich ersetzen oder löschen."
+
+[[entries]]
+kind = "neu"
+text = "Eine Vorlage enthält nur die Compose-Datei, nie die Umgebungswerte des Stacks. Feste Passwörter, Tokens und Schlüssel werden beim Speichern abgelehnt, soweit sie sich erkennen lassen, mit Zeile und Grund."
+
+[[entries]]
+kind = "behoben"
+text = "Beim Laden einer eigenen Stack-Vorlage bleiben Änderungen an Name und Compose-Datei erhalten, die während des Ladens eingegeben wurden."
+
+[[entries]]
+kind = "neu"
+text = "Findet die Update-Suche ein Sicherheitsupdate, meldet Deck das einmal rot, mit eingerichtetem Meldungskanal auch als Push."
+
+[[entries]]
+kind = "neu"
+text = "Einstellungen, Updates: Der Inhaber kann mit seinem Passwort (und, wenn Zwei-Faktor an ist, dem Code) zustimmen, dass Deck Sicherheitsupdates künftig selbst einspielt. Das wirkt erst ab Version 1.0, bis dahin bleibt es beim Melden."
+
+[[entries]]
+kind = "behoben"
+text = "Ein Wechsel zwischen Stable und Beta löst für bereits gemeldete Sicherheitsupdates keine erneuten Meldungen aus."
+
+[[entries]]
+kind = "sicherheit"
+text = "sudo startet die Hilfsskripte von Nodvard Deck jetzt nur noch in genau der Fassung, die beim Einrichten auf den Server kam (ab dem nächsten Einrichten, nicht mit sudo-rs, dem Standard ab Ubuntu 25.10)."
+
+[[entries]]
+kind = "neu"
+text = "Einstellungen, Updates: Bei einer neuen Version steht jetzt, was sie bringt: Sicherheitsupdate, Fehlerbehebungen, neue Funktionen oder Verbesserungen. Ist das für eine Version nicht bekannt, sagt Deck das, statt das Update harmlos aussehen zu lassen."
+
+[[entries]]
+kind = "behoben"
+text = "Freigegebene Updates bleiben installierbar, wenn das Laden der Änderungsarten älterer Versionen zu lange dauert."
+
+[[entries]]
+kind = "behoben"
+text = "Bei einer unvollständig geladenen Versionsliste weist die Update-Suche auf fehlende Angaben zu den Änderungen hin."
+
+[[entries]]
+kind = "behoben"
+text = "Module mit neuem Namen, etwa Docker, finden ihre gespeicherten Dateien auch dann, wenn unter dem neuen Namen nur ein leerer Ordner liegt."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Dock zeigt in Titel, Anmeldung und Einrichtung seinen eigenen Namen, und die Befehle für Einrichtungscode und Notfall nennen den richtigen Dienst."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Dock: Die Seite Updates sucht nach dem eigenen Image und zeigt nur die passenden Anleitungen."
+
+[[entries]]
+kind = "verbessert"
+text = "Nodvard Dock: Der Einrichtungs-Assistent schaltet das Modul Docker selbst ein, statt danach zu fragen."
+
+[[entries]]
+kind = "sicherheit"
+text = "Stacks aus Git: Nodvard Deck prüft vor dem Holen, wohin der Name des Git-Servers wirklich zeigt, und verbindet sich nur mit genau dieser Adresse. Deck selbst und die internen Dienste von Cloud-Anbietern sind immer gesperrt."
+
+[[entries]]
+kind = "verbessert"
+text = "Git-Server im eigenen Netz, etwa Gitea auf dem Heimserver, gehen erst, wenn du in den Einstellungen des Moduls Docker unter „Erweitert“ den Schalter „Git-Server im eigenen Netz erlauben“ einschaltest. Ohne ihn sagt Deck beim Holen genau das."
+
+[[entries]]
+kind = "sicherheit"
+text = "Läuft Nodvard Deck über einen Proxy (HTTPS_PROXY), holt es aus Git nur noch von Adressen aus Zahlen, weil der Proxy einen Namen selbst nachschlägt. Einen Git-Server mit Namen trägst du unter NO_PROXY ein, dann verbindet sich Deck direkt."
+
+[[entries]]
+kind = "behoben"
+text = "Docker am Handy: Die Reiter Stacks, Images, Volumes und Netze zeigen jeden Eintrag als eigene Karte mit den Knöpfen darunter. Vorher liefen Angaben und Knöpfe ineinander oder standen schief."
+
+[[entries]]
+kind = "behoben"
+text = "Docker am Handy: Unter „Docker-Speicher“ ist die Liste der Images nicht mehr rechts abgeschnitten, Größe, Alter und Nutzung stehen beschriftet in der Karte."
+
+[[entries]]
+kind = "behoben"
+text = "Gameserver am Handy: Der Knopf „Kopieren“ beim Join-Code ragt nicht mehr aus der Karte, er rutscht bei wenig Platz unter den Code."
+
+[[entries]]
+kind = "behoben"
+text = "Inventar am Handy: Preis und Garantie stehen jetzt in jeder Zeile unter dem Namen, lange Namen brechen auf zwei Zeilen um."
+
+[[entries]]
+kind = "behoben"
+text = "Am Handy ist der Titel einer Meldung lesbar: Datum und Knöpfe stehen jetzt darunter, statt ihn auf wenige Buchstaben je Zeile zu quetschen."
+
+[[entries]]
+kind = "verbessert"
+text = "Am Handy zeigen die Reiter bei Proxmox und die Bereiche der Einstellungen mit einem Verlauf und einem Pfeil am Rand, dass seitlich noch mehr kommt, und der geöffnete Bereich rückt von selbst ins Bild."
+
+[[entries]]
+kind = "behoben"
+text = "Am Computer bricht die Beschreibung unter den Bereichen der Einstellungen jetzt um, statt am Rand abgeschnitten zu werden."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield am Handy: Jeder Server steht als eigene Karte da, mit Virenschutz, letztem Scan, Härtung und den Knöpfen. Vorher musste man die Tabelle seitlich wischen, um Härtung und Knöpfe zu sehen."
+
+[[entries]]
+kind = "verbessert"
+text = "Nodvard Shield am Handy: Hinweise, Funde in der Quarantäne und Updates je Server sind besser lesbar, die Knöpfe stehen bei wenig Platz darunter."
+
+[[entries]]
+kind = "behoben"
+text = "Übersicht: Die Serverliste passt jetzt auf den Bildschirm, am Handy und am Laptop, die Knöpfe für Terminal und Konsole sind nicht mehr abgeschnitten. Die Spalte „Läuft seit“ erscheint dafür erst auf sehr breiten Bildschirmen."
+
+[[entries]]
+kind = "behoben"
+text = "Am Handy verdeckt die Leiste des Browsers nicht mehr das Ende einer Seite, man kann bis ganz nach unten blättern."
+
+[[entries]]
+kind = "behoben"
+text = "Die Serverliste im Cockpit zeigt bei laufenden Proxmox-Gästen jetzt CPU, Arbeitsspeicher und „Läuft seit“ statt „–“. Nach einem Umzug erhalten als verschwunden markierte Einträge keine Messwerte mehr. Bei VMs bleibt die Platte leer."
+
+[[entries]]
+kind = "behoben"
+text = "Der Konsolenknopf bleibt bei laufenden Proxmox-Gästen auch mit Messwerten sichtbar."
+
+[[entries]]
+kind = "behoben"
+text = "Ungültige Proxmox-Messwerte betreffen nur den jeweiligen Server; die Werte anderer Server werden weiter erfasst."
+
+[[entries]]
+kind = "behoben"
+text = "Bei Nginx Proxy Manager steht an einem abgelaufenen Zertifikat nicht mehr zweimal „abgelaufen“, sondern zum Beispiel „abgelaufen · seit 2 Tagen“."
+
+[[entries]]
+kind = "behoben"
+text = "Der Push-Versand gibt die Datenbankverbindung vor dem Senden frei, damit andere Anfragen weiterarbeiten können."
+
+[[entries]]
+kind = "verbessert"
+text = "Proxmox-Knoten und LXC-Container zeigen in der Serverliste im Cockpit jetzt auch die Platte. Bei VMs bleibt sie leer, weil Proxmox für sie keinen belegten Platz meldet."
+
+[[entries]]
+kind = "behoben"
+text = "Gespeicherte Sicherheitsmeldungen erscheinen auch ohne Meldungskanal nur einmal je Version."
+prs = [589]
+
+[[entries]]
+kind = "behoben"
+text = "Beim Wechsel des Versionskanals bleibt die Bestätigung für Sicherheitsupdates bis zum Ende des Ladens gesperrt. Verspätete Antworten überschreiben die gespeicherte Zustimmung nicht mehr."
+prs = [589]
+
+[[entries]]
+kind = "behoben"
+text = "Sicherheitsupdates werden bei der nächsten Suche erneut gemeldet, wenn weder eine In-App-Meldung gespeichert noch eine Meldung erfolgreich über einen Meldungskanal zugestellt wurde."
+prs = [589]
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Dock zeigt keinen Schalter zum selbstständigen Einspielen von Sicherheitsupdates mehr."
+prs = [589]
+
+[[entries]]
+kind = "behoben"
+text = "Eine laufende Update-Suche überschreibt die gerade gespeicherte Zustimmung zu Sicherheitsupdates nicht mehr."
+prs = [589]
+
+[[entries]]
+kind = "behoben"
+text = "Die Docker-Seite behält Ergebnisse, Fehler und Ablehnungsgründe von Ressourcenaktionen beim Neuladen und bei Ladefehlern sichtbar."
+
+[[entries]]
+kind = "behoben"
+text = "Die Docker-Seite zeigt nach fremder Freigabe auch das Ergebnis von Löschaktionen samt Fehler oder Ablehnungsgrund. Ergebnisse gleichzeitig abgeschlossener Ressourcenaktionen bleiben gemeinsam sichtbar."
+
+[[entries]]
+kind = "behoben"
+text = "Die Frontend-Tests prüfen Import-Map und Kachelfarben auch mit der strengeren Sicherheitsrichtlinie."
+
+[[entries]]
+kind = "behoben"
+text = "Ein erkannter Dienst, den es mit derselben Adresse schon als eigene App gibt, steht auf der Seite „Apps“ und in der Übersicht nicht mehr doppelt da."
+
+[[entries]]
+kind = "verbessert"
+text = "Auf den Seiten der Dienste (etwa Plex, Jellyfin, Pi-hole oder Synology) sind „Einstellungen“ und Links wie „Pi-hole öffnen“ oben jetzt Knöpfe wie „Aktualisieren“ daneben, und bei Plex steht unter einer Bibliothek namens „Filme“ nicht noch einmal „Filme“."
+
+[[entries]]
+kind = "verbessert"
+text = "Bei Dokumenten steht in der Zeile ein „+ Tag“, solange noch Tags übrig sind: Ein Klick öffnet die Details und springt gleich zur Auswahl des Tags."
+
+[[entries]]
+kind = "verbessert"
+text = "Im Einrichtungsassistenten lassen sich die Befehle zum Finden des Einrichtungscodes mit einem Knopf kopieren, und der Knopf zum Einspielen einer Sicherung heißt schlicht „Sicherung einspielen“."
+
+[[entries]]
+kind = "verbessert"
+text = "In der Serverliste führt ein Server ohne Zugang gleich zu „Zugang einrichten“ statt zu „Prüfen“ (prüfen lässt er sich weiter auf seiner eigenen Seite), und der farbige Punkt nennt den Zustand des Servers."
+
+[[entries]]
+kind = "verbessert"
+text = "Ungelesene Meldungen haben einen farbigen Streifen am Rand (Vorlese-Programme sagen „Ungelesen“ dazu), und der Knopf heißt jetzt „Als gelesen markieren“ statt nur „Gelesen“."
+
+[[entries]]
+kind = "verbessert"
+text = "Bietet der Update-Helfer „Jetzt aktualisieren“ an, ist die Anleitung für Updates von Hand darunter eingeklappt („Von Hand aktualisieren“), sonst steht sie wie bisher offen da."
+
+[[entries]]
+kind = "verbessert"
+text = "Einstellungen → System: Die lange Liste der Zeitzonen ist jetzt zugeklappt. „Zeitzone ändern“ öffnet sie, nach der Wahl klappt sie wieder zu."
+
+[[entries]]
+kind = "behoben"
+text = "Ein geändertes Passwort oder Token gilt sofort in allen Modulen, ohne Neustart."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Projektübersicht erklärt auf Deutsch und Englisch Lizenz, Sicherheit, Schnellstart und Grenzen von Deck für neue Nutzer."
+
+[[entries]]
+kind = "behoben"
+text = "Shield erkennt unveränderliche Systeme wie Bazzite und Fedora Atomic und erklärt die manuelle Installation mit anschließendem Neustart, statt einen Installationsfehler anzuzeigen."
+
+[[entries]]
+kind = "verbessert"
+text = "Am Handy zeigen Aktionen und Dateien ihre Einträge als Karten statt als breite Tabelle, alle Knöpfe bleiben erreichbar."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Serverliste im Terminal ist am Handy höher und lässt sich bis zum letzten Server scrollen."

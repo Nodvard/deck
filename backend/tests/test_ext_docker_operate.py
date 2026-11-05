@@ -534,6 +534,8 @@ async def test_measuring_leaves_out_what_the_helper_cannot_tell(client, db_sessi
         calls.append((target.name, command))
         if "stats" in command:
             return result("web|1.50%|1MiB / 4GiB|0.03%\n")
+        if "container inspect" in command or command.endswith(" state web"):
+            return result('{"name":"/web","started":"2026-11-01T10:00:00Z"}\n')
         return result("/web|3\n" if "RestartCount" in command else "")
 
     monkeypatch.setattr(docker_on.handle, "run", run)
@@ -542,7 +544,10 @@ async def test_measuring_leaves_out_what_the_helper_cannot_tell(client, db_sessi
     body = measured.json()
     assert set(body["data"]) == {f"{docker_on.host}:web", f"{host.id}:web"}
     assert list(body["restarts"]) == [f"{docker_on.host}:web"]
-    assert [command for name, command in calls if name == "nur-lesen"] == [f"sudo -n {HELPER} stats"]
+    assert body["started_at"] == {
+        f"{docker_on.host}:web": "2026-11-01T10:00:00Z", f"{host.id}:web": "2026-11-01T10:00:00Z",
+    }
+    assert [command for name, command in calls if name == "nur-lesen"] == [f"sudo -n {HELPER} stats", f"sudo -n {HELPER} state web"]
 
 
 # Was auf einem Server im Modus „Nur bedienen“ geht; jede andere Route mit `{host_id}` antwortet 409 mit Grund.

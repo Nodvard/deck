@@ -31,6 +31,7 @@ import {
   urlHost,
   useAppActions,
   useAppSuggestions,
+  withoutAdopted,
 } from "../lib/apps";
 import { type AppTileOut, useHosts, useOverview } from "../lib/overview";
 import { useAuthStore } from "../state/auth";
@@ -88,7 +89,7 @@ export function AppsPage() {
   const returnFocus = useRef<HTMLElement | null>(null);
 
   const overviewFailed = overview.isError && !overview.data;
-  const apps = useMemo(() => overview.data?.apps ?? [], [overview.data]);
+  const apps = useMemo(() => withoutAdopted(overview.data?.apps ?? []), [overview.data]);
   const custom = useMemo(() => apps.filter((a) => a.source === "custom").sort(byPosition), [apps]);
   const detected = useMemo(() => apps.filter((a) => a.source === "detected" && a.url), [apps]);
   const groups = useMemo(() => existingGroups(apps), [apps]);

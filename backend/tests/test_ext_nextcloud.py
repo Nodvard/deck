@@ -226,6 +226,33 @@ async def _setup_nextcloud(
 
 
 @pytest.mark.asyncio
+async def test_webdav_reads_the_current_app_password(client, db_session, test_settings, mock_webdav):
+    base_url, _state = mock_webdav
+    headers = _auth_header(await _setup_nextcloud(client, db_session, test_settings, base_url))
+    from nodvard_deck_ext_nextcloud.config import build_connector
+    from nodvard_deck_ext_nextcloud.connector import WebDavError
+
+    ctx = get_extension_runtime().loaded["nextcloud"].ctx
+
+    async def listing():
+        connector = await build_connector(ctx)
+        assert connector is not None
+        return await connector.list_children("/docs")
+
+    assert await listing()
+    for value in ("falsch", _PASSWORD):
+        saved = await client.put("/api/v1/extensions/nextcloud/secrets", headers=headers, json={
+            "label": "nextcloud-app-password", "value": value, "current_password": "correct-horse-battery",
+        })
+        assert saved.status_code == 204, saved.text
+        if value == "falsch":
+            with pytest.raises(WebDavError):
+                await listing()
+        else:
+            assert await listing()
+
+
+@pytest.mark.asyncio
 async def test_nextcloud_appears_as_a_file_source_over_the_real_files_api(client, db_session, test_settings, mock_webdav):
     base_url, _state = mock_webdav
     token = await _setup_nextcloud(client, db_session, test_settings, base_url)

@@ -469,6 +469,12 @@ function DocumentsPage() {
   const [tagFilter, setTagFilter] = useState("");
   const [showTags, setShowTags] = useState(false);
   const [expanded, setExpanded] = useState(null);
+  const [tagPickerFor, setTagPickerFor] = useState(null);
+  useEffect(() => {
+    if (!tagPickerFor || expanded !== tagPickerFor) return;
+    document.getElementById(`tag-select-${tagPickerFor}`)?.focus();
+    setTagPickerFor(null);
+  }, [tagPickerFor, expanded]);
   const [preview, setPreview] = useState(null);
   useEffect(() => () => {
     if (preview) URL.revokeObjectURL(preview.url);
@@ -749,7 +755,20 @@ function DocumentsPage() {
                           name,
                           /* @__PURE__ */ jsx3("button", { type: "button", onClick: () => void unlinkItem(doc, id), "aria-label": label, className: "opacity-60 hover:opacity-100", children: /* @__PURE__ */ jsx3(Icon, { name: "x", size: 10 }) })
                         ] }, id);
-                      })
+                      }),
+                      attachableTags.length > 0 && /* @__PURE__ */ jsx3(
+                        "button",
+                        {
+                          type: "button",
+                          onClick: () => {
+                            setExpanded(doc.id);
+                            setTagPickerFor(doc.id);
+                          },
+                          "aria-label": `+ Tag f\xFCr ${doc.original_filename}`,
+                          className: "rounded-full border border-dashed border-white/25 px-2 py-0.5 text-[11px] text-white/60 hover:border-white/50 hover:text-white",
+                          children: "+ Tag"
+                        }
+                      )
                     ] })
                   ] }),
                   /* @__PURE__ */ jsxs3("div", { className: "flex w-full flex-wrap items-center gap-1 sm:w-auto sm:flex-none", children: [
@@ -785,6 +804,7 @@ function DocumentsPage() {
                     /* @__PURE__ */ jsxs3(
                       "select",
                       {
+                        id: `tag-select-${doc.id}`,
                         value: attachTagId[doc.id] ?? "",
                         "aria-label": `Tag zu ${doc.original_filename} hinzuf\xFCgen`,
                         onChange: (e) => setAttachTagId({ ...attachTagId, [doc.id]: e.target.value }),

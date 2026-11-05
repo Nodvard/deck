@@ -5,11 +5,13 @@ Router der Erweiterungen (`/api/v1/ext/<id>/...`) hängt `ExtensionRuntime.mount
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+
+from ..edition import require_edition_route
 
 from . import actions, apps, audit, auth, branding, catalog, changelog, console, dashboard, demo, extension_settings, extensions, files, host_access, hosts, jobs, me, notifications, overview, public, secrets, settings, system, terminal, users, ws
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_edition_route)])
 router.include_router(public.router)
 router.include_router(auth.router)
 router.include_router(branding.router)

@@ -865,6 +865,49 @@ def test_data_dir_of_an_existing_installation_follows_the_store_id(tmp_path):
     assert extensions_service._data_dir(settings, manifest, "old-ext") == tmp_path / "ext" / "old-ext"
 
 
+@pytest.mark.parametrize("store_id", ["renamed-ext", "old-ext"])
+def test_an_empty_folder_never_hides_a_filled_one(tmp_path, store_id):
+    from nodvard_deck.config import Settings
+
+    settings = Settings(data_dir=tmp_path, ext_data_dir=tmp_path / "ext")
+    manifest = _manifest_renamed()
+    other = "old-ext" if store_id == "renamed-ext" else "renamed-ext"
+    (tmp_path / "ext" / store_id).mkdir(parents=True)
+    (tmp_path / "ext" / other).mkdir()
+    (tmp_path / "ext" / other / "stacks.json").write_text("{}", encoding="utf-8")
+    assert extensions_service._data_dir(settings, manifest, store_id) == tmp_path / "ext" / other
+    (tmp_path / "ext" / store_id / "stacks.json").write_text("{}", encoding="utf-8")
+    assert extensions_service._data_dir(settings, manifest, store_id) == tmp_path / "ext" / store_id
+
+
+def test_a_folder_holding_only_a_subfolder_counts_as_filled(tmp_path):
+    from nodvard_deck.config import Settings
+
+    settings = Settings(data_dir=tmp_path, ext_data_dir=tmp_path / "ext")
+    (tmp_path / "ext" / "renamed-ext").mkdir(parents=True)
+    (tmp_path / "ext" / "old-ext" / "git-apply").mkdir(parents=True)
+    assert extensions_service._data_dir(settings, _manifest_renamed(), "renamed-ext") == tmp_path / "ext" / "old-ext"
+
+
+def test_an_unreadable_folder_counts_as_filled(tmp_path, monkeypatch):
+    from nodvard_deck.config import Settings
+
+    settings = Settings(data_dir=tmp_path, ext_data_dir=tmp_path / "ext")
+    (tmp_path / "ext" / "renamed-ext").mkdir(parents=True)
+    (tmp_path / "ext" / "old-ext").mkdir()
+    (tmp_path / "ext" / "old-ext" / "stacks.json").write_text("{}", encoding="utf-8")
+    real_scandir = extensions_service.os.scandir
+
+    def scandir(path):
+        if Path(path).name == "renamed-ext":
+            raise PermissionError(13, "Permission denied")
+        return real_scandir(path)
+
+    monkeypatch.setattr(extensions_service.os, "scandir", scandir)
+    chosen = extensions_service._data_dir(settings, _manifest_renamed(), "renamed-ext")
+    assert chosen == tmp_path / "ext" / "renamed-ext"
+
+
 def test_data_dir_without_legacy_ids_is_always_the_own_folder(tmp_path):
     from nodvard_sdk import ExtensionManifest
 

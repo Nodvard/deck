@@ -511,7 +511,7 @@ async def _record_failure(exc: Exception, *, trigger: str, user_id: str | None) 
         async with session_scope() as session:
             await notifications_service.send(
                 session, title="Sicherung fehlgeschlagen", body=body, severity="warning",
-                payload={"path": "/settings/system", "tags": ["floppy_disk"]},
+                payload={"notification_type": "deck.backup_failed", "path": "/settings/system", "tags": ["floppy_disk"]},
             )
 
 

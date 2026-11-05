@@ -13,6 +13,7 @@ import { hostProvider, providerDeleteNote, type HostProvider } from "../../../li
 import type { HostOut } from "../../../lib/hosts";
 import { confirmDialog, promptDialog } from "../../../state/dialogs";
 import { Button } from "../ui";
+import { productText, useEditionStore } from "../../../state/edition";
 
 export type DeleteOutcome = { status: "deleted" } | { status: "cancelled" } | { status: "mismatch" } | { status: "error"; text: string };
 
@@ -28,7 +29,9 @@ export function deletePrompt(host: HostOut, provider?: HostProvider): string {
       : " Dieser Server wurde automatisch eingelesen und taucht beim nächsten Abgleich wieder auf – dann ohne SSH-Zugang.";
   return (
     `Zum Löschen den Kurznamen „${host.name}“ eintippen. Gelöscht werden auch SSH-Zugang und gemerkter Server-Schlüssel. ` +
-    "Verläufe in Nodvard Shield bleiben mit dem alten Namen stehen; Skripte, die nur auf diesem Server laufen sollten, laufen danach nirgends." +
+    (useEditionStore.getState().edition.choose_modules
+      ? "Verläufe in Nodvard Shield bleiben mit dem alten Namen stehen; Skripte, die nur auf diesem Server laufen sollten, laufen danach nirgends."
+      : "") +
     extra
   );
 }
@@ -37,7 +40,7 @@ export function deletePrompt(host: HostOut, provider?: HostProvider): string {
  * nächsten Abgleich nicht wieder, und den Kurznamen abzutippen schützt hier vor nichts. */
 export function goneDeletePrompt(host: HostOut, provider?: HostProvider): string {
   const where = provider ? `in ${provider.name}` : "beim Anbieter";
-  return `„${host.display_name}“ gibt es ${where} nicht mehr. Aus Nodvard Deck entfernen? Gespeicherte Zugänge und der gemerkte Server-Schlüssel verschwinden mit.`;
+  return `„${host.display_name}“ gibt es ${where} nicht mehr. Aus ${productText("Nodvard Deck")} entfernen? Gespeicherte Zugänge und der gemerkte Server-Schlüssel verschwinden mit.`;
 }
 
 export async function deleteHost(host: HostOut, provider?: HostProvider): Promise<DeleteOutcome> {

@@ -11,6 +11,7 @@ import { CANCELLED, withConfirmation } from "../../../lib/confirmation";
 import { fieldErrors, refreshHosts, type HostOut } from "../../../lib/hosts";
 import { Badge, Button, NoticeLine, Toggle, inputClass, type Notice } from "../ui";
 import { FormField } from "./FormField";
+import { useEdition } from "../../../state/edition";
 
 function parseTags(text: string): string[] {
   return text.split(/[,\s]+/).map((t) => t.trim().toLowerCase()).filter(Boolean);
@@ -43,6 +44,7 @@ export function HostForm({
   onCancel?: () => void;
 }) {
   const queryClient = useQueryClient();
+  const edition = useEdition();
   const editing = host !== undefined;
   const managedTags = host?.managed_tags ?? [];
   const manualTags = (host?.tags ?? []).filter((t) => !managedTags.includes(t));
@@ -149,10 +151,10 @@ export function HostForm({
         <FormField
           className="sm:col-span-2"
           label="Markierungen"
-          hint="Mit Komma trennen. docker = Docker und Container-Wache nehmen den Server; gameserver = erscheint bei Gameserver."
+          hint={edition.choose_modules ? "Mit Komma trennen. docker = Docker und Container-Wache nehmen den Server; gameserver = erscheint bei Gameserver." : "Mit Komma trennen. docker = voller Docker-Zugang; docker-bedienen = nur ansehen, starten, stoppen und neu starten."}
           error={errors.tags}
         >
-          {(p) => <input {...p} className={inputClass} value={tagsText} onChange={(e) => setTagsText(e.target.value)} autoCapitalize="none" placeholder="docker, gameserver" />}
+          {(p) => <input {...p} className={inputClass} value={tagsText} onChange={(e) => setTagsText(e.target.value)} autoCapitalize="none" placeholder={edition.choose_modules ? "docker, gameserver" : "docker"} />}
         </FormField>
       </div>
       {managedTags.length > 0 && (
@@ -162,7 +164,7 @@ export function HostForm({
         </p>
       )}
 
-      {editing && (
+      {editing && edition.choose_modules && (
         <details className="rounded-lg border border-white/[0.08] px-3 py-2">
           <summary className="cursor-pointer text-sm text-white/70">Erweitert</summary>
           <div className="mt-3 space-y-3">

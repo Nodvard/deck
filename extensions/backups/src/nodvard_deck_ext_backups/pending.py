@@ -1,4 +1,4 @@
-"""Offene Kopien: Wiederherstellungen, die Proxmox begonnen hat, die Nodvard Deck aber noch nicht fertig eingerichtet hat."""
+"""Offene Kopien: von Proxmox begonnene Wiederherstellungen, die Nodvard Deck noch nicht fertig eingerichtet hat."""
 
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ def _save(ctx: ExtensionContext, data: dict[str, dict[str, Any]]) -> None:
 
 
 def remember(ctx: ExtensionContext, key: str, record: dict[str, Any]) -> None:
-    """Wirft `OSError`, wenn der Vermerk nicht geschrieben werden kann -- dann wird nichts angelegt."""
+    """Wirft `OSError`, wenn der Vermerk nicht geschrieben werden kann; dann wird nichts angelegt."""
     data = load(ctx)
     data[key] = record
     _save(ctx, data)

@@ -157,34 +157,34 @@ POLL_INTERVAL_S = 5.0
 """So oft sieht der Ablauf nach: beim Beobachten, beim Warten auf den alten Container und vor jedem neuen Versuch."""
 CLEANUP_RETRY_S = 60.0
 """So lange versucht der Ablauf nach dem Commit je Runde, den alten Container und ein altes Schutz-Tag zu entfernen.
-Gelingt es nicht, bleibt das Journal auf `committed` stehen (die Wiederaufnahme raeumt in der naechsten Runde weiter
+Gelingt es nicht, bleibt das Journal auf `committed` stehen (die Wiederaufnahme räumt in der nächsten Runde weiter
 auf)."""
 CLEANUP_ROUNDS = 5
-"""So viele Runden lang versucht der Ablauf einen Teil des Aufraeumens nach dem Commit, den die Engine mit einem Fehler
-beantwortet (5xx, unverstaendliche Antwort; etwa "device or resource busy" beim Entfernen). Danach bleibt dieser Teil
-liegen wie bei einer endgueltigen Ablehnung (4xx), sonst bliebe der Helfer fuer immer beschaeftigt. Ist die Engine nur
-nicht erreichbar, zaehlt die Runde nicht: dann kann ohnehin niemand etwas aendern. Gezaehlt wird im laufenden
+"""So viele Runden lang versucht der Ablauf einen Teil des Aufräumens nach dem Commit, den die Engine mit einem Fehler
+beantwortet (5xx, unverständliche Antwort; etwa "device or resource busy" beim Entfernen). Danach bleibt dieser Teil
+liegen wie bei einer endgültigen Ablehnung (4xx), sonst bliebe der Helfer für immer beschäftigt. Ist die Engine nur
+nicht erreichbar, zählt die Runde nicht: dann kann ohnehin niemand etwas ändern. Gezählt wird im laufenden
 Prozess.
 
-Fuer das Speichern von Slot bzw. Sperre in `state.json` gibt es bewusst keine solche Grenze: Laesst sich die Datei
-dauerhaft nicht schreiben (Datentraeger voll), bleibt der Helfer beschaeftigt, bis es wieder geht. Ginge das Journal
-vorher, waeren Rueckweg bzw. Sperre verloren; das Ergebnis steht derweil im Status (aus dem geladenen Zustand)."""
+Für das Speichern von Slot bzw. Sperre in `state.json` gibt es bewusst keine solche Grenze: Laesst sich die Datei
+dauerhaft nicht schreiben (Datenträger voll), bleibt der Helfer beschäftigt, bis es wieder geht. Ginge das Journal
+vorher, wären Rückweg bzw. Sperre verloren; das Ergebnis steht derweil im Status (aus dem geladenen Zustand)."""
 STOP_MIN_S = 30
-"""Mindestens so lange darf ein Container beim Stoppen brauchen, auch wenn sein `StopTimeout` kuerzer ist."""
+"""Mindestens so lange darf ein Container beim Stoppen brauchen, auch wenn sein `StopTimeout` kürzer ist."""
 RESCUE_MARKER = "HTTP Error 503"
 """So meldet der Healthcheck die Notseite des Dashboards. Nur ein Abbruchsignal: nie geloggt, nie ein Erfolg."""
 RESCUE_CHECKS = 2
-"""So viele letzte Eintraege in `Health.Log` muessen die Notseite zeigen."""
+"""So viele letzte Einträge in `Health.Log` müssen die Notseite zeigen."""
 HEALTHY = "healthy"
 """Ergebnis von `judge`, wenn der Container gesund ist (kein Code aus `policy.CODES`)."""
 OWN_START_S = 120
-"""So lange nach dem Eintrag `started` startet der neue Container beim eigenen Start spaetestens (Zeitlimit des
-Aufrufs plus Reserve). Startete er spaeter, hat ihn der Docker-Dienst neu gestartet."""
+"""So lange nach dem Eintrag `started` startet der neue Container beim eigenen Start spätestens (Zeitlimit des
+Aufrufs plus Reserve). Startete er später, hat ihn der Docker-Dienst neu gestartet."""
 START_SLACK_S = 2
 """Spielraum beim Vergleich eines Starts (`State.StartedAt`) mit Zeitpunkten aus dem Journal (das Journal rechnet in
-ganzen Sekunden). Etwas anderes als `policy.CLOCK_SLACK_S` (Spielraum fuer Uhrspruenge bei den Grenzen in `/state`)."""
+ganzen Sekunden). Etwas anderes als `policy.CLOCK_SLACK_S` (Spielraum für Uhrsprünge bei den Grenzen in `/state`)."""
 TOGETHER_S = 120
-"""So nah (davor oder danach) liegen die Starts des Helfers und des neuen Containers hoechstens, wenn der Docker-Dienst
+"""So nah (davor oder danach) liegen die Starts des Helfers und des neuen Containers höchstens, wenn der Docker-Dienst
 beide zusammen gestartet hat (Neustart des Rechners oder des Dienstes: er startet die Container mit Restart-Policy kurz
 nacheinander, auf einem langsamen Raspberry Pi kann das eine Weile dauern). Beide Zeitpunkte stammen dann aus derselben
 Uhr kurz nach dem Hochfahren -- ihr Abstand stimmt, auch wenn die Uhr selbst falsch geht, solange NTP sie nicht
@@ -194,13 +194,13 @@ _STEP_CODES = {
     "creating": policy.CREATE_FAILED, "created": policy.CREATE_FAILED, "old_stopped": policy.STOP_FAILED,
     "started": policy.START_FAILED,
 }
-"""Fehlercode, wenn ein Aufruf in diesem Schritt an der Engine scheitert. In den uebrigen Schritten gilt der Code
+"""Fehlercode, wenn ein Aufruf in diesem Schritt an der Engine scheitert. In den übrigen Schritten gilt der Code
 des Engine-Fehlers (`engine_unreachable`, `engine_unsupported`)."""
 
 
 _TRANSPORT_ERRORS = frozenset({"unreachable", "timeout", "disconnected", "not_negotiated"})
 """Fehler auf dem Weg zur Engine (`EngineError.reason`), nicht in ihrer Antwort: Der Docker-Dienst war nicht da, hing
-oder startete gerade neu. Ein spaeterer Versuch kann gelingen."""
+oder startete gerade neu. Ein späterer Versuch kann gelingen."""
 
 
 def _index(step: str) -> int:
@@ -309,11 +309,11 @@ class _Run:
     from_version: str | None = None
     target: target.Target | None = None
     template: dict[str, Any] | None = None
-    """Inspect des alten Containers: Vorlage fuer seine Compose-Labels und sein `StopTimeout`."""
+    """Inspect des alten Containers: Vorlage für seine Compose-Labels und sein `StopTimeout`."""
     me: target.SelfInfo | None = None
     labels: tuple[tuple[str, str], ...] = ()
     slot: Slot | None = None
-    """Beim Rueckweg der benutzte Slot."""
+    """Beim Rückweg der benutzte Slot."""
     journal: Journal | None = None
     binding: Binding | None = None
     new_image: dict[str, Any] | None = None
@@ -323,7 +323,7 @@ class _Run:
     watch_until: float | None = None
     """Ende des Beobachtens auf der monotonen Uhr (aus der Frist im Journal)."""
     policy_restored: bool = False
-    """Der Rueckbau hat die Restart-Policy des alten Containers in diesem Lauf wiederhergestellt."""
+    """Der Rückbau hat die Restart-Policy des alten Containers in diesem Lauf wiederhergestellt."""
     stop_sent_at: float | None = None
     """Wann der Stopp des alten Containers hinausging (monotone Uhr); bei der Wiederaufnahme ab `old_stopped` der
     Zeitpunkt des Neustarts, denn ein Stopp kann noch laufen. `None`: es ging keiner hinaus."""
@@ -460,7 +460,7 @@ class Flow:
         self._log = logger or _ignore
         self._checkpoint = checkpoint or _ignore
         self._cleanup_misses: dict[str, int] = {}
-        """Je Teil des Aufraeumens nach dem Commit: in wie vielen Runden die Engine ihn mit einem Fehler beantwortet hat
+        """Je Teil des Aufräumens nach dem Commit: in wie vielen Runden die Engine ihn mit einem Fehler beantwortet hat
         (siehe `CLEANUP_ROUNDS`)."""
 
     # --- Einstieg -----------------------------------------------------------

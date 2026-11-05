@@ -29,17 +29,17 @@ Fließtext "Lattice" mit großem L (Produktname in Kommentaren) gehört zur Umbe
 hierher: geprüft werden nur die technischen Schreibweisen `lattice` und `LATTICE`.
 
 **Regel 3 (alte Shield-Kennung):** Nodvard Shield hiess bis 0.6 technisch `nexus-soc` (Paket `nodvard_deck_ext_nexus_soc`,
-Aktionsarten `nexus_soc.*`); seit 0.7 heisst die Kennung `shield`. Zwei harte Verbote ohne Positivliste: das Paket
+Aktionsarten `nexus_soc.*`); seit 0.7 heißt die Kennung `shield`. Zwei harte Verbote ohne Positivliste: das Paket
 `nodvard_deck_ext_nexus_soc` steht nirgends, und die alten Adressen `/ext/nexus-soc` und `/extensions/nexus-soc` stehen nur in
 Testdateien mit "legacy" im Namen (den Alias-Tests: `test_*legacy*.py`, `*Legacy*.test.ts(x)`). Jedes andere Vorkommen der klein
 geschriebenen technischen Schreibweise (`nexus`, `nexus-soc`, `nexus_soc`, `nexus-quarantine` ...) muss zu einem Eintrag von
-`KEPT_SHIELD` passen: Namen, die bewusst bleiben, weil sie in der Datenbank oder auf den Servern liegen und ein Rueckweg aufs alte
-Image daran haengt (Tabellen, Aktionsarten, Geheimnis-Label, Server-Ordner). Anders als bei Regel 2 nennt jeder Eintrag die
-Dateien, in denen er gilt (`where`); ein Test sorgt dafuer, dass jede dieser Angaben noch gebraucht wird. Nicht geprueft:
-`docs/`, `reference/`, Markdown, veroeffentlichte Aenderungsprotokolle, gebaute Bundles, die beiden Vertrags-Schnappschuesse
+`KEPT_SHIELD` passen: Namen, die bewusst bleiben, weil sie in der Datenbank oder auf den Servern liegen und ein Rückweg aufs alte
+Image daran hängt (Tabellen, Aktionsarten, Geheimnis-Label, Server-Ordner). Anders als bei Regel 2 nennt jeder Eintrag die
+Dateien, in denen er gilt (`where`); ein Test sorgt dafür, dass jede dieser Angaben noch gebraucht wird. Nicht geprüft:
+`docs/`, `reference/`, Markdown, veröffentlichte Änderungsprotokolle, gebaute Bundles, die beiden Vertrags-Schnappschüsse
 `api_v1.json` und `alembic_revisions.json`, der eingefrorene Migrationsordner `extensions/shield/migrations/` (eine
-ausgelieferte Revision aendert sich nie) sowie die Waechter selbst und ihre Tests. Der Produktname in Grossschreibung
-(Fliesstext) gehoert zu `backend/tests/test_no_visible_nexus.py`.
+ausgelieferte Revision ändert sich nie) sowie die Wächter selbst und ihre Tests. Der Produktname in Großschreibung
+(Fließtext) gehört zu `backend/tests/test_no_visible_nexus.py`.
 
 **Regel 4 (alte Docker-Kennung):** Das Docker-Modul hieß bis 0.8 `service-matrix`. Das alte Paket
 `nodvard_deck_ext_service_matrix` steht nirgends, die alten Adressen `/ext/service-matrix` und `/extensions/service-matrix` nur in
@@ -47,7 +47,7 @@ Alias-Tests (gemeint sind Adressen mit `/` davor). Gespeicherte Namen (Speicher-
 bleiben ohne Positivliste erlaubt.
 Nicht geprüft wird dasselbe wie bei Regel 3.
 
-Der Waechter laeuft als pytest-Test (`backend/tests/test_legacy_names.py`), also mit `pytest backend/tests` und in der CI.
+Der Wächter läuft als pytest-Test (`backend/tests/test_legacy_names.py`), also mit `pytest backend/tests` und in der CI.
 """
 
 from __future__ import annotations
@@ -69,6 +69,8 @@ EXEMPT_PREFIXES = (
     "backend/src/nodvard_deck/ext/old_names.py",
     "backend/tests/test_ext_old_package_names.py",
     "backend/tests/test_wheel.py",  # prüft, dass die alten Pakete nicht mehr im Wheel stecken
+    # Prüft, dass das alte Refresh-Cookie nicht mehr gilt.
+    "backend/tests/test_auth_refresh_cookie.py",
     # Prüft, dass die alten Namen im Frontend nicht mehr wirken.
     "frontend/src/lib/oldNames.test.ts",
     # Dieser Wächter und sein Test (sie nennen die alten Namen als Muster und Beispiele).
@@ -99,7 +101,7 @@ def is_exempt(rel: str) -> bool:
 # --------------------------------------------------------------------------- Regel 1 (hart)
 
 # `import lattice`, `from lattice import ...`, `from lattice.x import ...`, `import lattice_sdk`, `from lattice_sdk...`;
-# auch hinter `;` und in Anfuehrungszeichen (`python -c "import lattice"` in Shell-Skripten, `x = 1; import lattice`).
+# auch hinter `;` und in Anführungszeichen (`python -c "import lattice"` in Shell-Skripten, `x = 1; import lattice`).
 IMPORT_RE = re.compile(r"(?:^|[;\"'`])\s*(?:from|import)\s+lattice(?:_sdk)?(?![\w-])", re.MULTILINE)
 # Modulpfade als Text: patch("lattice.core.x"), "lattice.main:app", python -m lattice.migrate, lattice_sdk.x
 MODULE_TEXT_RE = re.compile(
@@ -109,9 +111,9 @@ MODULE_TEXT_RE = re.compile(
     r"|-m\s+[\"']?lattice\b"
     r"|\bsrc/lattice\b(?!_)"
     r"|\bsdk/python/lattice"
-    # Die alten Paketnamen der eingebauten Extensions: `lattice_ext_proxmox` heisst jetzt `nodvard_deck_ext_proxmox`.
+    # Die alten Paketnamen der eingebauten Extensions: `lattice_ext_proxmox` heißt jetzt `nodvard_deck_ext_proxmox`.
     r"|\blattice_ext_\w+"
-    # Der Paketname als Text fuer Import oder Logger: import_module("lattice"), getLogger("lattice"), auch als f-String.
+    # Der Paketname als Text für Import oder Logger: import_module("lattice"), getLogger("lattice"), auch als f-String.
     r"|\b(?:import_module|__import__|find_spec|getLogger|get_logger)\(\s*[rf]?[\"']lattice(?![\w-])"
     # Zusammengesetzte Modulpfade: f"lattice.{name}", "lattice." + name, "lattice.%s" % name
     # (nicht "lattice.$U": das ist der Dateiname der sudo-Regel, siehe Positivliste)
@@ -130,7 +132,7 @@ class Kept:
     pattern: re.Pattern[str]
     reason: str
     paths: re.Pattern[str] | None = None
-    """Nur in Dateien, deren Pfad dazu passt (sonst gilt der Eintrag ueberall)."""
+    """Nur in Dateien, deren Pfad dazu passt (sonst gilt der Eintrag überall)."""
     where: tuple[str, ...] = ()
     """Bei `KEPT_SHIELD`: die einzelnen Pfad-Muster, aus denen `paths` zusammengesetzt ist (jedes muss noch gebraucht werden)."""
 
@@ -164,13 +166,6 @@ KEPT_NAMES: tuple[Kept, ...] = (
        "und auf der Startseite."),
     _k("Umgebungsvariablen (klein geschrieben)", r"\blattice_env\b",
        "Test: Windows liest Umgebungsvariablen ohne Gross-/Kleinschreibung (`lattice_env` muss wie `LATTICE_ENV` wirken)."),
-    # --- Cookie -----------------------------------------------------------------------------------------------------
-    _k("Cookie", r"lattice_refresh\b",
-       "Der alte Name des Refresh-Cookies bleibt als Rueckfall: der Server schreibt jeden Token in `nodvard_deck_refresh` UND "
-       "`lattice_refresh` (gleicher Wert, gleiche Attribute), liest beide und loescht beide beim Abmelden. So meldet der Deploy "
-       "niemanden ab, und nach einem Rollback aufs alte Image (es kennt nur `lattice_refresh`) bleibt man angemeldet. Faellt in "
-       "einem Aufraeum-PR weg, fruehestens 30 Tage (Laufzeit des Refresh-Tokens) nach dem Deploy und wenn kein Rollback aufs "
-       "alte Image mehr noetig ist."),
     # --- Namen auf anderen Rechnern und im Container ----------------------------------------------------------------
     _k("Container-Benutzer und alter Schluesselkommentar und Proxmox-Namen", r"lattice:lattice\b|lattice@|!lattice\b|lattice-\{",
        "Der Linux-Benutzer `lattice` (UID 1000) im Container bleibt. Auf den verwalteten Servern heissen aeltere Zugaenge weiter "
@@ -197,8 +192,8 @@ KEPT_NAMES: tuple[Kept, ...] = (
        "Namen auf fremden Hosts (Rollback-Tags, Zustandsordner der Image-Updates, systemd-Einheiten `lattice-upgrade-*`) und "
        "Skript-Ordner/-Dateien; Fortsetzung und Rollback haengen daran."),
     _k("Deploy-Namen", r"(?:deploy-)?lattice-(?:1|deploy-test)\b|lattice-deploy-test\b|lattice\.tar\b|\blattice:(?:latest|previous|pi-[\w-]+|dev|1(?:\.2)?|\*)",
-       "Der alte Container `deploy-lattice-1`, die alten Image-Tags `lattice:latest`/`lattice:previous` (gestoppt bzw. "
-       "gesichert, bis der Aufraeum-Schritt sie entfernt) und der Zielordner `~/lattice-deploy-test` (`DEPLOY_ROOT`) bleiben."),
+       "Der Container `deploy-lattice-1` und die Image-Tags `lattice:*` eines Stands von vor 0.6 (die Deploy-Skripte "
+       "brechen ab, solange es sie gibt) und der Zielordner `~/lattice-deploy-test` (`DEPLOY_ROOT`) bleiben."),
     _k("Alter Image-Name", r"/lattice\b(?![\w.-])|\blattice\b(?=/)",
        "Der alte Image-Name `lattice` (`nico/lattice`, `docker.io/library/lattice`): das Docker-Modul erkennt das Dashboard "
        "unter dem alten und dem neuen Namen und bekommt dafuer Beispielwerte in den Tests.",
@@ -215,9 +210,9 @@ SHIELD_PACKAGE_RE = re.compile(r"nodvard_deck_ext_nexus_soc")
 SHIELD_ADDRESS_RE = re.compile(r"/(?:ext|extensions)/nexus-soc(?![\w-])")
 SHIELD_TOKEN_RE = re.compile(r"nexus|(?i:nexus[-_]soc)")
 """Alles, was nach der alten Kennung aussieht: klein geschriebenes `nexus` (technische Schreibweise) und `nexus_soc` in jeder
-Gross-/Kleinschreibung. Den Produktnamen in Grossschreibung pruefen `test_no_visible_nexus.py` und die Sperrliste des Kerns."""
+Groß-/Kleinschreibung. Den Produktnamen in Großschreibung prüfen `test_no_visible_nexus.py` und die Sperrliste des Kerns."""
 
-# Alias-Tests: Dateien, die das Verhalten der alten Kennung ausdruecklich pruefen (Weiterleitung, Namen, Rueckweg). Nur dort darf
+# Alias-Tests: Dateien, die das Verhalten der alten Kennung ausdrücklich prüfen (Weiterleitung, Namen, Rückweg). Nur dort darf
 # die alte Adresse stehen.
 _LEGACY_TEST = r"(?:tests/(?:[^/]+/)*test_[^/]*legacy[^/]*\.py|[^/]*[Ll]egacy[^/]*\.test\.tsx?)"
 LEGACY_TEST_RE = re.compile(rf"(?:^|/){_LEGACY_TEST}$")
@@ -226,14 +221,14 @@ LEGACY_TEST_WHERE = rf"(?:^|/){_LEGACY_TEST}$"
 SHIELD_EXEMPT_PREFIXES = (
     "docs/",
     "reference/",
-    # Veroeffentlichte Aenderungsprotokolle: was in einer Version stand, bleibt stehen.
+    # Veröffentlichte Änderungsprotokolle: was in einer Version stand, bleibt stehen.
     "backend/src/nodvard_deck/changelog/versions/",
-    # Eingefroren: eine ausgelieferte Alembic-Revision aendert sich nie (Dateiname, Branch-Label und Tabellen bleiben alt).
+    # Eingefroren: eine ausgelieferte Alembic-Revision ändert sich nie (Dateiname, Branch-Label und Tabellen bleiben alt).
     "extensions/shield/migrations/",
-    # Schnappschuesse des Vertrags (gespeicherte Namen, Branch-Label); sie entstehen aus dem Code (scripts/update_api_contract.py).
+    # Schnappschüsse des Vertrags (gespeicherte Namen, Branch-Label); sie entstehen aus dem Code (scripts/update_api_contract.py).
     "backend/tests/contract/api_v1.json",
     "backend/tests/contract/alembic_revisions.json",
-    # Die Waechter selbst und ihre Tests: sie nennen die alten Namen als Muster und Beispiele.
+    # Die Wächter selbst und ihre Tests: sie nennen die alten Namen als Muster und Beispiele.
     "scripts/check_legacy_names.py",
     "backend/tests/test_legacy_names.py",
     "scripts/check_core_purity.py",  # Sperrliste des Kerns: das Wort steht dort als verbotenes Wort
@@ -250,13 +245,13 @@ def is_shield_exempt(rel: str) -> bool:
 
 
 def _ks(name: str, pattern: str, reason: str, where: list[str]) -> Kept:
-    """Eintrag der Positivliste fuer Regel 3: Pfad-Angaben sind Pflicht, `paths` ist ihre Vereinigung."""
+    """Eintrag der Positivliste für Regel 3: Pfad-Angaben sind Pflicht, `paths` ist ihre Vereinigung."""
     paths = "|".join(f"(?:{w})" for w in where)
     return Kept(name, re.compile(pattern), reason, re.compile(paths), tuple(where))
 
 
 def _f(*paths: str) -> list[str]:
-    """Je Datei ein Pfad-Muster (so laesst sich pruefen, dass jede Datei der Liste ihren Eintrag noch braucht)."""
+    """Je Datei ein Pfad-Muster (so lässt sich prüfen, dass jede Datei der Liste ihren Eintrag noch braucht)."""
     return ["^" + re.escape(p) + "$" for p in paths]
 
 
@@ -389,7 +384,7 @@ def read_text(path: Path) -> str | None:
     return data.decode("utf-8", "replace")
 
 
-# --------------------------------------------------------------------------- Pruefen
+# --------------------------------------------------------------------------- Prüfen
 
 
 @dataclass(frozen=True)
@@ -424,7 +419,7 @@ def kept_names_in(line: str, rel: str = "", entries: tuple[Kept, ...] = KEPT_NAM
 
 
 def check_text(rel: str, text: str) -> list[Finding]:
-    """Fuer eine Datei (Pfad relativ zum Repo, Inhalt): alle Verstoesse."""
+    """Für eine Datei (Pfad relativ zum Repo, Inhalt): alle Verstöße."""
     findings: list[Finding] = []
     for lineno, line in enumerate(text.splitlines(), start=1):
         if not TOKEN_RE.search(line) and "Lattice" not in line:
@@ -444,7 +439,7 @@ def check_text(rel: str, text: str) -> list[Finding]:
 
 
 def check_shield_text(rel: str, text: str) -> list[Finding]:
-    """Regel 3 fuer eine Datei: die alte Shield-Kennung (Pfad relativ zum Repo, Inhalt)."""
+    """Regel 3 für eine Datei: die alte Shield-Kennung (Pfad relativ zum Repo, Inhalt)."""
     findings: list[Finding] = []
     for lineno, line in enumerate(text.splitlines(), start=1):
         if not SHIELD_TOKEN_RE.search(line):
@@ -472,7 +467,7 @@ def check_docker_text(rel: str, text: str) -> list[Finding]:
 
 
 def find_violations(root: Path = REPO_ROOT, files: list[str] | None = None) -> list[Finding]:
-    """Alle Verstoesse gegen Regel 1 und 2 (`lattice`), Regel 3 (alte Shield-Kennung) und Regel 4 (alte Docker-Kennung)."""
+    """Alle Verstöße gegen Regel 1 und 2 (`lattice`), Regel 3 (alte Shield-Kennung) und Regel 4 (alte Docker-Kennung)."""
     out: list[Finding] = []
     for rel in files if files is not None else tracked_files(root):
         check_lattice, check_shield = not is_exempt(rel), not is_shield_exempt(rel)
@@ -490,7 +485,7 @@ def find_violations(root: Path = REPO_ROOT, files: list[str] | None = None) -> l
 
 
 def list_kept(root: Path = REPO_ROOT) -> list[Finding]:
-    """Alle erlaubten Vorkommen (Uebersicht fuer `--list`): Regel 2 mit Art "bleibt", Regel 3 mit Art "shield-bleibt"."""
+    """Alle erlaubten Vorkommen (Übersicht für `--list`): Regel 2 mit Art "bleibt", Regel 3 mit Art "shield-bleibt"."""
     out: list[Finding] = []
     for rel in tracked_files(root):
         check_lattice, check_shield = not is_exempt(rel), not is_shield_exempt(rel)

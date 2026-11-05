@@ -191,7 +191,7 @@ async def _report_account_change(session: SessionDep, admin: User, target: User,
                 "Hast du das nicht erwartet, sprich mit der Person, die es getan hat, oder dem Inhaber."
             ),
             severity="warning",
-            payload={"path": "/settings/users", "tags": ["warning", "key"]},
+            payload={"notification_type": "account.changed", "path": "/settings/users", "tags": ["warning", "key"]},
         )
     except Exception:
         import logging

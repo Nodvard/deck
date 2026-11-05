@@ -102,7 +102,7 @@ export function TimeAndLogCard({ settings }: { settings: SettingRow[] }): JSX.El
       <div className="space-y-5">
         <div>
           <p className="mb-1.5 text-sm text-white/70">Zeitzone</p>
-          <TimezonePicker value={zone} savedZone={saved.zone} onChange={setZone} />
+          <TimezonePicker value={zone} savedZone={saved.zone} onChange={setZone} collapsible />
           <p className="mt-2 text-xs text-white/40">
             Gilt für alle Zeitpläne (auch die der Erweiterungen, z. B. das Morgen-Briefing) und die Wartungsfenster.
             Protokoll und Meldungen zeigen weiterhin die Uhrzeit deines Geräts. Bei einem Wechsel der Zone

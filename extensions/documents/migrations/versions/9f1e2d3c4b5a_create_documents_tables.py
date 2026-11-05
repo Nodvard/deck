@@ -9,8 +9,8 @@ Zweite Extension mit eigenem, vom Kern-Branch UNABHAENGIGEN Alembic-Kopf
 Mechanismus wie bei `inventory` (siehe dortige erste Revision und
 `backend/src/nodvard_deck/migrate.py`).
 
-Tabellennamen zwingend mit `ext_documents_` praefixiert (docs/02-EXTENSION-
-API.md §7), zusaetzlich von `DbHandle.declare_tables()` beim `setup()`-Aufruf
+Tabellennamen zwingend mit `ext_documents_` präfixiert (docs/02-EXTENSION-
+API.md §7), zusätzlich von `DbHandle.declare_tables()` beim `setup()`-Aufruf
 gegen die ORM-Modelle validiert (siehe nodvard_deck_ext_documents/models.py).
 """
 from __future__ import annotations

@@ -31,12 +31,8 @@ async def _age_revocations(db_session, seconds: int = 31):
 
 
 def _browser_holds(client, value: str) -> None:
-    """Der Browser haelt genau diesen Refresh-Token. Seit der Umbenennung (Teil B, PR 4) schreibt der
-    Server ihn in zwei Cookies; mit nur einem `client.cookies.set` bliebe im Cookie-Speicher von httpx
-    der aktuelle Wert im anderen Namen stehen und wuerde zuerst gelesen. Die Faelle mit
-    unterschiedlichen Werten in beiden Namen (Rollback) stehen in test_auth_refresh_cookie.py."""
-    for name in ("nodvard_deck_refresh", "lattice_refresh"):
-        client.cookies.set(name, value)
+    """Der Browser hält genau diesen Refresh-Token."""
+    client.cookies.set("nodvard_deck_refresh", value)
 
 
 async def _login_web(client):
@@ -62,12 +58,12 @@ async def test_bootstrap_status_flips_after_first_user(client):
     ab, um zu entscheiden, ob er sich selbst oder /login zeigt."""
     before = await client.get("/api/v1/auth/bootstrap")
     assert before.status_code == 200
-    assert before.json() == {"needed": True}
+    assert before.json() == {"needed": True, "insecure_connection": True}
 
     await _bootstrap(client)
 
     after = await client.get("/api/v1/auth/bootstrap")
-    assert after.json() == {"needed": False}
+    assert after.json() == {"needed": False, "insecure_connection": True}
 
 
 @pytest.mark.asyncio
@@ -93,8 +89,7 @@ async def test_login_web_sets_cookie_not_body(client):
     assert body["access_token"]
     assert body["user"]["is_owner"] is True
     assert body["user"]["permissions"] == ["*"]
-    assert "lattice_refresh" in r.cookies
-    assert "nodvard_deck_refresh" in r.cookies, "Uebergangszeit: beide Cookies"
+    assert "nodvard_deck_refresh" in r.cookies
     # docs/00-DECISIONS.md D-07 fordert Secure fuer den Produktivbetrieb -- ueber
     # Klartext-HTTP (base_url http://test) MUSS es fehlen, sonst wuerde ein echter
     # Browser den Cookie nie speichern (siehe Tests unten).
@@ -148,7 +143,6 @@ async def test_refresh_cookie_secure_over_https(client):
 
     logout = await client.post("https://test/api/v1/auth/logout", json={})
     assert logout.status_code == 204
-    assert "lattice_refresh" in logout.headers["set-cookie"]
     assert "nodvard_deck_refresh" in logout.headers["set-cookie"]
     assert _is_secure(logout.headers["set-cookie"])
 
@@ -181,7 +175,6 @@ async def test_login_android_returns_refresh_token_in_body_no_cookie(client):
     )
     assert r.status_code == 200
     assert r.json()["refresh_token"]
-    assert "lattice_refresh" not in r.cookies
     assert "nodvard_deck_refresh" not in r.cookies
 
 
@@ -244,11 +237,11 @@ async def test_refresh_rotation_and_reuse_detection(client, db_session):
         "/api/v1/auth/login",
         json={"username": "nico", "password": "correct-horse-battery"},
     )
-    old_cookie = login.cookies["lattice_refresh"]
+    old_cookie = login.cookies["nodvard_deck_refresh"]
 
     r1 = await client.post("/api/v1/auth/refresh", json={})
     assert r1.status_code == 200
-    new_cookie = r1.cookies["lattice_refresh"]
+    new_cookie = r1.cookies["nodvard_deck_refresh"]
     assert new_cookie != old_cookie
 
     # Alten (jetzt widerrufenen) Cookie manuell zurueckspielen und wiederverwenden --
@@ -279,7 +272,7 @@ async def test_logout_revokes_refresh_token(client):
     )
     assert (await client.post("/api/v1/auth/logout", json={})).status_code == 204
 
-    _browser_holds(client, login.cookies["lattice_refresh"])
+    _browser_holds(client, login.cookies["nodvard_deck_refresh"])
     r = await client.post("/api/v1/auth/refresh", json={})
     assert r.status_code == 401
 
@@ -299,11 +292,11 @@ async def test_refresh_grace_parallel_tab_gets_access_token_without_new_refresh(
     """Zwei Tabs aktualisieren fast gleichzeitig: der zweite kommt mit dem gerade
     rotierten Token an und bleibt angemeldet -- ohne zweite Sitzungskette."""
     login = await _login_web(client)
-    old_cookie = login.cookies["lattice_refresh"]
+    old_cookie = login.cookies["nodvard_deck_refresh"]
 
     first = await client.post("/api/v1/auth/refresh", json={})
     assert first.status_code == 200
-    new_cookie = first.cookies["lattice_refresh"]
+    new_cookie = first.cookies["nodvard_deck_refresh"]
 
     _browser_holds(client, old_cookie)
     second = await client.post("/api/v1/auth/refresh", json={})
@@ -359,7 +352,7 @@ async def test_refresh_grace_body_client_gets_no_new_refresh_token(client):
 @pytest.mark.asyncio
 async def test_refresh_grace_expires_after_30_seconds(client, db_session):
     login = await _login_web(client)
-    old_cookie = login.cookies["lattice_refresh"]
+    old_cookie = login.cookies["nodvard_deck_refresh"]
     assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 200
 
     await _age_revocations(db_session, seconds=31)
@@ -371,7 +364,7 @@ async def test_refresh_grace_expires_after_30_seconds(client, db_session):
 async def test_refresh_grace_does_not_apply_to_logout(client):
     """Abmelden widerruft ohne Nachfolger -> auch innerhalb der 30 s nie mehr gueltig."""
     login = await _login_web(client)
-    old_cookie = login.cookies["lattice_refresh"]
+    old_cookie = login.cookies["nodvard_deck_refresh"]
     assert (await client.post("/api/v1/auth/logout", json={})).status_code == 204
 
     _browser_holds(client, old_cookie)
@@ -383,7 +376,7 @@ async def test_refresh_grace_rejected_when_successor_was_logged_out(client):
     """Token rotiert, dann meldet sich die Nachfolger-Sitzung ab: der alte Token darf
     die abgemeldete Sitzung nicht wieder beleben."""
     login = await _login_web(client)
-    old_cookie = login.cookies["lattice_refresh"]
+    old_cookie = login.cookies["nodvard_deck_refresh"]
     first = await client.post("/api/v1/auth/refresh", json={})
     assert first.status_code == 200
     assert (await client.post("/api/v1/auth/logout", json={})).status_code == 204
@@ -399,7 +392,7 @@ async def test_refresh_grace_does_not_apply_to_password_change(client, db_sessio
     from nodvard_deck.services import auth as auth_service
 
     login = await _login_web(client)
-    old_cookie = login.cookies["lattice_refresh"]
+    old_cookie = login.cookies["nodvard_deck_refresh"]
     first = await client.post("/api/v1/auth/refresh", json={})
     assert first.status_code == 200
     user_id = login.json()["user"]["id"]
@@ -409,7 +402,7 @@ async def test_refresh_grace_does_not_apply_to_password_change(client, db_sessio
 
     _browser_holds(client, old_cookie)
     assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 401
-    _browser_holds(client, first.cookies["lattice_refresh"])
+    _browser_holds(client, first.cookies["nodvard_deck_refresh"])
     assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 401
 
 
@@ -419,7 +412,7 @@ async def test_refresh_grace_rejected_for_deactivated_user(client, db_session):
     from sqlalchemy import select
 
     login = await _login_web(client)
-    old_cookie = login.cookies["lattice_refresh"]
+    old_cookie = login.cookies["nodvard_deck_refresh"]
     assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 200
 
     user = (await db_session.execute(select(User))).scalars().one()
@@ -441,7 +434,7 @@ async def test_refresh_rotation_is_atomic_loser_falls_into_grace(client, db_sess
     from sqlalchemy.orm.attributes import set_committed_value
 
     login = await _login_web(client)
-    old_cookie = login.cookies["lattice_refresh"]
+    old_cookie = login.cookies["nodvard_deck_refresh"]
     assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 200
 
     from nodvard_deck.core import security
@@ -471,7 +464,7 @@ async def test_refresh_grace_does_not_apply_after_own_password_change(client):
     """Eigener Passwortwechsel: die aktuelle Sitzung bleibt, aber ein davor rotierter
     Token, dessen Nachfolger sie ist, bekommt keine Gnadenfrist mehr."""
     login = await _login_web(client)
-    old_cookie = login.cookies["lattice_refresh"]
+    old_cookie = login.cookies["nodvard_deck_refresh"]
     first = await client.post("/api/v1/auth/refresh", json={})
     assert first.status_code == 200
     headers = {"Authorization": f"Bearer {first.json()['access_token']}"}
@@ -485,7 +478,7 @@ async def test_refresh_grace_does_not_apply_after_own_password_change(client):
 
     _browser_holds(client, old_cookie)
     assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 401
-    _browser_holds(client, first.cookies["lattice_refresh"])
+    _browser_holds(client, first.cookies["nodvard_deck_refresh"])
     assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 200
 
 
@@ -499,7 +492,7 @@ async def test_password_change_with_stale_session_keeps_the_current_browser_logg
     # Tab B erneuert: der Cookie zeigt danach auf S2, S1 ist durch Rotation widerrufen.
     rotated = await client.post("/api/v1/auth/refresh", json={})
     assert rotated.status_code == 200
-    current_cookie = rotated.cookies["lattice_refresh"]
+    current_cookie = rotated.cookies["nodvard_deck_refresh"]
 
     ok = await client.post(
         "/api/v1/me/password",
@@ -523,10 +516,10 @@ async def test_password_change_with_stale_session_still_signs_out_other_devices(
     )
     phone_refresh = phone.json()["refresh_token"]
     web = await client.post("/api/v1/auth/login", json={"username": "nico", "password": "correct-horse-battery"})
-    old_cookie = web.cookies["lattice_refresh"]
+    old_cookie = web.cookies["nodvard_deck_refresh"]
     stale_headers = {"Authorization": f"Bearer {web.json()['access_token']}"}
     rotated = await client.post("/api/v1/auth/refresh", json={})
-    current_cookie = rotated.cookies["lattice_refresh"]
+    current_cookie = rotated.cookies["nodvard_deck_refresh"]
 
     ok = await client.post(
         "/api/v1/me/password",

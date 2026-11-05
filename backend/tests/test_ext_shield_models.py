@@ -206,6 +206,61 @@ def _provider(resp=None, exc=None, *, url="http://ki:11434", failover=None):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["complete", "health", "models"])
+async def test_ollama_uses_the_current_vault_key_on_every_call(db_session, tmp_path, test_settings, operation):
+    from nodvard_deck.ext.context import build_context
+    from nodvard_deck.ext.runtime import ExtensionRuntime, LoadedExtension
+    from nodvard_deck.models import ExtensionRecord
+    from nodvard_deck_ext_shield.ollama import OllamaProvider, _TOKEN_LABEL, list_models
+    from nodvard_sdk import ExtensionManifest
+
+    label = _TOKEN_LABEL
+    permissions = ["net.outbound", f"secrets.read:{label}"]
+    manifest = ExtensionManifest(
+        id="shield", name="Shield", version="0.1.0", api_version="0.1.0",
+        entrypoint="x:Extension", permissions=permissions,
+    )
+    loaded = LoadedExtension(manifest=manifest, instance=None, ctx=None, granted_permissions=permissions)
+    ctx = build_context(ExtensionRuntime(), loaded, manifest, permissions, tmp_path, test_settings)
+    db_session.add(ExtensionRecord(
+        id="shield", version="0.1.0", api_version="0.1.0", state="enabled",
+        settings={"ollama_url": "http://ki.test:11434"},
+    ))
+    await db_session.flush()
+    seen = []
+    expected = "Bearer erstes-token"
+
+    def answer(request):
+        auth = request.headers.get("authorization")
+        seen.append(auth)
+        if auth != expected:
+            return httpx.Response(401)
+        return httpx.Response(200, json={"response": "Antwort", "models": [{"name": "qwen2.5:7b"}]})
+
+    provider = OllamaProvider(ctx)
+
+    async def call():
+        if operation == "health":
+            return (await provider.health()).ok
+        if operation == "models":
+            return (await list_models(ctx))["error"] is None
+        return await provider.complete("Frage") == "Antwort"
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
+        ctx.http._client = http
+        await ctx.secrets.create(label=label, kind="generic", value="erstes-token")
+        assert await call() is True
+        await ctx.secrets.replace(label=label, value="falsch")
+        assert await call() is False
+        expected = "Bearer zweites-token"
+        await ctx.secrets.replace(label=label, value="zweites-token")
+        assert await call() is True
+        await ctx.secrets.delete(label)
+        assert await call() is False
+    assert seen == ["Bearer erstes-token", "Bearer falsch", "Bearer zweites-token", None]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("status", "ok"), [(200, True), (204, True), (301, False), (302, False), (308, False),
                                             (404, False), (500, False)])
 async def test_health_is_ok_only_for_a_2xx_answer(status, ok):

@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useInRouterContext, useLocation } from "react-router-dom";
 
 import { LoadError } from "../components/LoadError";
+import { CARD_BODY, CARD_CELL, CARD_CELL_PLAIN, CARD_HEAD, CARD_ROW, CARD_TABLE } from "../components/cardTable";
 import { actionReason, describeActionOutcome, OUTCOME_TEXT_CLASS, OUTPUT_HIDDEN_HINT, type ActionOutcome } from "../lib/actionOutcome";
 import {
   ACTION_POLL_INTERVAL_MS,
@@ -690,26 +691,26 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
       )}
       {rows && rows.length === 0 && <p className="text-sm opacity-60">Keine Aktionen in diesem Filter.</p>}
 
-      {/* Handy: die Tabelle scrollt in sich, die Seite bleibt schmal. */}
+      {/* Handy: Karten statt Tabelle (components/cardTable.ts); die Rollen erhalten die Tabelle für Vorlese-Programme. */}
       {rows && rows.length > 0 && (
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-white/10 text-left text-xs opacity-60">
-                <th className="w-8 py-1">
+          <table role="table" className={CARD_TABLE}>
+            <thead role="rowgroup" className={CARD_HEAD}>
+              <tr role="row" className="border-b border-white/10 text-left text-xs opacity-60">
+                <th role="columnheader" className="w-8 py-1">
                   <span className="sr-only">Auswahl</span>
                 </th>
-                <th className="py-1">Zeit</th>
-                <th className="py-1">Aktion</th>
-                <th className="py-1">Server</th>
-                <th className="py-1">Risiko</th>
-                <th className="py-1">Status</th>
-                <th className="py-1">Vorgeschlagen von</th>
-                <th className="py-1">Begründung</th>
-                <th className="py-1">Aktionen</th>
+                <th role="columnheader" className="py-1">Zeit</th>
+                <th role="columnheader" className="py-1">Aktion</th>
+                <th role="columnheader" className="py-1">Server</th>
+                <th role="columnheader" className="py-1">Risiko</th>
+                <th role="columnheader" className="py-1">Status</th>
+                <th role="columnheader" className="py-1">Vorgeschlagen von</th>
+                <th role="columnheader" className="py-1">Begründung</th>
+                <th role="columnheader" className="py-1">Aktionen</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody role="rowgroup" className={CARD_BODY}>
               {rows.map((a) => {
                 const canDecide = hasPermission(`actions.approve:${a.risk}`);
                 const why = actionReason(a);
@@ -718,10 +719,10 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
                 const shownStatus = overdue ? "expired" : a.status;
                 const isFocus = a.id === focusId;
                 return (
-                  <tr
+                  <tr role="row"
                     key={a.id}
                     data-testid={isFocus ? "focused-action" : undefined}
-                    className={isFocus ? "bg-sky-500/10 outline outline-1 outline-sky-400/50" : undefined}
+                    className={`${CARD_ROW} ${isFocus ? "bg-sky-500/10 outline outline-1 outline-sky-400/50" : "bg-white/5 sm:bg-transparent"}`}
                     ref={isFocus ? (el) => {
                       if (el && !focusScrolled.current) {
                         focusScrolled.current = true;
@@ -729,8 +730,8 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
                       }
                     } : undefined}
                   >
-                    <td className="py-1.5 pr-2">
-                      {/* Nur Zeilen aus der Liste: die angeheftete Aktion aus dem Link zaehlt die Sammel-Freigabe nicht mit. */}
+                    <td role="cell" className="absolute right-2 top-2 py-1.5 pr-2 sm:static">
+                      {/* Nur Zeilen aus der Liste: die angeheftete Aktion aus dem Link zählt die Sammel-Freigabe nicht mit. */}
                       {a.status === "proposed" && canDecide && listedIds.has(a.id) && (
                         <input
                           type="checkbox"
@@ -742,10 +743,10 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
                         />
                       )}
                     </td>
-                    <td className="py-1.5 opacity-70">{new Date(a.created_at).toLocaleString("de-DE")}</td>
-                    <td className="py-1.5">
+                    <td role="cell" data-label="Zeit" className={`${CARD_CELL} py-1.5 opacity-70`}>{new Date(a.created_at).toLocaleString("de-DE")}</td>
+                    <td role="cell" className={`${CARD_CELL_PLAIN} order-first py-1.5`}>
                       {/* Die rohen Kennungen bleiben als Tooltip erreichbar, sobald Namen dastehen. */}
-                      <span title={actionTitle(a) !== rawActionTitle(a) ? rawActionTitle(a) : undefined}>{actionTitle(a)}</span>
+                      <span className="pr-7 font-medium sm:pr-0 sm:font-normal" title={actionTitle(a) !== rawActionTitle(a) ? rawActionTitle(a) : undefined}>{actionTitle(a)}</span>
                       {commandOf(a) !== null ? (
                         <pre
                           data-testid={`command-${a.id}`}
@@ -757,9 +758,9 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
                         a.payload_hidden && <p className="mt-1 max-w-xs break-words text-xs opacity-70">{COMMAND_HIDDEN_HINT}</p>
                       )}
                     </td>
-                    <td className="py-1.5">{hostLabel(a.host_id)}</td>
-                    <td className="py-1.5 opacity-70" title={a.risk}>{RISK_LABEL[a.risk] ?? a.risk}</td>
-                    <td className="py-1.5">
+                    <td role="cell" data-label="Server" className={`${CARD_CELL} py-1.5`}>{hostLabel(a.host_id)}</td>
+                    <td role="cell" data-label="Risiko" className={`${CARD_CELL} py-1.5 opacity-70`} title={a.risk}>{RISK_LABEL[a.risk] ?? a.risk}</td>
+                    <td role="cell" data-label="Status" className={`${CARD_CELL} py-1.5`}>
                       <span className={`rounded border px-1.5 py-0.5 text-xs ${STATUS_CLASS[shownStatus] ?? "bg-white/10 opacity-70"}`}>
                         {STATUS_LABEL[shownStatus] ?? shownStatus}
                       </span>
@@ -789,14 +790,14 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
                         );
                       })()}
                     </td>
-                    <td className="py-1.5 opacity-70">
+                    <td role="cell" data-label="Vorgeschlagen von" className={`${CARD_CELL} py-1.5 opacity-70`}>
                       {/* Die rohe Kennung bleibt als Tooltip erreichbar (z. B. zum Nachschlagen im Protokoll). */}
                       <span className="break-words" title={`${a.proposed_by_type}/${a.proposed_by_id}`}>
                         {proposedByText(a)}
                       </span>
                     </td>
-                    <td className="py-1.5 opacity-70">{a.reason}</td>
-                    <td className="py-1.5">
+                    <td role="cell" data-label="Begründung" className={`${CARD_CELL} py-1.5 opacity-70`}>{a.reason}</td>
+                    <td role="cell" className={`${CARD_CELL_PLAIN} py-1.5`}>
                       {a.status === "proposed" && (
                         <div className="flex flex-wrap gap-1.5">
                           {!overdue && (

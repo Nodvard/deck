@@ -2,10 +2,10 @@
  * Glocke in der Kopfzeile mit Schnellansicht: ein kleines Fenster unter der Glocke zeigt
  * die neuesten Meldungen, statt jedes Mal auf die volle Meldungsseite zu springen.
  *
- * Daten: dieselben Endpunkte und derselbe Live-Weg wie die Meldungsseite. Den Zaehler
+ * Daten: dieselben Endpunkte und derselbe Live-Weg wie die Meldungsseite. Den Zähler
  * und die WS-Anbindung liefert `useUnreadNotifications` (AppShell); jede neue Meldung
- * macht alle Abfragen unter dem Schluessel ["notifications"] ungueltig -- die Liste hier
- * zieht also von selbst nach, solange das Fenster offen ist. Beim Oeffnen wird immer neu geladen.
+ * macht alle Abfragen unter dem Schlüssel ["notifications"] ungültig -- die Liste hier
+ * zieht also von selbst nach, solange das Fenster offen ist. Beim Öffnen wird immer neu geladen.
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertOctagon, AlertTriangle, Bell, BellOff, Info } from "lucide-react";
@@ -70,7 +70,7 @@ function BellRow({ n, onOpen }: { n: NotificationOut; onOpen: (n: NotificationOu
 }
 
 export function NotificationBell({ unread }: { unread: number }) {
-  // Der Lesestatus gilt fuer alle Nutzer gemeinsam; markieren duerfen nur Nutzer mit Schreibrecht.
+  // Der Lesestatus gilt für alle Nutzer gemeinsam; markieren dürfen nur Nutzer mit Schreibrecht.
   const canMark = useAuthStore((s) => s.hasPermission)("notifications.write");
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -86,10 +86,10 @@ export function NotificationBell({ unread }: { unread: number }) {
   }, []);
 
   // Nach jeder Navigation zu (auch Tippen auf die schon offene Seite: neuer `location.key`).
-  // Ohne Fokus-Rueckgabe: der gehoert dann der neuen Seite.
+  // Ohne Fokus-Rückgabe: der gehört dann der neuen Seite.
   useEffect(() => setOpen(false), [location.key]);
 
-  // Beim Oeffnen den Fokus ins Fenster holen.
+  // Beim Öffnen den Fokus ins Fenster holen.
   useEffect(() => {
     if (open) panelRef.current?.focus();
   }, [open]);
@@ -113,8 +113,8 @@ export function NotificationBell({ unread }: { unread: number }) {
     };
   }, [open, close]);
 
-  // Das Fenster existiert nur geoeffnet -- jedes Oeffnen mountet die Abfrage neu und
-  // laedt deshalb frisch ("always": auch wenn noch Daten im Cache liegen).
+  // Das Fenster existiert nur geöffnet -- jedes Öffnen mountet die Abfrage neu und
+  // lädt deshalb frisch ("always": auch wenn noch Daten im Cache liegen).
   const { data, error, isLoading } = useQuery({
     queryKey: ["notifications", "bell"],
     queryFn: () => api.get<NotificationOut[]>(`/notifications?limit=${MAX_ITEMS}`),

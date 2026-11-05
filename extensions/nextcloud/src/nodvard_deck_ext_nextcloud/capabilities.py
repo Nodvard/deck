@@ -1,9 +1,5 @@
-"""Erfuellt `nodvard_sdk.capabilities.FileSource`/`FileSourceProvider` gegen die
-Nextcloud-WebDAV-API.
-
-Genau EINE Quelle pro konfigurierter Nextcloud-Instanz (`source_id="nextcloud"`) --
-mehrere Server-Instanzen sind derzeit nicht vorgesehen (dieselbe
-Scope-Entscheidung wie bei proxmox in Phase 1)."""
+"""`FileSource` und `FileSourceProvider` für Nextcloud über WebDAV: genau eine Quelle (`source_id="nextcloud"`),
+mehrere Nextclouds sind nicht vorgesehen."""
 
 from __future__ import annotations
 
@@ -35,13 +31,8 @@ _TEXT_EXTENSIONS = {
     ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".c", ".h", ".cpp",
     ".sh", ".bash", ".ps1", ".sql", ".html", ".htm", ".css", ".xml", ".svg",
 }
-"""Echte Volltextsuche in DateiINHALTEN statt nur -namen.
-WebDAV liefert `mime` nicht zuverlaessig fuer jede
-Datei (haengt vom Server ab) -- diese Allowlist ist der Fallback, wenn `mime` fehlt
-oder nicht eindeutig text-artig ist. Bewusst per Extension dupliziert (identisch in
-terminals `__init__.py`) statt in die SDK zu wandern: bislang genau zwei Verwender,
-keine dritte Extension braucht das noch -- dasselbe Muster wie D-15 (erst beim dritten
-unabhaengigen Fall generalisieren)."""
+"""WebDAV liefert `mime` nicht für jede Datei zuverlässig; diese Endungen sind dann der Fallback für die
+Inhaltssuche. Die Terminal-Erweiterung führt bewusst eine eigene Kopie."""
 
 _MAX_CONTENT_BYTES_PER_FILE = 64 * 1024
 _MAX_CONTENT_READS = 50
@@ -54,32 +45,14 @@ def _looks_like_text(name: str, mime: str | None) -> bool:
         if mime in ("application/json", "application/xml", "application/javascript", "application/x-yaml"):
             return True
         if not mime.startswith("application/octet-stream"):
-            # Ein bekannter, aber eindeutig binaerer Mime-Typ (image/*, video/*, ...)
-            # -- der Extensions-Fallback unten wuerde sonst z.B. "foo.svg" trotz
-            # image/svg+xml erneut versuchen, das ist bereits durch die
-            # text/-Pruefung oben abgedeckt, alles andere hier ist echt binaer.
+            # Ein bekannter Mime-Typ ohne text/ ist binär, auch wenn die Endung nach Text aussieht (`.svg`).
             return False
     return PurePosixPath(name).suffix.lower() in _TEXT_EXTENSIONS
 
 
 class NextcloudFileSource:
-    """Erfuellt `nodvard_sdk.capabilities.FileSource`.
-
-    **`caps.search=True` (Nachtrag):** WebDAV hat kein portables Volltextsuch-
-    Primitiv, und Nextclouds eigene `SEARCH`-Erweiterung waere ein weiterer,
-    Nextcloud-spezifischer Sonderpfad (Sonderformat, eigenes XML) -- deshalb baut
-    `search()` stattdessen auf dem bereits vorhandenen, generischen
-    `list_children()` (PROPFIND Depth:1) auf: eine echte, aber bewusst begrenzte
-    Verzeichnis-Wanderung ab `root` (siehe `_MAX_RESULTS`/`_MAX_DIRS_VISITED`
-    dort) statt eines Endlosscans auf sehr grossen Baeumen.
-
-    **Volltextsuche in Dateiinhalten:** urspruenglich nur der Dateiname.
-    `search()` liest jetzt
-    zusaetzlich den Anfang text-artiger Dateien (`_looks_like_text`,
-    `_MAX_CONTENT_BYTES_PER_FILE`/`_MAX_CONTENT_READS` als zweiter Deckel neben den
-    beiden oben). Dieselbe Erweiterung gilt jetzt auch fuer terminals
-    `_SshFileSource.search()` (WP-4/WP-11) -- vorher bewusst nur Dateiname, siehe
-    dortigen Docstring fuer die identische, dort dupliziert gehaltene Logik."""
+    """Erfüllt `FileSource` über WebDAV; die Suche wandert begrenzt durch die Ordner, weil WebDAV keine portable
+    Volltextsuche hat."""
 
     _MAX_RESULTS = 200
     _MAX_DIRS_VISITED = 500
@@ -117,12 +90,7 @@ class NextcloudFileSource:
         return await self.stat(path)
 
     async def remove(self, path: PurePosixPath, *, recursive: bool = False) -> None:
-        """`recursive` ist hier nur informativ -- WebDAV `DELETE` auf eine Collection
-        entfernt IMMER alles darunter, es gibt keinen Nicht-rekursiven Modus im
-        Protokoll. Ein `recursive=False`-Aufruf auf ein nicht-leeres Verzeichnis
-        entfernt es trotzdem vollstaendig, statt (wie ein lokales `rmdir()`) mit
-        einem Fehler abzulehnen -- ehrlich benannter Unterschied, keine Nachbildung
-        auf Anwendungsebene in dieser Runde."""
+        """WebDAV `DELETE` löscht einen Ordner immer samt Inhalt, auch bei `recursive=False`."""
         await self._connector.remove(str(path))
 
     async def rename(self, src: PurePosixPath, dst: PurePosixPath) -> FileEntry:
@@ -133,20 +101,12 @@ class NextcloudFileSource:
         try:
             return await self._connector.list_children(str(path))
         except WebDavError:
-            # Ein einzelnes nicht erreichbares Unterverzeichnis (z. B. durch eine
-            # Zugriffsbeschraenkung) bricht die Suche NICHT komplett ab -- dieselbe
-            # Haltung wie `api/v1/files.py::search()`s "eine kaputte Quelle darf die
-            # Suche der anderen nicht verhindern", hier eine Ebene tiefer fuer ein
-            # einzelnes Unterverzeichnis angewendet.
+            # Ein Unterordner, der nicht antwortet oder gesperrt ist, fehlt im Ergebnis, statt die Suche abzubrechen.
             return []
 
     async def _content_matches(self, path: str, needle: str) -> bool:
-        """Liest hoechstens `_MAX_CONTENT_BYTES_PER_FILE` (nicht die ganze Datei --
-        ein Treffer im ersten Ausschnitt reicht, und ein einzelnes riesiges Log darf
-        die Suche nicht dominieren). `errors="ignore"` statt eines Abbruchs bei einer
-        Datei, die trotz `_looks_like_text` doch nicht valides UTF-8 ist (z. B. eine
-        Textdatei mit Latin-1-Resten) -- ein bewusst grosszuegiger Best-Effort, kein
-        Volltextindex."""
+        """Sucht nur in den ersten `_MAX_CONTENT_BYTES_PER_FILE` Bytes, damit ein großes Log die Suche nicht bremst;
+        nicht lesbares UTF-8 wird übergangen statt abzubrechen."""
         read = 0
         buf = bytearray()
         try:
@@ -160,20 +120,9 @@ class NextcloudFileSource:
         return needle in buf.decode("utf-8", errors="ignore").lower()
 
     async def search(self, query: str, *, root: PurePosixPath) -> AsyncIterator[FileEntry]:  # noqa: ANN201
-        """Breitensuche ab `root`, gegen Dateiname UND -inhalt. Ein
-        Treffer ist Name ODER Inhalt; Inhalt wird nur gelesen, wenn der Name schon
-        nicht traf, `_looks_like_text()` zustimmt UND `_MAX_CONTENT_READS` fuer
-        diesen Aufruf noch nicht erschoepft ist (Bandbreiten-Deckel zusaetzlich zu
-        `_MAX_RESULTS`/`_MAX_DIRS_VISITED`) -- danach laeuft die Namenssuche fuer den
-        Rest des Baums unveraendert weiter, nur ohne weitere Inhalts-Reads.
-
-        **`_MAX_CONCURRENCY` (Nachtrag, live gegen die echte Nextcloud gefunden):**
-        eine rein serielle Breitensuche (ein PROPFIND nach dem anderen) brauchte
-        gegen einen echten, nicht-trivialen Baum (Foto-Backup-Ordner mit vielen
-        Dateien) 16-17 Sekunden pro Anfrage -- jeder Netzwerk-Umlauf einzeln
-        nacheinander. Jetzt PRO EBENE bis zu `_MAX_CONCURRENCY` Verzeichnisse
-        gleichzeitig abgefragt, statt eines nach dem anderen -- gleiche Grenzen,
-        gleiches Ergebnis, nur parallel statt seriell."""
+        """Breitensuche ab `root` nach Name oder Inhalt, je Runde bis zu `_MAX_CONCURRENCY` Ordner gleichzeitig, weil
+        jeder Ordner einen eigenen Netz-Umlauf kostet. Inhalte nur von Text-Dateien und höchstens
+        `_MAX_CONTENT_READS` je Aufruf."""
         needle = query.lower()
         frontier: list[PurePosixPath] = [root]
         visited_dirs = 0
@@ -212,10 +161,8 @@ class NextcloudFileSource:
 
 
 class NextcloudFileSourceProvider:
-    """Erfuellt `nodvard_sdk.capabilities.FileSourceProvider`. Liefert die eine
-    konfigurierte Quelle nur, wenn `base_url`/`username`/das Secret tatsaechlich
-    gesetzt sind -- unkonfiguriert erscheint die Extension NICHT im Dateimanager,
-    statt mit einer garantiert fehlschlagenden Quelle aufzutauchen."""
+    """Erfüllt `FileSourceProvider`; ohne Adresse, Benutzer oder Geheimnis fehlt die Quelle im Dateimanager, statt
+    dort aufzutauchen und garantiert zu scheitern."""
 
     def __init__(self, ctx: "ExtensionContext") -> None:
         self._ctx = ctx

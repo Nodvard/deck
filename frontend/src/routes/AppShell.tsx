@@ -22,11 +22,12 @@ import { useProactiveTokenRefresh } from "../lib/tokenRefresh";
 import { useWsSubscription, wsClient } from "../lib/ws";
 import { useAuthStore } from "../state/auth";
 import { useBrandingStore } from "../state/branding";
+import { useEdition } from "../state/edition";
 import type { PageOut } from "../widgets/types";
 
 /** Gruppiert PageOut[] nach nav_section (docs/02-EXTENSION-API.md §5), sortiert nach nav_order.
- * Abschnitte mit nur EINER Seite wandern gesammelt unter "Werkzeuge" -- sonst stuende
- * z. B. "DOKUMENTE" als Ueberschrift ueber genau einem Eintrag "Dokumente". */
+ * Abschnitte mit nur EINER Seite wandern gesammelt unter "Werkzeuge" -- sonst stünde
+ * z. B. "DOKUMENTE" als Überschrift über genau einem Eintrag "Dokumente". */
 export function groupPagesBySection(pages: PageOut[]) {
   const sorted = [...pages].filter((p) => p.show_in_nav !== false).sort((a, b) => a.nav_order - b.nav_order);
   const bySection = new Map<string, PageOut[]>();
@@ -83,7 +84,8 @@ function Clock() {
 }
 
 export function AppShell() {
-  // main.tsx laedt das schon beim Boot (vor dem Login) -- hier nur noch lesen, kein
+  const edition = useEdition();
+  // main.tsx lädt das schon beim Boot (vor dem Login) -- hier nur noch lesen, kein
   // zweiter Fetch (siehe state/branding.ts).
   const branding = useBrandingStore((s) => s.branding);
   const { data: pages } = usePages();
@@ -91,13 +93,12 @@ export function AppShell() {
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
   // Terminal-Seite: eine Shell verlangt dieselbe Berechtigung wie die
-  // Terminal-API (`hosts.execute`) -- ohne sie fuehrt der Menuepunkt ins Leere.
+  // Terminal-API (`hosts.execute`) -- ohne sie führt der Menüpunkt ins Leere.
   const canUseTerminal = useAuthStore((s) => s.hasPermission("hosts.execute"));
   const canReadNotifications = useAuthStore((s) => s.hasPermission("notifications.read"));
   const canReadHosts = useAuthStore((s) => s.hasPermission("hosts.read"));
   const unreadNotifications = useUnreadNotifications(canReadNotifications);
-  // Kleine Versionsnummer unten in der Seitenleiste (und damit im Handy-Menü); ein Klick
-  // öffnet das Änderungsprotokoll, "Neu" erscheint, solange man den Stand noch nicht kennt.
+  // „Neu“ bleibt an der Version, bis der Stand auf der Über-Seite gelesen wurde.
   const { version: appVersion, isNew: changelogIsNew } = useChangelogNotice();
   const queryClient = useQueryClient();
   // Das Theme des Kontos gilt auf jedem Gerät; bis die Antwort da ist, bleibt das im Browser gemerkte.
@@ -114,7 +115,7 @@ export function AppShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   useCommandPaletteHotkey(setPaletteOpen);
 
-  // Handy/Tablet: die Seitenleiste ist ein ausklappbares Menue (unter 1024 px).
+  // Handy/Tablet: die Seitenleiste ist ein ausklappbares Menü (unter 1024 px).
   // Bei jeder Navigation (auch Tippen auf den Eintrag der schon offenen Seite: gleiche
   // Adresse, aber neuer `location.key`) und mit Esc klappt es wieder zu.
   const [menuOpen, setMenuOpen] = useState(false);
@@ -127,9 +128,9 @@ export function AppShell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [menuOpen]);
 
-  // services/extensions.py publiziert "extension.enabled"/"extension.disabled" ueber
+  // services/extensions.py publiziert "extension.enabled"/"extension.disabled" über
   // den bestehenden "events"-Kanal -- Navigation UND Dashboard-Widget-Katalog
-  // muessen live nachziehen, ohne dass ein Nutzer neu laden muss (Widgets
+  // müssen live nachziehen, ohne dass ein Nutzer neu laden muss (Widgets
   // erscheinen/verschwinden beim Aktivieren/Deaktivieren einer Extension).
   useWsSubscription("events", (payload) => {
     const name = (payload as { name?: string }).name;
@@ -137,7 +138,7 @@ export function AppShell() {
       void queryClient.invalidateQueries({ queryKey: ["pages"] });
       void queryClient.invalidateQueries({ queryKey: ["widgets"] });
     }
-    // Die Erreichbarkeitspruefung (`host.status_changed`) meldet, wenn ein Server ausfaellt oder wieder da ist:
+    // Die Erreichbarkeitsprüfung (`host.status_changed`) meldet, wenn ein Server ausfällt oder wieder da ist:
     // Server-Liste, Server-Seite und Cockpit ziehen sofort nach, ohne auf den 30-Sekunden-Abruf zu warten.
     if (name === "host.status_changed") {
       void queryClient.invalidateQueries({ queryKey: ["hosts"] });
@@ -149,17 +150,17 @@ export function AppShell() {
   // -- das Token wird im sichtbaren Tab kurz vor Ablauf erneuert (lib/tokenRefresh.ts).
   useProactiveTokenRefresh();
 
-  // Zeitzone des Dashboards fuer die Zeitplan-Waehler (lib/deckTimezone.ts). GET /me darf
-  // jeder Angemeldete, auch ohne `settings.write`; scheitert es, rechnen die Waehler in der
-  // Zeit des Geraets wie bisher.
+  // Zeitzone des Dashboards für die Zeitplan-Wähler (lib/deckTimezone.ts). GET /me darf
+  // jeder Angemeldete, auch ohne `settings.write`; scheitert es, rechnen die Wähler in der
+  // Zeit des Geräts wie bisher.
   useEffect(() => {
     api.get<{ timezone?: string }>("/me")
       .then((me) => setDeckTimezone(me.timezone || null))
       .catch(() => undefined);
   }, []);
 
-  // Eine WS-Verbindung fuer die gesamte Shell-Lebensdauer (Multiplex-Hub) --
-  // einzelne Widgets abonnieren nur noch Kanaele, siehe lib/ws.ts.
+  // Eine WS-Verbindung für die gesamte Shell-Lebensdauer (Multiplex-Hub) --
+  // einzelne Widgets abonnieren nur noch Kanäle, siehe lib/ws.ts.
   useEffect(() => {
     wsClient.ensureConnected();
     return () => wsClient.disconnect();
@@ -168,12 +169,12 @@ export function AppShell() {
   const sections = groupPagesBySection(pages ?? []);
   const productName = branding?.product_name ?? "Nodvard Deck";
   const logoUrl = localImageUrl(branding?.logo_url);
-  // Ein leerer Anzeigename ("") liesse Kreis und Namen leer -- deshalb || statt ??.
+  // Ein leerer Anzeigename ("") ließe Kreis und Namen leer -- deshalb || statt ??.
   const userName = user?.display_name || user?.username || "";
   const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
   return (
-    <div className="flex h-screen bg-[var(--color-background)] text-[var(--color-text)]">
+    <div className="flex h-screen supports-[height:100dvh]:h-dvh bg-[var(--color-background)] text-[var(--color-text)]">
       {menuOpen && (
         <div className="fixed inset-0 z-30 bg-scrim/60 backdrop-blur-sm lg:hidden" onClick={() => setMenuOpen(false)} aria-hidden="true" data-testid="menu-backdrop" />
       )}
@@ -201,7 +202,7 @@ export function AppShell() {
           )}
           <span className="min-w-0">
             <span className="block truncate text-[15px] font-semibold leading-tight">{productName}</span>
-            <span className="block text-[11px] leading-tight text-white/50">Homelab-Cockpit</span>
+            <span className="block text-[11px] leading-tight text-white/50">{edition.choose_modules ? "Homelab-Cockpit" : "Docker-Verwaltung"}</span>
           </span>
         </Link>
         {capabilities?.feature_flags.demo_mode && (
@@ -211,10 +212,10 @@ export function AppShell() {
         )}
         <nav className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 pb-4" aria-label="Hauptnavigation">
           <div className="flex flex-col gap-0.5">
-            <NavItem to="/" end icon="layout-dashboard" label="Übersicht" />
-            {canReadHosts && <NavItem to="/apps" icon="boxes" label="Apps" />}
-            <NavItem to="/files" icon="folder-open" label="Dateien" />
-            {canUseTerminal && <NavItem to="/terminal" icon="terminal" label="Terminal" />}
+            {edition.choose_modules && <NavItem to="/" end icon="layout-dashboard" label="Übersicht" />}
+            {edition.choose_modules && canReadHosts && <NavItem to="/apps" icon="boxes" label="Apps" />}
+            {edition.choose_modules && <NavItem to="/files" icon="folder-open" label="Dateien" />}
+            {edition.choose_modules && canUseTerminal && <NavItem to="/terminal" icon="terminal" label="Terminal" />}
             {canReadNotifications && <NavItem to="/notifications" icon="bell" label="Meldungen" badge={unreadNotifications} />}
             <NavItem to="/actions" icon="shield-check" label="Aktionen" />
           </div>
@@ -249,7 +250,7 @@ export function AppShell() {
           {appVersion && (
             <Link
               to="/settings/about"
-              title="Änderungsprotokoll öffnen"
+              title={`Über ${edition.product_name}`}
               className="mt-1 flex w-fit items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] text-white/35 hover:bg-white/5 hover:text-white/70"
             >
               v{appVersion}

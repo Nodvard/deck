@@ -2,6 +2,7 @@
  * Cockpit: Übersicht oben auf der Startseite mit Lage, Kennzahlen, Servertabelle, offenen Punkten, Modulen und Apps.
  * Herstellerneutral: Server und Messwerte kommen aus dem Kern, Dienste und Backups aus `GET /overview`.
  */
+import { styleRef } from "../../../extensions/_shared/frontend/src/csp";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -102,20 +103,26 @@ function loadColor(pct: number): string {
   return pct >= 90 ? "var(--color-bad)" : pct >= 75 ? "var(--color-warn)" : "var(--color-accent)";
 }
 
-/** Auslastung als schmaler Balken für die Servertabelle; die Zahlen daneben, auf breiten Schirmen auch absolut. */
+/** Auslastung als schmaler Balken mit Prozentzahl; am Handy steht die Zahl über dem Balken, ab 2xl darunter zusätzlich
+ * die absolute Angabe. */
 function Meter({ value, label, caption, dim = false }: { value: number | null; label: string; caption?: string; dim?: boolean }) {
   const pct = value == null ? 0 : Math.max(0, Math.min(100, value));
   return (
-    <span className={`inline-flex items-center gap-2 whitespace-nowrap ${dim ? "opacity-50" : ""}`}>
-      <span
-        role="img"
-        aria-label={`${label} ${value == null ? "unbekannt" : `${Math.round(pct)} %`}`}
-        className="inline-block h-1.5 w-12 flex-none overflow-hidden rounded-full bg-[var(--color-track)]"
-      >
-        <span className="block h-full" style={{ width: `${pct}%`, background: loadColor(pct) }} />
+    <span className={`inline-flex flex-col gap-0.5 ${dim ? "opacity-50" : ""}`}>
+      <span className="inline-flex flex-col-reverse items-start gap-1 whitespace-nowrap sm:flex-row sm:items-center sm:gap-2">
+        <span
+          role="img"
+          aria-label={`${label} ${value == null ? "unbekannt" : `${Math.round(pct)} %`}`}
+          className="inline-block h-1.5 w-10 flex-none overflow-hidden rounded-full bg-[var(--color-track)]"
+        >
+          <span className="block h-full" ref={styleRef({ width: `${pct}%`, background: loadColor(pct) })} />
+        </span>
+        <span className="tabular-nums text-white/70">{value == null ? "–" : `${Math.round(pct)} %`}</span>
       </span>
-      <span className="tabular-nums text-white/70">{value == null ? "–" : `${Math.round(pct)} %`}</span>
-      {value != null && caption && <span className="hidden tabular-nums text-white/45 2xl:inline">{caption}</span>}
+      {/* Ohne Angabe ein leerer Platzhalter, sonst stehen die Balken einer Zeile ungleich hoch. */}
+      <span className={`hidden whitespace-nowrap text-[11px] tabular-nums text-white/45 2xl:block ${value != null && caption ? "" : "invisible"}`}>
+        {value != null && caption ? caption : "\u00a0"}
+      </span>
     </span>
   );
 }
@@ -132,7 +139,7 @@ export function Ring({ value, label, caption, dim = false }: { value: number | n
         <circle
           cx="29" cy="29" r={r} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round"
           strokeDasharray={`${(pct / 100) * c} ${c}`} transform="rotate(-90 29 29)"
-          style={{ transition: "stroke-dasharray 0.6s ease" }}
+          ref={styleRef({ transition: "stroke-dasharray 0.6s ease" })}
         />
         <text x="29" y="33" textAnchor="middle" fontSize="12" fontWeight="600" fill="currentColor">
           {value == null ? "–" : `${Math.round(pct)}%`}
@@ -155,7 +162,7 @@ interface CardData {
   cpu: number | null;
   mem: number | null;
   memText?: string;
-  /** Platte: nur wenn gemessen (Hypervisor-Knoten liefern sie nicht). */
+  /** Platte: fehlt der Wert, steht „–“ ohne Balken; `null` heißt unbekannt. */
   disk?: number | null;
   diskText?: string;
   uptime_s?: number | null;
@@ -189,7 +196,7 @@ function healthOf(host: HostOut): ReturnType<typeof hostHealth> {
 const ROW = "border-t border-[var(--color-line)] align-middle";
 const CELL = "px-3 py-2.5";
 
-/** Eine Tabellenzeile für Hypervisor-Knoten und Linux-Server mit Messwerten; nur die Quelle der Zahlen unterscheidet sich. */
+/** Eine Tabellenzeile für Hosts mit Messwerten; nur die Quelle der Zahlen unterscheidet sich. */
 function HostRow({ host, data, testId, canTerminal, provider }: { host: HostOut; data: CardData; testId: string; canTerminal: boolean; provider?: HostProvider }) {
   const health = healthOf(host);
   const offline = data.state === "offline";
@@ -218,10 +225,10 @@ function HostRow({ host, data, testId, canTerminal, provider }: { host: HostOut;
       <td className={`${CELL} hidden sm:table-cell`}>
         {data.disk !== undefined ? <Meter value={offline ? null : data.disk} label="Platte" caption={data.diskText} dim={dim} /> : <span className="text-white/35">–</span>}
       </td>
-      <td className={`${CELL} hidden whitespace-nowrap tabular-nums text-white/55 xl:table-cell`} data-testid={`${testId}-uptime`}>
+      <td className={`${CELL} hidden whitespace-nowrap tabular-nums text-white/55 2xl:table-cell`} data-testid={`${testId}-uptime`}>
         {uptime ? formatUptime(uptime) : "–"}
       </td>
-      <HostActions host={host} canTerminal={canTerminal} console={false} />
+      <HostActions host={host} canTerminal={canTerminal} console={hasConsole(host) && health === "online"} />
     </tr>
   );
 }
@@ -231,6 +238,7 @@ function NodeCard({ host, canTerminal, provider }: { host: HostOut; canTerminal:
   const { data, isError } = useHostMetrics(host.id);
   const v = data?.values ?? {};
   const memPct = v.mem_total_bytes ? (100 * (v.mem_used_bytes ?? 0)) / v.mem_total_bytes : null;
+  const diskPct = v.root_total_bytes ? (100 * (v.root_used_bytes ?? 0)) / v.root_total_bytes : null;
   const offline = healthOf(host) === "problem";
   return (
     <HostRow
@@ -243,6 +251,8 @@ function NodeCard({ host, canTerminal, provider }: { host: HostOut; canTerminal:
         cpu: isError ? null : (v.cpu_percent ?? null),
         mem: isError ? null : memPct,
         memText: usedOfTotal(v.mem_used_bytes, v.mem_total_bytes),
+        disk: diskPct === null ? undefined : isError ? null : diskPct,
+        diskText: usedOfTotal(v.root_used_bytes, v.root_total_bytes),
         uptime_s: v.uptime_s,
         note: offline ? "nicht erreichbar · keine aktuellen Werte" : undefined,
       }}
@@ -250,8 +260,8 @@ function NodeCard({ host, canTerminal, provider }: { host: HostOut; canTerminal:
   );
 }
 
-/** Linux-Server mit Messwerten aus dem Verlauf (`GET /hosts/metrics/latest`, ohne SSH-Aufruf). Ein
- * nicht erreichbarer Server zeigt keine alten Werte als aktuell; ein zu alter Wert heisst „veraltet“. */
+/** Linux-Server und Proxmox-Gäste mit Messwerten aus dem Verlauf (`GET /hosts/metrics/latest`, ohne SSH-Aufruf). Ein
+ * nicht erreichbarer Server zeigt keine alten Werte als aktuell; ein zu alter Wert heißt „veraltet“. */
 function ServerCard({ host, latest, unconfirmed, canTerminal, provider }: { host: HostOut; latest: HostLatestMetrics; unconfirmed: boolean; canTerminal: boolean; provider?: HostProvider }) {
   const offline = healthOf(host) === "problem";
   const stale = latest.stale || unconfirmed;
@@ -266,7 +276,8 @@ function ServerCard({ host, latest, unconfirmed, canTerminal, provider }: { host
         cpu: latest.cpu,
         mem: latest.mem,
         memText: usedOfTotal(latest.mem_used_bytes, latest.mem_total_bytes),
-        disk: latest.disk,
+        // VMs melden keine Platte: „–“ statt eines Balkens „unbekannt“.
+        disk: latest.disk ?? undefined,
         diskText: usedOfTotal(latest.disk_used_bytes, latest.disk_total_bytes),
         uptime_s: latest.uptime_s,
         note: offline
@@ -303,7 +314,7 @@ function MachineRow({ host, canTerminal, hint, provider }: { host: HostOut; canT
       <td className={CELL}>{empty}</td>
       <td className={CELL}>{empty}</td>
       <td className={`${CELL} hidden sm:table-cell`}>{empty}</td>
-      <td className={`${CELL} hidden xl:table-cell`}>{empty}</td>
+      <td className={`${CELL} hidden 2xl:table-cell`}>{empty}</td>
       <HostActions host={host} canTerminal={canTerminal} console={hasConsole(host) && health === "online"} />
     </tr>
   );
@@ -318,7 +329,7 @@ function metricsHint(host: HostOut, systemModuleOn: boolean | null): string | nu
   if (!host.credential) return "Keine Auslastung: noch kein SSH-Zugang";
   if (!host.enabled) return "Keine Auslastung: Messwerte für diesen Server sind aus";
   if (systemModuleOn === false) return "Keine Auslastung: Modul „Server-Zustand“ ist aus";
-  // Hat der Server nie geantwortet, kommt auch nichts mehr nach: erst die Verbindung klaeren, nicht auf Kurven warten.
+  // Hat der Server nie geantwortet, kommt auch nichts mehr nach: erst die Verbindung klären, nicht auf Kurven warten.
   if (healthOf(host) === "problem" && neverAnswered(host)) return "Noch keine Verbindung: prüfe zuerst den Zugang";
   if (systemModuleOn && healthOf(host) !== "problem") return "Noch keine Messwerte";
   return null;
@@ -390,14 +401,14 @@ export function Cockpit() {
   ].filter(Boolean).join(", ");
   const backups = overview?.backups ?? null;
   const backupsUnreachable = backups?.unreachable_names ?? [];
-  // Platzhalter nicht erreichbarer Server (`unreachable`) sind keine Dienste: sie zaehlen weder als „laeuft“ noch als „laeuft nicht“.
+  // Platzhalter nicht erreichbarer Server (`unreachable`) sind keine Dienste: sie zählen weder als „läuft“ noch als „läuft nicht“.
   const services = (overview?.services ?? []).filter((s) => !s.unreachable);
   // Ein ausgeschalteter oder beim Anbieter gelöschter Gast hat kein Docker, das antworten könnte: keine Störung.
   const switchedOffNames = new Set(allHosts.filter((h) => healthOf(h) === "stopped").map((h) => h.display_name || h.name));
   const servicesDown = (overview?.services_unreachable_hosts ?? []).filter((name) => !switchedOffNames.has(name));
   // Nicht nur „Server aus“: der Platzhalter kommt auch, wenn der Server antwortet, Docker aber nicht (Dienst aus, keine Rechte).
   const servicesDownText = `Container von ${servicesDown.length === 1 ? "1 Server" : `${servicesDown.length} Servern`} nicht abrufbar`;
-  // Ein Server, der ohnehin als „nicht erreichbar“ in der Liste steht, zaehlt nicht doppelt.
+  // Ein Server, der ohnehin als „nicht erreichbar“ in der Liste steht, zählt nicht doppelt.
   const problemNames = new Set(problemHosts.map((h) => h.display_name));
   const servicesDownExtra = servicesDown.filter((name) => !problemNames.has(name));
   const attention = overview?.attention ?? [];
@@ -409,13 +420,13 @@ export function Cockpit() {
   const legacyEnv = overview?.legacy_env ?? [];
   const issues = problemHosts.length + servicesDownExtra.length + (backups?.failed ?? 0) + backupsUnreachable.length + attention.length + (overview?.pending_actions ?? 0);
 
-  // Eigene Apps und erkannte Dienste in einer Liste (`services` bleibt fuer die Kennzahl „Dienste“).
+  // Eigene Apps und erkannte Dienste in einer Liste (`services` bleibt für die Kennzahl „Dienste“).
   const apps = overview?.apps ?? [];
 
   const quickPages = (pages ?? []).filter((p) => p.show_in_nav !== false).sort((a, b) => a.nav_order - b.nav_order);
   const loading = canReadHosts && (hostsLoading || overviewLoading);
-  // Ohne einen einzigen Server gibt es nichts, was "rund laufen" koennte -- stattdessen zeigt das
-  // Cockpit, was als Naechstes zu tun ist.
+  // Ohne einen einzigen Server gibt es nichts, was "rund laufen" könnte -- stattdessen zeigt das
+  // Cockpit, was als Nächstes zu tun ist.
   const noHosts = canReadHosts && !loading && hosts !== undefined && allHosts.length === 0;
   // Eine gescheiterte Abfrage ist keine Auskunft: ohne Serverliste kein „Alles läuft rund“, ohne Übersicht
   // (Dienste, Backups, Meldungen, Freigaben) kein „Nichts offen“. Scheitert nur das Nachladen, bleiben die
@@ -565,7 +576,7 @@ export function Cockpit() {
                       <th className="px-3 py-2 font-medium">CPU</th>
                       <th className="px-3 py-2 font-medium">RAM</th>
                       <th className="hidden px-3 py-2 font-medium sm:table-cell">Platte</th>
-                      <th className="hidden px-3 py-2 font-medium xl:table-cell">Läuft seit</th>
+                      <th className="hidden px-3 py-2 font-medium 2xl:table-cell">Läuft seit</th>
                       <th className="px-2 py-2"><span className="sr-only">Aktionen</span></th>
                     </tr>
                   </thead>

@@ -133,6 +133,22 @@ export function dataLink(value: string | null | undefined): string | undefined {
   return safeHref(value) ?? internalPath(value);
 }
 
+/** Vergleichswert einer Adresse: Schema und Rechner klein, ohne Schrägstrich am Ende und ohne Standard-Port. */
+export function urlKey(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}${u.pathname.replace(/\/+$/, "")}${u.search}`;
+  } catch {
+    return url.trim().toLowerCase();
+  }
+}
+
+/** Ein erkannter Dienst, den es mit derselben Adresse schon als eigene App gibt, steht nur einmal da: als eigene App. */
+export function withoutAdopted(apps: AppTileOut[]): AppTileOut[] {
+  const own = new Set(apps.flatMap((a) => (a.source === "custom" && a.url ? [urlKey(a.url)] : [])));
+  return apps.filter((a) => a.source !== "detected" || !a.url || !own.has(urlKey(a.url)));
+}
+
 /** `192.168.2.1:8080` aus einer Adresse, als Untertitel der Kachel. */
 export function urlHost(url: string | null | undefined): string {
   if (!url) return "";

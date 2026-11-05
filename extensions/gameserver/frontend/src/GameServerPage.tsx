@@ -269,9 +269,9 @@ function ServerCard({ server, profiles, profilesError, onRetryProfiles, onAction
           label="Join-Code"
           value={
             server.join_code ? (
-              <span className="flex items-center gap-2">
-                <span className="font-mono tracking-[0.2em]">{server.join_code}</span>
-                <button type="button" onClick={() => void copy()} className="rounded-md px-2 py-0.5 text-xs font-normal tracking-normal border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-1" data-testid="join-code">
+                <span className="break-all font-mono tracking-[0.2em]">{server.join_code}</span>
+                <button type="button" onClick={() => void copy()} className="rounded-lg px-2 py-0.5 text-xs font-normal tracking-normal border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] transition">
                   {copied ? "Kopiert!" : "Kopieren"}
                 </button>
               </span>

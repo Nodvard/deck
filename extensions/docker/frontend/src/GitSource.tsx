@@ -1,3 +1,4 @@
+import { productText } from "./product";
 /** Stack aus einem Git-Repository: Quelle eintragen, den Stand holen, ansehen und über die Freigabe einspielen. */
 import { useEffect, useRef, useState } from "react";
 
@@ -17,6 +18,16 @@ interface GitOut { source: Source | null; accesses: Access[]; layout_problem: st
 interface Applied {
   applied: { commit: string; at: string; files: number } | null;
   previous: { id: string; commit: string; commit_before: string | null; at: string } | null;
+}
+/** Letzte Abfrage beim Repository (`GET …/git/watch`); `new`: dort steht ein anderer Commit als eingespielt. */
+interface Watch {
+  remote: string | null;
+  short: string | null;
+  ref_kind: "branch" | "tag" | null;
+  checked_at: string | null;
+  problem: string | null;
+  applied: string | null;
+  new: boolean;
 }
 interface FileState { path: string; server_path: string; state: "new" | "changed" | "same" | "other"; size: number; mode: string; env?: boolean }
 export interface Preview {
@@ -99,6 +110,34 @@ export function PreviewView({ preview, source }: { preview: Preview; source: Sou
   );
 }
 
+/** Was die letzte Abfrage beim Repository ergab; ein Fehler steht als Grund da, nie als „kein neuer Stand“. */
+function WatchLine({ watch }: { watch: Watch }): JSX.Element {
+  const checked = watch.checked_at ? when(watch.checked_at) : "unbekannt";
+  if (watch.problem) {
+    return <p className="break-words text-amber-300" data-testid="git-watch">Die Prüfung am {checked} ist gescheitert: {watch.problem}</p>;
+  }
+  if (watch.new) {
+    return (
+      <p className="flex flex-wrap items-center gap-1.5 break-words" data-testid="git-watch">
+        <Badge tone="info">Neuer Stand in Git</Badge>
+        <span>
+          Im Repository steht <span className="font-mono">{watch.short}</span>, eingespielt ist{" "}
+          <span className="font-mono">{watch.applied?.slice(0, 7)}</span> (geprüft am {checked}). Ob sich der Ordner dieses Stacks ändert, zeigt
+          „Holen und ansehen“.
+        </span>
+      </p>
+    );
+  }
+  if (!watch.applied) {
+    return (
+      <p className="opacity-70" data-testid="git-watch">
+        Im Repository steht <span className="font-mono">{watch.short}</span> (geprüft am {checked}). Aus Git ist hier noch nichts eingespielt.
+      </p>
+    );
+  }
+  return <p className="opacity-70" data-testid="git-watch">Kein neuer Stand in Git (geprüft am {checked}).</p>;
+}
+
 export function GitSourcePanel({ hostId, project, onDone }: {
   hostId: string; project: string; onDone: (message: string, warn?: boolean) => void;
 }): JSX.Element {
@@ -108,9 +147,10 @@ export function GitSourcePanel({ hostId, project, onDone }: {
   const [draft, setDraft] = useState({ url: "", ref: "main", path: "compose.yaml", access: "" });
   const [preview, setPreview] = useState<Preview | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"save" | "fetch" | "remove" | "apply" | "back" | "restart" | null>(null);
+  const [busy, setBusy] = useState<"save" | "fetch" | "remove" | "apply" | "back" | "restart" | "check" | null>(null);
   const [stale, setStale] = useState<{ services: string[]; text: string; warn: boolean } | null>(null);
   const [applied, setApplied] = useState<Applied | null>(null);
+  const [watch, setWatch] = useState<Watch | null>(null);
   const [backup, setBackup] = useState<BackupChoice>(NO_BACKUP);
   // Jede Wahl und jeder neue Stand zählt hoch; eine Antwort zu einer älteren Wahl gilt nicht mehr.
   const planRequest = useRef(0);
@@ -128,8 +168,31 @@ export function GitSourcePanel({ hostId, project, onDone }: {
         if (body.source) setDraft({ url: body.source.url, ref: body.source.ref, path: body.source.path, access: body.source.access ?? "" });
       })
       .catch((err: unknown) => { if (!controller.signal.aborted) setError(errorMessage(err)); });
+    void loadWatch(controller.signal);
     return () => controller.abort();
   }, [url, reload]);
+
+  /** Nur eine Zugabe: Ohne Antwort fehlt die Zeile zum Stand im Repository, der Rest geht. */
+  async function loadWatch(signal?: AbortSignal) {
+    try {
+      const body = await fetchJson<{ watch: Watch | null }>(`${url}/watch`, { signal });
+      if (!signal?.aborted) setWatch(body.watch);
+    } catch {
+      if (!signal?.aborted) setWatch(null);
+    }
+  }
+
+  async function checkNow() {
+    setBusy("check");
+    setFailed(null);
+    try {
+      setWatch((await fetchJson<{ watch: Watch | null }>(`${url}/check`, { method: "POST" })).watch);
+    } catch (err) {
+      setFailed(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function send(kind: "save" | "fetch" | "remove", init: RequestInit): Promise<unknown | null> {
     setBusy(kind);
@@ -152,6 +215,9 @@ export function GitSourcePanel({ hostId, project, onDone }: {
     if (!saved || !state) return;
     setState({ ...state, source: saved.source });
     setPreview(null);
+    // Der Stand gehörte zur alten Quelle; für die neue fragt der Server neu.
+    setWatch(null);
+    await loadWatch();
     await fetchNow();
   }
 
@@ -167,6 +233,7 @@ export function GitSourcePanel({ hostId, project, onDone }: {
     } catch {
       // Die alte Anzeige bleibt; „Erneut versuchen“ gibt es beim nächsten Öffnen.
     }
+    await loadWatch();
   }
 
   /** Schlägt vor, gibt frei, wenn der Nutzer das darf, und meldet das Ergebnis. */
@@ -229,7 +296,7 @@ export function GitSourcePanel({ hostId, project, onDone }: {
       ? `Vorher sichert es die Volumes${stops.length > 0 ? `; ${stops.join(", ")} ${stops.length === 1 ? "steht" : "stehen"} dafür still` : ""}. `
       : "Volumes werden vorher nicht gesichert. ";
     const ok = await deck().confirmDialog(
-      `Stand ${shown.commit.short} in Stack „${project}“ einspielen? Nodvard Deck schreibt ${count("new")} neue und ${count("changed")} ` +
+      `Stand ${shown.commit.short} in Stack „${project}“ einspielen? ${productText("Nodvard Deck")} schreibt ${count("new")} neue und ${count("changed")} ` +
         "geänderte Dateien auf den Server, Compose wendet den Stack danach an, und Dienste, die geänderte Dateien einlesen, starten neu (die Freigabe nennt sie). Dateien, die es früher aus diesem Repository geschrieben hat und " +
         "die jetzt fehlen, entfernt es nur, wenn sie auf dem Server unverändert sind. Umgebungsdateien wie .env auf dem Server ersetzt es nie. " +
         `${volumes}Der Stand davor bleibt für einen Schritt zurück.`,
@@ -240,7 +307,7 @@ export function GitSourcePanel({ hostId, project, onDone }: {
 
   async function back(previous: NonNullable<Applied["previous"]>) {
     const ok = await deck().confirmDialog(
-      `Stack „${project}“ zurück auf den Stand vor ${previous.commit.slice(0, 7)}? Nodvard Deck stellt die Dateien wieder her, die das ` +
+      `Stack „${project}“ zurück auf den Stand vor ${previous.commit.slice(0, 7)}? ${productText("Nodvard Deck")} stellt die Dateien wieder her, die das ` +
         "letzte Einspielen ersetzt oder entfernt hat, und nimmt neu angelegte wieder weg, auch eine dabei neu angelegte .env. Was seitdem " +
         "auf dem Server geändert wurde, bleibt, wie es ist. Compose wendet den Stack danach an, und Dienste, die zurückgestellte Dateien einlesen, starten neu " +
         "(die Freigabe nennt sie). Volumes werden vorher nicht gesichert.",
@@ -260,7 +327,7 @@ export function GitSourcePanel({ hostId, project, onDone }: {
 
   async function remove() {
     const ok = await deck().confirmDialog(
-      `Repository von „${project}“ vergessen? Nodvard Deck löscht nur die Angaben und den geholten Stand; Stack und Dateien auf dem Server bleiben, wie sie sind.`,
+      `Repository von „${project}“ vergessen? ${productText("Nodvard Deck")} löscht nur die Angaben und den geholten Stand; Stack und Dateien auf dem Server bleiben, wie sie sind.`,
       { confirmLabel: "Vergessen" },
     );
     if (!ok) return;
@@ -283,7 +350,7 @@ export function GitSourcePanel({ hostId, project, onDone }: {
     || (source.access ?? "") !== draft.access;
   return (
     <div className="flex flex-col gap-2 text-xs" data-testid={`git-${project}`}>
-      <p className="opacity-70">{INTRO}</p>
+      <p className="opacity-70">{productText(INTRO)}</p>
       <label className="flex flex-col gap-1">
         <span>Adresse des Repositorys</span>
         <input aria-label="Adresse des Repositorys" value={draft.url} placeholder="https://github.com/name/repo"
@@ -323,6 +390,9 @@ export function GitSourcePanel({ hostId, project, onDone }: {
         {source && !dirty && (
           <Button small disabled={busy !== null} onClick={() => void fetchNow()}>{busy === "fetch" ? "Hole …" : "Holen und ansehen"}</Button>
         )}
+        {source && !dirty && (
+          <Button small disabled={busy !== null} onClick={() => void checkNow()}>{busy === "check" ? "Prüfe …" : "Auf neuen Stand prüfen"}</Button>
+        )}
         {source && <Button small variant="danger" disabled={busy !== null} onClick={() => void remove()}>Repository vergessen</Button>}
       </div>
       {applied?.applied && (
@@ -330,6 +400,7 @@ export function GitSourcePanel({ hostId, project, onDone }: {
           Zuletzt eingespielt: Stand <span className="font-mono">{applied.applied.commit.slice(0, 7)}</span>, {when(applied.applied.at)}.
         </p>
       )}
+      {source && !dirty && watch && <WatchLine watch={watch} />}
       {applied?.previous && (
         <div>
           <Button small disabled={busy !== null} onClick={() => void back(applied.previous!)}>

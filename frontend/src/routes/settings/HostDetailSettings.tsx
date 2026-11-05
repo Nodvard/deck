@@ -19,6 +19,7 @@ import { GroupMembership } from "./hosts/GroupMembership";
 import { HostForm } from "./hosts/HostForm";
 import { KnownKeys } from "./hosts/KnownKeys";
 import { Badge, Button, Card, NoticeLine, PageHeader, type Notice } from "./ui";
+import { useEdition, productText } from "../../state/edition";
 
 function Summary({ host }: { host: HostOut }) {
   const { data: extensions } = useExtensions(Boolean(host.provider_ext_id));
@@ -56,6 +57,7 @@ function Summary({ host }: { host: HostOut }) {
 }
 
 function HostDetail({ hostId }: { hostId: string }) {
+  const edition = useEdition();
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const host = useHost(hostId);
@@ -98,7 +100,7 @@ function HostDetail({ hostId }: { hostId: string }) {
         {editing ? <HostForm host={h} onSaved={() => setEditing(false)} onCancel={() => setEditing(false)} /> : <Summary host={h} />}
       </Card>
 
-      <Card title="SSH-Zugang" description="Damit sich Nodvard Deck auf dem Server anmelden kann (Terminal, Updates, Überwachung).">
+      <Card title="SSH-Zugang" description={edition.choose_modules ? productText("Damit sich Nodvard Deck auf dem Server anmelden kann (Terminal, Updates, Überwachung).") : "Damit sich Nodvard Dock für die Docker-Verwaltung auf dem Server anmelden kann."}>
         {credentials.isLoading && <p className="text-sm text-white/50">Lade Zugänge …</p>}
         {credentials.isError && <p role="alert" className="text-sm text-red-300">Die Zugänge konnten nicht geladen werden.</p>}
         {credentials.data && (
@@ -110,21 +112,21 @@ function HostDetail({ hostId }: { hostId: string }) {
         )}
       </Card>
 
-      <Card title="Verbindung prüfen" description="Testet Schritt für Schritt, ob sich Nodvard Deck mit dem Server verbinden kann, und sagt, was noch fehlt.">
+      <Card title="Verbindung prüfen" description={productText("Testet Schritt für Schritt, ob sich Nodvard Deck mit dem Server verbinden kann, und sagt, was noch fehlt.")}>
         <ConnectionCheck hostId={h.id} />
       </Card>
 
-      <Card title="Server-Schlüssel" description="Den Fingerabdruck des Servers merkt sich Nodvard Deck bei der ersten Prüfung und lehnt danach jeden anderen ab.">
+      <Card title="Server-Schlüssel" description={productText("Den Fingerabdruck des Servers merkt sich Nodvard Deck bei der ersten Prüfung und lehnt danach jeden anderen ab.")}>
         <KnownKeys host={h} />
       </Card>
 
-      <Card title="Gruppen" description="Mit Gruppen lässt „Skripte“ ein Skript auf mehreren Servern laufen.">
+      {edition.choose_modules && <Card title="Gruppen" description="Mit Gruppen lässt „Skripte“ ein Skript auf mehreren Servern laufen.">
         <GroupMembership hostId={h.id} />
-      </Card>
+      </Card>}
 
       <Card title="Gefahrenbereich">
         <p className="mb-3 text-sm text-white/60">
-          Löscht den Server aus Nodvard Deck – samt SSH-Zugang und gemerktem Server-Schlüssel. Der Server selbst bleibt unberührt.
+          Löscht den Server aus {productText("Nodvard Deck")} – samt SSH-Zugang und gemerktem Server-Schlüssel. Der Server selbst bleibt unberührt.
         </p>
         <DeleteHostButton host={h} onDeleted={() => navigate("/settings/hosts")} onMessage={setNotice} />
       </Card>

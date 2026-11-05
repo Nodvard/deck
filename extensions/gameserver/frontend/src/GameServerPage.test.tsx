@@ -173,6 +173,13 @@ describe("GameServerPage", () => {
     expect(await screen.findByRole("button", { name: "Kopiert!" })).toBeInTheDocument();
   });
 
+  it("am Handy rutscht „Kopieren“ unter den Code, statt aus der Karte zu ragen", async () => {
+    render(<GameServerPage />);
+    const code = await screen.findByTestId("join-code");
+    expect(code).toHaveClass("flex-wrap");
+    expect(within(code).getByText("413749")).toHaveClass("break-all");
+  });
+
   it("Altersangaben", () => {
     expect([ago(null), ago(30), ago(600), ago(7200), ago(3 * 86400)]).toEqual(["unbekannt", "gerade eben", "vor 10 min", "vor 2 h", "vor 3 T"]);
   });

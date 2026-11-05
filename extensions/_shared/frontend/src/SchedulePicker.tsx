@@ -1,12 +1,12 @@
 /**
- * Zeitplan-Waehler im Wecker-Stil: Haeufigkeit, grosse Uhrzeit, Wochentage zum
- * Antippen, Klartext und naechster Lauf. Liest und schreibt einen Cron-Ausdruck
- * (Minute Stunde Tag Monat Wochentag), damit Backend und Scheduler unveraendert
- * bleiben. Alles, was sich nicht in die einfachen Formen uebersetzen laesst, bleibt
+ * Zeitplan-Wähler im Wecker-Stil: Häufigkeit, große Uhrzeit, Wochentage zum
+ * Antippen, Klartext und nächster Lauf. Liest und schreibt einen Cron-Ausdruck
+ * (Minute Stunde Tag Monat Wochentag), damit Backend und Scheduler unverändert
+ * bleiben. Alles, was sich nicht in die einfachen Formen übersetzen lässt, bleibt
  * als "Eigener (Cron)" bearbeitbar.
  *
  * Teil des UI-Kits: Erweiterungsseiten (Skripte, Nodvard Shield) binden ihn wie `ui.tsx` ein,
- * Kern-Seiten (Einstellungen) ueber dieselbe Aufloesung (`frontend/kit.resolve.ts`). Ausser React
+ * Kern-Seiten (Einstellungen) über dieselbe Auflösung (`frontend/kit.resolve.ts`). Außer React
  * braucht er nur die Zeitzone des Dashboards (`timezone.ts`).
  */
 import { useEffect, useState } from "react";
@@ -98,7 +98,7 @@ function wallClock(date: Date, timeZone: string): number {
 }
 
 /** Der Zeitpunkt, an dem die Wanduhr in `timeZone` `wall` zeigt; `null`, wenn es die Zeit dort nicht
- * gibt (Sprung auf Sommerzeit). In der doppelten Stunde beim Zurueckstellen gilt der fruehere. */
+ * gibt (Sprung auf Sommerzeit). In der doppelten Stunde beim Zurückstellen gilt der frühere. */
 function instantAt(wall: number, timeZone: string): Date | null {
   const DAY = 86_400_000;
   const offset = (t: number) => wallClock(new Date(t), timeZone) - Math.floor(t / 60000) * 60000;
@@ -111,8 +111,8 @@ function instantAt(wall: number, timeZone: string): Date | null {
 }
 
 /**
- * Naechster Lauf fuer die einfachen Formen, sonst null. Ohne `timeZone` (oder in der Zone des
- * Geraets) gilt die lokale Zeit; mit `timeZone` meint der Zeitplan die Uhrzeit DORT (Einstellung
+ * Nächster Lauf für die einfachen Formen, sonst null. Ohne `timeZone` (oder in der Zone des
+ * Geräts) gilt die lokale Zeit; mit `timeZone` meint der Zeitplan die Uhrzeit DORT (Einstellung
  * System, Zeitzone) -- der Browser darf woanders stehen.
  */
 export function nextRun(cron: string | null | undefined, from = new Date(), timeZone?: string | null): Date | null {

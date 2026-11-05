@@ -1,3 +1,69 @@
+// ../../_shared/frontend/src/csp.ts
+function cspNonce() {
+  return document.querySelector('meta[name="csp-nonce"]')?.content ?? "";
+}
+function createStyle() {
+  const element = document.createElement("style");
+  element.nonce = cspNonce();
+  return element;
+}
+var UNITLESS = /* @__PURE__ */ new Set([
+  "animationIterationCount",
+  "aspectRatio",
+  "columnCount",
+  "fillOpacity",
+  "flex",
+  "flexGrow",
+  "flexShrink",
+  "fontWeight",
+  "gridArea",
+  "gridColumn",
+  "gridColumnEnd",
+  "gridColumnStart",
+  "gridRow",
+  "gridRowEnd",
+  "gridRowStart",
+  "lineHeight",
+  "opacity",
+  "order",
+  "orphans",
+  "scale",
+  "strokeDasharray",
+  "strokeDashoffset",
+  "strokeMiterlimit",
+  "strokeOpacity",
+  "strokeWidth",
+  "tabSize",
+  "widows",
+  "zIndex",
+  "zoom"
+]);
+function styleRef(values, ref) {
+  let style;
+  return (node) => {
+    style?.remove();
+    style = void 0;
+    if (node && values) {
+      const id = Array.from(crypto.getRandomValues(new Uint32Array(4))).join("-");
+      node.setAttribute("data-deck-style", id);
+      style = createStyle();
+      document.head.appendChild(style);
+      const sheet = style.sheet;
+      const selector = `${node === document.documentElement ? ":root" : ""}[data-deck-style="${id}"]`;
+      sheet.insertRule(`${selector} {}`);
+      const declaration = sheet.cssRules[0].style;
+      for (const [key, value] of Object.entries(values)) {
+        if (value == null || typeof value === "boolean") continue;
+        const name = key.startsWith("--") ? key : key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`).replace(/^ms-/, "-ms-");
+        const unit = typeof value === "number" && value !== 0 && !key.startsWith("--") && !UNITLESS.has(key) ? "px" : "";
+        declaration.setProperty(name, `${value}${unit}`);
+      }
+    }
+    if (typeof ref === "function") ref(node);
+    else if (ref) ref.current = node;
+  };
+}
+
 // src/PlexPage.tsx
 import { useCallback, useEffect as useEffect3, useRef as useRef2, useState as useState2 } from "react";
 
@@ -343,7 +409,9 @@ function mediaDetail(media) {
   return media.year !== null ? String(media.year) : "";
 }
 function libraryHint(library) {
-  return [UNIT[library.kind] ?? "Eintr\xE4ge", library.scanning ? "wird aktualisiert" : ""].filter(Boolean).join(" \xB7 ");
+  const unit = UNIT[library.kind] ?? "Eintr\xE4ge";
+  const named = library.title.trim().toLowerCase() === unit.toLowerCase();
+  return [named ? "" : unit, library.scanning ? "wird aktualisiert" : ""].filter(Boolean).join(" \xB7 ");
 }
 function headline(connection) {
   if (connection.state === "not_configured") return { label: "nicht eingerichtet", tone: "neutral" };
@@ -394,7 +462,7 @@ function PlaybackRow({ playback }) {
         "aria-valuemax": 100,
         "aria-valuenow": playback.progress_percent,
         className: "h-1 w-full overflow-hidden rounded bg-white/10",
-        children: /* @__PURE__ */ jsx4("div", { className: "h-full rounded bg-[var(--color-accent)]", style: { width: `${playback.progress_percent}%` } })
+        children: /* @__PURE__ */ jsx4("div", { className: "h-full rounded bg-[var(--color-accent)]", ref: styleRef({ width: `${playback.progress_percent}%` }) })
       }
     )
   ] });
@@ -497,7 +565,7 @@ function PlexPage() {
       title: "Plex",
       description: "Zeigt, was gerade l\xE4uft, wie gro\xDF die Bibliotheken sind und was zuletzt hinzugekommen ist. Nur lesend.",
       actions: /* @__PURE__ */ jsxs3(Fragment2, { children: [
-        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx4("a", { href: SETTINGS_PATH, className: buttonClass("ghost"), children: "Einstellungen" }),
+        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx4("a", { href: SETTINGS_PATH, className: buttonClass("secondary"), children: "Einstellungen" }),
         /* @__PURE__ */ jsx4(Button, { onClick: reload, disabled: loading, children: "Aktualisieren" })
       ] }),
       children: [

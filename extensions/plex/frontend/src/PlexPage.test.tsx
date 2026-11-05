@@ -336,6 +336,15 @@ describe("Hilfen", () => {
     expect(libraryHint({ ...lib, kind: "other" })).toBe("Einträge");
   });
 
+  it("libraryHint wiederholt den Namen der Bibliothek nicht", () => {
+    const lib = { title: "Filme", kind: "movie", count: 388, scanning: false };
+    expect(libraryHint(lib)).toBe("");
+    expect(libraryHint({ ...lib, title: "serien ", kind: "show" })).toBe("");
+    expect(libraryHint({ ...lib, scanning: true })).toBe("wird aktualisiert");
+    expect(libraryHint({ ...lib, title: "Kinderfilme" })).toBe("Filme");
+    expect(libraryHint({ ...lib, kind: "show" })).toBe("Serien");
+  });
+
   it("mediaDetail", () => {
     expect(mediaDetail(folge)).toBe("Die Beispielserie S02E05");
     expect(mediaDetail(film)).toBe("2019");

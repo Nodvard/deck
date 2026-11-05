@@ -1,8 +1,8 @@
 """Endpunkte ohne Authentifizierung — docs/04-API.md §2.
 
 `/capabilities` ist absichtlich hier und nicht auth-pflichtig: die Login-Seite selbst
-(Web) und die Android-App vor dem ersten Login muessen wissen, was der Server kann
-(docs/04 §2: "eine APK, viele unterschiedlich bestueckte Server"). Es verraet nur
+(Web) und die Android-App vor dem ersten Login müssen wissen, was der Server kann
+(docs/04 §2: "eine APK, viele unterschiedlich bestueckte Server"). Es verrät nur
 Struktur (welche Extensions aktiviert sind, welche View-Typen existieren), nie Daten.
 """
 
@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import hashlib
 import io
+import secrets
 import time
 from functools import lru_cache
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
-from pydantic import BaseModel
-
 from nodvard_sdk import API_VERSION
 from nodvard_sdk.widgets import (
     ActionsView,
@@ -25,27 +25,33 @@ from nodvard_sdk.widgets import (
     ListView,
     LogView,
     MarkdownView,
-    StatView,
     StatusGridView,
+    StatView,
     TableView,
 )
+from pydantic import BaseModel
 
 _VIEW_CLASSES = (
     StatView, ListView, TableView, ChartView, StatusGridView, GaugeView,
     MarkdownView, ActionsView, LogView,
 )
 
+from ... import edition
 from ...branding import (
     DEFAULT_THEME_BACKGROUND,
     LOGO_CONTENT_TYPES,
+    MAX_FAVICON_BYTES,
+    MAX_LOGO_BYTES,
     UNTRUSTED_FILE_HEADERS,
     Branding,
     find_favicon_file,
     find_logo_file,
     load_branding,
 )
+from ...core.updates import REGISTRY_HOST
 from ...custom_css import load_custom_css, servable_css
 from ...ext.runtime import get_extension_runtime
+from ...svg_safe import UnsafeSvg, nonce_svg, svg_csp
 from ...version import __version__
 from ..deps import SessionDep, SettingsDep
 
@@ -63,8 +69,38 @@ async def health(request: Request) -> dict:
 
 
 @router.get("/branding", response_model=Branding)
-async def get_branding(session: SessionDep) -> Branding:
-    return await load_branding(session)
+async def get_branding(session: SessionDep, settings: SettingsDep) -> Branding:
+    return await load_branding(session, edition.of(settings))
+
+
+class EditionOut(BaseModel):
+    """Welche Ausgabe läuft (`nodvard_deck.edition`). Die Einrichtung braucht das schon vor dem ersten Konto."""
+
+    id: str
+    """`deck` oder `dock`."""
+    product_name: str
+    """Name der Software, unabhängig vom eigenen Branding."""
+    service: str
+    """Dienst in der mitgelieferten Compose-Datei, z. B. für `docker compose logs <service>`."""
+    image: str
+    """Offizielles Image ohne Tag, z. B. `ghcr.io/nodvard/deck`."""
+    choose_modules: bool
+    """`false`: Die Module stehen mit dem Image fest, die Einrichtung schaltet alle ein, statt zu fragen."""
+    repo_tools: bool
+    """Update-Helfer und `scripts/deploy_pi.sh` gelten für diese Ausgabe."""
+
+
+@router.get("/edition", response_model=EditionOut)
+async def get_edition(settings: SettingsDep) -> EditionOut:
+    current = edition.of(settings)
+    return EditionOut(
+        id=current.id,
+        product_name=current.product_name,
+        service=current.service,
+        image=f"{REGISTRY_HOST}/{current.repository}",
+        choose_modules=current.choose_modules,
+        repo_tools=current.repo_tools,
+    )
 
 
 @router.get("/branding/custom.css", response_class=Response)
@@ -83,28 +119,50 @@ async def get_custom_css_file(request: Request, session: SessionDep) -> Response
 _EXT_TO_CONTENT_TYPE = {ext: content_type for content_type, ext in LOGO_CONTENT_TYPES.items()}
 
 
+def _branding_image_response(path: Path, content_type: str, max_bytes: int) -> Response:
+    headers = {"Cache-Control": "no-store", **UNTRUSTED_FILE_HEADERS}
+    content = None
+    if content_type == "image/svg+xml":
+        with path.open("rb") as source:
+            content = source.read(max_bytes + 1)
+    size = len(content) if content is not None else path.stat().st_size
+    if size > max_bytes:
+        raise HTTPException(status_code=413, detail="Bilddatei zu groß.")
+    if content is not None:
+        nonce = secrets.token_urlsafe(32)
+        try:
+            rendered = nonce_svg(content, nonce)
+        except UnsafeSvg as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if rendered is not None:
+            content, hashes = rendered
+            headers["Content-Security-Policy"] = svg_csp(nonce, hashes)
+            return Response(content, media_type=content_type, headers=headers)
+    return FileResponse(path, media_type=content_type, headers=headers)
+
+
 @router.get("/branding/logo")
-async def get_branding_logo(settings: SettingsDep) -> FileResponse:
-    """Oeffentlich wie `GET /branding` selbst -- Login-/Setup-Seite zeigen das Logo vor
+async def get_branding_logo(settings: SettingsDep) -> Response:
+    """Öffentlich wie `GET /branding` selbst -- Login-/Setup-Seite zeigen das Logo vor
     jeder Authentifizierung."""
     path = find_logo_file(settings.data_dir)
     if path is None:
         raise HTTPException(status_code=404, detail="Kein Logo hinterlegt.")
     content_type = _EXT_TO_CONTENT_TYPE.get(path.suffix.removeprefix("."), "application/octet-stream")
-    return FileResponse(path, media_type=content_type, headers={"Cache-Control": "no-store", **UNTRUSTED_FILE_HEADERS})
+    return _branding_image_response(path, content_type, MAX_LOGO_BYTES)
 
 
 _FAVICON_MEDIA_TYPES = {"png": "image/png", "svg": "image/svg+xml", "ico": "image/x-icon"}
 
 
 @router.get("/branding/favicon")
-async def get_branding_favicon(settings: SettingsDep) -> FileResponse:
-    """Oeffentlich wie das Logo: Das Symbol im Browser-Tab steht schon auf der Anmeldeseite."""
+async def get_branding_favicon(settings: SettingsDep) -> Response:
+    """Öffentlich wie das Logo: Das Symbol im Browser-Tab steht schon auf der Anmeldeseite."""
     path = find_favicon_file(settings.data_dir)
     if path is None:
         raise HTTPException(status_code=404, detail="Kein Favicon hinterlegt.")
     content_type = _FAVICON_MEDIA_TYPES.get(path.suffix.removeprefix("."), "application/octet-stream")
-    return FileResponse(path, media_type=content_type, headers={"Cache-Control": "no-store", **UNTRUSTED_FILE_HEADERS})
+    return _branding_image_response(path, content_type, MAX_FAVICON_BYTES)
 
 
 # --- Als App aufs Handy (PWA) -----------------------------------------------------
@@ -116,8 +174,8 @@ _ICON_SIZES = (180, 192, 512)
 
 
 @router.get("/app/manifest.webmanifest")
-async def app_manifest(session: SessionDep) -> JSONResponse:
-    b = await load_branding(session)
+async def app_manifest(session: SessionDep, settings: SettingsDep) -> JSONResponse:
+    b = await load_branding(session, edition.of(settings))
     icons = [
         {"src": f"/api/v1/app/icon-{size}.png", "sizes": f"{size}x{size}", "type": "image/png", "purpose": "any"}
         for size in (192, 512)
@@ -149,7 +207,7 @@ async def app_icon(name: str, session: SessionDep, settings: SettingsDep) -> Res
     size_text, _, variant = name.partition("-")
     if not size_text.isdigit() or int(size_text) not in _ICON_SIZES or variant not in ("", "maskable"):
         raise HTTPException(status_code=404, detail="Unbekanntes Symbol.")
-    b = await load_branding(session)
+    b = await load_branding(session, edition.of(settings))
     logo = find_logo_file(settings.data_dir)
     logo_key = (str(logo), logo.stat().st_mtime) if logo is not None else None
     png = _render_icon(int(size_text), variant == "maskable", b.product_name[:1].upper() or "N",
@@ -171,7 +229,7 @@ def _hex(color: str, fallback: tuple[int, int, int]) -> tuple[int, int, int]:
 def _render_icon(size: int, maskable: bool, letter: str, accent: str, accent_strong: str, background: str,
                  logo_key: tuple[str, float] | None) -> bytes:
     """Symbol mit Pillow: hochgeladenes Logo auf Hintergrund, sonst Farbverlauf der
-    Akzentfarben mit dem Anfangsbuchstaben -- wie das Logo oben links im Menue."""
+    Akzentfarben mit dem Anfangsbuchstaben -- wie das Logo oben links im Menü."""
     from PIL import Image, ImageDraw, ImageFont
 
     a, s = _hex(accent, (14, 165, 233)), _hex(accent_strong, (3, 105, 161))
@@ -188,7 +246,7 @@ def _render_icon(size: int, maskable: bool, letter: str, accent: str, accent_str
 
     mask = Image.new("L", (size, size), 0)
     if maskable:
-        mask.paste(255, (0, 0, size, size))  # Vollflaeche -- das System schneidet selbst zu
+        mask.paste(255, (0, 0, size, size))  # Vollfläche -- das System schneidet selbst zu
     else:
         ImageDraw.Draw(mask).rounded_rectangle((0, 0, size - 1, size - 1), radius=round(size * 0.22), fill=255)
 
@@ -211,7 +269,7 @@ def _render_icon(size: int, maskable: bool, letter: str, accent: str, accent_str
         font_size = round(size * (0.42 if maskable else 0.52))
         try:
             font = ImageFont.load_default(size=font_size)
-        except TypeError:  # sehr altes Pillow ohne Groessenangabe
+        except TypeError:  # sehr altes Pillow ohne Größenangabe
             font = ImageFont.load_default()
         stroke = max(1, round(size * 0.022))  # die mitgelieferte Schrift ist duenn -- Kontur macht sie fett
         box = draw.textbbox((0, 0), letter, font=font, stroke_width=stroke)
@@ -240,7 +298,7 @@ class Capabilities(BaseModel):
 
 @router.get("/capabilities", response_model=Capabilities)
 async def get_capabilities(settings: SettingsDep) -> Capabilities:
-    """`feature_flags` war seit seiner Einfuehrung immer `{}` -- kein Aufrufer
+    """`feature_flags` war seit seiner Einführung immer `{}` -- kein Aufrufer
     brauchte es. `demo_mode` ist der
     erste echte: die Login-/Setup-Seite kann jetzt sichtbar machen, dass eine
     Installation eine Demo mit Fake-Daten ist, nicht echte Infrastruktur."""

@@ -257,7 +257,7 @@ export function HomeAssistantPage(): JSX.Element {
       description="Zeigt Version, bereitstehende Updates, nicht verfügbare Geräte und ausgewählte Werte deines Home Assistant. Nur lesend."
       actions={
         <>
-          {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("ghost")}>Einstellungen</a>}
+          {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("secondary")}>Einstellungen</a>}
           <Button onClick={reload} disabled={loading}>Aktualisieren</Button>
         </>
       }

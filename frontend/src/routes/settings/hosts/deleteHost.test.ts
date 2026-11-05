@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { HostOut } from "../../../lib/hosts";
 import { useAuthStore } from "../../../state/auth";
-import { deleteHost } from "./deleteHost";
+import { DECK_EDITION, useEditionStore } from "../../../state/edition";
+import { deleteHost, deletePrompt, goneDeletePrompt } from "./deleteHost";
 
 const dialogs = vi.hoisted(() => ({
   promptDialog: vi.fn(async (..._args: unknown[]) => "pve1" as string | null),
@@ -31,6 +32,27 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("deleteHost", () => {
+  it("Dock erklärt beim Löschen nur seine Serverzugänge", () => {
+    useEditionStore.setState({ edition: { ...DECK_EDITION, choose_modules: false } });
+    try {
+      expect(deletePrompt(HOST)).toContain("SSH-Zugang und gemerkter Server-Schlüssel");
+      expect(deletePrompt(HOST)).not.toMatch(/Shield|Skripte/);
+      useEditionStore.setState({ edition: DECK_EDITION });
+      expect(deletePrompt(HOST)).toContain("Verläufe in Nodvard Shield");
+    } finally {
+      useEditionStore.setState({ edition: DECK_EDITION });
+    }
+  });
+
+  it("Dock nennt sich beim Entfernen eines verschwundenen Servers", () => {
+    useEditionStore.setState({ edition: { ...DECK_EDITION, choose_modules: false } });
+    try {
+      expect(goneDeletePrompt(HOST)).toContain("Aus Nodvard Dock entfernen?");
+    } finally {
+      useEditionStore.setState({ edition: DECK_EDITION });
+    }
+  });
+
   it("fragt bei gespeicherten Zugängen nach Passwort und Code und sendet dann erneut", async () => {
     expect(await deleteHost(HOST)).toEqual({ status: "deleted" });
     expect(dialogs.confirmIdentity).toHaveBeenCalledWith(expect.stringContaining("gespeicherten Zugänge"), true);

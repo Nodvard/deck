@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { mockHostsApi, reply, type Call } from "../../test/hostsMock";
 import { useAuthStore } from "../../state/auth";
+import { useConnectionWarningStore } from "../../state/connectionWarning";
 import { SystemSettings } from "./SystemSettings";
 import {
   TrustedProxyCard,
@@ -25,19 +26,37 @@ function setUser(permissions: string[], isOwner = true) {
 function connection(over: Partial<ConnectionInfo> = {}): ConnectionInfo {
   return {
     peer: "172.18.0.5", client: "172.18.0.5", scheme: "http", via_trusted_proxy: false, forwarded_headers: false,
-    trusted_proxies: [], trusted_proxies_source: "setting", ...over,
+    trusted_proxies: [], trusted_proxies_source: "setting", insecure_connection: false, ...over,
   };
 }
 
 const rows = (value: unknown = []) => [{ key: "system.trusted_proxies", value }];
 
-beforeEach(() => setUser(["*"]));
+beforeEach(() => {
+  setUser(["*"]);
+  useConnectionWarningStore.getState().reset();
+});
 afterEach(() => {
   vi.clearAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("Karte „Vertrauenswürdiger Proxy“", () => {
+  it("warnt vor unverschlüsseltem Zugriff in den Systemeinstellungen", async () => {
+    mockHostsApi({ "GET /system/connection": { ...connection(), insecure_connection: true } });
+    render(<TrustedProxyCard settings={rows()} />);
+    const warning = await screen.findByRole("alert");
+    expect(warning).toHaveTextContent("Diese Verbindung ist unverschlüsselt. Im Heimnetz kann dein Anmelde-Token mitgelesen werden.");
+    expect(screen.getByRole("link", { name: /Verbindung absichern/ })).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#verbindung-absichern");
+  });
+
+  it("zeigt bei HTTPS oder lokalem Zugriff keinen Verbindungsbalken", async () => {
+    mockHostsApi({ "GET /system/connection": { ...connection(), insecure_connection: false } });
+    render(<TrustedProxyCard settings={rows()} />);
+    await screen.findByText(/Deine Anfrage kommt gerade/);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("zeigt die gespeicherte Liste und eine direkte Anfrage", async () => {
     mockHostsApi({ "GET /system/connection": connection({ peer: "192.168.2.40", client: "192.168.2.40" }) });
     render(<TrustedProxyCard settings={rows(["172.18.0.5", "fd00:1::/64"])} />);
@@ -119,7 +138,7 @@ describe("Karte „Vertrauenswürdiger Proxy“", () => {
       "GET /system/connection": () =>
         trusted
           ? connection({ client: "192.168.2.40", scheme: "https", via_trusted_proxy: true, forwarded_headers: true, trusted_proxies: ["172.18.0.5"] })
-          : connection({ forwarded_headers: true }),
+          : connection({ forwarded_headers: true, insecure_connection: true }),
       "PUT /settings/system.trusted_proxies": (call: Call) => {
         trusted = true;
         return { key: "system.trusted_proxies", value: (call.body as { value: string[] }).value };
@@ -127,6 +146,7 @@ describe("Karte „Vertrauenswürdiger Proxy“", () => {
     });
     render(<TrustedProxyCard settings={rows()} />);
     expect(await screen.findByText("Deine Anfrage kommt gerade von 172.18.0.5 über http und trägt Angaben eines Proxys.")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Diese Verbindung ist unverschlüsselt.");
     expect(screen.queryByText(/\(direkt\)/)).not.toBeInTheDocument();
     expect(screen.getByText(/über einen Proxy mit der Adresse 172.18.0.5/)).toBeInTheDocument();
 
@@ -137,6 +157,7 @@ describe("Karte „Vertrauenswürdiger Proxy“", () => {
     fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
     expect(await screen.findByText(/^Gespeichert\./)).toBeInTheDocument();
     expect(await screen.findByText("Deine Anfrage kommt gerade von 192.168.2.40 über https, weitergeleitet von 172.18.0.5.")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(calls.filter((c) => c.method === "PUT").map((c) => [c.path, c.body])).toEqual([
       ["/settings/system.trusted_proxies", { value: ["172.18.0.5"] }],
     ]);

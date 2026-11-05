@@ -274,7 +274,7 @@ export function UptimeKumaPage(): JSX.Element {
       description="Zeigt, welche Dienste laut Uptime Kuma laufen und welche ausgefallen sind."
       actions={
         <>
-          {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("ghost")}>Einstellungen</a>}
+          {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("secondary")}>Einstellungen</a>}
           <Button onClick={reload} disabled={loading}>Aktualisieren</Button>
         </>
       }

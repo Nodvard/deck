@@ -80,8 +80,7 @@ class PayloadError(ValueError):
 
 
 def _only(payload: Any, allowed: set[str]) -> dict[str, Any]:
-    # Der Payload liegt zwischen Vorschlag und Ausführung in der Datenbank, darum wird er hier noch einmal streng geprüft
-    # (nur erlaubte Felder, echte ganze Zahlen, feste Pausenlängen, gültige Domain).
+    # Der Payload liegt zwischen Vorschlag und Ausführung in der Datenbank, darum hier noch einmal streng geprüft.
     if not isinstance(payload, dict):
         raise PayloadError("Ungültige Aktion: Daten fehlen.")
     extra = sorted(set(payload) - allowed)

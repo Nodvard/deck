@@ -121,7 +121,7 @@ def _failed_notification(
         body=f"{body}\n{AFTER_WINDOW_NOTE}" if after_window else body,
         severity=Severity.CRITICAL,
         correlation_id=f"backups-watch:{key}",
-        payload={"host_id": host_id} if host_id else {},
+        payload={"notification_type": "backups.failed", **({"host_id": host_id} if host_id else {})},
     )
 
 
@@ -137,7 +137,7 @@ def _recovered_notification(job: dict[str, Any], key: str, variant: str) -> Noti
         severity=Severity.INFO,
         correlation_id=f"backups-watch:{key}",
         # Wie der Fehlschlag zum Host, damit das Fenster beide gleich behandelt (docs/03 §9).
-        payload={"host_id": host_id} if host_id else {},
+        payload={"notification_type": "backups.recovered", **({"host_id": host_id} if host_id else {})},
     )
 
 
@@ -284,7 +284,7 @@ def _age_notification(vm: dict[str, Any], key: str, last_ok: float, days: int, *
         body=f"{body}\n{AFTER_WINDOW_NOTE}" if after_window else body,
         severity=Severity.WARNING,
         correlation_id=f"backups-watch:{key}",
-        payload=payload,
+        payload={"notification_type": "backups.old", **payload},
     )
 
 
@@ -299,7 +299,7 @@ def _age_recovered_notification(vm: dict[str, Any], key: str, last_ok: float, va
         body=f"{body} {note}" if note else body,
         severity=Severity.INFO,
         correlation_id=f"backups-watch:{key}",
-        payload=payload,
+        payload={"notification_type": "backups.current", **payload},
     )
 
 

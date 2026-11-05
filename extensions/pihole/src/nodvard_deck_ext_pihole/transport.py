@@ -1,8 +1,6 @@
-"""HTTP-Helfer des Pi-hole-Clients, nur über `ctx.http` (nie ein eigener `httpx`-Client).
-
-Netzwerkfehler werden zu festen deutschen Meldungen; Passwörter, Sitzungen und Tokens stehen nie darin. Bis auf diesen
-Kopf gleich mit `transport.py` im Modul „Nginx Proxy Manager“ (ein Test hält beide gleich).
-"""
+"""HTTP-Helfer des Pi-hole-Clients, nur über `ctx.http` (nie ein eigener `httpx`-Client). Netzwerkfehler werden zu
+festen deutschen Meldungen, Passwörter, Sitzungen und Tokens stehen nie darin. Bis auf diesen Kopf gleich mit
+`transport.py` im Modul „Nginx Proxy Manager“ (ein Test hält beide gleich)."""
 
 from __future__ import annotations
 

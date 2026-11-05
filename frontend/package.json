@@ -1,7 +1,7 @@
 {
   "name": "nodvard-deck-frontend",
   "private": true,
-  "version": "0.12.1",
+  "version": "0.13.0",
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "scripts": {
@@ -11,6 +11,8 @@
     "typecheck": "tsc -b",
     "typecheck:extensions": "tsc -p ../extensions/tsconfig.json",
     "test": "vitest run",
+    "test:csp": "node ../scripts/test_csp_browser.mjs",
+    "test:csp:install": "playwright install chromium",
     "test:extensions": "vitest run -c vitest.extensions.config.ts"
   },
   "dependencies": {
@@ -39,6 +41,7 @@
     "@vitejs/plugin-react": "^5.2.0",
     "autoprefixer": "^10.4.20",
     "jsdom": "^30.0.1",
+    "playwright": "1.64.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.15",
     "typescript": "^5.6.3",

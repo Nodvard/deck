@@ -17,8 +17,10 @@ import {
   normalizeUrl,
   safeHref,
   urlHost,
+  urlKey,
   validateAppForm,
   validateUrl,
+  withoutAdopted,
 } from "./apps";
 import type { AppTileOut } from "./overview";
 
@@ -278,5 +280,26 @@ describe("Gruppen und Filter", () => {
 
   it("schlägt vorhandene Gruppen alphabetisch vor", () => {
     expect(existingGroups(apps)).toEqual(["Netzwerk", "Speicher"]);
+  });
+});
+
+describe("withoutAdopted", () => {
+  it("vergleicht Adressen ohne Schrägstrich am Ende und ohne Groß-/Kleinschreibung beim Rechner", () => {
+    expect(urlKey("HTTP://Pi.Local:8081/admin/")).toBe("http://pi.local:8081/admin");
+    expect(urlKey("http://10.0.0.5:3000")).toBe(urlKey("http://10.0.0.5:3000/"));
+    expect(urlKey("http://10.0.0.5:3000/a")).not.toBe(urlKey("http://10.0.0.5:3000/b"));
+    expect(urlKey("http://pi.local:80/")).toBe(urlKey("http://pi.local"));
+    expect(urlKey("http://pi.local/?tab=a")).not.toBe(urlKey("http://pi.local/?tab=b"));
+  });
+
+  it("ein erkannter Dienst mit derselben Adresse wie eine eigene App steht nur als eigene App da", () => {
+    const apps = [
+      tile({ id: "a1", name: "Pi-hole", url: "http://192.168.2.31:8081/admin" }),
+      tile({ id: "d1", source: "detected", name: "pihole", url: "http://192.168.2.31:8081/admin/" }),
+      tile({ id: "d2", source: "detected", name: "grafana", url: "http://192.168.2.31:3000" }),
+      tile({ id: "d3", source: "detected", name: "redis", url: null }),
+      tile({ id: "a2", name: "Notiz", url: null }),
+    ];
+    expect(withoutAdopted(apps).map((a) => a.id)).toEqual(["a1", "d2", "d3", "a2"]);
   });
 });

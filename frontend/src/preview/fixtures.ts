@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 /**
  * Testdaten fuer die Design-Vorschau -- typische Homelab-Beispieldaten (Hosts, IPs,
  * Auslastung, Container), frei erfunden. Nur fuer preview.html.
@@ -48,7 +49,7 @@ const HOSTS = [
   host("g-ki", "ki-server", "192.168.2.43", "vm", "running"),
   host("g-valheim", "game-win", "192.168.2.24", "vm", "running", { os_family: "windows" }),
   host("g-dmini", "docker-lxc", "192.168.2.25", "lxc", "running"),
-  host("g-bastion", "bastion", "192.168.2.26", "lxc", "running"),
+  host("g-bastion", "bastion", "192.168.2.26", "lxc", "down"),
   host("h-pi", "Heimserver", "192.168.2.31", null, "up", { name: "heimserver", provider_ext_id: null, credential: KEY_OLD_USER }),
 ];
 
@@ -142,7 +143,7 @@ const METRICS: Record<string, object> = {
   "g-ki": { values: { cpu_percent: 31.8, mem_used_bytes: 14.1 * GB, mem_total_bytes: 16 * GB, uptime_s: 86_400 }, sampled_at: "2026-10-08T09:58:00Z" },
   "g-valheim": { values: { cpu_percent: 12.0, mem_used_bytes: 3.1 * GB, mem_total_bytes: 6 * GB, uptime_s: 43_200 }, sampled_at: "2026-10-08T09:58:00Z" },
   "g-dmini": { values: { cpu_percent: 1.2, mem_used_bytes: 0.6 * GB, mem_total_bytes: 2 * GB, uptime_s: 604_800 }, sampled_at: "2026-10-08T09:58:00Z" },
-  "g-bastion": { values: { cpu_percent: 0.3, mem_used_bytes: 0.1 * GB, mem_total_bytes: 0.5 * GB, uptime_s: 604_800 }, sampled_at: "2026-10-08T09:58:00Z" },
+  "g-bastion": { values: { cpu_percent: 0, mem_used_bytes: 0, mem_total_bytes: 0.5 * GB, uptime_s: 0 }, sampled_at: "2026-10-08T09:58:00Z" },
 };
 
 /** Letzter Messwert aus dem Verlauf, wie ihn `GET /hosts/metrics/latest` liefert (Cockpit-Karten der Linux-Server). */
@@ -188,7 +189,7 @@ const OVERVIEW = {
   pending_actions: 1,
   unread_notifications: 3,
   attention: [
-    { id: "a1", ts: new Date(Date.now() - 42 * 60_000).toISOString(), severity: "warning", title: "Datenträger auf pve1: 28 % Rest", source_ext_id: "proxmox" },
+    { id: "a1", ts: new Date(Date.now() - 5 * 60_000).toISOString(), severity: "warning", title: "Speicher local-lvm auf pve2 fast voll: 95 %", source_ext_id: "proxmox" },
   ],
   errors: [],
   generated_at: Date.now() / 1000,
@@ -248,8 +249,8 @@ const WIDGETS = [
     kind: "list", empty_text: "Keine Zertifikate", max_items: null,
     item: listItem("{{ domain }}", "läuft ab am {{ expires }}", { text: "{{ label }}", tone: "{{ tone }}" }),
   }),
-  w("documents", "untagged", "Dokumente ohne Tag", "file-text", "widgets/untagged", {
-    kind: "list", empty_text: "Alle Dokumente haben Tags.", max_items: 5, item: listItem("{{ title }}", null, null),
+  w("documents", "untagged", "Dokumente ohne Tag", "tag", "widgets/untagged", {
+    kind: "list", empty_text: "Alle Dokumente sind getaggt", max_items: null, item: listItem("{{ name }}", null, { text: "{{ status }}", tone: "{{ tone }}" }),
   }),
   w("uptime-kuma", "monitors", "Uptime Kuma", "activity", "widgets/monitors", {
     kind: "list", empty_text: "Keine Monitore", max_items: null, item: listItem("{{ name }}", "{{ detail }}", { text: "{{ label }}", tone: "{{ tone }}" }),
@@ -270,6 +271,8 @@ const WIDGET_DATA: Record<string, unknown> = {
     { name: "monitoring", storage: "backup-pve1", connection: "pve2", last_status_label: "erfolgreich", tone: "good", job_ref: "pve2--a--102", can_retry: false, can_backup_now: true },
     { name: "ki-server", storage: "backup-nas", connection: "pve2", last_status_label: "erfolgreich", tone: "good", job_ref: "pve2--b--120", can_retry: false, can_backup_now: true },
     { name: "docker-lxc", storage: "backup-nas", connection: "pve1", last_status_label: "unbekannt", tone: "neutral", job_ref: "pve1--c--100", can_retry: false, can_backup_now: true },
+    { name: "docker", storage: "backup-nas", connection: "pve2", last_status_label: "erfolgreich", tone: "good", job_ref: "pve2--b--100", can_retry: false, can_backup_now: true },
+    { name: "bastion", storage: "backup-nas", connection: "pve1", last_status_label: "unbekannt", tone: "neutral", job_ref: "pve1--c--201", can_retry: false, can_backup_now: true },
   ],
   "/ext/gameserver/widgets/servers": [
     { name: "game-win", join_code_display: "Join-Code: 413749", players_display: "1 Spieler online", service_label: "läuft", tone: "good", can_stop: true, host_id: "g-valheim" },
@@ -282,7 +285,7 @@ const WIDGET_DATA: Record<string, unknown> = {
     { name: "ki-server", kind_label: "VM", connection: "pve2", status: "running" },
     { name: "game-win", kind_label: "VM", connection: "pve2", status: "running" },
     { name: "docker-lxc", kind_label: "LXC", connection: "pve1", status: "running" },
-    { name: "bastion", kind_label: "LXC", connection: "pve1", status: "running" },
+    { name: "bastion", kind_label: "LXC", connection: "pve1", status: "stopped" },
   ],
   "/ext/proxmox/widgets/node-load": { value: 18.9, node_count: 2 },
   "/ext/proxmox/widgets/disks": [
@@ -290,11 +293,11 @@ const WIDGET_DATA: Record<string, unknown> = {
     { node: "pve1", model: "SATA SSD 500GB", summary: "SSD · 500 GB · 33 °C", badge: "gesund", tone: "good" },
   ],
   "/ext/proxmox/widgets/updates": [
-    { node: "pve2", summary: "Auf dem neuesten Stand", badge: "aktuell", tone: "good" },
+    { node: "pve2", summary: "3 Updates verfügbar, darunter ein neuer Kernel (danach Neustart nötig)", badge: "3 Updates", tone: "warn" },
     { node: "pve1", summary: "Auf dem neuesten Stand", badge: "aktuell", tone: "good" },
   ],
   "/ext/shield/widgets/incidents": [
-    { title: "Container 'clamav' beendet (Exit 137)", host: "docker", status_label: "Vorschlag", tone: "warn" },
+    { title: "Container 'clamav' beendet (Exit 137) (2x)", host: "docker", status_label: "Vorschlag", tone: "warn" },
   ],
   "/ext/npm/widgets/certificates": Array.from({ length: 14 }, (_, i) => ({
     domain: `dienst-${i + 1}.heim.example`,
@@ -302,12 +305,12 @@ const WIDGET_DATA: Record<string, unknown> = {
     label: i < 2 ? "läuft bald ab" : "gültig",
     tone: i < 2 ? "warn" : "good",
   })),
-  "/ext/documents/widgets/untagged": [],
+  "/ext/documents/widgets/untagged": [{ id: "d3", name: "garantie-scan.jpg", status: "ohne Tag", tone: "warn" }],
   "/ext/uptime-kuma/widgets/monitors": [
     { name: "Uptime Kuma nicht eingerichtet", detail: "Adresse und Zugang fehlen", label: "nicht eingerichtet", tone: "neutral" },
   ],
   // Felder wie im Modul Docker (`list_services`), damit auch die Container-Seite in der Vorschau läuft.
-  "/ext/docker/widgets/matrix": OVERVIEW.services.map((sv) => ({ ...sv, container: sv.name, status: sv.state === "running" ? "Up 3 days" : "Exited (0) 2 hours ago" })),
+  "/ext/docker/widgets/matrix": OVERVIEW.services.map((sv) => ({ ...sv, container: sv.name, status: sv.state === "running" ? "Up 3 days" : "Exited (137) 30 minutes ago" })),
 };
 
 const GAMESERVER = {
@@ -442,7 +445,8 @@ const ACTIONS = [
   actionRow("act-1", { reason: "Sicherheitsupdates einspielen (12 Pakete, davon 3 Sicherheit)" }),
   actionRow("act-2", {
     action_type: "container.restart", host_id: "g-docker", proposed_by_type: "extension", proposed_by_id: "shield",
-    proposed_by_label: "Nodvard Shield", reason: "KI-Container-Wache: „immich_server“ ist abgestürzt (Exit 137)", created_at: "2026-09-25T19:44:00Z",
+    proposed_by_label: "Nodvard Shield", reason: "KI-Container-Wache: „clamav“ ist abgestürzt (Exit 137)",
+    created_at: new Date(Date.now() - 30 * 60_000).toISOString(), expires_at: new Date(Date.now() + 6 * 3600_000).toISOString(),
   }),
   actionRow("act-3", {
     ext_id: "proxmox", action_type: "vm.stop", host_id: "g-valheim", risk: "high", status: "failed", reason: "Wartung",
@@ -728,7 +732,17 @@ const MODULE_META: Record<string, { category: string; sort_order: number; stage?
   ntfy: { category: "connections", sort_order: 10 },
 };
 
-const NTFY = { id: "ntfy", name: "ntfy-Benachrichtigungen", description: "Push-Nachrichten aufs Handy", icon: "bell", has_settings: true };
+// Beschreibungen wie in einer echten Installation: aus der extension.toml jedes Moduls.
+const MANIFESTS = import.meta.glob<string>("../../../extensions/*/extension.toml", { query: "?raw", import: "default", eager: true });
+const DESCRIPTIONS: Record<string, string> = Object.fromEntries(
+  Object.values(MANIFESTS).flatMap((text) => {
+    const id = /^id\s*=\s*"([^"]+)"/m.exec(text)?.[1];
+    const description = /^description\s*=\s*"([^"]*)"/m.exec(text)?.[1];
+    return id && description ? [[id, description]] : [];
+  }),
+);
+
+const NTFY = { id: "ntfy", name: "ntfy-Benachrichtigungen", description: DESCRIPTIONS.ntfy, icon: "bell", has_settings: true };
 
 const REQUIREMENTS = [
   { ext_id: "shield", id: "root", label: "Root-Rechte (Nodvard Shield)", check_command: null, ok_text: "", fail_hint: "", unix_group: null, needs_root: true, root_reason: "Updates einspielen, Quarantäne, Härtungs-Audit, Fail2ban", order: 50 },
@@ -989,7 +1003,8 @@ function helperRoutes(p: string, method: string): { handled: boolean; value?: un
     return {
       handled: true,
       value: {
-        current: after ? "0.7.1" : "0.7.0", latest: "0.7.1", latest_digest: null, available: !after, channel: "stable", enabled: true,
+        current: after ? "0.7.1" : "0.7.0", latest: "0.7.1", latest_digest: null, available: !after, kinds: ["behoben"],
+        kinds_complete: true, channel: "stable", enabled: true,
         approved: true, approved_key: "21fe31dfa154a261",
         checked_at: "2026-10-03T04:41:00Z", attempted_at: "2026-10-03T04:41:00Z", source: "cache", error: null,
         official_image: true, image: "ghcr.io/nodvard/deck", official_image_name: "ghcr.io/nodvard/deck", helper: previewState.helper !== "nicht-eingerichtet",
@@ -1012,7 +1027,8 @@ function backupRoutes(p: string, method: string): { handled: boolean; value?: un
     return {
       handled: true,
       value: {
-        current: "0.5.0", latest: "0.6.0", latest_digest: null, available: true, channel: "stable", enabled: true,
+        current: "0.5.0", latest: "0.6.0", latest_digest: null, available: true, kinds: ["sicherheit", "behoben", "neu"], kinds_complete: true,
+        channel: "stable", enabled: true,
         checked_at: "2026-10-01T04:41:00Z", attempted_at: "2026-10-01T04:41:00Z", source: method === "POST" ? "live" : "cache", error: null,
         official_image: true, image: "ghcr.io/nodvard/deck", official_image_name: "ghcr.io/nodvard/deck", helper: false,
         release_notes_url: "https://github.com/nodvard/deck/blob/v0.6.0/CHANGELOG.md",
@@ -1104,7 +1120,7 @@ const PVE_UPDATES = {
 const PVE_STORAGE = {
   pools: [
     { id: "pve2/pve2/local", connection: "pve2", node: "pve2", storage: "local", type: "dir", content_labels: ["ISO-Images", "Container-Vorlagen", "Backups"], shared: false, total: 94 * GB, used: 31 * GB, used_percent: 33, tone: "good", volumes: [], other: { iso: { label: "ISO-Images", count: 3, size: 6.2 * GB } } },
-    { id: "pve2/pve2/local-lvm", connection: "pve2", node: "pve2", storage: "local-lvm", type: "lvmthin", content_labels: ["VM-Disks", "Container-Disks"], shared: false, total: 832 * GB, used: 655 * GB, used_percent: 78.7, tone: "warn",
+    { id: "pve2/pve2/local-lvm", connection: "pve2", node: "pve2", storage: "local-lvm", type: "lvmthin", content_labels: ["VM-Disks", "Container-Disks"], shared: false, total: 640 * GB, used: 608 * GB, used_percent: 95, tone: "danger",
       volumes: [
         { volid: "local-lvm:vm-100-disk-0", vmid: "100", name: "docker", size: 256 * GB },
         { volid: "local-lvm:vm-101-disk-0", vmid: "101", name: "monitoring", size: 32 * GB },
@@ -1146,15 +1162,16 @@ const PVE_HEALTH = (big: boolean) => ({
 });
 const PVE_GUEST = (id: string) => {
   const lxc = id === "g-dmini" || id === "g-bastion";
+  const running = HOSTS.find((h) => h.id === id)?.status === "running";
   const vmid = (PROVIDER_REF[id] ?? "").split("/")[3] ?? "100";
   const mem = Math.round(((METRICS[id] as { values?: { mem_total_bytes?: number } } | undefined)?.values?.mem_total_bytes ?? 2 * GB) / 1024 ** 2);
   return {
     kind: lxc ? "lxc" : "qemu", cores: lxc ? 2 : 4, sockets: lxc ? null : 1, cpu_type: lxc ? null : "host",
     memory_mb: mem, balloon_mb: lxc ? null : 0, swap_mb: lxc ? 512 : null, os: lxc ? "debian" : id === "g-valheim" ? "win11" : "l26",
     onboot: true, startup_order: id === "g-docker" ? 1 : null,
-    disks: [{ slot: lxc ? "rootfs" : "scsi0", kind: "disk", storage: "local-lvm", volume: `vm-${vmid}-disk-0`, size: lxc ? "32G" : "256G", mountpoint: lxc ? "/" : null }],
-    networks: [{ slot: "net0", name: lxc ? "eth0" : null, model: lxc ? null : "virtio", mac: "BC:24:11:00:00:01", bridge: "vmbr0", vlan: null, firewall: true, configured_ip: lxc ? "dhcp" : null, link_down: false, ips: [HOSTS.find((h) => h.id === id)?.address ?? ""] }],
-    passthrough: id === "g-ki" ? ["GPU 0000:01:00"] : [], tags: [], running: true, other_ips: [],
+    disks: [{ slot: lxc ? "rootfs" : "scsi0", kind: "disk", storage: "local-lvm", volume: `vm-${vmid}-disk-0`, size: id === "g-bastion" ? "8G" : lxc ? "32G" : "256G", mountpoint: lxc ? "/" : null }],
+    networks: [{ slot: "net0", name: lxc ? "eth0" : null, model: lxc ? null : "virtio", mac: "BC:24:11:00:00:01", bridge: "vmbr0", vlan: null, firewall: true, configured_ip: lxc ? "dhcp" : null, link_down: false, ips: running ? [HOSTS.find((h) => h.id === id)?.address ?? ""] : [] }],
+    passthrough: id === "g-ki" ? ["GPU 0000:01:00"] : [], tags: [], running, other_ips: [],
     agent_enabled: !lxc, agent_responding: !lxc ? id !== "g-valheim" : null, bios: lxc ? undefined : "ovmf", machine: lxc ? undefined : "q35",
     unprivileged: lxc ? true : undefined, features: lxc ? ["nesting"] : undefined,
   };
@@ -1165,7 +1182,6 @@ function proxmoxRoutes(p: string, method: string): { handled: boolean; value?: u
   // Der Abgleich meldet Gäste als „up“/„down“ (HostStatus), nicht als „running“.
   if (p === "/hosts?tag=proxmox") {
     const rows = HOSTS.filter((h) => h.managed_tags.includes("proxmox")).map((h) => ({ ...h, status: h.status === "running" ? "up" : h.status }));
-    if (rows.length) rows[rows.length - 1] = { ...rows[rows.length - 1], status: "down" };
     return { handled: true, value: none ? [] : rows };
   }
   if (method !== "GET") return { handled: false };
@@ -1225,7 +1241,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   if (access.handled) return access.value;
   const backup = backupRoutes(p, method);
   if (backup.handled) return backup.value;
-  if (p === "/app/changelog") return CHANGELOG;
+  if (p.split("?")[0] === "/app/changelog") return CHANGELOG;
   const pve = proxmoxRoutes(p, method);
   if (pve.handled) return pve.value;
   if (previewState.ohneProxmox && /^\/ext\/(backups|proxmox)\/(inventory|unprotected)$/.test(p)) return { guests: [], errors: [] };
@@ -1490,14 +1506,14 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   if (p.startsWith("/extensions/") && p.split("/").length === 3) {
     const id = p.split("/")[2];
     const pg = PAGES.find((x) => x.ext_id === id);
-    return { id, name: pg?.title ?? "Proxmox VE", description: "Liest deine Proxmox-Server mit allen VMs und Containern ein.", icon: pg?.icon ?? "server", state: "enabled", version: "0.1.0" };
+    return { id, name: pg?.title ?? "Proxmox VE", description: DESCRIPTIONS[id] ?? null, icon: pg?.icon ?? "server", state: "enabled", version: "0.1.0" };
   }
   if (p === "/extensions" && previewState.ohneProxmox) return ohneProxmoxExtensions();
   if (p === "/extensions") return [
     ...PAGES.map((pg) => ({
       id: pg.ext_id, version: "1.0.0", api_version: "0.1.0", source: "bundled", bundled: true, display_version: "0.6.0", has_settings: ["proxmox", "backups", "shield", "gameserver", "docker"].includes(pg.ext_id),
       state: previewState.noHosts ? "disabled" : pg.ext_id === "shield" ? "disabled" : pg.ext_id === "gameserver" ? "error" : "enabled",
-      name: pg.title, description: `Modul ${pg.title}`, icon: pg.icon, granted_permissions: [], ...MODULE_META[pg.ext_id],
+      name: pg.title, description: DESCRIPTIONS[pg.ext_id] ?? null, icon: pg.icon, granted_permissions: [], ...MODULE_META[pg.ext_id],
       last_error: !previewState.noHosts && pg.ext_id === "gameserver" ? "on_start() fehlgeschlagen: Verbindung zu game-win abgelehnt" : null,
       needs_setup: previewState.start && pg.ext_id === "proxmox",
       setup_reasons: previewState.start && pg.ext_id === "proxmox" ? ["Zugangsdaten fehlen: API-Token-Geheimnis (pve2)."] : [],
@@ -1597,7 +1613,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
 /** Meldungen fuer die Glocken-Schnellansicht (relativ zu "jetzt", damit "vor 5 min" stimmt). */
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 const NOTIFICATIONS = [
-  { id: "n1", ts: minutesAgo(5), severity: "critical", title: "Speicher fast voll: local-lvm auf pve2 bei 95 %", body: "", source_ext_id: "proxmox", correlation_id: null, read_at: null, payload: { path: "/hosts/pve2" } },
+  { id: "n1", ts: minutesAgo(5), severity: "warning", title: "Speicher local-lvm auf pve2 fast voll: 95 %", body: "", source_ext_id: "proxmox", correlation_id: null, read_at: null, payload: { path: "/ext/proxmox/nodes?tab=storage&host=n-pve2" } },
   { id: "n2", ts: minutesAgo(32), severity: "warning", title: "Einbruchschutz: 2 neue Sicherheitsereignisse, unter anderem ein ungewöhnlicher SSH-Login von einer unbekannten Adresse", body: "", source_ext_id: "shield", correlation_id: null, read_at: null, payload: { path: "/ext/shield/soc?tab=guard" } },
   { id: "n3", ts: minutesAgo(95), severity: "info", title: "", body: "Backup „docker“ erfolgreich abgeschlossen\n2,4 GB in 6 min", source_ext_id: "backups", correlation_id: null, read_at: null, payload: {} },
   { id: "n4", ts: minutesAgo(60 * 7), severity: "info", title: "Morgen-Briefing: alles im grünen Bereich", body: "", source_ext_id: "shield", correlation_id: null, read_at: minutesAgo(60 * 6), payload: { path: "/ext/shield/soc" } },
@@ -1659,7 +1675,7 @@ function ohneProxmoxSoc(p: string, base: Record<string, unknown>): unknown {
 function ohneProxmoxExtensions() {
   const row = (id: string, name: string, icon: string, state: string, hasSettings = false) => ({
     id, version: "1.0.0", api_version: "0.1.0", source: "bundled", bundled: true, display_version: "0.6.0", has_settings: hasSettings, state, name,
-    description: `Modul ${name}`, icon, granted_permissions: [], last_error: null, needs_setup: false, setup_reasons: [], ...MODULE_META[id],
+    description: DESCRIPTIONS[id] ?? null, icon, granted_permissions: [], last_error: null, needs_setup: false, setup_reasons: [], ...MODULE_META[id],
   });
   const on = previewState.ohneProxmoxMin ? "disabled" : "enabled";
   return [
@@ -1737,7 +1753,7 @@ export function applyOhneProxmox(min: boolean, many = false): void {
       { name: "Debian-VM", summary: "Debian 12 · CPU 2 % · RAM 31 % · Platte 52 %", badge: "gut", tone: "good" },
       { name: "NAS", summary: "Debian 12 · CPU 1 % · RAM 18 % · Platte 78 %", badge: "gut", tone: "good" },
     ],
-    "/ext/docker/widgets/matrix": services.map((sv) => ({ ...sv, container: sv.name, status: sv.state === "running" ? "Up 3 days" : "Exited (0) 2 hours ago" })),
+    "/ext/docker/widgets/matrix": services.map((sv) => ({ ...sv, container: sv.name, status: sv.state === "running" ? "Up 3 days" : "Exited (137) 30 minutes ago" })),
     "/ext/shield/widgets/incidents": [],
   });
   for (const key of Object.keys(LATEST)) delete LATEST[key];

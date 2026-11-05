@@ -10,6 +10,7 @@ import { api, ApiError } from "../../../lib/api";
 import { formatDate, refreshHosts, useKnownKeys, type HostOut } from "../../../lib/hosts";
 import { confirmDialog } from "../../../state/dialogs";
 import { Button, NoticeLine, type Notice } from "../ui";
+import { productText } from "../../../state/edition";
 
 export function KnownKeys({ host }: { host: HostOut }) {
   const queryClient = useQueryClient();
@@ -19,7 +20,7 @@ export function KnownKeys({ host }: { host: HostOut }) {
 
   async function forget(keyType: string) {
     const ok = await confirmDialog(
-      `Gemerkten Schlüssel (${keyType}) von „${host.display_name}“ vergessen? Nur machen, wenn der Server neu installiert wurde. Bis du unter „Verbindung prüfen“ den neuen Fingerabdruck bestätigst, verbindet sich Nodvard Deck nicht mehr mit dem Server.`,
+      `Gemerkten Schlüssel (${keyType}) von „${host.display_name}“ vergessen? Nur machen, wenn der Server neu installiert wurde. Bis du unter „Verbindung prüfen“ den neuen Fingerabdruck bestätigst, verbindet sich ${productText("Nodvard Deck")} nicht mehr mit dem Server.`,
       { danger: true, confirmLabel: "Vergessen" },
     );
     if (!ok) return;
@@ -28,7 +29,7 @@ export function KnownKeys({ host }: { host: HostOut }) {
     try {
       await api.delete(`/hosts/${host.id}/known-hosts/${encodeURIComponent(keyType)}`);
       await refreshHosts(queryClient);
-      setNotice({ kind: "ok", text: "Schlüssel vergessen. Drück jetzt „Verbindung prüfen“ und bestätige den neuen Fingerabdruck – vorher verbindet sich Nodvard Deck nicht mehr mit dem Server." });
+      setNotice({ kind: "ok", text: productText("Schlüssel vergessen. Drück jetzt „Verbindung prüfen“ und bestätige den neuen Fingerabdruck – vorher verbindet sich Nodvard Deck nicht mehr mit dem Server.") });
     } catch (err) {
       setNotice({ kind: "error", text: err instanceof ApiError ? err.message : String(err) });
     } finally {

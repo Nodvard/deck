@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from ...ext.runtime import get_extension_runtime
+from ...edition import of
 from ...models import ExtensionRecord, User
 from ...services import audit as audit_service
 from ...services import extension_setup
@@ -196,19 +197,22 @@ async def _audit_toggle(session, user: User, action: str, ext_id: str, record: E
 
 
 @router.get("")
-async def list_extensions(session: SessionDep, user: CurrentUser) -> list[ExtensionOut]:
+async def list_extensions(session: SessionDep, user: CurrentUser, settings: SettingsDep) -> list[ExtensionOut]:
     """Alle Erweiterungen der Registry, je einmal unter ihrer heutigen Kennung. Ein verwaister Zwilling
     (Zeile einer alten Kennung, die die umbenannte Erweiterung nicht nutzt) fehlt."""
     runtime = get_extension_runtime()
     result = await session.execute(select(ExtensionRecord).order_by(ExtensionRecord.id))
-    records = [r for r in result.scalars().all() if not runtime.is_stale_twin(r.id)]
+    records = [r for r in result.scalars().all() if not runtime.is_stale_twin(r.id)
+               and (of(settings).choose_modules or runtime.canonical(r.id) in runtime.discovered)]
     items = await _with_setup(session, records, user)
     return sorted(items, key=lambda item: item.id)
 
 
 @router.get("/{ext_id}")
-async def get_extension(ext_id: str, session: SessionDep, user: CurrentUser) -> ExtensionOut:
+async def get_extension(ext_id: str, session: SessionDep, user: CurrentUser, settings: SettingsDep) -> ExtensionOut:
     """Auch über eine alte Kennung (`legacy_ids`); die Antwort nennt die heutige in `id`."""
+    if not of(settings).choose_modules and get_extension_runtime().canonical(ext_id) not in get_extension_runtime().discovered:
+        raise HTTPException(404, "Dieses Modul ist in dieser Ausgabe nicht verfügbar.")
     _, record = await resolve_extension(session, ext_id)
     return (await _with_setup(session, [record], user))[0]
 

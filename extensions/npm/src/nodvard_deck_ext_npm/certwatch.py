@@ -66,7 +66,7 @@ async def run_cert_watch(ctx: ExtensionContext, service: NpmService, *, now: dat
             body=body,
             severity=Severity.CRITICAL if expired else Severity.WARNING,
             correlation_id=f"network-cert:{key}",
-            payload={"path": PAGE_PATH, "tags": ["lock"]},
+            payload={"notification_type": "npm.certificate", "path": PAGE_PATH, "tags": ["lock"]},
         ))
         notified[key] = today
         sent += 1

@@ -16,18 +16,18 @@ import time
 import weakref
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import httpx
 
-from .. import image_info
+from .. import edition, image_info
 from ..version import __version__
 
 logger = logging.getLogger("nodvard_deck.updates")
 
 REPOSITORY = "nodvard/deck"
-"""Das offizielle Repository, die einzige Stelle im Kern, die es nennt (Image `ghcr.io/<REPOSITORY>`, Quelltext auf
-GitHub)."""
+"""Repository von Nodvard Deck (Image `ghcr.io/<REPOSITORY>`, Quelltext auf GitHub), gleich `edition.DECK.repository`.
+Als Text, weil der Update-Helfer ihn hier ohne Import liest. Gesucht wird nach dem Image der laufenden Ausgabe."""
 
 REGISTRY_HOST = "ghcr.io"
 OFFICIAL_IMAGE = f"{REGISTRY_HOST}/{REPOSITORY}"
@@ -60,6 +60,13 @@ MAX_PAGES = 10
 MAX_BODY_BYTES = 1024 * 1024
 """Größte Antwort der Registry, die gelesen wird (Token, eine Tag-Seite, Manifest)."""
 MAX_TAG_LENGTH = 64
+
+KINDS_ANNOTATION = "io.nodvard.deck.release.kinds"
+"""Annotation am Image-Index, die `release.yml` aus dem Änderungsprotokoll der Version schreibt."""
+KINDS = ("sicherheit", "behoben", "verbessert", "neu", "dokumentation")
+MAX_KIND_LOOKUPS = 10
+"""So viele Versionen ab der neuesten werden höchstens nach ihren Arten gefragt; was darüber hinausgeht, bleibt
+unbekannt."""
 
 CACHE_NAME = "update_check.json"
 STALE_TMP_S = 3600
@@ -134,16 +141,44 @@ def pick_latest(tags: list[Any], channel: str) -> str | None:
     return best[1] if best else None
 
 
-# Das Release-Image trägt `/app/image-info.json` mit `"image": "<OFFICIAL_IMAGE>"` (`nodvard_deck.image_info`,
+def versions_up_to(tags: list[Any], latest: str, channel: str) -> list[str]:
+    """Die Versionen im Kanal bis einschließlich `latest`, die neueste zuerst."""
+    allow_pre = channel == "beta"
+    top = _version_key(latest)
+    found: dict[tuple, str] = {}
+    for tag in tags:
+        key = _version_key(tag, allow_pre=allow_pre) if isinstance(tag, str) else None
+        if key is not None and top is not None and key <= top:
+            found[key] = tag
+    return [found[key] for key in sorted(found, reverse=True)]
+
+
+def kinds_of(manifest: bytes) -> tuple[list[str], bool] | None:
+    """Die bekannten Arten aus der Annotation am Image-Index in fester Reihenfolge und ob es nur bekannte waren;
+    `None`, wenn die Annotation fehlt oder unlesbar ist."""
+    try:
+        data = json.loads(manifest)
+    except (ValueError, RecursionError):
+        return None
+    annotations = data.get("annotations") if isinstance(data, dict) else None
+    value = annotations.get(KINDS_ANNOTATION) if isinstance(annotations, dict) else None
+    if not isinstance(value, str):
+        return None
+    named = {part.strip() for part in value.split(",")} - {""}
+    # Leer oder mit einer Art, die dieser Stand nicht kennt, ist die Angabe unvollständig: nie „harmlos“.
+    return [kind for kind in KINDS if kind in named], bool(named) and named <= set(KINDS)
+
+
+# Das Release-Image trägt `/app/image-info.json` mit `"image": "ghcr.io/<repository>"` (`nodvard_deck.image_info`,
 # Build-Argument `IMAGE` in `deploy/Dockerfile`); ein selbst gebautes Image hat die Datei nicht, die Oberfläche zeigt
 # dann den passenden Weg.
-def is_official_image(image: str | None) -> bool:
-    return bool(image) and image.strip() == OFFICIAL_IMAGE
+def is_official_image(image: str | None, repository: str = REPOSITORY) -> bool:
+    return bool(image) and image.strip() == f"{REGISTRY_HOST}/{repository}"
 
 
 def running_version(settings: Any, fallback: str | None = None) -> str:
     """Die genaue Version dieses Containers für die Update-Suche und die Kopien vor Updates (`boot`)."""
-    if is_official_image(getattr(settings, "image", None)):
+    if is_official_image(getattr(settings, "image", None), edition.of(settings).repository):
         # Die Datei im Image geht vor der Variable `NODVARD_DECK_BUILD`: sie kommt immer aus dem laufenden Image, die
         # Variable könnte aus einem alten Container stammen. Auch eine Vorabversion wie `0.6.0-rc1` zählt, die
         # `version.__version__` nie sein kann.
@@ -205,11 +240,11 @@ async def _get_json(client: httpx.AsyncClient, url: str, **kwargs: Any) -> tuple
         raise CheckFailed("kein JSON") from exc
 
 
-async def _token(client: httpx.AsyncClient) -> str:
+async def _token(client: httpx.AsyncClient, repository: str) -> str:
     # Anonymes Token: klappt nur, solange das Paket öffentlich ist.
     body, _ = await _get_json(
         client, f"https://{REGISTRY_HOST}/token",
-        params={"scope": f"repository:{REPOSITORY}:pull", "service": REGISTRY_HOST},
+        params={"scope": f"repository:{repository}:pull", "service": REGISTRY_HOST},
     )
     token = body.get("token") or body.get("access_token") if isinstance(body, dict) else None
     if not isinstance(token, str) or not token:
@@ -217,24 +252,24 @@ async def _token(client: httpx.AsyncClient) -> str:
     return token
 
 
-def _next_page(response: httpx.Response) -> str | None:
+def _next_page(response: httpx.Response, repository: str) -> str | None:
     link = response.links.get("next", {}).get("url")
     if not link:
         return None
     # Der Token geht nur an ghcr.io: eine Folgeseite woanders hin gilt als Fehler.
     url = response.url.join(link)
-    if url.scheme != "https" or url.host != REGISTRY_HOST or url.path != f"/v2/{REPOSITORY}/tags/list":
+    if url.scheme != "https" or url.host != REGISTRY_HOST or url.path != f"/v2/{repository}/tags/list":
         raise CheckFailed("Folgeseite zeigt woanders hin")
     return str(url)
 
 
-async def _tags(client: httpx.AsyncClient, token: str) -> list[str]:
+async def _tags(client: httpx.AsyncClient, token: str, repository: str) -> tuple[list[str], bool]:
     headers = {"Authorization": f"Bearer {token}"}
-    url: str | None = f"https://{REGISTRY_HOST}/v2/{REPOSITORY}/tags/list?n={PAGE_SIZE}"
+    url: str | None = f"https://{REGISTRY_HOST}/v2/{repository}/tags/list?n={PAGE_SIZE}"
     found: list[str] = []
     for _ in range(MAX_PAGES):
         if url is None:
-            return found
+            return found, True
         body, response = await _get_json(client, url, headers=headers)
         if not isinstance(body, dict) or "tags" not in body:
             raise CheckFailed("Tag-Liste fehlt")
@@ -242,22 +277,21 @@ async def _tags(client: httpx.AsyncClient, token: str) -> list[str]:
         if not isinstance(tags, list):
             raise CheckFailed("Tag-Liste kaputt")
         found.extend(t for t in tags if isinstance(t, str))
-        url = _next_page(response)
+        url = _next_page(response, repository)
     if url is not None:
         logger.warning("update_check_page_limit pages=%s", MAX_PAGES)
-    return found
+    return found, url is None
 
 
-async def _digest(client: httpx.AsyncClient, token: str, tag: str) -> str | None:
+async def _manifest(client: httpx.AsyncClient, token: str, tag: str, repository: str) -> bytes | None:
     try:
         body, _ = await _get_limited(
-            client, f"https://{REGISTRY_HOST}/v2/{REPOSITORY}/manifests/{tag}",
+            client, f"https://{REGISTRY_HOST}/v2/{repository}/manifests/{tag}",
             headers={"Authorization": f"Bearer {token}", "Accept": _ACCEPT_MANIFEST},
         )
     except (CheckFailed, httpx.HTTPError):
         return None
-    # Ein Digest ist per Definition der sha256 über die Bytes des Manifests.
-    return "sha256:" + hashlib.sha256(body).hexdigest() if body else None
+    return body or None
 
 
 async def _release_file(client: httpx.AsyncClient, version: str, name: str) -> bytes | None:
@@ -323,44 +357,72 @@ async def _fetch_grant(client: httpx.AsyncClient, version: str, digest: str) -> 
     return found
 
 
-async def _find_latest(client: httpx.AsyncClient, channel: str) -> tuple[str, str | None]:
-    token = await _token(client)
-    return token, pick_latest(await _tags(client, token), channel)
+async def _find_latest(client: httpx.AsyncClient, channel: str, repository: str) -> tuple[str, list[str], str | None, bool]:
+    token = await _token(client, repository)
+    tags, complete = await _tags(client, token, repository)
+    return token, tags, pick_latest(tags, channel), complete
+
+
+class Found(NamedTuple):
+    latest: str | None
+    digest: str | None
+    grant: dict[str, Any] | None
+    kinds: list[str]
+    """Die Arten aller Versionen nach `current` bis `latest`, soweit bekannt."""
+    kinds_complete: bool
+    """`False`, wenn Tags oder Arten nicht vollständig ermittelt werden konnten."""
 
 
 async def fetch_latest(
-    channel: str, *, transport: httpx.AsyncBaseTransport | None = None, previous_grant: Any = None,
-) -> tuple[str | None, str | None, dict[str, Any] | None]:
-    """Neueste Version im Kanal, ihr Digest und ihre Freigabe (bei einem Fehler beim Abruf `previous_grant`, wenn sie
-    passt); wirft `CheckFailed`, wenn Token oder Tags nicht rechtzeitig kommen."""
+    channel: str, *, current: str = __version__, repository: str = REPOSITORY,
+    transport: httpx.AsyncBaseTransport | None = None, previous_grant: Any = None,
+) -> Found:
+    """Neueste Version, Digest, Freigabe und Arten seit `current`; bei Abruffehlern bleibt eine passende Freigabe.
+    Wirft `CheckFailed`, wenn Token oder Tags nicht rechtzeitig kommen. Freigaben gibt es nur für Deck."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + TOTAL_TIMEOUT_S
     async with _make_client(transport) as client:
         try:
-            token, latest = await asyncio.wait_for(_find_latest(client, channel), TOTAL_TIMEOUT_S)
+            token, tags, latest, tags_complete = await asyncio.wait_for(_find_latest(client, channel, repository), TOTAL_TIMEOUT_S)
         except TimeoutError as exc:
             raise CheckFailed("Zeitlimit") from exc
         except httpx.HTTPError as exc:
             raise CheckFailed(type(exc).__name__) from exc
-        # Der Digest ist nur eine Zugabe: Er bekommt die Zeit, die übrig ist; reicht sie nicht oder scheitert er,
-        # bleibt er `None` und das Ergebnis gilt trotzdem.
-        digest = None
-        if latest:
-            try:
-                digest = await asyncio.wait_for(_digest(client, token, latest), max(0.0, deadline - loop.time()))
-            except TimeoutError:
-                logger.info("update_check_digest_skipped reason=Zeitlimit")
-        # Wie der Digest nur eine Zugabe: Ohne Freigabe fehlt nur der Update-Knopf.
+        if not latest:
+            return Found(None, None, None, [], True)
+        # Digest und Arten sind nur eine Zugabe: Sie bekommen die Zeit, die übrig ist. Was fehlt, bleibt `None`
+        # bzw. unbekannt, und das Ergebnis gilt trotzdem. Gefragt werden immer die neuesten Versionen im Kanal, nicht
+        # nur die nach der laufenden: Sonst verriete die älteste Anfrage ghcr.io, welche Version hier läuft.
+        listed = versions_up_to(tags, latest, channel)
+        wanted = listed[:MAX_KIND_LOOKUPS]
+        newer = [tag for tag in listed if is_newer(tag, current)]
+        digest, kinds, complete = None, set(), tags_complete and len(newer) <= MAX_KIND_LOOKUPS
         grant = None
-        if latest and digest:
+        for tag in wanted:
             try:
-                grant = await asyncio.wait_for(_fetch_grant(client, latest, digest), max(0.0, deadline - loop.time()))
-            except Exception as exc:  # noqa: BLE001 - die Freigabe ist nur eine Zugabe
-                logger.info("update_check_grant_skipped reason=%s", str(exc) or type(exc).__name__)
-                fits = isinstance(previous_grant, dict) and grant_fits(
-                    previous_grant.get("grant"), previous_grant.get("sig"), version=latest, digest=digest)
-                grant = previous_grant if fits else None
-    return latest, digest, grant
+                body = await asyncio.wait_for(_manifest(client, token, tag, repository), max(0.0, deadline - loop.time()))
+            except TimeoutError:
+                logger.info("update_check_manifest_skipped tag=%s reason=Zeitlimit", tag)
+                body = None
+            if tag == latest and body:
+                # Ein Digest ist per Definition der sha256 über die Bytes des Manifests.
+                digest = "sha256:" + hashlib.sha256(body).hexdigest()
+                if repository == REPOSITORY:
+                    try:
+                        grant = await asyncio.wait_for(_fetch_grant(client, latest, digest), max(0.0, deadline - loop.time()))
+                    except Exception as exc:  # noqa: BLE001 - die Freigabe ist nur eine Zugabe
+                        logger.info("update_check_grant_skipped reason=%s", str(exc) or type(exc).__name__)
+                        fits = isinstance(previous_grant, dict) and grant_fits(
+                            previous_grant.get("grant"), previous_grant.get("sig"), version=latest, digest=digest)
+                        grant = previous_grant if fits else None
+            if tag not in newer:
+                continue
+            found = kinds_of(body) if body else None
+            if found is None or not found[1]:
+                complete = False
+            if found is not None:
+                kinds.update(found[0])
+    return Found(latest, digest, grant, [kind for kind in KINDS if kind in kinds], complete)
 
 
 def _now_iso() -> str:
@@ -430,6 +492,11 @@ def _str_or_none(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _same_search(cache: dict[str, Any], channel: str, repository: str) -> bool:
+    # Alles im Cache gehört zu Kanal und Image, für die geprüft wurde, auch der Fehler eines Versuchs.
+    return cache.get("channel") == channel and cache.get("repository", REPOSITORY) == repository
+
+
 def _usable_grant(cache: dict[str, Any], latest: str | None, digest: str | None, now: float) -> dict[str, Any] | None:
     found = cache.get("grant")
     if not latest or not isinstance(found, dict):
@@ -446,37 +513,47 @@ def cached_grant(data_dir: Path, *, channel: str | None, version: str, digest: s
                  now: float | None = None) -> dict[str, Any] | None:
     """Die Freigabe aus der letzten Update-Suche, wenn sie genau zu Version und Digest passt und gerade gilt."""
     cache = load_cache(data_dir)
-    if cache.get("channel") != normalize_channel(channel) or cache.get("latest") != version:
+    if not _same_search(cache, normalize_channel(channel), REPOSITORY) or cache.get("latest") != version:
         return None
     return _usable_grant(cache, version, digest, time.time() if now is None else now)
 
 
-def _result(cache: dict[str, Any], *, channel: str, image: str | None, current: str, source: str) -> dict[str, Any]:
-    # Alles im Cache gehört zu dem Kanal, in dem geprüft wurde, auch der Fehler eines Versuchs.
-    own = cache if cache.get("channel") == channel else {}
+def _result(
+    cache: dict[str, Any], *, channel: str, image: str | None, current: str, source: str, repository: str,
+) -> dict[str, Any]:
+    own = cache if _same_search(cache, channel, repository) else {}
     latest = _str_or_none(own.get("latest"))
     if latest is not None and _version_key(latest, allow_pre=channel == "beta") is None:
         latest = None
     digest = _str_or_none(own.get("latest_digest")) if latest else None
     if digest is not None and not _DIGEST_RE.fullmatch(digest):
         digest = None
+    available = bool(latest) and is_newer(latest, current)
+    # Die Arten gelten nur für die Version, von der aus gesucht wurde; nach einem Update sind sie bis zur nächsten
+    # Suche unbekannt.
+    raw_kinds = own.get("kinds") if own.get("kinds_since") == current else None
+    known = isinstance(raw_kinds, list) and all(isinstance(kind, str) for kind in raw_kinds)
+    kinds = [kind for kind in KINDS if known and kind in raw_kinds]
+    kinds_complete = known and own.get("kinds_complete") is True
     error = _str_or_none(own.get("error"))
     if source == "cache" and error:
         source = "offline"
-    grant = _usable_grant(own, latest, digest, time.time())
+    grant = _usable_grant(own, latest, digest, time.time()) if repository == REPOSITORY else None
     return {
         "current": current,
         "latest": latest,
         "latest_digest": digest,
-        "available": bool(latest) and is_newer(latest, current),
+        "available": available,
+        "kinds": kinds if available else [],
+        "kinds_complete": kinds_complete if available else True,
         "channel": channel,
         "checked_at": _str_or_none(own.get("checked_at")),
         "attempted_at": _str_or_none(own.get("attempted_at")),
         "source": source,
         "error": OFFLINE_TEXT if error else None,
-        "official_image": is_official_image(image),
+        "official_image": is_official_image(image, repository),
         "image": (image or "").strip() or None,
-        "official_image_name": OFFICIAL_IMAGE,
+        "official_image_name": f"{REGISTRY_HOST}/{repository}",
         "helper": False,
         "release_notes_url": RELEASE_NOTES_URL.format(version=latest) if latest else None,
         "approved": grant is not None,
@@ -484,9 +561,14 @@ def _result(cache: dict[str, Any], *, channel: str, image: str | None, current: 
     }
 
 
-def status(data_dir: Path, *, channel: str | None, image: str | None, current: str = __version__) -> dict[str, Any]:
+def status(
+    data_dir: Path, *, channel: str | None, image: str | None, current: str = __version__, repository: str = REPOSITORY,
+) -> dict[str, Any]:
     """Letzter bekannter Stand aus dem Cache, ohne Netz; `source` ist "cache", nach einem gescheiterten Versuch "offline"."""
-    return _result(load_cache(data_dir), channel=normalize_channel(channel), image=image, current=current, source="cache")
+    return _result(
+        load_cache(data_dir), channel=normalize_channel(channel), image=image, current=current, source="cache",
+        repository=repository,
+    )
 
 
 async def check(
@@ -495,6 +577,7 @@ async def check(
     channel: str | None,
     image: str | None,
     current: str = __version__,
+    repository: str = REPOSITORY,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> dict[str, Any]:
     """Fragt die Registry jetzt, schreibt den Cache und liefert das Ergebnis wie `status`, wirft nie; eine zweite
@@ -504,23 +587,28 @@ async def check(
         cache = await asyncio.to_thread(load_cache, data_dir)
         now = _now_iso()
         try:
-            previous = cache.get("grant") if cache.get("channel") == channel else None
-            latest, digest, grant = await fetch_latest(channel, transport=transport, previous_grant=previous)
+            previous = cache.get("grant") if _same_search(cache, channel, repository) else None
+            found = await fetch_latest(
+                channel, current=current, repository=repository, transport=transport, previous_grant=previous,
+            )
         except Exception as exc:  # noqa: BLE001 - nie eine Ausnahme nach außen (CheckFailed, Zeitlimit, alles andere)
             logger.info("update_check_failed reason=%s", str(exc) or type(exc).__name__)
             # Der letzte gute Stand bleibt im Cache stehen, nur der Fehler kommt dazu.
-            if cache.get("channel") != channel:
-                cache = {"channel": channel}
+            if not _same_search(cache, channel, repository):
+                cache = {"channel": channel, "repository": repository}
             cache.update(attempted_at=now, error="offline")
             source = "offline"
         else:
             # Auch "keine passende Version" (nur Vorabversionen im Kanal stable, noch keine Tags) ist ein gültiges
             # Ergebnis: `latest` ist leer, `checked_at` gesetzt, ein zuvor gefundener Stand wird bewusst ersetzt.
-            cache = {"channel": channel, "latest": latest, "latest_digest": digest, "grant": grant, "checked_at": now,
-                     "attempted_at": now, "error": None}
+            cache = {
+                "channel": channel, "repository": repository, "latest": found.latest, "latest_digest": found.digest,
+                "grant": found.grant, "kinds": found.kinds, "kinds_complete": found.kinds_complete,
+                "kinds_since": current, "checked_at": now, "attempted_at": now, "error": None,
+            }
             source = "live"
         try:
             await asyncio.to_thread(save_cache, data_dir, cache)
         except OSError:
             logger.warning("update_check_cache_not_written dir=%s", data_dir)
-    return _result(cache, channel=channel, image=image, current=current, source=source)
+    return _result(cache, channel=channel, image=image, current=current, source=source, repository=repository)

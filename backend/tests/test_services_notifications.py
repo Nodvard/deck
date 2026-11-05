@@ -67,6 +67,48 @@ async def test_send_creates_row_and_delivers_to_all_channels(db_session):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("preferences", [None, {"host.down": {"enabled": True, "priority": "low"}}])
+async def test_channel_send_holds_no_database_connection(file_db, preferences):
+    from nodvard_deck.db.session import get_engine
+    from nodvard_deck.services.notification_types import SETTING_KEY
+
+    pool = get_engine().pool
+    held = []
+    stored = []
+
+    class Channel(_RecordingChannel):
+        uses_push_preferences = True
+
+        async def send(self, notification: SdkNotification) -> None:
+            held.append(pool.checkedout())
+            async with file_db() as session:
+                stored.append(await settings_service.get_global(session, SETTING_KEY, {}))
+            held.append(pool.checkedout())
+            await super().send(notification)
+
+    channel = Channel("push")
+    _provide(channel)
+    async with file_db() as session:
+        if preferences is not None:
+            await settings_service.set_global(session, SETTING_KEY, preferences)
+        row = await notifications_service.send(
+            session, title="Server nicht erreichbar", body="Inhalt", severity="warning",
+            payload={"notification_type": "host.down"}, raise_on_failure=True,
+        )
+        assert held == [0, 0]
+        assert stored == [preferences or {}]
+        expected_payload = {"notification_type": "host.down"}
+        if preferences is not None:
+            expected_payload["_push_priority"] = "low"
+        assert [message.payload for message in channel.received] == [expected_payload]
+        assert row.payload == {"notification_type": "host.down"}
+        delivery = (await session.execute(
+            select(NotificationDelivery).where(NotificationDelivery.notification_id == row.id)
+        )).scalar_one()
+        assert (delivery.channel_id, delivery.status, delivery.error) == ("push", "sent", None)
+
+
+@pytest.mark.asyncio
 async def test_a_failing_channel_does_not_block_others_or_the_notification_row(db_session):
     broken = _RecordingChannel("broken", fail=True)
     healthy = _RecordingChannel("healthy")

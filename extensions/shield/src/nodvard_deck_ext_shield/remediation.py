@@ -14,7 +14,8 @@ DEFAULT_FORBIDDEN_HOST_KEYWORDS = (
     "pve", "proxmox", "host", "server",
     "node", "router", "gateway", "nas",
 )
-"""Startwert, kein Zwang: jede Installation ergänzt die Liste über `forbidden_host_keywords` (settings.schema.json) um ihre Servernamen."""
+"""Startwert, kein Zwang: Jede Installation ergänzt die Liste über `forbidden_host_keywords` (settings.schema.json)
+um ihre Servernamen."""
 
 _DOCKER_RESTART_RE = re.compile(r"\bdocker\s+restart\s+([A-Za-z0-9_.-]+)", re.IGNORECASE)
 
@@ -101,7 +102,7 @@ def sanitize_untrusted(text: str, max_len: int = 2000, *, keep_tail: bool = Fals
 
 
 def restart_risk_eligible(*, is_crash: bool, resumed: bool, attempts: int, fact: dict | None) -> bool:
-    """Darf ein Neustart-Vorschlag für diesen Vorfall MITTEL statt HOCH sein? Streng, im Zweifel HOCH.
+    """Darf ein Neustart-Vorschlag für diesen Vorfall „mittel“ statt „hoch“ sein? Streng, im Zweifel „hoch“.
 
     Nur ein echter Absturz laut `watcher.parse_exit_facts`; nie bei manuellem Stopp, Pause, Wiederaufnahme, Wiederholung."""
     if not is_crash or resumed or attempts > 0 or fact is None:
@@ -112,8 +113,8 @@ def restart_risk_eligible(*, is_crash: bool, resumed: bool, attempts: int, fact:
     if not isinstance(code, int) or code in (0, 143):  # sauber beendet bzw. SIGTERM, also absichtlich gestoppt
         return False
     if _is_signal(code):
-        # Beendigung durch ein Signal (z. B. `docker kill`): nur bei OOMKilled MITTEL. Bewusst konservativ: auch 139
-        # (SIGSEGV) ist ein echter Absturz, fällt aber unter diese Regel und bleibt HOCH.
+        # Beendigung durch ein Signal (z. B. `docker kill`): nur bei OOMKilled „mittel“. Bewusst konservativ: auch 139
+        # (SIGSEGV) ist ein echter Absturz, fällt aber unter diese Regel und bleibt „hoch“.
         return bool(fact.get("oom_killed"))
     return True  # alles andere (z. B. 1, 2, auch 255 = exit(-1)) ist ein Absturz
 
@@ -185,7 +186,7 @@ def classify_exit_cause(details: dict[str, Any], fact: dict[str, Any] | None) ->
         )
     if code in _CRASH_SIGNAL_CODES:
         # SIGSEGV/SIGABRT/SIGBUS/SIGFPE/SIGILL kommen aus dem Prozess selbst: ein Absturz, kein Eingriff von außen.
-        # Das Risiko bleibt trotzdem HOCH (restart_risk_eligible: >128 ohne OOM).
+        # Das Risiko bleibt trotzdem „hoch“ (`restart_risk_eligible`: Exit-Code über 128 ohne OOM).
         return Cause(
             f"echter Absturz (Signal {code - 128}, Exit-Code {code})",
             f"Der Prozess im Container ist mit einem Fehler-Signal abgestürzt (Exit-Code {code} = "
@@ -237,9 +238,7 @@ def cause_tag_for_command(command: str, host_id: str, causes: dict[tuple[str, st
     return entry[2].tag if entry is not None else None
 
 
-# ---------------------------------------------------------------------------
-# Feste Fakten im Lagebericht und Abgleich mit dem Modelltext
-# ---------------------------------------------------------------------------
+# --- Feste Fakten im Lagebericht und Abgleich mit dem Modelltext ---
 
 
 def format_finished_at(value: Any) -> str:

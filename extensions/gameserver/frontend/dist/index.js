@@ -603,9 +603,9 @@ function ServerCard({ server, profiles, profilesError, onRetryProfiles, onAction
         Stat,
         {
           label: "Join-Code",
-          value: server.join_code ? /* @__PURE__ */ jsxs3("span", { className: "flex items-center gap-2", children: [
-            /* @__PURE__ */ jsx4("span", { className: "font-mono tracking-[0.2em]", children: server.join_code }),
-            /* @__PURE__ */ jsx4("button", { type: "button", onClick: () => void copy(), className: "rounded-md px-2 py-0.5 text-xs font-normal tracking-normal border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: copied ? "Kopiert!" : "Kopieren" })
+          value: server.join_code ? /* @__PURE__ */ jsxs3("span", { className: "flex flex-wrap items-center gap-x-2 gap-y-1", "data-testid": "join-code", children: [
+            /* @__PURE__ */ jsx4("span", { className: "break-all font-mono tracking-[0.2em]", children: server.join_code }),
+            /* @__PURE__ */ jsx4("button", { type: "button", onClick: () => void copy(), className: "rounded-lg px-2 py-0.5 text-xs font-normal tracking-normal border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] transition", children: copied ? "Kopiert!" : "Kopieren" })
           ] }) : /* @__PURE__ */ jsx4("span", { className: "text-base text-white/50", children: "\u2013" }),
           sub: server.join_code ? unknown ? void 0 : `vergeben ${ago(d.join_code_age_s)}` : server.join_code_display
         }

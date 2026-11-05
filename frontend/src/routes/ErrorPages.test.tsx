@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { respond } from "../preview/fixtures";
 import { useAuthStore } from "../state/auth";
+import { DECK_EDITION, useEditionStore } from "../state/edition";
 import { RouteErrorPage } from "./ErrorPages";
 import { routes } from "./router";
 
@@ -87,6 +88,18 @@ describe("unbekannte Adresse", () => {
 });
 
 describe("Fehler beim Aufbauen einer Seite", () => {
+  it("Dock nennt sich beim Neuladen nach einem Update", async () => {
+    useEditionStore.setState({ edition: { ...DECK_EDITION, choose_modules: false } });
+    try {
+      renderApp("/kaputt", [{ errorElement: <RouteErrorPage />, children: [
+        { path: "/kaputt", element: <Boom message="Failed to fetch dynamically imported module: /assets/Terminal-ab12.js" /> },
+      ] }]);
+      expect(await screen.findByText(/Nodvard Dock gerade aktualisiert/)).toBeInTheDocument();
+    } finally {
+      useEditionStore.setState({ edition: DECK_EDITION });
+    }
+  });
+
   it("zeigt eine deutsche Fehlerseite mit „Seite neu laden“ und „Zur Übersicht“, Einzelheiten zugeklappt", async () => {
     renderApp("/kaputt", [
       { errorElement: <RouteErrorPage />, children: [{ path: "/kaputt", element: <Boom message="x is undefined" /> }] },

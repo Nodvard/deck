@@ -1,0 +1,9 @@
+{
+  "proxmox.conn": "Proxmox: Verbindung",
+  "proxmox.node": "Proxmox: Knoten",
+  "proxmox.storage": "Proxmox: Speicher",
+  "proxmox.disk": "Proxmox: Datenträger",
+  "proxmox.disktemp": "Proxmox: Laufwerkstemperatur",
+  "proxmox.zfs": "Proxmox: ZFS-Pool",
+  "proxmox.zfsgone": "Proxmox: ZFS-Pool verschwunden"
+}

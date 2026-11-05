@@ -1,3 +1,4 @@
+import { productText } from "./product";
 /** Private Registries je Server: wer angemeldet ist, Anmelden und Abmelden nur über die Freigabe. */
 import { useEffect, useState, type ReactNode } from "react";
 
@@ -103,7 +104,7 @@ export function RegistryList({ hostId }: { hostId: string }): JSX.Element {
   return (
     <div className="flex flex-col gap-2" data-testid="registries">
       <p className="text-xs opacity-60">
-        Angemeldet wird je Server. Docker speichert die Anmeldung dort in ~/.docker/config.json des Zugangs von Nodvard Deck
+        Angemeldet wird je Server. Docker speichert die Anmeldung dort in ~/.docker/config.json des Zugangs von {productText("Nodvard Deck")}
         {state.creds_store ? ` über das Hilfsprogramm „${state.creds_store}“` : ", nur umkodiert, nicht verschlüsselt"}, wie bei docker login von Hand.
       </p>
       {warnings}

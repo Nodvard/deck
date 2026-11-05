@@ -17,6 +17,7 @@ from ...config import Settings
 from ...core import rate_limit, vault
 from ...core.vault import VaultError
 from ...db.base import utcnow
+from ...edition import of
 from ...ext.root_helpers import RootHelperFile
 from ...ext.runtime import get_extension_runtime
 from ...models import Host, HostCredential, KnownHostKey, User
@@ -280,6 +281,8 @@ async def _prepare_setup(
     """Vorbedingungen und Skript für `GET .../setup` und `POST .../setup-with-password`, nur Linux mit SSH-Schlüssel.
     Die volle sudo-Regel gibt es nur mit `full_sudo` oder für ein Modul ohne Hilfsskript, sonst die Regeln der
     Hilfsskripte; braucht kein Modul root, gar keine. `drop_full_rule` geht nur, wo die Skripte allein reichen."""
+    if full_sudo and not of(settings).choose_modules:
+        raise HTTPException(status_code=422, detail="Volle sudo-Rechte sind in dieser Ausgabe nicht verfügbar.")
     host = await _load_host(session, host_id)
     credential = await session.get(HostCredential, credential_id)
     if credential is None or credential.host_id != host_id:
@@ -365,19 +368,24 @@ def _drop_refusal(
     return ""
 
 
-def _notes(prepared: _PreparedSetup) -> list[str]:
+def _notes(prepared: _PreparedSetup, settings: Settings) -> list[str]:
     notes = host_setup.setup_notes(
         prepared.credential.username, groups=prepared.groups, sudo=prepared.sudo,
         helpers=[f"{h.ext_id}-root" for h in prepared.helpers], full_sudo=prepared.full_sudo,
         no_fallback=[f"{h.ext_id}-root" for h in prepared.helpers if not h.sudo_fallback],
         drop_full_rule=prepared.drop_full_rule,
     )
-    if prepared.sudo_skipped:
+    if prepared.sudo_skipped and of(settings).choose_modules:
         notes.append(
             "Kein eingeschaltetes Modul braucht auf diesem Server root. Darum richtet der Befehl kein sudo ein, auch "
             "wenn „Root-Rechte ohne Passwort“ angekreuzt ist. Brauchst du sudo für eigene Befehle über Nodvard Deck, "
             "kreuze unter „Erweitert“ „Volle Rechte“ an."
         )
+    if not of(settings).choose_modules:
+        notes[0] = notes[0].replace("Terminal, Dateien", "Container-Konsole")
+        if prepared.sudo_skipped:
+            notes.append("Kein eingeschaltetes Modul braucht auf diesem Server root. Darum richtet der Befehl kein sudo ein.")
+        return [note.replace("Nodvard Deck", of(settings).product_name) for note in notes]
     return notes
 
 
@@ -403,7 +411,7 @@ async def credential_setup(
     username = prepared.credential.username
     return SetupOut(
         username=username, public_key=prepared.info.public_key, fingerprint=prepared.info.fingerprint,
-        one_liner=prepared.one_liner, script=prepared.script, notes=_notes(prepared), groups=prepared.groups,
+        one_liner=prepared.one_liner, script=prepared.script, notes=_notes(prepared, settings), groups=prepared.groups,
         sudo=prepared.sudo, full_sudo=prepared.full_sudo, drop_full_rule=prepared.drop_full_rule,
         helpers=[SetupHelperOut.from_file(h) for h in prepared.helpers],
     )
@@ -567,7 +575,7 @@ async def credential_setup_with_password(
             run.outcome, run.reason, _SETUP_FAILURE_STATUS.get(run.outcome, 502), messages=run.messages
         ) from None
 
-    notes = _notes(prepared)
+    notes = _notes(prepared, settings)
     check: ConnectionCheckOut | None
     try:
         check = await host_check.run_check(

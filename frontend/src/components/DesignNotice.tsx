@@ -10,12 +10,14 @@ import { Palette } from "lucide-react";
 import { api } from "../lib/api";
 import { type Preferences, usePreferences } from "../lib/firstSteps";
 import { applyTheme } from "../lib/theme";
+import { useEdition } from "../state/edition";
 
 export function DesignNotice() {
+  const edition = useEdition();
   const preferences = usePreferences();
   const queryClient = useQueryClient();
   // Erst eine Antwort von nach dem Anmelden zählt (ein Rest im Zwischenspeicher könnte vom vorigen Konto stammen).
-  if (!preferences.isFetchedAfterMount || preferences.data?.design_notice_dismissed !== false) return null;
+  if (!edition.choose_modules || !preferences.isFetchedAfterMount || preferences.data?.design_notice_dismissed !== false) return null;
 
   async function decide(original: boolean) {
     const change: Partial<Preferences> = original ? { design_notice_dismissed: true, theme: "original" } : { design_notice_dismissed: true };

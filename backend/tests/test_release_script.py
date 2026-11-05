@@ -14,7 +14,6 @@ import tomllib
 from pathlib import Path
 
 import pytest
-
 from nodvard_deck import __version__, changelog
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -79,6 +78,15 @@ def _with_fragments(tree: release.Tree) -> None:
         _fragment(tree, name, body)
 
 
+def test_release_accepts_shipped_fragments(tree):
+    _with_fragments(tree)
+    for path in (changelog.CHANGELOG_DIR / "unreleased").glob("*.toml"):
+        shutil.copy(path, tree.unreleased_dir / path.name)
+    plan = release.plan_release(tree, "0.5.0")
+    entries = tuple(entry for path in plan.fragments for entry in changelog.read_fragment(path))
+    assert changelog.parse_release(tomllib.loads(plan.release_text)).entries == entries
+
+
 def test_release_writes_version_file_bumps_everything_and_removes_fragments(tree, capsys):
     _with_fragments(tree)
     before = _snapshot(tree)
@@ -114,7 +122,10 @@ def test_release_writes_version_file_bumps_everything_and_removes_fragments(tree
         diff = [(o, n) for o, n in zip(old_lines, new_lines) if o != n]
         assert diff, rel
         assert all("0.4.0" in o and "0.5.0" in n for o, n in diff), (rel, diff)
-    assert len([1 for k in after if k not in before]) == 1  # nur die neue Versionsdatei
+    assert set(after) - set(before) == {
+        "backend/src/nodvard_deck/changelog/versions/0.5.0.toml",
+        "docs/release-notes/dock-0.5.0.md",
+    }
 
 
 def test_pure_fix_round_and_default_date(tree):
@@ -274,6 +285,19 @@ def test_a_patch_takes_only_fixes_and_security(tree, capsys):
     assert release.main(["0.5.0"], root=tree.root) == 0
 
 
+def test_documentation_waits_for_the_next_feature_release(tree, capsys):
+    _fragment(tree, "dock-doku", '[[entries]]\nkind = "dokumentation"\ntext = "Dock erklärt den ersten Start."\n')
+    before = _snapshot(tree)
+    assert release.main(["0.4.1"], root=tree.root) == 1
+    assert _snapshot(tree) == before
+    assert "dock-doku.toml (dokumentation)" in capsys.readouterr().err
+    assert release.main(["0.5.0"], root=tree.root) == 0
+    assert changelog.read_release(tree.versions_dir / "0.5.0.toml").entries == (
+        changelog.Entry("dokumentation", "Dock erklärt den ersten Start.", ()),
+    )
+    assert not (tree.unreleased_dir / "dock-doku.toml").exists()
+
+
 @pytest.mark.parametrize("version", ["0.5.1", "1.0.1"])
 def test_a_patch_stays_in_the_line_of_the_current_version(tree, capsys, version):
     _fragment(tree, "fix", '[[entries]]\nkind = "sicherheit"\ntext = "Lücke."\n')
@@ -327,3 +351,57 @@ def test_after_a_patch_from_the_release_branch_main_does_not_release_it_twice(tr
     (tree.unreleased_dir / "fix.toml").unlink()
     assert release.main(["0.5.0"], root=tree.root) == 0
     assert [e.text for e in changelog.read_release(tree.versions_dir / "0.5.0.toml").entries] == ["Funktion."]
+
+
+def test_release_generates_dock_notes_and_preserves_areas(tree, capsys):
+    areas = (None, "kern", "docker", "stacks-git", "image-updates", "proxmox", "documents")
+    body = "".join(
+        f'[[entries]]\nkind = "verbessert"\ntext = "Änderung {index}."\nprs = [{index + 1}]\n'
+        + (f'bereich = "{area}"\n' if area else "")
+        for index, area in enumerate(areas)
+    )
+    _fragment(tree, "bereiche", body)
+    before = _snapshot(tree)
+    assert release.main(["0.5.0", "--dry-run", "--title", "Neue Stacks", "--date", "2026-11-04"], root=tree.root) == 0
+    assert _snapshot(tree) == before
+    assert "docs/release-notes/dock-0.5.0.md" in capsys.readouterr().out
+    assert release.main(["0.5.0", "--title", "Neue Stacks", "--date", "2026-11-04"], root=tree.root) == 0
+    parsed = changelog.read_release(tree.versions_dir / "0.5.0.toml")
+    assert tuple(entry.bereich for entry in parsed.entries) == areas
+    assert parsed.entries == changelog.parse_entries(tomllib.loads(body)["entries"])
+    notes = (tree.release_notes_dir / "dock-0.5.0.md").read_text(encoding="utf-8")
+    assert notes == (
+        "# Nodvard Dock 0.5.0\n\n2026-11-04\n\nNeue Stacks\n\n## Verbessert\n\n"
+        + "".join(f"- Änderung {index}. #{index + 1}\n" for index in range(5))
+    )
+    dock = changelog.load_changelog(tree.changelog_dir, edition="dock")
+    assert all(entry.text in notes for entry in dock.versions[0].entries)
+
+
+def test_existing_dock_notes_stop_the_release_without_writing(tree, capsys):
+    _with_fragments(tree)
+    tree.release_notes_dir.mkdir(parents=True)
+    (tree.release_notes_dir / "dock-0.5.0.md").write_text("Eigener Text.\n", encoding="utf-8")
+    before = _snapshot(tree)
+    assert release.main(["0.5.0"], root=tree.root) == 1
+    assert _snapshot(tree) == before
+    assert "Dock-Release-Notes bestehen bereits" in capsys.readouterr().err
+
+
+def test_dock_notes_group_kinds_and_handle_a_deck_only_release():
+    entries = (
+        changelog.Entry("sicherheit", "Lücke geschlossen.", bereich="docker"),
+        changelog.Entry("neu", "Neue Ansicht.", bereich="kern"),
+        changelog.Entry("behoben", "Fehler behoben.", bereich="docker"),
+    )
+    notes = release.render_dock_notes(changelog.Release("0.5.0", "2026-11-04", None, entries))
+    assert notes.index("## Neu") < notes.index("## Behoben") < notes.index("## Sicherheit")
+    assert "## Verbessert" not in notes
+    notes = release.render_dock_notes(changelog.Release(
+        "0.5.0", "2026-11-04", None,
+        (changelog.Entry("neu", "Neue Maschinen.", bereich="proxmox"),),
+    ))
+    assert notes == (
+        "# Nodvard Dock 0.5.0\n\n2026-11-04\n\n"
+        "Für Nodvard Dock gibt es in dieser Version keine eigenen Änderungen.\n"
+    )

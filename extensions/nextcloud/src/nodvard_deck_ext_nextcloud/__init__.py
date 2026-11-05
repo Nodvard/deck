@@ -1,14 +1,5 @@
-"""nextcloud-Extension -- die zweite echte Vendor-Extension nach proxmox,
-liefert `FileSource`/`FileSourceProvider` fuer
-den Kern-Dateimanager über WebDAV und eine Kachel mit Kennzahlen aus "Server-Info". Kein Host-Bezug (anders als proxmox/terminal) --
-eine Nextcloud-Instanz ist keine `Host`-Entitaet, genauso wenig wie proxmoxs eigener
-API-Endpunkt selbst ein Host ist (nur die von ihm entdeckten VMs sind welche).
-
-**Die Nagelprobe fuer core_purity:** wie bei proxmox ist diese Datei (mit
-`connector.py`/`capabilities.py`/`config.py`) die einzige Stelle im Repository
-ausserhalb von `extensions/nextcloud/`, an der "Nextcloud"/"WebDAV" vorkommen darf.
-Der Kern sieht nur `FileSource`/`FileSourceProvider` (`nodvard_sdk.capabilities`).
-"""
+"""Erweiterung Nextcloud: Dateimanager-Quelle über WebDAV und eine Kachel mit Kennzahlen aus „Server-Info“. Eine
+Nextcloud ist kein Host, der Kern kennt nur `FileSource` und `FileSourceProvider`."""
 
 from __future__ import annotations
 

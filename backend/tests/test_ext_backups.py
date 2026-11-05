@@ -1486,11 +1486,11 @@ async def test_backup_failure_in_the_window_is_announced_once_after_it_if_still_
     assert [n.title for n in channel.received] == ["Backup fehlgeschlagen: Docker-VM (seit dem Wartungsfenster)"]
     assert "Wartungsfenster" in channel.received[0].body
     assert "Seite „Proxmox-Backups“" in channel.received[0].body
-    assert channel.received[0].payload == {"host_id": host_id}
+    assert channel.received[0].payload == {"notification_type": "backups.failed", "host_id": host_id}
 
     state["tasks"].append({"upid": "UPID:pve2:3", "node": "pve2", "type": "vzdump", "id": "100", "status": "OK", "starttime": _FRESH + 5000, "endtime": _FRESH + 5300})
     await _run_backup_watch()
-    assert [(n.title, n.payload) for n in channel.received][1:] == [("Backup wieder erfolgreich: Docker-VM", {"host_id": host_id})]
+    assert [(n.title, n.payload) for n in channel.received][1:] == [("Backup wieder erfolgreich: Docker-VM", {"notification_type": "backups.recovered", "host_id": host_id})]
 
 
 @pytest.mark.asyncio
@@ -1549,7 +1549,7 @@ async def test_backup_all_clear_for_a_heard_failure_comes_after_the_window(
     for _ in range(2):
         assert (await _run_backup_watch())["notified"] == 0, "nach dem Fenster genau einmal"
     assert [(n.title, n.payload) for n in channel.received][1:] == [
-        ("Backup wieder erfolgreich: Docker-VM (im Wartungsfenster)", {"host_id": host_id}),
+        ("Backup wieder erfolgreich: Docker-VM (im Wartungsfenster)", {"notification_type": "backups.recovered", "host_id": host_id}),
     ]
     assert await _backup_deliveries(db_session) == [
         ("Backup fehlgeschlagen: Docker-VM", "sent"),
@@ -1692,6 +1692,7 @@ async def test_backup_age_reports_an_old_backup_once_and_the_recovery_with_a_new
         assert (await _run_backup_watch())["notified"] == 0, "derselbe Zustand wird nicht erneut gemeldet"
     assert await _backup_notifications(db_session) == [("warning", "Backup zu alt: Monitoring-VM")]
     assert (await _backup_payloads(db_session))["Backup zu alt: Monitoring-VM"] == {
+        "notification_type": "backups.old",
         "host_id": host_ids["102"], "path": f"/ext/backups/backups?host={host_ids['102']}",
     }
     body = (await db_session.execute(select(NotificationRow.body).where(NotificationRow.title == "Backup zu alt: Monitoring-VM"))).scalar_one()

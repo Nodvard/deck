@@ -330,8 +330,8 @@ export function PiholePage(): JSX.Element {
       description="Werbe- und Tracker-Blocker für das ganze Netz."
       actions={
         <>
-          {adminHref && <a href={`${adminHref}/admin/`} target="_blank" rel="noreferrer" className={buttonClass("ghost")}>Pi-hole öffnen</a>}
-          {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("ghost")}>Einstellungen</a>}
+          {adminHref && <a href={`${adminHref}/admin/`} target="_blank" rel="noreferrer" className={buttonClass("secondary")}>Pi-hole öffnen</a>}
+          {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("secondary")}>Einstellungen</a>}
           <Button onClick={load}>Aktualisieren</Button>
         </>
       }

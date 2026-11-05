@@ -12,6 +12,7 @@ import { useRequirements, useSetup, type ConnectionCheck as CheckResult, type Cr
 import { errorText } from "../ui";
 import { CopyButton } from "./CopyButton";
 import { PasswordSetup } from "./PasswordSetup";
+import { useEdition, productText } from "../../../state/edition";
 
 const CHECKBOX = "mt-0.5 h-4 w-4 flex-none accent-[var(--color-accent)]";
 
@@ -32,6 +33,7 @@ export function SetupCommand({
   /** Ergebnis der Prüfung nach „Mit Passwort einrichten“. */
   onChecked?: (result: CheckResult) => void;
 }) {
+  const edition = useEdition();
   const requirements = useRequirements(host.id);
   const isRoot = credential.username === "root";
 
@@ -111,12 +113,13 @@ export function SetupCommand({
           )}
           {ruleKnown && (noRootNeeded ? (
             <p className="text-xs text-white/45" data-testid="setup-sudo-note">
-              Kein Modul braucht auf diesem Server root. Der Befehl richtet darum kein sudo ein; brauchst du sudo für
-              eigene Befehle über Nodvard Deck, kreuze unter „Erweitert“ „Volle Rechte“ an.
+              {edition.choose_modules
+                ? "Kein Modul braucht auf diesem Server root. Der Befehl richtet darum kein sudo ein; brauchst du sudo für eigene Befehle über Nodvard Deck, kreuze unter „Erweitert“ „Volle Rechte“ an."
+                : "Der Docker-Zugang braucht auf diesem Server kein sudo."}
             </p>
           ) : fullRule ? (
             <p className="text-xs text-white/45" data-testid="setup-sudo-note">
-              Nodvard Deck startet einige root-Befehle über „sudo sh -c“, darum braucht es die volle sudo-Regel.
+              {productText("Nodvard Deck")} startet einige root-Befehle über „sudo sh -c“, darum braucht es die volle sudo-Regel.
               Deshalb bekommt nur dieser eine Benutzer die Rechte, und er kann sich nur mit dem Schlüssel anmelden.
             </p>
           ) : (
@@ -128,7 +131,7 @@ export function SetupCommand({
           {sudo && (fullChoice || dropChoice || offersHelpers || noRootNeeded) && (
             <details className="text-sm" data-testid="setup-advanced" open={dropFullRule || undefined}>
               <summary className="cursor-pointer text-xs text-white/55">Erweitert</summary>
-              <label className="mt-2 flex cursor-pointer items-start gap-2.5">
+              {edition.choose_modules && <label className="mt-2 flex cursor-pointer items-start gap-2.5">
                 <input
                   type="checkbox" className={CHECKBOX} checked={fullChoice || fullForced} disabled={fullForced}
                   onChange={(e) => setFullChoice(e.target.checked)}
@@ -138,10 +141,10 @@ export function SetupCommand({
                   <span className="text-white/50">
                     {fullForced
                       ? " (nötig, weil ein Modul root braucht und noch kein Hilfsskript hat)"
-                      : " (nur nötig, wenn du über Nodvard Deck eigene Befehle mit sudo startest)"}
+                      : productText(" (nur nötig, wenn du über Nodvard Deck eigene Befehle mit sudo startest)")}
                   </span>
                 </span>
-              </label>
+              </label>}
               {(canDrop || dropChoice) && !fullChoice && (
                 <label className="mt-2 flex cursor-pointer items-start gap-2.5">
                   <input
@@ -150,8 +153,8 @@ export function SetupCommand({
                   <span>
                     Volle sudo-Regel entfernen
                     <span className="text-white/50">
-                      {" "}(nur die von Nodvard Deck; geht danach ein Hilfsskript nicht, kommt sie sofort zurück. Danach
-                      gehen eigene Befehle mit sudo über Nodvard Deck nicht mehr, und nach einem Update mit neuen
+                      {" "}(nur die von {productText("Nodvard Deck")}; geht danach ein Hilfsskript nicht, kommt sie sofort zurück. Danach
+                      gehen eigene Befehle mit sudo über {productText("Nodvard Deck")} nicht mehr, und nach einem Update mit neuen
                       Hilfsskripten haben die Module erst nach dem nächsten Einrichten wieder root.)
                     </span>
                   </span>
@@ -167,7 +170,7 @@ export function SetupCommand({
         {(["command", "password"] as Way[]).map((w) => (
           <label key={w} className="flex cursor-pointer items-start gap-2 text-sm">
             <input type="radio" name={`einrichten-${credential.id}`} className={CHECKBOX} checked={way === w} onChange={() => setWay(w)} />
-            <span>{WAY_LABEL[w]}</span>
+            <span>{productText(WAY_LABEL[w])}</span>
           </label>
         ))}
       </fieldset>

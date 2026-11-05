@@ -57,8 +57,8 @@ deck-2`, `pveum user token remove nodvard-backup@pve deck`); Nodvard Deck does n
 needs `User.Modify` for that, which would let it give itself all privileges of its user. To undo everything: remove
 the connections in Nodvard Deck, then on the Proxmox server `pveum user delete nodvard@pve` and
 `pveum user delete nodvard-backup@pve`, `pveum role delete` for `NodvardDeck`, `NodvardDeckBackup`,
-`NodvardDeckBackupStore`, `NodvardDeckRestore` and `pveum pool delete nodvard-kopien`. Details in the German version:
-[10-PROXMOX-TOKEN.md](../10-PROXMOX-TOKEN.md#schneller-weg-mit-passwort-verbinden).
+`NodvardDeckBackupStore`, `NodvardDeckRestore` and `pveum pool delete nodvard-kopien`. Details in the section
+[Quick way: connect with a password](#quick-way-connect-with-a-password).
 
 ## In brief
 
@@ -253,7 +253,7 @@ such a backup right away. The same applies to VMs that pass through PCI or USB d
 | `Sys.Modify` (on `/`) | "Proxmox updates" tile („Proxmox-Updates“), "Refresh package lists" („Paketlisten aktualisieren“), creating/changing backup jobs, starting a backup now / retry for jobs with a bandwidth limit or ionice, start order for VMs | the updates tile shows HTTP 403, these actions fail |
 | `VM.Console` | Console | no console |
 | `VM.Config.Disk` | Guest disks in the storage overview (Nodvard Deck only reads – but with this privilege Proxmox also allows growing/moving disks) | this list is missing |
-| `VM.GuestAgent.Audit` | Real IP addresses of the VMs | Nodvard Deck enters the address of the Proxmox server as a placeholder; then set the correct address by hand ([FIRST-SETUP.md](FIRST-SETUP.md#5-servers-and-ssh-access)) |
+| `VM.GuestAgent.Audit` | Real IP addresses of the VMs | Nodvard Deck enters the address of the Proxmox server as a placeholder; then set the correct address by hand ([FIRST-SETUP.md](FIRST-SETUP.md#e3-correcting-the-address)) |
 
 If you want to add `Sys.Modify` or the privileges for making changes later: changing the role
 is enough, the token and the Nodvard Deck settings stay, e.g.

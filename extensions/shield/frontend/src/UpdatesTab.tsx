@@ -637,7 +637,7 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
           return (
             <div key={h.host_id} className="panel px-4 py-3" data-testid={`updates-${h.host_id}`}>
               <div className="flex flex-wrap items-center gap-3">
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-[1_1_14rem]">
                   <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
                     {h.host_name}
                     <Badge tone={state.tone}>{state.label}</Badge>

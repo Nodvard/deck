@@ -25,6 +25,8 @@ declare global {
     ReactDOM: typeof ReactDOM & typeof ReactDOMClient;
     ReactJsxRuntime: typeof ReactJsxRuntime;
     getAccessToken: () => string | null;
+    /** Produktname der Ausgabe; ältere Kerne kennen diesen Getter nicht. */
+    getProductName?: () => string;
     /** Holt ein neues Token (Refresh-Cookie) und liefert es, bei Fehlschlag null (wirft nie). Optional, damit
      * Test-Attrappen nicht alle nachziehen müssen, die Kern-Shell setzt es immer. */
     refreshAccessToken?: () => Promise<string | null>;

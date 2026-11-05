@@ -1,6 +1,6 @@
 /**
  * Benutzerverwaltung unter Einstellungen -> Benutzer (`/settings/users`): Konten
- * anlegen, bearbeiten (Name, E-Mail, Rollen, Passwort zuruecksetzen), sperren und
+ * anlegen, bearbeiten (Name, E-Mail, Rollen, Passwort zurücksetzen), sperren und
  * entfernen. Ruft die `users.py`-API (backend/src/nodvard_deck/api/v1/users.py).
  */
 import { Pencil, Plus, UserPlus } from "lucide-react";
@@ -10,6 +10,7 @@ import { api, ApiError } from "../lib/api";
 import { USERNAME_HINT, emailProblem, passwordProblem, usernameProblem } from "../lib/credentials";
 import { confirmDialog } from "../state/dialogs";
 import { useAuthStore } from "../state/auth";
+import { useEdition } from "../state/edition";
 import { SecondFactorField, isTotpMissing, isTotpRejected, useTwoFactorEnabled } from "./settings/SecondFactorField";
 import { Badge, Button, Card, Field, NoticeLine, PageHeader, inputClass, type Notice } from "./settings/ui";
 
@@ -76,6 +77,10 @@ function OwnConfirmation({ password, onPassword, code, onCode, needsCode, note }
 }
 
 function RolePicker({ roles, selected, onToggle }: { roles: Role[]; selected: string[]; onToggle: (id: string) => void }) {
+  const edition = useEdition();
+  const hints = edition.choose_modules ? ROLE_HINTS : {
+    ...ROLE_HINTS, operator: "Container und Stacks bedienen, Aktionen bis mittleres Risiko freigeben",
+  };
   return (
     <div className="grid gap-2 sm:grid-cols-2">
       {roles.map((r) => (
@@ -88,7 +93,7 @@ function RolePicker({ roles, selected, onToggle }: { roles: Role[]; selected: st
           <input type="checkbox" className="mt-0.5" checked={selected.includes(r.id)} onChange={() => onToggle(r.id)} aria-label={roleLabel(r)} />
           <span>
             <span className="block font-medium">{roleLabel(r)}</span>
-            <span className="block text-xs text-white/45">{ROLE_HINTS[r.name] ?? (r.is_builtin ? "" : r.description)}</span>
+            <span className="block text-xs text-white/45">{hints[r.name] ?? (r.is_builtin ? "" : r.description)}</span>
           </span>
         </label>
       ))}
@@ -387,7 +392,7 @@ function EditUser({ user, isSelf, roles, ownTwoFactor = false, onCancel, onSaved
   async function save() {
     const patch: Record<string, unknown> = {};
     if (displayName !== user.display_name) patch.display_name = displayName;
-    // Nur eine geaenderte Adresse pruefen: ein Konto mit einer alten, nie geprueften Adresse bleibt sonst nicht speicherbar.
+    // Nur eine geänderte Adresse prüfen: ein Konto mit einer alten, nie geprüften Adresse bleibt sonst nicht speicherbar.
     if (email.trim() !== (user.email ?? "").trim()) {
       const emailError = emailProblem(email);
       if (emailError) return setNotice({ kind: "error", text: emailError });

@@ -1,6 +1,6 @@
 /**
- * Protokoll: alle sicherheitsrelevanten Vorgaenge (Anmeldungen, Freigaben,
- * ausgefuehrte Befehle, Einstellungs-Aenderungen) mit Filter und Export.
+ * Protokoll: alle sicherheitsrelevanten Vorgänge (Anmeldungen, Freigaben,
+ * ausgeführte Befehle, Einstellungs-Änderungen) mit Filter und Export.
  */
 import { ChevronDown, ChevronRight, Download, Search } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState } from "react";
@@ -9,6 +9,7 @@ import { api, apiErrorFromResponse, apiFetchResponse } from "../../lib/api";
 import { useExtensionLabel } from "../../lib/extensionNames";
 import { useAuthStore } from "../../state/auth";
 import { Badge, Button, NoticeLine, PageHeader, Toggle, errorText, inputClass, type Notice } from "./ui";
+import { useEdition } from "../../state/edition";
 
 interface AuditEntry {
   id: string;
@@ -236,6 +237,7 @@ export function targetText(
 const ACTOR_LABELS: Record<string, string> = { user: "Benutzer", system: "System", extension: "Erweiterung", ai: "KI", token: "API-Token", anonymous: "Nicht angemeldet" };
 
 export function AuditSettings(): JSX.Element {
+  const edition = useEdition();
   const hasPermission = useAuthStore((s) => s.hasPermission);
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [done, setDone] = useState(false);
@@ -347,7 +349,7 @@ export function AuditSettings(): JSX.Element {
         </select>
         <select aria-label="Auslöser" value={actorType} onChange={(e) => setActorType(e.target.value)} className={inputClass}>
           <option value="">Alle Auslöser</option>
-          {Object.entries(ACTOR_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          {Object.entries(ACTOR_LABELS).filter(([k]) => edition.choose_modules || k !== "ai").map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
         <input aria-label="Seit" type="date" value={since} onChange={(e) => setSince(e.target.value)} className={inputClass} />
       </div>

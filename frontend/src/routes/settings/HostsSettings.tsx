@@ -18,7 +18,8 @@ import { api, ApiError } from "../../lib/api";
 import { useExtensions } from "../../lib/firstSteps";
 import { hostProvider } from "../../lib/hostProvider";
 import { checkSummary, loginOutcome, refreshHosts, type ConnectionCheck, type HostOut } from "../../lib/hosts";
-import { hostHealthOf, useHosts } from "../../lib/overview";
+import { hostHealthOf, hostStatusText, useHosts } from "../../lib/overview";
+import { useEdition } from "../../state/edition";
 import { AccessBadge } from "./hosts/AccessBadge";
 import { DeleteHostButton } from "./hosts/deleteHost";
 import { GroupsCard } from "./hosts/GroupsCard";
@@ -26,6 +27,7 @@ import { HostForm } from "./hosts/HostForm";
 import { HostKeysCard } from "./hosts/HostKeysCard";
 import { ReachabilityCard } from "./hosts/ReachabilityCard";
 import { Badge, Button, Card, PageHeader, inputClass } from "./ui";
+import { productText } from "../../state/edition";
 
 /** Ab so vielen Servern gibt es ein Suchfeld. */
 const SEARCH_FROM = 9;
@@ -54,6 +56,7 @@ function HostRow({ host }: { host: HostOut }) {
   const [check, setCheck] = useState<RowCheck | null>(null);
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const health = hostHealthOf(host);
+  const stateLabel = `Zustand: ${hostStatusText(host)}`;
   const { data: extensions } = useExtensions(Boolean(host.provider_ext_id));
   const provider = hostProvider(host, extensions);
 
@@ -72,7 +75,7 @@ function HostRow({ host }: { host: HostOut }) {
     <li className="panel flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <p className="flex items-center gap-2 font-medium">
-          <span className={`status-dot ${health}`} aria-hidden />
+          <span className={`status-dot ${health}`} role="img" aria-label={stateLabel} title={stateLabel} />
           <span className="break-words">{host.display_name}</span>
         </p>
         <p className="mt-0.5 break-all text-xs text-white/50">{host.name} · {host.address}{isSwitchedOff(host) ? " · aus" : ""}</p>
@@ -94,15 +97,17 @@ function HostRow({ host }: { host: HostOut }) {
           to={`/settings/hosts/${host.id}`}
           className="inline-flex items-center justify-center rounded-lg border border-white/10 bg-white/[0.06] px-3 py-1.5 text-sm font-medium hover:bg-white/[0.12]"
         >
-          Einrichten
+          {host.credential ? "Einrichten" : "Zugang einrichten"}
         </Link>
-        <Button busy={check?.state === "busy"} onClick={() => void runCheck()}>Prüfen</Button>
+        {/* Ohne Zugang endet die Prüfung bei Erreichbarkeit und Server-Schlüssel; beides steht auf der Seite des Servers. */}
+        {host.credential && <Button busy={check?.state === "busy"} onClick={() => void runCheck()}>Prüfen</Button>}
       </div>
     </li>
   );
 }
 
 export function HostsSettings() {
+  const edition = useEdition();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const hosts = useHosts();
@@ -145,7 +150,7 @@ export function HostsSettings() {
         title="Server & Zugänge"
         description={
           <>
-            Hier legst du Server an und richtest den SSH-Zugang ein, mit dem sich Nodvard Deck verbindet.{" "}
+            Hier legst du Server an und richtest den SSH-Zugang ein, mit dem sich {edition.product_name} verbindet.{" "}
             <GuideLink section="servers" testId="hosts-guide">Anleitung zu Servern und SSH-Zugang</GuideLink>
           </>
         }
@@ -168,17 +173,17 @@ export function HostsSettings() {
         <div className="panel mb-5 p-6 text-center">
           <p className="text-base font-medium">Noch keine Server.</p>
           <p className="mx-auto mt-2 max-w-md text-sm text-white/55">
-            Leg den ersten an – zum Beispiel den Raspberry Pi, auf dem Nodvard Deck läuft, ein NAS oder eine Debian-VM. Dafür reichen
+            {edition.choose_modules ? productText("Leg den ersten an – zum Beispiel den Raspberry Pi, auf dem Nodvard Deck läuft, ein NAS oder eine Debian-VM. Dafür reichen") : "Leg den ersten Docker-Server an. Dafür reichen"}{" "}
             Name, Adresse und ein SSH-Zugang.
           </p>
           <div className="mt-4 flex flex-wrap justify-center gap-2">
             {addButton}
-            <DemoSeedButton />
+            {edition.choose_modules && <DemoSeedButton />}
           </div>
-          <p className="mt-4 text-xs text-white/45">
+          {edition.choose_modules && <p className="mt-4 text-xs text-white/45">
             Nutzt du Proxmox? Dann trägst du nur dessen Zugang ein, Knoten und VMs erscheinen danach von selbst:{" "}
             <Link to="/settings/extensions/proxmox" className="underline underline-offset-2 hover:text-white">Proxmox einrichten</Link>
-          </p>
+          </p>}
         </div>
       )}
 
@@ -234,7 +239,7 @@ export function HostsSettings() {
 
       <ReachabilityCard />
       <HostKeysCard />
-      <GroupsCard />
+      {edition.choose_modules && <GroupsCard />}
     </>
   );
 }

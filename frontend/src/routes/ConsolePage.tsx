@@ -1,20 +1,20 @@
 /**
- * Grafische Konsole einer VM/eines Containers -- damit dafuer niemand in die Proxmox-
- * Oberflaeche wechseln muss. Kern-Seite ohne PageSpec wie Dateien/
+ * Grafische Konsole einer VM/eines Containers -- damit dafür niemand in die Proxmox-
+ * Oberfläche wechseln muss. Kern-Seite ohne PageSpec wie Dateien/
  * Aktionen: sie kennt keinen Hypervisor, nur `POST /console/sessions` (die
  * `ConsoleTarget`-Capability dahinter liefert z. B. die proxmox-Extension).
  *
- * Ablauf: `POST /console/sessions` oeffnet die Konsole serverseitig und liefert URL +
- * Einmal-Kennwort; noVNC oeffnet danach selbst den WebSocket zu Nodvard Deck (nie direkt
+ * Ablauf: `POST /console/sessions` öffnet die Konsole serverseitig und liefert URL +
+ * Einmal-Kennwort; noVNC öffnet danach selbst den WebSocket zu Nodvard Deck (nie direkt
  * zum Hypervisor) und authentifiziert sich per RFB mit dem Einmal-Kennwort. Der
  * Browser sieht damit weder einen Proxmox-Login noch das API-Token.
  *
  * noVNC wird erst hier dynamisch geladen: das Paket nutzt Top-Level-`await` und ist
- * gross, das Haupt-Bundle soll dafuer nicht zahlen.
+ * groß, das Haupt-Bundle soll dafür nicht zahlen.
  *
  * "Text senden": QEMUs VNC kennt keine Zwischenablage -- der Dialog tippt Text als
- * Tastendruecke, passend zum Tastaturlayout des GASTS (lib/keyboardLayouts.ts).
- * Zeilenumbrueche druecken Enter nur, wenn das ausdruecklich angehakt ist.
+ * Tastendrücke, passend zum Tastaturlayout des GASTS (lib/keyboardLayouts.ts).
+ * Zeilenumbrüche drücken Enter nur, wenn das ausdrücklich angehakt ist.
  */
 import * as Dialog from "@radix-ui/react-dialog";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -71,7 +71,7 @@ function saveLayout(layout: LayoutId) {
   try {
     window.localStorage.setItem(LAYOUT_STORAGE_KEY, layout);
   } catch {
-    /* privates Fenster o. ae. -- dann eben nicht merken */
+    /* privates Fenster o. ä. -- dann eben nicht merken */
   }
 }
 
@@ -99,7 +99,7 @@ function TypeTextDialog({ open, onOpenChange, rfb }: { open: boolean; onOpenChan
       for (let i = 0; i < steps.length; i += 1) {
         const step = steps[i];
         rfb.sendKey(step.keysym, step.code, step.down);
-        // Kurze Pause nach jedem Loslassen: manche Gaeste (Windows-Anmeldemaske)
+        // Kurze Pause nach jedem Loslassen: manche Gäste (Windows-Anmeldemaske)
         // verschlucken sonst Zeichen, wenn sie zu dicht kommen.
         if (!step.down) await new Promise((r) => setTimeout(r, 8));
       }
@@ -215,7 +215,7 @@ export function ConsolePage() {
         rfb.scaleViewport = scale;
         rfb.background = "#000";
         // Nur die AKTUELLE Sitzung darf den Status setzen: nach "Neu verbinden"
-        // meldet die alte ihr `disconnect` erst asynchron, wenn die neue schon laeuft.
+        // meldet die alte ihr `disconnect` erst asynchron, wenn die neue schon läuft.
         const isCurrent = () => rfbRef.current === rfb;
         rfb.addEventListener("connect", () => {
           if (!isCurrent()) return;

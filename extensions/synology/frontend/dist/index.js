@@ -1,3 +1,69 @@
+// ../../_shared/frontend/src/csp.ts
+function cspNonce() {
+  return document.querySelector('meta[name="csp-nonce"]')?.content ?? "";
+}
+function createStyle() {
+  const element = document.createElement("style");
+  element.nonce = cspNonce();
+  return element;
+}
+var UNITLESS = /* @__PURE__ */ new Set([
+  "animationIterationCount",
+  "aspectRatio",
+  "columnCount",
+  "fillOpacity",
+  "flex",
+  "flexGrow",
+  "flexShrink",
+  "fontWeight",
+  "gridArea",
+  "gridColumn",
+  "gridColumnEnd",
+  "gridColumnStart",
+  "gridRow",
+  "gridRowEnd",
+  "gridRowStart",
+  "lineHeight",
+  "opacity",
+  "order",
+  "orphans",
+  "scale",
+  "strokeDasharray",
+  "strokeDashoffset",
+  "strokeMiterlimit",
+  "strokeOpacity",
+  "strokeWidth",
+  "tabSize",
+  "widows",
+  "zIndex",
+  "zoom"
+]);
+function styleRef(values, ref) {
+  let style;
+  return (node) => {
+    style?.remove();
+    style = void 0;
+    if (node && values) {
+      const id = Array.from(crypto.getRandomValues(new Uint32Array(4))).join("-");
+      node.setAttribute("data-deck-style", id);
+      style = createStyle();
+      document.head.appendChild(style);
+      const sheet = style.sheet;
+      const selector = `${node === document.documentElement ? ":root" : ""}[data-deck-style="${id}"]`;
+      sheet.insertRule(`${selector} {}`);
+      const declaration = sheet.cssRules[0].style;
+      for (const [key, value] of Object.entries(values)) {
+        if (value == null || typeof value === "boolean") continue;
+        const name = key.startsWith("--") ? key : key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`).replace(/^ms-/, "-ms-");
+        const unit = typeof value === "number" && value !== 0 && !key.startsWith("--") && !UNITLESS.has(key) ? "px" : "";
+        declaration.setProperty(name, `${value}${unit}`);
+      }
+    }
+    if (typeof ref === "function") ref(node);
+    else if (ref) ref.current = node;
+  };
+}
+
 // src/SynologyPage.tsx
 import { useCallback as useCallback2, useEffect as useEffect4, useRef as useRef2, useState as useState3 } from "react";
 
@@ -421,7 +487,7 @@ function UsageBar({ volume }) {
         "aria-valuemax": 100,
         "aria-valuenow": volume.percent,
         className: "h-1.5 w-full overflow-hidden rounded bg-white/10",
-        children: /* @__PURE__ */ jsx4("div", { className: `h-full rounded ${full ? "bg-amber-400" : "bg-[var(--color-accent)]"}`, style: { width: `${volume.percent}%` } })
+        children: /* @__PURE__ */ jsx4("div", { className: `h-full rounded ${full ? "bg-amber-400" : "bg-[var(--color-accent)]"}`, ref: styleRef({ width: `${volume.percent}%` }) })
       }
     ),
     /* @__PURE__ */ jsx4("p", { className: `text-xs ${full ? "text-amber-300" : "text-white/60"}`, children: usageText(volume) })
@@ -777,7 +843,7 @@ function SynologyPage() {
       title: "Synology DSM",
       description: "Zeigt den Zustand deiner Synology-Ger\xE4te: Auslastung, Speicherpools, Volumes, Festplatten, Hyper Backup und ob ein Update bereitsteht. Nur lesend.",
       actions: /* @__PURE__ */ jsxs3(Fragment2, { children: [
-        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx4("a", { href: SETTINGS_PATH, className: buttonClass("ghost"), children: "Einstellungen" }),
+        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx4("a", { href: SETTINGS_PATH, className: buttonClass("secondary"), children: "Einstellungen" }),
         /* @__PURE__ */ jsx4(Button, { onClick: reload, disabled: loading, children: "Aktualisieren" })
       ] }),
       children: [

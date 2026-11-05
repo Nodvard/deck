@@ -14,6 +14,7 @@ import { CANCELLED, withConfirmation } from "../../lib/confirmation";
 import { EXTENSION_GUIDE } from "../../lib/docs";
 import { sameTarget } from "../../lib/targetAddress";
 import { confirmDialog } from "../../state/dialogs";
+import { useEdition } from "../../state/edition";
 import { QrLinkCard } from "./QrLinkCard";
 import { SchemaFields, validateValues, type JsonSchema } from "./SchemaForm";
 import { Badge, Button, Card, ExtensionStateBadge, NoticeLine, errorText, inputClass, type Notice } from "./ui";
@@ -168,6 +169,7 @@ function secretsWithoutTarget(schema: (JsonSchema & { "x-secrets"?: unknown }) |
 }
 
 export function ExtensionConfigPage(): JSX.Element {
+  const edition = useEdition();
   const { extId = "" } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -263,9 +265,9 @@ export function ExtensionConfigPage(): JSX.Element {
 
   return (
     <div>
-      <Link to="/settings/extensions" className="mb-4 inline-flex items-center gap-1.5 text-xs text-white/50 hover:text-white">
+      {edition.choose_modules && <Link to="/settings/extensions" className="mb-4 inline-flex items-center gap-1.5 text-xs text-white/50 hover:text-white">
         <ArrowLeft size={13} /> Alle Erweiterungen
-      </Link>
+      </Link>}
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <span className="grid h-11 w-11 flex-none place-items-center rounded-xl bg-white/[0.06] text-[var(--color-accent)]">

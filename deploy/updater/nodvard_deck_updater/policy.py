@@ -43,15 +43,15 @@ from . import ed25519, trust
 
 REPOSITORY = "ghcr.io/nodvard/deck"
 """Das einzige Repository, das der Helfer anfasst. Eine Konstante: Tests geben ein anderes nur als Parameter
-mit (`repository=`), nie ueber die Umgebung (`tests/test_code_guard.py` prueft beides)."""
+mit (`repository=`), nie über die Umgebung (`tests/test_code_guard.py` prüft beides)."""
 
 VERSION_LABEL = "org.opencontainers.image.version"
-"""Label im Image, an dem die Version haengt. Nie aus Container-Labels, Kanal oder Dashboard."""
+"""Label im Image, an dem die Version hängt. Nie aus Container-Labels, Kanal oder Dashboard."""
 
 MIN_VERSION = "0.7.0"
-"""Mindestversion des Ziels und des Rueckwegs: das erste Release mit dem Update-Helfer. Aeltere Versionen
-koennen eine Vorher-Kopie nicht selbst einspielen. Bis das Release feststeht, bewusst die hoehere Annahme
-(sicherer): lieber einmal von Hand aktualisieren als auf eine Version ohne diese Faehigkeit zurueck."""
+"""Mindestversion des Ziels und des Rückwegs: das erste Release mit dem Update-Helfer. Ältere Versionen
+können eine Vorher-Kopie nicht selbst einspielen. Bis das Release feststeht, bewusst die höhere Annahme
+(sicherer): lieber einmal von Hand aktualisieren als auf eine Version ohne diese Fähigkeit zurück."""
 
 PROTOCOL = 1
 """Version des Status (`status.json`, Feld `proto`)."""
@@ -75,19 +75,19 @@ REQUEST_MAX_BYTES = 4096
 REQUEST_MAX_AGE_S = 600
 REQUEST_MAX_FUTURE_S = 60
 ACTION_INTERVAL_S = 600
-"""Hoechstens eine angenommene Aktion je 10 Minuten (abgelehnte zaehlen nicht)."""
+"""Höchstens eine angenommene Aktion je 10 Minuten (abgelehnte zählen nicht)."""
 BLOCK_AFTER_ROLLBACK_S = 24 * 3600
-"""Nach einem Rueckweg von Version X: so lange kein Update auf X."""
+"""Nach einem Rückweg von Version X: so lange kein Update auf X."""
 SEEN_TTL_S = 3600
-"""So lange bleibt eine verarbeitete Anforderungs-ID gesperrt (Replay). Laenger als das Zeitfenster der
-Anforderung (600 s): eine aeltere Wiederholung scheitert ohnehin an `expired`."""
+"""So lange bleibt eine verarbeitete Anforderungs-ID gesperrt (Replay). Länger als das Zeitfenster der
+Anforderung (600 s): eine ältere Wiederholung scheitert ohnehin an `expired`."""
 SLOT_TTL_S = 7 * 24 * 3600
-"""So lange gilt der Rueckweg-Slot nach einem Update."""
+"""So lange gilt der Rückweg-Slot nach einem Update."""
 CLOCK_SLACK_S = 60
-"""Spielraum fuer Uhrsprung: ein Slot, der laenger als `SLOT_TTL_S + CLOCK_SLACK_S` in der Zukunft endet, gilt
-nicht (die Uhr ist zurueckgesprungen oder die Datei ist falsch) -- fail-closed."""
+"""Spielraum für Uhrsprung: ein Slot, der länger als `SLOT_TTL_S + CLOCK_SLACK_S` in der Zukunft endet, gilt
+nicht (die Uhr ist zurückgesprungen oder die Datei ist falsch) -- fail-closed."""
 DEADLINE_S = 15 * 60
-"""Frist fuer einen Ablauf bis zum ersten `healthy` (fest, nicht einstellbar)."""
+"""Frist für einen Ablauf bis zum ersten `healthy` (fest, nicht einstellbar)."""
 STATUS_MAX_BYTES = 16 * 1024
 RESULTS_MAX = 10
 
@@ -122,7 +122,7 @@ SWARM = "swarm"
 FOREIGN_IMAGE = "foreign_image"
 PINNED_VERSION = "pinned_version"
 NOT_FROM_REGISTRY = "not_from_registry"
-"""Die Engine nennt fuer das laufende Image keinen Digest im Repository. Beim alten Store heisst das: nicht aus der
+"""Die Engine nennt für das laufende Image keinen Digest im Repository. Beim alten Store heißt das: nicht aus der
 Registry gezogen; beim containerd-Store nur: das Image hat im Repository keinen Namen (mehr). Umgekehrt beweist ein
 Digest beim containerd-Store nicht, dass das Image aus der Registry stammt (siehe `require_registry_digest`)."""
 NO_VERSION_LABEL = "no_version_label"
@@ -161,9 +161,9 @@ DIGEST_CHANGED = "digest_changed"
 """Der Digest der Anforderung ist nicht der, auf den das bewegliche Tag gerade zeigt (neue Version oder Rückruf seit
 der Update-Suche)."""
 NOT_IMPLEMENTED = "not_implemented"
-"""Die Anforderung ist gueltig, diese Helfer-Version fuehrt die Aktion aber nicht aus. Fuer Update und Rueckweg kommt
-er nicht vor (beides fuehrt der Helfer aus). Er bleibt im Protokoll, denn Codes kommen nur dazu und fallen nie weg:
-eine spaetere Protokoll-Funktion, die ein aelterer Helfer nicht kennt, beantwortet dieser damit."""
+"""Die Anforderung ist gültig, diese Helfer-Version führt die Aktion aber nicht aus. Für Update und Rückweg kommt
+er nicht vor (beides führt der Helfer aus). Er bleibt im Protokoll, denn Codes kommen nur dazu und fallen nie weg:
+eine spätere Protokoll-Funktion, die ein älterer Helfer nicht kennt, beantwortet dieser damit."""
 SIGNATURE_REQUIRED = "signature_required"
 """Ein Update ohne Signatur, aber dieser Helfer verlangt eine (`UPDATE_REQUIRES_SIGNATURE`)."""
 UNKNOWN_KEY = "unknown_key"
@@ -236,7 +236,7 @@ VERSION_RE = re.compile(rf"{_NUM}\.{_NUM}\.{_NUM}", re.ASCII)
 """Version `X.Y.Z`. Immer mit `fullmatch` benutzen. `[0-9]` statt `\\d`: `\\d` traefe ohne `re.ASCII`
 auch Unicode-Ziffern."""
 MINOR_TAG_RE = re.compile(rf"{_NUM}\.{_NUM}", re.ASCII)
-"""Bewegliches Tag `X.Y`. Wie die Version hoechstens 9 Stellen je Teil."""
+"""Bewegliches Tag `X.Y`. Wie die Version höchstens 9 Stellen je Teil."""
 UUID4_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", re.ASCII)
 """Anforderungs-ID: UUID4, nur Kleinbuchstaben (eine Schreibweise je ID, sonst liefe der Replay-Schutz ins Leere)."""
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}", re.ASCII)
@@ -279,7 +279,7 @@ def is_code(value: object) -> bool:
 
 
 RESULT_KEYS = ("id", "action", "from", "to", "outcome", "code", "finished_at")
-"""Ein Eintrag in `status.results` (und in `state.json`, damit er einen Neustart des Helfers uebersteht)."""
+"""Ein Eintrag in `status.results` (und in `state.json`, damit er einen Neustart des Helfers übersteht)."""
 
 
 def is_result(entry: object) -> bool:

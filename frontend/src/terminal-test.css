@@ -1,0 +1,7 @@
+
+    body { background: #111; color: #eee; font-family: sans-serif; padding: 1rem; }
+    #status { margin-bottom: 1rem; white-space: pre-wrap; }
+    #term { width: 800px; height: 400px; }
+    input, button { font-size: 14px; padding: 4px 8px; margin-right: 4px; }
+  
+#hostId { width: 320px; }

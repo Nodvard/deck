@@ -92,7 +92,7 @@ describe("Links in die Anleitung", () => {
     expect(REPO_URL).toBe("https://github.com/nodvard/deck");
     expect(repoFile("deploy/README.md", "update-helfer")).toBe("https://github.com/nodvard/deck/blob/main/deploy/README.md#update-helfer");
     expect(guideUrl()).toBe("https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md");
-    expect(guideUrl("locked")).toBe("https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#12-ausgesperrt-notfall-befehle");
+    expect(guideUrl("locked")).toBe("https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#73-ausgesperrt-notfall-befehle");
   });
 
   it("verlinkt nur die deutsche Anleitung", () => {

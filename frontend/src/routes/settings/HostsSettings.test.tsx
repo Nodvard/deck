@@ -122,7 +122,7 @@ describe("Server & Zugänge: Liste", () => {
     mockHostsApi({ "GET /hosts": [PI], "GET /host-groups": [] });
     renderPage();
     const link = await screen.findByTestId("hosts-guide");
-    expect(link).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#5-server-und-ssh-zugang");
+    expect(link).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#3-den-ersten-server-verbinden");
     expect(link).toHaveAttribute("target", "_blank");
   });
 
@@ -139,6 +139,18 @@ describe("Server & Zugänge: Liste", () => {
     expect(screen.getAllByRole("link", { name: "Einrichten" })[0]).toHaveAttribute("href", "/settings/hosts/h1");
     // Bei wenigen Servern braucht es keine Suche.
     expect(screen.queryByPlaceholderText("Server suchen …")).not.toBeInTheDocument();
+  });
+
+  it("ohne Zugang führt die Zeile zu „Zugang einrichten“ statt zu „Prüfen“", async () => {
+    mockHostsApi({ "GET /hosts": [PI, KI], "GET /host-groups": [] });
+    renderPage();
+    const row = (await screen.findByText("KI-Server")).closest("li") as HTMLElement;
+    expect(within(row).getByRole("link", { name: "Zugang einrichten" })).toHaveAttribute("href", "/settings/hosts/h3");
+    expect(within(row).queryByRole("button", { name: "Prüfen" })).toBeNull();
+    expect(within(row).getByRole("img", { name: "Zustand: läuft" })).toBeInTheDocument();
+    const pi = screen.getByText("Bastel-Pi").closest("li") as HTMLElement;
+    expect(within(pi).getByRole("link", { name: "Einrichten" })).toBeInTheDocument();
+    expect(within(pi).getByRole("button", { name: "Prüfen" })).toBeInTheDocument();
   });
 
   it("kennzeichnet einen eingelesenen Server mit „Modul aus“, wenn das Modul ausgeschaltet ist", async () => {

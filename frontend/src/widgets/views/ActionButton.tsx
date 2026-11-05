@@ -37,7 +37,7 @@ interface ProposeResult extends ActionOutcomeSource {
 }
 
 /** Status, bei denen die direkte Antwort sicher ein Aktionsergebnis ist -- andere
- * Endpunkte liefern ebenfalls `status` (z. B. Shield-Vorfaelle "dismissed"). */
+ * Endpunkte liefern ebenfalls `status` (z. B. Shield-Vorfälle "dismissed"). */
 const DIRECT_FAILURE = new Set(["failed", "denied"]);
 
 /** Fehlermeldung zu einer gescheiterten/gesperrten Aktion. Extensions
@@ -53,13 +53,13 @@ async function failureText(res: ProposeResult): Promise<string> {
 }
 
 /**
- * Fuehrt eine WidgetAction aus: `endpoint` ist ein Template relativ zu
- * `/api/v1/ext/<ext_id>/` (docs/02-EXTENSION-API.md §4). `confirm` fragt ueber den
+ * Führt eine WidgetAction aus: `endpoint` ist ein Template relativ zu
+ * `/api/v1/ext/<ext_id>/` (docs/02-EXTENSION-API.md §4). `confirm` fragt über den
  * echten globalen Dialog (state/dialogs.ts) statt `window.confirm()`.
  *
- * Der Core Action Gate (core/gate.py) laesst JEDE Aktion erst als `status="proposed"`
- * stehen -- ohne einen Folge-Call auf `/actions/{id}/approve` bliebe sie haengen. Fuer
- * jede WidgetAction ueber diese gemeinsame Komponente (u.a. gameserver Start/Stop)
+ * Der Core Action Gate (core/gate.py) lässt JEDE Aktion erst als `status="proposed"`
+ * stehen -- ohne einen Folge-Call auf `/actions/{id}/approve` bliebe sie hängen. Für
+ * jede WidgetAction über diese gemeinsame Komponente (u.a. gameserver Start/Stop)
  * gilt deshalb dieselbe "Auto-Freigabe wenn berechtigt"-Logik wie auf
  * ProxmoxNodePage.tsx/BackupsPage.tsx, hier zentral statt pro Extension.
  */
@@ -79,12 +79,12 @@ export function ActionButton({ action, row, extId, onDone }: { action: WidgetAct
   // es schon vor der Freigabe-Antwort.
   const unmountSignal = useUnmountSignal();
 
-  /** Laeuft die Aktion nach der Antwort noch (202 'executing'), bis zum Ende
+  /** Läuft die Aktion nach der Antwort noch (202 'executing'), bis zum Ende
    * nachfragen -- der Knopf bleibt so lange auf "…". */
   async function settle(res: ProposeResult, actionId: string | undefined): Promise<ProposeResult> {
     if (!actionId || !isActionRunning(res.status)) return res;
     const signal = unmountSignal();
-    throwIfAborted(signal); // Kachel schon weg, waehrend die Freigabe noch wartete
+    throwIfAborted(signal); // Kachel schon weg, während die Freigabe noch wartete
     setNotice(RUNNING_IN_BACKGROUND_TEXT);
     const final = await waitForAction<ProposeResult>(actionId, { signal });
     setNotice(null);
@@ -97,8 +97,8 @@ export function ActionButton({ action, row, extId, onDone }: { action: WidgetAct
         danger: action.style === "danger",
         confirmLabel: action.label,
       });
-      // Kachel inzwischen abgebaut (Seite verlassen, waehrend die Rueckfrage offen war):
-      // nicht mehr ausloesen.
+      // Kachel inzwischen abgebaut (Seite verlassen, während die Rückfrage offen war):
+      // nicht mehr auslösen.
       if (!ok || unmountSignal().aborted) return;
     }
     setPending(true);
@@ -128,7 +128,7 @@ export function ActionButton({ action, row, extId, onDone }: { action: WidgetAct
         const final = await settle(result, result.id ?? result.action_id);
         if (final.status && DIRECT_FAILURE.has(final.status)) setError(await failureText(final));
       } else if (result?.status && DIRECT_FAILURE.has(result.status)) {
-        // Gate-Sperre (Sperrliste, Flap-Schutz) oder sofortige Ausfuehrung im
+        // Gate-Sperre (Sperrliste, Flap-Schutz) oder sofortige Ausführung im
         // Vollautonomie-Modus, die gescheitert ist.
         setError(await failureText(result));
       }

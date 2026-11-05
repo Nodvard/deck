@@ -226,20 +226,22 @@ The frontend writes the colors into CSS custom properties on `:root` at startup.
 No rebuild, no restart, no environment variable. Logo and favicon are stored as uploads in the
 data volume (`branding/`); `PUT /branding` accepts other addresses for them only as the app's own path or
 `data:image/…`. The app page loads scripts only from its own server: `script-src 'self'` plus the checksum of the
-embedded import map from `index.html` is fixed (`Content-Security-Policy`, also on the `304` response), so
+embedded import map from `index.html` is fixed (`Content-Security-Policy`), so
 no `javascript:` link, no `onclick=` from injected HTML, and no `eval` will run. The checksum is generated when
 serving and recalculated as soon as `index.html` changes; a new embedded script therefore needs no
-maintenance. Everything else likewise comes only from the app's own server (`default-src 'self'`, including
-connections and WebSockets); images may additionally be `data:` and `blob:` (`img-src 'self' data: blob:`), frames
-only `blob:` (the PDF preview in Documents, „Dokumente“). Styles need `'unsafe-inline'` because xterm (the console,
-„Konsole“) creates `<style>` elements at runtime; images and fonts from foreign addresses are blocked all the same.
+maintenance. Everything else likewise comes only from the app's own server (`default-src 'self'`); `connect-src` permits
+the app's API and WebSockets only at its own address; images may additionally be `data:` and `blob:`
+(`img-src 'self' data: blob:`), frames
+only `blob:` (the PDF preview in Documents, „Dokumente“). The CSP is enforced without wildcards or `unsafe-inline`: Dynamic styles and xterm stylesheets
+use a fresh nonce per non-cacheable HTML response, style attributes are blocked, and fonts come only from the app itself;
+`NODVARD_DECK_CSP_LEGACY=1` restores the previous style policy in an emergency and logs a warning.
 JSON responses without rules of their own get `default-src 'none'`. What this means for extension bundles is described in the
 [Extension interface](EXTENSION-API.md#loading-the-frontend-bundle). Links from extension
 data (app tiles, command palette, widgets, extension pages) are accepted by the UI only with `http:` or
 `https:`; targets of notifications only as a path within the dashboard (`/…`, not `//…`).
 An SVG is checked on upload (no scripts, no references out of the file), and every
 uploaded image is served with a sandbox CSP;
-the support link accepts only `http:`, `https:`, and `mailto:` ([API](../04-API.md), in German).
+the support link accepts only `http:`, `https:`, and `mailto:` ([API](API.md)).
 
 In code, the rule is: **no literal for product name or color** outside
 `branding.py` (backend defaults) and the CSS variable definition (frontend). Also
@@ -283,7 +285,7 @@ of the Docker module, no list is needed: the check for old names only forbids th
 |---|---|---|
 | Extension packages `nodvard_deck_ext_<id>` | `lattice_ext_<id>` | No alias for the built-in ones (the `entrypoint` comes fresh from `extension.toml`); third-party packages with the old name keep loading |
 | Environment variables `NODVARD_DECK_*` | `LATTICE_*` | Fallback if the new one isn't set; only for a transition (by 1.0 at the latest), with a notice for the owner in the overview |
-| Refresh cookie `nodvard_deck_refresh` | `lattice_refresh` | Both are written, read, and deleted on logout ([API](../04-API.md), in German) |
+| Refresh cookie `nodvard_deck_refresh` | `lattice_refresh` | Both are written, read, and deleted on logout ([API](API.md)) |
 | Image, Compose service, containers `nodvard-deck`, `deploy-nodvard-deck-1` | `lattice`, `deploy-lattice-1` | Migrated on first deploy ([deploy/README](../../deploy/README.md)) |
 
 **Removed with 0.12 (before the promise for 1.0):**
@@ -321,7 +323,7 @@ stored data is neither copied nor renamed, and a way back to the old image finds
 |---|---|---|
 | Identifier `shield` (`extension.toml`) | `nexus-soc` | `legacy_ids`. On existing installations, the registry row `nexus-soc` remains the **storage identifier**: settings, state, permissions, and schedules stay attached to it. New installations create `shield` |
 | Folder `extensions/shield/`, package `nodvard_deck_ext_shield` | `extensions/nexus-soc/`, `nodvard_deck_ext_nexus_soc` | No alias (extensions don't import each other). If the old folder is still there, Shield is not loaded ([deploy/README](../../deploy/README.md)) |
-| Addresses `/api/v1/ext/shield/…` | `/api/v1/ext/nexus-soc/…` | The same routes are additionally mounted under the old address, same login check, `deprecated` in the OpenAPI schema ([API, section 7](../04-API.md#7-kompatibilität), in German) |
+| Addresses `/api/v1/ext/shield/…` | `/api/v1/ext/nexus-soc/…` | The same routes are additionally mounted under the old address, same login check, `deprecated` in the OpenAPI schema ([API, section 7](API.md#7-compatibility)) |
 | Core addresses `/api/v1/extensions/shield/…` (settings, secrets, test, bundle) | `/api/v1/extensions/nexus-soc/…` | The old identifier is resolved, responses give the new one in `id` |
 | Pages `/ext/shield/soc`, `/settings/extensions/shield` | `/ext/nexus-soc/soc`, `/settings/extensions/nexus-soc` | The UI redirects (query and anchor are kept). Saved links in notifications, push, and bookmarks keep working this way |
 | Dashboard tiles under `shield` | Entries under `nexus-soc` | Keep position, size, and visibility; the old entry stays in the layout for a way back |
@@ -354,7 +356,7 @@ The **Docker** module had a different name until 0.8 and the technical identifie
 |---|---|---|
 | Identifier `docker` (`extension.toml`) | `service-matrix` | `legacy_ids`. On existing installations, `service-matrix` remains the **storage identifier**: settings including custom tile addresses, the image-check schedule, and the data folder `data/ext/service-matrix/` (running image updates) stay attached to it. New installations create `docker` |
 | Folder `extensions/docker/`, package `nodvard_deck_ext_docker` | `extensions/service-matrix/`, `nodvard_deck_ext_service_matrix` | No alias (extensions don't import each other) |
-| Addresses `/api/v1/ext/docker/…` | `/api/v1/ext/service-matrix/…` | The same routes are additionally mounted under the old address, same login check, `deprecated` in the OpenAPI schema ([API, section 7](../04-API.md#7-kompatibilität), in German) |
+| Addresses `/api/v1/ext/docker/…` | `/api/v1/ext/service-matrix/…` | The same routes are additionally mounted under the old address, same login check, `deprecated` in the OpenAPI schema ([API, section 7](API.md#7-compatibility)) |
 | Core addresses `/api/v1/extensions/docker/…` | `/api/v1/extensions/service-matrix/…` | The old identifier is resolved, responses give the new one in `id` |
 | Pages `/ext/docker/matrix`, `/settings/extensions/docker` | `/ext/service-matrix/matrix`, `/settings/extensions/service-matrix` | The UI redirects (query and anchor are kept). Saved links in notifications and bookmarks keep working this way |
 | Dashboard tile "Container" under `docker` | Entry under `service-matrix` | Keeps position, size, and visibility (`legacy_ext_ids`) |

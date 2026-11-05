@@ -282,6 +282,14 @@ def test_strange_arguments_are_refused(tmp_path, args):
     assert not (tmp_path / "audit").exists() and not (tmp_path / "jobs").exists()
 
 
+@needs_sh
+@pytest.mark.parametrize("sub", ["audit-start", "audit-run", "audit-poll", "audit-stop", "upgrade-poll"])
+def test_a_missing_run_id_is_named(tmp_path, sub):
+    helper = helper_copy(tmp_path, path="/nicht-da", sdmark=tmp_path / "sd")
+    done = subprocess.run([SH, str(helper), sub], capture_output=True, text=True, timeout=30, check=False)
+    assert (done.returncode, done.stdout, done.stderr) == (64, "", f"shield-root: {sub} erwartet eine Lauf-ID\n")
+
+
 def test_the_dashboard_asks_the_helper_only_for_the_fixed_limit():
     av, aj, dt = _mods()
     launch = dt.launch_command(RID, aj.lynis_command(RID), kind=aj.AUDITS)

@@ -3,6 +3,7 @@
  * (ohne Konto, Einrichtungscode): hochladen, Passwort oder Schlüssel, Zusammenfassung, einspielen, warten, anmelden.
  * Passwörter, Schlüssel und Code stehen nur im lokalen State und gehen direkt an `lib/restore.ts` (kein Query-Cache).
  */
+import { styleRef } from "../../../../extensions/_shared/frontend/src/csp";
 import { AlertTriangle, CheckCircle2, FileUp, Loader2, ShieldAlert } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
@@ -26,6 +27,7 @@ import {
 } from "../../lib/restore";
 import { SecondFactorField, isTotpMissing, isTotpRejected, useTwoFactorEnabled } from "./SecondFactorField";
 import { Badge, Button, Field, NoticeLine, errorText, inputClass, type Notice } from "./ui";
+import { productText } from "../../state/edition";
 
 type Phase =
   | { kind: "idle" }
@@ -286,7 +288,7 @@ export function RestoreFlow(props: RestoreFlowProps): JSX.Element {
       <div role="status" aria-live="polite" className="space-y-3 text-sm" data-testid="restore-waiting">
         <p className="flex items-center gap-2 font-medium">
           <Loader2 size={16} className="animate-spin" />
-          {phase.slow ? "Das dauert länger als erwartet." : "Nodvard Deck startet neu und spielt die Sicherung ein …"}
+          {phase.slow ? "Das dauert länger als erwartet." : productText("Nodvard Deck startet neu und spielt die Sicherung ein …")}
         </p>
         {phase.slow ? (
           <>
@@ -336,7 +338,7 @@ export function RestoreFlow(props: RestoreFlowProps): JSX.Element {
           aria-valuenow={percent}
           className="h-2 overflow-hidden rounded-full bg-white/10"
         >
-          <div className="h-full rounded-full bg-[var(--color-accent)] transition-[width]" style={{ width: `${percent}%` }} />
+          <div className="h-full rounded-full bg-[var(--color-accent)] transition-[width]" ref={styleRef({ width: `${percent}%` })} />
         </div>
         <p className="text-xs text-white/55">
           {percent} % · {formatSize(phase.loaded)} von {formatSize(phase.total)}
@@ -451,7 +453,7 @@ export function RestoreFlow(props: RestoreFlowProps): JSX.Element {
               Betreibe danach nur eine von beiden.
             </li>
             <li>
-              Nodvard Deck startet dafür neu. Das klappt nur, wenn der Container eine Neustart-Regel hat (in den mitgelieferten Compose-Dateien steht{" "}
+              {productText("Nodvard Deck")} startet dafür neu. Das klappt nur, wenn der Container eine Neustart-Regel hat (in den mitgelieferten Compose-Dateien steht{" "}
               <code>restart: unless-stopped</code>). Ohne sie bleibt er danach aus und muss von Hand gestartet werden, z. B. mit <code>docker compose up -d</code>.
             </li>
           </ul>
@@ -545,7 +547,7 @@ export function RestoreFlow(props: RestoreFlowProps): JSX.Element {
       <p className="text-sm text-white/70">
         {mode === "owner"
           ? "Wähle eine Sicherungsdatei (.ndbak). Sie wird hochgeladen und geprüft; eingespielt wird erst, wenn du es bestätigst."
-          : "Du hast schon eine Sicherung von Nodvard Deck? Dann spiel sie hier ein: Konten, Server, Zugangsdaten und Einstellungen kommen zurück, du musst nichts neu einrichten."}
+          : productText("Du hast schon eine Sicherung von Nodvard Deck? Dann spiel sie hier ein: Konten, Server, Zugangsdaten und Einstellungen kommen zurück, du musst nichts neu einrichten.")}
       </p>
       {codeField}
       <Field

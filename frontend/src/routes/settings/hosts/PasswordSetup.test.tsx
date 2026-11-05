@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { sendsInClear } from "../../../lib/hosts";
 import { useAuthStore } from "../../../state/auth";
+import { DECK_EDITION, useEditionStore } from "../../../state/edition";
 import { checkFixture, credentialFixture, FINGERPRINT, hostFixture, mockHostsApi, reply, type Call } from "../../../test/hostsMock";
 import { HostDetailSettings } from "../HostDetailSettings";
 
@@ -104,6 +105,22 @@ afterEach(() => {
 });
 
 describe("Mit Passwort einrichten: Formular", () => {
+  it("Dock nennt sich beim Einrichten und beim Ergebnis", async () => {
+    useEditionStore.setState({ edition: { ...DECK_EDITION, choose_modules: false } });
+    try {
+      mockHostsApi(routes({ "GET /hosts/h1/requirements": [REQUIREMENTS[1]], [SETUP_URL]: okResult() }));
+      renderDetail();
+      const form = await openPasswordWay();
+      expect(screen.queryAllByText(/Nodvard Deck/)).toHaveLength(0);
+      expect(within(form).getByText(/Nodvard Dock/)).toBeInTheDocument();
+      typePassword(form);
+      fireEvent.click(within(form).getByRole("button", { name: "Einrichten" }));
+      expect(await within(form).findByText(/Eingerichtet\. Nodvard Dock meldet sich/)).toBeInTheDocument();
+    } finally {
+      useEditionStore.setState({ edition: DECK_EDITION });
+    }
+  });
+
   it("Standard bleibt „Befehl selbst einfügen“; der zweite Weg zeigt Anmelde-Konto (root) und ein verdecktes Passwortfeld", async () => {
     mockHostsApi(routes());
     renderDetail();

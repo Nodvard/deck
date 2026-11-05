@@ -1,79 +1,79 @@
 #!/usr/bin/env bash
-# Spielt eine mit backup.sh erzeugte tar.gz zurueck -- ERSETZT den kompletten
+# Spielt eine mit backup.sh erzeugte tar.gz zurück -- ERSETZT den kompletten
 # aktuellen Inhalt von /app/data.
 #
-# `--entrypoint sh` statt des Image-Entrypoints: der wuerde vor dem Einspielen
-# `python -m nodvard_deck.migrate` gegen genau die (moeglicherweise kaputte) Datenbank
+# `--entrypoint sh` statt des Image-Entrypoints: der würde vor dem Einspielen
+# `python -m nodvard_deck.migrate` gegen genau die (möglicherweise kaputte) Datenbank
 # fahren, die hier ersetzt werden soll, und mit `set -e` den Dienst gestoppt
-# zuruecklassen. Der `trap` startet den Dienst in jedem Fall
-# wieder; die Migration laeuft dann beim normalen Start ueber /entrypoint.sh.
+# zurücklassen. Der `trap` startet den Dienst in jedem Fall
+# wieder; die Migration läuft dann beim normalen Start über /entrypoint.sh.
 #
 # `--user 1000:1000`: Der Hilfscontainer umgeht den Entrypoint (der sonst von root zu `lattice` wechselt)
-# und laeuft deshalb ausdruecklich als `lattice`; eingespielte Dateien gehoeren so nicht root.
+# und läuft deshalb ausdrücklich als `lattice`; eingespielte Dateien gehören so nicht root.
 #
-# Die Sicherungsdatei (tar.gz) wird NICHT in den Container eingebunden, sondern ueber die Standardeingabe
+# Die Sicherungsdatei (tar.gz) wird NICHT in den Container eingebunden, sondern über die Standardeingabe
 # hineingereicht (`tar xzf -`, `< Datei`, dazu `-T`: kein Pseudo-Terminal). Gelesen wird sie also von DIESER
-# Shell, mit den Rechten des Aufrufers: Es klappt auch, wenn die Datei root gehoert (z. B. von
+# Shell, mit den Rechten des Aufrufers: Es klappt auch, wenn die Datei root gehört (z. B. von
 # `sudo ./backup.sh`, Rechte 0600) oder in einem Ordner liegt, den der Container-Benutzer 1000 nicht
-# lesen darf. Vorher wird die Datei hier einmal mit `tar tzf` geprueft: Eine beschaedigte Datei soll nicht
+# lesen darf. Vorher wird die Datei hier einmal mit `tar tzf` geprüft: Eine beschädigte Datei soll nicht
 # erst NACH dem Leeren des Volumes auffallen.
 #
-# Das Einspielen geschieht in zwei Schritten, damit ein Abbruch den bisherigen Stand nicht zerstoert:
-# 1. Die Datei wird in `/app/data/.restore-neu` ENTPACKT; die bisherigen Daten bleiben unberuehrt. Scheitert das
-#    (Datentraeger voll, Lesefehler, Ctrl-C), laeuft der Dienst danach auf dem alten Stand weiter.
+# Das Einspielen geschieht in zwei Schritten, damit ein Abbruch den bisherigen Stand nicht zerstört:
+# 1. Die Datei wird in `/app/data/.restore-neu` ENTPACKT; die bisherigen Daten bleiben unberührt. Scheitert das
+#    (Datenträger voll, Lesefehler, Ctrl-C), läuft der Dienst danach auf dem alten Stand weiter.
 # 2. Erst wenn alles entpackt und nicht leer ist, werden die alten Daten nach `.restore-alt` beiseitegeschoben, die
-#    neuen eingesetzt und `.restore-alt` geloescht (nur Umbenennungen innerhalb des Volumes). Dieser Schritt ist
+#    neuen eingesetzt und `.restore-alt` gelöscht (nur Umbenennungen innerhalb des Volumes). Dieser Schritt ist
 #    kurz und wird weder von SIGHUP (SSH-Abbruch) noch von Ctrl-C unterbrochen.
-# Die Marke `/app/data/.restore-austausch` haelt fest, dass Schritt 2 laeuft (und ob gerade die alten Daten beiseite-
+# Die Marke `/app/data/.restore-austausch` hält fest, dass Schritt 2 läuft (und ob gerade die alten Daten beiseite-
 # oder die neuen eingesetzt werden). Sie entsteht vor der ersten Umbenennung und verschwindet erst, wenn alles fertig
 # ist. Bricht Schritt 2 trotzdem ab, bleibt der Dienst GESTOPPT (nie auf halben Daten starten), und ein erneuter Lauf
 # mit derselben Datei macht den Austausch an der richtigen Stelle fertig: auch er startet den Dienst nicht, solange die
 # Marke liegt (auch nicht, wenn sein Entpacken scheitert). backup.sh lehnt eine Sicherung ab, solange die Marke liegt.
-# Ein `.restore-alt` aus einem frueheren Lauf wird nie geloescht, sondern unter `.restore-alt-<Zeit>` beiseitegelegt.
-# Die Arbeitsordner (`.restore-*`) kommen weder in eine Sicherung noch beim Einspielen ins Volume, auch aus aelteren
+# Ein `.restore-alt` aus einem früheren Lauf wird nie gelöscht, sondern unter `.restore-alt-<Zeit>` beiseitegelegt.
+# Die Arbeitsordner (`.restore-*`) kommen weder in eine Sicherung noch beim Einspielen ins Volume, auch aus älteren
 # Sicherungen nicht, in denen sie schon stecken.
-# Platz: waehrend des Austauschs liegen alte und neue Daten kurz nebeneinander (doppelter Platzbedarf).
+# Platz: während des Austauschs liegen alte und neue Daten kurz nebeneinander (doppelter Platzbedarf).
 #
-# Verbindungsabbruch: SIGHUP und SIGPIPE werden von Anfang an ignoriert, und nach der Rueckfrage scheitert keine
+# Verbindungsabbruch: SIGHUP und SIGPIPE werden von Anfang an ignoriert, und nach der Rückfrage scheitert keine
 # Meldung mehr an einem weggefallenen Terminal (jede Ausgabe ist abgesichert, die Ausgabe der Hilfscontainer geht erst
-# in eine Datei und wird dann gezeigt). Die Meldungen ab der Rueckfrage stehen zusaetzlich in `restore.log` (neben
+# in eine Datei und wird dann gezeigt). Die Meldungen ab der Rückfrage stehen zusätzlich in `restore.log` (neben
 # diesem Skript; anderer Ordner: RESTORE_LOG_DIR): dort steht nach einem Abbruch der SSH-Verbindung, wie es ausging.
 #
 # Sperre: backup.sh und restore.sh (beide Zweige, auch `.ndbak`) halten dieselbe Sperre (`flock` auf `.backup-restore.lock`
-# neben dem Skript) bis zum Ende. Ein zweiter Lauf, der gleichzeitig startet (etwa nach einem SSH-Abbruch, waehrend der erste
-# im Hintergrund weiterlaeuft, oder eine Cron-Sicherung waehrend des Einspielens), wird abgewiesen, ohne etwas zu veraendern.
-# Der Dateideskriptor 9 bleibt Hilfsprogrammen verschlossen (`9>&-`): ein haengender Hilfsprozess haelt die Sperre sonst ueber
-# das Ende des Skripts hinaus. Fehlt `flock` (Paket util-linux), gibt es eine Warnung, und das Skript laeuft ohne Sperre weiter.
-# Die Sperrdatei und restore.log gehoeren nach `sudo` dem Aufrufer (SUDO_UID), damit spaetere Laeufe ohne sudo nicht still
-# auf beides verzichten muessen.
+# neben dem Skript) bis zum Ende. Ein zweiter Lauf, der gleichzeitig startet (etwa nach einem SSH-Abbruch, während der erste
+# im Hintergrund weiterläuft, oder eine Cron-Sicherung während des Einspielens), wird abgewiesen, ohne etwas zu verändern.
+# Der Dateideskriptor 9 bleibt Hilfsprogrammen verschlossen (`9>&-`): ein hängender Hilfsprozess hält die Sperre sonst über
+# das Ende des Skripts hinaus. Fehlt `flock` (Paket util-linux), gibt es eine Warnung, und das Skript läuft ohne Sperre weiter.
+# Die Sperrdatei und restore.log gehören nach `sudo` dem Aufrufer (SUDO_UID), damit spätere Läufe ohne sudo nicht still
+# auf beides verzichten müssen.
 #
-# Exit-Codes (3 bis 5: es wurde nichts veraendert, nichts angehalten und nichts gestartet):
-#   0 fertig   1 Fehler (je nach Meldung)   3 ein unterbrochenes Einspielen liegt noch (Marke, nur fuer `.ndbak`: erst
-#   dieses mit derselben tar.gz abschliessen)   4 es laeuft schon eine Sicherung oder ein Einspielen (Sperre)
-#   5 die Marke ist leer oder beschaedigt (Meldung nennt den Weg von Hand)
-# Der Austausch im Hilfscontainer hat eigene, innere Codes (4 = nichts veraendert); sie sind nicht die des Skripts.
+# Exit-Codes (3 bis 5: es wurde nichts verändert, nichts angehalten und nichts gestartet):
+#   0 fertig   1 Fehler (je nach Meldung)   3 ein unterbrochenes Einspielen liegt noch (Marke, nur für `.ndbak`: erst
+#   dieses mit derselben tar.gz abschließen)   4 es läuft schon eine Sicherung oder ein Einspielen (Sperre)
+#   5 die Marke ist leer oder beschädigt (Meldung nennt den Weg von Hand)
+# Der Austausch im Hilfscontainer hat eigene, innere Codes (4 = nichts verändert); sie sind nicht die des Skripts.
 #
 # Nutzung (aus deploy/):  ./restore.sh /pfad/zu/nodvard-deck-backup-20260101-120000.tar.gz   (auch lattice-backup-*.tar.gz)
 #
-# Eine verschluesselte Sicherung (`*.ndbak`, aus der Oberflaeche oder von backup.sh mit Sicherungsschluessel) wird NICHT
-# sofort eingespielt: das Skript laesst sie von `python -m nodvard_deck.admin restore-backup` pruefen und VORMERKEN
-# (Passwort bzw. Wiederherstellungsschluessel wird abgefragt, es erscheint eine Zusammenfassung) und startet den Dienst
+# Eine verschlüsselte Sicherung (`*.ndbak`, aus der Oberfläche oder von backup.sh mit Sicherungsschlüssel) wird NICHT
+# sofort eingespielt: das Skript lässt sie von `python -m nodvard_deck.admin restore-backup` prüfen und VORMERKEN
+# (Passwort bzw. Wiederherstellungsschlüssel wird abgefragt, es erscheint eine Zusammenfassung) und startet den Dienst
 # auf Wunsch neu. Eingespielt wird
-# dann beim Start (`nodvard_deck.boot`), mit denselben Pruefungen und demselben Rueckweg wie in der Oberflaeche.
-# Hier braucht der Container die Datei als Pfad (die Standardeingabe gehoert dem Passwort-Dialog, und der
-# braucht ein Terminal). Das Skript legt dafuer eine KOPIE in einem eigenen Ordner mit zufaelligem Namen
-# an (Ordner 0700, Datei 0600) und loescht sie am Ende wieder. Damit der Container-Benutzer 1000 sie trotzdem
-# lesen kann: Als root gehoert die Kopie 1000 (der Ordner bleibt root-eigen und wird erst danach auf 0711
-# geoeffnet, so kann niemand dazwischen etwas austauschen); als 1000 passt es von selbst; als jeder andere
+# dann beim Start (`nodvard_deck.boot`), mit denselben Prüfungen und demselben Rückweg wie in der Oberfläche.
+# Hier braucht der Container die Datei als Pfad (die Standardeingabe gehört dem Passwort-Dialog, und der
+# braucht ein Terminal). Das Skript legt dafür eine KOPIE in einem eigenen Ordner mit zufälligem Namen
+# an (Ordner 0700, Datei 0600) und löscht sie am Ende wieder. Damit der Container-Benutzer 1000 sie trotzdem
+# lesen kann: Als root gehört die Kopie 1000 (der Ordner bleibt root-eigen und wird erst danach auf 0711
+# geöffnet, so kann niemand dazwischen etwas austauschen); als 1000 passt es von selbst; als jeder andere
 # bekommt 1000 per `setfacl` genau auf diesen Ordner und diese Datei Zugriff -- fehlt `setfacl`, bricht das
-# Skript ab und verlangt sudo. Fuer andere lokale Benutzer ist die Kopie nie lesbar. So scheitert es weder
+# Skript ab und verlangt sudo. Für andere lokale Benutzer ist die Kopie nie lesbar. So scheitert es weder
 # an einer root-eigenen Datei noch an einem Ordner, den 1000 nicht betreten darf:
 #   ./restore.sh /pfad/zu/nodvard-deck-sicherung-20261001-023000.ndbak
 set -euo pipefail
 trap '' HUP PIPE
 cd "$(dirname "$0")"
 
-# Meldungen: scheitern nie (Terminal nach einem SSH-Abbruch weg) und stehen zusaetzlich in restore.log, sobald es offen ist.
+# Meldungen: scheitern nie (Terminal nach einem SSH-Abbruch weg) und stehen zusätzlich in restore.log, sobald es offen ist.
 LOG_FILE=""
 log_line() {
   if [ -n "$LOG_FILE" ]; then printf '%s\n' "$*" >> "$LOG_FILE" 2>/dev/null || true; fi
@@ -88,7 +88,7 @@ warn() {
   log_line "$*"
 }
 
-# Nach `sudo` gehoeren Sperrdatei und Protokoll dem Aufrufer (SUDO_UID), nicht root.
+# Nach `sudo` gehören Sperrdatei und Protokoll dem Aufrufer (SUDO_UID), nicht root.
 give_to_sudo_user() {
   [ "$(id -u)" = 0 ] || return 0
   [ -n "${SUDO_UID:-}" ] && [ "$SUDO_UID" != 0 ] || return 0
@@ -104,8 +104,8 @@ acquire_lock() {
     warn "WARNUNG: 'flock' fehlt (Paket util-linux). Es laeuft ohne Sperre weiter: Achte selbst darauf, dass nicht gleichzeitig eine Sicherung oder ein Einspielen laeuft."
     return 0
   fi
-  # Nie einem Link folgen: als root wuerde sonst eine Datei an dessen Ziel angelegt und auf 0644 gesetzt (oder an einer
-  # Pipe gewartet). Angelegt wird exklusiv (noclobber), ein vorhandener Name wird nie ueberschrieben.
+  # Nie einem Link folgen: als root würde sonst eine Datei an dessen Ziel angelegt und auf 0644 gesetzt (oder an einer
+  # Pipe gewartet). Angelegt wird exklusiv (noclobber), ein vorhandener Name wird nie überschrieben.
   if [ -L "$LOCK_FILE" ] || { [ -e "$LOCK_FILE" ] && [ ! -f "$LOCK_FILE" ]; }; then
     warn "FEHLER: ${LOCK_FILE} ist keine gewoehnliche Datei (ein Link oder Aehnliches) und wird nicht benutzt. Bitte von Hand entfernen: rm ${LOCK_FILE} -- danach legt das Skript sie selbst neu an. Es wurde nichts veraendert."
     exit 1
@@ -114,7 +114,7 @@ acquire_lock() {
     chmod 0644 "$LOCK_FILE" 2>/dev/null || true
     give_to_sudo_user "$LOCK_FILE"
   fi
-  # Nur lesend oeffnen: flock geht auch so, und es klappt, wenn die Datei einem anderen Benutzer (z. B. root) gehoert.
+  # Nur lesend öffnen: flock geht auch so, und es klappt, wenn die Datei einem anderen Benutzer (z. B. root) gehört.
   if ! { exec 9< "$LOCK_FILE"; } 2>/dev/null; then
     warn "WARNUNG: Die Sperrdatei ${LOCK_FILE} laesst sich nicht oeffnen. Es laeuft ohne Sperre weiter: Achte selbst darauf, dass nicht gleichzeitig eine Sicherung oder ein Einspielen laeuft."
     return 0
@@ -130,9 +130,9 @@ acquire_lock() {
   esac
 }
 
-# Ob ein frueheres Einspielen mitten im Austausch stehen geblieben ist (Marke): Exit 0 = nein, 3 = ja (alt|neu),
-# 5 = Marke leer, unlesbar oder mit unbekanntem Inhalt. Es wird nichts veraendert.
-# shellcheck disable=SC2016 # laeuft im Container
+# Ob ein früheres Einspielen mitten im Austausch stehen geblieben ist (Marke): Exit 0 = nein, 3 = ja (alt|neu),
+# 5 = Marke leer, unlesbar oder mit unbekanntem Inhalt. Es wird nichts verändert.
+# shellcheck disable=SC2016 # läuft im Container
 CHECK_SCRIPT='M=/app/data/.restore-austausch
 if [ -e "$M" ] || [ -L "$M" ]; then
   p=$(cat "$M" 2>/dev/null) || exit 5
@@ -155,11 +155,22 @@ BACKUP_FILE="${1:?Nutzung: restore.sh <backup-datei.tar.gz>}"
 [ -r "$BACKUP_FILE" ] || { echo "Nicht lesbar fuer den aktuellen Benutzer: ${BACKUP_FILE} (gehoert sie root? Dann das Skript mit sudo starten.)" >&2; exit 1; }
 BACKUP_NAME="$(basename "$BACKUP_FILE")"
 
+# So hieß der Container vor Version 0.6. Läuft er noch oder fehlt das neue Image, kennen diesen Stand nur noch die
+# Skripte aus Version 0.11: Abbruch vor der Rückfrage und vor beiden Zweigen. Ein gestoppter Rest neben dem neuen Image
+# stört nicht.
+PRE_RENAME_CONTAINER="deploy-lattice-1"
+pre_rename_status="$(docker container inspect -f '{{.State.Status}}' "$PRE_RENAME_CONTAINER" 2>/dev/null || true)"
+if [ -n "$pre_rename_status" ] \
+  && { [ "$pre_rename_status" = running ] || ! docker image inspect nodvard-deck:latest >/dev/null 2>&1; }; then
+  warn "FEHLER: Hier liegt noch Nodvard Deck von vor Version 0.6 (Container $PRE_RENAME_CONTAINER). Erst mit Version 0.11 umstellen (git checkout v0.11.1, scripts/deploy_pi.sh), danach mit dieser Version einspielen. Es wurde nichts veraendert."
+  exit 1
+fi
+
 case "$BACKUP_NAME" in
   *.ndbak)
     acquire_lock
     # Steht ein tar.gz-Einspielen mitten im Austausch, ist der Dienst absichtlich gestoppt: ein Neustart (und damit auch das
-    # Vormerken) wuerde ihn auf halbem Stand starten. Dann wird nichts vorgemerkt.
+    # Vormerken) würde ihn auf halbem Stand starten. Dann wird nichts vorgemerkt.
     ndbak_check_rc=0
     docker compose -p deploy run -T --rm --no-deps --user 1000:1000 --entrypoint sh nodvard-deck -c "$CHECK_SCRIPT" 9>&- < /dev/null || ndbak_check_rc=$?
     case "$ndbak_check_rc" in
@@ -173,14 +184,14 @@ case "$BACKUP_NAME" in
       *) warn "FEHLER: Der Datenordner liess sich nicht pruefen (Docker meldete einen Fehler, siehe oben). Es wurde nichts vorgemerkt und nichts veraendert."; exit 1 ;;
     esac
     echo "Verschluesselte Sicherung: sie wird geprueft und zum Einspielen vorgemerkt (Passwort wird gleich abgefragt)."
-    # Kopie fuer den Container (siehe Kopfkommentar): eigener Ordner (mktemp: 0700), nach dem Lauf wieder weg.
+    # Kopie für den Container (siehe Kopfkommentar): eigener Ordner (mktemp: 0700), nach dem Lauf wieder weg.
     STAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nodvard-restore.XXXXXX")"
     trap 'rm -rf "$STAGE_DIR"' EXIT
     CALLER_UID="$(id -u)"
     cp "$BACKUP_FILE" "${STAGE_DIR}/${BACKUP_NAME}"
     chmod 0600 "${STAGE_DIR}/${BACKUP_NAME}"
     if [ "$CALLER_UID" = 0 ]; then
-      # Die Datei gehoert 1000, der Ordner bleibt root-eigen und wird erst jetzt (Datei steht schon) fuer 1000 begehbar.
+      # Die Datei gehört 1000, der Ordner bleibt root-eigen und wird erst jetzt (Datei steht schon) für 1000 begehbar.
       chown 1000:1000 "${STAGE_DIR}/${BACKUP_NAME}"
       chmod 0711 "$STAGE_DIR"
     elif [ "$CALLER_UID" != 1000 ]; then
@@ -204,7 +215,7 @@ case "$BACKUP_NAME" in
     ;;
 esac
 
-# Vor dem Leeren des Volumes: ist das ueberhaupt ein tar.gz? (Sonst waere das Volume danach leer UND nichts eingespielt.)
+# Vor dem Leeren des Volumes: ist das überhaupt ein tar.gz? (Sonst wäre das Volume danach leer UND nichts eingespielt.)
 if command -v tar >/dev/null 2>&1 && ! tar tzf "$BACKUP_FILE" >/dev/null 2>&1; then
   echo "FEHLER: ${BACKUP_FILE} ist kein lesbares tar.gz (beschaedigt oder abgeschnitten). Es wurde nichts veraendert." >&2
   exit 1
@@ -219,9 +230,9 @@ case "$confirm" in
 esac
 
 # Ab hier darf keine Meldung das Skript beenden (weggefallenes Terminal nach einem SSH-Abbruch: jedes Schreiben
-# scheitert dann). Alles steht zusaetzlich im Protokoll, wenn es sich anlegen laesst.
-# fd 3/4 merken sich die Ausgabe des Aufrufers: Endet das Skript durch ein Signal (Ctrl-C), waehrend die Ausgabe eines
-# Hilfscontainers umgeleitet ist, laeuft der EXIT-Trap sonst noch mit dieser Umleitung, und seine Meldungen gingen verloren.
+# scheitert dann). Alles steht zusätzlich im Protokoll, wenn es sich anlegen lässt.
+# fd 3/4 merken sich die Ausgabe des Aufrufers: Endet das Skript durch ein Signal (Ctrl-C), während die Ausgabe eines
+# Hilfscontainers umgeleitet ist, läuft der EXIT-Trap sonst noch mit dieser Umleitung, und seine Meldungen gingen verloren.
 exec 3>&1 4>&2
 LOG_DIR="${RESTORE_LOG_DIR:-.}"
 if mkdir -p -- "$LOG_DIR" 2>/dev/null && : >> "$LOG_DIR/restore.log" 2>/dev/null; then
@@ -232,7 +243,7 @@ if mkdir -p -- "$LOG_DIR" 2>/dev/null && : >> "$LOG_DIR/restore.log" 2>/dev/null
 fi
 
 # Die Ausgabe der Hilfscontainer landet erst in dieser Datei und wird danach gezeigt: Docker schreibt so nie selbst auf
-# ein Terminal, das es vielleicht nicht mehr gibt. Laesst sie sich nicht anlegen, geht die Ausgabe direkt durch.
+# ein Terminal, das es vielleicht nicht mehr gibt. Lässt sie sich nicht anlegen, geht die Ausgabe direkt durch.
 STEP_OUT="$(mktemp "${TMPDIR:-/tmp}/nodvard-restore-ausgabe.XXXXXX" 2>/dev/null)" || STEP_OUT=""
 SERVICE_TOUCHED=0
 on_exit() {
@@ -243,7 +254,7 @@ on_exit() {
 }
 trap on_exit EXIT
 
-# run_logged <befehl>...: Ausgabe ueber STEP_OUT, Exit-Code des Befehls. Die Standardeingabe reicht er durch.
+# run_logged <befehl>...: Ausgabe über STEP_OUT, Exit-Code des Befehls. Die Standardeingabe reicht er durch.
 run_logged() {
   local rc=0 line
   if [ -z "$STEP_OUT" ]; then
@@ -264,15 +275,15 @@ helper() {
   dk compose -p deploy run -T --rm --no-deps --user 1000:1000 --entrypoint sh nodvard-deck -c "$@"
 }
 
-# Vorab (der Dienst laeuft noch, es wird nichts veraendert): liegt die Marke eines unterbrochenen Austauschs? (CHECK_SCRIPT, oben)
-# Schritt 1: entpacken, die bisherigen Daten bleiben dabei unberuehrt. Arbeitsordner aus der Sicherung (`.restore-*`, auch
-# ohne `./` im Namen) werden nie mit eingespielt. Bleibt ein halb entpackter Ordner zurueck (Abbruch von aussen), raeumt
-# der naechste Durchlauf ihn weg; Sicherungen lassen ihn aus.
-# shellcheck disable=SC2016 # laeuft im Container, dort wird `$(...)` ausgewertet, nicht hier
+# Vorab (der Dienst läuft noch, es wird nichts verändert): liegt die Marke eines unterbrochenen Austauschs? (CHECK_SCRIPT, oben)
+# Schritt 1: entpacken, die bisherigen Daten bleiben dabei unberührt. Arbeitsordner aus der Sicherung (`.restore-*`, auch
+# ohne `./` im Namen) werden nie mit eingespielt. Bleibt ein halb entpackter Ordner zurück (Abbruch von außen), räumt
+# der nächste Durchlauf ihn weg; Sicherungen lassen ihn aus.
+# shellcheck disable=SC2016 # läuft im Container, dort wird `$(...)` ausgewertet, nicht hier
 UNPACK_SCRIPT='
 D=/app/data/.restore-neu
 cd /app/data || exit 1
-# Stand ein abgebrochener Austausch beim Einsetzen der neuen Daten (Marke `neu`), liegen die alten vollstaendig in
+# Stand ein abgebrochener Austausch beim Einsetzen der neuen Daten (Marke `neu`), liegen die alten vollständig in
 # .restore-alt, und oben liegt nur ein Teil der neuen: weg damit, sonst braucht das Entpacken noch mehr Platz.
 if [ -e .restore-austausch ] && [ "$(cat .restore-austausch)" = neu ]; then
   find . -mindepth 1 -maxdepth 1 ! -name .restore-neu ! -name ".restore-alt*" ! -name ".restore-austausch*" -exec rm -rf {} + || exit 1
@@ -294,14 +305,14 @@ fi
 '
 # Schritt 2: nur Umbenennungen innerhalb des Volumes; `find ... {} +` meldet einen Fehler von `mv` weiter.
 # Die Marke sagt, wo ein abgebrochener Lauf stand: `alt` = die alten Daten werden beiseitegeschoben (oben liegt nur Altes,
-# der Rest steckt schon in .restore-alt), `neu` = die alten liegen vollstaendig in .restore-alt, oben liegt nur, was schon
+# der Rest steckt schon in .restore-alt), `neu` = die alten liegen vollständig in .restore-alt, oben liegt nur, was schon
 # von den neuen Daten eingesetzt war (das kommt gleich frisch aus .restore-neu). Geschrieben wird sie per Umbenennen,
-# also immer vollstaendig, und vorher mit `sync` auf den Datentraeger gebracht: sonst kann sie nach einem Stromausfall
-# leer sein, und kein Lauf koennte mehr sicher weitermachen. Genauso werden die eingesetzten neuen Daten (ein `sync` ganz
-# ohne Angabe) auf den Datentraeger gebracht, BEVOR die Marke und der alte Stand geloescht werden: sonst kann ein Stromausfall
-# kurz nach "Fertig." eine leere Datenbank hinterlassen, und der alte Stand waere dann schon weg. Exit 4: es wurde nichts
-# veraendert (die alten Daten sind vollstaendig oben).
-# shellcheck disable=SC2016 # laeuft im Container
+# also immer vollständig, und vorher mit `sync` auf den Datenträger gebracht: sonst kann sie nach einem Stromausfall
+# leer sein, und kein Lauf könnte mehr sicher weitermachen. Genauso werden die eingesetzten neuen Daten (ein `sync` ganz
+# ohne Angabe) auf den Datenträger gebracht, BEVOR die Marke und der alte Stand gelöscht werden: sonst kann ein Stromausfall
+# kurz nach "Fertig." eine leere Datenbank hinterlassen, und der alte Stand wäre dann schon weg. Exit 4: es wurde nichts
+# verändert (die alten Daten sind vollständig oben).
+# shellcheck disable=SC2016 # läuft im Container
 SWAP_SCRIPT='
 cd /app/data || exit 4
 M=.restore-austausch
@@ -337,7 +348,7 @@ rm -f "$M"
 rm -rf .restore-alt || echo "Hinweis: Der bisherige Stand unter /app/data/.restore-alt liess sich nicht ganz loeschen. Er stoert nicht (Sicherungen lassen ihn aus) und wird beim naechsten Einspielen beiseitegelegt." >&2
 '
 
-# Erst pruefen, dann anhalten: Liegt die Marke, ist der Datenbestand schon halb ausgetauscht.
+# Erst prüfen, dann anhalten: Liegt die Marke, ist der Datenbestand schon halb ausgetauscht.
 acquire_lock
 check_rc=0
 run_logged helper "$CHECK_SCRIPT" < /dev/null || check_rc=$?
@@ -359,7 +370,7 @@ case "$check_rc" in
     ;;
 esac
 
-# 1 = der Datenbestand ist (moeglicherweise) halb ausgetauscht: der Dienst darf NICHT starten.
+# 1 = der Datenbestand ist (möglicherweise) halb ausgetauscht: der Dienst darf NICHT starten.
 KEEP_STOPPED="$RESUME"
 restart_services() {
   if [ "$KEEP_STOPPED" = 1 ]; then
@@ -370,26 +381,11 @@ restart_services() {
     if [ -n "$LOG_FILE" ]; then warn "Protokoll: ${LOG_FILE}"; fi
     return 0
   fi
-  if [ "$OLD_WAS_RUNNING" = 1 ]; then
-    say "Starte den alten Container $OLD_CONTAINER wieder ..."
-    run_logged dk start "$OLD_CONTAINER" || warn "WARNUNG: $OLD_CONTAINER liess sich nicht starten."
-  else
-    say "Starte den nodvard-deck-Dienst wieder ..."
-    run_logged dk compose -p deploy start nodvard-deck || warn "WARNUNG: Der nodvard-deck-Dienst liess sich nicht starten: docker compose -p deploy start nodvard-deck"
-  fi
+  say "Starte den nodvard-deck-Dienst wieder ..."
+  run_logged dk compose -p deploy start nodvard-deck || warn "WARNUNG: Der nodvard-deck-Dienst liess sich nicht starten: docker compose -p deploy start nodvard-deck"
 }
 
-# Lief vor dem Umschalten (oder nach einem Rollback) noch der alte Container `deploy-lattice-1`
-# (Dienst `lattice` vor der Umbenennung), hat er dasselbe Volume offen: ihn ebenfalls stoppen und
-# am Ende wieder starten, sonst wuerde er mitten im Betrieb gesichert bzw. geleert.
-OLD_CONTAINER="deploy-lattice-1"
-OLD_WAS_RUNNING=0
 SERVICE_TOUCHED=1
-if [ "$(dk container inspect -f '{{.State.Status}}' "$OLD_CONTAINER" 2>/dev/null || true)" = "running" ]; then
-  OLD_WAS_RUNNING=1
-  say "Stoppe den alten Container $OLD_CONTAINER (hat dasselbe Volume offen) ..."
-  run_logged dk stop -t 30 "$OLD_CONTAINER"
-fi
 
 say "Stoppe den nodvard-deck-Dienst ..."
 run_logged dk compose -p deploy stop nodvard-deck

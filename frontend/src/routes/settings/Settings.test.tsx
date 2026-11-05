@@ -114,6 +114,20 @@ describe("Einstellungen", () => {
     expect(labels.findIndex((t) => t.startsWith("Server & Zugänge"))).toBe(labels.findIndex((t) => t.startsWith("Benutzer")) + 1);
   });
 
+  it("am Handy zeigt ein Pfeil, dass die Leiste weitergeht, auch nach der Weiterleitung von /settings", () => {
+    render(
+      <MemoryRouter initialEntries={["/settings"]}>
+        <Routes><Route path="/settings/*" element={<SettingsLayout />} /></Routes>
+      </MemoryRouter>,
+    );
+    const list = screen.getByRole("navigation", { name: "Einstellungen" }).querySelector("ul")!;
+    Object.defineProperty(list, "scrollWidth", { configurable: true, value: 1200 });
+    Object.defineProperty(list, "clientWidth", { configurable: true, value: 360 });
+    fireEvent.scroll(list);
+    expect(screen.getByRole("button", { name: "Nach rechts blättern" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Nach links blättern" })).not.toBeInTheDocument();
+  });
+
   it("Mein Konto: Profil speichern und Passwort mit Prüfung ändern", async () => {
     const me = { id: "u1", username: "nico", display_name: "Nico", email: null, is_owner: false, locale: "de", permissions: ["*"], totp_enabled: false };
     const calls = mockApi({
@@ -1391,6 +1405,8 @@ describe("System: Zeit & Protokoll", () => {
     render(<SystemSettings />);
     expect(await screen.findByText("Zeit & Protokoll")).toBeInTheDocument();
     expect(screen.getByDisplayValue("90")).toBeInTheDocument();
+    expect(screen.queryByRole("listbox", { name: "Zeitzonen" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Zeitzone ändern" }));
     expect(within(screen.getByRole("listbox", { name: "Zeitzonen" })).getByRole("option", { selected: true })).toHaveTextContent(SAVED);
 
     fireEvent.change(screen.getByLabelText("Zeitzone suchen"), { target: { value: "new york" } });
@@ -1399,6 +1415,7 @@ describe("System: Zeit & Protokoll", () => {
     expect(options[0].textContent).toMatch(/^America\/New_York/);
     fireEvent.click(within(options[0]).getByRole("button"));
     expect(screen.getByText("nicht gespeichert")).toBeInTheDocument();
+    expect(screen.queryByRole("listbox", { name: "Zeitzonen" })).toBeNull();
 
     fireEvent.change(screen.getByLabelText("Protokoll aufbewahren (Tage)"), { target: { value: "365" } });
     fireEvent.click(screen.getByRole("button", { name: "Speichern" }));

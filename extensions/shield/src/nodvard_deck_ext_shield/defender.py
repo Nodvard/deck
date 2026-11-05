@@ -74,9 +74,8 @@ MAX_PARALLEL = 3
 # So lange wartet ein Scan (nicht der Wächter) auf die Sperre des Servers (`av.guard_command`): etwas länger, als ein
 # Wächter-Lauf höchstens dauert.
 SCAN_LOCK_WAIT_S = SCAN_TIMEOUTS["watch"] + 60
-# Der Wächter prüft Dateien, die seit dem Beginn seines letzten Laufs geändert wurden (plus 2 Minuten Puffer), mindestens
-# das Intervall plus 2 Minuten. Fiel ein Lauf aus, wächst das Fenster mit, höchstens bis hierher: Das deckt einen Tiefenscan
-# (bis 4 Stunden) ab, ohne dass nach einer langen Pause ein Lauf alles der letzten Tage prüfen muss.
+# Obergrenze für das Fenster des Wächters (`_watch_minutes`): Es wächst, wenn Läufe ausfallen, und deckt so einen
+# Tiefenscan (bis 4 Stunden) ab, ohne dass nach langer Pause ein Lauf die Dateien der letzten Tage prüfen muss.
 WATCH_MAX_WINDOW_MIN = 6 * 60
 # Setzt der Wächter so lange aus, dass sein Fenster die Grenze erreicht, gehen Dateien ungeprüft verloren: Dann gibt es
 # eine sichtbare Fehlerzeile (höchstens eine je `WATCH_MAX_WINDOW_MIN`), sonst bliebe unbemerkt, dass der Wächter nicht
@@ -308,9 +307,8 @@ class Defender:
         todo: list[tuple[Host, str]] = []
         async with self._ctx.db.session() as session:
             for host in hosts:
-                # Nie zwei clamscan gleichzeitig auf einem Server: Läuft die gleiche Art oder ein großer Scan schon,
-                # startet weder ein zweiter großer noch der Wächter. Ein laufender Wächter (kurz) hält einen großen
-                # Scan nicht auf.
+                # Nie zwei clamscan gleichzeitig auf einem Server: Bei gleicher Art oder laufendem großen Scan startet
+                # weder ein zweiter großer noch der Wächter. Ein kurzer Wächter-Lauf hält keinen großen Scan auf.
                 if self.is_running(host.id, kind) or self._big_scan_running(host.id):
                     if kind == "watch" and not self.is_running(host.id, kind):
                         _log.debug("shield_watch_skipped_big_scan_running host=%s", host.id)
@@ -342,9 +340,9 @@ class Defender:
 
     @staticmethod
     async def _drop_previous_capped_watch_row(session: Any, host_id: str, scan_id: str) -> None:
-        """Die Wächter-Zeile ersetzt die des vorigen Laufs, wenn auch die nur wegen der Obergrenze unvollständig war,
-        damit solche Zeilen die echten Scans nicht aus der Liste verdrängen; eine saubere Zeile, ein Fund oder ein
-        anderer Fehler dazwischen unterbrechen die Folge."""
+        """Ersetzt die Zeile des vorigen Wächter-Laufs, wenn auch sie nur wegen der Obergrenze unvollständig war, damit
+        solche Zeilen die echten Scans nicht verdrängen. Eine saubere Zeile, ein Fund oder ein anderer Fehler beendet
+        die Folge."""
         previous = (await session.execute(
             select(ScanRecord).where(ScanRecord.host_id == host_id, ScanRecord.kind == "watch", ScanRecord.id != scan_id)
             .order_by(ScanRecord.started_at.desc()).limit(1)
@@ -353,9 +351,10 @@ class Defender:
             await session.delete(previous)
 
     async def _watch_minutes(self, host_id: str, scan_id: str, interval_min: int) -> int:
-        """Fenster des Wächters in Minuten (`find -mmin`): ab Beginn des letzten wirklich gelaufenen Laufs plus 2, mindestens
-        Intervall plus 2, höchstens `WATCH_MAX_WINDOW_MIN`. Ein Fehlerlauf zählt (sonst wüchse das Fenster endlos), ein von
-        einem Neustart abgebrochener (`ABORTED_BY_RESTART`) und `WATCH_BLOCKED_MESSAGE` nicht."""
+        """Fenster des Wächters in Minuten (`find -mmin`): ab Beginn des letzten wirklich gelaufenen Laufs plus 2,
+        mindestens Intervall plus 2, höchstens `WATCH_MAX_WINDOW_MIN`. Ein Fehlerlauf zählt (sonst wüchse das Fenster
+        endlos), ein durch Neustart abgebrochener (`ABORTED_BY_RESTART`) oder blockierter (`WATCH_BLOCKED_MESSAGE`)
+        nicht."""
         base = interval_min + 2
         async with self._ctx.db.session() as session:
             last = (await session.execute(
@@ -396,7 +395,7 @@ class Defender:
     async def _collect_realtime(self, host: Host, settings: dict[str, Any]) -> tuple[av.ScanResult, str] | None:
         """Holt neue Funde aus dem Protokoll des Echtzeit-Wächters und prüft jeden noch einmal über clamd.
 
-        `None`, wenn der Wächter dort nicht in Echtzeit läuft: Dann prüft dieser Lauf wie bisher im Minuten-Takt."""
+        `None`, wenn der Wächter dort nicht in Echtzeit läuft: Dann prüft dieser Lauf im Minuten-Takt."""
         state = (await load_baseline(self._ctx, host.id, rt.STATE_KIND)) or {}
         if not state.get("enabled"):
             return None
@@ -450,10 +449,9 @@ class Defender:
         return parsed, "\n".join([summary, *chunk.lines[-50:]])
 
     async def _confirm_realtime(self, host: Host, paths: list[str]) -> dict[str, str] | None:
-        """Prüft die Pfade aus dem Protokoll noch einmal; nur was clamd jetzt wieder findet, gilt als Fund.
-
-        Ein Dateiname mit Zeilenumbruch kann im Protokoll einen Fund für eine fremde, saubere Datei vortäuschen; die
-        Gegenprüfung findet dort nichts. `None`, wenn clamd nicht prüfen konnte."""
+        """Prüft die Pfade aus dem Protokoll noch einmal, weil ein Dateiname mit Zeilenumbruch dort einen Fund für eine
+        fremde, saubere Datei vortäuschen kann; nur was clamd wieder findet, gilt als Fund (`None`, wenn clamd nicht
+        prüfen konnte)."""
         confirmed: dict[str, str] = {}
         for i in range(0, len(paths), rt.CONFIRM_BATCH):
             batch = paths[i:i + rt.CONFIRM_BATCH]
@@ -620,7 +618,7 @@ class Defender:
                     severity=Severity.CRITICAL,
                     # Absichtlich ohne `host_id`: Ein Fund ist nie Wartungslärm, ein Wartungsfenster (Tiefenscan
                     # sonntags 03:30) darf ihn nicht stummschalten (hostscope.py).
-                    payload={"path": f"{SOC_PATH}?tab=quarantine", "tags": ["biohazard"],
+                    payload={"notification_type": "shield.malware", "path": f"{SOC_PATH}?tab=quarantine", "tags": ["biohazard"],
                              "actions": [{"label": "Quarantäne öffnen", "path": f"{SOC_PATH}?tab=quarantine"}]},
                 ))
         await self._ctx.ws.broadcast("defender", {"scan": scan_id, "status": parsed.status})
@@ -1130,7 +1128,7 @@ class Defender:
             await self._ctx.notify.send(Notification(
                 title=f"Härtungs-Audit: {warnings} Warnung(en), {len(failed)} Fehler",
                 body="\n".join(lines), severity=Severity.WARNING,
-                payload={"path": f"{SOC_PATH}?tab=hardening", "tags": ["shield"], **host_scope(h.id for h, _ in results)},
+                payload={"notification_type": "shield.audit", "path": f"{SOC_PATH}?tab=hardening", "tags": ["shield"], **host_scope(h.id for h, _ in results)},
             ))
 
     # --- Status / Übersicht --------------------------------------------------------
@@ -1152,6 +1150,7 @@ class Defender:
                 "signature_ts": protection.parse_signature_date(st.signature_date),
                 "freshclam_active": st.freshclam_active, "lynis_installed": st.lynis_installed,
                 "lynis_version": st.lynis_version, "quarantine_files": st.quarantine_files, "os_id": st.os_id,
+                "rpm_ostree": st.rpm_ostree,
             }
         except Exception as exc:  # noqa: BLE001
             data = {"reachable": False, "error": _describe(exc, timeout_s=STATUS_TIMEOUT), "clamav_installed": False,
@@ -1205,15 +1204,13 @@ class Defender:
             counts = dict((await session.execute(
                 select(FindingRecord.status, func.count()).group_by(FindingRecord.status)
             )).all())
-            # Je Server dieselbe Quelle wie die Gesamtzahl oben (die Funde und ihr Zustand, nicht nur das Ergebnis des
-            # letzten Scans), sonst widersprächen sich Kopf und Zeile nach Quarantäne oder Löschen, und ein offener Fund
-            # des Wächters fehlte in der Zeile.
+            # Dieselbe Quelle wie die Gesamtzahl oben (Funde samt Zustand, nicht das Ergebnis des letzten Scans), sonst
+            # widersprächen sich Kopf und Zeile nach Quarantäne oder Löschen, und offene Funde des Wächters fehlten.
             open_by_host = dict((await session.execute(
                 select(FindingRecord.host_id, func.count()).where(FindingRecord.status == "detected").group_by(FindingRecord.host_id)
             )).all())
-            # Was aus den Funden des letzten befallenen Scans wurde. Ein späterer Lauf (etwa der Wächter) hängt einen
-            # Fund, den er wieder findet, an sich selbst (`scan_id`): Deshalb zählen die Funde aller Läufe des Servers
-            # ab dem Start dieses Scans, nicht nur die mit seiner Kennung.
+            # Was aus den Funden des letzten befallenen Scans wurde. Ein späterer Lauf (etwa der Wächter) hängt
+            # wiedergefundene Funde an sich selbst (`scan_id`); darum zählen alle Läufe des Servers ab dem Scanstart.
             infected_last = {s.host_id: s for s in last_scans.values() if s.status == "infected"}
             scan_findings: dict[str, dict[str, int]] = {}
             if infected_last:
@@ -1316,7 +1313,7 @@ class Defender:
         sev = {"critical": Severity.CRITICAL, "warning": Severity.WARNING}.get(level, Severity.INFO)
         result = await self._ctx.notify.send(Notification(
             title=title, body=body, severity=sev,
-            payload={"path": SOC_PATH, "tags": ["coffee"], "actions": briefing_buttons(waiting, crashes)},
+            payload={"notification_type": "shield.briefing", "path": SOC_PATH, "tags": ["coffee"], "actions": briefing_buttons(waiting, crashes)},
         ))
         return {"title": title, "body": body, "level": level, "push": push_state(result)}
 

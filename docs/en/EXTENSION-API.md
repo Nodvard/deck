@@ -164,7 +164,7 @@ notifications, audit entries, loggers and live channels.
   marked as deprecated in the OpenAPI schema, throughout 1.x). The core addresses `/api/v1/extensions/<old>/…` and the
   bundle resolve the old ID. Saved links, open tabs with an old bundle and the app keep working without changes.
   `request.url_for` always builds the new address. New code only uses the new ID; the API names the old ones in
-  `legacy_ids` and `legacy_ext_ids` ([API, section 7](../04-API.md#7-kompatibilität), in German).
+  `legacy_ids` and `legacy_ext_ids` ([API, section 7](API.md#7-compatibility)).
 - **Interface:** the web interface follows the rename by itself. `/ext/<old>/<page>` and `/settings/extensions/<old>`
   redirect to the new ID, replacing the history entry (query and anchor are kept). Dashboard widgets keep their
   position, size and visibility. Notifications, audit log and actions show the extension's name, also for entries under
@@ -177,8 +177,10 @@ notifications, audit entries, loggers and live channels.
 - **Live messages:** `ctx.ws.broadcast` also sends on `ext.<old>.<channel>`, so open pages with an old state keep
   receiving messages.
 - **`requires`:** if another extension still names the old ID, it keeps seeing the capabilities of the renamed one.
-- **Data folder:** `data/ext/<storage ID>`. If it is missing, the first existing folder of the new or an old ID is used.
-  If there is none, `data/ext/<storage ID>` is created. Nothing is moved.
+- **Data folder:** the first non-empty folder under `data/ext/`, in the order storage ID, new ID, old IDs. An empty
+  folder, for example one an earlier start created, does not hide a filled one. If all are empty, the first existing one
+  is used; if there is none, `data/ext/<storage ID>` is created. A folder that cannot be read counts as filled. Nothing
+  is moved.
 - **Backups:** extensions are also recognized under their old IDs. A backup with the old row does not produce a
   "does not exist here" warning when restored.
 - **Secrets:** they are found by their label. Labels and permission patterns such as `secrets.read:old-name-*` stay.
@@ -285,7 +287,7 @@ bundled module along with its settings, permissions and takeover. In `adopts.rou
 part of the address.
 
 The old addresses remain in all 1.x releases (marked deprecated) and go away with 2.0 at the earliest
-([API, section 7](../04-API.md#7-kompatibilität), in German).
+([API, section 7](API.md#7-compatibility)).
 
 ### Settings schema: `settings.schema.json` and the `x-*` additions
 
@@ -369,6 +371,48 @@ registrations first (and thereby build routers, navigation and the widget catalo
 go) before any background task runs and pushes events onto a bus that is still half
 built.
 
+### Receiving vault changes
+
+An extension registers by overriding `on_secret_changed(ctx, label)` in its
+`NodvardExtension` class. No separate registration call is needed. `label` is the
+secret's key name and `ctx.ext_id` identifies the receiving module. The plaintext
+is never included. Every loaded module with a matching granted `secrets.read:<label>`
+permission receives the call, including patterns such as `service-*`. The secret's
+owner does not have to be the receiving module.
+
+The core commits first, then waits for the hooks. Reading the secret again in the hook
+already returns the new value. This covers creation, replacement and deletion through
+the vault and module settings, including automatic removal of a secret bound to a
+changed address. Metadata changes alone do not trigger a call. Hooks of different
+modules run concurrently, with at most ten seconds per module for all affected labels.
+Errors and timeouts are logged; the saved value remains in place. The hook does not
+inherit a user's identity.
+
+Discard sessions, results and authentication failure pauses for the affected connection
+in the hook. An in-flight request must not leave a valid cache entry or a new shared
+session using the old value. The next connection and connection test read the secret
+again. Changes made through `ctx.secrets` do not trigger the hook, so their caller must
+invalidate its own cache.
+
+The bundled modules handle credentials as follows:
+
+| Modules | Behaviour when a secret changes | Evidence in `backend/tests/` |
+|---|---|---|
+| Pi-hole, Nginx Proxy Manager | Shared hook discards the session; connection tests log in afresh | `test_ext_pihole.py`, `test_ext_npm.py` |
+| qBittorrent, Synology DSM | Hook discards the session, result and authentication pause per connection | `test_ext_qbittorrent.py`, `test_ext_synology.py`, `test_ext_synology_devices.py` |
+| Home Assistant, Jellyfin, Plex, Uptime Kuma | Hook discards the result and authentication pause per connection | `test_ext_home_assistant.py`, `test_ext_jellyfin.py`, `test_ext_plex.py`, `test_ext_uptime_kuma.py` |
+| Nextcloud | Hook discards the server information result and pause; WebDAV reads the app password per connection | `test_ext_nextcloud.py`, `test_ext_nextcloud_serverinfo.py` |
+| Proxmox, Backups | Build connectors with the current token on every call, without a credential cache | `test_ext_proxmox.py`, `test_ext_backups.py` |
+| Docker | Git fetch and head requests read the token per job; registry login reads the password per login | `test_ext_docker_git.py`, `test_ext_docker_registries.py` |
+| Shield-Ollama | Generation, model lists and connection tests read the key on every call | `test_ext_shield_models.py` |
+| ntfy | Sending and connection tests read the token on every call; additional channels read their URL from the vault | `test_ext_ntfy.py`, `test_ext_ntfy_kanaele.py` |
+| Scripts | Read secret parameters on each execution, including after approval | `test_ext_scripts.py` |
+| Vaultwarden | Public status requests without passwords or tokens; no credential cache | `test_ext_vaultwarden.py` |
+
+A registry login is also stored on the Docker server. Changing its password in the
+vault does not automatically log in there; the next explicitly requested login uses
+the new password.
+
 ---
 
 ## 2. The `ExtensionContext`
@@ -434,7 +478,7 @@ attached to an already mounted router later at runtime (for example from a backg
 longer seen by the core: such routes must secure themselves.
 
 **Request size.** The core accepts at most 1 MiB on every route (`NODVARD_DECK_MAX_BODY_BYTES`) and answers anything
-larger with `413` ([API, section 1](../04-API.md#1-konventionen), in German). A route that deliberately accepts larger
+larger with `413` ([API, section 1](API.md#1-conventions)). A route that deliberately accepts larger
 uploads declares this with `nodvard_sdk.max_body_bytes(limit)`: `@router.post(...)` outermost, `@max_body_bytes(...)`
 directly above the function. `limit` is an upper bound in bytes, or a function without arguments that returns it on
 every request (for configurable limits). The core checks the `Content-Length` and counts along for requests without a
@@ -451,8 +495,7 @@ refreshes the token on a 401 (see section 5); `HelloPage.tsx` in hello-world sho
 A notification with `payload["host_id"]` (one server) or `payload["host_ids"]`
 (collective notification; silent only if **all** servers fall into a running window)
 is silenced by a maintenance window: it appears in the history but goes to no channel
-(see [Data model, section 9](../03-DATA-MODEL.md#9-einstellungen-und-branding), in
-German). Without a host reference a notification is never silent.
+(see [Data model, section 9](DATA-MODEL.md#9-settings-and-branding)). Without a host reference a notification is never silent.
 
 - `send()` returns `NotifyResult(notification_id, suppressed, delivered)`. `suppressed=True`
   means: history only, no push. `delivered=True` means: at least one channel delivered the
@@ -603,7 +646,7 @@ stay valid.
 
 **Sources with a server behind them:** Optionally, a source names `host_id: str | None`, the ID of the server it
 stands for (for example SFTP to a host; the SSH sources of the terminal extension set it). The core passes it on in
-`GET /files/sources` as `host_id` ([API, section 3](../04-API.md#dateien), in German), and the file manager shows the
+`GET /files/sources` as `host_id` ([API, section 3](API.md#files)), and the file manager shows the
 status light and the operating system of that server next to the source. If the attribute is missing or the value is
 not a non-empty string, `null` applies. Like `required_permission` the attribute is not a member of the protocol; the
 core reads it with `getattr(source, "host_id", None)`, older sources without it stay valid.
@@ -614,28 +657,28 @@ hold that permission themselves; `files.read`/`files.write` alone are not enough
 sources that work with someone else's credentials: the SSH sources of the terminal extension require
 `hosts.execute`, because access runs with the server's login (often root), not with the user's
 account. Downloads, searches, writes, copies and denied attempts on such sources are recorded in the
-audit log ([API, section 3](../04-API.md#dateien), in German). The attribute is deliberately not a
+audit log ([API, section 3](API.md#files)). The attribute is deliberately not a
 member of the protocol (otherwise `@runtime_checkable` would reject older sources without it); the
 core reads it with `getattr`. If the value is not a string or is empty, only the owner and `admin`
 can see and open the source.
 
 **Errors of a source:** A source does not have to translate its errors itself. The core answers `404` for a
 `FileNotFoundError` and `502` with `Zugriff auf die Quelle fehlgeschlagen: <Grund>` (access to the source failed:
-reason) for any other exception ([API, section 3](../04-API.md#dateien), in German). Network errors (timeout, connection
+reason) for any other exception ([API, section 3](API.md#files)). Network errors (timeout, connection
 refused or lost, unknown name, no route to the server) become a German sentence, from any other `OSError` only the
 exception's name gets through (its text can contain paths), otherwise its text. If the text of an exception of your
 own is already a finished sentence for the interface, the source sets `readable = True` on the class (like
 `WebDavError` of the Nextcloud source): a non-empty text then arrives unchanged, and the case counts as expected, like
 a network error (no traceback in the container log). Like `required_permission`, the attribute is not a member of the
 protocol; the core reads it with `getattr`. The same applies to exceptions from `TerminalTarget.open()`; there the
-reason appears in the terminal's error message ([API, section 4](../04-API.md#4-websocket), in German).
+reason appears in the terminal's error message ([API, section 4](API.md#4-websocket)).
 
 **Important places:** A `FilePlaceProvider` names shortcuts for a server in the file manager (project folders, logs,
 backups). `async places_for_host(host_id) -> list[FilePlace]`; `FilePlace` has `label` (short, German), `path`
 (absolute, starting with `/`), `icon` and an optional `hint`. A provider names only what its extension already knows
 (labels from a `docker ps` it has read anyway, a node's storage list, the host entry) and asks the server nothing just
 to guess places; without knowledge it returns an empty list. The core asks all providers at the same time
-(`GET /files/places`, [API, section 3](../04-API.md#dateien), in German), gives each six seconds, lets a failing provider
+(`GET /files/places`, [API, section 3](API.md#files)), gives each six seconds, lets a failing provider
 cost only its own places, removes duplicate paths and shows at most 30. Only users who may also open a file source for
 that server get places. New in this version, purely additive; older extensions are not affected.
 
@@ -663,8 +706,7 @@ decision = await ctx.actions.propose(ActionRequest(
 ))
 ```
 
-The core decides (the gate; see [Architecture, section 4](../01-ARCHITECTURE.md#4-das-aktions-gate),
-in German), writes the audit entry and, if applicable, executes the action via the matching
+The core decides (the gate; see [Architecture, section 4](ARCHITECTURE.md#4-the-action-gate)), writes the audit entry and, if applicable, executes the action via the matching
 `ActionExecutor`.
 `reason` is anchored in the data type as a mandatory field — so the obligation to give a
 reason cannot be bypassed by accident.
@@ -695,8 +737,7 @@ to Actions („Aktionen“).
 the extension's own actions, but with the full `result` and the full `payload`, i.e. including the
 command as well as output and error text from the server. The core does not check who calls the route
 here (its own API shows output and error text only with `hosts.execute`, the full `payload` only with
-`hosts.execute` or the matching `actions.approve:<risk>`; see [API, „Aktionen“](../04-API.md#aktionen--der-bestätigungs-workflow),
-in German). A route that shows them must therefore require `hosts.execute` itself, e.g. with
+`hosts.execute` or the matching `actions.approve:<risk>`; see [API, Actions](API.md#actions-the-confirmation-workflow)). A route that shows them must therefore require `hosts.execute` itself, e.g. with
 `ctx.api.include_router(router, permission="hosts.execute")` like the scripts extension. From the
 result, the core puts no text from the server into the audit log (`action.executed`), only
 success, exit code, duration and the length of output and error text (plus a fixed sentence when
@@ -708,7 +749,7 @@ may only read see notifications as well). In-process handlers (`ctx.events.subsc
 `action.executed` (with `ext_id` of the proposing extension) with the action's `payload` only if the action
 comes from their own extension or the extension has `hosts.execute`; otherwise the field is missing (older
 cores gave it to everyone). Over the WebSocket, users without `hosts.execute` get only a shortened `payload`
-([API, section 4](../04-API.md#4-websocket), in German).
+([API, section 4](API.md#4-websocket)).
 
 **Standing approval (without a click).** A proposal can rely on an approval that a person gave in advance:
 `ActionRequest.standing_approval = StandingApproval(granted_by_user_id=…, granted_at=…, label=…)`. This only works
@@ -738,8 +779,7 @@ schedule (`"schedule"`), by hand (`"manual"`: `POST /jobs/{id}/run` or `ctx.sche
 ## 4. Widgets — declarative, not code
 
 **The rule:** No widget without a declarative form. For the reason, see
-decision D-04 in [00-DECISIONS](../00-DECISIONS.md)
-(in German): extensions ship React; the Flutter app cannot run React. If the widget
+decision D-04 in [DECISIONS](DECISIONS.md): extensions ship React; the Flutter app cannot run React. If the widget
 format were code, the Android app would see nothing of any extension.
 
 ```python
@@ -983,7 +1023,7 @@ Shared singletons hang off `window.__nodvardDeck`; an import-map shim (`/nodvard
 `react`, `react/jsx-runtime` and `react-dom` to it.
 
 The bundle runs under the Content Security Policy of the app page (`script-src 'self'`, see
-[01-ARCHITECTURE.md](../01-ARCHITECTURE.md), in German): code only from the Nodvard Deck server, no `eval` and no
+[ARCHITECTURE.md](ARCHITECTURE.md)): code only from the Nodvard Deck server, no `eval` and no
 `new Function` (not in libraries either, such as template or schema compilers), no `on…=` attributes in inserted
 HTML, no loading from a CDN, no workers from `blob:` and no WebAssembly. The browser blocks anything that breaks
 these rules and names the reason in the console.
@@ -1160,6 +1200,8 @@ This is the proof that the interface is sufficient for them.
 
 ### Nodvard Shield
 
+Supported systems: On immutable rpm-ostree systems such as Bazzite and Fedora Atomic, Shield shows manual installation instructions for missing protection tools using `rpm-ostree install clamav clamav-update lynis fail2ban`, followed by a reboot; Deck does not install packages there.
+
 | Component | Implementation against the interface |
 |---|---|
 | Ollama chat | `ConnectorType("ollama")` + `AIProvider` capability |
@@ -1213,7 +1255,7 @@ as a bundled extension, for three reasons:
    instead, it goes unnoticed which gaps the interface has — until a third-party extension
    trips over them.
 2. **It keeps the core empty.** An empty, renameable core
-   ([Architecture, section 1](../01-ARCHITECTURE.md#1-die-drei-schichten), in German) is
+   ([Architecture, section 1](ARCHITECTURE.md#1-the-three-layers)) is
    only empty if it really contains nothing infrastructure-specific. A script runner in the
    core is a feature every installation carries whether it needs it or not — and one that
    could then not be switched off.
@@ -1239,8 +1281,7 @@ layer, scheduler, gate, vault, run log, audit. Those are exactly the core servic
 backward-compatible way. Public names (`__all__` and the public classes/functions of the modules)
 are not removed or renamed, parameters are not dropped, and new parameters get a default value.
 Renaming is only possible with a transition: the old name stays in parallel for several releases
-(documented as deprecated). Background: Nodvard Link, see [API, section 7](../04-API.md#7-kompatibilität)
-(in German). A test (`backend/tests/contract/test_sdk_contract.py`) compares against the checked-in
+(documented as deprecated). Background: Nodvard Link, see [API, section 7](API.md#7-compatibility). A test (`backend/tests/contract/test_sdk_contract.py`) compares against the checked-in
 list `sdk_public.json`; new names are brought up to date with `python scripts/update_api_contract.py`,
 exceptions only with a justification in `backend/tests/contract/breaking_exceptions.toml`. The major
 version will be raised to `1.0` once the bundled extensions are stable; the rules of the table

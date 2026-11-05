@@ -3,6 +3,7 @@
  * Netzwerkkarten, Dateisysteme, Prozesse. Fragt `GET /ext/system/hosts/{id}/live` alle 3 s ab, solange die Seite
  * sichtbar ist; der Verlauf der letzten 3 Minuten liegt nur im Browser (der gespeicherte steht auf der Server-Seite).
  */
+import { styleRef } from "../../../_shared/frontend/src/csp";
 import { useEffect, useRef, useState } from "react";
 
 import { formatBytes, formatUptime } from "./format";
@@ -72,12 +73,13 @@ function Spark({ values, max, color = BLUE }: { values: number[]; max?: number; 
   );
 }
 
-function Tile({ label, value, sub, spark }: { label: string; value: string; sub?: string; spark?: JSX.Element }): JSX.Element {
+function Tile({ label, value, sub, spark, children }: { label: string; value: string; sub?: string; spark?: JSX.Element; children?: React.ReactNode }): JSX.Element {
   return (
     <div className="panel p-3">
       <p className="text-xs opacity-50">{label}</p>
       <p className="text-xl font-semibold tabular-nums">{value}</p>
       {sub && <p className="truncate text-[11px] opacity-60">{sub}</p>}
+      {children}
       {spark}
     </div>
   );
@@ -86,7 +88,7 @@ function Tile({ label, value, sub, spark }: { label: string; value: string; sub?
 function Meter({ percent }: { percent: number }): JSX.Element {
   return (
     <div className="h-1.5 w-full overflow-hidden rounded bg-white/10">
-      <div className="h-full rounded" style={{ width: `${Math.min(100, Math.max(0, percent))}%`, background: barColor(percent) }} />
+      <div className="h-full rounded" ref={styleRef({ width: `${Math.min(100, Math.max(0, percent))}%`, background: barColor(percent) })} />
     </div>
   );
 }
@@ -194,6 +196,9 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
   const hottest = data.temperatures.length ? Math.max(...data.temperatures.map((t) => t.celsius)) : null;
   const procs = [...data.processes].sort((a, b) => (procSort === "cpu" ? b.cpu_percent - a.cpu_percent || b.mem_bytes - a.mem_bytes : b.mem_bytes - a.mem_bytes));
   const freqs = cpu.per_core.map((c) => c.freq_mhz).filter((f): f is number => f != null);
+  const frequencySummary = freqs.length
+    ? `Takt: Durchschnitt ${Math.round(freqs.reduce((sum, f) => sum + f, 0) / freqs.length)} MHz, min ${Math.round(Math.min(...freqs))}, max ${Math.round(Math.max(...freqs))}`
+    : "Takt nicht verfügbar";
 
   return (
     <div className="space-y-4" data-testid="live-view">
@@ -205,7 +210,9 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
       )}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <Tile label="CPU" value={pct(cpu.total?.percent)} sub={freqs.length ? `${Math.max(...freqs)} MHz · ${cpu.cores} Kerne` : `${cpu.cores} Kerne`} spark={<Spark values={history.cpu} max={100} />} />
+        <Tile label="CPU" value={pct(cpu.total?.percent)} sub={`${cpu.cores} Kerne`} spark={<Spark values={history.cpu} max={100} />}>
+          <p className="mt-1 text-sm tabular-nums">{frequencySummary}</p>
+        </Tile>
         <Tile label="Arbeitsspeicher" value={memory ? pct((100 * memory.used) / memory.total) : "–"} sub={memory ? `${formatBytes(memory.used)} von ${formatBytes(memory.total)}` : undefined} spark={<Spark values={history.mem} max={100} />} />
         <Tile label="Datenträger aktiv" value={pct(diskBusy)} sub={data.disks.map((d) => d.name).join(", ") || "keine"} spark={<Spark values={history.disk} max={100} />} />
         <Tile label="Netzwerk" value={rate(netIn + netOut)} sub={`↓ ${rate(netIn)} · ↑ ${rate(netOut)}`} spark={<Spark values={history.netIn} color={BLUE} />} />
@@ -228,7 +235,7 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
                   <span className="font-semibold tabular-nums">{pct(core.percent)}</span>
                 </div>
                 <Meter percent={core.percent ?? 0} />
-                {core.freq_mhz != null && <p className="mt-1 text-[10px] tabular-nums opacity-50">{core.freq_mhz} MHz</p>}
+                {core.freq_mhz != null && <p className="mt-1 text-sm tabular-nums">{core.freq_mhz} MHz</p>}
               </div>
             ))}
           </div>
@@ -238,14 +245,14 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
           {memory ? (
             <>
               <div className="mb-2 flex h-3 w-full overflow-hidden rounded bg-white/10" data-testid="mem-bar" aria-label="Aufteilung des Arbeitsspeichers">
-                <div style={{ width: `${(100 * memory.used) / memory.total}%`, background: BLUE }} title="belegt" />
-                <div style={{ width: `${(100 * (memory.cached ?? 0)) / memory.total}%`, background: "#199e70" }} title="Cache" />
-                <div style={{ width: `${(100 * (memory.buffers ?? 0)) / memory.total}%`, background: "#c98500" }} title="Puffer" />
+                <div ref={styleRef({ width: `${(100 * memory.used) / memory.total}%`, background: BLUE })} title="belegt" />
+                <div ref={styleRef({ width: `${(100 * (memory.cached ?? 0)) / memory.total}%`, background: "#199e70" })} title="Cache" />
+                <div ref={styleRef({ width: `${(100 * (memory.buffers ?? 0)) / memory.total}%`, background: "#c98500" })} title="Puffer" />
               </div>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3">
-                <div><dt className="opacity-50"><span className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: BLUE }} />belegt</dt><dd className="tabular-nums">{formatBytes(memory.used)}</dd></div>
-                <div><dt className="opacity-50"><span className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: "#199e70" }} />Cache</dt><dd className="tabular-nums">{formatBytes(memory.cached)}</dd></div>
-                <div><dt className="opacity-50"><span className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: "#c98500" }} />Puffer</dt><dd className="tabular-nums">{formatBytes(memory.buffers)}</dd></div>
+                <div><dt className="opacity-50"><span className="mr-1 inline-block h-2 w-2 rounded-sm" ref={styleRef({ background: BLUE })} />belegt</dt><dd className="tabular-nums">{formatBytes(memory.used)}</dd></div>
+                <div><dt className="opacity-50"><span className="mr-1 inline-block h-2 w-2 rounded-sm" ref={styleRef({ background: "#199e70" })} />Cache</dt><dd className="tabular-nums">{formatBytes(memory.cached)}</dd></div>
+                <div><dt className="opacity-50"><span className="mr-1 inline-block h-2 w-2 rounded-sm" ref={styleRef({ background: "#c98500" })} />Puffer</dt><dd className="tabular-nums">{formatBytes(memory.buffers)}</dd></div>
                 <div><dt className="opacity-50">verfügbar</dt><dd className="tabular-nums">{formatBytes(memory.available)}</dd></div>
                 <div><dt className="opacity-50">gemeinsam</dt><dd className="tabular-nums">{formatBytes(memory.shared)}</dd></div>
                 <div><dt className="opacity-50">gesamt</dt><dd className="tabular-nums">{formatBytes(memory.total)}</dd></div>

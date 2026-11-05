@@ -92,8 +92,8 @@ MAX_JOURNAL_BYTES = 64 * 1024
 MAX_ACTIONS = 64
 MAX_BLOCKED = 64
 MAX_SEEN = 1024
-"""Obergrenze der gemerkten IDs. Darueber fallen die aeltesten weg -- das oeffnet keinen Replay, der nicht auch mit
-einer frischen ID ginge (die Grenzen gelten fuer jede Anforderung)."""
+"""Obergrenze der gemerkten IDs. Darüber fallen die ältesten weg -- das öffnet keinen Replay, der nicht auch mit
+einer frischen ID ginge (die Grenzen gelten für jede Anforderung)."""
 HOLD_AFTER_CORRUPT_S = 24 * 3600
 
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -291,7 +291,7 @@ class State:
     seen: dict[str, int] = field(default_factory=dict)
     hold_until: int | None = None
     results: list[dict[str, Any]] = field(default_factory=list)
-    """Die letzten Ergebnisse (`policy.is_result`), hoechstens `policy.RESULTS_MAX`, eins je Anforderungs-ID."""
+    """Die letzten Ergebnisse (`policy.is_result`), höchstens `policy.RESULTS_MAX`, eins je Anforderungs-ID."""
 
     # --- Änderungen --------------------------------------------------------
 
@@ -435,9 +435,9 @@ class State:
 
 RESTART_POLICIES = ("", "no", "always", "unless-stopped", "on-failure")
 CONTAINER_NAME_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}", re.ASCII)
-"""Containername ohne den fuehrenden `/` aus dem Inspect."""
+"""Containername ohne den führenden `/` aus dem Inspect."""
 PREVIOUS_SUFFIX = "-previous"
-"""Endung, unter der der alte Container waehrend eines Vorgangs weiterlaeuft (`<name>-previous`)."""
+"""Endung, unter der der alte Container während eines Vorgangs weiterläuft (`<name>-previous`)."""
 
 JOURNAL_KEYS = ("format", "request_id", "action", "step", "started_at", "deadline", "old", "new", "undo", "code")
 OLD_KEYS = ("id", "name", "image_id", "version", "restart_policy", "tag_text", "repo_digest")

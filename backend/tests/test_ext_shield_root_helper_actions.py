@@ -297,12 +297,19 @@ def test_ban_behaves_like_the_old_command(tmp_path, ip, unban):
     ("package", "tools"),
     [
         ("clamav", {"apt-get": 'echo "apt-get $* $DEBIAN_FRONTEND"\n'}),
+        ("clamav", {"dnf": 'echo "dnf $*"\n'}),
+        ("clamav", {"apk": 'echo "apk $*"\n'}),
+        ("lynis", {"apt-get": 'echo "apt-get $* $DEBIAN_FRONTEND"\n'}),
         ("lynis", {"dnf": 'echo "dnf $*"\n'}),
+        ("lynis", {"apk": 'echo "apk $*"\n'}),
         ("lynis", {}),
         ("signatures", {"systemctl": 'echo "systemctl $*"\n', "freshclam": "echo freshclam; exit 3\n"}),
         ("unattended", {}),
     ],
-    ids=["clamav-apt", "lynis-dnf", "ohne-paketmanager", "signaturen", "unattended-ohne-apt"],
+    ids=[
+        "clamav-apt", "clamav-dnf", "clamav-apk", "lynis-apt", "lynis-dnf", "lynis-apk", "ohne-paketmanager",
+        "signaturen", "unattended-ohne-apt",
+    ],
 )
 def test_install_behaves_like_the_old_command(tmp_path, package, tools):
     """Nur Attrappen im PATH, damit nichts wirklich installiert oder unter /etc geschrieben wird."""
@@ -311,6 +318,29 @@ def test_install_behaves_like_the_old_command(tmp_path, package, tools):
     old = _run_old(av.INSTALL_COMMANDS[package], env_path=str(bin_dir))
     new = _run_new(_helper(tmp_path, path=str(bin_dir)), "install", package)
     assert new == old
+
+
+@pytest.mark.parametrize("manager", ["apt-get", "dnf", "apk"])
+def test_install_fail2ban_behaves_like_the_old_command(tmp_path, manager):
+    """`jail.local` liegt in beiden Fassungen unter `tmp_path` statt unter /etc."""
+    av = _av()
+    jail = tmp_path / "jail.local"
+    tools = {
+        manager: f'echo "{manager} $* $DEBIAN_FRONTEND"\n',
+        "systemctl": 'echo "systemctl $*"\n',
+        "fail2ban-client": 'echo "fail2ban-client $*"\n',
+    }
+    bin_dir = _stubs(tmp_path, tools)
+    etc_jail = "/etc/fail2ban/jail.local"
+    old = _run_old(av.INSTALL_COMMANDS["fail2ban"].replace(etc_jail, str(jail)), env_path=str(bin_dir))
+    old_jail = jail.read_text()
+    jail.unlink()
+    helper = _helper(tmp_path, path=str(bin_dir))
+    helper.write_text(helper.read_text().replace(etc_jail, str(jail)))
+    new = _run_new(helper, "install", "fail2ban")
+    assert new == old
+    assert f"{manager} " in new[1] and "fail2ban-client ping" in new[1]
+    assert jail.read_text() == old_jail == "[DEFAULT]\nbackend = systemd\n\n[sshd]\nenabled = true\n"
 
 
 @pytest.mark.parametrize(

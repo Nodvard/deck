@@ -1,7 +1,5 @@
-"""Liest die Antworten der DSM-Web-API defensiv: jedes Feld darf fehlen, dann ist der Wert `None`.
-
-Zurückgegeben wird `None`, wenn die Antwort nicht nach dem erwarteten Aufruf aussieht. Die Seriennummer, die DSM
-mitschickt, wird nie gelesen."""
+"""Liest die Antworten der DSM-Web-API defensiv: ein fehlendes Feld wird `None`, eine Antwort, die nicht zum Aufruf
+passt, ergibt `None` für das Ganze. Die Seriennummer, die DSM mitschickt, wird nie gelesen."""
 
 from __future__ import annotations
 

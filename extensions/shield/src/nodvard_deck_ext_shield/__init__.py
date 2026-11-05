@@ -72,9 +72,8 @@ from .watcher import (
 RETRY_BACKOFF_S = 300.0
 """Wartezeit, bis ein fehlgeschlagener Batch erneut versucht wird."""
 INCIDENT_MERGE_WINDOW_S = 24 * 3600.0
-"""Ein neuer Absturz desselben Containers zählt bis zu dieser Zeit nach dem ersten Auftreten am noch unbearbeiteten
-Vorfall mit, danach beginnt ein neuer Vorfall mit neuer Meldung: höchstens eine Meldung je Container und Tag,
-aber nie dauerhaft keine."""
+"""Bis zu dieser Zeit nach dem ersten Auftreten zählt ein neuer Absturz desselben Containers am unbearbeiteten Vorfall
+mit, danach beginnt ein neuer Vorfall mit Meldung: höchstens eine je Container und Tag, aber nie dauerhaft keine."""
 _WAITING_ACTION_STATUSES = frozenset({"proposed", "approved", "executing"})
 """Die Aktion eines Vorfalls ist noch nicht durch: Der Vorfall zählt weitere Abstürze mit (`merge_into_active`)."""
 
@@ -752,7 +751,7 @@ class Extension(NodvardExtension):
                     "(keine Einschätzung von Nodvard KI). Bitte im Dashboard und im Protokoll nachsehen:\n" + lines
                 ),
                 severity=Severity.WARNING,
-                payload={**host_scope(i.host_id for i in failed), **container_watch_links(None)},
+                payload={"notification_type": "shield.container_failed", **host_scope(i.host_id for i in failed), **container_watch_links(None)},
             )
         )
 
@@ -1016,7 +1015,7 @@ class Extension(NodvardExtension):
                 title=f"Lagebericht der Container-Wache ({len(batch)} Ereignis{'se' if len(batch) != 1 else ''})",
                 body=notify_body,
                 severity=Severity.WARNING if has_crash else Severity.INFO,
-                payload={**host_scope(i.host_id for i in batch), **container_watch_links(action_id if proposed else None)},
+                payload={"notification_type": "shield.container_report", **host_scope(i.host_id for i in batch), **container_watch_links(action_id if proposed else None)},
             )
         )
         # Erst jetzt ist der Batch gemeldet: die dauerhafte Warteschlange freigeben.

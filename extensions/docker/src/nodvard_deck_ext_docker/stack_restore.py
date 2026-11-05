@@ -571,7 +571,7 @@ class DockerStackRestoreExecutor:
         try:
             await self._ctx.notify.send(Notification(
                 title=f"Zurückspielen in „{stack.project}“ auf {name} abgebrochen", body=text, severity=Severity.WARNING,
-                payload={"path": f"/ext/docker/matrix?host={host.id}", "tags": ["warning"]},
+                payload={"notification_type": "docker.restore_failed", "path": f"/ext/docker/matrix?host={host.id}", "tags": ["warning"]},
             ))
         except Exception:  # die Meldung ist ein Zusatz, der Grund steht schon im Log
             log.exception("docker_restore_notify_failed project=%s", stack.project)

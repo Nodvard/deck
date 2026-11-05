@@ -31,6 +31,7 @@ function serve(state: Record<string, unknown>, over: Record<string, (init?: Requ
     if (over[key]) return over[key](init);
     if (key === "GET /git") return Response.json(state);
     if (key === "GET /git/applied") return Response.json(applied);
+    if (key === "GET /git/watch") return Response.json({ watch: null });
     if (key === "PUT /git") return Response.json({ source: { ...SOURCE, ...(JSON.parse(String(init?.body)) as object) } });
     if (key === "POST /git/fetch") return Response.json(PREVIEW);
     if (key === "DELETE /git") return Response.json({ source: null });
@@ -47,6 +48,77 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+const WATCH = { remote: "b".repeat(40), short: "bbbbbbb", ref_kind: "branch", checked_at: "2026-10-30T20:47:00+00:00", problem: null,
+  applied: "a".repeat(40), new: true };
+const APPLIED = { applied: { commit: "a".repeat(40), at: "2026-10-29T10:00:00+00:00", files: 2 }, previous: null };
+
+describe("Stand im Repository", () => {
+  it("zeigt einen neuen Stand in Git mit beiden Commits", async () => {
+    serve({ source: SOURCE, accesses: [], layout_problem: null }, { "GET /git/watch": () => Response.json({ watch: WATCH }) }, APPLIED);
+    render(<GitSourcePanel hostId="h1" project="shop" onDone={vi.fn()} />);
+    const line = await screen.findByTestId("git-watch");
+    expect(line.textContent).toContain("Neuer Stand in Git");
+    expect(line.textContent).toContain("Im Repository steht bbbbbbb, eingespielt ist aaaaaaa");
+  });
+
+  it("nennt eine gescheiterte Prüfung mit Grund statt „kein neuer Stand“", async () => {
+    const failed = { ...WATCH, new: false, problem: "Der Server antwortet nicht. Prüf die Adresse und ob Deck ihn erreichen kann." };
+    serve({ source: SOURCE, accesses: [], layout_problem: null }, { "GET /git/watch": () => Response.json({ watch: failed }) }, APPLIED);
+    render(<GitSourcePanel hostId="h1" project="shop" onDone={vi.fn()} />);
+    const line = await screen.findByTestId("git-watch");
+    expect(line.textContent).toContain("ist gescheitert: Der Server antwortet nicht.");
+    expect(line.textContent).not.toContain("Kein neuer Stand");
+  });
+
+  it("prüft auf Knopfdruck und zeigt das Ergebnis", async () => {
+    serve({ source: SOURCE, accesses: [], layout_problem: null }, {
+      "POST /git/check": () => Response.json({ watch: { ...WATCH, remote: "a".repeat(40), short: "aaaaaaa", new: false } }),
+    }, APPLIED);
+    render(<GitSourcePanel hostId="h1" project="shop" onDone={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Auf neuen Stand prüfen" }));
+    expect((await screen.findByTestId("git-watch")).textContent).toContain("Kein neuer Stand in Git");
+    expect(requests.filter((r) => r.method === "POST").map((r) => r.url)).toEqual([expect.stringMatching(/\/git\/check$/)]);
+  });
+
+  it("eine neue Quelle zeigt nicht den Stand der alten", async () => {
+    let watch: object | null = { ...WATCH, new: false, remote: "a".repeat(40), short: "aaaaaaa" };
+    serve({ source: SOURCE, accesses: [], layout_problem: null }, {
+      "GET /git/watch": () => Response.json({ watch }),
+      "PUT /git": (init) => { watch = null; return Response.json({ source: { ...SOURCE, ...(JSON.parse(String(init?.body)) as object) } }); },
+    }, APPLIED);
+    render(<GitSourcePanel hostId="h1" project="shop" onDone={vi.fn()} />);
+    expect((await screen.findByTestId("git-watch")).textContent).toContain("Kein neuer Stand in Git");
+    fireEvent.change(screen.getByLabelText("Branch oder Tag"), { target: { value: "andere" } });
+    fireEvent.click(screen.getByRole("button", { name: "Speichern und holen" }));
+    await screen.findByTestId("git-preview");
+    expect(screen.queryByTestId("git-watch")).toBeNull();
+  });
+
+  it("fragt nach dem Einspielen den Stand im Repository neu", async () => {
+    let watch: object = WATCH;
+    serve({ source: SOURCE, accesses: [], layout_problem: null }, {
+      "GET /git/watch": () => Response.json({ watch }),
+      "POST /git/apply": () => { watch = { ...WATCH, applied: "b".repeat(40), new: false }; return Response.json({ action_id: "a1", status: "proposed", risk: "high" }, { status: 202 }); },
+      "POST /actions/a1/approve": () => Response.json({ id: "a1", status: "succeeded", result: { success: true,
+        output: "Stand bbbbbbb eingespielt. Diese Dienste lesen vielleicht noch den alten Stand: web.", detail: { written: true, stale: ["web"] } } }),
+    }, APPLIED);
+    render(<GitSourcePanel hostId="h1" project="shop" onDone={vi.fn()} />);
+    expect((await screen.findByTestId("git-watch")).textContent).toContain("Neuer Stand in Git");
+    fireEvent.click(screen.getByRole("button", { name: "Holen und ansehen" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Einspielen" }));
+    await screen.findByTestId("git-stale");
+    await waitFor(() => expect(screen.getByTestId("git-watch").textContent).toContain("Kein neuer Stand in Git"));
+  });
+
+  it("ohne Antwort zur Prüfung fehlt nur diese Zeile", async () => {
+    serve({ source: SOURCE, accesses: [], layout_problem: null }, { "GET /git/watch": () => new Response("kaputt", { status: 500 }) }, APPLIED);
+    render(<GitSourcePanel hostId="h1" project="shop" onDone={vi.fn()} />);
+    await screen.findByTestId("git-applied");
+    expect(screen.queryByTestId("git-watch")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
 describe("Stack aus Git", () => {
   it("trägt eine Quelle ein und zeigt danach den geholten Stand", async () => {
     serve({ source: null, accesses: [{ name: "github", host: "github.com" }], layout_problem: null });
@@ -57,7 +129,7 @@ describe("Stack aus Git", () => {
     fireEvent.click(screen.getByRole("button", { name: "Eintragen und holen" }));
     const preview = await screen.findByTestId("git-preview");
     expect(requests.find((r) => r.method === "PUT")?.body).toEqual({ url: "https://github.com/team/stacks", ref: "main", path: "shop/compose.yaml", access: "github" });
-    expect(requests.map((r) => r.method)).toEqual(["GET", "GET", "PUT", "POST"]);
+    expect(requests.map((r) => r.method)).toEqual(["GET", "GET", "GET", "PUT", "GET", "POST"]);
     expect(preview.textContent).toContain("Stand aaaaaaa (Branch main) von Ada Lovelace");
     expect(preview.textContent).toContain("Neustart");
     expect(preview.textContent).toContain("Darauf solltest du achten:");
@@ -360,4 +432,11 @@ describe("Stack aus Git", () => {
     expect(await screen.findByRole("button", { name: /Erneut versuchen/ })).toBeInTheDocument();
     expect(screen.queryByLabelText("Adresse des Repositorys")).toBeNull();
   });
+});
+
+it("Dock erklärt seine Git-Quelle mit dem passenden Namen", async () => {
+  window.__nodvardDeck.getProductName = () => "Nodvard Dock";
+  serve({ source: null, accesses: [], layout_problem: null });
+  render(<GitSourcePanel hostId="h1" project="shop" onDone={vi.fn()} />);
+  expect(await screen.findByText(/Nodvard Dock holt das Repository selbst/)).toBeInTheDocument();
 });

@@ -111,6 +111,13 @@
         ]
       }
     },
+    "git_private_networks": {
+      "type": "boolean",
+      "title": "Git-Server im eigenen Netz erlauben",
+      "description": "Holt Stacks auch von Git-Servern mit einer Adresse im eigenen Netz, etwa Gitea oder Forgejo auf dem Heimserver: 192.168.x.x, 10.x.x.x, 172.16.x.x bis 172.31.x.x, Adressen aus Tailscale oder einem VPN (100.64.x.x bis 100.127.x.x), IPv6 mit fd… am Anfang oder ein Name wie git.lan, der auf so eine Adresse zeigt. Aus holt Deck nur von Servern im Internet, damit eine eingetragene Adresse nicht auf andere Geräte im Heimnetz zeigen kann. Deck selbst (127.0.0.1) und die internen Dienste von Cloud-Anbietern bleiben immer gesperrt. Läuft Deck über einen Proxy (HTTPS_PROXY), holt es aus Git nur von einer Adresse aus Zahlen: Einen Namen schlägt der Proxy selbst nach, und Deck kann nicht prüfen, wohin er dann verbindet. Für einen Git-Server mit Namen gehört er unter NO_PROXY, dann verbindet sich Deck direkt.",
+      "default": false,
+      "x-advanced": true
+    },
     "git_accesses": {
       "type": "array",
       "title": "Git-Zugänge",
@@ -149,6 +156,18 @@
           "username"
         ]
       }
+    },
+    "git_watch_enabled": {
+      "type": "boolean",
+      "default": false,
+      "title": "Stacks aus Git regelmäßig prüfen",
+      "description": "Fragt nach Zeitplan bei jedem Repository nach, ob es einen neuen Stand gibt, und schickt dann eine Nachricht. Gemeldet werden nur Stacks, in die schon etwas aus Git eingespielt wurde, und eine Warnung kommt, wenn die Prüfung dreimal hintereinander scheitert. Dateien werden dabei nicht heruntergeladen, am Server ändert sich nichts. Einspielen geht weiter nur per Klick mit Freigabe."
+    },
+    "git_watch_cron": {
+      "type": "string",
+      "default": "47 * * * *",
+      "title": "Zeitplan der Git-Prüfung",
+      "x-widget": "schedule"
     }
   },
   "x-secrets": [

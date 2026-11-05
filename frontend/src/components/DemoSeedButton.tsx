@@ -1,6 +1,6 @@
 /**
  * Knopf „Mit Beispieldaten ansehen“: legt Beispiel-Server, -Meldungen und ein Beispiel-Layout an,
- * damit man sieht, wie das Dashboard gefuellt aussieht. Erscheint nur mit dem Recht dafuer
+ * damit man sieht, wie das Dashboard gefüllt aussieht. Erscheint nur mit dem Recht dafür
  * (`hosts.write` und `settings.write`) -- sonst rendert die Komponente nichts.
  */
 import { Eye, Loader2 } from "lucide-react";

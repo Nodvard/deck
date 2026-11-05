@@ -5,6 +5,7 @@
  * durch Attrappen -- kein Backend, kein Login.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { installStyleNonce } from "../../../extensions/_shared/frontend/src/csp";
 import * as React from "react";
 import * as ReactDOMClient from "react-dom/client";
 import { createMemoryRouter, RouterProvider, useParams } from "react-router-dom";
@@ -39,6 +40,8 @@ import { applyTheme, isTheme } from "../lib/theme";
 import { useBrandingStore } from "../state/branding";
 import "../styles/index.css";
 import { applyOhneProxmox, HELPER_SCENARIOS, PREVIEW_DOWN, previewHealth, previewHelperReload, previewState, respond, RESTORE_ID, type HelperScenario } from "./fixtures";
+
+installStyleNonce();
 
 class SilentWebSocket extends EventTarget {
   readyState = 0;

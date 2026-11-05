@@ -11,10 +11,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from ... import edition
 from ...branding import load_branding
 from ...core import rate_limit, vault
 from ...core.cron import cron_trigger
 from ...core.schema_check import PATTERN_MAX_LENGTH as _PATTERN_MAX_LENGTH
+from ...edition import display_text
 from ...core.schema_check import bound as _bound
 from ...core.schema_check import number_text as _number_text
 from ...core.schema_check import pattern_matches as _pattern_matches
@@ -210,10 +212,23 @@ async def _record(session, ext_id: str, *, change: bool = False) -> tuple[str, E
     return await resolve_extension(session, ext_id, change=change, not_found="Unbekannte Erweiterung.")
 
 
+def _display_schema(value: Any, settings: Any) -> Any:
+    if isinstance(value, list):
+        return [_display_schema(item, settings) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: display_text(settings, item) if key in {"title", "description"} and isinstance(item, str)
+            else _display_schema(item, settings)
+            for key, item in value.items()
+        }
+    return value
+
+
 async def _settings_out(
-    session, ext_id: str, values: dict[str, Any], secrets_cleared: list[str] | None = None  # noqa: ANN001
+    session, ext_id: str, values: dict[str, Any], secrets_cleared: list[str] | None = None, *, settings=None  # noqa: ANN001
 ) -> ExtensionSettingsOut:
     schema = schema_for(ext_id)
+    schema = _display_schema(schema, settings)
     slots = []
     for spec in _secret_slots_spec(schema, values):
         exists = (await session.execute(select(Secret.id).where(Secret.label == spec["label"]))).first() is not None
@@ -225,9 +240,9 @@ async def _settings_out(
 
 
 @router.get("/{ext_id}/settings", response_model=ExtensionSettingsOut, response_model_by_alias=True)
-async def get_extension_settings(ext_id: str, session: SessionDep) -> ExtensionSettingsOut:
+async def get_extension_settings(ext_id: str, session: SessionDep, settings: SettingsDep) -> ExtensionSettingsOut:
     ext_id, record = await _record(session, ext_id)
-    return await _settings_out(session, ext_id, dict(record.settings or {}))
+    return await _settings_out(session, ext_id, dict(record.settings or {}), settings=settings)
 
 
 @router.put("/{ext_id}/settings", response_model=ExtensionSettingsOut, response_model_by_alias=True)
@@ -300,7 +315,7 @@ async def put_extension_settings(
         detail={"changed": changed, **({"secrets_cleared": cleared} if cleared else {})},
     )
     await extensions_service.notify_secret_changed(session, cleared)
-    return await _settings_out(session, ext_id, merged, cleared)
+    return await _settings_out(session, ext_id, merged, cleared, settings=settings)
 
 
 @router.put("/{ext_id}/secrets", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
@@ -442,7 +457,7 @@ async def test_extension(
     schema = schema_for(ext_id)
     secrets = await _known_secret_values(session, settings, ext_id, values)
     if payload.mode == "message":
-        branding = await load_branding(session)
+        branding = await load_branding(session, edition.of(settings))
         outcome = await extension_test.send_test_message(
             channel=channel, settings=values, schema=schema, secrets=secrets, product_name=branding.product_name
         )

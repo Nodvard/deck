@@ -735,7 +735,7 @@ class ImageUpdateService:
                 title=f"Image-Updates: {len(lines)} Container mit neuer Version",
                 body=f"{body}\nEs wurde nichts geändert.",
                 severity=Severity.INFO,
-                payload={"path": MATRIX_PATH, "tags": ["package"]},
+                payload={"notification_type": "docker.images_available", "path": MATRIX_PATH, "tags": ["package"]},
             ))
         known = {h.id for h in hosts}
         merged = {h: sorted(keys) for h, keys in previous.items() if h in known and h not in current}

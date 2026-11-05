@@ -1,0 +1,7 @@
+{
+  "backups.failed": "Backup fehlgeschlagen",
+  "backups.recovered": "Backup wieder erfolgreich",
+  "backups.old": "Backup zu alt",
+  "backups.current": "Backup wieder aktuell",
+  "backups.restore": "Wiederherstellung abgeschlossen"
+}

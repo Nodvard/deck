@@ -18,7 +18,12 @@ describe("copyText", () => {
 
   it("fällt ohne Zwischenablage (http, kein sicherer Kontext) auf das Kopieren über ein Textfeld zurück", async () => {
     vi.stubGlobal("navigator", {});
-    const exec = vi.fn(() => true);
+    const exec = vi.fn(() => {
+      const field = document.querySelector("textarea")!;
+      expect(field).not.toHaveAttribute("style");
+      expect(field).toHaveClass("clipboard-copy-field");
+      return true;
+    });
     (document as unknown as { execCommand: unknown }).execCommand = exec;
     expect(await copyText("sudo sh -c 'x'")).toBe(true);
     expect(exec).toHaveBeenCalledWith("copy");

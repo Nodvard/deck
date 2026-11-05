@@ -8,6 +8,7 @@ import {
   checkFixture, credentialFixture, FINGERPRINT, hostFixture, mockHostsApi, OLD_FINGERPRINT, reply, type Call,
 } from "../../test/hostsMock";
 import { useAuthStore } from "../../state/auth";
+import { DECK_EDITION, useEditionStore } from "../../state/edition";
 import { confirmDialog, promptDialog } from "../../state/dialogs";
 import { HostDetailSettings } from "./HostDetailSettings";
 
@@ -219,7 +220,7 @@ describe("Server-Detail: Einrichtungsbefehl-Kasten ohne doppelte Sätze", () => 
     fireEvent.click(await screen.findByRole("button", { name: "Einrichtungsbefehl zeigen" }));
     await screen.findByLabelText("Einrichtungsbefehl");
     const link = within(screen.getByTestId("setup-guide")).getByRole("link", { name: /Root-Rechte ohne Passwort und Gruppe docker/ });
-    expect(link).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#6-root-rechte-ohne-passwort-und-gruppe-docker");
+    expect(link).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#f-root-rechte-ohne-passwort-und-gruppe-docker");
   });
 
   it("die mitgebrachten Hilfsskripte stehen lesbar unter „Was macht der Befehl?“", async () => {
@@ -499,6 +500,22 @@ describe("Server-Detail: Verbindung prüfen", () => {
 
 describe("Server-Detail: gemerkte Schlüssel", () => {
   const KEY = { key_type: "sk-ssh-ed25519@openssh.com", fingerprint: FINGERPRINT, first_seen_at: "2026-09-12T09:30:00Z", accepted_by_user_id: "u1", accepted_by_label: "nico" };
+
+  it("Dock nennt sich beim Vergessen eines Schlüssels", async () => {
+    useEditionStore.setState({ edition: { ...DECK_EDITION, choose_modules: false } });
+    try {
+      mockHostsApi(routes({
+        "GET /hosts/h1/known-hosts": [KEY],
+        "DELETE /hosts/h1/known-hosts/sk-ssh-ed25519%40openssh.com": () => undefined,
+      }));
+      renderDetail();
+      fireEvent.click(await within(await findCard("Server-Schlüssel")).findByRole("button", { name: "Vergessen" }));
+      await waitFor(() => expect(confirmDialog).toHaveBeenCalledWith(expect.stringContaining("Nodvard Dock"), expect.anything()));
+      expect(await screen.findByText(/vorher verbindet sich Nodvard Dock/)).toBeInTheDocument();
+    } finally {
+      useEditionStore.setState({ edition: DECK_EDITION });
+    }
+  });
 
   it("zeigt Typ, Fingerabdruck, Datum und wer ihn bestätigt hat; leer: Hinweis", async () => {
     mockHostsApi(routes({ "GET /hosts/h1/known-hosts": [KEY, { ...KEY, key_type: "ssh-rsa", accepted_by_label: null }] }));
@@ -954,4 +971,39 @@ describe("Server-Detail: Gruppen", () => {
     fireEvent.click(within(groups).getByRole("checkbox", { name: "proxmox" }));
     await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/host-groups/g2/members/h1")).toBe(true));
   });
+});
+
+it("Dock zeigt am SSH-Zugang nur seine Funktionen", async () => {
+  useEditionStore.setState({ edition: { ...DECK_EDITION, id: "dock", product_name: "Nodvard Dock", choose_modules: false } });
+  try {
+    mockHostsApi(routes({ "GET /hosts/h1/requirements": [REQUIREMENTS[1]] }));
+    renderDetail();
+    await screen.findByRole("heading", { name: "SSH-Zugang" });
+    expect(screen.queryByText(/Überwachung|Skripte|Proxmox/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Schlüssel erzeugen/ }));
+    expect(screen.queryByText(/Proxmox-Knoten/)).toBeNull();
+    expect(screen.queryAllByText(/Nodvard Deck/)).toHaveLength(0);
+  } finally {
+    useEditionStore.setState({ edition: DECK_EDITION });
+  }
+});
+
+it("Dock bietet bei Hilfsskripten keine volle sudo-Regel an", async () => {
+  useEditionStore.setState({ edition: { ...DECK_EDITION, id: "dock", product_name: "Nodvard Dock", choose_modules: false } });
+  try {
+    mockHostsApi(routes({
+      "GET /hosts/h1/credentials": [credentialFixture()],
+      "GET /hosts/h1/requirements": [{ ...REQUIREMENTS[1], unix_group: null, needs_root: true, root_reason: "Container bedienen" }],
+      "GET /hosts/h1/credentials/c1/setup": (call: Call) => ({ ...setupFixture(call), full_sudo: false, helpers: [{
+        ext_id: "docker", module: "Docker", path: "/usr/local/lib/nodvard-deck/docker-root", version: 2,
+        sha256: "a".repeat(64), text: "#!/bin/sh\nHELPER_VERSION=2\n",
+      }] }),
+    }));
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Einrichtungsbefehl zeigen" }));
+    await screen.findByLabelText("Einrichtungsbefehl");
+    expect(screen.queryByRole("checkbox", { name: /Volle Rechte/ })).toBeNull();
+  } finally {
+    useEditionStore.setState({ edition: DECK_EDITION });
+  }
 });

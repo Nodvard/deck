@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import Settings
@@ -19,6 +19,7 @@ from ...models import User
 from ...services import audit as audit_service
 from ...services import job_retention as job_retention_service
 from ...services import notification_retention as notification_retention_service
+from ...services import notification_types
 from ...services import reachability as reachability_service
 from ...services import settings as settings_service
 from ...services import update_check as update_check_service
@@ -43,10 +44,12 @@ _MANAGED_KEYS: dict[str, type] = {
     "audit.retention_days": int,
     "jobs.run_retention_days": int,
     "notifications.retention_days": int,
+    notification_types.SETTING_KEY: dict,
     "hosts.reachability.enabled": bool,
     "hosts.reachability.interval_minutes": int,
     "system.update_check.enabled": bool,
     "system.update_check.channel": str,
+    "system.update_check.auto_security": bool,
     "ssh.confirm_new_host_keys": bool,
     "system.trusted_proxies": list,
 }
@@ -61,28 +64,37 @@ _DEFAULTS: dict[str, Any] = {
     "hosts.reachability.interval_minutes": reachability_service.DEFAULT_INTERVAL_MINUTES,
     "system.update_check.enabled": update_check_service.DEFAULT_ENABLED,
     "system.update_check.channel": update_check_service.DEFAULT_CHANNEL,
+    "system.update_check.auto_security": update_check_service.DEFAULT_AUTO_SECURITY,
     "ssh.confirm_new_host_keys": True,
     "system.trusted_proxies": [],
 }
-"""Feste Vorgaben; `system.timezone` und `audit.retention_days` kommen aus der Umgebung (`_default_for`)."""
+"""Feste Vorgaben; Zeitzone, Audit-Aufbewahrung und Push-Katalog kommen aus `_default_for`."""
 _AUDITED_KEYS = {
+    notification_types.SETTING_KEY,
     "autonomy.mode", "autonomy.max_risk", "security.deny_patterns", "maintenance.windows",
     "system.timezone", "audit.retention_days", "jobs.run_retention_days", "notifications.retention_days",
     "hosts.reachability.enabled", "hosts.reachability.interval_minutes", "system.update_check.enabled",
-    "system.update_check.channel", "ssh.confirm_new_host_keys", "system.trusted_proxies",
+    "system.update_check.channel", "system.update_check.auto_security", "ssh.confirm_new_host_keys",
+    "system.trusted_proxies",
 }
 """Diese Einstellungen landen mit altem und neuem Wert im Protokoll (`system.settings.changed`).
 Dazu gehören die vier, die das Freigabe-Gate steuern: wer die Autonomie lockert oder Sperrmuster
 und Wartungsfenster ändert, hinterlässt eine Spur."""
 _AUDIT_MAX_JSON_CHARS = 8000
 """Länger darf eine Liste im Protokoll nicht werden (JSON-Zeichen)."""
-_OWNER_CONFIRMED_KEYS = {"autonomy.mode", "autonomy.max_risk", "ssh.confirm_new_host_keys"}
-"""Diese Einstellungen entscheiden, was ohne Rückfrage auf den Servern läuft (Selbstständigkeit) und ob Deck einem neuen
-Server-Schlüssel ohne Bestätigung vertraut. Ändern darf sie nur der Inhaber, mit seinem Passwort und, wenn Zwei-Faktor an
-ist, dem Code aus der App. Eine gestohlene Sitzung allein reicht dafür nicht, die eines Admins auch mit Passwort nicht."""
+_OWNER_CONFIRMED_KEYS = {
+    "autonomy.mode", "autonomy.max_risk", "ssh.confirm_new_host_keys", "system.update_check.auto_security",
+}
+"""Was ohne Rückfrage läuft, ob Deck neuen Server-Schlüsseln vertraut und ob es Sicherheitsupdates selbst einspielt:
+nur der Inhaber, mit Passwort und, wenn Zwei-Faktor an ist, dem Code aus der App. Eine gestohlene Sitzung reicht dafür
+nicht, die eines Admins auch mit Passwort nicht."""
 OWNER_PASSWORD_REQUIRED = "Zur Bestätigung brauchst du dein Passwort."
 OWNER_PASSWORD_MISSING_CODE = "password_missing"
 """`code` der 403-Antwort ohne `current_password` (wie bei `PUT /users/{id}`): die Oberfläche zeigt daran das Passwortfeld."""
+_CONFIRM_ACTIONS = {
+    "ssh.confirm_new_host_keys": "server_schluessel_regel_aendern",
+    "system.update_check.auto_security": "sicherheitsupdates_selbst_einspielen",
+}
 _REACHABILITY_KEYS = {"hosts.reachability.enabled", "hosts.reachability.interval_minutes"}
 _UPDATE_CHECK_JOB_KEYS = {"system.update_check.enabled"}
 _VALID_AUTONOMY_MODES = {"propose", "full"}
@@ -125,7 +137,8 @@ def _validate_maintenance_windows(value: list) -> None:
 class SettingIn(BaseModel):
     value: Any
     current_password: str = Field(default="", max_length=1024)
-    """Nur für `autonomy.mode`, `autonomy.max_risk` und `ssh.confirm_new_host_keys`: das Passwort des Inhabers."""
+    """Nur für `autonomy.mode`, `autonomy.max_risk`, `ssh.confirm_new_host_keys` und
+    `system.update_check.auto_security`: das Passwort des Inhabers."""
     totp_code: str = Field(default="", max_length=64)
     """Dazu der Code aus der App, wenn der Inhaber Zwei-Faktor an hat (sonst 403 mit `code: "totp_missing"`)."""
 
@@ -155,6 +168,8 @@ async def _default_for(key: str, session: AsyncSession, settings: Settings) -> A
         return await timezone_service.get_timezone(session)
     if key == "audit.retention_days":
         return settings.audit_retention_days
+    if key == notification_types.SETTING_KEY:
+        return notification_types.defaults(notification_types.catalog(settings.extensions_dir))
     return _DEFAULTS[key]
 
 
@@ -227,6 +242,8 @@ def _validate(key: str, value: Any) -> None:
 
 async def _current(key: str, session: AsyncSession, settings: Settings) -> Any:
     stored = await settings_service.get_global(session, key)
+    if key == notification_types.SETTING_KEY:
+        return notification_types.with_defaults(stored, notification_types.catalog(settings.extensions_dir))
     return stored if stored is not None else await _default_for(key, session, settings)
 
 
@@ -241,8 +258,16 @@ async def list_settings(session: SessionDep, settings: SettingsDep) -> list[Sett
             value = trusted_proxies_service.env_entries(settings, warn=False)  # Umgebungsvariable übersteuert
         else:
             value = stored[key] if key in stored else await _default_for(key, session, settings)
+        if key == notification_types.SETTING_KEY:
+            value = notification_types.with_defaults(value, notification_types.catalog(settings.extensions_dir))
         out.append(SettingOut(key=key, value=value))
     return out
+
+
+@router.get("/notification-types")
+async def list_notification_types(settings: SettingsDep) -> list[notification_types.NotificationTypeOut]:
+    return [notification_types.NotificationTypeOut(id=key, label=label)
+            for key, label in notification_types.catalog(settings.extensions_dir).items()]
 
 
 _OWNER_ONLY: dict[str, tuple[str, str]] = {
@@ -258,6 +283,10 @@ _OWNER_ONLY: dict[str, tuple[str, str]] = {
     "ssh.confirm_new_host_keys": (
         "Nur der Inhaber darf die Regel für neue Server-Schlüssel ändern.",
         "Ob neue Server-Schlüssel erst bestätigt werden müssen, legt nur der Inhaber (Owner) fest.",
+    ),
+    "system.update_check.auto_security": (
+        "Nur der Inhaber darf festlegen, ob Sicherheitsupdates selbst eingespielt werden.",
+        "Ob Nodvard Deck Sicherheitsupdates selbst einspielt, legt nur der Inhaber (Owner) fest.",
     ),
 }
 """Einstellungen nur für den Inhaber, nicht für jeden Admin: Grund fürs Protokoll und Antwort (403). `autonomy` steht für
@@ -336,7 +365,8 @@ async def put_setting(
         "autonomy.mode", "autonomy.max_risk", "security.deny_patterns", "maintenance.windows",
         "system.timezone", "audit.retention_days", "jobs.run_retention_days", "notifications.retention_days",
         "hosts.reachability.enabled", "hosts.reachability.interval_minutes", "system.update_check.enabled",
-        "system.update_check.channel", "ssh.confirm_new_host_keys", "system.trusted_proxies",
+        "system.update_check.channel", "system.update_check.auto_security", "ssh.confirm_new_host_keys",
+        "system.trusted_proxies", "notifications.push_types",
     ],
     payload: SettingIn,
     request: Request,
@@ -347,6 +377,17 @@ async def put_setting(
     await _refuse_unless_owner(session, user, key)
     _validate(key, payload.value)
     value = payload.value
+    if key == notification_types.SETTING_KEY:
+        types = notification_types.catalog(settings.extensions_dir)
+        normalized = {}
+        for kind, preference in value.items():
+            if kind not in types:
+                raise HTTPException(status_code=422, detail=f"Unbekannte Meldungsart: {kind}.")
+            try:
+                normalized[kind] = notification_types.PushPreference.model_validate(preference).model_dump()
+            except ValidationError as exc:
+                raise HTTPException(status_code=422, detail=f"Ungültige Push-Einstellung für {kind}.") from exc
+        value = notification_types.with_defaults(normalized, types)
     if key == trusted_proxies_service.SETTING_KEY:
         try:
             value = trusted_proxies_service.normalize(value)
@@ -369,7 +410,7 @@ async def put_setting(
             ),
         )
     if key in _OWNER_CONFIRMED_KEYS:
-        action = "selbststaendigkeit_aendern" if key.startswith("autonomy.") else "server_schluessel_regel_aendern"
+        action = "selbststaendigkeit_aendern" if key.startswith("autonomy.") else _CONFIRM_ACTIONS[key]
         refused = await _confirm_owner(
             request, session, settings, user, payload.current_password, payload.totp_code, action
         )

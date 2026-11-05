@@ -106,13 +106,13 @@ def _pretty(normalized: str) -> str:
     return "-".join(normalized[i : i + GROUP_LEN] for i in range(0, len(normalized), GROUP_LEN))
 
 
-def banner(code: str) -> str:
+def banner(code: str, product: str = "Nodvard Deck") -> str:
     """Auffälliger Protokoll-Block für den Start (Code zusätzlich allein in einer Zeile); die Zeile
     `Einrichtungscode: ...` bleibt unverändert, weil Doku und `grep` sich darauf verlassen."""
     line = "=" * 64
     return (
         f"\n{line}\n"
-        "  Nodvard Deck – Ersteinrichtung\n"
+        f"  {product} – Ersteinrichtung\n"
         f"  Einrichtungscode: {code} – im Browser eingeben\n"
         "\n"
         f"      {code}\n"

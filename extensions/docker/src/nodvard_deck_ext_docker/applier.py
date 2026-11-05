@@ -858,7 +858,7 @@ class ImageApplier:
             await self._ctx.notify.send(Notification(
                 title=f"Image-Update „{t.container}“ auf {host_name}: {'fertig' if success else 'fehlgeschlagen'}",
                 body=body, severity=Severity.INFO if success else Severity.WARNING, correlation_id=run_id,
-                payload={"path": f"/ext/docker/matrix?host={host.id}", "tags": ["package"] if success else ["warning"]},
+                payload={"notification_type": "docker.image_result", "path": f"/ext/docker/matrix?host={host.id}", "tags": ["package"] if success else ["warning"]},
             ))
         except Exception:  # noqa: BLE001
             log.exception("image_update_notify_failed host=%s container=%s", host.id, t.container)

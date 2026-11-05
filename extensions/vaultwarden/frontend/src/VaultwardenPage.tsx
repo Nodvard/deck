@@ -143,8 +143,8 @@ export function VaultwardenPage(): JSX.Element {
       description="Dein Passwort-Manager. Die Bitwarden-Apps sprechen direkt mit Vaultwarden."
       actions={
         <>
-          {webVault && <a href={`${webVault}/`} target="_blank" rel="noreferrer" className={buttonClass("ghost")}>Web-Tresor öffnen</a>}
-          {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("ghost")}>Einstellungen</a>}
+          {webVault && <a href={`${webVault}/`} target="_blank" rel="noreferrer" className={buttonClass("secondary")}>Web-Tresor öffnen</a>}
+          {deck().hasPermission("extensions.manage") && <a href={SETTINGS_PATH} className={buttonClass("secondary")}>Einstellungen</a>}
           <Button onClick={load}>Aktualisieren</Button>
         </>
       }

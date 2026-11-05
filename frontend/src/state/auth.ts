@@ -6,6 +6,7 @@
 import { create } from "zustand";
 
 import { AUTH_FIELD_LABELS, validationText } from "../lib/validation";
+import { useConnectionWarningStore } from "./connectionWarning";
 
 export interface CurrentUser {
   id: string;
@@ -154,6 +155,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       return { ok: false, error };
     }
     const body = await parseJsonResponse<{ access_token: string; user: CurrentUser }>(res);
+    useConnectionWarningStore.getState().reset();
     set({ accessToken: body.access_token, user: body.user, status: "authenticated", mfaToken: null });
     return { ok: true };
   },
@@ -186,6 +188,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       return { ok: false, error };
     }
     const body = await parseJsonResponse<{ access_token: string; user: CurrentUser }>(res);
+    useConnectionWarningStore.getState().reset();
     set({ accessToken: body.access_token, user: body.user, status: "authenticated", mfaToken: null });
     return { ok: true };
   },

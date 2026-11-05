@@ -35,7 +35,6 @@ class Extension(NodvardExtension):
         self._service = QbittorrentService(ctx)
         service = self._service
 
-        # Die eingetragenen Adressen als Vorschläge für App-Kacheln.
         ctx.capabilities.provide(QbittorrentAppSuggestions(service))
 
         ctx.settings.declare(

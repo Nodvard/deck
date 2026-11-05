@@ -327,6 +327,21 @@ describe("TerminalPage", () => {
     expect(aside.parentElement).toHaveClass("flex-col", "lg:flex-row");
   });
 
+  it("Handy: Liste mit Gruppen wird ohne offenen Tab nicht fest abgeschnitten, der Hinweis passt zu jeder Breite", async () => {
+    const hosts = HOSTS.map((h) => ((h as { id: string }).id === "h-vm" ? { ...(h as object), category: "vm", parent_label: "pve1" } : h));
+    vi.stubGlobal("fetch", mockFetch([], undefined, hosts));
+    renderPage();
+    await screen.findByText("Raspberry Pi");
+    // Alle Gruppen und Kacheln sind im DOM, die Liste scrollt in sich statt mit fester Höhe zu kappen.
+    expect(screen.getByTestId("group-vm")).toHaveTextContent("Virtuelle Maschinen");
+    expect(screen.getByText("win-game")).toBeInTheDocument();
+    const list = screen.getByTestId("terminal-hostlist");
+    // jsdom wertet keine Media Queries aus, daher die Klassen.
+    expect(list).toHaveClass("max-h-[60dvh]", "overflow-auto", "sm:max-h-48", "lg:max-h-none");
+    expect(list).not.toHaveClass("max-h-48");
+    expect(screen.getByTestId("terminal-hint")).toHaveTextContent("Einen Server wählen – jede Sitzung öffnet sich als eigener Tab.");
+  });
+
   it("?host=<id> oeffnet direkt einen Tab", async () => {
     const sessions: unknown[] = [];
     vi.stubGlobal("fetch", mockFetch(sessions));

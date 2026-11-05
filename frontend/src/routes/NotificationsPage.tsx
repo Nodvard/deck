@@ -4,7 +4,7 @@
  * (services/notifications.py publiziert dort).
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Trash2 } from "lucide-react";
+import { Check, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -75,12 +75,22 @@ function NotificationItem({
   const long = n.body.length > 240 || n.body.split("\n").length > 4;
   const path = internalPath(n.payload?.path);
   return (
-    <li className={`rounded border p-3 text-sm ${n.read_at ? "border-white/5 opacity-70" : "border-white/15"}`} data-testid={`notification-${n.id}`}>
+    <li
+      className={`rounded border p-3 text-sm ${
+        n.read_at ? "border-white/5 opacity-70" : "border-white/15 border-l-[3px] border-l-[var(--color-accent)] bg-white/[0.03]"
+      }`}
+      data-testid={`notification-${n.id}`}
+      data-unread={n.read_at ? undefined : "true"}
+    >
       <div className="flex flex-wrap items-start gap-2">
         <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${SEVERITY_CLASS[n.severity] ?? "bg-white/10"}`}>
           {SEVERITY_LABEL[n.severity] ?? n.severity}
         </span>
-        <span className="min-w-0 flex-1 break-words font-medium">{n.title}</span>
+        {/* Grundbreite für den Titel: Sonst drückt die Zeitangabe ihn am Handy auf wenige Buchstaben je Zeile. */}
+        <span className="min-w-0 flex-[1_1_10rem] break-words font-medium">
+          {!n.read_at && <span className="sr-only">Ungelesen: </span>}
+          {n.title}
+        </span>
         <span className="text-xs opacity-50">
           {new Date(n.ts).toLocaleString("de-DE")}
           {n.source_ext_id ? ` · ${sourceLabel(n.source_ext_id)}` : ""}
@@ -91,8 +101,13 @@ function NotificationItem({
           </Link>
         )}
         {!n.read_at && canWrite && (
-          <button type="button" onClick={() => onRead(n.id)} className="rounded bg-white/10 px-2 py-0.5 text-xs hover:bg-white/20">
-            Gelesen
+          <button
+            type="button"
+            onClick={() => onRead(n.id)}
+            aria-label={`Meldung „${n.title.trim() || "ohne Titel"}“ als gelesen markieren`}
+            className="inline-flex items-center gap-1 rounded bg-white/10 px-2 py-0.5 text-xs hover:bg-white/20"
+          >
+            <Check size={12} aria-hidden /> Als gelesen markieren
           </button>
         )}
         {canWrite && (

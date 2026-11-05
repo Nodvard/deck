@@ -356,7 +356,7 @@ async def test_scheduled_run_reports_skipped_hosts_once(tmp_path, db_session, se
     assert notes[0].title == "Skript „Wartung“ überspringt Server"
     assert "ki-server (keine SSH-Zugangsdaten)" in notes[0].body
     assert "game-win (Windows-Server)" in notes[0].body
-    assert notes[0].payload == {"path": "/ext/scripts/scripts"}
+    assert notes[0].payload == {"notification_type": "scripts.skipped", "path": "/ext/scripts/scripts"}
 
     await run_script(ctx, ext._repo, "fleet-script", param_overrides={})
     await run_script(ctx, ext._repo, "fleet-script", param_overrides={})
@@ -687,6 +687,27 @@ async def test_executor_rebuilds_the_real_command_from_the_vault(tmp_path, db_se
     assert executed.success is True
     assert commands == ["curl -H 'Authorization: Bearer s3cr3t-value' https://example.invalid/b\n"]
     assert "s3cr3t-value" not in executed.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_each_script_execution_reads_the_current_secret(tmp_path, db_session, settings_bound, monkeypatch):
+    _runtime, ctx, ext = await _setup_scripts_extension(tmp_path, settings_bound)
+    from nodvard_deck_ext_scripts import _ScriptActionExecutor, run_script
+    from nodvard_sdk import ActionRequest, Actor, Risk
+
+    host, _meta = await _secret_script(ctx, ext, db_session, content="echo $api_key\n", secret_value="erstes-token")
+    commands = _capture_exec(monkeypatch, ctx)
+    result = await run_script(ctx, ext._repo, "secret-script", param_overrides={})
+    action = await db_session.get(Action, result["results"][0]["action_id"])
+    request = ActionRequest(
+        action_type="script.run", host_ref=host.id, payload=dict(action.payload), risk=Risk.HIGH,
+        proposed_by=Actor.extension("scripts"), reason="Test",
+    )
+    executor = _ScriptActionExecutor(ctx, ext._repo)
+    assert (await executor.execute(request)).success is True
+    await ctx.secrets.replace(label="scripts-secret-script-api_key", value="zweites-token")
+    assert (await executor.execute(request)).success is True
+    assert commands == ["echo erstes-token\n", "echo zweites-token\n"]
 
 
 @pytest.mark.asyncio
@@ -1158,7 +1179,7 @@ async def test_promotion_notice_does_not_contain_the_command(tmp_path, db_sessio
     assert notes  # (Handler frueherer Tests am globalen Bus koennen weitere Meldungen anlegen)
     for note in notes:
         assert "GEHEIM123" not in note.body and "GEHEIM123" not in str(note.payload)
-        assert note.payload == {"path": "/ext/scripts/scripts"}
+        assert note.payload == {"notification_type": "scripts.repair", "path": "/ext/scripts/scripts"}
 
 
 @pytest.mark.asyncio

@@ -48,7 +48,7 @@ class GuardUnavailable(Exception):
 
 
 def guard_as_root(watch_files: list[str] | None) -> str:
-    """Die Abfrage für Einbruchschutz und Datei-Wächter, als root, wenn das geht: über das Hilfsskript, sonst wie bisher."""
+    """Abfrage für Einbruchschutz und Datei-Wächter, als root, wenn das geht: über das Hilfsskript, sonst direkt."""
     return av.via_helper(
         ix.guard_args(watch_files), ix.guard_command(watch_files), version=av.HELPER_READ_VERSION, required=False
     )
@@ -359,7 +359,7 @@ class Guard:
         await self._ctx.notify.send(Notification(
             title=f"{name}: {title}" if len(events) == 1 else title, body=body,
             severity=Severity.CRITICAL if worst == "critical" else Severity.WARNING,
-            payload=payload,
+            payload={"notification_type": "shield.guard", **payload},
         ))
 
     # --- Übersicht und Bestätigen ---

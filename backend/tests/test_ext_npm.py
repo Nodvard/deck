@@ -358,7 +358,8 @@ async def test_npm_hosts_certificates_and_widget(client, db_session, test_settin
         ("Altes Zertifikat", "abgelaufen", "danger"),
         ("nas.home.example", "läuft bald ab", "warn"),
     ]
-    assert "abgelaufen (seit 3 Tagen abgelaufen)" in rows[0]["subtitle"]
+    assert "abgelaufen (seit 3 Tagen)" in rows[0]["subtitle"]
+    assert rows[0]["subtitle"].count("abgelaufen") == 1
 
     # Alles erneuert -> eine gruene Zeile statt einer leeren Kachel.
     for cert in fake.certs:

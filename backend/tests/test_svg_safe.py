@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 from types import SimpleNamespace
+from xml.etree import ElementTree
 from xml.parsers import expat
 
 import pytest
@@ -28,6 +31,71 @@ BOMB = (
 def test_plain_and_doctype_without_own_entities_are_accepted():
     check_svg(PLAIN)
     check_svg(ILLUSTRATOR)
+
+
+@pytest.mark.parametrize("content", [XXE, BOMB, b"kein XML"])
+def test_nonce_rendering_does_not_resolve_entities(content):
+    assert svg_safe.nonce_svg(content, "testnonce") is None
+
+
+@pytest.mark.parametrize(("rule", "inline"), [
+    ("#r {fill:red}", "fill:blue"),
+    ("#r {fill:red !important}", "fill:blue"),
+    ("#r {fill:red !important}", "fill:blue !important"),
+    ("@layer colors {#r {fill:red !important}}", "fill:blue !important"),
+])
+def test_nonce_rendering_preserves_inline_cascade(rule, inline):
+    content = (
+        f'<svg xmlns="{svg_safe.SVG_NS}"><style>{rule}</style>'
+        f'<rect id="r" class="shape" style="{inline}"/></svg>'
+    ).encode()
+    check_svg(content)
+    rendered, hashes = svg_safe.nonce_svg(content, "testnonce")
+    root = ElementTree.fromstring(rendered)
+    style, rect = root
+    assert style.tag == f"{{{svg_safe.SVG_NS}}}style"
+    assert style.attrib == {"nonce": "testnonce"}
+    assert style.text == rule
+    assert rect.tag == f"{{{svg_safe.SVG_NS}}}rect"
+    assert rect.attrib == {"id": "r", "class": "shape", "style": inline}
+    digest = base64.b64encode(hashlib.sha256(inline.encode()).digest()).decode()
+    assert hashes == [f"'sha256-{digest}'"]
+
+
+def test_nonce_rendering_hashes_decoded_attribute_values_once():
+    content = (
+        f'<svg xmlns="{svg_safe.SVG_NS}"><rect style="fill:blue; --text: &quot;Grün &amp; Blau&quot;"/>'
+        '<circle style="fill:blue; --text: &quot;Grün &amp; Blau&quot;"/></svg>'
+    ).encode()
+    rendered, hashes = svg_safe.nonce_svg(content, "testnonce")
+    value = 'fill:blue; --text: "Grün & Blau"'
+    assert all(element.get("style") == value for element in ElementTree.fromstring(rendered))
+    digest = base64.b64encode(hashlib.sha256(value.encode()).digest()).decode()
+    assert hashes == [f"'sha256-{digest}'"]
+
+
+@pytest.mark.parametrize("count", [74, 5000])
+@pytest.mark.parametrize("operation", [check_svg, lambda content: svg_safe.nonce_svg(content, "x" * 43)])
+def test_many_unique_styles_are_rejected(count, operation):
+    content = (
+        f'<svg xmlns="{svg_safe.SVG_NS}">'
+        + "".join(f'<rect style="fill:#{i:06x}"/>' for i in range(count))
+        + '</svg>'
+    ).encode()
+    with pytest.raises(UnsafeSvg, match="zu viele unterschiedliche Stile"):
+        operation(content)
+
+
+def test_many_repeated_styles_are_accepted():
+    content = (
+        f'<svg xmlns="{svg_safe.SVG_NS}">'
+        + '<rect style="fill:blue"/>' * 5000
+        + '</svg>'
+    ).encode()
+    check_svg(content)
+    rendered, hashes = svg_safe.nonce_svg(content, "x" * 43)
+    assert len(ElementTree.fromstring(rendered)) == 5000
+    assert len(hashes) == 1
 
 
 @pytest.mark.parametrize("content", [XXE, BOMB])

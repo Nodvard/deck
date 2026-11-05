@@ -585,8 +585,8 @@ function PiholePage() {
       title: "Pi-hole",
       description: "Werbe- und Tracker-Blocker f\xFCr das ganze Netz.",
       actions: /* @__PURE__ */ jsxs2(Fragment2, { children: [
-        adminHref && /* @__PURE__ */ jsx3("a", { href: `${adminHref}/admin/`, target: "_blank", rel: "noreferrer", className: buttonClass("ghost"), children: "Pi-hole \xF6ffnen" }),
-        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx3("a", { href: SETTINGS_PATH, className: buttonClass("ghost"), children: "Einstellungen" }),
+        adminHref && /* @__PURE__ */ jsx3("a", { href: `${adminHref}/admin/`, target: "_blank", rel: "noreferrer", className: buttonClass("secondary"), children: "Pi-hole \xF6ffnen" }),
+        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx3("a", { href: SETTINGS_PATH, className: buttonClass("secondary"), children: "Einstellungen" }),
         /* @__PURE__ */ jsx3(Button, { onClick: load, children: "Aktualisieren" })
       ] }),
       children: [

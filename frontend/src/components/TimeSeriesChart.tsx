@@ -1,13 +1,14 @@
 /**
- * Zeitreihen-Diagramm fuer den Metrik-Verlauf der Server-Seite, so genau ablesbar wie
+ * Zeitreihen-Diagramm für den Metrik-Verlauf der Server-Seite, so genau ablesbar wie
  * in Grafana, Task-Manager oder HWiNFO. Bewusst ohne Chart-Bibliothek:
  * reines SVG, ein paar hundert Punkte je Kurve, offline-tauglich.
  *
- * Lesbarkeit vor Deko: 2px-Linien mit leichter Flaeche darunter, ruhiges Raster, EINE
- * y-Achse je Diagramm (zwei Groessen = zwei Diagramme), Fadenkreuz mit Tooltip, das
- * ALLE Kurven am gewaehlten Zeitpunkt zeigt, und eine Legende mit aktuell/Min/Mittel/Max
- * wie bei HWiNFO. Luecken (Host nicht erreichbar) bleiben Luecken.
+ * Lesbarkeit vor Deko: 2px-Linien mit leichter Fläche darunter, ruhiges Raster, EINE
+ * y-Achse je Diagramm (zwei Größen = zwei Diagramme), Fadenkreuz mit Tooltip, das
+ * ALLE Kurven am gewählten Zeitpunkt zeigt, und eine Legende mit aktuell/Min/Mittel/Max
+ * wie bei HWiNFO. Lücken (Host nicht erreichbar) bleiben Lücken.
  */
+import { styleRef } from "../../../extensions/_shared/frontend/src/csp";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { minMax } from "../lib/minMax";
@@ -24,7 +25,7 @@ interface Props {
   timestamps: number[];
   series: ChartSeries[];
   format: (value: number) => string;
-  /** Feste Obergrenze (z. B. 100 fuer Prozent, Gesamt-RAM); sonst aus den Daten. */
+  /** Feste Obergrenze (z. B. 100 für Prozent, Gesamt-RAM); sonst aus den Daten. */
   yMax?: number;
   height?: number;
   rangeSeconds: number;
@@ -115,7 +116,7 @@ export function TimeSeriesChart({ title, timestamps, series, format, yMax, heigh
   );
 
   const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * top);
-  // Schmale Diagramme (Handy): drei statt fuenf Zeitmarken, sonst ueberlappen die Beschriftungen.
+  // Schmale Diagramme (Handy): drei statt fünf Zeitmarken, sonst überlappen die Beschriftungen.
   const xTicks = (width < (t1 - t0 > 2 * 86400 ? 720 : 480) ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1]).map((f) => t0 + f * (t1 - t0));
 
   function onMove(event: React.PointerEvent<SVGSVGElement>) {
@@ -171,13 +172,13 @@ export function TimeSeriesChart({ title, timestamps, series, format, yMax, heigh
         {hover !== null && hasData && (
           <div
             className="pointer-events-none absolute top-1 z-10 min-w-[150px] rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-3 py-2 text-xs shadow-xl"
-            style={{ left: hoverX > width / 2 ? hoverX - 170 : hoverX + 12 }}
+            ref={styleRef({ left: hoverX > width / 2 ? hoverX - 170 : hoverX + 12 })}
             role="tooltip"
           >
             <p className="mb-1 text-[10px] text-white/50">{new Date(timestamps[hover] * 1000).toLocaleString("de-DE")}</p>
             {series.map((s) => (
               <p key={s.key} className="flex items-center gap-2">
-                <span className="inline-block h-0.5 w-3 rounded" style={{ background: s.color }} />
+                <span className="inline-block h-0.5 w-3 rounded" ref={styleRef({ background: s.color })} />
                 <span className="font-semibold tabular-nums text-white">{isValue(s.values[hover]) ? format(s.values[hover]) : "–"}</span>
                 <span className="text-white/55">{s.label}</span>
               </p>
@@ -203,7 +204,7 @@ export function TimeSeriesChart({ title, timestamps, series, format, yMax, heigh
               return (
                 <tr key={s.key} className="text-white/80">
                   <td className="py-0.5">
-                    <span className="mr-1.5 inline-block h-0.5 w-3 rounded align-middle" style={{ background: s.color }} />
+                    <span className="mr-1.5 inline-block h-0.5 w-3 rounded align-middle" ref={styleRef({ background: s.color })} />
                     {s.label}
                   </td>
                   <td className="text-right tabular-nums">{f(st.current)}</td>

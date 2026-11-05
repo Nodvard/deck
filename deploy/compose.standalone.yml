@@ -2,11 +2,11 @@
 #   1. Diese Datei als compose.yml in einen leeren Ordner laden:
 #        curl -fsSL -o compose.yml https://raw.githubusercontent.com/nodvard/deck/main/deploy/compose.standalone.yml
 #   2. In diesem Ordner:  docker compose up -d
-#   3. Browser oeffnen: http://<Adresse-des-Rechners>:8080  und der Anleitung auf dem Bildschirm folgen.
+#   3. Browser öffnen: http://<Adresse-des-Rechners>:8080  und der Anleitung auf dem Bildschirm folgen.
 #      (Der Einrichtungscode steht im Protokoll: docker compose logs nodvard-deck)
 #
 # Aktualisieren: docker compose pull && docker compose up -d
-# (Unter anderem Dateinamen gespeichert? Dann ueberall -f <datei> ergaenzen.)
+# (Unter anderem Dateinamen gespeichert? Dann überall -f <datei> ergänzen.)
 # Anderer Port: Umgebungsvariable NODVARD_DECK_PORT setzen (z. B. in einer Datei .env neben dieser Datei).
 # Portainer: Stacks -> Add stack, entweder "Repository" (URL https://github.com/nodvard/deck, Compose path
 #   deploy/compose.standalone.yml) oder "Web editor" mit dem INHALT dieser Datei, nicht mit den Befehlen oben.
@@ -16,34 +16,34 @@ name: nodvard-deck
 
 services:
   nodvard-deck:
-    # Lieber nicht automatisch auf die naechste Reihe? Statt "latest" ghcr.io/nodvard/deck:X.Y eintragen (die ersten
+    # Lieber nicht automatisch auf die nächste Reihe? Statt "latest" ghcr.io/nodvard/deck:X.Y eintragen (die ersten
     # beiden Zahlen deiner Version): Dann kommen nur noch Fehler- und Sicherheitskorrekturen dieser Reihe. Eine genaue
-    # Version (X.Y.Z) bleibt, bis du sie hier aenderst; dann gibt es kein Update per Knopf.
+    # Version (X.Y.Z) bleibt, bis du sie hier änderst; dann gibt es kein Update per Knopf.
     image: ghcr.io/nodvard/deck:latest
     restart: unless-stopped
     ports:
       # Der alte Name LATTICE_PORT gilt nur noch übergangsweise (spätestens bis 1.0).
       - "${NODVARD_DECK_PORT:-${LATTICE_PORT:-8080}}:8080"
     volumes:
-      # Alle Daten (Datenbank, Schluessel, Dokumente). Ein benannter Datenspeicher braucht keine
+      # Alle Daten (Datenbank, Schlüssel, Dokumente). Ein benannter Datenspeicher braucht keine
       # Rechte-Einstellungen. Lieber einen Ordner? "./daten:/app/data" -- der Container setzt die
       # Besitzrechte an diesem Ordner beim Start selbst.
       - nodvard_deck_data:/app/data
-      # Optional: Ordner fuer die Sicherungen aus Einstellungen -> System -> Sicherung, AUSSERHALB
+      # Optional: Ordner für die Sicherungen aus Einstellungen -> System -> Sicherung, AUSSERHALB
       # des Datenspeichers (am besten ein anderes Laufwerk oder ein NAS). Zeile einkommentieren,
       # Ordner anlegen und dem Nutzer 1000 geben (`mkdir sicherungen && sudo chown 1000:1000 sicherungen`),
-      # dann in der Oberflaeche als Ordner `/backups` waehlen. Nur `/backups` (und darunter) ist
+      # dann in der Oberfläche als Ordner `/backups` wählen. Nur `/backups` (und darunter) ist
       # als Ziel erlaubt, neben dem Standard /app/data/backups.
       # - ./sicherungen:/backups
-      # NAS oder NFS: den eingehaengten Ordner eintragen, Rechte fuer 1000 und Reihenfolge beim Start siehe
-      # docs/11-ERST-EINRICHTUNG.md, Abschnitt "Sicherungen auf ein NAS oder NFS".
+      # NAS oder NFS: den eingehängten Ordner eintragen, Rechte für 1000 und Reihenfolge beim Start siehe
+      # docs/16-SICHERUNG.md, Abschnitt "Sicherungen auf ein NAS oder NFS".
       # - /pfad/zum/nas:/backups
-    # Eigener Namensserver nur fuer diesen Container. Noetig nur, wenn interne Namen des Heimnetzes
+    # Eigener Namensserver nur für diesen Container. Nötig nur, wenn interne Namen des Heimnetzes
     # (z. B. von einem Pi-hole) nicht gefunden werden. Zum Einschalten die Zeilen einkommentieren:
     # dns:
     #   - 192.168.1.10
     #   - 1.1.1.1
-    # Begrenzt die Docker-Logdatei (3 x 10 MB), damit sie nicht ungebremst waechst.
+    # Begrenzt die Docker-Logdatei (3 x 10 MB), damit sie nicht ungebremst wächst.
     logging:
       driver: json-file
       options:
@@ -53,8 +53,8 @@ services:
       test: ["CMD", "python", "-I", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health', timeout=2)"]
       interval: 30s
       timeout: 3s
-      # Vor dem Start laeuft die Migration samt Kopie der Datenbank (`nodvard_deck.boot`) -- bei einer grossen Datenbank auf einem Pi
-      # Minuten. Waehrend dieser Zeit zaehlen Fehlschlaege nicht. Die Notseite antwortet mit 503; der Check schlaegt dann an.
+      # Vor dem Start läuft die Migration samt Kopie der Datenbank (`nodvard_deck.boot`) -- bei einer großen Datenbank auf einem Pi
+      # Minuten. Während dieser Zeit zählen Fehlschläge nicht. Die Notseite antwortet mit 503; der Check schlägt dann an.
       start_period: 300s
       retries: 3
 

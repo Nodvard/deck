@@ -156,7 +156,10 @@ async def remind_one(session: AsyncSession, secret_id: str, *, now: datetime, zo
     metadata[METADATA_KEY] = {"for": _marker(secret.expires_at), "stage": stage.key}
     secret.secret_metadata = metadata
     await session.flush()
-    await notifications_service.deliver(session, title=title, body=body, severity=stage.severity, payload=payload)
+    await notifications_service.deliver(
+        session, title=title, body=body, severity=stage.severity,
+        payload={"notification_type": f"secret.{stage.key}", **payload},
+    )
     return stage.key
 
 

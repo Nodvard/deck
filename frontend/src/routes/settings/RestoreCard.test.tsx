@@ -12,6 +12,7 @@ import {
   type StagedRestore,
 } from "../../lib/restore";
 import { useAuthStore } from "../../state/auth";
+import { DECK_EDITION, useEditionStore } from "../../state/edition";
 import { RestoreCard } from "./RestoreCard";
 import { SystemSettings } from "./SystemSettings";
 
@@ -102,12 +103,26 @@ describe("Karte Wiederherstellen: Anleitung", () => {
     mockApi({ "GET /system/restore/status": () => status() });
     render(<RestoreCard />);
     const link = await screen.findByTestId("restore-guide");
-    expect(link).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#102-wiederherstellen-sicherung-einspielen");
+    expect(link).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#62-wiederherstellen-sicherung-einspielen");
     expect(link).toHaveAttribute("target", "_blank");
   });
 });
 
 describe("Karte Wiederherstellen: Ablauf", () => {
+  it("Dock nennt sich vor dem Neustart zur Wiederherstellung", async () => {
+    useEditionStore.setState({ edition: { ...DECK_EDITION, choose_modules: false } });
+    try {
+      mockApi({ "GET /system/restore/status": () => status({
+        staged: staged({ state: "ready", summary: { ...SUMMARY, extensions: [{ id: "docker", version: "1.2.0" }] } }),
+      }) });
+      render(<RestoreCard />);
+      expect(await screen.findByText(/Nodvard Dock startet dafür neu/)).toBeInTheDocument();
+      expect(screen.queryAllByText(/Nodvard Deck/)).toHaveLength(0);
+    } finally {
+      useEditionStore.setState({ edition: DECK_EDITION });
+    }
+  });
+
   it("Datei wählen, hochladen mit Fortschritt, prüfen, Zusammenfassung, einspielen, warten, zur Anmeldung", async () => {
     const calls = mockApi({
       "GET /system/restore/status": () => status(),

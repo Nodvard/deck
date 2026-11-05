@@ -52,6 +52,9 @@ NO_ROOT_HELPER = "@@noroot-helper"
 NO_ROOT_HELPER_UNREADABLE = "@@noroot-helper-unreadable"
 """Statt NO_ROOT_HELPER: Das Hilfsskript liegt da, der angemeldete Benutzer kann es aber nicht lesen, also weder seine
 Prüfsumme noch seine Version prüfen."""
+NO_ROOT_HELPER_MISSING = "@@noroot-helper-missing"
+"""Statt NO_ROOT_HELPER bei Unterbefehlen ohne alten Weg (`via_helper(helper_only=True)`): Auf dem Server liegt kein
+Hilfsskript."""
 NO_ROOT_MESSAGE = (
     "Keine root-Rechte: Das Dashboard ist auf diesem Server nicht als root angemeldet und "
     "darf sudo nicht ohne Passwort nutzen."
@@ -126,25 +129,39 @@ def helper_matches() -> str | None:
 
 
 def _no_root(required: bool, inner: str, matches: str) -> str:
-    """Letzter Zweig ohne root: als normaler Benutzer oder NO_ROOT; liegt ein Hilfsskript da, das nicht das mitgelieferte
-    ist, dazu `@@noroot-helper <Version aus seinem Text>` für `no_root_message`, bei einem unlesbaren
-    `@@noroot-helper-unreadable`."""
+    """Letzter Zweig ohne root: als normaler Benutzer oder `_no_root_exit`."""
     if not required:
         return f"sh -c {inner}"
+    return _no_root_exit(matches)
+
+
+def _no_root_exit(matches: str, *, missing: bool = False) -> str:
+    """NO_ROOT; liegt ein Hilfsskript da, das nicht das mitgelieferte ist, dazu `@@noroot-helper <Version aus seinem
+    Text>` für `no_root_message`, bei einem unlesbaren `@@noroot-helper-unreadable`, mit `missing` bei gar keinem
+    `@@noroot-helper-missing`."""
     helper = shlex.quote(HELPER)
+    absent = f"elif [ ! -e {helper} ]; then echo '{NO_ROOT_HELPER_MISSING}'; " if missing else ""
     return (
         f"echo '{NO_ROOT}'; if [ -e {helper} ] && ! {{ {matches}; }}; then if [ -r {helper} ]; then "
         f"echo \"{NO_ROOT_HELPER} $(sed -n 's/^HELPER_VERSION=//p' {helper} 2>/dev/null | head -n 1)\"; "
-        f"else echo '{NO_ROOT_HELPER_UNREADABLE}'; fi; fi; exit 126"
+        f"else echo '{NO_ROOT_HELPER_UNREADABLE}'; fi; {absent}fi; exit 126"
     )
 
 
-def via_helper(args: Sequence[str], command: str, *, version: int, required: bool = True) -> str:
+def via_helper(
+    args: Sequence[str], command: str | None, *, version: int, required: bool = True, helper_only: bool = False
+) -> str:
     """Wie `as_root(command, required=...)`, aber ohne root-Anmeldung zuerst über das Hilfsskript: Ist es genau das
     mitgelieferte (`helper_matches`) und kann das mindestens `version`, läuft `sudo -n <skript> <args>`, das dasselbe
     ausgibt wie `command`. Sonst geht es auf dem alten Weg weiter (`sudo -n sh -c`, dann je nach `required` NO_ROOT oder
-    als normaler Benutzer)."""
+    als normaler Benutzer). Mit `helper_only` gibt es keinen alten Weg, siehe `_helper_only`."""
     matches = helper_matches()
+    if helper_only:
+        if command is not None:
+            raise ValueError("Mit helper_only gibt es keinen alten Befehl.")
+        return _helper_only(args, version, matches)
+    if command is None:
+        raise ValueError("Ohne helper_only braucht es den alten Befehl.")
     if matches is None or HELPER_BUNDLED is None or HELPER_BUNDLED[0] < version:
         return as_root(command, required=required)
     helper = shlex.quote(HELPER)
@@ -162,10 +179,31 @@ def via_helper(args: Sequence[str], command: str, *, version: int, required: boo
     )
 
 
+HELPER_NOT_BUNDLED = ("In dieser Installation fehlt das mitgelieferte Hilfsskript von Nodvard Shield. Bitte Nodvard "
+                      "Deck neu einspielen (docker compose pull, dann docker compose up -d).")
+
+
+def _helper_only(args: Sequence[str], version: int, matches: str | None) -> str:
+    """Für Unterbefehle, die nur das Hilfsskript kann: als root läuft es direkt, sonst über `sudo -n`, und nur das
+    mitgelieferte. Passt es nicht oder fehlt es, kommt NO_ROOT mit dem Grund, nie `sudo -n sh -c`."""
+    if matches is None or HELPER_BUNDLED is None or HELPER_BUNDLED[0] < version:
+        raise ValueError(HELPER_NOT_BUNDLED)
+    helper = shlex.quote(HELPER)
+    call = " ".join(shlex.quote(a) for a in args)
+    return (
+        f"if [ \"$(id -u)\" -eq 0 ] && {matches}; then {helper} {call}; "
+        f"elif {matches} && [ \"$(sudo -n {helper} version 2>/dev/null)\" -ge {version} ] 2>/dev/null; then "
+        f"sudo -n {helper} {call}; "
+        f"else {_no_root_exit(matches, missing=True)}; fi"
+    )
+
+
 _NO_ROOT_HELPER_RE = re.compile(rf"^{NO_ROOT_HELPER}(?: (.*))?$", re.MULTILINE)
 
 
 HELPER_RERUN = "Bitte den Server neu einrichten (Einrichtungsbefehl mit „Root-Rechte ohne Passwort“)."
+HELPER_MISSING_MESSAGE = ("Auf dem Server fehlt das Hilfsskript von Nodvard Shield, ohne das geht diese Aktion nicht. "
+                          f"{HELPER_RERUN}")
 
 
 def no_root_message(output: str | None) -> str:
@@ -173,6 +211,8 @@ def no_root_message(output: str | None) -> str:
     lässt, sagt sie das und verlangt „neu einrichten“. Sonst `NO_ROOT_MESSAGE`. Höchstens 200 Zeichen: Anzeigen mit
     einer Zeile schneiden sonst den Teil mit „neu einrichten“ ab."""
     text = output or ""
+    if HELPER_BUNDLED is not None and NO_ROOT_HELPER_MISSING in text.splitlines():
+        return HELPER_MISSING_MESSAGE
     if HELPER_BUNDLED is not None and NO_ROOT_HELPER_UNREADABLE in text.splitlines():
         what = "lässt sich nicht lesen"
     else:
@@ -926,6 +966,13 @@ def parse_scan_output(
     return ScanResult(status="error", files_scanned=files, errors=errors, error=f"Scan fehlgeschlagen: {detail}")
 
 
+RPM_OSTREE_CHECK = "command -v rpm-ostree >/dev/null 2>&1 || [ -f /run/ostree-booted ]"
+RPM_OSTREE_HINT = "unveränderliches System (rpm-ostree): Installation von Hand, dann Neustart"
+RPM_OSTREE_INSTALL = "rpm-ostree install clamav clamav-update lynis fail2ban"
+RPM_OSTREE_MESSAGE = f"{RPM_OSTREE_HINT}. Auf dem Server ausführen: {RPM_OSTREE_INSTALL}. Danach neu starten."
+RPM_OSTREE_GUARD = f"if {RPM_OSTREE_CHECK}; then echo {shlex.quote(RPM_OSTREE_MESSAGE)}; exit 2; fi; "
+
+
 STATUS_COMMAND = (
     # Die Abfrage läuft ohne root. Debian und Raspberry Pi OS legen Lynis nach /usr/sbin, das ein normaler Benutzer
     # nicht im Suchpfad hat: Ohne diese Zeile gälte Lynis nach der Installation weiter als "nicht installiert".
@@ -938,7 +985,8 @@ STATUS_COMMAND = (
     # laufenden Audits weg).
     "echo @@lynis; (lynis --version 2>/dev/null || echo none); "
     f"echo @@quarantine; (ls -1 {QUARANTINE_DIR} 2>/dev/null | wc -l); "
-    "echo @@os; (. /etc/os-release 2>/dev/null && echo \"$ID\"); echo @@end"
+    "echo @@os; (. /etc/os-release 2>/dev/null && echo \"$ID\"); "
+    f"echo @@rpm_ostree; if {RPM_OSTREE_CHECK}; then echo yes; else echo no; fi; echo @@end"
 )
 
 
@@ -953,6 +1001,7 @@ class ProtectionStatus:
     lynis_version: str | None = None
     quarantine_files: int = 0
     os_id: str | None = None
+    rpm_ostree: bool = False
 
 
 def parse_status(output: str) -> ProtectionStatus:
@@ -984,6 +1033,7 @@ def parse_status(output: str) -> ProtectionStatus:
         lynis_version=lynis if lynis and lynis != "none" else None,
         quarantine_files=qcount,
         os_id=sections.get("os", "").strip() or None,
+        rpm_ostree=sections.get("rpm_ostree", "").strip() == "yes",
     )
 
 
@@ -1176,6 +1226,7 @@ HELPER_MESSAGES = {
     "quarantine_check_busy": QUARANTINE_CHECK_BUSY,
     "quarantine_kept": QUARANTINE_KEPT,
     "only_apt": "Nur für Debian/Ubuntu (apt)",
+    "rpm_ostree": RPM_OSTREE_MESSAGE,
     "realtime_no_package": REALTIME_NO_PACKAGE,
     "realtime_no_systemd": REALTIME_NO_SYSTEMD,
     "realtime_not_started": REALTIME_NOT_STARTED,
@@ -1291,21 +1342,21 @@ def parse_lynis(output: str) -> LynisResult:
 
 
 INSTALL_COMMANDS = {
-    "clamav": (
+    "clamav": RPM_OSTREE_GUARD + (
         "if command -v apt-get >/dev/null; then DEBIAN_FRONTEND=noninteractive apt-get update -q && "
         "DEBIAN_FRONTEND=noninteractive apt-get install -y -q clamav clamav-freshclam; "
         "elif command -v dnf >/dev/null; then dnf install -y clamav clamav-update; "
         "elif command -v apk >/dev/null; then apk add clamav clamav-libunrar; "
         "else echo 'Kein bekannter Paketmanager'; exit 2; fi"
     ),
-    "lynis": (
+    "lynis": RPM_OSTREE_GUARD + (
         "if command -v apt-get >/dev/null; then DEBIAN_FRONTEND=noninteractive apt-get update -q && "
         "DEBIAN_FRONTEND=noninteractive apt-get install -y -q lynis; "
         "elif command -v dnf >/dev/null; then dnf install -y lynis; "
         "elif command -v apk >/dev/null; then apk add lynis; "
         "else echo 'Kein bekannter Paketmanager'; exit 2; fi"
     ),
-    "fail2ban": (
+    "fail2ban": RPM_OSTREE_GUARD + (
         "if command -v apt-get >/dev/null; then DEBIAN_FRONTEND=noninteractive apt-get update -q && "
         "DEBIAN_FRONTEND=noninteractive apt-get install -y -q fail2ban; "
         "elif command -v dnf >/dev/null; then dnf install -y fail2ban; "

@@ -437,7 +437,8 @@ function Problem({ title, state, message, onRetry, testId }) {
 }
 function CertBadge({ cert }) {
   if (!cert) return /* @__PURE__ */ jsx3(Badge, { children: "ohne Zertifikat" });
-  return /* @__PURE__ */ jsx3(Badge, { tone: CERT_TONE[cert.status], children: cert.status === "ok" ? `g\xFCltig bis ${date(cert.expires_at)}` : `${cert.status_label} \xB7 ${cert.days_text}` });
+  const text = cert.status === "ok" ? `g\xFCltig bis ${date(cert.expires_at)}` : cert.status === "expired" && cert.days_text.includes(cert.status_label) ? cert.days_text : `${cert.status_label} \xB7 ${cert.days_text}`;
+  return /* @__PURE__ */ jsx3(Badge, { tone: CERT_TONE[cert.status], children: text });
 }
 function hostUrl(host) {
   const domain = host.domains[0];
@@ -508,16 +509,12 @@ function NpmSection({ data, canAct, busy, onToggle, onRetry, checks, checking, o
           " \xB7 ",
           c.provider_label,
           " \xB7 ",
-          c.status === "expired" ? "abgelaufen am" : "l\xE4uft ab am",
+          c.status === "expired" ? "Ablaufdatum:" : "l\xE4uft ab am",
           " ",
           date(c.expires_at)
         ] })
       ] }),
-      /* @__PURE__ */ jsxs2(Badge, { tone: CERT_TONE[c.status], children: [
-        c.status_label,
-        " \xB7 ",
-        c.days_text
-      ] })
+      /* @__PURE__ */ jsx3(CertBadge, { cert: c })
     ] }, c.id)) }) }) : data.certificates.length > 0 && /* @__PURE__ */ jsx3("p", { className: "text-sm text-emerald-300", children: "Alle Zertifikate sind noch mindestens 14 Tage g\xFCltig." }),
     /* @__PURE__ */ jsx3(
       Card,
@@ -635,7 +632,7 @@ function NpmPage() {
       title: "Nginx Proxy Manager",
       description: "Proxy-Hosts, Zertifikate und wohin die Adressen f\xFChren.",
       actions: /* @__PURE__ */ jsxs2(Fragment2, { children: [
-        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx3("a", { href: SETTINGS_PATH, className: buttonClass("ghost"), children: "Einstellungen" }),
+        deck().hasPermission("extensions.manage") && /* @__PURE__ */ jsx3("a", { href: SETTINGS_PATH, className: buttonClass("secondary"), children: "Einstellungen" }),
         /* @__PURE__ */ jsx3(Button, { onClick: loadAll, children: "Aktualisieren" })
       ] }),
       children: [

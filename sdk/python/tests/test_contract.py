@@ -9,6 +9,16 @@ from pydantic import ValidationError
 import nodvard_sdk as sdk
 
 
+@pytest.mark.asyncio
+async def test_secret_changed_hook_is_optional_and_accepts_context_and_label():
+    import inspect
+
+    hook = sdk.NodvardExtension.on_secret_changed
+    assert inspect.iscoroutinefunction(hook)
+    assert list(inspect.signature(hook).parameters) == ["self", "ctx", "label"]
+    assert await sdk.NodvardExtension().on_secret_changed(object(), "dienst-token:server") is None
+
+
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")  # die alten Klassennamen stehen als Aliase in __all__ (und warnen)
 def test_sdk_exports_are_complete():
     missing = [name for name in sdk.__all__ if not hasattr(sdk, name)]

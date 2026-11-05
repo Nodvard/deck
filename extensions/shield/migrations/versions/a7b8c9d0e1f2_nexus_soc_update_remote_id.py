@@ -1,4 +1,4 @@
-"""nexus-soc: Update-Laeufe merken sich ihren entkoppelten Lauf auf dem Server
+"""nexus-soc: Update-Läufe merken sich ihren entkoppelten Lauf auf dem Server
 
 Befund 37: Updates laufen auf dem Server entkoppelt vom SSH-Kanal weiter
 (`detached.py`). `remote_id` ist der Name des Laufs dort (Dateien unter

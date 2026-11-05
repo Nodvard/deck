@@ -29,7 +29,7 @@ class ConnectionRefused(Exception):
 
 
 def _valid_base_url(base_url: str) -> bool:
-    """`https://rechner[:port]` -- ohne Zugangsdaten, Pfad, Anfrage, Fragment oder Leer-/Steuerzeichen."""
+    """`https://rechner[:port]`, ohne Zugangsdaten, Pfad, Anfrage, Fragment oder Leer-/Steuerzeichen."""
     # Strenger als eine von Hand eingetragene Adresse, weil sie von einer anderen Erweiterung kommt.
     text = str(base_url or "")
     if not text or len(text) > 300 or any(unicodedata.category(ch).startswith(("C", "Z")) for ch in text):

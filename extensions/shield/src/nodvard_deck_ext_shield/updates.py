@@ -435,10 +435,9 @@ def upgrade_command(manager: str, mode: str, security_packages: list[str] | None
 def upgrade_args(manager: str, mode: str, security_packages: list[str] | None = None, *,
                  dist_upgrade: bool = False) -> list[str] | None:
     """Derselbe Lauf wie `upgrade_command` als Angaben für `shield-root upgrade-start <lauf-id> ...` (ab Version 4):
-    Paketmanager, Art, `dist` oder `plain` und bei apt und "security" die Paketnamen. ValueError wie dort.
-
-    `None`, wenn ein Name nur dank `$` vor einem Zeilenumbruch durch den Filter kommt: Das Skript lehnte ihn ab, also
-    bleibt es dann beim alten Weg."""
+    Paketmanager, Art, `dist` oder `plain` und bei apt und "security" die Paketnamen. ValueError wie dort. `None`, wenn
+    ein Name nur dank `$` vor einem Zeilenumbruch den Filter passiert: Das Skript lehnte ihn ab, der Lauf geht dann
+    ohne Hilfsskript."""
     upgrade_command(manager, mode, security_packages, dist_upgrade=dist_upgrade)
     names = [n for n in (security_packages or []) if _PKG_NAME_RE.match(n)] if (manager, mode) == ("apt", "security") else []
     if not all(_PKG_NAME_RE.fullmatch(n) for n in names):

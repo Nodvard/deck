@@ -576,6 +576,7 @@ class DockerServiceCatalog:
         from .operate import docker_hosts
 
         stats: dict[str, dict[str, Any]] = {}
+        started_at: dict[str, str] = {}
         restarts: dict[str, int] = {}
         environments: dict[str, dict[str, Any]] = {}
         for host, _ in await docker_hosts(self._ctx):
@@ -585,11 +586,15 @@ class DockerServiceCatalog:
                 continue
             if result.exit_code != 0:
                 continue
+            names: list[str] = []
             for line in result.stdout.splitlines():
                 parsed = parse_stats_line(line)
                 if parsed is not None:
                     name, values = parsed
                     stats[f"{host.id}:{name}"] = values
+                    if CONTAINER_NAME_RE.match(name):
+                        names.append(name)
+            started_at.update(await self._start_times(host, names))
             try:
                 counted = await self._ctx.exec.run(host, commands.restart_counts(), timeout_s=15)
             except Exception:  # noqa: BLE001 - ohne Zähler bleibt die Liste brauchbar
@@ -600,7 +605,24 @@ class DockerServiceCatalog:
             environment = await self._environment(host)
             if environment is not None:
                 environments[host.id] = environment
-        return {"data": stats, "restarts": restarts, "hosts": environments}
+        return {"data": stats, "restarts": restarts, "hosts": environments, "started_at": started_at}
+
+    async def _start_times(self, host: Any, names: list[str]) -> dict[str, str]:
+        """Startzeiten über dieselbe Zustandsabfrage wie nach Container-Aktionen, auch im Modus „Nur bedienen“."""
+        from .after_check import cmd_state
+        from .image_apply import parse_verify
+
+        started_at: dict[str, str] = {}
+        for offset in range(0, len(names), MAX_INSPECT_PER_HOST):
+            batch = names[offset:offset + MAX_INSPECT_PER_HOST]
+            try:
+                result = await self._ctx.exec.run(host, cmd_state(batch), timeout_s=INSPECT_TIMEOUT_S)
+            except Exception:  # noqa: BLE001 - fehlende Startzeiten lassen die übrigen Messwerte unverändert
+                continue
+            for member in parse_verify(result.stdout).members:
+                if member.name in batch and member.started and not member.started.startswith("0001-"):
+                    started_at[f"{host.id}:{member.name}"] = member.started
+        return started_at
 
     async def _environment(self, host: Any) -> dict[str, Any] | None:
         remembered = self._environments.get(host.id)
