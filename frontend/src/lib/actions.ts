@@ -1,17 +1,15 @@
-/**
- * Genehmigte Aktionen laufen im Hintergrund (core/gate.py): Die API wartet höchstens etwa 20 s, ist die Aktion dann
- * nicht fertig (Update, langes Skript), antwortet sie mit 202 und Status `executing`. Das Ergebnis holt sich die
- * Oberfläche hier über `GET /actions/{id}` ab, sonst hinge der Knopf bis zu 45 Minuten.
- */
-import { api, ApiError } from "./api";
+/** Laufende Aktionen nach einer 202-Antwort über /actions/{id} abfragen, bis das Ergebnis vorliegt. */
+import { ApiError, apiFetch } from "./api";
 
 /** Abstand zwischen zwei Nachfragen. */
 export const ACTION_POLL_INTERVAL_MS = 3000;
 /** So lange wird höchstens nachgefragt (ein Update darf bis zu 45 min dauern). */
 export const ACTION_POLL_MAX_MS = 60 * 60 * 1000;
+/** Höchstdauer einer einzelnen Nachfrage samt Antwort; eine hängende zählt wie ein kurzer Aussetzer. */
+export const ACTION_REQUEST_TIMEOUT_MS = 30_000;
 
-export const RUNNING_IN_BACKGROUND_TEXT = "Läuft im Hintergrund – das Ergebnis erscheint hier und unter „Aktionen“.";
-export const GAVE_UP_WAITING_TEXT = "Läuft seit über einer Stunde – das Ergebnis steht später unter „Aktionen“.";
+export const RUNNING_IN_BACKGROUND_TEXT = "Läuft im Hintergrund, das Ergebnis erscheint hier und unter „Aktionen“.";
+export const GAVE_UP_WAITING_TEXT = "Läuft seit über einer Stunde, das Ergebnis steht später unter „Aktionen“.";
 
 /** Status, in denen eine Aktion noch nicht fertig ist. */
 export function isActionRunning(status: string | null | undefined): boolean {
@@ -76,14 +74,29 @@ export async function waitForAction<T extends { status?: string | null }>(
   const deadline = Date.now() + maxMs;
   for (;;) {
     await sleep(intervalMs, signal);
+    // Frist und Abbruch gelten auch, solange die Antwort aussteht: Sonst hinge das Warten an einer stummen Verbindung.
+    const request = new AbortController();
+    const stop = () => request.abort();
+    const timer = setTimeout(stop, Math.max(0, Math.min(ACTION_REQUEST_TIMEOUT_MS, deadline - Date.now())));
+    signal?.addEventListener("abort", stop, { once: true });
+    const stopped = new Promise<never>((_, reject) => {
+      request.signal.addEventListener("abort", () => reject(abortError()), { once: true });
+    });
     try {
-      const action = await api.get<T>(`/actions/${encodeURIComponent(actionId)}`);
+      const action = await Promise.race([
+        apiFetch<T>(`/actions/${encodeURIComponent(actionId)}`, { method: "GET", signal: request.signal }),
+        stopped,
+      ]);
       if (signal?.aborted) throw abortError();
       if (!isActionRunning(action?.status)) return action;
     } catch (err) {
-      if (isAbortError(err)) throw err;
+      if (signal?.aborted) throw abortError();
+      // Ein Abbruch hier war die Frist dieser einen Nachfrage: weiter wie bei einem Aussetzer.
       // 4xx (z. B. Aktion gelöscht, keine Rechte mehr) ändert sich durch Warten nicht.
-      if (err instanceof ApiError && err.status < 500) throw err;
+      if (!isAbortError(err) && err instanceof ApiError && err.status < 500) throw err;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", stop);
     }
     if (Date.now() >= deadline) throw new ActionWaitTimeout();
   }

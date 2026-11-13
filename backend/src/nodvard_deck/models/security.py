@@ -63,16 +63,6 @@ class SecretUsage(Base):
     last_used_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
-class SecretGrant(Base):
-    __tablename__ = "secret_grants"
-
-    secret_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("secrets.id", ondelete="CASCADE"), primary_key=True
-    )
-    grantee_type: Mapped[str] = mapped_column(String(16), primary_key=True)  # ext | role
-    grantee_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-
-
 class AuditEntry(Base, IdMixin):
     """Append-only: kein UPDATE und kein DELETE aus der Anwendung, nur der Retention-Job löscht (`audit.retention_days`)."""
 
@@ -82,7 +72,7 @@ class AuditEntry(Base, IdMixin):
         Index("ix_audit_correlation", "correlation_id"),
     )
 
-    ts: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+    ts: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     actor_type: Mapped[str] = mapped_column(String(16))  # user|extension|ai|scheduler|system
     actor_id: Mapped[str] = mapped_column(String(128))
     action: Mapped[str] = mapped_column(String(128), index=True)
@@ -115,11 +105,11 @@ class Action(Base, IdMixin):
     ext_id: Mapped[str] = mapped_column(String(64), index=True)
     action_type: Mapped[str] = mapped_column(String(64), index=True)
     host_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("hosts.id", ondelete="SET NULL")
+        String(36), ForeignKey("hosts.id", ondelete="SET NULL"), index=True
     )
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     risk: Mapped[str] = mapped_column(String(16), default="medium")
-    status: Mapped[str] = mapped_column(String(16), default="proposed", index=True)
+    status: Mapped[str] = mapped_column(String(16), default="proposed")
 
     proposed_by_type: Mapped[str] = mapped_column(String(16))
     proposed_by_id: Mapped[str] = mapped_column(String(128))
@@ -152,6 +142,6 @@ class ActionFlapHistory(Base, IdMixin):
     __table_args__ = (Index("ix_flap_fingerprint_ts", "fingerprint", "ts"),)
 
     host_id: Mapped[str | None] = mapped_column(String(36))
-    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64))
     ts: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     blocked: Mapped[bool] = mapped_column(Boolean, default=False)

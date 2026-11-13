@@ -7,13 +7,18 @@ Host-Mechanismus ist.
 from __future__ import annotations
 
 import sys
+from contextlib import nullcontext
 from pathlib import Path, PurePosixPath
+from unittest.mock import AsyncMock
 
 import pytest
+from exec_gate_helpers import execute_approved
 from nodvard_sdk import Actor, ActorType, ExtensionManifest
 from nodvard_sdk.actions import ActionRequest
 from nodvard_sdk.capabilities import ActionExecutor, TerminalTarget
 
+from nodvard_deck.api.v1.files import _authorized_source
+from nodvard_deck.core import gate
 from nodvard_deck.ext.context import build_context
 from nodvard_deck.ext.runtime import ExtensionRuntime, LoadedExtension
 from nodvard_deck.services import hosts as hosts_service
@@ -128,7 +133,7 @@ async def test_action_executor_runs_shell_exec(local_ssh_server, db_session, tmp
         action_type="shell.exec", host_ref=host.id, payload={"command": "echo hallo"},
         proposed_by=Actor(type=ActorType.EXTENSION, id="terminal"), reason="Test",
     )
-    result = await executor.execute(request)
+    result = await execute_approved(db_session, lambda: executor.execute(request), host_id=host.id)
     assert result.success is True
     assert result.exit_code == 0
     assert result.output == "ran:echo hallo\n"
@@ -208,7 +213,8 @@ async def test_terminal_target_open_read_write_close_roundtrip(
     sdk_host = host_to_sdk(db_host)
 
     assert await target.can_open(sdk_host) is True
-    session = await target.open(sdk_host, user=None, cols=80, rows=24)
+    with gate.authorized_ssh(host.id, operations=frozenset({"shell"}), ext_id="terminal"):
+        session = await target.open(sdk_host, user=None, cols=80, rows=24)
     try:
         chunks = []
         async for chunk in session.read():
@@ -237,7 +243,7 @@ async def test_file_source_sftp_roundtrip(local_ssh_server, db_session, tmp_path
     _runtime, _ctx, extension = await _setup_terminal_extension(
         tmp_path, settings_bound, ["hosts.read", "hosts.execute"]
     )
-    source = extension.file_source_for(host.id)
+    source = _authorized_source(extension.file_source_for(host.id))
     assert source.caps.write is True
 
     async def _content():
@@ -277,7 +283,7 @@ async def test_file_source_reports_the_free_space_of_the_target_folder(local_ssh
     _runtime, _ctx, extension = await _setup_terminal_extension(
         tmp_path, settings_bound, ["hosts.read", "hosts.execute"]
     )
-    source = extension.file_source_for(host.id)
+    source = _authorized_source(extension.file_source_for(host.id))
 
     free = await source.free_bytes(PurePosixPath("ziel.bin"))
     vfs = os.statvfs(sftp_root)
@@ -298,7 +304,7 @@ async def test_file_source_lists_folder_with_dead_symlink(local_ssh_server, db_s
     _runtime, _ctx, extension = await _setup_terminal_extension(
         tmp_path, settings_bound, ["hosts.read", "hosts.execute"]
     )
-    source = extension.file_source_for(host.id)
+    source = _authorized_source(extension.file_source_for(host.id))
 
     (sftp_root / "ok.conf").write_bytes(b"inhalt")
     os.utime(sftp_root / "ok.conf", (1_700_000_000, 1_700_000_000))
@@ -334,7 +340,7 @@ async def test_file_source_rename_of_dead_symlink_works(local_ssh_server, db_ses
     _runtime, _ctx, extension = await _setup_terminal_extension(
         tmp_path, settings_bound, ["hosts.read", "hosts.execute"]
     )
-    source = extension.file_source_for(host.id)
+    source = _authorized_source(extension.file_source_for(host.id))
     (sftp_root / "kaputter-link").symlink_to("gibt-es-nicht")
 
     renamed = await source.rename(PurePosixPath("kaputter-link"), PurePosixPath("neuer-link"))
@@ -355,7 +361,7 @@ async def test_file_source_rename_to_missing_target_still_raises(
     _runtime, _ctx, extension = await _setup_terminal_extension(
         tmp_path, settings_bound, ["hosts.read", "hosts.execute"]
     )
-    source = extension.file_source_for(host.id)
+    source = _authorized_source(extension.file_source_for(host.id))
 
     with pytest.raises(Exception):  # noqa: B017 - SFTP-Fehler (Quelle fehlt)
         await source.rename(PurePosixPath("gibt-es-nicht"), PurePosixPath("egal"))
@@ -371,7 +377,7 @@ async def test_file_source_remove_folder_symlink_keeps_target(local_ssh_server, 
     _runtime, _ctx, extension = await _setup_terminal_extension(
         tmp_path, settings_bound, ["hosts.read", "hosts.execute"]
     )
-    source = extension.file_source_for(host.id)
+    source = _authorized_source(extension.file_source_for(host.id))
     (sftp_root / "docs").mkdir()
     (sftp_root / "docs" / "a.txt").write_bytes(b"x")
     (sftp_root / "docs-link").symlink_to("docs")
@@ -394,7 +400,7 @@ async def test_file_source_remove_recursive_still_removes_real_folder(
     _runtime, _ctx, extension = await _setup_terminal_extension(
         tmp_path, settings_bound, ["hosts.read", "hosts.execute"]
     )
-    source = extension.file_source_for(host.id)
+    source = _authorized_source(extension.file_source_for(host.id))
     (sftp_root / "ordner" / "unter").mkdir(parents=True)
     (sftp_root / "ordner" / "unter" / "a.txt").write_bytes(b"x")
 
@@ -416,7 +422,7 @@ async def test_file_source_search_finds_a_file_two_levels_deep(
     _runtime, _ctx, extension = await _setup_terminal_extension(
         tmp_path, settings_bound, ["hosts.read", "hosts.execute"]
     )
-    source = extension.file_source_for(host.id)
+    source = _authorized_source(extension.file_source_for(host.id))
     assert source.caps.search is True
 
     (sftp_root / "docs").mkdir()
@@ -438,7 +444,7 @@ async def test_file_source_search_is_case_insensitive_and_matches_substrings(
     _runtime, _ctx, extension = await _setup_terminal_extension(
         tmp_path, settings_bound, ["hosts.read", "hosts.execute"]
     )
-    source = extension.file_source_for(host.id)
+    source = _authorized_source(extension.file_source_for(host.id))
 
     (sftp_root / "docs").mkdir()
     (sftp_root / "docs" / "notes.txt").write_bytes(b"hallo")
@@ -464,7 +470,7 @@ async def test_file_source_search_finds_a_word_that_exists_only_in_file_content(
     _runtime, _ctx, extension = await _setup_terminal_extension(
         tmp_path, settings_bound, ["hosts.read", "hosts.execute"]
     )
-    source = extension.file_source_for(host.id)
+    source = _authorized_source(extension.file_source_for(host.id))
 
     (sftp_root / "photos").mkdir()
     (sftp_root / "photos" / "journal.log").write_bytes("Sah heute eine quetzalcoatl-Statue.".encode())
@@ -484,7 +490,7 @@ async def test_file_source_search_returns_nothing_not_an_error_when_no_match(
     _runtime, _ctx, extension = await _setup_terminal_extension(
         tmp_path, settings_bound, ["hosts.read", "hosts.execute"]
     )
-    source = extension.file_source_for(host.id)
+    source = _authorized_source(extension.file_source_for(host.id))
 
     hits = [entry async for entry in source.search("xyz-nichts-passt-hier", root=PurePosixPath("."))]
     assert hits == []
@@ -521,7 +527,7 @@ async def test_file_source_provider_returns_one_source_per_host_with_credentials
 
     from pathlib import PurePosixPath
 
-    with_creds_source = sources[0]
+    with_creds_source = _authorized_source(sources[0])
     listing = await with_creds_source.list_dir(PurePosixPath("."))
     assert listing.items == []  # frisches, leeres sftp_root
 
@@ -549,3 +555,39 @@ async def test_two_hosts_with_credentials_get_distinct_labels(local_ssh_server, 
     assert len(sources) == 2
     assert len({s.label for s in sources}) == 2
     assert all(s.label != "SSH (SFTP)" for s in sources)
+
+
+@pytest.mark.parametrize("operation", ["command", "shell", "sftp"])
+@pytest.mark.parametrize("access", ["missing", "other_host", "other_extension", "other_operation"])
+async def test_terminal_rejects_access_without_matching_authorization(
+    db_session, tmp_path, settings_bound, operation, access,
+):
+    from nodvard_sdk.errors import ActionBlocked
+
+    host = await hosts_service.create_host(db_session, name="server", address="192.0.2.1")
+    await db_session.commit()
+    runtime, ctx, extension = await _setup_terminal_extension(
+        tmp_path, settings_bound, ["hosts.read", "hosts.execute"],
+    )
+    sdk_host = await ctx.hosts.get(host.id)
+    ctx.exec._connection = AsyncMock()
+    operations = frozenset({operation})
+    if access == "other_operation":
+        operations = frozenset({"sftp" if operation != "sftp" else "shell"})
+    authorization = nullcontext() if access == "missing" else gate.authorized_ssh(
+        "other-host" if access == "other_host" else host.id,
+        operations=operations,
+        ext_id="other-extension" if access == "other_extension" else "terminal",
+    )
+    with authorization, pytest.raises(ActionBlocked) as raised:
+        if operation == "command":
+            await runtime.capabilities.query(ActionExecutor)[0].execute(ActionRequest(
+                action_type="shell.exec", host_ref=host.id, payload={"command": "echo hallo"},
+                proposed_by=Actor.extension("terminal"), reason="Test",
+            ))
+        elif operation == "shell":
+            await runtime.capabilities.query(TerminalTarget)[0].open(sdk_host, user=None, cols=80, rows=24)
+        else:
+            await extension.file_source_for(host.id).stat(PurePosixPath("test.txt"))
+    assert raised.value.rule == "action_gate"
+    ctx.exec._connection.assert_not_awaited()

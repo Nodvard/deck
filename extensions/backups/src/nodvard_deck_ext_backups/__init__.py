@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from http import HTTPStatus
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from nodvard_sdk import (
     Actor,
@@ -26,7 +27,7 @@ from nodvard_sdk import (
 )
 from nodvard_sdk.actions import REQUEST_WAIT_S, ActionRequest, ActionSpec
 from nodvard_sdk.errors import NodvardError
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .capabilities import BackupActionExecutor, ProxmoxBackupProvider, job_vmids
 from .certificate import FIELD as FINGERPRINT_FIELD
@@ -63,11 +64,29 @@ def _space_warning_response(warning: dict[str, Any]) -> JSONResponse:
     )
 
 
+class _RetryIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    ignore_space: bool = False
+
+
+class _JobEditIn(_RetryIn):
+    changes: dict[str, Any]
+
+
+class _JobCreateIn(_RetryIn):
+    values: dict[str, Any]
+
+
 class _TokenIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     value: str
 
 
 class _ConnectionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     """Das Token selbst kommt nie hierher, sondern nur über `POST .../{name}/token` in den Tresor."""
 
     name: str
@@ -84,10 +103,14 @@ class _ConnectionIn(BaseModel):
 
 
 class _AcknowledgeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     note: str = ""
 
 
 class _ConnectionPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     base_url: str | None = None
     token_id: str | None = None
     tls_insecure_skip_verify: bool | None = None
@@ -223,7 +246,11 @@ class Extension(NodvardExtension):
 
         router = APIRouter()
 
-        @router.post("/connections/{name}/token", status_code=status.HTTP_204_NO_CONTENT)
+        @router.post(
+            "/connections/{name}/token", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409,)},
+        )
         async def set_token(name: str, payload: _TokenIn) -> None:
             label = f"{TOKEN_LABEL}:{name}"
             # Bei einem doppelten Namen würden sich zwei Adressen ein Token teilen.
@@ -279,7 +306,11 @@ class Extension(NodvardExtension):
             connections: list[dict[str, Any]] = settings.get("connections") or []
             return [await _connection_out(c) for c in connections]
 
-        @router.post("/connections", status_code=status.HTTP_201_CREATED)
+        @router.post(
+            "/connections", status_code=status.HTTP_201_CREATED,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409,)},
+        )
         async def add_connection(payload: _ConnectionIn) -> _ConnectionOut:
             settings = await ctx.settings.get()
             connections: list[dict[str, Any]] = settings.get("connections") or []
@@ -301,7 +332,11 @@ class Extension(NodvardExtension):
             await ctx.settings.set(settings)
             return await _connection_out(entry)
 
-        @router.put("/connections/{name}")
+        @router.put(
+            "/connections/{name}",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 409,)},
+        )
         async def update_connection(name: str, payload: _ConnectionPatch) -> _ConnectionOut:
             settings = await ctx.settings.get()
             connections: list[dict[str, Any]] = settings.get("connections") or []
@@ -328,7 +363,11 @@ class Extension(NodvardExtension):
                 return await _connection_out(conn)
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Verbindung '{name}' existiert nicht.")
 
-        @router.delete("/connections/{name}", status_code=status.HTTP_204_NO_CONTENT)
+        @router.delete(
+            "/connections/{name}", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def remove_connection(name: str) -> None:
             settings = await ctx.settings.get()
             connections: list[dict[str, Any]] = settings.get("connections") or []
@@ -349,21 +388,33 @@ class Extension(NodvardExtension):
 
         data_router = APIRouter()
 
-        @data_router.get("/jobs")
+        @data_router.get(
+            "/jobs",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409,)},
+        )
         async def list_jobs() -> list[dict[str, Any]]:
             try:
                 return await self._provider.list_jobs()
             except (RuntimeError, NodvardError, ProxmoxBackupApiError) as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
-        @data_router.get("/jobs/{job_ref}/history")
+        @data_router.get(
+            "/jobs/{job_ref}/history",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409,)},
+        )
         async def job_history(job_ref: str) -> list[dict[str, Any]]:
             try:
                 return await self._provider.job_history(job_ref)
             except (RuntimeError, NodvardError, ProxmoxBackupApiError) as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
-        @data_router.get("/jobs/{job_ref}/failure")
+        @data_router.get(
+            "/jobs/{job_ref}/failure",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 409,)},
+        )
         async def job_failure(job_ref: str, upid: str | None = None) -> dict[str, Any]:
             """Warum der neueste (oder der genannte) Lauf fehlschlug, in Klartext (failure_text.py) samt Zeile von
             Proxmox; 404, wenn es keinen solchen Lauf gibt."""
@@ -377,7 +428,11 @@ class Extension(NodvardExtension):
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kein fehlgeschlagener Lauf gefunden.")
             return cause
 
-        @data_router.get("/unprotected")
+        @data_router.get(
+            "/unprotected",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409,)},
+        )
         async def unprotected_guests() -> dict[str, Any]:
             """Gäste, die kein Backup-Job erfasst (Proxmox' eigene Auswertung)."""
             try:
@@ -385,7 +440,11 @@ class Extension(NodvardExtension):
             except (RuntimeError, NodvardError) as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
-        @data_router.get("/inventory")
+        @data_router.get(
+            "/inventory",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409,)},
+        )
         async def backup_inventory_overview() -> dict[str, Any]:
             """Was tatsächlich auf den Backup-Speichern liegt, je Gast. Nicht im Widget (alle 60 s), weil das Lesen
             der NFS-Verzeichnisse dauert."""
@@ -412,22 +471,30 @@ class Extension(NodvardExtension):
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Backup-Job '{job_id}' existiert nicht (mehr).")
             return connection, job_id, job
 
-        @edit_router.get("/jobs/{job_ref}/config")
+        @edit_router.get(
+            "/jobs/{job_ref}/config",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 502,)},
+        )
         async def job_config(job_ref: str) -> dict[str, Any]:
             """Die editierbaren Werte eines Jobs."""
             _connection, job_id, job = await _job_for(job_ref)
             return {"job_id": job_id, **current_values(job)}
 
-        @edit_router.post("/jobs/{job_ref}/edit")
+        @edit_router.post(
+            "/jobs/{job_ref}/edit",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 409, 422, 502,)},
+        )
         async def edit_job(
             job_ref: str,
-            changes: dict[str, Any] = Body(..., embed=True),
-            ignore_space: bool = Body(False, embed=True),
+            payload: _JobEditIn,
             actor: Actor = Depends(ctx.api.current_actor),
         ) -> Any:  # noqa: ANN401 - dict oder die 409-Platzwarnung
             """Schlägt die Änderung dem Gate vor. Weniger Aufbewahrung oder Abschalten ist hohes Risiko (Proxmox
             löscht beim nächsten Lauf, was über der Grenze liegt). Bei neuem Speicher oder Wiedereinschalten wird
             vorher der Platz geprüft (space.py), sonst 409 mit `space_warning`."""
+            changes, ignore_space = payload.changes, payload.ignore_space
             connection, job_id, job = await _job_for(job_ref)
             try:
                 _params, diff, destructive = build_job_update(job, changes)
@@ -456,17 +523,21 @@ class Extension(NodvardExtension):
             decision = await ctx.actions.propose(request, wait_s=REQUEST_WAIT_S)
             return {"action_id": decision.action_id, "status": decision.status.value, "risk": request.risk.value}
 
-        @edit_router.post("/unprotected/{connection}/{vmid}/job")
+        @edit_router.post(
+            "/unprotected/{connection}/{vmid}/job",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 409, 422,)},
+        )
         async def create_job_for_guest(
             connection: str,
             vmid: str,
-            values: dict[str, Any] = Body(..., embed=True),
-            ignore_space: bool = Body(False, embed=True),
+            payload: _JobCreateIn,
             actor: Actor = Depends(ctx.api.current_actor),
         ) -> Any:  # noqa: ANN401 - dict oder die 409-Platzwarnung
             """Neuer Job nur für einen Gast ohne Backup, niedriges Risiko (ein zusätzliches Backup nimmt nichts weg).
             Passt der Gast nicht auf den Speicher (space.py), kommt 409 mit `space_warning`; `ignore_space` heißt
             „trotzdem“."""
+            values, ignore_space = payload.values, payload.ignore_space
             connector = (await build_connectors(ctx)).get(connection)
             if connector is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Verbindung '{connection}' unbekannt.")
@@ -504,22 +575,35 @@ class Extension(NodvardExtension):
             settings["acknowledged_unprotected"] = acks
             await ctx.settings.set(settings)
 
-        @ack_router.put("/unprotected/{connection}/{vmid}/acknowledged", status_code=status.HTTP_204_NO_CONTENT)
+        @ack_router.put(
+            "/unprotected/{connection}/{vmid}/acknowledged", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (422,)},
+        )
         async def acknowledge_unprotected(connection: str, vmid: str, payload: _AcknowledgeIn) -> None:
             """„Bewusst ohne Backup“: eine Konfigurationsentscheidung, daher `settings.write`. Der Gast bleibt auf
             der Seite sichtbar, warnt aber nicht mehr im Widget."""
             await _set_acknowledged(connection, vmid, payload.note)
 
-        @ack_router.delete("/unprotected/{connection}/{vmid}/acknowledged", status_code=status.HTTP_204_NO_CONTENT)
+        @ack_router.delete(
+            "/unprotected/{connection}/{vmid}/acknowledged", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (422,)},
+        )
         async def unacknowledge_unprotected(connection: str, vmid: str) -> None:
             await _set_acknowledged(connection, vmid, None)
 
         retry_router = APIRouter()
 
-        @retry_router.post("/jobs/{job_ref}/retry")
+        @retry_router.post(
+            "/jobs/{job_ref}/retry",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 409,)},
+        )
         async def retry_job(
-            job_ref: str, ignore_space: bool = Body(False, embed=True), actor: Actor = Depends(ctx.api.current_actor),
+            job_ref: str, payload: _RetryIn | None = None, actor: Actor = Depends(ctx.api.current_actor),
         ) -> Any:  # noqa: ANN401
+            ignore_space = payload.ignore_space if payload is not None else False
             try:
                 request = (await self._provider.retry(job_ref)).model_copy(update={"proposed_by": actor})
             except NodvardError as exc:
@@ -541,7 +625,9 @@ class Extension(NodvardExtension):
 
         # ProxmoxBackupApiError muss mit abgefangen werden: ein echter API-Fehler (z. B. ein von Proxmox
         # abgelehnter Parameter) soll eine leere Liste ergeben, keinen rohen 500.
-        @data_router.get("/widgets/summary")
+        @data_router.get(
+            "/widgets/summary",
+        )
         async def summary_widget_data() -> dict[str, Any]:
             try:
                 jobs = await self._provider.list_jobs()
@@ -623,7 +709,7 @@ class Extension(NodvardExtension):
                             ),
                         ],
                     ),
-                    empty_text="Keine Backup-Jobs konfiguriert",
+                    empty_text="Keine Sicherungsjobs gefunden",
                 ),
             )
         )

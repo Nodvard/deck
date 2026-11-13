@@ -57,8 +57,10 @@ Jede Antwort, auch eine der Notseite, trägt feste Sicherheits-Kopfzeilen, die e
 `Permissions-Policy` mit gesperrten Geräten (Kamera, Mikrofon, Standort, Bewegungssensoren, USB, seriell, HID,
 Bluetooth, MIDI, Bildschirmaufnahme, Bezahlen; Vollbild und Zwischenablage bleiben bei der Vorgabe des Browsers) und
 `Cross-Origin-Resource-Policy: same-origin`. Nur die öffentlichen Symbole (`/branding/logo`, `/branding/favicon`,
-`/app/icon-<Größe>.png`) und `/health` tragen `cross-origin`, damit eine Startseite wie Homarr Deck-Symbole zeigen und
-Deck anpingen kann.
+`/app/icon-<Größe>.png`, auch mit `-maskable`, Größen 180, 192 und 512) tragen bei `GET` und `HEAD` `cross-origin`,
+damit eine Startseite wie Homarr Deck-Symbole zeigen kann. `/health` trägt ebenfalls `cross-origin`, damit
+Startseiten wie Homarr oder Homepage Deck aus dem Browser anpingen können. Alle anderen Antworten, auch Bild-Uploads,
+bleiben bei `same-origin`.
 
 ---
 
@@ -71,7 +73,7 @@ GET  /api/v1/branding            → Name, Logo, Farben (Login-Seite braucht es)
 GET  /api/v1/edition             → welche Ausgabe läuft: {id (`deck` oder `dock`), product_name, service, image,
                                    choose_modules, repo_tools}; festgelegt beim Bauen (`EDITION`, `nodvard_deck/edition.py`)
 GET  /api/v1/branding/logo       → das hochgeladene Logo (404, wenn keins da ist). Antwortet mit
-                                   `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`
+                                   `Content-Security-Policy: default-src 'none'; style-src 'none'; sandbox`
                                    und `X-Content-Type-Options: nosniff`: Wer die Adresse direkt öffnet, bekommt kein
                                    Skript ausgeführt; als `<img>` eingebunden ändert sich nichts.
 GET  /api/v1/branding/favicon    → das hochgeladene Favicon (404, wenn keins da ist), mit denselben Kopfzeilen wie
@@ -95,20 +97,24 @@ POST /api/v1/auth/login          → {username, password}
                                    der Prüfung deaktiviert oder sein Passwort geändert: 401 wie bei falschem Passwort.
                                    → 429 mit `Retry-After`, geprüft vor dem Passwort und ohne Datenbank: 10
                                    Fehlversuche je Adresse und Name oder 30 je Adresse (IPv6 je /64) in 5 Minuten.
+                                   Zusätzlich höchstens 30 falsche Passwörter je Benutzername in 5 Minuten über
+                                   alle fremden Adressen, auch wechselnde IPv6-/64-Netze. Diese Sperre betrifft aus
+                                   fremden Netzen auch richtige Passwörter und endet mit dem Ablauf der ältesten
+                                   Fehlversuche; lokale Netze (Liste unten) zählen nicht mit und sperrt sie nicht.
                                    Dazu die Bremse je Name: Ab 10 Fehlversuchen für einen Namen in 24 Stunden, von
                                    allen fremden Adressen zusammen, wartet jeder Versuch aus einem Netz (IPv4 je
                                    Adresse, IPv6 je /64) doppelt so lange wie der vorige aus demselben Netz (2 s,
                                    4 s, …, höchstens 5 Minuten); nach 24 Stunden ohne Versuch beginnt ein Netz von
                                    vorn, eine gelungene Anmeldung setzt es zurück (mit Zwei-Faktor, sobald auch der
-                                   Code stimmt). Aus einem Netz, aus dem niemand rät, geht der erste Versuch sofort;
-                                   so kann niemand ein fremdes Konto aussperren. Wer das Netz mit dem Angreifer
-                                   teilt, wartet dort wie er. Wer für jeden Versuch eine neue Adresse nimmt, wird kaum
-                                   aufgehalten. Dafür braucht es kein Botnetz: Ein eigenes IPv6-Präfix, wie es viele
-                                   Anbieter vergeben, enthält viele /64-Netze (ein /56 256, ein /48 65 536). Dagegen
-                                   helfen ein langes Passwort und Zwei-Faktor. Lokale Netze (127.0.0.0/8, 10.0.0.0/8,
+                                   Code stimmt). Aus einem Netz, aus dem niemand rät, geht der erste Versuch sofort,
+                                   solange die Passwortgrenze über alle Adressen noch nicht erreicht ist. Wer das
+                                   Netz mit dem Angreifer teilt, wartet dort wie er. Lokale Netze (127.0.0.0/8, 10.0.0.0/8,
                                    172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10, ::1, fc00::/7,
                                    fe80::/10) und Anfragen ohne erkennbare Adresse (Unix-Socket) bremst sie nicht.
-                                   Unbekannte Namen werden genauso gebremst; die Namen teilen sich 4096 Plätze.
+                                   Unbekannte Namen werden genauso begrenzt; die Namen teilen sich 4096 Plätze.
+                                   Selten können dadurch verschiedene Namen dieselbe Grenze erreichen.
+                                   Die Passwortgrenze steht als `password` in `login.locked.scopes`, ihr Fenster
+                                   als `window_seconds`; eine richtige Anmeldung nimmt nur ihren eigenen Versuch zurück.
                                    Beginnt die Bremse, steht `login.locked` im Protokoll (`scopes` enthält `name`), bei
                                    einem bestehenden Konto kommt danach, nach der Antwort, die Meldung „Passwort wird
                                    durchprobiert“. Alle Zähler liegen im Speicher und beginnen nach einem Neustart neu.
@@ -158,7 +164,9 @@ PUT/POST/DELETE /api/v1/auth/bootstrap/restore/…, POST /api/v1/auth/bootstrap/
                                    (403 falsch/fehlt, 429 zu oft; gleicher Zähler je IP).
 POST /api/v1/auth/refresh        → neuer Access-Token (+ rotierter Refresh-Token; in den 30 s nach
                                    einer Rotation liefert derselbe alte Token nur einen Access-Token,
-                                   ohne Cookie und ohne `refresh_token` im Body)
+                                   ohne Cookie und ohne `refresh_token` im Body);
+                                   429 mit `Retry-After` bei zu vielen Erneuerungen je Konto oder zu vielen
+                                   ungültigen Tokens je Adresse (erfolgreiche zählen nur je Konto)
 POST /api/v1/auth/logout         → Refresh-Token widerrufen (bei Web: den des Cookies) und das Cookie löschen
 GET  /api/v1/capabilities        → was dieser Server kann
 ```
@@ -195,6 +203,12 @@ Feature-Flags. Die Android-App fragt das beim Verbinden ab und blendet aus, was 
 Server nicht hat — dadurch funktioniert **eine** APK gegen unterschiedlich bestückte
 Installationen: ein generischer Client, eigene Server-URL pro Nutzer.
 
+`feature_flags.terminal` und `feature_flags.files` sind wahr, solange mindestens ein geladenes Modul
+`TerminalTarget` beziehungsweise `FileSourceProvider` anbietet. Sie hängen weder von Modulkennungen noch von
+bereits eingerichteten Servern oder Dateiquellen ab. Ein- und Ausschalten wirkt sofort; der Client aktualisiert
+die Angaben nach einer Änderung und bei `extension.*`-Ereignissen. Die Rechte des angemeldeten Nutzers gelten
+zusätzlich. Bei älteren Servern können diese Flags fehlen.
+
 ---
 
 ## 3. Kern-Ressourcen
@@ -221,13 +235,18 @@ GET    /me                          PATCH /me            POST /me/password
                                        zusätzlich `mfa.recovery_used` ({remaining, aktion: "passwort_aendern"}) und
                                        eine Meldung wie bei DELETE /me/totp.
 GET    /me/preferences              PATCH /me/preferences
-                                     → {first_steps_dismissed, theme, design_notice_dismissed}, je Benutzer und auf jedem
-                                       Gerät gleich. `theme`: `classic` (Klassisch hell), `simple` (Schlicht dunkel,
+                                     → {first_steps_dismissed, theme, design_notice_dismissed, totp_setup_skipped,
+                                       totp_reminder_dismissed}, je Benutzer und auf jedem Gerät gleich.
+                                       `theme`: `classic` (Klassisch hell), `simple` (Schlicht dunkel,
                                        Standard), `pro` (Profi dunkel), `original` (Bisher, das Aussehen bis 0.8); ein
                                        unbekannter gespeicherter Wert liefert `simple`. `design_notice_dismissed`: der
                                        Hinweis „Deck hat ein neues Aussehen.“ ist erledigt; neue Konten haben ihn gleich
-                                       als erledigt, Konten von vor dem Update sehen ihn einmal. PATCH ändert nur die
-                                       mitgeschickten Felder, falsche Werte 422.
+                                       als erledigt, Konten von vor dem Update sehen ihn einmal. `totp_setup_skipped`
+                                       merkt das Überspringen der Zwei-Faktor-Einrichtung im Assistenten.
+                                       `totp_reminder_dismissed` erledigt die einmalige Erinnerung auf der Übersicht,
+                                       durch bewusstes Ausblenden oder erfolgreiche Aktivierung von Zwei-Faktor.
+                                       Beide beginnen mit `false`. PATCH ändert nur die mitgeschickten Felder,
+                                       falsche Werte 422.
 GET    /me/sessions                 DELETE /me/sessions/{id}
 GET    /me/tokens                   POST /me/tokens      DELETE /me/tokens/{id}
 POST   /me/totp/setup               POST /me/totp/confirm   DELETE /me/totp
@@ -587,9 +606,11 @@ Protokoll):
   Server melden (nach `tags` und `os_families` des Servers gefiltert, ohne die mit einem Tag des Servers in `skip_tags`,
   sortiert nach `order`). `unix_group` ist `null`,
   wenn der Name nicht `^[a-z_][a-z0-9_-]{0,31}$` entspricht.
-- `POST /hosts/{id}/credentials/generate-key` `{username = "lattice", port = 22}` (`hosts.write`, `201`) erzeugt einen
-  ed25519-Schlüssel nur für diesen Server (Kommentar `nodvard@<Kurzname>`). Der Standard `username = "lattice"` bleibt
-  aus Kompatibilitätsgründen (ältere Aufrufer schicken oft keinen Namen); die Oberfläche schlägt `nodvard` vor und
+- `POST /hosts/{id}/credentials/generate-key` mit `username` und `port` (`hosts.write`, `201`) erzeugt einen
+  ed25519-Schlüssel nur für diesen Server (Kommentar `nodvard@<Kurzname>`). Für neue Zugänge sendet man
+  z. B. `{username: "nodvard", port: 22}`. Ohne diese Felder gelten `username = "lattice"` und `port = 22`.
+  Der alte Benutzername bleibt aus Kompatibilitätsgründen (ältere Aufrufer schicken oft keinen Namen);
+  die Oberfläche schlägt `nodvard` vor und
   schickt den Namen immer mit. Antwort: `{credential, public_key,
   fingerprint}` – **der private Schlüssel liegt nur im Tresor** und steht nie in einer Antwort (auch keiner `422`),
   im Protokoll oder im Log. `is_default` ist nur dann `true`, wenn der Server noch keinen SSH-Zugang (Schlüssel oder
@@ -856,8 +877,8 @@ Schlüssel, Wert ungültig → `422`:
   `*.githubusercontent.com`) gehören zu GitHub, das bei jeder Prüfung die IP-Adresse und den Zeitpunkt sieht, sonst nichts (der User-Agent `nodvard-deck` nennt keine Version); die tägliche Prüfung lässt sich abschalten. Siehe
   „System und Sicherungen“.
 - `system.update_check.auto_security`: Zustimmung des Inhabers, dass Deck Sicherheitsupdates derselben Reihe selbst
-  einspielt. In dieser Version spielt Deck noch nichts selbst ein; das kommt erst mit signierten Anforderungen an den
-  Update-Helfer. Ändern darf nur der Inhaber, mit `current_password` und, wenn Zwei-Faktor an ist, `totp_code` (wie bei
+  einspielt. Diese Einstellung aktiviert derzeit kein automatisches Einspielen. Ändern darf nur der Inhaber, mit
+  `current_password` und, wenn Zwei-Faktor an ist, `totp_code` (wie bei
   `ssh.confirm_new_host_keys`); andere bekommen `403`, der Versuch steht als `denied` im Protokoll. Gezeigt in
   `GET /system/updates` (`auto_security`).
 - `ssh.confirm_new_host_keys`: `true` = Terminal, Jobs und Status merken den Schlüssel eines Servers, für den noch
@@ -984,21 +1005,33 @@ zusätzlich `totp_code`, den aktuellen sechsstelligen Code aus der App (Wiederhe
   was das Dashboard vorher prüft, sorgt für eine klare Antwort. Gezogen wird immer der Digest, auf den das bewegliche
   Tag im offiziellen Repository gerade zeigt; ein Digest in der Anforderung muss derselbe sein (`digest_changed`), er
   wählt nichts aus. Ein Update per Knopf gibt es nur mit Freigabe aus der Update-Suche (`approved`, sonst `409`
-  `not_released`); kennt der Helfer Anforderungen `v: 2` (`request_versions` in `GET /system/updates/helper`), geht sie
-  mit (`signed: true` in der Antwort und im Protokoll), ein älterer Helfer bekommt `v: 1`. Das Image gilt nur, wenn sein
+  `not_released`). Deck sendet Updates nur als `v: 3` mit Release-Freigabe und eigener Signatur
+  (`signed: true` in der Antwort und im Protokoll). Ein älterer Helfer wird mit `409 signature_required` abgelehnt.
+  Das Image gilt nur, wenn sein
   Versions-Label genau die angeforderte Version ist, diese neuer als
   die laufende ist und zur Reihe im Tag passt. Wer Dashboard oder Kanal in der Hand hat, kann so keine andere Version
-  aus der Registry einspielen, und ein Rückruf über das Zurücksetzen des Tags greift. Ein Update kann eine signierte
-  Freigabe mitbringen (Anforderung `v: 2`): Sie nennt Repository, Version und Digest, gilt nur in ihrem Zeitfenster und
+  aus der Registry einspielen, und ein Rückruf über das Zurücksetzen des Tags greift. Jedes Update bringt eine signierte
+  Freigabe mit: Sie nennt Repository, Version und Digest, gilt nur in ihrem Zeitfenster und
   muss mit einem Schlüssel signiert sein, der fest im Helfer steht (Ed25519); das Tag muss trotzdem auf den Digest zeigen.
   Signiert sind genau die sieben Felder der Freigabe (`fmt`, `repo`, `version`, `digest`, `key_id`, `issued_at`,
   `expires_at`) als sortiertes, kompaktes ASCII-JSON; die Signatur steht hexadezimal in `sig`, eine Freigabe gilt höchstens
-  366 Tage. Der Helfer rechnet die Signatur erst nach den Grenzen nach und höchstens einmal je Runde (weitere: `busy`).
-  In seinem Status nennt er `2` unter `request_versions` nur, wenn er mindestens einen Schlüssel eingebaut hat; ohne
+  366 Tage. Der Helfer rechnet beide Signaturen erst nach den Grenzen nach, höchstens für eine Anforderung je Runde (weitere: `busy`).
+  In seinem Status nennt er `2` und `3` unter `request_versions` nur, wenn er mindestens einen Release-Schlüssel eingebaut hat; ohne
   Schlüssel bleibt es bei `v: 1`.
   Eine abgelehnte Freigabe ändert nichts (`unknown_key`, `grant_mismatch`, `grant_expired`, `bad_signature`). Ohne
-  Freigabe nimmt der Helfer ein Update noch an, Pflicht wird sie mit 1.0 (dann `signature_required`). Der Rückweg kommt
-  ohne Signatur aus: Er setzt nur den Stand davor wieder ein, den der Helfer selbst gesichert hat. Eine Freigabe lässt
+  Freigabe verweigert der Helfer ein Update (`signature_required`). Bei `v: 3` sind außerdem `request_key_id` und
+  `request_sig` Pflicht. Die Ed25519-Signatur gilt für `nodvard-deck-update-request-v1` mit abschließendem Nullbyte
+  und das sortierte, kompakte ASCII-JSON aller Felder außer `request_sig`, einschließlich Release-Freigabe und ihrer
+  Signatur. Der öffentliche Installationsschlüssel liegt unter `/state/request-key.pub`, außerhalb des gemeinsamen
+  Kanals. Deck liest den privaten Schlüssel aus `updater-ed25519.key` im Datenordner (0600). Der Helfer prüft beide
+  Signaturen vor Änderungen an der Engine; Anforderungen mit `v: 1` oder `v: 2` reichen für ein Update nicht aus.
+  Einrichtung und Wechsel stehen unter [Update-Helfer](../deploy/README.md#update-helfer).
+  Der Rückweg kommt
+  ohne Release-Freigabe aus (er setzt nur den Stand davor wieder ein, den der Helfer selbst gesichert hat), geht aber
+  ebenfalls nur als `v: 3` mit `request_key_id` und `request_sig` über `v`, `id`, `action`, `version`, `created_at` und
+  `request_key_id`; ohne diese Signatur oder bei einem Helfer ohne `3` in `request_versions` antwortet Deck mit
+  `409 signature_required`. Die Signatur schützt gegen fremde Schreiber im Kanal, nicht gegen ein übernommenes
+  Deck; dort bleibt die Release-Freigabe die Grenze. Eine Freigabe lässt
   sich mit einer neuen Anforderung erneut verwenden; das bringt nur dieselbe Version, und die Grenze unten gilt
   weiter. Höchstens **eine Anforderung je 10 Minuten**, Update und Rückweg
   zusammen, sonst `429` „Gerade erst angefordert …“ mit `Retry-After`; was nicht angefordert wurde (Kanal nicht sicher, Vormerkung
@@ -1090,7 +1123,8 @@ Zustand in `<Datenordner>/.boot/`, Kopien in `<Datenordner>/backups/vor-update/`
   `admin restore-backup` räumt dann keinen laufenden Upload der Anwendung weg. Wo `flock` nicht geht, gibt es eine Sperre ohne Wirkung.
 - **Kopie vor jeder Migration** (nur SQLite): Datenbank online kopieren (`sqlite3.backup`, danach `integrity_check`) nach
   `backups/vor-update/<Zeit>_<von>_<nach>.db` (+ `.json`), vorher mindestens das **1,2-fache** der Datenbank samt WAL frei, es bleiben **drei**.
-  **Ohne Kopie keine Migration** (`no_space`, `no_copy`). Notausgang `NODVARD_DECK_SKIP_PRE_MIGRATE_BACKUP=1` (alter Name `LATTICE_…` gilt nur noch in dieser Version).
+  **Ohne Kopie keine Migration** (`no_space`, `no_copy`). Notausgang `NODVARD_DECK_SKIP_PRE_MIGRATE_BACKUP=1`
+  (der alte Name `LATTICE_SKIP_PRE_MIGRATE_BACKUP` gilt bis zum Ausbau für 1.0, siehe [Inventur](ALTE-NAMEN.md)).
   Scheitert die Migration, geht die Datenbank auf die Kopie zurück (die Kopie wird dabei umbenannt, nicht kopiert); `state.json` hält
   `last_migration` vorher als `running` fest, ein Absturz mitten drin wird beim nächsten Start genauso behandelt. Den halben Stand verwirft der Rückweg im
   selben Start; nach einem Absturz legt er ihn nach `restore/replaced-…` (außer die Datenbank liegt auf einem anderen Laufwerk und im Datenordner fehlt der Platz).
@@ -1394,6 +1428,111 @@ auch nach einem Neustart des Dashboards. `GET /ext/shield/defender/overview` nen
 (`audit_run`).
 
 Die alten Adressen `/ext/nexus-soc/…` antworten gleich (veraltet, siehe §7).
+
+### Wochenbericht (Erweiterung `shield`)
+
+```
+GET /ext/shield/reports        → 200 {items[], total}   Recht: soc.read
+GET /ext/shield/reports/{id}   → 200 Bericht            Recht: soc.read
+```
+
+Die Pfade gelten unter `/api/v1`. Beide lesen nur gespeicherte Berichte und lösen keine Scans oder Server-Abfragen
+aus. Unbekannte oder abgelaufene Berichte ergeben `404`. Die Liste enthält höchstens zwölf Berichte aus den letzten
+84 Tagen, neueste zuerst. Jeder Eintrag trägt `id`, `created_at`, `period_start`, `period_end`, `host_count` und
+`summary`: `updates`, `security_updates`, `new_findings`, `resolved_findings`, `unknown_update_hosts` und
+`unknown_security_update_hosts` sind Zählungen. Update-Summen enthalten nur bekannte Werte; `unknown_update_hosts`
+zählt Server ohne gespeicherten Update-Stand, `unknown_security_update_hosts` zusätzlich Server ohne bekannte Zahl der
+Sicherheitsupdates. Alle Zeitangaben sind Unix-Sekunden.
+
+Die Detailantwort ergänzt `hosts` und `certificates_note`. Jeder Server trägt `host_id`, `host_name` und:
+
+| Feld | Inhalt |
+|---|---|
+| `updates` | `null` ohne Stand, sonst `open`, `security` (Zahl oder `null`), `checked_at`, `error` (Text oder `null`) |
+| `scan` | `null` ohne Scan, sonst `status`, `infected`, `files_scanned`, `started_at`, `finished_at`; Dateizahl und Ende können `null` sein |
+| `fail2ban` | `null` ohne Stand, sonst `status`, `banned` (Zahl oder `null`), `checked_at`, `error` (Text oder `null`); zuletzt gespeicherte aktuelle Sperren, keine Wochensumme |
+| `lynis` | `null` ohne erfolgreichen Wert, sonst `hardening_index` und `created_at` des letzten erfolgreichen Audits |
+| `findings` | `new` und `resolved`, jeweils Listen mit `id`, `path`, `signature`, `status` |
+| `certificates` | derzeit `null`, weil Shield keine Zertifikatsabläufe speichert; `certificates_note` erklärt diese Grenze |
+
+`null` bedeutet unbekannt, nicht null Funde oder null auslaufende Zertifikate. `new` enthält im Zeitraum erkannte
+Schadsoftware-Funde; `resolved` enthält Funde, deren letzter Statuswechsel im Zeitraum zu `quarantined`, `deleted`
+oder `ignored` führte. `restored` und `detected` gelten nicht als erledigt. Der Zeitraum ist
+`period_start <= Zeitpunkt < period_end`: seit dem Ende des letzten noch gespeicherten Berichts, ohne solchen Bericht
+die vorherigen sieben Tage. Gespeicherte Berichte ändern sich durch spätere Scan-Ergebnisse oder Statuswechsel nicht.
+
+Einstellungen: `weekly_report_enabled` (Standard `true`) und `weekly_report_cron` (Standard `0 8 * * 1`, Montag
+08:00 in der eingestellten Systemzeitzone). Der Bericht entsteht höchstens einmal je Installation und lokaler
+Kalenderwoche. Die Kurzfassung läuft über die vorhandenen Meldungskanäle mit `notification_type: "shield.weekly_report"`
+und dem Pfad `/ext/shield/soc?tab=reports&report=<id>` zum vollständigen Bericht. Beim Erstellen bleiben höchstens zwölf
+Berichte aus den letzten 84 Tagen erhalten; es gibt keine nachträglich erzeugten Berichte für verpasste Wochen.
+Ein unterbrochener Versand kann beim erneuten Versuch eine Kurzfassung doppelt zustellen, wenn sie bereits zugestellt,
+aber noch nicht als versandt gespeichert war.
+
+### CVE-Abgleich und Außenprüfung (Erweiterung `shield`)
+
+```
+GET   /ext/shield/defender/checks                 → 200 {hosts[]}       Recht: soc.read
+POST  /ext/shield/defender/checks/{host_id}/run   → 202 {Serverstand}   Recht: soc.manage
+PATCH /ext/shield/defender/checks/{host_id}       → 200 {Serverstand}   Recht: soc.manage
+```
+
+`GET` liest ausschließlich gespeicherte Ergebnisse. Die Serverauswahl entspricht dem Virenschutz:
+verwaltete Linux-Server mit SSH-Zugang, eingeschränkt durch `av_host_tag`, falls gesetzt.
+`POST` benötigt keinen Body und startet beide Prüfungen im Hintergrund. Währenddessen liefert `running: true`
+den laufenden Zustand, vorhandene Ergebnisse behalten ihren ursprünglichen Zeitpunkt. Nach Abschluss liefert
+`GET` die neuen Ergebnisse. Doppelte Starts werden abgelehnt. Beim Stoppen der Erweiterung werden ihre manuellen
+Prüfungen abgebrochen; gespeicherte Ergebnisse bleiben erhalten.
+`PATCH` akzeptiert ausschließlich `{"external_enabled": true|false}`. Der Wert wird je Server gespeichert.
+Bei ausgeschalteter Außenprüfung erfolgen auch bei manuellen Läufen keine Verbindungen dafür; alte Ergebnisse
+bleiben als Verlauf sichtbar. Ein globales `external_checks_enabled: false` hat Vorrang.
+
+Der Serverstand enthält:
+
+| Feld | Inhalt |
+|---|---|
+| `host_id`, `host_name` | Kennung und Anzeigename |
+| `running` | Ob ein manueller oder geplanter Lauf aktiv ist |
+| `external_enabled` | Wirksamer Schalter für die Außenprüfung |
+| `cve` | `null` vor der ersten Prüfung, sonst `{status, checked_at, findings[], counts, error}` |
+| `external` | `null` vor der ersten Außenprüfung, sonst `{status, checked_at, open_ports[], new_ports[], certificates[], warnings[], error}` |
+
+Zeitangaben sind Unix-Sekunden. `cve.status` ist `ok`, `error` oder `unsupported`.
+Ein CVE-Fund enthält `{package, installed_version, cve, severity, fixed_version}`.
+`severity` ist `critical`, `high`, `medium`, `low` oder `unknown`; `fixed_version` ist ohne bekannte Behebung `null`.
+`counts` enthält `high` und `critical` als Anzahl der Paket/CVE-Funde dieser Schwere.
+Ein Fehler oder ein nicht unterstützter Stand ist keine vollständige Prüfung, auch wenn die Fundliste leer ist.
+Die Update-Zentrale für den Server liegt unter `/ext/shield/soc?tab=updates&host=<host_id>`.
+
+`external.status` ist `ok`, `warning`, `error` oder `unavailable`.
+`open_ports` enthält erreichte TCP-Portnummern; `new_ports` enthält zusätzliche offene Ports gegenüber dem letzten
+erfolgreichen vergleichbaren Lauf. Der erste Lauf meldet keine Ports als neu.
+Fehlgeschlagene Prüfungen überschreiben den letzten erfolgreichen Vergleichsstand nicht.
+Es werden gängige TCP-Ports sowie die im Dienstekatalog und an den Servermetadaten bekannten Dienste geprüft,
+höchstens 128 Ports und zwölf HTTPS-Ziele je Server. Verbindungen sind begrenzt: vier TCP-Prüfungen parallel,
+je 1,5 Sekunden; zwei HTTPS-Prüfungen parallel, je TLS-Verbindung drei Sekunden. Ein Außenlauf dauert höchstens
+120 Sekunden, das Lesen des Dienstekatalogs höchstens 20 Sekunden. Geprüft wird aus dem Heimnetz (vom Rechner mit Deck), nicht aus dem Internet.
+
+Jeder Zertifikateintrag enthält `{hostname, port, status, issuer, expires_at, days_remaining, hostname_matches,
+self_signed, trusted, protocol, weak_protocols[], protocol_check_available, warnings[], error}`.
+`status` ist `ok`, `warning` oder `unavailable`. Nicht feststellbare Werte sind `null`.
+`weak_protocols` nennt erfolgreich ausgehandelte alte TLS-Protokolle; eine nicht verfügbare Prüfung wird über
+`protocol_check_available: false` kenntlich gemacht. Warnungen betreffen insbesondere Ablauf unter 14 Tagen,
+selbstsignierte Zertifikate, fehlendes Vertrauen und einen unpassenden Hostnamen.
+
+Der Scheduler-Job `server-checks` nutzt `checks_enabled` (Standard `true`) und `checks_cron` (Standard
+`30 6 * * *`). Die Einstellung `external_checks_enabled` (Standard `true`) erlaubt die Außenprüfung global.
+Ein ausgeschalteter Zeitplan verhindert keine manuelle CVE-Prüfung. Beide Prüfungen ändern nichts am Server.
+Die Paketliste wird über das Shield-Hilfsskript Version 20 gelesen (`package-inventory`, keine Argumente).
+Ohne aktuelles Hilfsskript wird dieselbe Leseabfrage mit den vorhandenen Zugriffsrechten versucht.
+Öffentliche Distributionsdaten werden ausschließlich durch Deck geladen und 24 Stunden lokal zwischengespeichert.
+Paketnamen und installierte Versionen werden an keinen Datenanbieter gesendet.
+
+| Status | Bedeutung |
+|---|---|
+| 404 | Server unbekannt oder nicht in der Shield-Auswahl |
+| 409 | Prüfung läuft bereits, Schalter während eines Laufs geändert oder global ausgeschaltete Außenprüfung aktiviert |
+| 422 | Ungültiger Body, etwa zusätzliche Felder oder ein anderer Wert als ein JSON-Boolean |
 
 ### Proxmox mit Passwort verbinden (Erweiterung `proxmox`)
 
@@ -2253,6 +2392,10 @@ Und bei Erweiterungen: `ctx.http` folgt keiner Weiterleitung mehr, auch nicht mi
 `ctx.audit.log()` schreibt keine Kern-Einträge (`mfa.*`, `auth.*`, `login.*`, `system.*`, `user.*`); beides in
 [02 §2](02-EXTENSION-API.md#2-der-extensioncontext).
 
+Die [Inventur alter Namen](ALTE-NAMEN.md) nennt für beibehaltene technische Werte den Grund und das Ausbauziel
+1.0 oder 1.1. Diese Planung hebt keine Vertragszusage auf: Alte API-Adressen bleiben wie unten beschrieben in allen
+1.x erhalten, bestehende Daten und offene Aktionen brauchen vor jeder Umstellung eine eigene Migration.
+
 **Umbenennen** geht nur so: Der alte Name bleibt mehrere Releases parallel bestehen und ist
 als `deprecated` markiert (`deprecated=True` am Endpunkt bzw. Feld, dazu ein Hinweis im
 Änderungsprotokoll). Erst wenn App und Extensions den neuen Namen nutzen, darf der alte
@@ -2294,8 +2437,9 @@ weiter beantwortet (solange `npm` an ist): `GET /api/v1/ext/network/npm`, `GET /
 `GET /api/v1/ext/network/widgets/certificates` und `POST /api/v1/ext/network/npm/hosts/{host_id}/enable` bzw. `…/disable`.
 „Netzwerk“ selbst ist nur noch ein Wegweiser ohne eigene Adressen.
 
-**Nodvard Shield** heißt seit 0.7 `shield` (früher `nexus-soc`). Veraltet sind damit `/api/v1/ext/nexus-soc/**` (alle
-Routen der Erweiterung, heute 34 Pfade, jeder auch unter `/api/v1/ext/shield/…`) und `/api/v1/extensions/nexus-soc/**`.
+**Nodvard Shield** nutzt seit 0.7 die Kennung `shield`. Die alten Kompatibilitätsadressen sind veraltet:
+`/api/v1/ext/nexus-soc/**` (alle Routen der Erweiterung, heute 34 Pfade, jeder auch unter `/api/v1/ext/shield/…`)
+und `/api/v1/extensions/nexus-soc/**`.
 Beide antworten wie die neuen. Neue Einträge im Protokoll heißen `shield.*`, ältere `nexus_soc.*` bleiben stehen; ein
 Filter `GET /audit?action=shield.…` findet die älteren nicht. Die Aktionsarten bleiben `nexus_soc.*`
 ([01 „Alte und neue Namen“](01-ARCHITECTURE.md#alte-und-neue-namen)).
@@ -2319,3 +2463,109 @@ vergleichen die aktuelle `app.openapi()` (mit allen mitgelieferten Extensions) d
   `backend/tests/contract/breaking_exceptions.toml` (Pfad, Methode, Art, Begründung), dann
   `python scripts/update_api_contract.py --allow-breaking`. Die Liste ist anfangs leer und soll
   es möglichst bleiben.
+
+### Routen ohne lokale Aufrufer
+
+Fehlende Aufrufe aus der Web-Oberfläche sind kein Grund, öffentliche Vertragsrouten zu entfernen.
+Die folgenden Routen bleiben für externe Clients und als SDK-Beispiele erhalten. Ihre Vertragsgründe
+stehen auch an den Handlern beziehungsweise den Alias-Angaben der Erweiterungen.
+
+Die Alias-Zeilen umfassen sämtliche Methode-Pfad-Paare unter dem jeweiligen Präfix.
+Der aktuelle Schnappschuss `backend/tests/contract/api_v1.json` enthält dort 61 Docker-, 49 Shield- und
+9 Netzwerk-Routen. Zusammen mit den elf Einzelrouten sind das 130 Vertragsrouten. Der Suchbericht
+vom 2. November 2026 zählte noch 112. Externe Nutzung lässt sich aus den lokalen Aufrufern nicht ableiten.
+
+**Entfernt:** keine. Die bereits veralteten Adressen bleiben in 1.x erhalten und können frühestens
+mit v2 entfallen. Eine Entfernung in 1.1 ist für diese Vertragsrouten nicht vorgesehen.
+
+| Endpunkt | Entscheidung | Grund |
+|---|---|---|
+| `* /api/v1/ext/service-matrix/**` | Behalten, bereits veraltet | Kompatibilitätsadressen von Docker für bestehende Clients; in 1.x zugesagt. |
+| `* /api/v1/ext/nexus-soc/**` | Behalten, bereits veraltet | Kompatibilitätsadressen von Shield für bestehende Clients; in 1.x zugesagt. |
+| `* /api/v1/ext/network/**` | Behalten, bereits veraltet | Übernommene Adressen von Pi-hole und NPM für bestehende Clients; in 1.x zugesagt. |
+| `GET /api/v1/system/backups/download/{ticket}/status` | Behalten, bereits veraltet | Ticket-Status für bestehende Clients; Nachfolger ist `/system/backups/download-jobs/{job_id}`. |
+| `GET /api/v1/files/{source_id}/info` | Behalten | Öffentlicher Zugriff auf `FileSource.info()` aus dem SDK: Quota, Zustand und Deep-Link. |
+| `GET /api/v1/files/{source_id}/stat` | Behalten | Öffentlicher Zugriff auf `FileSource.stat()` aus dem SDK: Metadaten einer Datei. |
+| `GET /api/v1/hosts/{host_id}/status` | Behalten | Öffentliche Einzelabfrage über SSH oder `HostProvider.host_status()` aus dem SDK. |
+| `GET /api/v1/runs/{run_id}` | Behalten | Öffentlicher Abruf eines Laufs über seine ID, auch unabhängig von der Job-Liste. |
+| `GET /api/v1/runs/{run_id}/output` | Behalten | Öffentlicher Abruf des Laufprotokolls über die Lauf-ID. |
+| `POST /api/v1/runs/{run_id}/cancel` | Behalten | Öffentlicher Abbruch eines laufenden Jobs über die Lauf-ID. |
+| `GET /api/v1/system/openapi.json` | Behalten | Vertrag für externe Clients und Grundlage der Flutter-Modellgenerierung. |
+| `GET /api/v1/ext/hello-world/protected-widget` | Behalten | SDK-Beispiel für `include_router(permission=...)` mit zusätzlicher Berechtigungsprüfung. |
+| `POST /api/v1/ext/hello-world/notify-test` | Behalten | SDK-Beispiel für `notify.send()` und die Wartungsfenster-Prüfung. |
+| `POST /api/v1/ext/hello-world/vault-use-and-fail` | Behalten | SDK-Beispiel für `vault_use()` und einen beständigen Audit-Eintrag bei Fehlern. |
+
+## Nutzungsdaten
+
+Alle Endpunkte unter `/api/v1/telemetry` verlangen eine angemeldete Inhabersitzung.
+Ohne Anmeldung folgt 401, für andere Benutzer einschließlich Admins 403.
+
+| Methode | Pfad | Vertrag |
+|---|---|---|
+| GET | `/api/v1/telemetry` | Lokaler Stand ohne Netzaufruf |
+| POST | `/api/v1/telemetry/preview` | Body `{ "basis": false, "nutzung": false, "fehler": false }`, Vorschau für diese Auswahl, ohne Einwilligung zu speichern |
+| PUT | `/api/v1/telemetry` | Gleicher Body, speichert die drei unabhängigen Schalter; Standard je Feld `false`; unbekannte Felder 422, Opt-in bei Sperre 409; Ausschalten bleibt möglich |
+| POST | `/api/v1/telemetry/send` | Kein Body; verwendet ausschließlich die gespeicherte Auswahl und dieselbe Berichtsfunktion wie die Vorschau |
+| DELETE | `/api/v1/telemetry` | Kein Body; schaltet alle Stufen aus, rotiert Kennung und Schlüssel, versucht offene Löschwünsche; die 24-Stunden-Sperre bleibt bestehen |
+
+GET, Vorschau und PUT liefern `{ choices, blocked, preview, preview_error, history, next_send_at, pending_deletions }`.
+`choices` enthält die gespeicherten booleschen Schalter, auch bei einer abweichenden Vorschau.
+`blocked` ist `null`, `admin`, `privacy` oder `endpoint`. `preview` ist das echte Bericht-JSON ohne Löschschlüssel.
+Bei unbekannter Architektur und gewählter Basisstufe ist `preview: null`, `preview_error: "unsupported_arch"`;
+sonst ist `preview_error: null`. Eine solche Basis-Auswahl kann nicht gespeichert werden (409).
+`history` enthält höchstens 30 Einträge `{ at, operation, outcome, report }`, neueste zuerst.
+`at` ist nur lokal ein ISO-Zeitpunkt. `operation` ist `report` oder `delete`, `outcome` eines von
+`sending`, `sent`, `failed`, `deleted`. `report` enthält das Bericht-JSON oder beim Löschen nur `{ id }`.
+`next_send_at` ist die früheste erlaubte Zeit für einen neuen Versuch oder `null`, kein zugesicherter automatischer Termin.
+`pending_deletions` zählt lokal vorgemerkte Löschwünsche.
+
+Senden und Löschen liefern `{ "result": "..." }`. Senden: `sent`, `failed`, `disabled`, `rate_limited` oder
+`unsupported_arch`. Löschen: `deleted` oder `delete_pending`. Ein HTTP 200 der lokalen API allein bedeutet
+keinen erfolgreichen externen Versand. Fehlversuche sperren weitere Berichte ebenfalls für 24 Stunden.
+Identität, Einwilligung, Sperre, Fehlerzähler und Verlauf liegen in der vorhandenen lokalen Tabelle `settings`
+unter dem internen Schlüssel `telemetry.state`, der über die allgemeine Einstellungs-API nicht zugänglich ist.
+
+### Bericht an den Empfänger, Datenformat 1
+
+Die Basisadresse kommt ausschließlich aus `NODVARD_DECK_TELEMETRY_URL`, standardmäßig leer.
+Beispielplatzhalter: `https://telemetrie.example.invalid`. Ohne gültige HTTPS-Adresse, bei
+`NODVARD_DECK_TELEMETRY_PRIVACY_READY=false`, bei `NODVARD_TELEMETRIE=aus` oder
+`NODVARD_DECK_TELEMETRIE=aus` gibt es keinen externen Aufruf. Keine Weiterleitungen, keine Proxy-Übernahme aus
+der Umgebung, keine Wiederholungsschleife. Zeitlimit je Anfrage: zehn Sekunden. Vor Netzaufrufen ist die
+DB-Transaktion beendet. Die Anwendung läuft wie bisher mit einem Worker.
+
+`POST <Basisadresse>/v1/bericht` erhält höchstens einmal je 24 Stunden dieses JSON, ausschließlich mit den
+gewählten Blöcken. Kein Datum oder zusätzlicher Envelope wird angehängt:
+
+```json
+{
+  "schema": 1,
+  "id": "81f813f9-7e6c-4276-905d-b2bdf8d678cc",
+  "basis": { "version": "0.12.1", "produkt": "deck", "installation": "docker", "arch": "arm64", "sprache": "de" },
+  "nutzung": { "module": ["docker", "pihole"], "fremd": "0", "server": "2-5", "benutzer": "1", "zwei_faktor": true, "sicherungen_aktiv": false },
+  "fehler": { "arten": { "ssh.timeout": 3, "backup.ziel_nicht_beschreibbar": 1 } }
+}
+```
+
+Zulässige Werte: aktuelle feste Programmversion; Produkt `deck|dock`; Installation `docker|pi|sonstiges`;
+Architektur `amd64|arm64`; Sprache `de|en`; Server `0|1|2-5|6-20|21+`; Benutzer `1|2-5|6+`;
+fremde Module als Klasse `0|1|2-5|6+`. `module` enthält ausschließlich aktive Kennungen aus der mitgelieferten
+festen Liste `telemetry/vocabulary.json`. Fremde Namen werden verworfen. Fehlercodes stehen ausschließlich in
+`telemetry/codes.py`, unbekannte Codes werden verworfen und Zähler auf 0 bis 99 gekappt.
+`zwei_faktor` bedeutet mindestens ein aktives Konto mit bestätigter Zwei-Faktor-Anmeldung.
+`sicherungen_aktiv` meint automatische Sicherungen von Deck selbst, keine Server-Sicherungen einzelner Module.
+Fehlerzähler werden nur bei aktiver Fehlerstufe gesammelt und nach einem Versuch geleert.
+Das geschlossene Schema steht in `telemetry/schema.py`; unbekannte Felder und freie Werte werden abgelehnt.
+
+Die lokale Installation erzeugt einen zufälligen 256-Bit-Schlüssel und die UUIDv4 unabhängig von Hardware.
+Der Löschschlüssel im Header `X-Nodvard-Delete-Key` ist `HMAC-SHA256(secret, id)` als Hexwert.
+Der gleiche Header wird bei jedem Bericht mitgegeben, einschließlich des ersten; er ist kein Berichtsfeld.
+Der Empfänger muss nur den Hash dieses Löschschlüssels speichern und spätere Anfragen dagegen prüfen.
+`DELETE <Basisadresse>/v1/id/<id>` trägt denselben Header und keinen JSON-Body.
+Ein 2xx bestätigt die Anfrage, sonst bleibt der Löschwunsch mit alter Kennung und Schlüssel lokal für einen
+erneuten manuellen Versuch erhalten. Ohne je versuchten Bericht und bei gesperrtem Empfänger wird nur lokal rotiert.
+Der neue lokale Schlüssel wird niemals in Vorschau oder Verlauf ausgegeben.
+
+Es werden keine freien Fehlertexte, Namen, Hostnamen, IP-Adressen, Pfade, Zeitstempel, Zeitzonen oder Laufzeiten
+in Berichte aufgenommen. Die technische Sichtbarkeit der öffentlichen IP beim Empfänger lässt sich dadurch
+nicht verhindern. Empfängerimplementierung und Datenschutztext sind nicht Teil dieses API-Moduls.

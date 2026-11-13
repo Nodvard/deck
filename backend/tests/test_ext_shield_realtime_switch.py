@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from exec_gate_helpers import ReadingExec
 from shield_helper_kit import EXT_DIR, SH, helper_copy, stubs
 
 from nodvard_deck.core.deny_patterns import match_deny_patterns
@@ -359,9 +360,9 @@ class _Ctx:
         self.commands: list[str] = []
         self.proposals: list = []
         self.settings_value: dict = {}
-        self.api = SimpleNamespace(current_actor=lambda: Actor.user("u1", "anna"))
+        self.api = SimpleNamespace(current_actor=lambda: Actor.user("u1", "anna"), require_permission=lambda permission: lambda: None)
         self.hosts = SimpleNamespace(get=self._get, list=self._list)
-        self.exec = SimpleNamespace(run=self._run)
+        self.exec = ReadingExec(ext_id="shield", run=self._run)
         self.db = SimpleNamespace(session=self._session)
         self.actions = SimpleNamespace(propose=self._propose)
         self.settings = SimpleNamespace(get=self._settings)

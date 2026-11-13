@@ -10,8 +10,35 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from nodvard_sdk.errors import error_message
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 _VALUE_ERROR_PREFIX = "Value error, "
+
+
+class ErrorMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        started = False
+
+        async def track(message: Message) -> None:
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, track)
+        except Exception as exc:
+            detail = error_message(exc)
+            if started:
+                raise RuntimeError(detail) from None
+            await JSONResponse({"detail": detail}, status_code=500)(scope, receive, send)
 
 
 def _german_message(error_type: str, ctx: Mapping[str, Any], fallback: str) -> str:

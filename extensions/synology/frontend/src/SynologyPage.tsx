@@ -1,3 +1,4 @@
+import { CARD_BODY, CARD_CELL, CARD_CELL_PLAIN, CARD_HEAD, CARD_ROW, CARD_TABLE } from "../../../_shared/frontend/src/cardTable";
 /** Synology-Seite (PageSpec `component="SynologyPage"`): Zustand eines oder mehrerer DSM mit Modell, Auslastung, Speicherpools, Volumes, Festplatten und Hyper Backup, nur lesend. */
 import { styleRef } from "../../../_shared/frontend/src/csp";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
@@ -261,9 +262,9 @@ function PoolsCard({ data }: { data: Overview }) {
   if (!pools || pools.length === 0) return null;
   return (
     <Card title="Speicherpools" padded={false}>
-      <div className="overflow-x-auto">
-        <table data-testid="pools" className="w-full text-sm">
-          <thead>
+      <div className="p-3 sm:overflow-x-auto sm:p-0">
+        <table role="table" data-testid="pools" className={`${CARD_TABLE} text-left`}>
+          <thead role="rowgroup" className={CARD_HEAD}>
             <tr className="border-b border-white/10 text-left text-xs text-white/50">
               <th className="px-5 py-2 font-medium">Name</th>
               <th className="px-3 py-2 font-medium">RAID</th>
@@ -273,18 +274,18 @@ function PoolsCard({ data }: { data: Overview }) {
               <th className="px-5 py-2 font-medium">Größe</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/[0.06]">
+          <tbody role="rowgroup" className={CARD_BODY}>
             {pools.map((pool) => (
-              <tr key={pool.id} data-testid="pool">
-                <td className="break-words px-5 py-2.5 align-top">
+              <tr role="row" className={CARD_ROW} key={pool.id} data-testid="pool">
+                <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] break-words sm:px-5 sm:py-2.5 align-top`}>
                   <span className="font-medium">{pool.name}</span>
                   {pool.description && <p className="text-xs text-white/45">{pool.description}</p>}
                 </td>
-                <td className="whitespace-nowrap px-3 py-2.5 align-top">{pool.raid ?? "–"}</td>
-                <td className="px-3 py-2.5 align-top"><Badge tone={toneOf(pool.tone)}>{pool.status_label}</Badge></td>
-                <td className="px-3 py-2.5 align-top tabular-nums">{pool.disks ?? "–"}</td>
-                <td className="break-words px-3 py-2.5 align-top text-white/70">{pool.volumes.length > 0 ? pool.volumes.join(", ") : "–"}</td>
-                <td className="whitespace-nowrap px-5 py-2.5 align-top tabular-nums">{pool.total !== null ? sizeText(pool.total) : "–"}</td>
+                <td data-label="RAID" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:whitespace-nowrap sm:px-3 sm:py-2.5 align-top`}>{pool.raid ?? "–"}</td>
+                <td data-label="Zustand" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-2.5 align-top`}><Badge tone={toneOf(pool.tone)}>{pool.status_label}</Badge></td>
+                <td data-label="Festplatten" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-2.5 align-top tabular-nums`}>{pool.disks ?? "–"}</td>
+                <td data-label="Volumes" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] break-words sm:px-3 sm:py-2.5 align-top text-white/70`}>{pool.volumes.length > 0 ? pool.volumes.join(", ") : "–"}</td>
+                <td data-label="Größe" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:whitespace-nowrap sm:px-5 sm:py-2.5 align-top tabular-nums`}>{pool.total !== null ? sizeText(pool.total) : "–"}</td>
               </tr>
             ))}
           </tbody>
@@ -301,24 +302,24 @@ function VolumesCard({ data }: { data: Overview }) {
       {data.storage_note && <div className="px-5 py-4"><PartNote note={data.storage_note} testId="note-storage" /></div>}
       {volumes && volumes.length === 0 && <p data-testid="no-volumes" className="px-5 py-4 text-sm text-white/50">DSM meldet keine Volumes.</p>}
       {volumes && volumes.length > 0 && (
-        <div className="overflow-x-auto">
-          <table data-testid="volumes" className="w-full text-sm">
-            <thead>
+        <div className="p-3 sm:overflow-x-auto sm:p-0">
+          <table role="table" data-testid="volumes" className={`${CARD_TABLE} text-left`}>
+            <thead role="rowgroup" className={CARD_HEAD}>
               <tr className="border-b border-white/10 text-left text-xs text-white/50">
                 <th className="px-5 py-2 font-medium">Name</th>
                 <th className="px-3 py-2 font-medium">Status</th>
                 <th className="px-5 py-2 font-medium">Belegung</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/[0.06]">
+            <tbody role="rowgroup" className={CARD_BODY}>
               {volumes.map((volume) => (
-                <tr key={volume.id} data-testid="volume">
-                  <td className="break-words px-5 py-2.5 align-top">
+                <tr role="row" className={CARD_ROW} key={volume.id} data-testid="volume">
+                  <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] break-words sm:px-5 sm:py-2.5 align-top`}>
                     <span className="font-medium">{volume.name}</span>
                     {volume.fs_type && <span className="ml-2 text-xs text-white/45">{volume.fs_type}</span>}
                   </td>
-                  <td className="px-3 py-2.5 align-top"><Badge tone={toneOf(volume.tone)}>{volume.status_label}</Badge></td>
-                  <td className="px-5 py-2.5 align-top"><UsageBar volume={volume} /></td>
+                  <td data-label="Status" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-2.5 align-top`}><Badge tone={toneOf(volume.tone)}>{volume.status_label}</Badge></td>
+                  <td data-label="Belegung" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-5 sm:py-2.5 align-top`}><UsageBar volume={volume} /></td>
                 </tr>
               ))}
             </tbody>
@@ -337,9 +338,9 @@ function DisksCard({ data }: { data: Overview }) {
     <Card title="Festplatten" padded={false}>
       {disks.length === 0 && <p data-testid="no-disks" className="px-5 py-4 text-sm text-white/50">DSM meldet keine Festplatten.</p>}
       {disks.length > 0 && (
-        <div className="overflow-x-auto">
-          <table data-testid="disks" className="w-full text-sm">
-            <thead>
+        <div className="p-3 sm:overflow-x-auto sm:p-0">
+          <table role="table" data-testid="disks" className={`${CARD_TABLE} text-left`}>
+            <thead role="rowgroup" className={CARD_HEAD}>
               <tr className="border-b border-white/10 text-left text-xs text-white/50">
                 <th className="px-5 py-2 font-medium">Name</th>
                 <th className="px-3 py-2 font-medium">Modell</th>
@@ -348,21 +349,21 @@ function DisksCard({ data }: { data: Overview }) {
                 <th className="px-5 py-2 font-medium">SMART</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/[0.06]">
+            <tbody role="rowgroup" className={CARD_BODY}>
               {disks.map((disk) => (
-                <tr key={disk.id} data-testid="disk">
-                  <td className="break-words px-5 py-2.5 align-top">
+                <tr role="row" className={CARD_ROW} key={disk.id} data-testid="disk">
+                  <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] break-words sm:px-5 sm:py-2.5 align-top`}>
                     <span className="font-medium">{disk.name}</span>
                     {disk.warning && <p data-testid="disk-warning" className="text-xs text-amber-300">{disk.warning}</p>}
                   </td>
-                  <td className="break-words px-3 py-2.5 align-top text-white/70">{disk.model ?? "–"}</td>
-                  <td className="px-3 py-2.5 align-top"><Badge tone={toneOf(disk.tone)}>{disk.status_label}</Badge></td>
-                  <td className="whitespace-nowrap px-3 py-2.5 align-top tabular-nums">
+                  <td data-label="Modell" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] break-words sm:px-3 sm:py-2.5 align-top text-white/70`}>{disk.model ?? "–"}</td>
+                  <td data-label="Status" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-2.5 align-top`}><Badge tone={toneOf(disk.tone)}>{disk.status_label}</Badge></td>
+                  <td data-label="Temperatur" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:whitespace-nowrap sm:px-3 sm:py-2.5 align-top tabular-nums`}>
                     {disk.temp === null ? "–" : disk.temp_warn === true ? (
                       <span className="text-amber-300" title="über der Grenze">{`${disk.temp} °C`}<span className="sr-only"> (über der Grenze)</span></span>
                     ) : `${disk.temp} °C`}
                   </td>
-                  <td className="px-5 py-2.5 align-top">
+                  <td data-label="SMART" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-5 sm:py-2.5 align-top`}>
                     {disk.smart_label ? <Badge tone={toneOf(disk.smart_tone)}>{disk.smart_label}</Badge> : <span className="text-white/50">–</span>}
                   </td>
                 </tr>
@@ -388,9 +389,9 @@ function BackupsCard({ data }: { data: Overview }) {
       )}
       {backups && backups.length > 0 && (
         <>
-          <div className="overflow-x-auto">
-            <table data-testid="backups" className="w-full text-sm">
-              <thead>
+          <div className="p-3 sm:overflow-x-auto sm:p-0">
+            <table role="table" data-testid="backups" className={`${CARD_TABLE} text-left`}>
+              <thead role="rowgroup" className={CARD_HEAD}>
                 <tr className="border-b border-white/10 text-left text-xs text-white/50">
                   <th className="px-5 py-2 font-medium">Aufgabe</th>
                   <th className="px-3 py-2 font-medium">Ergebnis</th>
@@ -398,16 +399,16 @@ function BackupsCard({ data }: { data: Overview }) {
                   <th className="whitespace-nowrap px-5 py-2 font-medium">Nächster Lauf</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/[0.06]">
+              <tbody role="rowgroup" className={CARD_BODY}>
                 {backups.map((task) => (
-                  <tr key={task.id} data-testid="backup">
-                    <td className="break-words px-5 py-2.5 align-top">
+                  <tr role="row" className={CARD_ROW} key={task.id} data-testid="backup">
+                    <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] break-words sm:px-5 sm:py-2.5 align-top`}>
                       <span className="font-medium">{task.name}</span>
                       {task.problem && <p data-testid="backup-problem" className={`text-xs ${TONE_TEXT[task.tone] ?? "text-white/60"}`}>{task.problem}</p>}
                     </td>
-                    <td className="px-3 py-2.5 align-top"><Badge tone={toneOf(task.tone)}>{task.result_label}</Badge></td>
-                    <td className="whitespace-nowrap px-3 py-2.5 align-top tabular-nums">{dsmTime(task.last_run) ?? <span className="text-white/50">–</span>}</td>
-                    <td className="whitespace-nowrap px-5 py-2.5 align-top tabular-nums">{dsmTime(task.next_run) ?? <span className="text-white/50">kein Zeitplan</span>}</td>
+                    <td data-label="Ergebnis" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-2.5 align-top`}><Badge tone={toneOf(task.tone)}>{task.result_label}</Badge></td>
+                    <td data-label="Letzter Lauf" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:whitespace-nowrap sm:px-3 sm:py-2.5 align-top tabular-nums`}>{dsmTime(task.last_run) ?? <span className="text-white/50">–</span>}</td>
+                    <td data-label="Nächster Lauf" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:whitespace-nowrap sm:px-5 sm:py-2.5 align-top tabular-nums`}>{dsmTime(task.next_run) ?? <span className="text-white/50">kein Zeitplan</span>}</td>
                   </tr>
                 ))}
               </tbody>

@@ -152,6 +152,25 @@ def test_health_is_503_and_never_says_ok(env):
     assert status == 503 and body == b""
 
 
+@pytest.mark.parametrize(("method", "path", "status"), [
+    ("GET", "/", 503),
+    ("HEAD", "/", 503),
+    ("GET", "/api/v1/health", 503),
+    ("GET", "/rescue/status", 200),
+    ("GET", "/rescue/log", 401),
+    ("POST", "/rescue/unlock", 303),
+])
+@pytest.mark.parametrize("proto", [None, "http", "https"])
+def test_rescue_responses_always_include_hsts(env, method, path, status, proto):
+    body = f"code={env.code}" if method == "POST" else None
+    headers = {} if proto is None else {"X-Forwarded-Proto": proto}
+    actual, _, _, response = env.request(method, path, body, headers)
+    assert actual == status
+    assert [value for name, value in response.getheaders() if name.lower() == "strict-transport-security"] == [
+        "max-age=31536000",
+    ]
+
+
 @pytest.mark.parametrize("method,path", [("GET", "/api/v1/auth/bootstrap"), ("POST", "/api/v1/auth/login"), ("GET", "/api/v1/hosts"),
                                           ("PUT", "/api/v1/settings/x"), ("DELETE", "/api/v1/hosts/1")])
 def test_every_other_api_path_is_503_json_too(env, method, path):
@@ -206,17 +225,22 @@ def test_unusual_methods_are_refused(env):
 # ---------------------------------------------------------------------------
 
 
-def test_the_code_file_is_private_and_has_the_setup_code_format(tmp_path):
+def test_the_code_file_is_private_and_has_the_setup_code_format(tmp_path, monkeypatch):
+    codes = iter(("ABCD-EFGH-JKLM", "NPQR-STUV-WXYZ"))
+    monkeypatch.setattr(rescue, "_generate_code", lambda: next(codes))
     data = tmp_path / "d"
     data.mkdir()
     r = rescue.Rescue(data)
     code = r.ensure_code()
+    assert code == "ABCD-EFGH-JKLM"
     assert CODE_RE.match(code)
     path = data / ".boot" / "rescue_code.txt"
     assert stat.S_IMODE(path.stat().st_mode) == 0o600 and stat.S_IMODE(path.parent.stat().st_mode) == 0o700
-    assert rescue.Rescue(data).ensure_code() == code, "bleibt ueber Neustarts gleich, bis ein Start gelingt"
+    assert rescue.Rescue(data).ensure_code() == code, "bleibt über Neustarts gleich, bis ein Start gelingt"
     assert bootstate.clear_rescue_code(data) is True
-    assert rescue.Rescue(data).ensure_code() != code or True
+    assert not path.exists()
+    assert rescue.Rescue(data).ensure_code() == "NPQR-STUV-WXYZ"
+    assert path.read_text(encoding="utf-8") == "NPQR-STUV-WXYZ\n"
 
 
 def test_an_unusable_code_file_is_replaced(tmp_path):
@@ -315,6 +339,17 @@ def test_throttle_counts_when_the_attempt_starts_so_parallel_guesses_do_not_get_
     status, token = r.try_code("1.2.3.4", "ABCD-EFGH-JKLM", now=100.0)
     assert status == "ok" and token, "der richtige Code geht auch waehrend der Sperre"
     assert r.try_code("1.2.3.4", "falsch", now=100.0 + rescue.LOCK_S + 1)[0] == "wrong", "nach der Sperrzeit wird wieder gezaehlt"
+
+
+def test_code_attempts_share_the_ipv6_network_limit():
+    r = rescue.Rescue(Path("/nirgends"))
+    r._code = "ABCD-EFGH-JKLM"
+    for index in range(rescue.MAX_FAILURES_PER_IP):
+        assert r.try_code(f"2001:db8::{index}", "falsch", now=100.0)[0] == "wrong"
+    status, wait = r.try_code("2001:db8::ff", "falsch", now=100.0)
+    assert status == "locked" and wait > 0
+    assert r.try_code("2001:db8:0:1::1", "falsch", now=100.0)[0] == "wrong"
+    assert r.try_code("2001:db8::ff", "falsch", now=101.0 + rescue.LOCK_S)[0] == "wrong"
 
 
 def test_a_successful_attempt_is_not_counted_against_the_caller():
@@ -555,10 +590,13 @@ def test_a_browser_that_says_the_request_is_cross_site_is_refused(env):
     assert status == 303
 
 
-def test_the_referrer_policy_lets_browsers_send_the_origin_with_a_form(env):
-    # `no-referrer` machte aus dem Origin eines Formulars `null` -- in einem echten Browser ging dann nichts mehr (live gefunden).
+def test_referrer_policy_keeps_form_origin_on_the_own_site(env):
     headers = env.request("GET", "/")[1]
     assert headers["referrer-policy"] == "same-origin"
+    status, headers, _, _ = env.request(
+        "POST", "/rescue/unlock", f"code={env.code}", {"Origin": f"http://127.0.0.1:{env.port}"},
+    )
+    assert status == 303 and headers["set-cookie"].startswith("rescue_session=")
 
 
 def test_a_foreign_origin_cannot_even_try_the_code(env):

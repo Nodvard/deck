@@ -83,7 +83,7 @@ def test_oci_labels_source_license_version():
 def test_login_uses_only_the_github_token_and_least_privilege():
     workflow = _workflow()
     job = workflow["jobs"]["image"]
-    assert job["permissions"] == {"contents": "read", "packages": "write"}
+    assert job["permissions"] == {"contents": "read", "packages": "write", "id-token": "write", "attestations": "write"}
     assert workflow.get("permissions", {}) in ({}, {"contents": "read"})
     login = _step("docker/login-action")["with"]
     assert login["registry"] == "ghcr.io"
@@ -100,7 +100,7 @@ def test_login_uses_only_the_github_token_and_least_privilege():
             # Legt das GitHub-Release an: Schreibrecht aufs Repository, keins auf die Registry.
             assert other["permissions"] == {"contents": "write"}
             continue
-        assert other["permissions"] == {"contents": "read", "packages": "write"}, name
+        assert other["permissions"] == {"contents": "read", "packages": "write", "id-token": "write", "attestations": "write"}, name
     for forbidden in ("ssh", "scp", "deploy_pi", "docker compose", "kubectl"):
         assert forbidden not in text.lower().replace("docker/", ""), forbidden
 
@@ -130,6 +130,16 @@ def test_every_release_fetches_the_debian_packages_fresh():
     apt_run = runtime.rindex("\nRUN ", 0, runtime.index("apt-get update"))
     # Direkt davor: Ein neuer Wert baut sonst auch die Schritte dazwischen neu.
     assert runtime[:apt_run].endswith('\nARG APT_REFRESH=""')
+
+
+def test_the_upgrade_step_uses_apt_refresh():
+    # BuildKit nimmt den Wert erst in den Cache-Schlüssel, wenn der Befehl ihn liest.
+    text = (ROOT / "deploy" / "Dockerfile").read_text(encoding="utf-8")
+    runtime = text[text.index("AS runtime"):]
+    apt_run = runtime.rindex("\nRUN ", 0, runtime.index("apt-get update"))
+    command, _, _rest = runtime[apt_run + 1:].partition("\nRUN ")
+    code = " ".join(part.split("#", 1)[0] for part in command.splitlines())
+    assert "${APT_REFRESH}" in code or "$APT_REFRESH" in code
 
 
 def test_dockerfile_writes_the_build_args_into_a_file_not_the_environment():
@@ -245,7 +255,9 @@ def test_newest_version_is_decided_after_the_tag_guard_and_before_the_tags():
     assert newest["id"] == "newest"
     assert "${{" not in newest["run"], "VERSION nur über die Umgebung, nie in den Befehl eingesetzt"
     assert "if" not in newest and "continue-on-error" not in newest, "ohne Ergebnis darf der Lauf nicht weitergehen"
-    assert _workflow()["jobs"]["image"]["outputs"] == {"newest": "${{ steps.newest.outputs.newest }}"}
+    assert _workflow()["jobs"]["image"]["outputs"] == {
+        "newest": "${{ steps.newest.outputs.newest }}", "digest": "${{ steps.build.outputs.digest }}",
+    }
 
 
 def _run_newest(tmp_path: Path, version: str, tags: list[str], *, git_exit: int = 0):
@@ -593,20 +605,28 @@ def test_helper_digest_is_an_output_of_the_helper_job():
 def test_release_comes_after_tag_1_only_for_final_versions_with_least_privilege():
     job = _release_job()
     assert set(job) == {"needs", "if", "runs-on", "permissions", "steps"}, sorted(job)
-    assert job["needs"] == "updater-image"
+    assert job["needs"] == ["image", "updater-image", "dock-image"]
     assert job["if"] == "${{ !contains(github.ref_name, '-') }}"
     assert job["permissions"] == {"contents": "write"}
     checkout = job["steps"][0]
     assert str(checkout["uses"]).split("@")[0] == "actions/checkout"
     assert checkout["with"] == {"persist-credentials": False}, "kein Token mit Schreibrecht in der Arbeitskopie"
-    assert [s for s in job["steps"] if "uses" in s] == [checkout], "keine fremde Action mit Schreibrecht"
+    download = _release_named("Bausteinlisten holen")
+    assert [s for s in job["steps"] if "uses" in s] == [checkout, download]
+    assert download["uses"] == "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+    assert download["with"] == {"pattern": "release-sbom-*", "merge-multiple": True, "path": "${{ runner.temp }}/sbom"}
     for step in job["steps"]:
         assert "continue-on-error" not in step and "if" not in step, step
 
 
 def test_release_files_get_the_published_digest_only_through_the_environment():
     step = _release_named("Dateien fürs Release")
-    assert step["env"] == {"IMAGE": "${{ env.IMAGE_NAME }}-updater", "DIGEST": "${{ needs.updater-image.outputs.digest }}"}
+    assert step["env"] == {
+        "IMAGE": "${{ env.IMAGE_NAME }}-updater", "DIGEST": "${{ needs.updater-image.outputs.digest }}",
+        "DECK_IMAGE": "${{ env.IMAGE_NAME }}", "DECK_DIGEST": "${{ needs.image.outputs.digest }}",
+        "DOCK_IMAGE": "${{ env.DOCK_IMAGE_NAME }}", "DOCK_DIGEST": "${{ needs.dock-image.outputs.digest }}",
+        "REPOSITORY": "${{ github.repository }}",
+    }
     assert "${{" not in step["run"]
     assert "\npython3 scripts/release_helper_assets.py files " in step["run"]
 
@@ -722,8 +742,15 @@ def _fake_gh(tmp_path: Path, release: dict | None, view_error: str | None) -> tu
     return bin_dir, state
 
 
+def _sbom_assets() -> dict[str, str]:
+    return {f"{name}{suffix}": json.dumps({"image": name, "file": suffix})
+            for name in ("deck", "dock", "updater")
+            for suffix in ("-linux-amd64.spdx.json", "-linux-amd64.cdx.json", "-linux-arm64.spdx.json",
+                           "-linux-arm64.cdx.json", ".sigstore.json")}
+
+
 def _run_release(tmp_path: Path, release: dict | None = None, digest: str = DIGEST, *, version: str | None = None,
-                 view_error: str | None = None, files_out: list | None = None):
+                 view_error: str | None = None, files_out: list | None = None, missing_asset: str | None = None):
     """Beide Schritte in bash wie auf dem Runner; zurück kommen Ergebnis, `gh`-Aufrufe, Release danach und RUNNER_TEMP."""
     import os
     import shutil
@@ -738,8 +765,16 @@ def _run_release(tmp_path: Path, release: dict | None = None, digest: str = DIGE
     bin_dir, state = _fake_gh(tmp_path, release and {"tag": f"v{version}", **release}, view_error)
     runner_temp = tmp_path / "runner"
     runner_temp.mkdir()
+    sbom = runner_temp / "sbom"
+    sbom.mkdir()
+    for name, content in _sbom_assets().items():
+        if name != missing_asset:
+            (sbom / name).write_text(content, encoding="utf-8")
     image = _workflow()["env"]["IMAGE_NAME"] + "-updater"
-    env = {**os.environ, "VERSION": version, "IMAGE": image, "DIGEST": digest, "RUNNER_TEMP": str(runner_temp)}
+    env = {**os.environ, "VERSION": version, "IMAGE": image, "DIGEST": digest, "RUNNER_TEMP": str(runner_temp),
+           "DECK_IMAGE": _workflow()["env"]["IMAGE_NAME"], "DECK_DIGEST": "sha256:" + "12" * 32,
+           "DOCK_IMAGE": _workflow()["env"]["DOCK_IMAGE_NAME"], "DOCK_DIGEST": "sha256:" + "34" * 32,
+           "REPOSITORY": "nodvard/deck"}
     files = subprocess.run([bash, "-eo", "pipefail", "-c", _release_named("Dateien fürs Release")["run"]], cwd=ROOT, env=env,
                            capture_output=True, text=True, check=False)
     if files_out is not None:
@@ -771,11 +806,17 @@ def test_a_new_release_is_only_a_draft_with_the_text_the_pinned_file_and_the_dig
         "tag": "v0.11.0", "draft": True, "latest": None, "prerelease": False,
         "title": (out / "release-title.txt").read_text(encoding="utf-8").strip(),
         "body": (out / "release-notes.md").read_text(encoding="utf-8"),
-        "assets": {COMPOSE: pinned},
+        "assets": {COMPOSE: pinned, **_sbom_assets()},
     }
     assert release["title"].startswith("Nodvard Deck 0.11.0 – ")
     assert release["body"].startswith("*English version: [below](#english).*\n")
     assert f"`{image}@{DIGEST}`" in release["body"]
+    for name, sha in (("deck", "12" * 32), ("dock", "34" * 32), ("deck-updater", "ab" * 32)):
+        source = f"ghcr.io/nodvard/{name}@sha256:{sha}"
+        assert f"`{source}`" in release["body"]
+        assert f"gh attestation verify oci://{source}" in release["body"]
+    assert release["body"].count("<!-- nodvard-helper-digest -->") == 1
+    assert release["body"].count("<!-- /nodvard-helper-digest -->") == 1
     assert "::notice::Entwurf für v0.11.0 angelegt." in done.stdout
 
 
@@ -790,7 +831,7 @@ def test_an_existing_draft_keeps_title_status_and_text_around_the_section(tmp_pa
     assert release == {
         **draft, "tag": "v0.11.0",
         "body": f"Von Hand geschrieben.\r\n\r\n{section}\r\n\r\nDarunter auch.\r\n",
-        "assets": {COMPOSE: (out / COMPOSE).read_text(encoding="utf-8")},
+        "assets": {COMPOSE: (out / COMPOSE).read_text(encoding="utf-8"), **_sbom_assets()},
     }
     assert "::notice::v0.11.0 ergänzt" in done.stdout
 
@@ -804,7 +845,7 @@ def test_a_published_release_stays_published_and_gets_the_new_file(tmp_path):
     assert release == {
         **published, "tag": release["tag"],
         "body": "Von Hand.\n\n" + (out / "helper-digest.md").read_text(encoding="utf-8"),
-        "assets": {COMPOSE: (out / COMPOSE).read_text(encoding="utf-8")},
+        "assets": {COMPOSE: (out / COMPOSE).read_text(encoding="utf-8"), **_sbom_assets()},
     }
 
 
@@ -839,6 +880,139 @@ def test_a_bad_digest_stops_before_anything_reaches_github(tmp_path):
     done, calls, release, runner_temp = _run_release(tmp_path, digest="")
     assert done.returncode == 1 and "Kein Digest" in done.stderr
     assert calls == [] and release is None and not (runner_temp / "release").exists()
+
+
+@pytest.mark.parametrize("missing", list(_sbom_assets()))
+def test_missing_sbom_or_attestation_stops_before_github(tmp_path, missing):
+    done, calls, release, _ = _run_release(tmp_path, missing_asset=missing)
+    assert done.returncode != 0
+    assert calls == [] and release is None
+
+
+@pytest.mark.parametrize(("job_name", "name", "image"), [
+    ("image", "deck", "${{ env.IMAGE_NAME }}"),
+    ("dock-image", "dock", "${{ env.DOCK_IMAGE_NAME }}"),
+    ("updater-image", "updater", "${{ env.IMAGE_NAME }}-updater"),
+])
+def test_all_images_publish_sbom_and_signed_provenance(job_name, name, image):
+    job = _workflow()["jobs"][job_name]
+    steps = job["steps"]
+    build = next(s for s in steps if s.get("id") == "build")
+    assert build["with"]["sbom"] is True
+    assert build["with"]["provenance"] == "mode=max"
+    assert job["outputs"]["digest"] == "${{ steps.build.outputs.digest }}"
+    attest = next(s for s in steps if s.get("id") == "attest")
+    assert attest["uses"].split("@")[0] == "actions/attest-build-provenance"
+    assert attest["with"] == {"subject-name": image, "subject-digest": "${{ steps.build.outputs.digest }}",
+                              "push-to-registry": True}
+    syft = next(s for s in steps if s.get("id") == "syft")
+    assert syft["uses"].split("@")[0] == "anchore/sbom-action/download-syft"
+    assert syft["with"] == {"syft-version": "v1.33.0"}
+    scan = next(s for s in steps if s.get("name") == "Bausteinlisten erzeugen")
+    assert scan["env"] == {"IMAGE": image, "DIGEST": "${{ steps.build.outputs.digest }}",
+                           "SYFT": "${{ steps.syft.outputs.cmd }}", "BUNDLE": "${{ steps.attest.outputs.bundle-path }}"}
+    assert "${{" not in scan["run"]
+    upload = next(s for s in steps if s.get("name") == "Bausteinlisten ablegen")
+    assert upload["uses"].split("@")[0] == "actions/upload-artifact"
+    assert upload["with"] == {"name": f"release-sbom-{name}", "path": "${{ runner.temp }}/sbom/*",
+                              "if-no-files-found": "error", "overwrite": True}
+    assert steps.index(build) < steps.index(attest) < steps.index(scan) < steps.index(upload)
+    for step in (build, attest, syft, scan, upload):
+        assert "if" not in step and "continue-on-error" not in step
+
+
+def _run_sbom(tmp_path: Path, job_name: str, fail: bool):
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("braucht bash wie der Runner von GitHub")
+    fake = tmp_path / "syft.py"
+    fake.write_text('''\
+import json
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+with Path(__file__).with_suffix(".jsonl").open("a") as log:
+    log.write(json.dumps(args) + "\\n")
+if Path(__file__).with_suffix(".fail").exists():
+    sys.exit(2)
+for i, arg in enumerate(args):
+    if arg == "-o":
+        fmt, path = args[i + 1].split("=", 1)
+        Path(path).write_text(json.dumps({"format": fmt, "source": args[0]}))
+''', encoding="utf-8")
+    syft = tmp_path / "syft"
+    syft.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{fake}" "$@"\n', encoding="utf-8")
+    syft.chmod(0o755)
+    if fail:
+        fake.with_suffix(".fail").touch()
+    bundle = tmp_path / "bundle.json"
+    bundle.write_text('{"signed":true}', encoding="utf-8")
+    env = {**os.environ, "IMAGE": "ghcr.io/nodvard/test", "DIGEST": DIGEST, "SYFT": str(syft),
+           "BUNDLE": str(bundle), "RUNNER_TEMP": str(tmp_path)}
+    step = next(s for s in _workflow()["jobs"][job_name]["steps"] if s.get("name") == "Bausteinlisten erzeugen")
+    done = subprocess.run([bash, "-eo", "pipefail", "-c", step["run"]], env=env, cwd=ROOT,
+                          capture_output=True, text=True, check=False)
+    calls = [json.loads(line) for line in fake.with_suffix(".jsonl").read_text().splitlines()]
+    return done, calls
+
+
+@pytest.mark.parametrize(("job_name", "name"), [("image", "deck"), ("dock-image", "dock"), ("updater-image", "updater")])
+def test_sboms_scan_the_published_digest_for_each_platform(tmp_path, job_name, name):
+    done, calls = _run_sbom(tmp_path, job_name, False)
+    assert done.returncode == 0, done.stderr
+    assert len(calls) == 2
+    for args, arch in zip(calls, ("amd64", "arm64"), strict=True):
+        assert args == [f"registry:ghcr.io/nodvard/test@{DIGEST}", "--platform", f"linux/{arch}",
+                        "-o", f"spdx-json={tmp_path}/sbom/{name}-linux-{arch}.spdx.json",
+                        "-o", f"cyclonedx-json={tmp_path}/sbom/{name}-linux-{arch}.cdx.json"]
+    out = tmp_path / "sbom"
+    assert {p.name for p in out.iterdir()} == {n for n in _sbom_assets() if n.startswith(name + ".") or n.startswith(name + "-")}
+    assert (out / f"{name}.sigstore.json").read_text() == '{"signed":true}'
+
+
+@pytest.mark.parametrize("job_name", ["image", "dock-image", "updater-image"])
+def test_a_failed_sbom_scan_stops_the_step(tmp_path, job_name):
+    done, calls = _run_sbom(tmp_path, job_name, True)
+    assert done.returncode == 2 and len(calls) == 1
+    assert list((tmp_path / "sbom").iterdir()) == []
+
+
+def test_sbom_user_guides_are_linked_and_cover_formats_digests_and_provenance():
+    index = (ROOT / "docs" / "README.md").read_text(encoding="utf-8")
+    for path in ("BAUSTEINLISTE.md", "en/SBOM.md"):
+        assert f"]({path})" in index
+        text = (ROOT / "docs" / path).read_text(encoding="utf-8")
+        for command in ("docker buildx imagetools inspect", "gh attestation verify", "--source-ref refs/tags/"):
+            assert command in text
+        for value in ("SPDX", "CycloneDX", "packages", "components", "amd64", "arm64", ".SBOM", ".Provenance"):
+            assert value in text
+        for image in ("deck", "dock", "deck-updater"):
+            assert f"ghcr.io/nodvard/{image}" in text
+
+
+def test_publishing_guide_explains_the_optional_attestation_check():
+    path = ROOT / "docs" / "VEROEFFENTLICHEN.md"
+    if not path.is_file():
+        pytest.skip("interne Release-Anleitung fehlt im öffentlichen Repository")
+    guide = path.read_text(encoding="utf-8")
+    assert "## Bausteinliste und Herkunft prüfen" in guide
+    assert "--verify-attestation" in guide and "](BAUSTEINLISTE.md)" in guide
+
+
+def test_sbom_changelog_entry_is_a_security_change():
+    import tomllib
+
+    changelog = ROOT / "backend/src/nodvard_deck/changelog"
+    entries = [entry for folder in ("unreleased", "versions") for path in (changelog / folder).glob("*.toml")
+               for entry in tomllib.loads(path.read_text(encoding="utf-8"))["entries"]]
+    assert any(entry["kind"] == "sicherheit" and "Bausteinlisten" in entry["text"] and "Herkunft" in entry["text"]
+               for entry in entries)
 
 
 # ---------------------------------------------------------------------------
@@ -880,7 +1054,7 @@ def test_dock_image_waits_for_the_dashboard_image():
     # Ein Tag, das "Tag passt zu version.py" ablehnt, bringt so auch kein Dock-Image.
     job = _dock_job()
     assert job["needs"] == "image"
-    assert set(job) == {"needs", "runs-on", "permissions", "steps"}, sorted(job)
+    assert set(job) == {"needs", "runs-on", "permissions", "outputs", "steps"}, sorted(job)
 
 
 def test_dock_image_is_the_dashboard_dockerfile_with_only_the_docker_module():

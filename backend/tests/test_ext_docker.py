@@ -7,11 +7,13 @@ geht es um die Docker-ps-Parsing-/URL-Rate-Logik selbst.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
 import docker_stack_fakes as fakes
 import pytest
+from exec_gate_helpers import ReadingExec
 from docker_stack_fakes import EXT_DIR, FakeSettings, docker_on  # noqa: F401 - Fixture
 
 from nodvard_deck.services import extensions as extensions_service
@@ -77,8 +79,9 @@ class _FakeHostsHandle:
         return self._hosts
 
 
-class _FakeExecHandle:
+class _FakeExecHandle(ReadingExec):
     def __init__(self, outputs: dict) -> None:
+        super().__init__(ext_id="docker")
         self._outputs = outputs
 
     async def run(self, host, command: str, *, timeout_s: int = 60):  # noqa: ANN001
@@ -802,6 +805,8 @@ async def test_live_logs_stream_and_the_remote_process_ends_when_the_browser_lea
         ) as resp:
             assert resp.status_code == 200
             assert resp.headers["content-type"].startswith("text/plain")
+            assert resp.headers["cache-control"] == "no-store"
+            assert resp.headers["x-accel-buffering"] == "no"
             received = b""
             async for chunk in resp.aiter_bytes():
                 received += chunk
@@ -856,6 +861,7 @@ async def test_logs_since_a_time_and_only_on_docker_hosts(
         base = f"/api/v1/ext/docker/containers/{host.id}/web/logs"
         recent = await ac.get(f"{base}?tail=5000&follow=false&since=24h", headers=auth)
         assert recent.status_code == 200, recent.text
+        assert recent.headers["cache-control"] == "no-store"
         assert "web bereit" in recent.text
         for bad in ("1d", "10m%3Bid", "0m", "10m%0A"):
             assert (await ac.get(f"{base}?since={bad}", headers=auth)).status_code == 400, bad
@@ -1322,18 +1328,13 @@ def _plan(host_id: str, *, affected=("web",), warnings=()):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("error", "detail"),
-    [
-        (OSError("Verbindung abgelehnt"), "Host nicht erreichbar: Verbindung abgelehnt"),
-        (TimeoutError(), "Host nicht erreichbar: TimeoutError"),
-        (RuntimeError("Docker antwortet nicht"), "Host nicht erreichbar: Docker antwortet nicht"),
-    ],
+    "error", [OSError("Verbindung abgelehnt"), TimeoutError(), RuntimeError("vertraulich-f /srv/private/docker")],
 )
 @pytest.mark.parametrize(
     ("method", "suffix", "body"),
     [("GET", "image-update/plan", None), ("POST", "image-update", {"plan_id": "0" * 16})],
 )
-async def test_image_update_routes_say_502_when_the_plan_cannot_be_made(client, docker_on, monkeypatch, method, suffix, body, error, detail):
+async def test_image_update_routes_say_502_when_the_plan_cannot_be_made(client, docker_on, monkeypatch, method, suffix, body, error, caplog):
     async def plan(host, container):
         raise error
 
@@ -1343,7 +1344,10 @@ async def test_image_update_routes_say_502_when_the_plan_cannot_be_made(client, 
         method, f"/api/v1/ext/docker/containers/{docker_on.host}/web/{suffix}", json=body, headers=docker_on.owner,
     )
 
-    assert (answer.status_code, answer.json()["detail"]) == (502, detail)
+    assert answer.status_code == 502
+    assert re.fullmatch(r"Host nicht erreichbar\. Fehlerkennung: [0-9a-f]{32}\.", answer.json()["detail"])
+    assert "vertraulich-f" not in answer.text + caplog.text
+    assert "/srv/private" not in answer.text
 
 
 @pytest.mark.asyncio
@@ -1395,10 +1399,9 @@ async def test_inspect_route_says_502_when_the_answer_is_no_inspect_list(client,
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("stderr", "detail"),
-    [("Cannot connect to the Docker daemon\n", "Cannot connect to the Docker daemon"), ("", "docker system df fehlgeschlagen")],
+    "stderr", ["Cannot connect to the Docker daemon\n", "", "vertraulich-g /run/docker.sock"],
 )
-async def test_storage_route_says_502_when_docker_system_df_fails(client, docker_on, monkeypatch, stderr, detail):
+async def test_storage_route_says_502_when_docker_system_df_fails(client, docker_on, monkeypatch, stderr, caplog):
     from nodvard_deck_ext_docker import commands
 
     async def run(host, command, timeout_s=60):
@@ -1408,7 +1411,35 @@ async def test_storage_route_says_502_when_docker_system_df_fails(client, docker
 
     answer = await client.get(f"/api/v1/ext/docker/hosts/{docker_on.host}/docker", headers=docker_on.owner)
 
-    assert (answer.status_code, answer.json()["detail"]) == (502, detail)
+    assert answer.status_code == 502
+    assert re.fullmatch(r"Speicherbelegung konnte nicht geladen werden\. Fehlerkennung: [0-9a-f]{32}\.", answer.json()["detail"])
+    assert "vertraulich-g" not in answer.text + caplog.text
+    assert "/run/docker.sock" not in answer.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["inspect", "logs"])
+async def test_container_diagnostics_hide_remote_errors(client, docker_on, monkeypatch, caplog, endpoint):
+    from contextlib import asynccontextmanager
+
+    failure = "vertraulich-docker /run/private/socket"
+
+    async def run(*args, **kwargs):
+        return fakes.result("", failure, 1)
+
+    @asynccontextmanager
+    async def stream(*args, **kwargs):
+        raise RuntimeError(failure)
+        yield
+
+    monkeypatch.setattr(docker_on.handle, "run", run)
+    monkeypatch.setattr(docker_on.handle, "stream", stream)
+    response = await client.get(f"/api/v1/ext/docker/containers/{docker_on.host}/web/{endpoint}", headers=docker_on.owner)
+    assert response.status_code == 502
+    match = re.search(r"Fehlerkennung: ([0-9a-f]{32})\.", response.json()["detail"])
+    assert match and match[1] in caplog.text
+    assert "vertraulich-docker" not in response.text + caplog.text
+    assert "/run/private" not in response.text
 
 
 @pytest.mark.asyncio
@@ -1432,7 +1463,7 @@ async def test_storage_route_still_answers_when_only_the_image_list_fails(client
 
 
 @pytest.mark.asyncio
-async def test_logs_route_says_502_when_the_log_stream_cannot_be_opened(client, docker_on, monkeypatch):
+async def test_logs_route_says_502_when_the_log_stream_cannot_be_opened(client, docker_on, monkeypatch, caplog):
     from contextlib import asynccontextmanager
 
     from nodvard_deck_ext_docker import commands
@@ -1449,7 +1480,10 @@ async def test_logs_route_says_502_when_the_log_stream_cannot_be_opened(client, 
 
     answer = await client.get(f"/api/v1/ext/docker/containers/{docker_on.host}/web/logs?tail=20", headers=docker_on.owner)
 
-    assert (answer.status_code, answer.json()["detail"]) == (502, "Logs nicht abrufbar: Verbindung abgelehnt")
+    assert answer.status_code == 502
+    match = re.fullmatch(r"Logs nicht abrufbar\. Fehlerkennung: ([0-9a-f]{32})\.", answer.json()["detail"])
+    assert match and match[1] in caplog.text
+    assert "Verbindung abgelehnt" not in answer.text + caplog.text
     assert opened == [commands.logs("web", 20, follow=True)]
 
 

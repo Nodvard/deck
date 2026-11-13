@@ -5,21 +5,41 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from nodvard_sdk import REQUEST_WAIT_S, Actor, ActionRequest, ActionResult, ActionSpec, DryRunReport, GateDecision, Notification, Risk, Severity
-from pydantic import BaseModel, Field
+from nodvard_sdk import (
+    REQUEST_WAIT_S,
+    ActionRequest,
+    ActionResult,
+    ActionSpec,
+    Actor,
+    DryRunReport,
+    GateDecision,
+    Notification,
+    Risk,
+    Severity,
+)
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import antivirus as av
-from . import updates as up
-from .defender import DEFAULT_CRONS, Defender, _describe, max_filesize_mb, watch_interval_min
+from . import fail2ban as f2b
 from . import intrusion as ix
 from . import realtime as rt
+from . import updates as up
+from .defender import (
+    DEFAULT_CRONS,
+    Defender,
+    _describe,
+    max_filesize_mb,
+    watch_interval_min,
+)
 from .guard import Guard, GuardUnavailable, guard_interval_min
 from .ids import (
     ACTION_BAN,
     ACTION_DELETE,
+    ACTION_FAIL2BAN_CONFIG,
     ACTION_INSTALL,
     ACTION_REALTIME,
     ACTION_REBOOT,
@@ -29,7 +49,13 @@ from .ids import (
     LOGGER,
     SOC_PATH,
 )
-from .patching import DEFAULT_UPDATE_CRONS, UpdateCenter, load_baseline, load_baselines, save_baseline
+from .patching import (
+    DEFAULT_UPDATE_CRONS,
+    UpdateCenter,
+    load_baseline,
+    load_baselines,
+    save_baseline,
+)
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
@@ -57,13 +83,13 @@ async def register_jobs(ctx: ExtensionContext, defender: Defender, updates: Upda
     s = await ctx.settings.get()
 
     async def quick() -> dict:
-        return {"scans": await defender.start_scans(await defender.target_hosts(), "quick", paths=None, trigger="schedule")}
+        return {"scans": await defender.start_scans(await defender.target_hosts(), "quick", paths=None, trigger="schedule", wait=True)}
 
     async def deep() -> dict:
-        return {"scans": await defender.start_scans(await defender.target_hosts(), "deep", paths=None, trigger="schedule")}
+        return {"scans": await defender.start_scans(await defender.target_hosts(), "deep", paths=None, trigger="schedule", wait=True)}
 
     async def watch() -> dict:
-        return {"scans": await defender.start_scans(await defender.target_hosts(), "watch", paths=None, trigger="schedule")}
+        return {"scans": await defender.start_scans(await defender.target_hosts(), "watch", paths=None, trigger="schedule", wait=True)}
 
     async def briefing() -> dict:
         return await defender.send_briefing(await updates.overview(), await guard.summary_line() if guard else None)
@@ -139,6 +165,7 @@ STALE_MESSAGE = "Der Vorschlag passt nicht (mehr) zum erwarteten Befehl – bitt
 # Diese Felder schreiben die /defender-Routen in den Payload; nur daraus entsteht der Befehl.
 # Fehlen sie, stammt der Vorschlag aus einer älteren Version.
 _REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    ACTION_FAIL2BAN_CONFIG: f2b.FIELDS,
     ACTION_BAN: ("ip", "jail", "unban"),
     ACTION_INSTALL: ("package",),
     ACTION_UPGRADE: ("mode", "manager", "packages"),
@@ -164,6 +191,8 @@ class ActionCommands:
             raise ValueError(f"Unbekannte Aktion '{action_type}'.")
         if any(field not in payload for field in required):
             raise ValueError(OLD_VERSION_MESSAGE)
+        if action_type == ACTION_FAIL2BAN_CONFIG:
+            return f2b.command(payload)
         if action_type == ACTION_BAN:
             ip, jail, unban = payload["ip"], payload["jail"], payload["unban"]
             if not isinstance(ip, str):
@@ -249,6 +278,7 @@ class DefenderExecutor:
 
     action_types = frozenset({
         ACTION_RESTORE, ACTION_DELETE, ACTION_INSTALL, ACTION_UPGRADE, ACTION_REBOOT, ACTION_BAN, ACTION_REALTIME,
+        ACTION_FAIL2BAN_CONFIG,
     })
 
     def __init__(self, ctx: ExtensionContext, defender: Defender, updates: UpdateCenter | None = None) -> None:
@@ -269,6 +299,24 @@ class DefenderExecutor:
             return ActionResult(success=False, error=str(exc))
         if req.payload.get("command") != command:
             return ActionResult(success=False, error=STALE_MESSAGE)
+        if req.action_type == ACTION_FAIL2BAN_CONFIG:
+            try:
+                current = await f2b.read(self._ctx, host)
+                wanted = f2b.settings(req.payload, strict=True)
+                if current["deck_address"] != wanted["deck_address"] or current["available_jails"] != wanted["available_jails"]:
+                    return ActionResult(success=False, error="SSH-Quelladresse oder erkannte Jails haben sich geändert. Bitte neu vorschlagen.")
+            except ValueError as exc:
+                return ActionResult(success=False, error=str(exc))
+            result = await self._ctx.exec.run(host, command, timeout_s=120)
+            output = av.helper_text((result.stdout or "") + (result.stderr or ""))
+            ok = result.exit_code == 0
+            await self._ctx.audit.log(
+                action=f"{EXT_ID}.fail2ban_config", outcome="success" if ok else "failure",
+                actor=req.proposed_by, target_type="host", target_id=host.id,
+                reason=req.reason, detail={key: wanted[key] for key in f2b.FIELDS},
+            )
+            return ActionResult(success=ok, exit_code=result.exit_code, output=output, duration_ms=result.duration_ms,
+                                error=None if ok else av.no_root_message(output) if av.NO_ROOT in output else output)
         if req.action_type in (ACTION_UPGRADE, ACTION_REBOOT):
             if self._updates is None:
                 return ActionResult(success=False, error="Die Update-Zentrale ist nicht aktiv.")
@@ -360,6 +408,8 @@ class DefenderExecutor:
 # als Formular mit freiem Feld "command" (läuft als root); POST /hosts/{id}/actions lehnt sie deshalb ab.
 # `ctx.actions.propose` prüft host_bound nicht. command_field bleibt, damit die Sperrliste den Befehl prüft.
 ACTION_SPECS = [
+    ActionSpec(action_type=ACTION_FAIL2BAN_CONFIG, label="Fail2ban-Einstellungen ändern", default_risk=Risk.MEDIUM,
+               permissions=["hosts.execute"], host_bound=False, command_field="command"),
     ActionSpec(action_type=ACTION_RESTORE, label="Datei aus Quarantäne wiederherstellen", default_risk=Risk.MEDIUM,
                permissions=["hosts.execute"], host_bound=False, command_field="command"),
     ActionSpec(action_type=ACTION_DELETE, label="Datei in Quarantäne endgültig löschen", default_risk=Risk.MEDIUM,
@@ -378,34 +428,57 @@ ACTION_SPECS = [
 
 
 class _ScanIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     kind: Literal["quick", "deep", "custom"] = "quick"
     host_ids: list[str] | Literal["all"] = "all"
     paths: list[str] | None = Field(default=None, max_length=20)
 
 
 class _AuditIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     host_ids: list[str] | Literal["all"] = "all"
 
 
 class _InstallIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     package: Literal["clamav", "lynis", "signatures", "fail2ban", "unattended"]
 
 
 class _BanIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     ip: str
     jail: str = "sshd"
     unban: bool = False
 
 
+class _Fail2banIn(BaseModel):
+    model_config = {"extra": "forbid", "strict": True}
+    bantime: int = Field(ge=1, le=31536000)
+    findtime: int = Field(ge=1, le=31536000)
+    maxretry: int = Field(ge=1, le=1000)
+    ignoreip: list[str] = Field(max_length=256)
+    jails: list[str] = Field(max_length=256)
+
+
 class _RealtimeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     enable: bool
 
 
 class _UpgradeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     mode: Literal["all", "security", "cleanup", "reboot"]
 
 
 class _ProposeAllIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     """Sammel-Vorschlag: nur Einspielen (alle oder nur Sicherheitsupdates); Aufräumen und Neustart bleiben je Server."""
 
     mode: Literal["all", "security"]
@@ -431,16 +504,16 @@ _INSTALL_LABEL = {
 
 
 def _nothing_to_do(row: dict[str, Any], mode: str) -> str | None:
-    """Warum für diesen Server (eine Zeile von `UpdateCenter.overview`) in dieser Art nichts vorgeschlagen wird, sonst None.
-
-    Gleiche Bedingungen wie bei den Einzel-Knöpfen der Seite, nach gespeichertem Stand; es wird kein Server geprüft."""
+    """Grund, warum der gespeicherte Update-Stand keinen Sammelvorschlag erlaubt, sonst None."""
     st = row.get("status")
     if not st:
         return "Noch nicht geprüft."
     if st.get("unsupported"):
         return "Kein Paketmanager, den die Update-Zentrale kennt."
+    if st.get("error"):
+        return st["error"]
     if not st.get("manager"):
-        return st.get("error") or "Update-Stand unbekannt."
+        return "Update-Stand unbekannt."
     if mode == "security" and not st.get("security_count"):
         return "Keine Sicherheitsupdates offen."
     if mode == "all" and not st.get("count"):
@@ -667,11 +740,23 @@ def build_routers(
         rows: list[dict[str, Any]] = []
         if updates is not None:
             us = (await updates.overview())["summary"]
-            if us["checked"]:
-                label = f"{us['security']} Sicherheit" if us["security"] else (f"{us['packages']} offen" if us["packages"] else "aktuell")
-                tone = "danger" if us["security"] else ("warn" if us["packages"] or us["reboot"] else "good")
-                rows.append({"title": "Updates", "label": label, "tone": tone,
-                             "subtitle": f"{us['up_to_date']}/{us['hosts']} Server aktuell" + (f" · Neustart nötig: {us['reboot']}" if us["reboot"] else "")})
+            errors = us.get("errors", 0)
+            if us["checked"] or errors:
+                if us["security"]:
+                    label, tone = f"{us['security']} Sicherheit", "danger"
+                elif us["packages"]:
+                    label, tone = f"{us['packages']} offen", "warn"
+                elif errors:
+                    label, tone = "Prüfung fehlgeschlagen", "warn"
+                else:
+                    label, tone = "aktuell", "warn" if us["reboot"] else "good"
+                subtitle = f"{us['up_to_date']}/{us['hosts']} Server aktuell"
+                if us["reboot"]:
+                    subtitle += f" · Neustart nötig: {us['reboot']}"
+                if errors:
+                    checks = "Prüfung" if errors == 1 else "Prüfungen"
+                    subtitle += f" · {errors} {checks} fehlgeschlagen. Unter Updates erneut prüfen."
+                rows.append({"title": "Updates", "label": label, "tone": tone, "subtitle": subtitle})
         if guard is not None:
             go = await guard.overview()
             gs = go["summary"]
@@ -701,7 +786,11 @@ def build_routers(
     async def audits() -> list[dict]:
         return await defender.latest_audits()
 
-    @manage.post("/scans")
+    @manage.post(
+        "/scans",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400,)},
+    )
     async def start_scan(payload: _ScanIn) -> dict:
         given = [p.strip() for p in payload.paths or [] if p.strip()]
         if payload.kind == "custom" and not given:
@@ -716,12 +805,20 @@ def build_routers(
         ids = await defender.start_scans(await _hosts(payload.host_ids), payload.kind, paths=paths, trigger="manual")
         return {"scans": ids}
 
-    @manage.post("/updates/check")
+    @manage.post(
+        "/updates/check",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400,)},
+    )
     async def updates_check(payload: _AuditIn) -> dict:
         assert updates is not None
         return {"hosts": updates.start_check(await _hosts(payload.host_ids))}
 
-    @manage.post("/guard/check")
+    @manage.post(
+        "/guard/check",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400,)},
+    )
     async def guard_check(payload: _AuditIn) -> dict:
         assert guard is not None
         return {"hosts": guard.start(await _hosts(payload.host_ids))}
@@ -732,7 +829,11 @@ def build_routers(
         done, kept = await guard.acknowledge_all(actor, host_id=host)
         return {"acknowledged": done, "kept_open": kept}
 
-    @manage.post("/events/{event_id}/acknowledge")
+    @manage.post(
+        "/events/{event_id}/acknowledge",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (409, 503)},
+    )
     async def acknowledge(event_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
         assert guard is not None
         try:
@@ -769,7 +870,8 @@ def build_routers(
             known = ", ".join(sorted(name for name in jails if ix.valid_jail(name)))
             raise refuse(f"Den Jail „{jail}“ gibt es auf diesem Server nicht (laut letzter Prüfung: {known}).")
         try:
-            seen = await ctx.exec.run(host, ix.DECK_ADDRESS_COMMAND, timeout_s=15)
+            with ctx.exec.read_access(host):
+                seen = await ctx.exec.run(host, ix.DECK_ADDRESS_COMMAND, timeout_s=15)
         except Exception:  # noqa: BLE001 - beim Ausführen prüft der Server selbst noch einmal
             return
         if not (seen.stdout or "").strip():
@@ -777,7 +879,44 @@ def build_routers(
         if ix.is_deck_address(ip, seen.stdout or ""):
             raise refuse(ix.DECK_SELF_REFUSED)
 
-    @manage.post("/hosts/{host_id}/ban")
+    @read.get(
+        "/hosts/{host_id}/fail2ban",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (404, 409)},
+    )
+    async def fail2ban_settings(host_id: str) -> dict:
+        host = await ctx.hosts.get(host_id)
+        if host is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Server.")
+        try:
+            return await f2b.read(ctx, host)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    @manage.post(
+        "/hosts/{host_id}/fail2ban", dependencies=[Depends(ctx.api.require_permission("hosts.execute"))],
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409)},
+    )
+    async def fail2ban_propose(host_id: str, payload: _Fail2banIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
+        host = await ctx.hosts.get(host_id)
+        if host is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Server.")
+        try:
+            current = await f2b.read(ctx, host)
+            fields = f2b.settings({**payload.model_dump(), "deck_address": current["deck_address"],
+                                   "available_jails": current["available_jails"], "sshd_backend": current["sshd_backend"]},
+                                  strict=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        return await _propose(host, ACTION_FAIL2BAN_CONFIG, fields,
+                              f"Fail2ban-Einstellungen auf {host.display_name or host.name} ändern", actor, Risk.MEDIUM)
+
+    @manage.post(
+        "/hosts/{host_id}/ban",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409)},
+    )
     async def ban(
         host_id: str, payload: _BanIn, request: Request, actor: Actor = Depends(ctx.api.current_actor),
     ) -> dict:
@@ -795,7 +934,11 @@ def build_routers(
         return await _propose(host, ACTION_BAN, {"ip": ip, "jail": payload.jail, "unban": payload.unban},
                               f"{ip} auf {host.display_name or host.name} {verb} (Fail2ban)", actor, Risk.LOW)
 
-    @manage.post("/hosts/{host_id}/upgrade")
+    @manage.post(
+        "/hosts/{host_id}/upgrade",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (404, 409)},
+    )
     async def upgrade(host_id: str, payload: _UpgradeIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
         assert updates is not None
         host = await ctx.hosts.get(host_id)
@@ -826,7 +969,11 @@ def build_routers(
             found.setdefault(row.host_id, row)
         return found
 
-    @manage.post("/updates/propose-all")
+    @manage.post(
+        "/updates/propose-all",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (409,)},
+    )
     async def propose_all(payload: _ProposeAllIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
         """Legt für viele Server je einen Update-Vorschlag an; freigegeben wird wie sonst unter "Aktionen".
 
@@ -902,7 +1049,11 @@ def build_routers(
 
     briefing_running = False
 
-    @manage.post("/briefing")
+    @manage.post(
+        "/briefing",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (409,)},
+    )
     async def briefing_now() -> dict:
         """Lagebericht jetzt. Dauert bei einem nicht erreichbaren Server bis ~20 s;
         ein zweiter Klick (auch aus einem anderen Tab) legt kein zweites Briefing an."""
@@ -917,28 +1068,44 @@ def build_routers(
         finally:
             briefing_running = False
 
-    @manage.post("/audits")
+    @manage.post(
+        "/audits",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400,)},
+    )
     async def start_audit(payload: _AuditIn) -> dict:
         """Startet je Server ein Audit und antwortet sofort: `started` (neu), `running` (lief schon, es startet kein
         zweites) und `audits` (je Server seit wann, für "läuft seit ...")."""
         hosts = await _hosts(payload.host_ids)
         return {"hosts": len(hosts), **await defender.start_audits(hosts, trigger="manual")}
 
-    @manage.post("/findings/{finding_id}/quarantine")
+    @manage.post(
+        "/findings/{finding_id}/quarantine",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (409,)},
+    )
     async def quarantine(finding_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
         ok, message = await defender.quarantine(finding_id, actor=actor)
         if not ok:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=message)
         return {"ok": True}
 
-    @manage.post("/findings/{finding_id}/ignore")
+    @manage.post(
+        "/findings/{finding_id}/ignore",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (409,)},
+    )
     async def ignore(finding_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
         if not await defender.ignore(finding_id):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Dieser Fund ist nicht (mehr) offen.")
         await ctx.audit.log(action=f"{EXT_ID}.finding_ignored", outcome="success", reason=finding_id, actor=actor)
         return {"ok": True}
 
-    @manage.post("/findings/{finding_id}/reopen")
+    @manage.post(
+        "/findings/{finding_id}/reopen",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (409,)},
+    )
     async def reopen(finding_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
         ok, message = await defender.reopen(finding_id)
         if not ok:
@@ -946,7 +1113,11 @@ def build_routers(
         await ctx.audit.log(action=f"{EXT_ID}.finding_reopened", outcome="success", reason=finding_id, actor=actor)
         return {"ok": True}
 
-    @manage.post("/findings/{finding_id}/{action}")
+    @manage.post(
+        "/findings/{finding_id}/{action}",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (404, 409)},
+    )
     async def restore_or_delete(finding_id: str, action: Literal["restore", "delete"], actor: Actor = Depends(ctx.api.current_actor)) -> dict:
         f = await defender.finding(finding_id)
         if f is None:
@@ -965,7 +1136,11 @@ def build_routers(
                               f"Endgültig löschen: {f['path']} ({f['signature']})", actor, Risk.MEDIUM,
                               error_status=status.HTTP_409_CONFLICT)
 
-    @manage.post("/realtime/{host_id}")
+    @manage.post(
+        "/realtime/{host_id}",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409)},
+    )
     async def realtime_switch(host_id: str, payload: _RealtimeIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
         """Schlägt vor, den Wächter auf dem Server in Echtzeit laufen zu lassen oder zurück auf den Minuten-Takt."""
         host = await ctx.hosts.get(host_id)
@@ -991,7 +1166,11 @@ def build_routers(
         reason = f"Viren-Wächter auf {name} in Echtzeit" if payload.enable else f"Viren-Wächter auf {name} zurück auf Intervall"
         return await _propose(host, ACTION_REALTIME, fields, reason, actor, Risk.MEDIUM)
 
-    @manage.post("/hosts/{host_id}/install")
+    @manage.post(
+        "/hosts/{host_id}/install",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (404,)},
+    )
     async def install(host_id: str, payload: _InstallIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
         host = await ctx.hosts.get(host_id)
         if host is None:

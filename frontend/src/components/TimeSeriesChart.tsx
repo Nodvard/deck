@@ -1,13 +1,4 @@
-/**
- * Zeitreihen-Diagramm für den Metrik-Verlauf der Server-Seite, so genau ablesbar wie
- * in Grafana, Task-Manager oder HWiNFO. Bewusst ohne Chart-Bibliothek:
- * reines SVG, ein paar hundert Punkte je Kurve, offline-tauglich.
- *
- * Lesbarkeit vor Deko: 2px-Linien mit leichter Fläche darunter, ruhiges Raster, EINE
- * y-Achse je Diagramm (zwei Größen = zwei Diagramme), Fadenkreuz mit Tooltip, das
- * ALLE Kurven am gewählten Zeitpunkt zeigt, und eine Legende mit aktuell/Min/Mittel/Max
- * wie bei HWiNFO. Lücken (Host nicht erreichbar) bleiben Lücken.
- */
+/** SVG-Zeitreihen mit gemeinsamer Zeitachse, Tooltip und Kennzahlen; fehlende Messwerte bleiben als Lücken sichtbar. */
 import { styleRef } from "../../../extensions/_shared/frontend/src/csp";
 import { useEffect, useMemo, useRef, useState } from "react";
 

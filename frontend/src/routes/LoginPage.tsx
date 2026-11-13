@@ -21,7 +21,7 @@ const FEATURES = [
   { icon: ShieldCheck, title: "Nachvollziehbare Änderungen", text: "Jede Aktion mit Freigabe und Protokoll: wer, wann, was." },
 ];
 
-const UNREACHABLE = "Server nicht erreichbar – bitte gleich noch einmal versuchen.";
+const UNREACHABLE = "Server nicht erreichbar, bitte gleich noch einmal versuchen.";
 
 const inputClass =
   "w-full rounded-lg border border-white/10 bg-black/30 py-2.5 pl-10 pr-3 text-sm text-white placeholder:text-white/30 transition";

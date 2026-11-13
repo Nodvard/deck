@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { textToKeySteps, type KeyStep } from "./keyboardLayouts";
 
-/** Liest die Tastendruecke als lesbare Folge: "+ShiftLeft KeyA -ShiftLeft" usw. --
+/** Liest die Tastendrücke als lesbare Folge: "+ShiftLeft KeyA -ShiftLeft" usw. --
  * ein "down"+"up" derselben Taste wird zu einem einzigen Eintrag zusammengefasst. */
 function describeSteps(steps: KeyStep[]): string {
   const out: string[] = [];
@@ -30,7 +30,7 @@ describe("textToKeySteps", () => {
     expect(describeSteps(textToKeySteps("zy", "us", { enter: false }).steps)).toBe("KeyZ KeyY");
   });
 
-  it("DE: AltGr-Zeichen fuer typische Shell-/Passwort-Sonderzeichen", () => {
+  it("DE: AltGr-Zeichen für typische Shell-/Passwort-Sonderzeichen", () => {
     const { steps, unsupported } = textToKeySteps("@{|~\\", "de", { enter: false });
     expect(unsupported).toEqual([]);
     expect(describeSteps(steps)).toBe(
@@ -50,13 +50,13 @@ describe("textToKeySteps", () => {
     expect(describeSteps(textToKeySteps("^", "de", { enter: false }).steps)).toBe("Backquote Space");
   });
 
-  it("schickt zu jeder Taste den passenden Keysym mit (fuer Server ohne Scancodes)", () => {
+  it("schickt zu jeder Taste den passenden Keysym mit (für Server ohne Scancodes)", () => {
     const { steps } = textToKeySteps("a€", "de", { enter: false });
     const keysyms = steps.filter((s) => s.down && s.code !== "AltRight").map((s) => s.keysym);
     expect(keysyms).toEqual([0x61, 0x01000000 + 0x20ac]);
   });
 
-  it("Zeilenumbrueche druecken Enter nur, wenn ausdruecklich gewuenscht", () => {
+  it("Zeilenumbrüche drücken Enter nur, wenn ausdrücklich gewünscht", () => {
     expect(textToKeySteps("ls\n", "us", { enter: false }).unsupported).toEqual(["↵"]);
     const { steps, unsupported } = textToKeySteps("ls\r\n", "us", { enter: true });
     expect(unsupported).toEqual([]);

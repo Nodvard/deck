@@ -14,6 +14,7 @@ from collections import deque
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import quote, unquote, urlsplit
 
@@ -30,7 +31,7 @@ from nodvard_sdk import (
     same_target,
     sha256_fingerprint,
 )
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from .certificate import FIELD as FINGERPRINT_FIELD
 from .config import build_connector
@@ -1713,10 +1714,14 @@ async def _save(ctx: Any, *, name: str, base_url: str, token_id: str, token_valu
 
 
 class CertificateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     base_url: str = Field(max_length=300)
 
 
 class ConnectIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     base_url: str = Field(max_length=300)
     username: str = Field(default="root@pam", max_length=128)
     password: SecretStr = Field(max_length=512)
@@ -1731,6 +1736,8 @@ class ConnectIn(BaseModel):
 
 
 class TfaIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     flow: str = Field(max_length=64)
     code: SecretStr = Field(max_length=256)
     kind: Literal["totp", "recovery", "yubico"] = "totp"
@@ -1766,7 +1773,11 @@ def build_router(ctx: ExtensionContext) -> APIRouter:
         except PasswordConnectError as exc:
             return exc.response()
 
-    @router.get("/connections/{name}/old-tokens")
+    @router.get(
+        "/connections/{name}/old-tokens",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (404, 502)},
+    )
     async def old_tokens(name: str) -> dict[str, Any]:
         """Tokens, die Nodvard Deck für `nodvard@pve` und `nodvard-backup@pve` angelegt hat und die keine Verbindung mehr
         benutzt, mit dem `pveum`-Befehl zum Löschen (siehe `old_tokens_of`, warum es keinen Knopf gibt). Gelesen mit dem

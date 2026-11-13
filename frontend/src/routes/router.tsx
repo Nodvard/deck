@@ -29,6 +29,7 @@ import { NotificationSettings } from "./settings/NotificationSettings";
 import { SettingsLayout } from "./settings/SettingsLayout";
 import { SystemSettings } from "./settings/SystemSettings";
 import { VaultSettings } from "./settings/VaultSettings";
+import { TelemetrySettings } from "./settings/TelemetrySettings";
 
 /**
  * Die Routen als eigener Wert, damit Tests sie mit einem Memory-Router laufen lassen können. Ganz außen fängt
@@ -86,6 +87,7 @@ export const routes: RouteObject[] = [
                       { path: "vault", element: <VaultSettings /> },
                       { path: "audit", element: <AuditSettings /> },
                       { path: "about", element: <AboutSettings /> },
+                      { path: "telemetry", element: <TelemetrySettings /> },
                     ],
                   },
                   // PageSpec.path (docs/02-EXTENSION-API.md) wird zu /ext/<ext_id><path>.

@@ -57,7 +57,9 @@ def test_the_groups_revision_follows_the_previous_core_head_in_the_one_core_chai
     assert len(core_heads) == 1
     assert GROUPS_REVISION in {rev.revision for rev in script.walk_revisions(base="base", head=core_heads[0])}
     assert script.get_revision(GROUPS_REVISION).down_revision == PREVIOUS_CORE_HEAD
-    assert GROUPS_REVISION in known_revisions(REPO_ROOT)[1]
+    revisions, heads = known_revisions(REPO_ROOT)
+    assert GROUPS_REVISION in revisions
+    assert core_heads[0] in heads
 
 
 def test_existing_layouts_keep_their_widgets_and_get_no_groups(migrated):

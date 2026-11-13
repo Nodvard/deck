@@ -9,6 +9,7 @@ import pytest
 from nodvard_sdk import ExtensionManifest
 
 from nodvard_deck.core import known_actors
+from nodvard_deck.ext.context import Context, build_context
 from nodvard_deck.ext.runtime import LoadedExtension, get_extension_runtime
 from nodvard_deck.services import extensions as extensions_service
 
@@ -38,18 +39,21 @@ class _Extension:
 
 
 @pytest.fixture
-def load(monkeypatch):
+def load(monkeypatch, tmp_path, test_settings):
     runtime = get_extension_runtime()
     monkeypatch.setattr(runtime, "loaded", {})
 
-    def add(ext_id: str, instance: object, permissions: list[str]) -> None:
+    def add(ext_id: str, instance: object, permissions: list[str]) -> Context:
         manifest = ExtensionManifest(
             id=ext_id, name=ext_id, version="0.1.0", api_version="0.1.0", entrypoint="x:Extension",
             permissions=permissions,
         )
-        runtime.loaded[ext_id] = LoadedExtension(
-            manifest=manifest, instance=instance, ctx=object(), granted_permissions=permissions,
+        loaded = LoadedExtension(
+            manifest=manifest, instance=instance, ctx=None, granted_permissions=permissions,
         )
+        loaded.ctx = build_context(runtime, loaded, manifest, permissions, tmp_path / ext_id, test_settings)
+        runtime.loaded[ext_id] = loaded
+        return loaded.ctx
 
     return add
 
@@ -63,6 +67,35 @@ async def test_only_extensions_that_may_read_the_secret_hear_of_it_after_saving(
 
     known_actors.add_user("nutzer-1")
     await extensions_service.notify_secret_changed(_Session(seen), [LABEL, LABEL])
+    assert seen == ["commit", f"pihole:{LABEL}"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("permission", ["secrets.read:fremd-*", "*"])
+@pytest.mark.parametrize("change", ["append", "replace", "overwrite"])
+async def test_secret_hook_ignores_added_permissions(load, permission, change):
+    seen: list[str] = []
+    ctx = load("pihole", _Extension(seen, "pihole"), [f"secrets.read:{LABEL}"])
+    if change == "append":
+        ctx._loaded.granted_permissions.append(permission)
+    elif change == "replace":
+        ctx._loaded.granted_permissions = [permission]
+    else:
+        ctx._loaded.granted_permissions[:] = [permission]
+
+    await extensions_service.notify_secret_changed(_Session(seen), [LABEL, "fremd-token"])
+
+    assert seen == ["commit", f"pihole:{LABEL}"]
+
+
+@pytest.mark.asyncio
+async def test_secret_hook_keeps_initial_permissions(load):
+    seen: list[str] = []
+    ctx = load("pihole", _Extension(seen, "pihole"), [f"secrets.read:{LABEL}"])
+    ctx._loaded.granted_permissions.clear()
+
+    await extensions_service.notify_secret_changed(_Session(seen), [LABEL, "fremd-token"])
+
     assert seen == ["commit", f"pihole:{LABEL}"]
 
 

@@ -13,7 +13,7 @@ vi.mock("../state/dialogs", () => ({ confirmDialog: vi.fn(async () => true), pro
 type Call = { path: string; method: string; body: unknown };
 
 /** Dieselben Daten wie die Design-Vorschau; `overrides` gewinnt je Pfad (eine Funktion
- * wird bei jedem Aufruf neu gefragt), `statuses` setzt fuer einen Pfad einen anderen
+ * wird bei jedem Aufruf neu gefragt), `statuses` setzt für einen Pfad einen anderen
  * HTTP-Status als 200. */
 function mockFetch(overrides: Record<string, unknown> = {}, calls: Call[] = [], statuses: Record<string, number> = {}) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -43,8 +43,8 @@ function renderHost(hostId: string) {
   );
 }
 
-/** Wie im echten Router: dieselbe Route fuer alle Server -- ein Wechsel per Link
- * (Strg+K-Palette, Browser-Zurueck) baut `HostPage` nicht neu auf. */
+/** Wie im echten Router: dieselbe Route für alle Server -- ein Wechsel per Link
+ * (Strg+K-Palette, Browser-Zurück) baut `HostPage` nicht neu auf. */
 function renderHostWithNav(hostId: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -376,7 +376,7 @@ describe("HostPage (Server-Seite, Plesk-Stil)", () => {
     });
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
-      // Die Freigabe von "Starten" haengt, bis der Test sie beantwortet.
+      // Die Freigabe von "Starten" hängt, bis der Test sie beantwortet.
       if (url.endsWith("/actions/a5/approve")) return new Promise<Response>((resolve) => { releaseStart = resolve; });
       return base(input, init);
     }));
@@ -386,7 +386,7 @@ describe("HostPage (Server-Seite, Plesk-Stil)", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Snapshot erstellen" }));
     await waitFor(() => expect(texts()).toEqual(["Snapshot erstellen: Fehlgeschlagen: Speicher voll."]));
 
-    // Die spaete Antwort der aelteren Aktion: eigene Zeile, der Fehlschlag bleibt stehen.
+    // Die späte Antwort der älteren Aktion: eigene Zeile, der Fehlschlag bleibt stehen.
     await act(async () => {
       releaseStart(new Response(JSON.stringify({ id: "a5", status: "executing", risk: "low", gate_decision: {}, result: {} }), { status: 202 }));
     });
@@ -498,10 +498,10 @@ describe("HostPage (Server-Seite, Plesk-Stil)", () => {
     await screen.findByRole("heading", { level: 1, name: /docker/ });
     expect(screen.getByRole("link", { name: "Bearbeiten" })).toHaveAttribute("href", "/settings/hosts/g-docker");
     const card = (await screen.findByRole("heading", { level: 2, name: "Zugang" })).closest("section") as HTMLElement;
-    expect(within(card).getByText("Schlüssel · lattice")).toBeInTheDocument();
+    expect(within(card).getByText("Schlüssel · nodvard")).toBeInTheDocument();
     expect(within(card).getByRole("link", { name: "Zugang einrichten" })).toHaveAttribute("href", "/settings/hosts/g-docker");
     fireEvent.click(within(card).getByRole("button", { name: "Verbindung prüfen" }));
-    expect(await within(card).findByText("Anmeldung als lattice")).toBeInTheDocument();
+    expect(await within(card).findByText("Anmeldung als nodvard")).toBeInTheDocument();
     expect(calls.some((c) => c.method === "POST" && c.path === "/hosts/g-docker/check")).toBe(true);
   });
 

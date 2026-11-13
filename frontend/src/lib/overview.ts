@@ -16,6 +16,7 @@ export interface HostCredentialSummary {
 }
 
 export interface HostOut {
+  manual_entry?: { id: string; name: string; display_name: string; address: string } | null;
   id: string;
   name: string;
   display_name: string;

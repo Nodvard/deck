@@ -13,6 +13,8 @@ from ...services import audit as audit_service
 from ...services import auth as auth_service
 from ...services import settings as settings_service
 from ..deps import CurrentSessionId, CurrentUser, SessionDep, SettingsDep
+from ..models import RequestModel
+from ..responses import error_responses
 from .auth import (
     TotpMissing,
     _client_ip,
@@ -44,14 +46,14 @@ class RecoveryCodesOut(BaseModel):
     """Klartext, einmalig: gespeichert werden nur Hashes, kein Endpunkt liefert sie erneut."""
 
 
-class RecoveryCodesRequest(BaseModel):
+class RecoveryCodesRequest(RequestModel):
     current_password: str
     totp_code: str = Field(default="", max_length=64)
     """Pflicht, wenn Zwei-Faktor an ist: der aktuelle Code aus der App oder ein bisheriger Wiederherstellungs-Code.
     Fehlt er: 403 mit `code: "totp_missing"`."""
 
 
-class TotpDisableRequest(BaseModel):
+class TotpDisableRequest(RequestModel):
     current_password: str
     totp_code: str = Field(default="", max_length=64)
     """Pflicht, wenn Zwei-Faktor an ist: der aktuelle Code aus der App oder ein Wiederherstellungs-Code
@@ -59,7 +61,7 @@ class TotpDisableRequest(BaseModel):
     Im Schema optional, damit ältere Aufrufer diese Antwort statt eines 422 bekommen."""
 
 
-class TotpSetupRequest(BaseModel):
+class TotpSetupRequest(RequestModel):
     current_password: str | None = None
     """Das aktuelle Passwort, fürs Einschalten verlangt (ohne gibt es 400). Im Schema optional, damit ältere Aufrufer
     ohne Body diese Antwort statt eines 422 bekommen."""
@@ -70,11 +72,11 @@ class TotpSetupOut(BaseModel):
     otpauth_uri: str
 
 
-class TotpConfirmRequest(BaseModel):
+class TotpConfirmRequest(RequestModel):
     code: str = Field(min_length=6, max_length=6)
 
 
-@router.get("")
+@router.get("", responses=error_responses(401, 403, 507))
 async def get_me(user: CurrentUser, session: SessionDep) -> MeOut:
     totp_enabled = auth_service.two_factor_enabled(user)
     return MeOut(
@@ -93,13 +95,13 @@ async def get_me(user: CurrentUser, session: SessionDep) -> MeOut:
     )
 
 
-class MeUpdate(BaseModel):
+class MeUpdate(RequestModel):
     display_name: str | None = Field(default=None, max_length=128)
     email: str | None = Field(default=None, max_length=255)
     locale: str | None = Field(default=None, pattern=r"^[a-z]{2}$")
 
 
-class PasswordChange(BaseModel):
+class PasswordChange(RequestModel):
     current_password: str
     new_password: str = Field(min_length=8, max_length=255)
     totp_code: str = Field(default="", max_length=64)
@@ -108,7 +110,7 @@ class PasswordChange(BaseModel):
     Im Schema optional, damit ältere Aufrufer diese Antwort statt eines 422 bekommen."""
 
 
-@router.patch("")
+@router.patch("", responses=error_responses(401, 403, 507))
 async def update_me(payload: MeUpdate, user: CurrentUser, session: SessionDep) -> MeOut:
     if payload.display_name is not None:
         user.display_name = payload.display_name.strip()
@@ -135,12 +137,18 @@ class PreferencesOut(BaseModel):
     Aussehen bis 0.8)."""
     design_notice_dismissed: bool = False
     """Hinweis „Deck hat ein neues Aussehen.“ weggeklickt; er erscheint je Benutzer nur einmal, auf jedem Gerät."""
+    totp_setup_skipped: bool = False
+    """Zwei-Faktor-Einrichtung im Assistenten übersprungen; die Übersicht erinnert ans Nachholen."""
+    totp_reminder_dismissed: bool = False
+    """Erinnerung an Zwei-Faktor ausgeblendet oder durch die Aktivierung erledigt, auf jedem Gerät."""
 
 
-class PreferencesUpdate(BaseModel):
+class PreferencesUpdate(RequestModel):
     first_steps_dismissed: bool | None = None
     theme: Theme | None = None
     design_notice_dismissed: bool | None = None
+    totp_setup_skipped: bool | None = None
+    totp_reminder_dismissed: bool | None = None
 
 
 async def _preferences(session: SessionDep, user_id: str) -> PreferencesOut:
@@ -150,15 +158,21 @@ async def _preferences(session: SessionDep, user_id: str) -> PreferencesOut:
         # Ein Wert, den es nicht mehr gibt, fällt auf den Standard zurück statt die Antwort zu sprengen.
         theme=theme if theme in get_args(Theme) else DEFAULT_THEME,
         design_notice_dismissed=bool(await settings_service.get_user(session, user_id, DESIGN_NOTICE_KEY, False)),
+        totp_setup_skipped=bool(
+            await settings_service.get_user(session, user_id, settings_service.TOTP_SETUP_SKIPPED_KEY, False)
+        ),
+        totp_reminder_dismissed=bool(
+            await settings_service.get_user(session, user_id, settings_service.TOTP_REMINDER_DISMISSED_KEY, False)
+        ),
     )
 
 
-@router.get("/preferences")
+@router.get("/preferences", responses=error_responses(401, 403, 507))
 async def get_preferences(user: CurrentUser, session: SessionDep) -> PreferencesOut:
     return await _preferences(session, user.id)
 
 
-@router.patch("/preferences")
+@router.patch("/preferences", responses=error_responses(401, 403, 507))
 async def update_preferences(payload: PreferencesUpdate, user: CurrentUser, session: SessionDep) -> PreferencesOut:
     if payload.first_steps_dismissed is not None:
         await settings_service.set_user(session, user.id, FIRST_STEPS_KEY, payload.first_steps_dismissed)
@@ -166,10 +180,20 @@ async def update_preferences(payload: PreferencesUpdate, user: CurrentUser, sess
         await settings_service.set_user(session, user.id, THEME_KEY, payload.theme)
     if payload.design_notice_dismissed is not None:
         await settings_service.set_user(session, user.id, DESIGN_NOTICE_KEY, payload.design_notice_dismissed)
+    if payload.totp_setup_skipped is not None:
+        await settings_service.set_user(session, user.id, settings_service.TOTP_SETUP_SKIPPED_KEY, payload.totp_setup_skipped)
+    if payload.totp_reminder_dismissed is not None:
+        await settings_service.set_user(
+            session, user.id, settings_service.TOTP_REMINDER_DISMISSED_KEY, payload.totp_reminder_dismissed
+        )
     return await _preferences(session, user.id)
 
 
-@router.post("/password", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=error_responses(400, 401, 403, 422, 429, 503, 507),
+)
 async def change_password(
     payload: PasswordChange, request: Request, user: CurrentUser, session: SessionDep, settings: SettingsDep,
     current_session_id: CurrentSessionId,
@@ -217,7 +241,7 @@ TOTP_SETUP_PASSWORD_REQUIRED = (
 )
 
 
-@router.post("/totp/setup", response_model=TotpSetupOut)
+@router.post("/totp/setup", response_model=TotpSetupOut, responses=error_responses(400, 401, 403, 409, 429, 503, 507))
 async def totp_setup(
     request: Request,
     user: CurrentUser,
@@ -237,7 +261,7 @@ async def totp_setup(
     return TotpSetupOut(secret=secret, otpauth_uri=otpauth_uri)
 
 
-@router.post("/totp/confirm")
+@router.post("/totp/confirm", responses=error_responses(400, 401, 403, 409, 429, 503, 507))
 async def totp_confirm(
     payload: TotpConfirmRequest, request: Request, user: CurrentUser, session: SessionDep, settings: SettingsDep
 ) -> RecoveryCodesOut:
@@ -260,7 +284,11 @@ async def totp_confirm(
     return RecoveryCodesOut(recovery_codes=codes)
 
 
-@router.post("/recovery-codes", response_model=RecoveryCodesOut)
+@router.post(
+    "/recovery-codes",
+    response_model=RecoveryCodesOut,
+    responses=error_responses(400, 401, 403, 409, 429, 503, 507),
+)
 async def regenerate_recovery_codes(
     payload: RecoveryCodesRequest, request: Request, user: CurrentUser, session: SessionDep, settings: SettingsDep
 ):
@@ -296,7 +324,11 @@ async def regenerate_recovery_codes(
     return RecoveryCodesOut(recovery_codes=codes)
 
 
-@router.delete("/totp", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/totp",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=error_responses(400, 401, 403, 429, 503, 507),
+)
 async def totp_disable(
     payload: TotpDisableRequest, request: Request, user: CurrentUser, session: SessionDep, settings: SettingsDep,
     current_session_id: CurrentSessionId,

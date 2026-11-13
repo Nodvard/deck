@@ -16,6 +16,7 @@ import subprocess
 
 import asyncssh
 import pytest
+from exec_gate_helpers import execute_approved
 from nodvard_sdk.errors import ActionBlocked, PermissionDenied
 from sqlalchemy import select
 from test_ext_context import _build
@@ -152,10 +153,12 @@ async def argv_host(db_session, test_settings):
             pass
 
 
-async def test_run_argv_sends_the_joined_command_line_over_ssh(tmp_path, test_settings, argv_host):
+async def test_run_argv_sends_the_joined_command_line_over_ssh(tmp_path, test_settings, argv_host, db_session):
     _, _, ctx = _build(tmp_path, permissions=["hosts.execute"], settings=test_settings)
     argv = ["echo", "a b", "$(id)", "it's"]
-    result = await ctx.exec.run_argv(argv_host, argv, timeout_s=10)
+    result = await execute_approved(
+        db_session, lambda: ctx.exec.run_argv(argv_host, argv, timeout_s=10), host_id=argv_host.id
+    )
     assert result.exit_code == 0
     assert json.loads(result.stdout) == {"command": shlex.join(argv), "stdin": None}
 
@@ -169,20 +172,28 @@ async def test_run_argv_sends_the_joined_command_line_over_ssh(tmp_path, test_se
         (b"", ""),
     ],
 )
-async def test_run_argv_feeds_stdin_and_closes_it(tmp_path, test_settings, argv_host, stdin, expected):
+async def test_run_argv_feeds_stdin_and_closes_it(tmp_path, test_settings, argv_host, stdin, expected, db_session):
     _, _, ctx = _build(tmp_path, permissions=["hosts.execute"], settings=test_settings)
-    result = await ctx.exec.run_argv(argv_host, ["read-stdin", "--", "-"], stdin=stdin, timeout_s=10)
+    result = await execute_approved(
+        db_session,
+        lambda: ctx.exec.run_argv(argv_host, ["read-stdin", "--", "-"], stdin=stdin, timeout_s=10),
+        host_id=argv_host.id,
+    )
     reply = json.loads(result.stdout)
     assert reply == {"command": "read-stdin -- -", "stdin": expected}
     # Die Daten stehen nicht auf der Kommandozeile.
     assert expected == "" or expected.strip() not in reply["command"]
 
 
-async def test_stream_argv_runs_the_joined_command_line(tmp_path, test_settings, argv_host):
+async def test_stream_argv_runs_the_joined_command_line(tmp_path, test_settings, argv_host, db_session):
     _, _, ctx = _build(tmp_path, permissions=["hosts.execute"], settings=test_settings)
     argv = ["tail", "-f", "/var/log/a b.log"]
-    chunks = b""
-    async with ctx.exec.stream_argv(argv_host, argv) as stream:
-        async for chunk in stream:
-            chunks += chunk
+    async def read():
+        chunks = b""
+        async with ctx.exec.stream_argv(argv_host, argv) as stream:
+            async for chunk in stream:
+                chunks += chunk
+        return chunks
+
+    chunks = await execute_approved(db_session, read, host_id=argv_host.id)
     assert json.loads(chunks.decode().strip())["command"] == shlex.join(argv)

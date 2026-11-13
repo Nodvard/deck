@@ -10,12 +10,16 @@ from typing import Any
 from urllib.parse import quote, quote_plus, urlsplit
 
 import httpx
+from fastapi import HTTPException, status
 from nodvard_sdk import Notification as SdkNotification, Severity
 from nodvard_sdk.capabilities import NotificationChannel
+
+from ..core import rate_limit
 
 TEST_TIMEOUT_S = 25.0
 _MAX_TEXT = 300
 _MAX_VERBATIM = 1500  # für Sätze, die mehrere Ziele zusammenfassen (`verbatim`): einer je Ziel
+_test_window = rate_limit.SlidingWindow(10, 60)
 
 _SECRET_KEYS = r"(?:token|password|passwort|passwd|secret|api[_-]?key|apikey|authorization|session(?:[_-]?id)?|cookie)"
 _REDACTIONS: list[tuple[re.Pattern[str], str]] = [
@@ -30,6 +34,16 @@ _REDACTIONS: list[tuple[re.Pattern[str], str]] = [
     ),
     (re.compile(r"(?<=://)[^/\s@]+@"), "***@"),
 ]
+
+
+def check_rate_limit(user_id: str) -> None:
+    wait = _test_window.hit(user_id)
+    if wait:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Zu viele Tests hintereinander. Bitte in {rate_limit.wait_text(wait)} erneut versuchen.",
+            headers={"Retry-After": str(wait)},
+        )
 
 
 def scrub(text: str, secrets: list[str] | None = None, *, limit: int = _MAX_TEXT) -> str:

@@ -11,6 +11,7 @@ import stat
 import sys
 
 import pytest
+from nodvard_deck.config import Settings
 from nodvard_deck.core import login_limit, setup_code
 from nodvard_deck.models import AuditEntry, User
 from sqlalchemy import select
@@ -66,6 +67,14 @@ def test_too_short_preset_is_ignored(tmp_path):
     code, created = setup_code.ensure(tmp_path, "abc")
     assert created is True
     assert code != "ABC"
+
+
+@pytest.mark.parametrize(
+    ("preset", "expected"),
+    [(None, None), ("", None), ("abc-defg--", None), ("ÄÖÜ-äöü-ß!", None), ("abcd-1234", "ABCD1234")],
+)
+def test_minimum_preset_length_counts_only_ascii_letters_and_digits(preset, expected):
+    assert setup_code.valid_preset(preset) == expected
 
 
 def test_verify_without_any_code_is_false(tmp_path):
@@ -131,13 +140,41 @@ async def test_code_is_invalid_after_setup(client, real_code_settings):
 
 
 @pytest.mark.asyncio
-async def test_env_preset_is_the_required_code(client, test_settings):
-    test_settings.setup_code = "vorab-gesetzt-9"
+async def test_env_preset_is_the_required_code(client, test_settings, monkeypatch):
+    monkeypatch.setenv("NODVARD_DECK_SETUP_CODE", "vorab-gesetzt-9")
+    test_settings.setup_code = Settings(_env_file=None).setup_code
     wrong = await client.post(URL, json={**BODY, "setup_code": "TEST-CODE-2345"})
     assert wrong.status_code == 403
     ok = await client.post(URL, json={**BODY, "setup_code": "VORAB GESETZT 9"})
     assert ok.status_code == 201, ok.text
     assert not _file(test_settings).exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial", [None, "vorab-gesetzt-9"])
+@pytest.mark.parametrize("preset", ["vorab-gesetzt-9", "spaeter-gesetzt-8", "kurz"])
+async def test_env_preset_is_ignored_after_setup(client, test_settings, db_session, monkeypatch, capsys, initial, preset):
+    from nodvard_deck.services import auth as auth_service
+
+    test_settings.setup_code = initial
+    first = await auth_service.prepare_setup_code(db_session, test_settings)
+    assert (await client.post(URL, json={**BODY, "setup_code": first})).status_code == 201
+    capsys.readouterr()
+
+    # Neustart mit beibehaltener, geänderter oder erst jetzt gesetzter Variable.
+    monkeypatch.setenv("NODVARD_DECK_SETUP_CODE", preset)
+    test_settings.setup_code = Settings(_env_file=None).setup_code
+    assert await auth_service.prepare_setup_code(db_session, test_settings) is None
+    out = capsys.readouterr().out
+    assert "NODVARD_DECK_SETUP_CODE wird ignoriert, weil bereits ein Konto existiert." in out
+    assert preset not in out and setup_code.normalize(preset) not in out
+    assert "Einrichtungscode:" not in out
+    assert not _file(test_settings).exists()
+    assert (await client.get(URL)).json()["needed"] is False
+    assert (await client.post(URL, json={**BODY, "setup_code": preset})).status_code == 409
+    assert (await client.post(URL + "/restart", headers={"X-Setup-Code": preset})).status_code == 409
+    assert (await client.post("/api/v1/auth/login", json=BODY)).status_code == 200
+    assert len((await db_session.execute(select(User))).scalars().all()) == 1
 
 
 @pytest.mark.asyncio
@@ -176,7 +213,7 @@ async def test_startup_logs_code_until_setup_is_done(db_session, real_code_setti
     first = await auth_service.prepare_setup_code(db_session, real_code_settings)
     out = capsys.readouterr().out
     assert first is not None
-    assert f"Einrichtungscode: {first} – im Browser eingeben" in out
+    assert f"Einrichtungscode: {first} (im Browser eingeben)" in out
 
     # Neustart: derselbe Code, wieder im Protokoll.
     second = await auth_service.prepare_setup_code(db_session, real_code_settings)
@@ -206,20 +243,37 @@ async def test_startup_preset_is_shown_and_no_file_written(db_session, test_sett
     assert not _file(test_settings).exists()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("preset", ["abcdefg", "a-b-c-d-e-f-g", "ÄÖÜ-äöü-ß"])
+async def test_startup_rejects_short_preset_and_accepts_generated_code(client, db_session, test_settings, capsys, preset):
+    from nodvard_deck.services import auth as auth_service
+
+    test_settings.setup_code = preset
+    code = await auth_service.prepare_setup_code(db_session, test_settings)
+    out = capsys.readouterr().out
+    assert "NODVARD_DECK_SETUP_CODE ist zu kurz (mindestens 8 Buchstaben oder Ziffern) und wird ignoriert." in out
+    assert preset not in out
+    assert f"Einrichtungscode: {code}" in out
+    assert _file(test_settings).exists()
+    assert (await client.post(URL, json={**BODY, "setup_code": preset})).status_code == 403
+    assert (await client.post(URL, json={**BODY, "setup_code": code})).status_code == 201
+
+
 # --- Protokoll-Block: der Code ist gross und einzeln zu finden ---------------
 
 
 def test_banner_shows_the_code_alone_in_a_line_between_blank_lines():
-    lines = setup_code.banner("K7MQ-X2VD-H9PA").split("\n")
-    at = [i for i, line in enumerate(lines) if line.strip() == "K7MQ-X2VD-H9PA"]
+    lines = setup_code.banner("K7MQ-X2VD-H9PA").strip().split("\n")
+    contents = [line.strip("| ") for line in lines]
+    at = [i for i, line in enumerate(contents) if line == "K7MQ-X2VD-H9PA"]
     assert len(at) == 1, "der Code steht genau einmal allein in einer Zeile"
-    assert lines[at[0] - 1].strip() == "" and lines[at[0] + 1].strip() == ""
-    # Rahmen aus '='-Zeilen um den ganzen Block.
-    frame = [i for i, line in enumerate(lines) if set(line) == {"="}]
-    assert len(frame) == 2 and frame[0] < at[0] < frame[1]
+    assert contents[at[0] - 1] == "" and contents[at[0] + 1] == ""
+    assert lines[0] == lines[-1] and re.fullmatch(r"\+=+\+", lines[0])
+    assert all(line.startswith("| ") and line.endswith(" |") for line in lines[1:-1])
+    assert len({len(line) for line in lines}) == 1
 
 
 def test_banner_keeps_the_text_that_docs_and_grep_rely_on():
     text = setup_code.banner("K7MQ-X2VD-H9PA")
-    assert "Einrichtungscode: K7MQ-X2VD-H9PA – im Browser eingeben" in text
+    assert "Einrichtungscode: K7MQ-X2VD-H9PA (im Browser eingeben)" in text
     assert text.startswith("\n") and text.endswith("\n")

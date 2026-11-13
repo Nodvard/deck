@@ -26,6 +26,7 @@ permissions = [
 from = "network"
 settings = "pihole"
 widgets = { pihole = "status" }
+# API-Vertrag: Übernommene Adressen bleiben in 1.x erreichbar.
 routes = { "/pihole" = "/summary", "/widgets/pihole" = "/widgets/status", "/pihole/pause" = "/pause", "/pihole/resume" = "/resume" }
 secrets = ["network-pihole-password"]
 

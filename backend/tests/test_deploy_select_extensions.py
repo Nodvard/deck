@@ -18,7 +18,7 @@ pytestmark = pytest.mark.skipif(shutil.which("sh") is None, reason="braucht eine
 
 def _tree(tmp_path: Path) -> Path:
     folder = tmp_path / "extensions"
-    for name in ("_shared", "docker", "documents", "network"):
+    for name in ("_shared", "docker", "documents", "hello-world", "network"):
         (folder / name / "frontend").mkdir(parents=True)
         if name != "_shared":
             (folder / name / "extension.toml").write_text(f'[extension]\nid = "{name}"\n', encoding="utf-8")
@@ -35,9 +35,10 @@ def _left(folder: Path) -> list[str]:
 
 
 @pytest.mark.parametrize(("modules", "left"), [
-    ("", ["_shared", "docker", "documents", "network", "tsconfig.json"]),
+    ("", ["_shared", "docker", "documents", "tsconfig.json"]),
     ("docker", ["_shared", "docker", "tsconfig.json"]),
     ("docker,network", ["_shared", "docker", "network", "tsconfig.json"]),
+    ("hello-world", ["_shared", "hello-world", "tsconfig.json"]),
     ("docker,,", ["_shared", "docker", "tsconfig.json"]),
 ])
 def test_keeps_the_chosen_modules_and_the_kit(tmp_path, modules, left):
@@ -61,7 +62,7 @@ def test_a_wrong_list_stops_the_build_and_removes_nothing(tmp_path, modules, err
     folder = _tree(tmp_path)
     done = _select(modules, folder)
     assert done.returncode == 1 and error in done.stderr
-    assert _left(folder) == ["_shared", "docker", "documents", "network", "tsconfig.json"]
+    assert _left(folder) == ["_shared", "docker", "documents", "hello-world", "network", "tsconfig.json"]
 
 
 def test_the_docker_module_can_be_chosen_from_the_repository(tmp_path):

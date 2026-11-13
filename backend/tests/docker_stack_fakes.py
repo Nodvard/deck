@@ -62,6 +62,7 @@ class FakeExec:
         """Für die Mount-Prüfung beim Löschen: je Container `id`, `name`, `project` und `mounts`."""
         self.rm_probe = result("Usage: rm [OPTION]... [FILE]...\n")
         self.login_uid = 1000
+        self.real_paths: dict[str, str] = {}
         """Als wer sich Deck anmeldet (`id -u`); wie der Besitzer der Stack-Ordner in `FakeSftp`."""
         self.sftp_server = FakeSftp(self.files, links=self.links)
         self.modes = self.sftp_server.modes
@@ -88,6 +89,8 @@ class FakeExec:
             return result("".join(f"{c['id']}\n" for c in self.containers))
         if argv[:3] == ["docker", "container", "inspect"]:
             return result("".join(json.dumps({k: v for k, v in c.items() if k != "id"}) + "\n" for c in self.containers))
+        if argv[:3] == ["realpath", "-m", "--"]:
+            return result("".join(f"{self.real_paths.get(path, path)}\n" for path in argv[3:]))
         if argv == ["id", "-u"]:
             return result(f"{self.login_uid}\n")
         if argv == ["rm", "--one-file-system", "--help"]:

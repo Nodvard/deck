@@ -273,17 +273,26 @@ class PiholeClient:
         return body
 
     async def summary(self) -> dict[str, Any]:
-        return parse_summary(await self._api("GET", "/api/stats/summary"))
+        summary = parse_summary(await self._api("GET", "/api/stats/summary"))
+        if summary["queries_total"] is None or summary["queries_total"] < 0:
+            raise PiholeError("Pi-hole hat keine gültige Antwort geschickt.")
+        return summary
 
     async def blocking(self) -> dict[str, Any]:
-        return parse_blocking(await self._api("GET", "/api/dns/blocking"))
+        body = await self._api("GET", "/api/dns/blocking")
+        if not isinstance(body.get("blocking"), str) or body["blocking"].lower() not in _BLOCKING_STATES:
+            raise PiholeError("Pi-hole hat keine gültige Antwort geschickt.")
+        return parse_blocking(body)
 
     async def set_blocking(self, enabled: bool, *, timer_s: int | None = None) -> dict[str, Any]:
         body: dict[str, Any] = {"blocking": bool(enabled), "timer": timer_s}
         return parse_blocking(await self._api("POST", "/api/dns/blocking", json=body))
 
     async def top_clients(self, limit: int = TOP_CLIENTS) -> list[dict[str, Any]]:
-        return parse_top_clients(await self._api("GET", f"/api/stats/top_clients?count={int(limit)}"), limit)
+        body = await self._api("GET", f"/api/stats/top_clients?count={int(limit)}")
+        if not isinstance(body.get("clients"), list):
+            raise PiholeError("Pi-hole hat keine gültige Antwort geschickt.")
+        return parse_top_clients(body, limit)
 
     async def update_gravity(self) -> str:
         """Lädt die Sperrlisten neu (`POST /api/action/gravity`) und gibt das Ende der Ausgabe von Pi-hole zurück."""

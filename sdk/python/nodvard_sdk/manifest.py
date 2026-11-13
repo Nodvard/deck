@@ -232,6 +232,9 @@ class ExtensionManifest(BaseModel):
 
     adopts: list[AdoptSpec] = Field(default_factory=list)
     """Teile, die andere Module an dieses abgeben (siehe `AdoptSpec`). Leer = nichts übernommen (der Normalfall)."""
+    editions: list[str] = Field(default_factory=list)
+    """Feste Ausgaben, in denen das Modul mitläuft, z. B. `["dock"]` für Nodvard Dock. Dort bedient der Kern nur Module,
+    die die Ausgabe hier nennen. Leer = nur im frei wählbaren Nodvard Deck (der Normalfall)."""
 
     @field_validator("id")
     @classmethod

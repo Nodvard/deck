@@ -5,6 +5,8 @@ Sperrliste, Anti-Flapping, Autonomie-Entscheidung, Ausfuehrung, und dass Schritt
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from nodvard_sdk import Actor, ActionRequest, ActionResult, ActorType, DryRunReport, GateOutcome, Risk
 from nodvard_sdk.capabilities import ActionExecutor
@@ -160,7 +162,7 @@ async def test_propose_full_autonomy_above_risk_threshold_still_requires_confirm
 
 
 @pytest.mark.asyncio
-async def test_execute_action_records_failure_when_executor_raises(db_session):
+async def test_execute_action_records_failure_when_executor_raises(db_session, caplog):
     executor = _register_executor(raise_error=True)
     await settings_service.set_global(db_session, "autonomy.mode", "full")
     await settings_service.set_global(db_session, "autonomy.max_risk", "high")
@@ -173,7 +175,9 @@ async def test_execute_action_records_failure_when_executor_raises(db_session):
 
     row = await db_session.get(Action, decision.action_id)
     assert row.result["success"] is False
-    assert "abgerissen" in row.result["error"]
+    assert re.fullmatch(r"Die Anfrage ist fehlgeschlagen\. Fehlerkennung: [0-9a-f]{32}\.", row.result["error"])
+    assert "abgerissen" not in row.result["error"] + caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
 
     executed_audit = await _last_audit(db_session, "action.executed")
     assert executed_audit.outcome == "failure"
@@ -794,7 +798,7 @@ async def test_approve_with_wait_zero_runs_in_background_without_holding_a_lock(
 
 
 @pytest.mark.asyncio
-async def test_background_executor_error_ends_in_failed(tmp_path):
+async def test_background_executor_error_ends_in_failed(tmp_path, caplog):
     import asyncio
 
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -819,7 +823,9 @@ async def test_background_executor_error_ends_in_failed(tmp_path):
 
         stored = await _stored(sessionmaker, decision.action_id)
         assert stored.status == "failed"
-        assert "abgerissen" in stored.result["error"]
+        assert re.fullmatch(r"Die Anfrage ist fehlgeschlagen\. Fehlerkennung: [0-9a-f]{32}\.", stored.result["error"])
+        assert "abgerissen" not in stored.result["error"] + caplog.text
+        assert all(record.exc_info is None for record in caplog.records)
         assert stored.finished_at is not None
     finally:
         await gate.shutdown_running()
@@ -828,7 +834,7 @@ async def test_background_executor_error_ends_in_failed(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_background_error_outside_the_executor_still_ends_in_failed(db_session, monkeypatch):
+async def test_background_error_outside_the_executor_still_ends_in_failed(db_session, monkeypatch, caplog):
     """Auch ein Fehler ausserhalb des Executors (hier: beim Suchen des Executors)
     darf die Aktion nie auf 'executing' haengen lassen."""
 
@@ -840,7 +846,9 @@ async def test_background_error_outside_the_executor_still_ends_in_failed(db_ses
     action, moved = await gate.approve(db_session, decision.action_id, user_id="user-1")
     assert moved is True
     assert action.status == "failed"
-    assert action.result["error"] == "Laufzeit kaputt"
+    assert re.fullmatch(r"Die Anfrage ist fehlgeschlagen\. Fehlerkennung: [0-9a-f]{32}\.", action.result["error"])
+    assert "Laufzeit kaputt" not in action.result["error"] + caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
     executed = await _last_audit(db_session, "action.executed")
     assert executed.outcome == "failure"
 

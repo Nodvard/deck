@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import edition
 from ..config import Settings, get_settings
 from ..core import updates
-from ..db.session import session_scope
+from ..db.session import release_connection, session_scope
 from ..models import Notification, NotificationDelivery
 from . import jobs as jobs_service
 from . import settings as settings_service
@@ -77,12 +77,14 @@ async def current_status(session: AsyncSession, settings: Settings) -> dict[str,
 async def check_now(session: AsyncSession, settings: Settings) -> dict[str, Any]:
     """Fragt die Registry jetzt (nie eine Ausnahme, siehe `core.updates.check`)."""
     enabled, channel = await load_config(session)
+    auto_security = await _auto_security(session)
+    await release_connection(session)
     result = await updates.check(
         settings.data_dir, channel=channel, image=_image(settings), current=running_version(settings),
         repository=edition.of(settings).repository,
     )
     await notify_security(result)
-    return {**result, "enabled": enabled, "auto_security": await _auto_security(session)}
+    return {**result, "enabled": enabled, "auto_security": auto_security}
 
 
 _security_slot: tuple[weakref.ReferenceType[asyncio.AbstractEventLoop], asyncio.Lock] | None = None

@@ -3,9 +3,11 @@ der Stack als übernommen. Angelegt wird nur über das Gate, und ein bestehender
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 import contextlib
 import dataclasses
+import json
 import logging
 import posixpath
 import shlex
@@ -32,6 +34,7 @@ from .editor import (
     parse_check,
     sha256,
 )
+from .env_values import cmd_with_env, env_file, env_stdin, hide_detail, hide_values
 from .image_apply import PROJECT_RE, _valid_path
 from .operate import still_full
 from .stack_actions import IN_FOLDER, DockerStackExecutor, busy_text
@@ -54,7 +57,7 @@ NEW_DIR_MODE = 0o755
 MAX_ROOTS = 200
 RISK_TOO_LOW = "Die Datei enthält riskante Einstellungen; dafür braucht es eine Freigabe mit hohem Risiko. Bitte noch einmal anlegen."
 # Dort kann jeder Nutzer des Servers Ordner anlegen und austauschen.
-_SHARED_ROOTS = ("/tmp", "/var/tmp", "/dev/shm", "/run/user")
+_SHARED_ROOTS = ("/tmp", "/var/tmp", "/dev/shm", "/run/user")  # nosec B108 - Sperrliste für Stack-Ordner
 # SFTP-Fehler ohne Antwort des Servers: keine Verbindung, Verbindung abgerissen.
 _SFTP_NO_ANSWER = (6, 7)
 
@@ -257,18 +260,21 @@ class NewStacks:
             return f"Server nicht erreichbar: {str(exc) or type(exc).__name__}"
         return None
 
-    async def check(self, host: Any, stack: Stack, root: str, content: bytes) -> Checked:
+    async def check(self, host: Any, stack: Stack, root: str, content: bytes, env: dict[str, str] | None = None) -> Checked:
         """Vorab-Prüfung; fehlt der Ordner für neue Stacks noch, läuft sie in `/`. Verbindlich prüft der Ausführer im neuen Ordner."""
         try:
             for cwd in (root, "/"):
-                result = await self._ctx.exec.run_argv(host, cmd_new_check(stack, cwd), stdin=content, timeout_s=60)
+                result = await self._ctx.exec.run_argv(
+                    host, cmd_with_env(cmd_new_check(stack, cwd), env), stdin=env_stdin(env, content, pwd=stack.working_dir), timeout_s=60,
+                )
                 if result.exit_code != 97:
                     break
         except OSError as exc:
             if type(exc) is TimeoutError:
                 return Checked(unverified="Compose hat nicht innerhalb von 60 Sekunden geantwortet.")
             return Checked(unverified=f"Server nicht erreichbar: {str(exc) or type(exc).__name__}")
-        checked = parse_check(result.exit_code, result.stdout, result.stderr, COMPOSE_NAME)
+        checked = parse_check(result.exit_code, result.stdout, result.stderr, COMPOSE_NAME, roots=(stack.working_dir,))
+        checked = _hide_check(await self.editor.with_real_targets(host, checked, (stack.working_dir,)), env or {})
         if checked.error and f"{stack.working_dir}/" in checked.error and "not found" in checked.error:
             note = (
                 " Der Ordner des Stacks ist neu und leer; Dateien wie eine .env legst du nach dem Anlegen darin an. Bis dahin lass "
@@ -276,6 +282,12 @@ class NewStacks:
             )
             return dataclasses.replace(checked, error=_sentence(checked.error) + note)
         return checked
+
+
+def _hide_check(checked: Checked, values: dict[str, str]) -> Checked:
+    return dataclasses.replace(checked, error=hide_values(checked.error, values), unverified=hide_values(checked.unverified, values),
+                               warnings=tuple(hide_values(w, values) for w in checked.warnings),
+                               services=tuple(hide_values(s, values) for s in checked.services))
 
 
 def _sentence(text: str) -> str:
@@ -432,9 +444,19 @@ class DockerStackCreateExecutor:
         with self._actions.locks.hold(host.id, name, "Anlegen") as busy:
             if busy is not None:
                 return ActionResult(success=False, error=busy_text(busy))
-            return await self._create(req, host, stack, root, draft[1], bool(payload.get("start")))
+            content, values = draft[1], {}
+            if payload.get("with_env"):
+                try:
+                    packed = json.loads(content)
+                    content, values = packed["compose"].encode(), packed["env"]
+                    env_file(values)
+                except (ValueError, TypeError, KeyError, AttributeError):
+                    return ActionResult(success=False, error="Der Entwurf ist beschädigt. Bitte noch einmal anlegen.")
+            result = await self._create(req, host, stack, root, content, bool(payload.get("start")), values)
+            return result.model_copy(update={"error": hide_values(result.error, values), "output": hide_values(result.output, values),
+                                             "detail": hide_detail(result.detail, values)})
 
-    async def _create(self, req: ActionRequest, host: Any, stack: Stack, root: str, content: bytes, start: bool) -> ActionResult:
+    async def _create(self, req: ActionRequest, host: Any, stack: Stack, root: str, content: bytes, start: bool, env: dict[str, str]) -> ActionResult:
         started = time.monotonic()
         conflict = await self._new.conflict(host, stack.project, root)
         if conflict is not None:
@@ -442,7 +464,8 @@ class DockerStackCreateExecutor:
         created: list[tuple[str, str]] = []
         async with self._ctx.exec.sftp(host) as sftp:
             try:
-                problem = await self.lay_out(req, sftp, host, stack, root, content, created)
+                extra = ((f"{stack.working_dir}/.env", env_file(env)),) if env else ()
+                problem = await self.lay_out(req, sftp, host, stack, root, content, created, extra, env=env)
             except BaseException:
                 # Auch bei einem Abbruch (Neustart von Deck, Zeitgrenze der Freigabe) nichts Halbes liegen lassen.
                 await asyncio.shield(_undo(sftp, created))
@@ -452,7 +475,7 @@ class DockerStackCreateExecutor:
                 return ActionResult(success=False, error=_sentence(problem) + _leftover(left) if left else problem)
         folder = stack.working_dir
         try:
-            await self._adopted.add(host.id, stack)
+            await self._adopted.add(host.id, dataclasses.replace(stack, env_names=tuple(env)))
         except Exception as exc:  # noqa: BLE001 - die Datei steht, nur das Merken fehlt
             return ActionResult(success=False, error=(
                 f"Die Compose-Datei liegt in {folder}, Nodvard Deck konnte sich den Stack aber nicht merken ({exc}). "
@@ -464,7 +487,7 @@ class DockerStackCreateExecutor:
         if not start:
             return ActionResult(success=True, exit_code=0, output=done, duration_ms=duration_ms, detail={"created": True})
         try:
-            applied = await self._actions.run(host, stack, "docker.stack_up")
+            applied = await self._actions.run(host, stack, "docker.stack_up", **({"env": env} if env else {}))
         except Exception as exc:  # noqa: BLE001 - der Stack ist schon angelegt, das muss die Oberfläche erfahren
             return ActionResult(success=False, output=done, duration_ms=duration_ms, detail={"created": True},
                                 error=f"Angelegt, aber das Starten ist gescheitert: {_describe(exc)}")
@@ -480,6 +503,7 @@ class DockerStackCreateExecutor:
     async def lay_out(
         self, req: ActionRequest, sftp: Any, host: Any, stack: Stack, root: str, content: bytes, created: list[tuple[str, str]],
         extra: tuple[tuple[str, bytes], ...] = (), vet: Callable[[dict[str, Any]], str | None] | None = None,
+        env: dict[str, str] | None = None,
     ) -> str | None:
         """Ordner anlegen, `extra` (etwa eine `.env`) hineinschreiben, im Ordner prüfen, Datei schreiben; gibt den Grund
         zurück, wenn es nicht ging. `vet` prüft zusätzlich die Datei, wie Compose sie im neuen Ordner auflöst."""
@@ -513,7 +537,7 @@ class DockerStackCreateExecutor:
                 return f"{posixpath.basename(extra_path)} ließ sich nicht schreiben: {str(exc) or type(exc).__name__}"
             if problem is not None:
                 return problem
-        checked = await self._new.editor.check(host, stack, 0, content)
+        checked = _hide_check(await self._new.editor.check(host, stack, 0, content, **({"env": env} if env else {})), env or {})
         if checked.problem is not None:
             return checked.problem
         if checked.warnings and RISK_ORDER.index(req.risk) < RISK_ORDER.index(Risk.HIGH):
@@ -532,9 +556,10 @@ class DockerStackCreateExecutor:
 
 
 class _NewIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
     name: str = Field(max_length=64)
     content: str = Field(max_length=MAX_FILE_BYTES)
+    env: dict[str, str] = Field(default_factory=dict, max_length=100)
 
 
 class _CreateIn(_NewIn):
@@ -542,7 +567,7 @@ class _CreateIn(_NewIn):
 
 
 class _RootIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
     path: str | None = Field(default=None, max_length=1024)
 
 
@@ -563,12 +588,18 @@ def new_routes(new: NewStacks, docker_host: Any, current_actor: Any) -> APIRoute
             )
         return name
 
-    @router.get("/hosts/{host_id}/new-stack")
+    @router.get(
+        "/hosts/{host_id}/new-stack",
+    )
     async def new_place(host_id: str) -> dict:
         """Wohin neue Stacks auf diesem Server kommen."""
         return await new.place(await docker_host(host_id))
 
-    @router.put("/hosts/{host_id}/stack-root")
+    @router.put(
+        "/hosts/{host_id}/stack-root",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400,)},
+    )
     async def set_root(host_id: str, body: _RootIn, actor: Actor = Depends(current_actor)) -> dict:
         """Ordner für neue Stacks auf diesem Server; `null` nimmt wieder die Vorgabe."""
         host = await docker_host(host_id)
@@ -580,17 +611,29 @@ def new_routes(new: NewStacks, docker_host: Any, current_actor: Any) -> APIRoute
     async def _prepare(host_id: str, body: _NewIn) -> tuple[Any, Stack, str, bytes, Any, str | None]:
         host = await docker_host(host_id)
         name, content = _name(body.name), _content(body.content)
+        try:
+            env_file(body.env)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         root = await new.root(host.id)
         stack = new_stack(name, root)
-        return host, stack, root, content, await new.check(host, stack, root, content), await new.conflict(host, name, root)
+        return host, stack, root, content, await new.check(host, stack, root, content, body.env), await new.conflict(host, name, root)
 
-    @router.post("/hosts/{host_id}/new-stack/check")
+    @router.post(
+        "/hosts/{host_id}/new-stack/check",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 413,)},
+    )
     async def check_new(host_id: str, body: _NewIn) -> dict:
         """Prüft Name und Datei eines neuen Stacks, ohne etwas anzulegen."""
         _, stack, _, _, checked, conflict = await _prepare(host_id, body)
         return {**checked.as_response(), "folder": stack.working_dir, "conflict": conflict}
 
-    @router.post("/hosts/{host_id}/new-stack", status_code=status.HTTP_202_ACCEPTED)
+    @router.post(
+        "/hosts/{host_id}/new-stack", status_code=status.HTTP_202_ACCEPTED,
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 409, 413, 503,)},
+    )
     async def create(host_id: str, body: _CreateIn, actor: Actor = Depends(current_actor)) -> dict:
         """Schlägt das Anlegen vor (Gate-Aktion `docker.stack_create`), mit hohem Risiko bei riskanten Einstellungen."""
         host, stack, _, content, checked, conflict = await _prepare(host_id, body)
@@ -601,7 +644,8 @@ def new_routes(new: NewStacks, docker_host: Any, current_actor: Any) -> APIRoute
             raise HTTPException(status_code=code, detail=checked.problem)
         risk = Risk.HIGH if checked.warnings else Risk.MEDIUM
         try:
-            draft = await asyncio.to_thread(new.editor.drafts.put, host.id, stack.project, stack.files[0], content)
+            packed = json.dumps({"compose": body.content, "env": body.env}, ensure_ascii=False).encode() if body.env else content
+            draft = await asyncio.to_thread(new.editor.drafts.put, host.id, stack.project, stack.files[0], packed)
         except OSError as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -618,7 +662,8 @@ def new_routes(new: NewStacks, docker_host: Any, current_actor: Any) -> APIRoute
             ActionRequest(
                 action_type=CREATE_ACTION, host_ref=host.id, risk=risk, proposed_by=actor, reason=reason,
                 payload={
-                    "project": stack.project, "folder": stack.working_dir, "draft": draft, "sha256": sha256(content),
+                    "project": stack.project, "folder": stack.working_dir, "draft": draft, "sha256": sha256(packed),
+                    **({"with_env": True} if body.env else {}),
                     "start": body.start, "lines": lines, "warnings": list(checked.warnings),
                 },
             ),

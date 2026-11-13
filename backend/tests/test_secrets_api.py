@@ -412,19 +412,47 @@ async def test_a_viewer_cannot_change_an_entry_even_with_the_own_password(client
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("method", "suffix"), [("PUT", "/value"), ("DELETE", "")])
-async def test_too_many_wrong_passwords_lock_replace_and_delete(client, db_session, test_settings, method, suffix):
+@pytest.mark.parametrize(("method", "suffix", "body"), [
+    pytest.param("PUT", "/value", {"value": "NEU"}, id="PUT-/value"),
+    pytest.param("DELETE", "", {}, id="DELETE-"),
+])
+async def test_too_many_wrong_passwords_lock_replace_and_delete(client, db_session, test_settings, method, suffix, body):
     from nodvard_deck.core import login_limit, vault
 
     token = await _bootstrap_owner(client)
     secret_id = await _secret(client, token)
     url = f"/api/v1/secrets/{secret_id}{suffix}"
     for _ in range(login_limit.MAX_FAILURES_PER_USER):
-        r = await client.request(method, url, json={"value": "NEU", "current_password": "falsch"}, headers=_auth_header(token))
+        r = await client.request(method, url, json={**body, "current_password": "falsch"}, headers=_auth_header(token))
         assert r.status_code == 400, r.text
-    r = await client.request(method, url, json={"value": "NEU", "current_password": OWNER_PW}, headers=_auth_header(token))
+    r = await client.request(method, url, json={**body, "current_password": OWNER_PW}, headers=_auth_header(token))
     assert r.status_code == 429 and "Retry-After" in r.headers, "auch das richtige Passwort hilft erst nach der Pause"
     assert await vault.read_secret_plaintext(db_session, vault.load_keyring(test_settings), secret_id) == "WERT-123"
+    assert await _audit(db_session, "secret.replaced") == []
+    assert await _audit(db_session, "secret.deleted") == []
+
+
+@pytest.mark.asyncio
+async def test_delete_rejects_unknown_fields_without_deleting(client, db_session, test_settings):
+    from nodvard_deck.core import vault
+
+    token = await _bootstrap_owner(client)
+    secret_id = await _secret(client, token)
+    url = f"/api/v1/secrets/{secret_id}"
+    r = await client.request(
+        "DELETE", url, json={"value": "NEU", "current_password": OWNER_PW}, headers=_auth_header(token),
+    )
+    assert r.status_code == 422, r.text
+    assert any(error["type"] == "extra_forbidden" and error["loc"] == ["body", "value"] for error in r.json()["detail"])
+    assert await vault.read_secret_plaintext(db_session, vault.load_keyring(test_settings), secret_id) == "WERT-123"
+    assert await _audit(db_session, "secret.deleted") == []
+
+    r = await client.request("DELETE", url, json={"current_password": OWNER_PW}, headers=_auth_header(token))
+    assert r.status_code == 204, r.text
+    listed = await client.get("/api/v1/secrets", headers=_auth_header(token))
+    assert listed.status_code == 200, listed.text
+    assert all(secret["id"] != secret_id for secret in listed.json())
+    assert len(await _audit(db_session, "secret.deleted")) == 1
 
 
 @pytest.mark.asyncio

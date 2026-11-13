@@ -1,24 +1,4 @@
-"""Waechter: Der Name "Nexus" ist fuer die Oberflaeche und die Doku vergeben.
-
-Die Sicherheits-Erweiterung heisst "Nodvard Shield", alles mit KI heisst "Nodvard KI". "Nexus" darf nur noch im
-Uebergangshinweis zur Umbenennung und im Erkennungsmuster fuer alte KI-Antworten vorkommen. Jede Ausnahme steht in `ALLOWED` als genauer Treffer (Datei-Endung + Teilstring): nur dieser
-Teilstring wird aus der Zeile genommen, der Rest wird weiter geprueft ("Der alte Nexus SOC ..." faellt also auf).
-Eine Ausnahme, die nirgends mehr greift, laesst den Test scheitern.
-
-Geprueft werden (Schreibweise "Nexus"/"NEXUS", Wortgrenze, jede Zeile): Erweiterungs-Manifeste und
-Einstellungsschemas (komplett, also auch Vorgabewerte und Beispiele), Frontend-Quellen samt Vorschau-Testdaten und
-HTML-Einstiegsseiten, die gebauten Bundles, Backend-/Erweiterungs-/SDK-Python, Skripte, README, CHANGELOG, Doku,
-deploy/README und alle Aenderungsprotokolle (in der App unter "Ueber" sichtbar). Zusaetzlich werden die sichtbaren Textfelder der
-Manifeste und Schemas (title, description, name, x-item-title, x-enum-labels, ...) auch klein geschrieben geprueft.
-
-Nicht geprueft: Tests (die pruefen Erkennung/Verhalten und duerfen den alten Namen als Eingabe nutzen, auch
-`*.test.ts(x)` im Frontend). Dateien, die nicht veroeffentlicht werden (`export-ignore` in `.gitattributes`),
-werden ebenfalls nicht geprueft; die Muster dafuer liest der Test direkt aus `.gitattributes`.
-Die klein geschriebene technische Kennung (`nexus-soc`, bis 0.6 die Kennung von Nodvard Shield, heute `shield`) prueft dieser
-Test nicht: In Quelltexten, Tests und Skripten sorgt `scripts/check_legacy_names.py` (Regel 3, "alte Shield-Kennung", Test
-`backend/tests/test_legacy_names.py`) dafuer, dass sie nur dort steht, wo gespeicherte Daten oder Alias-Tests sie brauchen. In
-sichtbaren Texten von Manifesten und Schemas faengt sie die Pruefung der Felder unten ab (auch klein geschrieben).
-"""
+"""Prüft sichtbare Texte auf alte Produktnamen und begrenzt dokumentierte Ausnahmen."""
 
 from __future__ import annotations
 
@@ -34,8 +14,9 @@ NAME_ANY_CASE_RE = re.compile(r"\bnexus\b", re.IGNORECASE)
 
 # (Pfad-Endung, genauer Teilstring, Begruendung). Nur der Teilstring wird freigegeben, nicht die ganze Zeile.
 ALLOWED: list[tuple[str, str, str]] = [
-    ("", "bis 0.6 „Nexus SOC“", "Uebergangshinweis zur Umbenennung: so hiess die Erweiterung bis 0.6 (die technische Kennung ist seit 0.7 `shield`)"),
     ("parsing.py", "(?:NODVARD|NEXUS)", "alte KI-Antworten mit dem frueheren Marker weiter erkennen"),
+    ("docs/ALTE-NAMEN.md", "Nachricht an NEXUS", "Die Inventur zitiert den bereinigten Testtext im Ausgangsstand."),
+    ("docs/ALTE-NAMEN.md", "(?:NODVARD&#124;NEXUS)", "Die Inventur zitiert das beibehaltene Erkennungsmuster als HTML-Code."),
 ]
 
 
@@ -118,8 +99,8 @@ def test_kein_nexus_in_sichtbaren_quellen() -> None:
     assert not tot, "Ausnahmen, die nirgends mehr greifen (entfernen):\n" + "\n".join(tot)
 
 
-def test_ausnahmen_geben_nur_ihren_teilstring_frei() -> None:
-    """Die Ausnahmen nehmen nur ihren Teilstring aus der Zeile, nicht die Zeile, in der sie stehen."""
+def test_removed_rename_notice_is_rejected() -> None:
+    """Ein entfernter Umbenennungshinweis erlaubt keine alten Produktnamen mehr."""
     used: set[int] = set()
     for line in (
         "Der alte Nexus SOC prüft alles.",
@@ -128,7 +109,14 @@ def test_ausnahmen_geben_nur_ihren_teilstring_frei() -> None:
         "bis 0.6 „Nexus SOC“ und Nexus Deck",
     ):
         assert NAME_RE.search(_strip_allowed("frontend/src/x.tsx", line, used)), line
-    assert not NAME_RE.search(_strip_allowed("frontend/src/x.tsx", "Shield (bis 0.6 „Nexus SOC“)", used))
+    assert NAME_RE.search(_strip_allowed("frontend/src/x.tsx", "Shield (bis 0.6 „Nexus SOC“)", used))
+
+
+def test_inventory_quotes_only_allow_the_exact_text_in_the_inventory() -> None:
+    for text in ("Nachricht an NEXUS", "(?:NODVARD&#124;NEXUS)"):
+        assert not NAME_RE.search(_strip_allowed("docs/ALTE-NAMEN.md", text, set()))
+        assert NAME_RE.search(_strip_allowed("frontend/src/x.tsx", text, set()))
+        assert NAME_RE.search(_strip_allowed("docs/ALTE-NAMEN.md", f"{text} und Nexus", set()))
 
 
 # Schluessel, deren Text in der Oberflaeche steht.

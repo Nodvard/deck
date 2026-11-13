@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freigabe eines Releases für den Update-Helfer: Schlüssel anlegen und eine Version signieren.
+"""Schlüssel anlegen und Releases für den Update-Helfer signieren.
 
     python scripts/release_grant.py key --out <Ordner>                    # einmalig: Schlüssel current und next
     python scripts/release_grant.py sign v0.12.0 --key <current.pem> --expect-digest sha256:<aus release.yml> [--upload]
@@ -7,7 +7,7 @@
 `sign` fragt den Digest bei ghcr.io ab und signiert nur, wenn er dem Digest aus dem Lauf von `release.yml` gleicht
 (`--trust-registry` verzichtet auf diesen Vergleich). Es baut die Freigabe, lässt sie von der Prüfung des Helfers
 gegenlesen und legt `freigabe.json` und `freigabe.json.sig` ab; mit `--upload` hängt `gh` beide an den Entwurf des
-Releases. Läuft nur auf Nicos Rechner, nie in der CI: der private Schlüssel verlässt ihn nicht.
+Releases. Läuft nur auf dem Rechner des Projektinhabers, nie in der CI: der private Schlüssel verlässt ihn nicht.
 """
 
 from __future__ import annotations
@@ -46,6 +46,12 @@ class GrantError(Exception):
     """Abgelehnt; die Meldung sagt warum und was zu tun ist (Exit-Code 1)."""
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        fp.close()
+        raise GrantError("Weiterleitungen von ghcr.io werden nicht verfolgt.")
+
+
 def _crypto():
     try:
         from cryptography.hazmat.primitives import serialization
@@ -67,7 +73,8 @@ def _get(url: str, headers: dict[str, str]) -> tuple[bytes, dict[str, str]]:
     if urllib.parse.urlsplit(url).hostname != REGISTRY:
         raise GrantError(f"Nur {REGISTRY} wird gefragt, nicht {url}.")
     request = urllib.request.Request(url, headers={"User-Agent": "nodvard-release", **headers})
-    with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:
+    opener = urllib.request.build_opener(_NoRedirect())
+    with opener.open(request, timeout=TIMEOUT_S) as response:
         body = response.read(MAX_BODY_BYTES + 1)
         found = {key.lower(): value for key, value in response.headers.items()}
     if len(body) > MAX_BODY_BYTES:
@@ -116,6 +123,30 @@ def checked_digest(version: str, expected: str | None) -> str:
                          "mehreren Versuchen aus dem letzten). Stimmt er, zeigt ghcr.io auf ein Image, das dieser Lauf "
                          "nicht gebaut hat: nicht signieren, sondern herausfinden, wer das Tag zuletzt gesetzt hat.")
     return digest
+
+
+def verify_attestation(version: str, digest: str) -> None:
+    options = {"check": False, "capture_output": True, "text": True, "encoding": "utf-8", "errors": "replace",
+               "timeout": 60}
+    try:
+        help_result = subprocess.run(["gh", "attestation", "verify", "--help"], **options)
+        if help_result.returncode != 0:
+            raise GrantError("„gh attestation verify“ ist nicht verfügbar, die Herkunft ließ sich nicht prüfen. "
+                             "Nichts signiert. Eine aktuelle GitHub CLI installieren oder ohne --verify-attestation "
+                             "signieren.")
+        command = ["gh", "attestation", "verify", f"oci://{policy.REPOSITORY}@{digest}", "--repo", REPOSITORY,
+                   "--signer-workflow", f"{REPOSITORY}/.github/workflows/release.yml",
+                   "--source-ref", f"refs/tags/v{version}", "--deny-self-hosted-runners"]
+        done = subprocess.run(command, **options)
+    except FileNotFoundError:
+        raise GrantError("„gh“ fehlt, die Herkunft ließ sich nicht prüfen. Nichts signiert. Die GitHub CLI "
+                         "installieren oder ohne --verify-attestation signieren.") from None
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise GrantError(f"Herkunft ließ sich nicht prüfen: {exc}. Nichts signiert.") from None
+    if done.returncode != 0:
+        raise GrantError(f"Herkunftsprüfung fehlgeschlagen (gh {done.returncode}). Nichts signiert.\n"
+                         f"{done.stdout}{done.stderr}")
+    print(f"Herkunft geprüft: {policy.REPOSITORY}@{digest}, Release-Workflow zu v{version}.")
 
 
 def build_grant(version: str, digest: str, key_id: str, now: int) -> dict[str, object]:
@@ -229,6 +260,8 @@ def main(argv: list[str] | None = None) -> int:
     sign_cmd.add_argument("--trust-registry", action="store_true",
                           help="ohne Vergleich signieren, was ghcr.io gerade liefert")
     sign_cmd.add_argument("--upload", action="store_true", help="beide Dateien mit gh an den Entwurf hängen")
+    sign_cmd.add_argument("--verify-attestation", action="store_true",
+                          help="Herkunft mit gh prüfen; fehlt der Befehl, wird nichts signiert")
     args = parser.parse_args(argv)
     try:
         if args.command == "key":
@@ -240,6 +273,8 @@ def main(argv: list[str] | None = None) -> int:
         version = version_of(args.tag)
         expected = expected_digest(args.expect_digest, args.trust_registry)
         digest = checked_digest(version, expected)
+        if args.verify_attestation:
+            verify_attestation(version, digest)
         if expected is None:
             print(f"Ohne Vergleich: ghcr.io liefert für {version} {digest}. Nur weitermachen, wenn das der Digest aus "
                   "dem Lauf von release.yml ist.", file=sys.stderr)

@@ -1541,13 +1541,13 @@ export function InventoryPage(): JSX.Element {
                     </div>
                   </div>
                   {(item.purchase_price_cents != null || item.warranty_until) && (
-                    <p className="ml-10 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs sm:hidden" data-testid={`price-mobile-${item.id}`}>
+                    <p className="ml-0 sm:ml-10 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs sm:hidden" data-testid={`price-mobile-${item.id}`}>
                       <span className="tabular-nums">{formatPrice(item.purchase_price_cents)}</span>
                       {item.warranty_until && <Badge tone={WARRANTY_BADGE[ws].tone}>{WARRANTY_BADGE[ws].label(item.warranty_until)}</Badge>}
                     </p>
                   )}
                   {isExpanded && (
-                    <div className="ml-10 mt-3 rounded-lg border border-white/[0.06] bg-black/15 p-4 text-sm">
+                    <div className="ml-0 sm:ml-10 mt-3 rounded-lg border border-white/[0.06] bg-black/15 p-4 text-sm">
                       {item.description && <p className="mb-3 text-white/80">{item.description}</p>}
                       <dl className="mb-4 grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4">
                         <div><dt className="text-xs text-white/45">Kaufdatum</dt><dd>{formatDate(item.purchase_date)}</dd></div>

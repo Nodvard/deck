@@ -560,7 +560,7 @@ export function DocumentsPage(): JSX.Element {
                     </div>
                   </div>
                   {isExpanded && (
-                    <div className="ml-10 mt-3 space-y-3 rounded-lg border border-white/[0.06] bg-black/15 p-4 text-sm">
+                    <div className="ml-0 sm:ml-10 mt-3 space-y-3 rounded-lg border border-white/[0.06] bg-black/15 p-4 text-sm">
                       {preview?.id === doc.id && (
                         <div data-testid={`preview-${doc.id}`}>
                           {preview.kind === "image" ? (

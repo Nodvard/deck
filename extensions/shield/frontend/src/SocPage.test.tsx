@@ -132,6 +132,100 @@ describe("Nodvard Shield Virenschutz", () => {
     expect(within(screen.getByRole("tab", { name: /Updates/ })).getByTitle("Sicherheitsupdates")).toHaveTextContent("2");
   });
 
+  it.each([0, 1])("meldet fehlgeschlagene Update-Prüfungen auch bei %s erfolgreich geprüften Servern", async (checked) => {
+    const base = mockFetch([]);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (input.toString().endsWith("/defender/updates")) {
+        return new Response(JSON.stringify({
+          hosts: [], runs: [], summary: { hosts: 2, checked, up_to_date: checked, packages: 0, security: 0, reboot: 0, errors: 2 - checked },
+        }), { status: 200 });
+      }
+      return base(input, init);
+    }));
+    render(<SocPage />);
+    const side = within(await screen.findByTestId("side-summary"));
+    expect(await side.findByText(/Update-Prüfung(?:en)? fehlgeschlagen\. Unter „Updates“ den Grund prüfen und erneut versuchen\./)).toBeInTheDocument();
+    expect(side.queryByText(/Server aktuell/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    [1, 1, "1 Sicherheitsupdate offen. 1 Update-Prüfung fehlgeschlagen."],
+    [2, 2, "2 Sicherheitsupdates offen. 2 Update-Prüfungen fehlgeschlagen."],
+  ])("nennt %s Sicherheitsupdates vor %s fehlgeschlagenen Prüfungen", async (security, errors, text) => {
+    const base = mockFetch([]);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (input.toString().endsWith("/defender/updates")) {
+        return new Response(JSON.stringify({
+          hosts: [], runs: [], summary: { hosts: errors + 1, checked: 1, up_to_date: 0, packages: security, security, reboot: 0, errors },
+        }), { status: 200 });
+      }
+      return base(input, init);
+    }));
+    render(<SocPage />);
+    const side = within(await screen.findByTestId("side-summary"));
+    const label = await side.findByText(`${text} Unter „Updates“ den Grund prüfen und erneut versuchen.`);
+    expect(label.closest("button")?.querySelector("span.bg-red-400")).toBeInTheDocument();
+    expect(side.queryByText(/Server aktuell/)).not.toBeInTheDocument();
+  });
+
+  it.each([1, 3])("nennt %s normale Updates neben einer fehlgeschlagenen Prüfung", async (packages) => {
+    const base = mockFetch([]);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (input.toString().endsWith("/defender/updates")) {
+        return new Response(JSON.stringify({
+          hosts: [], runs: [], summary: { hosts: 2, checked: 1, up_to_date: 0, packages, security: 0, reboot: 0, errors: 1 },
+        }), { status: 200 });
+      }
+      return base(input, init);
+    }));
+    render(<SocPage />);
+    const side = within(await screen.findByTestId("side-summary"));
+    const text = `${packages} ${packages === 1 ? "Update" : "Updates"} offen. 1 Update-Prüfung fehlgeschlagen. Unter „Updates“ den Grund prüfen und erneut versuchen.`;
+    const label = await side.findByText(text);
+    expect(label.closest("button")?.querySelector("span.bg-amber-400")).toBeInTheDocument();
+  });
+
+  it("nennt bei noch ausstehender Update-Prüfung den Stand unbekannt", async () => {
+    const base = mockFetch([]);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (input.toString().endsWith("/defender/updates")) {
+        return new Response(JSON.stringify({
+          hosts: [], runs: [], summary: { hosts: 2, checked: 1, up_to_date: 1, packages: 0, security: 0, reboot: 0, errors: 0 },
+        }), { status: 200 });
+      }
+      return base(input, init);
+    }));
+    render(<SocPage />);
+    const side = within(await screen.findByTestId("side-summary"));
+    expect(await side.findByText("Update-Stand noch nicht für alle Server bekannt. Unter „Updates“ prüfen.")).toBeInTheDocument();
+    expect(side.queryByText(/Alle 2 Server aktuell/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    [1, 1, "1 Server aktuell, 1 nicht unterstützt"],
+    [0, 2, "2 Server nicht unterstützt"],
+  ])("zählt %s aktuelle und %s nicht unterstützte Server als fertig geprüft", async (checked, unsupported, text) => {
+    const base = mockFetch([]);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (input.toString().endsWith("/defender/updates")) {
+        return new Response(JSON.stringify({
+          hosts: [
+            ...Array.from({ length: checked }, () => ({ status: { unsupported: false } })),
+            ...Array.from({ length: unsupported }, () => ({ status: { unsupported: true } })),
+          ],
+          summary: { hosts: 2, checked, up_to_date: checked, packages: 0, security: 0, reboot: 0, errors: 0 },
+        }), { status: 200 });
+      }
+      return base(input, init);
+    }));
+    render(<SocPage />);
+    const side = within(await screen.findByTestId("side-summary"));
+    const label = await side.findByText(text);
+    expect(label.closest("button")?.querySelector("span.bg-white\\/40")).toBeInTheDocument();
+    expect(side.queryByText(/noch nicht für alle Server bekannt/)).not.toBeInTheDocument();
+    expect(side.queryByText(/Alle 2 Server aktuell/)).not.toBeInTheDocument();
+  });
+
   it("startet einen Schnellscan für alle Server und installiert ClamAV über die Freigabe", async () => {
     const calls: Call[] = [];
     vi.stubGlobal("fetch", mockFetch(calls));

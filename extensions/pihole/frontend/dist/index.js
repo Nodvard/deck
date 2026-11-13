@@ -11,7 +11,7 @@ function deck() {
 }
 
 // ../../_shared/frontend/src/api.ts
-var SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar \u2013 bitte gleich noch einmal versuchen.";
+var SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar, bitte gleich noch einmal versuchen.";
 var ServerUnavailableError = class extends Error {
   status;
   constructor(answer) {
@@ -304,7 +304,7 @@ function Card({ title, description, actions, children, className = "", padded = 
   ] });
 }
 var BUTTON_STYLES = {
-  primary: "accent-gradient text-on-accent hover:bg-accent-strong",
+  primary: "border border-transparent accent-gradient text-on-accent hover:bg-accent-strong",
   secondary: "border border-white/10 bg-white/[0.06] text-white hover:bg-white/[0.12]",
   danger: "border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25",
   ghost: "text-white/60 hover:bg-white/[0.06] hover:text-white"

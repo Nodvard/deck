@@ -130,6 +130,20 @@ describe("CommandPalette", () => {
     errors.mockRestore();
   });
 
+  it.each([true, false])("zeigt Nutzungsdaten nur für den Inhaber (Inhaber: %s)", async (owner) => {
+    useAuthStore.setState({ user: { ...useAuthStore.getState().user!, is_owner: owner } });
+    renderHarness();
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    const input = await screen.findByLabelText("Suchen");
+    fireEvent.change(input, { target: { value: "Nutzungsdaten" } });
+    if (owner) {
+      fireEvent.click(await screen.findByRole("option", { name: "Einstellungen: Nutzungsdaten" }));
+      await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/settings/telemetry"));
+    } else {
+      expect(await screen.findByText("Nichts gefunden.")).toBeInTheDocument();
+    }
+  });
+
   it("Betrachter sehen weder Terminal noch Einstellungen ohne Berechtigung", async () => {
     useAuthStore.setState({
       user: {

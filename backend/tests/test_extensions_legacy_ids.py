@@ -347,6 +347,30 @@ async def test_renamed_extension_missing_at_boot_keeps_the_old_row_enabled(tmp_p
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stale_twins", [False, True])
+async def test_usage_report_resolves_renamed_modules(tmp_path, db_session, test_settings, stale_twins):
+    from nodvard_deck.telemetry import service
+    from nodvard_deck.telemetry.schema import Choices
+
+    settings = _settings(test_settings, tmp_path)
+    for ext_id, old_id in (("docker", "service-matrix"), ("shield", "nexus-soc")):
+        _write_ext(settings.extensions_dir, ext_id, legacy_ids=[old_id])
+        db_session.add(ExtensionRecord(
+            id=old_id, version="0.1.0", api_version="0.1", state="enabled", source="bundled",
+            manifest={"id": old_id}, granted_permissions=["schedule.register"],
+        ))
+        if stale_twins:
+            db_session.add(ExtensionRecord(
+                id=ext_id, version="0.2.0", api_version="0.1", state="disabled", source="bundled",
+            ))
+    await db_session.commit()
+    await extensions_service.discover_and_sync(db_session, settings)
+    data = await service.status(db_session, settings, choices=Choices(nutzung=True))
+    assert data["preview"]["nutzung"]["module"] == ([] if stale_twins else ["docker", "shield"])
+    assert data["preview"]["nutzung"]["fremd"] == "0"
+
+
+@pytest.mark.asyncio
 async def test_new_installation_creates_a_row_with_the_new_id(tmp_path, db_session, test_settings):
     _write_ext(tmp_path / "extensions", "renamed-ext", legacy_ids=["old-ext"])
     settings = _settings(test_settings, tmp_path)

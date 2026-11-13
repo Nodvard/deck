@@ -19,6 +19,32 @@ async def _bootstrap_owner(base_url: str) -> str:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("raw", ["[]", "null", '"text"', "42", "true"])
+@pytest.mark.parametrize("authenticated", [False, True])
+async def test_non_object_messages_are_rejected(running_app, raw, authenticated):
+    import websockets
+    from websockets.exceptions import ConnectionClosed
+
+    http_base, ws_base = running_app
+    token = await _bootstrap_owner(http_base) if authenticated else None
+    async with websockets.connect(f"{ws_base}/api/v1/ws") as ws:
+        if authenticated:
+            await ws.send(json.dumps({"type": "auth", "token": token}))
+            assert json.loads(await asyncio.wait_for(ws.recv(), timeout=5)) == {"type": "auth_ok"}
+        await ws.send(raw)
+        reply = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+        if authenticated:
+            assert reply == {"type": "error", "payload": {"title": "Nachricht muss ein Objekt sein."}}
+            await ws.send(json.dumps({"type": "ping"}))
+            assert json.loads(await asyncio.wait_for(ws.recv(), timeout=5)) == {"type": "pong"}
+        else:
+            assert reply == {"type": "auth_error"}
+            with pytest.raises(ConnectionClosed) as closed:
+                await asyncio.wait_for(ws.recv(), timeout=5)
+            assert closed.value.rcvd.code == 4401
+
+
+@pytest.mark.asyncio
 async def test_auth_handshake_then_subscribe_and_receive_event(running_app):
     import websockets
 

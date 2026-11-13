@@ -3,6 +3,7 @@ Dienste neu erstellen und prüfen. Startet einer nicht, geht es zur alten Versio
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 import contextlib
 import functools
@@ -21,6 +22,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from nodvard_sdk.actions import ActionRequest, ActionResult, ActionSpec, DryRunReport
 from nodvard_sdk.types import Actor, Risk
+from nodvard_sdk.errors import error_message
 from pydantic import BaseModel, ConfigDict, Field
 
 from .applier import RISK_ORDER
@@ -39,7 +41,6 @@ from .stack_actions import (
 from .stack_backup import (
     ARCHIVE_BUDGET_S,
     BACKUP_IMAGE,
-    BACKUP_ROOT,
     CONTENTS_FILE,
     NO_VOLUMES,
     PART_SUFFIX,
@@ -47,6 +48,7 @@ from .stack_backup import (
     VolumeBackup,
     archive_name,
     backup_folder,
+    backup_path,
     cmd_archive,
     cmd_pull_backup_image,
     cmd_start_services,
@@ -67,6 +69,7 @@ BACKUP_UNTIL_S = 2700
 """Spätestens so lange nach dem Start der Aktion endet die Sicherung; danach bleibt bis zur Grenze der Freigabe Zeit für den Rest."""
 UP_TIMEOUT_S = 900
 READ_TIMEOUT_S = 60
+CLEANUP_TIMEOUT_S = 20 * 60
 MAX_SERVICES = 40
 IMAGES_FORMAT = (
     '{"name":{{json .Name}},"image_id":{{json .Image}},"ref":{{json .Config.Image}},"running":{{json .State.Running}},'
@@ -101,8 +104,7 @@ def stack_actions_specs() -> list[ActionSpec]:
 
 
 def rollback_ref(project: str, service: str, tag: str = "previous") -> str:
-    """`lattice-rollback/stack-<projekt>-<dienst>-<kurzer Hash>:previous`, die Sicherung eines Dienstes; `:pending` hält
-    das laufende Image während des Holens fest."""
+    """Sicherungsname eines Dienstes; `:pending` hält das laufende Image während des Holens fest."""
     if not PROJECT_RE.match(project) or not SERVICE_RE.match(service) or tag not in ("previous", "pending"):
         raise ValueError(f"Ungültiger Dienst: {project!r}/{service!r}")
     slug = re.sub(r"[^a-z0-9]+", "-", f"{project}-{service}".lower()).strip("-")[:60].strip("-")
@@ -123,6 +125,12 @@ def cmd_container_images(names: list[str]) -> list[str]:
     if not names or not all(CONTAINER_NAME_RE.match(n) for n in names):
         raise ValueError(f"Ungültige Container: {names!r}")
     return ["docker", "inspect", "--type", "container", "--format", IMAGES_FORMAT, *names]
+
+
+def cmd_volume_users(volume: str) -> list[str]:
+    if not VOLUME_NAME_RE.match(volume):
+        raise ValueError(f"Ungültiger Volume-Name: {volume!r}")
+    return ["docker", "ps", "--filter", f"volume={volume}", "--format", "{{.Names}}"]
 
 
 def cmd_image_id(ref: str) -> list[str]:
@@ -447,6 +455,38 @@ def _report_after_abort(
         log.warning("docker_stack_services_not_started_after_abort project=%s reason=%s", project, not_started)
 
 
+class CleanupTimeout(TimeoutError):
+    """Eigener deutscher Satz (nennt Stack und Ordner); `readable` lässt ihn in der Aktion stehen."""
+
+    readable = True
+
+
+async def _wait_for_cleanup(task: asyncio.Task[Any], *, remaining: str = "Prüfe den Stack auf dem Server.") -> None:
+    """Wartet trotz Abbruch bis zum Aufräumende, höchstens bis zur festen Aufräumfrist."""
+    deadline = asyncio.get_running_loop().time() + CLEANUP_TIMEOUT_S
+    cancelled = False
+    while not task.done():
+        left = deadline - asyncio.get_running_loop().time()
+        if left <= 0:
+            task.cancel()
+
+            def finished(done: asyncio.Task[Any]) -> None:
+                if not done.cancelled():
+                    done.exception()
+
+            task.add_done_callback(finished)
+            log.warning("docker_clean_up_timed_out remaining=%s", remaining)
+            if cancelled:
+                raise asyncio.CancelledError
+            raise CleanupTimeout(f"Das Aufräumen hat zu lange gedauert. {remaining}")
+        try:
+            await asyncio.wait({task}, timeout=left)
+        except asyncio.CancelledError:
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError
+
+
 class DockerStackUpdateExecutor:
     """Aktualisiert die Dienste eines übernommenen Stacks und setzt sie auf Wunsch zurück."""
 
@@ -457,7 +497,7 @@ class DockerStackUpdateExecutor:
         self._update = update
         self._images = images
         self._rechecks: set[asyncio.Task[None]] = set()
-        self._cleanups: set[asyncio.Task[tuple[str, str | None]]] = set()
+        self._cleanups: set[asyncio.Task[Any]] = set()
 
     async def execute(self, req: ActionRequest) -> ActionResult:
         payload = req.payload or {}
@@ -588,7 +628,14 @@ class DockerStackUpdateExecutor:
         except BaseException:
             # Gestoppt für die Sicherung: Auch bei einem Abbruch (Zeitgrenze der Freigabe, Neustart) laufen sie wieder an.
             if saved:
-                await asyncio.shield(self.start_again(host, stack, changed))
+                restart = asyncio.create_task(self.start_again(host, stack, changed))
+                self._cleanups.add(restart)
+                restart.add_done_callback(self._cleanups.discard)
+                try:
+                    await _wait_for_cleanup(restart, remaining=f"Prüfe die Dienste im Stack „{stack.project}“.")
+                finally:
+                    if restart.done() and not restart.cancelled():
+                        restart.result()
             raise
 
     async def _finish(
@@ -660,9 +707,7 @@ class DockerStackUpdateExecutor:
         try:
             async with self._ctx.exec.sftp(host) as sftp:
                 kind = type(await sftp.stat(home))
-                path = home
-                for depth, part in enumerate((BACKUP_ROOT, stack.project, folder.rsplit("/", 1)[1])):
-                    path = f"{path}/{part}"
+                for depth, path in enumerate((backup_path(home), backup_path(home, stack.project), folder)):
                     reached = depth == 2
                     try:
                         await sftp.mkdir(path, kind(permissions=0o700))
@@ -693,6 +738,17 @@ class DockerStackUpdateExecutor:
                        if services else None)
             deadline = min(time.monotonic() + ARCHIVE_BUDGET_S, started + BACKUP_UNTIL_S)
             for volume in volumes if problem is None else ():
+                try:
+                    users = await self._update._exec(host, cmd_volume_users(volume))
+                except (StackProblem, ValueError) as exc:  # auch ein ungültiger Name bricht ab und startet die Dienste wieder
+                    problem = f"Die Nutzer von Volume {volume} ließen sich nicht prüfen: {exc}"
+                    break
+                if users.exit_code != 0:
+                    problem = f"Die Nutzer von Volume {volume} ließen sich nicht prüfen: {failure_line(users.stderr or users.stdout)}"
+                    break
+                if users.stdout.strip():
+                    problem = f"Volume {volume} wird noch von laufenden Containern genutzt: {', '.join(users.stdout.split())}."
+                    break
                 left = int(deadline - time.monotonic())
                 if left <= 0:
                     problem = f"Für die Sicherung reichte die Zeit nicht, {volume} ist nicht mehr dran gekommen."
@@ -706,12 +762,13 @@ class DockerStackUpdateExecutor:
             # Als eigene Aufgabe: Auch ein zweiter Abbruch überspringt weder das Wiederstarten noch das Aufräumen.
             cleanup = self._clean_up_task(host, stack, services, folder, packing, packed)
             cleanup.add_done_callback(functools.partial(_report_after_abort, stack.project, folder, packing, list(packed)))
-            await asyncio.wait([cleanup])
+            await _wait_for_cleanup(cleanup, remaining=f"Prüfe die Dienste im Stack „{stack.project}“ und die Sicherung in {folder}.")
             raise
         if problem is not None:
             cleanup = self._clean_up_task(host, stack, services, folder, packing, packed)
             try:
-                left, not_started = await asyncio.shield(cleanup)
+                await _wait_for_cleanup(cleanup, remaining=f"Prüfe die Dienste im Stack „{stack.project}“ und die Sicherung in {folder}.")
+                left, not_started = cleanup.result()
             except asyncio.CancelledError:
                 cleanup.add_done_callback(functools.partial(_report_after_abort, stack.project, folder, packing, list(packed)))
                 raise
@@ -757,7 +814,7 @@ class DockerStackUpdateExecutor:
     async def _remove_folder(self, host: Any, folder: str) -> bool:
         """Entfernt den Zeitordner, wenn darin höchstens die Inhaltsliste liegt; False, wenn er danach noch da sein kann."""
         try:
-            async with self._ctx.exec.sftp(host) as sftp:
+            async with asyncio.timeout(READ_TIMEOUT_S), self._ctx.exec.sftp(host) as sftp:
                 if {str(n) for n in await sftp.listdir(folder)} - {".", ".."} == {CONTENTS_FILE}:
                     try:
                         await sftp.remove(f"{folder}/{CONTENTS_FILE}")
@@ -778,7 +835,7 @@ class DockerStackUpdateExecutor:
         if stopped is not None and "no such container" not in stopped.lower():
             return _leftovers(folder, volume)
         try:
-            async with self._ctx.exec.sftp(host) as sftp:
+            async with asyncio.timeout(READ_TIMEOUT_S), self._ctx.exec.sftp(host) as sftp:
                 await sftp.remove(f"{folder}/{volume}{PART_SUFFIX}")
         except Exception as exc:
             if no_such_file(exc):
@@ -913,7 +970,7 @@ class DockerStackUpdateExecutor:
 
 
 class _UpdateIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
     services: list[str] = Field(min_length=1, max_length=MAX_SERVICES)
     backup: bool = False
 
@@ -934,9 +991,13 @@ def update_routes(update: StackUpdate, editor: StackEditor, docker_host: Any, cu
         try:
             return await update.plan(host, stack)
         except (OSError, StackProblem) as exc:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Server nicht erreichbar: {str(exc) or type(exc).__name__}") from exc
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=error_message(exc, "Server nicht erreichbar.")) from None
 
-    @router.get("/hosts/{host_id}/stacks/{project}/update")
+    @router.get(
+        "/hosts/{host_id}/stacks/{project}/update",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 409, 502,)},
+    )
     async def update_plan(host_id: str, project: str) -> dict:
         """Je Dienst der Stand der Image-Prüfung, welche ein Update bekämen und wofür es eine Sicherung gibt."""
         return await _plan(*await _target(host_id, project))
@@ -980,12 +1041,20 @@ def update_routes(update: StackUpdate, editor: StackEditor, docker_host: Any, cu
         ))
         return {"action_id": decision.action_id, "status": decision.status.value, "risk": risk.value, "detail": decision.detail}
 
-    @router.post("/hosts/{host_id}/stacks/{project}/update", status_code=status.HTTP_202_ACCEPTED)
+    @router.post(
+        "/hosts/{host_id}/stacks/{project}/update", status_code=status.HTTP_202_ACCEPTED,
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409, 502,)},
+    )
     async def update_stack(host_id: str, project: str, body: _UpdateIn, actor: Actor = Depends(current_actor)) -> dict:
         """Schlägt das Update vor (Gate-Aktion `docker.stack_update`), hohes Risiko bei Datenspeichern."""
         return await _propose(host_id, project, body, actor, UPDATE_ACTION)
 
-    @router.post("/hosts/{host_id}/stacks/{project}/rollback", status_code=status.HTTP_202_ACCEPTED)
+    @router.post(
+        "/hosts/{host_id}/stacks/{project}/rollback", status_code=status.HTTP_202_ACCEPTED,
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409, 502,)},
+    )
     async def roll_back(host_id: str, project: str, body: _UpdateIn, actor: Actor = Depends(current_actor)) -> dict:
         """Schlägt den Rückweg auf die Sicherung vor (Gate-Aktion `docker.stack_rollback`, immer hohes Risiko)."""
         return await _propose(host_id, project, body, actor, ROLLBACK_ACTION)

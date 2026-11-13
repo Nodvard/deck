@@ -9,7 +9,7 @@ import { afterCheckText, ImageUpdateBadge, ContainersPage, statusText, summarize
 const SERVICES = [
   { id: "h1:nginx", name: "nginx", host: "docker", host_id: "h1", container: "nginx", is_self: false, state: "running", status: "Up 2 hours", tone: "good", url: "http://10.0.0.5:8080" },
   { id: "h1:worker", name: "worker", host: "docker", host_id: "h1", container: "worker", is_self: false, state: "exited", status: "Exited (1)", tone: "neutral", url: null },
-  { id: "h1:lattice-1", name: "lattice-1", host: "docker", host_id: "h1", container: "lattice-1", is_self: true, state: "running", status: "Up 1 day", tone: "good", url: null },
+  { id: "h1:nodvard-deck-1", name: "nodvard-deck-1", host: "docker", host_id: "h1", container: "nodvard-deck-1", is_self: true, state: "running", status: "Up 1 day", tone: "good", url: null },
   { id: "h2:__error__", name: "⚠ docker-lxc", host: "docker-lxc", state: "error", status: "Nicht erreichbar: timeout", tone: "danger", url: null },
 ];
 
@@ -85,6 +85,79 @@ describe("ContainersPage", () => {
     await screen.findByText("Noch kein Server mit Docker");
   });
 
+  it("behauptet bei einem erreichbaren Server ohne Container und einem Ausfall keinen Gesamtausfall", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/widgets/matrix")) return Response.json({ data: [SERVICES[3]], meta: {} });
+      if (url.endsWith("/stats")) {
+        return Response.json({ data: {}, hosts: { h1: { virtualization: "none", cpus: 2, mem_total: 4e9, docker_version: "27.0.0" } } });
+      }
+      return new Response("{}", { status: 404 });
+    }));
+    render(<ContainersPage />);
+
+    await screen.findByText("Nicht erreichbar: timeout");
+    expect(screen.queryByText("Kein Docker-Server erreichbar")).toBeNull();
+    await waitFor(() => expect(screen.queryByText("Docker-Verbindung fehlgeschlagen")).toBeNull());
+    expect(screen.queryByText(/ob der Docker-Dienst läuft/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Aktualisieren" }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/widgets/matrix"))).toHaveLength(2));
+    expect(screen.getByText("Nicht erreichbar: timeout")).toBeInTheDocument();
+  });
+
+  it("zeigt den Verbindungshinweis beim Filter auf einen ausgefallenen Server trotz anderer erreichbarer Server", async () => {
+    window.history.replaceState({}, "", "/ext/docker/matrix?host=h2");
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/widgets/matrix")) return Response.json({ data: [SERVICES[3]], meta: {} });
+      if (url.endsWith("/stats")) {
+        return Response.json({ data: {}, hosts: { h1: { virtualization: "none", cpus: 2, mem_total: 4e9, docker_version: "27.0.0" } } });
+      }
+      return new Response("{}", { status: 404 });
+    }));
+    render(<ContainersPage />);
+
+    expect(await screen.findByText("Docker-Verbindung fehlgeschlagen")).toBeInTheDocument();
+    expect(screen.getByText("Nicht erreichbar: timeout")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Erneut versuchen" })).toBeInTheDocument();
+  });
+
+  it("wartet vor dem Verbindungshinweis auf die Serverdaten", async () => {
+    let finishStats!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/widgets/matrix")) return Response.json({ data: [SERVICES[3]], meta: {} });
+      if (url.endsWith("/stats")) return new Promise<Response>((resolve) => { finishStats = resolve; });
+      return new Response("{}", { status: 404 });
+    }));
+    render(<ContainersPage />);
+
+    await screen.findByText("Nicht erreichbar: timeout");
+    expect(screen.queryByText("Docker-Verbindung fehlgeschlagen")).toBeNull();
+    await act(async () => finishStats(Response.json({ data: {}, hosts: {} })));
+    expect(await screen.findByText("Docker-Verbindung fehlgeschlagen")).toBeInTheDocument();
+  });
+
+  it("sind alle Docker-Server unerreichbar, nennt die Seite den nächsten Schritt und lässt sich erneut laden", async () => {
+    let reachable = false;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/widgets/matrix")) {
+        return Response.json({ data: reachable ? [SERVICES[0]] : [SERVICES[3]] });
+      }
+      return new Response("{}", { status: 404 });
+    }));
+    render(<ContainersPage />);
+
+    await screen.findByText("Docker-Verbindung fehlgeschlagen");
+    expect(screen.getByText(/Prüfe unter Server & Zugänge die Verbindung und ob der Docker-Dienst läuft/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Server & Zugänge öffnen" })).toHaveAttribute("href", "/settings/hosts");
+    expect(screen.getByText("Nicht erreichbar: timeout")).toBeInTheDocument();
+    reachable = true;
+    fireEvent.click(screen.getByRole("button", { name: "Erneut versuchen" }));
+    await screen.findByText("nginx");
+    expect(screen.queryByText("Docker-Verbindung fehlgeschlagen")).toBeNull();
+  });
+
   it("zeigt eine Fehlermeldung, wenn der Endpunkt selbst scheitert", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 500 })));
     render(<ContainersPage />);
@@ -120,7 +193,7 @@ describe("ContainersPage", () => {
     render(<ContainersPage />);
 
     expect((await screen.findByTestId("load-error")).textContent).toContain(
-      "Die Liste der Container ließ sich gerade nicht laden: Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.",
+      "Die Liste der Container ließ sich gerade nicht laden: Server gerade nicht erreichbar, bitte gleich noch einmal versuchen.",
     );
   });
 
@@ -216,7 +289,7 @@ describe("ContainersPage -- Container-Verwaltung", () => {
     vi.stubGlobal("fetch", managedFetch([]));
     render(<ContainersPage />);
     await screen.findByText("nginx");
-    // nginx + lattice-1 laufen -> Neustart/Stoppen; worker ist gestoppt -> Starten.
+    // nginx + nodvard-deck-1 laufen -> Neustart/Stoppen; worker ist gestoppt -> Starten.
     expect(screen.getAllByRole("button", { name: "Neustart" })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "Stoppen" })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "Starten" })).toHaveLength(1);
@@ -323,7 +396,7 @@ describe("ContainersPage -- Container-Verwaltung", () => {
   it("Nodvard Deck selbst laesst sich hier nicht stoppen", async () => {
     vi.stubGlobal("fetch", managedFetch([]));
     render(<ContainersPage />);
-    await screen.findByText("lattice-1");
+    await screen.findByText("nodvard-deck-1");
     const stopButtons = screen.getAllByRole("button", { name: "Stoppen" });
     expect(stopButtons.filter((b) => (b as HTMLButtonElement).disabled)).toHaveLength(1);
   });
@@ -363,11 +436,11 @@ describe("ContainersPage -- Container-Verwaltung", () => {
   it("zeigt Image, CPU und RAM -- unbekannter Speicher als 'n. v.' statt 0 B", async () => {
     const services = [
       { ...SERVICES[0], image: "nginx:1.27" },
-      { ...SERVICES[2], image: "lattice:latest" },
+      { ...SERVICES[2], image: "nodvard-deck:latest" },
     ];
     const stats = {
       "h1:nginx": { cpu_percent: 1.5, mem_used: 45 * 1024 * 1024, mem_limit: 4 * 1024 ** 3 },
-      "h1:lattice-1": { cpu_percent: 0.29, mem_used: null, mem_limit: null },
+      "h1:nodvard-deck-1": { cpu_percent: 0.29, mem_used: null, mem_limit: null },
     };
     vi.stubGlobal(
       "fetch",
@@ -382,7 +455,7 @@ describe("ContainersPage -- Container-Verwaltung", () => {
     expect(await screen.findByText("nginx:1.27")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("cpu-h1:nginx").textContent).toBe("1.5 %"));
     expect(screen.getByTestId("mem-h1:nginx").textContent).toBe("45 MB");
-    expect(screen.getByTestId("mem-h1:lattice-1").textContent).toBe("n. v.");
+    expect(screen.getByTestId("mem-h1:nodvard-deck-1").textContent).toBe("n. v.");
   });
 
   it("waehrend der Messung steht '…' statt '–'", async () => {
@@ -536,7 +609,7 @@ describe("ContainersPage -- Image-Updates", () => {
   const LOCAL_REASON = "Selbst gebautes Image – es gibt dafür keine Registry, Updates kommen über den eigenen Build (beim Dashboard: Deploy).";
   const RESULTS: Record<string, ImageResult> = {
     "h1:nginx": { image: "nginx:1.27", status: "update", reason: null, remote_digest: DIGEST, registry_at: "2026-09-30T06:30:00+00:00" },
-    "h1:lattice-1": { image: "lattice:latest", status: "local", reason: LOCAL_REASON, remote_digest: null, registry_at: null },
+    "h1:nodvard-deck-1": { image: "nodvard-deck:latest", status: "local", reason: LOCAL_REASON, remote_digest: null, registry_at: null },
   };
   const CHECKED = { h1: { checking: false, checked_at: "2026-09-30T06:30:00+00:00", error: null } };
 
@@ -564,7 +637,7 @@ describe("ContainersPage -- Image-Updates", () => {
     const update = screen.getByText("Update verfügbar");
     expect(update.className).toContain("amber");
     expect(update.getAttribute("title")).toContain("bbbbbbbbbbbb");
-    rerender(<ImageUpdateBadge result={RESULTS["h1:lattice-1"]} />);
+    rerender(<ImageUpdateBadge result={RESULTS["h1:nodvard-deck-1"]} />);
     const local = screen.getByText("selbst gebaut");
     expect(local.className).toContain("bg-white/10"); // neutrales Grau wie "nicht prüfbar", keine Warnfarbe
     expect(local.className).not.toContain("amber");
@@ -590,9 +663,9 @@ describe("ContainersPage -- Image-Updates", () => {
     render(<ContainersPage />);
     await screen.findByText("nginx");
     await waitFor(() => expect(screen.getByTestId("image-h1:nginx").textContent).toBe("Update verfügbar"));
-    expect(screen.getByTestId("image-h1:lattice-1").textContent).toContain("selbst gebaut");
-    expect(screen.getByTestId("image-h1:lattice-1").textContent).toContain("Selbst gebautes Image");
-    expect(screen.getByTestId("image-h1:lattice-1").textContent).not.toContain("nicht prüfbar");
+    expect(screen.getByTestId("image-h1:nodvard-deck-1").textContent).toContain("selbst gebaut");
+    expect(screen.getByTestId("image-h1:nodvard-deck-1").textContent).toContain("Selbst gebautes Image");
+    expect(screen.getByTestId("image-h1:nodvard-deck-1").textContent).not.toContain("nicht prüfbar");
     // Gestoppter Container: noch nie geprüft; Fehler-Kachel des Hosts: gar kein Badge.
     expect(screen.getByTestId("image-h1:worker").textContent).toBe("–");
     expect(screen.getByTestId("image-h2:__error__").textContent).toBe("");
@@ -729,20 +802,20 @@ describe("ContainersPage -- Image-Updates", () => {
     });
 
     it("selbst gebaut ist kein Problem: 'alles aktuell' bleibt, die Zahl steht dahinter", () => {
-      const text = summarizeImages({ data: { "h1:a": res("current"), "h1:b": res("current"), "h1:lattice": res("local") }, hosts: { h1: okHost } }, false);
+      const text = summarizeImages({ data: { "h1:a": res("current"), "h1:b": res("current"), "h1:nodvard-deck": res("local") }, hosts: { h1: okHost } }, false);
       expect(text).toContain("alles aktuell · 1 selbst gebaut");
       expect(text).not.toContain("nicht prüfbar");
     });
 
     it("nur selbst gebaute Container: nichts wurde verglichen, also kein 'alles aktuell', aber auch keine Warnung", () => {
-      const text = summarizeImages({ data: { "h1:lattice": res("local"), "h1:mine": res("local") }, hosts: { h1: okHost } }, false);
+      const text = summarizeImages({ data: { "h1:nodvard-deck": res("local"), "h1:mine": res("local") }, hosts: { h1: okHost } }, false);
       expect(text).toMatch(/ · 2 selbst gebaut$/);
       expect(text).not.toContain("alles aktuell");
       expect(text).not.toContain("nicht prüfbar");
     });
 
     it("gemischt mit selbst gebaut: Update, aktuell, selbst gebaut, dann die echten Probleme", () => {
-      const data: Record<string, ImageResult> = { "h1:lattice": res("local") };
+      const data: Record<string, ImageResult> = { "h1:nodvard-deck": res("local") };
       for (let i = 0; i < 11; i++) data[`h1:u${i}`] = res("update");
       data["h1:c1"] = res("current");
       data["h1:c2"] = res("current");
@@ -753,10 +826,10 @@ describe("ContainersPage -- Image-Updates", () => {
     });
 
     it("selbst gebaut hebt ein Problem nicht auf: mit Abruflimit oder Host-Fehler kein 'alles aktuell'", () => {
-      const limited = summarizeImages({ data: { "h1:a": res("current"), "h1:lattice": res("local"), "h1:b": res("unknown") }, hosts: { h1: okHost } }, false);
+      const limited = summarizeImages({ data: { "h1:a": res("current"), "h1:nodvard-deck": res("local"), "h1:b": res("unknown") }, hosts: { h1: okHost } }, false);
       expect(limited).not.toContain("alles aktuell");
       expect(limited).toContain("1 aktuell · 1 selbst gebaut · 1 nicht prüfbar");
-      const hostDown = summarizeImages({ data: { "h1:a": res("current"), "h1:lattice": res("local") }, hosts: { h1: okHost, h2: { checking: false, checked_at: null, error: "weg" } } }, false);
+      const hostDown = summarizeImages({ data: { "h1:a": res("current"), "h1:nodvard-deck": res("local") }, hosts: { h1: okHost, h2: { checking: false, checked_at: null, error: "weg" } } }, false);
       expect(hostDown).not.toContain("alles aktuell");
       expect(hostDown).toContain("1 aktuell · 1 selbst gebaut · 1 Server nicht erreichbar");
     });
@@ -892,11 +965,11 @@ describe("ContainersPage -- Image-Update einspielen", () => {
   }
 
   it("Knopf nur bei 'Update verfügbar' laufender Container, die nicht Nodvard Deck selbst sind", async () => {
-    await open({ data: { "h1:nginx": UPDATE, "h1:lattice-1": { ...UPDATE, image: "lattice:latest" }, "h1:worker": UPDATE } });
-    // nginx: ja; lattice-1 (Nodvard Deck selbst) und worker (gestoppt): nein.
+    await open({ data: { "h1:nginx": UPDATE, "h1:nodvard-deck-1": { ...UPDATE, image: "nodvard-deck:latest" }, "h1:worker": UPDATE } });
+    // nginx: ja; nodvard-deck-1 (Nodvard Deck selbst) und worker (gestoppt): nein.
     expect(screen.getAllByRole("button", { name: "Einspielen" })).toHaveLength(1);
     expect(within(screen.getByTestId("image-action-h1:nginx")).getByRole("button", { name: "Einspielen" })).toBeInTheDocument();
-    expect(screen.queryByTestId("image-action-h1:lattice-1")).toBeNull();
+    expect(screen.queryByTestId("image-action-h1:nodvard-deck-1")).toBeNull();
     expect(screen.queryByTestId("image-action-h1:worker")).toBeNull();
   });
 

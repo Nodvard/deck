@@ -12,7 +12,7 @@ import { AuditSettings } from "./AuditSettings";
  * "Nicht authentifiziert" zu scheitern. Das Token "tok" ist hier abgelaufen, erst "tok-neu" gilt.
  */
 const USER = { id: "u1", username: "nico", display_name: null, email: null, is_owner: false, locale: "de", permissions: ["audit.read"] };
-const UNAVAILABLE = "Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.";
+const UNAVAILABLE = "Server gerade nicht erreichbar, bitte gleich noch einmal versuchen.";
 
 let refreshCalls: number;
 let exportAuth: (string | null)[];

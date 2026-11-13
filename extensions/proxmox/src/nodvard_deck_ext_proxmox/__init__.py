@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 from typing import Any
 
@@ -23,7 +24,7 @@ from nodvard_sdk import (
     WidgetSpec,
     same_target,
 )
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .capabilities import (
     ProxmoxActionExecutor,
@@ -100,10 +101,14 @@ class _WatchJobSpec:
 
 
 class _TokenIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     value: str
 
 
 class _ConnectionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     """Wie das Schema von `settings.connections`, aber ohne Token: das liegt nur im Tresor (`POST .../{name}/token`)."""
 
     name: str
@@ -120,6 +125,8 @@ class _ConnectionIn(BaseModel):
 
 
 class _ConnectionPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     """Alle Felder optional: ein `PUT` ändert nur, was mitgeschickt wird (z. B. `enabled` allein)."""
 
     base_url: str | None = None
@@ -187,7 +194,11 @@ class Extension(NodvardExtension):
 
         router = APIRouter()
 
-        @router.post("/connections/{name}/token", status_code=status.HTTP_204_NO_CONTENT)
+        @router.post(
+            "/connections/{name}/token", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409,)},
+        )
         async def set_token(name: str, payload: _TokenIn) -> None:
             """Legt das Token im Tresor ab, nie in den Einstellungen; ein Geheimnis je Verbindung."""
             # Nur Erstanlage. Ersetzen und Entfernen laufen über die Moduleinstellungen des Kerns, mit Passwort.
@@ -245,7 +256,11 @@ class Extension(NodvardExtension):
             connections: list[dict[str, Any]] = settings.get("connections") or []
             return [await _connection_out(c) for c in connections]
 
-        @router.post("/connections", status_code=status.HTTP_201_CREATED)
+        @router.post(
+            "/connections", status_code=status.HTTP_201_CREATED,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409,)},
+        )
         async def add_connection(payload: _ConnectionIn) -> _ConnectionOut:
             settings = await ctx.settings.get()
             connections: list[dict[str, Any]] = settings.get("connections") or []
@@ -267,7 +282,11 @@ class Extension(NodvardExtension):
             await ctx.settings.set(settings)
             return await _connection_out(entry)
 
-        @router.put("/connections/{name}")
+        @router.put(
+            "/connections/{name}",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 409,)},
+        )
         async def update_connection(name: str, payload: _ConnectionPatch) -> _ConnectionOut:
             settings = await ctx.settings.get()
             connections: list[dict[str, Any]] = settings.get("connections") or []
@@ -294,7 +313,11 @@ class Extension(NodvardExtension):
                 return await _connection_out(conn)
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Verbindung '{name}' existiert nicht.")
 
-        @router.delete("/connections/{name}", status_code=status.HTTP_204_NO_CONTENT)
+        @router.delete(
+            "/connections/{name}", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def remove_connection(name: str) -> None:
             """Entfernt die Verbindung samt Token im Tresor, damit eine neue gleichnamige Verbindung es nicht erbt."""
             settings = await ctx.settings.get()
@@ -337,7 +360,11 @@ class Extension(NodvardExtension):
                 "meta": {},
             }
 
-        @data_router.get("/guests/{host_id}/snapshots")
+        @data_router.get(
+            "/guests/{host_id}/snapshots",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 502,)},
+        )
         async def guest_snapshots(host_id: str) -> list[dict]:
             """Snapshots eines Gasts, neueste zuerst, ohne Proxmox' Pseudo-Eintrag "current" (der laufende Zustand).
             Zurückrollen und Löschen laufen als Aktionen über das Gate, nicht hier."""
@@ -366,7 +393,11 @@ class Extension(NodvardExtension):
             snaps.sort(key=lambda r: r.get("snaptime") or 0, reverse=True)
             return snaps
 
-        @data_router.get("/guests/{host_id}/details")
+        @data_router.get(
+            "/guests/{host_id}/details",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 502,)},
+        )
         async def guest_details(host_id: str) -> dict:
             """Kerne, RAM, Disks, Netzwerk und Gast-Agent (guest_config.py), nur Felder der Positivliste."""
             host = await ctx.hosts.get(host_id)
@@ -381,7 +412,11 @@ class Extension(NodvardExtension):
             except (RuntimeError, ProxmoxApiError) as exc:
                 raise bad_gateway(exc, ctx.logger) from exc
 
-        @data_router.get("/nodes/{host_id}/health")
+        @data_router.get(
+            "/nodes/{host_id}/health",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 502,)},
+        )
         async def node_health(host_id: str) -> dict:
             """Prozessor, Last, Speicher, Systemplatte und Datenträger mit SMART-Zustand eines Knotens (node_health.py)."""
             host = await ctx.hosts.get(host_id)
@@ -428,7 +463,11 @@ class Extension(NodvardExtension):
             """Aufgabenverlauf aller Knoten (tasks.py); Konsolen-Öffnungen sind standardmäßig ausgeblendet."""
             return await collect_tasks(ctx, limit=max(1, min(limit, 200)), include_console=include_console)
 
-        @data_router.get("/tasks/{connection}/{node}/log")
+        @data_router.get(
+            "/tasks/{connection}/{node}/log",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (400, 502,)},
+        )
         async def task_log(connection: str, node: str, upid: str) -> dict:
             """Protokoll eines Tasks. `upid` kommt als Query-Parameter (enthält Doppelpunkte) und muss zu `node` passen:
             Proxmox kodiert den Knoten in der UPID selbst (`UPID:<node>:...`)."""

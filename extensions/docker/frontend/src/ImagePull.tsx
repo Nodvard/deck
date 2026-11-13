@@ -55,7 +55,7 @@ export function ImagePull({ hostId, onDone }: { hostId: string; onDone: (message
 
   if (!open) return <div className="mb-2"><Button small onClick={() => setOpen(true)}>Image holen</Button></div>;
   return (
-    <div className="mb-3 flex flex-col gap-2 bg-black/20 p-2 text-xs panel" data-testid="image-pull">
+    <div className="mb-3 flex max-w-xl flex-col gap-2 bg-black/20 p-2 text-xs panel" data-testid="image-pull">
       <label className="flex flex-col gap-1">
         <span>Name des Images mit Tag</span>
         <input aria-label="Name des Images" value={image} maxLength={MAX_LENGTH} onChange={(e) => setImage(e.target.value.trim())}

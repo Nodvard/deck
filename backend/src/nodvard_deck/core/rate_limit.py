@@ -46,6 +46,19 @@ class SlidingWindow:
                 self._sweep(cutoff)
             return 0
 
+    def wait(self, key: str) -> int:
+        """Wie `hit`, zählt aber nicht: `0` heißt, ein weiterer Aufruf wäre erlaubt, sonst die Wartezeit in Sekunden."""
+        with self._lock:
+            now = _now()
+            cutoff = now - self.window_s
+            hits = self._hits.get(key)
+            if hits is not None:
+                while hits and hits[0] <= cutoff:
+                    hits.popleft()
+                if len(hits) >= self.limit:
+                    return max(1, math.ceil(hits[0] + self.window_s - now))
+            return 0
+
     def _sweep(self, cutoff: float) -> None:
         for key, hits in list(self._hits.items()):
             while hits and hits[0] <= cutoff:

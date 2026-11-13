@@ -7,6 +7,11 @@ einen Reverse-Proxy wie **Nginx Proxy Manager**, **Traefik** oder **Caddy**, mei
 wie `https://deck.example.org`. Nodvard Deck bringt selbst keinen Proxy und keine Zertifikate mit. Das übernimmt dein
 Proxy, hier geht es nur darum, dass beide gut zusammenspielen.
 
+**Standardmäßig lauscht Nodvard Deck per unverschlüsseltem HTTP auf `0.0.0.0:8080`**, also auf allen
+IPv4-Adressen im Container. Die Portfreigabe `"8080:8080"` veröffentlicht den Port auf allen Netzwerkadressen
+des Rechners. Ein HTTPS-Proxy schließt diesen direkten HTTP-Zugang nicht automatisch. Beschränke die
+Portfreigabe deshalb passend zum Standort des Proxys ([Abschnitt 6](#6-sicherheit-was-du-beachten-solltest)).
+
 Ohne Proxy brauchst du nichts davon. Lass die Einstellung dann einfach leer.
 
 ## Inhalt
@@ -217,12 +222,15 @@ deines Proxys (Abschnitt 6).
   Anmeldungen für einen Benutzernamen innerhalb von 24 Stunden wartet jeder weitere Versuch aus einem Netz doppelt so
   lange wie der vorige aus demselben Netz, höchstens 5 Minuten. Du bekommst dann die Meldung „Passwort wird
   durchprobiert“.
-  - Aussperren kann dich so niemand: Aus deinem Heimnetz, über ein VPN wie [Tailscale](13-TAILSCALE.md) und aus jedem
-    Netz, aus dem nicht geraten wird, kommst du sofort hinein. Vertippst du dich dort, wartest du 2 Sekunden.
+  - Nach 30 falschen Passwörtern für einen Benutzernamen in 5 Minuten sind weitere Anmeldeversuche aus fremden Netzen
+    vorübergehend gesperrt, auch mit dem richtigen Passwort. Aus dem Heimnetz und über ein VPN wie
+    [Tailscale](13-TAILSCALE.md) kommst du trotzdem hinein; dort gelten nur die Grenzen je Adresse.
+  - Solange diese Grenze nicht erreicht ist, kommst du auch aus jedem fremden Netz, aus dem nicht geraten wird, sofort
+    hinein. Vertippst du dich in einem fremden Netz, wartest du 2 Sekunden.
   - Teilst du das Netz mit dem Angreifer (etwa dasselbe öffentliche WLAN), wartest du dort wie er, auch mit dem
     richtigen Passwort. Nimm dann ein anderes Netz oder das VPN.
-  - Wer für jeden Versuch eine neue Adresse nimmt, etwa über ein Botnetz, wird so kaum aufgehalten. Dagegen helfen ein
-    langes Passwort und Zwei-Faktor; die Meldung sagt dir, dass jemand rät.
+  - Wechselnde Adressen und IPv6-Netze umgehen diese zusätzliche Grenze nicht. Nimm trotzdem ein langes Passwort
+    und schalte Zwei-Faktor ein; die Meldung sagt dir, dass jemand rät.
 - **Ohne Eintrag unter „Vertrauenswürdiger Proxy“** sieht Nodvard Deck nur die Adresse des Proxys. Die ist meist
   lokal, und dann greift diese Bremse nicht. Es bleiben die Grenzen je Adresse, und die gelten dann für alle zusammen:
   Wer von außen ein paar falsche Passwörter schickt, sperrt damit alle immer wieder für einige Minuten aus. Trag deinen
@@ -234,8 +242,15 @@ deines Proxys (Abschnitt 6).
   ein, am besten mit seiner einzelnen Adresse.
 - **Nodvard Deck bleibt auch direkt erreichbar**, per HTTP auf Port 8080, am Proxy vorbei. Willst du das nicht, gib den
   Port nicht nach außen frei:
+
+  Die Beispiele verwenden Host-Port 8080. Behalte bei Compose, `docker run` und `podman run` deinen bisherigen
+  Host-Port bei: Aus `8081:8080` wird `127.0.0.1:8081:8080` oder `192.168.1.10:8081:8080`.
+  Passe auch die Adresse im Browser bzw. das Proxy-Ziel an: `http://127.0.0.1:8081` oder
+  `http://192.168.1.10:8081`. Der Container-Port rechts bleibt `8080`.
+
   - Proxy im selben Docker-Netz: die Zeilen `ports:` beim Dienst `nodvard-deck` ganz weglassen (siehe Beispiel oben).
-  - Proxy direkt auf dem Rechner: den Port nur an den Rechner selbst binden:
+  - Proxy direkt auf demselben Rechner: die vorhandene Liste unter `ports:` durch die folgende ersetzen.
+    Der Proxy leitet dann an `http://127.0.0.1:8080` weiter:
 
     ```yaml
     services:
@@ -243,6 +258,25 @@ deines Proxys (Abschnitt 6).
         ports:
           - "127.0.0.1:8080:8080"
     ```
+  - Proxy auf einem anderen Rechner im LAN: die vorhandene Portfreigabe
+    stattdessen an die LAN-Adresse des Rechners binden, hier als Beispiel `192.168.1.10`:
+
+    ```yaml
+    services:
+      nodvard-deck:
+        ports:
+          - "192.168.1.10:8080:8080"
+    ```
+
+    Nimm die tatsächliche, möglichst feste LAN-Adresse. Die Bindung wählt die Zieladresse und beschränkt
+    keine Absender. Im Router keine Portweiterleitung auf 8080 einrichten; in der Firewall nur die einzelne
+    Adresse des Proxys erlauben. Ist ein Gateway oder ein ganzes Docker-Netz als vertrauenswürdig eingetragen,
+    gilt diese LAN-Variante nicht. Nutze dann eine der beiden Varianten oben.
+
+  Ändere dafür die bestehende Compose-Datei direkt und führe `docker compose up -d` aus. Die übrigen
+  Einstellungen bleiben stehen. Mit `docker run` oder `podman run` ersetzt du `-p 8080:8080` entsprechend
+  durch `-p 127.0.0.1:8080:8080` oder `-p 192.168.1.10:8080:8080` und erstellst den Container neu
+  ([Installation](13-INSTALLATION.md#zugriff-auf-diesen-rechner-oder-das-lan-beschränken)).
 - **Gateway oder ganzes Docker-Netz eingetragen?** Dann gib Port 8080 nicht nach außen frei (keine `ports:`-Zeilen
   oder nur `127.0.0.1:8080:8080` wie oben). Sonst kommen je nach Docker-Einrichtung auch Verbindungen anderer Geräte
   über das Gateway an und dürften ihre Adresse fälschen. Bindest du den Port an `127.0.0.1`, erscheinen Verbindungen

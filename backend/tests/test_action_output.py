@@ -5,6 +5,7 @@ api/v1/audit.py)."""
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from nodvard_sdk import Actor, ActionRequest, ActionResult, ActorType, DryRunReport, Risk
@@ -277,7 +278,7 @@ class _Raising:
 @pytest.mark.asyncio
 async def test_gate_reasons_stay_in_the_audit_but_not_text_from_the_server(client, db_session):
     """Ohne Executor und bei einer Ausnahme im Executor: das Protokoll nennt die Ursache mit einem
-    festen Text. Der Text der Ausnahme (kann Inhalte vom Server tragen) steht nur in der Aktion."""
+    festen Text. Der Text der Ausnahme (kann Inhalte vom Server tragen) steht nirgends, nur die Fehlerkennung."""
     # Kein Executor fuer den Typ
     first = await gate.propose(db_session, ext_id="terminal", request=_gate_request(), command_field=None)
     missing, _ = await gate.approve(db_session, first.action_id, user_id="u1")
@@ -289,7 +290,8 @@ async def test_gate_reasons_stay_in_the_audit_but_not_text_from_the_server(clien
     get_extension_runtime().capabilities.provide("terminal", ActionExecutor, _Raising())
     second = await gate.propose(db_session, ext_id="terminal", request=_gate_request(), command_field=None)
     raised, _ = await gate.approve(db_session, second.action_id, user_id="u1")
-    assert SECRET in raised.result["error"], "die Aktion behaelt den vollen Text"
+    assert re.fullmatch(r"Die Anfrage ist fehlgeschlagen\. Fehlerkennung: [0-9a-f]{32}\.", raised.result["error"])
+    assert SECRET not in raised.result["error"], "auch die Aktion zeigt nur die Fehlerkennung, den Text nur das Serverprotokoll"
     in_audit = (await _executed_audit(db_session, second.action_id)).detail["result"]
     assert SECRET not in json.dumps(in_audit)
     assert in_audit["gate_error"] == (

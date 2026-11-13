@@ -58,6 +58,14 @@ class Host(Base, IdMixin, TimestampMixin):
     )
 
 
+class HostMerge(Base):
+    __tablename__ = "host_merges"
+
+    source_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    host_id: Mapped[str] = mapped_column(String(36), ForeignKey("hosts.id", ondelete="CASCADE"))
+    snapshot: Mapped[dict] = mapped_column(JSON)
+
+
 class HostTag(Base):
     """Markierung eines Hosts: eine Extension fragt "alle Hosts mit Tag docker", statt eine eigene Liste zu pflegen."""
 

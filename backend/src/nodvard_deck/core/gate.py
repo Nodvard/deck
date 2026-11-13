@@ -7,12 +7,26 @@ import hashlib
 import json
 import logging
 import re
+import time
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from nodvard_sdk import Actor, ActionRequest, GateDecision, GateOutcome, Risk, StandingApproval
+from nodvard_sdk import (
+    ActionRequest,
+    ActionResult,
+    Actor,
+    GateDecision,
+    GateOutcome,
+    Risk,
+    StandingApproval,
+)
 from nodvard_sdk.actions import REQUEST_WAIT_S, ActionStatus
 from nodvard_sdk.capabilities import ActionExecutor
+from nodvard_sdk.errors import error_message
 from nodvard_sdk.types import Event
 from sqlalchemy import update
 from sqlalchemy.exc import OperationalError
@@ -53,10 +67,8 @@ def describe_error(exc: BaseException) -> str:
     if getattr(exc, "readable", False) and text:
         return text  # z. B. SshUnreachable: der Text sagt schon auf Deutsch, was los ist
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
-        return f"Zeitüberschreitung{': ' + text if text else ''} – der Befehl hat zu lange gebraucht."
-    if isinstance(exc, (ConnectionError, OSError)) and not text:
-        return f"Server nicht erreichbar ({type(exc).__name__})."
-    return text or type(exc).__name__
+        return error_message(exc, "Zeitüberschreitung. Der Befehl hat zu lange gebraucht.")
+    return error_message(exc)
 
 
 def _audit_error_for(exc: BaseException) -> str:
@@ -116,6 +128,105 @@ auf die Anfrage."""
 _running: dict[str, asyncio.Task[None]] = {}
 """Laufende Ausführungen je Aktion; die Event-Loop hält Tasks nur schwach, ohne diese Referenz könnte der GC einen
 laufenden Task einsammeln."""
+
+_cleanups: set[asyncio.Task[None]] = set()
+
+
+@dataclass
+class _Execution:
+    host_id: str | None
+    active: bool = True
+
+
+_execution: ContextVar[_Execution | None] = ContextVar("nodvard_action_execution", default=None)
+
+
+@dataclass
+class _SshAccess:
+    host_id: str | None
+    operations: frozenset[str]
+    ext_id: str | None
+    expires_at: float | None = None
+    active: bool = True
+    parent: _SshAccess | None = None
+
+
+_ssh_access: ContextVar[_SshAccess | None] = ContextVar("nodvard_ssh_access", default=None)
+
+
+def _ssh_access_active(access: _SshAccess) -> bool:
+    return (
+        access.active and (access.expires_at is None or time.monotonic() < access.expires_at)
+        and (access.parent is None or _ssh_access_active(access.parent))
+    )
+
+
+@contextmanager
+def delegated_ssh_read(consumer_ext_id: str, provider_ext_id: str) -> Iterator[None]:
+    """Überträgt einen gültigen Lesekontext nur für den Aufruf des registrierten Anbieters."""
+    parent = _ssh_access.get()
+    if (
+        parent is None or not _ssh_access_active(parent)
+        or parent.ext_id not in (None, consumer_ext_id) or "command" not in parent.operations
+    ):
+        yield
+        return
+    access = _SshAccess(
+        host_id=parent.host_id, operations=frozenset({"command"}), ext_id=provider_ext_id,
+        expires_at=parent.expires_at, parent=parent,
+    )
+    token = _ssh_access.set(access)
+    try:
+        yield
+    finally:
+        access.active = False
+        _ssh_access.reset(token)
+
+
+@contextmanager
+def authorized_ssh(
+    host_id: str | None, *, operations: frozenset[str], ext_id: str | None = None,
+    timeout_s: float | None = None,
+) -> Iterator[None]:
+    """Bindet einen autorisierten SSH-Zugriff an Server, Modul, Zugriffsart und optional eine Frist."""
+    access = _SshAccess(
+        host_id=host_id, operations=operations, ext_id=ext_id,
+        expires_at=None if timeout_s is None else time.monotonic() + timeout_s,
+    )
+    token = _ssh_access.set(access)
+    try:
+        yield
+    finally:
+        access.active = False
+        _ssh_access.reset(token)
+
+
+def blocked(rule: str, detail: str) -> Exception:
+    """Ablehnung des Kerns mit festem Text; `readable` lässt ihn in Aktion und Antwort stehen (`describe_error`)."""
+    from nodvard_sdk.errors import ActionBlocked
+
+    exc = ActionBlocked(rule, detail)
+    exc.readable = True  # type: ignore[attr-defined]
+    return exc
+
+
+def require_execution(host_id: str, *, operation: str = "command", ext_id: str | None = None) -> None:
+    """Verlangt eine Aktionsfreigabe oder einen passenden, autorisierten API-Zugriff."""
+    execution = _execution.get()
+    access = _ssh_access.get()
+    executing = execution is not None and execution.active
+    host_matches = bool(host_id and host_id.strip()) and (not executing or execution.host_id == host_id)
+    if host_matches and executing and access is None:
+        return
+    if (
+        host_matches
+        and access is not None and _ssh_access_active(access) and access.host_id == host_id
+        and operation in access.operations and access.ext_id in (None, ext_id)
+    ):
+        return
+    raise blocked(
+        "action_gate", "Für diesen Server fehlt eine Aktionsfreigabe. Die Aktion über ctx.actions.propose() vorschlagen."
+    )
 
 
 def _request_from_row(action: Action) -> ActionRequest:
@@ -183,12 +294,40 @@ async def wait_for_action(action_id: str, timeout: float | None) -> bool:
 async def shutdown_running(timeout: float = 5.0) -> None:
     """Bricht laufende Ausführungen ab, sie vermerken sich selbst als `failed`; den Rest fängt
     `fail_interrupted_on_boot()` auf."""
-    tasks = [t for t in _running.values() if not t.done()]
+    tasks = {t for t in _running.values() if not t.done()}
     for task in tasks:
         task.cancel()
+    tasks.update(t for t in _cleanups if not t.done())
     if tasks:
         await asyncio.wait(tasks, timeout=timeout)
     _running.clear()
+
+
+async def _execute(executor: ActionExecutor, request: ActionRequest, people: list[tuple[str, str]]) -> ActionResult:
+    with known_actors.known_while(people):
+        execution = _Execution(host_id=request.host_ref)
+        token = _execution.set(execution)
+        access_token = _ssh_access.set(None)
+        try:
+            return await executor.execute(request)
+        finally:
+            execution.active = False
+            _ssh_access.reset(access_token)
+            _execution.reset(token)
+
+
+async def _wait_for_cleanup(task: asyncio.Task[ActionResult]) -> None:
+    current = asyncio.current_task()
+    if current is not None:
+        _cleanups.add(current)
+        current.add_done_callback(_cleanups.discard)
+    while not task.done():
+        try:
+            await asyncio.wait({task})
+        except asyncio.CancelledError:
+            pass
+    if not task.cancelled():
+        task.exception()
 
 
 async def _run_action(action_id: str) -> None:
@@ -214,21 +353,27 @@ async def _run_action(action_id: str) -> None:
             outcome = ActionStatus.FAILED, {"success": False, "error": error}, error
         else:
             deadline = asyncio.timeout(EXECUTE_TIMEOUT_S)
+            task = asyncio.create_task(_execute(executor, request, people), name=f"nodvard-deck-executor-{action_id}")
             try:
                 async with deadline:
-                    with known_actors.known_while(people):
-                        res = await executor.execute(request)
+                    try:
+                        res = await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        task.cancel()
+                        await _wait_for_cleanup(task)
+                        raise
                 outcome = (
                     ActionStatus.SUCCEEDED if res.success else ActionStatus.FAILED,
                     res.model_dump(mode="json"),
                     None,
                 )
             except Exception as exc:  # noqa: BLE001 - darf das Protokoll nie verschlucken
-                logger.exception("gate_execute_raised action_id=%s action_type=%s", action_id, request.action_type)
+                reason = describe_error(exc)
+                logger.warning("gate_execute_raised action_id=%s action_type=%s reason=%s", action_id, request.action_type, reason)
                 if deadline.expired():
                     outcome = ActionStatus.FAILED, {"success": False, "error": EXECUTE_TIMEOUT_ERROR}, EXECUTE_TIMEOUT_ERROR
                 else:
-                    outcome = ActionStatus.FAILED, {"success": False, "error": describe_error(exc)}, _audit_error_for(exc)
+                    outcome = ActionStatus.FAILED, {"success": False, "error": reason}, _audit_error_for(exc)
         await _record_outcome(action_id, outcome[0], outcome[1], gate_error=outcome[2])
     except asyncio.CancelledError:
         # Beim Beenden: Steht das Ergebnis schon fest (abgebrochen erst beim Speichern), zählt es, sonst ist der Ausgang
@@ -243,9 +388,10 @@ async def _run_action(action_id: str) -> None:
         )
         raise
     except Exception as exc:
-        logger.exception("gate_background_failed action_id=%s", action_id)
+        reason = describe_error(exc)
+        logger.warning("gate_background_failed action_id=%s reason=%s", action_id, reason)
         await _record_outcome_safely(
-            action_id, {"success": False, "error": describe_error(exc)}, gate_error=_audit_error_for(exc)
+            action_id, {"success": False, "error": reason}, gate_error=_audit_error_for(exc)
         )
 
 
@@ -432,7 +578,7 @@ async def _standing_note(session: AsyncSession, granted_by_user_id: str, granted
 
 async def propose(
     session: AsyncSession, *, ext_id: str, request: ActionRequest, command_field: str | None,
-    wait_s: float | None = None,
+    wait_s: float | None = None, fingerprint_exclude_fields: Sequence[str] = (),
 ) -> GateDecision:
     """Prüft Sperrliste, Anti-Flapping, Autonomie und Audit für einen Vorschlag; die Berechtigungen prüft der
     Aufrufer vorher."""
@@ -451,7 +597,8 @@ async def propose(
             )
 
     fingerprint, blocked = await _flap_check_and_record(
-        session, host_id=request.host_ref, action_type=request.action_type, payload=request.payload
+        session, host_id=request.host_ref, action_type=request.action_type,
+        payload={key: value for key, value in request.payload.items() if key not in fingerprint_exclude_fields},
     )
     if blocked:
         return await _persist_denied(

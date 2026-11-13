@@ -12,27 +12,89 @@ from .antivirus import HELPER_READ_VERSION, via_helper
 from .detached import KEPT_BACK_MARK
 
 _SECURITY_RE = re.compile(r"security", re.IGNORECASE)
-_PKG_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+._:~-]*$")
+_PKG_NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9+._:~-]*[A-Za-z0-9+._:~])?$")
 _PHASING_RC_RE = re.compile(r"rc (inst|all) (\d+)")
+_LIST_RC_RE = re.compile(r"rc list (\d+)")
+_SOURCE_ERROR_RE = re.compile(
+    r"^(?:[EW]: Failed to fetch |Err:\d+\s+https?://|Error: Failed to download metadata for repo |ERROR:\s+https?://)",
+    re.IGNORECASE,
+)
+_URL_CREDENTIALS_RE = re.compile(r"(https?://)[^/\s]*@", re.IGNORECASE)
+
+STATUS_ERRORS = {
+    "dpkg": ("Die Paketverwaltung meldet einen dpkg-Fehler. Auf dem Server „sudo dpkg --configure -a“ ausführen, "
+             "die dort angezeigten Fehler beheben und anschließend erneut prüfen."),
+    "locked": ("Die Paketverwaltung ist durch einen anderen Vorgang gesperrt. Bitte warten, bis dieser beendet ist, "
+               "und anschließend erneut prüfen. Sperrdateien nicht löschen."),
+    "permission": ("Für die Paketprüfung fehlen Root-Rechte. Unter „Server & Zugänge“ den Server mit "
+                   "„Root-Rechte ohne Passwort“ neu einrichten und anschließend erneut prüfen."),
+    "timeout": ("Zeitüberschreitung bei der Paketprüfung. Die Verbindung zum Server und dessen Auslastung prüfen "
+                "und anschließend erneut prüfen."),
+    "detection": ("Die Paketprüfung hat kein vollständiges, lesbares Ergebnis geliefert. Die Verbindung zum Server "
+                  "prüfen und anschließend erneut prüfen."),
+}
+
+
+def status_error_kind(output: str) -> str | None:
+    """Bekannte Fehler der Paketverwaltung von leeren Ergebnissen unterscheiden."""
+    diagnostics = []
+    section = None
+    source = False
+    for line in output.splitlines():
+        if re.fullmatch(r"@@[a-z]+", line.strip()):
+            section = line.strip()[2:]
+        if section in {"refresh", "list", "phasing"} and (_SOURCE_ERROR_RE.match(line.strip()) or source and line[:1].isspace()):
+            source = True
+            continue
+        source = False
+        diagnostics.append(line)
+    text = "\n".join(line for line in diagnostics
+                     if not (_APT_RE.match(line) or _DNF_RE.match(line) or _APK_RE.match(line))
+                     and not line.startswith(("inst ", "all ", "Conf ", "Remv "))).casefold()
+    if any(word in text for word in ("permission denied", "operation not permitted", "are you root", "not root",
+                                     "must be root", "superuser privileges", "superuser privilege", "a password is required",
+                                     "not in the sudoers", "a terminal is required", "no tty present")):
+        return "permission"
+    if any(word in text for word in ("could not get lock", "unable to acquire", "unable to lock", "held by process",
+                                     "resource temporarily unavailable", "database is locked", "waiting for cache lock",
+                                     "another app is currently holding")):
+        return "locked"
+    if any(word in text for word in ("timed out", "timeout expired", "timeout:", "command timeout", "zeitüberschreitung")):
+        return "timeout"
+    if re.search(r"\bdpkg\b[^\n]*\b(?:error|fehler|interrupted|failed)\b|\b(?:error|fehler)\b[^\n]*\bdpkg\b", text):
+        return "dpkg"
+    return None
 
 
 REFRESH_COMMAND = (
-    "if command -v apt-get >/dev/null 2>&1; then apt-get update -qq 2>&1 | grep -E '^(E|Err|W):' | head -n 20; "
-    "elif command -v dnf >/dev/null 2>&1; then dnf -q makecache 2>&1 | tail -n 5; "
-    "elif command -v apk >/dev/null 2>&1; then apk update -q 2>&1 | tail -n 5; fi"
+    "refresh_rc=0; refresh_out=; if command -v apt-get >/dev/null 2>&1; then "
+    "refresh_out=$(LC_ALL=C apt-get update -qq 2>&1) || refresh_rc=$?; "
+    "refresh_out=$(printf '%s\\n' \"$refresh_out\" | awk -v failed=\"$refresh_rc\" "
+    "'/^(E|Err|W):/ || (failed && !/^(Hit|Get|Ign):/)'); "
+    "elif command -v dnf >/dev/null 2>&1; then refresh_out=$(LC_ALL=C dnf -q makecache 2>&1) || refresh_rc=$?; "
+    "elif command -v apk >/dev/null 2>&1; then refresh_out=$(LC_ALL=C apk update -q 2>&1) || refresh_rc=$?; "
+    "fi; printf '%s\\n' \"$refresh_out\" | sed -E 's#(https?://)[^/[:space:]]*@#\\1#g' | tail -n 20 | cut -c 1-500; "
+    "(exit \"$refresh_rc\")"
 )
 """Paketlisten neu laden (braucht root); das Hilfsskript macht dasselbe mit `refresh-packages`."""
 
 
+_SCRUB_OUTPUT = "sed -E 's#(https?://)[^/[:space:]]*@#\\1#g' | cut -c 1-500"
+"""Zugangsdaten aus URLs entfernen und Zeilen kürzen, bevor Fehlerausgaben das Gerät verlassen."""
+
 # Was „Alle einspielen“ einspielen würde, einmal wie eingestellt und einmal mit allen schrittweise verteilten Updates:
 # Was nur im zweiten Lauf dabei ist, hält apt wegen Phasing zurück. Fest "C", nur simuliert, braucht kein root.
 # Jeder Lauf meldet seinen Exit-Code, denn ein gescheiterter Lauf liefert keine Zeilen und sähe sonst aus wie 0.
+# Fehlerzeilen eines gescheiterten Laufs: höchstens 20, ohne Zugangsdaten, gekürzt wie bei REFRESH_COMMAND.
 PHASING_COMMAND = (
     "echo @@phasing; if command -v apt-get >/dev/null 2>&1; then "
-    "phasing_out=$(LC_ALL=C apt-get -s upgrade --with-new-pkgs 2>/dev/null); echo \"rc inst $?\"; "
-    "printf '%s\\n' \"$phasing_out\" | awk '$1 == \"Inst\" { print \"inst \" $2 }'; "
+    "phasing_out=$(LC_ALL=C apt-get -s upgrade --with-new-pkgs 2>&1); phasing_rc=$?; echo \"rc inst $phasing_rc\"; "
+    "printf '%s\\n' \"$phasing_out\" | awk -v failed=\"$phasing_rc\" "
+    "'$1 == \"Inst\" { print \"inst \" $2; next } failed && n++ < 20 { print }' | " + _SCRUB_OUTPUT + "; "
     "phasing_out=$(LC_ALL=C apt-get -s -o APT::Get::Always-Include-Phased-Updates=true upgrade --with-new-pkgs "
-    "2>/dev/null); echo \"rc all $?\"; printf '%s\\n' \"$phasing_out\" | awk '$1 == \"Inst\" { print \"all \" $2 }'; fi; "
+    "2>&1); phasing_rc=$?; echo \"rc all $phasing_rc\"; printf '%s\\n' \"$phasing_out\" | "
+    "awk -v failed=\"$phasing_rc\" '$1 == \"Inst\" { print \"all \" $2; next } failed && n++ < 20 { print }' | "
+    + _SCRUB_OUTPUT + "; fi; "
 )
 
 
@@ -43,14 +105,15 @@ def status_command(*, refresh: bool) -> str:
         refresh_part = (
             f"echo @@refresh; "
             f"{via_helper(['refresh-packages'], REFRESH_COMMAND, version=HELPER_READ_VERSION, required=False)}; "
+            "echo \"rc refresh $?\"; "
         )
     return (
-        "echo @@pm; if command -v apt-get >/dev/null 2>&1; then echo apt; "
+        "export LC_ALL=C; echo @@pm; if command -v apt-get >/dev/null 2>&1; then echo apt; "
         "elif command -v dnf >/dev/null 2>&1; then echo dnf; elif command -v apk >/dev/null 2>&1; then echo apk; else echo none; fi; "
         + refresh_part
-        + "echo @@list; if command -v apt-get >/dev/null 2>&1; then apt list --upgradable 2>/dev/null | grep -v '^Listing'; "
-        "elif command -v dnf >/dev/null 2>&1; then dnf -q check-update 2>/dev/null; "
-        "elif command -v apk >/dev/null 2>&1; then apk version -l '<' 2>/dev/null | tail -n +2; fi; "
+        + "echo @@list; if command -v apt-get >/dev/null 2>&1; then apt list --upgradable 2>&1; echo \"rc list $?\"; "
+        "elif command -v dnf >/dev/null 2>&1; then dnf -q check-update 2>&1; echo \"rc list $?\"; "
+        "elif command -v apk >/dev/null 2>&1; then apk version -l '<' 2>&1; echo \"rc list $?\"; fi; "
         + PHASING_COMMAND
         + "echo @@held; if command -v apt-mark >/dev/null 2>&1; then apt-mark showhold 2>/dev/null; fi; "
         "echo @@pve; if command -v pveversion >/dev/null 2>&1; then echo yes; else echo no; fi; "
@@ -102,6 +165,7 @@ class UpdateStatus:
     unattended: bool | None = None
     refresh_error: str | None = None
     error: str | None = None
+    error_kind: str | None = None
     unsupported: bool = False
     """Kein bekannter Paketmanager (z. B. ein NAS): kein Fehler, nur „nicht unterstützt“, ohne Warnung."""
     phasing: str = "none"
@@ -131,7 +195,8 @@ class UpdateStatus:
             "security_count": self.security_count, "phased_count": self.phased_count, "reboot_required": self.reboot_required,
             "reboot_reasons": self.reboot_reasons, "kernel": self.kernel, "latest_kernel": self.latest_kernel,
             "uptime_s": self.uptime_s, "unattended": self.unattended, "refresh_error": self.refresh_error, "error": self.error,
-            "unsupported": self.unsupported, "phasing": self.phasing, "pve": self.pve, "kept_back_count": self.kept_back_count,
+            "unsupported": self.unsupported, "error_kind": self.error_kind, "phasing": self.phasing, "pve": self.pve,
+            "kept_back_count": self.kept_back_count,
             "held_count": sum(1 for p in self.packages if p.held),
             "installable_count": sum(1 for p in self.packages if p.installable),
             "installable_security_count": sum(1 for p in self.packages if p.security and p.installable),
@@ -194,11 +259,29 @@ def _apk_name(full: str) -> tuple[str, str | None]:
     return (m.group("name"), m.group("ver")) if m else (full, None)
 
 
-def parse_status(output: str) -> UpdateStatus:
+def parse_status(output: str, *, exit_code: int | None = 0) -> UpdateStatus:
     s = _sections(output)
-    manager = (s.get("pm") or ["none"])[0]
+    manager = (s.get("pm") or [None])[0]
+    error_kind = status_error_kind(output)
+    command_codes = [int(m.group(1)) for lines in (s.get("list", []), s.get("refresh", []), s.get("phasing", []))
+                     for line in lines if (m := re.fullmatch(r"rc (?:list|refresh|inst|all) (\d+)", line))]
+    if not error_kind and (exit_code in {124, 137} or any(code in {124, 137} for code in command_codes)):
+        error_kind = "timeout"
+    if error_kind and (manager not in {"apt", "dnf", "apk"} or "end" not in s or "list" not in s):
+        return UpdateStatus(manager=manager if manager in {"apt", "dnf", "apk"} else None,
+                            error=STATUS_ERRORS[error_kind], error_kind=error_kind)
+    if not error_kind and (exit_code != 0 or "end" not in s or manager not in {"apt", "dnf", "apk", "none"}):
+        return UpdateStatus(manager=manager if manager in {"apt", "dnf", "apk"} else None,
+                            error=STATUS_ERRORS["detection"], error_kind="detection")
     if manager == "none":
         return UpdateStatus(manager=None, error="Kein unterstützter Paketmanager (apt, dnf, apk) gefunden.", unsupported=True)
+    codes = [m.group(1) for line in s.get("list", []) if (m := _LIST_RC_RE.fullmatch(line))]
+    list_failed = any(line.startswith(("E:", "Error:", "ERROR:", "error:")) and not _SOURCE_ERROR_RE.match(line)
+                      for line in s.get("list", []))
+    if "list" not in s or (not error_kind and (list_failed or codes and codes != ["0"]
+                                             and not (manager == "dnf" and codes == ["100"]))):
+        return UpdateStatus(manager=manager, error=STATUS_ERRORS["detection"], error_kind="detection")
+    refresh_codes = [m.group(1) for line in s.get("refresh", []) if (m := re.fullmatch(r"rc refresh (\d+)", line))]
 
     packages: list[Package] = []
     dnf_security: set[str] = set()
@@ -253,14 +336,19 @@ def parse_status(output: str) -> UpdateStatus:
     unattended_raw = (s.get("unattended") or ["n/a"])[0]
     refresh_error = None
     refresh_lines = s.get("refresh", [])
-    bad = [ln for ln in refresh_lines if ln.startswith(("E:", "Err:", "Error", "ERROR")) or "Permission denied" in ln]
+    bad = [ln for ln in refresh_lines if ln.startswith(("E:", "Err:", "Error", "ERROR", "error:"))
+           or "Permission denied" in ln or _SOURCE_ERROR_RE.match(ln)]
+    bad.extend(ln for ln in s.get("list", []) if _SOURCE_ERROR_RE.match(ln))
     if any("Permission denied" in ln or "are you root" in ln for ln in bad):
-        refresh_error = "Paketlisten konnten nicht neu geladen werden (fehlen root-Rechte?) – angezeigt wird der zuletzt geladene Stand."
+        refresh_error = ("Paketlisten konnten nicht neu geladen werden, weil root-Rechte fehlen. Unter „Server & Zugänge“ "
+                         "den Server mit „Root-Rechte ohne Passwort“ neu einrichten und erneut prüfen.")
     elif any(_names_host(ln, PROXMOX_ENTERPRISE_HOST) for ln in bad):
         refresh_error = ("Die Proxmox-Enterprise-Paketquelle verlangt ein Abo (401). Ohne Abo die Quelle "
-                         "„pve-no-subscription“ nutzen und die Enterprise-Quelle abschalten – die übrigen Quellen wurden geladen.")
+                         "„pve-no-subscription“ nutzen und die Enterprise-Quelle abschalten. Die übrigen Quellen wurden geladen.")
     elif bad:
-        refresh_error = f"Nicht alle Paketquellen erreichbar: {bad[0][:200]}"
+        refresh_error = f"Nicht alle Paketquellen erreichbar: {_URL_CREDENTIALS_RE.sub(r'\1', bad[0])[:200]}"
+    if not error_kind and refresh_codes and refresh_codes != ["0"] and not refresh_error:
+        error_kind = "detection"
 
     packages.sort(key=lambda p: (not p.security, p.name))
     if manager != "apt":
@@ -270,7 +358,8 @@ def parse_status(output: str) -> UpdateStatus:
     return UpdateStatus(
         manager=manager, packages=packages, reboot_required=reboot, reboot_reasons=reasons, kernel=kernel,
         latest_kernel=latest, uptime_s=uptime, unattended=True if unattended_raw == "yes" else False if unattended_raw == "no" else None,
-        refresh_error=refresh_error, phasing=phasing, pve=manager == "apt" and (s.get("pve") or ["no"])[0] == "yes",
+        refresh_error=refresh_error, error=STATUS_ERRORS[error_kind] if error_kind else None, error_kind=error_kind,
+        phasing=phasing, pve=manager == "apt" and (s.get("pve") or ["no"])[0] == "yes",
     )
 
 

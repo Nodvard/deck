@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LogPanel, logFileName, MAX_LINES } from "./Logs";
@@ -30,6 +30,155 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("LogPanel", () => {
+  it("ruft einen abgeschlossenen Zeitraum nicht erneut ab", async () => {
+    vi.useFakeTimers();
+    const urls = serve("gespeicherte Ausgabe\n");
+    const view = render(<LogPanel entry={ENTRY} onClose={() => {}} />);
+    try {
+      await act(async () => {});
+      fireEvent.change(screen.getByLabelText("Zeitraum"), { target: { value: "24h" } });
+      await act(async () => {});
+      expect(urls).toHaveLength(2);
+      expect(box()).toHaveTextContent("gespeicherte Ausgabe");
+      expect(screen.getByText("beendet")).toBeInTheDocument();
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+      expect(urls).toHaveLength(2);
+      expect(box()).toHaveTextContent("gespeicherte Ausgabe");
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it("begrenzt neue Verbindungen nach Stromende und behält die Ausgabe bei leeren Antworten", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response("letzte Ausgabe\n"))
+      .mockImplementation(async () => new Response(""));
+    vi.stubGlobal("fetch", fetch);
+    const view = render(<LogPanel entry={ENTRY} onClose={() => {}} />);
+    try {
+      await act(async () => {});
+      expect(screen.getByText("verbindet erneut")).toBeInTheDocument();
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+      expect(fetch).toHaveBeenCalledTimes(4);
+      expect(screen.getByText("beendet")).toBeInTheDocument();
+      expect(box()).toHaveTextContent("letzte Ausgabe");
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ["Netzwerkfehler", () => Promise.reject(new TypeError("Verbindung unterbrochen"))],
+    ["Proxyfehler", () => Promise.resolve(new Response("Bad Gateway", { status: 502 }))],
+    ["Docker-Fehler", () => Promise.resolve(Response.json({ detail: "Docker startet noch" }, { status: 502 }))],
+    ["Serverfehler", () => Promise.resolve(Response.json({ detail: "Fehler beim Lesen" }, { status: 500 }))],
+  ])("zeigt bei %s die Wiederholung an und beendet sie nach drei Versuchen", async (_label, reply) => {
+    vi.useFakeTimers();
+    const fetch = vi.fn(reply);
+    vi.stubGlobal("fetch", fetch);
+    const view = render(<LogPanel entry={ENTRY} onClose={() => {}} />);
+    try {
+      await act(async () => {});
+      expect(screen.getByText("verbindet erneut")).toBeInTheDocument();
+      expect(screen.queryByText("Fehler")).not.toBeInTheDocument();
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+      expect(fetch).toHaveBeenCalledTimes(4);
+      expect(screen.getByText("Fehler")).toBeInTheDocument();
+      expect(screen.queryByText("verbindet erneut")).not.toBeInTheDocument();
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it("behält die Ausgabe, solange die neue Verbindung noch keine Zeilen liefert", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response("letzte Ausgabe\n"))
+      .mockResolvedValue(new Response(new ReadableStream()));
+    vi.stubGlobal("fetch", fetch);
+    const view = render(<LogPanel entry={ENTRY} onClose={() => {}} />);
+    try {
+      await act(async () => {});
+      await act(() => vi.advanceTimersByTimeAsync(3000));
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(screen.getByText("live")).toBeInTheDocument();
+      expect(box()).toHaveTextContent("letzte Ausgabe");
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it("verbindet nach einem Berechtigungsfehler nicht erneut", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn(async () => Response.json({ detail: "Nicht erlaubt" }, { status: 403 }));
+    vi.stubGlobal("fetch", fetch);
+    const view = render(<LogPanel entry={ENTRY} onClose={() => {}} />);
+    try {
+      await act(async () => {});
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(screen.getByText("Fehler")).toBeInTheDocument();
+      expect(screen.getByText("Nicht erlaubt")).toBeInTheDocument();
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it("bricht eine geplante Wiederholung beim Anhalten ab", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn(async () => new Response("letzte Ausgabe\n"));
+    vi.stubGlobal("fetch", fetch);
+    const view = render(<LogPanel entry={ENTRY} onClose={() => {}} />);
+    try {
+      await act(async () => {});
+      fireEvent.click(screen.getByRole("button", { name: "Anhalten" }));
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(screen.getByText("angehalten")).toBeInTheDocument();
+      expect(box()).toHaveTextContent("letzte Ausgabe");
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it("verbindet nach einem Docker-Neustart bei Stromende und vorübergehenden Fehlern erneut", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response("vor dem Neustart\n"))
+      .mockRejectedValueOnce(new TypeError("Verbindung unterbrochen"))
+      .mockResolvedValueOnce(Response.json({ detail: "Docker startet noch" }, { status: 502 }))
+      .mockResolvedValue(new Response(new ReadableStream({
+        start(controller) { controller.enqueue(new TextEncoder().encode("nach dem Neustart\n")); },
+      })));
+    vi.stubGlobal("fetch", fetch);
+    const view = render(<LogPanel entry={ENTRY} onClose={() => {}} />);
+    try {
+      await act(async () => {});
+      expect(box()).toHaveTextContent("vor dem Neustart");
+      for (const attempts of [2, 3, 4]) {
+        await act(() => vi.advanceTimersByTimeAsync(3000));
+        expect(fetch).toHaveBeenCalledTimes(attempts);
+      }
+      expect(box()).toHaveTextContent("nach dem Neustart");
+      expect(screen.getByText("live")).toBeInTheDocument();
+      expect(screen.queryByText("Docker startet noch")).not.toBeInTheDocument();
+      view.unmount();
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+      expect(fetch).toHaveBeenCalledTimes(4);
+      expect(fetch.mock.calls[3][1].signal.aborted).toBe(true);
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
+
   it("Zeitraum: holt bis zu 5000 Zeilen seit dann und sagt, wenn es keine gibt", async () => {
     const urls = serve("");
     render(<LogPanel entry={ENTRY} onClose={() => {}} />);

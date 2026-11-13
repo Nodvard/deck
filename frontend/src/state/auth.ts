@@ -1,8 +1,4 @@
-/**
- * Auth-Zustand. Der Access-Token lebt nur im Speicher, nie in localStorage: Ein XSS-Angriff, der localStorage liest,
- * könnte sonst einen 30 Tage gültigen Zugang stehlen statt nur einen 15-Minuten-Token. Der Refresh-Token ist ein
- * HttpOnly-Cookie; `apiFetch` (lib/api.ts) liest den Zustand außerhalb von React über `useAuthStore.getState()`.
- */
+/** Access-Token nur im Speicher halten; der Refresh-Token bleibt im HttpOnly-Cookie. */
 import { create } from "zustand";
 
 import { AUTH_FIELD_LABELS, validationText } from "../lib/validation";
@@ -40,7 +36,8 @@ function matchesPermission(granted: string[], required: string): boolean {
     if (gBase === "*") return true;
     if (gBase !== reqBase) continue;
     if (gScope === undefined) return true;
-    if (reqScope === undefined) return false;
+    // Ein eingeschränktes Recht deckt keine globale Anforderung, ein späteres globales aber schon.
+    if (reqScope === undefined) continue;
     if (gScope === "*" || gScope.endsWith("*")) {
       if (gScope === "*" || reqScope.startsWith(gScope.slice(0, -1))) return true;
       continue;
@@ -76,7 +73,7 @@ export async function authErrorText(res: Response): Promise<string> {
 }
 
 /** Meldung, wenn der Server beim Erneuern der Anmeldung gerade nicht antwortet. */
-export const SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.";
+export const SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar, bitte gleich noch einmal versuchen.";
 
 /**
  * `refresh()` wirft das, wenn die Erneuerung scheitert, das Cookie aber nicht abgelehnt wurde (Netzwerk, Zeitlimit,
@@ -132,6 +129,12 @@ const REFRESH_REJECTED_STATUS = new Set([400, 401, 403]);
  */
 let inFlightRefresh: Promise<boolean> | null = null;
 
+/**
+ * Zählt jede An- und Abmeldung. Ein Refresh, der vorher gestartet wurde, verwirft seine Antwort, sonst meldete er nach
+ * einer Abmeldung wieder an oder ein inzwischen angemeldetes anderes Konto ab.
+ */
+let sessionGeneration = 0;
+
 export const useAuthStore = create<AuthState>((set, get) => ({
   accessToken: null,
   user: null,
@@ -156,6 +159,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
     const body = await parseJsonResponse<{ access_token: string; user: CurrentUser }>(res);
     useConnectionWarningStore.getState().reset();
+    sessionGeneration += 1;
     set({ accessToken: body.access_token, user: body.user, status: "authenticated", mfaToken: null });
     return { ok: true };
   },
@@ -189,6 +193,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
     const body = await parseJsonResponse<{ access_token: string; user: CurrentUser }>(res);
     useConnectionWarningStore.getState().reset();
+    sessionGeneration += 1;
     set({ accessToken: body.access_token, user: body.user, status: "authenticated", mfaToken: null });
     return { ok: true };
   },
@@ -198,6 +203,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // jedem `await` passieren, sonst sähen zwei im selben Tick gestartete Aufrufe beide `null`.
     if (inFlightRefresh) return inFlightRefresh;
 
+    const generation = sessionGeneration;
     inFlightRefresh = (async () => {
       // Abbruch nach REFRESH_TIMEOUT_MS, gilt auch fürs Lesen der Antwort (unten).
       const controller = new AbortController();
@@ -216,6 +222,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           // keine Aussage über das Cookie, Zustand behalten, der Aufrufer versucht es später.
           throw new ServerUnavailableError();
         }
+        if (generation !== sessionGeneration) return get().status === "authenticated";
         if (REFRESH_REJECTED_STATUS.has(res.status)) {
           set({ accessToken: null, user: null, status: "anonymous" });
           return false;
@@ -230,6 +237,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           throw new ServerUnavailableError();
         }
         if (!body.access_token || !body.user) throw new ServerUnavailableError();
+        if (generation !== sessionGeneration) return get().status === "authenticated";
         set({ accessToken: body.access_token, user: body.user, status: "authenticated" });
         return true;
       } finally {
@@ -242,7 +250,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   async logout() {
+    sessionGeneration += 1;
     await fetch("/api/v1/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
+    sessionGeneration += 1;
     set({ accessToken: null, user: null, status: "anonymous", mfaToken: null });
   },
 

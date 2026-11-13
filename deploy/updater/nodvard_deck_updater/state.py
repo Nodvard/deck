@@ -82,6 +82,7 @@ from .policy import Refusal
 STATE_NAME = "state.json"
 JOURNAL_NAME = "journal.json"
 LOCK_NAME = "lock"
+REQUEST_KEY_NAME = "request-key.pub"
 BROKEN_SUFFIX = ".broken"
 DIR_MODE = 0o700
 FILE_MODE = 0o600
@@ -155,6 +156,7 @@ def read_regular(
     max_bytes: int,
     owner: int | None = None,
     identity: tuple[int, int] | None = None,
+    mode: int | None = None,
 ) -> bytes:
     """Liest eine kleine reguläre Datei `name` relativ zu `dir_fd`.
 
@@ -188,6 +190,8 @@ def read_regular(
             raise UnsafeFile("links")
         if owner is not None and st.st_uid != owner:
             raise UnsafeFile("owner")
+        if mode is not None and stat.S_IMODE(st.st_mode) != mode:
+            raise UnsafeFile("mode")
         if identity is not None and (st.st_dev, st.st_ino) != identity:
             raise UnsafeFile("replaced")
         if st.st_size > max_bytes:
@@ -782,6 +786,16 @@ class StateStore:
             with contextlib.suppress(OSError):
                 self.save_state(state)
         return state
+
+    def request_public_key(self) -> bytes:
+        try:
+            raw = read_regular(self._fd(), REQUEST_KEY_NAME, max_bytes=65, owner=self._uid, mode=FILE_MODE)
+            public = bytes.fromhex(raw.decode("ascii").strip())
+            if len(public) != 32:
+                raise ValueError("key")
+            return public
+        except (OSError, UnsafeFile, ReadFailed, ValueError):
+            raise Refusal(policy.UNKNOWN_KEY) from None
 
     def _exists(self, name: str) -> bool:
         try:

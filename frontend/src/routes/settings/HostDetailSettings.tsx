@@ -52,6 +52,12 @@ function Summary({ host }: { host: HostOut }) {
             : <>Dieser Server wird automatisch von der Erweiterung „{provider?.name ?? host.provider_ext_id}“ eingelesen{host.kind ? ` (${kindLabel(host)})` : ""}.</>}
         </p>
       )}
+      {host.manual_entry && (
+        <p className="text-xs text-white/45 sm:col-span-2">
+          Der Hand-Server „{host.manual_entry.display_name}“ ({host.manual_entry.address}) ist diesem Eintrag zugeordnet.
+          SSH-Zugänge, Markierungen und Verlauf bleiben erhalten.
+        </p>
+      )}
     </dl>
   );
 }

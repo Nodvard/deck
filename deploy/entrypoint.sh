@@ -15,11 +15,7 @@ umask 077
 
 # --- Besitzrechte am Datenordner, dann vom Benutzer root zu `lattice` wechseln ----------------------
 #
-# Das Image startet als root (kein `USER` im Dockerfile), damit dieses Skript den Datenordner
-# /app/data in Ordnung bringen kann: Ein eingebundener NAS-/Host-Ordner gehört oft root oder
-# einem anderen Benutzer, dann könnte `lattice` (UID 1000) dort nichts schreiben ("unable to open
-# database file"). Danach startet dieses Skript sich SELBST als `lattice` neu (setpriv, Teil von
-# util-linux, im Basis-Image vorhanden) -- Migration und Anwendung laufen also nie als root.
+# Das Image startet als root und wechselt vor Migration und Anwendung zu UID 1000.
 #
 # Sicherheit:
 #  - chown NUR auf /app/data (fest eingetragen, nicht aus einer Umgebungsvariable), und nur auf
@@ -74,6 +70,21 @@ if [ "$(id -u)" = "0" ]; then
 fi
 
 cd /app
+
+if [ -d /app/data ] && [ ! -w /app/data ]; then
+  service="$(python -c '
+from nodvard_deck.edition import DECK, EDITIONS
+from nodvard_deck.image_info import read
+print(EDITIONS.get(read("image-info.json").get("edition"), DECK).service)
+' 2>/dev/null)" || service=nodvard-deck
+  [ -n "$service" ] || service=nodvard-deck
+  echo "FEHLER: /app/data ist für Benutzer $(id -u):$(id -g) nicht beschreibbar." >&2
+  echo "Im Ordner mit compose.yml ausführen:" >&2
+  echo "docker compose stop $service" >&2
+  echo "docker compose run --rm --no-deps --user 0:0 --cap-add CHOWN --cap-add DAC_OVERRIDE --entrypoint /usr/local/bin/migrate-data $service" >&2
+  echo "docker compose up -d $service" >&2
+  exit 1
+fi
 
 # --- Rechte im Datenordner (jetzt als `lattice`, nicht mehr als root) -------------------------------------------------
 #

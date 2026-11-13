@@ -1,18 +1,10 @@
-/**
- * Glocke in der Kopfzeile mit Schnellansicht: ein kleines Fenster unter der Glocke zeigt
- * die neuesten Meldungen, statt jedes Mal auf die volle Meldungsseite zu springen.
- *
- * Daten: dieselben Endpunkte und derselbe Live-Weg wie die Meldungsseite. Den Zähler
- * und die WS-Anbindung liefert `useUnreadNotifications` (AppShell); jede neue Meldung
- * macht alle Abfragen unter dem Schlüssel ["notifications"] ungültig -- die Liste hier
- * zieht also von selbst nach, solange das Fenster offen ist. Beim Öffnen wird immer neu geladen.
- */
+/** Meldungs-Schnellansicht mit Live-Invalidierung; beim Öffnen wird die Liste neu geladen. */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertOctagon, AlertTriangle, Bell, BellOff, Info } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { internalPath } from "../lib/apps";
 import { useExtensionLabel } from "../lib/extensionNames";
 import { relativeTime } from "../lib/overview";
@@ -130,8 +122,15 @@ export function NotificationBell({ unread }: { unread: number }) {
     navigate(targetPath(n) ?? "/notifications");
   };
 
+  const [markError, setMarkError] = useState<string | null>(null);
   const markAll = async () => {
-    await api.post("/notifications/read-all");
+    setMarkError(null);
+    try {
+      await api.post("/notifications/read-all");
+    } catch (err) {
+      setMarkError(`Nicht als gelesen markiert: ${err instanceof ApiError ? err.message : String(err)}`);
+      return;
+    }
     refresh();
   };
 
@@ -182,6 +181,11 @@ export function NotificationBell({ unread }: { unread: number }) {
             )}
           </div>
 
+          {markError && (
+            <p role="alert" className="flex-none border-b border-white/[0.07] px-4 py-2 text-xs text-red-300">
+              {markError}
+            </p>
+          )}
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
             {isLoading && !data && <p className="px-4 py-6 text-center text-sm text-white/50">Lade …</p>}
             {error && !data && (

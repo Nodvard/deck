@@ -40,6 +40,7 @@ class WsMultiplexClient {
   disconnect(): void {
     this.connectRequested = false;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
     this.authenticated = false;
     this.socket?.close();
     this.socket = null;
@@ -74,11 +75,15 @@ class WsMultiplexClient {
     const socket = new WebSocket(`${protocol}//${window.location.host}/api/v1/ws`);
     this.socket = socket;
 
+    // Ereignisse einer abgelösten Verbindung zählen nicht mehr: Ein verspätetes `close` öffnete sonst eine weitere,
+    // und die aktuelle bliebe unverwaltet offen.
     socket.addEventListener("open", () => {
+      if (this.socket !== socket) return;
       this.send({ type: "auth", token: useAuthStore.getState().accessToken });
     });
 
     socket.addEventListener("message", (ev: MessageEvent<string>) => {
+      if (this.socket !== socket) return;
       let message: ServerMessage;
       try {
         message = JSON.parse(ev.data) as ServerMessage;
@@ -89,6 +94,8 @@ class WsMultiplexClient {
     });
 
     socket.addEventListener("close", () => {
+      if (this.socket !== socket) return;
+      this.socket = null;
       this.authenticated = false;
       if (this.connectRequested) this.scheduleReconnect();
     });
@@ -140,7 +147,8 @@ class WsMultiplexClient {
     this.reconnectAttempt += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      if (this.connectRequested) this.open();
+      // Über `ensureConnected`: Hat inzwischen ein Abonnent neu verbunden, bleibt es bei dieser einen Verbindung.
+      if (this.connectRequested) this.ensureConnected();
     }, delay);
   }
 }

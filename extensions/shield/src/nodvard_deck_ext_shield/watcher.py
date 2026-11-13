@@ -31,7 +31,7 @@ class StateStore(Protocol):
 
 
 class BaselineStateStore:
-    """Legt den Container-Stand je Host in `ext_nexus_soc_baselines` (Art "docker") ab, wie Updates und Einbruchschutz."""
+    """Speichert den Container-Stand je Host als Baseline der Art "docker"."""
 
     def __init__(self, ctx: Any) -> None:
         self._ctx = ctx
@@ -234,7 +234,8 @@ class DockerWatcher:
             + " ".join(shlex.quote(n) for n in names)
         )
         try:
-            result = await self._ctx.exec.run(host, command, timeout_s=10)
+            with self._ctx.exec.read_access(host, timeout_s=15):
+                result = await self._ctx.exec.run(host, command, timeout_s=10)
         except Exception:  # noqa: BLE001 - Anreicherung: ohne Zähler bleibt es beim Zustandsvergleich
             return {}
         # Auch bei Exit-Code != 0 (z. B. ein Container war inzwischen weg) die lesbaren Zeilen nutzen.
@@ -250,9 +251,10 @@ class DockerWatcher:
                 continue
             await self._load_host_state(host)
             try:
-                result = await self._ctx.exec.run(
-                    host, "docker ps -a --format '{{.Names}}|{{.State}}|{{.Status}}'", timeout_s=10
-                )
+                with self._ctx.exec.read_access(host, timeout_s=15):
+                    result = await self._ctx.exec.run(
+                        host, "docker ps -a --format '{{.Names}}|{{.State}}|{{.Status}}'", timeout_s=10
+                    )
             except Exception:  # noqa: BLE001 - ein nicht erreichbarer Host darf den Takt nicht abreißen
                 continue
             if result.exit_code != 0:

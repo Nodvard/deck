@@ -204,6 +204,36 @@ describe("Warten auf den Neustart", () => {
     expect(answers).toHaveLength(0);
   });
 
+  it("eine hängende Abfrage hält das Zeitlimit nicht auf", async () => {
+    vi.spyOn(restartProbe, "health").mockImplementation(() => new Promise<null>(() => {}));
+    restartTiming.timeoutMs = 60;
+    const started = Date.now();
+    expect(await waitForRestart(500)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it("ein Abbruch wartet nicht auf eine hängende Abfrage", async () => {
+    vi.spyOn(restartProbe, "health").mockImplementation(() => new Promise<null>(() => {}));
+    restartTiming.timeoutMs = 60_000;
+    const controller = new AbortController();
+    const started = Date.now();
+    const waiting = waitForRestart(500, { signal: controller.signal });
+    setTimeout(() => controller.abort(), 30);
+    expect(await waiting).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it("„Weiter warten“: ein schon gesehener Ausfall gilt auch im nächsten Versuch", async () => {
+    let back = false;
+    vi.spyOn(restartProbe, "health").mockImplementation(async () => (back ? { status: "ok", uptime_s: 900 } : null));
+    restartTiming.timeoutMs = 5000;
+    const seen = { down: false };
+    expect(await waitForRestart(null, { seen, timeoutMs: 20 })).toBe(false);
+    expect(seen.down).toBe(true);
+    back = true;
+    expect(await waitForRestart(null, { seen, timeoutMs: 200 })).toBe(true);
+  });
+
   it("bricht auf Wunsch ab", async () => {
     vi.spyOn(restartProbe, "health").mockResolvedValue(null);
     const controller = new AbortController();

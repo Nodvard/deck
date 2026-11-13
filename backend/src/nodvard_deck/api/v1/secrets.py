@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +18,8 @@ from ...models import Host, HostCredential, Secret, SecretUsage, User
 from ...services import audit as audit_service
 from ...services import extensions as extensions_service
 from ..deps import SessionDep, SettingsDep, require_permission
+from ..models import RequestModel
+from ..responses import error_responses
 from .auth import confirm_stored_secret_change
 
 router = APIRouter(prefix="/secrets", tags=["secrets"])
@@ -75,15 +77,24 @@ class SecretOut(BaseModel):
         )
 
 
-class SecretCreate(BaseModel):
+class SecretExpiry(RequestModel):
+    @field_validator("expires_at", mode="before", check_fields=False)
+    @classmethod
+    def _expiry_type(cls, value):
+        if value is not None and not isinstance(value, (str, datetime)):
+            raise ValueError("Das Ablaufdatum muss ein Datum als Text sein.")
+        return value
+
+
+class SecretCreate(SecretExpiry):
     label: str = Field(min_length=1, max_length=128)
     kind: SecretKind
     value: str = Field(min_length=1)
     description: str = ""
-    expires_at: datetime | None = None
+    expires_at: datetime | None = Field(default=None, strict=False)
 
 
-class SecretConfirm(BaseModel):
+class SecretConfirm(RequestModel):
     """Bestätigung für Ersetzen und Löschen: das eigene Passwort und, wenn Zwei-Faktor an ist, der Code aus der App."""
 
     current_password: str = Field(default="", max_length=1024)
@@ -94,12 +105,12 @@ class SecretValueUpdate(SecretConfirm):
     value: str = Field(min_length=1)
 
 
-class SecretPatch(BaseModel):
+class SecretPatch(SecretExpiry):
     """Nur die angegebenen Felder ändern sich; `expires_at: null` entfernt das Ablaufdatum. Eine Zeit
     ohne Zeitzone gilt als UTC."""
 
     description: str | None = Field(default=None, max_length=255)
-    expires_at: datetime | None = None
+    expires_at: datetime | None = Field(default=None, strict=False)
 
 
 _USAGE_ORDER = {"login": 0, "host": 1, "extension": 2}
@@ -193,7 +204,7 @@ def _as_utc(value: datetime | None) -> datetime | None:
         ) from exc
 
 
-@router.get("", dependencies=[Depends(require_permission("secrets.read"))])
+@router.get("", dependencies=[Depends(require_permission("secrets.read"))], responses=error_responses(401, 403, 507))
 async def list_secrets(session: SessionDep) -> list[SecretOut]:
     result = await session.execute(select(Secret).order_by(Secret.label))
     secrets = list(result.scalars().all())
@@ -201,7 +212,7 @@ async def list_secrets(session: SessionDep) -> list[SecretOut]:
     return [SecretOut.from_model(s, *users.get(s.id, ([], []))) for s in secrets]
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED, responses=error_responses(401, 403, 409, 422, 507))
 async def create_secret(
     payload: SecretCreate,
     request: Request,
@@ -257,7 +268,12 @@ async def _refuse_login_secret(session: SessionDep, secret_id: str) -> None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=LOGIN_SECRET_MESSAGE)
 
 
-@router.put("/{secret_id}/value", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+@router.put(
+    "/{secret_id}/value",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    responses=error_responses(400, 401, 403, 404, 409, 429, 503, 507),
+)
 async def replace_secret_value(
     secret_id: str,
     payload: SecretValueUpdate,
@@ -283,7 +299,7 @@ async def replace_secret_value(
     return None
 
 
-@router.patch("/{secret_id}")
+@router.patch("/{secret_id}", responses=error_responses(401, 403, 404, 409, 422, 507))
 async def update_secret(
     secret_id: str,
     payload: SecretPatch,
@@ -312,7 +328,12 @@ IN_USE_MESSAGE = (
 )
 
 
-@router.delete("/{secret_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+@router.delete(
+    "/{secret_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    responses=error_responses(400, 401, 403, 409, 429, 503, 507),
+)
 async def delete_secret(
     secret_id: str,
     request: Request,

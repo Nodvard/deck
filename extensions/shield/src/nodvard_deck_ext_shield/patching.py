@@ -422,17 +422,21 @@ class UpdateCenter:
         self._checking.add(host.id)
         try:
             try:
-                res = await self._ctx.exec.run(host, up.status_command(refresh=refresh), timeout_s=CHECK_TIMEOUT)
-                status = up.parse_status((res.stdout or "") + "\n" + (res.stderr or ""))
+                with self._ctx.exec.read_access(host):
+                    res = await self._ctx.exec.run(host, up.status_command(refresh=refresh), timeout_s=CHECK_TIMEOUT)
+                status = up.parse_status((res.stdout or "") + "\n" + (res.stderr or ""), exit_code=res.exit_code)
             except Exception as exc:  # noqa: BLE001 - Fehler landet sichtbar am Server
-                status = up.UpdateStatus(manager=None, error=_describe(exc))
+                kind = ("timeout" if isinstance(exc, TimeoutError) else "permission" if isinstance(exc, PermissionError)
+                        else up.status_error_kind(str(exc)))
+                status = up.UpdateStatus(manager=None, error=up.STATUS_ERRORS[kind] if kind else _describe(exc), error_kind=kind)
             now = _now().timestamp()
             old = await load_baseline(self._ctx, host.id, "updates")
             if status.error and not status.unsupported:
                 # Den letzten guten Stand samt `checked_at` behalten und Fehler und Zeitpunkt des Versuchs
                 # (`attempted_at`) ergänzen; ohne guten Stand gibt es keine erfolgreiche Prüfung.
                 if old and old.get("manager"):
-                    data = {**old, "error": status.error, "attempted_at": now}
+                    data = {**old, "error": status.error, "error_kind": status.error_kind, "unsupported": False,
+                            "attempted_at": now}
                 else:
                     data = {**status.as_dict(), "checked_at": None, "attempted_at": now}
             else:
@@ -612,9 +616,9 @@ class UpdateCenter:
         Beides landet im Payload der Aktion, der Befehl wird daraus gebaut (`defender_api.ActionCommands`)."""
         st = await load_baseline(self._ctx, host.id, "updates")
         # Ein Stand ohne Einteilung (ältere Version) kennt keine zurückgehaltenen Pakete; die dürfen nie in den Sicherheitslauf.
-        if not st or not st.get("manager") or (mode == "security" and "installable_count" not in st):
+        if not st or st.get("error") or not st.get("manager") or (mode == "security" and "installable_count" not in st):
             st = await self.check_host(host, refresh=True)
-        if not st.get("manager"):
+        if st.get("error") or not st.get("manager"):
             raise ValueError(st.get("error") or "Update-Stand unbekannt.")
         if mode == "security" and not up.security_known(st):
             raise ValueError(up.SECURITY_UNKNOWN_MESSAGE)
@@ -763,7 +767,8 @@ class UpdateCenter:
         output = ""
         while True:
             try:
-                res = await self._ctx.exec.run(host, command, timeout_s=POLL_TIMEOUT_S)
+                with self._ctx.exec.read_access(host):
+                    res = await self._ctx.exec.run(host, command, timeout_s=POLL_TIMEOUT_S)
             except Exception as exc:  # noqa: BLE001 - Verbindung weg (z. B. während Docker neu startet): weiter nachfragen
                 last_error = _describe(exc)
             else:
@@ -860,6 +865,8 @@ class UpdateCenter:
         return {"hosts": len(pairs), "title": title}
 
     async def auto_update(self) -> dict[str, Any]:
+        from nodvard_deck.core.gate import authorized_ssh
+
         settings = await self._ctx.settings.get()
         # Auch ein Lauf von Hand (Job-Liste der API) spielt nichts ein, solange die Automatik aus ist.
         if not settings.get("auto_updates_enabled", False):
@@ -909,7 +916,8 @@ class UpdateCenter:
                     lines.append(f"- {name}: {exc}")
                     continue
                 # Die Meldung nennt nur `public`: eine Zeile vom Server steht nicht in der Push-Nachricht.
-                run, _out, _rc = await self._execute(host, mode, command=command, trigger="schedule", plan=plan)
+                with authorized_ssh(host.id, operations=frozenset({"command"}), ext_id=EXT_ID, timeout_s=LAUNCH_TIMEOUT_S):
+                    run, _out, _rc = await self._execute(host, mode, command=command, trigger="schedule", plan=plan)
                 update_ok = run.ok
                 failed += 0 if run.ok else 1
                 lines.append(f"- {name}: {run.public}" if run.ok else f"- {name}: FEHLGESCHLAGEN – {run.public}")
@@ -941,7 +949,8 @@ class UpdateCenter:
                         else "  ↳ Neustart folgt nach dieser Meldung (ob hier das Dashboard läuft, ließ sich nicht prüfen)."
                     )
                 else:
-                    run, _out, _rc = await self._execute(host, "reboot", command=up.REBOOT_COMMAND, trigger="schedule")
+                    with authorized_ssh(host.id, operations=frozenset({"command"}), ext_id=EXT_ID, timeout_s=60):
+                        run, _out, _rc = await self._execute(host, "reboot", command=up.REBOOT_COMMAND, trigger="schedule")
                     lines.append(f"  ↳ Neustart: {run.public}")
         if lines:
             title = f"Automatische Updates: {len(hosts) - skipped} Server" + (f", {failed} Fehler" if failed else "")
@@ -951,7 +960,8 @@ class UpdateCenter:
             ))
         for host in reboot_last:
             # Erst jetzt: Die Zusammenfassung ist raus, die anderen Server sind durch.
-            run, _out, _rc = await self._execute(host, "reboot", command=up.REBOOT_COMMAND, trigger="schedule")
+            with authorized_ssh(host.id, operations=frozenset({"command"}), ext_id=EXT_ID, timeout_s=60):
+                run, _out, _rc = await self._execute(host, "reboot", command=up.REBOOT_COMMAND, trigger="schedule")
             failed += 0 if run.ok else 1
             name = host.display_name or host.name
             here = (
@@ -975,7 +985,8 @@ class UpdateCenter:
         if not _HOSTNAME_RE.fullmatch(own):
             return None
         try:
-            res = await self._ctx.exec.run(host, own_container_probe(own), timeout_s=PROBE_TIMEOUT_S)
+            with self._ctx.exec.read_access(host):
+                res = await self._ctx.exec.run(host, own_container_probe(own), timeout_s=PROBE_TIMEOUT_S)
         except Exception:  # noqa: BLE001 - nicht erreichbar heißt: unbekannt, nicht "nein"
             return None
         out = res.stdout or ""

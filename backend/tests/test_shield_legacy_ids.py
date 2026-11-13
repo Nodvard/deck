@@ -40,6 +40,7 @@ SHIELD_SRC = REPO_EXTENSIONS_DIR / "shield" / "src"
 JOB_KEYS = sorted([
     "defender-quick", "defender-deep", "defender-watch", "defender-briefing", "defender-audit",
     "defender-updates-check", "defender-updates-auto", "defender-guard",
+    "weekly-report",
 ])
 SETTINGS_OF_0_6 = {
     "ollama_url": "http://192.168.2.42:11434", "docker_host_tag": "box", "quick_scan_cron": "30 3 * * *",
@@ -91,13 +92,29 @@ def _old_image_folder(tmp_path: Path) -> Path:
     (target / "src" / "nodvard_deck_ext_shield").rename(target / "src" / OLD_PACKAGE)
     manifest = target / "extension.toml"
     text = manifest.read_text(encoding="utf-8")
-    text = text.replace('id          = "shield"\nlegacy_ids  = ["nexus-soc"]\n', 'id          = "nexus-soc"\n')
+    text = text.replace('id          = "shield"\n', 'id          = "nexus-soc"\n')
+    text = text.replace('legacy_ids  = ["nexus-soc"]\n', "")
     text = text.replace('"nodvard_deck_ext_shield:Extension"', f'"{OLD_PACKAGE}:Extension"')
     assert 'id          = "nexus-soc"' in text and "legacy_ids" not in text and OLD_PACKAGE in text
     manifest.write_text(text, encoding="utf-8")
     ids = target / "src" / OLD_PACKAGE / "ids.py"
     ids.write_text(ids.read_text(encoding="utf-8").replace('EXT_ID = "shield"', 'EXT_ID = "nexus-soc"'), encoding="utf-8")
+    # Die nachgebaute alte Erweiterung braucht für die neue Tabelle ihre eigene Vorsilbe.
+    models = target / "src" / OLD_PACKAGE / "models.py"
+    models.write_text(models.read_text(encoding="utf-8").replace(
+        '__tablename__ = "ext_shield_weekly_reports"', '__tablename__ = "ext_nexus_soc_weekly_reports"',
+    ), encoding="utf-8")
     return root
+
+
+def test_old_image_manifest_has_no_aliases(tmp_path):
+    from nodvard_sdk import load_manifest
+
+    folder = _old_image_folder(tmp_path) / OLD_ID
+    manifest = load_manifest(folder / "extension.toml")
+    assert (manifest.id, manifest.legacy_ids) == (OLD_ID, [])
+    assert manifest.entrypoint == f"{OLD_PACKAGE}:Extension"
+    assert (folder / "src" / OLD_PACKAGE / "__init__.py").is_file()
 
 
 async def _owner_headers(client) -> dict[str, str]:
@@ -218,6 +235,9 @@ async def _assert_same_state(db_session, state: dict, *, expected_settings: dict
     assert record.settings == expected_settings
     assert not [r for r in (await db_session.execute(select(ExtensionRecord))).scalars().all() if r.state == "error"]
     jobs = await _jobs(db_session)
+    # Der gemeinsame Zeitplan fuer CVE-Abgleich und Aussenpruefung ist neu und kommt beim Start hinzu (genau einmal).
+    assert ("nexus-soc", "server-checks") in jobs, "Zeitplan fuer CVE-Abgleich und Aussenpruefung angelegt"
+    jobs.pop(("nexus-soc", "server-checks"))
     assert jobs == {("nexus-soc", key): job_id for key, job_id in state["jobs"].items()}, "dieselben Zeitplaene, keine doppelten"
 
 
@@ -375,7 +395,7 @@ async def test_a_new_installation_stores_everything_under_shield_and_the_old_add
     assert (await _row(db_session, "shield")).settings["docker_host_tag"] == "box"
     assert "nexus-soc" not in await _row_ids(db_session)
     jobs = await _jobs(db_session)
-    assert {ext for ext, _ in jobs} == {"shield"} and sorted(key for _, key in jobs) == JOB_KEYS
+    assert {ext for ext, _ in jobs} == {"shield"} and sorted(key for _, key in jobs) == sorted([*JOB_KEYS, "server-checks"])
 
     new = await client.get("/api/v1/ext/shield/defender/findings", headers=headers)
     old = await client.get("/api/v1/ext/nexus-soc/defender/findings", headers=headers)

@@ -457,6 +457,110 @@ def test_a_failed_fetch_leaves_the_last_state_and_no_rest(tmp_path):
         assert repo.refs[gf.FETCHED_REF].decode() == first
 
 
+def _stored_bytes(root):
+    return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
+
+
+def test_storage_quota_counts_all_repositories(tmp_path, monkeypatch):
+    gf = _gf()
+    origin, cache = tmp_path / "origin", tmp_path / "git"
+    _commit(origin, {"shop": {"compose.yaml": COMPOSE}})
+    _fetch(tmp_path, store=cache / "first")
+    size = _stored_bytes(cache)
+    monkeypatch.setattr(gf, "MAX_STORAGE_BYTES", 2 * size, raising=False)
+    _fetch(tmp_path, store=cache / "second")
+    assert _stored_bytes(cache) == 2 * size
+    with pytest.raises(gf.GitProblem, match="Speichergrenze.*Repositorys"):
+        _fetch(tmp_path, store=cache / "third")
+    assert sorted(path.name for path in cache.iterdir()) == ["first", "second"]
+    assert _stored_bytes(cache) == 2 * size
+    shutil.rmtree(cache / "first")
+    assert _fetch(tmp_path, store=cache / "third").files["compose.yaml"][1] == COMPOSE
+
+
+def test_storage_quota_preserves_the_previous_state(tmp_path, monkeypatch):
+    gf = _gf()
+    origin, cache = tmp_path / "origin", tmp_path / "git"
+    first = _commit(origin, {"shop": {"compose.yaml": COMPOSE}})
+    _fetch(tmp_path, store=cache / "shop")
+    size = _stored_bytes(cache)
+    monkeypatch.setattr(gf, "MAX_STORAGE_BYTES", size + 512, raising=False)
+    _commit(origin, {"shop": {"compose.yaml": COMPOSE, "data.bin": os.urandom(20000)}})
+    with pytest.raises(gf.GitProblem, match="Speichergrenze.*Repositorys"):
+        _fetch(tmp_path, store=cache / "shop")
+    assert _stored_bytes(cache) == size
+    assert [path.name for path in cache.iterdir()] == ["shop"]
+    from dulwich.repo import Repo
+
+    with Repo(str(cache / "shop")) as repo:
+        assert repo.refs[gf.FETCHED_REF].decode() == first
+    updated = _commit(origin, {"shop": {"compose.yaml": COMPOSE.replace(b"web", b"app")}})
+    assert _fetch(tmp_path, store=cache / "shop").commit == updated
+    assert _stored_bytes(cache) <= size + 512
+
+
+def test_storage_quota_keeps_counting_after_a_file_disappears(tmp_path, monkeypatch):
+    gf = _gf()
+    store, neighbor = tmp_path / "current", tmp_path / "neighbor"
+    neighbor.mkdir()
+    missing, remaining = neighbor / "missing", neighbor / "remaining"
+    remaining.write_bytes(b"xx")
+    rglob = Path.rglob
+    monkeypatch.setattr(Path, "rglob", lambda path, pattern: iter((missing, remaining)) if path == neighbor else rglob(path, pattern))
+    monkeypatch.setattr(gf, "MAX_STORAGE_BYTES", 1)
+    with pytest.raises(gf.GitProblem, match="Speichergrenze.*Repositorys"):
+        gf._check_storage(store)
+
+
+def test_storage_quota_keeps_counting_after_a_repository_disappears(tmp_path, monkeypatch):
+    gf = _gf()
+    store, missing, remaining = tmp_path / "current", tmp_path / "missing", tmp_path / "remaining"
+    remaining.mkdir()
+    (remaining / "data").write_bytes(b"xx")
+    iterdir, rglob = Path.iterdir, Path.rglob
+
+    def entries(path, pattern):
+        if path == missing:
+            with os.scandir(path):
+                pass
+        yield from rglob(path, pattern)
+
+    monkeypatch.setattr(Path, "iterdir", lambda path: iter((missing, remaining)) if path == tmp_path else iterdir(path))
+    monkeypatch.setattr(Path, "rglob", entries)
+    monkeypatch.setattr(gf, "MAX_STORAGE_BYTES", 1)
+    with pytest.raises(gf.GitProblem, match="Speichergrenze.*Repositorys"):
+        gf._check_storage(store)
+
+
+@pytest.mark.parametrize("operation", ["lstat", "rglob"])
+@pytest.mark.parametrize("error", [PermissionError, OSError])
+def test_storage_quota_does_not_ignore_other_filesystem_errors(tmp_path, monkeypatch, operation, error):
+    gf = _gf()
+    store, neighbor = tmp_path / "current", tmp_path / "neighbor"
+    neighbor.mkdir()
+    leaf = neighbor / "data"
+    leaf.write_bytes(b"x")
+    original = getattr(Path, operation)
+
+    def fail():
+        raise error("nicht lesbar")
+
+    def broken(path, *args, **kwargs):
+        if operation == "lstat" and path == leaf:
+            fail()
+        if operation == "rglob" and path == neighbor:
+            def entries():
+                yield leaf
+                fail()
+
+            return entries()
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, operation, broken)
+    with pytest.raises(error, match="nicht lesbar"):
+        gf._check_storage(store)
+
+
 def test_a_broken_store_is_made_new(tmp_path):
     store = tmp_path / "store"
     (store / "objects" / "pack").mkdir(parents=True)
@@ -1105,6 +1209,44 @@ async def test_a_worker_that_does_not_read_its_order_is_a_problem(tmp_path, monk
 
 
 @POSIX_LIMITS
+@pytest.mark.asyncio
+async def test_nested_env_file_merges_are_limited_in_the_worker(monkeypatch):
+    gs, gf = _gs(), _gf()
+    limits = gf.Limits(seconds=2, memory_bytes=256 * 1024 * 1024)
+    monkeypatch.setattr(gs, "GRACE_S", 2)
+    request = {"mode": "env_files", "folder": "/opt/stacks/shop",
+               "limits": {"seconds": limits.seconds, "memory_bytes": limits.memory_bytes},
+               "composes": [base64.b64encode(COMPOSE + b"    env_file: vars.txt\n").decode()]}
+    answer = await asyncio.wait_for(gs.run_worker(request, limits), 15)
+    assert answer == {"ok": True, "env_files": ["/opt/stacks/shop/vars.txt"]}
+
+    merges = ["x-merge-0: &m0 {K: v}\n"]
+    merges += [f"x-merge-{i}: &m{i} {{<<: [*m{i - 1}, *m{i - 1}]}}\n" for i in range(1, 32)]
+    request["composes"] = [base64.b64encode("".join(merges).encode() + COMPOSE).decode()]
+    try:
+        answer = await asyncio.wait_for(gs.run_worker(request, limits), 15)
+    except gs.GitProblem as exc:
+        problem = str(exc)
+    else:
+        assert answer["ok"] is False
+        problem = answer["problem"]
+    assert any(word in problem for word in ("Speicher", "Rechenzeit", "Sekunden")), problem
+
+
+@pytest.mark.asyncio
+async def test_env_file_analysis_accepts_two_maximum_compose_files(tmp_path):
+    from nodvard_deck_ext_docker import adopt
+
+    gs = _gs()
+    git = gs.GitStacks(_settings({}), None, adopt.AdoptedStacks(tmp_path), tmp_path)
+    compose = COMPOSE + b"    env_file: vars.txt\n#"
+    compose += b"x" * (git.limits.compose_bytes - len(compose))
+    assert await git.service_env_files("/opt/stacks/shop", compose, compose) == {"/opt/stacks/shop/vars.txt"}
+    with pytest.raises(gs.GitProblem, match="Compose-Datei ist größer"):
+        await git.service_env_files("/opt/stacks/shop", compose + b"x")
+
+
+@POSIX_LIMITS
 def test_the_worker_limits_itself():
     # Vorher Kern-Abzüge erlauben, soweit die harte Grenze es zulässt: Sonst fiele nicht auf, wenn _confine sie nicht abschaltet.
     code = ("import os, resource, sys; sys.path.insert(0, sys.argv[1]); import git_fetch as g; "
@@ -1304,6 +1446,61 @@ async def _with_access(client, docker_on, host="git.example.org", token=None):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("change", [
+    {"url": "https://git.example.org/team/private"},
+    {"path": "private/secrets.yml"},
+    {"ref": "private"},
+])
+async def test_an_operator_cannot_redirect_a_saved_git_access(client, db_session, docker_on, tmp_path, change):
+    from docker_stack_fakes import login
+
+    url = await _adopted(client, docker_on)
+    operator = await login(client, db_session, "operator1", "operator")
+    admin = await login(client, db_session, "admin1", "admin")
+    await _with_access(client, docker_on, token="test-only-git-password")
+    origin, private = tmp_path / "origin", tmp_path / "private"
+    hidden = b"password: test-only-private-value\n"
+    _commit(origin, {"shop": {"compose.yaml": COMPOSE}, "private": {"secrets.yml": hidden}})
+    _commit(origin, {"shop": {"compose.yaml": hidden}}, branch="private")
+    _commit(private, {"shop": {"compose.yaml": hidden}})
+    clients = {URL: _local(origin), "https://git.example.org/team/private": _local(private)}
+
+    def client_for(address, credentials, limits):
+        assert credentials == ("deck", "test-only-git-password")
+        return clients[address](address, credentials, limits)
+
+    _git(docker_on).run_fetch = _in_process(client_for)
+    body = {"url": URL, "path": "shop/compose.yaml", "access": "team"}
+    saved = await client.put(url, headers=admin, json=body)
+    assert saved.status_code == 200, saved.text
+
+    changed = await client.put(url, headers=operator, json={**body, **change})
+    fetched = await client.post(f"{url}/fetch", headers=operator)
+    assert fetched.status_code == 200, fetched.text
+    assert (changed.status_code, fetched.json()["compose"]["new"]) == (403, COMPOSE.decode())
+    assert (await client.get(url, headers=operator)).json()["source"] == saved.json()["source"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("access", "public_source"), [(None, False), ("team", False), ("team", True)])
+async def test_an_operator_cannot_assign_a_git_source(client, db_session, docker_on, access, public_source):
+    from docker_stack_fakes import login
+
+    url = await _adopted(client, docker_on)
+    operator = await login(client, db_session, "operator1", "operator")
+    await _with_access(client, docker_on)
+    body = {"url": URL, "path": "shop/compose.yaml", "access": access}
+    if public_source:
+        saved = await client.put(url, headers=docker_on.owner, json={**body, "access": None})
+        assert saved.status_code == 200, saved.text
+    before = (await client.get(url, headers=docker_on.owner)).json()["source"]
+
+    refused = await client.put(url, headers=operator, json=body)
+    assert refused.status_code == 403, refused.text
+    assert (await client.get(url, headers=docker_on.owner)).json()["source"] == before
+
+
+@pytest.mark.asyncio
 async def test_a_private_repository_with_a_token_from_the_vault(client, docker_on, tmp_path):
     url = await _adopted(client, docker_on)
     origin = tmp_path / "origin"
@@ -1450,7 +1647,7 @@ async def test_a_stack_with_several_files_cannot_take_a_source(client, docker_on
     from nodvard_deck_ext_docker import adopt
 
     store = adopt.AdoptedStacks(docker_on.data_dir)
-    stack = SimpleNamespace(project="shop", working_dir="/opt/stacks/shop", files=("/opt/stacks/shop/a.yaml", "/opt/stacks/shop/b.yaml"), env_files=())
+    stack = SimpleNamespace(project="shop", working_dir="/opt/stacks/shop", files=("/opt/stacks/shop/a.yaml", "/opt/stacks/shop/b.yaml"), env_files=(), env_names=())
     await store.add(docker_on.host, stack)
     url = f"/api/v1/ext/docker/hosts/{docker_on.host}/stacks/shop/git"
     assert (await client.get(url, headers=docker_on.owner)).json()["layout_problem"].startswith("Der Stack besteht aus mehreren Compose-Dateien.")
@@ -1507,7 +1704,7 @@ async def test_the_worker_hears_whether_private_networks_are_allowed(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_at_most_two_fetches_run_at_once(tmp_path):
+async def test_fetches_run_serially_for_the_shared_storage_quota(tmp_path):
     from nodvard_deck_ext_docker import adopt
 
     gs = _gs()
@@ -1527,7 +1724,90 @@ async def test_at_most_two_fetches_run_at_once(tmp_path):
     for i, source in enumerate(sources):
         await git.sources.put("h1", f"s{i}", source)
     await asyncio.gather(*(git.fetch("h1", f"s{i}", source) for i, source in enumerate(sources)))
-    assert peak == gs.PARALLEL == 2
+    assert peak == gs.PARALLEL == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_fetches_share_the_storage_quota_across_hosts(tmp_path, monkeypatch):
+    from nodvard_deck_ext_docker import adopt
+
+    gs, gf = _gs(), _gf()
+    origin = tmp_path / "origin"
+    _commit(origin, {"shop": {"compose.yaml": COMPOSE}})
+    _fetch(tmp_path, store=tmp_path / "probe" / "shop")
+    monkeypatch.setattr(gf, "MAX_STORAGE_BYTES", _stored_bytes(tmp_path / "probe"), raising=False)
+    data = tmp_path / "data"
+    git = gs.GitStacks(_settings({}), None, adopt.AdoptedStacks(data), data)
+    local_fetch = _in_process(_local(origin))
+
+    async def delayed(request, limits):
+        await asyncio.sleep(0.05)
+        return await local_fetch(request, limits)
+
+    git.run_fetch = delayed
+    source = gs.Source(URL, "main", "shop/compose.yaml", None, "")
+    for host in ("h1", "h2"):
+        await git.sources.put(host, "shop", source)
+    results = await asyncio.gather(*(git.fetch(host, "shop", source) for host in ("h1", "h2")), return_exceptions=True)
+    assert sum(isinstance(result, gf.Fetched) for result in results) == 1
+    failures = [result for result in results if isinstance(result, gf.GitProblem)]
+    assert len(failures) == 1 and "Speichergrenze" in str(failures[0])
+    assert _stored_bytes(data / "git") <= gf.MAX_STORAGE_BYTES
+    assert len(list((data / "git").iterdir())) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["lstat", "rglob"])
+async def test_forgetting_another_stack_during_storage_counting_does_not_break_fetch(tmp_path, monkeypatch, operation):
+    from nodvard_deck_ext_docker import adopt
+
+    gs = _gs()
+    origin, data = tmp_path / "origin", tmp_path / "data"
+    commit = _commit(origin, {"shop": {"compose.yaml": COMPOSE}})
+    git = gs.GitStacks(_settings({}), None, adopt.AdoptedStacks(data), data)
+    git.run_fetch = _in_process(_local(origin))
+    source = gs.Source(URL, "main", "shop/compose.yaml", None, "")
+    for host in ("h1", "h2"):
+        await git.sources.put(host, "shop", source)
+    await git.fetch("h2", "shop", source)
+    neighbor = git.repo_dir("h2", "shop")
+    counting, resume = threading.Event(), threading.Event()
+
+    def pause():
+        counting.set()
+        if not resume.wait(10):
+            raise TimeoutError("Vergessen hat das Zählen nicht fortgesetzt")
+
+    original = getattr(Path, operation)
+
+    def interrupted(path, *args, **kwargs):
+        if operation == "lstat" and path == neighbor / "HEAD":
+            pause()
+        if operation == "rglob" and path == neighbor:
+            def entries():
+                paths = original(path, *args, **kwargs)
+                yield next(paths)
+                pause()
+                with os.scandir(path):
+                    pass
+                yield from paths
+
+            return entries()
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, operation, interrupted)
+    fetched = asyncio.create_task(git.fetch("h1", "shop", source))
+    try:
+        assert await asyncio.to_thread(counting.wait, 10)
+        await asyncio.wait_for(git.forget("h2", "shop"), 10)
+        assert git.sources.get("h2", "shop") is None
+        assert not neighbor.exists()
+    finally:
+        resume.set()
+        await asyncio.gather(fetched, return_exceptions=True)
+    result = fetched.result()
+    assert result.commit == commit and result.files["compose.yaml"][1] == COMPOSE
+    assert list(neighbor.parent.iterdir()) == [git.repo_dir("h1", "shop")]
 
 
 def test_private_networks_are_off_unless_switched_on():

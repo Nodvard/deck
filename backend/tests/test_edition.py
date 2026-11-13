@@ -69,5 +69,5 @@ async def test_dock_names_itself_in_the_authenticator_app(client, test_settings,
 def test_setup_code_banner_names_the_edition():
     from nodvard_deck.core import setup_code
 
-    assert "Nodvard Dock – Ersteinrichtung" in setup_code.banner("K7MQ-X2VD-H9PA", "Nodvard Dock")
-    assert "Nodvard Deck – Ersteinrichtung" in setup_code.banner("K7MQ-X2VD-H9PA")
+    assert "Nodvard Dock: Ersteinrichtung" in setup_code.banner("K7MQ-X2VD-H9PA", "Nodvard Dock")
+    assert "Nodvard Deck: Ersteinrichtung" in setup_code.banner("K7MQ-X2VD-H9PA")

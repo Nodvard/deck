@@ -3,6 +3,7 @@ dabei nichts und kein Container wird neu erstellt."""
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 import json
 import logging
@@ -18,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from .capabilities import is_own_container
+from .env_values import valid_env_names
 from .image_apply import MAX_FILES, PROJECT_RE, _valid_path, is_self_image
 from .image_updates import _write_atomic
 from .stacks import NO_FILE, DockerStacks, Stack, StackProblem, compose_argv, first_reason, read_file
@@ -47,9 +49,10 @@ class Adopted:
     config_files: tuple[str, ...]
     env_files: tuple[str, ...]
     adopted_at: str
+    env_names: tuple[str, ...] = ()
 
     def stack(self, project: str) -> Stack:
-        return Stack(project, [], self.working_dir, self.config_files, self.env_files, "compose")
+        return Stack(project, [], self.working_dir, self.config_files, self.env_files, "compose", env_names=self.env_names)
 
     def note(self, stack: Stack) -> str | None:
         """Warum die Übernahme nicht mehr zum laufenden Stack passt, oder `None`."""
@@ -64,6 +67,7 @@ class Adopted:
         return {
             "working_dir": self.working_dir, "config_files": list(self.config_files), "env_files": list(self.env_files),
             "adopted_at": self.adopted_at,
+            **({"env_names": list(self.env_names)} if self.env_names else {}),
         }
 
 
@@ -76,7 +80,10 @@ def _entry(raw: Any) -> Adopted | None:
         return None
     if not all(isinstance(p, str) and _valid_path(p) for p in (working_dir, *files, *env_files)):
         return None
-    return Adopted(working_dir, tuple(files), tuple(env_files), str(raw.get("adopted_at") or ""))
+    names = raw.get("env_names", [])
+    if not valid_env_names(names):
+        return None
+    return Adopted(working_dir, tuple(files), tuple(env_files), str(raw.get("adopted_at") or ""), tuple(names))
 
 
 class StoreProblem(Exception):
@@ -147,7 +154,7 @@ class AdoptedStacks:
     async def add(self, host_id: str, stack: Stack) -> Adopted:
         if stack.files is None:
             raise ValueError(f"Stack ohne lesbare Dateien: {stack.project!r}")
-        entry = Adopted(stack.working_dir, stack.files, stack.env_files, datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        entry = Adopted(stack.working_dir, stack.files, stack.env_files, datetime.now(timezone.utc).isoformat(timespec="seconds"), stack.env_names)
         async with self._lock:
             data = self._read(before_write=True)
             data.setdefault(host_id, {})[stack.project] = entry
@@ -206,7 +213,7 @@ async def problems(ctx: Any, stacks: DockerStacks, host: Any, stack: Stack) -> l
 class _AdoptIn(BaseModel):
     """Die Pfade, die die Prüfung gezeigt hat; übernommen wird nur, wenn der Stack noch genau so läuft."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     working_dir: str = Field(max_length=1024)
     config_files: list[Annotated[str, Field(max_length=1024)]] = Field(max_length=MAX_FILES)
@@ -235,7 +242,11 @@ def adopt_routes(
         except StackProblem as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
-    @router.get("/hosts/{host_id}/stacks/{project}/adopt")
+    @router.get(
+        "/hosts/{host_id}/stacks/{project}/adopt",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409, 502,)},
+    )
     async def adopt_check(host_id: str, project: str) -> dict:
         """Lässt sich der Stack übernehmen? Nur lesend: Gründe dagegen, Ordner und Dateien."""
         host = await docker_host(host_id)
@@ -247,7 +258,11 @@ def adopt_routes(
             "adopted": project in adopted.for_host(host.id),
         }
 
-    @router.post("/hosts/{host_id}/stacks/{project}/adopt")
+    @router.post(
+        "/hosts/{host_id}/stacks/{project}/adopt",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409, 502, 503,)},
+    )
     async def adopt(host_id: str, project: str, body: _AdoptIn, actor: Any = Depends(ctx.api.current_actor)) -> dict:
         """Übernimmt den Stack nach derselben Prüfung und nur mit den Pfaden, die sie gezeigt hat; am Server ändert sich nichts."""
         host = await docker_host(host_id)
@@ -267,7 +282,11 @@ def adopt_routes(
         await _audit(ctx, "docker.stack_adopt", host.id, project, actor, {"working_dir": entry.working_dir, "config_files": list(entry.config_files)})
         return {"project": project, "adopted": True, **entry.to_json()}
 
-    @router.delete("/hosts/{host_id}/stacks/{project}/adopt")
+    @router.delete(
+        "/hosts/{host_id}/stacks/{project}/adopt",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 503,)},
+    )
     async def release(host_id: str, project: str, actor: Any = Depends(ctx.api.current_actor)) -> dict:
         """Vergisst die Übernahme; Stack, Datei und Container bleiben, wie sie sind."""
         host = await docker_host(host_id)

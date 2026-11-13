@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ContainersPage } from "./ContainersPage";
 import { changesText, membersText, type StackOut } from "./Stacks";
@@ -32,7 +32,7 @@ const STACKS: StackOut[] = [
 const requests: string[] = [];
 const bodies: unknown[] = [];
 
-function serve(over: Record<string, (init?: RequestInit) => Response> = {}) {
+function serve(over: Record<string, (init?: RequestInit) => Response | Promise<Response>> = {}) {
   const urls: string[] = [];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -62,6 +62,25 @@ function serve(over: Record<string, (init?: RequestInit) => Response> = {}) {
   }));
   return urls;
 }
+
+function openMore(row: HTMLElement): HTMLDetailsElement {
+  const more = row.querySelector("details")!;
+  if (!more.open) fireEvent.click(within(more).getByText("Mehr"));
+  return more;
+}
+
+function menuAction(row: HTMLElement, name: string) {
+  fireEvent.click(within(openMore(row)).getByRole("button", { name }));
+}
+
+beforeAll(() => {
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value(this: HTMLDialogElement) { this.open = true; } });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value(this: HTMLDialogElement) { this.open = false; this.dispatchEvent(new Event("close")); } });
+});
+afterAll(() => {
+  Reflect.deleteProperty(HTMLDialogElement.prototype, "showModal");
+  Reflect.deleteProperty(HTMLDialogElement.prototype, "close");
+});
 
 beforeEach(() => {
   requests.length = 0;
@@ -103,7 +122,7 @@ describe("Reiter Stacks", () => {
     serve();
     render(<ContainersPage />);
     const shop = await screen.findByTestId("stack-shop");
-    fireEvent.click(within(shop).getByRole("button", { name: "Datei ansehen" }));
+    menuAction(shop, "Datei ansehen");
     const file = await screen.findByTestId("stack-file-shop");
     expect(file.querySelector("pre")?.textContent).toBe("services:\n  web:\n    image: busybox:1.37\n");
     expect(file.textContent).toContain("/opt/stacks/shop/extra.yml");
@@ -119,7 +138,7 @@ describe("Reiter Stacks", () => {
     const compose = "services:\n  web:\n    image: busybox:1.37\n";
     serve({ "/own-templates": () => Response.json({ id: "a1b2c3d4e5f6a7b8", name: "Laden", summary: "", compose, updated_at: "2026-10-30T22:00:00+00:00" }, { status: 201 }) });
     render(<ContainersPage />);
-    fireEvent.click(within(await screen.findByTestId("stack-shop")).getByRole("button", { name: "Datei ansehen" }));
+    menuAction(await screen.findByTestId("stack-shop"), "Datei ansehen");
     const file = await screen.findByTestId("stack-file-shop");
     expect(within(file).queryByRole("button", { name: "Als Vorlage speichern: /opt/stacks/shop/extra.yml" })).toBeNull();
     fireEvent.click(within(file).getByRole("button", { name: "Als Vorlage speichern: /opt/stacks/shop/compose.yaml" }));
@@ -204,7 +223,7 @@ describe("Übernehmen", () => {
     // Ohne Container gibt es nichts, was eine Änderung anwenden könnte.
     expect(leer.textContent).not.toContain("geändert");
     expect(leer.textContent).not.toContain("Nicht geprüft");
-    fireEvent.click(within(leer).getByRole("button", { name: "Übernahme aufheben" }));
+    menuAction(leer, "Übernahme aufheben");
     await waitFor(() => expect(window.__nodvardDeck.confirmDialog).toHaveBeenCalled());
     const question = String((window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mock.calls[0][0]);
     expect(question).toContain("Container bleiben, wie sie sind");
@@ -212,7 +231,7 @@ describe("Übernehmen", () => {
     expect(requests.some((r) => r.startsWith("DELETE"))).toBe(false);
 
     (window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
-    fireEvent.click(within(leer).getByRole("button", { name: "Übernahme aufheben" }));
+    menuAction(leer, "Übernahme aufheben");
     expect(await screen.findByText("Übernahme von „leer“ aufgehoben.")).toBeInTheDocument();
     expect(requests).toContain(`DELETE /api/v1/ext/docker/hosts/h1${adoptUrl("leer")}`);
   });
@@ -223,7 +242,7 @@ describe("Übernehmen", () => {
     const moved = await screen.findByTestId("stack-umgezogen");
     expect(moved.textContent).toContain("Übernimm ihn neu");
     expect(within(moved).getByRole("button", { name: "Neu übernehmen" })).toBeInTheDocument();
-    expect(within(moved).getByRole("button", { name: "Übernahme aufheben" })).toBeInTheDocument();
+    expect(within(openMore(moved)).getByRole("button", { name: "Übernahme aufheben" })).toBeInTheDocument();
     expect(within(moved).queryByText("übernommen")).toBeNull();
   });
 
@@ -249,38 +268,70 @@ describe("Übernehmen", () => {
 });
 
 describe("Stack-Aktionen", () => {
-  it("nur für übernommene Stacks, und nur, was gerade passt", async () => {
+  it.each(["Nodvard Deck", "Nodvard Dock"])("%s zeigt drei Hauptaktionen und den Rest unter Mehr", async (product) => {
+    window.__nodvardDeck.getProductName = () => product;
     serve();
     render(<ContainersPage />);
     const app = await screen.findByTestId("stack-app");
-    expect(within(app).getAllByRole("button").map((b) => b.textContent)).toEqual(
-      ["Datei ansehen", "Bearbeiten", "Aus Git", "Anwenden", "Stoppen", "Herunterfahren", "Images holen", "Übernahme aufheben", "Update", "Sicherungen",
-        "Löschen"],
+    expect(within(app).getAllByRole("button").filter((button) => !button.closest("details")).map((button) => button.textContent)).toEqual(
+      ["Anwenden", "Bearbeiten", "Update"],
     );
-    expect(within(screen.getByTestId("stack-media")).queryByRole("button", { name: "Bearbeiten" })).toBeNull();
-    expect(within(screen.getByTestId("stack-media")).queryByRole("button", { name: "Aus Git" })).toBeNull();
+    const more = within(app).getByTestId("stack-more-app");
+    expect(more).not.toHaveAttribute("open");
+    expect(more.querySelector("summary")).toHaveAttribute("aria-label", "Mehr: Weitere Aktionen für app");
+    openMore(app);
+    expect(within(more).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Datei ansehen", "Aus Git", "Stoppen", "Übernahme aufheben", "Sicherungen", "Löschen",
+    ]);
+    expect(within(app).queryByRole("button", { name: /Herunterfahren|Images holen/ })).toBeNull();
+    expect(within(more).getByRole("button", { name: "Löschen" }).className).toContain("red");
+    const media = screen.getByTestId("stack-media");
+    expect(within(media).getByRole("button", { name: "Übernehmen" })).toBeInTheDocument();
+    expect(within(openMore(media)).getAllByRole("button").map((button) => button.textContent)).toEqual(["Datei ansehen"]);
+    expect(within(media).queryByRole("button", { name: /Anwenden|Bearbeiten|Update/ })).toBeNull();
     const leer = screen.getByTestId("stack-leer");
-    expect(within(leer).queryByRole("button", { name: "Stoppen: leer" })).toBeNull();
-    expect(within(leer).queryByRole("button", { name: "Herunterfahren: leer" })).toBeNull();
+    expect(within(openMore(leer)).queryByRole("button", { name: "Stoppen" })).toBeNull();
     expect(within(leer).getByRole("button", { name: "Anwenden: leer" })).toBeInTheDocument();
-    expect(within(leer).queryByRole("button", { name: "Update" })).toBeNull();
-    expect(within(screen.getByTestId("stack-media")).queryByRole("button", { name: "Anwenden: media" })).toBeNull();
+    expect(within(leer).getByRole("button", { name: "Update" })).toBeInTheDocument();
   });
 
-  it("über die Freigabe, mit Rückfrage und Ergebnis", async () => {
-    (window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+  it.each([
+    ["Nur anhalten", "docker.stack_stop", "Stoppen", "gestoppt"],
+    ["Container entfernen", "docker.stack_down", "Herunterfahren", "heruntergefahren"],
+  ])("Stoppen mit „%s“ geht über die Freigabe", async (choice, action, label, result) => {
     serve({
-      "/actions/docker.stack_down": () => Response.json({ id: "a1", status: "proposed", risk: "high" }, { status: 202 }),
-      "/actions/a1/approve": () => Response.json({ id: "a1", status: "succeeded", result: { output: "Stack „app“ heruntergefahren." } }),
+      [`/actions/${action}`]: () => Response.json({ id: "a1", status: "proposed", risk: action.endsWith("down") ? "high" : "medium" }, { status: 202 }),
+      "/actions/a1/approve": () => Response.json({ id: "a1", status: "succeeded", result: { output: `Stack „app“ ${result}.` } }),
     });
     render(<ContainersPage />);
-    fireEvent.click(within(await screen.findByTestId("stack-app")).getByRole("button", { name: "Herunterfahren: app" }));
-    expect(await screen.findByText("Stack „app“ heruntergefahren.")).toBeInTheDocument();
-    const question = String((window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mock.calls[0][0]);
-    expect(question).toMatch(/^Stack „app“ herunterfahren\? /);
-    expect(question).toContain("Was nur im Container lag und nicht in einem Volume oder Ordner, ist danach weg.");
-    expect(requests).toContain("POST /api/v1/hosts/h1/actions/docker.stack_down");
-    expect(bodies[0]).toEqual({ payload: { project: "app" }, reason: "Stack „app“ über die Docker-Seite: Herunterfahren." });
+    const app = await screen.findByTestId("stack-app");
+    menuAction(app, "Stoppen");
+    const dialog = await screen.findByRole("dialog", { name: "Stack „app“ stoppen" });
+    expect(within(dialog).getByRole("radio", { name: "Nur anhalten" })).toBeChecked();
+    expect(dialog.textContent).toContain("Volumes bleiben");
+    expect(dialog.textContent).toContain("Container");
+    expect(requests.some((r) => r.startsWith("POST"))).toBe(false);
+    expect(within(app).getByTestId("stack-more-app")).not.toHaveAttribute("open");
+    fireEvent.click(within(dialog).getByRole("radio", { name: choice }));
+    if (choice === "Container entfernen") expect(dialog.textContent).toContain("Was nur im Container lag");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stoppen" }));
+    expect(await screen.findByText(`Stack „app“ ${result}.`)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(window.__nodvardDeck.confirmDialog).not.toHaveBeenCalled();
+    expect(requests).toContain(`POST /api/v1/hosts/h1/actions/${action}`);
+    expect(bodies[0]).toEqual({ payload: { project: "app" }, reason: `Stack „app“ über die Docker-Seite: ${label}.` });
+  });
+
+  it("bei gestoppten Containern ist Entfernen vorgewählt, Anhalten gesperrt", async () => {
+    serve({
+      "/stacks/usage": () => Response.json({ usage: {} }),
+      "/stacks": () => Response.json({ stacks: [base({ project: "app", adopted: true, state: "stopped", running: 0, total: 2 })] }),
+    });
+    render(<ContainersPage />);
+    menuAction(await screen.findByTestId("stack-app"), "Stoppen");
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("radio", { name: "Nur anhalten" })).toBeDisabled();
+    expect(within(dialog).getByRole("radio", { name: "Container entfernen" })).toBeChecked();
   });
 
   it("Löschen: der Ordner nur angehakt, mit Warnung, über die Freigabe", async () => {
@@ -294,7 +345,7 @@ describe("Stack-Aktionen", () => {
         output: "Stack „app“ heruntergefahren und gelöscht. Der Ordner /opt/stacks/app ist gelöscht. Die Volumes bleiben; unbenutzte löschst du im Reiter Volumes." } }),
     });
     render(<ContainersPage />);
-    fireEvent.click(within(await screen.findByTestId("stack-app")).getByRole("button", { name: "Löschen" }));
+    menuAction(await screen.findByTestId("stack-app"), "Löschen");
     const panel = await screen.findByTestId("delete-app");
     expect(panel.textContent).toContain("Die Volumes bleiben.");
     expect(within(panel).queryByText(/ein Zurück gibt es nicht/)).toBeNull();
@@ -311,7 +362,7 @@ describe("Stack-Aktionen", () => {
   it("Löschen: ein Ordner, der bleiben muss, lässt sich nicht anhaken", async () => {
     serve({ "/stacks/app/delete": () => Response.json({ folder: "/opt/stacks/app", folder_refusal: "Den Ordner /opt/stacks/app löscht Nodvard Deck nicht: Darin liegt noch ein anderer Stack." }) });
     render(<ContainersPage />);
-    fireEvent.click(within(await screen.findByTestId("stack-app")).getByRole("button", { name: "Löschen" }));
+    menuAction(await screen.findByTestId("stack-app"), "Löschen");
     const panel = await screen.findByTestId("delete-app");
     expect(within(panel).getByRole("checkbox")).toBeDisabled();
     expect(panel.textContent).toContain("Darin liegt noch ein anderer Stack.");
@@ -326,7 +377,7 @@ describe("Stack-Aktionen", () => {
       "/actions/d2/approve": () => Response.json({ id: "d2", status: "failed", result: { error: "Der Stack „app“ ist nicht übernommen." } }),
     });
     render(<ContainersPage />);
-    fireEvent.click(within(await screen.findByTestId("stack-app")).getByRole("button", { name: "Löschen" }));
+    menuAction(await screen.findByTestId("stack-app"), "Löschen");
     const panel = await screen.findByTestId("delete-app");
     fireEvent.click(within(panel).getByRole("button", { name: "Stack löschen" }));
     expect((await within(panel).findByRole("alert")).textContent).toContain("Der Stack „app“ ist nicht übernommen.");
@@ -342,7 +393,7 @@ describe("Stack-Aktionen", () => {
         output: "Stack „app“ heruntergefahren.", error: "Der Ordner /opt/stacks/app ließ sich nicht ganz löschen: Permission denied." } }),
     });
     render(<ContainersPage />);
-    fireEvent.click(within(await screen.findByTestId("stack-app")).getByRole("button", { name: "Löschen" }));
+    menuAction(await screen.findByTestId("stack-app"), "Löschen");
     fireEvent.click(within(await screen.findByTestId("delete-app")).getByRole("button", { name: "Stack löschen" }));
     const warning = await screen.findByRole("alert");
     expect(warning.textContent).toContain("Stack „app“ heruntergefahren.");
@@ -542,23 +593,72 @@ describe("Stack-Aktionen", () => {
     expect(requests.some((r) => r.startsWith("POST"))).toBe(false);
   });
 
-  it("eine Freigabe, die noch aussteht, nennt den Stack", async () => {
+  it("Images holen liegt unter Update und nennt eine ausstehende Freigabe", async () => {
     (window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     (window.__nodvardDeck.hasPermission as ReturnType<typeof vi.fn>).mockImplementation((p: string) => !p.startsWith("actions.approve"));
-    serve({ "/actions/docker.stack_pull": () => Response.json({ id: "a2", status: "proposed", risk: "medium" }, { status: 202 }) });
+    serve({
+      "/stacks/app/update": () => Response.json({ services: [], updates: [], data_store: false, rollback: [] }),
+      "/actions/docker.stack_pull": () => Response.json({ id: "a2", status: "proposed", risk: "medium" }, { status: 202 }),
+    });
     render(<ContainersPage />);
-    fireEvent.click(within(await screen.findByTestId("stack-app")).getByRole("button", { name: "Images holen: app" }));
+    const app = await screen.findByTestId("stack-app");
+    expect(within(openMore(app)).queryByRole("button", { name: /Images holen/ })).toBeNull();
+    fireEvent.click(within(app).getByRole("button", { name: "Update" }));
+    const panel = await screen.findByTestId("update-app");
+    fireEvent.click(within(panel).getByRole("button", { name: "Images holen" }));
     expect(await screen.findByText(/^Stack „app“, Images holen: vorgeschlagen/)).toBeInTheDocument();
     expect(String((window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>).mock.calls[0][0])).toMatch(/^Images für den Stack „app“ neu holen\? /);
+    expect(bodies[0]).toEqual({ payload: { project: "app" }, reason: "Stack „app“ über die Docker-Seite: Images holen." });
   });
 
-  it("nach „Abbrechen“ geht nichts raus", async () => {
-    serve();
+  it("Images holen wartet auch auf eine laufende Aktion eines anderen Stacks", async () => {
+    const confirm = window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>;
+    confirm.mockResolvedValue(true);
+    serve({
+      "/actions/docker.stack_up": () => new Promise<Response>(() => {}),
+      "/stacks/leer/update": () => Response.json({ services: [], updates: [], data_store: false, rollback: [] }),
+    });
     render(<ContainersPage />);
-    fireEvent.click(within(await screen.findByTestId("stack-app")).getByRole("button", { name: "Stoppen: app" }));
-    await waitFor(() => expect(window.__nodvardDeck.confirmDialog).toHaveBeenCalled());
+    fireEvent.click(within(await screen.findByTestId("stack-app")).getByRole("button", { name: "Anwenden: app" }));
+    await waitFor(() => expect(requests).toContain("POST /api/v1/hosts/h1/actions/docker.stack_up"));
+    fireEvent.click(within(screen.getByTestId("stack-leer")).getByRole("button", { name: "Update" }));
+    const panel = await screen.findByTestId("update-leer");
+    const pull = within(panel).getByRole("button", { name: "Images holen" });
+    expect(pull).toBeDisabled();
+    fireEvent.click(pull);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(requests.filter((request) => request.startsWith("POST"))).toEqual(["POST /api/v1/hosts/h1/actions/docker.stack_up"]);
+  });
+
+  it("Images holen bleibt ohne Container, beim Laden und bei einem Ladefehler erreichbar", async () => {
+    const confirm = window.__nodvardDeck.confirmDialog as ReturnType<typeof vi.fn>;
+    confirm.mockResolvedValue(false);
+    let answer!: (response: Response) => void;
+    serve({ "/stacks/leer/update": () => new Promise<Response>((resolve) => { answer = resolve; }) });
+    render(<ContainersPage />);
+    const leer = await screen.findByTestId("stack-leer");
+    fireEvent.click(within(leer).getByRole("button", { name: "Update" }));
+    expect(within(leer).getByText("Lade die Übersicht …")).toBeInTheDocument();
+    fireEvent.click(within(leer).getByRole("button", { name: "Images holen" }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledOnce());
+    await act(async () => { answer(Response.json({ detail: "Server nicht erreichbar" }, { status: 502 })); });
+    expect(await within(leer).findByText(/Server nicht erreichbar/)).toBeInTheDocument();
+    fireEvent.click(within(leer).getByRole("button", { name: "Images holen" }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(2));
     expect(requests.some((r) => r.startsWith("POST"))).toBe(false);
   });
+
+  it.each(["Abbrechen", "Escape"])("Stoppen mit „%s“ löst keine Aktion aus", async (cancel) => {
+    serve();
+    render(<ContainersPage />);
+    menuAction(await screen.findByTestId("stack-app"), "Stoppen");
+    const dialog = await screen.findByRole("dialog");
+    if (cancel === "Escape") fireEvent(dialog, new Event("cancel", { cancelable: true }));
+    else fireEvent.click(within(dialog).getByRole("button", { name: "Abbrechen" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(requests.some((r) => r.startsWith("POST"))).toBe(false);
+  });
+
 });
 
 describe("Bearbeiten", () => {
@@ -588,11 +688,11 @@ describe("Bearbeiten", () => {
     const app = await screen.findByTestId("stack-app");
     fireEvent.click(within(app).getByRole("button", { name: "Bearbeiten" }));
     fireEvent.change(await screen.findByRole("textbox", { name: "Inhalt von compose.yaml" }), { target: { value: "geändert\n" } });
-    fireEvent.click(within(app).getByRole("button", { name: "Datei ansehen" }));
+    menuAction(app, "Datei ansehen");
     await waitFor(() => expect(confirm).toHaveBeenCalledWith("Deine Änderung im Editor ist noch nicht gespeichert. Verwerfen?", { confirmLabel: "Verwerfen" }));
     expect(screen.getByTestId("stack-editor-app")).toBeInTheDocument();
     confirm.mockResolvedValue(true);
-    fireEvent.click(within(app).getByRole("button", { name: "Datei ansehen" }));
+    menuAction(app, "Datei ansehen");
     await waitFor(() => expect(screen.queryByTestId("stack-editor-app")).toBeNull());
   });
 });

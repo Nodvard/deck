@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
-from ..core import bootstate, rate_limit, updates
+from ..core import bootstate, rate_limit, updater_signing, updates
 from ..core import updater_client as client
 from ..core.backup import premigrate
 from ..core.backup import restore as _restore
@@ -282,7 +282,14 @@ def _hit_window() -> None:
 def _write(settings: Settings, *, action: str, version: str, digest: str | None = None,
            grant: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
-        return client.write_request(settings.updater_dir, action=action, version=version, digest=digest, grant=grant)
+        key = updater_signing.load_key(settings.data_dir)
+    except (OSError, ValueError):
+        _request_window.reset()
+        raise HelperRefused(409, "signature_required", "Der Schlüssel für Update-Anforderungen fehlt oder ist ungültig. "
+                            "Richte den Update-Helfer erneut ein.") from None
+    try:
+        return client.write_request(settings.updater_dir, action=action, version=version, digest=digest, grant=grant,
+                                    signing_key=key)
     except client.ChannelError as exc:
         _request_window.reset()  # es wurde nichts angefordert
         raise HelperRefused(409, "channel_unsafe", "Der Kanal zum Update-Helfer ist nicht sicher eingerichtet.",
@@ -326,9 +333,8 @@ def _checked_digest(doc: dict[str, Any], cached: dict[str, Any]) -> str | None:
 
 
 def _released_grant(settings: Settings, doc: dict[str, Any], version: str,
-                    cached: dict[str, Any]) -> dict[str, Any] | None:
-    """Die Freigabe, die mitgeht (`None` bei einem Helfer, der sie nicht prüft), sonst `409` `not_released` bzw.
-    `no_digest`."""
+                    cached: dict[str, Any]) -> dict[str, Any]:
+    """Passende Freigabe für einen Helfer mit signierten Anforderungen."""
     digest = cached.get("latest_digest")
     if not isinstance(digest, str) or not client.DIGEST_RE.fullmatch(digest):
         raise HelperRefused(409, "no_digest", NO_DIGEST_TEXT)
@@ -338,7 +344,10 @@ def _released_grant(settings: Settings, doc: dict[str, Any], version: str,
                             f"Für Version {version} liegt noch keine gültige Freigabe vor, oder sie ließ sich bei der "
                             "Update-Suche nicht abrufen. Suche erneut nach Updates; von Hand lässt sich die Version "
                             "schon einspielen.")
-    return grant if client.SIGNED_REQUEST_VERSION in doc["request_versions"] else None
+    if client.AUTHENTICATED_REQUEST_VERSION not in doc["request_versions"]:
+        raise HelperRefused(409, "signature_required", "Dieser Update-Helfer prüft keine signierten Anforderungen. "
+                            "Aktualisiere ihn zuerst von Hand.")
+    return grant
 
 
 async def apply(session: AsyncSession, settings: Settings, *, version: str) -> dict[str, Any]:
@@ -395,6 +404,9 @@ async def rollback(settings: Settings, *, accept_data_loss: bool) -> dict[str, A
         previous = doc["previous"]
         if previous is None or previous["until"] <= time.time():
             raise HelperRefused(409, "no_previous", "Es gibt keine Vorgängerversion, auf die du zurück kannst.")
+        if client.AUTHENTICATED_REQUEST_VERSION not in doc["request_versions"]:
+            raise HelperRefused(409, "signature_required", "Dieser Update-Helfer prüft keine signierten Anforderungen. "
+                                "Aktualisiere ihn zuerst von Hand.")
         to_version = previous["version"]
         current = doc["target"]["current_version"] or updates.running_version(settings)
         await asyncio.to_thread(_require_no_pending, settings)

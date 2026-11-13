@@ -16,8 +16,10 @@ Hier steht alles, was der Helfer *entscheidet*, bevor er etwas verändert:
 * **Signierte Anforderung (`v: 2`, nur `update`):** dazu Pflicht `digest`, die Freigabe `grant` (höchstens
   `GRANT_MAX_S` gültig) und ihre Ed25519-Signatur `sig` über `dumps(grant)`, geprüft gegen die Schlüssel in
   `trust.py`. Die billigen Prüfungen in dieser Reihenfolge: `unknown_key`, `grant_mismatch`, `grant_expired`; die
-  Rechnung (`bad_signature`) kommt zuletzt und getrennt (`check_signature`). Erst wenn `UPDATE_REQUIRES_SIGNATURE`
-  gilt, lehnt der Helfer ein Update mit `v: 1` ab (`signature_required`); der Rückweg bleibt `v: 1`.
+  Rechnung (`bad_signature`) kommt zuletzt und getrennt (`check_signature`). Updates ohne Freigabe werden
+  abgelehnt (`signature_required`). `v: 3` bindet zusätzlich die gesamte Anforderung an den Installationsschlüssel
+  (`request_key_id`, `request_sig`), beim Rückweg ohne Freigabe. Der Helfer führt nur `v: 3` aus
+  (`require_authenticated`), Update wie Rückweg; `v: 1` und `v: 2` lehnt er mit `signature_required` ab.
 * **Grenzen:** eine angenommene Aktion je 10 min, 24 h kein Update auf eine Version, von der aus
   zurückgegangen wurde, verarbeitete IDs 1 h gesperrt, Mindestversion `MIN_VERSION`.
 * **Rückweg-Slot:** genau ein Slot, nur für genau den installierten Container und genau die Version
@@ -55,13 +57,14 @@ können eine Vorher-Kopie nicht selbst einspielen. Bis das Release feststeht, be
 
 PROTOCOL = 1
 """Version des Status (`status.json`, Feld `proto`)."""
-REQUEST_VERSIONS = (1, 2)
-"""Versionen der Anforderung, die dieser Helfer versteht (Feld `v`); `2` ist ein signiertes Update."""
+REQUEST_VERSIONS = (1, 2, 3)
+"""Bekannte Formate (Feld `v`): `1` Grundformat, `2` mit Freigabe, `3` zusätzlich mit Installationssignatur.
+Ausgeführt wird nur `3` (`require_authenticated`); die Liste im Status bleibt für ältere Dashboards gleich."""
 REQUEST_OPTIONS = ("digest",)
 """Zusätzliche Felder der Anforderung, die dieser Helfer versteht; der Status nennt sie (`request_options`)."""
 
-UPDATE_REQUIRES_SIGNATURE = False
-"""Ob ein Update nur noch signiert (`v: 2`) angenommen wird; sonst `signature_required`."""
+UPDATE_REQUIRES_SIGNATURE = True
+"""Updates brauchen eine signierte Release-Freigabe."""
 GRANT_FORMAT = 1
 """Version der Freigabe (Feld `fmt`)."""
 GRANT_MAX_S = 366 * 24 * 3600
@@ -167,13 +170,13 @@ eine spätere Protokoll-Funktion, die ein älterer Helfer nicht kennt, beantwort
 SIGNATURE_REQUIRED = "signature_required"
 """Ein Update ohne Signatur, aber dieser Helfer verlangt eine (`UPDATE_REQUIRES_SIGNATURE`)."""
 UNKNOWN_KEY = "unknown_key"
-"""Die Freigabe nennt einen Schlüssel, der nicht in `trust.TRUSTED_KEYS` steht."""
+"""Ein Schlüssel ist nicht als Release- oder Installationsschlüssel hinterlegt."""
 GRANT_MISMATCH = "grant_mismatch"
 """Die Freigabe gilt für ein anderes Repository, eine andere Version oder einen anderen Digest."""
 GRANT_EXPIRED = "grant_expired"
 """Die Freigabe ist abgelaufen oder erst in der Zukunft ausgestellt."""
 BAD_SIGNATURE = "bad_signature"
-"""Die Signatur passt nicht zu Freigabe und Schlüssel."""
+"""Eine Signatur passt nicht zu Inhalt und Schlüssel."""
 REQUEST_CODES = (
     BAD_REQUEST, EXPIRED, REPLAY, BUSY, RATE_LIMITED, BLOCKED_VERSION, NOT_NEWER, TAG_NOT_ON_VERSION,
     PLATFORM_MISMATCH, PULL_FAILED, NO_PREVIOUS, PREVIOUS_MISMATCH, NOT_IMPLEMENTED, DIGEST_CHANGED,
@@ -507,6 +510,11 @@ def dumps(obj: Any) -> bytes:
 REQUEST_KEYS = frozenset({"v", "id", "action", "version", "created_at"})
 SIGNED_REQUEST_KEYS = REQUEST_KEYS | {"digest", "grant", "sig"}
 """Genau diese Schlüssel hat eine Anforderung mit `v: 2`."""
+AUTHENTICATED_REQUEST_KEYS = SIGNED_REQUEST_KEYS | {"request_key_id", "request_sig"}
+"""Genau diese Schlüssel hat ein Update mit `v: 3`."""
+AUTHENTICATED_ROLLBACK_KEYS = REQUEST_KEYS | {"request_key_id", "request_sig"}
+"""Genau diese Schlüssel hat ein Rückweg mit `v: 3` (ohne Freigabe)."""
+REQUEST_DOMAIN = b"nodvard-deck-update-request-v1\0"
 GRANT_KEYS = frozenset({"fmt", "repo", "version", "digest", "key_id", "issued_at", "expires_at"})
 
 
@@ -547,8 +555,7 @@ def _grant_from(obj: object) -> Grant:
 
 @dataclass(frozen=True)
 class Request:
-    """Eine geprüfte Anforderung aus `requests/<id>.json`; `digest` nur bei einem Update, `grant` und `sig` nur bei
-    `v: 2`."""
+    """Anforderung mit Release-Freigabe und bei `v: 3` eigener Signatur."""
 
     v: int
     id: str
@@ -558,6 +565,17 @@ class Request:
     digest: str | None = None
     grant: Grant | None = None
     sig: str | None = None
+    request_key_id: str | None = None
+    request_sig: str | None = None
+
+    def signed_bytes(self) -> bytes:
+        """Die Bytes, über die `request_sig` geht: die ganze Anforderung ohne `request_sig`, kanonisch."""
+        if self.grant is None:
+            obj = {key: getattr(self, key) for key in AUTHENTICATED_ROLLBACK_KEYS - {"request_sig"}}
+        else:
+            obj = {key: getattr(self, key) for key in AUTHENTICATED_REQUEST_KEYS - {"request_sig", "grant"}}
+            obj["grant"] = loads_strict(self.grant.signed_bytes(), max_bytes=REQUEST_MAX_BYTES)
+        return REQUEST_DOMAIN + dumps(obj)
 
 
 def _request_from(raw: bytes, file_id: str | None) -> Request:
@@ -571,11 +589,23 @@ def _request_from(raw: bytes, file_id: str | None) -> Request:
     if v == 1:
         if not REQUEST_KEYS <= set(obj) <= REQUEST_KEYS | set(REQUEST_OPTIONS):
             raise Refusal(BAD_REQUEST)
-    elif v == 2:
-        if set(obj) != SIGNED_REQUEST_KEYS or obj["action"] != "update":
+    elif v == 3 and obj.get("action") == "rollback":
+        if set(obj) != AUTHENTICATED_ROLLBACK_KEYS:
+            raise Refusal(BAD_REQUEST)
+        if (not isinstance(obj["request_key_id"], str) or not KEY_ID_RE.fullmatch(obj["request_key_id"])
+                or not isinstance(obj["request_sig"], str) or not SIGNATURE_RE.fullmatch(obj["request_sig"])):
+            raise Refusal(BAD_REQUEST)
+    elif v in (2, 3):
+        expected = SIGNED_REQUEST_KEYS if v == 2 else AUTHENTICATED_REQUEST_KEYS
+        if set(obj) != expected or obj["action"] != "update":
             raise Refusal(BAD_REQUEST)
         grant, sig = _grant_from(obj["grant"]), obj["sig"]
         if not isinstance(sig, str) or not SIGNATURE_RE.fullmatch(sig):
+            raise Refusal(BAD_REQUEST)
+        if v == 3 and (not isinstance(obj["request_key_id"], str)
+                       or not KEY_ID_RE.fullmatch(obj["request_key_id"])
+                       or not isinstance(obj["request_sig"], str)
+                       or not SIGNATURE_RE.fullmatch(obj["request_sig"])):
             raise Refusal(BAD_REQUEST)
     else:
         raise Refusal(BAD_REQUEST)
@@ -592,7 +622,7 @@ def _request_from(raw: bytes, file_id: str | None) -> Request:
     if not _is_int(created_at):
         raise Refusal(BAD_REQUEST)
     return Request(v=v, id=rid, action=action, version=version, created_at=created_at, digest=digest, grant=grant,
-                   sig=sig)
+                   sig=sig, request_key_id=obj.get("request_key_id"), request_sig=obj.get("request_sig"))
 
 
 def check_grant(
@@ -612,7 +642,7 @@ def check_grant(
 
 
 def check_signature(request: Request, *, keys: tuple[trust.TrustedKey, ...]) -> None:
-    """Rechnet die Ed25519-Signatur einer Anforderung mit `v: 2` nach, sonst `bad_signature`."""
+    """Prüft die Ed25519-Signatur der Release-Freigabe."""
     grant, sig = request.grant, request.sig
     if grant is None or sig is None:
         raise ValueError("check_signature nur fuer v: 2")
@@ -624,8 +654,24 @@ def check_signature(request: Request, *, keys: tuple[trust.TrustedKey, ...]) -> 
 
 
 def request_versions(keys: tuple[trust.TrustedKey, ...]) -> tuple[int, ...]:
-    """Was der Status nennt: `2` nur mit mindestens einem vertrauten Schlüssel, sonst lehnte jede `v: 2` ab."""
+    """Freigaben und signierte Anforderungen nur mit hinterlegten Release-Schlüsseln."""
     return REQUEST_VERSIONS if keys else (1,)
+
+
+def require_authenticated(request: Request) -> None:
+    """Der Helfer führt nur Anforderungen mit `v: 3` aus, Update wie Rückweg; sonst `signature_required`."""
+    if request.v != 3:
+        raise Refusal(SIGNATURE_REQUIRED)
+
+
+def check_request_signature(request: Request, public: bytes) -> None:
+    """Prüft `request_sig` gegen den Installationsschlüssel aus `/state` (`request-key.pub`)."""
+    if request.v != 3 or request.request_sig is None:
+        raise Refusal(SIGNATURE_REQUIRED)
+    if request.request_key_id != trust.key_id(public) or not ed25519.valid_public_key(public):
+        raise Refusal(UNKNOWN_KEY)
+    if not ed25519.verify(public, request.signed_bytes(), bytes.fromhex(request.request_sig)):
+        raise Refusal(BAD_SIGNATURE)
 
 
 def parse_request(
@@ -636,10 +682,9 @@ def parse_request(
     keys: tuple[trust.TrustedKey, ...] = trust.TRUSTED_KEYS,
     repository: str = REPOSITORY,
 ) -> Request:
-    """Prüft eine Anforderung vollständig, samt Signatur, und gibt sie zurück, sonst `Refusal` (Regeln im Kopf des
-    Moduls); die Ausnahme gilt nur für diese eine Anforderung."""
+    """Liest die Anforderung und prüft die Release-Signatur; die eigene Signatur prüft `check_request_signature`."""
     request = read_request(raw, now=now, file_id=file_id, keys=keys, repository=repository)
-    if request.v == 2:
+    if request.grant is not None:
         check_signature(request, keys=keys)
     return request
 
@@ -664,7 +709,7 @@ def read_request(
         raise Refusal(BAD_REQUEST)
     if request.created_at < now_s - REQUEST_MAX_AGE_S:
         raise Refusal(EXPIRED)
-    if request.v == 2:
+    if request.grant is not None:
         check_grant(request, now=now, keys=keys, repository=repository)
     elif request.action == "update" and UPDATE_REQUIRES_SIGNATURE:
         raise Refusal(SIGNATURE_REQUIRED)

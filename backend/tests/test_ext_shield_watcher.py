@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from nodvard_deck.ext.context import ExecHandle, _PermissionChecker
 
 SHIELD_SRC = Path(__file__).resolve().parents[2] / "extensions" / "shield" / "src"
 if str(SHIELD_SRC) not in sys.path:
@@ -41,8 +42,9 @@ class _FakeHostsHandle:
         return self._hosts
 
 
-class _FakeExecHandle:
+class _FakeExecHandle(ExecHandle):
     def __init__(self, outputs: dict, inspect: dict | None = None) -> None:
+        super().__init__(_PermissionChecker("shield", ["hosts.read", "hosts.execute"]), settings=None)
         self._outputs = outputs
         self._inspect = inspect
         self.commands: list[str] = []
@@ -65,6 +67,31 @@ class _FakeCtx:
 
 def _ps_line(name: str, state: str, status: str) -> str:
     return f"{name}|{state}|{status}"
+
+
+@pytest.mark.asyncio
+async def test_watcher_ticks_stop_logging_in_after_three_rejections(db_session, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from nodvard_deck.core import ssh
+
+    connect = AsyncMock(side_effect=ssh.SshAuthError("abgelehnt"))
+    monkeypatch.setattr(ssh, "connect", connect)
+    pool = ssh.SshPool()
+    host = _FakeHost("h1", "docker")
+    ctx = _FakeCtx(settings={}, hosts=[host], outputs={})
+
+    async def run(host, command, *, timeout_s):
+        target = ssh.ConnectionTarget(host.id, "127.0.0.1", 22, "deck", "ssh_password", "wrong")
+        await pool.get(db_session, target, credential_id="c1")
+
+    ctx.exec.run = run
+    on_transition = AsyncMock()
+    watcher = DockerWatcher(ctx, on_transition=on_transition)
+    for _ in range(20):
+        await watcher.tick()
+    assert connect.await_count == 3
+    on_transition.assert_not_awaited()
 
 
 @pytest.mark.asyncio

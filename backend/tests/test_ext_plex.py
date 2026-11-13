@@ -1281,6 +1281,169 @@ async def test_the_server_vanishing_after_the_first_answer_is_unreachable(client
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("refresh", [False, True], ids=["automatisch", "aktualisieren"])
+@pytest.mark.parametrize(
+    ("fault", "state", "fragment", "label", "tone"),
+    [
+        ("abbruch", "unreachable", "ist nicht erreichbar", "nicht erreichbar", "danger"),
+        ("zeitüberschreitung", "unreachable", "Zeitüberschreitung", "nicht erreichbar", "danger"),
+        ("falsche-antwort", "error", "nicht das erwartete Format", "Fehler", "warn"),
+        ("leere-antwort", "error", "nicht das erwartete Format", "Fehler", "warn"),
+    ],
+)
+async def test_wackeltest_replaces_old_data_and_recovers_without_reconfiguration(
+    client, db_session, test_settings, monkeypatch, caplog, refresh, fault, state, fragment, label, tone
+):
+    """Gesund, gestört, wieder verbunden: Seite und Kachel folgen demselben Zwischenspeicher."""
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection())
+    now = [1000.0]
+    _service()._clock = lambda: now[0]
+
+    healthy = await _overview(client, headers)
+    assert _only(healthy)["state"] == "ok"
+    assert healthy["summary"] == {"connections": 1, "playing": 2, "transcoding": 1}
+    healthy_widget = await _widget(client, headers)
+    assert healthy_widget["data"][-1]["label"] == "2 laufen"
+    assert sorted(fake.paths()) == ALL_PATHS
+    before_failure = len(fake.requests)
+
+    stream_closed = []
+    timeout_cancelled = []
+    loop = asyncio.get_running_loop()
+    loop_now = [loop.time()]
+
+    async def broken_body():
+        try:
+            yield b'{"MediaContainer":'
+            if fault == "abbruch":
+                raise httpx.ReadError(f"Verbindung abgebrochen: {TOKEN}")
+            # Erst im laufenden Antwortstrom vergeht die Zeit. Fällige Timer kommen vor der Antwort dran.
+            loop_now[0] += transport.TOTAL_TIMEOUT_S + 1
+            reply = asyncio.Event()
+            loop.call_later(0, reply.set)
+            try:
+                await reply.wait()
+            except asyncio.CancelledError:
+                timeout_cancelled.append(True)
+                raise
+        finally:
+            stream_closed.append(True)
+
+    def fail(request: httpx.Request) -> httpx.Response:
+        if fault in ("abbruch", "zeitüberschreitung"):
+            return httpx.Response(200, content=broken_body())
+        if fault == "falsche-antwort":
+            return httpx.Response(200, json={"unerwartet": TOKEN})
+        return httpx.Response(200, content=b"")
+
+    fake.overrides["/"] = fail
+    assert await _overview(client, headers) == healthy
+    assert len(fake.requests) == before_failure, "vor Ablauf der Frist gilt noch der letzte gelesene Zustand"
+
+    async def read_again():
+        if not refresh:
+            now[0] += plex_service.CACHE_TTL_S + 1
+        if fault == "zeitüberschreitung":
+            loop_now[0] = loop.time()
+            # Nur die Uhr ersetzen: Die Frist und das Abbrechen der Anfrage bleiben echt.
+            with monkeypatch.context() as clock:
+                clock.setattr(loop, "time", lambda: loop_now[0])
+                return await _overview(client, headers, "?refresh=true" if refresh else "")
+        return await asyncio.wait_for(_overview(client, headers, "?refresh=true" if refresh else ""), 5)
+
+    failed = await read_again()
+    connection = _only(failed)
+    assert connection["state"] == state and fragment in connection["message"]
+    assert all(connection[key] is None for key in ("server_name", "version", "playbacks", "playback_count", "libraries", "latest"))
+    assert connection["problems"] == []
+    assert failed["summary"] == {"connections": 1, "playing": 0, "transcoding": 0}
+    assert fake.paths()[before_failure:] == ["/"], "nach dem Fehler helfen keine weiteren Anfragen"
+    if fault in ("abbruch", "zeitüberschreitung"):
+        assert stream_closed == [True], "auch die unterbrochene Antwort wird geschlossen"
+    if fault == "zeitüberschreitung":
+        assert timeout_cancelled == [True], "die Gesamtfrist bricht die laufende Antwort ab"
+    failed_widget = await _widget(client, headers)
+    assert failed_widget["data"] == [{
+        "title": f"pl: {label}", "subtitle": connection["message"], "label": label, "tone": tone,
+    }]
+    assert failed_widget["meta"] == failed["summary"]
+    before_recovery = len(fake.requests)
+
+    del fake.overrides["/"]
+    fake.root["MediaContainer"]["friendlyName"] = "Wieder verbunden"
+    fake.sessions = _sessions(_session("lea", "Neuer Film"))
+    assert await _overview(client, headers) == failed
+    assert await _widget(client, headers) == failed_widget
+    assert len(fake.requests) == before_recovery, "auch ein Fehler bleibt nur bis zum Ablauf im Zwischenspeicher"
+
+    recovered = await read_again()
+    connection = _only(recovered)
+    assert (connection["state"], connection["message"], connection["problems"]) == ("ok", None, [])
+    assert connection["server_name"] == "Wieder verbunden"
+    assert [p["title"] for p in connection["playbacks"]] == ["Neuer Film"]
+    assert connection["playback_count"] == 1 and connection["libraries"] and connection["latest"]
+    assert recovered["summary"] == {"connections": 1, "playing": 1, "transcoding": 0}
+    recovered_widget = await _widget(client, headers)
+    assert [row["title"] for row in recovered_widget["data"]] == ["Neuer Film", "Plex 1.41.3.9314-a0bfb8370"]
+    assert recovered_widget["data"][-1]["label"] == "1 läuft"
+    assert all(row["tone"] == "good" for row in recovered_widget["data"])
+    assert recovered_widget["meta"] == recovered["summary"]
+    assert sorted(fake.paths()[before_recovery:]) == ALL_PATHS
+    assert await _overview(client, headers) == recovered
+    assert len(fake.requests) == before_recovery + len(ALL_PATHS), "Seite und Kachel teilen auch den wiederhergestellten Zustand"
+    assert TOKEN not in json.dumps([healthy, healthy_widget, failed, failed_widget, recovered, recovered_widget]) + caplog.text
+    assert "Traceback" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_wackeltest_a_lost_session_stream_drops_old_playbacks_and_recovers(client, db_session, test_settings):
+    """Ein Abbruch nach gültiger Serverantwort lässt die übrigen Abschnitte lesbar."""
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection())
+    now = [1000.0]
+    _service()._clock = lambda: now[0]
+    healthy = await _overview(client, headers)
+    assert _only(healthy)["playback_count"] == 2
+    assert len((await _widget(client, headers))["data"]) == 3
+    before_failure = len(fake.requests)
+
+    async def broken_sessions():
+        yield b'{"MediaContainer":{"Metadata":['
+        raise httpx.ReadError("Verbindung beim Lesen der Wiedergaben abgebrochen")
+
+    fake.overrides["/status/sessions"] = lambda request: httpx.Response(200, content=broken_sessions())
+    fake.root["MediaContainer"]["friendlyName"] = "Neue Serverantwort"
+    fake.counts["1"]["MediaContainer"]["totalSize"] = 483
+    failed = await _overview(client, headers, "?refresh=true")
+    connection = _only(failed)
+    assert (connection["state"], connection["message"], connection["server_name"]) == ("ok", None, "Neue Serverantwort")
+    assert connection["playbacks"] is None and connection["playback_count"] is None
+    assert connection["libraries"][0]["count"] == 483 and connection["latest"]
+    assert len(connection["problems"]) == 1 and connection["problems"][0].startswith("Laufende Wiedergaben:")
+    assert "nicht erreichbar" in connection["problems"][0]
+    assert failed["summary"] == {"connections": 1, "playing": 0, "transcoding": 0}
+    assert fake.paths()[before_failure] == "/" and sorted(fake.paths()[before_failure:]) == ALL_PATHS
+    rows = (await _widget(client, headers))["data"]
+    assert len(rows) == 1 and (rows[0]["label"], rows[0]["tone"]) == ("unvollständig", "warn")
+    assert "Wiedergaben nicht lesbar" in rows[0]["subtitle"] and "483 Filme" in rows[0]["subtitle"]
+    assert len(fake.requests) == before_failure + len(ALL_PATHS), "die Kachel zeigt den neu gelesenen Teilzustand"
+
+    del fake.overrides["/status/sessions"]
+    fake.sessions = _sessions(_session("lea", "Wieder laufender Film"))
+    now[0] += plex_service.CACHE_TTL_S + 1
+    recovered = await _overview(client, headers)
+    connection = _only(recovered)
+    assert (connection["state"], connection["message"], connection["problems"], connection["playback_count"]) == ("ok", None, [], 1)
+    assert [p["title"] for p in connection["playbacks"]] == ["Wieder laufender Film"]
+    assert connection["libraries"][0]["count"] == 483
+    rows = (await _widget(client, headers))["data"]
+    assert [row["label"] for row in rows] == ["läuft", "1 läuft"]
+    assert all(row["tone"] == "good" and "Wiedergaben nicht lesbar" not in row["subtitle"] for row in rows)
+    assert len(fake.requests) == before_failure + 2 * len(ALL_PATHS)
+
+
+@pytest.mark.asyncio
 async def test_a_text_that_quotes_the_token_never_reaches_the_user(client, db_session, test_settings, caplog):
     caplog.set_level(logging.DEBUG)
     headers, fake = await _enable(client, db_session, test_settings)

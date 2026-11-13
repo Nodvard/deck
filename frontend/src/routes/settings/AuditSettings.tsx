@@ -1,3 +1,4 @@
+import { CARD_BODY, CARD_CELL, CARD_CELL_PLAIN, CARD_HEAD, CARD_ROW, CARD_TABLE } from "../../components/cardTable";
 /**
  * Protokoll: alle sicherheitsrelevanten Vorgänge (Anmeldungen, Freigaben,
  * ausgeführte Befehle, Einstellungs-Änderungen) mit Filter und Export.
@@ -143,12 +144,15 @@ const ACTION_LABELS: Record<string, string> = {
   "host.known_key_pinned": "Server-Schlüssel bestätigt",
   "host.known_key_forgotten": "Server-Schlüssel vergessen",
   "host.connection_checked": "Verbindung geprüft",
+  "host.ssh_retry_reset": "Anmeldepause aufgehoben",
   "host.setup_with_password": "Server mit Passwort einrichten",
   "host.group_changed": "Gruppe geändert",
   "shield.finding_ignored": "Fund ignoriert",
   "shield.finding_reopened": "Fund wieder beachtet",
   "shield.malware_found": "Schadsoftware gefunden",
   "shield.quarantine": "Datei in Quarantäne verschoben",
+  "shield.ssh_hardening": "SSH-Härtung geändert",
+  "shield.fail2ban_config": "Fail2ban-Einstellungen geändert",
   "shield.guard_bruteforce": "Angriff auf SSH erkannt",
   "shield.guard_new_login_ip": "Anmeldung von neuer Adresse bemerkt",
   "shield.guard_new_port": "Neuer offener Port bemerkt",
@@ -179,8 +183,7 @@ const ACTION_LABELS: Record<string, string> = {
   "notifications.deleted": "Meldung gelöscht",
 };
 
-/** Bis 0.6 hieß Nodvard Shield `nexus_soc`; ältere Einträge tragen das noch als Vorsilbe und bleiben bis zum Ende der
- * Aufbewahrungsfrist im Protokoll stehen. Sie bekommen dieselbe Beschriftung wie die neuen (`shield.<Vorgang>`). */
+/** Ältere Protokolleinträge behalten ihre Vorsilbe und bekommen die aktuelle Beschriftung. */
 const LEGACY_ACTION_PREFIXES: Record<string, string> = { "nexus_soc.": "shield." };
 
 /** Die deutsche Beschriftung eines Vorgangs; `undefined`, wenn es keine gibt (dann zeigt die Tabelle den Namen roh).
@@ -358,9 +361,9 @@ export function AuditSettings(): JSX.Element {
         Automatische Zugriffe von Erweiterungen ausblenden
       </div>
 
-      <div className="panel overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-white/[0.06] text-xs text-white/40">
+      <div className="panel p-3 sm:p-0">
+        <table role="table" className={`${CARD_TABLE} text-left text-left text-sm`}>
+          <thead role="rowgroup" className={`${CARD_HEAD} border-b border-white/[0.06] text-xs text-white/40`}>
             <tr>
               <th className="w-6 px-3 py-2.5" />
               <th className="px-3 py-2.5 font-medium">Zeitpunkt</th>
@@ -370,24 +373,24 @@ export function AuditSettings(): JSX.Element {
               <th className="px-3 py-2.5 font-medium">Ergebnis</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/[0.04]">
+          <tbody role="rowgroup" className={CARD_BODY}>
             {visible.map((e) => (
               <Fragment key={e.id}>
-                <tr className="cursor-pointer hover:bg-white/[0.03]" onClick={() => setOpen(open === e.id ? null : e.id)}>
-                  <td className="px-3 py-2 text-white/40">{open === e.id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</td>
-                  <td className="whitespace-nowrap px-3 py-2 tabular-nums text-white/60">{new Date(e.ts).toLocaleString("de-DE")}</td>
-                  <td className="px-3 py-2">
+                <tr role="row" className={`${CARD_ROW} cursor-pointer hover:bg-white/[0.03]`} onClick={() => setOpen(open === e.id ? null : e.id)}>
+                  <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-2 text-white/40`}>{open === e.id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</td>
+                  <td role="cell" data-label="Zeitpunkt" className={`${CARD_CELL} min-w-0 py-1 [overflow-wrap:anywhere] sm:whitespace-nowrap sm:px-3 sm:py-2 tabular-nums text-white/60`}>{new Date(e.ts).toLocaleString("de-DE")}</td>
+                  <td data-label="Vorgang" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-2`}>
                     {/* Der technische Name (`login.succeeded`) steht nur noch im Tooltip und in den Einzelheiten. */}
                     <span className="block" title={auditActionLabel(e.action) ? e.action : undefined}>{auditActionLabel(e.action) ?? e.action}</span>
                   </td>
-                  <td className="px-3 py-2 text-white/70">{actorName(e)}</td>
-                  <td className="max-w-[16rem] truncate px-3 py-2 text-white/60" title={e.target_id ?? undefined}>{targetText(e, { users: userNames, hosts: hostNames, extension: extensionLabel })}</td>
-                  <td className="px-3 py-2"><Badge tone={OUTCOME_TONE[e.outcome] ?? "neutral"}>{OUTCOME_LABELS[e.outcome] ?? e.outcome}</Badge></td>
+                  <td data-label="Wer" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-2 text-white/70`}>{actorName(e)}</td>
+                  <td data-label="Ziel" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:max-w-[16rem] sm:truncate sm:px-3 sm:py-2 text-white/60`} title={e.target_id ?? undefined}>{targetText(e, { users: userNames, hosts: hostNames, extension: extensionLabel })}</td>
+                  <td data-label="Ergebnis" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-2`}><Badge tone={OUTCOME_TONE[e.outcome] ?? "neutral"}>{OUTCOME_LABELS[e.outcome] ?? e.outcome}</Badge></td>
                 </tr>
                 {open === e.id && (
-                  <tr className="bg-black/20">
-                    <td />
-                    <td colSpan={5} className="px-3 py-3 text-xs">
+                  <tr role="row" className={`${CARD_ROW} bg-black/20`}>
+                    <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere]`} />
+                    <td role="cell" colSpan={5} className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-3 text-xs`}>
                       <dl className="grid gap-x-6 gap-y-1 sm:grid-cols-[auto_1fr]">
                         <dt className="text-white/40">Vorgang</dt><dd className="font-mono">{e.action}</dd>
                         {e.target_type && (<><dt className="text-white/40">Ziel</dt><dd className="break-all">{TARGET_LABELS[e.target_type] ?? e.target_type}{e.target_id ? ` · ${e.target_id}` : ""}</dd></>)}

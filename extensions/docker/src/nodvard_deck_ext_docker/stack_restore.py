@@ -3,6 +3,7 @@ einen Hilfsordner im Volume, getauscht erst danach: Ein kaputtes Archiv lässt d
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 import logging
 import re
@@ -26,13 +27,13 @@ from .stack_actions import busy_text, failure_line
 from .stack_backup import (
     _STAMP_RE,
     BACKUP_IMAGE,
-    BACKUP_ROOT,
     CONTENTS_FILE,
     MAX_CONTENTS_BYTES,
     PART_SUFFIX,
     STOP_TIMEOUT_S,
     _gb,
     backup_folder,
+    backup_path,
     cmd_start_services,
     cmd_stop_services,
     parse_contents,
@@ -197,7 +198,7 @@ class StackRestore:
             out["error"] = "Der Heimatordner des Zugangs von Nodvard Deck ließ sich nicht lesen."
             return out
         home, _ = found
-        base = f"{home}/{BACKUP_ROOT}/{stack.project}"
+        base = backup_path(home, stack.project)
         out["folder"] = f"{base}/"
         try:
             running = await self.update.running(host, stack)
@@ -215,7 +216,7 @@ class StackRestore:
             out["note"] = "Der Stack hat gerade keine Container, deshalb lässt sich kein Volume zurückspielen. Starte ihn zuerst im Reiter Stacks."
         try:
             async with self._ctx.exec.sftp(host) as sftp:
-                if not await _is_dir(sftp, f"{home}/{BACKUP_ROOT}") or not await _is_dir(sftp, base):
+                if not await _is_dir(sftp, backup_path(home)) or not await _is_dir(sftp, base):
                     return out
                 stamps = sorted((n for n in await sftp.listdir(base) if valid_stamp(str(n))), reverse=True)[:MAX_BACKUPS]
                 for stamp in stamps:
@@ -733,7 +734,11 @@ def restore_routes(restore: StackRestore, editor: StackEditor, docker_host: Any,
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=target)
         return target
 
-    @router.get("/hosts/{host_id}/stacks/{project}/backups")
+    @router.get(
+        "/hosts/{host_id}/stacks/{project}/backups",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 409,)},
+    )
     async def list_backups(host_id: str, project: str) -> dict:
         """Die Volume-Sicherungen des Stacks, neueste zuerst, je Volume mit Größe und den Diensten, die es heute nutzen."""
         return await restore.backups(*await _target(host_id, project))
@@ -761,7 +766,11 @@ def restore_routes(restore: StackRestore, editor: StackEditor, docker_host: Any,
         ))
         return {"action_id": decision.action_id, "status": decision.status.value, "risk": risk.value, "detail": decision.detail}
 
-    @router.post("/hosts/{host_id}/stacks/{project}/backups/{stamp}/restore", status_code=status.HTTP_202_ACCEPTED)
+    @router.post(
+        "/hosts/{host_id}/stacks/{project}/backups/{stamp}/restore", status_code=status.HTTP_202_ACCEPTED,
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409, 502,)},
+    )
     async def propose_restore(host_id: str, project: str, stamp: str, body: _RestoreIn, actor: Actor = Depends(current_actor)) -> dict:
         """Schlägt das Zurückspielen vor (Gate-Aktion `docker.stack_volume_restore`, hohes Risiko)."""
         volumes = sorted(set(body.volumes))
@@ -769,7 +778,11 @@ def restore_routes(restore: StackRestore, editor: StackEditor, docker_host: Any,
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ungültiger Name eines Volumes.")
         return await _propose(host_id, project, stamp, actor, RESTORE_ACTION, volumes)
 
-    @router.post("/hosts/{host_id}/stacks/{project}/backups/{stamp}/delete", status_code=status.HTTP_202_ACCEPTED)
+    @router.post(
+        "/hosts/{host_id}/stacks/{project}/backups/{stamp}/delete", status_code=status.HTTP_202_ACCEPTED,
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409, 502,)},
+    )
     async def propose_drop(host_id: str, project: str, stamp: str, actor: Actor = Depends(current_actor)) -> dict:
         """Schlägt das Löschen der Sicherung vor (Gate-Aktion `docker.stack_backup_delete`)."""
         return await _propose(host_id, project, stamp, actor, DROP_ACTION, [])

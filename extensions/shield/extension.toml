@@ -1,5 +1,6 @@
 [extension]
 id          = "shield"
+# API-Vertrag: Alte Extension-Adressen bleiben in 1.x erreichbar.
 legacy_ids  = ["nexus-soc"]
 name        = "Nodvard Shield"
 version     = "0.1.0"
@@ -10,9 +11,10 @@ icon        = "shield-alert"
 category    = "security"
 sort_order  = 10
 entrypoint  = "nodvard_deck_ext_shield:Extension"
+requires    = ["docker"]
 frontend    = "frontend/dist/index.js"
 # Hilfsskript für root-Befehle (inline, nicht als eigener Abschnitt; Regeln in nodvard_sdk.RootHelperSpec).
-root_helper = { file = "root-helper/shield-root.sh", version = 18 }
+root_helper = { file = "root-helper/shield-root.sh", version = 26 }
 
 permissions = [
   "net.outbound",
@@ -22,6 +24,7 @@ permissions = [
   "audit.write",
   "schedule.register",
   "secrets.read:nexus-soc-*",
+  "secrets.read:shield-openai-compat-key",
 ]
 
 [settings]

@@ -372,7 +372,7 @@ def validate_status(doc: object) -> None:
     doc = _keys(doc, STATUS_KEYS + optional, "Schluessel")
     _check(type(doc["proto"]) is int and doc["proto"] == policy.PROTOCOL, "proto")
     _check(policy.is_version(doc["helper_version"]), "helper_version")
-    _check(doc["request_versions"] in (list(policy.request_versions(())), list(policy.REQUEST_VERSIONS))
+    _check(doc["request_versions"] in (list(policy.request_versions(())), [1, 2], list(policy.REQUEST_VERSIONS))
            and all(type(v) is int for v in doc["request_versions"]), "request_versions")
     if "request_options" in doc:
         _check(doc["request_options"] == list(policy.REQUEST_OPTIONS), "request_options")

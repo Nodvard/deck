@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..core import audit as core_audit
 from ..core.audit import write_entry
 from ..db import utcnow
-from ..models import AuditEntry, User
+from ..models import AuditEntry, HostMerge, User
 
 __all__ = [
     "RETENTION_KEY", "RETENTION_MAX_DAYS", "RETENTION_MIN_DAYS",
@@ -58,7 +58,11 @@ async def list_entries(
     if target_type is not None:
         stmt = stmt.where(AuditEntry.target_type == target_type)
     if target_id is not None:
-        stmt = stmt.where(AuditEntry.target_id == target_id)
+        if target_type == "host":
+            source_ids = select(HostMerge.source_id).where(HostMerge.host_id == target_id)
+            stmt = stmt.where((AuditEntry.target_id == target_id) | AuditEntry.target_id.in_(source_ids))
+        else:
+            stmt = stmt.where(AuditEntry.target_id == target_id)
     if correlation_id is not None:
         stmt = stmt.where(AuditEntry.correlation_id == correlation_id)
     if since is not None:

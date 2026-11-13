@@ -7,10 +7,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import timedelta
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import LOCAL_TIMEZONE
 from ..db import utcnow
+from ..models import HostMerge
 from .cron import cron_trigger
 from .timezone import get_timezone
 
@@ -33,6 +35,8 @@ async def is_in_window(
         # Ohne Host-Zuordnung ist kein Wartungsfenster zuständig (eine Meldung ohne `host_id` wird nie unterdrückt).
         return False
 
+    aliases = dict((await session.execute(select(HostMerge.source_id, HostMerge.host_id))).all())
+    targets = [aliases.get(target, target) for target in targets]
     now = utcnow()
     zone = await get_timezone(session)
     running: list[object] = []  # `host_ids` der Fenster, die gerade laufen
@@ -43,7 +47,10 @@ async def is_in_window(
             continue
 
         if _window_covers_now(cron, duration, now, zone):
-            running.append(window.get("host_ids", "all"))
+            hosts = window.get("host_ids", "all")
+            if isinstance(hosts, list):
+                hosts = [aliases.get(host, host) for host in hosts]
+            running.append(hosts)
 
     return bool(running) and all(
         any(hosts == "all" or (isinstance(hosts, list) and target in hosts) for hosts in running)

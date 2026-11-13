@@ -11,7 +11,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from shield_helper_kit import SCRIPT, stubs
+from exec_gate_helpers import ReadingExec
+from shield_helper_kit import helper_copy, stubs
 
 EXT_DIR = Path(__file__).resolve().parents[2] / "extensions" / "shield"
 SH = shutil.which("sh")
@@ -39,7 +40,8 @@ async def test_host_status_exposes_rpm_ostree(av, marker, expected):
 
     output = f"@@clam\nnone\n@@lynis\nnone\n@@os\nfedora\n@@rpm_ostree\n{marker}\n@@end\n"
     run = AsyncMock(return_value=SimpleNamespace(stdout=output))
-    status = await Defender(SimpleNamespace(exec=SimpleNamespace(run=run))).host_status(SimpleNamespace(id="h1"))
+    status = await Defender(SimpleNamespace(exec=ReadingExec(ext_id="shield", run=run))).host_status(SimpleNamespace(id="h1"))
+    assert status["reachable"] is True
     assert status["rpm_ostree"] is expected
     assert status["clamav_installed"] is False
     assert status["lynis_installed"] is False
@@ -73,21 +75,22 @@ def test_status_detects_rpm_ostree_without_root(av, tmp_path, detection):
 def test_install_stops_on_ostree_and_keeps_fedora_dnf(av, tmp_path, package, detection, route):
     calls = tmp_path / "calls"
     tools = {name: f'echo "{name} $*" >> "{calls}"\n' for name in ("dnf", "systemctl", "fail2ban-client")}
+    tools["mkdir"] = 'exec /bin/mkdir "$@"\n'
     if detection == "command":
         tools["rpm-ostree"] = f'echo unexpected >> "{calls}"; exit 99\n'
     bin_dir = stubs(tmp_path, tools)
     booted = tmp_path / "ostree-booted"
     if detection == "file":
         booted.touch()
-    jail = tmp_path / "jail.local"
+    fail2ban = tmp_path / "etc" / "fail2ban"
+    jail = fail2ban / "jail.d" / "nodvard.local"
     if route == "direct":
-        command = av.INSTALL_COMMANDS[package]
+        command = av.INSTALL_COMMANDS[package].replace("/etc/fail2ban", str(fail2ban))
     else:
-        helper = tmp_path / "shield-root"
-        text = SCRIPT.read_text(encoding="ascii").replace("PATH=/usr/sbin:/usr/bin:/sbin:/bin", f"PATH={bin_dir}")
-        helper.write_text(text.replace("/run/ostree-booted", str(booted)).replace("/etc/fail2ban/jail.local", str(jail)))
+        helper = helper_copy(tmp_path, path=str(bin_dir), sdmark=tmp_path / "no-systemd")
+        helper.write_text(helper.read_text(encoding="ascii").replace("/run/ostree-booted", str(booted)))
         command = f'"{SH}" "{helper}" install {package}'
-    command = command.replace("/run/ostree-booted", str(booted)).replace("/etc/fail2ban/jail.local", str(jail))
+    command = command.replace("/run/ostree-booted", str(booted))
     done = subprocess.run([SH, "-c", command], env={"PATH": str(bin_dir)}, capture_output=True, text=True, check=False)
     if detection != "neither":
         assert done.returncode == 2
@@ -99,6 +102,8 @@ def test_install_stops_on_ostree_and_keeps_fedora_dnf(av, tmp_path, package, det
         packages = "clamav clamav-update" if package == "clamav" else package
         assert calls.read_text().splitlines()[0] == f"dnf install -y {packages}"
         assert (package == "fail2ban") is jail.exists()
+        if package == "fail2ban":
+            assert jail.read_text() == "[sshd]\nenabled = true\nbackend = systemd\n"
 
 
 @pytest.mark.parametrize("package", ["clamav", "lynis", "fail2ban"])

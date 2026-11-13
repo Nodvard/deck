@@ -89,3 +89,25 @@ async def test_create_app_installs_the_filter(client):
     # Die Test-App kommt aus create_app(): der Filter haengt danach am Logger.
     logger = logging.getLogger(log_filters.ACCESS_LOGGER)
     assert any(isinstance(f, log_filters.TicketRedactFilter) for f in logger.filters)
+
+
+@pytest.mark.parametrize("kind", ["terminal", "console"])
+@pytest.mark.parametrize("suffix", ["", "?token=private"])
+def test_websocket_tickets_are_removed_from_both_uvicorn_logs(kind, suffix):
+    path = f"/proxy/api/v1/ws/{kind}/{TICKET}{suffix}"
+    for name, message, args in (
+        ("uvicorn.access", ACCESS_FORMAT, ("127.0.0.1:1", "GET", path, "1.1", 101)),
+        ("uvicorn.error", '%s - "WebSocket %s" [accepted]', ("127.0.0.1:1", path)),
+    ):
+        logger = logging.getLogger(name)
+        previous = list(logger.filters)
+        try:
+            log_filters.install_access_log_filters()
+            record = logging.LogRecord(name, logging.INFO, __file__, 1, message, args, None)
+            assert logger.filter(record)
+            line = record.getMessage()
+            assert TICKET not in line
+            assert "private" not in line
+            assert f"/ws/{kind}/…" in line
+        finally:
+            logger.filters[:] = previous

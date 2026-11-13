@@ -96,21 +96,12 @@ def test_upgrade_heads_migrates_core_and_inventory_branches_together(tmp_path: P
         queue_cols = {r[1] for r in db.execute("PRAGMA table_info(ext_nexus_soc_incident_queue)").fetchall()}
         assert {"id", "host_id", "host_name", "target", "message", "details", "status", "created_at", "processed_at",
                 "attempts", "action_id", "ai_summary", "proposal_started"} <= queue_cols
+        assert "ext_shield_weekly_reports" in tables
 
         heads = {r[0] for r in db.execute("SELECT version_num FROM alembic_version").fetchall()}
-        # Drei UNABHAENGIGE Koepfe (Kern, inventory, documents) in EINER
-        # alembic_version-Tabelle -- natives Alembic-Verhalten fuer getrennte
-        # Branches (down_revision=None + eigener branch_labels-Wert je Extension),
-        # kein zweiter Mechanismus noetig. Die inventory-/documents-Koepfe pruefen
-        # wir auf den exakten Revisionswert (bewegen sich nur, wenn diese Extension
-        # eine zweite Revision bekommt); den Kern-Kopf NUR auf Anzahl, nicht auf
-        # exakten Wert -- der wandert mit jeder neuen Kern-Migration, unabhaengig
-        # vom hier getesteten Multi-Branch-Mechanismus.
+        # Vier unabhängige Zweige teilen sich die Tabelle für Migrationsstände.
         assert len(heads) == 4
-        # Shield (Branch-Label `nexus-soc`): b8c9d0e1f2a3 (dauerhafte Vorfalls-Warteschlange) auf a7b8c9d0e1f2
-        # (remote_id der Update-Laeufe). Inventar: c7d8e9f0a1b2 (Homelab-Baukasten) auf a1b2c3d4e5f6.
-        # Dokumente: a7b8c9d0e1f4 (Nextcloud-Ordner als Eingang) auf e2f3a4b5c6d7 (Verknüpfung mit Gegenständen).
-        assert {"c7d8e9f0a1b2", "a7b8c9d0e1f4", "b8c9d0e1f2a3"} <= heads
+        assert {"c7d8e9f0a1b2", "a7b8c9d0e1f4", "c9d0e1f2a3b4"} <= heads
     finally:
         db.close()
 

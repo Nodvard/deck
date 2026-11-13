@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import asyncssh
 import pytest
+from exec_gate_helpers import execute_approved
 from nodvard_deck.core import ssh
 from nodvard_deck.services import host_setup, one_time_password
 from nodvard_sdk import Host as SdkHost
@@ -99,7 +100,7 @@ def _ctx(settings: dict | None = None) -> SimpleNamespace:
         return HOST if host_id == HOST.id else None
 
     return SimpleNamespace(
-        exec=context.ExecHandle(context._PermissionChecker("shield", ["hosts.execute"]), settings=None),
+        exec=context.ExecHandle(context._PermissionChecker("shield", ["hosts.read", "hosts.execute"]), settings=None),
         settings=SimpleNamespace(get=get_settings), hosts=SimpleNamespace(get=get_host),
         db=SimpleNamespace(session=session), audit=SimpleNamespace(log=nothing), ws=SimpleNamespace(broadcast=nothing),
         notify=SimpleNamespace(send=nothing),
@@ -141,7 +142,7 @@ async def test_shield_lynis_start(server):
     ("all", [], False),
     ("security", [f"libpaket{i:03d}-erweitert" for i in range(150)], False),
 ], ids=["alle-proxmox", "alle", "sicherheit-150"])
-async def test_shield_updates(server, mode, packages, dist):
+async def test_shield_updates(server, db_session, mode, packages, dist):
     from nodvard_deck_ext_shield import defender as df
     from nodvard_deck_ext_shield import defender_api as api
     from nodvard_deck_ext_shield import patching
@@ -161,7 +162,10 @@ async def test_shield_updates(server, mode, packages, dist):
         return finished
 
     center._wait_detached = wait
-    assert await center._run_detached(HOST, "upd_0123456789abcdef", command, plan) == finished
+    result = await execute_approved(
+        db_session, lambda: center._run_detached(HOST, "upd_0123456789abcdef", command, plan), host_id=HOST.id,
+    )
+    assert result == finished
     assert_short(server)
 
 
@@ -218,9 +222,20 @@ async def test_docker_stack_list_with_sixty_stacks(server):
     ]
     listing = "".join(json.dumps(r) + "\n" for r in rows)
     server.reply = lambda command: (0, listing if command.startswith("docker ps") else "")
-    overview = await st.DockerStacks(_ctx()).overview(HOST)
+    ctx = _ctx()
+    with ctx.exec.read_access(HOST):
+        overview = await st.DockerStacks(ctx).overview(HOST)
     assert len(overview["stacks"]) == 60 and overview["check_error"] is None
     assert_short(server)
+
+
+@pytest.mark.asyncio
+async def test_docker_stack_list_requires_read_access(server):
+    from nodvard_deck_ext_docker import stacks as st
+
+    with pytest.raises(st.StackProblem, match="Aktionsfreigabe"):
+        await st.DockerStacks(_ctx()).overview(HOST)
+    assert server.sent == []
 
 
 @pytest.fixture

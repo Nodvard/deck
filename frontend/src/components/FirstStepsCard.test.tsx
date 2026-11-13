@@ -12,7 +12,7 @@ const host = (id: string, extra: Partial<HostOut> = {}): HostOut => ({
   id, name: id, display_name: id, address: "10.0.0.5", os_family: "linux", kind: null, tags: [], managed_tags: [],
   credential: null, is_managed: true, enabled: true, status: "unknown", last_seen_at: null, provider_ext_id: null, ...extra,
 });
-const ssh = { id: "c1", kind: "ssh_key" as const, username: "lattice", port: 22 };
+const ssh = { id: "c1", kind: "ssh_key" as const, username: "nodvard", port: 22 };
 const ext = (id: string, extra: Partial<ExtensionInfo> = {}): ExtensionInfo => ({
   id, name: id, state: "enabled", has_settings: true, needs_setup: false, ...extra,
 });

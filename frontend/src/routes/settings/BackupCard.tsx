@@ -1,8 +1,4 @@
-/**
- * Karte „Sicherung“ (Einstellungen, System): Sicherungspasswort, automatische Sicherungen, Liste, Herunterladen. Ändern
- * darf nur der Owner, Kritisches zusätzlich mit dem Anmeldepasswort. Passwörter bleiben im lokalen State, gehen direkt
- * per `api.*` raus, nie in einen Query-Key oder Mutations-Cache (wie HostDetailSettings).
- */
+/** Sicherungen nur als Owner verwalten; Passwörter bleiben im lokalen State und gehen nie in den Query-Cache. */
 import { AlertTriangle, CheckCircle2, Copy, Download, HardDrive, KeyRound, Loader2, ShieldCheck, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -39,6 +35,8 @@ export function BackupCard(): JSX.Element {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
   const [busyRun, setBusyRun] = useState(false);
+  // Zählt jede beendete Abfrage, damit eine laufende Sicherung auch nach einem Fehlschlag weiter nachgefragt wird.
+  const [loads, setLoads] = useState(0);
 
   const reload = useCallback(async () => {
     try {
@@ -46,6 +44,8 @@ export function BackupCard(): JSX.Element {
       setLoadError(null);
     } catch (err) {
       setLoadError(errorText(err));
+    } finally {
+      setLoads((n) => n + 1);
     }
   }, []);
 
@@ -58,7 +58,7 @@ export function BackupCard(): JSX.Element {
     if (!overview?.running) return;
     const timer = setTimeout(() => void reload(), RUNNING_POLL_MS);
     return () => clearTimeout(timer);
-  }, [overview, reload]);
+  }, [overview, loads, reload]);
 
   async function runNow() {
     setBusyRun(true);
@@ -196,7 +196,7 @@ function KeySection({ overview, isOwner, onChanged }: { overview: BackupOverview
         </p>
       ) : (
         <p className="text-sm text-white/70">
-          Noch nicht festgelegt. Die Sicherungen werden mit diesem Passwort verschlüsselt. {productText("Nodvard Deck")} speichert es nicht – darum
+          Noch nicht festgelegt. Die Sicherungen werden mit diesem Passwort verschlüsselt. {productText("Nodvard Deck")} speichert es nicht, darum
           bleiben die Sicherungen auch dann sicher, wenn jemand sie in die Hände bekommt.
         </p>
       )}
@@ -218,7 +218,7 @@ function KeySection({ overview, isOwner, onChanged }: { overview: BackupOverview
             <AlertTriangle size={16} className="mt-0.5 flex-none" />
             <span>
               <strong>Passwort weg = Sicherungen wertlos.</strong> Ohne dieses Passwort oder den Wiederherstellungsschlüssel lässt sich
-              keine Sicherung mehr öffnen – von niemandem. Bitte gut aufbewahren, z. B. im Passwortmanager.
+              keine Sicherung mehr öffnen, von niemandem. Bitte gut aufbewahren, z. B. im Passwortmanager.
             </span>
           </div>
           {overview.key && (
@@ -263,7 +263,7 @@ function RecoveryKeyPanel({ result, onDone }: { result: KeyResult; onDone: () =>
 
   async function copy() {
     const ok = await copyText(result.recovery_key);
-    setNotice(ok ? { kind: "ok", text: "Schlüssel in die Zwischenablage kopiert." } : { kind: "error", text: "Kopieren hat nicht geklappt – bitte als Datei speichern." });
+    setNotice(ok ? { kind: "ok", text: "Schlüssel in die Zwischenablage kopiert." } : { kind: "error", text: "Kopieren hat nicht geklappt, bitte als Datei speichern." });
   }
 
   function save() {

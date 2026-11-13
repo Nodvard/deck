@@ -1,6 +1,6 @@
 import { productText } from "./product";
 /** Neuer Stack: Name, Ordner und Compose-Datei aus einer Vorlage, einem Beispiel, eingefügtem Text oder einer Datei; angelegt wird über die Freigabe. */
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 
 import { describeActionOutcome, settleAction, type ActionState } from "../../../_shared/frontend/src/actions";
 import { deck } from "../../../_shared/frontend/src/deck";
@@ -44,6 +44,7 @@ export function NewStack({ hostId, onClose }: { hostId: string; onClose: (messag
   const [reload, setReload] = useState(0);
   const [name, setName] = useState("");
   const [text, setText] = useState(EXAMPLE);
+  const [values, setValues] = useState<Record<string, string>>({});
   const [checked, setChecked] = useState<NewCheck | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -99,16 +100,29 @@ export function NewStack({ hostId, onClose }: { hostId: string; onClose: (messag
     return () => controller.abort();
   }, [ownReload]);
 
+  const needed = useMemo(() => neededValues(text), [text]);
   if (error) return <LoadError what="Der Ordner für neue Stacks" error={error} onRetry={() => setReload((n) => n + 1)} compact />;
   if (!place) return <p className="text-xs opacity-60">Lade …</p>;
   const nameOk = NAME_RE.test(name);
-  const needed = neededValues(text);
+  const variables = [...needed.required, ...needed.open];
+  const env = Object.fromEntries(variables.filter((key) => Object.hasOwn(values, key)).map((key) => [key, values[key]]));
+  const envOk = needed.required.every((key) => (env[key] ?? "") !== "");
+  const envBody = Object.keys(env).length ? { env } : {};
   const changed = name !== "" || text !== EXAMPLE;
 
-  function edit(next: { name?: string; text?: string }) {
+  function edit(next: { name?: string; text?: string; values?: Record<string, string> }) {
     checkRun.current += 1;
     if (next.name !== undefined) setName(next.name);
-    if (next.text !== undefined) setText(next.text);
+    if (next.text !== undefined) {
+      setText(next.text);
+      const unfinished = next.text.match(/\$\$|\$\{|\}/g)?.reduce((open, part) =>
+        part === "${" ? open + 1 : part === "}" ? Math.max(0, open - 1) : open, 0);
+      if (!unfinished) {
+        const keep = neededValues(next.text);
+        setValues((previous) => Object.fromEntries(Object.entries(previous).filter(([key]) => keep.open.includes(key) || keep.required.includes(key))));
+      }
+    }
+    if (next.values !== undefined) setValues(next.values);
     setChecked(null);
     setProblem(null);
   }
@@ -139,7 +153,7 @@ export function NewStack({ hostId, onClose }: { hostId: string; onClose: (messag
     setPicked(next);
     setSaving(false);
     setNotice(null);
-    edit({ text: next.compose, ...(name === "" || name === picked?.stackName ? { name: next.stackName } : {}) });
+    edit({ text: next.compose, values: {}, ...(name === "" || name === picked?.stackName ? { name: next.stackName } : {}) });
   }
 
   function saved(template: OwnTemplate) {
@@ -172,11 +186,12 @@ export function NewStack({ hostId, onClose }: { hostId: string; onClose: (messag
   }
 
   async function check(): Promise<NewCheck | null> {
+    if (!envOk) return null;
     const run = ++checkRun.current;
     setBusy(true);
     setProblem(null);
     try {
-      const result = await fetchJson<NewCheck>(`${base}/new-stack/check`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ name, content: text }) });
+      const result = await fetchJson<NewCheck>(`${base}/new-stack/check`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ name, content: text, ...envBody }) });
       if (run !== checkRun.current) return null;
       setChecked(result);
       return result;
@@ -193,13 +208,16 @@ export function NewStack({ hostId, onClose }: { hostId: string; onClose: (messag
     if (!result?.ok || result.conflict) return;
     const risky = result.warnings.length ? ` Riskant: ${result.warnings.join(" ")} ${RISKY_NOTE}` : "";
     const then = start ? " und starten" : "";
-    const question = `Stack „${name}“ in ${result.folder} anlegen${then}? ${productText("Nodvard Deck")} legt den Ordner an, schreibt compose.yaml und übernimmt den Stack.${risky}`;
+    const files = Object.keys(env).length ? "compose.yaml und .env" : "compose.yaml";
+    const question = `Stack „${name}“ in ${result.folder} anlegen${then}? ${productText("Nodvard Deck")} legt den Ordner an, schreibt ${files} und übernimmt den Stack.${risky}`;
+    const checkedRun = checkRun.current;
     if (!(await deck().confirmDialog(question, { confirmLabel: start ? "Anlegen und starten" : "Anlegen" }))) return;
+    if (checkedRun !== checkRun.current) return;
     setBusy(true);
     const signal = (life.current ?? new AbortController()).signal;
     let submitted = false;
     try {
-      const proposal = await fetchJson<ActionState>(`${base}/new-stack`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ name, content: text, start }) });
+      const proposal = await fetchJson<ActionState>(`${base}/new-stack`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ name, content: text, ...envBody, start }) });
       submitted = true;
       const run = await settleAction(proposal, { signal });
       const action = await withResult(run.action, signal);
@@ -229,7 +247,7 @@ export function NewStack({ hostId, onClose }: { hostId: string; onClose: (messag
     }
     void file.text().then((content) => {
       setPicked(null);
-      edit({ text: content.replace(/\r\n/g, "\n") });
+      edit({ text: content.replace(/\r\n/g, "\n"), values: {} });
     });
   }
 
@@ -324,7 +342,7 @@ export function NewStack({ hostId, onClose }: { hostId: string; onClose: (messag
       {name && !nameOk && <p className="text-amber-300">Nur Kleinbuchstaben, Ziffern, „-“ und „_“, am Anfang ein Buchstabe oder eine Ziffer.</p>}
       {nameOk && <p className="break-all opacity-70">Ordner: <span className="font-mono">{place.root}/{name}</span></p>}
       <div className="flex flex-wrap gap-1.5">
-        <Button small onClick={() => { setPicked(null); edit({ text: EXAMPLE }); }}>Beispiel einfügen</Button>
+        <Button small onClick={() => { setPicked(null); edit({ text: EXAMPLE, values: {} }); }}>Beispiel einfügen</Button>
         <Button small pressed={saving} disabled={busy || text.trim() === ""} onClick={() => { setSaving(!saving); setNotice(null); }}>Als Vorlage speichern</Button>
         <label className="cursor-pointer rounded-lg border border-white/10 bg-white/[0.06] px-2 py-1 hover:bg-white/[0.12]">
           Datei hochladen
@@ -342,26 +360,29 @@ export function NewStack({ hostId, onClose }: { hostId: string; onClose: (messag
           className="w-full resize-y rounded bg-black/60 p-2 font-mono text-[11px] leading-snug outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
           onChange={(e) => edit({ text: e.target.value })} />
       )}
-      {needed.open.length > 0 && (
-        <p className="text-amber-300" data-testid="needed-values">
-          Die Datei erwartet {needed.open.length === 1 ? "einen Wert" : "Werte"} für {needed.open.join(", ")}. Leg den Stack mit „Anlegen“
-          an, trag {needed.open.length === 1 ? "ihn" : "sie"} in eine .env in seinem Ordner ein (etwa über „Dateien“) und starte ihn erst
-          dann. Sonst {needed.open.length === 1 ? "bleibt er" : "bleiben sie"} leer.
-        </p>
-      )}
-      {needed.required.length > 0 && (
-        <p className="text-amber-300" data-testid="required-values">
-          {needed.required.join(", ")} {needed.required.length === 1 ? "ist" : "sind"} mit „:?“ als Pflicht markiert. Ohne .env bricht
-          deshalb schon das Anlegen ab. Schreib dort zum Beispiel {"${"}{needed.required[0]}{"}"} ohne „:?“ und trag den Wert danach ein.
-        </p>
+      {variables.length > 0 && (
+        <fieldset className="flex flex-col gap-2 rounded border border-white/10 p-2" disabled={busy}>
+          <legend className="px-1">Werte für diesen Stack</legend>
+          <p className="opacity-70">Die Werte werden beim Anlegen in der .env dieses Stacks gespeichert. Vorlagen enthalten diese Werte nie. Felder ohne Pflichtmarkierung dürfen leer bleiben.</p>
+          {variables.map((key) => (
+            <label key={key} className="flex flex-col gap-1">
+              <span className="font-mono">{key}{needed.required.includes(key) && " (Pflicht)"}</span>
+              <input aria-label={`Wert für ${key}`} type={/PASSWORD|SECRET|TOKEN|KEY/i.test(key) ? "password" : "text"}
+                autoComplete="off" spellCheck={false} required={needed.required.includes(key)} value={env[key] ?? ""}
+                onChange={(event) => edit({ values: { ...values, [key]: event.target.value } })}
+                className="rounded border border-white/10 bg-black/25 px-2 py-1 outline-none focus:border-[var(--color-accent)]" />
+            </label>
+          ))}
+          {!envOk && <p className="text-amber-300">Fülle die Pflichtfelder aus, bevor du den Stack prüfst oder anlegst.</p>}
+        </fieldset>
       )}
       {checked?.conflict && <p className="text-red-400" role="alert">{checked.conflict}</p>}
       <CheckResult checked={checked} note={RISKY_NOTE} />
       {problem && <p className="break-words text-red-400" role="alert">{problem}</p>}
       <div className="flex flex-wrap gap-1.5">
-        <Button small disabled={busy || !nameOk} onClick={() => void check()}>Prüfen</Button>
-        <Button small variant="primary" disabled={busy || !nameOk} onClick={() => void create(false)}>Anlegen</Button>
-        <Button small disabled={busy || !nameOk} onClick={() => void create(true)}>Anlegen und starten</Button>
+        <Button small disabled={busy || !nameOk || !envOk} onClick={() => void check()}>Prüfen</Button>
+        <Button small variant="primary" disabled={busy || !nameOk || !envOk} onClick={() => void create(false)}>Anlegen</Button>
+        <Button small disabled={busy || !nameOk || !envOk} onClick={() => void create(true)}>Anlegen und starten</Button>
         <Button small onClick={() => void leave()}>Schließen</Button>
       </div>
     </div>

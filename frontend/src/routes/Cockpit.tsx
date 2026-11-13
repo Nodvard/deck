@@ -1,7 +1,5 @@
-/**
- * Cockpit: Übersicht oben auf der Startseite mit Lage, Kennzahlen, Servertabelle, offenen Punkten, Modulen und Apps.
- * Herstellerneutral: Server und Messwerte kommen aus dem Kern, Dienste und Backups aus `GET /overview`.
- */
+/** Cockpit mit Serverdaten aus dem Kern und Diensten sowie Sicherungen aus /overview. */
+import { CARD_BODY, CARD_CELL, CARD_CELL_PLAIN, CARD_HEAD, CARD_ROW, CARD_TABLE } from "../components/cardTable";
 import { styleRef } from "../../../extensions/_shared/frontend/src/csp";
 import {
   AlertTriangle,
@@ -25,7 +23,8 @@ import { FirstStepsCard } from "../components/FirstStepsCard";
 import { Icon } from "../components/Icon";
 import { LoadError } from "../components/LoadError";
 import { ProviderBadge } from "../components/ProviderBadge";
-import { usePages } from "../lib/catalog";
+import { TotpReminder } from "../components/TotpReminder";
+import { useCoreFeatures, usePages } from "../lib/catalog";
 import { useExtensionLabel } from "../lib/extensionNames";
 import { NEW_HOST_TARGET, useExtensions } from "../lib/firstSteps";
 import { hostProvider, type HostProvider } from "../lib/hostProvider";
@@ -74,12 +73,12 @@ function Panel({ title, right, children }: { title: string; right?: React.ReactN
 
 /** Unterzeile der Backup-Kachel. Eine Verbindung, die nicht antwortet, ist kein Job und
  * kein "noch ohne Lauf" -- sie steht als eigene Warnung da. */
-function backupSummary(failed: number, unreachable: number, unknown: number): string {
+function backupSummary(total: number, failed: number, unreachable: number, unknown: number): string {
   const parts: string[] = [];
   if (failed) parts.push(`${failed} fehlgeschlagen`);
   if (unreachable) parts.push(unreachable === 1 ? "Verbindung nicht erreichbar" : `${unreachable} Verbindungen nicht erreichbar`);
   if (!failed && unknown) parts.push(`${unknown} noch ohne Lauf`);
-  return parts.join(" · ") || "alle erfolgreich";
+  return parts.join(" · ") || (total > 0 ? "alle erfolgreich" : "Noch keine Sicherungen");
 }
 
 function StatCard({
@@ -173,7 +172,7 @@ interface CardData {
 function HostActions({ host, canTerminal, console }: { host: HostOut; canTerminal: boolean; console: boolean }) {
   const linkClass = "rounded-md p-1.5 text-white/55 hover:bg-white/10 hover:text-white";
   return (
-    <td className="w-px whitespace-nowrap px-2 text-right">
+    <td role="cell" className={`${CARD_CELL_PLAIN} mt-2 sm:mt-0 sm:w-px sm:whitespace-nowrap sm:px-2 sm:text-right`}>
       {console && (
         <Link to={`/console/${host.id}`} className={linkClass} title="Konsole" aria-label={`Konsole ${host.display_name}`}>
           <Monitor size={15} className="inline" />
@@ -193,8 +192,8 @@ function healthOf(host: HostOut): ReturnType<typeof hostHealth> {
   return isGone(host) ? "stopped" : hostHealth(host.status, host.power_state);
 }
 
-const ROW = "border-t border-[var(--color-line)] align-middle";
-const CELL = "px-3 py-2.5";
+const ROW = "sm:border-t sm:border-[var(--color-line)] align-middle";
+const CELL = "py-1 sm:px-3 sm:py-2.5";
 
 /** Eine Tabellenzeile für Hosts mit Messwerten; nur die Quelle der Zahlen unterscheidet sich. */
 function HostRow({ host, data, testId, canTerminal, provider }: { host: HostOut; data: CardData; testId: string; canTerminal: boolean; provider?: HostProvider }) {
@@ -203,8 +202,8 @@ function HostRow({ host, data, testId, canTerminal, provider }: { host: HostOut;
   const dim = data.state !== "live";
   const uptime = offline ? null : data.uptime_s;
   return (
-    <tr className={ROW} data-testid={testId} data-state={data.state}>
-      <td className={`${CELL} pl-4`}>
+    <tr role="row" className={`${CARD_ROW} ${ROW}`} data-testid={testId} data-state={data.state}>
+      <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] ${CELL} sm:pl-4`}>
         <span className="flex items-center gap-2">
           <span className={`status-dot ${health}`} title={hostStatusText(host)} />
           <Link to={`/hosts/${host.id}`} className="min-w-0 break-words font-medium hover:underline">{host.display_name}</Link>
@@ -216,16 +215,16 @@ function HostRow({ host, data, testId, canTerminal, provider }: { host: HostOut;
           </span>
         )}
       </td>
-      <td className={`${CELL} hidden text-white/55 md:table-cell`}>
-        <span className="block whitespace-nowrap tabular-nums">{host.address}</span>
+      <td data-label="Adresse" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] ${CELL} text-white/55 sm:hidden md:table-cell`}>
+        <span className="block break-all tabular-nums">{host.address}</span>
         <span className="block whitespace-nowrap text-[11px] text-white/40">{kindLabel(host)}</span>
       </td>
-      <td className={CELL}><Meter value={offline ? null : data.cpu} label="CPU" dim={dim} /></td>
-      <td className={CELL}><Meter value={offline ? null : data.mem} label="RAM" caption={data.memText} dim={dim} /></td>
-      <td className={`${CELL} hidden sm:table-cell`}>
+      <td data-label="CPU" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] ${CELL}`}><Meter value={offline ? null : data.cpu} label="CPU" dim={dim} /></td>
+      <td data-label="RAM" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] ${CELL}`}><Meter value={offline ? null : data.mem} label="RAM" caption={data.memText} dim={dim} /></td>
+      <td data-label="Platte" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] ${CELL} hidden sm:table-cell`}>
         {data.disk !== undefined ? <Meter value={offline ? null : data.disk} label="Platte" caption={data.diskText} dim={dim} /> : <span className="text-white/35">–</span>}
       </td>
-      <td className={`${CELL} hidden whitespace-nowrap tabular-nums text-white/55 2xl:table-cell`} data-testid={`${testId}-uptime`}>
+      <td data-label="Läuft seit" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] ${CELL} hidden sm:whitespace-nowrap tabular-nums text-white/55 sm:hidden 2xl:table-cell`} data-testid={`${testId}-uptime`}>
         {uptime ? formatUptime(uptime) : "–"}
       </td>
       <HostActions host={host} canTerminal={canTerminal} console={hasConsole(host) && health === "online"} />
@@ -293,8 +292,8 @@ function MachineRow({ host, canTerminal, hint, provider }: { host: HostOut; canT
   const health = healthOf(host);
   const empty = <span className="text-white/35">–</span>;
   return (
-    <tr className={ROW} data-testid={`machine-${host.id}`}>
-      <td className={`${CELL} pl-4`}>
+    <tr role="row" className={`${CARD_ROW} ${ROW}`} data-testid={`machine-${host.id}`}>
+      <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] ${CELL} sm:pl-4`}>
         <span className="flex items-center gap-2">
           <span className={`status-dot ${health}`} title={hostStatusText(host)} />
           <Link to={`/hosts/${host.id}`} className="min-w-0 break-words font-medium hover:underline">{host.display_name}</Link>
@@ -307,14 +306,14 @@ function MachineRow({ host, canTerminal, hint, provider }: { host: HostOut; canT
           </span>
         ) : hint && <span className="mt-0.5 block text-[11px] text-white/45" data-testid={`machine-${host.id}-hint`}>{hint}</span>}
       </td>
-      <td className={`${CELL} hidden text-white/55 md:table-cell`}>
-        <span className="block whitespace-nowrap tabular-nums">{host.address}</span>
+      <td role="cell" data-label="Adresse" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] ${CELL} text-white/55 sm:hidden md:table-cell`}>
+        <span className="block break-all tabular-nums">{host.address}</span>
         <span className="block whitespace-nowrap text-[11px] text-white/40">{kindLabel(host)}</span>
       </td>
-      <td className={CELL}>{empty}</td>
-      <td className={CELL}>{empty}</td>
-      <td className={`${CELL} hidden sm:table-cell`}>{empty}</td>
-      <td className={`${CELL} hidden 2xl:table-cell`}>{empty}</td>
+      <td role="cell" data-label="CPU" className={`${CARD_CELL} ${CELL}`}>{empty}</td>
+      <td role="cell" data-label="RAM" className={`${CARD_CELL} ${CELL}`}>{empty}</td>
+      <td role="cell" data-label="Platte" className={`${CARD_CELL} ${CELL}`}>{empty}</td>
+      <td role="cell" data-label="Läuft seit" className={`${CARD_CELL} ${CELL} sm:hidden 2xl:table-cell`}>{empty}</td>
       <HostActions host={host} canTerminal={canTerminal} console={hasConsole(host) && health === "online"} />
     </tr>
   );
@@ -338,13 +337,15 @@ function metricsHint(host: HostOut, systemModuleOn: boolean | null): string | nu
 export function Cockpit() {
   const canReadHosts = useAuthStore((s) => s.hasPermission("hosts.read"));
   const canExecute = useAuthStore((s) => s.hasPermission("hosts.execute"));
+  const features = useCoreFeatures();
+  const canUseTerminal = canExecute && features.terminal;
   const canWriteHosts = useAuthStore((s) => s.hasPermission("hosts.write"));
   const canWriteApps = useAuthStore((s) => s.hasPermission("apps.write"));
   const hostsQuery = useHosts(canReadHosts);
   const overviewQuery = useOverview(canReadHosts);
   const { data: hosts, isLoading: hostsLoading } = hostsQuery;
   const { data: overview, isLoading: overviewLoading } = overviewQuery;
-  const { data: terminalHosts } = useTerminalHosts(canExecute);
+  const { data: terminalHosts } = useTerminalHosts(canUseTerminal);
   const { data: latest, isLoading: latestLoading, isError: latestError } = useLatestMetrics(canReadHosts);
   const { data: pages } = usePages();
   const extensionLabel = useExtensionLabel((overview?.attention ?? []).some((a) => a.source_ext_id));
@@ -372,7 +373,7 @@ export function Cockpit() {
   const measured = latest?.hosts ?? {};
   const renderHostRow = (host: HostOut) => {
     const provider = hostProvider(host, extensions);
-    const canTerminal = terminalIds.has(host.id);
+    const canTerminal = canUseTerminal && terminalIds.has(host.id);
     if (isNode(host)) return <NodeCard key={host.id} host={host} canTerminal={canTerminal} provider={provider} />;
     if (measured[host.id]) {
       return <ServerCard key={host.id} host={host} latest={measured[host.id]} unconfirmed={latestError} canTerminal={canTerminal} provider={provider} />;
@@ -382,7 +383,7 @@ export function Cockpit() {
 
   const allHosts = hosts ?? [];
   // Die Kennzahl „Server“ zählt die physischen Maschinen (auch Hypervisor-Knoten), VMs und LXC stehen dahinter
-  // („3/3 + 4 VMs · 5 LXC“). Ohne physische (nur Gäste) zählt sie alle wie bisher.
+  // („3/3 + 4 VMs · 5 LXC“). Ohne physische Server zählt sie alle Gäste.
   // Was der Anbieter nicht mehr kennt (etwa in Proxmox gelöscht), zählt nirgends mit; es steht grau in der Tabelle.
   const present = allHosts.filter((h) => !isGone(h));
   const physical = present.filter((h) => hostCategory(h) === "server");
@@ -509,6 +510,7 @@ export function Cockpit() {
         </div>
       )}
 
+      <TotpReminder />
       <FirstStepsCard />
 
       {canReadHosts && (
@@ -545,8 +547,8 @@ export function Cockpit() {
             <StatCard
               label="Backups"
               value={backups ? (backups.total === 0 && backupsUnreachable.length > 0 ? "–" : `${backups.ok}/${backups.total}`) : "…"}
-              sub={backups ? backupSummary(backups.failed, backupsUnreachable.length, backups.unknown) : ""}
-              tone={backups?.failed ? "danger" : backupsUnreachable.length || backups?.unknown ? "warn" : "good"}
+              sub={backups ? backupSummary(backups.total, backups.failed, backupsUnreachable.length, backups.unknown) : ""}
+              tone={backups?.failed ? "danger" : backupsUnreachable.length || backups?.unknown ? "warn" : backups?.total ? "good" : "neutral"}
             />
           )}
           <StatCard
@@ -567,9 +569,9 @@ export function Cockpit() {
             {!noHosts && (
             <Panel title="Server" right={allHosts.length > 0 ? <span className="text-white/50">{allHosts.length}</span> : undefined}>
             {(nodes.length + servers.length > 0 || (!latestLoading && machines.length > 0)) && (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
+              <div className="p-3 sm:p-0">
+                <table role="table" className={`${CARD_TABLE} text-left`}>
+                  <thead role="rowgroup" className={CARD_HEAD}>
                     <tr className="text-left text-xs text-white/50">
                       <th className="px-3 py-2 pl-4 font-medium">Name</th>
                       <th className="hidden px-3 py-2 font-medium md:table-cell">Adresse</th>
@@ -583,17 +585,17 @@ export function Cockpit() {
                   {tableGroups.length > 1 ? (
                     // Mehrere Arten: je Art ein Abschnitt mit Überschrift (physisch, VMs, LXC), darin wie sonst.
                     tableGroups.map((group) => (
-                      <tbody key={group.category} data-testid={`host-group-${group.category}`}>
-                        <tr className={ROW}>
-                          <th colSpan={7} className="px-4 pb-1.5 pt-3 text-left font-normal"><GroupHeading group={group} /></th>
+                      <tbody role="rowgroup" className={CARD_BODY} key={group.category} data-testid={`host-group-${group.category}`}>
+                        <tr role="row" className={`block sm:table-row ${ROW}`}>
+                          <th role="columnheader" colSpan={7} className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] sm:px-4 pb-1.5 pt-3 text-left font-normal`}><GroupHeading group={group} /></th>
                         </tr>
                         {group.hosts.map(renderHostRow)}
                       </tbody>
                     ))
                   ) : (
                     <>
-                      {nodes.length + servers.length > 0 && <tbody data-testid="host-cards">{[...nodes, ...servers].map(renderHostRow)}</tbody>}
-                      {!latestLoading && machines.length > 0 && <tbody>{machines.map(renderHostRow)}</tbody>}
+                      {nodes.length + servers.length > 0 && <tbody role="rowgroup" className={CARD_BODY} data-testid="host-cards">{[...nodes, ...servers].map(renderHostRow)}</tbody>}
+                      {!latestLoading && machines.length > 0 && <tbody role="rowgroup" className={CARD_BODY}>{machines.map(renderHostRow)}</tbody>}
                     </>
                   )}
                 </table>
@@ -741,8 +743,8 @@ export function Cockpit() {
           <Panel title="Module">
             <div className="grid grid-cols-2 gap-0.5 p-2" data-testid="modules">
               {[
-                { to: "/files", icon: "folder-open", title: "Dateien" },
-                ...(canExecute ? [{ to: "/terminal", icon: "terminal", title: "Terminal" }] : []),
+                ...(features.files ? [{ to: "/files", icon: "folder-open", title: "Dateien" }] : []),
+                ...(canUseTerminal ? [{ to: "/terminal", icon: "terminal", title: "Terminal" }] : []),
                 ...quickPages.map((p) => ({ to: `/ext/${p.ext_id}${p.path}`, icon: p.icon ?? "box", title: p.title })),
               ].map((m) => (
                 <Link key={m.to} to={m.to} className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-white/[0.06]">

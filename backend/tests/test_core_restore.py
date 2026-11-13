@@ -198,6 +198,39 @@ def test_allowed_directory_entries_are_accepted_and_regular_files_still_hash_che
     assert set(staged2.files) == {"db/lattice.db", "files/ext/a/b.txt"}
 
 
+@pytest.mark.parametrize("tampered", ["datei-pruefsumme", "datei-groesse", "db-pruefsumme", "eintrag-fehlt-im-verzeichnis"])
+def test_manifest_checksum_mismatch_rejects_the_restore(layout, tmp_path, tampered):
+    # Gueltiges Archiv und gueltiges Inhaltsverzeichnis, nur eine Angabe im Verzeichnis stimmt nicht mit dem Inhalt ueberein:
+    # allein der Vergleich `expected != seen` in snapshot.extract lehnt das ab (alles andere im Archiv ist in Ordnung).
+    db = make_db(tmp_path / "q.db")
+    good = make_backup(tmp_path / "g.ndbak", db=db, files={"ext/a/b.txt": b"b"})
+    rid0, staged = stage(layout, good)
+    db_bytes = (layout.restore_dir / rid0 / restore.STAGING_NAME / "db" / "lattice.db").read_bytes()
+    db_sha, db_size = staged.files["db/lattice.db"]
+    file_sha, file_size = staged.files["files/ext/a/b.txt"]
+    files = [{"path": "files/ext/a/b.txt", "sha256": file_sha, "size": file_size, "mode": 420}]
+    if tampered == "datei-pruefsumme":
+        files[0]["sha256"] = "0" * 64
+    elif tampered == "datei-groesse":
+        files[0]["size"] = file_size + 1
+    elif tampered == "db-pruefsumme":
+        db_sha = "f" * 64
+    else:
+        files = []
+    manifest = {
+        "format": 1, "app_version": "0.5.0", "created_at": "2026-10-01T03:00:00Z", "instance_id": "i", "jwt_from_env": False, "build": None,
+        "header": fmt.build_header(created_at=__import__("restore_helpers").CREATED, app_version="0.5.0", mode="passwort"),
+        "db": {"dialect": "sqlite", "sha256": db_sha, "size": db_size, "alembic_heads": current_heads()},
+        "extensions": [], "files": files,
+    }
+    members = [tar_member("db/lattice.db", db_bytes), tar_member("files/ext/a/b.txt", b"b")]
+    bad = craft_backup(tmp_path / "pruefsumme.ndbak", members, manifest=manifest)
+    rid = restore.new_id()
+    with pytest.raises(DamagedBackup, match="Prüfsummen stimmen nicht"):
+        stage(layout, bad, restore_id=rid)
+    _only_staging_removed(layout, rid)
+
+
 def test_oversized_entry_is_rejected_before_it_is_written(layout, tmp_path):
     path = craft_backup(tmp_path / "gross.ndbak", [tar_member("files/ext/riesig.bin", b"a" * 5000)])
     rid = restore.new_id()
@@ -401,7 +434,7 @@ def test_untrusted_connection_is_read_only_and_denies_everything_but_reading(tmp
 def test_wal_mode_database_can_be_inspected(tmp_path):
     db = make_db(tmp_path / "wal.db", wal=True)
     assert restore.inspect_db(db).users == 1
-    assert not Path(f"{db}-wal").exists() or True  # immutable: es darf nichts danebenliegen, das wir angelegt haben
+    assert not Path(f"{db}-wal").exists()  # immutable: es darf nichts danebenliegen, das wir angelegt haben
 
 
 def test_database_path_with_special_characters(tmp_path):

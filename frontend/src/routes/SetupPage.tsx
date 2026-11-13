@@ -18,13 +18,14 @@ import { ModulesStep, switchOnAllModules } from "./setup/ModulesStep";
 import { StepNav } from "./setup/StepNav";
 import { TimezoneStep } from "./setup/TimezoneStep";
 import { TotpStep } from "./setup/TotpStep";
+import { TelemetrySettings } from "./settings/TelemetrySettings";
 
 /**
- * Einrichtungs-Assistent einer frischen Installation, sechs Schritte, nur der erste (Konto oder Sicherung einspielen)
+ * Einrichtungs-Assistent einer frischen Installation, sieben Schritte, nur der erste (Konto oder Sicherung einspielen)
  * ist Pflicht. Die Seite erscheint nur, solange `GET /auth/bootstrap` ein Konto verlangt, sonst geht es auf /login
  * statt auf einen 409 beim Absenden. Stehen die Module mit dem Image fest (Nodvard Dock), entfällt die Frage nach ihnen.
  */
-type Step = "account" | "timezone" | "modules" | "totp" | "branding" | "done";
+type Step = "account" | "timezone" | "modules" | "totp" | "branding" | "telemetry" | "done";
 
 const STEPS: { id: Step; title: string }[] = [
   { id: "account", title: "Administrator-Konto anlegen" },
@@ -32,6 +33,7 @@ const STEPS: { id: Step; title: string }[] = [
   { id: "modules", title: "Was willst du nutzen?" },
   { id: "totp", title: "Zwei-Faktor-Anmeldung (optional)" },
   { id: "branding", title: "Aussehen (optional)" },
+  { id: "telemetry", title: "Nutzungsdaten (optional)" },
   { id: "done", title: "Fertig" },
 ];
 
@@ -167,7 +169,7 @@ export function SetupPage() {
       result = await bootstrap(username, password, setupCode.trim());
     } catch {
       // fetch wirft ohne Antwort, sonst bliebe der Knopf für immer auf "…" (wie auf der Anmeldeseite).
-      setError("Server nicht erreichbar – bitte gleich noch einmal versuchen.");
+      setError("Server nicht erreichbar, bitte gleich noch einmal versuchen.");
       return;
     } finally {
       setPending(false);
@@ -201,7 +203,7 @@ export function SetupPage() {
       return;
     }
     setPending(false);
-    goTo("done");
+    goTo("telemetry");
   }
 
   async function afterTimezone() {
@@ -249,7 +251,7 @@ export function SetupPage() {
         ) : (
           <>
             <p className="text-sm opacity-60" data-testid="setup-progress">
-              Schritt {index + 1} von {steps.length} — {steps[index].title}
+              Schritt {index + 1} von {steps.length}: {steps[index].title}
             </p>
             <div className="mb-4 mt-2 flex gap-1" aria-hidden="true">
               {steps.map((s, i) => (
@@ -292,7 +294,7 @@ export function SetupPage() {
               </label>
               {/* Neben dem Etikett statt darin: Der Kopierknopf gehört nicht in den Namen des Feldes. */}
               <p id="setup-code-hint" className="mt-1 text-xs opacity-60">
-                Er schützt die Einrichtung davor, dass jemand anderes im Netz das erste Konto anlegt. Du findest ihn im Protokoll (Log) des Containers:
+                Er schützt die Einrichtung davor, dass jemand anderes im Netz das erste Konto anlegt. Hast du einen eigenen Code vorgegeben, gib ihn hier ein. Sonst findest du ihn im Protokoll (Log) des Containers:
               </p>
               <div className="mt-1 text-xs">
                 <Command id="setup-code-command" text={`docker compose logs ${edition.service}`} />
@@ -394,12 +396,14 @@ export function SetupPage() {
             <p className="text-xs opacity-50">Name, Untertitel und Farbe sowie Logo, weitere Farben und Support-Link kannst du jederzeit unter Einstellungen → Darstellung ändern.</p>
             {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
             <StepNav onBack={() => goTo("totp")}>
-              <Button onClick={() => goTo("done")}>Überspringen</Button>
+              <Button onClick={() => goTo("telemetry")}>Überspringen</Button>
               <Button type="submit" variant="primary" busy={pending}>Speichern</Button>
             </StepNav>
           </form>
+        ) : step === "telemetry" ? (
+          <TelemetrySettings onNext={() => goTo("done")} onBack={() => goTo("branding")} />
         ) : (
-          <FinishStep onBack={() => goTo("branding")} onFinish={finish} />
+          <FinishStep onBack={() => goTo("telemetry")} onFinish={finish} />
         )}
       </div>
     </div>
@@ -435,9 +439,19 @@ function CodeHelp() {
       {open && (
         <div id="setup-code-help" className="flex flex-col gap-3 border-t border-white/10 px-3 py-3 text-xs">
           <p className="opacity-70">
-            Der Code steht im <strong>Protokoll (Log)</strong> des Containers „{service}“: in einem Rahmen aus <code>=</code>-Zeichen, der Code
-            ganz allein in einer Zeile, etwa <code>K7MQ-X2VD-H9PA</code>. Nach einem Neustart steht derselbe Code noch einmal weiter unten.
+            Der Code steht im <strong>Protokoll (Log)</strong> des Containers „{service}“: in einer umrahmten Box aus <code>=</code>- und <code>|</code>-Zeichen,
+            in einer eigenen Zeile, etwa <code>K7MQ-X2VD-H9PA</code>. Solange noch kein Konto existiert, erscheint er bei jedem Start.
           </p>
+          <div>
+            <p className="font-medium">Eigenen Code vorgeben (optional)</p>
+            <p className="opacity-70">
+              Vor dem ersten Start kannst du <code>NODVARD_DECK_SETUP_CODE=dein-eigener-code</code> in eine Datei <code>.env</code> neben
+              der Compose-Datei schreiben. In Portainer trägst du <code>NODVARD_DECK_SETUP_CODE</code> unter „Environment variables“ des Stacks ein.
+              Der Code braucht mindestens 8 Buchstaben von A bis Z oder Ziffern von 0 bis 9. Kleinbuchstaben sind erlaubt, Trennzeichen zählen nicht mit.
+              Ist der Wert leer oder zu kurz, erzeugt der Container selbst einen Code. Sobald ein Konto existiert, wird die Variable ignoriert;
+              das steht beim nächsten Start im Protokoll.
+            </p>
+          </div>
           <div>
             <p className="font-medium">Befehlszeile</p>
             <p className="opacity-70">Im Ordner mit der Compose-Datei:</p>

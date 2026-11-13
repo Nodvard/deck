@@ -170,6 +170,29 @@ def _closed_port() -> int:
 
 
 @pytest.mark.asyncio
+async def test_connection_check_can_log_in_during_an_auth_pause(client, local_ssh_server, ssh_server_stats):
+    import time
+
+    from nodvard_deck.core import ssh_retry
+
+    address, port, username, password, _ = local_ssh_server
+    token = await _bootstrap_owner(client)
+    host = await _make_host(client, token, address=address)
+    await _add_password(client, token, host["id"], port, username, password)
+    first = await _check(client, token, host["id"])
+    await _pin_seen_key(client, token, host["id"], first)
+    await ssh_retry.save(host["id"], ssh_retry.RetryState(3, time.time() + 1800))
+    before = ssh_server_stats["password_tries"]
+    result = await _check(client, token, host["id"])
+    assert result.status_code == 200
+    assert _statuses(result)["login"] == "ok"
+    assert ssh_server_stats["password_tries"] == before + 1
+    # Die erfolgreiche Prüfung des Standard-Zugangs hebt die Pause der Hintergrundzugriffe auf.
+    state = await client.get(f"/api/v1/hosts/{host['id']}/ssh-retry", headers=_auth(token))
+    assert state.json() == {"failures": 0, "retry_at": 0}
+
+
+@pytest.mark.asyncio
 async def test_check_without_credential_asks_to_confirm_the_key_and_writes_nothing(
     client, db_session, local_ssh_server, ssh_server_stats, server_port
 ):

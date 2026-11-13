@@ -1,4 +1,6 @@
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -7,6 +9,23 @@ README = Path(__file__).resolve().parents[2] / "README.md"
 SECURITY = "## Sicherheit und Datenschutz auf einen Blick"
 README_EN = README.with_name("README.en.md")
 SECURITY_EN = "## Security and privacy at a glance"
+
+
+@pytest.fixture(scope="module")
+def standard_extensions(tmp_path_factory):
+    shell = shutil.which("sh")
+    if shell is None:
+        pytest.skip("braucht eine POSIX-Shell")
+    folder = tmp_path_factory.mktemp("readme-modules") / "extensions"
+    shutil.copytree(
+        README.parent / "extensions", folder,
+        ignore=shutil.ignore_patterns("node_modules", "__pycache__", "dist"),
+    )
+    subprocess.run(
+        [shell, str(README.parent / "deploy/select_extensions.sh"), "", str(folder)],
+        capture_output=True, text=True, check=True,
+    )
+    return folder
 
 
 @pytest.fixture(autouse=True, params=("unreleased", "released"))
@@ -87,10 +106,6 @@ def test_security_section_describes_outgoing_connections():
 def test_module_table_has_unique_current_descriptions():
     text = README.read_text(encoding="utf-8")
     expected = {
-        "Netzwerk (Beta)": (
-            "Wegweiser zu den Modulen Pi-hole und Nginx Proxy Manager. "
-            "Wer die beiden nutzt, kann dieses Modul ausschalten."
-        ),
         "Skripte": (
             "Versionierte Skript-Bibliothek, auf einem oder vielen Servern ausführen, "
             "zeitgesteuert, auf Wunsch ohne Klick, solange sich nichts ändert"
@@ -101,6 +116,22 @@ def test_module_table_has_unique_current_descriptions():
         rows = [line for line in text.splitlines() if line.startswith(f"| {name} |")]
         assert rows == [f"| {name} | {description} |"]
     assert "| ntfy |" not in text
+
+
+@pytest.mark.parametrize(
+    "readme,features,sdk",
+    [(README, "Funktionen", "docs/02-EXTENSION-API.md"),
+     (README_EN, "Features", "docs/en/EXTENSION-API.md")],
+    ids=["deutsch", "englisch"],
+)
+def test_optional_modules_are_documented_outside_the_standard_table(readme, features, sdk):
+    section = _section(readme.read_text(encoding="utf-8"), features)
+    rows = "\n".join(line for line in section.splitlines() if line.startswith("|"))
+    assert not re.search(r"Netzwerk|Network|Hello World|hello-world", rows)
+    assert "](extensions/network/extension.toml)" in section
+    assert f"]({sdk})" in section
+    assert "`hello-world`" in section
+    assert "extensions/hello-world/extension.toml)" in (README.parent / sdk).read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -120,6 +151,21 @@ def test_deck_and_dock_link_to_the_matching_language(readme, dock, guide, back):
     assert f"](../../{guide})" in dock_text
     index = (README.parent / "docs/README.md").read_text(encoding="utf-8")
     assert f"]({guide.removeprefix('docs/')})" in index
+
+
+def test_docs_index_lists_shield_and_dock_once():
+    folder = README.parent / "docs"
+    index = (folder / "README.md").read_text(encoding="utf-8")
+    for guide, translation, topic in (
+        ("en/SHIELD.md", "18-SHIELD.md", "Fail2ban"),
+        ("en/dock/README.md", "dock/README.md", "FAQ"),
+    ):
+        rows = [line for line in index.splitlines() if line.startswith(f"| [{guide}]")]
+        assert len(rows) == 1
+        assert f"]({translation})" in rows[0]
+        assert topic in rows[0]
+        assert (folder / guide).is_file()
+        assert (folder / translation).is_file()
 
 
 @pytest.mark.parametrize("readme", [README, README_EN], ids=["deutsch", "englisch"])
@@ -151,6 +197,44 @@ def test_english_license_section_does_not_repeat_the_explanation():
     assert "The source code is available to read." in section
     assert section.count("](THIRD_PARTY_LICENSES)") == 1
     assert "**Why this license?**" not in section
+
+
+@pytest.mark.parametrize(
+    "readme,heading,statements,guide",
+    (
+        (README, SECURITY, (
+            "**Keine Telemetrie:** Ohne Zustimmung sendet Deck keine Nutzungs- oder Absturzdaten an Nodvard oder einen Analysedienst.",
+            "**Freiwillige Nutzungsdaten:** Drei einzeln wählbare Stufen, standardmäßig aus.",
+            "Ohne Zustimmung wird nichts gesendet.",
+            "Vorschau des echten JSON, lokales Protokoll und Löschknopf",
+            "Bis Empfänger und Datenschutzfreigabe konfiguriert sind, bleibt das Teilen gesperrt",
+            "**Deck selbst sucht nach Updates:**",
+        ), "docs/18-NUTZUNGSDATEN.md"),
+        (README_EN, SECURITY_EN, (
+            "**No telemetry:** Without consent, Deck sends no usage or crash data to Nodvard or an analytics service.",
+            "**Optional usage data:** Three independently selectable stages, off by default.",
+            "Nothing is sent without consent.",
+            "a real JSON preview, local history and a deletion button",
+            "Sharing stays locked until a receiver and privacy release are configured",
+            "**Deck itself checks for updates:**",
+        ), "docs/en/USAGE-DATA.md"),
+    ),
+)
+def test_security_preserves_usage_data_consent_and_connection_evidence(readme, heading, statements, guide):
+    text = readme.read_text(encoding="utf-8")
+    assert re.search(r"^(?:<{7}|={7}|>{7})(?: |$)", text, re.MULTILINE) is None
+    section = _section(text, heading.removeprefix("## "))
+    normalized = " ".join(section.split())
+    for statement in statements:
+        assert statement in normalized
+    for source in (
+        guide,
+        "docs/04-API.md#nutzungsdaten",
+        "backend/pyproject.toml",
+        "frontend/package.json",
+        "frontend/src/main.tsx",
+    ):
+        assert f"]({source})" in section
 
 
 @pytest.mark.parametrize(
@@ -220,10 +304,12 @@ def test_promises_cover_capabilities_and_limits(readme, header, why, quick, prom
 
 
 @pytest.mark.parametrize("readme,header,why,quick,promises,security,guide,anchor", LANGUAGES)
-def test_security_covers_every_modules_access_and_links_to_code(readme, header, why, quick, promises, security, guide, anchor):
+def test_security_covers_standard_modules_access_and_links_to_code(
+    readme, header, why, quick, promises, security, guide, anchor, standard_extensions,
+):
     section = _section(readme.read_text(encoding="utf-8"), security)
-    for manifest in sorted((README.parent / "extensions").glob("*/extension.toml")):
-        link = manifest.relative_to(README.parent).as_posix()
+    for manifest in sorted(standard_extensions.glob("*/extension.toml")):
+        link = f"extensions/{manifest.parent.name}/extension.toml"
         assert f"]({link})" in section, manifest.parent.name
     for source in (
         "backend/src/nodvard_deck/config.py",

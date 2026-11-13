@@ -9,8 +9,9 @@ Dock verwaltet Docker über SSH. Die Oberfläche ist derzeit auf Deutsch; die en
 |---|---|
 | [Stacks aus Git](stacks-from-git.md) | Erster Stack, HTTPS-Quelle, Vergleich, Freigabe, Rückweg und Grenzen |
 | [Image-Updates](image-updates.md) | Prüfen und Einspielen unterscheiden, Sicherung und Rückweg |
-| [Vorlagen](templates.md) | Vorhandener Katalog, Ports und Einrichtung |
+| [Vorlagen](templates.md) | Katalog, eigene Vorlagen, erforderliche Werte und Einrichtung |
 | [Fehlerbehebung](troubleshooting.md) | Start, Login, SSH, Git, Updates und Wiederherstellung |
+| [Häufige Fragen (FAQ)](FAQ.md) | Docker-Netze, Image holen, eigene Vorlagen und Stacks aus Git |
 
 ## Edition und Umfang
 
@@ -18,7 +19,7 @@ Dock entsteht aus demselben Quelltext wie Deck. Die folgenden Unterschiede ergeb
 
 | Eigenschaft | Dock | Deck | Codebeleg |
 |---|---|---|---|
-| Build | `EDITION=dock`, `NODVARD_DECK_EXTENSIONS=docker` | Modulauswahl über `NODVARD_DECK_EXTENSIONS`, ohne Auswahl alle Module | [Dockerfile](../../deploy/Dockerfile), [Modulauswahl](../../deploy/select_extensions.sh) |
+| Build | `EDITION=dock`, `NODVARD_DECK_EXTENSIONS=docker` | Modulauswahl über `NODVARD_DECK_EXTENSIONS`, ohne Auswahl alle außer `network` und `hello-world` | [Dockerfile](../../deploy/Dockerfile), [Modulauswahl](../../deploy/select_extensions.sh) |
 | Image und Compose-Dienst | `ghcr.io/nodvard/dock`, `nodvard-dock` | `ghcr.io/nodvard/deck`, `nodvard-deck` | [edition.py](../../backend/src/nodvard_deck/edition.py), [Dock-Compose](../../deploy/nodvard-dock/compose.yml) |
 | Einrichtungsassistent | `choose_modules=False`, mitgelieferte Module automatisch aktiv | `choose_modules=True`, Module auswählbar | [edition.py](../../backend/src/nodvard_deck/edition.py), [SetupPage.tsx](../../frontend/src/routes/SetupPage.tsx) |
 | Update-Werkzeuge | `repo_tools=False`, Compose verwenden | `repo_tools=True`, auch Deck-Repository-Werkzeuge | [edition.py](../../backend/src/nodvard_deck/edition.py) |

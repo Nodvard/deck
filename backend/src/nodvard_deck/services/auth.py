@@ -33,7 +33,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 
 from .. import edition
 from ..config import Settings
-from ..core import login_limit, security, setup_code, vault
+from ..core import login_limit, rate_limit, security, setup_code, vault
 from ..core.rbac import BUILTIN_ROLES, has_permission
 from ..db import new_id, refresh_relationships, utcnow
 from ..db.session import session_scope
@@ -123,9 +123,14 @@ def _begin_attempt(
     mfa_token: str | None = None,
     account: str | None = None,
     brake_name: bool = False,
+    password_login: bool = False,
+    address: str | None = None,
 ) -> login_limit.Attempt:
     try:
-        return login_limit.begin(ip, username, mfa_token=mfa_token, account=account, brake_name=brake_name)
+        return login_limit.begin(
+            ip, username, mfa_token=mfa_token, account=account, brake_name=brake_name, password_login=password_login,
+            address=address,
+        )
     except login_limit.MfaTokenUsed:
         raise InvalidMfaCode(MFA_TOKEN_USED_MESSAGE) from None
     except login_limit.MfaExhausted:
@@ -245,6 +250,10 @@ async def _record_failure(
             f"{login_limit.NAME_FREE_FAILURES} Fehlversuche für diesen Benutzernamen in 24 Stunden aus fremden Netzen "
             f"(alle Adressen zusammen); jeder Versuch aus einem Netz wartet jetzt doppelt so lange wie der vorige aus "
             f"demselben Netz, höchstens {login_limit.NAME_MAX_WAIT_SECONDS // 60} Minuten"
+        ),
+        login_limit.SCOPE_PASSWORD: (
+            f"{login_limit.MAX_PASSWORD_FAILURES_PER_NAME} Fehlversuche für diesen Benutzernamen "
+            f"in {minutes} Minuten über alle Adressen aus fremden Netzen"
         ),
     }
     await audit_service.log(
@@ -508,11 +517,13 @@ async def prepare_setup_code(session: AsyncSession, settings: Settings) -> str |
     """Stellt beim Start ohne Nutzer den Einrichtungscode bereit, sonst löscht es eine übrig gebliebene Code-Datei."""
     if not await needs_bootstrap(session):
         setup_code.clear(settings.data_dir)
+        if settings.setup_code:
+            print("Hinweis: NODVARD_DECK_SETUP_CODE wird ignoriert, weil bereits ein Konto existiert.", flush=True)
         return None
     if settings.setup_code and setup_code.valid_preset(settings.setup_code) is None:
         print(
             "Hinweis: NODVARD_DECK_SETUP_CODE ist zu kurz (mindestens "
-            f"{setup_code.MIN_PRESET_LEN} Zeichen) und wird ignoriert.",
+            f"{setup_code.MIN_PRESET_LEN} Buchstaben oder Ziffern) und wird ignoriert.",
             flush=True,
         )
     code, _created = setup_code.ensure(settings.data_dir, settings.setup_code)
@@ -658,7 +669,8 @@ async def login(
     if too_long:
         username = username[:MAX_USERNAME_LENGTH]
         password = password[:MAX_LOGIN_PASSWORD_LENGTH]
-    attempt = _begin_attempt(ip, username, brake_name=login_limit.is_foreign(ip))
+    foreign = login_limit.is_foreign(ip)
+    attempt = _begin_attempt(ip, username, brake_name=foreign, password_login=foreign)
     user = None
     if not too_long:
         result = await session.execute(select(User).where(func.lower(User.username) == username))
@@ -907,8 +919,11 @@ async def _report_password_guessing(user_id: str) -> None:
                 body=(
                     f"Für „{user.username}“ gab es in 24 Stunden {login_limit.NAME_FREE_FAILURES} falsche Anmeldungen "
                     "aus fremden Netzen. Jeder weitere Versuch aus einem dieser Netze wartet jetzt länger, bis zu "
-                    f"{login_limit.NAME_MAX_WAIT_SECONDS // 60} Minuten. Aus deinem Heimnetz, über ein VPN und aus "
-                    f"anderen Netzen kommst du weiter sofort hinein. {advice}"
+                    f"{login_limit.NAME_MAX_WAIT_SECONDS // 60} Minuten. Nach "
+                    f"{login_limit.MAX_PASSWORD_FAILURES_PER_NAME} falschen Passwörtern in "
+                    f"{login_limit.WINDOW_SECONDS // 60} Minuten werden Anmeldeversuche aus fremden Netzen "
+                    "vorübergehend gesperrt, auch mit dem richtigen Passwort. Aus deinem Heimnetz oder über VPN "
+                    f"kommst du weiter hinein. {advice}"
                 ),
                 severity="warning",
                 payload={"notification_type": "account.password_attempts", "path": "/settings/account", "tags": ["warning", "key"]},
@@ -1026,11 +1041,36 @@ async def report_recovery_use(
         _log.warning("Meldung zum Wiederherstellungs-Code nicht zugestellt", exc_info=True)
 
 
+_refresh_address_window = rate_limit.SlidingWindow(60, 60)
+_refresh_account_window = rate_limit.SlidingWindow(30, 60)
+
+
+def _check_refresh_account_limit(user_id: str) -> None:
+    wait = _refresh_account_window.hit(user_id)
+    if wait:
+        raise TooManyAttempts(login_limit.lockout_message(wait), retry_after=wait)
+
+
 async def refresh_access_token(
-    session: AsyncSession, settings: Settings, *, raw_refresh_token: str
+    session: AsyncSession, settings: Settings, *, raw_refresh_token: str, ip: str | None = None,
 ) -> IssuedTokens:
     """Rotation: Der eingelöste Refresh-Token wird sofort widerrufen und ein neuer ausgegeben, ein zweiter
-    Einlösungsversuch scheitert."""
+    Einlösungsversuch scheitert. Die Adressgrenze zählt nur fehlgeschlagene Einlösungen, damit ungültige Tokens
+    hinter einem gemeinsamen Proxy nicht alle Nutzer aussperren; erfolgreiche begrenzt nur die Kontogrenze."""
+    bucket = login_limit.ip_bucket(ip)
+    wait = _refresh_address_window.wait(bucket)
+    if wait:
+        raise TooManyAttempts(login_limit.lockout_message(wait), retry_after=wait)
+    try:
+        return await _redeem_refresh_token(session, settings, raw_refresh_token=raw_refresh_token)
+    except InvalidCredentials:
+        _refresh_address_window.hit(bucket)
+        raise
+
+
+async def _redeem_refresh_token(
+    session: AsyncSession, settings: Settings, *, raw_refresh_token: str,
+) -> IssuedTokens:
     token_hash = security.hash_opaque_token(raw_refresh_token)
     result = await session.execute(
         select(RefreshToken).where(RefreshToken.token_hash == token_hash)
@@ -1043,11 +1083,15 @@ async def refresh_access_token(
         raise invalid
 
     if token_row.revoked_at is not None:
-        return await _grace_tokens(session, settings, token_row, now, invalid)
+        tokens = await _grace_tokens(session, settings, token_row, now, invalid)
+        _check_refresh_account_limit(token_row.user_id)
+        return tokens
 
     user = await session.get(User, token_row.user_id)
     if user is None or not user.is_active:
         raise InvalidCredentials("Nutzer nicht mehr aktiv.")
+
+    _check_refresh_account_limit(token_row.user_id)
 
     # Atomar einlösen: Nur wer die Zeile von „nicht widerrufen“ auf „widerrufen“ setzt, darf rotieren. Zwei
     # überlappende Aufrufe mit demselben Token erzeugen so nicht zwei gültige Nachfolger; der Verlierer fällt in die
@@ -1360,7 +1404,7 @@ async def confirm_totp_setup(
             "Die Zwei-Faktor-Einrichtung wurde noch nicht gestartet."
         )
 
-    attempt = _begin_attempt(_account_key(user.id), SENSITIVE_ATTEMPT_KEY)
+    attempt = _begin_attempt(_account_key(user.id), SENSITIVE_ATTEMPT_KEY, address=ip or "unbekannt")
     keyring = vault.load_keyring(settings)
     raw_secret = await vault.read_secret_plaintext(session, keyring, user.totp_secret_id)
     compact = "".join(code.split())
@@ -1395,6 +1439,8 @@ async def confirm_totp_setup(
     await code_set.hash()
     user.totp_confirmed_at = utcnow()
     await session.flush()
+    # Nach erfolgreicher Aktivierung ist die einmalige Erinnerung erledigt, auch wenn Zwei-Faktor später wieder aus ist.
+    await settings_service.set_user(session, user.id, settings_service.TOTP_REMINDER_DISMISSED_KEY, True)
     return await issue_recovery_codes(session, user, code_set)
 
 
@@ -1431,9 +1477,8 @@ async def require_current_password(
 ) -> None:
     """Bestätigt eine empfindliche Konto-Aktion (`action`) mit dem aktuellen Passwort; falsche Eingaben werden
     gedrosselt und protokolliert."""
-    # Ein Zähler je Nutzer für alle empfindlichen Aktionen, nicht je IP: Sonst ließe sich die Sperre mit wechselnden
-    # Adressen umgehen, und ein Angreifer mit gestohlener Sitzung käme trotz Drosselung weiter.
-    attempt = _begin_attempt(_account_key(user.id), SENSITIVE_ATTEMPT_KEY)
+    # Konto- und Adressgrenzen gelten über alle empfindlichen Aktionen.
+    attempt = _begin_attempt(_account_key(user.id), SENSITIVE_ATTEMPT_KEY, address=ip or "unbekannt")
     if not await _verify_password(attempt, password, user.password_hash, signed_in=True):
         await audit_service.log(
             session,
@@ -1507,9 +1552,7 @@ async def require_current_totp(
 ) -> str | None:
     """Verlangt bei eingeschaltetem Zwei-Faktor den aktuellen Code aus der App; `None` bei Zwei-Faktor aus, sonst
     `VIA_TOTP` oder `VIA_RECOVERY`."""
-    # Dieselben Bausteine wie beim Anmelden (`verify_mfa`): Ein Code gilt je Konto nur einmal, auch quer zwischen
-    # Anmeldung und Bestätigung. Gedrosselt wird nur über die IP-unabhängige Grenze je Konto, die sich beide teilen; der
-    # Zähler der Passwortabfrage taugt nicht dafür, das richtige Passwort davor setzt ihn zurück.
+    # Codes teilen sich die Kontogrenze mit der Anmeldung; ein richtiges Passwort setzt sie nicht zurück.
     if not two_factor_enabled(user):
         return None
     compact = "".join((code or "").split())
@@ -1531,6 +1574,7 @@ async def require_current_totp(
             _account_key(user.id),
             RECOVERY_ATTEMPT_KEY if via_recovery else SENSITIVE_ATTEMPT_KEY,
             account=None if via_recovery else user.id,
+            address=ip or "unbekannt",
         )
     except TooManyAttempts as exc:
         if not allow_recovery or via_recovery:

@@ -1,7 +1,4 @@
-/**
- * Bausteine für alle Einstellungs-Bereiche, damit jede Unterseite gleich aussieht:
- * Kopfzeile, Karten mit Titel/Beschreibung, Formularfelder und Rückmeldungen.
- */
+/** Gemeinsame Bausteine für Einstellungsseiten und Rückmeldungen. */
 import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -20,13 +17,16 @@ export function PageHeader({ title, description, actions }: { title: string; des
   );
 }
 
-export function Card({ title, description, children, footer }: { title?: string; description?: ReactNode; children: ReactNode; footer?: ReactNode }) {
+export function Card({ title, description, actions, children, footer }: { title?: string; description?: ReactNode; actions?: ReactNode; children: ReactNode; footer?: ReactNode }) {
   return (
     <section className="panel mb-5 overflow-hidden">
-      {(title || description) && (
-        <header className="border-b border-white/[0.06] px-5 py-4">
-          {title && <h3 className="text-sm font-semibold">{title}</h3>}
-          {description && <p className="mt-0.5 text-xs text-white/50">{description}</p>}
+      {(title || description || actions) && (
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.06] px-5 py-4">
+          <div>
+            {title && <h3 className="text-sm font-semibold">{title}</h3>}
+            {description && <p className="mt-0.5 text-xs text-white/50">{description}</p>}
+          </div>
+          {actions && <div className="flex items-center gap-2">{actions}</div>}
         </header>
       )}
       <div className="px-5 py-4">{children}</div>
@@ -106,12 +106,7 @@ export function Badge({ children, tone = "neutral" }: { children: ReactNode; ton
   return <span className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] font-medium ${styles}`}>{children}</span>;
 }
 
-/**
- * Zustand einer Erweiterung aus models/platform.py (enabled | disabled | error |
- * incompatible | uninstalling). "failed" bleibt als alter Name für "error" erhalten.
- * Früher stand alles außer "enabled" als "Aus" da, auch eine abgestürzte
- * Erweiterung.
- */
+/** Erweiterungszustand anzeigen; „failed“ wird als kompatibler Alias für „error“ behandelt. */
 export function ExtensionStateBadge({ state }: { state: string }) {
   switch (state) {
     case "enabled":

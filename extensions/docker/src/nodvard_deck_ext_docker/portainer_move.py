@@ -3,6 +3,7 @@ demselben Projektnamen neu ausgerollt. Die Volumes bleiben, die Container werden
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 import functools
 import json
@@ -50,7 +51,11 @@ from .stack_actions import (
 )
 from .stack_backup import BACKUP_IMAGE
 from .stack_delete import _ID_RE, MAX_CONTAINERS, cmd_container_ids
-from .stack_update import cmd_container_images, parse_container_images
+from .stack_update import (
+    _wait_for_cleanup,
+    cmd_container_images,
+    parse_container_images,
+)
 from .stacks import (
     MAX_ENV_BYTES,
     MAX_FILE_BYTES,
@@ -716,17 +721,16 @@ class DockerPortainerMoveExecutor:
             return ActionResult(success=False, error=f"{foreign} Geändert wurde nichts.")
         root = await self._move.new.root(host.id)
         target = new_stack(project, root)
+        if target.working_dir != payload.get("folder"):
+            return ActionResult(success=False, error="Der Zielordner hat sich inzwischen geändert. Bitte noch einmal umziehen.")
         # Die `.env` im Ordner liefert Compose die Werte für `${…}` in der Datei, so wie Portainer sie beim Ausrollen setzt.
         extra = ((f"{target.working_dir}/.env", env),) if env else ()
         if env and uses_stack_env(text):
             extra += ((f"{target.working_dir}/{ENV_NAME}", env),)
 
-        own: list[str] = []
-
         def vet(config: dict[str, Any]) -> str | None:
             found = resolved_blockers(config, target.working_dir, stack.working_dir)
             refusal = " ".join(_sentence(b) for b in found) if found else changed_images(config, images)
-            own.extend([refusal] if refusal else [])
             return refusal
 
         created: list[tuple[str, str]] = []
@@ -736,14 +740,12 @@ class DockerPortainerMoveExecutor:
                 if problem is None:
                     # Rollt Portainer den Stack inzwischen neu aus, gehört die gelesene Datei nicht mehr zu den Containern.
                     problem = await self._still_matching(host, stack, images)
-                    own.extend([problem] if problem else [])
             except BaseException:
                 await self._clean_up_after_abort(host, target, created, look=False, compose_may_run=False)
                 raise
         if problem is not None:
             left = await self._clean_up_now(host, target, created)
-            # Nur Ausgaben von Compose können Werte zitieren; Decks eigene Sätze nennen Ordner und Images, die bleiben lesbar.
-            reason = problem if problem in own else scrub(problem, values)
+            reason = scrub(problem, values)
             return ActionResult(success=False, error=_sentence(reason) + _leftover(left) + " Am Stack hat sich nichts geändert.")
         before = sum(1 for m in stack.members if m.state == "running")
         return await self._roll_out(host, target, created, values, started, before)
@@ -871,7 +873,8 @@ class DockerPortainerMoveExecutor:
         """Entfernt den neuen Ordner und gibt zurück, was stehen blieb; bricht die Aktion dabei ab, räumt es trotzdem fertig auf."""
         cleanup = self._clean_up_task(host, target, created, look=False, compose_may_run=False)
         try:
-            return await asyncio.shield(cleanup)
+            await _wait_for_cleanup(cleanup, remaining=f"Prüfe den Stack „{target.project}“ und die Dateien in {target.working_dir}.")
+            return cleanup.result()
         except asyncio.CancelledError:
             cleanup.add_done_callback(functools.partial(_report_after_abort, target.project, target.working_dir, False))
             raise
@@ -883,8 +886,7 @@ class DockerPortainerMoveExecutor:
             return
         cleanup = self._clean_up_task(host, target, created, look=look, compose_may_run=compose_may_run)
         cleanup.add_done_callback(functools.partial(_report_after_abort, target.project, target.working_dir, compose_may_run))
-        # Auch ein zweiter Abbruch reißt das Aufräumen nicht mit, er beendet nur das Warten darauf.
-        await asyncio.wait([cleanup])
+        await _wait_for_cleanup(cleanup, remaining=f"Prüfe den Stack „{target.project}“ und die Dateien in {target.working_dir}.")
 
     async def _clean_up(
         self, host: Any, target: Stack, created: list[tuple[str, str]], *, look: bool, compose_may_run: bool,
@@ -938,12 +940,20 @@ def move_routes(move: PortainerMove, editor: StackEditor, docker_host: Any, curr
         host = await docker_host(host_id)
         return host, await move.plan(host, project)
 
-    @router.get("/hosts/{host_id}/stacks/{project}/from-portainer")
+    @router.get(
+        "/hosts/{host_id}/stacks/{project}/from-portainer",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 502,)},
+    )
     async def move_plan(host_id: str, project: str) -> dict:
         """Wohin ein Portainer-Stack zöge und warum es nicht geht."""
         return (await _plan(host_id, project))[1]
 
-    @router.post("/hosts/{host_id}/stacks/{project}/from-portainer", status_code=status.HTTP_202_ACCEPTED)
+    @router.post(
+        "/hosts/{host_id}/stacks/{project}/from-portainer", status_code=status.HTTP_202_ACCEPTED,
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 409, 502,)},
+    )
     async def move_stack(host_id: str, project: str, actor: Actor = Depends(current_actor)) -> dict:
         """Schlägt den Umzug vor (Gate-Aktion `docker.stack_from_portainer`, immer mit hohem Risiko)."""
         host, plan = await _plan(host_id, project)

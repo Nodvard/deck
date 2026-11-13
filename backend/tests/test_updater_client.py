@@ -94,6 +94,7 @@ def test_root_writable_for_others_or_foreign_owner_is_unsafe(channel, monkeypatc
     assert client.read_status(channel).reason == "unsafe", "der Kanal muss root gehoeren"
 
 
+@pytest.mark.needs_root
 @pytest.mark.skipif(os.geteuid() != 0, reason="nur root kann den Besitzer aendern")
 def test_status_of_another_owner_is_unsafe(channel):
     path = write_status(channel, status_doc())
@@ -254,7 +255,7 @@ def test_constants_match_the_helper_and_the_shared_vectors():
     channel = helper_module("channel")
     assert client.PROTOCOL == proto["proto"] == policy.PROTOCOL
     assert proto["request_versions"] == list(policy.REQUEST_VERSIONS)
-    assert [client.REQUEST_VERSION, client.SIGNED_REQUEST_VERSION] == proto["request_versions"]
+    assert [client.REQUEST_VERSION, client.SIGNED_REQUEST_VERSION, client.AUTHENTICATED_REQUEST_VERSION] == proto["request_versions"]
     assert list(client.SIGNED_REQUEST_KEYS) == proto["signed_request_keys"] == sorted(policy.SIGNED_REQUEST_KEYS)
     assert updates.GRANT_KEYS == set(proto["grant_keys"]) == policy.GRANT_KEYS
     assert updates.GRANT_FORMAT == proto["grant_format"] == policy.GRANT_FORMAT
@@ -407,7 +408,8 @@ def test_an_update_with_a_digest_is_read_by_the_real_helper_as_written():
     digest = "sha256:" + "4f" * 32
     data = client.encode_request(request_id=str(uuid.uuid4()), action="update", version="0.7.1", created_at=1790812395,
                                  digest=digest)
-    assert policy.parse_request(data, now=1790812400).digest == digest
+    with pytest.raises(policy.Refusal, match="signature_required"):
+        policy.parse_request(data, now=1790812400)
 
 
 @pytest.mark.parametrize(("action", "digest"), [

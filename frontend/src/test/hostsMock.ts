@@ -58,7 +58,7 @@ export function hostFixture(over: Record<string, unknown> = {}) {
 
 export function credentialFixture(over: Record<string, unknown> = {}) {
   return {
-    id: "c1", host_id: "h1", kind: "ssh_key", username: "lattice", port: 22, is_default: true,
+    id: "c1", host_id: "h1", kind: "ssh_key", username: "nodvard", port: 22, is_default: true,
     created_at: "2026-09-30T10:00:00Z", ...over,
   };
 }
@@ -73,7 +73,7 @@ export function checkFixture(over: Record<string, unknown> = {}) {
     items: [
       { id: "reachable", label: "Server erreichbar", status: "ok", detail: "SSH-Dienst antwortet.", hint: "" },
       { id: "host_key", label: "Server-Schlüssel", status: "ok", detail: "Bekannt (ssh-ed25519).", hint: "" },
-      { id: "login", label: "Anmeldung als lattice", status: "ok", detail: "Mit Schlüssel angemeldet.", hint: "" },
+      { id: "login", label: "Anmeldung als nodvard", status: "ok", detail: "Mit Schlüssel angemeldet.", hint: "" },
       { id: "root", label: "Root-Rechte", status: "warn", detail: "sudo verlangt ein Passwort.", hint: "Einrichtungsbefehl mit „Root-Rechte ohne Passwort“ erneut ausführen." },
       { id: "os", label: "Betriebssystem", status: "ok", detail: "Debian 12", hint: "" },
     ],

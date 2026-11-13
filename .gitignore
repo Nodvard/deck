@@ -43,3 +43,18 @@ deploy/.backup-restore.lock
 
 # Protokoll von restore.sh (Pfade, Benutzernamen; entsteht beim ersten Einspielen)
 deploy/restore.log
+
+# Lokale Browserprofile, Paketcache und Laufprotokolle
+/.mobile-deps/browser-*/
+/.mobile-deps/cache/
+/.mobile-deps/*.log
+
+# Arbeitsnotizen zu Pull Requests gehoeren nicht ins Repo
+/PR-*.txt
+
+# Einmalige Umbau-Skripte gehoeren nicht ins Repo
+/.mobile-edit.cjs
+/.mobile-tests.cjs
+
+# Testläufe der Prüf- und Bauwerkzeuge
+/.pr-*.log

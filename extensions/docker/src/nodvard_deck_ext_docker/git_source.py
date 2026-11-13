@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 import base64
 import binascii
@@ -16,7 +17,7 @@ import re
 import shutil
 import stat as statmod
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -53,8 +54,8 @@ SECRET_PREFIX = "docker-git-token:"
 WORKER = Path(__file__).with_name("git_fetch.py")
 GRACE_S = 10
 """So lange darf der Prozess nach seiner eigenen Frist noch brauchen, dann beendet Deck ihn."""
-PARALLEL = 2
-"""Höchstens so viele Prozesse holen gleichzeitig, jeder darf bis zu `Limits.memory_bytes` belegen."""
+PARALLEL = 1
+"""Nur ein Prozess holt gleichzeitig, damit Prüfung und Tausch die gemeinsame Speichergrenze einhalten."""
 REAP_S = 10
 """So lange wartet Deck nach dem Beenden darauf, dass der Prozess wirklich weg ist."""
 _WORKER_ENV = ("PATH", "LANG", "LANGUAGE", "TZ", "TMPDIR", "TEMP", "TMP", "SYSTEMROOT", "SSL_CERT_FILE", "SSL_CERT_DIR")
@@ -287,9 +288,12 @@ ENV_NAME = ".env"
 """Umgebungsdateien halten meist Geheimnisse; Deck ersetzt sie auf dem Server nie, eine fehlende schreibt es mit 0600."""
 
 
-def env_file(stack: Stack, path: str) -> bool:
-    """Eine Umgebungsdatei des Stacks: `.env` in jedem Ordner und jede, die beim Übernehmen genannt war."""
-    return posixpath.basename(path) == ENV_NAME or path in stack.env_files
+def env_file(stack: Stack, path: str, service_files: Collection[str] = ()) -> bool:
+    """Eine Umgebungsdatei aus Übernahme oder Compose, außerdem `.env` in jedem Ordner."""
+    if posixpath.basename(path) == ENV_NAME:
+        return True
+    normal = posixpath.normpath(path).lstrip("/")
+    return any(posixpath.normpath(p).lstrip("/") == normal for p in (*stack.env_files, *service_files))
 
 
 def server_path(stack: Stack, fetched: Fetched, rel: str) -> str:
@@ -465,6 +469,7 @@ class GitStacks:
         self._locks: dict[str, asyncio.Lock] = {}
         self.limits = LIMITS
         self._slots = asyncio.Semaphore(PARALLEL)
+        self._check_slots = asyncio.Semaphore(PARALLEL)
         self.run_fetch: Callable[[dict[str, Any], Limits], Awaitable[dict[str, Any]]] = run_worker
         """Test-Einhänger: führt den Auftrag statt im eigenen Prozess anders aus."""
         self.on_forget: Callable[[str, str], Awaitable[None]] | None = None
@@ -524,7 +529,8 @@ class GitStacks:
             raise GitProblem(f"Für „{access.name}“ ist kein Token im Tresor. Trag es unter Einstellungen → Docker ein.")
         return (access.username, token)
 
-    async def head(self, host_id: str, project: str, source: Source, known: tuple[str, ...] = ()) -> tuple[str, str]:
+    async def head(self, host_id: str, project: str, source: Source, known: tuple[str, ...] = (), *,
+                   scheduled: bool = False) -> tuple[str, str]:
         """Commit und Art (`branch`, `tag`), auf die die Quelle gerade zeigt; schreibt nichts. Bei einem Tag, der nicht auf
         einen der `known` Commits zeigt, sieht der Arbeiter einmal nach, ob dahinter ein Commit steht."""
         async with contextlib.AsyncExitStack() as stack:
@@ -534,7 +540,7 @@ class GitStacks:
             request = {"mode": "head", "url": source.url, "ref": source.ref, "known": list(known),
                        "credentials": list(credentials) if credentials else None, "limits": asdict(self.limits),
                        "allow_private": await self.private_allowed()}
-            async with self._slots:
+            async with self._slots if scheduled else self._check_slots:
                 answer = await self.run_fetch(request, self.limits)
         return parse_head(answer)
 
@@ -552,6 +558,21 @@ class GitStacks:
                 async with self._slots:
                     return parse_answer(await self.run_fetch(request, self.limits), self.limits)
 
+    async def service_env_files(self, folder: str, *composes: bytes) -> set[str]:
+        """Liest Umgebungsdateipfade im begrenzten Prozess."""
+        if any(len(compose) > self.limits.compose_bytes for compose in composes):
+            raise GitProblem(f"Die Compose-Datei ist größer als {self.limits.compose_bytes // 1024} KB.")
+        request = {"mode": "env_files", "folder": folder, "composes": [base64.b64encode(c).decode() for c in composes],
+                   "limits": asdict(self.limits)}
+        async with self._slots:
+            answer = await self.run_fetch(request, self.limits)
+        if answer.get("ok") is not True:
+            raise GitProblem(_shown(str(answer.get("problem") or UNREADABLE), 500))
+        paths = answer.get("env_files")
+        if not isinstance(paths, list) or not all(isinstance(p, str) and p.startswith("/") for p in paths):
+            raise GitProblem(UNREADABLE)
+        return set(paths)
+
     async def preview(self, host: Any, stack: Stack, source: Source) -> dict[str, Any]:
         fetched = await self.fetch(host.id, stack.project, source)
         out: dict[str, Any] = {
@@ -561,6 +582,11 @@ class GitStacks:
             "problems": content_problems(stack, fetched), "warnings": [], "files": [], "compose": None,
         }
         target = stack.files[0]
+        service_files: set[str] = set()
+        try:
+            service_files.update(await self.service_env_files(stack.working_dir, fetched.files.get(fetched.compose, (0, b""))[1]))
+        except GitProblem as exc:
+            out["problems"].append(str(exc))
         if fetched.compose in fetched.files:
             out["warnings"] = list(fetched.warnings)
         try:
@@ -582,6 +608,13 @@ class GitStacks:
                         old = None
                     out["compose"] = {"path": target, "old": old, "new": new.decode("utf-8", "replace"),
                                       "same": old is not None and old.encode() == new}
+                    if old is not None:
+                        try:
+                            service_files.update(await self.service_env_files(stack.working_dir, old.encode("utf-8")))
+                        except GitProblem as exc:
+                            out["problems"].append(str(exc))
+                for entry in out["files"]:
+                    entry["env"] = env_file(stack, entry["server_path"], service_files)
         except Exception as exc:  # als Grund zeigen, nicht als 500
             raise GitProblem(f"Die Dateien auf dem Server ließen sich nicht lesen: {str(exc)[:200] or type(exc).__name__}") from exc
         out["problems"] = list(dict.fromkeys(out["problems"]))[:MAX_PROBLEMS]
@@ -608,14 +641,19 @@ async def _audit(ctx: Any, action: str, host_id: str, project: str, actor: Any, 
         log.exception("docker_git_audit_failed action=%s", action)
 
 
-def git_routes(git: GitStacks, docker_host: Callable[[str], Awaitable[Any]], current_actor: Any) -> APIRouter:
+def git_routes(git: GitStacks, docker_host: Callable[[str], Awaitable[Any]], current_actor: Any) -> tuple[APIRouter, APIRouter]:
     router = APIRouter()
+    source_router = APIRouter()
 
     def _project(project: str) -> None:
         if not PROJECT_RE.match(project):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ungültiger Stack-Name.")
 
-    @router.get("/hosts/{host_id}/stacks/{project}/git")
+    @router.get(
+        "/hosts/{host_id}/stacks/{project}/git",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400,)},
+    )
     async def get_source(host_id: str, project: str) -> dict:
         """Das eingetragene Repository und die Zugänge zur Auswahl; nur aus dem Speicher von Deck."""
         _project(project)
@@ -628,7 +666,11 @@ def git_routes(git: GitStacks, docker_host: Callable[[str], Awaitable[Any]], cur
             "layout_problem": layout_problem(stack),
         }
 
-    @router.put("/hosts/{host_id}/stacks/{project}/git")
+    @source_router.put(
+        "/hosts/{host_id}/stacks/{project}/git",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 409, 422, 503,)},
+    )
     async def put_source(host_id: str, project: str, body: _SourceIn, actor: Actor = Depends(current_actor)) -> dict:
         """Trägt das Repository ein, aus dem der Stack kommen soll; geholt wird erst über „Holen und ansehen“."""
         _project(project)
@@ -655,7 +697,11 @@ def git_routes(git: GitStacks, docker_host: Callable[[str], Awaitable[Any]], cur
         await _audit(git.ctx, "docker.stack_git_source", host.id, project, actor, {"url": url, "ref": ref, "path": path, "access": body.access})
         return {"source": source.to_json()}
 
-    @router.delete("/hosts/{host_id}/stacks/{project}/git")
+    @router.delete(
+        "/hosts/{host_id}/stacks/{project}/git",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 503,)},
+    )
     async def delete_source(host_id: str, project: str, actor: Actor = Depends(current_actor)) -> dict:
         """Vergisst das Repository und alles Geholte; am Stack und auf dem Server ändert sich nichts."""
         _project(project)
@@ -669,7 +715,11 @@ def git_routes(git: GitStacks, docker_host: Callable[[str], Awaitable[Any]], cur
         await _audit(git.ctx, "docker.stack_git_source_removed", host.id, project, actor, {})
         return {"source": None}
 
-    @router.post("/hosts/{host_id}/stacks/{project}/git/fetch")
+    @router.post(
+        "/hosts/{host_id}/stacks/{project}/git/fetch",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409, 502,)},
+    )
     async def fetch_source(host_id: str, project: str, actor: Actor = Depends(current_actor)) -> dict:
         """Holt den Stand aus dem Repository und vergleicht ihn mit den Dateien auf dem Server, nur lesend."""
         _project(project)
@@ -691,4 +741,4 @@ def git_routes(git: GitStacks, docker_host: Callable[[str], Awaitable[Any]], cur
         await _audit(git.ctx, "docker.stack_git_fetch", host.id, project, actor, {"url": source.url, "ref": source.ref, "commit": out["commit"]["id"]})
         return out
 
-    return router
+    return router, source_router

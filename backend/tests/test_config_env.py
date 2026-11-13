@@ -302,6 +302,7 @@ def test_compose_file_uses_new_names_with_nested_fallback_for_dns():
     assert set(env) == {
         "NODVARD_DECK_ENV",
         "NODVARD_DECK_LOG_JSON",
+        "NODVARD_DECK_SETUP_CODE",
         "NODVARD_DECK_AUDIT_RETENTION_DAYS",
         "NODVARD_DECK_DEMO_MODE",
     }

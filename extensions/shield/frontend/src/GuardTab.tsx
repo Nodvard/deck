@@ -10,6 +10,8 @@ import { API, HostFilter, ago, call, proposeAndApprove, track, useForHost, usePa
 import { deck } from "../../../_shared/frontend/src/deck";
 import { RunNotice, RunNotices, type PageNotice } from "./RunNotice";
 import { ServerSetupLink } from "./ServerSetupLink";
+import { SshHardening } from "./SshHardening";
+import { Fail2banSettings } from "./Fail2banSettings";
 
 interface Attacker { ip: string; count: number; users: string[]; last_ts: number | null; banned: boolean }
 interface LoginRow { user: string; ip: string; method: string; ts: number | null }
@@ -61,6 +63,7 @@ interface GuardView {
   files_pending: string[];
   checked_at: number;
   ssh_port?: string | null;
+  ssh_error?: string | null;
   /** null = nicht lesbar (ohne root liefert `sshd -T` nichts) – nicht dasselbe wie „keine Befunde“. */
   ssh_findings?: { key: string; value: string; severity: "info" | "warning" | "critical"; text: string; advice: string }[] | null;
 }
@@ -505,6 +508,7 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
               }
             >
               <div data-testid={`guard-${h.host_id}`}>
+                <SshHardening hostId={h.host_id} canManage={canManage} />
                 {!v && <p className="text-sm text-white/50">Noch keine Daten – „Alle jetzt prüfen“ startet den ersten Blick.</p>}
                 {v?.error && <p className="text-sm text-amber-300">{v.error}</p>}
                 {v && !v.error && (
@@ -599,11 +603,17 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
                       </section>
                     )}
 
+                    {(f2b === "running" || f2b === "stopped") && (
+                      <Fail2banSettings hostId={h.host_id} canManage={canManage} onSaved={() => { recheck(h.host_id); load(); }} />
+                    )}
+
                     {v.ssh_findings === null && (
                       <section data-testid={`sshd-${h.host_id}`}>
                         <p className="mb-1.5 text-xs text-white/40">SSH-Einstellungen</p>
                         <p className="text-xs text-white/50">
-                          {v.is_root
+                          {v.ssh_error
+                            ? `SSH-Einstellungen konnten nicht gelesen werden: ${v.ssh_error}`
+                            : v.is_root
                             ? "SSH-Einstellungen konnten nicht gelesen werden."
                             : "SSH-Einstellungen nicht lesbar – dafür braucht Nodvard Deck root oder sudo ohne Passwort."}
                         </p>

@@ -2,6 +2,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 import { kitDedupe, kitFsAllow } from "./kit.resolve";
+import { xtermCsp } from "./xterm.csp";
 
 /**
  * NUR fuer die Design-Vorschau (preview.html): wie vite.config.ts, dazu dieselbe
@@ -12,9 +13,9 @@ import { kitDedupe, kitFsAllow } from "./kit.resolve";
  *   node node_modules/vite/bin/vite.js --config vite.preview.config.ts --port 5199
  */
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), xtermCsp()],
   build: { target: "es2022" },
-  optimizeDeps: { esbuildOptions: { target: "es2022" } },
+  optimizeDeps: { exclude: ["@xterm/xterm"], esbuildOptions: { target: "es2022" } },
   server: { fs: { allow: kitFsAllow } },
   resolve: { dedupe: kitDedupe },
 });

@@ -177,7 +177,7 @@ describe("Karte Wiederherstellen: Ablauf", () => {
     for (const text of ["anna", "3", "7", "proxmox", "backups", "0.5.0"]) expect(screen.getAllByText(text).length).toBeGreaterThan(0);
     expect(screen.getByText(/0123456789abcdef0123456789abcdef/)).toBeInTheDocument();
     expect(screen.getByText(/von einer anderen Installation/)).toBeInTheDocument();
-    expect(screen.getByText("Das Einspielen ersetzt alles – auch die Konten.")).toBeInTheDocument();
+    expect(screen.getByText("Das Einspielen ersetzt alles, auch die Konten.")).toBeInTheDocument();
     expect(screen.getByText(/prüft nicht,/)).toBeInTheDocument(); // age: keine Absender-Prüfung
     expect(screen.getByText(/dieselben Schlüssel und Zugangsdaten/)).toBeInTheDocument(); // zwei Instanzen
     expect(screen.getByText(/Neustart-Regel/)).toBeInTheDocument();

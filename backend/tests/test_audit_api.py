@@ -33,6 +33,27 @@ async def test_unauthenticated_request_is_rejected(client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("offset", [-1, 2**63, 10**100])
+async def test_list_rejects_offset_outside_sqlite_range(client, offset):
+    token = await _bootstrap_owner(client)
+    response = await client.get(
+        "/api/v1/audit", params={"offset": str(offset)}, headers=_auth_header(token)
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"][0]["loc"] == ["query", "offset"]
+
+
+@pytest.mark.asyncio
+async def test_list_accepts_largest_sqlite_offset(client):
+    token = await _bootstrap_owner(client)
+    response = await client.get(
+        "/api/v1/audit", params={"offset": str(2**63 - 1)}, headers=_auth_header(token)
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == []
+
+
+@pytest.mark.asyncio
 async def test_user_without_any_role_gets_403(client, db_session):
     from nodvard_deck.core import security
     from nodvard_deck.models import User

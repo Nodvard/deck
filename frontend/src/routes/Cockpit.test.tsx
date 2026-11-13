@@ -1,3 +1,4 @@
+import { cardTable, mobileLayout } from "../test/mobileLayout";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -56,6 +57,17 @@ beforeEach(() => {
 });
 
 describe("Cockpit", () => {
+  it("zeigt die offene Zwei-Faktor-Erinnerung unabhängig von der Karte Erste Schritte", async () => {
+    vi.stubGlobal("fetch", mockFetch({
+      "/me/preferences": { first_steps_dismissed: true, totp_setup_skipped: true, totp_reminder_dismissed: false },
+      "/me": { id: "u1", totp_enabled: false },
+    }));
+    renderCockpit();
+    const reminder = await screen.findByTestId("totp-reminder");
+    expect(within(reminder).getByRole("link", { name: "Einstellungen → Mein Konto" })).toHaveAttribute("href", "/settings/account");
+    expect(screen.queryByTestId("first-steps")).not.toBeInTheDocument();
+  });
+
   it("Lagebild: sachliche Überschrift ohne Begrüßung, was Aufmerksamkeit braucht, Kennzahlen", async () => {
     vi.stubGlobal("fetch", mockFetch());
     renderCockpit();
@@ -384,6 +396,35 @@ describe("Cockpit", () => {
     expect(screen.getByTestId("attention").textContent).toContain("Container nicht abrufbar: h2");
   });
 
+  it("zeigt bei 0/0 Backups einen neutralen Leerzustand", async () => {
+    const overview = {
+      ...(respond("/api/v1/overview", "GET") as object),
+      backups: { total: 0, ok: 0, failed: 0, running: 0, unknown: 0, failed_names: [], unreachable_names: [] },
+    };
+    vi.stubGlobal("fetch", mockFetch({ "/overview": overview }));
+    renderCockpit();
+
+    const empty = await screen.findByText("Noch keine Sicherungen");
+    const stat = screen.getByTestId("stat-Backups");
+    expect(stat).toHaveTextContent("0/0");
+    expect(empty).toHaveClass("text-white/55");
+    expect(stat.querySelector(".text-emerald-300")).toBeNull();
+    expect(stat).not.toHaveTextContent("alle erfolgreich");
+  });
+
+  it("zeigt vorhandene erfolgreiche Backups weiterhin grün", async () => {
+    const overview = {
+      ...(respond("/api/v1/overview", "GET") as object),
+      backups: { total: 2, ok: 2, failed: 0, running: 0, unknown: 0, failed_names: [], unreachable_names: [] },
+    };
+    vi.stubGlobal("fetch", mockFetch({ "/overview": overview }));
+    renderCockpit();
+
+    const success = await screen.findByText("alle erfolgreich");
+    expect(success).toHaveClass("text-emerald-300");
+    expect(screen.getByTestId("stat-Backups")).toHaveTextContent("2/2");
+  });
+
   it("Backup-Verbindung nicht erreichbar: Warnung statt eines Jobs, zählt als Aufmerksamkeit", async () => {
     const base = respond("/api/v1/overview", "GET") as { backups: object };
     const overview = {
@@ -631,3 +672,32 @@ describe("Cockpit", () => {
     });
   });
 });
+
+it("390 px: Server erscheinen als beschriftete Karten", async () => {
+  vi.stubGlobal("fetch", mockFetch());
+  renderCockpit();
+  const row = await screen.findByTestId("node-n-pve2");
+  await cardTable(row.closest("table")!, ["CPU", "RAM", "Platte", "Adresse", "Läuft seit"]);
+}, 30000);
+
+it("390 px: Neue Server ohne Messwerte zeigen lange Adressen vollständig", async () => {
+  const hosts = respond("/api/v1/hosts", "GET") as { id: string }[];
+  const address = `neuer-server.${"standort".repeat(7)}.${"messwerte".repeat(7)}.example`;
+  const host = {
+    ...hosts.find(entry => entry.id === "h-pi")!,
+    id: "h-neu", name: "neu", display_name: "Neuer Server", address,
+    status: "unknown", last_seen_at: null, login_ok_at: null,
+  };
+  vi.stubGlobal("fetch", mockFetch({
+    "/hosts": [host],
+    "/hosts/metrics/latest": { hosts: {}, stale_after_s: 120 },
+    "/pages": [{ ext_id: "system", path: "/system", title: "Server-Zustand" }],
+  }));
+  renderCockpit();
+  const row = await screen.findByTestId("machine-h-neu");
+  expect(within(row).getByText(address)).toBeInTheDocument();
+  expect(await within(row).findByText("Noch keine Messwerte")).toBeInTheDocument();
+  expect(row.querySelector('[data-label="CPU"]')).toHaveTextContent("–");
+  expect(row.querySelector('[data-label="RAM"]')).toHaveTextContent("–");
+  await mobileLayout(row.closest('section[aria-label="Server"]')!, 'td[data-label="Adresse"] > span:first-child');
+}, 30000);

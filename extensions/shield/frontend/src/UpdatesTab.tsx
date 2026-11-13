@@ -1,3 +1,4 @@
+import { CARD_BODY, CARD_CELL, CARD_CELL_PLAIN, CARD_HEAD, CARD_ROW, CARD_TABLE } from "../../../_shared/frontend/src/cardTable";
 /**
  * Update-Zentrale (Reiter „Updates“): anstehende Paket-Updates je Server, Sicherheitsupdates, Neustart-Bedarf,
  * Einspielen per Klick (über das Gate) und der Verlauf aller Läufe. Daten: GET /ext/shield/defender/updates.
@@ -51,6 +52,7 @@ interface UpdateState {
   unattended: boolean | null;
   refresh_error: string | null;
   error: string | null;
+  error_kind?: "dpkg" | "locked" | "permission" | "timeout" | "detection" | null;
   /** Kein Paketmanager, den die Update-Zentrale kennt (z. B. ein NAS mit eigener Firmware): kein Fehler (fehlt bei älteren Ständen). */
   unsupported?: boolean;
   /** Letzte erfolgreiche Prüfung (leer, wenn noch keine gelang). */
@@ -338,7 +340,7 @@ function hostState(h: HostUpdates): { label: string; tone: Tone } {
   const st = h.status;
   if (!st) return { label: "noch nicht geprüft", tone: "neutral" };
   if (st.unsupported) return { label: "nicht unterstützt", tone: "neutral" };
-  if (st.error && !st.manager) return { label: "Fehler", tone: "warn" };
+  if (st.error) return { label: "Prüfung fehlgeschlagen", tone: "warn" };
   // Mit dist-upgrade kommen zurückgehaltene Sicherheitsupdates über „Alle einspielen“ mit; sie bleiben Sicherheitsupdates.
   const keptSecurity = h.full_upgrade ? st.packages.filter((p) => p.kept_back && p.security).length : 0;
   const sec = installableSecurity(st) + keptSecurity;
@@ -438,7 +440,7 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
   function proposable(mode: BulkMode): HostUpdates[] {
     return (data?.hosts ?? []).filter((h) => {
       const st = h.status;
-      return !!st && !st.unsupported && !!st.manager && !h.busy && (mode === "security" ? securityRunnable(st) : installable(st, h.full_upgrade)) > 0;
+      return !!st && !st.error && !st.unsupported && !!st.manager && !h.busy && (mode === "security" ? securityRunnable(st) : installable(st, h.full_upgrade)) > 0;
     });
   }
 
@@ -565,6 +567,8 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
   if (!data) return offline || <p className="text-sm text-white/50">Lade …</p>;
   const { summary: sm, config: c } = data;
   const unsupported = data.hosts.filter((h) => h.status?.unsupported).length;
+  const errors = data.hosts.filter((h) => h.status?.error && !h.status.unsupported).length;
+  const unknownHint = errors ? `Update-Stand für ${count(errors, "Server", "Server")} unbekannt. Erst die Prüfung wiederholen.` : "";
 
   if (hosts.length === 0) {
     return <EmptyState icon="package" title="Keine Server" text="Sobald Linux-Server mit SSH-Zugang angelegt sind, zeigt die Update-Zentrale hier ihre anstehenden Updates." action={<ServerSetupLink className="text-sm" />} />;
@@ -582,11 +586,11 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
             sm.checked + unsupported < sm.hosts ? `${sm.hosts - sm.checked - unsupported} noch nicht geprüft` : "",
             unsupported ? `${unsupported} nicht unterstützt` : "",
           ].filter(Boolean).join(" · ") || undefined} />
-        <Stat label="Offene Updates" value={sm.packages} tone={(sm.installable ?? sm.packages) ? "warn" : sm.packages ? undefined : "good"}
-          hint={leftOutHint(sm.packages, sm.installable, sm.not_installable)} />
-        <Stat label="Sicherheitsupdates" value={sm.security} tone={sm.security ? "bad" : "good"}
-          hint={leftOutHint(sm.security, sm.installable_security, sm.not_installable_security)} />
-        <Stat label="Neustart nötig" value={sm.reboot} tone={sm.reboot ? "warn" : undefined} hint={sm.errors ? `${count(sm.errors, "Prüfung", "Prüfungen")} fehlgeschlagen` : undefined} />
+        <Stat label="Offene Updates" value={errors && !sm.packages ? "unbekannt" : sm.packages} tone={(sm.installable ?? sm.packages) ? "warn" : sm.packages || errors ? undefined : "good"}
+          hint={[leftOutHint(sm.packages, sm.installable, sm.not_installable), unknownHint].filter(Boolean).join(" ") || undefined} />
+        <Stat label="Sicherheitsupdates" value={errors && !sm.security ? "unbekannt" : sm.security} tone={sm.security ? "bad" : errors ? undefined : "good"}
+          hint={[leftOutHint(sm.security, sm.installable_security, sm.not_installable_security), unknownHint].filter(Boolean).join(" ") || undefined} />
+        <Stat label="Neustart nötig" value={errors && !sm.reboot ? "unbekannt" : sm.reboot} tone={sm.reboot ? "warn" : undefined} hint={errors ? `${count(errors, "Prüfung", "Prüfungen")} fehlgeschlagen` : undefined} />
       </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -625,12 +629,13 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
       <div className="space-y-3" data-testid="update-hosts">
         {hosts.map((h) => {
           const st = h.status;
+          const readable = !!st && !st.error && !st.unsupported;
           const state = hostState(h);
           const running = pending[h.host_id] ?? (h.busy as Mode | null);
           // Nach „Neu starten“ gilt der alte Stand nicht mehr – nicht erneut „Neustart nötig“
           // samt Knopf anzeigen, bis eine Prüfung den neuen Stand geholt hat.
           const rebootSince = st?.reboot_pending_since;
-          const needsReboot = !!st?.reboot_required && !rebootSince;
+          const needsReboot = readable && st.reboot_required && !rebootSince;
           const isOpen = open === h.host_id;
           const notes = updateNotes(st, h.full_upgrade);
           const openNote = notes.find((n) => `${h.host_id}:${n.key}` === noteOpen);
@@ -665,6 +670,9 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
                     </p>
                   )}
                   {st?.error && <p className={`mt-1 text-xs ${st.unsupported ? "text-white/50" : "text-amber-300"}`}>{st.error}</p>}
+                  {st?.error && !st.unsupported && st.checked_at && (
+                    <p className="mt-1 text-xs text-amber-300">Der angezeigte Stand stammt aus der letzten erfolgreichen Prüfung und kann veraltet sein.</p>
+                  )}
                   {st?.refresh_error && <p className="mt-1 text-xs text-amber-300/80">{st.refresh_error}</p>}
                   {openNote && <p className="mt-1 text-xs text-white/50">{openNote.hint}</p>}
                   {needsReboot && st.reboot_reasons.length > 0 && (
@@ -682,8 +690,8 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
                 </div>
                 {canManage && (
                   <div className="flex flex-wrap gap-1">
-                    {!!st && securityRunnable(st) > 0 && <Button small variant="primary" disabled={!!running} onClick={() => void apply(h, "security")}>Sicherheitsupdates einspielen</Button>}
-                    {!!st && installable(st, h.full_upgrade) > 0 && <Button small variant={installableSecurity(st) ? "secondary" : "primary"} disabled={!!running} onClick={() => void apply(h, "all")}>Alle einspielen</Button>}
+                    {readable && securityRunnable(st) > 0 && <Button small variant="primary" disabled={!!running} onClick={() => void apply(h, "security")}>Sicherheitsupdates einspielen</Button>}
+                    {readable && installable(st, h.full_upgrade) > 0 && <Button small variant={installableSecurity(st) ? "secondary" : "primary"} disabled={!!running} onClick={() => void apply(h, "all")}>Alle einspielen</Button>}
                     {needsReboot && <Button small variant="danger" disabled={!!running} onClick={() => void apply(h, "reboot")}>Neu starten</Button>}
                     <Button small variant="ghost" disabled={h.checking || !!running} onClick={() => void checkAll([h.host_id])} ariaLabel={`${h.host_name} prüfen`}>
                       <Icon name="refresh" size={12} /> Prüfen
@@ -698,18 +706,18 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
                 </button>
               )}
               {isOpen && st && (
-                <div className="mt-2 max-h-80 overflow-auto rounded-lg border border-white/[0.06]">
-                  <table className="w-full text-left text-xs">
-                    <thead className="sticky top-0 bg-[var(--color-surface-head)] text-white/45">
+                <div className="mt-2 max-h-80 overflow-y-auto rounded-lg border border-white/[0.06] p-2 sm:p-0">
+                  <table role="table" className={`${CARD_TABLE} text-left text-left text-xs`}>
+                    <thead role="rowgroup" className={`${CARD_HEAD} sm:sticky sm:top-0 bg-[var(--color-surface-head)] text-white/45`}>
                       <tr><th className="px-3 py-1.5 font-medium">Paket</th><th className="px-3 py-1.5 font-medium">installiert</th><th className="px-3 py-1.5 font-medium">neu</th><th className="px-3 py-1.5" /></tr>
                     </thead>
-                    <tbody className="divide-y divide-white/[0.04]">
+                    <tbody role="rowgroup" className={CARD_BODY}>
                       {st.packages.map((p) => (
-                        <tr key={p.name}>
-                          <td className="px-3 py-1.5 font-mono">{p.name}</td>
-                          <td className="px-3 py-1.5 font-mono text-white/50">{p.current_version ?? "–"}</td>
-                          <td className="px-3 py-1.5 font-mono">{p.new_version}</td>
-                          <td className="px-3 py-1.5 text-right">
+                        <tr role="row" className={CARD_ROW} key={p.name}>
+                          <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-1.5 font-mono`}>{p.name}</td>
+                          <td data-label="installiert" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-1.5 font-mono text-white/50`}>{p.current_version ?? "–"}</td>
+                          <td data-label="neu" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-1.5 font-mono`}>{p.new_version}</td>
+                          <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-1.5 sm:text-right`}>
                             {p.security && <Badge tone="bad">Sicherheit</Badge>}
                             {p.phased && <span title={PHASING_HINT}><Badge>verzögert</Badge></span>}
                             {p.kept_back && !h.full_upgrade && <span title={KEPT_BACK_HINT}><Badge>zurückgehalten</Badge></span>}
@@ -723,7 +731,7 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
               )}
 
               {/* „Aufräumen“ für jeden apt-Server; der Tipp davor nur, wenn er noch etwas bringt. */}
-              {canManage && st?.manager === "apt" && (
+              {canManage && readable && st.manager === "apt" && (
                 <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-white/50">
                   {/* Spielt Nodvard Deck selbst ein (für alle Server, ohne Markierung), braucht es den Tipp nicht. Mit
                       Markierung ist hier nicht bekannt, ob dieser Server dazugehört: dann bleibt der Tipp. */}

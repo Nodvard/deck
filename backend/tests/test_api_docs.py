@@ -113,7 +113,7 @@ def test_das_dokument_laesst_sich_auch_ohne_route_bauen(monkeypatch, tmp_path):
 
 @pytest.fixture
 def frontend_dist(tmp_path: Path) -> Path:
-    """`<data_dir>/../frontend/dist` -- dort haengt `create_app()` die App-Shell ein."""
+    """Testoberfläche für `Settings.frontend_dist`."""
     dist = tmp_path / "frontend" / "dist"
     dist.mkdir(parents=True)
     (dist / "index.html").write_text("<html>App-Shell</html>", encoding="utf-8")
@@ -122,9 +122,8 @@ def frontend_dist(tmp_path: Path) -> Path:
 
 @pytest.mark.parametrize("path", [*DOC_PATHS, "/docs/oauth2-redirect", "/docs/"])
 async def test_die_app_shell_beantwortet_die_doku_adressen_nicht(monkeypatch, tmp_path, frontend_dist, path):
-    """Mit ausgeliefertem Frontend (Produktion) wuerde der Rueckfall auf `index.html` `/openapi.json`
-    sonst mit 200 und HTML beantworten. Es bleibt ein 404; andere Seiten der App gehen weiter."""
-    async with _http(_app(monkeypatch, tmp_path, env="prod")) as http:
+    """Die API-Doku bleibt trotz ausgelieferter App-Shell gesperrt."""
+    async with _http(_app(monkeypatch, tmp_path, env="prod", frontend_dist=frontend_dist)) as http:
         res = await http.get(path)
         assert res.status_code == 404, path
         assert "App-Shell" not in res.text
@@ -135,11 +134,14 @@ async def test_die_app_shell_beantwortet_die_doku_adressen_nicht(monkeypatch, tm
 async def test_mit_frontend_liefert_der_entwicklungsmodus_die_doku_statt_der_app_shell(
     monkeypatch, tmp_path, frontend_dist
 ):
-    async with _http(_app(monkeypatch, tmp_path, env="dev")) as http:
+    async with _http(_app(monkeypatch, tmp_path, env="dev", frontend_dist=frontend_dist)) as http:
         schema = await http.get("/openapi.json")
         swagger = await http.get("/docs")
+        shell = await http.get("/settings")
     assert schema.json()["info"]["title"] == "Nodvard Deck"
+    assert swagger.status_code == 200 and "swagger" in swagger.text.lower()
     assert "App-Shell" not in swagger.text
+    assert shell.status_code == 200 and "App-Shell" in shell.text
 
 
 # --------------------------------------------------------------------------- Admin-Endpunkt

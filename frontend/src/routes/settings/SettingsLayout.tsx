@@ -19,6 +19,7 @@ interface Section {
   icon: LucideIcon;
   /** Eine Berechtigung oder eine Liste, von der eine reicht. */
   permission?: string | string[];
+  ownerOnly?: boolean;
 }
 
 export const SECTIONS: Section[] = [
@@ -33,6 +34,7 @@ export const SECTIONS: Section[] = [
   { path: "system", label: "System", description: "Sicherung, Zeit, Protokoll", icon: HardDrive, permission: ["system.read", "settings.write"] },
   { path: "extensions", label: "Erweiterungen", description: "Module ein- und ausschalten", icon: Blocks, permission: "extensions.manage" },
   { path: "audit", label: "Protokoll", description: "Wer hat wann was getan", icon: History, permission: "audit.read" },
+  { path: "telemetry", label: "Nutzungsdaten", description: "Freiwillig teilen, ansehen und löschen", icon: Info, ownerOnly: true },
   // Für jeden angemeldeten Nutzer, ohne Berechtigung: Version und Änderungsprotokoll.
   { path: "about", label: "Über Nodvard Deck", description: "Version und Änderungsprotokoll", icon: Info },
 ];
@@ -47,8 +49,9 @@ export function useVisibleSections(): Section[] {
   const edition = useEdition();
   const hasPermission = useAuthStore((s) => s.hasPermission);
   // `user` abonnieren, damit sich die Liste nach dem Laden der Rechte aktualisiert.
-  useAuthStore((s) => s.user);
+  const user = useAuthStore((s) => s.user);
   return editionSections(edition.choose_modules, edition.product_name).filter((s) => {
+    if (s.ownerOnly && !user?.is_owner) return false;
     if (!s.permission) return true;
     const wanted = Array.isArray(s.permission) ? s.permission : [s.permission];
     return wanted.some((p) => hasPermission(p));

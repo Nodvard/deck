@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { EXAMPLE, NewStack } from "./NewStack";
@@ -258,18 +258,150 @@ describe("Neuer Stack", () => {
     expect(await screen.findByText("Die Datei mit den eigenen Vorlagen ist beschädigt.")).toBeInTheDocument();
   });
 
-  it("nennt Werte, die der Stack noch aus einer .env braucht", async () => {
+  it("bietet erkannte Variablen als Felder an und maskiert Geheimnisse", async () => {
     serve();
     render(<NewStack hostId="h1" onClose={vi.fn()} />);
     const area = await screen.findByRole("textbox", { name: "Compose-Datei des neuen Stacks" });
-    expect(screen.queryByTestId("needed-values")).toBeNull();
-    fireEvent.change(area, { target: { value: "services:\n  db:\n    environment:\n      A: ${DB_PASSWORD}\n      B: $$INNEN\n      C: ${TZ:-UTC}\n" } });
-    expect(screen.getByTestId("needed-values").textContent).toContain("einen Wert für DB_PASSWORD.");
-    expect(screen.queryByTestId("required-values")).toBeNull();
-    fireEvent.change(area, { target: { value: "services:\n  db:\n    environment:\n      A: ${DB_PASSWORD:?fehlt}\n" } });
-    expect(screen.queryByTestId("needed-values")).toBeNull();
-    expect(screen.getByTestId("required-values").textContent).toContain("DB_PASSWORD ist mit „:?“ als Pflicht markiert.");
-    expect(screen.getByTestId("required-values").textContent).toContain("${DB_PASSWORD} ohne „:?“");
+    fireEvent.change(area, { target: { value: "services:\n  db:\n    environment:\n      A: ${DB_PASSWORD:?fehlt}\n      B: $APP_SECRET\n      C: ${api_token}\n      D: ${API_KEY}\n      E: ${DOMAIN}\n      F: $$INNEN\n      G: ${TZ:-UTC}\n      H: ${DOMAIN}\n" } });
+    for (const name of ["DB_PASSWORD", "APP_SECRET", "api_token", "API_KEY"]) {
+      expect(screen.getByLabelText(`Wert für ${name}`)).toHaveAttribute("type", "password");
+    }
+    expect(screen.getByLabelText("Wert für DB_PASSWORD")).toBeRequired();
+    expect(screen.getAllByLabelText("Wert für DOMAIN")).toHaveLength(1);
+    expect(screen.getByLabelText("Wert für DOMAIN")).toHaveAttribute("type", "text");
+    expect(screen.getByLabelText("Wert für DOMAIN")).not.toBeRequired();
+    expect(screen.queryByLabelText("Wert für INNEN")).toBeNull();
+    expect(screen.queryByLabelText("Wert für TZ")).toBeNull();
+  });
+
+  it.each([false, true])("prüft und legt mit eigenen .env-Werten an (start: %s)", async (start) => {
+    const onClose = vi.fn();
+    serve({
+      "/new-stack/check": () => Response.json(OK),
+      "/new-stack": (init) => init?.method === "POST"
+        ? Response.json({ action_id: "c1", status: "proposed", risk: "medium", detail: null }, { status: 202 }) : Response.json(PLACE),
+    });
+    window.__nodvardDeck.hasPermission = vi.fn().mockReturnValue(false);
+    render(<NewStack hostId="h1" onClose={onClose} />);
+    const area = await screen.findByRole("textbox", { name: "Compose-Datei des neuen Stacks" });
+    const content = "services:\n  db:\n    image: postgres:17\n    environment:\n      POSTGRES_PASSWORD: ${DB_PASSWORD:?fehlt}\n      DOMAIN: ${DOMAIN}\n";
+    fireEvent.change(nameBox(), { target: { value: "neu" } });
+    fireEvent.change(area, { target: { value: content } });
+    for (const label of ["Prüfen", "Anlegen", "Anlegen und starten"]) expect(screen.getByRole("button", { name: label })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Wert für DB_PASSWORD"), { target: { value: "test-$'wert" } });
+    fireEvent.click(screen.getByRole("button", { name: "Prüfen" }));
+    await screen.findByText(/Compose kann die Datei lesen/);
+    fireEvent.change(screen.getByLabelText("Wert für DB_PASSWORD"), { target: { value: "test-$'neu" } });
+    expect(screen.queryByText(/Compose kann die Datei lesen/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: start ? "Anlegen und starten" : "Anlegen" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(bodies).toEqual([
+      { name: "neu", content, env: { DB_PASSWORD: "test-$'wert" } },
+      { name: "neu", content, env: { DB_PASSWORD: "test-$'neu" } },
+      { name: "neu", content, env: { DB_PASSWORD: "test-$'neu" }, start },
+    ]);
+    expect(confirm().mock.calls[0][0]).toContain(".env");
+    expect(confirm().mock.calls[0][0]).not.toContain("test-$'neu");
+    expect(area).toHaveValue(content);
+  });
+
+  it.each([false, true])("erhält unberührtes PWD und sendet bewusst geleerte Werte (geleert: %s)", async (cleared) => {
+    const onClose = vi.fn();
+    serve({
+      "/new-stack/check": () => Response.json(OK),
+      "/new-stack": (init) => init?.method === "POST"
+        ? Response.json({ action_id: "c1", status: "proposed", risk: "medium", detail: null }, { status: 202 }) : Response.json(PLACE),
+    });
+    window.__nodvardDeck.hasPermission = vi.fn().mockReturnValue(false);
+    render(<NewStack hostId="h1" onClose={onClose} />);
+    const area = await screen.findByRole("textbox", { name: "Compose-Datei des neuen Stacks" });
+    const content = 'services:\n  app:\n    image: busybox\n    volumes:\n      - "${PWD}/data:/data"\n';
+    fireEvent.change(nameBox(), { target: { value: "neu" } });
+    fireEvent.change(area, { target: { value: content } });
+    if (cleared) {
+      fireEvent.change(screen.getByLabelText("Wert für PWD"), { target: { value: "/srv/daten" } });
+      fireEvent.change(screen.getByLabelText("Wert für PWD"), { target: { value: "" } });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Anlegen und starten" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    const body = { name: "neu", content, ...(cleared ? { env: { PWD: "" } } : {}) };
+    expect(bodies).toEqual([body, { ...body, start: true }]);
+    expect(confirm().mock.calls[0][0].includes(".env")).toBe(cleared);
+  });
+
+  it("speichert Vorlagen ohne die eingegebenen Werte", async () => {
+    const content = "services:\n  app:\n    image: nginx:1.27\n    environment:\n      TOKEN: ${API_TOKEN}\n";
+    serve({ "/own-templates": (init) => init?.method === "POST" ? Response.json({ ...OWN, compose: content }, { status: 201 })
+      : Response.json({ templates: [], max: 100 }) });
+    render(<NewStack hostId="h1" onClose={vi.fn()} />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Compose-Datei des neuen Stacks" }), { target: { value: content } });
+    fireEvent.change(screen.getByLabelText("Wert für API_TOKEN"), { target: { value: "test-geheim" } });
+    fireEvent.click(screen.getByRole("button", { name: "Als Vorlage speichern" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Name der Vorlage" }), { target: { value: "Web" } });
+    fireEvent.click(screen.getByRole("button", { name: "Vorlage speichern" }));
+    await screen.findByText("Vorlage „Mein Web“ gespeichert.");
+    expect(bodies.at(-1)).toEqual({ name: "Web", summary: "", compose: content });
+  });
+
+  it("legt nach einer Änderung im offenen Bestätigungsdialog nicht den alten Stand an", async () => {
+    let finish!: (answer: boolean) => void;
+    confirm().mockReturnValue(new Promise<boolean>((resolve) => { finish = resolve; }));
+    serve();
+    render(<NewStack hostId="h1" onClose={vi.fn()} />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Compose-Datei des neuen Stacks" }), {
+      target: { value: "services:\n  app:\n    image: nginx:1.27\n    environment:\n      DOMAIN: ${DOMAIN}\n" },
+    });
+    fireEvent.change(nameBox(), { target: { value: "neu" } });
+    fireEvent.click(screen.getByRole("button", { name: "Anlegen" }));
+    await waitFor(() => expect(confirm()).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Wert für DOMAIN"), { target: { value: "neu.invalid" } });
+    await act(async () => { finish(true); });
+    expect(requests).not.toContain("POST /new-stack");
+  });
+
+  it.each(["${DB_PASSWORD}", '"${DB_PASSWORD}"'])("behält Werte bei unvollständigen Variablen (%s)", async (variable) => {
+    serve();
+    render(<NewStack hostId="h1" onClose={vi.fn()} />);
+    const area = await screen.findByRole("textbox", { name: "Compose-Datei des neuen Stacks" });
+    const content = `services:\n  app:\n    image: nginx:1.27\n    environment:\n      PASSWORD: ${variable}\n      DOMAIN: \${DOMAIN}\n      CACHE: \${CACHE:-\${FALLBACK:-local}}\n`;
+    fireEvent.change(nameBox(), { target: { value: "neu" } });
+    fireEvent.change(area, { target: { value: content } });
+    fireEvent.change(screen.getByLabelText("Wert für DB_PASSWORD"), { target: { value: "test-geheim" } });
+    fireEvent.change(screen.getByLabelText("Wert für DOMAIN"), { target: { value: "alt.invalid" } });
+
+    const incomplete = content.replace("${DB_PASSWORD}", "${DB_PASSWORD");
+    fireEvent.change(area, { target: { value: incomplete } });
+    expect(screen.queryByLabelText("Wert für DB_PASSWORD")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Wert für DOMAIN"), { target: { value: "neu.invalid" } });
+    fireEvent.click(screen.getByRole("button", { name: "Prüfen" }));
+    await waitFor(() => expect(bodies).toEqual([{ name: "neu", content: incomplete, env: { DOMAIN: "neu.invalid" } }]));
+
+    fireEvent.change(area, { target: { value: content } });
+    expect(screen.getByLabelText("Wert für DB_PASSWORD")).toHaveValue("test-geheim");
+    fireEvent.click(screen.getByRole("button", { name: "Prüfen" }));
+    await waitFor(() => expect(bodies.at(-1)).toEqual({ name: "neu", content, env: { DB_PASSWORD: "test-geheim", DOMAIN: "neu.invalid" } }));
+
+    fireEvent.change(area, { target: { value: content.replace(`      PASSWORD: ${variable}\n`, "") } });
+    expect(screen.queryByLabelText("Wert für DB_PASSWORD")).toBeNull();
+    fireEvent.change(area, { target: { value: content } });
+    expect(screen.getByLabelText("Wert für DB_PASSWORD")).toHaveValue("");
+  });
+
+  it("vergisst entfernte Variablen und setzt Werte beim Vorlagenwechsel zurück", async () => {
+    const content = "services:\n  app:\n    image: nginx:1.27\n    environment:\n      A: ${DOMAIN}\n      B: ${TOKEN}\n";
+    serve({ "/stack-templates": () => Response.json({ templates: [{ ...TEMPLATES[0], compose: content }] }) });
+    render(<NewStack hostId="h1" onClose={vi.fn()} />);
+    const area = await screen.findByRole("textbox", { name: "Compose-Datei des neuen Stacks" });
+    fireEvent.change(area, { target: { value: content } });
+    fireEvent.change(screen.getByLabelText("Wert für DOMAIN"), { target: { value: "test.invalid" } });
+    fireEvent.change(screen.getByLabelText("Wert für TOKEN"), { target: { value: "test-geheim" } });
+    fireEvent.change(area, { target: { value: content.replace("      B: ${TOKEN}\n", "") } });
+    expect(screen.getByLabelText("Wert für DOMAIN")).toHaveValue("test.invalid");
+    fireEvent.change(area, { target: { value: content } });
+    expect(screen.getByLabelText("Wert für TOKEN")).toHaveValue("");
+    fireEvent.change(await screen.findByRole("combobox", { name: "Vorlage" }), { target: { value: "uptime-kuma" } });
+    await waitFor(() => expect(nameBox()).toHaveValue("uptime-kuma"));
+    expect(screen.getByLabelText("Wert für DOMAIN")).toHaveValue("");
   });
 
   it("fehlen die eigenen Vorlagen, steht der Grund da und der Katalog bleibt", async () => {
@@ -477,6 +609,29 @@ it("Dock lässt eigene Ordnernamen in der Freigabe unverändert", async () => {
   expect(String(confirm().mock.calls[0][0])).toContain("Nodvard Dock legt den Ordner an");
 });
 
+it.each([false, true])("nur Anlegen ist Primärknopf, Vorlage speichern ist Umriss gleicher Höhe (eigene Vorlage gewählt: %s)", async (withOwn) => {
+  serve(withOwn ? { "/own-templates/": () => Response.json(OWN), "/own-templates": () => Response.json({ templates: [OWN_LISTED], max: 100 }) } : {});
+  render(<NewStack hostId="h1" onClose={vi.fn()} />);
+  const box = await screen.findByRole("combobox", { name: "Vorlage" });
+  if (withOwn) {
+    await waitFor(() => expect(box.querySelector("optgroup")).not.toBeNull());
+    fireEvent.change(box, { target: { value: `own:${OWN.id}` } });
+    await screen.findByTestId("own-template-note");
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Als Vorlage speichern" }));
+  const panel = within(screen.getByTestId("save-template"));
+  const create = screen.getByRole("button", { name: "Anlegen" });
+  const saves = [panel.getByRole("button", { name: withOwn ? "Als neue Vorlage speichern" : "Vorlage speichern" }),
+    ...(withOwn ? [panel.getByRole("button", { name: "Vorlage „Mein Web“ ersetzen" })] : [])];
+  expect(create).toHaveClass("accent-gradient");
+  for (const save of saves) {
+    expect(save).not.toHaveClass("accent-gradient");
+    expect(save).toHaveClass("border", "bg-white/[0.06]");
+    expect(save.className.match(/\b(?:px|py)-[\d.]+\b|\btext-xs\b/g)).toEqual(create.className.match(/\b(?:px|py)-[\d.]+\b|\btext-xs\b/g));
+    expect(create).toHaveClass("border");
+  }
+});
+
 describe("Hilfen für eigene Vorlagen", () => {
   it("bildet aus dem Namen einen Stack-Namen", () => {
     expect(stackNameOf("Mein Web")).toBe("mein-web");
@@ -486,5 +641,10 @@ describe("Hilfen für eigene Vorlagen", () => {
 
   it("findet nur Variablen ohne Vorgabe, nicht die des Containers", () => {
     expect(neededValues("A: ${X}\nB: $Y\nC: $$Z\nD: $${W}\nE: ${V:-a}\nF: ${U-}\nG: ${X}\nH: ${T:?fehlt}\n")).toEqual({ open: ["X", "Y"], required: ["T"] });
+    expect(neededValues("${A?fehlt} ${B:?} ${C:+ja} ${D+ja} $$$E $$$${F} ${A}")).toEqual({ open: ["E"], required: ["A", "B"] });
+  });
+
+  it("ignoriert Kommentare und Schlüssel, erhält aber Rauten in Werten", () => {
+    expect(neededValues('services:\n  app:\n    image: nginx:1.27 # ${IGNORE:?}\n# ${COMMENT:?}\n    environment:\n      "${KEY:?}": "# ${VALUE:?}"\n    command: |\n      echo "# ${BLOCK}"\n')).toEqual({ open: ["BLOCK"], required: ["VALUE"] });
   });
 });

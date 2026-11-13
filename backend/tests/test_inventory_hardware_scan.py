@@ -422,34 +422,25 @@ async def test_scan_says_why_it_cannot_read(client, db_session, test_settings, s
     cases = [
         (ConnectionRefusedError(111, "Connection refused"), "Verbindung abgelehnt – läuft der SSH-Dienst?"),
         (TimeoutError(), "keine Antwort innerhalb der Zeitgrenze – ist der Server an?"),
-        # Unbekannte Fehler können Pfade oder Adressen tragen: die bleiben im Protokoll, nicht in der Antwort.
-        (RuntimeError("kaputt in /etc/ssh/ssh_config bei 10.0.0.7"), "unerwarteter Fehler (Einzelheiten im Protokoll des Dashboards)."),
     ]
     for error, text in cases:
         ssh_answer["error"] = error
         res = await client.post(f"{API}/hosts/{host['id']}/scan", headers=headers)
         assert (res.status_code, res.json()["detail"]) == (502, prefix + text)
 
-    ssh_answer["error"] = None
-    ssh_answer["exit_code"] = 1
-    res = await client.post(f"{API}/hosts/{host['id']}/scan", headers=headers)
-    assert (res.status_code, res.json()["detail"]) == (502, prefix + "Permission denied")
-
-    # Das Skript lief gar nicht (eingeschränkte Shell): Fehler mit dem, was der Server sagt, statt „Nichts gefunden“.
-    ssh_answer.update(exit_code=1, stdout="restricted", stderr="")
-    res = await client.post(f"{API}/hosts/{host['id']}/scan", headers=headers)
-    assert (res.status_code, res.json()["detail"]) == (502, prefix + "restricted")
-    ssh_answer.update(exit_code=0, stdout="", stderr="")
-    res = await client.post(f"{API}/hosts/{host['id']}/scan", headers=headers)
-    assert (res.status_code, res.json()["detail"]) == (502, prefix + "Der Server hat nichts geantwortet.")
-    ssh_answer.update(exit_code=1, stderr="Permission denied")
-
-    # Fremde Fehlerausgabe: eine Zeile, ohne Steuerzeichen, gekürzt.
-    ssh_answer["stderr"] = "\x1b[31mzeile1\nzeile2\x07 " + "x" * 1000
-    detail = (await client.post(f"{API}/hosts/{host['id']}/scan", headers=headers)).json()["detail"]
-    reason = detail.removeprefix(prefix)
-    assert reason.startswith("[31mzeile1 zeile2 x") and len(reason) == 300 and reason.endswith("…")
-    assert not any(ch in detail for ch in "\x1b\n\x07")
+    import re
+    for answer in (
+        {"error": RuntimeError("vertraulich /etc/ssh/ssh_config 10.0.0.7")},
+        {"error": None, "exit_code": 1, "stderr": "Permission denied"},
+        {"exit_code": 1, "stdout": "restricted /etc/private", "stderr": ""},
+        {"exit_code": 0, "stdout": "", "stderr": ""},
+        {"exit_code": 1, "stderr": "\x1b[31mvertraulich\nzeile2\x07 " + "x" * 1000},
+    ):
+        ssh_answer.update(answer)
+        res = await client.post(f"{API}/hosts/{host['id']}/scan", headers=headers)
+        assert res.status_code == 502
+        assert re.fullmatch(re.escape(prefix) + r"Die Anfrage ist fehlgeschlagen\. Fehlerkennung: [0-9a-f]{32}\.", res.json()["detail"])
+        assert not any(text in res.text for text in ("vertraulich", "/etc/", "10.0.0.7", "Permission denied", "restricted"))
 
 
 @pytest.mark.asyncio

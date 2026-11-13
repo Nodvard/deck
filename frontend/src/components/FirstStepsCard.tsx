@@ -1,12 +1,4 @@
-/**
- * Karte „Erste Schritte“ oben im Cockpit: Checkliste mit Häkchen und Direktlink je Schritt.
- * Sie verschwindet von selbst, wenn alles erledigt ist, und lässt sich je Benutzer ausblenden
- * (`GET/PATCH /me/preferences`, gilt also auf jedem Gerät). Die Schritte kommen aus
- * `lib/firstSteps.ts` -- nur solche, für die der Nutzer das Recht hat.
- *
- * Solange noch Daten laden, bleibt die Karte weg: ein kurzes Aufblitzen offener Schritte bei
- * jemandem, der längst fertig ist, wäre schlimmer als eine Karte, die einen Moment später kommt.
- */
+/** Ausblendbare Checkliste pro Nutzer; sie erscheint erst nach dem Laden der Daten und nur bei offenen Schritten. */
 import { styleRef } from "../../../extensions/_shared/frontend/src/csp";
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, ShieldCheck } from "lucide-react";
@@ -129,7 +121,7 @@ export function FirstStepsCard() {
         </button>
       </div>
       <p className="-mt-0.5 text-xs text-white/50">
-        So ist Nodvard Deck startklar – ein Schritt nach dem anderen.{" "}
+        So ist Nodvard Deck startklar, ein Schritt nach dem anderen.{" "}
         <GuideLink testId="first-steps-guide">Ausführlich erklärt in der Anleitung</GuideLink>
       </p>
       <div className="mt-3 flex items-center gap-3">

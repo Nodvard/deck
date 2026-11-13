@@ -97,3 +97,46 @@ describe("WS-Client -- auth_error", () => {
     expect(useAuthStore.getState().accessToken).toBe("tok-neu");
   });
 });
+
+describe("WS-Client -- abgelöste Verbindungen", () => {
+  /** Wie der Browser: `close()` meldet das `close`-Ereignis erst später. */
+  function fireClose(socket: FakeSocket) {
+    for (const listener of socket.listeners.get("close") ?? []) listener({});
+  }
+
+  it("ein verspätetes close der alten Verbindung öffnet keine weitere", () => {
+    vi.useFakeTimers();
+    try {
+      wsClient.subscribe("hosts", () => {});
+      const first = FakeSocket.instances[0];
+      wsClient.disconnect();
+      wsClient.subscribe("jobs", () => {});
+      expect(FakeSocket.instances).toHaveLength(2);
+
+      fireClose(first);
+      vi.advanceTimersByTime(30_000);
+
+      expect(FakeSocket.instances).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("nach disconnect während eines geplanten Wiederverbindens klappt das nächste Wiederverbinden", () => {
+    vi.useFakeTimers();
+    try {
+      wsClient.subscribe("hosts", () => {});
+      fireClose(FakeSocket.instances[0]);
+      wsClient.disconnect();
+      wsClient.subscribe("hosts", () => {});
+      expect(FakeSocket.instances).toHaveLength(2);
+
+      fireClose(FakeSocket.instances[1]);
+      vi.advanceTimersByTime(30_000);
+
+      expect(FakeSocket.instances).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

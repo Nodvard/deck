@@ -15,6 +15,8 @@ from pydantic import BaseModel, Field, field_validator
 from ...models import DashboardLayout
 from ...services import dashboard as dashboard_service
 from ..deps import CurrentUser, SessionDep
+from ..models import RequestModel
+from ..responses import error_responses
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -61,10 +63,14 @@ def _known_groups(raw: list[dict[str, Any]] | None) -> list[DashboardGroup]:
     return groups
 
 
-class LayoutPatch(BaseModel):
+class DashboardGroupIn(DashboardGroup, RequestModel):
+    pass
+
+
+class LayoutPatch(RequestModel):
     name: str | None = None
     items: list[dict[str, Any]] | None = None
-    groups: list[DashboardGroup] | None = None
+    groups: list[DashboardGroupIn] | None = None
 
     @field_validator("groups")
     @classmethod
@@ -74,7 +80,7 @@ class LayoutPatch(BaseModel):
         return value
 
 
-@router.get("/layouts")
+@router.get("/layouts", responses=error_responses(401, 403, 507))
 async def list_layouts(session: SessionDep, user: CurrentUser) -> list[LayoutOut]:
     rows = await dashboard_service.list_layouts(session, user_id=user.id)
     if not rows:
@@ -82,7 +88,7 @@ async def list_layouts(session: SessionDep, user: CurrentUser) -> list[LayoutOut
     return [LayoutOut.from_model(r) for r in rows]
 
 
-@router.get("/layouts/{layout_id}")
+@router.get("/layouts/{layout_id}", responses=error_responses(401, 403, 404, 507))
 async def get_layout(layout_id: str, session: SessionDep, user: CurrentUser) -> LayoutOut:
     layout = await dashboard_service.get_layout(session, layout_id, user_id=user.id)
     if layout is None:
@@ -90,7 +96,7 @@ async def get_layout(layout_id: str, session: SessionDep, user: CurrentUser) -> 
     return LayoutOut.from_model(layout)
 
 
-@router.put("/layouts/{layout_id}")
+@router.put("/layouts/{layout_id}", responses=error_responses(401, 403, 404, 507))
 async def put_layout(layout_id: str, payload: LayoutPatch, session: SessionDep, user: CurrentUser) -> LayoutOut:
     layout = await dashboard_service.get_layout(session, layout_id, user_id=user.id)
     if layout is None:

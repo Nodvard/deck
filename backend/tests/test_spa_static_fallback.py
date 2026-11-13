@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from nodvard_deck import main
+from nodvard_deck.config import Settings
 from nodvard_deck.main import SPA_CSP, _SpaStaticFiles
 
 
@@ -31,6 +33,38 @@ def test_root_serves_index_html(spa_client: TestClient):
     res = spa_client.get("/")
     assert res.status_code == 200
     assert "App-Shell" in res.text
+
+
+@pytest.mark.parametrize("custom_frontend", [False, True])
+def test_custom_data_dir_keeps_frontend(tmp_path, monkeypatch, custom_frontend):
+    install = tmp_path / "app"
+    install.mkdir()
+    monkeypatch.chdir(install)
+    data_dir = tmp_path / "var" / "lib" / "nodvard"
+    data_dir.mkdir(parents=True)
+    if custom_frontend:
+        frontend = tmp_path / "web"
+        monkeypatch.setenv("NODVARD_DECK_FRONTEND_DIST", str(frontend))
+    else:
+        frontend = install / "frontend" / "dist"
+        monkeypatch.delenv("NODVARD_DECK_FRONTEND_DIST", raising=False)
+    monkeypatch.delenv("LATTICE_FRONTEND_DIST", raising=False)
+    frontend.mkdir(parents=True)
+    (frontend / "index.html").write_text("<html>Deck</html>", encoding="utf-8")
+    (frontend / "assets").mkdir()
+    (frontend / "assets" / "app.js").write_text("console.log('Deck')", encoding="utf-8")
+    settings = Settings(data_dir=data_dir, _env_file=None)
+    monkeypatch.setattr(main, "get_settings", lambda: settings)
+
+    client = TestClient(main.create_app())
+    for path in ("/", "/settings/system"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert "<html>Deck</html>" in response.text
+    response = client.get("/assets/app.js")
+    assert response.status_code == 200
+    assert response.text == "console.log('Deck')"
+    assert client.get("/api/v1/gibt-es-nicht").status_code == 404
 
 
 def test_an_existing_asset_is_served_as_itself_not_the_fallback(spa_client: TestClient):

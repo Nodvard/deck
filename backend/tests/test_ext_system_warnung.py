@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from exec_gate_helpers import ReadingExec
 
 REPO_EXTENSIONS_DIR = Path(__file__).resolve().parents[2] / "extensions"
 sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "system" / "src"))
@@ -162,7 +163,7 @@ class FakeCtx:
         ctx = self
         ctx.hosts = SimpleNamespace(list=ctx._list_hosts)
         ctx.settings = SimpleNamespace(get=ctx._get_settings)
-        ctx.exec = SimpleNamespace(run=ctx._run)
+        ctx.exec = ReadingExec(ext_id="system", run=ctx._run)
         ctx.notify = SimpleNamespace(send=ctx._send, would_suppress=ctx._would_suppress)
 
     async def _list_hosts(self, **_: Any) -> list[Any]:
@@ -734,7 +735,8 @@ async def _role_headers(client, db_session, role: str) -> dict:
 
 
 @pytest.fixture
-async def limit_api(client, db_session, test_settings):
+async def limit_api(client, db_session, test_settings, request, monkeypatch):
+    from nodvard_deck.ext.runtime import get_extension_runtime
     from nodvard_deck.services import extensions as extensions_service
     from nodvard_deck.services import hosts as hosts_service
 
@@ -742,6 +744,10 @@ async def limit_api(client, db_session, test_settings):
     await db_session.commit()
     test_settings.extensions_dir = REPO_EXTENSIONS_DIR
     await extensions_service.discover_and_sync(db_session, test_settings)
+    denied = getattr(request, "param", ())
+    if denied:
+        manifest = get_extension_runtime().discovered["system"].manifest
+        monkeypatch.setattr(manifest, "permissions", [p for p in manifest.permissions if p not in denied])
     await client.post("/api/v1/auth/bootstrap", json={"username": "owner1", "password": "correct-horse-battery", "setup_code": "TEST-CODE-2345"})
     token = (await client.post("/api/v1/auth/login", json={"username": "owner1", "password": "correct-horse-battery"})).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -851,12 +857,12 @@ async def test_a_change_of_the_limit_is_written_to_the_audit_log(client, db_sess
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("limit_api", [("audit.write",)], indirect=True)
 async def test_the_limit_is_saved_even_without_the_audit_permission(client, db_session, limit_api, caplog):
     from nodvard_deck.ext.runtime import get_extension_runtime
 
     granted = get_extension_runtime().loaded["system"].granted_permissions
-    assert "audit.write" in granted
-    granted.remove("audit.write")
+    assert "audit.write" not in granted
     with caplog.at_level(logging.WARNING):
         saved = await client.put(limit_api.url, json={"own_c": 90}, headers=limit_api.headers)
     assert saved.status_code == 200, saved.text

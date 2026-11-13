@@ -444,31 +444,83 @@ async def test_nothing_is_reported_while_the_state_cannot_be_saved(client, docke
         assert (await _instance()._git_watch.check_all())["saved"] is False
     assert sent == [], "ohne gespeicherten Stand käme sonst bei jedem Lauf dieselbe Meldung"
     checked = await client.post(f"{url}/check", headers=docker_on.owner)
+    assert checked.status_code == 200, checked.text
+    assert checked.json()["watch"]["problem"] is None
     assert checked.json()["watch"]["remote"] == second, "der Knopf zeigt das Ergebnis trotzdem"
 
 
 @pytest.mark.asyncio
-async def test_a_check_on_request_does_not_wait_for_the_scheduled_run(client, docker_on, tmp_path, monkeypatch):
+@pytest.mark.parametrize("scheduled_problem", [False, True])
+async def test_a_check_on_request_does_not_wait_for_the_scheduled_run(client, docker_on, tmp_path, monkeypatch, scheduled_problem):
     origin = tmp_path / "origin"
-    commit = _commit(origin)
+    first = _commit(origin)
     url = await _with_source(client, docker_on, origin)
-    _notes(monkeypatch)
+    _instance()._git_apply.state.put_written(docker_on.host, "shop", first, {})
+    sent = _notes(monkeypatch)
+    watch = _instance()._git_watch
     fast = _instance()._git.run_fetch
     gate, started = asyncio.Event(), asyncio.Event()
 
+    class UncontendedLock(asyncio.Lock):
+        async def acquire(self):
+            assert not self.locked(), "Die manuelle Prüfung wartet auf den Lauf nach Zeitplan."
+            return await super().acquire()
+
+    monkeypatch.setattr(watch, "_lock", UncontendedLock())
+    monkeypatch.setattr(watch, "_run", UncontendedLock())
+
     async def first_waits(request, limits):
+        answer = await fast(request, limits)
         if not started.is_set():
             started.set()
             await gate.wait()
-        return await fast(request, limits)
+            if scheduled_problem:
+                return {"ok": False, "problem": "Der Server antwortet nicht."}
+        return answer
 
     _instance()._git.run_fetch = first_waits
-    running = asyncio.create_task(_instance()._git_watch.check_all())
-    await started.wait()
-    checked = await asyncio.wait_for(client.post(f"{url}/check", headers=docker_on.owner), 10)
-    assert checked.json()["watch"]["remote"] == commit and not running.done()
-    gate.set()
-    assert (await running)["saved"] is True
+    running = asyncio.create_task(watch.check_all())
+    try:
+        await asyncio.wait_for(started.wait(), timeout=10)
+        second = _commit(origin, COMPOSE + b"    restart: always\n")
+        checked = await asyncio.wait_for(client.post(f"{url}/check", headers=docker_on.owner), timeout=10)
+        assert checked.status_code == 200, checked.text
+        assert checked.json()["watch"]["problem"] is None
+        assert checked.json()["watch"]["remote"] == second and not running.done()
+    finally:
+        gate.set()
+        outcome = await running
+        assert outcome["saved"] is True
+    assert outcome["new"] == 1 and outcome["problems"] == 0
+    shown = (await client.get(f"{url}/watch", headers=docker_on.owner)).json()["watch"]
+    assert shown["remote"] == second and shown["problem"] is None
+    assert len(sent) == 1 and second[:7] in sent[0].body
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_check_times_out_and_finishes_the_scheduled_run(client, docker_on, tmp_path, monkeypatch):
+    post, cancelled = client.post, asyncio.Event()
+
+    async def blocked(url, **kwargs):
+        if not url.endswith("/check"):
+            return await post(url, **kwargs)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    monkeypatch.setattr(client, "post", blocked)
+    checking = asyncio.create_task(test_a_check_on_request_does_not_wait_for_the_scheduled_run(
+        client, docker_on, tmp_path, monkeypatch, False))
+    try:
+        done, _ = await asyncio.wait({checking}, timeout=15)
+        assert checking in done, "Der Test wartet endlos auf die manuelle Prüfung."
+        with pytest.raises(TimeoutError):
+            await checking
+        assert cancelled.is_set()
+    finally:
+        checking.cancel()
+        await asyncio.gather(checking, return_exceptions=True)
 
 
 @pytest.mark.asyncio

@@ -38,6 +38,14 @@ PINNED = {
     ("shield", 16): "3cce326a354a17f5be53a36f79a53503e2685b704b7ab64cee2cfd5ab7e22370",
     ("shield", 17): "0e87b96d55042c35c721fceeb4fd2b643b490fa5ab2cc15ec31acdfb93784022",
     ("shield", 18): "18b2428d10d3924e630063807aeee20c54459b63183633fab2c4ce38538bc5a2",
+    ("shield", 19): "d7879005a264341639ab5806b72e051e77fc3b21069ad744652ee2ad8988bbd0",
+    ("shield", 20): "434c219f50a56eb154f07b0d0623486ac84dec73cf75e4184aa1883c63ef4acd",
+    ("shield", 21): "1e5c6da4f1d9763ae6a08bf52d04da6fba92ff59f928d6d056103176e975963d",
+    ("shield", 22): "22812fb14f86db16b45575e527b38988055686d14377b853478146446a4511d6",
+    ("shield", 23): "2fd9e30dbc3b1798d3de5efd97ee99e2c1fef1a6fad84c43a797951b3877a7b3",
+    ("shield", 24): "553bf85e5c17a7d69ce7b95e057ba81480cdb1792392d2920987a3972e60f864",
+    ("shield", 25): "4810fc947715c3e5eb86fc2b058085d997b16d59a963a2148be1f0a41c1f854f",
+    ("shield", 26): "936ebf9cd119e7299070dcba2d0a352a710743a9969a5f8db37be65129f7d3f1",
     ("system", 1): "dbae0a1432917b084dbe06cf43a155bfc0d7de38dfa06342267e545e09004368",
     ("system", 2): "116c19ce9b50057456f4cd1b35091564f6d7ce327aea086f9c965e3c2330c994",
 }
@@ -88,6 +96,10 @@ def test_every_helper_is_pinned_to_its_version():
             f"{ext_id}: Text geändert, aber Version {helper.version} gleich geblieben. HELPER_VERSION im Skript und "
             "root_helper.version in extension.toml erhöhen, dann die neue Prüfsumme in PINNED eintragen."
         )
+
+
+def test_shield_ssh_settings_helper_replaces_version_21():
+    assert _helpers()["shield"].version > 21
 
 
 def test_shield_setup_includes_the_bundled_helper_without_full_sudo():

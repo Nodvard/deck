@@ -54,7 +54,7 @@ SUDO_FULL_WANTED_KEY = "sudo_full_wanted"
 """Schlüssel in `Host.host_metadata`: Die volle sudo-Regel ist hier gewollt (eigene Befehle), „Verbindung prüfen“ und
 die Übersicht raten dann nicht, sie zu entfernen."""
 
-CORE_METADATA_KEYS = (LOGIN_OK_KEY, SETUP_RUN_KEY, SUDO_FULL_WANTED_KEY)
+CORE_METADATA_KEYS = (LOGIN_OK_KEY, SETUP_RUN_KEY, SUDO_FULL_WANTED_KEY, "manual_entry")
 """Was dem Kern gehört und beim Abgleich (`upsert_discovered`) nicht mit den Angaben des Anbieters überschrieben wird."""
 
 
@@ -200,6 +200,9 @@ async def create_host(
     from ..db import refresh_relationships
 
     await refresh_relationships(session, host, "tags", "credentials")
+    from .host_merge import merge_discovered
+
+    await merge_discovered(session)
     return host
 
 
@@ -470,10 +473,11 @@ async def clear_known_host_key(session: AsyncSession, host_id: str, key_type: st
     result = await session.execute(
         select(KnownHostKey).where(KnownHostKey.host_id == host_id, KnownHostKey.key_type == key_type)
     )
-    row = result.scalars().first()
-    if row is None:
+    rows = result.scalars().all()
+    if not rows:
         return False
-    await session.delete(row)
+    for row in rows:
+        await session.delete(row)
     # Ab jetzt darf kein Hintergrunddienst den nächsten Schlüssel still merken, auch wenn die Einstellung es sonst erlaubt;
     # erst die Bestätigung nimmt den Merker weg. Im selben Commit wie das Löschen.
     await require_host_key_confirmation(session, host_id)

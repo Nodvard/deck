@@ -1,19 +1,11 @@
-/**
- * „Erste Schritte“ im Cockpit: die Checkliste, die einen Neuling von der leeren Installation bis
- * zum laufenden Dashboard führt. Alles hier ist abgeleitet aus Daten, die es ohnehin gibt
- * (Server, Erweiterungen, Dashboard-Layout) -- es gibt keine eigene Buchführung, die vom Zustand
- * abweichen könnte. Wo es keine verlässliche Quelle gibt (Sicherung), steht nur ein Hinweis.
- *
- * Ein Schritt erscheint nur, wenn der Nutzer das Recht hat, ihn zu erledigen, und die Daten dazu
- * geladen werden konnten (kein Raten bei einem Fehler).
- */
+/** Checkliste aus Servern, Erweiterungen und Layout; nur berechtigte Schritte mit geladenen Daten erscheinen. */
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "./api";
 import { isSshCredential } from "./hosts";
 import { type HostOut } from "./overview";
 
-/** Die Erweiterung für Push-Nachrichten. Der Kern weiß sonst nichts über einzelne Erweiterungen;
+/** Die Erweiterung für Push-Nachrichten. Der Kern weiss sonst nichts über einzelne Erweiterungen;
  * hier gibt es (noch) keine allgemeine Kennzeichnung über die API. */
 export const PUSH_EXTENSION_ID = "ntfy";
 
@@ -36,6 +28,10 @@ export interface Preferences {
   theme?: string;
   /** Hinweis „Deck hat ein neues Aussehen.“ erledigt; fehlt bei einem älteren Server (dann kein Hinweis). */
   design_notice_dismissed?: boolean;
+  /** Zwei-Faktor im Assistenten verschoben; fehlt bei einem älteren Server. */
+  totp_setup_skipped?: boolean;
+  /** Einmalige Erinnerung bewusst ausgeblendet oder Zwei-Faktor inzwischen eingeschaltet. */
+  totp_reminder_dismissed?: boolean;
 }
 
 export function useExtensions(enabled = true) {
@@ -111,7 +107,7 @@ export function buildFirstSteps({ can, hosts, extensions, placedWidgets, catalog
       action: !accessDone && waitingKey ? "Befehl ansehen" : "Zugang einrichten",
       text: !accessDone && waitingKey
         ? "Der Schlüssel ist erzeugt, aber noch nicht bestätigt: Führe den Befehl auf dem Server aus und prüfe danach die Verbindung. Die Seite zeigt ihn dir zum Kopieren."
-        : "Nodvard Deck meldet sich per SSH auf dem Server an. Mit einem Passwort geht das ohne Befehl; für den vollen Zugang mit Schlüssel führst du einmal einen Befehl auf dem Server aus – die Seite zeigt ihn dir zum Kopieren.",
+        : "Nodvard Deck meldet sich per SSH auf dem Server an. Mit einem Passwort geht das ohne Befehl; für den vollen Zugang mit Schlüssel führst du einmal einen Befehl auf dem Server aus, die Seite zeigt ihn dir zum Kopieren.",
     });
     const connected = withAccess.some((h) => !!h.login_ok_at);
     const toCheck = preferManual(withAccess);

@@ -77,7 +77,7 @@ describe("SocPage", () => {
     await screen.findByText("nginx-proxy", { exact: false });
     expect(screen.getByText("Beobachtete Hosts")).toBeInTheDocument();
     expect(screen.getByText("Wartet auf Bündelung")).toBeInTheDocument();
-    expect(screen.queryByPlaceholderText(/Nachricht an NEXUS/)).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/Nachricht an/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Senden" })).not.toBeInTheDocument();
   });
 
@@ -248,7 +248,7 @@ describe("SocPage", () => {
 });
 
 describe("auditActionLabel", () => {
-  it("beschriftet neue (shield.*) und alte (nexus_soc.*) Protokolleinträge gleich", () => {
+  it("beschriftet neue und ältere Protokolleinträge gleich", () => {
     for (const [name, label] of [
       ["incident", "Vorfall erfasst und von Nodvard KI bewertet"],
       ["incident_status", "Status geändert"],

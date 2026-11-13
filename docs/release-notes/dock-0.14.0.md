@@ -1,0 +1,265 @@
+# Nodvard Dock 0.14.0
+
+2026-11-13
+
+## Neu
+
+- Der Reiter Images zeigt die Gesamtgröße aller Images, räumt nach Rückfrage und Freigabe ungenutzte Images ohne Namen auf und meldet danach die Anzahl entfernter Images sowie den freigegebenen Speicherplatz.
+- Nodvard Shield: Fail2ban lässt sich jetzt je Server einstellen, mit Sperrdauer, Fundzeit, Versuchen, Ausnahmen und auswählbaren Schutzregeln. Der SSH-Zugang von Deck bleibt automatisch ausgenommen, sshd bleibt Pflicht. Änderungen brauchen die gewohnte Freigabe und werden vor dem Aktivieren geprüft. Dafür bestehende Server nach dem Update erneut einrichten, damit das neue Shield-Hilfsskript bereitsteht.
+- Shield erstellt wöchentliche Sicherheitsberichte mit zwölf Wochen Verlauf und verschickt eine Kurzfassung mit Link über die vorhandenen Meldungskanäle.
+- Nodvard KI kann neben Ollama auch OpenAI-kompatible Anbieter nutzen, mit Ersatzmodell, Verbindungstest und einem Hinweis, wenn Daten dein Netz verlassen.
+- Freiwillige Nutzungsdaten in drei Stufen, standardmäßig aus
+- Shield gleicht installierte Pakete je Server mit öffentlichen Sicherheitsmeldungen ab und zeigt betroffene Pakete, CVEs, Schwere und behobene Versionen mit einem Link zur Update-Zentrale. Paketlisten bleiben in Deck.
+- Shield prüft aus dem Heimnetz (von Deck aus, nicht aus dem Internet) offene TCP-Ports und HTTPS-Zertifikate. Die Karten warnen vor neu offenen Ports, bald ablaufenden, selbstsignierten oder unpassenden Zertifikaten und schwachen TLS-Protokollen. Beide Prüfungen laufen lesend nach Zeitplan; die Außenprüfung lässt sich abschalten.
+
+## Verbessert
+
+- Beim Anlegen eines neuen Stacks ist nur noch „Anlegen“ hervorgehoben, „Vorlage speichern“ ist ein schlichter Knopf in gleicher Höhe.
+- Die Update-Zentrale zeigt die Suche direkt oben und die Anleitung zum Aktualisieren von Hand erst beim Aufklappen.
+- Beim Anlegen und Bearbeiten eines Servers lassen sich die üblichen Markierungen über Auswahlkästchen mit kurzen Erklärungen setzen; eigene Markierungen bleiben möglich.
+- Beim Anlegen eines Stacks lassen sich fehlende Werte direkt eingeben; Passwörter werden verdeckt und nur für diesen Stack gespeichert.
+- Im Docker-Modul heißt der Knopf an einem Netz jetzt „Container verbinden“, und die Formulare zum Anlegen eines Netzes und zum Holen eines Images bleiben übersichtlich schmal.
+- Stack-Karten zeigen auch auf dem Handy nur noch die wichtigsten Knöpfe und ein Mehr-Menü.
+- Beim Stoppen eines Stacks lässt sich wählen, ob die Container bleiben oder entfernt werden, während die Volumes erhalten bleiben.
+- Images lassen sich jetzt im Update-Bereich eines Stacks holen.
+- Mehrere Sicherheitsprüfungen (Besitzer von Dateien, Sperrdatei, Rechtewechsel beim Start) laufen jetzt auch in der automatischen Prüfung, statt dort still übersprungen zu werden.
+- Für die erste Einrichtung lässt sich ein eigener Code vorgeben; der gültige Code erscheint gut sichtbar in einer umrahmten Box im Container-Protokoll.
+- Netzwerk und das Entwicklerbeispiel Hello World werden nicht mehr standardmäßig mitgeliefert, Pi-hole und Nginx Proxy Manager bleiben verfügbar.
+- Die Dateiansicht kennzeichnet Verknüpfungen mit „Link“ statt einem Symbol und zeigt Ordnernamen ohne Ordnersymbole. #695
+- Der Einrichtungsbefehl für Server ist deutlich kürzer, weil die Hilfsskripte darin komprimiert mitkommen. Auf dem Server wird dafür gzip gebraucht, das auf gängigen Linux-Systemen schon da ist.
+- Beim Anlegen eines Servers steht der Anzeigename zuerst, und der Kurzname ergibt sich daraus von selbst („Müllers NAS“ wird „muellers-nas“); wer will, ändert ihn vor dem Anlegen.
+- Git-Abfragen für Stacks laufen nacheinander. Antwortet ein Git-Server langsam, warten auch Abfragen für andere Stacks und Server. #688
+- Ein Test sichert ab, dass eine Sicherung mit nicht passenden Prüfsummen beim Wiederherstellen abgelehnt wird.
+- Ein Test prüft jetzt wirklich, dass beim Prüfen einer Sicherung keine Nebendateien der Datenbank angelegt werden.
+- Hand-Server und Proxmox-Knoten oder Gäste mit gleicher Adresse oder gleichem Hostnamen erscheinen gemeinsam. Der Hand-Eintrag bleibt zugeordnet; Proxmox-Zustand und SSH-Messwerte stehen zusammen. Eine rückgängig machbare Migration übernimmt bestehende Markierungen, Zugänge und Verläufe.
+- Wer die Zwei-Faktor-Anmeldung bei der Einrichtung überspringt, findet einen direkten Link zu den Kontoeinstellungen und eine Erinnerung auf der Übersicht, bis die Anmeldung abgesichert oder der Hinweis ausgeblendet ist.
+
+## Behoben
+
+- Zu große Seitenangaben beim Abrufen der Aktionen, des Protokolls, der Meldungen und der Shield-Historie werden als ungültige Eingabe abgewiesen und lösen keinen internen Fehler mehr aus. #685
+- Ein auf einzelne Server beschränktes Recht verdeckt in der Oberfläche kein zusätzlich vergebenes allgemeines Recht mehr.
+- In der API-Beschreibung sind die Antworttypen der Wochenberichte und weitere Fehlermeldungen für Shield, Proxmox und Backups ergänzt.
+- Die Schnittstellen für Apps und Erweiterungen bleiben auch ohne Nutzung durch die Web-Oberfläche erhalten und sind jetzt ausdrücklich dokumentiert.
+- Nicht erlaubte API-Methoden liefern auch bei eingebundenen Routern und ausgeliefertem Frontend die erlaubten Methoden zurück. Fehlende Fehlerantworten sind in der API-Beschreibung ergänzt.
+- Der Schalter zum selbstständigen Einspielen von Sicherheitsupdates ist bis Version 1.0 ausgeblendet.
+- In der Docker-Netzliste steht bei „none“ jetzt „ohne Netz“, und gleiche Namen werden nicht mehr doppelt angezeigt.
+- Ausdrücklich eingeschaltete automatische Server-Updates können wieder Updates einspielen und die vorgesehenen Neustarts ausführen.
+- Nach einer erfolgreichen Volume-Sicherung werden gestoppte Docker-Dienste auch dann wieder gestartet, wenn das anschließende Update mehrfach abgebrochen wird.
+- Ohne Sicherungen zeigt die Übersicht jetzt einen grauen Hinweis statt eines grünen Erfolgs. Proxmox-Backups und das Backup-Widget zeigen bei leeren Listen „Keine Sicherungsjobs gefunden“.
+- Nodvard Shield zeigt laufende Fail2ban-Werte statt abweichender gespeicherter Einstellungen. Überschreiben vorrangige Jail-Konfigurationen die freigegebenen Zahlenwerte, IP-Ausnahmen oder die Jail-Auswahl, wird die Änderung vor dem Reload zurückgesetzt.
+- Ein fehlgeschlagenes Neuladen von Fail2ban nach der Installation wird als Fehler gemeldet.
+- Wiederholte Löschversuche für Nutzungsdaten merken keine unbenutzten Kennungen mehr vor.
+- Nutzungsberichte erkennen umbenannte Module richtig und lassen verwaiste Einträge aus.
+- Löschwünsche für Nutzungsdaten gehen auch nach einem Empfängerwechsel an die bisherigen Empfänger.
+- Die gehärteten Compose-Vorlagen unterstützen weiterhin einen eigenen Einrichtungscode. Die Installationsanleitungen enthalten die Datenmigration und die Zugriffsbeschränkung. Bei fehlenden Schreibrechten nennt der Reparaturhinweis den Dienstnamen der jeweiligen Ausgabe.
+- Unvollständige Teilabrufe von Dateien werden als Fehler erkannt, statt als erfolgreiche Übertragung zu enden.
+- Teilabrufe von Dateien enden auch dann sauber, wenn die Quelle nach der Größenabfrage weniger Daten liefert.
+- Fehler bei der erneuten Rechteprüfung einer grafischen Konsole werden als Verbindungsfehler gemeldet.
+- Bei einem nicht erreichbaren Server zeigen Kern und Erweiterungen wieder dieselbe Meldung. #695
+- Die Dateikopie-Tests verwenden die auf den Zielserver begrenzte Freigabe des Dateimanagers. Direkte Zugriffe ohne passende Host-, Erweiterungs- oder Operationsfreigabe bleiben gesperrt.
+- Die Live-Verbindung der Oberfläche öffnet nach einem Neuaufbau keine doppelte Verbindung mehr und verbindet sich nach Unterbrechungen zuverlässig neu.
+- Scheitert „Alle als gelesen“ in der Meldungsglocke, erscheint dort eine Fehlermeldung, statt dass nichts passiert.
+- Das Image übernimmt beim Start ältere root-eigene Datenordner und gibt vor Migration und Anwendung die Rechte ab. Bei fest vorgegebenem Benutzer nennt eine Startmeldung die Befehle zur Umstellung; die Installationsanleitungen erklären beide Wege.
+- Ungenutzte Datenbankstrukturen werden ohne Datenverlust bereinigt und Filter für Aktionen und Meldungen erhalten passende Indizes.
+- Virenscans, Hintergrundprüfungen und wiederaufgenommene Aufgaben erhalten passende Zugriffskontexte. Die Container-Wache liest Absturzursachen und Logs; Servermesswerte, Schutzstatus, Hardware-Scans und Vorprüfungen funktionieren wieder. Dateiänderungen lassen sich bestätigen und Lageberichte merken den Schutzstatus. Der NPM-Adress-Check liest den Docker-Katalog mit einer auf dessen Anbieter begrenzten Freigabe. Docker zeigt Sicherungen und Projektordner, prüft Image-Updates und führt Dienstneustarts auf anderen Servern über die Freigabe aus. Abgebrochene Virenscans schließen ihre Einträge ab und geben wartende Server frei.
+- Nodvard Dock gibt nur die benötigten API-Routen frei. Neue Deck-Routen bleiben gesperrt, bis sie ausdrücklich für Dock freigegeben werden.
+- Wird eine Container-Umwandlung beim Stoppen oder Starten mehrfach abgebrochen, behält der Rückweg seine Freigabe, bis der alte Container wiederhergestellt ist oder die Aufräumfrist abläuft.
+- Nach dem Einspielen oder Neustarten eines Stacks aus Git prüft Deck kurz, ob die Dienste stabil laufen. Bei Problemen nennt der Verlauf die betroffenen Dienste und verweist auf den Knopf „Logs“. Container-Logs werden dabei nicht im Verlauf gespeichert.
+- Dienste für einmalige Aufgaben dürfen ohne Fehler enden und werden mit Exit-Code 0 als erfolgreich abgeschlossen gemeldet.
+- Die Prüfung von Stacks aus Git meldet bei längeren Abrufen und absichtlich auf null gesetzten Diensten keine falschen Fehler mehr.
+- Der Dienstkatalog bleibt auch mit alten Docker-Kennungen beim Vergleich mit dem registrierten Anbieter kompatibel.
+- Die Protokollansicht begrenzt erneute Verbindungen, behält die Ausgabe währenddessen und beendet abgeschlossene Zeitraumabrufe.
+- Die Container-Seite berücksichtigt erreichbare Docker-Server ohne Container beim Verbindungshinweis.
+- Beim Abbruch eines Portainer-Umzugs bleibt die Freigabe bis zum Ende des Aufräumens erhalten, damit neu angelegte Dateien und Ordner auch beim Herunterfahren entfernt werden können.
+- Nach einem Deck-Neustart kann der automatische Docker-Rückweg auch nach einer vorübergehenden Projektsperre erneut starten.
+- Fail2ban-Änderungen lassen sich auch bei langsamem SSH-Verbindungsaufbau wieder vorschlagen.
+- Nach einer fehlgeschlagenen Container-Umwandlung bleibt die Freigabe für den Rückweg erhalten, damit der alte Container auch bei einem Abbruch wieder starten kann.
+- Das Aufräumen nach einer fehlgeschlagenen Volume-Sicherung oder einem Portainer-Umzug hat eine feste Zeitgrenze und meldet nötige Nacharbeiten, wenn der Server nicht antwortet.
+- Volume-Sicherungen prüfen den freien Platz auch dann, wenn der Heimatordner mit einem Schrägstrich endet. Der über SFTP gelesene Heimatpfad wird ebenfalls bereinigt.
+- Alte Einmal-Container lösen beim Einspielen oder Neustarten von Stacks aus Git keine falsche Fehlermeldung mehr aus.
+- Die Prüfung von Stacks aus Git erkennt nach einem Neustart fehlende Container und verwendet bei allen Abfragen den Ordner des Stacks.
+- Die Vorprüfung neuer Docker-Stacks verwendet auch mit eingegebenen Variablen den vorgesehenen Stack-Ordner und meldet dafür kein falsches hohes Risiko.
+- Beim Löschen eines Stack-Ordners bleiben auch automatisch geladene Umgebungsdateien anderer Stacks geschützt, wenn eine Verknüpfung dorthin zeigt.
+- Neue Docker-Stacks behalten beim erneuten Anwenden ihre gespeicherten Variablen. Unberührte optionale Felder überschreiben keine Vorgaben mehr, etwa den Datenordner über PWD.
+- Beim Bearbeiten neuer Docker-Stacks bleiben eingegebene Werte erhalten, wenn ein Variablenplatzhalter beim Tippen kurz unvollständig ist.
+- Beim Löschen eines Stack-Ordners bleiben Konfigurationsdateien anderer Stacks auch dann geschützt, wenn deren Arbeitsordner fehlt.
+- Stacks ohne angegebenen Arbeitsordner blockieren die Prüfung beim Löschen eines anderen Stack-Ordners nicht mehr.
+- Beim Löschen eines Stack-Ordners erkennt Deck auch Verknüpfungen auf Arbeitsordner und Konfigurationsdateien anderer Stacks und schützt sie vor dem Löschen.
+- Die Volume-Abfrage vor Stack-Sicherungen nutzt einen geprüften Befehlsbauer. Das geänderte Shield-Hilfsskript erhält eine neue Version, damit Server die Korrektur übernehmen.
+- Der Test für einen eigenen Einrichtungscode berücksichtigt den zusätzlichen Schritt für Nutzungsdaten im Einrichtungsassistenten.
+- Dauerhafte Hintergrundaufgaben von Shield und dem Beispielmodul starten nach einem Absturz wieder neu, und das Entwickler-Kit beschreibt, wie Module das selbst nutzen.
+- Werden die Einstellungen eines Moduls zweimal kurz nacheinander gespeichert, übernimmt das Modul auch die zweite Änderung.
+- Erweiterungen lassen sich unabhängig von der Ladereihenfolge starten.
+- Ein Server in Wartung bleibt in Wartung, auch wenn ein Modul ihn beim nächsten Abgleich wieder als erreichbar meldet.
+- Die Fail2ban-Einstellungen lassen sich auch mit 256 zusätzlichen Ausnahmen wiederholt speichern.
+- Fehlerkennungen lassen sich auch bei fehlgeschlagenen Befehlen der richtigen Aufrufstelle zuordnen, ohne vertrauliche Fehlertexte zu protokollieren.
+- Beim Seitenwechsel beginnt der Inhalt wieder oben, damit Überschriften und Formulare vollständig sichtbar sind, während Reiterwechsel die bisherige Position behalten.
+- Das Web-Terminal zeigt beliebige Text- und Hintergrundfarben auch mit strenger Inhaltsrichtlinie richtig an.
+- Nach einem Neustart von Docker verbindet sich die Protokollansicht automatisch erneut.
+- Wenn eine Docker-Verbindung fehlschlägt, zeigt die Container-Seite einen Prüfhinweis und bietet einen erneuten Verbindungsversuch an.
+- Bei Stacks aus Git sind die Angaben zur Quelle ohne Verwaltungsrecht gesperrt. Ein Hinweis erklärt, dass nur Administratoren die Quelle ändern dürfen.
+- Die Prüfung von Stacks aus Git auf Knopfdruck wartet nicht mehr auf einen laufenden Zeitplan. Ihr Ergebnis bleibt auch nach dessen Abschluss sichtbar.
+- Server-Zustand zeigt fehlende SSH-Zugänge als eigenen Zustand und meldet Server erst nach erfolgreicher Prüfung als erreichbar. Live-Abfragen halten nach einem Fehler an und lassen sich erneut versuchen.
+- Allgemeine Abfragefehler beim Server-Zustand werden nicht mehr als fehlgeschlagene SSH-Verbindung angezeigt. Hinweise auf die Zugangseinstellungen erscheinen nur bei Zugangs- und SSH-Fehlern.
+- Aufräumen und Wiederstarten nach einem Aktionsabbruch behalten ihre Freigabe auch bei weiteren Abbrüchen bis zum Ende. Beim Herunterfahren wartet Deck innerhalb der Wartefrist auch auf diese Aufgaben.
+- Ungültige Größenangaben mit Unicode-Ziffern beim App-Symbol liefern eine Nicht-gefunden-Antwort statt eines Serverfehlers.
+- Teilabrufe von Dateien liefern die angeforderten Bytes, auch bei begrenzten Bereichen und beim Abruf des Dateiendes.
+- Live-Verbindungen weisen Nachrichten mit falschem JSON-Typ geordnet zurück, auch vor der Anmeldung.
+- Gespeicherte Git-Quellen für Stacks belegen zusammen höchstens 500 MB. Reicht der Platz für einen neuen Stand nicht, bleibt der bisherige erhalten. #688
+- Ein neuer Git-Stand lässt sich auch holen, während eine andere Git-Quelle entfernt wird. #688
+- Backup-Verbindungen und Sicherungsjobs erscheinen auf dem Handy als Karten mit umbrechenden Aktionen.
+- Private Registries erscheinen auf dem Handy als Karten mit ausreichend Platz für Adressen und Aktionen.
+- Aufgeklappte Dokumentdetails nutzen auf dem Handy die ganze Kartenbreite.
+- Preise und aufgeklappte Inventardetails haben auf dem Handy keine zusätzliche Einrückung mehr.
+- Serverübersicht, Protokoll und Widget-Tabellen erscheinen auf dem Handy als Karten. Benutzeraktionen, Erweiterungsliste und Dialoge passen sich der Bildschirmbreite an.
+- Proxmox zeigt Verbindungen, Gäste, Speicherpools, Paket-Updates und den Aufgabenverlauf auf dem Handy als Karten ohne seitliches Wischen.
+- Paketlisten in Nodvard Shield zeigen Namen und Versionen auf dem Handy als beschriftete Karten.
+- Synology zeigt Speicherpools, Volumes, Festplatten und Hyper-Backup-Aufgaben auf dem Handy als Karten.
+- Dateisysteme und Live-Messwerte für Sensoren, Datenträger, Netzwerk und Prozesse erscheinen auf dem Handy als Karten mit lesbaren Beschriftungen.
+- Lange Adressen neu angelegter Server bleiben auf dem Handy vollständig lesbar.
+- Die Weboberfläche bleibt auch mit einem abweichenden Datenordner erreichbar.
+- Die Updatesuche gibt ihre Datenbankverbindung vor dem Warten auf die Antwort frei, damit andere Zugriffe weiter möglich bleiben.
+- Leere Textdateien lassen sich wieder ohne Fehlermeldung in der Vorschau öffnen.
+- Ausgeschaltete Module verschwinden sofort aus Seitenleiste, Übersicht und Suche, auch beim Ausschalten in einer anderen Sitzung.
+- Logo, Favicon und App-Symbole lassen sich wieder auf fremden Startseiten einbinden. Andere API-Antworten behalten die strengen Sicherheits-Kopfzeilen.
+- Fehlgeschlagene oder unvollständige Update-Abfragen zeigen einen Fehler und behalten den letzten erfolgreichen Stand samt Prüfzeitpunkt.
+- Das Löschen einer Datei aus der Quarantäne meldet bei einem Löschfehler keinen Erfolg mehr.
+- Shield unterscheidet bei Vorfällen und Erholungen auch Container, deren Namen sich nur durch Groß- und Kleinschreibung unterscheiden.
+- Beim Umwandeln eines Containers in einen Stack bleibt seine Einstellung für den gemeinsam nutzbaren Speicherbereich erhalten.
+- Importreihenfolge der öffentlichen API für die Ruff-Prüfung korrigiert.
+- Auch mit eingeschränkten Zugriffsrechten meldet das Löschen aus der Quarantäne Fehler zuverlässig.
+- Weitere Stacks aus Portainer oder unbekannter Herkunft lassen die Löschprüfung nicht mehr abstürzen. Fehlen Dateiangaben, erklärt Deck, warum der Ordner bleiben muss.
+- Nodvard Shield: Beim Ändern der Fail2ban-Einstellungen bleiben aktive Schutzregeln ausgewählt und Virenscans auf demselben Server laufen weiterhin nacheinander.
+- Der Rückweg zur vorherigen Version behält den eingestellten Container-Nutzer auch dann bei, wenn die neue Version denselben Nutzer vorgibt.
+- Wartungsfenster mit ausgewählten Servern gelten auch nach deren Zusammenführung weiter.
+- Beim Zusammenführen von Servern bleiben der bestätigte Stand des Datei-Wächters und die Ziele vorhandener Skripte erhalten.
+- Nicht mehr vorhandene Gäste werden neuen Hand-Servern mit wiederverwendeten Adressen nicht mehr automatisch zugeordnet.
+- Server-Zustand behält nach einem Ansichtswechsel den aktuellen Verbindungsstatus bei, auch wenn eine ältere Abfrage später antwortet.
+- Shields CVE-Abgleich kann die installierten Pakete wieder lesen und wertet verneinte Verweise in RHEL-Sicherheitsregeln richtig aus.
+- Nodvard Shield erkennt das Hilfsskript mit der korrigierten SSH-Abfrage auf Servern als neue Version.
+- Shield ordnet Neustarts bei Containernamen mit unterschiedlicher Groß- und Kleinschreibung richtig zu, sodass die Ruhezeit und Hinweise bei erneuten Abstürzen stimmen.
+- Nodvard Shield übernimmt lesbare Update-Listen auch bei Zeitüberschreitungen einzelner Paketquellen und verwechselt Paketnamen nicht mehr mit Schäden an der Paketverwaltung.
+- Shield lässt sich mit der SSH-Härtung wieder aktivieren. Die Vorbereitung einer Härtungsaktion verlangt weiterhin die Rechte für Shield-Verwaltung und Serverausführung.
+- Das Shield-Frontend enthält die Sicherheitsprüfungen je Server und die beschrifteten Paketlisten für das Handy gemeinsam.
+- Nodvard Shield liest die SSH-Einstellungen auch bei neueren Servern mit anderer Groß- und Kleinschreibung und zeigt bei fehlgeschlagenen Abfragen den Fehlergrund an.
+- Shield trägt neue root-Schlüssel auch auf Proxmox in die gemeinsame Schlüsseldatei des Clusters ein.
+- SSH härten sperrt root nicht mehr aus, wenn für root schon Schlüssel eingetragen sind: Die Anmeldung mit Schlüssel bleibt dann erlaubt, gesperrt wird nur das Passwort.
+- SSH-Schlüssel mit Kommentar funktionieren. Neue Schlüssel lassen sich mit einem vorhandenen Zugang eintragen, und langsame SSH-Verbindungen blockieren die Datenbank nicht mehr.
+- Shield verlangt zum Eintragen eines neuen Deck-Schlüssels einen bestehenden Zugang und zeigt den nötigen Schritt an.
+- Nodvard Shield behält Fehlermeldungen beim Laden der Paketquellen auch nach langen Ausgaben und zeigt offene Updates neben fehlgeschlagenen Prüfungen in der Kurzlage.
+- Nodvard Shield übernimmt lesbare Update-Listen auch bei nicht erreichbaren Paketquellen und zeigt den Quellenfehler als Hinweis.
+- Die Kurzlage von Nodvard Shield zeigt offene Sicherheitsupdates auch dann, wenn zugleich Update-Prüfungen fehlgeschlagen sind.
+- Nodvard Shield zeigt bei fehlgeschlagenen Update-Prüfungen den Grund und den nächsten Schritt, statt fehlende Unterstützung oder einen aktuellen Stand zu melden.
+- Automatische Shield-Statusabfragen teilen sich einen Verbindungstest für fünf Minuten.
+- Shield merkt und protokolliert auch fehlgeschlagene Modelltests für die Moduleinstellungen.
+- Shield prüft die Antwort des gespeicherten Modells und bei Bedarf den Ersatzserver. Modulverwalter können die Verbindung testen; Fehler beim Test werden zuverlässig angezeigt.
+- Shield gibt Datenbankverbindungen vor Anfragen an selbst eingerichtete Anbieter frei.
+- Nach drei abgelehnten SSH-Anmeldungen pausiert Deck weitere Versuche für diesen Server zunächst 30 Minuten und bei weiteren Fehlern bis zu sechs Stunden. Die Pause bleibt nach einem Neustart erhalten und endet mit „Jetzt erneut prüfen“ oder einer erfolgreichen Prüfung des Standard-Zugangs. „Verbindung prüfen“ bleibt jederzeit nutzbar.
+- Fail2ban-Einstellungen lassen sich wieder vorschlagen und mit voller Automatik speichern. Fehlt die eindeutige Zuordnung eines Metrikanbieters, bleibt eine Messlücke; der Einzelabruf meldet den Anbieter als nicht verfügbar.
+- Die Server-Einrichtung installiert Hilfsskripte auch für root, ohne sudo-Regeln anzulegen. Die SSH-Härtung konfiguriert ihre Wiederholungssperre über den allgemeinen Aktionsvertrag.
+- Bleibt nach einer fehlenden Bestätigungsantwort die SSH-Härtung aktiv, meldet Shield die Rücknahme als unbestätigt und empfiehlt eine Statusprüfung.
+- Scheitert das Zurücknehmen der SSH-Härtung, bleibt die bisherige Einstellung erhalten und die Rücknahme kann erneut versucht werden.
+- Die Wiederholungssperre für SSH-Härtungsaktionen greift auch bei neuen Rücknahme-Token. Der automatische Rückweg wird mit einem echten Kindprozess geprüft.
+- Pi-hole meldet leere oder unpassende Antworten als Verbindungsproblem, statt eine erfolgreiche Abfrage anzuzeigen.
+- Ein Update-Helfer ohne Prüfung signierter Anforderungen sperrt jetzt den Knopf für Update und Rückweg mit Grund, statt den Klick mit einem Fehler zu beantworten. Die Fehlertexte nennen den Schlüssel der Installation als mögliche Ursache. Ein Schlüssel mit liegengebliebenem Temp-Namen wird beim nächsten Einrichten wieder brauchbar.
+- Fehler beim Erstellen oder Schreiben einer Update-Anforderung werden nicht mehr als fehlender Schlüssel gemeldet.
+- Die Update-Zentrale zeigt bei einer fehlgeschlagenen Suche ohne bekannte Version auch in der Kopfzeile den Fehler an.
+- Volume-Sicherungen werden auch bei Heimatordnern mit abschließendem Schrägstrich und beim Heimatordner / richtig angelegt und angezeigt.
+- Abgebrochene Wächter-Läufe verkürzen das Suchfenster des nächsten Scans nicht mehr, auch wenn sie noch auf einen freien Scanplatz gewartet haben.
+- Das Warten auf laufende Aktionen und auf einen Neustart hält sein Zeitlimit auch dann ein, wenn der Server eine Antwort nicht zu Ende schickt.
+- Wiederherstellen: „Weiter warten“ erkennt jetzt auch einen Neustart, der schon vor dem Klick abgeschlossen war.
+- Sicherung: Scheitert eine Statusabfrage während einer laufenden Sicherung, fragt die Seite weiter nach, statt dauerhaft „Sicherung läuft“ zu zeigen.
+
+## Sicherheit
+
+- Nach 30 falschen Passwörtern für einen Benutzernamen in fünf Minuten werden weitere Anmeldeversuche aus fremden Netzen vorübergehend gesperrt, auch bei wechselnden Adressen und IPv6-Netzen.
+- Wer deinen Benutzernamen kennt, kann dich mit falschen Passwörtern aus dem Internet nicht mehr aus dem Heimnetz oder VPN aussperren. Die Sperre nach 30 Fehlversuchen gilt nur noch für fremde Netze.
+- Eine noch laufende Erneuerung der Anmeldung meldet nach dem Abmelden nicht wieder an und meldet ein inzwischen neu angemeldetes Konto nicht mehr ab.
+- Endet die Anmeldung, während ein Bestätigungsdialog (etwa zum Löschen) offen ist, gilt er als abgebrochen und lässt sich nach der Anmeldung eines anderen Kontos nicht mehr bestätigen.
+- Die API und mitgelieferte Erweiterungen weisen unbekannte Felder und falsche JSON-Typen zurück. Pflichtköpfe, Antwortstatus und Dateitypen sind im API-Schema beschrieben. Unbekannte Methoden liefern auch mit ausgeliefertem Frontend 405 mit den erlaubten Methoden.
+- Die Prüfung von Compose-Dateien meldet jetzt alles als riskant, was nicht als harmlos bekannt ist: unbekannte Einstellungen, Ordner außerhalb der Datenordner, fremde Netze und Volumes.
+- Beim Speichern im Editor und bei der Prüfung eines neuen Stacks werden Ordner in Compose-Dateien auf dem Server aufgelöst, damit ein Verweis auf einen Systemordner nicht als Datenordner durchgeht. Das gilt für den Moment der Prüfung und schützt nicht gegen einen Container, der in einem erlaubten Datenordner schreiben darf.
+- Die Compose-Prüfung warnt auch bei volumes_from, device_cgroup_rules, vorhandenen (externen) Volumes sowie Volumes auf Geräten oder mit overlay.
+- Beim Speichern einer Compose-Datei gilt eine Warnung nur noch als bekannt, wenn sich der ganze betroffene Dienst nicht geändert hat; jede Änderung an einem gewarnten Dienst oder an einem Dienst, der ein gewarntes Volume nutzt, braucht wieder die hohe Freigabe.
+- In Nodvard Dock lässt sich ein Modul, das nicht zu Dock gehört, auch beim Start und beim automatischen Einschalten nicht mehr laden.
+- Nodvard Dock richtet nie die volle sudo-Regel ein, auch dann nicht, wenn ein Modul root braucht und kein Hilfsskript hat.
+- Ein gefundener Server wird nicht mehr mit einem von Hand angelegten Server zusammengeführt, wenn er einen SSH-Schlüssel mitbringt, den der von Hand angelegte noch nicht kennt.
+- Die Konsole in einem Container öffnet sich nicht mehr, wenn sich nicht prüfen lässt, ob es der Container von Nodvard Deck selbst ist. Containern mit dem Image von Nodvard Deck bleibt sie ebenfalls verschlossen.
+- Der Hilfsbefehl des Dateiwächters nimmt nur noch die beiden Dateien des eigenen Laufs an und prüft deren Ergebniszeilen, bevor er rechnet.
+- Bei Sicherheitsupdates werden Paketnamen mit einem Minus am Ende abgelehnt, damit daraus keine Paket-Entfernung wird.
+- Das Anmelden bei einer Registry zählt jetzt als hohes Risiko und braucht das Recht auf Tresor-Einträge, damit niemand ein Registry-Passwort ohne dieses Recht auf einen Server bringen kann.
+- Die Rückfrage beim Anmelden bei einer Registry sagt, dass das Passwort danach in der Docker-Konfiguration des Servers liegt. Ein Vorschlag, der nicht als hohes Risiko gestellt wurde, wird nicht mehr ausgeführt.
+- Auf der Seite „Aktionen“ zeigt „Änderung ansehen“ bei einer Compose-Änderung den Unterschied und die ganze neue Datei, bevor man freigibt. Das sehen nur Vorschlagende und Freigabeberechtigte.
+- Der volle Inhalt und der Unterschied einer freizugebenden Compose-Änderung werden im Freigabe-Dialog angezeigt, nur für Vorschlagende und Freigabeberechtigte. Andere sehen den Inhalt nicht, auch nicht in der Aktionsliste.
+- Vorgegebene Einrichtungscodes brauchen mindestens acht Buchstaben oder Ziffern und werden nach dem ersten Konto mit einem Hinweis im Protokoll ignoriert.
+- Fail2ban-Einstellungen lassen sich nur mit persönlicher Berechtigung zum Ausführen von Serveraktionen ändern, auch bei voller Automatik.
+- Die Compose-Vorgaben betreiben den Container ohne root, mit schreibgeschütztem Root-Dateisystem und ohne zusätzliche Rechte. Ohne Benutzervorgabe startet das Image als root und wechselt vor Migration und Anwendung zu UID 1000. Die Anwendung setzt HSTS nur bei erkanntem HTTPS; die Notseite sendet es immer, Browser beachten es nur über HTTPS. Öffentliche Bilder und der Health-Endpunkt bleiben auf fremden Webseiten abrufbar, damit Startseiten wie Homarr Deck anpingen können; alle anderen API-Antworten sind auf die eigene Seite beschränkt.
+- Dateien: Eine verspätete Ordnerliste der vorher gewählten Quelle ersetzt nicht mehr die Liste der neuen Quelle, sodass Umbenennen und Löschen immer die angezeigten Einträge treffen.
+- SSH-Zugriffe ohne passenden Kontext werden blockiert. Lesekontexte und geplante Jobs prüfen Befehle jedoch nicht auf Änderungen und bilden keine Sicherheitsgrenze gegen absichtlich schreibende Erweiterungen. Web-Terminal und Dateimanager bleiben mit ihren Berechtigungen nutzbar. SFTP-Lesezugriffe erlauben auch über geöffnete Dateien keine Änderungen. Nach einer fehlgeschlagenen oder abgebrochenen Volume-Sicherung bleiben Aufräumen und Wiederstarten der Dienste auch beim Herunterfahren möglich.
+- Beim Holen und Einspielen von Stacks aus Git ermittelt Deck die Umgebungsdateien in einem eigenen Prozess mit festen Grenzen für Speicher und Laufzeit. Umgebungsdateien bleiben auch bei Pfaden mit mehreren führenden Schrägstrichen geschützt.
+- Verbindungen von Erweiterungen zu verwalteten Servern (etwa die Konsole) haben eine feste Obergrenze je Nachricht, damit ein fremder Server nicht den Speicher von Nodvard Deck füllen kann.
+- Verlangt eine Erweiterung, einen Befehl als anderer Benutzer auszuführen, wird das abgelehnt, statt den Befehl still mit dem hinterlegten Zugang auszuführen.
+- Ändert eine Erweiterung nach dem Laden ihre eigene Liste erlaubter Rechte, erhält sie dadurch keine zusätzlichen Rechte oder Hinweise auf fremde Geheimnisse. #692
+- Die Inhaltsrichtlinie der Oberfläche bleibt auch bei einer alten Ausnahmeeinstellung streng.
+- Docker-Protokolle verbieten jetzt die Zwischenspeicherung im Browser und in vorgeschalteten Proxys, da sie vertrauliche Daten enthalten können.
+- Das Signierwerkzeug für Updates bricht bei Weiterleitungen ab, damit die Zugangsdaten für die Image-Abfrage nicht an andere Ziele gelangen.
+- Deck und die Notseite verlangen beim Einbinden fremder Inhalte jetzt eine ausdrückliche Freigabe des fremden Servers.
+- Quellen für Stacks aus Git lassen sich nur noch mit dem Recht zum Verwalten von Erweiterungen festlegen oder ändern, damit gespeicherte Zugänge nicht für andere Repositorys verwendet werden können. Operatoren können die festgelegten Quellen weiterhin abrufen.
+- Beim Einspielen eines Stacks aus Git bleiben vorhandene Umgebungsdateien der Dienste erhalten. Bei fehlerhaften Compose-Dateien, variablen Pfaden oder eingebundenen Compose-Dateien lehnt Deck das Einspielen vor dem Schreiben ab, weil sich die betroffenen Umgebungsdateien nicht sicher bestimmen lassen.
+- Grafische Konsolen übertragen Daten erst nach erneuter Rechteprüfung und werden bei entzogenem Zugriff oder fehlgeschlagener Prüfung geschlossen.
+- Wenn ein Schlüsselwechsel im Tresor beim Speichern scheitert, bleiben die bisherigen Schlüssel und Geheimnisse lesbar.
+- Fail2ban lässt sich über Ausnahmen nicht mehr praktisch abschalten: zu große Adressbereiche und Sperrzeiten unter einer Minute werden abgelehnt.
+- Das Signieren einer Release-Freigabe bricht ab, wenn die verlangte Herkunftsprüfung nicht möglich ist.
+- Das Deck-Image bringt beim Bauen die aktuellen Debian-Sicherheitsupdates mit, damit auch Systembibliotheken wie zlib auf dem neuesten Stand sind.
+- Beim Umzug aus Portainer bleiben geheime Werte auch in Fehlermeldungen zu Images und Dateipfaden verborgen.
+- Volume-Sicherungen brechen ab, wenn noch laufende Container auf dem Server die betroffenen Volumes nutzen oder diese Prüfung fehlschlägt.
+- Beim Löschen eines Stack-Ordners bleiben Konfigurationsdateien anderer laufender oder übernommener Stacks geschützt.
+- Portainer-Umzüge und Container-Umwandlungen brechen vor dem Schreiben ab, wenn sich der Zielordner seit der Freigabe geändert hat.
+- Deck und die Notseite geben beim Öffnen fremder Seiten keine Adressdaten weiter; die Notseite liefert nun ebenfalls die Kopfzeile für dauerhaft verschlüsselte Verbindungen.
+- Zu jeder neuen Version gibt es Bausteinlisten und prüfbare Herkunftsnachweise für Deck, Dock und den Update-Helfer.
+- Hand-Server mit ausstehender SSH-Schlüsselbestätigung werden erst nach der Bestätigung automatisch zugeordnet, damit vergessene Schlüssel nicht wieder vertraut werden.
+- Beim Zusammenführen von Servern werden gleiche SSH-Schlüssel nur einmal übernommen. Unterschiedliche Schlüssel verhindern die automatische Zuordnung. Beim Vergessen eines Schlüsseltyps werden alle zugehörigen Schlüssel entfernt.
+- Nodvard Shield begrenzt Größe und Wartezeit externer Anbieterantworten, damit fehlerhafte Server Deck nicht blockieren.
+- Nodvard Shield begrenzt auch bei Ollama die Größe und Gesamtdauer der Antworten für Modellanfragen und Modelllisten.
+- Die Ausgabe beim Laden der Paketquellen ist begrenzt und zeigt keine Zugangsdaten aus Quellenadressen mehr an.
+- Shield kann SSH je Server auf Schlüsselanmeldung umstellen. Passwortanmeldungen werden gesperrt, Root-Zugänge deutlich gekennzeichnet. Eine neue Verbindung prüft den Zugang; bei einem Fehler wird die Änderung zurückgenommen. Schlüssel eintragen und Härtung zurücknehmen sind eigene Aktionen mit Freigabe und Protokoll.
+- Die SSH-Härtung warnt vor dem Aussperren und wird bei Servern mit Zwei-Faktor-Anmeldung oder Passwort-Standardzugang nicht angeboten. Die Rücknahme nach 60 Sekunden läuft als eigene Systemeinheit, und eine nach einem Neustart unbestätigte Härtung wird vor dem Start von SSH zurückgenommen.
+- Shield bestätigt die SSH-Härtung nur, wenn bedingte Passwortausnahmen ausgeschlossen sind.
+- Kann Shield die SSH-Härtungsdatei nicht entfernen, meldet es die Rücknahme als fehlgeschlagen und behält den automatischen Rückweg bei.
+- Laufende Shield-Anfragen senden gespeicherte Zugangsdaten bei einem Adresswechsel nicht an den neuen Ersatzserver.
+- Auch die Verbindungstests in Shield teilen sich die Grenze von zehn Tests je Minute und Nutzer mit den Moduleinstellungen.
+- Sicherheitsabfragen für Konten und die Erneuerung von Sitzungen werden zusätzlich je Adresse begrenzt. Die Notfallseite zählt falsche Codes aus einem IPv6-Netz zusammen.
+- Dokumente und Inventarbilder werden beim Hochladen auf ihren Dateityp geprüft. Downloads im Dateimanager erhalten eine eigene Browser-Sandbox.
+- Unerwartete Fehler erhalten eine Fehlerkennung statt fremder Fehlertexte. WebSocket-Tickets werden im Zugriffsprotokoll ausgeblendet.
+- Ungültige Anmeldetokens hinter einem gemeinsamen Proxy sperren die Sitzungserneuerung der anderen Nutzer nicht mehr aus; die Adressgrenze zählt nur Fehlversuche.
+- Abgemeldete und abgelaufene Refresh-Tokens belasten das Kontolimit zur Sitzungserneuerung nicht mehr. Andere gültige Sitzungen bleiben dadurch nutzbar.
+- SSH-Freigaben verlangen einen eindeutigen Server. Pfad und Query müssen übereinstimmen; Aktionen ohne Serverbezug und geplante Jobs erhalten keine pauschale Freigabe. Sammelabfragen öffnen begrenzte Zugriffe je Server. Engere Lesekontexte gelten auch innerhalb laufender Aktionen.
+- SSH-Sitzungen zur Einrichtung und Härtung prüfen den Freigabekontext vor dem Verbindungsaufbau, jedem Befehl und der Schlüsselgegenprobe. Statusabfragen und Vorprüfungen verwenden auf den Server begrenzte Zugriffe.
+- Deck signiert Anforderungen an den Update-Helfer, Update wie Rückweg, mit einem eigenen Schlüssel je Installation. Der Update-Helfer verlangt eine gültige Anforderung, für ein Update zusätzlich die Release-Freigabe, und lehnt fehlende, gefälschte, wiederholte und abgelaufene Signaturen ab.
+
+## Dokumentation
+
+- Englische Versionshinweise für die Versionen 0.13.0, 0.12.1 und 0.12.0 hinzugefügt.
+- Die Anleitungen zur Erst-Einrichtung und Installation berücksichtigen jetzt die Neuerungen aus Version 0.13.
+- Häufige Fragen zu Docker-Netzen, Images und Vorlagen sowie Hilfe zu den Meldungen der Update-Zentrale ergänzt.
+- Die Anleitung für Vorlagen beschreibt jetzt auch eigene Stack-Vorlagen, das Speichern aus bestehenden Dateien und die Prüfung auf Passwörter.
+- Anleitung zur Anbindung von Servern mit Zwei-Faktor-Authentifizierung per SSH hinzugefügt.
+- Häufige Fragen zur Lizenz und zur privaten Nutzung sind in der Dokumentation zusammengefasst.
+- Hilfe zur Fehlersuche für häufige Probleme bei Erst-Einrichtung und Betrieb hinzugefügt.
+- Abnahme-Checklisten für den Test am echten Gerät für die Module Pi-hole, Plex und Synology hinzugefügt.
+- Die Zählung der API-Vertragsrouten berücksichtigt die beiden Shield-Wochenberichtsrouten unter der bisherigen Shield-Adresse: 43 Shield-Routen und insgesamt 123 Vertragsrouten.
+- Die Anleitung zur ersten Einrichtung erklärt die Auswahlkästchen für Server und ihre Wirkung.
+- Die Anleitung für Vorlagen erklärt die Eingabe erforderlicher Werte und die getrennte Speicherung von Zugangsdaten.
+- Unternehmen dürfen Deck und Dock bis zu 30 Tage intern zur Bewertung testen.
+- Die technischen Anleitungen verwenden die heutigen Produktnamen und erklären, welche alten Namen für bestehende Installationen erhalten bleiben.
+- Die Anleitung zur ersten Einrichtung erklärt auf Deutsch und Englisch, wie sich ein eigener Einrichtungscode vorgeben und im Container-Protokoll finden lässt.
+- Für Erweiterungsautoren: SSH-Aufrufe brauchen jetzt zusätzlich zur Berechtigung einen Freigabekontext und werden sonst blockiert. Die deutsche und englische Schnittstellen-Dokumentation erklären die Umstellung, die Grenzen der Lesekontexte und die automatischen Schreibzugriffe von Shield und Docker.
+- Die Anleitung erklärt Schritt für Schritt, wie du Server über Tailscale verbindest und Verbindungsprobleme behebst.
+- Die Anleitungen erklären den HTTP-Zugriff im Heimnetz und hinter einem Reverse Proxy sowie die noch verwendeten Übergangsnamen und vermeiden veraltende Versionsangaben und doppelte Installationshinweise.
+- Das Entwickler-Kit beschreibt das Anmelden geplanter Aufgaben jetzt so, wie der Kern es erwartet: mit Abwarten des Aufrufs.
+- Die deutsche und englische Anleitung erklärt den Wochenbericht, seinen Zeitplan und die Grenzen der gespeicherten Ergebnisse.
+- Die Auslieferungsanleitung nennt den tatsächlichen Benutzer des Healthchecks. Die deutsche und englische Erst-Einrichtung erklären die Ausnahme für das Einbinden öffentlicher Bilder.
+- Die Installationsanleitung für Unraid, ZimaOS und CasaOS beschreibt die Rechte am Datenordner beim Starten des Containers passend zum tatsächlichen Ablauf. #729
+- Die Shield-Anleitung erklärt auf Deutsch und Englisch, wie du einen Anbieter einrichtest, den Zugang im Tresor hinterlegst und die Verbindung prüfst.
+- Die Installationsanleitungen für Unraid, CasaOS und ZimaOS erklären die nötigen Besitzrechte am Datenordner vor dem ersten Start.
+- Die Tailscale-Anleitung stellt klar, dass du die IP für den Verbindungstest auf dem Zielserver ermittelst.

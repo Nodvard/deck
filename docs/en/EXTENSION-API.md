@@ -8,6 +8,11 @@ of them it fulfills, and the core uses them generically.
 This document is the specification. The matching, importable contract lives in
 `sdk/python/nodvard_sdk/`.
 
+The executable SDK example [hello-world](../../extensions/hello-world/extension.toml) remains in the source tree as a
+template for extensions and for integration tests. It is not included in the standard image.
+For a custom build, select it explicitly in `NODVARD_DECK_EXTENSIONS`,
+see [module selection when building](../../deploy/README.md#bauen).
+
 ---
 
 ## 1. Anatomy of an extension
@@ -53,6 +58,7 @@ enable_on   = ["host_credential"]         # optional: see below
 category    = "security"                  # optional: group in the module selection of the setup wizard
 sort_order  = 10                          # optional: order within the group (default 100)
 stage       = "beta"                      # optional: maturity, "stable" (default) or "beta"
+editions    = ["dock"]                    # optional: fixed editions that ship the module
 
 # What the extension asks of the core. The admin confirms this at installation.
 # The core enforces it on EVERY ctx call.
@@ -71,7 +77,7 @@ schema = "settings.schema.json"
 ```
 
 **Package name (`entrypoint`):** The Python packages of the bundled extensions are called
-`nodvard_deck_ext_<id>` (hyphens in the ID become `_`, so `hello-world` becomes `nodvard_deck_ext_hello_world`) and live
+`nodvard_deck_ext_<id>` (hyphens in the ID become `_`, so `home-assistant` becomes `nodvard_deck_ext_home_assistant`) and live
 under `extensions/<id>/src/`. This is the convention for new extensions; the core does not enforce
 it. It imports exactly the module named in `entrypoint` and reads the manifest fresh from disk on
 every start. **Third-party extensions that follow the old convention `lattice_ext_<id>` (or use any
@@ -109,6 +115,11 @@ extension by name for this; it only reads this marker. The extension is switched
 has ever switched it on or off on purpose** – a user who switched it off is left alone. The audit log
 records `extension.auto_enabled`. On installations that already existed before this feature,
 extensions that were already created stay untouched; only newly added ones count as "untouched".
+
+**`editions` (optional):** Fixed editions that ship the module (today `dock` for Nodvard Dock). A fixed edition only
+serves modules that name it here: settings, test, interface and the routes under `/api/v1/ext/<id>/`. The core does not
+know any extension by name for this; it only reads this marker. Empty = only in Nodvard Deck, where modules are chosen
+freely.
 
 **Reserved IDs:** `core` belongs to the core, which uses it as the `ext_id` of actions someone starts in the
 interface. If it appears as `id`, in `legacy_ids` or in `adopts.from`, the extension does not load (list:
@@ -446,6 +457,58 @@ permission-checked and writes to the audit log where needed.
 Deliberately not available on the context: direct access to core tables, the `asyncio`
 loop object, other extensions (only via `ctx.events` and declared `requires` +
 `ctx.capabilities.query()`).
+
+### SSH and approval
+
+`ctx.exec.run()`, `run_argv()`, `stream()`, `stream_argv()`, `open_shell()` and `sftp()`
+require a matching approval context in addition to `hosts.execute`. Without it,
+the call raises `ActionBlocked` from `nodvard_sdk.errors` with
+`rule == "action_gate"` before connecting. This is not a connection failure:
+do not report it as an unreachable host. Propose changes through
+`ctx.actions.propose()` and execute them in the registered `ActionExecutor.execute()`.
+
+Three contexts permit SSH commands:
+
+| Context | Scope and limits |
+|---|---|
+| Running action | The gate grants access during `ActionExecutor.execute()` only for a nonempty `host_ref`. It ends with execution, including failures. An action without a host grants no SSH access. A read context inside the action additionally limits the host, extension, operation and duration; it cannot override the action's host. |
+| Protected route | `GET` and `HEAD` receive a command context with `permission="hosts.read"` or `permission="hosts.execute"`. `ssh_read=True` also enables this for another explicitly set permission. `host_id` must unambiguously identify a host in the path or query. Conflicting values and repeated query parameters are rejected. Without a host there is no automatic SSH context. `ssh_preflight=True` requires `permission="hosts.execute"` and allows preflight checks in `POST` and other methods as well. The context ends with the request. |
+| Explicit read context | `with ctx.exec.read_access(host, timeout_s=30):` requires `hosts.read` and `hosts.execute`. It covers only this extension and host, with `0 < timeout_s <= 60`, and ends no later than leaving the block. |
+
+Scheduled and manually triggered jobs, and requests collecting multiple hosts,
+open a separate `read_access` block for each host. `ctx.scheduler.register_job()` grants no SSH access.
+
+The two read contexts permit `run`, `run_argv`, `stream` and `stream_argv`, but
+not `open_shell`. Only a route context with `hosts.execute` additionally permits
+reading through `sftp`; writing, renaming and deleting remain blocked there,
+including through open files. A running action permits shells and writable SFTP.
+The core grants separate access to the web terminal and file manager.
+Manifest permissions and command deny patterns still apply.
+
+**Limit:** A read context does not check whether a shell command actually only reads.
+The gate protects against accidental direct changes from ordinary POST routes
+and background tasks without a context. It is not a security boundary against
+an extension deliberately making changes through GET, a job or `read_access`.
+Shield also uses `read_access` for quarantine and for starting and stopping Lynis;
+Docker uses it after a restart for automatic rollback to the previous image.
+Shield's automatic updates also run in a job context without individual action
+approval. The name “read context” does not make these workflows read-only.
+
+**Migration for extension authors:** `ctx.spawn` and event handlers receive no
+SSH approval of their own. An inherited context becomes invalid when its original
+call ends, even if the background task continues. Open a separate block for short
+read queries and propose an action for changes:
+
+```python
+with ctx.exec.read_access(host, timeout_s=30):
+    result = await ctx.exec.run_argv(host, ["uname", "-r"])
+```
+
+The deadline limits new calls; it does not cancel an SSH command already running.
+Use `timeout_s` on `run()` or `run_argv()` to limit that command's duration.
+Older cores did not require this approval context. The runtime change is recorded
+in `backend/tests/contract/breaking_exceptions.toml`; the SDK snapshot alone
+cannot detect it.
 
 ### Routes and login
 
@@ -1028,6 +1091,14 @@ The bundle runs under the Content Security Policy of the app page (`script-src '
 HTML, no loading from a CDN, no workers from `blob:` and no WebAssembly. The browser blocks anything that breaks
 these rules and names the reason in the console.
 
+Styles follow `style-src 'self' 'nonce-…'` and `style-src-attr 'none'`. Use classes for fixed values;
+for dynamic dimensions and colors, `ref={styleRef({ width: percent + "%" })}` from
+`extensions/_shared/frontend/src/csp.ts` writes a stylesheet with the current nonce. `createStyle()` from the same
+module creates authorized `<style>` elements. The nonce comes from the HTML response and must not be hardcoded in a bundle.
+Libraries must not insert style attributes through `setAttribute("style", …)` or HTML. Direct assignments to
+individual CSSOM properties are permitted. `npm run test:csp` checks real components in Chromium under the CSP;
+jsdom does not enforce these rules.
+
 **Names in the frontend contract.** Bundles hook into `window.__nodvardDeck` (the UI kit reads it via `deck()` from
 `extensions/_shared/frontend/src/deck.ts`), the events `nodvard-deck:navigate` and `nodvard-deck:timezone`, the CSS
 class `nodvard-deck-focus` and the TypeScript type `NodvardDeckTokenRefreshResult`. The old names from before Nodvard
@@ -1071,8 +1142,8 @@ export { SocPage } from "./SocPage";
 export { IncidentFeed } from "./IncidentFeed";
 ```
 
-A real, minimal example is in `extensions/hello-world/frontend/src/`: one page
-(`HelloPage.tsx`, using `authedFetch` and the UI kit), built with `extensions/hello-world/frontend/build.mjs`.
+A real, minimal example is [HelloPage.tsx](../../extensions/hello-world/frontend/src/HelloPage.tsx),
+using `authedFetch` and the UI kit. [build.mjs](../../extensions/hello-world/frontend/build.mjs) builds the page.
 
 ### UI kit and module rule
 
@@ -1207,8 +1278,8 @@ Supported systems: On immutable rpm-ostree systems such as Bazzite and Fedora At
 | Ollama chat | `ConnectorType("ollama")` + `AIProvider` capability |
 | Free-text chat UI | `register_page("soc")`, streaming via `ctx.ws` |
 | Incident queue/batching | own tables `ext_nexus_soc_incidents`, background task via `ctx.spawn` |
-| Docker watcher (8 s) | `ctx.spawn` + `ctx.exec.run()` against hosts with the tag `docker` |
-| Remediation | `ctx.actions.propose(...)` — **never** `ctx.exec` directly. AI text only ever yields a restart of a crashed container (`shell.exec`, the extension builds the command itself); everything else stays text |
+| Docker watcher (8 s) | `ctx.spawn` + `ctx.exec.run()` inside `ctx.exec.read_access(host)` against hosts with the tag `docker` |
+| Remediation | `ctx.actions.propose(...)`; SSH commands run in `ActionExecutor.execute()`. Automatic remediation only proposes restarting a crashed container (`shell.exec`); the extension builds the command itself |
 | Blocklist / anti-flapping | core gate; the extension only supplies additional patterns |
 | Obligation to give a reason | `ActionRequest.reason` is a mandatory field |
 | Two operating modes | core setting `autonomy.mode`, not extension code |

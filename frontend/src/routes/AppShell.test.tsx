@@ -362,6 +362,20 @@ describe("AppShell: Beispieldaten-Band", () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(screen.queryByTestId("demo-banner")).toBeNull();
   });
+
+  it("fragt in Dock keine Beispieldaten ab", async () => {
+    const previous = useEditionStore.getState();
+    useEditionStore.setState({ edition: { ...DECK_EDITION, id: "dock", choose_modules: false }, loaded: true });
+    try {
+      previewState.demo = true;
+      renderShell();
+      await screen.findByRole("navigation", { name: "Hauptnavigation" });
+      expect(vi.mocked(fetch).mock.calls.map(([url]) => String(url))).not.toContain("/api/v1/demo");
+      expect(screen.queryByTestId("demo-banner")).toBeNull();
+    } finally {
+      useEditionStore.setState(previous);
+    }
+  });
 });
 
 describe("AppShell: Serverzustand live", () => {

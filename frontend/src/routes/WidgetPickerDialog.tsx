@@ -1,16 +1,4 @@
-/**
- * "Widgets verwalten": neben der automatischen Platzierung
- * (`appendMissingWidgets()` in DashboardPage.tsx, läuft beim Aktivieren einer
- * Extension) der Weg, ein Widget manuell zu entfernen oder ein zuvor entferntes
- * wieder hinzuzufügen, ohne die Extension selbst zu deaktivieren. Dieser Dialog
- * macht `DashboardLayoutItem[]` direkt bearbeitbar: ein Häkchen pro bekanntem Widget (`GET /widgets`-Katalog),
- * "aktiv" heißt "steht aktuell im gespeicherten Layout".
- *
- * Platzierung beim Hinzufügen folgt derselben simplen Zeilen-Logik wie
- * `appendMissingWidgets()` (an die nächste freie Zeile anhängen) --
- * bewusst keine gemeinsame Funktion daraus gemacht, um DashboardPage.tsx's
- * Auto-Platzierungs-Effekt nicht an eine UI-Komponente zu koppeln.
- */
+/** Widgets ein- und ausblenden; neue Widgets kommen an die nächste freie Zeile, ohne die Erweiterung zu deaktivieren. */
 import * as Dialog from "@radix-ui/react-dialog";
 import { Link } from "react-router-dom";
 
@@ -76,7 +64,7 @@ export function WidgetPickerDialog({ widgets, items, onChange, open, onOpenChang
       </Dialog.Trigger>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-scrim/60" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-[var(--color-surface)] p-4 shadow-xl">
+        <Dialog.Content className="fixed left-1/2 top-1/2 w-full max-w-[min(100vw-2rem,28rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-[var(--color-surface)] p-4 shadow-xl">
           <Dialog.Title className="mb-1 text-lg font-semibold">Widgets verwalten</Dialog.Title>
           <Dialog.Description className="mb-3 text-sm opacity-70">
             Welche Widgets auf dem Dashboard erscheinen.

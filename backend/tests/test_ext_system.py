@@ -235,8 +235,9 @@ def test_error_text_is_plain_german_even_without_an_exception_message():
     assert error_text(TimeoutError()) == "keine Antwort innerhalb der Zeitgrenze – ist der Server an?"
     assert error_text(asyncio.TimeoutError()) == error_text(TimeoutError())
     assert error_text(ConnectionRefusedError()).startswith("Verbindung abgelehnt")
-    assert error_text(RuntimeError("Anmeldung abgelehnt")) == "Anmeldung abgelehnt"
-    assert error_text(RuntimeError("")) == "Verbindung fehlgeschlagen"
+    import re
+    for error in (RuntimeError("vertraulich /etc/private"), RuntimeError("")):
+        assert re.fullmatch(r"Die Anfrage ist fehlgeschlagen\. Fehlerkennung: [0-9a-f]{32}\.", error_text(error))
     assert "Error" not in error_text(OSError())
 
 
@@ -251,6 +252,7 @@ def test_widget_row_worst_first_and_unreachable_is_danger():
     assert widget_row(host, info, None) == {
         "name": "Heimserver", "host_id": "h1", "kind": "Server", "summary": "Swap zu 71 % belegt – RAM knapp",
         "badge": "2 Befunde", "tone": "warn",
+        "reachable": True,
         "cpu_percent": 3.0, "mem_percent": 44,  # fuer die Server-Kacheln der System-Seite
     }
     ok = {**info, "findings": []}

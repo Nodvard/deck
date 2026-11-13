@@ -279,6 +279,9 @@ class ProxmoxHostProvider:
         name_by_ref = {
             h.provider_ref: h.name for h in known if h.provider_ref and h.provider_ext_id == self._ctx.ext_id
         }
+        address_by_ref = {
+            h.provider_ref: h.address for h in known if h.provider_ref and h.provider_ext_id == self._ctx.ext_id
+        }
 
         def free_name(provider_ref: str, wanted: str, fallback: str) -> str:
             if provider_ref in name_by_ref:
@@ -321,6 +324,7 @@ class ProxmoxHostProvider:
                         tags=["proxmox", "node"],
                         metadata={
                             "connection": conn_name, "node": node_name,
+                            "identity_addresses": [connector.host, node_name],
                             "cpu": node.get("cpu"), "maxmem": node.get("maxmem"),
                         },
                     )
@@ -351,6 +355,8 @@ class ProxmoxHostProvider:
                     vmid = str(guest["vmid"])
                     short = "vm" if kind == "qemu" else "lxc"
                     guest_ref = f"{conn_name}/{kind}/{node_name}/{vmid}"
+                    remembered = address_by_ref.get(guest_ref)
+                    identity_address = address or (remembered if remembered != connector.host else None)
                     discovered.append(
                         DiscoveredHost(
                             provider_ref=guest_ref,
@@ -369,6 +375,7 @@ class ProxmoxHostProvider:
                             tags=["proxmox", short],
                             metadata={
                                 "connection": conn_name, "node": node_name, "vmid": vmid,
+                                "identity_addresses": [value for value in (identity_address, guest.get("name")) if value],
                                 "cpu": guest.get("cpu"), "maxmem": guest.get("maxmem"),
                                 "address_source": ("guest-agent" if kind == "qemu" else "container") if address else "placeholder",
                             },

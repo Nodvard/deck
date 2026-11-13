@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type QueryClient } from "@tanstack/react-query";
 
 import { api } from "./api";
 import type { PageOut, WidgetOut } from "../widgets/types";
@@ -20,11 +20,21 @@ interface Capabilities {
   feature_flags: Record<string, boolean>;
 }
 
-/**
- * GET /api/v1/capabilities: öffentlich, kein Login nötig (public.py). Bisher nur für die Android-App gedacht;
- * `demo_mode` ist der erste Web-Aufrufer und zeigt sichtbar, wenn eine Installation eine Demo mit Fake-Daten ist,
- * nicht echte Infrastruktur (AppShell.tsx).
- */
+/** Öffentlich verfügbare Funktionen der aktuell geladenen Module. */
 export function useCapabilities() {
   return useQuery({ queryKey: ["capabilities"], queryFn: () => api.get<Capabilities>("/capabilities") });
+}
+
+export function useCoreFeatures() {
+  const { data } = useCapabilities();
+  return { terminal: data?.feature_flags.terminal === true, files: data?.feature_flags.files === true };
+}
+
+/** Inaktive Kataloge vor dem Seitenwechsel laden, damit ausgeschaltete Kacheln nicht kurz wieder erscheinen. */
+export function refreshExtensionQueries(queryClient: QueryClient) {
+  return Promise.all(
+    ["pages", "widgets", "capabilities", "extensions", "overview", "terminal", "hosts"].map((key) =>
+      queryClient.invalidateQueries({ queryKey: [key], refetchType: key === "hosts" ? "active" : "all" }),
+    ),
+  );
 }

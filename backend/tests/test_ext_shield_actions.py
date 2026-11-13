@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from exec_gate_helpers import ReadingExec
 from fastapi import FastAPI
 from nodvard_sdk import ActionRequest, Actor, GateDecision, GateOutcome, Host, Risk
 from nodvard_sdk.actions import ActionStatus
@@ -40,9 +41,11 @@ class _Ctx:
         self.deck_address: str | None = "10.0.0.9"
         self.next_result: SimpleNamespace | None = None
         self._host = Host(id="h1", name="pi", display_name="Raspberry Pi", address="10.0.0.2")
-        self.api = SimpleNamespace(current_actor=lambda: Actor.user("u1", "nico"))
+        self.api = SimpleNamespace(
+            current_actor=lambda: Actor.user("u1", "nico"), require_permission=lambda permission: lambda: None,
+        )
         self.hosts = SimpleNamespace(get=self._get)
-        self.exec = SimpleNamespace(run=self._run)
+        self.exec = ReadingExec(ext_id="shield", run=self._run)
         self.db = SimpleNamespace(session=self._session)
         self.actions = SimpleNamespace(propose=self._propose)
         self.settings = SimpleNamespace(get=self._settings)
@@ -130,6 +133,7 @@ async def soc():
     updates = _Updates()
     _read, manage = build_routers(ctx, defender, updates, None)
     app = FastAPI()
+    app.include_router(_read)
     app.include_router(manage)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://soc") as client:
         yield SimpleNamespace(ctx=ctx, defender=defender, updates=updates, client=client, app=app,
@@ -552,7 +556,7 @@ async def test_the_restore_result_names_the_place_from_the_record(soc, restored_
     async def run(host, command, timeout_s=60):
         return SimpleNamespace(exit_code=0, stdout=f"@@restored_to={restored_to}\nok\n", stderr="", duration_ms=5)
 
-    soc.ctx.exec = SimpleNamespace(run=run)
+    soc.ctx.exec = ReadingExec(ext_id="shield", run=run)
     res = await soc.executor.execute(req)
     assert res.success and res.output == f"Zurückgelegt nach {restored_to}."
     assert res.detail == {"note": res.output, "restored_to": restored_to}
@@ -569,7 +573,7 @@ async def test_a_restore_that_names_no_place_ends_as_before(soc):
     async def run(host, command, timeout_s=60):
         return SimpleNamespace(exit_code=0, stdout="ok\n", stderr="", duration_ms=5)
 
-    soc.ctx.exec = SimpleNamespace(run=run)
+    soc.ctx.exec = ReadingExec(ext_id="shield", run=run)
     res = await soc.executor.execute(req)
     assert res.success and res.output == "ok\n" and res.detail == {}
     finding = await soc.defender.finding("f1")
@@ -703,3 +707,163 @@ async def test_unknown_host_and_missing_update_center_fail(soc):
     res = await without_updates.execute(_req("nexus_soc.reboot", {"command": up.REBOOT_COMMAND}))
     assert not res.success and "Update-Zentrale" in res.error
     assert soc.ctx.commands == []
+
+
+@pytest.fixture
+def fail2ban_soc(soc, monkeypatch):
+    from nodvard_deck_ext_shield import fail2ban as f2b
+    from test_ext_shield_fail2ban_config import READ
+
+    original = soc.ctx.exec.run
+    soc.ctx.config_output = READ
+    soc.ctx.config_code = 0
+    soc.ctx.config_reads = 0
+
+    async def run(host, command, timeout_s=60):
+        if command == f2b.read_command():
+            soc.ctx.config_reads += 1
+            return SimpleNamespace(exit_code=soc.ctx.config_code, stdout=soc.ctx.config_output, stderr="", duration_ms=1)
+        return await original(host, command, timeout_s=timeout_s)
+
+    monkeypatch.setattr(soc.ctx.exec, "run", run)
+    return soc
+
+
+def _fail2ban_body(**changes):
+    return {"bantime": 3600, "findtime": 900, "maxretry": 4, "ignoreip": ["192.0.2.0/24"],
+            "jails": ["sshd", "nginx-http-auth"], **changes}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("path", "body"), [
+    ("/defender/hosts/h1/ban", {"ip": "203.0.113.9", "unban": "false"}),
+    ("/defender/hosts/h1/ban", {"ip": "203.0.113.9", "command": "id"}),
+    ("/defender/realtime/h1", {"enable": "false"}),
+    ("/defender/hosts/h1/fail2ban", _fail2ban_body(bantime="3600")),
+])
+async def test_fail2ban_proposals_keep_existing_request_validation_strict(fail2ban_soc, path, body):
+    soc = fail2ban_soc
+    response = await soc.client.post(path, json=body)
+    assert response.status_code == 422
+    assert soc.ctx.proposals == [] and soc.ctx.commands == [] and soc.ctx.config_reads == 0
+
+    req = await _click(soc, "/defender/hosts/h1/fail2ban", _fail2ban_body())
+    assert req.action_type == "nexus_soc.fail2ban_config"
+    assert (await soc.executor.execute(req)).success
+    assert soc.ctx.commands == [req.payload["command"]]
+    assert soc.ctx.config_reads == 2
+
+
+@pytest.mark.asyncio
+async def test_fail2ban_proposal_renews_access_after_a_slow_address_read(fail2ban_soc, monkeypatch):
+    from nodvard_deck.core import gate
+
+    soc = fail2ban_soc
+    clock = [0.0]
+    calls = []
+    monkeypatch.setattr(gate, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    original = soc.ctx.exec.run
+
+    async def run(host, command, **kwargs):
+        gate.require_execution(host.id, ext_id="shield")
+        calls.append((command, clock[0]))
+        if command == ix.DECK_ADDRESS_COMMAND:
+            clock[0] += 35
+        return await original(host, command, **kwargs)
+
+    monkeypatch.setattr(soc.ctx.exec, "run", run)
+    req = await _click(soc, "/defender/hosts/h1/fail2ban", _fail2ban_body())
+    assert req.action_type == "nexus_soc.fail2ban_config"
+    assert req.payload["deck_address"] == "10.0.0.9"
+    assert len(calls) == 2 and [at for _command, at in calls] == [0, 35]
+    assert soc.ctx.config_reads == 1
+    assert soc.ctx.commands == []
+
+
+@pytest.mark.asyncio
+async def test_fail2ban_read_is_readonly_and_proposal_waits_for_gate(fail2ban_soc):
+    soc = fail2ban_soc
+    response = await soc.client.get("/defender/hosts/h1/fail2ban")
+    assert response.status_code == 200
+    assert response.json()["deck_address"] == "10.0.0.9"
+    assert "10.0.0.9" in response.json()["ignoreip"]
+    assert soc.ctx.proposals == [] and soc.ctx.commands == []
+    req = await _click(soc, "/defender/hosts/h1/fail2ban", _fail2ban_body())
+    assert req.action_type == "nexus_soc.fail2ban_config" and req.risk == Risk.MEDIUM
+    assert req.payload["ignoreip"] == ["10.0.0.9", "192.0.2.0/24"]
+    assert "fail2ban-config-write" in req.payload["command"]
+    assert soc.ctx.commands == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [0, 1])
+async def test_fail2ban_executor_runs_only_the_approved_helper_command_and_audits(fail2ban_soc, code):
+    from unittest.mock import AsyncMock
+
+    from nodvard_deck_ext_shield.defender_api import ACTION_SPECS
+
+    soc = fail2ban_soc
+    req = await _click(soc, "/defender/hosts/h1/fail2ban", _fail2ban_body())
+    soc.ctx.next_result = SimpleNamespace(exit_code=code, stdout="ok" if code == 0 else "Test fehlgeschlagen", stderr="", duration_ms=5)
+    soc.ctx.audit.log = AsyncMock()
+    result = await soc.executor.execute(req)
+    assert result.success is (code == 0)
+    assert soc.ctx.commands == [req.payload["command"]]
+    assert soc.ctx.config_reads == 2
+    audit = soc.ctx.audit.log.call_args.kwargs
+    assert audit["action"] == "shield.fail2ban_config" and audit["target_id"] == "h1"
+    assert audit["outcome"] == ("success" if code == 0 else "failure")
+    assert "10.0.0.9" in audit["detail"]["ignoreip"]
+    spec = next(s for s in ACTION_SPECS if s.action_type == req.action_type)
+    assert spec.permissions == ["hosts.execute"] and not spec.host_bound and spec.command_field == "command"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changes", [{"ignoreip": ["1.2.3.4;id"]}, {"jails": []}, {"jails": ["sshd", "unknown"]},
+                                     {"maxretry": True}, {"findtime": 0}, {"command": "id"}, {"deck_address": "1.2.3.4"}])
+async def test_fail2ban_route_refuses_untrusted_fields(fail2ban_soc, changes):
+    soc = fail2ban_soc
+    response = await soc.client.post("/defender/hosts/h1/fail2ban", json=_fail2ban_body(**changes))
+    assert response.status_code in (409, 422)
+    assert soc.ctx.proposals == [] and soc.ctx.commands == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["peer", "jails", "command", "field", "missing", "read-error"])
+async def test_fail2ban_stale_or_modified_proposal_never_writes(fail2ban_soc, change):
+    soc = fail2ban_soc
+    req = await _click(soc, "/defender/hosts/h1/fail2ban", _fail2ban_body())
+    if change == "peer":
+        soc.ctx.deck_address = "10.0.0.10"
+    elif change == "jails":
+        soc.ctx.config_output = soc.ctx.config_output.replace("nginx-http-auth", "postfix")
+    elif change == "command":
+        req.payload["command"] = "id"
+    elif change == "field":
+        req.payload["bantime"] = 42
+    elif change == "missing":
+        del req.payload["deck_address"]
+    else:
+        soc.ctx.config_code = 1
+    result = await soc.executor.execute(req)
+    assert not result.success and result.error
+    assert soc.ctx.commands == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("peer", ["", "kein-ip"])
+async def test_fail2ban_without_verified_ssh_source_cannot_propose(fail2ban_soc, peer):
+    soc = fail2ban_soc
+    soc.ctx.deck_address = peer
+    response = await soc.client.post("/defender/hosts/h1/fail2ban", json=_fail2ban_body())
+    assert response.status_code == 409
+    assert not soc.ctx.proposals and not soc.ctx.commands
+
+
+@pytest.mark.asyncio
+async def test_fail2ban_unknown_host_does_not_run_ssh(fail2ban_soc):
+    soc = fail2ban_soc
+    for response in (await soc.client.get("/defender/hosts/missing/fail2ban"),
+                     await soc.client.post("/defender/hosts/missing/fail2ban", json=_fail2ban_body())):
+        assert response.status_code == 404
+    assert not soc.ctx.proposals and not soc.ctx.commands and soc.ctx.config_reads == 0

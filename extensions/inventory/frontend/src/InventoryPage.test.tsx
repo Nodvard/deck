@@ -1,3 +1,4 @@
+import { mobileLayout } from "../../../../frontend/src/test/mobileLayout";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -281,3 +282,14 @@ describe("InventoryPage: Ladefehler", () => {
     expect(screen.queryByTestId("load-error")).toBeNull();
   });
 });
+
+it("390 px: Inventarpreise und Details haben keine Einrückung", async () => {
+  vi.stubGlobal("fetch", mockFetch());
+  render(<InventoryPage />);
+  const price = await screen.findByTestId("price-mobile-item-1");
+  expect(price).toHaveClass("ml-0", "sm:ml-10");
+  const row = price.closest("li")!;
+  fireEvent.click(row.querySelector('button[aria-expanded]')!);
+  expect(row.querySelector("div.ml-0")).toHaveClass("ml-0", "sm:ml-10");
+  await mobileLayout(row);
+}, 30000);

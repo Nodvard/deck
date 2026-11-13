@@ -13,8 +13,8 @@ function render(ui: ReactElement, initialEntry = "/files") {
   return renderPlain(<MemoryRouter initialEntries={[initialEntry]}>{ui}</MemoryRouter>);
 }
 
-// Transfer-Fortschritt kommt im Betrieb ueber den WS-Hub (`runs.<id>`) -- hier ein
-// Stellvertreter, ueber den ein Test das "succeeded"/"failed" des Laufs selbst schickt.
+// Transfer-Fortschritt kommt im Betrieb über den WS-Hub (`runs.<id>`) -- hier ein
+// Stellvertreter, über den ein Test das "succeeded"/"failed" des Laufs selbst schickt.
 const wsHandlers = new Map<string, (payload: unknown) => void>();
 vi.mock("../lib/ws", () => ({
   useWsSubscription: (channel: string | null | undefined, handler: (payload: unknown) => void) => {
@@ -22,14 +22,7 @@ vi.mock("../lib/ws", () => ({
   },
 }));
 
-/**
- * Echtes Drag&Drop im Browser laesst sich in jsdom nicht 1:1 simulieren (kein
- * natives `DataTransfer`) -- diese Tests bilden trotzdem das ECHTE Nutzerverhalten
- * ab: ein `dataTransfer`-Objekt, das ueber `dragStart` gesetzt und in `drop`
- * ausgelesen wird, genau wie der Browser es waehrend einer echten Ziehgeste tut,
- * nur ohne den Browser selbst. Der eigentliche visuelle/geraeteseitige Beweis lief
- * zusaetzlich live im echten Browser.
- */
+/** Ein DataTransfer-Ersatz verbindet dragStart und drop, da jsdom kein natives Drag-and-drop anbietet. */
 function makeDataTransfer() {
   const store = new Map<string, string>();
   const types: string[] = [];
@@ -59,7 +52,7 @@ const POWER_ROOT = [
   { name: "docs", path: "/docs", is_dir: true, size: null, modified_at: null, mime: null },
 ];
 
-// Ordnerinhalt der pve2-Quelle -- Tests koennen ihn ersetzen (Links etc.).
+// Ordnerinhalt der pve2-Quelle -- Tests können ihn ersetzen (Links etc.).
 let powerRoot: unknown[] = POWER_ROOT;
 
 let mkdirCalls: unknown[];
@@ -196,7 +189,7 @@ describe("FilesPage Vorschau", () => {
     vi.stubGlobal("fetch", mockFetch());
     render(<FilesPage />);
     const row = (await screen.findByText("⠿ notes.txt")).closest("tr")!;
-    expect(within(screen.getByText("📁 docs").closest("tr")!).queryByRole("button", { name: "Ansehen" })).toBeNull();
+    expect(within(screen.getByText("docs").closest("tr")!).queryByRole("button", { name: "Ansehen" })).toBeNull();
 
     const view = within(row).getByRole("button", { name: "Ansehen" });
     fireEvent.click(view);
@@ -210,7 +203,7 @@ describe("FilesPage Vorschau", () => {
 });
 
 describe("FilesPage Drag&Drop", () => {
-  it("zieht eine Datei auf eine andere Quelle: Zielordner-Dialog oeffnet mit dieser Quelle, Bestaetigen kopiert", async () => {
+  it("zieht eine Datei auf eine andere Quelle: Zielordner-Dialog öffnet mit dieser Quelle, Bestätigen kopiert", async () => {
     let transferBody: unknown = null;
     vi.stubGlobal("fetch", mockFetch((body) => (transferBody = body)));
     render(<FilesPage />);
@@ -222,7 +215,7 @@ describe("FilesPage Drag&Drop", () => {
     fireEvent.dragStart(fileRow, { dataTransfer });
     fireEvent.drop(nextcloudEntry, { dataTransfer });
 
-    // Ordner-Auswahl: nicht mehr blind in die Wurzel -- erst waehlen.
+    // Ordner-Auswahl: nicht mehr blind in die Wurzel -- erst wählen.
     const dialog = await screen.findByRole("dialog");
     expect(transferBody).toBeNull();
     const sourceList = within(dialog).getByRole("list", { name: "Zielquelle" });
@@ -242,7 +235,7 @@ describe("FilesPage Drag&Drop", () => {
     render(<FilesPage />);
 
     const fileRow = (await screen.findByText("⠿ notes.txt")).closest("tr")!;
-    const folderRow = (await screen.findByText("📁 docs")).closest("tr")!;
+    const folderRow = (await screen.findByText("docs")).closest("tr")!;
 
     const dataTransfer = makeDataTransfer();
     fireEvent.dragStart(fileRow, { dataTransfer });
@@ -259,14 +252,14 @@ describe("FilesPage Drag&Drop", () => {
     vi.stubGlobal("fetch", mockFetch());
     render(<FilesPage />);
 
-    const folderRow = (await screen.findByText("📁 docs")).closest("tr")!;
+    const folderRow = (await screen.findByText("docs")).closest("tr")!;
     const fileRow = (await screen.findByText("⠿ notes.txt")).closest("tr")!;
 
     expect(folderRow).toHaveAttribute("draggable", "false");
     expect(fileRow).toHaveAttribute("draggable", "true");
   });
 
-  it("ueberspringt den Transfer, wenn Ziel und Quelle identisch sind, statt sinnlos zu kopieren", async () => {
+  it("überspringt den Transfer, wenn Ziel und Quelle identisch sind, statt sinnlos zu kopieren", async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal("fetch", fetchMock);
     render(<FilesPage />);
@@ -287,12 +280,7 @@ describe("FilesPage Drag&Drop", () => {
   });
 });
 
-/**
- * Umbenennen/Löschen/Neuer-Ordner gingen bisher ueber `window.prompt()`/
- * `confirm()` (siehe FilesPage.tsx-Modul-Docstring) -- jetzt echte Radix-Dialoge
- * (state/dialogs.ts). `GlobalDialogs` wird hier bewusst MIT gerendert, wie in der
- * echten App via AppShell.tsx -- FilesPage zeichnet selbst kein Dialog-UI mehr.
- */
+/** GlobalDialogs mitrendern, damit Dateiaktionen über die sichtbaren Dialoge bestätigt werden. */
 describe("FilesPage Handy-Layout", () => {
   it("Quellen stehen auf schmalen Bildschirmen über der Liste, die Tabelle scrollt in sich", async () => {
     vi.stubGlobal("fetch", mockFetch());
@@ -324,7 +312,7 @@ describe("FilesPage Handy-Layout", () => {
     expect(buttons.closest("td")).toHaveClass("block", "sm:table-cell");
     // Werte tragen ihre Beschriftung; bei einem Ordner ist die Größe leer, die leere Zelle fällt auf dem Handy weg.
     expect([...card.querySelectorAll("td[data-label]")].map((td) => td.getAttribute("data-label"))).toEqual(["Größe", "Geändert"]);
-    const folderSize = screen.getByText("📁 docs").closest("tr")!.querySelector("td[data-label='Größe']")!;
+    const folderSize = screen.getByRole("button", { name: "docs" }).closest("tr")!.querySelector("td[data-label='Größe']")!;
     expect(folderSize).toBeEmptyDOMElement();
     expect(folderSize).toHaveClass("empty:hidden", "sm:empty:table-cell");
     expect(card).toHaveAttribute("role", "row");
@@ -332,7 +320,7 @@ describe("FilesPage Handy-Layout", () => {
 });
 
 describe("FilesPage Dialoge (Umbenennen/Löschen/Neuer-Ordner)", () => {
-  it("bricht das Löschen ab, wenn der Bestaetigungsdialog abgebrochen wird", async () => {
+  it("bricht das Löschen ab, wenn der Bestätigungsdialog abgebrochen wird", async () => {
     vi.stubGlobal("fetch", mockFetch());
     render(
       <>
@@ -351,7 +339,7 @@ describe("FilesPage Dialoge (Umbenennen/Löschen/Neuer-Ordner)", () => {
     expect(removeCalls).toHaveLength(0);
   });
 
-  it("loescht, sobald im echten Dialog bestaetigt wird", async () => {
+  it("löscht, sobald im echten Dialog bestätigt wird", async () => {
     vi.stubGlobal("fetch", mockFetch());
     render(
       <>
@@ -388,7 +376,7 @@ describe("FilesPage Dialoge (Umbenennen/Löschen/Neuer-Ordner)", () => {
     await waitFor(() => expect(mkdirCalls).toEqual([{ path: "/neuer-ordner" }]));
   });
 
-  it("bricht Umbenennen ab, wenn der Prompt-Dialog leer bestaetigt wird", async () => {
+  it("bricht Umbenennen ab, wenn der Prompt-Dialog leer bestätigt wird", async () => {
     vi.stubGlobal("fetch", mockFetch());
     render(
       <>
@@ -411,16 +399,9 @@ describe("FilesPage Dialoge (Umbenennen/Löschen/Neuer-Ordner)", () => {
   });
 });
 
-/**
- * Upload laeuft ueber XMLHttpRequest (nicht fetch(), siehe FilesPage.tsx-Docstring
- * bei uploadWithProgress -- fetch() kann Request-Upload-Fortschritt nicht melden).
- * jsdoms XMLHttpRequest fuehrt keine echten Netzwerk-Requests aus -- hier durch eine
- * minimale Fake-Implementierung ersetzt, die `open`/`send` aufzeichnet und
- * Fortschritts-/Abschluss-Events manuell ausloest, wie ein echter Browser es waehrend
- * eines echten Uploads tut.
- */
+/** Der XMLHttpRequest-Ersatz zeichnet Uploads auf und löst Fortschritts- sowie Abschlussereignisse aus. */
 describe("FilesPage Upload-Fortschritt", () => {
-  it("zeigt den Fortschrittsbalken waehrend des Uploads und blendet ihn danach aus", async () => {
+  it("zeigt den Fortschrittsbalken während des Uploads und blendet ihn danach aus", async () => {
     vi.stubGlobal("fetch", mockFetch());
 
     let capturedXhr: FakeXhr | null = null;
@@ -472,13 +453,13 @@ describe("FilesPage Zielordner-Dialog", () => {
     return screen.findByRole("dialog");
   }
 
-  it("Kopieren nach …: Quelle waehlen, in einen Unterordner navigieren, dorthin kopieren", async () => {
+  it("Kopieren nach …: Quelle wählen, in einen Unterordner navigieren, dorthin kopieren", async () => {
     let transferBody: unknown = null;
     vi.stubGlobal("fetch", mockFetch((body) => (transferBody = body)));
     render(<FilesPage />);
 
     const dialog = await openPickerFor("notes.txt");
-    fireEvent.click(await within(dialog).findByRole("button", { name: "📁 docs" }));
+    fireEvent.click(await within(dialog).findByRole("button", { name: "docs" }));
     await waitFor(() => expect(within(dialog).getByText(/Ziel: SSH \(SFTP\): pve2 · \/docs\/notes\.txt/)).toBeInTheDocument());
     fireEvent.click(within(dialog).getByRole("button", { name: "Hierher kopieren" }));
 
@@ -489,7 +470,7 @@ describe("FilesPage Zielordner-Dialog", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("Verschieben loescht das Original erst NACH erfolgreichem Transfer", async () => {
+  it("Verschieben löscht das Original erst NACH erfolgreichem Transfer", async () => {
     let transferBody: unknown = null;
     vi.stubGlobal("fetch", mockFetch((body) => (transferBody = body)));
     render(<FilesPage />);
@@ -511,7 +492,7 @@ describe("FilesPage Zielordner-Dialog", () => {
     expect(await screen.findByText(/'notes.txt' verschoben/)).toBeInTheDocument();
   });
 
-  it("Verschieben loescht das Original nicht, wenn weniger Bytes ankamen als die Quelle hat", async () => {
+  it("Verschieben löscht das Original nicht, wenn weniger Bytes ankamen als die Quelle hat", async () => {
     vi.stubGlobal("fetch", mockFetch());
     render(<FilesPage />);
 
@@ -526,7 +507,7 @@ describe("FilesPage Zielordner-Dialog", () => {
     expect(removeCalls).toEqual([]);
   });
 
-  it("Verschieben loescht das Original nicht, wenn die Groesse der Quelle unbekannt war", async () => {
+  it("Verschieben löscht das Original nicht, wenn die Größe der Quelle unbekannt war", async () => {
     powerRoot = [{ name: "notes.txt", path: "/notes.txt", is_dir: false, size: null, modified_at: null, mime: null }];
     vi.stubGlobal("fetch", mockFetch());
     render(<FilesPage />);
@@ -542,7 +523,7 @@ describe("FilesPage Zielordner-Dialog", () => {
     expect(removeCalls).toEqual([]);
   });
 
-  it("Verschieben ohne Erfolg laesst das Original stehen", async () => {
+  it("Verschieben ohne Erfolg lässt das Original stehen", async () => {
     vi.stubGlobal("fetch", mockFetch());
     render(<FilesPage />);
 
@@ -585,15 +566,15 @@ describe("FilesPage Links", () => {
     vi.stubGlobal("fetch", mockFetch());
     render(<FilesPage />);
 
-    const folderLinkRow = (await screen.findByText("📁 current")).closest("tr")!;
+    const folderLinkRow = (await screen.findByText("current")).closest("tr")!;
     const fileLinkRow = screen.getByText("⠿ latest.log").closest("tr")!;
     const plainRow = screen.getByText("⠿ notes.txt").closest("tr")!;
 
     expect(within(folderLinkRow).getByRole("img", { name: "Link" })).toBeInTheDocument();
     expect(within(fileLinkRow).getByRole("img", { name: "Link" })).toBeInTheDocument();
     expect(within(plainRow).queryByRole("img", { name: "Link" })).toBeNull();
-    // Ein Link auf einen Ordner bleibt ein oeffnbarer Ordner.
-    expect(within(folderLinkRow).getByRole("button", { name: "📁 current" })).toBeInTheDocument();
+    // Ein Link auf einen Ordner bleibt ein öffnbarer Ordner.
+    expect(within(folderLinkRow).getByRole("button", { name: "current" })).toBeInTheDocument();
     // Ein funktionierender Link auf eine Datei ist wie eine Datei ladbar und ziehbar.
     expect(within(fileLinkRow).getByRole("button", { name: "Laden" })).toBeInTheDocument();
     expect(fileLinkRow).toHaveAttribute("draggable", "true");
@@ -632,11 +613,11 @@ describe("FilesPage Links", () => {
       fireEvent.click(dialog.getByRole("button", { name: "Löschen" }));
     }
 
-    await loescheZeile("📁 current"); // Link auf einen Ordner
+    await loescheZeile("current"); // Link auf einen Ordner
     await waitFor(() => expect(removeCalls).toEqual([{ path: "/current", recursive: false }]));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
-    await loescheZeile("📁 docs"); // echter Ordner
+    await loescheZeile("docs"); // echter Ordner
     await waitFor(() => expect(removeCalls).toHaveLength(2));
     expect(removeCalls[1]).toEqual({ path: "/docs", recursive: true });
   });
@@ -671,7 +652,7 @@ describe("FilesPage Links", () => {
     render(<FilesPage />);
 
     const brokenRow = (await screen.findByText("Link ins Leere")).closest("tr")!;
-    const folderRow = screen.getByText("📁 docs").closest("tr")!;
+    const folderRow = screen.getByText("docs").closest("tr")!;
 
     const dataTransfer = makeDataTransfer();
     fireEvent.dragStart(brokenRow, { dataTransfer });
@@ -718,7 +699,7 @@ describe("FilesPage ohne Quellen", () => {
  * "Nicht authentifiziert" zu scheitern. Das Token "tok" ist hier abgelaufen, erst "tok-neu" gilt.
  */
 describe("FilesPage bei abgelaufener Anmeldung", () => {
-  const UNAVAILABLE = "Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.";
+  const UNAVAILABLE = "Server gerade nicht erreichbar, bitte gleich noch einmal versuchen.";
   const USER = { id: "u1", username: "nico", display_name: null, email: null, is_owner: true, locale: "de", permissions: ["*"] };
   const SOURCE = "ssh-sftp%3Apve2";
 
@@ -937,5 +918,31 @@ describe("FilesPage bei abgelaufener Anmeldung", () => {
       expect(FakeXhr.instances).toHaveLength(1);
       expect(refreshCalls).toBe(0);
     });
+  });
+});
+
+describe("FilesPage verspätete Listen", () => {
+  it("eine späte Antwort der vorher gewählten Quelle ersetzt nicht die Liste der neuen", async () => {
+    let releaseOld!: () => void;
+    const oldHeld = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    const inner = mockFetch();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/api/v1/files/ssh-sftp%3Apve2/list")) await oldHeld;
+      return inner(input, init);
+    }));
+    render(<FilesPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Nextcloud" }));
+    await waitFor(() => expect(inner.mock.calls.some(([url]) => String(url).includes("/files/nextcloud/list"))).toBe(true));
+    await act(async () => {
+      releaseOld();
+      await oldHeld;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    expect(screen.queryByText("⠿ notes.txt")).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("button", { name: "Löschen" })).toHaveLength(0);
   });
 });

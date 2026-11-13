@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ALLOWED_FILTERS, renderTemplate, renderTone } from "./template";
 
 describe("renderTemplate", () => {
-  it("gibt ein Literal ohne {{ }} unveraendert zurueck", () => {
+  it("gibt ein Literal ohne {{ }} unverändert zurück", () => {
     expect(renderTemplate("danger", {})).toBe("danger");
   });
 
@@ -15,7 +15,7 @@ describe("renderTemplate", () => {
     expect(renderTemplate("{{ host.name }}", { host: { name: "host-1" } })).toBe("host-1");
   });
 
-  it("mischt Literal-Text und mehrere Ausdruecke", () => {
+  it("mischt Literal-Text und mehrere Ausdrücke", () => {
     expect(renderTemplate("{{ host }} · {{ count }}", { host: "host-1", count: 3 })).toBe("host-1 · 3");
   });
 
@@ -38,11 +38,11 @@ describe("renderTemplate", () => {
     expect(renderTemplate("{{ v | number }}", { v: 1234567 })).toBe("1.234.567");
   });
 
-  it("percent haengt % an", () => {
+  it("percent hängt % an", () => {
     expect(renderTemplate("{{ v | percent }}", { v: 42.5 })).toBe("42,5%");
   });
 
-  it("bytes waehlt die passende Einheit", () => {
+  it("bytes wählt die passende Einheit", () => {
     expect(renderTemplate("{{ v | bytes }}", { v: 1536 })).toBe("1,5 KB");
   });
 
@@ -50,7 +50,7 @@ describe("renderTemplate", () => {
     expect(renderTemplate("{{ v | duration }}", { v: 3725 })).toBe("1h 2m");
   });
 
-  it("truncate kuerzt lange Strings", () => {
+  it("truncate kürzt lange Strings", () => {
     const long = "x".repeat(100);
     expect(renderTemplate("{{ v | truncate }}", { v: long }).length).toBeLessThan(long.length);
   });
@@ -59,7 +59,7 @@ describe("renderTemplate", () => {
     expect(renderTemplate("{{ v | relative }}", { v: new Date().toISOString() })).toBe("gerade eben");
   });
 
-  it("tone bildet bekannte Schluesselwoerter ab", () => {
+  it("tone bildet bekannte Schlüsselwörter ab", () => {
     expect(renderTone("{{ v | tone }}", { v: "critical" })).toBe("danger");
     expect(renderTone("{{ v | tone }}", { v: "ok" })).toBe("good");
     expect(renderTone("{{ v | tone }}", { v: "unbekannt-xyz" })).toBe("neutral");

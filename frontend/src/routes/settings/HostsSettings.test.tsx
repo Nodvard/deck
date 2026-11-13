@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { checkFixture, hostFixture, mockHostsApi, reply } from "../../test/hostsMock";
 import { useAuthStore } from "../../state/auth";
 import { confirmDialog, promptDialog } from "../../state/dialogs";
+import { shortNameFrom } from "./hosts/HostForm";
 import { HostsSettings } from "./HostsSettings";
 
 vi.mock("../../state/dialogs", () => ({ confirmDialog: vi.fn(async () => true), promptDialog: vi.fn(async () => null) }));
@@ -34,7 +35,7 @@ function renderPage(initial = "/settings/hosts") {
   );
 }
 
-const PI = hostFixture({ id: "h1", login_ok_at: "2026-10-01T10:00:00Z", credential: { id: "c1", kind: "ssh_key", username: "lattice", port: 22 } });
+const PI = hostFixture({ id: "h1", login_ok_at: "2026-10-01T10:00:00Z", credential: { id: "c1", kind: "ssh_key", username: "pi-admin", port: 22 } });
 const ZABBIX = hostFixture({
   id: "h2", name: "zabbix", display_name: "Zabbix", address: "192.168.2.83", kind: "vm", provider_ext_id: "proxmox",
   credential: { id: "c2", kind: "ssh_password", username: "admin", port: 22 },
@@ -89,7 +90,7 @@ describe("Server & Zugänge: Liste", () => {
     mockHostsApi({ "GET /hosts": [PI, NEVER, NEW], "GET /host-groups": [] });
     renderPage();
     await screen.findByText("Bastel-Pi");
-    expect(screen.getByText("Schlüssel · lattice").className).toContain("emerald");
+    expect(screen.getByText("Schlüssel · pi-admin").className).toContain("emerald");
     expect(screen.getByText("Schlüssel · nodvard").className).not.toContain("emerald");
     expect(screen.getByText("noch keine Verbindung")).toBeInTheDocument();
     expect(screen.getByText("Passwort · pi").className).not.toContain("emerald");
@@ -131,7 +132,7 @@ describe("Server & Zugänge: Liste", () => {
     renderPage();
     expect(await screen.findByText("Bastel-Pi")).toBeInTheDocument();
     expect(screen.getByText("bastel-pi · 192.168.2.72")).toBeInTheDocument();
-    expect(screen.getByText("Schlüssel · lattice")).toBeInTheDocument();
+    expect(screen.getByText("Schlüssel · pi-admin")).toBeInTheDocument();
     expect(screen.getByText("Passwort · admin")).toBeInTheDocument();
     expect(screen.getByText("Kein Zugang")).toBeInTheDocument();
     // Von Proxmox eingelesen, nicht von Hand angelegt.
@@ -256,6 +257,20 @@ describe("Server & Zugänge: Erreichbarkeit", () => {
 });
 
 describe("Server & Zugänge: Server anlegen", () => {
+  it("der Kurzname ergibt sich aus dem Anzeigenamen, bis man ihn selbst ändert", async () => {
+    mockHostsApi({ "GET /hosts": [], "GET /host-groups": [] });
+    renderPage();
+    fireEvent.click((await screen.findAllByRole("button", { name: "Server hinzufügen" }))[0]);
+    fireEvent.change(screen.getByLabelText("Anzeigename"), { target: { value: "Müllers NAS" } });
+    expect(screen.getByLabelText("Kurzname")).toHaveValue("muellers-nas");
+    fireEvent.change(screen.getByLabelText("Kurzname"), { target: { value: "nas" } });
+    fireEvent.change(screen.getByLabelText("Anzeigename"), { target: { value: "Müllers großes NAS" } });
+    expect(screen.getByLabelText("Kurzname")).toHaveValue("nas");
+    fireEvent.change(screen.getByLabelText("Kurzname"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Anzeigename"), { target: { value: "KI - Server" } });
+    expect(screen.getByLabelText("Kurzname")).toHaveValue("ki-server");
+  });
+
   it("schickt Kleinbuchstaben und Markierungen als Liste und öffnet danach den Zugang des neuen Servers", async () => {
     const calls = mockHostsApi({
       "GET /hosts": [], "GET /host-groups": [],
@@ -265,12 +280,14 @@ describe("Server & Zugänge: Server anlegen", () => {
     fireEvent.click((await screen.findAllByRole("button", { name: "Server hinzufügen" }))[0]);
     fireEvent.change(screen.getByLabelText("Kurzname"), { target: { value: " Bastel-Pi " } });
     fireEvent.change(screen.getByLabelText("Adresse (IP oder Name)"), { target: { value: "192.168.2.72" } });
-    fireEvent.change(screen.getByLabelText("Markierungen"), { target: { value: "docker, Web  nas" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Docker verwalten" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "NAS" }));
+    fireEvent.change(screen.getByLabelText("Eigene Markierungen"), { target: { value: " Web " } });
     fireEvent.click(screen.getByRole("button", { name: "Anlegen" }));
     await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent("/settings/hosts/new1?neu=1"));
     const post = calls.find((c) => c.method === "POST" && c.path === "/hosts");
     expect(post?.body).toEqual({
-      name: "bastel-pi", display_name: "bastel-pi", address: "192.168.2.72", os_family: "linux", tags: ["docker", "web", "nas"],
+      name: "bastel-pi", display_name: "bastel-pi", address: "192.168.2.72", os_family: "linux", tags: ["docker", "nas", "web"],
     });
   });
 
@@ -407,5 +424,28 @@ describe("Server & Zugänge: beim Anbieter gelöschte Gäste", () => {
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/hosts/h7")).toBe(true));
     expect(vi.mocked(confirmDialog).mock.calls[0][0]).toMatch(/„Alte VM“ gibt es .* nicht mehr\. Aus Nodvard Deck entfernen\?/);
     expect(vi.mocked(promptDialog)).not.toHaveBeenCalled();
+  });
+});
+
+describe("shortNameFrom", () => {
+  it.each([
+    ["Raspberry Pi", "raspberry-pi"],
+    ["Müllers NAS", "muellers-nas"],
+    ["KI-Server", "ki-server"],
+    ["  --Café 2!  ", "cafe-2"],
+    ["Größe", "groesse"],
+    ["KI - Server", "ki-server"],
+    ["Mu\u0308ller", "mueller"],
+    ["_intern", "intern"],
+    ["\u{1F680}", ""],
+    ["", ""],
+  ])("%s → %s", (input, expected) => {
+    expect(shortNameFrom(input)).toBe(expected);
+  });
+
+  it("bleibt bei 64 Zeichen und endet nie auf einem Bindestrich", () => {
+    const name = shortNameFrom(`${"a".repeat(63)} b`);
+    expect(name).toBe("a".repeat(63));
+    expect(name).toMatch(/^[a-z0-9][a-z0-9_-]{0,63}$/);
   });
 });

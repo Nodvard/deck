@@ -1,8 +1,4 @@
-/**
- * SSH-Zugang eines Servers: anlegen (Schlüssel erzeugen, Passwort, eigenen Schlüssel einfügen), Einrichtungsbefehl
- * zeigen, Zugang ersetzen und löschen. Was jemand hier eintippt (Passwort, privater Schlüssel), wird beim Abschicken
- * sofort aus dem State gelöscht und läuft nie durch `useMutation` oder einen Query-Key.
- */
+/** SSH-Zugänge verwalten; Passwort und Schlüssel werden nach dem Absenden aus dem State gelöscht und nie im Query-Cache gehalten. */
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 
@@ -33,7 +29,7 @@ const MODE_LABEL: Record<Mode, string> = {
 function describeCredential(c: CredentialOut): string {
   const how = c.kind === "ssh_key" ? "Anmeldung mit Schlüssel" : "Anmeldung mit Passwort";
   const since = formatDate(c.created_at);
-  return `${how} als ${c.username}, Port ${c.port}${since ? ` – seit ${since}` : ""}`;
+  return `${how} als ${c.username}, Port ${c.port}${since ? `, seit ${since}` : ""}`;
 }
 
 /** Formular zum Anlegen eines Zugangs in einer der drei Arten. */
@@ -83,7 +79,7 @@ function NewAccessForm({
           out,
           mode === "password"
             ? "Zugang gespeichert. Prüfe jetzt die Verbindung."
-            : productText("Schlüssel gespeichert. Damit sich Nodvard Deck anmelden kann, muss der zugehörige öffentliche Schlüssel auf dem Server eingetragen sein – der Befehl unten macht das."),
+            : productText("Schlüssel gespeichert. Damit sich Nodvard Deck anmelden kann, muss der zugehörige öffentliche Schlüssel auf dem Server eingetragen sein, der Befehl unten macht das."),
         );
       }
     } catch (err) {
@@ -105,7 +101,7 @@ function NewAccessForm({
           hint={
             mode === "generate"
               ? (useEditionStore.getState().edition.choose_modules
-                ? productText("Ein eigener Benutzer nur für Nodvard Deck. Er wird angelegt, falls es ihn noch nicht gibt. Bei Proxmox-Knoten „root“ nehmen. Ältere Zugänge heißen vielleicht noch „lattice“ – sie laufen unverändert weiter.")
+                ? productText("Ein eigener Benutzer nur für Nodvard Deck. Er wird angelegt, falls es ihn noch nicht gibt. Bei Proxmox-Knoten „root“ nehmen. Ältere Zugänge heißen vielleicht noch „lattice“, sie laufen unverändert weiter.")
                 : "Ein eigener Benutzer nur für Nodvard Dock. Er wird angelegt, falls es ihn noch nicht gibt.")
               : "Ein Benutzer, der auf dem Server schon existiert."
           }
@@ -168,7 +164,7 @@ function newAccessQuestion(previous: CredentialOut | undefined): string {
   const base = "Den neuen Zugang verwenden?";
   if (!previous) return base;
   if (previous.kind === "ssh_key") {
-    return `${base} Der bisherige Zugang wird in ${productText("Nodvard Deck")} gelöscht. Sein Schlüssel bleibt auf dem Server eingetragen – dort bei Bedarf aus ~/.ssh/authorized_keys entfernen.`;
+    return `${base} Der bisherige Zugang wird in ${productText("Nodvard Deck")} gelöscht. Sein Schlüssel bleibt auf dem Server eingetragen, dort bei Bedarf aus ~/.ssh/authorized_keys entfernen.`;
   }
   return `${base} Der bisherige Zugang (Passwort) wird in ${productText("Nodvard Deck")} gelöscht. Auf dem Server ändert sich dadurch nichts.`;
 }
@@ -192,7 +188,7 @@ function CredentialRow({
 
   async function remove() {
     const left = credential.kind === "ssh_key"
-      ? "Auf dem Server bleibt der Schlüssel eingetragen – bei Bedarf dort aus ~/.ssh/authorized_keys entfernen."
+      ? "Auf dem Server bleibt der Schlüssel eingetragen, bei Bedarf dort aus ~/.ssh/authorized_keys entfernen."
       : "Auf dem Server ändert sich dadurch nichts.";
     const ok = await confirmDialog(
       `SSH-Zugang für „${host.display_name}“ löschen? Terminal, Updates und Überwachung erreichen den Server dann nicht mehr. ${left}`,
@@ -241,7 +237,7 @@ function CredentialRow({
         <div className="min-w-0">
           <p className="break-words text-sm font-medium">{describeCredential(credential)}</p>
           <div className="mt-1 flex flex-wrap gap-1.5">
-            {credential.is_default ? <Badge tone="good">Standard</Badge> : <Badge tone="accent">Neuer Zugang – noch nicht in Benutzung</Badge>}
+            {credential.is_default ? <Badge tone="good">Standard</Badge> : <Badge tone="accent">Neuer Zugang, noch nicht in Benutzung</Badge>}
             <Badge>{CREDENTIAL_KIND_LABEL[credential.kind] ?? credential.kind}</Badge>
           </div>
         </div>

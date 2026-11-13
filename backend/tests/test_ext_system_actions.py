@@ -547,6 +547,16 @@ async def _login(client, username="owner1", password="correct-horse-battery") ->
     return {"Authorization": f"Bearer {login.json()['access_token']}"}
 
 
+async def _give_access(client, headers: dict, host_id: str) -> None:
+    """Ohne SSH-Zugang antwortet die Seite „Server-Zustand“ vorab mit 409."""
+    access = await client.post(
+        f"/api/v1/hosts/{host_id}/credentials",
+        json={"kind": "ssh_password", "username": "root", "port": 22, "secret_value": "TEST-WERT", "is_default": True},
+        headers=headers,
+    )
+    assert access.status_code == 201, access.text
+
+
 async def _enable(client, db_session, test_settings, monkeypatch) -> tuple[dict, dict, list[str]]:
     test_settings.extensions_dir = REPO_EXTENSIONS_DIR
     await extensions_service.discover_and_sync(db_session, test_settings)
@@ -554,6 +564,7 @@ async def _enable(client, db_session, test_settings, monkeypatch) -> tuple[dict,
     enabled = await client.post("/api/v1/extensions/system/enable", headers=headers)
     assert enabled.status_code == 200, enabled.text
     host = (await client.post("/api/v1/hosts", json={"name": "pi", "address": "10.0.0.5"}, headers=headers)).json()
+    await _give_access(client, headers, host["id"])
     commands: list[str] = []
 
     async def fake_run(host, command, timeout_s=60):
@@ -657,6 +668,7 @@ async def test_info_offers_no_docker_restart_where_the_dashboard_runs(client, db
 
     # Der Tag "dashboard" reicht -- ohne zusaetzliche SSH-Abfrage.
     tagged = (await client.post("/api/v1/hosts", json={"name": "heimserver", "address": "10.0.0.6", "tags": ["dashboard"]}, headers=headers)).json()
+    await _give_access(client, headers, tagged["id"])
     units, commands = await _info_units(client, headers, tagged["id"], monkeypatch, probe="@@other\n")
     assert units == ["cron.service", "nginx.service"]
     assert not any("@@own" in c for c in commands)

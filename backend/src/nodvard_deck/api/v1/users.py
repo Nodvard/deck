@@ -16,6 +16,8 @@ from ...services import audit as audit_service
 from ...services import auth as auth_service
 from ...services import settings as settings_service
 from ..deps import CurrentUser, SessionDep, SettingsDep, require_permission
+from ..models import RequestModel
+from ..responses import error_responses
 from ..errors import CodedHTTPException
 from .auth import TotpMissing, confirm_current_password, confirm_current_totp
 
@@ -47,7 +49,7 @@ class UserOut(BaseModel):
     roles: list[RoleOut]
 
 
-class UserCreate(BaseModel):
+class UserCreate(RequestModel):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=8, max_length=255)
     display_name: str = ""
@@ -64,7 +66,7 @@ class UserCreate(BaseModel):
         return auth_service.validate_new_username(value)
 
 
-class ResetTwoFactorRequest(BaseModel):
+class ResetTwoFactorRequest(RequestModel):
     current_password: str
     """Das Passwort des handelnden Admins (nicht des Ziels)."""
     totp_code: str = Field(default="", max_length=64)
@@ -72,7 +74,7 @@ class ResetTwoFactorRequest(BaseModel):
     `code: "totp_missing"`). Im Schema optional: ohne Zwei-Faktor reicht das Passwort."""
 
 
-class UserUpdate(BaseModel):
+class UserUpdate(RequestModel):
     display_name: str | None = None
     email: str | None = None
     is_active: bool | None = None
@@ -210,19 +212,31 @@ async def _audit_user(
     )
 
 
-@router.get("/roles", dependencies=[Depends(require_permission("users.read"))])
+@router.get(
+    "/roles",
+    dependencies=[Depends(require_permission("users.read"))],
+    responses=error_responses(401, 403, 507),
+)
 async def list_roles(session: SessionDep) -> list[RoleOut]:
     rows = (await session.execute(select(Role).order_by(Role.name))).scalars().all()
     return [_role_out(r) for r in rows]
 
 
-@router.get("/users", dependencies=[Depends(require_permission("users.read"))])
+@router.get(
+    "/users",
+    dependencies=[Depends(require_permission("users.read"))],
+    responses=error_responses(401, 403, 507),
+)
 async def list_users(session: SessionDep) -> list[UserOut]:
     rows = (await session.execute(select(User).order_by(User.username))).scalars().all()
     return [_user_out(u) for u in rows]
 
 
-@router.get("/users/{user_id}", dependencies=[Depends(require_permission("users.read"))])
+@router.get(
+    "/users/{user_id}",
+    dependencies=[Depends(require_permission("users.read"))],
+    responses=error_responses(401, 403, 404, 507),
+)
 async def get_user(user_id: str, session: SessionDep) -> UserOut:
     user = await session.get(User, user_id)
     if user is None:
@@ -230,7 +244,12 @@ async def get_user(user_id: str, session: SessionDep) -> UserOut:
     return _user_out(user)
 
 
-@router.post("/users", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("users.write"))])
+@router.post(
+    "/users",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("users.write"))],
+    responses=error_responses(400, 401, 403, 404, 409, 429, 503, 507),
+)
 async def create_user(
     payload: UserCreate, request: Request, session: SessionDep, settings: SettingsDep, current_user: CurrentUser
 ) -> UserOut:
@@ -266,7 +285,11 @@ async def create_user(
     return _user_out(user)
 
 
-@router.patch("/users/{user_id}", dependencies=[Depends(require_permission("users.write"))])
+@router.patch(
+    "/users/{user_id}",
+    dependencies=[Depends(require_permission("users.write"))],
+    responses=error_responses(400, 401, 403, 404, 409, 429, 503, 507),
+)
 async def update_user(
     user_id: str,
     payload: UserUpdate,
@@ -367,7 +390,12 @@ async def update_user(
     return _user_out(user)
 
 
-@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("users.write"))])
+@router.delete(
+    "/users/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("users.write"))],
+    responses=error_responses(401, 403, 404, 409, 507),
+)
 async def delete_user(user_id: str, current_user: CurrentUser, session: SessionDep) -> None:
     user = await session.get(User, user_id)
     if user is None:
@@ -384,7 +412,12 @@ async def delete_user(user_id: str, current_user: CurrentUser, session: SessionD
     await session.delete(user)
 
 
-@router.post("/users/{user_id}/reset-2fa", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("users.write"))])
+@router.post(
+    "/users/{user_id}/reset-2fa",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("users.write"))],
+    responses=error_responses(400, 401, 403, 404, 409, 429, 503, 507),
+)
 async def reset_user_2fa(
     user_id: str, payload: ResetTwoFactorRequest, request: Request, current_user: CurrentUser, session: SessionDep,
     settings: SettingsDep,

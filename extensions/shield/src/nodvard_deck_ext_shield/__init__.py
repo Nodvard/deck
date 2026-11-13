@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import logging
 import re
 import shlex
@@ -31,11 +32,13 @@ from nodvard_sdk import (
     WidgetAction,
     WidgetSpec,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from .defender import Defender
+from .checks import ServerChecks, build_routers as build_check_routers, register_job as register_check_job
 from .defender_api import ACTION_SPECS, DefenderExecutor, build_routers, register_jobs
 from .guard import Guard
+from .ssh_hardening import SPEC as SSH_SPEC, SshHardening
 from .hostscope import host_scope
 from .patching import UpdateCenter, schedule_zone
 from .history import STATUS_LABEL, STATUSES, IncidentRepository
@@ -57,7 +60,10 @@ from .remediation import (
     restart_risk_eligible,
     sanitize_untrusted,
 )
-from .ollama import NO_AI_TEXT, OllamaConnectorType, OllamaProvider
+from .reports import WeeklyReports, build_router as build_reports_router, register_job as register_report_job
+from .ai import ConfiguredAIProvider, is_configured
+from .ollama import NO_AI_TEXT, OllamaConnectorType
+from .openai_compat import NO_AI_TEXT as COMPAT_NO_AI_TEXT
 from .parsing import ParsedActionKind, parse_ai_response, strip_decision_block
 from .prompts import MAX_INSPECT_TEXT_CHARS, MAX_LOG_CHARS, SYSTEM_PROMPT, build_chat_prompt, build_incident_prompt
 from .watch_templates import build_routers as build_template_routers
@@ -116,10 +122,14 @@ def container_watch_links(action_id: str | None) -> dict[str, Any]:
 
 
 class _ChatIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     message: str
 
 
 class _TokenIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     value: str
 
 
@@ -137,17 +147,18 @@ class Extension(NodvardExtension):
     def __init__(self) -> None:
         self._store = IncidentStore()
         self._recovered: dict[tuple[str, str], float] = {}
-        """(Server, Container) kleingeschrieben -> (läuft wieder seit, Satz): die letzte Erholung, für Vorfälle, die
-        bei der Erholung noch geprüft wurden (`_finish_group`). Nur im Speicher, wie die Erholung selbst."""
+        """Letzte Erholung je Server und exaktem Containernamen für noch laufende Vorfallprüfungen."""
         self._history: IncidentRepository | None = None
         self._queue: IncidentQueueRepository | None = None
-        self._ai: OllamaProvider | None = None
+        self._ai: ConfiguredAIProvider | None = None
         self._watcher: DockerWatcher | None = None
         self._batch_ready: Any = None  # asyncio.Event, erst in setup() gebaut (braucht den Event-Loop des Hosts)
         self._ctx: ExtensionContext | None = None
         self._defender: Defender | None = None
         self._updates: UpdateCenter | None = None
         self._guard: Guard | None = None
+        self._reports: WeeklyReports | None = None
+        self._checks: ServerChecks | None = None
         self._retry_tasks: set[Any] = set()  # wartende Wiederholungen (werden bei on_stop abgebrochen)
 
     async def setup(self, ctx: ExtensionContext) -> None:
@@ -158,7 +169,7 @@ class Extension(NodvardExtension):
         ctx.db.declare_tables(HistoryBase.metadata)
         self._history = IncidentRepository(ctx)
         self._queue = IncidentQueueRepository(ctx)
-        self._ai = OllamaProvider(ctx)
+        self._ai = ConfiguredAIProvider(ctx)
         ctx.capabilities.provide(self._ai)
         ctx.connectors.register_type(OllamaConnectorType())
 
@@ -166,6 +177,11 @@ class Extension(NodvardExtension):
             {
                 "type": "object",
                 "properties": {
+                    "ai_provider": {"type": "string", "enum": ["ollama", "openai_compat"], "default": "ollama"},
+                    "openai_compat_url": {"type": "string"},
+                    "openai_compat_model": {"type": "string"},
+                    "openai_compat_failover_url": {"type": "string"},
+                    "openai_compat_failover_model": {"type": "string"},
                     "ollama_url": {"type": "string"},
                     "ollama_model": {"type": "string"},
                     "ollama_failover_url": {"type": "string"},
@@ -176,7 +192,7 @@ class Extension(NodvardExtension):
                     "forbidden_host_keywords": {"type": "array", "items": {"type": "string"}},
                     "suppressed_hosts": {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["ollama_url"],
+                "required": [],
             }
         )
 
@@ -188,22 +204,39 @@ class Extension(NodvardExtension):
         self._defender = Defender(ctx)
         self._updates = UpdateCenter(ctx, self._defender)
         self._guard = Guard(ctx, self._defender)
+        self._reports = WeeklyReports(ctx)
+        self._checks = ServerChecks(ctx, self._defender)
         ctx.capabilities.provide(DefenderExecutor(ctx, self._defender, self._updates))
         for spec in ACTION_SPECS:
             ctx.actions.register(spec)
         await register_jobs(ctx, self._defender, self._updates, self._guard)
+        await register_check_job(ctx, self._checks)
+        await register_report_job(ctx, self._reports)
+        checks_read, checks_manage = build_check_routers(self._checks)
+        ctx.api.include_router(checks_read, permission="soc.read")
+        ctx.api.include_router(checks_manage, permission="soc.manage")
+        ctx.api.include_router(build_reports_router(self._reports), permission="soc.read")
         defender_read, defender_manage = build_routers(ctx, self._defender, self._updates, self._guard)
-        ctx.api.include_router(defender_read, permission="soc.read")
+        ctx.api.include_router(defender_read, permission="soc.read", ssh_read=True)
         ctx.api.include_router(defender_manage, permission="soc.manage")
+        ssh_hardening = SshHardening(ctx)
+        ctx.capabilities.provide(ssh_hardening)
+        ctx.actions.register(SSH_SPEC)
+        # Ändern braucht `soc.manage` und dazu `hosts.execute` für die SSH-Vorprüfung.
+        ssh_read, ssh_manage = ssh_hardening.routers([Depends(ctx.api.require_permission("soc.manage"))])
+        ctx.api.include_router(ssh_read, permission="soc.read", ssh_read=True)
+        ctx.api.include_router(ssh_manage, permission="hosts.execute", ssh_preflight=True)
         # Wächter-Vorlagen: Suchen (liest auf den Servern) braucht `soc.manage` wie andere Shield-Aufgaben, Übernehmen
         # ändert die Einstellungen und braucht `settings.write` wie die Einstellungsseite.
         templates_read, templates_change = build_template_routers(ctx, self._defender)
-        ctx.api.include_router(templates_read, permission="soc.manage")
+        ctx.api.include_router(templates_read, permission="soc.manage", ssh_read=True)
         ctx.api.include_router(templates_change, permission="settings.write")
 
         router = APIRouter()
 
-        @router.post("/chat")
+        @router.post(
+            "/chat",
+        )
         async def chat(payload: _ChatIn) -> dict:
             settings = await ctx.settings.get()
             tag = settings.get("docker_host_tag") or "docker"
@@ -218,7 +251,9 @@ class Extension(NodvardExtension):
             display = strip_decision_block(reply)
             return {"reply": display or reply, "proposals": proposals}
 
-        @router.get("/widgets/incidents")
+        @router.get(
+            "/widgets/incidents",
+        )
         async def incidents_widget_data() -> dict:
             # Das Widget soll ruhig bleiben: nur, was noch Aufmerksamkeit braucht (offen oder mit Vorschlag). Geprüfte und
             # erledigte Vorfälle stehen auf der Shield-Seite. `search()` kennt nur einen einzelnen `status=`, deshalb
@@ -265,23 +300,43 @@ class Extension(NodvardExtension):
 
         incident_router = APIRouter()
 
-        @incident_router.post("/incidents/{incident_id}/confirm")
+        @incident_router.post(
+            "/incidents/{incident_id}/confirm",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def confirm_incident(incident_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
             return await _change_status(incident_id, "reviewed", actor)
 
-        @incident_router.post("/incidents/{incident_id}/dismiss")
+        @incident_router.post(
+            "/incidents/{incident_id}/dismiss",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def dismiss_incident(incident_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
             return await _change_status(incident_id, "dismissed", actor)
 
-        @incident_router.post("/incidents/{incident_id}/resolve")
+        @incident_router.post(
+            "/incidents/{incident_id}/resolve",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def resolve_incident(incident_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
             return await _change_status(incident_id, "resolved", actor)
 
-        @incident_router.post("/incidents/{incident_id}/reopen")
+        @incident_router.post(
+            "/incidents/{incident_id}/reopen",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def reopen_incident(incident_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
             return await _change_status(incident_id, "open", actor)
 
-        @router.get("/history")
+        @router.get(
+            "/history",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (400,)},
+        )
         async def search_history(
             q: str | None = None,
             status_filter: str | None = Query(default=None, alias="status"),
@@ -289,7 +344,7 @@ class Extension(NodvardExtension):
             since: datetime | None = None,
             until: datetime | None = None,
             limit: int = Query(default=50, ge=1, le=200),
-            offset: int = Query(default=0, ge=0),
+            offset: int = Query(default=0, ge=0, le=9223372036854775807),
         ) -> dict:
             """Durchsuchbare Vorfalls-Historie: freier Text (Nachricht, Container, Host, KI-Zusammenfassung), Status, Host,
             Zeitraum; neueste zuerst, seitenweise. `hosts` liefert die Auswahl für den Host-Filter mit."""
@@ -302,34 +357,65 @@ class Extension(NodvardExtension):
 
         # Die Detailseite braucht den vollen Datensatz (Status, KI-Zusammenfassung, verknüpfte Aktion) samt verworfener
         # Vorfälle; `GET /widgets/incidents` liefert nur das verdichtete Widget-Format.
-        @router.get("/incidents")
+        @router.get(
+            "/incidents",
+        )
         async def list_incidents(status_filter: str | None = None) -> list[dict]:
             items, _total = await self._history.search(status=status_filter, limit=200)
             return items
 
-        @router.get("/stats")
+        @router.get(
+            "/stats",
+        )
         async def get_stats() -> StatsOut:
             by_status = await self._history.count_by_status()
             settings = await ctx.settings.get()
             tag = settings.get("docker_host_tag") or "docker"
             hosts = await ctx.hosts.list(tag=tag)
-            ai_health = await self._ai.health()
-            ai_configured = bool(settings.get("ollama_url") or settings.get("ollama_failover_url"))
+            ai_health = await self._ai.cached_health()
+            ai_configured = is_configured(settings)
             return StatsOut(
                 by_status=by_status, pending_batch=self._store.pending_count(), watched_hosts=len(hosts),
                 ai_healthy=ai_health.ok, ai_message=ai_health.message, ai_configured=ai_configured,
             )
 
         @router.get("/ai/models")
-        async def get_ai_models(which: Literal["primary", "failover"] = Query(default="primary")) -> dict:
-            """Auswahlliste für "KI-Modell" (`x-widget: "remote-select"`); fragt nur gespeicherte Adressen."""
-            from .ollama import list_models
+        async def get_ai_models(
+            which: Literal["primary", "failover"] = Query(default="primary"),
+            provider: Literal["ollama", "openai_compat"] | None = Query(default=None),
+        ) -> dict:
+            """Fragt die Modelle einer gespeicherten Serveradresse ab."""
+            from .ai import list_models
 
-            return await list_models(ctx, which)
+            return await list_models(ctx, which, provider)
+
+        ai_settings_router = APIRouter()
+        test_actor = Depends(ctx.api.current_actor)
+
+        @ai_settings_router.post("/ai/test")
+        async def test_ai_connection(
+            which: Literal["primary", "failover"] = Query(default="primary"),
+            actor: Actor = test_actor,
+        ) -> dict:
+            """Prüft das gespeicherte Modell mit einer kurzen Anfrage."""
+            from .ai import test_connection
+
+            await ctx.settings.check_test_limit(actor=actor)
+            result = await test_connection(ctx, which)
+            await ctx.settings.save_test_result(
+                ok=result["ok"], message=result["message"], actor=actor, kind=result["error_code"] or "ok",
+            )
+            return result
+
+        ctx.api.include_router(ai_settings_router, permission="extensions.manage")
 
         token_router = APIRouter()
 
-        @token_router.post("/token", status_code=status.HTTP_204_NO_CONTENT)
+        @token_router.post(
+            "/token", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409,)},
+        )
         async def set_token(payload: _TokenIn) -> None:
             """Optionales Ollama-Token (z. B. für einen Reverse-Proxy mit Auth), im Tresor wie bei ntfy und proxmox."""
             from .ollama import _TOKEN_LABEL
@@ -476,10 +562,13 @@ class Extension(NodvardExtension):
             logging.getLogger(LOGGER).exception("shield_quarantine_notes_failed")
         # Vorfälle, die beim letzten Stopp noch im Sammelfenster lagen, wieder aufnehmen.
         await self._resume_open_incidents()
-        ctx.spawn(self._watcher.run_forever(), name=f"{EXT_ID}-docker-watcher")
-        ctx.spawn(self._batch_flush_loop(ctx), name=f"{EXT_ID}-batch-flush")
+        # Als Fabrik, damit der Kern die Dauerschleifen nach einem Absturz neu startet.
+        ctx.spawn(self._watcher.run_forever, name=f"{EXT_ID}-docker-watcher")
+        ctx.spawn(lambda: self._batch_flush_loop(ctx), name=f"{EXT_ID}-batch-flush")
 
     async def on_stop(self, ctx: ExtensionContext) -> None:
+        if self._checks is not None:
+            self._checks.cancel_tasks()
         if self._updates is not None:
             self._updates.cancel_catch_up()
         if self._defender is not None:
@@ -490,9 +579,11 @@ class Extension(NodvardExtension):
         self._retry_tasks.clear()
 
     async def on_settings_changed(self, ctx: ExtensionContext, new: dict[str, Any]) -> None:
-        # Zeitpläne (Scans, Wächter, Audit) sofort an die neuen Einstellungen anpassen.
+        # Geänderte Zeitpläne gelten sofort.
         self._register_docker_requirement(ctx, new.get("docker_host_tag") or "docker")
         await register_jobs(ctx, self._defender, self._updates, self._guard)
+        await register_check_job(ctx, self._checks)
+        await register_report_job(ctx, self._reports)
 
     async def health(self, ctx: ExtensionContext) -> HealthReport:
         result = await self._ai.health()
@@ -515,7 +606,7 @@ class Extension(NodvardExtension):
                 payload = getattr(row, "payload", None)
                 command = str(payload.get("command") or "") if isinstance(payload, dict) else ""
                 # Eine Aktion hängt an allen Vorfällen ihres Batches: Es zählt nur, was der Befehl wirklich traf.
-                if getattr(row, "host_id", None) != host.id or command.strip().lower() != expected.lower():
+                if getattr(row, "host_id", None) != host.id or command.strip() != expected:
                     continue
                 finished = getattr(row, "finished_at", None)
                 if not isinstance(finished, datetime):
@@ -537,7 +628,7 @@ class Extension(NodvardExtension):
         # Vor dem ersten `await` merken: `_finish_group` kann sonst genau dazwischen prüfen und die Erholung verpassen.
         now = time.time()
         self._recovered = {k: v for k, v in self._recovered.items() if now - v < RECOVERY_MEMORY_S}
-        self._recovered[(host.name.lower(), target.lower())] = running_since
+        self._recovered[(host.name.lower(), target)] = running_since
         zone = await schedule_zone(self._ctx)
         since = datetime.fromtimestamp(running_since, zone).strftime("%H:%M")
         resolved = await self._history.resolve_recovered(
@@ -564,7 +655,7 @@ class Extension(NodvardExtension):
     async def _on_transition(self, transition: ContainerTransition) -> None:
         # Der Container hat sich wieder gerührt: Eine gemerkte Erholung gilt nicht mehr (sonst erledigte
         # `_finish_group` einen Vorfall, dessen Container längst wieder abgestürzt ist).
-        self._recovered.pop((transition.host.name.lower(), transition.target.lower()), None)
+        self._recovered.pop((transition.host.name.lower(), transition.target), None)
         settings = await self._ctx.settings.get()
         log = logging.getLogger(LOGGER)
         is_crash = bool(transition.details.get("is_crash"))
@@ -812,7 +903,8 @@ class Extension(NodvardExtension):
                 host = await ctx.hosts.get(host_id)
                 if host is None:
                     continue
-                result = await ctx.exec.run(host, inspect_exit_command(names), timeout_s=10)
+                with ctx.exec.read_access(host, timeout_s=10):
+                    result = await ctx.exec.run(host, inspect_exit_command(names), timeout_s=10)
                 facts = parse_exit_facts(result.stdout)
             except Exception:  # noqa: BLE001
                 continue
@@ -844,7 +936,8 @@ class Extension(NodvardExtension):
             if host is None:
                 continue
             try:
-                result = await ctx.exec.run(host, f"docker logs --tail 25 {shlex.quote(incident.target)} 2>&1", timeout_s=10)
+                with ctx.exec.read_access(host, timeout_s=10):
+                    result = await ctx.exec.run(host, f"docker logs --tail 25 {shlex.quote(incident.target)} 2>&1", timeout_s=10)
                 if result.stdout.strip():
                     # Das Ende behalten: `docker logs --tail` liefert die neuesten Zeilen zuletzt, und die
                     # Absturzursache steht meist in den letzten.
@@ -954,7 +1047,7 @@ class Extension(NodvardExtension):
                 incident.status = "proposed" if proposed else "reviewed"
             # Lief der Container schon wieder ruhig, während dieser Vorfall noch geprüft wurde: gleich erledigt. Jeder
             # neue Zustandswechsel löscht die gemerkte Erholung (`_on_transition`), sie ist also jünger als der Absturz.
-            running_since = self._recovered.get((incident.host_name.lower(), incident.target.lower()))
+            running_since = self._recovered.get((incident.host_name.lower(), incident.target))
             auto_resolved = running_since is not None and incident.status in ("proposed", "reviewed")
             if auto_resolved:
                 previous = incident.status
@@ -987,7 +1080,7 @@ class Extension(NodvardExtension):
 
         resumed = sum(1 for i in batch if i.resumed)
         # Der Hinweis, dass Nodvard KI nicht eingerichtet ist, steht nur am Vorfall, nicht in jeder Meldung aufs Handy.
-        notify_body = re.sub(r"\n{3,}", "\n\n", ai_summary.replace(NO_AI_TEXT, "")).strip()
+        notify_body = re.sub(r"\n{3,}", "\n\n", ai_summary.replace(NO_AI_TEXT, "").replace(COMPAT_NO_AI_TEXT, "")).strip()
         failed_restarts = [i for i in batch if isinstance(i.details.get("after_restart"), (int, float))]
         if failed_restarts:
             notes = [

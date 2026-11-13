@@ -5,8 +5,8 @@
 from __future__ import annotations
 
 import shlex
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from types import SimpleNamespace
 from typing import Any
 
@@ -184,6 +184,11 @@ class OperateExec:
 
     async def _why(self) -> str:
         return refused_text(await self._full_tag()) if self._full_tag else REFUSED
+
+    @contextmanager
+    def read_access(self, host: Any, *, timeout_s: float = 30.0) -> Iterator[None]:
+        with self._inner.read_access(host, timeout_s=timeout_s):
+            yield
 
     async def run(self, host: Any, command: str, **kwargs: Any) -> Any:
         if not await self._operate(host):

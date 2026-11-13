@@ -2,7 +2,7 @@
 
 > English version: [en/FIRST-SETUP.md](en/FIRST-SETUP.md)
 
-Stand: Version 0.12.
+Diese Anleitung beschreibt die aktuelle Einrichtung von Nodvard Deck.
 
 In wenigen Minuten zum laufenden Dashboard. Du brauchst nur einen Rechner mit Docker, der durchläuft: einen Raspberry Pi,
 ein NAS, einen kleinen Server oder eine VM. Die Abschnitte 1 bis 7 führen in dieser Reihenfolge durch die Einrichtung.
@@ -94,7 +94,7 @@ beim Container in der Oberfläche, Befehle wie die Notfall-Befehle gibst du in s
 ### Verbindung absichern
 
 Beim Aufruf über `http://<Rechner-IP>:8080` ist die Verbindung unverschlüsselt. Im Heimnetz kann dein
-Anmelde-Token mitgelesen werden. Deshalb erscheint in Schritt 1 der Einrichtung und unter
+Sitzungs-Cookie mitgelesen werden. Deshalb erscheint in Schritt 1 der Einrichtung und unter
 **Einstellungen → System → Vertrauenswürdiger Proxy** ein Warnbalken. Du kannst ihn für die Sitzung
 ausblenden. Bei der nächsten Anmeldung erscheint er wieder, solange du HTTP verwendest. Bei HTTPS
 und beim Zugriff über `localhost`, `127.0.0.1` oder `::1` erscheint er nicht.
@@ -126,7 +126,8 @@ Einrichtungscode (unten) verlangt.
 
 Damit nicht jeder im Netz, der die Seite zuerst öffnet, das erste Konto (und damit den Inhaber) bekommt, verlangt
 `/setup` einen **Einrichtungscode**. Nodvard Deck würfelt ihn beim Start und schreibt ihn ins **Protokoll (Log) des
-Containers**: in einem Rahmen aus `=`-Zeichen, der Code zusätzlich allein in einer Zeile, etwa `K7MQ-X2VD-H9PA`.
+Containers**: in einer klar umrahmten Box aus `+`, `=` und `|`, der Code zusätzlich allein in einer Zeile,
+etwa `K7MQ-X2VD-H9PA`.
 Groß-/Kleinschreibung, Striche und Leerzeichen sind beim Eintippen egal. Im Assistenten klappt „Wo finde ich den Code?“
 dieselbe Hilfe auf.
 
@@ -134,7 +135,7 @@ dieselbe Hilfe auf.
 
   ```bash
   sudo docker compose logs nodvard-deck | grep -A1 Einrichtungscode
-  # Einrichtungscode: K7MQ-X2VD-H9PA – im Browser eingeben
+  # Einrichtungscode: K7MQ-X2VD-H9PA (im Browser eingeben)
   ```
 
   Windows PowerShell hat kein `grep`, dort:
@@ -147,23 +148,36 @@ dieselbe Hilfe auf.
 - **Unraid:** Symbol des Containers → **Logs**.
 - **Andere NAS und Oberflächen:** steht beim jeweiligen Weg in [Installation je Plattform](13-INSTALLATION.md).
 
-Der Code bleibt über Neustarts gleich und verschwindet, sobald das erste Konto angelegt ist. Nach einem Neustart steht
-derselbe Code noch einmal weiter unten im Protokoll.
+Der automatisch erzeugte Code bleibt über Neustarts gleich. Solange kein Konto existiert, steht er bei jedem Start
+erneut in der Box. Sobald das erste Konto angelegt ist, wird der Code ungültig und seine Datei gelöscht.
+Alte Einträge im Container-Protokoll bleiben sichtbar.
 
-**Den Code selbst festlegen:** Wer den Code lieber vorgibt (mindestens 8 Zeichen), trägt ihn in der Compose-Datei als
-**`NODVARD_DECK_SETUP_CODE: "…"`** unter `environment:` ein. Die `compose.yml` aus [Abschnitt 1](#1-schnellstart) hat
-noch keinen `environment:`-Block; du ergänzt ihn unter `nodvard-deck:` (gleiche Einrückung wie `image:`) und übernimmst
-ihn mit `docker compose up -d`:
+**Den Code selbst festlegen (optional):** Die Compose-Dateien unter `deploy/` reichen
+`NODVARD_DECK_SETUP_CODE` an den Container weiter. Vor dem ersten Start legst du neben deiner `compose.yml` eine
+Textdatei mit dem genauen Namen **`.env`** an (nicht `.env.txt`). Darin steht eine Zeile:
 
-```yaml
-    environment:
-      NODVARD_DECK_SETUP_CODE: "mein-eigener-code"
+```dotenv
+NODVARD_DECK_SETUP_CODE=mein-eigener-code-7392
 ```
 
-In `deploy/docker-compose.yml` des Repositorys gibt es den Block schon. Ohne diese Einstellung würfelt Nodvard Deck
-selbst. Mehr zum Code (Fehlversuche, wo er gespeichert ist): [Anhang B.1](#b1-der-einrichtungscode).
+Wähle einen eigenen, schwer zu erratenden Code statt des Beispiels. Er muss insgesamt mindestens **8 Buchstaben
+oder Ziffern** enthalten. Es zählen nur `A` bis `Z`, `a` bis `z` und `0` bis `9`. Andere Zeichen, auch Umlaute,
+Striche und Leerzeichen, werden entfernt; Kleinbuchstaben werden zu Großbuchstaben. Starte anschließend mit
+`docker compose up -d`.
+Bei der Installation aus dem Repository liegt die `.env` neben `deploy/docker-compose.yml`.
 
-### 2.2 Die sechs Schritte
+**Portainer:** Beim Anlegen des Stacks unter **Environment variables** den Namen `NODVARD_DECK_SETUP_CODE` und
+deinen Code als Wert eintragen, dann den Stack starten. Die Compose-Datei enthält die passende Weitergabe bereits.
+Auch ein selbst vorgegebener Code steht in der Box im Container-Protokoll und wird im Assistenten eingegeben.
+
+Ohne Variable oder mit leerem Wert verwendet Nodvard Deck einen zufälligen Code. Ein zu kurzer Wert wird mit
+einem Hinweis im Protokoll ignoriert; dann gilt der bereits gespeicherte oder ein neu erzeugter Zufallscode.
+Die Variable wirkt **nur, solange noch kein Konto existiert**. Nach der Einrichtung wird sie ignoriert und beim
+Start ein Hinweis ohne den Wert protokolliert. Sie kann kein weiteres Konto anlegen und kein Passwort zurücksetzen.
+Entferne die Zeile danach aus der `.env` bzw. aus den Stack-Variablen.
+Mehr zum Code (Fehlversuche, wo er gespeichert ist): [Anhang B.1](#b1-der-einrichtungscode).
+
+### 2.2 Die sieben Schritte
 
 1. **Administrator-Konto anlegen** (Pflicht): Einrichtungscode, Benutzername (mindestens 3 Zeichen, nur Kleinbuchstaben,
    Ziffern sowie `.`, `-` und `_`, z. B. `admin`) und ein Passwort mit mindestens 8 Zeichen. Dieses erste Konto ist der
@@ -180,7 +194,8 @@ selbst. Mehr zum Code (Fehlversuche, wo er gespeichert ist): [Anhang B.1](#b1-de
    Nachholen geht unter Einstellungen → Mein Konto ([Anhang C](#c-zwei-faktor-und-wiederherstellungs-codes)).
 5. **Aussehen** (optional): Produktname, Untertitel und Akzentfarbe. Logo, Theme und mehr gibt es später unter
    Einstellungen → Darstellung.
-6. **Fertig:** Der Schritt nennt den Notfall-Befehl für ein vergessenes Passwort ([7.3](#73-ausgesperrt-notfall-befehle)).
+6. **Nutzungsdaten** (optional): Drei unabhängige Stufen, alles aus. „Weiter ohne Teilen“ überspringt die Freigabe. [Was gesendet wird](18-NUTZUNGSDATEN.md).
+7. **Fertig:** Der Schritt nennt den Notfall-Befehl für ein vergessenes Passwort ([7.3](#73-ausgesperrt-notfall-befehle)).
    „Weiter zum Dashboard“ öffnet das Cockpit.
 
 Jeder Schritt im Einzelnen, auch eigenes CSS und sein Notausgang: [Anhang B](#b-einrichtungsassistent-im-detail).
@@ -227,11 +242,23 @@ alles gefüllt aussieht ([Anhang E.2](#e2-beispieldaten)).
 4. **Betriebssystem:** Linux oder Windows. Für Windows-Server gibt es keinen
    Einrichtungsbefehl und keine Rechte-Prüfung. Einen Windows-Server (etwa einen Gameserver) wirklich als Windows
    eintragen: Lange Befehle schickt Nodvard Deck sonst auf Linux-Art, und die scheitern unter Windows.
-5. **Markierungen** (mit Komma getrennt): `docker`, wenn dort Docker läuft – das Modul Docker
-   (Einstellung „Server-Markierung“) und die KI-Container-Wache von Nodvard Shield („Überwachte
-   Server“) nehmen genau die Server mit dieser Markierung. Gameserver erscheinen nur mit der
-   Markierung `gameserver`. Markierungen lassen sich jederzeit ändern, auch bei Proxmox-VMs
-   (die von Proxmox gesetzten bleiben, man kann sie nicht ändern).
+5. **Markierungen:** Die festen Auswahlkästchen erklären, wofür die jeweilige Markierung verwendet wird:
+   - **Docker verwalten** (`docker`): voller Zugang zum Modul Docker, etwa für Container, Stacks und
+     Image-Updates. Auch die Container-Wache von Nodvard Shield nimmt ab Werk diese Server.
+   - **Docker nur bedienen** (`docker-bedienen`): Container und ihre Logs ansehen sowie Container starten,
+     stoppen und neu starten. Die Einrichtung verwendet dafür ein begrenztes Hilfsskript statt der Gruppe `docker`.
+     Sind beide Docker-Haken gesetzt, gilt der volle Zugang.
+   - **Gameserver** (`gameserver`): Der Server erscheint im Modul Gameserver.
+   - **Nodvard Deck läuft hier** (`dashboard`): Das Modul System sperrt hier Neustarts von Docker und
+     containerd. Nodvard Shield plant diesen Server bei automatischen Updates zuletzt ein und verschiebt
+     seinen Neustart hinter die Zusammenfassung.
+   - **NAS** (`nas`): Kennzeichnet den Server als NAS und schaltet keine zusätzlichen Funktionen frei.
+
+   Unter **Eigene Markierungen** bleiben eigene Namen möglich, mit Komma oder Leerzeichen getrennt.
+   Die Kästchen setzen die Standard-Markierungen. Hast du die Server-Markierung in einem Modul geändert,
+   trägst du den passenden Namen dort als eigene Markierung ein. Die Markierungen lassen sich später ändern,
+   auch bei Proxmox-VMs. Von Erweiterungen verwaltete Markierungen bleiben erhalten und sind nicht änderbar;
+   ein passendes Auswahlkästchen ist bereits angehakt und gesperrt.
 6. **Anlegen.** Die Seite des neuen Servers öffnet sich und bietet gleich den nächsten Schritt an.
 
 Falsche Eingaben meldet die Seite direkt am Feld auf Deutsch (z. B. „Kurzname: nur
@@ -266,8 +293,9 @@ Konsole deiner VM-Verwaltung), einfügen, Enter. Er
 - richtet auf Wunsch **Root-Rechte ohne Passwort** und die **Gruppe docker** ein (siehe [Anhang F](#f-root-rechte-ohne-passwort-und-gruppe-docker)).
 
 Unter „Was macht der Befehl?“ steht derselbe Ablauf lesbar, Zeile für Zeile. Der Befehl läuft als root direkt, sonst
-über `sudo` – er funktioniert also auf Proxmox (kein sudo) ebenso wie auf Debian oder dem Pi. Er lässt sich gefahrlos
-mehrfach ausführen.
+über `sudo`. Er funktioniert auf Proxmox (kein sudo) ebenso wie auf Debian oder dem Pi und lässt sich gefahrlos
+mehrfach ausführen. Ab Version 0.13.0 verankert der Befehl bei klassischem sudo Prüfsummen für die Hilfsskripte.
+Auf Systemen mit `sudo-rs` (Standard ab Ubuntu 25.10) wird die Absicherung per Prüfsumme nicht unterstützt.
 
 **Root-Rechte und Gruppe docker:** Am Befehl musst du dafür nichts von Hand ändern. Die Seite setzt die Haken „Root-Rechte
 ohne Passwort“ und „Zur Gruppe docker hinzufügen“ selbst, weil die eingeschalteten Module melden, was sie brauchen.
@@ -363,15 +391,18 @@ Nodvard Shield und Push-Nachrichten, dazu das Modul Docker, wenn auf einem Serve
 Gameserver, wenn dort ein Spieleserver steht. **Proxmox VE und Proxmox-Backups brauchst du nur, wenn du Proxmox
 nutzt** – sonst lass sie aus (siehe [4.1](#41-ohne-proxmox)). Der Rest nach Bedarf.
 
-**Serverrechte nachziehen:** Das Einschalten allein ergänzt keine Rechte auf dem Server. Schaltest du Docker oder
-Nodvard Shield erst nach der SSH-Einrichtung ein, können Docker-Gruppe und Hilfsskripte fehlen. Öffne unter
+**Serverrechte nachziehen und Prüfsummen setzen:** Das Einschalten allein ergänzt keine Rechte auf dem Server.
+Schaltest du Docker oder Nodvard Shield erst nach der SSH-Einrichtung ein, können Docker-Gruppe und Hilfsskripte fehlen.
+Zudem führt sudo die Hilfsskripte ab Version 0.13.0 nur noch mit geprüfter Prüfsumme aus. Wiederhole die
+Server-Einrichtung nach der Aktualisierung auf 0.13.0 einmal auf jedem Server: Öffne unter
 **Einstellungen → Server & Zugänge** den vorhandenen Zugang und führe für jeden betroffenen Server mit bestehendem Schlüsselzugang
-den neu angezeigten Einrichtungsbefehl erneut aus ([3.3](#33-einrichtungsbefehl-auf-dem-server-ausführen)).
-Prüfe danach die Verbindung erneut ([3.4](#34-verbindung-prüfen)).
+den neu angezeigten Einrichtungsbefehl erneut aus ([3.3](#33-einrichtungsbefehl-auf-dem-server-ausführen)). Bis zur
+Wiederholung laufen die Server wie bisher. Prüfe danach die Verbindung erneut ([3.4](#34-verbindung-prüfen)).
 
 **„Beta“:** Gameserver, Home Assistant, Jellyfin, Netzwerk, Nginx Proxy Manager, Pi-hole, Plex, qBittorrent, Synology DSM,
 Uptime Kuma und Vaultwarden tragen das Kennzeichen „Beta“ (in den Einstellungen, im Assistenten, im Menü und über der Seite
 des Moduls). Sie funktionieren, sind aber noch nicht so gründlich erprobt wie der Rest. Rückmeldungen helfen.
+Netzwerk kommt nur in eigenen Builds als optionaler Wegweiser zu Pi-hole und Nginx Proxy Manager mit.
 
 **Synology DSM** (Beta, nur lesend) zeigt Zustand, Speicher, Festplatten und Hyper Backup einer oder mehrerer Synology.
 Lege dafür in DSM ein eigenes Konto nur für Nodvard Deck an (für die meisten Angaben in der Gruppe „administrators“) und
@@ -652,7 +683,8 @@ Was genau hakt, zeigt **„Verbindung prüfen“** auf der Seite des Servers Pun
 Die häufigsten Meldungen:
 
 **„Der Server hat den Schlüssel nicht akzeptiert.“:** Meist fehlt auf dem Server noch der Einrichtungsbefehl
-([3.3](#33-einrichtungsbefehl-auf-dem-server-ausführen)); ihn auszuführen ist gefahrlos, auch mehrmals. Läuft dort
+([3.3](#33-einrichtungsbefehl-auf-dem-server-ausführen)); ihn auszuführen ist gefahrlos, auch mehrmals. Verlangt der Server
+Zwei-Faktor-Authentifizierung (2FA): [Server mit Zwei-Faktor-Authentifizierung anbinden](SSH-MIT-2FA.md). Läuft dort
 Dropbear und wurde der Server mit einer älteren Version eingerichtet: [Anhang E.4](#e4-was-der-einrichtungsbefehl-genau-tut).
 
 **Server fehlt im Terminal / „Noch kein Server prüfbar“ oder „Keine Linux-Server mit SSH-Zugang gefunden“ bei Nodvard Shield:** Kein
@@ -722,10 +754,10 @@ heißt er `nodvard-deck-nodvard-deck-1`. Die Konsole findest du so:
 Dieselbe Anleitung steht auf der Anmeldeseite unter „Passwort vergessen?“.
 
 **Gut zu wissen:** Wenn Nodvard Deck jemanden „überall abmeldet“ (Passwort geändert, Zwei-Faktor
-zurückgesetzt oder abgeschaltet, Notfall-Befehl) oder du dich abmeldest, endet die Anmeldung sofort,
-auch für einen schon ausgestellten Zugangs-Schlüssel im Browser: Die nächste Anfrage damit wird
-abgelehnt. Offene Terminal- und Konsolen-Sitzungen einer beendeten Anmeldung schließen sich nach
-spätestens 15 Sekunden, die Live-Aktualisierung nach spätestens 30 Sekunden.
+zurückgesetzt oder abgeschaltet, Notfall-Befehl) oder du dich abmeldest, endet die Sitzung sofort:
+Das Anmelde-Cookie im Browser wird ungültig und die nächste Anfrage damit wird abgelehnt. Offene
+Terminal- und Konsolen-Sitzungen einer beendeten Anmeldung schließen sich nach spätestens 15 Sekunden,
+die Live-Aktualisierung nach spätestens 30 Sekunden.
 
 ## Anhang
 
@@ -741,7 +773,7 @@ Zum Nachschlagen: Technik, Sonderfälle und Einzelheiten, die du für den Start 
 | F | [Root-Rechte ohne Passwort und Gruppe docker](#f-root-rechte-ohne-passwort-und-gruppe-docker) | was die Haken erlauben |
 | G | [Module im Detail](#g-module-im-detail) | ohne Proxmox, Proxmox von Hand, Adress-Check, Widgets |
 | H | [Automatik und Wartungsfenster](#h-automatik-und-wartungsfenster) | Freigaben, Skripte ohne Klick, automatische Updates |
-| I | [Updates](#i-updates) | neue Version, Update per Knopf, Kopie vor der Migration |
+| I | [Updates](#i-updates) | neue Version, Update per Knopf, Kopie vor der Migration, Meldungen der Update-Zentrale |
 | J | [Wenn etwas hakt](#j-wenn-etwas-hakt) | Fehlermeldungen von Proxmox, Modulen und Anmeldung |
 | K | [Nodvard Deck startet nicht: die Notseite](#k-nodvard-deck-startet-nicht-die-notseite) | Notfallcode, Stand vor dem Update |
 | L | [Ohne Oberfläche](#l-ohne-oberfläche) | Server über die API einrichten |
@@ -754,19 +786,91 @@ Compose-Fassung für Oberflächen: [Installation je Plattform](13-INSTALLATION.m
 
 ### A.1 Daten: Speicher oder eigener Ordner
 
-Standard ist der Docker-Speicher (Volume) `nodvard-deck-data`. Er braucht keine Rechte-Einstellungen, auch nicht auf
-einem NAS. Ein eigener Ordner (`<ordner>:/app/data`) geht auch: Dann macht der Container beim Start den Benutzer mit der
-Nummer 1000 zum Besitzer dieses Ordners. Wann das auf NAS-Freigaben scheitert und was dann hilft:
-[Installation je Plattform, „Gut zu wissen“](13-INSTALLATION.md#gut-zu-wissen-egal-welcher-weg). Die Datenbank wird beim
-Containerstart automatisch angelegt bzw. aktualisiert, dafür ist nichts zu tun.
+Standard ist der Docker-Speicher (Volume) `nodvard-deck-data`. Ein frisches Volume erhält die passenden Rechte aus
+dem Image. Mit der Compose-Datei unten (`user: "1000:1000"`) startet Deck als `1000:1000`, auch Migration, Notseite und Healthcheck laufen ohne root. Ohne `user:` startet das Image als root und gibt nach dem Setzen der Besitzrechte an `1000:1000` ab. Ein eigener
+Ordner (`./daten:/app/data`) muss vorher diesem Nutzer gehören: `mkdir -p daten && sudo chown 1000:1000 daten`.
+Auf NAS-Freigaben müssen die Rechte für diese UID/GID am NAS gesetzt werden, wenn dort `chown` nicht erlaubt ist.
+Die Datenbank wird beim Containerstart automatisch angelegt bzw. aktualisiert.
+
+Die Compose-Vorgaben, hier als vollständiges Beispiel:
+
+```yaml
+name: nodvard-deck
+services:
+  nodvard-deck:
+    image: ghcr.io/nodvard/deck:latest
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=1777
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    ports:
+      - "8080:8080"
+    volumes:
+      - nodvard_deck_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-I", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health', timeout=2)"]
+      interval: 30s
+      timeout: 3s
+      start_period: 300s
+      retries: 3
+volumes:
+  nodvard_deck_data:
+    name: nodvard-deck-data
+```
+
+Schreibbar bleiben der Datenordner, `/tmp` und ausdrücklich eingebundene Ziele wie `/backups` oder der Kanal
+`/app/updater`. Zusätzliche Capabilities braucht Deck nicht: Uvicorn lauscht auf Port 8080 (`deploy/Dockerfile`),
+Serverzugriffe laufen über SSH (`backend/src/nodvard_deck/core/ssh.py`), OCR als normaler Prozess. Es gibt keine
+Spracheingabe im Frontend; Kamera, Mikrofon und Standort bleiben im Browser gesperrt. HSTS wird nur bei erkanntem
+HTTPS gesetzt. Proxy-Angaben zählen nur von einem eingetragenen vertrauenswürdigen Proxy. Über HTTP bleibt die
+Warnung vor unverschlüsseltem Zugriff bestehen. Die Notseite sendet HSTS immer; Browser beachten es nur über HTTPS.
+CORP `same-origin` gilt für API-Antworten. Ausgenommen ist `/api/v1/health` mit CORP `cross-origin`, damit Startseiten
+wie Homarr oder Homepage den Zustand von Deck direkt aus dem Browser abfragen können.
+Öffentliche Logos, Favicons und App-Symbole erhalten bei GET/HEAD CORP `cross-origin` und können auf fremden Webseiten
+eingebunden werden. Das betrifft `/api/v1/branding/logo`, `/api/v1/branding/favicon` und die App-Symbole unter
+`/api/v1/app/icon-*.png` (180, 192 und 512 Pixel, auch die Varianten mit `-maskable`). API-Antworten erhalten weiterhin
+`no-store`, die vorhandenen eigenen Cache-Regeln für Symbole, Bundles und andere statische Ressourcen bleiben erhalten.
+
+**Bestehende Installation umstellen:** Erst eine Sicherung erstellen. Den bisherigen Volume-Namen und alle
+Bind-Mounts behalten: Im Repository heißt das Volume `deploy_lattice_data`, in der Schnellinstallation
+`nodvard-deck-data`. Alte Starts haben die Daten bereits UID/GID 1000 zugewiesen; dann ist kein Besitzwechsel nötig.
+Vor dem Neustart die Sicherheitsvorgaben oben in die vorhandene Compose-Datei übernehmen und alte `user: root`-Angaben
+entfernen. Bei abweichenden Besitzrechten nach dem Laden oder Bauen des neuen Images im Ordner dieser Compose-Datei:
+
+```bash
+docker compose stop nodvard-deck
+docker compose run --rm --no-deps --user 0:0 --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --entrypoint /usr/local/bin/migrate-data nodvard-deck
+docker compose up -d nodvard-deck
+```
+
+Nur dieser einmalige Aufruf läuft als root. `CHOWN` erlaubt den Besitzerwechsel, `DAC_OVERRIDE` das Durchlaufen
+alter geschützter Ordner. Das Skript ändert ausschließlich Besitzrechte unter `/app/data`, folgt keinen Links und
+bleibt auf dessen Dateisystem. Währenddessen darf kein anderer Container diesen Datenordner benutzen.
+Die normalen Starts brauchen keine dieser Capabilities. Ein zusätzlicher Sicherungsordner unter `/backups`
+braucht ebenfalls Schreibrechte für UID 1000.
+
+Der Update-Helfer übernimmt den Nutzer des neuen Images, auch bei alten gleichwertigen root-Angaben. Andere eigene
+Nutzer bleiben erhalten. Er ändert keine Dateirechte und schreibt die Compose-Datei nicht um; abweichende
+Besitzrechte deshalb vor dem Update wie oben korrigieren und den Helfer vorher aktualisieren. Die Einstellungen
+`read_only`, `tmpfs`, `security_opt` und `cap_drop` übernimmt er vom laufenden Container. Sie werden bei bestehenden
+Installationen durch Anpassen der Compose-Datei und `docker compose up -d` wirksam. Scheitert der neue Start,
+greift die vorhandene Rückkehr zum alten Container.
 
 ### A.2 Aus dem Repository bauen (für Entwickler)
 
 Wer das Repository klont und das Image selbst baut, startet im Ordner `deploy/` des Repositorys
 (`docker compose build --pull && docker compose up -d`; `--pull` holt frische Basis-Images). Bauen, auf einen Raspberry Pi ausliefern
-(`scripts/deploy_pi.sh`), Rückfallweg und Rollback stehen in
-[deploy/README.md](../deploy/README.md). Die Kontrolle danach ist dieselbe wie oben
-(`curl -s http://localhost:8080/api/v1/health`).
+(`scripts/deploy_pi.sh`), Rückfallweg und Rollback stehen in [deploy/README.md](../deploy/README.md). Beim
+Ausliefern benennt `deploy_pi.sh` alte `LATTICE_*`-Variablen in `deploy/.env` auf dem Zielrechner automatisch
+in `NODVARD_DECK_*` um und behält eine Sicherungskopie. Ausnahme: Stehen in `deploy/.env.deploy` DNS-Einstellungen
+(`NODVARD_DECK_DNS_1/2`), schreibt `deploy_pi.sh` die `.env` auf dem Zielrechner komplett neu; eigene Zeilen dort gehen
+verloren. Wer von Hand ausliefert, nimmt diese Umbenennung in der `.env`-Datei selbst vor. Liegt auf dem Zielrechner noch eine Version vor 0.6, bricht der Vorgang mit einem Hinweis ab.
+Die Kontrolle danach ist dieselbe wie oben (`curl -s http://localhost:8080/api/v1/health`, Antwort `{"status":"ok"}`).
 
 Bei dieser Installation laufen die Befehle aus dieser Anleitung im Ordner `deploy/` des
 Repositorys (z. B. `cd ~/deck/deploy`) statt in `~/nodvard-deck`. Abschnitte, die nur für diesen
@@ -777,18 +881,20 @@ Weg gelten, sind entsprechend markiert.
 ### B.1 Der Einrichtungscode
 
 - Groß-/Kleinschreibung, Striche und Leerzeichen sind egal.
-- Der Code bleibt über Neustarts gleich (er liegt als `setup_code.txt` im Datenverzeichnis,
-  nur für Nodvard Deck lesbar) und wird nach dem Anlegen des Kontos gelöscht.
+- Der zufällig erzeugte Code bleibt über Neustarts gleich (er liegt als `setup_code.txt` im Datenverzeichnis,
+  nur für Nodvard Deck lesbar) und wird nach dem Anlegen des Kontos gelöscht. Ein vorgegebener Code wird nicht in
+  diese Datei geschrieben; dann gilt bis zur Einrichtung der Wert von `NODVARD_DECK_SETUP_CODE`.
 - Falsch eingegebene Codes werden wie falsche Passwörter gebremst (nach 10 Fehlversuchen
   einige Minuten Pause) und stehen im Protokoll als „Einrichtungscode falsch“.
-- Bestehende Installationen mit Konto merken davon nichts.
+- Sobald ein Konto existiert, bleibt `NODVARD_DECK_SETUP_CODE` wirkungslos. Beim Start weist das Protokoll darauf
+  hin, ohne den Wert auszugeben.
 
 ### B.2 Die Schritte im Einzelnen
 
-Der Assistent hat **sechs Schritte** und zeigt oben „Schritt X von 6“. Nur der erste ist Pflicht, alles
+Der Assistent hat **sieben Schritte** und zeigt oben „Schritt X von 7“. Nur der erste ist Pflicht, alles
 andere lässt sich überspringen und später in den Einstellungen nachholen. „Zurück“ gibt es ab Schritt 3.
 
-**Schritt 1 von 6 — Administrator-Konto anlegen**
+**Schritt 1 von 7 — Administrator-Konto anlegen**
 
 - **Einrichtungscode:** siehe [2.1](#21-den-einrichtungscode-finden).
 - **Benutzername:** mindestens 3 Zeichen, nur Kleinbuchstaben, Ziffern sowie `.`, `-` und `_`, ohne
@@ -800,7 +906,7 @@ andere lässt sich überspringen und später in den Einstellungen nachholen. „
 Dieses erste Konto ist der **Inhaber**. Der Inhaber darf immer alles, auch wenn später
 Rollen verstellt werden – so kann man sich nicht aussperren.
 
-**Schritt 2 von 6 — Zeitzone**
+**Schritt 2 von 7 — Zeitzone**
 
 Zeitpläne (zum Beispiel das Morgen-Briefing um 7 Uhr) und Wartungsfenster richten sich nach dieser
 Zeitzone. Vorausgewählt ist die Zeitzone des Geräts, mit dem du im Browser sitzt; kennt der Browser
@@ -811,10 +917,9 @@ geht später unter Einstellungen → System. Ohne Suche steht die gewählte Zone
 (Berlin, Wien, Zürich …); bekannte Zonen zeigen daneben den deutschen Namen (etwa „Österreich, Wien“ bei
 `Europe/Vienna`).
 
-**Schritt 3 von 6 — Was willst du nutzen?**
+**Schritt 3 von 7 — Was willst du nutzen?**
 
-Alle mitgelieferten Module als Kacheln mit Schalter (außer dem Beispiel-Modul „Hello World“ für Entwickler, das nur
-unter Einstellungen → Erweiterungen steht), nach Themen sortiert: zuerst „Für deine Server“
+Alle mitgelieferten Module als Kacheln mit Schalter, nach Themen sortiert: zuerst „Für deine Server“
 (Server-Zustand, Terminal, Docker, Proxmox VE …), dann Sicherheit, Werkzeuge, Verbindungen zu anderen
 Diensten. Ein Klick auf die Kachel oder den Schalter schaltet das Modul ein oder wieder aus. Kein Modul
 ist Pflicht („Überspringen“). Module, die danach noch Angaben brauchen (Adresse, Zugangsdaten,
@@ -823,7 +928,7 @@ Assistenten** unter Einstellungen → Erweiterungen, und die Karte „Erste Schr
 daran (siehe [4.](#4-erweiterungen-einschalten)). Reihenfolge und Gruppe stammen aus dem Manifest des
 Moduls (`category`, `sort_order`).
 
-**Schritt 4 von 6 — Zwei-Faktor-Anmeldung (optional)**
+**Schritt 4 von 7 — Zwei-Faktor-Anmeldung (optional)**
 
 „Jetzt einrichten“ fragt zur Sicherheit erst dein aktuelles Passwort ab („Weiter“) und zeigt dann einen
 **QR-Code** für die Authenticator-App (er wird im Browser gezeichnet,
@@ -834,7 +939,7 @@ kopieren oder als Textdatei speichern, dann „Ich habe die Codes gesichert“. 
 Auswahl, bei der Passwortabfrage und neben „Bestätigen“, richtet nichts ein und geht zu Schritt 5; nachholen
 unter Einstellungen → Mein Konto. „Zurück“ führt innerhalb des Schritts zur Auswahl.
 
-**Schritt 5 von 6 — Aussehen (optional)**
+**Schritt 5 von 7 — Aussehen (optional)**
 
 Produktname, Untertitel (die kleine Zeile unter dem Namen; derselbe Text ist der Name der App auf dem
 Handy-Startbildschirm, also kurz halten), Akzentfarbe → „Speichern“, oder „Überspringen“. Logo, Favicon und Theme
@@ -848,7 +953,15 @@ unbedienbar, hänge `?ohne-css=1` an die Adresse (z. B. `http://deck:8080/settin
 der Tab ohne eigenes CSS, auch beim Weiterklicken; die Karte „Eigenes CSS“ zeigt das an und hat den Knopf „Wieder
 einschalten“. Für alle anderen gilt das CSS weiter, bis du es korrigierst und speicherst.
 
-**Schritt 6 von 6 — Fertig**
+**Schritt 6 von 7: Nutzungsdaten (optional)**
+
+Drei unabhängige Schalter, standardmäßig aus. „Das wird gesendet“ zeigt das echte JSON.
+„Weiter ohne Teilen“ geht ohne Zustimmung weiter. „Teilen“ speichert die ausdrückliche Auswahl.
+Bis Empfänger und Datenschutzfreigabe konfiguriert sind, bleibt das Teilen gesperrt.
+[Alle Angaben und der Löschknopf](18-NUTZUNGSDATEN.md).
+Bei Nodvard Dock entfällt die Modul-Auswahl, der Assistent hat dort sechs Schritte.
+
+**Schritt 7 von 7: Fertig**
 
 Hinweis auf die Karte „Erste Schritte“ im Cockpit und der Notfall-Befehl (siehe
 [7.3](#73-ausgesperrt-notfall-befehle)); derselbe Befehl steht auf der Anmeldeseite hinter „Passwort
@@ -1110,10 +1223,12 @@ Ohne beide Haken bekommst du die **schlanke Variante**: eigener Benutzer, nur Sc
 Root-Rechte. Die reicht für Terminal, Dateien und Skripte.
 
 **Was der Haken „Root-Rechte“ einrichtet:** Standardmäßig nur die Hilfsskripte der Module (Nodvard Shield,
-Server-Zustand und Docker im Modus „Nur bedienen“), jedes mit einer eigenen, engen sudo-Regel; eine volle sudo-Regel gibt
-es dann nicht. Die volle Regel (`<benutzer> ALL=(root) NOPASSWD: ALL`) kommt nur dazu, wenn ein Modul root braucht und
-kein Hilfsskript hat, oder wenn du unter „Erweitert“ „Volle Rechte“ setzt. Braucht auf dem Server kein Modul root,
-richtet der Haken gar kein sudo ein.
+Server-Zustand und Docker im Modus „Nur bedienen“), jedes mit einer eigenen, engen sudo-Regel; eine volle sudo-Regel
+gibt es dann nicht. Ab Version 0.13.0 führt sudo diese Hilfsskripte nur noch in der geprüften Fassung mit fester
+SHA-256-Prüfsumme aus. Bei bestehenden Servern wird diese Bindung aktiv, sobald der Einrichtungsbefehl einmal neu
+ausgeführt wurde. Mit `sudo-rs`, dem Standard ab Ubuntu 25.10, funktioniert die Prüfsumme nicht. Die volle Regel
+(`<benutzer> ALL=(root) NOPASSWD: ALL`) kommt nur dazu, wenn ein Modul root braucht und kein Hilfsskript hat, oder wenn
+du unter „Erweitert“ „Volle Rechte“ setzt. Braucht auf dem Server kein Modul root, richtet der Haken gar kein sudo ein.
 
 **Das ist praktisch root – die Seite sagt es dir auch:** Wer in der Gruppe `docker` ist oder die volle sudo-Regel
 hat, kann auf dem Server praktisch alles. Nodvard Deck startet ohne Hilfsskript einige root-Befehle
@@ -1169,11 +1284,15 @@ Einrichtung meldet: **[Root-Rechte und Hilfsskripte](14-ROOT-RECHTE.md)**.
   seit“. Die Platte zeigen LXC-Container und Proxmox-Knoten. Bei VMs bleibt sie leer, weil Proxmox für sie keinen
   belegten Platz meldet. Gestoppte Gäste bleiben eine Zeile. Die Werte holt der Sammler alle 30 Sekunden mit einer
   Abfrage je Proxmox-Verbindung.
-- **Docker-Container:** das Modul Docker, für Server mit der Markierung `docker`. Dort startest, stoppst und löschst
-  du Container (gelöscht werden nur gestoppte; Volumes und Image bleiben), liest ihre Logs live, öffnest mit
-  „Konsole“ eine Shell im Container und spielst neuere Images ein („Einspielen“, nur bei Docker-Compose-Diensten). Stürzt
-  die neue Version beim Start ab, geht das Modul Docker in der Regel von selbst auf die alte zurück – nie bei
-  Datenbanken und anderen Datenspeichern; abschaltbar unter „Konfigurieren“ („Bei Fehlstart automatisch zurück“).
+- **Docker-Container und Stacks aus Git:** das Modul Docker, für Server mit der Markierung `docker`. Dort startest,
+  stoppst und löschst du Container (gelöscht werden nur gestoppte; Volumes und Image bleiben), liest ihre Logs live,
+  öffnest mit „Konsole“ eine Shell im Container und spielst neuere Images ein („Einspielen“, nur bei Docker-Compose-Diensten).
+  Stacks lassen sich auch direkt aus Git laden und nach Zeitplan auf Änderungen prüfen. Deck lädt Stacks aus Git standardmäßig
+  nur von öffentlichen Adressen. Für Gitea oder ähnliche Server im Heimnetz schaltest du in den Einstellungen des Moduls Docker
+  unter „Erweitert“ den Schalter „Git-Server im eigenen Netz erlauben“ ein. Deck verbindet sich nur mit der vorab geprüften
+  Zieladresse. Hinter einem Proxy (`HTTPS_PROXY`) holt Deck nur von Ziffern-Adressen; Git-Server mit Domainnamen gehören in
+  `NO_PROXY`. Stürzt eine neue Version beim Start ab, geht das Modul Docker in der Regel von selbst auf die alte zurück (nie bei
+  Datenbanken; abschaltbar unter „Konfigurieren“).
   Nach „Starten“, „Neustart“ und „Stack neu starten“ sieht Deck bis zu einer Minute lang nach, ob die Container
   wirklich laufen und laufen bleiben (ohne Healthcheck: zweimal im Abstand von 15 Sekunden ohne neuen Start). Stürzt
   ein Container gleich wieder ab, gilt die Aktion als fehlgeschlagen und sagt, warum (etwa „beendet, Exit-Code 1“).
@@ -1261,10 +1380,13 @@ Ausführlich in **[docs/10-PROXMOX-TOKEN.md](10-PROXMOX-TOKEN.md)**, der Weg mit
 
 ### G.3 Erweiterungen verwalten
 
-Unter Einstellungen → Erweiterungen stehen die Module in denselben Gruppen wie im Assistenten; die Beispiel-Module
-für Entwickler („Hello World“) stehen ganz unten unter „Für Entwickler“. Hat ein Modul Server eingelesen (etwa Proxmox),
+Unter Einstellungen → Erweiterungen stehen die Module in denselben Gruppen wie im Assistenten.
+Hat ein Modul Server eingelesen (etwa Proxmox),
 nennt die Rückfrage beim Ausschalten ihre Zahl: Die Server bleiben in der Liste stehen, im Cockpit tragen sie
 „Modul aus“, und ihr Zustand wird nicht mehr aktualisiert. Löschen kannst du sie unter Einstellungen → Server & Zugänge.
+
+**Für Entwickler:** Das ausführbare Beispiel [hello-world](02-EXTENSION-API.md) ist in der SDK-Dokumentation erklärt
+und gehört nicht zum Standardimage. Selbst installierte Beispiel-Module stehen unter „Für Entwickler“.
 
 ### G.4 Adress-Check (Nginx Proxy Manager)
 
@@ -1415,6 +1537,22 @@ Einstellungen → **Automatik & Sicherheit**:
   Nodvard Shield kommen nicht nach – sie bleiben als offene Ereignisse im Einbruchschutz stehen,
   und das Morgen-Briefing nennt sie.
 
+**Wochenbericht** (Nodvard Shield): Im Reiter „Wochenbericht“ findest du die Berichte der letzten zwölf Wochen.
+Ab Werk erstellt Shield jeden Montag um 08:00 Uhr einen Bericht für die ganze Installation, in der Zeitzone unter
+Einstellungen → System. Unter Einstellungen → Erweiterungen → „Nodvard Shield“ kannst du den Wochenbericht
+ausschalten oder seinen Zeitplan ändern.
+
+Jeder Bericht hält den damaligen Stand je Server fest: offene Updates und Sicherheitsupdates, das letzte
+Virenscan-Ergebnis, die zuletzt gespeicherten Fail2ban-Sperren, den letzten erfolgreichen Lynis-Härtungswert sowie
+neue und erledigte Schadsoftware-Funde im Berichtszeitraum. Fehlende Ergebnisse stehen als unbekannt im Bericht.
+Shield liest dafür nur seine gespeicherten Daten und startet weder neue Scans noch Server-Abfragen.
+Zertifikatsabläufe sind bisher nicht in Shield gespeichert; dafür steht ausdrücklich „Keine gespeicherten
+Zertifikatsdaten“ im Bericht. Daraus folgt keine Aussage, ob Zertifikate bald ablaufen.
+
+Über deine vorhandenen Meldungskanäle kommt eine Kurzfassung mit Link zum vollständigen Bericht.
+Ein alter Bericht verändert sich nicht, wenn später neue Ergebnisse eingehen. Vor dem ersten geplanten Lauf ist der
+Verlauf leer; Berichte für frühere Wochen werden nicht nachträglich erzeugt.
+
 **Automatische Updates** (Nodvard Shield): Einstellungen → Erweiterungen → „Nodvard Shield“ →
 „Updates automatisch einspielen“ ist ab Werk **aus**, ebenso „Danach automatisch neu
 starten, wenn nötig“. Erst einschalten, wenn die Update-Zentrale eine Weile sauber
@@ -1513,6 +1651,9 @@ bei ghcr.io nach, wo die fertigen Images liegen; mit **„Jetzt suchen“** geht
   dabei verloren. Oder wieder die neue Version eintragen. Einzelheiten in [Anhang I.3](#i3-die-kopie-vor-der-migration) und
   [Anhang K](#k-nodvard-deck-startet-nicht-die-notseite).
 - Läuft ein **selbst gebautes** Image (z. B. vom PC über `scripts/deploy_pi.sh`), sagt die Karte das; aktualisiert wird dann auf demselben Weg.
+- **Nach dem Update auf 0.13.0 beachten:**
+  1. **Neu anmelden:** Die Weboberfläche nutzt nur noch das Cookie von Nodvard Deck. Wer von einer Version vor 0.6.2 aktualisiert oder Deck seitdem nicht im Browser neu geladen hat, meldet sich nach dem Start einmal neu an.
+  2. **Server-Einrichtung einmal wiederholen:** Führe den Einrichtungsbefehl auf jedem Server unter **Einstellungen → Server & Zugänge** einmal neu aus, damit sudo die Hilfsskripte mit Prüfsumme absichert. Auf Rechnern mit `sudo-rs` (ab Ubuntu 25.10) greift die Prüfsumme nicht.
 
 ### I.2 Update per Knopf (Update-Helfer)
 
@@ -1582,6 +1723,21 @@ Vor jedem Update, das die Datenbank umbaut (eine **Migration**), legt Nodvard De
   Stand mit seinen Schlüsseln. Er wird danach nie durch die Sicherung ersetzt.
 - Bei einer anderen Datenbank als SQLite gibt es keine Kopie (bitte vorher selbst sichern).
 
+### I.4 Was die Update-Zentrale meldet und was es heißt
+
+<a id="was-die-update-zentrale-meldet-und-was-es-heisst"></a>
+<a id="i4-was-die-update-zentrale-meldet-und-was-es-heisst"></a>
+
+Unter **Einstellungen → System → „Updates“** zeigt die Karte den Zustand der Container-Aktualisierung von Nodvard Deck. Für Paket-Updates des Betriebssystems auf Servern ist das Modul Nodvard Shield zuständig (Reiter „Updates“). Die folgende Übersicht führt die belegten Zustände auf, erklärt ihre Bedeutung und nennt den nächsten Schritt:
+
+| Meldung oder Zustand | Was es heißt | Nächster Schritt |
+|---|---|---|
+| **„keine gefunden“** oder **„Es gibt noch keine fertige Version zum Herunterladen.“** | Die Suche war erfolgreich, aber im gewählten Kanal (Stable oder Beta) gibt es keine passende Version, zum Beispiel wenn die Registry nur Vorabversionen wie `0.6.0-rc1` anbietet. Ein Abruffehler ist das nicht; der steht als eigene Meldung in der Karte. | Nichts zu tun: Die nächste fertige Version erscheint beim nächsten Suchlauf von selbst. Wer Vorabversionen will, stellt den Kanal auf Beta um. |
+| **„Bei der letzten Update-Suche kam keine Prüfsumme für diese Version an. Such erneut nach Updates.“** | Die Registry hat keinen Digest (`latest_digest`) übermittelt, den der Update-Helfer zur kryptografischen Prüfung vor dem Einspielen verlangt. | Erneut auf **„Jetzt suchen“** klicken. Bleibt der Digest weiterhin aus, das Update manuell über die Anleitung (zum Beispiel per Docker Compose) einspielen. |
+| **„Für Version X liegt noch keine gültige Freigabe vor, oder sie ließ sich bei der Suche nicht abrufen. Such später erneut nach Updates; von Hand geht es schon mit der Anleitung unten.“** | Der Abruf der Freigabe-Signatur von github.com ist fehlgeschlagen (Netzwerkfehler oder Zeitüberschreitung) oder die Freigabe am Release fehlt noch. | Netzwerkverbindung zu github.com prüfen. Bei fortdauerndem Fehler das Update manuell über Docker Compose durchführen. |
+| **Sicherheitsupdate gefunden, aber Benachrichtigung bleibt aus** | Bei der Suche wurde ein Sicherheitsupdate erkannt, beim Erstellen oder Übermitteln der Benachrichtigung (`notify_security`) trat jedoch ein Fehler auf. Deck fängt die Ausnahme ab und protokolliert `security_notice_failed` im Server-Log. | Benachrichtigungskanäle in den Einstellungen kontrollieren und Server-Protokolle auf Zustellungsfehler prüfen. |
+| **Paketmanager-Fehler auf dem Host (`dpkg returned an error code`, `apt lock`, fehlende Root-Rechte, Zeitüberschreitung)** | Diese Fehler betreffen Linux-Paketmanager auf den verbundenen Servern und treten in den Systemeinstellungen von Deck nicht auf. | Für Paket-Updates von Servern das Shield-Modul (Reiter „Updates“) nutzen. In den Deck-Systemeinstellungen werden ausschließlich Container-Images von Nodvard Deck selbst aktualisiert. |
+
 ## J. Wenn etwas hakt
 
 <a id="11-wenn-etwas-hakt"></a>
@@ -1649,6 +1805,8 @@ steht in den Einstellungen `http://` statt `https://` (oder umgekehrt), oder ein
 Einstellungen die endgültige Adresse eintragen, so wie sie im Browser nach der Weiterleitung steht. Andere Fehler der
 Nextcloud erscheinen als fester Satz, etwa „Nextcloud ist gerade nicht bereit (HTTP 503), zum Beispiel im
 Wartungsmodus.“ oder „In der Nextcloud ist kein Speicherplatz mehr frei (HTTP 507).“
+
+**Git-Server im eigenen Netz wird abgewiesen oder Git-Stack schlägt fehl:** Deck lädt Stacks aus Git nur von öffentlichen Adressen. Für lokale Server (wie Gitea im Heimnetz) musst du unter **Einstellungen → Erweiterungen → Docker → Erweitert** den Schalter **„Git-Server im eigenen Netz erlauben“** aktivieren. Läuft Deck hinter einem Proxy (`HTTPS_PROXY`), dürfen Git-Server mit Domainnamen nicht über den Proxy laufen; trage ihren Namen in die Umgebungsvariable `NO_PROXY` ein.
 
 **„Der Zeitplan „…“ ist ungültig“** beim Speichern (Einstellungen einer Erweiterung, Skripte): Ein eigener Zeitplan
 (Auswahl „Eigener“) braucht genau fünf Angaben: Minute (0–59), Stunde (0–23), Tag (1–31), Monat (1–12) und Wochentag
@@ -1757,19 +1915,25 @@ einen gemerkten Server-Schlüssel vergessen. Skript, Schlüssel und die Einricht
 
 ## M. Alte Namen bei älteren Installationen
 
-Nodvard Deck hieß früher „Lattice“. Ein paar alte Namen begegnen dir noch, meist auf Installationen und Servern, die
-schon länger laufen. Sie bleiben mit Absicht, weil bestehende Einrichtungen und der Weg zurück auf eine ältere Version
-daran hängen:
+**Übergangsübersicht bis 1.0:** Nodvard Deck hieß früher „Lattice“. Diese Tabelle bleibt für den Übergang bis 1.0
+erhalten. Einige technische Namen verwendet der aktuelle Code weiterhin, auch für neue Update-Läufe und neue Dateien
+in Quarantäne. Andere kommen nur auf älteren Installationen vor. Benenne diese Namen und Ordner nicht von Hand um,
+weil bestehende Einrichtungen und der Weg zurück auf eine ältere Version daran hängen. Ausgenommen sind
+`LATTICE_*`-Variablen in `.env`: Stelle sie wie in der Tabelle beschrieben auf `NODVARD_DECK_*` um.
 
-| Name | Wo | Warum er bleibt |
+| Name | Wo | Aktueller Stand und Übergang |
 |---|---|---|
 | Benutzer `lattice` | SSH-Zugänge, die eine ältere Version angelegt hat | Die Server sind so eingerichtet, die Zugänge laufen unverändert weiter. Für neue Schlüssel schlägt die Seite `nodvard` vor |
 | Kommentar `lattice@…` | ältere Schlüssel in `~/.ssh/authorized_keys` | Der Einrichtungsbefehl erkennt ihn und trägt den Schlüssel nicht doppelt ein. Neue Schlüssel bekommen `nodvard@…` |
 | `/etc/sudoers.d/lattice-<benutzer>` | ältere volle sudo-Regel auf Servern | Der Einrichtungsbefehl ersetzt sie durch `nodvard-<benutzer>`, wenn sie genau die früher von Nodvard Deck angelegte ist ([Root-Rechte](14-ROOT-RECHTE.md#die-volle-sudo-regel)) |
-| systemd-Einheiten `lattice-upgrade-…` | Updates von Nodvard Shield auf deinen Servern | Fortsetzen und Zurückrollen von Updates hängen daran |
-| Ordner `/var/lib/nexus-updates` und `/var/lib/nexus-quarantine` | auf deinen Servern (Nodvard Shield hatte bis 0.6 eine andere Kennung) | Die Pfade stehen in gespeicherten Funden, und laufende Updates werden über den Ordner fortgesetzt |
+| systemd-Einheiten `lattice-upgrade-…` | Updates von Nodvard Shield auf deinen Servern | Weiterhin der aktuelle Name, auch für neue Läufe. Fortsetzen und Zurückrollen von Updates hängen daran |
+| Ordner `/var/lib/nexus-updates` und `/var/lib/nexus-quarantine` | Updates und Quarantäne von Nodvard Shield auf deinen Servern | Weiterhin die aktuellen Pfade. Die Pfade stehen in gespeicherten Funden, und laufende Updates werden über den Ordner fortgesetzt |
 | Datenbankdatei `lattice.db` (in Sicherungen `db/lattice.db`) | Datenordner | Umbenennen bräuchte eine Migration; nach einem Rückweg öffnete ein älteres Image sonst eine leere Datenbank |
-| `LATTICE_PORT` und die anderen `LATTICE_*`-Variablen | Compose-Datei, `.env` | Rückfall, wenn der neue Name `NODVARD_DECK_*` nicht gesetzt ist, nur noch übergangsweise (spätestens bis 1.0). Nodvard Deck weist den Inhaber in der Übersicht darauf hin |
+| `LATTICE_PORT` und die anderen `LATTICE_*`-Variablen | Compose-Datei, `.env` | Rückfall, wenn der neue Name `NODVARD_DECK_*` nicht gesetzt ist, nur noch übergangsweise (spätestens bis 1.0). `deploy_pi.sh` benennt `LATTICE_*` in `deploy/.env` auf dem Zielrechner automatisch in `NODVARD_DECK_*` um und behält eine Sicherungskopie (nicht bei DNS-Einstellungen in `deploy/.env.deploy`, dann wird die `.env` neu geschrieben). Wer von Hand ausliefert, benennt die Werte in `.env` selbst um. Ausliefern, Sichern und Einspielen brechen ab, wenn auf dem Zielrechner noch eine Version vor 0.6 liegt. Nodvard Deck weist den Inhaber in der Übersicht auf alte Namen hin |
 
+Die Namen für Update-Läufe und Quarantäne sind im aktuellen Code in
+[`detached.py`](../extensions/shield/src/nodvard_deck_ext_shield/detached.py),
+[`antivirus.py`](../extensions/shield/src/nodvard_deck_ext_shield/antivirus.py) und im
+[Hilfsskript für Root-Rechte](../extensions/shield/root-helper/shield-root.sh) festgelegt.
 Die vollständige Liste mit allen Gründen steht in
 [docs/01-ARCHITECTURE.md, „Alte und neue Namen“](01-ARCHITECTURE.md#alte-und-neue-namen).

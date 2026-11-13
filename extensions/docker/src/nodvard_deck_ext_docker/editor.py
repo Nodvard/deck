@@ -3,6 +3,7 @@ der alten Fassung im Verlauf."""
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 import contextlib
 import difflib
@@ -14,18 +15,20 @@ import re
 import secrets
 import stat as statmod
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from nodvard_sdk import REQUEST_WAIT_S
 from nodvard_sdk.actions import ActionRequest, ActionResult, ActionSpec, DryRunReport
 from nodvard_sdk.types import Actor, Risk
+from nodvard_sdk.errors import error_message
 from pydantic import BaseModel, ConfigDict, Field
 
 from .applier import RISK_ORDER
+from .env_values import cmd_with_env, env_stdin
 from .image_apply import PROJECT_RE
 from .stack_actions import IN_FOLDER, NO_FOLDER_EXIT, DockerStackExecutor, busy_text
 from .stacks import (
@@ -39,6 +42,7 @@ from .stacks import (
 
 SAVE_ACTION = "docker.stack_save"
 CHECK_TIMEOUT_S = 60
+REALPATH_TIMEOUT_S = 20
 HISTORY_KEEP = 20
 DRAFT_TTL_S = 24 * 3600
 MAX_DRAFTS = 50
@@ -60,6 +64,30 @@ _SHARED = {
     "network_mode": "das Netz", "pid": "die Prozesse", "ipc": "den gemeinsamen Speicher", "userns_mode": "die Benutzerkennungen",
     "uts": "den Rechnernamen", "cgroup": "die Steuergruppen",
 }
+_SHARED_KEYS = frozenset(_SHARED)
+_SHARES_WITH_OTHERS = ("network_mode", "pid", "ipc")
+_DATA_ROOTS = ("/srv", "/mnt", "/media", "/data")
+"""Ordner, in denen Dienste Nutzdaten ablegen dürfen, ohne dass das als riskant gilt; dazu kommt der Ordner des Stacks."""
+_SAFE_SERVICE_KEYS = frozenset({
+    "image", "command", "entrypoint", "environment", "env_file", "ports", "expose", "restart", "depends_on", "networks", "labels",
+    "healthcheck", "container_name", "hostname", "domainname", "user", "working_dir", "deploy", "profiles", "stop_grace_period",
+    "stop_signal", "tty", "stdin_open", "read_only", "tmpfs", "dns", "dns_search", "dns_opt", "extra_hosts", "cap_drop", "mem_limit",
+    "mem_reservation", "memswap_limit", "cpus", "cpu_shares", "cpu_quota", "cpu_period", "cpuset", "shm_size", "logging", "init",
+    "platform", "pull_policy", "sysctls", "ulimits", "links", "external_links", "mac_address", "group_add", "oom_score_adj",
+    "pids_limit", "scale", "attach", "secrets", "configs", "gpus",
+})
+"""Bekannt harmlos. Alles, was hier und in den eigens geprüften Schlüsseln fehlt, gilt als riskant."""
+_CHECKED_SERVICE_KEYS = frozenset({
+    "privileged", "cap_add", "security_opt", "volumes", "devices", "volumes_from", "device_cgroup_rules", "provider", "build",
+    "post_start", "pre_stop", *_SHARED_KEYS,
+})
+_SAFE_BUILD_KEYS = frozenset({"context", "dockerfile", "dockerfile_inline", "args", "target", "labels", "cache_from", "pull", "platforms", "no_cache"})
+_SAFE_TOP_KEYS = frozenset({"version", "name", "services", "volumes", "networks", "secrets", "configs"})
+_SAFE_SECURITY_OPT = frozenset({"no-new-privileges", "no-new-privileges:true", "no-new-privileges=true"})
+_SAFE_VOLUME_TYPES = frozenset({"nfs", "nfs4", "cifs", "tmpfs"})
+VARIABLE_PATH = "Pfad mit Variable"
+OUTSIDE_DATA = "außerhalb der Datenordner"
+_SAFE_NETWORK_DRIVERS = frozenset({"bridge", "overlay"})
 _PRIVATE_MODE = 0o600
 _SFTP_PERMISSION_DENIED = 3
 
@@ -88,6 +116,11 @@ def cmd_check(stack: Stack, index: int) -> list[str]:
     Standardeingabe, damit Compose den Entwurf liest und nicht die Datei auf dem Server."""
     return ["sh", "-c", IN_FOLDER, "sh", stack.working_dir,
             *compose_argv(stack, "--profile", "*", "config", "--format", "json", stdin_index=index)]
+
+
+def cmd_realpath(paths: list[str]) -> list[str]:
+    """Das tatsächliche Ziel jedes Ordners auf dem Server, auch wenn er noch fehlt."""
+    return ["realpath", "-m", "--", *paths]
 
 
 def _host_path(raw: str) -> str:
@@ -121,57 +154,251 @@ def _path_warning(who: str, raw: Any, verb: str = "bindet", *, read_only: bool =
     return f"{who} bindet {path} vom Server ein{' (nur lesend)' if read_only else ''}."
 
 
+def _roots(extra: tuple[str, ...]) -> tuple[str, ...]:
+    return (*_DATA_ROOTS, *(_host_path(r) for r in extra if r.startswith("/") and _host_path(r) != "/"))
+
+
+def _outside_warning(who: str, raw: Any, verb: str, roots: tuple[str, ...], resolved: dict[str, str] | None, *, read_only: bool = False) -> str | None:
+    """Ein Pfad gilt nur als unbedenklich, wenn er und sein tatsächliches Ziel auf dem Server in einem Datenordner liegen."""
+    if not isinstance(raw, str) or not raw.startswith("/"):
+        return None
+    path = _host_path(raw)
+    real = _host_path(resolved[path]) if resolved and path in resolved else path
+    for candidate in (path, real):
+        if line := _path_warning(who, candidate, verb, read_only=read_only):
+            return line
+    if _under(path, _HARMLESS) and _under(real, _HARMLESS):
+        return None
+    ro = " (nur lesend)" if read_only else ""
+    if real != path and not _under(real, roots):
+        return f"{who} {verb} {path}, das auf dem Server auf {real} zeigt, {OUTSIDE_DATA}{ro}."
+    if not _under(path, roots):
+        return f"{who} {verb} {path} vom Server, {OUTSIDE_DATA}{ro}."
+    return None
+
+
 def _device(raw: Any) -> str | None:
     source = raw.get("source") if isinstance(raw, dict) else raw.split(":", 1)[0] if isinstance(raw, str) else None
     return source if isinstance(source, str) and source else None
 
 
-def risky_settings(config: dict[str, Any]) -> list[str]:
-    """Einstellungen, mit denen ein Container den Server übernehmen oder Schutz abschalten kann, als Sätze für Menschen."""
+def _shares_with_others(key: str, value: Any, own: set[str]) -> bool:
+    """`container:` teilt mit einem fremden Container, `service:` nur, wenn der Dienst nicht in dieser Datei steht."""
+    if key not in _SHARES_WITH_OTHERS or not isinstance(value, str):
+        return False
+    return value.startswith("container:") or (value.startswith("service:") and value.removeprefix("service:") not in own)
+
+
+def _service_findings(name: str, svc: dict[str, Any], roots: tuple[str, ...], resolved: dict[str, str] | None, own: set[str]) -> list[str]:
     found: list[str] = []
-    services = config.get("services")
-    for name, svc in sorted(services.items() if isinstance(services, dict) else []):
-        if not isinstance(svc, dict):
+    who = f"„{name}“"
+    for key in sorted(set(svc) - _SAFE_SERVICE_KEYS - _CHECKED_SERVICE_KEYS):
+        if not key.startswith("x-"):
+            found.append(f"{who} nutzt die unbekannte Einstellung „{key}“; was nicht als harmlos bekannt ist, gilt als riskant.")
+    if svc.get("privileged") is True:
+        found.append(f"{who} bekommt alle Rechte des Servers (privileged).")
+    for key, what in _SHARED.items():
+        if svc.get(key) == "host":
+            found.append(f"{who} teilt {what} mit dem Server ({key}: host).")
+        elif _shares_with_others(key, svc.get(key), own):
+            found.append(f"{who} teilt {what} mit einem anderen Container ({key}: {svc[key]}).")
+    caps = {str(c).upper().removeprefix("CAP_") for c in svc.get("cap_add") or [] if isinstance(c, str)}
+    if caps & _RISKY_CAPS:
+        found.append(f"{who} bekommt besondere Rechte: {', '.join(sorted(caps & _RISKY_CAPS))} (cap_add).")
+    for opt in svc.get("security_opt") or []:
+        if not isinstance(opt, str):
             continue
-        who = f"„{name}“"
-        if svc.get("privileged") is True:
-            found.append(f"{who} bekommt alle Rechte des Servers (privileged).")
-        for key, what in _SHARED.items():
-            if svc.get(key) == "host":
-                found.append(f"{who} teilt {what} mit dem Server ({key}: host).")
-        caps = {str(c).upper().removeprefix("CAP_") for c in svc.get("cap_add") or [] if isinstance(c, str)}
-        if caps & _RISKY_CAPS:
-            found.append(f"{who} bekommt besondere Rechte: {', '.join(sorted(caps & _RISKY_CAPS))} (cap_add).")
-        for opt in svc.get("security_opt") or []:
-            if isinstance(opt, str) and opt.replace("=", ":", 1) in _UNCONFINED:
-                found.append(f"{who} schaltet einen Schutz ab ({opt}).")
-        for volume in svc.get("volumes") or []:
-            if not isinstance(volume, dict) or volume.get("type") != "bind":
-                continue
-            if line := _path_warning(who, volume.get("source"), read_only=volume.get("read_only") is True):
+        if opt.replace("=", ":", 1) in _UNCONFINED:
+            found.append(f"{who} schaltet einen Schutz ab ({opt}).")
+        elif opt not in _SAFE_SECURITY_OPT:
+            found.append(f"{who} ändert eine Schutzeinstellung ({opt}).")
+    for hook in (*(svc.get("post_start") or []), *(svc.get("pre_stop") or [])):
+        if isinstance(hook, dict) and hook.get("privileged") is True:
+            found.append(f"{who} führt einen Befehl mit allen Rechten des Servers aus (post_start oder pre_stop mit privileged).")
+    build = svc.get("build")
+    if isinstance(build, dict):
+        for key in sorted(set(build) - _SAFE_BUILD_KEYS):
+            found.append(f"{who} baut sein Image mit der Einstellung „{key}“ (build); die gilt als riskant.")
+        for key in ("context", "dockerfile"):
+            if line := _outside_warning(who, build.get(key), "baut sein Image aus", roots, resolved):
                 found.append(line)
-        for device in svc.get("devices") or []:
-            source = _device(device)
-            if source and source.startswith("/"):
-                path = _host_path(source)
-                if not _under(path, _HARMLESS) and not path.startswith(_HARMLESS_DEVICES):
-                    found.append(f"{who} bekommt das Gerät {path} des Servers (devices).")
-        provider = svc.get("provider")
-        if isinstance(provider, dict) and provider.get("type"):
-            found.append(f"{who} startet beim Anwenden ein Programm direkt auf dem Server, außerhalb jedes Containers (provider: {provider['type']}).")
-    # Ein benanntes Volume kann per `driver_opts` selbst ein Ordner des Servers sein, ebenso Geheimnisse und Konfigurationen.
-    for section, label, verb in (("volumes", "Das Volume", "bindet"), ("secrets", "Das Geheimnis", "liest"), ("configs", "Die Konfiguration", "liest")):
+    for volume in svc.get("volumes") or []:
+        if not isinstance(volume, dict) or volume.get("type") != "bind":
+            continue
+        if line := _outside_warning(who, volume.get("source"), "bindet", roots, resolved, read_only=volume.get("read_only") is True):
+            found.append(line)
+    for device in svc.get("devices") or []:
+        source = _device(device)
+        if source and source.startswith("/"):
+            path = _host_path(source)
+            if not _under(path, _HARMLESS) and not path.startswith(_HARMLESS_DEVICES):
+                found.append(f"{who} bekommt das Gerät {path} des Servers (devices).")
+    if svc.get("volumes_from"):
+        found.append(f"{who} übernimmt alle Ordner anderer Container (volumes_from).")
+    if svc.get("device_cgroup_rules"):
+        found.append(f"{who} bekommt Zugriff auf Geräte des Servers (device_cgroup_rules).")
+    provider = svc.get("provider")
+    if isinstance(provider, dict) and provider.get("type"):
+        found.append(f"{who} startet beim Anwenden ein Programm direkt auf dem Server, außerhalb jedes Containers (provider: {provider['type']}).")
+    return found
+
+
+def _volume_findings(name: str, entry: dict[str, Any], project: Any, roots: tuple[str, ...], resolved: dict[str, str] | None, flag_external: bool) -> list[str]:
+    label = f"Das Volume „{name}“"
+    if entry.get("external"):
+        if not flag_external:
+            return []
+        return [f"{label} ist ein vorhandenes Volume des Servers, dessen Inhalt diese Datei nicht festlegt (external)."]
+    found: list[str] = []
+    served = entry.get("name")
+    if isinstance(project, str) and isinstance(served, str) and not served.startswith(f"{project}_"):
+        found.append(f"{label} heißt auf dem Server „{served}“ und gehört damit nicht zu diesem Stack.")
+    if entry.get("driver") not in (None, "local"):
+        found.append(f"{label} nutzt den Treiber „{entry['driver']}“, der auf dem Server eigene Programme ausführt.")
+    opts = entry.get("driver_opts") if isinstance(entry.get("driver_opts"), dict) else {}
+    raw, kind = opts.get("device"), opts.get("type")
+    if isinstance(raw, str) and _host_path(raw).startswith("/dev/"):
+        return [*found, f"{label} bindet das Gerät {_host_path(raw)} des Servers ein."]
+    if kind == "overlay":
+        return [*found, f"{label} legt Ordner des Servers übereinander (overlay)."]
+    # Mit `o: bind` gilt der Dateisystemtyp nicht, das Volume ist dann ein Ordner des Servers.
+    binds = "bind" in str(opts.get("o", "")) or kind == "none"
+    if kind in _SAFE_VOLUME_TYPES and not binds:
+        return found
+    if kind not in (None, "none") and not binds:
+        return [*found, f"{label} bindet ein Dateisystem des Servers ein (type: {kind})."]
+    if binds and (line := _outside_warning(label, raw, "bindet", roots, resolved)):
+        found.append(line)
+    return found
+
+
+def bind_sources(config: dict[str, Any], roots: tuple[str, ...] = ()) -> list[str]:
+    """Absolute Ordner des Servers, die in der Datei vorkommen und in einem Datenordner liegen; sie lassen sich auf dem Server auflösen."""
+    allowed, found = _roots(roots), set()
+    services = config.get("services")
+    for svc in services.values() if isinstance(services, dict) else []:
+        for volume in (svc.get("volumes") or []) if isinstance(svc, dict) else []:
+            if isinstance(volume, dict) and volume.get("type") == "bind" and isinstance(volume.get("source"), str):
+                found.add(volume["source"])
+        build = svc.get("build") if isinstance(svc, dict) else None
+        for key in ("context", "dockerfile"):
+            if isinstance(build, dict) and isinstance(build.get(key), str):
+                found.add(build[key])
+    for section in ("volumes", "secrets", "configs"):
         entries = config.get(section)
-        for name, entry in sorted(entries.items() if isinstance(entries, dict) else []):
+        for entry in entries.values() if isinstance(entries, dict) else []:
             if not isinstance(entry, dict):
                 continue
-            opts = entry.get("driver_opts") if isinstance(entry.get("driver_opts"), dict) else {}
-            raw = opts.get("device") if section == "volumes" else entry.get("file")
-            if section == "volumes" and "bind" not in str(opts.get("o", "")) and opts.get("type") != "none":
-                continue
-            if line := _path_warning(f"{label} „{name}“", raw, verb):
-                found.append(line)
+            opts = entry.get("driver_opts")
+            source = opts.get("device") if section == "volumes" and isinstance(opts, dict) else entry.get("file")
+            if isinstance(source, str):
+                found.add(source)
+    paths = {_host_path(raw) for raw in found if raw.startswith("/")}
+    return sorted(path for path in paths if _under(path, allowed))
+
+
+class Finding(NamedTuple):
+    """Eine Warnung samt dem, woran sie hängt: Art und Name des Eintrags in der Compose-Datei."""
+
+    kind: str
+    name: str
+    text: str
+
+
+def risky_findings(
+    config: dict[str, Any], *, flag_external: bool = True, roots: tuple[str, ...] = (), resolved: dict[str, str] | None = None,
+) -> list[Finding]:
+    """Einstellungen, mit denen ein Container den Server übernehmen oder Schutz abschalten kann, mit ihrem Träger.
+
+    Riskant ist alles, was nicht als harmlos bekannt ist: unbekannte Schlüssel und Ordner außerhalb der Datenordner (`roots` und
+    die festen Datenordner). `resolved` ordnet Ordner dem tatsächlichen Ziel auf dem Server zu (Verweise aufgelöst)."""
+    found: list[Finding] = []
+    allowed = _roots(roots)
+    for key in sorted(set(config) - _SAFE_TOP_KEYS):
+        if not str(key).startswith("x-"):
+            found.append(Finding("top", str(key), f"Die Datei nutzt die unbekannte Einstellung „{key}“; was nicht als harmlos bekannt ist, gilt als riskant."))
+    services = config.get("services")
+    for name, svc in sorted(services.items() if isinstance(services, dict) else []):
+        if isinstance(svc, dict):
+            found.extend(Finding("service", name, line) for line in _service_findings(name, svc, allowed, resolved, set(services)))
+    volumes = config.get("volumes")
+    for name, entry in sorted(volumes.items() if isinstance(volumes, dict) else []):
+        if isinstance(entry, dict):
+            found.extend(Finding("volume", name, line) for line in _volume_findings(name, entry, config.get("name"), allowed, resolved, flag_external))
+    # Geheimnisse und Konfigurationen lesen Dateien des Servers.
+    for section, kind, label in (("secrets", "secret", "Das Geheimnis"), ("configs", "config", "Die Konfiguration")):
+        entries = config.get(section)
+        for name, entry in sorted(entries.items() if isinstance(entries, dict) else []):
+            if isinstance(entry, dict) and (line := _outside_warning(f"{label} „{name}“", entry.get("file"), "liest", allowed, resolved)):
+                found.append(Finding(kind, name, line))
+    networks = config.get("networks")
+    for name, entry in sorted(networks.items() if isinstance(networks, dict) else []):
+        if not isinstance(entry, dict):
+            continue
+        label = f"Das Netz „{name}“"
+        if entry.get("external"):
+            if flag_external:
+                found.append(Finding("network", name, f"{label} ist ein vorhandenes Netz des Servers, das diese Datei nicht festlegt (external)."))
+        elif entry.get("name") == "host" or entry.get("driver") == "host":
+            found.append(Finding("network", name, f"{label} ist das Netz des Servers selbst (host)."))
+        elif entry.get("driver") not in (None, *_SAFE_NETWORK_DRIVERS):
+            found.append(Finding("network", name, f"{label} nutzt den Treiber „{entry['driver']}“, der sich direkt ins Netz des Servers hängt."))
     return found
+
+
+def risky_settings(
+    config: dict[str, Any], *, flag_external: bool = True, roots: tuple[str, ...] = (), resolved: dict[str, str] | None = None,
+) -> list[str]:
+    """Wie `risky_findings`, nur die Sätze für Menschen."""
+    return [f.text for f in risky_findings(config, flag_external=flag_external, roots=roots, resolved=resolved)]
+
+
+# Abschnitt der Datei, in dem ein Dienst einen Eintrag der obersten Ebene benutzt.
+_USES = {"volume": "volumes", "secret": "secrets", "config": "configs", "network": "networks"}
+
+
+def _users(config: dict[str, Any], kind: str, name: str) -> dict[str, Any]:
+    """Die Dienste, die den Eintrag benutzen."""
+    services = config.get("services")
+    users: dict[str, Any] = {}
+    for svc_name, svc in (services.items() if isinstance(services, dict) else []):
+        used = svc.get(_USES[kind]) if isinstance(svc, dict) else None
+        if isinstance(used, dict):
+            hit = name in used
+        else:
+            hit = any(name == (item.get("source") if isinstance(item, dict) else item) for item in used or [])
+        if hit:
+            users[svc_name] = {"service": svc, "uses": _used_entries(config, svc)}
+    return users
+
+
+def _used_entries(config: dict[str, Any], svc: Any) -> dict[str, Any]:
+    """Die Einträge der obersten Ebene (Volumes, Geheimnisse, Konfigurationen, Netze), die der Dienst benennt, samt Inhalt."""
+    used: dict[str, Any] = {}
+    for section in _USES.values():
+        names = svc.get(section) if isinstance(svc, dict) else None
+        if isinstance(names, dict):
+            wanted = list(names)
+        else:
+            wanted = [item.get("source") if isinstance(item, dict) else item for item in names or []]
+        top = config.get(section)
+        used[section] = {n: top.get(n) for n in wanted if isinstance(n, str) and isinstance(top, dict)}
+    return used
+
+
+def _carrier(config: dict[str, Any], finding: Finding) -> str:
+    """Alles, woran die Warnung hängt: der ganze Dienst, bei Volume, Geheimnis, Konfiguration und Netz der Eintrag samt Benutzern."""
+    kind, name = finding.kind, finding.name
+    if kind == "service":
+        svc = (config.get("services") or {}).get(name)
+        part: Any = {"service": svc, "uses": _used_entries(config, svc)}
+    elif kind == "top":
+        part = config.get(name)
+    elif kind in _USES:
+        part = {"entry": (config.get(_USES[kind]) or {}).get(name), "users": _users(config, kind, name)}
+    else:
+        return ""
+    return json.dumps(part, sort_keys=True, default=str)
 
 
 @dataclass(frozen=True)
@@ -181,6 +408,7 @@ class Checked:
     unverified: str | None = None
     """Die Prüfung lief nicht (Server, Zeitlimit, Ordner); über die Datei sagt das nichts."""
     warnings: tuple[str, ...] = ()
+    findings: tuple[Finding, ...] = field(default=(), compare=False, repr=False)
     services: tuple[str, ...] = ()
     config: dict[str, Any] | None = field(default=None, compare=False, repr=False)
     """Die Datei, wie Compose sie aufgelöst hat (Pfade absolut, Variablen eingesetzt); nur zum Prüfen, nie für die Antwort."""
@@ -198,7 +426,7 @@ class Checked:
                 "services": list(self.services)}
 
 
-def parse_check(exit_code: int, stdout: str, stderr: str, name: str) -> Checked:
+def parse_check(exit_code: int, stdout: str, stderr: str, name: str, *, roots: tuple[str, ...] = ()) -> Checked:
     """Antwort von `cmd_check`; in Fehlermeldungen steht statt „-“ der Name der Datei."""
     if exit_code == NO_FOLDER_EXIT:
         return Checked(unverified="Den Ordner des Stacks gibt es auf dem Server nicht mehr, oder er ist nicht lesbar.")
@@ -212,14 +440,25 @@ def parse_check(exit_code: int, stdout: str, stderr: str, name: str) -> Checked:
     if not isinstance(config, dict):
         return Checked(unverified="Compose hat keine lesbare Antwort geliefert.")
     services = config.get("services") if isinstance(config.get("services"), dict) else {}
-    return Checked(warnings=tuple(risky_settings(config)), services=tuple(sorted(services)), config=config)
+    return _checked(risky_findings(config, roots=roots), services, config)
+
+
+def _checked(findings: list[Finding], services: Any, config: dict[str, Any]) -> Checked:
+    return Checked(warnings=tuple(f.text for f in findings), findings=tuple(findings), services=tuple(sorted(services)), config=config)
 
 
 def new_warnings(checked: Checked, before: Checked) -> list[str]:
-    """Die Warnungen, die die Datei auf dem Server noch nicht hatte; ließ sie sich nicht prüfen, zählen alle."""
+    """Die Warnungen, die die Datei auf dem Server noch nicht hatte; ließ sie sich nicht prüfen, zählen alle.
+
+    Bekannt ist eine Warnung nur, wenn alles unverändert ist, woran sie hängt (siehe `_carrier`)."""
     if before.problem is not None:
         return list(checked.warnings)
-    return [line for line in checked.warnings if line not in set(before.warnings)]
+    if before.config is None or checked.config is None:
+        return [line for line in checked.warnings if line not in set(before.warnings)]
+    known = {(f, _carrier(before.config, f)) for f in before.findings}
+    fresh = [f.text for f in checked.findings if (f, _carrier(checked.config, f)) not in known]
+    # Hinweise ohne Träger (Ordner nicht aufgelöst) sagen nichts über die alte Fassung aus und zählen immer.
+    return fresh + [line for line in checked.warnings if line not in {f.text for f in checked.findings}]
 
 
 def changed_lines(old: bytes, new: bytes) -> str:
@@ -381,16 +620,41 @@ class StackEditor:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Diese Datei gehört nicht zum Stack.")
         return host, stack, stack.files.index(path)
 
-    async def check(self, host: Any, stack: Stack, index: int, content: bytes) -> Checked:
+    async def check(self, host: Any, stack: Stack, index: int, content: bytes, env: dict[str, str] | None = None) -> Checked:
         try:
-            result = await self._ctx.exec.run_argv(host, cmd_check(stack, index), stdin=content, timeout_s=CHECK_TIMEOUT_S)
+            result = await self._ctx.exec.run_argv(
+                host, cmd_with_env(cmd_check(stack, index), env), stdin=env_stdin(env, content, saved=True), timeout_s=CHECK_TIMEOUT_S,
+            )
         except OSError as exc:
             if type(exc) is TimeoutError:
                 return Checked(unverified=f"Compose hat nicht innerhalb von {CHECK_TIMEOUT_S} Sekunden geantwortet.")
             return Checked(unverified=f"Server nicht erreichbar: {str(exc) or type(exc).__name__}")
         except Exception as exc:  # noqa: BLE001 - nicht geprüft, nicht abgelehnt
             return Checked(unverified=f"Die Prüfung ist abgebrochen: {str(exc) or type(exc).__name__}")
-        return parse_check(result.exit_code, result.stdout, result.stderr, posixpath.basename(stack.files[index]))
+        checked = parse_check(result.exit_code, result.stdout, result.stderr, posixpath.basename(stack.files[index]), roots=(stack.working_dir,))
+        return await self.with_real_targets(host, checked, (stack.working_dir,))
+
+    async def with_real_targets(self, host: Any, checked: Checked, roots: tuple[str, ...]) -> Checked:
+        """Löst Ordner in Datenordnern auf dem Server auf (Verweise) und prüft das Ziel; gelingt das nicht, ist das selbst eine Warnung."""
+        sources = bind_sources(checked.config, roots) if checked.config is not None else []
+        if not sources:
+            return checked
+        try:
+            done = await self._ctx.exec.run_argv(host, cmd_realpath(sources), timeout_s=REALPATH_TIMEOUT_S)
+            lines = done.stdout.splitlines()
+            resolved = dict(zip(sources, lines, strict=True)) if done.exit_code == 0 else None
+        except Exception:  # noqa: BLE001 - nicht aufgelöst heißt Warnung, nie Durchlass
+            resolved = None
+        if resolved is None:
+            note = f"Wohin diese Ordner auf dem Server wirklich zeigen, ließ sich nicht klären: {', '.join(sources)}."
+            return replace(checked, warnings=(*checked.warnings, note))
+        return _checked(risky_findings(checked.config, roots=roots, resolved=resolved), checked.services, checked.config)
+
+    async def actions_result(self, action_id: str) -> Any:
+        return await self._ctx.actions.result(action_id)
+
+    async def may_decide(self, actor: Actor, action_id: str) -> bool:
+        return await self._ctx.actions.may_decide(actor, action_id)
 
     async def propose(self, request: ActionRequest) -> Any:
         return await self._ctx.actions.propose(request, wait_s=REQUEST_WAIT_S)
@@ -684,7 +948,7 @@ class DockerStackSaveExecutor:
 
 
 class _CheckIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
     path: str = Field(max_length=1024)
     content: str = Field(max_length=MAX_FILE_BYTES)
 
@@ -711,13 +975,21 @@ def editor_routes(editor: StackEditor, docker_host: Any, current_actor: Any) -> 
             raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=f"Die Datei ist größer als {MAX_FILE_BYTES // 1024} KB.")
         return data
 
-    @router.post("/hosts/{host_id}/stacks/{project}/check")
+    @router.post(
+        "/hosts/{host_id}/stacks/{project}/check",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 409, 413,)},
+    )
     async def check_file(host_id: str, project: str, body: _CheckIn) -> dict:
         """Prüft einen Entwurf mit Compose selbst, ohne etwas zu speichern; dazu riskante Einstellungen."""
         host, stack, index = await _target(host_id, project, body.path)
         return (await editor.check(host, stack, index, _bytes(body.content))).as_response()
 
-    @router.post("/hosts/{host_id}/stacks/{project}/save", status_code=status.HTTP_202_ACCEPTED)
+    @router.post(
+        "/hosts/{host_id}/stacks/{project}/save", status_code=status.HTTP_202_ACCEPTED,
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 409, 413, 502, 503,)},
+    )
     async def save_file(host_id: str, project: str, body: _SaveIn, actor: Actor = Depends(current_actor)) -> dict:
         """Schlägt das Speichern vor (Gate-Aktion `docker.stack_save`), mit hohem Risiko bei riskanten Einstellungen."""
         host, stack, index = await _target(host_id, project, body.path)
@@ -731,7 +1003,7 @@ def editor_routes(editor: StackEditor, docker_host: Any, current_actor: Any) -> 
         except EditProblem as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         except Exception as exc:  # als Grund zeigen, nicht als 500
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Datei nicht lesbar: {str(exc) or type(exc).__name__}") from exc
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=error_message(exc, "Datei nicht lesbar.")) from None
         if sha256(old) != body.base_sha256:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=STALE)
         if old == content:
@@ -762,7 +1034,45 @@ def editor_routes(editor: StackEditor, docker_host: Any, current_actor: Any) -> 
         )
         return {"action_id": decision.action_id, "status": decision.status.value, "risk": risk.value, "detail": decision.detail}
 
-    @router.get("/hosts/{host_id}/stacks/{project}/history")
+    @router.get(
+        "/hosts/{host_id}/stacks/{project}/save-proposals/{action_id}",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 403, 404, 409, 502,)},
+    )
+    async def save_proposal(host_id: str, project: str, action_id: str, response: Response, actor: Actor = Depends(current_actor)) -> dict:
+        """Der vorgeschlagene Inhalt und der Unterschied zur Datei auf dem Server; nur für den Vorschlagenden und wer freigeben darf."""
+        response.headers["Cache-Control"] = "no-store"
+        await docker_host(host_id)
+        action = await editor.actions_result(action_id)
+        payload = (action.payload or {}) if action is not None else {}
+        if action is None or action.action_type != SAVE_ACTION or action.status != "proposed" or payload.get("project") != project:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Diesen Vorschlag gibt es nicht (mehr).")
+        own = (action.proposed_by_type, action.proposed_by_id) == ("user", str(actor.id))
+        if not own and not await editor.may_decide(actor, action_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Den Inhalt sieht nur, wer den Vorschlag gemacht hat oder ihn freigeben darf.")
+        host, _stack, _index = await _target(host_id, project, str(payload.get("path") or ""))
+        draft = editor.drafts.get(str(payload.get("draft") or ""))
+        if draft is None or (draft[0].get("host_id"), draft[0].get("project"), draft[0].get("path"), draft[0].get("sha256")) != (
+            host.id, project, payload.get("path"), payload.get("sha256"),
+        ):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Der Entwurf zu diesem Vorschlag ist nicht mehr da.")
+        try:
+            old = await editor.current(host, str(payload["path"]))
+        except EditProblem as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except Exception as exc:  # als Grund zeigen, nicht als 500
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=error_message(exc, "Datei nicht lesbar.")) from None
+        new = draft[1]
+        diff = difflib.unified_diff(
+            old.decode("utf-8", "replace").splitlines(), new.decode("utf-8", "replace").splitlines(), "Server", "Vorschlag", lineterm="",
+        )
+        return {"content": new.decode("utf-8", "replace"), "diff": "\n".join(diff)}
+
+    @router.get(
+        "/hosts/{host_id}/stacks/{project}/history",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400,)},
+    )
     async def history(host_id: str, project: str) -> dict:
         """Die gespeicherten alten Fassungen, neueste zuerst, ohne Inhalt."""
         if not PROJECT_RE.match(project):
@@ -770,7 +1080,11 @@ def editor_routes(editor: StackEditor, docker_host: Any, current_actor: Any) -> 
         host = await docker_host(host_id)
         return {"entries": editor.history.entries(host.id, project)}
 
-    @router.get("/hosts/{host_id}/stacks/{project}/history/{entry_id}")
+    @router.get(
+        "/hosts/{host_id}/stacks/{project}/history/{entry_id}",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404,)},
+    )
     async def history_entry(host_id: str, project: str, entry_id: str) -> dict:
         """Eine alte Fassung mit Inhalt, etwa um sie in den Editor zu laden."""
         if not PROJECT_RE.match(project):

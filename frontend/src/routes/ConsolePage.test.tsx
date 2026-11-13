@@ -7,7 +7,7 @@ import { ConsolePage, LAYOUT_STORAGE_KEY, consoleSocketUrl } from "./ConsolePage
 
 /**
  * noVNC selbst ist hier ein Test-Double: jsdom hat weder Canvas-Rendering noch echte
- * WebSockets. Geprueft wird der Vertrag der Seite -- was sie an noVNC uebergibt
+ * WebSockets. Geprüft wird der Vertrag der Seite -- was sie an noVNC übergibt
  * (Nodvard-Deck-WS-URL statt Hypervisor, Einmal-Kennwort als RFB-Credentials) und wie sie
  * auf dessen Ereignisse reagiert. Die echte Byte-Kette ist Backend-seitig bewiesen
  * (test_console_api.py, test_ext_proxmox.py) und live im Browser.
@@ -77,7 +77,7 @@ beforeEach(() => {
 });
 
 describe("ConsolePage", () => {
-  it("oeffnet die Sitzung ueber Nodvard Deck und uebergibt noVNC nur dessen URL + Einmal-Kennwort", async () => {
+  it("öffnet die Sitzung über Nodvard Deck und übergibt noVNC nur dessen URL + Einmal-Kennwort", async () => {
     const opened: unknown[] = [];
     vi.stubGlobal("fetch", mockFetch({ onOpen: (b) => opened.push(b) }));
     renderPage();
@@ -103,7 +103,7 @@ describe("ConsolePage", () => {
     expect(rfb.scaleViewport).toBe(false);
   });
 
-  it("zeigt die Meldung des Backends, wenn die Konsole nicht geoeffnet werden kann", async () => {
+  it("zeigt die Meldung des Backends, wenn die Konsole nicht geöffnet werden kann", async () => {
     vi.stubGlobal("fetch", mockFetch({ consoleStatus: 502 }));
     renderPage();
 
@@ -128,7 +128,7 @@ describe("ConsolePage", () => {
     expect(first.disconnect).toHaveBeenCalled();
     expect(opens).toBe(2);
 
-    // Das spaete `disconnect` der ALTEN Sitzung darf den Status der neuen nicht ueberschreiben.
+    // Das späte `disconnect` der ALTEN Sitzung darf den Status der neuen nicht überschreiben.
     act(() => FakeRfb.instances[1].emit("connect"));
     act(() => first.emit("disconnect", { clean: true }));
     expect(screen.getByText("Verbunden")).toBeTruthy();
@@ -140,7 +140,7 @@ describe("ConsolePage", () => {
     );
   });
 
-  it("Text senden: tippt den Text als Tastendruecke im gewaehlten Layout", async () => {
+  it("Text senden: tippt den Text als Tastendrücke im gewählten Layout", async () => {
     vi.stubGlobal("fetch", mockFetch());
     try { window.localStorage.removeItem(LAYOUT_STORAGE_KEY); } catch { /* egal */ }
     renderPage();
@@ -181,7 +181,7 @@ describe("ConsolePage", () => {
     }
   });
 
-  it("Text senden: nicht tippbare Zeichen und ungewollte Zeilenumbrueche werden abgelehnt, nichts wird geschickt", async () => {
+  it("Text senden: nicht tippbare Zeichen und ungewollte Zeilenumbrüche werden abgelehnt, nichts wird geschickt", async () => {
     vi.stubGlobal("fetch", mockFetch());
     renderPage();
     await waitFor(() => expect(FakeRfb.instances).toHaveLength(1));

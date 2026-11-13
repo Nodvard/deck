@@ -17,8 +17,10 @@ import { EXT_ID } from "./ids";
 import { GuardTab } from "./GuardTab";
 import { LynisFinding, TopIssues, topIssues, type LynisHelp } from "./LynisFinding";
 import { RunNotice, RunNotices, type PageNotice } from "./RunNotice";
+import { SecurityChecks } from "./SecurityChecks";
 import { UpdatesTab } from "./UpdatesTab";
 import { WatchTemplates } from "./WatchTemplates";
+import { WeeklyReports } from "./WeeklyReports";
 
 interface ScanRow {
   id: string;
@@ -175,7 +177,7 @@ interface AuditRow {
   created_at: number;
 }
 
-type Tab = "overview" | "scans" | "quarantine" | "hardening" | "updates" | "guard" | "containers";
+type Tab = "overview" | "scans" | "quarantine" | "hardening" | "updates" | "guard" | "containers" | "reports";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "Übersicht" },
@@ -185,6 +187,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "updates", label: "Updates" },
   { id: "guard", label: "Einbruchschutz" },
   { id: "containers", label: "Container-Wache" },
+  { id: "reports", label: "Wochenbericht" },
 ];
 
 const SCAN_STATUS: Record<string, { label: string; tone: Tone }> = {
@@ -442,6 +445,7 @@ export function SocPage(): JSX.Element {
   const [urlParams, updateUrl] = useUrlParams();
   const tabParam = urlParams.get("tab");
   const tab: Tab = TABS.find((x) => x.id === tabParam)?.id ?? "overview";
+  const reportsTab = tab === "reports";
   const setTab = useCallback((t: Tab) => updateUrl({ tab: t === "overview" ? null : t }), [updateUrl]);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -464,7 +468,7 @@ export function SocPage(): JSX.Element {
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   }, []);
 
-  useEffect(() => { loadOverview(); }, [loadOverview]);
+  useEffect(() => { if (!reportsTab) loadOverview(); }, [loadOverview, reportsTab]);
 
   // Am Handy liegt der aktive Reiter sonst außerhalb des sichtbaren Streifens.
   useEffect(() => {
@@ -474,18 +478,21 @@ export function SocPage(): JSX.Element {
   // Kurzlage aus Update-Zentrale und Einbruchschutz für Reiter-Zähler und Übersicht.
   const [side, setSide] = useState<SideSummary>({ updates: null, guard: null });
   useEffect(() => {
-    call<{ summary: SideSummary["updates"] }>(`${API}/updates`).then((u) => setSide((p) => ({ ...p, updates: u.summary }))).catch(() => undefined);
+    if (reportsTab) return;
+    call<{ summary: NonNullable<SideSummary["updates"]>; hosts?: { status: { unsupported?: boolean } | null }[] }>(`${API}/updates`)
+      .then((u) => setSide((p) => ({ ...p, updates: { ...u.summary, unsupported: u.hosts?.filter((h) => h.status?.unsupported).length ?? 0 } })))
+      .catch(() => undefined);
     call<{ summary: SideSummary["guard"] }>(`${API}/guard`).then((g) => setSide((p) => ({ ...p, guard: g.summary }))).catch(() => undefined);
-  }, [tab]);
+  }, [tab, reportsTab]);
   // Solange ein Scan oder Audit läuft, regelmäßig nachsehen. Ein Audit kann über eine Stunde dauern: dafür reicht
   // seltener.
   const scanning = !!overview?.hosts.some((h) => h.scanning);
   const auditing = !!overview?.hosts.some((h) => h.auditing);
   useEffect(() => {
-    if (!scanning && !auditing) return;
+    if (reportsTab || (!scanning && !auditing)) return;
     const t = setInterval(() => loadOverview(), scanning ? 5000 : 15_000);
     return () => clearInterval(t);
-  }, [scanning, auditing, loadOverview]);
+  }, [scanning, auditing, loadOverview, reportsTab]);
 
   // `null`: Der Nutzer hat die Rückfrage abgelehnt, es gibt nichts zu melden.
   async function run(label: string, fn: () => Promise<ActionResult | null>) {
@@ -580,7 +587,7 @@ export function SocPage(): JSX.Element {
     <Page
       title="Nodvard Shield"
       description="Schützt deine Server: Virenscans, Sicherheitsupdates, Einbruchschutz und eine Prüfung, wie sicher alles eingestellt ist – plus die KI-Wache (Nodvard KI) für abgestürzte Docker-Container."
-      actions={canManage && (
+      actions={canManage && !reportsTab && (
         // Die vier Knöpfe gehören zu Übersicht und Scans. Auf den anderen Reitern schoben sie am Handy den Inhalt weit
         // nach unten: dort stehen sie unter „Mehr“.
         tab === "overview" || tab === "scans" ? (
@@ -643,6 +650,7 @@ export function SocPage(): JSX.Element {
       {tab === "updates" && <UpdatesTab canManage={canManage} />}
       {tab === "guard" && <GuardTab canManage={canManage} />}
       {tab === "containers" && <ContainerWatch />}
+      {tab === "reports" && <WeeklyReports />}
       </PageActionsContext.Provider>
       </HostFilter.Provider>
     </Page>
@@ -650,12 +658,12 @@ export function SocPage(): JSX.Element {
 }
 
 interface SideSummary {
-  updates: { hosts: number; checked: number; up_to_date: number; packages: number; security: number; reboot: number } | null;
+  updates: { hosts: number; checked: number; up_to_date: number; packages: number; security: number; reboot: number; errors?: number; unsupported?: number } | null;
   guard: { failed_24h: number; banned: number; open_events: number; fail2ban_running: number; hosts: number } | null;
 }
 
-function SideLink({ title, text, tone, onClick }: { title: string; text: string; tone: "good" | "warn" | "bad"; onClick: () => void }) {
-  const dot = tone === "good" ? "bg-emerald-400" : tone === "warn" ? "bg-amber-400" : "bg-red-400";
+function SideLink({ title, text, tone, onClick }: { title: string; text: string; tone: "good" | "warn" | "bad" | "neutral"; onClick: () => void }) {
+  const dot = tone === "good" ? "bg-emerald-400" : tone === "warn" ? "bg-amber-400" : tone === "bad" ? "bg-red-400" : "bg-white/40";
   return (
     <button type="button" onClick={onClick} className="panel flex w-full min-w-0 items-center gap-3 px-4 py-3 text-left transition hover:bg-white/[0.04]">
       <span className={`h-2.5 w-2.5 flex-none rounded-full ${dot}`} />
@@ -860,15 +868,22 @@ function OverviewTab({
         </div>
       )}
 
-      {(side.updates?.checked || side.guard) && (
+      {(side.updates?.hosts || side.guard) && (
         <div className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-2" data-testid="side-summary">
-          {!!side.updates?.checked && (
+          {!!side.updates?.hosts && (
             <SideLink
               title="Updates"
-              tone={side.updates.security ? "bad" : side.updates.packages || side.updates.reboot ? "warn" : "good"}
-              text={side.updates.security
+              tone={side.updates.security ? "bad" : side.updates.errors || side.updates.checked + (side.updates.unsupported ?? 0) < side.updates.hosts || side.updates.packages || side.updates.reboot ? "warn" : side.updates.unsupported ? "neutral" : "good"}
+              text={side.updates.errors
+                ? `${side.updates.security ? `${count(side.updates.security, "Sicherheitsupdate", "Sicherheitsupdates")} offen. ` : side.updates.packages ? `${count(side.updates.packages, "Update", "Updates")} offen. ` : ""}${count(side.updates.errors, "Update-Prüfung", "Update-Prüfungen")} fehlgeschlagen. Unter „Updates“ den Grund prüfen und erneut versuchen.`
+                : side.updates.security
                 ? `${count(side.updates.security, "Sicherheitsupdate", "Sicherheitsupdates")} offen`
-                : side.updates.packages ? `${count(side.updates.packages, "Update", "Updates")} offen` : `Alle ${side.updates.hosts} Server aktuell`}
+                : side.updates.packages ? `${count(side.updates.packages, "Update", "Updates")} offen`
+                : side.updates.checked + (side.updates.unsupported ?? 0) < side.updates.hosts ? "Update-Stand noch nicht für alle Server bekannt. Unter „Updates“ prüfen."
+                : side.updates.unsupported ? side.updates.up_to_date
+                  ? `${count(side.updates.up_to_date, "Server", "Server")} aktuell, ${side.updates.unsupported} nicht unterstützt`
+                  : `${count(side.updates.unsupported, "Server", "Server")} nicht unterstützt`
+                : `Alle ${side.updates.hosts} Server aktuell`}
               onClick={() => onOpen("updates")}
             />
           )}
@@ -986,6 +1001,7 @@ function OverviewTab({
           </div>
         )}
       </Card>
+      {hosts.length > 0 && <SecurityChecks canManage={canManage} />}
     </>
   );
 }

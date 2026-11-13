@@ -285,7 +285,7 @@ async def test_extension_without_api_public_cannot_open_routes(client, db_sessio
     assert enabled.status_code == 200, enabled.text
     body = enabled.json()
     assert body["state"] == "error"
-    assert "api.public" in body["last_error"]
+    assert re.fullmatch(r"setup\(\) fehlgeschlagen\. Fehlerkennung: [0-9a-f]{32}\.", body["last_error"])
     assert (await client.get("/api/v1/ext/probe/hooks/open")).status_code == 404
     assert (await client.get("/api/v1/ext/probe/default", headers=headers)).status_code == 404
 
@@ -390,9 +390,10 @@ async def test_routes_that_cannot_check_login_are_refused(client, db_session, te
     body = await _enable_raw(client, db_session, test_settings, tmp_path, public=False, late=late)
 
     assert body["state"] == "error"
-    assert "Route /raw" in body["last_error"]
+    assert re.fullmatch(r"setup\(\) fehlgeschlagen\. Fehlerkennung: [0-9a-f]{32}\.", body["last_error"])
+    assert "/raw" not in body["last_error"]
     if not late:
-        assert "WebSocketRoute /ws" in body["last_error"] and "Mount /files" in body["last_error"]
+        assert "/ws" not in body["last_error"] and "/files" not in body["last_error"]
     assert (await client.post("/api/v1/ext/raw/raw")).status_code == 404
     assert (await client.get("/api/v1/ext/raw/files/x")).status_code == 404
     assert sys.modules["nodvard_deck_ext_raw"].HITS == []
@@ -480,7 +481,8 @@ async def test_route_added_in_on_start_without_login_check_is_refused(client, db
     assert enabled.status_code == 200, enabled.text
     body = enabled.json()
     assert body["state"] == "error"
-    assert "Route /late" in body["last_error"]
+    assert re.fullmatch(r"on_start\(\) hat Routen ohne Anmeldeprüfung angehängt\. Fehlerkennung: [0-9a-f]{32}\.", body["last_error"])
+    assert "/late" not in body["last_error"]
     # Nichts von der Erweiterung bleibt eingehaengt, die ungeschuetzte Route ist nie angekommen ...
     assert (await client.post("/api/v1/ext/starter/late")).status_code == 404
     assert (await client.get("/api/v1/ext/starter/fine", headers=headers)).status_code == 404

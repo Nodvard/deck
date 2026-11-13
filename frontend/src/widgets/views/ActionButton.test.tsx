@@ -7,13 +7,7 @@ import { useDialogsStore } from "../../state/dialogs";
 import type { WidgetAction } from "../types";
 import { ActionButton } from "./ActionButton";
 
-/**
- * `ActionButton`s `confirm` ging bisher ueber `window.confirm()` (siehe
- * dessen fruehere Docstring-Notiz "waere huebscher ... bewusst zurueckgestellt") --
- * jetzt der echte globale Dialog (state/dialogs.ts). `GlobalDialogs` wird hier
- * bewusst MIT gerendert (wie in der echten App via AppShell.tsx) -- `ActionButton`
- * selbst zeichnet kein Dialog-UI mehr, nur der globale Store haelt den Zustand.
- */
+/** ActionButton nutzt die globalen Dialoge; die Tests rendern deren UI mit. */
 const ACTION: WidgetAction = {
   id: "restart", label: "Neustart", endpoint: "actions/restart", method: "POST",
   body: null, confirm: true, confirm_text: "Wirklich neu starten?", style: "danger", permissions: [],
@@ -50,7 +44,7 @@ afterEach(() => {
 });
 
 describe("ActionButton confirm()", () => {
-  it("fuehrt die Aktion NICHT aus, wenn der Bestaetigungsdialog abgebrochen wird", async () => {
+  it("führt die Aktion NICHT aus, wenn der Bestätigungsdialog abgebrochen wird", async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal("fetch", fetchMock);
     render(
@@ -68,7 +62,7 @@ describe("ActionButton confirm()", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("fuehrt die Aktion aus, sobald im echten Dialog bestaetigt wird", async () => {
+  it("führt die Aktion aus, sobald im echten Dialog bestätigt wird", async () => {
     let called = false;
     vi.stubGlobal("fetch", mockFetch(() => { called = true; }));
     render(
@@ -80,8 +74,8 @@ describe("ActionButton confirm()", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Neustart" }));
     await screen.findByText("Wirklich neu starten?");
-    // "Neustart" erscheint zweimal (Aktions-Knopf UND Bestaetigen-Knopf im Dialog,
-    // dessen Beschriftung `action.label` uebernimmt) -- der Dialog-Knopf ist der
+    // "Neustart" erscheint zweimal (Aktions-Knopf UND Bestätigen-Knopf im Dialog,
+    // dessen Beschriftung `action.label` übernimmt) -- der Dialog-Knopf ist der
     // zuletzt gerenderte.
     const buttons = screen.getAllByRole("button", { name: "Neustart" });
     fireEvent.click(buttons[buttons.length - 1]);
@@ -91,8 +85,8 @@ describe("ActionButton confirm()", () => {
   });
 });
 
-describe("ActionButton: Kachel weg, waehrend die Rueckfrage offen ist", () => {
-  it("bestaetigt man danach noch, wird die Aktion NICHT mehr gestartet", async () => {
+describe("ActionButton: Kachel weg, während die Rückfrage offen ist", () => {
+  it("bestätigt man danach noch, wird die Aktion NICHT mehr gestartet", async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal("fetch", fetchMock);
     const { unmount } = render(
@@ -114,12 +108,7 @@ describe("ActionButton: Kachel weg, waehrend die Rueckfrage offen ist", () => {
   });
 });
 
-/**
- * Der Core Action Gate laesst jede Aktion erst
- * als "proposed" stehen -- vorher rief `run()` nie `/actions/{id}/approve` auf,
- * jede WidgetAction (u.a. gameserver Start/Stop) blieb dadurch fuer immer haengen.
- * Selbes Muster wie bereits fuer ProxmoxNodePage.tsx/BackupsPage.tsx bewiesen.
- */
+/** Vorgeschlagene Widget-Aktionen müssen vor der Ausführung bestätigt werden. */
 describe("ActionButton Freigabe (Action Gate)", () => {
   it("genehmigt eine vorgeschlagene Aktion automatisch, wenn berechtigt", async () => {
     let approveCalled = false;

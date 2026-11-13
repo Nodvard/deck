@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { LogOut, Menu, Search, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { BetaBadge, isBeta } from "../components/BetaBadge";
@@ -13,7 +13,7 @@ import { NotificationBell } from "../components/NotificationBell";
 import { useUnreadNotifications } from "./NotificationsPage";
 import { api } from "../lib/api";
 import { localImageUrl } from "../lib/branding";
-import { useCapabilities, usePages } from "../lib/catalog";
+import { refreshExtensionQueries, useCapabilities, useCoreFeatures, usePages } from "../lib/catalog";
 import { useChangelogNotice } from "../lib/changelog";
 import { setDeckTimezone } from "../lib/deckTimezone";
 import { usePreferences } from "../lib/firstSteps";
@@ -90,10 +90,10 @@ export function AppShell() {
   const branding = useBrandingStore((s) => s.branding);
   const { data: pages } = usePages();
   const { data: capabilities } = useCapabilities();
+  const features = useCoreFeatures();
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
-  // Terminal-Seite: eine Shell verlangt dieselbe Berechtigung wie die
-  // Terminal-API (`hosts.execute`) -- ohne sie führt der Menüpunkt ins Leere.
+  // Terminal-Seite und Terminal-API verlangen dieselbe Berechtigung.
   const canUseTerminal = useAuthStore((s) => s.hasPermission("hosts.execute"));
   const canReadNotifications = useAuthStore((s) => s.hasPermission("notifications.read"));
   const canReadHosts = useAuthStore((s) => s.hasPermission("hosts.read"));
@@ -120,6 +120,12 @@ export function AppShell() {
   // Adresse, aber neuer `location.key`) und mit Esc klappt es wieder zu.
   const [menuOpen, setMenuOpen] = useState(false);
   const location = useLocation();
+  const mainRef = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    if (!mainRef.current) return;
+    mainRef.current.scrollTop = 0;
+    mainRef.current.scrollLeft = 0;
+  }, [location.pathname]);
   useEffect(() => setMenuOpen(false), [location.key]);
   useEffect(() => {
     if (!menuOpen) return;
@@ -128,15 +134,11 @@ export function AppShell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [menuOpen]);
 
-  // services/extensions.py publiziert "extension.enabled"/"extension.disabled" über
-  // den bestehenden "events"-Kanal -- Navigation UND Dashboard-Widget-Katalog
-  // müssen live nachziehen, ohne dass ein Nutzer neu laden muss (Widgets
-  // erscheinen/verschwinden beim Aktivieren/Deaktivieren einer Extension).
+  // Schaltvorgänge aus anderen Sitzungen ändern auch die verfügbaren Kernfunktionen.
   useWsSubscription("events", (payload) => {
     const name = (payload as { name?: string }).name;
     if (typeof name === "string" && name.startsWith("extension.")) {
-      void queryClient.invalidateQueries({ queryKey: ["pages"] });
-      void queryClient.invalidateQueries({ queryKey: ["widgets"] });
+      void refreshExtensionQueries(queryClient);
     }
     // Die Erreichbarkeitsprüfung (`host.status_changed`) meldet, wenn ein Server ausfällt oder wieder da ist:
     // Server-Liste, Server-Seite und Cockpit ziehen sofort nach, ohne auf den 30-Sekunden-Abruf zu warten.
@@ -152,7 +154,7 @@ export function AppShell() {
 
   // Zeitzone des Dashboards für die Zeitplan-Wähler (lib/deckTimezone.ts). GET /me darf
   // jeder Angemeldete, auch ohne `settings.write`; scheitert es, rechnen die Wähler in der
-  // Zeit des Geräts wie bisher.
+  // Zeit des Geräts.
   useEffect(() => {
     api.get<{ timezone?: string }>("/me")
       .then((me) => setDeckTimezone(me.timezone || null))
@@ -214,8 +216,8 @@ export function AppShell() {
           <div className="flex flex-col gap-0.5">
             {edition.choose_modules && <NavItem to="/" end icon="layout-dashboard" label="Übersicht" />}
             {edition.choose_modules && canReadHosts && <NavItem to="/apps" icon="boxes" label="Apps" />}
-            {edition.choose_modules && <NavItem to="/files" icon="folder-open" label="Dateien" />}
-            {edition.choose_modules && canUseTerminal && <NavItem to="/terminal" icon="terminal" label="Terminal" />}
+            {edition.choose_modules && features.files && <NavItem to="/files" icon="folder-open" label="Dateien" />}
+            {edition.choose_modules && features.terminal && canUseTerminal && <NavItem to="/terminal" icon="terminal" label="Terminal" />}
             {canReadNotifications && <NavItem to="/notifications" icon="bell" label="Meldungen" badge={unreadNotifications} />}
             <NavItem to="/actions" icon="shield-check" label="Aktionen" />
           </div>
@@ -295,9 +297,9 @@ export function AppShell() {
             )}
           </div>
         </header>
-        <DemoBanner />
+        {edition.choose_modules && <DemoBanner />}
         <DesignNotice />
-        <main className="app-backdrop min-h-0 flex-1 overflow-auto">
+        <main ref={mainRef} className="app-backdrop min-h-0 flex-1 overflow-auto">
           <Outlet />
         </main>
       </div>

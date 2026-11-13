@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
 
 import pytest
 from fastapi import APIRouter, FastAPI
@@ -10,6 +12,17 @@ from nodvard_sdk import GridSize, ListItem, ListView, PageSpec, Refresh, WidgetS
 from nodvard_sdk.actions import ActionSpec
 
 from nodvard_deck.ext.runtime import ActionRegistry, CapabilityRegistry, ExtensionRuntime, SupervisedTask, UiRegistry
+
+
+def test_runtime_imports_in_a_fresh_process():
+    result = subprocess.run(
+        [sys.executable, "-c", "from nodvard_deck.ext.runtime import ExtensionRuntime"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def _page(id_: str) -> PageSpec:
@@ -176,6 +189,76 @@ async def test_supervised_task_plain_coroutine_cannot_restart_after_crash():
     task.start()
     await task.task
     assert task.crash_count == 1
+
+
+@pytest.mark.asyncio
+async def test_supervised_task_plain_coroutine_with_restart_reports_why_it_stays_down(caplog):
+    """Wer eine fertige Coroutine mit `restart=True` übergibt, erfährt im Log, dass und warum kein Neustart folgt."""
+
+    async def _fails() -> None:
+        raise RuntimeError("stuerzt ab")
+
+    task = SupervisedTask(ext_id="e", name="wache", target=_fails(), restart=True, restart_delay_s=0.01)
+    with caplog.at_level("WARNING", logger="nodvard_deck.ext"):
+        task.start()
+        await task.task
+    assert any("ext_task_not_restarted" in r.getMessage() and "wache" in r.getMessage() for r in caplog.records)
+
+
+def test_sdk_contract_matches_the_core_for_spawn_and_register_job():
+    """SDK-Vertrag und Kern stimmen überein: `register_job()` muss abgewartet werden, `spawn()` nimmt Fabriken an."""
+    import inspect
+    import typing
+
+    from nodvard_sdk.context import ExtensionContext as SdkContext
+    from nodvard_sdk.context import SchedulerHandle as SdkScheduler
+
+    from nodvard_deck.ext.context import SchedulerHandle as CoreScheduler
+
+    assert inspect.iscoroutinefunction(CoreScheduler.register_job)
+    assert inspect.iscoroutinefunction(SdkScheduler.register_job)
+    hints = typing.get_type_hints(SdkContext.spawn)
+    assert "Callable" in str(hints["coro"])
+
+
+@pytest.mark.asyncio
+async def test_hello_world_ticker_restarts_after_a_crash(monkeypatch):
+    """Die Beispiel-Erweiterung übergibt ihren Dauer-Task als Fabrik, also startet er nach einem Absturz neu."""
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "extensions" / "hello-world" / "src"))
+    from nodvard_deck_ext_hello_world import Extension as HelloWorldExtension
+
+    calls = []
+
+    async def publish(_event):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("erster Durchlauf stuerzt ab")
+
+    async def broadcast(*_args):
+        return None
+
+    async def log(**_kwargs):
+        return None
+
+    spawned = []
+    ctx = SimpleNamespace(
+        events=SimpleNamespace(publish=publish), ws=SimpleNamespace(broadcast=broadcast),
+        audit=SimpleNamespace(log=log), spawn=lambda target, name, **_kw: spawned.append(target),
+    )
+    await HelloWorldExtension().on_start(ctx)
+    assert len(spawned) == 1
+    task = SupervisedTask(ext_id="hello-world", name="hello-ticker", target=spawned[0], restart=True, restart_delay_s=0.01)
+    assert task.can_restart is True
+    task.start()
+    for _ in range(100):
+        if len(calls) >= 2:
+            break
+        await asyncio.sleep(0.01)
+    await task.cancel()
+    assert len(calls) >= 2
 
 
 @pytest.mark.asyncio

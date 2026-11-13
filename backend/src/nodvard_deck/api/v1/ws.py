@@ -47,7 +47,7 @@ async def _authenticate(
         envelope = json.loads(raw_message)
     except ValueError:
         return None
-    if envelope.get("type") != "auth":
+    if not isinstance(envelope, dict) or envelope.get("type") != "auth":
         return None
     token = envelope.get("token")
     if not isinstance(token, str):
@@ -166,6 +166,10 @@ async def ws_multiplex(websocket: WebSocket, settings: Annotated[Settings, Depen
                 envelope = json.loads(raw)
             except ValueError:
                 await websocket.send_json({"type": "error", "payload": {"title": "Ungültiges JSON."}})
+                continue
+
+            if not isinstance(envelope, dict):
+                await websocket.send_json({"type": "error", "payload": {"title": "Nachricht muss ein Objekt sein."}})
                 continue
 
             msg_type = envelope.get("type")

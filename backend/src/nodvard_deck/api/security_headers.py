@@ -5,7 +5,6 @@ eigener Server und setzt dieselben Kopfzeilen selbst."""
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -23,24 +22,21 @@ FIXED_HEADERS: dict[bytes, bytes] = {
     b"referrer-policy": b"same-origin",
     # Wirkt nur über https oder localhost; Deck öffnet fremde Seiten ohnehin mit `noopener`.
     b"cross-origin-opener-policy": b"same-origin",
+    b"cross-origin-embedder-policy": b"require-corp",
+    b"cross-origin-resource-policy": b"same-origin",
     b"permissions-policy": PERMISSIONS_POLICY,
 }
+PUBLIC_IMAGES = {
+    "/api/v1/branding/logo", "/api/v1/branding/favicon",
+    *(f"/api/v1/app/icon-{size}{variant}.png" for size in (180, 192, 512) for variant in ("", "-maskable")),
+}
+HEALTH_PATH = "/api/v1/health"
+"""Startseiten wie Homarr oder Homepage fragen den Zustand direkt aus dem Browser ab."""
 CSP_HEADER = b"content-security-policy"
 CONTENT_TYPE = b"content-type"
 FRAME_ANCESTORS = "frame-ancestors 'none'"
 DATA_POLICY = f"default-src 'none'; {FRAME_ANCESTORS}"
 """Für JSON ohne eigene CSP: Direkt im Browser geöffnet, lädt die Antwort nichts nach."""
-CORP_HEADER = b"cross-origin-resource-policy"
-EMBEDDABLE_PATHS = frozenset({"/api/v1/health", "/api/v1/branding/logo", "/api/v1/branding/favicon"})
-APP_ICON = re.compile(r"/api/v1/app/icon-[0-9]+(-maskable)?\.png")
-"""Öffentlich ohne Anmeldung: Eine Startseite wie Homarr darf Deck-Symbole zeigen und Deck anpingen."""
-
-
-def resource_policy(path: str) -> bytes:
-    """`Cross-Origin-Resource-Policy` für `path`: `cross-origin` nur für die öffentlichen Symbole und `/health`."""
-    if path in EMBEDDABLE_PATHS or APP_ICON.fullmatch(path):
-        return b"cross-origin"
-    return b"same-origin"
 
 
 def with_frame_ancestors(policy: str) -> str:
@@ -50,7 +46,9 @@ def with_frame_ancestors(policy: str) -> str:
     return "; ".join([*kept, FRAME_ANCESTORS])
 
 
-def secure_headers(headers: Iterable[tuple[bytes, bytes]], path: str = "") -> list[tuple[bytes, bytes]]:
+def secure_headers(
+    headers: Iterable[tuple[bytes, bytes]], path: str = "", *, https: bool = False, method: str = "GET",
+) -> list[tuple[bytes, bytes]]:
     """Die Kopfzeilen einer Antwort auf `path` samt den festen Sicherheits-Kopfzeilen."""
     result: list[tuple[bytes, bytes]] = []
     has_policy = False
@@ -58,7 +56,7 @@ def secure_headers(headers: Iterable[tuple[bytes, bytes]], path: str = "") -> li
     is_json = False
     for name, value in headers:
         lower = name.lower()
-        if lower in FIXED_HEADERS or lower == CORP_HEADER:
+        if lower in FIXED_HEADERS or lower == b"strict-transport-security":
             continue  # unten fest gesetzt, genau einmal
         if lower == CSP_HEADER:
             has_policy = True
@@ -70,8 +68,14 @@ def secure_headers(headers: Iterable[tuple[bytes, bytes]], path: str = "") -> li
         result.append((name, value))
     if (path == "/api" or path.startswith("/api/")) and not has_cache_policy:
         result.append((b"cache-control", b"no-store"))
-    result.extend(FIXED_HEADERS.items())
-    result.append((CORP_HEADER, resource_policy(path)))
+    for name, value in FIXED_HEADERS.items():
+        if name == b"cross-origin-resource-policy" and (
+            path == HEALTH_PATH or (path in PUBLIC_IMAGES and method in ("GET", "HEAD"))
+        ):
+            value = b"cross-origin"
+        result.append((name, value))
+    if https:
+        result.append((b"strict-transport-security", b"max-age=31536000"))
     if not has_policy:
         result.append((CSP_HEADER, (DATA_POLICY if is_json else FRAME_ANCESTORS).encode("ascii")))
     return result
@@ -93,7 +97,10 @@ class SecurityHeadersMiddleware:
 
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
-                headers = secure_headers(message.get("headers", []), scope.get("path", ""))
+                headers = secure_headers(
+                    message.get("headers", []), scope.get("path", ""), https=scope.get("scheme") == "https",
+                    method=scope.get("method", "GET"),
+                )
                 message = {**message, "headers": headers}
             await send(message)
 

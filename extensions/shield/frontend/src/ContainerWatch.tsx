@@ -242,7 +242,7 @@ export function ContainerWatch(): JSX.Element {
           <div className="flex items-center gap-2 text-xs" data-testid="ai-not-configured">
             <span className="h-2 w-2 rounded-full bg-white/30" />
             <span className="text-white/60">
-              Nodvard KI ist nicht eingerichtet (optional). Die Wache zeigt abgestürzte Container trotzdem an; Einschätzungen und Vorschläge gibt es mit einem KI-Server (Ollama) unter Einstellungen → Erweiterungen → Nodvard Shield.
+              Nodvard KI ist nicht eingerichtet (optional). Die Wache zeigt abgestürzte Container trotzdem an; Einschätzungen und Vorschläge gibt es mit einem KI-Anbieter unter Einstellungen → Erweiterungen → Nodvard Shield.
             </span>
           </div>
         ) : (

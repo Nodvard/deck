@@ -3,6 +3,7 @@ Compose, wendet ihn an und hält einen Schritt zurück bereit."""
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 import base64
 import binascii
@@ -28,10 +29,13 @@ from nodvard_sdk.actions import ActionRequest, ActionResult, ActionSpec, DryRunR
 from nodvard_sdk.types import Actor, Risk
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
-from .commands import VOLUME_NAME_RE
+from .after_check import cmd_state_argv
+from .commands import CONTAINER_NAME_RE, VOLUME_NAME_RE
 from .compose_errors import scrub_compose_output
 from .editor import (
     _SFTP_OP_UNSUPPORTED,
+    OUTSIDE_DATA,
+    VARIABLE_PATH,
     Checked,
     _replace,
     _stack_key,
@@ -59,6 +63,8 @@ from .stack_actions import (
     DockerStackExecutor,
     busy_text,
     cmd_all_services,
+    cmd_ps,
+    cmd_services,
 )
 from .stack_backup import _gb, restore_hint
 from .stack_update import DockerStackUpdateExecutor, StackUpdate
@@ -91,6 +97,8 @@ SERVER_FILE_LIMIT = 10 * 1024 * 1024
 SERVER_TOTAL_LIMIT = 64 * 1024 * 1024
 """So viel liest Deck vom Server höchstens ein; die alten Fassungen hält es bis zum Schreiben im Speicher."""
 RESTART_TIMEOUT_S = 900
+STABILITY_TIMEOUT_S = 20
+STABILITY_INTERVAL_S = 2
 NAMES_SHOWN = 10
 NAME_CHARS = 80
 """So viele Zeichen eines Namens zeigt die Freigabe, vom Ende her; mehr verdrängt nur andere Hinweise."""
@@ -385,6 +393,7 @@ class Plan:
     io: Any = None
     """Womit Deck liest und schreibt: mit dem Zugang selbst oder mit den Rechten des Besitzers des Stack-Ordners."""
     owner_uid: int | None = None
+    service_env_files: set[str] = field(default_factory=set)
 
     def bases(self) -> dict[str, str | None]:
         return {path: self.targets[path].sha256 for path in (*self.writes, *self.removes)}
@@ -826,12 +835,33 @@ def local_config(compose: bytes, folder: str) -> dict[str, Any] | None:
     return {**config, **sections, "services": services}
 
 
-def static_view(compose: bytes, folder: str, changed: list[str]) -> tuple[list[str], list[str]]:
+def variable_paths(config: dict[str, Any]) -> list[str]:
+    """Ordner, deren Ziel eine Variable bestimmt; sie sind vor dem Schreiben nicht zu prüfen und gelten erst danach."""
+    found: list[str] = []
+    services = config.get("services") if isinstance(config.get("services"), dict) else {}
+    for name, svc in sorted(services.items()):
+        for volume in (svc.get("volumes") or []) if isinstance(svc, dict) else []:
+            source = volume.get("source") if isinstance(volume, dict) else None
+            if isinstance(source, str) and ("$" in source or source.startswith("~")):
+                found.append(f"„{name}“ bindet einen {VARIABLE_PATH} ({source}); wohin er zeigt, wird erst nach dem Schreiben geprüft und kann außerhalb der Datenordner liegen.")
+    for section, key in (("volumes", "device"), ("secrets", "file"), ("configs", "file")):
+        entries = config.get(section) if isinstance(config.get(section), dict) else {}
+        for name, entry in sorted(entries.items()):
+            opts = entry.get("driver_opts") if isinstance(entry, dict) and isinstance(entry.get("driver_opts"), dict) else entry
+            value = opts.get(key) if isinstance(opts, dict) else None
+            if isinstance(value, str) and ("$" in value or value.startswith("~")):
+                found.append(f"„{name}“ nutzt einen {VARIABLE_PATH} ({value}); wohin er zeigt, wird erst nach dem Schreiben geprüft und kann außerhalb der Datenordner liegen.")
+    return found
+
+
+def static_view(compose: bytes, folder: str, changed: list[str], project: str | None = None) -> tuple[list[str], list[str]]:
     """Riskante Einstellungen und Dienste, die eine geänderte Datei einlesen, nur aus der Datei und ohne Compose; was sich so nicht
     lesen lässt, prüft Compose nach der Freigabe."""
     config = local_config(compose, folder)
+    if config is not None and project:
+        config = {**config, "name": project}
     try:
-        return ([] if config is None else risky_settings(config)), readers(config, changed)
+        return ([] if config is None else [*risky_settings(config, roots=(folder,)), *variable_paths(config)]), readers(config, changed)
     except Exception:  # eine ungewöhnliche Datei darf den Vorschlag nicht verhindern
         log.warning("docker_git_static_view_failed folder=%s", folder, exc_info=True)
         return [], []
@@ -908,6 +938,14 @@ class GitApply:
         folder_attrs = await folder_owner(sftp, stack.working_dir)
         plan.io = await owner_files(self.ctx, host, sftp, folder_attrs)
         plan.owner_uid = owner_uid = getattr(folder_attrs, "uid", None)
+        compose_path = stack.files[0]
+        try:
+            current = await read_target(sftp, plan.io, compose_path, SERVER_FILE_LIMIT)
+            plan.service_env_files = await self.git.service_env_files(
+                stack.working_dir, current.data or b"", files.get(compose_path, (0, b""))[1])
+        except (Refused, GitProblem) as exc:
+            plan.problems.append(str(exc))
+            return plan
         seen: dict[str, str | None] = {}
         total = 0
         _, _, written = self.state.written(host.id, stack.project)
@@ -916,7 +954,7 @@ class GitApply:
                 plan.problems.append(problem)
                 continue
             try:
-                target = plan.targets[path] = await read_target(sftp, plan.io, path, SERVER_FILE_LIMIT)
+                target = plan.targets[path] = current if path == compose_path else await read_target(sftp, plan.io, path, SERVER_FILE_LIMIT)
             except Refused as exc:
                 plan.problems.append(str(exc))
                 continue
@@ -927,18 +965,18 @@ class GitApply:
                 break
             if path in files:
                 repo_mode, data = files[path]
-                if env_file(stack, path) and target.sha256 is not None:
+                if env_file(stack, path, plan.service_env_files) and target.sha256 is not None:
                     plan.env_kept.append(path)
                 elif target.sha256 != sha256(data) or (target.attrs is not None and bool(repo_mode & 0o100) != bool(_mode_of(target) & 0o100)):
                     plan.writes.append(path)
                     if problem := foreign_owner(target, owner_uid, plan.owner_changes):
                         plan.problems.append(problem)
-                    mode = wanted_mode(repo_mode, target, path, env_file(stack, path))
+                    mode = wanted_mode(repo_mode, target, path, env_file(stack, path, plan.service_env_files))
                     if target.attrs is not None and _mode_of(target) & ~mode & 0o7777:
                         plan.mode_changes.append((path, _mode_of(target), mode))
             elif target.sha256 is None:
                 continue
-            elif env_file(stack, path):
+            elif env_file(stack, path, plan.service_env_files):
                 plan.env_left.append(path)
             elif target.sha256 == written[path]:
                 plan.removes.append(path)
@@ -954,13 +992,13 @@ class GitApply:
             if type(exc) is TimeoutError:
                 return Checked(unverified=f"Compose hat nicht innerhalb von {CHECK_TIMEOUT_S} Sekunden geantwortet.")
             return Checked(unverified=f"Die Prüfung ist abgebrochen: {str(exc) or type(exc).__name__}")
-        return parse_check(result.exit_code, result.stdout, result.stderr, posixpath.basename(stack.files[0]))
+        return parse_check(result.exit_code, result.stdout, result.stderr, posixpath.basename(stack.files[0]), roots=(stack.working_dir,))
 
     @staticmethod
     def preview(stack: Stack, compose: bytes, changed: list[str]) -> tuple[list[str], list[str]]:
         """Riskante Einstellungen und Dienste, die neu starten, nur aus der Datei: Compose bekommt Inhalt aus dem Repository erst nach
         der Freigabe zu sehen, denn schon `config` kann Einbindungen aus dem Netz holen."""
-        return static_view(compose, stack.working_dir, changed)
+        return static_view(compose, stack.working_dir, changed, stack.project)
 
     async def propose(self, request: ActionRequest) -> Any:
         return await self.ctx.actions.propose(request, wait_s=REQUEST_WAIT_S)
@@ -1015,7 +1053,7 @@ class DockerStackGitApplyExecutor:
                 containers = await self._containers_of(host, stack, services)
                 if problem := await self._restart(host, stack, services):
                     return _fail(f"Der Neustart von {', '.join(services)} ist gescheitert: {problem}", started)
-                return await self._restart_checked(host, services, containers, started)
+                return await self._restart_checked(host, stack, services, containers, started)
         draft_id = str(payload.get("draft") or "")
         try:
             draft = self._apply.drafts.get(draft_id)
@@ -1161,7 +1199,7 @@ class DockerStackGitApplyExecutor:
                 await make_dirs(sftp, io, stack.working_dir, path, done.dirs)
                 target, (mode, data) = plan.targets[path], plan.files[path]
                 done.pending = (path, sha256(data))
-                await io.write(path, wanted_mode(mode, target, path, env_file(stack, path)), data)
+                await io.write(path, wanted_mode(mode, target, path, env_file(stack, path, plan.service_env_files)), data)
                 done.written[path], done.pending = sha256(data), None
             for path in plan.removes:
                 await still_as_planned(sftp, stack.working_dir, plan, path)
@@ -1179,7 +1217,11 @@ class DockerStackGitApplyExecutor:
                 await self._back_out(sftp, host, stack, plan, previous, staged, done, "")
             raise
         problem = checked.problem
-        if problem is None and (unseen := [line for line in checked.warnings if line not in set(risky)]):
+        # Wer einen Pfad mit Variable freigegeben hat, hat auch freigegeben, dass er nach dem Auflösen außerhalb der Datenordner liegt.
+        variable_ok = any(VARIABLE_PATH in line for line in risky)
+        if problem is None and (unseen := [
+            line for line in checked.warnings if line not in set(risky) and not (variable_ok and OUTSIDE_DATA in line)
+        ]):
             problem = UNSEEN_RISK.format(lines=" ".join(unseen))
         if problem is not None:
             return await self._back_out(sftp, host, stack, plan, previous, staged, done, problem)
@@ -1227,31 +1269,24 @@ class DockerStackGitApplyExecutor:
             return _first_line(scrub_compose_output(result.stderr or "")) or f"Code {result.exit_code}"
         return None
 
-    async def _containers_of(self, host: Any, stack: Stack, services: list[str]) -> list[str] | None:
-        """Die Container dieser Dienste, `None`, wenn sie sich nicht lesen ließen. Alle zählen, denn `compose restart` startet
-        auch gestoppte."""
+    async def _containers_of(self, host: Any, stack: Stack, services: list[str]) -> dict[str, str] | None:
+        """Containername zu Dienst, auch für gestoppte Container, oder `None` bei Lesefehlern."""
         try:
             found = await self._apply.update.running(host, stack)
         except (OSError, StackProblem):
             return None
-        return [name for service in services if service in found for name in found[service].containers]
+        return {name: service for service in services if service in found for name in found[service].containers}
 
-    async def _restart_checked(self, host: Any, services: list[str], containers: list[str] | None, started: float) -> ActionResult:
+    async def _restart_checked(self, host: Any, stack: Stack, services: list[str], containers: dict[str, str] | None,
+                               started: float) -> ActionResult:
         """Nach dem Neustart: Laufen die Container dieser Dienste und bleiben sie laufen?"""
-        from . import after_check as ac  # spät: after_check braucht capabilities
-
         done = f"Neu gestartet: {', '.join(services)}."
         if not containers:
             skipped = RESTART_UNCHECKED if containers is not None else RESTART_UNREADABLE
             return ActionResult(success=True, exit_code=0, output=f"{done}\n{skipped}",
                                 duration_ms=int((time.monotonic() - started) * 1000))
-        verdict, _ = await ac.check_running(self._apply.ctx, host, containers)
-        line = ac.result_line(verdict)
-        detail = {"check": {"ok": verdict.ok, "text": verdict.text}}
         duration_ms = int((time.monotonic() - started) * 1000)
-        if verdict.ok:
-            return ActionResult(success=True, exit_code=0, output=f"{done}\n{line}", duration_ms=duration_ms, detail=detail)
-        return ActionResult(success=False, exit_code=0, output=done, error=line, duration_ms=duration_ms, detail=detail)
+        return await self._check_stability(host, stack, done, duration_ms, services, only_restarted=True, containers=containers)
 
     async def _up(self, host: Any, stack: Stack, done: str, started: float, readers_now: list[str], approved: list[str]) -> ActionResult:
         """Die freigegebenen Dienste mit geänderten Dateien neu starten, dann `up -d` samt Prüfung, ob alles läuft; wer nur auf dem
@@ -1264,8 +1299,12 @@ class DockerStackGitApplyExecutor:
         if stale:
             done += " " + STALE_SERVICES.format(names=", ".join(stale))
         duration_ms = int((time.monotonic() - started) * 1000)
+
+        async def check(host, stack, done, duration_ms):
+            return await self._check_stability(host, stack, done, duration_ms, restarts)
+
         try:
-            applied = await self._actions.run(host, stack, "docker.stack_up")
+            applied = await self._actions.run(host, stack, "docker.stack_up", check=check)
         except Exception as exc:  # noqa: BLE001 - die Dateien stehen schon auf dem Server, das muss die Oberfläche erfahren
             return ActionResult(success=False, output=done, duration_ms=duration_ms, detail={"written": True, **({"stale": stale} if stale else {})},
                                 error=f"{APPLY_FAILED}: {_describe(exc)}")
@@ -1273,6 +1312,9 @@ class DockerStackGitApplyExecutor:
         detail = {**(applied.detail or {}), "written": True, **({"stale": stale} if stale else {})}
         total = duration_ms + (applied.duration_ms or 0)
         if not applied.success:
+            if (applied.detail or {}).get("check", {}).get("ok") is False:
+                return ActionResult(success=False, exit_code=applied.exit_code, output=output, duration_ms=total, detail=detail,
+                                    error=f"Geschrieben und angewendet. {applied.error}")
             return ActionResult(success=False, exit_code=applied.exit_code, output=output, duration_ms=total, detail=detail,
                                 error=f"{APPLY_FAILED}: {applied.error}")
         if restart_problem is not None:
@@ -1280,6 +1322,120 @@ class DockerStackGitApplyExecutor:
                                 error=f"Geschrieben und angewendet, aber der Neustart von {', '.join(restarts)} ist gescheitert: "
                                 f"{restart_problem}. Diese Dienste lesen vielleicht noch die alten Dateien.")
         return ActionResult(success=True, exit_code=0, output=output, duration_ms=total, detail=detail)
+
+    async def _check_stability(self, host: Any, stack: Stack, done: str, duration_ms: int,
+                               restarted: list[str], *, only_restarted: bool = False, containers: dict[str, str] | None = None) -> ActionResult:
+        """Beobachtet die Dienste nach dem Anwenden, ohne den eingespielten Stand zurückzusetzen."""
+        from . import image_apply as ia
+
+        started = time.monotonic()
+        deadline = started + STABILITY_TIMEOUT_S
+        baseline: dict[str, ia.Member] = {}
+        known = dict(containers or {})
+        observed: dict[str, float] = {}
+        affected: dict[str, str] = {}
+        completed: set[str] = set()
+        services = set(restarted)
+        problem = "Die Dienste ließen sich nicht lesen."
+        try:
+            if not only_restarted:
+                listed = await self._apply.ctx.exec.run_argv(host, cmd_services(stack), timeout_s=5)
+                if listed.exit_code != 0:
+                    raise StackProblem(problem)
+                services.update(line.strip() for line in listed.stdout.splitlines() if SERVICE_RE.match(line.strip()))
+            if not services:
+                raise StackProblem("Die Datei nennt keine gestarteten Dienste.")
+            if not only_restarted:
+                configured = await self._apply.ctx.exec.run_argv(host, cmd_check_disk(stack), timeout_s=5)
+                if configured.exit_code != 0:
+                    raise StackProblem(problem)
+                disabled = {name for name, service in json.loads(configured.stdout)["services"].items()
+                            if service.get("scale") == 0 or (service.get("deploy") or {}).get("replicas") == 0}
+                services.difference_update(disabled)
+                problem = ""
+            while services:
+                try:
+                    ps = await self._apply.ctx.exec.run_argv(
+                        host, cmd_ps(stack),
+                        timeout_s=5,
+                    )
+                    if ps.exit_code != 0:
+                        raise StackProblem("Die Container ließen sich nicht lesen.")
+                    raw = ps.stdout.strip()
+                    rows = json.loads(raw) if raw.startswith("[") else [json.loads(line) for line in raw.splitlines()]
+                    names = {r["Name"]: r["Service"] for r in rows if r.get("Service") in services
+                             and CONTAINER_NAME_RE.match(str(r.get("Name") or ""))}
+                    members = {}
+                    if names:
+                        inspected = await self._apply.ctx.exec.run_argv(
+                            host, cmd_state_argv(list(names), oneoff=True),
+                            timeout_s=5,
+                        )
+                        if inspected.exit_code != 0:
+                            raise StackProblem("Der Zustand der Container ließ sich nicht lesen.")
+                        lines = []
+                        for line in inspected.stdout.splitlines():
+                            if not line.strip():
+                                continue
+                            row = json.loads(line)
+                            if str(row.get("oneoff") or "").lower() == "true":
+                                names.pop(str(row.get("name") or "").lstrip("/"), None)
+                            else:
+                                lines.append(line)
+                        members = {m.name: m for m in ia.parse_verify("\n".join(lines)).members}
+                    affected = {s: "kein Container vorhanden" for s in services - set(names.values())}
+                    failed = bool(known.keys() - names.keys())
+                    known.update(names)
+                    completed = set()
+                    for name, service in names.items():
+                        member = members.get(name)
+                        if member is None or member.restarts is None:
+                            affected[service] = "Zustand nicht prüfbar"
+                            continue
+                        previous = baseline.setdefault(name, member)
+                        observed.setdefault(name, time.monotonic())
+                        finished = member.status == "exited" and member.exit_code == 0
+                        if member.restarts > previous.restarts or member.started != previous.started:
+                            affected[service] = "erneut gestartet"
+                            failed = True
+                        elif member.status != "running" and not finished:
+                            state = {"exited": "beendet", "dead": "defekt", "restarting": "startet neu",
+                                     "created": "erstellt", "paused": "pausiert"}.get(member.status, member.status)
+                            affected[service] = f"läuft nicht (Zustand: {state}, Exit-Code {member.exit_code})"
+                            failed = failed or member.status in ("exited", "dead")
+                        elif not finished and member.health not in (None, "healthy"):
+                            health = {"starting": "startet", "unhealthy": "ungesund"}.get(member.health, member.health)
+                            affected[service] = f"Gesundheitsprüfung: {health}"
+                        elif time.monotonic() - observed[name] < STABILITY_INTERVAL_S:
+                            affected[service] = "noch nicht lange genug beobachtet"
+                        if finished:
+                            completed.add(service)
+                    affected.update({s: "Container erneut erstellt oder entfernt" for n, s in known.items() if n not in names})
+                    problem = ""
+                    if failed:
+                        break
+                except Exception:  # noqa: BLE001 - bis zur Frist erneut lesen
+                    problem = "Der Zustand der Dienste ließ sich nicht prüfen."
+                if time.monotonic() >= deadline:
+                    break
+                await asyncio.sleep(min(STABILITY_INTERVAL_S, max(0, deadline - time.monotonic())))
+        except Exception as exc:  # noqa: BLE001 - Dateien sind bereits eingespielt
+            problem = str(exc) if isinstance(exc, StackProblem) else "Die Dienste ließen sich nicht lesen."
+        if problem:
+            affected = {s: problem for s in services} or {stack.project: problem}
+        ok = not affected
+        text = "Dienste laufen stabil." if services else "Keine Dienste zum Starten vorgesehen."
+        if not ok:
+            text = "Warnung: " + "; ".join(f"{s}: {reason}" for s, reason in sorted(affected.items())) + "."
+        if ok and completed:
+            text = f"Ohne Fehler beendet (Exit-Code 0): {', '.join(sorted(completed))}."
+            if any(m.status == "running" for m in members.values()):
+                text += " Die übrigen Dienste laufen stabil."
+        elif not ok:
+            text += " Logs über den Knopf „Logs“."
+        return ActionResult(success=ok, exit_code=0, output=f"{done}\n{text}" if ok else done,
+                            error=None if ok else text, detail={"check": {"ok": ok, "text": text}},
+                            duration_ms=duration_ms + int((time.monotonic() - started) * 1000))
 
     async def _rollback(self, host: Any, stack: Stack, previous_id: str, approved: list[str]) -> ActionResult:
         started = time.monotonic()
@@ -1527,7 +1683,11 @@ def apply_routes(apply: GitApply, docker_host: Callable[[str], Awaitable[Any]], 
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=problem)
         return found
 
-    @router.get("/hosts/{host_id}/stacks/{project}/git/applied")
+    @router.get(
+        "/hosts/{host_id}/stacks/{project}/git/applied",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400,)},
+    )
     async def applied(host_id: str, project: str) -> dict:
         """Was zuletzt aus Git eingespielt wurde und ob es einen Schritt zurück gibt; nur aus dem Speicher von Deck."""
         if not PROJECT_RE.match(project):
@@ -1542,7 +1702,11 @@ def apply_routes(apply: GitApply, docker_host: Callable[[str], Awaitable[Any]], 
             if previous else None,
         }
 
-    @router.get("/hosts/{host_id}/stacks/{project}/git/volume-plan")
+    @router.get(
+        "/hosts/{host_id}/stacks/{project}/git/volume-plan",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409, 502,)},
+    )
     async def volume_plan(host_id: str, project: str) -> dict:
         """Was eine Sicherung vor dem Einspielen umfasst: Volumes mit Größe, freier Platz, Ziel und die Dienste, die dafür stillstehen."""
         host, stack = await _stack(host_id, project)
@@ -1551,7 +1715,11 @@ def apply_routes(apply: GitApply, docker_host: Callable[[str], Awaitable[Any]], 
         except StackProblem as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from None
 
-    @router.post("/hosts/{host_id}/stacks/{project}/git/apply", status_code=status.HTTP_202_ACCEPTED)
+    @router.post(
+        "/hosts/{host_id}/stacks/{project}/git/apply", status_code=status.HTTP_202_ACCEPTED,
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409, 502, 503,)},
+    )
     async def apply_commit(host_id: str, project: str, body: _ApplyIn, actor: Actor = Depends(current_actor)) -> dict:
         """Schlägt das Einspielen genau des angesehenen Stands vor (Gate-Aktion `docker.stack_git_apply`)."""
         host, stack = await _stack(host_id, project)
@@ -1612,7 +1780,11 @@ def apply_routes(apply: GitApply, docker_host: Callable[[str], Awaitable[Any]], 
         ))
         return {"action_id": decision.action_id, "status": decision.status.value, "risk": RISK.value, "detail": decision.detail}
 
-    @router.post("/hosts/{host_id}/stacks/{project}/git/rollback", status_code=status.HTTP_202_ACCEPTED)
+    @router.post(
+        "/hosts/{host_id}/stacks/{project}/git/rollback", status_code=status.HTTP_202_ACCEPTED,
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409, 502,)},
+    )
     async def rollback(host_id: str, project: str, body: _RollbackIn, actor: Actor = Depends(current_actor)) -> dict:
         """Schlägt vor, den Stand vor dem letzten Einspielen zurückzuholen (Gate-Aktion `docker.stack_git_rollback`)."""
         host, stack = await _stack(host_id, project)
@@ -1650,7 +1822,11 @@ def apply_routes(apply: GitApply, docker_host: Callable[[str], Awaitable[Any]], 
         except Exception:  # noqa: BLE001 - ohne lesbare Datei nennt die Freigabe nur keine Dienste
             return b""
 
-    @router.post("/hosts/{host_id}/stacks/{project}/git/restart", status_code=status.HTTP_202_ACCEPTED)
+    @router.post(
+        "/hosts/{host_id}/stacks/{project}/git/restart", status_code=status.HTTP_202_ACCEPTED,
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409, 502,)},
+    )
     async def restart(host_id: str, project: str, body: _RestartIn, actor: Actor = Depends(current_actor)) -> dict:
         """Schlägt vor, Dienste neu zu starten, die nach dem Einspielen vielleicht noch den alten Stand lesen (`docker.stack_git_restart`)."""
         host, stack = await _stack(host_id, project)

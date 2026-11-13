@@ -1,4 +1,4 @@
-"""Kennung und feste Namen von Nodvard Shield; die alte Kennung `nexus-soc` bleibt nur bei Gespeichertem."""
+"""Kennung und feste Namen von Nodvard Shield."""
 
 from __future__ import annotations
 
@@ -13,9 +13,7 @@ LOGGER = f"nodvard_deck.ext.{EXT_ID}"
 """Logger-Name der Erweiterung; Untermodule hängen `.<name>` an."""
 
 ACTION_PREFIX = "nexus_soc"
-"""Vorsilbe der Aktionsarten (`nexus_soc.upgrade` ...), bewusst die alte: Gespeicherte Vorschläge und Freigaben
-tragen sie, und das Gate findet den Ausführer nur darüber. So bleiben offene Vorschläge über Update und Rückweg
-ausführbar. Angezeigt wird das Label der `ActionSpec`."""
+"""Feste Vorsilbe, über die das Gate gespeicherte Vorschläge und Freigaben ihrem Ausführer zuordnet."""
 
 ACTION_RESTORE = f"{ACTION_PREFIX}.restore"
 ACTION_DELETE = f"{ACTION_PREFIX}.delete"
@@ -24,3 +22,4 @@ ACTION_UPGRADE = f"{ACTION_PREFIX}.upgrade"
 ACTION_REBOOT = f"{ACTION_PREFIX}.reboot"
 ACTION_BAN = f"{ACTION_PREFIX}.ban"
 ACTION_REALTIME = f"{ACTION_PREFIX}.realtime"
+ACTION_FAIL2BAN_CONFIG = f"{ACTION_PREFIX}.fail2ban_config"

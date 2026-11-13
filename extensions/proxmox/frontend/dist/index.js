@@ -1,3 +1,11 @@
+// ../../_shared/frontend/src/cardTable.ts
+var CARD_TABLE = "block w-full text-sm sm:table";
+var CARD_HEAD = "hidden sm:table-header-group";
+var CARD_BODY = "block sm:table-row-group sm:divide-y sm:divide-white/5";
+var CARD_ROW = "relative mb-3 flex flex-col rounded-lg border border-white/10 p-3 sm:static sm:mb-0 sm:table-row sm:rounded-none sm:border-0 sm:p-0";
+var CARD_CELL_PLAIN = "block empty:hidden sm:table-cell sm:empty:table-cell";
+var CARD_CELL = `${CARD_CELL_PLAIN} before:mb-0.5 before:block before:text-xs before:opacity-60 before:content-[attr(data-label)] sm:before:hidden`;
+
 // ../../_shared/frontend/src/csp.ts
 function cspNonce() {
   return document.querySelector('meta[name="csp-nonce"]')?.content ?? "";
@@ -84,7 +92,7 @@ function deckEventName(event) {
 var FOCUS_CLASS = "nodvard-deck-focus";
 
 // ../../_shared/frontend/src/api.ts
-var SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar \u2013 bitte gleich noch einmal versuchen.";
+var SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar, bitte gleich noch einmal versuchen.";
 var ServerUnavailableError = class extends Error {
   status;
   constructor(answer) {
@@ -396,7 +404,7 @@ function Icon({ name, size = 16, className = "" }) {
   );
 }
 var BUTTON_STYLES = {
-  primary: "accent-gradient text-on-accent hover:bg-accent-strong",
+  primary: "border border-transparent accent-gradient text-on-accent hover:bg-accent-strong",
   secondary: "border border-white/10 bg-white/[0.06] text-white hover:bg-white/[0.12]",
   danger: "border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25",
   ghost: "text-white/60 hover:bg-white/[0.06] hover:text-white"
@@ -1389,10 +1397,10 @@ function UpdatesSection({ nodes, shieldHref }) {
           n.packages.length,
           ")"
         ] }),
-        /* @__PURE__ */ jsx9("table", { className: "mt-1 w-full text-xs", children: /* @__PURE__ */ jsx9("tbody", { className: "divide-y divide-white/5", children: n.packages.map((pkg) => /* @__PURE__ */ jsxs9("tr", { children: [
-          /* @__PURE__ */ jsx9("td", { className: "py-0.5 pr-2 font-mono", children: pkg.package }),
-          /* @__PURE__ */ jsx9("td", { className: "py-0.5 pr-2 whitespace-nowrap font-mono", children: pkg.new_package ? `neu: ${pkg.version}` : `${pkg.old_version} \u2192 ${pkg.version}` }),
-          /* @__PURE__ */ jsx9("td", { className: "py-0.5 opacity-60", children: pkg.title })
+        /* @__PURE__ */ jsx9("table", { role: "table", className: `${CARD_TABLE} text-left mt-1 w-full text-xs`, children: /* @__PURE__ */ jsx9("tbody", { role: "rowgroup", className: CARD_BODY, children: n.packages.map((pkg) => /* @__PURE__ */ jsxs9("tr", { role: "row", className: CARD_ROW, children: [
+          /* @__PURE__ */ jsx9("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-0.5 sm:pr-2 font-mono`, children: pkg.package }),
+          /* @__PURE__ */ jsx9("td", { "data-label": "Version", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-0.5 sm:pr-2 sm:whitespace-nowrap font-mono`, children: pkg.new_package ? `neu: ${pkg.version}` : `${pkg.old_version} \u2192 ${pkg.version}` }),
+          /* @__PURE__ */ jsx9("td", { "data-label": "Beschreibung", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-0.5 opacity-60`, children: pkg.title })
         ] }, pkg.package)) }) })
       ] })
     ] }, n.node);
@@ -1417,21 +1425,21 @@ function UnreachableHint({
   return /* @__PURE__ */ jsx9("div", { className: "mt-3 space-y-1 text-sm text-amber-300", "data-testid": testId, children: [...lines].map(([rest, whats]) => /* @__PURE__ */ jsx9("p", { children: `${whats.join(" und ")} ${rest}` }, rest)) });
 }
 function StorageSection({ pools, focusNode = null }) {
-  return /* @__PURE__ */ jsx9("div", { children: /* @__PURE__ */ jsxs9("table", { className: "w-full text-sm", children: [
-    /* @__PURE__ */ jsx9("thead", { children: /* @__PURE__ */ jsxs9("tr", { className: "border-b border-white/10 text-left text-xs opacity-60", children: [
+  return /* @__PURE__ */ jsx9("div", { children: /* @__PURE__ */ jsxs9("table", { role: "table", className: `${CARD_TABLE} text-left`, children: [
+    /* @__PURE__ */ jsx9("thead", { role: "rowgroup", className: CARD_HEAD, children: /* @__PURE__ */ jsxs9("tr", { className: "border-b border-white/10 text-left text-xs opacity-60", children: [
       /* @__PURE__ */ jsx9("th", { className: "py-1 w-1/5", children: "Pool" }),
       /* @__PURE__ */ jsx9("th", { className: "py-1", children: "Inhalt" }),
       /* @__PURE__ */ jsx9("th", { className: "py-1 w-1/3", children: "Belegung" })
     ] }) }),
-    /* @__PURE__ */ jsx9("tbody", { className: "divide-y divide-white/5", children: pools.map((pool) => /* @__PURE__ */ jsxs9("tr", { "data-testid": `pool-${pool.storage}`, className: focusNode && pool.node === focusNode ? FOCUS_CLASS : void 0, children: [
-      /* @__PURE__ */ jsxs9("td", { className: "py-1.5 align-top", children: [
+    /* @__PURE__ */ jsx9("tbody", { role: "rowgroup", className: CARD_BODY, children: pools.map((pool) => /* @__PURE__ */ jsxs9("tr", { role: "row", "data-testid": `pool-${pool.storage}`, className: `${CARD_ROW} ${focusNode && pool.node === focusNode ? FOCUS_CLASS : ""}`, children: [
+      /* @__PURE__ */ jsxs9("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 align-top`, children: [
         /* @__PURE__ */ jsx9("span", { className: "font-medium", children: pool.storage }),
         /* @__PURE__ */ jsxs9("span", { className: "block text-xs opacity-60", children: [
           pool.type,
           pool.shared ? " \xB7 geteilt" : ""
         ] })
       ] }),
-      /* @__PURE__ */ jsxs9("td", { className: "py-1.5 align-top text-xs", children: [
+      /* @__PURE__ */ jsxs9("td", { "data-label": "Inhalt", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 align-top text-xs`, children: [
         /* @__PURE__ */ jsx9("span", { className: "opacity-70", children: pool.content_labels.join(", ") }),
         (pool.volumes ?? []).length > 0 && /* @__PURE__ */ jsxs9("span", { className: "block", children: [
           "Gast-Disks:",
@@ -1440,7 +1448,7 @@ function StorageSection({ pools, focusNode = null }) {
         ] }),
         Object.values(pool.other ?? {}).length > 0 && /* @__PURE__ */ jsx9("span", { className: "block opacity-60", children: Object.values(pool.other ?? {}).map((o) => `${o.count} ${o.label} (${formatBytes2(o.size)})`).join(", ") })
       ] }),
-      /* @__PURE__ */ jsxs9("td", { className: "py-1.5 align-top text-xs", children: [
+      /* @__PURE__ */ jsxs9("td", { "data-label": "Belegung", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 align-top text-xs`, children: [
         /* @__PURE__ */ jsx9("div", { className: "h-1.5 w-full overflow-hidden rounded bg-white/10", role: "progressbar", "aria-valuenow": pool.used_percent ?? 0, "aria-valuemin": 0, "aria-valuemax": 100, children: /* @__PURE__ */ jsx9("div", { className: `h-full ${BAR_TONE[pool.tone] ?? BAR_TONE.neutral}`, ref: styleRef({ width: `${Math.min(100, pool.used_percent ?? 0)}%` }) }) }),
         /* @__PURE__ */ jsxs9("span", { className: "opacity-70", children: [
           formatBytes2(pool.used ?? 0),
@@ -1479,17 +1487,17 @@ function TaskRow({ task }) {
   const statusClass = task.running ? "text-amber-300" : task.ok ? "text-emerald-300" : "text-red-300";
   const statusText = task.running ? "l\xE4uft" : task.ok ? "OK" : task.status ?? "Fehler";
   return /* @__PURE__ */ jsxs9(Fragment5, { children: [
-    /* @__PURE__ */ jsxs9("tr", { className: "cursor-pointer hover:bg-white/5", onClick: () => void toggle(), "data-testid": `task-${task.upid}`, children: [
-      /* @__PURE__ */ jsx9("td", { className: "py-1 whitespace-nowrap opacity-70", children: task.starttime ? new Date(task.starttime * 1e3).toLocaleString("de-DE") : "" }),
-      /* @__PURE__ */ jsxs9("td", { className: "py-1", children: [
+    /* @__PURE__ */ jsxs9("tr", { role: "row", className: `${CARD_ROW} cursor-pointer hover:bg-white/5`, onClick: () => void toggle(), "data-testid": `task-${task.upid}`, children: [
+      /* @__PURE__ */ jsx9("td", { "data-label": "Zeit", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:whitespace-nowrap opacity-70`, children: task.starttime ? new Date(task.starttime * 1e3).toLocaleString("de-DE") : "" }),
+      /* @__PURE__ */ jsxs9("td", { "data-label": "Aufgabe", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1`, children: [
         task.type_label,
         task.guest_name ? ` \xB7 ${task.guest_name}` : task.guest_id ? ` \xB7 ${task.guest_id}` : ""
       ] }),
-      /* @__PURE__ */ jsx9("td", { className: "py-1 opacity-70", children: task.user }),
-      /* @__PURE__ */ jsx9("td", { className: `py-1 break-words ${statusClass}`, children: statusText }),
-      /* @__PURE__ */ jsx9("td", { className: "py-1 whitespace-nowrap opacity-70", children: formatDuration(task.duration_s) })
+      /* @__PURE__ */ jsx9("td", { "data-label": "Benutzer", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 opacity-70`, children: task.user }),
+      /* @__PURE__ */ jsx9("td", { "data-label": "Status", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 break-words ${statusClass}`, children: statusText }),
+      /* @__PURE__ */ jsx9("td", { "data-label": "Dauer", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:whitespace-nowrap opacity-70`, children: formatDuration(task.duration_s) })
     ] }),
-    open && /* @__PURE__ */ jsx9("tr", { children: /* @__PURE__ */ jsxs9("td", { colSpan: 5, className: "bg-black/30 p-2", children: [
+    open && /* @__PURE__ */ jsx9("tr", { role: "row", className: CARD_ROW, children: /* @__PURE__ */ jsxs9("td", { role: "cell", colSpan: 5, className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] bg-black/30 sm:p-2`, children: [
       error && /* @__PURE__ */ jsx9("p", { className: "text-red-400", children: error }),
       !error && !lines && /* @__PURE__ */ jsx9("p", { className: "opacity-60", children: "Lade Protokoll \u2026" }),
       lines && /* @__PURE__ */ jsx9("pre", { className: "max-h-64 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px]", children: lines.join("\n") || "(leer)" })
@@ -1498,15 +1506,15 @@ function TaskRow({ task }) {
 }
 function TasksTable({ tasks }) {
   if (tasks.length === 0) return /* @__PURE__ */ jsx9("p", { className: "text-xs opacity-60", children: "Keine Aufgaben in letzter Zeit." });
-  return /* @__PURE__ */ jsx9("div", { className: "overflow-x-auto", children: /* @__PURE__ */ jsxs9("table", { className: "w-full min-w-[32rem] text-xs", children: [
-    /* @__PURE__ */ jsx9("thead", { children: /* @__PURE__ */ jsxs9("tr", { className: "border-b border-white/10 text-left opacity-60", children: [
+  return /* @__PURE__ */ jsx9("div", { className: "overflow-x-auto", children: /* @__PURE__ */ jsxs9("table", { role: "table", className: `${CARD_TABLE} text-left  text-xs`, children: [
+    /* @__PURE__ */ jsx9("thead", { role: "rowgroup", className: CARD_HEAD, children: /* @__PURE__ */ jsxs9("tr", { className: "border-b border-white/10 text-left opacity-60", children: [
       /* @__PURE__ */ jsx9("th", { className: "py-1", children: "Zeit" }),
       /* @__PURE__ */ jsx9("th", { className: "py-1", children: "Aufgabe" }),
       /* @__PURE__ */ jsx9("th", { className: "py-1", children: "Benutzer" }),
       /* @__PURE__ */ jsx9("th", { className: "py-1", children: "Status" }),
       /* @__PURE__ */ jsx9("th", { className: "py-1", children: "Dauer" })
     ] }) }),
-    /* @__PURE__ */ jsx9("tbody", { className: "divide-y divide-white/5", children: tasks.map((task) => /* @__PURE__ */ jsx9(TaskRow, { task }, task.upid)) })
+    /* @__PURE__ */ jsx9("tbody", { role: "rowgroup", className: CARD_BODY, children: tasks.map((task) => /* @__PURE__ */ jsx9(TaskRow, { task }, task.upid)) })
   ] }) });
 }
 function formatMb(mb) {
@@ -2073,8 +2081,8 @@ function ConnectionsPanel({
   const content = /* @__PURE__ */ jsxs9("div", { className: bare ? "" : "mt-3", children: [
     message && /* @__PURE__ */ jsx9("p", { className: "mb-2 text-xs opacity-80", children: message }),
     connections && connections.length === 0 && /* @__PURE__ */ jsx9("p", { className: "mb-2 text-xs opacity-60", children: "Noch keine Verbindung konfiguriert." }),
-    connections && connections.length > 0 && /* @__PURE__ */ jsxs9("table", { className: "mb-3 w-full text-xs", children: [
-      /* @__PURE__ */ jsx9("thead", { children: /* @__PURE__ */ jsxs9("tr", { className: "border-b border-white/10 text-left opacity-60", children: [
+    connections && connections.length > 0 && /* @__PURE__ */ jsxs9("table", { role: "table", className: `${CARD_TABLE} text-left mb-3 w-full text-xs`, children: [
+      /* @__PURE__ */ jsx9("thead", { role: "rowgroup", className: CARD_HEAD, children: /* @__PURE__ */ jsxs9("tr", { className: "border-b border-white/10 text-left opacity-60", children: [
         /* @__PURE__ */ jsx9("th", { className: "py-1 w-1/6", children: "Name" }),
         /* @__PURE__ */ jsx9("th", { className: "py-1 w-1/3", children: "Adresse" }),
         /* @__PURE__ */ jsx9("th", { className: "py-1 whitespace-nowrap", children: "Zertifikat" }),
@@ -2082,12 +2090,12 @@ function ConnectionsPanel({
         /* @__PURE__ */ jsx9("th", { className: "py-1 whitespace-nowrap", children: "Aktiv" }),
         /* @__PURE__ */ jsx9("th", { className: "py-1 whitespace-nowrap", children: "Aktionen" })
       ] }) }),
-      /* @__PURE__ */ jsx9("tbody", { className: "divide-y divide-white/5", children: connections.map((c) => /* @__PURE__ */ jsxs9("tr", { children: [
-        /* @__PURE__ */ jsx9("td", { className: "py-1.5 break-words", children: c.name }),
-        /* @__PURE__ */ jsx9("td", { className: "py-1.5 break-all opacity-70", children: c.base_url }),
-        /* @__PURE__ */ jsx9("td", { className: "py-1.5 whitespace-nowrap", children: /* @__PURE__ */ jsx9(CertificateStatus, { connection: c }) }),
-        /* @__PURE__ */ jsx9("td", { className: "py-1.5 whitespace-nowrap", children: c.has_token ? "gesetzt" : /* @__PURE__ */ jsx9("span", { className: "text-amber-400", children: "fehlt" }) }),
-        /* @__PURE__ */ jsx9("td", { className: "py-1.5", children: /* @__PURE__ */ jsx9(
+      /* @__PURE__ */ jsx9("tbody", { role: "rowgroup", className: CARD_BODY, children: connections.map((c) => /* @__PURE__ */ jsxs9("tr", { role: "row", className: CARD_ROW, children: [
+        /* @__PURE__ */ jsx9("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 break-words`, children: c.name }),
+        /* @__PURE__ */ jsx9("td", { "data-label": "Adresse", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 break-all opacity-70`, children: c.base_url }),
+        /* @__PURE__ */ jsx9("td", { "data-label": "Zertifikat", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 sm:whitespace-nowrap`, children: /* @__PURE__ */ jsx9(CertificateStatus, { connection: c }) }),
+        /* @__PURE__ */ jsx9("td", { "data-label": "Token", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 sm:whitespace-nowrap`, children: c.has_token ? "gesetzt" : /* @__PURE__ */ jsx9("span", { className: "text-amber-400", children: "fehlt" }) }),
+        /* @__PURE__ */ jsx9("td", { "data-label": "Aktiv", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`, children: /* @__PURE__ */ jsx9(
           "button",
           {
             type: "button",
@@ -2097,7 +2105,7 @@ function ConnectionsPanel({
             children: c.enabled ? "aktiv" : "deaktiviert"
           }
         ) }),
-        /* @__PURE__ */ jsx9("td", { className: "py-1.5", children: /* @__PURE__ */ jsxs9("div", { className: "flex gap-1.5", children: [
+        /* @__PURE__ */ jsx9("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`, children: /* @__PURE__ */ jsxs9("div", { className: "flex flex-wrap gap-1.5", children: [
           /* @__PURE__ */ jsx9(
             "button",
             {
@@ -2460,22 +2468,22 @@ function ProxmoxNodePage() {
           },
           node.id
         )),
-        /* @__PURE__ */ jsxs9("table", { className: "w-full text-sm", children: [
-          /* @__PURE__ */ jsx9("thead", { children: /* @__PURE__ */ jsxs9("tr", { className: "border-b border-white/10 text-left text-xs opacity-60", children: [
+        /* @__PURE__ */ jsxs9("table", { role: "table", className: `${CARD_TABLE} text-left`, children: [
+          /* @__PURE__ */ jsx9("thead", { role: "rowgroup", className: CARD_HEAD, children: /* @__PURE__ */ jsxs9("tr", { className: "border-b border-white/10 text-left text-xs opacity-60", children: [
             /* @__PURE__ */ jsx9("th", { className: "py-1 w-6" }),
             /* @__PURE__ */ jsx9("th", { className: "py-1 sm:w-1/2", children: "Name" }),
             /* @__PURE__ */ jsx9("th", { className: "hidden py-1 whitespace-nowrap sm:table-cell sm:w-28", children: "Status" }),
             /* @__PURE__ */ jsx9("th", { className: "py-1 text-right", children: "Aktionen" })
           ] }) }),
-          /* @__PURE__ */ jsx9("tbody", { className: "divide-y divide-white/5", children: guests.filter((g) => parseProviderRef(g.provider_ref).connection === connection).map((host) => {
+          /* @__PURE__ */ jsx9("tbody", { role: "rowgroup", className: CARD_BODY, children: guests.filter((g) => parseProviderRef(g.provider_ref).connection === connection).map((host) => {
             const { node } = parseProviderRef(host.provider_ref);
             const isExpanded = expanded === host.id;
             const visible = VM_ACTIONS.filter((a) => !a.showWhen || a.showWhen(host.status));
             const runAction2 = (action) => void trigger(host.id, host.display_name, action.type, action.confirm, {}, action.dangerConfirm);
             const isBusy = (type) => pending.has(`${host.id}:${type}`);
             return /* @__PURE__ */ jsxs9(Fragment4, { children: [
-              /* @__PURE__ */ jsxs9("tr", { id: `host-${host.id}`, className: host.id === focusHost ? FOCUS_CLASS : void 0, children: [
-                /* @__PURE__ */ jsx9("td", { className: "py-1.5 align-top", children: /* @__PURE__ */ jsx9(
+              /* @__PURE__ */ jsxs9("tr", { role: "row", id: `host-${host.id}`, className: `${CARD_ROW} ${host.id === focusHost ? FOCUS_CLASS : ""}`, children: [
+                /* @__PURE__ */ jsx9("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 align-top`, children: /* @__PURE__ */ jsx9(
                   "button",
                   {
                     type: "button",
@@ -2485,7 +2493,7 @@ function ProxmoxNodePage() {
                     children: isExpanded ? "\u25BE" : "\u25B8"
                   }
                 ) }),
-                /* @__PURE__ */ jsxs9("td", { className: "py-1.5 break-words", children: [
+                /* @__PURE__ */ jsxs9("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 break-words`, children: [
                   /* @__PURE__ */ jsx9("span", { className: "font-medium", children: host.display_name }),
                   /* @__PURE__ */ jsxs9("span", { className: "block text-xs opacity-60", children: [
                     KIND_LABEL[host.kind ?? ""] ?? host.kind,
@@ -2494,8 +2502,8 @@ function ProxmoxNodePage() {
                   ] }),
                   /* @__PURE__ */ jsx9("span", { className: `block text-xs sm:hidden ${STATUS_TONE[host.status] ?? ""}`, children: HOST_STATUS_LABEL[host.status] ?? host.status })
                 ] }),
-                /* @__PURE__ */ jsx9("td", { className: `hidden py-1.5 whitespace-nowrap sm:table-cell ${STATUS_TONE[host.status] ?? ""}`, children: HOST_STATUS_LABEL[host.status] ?? host.status }),
-                /* @__PURE__ */ jsx9("td", { className: "py-1.5", children: /* @__PURE__ */ jsxs9("div", { className: "flex flex-wrap justify-end gap-1.5", children: [
+                /* @__PURE__ */ jsx9("td", { "data-label": "Status", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] hidden sm:py-1.5 sm:whitespace-nowrap sm:table-cell ${STATUS_TONE[host.status] ?? ""}`, children: HOST_STATUS_LABEL[host.status] ?? host.status }),
+                /* @__PURE__ */ jsx9("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`, children: /* @__PURE__ */ jsxs9("div", { className: "flex flex-wrap gap-1.5 sm:justify-end", children: [
                   host.status === "up" ? /* @__PURE__ */ jsx9(
                     "a",
                     {
@@ -2543,9 +2551,9 @@ function ProxmoxNodePage() {
                   )
                 ] }) })
               ] }),
-              isExpanded && /* @__PURE__ */ jsxs9("tr", { children: [
-                /* @__PURE__ */ jsx9("td", {}),
-                /* @__PURE__ */ jsxs9("td", { colSpan: 3, className: "bg-black/20 py-2", children: [
+              isExpanded && /* @__PURE__ */ jsxs9("tr", { role: "row", className: CARD_ROW, children: [
+                /* @__PURE__ */ jsx9("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere]` }),
+                /* @__PURE__ */ jsxs9("td", { role: "cell", colSpan: 3, className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] bg-black/20 sm:py-2`, children: [
                   /* @__PURE__ */ jsx9(MetricsPanel, { hostId: host.id }),
                   /* @__PURE__ */ jsx9(GuestDetailsPanel, { hostId: host.id }),
                   /* @__PURE__ */ jsx9("p", { className: "mt-2 mb-1 text-xs font-medium opacity-60", children: "Snapshots" }),

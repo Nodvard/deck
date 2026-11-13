@@ -3,19 +3,27 @@
 from __future__ import annotations
 
 import asyncio
+import functools
+import inspect
 import logging
+import re
 from pathlib import PurePosixPath
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import Response
 from fastapi.responses import StreamingResponse
 from nodvard_sdk import FileEntry, FilePlace, FileSourceCaps, SourceInfo, max_body_bytes
 from nodvard_sdk.capabilities import FilePlaceProvider, FileSource, FileSourceProvider
+from nodvard_sdk.errors import error_message
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
 
+from ...branding import UNTRUSTED_FILE_HEADERS
 from ...config import get_settings
+from ...core import gate
 from ...core.error_text import describe_connection_error, is_expected_connection_error
 from ...core.ws_hub import get_ws_hub
 from ...db.session import release_connection
@@ -26,6 +34,8 @@ from ...services import jobs as jobs_service
 from ...services.auth import user_has_permission
 from ..body_limit import NO_LIMIT, format_bytes, too_large_message
 from ..deps import CurrentUser, SessionDep, require_permission
+from ..models import RequestModel
+from ..responses import error_responses, file_responses
 
 logger = logging.getLogger("nodvard_deck.files")
 
@@ -66,26 +76,26 @@ class FilePlaceOut(BaseModel):
     hint: str | None = None
 
 
-class MkdirIn(BaseModel):
+class MkdirIn(RequestModel):
     path: str
 
 
-class RenameIn(BaseModel):
+class RenameIn(RequestModel):
     src: str
     dst: str
 
 
-class RemoveIn(BaseModel):
+class RemoveIn(RequestModel):
     path: str
     recursive: bool = False
 
 
-class TransferEndpoint(BaseModel):
+class TransferEndpoint(RequestModel):
     source: str
     path: str
 
 
-class TransferIn(BaseModel):
+class TransferIn(RequestModel):
     model_config = {"populate_by_name": True}
 
     from_: TransferEndpoint = Field(alias="from")
@@ -108,8 +118,8 @@ async def _all_sources() -> list[FileSource]:
     for provider in providers:
         try:
             sources.extend(await provider.file_sources())
-        except Exception:  # noqa: BLE001 - eine kaputte Quelle darf die anderen nicht verstecken
-            logger.exception("file_source_provider_failed provider=%r", provider)
+        except Exception as exc:  # noqa: BLE001 - eine kaputte Quelle darf die anderen nicht verstecken
+            logger.warning("file_source_provider_failed reason=%s", error_message(exc))
     return sources
 
 
@@ -169,8 +179,49 @@ async def _resolve_source(source_id: str, user: User, session: AsyncSession) -> 
                 detail="Diese Quelle dürfen nur Admins benutzen." if permission == _LOCKED_PERMISSION
                 else f"Für diese Quelle brauchst du die Berechtigung '{permission}'.",
             )
-        return source
+        return _authorized_source(source)
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unbekannte Quelle '{source_id}'.")
+
+
+class _AuthorizedFileSource:
+    """Begrenzt die SSH-Freigabe auf den jeweiligen Aufruf einer geprüften Dateiquelle."""
+
+    def __init__(self, source: FileSource, host_id: str) -> None:
+        self._source = source
+        self._host_id = host_id
+
+    def __getattr__(self, name: str) -> Any:
+        value = getattr(self._source, name)
+        if inspect.isasyncgenfunction(value):
+            @functools.wraps(value)
+            async def stream(*args, **kwargs):
+                iterator = value(*args, **kwargs)
+                try:
+                    while True:
+                        with gate.authorized_ssh(self._host_id, operations=frozenset({"sftp"})):
+                            try:
+                                item = await anext(iterator)
+                            except StopAsyncIteration:
+                                return
+                        yield item
+                finally:
+                    with gate.authorized_ssh(self._host_id, operations=frozenset({"sftp"})):
+                        await iterator.aclose()
+            return stream
+        if inspect.iscoroutinefunction(value):
+            @functools.wraps(value)
+            async def call(*args, **kwargs):
+                with gate.authorized_ssh(self._host_id, operations=frozenset({"sftp"})):
+                    return await value(*args, **kwargs)
+            return call
+        return value
+
+
+def _authorized_source(source: FileSource) -> FileSource:
+    host_id = _source_host_id(source)
+    if host_id is None or _required_permission(source) != "hosts.execute":
+        return source
+    return _AuthorizedFileSource(source, host_id)
 
 
 async def _call(coro: Any, *, not_found: str | None = None) -> Any:
@@ -180,20 +231,19 @@ async def _call(coro: Any, *, not_found: str | None = None) -> Any:
         return await coro
     except HTTPException:
         raise
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=not_found or str(exc)) from exc
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=not_found or "Datei nicht gefunden.") from None
     except Exception as exc:  # noqa: BLE001 - siehe Docstring: jede Quelle normalisiert hier einheitlich
         # `str(exc)` ist bei Zeitüberschreitungen leer. Ein Fehler der Quelle (Server aus, falsche Zugangsdaten, Ordner
         # fehlt) ist kein Programmfehler: eine Zeile, nie ein Traceback (`deploy_pi.sh` wertet "Traceback" im Protokoll
         # als gescheiterten Start). Die Person bekommt den Grund als 502 zurück.
         reason = describe_connection_error(exc)
         expected = is_expected_connection_error(exc)
-        # Ins Protokoll darf der volle Text (nur Admins lesen es), in die Antwort kommt nur `reason`.
         logger.log(
             logging.INFO if expected else logging.WARNING,
             "file_source_failed type=%s reason=%s",
             type(exc).__name__,
-            reason if expected else (str(exc).strip() or reason),
+            reason,
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Zugriff auf die Quelle fehlgeschlagen: {reason}"
@@ -202,6 +252,16 @@ async def _call(coro: Any, *, not_found: str | None = None) -> Any:
 
 # Marke für "die Quelle hat nichts geliefert" (leere Datei), unterscheidbar von einem leeren Teil.
 _STREAM_END = object()
+
+
+class _RangeIncomplete(EOFError):
+    """Die Quelle lieferte weniger als den verlangten Bereich. Fester Satz aus dem Kern, kein Text der Quelle; `readable`
+    lässt ihn lesbar in der Antwort stehen (`describe_connection_error`)."""
+
+    readable = True
+
+    def __init__(self) -> None:
+        super().__init__("Die Quelle hat den Dateibereich nicht vollständig geliefert.")
 
 
 async def _close_stream(stream: Any) -> None:
@@ -216,30 +276,44 @@ async def _close_stream(stream: Any) -> None:
         logger.debug("file_source_close_failed", exc_info=True)
 
 
-async def _start_stream(source: FileSource, path: PurePosixPath, offset: int) -> tuple[Any, Any]:
+async def _start_stream(source: FileSource, path: PurePosixPath, offset: int, length: int | None = None) -> tuple[Any, Any]:
     """Öffnet `open_read()` und holt den ersten Teil. Gibt (Strom, erster Teil) zurück, der erste Teil ist `_STREAM_END`
     bei einer leeren Datei. Scheitert das, ist der Strom geschlossen und der Fehler geht weiter (der Aufrufer übersetzt
     ihn mit `_call()`)."""
     stream = aiter(source.open_read(path, offset=offset))
     try:
-        return stream, await anext(stream, _STREAM_END)
+        first = await anext(stream, _STREAM_END)
+        if first is _STREAM_END and length:
+            raise _RangeIncomplete()
+        return stream, first
     except BaseException:
         await _close_stream(stream)
         raise
 
 
-async def _primed_stream(stream: Any, first: Any) -> Any:
+async def _primed_stream(stream: Any, first: Any, remaining: int | None = None) -> Any:
     """Der schon geholte erste Teil, danach der Rest des Stroms; der Strom wird am Ende immer geschlossen."""
     try:
-        if first is not _STREAM_END:
-            yield first
-        async for chunk in stream:
+        chunk = first
+        while chunk is not _STREAM_END:
+            if remaining is not None:
+                chunk = chunk[:remaining]
+                remaining -= len(chunk)
             yield chunk
+            if remaining == 0:
+                return
+            chunk = await anext(stream, _STREAM_END)
+        if remaining:
+            raise _RangeIncomplete()
     finally:
         await _close_stream(stream)
 
 
-@router.get("/files/sources", dependencies=[Depends(require_permission("files.read"))])
+@router.get(
+    "/files/sources",
+    dependencies=[Depends(require_permission("files.read"))],
+    responses=error_responses(401, 403, 404, 507),
+)
 async def list_sources(user: CurrentUser) -> list[FileSourceOut]:
     sources = [s for s in await _all_sources() if _may_use(user, s)]
     return [
@@ -251,6 +325,7 @@ async def list_sources(user: CurrentUser) -> list[FileSourceOut]:
 @router.get(
     "/files/places",
     dependencies=[Depends(require_permission("files.read")), Depends(require_permission("hosts.read"))],
+    responses=error_responses(401, 403, 404, 507),
 )
 async def list_places(host_id: str, user: CurrentUser, session: SessionDep) -> list[FilePlaceOut]:
     """Wichtige Orte eines Servers (Abkürzungen im Dateimanager): gesammelt bei allen `FilePlaceProvider`, gleichzeitig,
@@ -265,8 +340,8 @@ async def list_places(host_id: str, user: CurrentUser, session: SessionDep) -> l
     # darf.
     if not any(_source_host_id(s) == host.id and _may_use(user, s) for s in await _all_sources()):
         return []
-    providers = get_extension_runtime().capabilities.query(FilePlaceProvider, allowed_ext_ids=None)
-    batches = await asyncio.gather(*(_places_of(provider, host.id) for provider in providers))
+    providers = get_extension_runtime().capabilities.query_named(FilePlaceProvider)
+    batches = await asyncio.gather(*(_places_of(provider, host.id, ext_id=ext_id) for ext_id, provider in providers))
     places: list[FilePlaceOut] = []
     seen: set[str] = set()
     for batch in batches:
@@ -279,9 +354,10 @@ async def list_places(host_id: str, user: CurrentUser, session: SessionDep) -> l
     return places[:MAX_PLACES]
 
 
-async def _places_of(provider: FilePlaceProvider, host_id: str) -> list[Any]:
+async def _places_of(provider: FilePlaceProvider, host_id: str, *, ext_id: str) -> list[Any]:
     try:
-        found = await asyncio.wait_for(provider.places_for_host(host_id), timeout=PLACES_TIMEOUT_S)
+        with gate.authorized_ssh(host_id, operations=frozenset({"command"}), ext_id=ext_id):
+            found = await asyncio.wait_for(provider.places_for_host(host_id), timeout=PLACES_TIMEOUT_S)
     except Exception as exc:  # noqa: BLE001 - ein Anbieter darf die anderen nicht verstecken
         # Ohne Traceback: das Protokoll gilt beim Ausliefern als Fehlerzeichen, und jede Server-Seite fragt neu.
         logger.warning("file_places_provider_failed provider=%r host=%s reason=%s", provider, host_id, str(exc) or type(exc).__name__)
@@ -314,7 +390,12 @@ def _source_host_id(source: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-@router.get("/files/{source_id}/info", dependencies=[Depends(require_permission("files.read"))])
+# API-Vertrag: FileSource.info() für externe Clients.
+@router.get(
+    "/files/{source_id}/info",
+    dependencies=[Depends(require_permission("files.read"))],
+    responses=error_responses(401, 403, 404, 502, 507),
+)
 async def source_info(source_id: str, user: CurrentUser, session: SessionDep) -> SourceInfo:
     """Quota, Health und Deep-Link der Quelle (`SourceInfo`, `FileSource.info()`); gleicher Fehlerpfad (`_call()`) wie
     jeder Quellen-Zugriff."""
@@ -322,7 +403,11 @@ async def source_info(source_id: str, user: CurrentUser, session: SessionDep) ->
     return await _call(source.info())
 
 
-@router.get("/files/{source_id}/list", dependencies=[Depends(require_permission("files.read"))])
+@router.get(
+    "/files/{source_id}/list",
+    dependencies=[Depends(require_permission("files.read"))],
+    responses=error_responses(401, 403, 404, 502, 507),
+)
 async def list_dir(
     source_id: str, user: CurrentUser, session: SessionDep, path: str = "/", cursor: str | None = None
 ) -> Any:
@@ -331,13 +416,27 @@ async def list_dir(
     return {"items": [e.model_dump(mode="json") for e in page.items], "next_cursor": page.next_cursor}
 
 
-@router.get("/files/{source_id}/stat", dependencies=[Depends(require_permission("files.read"))])
+# API-Vertrag: FileSource.stat() für externe Clients.
+@router.get(
+    "/files/{source_id}/stat",
+    dependencies=[Depends(require_permission("files.read"))],
+    responses=error_responses(401, 403, 404, 502, 507),
+)
 async def stat_entry(source_id: str, path: str, user: CurrentUser, session: SessionDep) -> FileEntry:
     source = await _resolve_source(source_id, user, session)
     return await _call(source.stat(PurePosixPath(path)), not_found=f"'{path}' nicht gefunden.")
 
 
-@router.get("/files/{source_id}/download", dependencies=[Depends(require_permission("files.read"))])
+@router.get(
+    "/files/{source_id}/download",
+    dependencies=[Depends(require_permission("files.read"))],
+    response_class=Response,
+    responses={
+        **error_responses(401, 403, 404, 416, 502, 507),
+        **file_responses("*/*"),
+        206: {"description": "Teilinhalt.", "content": file_responses("*/*")[200]["content"]},
+    },
+)
 async def download_file(
     source_id: str, path: str, request: Request, user: CurrentUser, session: SessionDep
 ) -> StreamingResponse:
@@ -346,24 +445,41 @@ async def download_file(
     entry = await _call(source.stat(p), not_found=f"'{path}' nicht gefunden.")
 
     offset = 0
+    length = None
     response_status = status.HTTP_200_OK
-    headers: dict[str, str] = {"Accept-Ranges": "bytes"}
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(p.name, safe='')}",
+        **UNTRUSTED_FILE_HEADERS,
+    }
     range_header = request.headers.get("range")
     if range_header and source.caps.range_read and entry.size is not None:
-        try:
-            start_str = range_header.removeprefix("bytes=").split("-", 1)[0]
-            offset = int(start_str) if start_str else 0
-        except ValueError:
-            offset = 0
-        else:
-            response_status = status.HTTP_206_PARTIAL_CONTENT
-            headers["Content-Range"] = f"bytes {offset}-{entry.size - 1}/{entry.size}"
+        match = re.fullmatch(r"bytes=([0-9]*)-([0-9]*)", range_header)
+        if match and any(match.groups()):
+            start_text, end_text = match.groups()
+            try:
+                start = int(start_text) if start_text else None
+                end = int(end_text) if end_text else None
+            except ValueError:
+                pass
+            else:
+                offset = start if start is not None else max(0, entry.size - end)
+                last = min(end, entry.size - 1) if start is not None and end is not None else entry.size - 1
+                if offset >= entry.size or last < offset:
+                    raise HTTPException(
+                        status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                        detail="Dateibereich nicht verfügbar.",
+                        headers={"Content-Range": f"bytes */{entry.size}"},
+                    )
+                length = last - offset + 1
+                response_status = status.HTTP_206_PARTIAL_CONTENT
+                headers["Content-Range"] = f"bytes {offset}-{last}/{entry.size}"
 
     # Den ersten Teil holen, bevor die Antwort gebaut wird: Starlette schickt den Kopf (200/206) sofort beim Start des
     # Stroms. Scheitert die Quelle gleich am Anfang (Nextcloud antwortet mit einer Weiterleitung oder 404, der Server
     # ist weg), wäre das sonst ein 200 mit leerem oder abgebrochenem Körper statt eines Fehlers.
     try:
-        stream, first = await _call(_start_stream(source, p, offset), not_found=f"'{path}' nicht gefunden.")
+        stream, first = await _call(_start_stream(source, p, offset, length), not_found=f"'{path}' nicht gefunden.")
     except HTTPException as exc:
         await _audit(
             session, user.id, source, "files.download", outcome="failure",
@@ -379,7 +495,7 @@ async def download_file(
         raise
 
     return StreamingResponse(
-        _primed_stream(stream, first),
+        _primed_stream(stream, first, length),
         status_code=response_status,
         media_type=entry.mime or "application/octet-stream",
         headers=headers,
@@ -406,7 +522,11 @@ def _upload_limit() -> int:
     return get_settings().files_max_upload_bytes or NO_LIMIT
 
 
-@router.post("/files/{source_id}/upload", dependencies=[Depends(require_permission("files.write"))])
+@router.post(
+    "/files/{source_id}/upload",
+    dependencies=[Depends(require_permission("files.write"))],
+    responses=error_responses(401, 403, 404, 409, 413, 502, 507),
+)
 @max_body_bytes(_upload_limit)
 async def upload_file(source_id: str, path: str, request: Request, user: CurrentUser, session: SessionDep) -> FileEntry:
     source = await _resolve_source(source_id, user, session)
@@ -434,7 +554,11 @@ async def upload_file(source_id: str, path: str, request: Request, user: Current
     )
 
 
-@router.post("/files/{source_id}/mkdir", dependencies=[Depends(require_permission("files.write"))])
+@router.post(
+    "/files/{source_id}/mkdir",
+    dependencies=[Depends(require_permission("files.write"))],
+    responses=error_responses(401, 403, 404, 409, 502, 507),
+)
 async def mkdir(source_id: str, payload: MkdirIn, user: CurrentUser, session: SessionDep) -> FileEntry:
     source = await _resolve_source(source_id, user, session)
     if not source.caps.mkdir:
@@ -442,7 +566,11 @@ async def mkdir(source_id: str, payload: MkdirIn, user: CurrentUser, session: Se
     return await _audited(session, user, source, "files.mkdir", {"path": payload.path}, source.mkdir(PurePosixPath(payload.path)))
 
 
-@router.post("/files/{source_id}/rename", dependencies=[Depends(require_permission("files.write"))])
+@router.post(
+    "/files/{source_id}/rename",
+    dependencies=[Depends(require_permission("files.write"))],
+    responses=error_responses(401, 403, 404, 409, 502, 507),
+)
 async def rename(source_id: str, payload: RenameIn, user: CurrentUser, session: SessionDep) -> FileEntry:
     source = await _resolve_source(source_id, user, session)
     if not source.caps.rename:
@@ -453,7 +581,11 @@ async def rename(source_id: str, payload: RenameIn, user: CurrentUser, session: 
     )
 
 
-@router.post("/files/{source_id}/remove", dependencies=[Depends(require_permission("files.write"))])
+@router.post(
+    "/files/{source_id}/remove",
+    dependencies=[Depends(require_permission("files.write"))],
+    responses=error_responses(401, 403, 404, 409, 502, 507),
+)
 async def remove(source_id: str, payload: RemoveIn, user: CurrentUser, session: SessionDep) -> dict[str, bool]:
     source = await _resolve_source(source_id, user, session)
     if not source.caps.remove:
@@ -465,12 +597,16 @@ async def remove(source_id: str, payload: RemoveIn, user: CurrentUser, session: 
     return {"removed": True}
 
 
-@router.get("/files/search", dependencies=[Depends(require_permission("files.read"))])
+@router.get(
+    "/files/search",
+    dependencies=[Depends(require_permission("files.read"))],
+    responses=error_responses(401, 403, 404, 502, 507),
+)
 async def search(user: CurrentUser, session: SessionDep, q: str, sources: str | None = Query(None)) -> list[SearchHit]:
     wanted = set(sources.split(",")) if sources else None
     all_sources = await _all_sources()
     targets = [
-        s for s in all_sources
+        _authorized_source(s) for s in all_sources
         if (wanted is None or s.source_id in wanted) and s.caps.search and _may_use(user, s)
     ]
     # Die Suche liest Dateiinhalte auf dem Server: je durchsuchter Quelle ein Eintrag (ohne Suchbegriff). Sofort
@@ -487,7 +623,7 @@ async def search(user: CurrentUser, session: SessionDep, q: str, sources: str | 
             if is_expected_connection_error(exc):  # Server aus: eine Zeile, kein Traceback
                 logger.info("file_source_search_failed source_id=%s reason=%s", source.source_id, describe_connection_error(exc))
             else:
-                logger.exception("file_source_search_failed source_id=%s", source.source_id)
+                logger.warning("file_source_search_failed source_id=%s reason=%s", source.source_id, error_message(exc))
             return []
 
     results = await asyncio.gather(*(_search_one(s) for s in targets))
@@ -505,8 +641,8 @@ async def _identity(source: FileSource, path: PurePosixPath) -> dict[str, Any] |
         return None
     try:
         identity = await method(path)
-    except Exception:  # noqa: BLE001 - nicht prüfbar heißt nicht "gleich"
-        logger.warning("file_identity_failed source_id=%s", source.source_id, exc_info=True)
+    except Exception as exc:  # noqa: BLE001 - nicht prüfbar heißt nicht "gleich"
+        logger.warning("file_identity_failed source_id=%s reason=%s", source.source_id, error_message(exc))
         return None
     return identity if isinstance(identity, dict) else None
 
@@ -585,7 +721,7 @@ async def _run_transfer(
         if is_expected_connection_error(exc):  # Server aus: eine Zeile, kein Traceback
             logger.info("file_transfer_failed run_id=%s reason=%s", run_id, reason)
         else:
-            logger.exception("file_transfer_failed run_id=%s", run_id)
+            logger.warning("file_transfer_failed run_id=%s reason=%s", run_id, reason)
         # Zuerst ins Protokoll: das Ziel kann schon abgeschnitten sein (`bytes` zeigt, wie weit es kam).
         await _audit_transfer_result(
             actor_id, (source_from, source_to), "failure", {**audit_detail, "bytes": bytes_done}
@@ -605,7 +741,11 @@ async def _run_transfer(
     await hub.publish(f"runs.{run_id}", {"status": "succeeded", "bytes": bytes_done}, required_permission="files.read")
 
 
-@router.post("/files/transfer", dependencies=[Depends(require_permission("files.write"))])
+@router.post(
+    "/files/transfer",
+    dependencies=[Depends(require_permission("files.write"))],
+    responses=error_responses(401, 403, 404, 409, 507),
+)
 async def transfer(payload: TransferIn, session: SessionDep, user: CurrentUser) -> TransferOut:
     source_from = await _resolve_source(payload.from_.source, user, session)
     source_to = await _resolve_source(payload.to.source, user, session)

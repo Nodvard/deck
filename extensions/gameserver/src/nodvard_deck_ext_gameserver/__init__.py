@@ -4,6 +4,7 @@ Alles Spiel- und Betriebssystem-Spezifische steckt in `profiles/`, pro Server w�
 """
 from __future__ import annotations
 
+from http import HTTPStatus
 import time
 from typing import Any
 
@@ -28,7 +29,8 @@ from nodvard_sdk import (
     WidgetAction,
     WidgetSpec,
 )
-from pydantic import BaseModel
+from nodvard_sdk.errors import error_message
+from pydantic import BaseModel, ConfigDict
 
 from .joincode import DEFAULT_JOIN_CODE_PATTERN, extract_join_code
 from .profiles import PROFILES, config_for, get_profile
@@ -77,13 +79,14 @@ class GameServerStatus:
             self._cache[host.id] = (time.monotonic(), data)
             return data
         try:
-            result = await self._ctx.exec.run(host, profile.status_command(config), timeout_s=45)
+            with self._ctx.exec.read_access(host, timeout_s=45):
+                result = await self._ctx.exec.run(host, profile.status_command(config), timeout_s=45)
             if result.exit_code != 0:
                 raise RuntimeError(result.stderr.strip() or f"Exit-Code {result.exit_code}")
             data = profile.parse_status(result.stdout)
             data["error"] = None
         except Exception as exc:  # noqa: BLE001 - ein nicht erreichbarer Server ist ein Zustand, kein Absturz
-            data = {"profile": profile.id, "running": False, "service_state": "unknown", "error": str(exc) or type(exc).__name__}
+            data = {"profile": profile.id, "running": False, "service_state": "unknown", "error": error_message(exc)}
         # Ausweg für Setups ohne passendes Profil: eigener Join-Code-Befehl (`log_command`, `join_code_pattern`).
         if settings.get("log_command") and data.get("error") is None:
             data["join_code"] = await _legacy_join_code(self._ctx, host, settings)
@@ -93,7 +96,8 @@ class GameServerStatus:
 
 async def _legacy_join_code(ctx: ExtensionContext, host: Any, settings: dict[str, Any]) -> str | None:
     try:
-        result = await ctx.exec.run(host, settings["log_command"], timeout_s=15)
+        with ctx.exec.read_access(host):
+            result = await ctx.exec.run(host, settings["log_command"], timeout_s=15)
     except Exception:  # noqa: BLE001
         return None
     if result.exit_code != 0:
@@ -160,6 +164,8 @@ class _WatchJobSpec:
 
 
 class _ConfigIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     profile: str
     values: dict[str, str] = {}
 
@@ -260,7 +266,11 @@ class Extension(NodvardExtension):
             config = config_for(await ctx.settings.get(), host_id)
             return {**summary, "details": data, "config": {"profile": config.profile, "values": config.values}}
 
-        @router.get("/servers/{host_id}")
+        @router.get(
+            "/servers/{host_id}",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def server_details(host_id: str) -> dict[str, Any]:
             """Details für Leser (`hosts.read`): ohne Server-Log, immer aus dem Zwischenspeicher."""
             # Log (Spielernamen, Verbindungsdaten) und `fresh` nur mit `hosts.execute`, wie die Container-Logs im Modul Docker.
@@ -268,7 +278,11 @@ class Extension(NodvardExtension):
 
         config_router = APIRouter()
 
-        @config_router.put("/servers/{host_id}/config")
+        @config_router.put(
+            "/servers/{host_id}/config",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 422,)},
+        )
         async def set_config(host_id: str, payload: _ConfigIn) -> dict[str, Any]:
             """Profil und Werte je Server (`settings.write`); leer heißt „automatisch erkennen“ (wird nicht gespeichert)."""
             await _host_or_404(host_id)
@@ -308,24 +322,44 @@ class Extension(NodvardExtension):
 
         action_router = APIRouter()
 
-        @action_router.get("/servers/{host_id}/details")
+        @action_router.get(
+            "/servers/{host_id}/details",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def server_details_full(host_id: str, fresh: bool = False) -> dict[str, Any]:
             """Wie `/servers/{host_id}`, aber mit Server-Log und `fresh` (am Cache vorbei, etwa nach einer Aktion)."""
             return await _details(host_id, fresh=fresh, with_log=True)
 
-        @action_router.post("/servers/{host_id}/start")
+        @action_router.post(
+            "/servers/{host_id}/start",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def start_server(host_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict[str, Any]:
             return await _propose_action(host_id, "start", actor)
 
-        @action_router.post("/servers/{host_id}/stop")
+        @action_router.post(
+            "/servers/{host_id}/stop",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def stop_server(host_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict[str, Any]:
             return await _propose_action(host_id, "stop", actor)
 
-        @action_router.post("/servers/{host_id}/restart")
+        @action_router.post(
+            "/servers/{host_id}/restart",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def restart_server(host_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict[str, Any]:
             return await _propose_action(host_id, "restart", actor)
 
-        @action_router.post("/servers/{host_id}/backup")
+        @action_router.post(
+            "/servers/{host_id}/backup",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def backup_world(host_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict[str, Any]:
             return await _propose_action(host_id, "backup", actor)
 

@@ -92,8 +92,9 @@ def guard_command(watch_files: list[str] | None = None) -> str:
         "echo \"@@jail $j\"; fail2ban-client status \"$j\" 2>/dev/null; done; "
         "elif printf '%s' \"$o\" | grep -qiE 'permission denied|you must be root'; then echo noaccess; "
         "else echo stopped; fi; else echo none; fi; "
-        "echo @@sshd; (sshd -T 2>/dev/null || /usr/sbin/sshd -T 2>/dev/null) | grep -E "
+        "echo @@sshd; { sshd_error=$({ (sshd -T || /usr/sbin/sshd -T) | grep -iE "
         "'^(port|permitrootlogin|passwordauthentication|permitemptypasswords|pubkeyauthentication|maxauthtries|x11forwarding|kbdinteractiveauthentication) '; "
+        "} 2>&1 1>&3); echo @@sshderror; printf '%s\\n' \"$sshd_error\" | sed 's/^/!/'; } 3>&1; "
         "echo @@range; cat /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null; "
         # Der Prozessname in `users:(("name",...` kommt vom Programm selbst und kann Zeilenumbrüche enthalten
         # ("a\n@@ssh\nb"). Nur Zeilen, die mit tcp/udp beginnen, kommen durch: sonst könnte ein Prozess hier eine
@@ -244,6 +245,7 @@ class GuardSnapshot:
     sshd: dict[str, str] = field(default_factory=dict)
     ssh_findings: list[SshFinding] = field(default_factory=list)
     dynamic_min: int = DEFAULT_DYNAMIC_PORT_MIN
+    sshd_error: str | None = None
 
     @property
     def banned(self) -> set[str]:
@@ -526,8 +528,10 @@ def parse_guard(output: str, dynamic_processes: list[str] | None = None, ranges:
     files = parse_files(s.get("files", []), binary=False)
     files.update(parse_files(s.get("bins", []), binary=True))
     sshd, ssh_findings = check_sshd(s.get("sshd", []))
+    sshd_error = " ".join(line[1:].strip() for line in s.get("sshderror", []) if line.startswith("!"))[:300]
     return GuardSnapshot(
         sshd=sshd, ssh_findings=ssh_findings,
+        sshd_error=(sshd_error or None) if not sshd else None,
         is_root=uid == "0", failures=failures, logins=logins, fail2ban=state if state in F2B_STATES else "none",
         jails=jails, ports=parse_ports(s.get("ports", []), dynamic_processes=dynamic_processes, dynamic_min=dynamic_min,
                                        is_root=uid == "0", ranges=ranges),
@@ -664,11 +668,7 @@ def _same(entry: FileEntry | dict[str, Any] | None, state: Any) -> bool:
 
 
 def adopted_by_setup(change: Change, entry: FileEntry | None, old: dict[str, Any] | None, run: SetupRun) -> bool:
-    """Stammt die Änderung nachweislich von der eigenen Einrichtung? Nur genau das, was der Befehl gemeldet hat:
-    Konto-Dateien und die Schlüsseldatei mit dem Stand vorher und nachher (bestätigter Stand = vorher, jetzt = nachher)
-    und der passenden Aktion, die eigenen sudo-Regeln mit genau dem Inhalt, den der Kern schreibt, die alte
-    `lattice-<Benutzer>` und die entfernte volle Regel nur gelöscht. Was nur Rechte oder Besitzer ändert, übernimmt der
-    Wächter nie still."""
+    """Erkennt eigene Einrichtungsänderungen nur anhand bestätigter Aktionen und exakt passender Dateistände."""
     user, path = run.user, change.path
     if not _SETUP_USER_RE.fullmatch(user):
         return False

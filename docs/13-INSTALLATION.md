@@ -8,6 +8,9 @@ Jeder Weg sagt, wie du die Seite öffnest, einen anderen Port nimmst, den Einric
 Danach geht es in der Erst-Einrichtung mit dem
 [Einrichtungsassistenten](11-ERST-EINRICHTUNG.md#2-einrichtungsassistent-setup) weiter.
 
+Um Server über dein Tailnet zu verbinden, folge der [Tailscale-Anleitung](13-TAILSCALE.md).
+Sie führt durch die Installation auf Deck-Host und Server, die MagicDNS-Adresse und den SSH-Zugang.
+
 Wer nur Docker hat und das Repository nicht kennt, braucht eine einzige Datei:
 [`deploy/compose.standalone.yml`](../deploy/compose.standalone.yml). Das fertige Image kommt aus der
 GitHub-Container-Registry (`ghcr.io/nodvard/deck`, für x86-Rechner und Raspberry Pi), es wird nichts gebaut.
@@ -35,26 +38,84 @@ GitHub-Container-Registry (`ghcr.io/nodvard/deck`, für x86-Rechner und Raspberr
 - **Port:** Nodvard Deck antwortet im Container auf Port 8080. Ist 8080 auf dem Gerät schon belegt, änderst
   du nur die Zahl **links** vom Doppelpunkt (`"8081:8080"`), rechts bleibt immer `8080`. Auf manchen NAS ist
   8080 von Haus aus vergeben; die Wege unten sagen, wo.
+- **HTTP und Erreichbarkeit:** Nodvard Deck lauscht im Container standardmäßig auf `0.0.0.0:8080`, also auf
+  allen IPv4-Adressen, und spricht unverschlüsseltes HTTP. Die Portfreigabe `"8080:8080"` in den Beispielen
+  veröffentlicht den Port auf allen Netzwerkadressen des Rechners. Für HTTPS brauchst du einen
+  [Reverse-Proxy](12-REVERSE-PROXY.md). Den direkten Zugriff beschränkst du wie im folgenden Abschnitt.
 - **Daten:** Alles liegt im Docker-Speicher (Volume) `nodvard-deck-data`. Das ist auch auf einem NAS der
-  empfohlene Weg, weil er keine Rechte-Einstellungen braucht. Lieber ein Ordner (`<ordner>:/app/data`)? Dann
-  macht der Container beim Start den Benutzer mit der Nummer **1000** zum Besitzer dieses Ordners und läuft
-  danach als dieser Benutzer. Die Nummer muss zu keinem Benutzer des NAS gehören. Auf einem normalen
-  Laufwerk klappt das ohne dein Zutun. Auf NAS-Freigaben mit eigenen Zugriffsregeln (ACL) oder auf einem
-  Netzlaufwerk kann es scheitern: Dann steht im Protokoll „Die Besitzrechte an /app/data liessen sich nicht
-  setzen“, und der Benutzer 1000 braucht Schreibrechte auf den Ordner (Hinweise je NAS unten). Klappt es,
+  empfohlene Weg für neue Installationen. Ohne eigene `user:`-Vorgabe startet das Image kurz als root,
+  übernimmt `/app/data` samt Inhalt für **1000:1000** und wechselt vor Migration und Anwendung zu diesem
+  Benutzer. So starten auch ältere root-eigene Datenordner nach einem Update weiter. Die Nummer muss zu
+  keinem Benutzer des NAS gehören. Die mitgelieferten Compose-Dateien setzen dagegen `user: "1000:1000"`
+  und `cap_drop: ALL`; dabei entfällt die automatische Besitzübernahme. Gehören vorhandene Daten noch root,
+  führe einmal die Befehle unten aus. Auf NAS-Freigaben mit eigenen Zugriffsregeln (ACL) oder Netzlaufwerken
+  braucht Benutzer 1000 zusätzlich Schreibrechte. Ist `/app/data` nicht beschreibbar, bricht der Start mit
+  „FEHLER: /app/data ist für Benutzer … nicht beschreibbar.“ und dem Reparaturbefehl ab. Klappt es,
   können danach nur noch der Benutzer 1000 und root den Ordner lesen; Dateimanager oder
   Sicherungsprogramme, die als anderer Benutzer laufen, kommen nicht mehr an die Dateien. Sichere Nodvard
   Deck deshalb mit der eingebauten Sicherung ([Erst-Einrichtung, Abschnitt 6](11-ERST-EINRICHTUNG.md#6-das-dashboard-selbst-sichern)).
 - **Einrichtungscode:** Er steht im Protokoll (Log) des Containers, in einem Rahmen aus `=`-Zeichen. Bei jedem
   Weg steht, wo du das Protokoll findest.
 
+Vorhandene root-eigene Daten bei `user: "1000:1000"` einmalig umstellen, im Ordner mit `compose.yml`:
+
+```bash
+docker compose stop nodvard-deck
+docker compose run --rm --no-deps --user 0:0 --cap-add CHOWN --cap-add DAC_OVERRIDE --entrypoint /usr/local/bin/migrate-data nodvard-deck
+docker compose up -d nodvard-deck
+```
+
+Der Hilfscontainer ändert nur die Besitzrechte in `/app/data`. Daten und Volume-Namen bleiben erhalten.
+
+### Zugriff auf diesen Rechner oder das LAN beschränken
+
+Die Beispiele verwenden Host-Port 8080. Behalte bei Compose, `docker run` und `podman run` deinen bisherigen
+Host-Port bei: Aus `8081:8080` wird `127.0.0.1:8081:8080` oder `192.168.1.10:8081:8080`.
+Passe auch die Adresse im Browser bzw. das Proxy-Ziel an: `http://127.0.0.1:8081` oder
+`http://192.168.1.10:8081`. Der Container-Port rechts bleibt `8080`.
+
+**Reverse-Proxy direkt auf demselben Rechner:** Ersetze beim Dienst `nodvard-deck` die vorhandene Liste
+unter `ports:` durch diese Zeile, damit Port 8080 nur über `127.0.0.1` auf diesem Rechner erreichbar ist:
+
+```yaml
+services:
+  nodvard-deck:
+    ports:
+      - "127.0.0.1:8080:8080"
+```
+
+Der Proxy leitet dann an `http://127.0.0.1:8080` weiter. Läuft er als Container im selben Docker-Netz,
+lasse `ports:` bei Nodvard Deck ganz weg und leite an `http://nodvard-deck:8080` weiter. Die Adresse des
+Proxys trägst du außerdem als [vertrauenswürdigen Proxy](12-REVERSE-PROXY.md#4-adresse-eintragen) ein.
+
+**Nur im LAN:** Ersetze die vorhandene Portfreigabe stattdessen durch die LAN-Adresse des Rechners,
+hier als Beispiel `192.168.1.10`:
+
+```yaml
+services:
+  nodvard-deck:
+    ports:
+      - "192.168.1.10:8080:8080"
+```
+
+Öffne dann `http://192.168.1.10:8080`. Verwende die tatsächliche, möglichst feste LAN-Adresse deines
+Rechners. Die Bindung wählt die Zieladresse, beschränkt aber keine Absender: Richte im Router keine
+Portweiterleitung auf 8080 ein und erlaube den Zugriff in der Firewall nur aus deinem LAN.
+
+Ändere die vorhandene Compose-Datei direkt und führe dort `docker compose up -d` aus. Die Ausschnitte
+ersetzen nur `ports:`, die übrigen Einstellungen und der Datenspeicher bleiben stehen. Bei `docker run`
+oder `podman run` ersetzt du entsprechend `-p 8080:8080` durch `-p 127.0.0.1:8080:8080` oder
+`-p 192.168.1.10:8080:8080` und erstellst den Container wie im jeweiligen Weg beschrieben neu.
+
 ## Kurze Fassung für Oberflächen
 
 Die Datei `compose.standalone.yml` liest den Port aus einer verschachtelten Variablen
 (`${NODVARD_DECK_PORT:-${LATTICE_PORT:-8080}}`, der innere Teil ist ein
 [alter Name](11-ERST-EINRICHTUNG.md#m-alte-namen-bei-älteren-installationen)). Nicht jede Oberfläche versteht diese
-Schreibweise. Für die NAS-Wege gibt es deshalb diese Fassung ohne Variablen; den Port änderst du direkt in
-der Zeile unter `ports:`:
+Schreibweise. Verwende in eigenen Konfigurationsdateien stets den aktuellen Namen `NODVARD_DECK_PORT`.
+Das Auslieferungsskript `deploy_pi.sh` benennt alte `LATTICE_*`-Einträge in `deploy/.env` automatisch um;
+bei manueller Bereitstellung ersetzt du alte Namen selbst. Für die NAS-Wege gibt es diese Fassung ohne Variablen;
+den Port änderst du direkt in der Zeile unter `ports:`:
 
 ```yaml
 services:
@@ -259,10 +320,10 @@ einer deutschen Oberfläche sind sie übersetzt.
 - **Vorsicht mit „Clean“:** Diese Aktion im Projekt entfernt laut Synology auch die Volumes des Projekts, also
   die Daten von Nodvard Deck. Vorher sichern ([Erst-Einrichtung, Abschnitt 6](11-ERST-EINRICHTUNG.md#6-das-dashboard-selbst-sichern)).
 - **Daten:** im Speicher `nodvard-deck-data`. Lieber ein Ordner, z. B. `/volume1/docker/nodvard-deck:/app/data`?
-  Meldet der Container „Die Besitzrechte an /app/data liessen sich nicht setzen“, gib in der File Station nur
-  diesem Ordner das Recht **Read & Write** für **Everyone**. So beschreibt es Synology für Container, die
-  ihren Ordner nicht beschreiben können. Damit kommen aber alle Benutzer des NAS an den Ordner, und dort
-  liegen auch Schlüssel; der Speicher ist deshalb der bessere Weg.
+  Ohne `user:`-Vorgabe übernimmt der Entrypoint vorhandene root-eigene Daten beim Update. Mit
+  `user: "1000:1000"` das Projekt stoppen und die einmalige Umstellung oben per SSH im Projektordner
+  ausführen. Bei abweichendem Dateinamen jeweils `docker compose -f docker-compose.yml` verwenden.
+  Verhindern DSM-ACLs den Zugriff weiterhin, Benutzer 1000 Schreibrechte nur auf diesen Ordner geben.
 
 ### UGREEN (UGOS Pro, App „Docker“)
 
@@ -279,6 +340,9 @@ einer deutschen Oberfläche sind sie übersetzt.
   aktualisierst du das Projekt. Die Daten bleiben im Speicher.
 - **Daten:** im Speicher `nodvard-deck-data`. Lieber ein Ordner? Der Ordner muss vor **Deploy** existieren,
   sonst bricht UGOS ab. Ein relativer Pfad wie `./daten:/app/data` landet im Speicherpfad des Projekts.
+  Ohne `user:`-Vorgabe übernimmt der Entrypoint root-eigene Daten beim Update automatisch. Mit
+  `user: "1000:1000"` das Projekt stoppen und die einmalige Umstellung oben per SSH im Speicherpfad des
+  Projekts ausführen. Den vorhandenen Ordner und seine Zuordnung zu `/app/data` beibehalten.
 
 ### QNAP (Container Station 3)
 
@@ -309,6 +373,14 @@ z. B. `"8090:8080"` statt `"8080:8080"` in der kurzen Fassung.
 
 Unraid bringt Docker mit, aber kein Docker Compose. Der einfachste Weg ist eine eigene Vorlage:
 
+Vor dem ersten Start im Unraid-Terminal als root den Datenordner vorbereiten:
+
+```bash
+mkdir -p /mnt/user/appdata/nodvard-deck
+chown -R 1000:1000 /mnt/user/appdata/nodvard-deck
+chmod 700 /mnt/user/appdata/nodvard-deck
+```
+
 1. Reiter **Docker** → ganz unten **Add Container**.
 2. **Name** `nodvard-deck`, **Repository** `ghcr.io/nodvard/deck:latest`, **Network Type** `Bridge`.
 3. **Add another Path, Port, Variable, Label or Device** → **Config Type** `Port`, **Container Port** `8080`,
@@ -322,9 +394,9 @@ Unraid bringt Docker mit, aber kein Docker Compose. Der einfachste Weg ist eine 
   Container Port bleibt 8080) → **Apply**.
 - **Einrichtungscode:** Symbol des Containers → **Logs**.
 - **Aktualisieren:** oben rechts auf **Advanced View** umschalten, beim Container **force update**.
-- **Daten:** im Ordner `/mnt/user/appdata/nodvard-deck`. Der Container macht beim Start den Benutzer 1000 zum
-  Besitzer. Setzt ein Rechte-Werkzeug von Unraid die Besitzer später zurück, richtet der Container das beim
-  nächsten Start wieder ein.
+- **Daten:** im Ordner `/mnt/user/appdata/nodvard-deck`. Das Image startet als root, setzt die Besitzrechte
+  des Ordners einmal auf `1000:1000` und läuft danach ohne root weiter. Setzt ein Rechte-Werkzeug von Unraid
+  sie später zurück, richtet der Container das beim nächsten Start wieder ein.
 - **Lieber mit Compose?** Das Plugin **Compose Manager Plus** (im Reiter **Apps** suchen) bringt Docker
   Compose mit. Dort unter **Docker** → **Compose** mit **Add Stack** einen Stack anlegen, die
   [kurze Fassung](#kurze-fassung-für-oberflächen) einfügen und im Menü des Stacks **Compose Up**; das Protokoll
@@ -386,6 +458,14 @@ services:
       - /DATA/AppData/nodvard-deck:/app/data
 ```
 
+Vor dem ersten Start per SSH oder im Terminal des Hosts den Datenordner vorbereiten:
+
+```bash
+sudo mkdir -p /DATA/AppData/nodvard-deck
+sudo chown -R 1000:1000 /DATA/AppData/nodvard-deck
+sudo chmod 700 /DATA/AppData/nodvard-deck
+```
+
 1. Im Bereich **Apps** auf **+** → **Install a customized app**.
 2. Oben auf **Import**, Reiter **Docker Compose**, die Fassung oben einfügen → **Submit**.
 3. Die übernommenen Angaben prüfen → **Install**.
@@ -394,8 +474,9 @@ services:
 - **Port schon belegt?** Im Menü der App **Settings**, die linke Portzahl ändern, **Save**.
 - **Einrichtungscode:** Im Menü der App **Settings** → oben **Terminal and Logs** → Reiter **Logs**.
 - **Aktualisieren:** Im Menü der App **Check then update**.
-- **Daten:** im Ordner `/DATA/AppData/nodvard-deck`. Der Container macht beim Start den Benutzer 1000 zum
-  Besitzer.
+- **Daten:** im Ordner `/DATA/AppData/nodvard-deck`. Das Image startet als root, setzt die Besitzrechte
+  des Ordners einmal auf `1000:1000` und läuft danach ohne root weiter. Werden sie später zurückgesetzt,
+  richtet der Container das beim nächsten Start wieder ein.
 
 ## Raspberry Pi, Proxmox und Docker Desktop
 

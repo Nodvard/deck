@@ -1,18 +1,11 @@
-/**
- * Befehlspalette: Strg+K / ⌘K
- * springt überall hin -- jede Seite (Kern und Extensions), jeder Host (Konsole,
- * Terminal), jede App mit Adresse. Eine Suche statt Menü-Klickerei.
- *
- * Nur Navigation, keine Aktion mit Nebenwirkung: Starten/Stoppen bleibt auf den Seiten
- * mit Rückfrage und Gate.
- */
+/** Strg+K oder ⌘K öffnet die Navigation zu Seiten, Servern und Apps; Aktionen bleiben auf ihren Seiten. */
 import * as Dialog from "@radix-ui/react-dialog";
 import { ArrowRight, BookOpen, ExternalLink, Monitor, Search, Server, SquareTerminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { safeHref } from "../lib/apps";
-import { usePages } from "../lib/catalog";
+import { useCoreFeatures, usePages } from "../lib/catalog";
 import { guideUrl } from "../lib/docs";
 import { hasConsole, useHosts, useOverview, useTerminalHosts } from "../lib/overview";
 import { useVisibleSections } from "../routes/settings/SettingsLayout";
@@ -71,6 +64,7 @@ function usePaletteItems(open: boolean): PaletteItem[] {
   const sections = useVisibleSections();
   const navigate = useNavigate();
   const { data: pages } = usePages();
+  const features = useCoreFeatures();
   const hasPermission = useAuthStore((s) => s.hasPermission);
   // `user` abonnieren, damit die Liste nach dem Laden der Rechte neu gebaut wird.
   const user = useAuthStore((s) => s.user);
@@ -78,7 +72,8 @@ function usePaletteItems(open: boolean): PaletteItem[] {
   const canExecute = useAuthStore((s) => s.hasPermission("hosts.execute"));
   const { data: hosts } = useHosts(open && canReadHosts);
   const { data: overview } = useOverview(open && canReadHosts && edition.choose_modules);
-  const { data: terminalHosts } = useTerminalHosts(open && canExecute && edition.choose_modules);
+  const canUseTerminal = canExecute && features.terminal;
+  const { data: terminalHosts } = useTerminalHosts(open && canUseTerminal && edition.choose_modules);
 
   return useMemo(() => {
     const items: PaletteItem[] = [];
@@ -90,7 +85,9 @@ function usePaletteItems(open: boolean): PaletteItem[] {
     }));
     for (const page of [...CORE_PAGES, ...settingsPages]) {
       if (!allowed(page.permission) || !editionPathAvailable(page.path, edition.choose_modules)
-        || !edition.choose_modules && ["/", "/terminal"].includes(page.path)) continue;
+        || !edition.choose_modules && ["/", "/terminal"].includes(page.path)
+        || page.path === "/terminal" && !features.terminal
+        || page.path === "/files" && !features.files) continue;
       items.push({
         id: `page:${page.path}`, group: "Seiten", title: page.title, keywords: page.keywords,
         icon: <Icon name={page.icon} />, run: () => navigate(page.path),
@@ -123,7 +120,7 @@ function usePaletteItems(open: boolean): PaletteItem[] {
           run: () => navigate(`/console/${host.id}`),
         });
       }
-      if (edition.choose_modules && terminalIds.has(host.id)) {
+      if (edition.choose_modules && canUseTerminal && terminalIds.has(host.id)) {
         items.push({
           id: `terminal:${host.id}`, group: "Server", title: `${host.display_name}: Terminal`, subtitle: host.address,
           keywords: `${host.name} ssh shell`, icon: <SquareTerminal size={16} strokeWidth={1.8} />,
@@ -141,7 +138,7 @@ function usePaletteItems(open: boolean): PaletteItem[] {
       });
     }
     return items;
-  }, [pages, hosts, overview, terminalHosts, navigate, hasPermission, user, edition, sections]);
+  }, [pages, hosts, overview, terminalHosts, features.terminal, features.files, canUseTerminal, navigate, hasPermission, user, edition, sections]);
 }
 
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -188,7 +185,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-scrim/60 backdrop-blur-sm" />
         <Dialog.Content
-          className="panel fixed left-1/2 top-[12vh] z-50 w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 overflow-hidden p-0"
+          className="panel fixed left-1/2 top-[12vh] z-50 w-full max-w-[min(100vw-2rem,36rem)] -translate-x-1/2 overflow-hidden p-0"
           aria-describedby={undefined}
           onKeyDown={onKeyDown}
         >

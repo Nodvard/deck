@@ -8,6 +8,7 @@ haette den eigentlichen Code nie ausgefuehrt.
 
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -204,7 +205,8 @@ async def test_broken_extension_is_isolated_and_does_not_block_others(tmp_path, 
 
     record = await db_session.get(ExtensionRecord, "broken-ext")
     assert record.state == "error"
-    assert "absichtlich kaputt" in record.last_error
+    assert re.fullmatch(r"setup\(\) fehlgeschlagen\. Fehlerkennung: [0-9a-f]{32}\.", record.last_error)
+    assert "absichtlich kaputt" not in record.last_error
     assert "broken-ext" not in get_extension_runtime().loaded
 
 
@@ -313,7 +315,8 @@ async def test_enable_after_on_start_crash_unloads_and_starts_again(tmp_path, db
 
     record = await db_session.get(ExtensionRecord, "flaky-ext")
     assert record.state == "error"
-    assert "Dienst gerade nicht erreichbar" in record.last_error
+    assert re.fullmatch(r"on_start\(\) fehlgeschlagen\. Fehlerkennung: [0-9a-f]{32}\.", record.last_error)
+    assert "Dienst gerade nicht erreichbar" not in record.last_error
     assert "flaky-ext" in get_extension_runtime().loaded
 
     # Ursache behoben -> erneutes Einschalten startet wirklich neu.
@@ -375,7 +378,8 @@ async def test_enable_after_on_start_crash_keeps_error_when_it_still_fails(tmp_p
 
     record = await db_session.get(ExtensionRecord, "flaky-ext")
     assert record.state == "error"
-    assert "Dienst gerade nicht erreichbar" in record.last_error
+    assert re.fullmatch(r"on_start\(\) fehlgeschlagen\. Fehlerkennung: [0-9a-f]{32}\.", record.last_error)
+    assert "Dienst gerade nicht erreichbar" not in record.last_error
     # Weiterhin verfolgt, damit "Ausschalten" sie sauber entfernen kann -- und nicht doppelt.
     assert "flaky-ext" in get_extension_runtime().loaded
 

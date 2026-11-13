@@ -1,9 +1,12 @@
 #!/bin/sh
-# Lässt unter <Ordner> nur die genannten Module (durch Kommas getrennt) und das gemeinsame UI-Kit stehen; leer heißt alle.
+# Lässt nur die genannten Module und das gemeinsame UI-Kit stehen; leer heißt Standardauswahl.
 set -eu
 modules=$1
 folder=$2
-[ -n "$modules" ] || exit 0
+if [ -z "$modules" ]; then
+  rm -rf "$folder/network" "$folder/hello-world"
+  exit 0
+fi
 case $modules in
   *[!a-z0-9,-]*)
     echo "Ungültige Modulliste: $modules (erlaubt sind Kleinbuchstaben, Ziffern, Bindestrich und Kommas)." >&2

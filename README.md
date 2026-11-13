@@ -81,7 +81,6 @@ Die Bilder zeigen Beispieldaten. Klicke auf ein Bild für die vergrößerte Ansi
 | Nodvard Shield | Sicherheit: Virenscan (ClamAV), Härtungs-Audits (Lynis), Update-Zentrale, Einbruchserkennung, Datei-Integrität, Container-Wache |
 | Pi-hole (Beta) | Statistiken, Blocken pausieren und fortsetzen, Sperrlisten neu laden, Domains sperren oder erlauben |
 | Nginx Proxy Manager (Beta) | Proxy-Hosts ein- und ausschalten, Zertifikatsablauf, Adress-Check zu den Containern |
-| Netzwerk (Beta) | Wegweiser zu den Modulen Pi-hole und Nginx Proxy Manager. Wer die beiden nutzt, kann dieses Modul ausschalten. |
 | Skripte | Versionierte Skript-Bibliothek, auf einem oder vielen Servern ausführen, zeitgesteuert, auf Wunsch ohne Klick, solange sich nichts ändert |
 | Push-Nachrichten | Push-Benachrichtigungen über ntfy und weitere Kanäle |
 
@@ -108,6 +107,10 @@ Server legst du von Hand an, Auslastung, Docker-Container, Updates und Sicherhei
 
 Erweiterungen bauen auf einem dokumentierten SDK auf. Du kannst also eigene schreiben,
 siehe [docs/02-EXTENSION-API.md](docs/02-EXTENSION-API.md).
+Das ausführbare Beispiel `hello-world` bleibt dort als Vorlage erklärt und wird nicht standardmäßig mitgeliefert.
+Der frühere [Netzwerk-Wegweiser](extensions/network/extension.toml) zu Pi-hole und Nginx Proxy Manager bleibt
+ebenfalls im Quellbaum für eigene Builds, gehört aber nicht mehr zum Standardimage.
+Vor einem Update beide Module ausschalten, falls sie noch aktiv sind: [Hinweise zum Bauen](deploy/README.md#bauen).
 
 ## Schnellstart in 5 Minuten
 
@@ -238,7 +241,9 @@ Image erst geladen wird.
 
 </details>
 
-**Weitere Wege**, jeweils Schritt für Schritt in
+### Weitere Wege
+
+Jeweils Schritt für Schritt in
 [docs/13, Installation je Plattform](docs/13-INSTALLATION.md):
 
 - **Im Terminal:** ein einzelner `docker run`-Befehl, Podman
@@ -255,31 +260,19 @@ Die komplette Schritt-für-Schritt-Anleitung (Einrichtungscode, SSH-Zugang, Prox
 Push-Nachrichten, Sicherung von Nodvard Deck selbst, Notfall-Befehle) steht in
 [docs/11-ERST-EINRICHTUNG.md](docs/11-ERST-EINRICHTUNG.md).
 
-### Weitere Wege
-
-Für diese Wege reicht teils Docker oder Podman allein. Jeder steht Schritt für Schritt in
-[docs/11, Abschnitt 1.1](docs/11-ERST-EINRICHTUNG.md#11-installation-ohne-das-repo):
-
-- **Im Terminal:** ein einzelner `docker run`-Befehl, Podman
-  ([Anleitung](docs/11-ERST-EINRICHTUNG.md#im-terminal))
-- **Mit einer Web-Oberfläche:** Portainer (aus dem Repository oder mit dem Web-Editor) und Dockge
-  ([Anleitung](docs/11-ERST-EINRICHTUNG.md#mit-einer-web-oberfläche)). Im Web-Editor von Portainer gehört der
-  **Inhalt** der Compose-Datei hinein, nicht die Befehle aus dem Schnellstart; sonst meldet Portainer „top-level
-  object must be a mapping“.
-- **Auf einem NAS:** Synology, UGREEN, QNAP, Unraid, TrueNAS SCALE, OpenMediaVault, ZimaOS und CasaOS
-  ([Anleitung](docs/11-ERST-EINRICHTUNG.md#auf-einem-nas))
-- **Auf bestimmten Geräten:** Raspberry Pi, Proxmox (VM oder LXC-Container) und Docker Desktop zum Ausprobieren
-  ([Anleitung](docs/11-ERST-EINRICHTUNG.md#raspberry-pi-proxmox-und-docker-desktop))
-
 **Selbst bauen** (für Entwickler): Repository klonen, dann in `deploy/` `docker compose build --pull && docker compose up -d`.
 Bauen, Deployen, Sichern und Wiederherstellen: [deploy/README.md](deploy/README.md).
 
 ## Sicherheit und Datenschutz auf einen Blick
 
-- **Keine Telemetrie:** Der mitgelieferte Code enthält keinen Versand von Nutzungs- oder Absturzdaten an Nodvard
+- **Keine Telemetrie:** Ohne Zustimmung sendet Deck keine Nutzungs- oder Absturzdaten an Nodvard
   oder einen Analysedienst. Die Netzverbindungen dienen den unten genannten Funktionen; nachprüfbar in den
   [Backend-Abhängigkeiten](backend/pyproject.toml), [Frontend-Abhängigkeiten](frontend/package.json),
   dem [Frontend-Einstieg](frontend/src/main.tsx) und den unten verlinkten Verbindungsimplementierungen.
+- **Freiwillige Nutzungsdaten:** Drei einzeln wählbare Stufen, standardmäßig aus. Ohne Zustimmung wird nichts gesendet.
+  Vorschau des echten JSON, lokales Protokoll und Löschknopf stehen unter Einstellungen → Nutzungsdaten.
+  Bis Empfänger und Datenschutzfreigabe konfiguriert sind, bleibt das Teilen gesperrt
+  ([Daten und Versand](docs/18-NUTZUNGSDATEN.md), [Datenformat](docs/04-API.md#nutzungsdaten)).
 - **Deck selbst sucht nach Updates:** Einmal am Tag fragt Nodvard Deck bei `ghcr.io` nach einer neuen
   Version. Es lädt außerdem die Release-Freigabe und ihre Signatur von `github.com`, mit möglichen Weiterleitungen
   zu `objects.githubusercontent.com` oder `release-assets.githubusercontent.com`. Diese Server sehen dabei deine
@@ -358,7 +351,7 @@ Zugang mit weitreichenden Rechten benötigen. In Deck begrenzen Benutzerrollen d
 | [Uptime Kuma](extensions/uptime-kuma/extension.toml) | API-Schlüssel zum Lesen der Monitore; optional öffentliche Status-Seite für Verlauf. |
 | [Vaultwarden](extensions/vaultwarden/extension.toml) | Öffentliche Status- und Konfigurationsabfragen, kein Admin-Token und kein Zugriff auf Passwörter. |
 | [Push-Nachrichten](extensions/ntfy/extension.toml) | Schreibzugang zum eingerichteten Thema, Kanal oder Raum, je Dienst per Token oder Webhook. |
-| [Dokumente](extensions/documents/extension.toml), [Netzwerk](extensions/network/extension.toml), [Hello World](extensions/hello-world/extension.toml) | Kein zusätzlicher Zugang zu Zielservern; Dokumente speichert und verarbeitet Dateien lokal, Netzwerk verlinkt die Netzwerkmodule, Hello World ist ein SDK-Beispiel. |
+| [Dokumente](extensions/documents/extension.toml) | Kein zusätzlicher Zugang zu Zielservern; speichert und verarbeitet Dateien lokal. |
 
 Die API-Zugänge stehen im Detail in den `settings.schema.json` neben den Manifesten; die SSH-Rechte und
 Hilfsskripte in [Root-Rechte](docs/14-ROOT-RECHTE.md) und im
@@ -420,17 +413,17 @@ Nodvard Deck ist ein privates, nicht-kommerzielles Projekt.
 
 ## Deck oder Dock?
 
-- **Nodvard Deck** ist das ganze Dashboard mit allen Modulen: Server, Proxmox, Docker, Backups, Sicherheit und mehr.
+- **Nodvard Deck** ist das ganze Dashboard mit den Standardmodulen: Server, Proxmox, Docker, Backups, Sicherheit und mehr.
 - **[Nodvard Dock](deploy/nodvard-dock/README.md)** ist die Docker-Ausgabe von Deck ohne Server-Module.
   Nimm Dock, wenn du nur Container und Stacks verwalten willst: [Schnellstart und Dokumentation](docs/dock/README.md).
 
 ## Lizenz
 
 Nodvard Deck steht unter der **PolyForm Noncommercial License 1.0.0** (siehe [LICENSE](LICENSE)).
-Kurz gesagt (verbindlich ist nur der Lizenztext): Quelltext einsehbar, kostenlos für den privaten Gebrauch.
+Kurz gesagt (verbindlich sind Lizenz und zusätzliche Erlaubnis): Quelltext einsehbar, kostenlos für den privaten Gebrauch.
 Du darfst Nodvard Deck für private und andere nicht-kommerzielle Zwecke nutzen, den Quelltext lesen und für dich anpassen.
-Kommerzielle Nutzung, zum Beispiel in einem Unternehmen oder als bezahlter Dienst, ist ohne gesonderte Erlaubnis
-nicht gestattet. Anfragen: **kontakt@nodvard.com**. Die Lizenzen der mitgelieferten Bibliotheken stehen in
+Für Unternehmen gibt es eine [zusätzliche Erlaubnis zur Bewertung](LICENSE-ZUSATZ.md). Weitere kommerzielle Nutzung,
+zum Beispiel als bezahlter Dienst, erfordert eine gesonderte Erlaubnis. Anfragen: **kontakt@nodvard.com**. Die Lizenzen der mitgelieferten Bibliotheken stehen in
 [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES).
 
 ## Marken

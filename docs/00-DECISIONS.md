@@ -71,8 +71,9 @@ gegen PostgreSQL, und der Treiber `asyncpg` ist nicht im Image.
    Audit- und Run-Logs im Bereich einiger tausend Zeilen pro Woche. SQLite im WAL-Modus
    liegt Größenordnungen über diesem Bedarf.
 
-**Umsetzung:** SQLAlchemy 2.0 (async) + Alembic. `DATABASE_URL` entscheidet;
-`sqlite+aiosqlite:///./data/lattice.db` ist der Default. `postgresql+asyncpg://…` ist
+**Umsetzung:** SQLAlchemy 2.0 (async) + Alembic. `NODVARD_DECK_DATABASE_URL` entscheidet;
+`sqlite+aiosqlite:///./data/lattice.db` ist der Default. Der Dateiname bleibt für bestehende
+Datenordner und den Rückweg zu älteren Images erhalten ([Inventur](ALTE-NAMEN.md)). `postgresql+asyncpg://…` ist
 vorgesehen, gilt aber erst nach einem echten Testlauf als unterstützt.
 
 **Disziplin-Regeln, die die Wahlfreiheit erhalten — für jeden neuen Code verbindlich:**
@@ -97,7 +98,7 @@ verletzen. Hat die Quelle selbst Historie (Proxmox führt RRD-Daten), liefert de
 sie über `MetricsProvider.history()` durch — Nodvard Deck speichert nichts. Nur für Hosts
 ohne solche Quelle (z. B. ein per SSH angebundener Raspberry Pi) sammelt
 `core/metrics_history.py` alle 30 s — in eine **eigene** SQLite-Datei `data/metrics.db`
-mit eigener Verbindung und genau einem Schreiber, nicht in `lattice.db`, ohne Alembic,
+mit eigener Verbindung und genau einem Schreiber, getrennt von der Anwendungsdatenbank, ohne Alembic,
 jederzeit löschbar (dann fehlt nur der Verlauf). Rohwerte 48 h, 5-Minuten-Verdichtung
 (Mittel/Min/Max) 35 Tage. Der Sekundentakt bleibt der Live-Ansicht vorbehalten und wird
 nie gespeichert.
@@ -483,7 +484,7 @@ eine Kern-Route (`trigger_host_action()` in `api/v1/hosts.py` deklariert
 
 Aufgefallen ist das an zwei Stellen:
 
-1. **nexus-soc (Nodvard Shield).** Die Endpunkte `/confirm`/`/dismiss` des
+1. **Nodvard Shield (damals `nexus-soc`).** Die Endpunkte `/confirm`/`/dismiss` des
    Incident-Widgets änderten `incident.status`, ohne festhalten zu können, WER geklickt
    hat. (`/chat` war nicht betroffen: Dort nennt `Actor.ai(model=...)` korrekt die KI als
    Urheber, der Nutzer hat nur gefragt.)
@@ -499,6 +500,11 @@ Kern-Route `POST /hosts/{id}/actions/{type}`, die `CurrentUser` bereits kennt.
 Extensions betrifft und eine eigene Entscheidung verdient. Umgesetzt als zusätzliche,
 optionale Dependency: Bestehende Extensions laufen unverändert weiter, ohne `actor`
 bleibt die Extension selbst der Urheber. Umgestellt sind unter anderem scripts
-(manueller Lauf), nexus-soc (Bestätigen, Verwerfen, Erledigt, Wieder öffnen), backups
+(manueller Lauf), Nodvard Shield (Bestätigen, Verwerfen, Erledigt, Wieder öffnen), backups
 (Job anlegen/bearbeiten, Erneut versuchen) und gameserver (Start, Stopp, Neustart, Welt
 sichern).
+
+## Für 1.0 vorgemerkt: Registry-Anmeldung
+
+Das Anmelden bei einer Registry legt das Passwort in die Docker-Konfiguration des Servers (`~/.docker/config.json`).
+Für 1.0 vorgemerkt: ein temporäres `DOCKER_CONFIG`, das nach dem Ziehen der Images wieder gelöscht wird.

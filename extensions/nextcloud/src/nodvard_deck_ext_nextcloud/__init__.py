@@ -3,6 +3,7 @@ Nextcloud ist kein Host, der Kern kennt nur `FileSource` und `FileSourceProvider
 
 from __future__ import annotations
 
+from http import HTTPStatus
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
@@ -17,7 +18,7 @@ from nodvard_sdk import (
     Refresh,
     WidgetSpec,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from .capabilities import NextcloudFileSourceProvider
 from .config import PASSWORD_LABEL, TOKEN_LABEL, build_connector
@@ -30,6 +31,8 @@ _WIDGET_ITEM = ListItem(title="{{ title }}", subtitle="{{ subtitle }}", badge=Ba
 
 
 class _PasswordIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     value: str
 
 
@@ -54,7 +57,11 @@ class Extension(NodvardExtension):
 
         router = APIRouter()
 
-        @router.post("/token", status_code=status.HTTP_204_NO_CONTENT)
+        @router.post(
+            "/token", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409,)},
+        )
         async def set_password(payload: _PasswordIn) -> None:
             """Wie `/token` bei Proxmox: das App-Passwort liegt im Tresor, nie in den Einstellungen. Nur Erstanlage;
             ersetzen und entfernen laufen über die Moduleinstellungen des Kerns (`/api/v1/extensions/nextcloud/secrets`)."""

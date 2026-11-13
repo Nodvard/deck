@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from docker_stack_fakes import EXT_DIR
+from exec_gate_helpers import ReadingExec
 from nodvard_sdk.types import Risk
 
 
@@ -858,7 +859,7 @@ class Ctx:
             async def get(self, host_id: str):
                 return outer.host if host_id == outer.host.id else None
 
-        class _Exec:
+        class _Exec(ReadingExec):
             async def run(self, host, command: str, *, timeout_s: int = 60):
                 return await outer.docker.run(command)
 
@@ -870,7 +871,7 @@ class Ctx:
             async def log(self, **kwargs) -> None:
                 outer.audit_rows.append(kwargs)
 
-        self.settings, self.hosts, self.exec, self.notify, self.audit = _Settings(), _Hosts(), _Exec(), _Notify(), _Audit()
+        self.settings, self.hosts, self.exec, self.notify, self.audit = _Settings(), _Hosts(), _Exec(ext_id="docker"), _Notify(), _Audit()
 
 
 def pretend_own_container(monkeypatch, short_id: str) -> None:
@@ -1019,6 +1020,42 @@ async def test_the_plan_never_contains_environment_values(tmp_path):
     docker.config_stderr = 'WARN The "X" variable is not set.'
     blocked = await applier.plan(ctx.host, "nextcloud-app")
     assert isinstance(blocked, _ia().NotUpdatable) and GEHEIM not in blocked.why
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("matching", [True, False])
+async def test_image_updates_keep_saved_stack_env_names(tmp_path, matching):
+    from dataclasses import replace
+
+    from nodvard_deck_ext_docker.adopt import AdoptedStacks
+    from nodvard_deck_ext_docker.stacks import Stack
+
+    docker = FakeApplyDocker()
+    _, applier, ctx = await checked(tmp_path, docker)
+    store = AdoptedStacks(tmp_path)
+    folder = "/opt/nextcloud" if matching else "/srv/nextcloud"
+    await store.add("h1", Stack("nextcloud", [], folder, (f"{folder}/docker-compose.yml",), (), "compose", env_names=("PWD", "PATH")))
+    applier._adopted = store
+    seen = []
+
+    async def config(command):
+        if command.startswith("sh -c") and " config " in command:
+            seen.append(command)
+            return FakeResult(stdout=docker.config_stdout if "--format json" in command else docker.hash_stdout)
+        return None
+
+    docker.handle_extra = config
+    plan = await applier.plan(ctx.host, "nextcloud-app")
+    assert isinstance(plan, _ap().Plan)
+    assert plan.target.env_names == (("PWD", "PATH") if matching else ())
+    assert bool(seen) is matching
+    assert ("-u PWD" in plan.command) is matching
+    saved = json.loads(json.dumps(_ap()._target_to_json(plan.target)))
+    restored = _ap()._target_from_json(saved)
+    assert restored == plan.target
+    assert ("-u PATH" in _ia().rollback_commands(restored, _ia().rollback_ref(restored.container))) is matching
+    with pytest.raises(ValueError):
+        _ia().compose_argv(replace(plan.target, env_names=("PWD;id",)), "config")
 
 
 @pytest.mark.asyncio
@@ -2437,6 +2474,46 @@ async def test_a_still_held_project_lock_is_waited_out_briefly(tmp_path, fast, m
     docker.rollback_launch_outs = ["@@launch\n@@busy\n"]
     result = await applier.apply(request_for(plan))
     assert len(docker.rollback_launched) == 2 and "sie läuft wieder" in result.error
+
+
+@pytest.mark.asyncio
+async def test_resumed_rollback_renews_access_after_a_busy_launch(tmp_path, resume_fast, monkeypatch):
+    from types import SimpleNamespace
+
+    from nodvard_deck.core import gate
+
+    ap = _ap()
+    monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
+    docker, ctx, _plan = await interrupt_update(tmp_path)
+    docker.polls = [POLL_DONE]
+    docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
+    docker.rollback_launch_outs = ["@@launch\n@@busy\n"]
+    clock = [0.0]
+    launches = []
+    monkeypatch.setattr(gate, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    original_run = ctx.exec.run
+    original_sleep = asyncio.sleep
+
+    async def run(host, command, **kwargs):
+        gate.require_execution(host.id, ext_id="docker")
+        if command.startswith("echo @@launch") and "@@step=rollback" in command:
+            launches.append(clock[0])
+            if len(launches) == 1:
+                clock[0] += 29
+        return await original_run(host, command, **kwargs)
+
+    async def sleep(delay):
+        clock[0] += delay
+        await original_sleep(0)
+
+    monkeypatch.setattr(ctx.exec, "run", run)
+    monkeypatch.setattr(ap.asyncio, "sleep", sleep)
+    _service, applier = new_dashboard(ctx)
+    assert await applier.resume_interrupted() == 1
+    assert launches == [0, 31]
+    assert len(docker.rollback_launched) == 2
+    assert docker.rolled_back is True
+    assert ctx.audit_rows[0]["detail"]["auto_rollback"]["ok"] is True
 
 
 @pytest.mark.asyncio

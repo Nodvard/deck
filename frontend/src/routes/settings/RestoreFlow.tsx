@@ -1,8 +1,4 @@
-/**
- * Ablauf „Sicherung einspielen“, derselbe in Einstellungen → System (Owner, Passwort) und im Einrichtungs-Assistenten
- * (ohne Konto, Einrichtungscode): hochladen, Passwort oder Schlüssel, Zusammenfassung, einspielen, warten, anmelden.
- * Passwörter, Schlüssel und Code stehen nur im lokalen State und gehen direkt an `lib/restore.ts` (kein Query-Cache).
- */
+/** Sicherung mit Passwort oder Schlüssel einspielen; Geheimnisse bleiben im lokalen State und gehen nie in den Query-Cache. */
 import { styleRef } from "../../../../extensions/_shared/frontend/src/csp";
 import { AlertTriangle, CheckCircle2, FileUp, Loader2, ShieldAlert } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -58,7 +54,7 @@ export interface RestoreFlowProps {
 function secretKindLabel(mode: "passwort" | "schluessel" | undefined): string {
   return mode === "passwort"
     ? "Das Einmal-Passwort, das du beim Herunterladen dieser Sicherung vergeben hast."
-    : "Das Sicherungspasswort deiner Installation – oder der Wiederherstellungsschlüssel.";
+    : "Das Sicherungspasswort deiner Installation oder der Wiederherstellungsschlüssel.";
 }
 
 export function RestoreFlow(props: RestoreFlowProps): JSX.Element {
@@ -87,6 +83,8 @@ export function RestoreFlow(props: RestoreFlowProps): JSX.Element {
   const [understood, setUnderstood] = useState(false);
   const abort = useRef<AbortController | null>(null);
   const alive = useRef(true);
+  /** Laufzeit vor dem Neustart und ob der Server seither weg war, für „Weiter warten“. */
+  const restartSeen = useRef<{ baseline: number | null; down: boolean }>({ baseline: null, down: false });
 
   useEffect(() => {
     alive.current = true;
@@ -171,12 +169,14 @@ export function RestoreFlow(props: RestoreFlowProps): JSX.Element {
   // ------------------------------------------------------------------- Einspielen und neu starten
   async function restartAndWait(password: string) {
     const baseline = await readUptime();
+    restartSeen.current = { baseline, down: false };
     await restartServer(auth(password));
     if (!alive.current) return;
     abort.current = new AbortController();
     setPhase({ kind: "waiting", seconds: 0, slow: false });
     const back = await waitForRestart(baseline, {
       signal: abort.current.signal,
+      seen: restartSeen.current,
       onTick: (seconds) => alive.current && setPhase({ kind: "waiting", seconds, slow: false }),
     });
     if (!alive.current) return;
@@ -302,7 +302,11 @@ export function RestoreFlow(props: RestoreFlowProps): JSX.Element {
                 setPhase({ kind: "waiting", seconds: 0, slow: false });
                 void (async () => {
                   abort.current = new AbortController();
-                  const back = await waitForRestart(null, { signal: abort.current.signal });
+                  // Mit Laufzeit und gesehenem Ausfall des ersten Versuchs: War der Server schon zurück, zählt das.
+                  const back = await waitForRestart(restartSeen.current.baseline, {
+                    signal: abort.current.signal,
+                    seen: restartSeen.current,
+                  });
                   if (alive.current) {
                     if (back) await finishAfterRestart();
                     else setPhase({ kind: "waiting", seconds: 0, slow: true });
@@ -434,12 +438,11 @@ export function RestoreFlow(props: RestoreFlowProps): JSX.Element {
           <ShieldAlert size={15} className="mt-0.5 flex-none" />
           <span>
             age, das Verfahren hinter der Verschlüsselung, prüft nicht, <strong>wer</strong> eine Sicherung erstellt hat. Wer das Passwort kennt, kann eine
-            Sicherung bauen. Spiele nur Sicherungen ein, die du selbst erstellt hast –
-            die Angaben oben helfen beim Prüfen.
+            Sicherung bauen. Spiele nur Sicherungen ein, die du selbst erstellt hast, die Angaben oben helfen beim Prüfen.
           </span>
         </p>
         <div role="note" aria-label="Wichtig" className="space-y-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-3 text-sm text-red-100">
-          <p className="font-semibold">Das Einspielen ersetzt alles – auch die Konten.</p>
+          <p className="font-semibold">Das Einspielen ersetzt alles, auch die Konten.</p>
           <ul className="list-disc space-y-1 pl-5 text-red-100/90">
             <li>
               Konten, Server, Zugangsdaten, Einstellungen und die Daten der Erweiterungen werden durch den Stand der Sicherung ersetzt. Danach gelten die Konten

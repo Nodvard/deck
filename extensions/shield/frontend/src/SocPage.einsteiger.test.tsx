@@ -41,6 +41,7 @@ function stubFetch({ overview, briefing }: Setup, calls: Call[] = []) {
     calls.push({ url, method, body: init?.body ? JSON.parse(init.body as string) : null });
     const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status });
     if (url.includes("/defender/overview")) return json(overview);
+    if (url.endsWith("/defender/checks")) return json({ hosts: [] });
     if (url.endsWith("/defender/briefing") && method === "POST") return briefing ? briefing() : json({ title: "Lagebericht – alles im grünen Bereich", push: "sent" });
     if (url.endsWith("/defender/updates")) return json({ hosts: [], runs: [], summary: { hosts: 0, checked: 0, up_to_date: 0, packages: 0, security: 0, reboot: 0 } });
     if (url.endsWith("/defender/guard")) return json({ hosts: [], summary: { failed_24h: 0, banned: 0, open_events: 0, fail2ban_running: 0, hosts: 0 } });

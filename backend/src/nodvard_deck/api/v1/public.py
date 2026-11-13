@@ -18,6 +18,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from nodvard_sdk import API_VERSION
+from nodvard_sdk.capabilities import FileSourceProvider, TerminalTarget
 from nodvard_sdk.widgets import (
     ActionsView,
     ChartView,
@@ -30,11 +31,6 @@ from nodvard_sdk.widgets import (
     TableView,
 )
 from pydantic import BaseModel
-
-_VIEW_CLASSES = (
-    StatView, ListView, TableView, ChartView, StatusGridView, GaugeView,
-    MarkdownView, ActionsView, LogView,
-)
 
 from ... import edition
 from ...branding import (
@@ -53,7 +49,13 @@ from ...custom_css import load_custom_css, servable_css
 from ...ext.runtime import get_extension_runtime
 from ...svg_safe import UnsafeSvg, nonce_svg, svg_csp
 from ...version import __version__
+from ..responses import error_responses, file_responses
 from ..deps import SessionDep, SettingsDep
+
+_VIEW_CLASSES = (
+    StatView, ListView, TableView, ChartView, StatusGridView, GaugeView,
+    MarkdownView, ActionsView, LogView,
+)
 
 router = APIRouter(tags=["public"])
 
@@ -68,7 +70,7 @@ async def health(request: Request) -> dict:
     }
 
 
-@router.get("/branding", response_model=Branding)
+@router.get("/branding", response_model=Branding, responses=error_responses(507))
 async def get_branding(session: SessionDep, settings: SettingsDep) -> Branding:
     return await load_branding(session, edition.of(settings))
 
@@ -103,7 +105,15 @@ async def get_edition(settings: SettingsDep) -> EditionOut:
     )
 
 
-@router.get("/branding/custom.css", response_class=Response)
+@router.get(
+    "/branding/custom.css",
+    response_class=Response,
+    responses={
+        **error_responses(507),
+        **file_responses("text/css"),
+        304: {"description": "Unverändert."},
+    },
+)
 async def get_custom_css_file(request: Request, session: SessionDep) -> Response:
     """Öffentlich wie `GET /branding`: auch die Anmeldeseite trägt das eigene CSS der Admins. Ein gespeicherter Wert,
     der die Prüfung nicht besteht, wird nicht ausgeliefert. Mit ETag: Der Browser fragt bei jedem Laden nach
@@ -141,7 +151,14 @@ def _branding_image_response(path: Path, content_type: str, max_bytes: int) -> R
     return FileResponse(path, media_type=content_type, headers=headers)
 
 
-@router.get("/branding/logo")
+@router.get(
+    "/branding/logo",
+    response_class=Response,
+    responses={
+        **error_responses(400, 404, 413, 416, 422),
+        **file_responses("image/png", "image/jpeg", "image/svg+xml", "image/webp", "application/octet-stream", ranges=True),
+    },
+)
 async def get_branding_logo(settings: SettingsDep) -> Response:
     """Öffentlich wie `GET /branding` selbst -- Login-/Setup-Seite zeigen das Logo vor
     jeder Authentifizierung."""
@@ -155,7 +172,14 @@ async def get_branding_logo(settings: SettingsDep) -> Response:
 _FAVICON_MEDIA_TYPES = {"png": "image/png", "svg": "image/svg+xml", "ico": "image/x-icon"}
 
 
-@router.get("/branding/favicon")
+@router.get(
+    "/branding/favicon",
+    response_class=Response,
+    responses={
+        **error_responses(400, 404, 413, 416, 422),
+        **file_responses("image/png", "image/svg+xml", "image/x-icon", "application/octet-stream", ranges=True),
+    },
+)
 async def get_branding_favicon(settings: SettingsDep) -> Response:
     """Öffentlich wie das Logo: Das Symbol im Browser-Tab steht schon auf der Anmeldeseite."""
     path = find_favicon_file(settings.data_dir)
@@ -173,7 +197,14 @@ async def get_branding_favicon(settings: SettingsDep) -> Response:
 _ICON_SIZES = (180, 192, 512)
 
 
-@router.get("/app/manifest.webmanifest")
+@router.get(
+    "/app/manifest.webmanifest",
+    response_class=Response,
+    responses={
+        **error_responses(507),
+        200: {"description": "OK", "content": {"application/manifest+json": {"schema": {"type": "object"}}}},
+    },
+)
 async def app_manifest(session: SessionDep, settings: SettingsDep) -> JSONResponse:
     b = await load_branding(session, edition.of(settings))
     icons = [
@@ -202,10 +233,17 @@ async def app_manifest(session: SessionDep, settings: SettingsDep) -> JSONRespon
     return JSONResponse(manifest, media_type="application/manifest+json", headers={"Cache-Control": "no-cache"})
 
 
-@router.get("/app/icon-{name}.png")
+@router.get(
+    "/app/icon-{name}.png",
+    response_class=Response,
+    responses={
+        **error_responses(404, 507),
+        **file_responses("image/png"),
+    },
+)
 async def app_icon(name: str, session: SessionDep, settings: SettingsDep) -> Response:
     size_text, _, variant = name.partition("-")
-    if not size_text.isdigit() or int(size_text) not in _ICON_SIZES or variant not in ("", "maskable"):
+    if size_text not in tuple(str(size) for size in _ICON_SIZES) or variant not in ("", "maskable"):
         raise HTTPException(status_code=404, detail="Unbekanntes Symbol.")
     b = await load_branding(session, edition.of(settings))
     logo = find_logo_file(settings.data_dir)
@@ -298,10 +336,7 @@ class Capabilities(BaseModel):
 
 @router.get("/capabilities", response_model=Capabilities)
 async def get_capabilities(settings: SettingsDep) -> Capabilities:
-    """`feature_flags` war seit seiner Einführung immer `{}` -- kein Aufrufer
-    brauchte es. `demo_mode` ist der
-    erste echte: die Login-/Setup-Seite kann jetzt sichtbar machen, dass eine
-    Installation eine Demo mit Fake-Daten ist, nicht echte Infrastruktur."""
+    """Meldet verfügbare Funktionen anhand der aktuell registrierten Anbieter."""
     runtime = get_extension_runtime()
     return Capabilities(
         api_version=API_VERSION,
@@ -313,5 +348,9 @@ async def get_capabilities(settings: SettingsDep) -> Capabilities:
             )
             for loaded in runtime.loaded.values()
         ],
-        feature_flags={"demo_mode": settings.demo_mode},
+        feature_flags={
+            "demo_mode": settings.demo_mode,
+            "terminal": bool(runtime.capabilities.query(TerminalTarget)),
+            "files": bool(runtime.capabilities.query(FileSourceProvider)),
+        },
     )

@@ -74,7 +74,7 @@ class _Ctx:
         self.raising: dict[str, Exception] = {}  # host_ref -> Ausnahme beim Vorschlagen
         self.audit_raises = False
         self.hold: asyncio.Event | None = None  # solange nicht gesetzt, haengt `propose`
-        self.api = SimpleNamespace(current_actor=lambda: Actor.user("u1", "nico"))
+        self.api = SimpleNamespace(current_actor=lambda: Actor.user("u1", "nico"), require_permission=lambda permission: lambda: None)
         self.hosts = SimpleNamespace(get=self._get)
         self.actions = SimpleNamespace(propose=self._propose, list=self._list)
         self.settings = SimpleNamespace(get=self._settings)
@@ -556,6 +556,7 @@ async def _real_app(client, db_session, test_settings, shield_tables, monkeypatc
         db_session.add(shield_tables.BaselineRecord(
             id=f"{ids[name]}:updates", host_id=ids[name], kind="updates", updated_at=NOW,
             data={"manager": "apt", "count": count, "security_count": security_count, "packages": pkgs, "error": None,
+                  "installable_count": count, "installable_security_count": security_count, "phasing": "checked",
                   "reboot_required": False, "checked_at": NOW.timestamp(), "attempted_at": NOW.timestamp()},
         ))
     await db_session.commit()

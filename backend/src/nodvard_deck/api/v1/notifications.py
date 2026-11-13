@@ -18,6 +18,8 @@ from ...models import Notification, User
 from ...services import audit as audit_service
 from ...services import notifications as notifications_service
 from ..deps import CurrentUser, SessionDep, require_permission
+from ..models import RequestModel
+from ..responses import error_responses
 
 log = logging.getLogger("nodvard_deck.notifications")
 
@@ -72,31 +74,42 @@ async def _audit_interrupted_delete(session: AsyncSession, actor_id: str, delete
         log.exception("Protokolleintrag fuer das unterbrochene Loeschen gelesener Meldungen ging nicht")
 
 
-class MarkReadIn(BaseModel):
+class MarkReadIn(RequestModel):
     ids: list[str] = Field(min_length=1)
 
 
-@router.get("")
+@router.get("", responses=error_responses(401, 403, 507))
 async def list_notifications(
-    session: SessionDep, unread: bool | None = None, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0)
+    session: SessionDep,
+    unread: bool | None = None,
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0, le=9223372036854775807),
 ) -> list[NotificationOut]:
     rows = await notifications_service.list_notifications(session, unread=unread, limit=limit, offset=offset)
     return [NotificationOut.from_model(n) for n in rows]
 
 
 # Muss vor `/{notification_id}` stehen, sonst fängt jene Route "unread-count" als ID ab.
-@router.get("/unread-count")
+@router.get("/unread-count", responses=error_responses(401, 403, 507))
 async def get_unread_count(session: SessionDep) -> dict[str, int]:
     """Zahl der ungelesenen Meldungen für den Zähler im Menü, ohne die Liste zu laden."""
     return {"unread": await notifications_service.unread_count(session)}
 
 
-@router.post("/read-all", dependencies=[Depends(require_permission("notifications.write"))])
+@router.post(
+    "/read-all",
+    dependencies=[Depends(require_permission("notifications.write"))],
+    responses=error_responses(401, 403, 507),
+)
 async def mark_all_read(session: SessionDep) -> dict[str, int]:
     return {"marked": await notifications_service.mark_all_read(session)}
 
 
-@router.post("/delete-read", dependencies=[Depends(require_permission("notifications.write"))])
+@router.post(
+    "/delete-read",
+    dependencies=[Depends(require_permission("notifications.write"))],
+    responses=error_responses(401, 403, 507),
+)
 async def delete_read_notifications(session: SessionDep, user: CurrentUser) -> dict[str, int]:
     """Löscht alle gelesenen Meldungen (ungelesene bleiben) und meldet die Anzahl. Gelöscht wird in Häppchen mit Commit
     dazwischen; scheitert eines, steht der Stand bis dahin als `failure` mit `interrupted` im Protokoll."""
@@ -112,7 +125,7 @@ async def delete_read_notifications(session: SessionDep, user: CurrentUser) -> d
     return {"deleted": deleted}
 
 
-@router.get("/{notification_id}")
+@router.get("/{notification_id}", responses=error_responses(401, 403, 404, 507))
 async def get_notification(notification_id: str, session: SessionDep) -> NotificationOut:
     row = await notifications_service.get_notification(session, notification_id)
     if row is None:
@@ -120,15 +133,21 @@ async def get_notification(notification_id: str, session: SessionDep) -> Notific
     return NotificationOut.from_model(row)
 
 
-@router.post("/read", dependencies=[Depends(require_permission("notifications.write"))])
+@router.post(
+    "/read",
+    dependencies=[Depends(require_permission("notifications.write"))],
+    responses=error_responses(401, 403, 507),
+)
 async def mark_read(payload: MarkReadIn, session: SessionDep) -> dict[str, int]:
     count = await notifications_service.mark_read(session, payload.ids)
     return {"marked": count}
 
 
 @router.delete(
-    "/{notification_id}", status_code=status.HTTP_204_NO_CONTENT,
+    "/{notification_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_permission("notifications.write"))],
+    responses=error_responses(401, 403, 404, 507),
 )
 async def delete_notification(notification_id: str, session: SessionDep, user: CurrentUser) -> Response:
     title = await notifications_service.delete_notification(session, notification_id)

@@ -7,7 +7,10 @@ import { useAuthStore } from "../state/auth";
 import { ExtensionPage } from "./ExtensionPage";
 
 // Es gibt keine Seiten: so, als wäre das Modul ausgeschaltet oder die Adresse falsch.
-vi.mock("../lib/catalog", () => ({ usePages: () => ({ data: [], isLoading: false }) }));
+vi.mock("../lib/catalog", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../lib/catalog")>(),
+  usePages: () => ({ data: [], isLoading: false }),
+}));
 
 let extension: { id: string; name: string; state: string; last_error?: string } | null;
 let enableCalls: string[];

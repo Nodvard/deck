@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from exec_gate_helpers import ReadingExec
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "extensions" / "shield" / "src"))
 
@@ -119,7 +120,7 @@ class _Ctx:
         host = Host(id="h1", name="pi", display_name="Pi", address="10.0.0.2")
         self.settings = SimpleNamespace(get=self._settings)
         self.hosts = SimpleNamespace(list=self._list, get=self._get)
-        self.exec = SimpleNamespace(run=self._run)
+        self.exec = ReadingExec(ext_id="shield", run=self._run)
         self.db = SimpleNamespace(session=self._session)
         self._host = host
 

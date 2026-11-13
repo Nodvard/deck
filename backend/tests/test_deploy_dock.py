@@ -50,8 +50,14 @@ def test_fixed_project_and_data_volume():
 def test_no_docker_socket_and_no_extra_rights():
     service = _service()
     assert not any("docker.sock" in str(volume) for volume in service["volumes"])
-    for key in ("privileged", "cap_add", "devices", "network_mode", "pid", "security_opt", "user"):
+    for key in ("privileged", "cap_add", "devices", "network_mode", "pid"):
         assert key not in service, key
+    # Gehärtet, nicht mit Zusatzrechten: genau diese Werte, damit keiner still gelockert wird.
+    assert service["user"] == "1000:1000"
+    assert service["security_opt"] == ["no-new-privileges:true"]
+    assert service["cap_drop"] == ["ALL"]
+    assert service["read_only"] is True
+    assert service["tmpfs"] == ["/tmp:rw,noexec,nosuid,nodev,mode=1777"]
     assert "docker.sock" not in COMPOSE.read_text(encoding="utf-8").split("services:")[1]
 
 

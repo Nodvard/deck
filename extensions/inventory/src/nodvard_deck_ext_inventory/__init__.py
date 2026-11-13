@@ -5,6 +5,7 @@ Eigene Tabellen mit eigenem Alembic-Zweig (`models.py`); die Bilder liegen auf d
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 import logging
 import re
@@ -13,6 +14,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import Response
+from nodvard_deck.branding import image_matches_type
 from nodvard_sdk import (
     Actor,
     Badge,
@@ -28,7 +30,7 @@ from nodvard_sdk import (
     WidgetSpec,
     max_body_bytes,
 )
-from nodvard_sdk.errors import HostUnreachable
+from nodvard_sdk.errors import HostUnreachable, error_message
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -69,8 +71,7 @@ def _scan_error_text(exc: BaseException) -> str:
         return "Verbindung abgebrochen – war der Server kurz weg?"
     if isinstance(exc, OSError):
         return "keine Verbindung zum Server."
-    _log.warning("Auslesen fehlgeschlagen", exc_info=exc)
-    return "unerwarteter Fehler (Einzelheiten im Protokoll des Dashboards)."
+    return error_message(exc)
 
 
 INVALID_IMAGE = (
@@ -95,6 +96,8 @@ _WARRANTY_EXPIRED_SHOWN_DAYS = 30
 
 
 class CategoryIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     name: str
 
 
@@ -106,6 +109,8 @@ class CategoryOut(BaseModel):
 
 
 class LocationIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     name: str
     parent_id: str | None = None
 
@@ -128,6 +133,8 @@ MAX_CENTS = 1_000_000_000
 
 
 class ItemIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     name: str
     description: str | None = None
     category_id: str | None = None
@@ -135,9 +142,9 @@ class ItemIn(BaseModel):
     # Obergrenzen, damit die Summen (Preis mal Menge je Projekt) nie über das hinauswachsen, was SQLite rechnen kann:
     # sonst endet die Projektliste mit einem Überlauf.
     quantity: int = 1
-    purchase_date: date | None = None
+    purchase_date: date | None = Field(default=None, strict=False)
     purchase_price_cents: int | None = None
-    warranty_until: date | None = None
+    warranty_until: date | None = Field(default=None, strict=False)
     notes: str | None = None
     # Homelab-Baukasten: beim Ändern (PUT) gilt ein Feld nur, wenn es mitgeschickt wird, damit ein älterer Aufrufer,
     # der sie nicht kennt, sie nicht versehentlich löscht.
@@ -151,6 +158,13 @@ class ItemIn(BaseModel):
     rack_id: str | None = Field(default=None, max_length=64)
     rack_position: int | None = Field(default=None, ge=1, le=100)
     rack_units: int | None = Field(default=None, ge=1, le=100)
+
+    @field_validator("purchase_date", "warranty_until", mode="before")
+    @classmethod
+    def _date_type(cls, value):
+        if value is not None and not isinstance(value, (str, date)):
+            raise ValueError("Das Datum muss ein Text sein.")
+        return value
 
     @field_validator("host_id", "project_id", "rack_id", "manufacturer", "model", "serial_number", mode="before")
     @classmethod
@@ -236,7 +250,7 @@ PROJECT_STATUSES = ("planned", "building", "done")
 
 
 class ProjectIn(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid", strict=True)
 
     name: str = Field(min_length=1, max_length=200)
     status: str = "planned"
@@ -275,7 +289,7 @@ class ProjectOut(BaseModel):
 
 
 class RackIn(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid", strict=True)
 
     name: str = Field(min_length=1, max_length=200)
     height_units: int = Field(default=42, ge=1, le=100)
@@ -397,7 +411,11 @@ class Extension(NodvardExtension):
                 rows = (await session.execute(select(Category).order_by(Category.name))).scalars().all()
                 return [_category_out(r) for r in rows]
 
-        @write_router.post("/categories", status_code=status.HTTP_201_CREATED)
+        @write_router.post(
+            "/categories", status_code=status.HTTP_201_CREATED,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409,)},
+        )
         async def create_category(payload: CategoryIn) -> CategoryOut:
             async with ctx.db.session() as session:
                 existing = (
@@ -410,7 +428,11 @@ class Extension(NodvardExtension):
                 await session.flush()
                 return _category_out(row)
 
-        @write_router.delete("/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
+        @write_router.delete(
+            "/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def delete_category(category_id: str) -> None:
             async with ctx.db.session() as session:
                 row = await session.get(Category, category_id)
@@ -425,7 +447,11 @@ class Extension(NodvardExtension):
                 rows = (await session.execute(select(Location).order_by(Location.name))).scalars().all()
                 return [_location_out(r) for r in rows]
 
-        @write_router.post("/locations", status_code=status.HTTP_201_CREATED)
+        @write_router.post(
+            "/locations", status_code=status.HTTP_201_CREATED,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def create_location(payload: LocationIn) -> LocationOut:
             async with ctx.db.session() as session:
                 if payload.parent_id is not None and await session.get(Location, payload.parent_id) is None:
@@ -435,7 +461,11 @@ class Extension(NodvardExtension):
                 await session.flush()
                 return _location_out(row)
 
-        @write_router.delete("/locations/{location_id}", status_code=status.HTTP_204_NO_CONTENT)
+        @write_router.delete(
+            "/locations/{location_id}", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def delete_location(location_id: str) -> None:
             async with ctx.db.session() as session:
                 row = await session.get(Location, location_id)
@@ -470,7 +500,11 @@ class Extension(NodvardExtension):
                 rows = (await session.execute(stmt)).scalars().all()
                 return [await _item_out(session, r) for r in rows]
 
-        @write_router.post("/items", status_code=status.HTTP_201_CREATED)
+        @write_router.post(
+            "/items", status_code=status.HTTP_201_CREATED,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 409, 422,)},
+        )
         async def create_item(payload: ItemIn) -> ItemOut:
             async with ctx.db.session() as session:
                 values = payload.model_dump()
@@ -480,7 +514,11 @@ class Extension(NodvardExtension):
                 await session.flush()
                 return await _item_out(session, row)
 
-        @read_router.get("/items/{item_id}")
+        @read_router.get(
+            "/items/{item_id}",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def get_item(item_id: str) -> ItemOut:
             async with ctx.db.session() as session:
                 row = await session.get(Item, item_id)
@@ -488,7 +526,11 @@ class Extension(NodvardExtension):
                     raise HTTPException(status_code=404, detail="Gegenstand nicht gefunden.")
                 return await _item_out(session, row)
 
-        @write_router.put("/items/{item_id}")
+        @write_router.put(
+            "/items/{item_id}",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 409, 422,)},
+        )
         async def update_item(item_id: str, payload: ItemIn) -> ItemOut:
             async with ctx.db.session() as session:
                 row = await session.get(Item, item_id)
@@ -505,7 +547,11 @@ class Extension(NodvardExtension):
                 await session.flush()
                 return await _item_out(session, row)
 
-        @write_router.delete("/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+        @write_router.delete(
+            "/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def delete_item(item_id: str) -> None:
             async with ctx.db.session() as session:
                 row = await session.get(Item, item_id)
@@ -538,7 +584,11 @@ class Extension(NodvardExtension):
                 await session.flush()
                 return await _project_out(session, row)
 
-        @write_router.put("/projects/{project_id}")
+        @write_router.put(
+            "/projects/{project_id}",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def update_project(project_id: str, payload: ProjectIn) -> ProjectOut:
             async with ctx.db.session() as session:
                 row = await session.get(Project, project_id)
@@ -549,7 +599,11 @@ class Extension(NodvardExtension):
                 await session.flush()
                 return await _project_out(session, row)
 
-        @write_router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+        @write_router.delete(
+            "/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def delete_project(project_id: str) -> None:
             """Die Teile bleiben im Inventar, sie gehören danach nur zu keinem Projekt mehr."""
             async with ctx.db.session() as session:
@@ -566,7 +620,11 @@ class Extension(NodvardExtension):
                 rows = (await session.execute(select(Rack).order_by(Rack.name))).scalars().all()
                 return [RackOut.model_validate(r, from_attributes=True) for r in rows]
 
-        @write_router.post("/racks", status_code=status.HTTP_201_CREATED)
+        @write_router.post(
+            "/racks", status_code=status.HTTP_201_CREATED,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def create_rack(payload: RackIn) -> RackOut:
             async with ctx.db.session() as session:
                 if payload.location_id is not None and await session.get(Location, payload.location_id) is None:
@@ -576,7 +634,11 @@ class Extension(NodvardExtension):
                 await session.flush()
                 return RackOut.model_validate(row, from_attributes=True)
 
-        @write_router.put("/racks/{rack_id}")
+        @write_router.put(
+            "/racks/{rack_id}",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 409,)},
+        )
         async def update_rack(rack_id: str, payload: RackIn) -> RackOut:
             async with ctx.db.session() as session:
                 row = await session.get(Rack, rack_id)
@@ -601,7 +663,11 @@ class Extension(NodvardExtension):
                 await session.flush()
                 return RackOut.model_validate(row, from_attributes=True)
 
-        @write_router.delete("/racks/{rack_id}", status_code=status.HTTP_204_NO_CONTENT)
+        @write_router.delete(
+            "/racks/{rack_id}", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def delete_rack(rack_id: str) -> None:
             """Die Geräte bleiben im Inventar, sie stecken danach nur in keinem Rack mehr."""
             async with ctx.db.session() as session:
@@ -618,7 +684,11 @@ class Extension(NodvardExtension):
         # Inventar-Rechte hat, darf das nicht (angelegt wird danach ganz normal über `POST /items`).
         scan_router = APIRouter()
 
-        @scan_router.post("/hosts/{host_id}/scan")
+        @scan_router.post(
+            "/hosts/{host_id}/scan",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 422, 502,)},
+        )
         async def scan_host(host_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict[str, Any]:  # noqa: B008
             """Liest per SSH (nur lesend, `hardware.SCAN_COMMAND`), welche Teile im Server stecken, und gibt
             Vorschläge zurück. Angelegt wird nichts: das macht die Seite mit dem, was der Nutzer auswählt."""
@@ -642,10 +712,7 @@ class Extension(NodvardExtension):
             # Das Skript endet immer mit Code 0 und beginnt mit „@@dmi“. Fehlt das, lief es gar nicht (eingeschränkte
             # Shell, erzwungener Befehl des Kontos): dann ein Fehler statt „Nichts gefunden“.
             if result.exit_code != 0 or "@@dmi" not in stdout[:4000]:
-                reason = (
-                    _short(result.stderr) or _short(stdout[:4000])
-                    or (f"Der Befehl endete mit Code {result.exit_code}." if result.exit_code else "Der Server hat nichts geantwortet.")
-                )
+                reason = error_message(RuntimeError(result.stderr or stdout[:4000]))
                 await _audit_scan(
                     actor, host.id, name, "failure", f"exit {result.exit_code}" if result.exit_code else "keine Ausgabe des Skripts",
                 )
@@ -675,7 +742,11 @@ class Extension(NodvardExtension):
                 _log.warning("Protokolleintrag für das Auslesen von %s fehlgeschlagen", host_name, exc_info=True)
 
         # --- Bilder -----------------------------------------------------------
-        @write_router.post("/items/{item_id}/images", status_code=status.HTTP_201_CREATED)
+        @write_router.post(
+            "/items/{item_id}/images", status_code=status.HTTP_201_CREATED,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 413, 415,)},
+        )
         @max_body_bytes(MAX_IMAGE_BYTES)
         async def upload_item_image(item_id: str, request: Request) -> ItemImageOut:
             """Rohkörper-Upload wie `POST /branding/logo`, dieselbe Konvention statt `multipart/form-data`."""
@@ -691,6 +762,8 @@ class Extension(NodvardExtension):
             content = await request.body()
             if len(content) > MAX_IMAGE_BYTES:
                 raise HTTPException(status_code=413, detail=f"Bild zu gross (max. {MAX_IMAGE_BYTES // 1024} KB).")
+            if not image_matches_type(content, extension):
+                raise HTTPException(status_code=422, detail="Der Inhalt passt nicht zum Bildtyp.")
 
             async with ctx.db.session() as session:
                 item = await session.get(Item, item_id)
@@ -703,7 +776,14 @@ class Extension(NodvardExtension):
                 await session.flush()
                 return _image_out(row)
 
-        @read_router.get("/items/{item_id}/images/{image_id}")
+        @read_router.get(
+            "/items/{item_id}/images/{image_id}", response_class=Response,
+            responses={**{code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)}, 200: {"description": "Bilddatei.", "content": {
+                media: {"schema": {"type": "string", "format": "binary"}}
+                for media in (*ALLOWED_CONTENT_TYPES, "application/octet-stream")
+            }}},
+        )
         async def get_item_image(item_id: str, image_id: str) -> Response:
             async with ctx.db.session() as session:
                 row = await session.get(ItemImage, image_id)
@@ -719,7 +799,11 @@ class Extension(NodvardExtension):
                 media_type = row.content_type if row.content_type in ALLOWED_CONTENT_TYPES else "application/octet-stream"
                 return Response(content=path.read_bytes(), media_type=media_type, headers=_UNTRUSTED_FILE_HEADERS)
 
-        @write_router.delete("/items/{item_id}/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
+        @write_router.delete(
+            "/items/{item_id}/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def delete_item_image(item_id: str, image_id: str) -> None:
             async with ctx.db.session() as session:
                 row = await session.get(ItemImage, image_id)
@@ -730,7 +814,7 @@ class Extension(NodvardExtension):
 
         ctx.api.include_router(read_router, permission="inventory.read")
         ctx.api.include_router(write_router, permission="inventory.write")
-        ctx.api.include_router(scan_router, permission="hosts.execute")
+        ctx.api.include_router(scan_router, permission="hosts.execute", ssh_preflight=True)
 
         # --- Widget: bald ablaufende Garantien --------------------------------
         widget_router = APIRouter()

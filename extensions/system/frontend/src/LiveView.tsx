@@ -1,13 +1,16 @@
+import { CARD_BODY, CARD_CELL, CARD_CELL_PLAIN, CARD_HEAD, CARD_ROW, CARD_TABLE } from "../../../_shared/frontend/src/cardTable";
 /**
  * Live-Ansicht eines Linux-Servers wie Task-Manager/HWiNFO: Kerne mit Takt, RAM, Temperaturen, Lüfter, Platten,
  * Netzwerkkarten, Dateisysteme, Prozesse. Fragt `GET /ext/system/hosts/{id}/live` alle 3 s ab, solange die Seite
  * sichtbar ist; der Verlauf der letzten 3 Minuten liegt nur im Browser (der gespeicherte steht auf der Server-Seite).
  */
 import { styleRef } from "../../../_shared/frontend/src/csp";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
+import { SettingsLink } from "../../../_shared/frontend/src/links";
 import { formatBytes, formatUptime } from "./format";
 import { TempLimit } from "./TempLimit";
+import { SystemQueryError } from "./systemQuery";
 
 export interface LiveData {
   complete: boolean;
@@ -116,26 +119,29 @@ function push(list: number[], value: number | undefined): number[] {
 
 export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id: string) => Promise<LiveData> }): JSX.Element {
   const [data, setData] = useState<LiveData | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Error | null>(null);
   const [paused, setPaused] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [history, setHistory] = useState<History>(EMPTY_HISTORY);
   const [procSort, setProcSort] = useState<"cpu" | "mem">("cpu");
   const [showVirtual, setShowVirtual] = useState(false);
-  const busy = useRef(false);
 
   useEffect(() => {
     setData(null);
     setError(null);
     setHistory(EMPTY_HISTORY);
+    setUpdatedAt(null);
+    setPaused(false);
   }, [hostId]);
 
   useEffect(() => {
     if (paused) return;
     let cancelled = false;
+    let busy = false;
+    let failed = false;
     async function tick() {
-      if (busy.current || (typeof document !== "undefined" && document.hidden)) return;
-      busy.current = true;
+      if (busy || failed || (typeof document !== "undefined" && document.hidden)) return;
+      busy = true;
       try {
         const live = await fetchLive(hostId);
         if (cancelled) return;
@@ -152,9 +158,13 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
           temp: push(h.temp, live.temperatures.length ? Math.max(...live.temperatures.map((t) => t.celsius)) : undefined),
         }));
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) {
+          failed = true;
+          setError(err instanceof Error ? err : new Error(String(err)));
+          setPaused(true);
+        }
       } finally {
-        busy.current = false;
+        busy = false;
       }
     }
     void tick();
@@ -167,14 +177,24 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
 
   const controls = (
     <div className="mb-3 flex flex-wrap items-center gap-3 text-xs">
-      <button type="button" onClick={() => setPaused((p) => !p)} className="rounded bg-white/10 px-2 py-1 hover:bg-white/20">
-        {paused ? "Fortsetzen" : "Pausieren"}
+      <button type="button" onClick={() => { setError(null); setPaused((p) => !p); }} className="rounded bg-white/10 px-2 py-1 hover:bg-white/20">
+        {error ? "Erneut versuchen" : paused ? "Fortsetzen" : "Pausieren"}
       </button>
       <span className="opacity-50">
         {paused ? "angehalten" : "aktualisiert alle 3 s"}
         {updatedAt ? ` · Stand ${updatedAt.toLocaleTimeString("de-DE")}` : ""}
       </span>
-      {error && <span className="text-red-400">Fehler: {error}</span>}
+      {error && (
+        <div role="alert" className="w-full space-y-2 text-red-400">
+          <p>Live-Abfrage angehalten: {error.message}</p>
+          {error instanceof SystemQueryError && (error.status === 409 || error.status === 502) ? (
+            <>
+              <p>Prüfe den SSH-Zugang unter Einstellungen → Server &amp; Zugänge und versuche es danach erneut.</p>
+              <SettingsLink to="/settings/hosts" permission="hosts.write" variant="secondary">Server &amp; Zugänge öffnen</SettingsLink>
+            </>
+          ) : <p>Versuche die Abfrage erneut.</p>}
+        </div>
+      )}
     </div>
   );
 
@@ -275,20 +295,20 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
           {data.temperatures.length === 0 && data.fans.length === 0 ? (
             <p className="text-sm opacity-50">Dieser Server meldet keine Sensoren (bei VMs normal).</p>
           ) : (
-            <table className="w-full text-sm" data-testid="sensors">
-              <tbody className="divide-y divide-white/5">
+            <table role="table" className={`${CARD_TABLE} text-left`} data-testid="sensors">
+              <tbody role="rowgroup" className={CARD_BODY}>
                 {data.temperatures.map((t) => (
-                  <tr key={`${t.source}-${t.label}`}>
-                    <td className="py-1 opacity-70">{t.label}</td>
-                    <td className="py-1 text-xs opacity-40">{t.source}</td>
-                    <td className={`py-1 text-right font-semibold tabular-nums ${tempTone(t.celsius)}`}>{t.celsius.toFixed(1)} °C</td>
+                  <tr role="row" className={CARD_ROW} key={`${t.source}-${t.label}`}>
+                    <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 opacity-70`}>{t.label}</td>
+                    <td data-label="Quelle" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 text-xs opacity-40`}>{t.source}</td>
+                    <td data-label="Wert" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right font-semibold tabular-nums ${tempTone(t.celsius)}`}>{t.celsius.toFixed(1)} °C</td>
                   </tr>
                 ))}
                 {data.fans.map((f) => (
-                  <tr key={f.label}>
-                    <td className="py-1 opacity-70">{f.label}</td>
-                    <td className="py-1 text-xs opacity-40">Lüfter</td>
-                    <td className="py-1 text-right font-semibold tabular-nums">{f.rpm} U/min</td>
+                  <tr role="row" className={CARD_ROW} key={f.label}>
+                    <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 opacity-70`}>{f.label}</td>
+                    <td data-label="Quelle" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 text-xs opacity-40`}>Lüfter</td>
+                    <td data-label="Wert" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right font-semibold tabular-nums`}>{f.rpm} U/min</td>
                   </tr>
                 ))}
               </tbody>
@@ -303,8 +323,8 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
           {data.disks.length === 0 ? (
             <p className="text-sm opacity-50">Keine physischen Datenträger erkannt.</p>
           ) : (
-            <table className="w-full text-sm" data-testid="live-disks">
-              <thead>
+            <table role="table" className={`${CARD_TABLE} text-left`} data-testid="live-disks">
+              <thead role="rowgroup" className={CARD_HEAD}>
                 <tr className="text-left text-xs opacity-50">
                   <th className="py-1 font-normal">Gerät</th>
                   <th className="py-1 text-right font-normal">Lesen</th>
@@ -313,14 +333,14 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
                   <th className="w-28 py-1 pl-3 font-normal">Aktiv</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/5">
+              <tbody role="rowgroup" className={CARD_BODY}>
                 {data.disks.map((d) => (
-                  <tr key={d.name}>
-                    <td className="py-1 font-mono text-xs">{d.name}</td>
-                    <td className="py-1 text-right tabular-nums">{rate(d.read_bps)}</td>
-                    <td className="py-1 text-right tabular-nums">{rate(d.write_bps)}</td>
-                    <td className="py-1 text-right tabular-nums">{d.read_iops.toFixed(0)} / {d.write_iops.toFixed(0)}</td>
-                    <td className="py-1 pl-3"><div className="flex items-center gap-2"><Meter percent={d.busy_percent} /><span className="w-14 whitespace-nowrap text-right text-xs tabular-nums">{pct(d.busy_percent)}</span></div></td>
+                  <tr role="row" className={CARD_ROW} key={d.name}>
+                    <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 font-mono text-xs`}>{d.name}</td>
+                    <td data-label="Lesen" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right tabular-nums`}>{rate(d.read_bps)}</td>
+                    <td data-label="Schreiben" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right tabular-nums`}>{rate(d.write_bps)}</td>
+                    <td data-label="IOPS l/s" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right tabular-nums`}>{d.read_iops.toFixed(0)} / {d.write_iops.toFixed(0)}</td>
+                    <td data-label="Aktiv" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:pl-3`}><div className="flex items-center gap-2"><Meter percent={d.busy_percent} /><span className="w-14 whitespace-nowrap text-right text-xs tabular-nums">{pct(d.busy_percent)}</span></div></td>
                   </tr>
                 ))}
               </tbody>
@@ -339,8 +359,8 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
           ) : undefined
         }
       >
-        <table className="w-full text-sm" data-testid="live-network">
-          <thead>
+        <table role="table" className={`${CARD_TABLE} text-left`} data-testid="live-network">
+          <thead role="rowgroup" className={CARD_HEAD}>
             <tr className="text-left text-xs opacity-50">
               <th className="py-1 font-normal">Schnittstelle</th>
               <th className="py-1 font-normal">Status</th>
@@ -350,15 +370,15 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
               <th className="py-1 text-right font-normal" title="Übertragungsfehler / vom System verworfene Pakete">Fehler / verworfen</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/5">
+          <tbody role="rowgroup" className={CARD_BODY}>
             {nics.map((n) => (
-              <tr key={n.name} className={n.virtual ? "opacity-60" : ""}>
-                <td className="py-1 font-mono text-xs">{n.name}</td>
-                <td className="py-1 text-xs">{n.state === "up" ? "verbunden" : n.state ?? "?"}{n.speed_mbps ? ` · ${n.speed_mbps >= 1000 ? `${n.speed_mbps / 1000} Gbit/s` : `${n.speed_mbps} Mbit/s`}` : ""}</td>
-                <td className="py-1 text-right tabular-nums">{rate(n.rx_bps)}</td>
-                <td className="py-1 text-right tabular-nums">{rate(n.tx_bps)}</td>
-                <td className="py-1 text-right text-xs tabular-nums opacity-70">{formatBytes(n.rx_total)} / {formatBytes(n.tx_total)}</td>
-                <td className="py-1 text-right text-xs tabular-nums">
+              <tr role="row" key={n.name} className={`${CARD_ROW} ${n.virtual ? "opacity-60" : ""}`}>
+                <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 font-mono text-xs`}>{n.name}</td>
+                <td data-label="Status" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 text-xs`}>{n.state === "up" ? "verbunden" : n.state ?? "?"}{n.speed_mbps ? ` · ${n.speed_mbps >= 1000 ? `${n.speed_mbps / 1000} Gbit/s` : `${n.speed_mbps} Mbit/s`}` : ""}</td>
+                <td data-label="Empfangen" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right tabular-nums`}>{rate(n.rx_bps)}</td>
+                <td data-label="Gesendet" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right tabular-nums`}>{rate(n.tx_bps)}</td>
+                <td data-label="Gesamt ↓ / ↑" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right text-xs tabular-nums opacity-70`}>{formatBytes(n.rx_total)} / {formatBytes(n.tx_total)}</td>
+                <td data-label="Fehler / verworfen" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right text-xs tabular-nums`}>
                   <span className={n.errors > 0 ? "text-amber-300" : "opacity-50"}>{n.errors}</span>
                   <span className="opacity-40"> / {n.drops}</span>
                 </td>
@@ -369,14 +389,14 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
       </Section>
 
       <Section title="Dateisysteme">
-        <table className="w-full text-sm" data-testid="live-filesystems">
-          <tbody className="divide-y divide-white/5">
+        <table role="table" className={`${CARD_TABLE} text-left`} data-testid="live-filesystems">
+          <tbody role="rowgroup" className={CARD_BODY}>
             {data.filesystems.map((f) => (
-              <tr key={`${f.device}-${f.mount}`}>
-                <td className="py-1 font-mono text-xs">{f.mount}</td>
-                <td className="py-1 text-xs opacity-50">{f.device} · {f.fstype}</td>
-                <td className="w-48 py-1"><Meter percent={f.percent} /></td>
-                <td className="py-1 pl-3 text-right text-xs tabular-nums">{formatBytes(f.used)} / {formatBytes(f.size)} ({f.percent.toFixed(0)} %)</td>
+              <tr role="row" className={CARD_ROW} key={`${f.device}-${f.mount}`}>
+                <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 font-mono text-xs`}>{f.mount}</td>
+                <td data-label="Gerät" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 text-xs opacity-50`}>{f.device} · {f.fstype}</td>
+                <td data-label="Belegung" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] w-full sm:w-48 sm:py-1`}><Meter percent={f.percent} /></td>
+                <td data-label="Verwendet" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:pl-3 sm:text-right text-xs tabular-nums`}>{formatBytes(f.used)} / {formatBytes(f.size)} ({f.percent.toFixed(0)} %)</td>
               </tr>
             ))}
           </tbody>
@@ -392,8 +412,8 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
           </div>
         }
       >
-        <table className="w-full text-sm" data-testid="processes">
-          <thead>
+        <table role="table" className={`${CARD_TABLE} text-left`} data-testid="processes">
+          <thead role="rowgroup" className={CARD_HEAD}>
             <tr className="text-left text-xs opacity-50">
               <th className="py-1 font-normal">PID</th>
               <th className="py-1 font-normal">Name</th>
@@ -402,14 +422,14 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
               <th className="py-1 text-right font-normal">RAM</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/5">
+          <tbody role="rowgroup" className={CARD_BODY}>
             {procs.slice(0, 15).map((p) => (
-              <tr key={p.pid}>
-                <td className="py-1 font-mono text-xs opacity-60">{p.pid}</td>
-                <td className="py-1">{p.name}</td>
-                <td className="py-1 text-xs opacity-60">{p.user ?? "?"}</td>
-                <td className="py-1 text-right tabular-nums">{p.cpu_percent.toFixed(1)} %</td>
-                <td className="py-1 text-right tabular-nums">{formatBytes(p.mem_bytes)}</td>
+              <tr role="row" className={CARD_ROW} key={p.pid}>
+                <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 font-mono text-xs opacity-60`}>{p.pid}</td>
+                <td data-label="Name" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1`}>{p.name}</td>
+                <td data-label="Benutzer" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 text-xs opacity-60`}>{p.user ?? "?"}</td>
+                <td data-label="CPU" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right tabular-nums`}>{p.cpu_percent.toFixed(1)} %</td>
+                <td data-label="RAM" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right tabular-nums`}>{formatBytes(p.mem_bytes)}</td>
               </tr>
             ))}
           </tbody>

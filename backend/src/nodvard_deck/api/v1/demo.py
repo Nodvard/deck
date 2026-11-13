@@ -9,6 +9,7 @@ from ...core import demo_seed
 from ...ext.runtime import get_extension_runtime
 from ...services.auth import user_has_permission
 from ...services.hosts import HostBusyError, HostServiceError
+from ..responses import error_responses
 from ..deps import CurrentUser, SessionDep, require_permission
 
 router = APIRouter(prefix="/demo", tags=["demo"])
@@ -54,12 +55,12 @@ def _status_out(value: demo_seed.DemoStatus) -> dict:
     }
 
 
-@router.get("", dependencies=[Depends(require_permission("hosts.read"))])
+@router.get("", dependencies=[Depends(require_permission("hosts.read"))], responses=error_responses(401, 403, 507))
 async def get_demo(session: SessionDep) -> DemoStatusOut:
     return DemoStatusOut(**_status_out(await demo_seed.demo_status(session)))
 
 
-@router.post("/seed", dependencies=_WriteGuards)
+@router.post("/seed", dependencies=_WriteGuards, responses=error_responses(401, 403, 404, 409, 507))
 async def seed_demo(session: SessionDep, user: CurrentUser) -> DemoSeedOut:
     # Dieselbe Auswahl wie `GET /widgets`.
     widgets = [
@@ -78,7 +79,7 @@ async def seed_demo(session: SessionDep, user: CurrentUser) -> DemoSeedOut:
     return DemoSeedOut(**_status_out(current), created=created)
 
 
-@router.delete("", dependencies=_WriteGuards)
+@router.delete("", dependencies=_WriteGuards, responses=error_responses(401, 403, 409, 507))
 async def remove_demo(session: SessionDep, user: CurrentUser) -> DemoRemoveOut:
     try:
         removal = await demo_seed.remove_demo_data(session, actor_type="user", actor_id=user.id)

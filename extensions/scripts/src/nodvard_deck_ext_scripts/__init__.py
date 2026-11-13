@@ -3,6 +3,7 @@ Kern-Scheduler."""
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import hashlib
 import logging
 import time
@@ -36,7 +37,7 @@ from nodvard_sdk import (
 )
 from nodvard_sdk.actions import REQUEST_WAIT_S, ActionRequest, ActionSpec, ActionStatus, GateOutcome
 from nodvard_sdk.errors import ActionBlocked, NodvardError
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from .params import ParamError, substitute_params
 from .promotion import MAX_COUNT, RecurringFixTracker, draft_content
@@ -634,6 +635,8 @@ async def run_script(
 
 
 class _ScriptIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     name: str
     description: str = ""
     content: str
@@ -644,10 +647,14 @@ class _ScriptIn(BaseModel):
 
 
 class _RunIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     param_overrides: dict[str, str] = {}
 
 
 class _StandingIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     # Was die Seite angezeigt hat (`_ScriptOut.fingerprint`, `_ScriptOut.targets_fingerprint`). Hat sich das Skript oder
     # ein Zielserver seitdem geändert, wird nicht freigegeben: Es gilt nur, was die Person gesehen hat.
     fingerprint: str
@@ -850,20 +857,32 @@ class Extension(NodvardExtension):
                 "meta": {},
             }
 
-        @router.get("/scripts/{script_id}")
+        @router.get(
+            "/scripts/{script_id}",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def get_script(script_id: str) -> _ScriptOut:
             script = self._repo.get(script_id)
             if script is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekanntes Skript.")
             return await _out(script)
 
-        @router.get("/scripts/{script_id}/history")
+        @router.get(
+            "/scripts/{script_id}/history",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def script_history(script_id: str, limit: int = Query(20, ge=1, le=1000)) -> list[dict[str, Any]]:
             if self._repo.get(script_id) is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekanntes Skript.")
             return self._repo.history(script_id, limit=limit)
 
-        @router.get("/scripts/{script_id}/runs")
+        @router.get(
+            "/scripts/{script_id}/runs",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def script_runs(script_id: str, limit: int = Query(20, ge=1, le=1000)) -> list[dict[str, Any]]:
             """Die letzten Läufe mit Ausgabe, Exit-Code, Zielserver und Auslöser."""
             if self._repo.get(script_id) is None:
@@ -893,7 +912,11 @@ class Extension(NodvardExtension):
                 })
             return out
 
-        @router.put("/scripts/{script_id}")
+        @router.put(
+            "/scripts/{script_id}",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409, 422,)},
+        )
         async def save_script(
             script_id: str, payload: _ScriptIn, create: bool = False, actor: Actor = Depends(ctx.api.current_actor)
         ) -> _ScriptOut:
@@ -962,7 +985,11 @@ class Extension(NodvardExtension):
             assert script is not None
             return await _out(script)
 
-        @router.delete("/scripts/{script_id}", status_code=status.HTTP_204_NO_CONTENT)
+        @router.delete(
+            "/scripts/{script_id}", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def delete_script(script_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> None:
             script = self._repo.get(script_id)
             if script is None:
@@ -979,7 +1006,11 @@ class Extension(NodvardExtension):
                 ctx, script_id, script.meta.name, "Das Skript wurde gelöscht.", actor=actor, notify=False
             )
 
-        @router.post("/scripts/{script_id}/run")
+        @router.post(
+            "/scripts/{script_id}/run",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 409,)},
+        )
         async def run_now(script_id: str, payload: _RunIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict[str, Any]:
             """Führt das Skript wie ein geplanter Lauf aus (`run_script()`), aber mit überschriebenen Parametern."""
             # Neben `POST /api/v1/jobs/{id}/run` des Kerns, das keine Parameter-Überschreibungen entgegennimmt.
@@ -999,7 +1030,11 @@ class Extension(NodvardExtension):
         # alle anderen bekommen serverseitig 403.
         standing_router = APIRouter()
 
-        @standing_router.post("/scripts/{script_id}/standing-approval")
+        @standing_router.post(
+            "/scripts/{script_id}/standing-approval",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (403, 404, 409, 500,)},
+        )
         async def grant_standing(
             script_id: str, payload: _StandingIn, actor: Actor = Depends(ctx.api.current_actor)
         ) -> _ScriptOut:
@@ -1081,7 +1116,11 @@ class Extension(NodvardExtension):
                 raise
             return await _out(script)
 
-        @standing_router.delete("/scripts/{script_id}/standing-approval", status_code=status.HTTP_204_NO_CONTENT)
+        @standing_router.delete(
+            "/scripts/{script_id}/standing-approval", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 500,)},
+        )
         async def revoke_standing(script_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> None:
             """Zieht die Freigabe zurück; wirkt sofort, auch auf die restlichen Server eines laufenden Laufs."""
             script = self._repo.get(script_id)

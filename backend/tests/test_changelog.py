@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import tomllib
 from pathlib import Path
 
@@ -45,10 +46,77 @@ def test_shipped_files_are_all_valid():
     assert len(loaded.versions) == len(list((changelog.CHANGELOG_DIR / "versions").glob("*.toml")))
 
 
+def test_unreleased_fragments_have_no_audit_numbers():
+    for path in (changelog.CHANGELOG_DIR / "unreleased").glob("*.toml"):
+        content = path.name + "\n" + path.read_text(encoding="utf-8")
+        assert not re.search(r"\bbefund[-_ ]*\d+\b", content, re.IGNORECASE), path.name
+
+
+def test_fragment_names_have_no_review_labels():
+    for path in (changelog.CHANGELOG_DIR / "unreleased").glob("*.toml"):
+        assert "befund" not in path.stem.lower(), path.name
+
+
 def test_all_versions_are_strictly_descending_and_unique():
     versions = [r.version for r in changelog.load_changelog().versions]
     keys = [changelog.parse_version(v) for v in versions]
     assert keys == sorted(set(keys), reverse=True)
+
+
+def test_git_network_policy_is_documented_once():
+    loaded = changelog.load_changelog()
+    entries = [*loaded.unreleased, *(entry for release in loaded.versions for entry in release.entries)]
+    texts = [entry.text for entry in entries if entry.kind == "sicherheit" and "Git" in entry.text
+             and ("Adresse" in entry.text or "Proxy" in entry.text)]
+    assert texts == [
+        (
+            "Stacks aus Git: Nodvard Deck prüft vor dem Holen, wohin der Name des Git-Servers wirklich zeigt, "
+            "und verbindet sich nur mit genau dieser Adresse. Deck selbst und die internen Dienste von Cloud-Anbietern "
+            "sind immer gesperrt."
+        ),
+        (
+            "Läuft Nodvard Deck über einen Proxy (HTTPS_PROXY), holt es aus Git nur noch von Adressen aus Zahlen, "
+            "weil der Proxy einen Namen selbst nachschlägt. Einen Git-Server mit Namen trägst du unter NO_PROXY ein, "
+            "dann verbindet sich Deck direkt."
+        ),
+    ]
+
+
+@pytest.mark.parametrize("text,name", [
+    ("SFTP-Lesezugriffe erlauben", "deck-ssh-freigaben.toml"),
+    ("Deck und die Notseite verlangen beim Einbinden", "fix-fremde-inhalte.toml"),
+])
+def test_unreleased_security_fragments_have_descriptive_names(text, name):
+    for path in (changelog.CHANGELOG_DIR / "unreleased").glob("*.toml"):
+        if text in path.read_text(encoding="utf-8"):
+            assert path.name == name
+
+
+def test_ssh_release_notes_explain_the_approval_limit():
+    loaded = changelog.load_changelog()
+    entries = [*loaded.unreleased, *(entry for release in loaded.versions for entry in release.entries)]
+    entry = next(entry for entry in entries if "SFTP-Lesezugriffe erlauben" in entry.text)
+    assert "keine Sicherheitsgrenze" in entry.text
+    assert "geplante Jobs" in entry.text
+    assert any("Für Erweiterungsautoren:" in entry.text and "Freigabekontext" in entry.text for entry in entries)
+
+
+def test_files_view_improvements_are_documented():
+    loaded = changelog.load_changelog()
+    entries = [*loaded.unreleased, *(entry for release in loaded.versions for entry in release.entries)]
+    assert any(
+        entry.kind == "verbessert"
+        and 695 in entry.prs
+        and all(word in entry.text for word in ("Dateiansicht", "Link", "Ordnersymbole"))
+        for entry in entries
+    )
+
+
+def test_unreleased_fragments_have_no_review_numbers():
+    for path in (changelog.CHANGELOG_DIR / "unreleased").glob("*.toml"):
+        assert not re.search(r"befund[\s-]*\d+", path.stem, re.IGNORECASE), path.name
+        for entry in changelog.read_fragment(path):
+            assert not re.search(r"befund[\s-]*\d+", entry.text, re.IGNORECASE), path.name
 
 
 def test_documentation_fragments_do_not_replace_each_other(tmp_path):
@@ -69,6 +137,40 @@ def test_security_notice_retry_is_limited_to_missing_delivery():
             "noch eine Meldung erfolgreich über einen Meldungskanal zugestellt wurde."
         )
     ]
+
+
+def test_extension_permissions_note_describes_changes_to_the_own_list():
+    loaded = changelog.load_changelog()
+    entries = [*loaded.unreleased, *(entry for release in loaded.versions for entry in release.entries)]
+    assert [(entry.kind, entry.text) for entry in entries if 692 in entry.prs] == [
+        (
+            "sicherheit",
+            (
+                "Ändert eine Erweiterung nach dem Laden ihre eigene Liste erlaubter Rechte, erhält sie dadurch "
+                "keine zusätzlichen Rechte oder Hinweise auf fremde Geheimnisse."
+            ),
+        )
+    ]
+
+
+def test_git_queries_explain_waiting_across_stacks_and_servers():
+    loaded = changelog.load_changelog()
+    entries = [*loaded.unreleased, *(entry for release in loaded.versions for entry in release.entries)]
+    texts = [entry.text for entry in entries if 688 in entry.prs and entry.text.startswith("Git-Abfragen")]
+    assert texts == [
+        (
+            "Git-Abfragen für Stacks laufen nacheinander. Antwortet ein Git-Server langsam, "
+            "warten auch Abfragen für andere Stacks und Server."
+        )
+    ]
+
+
+def test_pagination_errors_are_listed_as_bug_fix():
+    loaded = changelog.load_changelog()
+    entries = [*loaded.unreleased, *(entry for release in loaded.versions for entry in release.entries)]
+    fixes = [entry for entry in entries if 685 in entry.prs]
+    assert len(fixes) == 1
+    assert fixes[0].kind == "behoben"
 
 
 def test_version_numbers_never_drift():

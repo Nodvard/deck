@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -52,6 +53,7 @@ class FakePihole:
     def __init__(self) -> None:
         self.requests: list[httpx.Request] = []
         self.down = False
+        self.overrides: dict[str, Callable[[httpx.Request], httpx.Response]] = {}
         self.sessions: set[str] = set()
         self.blocking = {"blocking": "enabled", "timer": None}
         self.changes: list[str] = []
@@ -75,6 +77,8 @@ class FakePihole:
         if path == "/api/auth" and request.method == "DELETE":
             self.sessions.discard(request.headers["X-FTL-SID"])
             return httpx.Response(204)
+        if path in self.overrides:
+            return self.overrides[path](request)
         if path == "/api/stats/summary":
             return httpx.Response(200, json=_fixture("stats_summary.json"))
         if path == "/api/stats/top_clients":
@@ -367,10 +371,9 @@ async def test_domain_route_refuses_odd_input(client, db_session, test_settings,
     ("pihole.domain_allow", {}, "Bitte eine Domain"),
 ])
 async def test_executor_rejects_forged_payloads(client, db_session, test_settings, action_type, payload, error):
+    from nodvard_deck.core.known_actors import known_while
     from nodvard_sdk import Actor, Risk
     from nodvard_sdk.actions import ActionRequest
-
-    from nodvard_deck.core.known_actors import known_while
 
     headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers)
@@ -405,6 +408,109 @@ async def test_unreachable_and_wrong_password_are_clean_states(client, db_sessio
     fake.sessions.clear()
     body = (await client.get("/api/v1/ext/pihole/summary", headers=headers)).json()
     assert body["state"] == "auth_failed" and "Passwort" in body["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/api/stats/summary", "/api/dns/blocking", "/api/stats/top_clients"])
+@pytest.mark.parametrize(("failure", "message"), [
+    ("disconnect", "Pi-hole hat die Verbindung abgebrochen"),
+    ("timeout", "Pi-hole antwortet nicht (Zeitüberschreitung)"),
+    ("html", "Pi-hole hat keine gültige Antwort geschickt."),
+    ("wrong_json", "Pi-hole hat keine gültige Antwort geschickt."),
+    ("empty_json", "Pi-hole hat keine gültige Antwort geschickt."),
+    ("empty_body", "Pi-hole hat keine gültige Antwort geschickt."),
+])
+async def test_wackeltest_reports_an_outage_and_recovers_without_reconfiguration(
+    client, db_session, test_settings, caplog, path, failure, message,
+):
+    """Ein laufendes Pi-hole fällt aus und startet mit verlorener Sitzung und neuen Daten wieder."""
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    loaded = get_extension_runtime().loaded["pihole"]
+    service = loaded.instance._service
+
+    async def summary() -> dict:
+        response = await client.get("/api/v1/ext/pihole/summary", headers=headers)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    async def widget() -> dict:
+        response = await client.get("/api/v1/ext/pihole/widgets/status", headers=headers)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    healthy = await summary()
+    assert healthy["state"] == "ok" and healthy["summary"]["queries_total"] == 29160
+    assert (await widget())["meta"] == {"state": "ok"}
+    assert len(fake.sessions) == 1
+
+    canary = "FREMDE-ANTWORT-DARF-NICHT-ERSCHEINEN"
+
+    def broken(request: httpx.Request) -> httpx.Response:
+        if failure == "disconnect":
+            raise httpx.ReadError(canary, request=request)
+        if failure == "timeout":
+            raise httpx.ReadTimeout(canary, request=request)
+        if failure == "html":
+            return httpx.Response(200, text=f"<html>{canary}</html>")
+        if failure == "wrong_json":
+            return httpx.Response(200, json={"fremder_dienst": canary})
+        if failure == "empty_json":
+            return httpx.Response(200, json={})
+        assert failure == "empty_body"
+        return httpx.Response(200, content=b"")
+
+    fake.overrides[path] = broken
+    # Auch wiederholte Aktualisierungen zeigen den Fehler, ohne alte Zahlen oder Anmeldeschleife.
+    for _ in range(2):
+        before = len(fake.requests)
+        failed = await summary()
+        assert failed["state"] == "unreachable" and failed["message"].startswith(message), failed
+        assert all(failed[key] is None for key in ("summary", "blocking", "top_clients"))
+        tile = await widget()
+        assert tile["meta"] == {"state": "unreachable"}
+        assert tile["data"] == [{
+            "title": "Pi-hole nicht erreichbar", "subtitle": failed["message"], "label": "nicht erreichbar", "tone": "danger",
+        }]
+        assert 2 <= len(fake.requests) - before <= 6, "höchstens drei Datenanfragen je Aktualisierung"
+        assert sum(r.method == "POST" and r.url.path == "/api/auth" for r in fake.requests) == 1
+        assert canary not in json.dumps([failed, tile], ensure_ascii=False) + caplog.text
+
+    # Ein Neustart verliert die Sitzung. Der bestehende Client muss einmal neu anmelden.
+    fake.overrides.clear()
+    fake.sessions.clear()
+    fresh = _fixture("stats_summary.json")
+    fresh["queries"]["total"] = 30000
+    fake.overrides["/api/stats/summary"] = lambda request: httpx.Response(200, json=fresh)
+    fake.blocking = {"blocking": "disabled", "timer": None}
+    recovered = await summary()
+    assert recovered["state"] == "ok" and recovered["message"] is None
+    assert recovered["summary"]["queries_total"] == 30000
+    assert recovered["blocking"] == {"status": "disabled", "enabled": False, "timer_s": None}
+    assert recovered["top_clients"] == healthy["top_clients"]
+    tile = await widget()
+    assert tile["meta"] == {"state": "ok"}
+    assert tile["data"][0]["label"] == "aus" and "30.000 Anfragen" in tile["data"][1]["subtitle"]
+    assert loaded.instance._service is service, "Wiederverbindung ohne neue Einstellungen oder neuen Dienst"
+    assert sum(r.method == "POST" and r.url.path == "/api/auth" for r in fake.requests) == 2
+    assert len(fake.sessions) == 1 and fake.changes == []
+    assert PASSWORD not in json.dumps([failed, recovered, tile], ensure_ascii=False) + caplog.text
+
+
+@pytest.mark.asyncio
+async def test_wackeltest_accepts_zero_queries_and_an_empty_client_list(client, db_session, test_settings):
+    """Ein frisch gestartetes Pi-hole ohne Anfragen ist erreichbar."""
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    fake.overrides["/api/stats/summary"] = lambda request: httpx.Response(200, json={"queries": {"total": 0, "blocked": 0}})
+    fake.overrides["/api/stats/top_clients"] = lambda request: httpx.Response(200, json={"clients": []})
+    response = await client.get("/api/v1/ext/pihole/summary", headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["state"] == "ok" and body["summary"]["queries_total"] == 0 and body["top_clients"] == []
+    widget = await client.get("/api/v1/ext/pihole/widgets/status", headers=headers)
+    assert widget.status_code == 200 and widget.json()["meta"] == {"state": "ok"}
+    assert "0 Anfragen" in widget.json()["data"][1]["subtitle"]
 
 
 @pytest.mark.asyncio

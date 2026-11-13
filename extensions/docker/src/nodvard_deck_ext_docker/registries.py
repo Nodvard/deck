@@ -3,6 +3,7 @@ Passwort nie auf der Kommandozeile steht. Gezeigt wird nur, bei welchen Registri
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import json
 import re
 from dataclasses import dataclass
@@ -87,9 +88,12 @@ def login_spec() -> list[ActionSpec]:
     common: dict[str, Any] = {"permissions": ["hosts.execute"], "host_bound": False}
     return [
         ActionSpec(
-            action_type=LOGIN_ACTION, label="Bei einer Registry anmelden", icon="key", default_risk=Risk.MEDIUM,
+            action_type=LOGIN_ACTION, label="Bei einer Registry anmelden", icon="key", default_risk=Risk.HIGH,
             description="Meldet Docker auf einem Server bei einer privaten Registry an; das Passwort kommt aus dem Tresor.",
-            confirm_text="Docker auf diesem Server darf danach Images aus dieser Registry holen. Fortfahren?", **common,
+            confirm_text=(
+                "Docker auf diesem Server darf danach Images aus dieser Registry holen. Das Passwort liegt danach in der "
+                "Docker-Konfiguration des Servers, bis du dich wieder abmeldest. Fortfahren?"
+            ), **common,
         ),
         ActionSpec(
             action_type=LOGOUT_ACTION, label="Bei einer Registry abmelden", icon="log-out", default_risk=Risk.LOW,
@@ -232,6 +236,9 @@ class DockerRegistryExecutor:
         payload = req.payload or {}
         if getattr(req.proposed_by.type, "value", req.proposed_by.type) != "user":
             return ActionResult(success=False, error="Bei einer Registry meldet nur ein Mensch über die Docker-Seite an.")
+        if req.action_type == LOGIN_ACTION and req.risk not in (Risk.HIGH, Risk.CRITICAL):
+            return ActionResult(success=False, error=(
+                "Dieser Vorschlag war nicht als hohes Risiko eingestuft und wird nicht ausgeführt. Schlag das Anmelden noch einmal vor."))
         registry = await self._registries.find(str(payload.get("registry") or ""))
         if registry is None or not usable(registry):
             return ActionResult(success=False, error=NOT_LISTED)
@@ -294,10 +301,14 @@ class DockerRegistryExecutor:
         return DryRunReport(would_change=True, summary=f"Würde Docker bei {payload.get('address', '?')} {verb}.")
 
 
-def registry_routes(registries_: Registries, editor: StackEditor, docker_host: Any, current_actor: Any) -> APIRouter:
+def registry_routes(registries_: Registries, editor: StackEditor, docker_host: Any, current_actor: Any, require_permission: Any) -> APIRouter:
     router = APIRouter()
 
-    @router.get("/hosts/{host_id}/registries")
+    @router.get(
+        "/hosts/{host_id}/registries",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (503,)},
+    )
     async def registry_state(host_id: str) -> dict:
         """Die eingetragenen Registries und ob dieser Server bei ihnen angemeldet ist; nie Zugangsdaten."""
         host = await docker_host(host_id)
@@ -315,7 +326,7 @@ def registry_routes(registries_: Registries, editor: StackEditor, docker_host: A
         if registry is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Diese Registry ist nicht eingetragen.")
         verb = "anmelden" if action_type == LOGIN_ACTION else "abmelden"
-        risk = Risk.MEDIUM if action_type == LOGIN_ACTION else Risk.LOW
+        risk = Risk.HIGH if action_type == LOGIN_ACTION else Risk.LOW
         decision = await editor.propose(ActionRequest(
             action_type=action_type, host_ref=host.id, risk=risk, proposed_by=actor,
             reason=f"Docker bei {registry.address} {verb} (als {registry.username}).",
@@ -323,12 +334,22 @@ def registry_routes(registries_: Registries, editor: StackEditor, docker_host: A
         ))
         return {"action_id": decision.action_id, "status": decision.status.value, "risk": risk.value, "detail": decision.detail}
 
-    @router.post("/hosts/{host_id}/registries/{name}/login", status_code=status.HTTP_202_ACCEPTED)
+    # Wer anmelden darf, bringt das Passwort aus dem Tresor auf den Server; das setzt das Recht auf Tresor-Einträge voraus.
+    @router.post(
+        "/hosts/{host_id}/registries/{name}/login", status_code=status.HTTP_202_ACCEPTED,
+        dependencies=[Depends(require_permission("secrets.read"))],
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 403, 404, 409, 502,)},
+    )
     async def login(host_id: str, name: str, actor: Actor = Depends(current_actor)) -> dict:
         """Schlägt das Anmelden vor (Gate-Aktion `docker.registry_login`)."""
         return await _propose(host_id, name, actor, LOGIN_ACTION)
 
-    @router.post("/hosts/{host_id}/registries/{name}/logout", status_code=status.HTTP_202_ACCEPTED)
+    @router.post(
+        "/hosts/{host_id}/registries/{name}/logout", status_code=status.HTTP_202_ACCEPTED,
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409, 502,)},
+    )
     async def logout(host_id: str, name: str, actor: Actor = Depends(current_actor)) -> dict:
         """Schlägt das Abmelden vor (Gate-Aktion `docker.registry_logout`)."""
         return await _propose(host_id, name, actor, LOGOUT_ACTION)

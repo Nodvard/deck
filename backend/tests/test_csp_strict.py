@@ -30,8 +30,9 @@ def _client(tmp_path, *, legacy=False, origin="https://deck.example:8443"):
 
 
 @pytest.mark.parametrize("path", ["/", "/settings", "/ext/docker", "/ext/shield", "/preview.html"])
-def test_exact_enforced_header_and_nonce_in_html(tmp_path, path):
-    response = _client(tmp_path).get(path)
+@pytest.mark.parametrize("legacy", [False, True])
+def test_exact_enforced_header_and_nonce_in_html(tmp_path, path, legacy):
+    response = _client(tmp_path, legacy=legacy).get(path)
     nonce = re.search(r'name="csp-nonce" content="([A-Za-z0-9_-]+)"', response.text)[1]
     assert len(nonce) >= 43
     assert response.headers["content-security-policy"] == (
@@ -46,8 +47,9 @@ def test_exact_enforced_header_and_nonce_in_html(tmp_path, path):
     assert "etag" not in response.headers
 
 
-def test_nonce_is_unique_even_for_conditional_requests_and_head(tmp_path):
-    client = _client(tmp_path)
+@pytest.mark.parametrize("legacy", [False, True])
+def test_nonce_is_unique_even_for_conditional_requests_and_head(tmp_path, legacy):
+    client = _client(tmp_path, legacy=legacy)
     answers = [client.get("/"), client.get("/", headers={"If-None-Match": "*"}), client.head("/")]
     assert all(answer.status_code == 200 for answer in answers)
     nonces = [re.search(r"'nonce-([^']+)'", answer.headers["content-security-policy"])[1] for answer in answers]
@@ -66,17 +68,20 @@ def test_websockets_use_only_the_current_origin(tmp_path, origin, socket):
     assert "*" not in policy and "'unsafe-inline'" not in policy
 
 
-def test_legacy_switch_is_explicit_and_warns(tmp_path, caplog, monkeypatch):
+def test_legacy_environment_setting_is_ignored_and_warns(tmp_path, caplog, monkeypatch):
     monkeypatch.setenv("NODVARD_DECK_CSP_LEGACY", "1")
     settings = Settings(_env_file=None)
     assert settings.csp_legacy is True
     response = _client(tmp_path, legacy=settings.csp_legacy).get("/")
+    nonce = re.search(r'name="csp-nonce" content="([A-Za-z0-9_-]+)"', response.text)[1]
     assert response.headers["content-security-policy"] == (
-        "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; "
+        f"default-src 'self'; style-src 'self' 'nonce-{nonce}'; style-src-attr 'none'; "
+        "img-src 'self' data: blob:; font-src 'self'; connect-src 'self' wss://deck.example:8443; "
         "frame-src blob:; object-src 'none'; base-uri 'self'; form-action 'self'; "
         "script-src 'self'; frame-ancestors 'none'"
     )
     assert "NODVARD_DECK_CSP_LEGACY" in caplog.text
+    assert "wird ignoriert" in caplog.text
     monkeypatch.delenv("NODVARD_DECK_CSP_LEGACY")
     assert Settings(_env_file=None).csp_legacy is False
 

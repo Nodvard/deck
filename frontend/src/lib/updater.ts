@@ -66,8 +66,13 @@ export interface HelperView {
   pending: HelperPending | null;
   /** `digest`: Ein Update geht nur mit der Prüfsumme aus der letzten Update-Suche. */
   request_options?: string[];
-  /** Mit `2` prüft der Helfer die Freigabe samt Signatur. */
+  /** Mit `3` prüft der Helfer auch die Signatur der Anforderung; ältere Helfer nimmt Deck nicht mehr an. */
   request_versions?: number[];
+}
+
+/** Ein Helfer ohne `3` in `request_versions` lehnt jede Anforderung des Decks ab (`409 signature_required`). */
+export function helperSignsRequests(view: Pick<HelperView, "request_versions">): boolean {
+  return !Array.isArray(view.request_versions) || view.request_versions.includes(3);
 }
 
 export interface UpdateRequested {

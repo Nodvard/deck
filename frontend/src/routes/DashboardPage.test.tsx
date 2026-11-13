@@ -6,13 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthStore } from "../state/auth";
 import { DashboardPage } from "./DashboardPage";
 
-/**
- * Bisher gab es fuer DashboardPage/WidgetPickerDialog keinen
- * Test -- der erste hier, echte Fetch-Mocks + echtes Rendern (wie
- * SetupPage.test.tsx), kein `react-grid-layout`-Mock noetig (die Bibliothek
- * faellt in jsdom mangels `ResizeObserver` sauber auf `width=0` zurueck, statt
- * zu crashen -- Kinder werden trotzdem gemountet).
- */
+/** Dashboard und Widget-Auswahl mit echten Komponenten und Fetch-Mocks prüfen. */
 const WIDGET_A = {
   id: "summary", ext_id: "backups", title: "Backup-Center", icon: null, description: null,
   size: { w: 2, h: 2, min_w: 1, min_h: 1 },
@@ -22,7 +16,7 @@ const WIDGET_A = {
   permissions: [], component: null, default_enabled: true,
 };
 const WIDGET_B = {
-  id: "overview", ext_id: "proxmox", title: "Proxmox-Uebersicht", icon: null, description: null,
+  id: "overview", ext_id: "proxmox", title: "Proxmox-Übersicht", icon: null, description: null,
   size: { w: 2, h: 2, min_w: 1, min_h: 1 },
   refresh: { interval_s: null, ws_channel: null },
   data_endpoint: "widgets/overview",
@@ -41,7 +35,7 @@ let groupPuts: unknown[][];
 /** Antwort des Proxmox-Widgets. */
 let proxmoxData: Record<string, unknown>;
 
-/** Was tatsaechlich auf dem Dashboard steht -- entfernte Widgets bleiben als
+/** Was tatsächlich auf dem Dashboard steht -- entfernte Widgets bleiben als
  * `config.hidden` im gespeicherten Layout (siehe lib/dashboard.ts). */
 function visible(): { widget_id: string }[] {
   return (layoutItems as { widget_id: string; config?: { hidden?: boolean } }[]).filter((i) => i.config?.hidden !== true);
@@ -103,11 +97,7 @@ function renderDashboard() {
 
 beforeEach(() => {
   useAuthStore.setState({ accessToken: "tok", user: null, status: "authenticated", mfaToken: null });
-  // BEIDE Widgets starten platziert -- sonst wuerde `appendMissingWidgets()`
-  // (die bestehende Auto-Platzierung, siehe DashboardPage.tsx) das fehlende
-  // sofort selbst hinzufuegen und einen PUT ausloesen, noch bevor der Dialog
-  // ueberhaupt geoeffnet wird. Diese Tests pruefen die NEUE manuelle
-  // Hinzufuegen/Entfernen-Faehigkeit, nicht die bereits bestehende Auto-Platzierung.
+  // Beide Widgets sind platziert, damit die Auto-Platzierung vor der Dialogprüfung keinen PUT auslöst.
   layoutItems = [
     { widget_id: "summary", ext_id: "backups", x: 0, y: 0, w: 2, h: 2, config: {} },
     { widget_id: "overview", ext_id: "proxmox", x: 2, y: 0, w: 2, h: 2, config: {} },
@@ -129,16 +119,9 @@ async function openPicker() {
 }
 
 describe("DashboardPage Rasterbreite", () => {
-  /**
-   * Live gefunden (Dashboard-Kacheln abgeschnitten): das Raster
-   * war beim ersten Laden immer fest 1280px breit, unabhaengig von der Seitenbreite
-   * -- auf einem Laptop wurden die rechten Karten abgeschnitten. `useContainerWidth`
-   * (react-grid-layout) misst nur einmal beim Mount; das gemessene <div> existierte
-   * da aber noch nicht (Early-Return fuer "Lade Dashboard …"), also blieb es beim
-   * 1280px-Default und kein ResizeObserver wurde je angehaengt.
-   */
+  /** Die Rasterbreite muss nach dem Laden am vorhandenen Container gemessen werden. */
   // Kartenbreite einer w=2-Karte bei Rasterbreite W (12 Spalten, 12px Abstand, RGL):
-  // 2*(W-156)/12 + 12. Der alte, festgeklemmte 1280px-Default ergab 199px.
+  // 2*(W-156)/12 + 12.
   async function cardWidthForContainer(containerWidth: number): Promise<number> {
     const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
     Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => containerWidth });
@@ -154,7 +137,7 @@ describe("DashboardPage Rasterbreite", () => {
   }
 
   it("richtet das Raster beim ERSTEN Laden an der echten Containerbreite aus, nicht am 1280px-Default", async () => {
-    // 1100px Container (typischer Laptop) -> ~169px; der alte Bug haette 199px ergeben.
+    // Eine Karte im 1100px breiten Container ist etwa 169px breit.
     const width = await cardWidthForContainer(1100);
     expect(width).toBeGreaterThan(160);
     expect(width).toBeLessThan(180);
@@ -200,20 +183,20 @@ describe("DashboardPage Rasterbreite", () => {
 });
 
 describe("DashboardPage + WidgetPickerDialog", () => {
-  it("zeigt im Dialog den korrekten Haekchen-Status fuer beide platzierten Widgets", async () => {
+  it("zeigt im Dialog den korrekten Häkchen-Status für beide platzierten Widgets", async () => {
     vi.stubGlobal("fetch", mockFetch());
     renderDashboard();
 
-    await screen.findByText("Jobs"); // WidgetCard fuer "summary" ist gerendert
+    await screen.findByText("Jobs"); // WidgetCard für "summary" ist gerendert
     const dialog = await openPicker();
 
     const backupsRow = (await dialog.findByText("Backup-Center")).closest("label")!;
-    const proxmoxRow = (await dialog.findByText("Proxmox-Uebersicht")).closest("label")!;
+    const proxmoxRow = (await dialog.findByText("Proxmox-Übersicht")).closest("label")!;
     expect(backupsRow.querySelector("input")).toBeChecked();
     expect(proxmoxRow.querySelector("input")).toBeChecked();
   });
 
-  it("entfernt ein Widget und fuegt es ueber denselben Dialog wieder hinzu", async () => {
+  it("entfernt ein Widget und fügt es über denselben Dialog wieder hinzu", async () => {
     vi.stubGlobal("fetch", mockFetch());
     renderDashboard();
 
@@ -228,7 +211,7 @@ describe("DashboardPage + WidgetPickerDialog", () => {
     expect(visible()[0].widget_id).toBe("overview");
     fireEvent.click(screen.getByRole("button", { name: "Fertig" }));
     await waitFor(() => expect(screen.queryByText("Jobs")).not.toBeInTheDocument());
-    expect(screen.getByText("Hosts")).toBeInTheDocument(); // das andere Widget bleibt unberuehrt
+    expect(screen.getByText("Hosts")).toBeInTheDocument(); // das andere Widget bleibt unberührt
 
     dialog = await openPicker();
     const backupsCheckboxAgain = (await dialog.findByText("Backup-Center")).closest("label")!.querySelector("input")!;
@@ -253,7 +236,7 @@ describe("DashboardPage + WidgetPickerDialog", () => {
     await waitFor(() => expect(visible()).toHaveLength(1));
 
     dialog = within(screen.getByRole("dialog"));
-    fireEvent.click((await dialog.findByText("Proxmox-Uebersicht")).closest("label")!.querySelector("input")!);
+    fireEvent.click((await dialog.findByText("Proxmox-Übersicht")).closest("label")!.querySelector("input")!);
     await waitFor(() => expect(visible()).toHaveLength(0));
     fireEvent.click(screen.getByRole("button", { name: "Fertig" }));
 
@@ -263,7 +246,7 @@ describe("DashboardPage + WidgetPickerDialog", () => {
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Fertig" }));
     // Der Picker-Knopf bleibt erreichbar, auch wenn das Dashboard leer ist --
-    // sonst gaebe es keinen Weg zurueck (siehe Modul-Docstring).
+    // sonst gäbe es keinen Weg zurück (siehe Modul-Docstring).
     expect(screen.getByRole("button", { name: "Widgets verwalten" })).toBeInTheDocument();
   });
 
@@ -279,11 +262,11 @@ describe("DashboardPage + WidgetPickerDialog", () => {
     first.unmount();
 
     // Neu laden: frischer Mount, frischer Query-Cache -- genau der Fall, in dem vorher
-    // appendMissingWidgets() das Widget als "fehlend" wieder angehaengt hat.
+    // appendMissingWidgets() das Widget als "fehlend" wieder angehängt hat.
     renderDashboard();
     await screen.findByText("Hosts");
     expect(screen.queryByText("Jobs")).not.toBeInTheDocument();
-    // Auch nach allen Speichervorgaengen des zweiten Mounts (react-grid-layout meldet
+    // Auch nach allen Speichervorgängen des zweiten Mounts (react-grid-layout meldet
     // beim Mount sein Layout) bleibt es ausgeblendet -- und steht nicht doppelt drin.
     await waitFor(() => expect(visible().map((i) => i.widget_id)).toEqual(["overview"]));
     expect(layoutItems).toHaveLength(2);
@@ -293,7 +276,7 @@ describe("DashboardPage + WidgetPickerDialog", () => {
 
 /**
  * Eine umbenannte Erweiterung (`legacy_ext_ids` im Katalog): ihr Dashboard-Eintrag unter der alten Kennung
- * zieht mit um, statt dass ihr Widget als neu unten angehaengt wird.
+ * zieht mit um, statt dass ihr Widget als neu unten angehängt wird.
  */
 describe("DashboardPage: Widgets einer umbenannten Erweiterung", () => {
   const RENAMED = { ...WIDGET_A, ext_id: "renamed", legacy_ext_ids: ["old"] };

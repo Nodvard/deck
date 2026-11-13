@@ -10,6 +10,7 @@ import { Link } from "react-router-dom";
 import { BetaBadge, BetaExplainer, isBeta } from "../../components/BetaBadge";
 import { Icon } from "../../components/Icon";
 import { api } from "../../lib/api";
+import { refreshExtensionQueries } from "../../lib/catalog";
 import { extensionErrorText } from "../../lib/extensionError";
 import { groupModules } from "../../lib/moduleGroups";
 import { confirmDialog } from "../../state/dialogs";
@@ -120,7 +121,7 @@ export function ExtensionsSettings(): JSX.Element {
         setNotice({ kind: "ok", text: `„${label}“ ${enable ? "eingeschaltet" : "ausgeschaltet"}.` });
       }
       load();
-      for (const key of ["pages", "widgets", "capabilities"]) void queryClient.invalidateQueries({ queryKey: [key] });
+      await refreshExtensionQueries(queryClient);
     } catch (err) {
       setNotice({ kind: "error", text: errorText(err) });
     } finally {
@@ -171,11 +172,11 @@ export function ExtensionsSettings(): JSX.Element {
                 {group.rows.map((ext) => {
                   const enabled = ext.state === "enabled";
                   return (
-                    <li key={ext.id} data-testid={`ext-${ext.id}`} className="flex items-center gap-4 px-5 py-4">
+                    <li key={ext.id} data-testid={`ext-${ext.id}`} className="flex flex-col items-start gap-4 px-5 py-4 sm:flex-row sm:items-center">
                       <span className="grid h-10 w-10 flex-none place-items-center rounded-lg bg-white/[0.06] text-[var(--color-accent)]">
                         <Icon name={ext.icon} size={18} />
                       </span>
-                      <div className="min-w-0 flex-1">
+                      <div className="min-w-0 sm:flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <p className="text-sm font-medium">{ext.name ?? ext.id}</p>
                           {isBeta(ext.stage) && <BetaBadge />}

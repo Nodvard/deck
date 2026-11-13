@@ -13,6 +13,7 @@ from enum import Enum
 from pathlib import Path
 
 import pytest
+from exec_gate_helpers import ReadingExec
 from nodvard_sdk import FilePlace
 from nodvard_sdk.capabilities import FilePlaceProvider
 
@@ -68,10 +69,11 @@ class _Result:
         self.stdout, self.exit_code, self.stderr = stdout, exit_code, stderr
 
 
-class _Exec:
+class _Exec(ReadingExec):
     """Antwortet je Host mit einer Ausgabe (oder wirft) und merkt sich jeden Befehl."""
 
     def __init__(self, outputs: dict) -> None:
+        super().__init__(ext_id="docker")
         self.outputs = outputs
         self.commands: list[tuple[str, str]] = []
 

@@ -9,6 +9,7 @@ import { LoadError, errorMessage, fetchJson } from "../../../_shared/frontend/sr
 import { Badge, Button } from "../../../_shared/frontend/src/ui";
 
 import { HostSection } from "./Resources";
+import { CARD_ITEM, CARD_LIST } from "./cardList";
 import { JSON_HEADERS, withResult } from "./StackEditor";
 
 interface RegistryOut {
@@ -110,16 +111,17 @@ export function RegistryList({ hostId }: { hostId: string }): JSX.Element {
       {warnings}
       {state.error && <LoadError what="Die Anmeldungen" error={state.error} onRetry={() => setReload((n) => n + 1)} compact />}
       {message && <p className={`whitespace-pre-line break-words text-sm ${message.warn ? "text-red-400" : "opacity-90"}`} role="status">{message.text}</p>}
-      <ul className="divide-y divide-white/5 text-sm">
+      <ul className={CARD_LIST}>
         {state.registries.map((r) => (
-          <li key={r.name} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2" data-testid={`registry-${r.name}`}>
+          <li key={r.name} className={CARD_ITEM} data-testid={`registry-${r.name}`}>
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
             <div className="min-w-0 flex-1">
               <p className="break-words">{r.name} {status(r)}</p>
               <p className="break-all text-xs opacity-60">{r.address} · als {r.username}</p>
               {!r.secret_set && <p className="text-xs text-amber-300">Kein Passwort im Tresor. Trag es in den Einstellungen des Moduls ein.</p>}
             </div>
             {canChange && (
-              <div className="flex shrink-0 gap-1.5">
+              <div className="flex flex-wrap gap-1.5 sm:shrink-0">
                 {r.logged_in !== true && (
                   <Button small variant="primary" disabled={busy !== null || !r.secret_set} onClick={() => void run(r, "login")} ariaLabel={`Bei ${r.name} anmelden`}>
                     {busy === r.name ? "…" : "Anmelden"}
@@ -132,6 +134,7 @@ export function RegistryList({ hostId }: { hostId: string }): JSX.Element {
                 )}
               </div>
             )}
+            </div>
           </li>
         ))}
       </ul>

@@ -7,6 +7,7 @@ import os
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi.responses import Response
 from fastapi.responses import FileResponse, JSONResponse
 from nodvard_sdk import max_body_bytes
 from pydantic import BaseModel, Field
@@ -30,6 +31,8 @@ from ...services import update_check as update_check_service
 from ...services import update_helper as update_helper_service
 from ...version import __version__
 from ..deps import CurrentUser, OwnerUser, SessionDep, SettingsDep, require_permission
+from ..models import RequestModel
+from ..responses import error_responses, file_responses
 from ..proxy_headers import SCOPE_KEY as FORWARDING_SCOPE_KEY
 from ..proxy_headers import Forwarding, is_insecure_connection
 from .auth import (
@@ -63,7 +66,7 @@ UPDATE_CHECK_WINDOW_S = 60
 _update_check_window = rate_limit.SlidingWindow(1, UPDATE_CHECK_WINDOW_S)
 
 
-class PasswordConfirm(BaseModel):
+class PasswordConfirm(RequestModel):
     current_password: str = Field(default="", max_length=1024)
     """Aktuelles Passwort des Kontos zur Bestätigung."""
 
@@ -84,7 +87,7 @@ class BackupKeyIn(PasswordConfirm):
     """Neues Sicherungspasswort (mindestens 12 Zeichen)."""
 
 
-class TotpConfirm(BaseModel):
+class TotpConfirm(RequestModel):
     totp_code: str = Field(default="", max_length=64)
     """Aktueller Zwei-Faktor-Code aus der App; Pflicht, wenn Zwei-Faktor an ist (sonst 403 mit `code: "totp_missing"`).
     Im Schema optional, ohne Zwei-Faktor entfällt er."""
@@ -132,7 +135,11 @@ def _http_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
-@router.get("/info", dependencies=[Depends(require_permission("system.read"))])
+@router.get(
+    "/info",
+    dependencies=[Depends(require_permission("system.read"))],
+    responses=error_responses(401, 403, 507),
+)
 async def system_info(session: SessionDep, settings: SettingsDep) -> dict:
     try:
         free = store.free_bytes(settings.data_dir)
@@ -179,7 +186,11 @@ class ConnectionOut(BaseModel):
     und die nicht eingetragen sind, die zuletzt gesehene zuerst. Nur für den Inhaber, sonst leer."""
 
 
-@router.get("/connection", dependencies=[Depends(require_permission("system.read"))])
+@router.get(
+    "/connection",
+    dependencies=[Depends(require_permission("system.read"))],
+    responses=error_responses(401, 403, 507),
+)
 async def connection_info(request: Request, settings: SettingsDep, user: CurrentUser) -> ConnectionOut:
     """Gegenstelle, verwendete Client-Adresse und Schema dieser Anfrage (`api/proxy_headers.py`)."""
     info = request.scope.get(FORWARDING_SCOPE_KEY)
@@ -200,7 +211,12 @@ async def connection_info(request: Request, settings: SettingsDep, user: Current
     )
 
 
-@router.get("/openapi.json", dependencies=[Depends(require_permission("system.read"))])
+# API-Vertrag: Grundlage der Flutter-Modellgenerierung.
+@router.get(
+    "/openapi.json",
+    dependencies=[Depends(require_permission("system.read"))],
+    responses=error_responses(401, 403, 507),
+)
 async def openapi_document(request: Request) -> JSONResponse:
     """Das OpenAPI-Dokument dieser Installation (Recht `system.read`; 401 ohne Anmeldung, 403 ohne das Recht)."""
     # Ersatz für das öffentliche `/openapi.json`, das außerhalb des Entwicklungsmodus abgeschaltet ist.
@@ -259,7 +275,11 @@ class UpdateStatusOut(BaseModel):
     release_notes_url: str | None = None
 
 
-@router.get("/updates", dependencies=[Depends(require_permission("system.read"))])
+@router.get(
+    "/updates",
+    dependencies=[Depends(require_permission("system.read"))],
+    responses=error_responses(401, 403, 507),
+)
 async def update_status(session: SessionDep, settings: SettingsDep) -> UpdateStatusOut:
     """Letzter bekannter Stand, ohne Anfrage ins Netz."""
     result = await update_check_service.current_status(session, settings)
@@ -267,7 +287,11 @@ async def update_status(session: SessionDep, settings: SettingsDep) -> UpdateSta
     return UpdateStatusOut(**result)
 
 
-@router.post("/updates/check", dependencies=[Depends(require_permission("system.read"))])
+@router.post(
+    "/updates/check",
+    dependencies=[Depends(require_permission("system.read"))],
+    responses=error_responses(401, 403, 429, 503, 507),
+)
 async def update_check(session: SessionDep, settings: SettingsDep) -> UpdateStatusOut:
     """Jetzt bei ghcr.io nachsehen. Scheitert das (offline, Fehler), kommt der letzte Stand mit `source: offline`
     und `error` zurück, kein Fehlercode. Höchstens einmal pro Minute, sonst 429."""
@@ -436,7 +460,11 @@ async def _confirm_helper_request(
     return None
 
 
-@router.get("/updates/helper", dependencies=[Depends(require_permission("system.read"))])
+@router.get(
+    "/updates/helper",
+    dependencies=[Depends(require_permission("system.read"))],
+    responses=error_responses(401, 403, 404, 507),
+)
 async def update_helper_status(settings: SettingsDep) -> UpdateHelperOut:
     """Zustand des Update-Helfers (ohne Anfrage ins Netz). Hält nebenbei neue Ergebnisse des Helfers im Audit-Protokoll
     fest (genau einmal je Anforderung)."""
@@ -444,8 +472,13 @@ async def update_helper_status(settings: SettingsDep) -> UpdateHelperOut:
     return UpdateHelperOut.model_validate(await update_helper_service.status_view(settings))
 
 
-@router.post("/updates/apply", status_code=status.HTTP_202_ACCEPTED, response_model=UpdateRequestedOut,
-             response_model_by_alias=True)
+@router.post(
+    "/updates/apply",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=UpdateRequestedOut,
+    response_model_by_alias=True,
+    responses=error_responses(400, 401, 403, 404, 409, 429, 502, 503, 507),
+)
 async def update_apply(
     payload: UpdateApplyIn, request: Request, user: CurrentUser, session: SessionDep, settings: SettingsDep
 ):
@@ -474,8 +507,13 @@ async def update_apply(
                         status_code=status.HTTP_202_ACCEPTED, headers=_NO_STORE)
 
 
-@router.post("/updates/rollback", status_code=status.HTTP_202_ACCEPTED, response_model=UpdateRequestedOut,
-             response_model_by_alias=True)
+@router.post(
+    "/updates/rollback",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=UpdateRequestedOut,
+    response_model_by_alias=True,
+    responses=error_responses(400, 401, 403, 404, 409, 429, 502, 503, 507),
+)
 async def update_rollback(
     payload: UpdateRollbackIn, request: Request, user: CurrentUser, session: SessionDep, settings: SettingsDep
 ):
@@ -506,12 +544,16 @@ async def update_rollback(
                         status_code=status.HTTP_202_ACCEPTED, headers=_NO_STORE)
 
 
-@router.get("/backups", dependencies=[Depends(require_permission("system.read"))])
+@router.get(
+    "/backups",
+    dependencies=[Depends(require_permission("system.read"))],
+    responses=error_responses(401, 403, 507),
+)
 async def list_backups(session: SessionDep, settings: SettingsDep) -> dict:
     return await backups_service.overview(session, settings)
 
 
-@router.put("/backups/config")
+@router.put("/backups/config", responses=error_responses(400, 401, 403, 404, 409, 422, 429, 503, 507))
 async def put_backup_config(
     payload: BackupConfigIn, request: Request, user: OwnerUser, session: SessionDep, settings: SettingsDep
 ) -> dict:
@@ -534,7 +576,7 @@ async def put_backup_config(
     return await backups_service.overview(session, settings)
 
 
-@router.put("/backups/key")
+@router.put("/backups/key", responses=error_responses(400, 401, 403, 404, 409, 422, 429, 503, 507))
 async def put_backup_key(payload: BackupKeyIn, request: Request, user: OwnerUser, session: SessionDep) -> JSONResponse:
     """Sicherungspasswort festlegen oder ändern. Die Antwort enthält EINMALIG den Wiederherstellungsschlüssel;
     gespeichert wird er nirgends."""
@@ -551,7 +593,11 @@ async def put_backup_key(payload: BackupKeyIn, request: Request, user: OwnerUser
     )
 
 
-@router.post("/backups/run", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/backups/run",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses=error_responses(400, 401, 403, 404, 409, 422, 507),
+)
 async def run_backup_now(user: OwnerUser) -> dict:
     try:
         await backups_service.start_manual_run(user_id=user.id)
@@ -569,7 +615,11 @@ def _ticket_out(ticket) -> dict:
     }
 
 
-@router.post("/backups/download", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/backups/download",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses=error_responses(400, 401, 403, 404, 409, 422, 429, 503, 507),
+)
 async def prepare_download(
     payload: DownloadIn, request: Request, user: OwnerUser, session: SessionDep, settings: SettingsDep
 ) -> JSONResponse:
@@ -587,7 +637,7 @@ async def prepare_download(
     return JSONResponse(_ticket_out(ticket), status_code=status.HTTP_202_ACCEPTED, headers=_NO_STORE)
 
 
-@router.get("/backups/download-jobs/{job_id}")
+@router.get("/backups/download-jobs/{job_id}", responses=error_responses(401, 403, 404, 507))
 async def download_job_status(job_id: str, user: OwnerUser) -> JSONResponse:
     """Stand eines Downloads über die Status-ID (taugt nicht zum Herunterladen)."""
     # Die Oberfläche fragt jede Sekunde ab; die ID steht in Adresse und Zugriffsprotokoll, daher nicht das Ticket.
@@ -597,7 +647,8 @@ async def download_job_status(job_id: str, user: OwnerUser) -> JSONResponse:
     return JSONResponse(_ticket_out(found), headers=_NO_STORE)
 
 
-@router.get("/backups/download/{ticket}/status", deprecated=True)
+# API-Vertrag: Ticket-Status für bestehende Clients bis v2.
+@router.get("/backups/download/{ticket}/status", deprecated=True, responses=error_responses(401, 403, 404, 507))
 async def download_status(ticket: str, user: OwnerUser) -> JSONResponse:
     """Veraltet: Stand über das Ticket selbst (steht dann in der Adresse). Bleibt als Übergang; neu ist
     `GET .../download-jobs/{job_id}`."""
@@ -607,7 +658,14 @@ async def download_status(ticket: str, user: OwnerUser) -> JSONResponse:
     return JSONResponse(_ticket_out(found), headers=_NO_STORE)
 
 
-@router.get("/backups/download/{ticket}")
+@router.get(
+    "/backups/download/{ticket}",
+    response_class=Response,
+    responses={
+        **error_responses(400, 404, 409, 416, 507),
+        **file_responses("application/octet-stream", ranges=True),
+    },
+)
 async def download(ticket: str, session: SessionDep):
     """Browser-Download ohne Anmelde-Header: das Ticket ist die Berechtigung. Es gilt genau einmal, 5 Minuten, und nur,
     solange sein Nutzer noch aktiver Owner ist."""
@@ -644,7 +702,7 @@ def _unlink(path) -> None:
         pass
 
 
-@router.post("/backups/{name}/ticket")
+@router.post("/backups/{name}/ticket", responses=error_responses(400, 401, 403, 404, 409, 422, 429, 503, 507))
 async def stored_backup_ticket(
     name: str, payload: StoredDownloadIn, request: Request, user: OwnerUser, session: SessionDep, settings: SettingsDep
 ) -> JSONResponse:
@@ -659,7 +717,7 @@ async def stored_backup_ticket(
     return JSONResponse(_ticket_out(ticket), headers=_NO_STORE)
 
 
-@router.post("/backups/{name}/verify")
+@router.post("/backups/{name}/verify", responses=error_responses(400, 401, 403, 404, 409, 422, 507))
 async def verify_backup(name: str, user: OwnerUser, session: SessionDep, settings: SettingsDep) -> dict:
     try:
         target = await backups_service.target_of(settings, session)
@@ -674,7 +732,11 @@ async def verify_backup(name: str, user: OwnerUser, session: SessionDep, setting
     return result
 
 
-@router.delete("/backups/{name}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/backups/{name}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=error_responses(400, 401, 403, 404, 409, 422, 429, 503, 507),
+)
 async def delete_backup(
     name: str, payload: PasswordConfirm, request: Request, user: OwnerUser, session: SessionDep, settings: SettingsDep
 ) -> None:
@@ -696,7 +758,7 @@ def _scope(user: User, request: Request) -> restore_service.Scope:
     return restore_service.Scope("owner", user_id=user.id, label=user.username, ip=ip)
 
 
-@router.get("/restore/status")
+@router.get("/restore/status", responses=error_responses(400, 401, 403, 404, 409, 413, 422, 507))
 async def restore_status(
     request: Request, session: SessionDep, settings: SettingsDep,
     user: Annotated[User, Depends(require_permission("system.read"))],
@@ -710,7 +772,11 @@ async def restore_status(
         raise restore_http_error(exc) from exc
 
 
-@router.put("/restore/upload", status_code=status.HTTP_201_CREATED)
+@router.put(
+    "/restore/upload",
+    status_code=status.HTTP_201_CREATED,
+    responses=error_responses(400, 401, 403, 404, 409, 413, 415, 422, 429, 503, 507),
+)
 @max_body_bytes(lambda: get_settings().restore_max_upload_bytes)
 async def restore_upload(
     request: Request, user: OwnerUser, session: SessionDep, settings: SettingsDep,
@@ -728,7 +794,7 @@ async def restore_upload(
     return JSONResponse(view, status_code=status.HTTP_201_CREATED, headers=_NO_STORE)
 
 
-@router.post("/restore/{restore_id}/inspect")
+@router.post("/restore/{restore_id}/inspect", responses=error_responses(400, 401, 403, 404, 409, 413, 422, 507))
 async def restore_inspect(
     restore_id: str, payload: RestoreInspectIn, request: Request, user: OwnerUser, session: SessionDep, settings: SettingsDep
 ) -> JSONResponse:
@@ -744,7 +810,10 @@ class OwnerScheduleIn(PasswordConfirm, TotpConfirm, RestoreScheduleIn):
     die Konten."""
 
 
-@router.post("/restore/{restore_id}/schedule")
+@router.post(
+    "/restore/{restore_id}/schedule",
+    responses=error_responses(400, 401, 403, 404, 409, 413, 422, 429, 503, 507),
+)
 async def restore_schedule(
     restore_id: str, payload: OwnerScheduleIn, request: Request, user: OwnerUser, session: SessionDep, settings: SettingsDep
 ) -> JSONResponse:
@@ -761,13 +830,21 @@ async def restore_schedule(
     return JSONResponse(pending, headers=_NO_STORE)
 
 
-@router.delete("/restore/pending", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/restore/pending",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=error_responses(400, 401, 403, 404, 409, 413, 422, 507),
+)
 async def restore_cancel(request: Request, user: OwnerUser, session: SessionDep, settings: SettingsDep) -> None:
     """Verwirft die Vormerkung und jeden Zwischenstand (auch hochgeladene, noch nicht geprüfte)."""
     await do_cancel(session, settings, _scope(user, request))
 
 
-@router.delete("/restore/replaced", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/restore/replaced",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=error_responses(400, 401, 403, 404, 409, 413, 422, 429, 503, 507),
+)
 async def restore_delete_replaced(
     payload: PasswordConfirm, request: Request, user: OwnerUser, session: SessionDep, settings: SettingsDep
 ) -> None:
@@ -784,7 +861,7 @@ async def restore_delete_replaced(
     )
 
 
-@router.post("/restart", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/restart", status_code=status.HTTP_202_ACCEPTED, responses=error_responses(400, 401, 403, 429, 503, 507))
 async def restart(payload: PasswordConfirm, request: Request, user: OwnerUser, session: SessionDep) -> dict:
     """Beendet Nodvard Deck mit Rückgabewert 75; der Container startet es neu (`restart: unless-stopped`) und spielt
     dabei eine vorgemerkte Wiederherstellung ein. Owner mit Passwort. Ohne Neustart-Regel bleibt er danach aus."""

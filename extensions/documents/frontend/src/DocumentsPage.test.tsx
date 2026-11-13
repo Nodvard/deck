@@ -1,3 +1,4 @@
+import { mobileLayout } from "../../../../frontend/src/test/mobileLayout";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -326,3 +327,13 @@ describe("DocumentsPage: Ladefehler und Fehlergründe", () => {
     expect(await screen.findByText("Fehler: Datenbank gesperrt")).toBeInTheDocument();
   });
 });
+
+it("390 px: Dokumentdetails nutzen die ganze Kartenbreite", async () => {
+  vi.stubGlobal("fetch", mockFetch());
+  render(<DocumentsPage />);
+  const row = await screen.findByTestId("document-doc-1");
+  fireEvent.click(within(row).getByRole("button", { name: /Details/ }));
+  const details = row.querySelector(".space-y-3")!;
+  expect(details).toHaveClass("ml-0", "sm:ml-10");
+  await mobileLayout(row);
+}, 30000);

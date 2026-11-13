@@ -637,6 +637,95 @@ async def _login_from(ip: str, username="nico", password=PASSWORD):
         return await _login(other, username=username, password=password)
 
 
+@pytest.mark.parametrize("network", ["2001:db8:42:{:x}::1", "198.51.100.{}"])
+@pytest.mark.parametrize("account_state", ["active", "unknown", "disabled"])
+@pytest.mark.asyncio
+async def test_password_limit_blocks_rotating_networks(client, db_session, clock, monkeypatch, network, account_state):
+    from nodvard_deck.core import security
+    from nodvard_deck.models import User
+
+    await _bootstrap(client)
+    username = "niemand" if account_state == "unknown" else "nico"
+    if account_state == "disabled":
+        user = (await db_session.execute(select(User))).scalars().one()
+        user.is_active = False
+        await db_session.commit()
+
+    for i in range(30):
+        typed = username if i % 2 else f" {username.upper()} "
+        r = await _login_from(network.format(i + 1), username=typed, password="falsch")
+        assert r.status_code == 401
+        clock[0] += 1
+
+    calls = []
+    real_verify = security.verify_password
+    monkeypatch.setattr(security, "verify_password", lambda *a, **k: calls.append(1) or real_verify(*a, **k))
+    r = await _login_from(network.format(100), username=username)
+    assert r.status_code == 429
+    assert r.headers["Retry-After"] == "270"
+    assert calls == []
+    # Aus dem Heimnetz gilt die Grenze nicht: Raten aus fremden Netzen sperrt dort niemanden aus.
+    assert (await _login(client, username=username)).status_code == (200 if account_state == "active" else 401)
+    locked = [e for e in await _audit(db_session, "login.locked") if "password" in e.detail["scopes"]]
+    assert len(locked) == 1
+    assert locked[0].detail["window_seconds"] == 300
+    assert "über alle Adressen" in locked[0].reason
+    assert len(await _audit(db_session, "login.failed")) == (30 if account_state == "active" else 31)
+
+    clock[0] += 270
+    r = await _login_from(network.format(100), username=username)
+    assert r.status_code == (200 if account_state == "active" else 401)
+
+
+@pytest.mark.asyncio
+async def test_password_limit_keeps_failures_after_success(client, clock, monkeypatch):
+    monkeypatch.setattr(login_limit, "_NAME_KEY", b"password-limit-test")
+    await _bootstrap(client)
+    for i in range(30):
+        assert (await _login_from(f"2001:db8:43:{i + 1:x}::1", password="falsch")).status_code == 401
+        if i in (8, 17, 26):
+            assert (await _login_from("198.51.100.43")).status_code == 200
+    assert (await _login_from("198.51.100.44")).status_code == 429
+    assert (await _login_from("198.51.100.44", username="anderer-name", password="x")).status_code == 401
+    assert (await _login_from("192.168.43.2")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_password_limit_releases_mfa_and_busy_hashing(client, clock, monkeypatch):
+    from nodvard_deck.core import security
+
+    await _enable_totp(client)
+    for i in range(29):
+        assert (await _login_from(f"2001:db8:44:{i + 1:x}::1", password="falsch")).status_code == 401
+    for _ in range(3):
+        assert (await _login_from("198.51.100.41")).status_code == 202
+
+    async def busy(*_, **__):
+        raise security.HashingBusy
+
+    with monkeypatch.context() as m:
+        m.setattr(security, "verify_password_async", busy)
+        assert (await _login_from("198.51.100.42", password="falsch")).status_code == 503
+    assert (await _login_from("198.51.100.43", password="falsch")).status_code == 401
+    assert (await _login_from("198.51.100.44")).status_code == 429
+    assert (await _login_from("192.168.44.4")).status_code == 202
+
+
+@pytest.mark.asyncio
+async def test_password_limit_blocks_before_database_access(client, test_settings, clock):
+    from nodvard_deck.services import auth as auth_service
+
+    class NoDatabase:
+        def __getattr__(self, name):
+            raise AssertionError(f"Datenbank benutzt: {name}")
+
+    await _bootstrap(client)
+    for i in range(30):
+        assert (await _login_from(f"2001:db8:46:{i:x}::1", password="falsch")).status_code == 401
+    with pytest.raises(auth_service.TooManyAttempts):
+        await auth_service.login(NoDatabase(), test_settings, username="nico", password=PASSWORD, ip="198.51.100.46")
+
+
 async def _guess(count: int, username="nico", first: int = 1):
     for i in range(first, first + count):
         assert (await _login_from(f"203.0.113.{i}", username=username, password="falsch")).status_code == 401
@@ -659,6 +748,8 @@ async def test_guessing_from_many_networks_brakes_each_of_them(client, db_sessio
     notes = (await db_session.execute(select(Notification))).scalars().all()
     assert [n.title for n in notes] == ["Passwort wird durchprobiert"]
     assert "schalte Zwei-Faktor ein" in notes[0].body
+    assert "Nach 30 falschen Passwörtern in 5 Minuten" in notes[0].body
+    assert "auch mit dem richtigen Passwort" in notes[0].body
 
     clock[0] += login_limit.NAME_FIRST_WAIT_SECONDS
     assert (await _login_from("203.0.113.1", password="falsch")).status_code == 401
@@ -830,3 +921,30 @@ async def test_a_braked_attempt_does_not_touch_the_database(client, test_setting
             await auth_service.login(
                 _NoDatabase(), test_settings, username=name, password="x", ip=f"203.0.113.{first}"
             )
+
+
+@pytest.mark.asyncio
+async def test_guessing_from_few_foreign_addresses_does_not_lock_out_the_owner_at_home(client, db_session, clock):
+    """30 falsche Passwörter aus fremden Adressen sperren den Besitzer nicht im Heimnetz aus."""
+    await _bootstrap(client)
+    # Die Bremse je Name lässt jedes fremde Netz ab dem zweiten Versuch warten, deshalb je Versuch eine neue Adresse.
+    ips = ["203.0.113.71"] * login_limit.NAME_FREE_FAILURES + [f"203.0.113.{100 + i}" for i in range(20)]
+    for ip in ips:
+        assert (await _login_from(ip, password="falsch")).status_code == 401
+        clock[0] += 1
+    # Aus fremden Netzen geht es nicht weiter, auch nicht mit dem richtigen Passwort.
+    assert (await _login_from("203.0.113.74")).status_code == 429
+    assert (await _login_from("2001:db8:74::1")).status_code == 429
+    # Aus dem Heimnetz, über VPN und auf dem Gerät selbst kommt der Besitzer hinein.
+    for ip in ("192.168." + "178.20", "100.101.102.103", "fd00::20", "127.0.0.1"):
+        assert (await _login_from(ip)).status_code == 200, ip
+    locked = [e for e in await _audit(db_session, "login.locked") if "password" in e.detail["scopes"]]
+    assert len(locked) == 1
+
+
+@pytest.mark.asyncio
+async def test_failures_from_home_do_not_count_for_the_limit_across_addresses(client, clock):
+    await _bootstrap(client)
+    for i in range(login_limit.MAX_PASSWORD_FAILURES_PER_NAME):
+        assert (await _login_from(f"192.168.45.{i + 1}", password="falsch")).status_code == 401
+    assert (await _login_from("198.51.100.45")).status_code == 200

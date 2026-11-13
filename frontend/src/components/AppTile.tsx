@@ -1,11 +1,4 @@
-/**
- * Kacheln im Bereich „Apps“ des Cockpits: `AppTile` für einen erkannten Dienst (Container, wie bisher) und
- * `CustomAppTile` für eine von Hand angelegte App („+ App hinzufügen“). Beide sehen gleich aus; die eigene hat
- * dazu Symbol/Farbe nach Wahl und -- nur mit Schreibrecht -- ein kleines Menü (Bearbeiten, Verschieben, Löschen).
- *
- * Links öffnen mit `rel="noopener noreferrer"`. Eine eigene App zeigt nie einen Zustand: der Server fragt ihre
- * Adresse nicht ab (kein „läuft/läuft nicht“), sie ist nur ein Link.
- */
+/** Dienst- und eigene App-Kacheln mit sicheren Links; eigene Apps fragen keinen Dienstzustand ab. */
 import { styleRef } from "../../../extensions/_shared/frontend/src/csp";
 import { ArrowDown, ArrowUp, ExternalLink, MoreVertical, Pencil, Trash2 } from "lucide-react";
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
@@ -202,7 +195,7 @@ export function CustomAppTile({ app, actions }: { app: AppTileOut; actions?: Til
           {inner}
         </a>
       ) : (
-        <div className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-3 pr-1" title="Diese Adresse ist nicht gültig – bitte bearbeite die App.">
+        <div className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-3 pr-1" title="Diese Adresse ist nicht gültig, bitte bearbeite die App.">
           {inner}
         </div>
       )}

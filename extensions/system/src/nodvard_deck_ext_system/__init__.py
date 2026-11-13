@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 import time
 from typing import Any
@@ -23,6 +24,7 @@ from nodvard_sdk import (
     Refresh,
     WidgetSpec,
 )
+from nodvard_sdk.errors import error_message
 from pydantic import BaseModel, ConfigDict, Field
 
 from .actions import (
@@ -82,7 +84,7 @@ def error_text(exc: BaseException) -> str:
         return "keine Antwort innerhalb der Zeitgrenze – ist der Server an?"
     if isinstance(exc, ConnectionRefusedError):
         return "Verbindung abgelehnt – läuft der SSH-Dienst?"
-    return str(exc).strip() or "Verbindung fehlgeschlagen"
+    return error_message(exc)
 
 
 _KIND_WORDS = {"vm": "VM", "lxc": "LXC"}
@@ -128,6 +130,7 @@ def widget_row(host: Any, info: dict[str, Any] | None, error: str | None) -> dic
         return {
             "name": name, "host_id": host.id, "kind": kind, "summary": error or "nicht erreichbar",
             "badge": "nicht erreichbar", "tone": "danger",
+            "reachable": False,
         }
     # Nach Schwere sortiert, damit Text und Ton vom selben (schlimmsten) Eintrag kommen.
     findings = sorted(info["findings"], key=lambda f: _TONE_ORDER.get(f["tone"], 2))
@@ -140,6 +143,7 @@ def widget_row(host: Any, info: dict[str, Any] | None, error: str | None) -> dic
         "summary": findings[0]["text"] if findings else f"{info.get('os') or 'Linux'} – alles in Ordnung",
         "badge": "OK" if not findings else f"{len(findings)} Befund{'e' if len(findings) > 1 else ''}",
         "tone": tone,
+        "reachable": True,
         # Auslastung zur Zeit der Abfrage (für die Server-Kacheln); None, wenn unbekannt.
         "cpu_percent": info.get("cpu_percent"),
         "mem_percent": (
@@ -275,7 +279,8 @@ class Extension(NodvardExtension):
             try:
                 # Das äußere Zeitlimit (25 s) liegt über dem des SSH-Aufrufs (20 s), damit auch ein hängender
                 # Verbindungsaufbau endet.
-                result = await asyncio.wait_for(ctx.exec.run(host, SCRIPT, timeout_s=20), timeout=25)
+                with ctx.exec.read_access(host):
+                    result = await asyncio.wait_for(ctx.exec.run(host, SCRIPT, timeout_s=20), timeout=25)
             except Exception as exc:  # noqa: BLE001 - ein Host darf die anderen nicht verstecken
                 return widget_row(host, None, f"nicht erreichbar: {error_text(exc)}")
             if "@@os" not in result.stdout:
@@ -303,7 +308,11 @@ class Extension(NodvardExtension):
             widget_cache.put(key, now, rows)
             return {"data": rows, "meta": {"cached": False}}
 
-        @router.get("/hosts/{host_id}/live")
+        @router.get(
+            "/hosts/{host_id}/live",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (400, 404, 409, 502,)},
+        )
         async def host_live(host_id: str) -> dict:
             """Task-Manager-Ansicht: Kerne, Takt, Temperaturen, RAM, Platten, Netzwerkkarten, Dateisysteme, Top-Prozesse."""
             host = await ctx.hosts.get(host_id)
@@ -311,26 +320,42 @@ class Extension(NodvardExtension):
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
             if host.os_family != "linux":
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Live-Werte gibt es nur für Linux-Server.")
+            if not host.has_credential:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Für „{host.display_name or host.name}“ ist kein SSH-Zugang eingerichtet. "
+                    "Hinterlege ihn unter Einstellungen → Server & Zugänge.",
+                )
             try:
                 live = await metrics.live(host)
             except Exception as exc:  # noqa: BLE001 - dem Nutzer zeigen, nicht als 500 verstecken
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Nicht erreichbar: {error_text(exc)}") from exc
             return {**live, "host": {"id": host.id, "name": host.display_name or host.name}}
 
-        @router.get("/hosts/{host_id}/info")
+        @router.get(
+            "/hosts/{host_id}/info",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (400, 404, 409, 422, 502,)},
+        )
         async def host_info(host_id: str) -> dict:
             host = await ctx.hosts.get(host_id)
             if host is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
             if host.os_family != "linux":
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Die Seite „Server-Zustand“ gibt es nur für Linux-Server.")
+            if not host.has_credential:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Für „{host.display_name or host.name}“ ist kein SSH-Zugang eingerichtet. "
+                    "Hinterlege ihn unter Einstellungen → Server & Zugänge.",
+                )
             try:
                 result = await ctx.exec.run(host, SCRIPT, timeout_s=30)
             except Exception as exc:  # noqa: BLE001 - dem Nutzer zeigen, nicht als 500 verstecken
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Nicht erreichbar: {error_text(exc)}") from exc
             if "@@os" not in result.stdout:
-                detail = result.stderr.strip() or f"Exit-Code {result.exit_code}"
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Abfrage fehlgeschlagen: {detail}")
+                detail = error_message(RuntimeError(result.stderr), "Abfrage fehlgeschlagen.")
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=detail)
             info = parse_system_info(result.stdout)
             settings = await ctx.settings.get()
             apply_thresholds(info, *_thresholds(settings, host.id))
@@ -345,7 +370,7 @@ class Extension(NodvardExtension):
             return info
 
         router.include_router(build_action_router(ctx))
-        ctx.api.include_router(router, permission="hosts.execute")
+        ctx.api.include_router(router, permission="hosts.execute", ssh_preflight=True)
 
         # Eigene Temperaturgrenze je Server (`warn_temp_by_host`, im Formular versteckt): lesen mit `hosts.read`,
         # ändern wie die übrigen Einstellungen mit `settings.write`.

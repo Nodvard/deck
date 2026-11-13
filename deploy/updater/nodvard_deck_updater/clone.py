@@ -308,10 +308,13 @@ def _build_config(config: dict[str, Any], ic: dict[str, Any], *, container_id: s
     for field in CONFIG_COPY:
         if not is_default(config.get(field)):
             body[field] = _copy(config[field])
+    root_users = (None, "", "0", "root", "0:0", "root:root")
     for field in CONFIG_SUBTRACT:
         value = config.get(field)
         if value is not None and not isinstance(value, str):
             raise _unknown(field)
+        if field == "User" and value in root_users and ic.get(field) in root_users:
+            continue
         if value and value != (ic.get(field) or ""):
             body[field] = value
 

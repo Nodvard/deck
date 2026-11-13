@@ -2,12 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { auditActionLabel } from "./AuditSettings";
 
-/**
- * Bis 0.6 hieß Nodvard Shield `nexus_soc`; Protokolleinträge von damals tragen das als Vorsilbe und werden nicht
- * umgeschrieben. Sie bekommen dieselbe Beschriftung wie die neuen Einträge (`shield.<Vorgang>`).
- */
+/** Ältere Protokolleinträge bekommen dieselbe Beschriftung wie neue Einträge von Nodvard Shield. */
 describe("auditActionLabel: frühere Vorsilbe von Nodvard Shield", () => {
-  it("gibt Einträgen mit `nexus_soc.` dieselbe Beschriftung wie denen mit `shield.`", () => {
+  it("gibt älteren und neuen Einträgen dieselbe Beschriftung", () => {
     expect(auditActionLabel("nexus_soc.quarantine")).toBe("Datei in Quarantäne verschoben");
     expect(auditActionLabel("nexus_soc.guard_new_port")).toBe(auditActionLabel("shield.guard_new_port"));
     expect(auditActionLabel("nexus_soc.incident")).toBe("Vorfall erfasst und von Nodvard KI bewertet");

@@ -163,7 +163,8 @@ def test_a_server_that_does_not_answer_is_named(dns, monkeypatch, tmp_path, no_p
     assert answer == {"ok": False, "problem": "Der Server antwortet nicht. Prüf die Adresse und ob Deck ihn erreichen kann."}
 
 
-def test_the_next_address_is_tried_and_a_timeout_stays_one(monkeypatch):
+@pytest.mark.parametrize("error", [TimeoutError, OSError])
+def test_the_next_address_is_tried_and_a_timeout_stays_one(monkeypatch, error):
     gf = _gf()
     seen = []
     good = socket.socket()
@@ -171,7 +172,7 @@ def test_the_next_address_is_tried_and_a_timeout_stays_one(monkeypatch):
     def create_connection(address, *args, **kwargs):
         seen.append(address[0])
         if address[0] == "140.82.121.4":
-            raise TimeoutError
+            raise error
         return good
 
     monkeypatch.setattr(gf.urllib3_connection, "create_connection", create_connection)
@@ -179,7 +180,7 @@ def test_the_next_address_is_tried_and_a_timeout_stays_one(monkeypatch):
     with good:
         assert connection._new_conn() is good and seen == ["140.82.121.4", "140.82.121.5"]
     connection = gf._PinnedManager(["140.82.121.4"]).connection_from_url("https://git.example.org/")._new_conn()
-    with pytest.raises(gf.ConnectTimeoutError):
+    with pytest.raises(gf.ConnectTimeoutError if error is TimeoutError else gf.NewConnectionError):
         connection._new_conn()
 
 

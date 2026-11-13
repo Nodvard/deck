@@ -94,6 +94,17 @@ describe("Anleitung zur Erweiterung", () => {
 });
 
 describe("Verbindung testen", () => {
+  it.each(["/ext/other/test", "/ext/demo/../../settings/test", "/ext/demo/\t..\t/\t..\t/settings/test"])("blockiert eine ungültige Testadresse %s", async (path) => {
+    const calls = mockApi({
+      "GET /extensions/demo": () => ext(),
+      "GET /extensions/demo/settings": () => ({ ...settings(), schema: { ...SCHEMA, "x-connection-test-url": path } }),
+    });
+    renderConfig();
+    expect(await screen.findByRole("button", { name: "Verbindung testen" })).toBeDisabled();
+    expect(screen.getByText("Die Testadresse der Erweiterung ist ungültig.")).toBeInTheDocument();
+    expect(calls.every((call) => call.method === "GET")).toBe(true);
+  });
+
   it("zeigt ein erfolgreiches Ergebnis grün und fragt den Test-Endpunkt", async () => {
     const calls = mockApi({
       "GET /extensions/demo": () => ext(),

@@ -11,7 +11,7 @@ function deck() {
 }
 
 // ../../_shared/frontend/src/api.ts
-var SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar \u2013 bitte gleich noch einmal versuchen.";
+var SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar, bitte gleich noch einmal versuchen.";
 var ServerUnavailableError = class extends Error {
   status;
   constructor(answer) {
@@ -172,7 +172,7 @@ function Card({ title, description, actions, children, className = "", padded = 
   ] });
 }
 var BUTTON_STYLES = {
-  primary: "accent-gradient text-on-accent hover:bg-accent-strong",
+  primary: "border border-transparent accent-gradient text-on-accent hover:bg-accent-strong",
   secondary: "border border-white/10 bg-white/[0.06] text-white hover:bg-white/[0.12]",
   danger: "border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25",
   ghost: "text-white/60 hover:bg-white/[0.06] hover:text-white"
@@ -791,7 +791,7 @@ function DocumentsPage() {
                     ] })
                   ] })
                 ] }),
-                isExpanded && /* @__PURE__ */ jsxs3("div", { className: "ml-10 mt-3 space-y-3 rounded-lg border border-white/[0.06] bg-black/15 p-4 text-sm", children: [
+                isExpanded && /* @__PURE__ */ jsxs3("div", { className: "ml-0 sm:ml-10 mt-3 space-y-3 rounded-lg border border-white/[0.06] bg-black/15 p-4 text-sm", children: [
                   preview?.id === doc.id && /* @__PURE__ */ jsx3("div", { "data-testid": `preview-${doc.id}`, children: preview.kind === "image" ? /* @__PURE__ */ jsx3("img", { src: preview.url, alt: doc.original_filename, className: "max-h-[70vh] rounded-lg border border-white/10" }) : (
                     // Ohne `sandbox`: Hier landet nur ein Blob vom Typ application/pdf aus PREVIEW_KINDS, nie HTML oder SVG.
                     /* @__PURE__ */ jsx3("iframe", { src: preview.url, title: doc.original_filename, className: "h-[70vh] w-full rounded-lg border border-white/10 bg-[#fff]" })

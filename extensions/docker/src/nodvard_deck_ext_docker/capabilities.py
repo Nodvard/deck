@@ -24,6 +24,8 @@ from .locks import StackLocks, busy_text
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
 
+    from .resources import DockerResources
+
 
 def _json_pattern(regex: re.Pattern[str]) -> str:
     """Für das JSON-Schema (ECMA-Syntax kennt `\\Z` nicht): `\\Z` -> `$`."""
@@ -489,7 +491,8 @@ class DockerServiceCatalog:
         services: list[dict[str, Any]] = []
         for host, operate in await docker_hosts(self._ctx):
             try:
-                result = await self._ctx.exec.run(host, commands.ps_all(), timeout_s=10)
+                with self._ctx.exec.read_access(host):
+                    result = await self._ctx.exec.run(host, commands.ps_all(), timeout_s=10)
             except Exception as exc:  # noqa: BLE001 - ein nicht erreichbarer Host darf die anderen nicht verstecken
                 services.append(_error_tile(host, f"Nicht erreichbar: {exc}"))
                 continue
@@ -543,7 +546,8 @@ class DockerServiceCatalog:
                 services.append(row)
                 if state in STOPPED_STATES and DOCKER_ID_RE.match(container_id):
                     stopped.append((row, container_id[:12]))
-            await self._fill_stopped_ports(host, stopped)
+            with self._ctx.exec.read_access(host):
+                await self._fill_stopped_ports(host, stopped)
         return services
 
     async def _fill_stopped_ports(self, host: Any, stopped: list[tuple[dict[str, Any], str]]) -> None:
@@ -581,7 +585,8 @@ class DockerServiceCatalog:
         environments: dict[str, dict[str, Any]] = {}
         for host, _ in await docker_hosts(self._ctx):
             try:
-                result = await self._ctx.exec.run(host, commands.stats(), timeout_s=20)
+                with self._ctx.exec.read_access(host):
+                    result = await self._ctx.exec.run(host, commands.stats(), timeout_s=20)
             except Exception:  # noqa: BLE001 - ein kaputter Host darf die anderen nicht verdecken
                 continue
             if result.exit_code != 0:
@@ -596,13 +601,15 @@ class DockerServiceCatalog:
                         names.append(name)
             started_at.update(await self._start_times(host, names))
             try:
-                counted = await self._ctx.exec.run(host, commands.restart_counts(), timeout_s=15)
+                with self._ctx.exec.read_access(host):
+                    counted = await self._ctx.exec.run(host, commands.restart_counts(), timeout_s=15)
             except Exception:  # noqa: BLE001 - ohne Zähler bleibt die Liste brauchbar
                 counted = None
             # Auch bei Exit != 0 (ein Container verschwand zwischen `ps` und `inspect`) gelten die lesbaren Zeilen.
             if counted is not None:
                 restarts.update({f"{host.id}:{name}": n for name, n in parse_restart_counts(counted.stdout).items()})
-            environment = await self._environment(host)
+            with self._ctx.exec.read_access(host):
+                environment = await self._environment(host)
             if environment is not None:
                 environments[host.id] = environment
         return {"data": stats, "restarts": restarts, "hosts": environments, "started_at": started_at}
@@ -616,7 +623,8 @@ class DockerServiceCatalog:
         for offset in range(0, len(names), MAX_INSPECT_PER_HOST):
             batch = names[offset:offset + MAX_INSPECT_PER_HOST]
             try:
-                result = await self._ctx.exec.run(host, cmd_state(batch), timeout_s=INSPECT_TIMEOUT_S)
+                with self._ctx.exec.read_access(host):
+                    result = await self._ctx.exec.run(host, cmd_state(batch), timeout_s=INSPECT_TIMEOUT_S)
             except Exception:  # noqa: BLE001 - fehlende Startzeiten lassen die übrigen Messwerte unverändert
                 continue
             for member in parse_verify(result.stdout).members:
@@ -739,9 +747,10 @@ class DockerMaintenanceExecutor:
 
     action_types = frozenset(commands.PRUNE) | {"docker.stack_restart"}
 
-    def __init__(self, ctx: "ExtensionContext", locks: StackLocks | None = None) -> None:
+    def __init__(self, ctx: ExtensionContext, locks: StackLocks | None = None, resources: DockerResources | None = None) -> None:
         self._ctx = ctx
         self._locks = locks or StackLocks()
+        self._resources = resources
 
     async def execute(self, req: ActionRequest) -> ActionResult:
         from .operate import still_full  # spät: operate hängt über image_apply an diesem Modul
@@ -769,13 +778,31 @@ class DockerMaintenanceExecutor:
             return ActionResult(success=False, error=f"Host '{req.host_ref}' nicht gefunden.")
         if why := await still_full(self._ctx, host):
             return ActionResult(success=False, error=why)
-        result = await self._ctx.exec.run(host, command, timeout_s=600)
-        # Docker schließt mit "Total reclaimed space: 1.2GB": das ist die Nachricht.
+        image_ids: set[str] | None = None
+        if req.action_type in {"docker.prune_images", "docker.prune_unused_images"}:
+            listed = await self._ctx.exec.run(host, commands.image_ids(), timeout_s=60)
+            image_ids = {line.strip() for line in listed.stdout.splitlines() if line.strip()}
+            if listed.exit_code != 0 or any(not commands.IMAGE_ID_RE.fullmatch(image_id) for image_id in image_ids):
+                error = "Die Images ließen sich nicht lesen. Nichts aufgeräumt. " + listed.stderr.strip()
+                return ActionResult(success=False, error=error.rstrip())
+        try:
+            result = await self._ctx.exec.run(host, command, timeout_s=600)
+        finally:
+            if self._resources is not None:
+                self._resources.forget(host.id)
         reclaimed = next((line for line in reversed(result.stdout.splitlines()) if "reclaimed" in line.lower()), None)
+        space = reclaimed.split(":", 1)[1].strip() if reclaimed and ":" in reclaimed else None
+        output = f"Freigegeben: {space}" if space else result.stdout.strip() or None
+        if image_ids is not None:
+            # Docker nennt unter „deleted“ auch Layer, die keine eigenen Images sind.
+            deleted = {line.partition(": ")[2].strip() for line in result.stdout.splitlines() if line.startswith("deleted: ")}
+            count = len(image_ids & deleted)
+            output = f"{count} {'Image' if count == 1 else 'Images'} entfernt. "
+            output += f"Freigegeben: {space}." if space else "Freigegebener Platz unbekannt."
         return ActionResult(
             success=result.exit_code == 0,
             exit_code=result.exit_code,
-            output=(f"Freigegeben: {reclaimed.split(':', 1)[1].strip()}" if reclaimed and ":" in reclaimed else result.stdout.strip() or None),
+            output=output,
             error=result.stderr.strip() or None,
             duration_ms=result.duration_ms,
         )

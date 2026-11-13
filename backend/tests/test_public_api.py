@@ -43,6 +43,14 @@ async def test_app_manifest_default_is_nodvard_deck(client: AsyncClient) -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["%C2%B2", "%C2%B2-maskable", "%C2%B9%C2%B2%C2%B3"])
+async def test_app_icon_rejects_unicode_digits(client: AsyncClient, name: str) -> None:
+    response = await client.get(f"/api/v1/app/icon-{name}.png")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Unbekanntes Symbol."
+
+
+@pytest.mark.asyncio
 async def test_app_manifest_colors_come_from_the_default_theme(client: AsyncClient) -> None:
     """Startbild und Statusleiste der App im Hintergrund des Standard-Themes, nicht im alten Dunkelblau aus dem
     Branding; der Wert muss zu `:root` in `index.css` passen."""

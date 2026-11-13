@@ -1,8 +1,4 @@
-/**
- * „Mit Passwort einrichten“: Man gibt einmal Benutzer und Passwort eines Kontos ein, das sich per SSH anmelden darf
- * (root oder mit sudo); Nodvard Deck führt damit denselben Befehl aus, vergisst das Passwort und prüft danach die
- * Anmeldung mit dem neuen Schlüssel (`POST /hosts/{id}/credentials/{cid}/setup-with-password`).
- */
+/** SSH-Zugang mit einem vorhandenen Konto einrichten, dessen Passwort verwerfen und die Anmeldung mit dem neuen Schlüssel prüfen. */
 import { useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 
@@ -55,7 +51,7 @@ function Failure({
   if (failure.code === "host_key_changed" && key) {
     const item: CheckItem = {
       id: "host_key", label: "Server-Schlüssel", status: "fail", detail: failure.detail,
-      hint: "Dein Passwort wurde nicht gesendet. Das passiert nach einer Neuinstallation – oder wenn sich jemand dazwischenschaltet.",
+      hint: "Dein Passwort wurde nicht gesendet. Das passiert nach einer Neuinstallation oder wenn sich jemand dazwischenschaltet.",
     };
     return <KeyChanged item={item} hostKey={key} />;
   }
@@ -157,7 +153,7 @@ export function PasswordSetup({
       </p>
       {inClear && (
         <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200" data-testid="password-in-clear">
-          Achtung: Diese Seite läuft ohne HTTPS. Das Passwort geht unverschlüsselt durchs Netz – im eigenen Heimnetz meist in
+          Achtung: Diese Seite läuft ohne HTTPS. Das Passwort geht unverschlüsselt durchs Netz, im eigenen Heimnetz meist in
           Ordnung, in einem fremden Netz nicht. Sicherer ist dann „Befehl selbst einfügen“.
         </p>
       )}
@@ -200,7 +196,7 @@ export function PasswordSetup({
           <p role="status" className={`text-sm ${result.ok ? "text-emerald-300" : "text-amber-200"}`}>
             {result.ok
               ? productText("Eingerichtet. Nodvard Deck meldet sich jetzt mit dem neuen Schlüssel an.")
-              : "Der Befehl ist gelaufen, aber die Prüfung zeigt noch etwas – siehe unten."}
+              : "Der Befehl ist gelaufen, aber die Prüfung zeigt noch etwas, siehe unten."}
             {result.made_default ? " Der Zugang ist jetzt der Standard." : ""}
           </p>
           <Messages lines={result.messages} />

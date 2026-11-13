@@ -3,6 +3,7 @@ Stacks löschen, wenn nichts dagegen spricht."""
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import json
 import logging
 import posixpath
@@ -167,6 +168,8 @@ class StackDelete:
             running = await self.stacks.stacks(host)
         except StackProblem as exc:
             return f"{keep}: Die anderen Stacks des Servers ließen sich nicht prüfen. {exc}"
+        others = [entry.stack(project) for project, entry in self._adopted.for_host(host.id).items() if project != stack.project]
+        others += [s for s in running if s.project != stack.project and (s.working_dir or s.files or s.env_files or s.known_files)]
         try:
             async with self._ctx.exec.sftp(host) as sftp:
                 attrs = await _lstat(sftp, folder)
@@ -176,6 +179,8 @@ class StackDelete:
                 home = str(await sftp.realpath("."))
                 points = mount_points(await _read_text(sftp, MOUNTINFO))
                 homes = home_dirs(await _read_text(sftp, PASSWD))
+                paths = (folder, real) if real != folder else (folder,)
+                other_usage = await self._other_users(sftp, others, paths)
         except Exception as exc:  # noqa: BLE001 - was sich nicht prüfen lässt, wird nicht gelöscht
             # Ein Rechtefehler bringt einen eigenen Satz mit; die SSH-Bibliothek nur englische Kurzformen.
             why = _lost(exc) if _connection_error(exc) and not isinstance(exc, OSError) else str(exc) or type(exc).__name__
@@ -184,11 +189,8 @@ class StackDelete:
             return f"{keep}: Er ist ein Verweis auf einen anderen Ort oder kein Ordner."
         if real != folder and _protected(real):
             return f"{keep}: Er führt über einen Verweis nach {real}, und dort löscht Nodvard Deck nichts."
-        paths = (folder, real) if real != folder else (folder,)
-        others = [entry.working_dir for project, entry in self._adopted.for_host(host.id).items() if project != stack.project]
-        others += [s.working_dir for s in running if s.project != stack.project and s.working_dir]
-        if any(_inside(other, paths) for other in others):
-            return f"{keep}: Darin liegt noch ein anderer Stack."
+        if other_usage is not None:
+            return f"{keep}: {other_usage}"
         if _inside(home, paths):
             return f"{keep}: Darin liegt der Heimatordner des Zugangs von Nodvard Deck."
         for user_home, user in homes.items():
@@ -208,6 +210,25 @@ class StackDelete:
         if probe.exit_code != 0:
             return (f"{keep}: rm auf dem Server kennt die Option --one-file-system nicht (etwa bei BusyBox), ohne sie könnte es in "
                     "eingehängte Laufwerke hinein löschen. Lösche den Stack ohne Ordner und den Ordner danach selbst.")
+        return None
+
+    async def _other_users(self, sftp: Any, others: list[Stack], paths: tuple[str, ...]) -> str | None:
+        for other in others:
+            if other.working_dir and (
+                _inside(other.working_dir, paths) or _inside(str(await sftp.realpath(other.working_dir)), paths)
+            ):
+                return "Darin liegt noch ein anderer Stack."
+        for other in others:
+            env_files = other.env_files
+            if not env_files and other.working_dir:
+                env_path = posixpath.join(other.working_dir, ".env")
+                if await _lstat(sftp, env_path) is not None:
+                    env_files = (env_path,)
+            for path in (*(other.files or ()), *env_files, *other.known_files):
+                if _inside(path, paths) or _inside(str(await sftp.realpath(path)), paths):
+                    return f"Darin liegen noch Konfigurationsdateien des Stacks „{other.project}“."
+            if other.files is None and other.working_dir:
+                return f"Die Konfigurationsdateien des Stacks „{other.project}“ ließen sich nicht prüfen."
         return None
 
     async def _used_elsewhere(self, host: Any, project: str, paths: tuple[str, ...]) -> str | None:
@@ -380,7 +401,7 @@ class DockerStackDeleteExecutor:
 
 
 class _DeleteIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
     remove_folder: bool = False
 
 
@@ -396,13 +417,21 @@ def delete_routes(delete: StackDelete, editor: StackEditor, docker_host: Any, cu
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=target)
         return target
 
-    @router.get("/hosts/{host_id}/stacks/{project}/delete")
+    @router.get(
+        "/hosts/{host_id}/stacks/{project}/delete",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 409,)},
+    )
     async def delete_check(host_id: str, project: str) -> dict:
         """Ob sich mit dem Stack auch sein Ordner löschen ließe, und wenn nicht, warum."""
         host, stack = await _target(host_id, project)
         return {"folder": stack.working_dir, "folder_refusal": await delete.folder_refusal(host, stack)}
 
-    @router.post("/hosts/{host_id}/stacks/{project}/delete", status_code=status.HTTP_202_ACCEPTED)
+    @router.post(
+        "/hosts/{host_id}/stacks/{project}/delete", status_code=status.HTTP_202_ACCEPTED,
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 409,)},
+    )
     async def delete_stack(host_id: str, project: str, body: _DeleteIn, actor: Actor = Depends(current_actor)) -> dict:
         """Schlägt das Löschen vor (Gate-Aktion `docker.stack_delete`, immer mit hohem Risiko)."""
         host, stack = await _target(host_id, project)

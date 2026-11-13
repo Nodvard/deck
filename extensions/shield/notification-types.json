@@ -4,6 +4,7 @@
   "shield.malware": "Shield-Funde: Schadsoftware",
   "shield.audit": "Härtungs-Audit mit Warnungen oder Fehlern",
   "shield.briefing": "Shield-Lagebericht",
+  "shield.weekly_report": "Shield-Wochenbericht",
   "shield.schedule": "Shield-Zeitplan ungültig",
   "shield.guard": "Shield-Funde: Server-Wache",
   "shield.update_result": "Server-Update eingespielt oder fehlgeschlagen",

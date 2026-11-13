@@ -487,6 +487,11 @@ def _error_text(exc: Exception) -> str:
 
 
 async def _record_failure(exc: Exception, *, trigger: str, user_id: str | None) -> None:
+    if isinstance(exc, (PermissionError, store.TargetNotWritable)):
+        from ..telemetry.codes import ErrorCode
+        from ..telemetry.service import record_error
+
+        await record_error(ErrorCode.BACKUP_UNWRITABLE)
     text = _error_text(exc)
     # Protokoll und Meldung lesen auch Viewer, eine Meldung geht per ntfy nach draußen: dort nur der kurze Grund.
     # Den ganzen Hinweis zeigt die Übersicht der Sicherungen (`last_run`).

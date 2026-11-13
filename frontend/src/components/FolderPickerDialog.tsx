@@ -1,13 +1,4 @@
-/**
- * Ordner-Auswahl für Transfers zwischen Quellen. Ohne diesen Dialog gäbe es für
- * eine ANDERE Quelle nur deren Wurzel `/` als Ziel (siehe FilesPage.tsx-
- * Modul-Docstring: "ohne zweites Panel gibt es keinen Weg, einen tieferen Zielordner
- * einer anderen Quelle zu wählen"). Dieser Dialog ist das zweite Panel: Quelle
- * wählen, durch deren Ordner navigieren, bei Bedarf einen neuen anlegen, bestätigen.
- *
- * Zeigt nur Ordner (Dateien sind kein Ziel) und nur beschreibbare Quellen. Der Name
- * der Datei bleibt erhalten -- gewählt wird der Zielordner, nicht der Zieldateiname.
- */
+/** Beschreibbare Quelle und Zielordner für Transfers wählen; der Dateiname bleibt erhalten. */
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useState } from "react";
 
@@ -119,14 +110,14 @@ export function FolderPickerDialog({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-scrim/60" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 flex max-h-[85vh] w-[calc(100%-2rem)] max-w-2xl -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-white/10 bg-[var(--color-surface)] p-4 shadow-xl">
+        <Dialog.Content className="fixed left-1/2 top-1/2 flex max-h-[85vh] w-full max-w-[min(100vw-2rem,42rem)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-white/10 bg-[var(--color-surface)] p-4 shadow-xl">
           <Dialog.Title className="mb-1 text-lg font-semibold">Zielordner wählen</Dialog.Title>
           <Dialog.Description className="mb-3 text-sm opacity-70">
             Wohin soll '{fileName}'? Quelle links, Ordner rechts.
           </Dialog.Description>
 
-          <div className="flex min-h-0 flex-1 gap-3">
-            <ul className="w-44 shrink-0 space-y-0.5 overflow-auto text-sm" aria-label="Zielquelle">
+          <div className="flex min-h-0 flex-1 flex-col gap-3 sm:flex-row">
+            <ul className="max-h-32 shrink-0 space-y-0.5 sm:max-h-none sm:w-44 overflow-auto text-sm" aria-label="Zielquelle">
               {writable.map((s) => (
                 <li key={s.source_id}>
                   <button
@@ -169,7 +160,7 @@ export function FolderPickerDialog({
                 {dirs?.map((d) => (
                   <li key={d.path}>
                     <button type="button" onClick={() => setPath(d.path)} className="w-full break-words px-2 py-1 text-left hover:bg-white/5">
-                      📁 {d.name}
+                      {d.name}
                     </button>
                   </li>
                 ))}

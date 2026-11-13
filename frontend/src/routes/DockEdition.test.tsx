@@ -65,6 +65,16 @@ it("Dock bietet in der Suche keine allgemeinen Deck-Seiten an", async () => {
     expect(screen.queryByRole("option", { name })).toBeNull();
 });
 
+it.each([true, false])("Dock zeigt Nutzungsdaten in Menü und Suche nur dem Inhaber (Inhaber: %s)", async (owner) => {
+  useAuthStore.setState({ user: { ...useAuthStore.getState().user!, is_owner: owner } });
+  const menu = show(<SettingsLayout />);
+  expect(screen.queryByRole("link", { name: /Nutzungsdaten/ }) !== null).toBe(owner);
+  menu.unmount();
+  show(<CommandPalette open onOpenChange={() => undefined} />);
+  await screen.findByRole("option", { name: "Docker" });
+  expect(screen.queryByRole("option", { name: "Einstellungen: Nutzungsdaten" }) !== null).toBe(owner);
+});
+
 it("Dock empfiehlt in der Serverliste keine fremden Module", async () => {
   show(<HostsSettings />);
   await screen.findByText("Noch keine Server.");
@@ -94,6 +104,7 @@ it("Dock zeigt beim Container-Terminal keine allgemeine Serverauswahl", async ()
   await waitFor(() => expect(fetch).toHaveBeenCalled());
   expect(screen.queryByText(/Modul „Terminal“|SSH-Zugang einrichten/)).toBeNull();
   expect(await screen.findByRole("link", { name: "Docker öffnen" })).toHaveAttribute("href", "/ext/docker/matrix");
+  expect(screen.getByTestId("terminal-hint")).toHaveTextContent("Die Konsole öffnet sich über die Docker-Seite.");
 });
 
 it("Dock nennt sich auf der Über-Seite und verlinkt seine Hilfe", async () => {

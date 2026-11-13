@@ -72,7 +72,7 @@ describe("Zugangs-Karte: Abzeichen und Hinweis", () => {
   it("eine gelungene Prüfung macht das Abzeichen grün, eine misslungene Anmeldung nennt es beim Namen", async () => {
     renderCard({ status: "unknown", last_seen_at: null }, { "POST /hosts/h1/check": checkFixture() });
     fireEvent.click(screen.getByRole("button", { name: "Verbindung prüfen" }));
-    await screen.findByText("Anmeldung als lattice");
+    await screen.findByText("Anmeldung als nodvard");
     expect(screen.getByText("Schlüssel · nodvard").className).toContain("emerald");
     expect(screen.queryByTestId("access-hint")).toBeNull();
   });

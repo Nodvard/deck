@@ -67,7 +67,10 @@ class _Result:
 
 
 class _Exec:
-    def __init__(self, *, fail: BaseException | None = None, container_id: str = "0123456789ab" * 5 + "0011") -> None:
+    def __init__(self, *, fail: BaseException | None = None, container_id: str = "0123456789ab" * 5 + "0011",
+                 image: str = "nginx:1", inspect_exit: int = 0) -> None:
+        self.image = image
+        self.inspect_exit = inspect_exit
         self.opened: list[dict] = []
         self.ran: list[str] = []
         self.closed = 0
@@ -77,7 +80,9 @@ class _Exec:
 
     async def run(self, host, command: str, *, timeout_s: int = 60):
         self.ran.append(command)
-        return _Result(0, self.container_id + "\n")
+        if self.inspect_exit:
+            return _Result(self.inspect_exit, "")
+        return _Result(0, f"{self.container_id}|{self.image}\n")
 
     def open_shell(self, host, *, cols: int, rows: int, command: str | None = None):
         @asynccontextmanager
@@ -147,7 +152,7 @@ async def test_open_runs_docker_exec_with_a_pty_and_relays_the_session():
     session = await ContainerShell(_Ctx(exec_handle)).open_in(_Host(), "web", cols=120, rows=40)
     assert exec_handle.opened == [{
         "host": "h1", "cols": 120, "rows": 40,
-        "command": "docker exec -it web sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi'",
+        "command": "docker exec -it " + "0123456789ab" * 5 + "0011" + " sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi'",
     }]
     assert [chunk async for chunk in session.read()] == [b"root@web:/# "]
     await session.write(b"ls\n")
@@ -167,7 +172,40 @@ async def test_never_a_shell_in_the_dashboards_own_container(monkeypatch):
     with pytest.raises(ShellRefused, match="Nodvard Deck selbst") as caught:
         await ContainerShell(_Ctx(exec_handle)).open_in(_Host(), "nodvard-deck-1", cols=80, rows=24)
     assert caught.value.readable is True
-    assert exec_handle.opened == [] and exec_handle.ran == ["docker inspect --type container -f '{{.Id}}' nodvard-deck-1"]
+    assert exec_handle.opened == [] and exec_handle.ran == ["docker inspect --type container -f '{{.Id}}|{{.Config.Image}}' nodvard-deck-1"]
+
+
+@pytest.mark.asyncio
+async def test_no_shell_when_the_own_container_check_fails():
+    from nodvard_deck_ext_docker.shell import ContainerShell, ShellRefused
+
+    exec_handle = _Exec(inspect_exit=1)
+    with pytest.raises(ShellRefused, match="nicht prüfen") as caught:
+        await ContainerShell(_Ctx(exec_handle)).open_in(_Host(), "web", cols=80, rows=24)
+    assert caught.value.readable is True and exec_handle.opened == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("container_id", ["", "abc123", "Z" * 64, "0123456789ab" * 5 + "00112", "0123456789ab" * 5 + "0011\n" + "0123456789ab" * 5 + "0011"])
+async def test_no_shell_unless_inspect_returns_exactly_one_full_id(container_id):
+    from nodvard_deck_ext_docker.shell import ContainerShell, ShellRefused
+
+    exec_handle = _Exec(container_id=container_id)
+    with pytest.raises(ShellRefused, match="nicht prüfen"):
+        await ContainerShell(_Ctx(exec_handle)).open_in(_Host(), "web", cols=80, rows=24)
+    assert exec_handle.opened == []
+
+
+@pytest.mark.asyncio
+async def test_no_shell_in_a_container_of_the_dashboard_image(monkeypatch):
+    import nodvard_deck_ext_docker.capabilities as caps
+    from nodvard_deck_ext_docker.shell import ContainerShell, ShellRefused
+
+    monkeypatch.setattr(caps, "_own_container_id", lambda: "")
+    exec_handle = _Exec(image="ghcr.io/nodvard/deck:1.0")
+    with pytest.raises(ShellRefused, match="Nodvard Deck selbst"):
+        await ContainerShell(_Ctx(exec_handle)).open_in(_Host(), "dash", cols=80, rows=24)
+    assert exec_handle.opened == []
 
 
 @pytest.mark.asyncio

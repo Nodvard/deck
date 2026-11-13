@@ -35,6 +35,7 @@ function makeBackend(opts: { bootstrapNeeded?: boolean; refreshOk?: boolean; tim
     refreshOk: opts.refreshOk ?? false,
     timezone: opts.timezone ?? "Europe/Berlin",
     totp: opts.totp ?? false,
+    preferences: { totp_setup_skipped: false, totp_reminder_dismissed: false },
     extensions: structuredClone(EXTENSIONS) as Record<string, unknown>[],
     /** Namen von Zonen, die der Server nicht kennt (PUT -> 422). */
     unknownZones: new Set<string>(),
@@ -62,6 +63,10 @@ function makeBackend(opts: { bootstrapNeeded?: boolean; refreshOk?: boolean; tim
     if (path === "/branding" && method === "GET") return json(DEFAULT_BRANDING);
     if (path === "/branding" && method === "PUT") return json({ ...DEFAULT_BRANDING, ...body });
     if (path === "/me") return json({ ...user, totp_enabled: state.totp, timezone: state.timezone });
+    if (path === "/me/preferences" && method === "PATCH") {
+      Object.assign(state.preferences, body);
+      return json(state.preferences);
+    }
     if (path === "/settings/system.timezone" && method === "PUT") {
       const zone = (body as { value: string }).value;
       if (state.unknownZones.has(zone)) return json({ detail: `system.timezone: unbekannte Zeitzone '${zone}'` }, 422);
@@ -85,6 +90,7 @@ function makeBackend(opts: { bootstrapNeeded?: boolean; refreshOk?: boolean; tim
       state.totp = true;
       return json({ recovery_codes: ["AAAAA-BBBBB", "CCCCC-DDDDD"] });
     }
+    if (path === "/telemetry") return json({ choices: { basis: false, nutzung: false, fehler: false }, blocked: "privacy", preview: { schema: 1, id: "81f813f9-7e6c-4276-905d-b2bdf8d678cc" }, history: [], next_send_at: null, pending_deletions: 0 });
     if (path === "/edition") return json(DECK_EDITION);
     throw new Error(`Unerwarteter Fetch in diesem Test: ${method} ${url}`);
   });
@@ -122,10 +128,10 @@ async function fillAccount(code = "ABCD-EFGH-JKMN") {
 async function createAccount() {
   await fillAccount();
   fireEvent.click(screen.getByRole("button", { name: "Konto anlegen" }));
-  await screen.findByText(/Schritt 2 von 6/);
+  await screen.findByText(/Schritt 2 von 7/);
 }
 
-/** Schrittanzeige „Schritt X von 6 — Titel“. */
+/** Schrittanzeige „Schritt X von 7: Titel“. */
 function progress() {
   return screen.getByTestId("setup-progress").textContent;
 }
@@ -154,7 +160,7 @@ async function enterTotpPassword(password = "geheim123") {
 async function toBranding() {
   await toTotp();
   fireEvent.click(screen.getByRole("button", { name: "Später einrichten" }));
-  await screen.findByText(/Schritt 5 von 6/);
+  await screen.findByText(/Schritt 5 von 7/);
 }
 
 beforeEach(() => {
@@ -199,9 +205,9 @@ describe("SetupPage", () => {
     makeBackend();
     renderSetup();
     await screen.findByText("Willkommen");
-    expect(progress()).toBe("Schritt 1 von 6 — Administrator-Konto anlegen");
+    expect(progress()).toBe("Schritt 1 von 7: Administrator-Konto anlegen");
     await createAccount();
-    expect(progress()).toBe("Schritt 2 von 6 — Zeitzone");
+    expect(progress()).toBe("Schritt 2 von 7: Zeitzone");
     expect(useAuthStore.getState().status).toBe("authenticated");
   });
 
@@ -216,7 +222,7 @@ describe("SetupPage", () => {
     await fillAccount();
     fireEvent.click(screen.getByRole("button", { name: "Konto anlegen" }));
 
-    expect(await screen.findByText("Server nicht erreichbar – bitte gleich noch einmal versuchen.")).toBeInTheDocument();
+    expect(await screen.findByText("Server nicht erreichbar, bitte gleich noch einmal versuchen.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Konto anlegen" })).toBeEnabled();
   });
 
@@ -235,7 +241,7 @@ describe("SetupPage", () => {
 
     fireEvent.change(screen.getByLabelText(/^Einrichtungscode/), { target: { value: "abcd-efgh-jkmn" } });
     fireEvent.click(screen.getByRole("button", { name: "Konto anlegen" }));
-    await screen.findByText(/Schritt 2 von 6/);
+    await screen.findByText(/Schritt 2 von 7/);
     expect(backend.calls.find((c) => c.method === "POST" && c.path === "/auth/bootstrap")!.body).toMatchObject({ username: "nico", setup_code: "ABCD-EFGH-JKMN" });
   });
 
@@ -265,10 +271,10 @@ describe("SetupPage", () => {
     await fillAccount("AAAA-AAAA-AAAA");
     fireEvent.click(screen.getByRole("button", { name: "Konto anlegen" }));
     expect(await screen.findByText("Der Einrichtungscode stimmt nicht.")).toBeInTheDocument();
-    expect(progress()).toMatch(/Schritt 1 von 6/);
+    expect(progress()).toMatch(/Schritt 1 von 7/);
   });
 
-  it("zeigt einen Fehler, wenn die Passwoerter nicht uebereinstimmen, ohne zu fetchen", async () => {
+  it("zeigt einen Fehler, wenn die Passwörter nicht übereinstimmen, ohne zu fetchen", async () => {
     const backend = makeBackend();
     renderSetup();
     await fillAccount();
@@ -305,7 +311,7 @@ describe("SetupPage", () => {
     expect(await screen.findByText(expected)).toBeInTheDocument();
     expect(screen.queryByText(/HTTP 422/)).not.toBeInTheDocument();
     expect(backend.count("POST", "/auth/bootstrap")).toBe(0);
-    expect(progress()).toMatch(/Schritt 1 von 6/);
+    expect(progress()).toMatch(/Schritt 1 von 7/);
   });
 
   it("lehnt der Server trotzdem mit 422 ab, steht dessen deutscher Satz da (nicht „HTTP 422“)", async () => {
@@ -322,7 +328,7 @@ describe("SetupPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Konto anlegen" }));
     expect(await screen.findByText("Passwort: Mindestens 8 Zeichen.")).toBeInTheDocument();
     expect(screen.queryByText(/HTTP 422/)).not.toBeInTheDocument();
-    expect(progress()).toMatch(/Schritt 1 von 6/);
+    expect(progress()).toMatch(/Schritt 1 von 7/);
   });
 
   it("klappt die Anleitung zum Einrichtungscode auf: Befehlszeile, Docker Desktop, Portainer, Synology, Unraid", async () => {
@@ -364,6 +370,27 @@ describe("SetupPage", () => {
     }
   });
 
+  it("erklärt die optionale Vorgabe und nimmt den eigenen Code für das erste Konto an", async () => {
+    const backend = makeBackend();
+    renderSetup();
+    await screen.findByText("Willkommen");
+    expect(screen.getByLabelText("Einrichtungscode")).toHaveAccessibleDescription(/Hast du einen eigenen Code vorgegeben, gib ihn hier ein/);
+    expect(screen.queryByText("Eigenen Code vorgeben (optional)")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Wo finde ich den Code?" }));
+    expect(screen.getByText("NODVARD_DECK_SETUP_CODE=dein-eigener-code")).toBeInTheDocument();
+    const help = screen.getByText(/Vor dem ersten Start kannst du/);
+    expect(help).toHaveTextContent(/\.env.*Compose-Datei.*Portainer.*Environment variables/);
+    expect(help).toHaveTextContent(/mindestens 8 Buchstaben.*Trennzeichen zählen nicht mit/);
+    expect(help).toHaveTextContent(/leer oder zu kurz, erzeugt der Container selbst einen Code/);
+    expect(help).toHaveTextContent(/Sobald ein Konto existiert, wird die Variable ignoriert/);
+
+    await fillAccount("mein-eigener-code");
+    fireEvent.click(screen.getByRole("button", { name: "Konto anlegen" }));
+    await screen.findByText(/Schritt 2 von 7/);
+    expect(backend.calls.find((c) => c.method === "POST" && c.path === "/auth/bootstrap")!.body).toMatchObject({ setup_code: "MEIN-EIGENER-CODE" });
+  });
+
   it("die Hilfe zum Einrichtungscode verweist auf den Abschnitt zum Assistenten in der Anleitung", async () => {
     makeBackend();
     renderSetup();
@@ -387,7 +414,7 @@ describe("SetupPage", () => {
       expect(screen.getByText(/Vorausgewählt ist die Zeitzone dieses Geräts/)).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("button", { name: "Weiter" }));
-      await screen.findByText(/Schritt 3 von 6/);
+      await screen.findByText(/Schritt 3 von 7/);
       const put = backend.calls.find((c) => c.method === "PUT" && c.path === "/settings/system.timezone");
       expect(put?.body).toEqual({ value: "America/New_York" });
     });
@@ -403,7 +430,7 @@ describe("SetupPage", () => {
       fireEvent.click(within(screen.getByRole("listbox", { name: "Zeitzonen" })).getByRole("option", { name: /^Asia\/Tokyo/ }).querySelector("button")!);
       expect(screen.getByText("nicht gespeichert")).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Weiter" }));
-      await screen.findByText(/Schritt 3 von 6/);
+      await screen.findByText(/Schritt 3 von 7/);
       expect(backend.calls.find((c) => c.path === "/settings/system.timezone")?.body).toEqual({ value: "Asia/Tokyo" });
     });
 
@@ -415,7 +442,7 @@ describe("SetupPage", () => {
       await screen.findByRole("listbox", { name: "Zeitzonen" });
       expect(screen.queryByText(/Vorausgewählt ist/)).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Weiter" }));
-      await screen.findByText(/Schritt 3 von 6/);
+      await screen.findByText(/Schritt 3 von 7/);
       expect(backend.count("PUT", "/settings/system.timezone")).toBe(0);
     });
 
@@ -437,7 +464,7 @@ describe("SetupPage", () => {
       await screen.findByRole("listbox", { name: "Zeitzonen" });
       fireEvent.click(screen.getByRole("button", { name: "Weiter" }));
       expect(await screen.findByText("Diese Zeitzone kennt der Server nicht. Bitte eine andere aus der Liste wählen.")).toBeInTheDocument();
-      expect(progress()).toMatch(/Schritt 2 von 6/);
+      expect(progress()).toMatch(/Schritt 2 von 7/);
       expect(within(screen.getByRole("listbox", { name: "Zeitzonen" })).getByRole("option", { selected: true })).toHaveTextContent("Europe/Berlin");
     });
 
@@ -448,7 +475,7 @@ describe("SetupPage", () => {
       await createAccount();
       await screen.findByRole("listbox", { name: "Zeitzonen" });
       fireEvent.click(screen.getByRole("button", { name: "Überspringen" }));
-      await screen.findByText(/Schritt 3 von 6/);
+      await screen.findByText(/Schritt 3 von 7/);
       expect(backend.count("PUT", "/settings/system.timezone")).toBe(0);
     });
   });
@@ -459,7 +486,7 @@ describe("SetupPage", () => {
       renderSetup();
       await toModules();
 
-      expect(progress()).toBe("Schritt 3 von 6 — Was willst du nutzen?");
+      expect(progress()).toBe("Schritt 3 von 7: Was willst du nutzen?");
       const groups = screen.getAllByRole("region").map((r) => r.getAttribute("aria-label"));
       expect(groups).toEqual(["Für deine Server", "Sicherheit", "Verbindungen zu anderen Diensten", "Weitere Module"]);
       const tiles = screen.getAllByTestId(/^module-/).map((t) => t.getAttribute("data-testid"));
@@ -529,7 +556,7 @@ describe("SetupPage", () => {
       fireEvent.click(screen.getByRole("switch", { name: "System einschalten" }));
       expect(await screen.findByRole("button", { name: "Weiter" })).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Weiter" }));
-      await screen.findByText(/Schritt 4 von 6/);
+      await screen.findByText(/Schritt 4 von 7/);
     });
 
     it("Zurück führt zur Zeitzone", async () => {
@@ -538,7 +565,7 @@ describe("SetupPage", () => {
       await toModules();
       fireEvent.click(screen.getByRole("button", { name: "Zurück" }));
       await screen.findByTestId("setup-timezone");
-      expect(progress()).toMatch(/Schritt 2 von 6/);
+      expect(progress()).toMatch(/Schritt 2 von 7/);
     });
   });
 
@@ -547,7 +574,7 @@ describe("SetupPage", () => {
       const backend = makeBackend();
       renderSetup();
       await toTotp();
-      expect(progress()).toBe("Schritt 4 von 6 — Zwei-Faktor-Anmeldung (optional)");
+      expect(progress()).toBe("Schritt 4 von 7: Zwei-Faktor-Anmeldung (optional)");
 
       fireEvent.click(screen.getByRole("button", { name: "Jetzt einrichten" }));
       await enterTotpPassword();
@@ -563,10 +590,11 @@ describe("SetupPage", () => {
       expect(backend.calls.find((c) => c.path === "/me/totp/confirm")?.body).toEqual({ code: "123456" });
       expect(backend.calls.find((c) => c.path === "/me/totp/setup")?.body).toEqual({ current_password: "geheim123" });
       // Erst nach „Ich habe die Codes gesichert“ geht es weiter; Zwei-Faktor ist jetzt an, also kein „Später“.
-      expect(progress()).toMatch(/Schritt 4 von 6/);
+      expect(progress()).toMatch(/Schritt 4 von 7/);
       expect(screen.queryByRole("button", { name: "Später einrichten" })).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Ich habe die Codes gesichert" }));
-      await screen.findByText(/Schritt 5 von 6/);
+      await screen.findByText(/Schritt 5 von 7/);
+      expect(backend.count("PATCH", "/me/preferences")).toBe(0);
     });
 
     it("zeigt den Fehler des Servers bei falschem Code und lässt es erneut versuchen", async () => {
@@ -589,14 +617,62 @@ describe("SetupPage", () => {
       expect(screen.getByRole("button", { name: "Später einrichten" })).toBeInTheDocument();
     });
 
-    it("lässt sich überspringen, ohne etwas einzurichten", async () => {
+    it("verlinkt die Einstellungen und merkt sich beim Überspringen die Erinnerung", async () => {
       const backend = makeBackend();
       renderSetup();
       await toTotp();
-      expect(screen.getByText("Du kannst das jederzeit unter Einstellungen → Mein Konto nachholen.")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Einstellungen → Mein Konto" })).toHaveAttribute("href", "/settings/account");
+      expect(screen.getByTestId("setup-totp")).toHaveTextContent("Du kannst das jederzeit unter Einstellungen → Mein Konto nachholen.");
+      expect(screen.getByText(/Auf der Übersicht erinnern wir dich/)).toHaveTextContent("bis du Zwei-Faktor aktivierst oder den Hinweis ausblendest.");
       fireEvent.click(screen.getByRole("button", { name: "Später einrichten" }));
-      await screen.findByText(/Schritt 5 von 6/);
+      await screen.findByText(/Schritt 5 von 7/);
       expect(backend.count("POST", "/me/totp/setup")).toBe(0);
+      expect(backend.calls.find((c) => c.method === "PATCH" && c.path === "/me/preferences")?.body).toEqual({ totp_setup_skipped: true });
+      expect(backend.state.preferences.totp_setup_skipped).toBe(true);
+    });
+
+    it("bleibt bei einem Speicherfehler im Schritt und lässt die Erinnerung erneut speichern", async () => {
+      const backend = makeBackend();
+      const online = backend.fetchMock.getMockImplementation()!;
+      let fail = true;
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith("/me/preferences") && fail) {
+          return new Response(JSON.stringify({ detail: "Nicht erreichbar" }), { status: 503 });
+        }
+        return online(input, init);
+      }));
+      renderSetup();
+      await toTotp();
+      fireEvent.click(screen.getByRole("button", { name: "Später einrichten" }));
+      expect(await screen.findByText("Die Erinnerung konnte nicht gespeichert werden. Bitte versuche es erneut.")).toBeInTheDocument();
+      expect(progress()).toMatch(/Schritt 4 von 7/);
+      expect(backend.state.preferences.totp_setup_skipped).toBe(false);
+      fail = false;
+      fireEvent.click(screen.getByRole("button", { name: "Später einrichten" }));
+      await screen.findByText(/Schritt 5 von 7/);
+      expect(backend.state.preferences.totp_setup_skipped).toBe(true);
+    });
+
+    it("wartet auf das Speichern und verhindert mehrfaches Überspringen", async () => {
+      const backend = makeBackend();
+      const online = backend.fetchMock.getMockImplementation()!;
+      let release!: () => void;
+      const saved = new Promise<void>((resolve) => { release = resolve; });
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith("/me/preferences")) await saved;
+        return online(input, init);
+      }));
+      renderSetup();
+      await toTotp();
+      const later = screen.getByRole("button", { name: "Später einrichten" });
+      fireEvent.click(later);
+      expect(later).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Jetzt einrichten" })).toBeDisabled();
+      fireEvent.click(later);
+      expect(progress()).toMatch(/Schritt 4 von 7/);
+      await act(async () => { release(); });
+      await screen.findByText(/Schritt 5 von 7/);
+      expect(backend.count("PATCH", "/me/preferences")).toBe(1);
     });
 
     it("„Später einrichten“ gibt es auch bei der Passwortabfrage und neben „Bestätigen“", async () => {
@@ -605,11 +681,12 @@ describe("SetupPage", () => {
       await toTotp();
       fireEvent.click(screen.getByRole("button", { name: "Jetzt einrichten" }));
       await screen.findByTestId("totp-password");
-      expect(screen.getByText(/jederzeit unter Einstellungen → Mein Konto nachholen/)).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Einstellungen → Mein Konto" })).toHaveAttribute("href", "/settings/account");
       expect(screen.queryByRole("button", { name: "Abbrechen" })).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Später einrichten" }));
-      await screen.findByText(/Schritt 5 von 6/);
+      await screen.findByText(/Schritt 5 von 7/);
       expect(backend.count("POST", "/me/totp/setup")).toBe(0);
+      expect(backend.state.preferences.totp_setup_skipped).toBe(true);
 
       fireEvent.click(screen.getByRole("button", { name: "Zurück" }));
       fireEvent.click(await screen.findByRole("button", { name: "Jetzt einrichten" }));
@@ -618,10 +695,31 @@ describe("SetupPage", () => {
       expect(within(row).getByRole("button", { name: "Später einrichten" })).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Abbrechen" })).not.toBeInTheDocument();
       fireEvent.click(within(row).getByRole("button", { name: "Später einrichten" }));
-      await screen.findByText(/Schritt 5 von 6/);
+      await screen.findByText(/Schritt 5 von 7/);
       expect(backend.count("POST", "/me/totp/confirm")).toBe(0);
+      expect(backend.count("PATCH", "/me/preferences")).toBe(2);
       fireEvent.click(screen.getByRole("button", { name: "Überspringen" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Weiter ohne Teilen" }));
       expect(await screen.findByRole("link", { name: /Zwei-Faktor jetzt einrichten/ })).toBeInTheDocument();
+    });
+
+    it("springt nach Zurück nicht durch eine verspätet gespeicherte Erinnerung weiter", async () => {
+      const backend = makeBackend();
+      const online = backend.fetchMock.getMockImplementation()!;
+      let release!: () => void;
+      const saved = new Promise<void>((resolve) => { release = resolve; });
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith("/me/preferences")) await saved;
+        return online(input, init);
+      }));
+      renderSetup();
+      await toTotp();
+      fireEvent.click(screen.getByRole("button", { name: "Später einrichten" }));
+      fireEvent.click(screen.getByRole("button", { name: "Zurück" }));
+      await screen.findByTestId("setup-modules");
+      await act(async () => { release(); });
+      await waitFor(() => expect(backend.count("PATCH", "/me/preferences")).toBe(1));
+      expect(progress()).toMatch(/Schritt 3 von 7/);
     });
 
     it("Zurück während der Einrichtung geht zur Auswahl, dort Zurück zu den Modulen", async () => {
@@ -645,8 +743,9 @@ describe("SetupPage", () => {
       expect(await screen.findByText(/schon eingerichtet/)).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Jetzt einrichten" })).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Weiter" }));
-      await screen.findByText(/Schritt 5 von 6/);
+      await screen.findByText(/Schritt 5 von 7/);
       expect(backend.count("POST", "/me/totp/setup")).toBe(0);
+      expect(backend.count("PATCH", "/me/preferences")).toBe(0);
     });
   });
 
@@ -660,27 +759,27 @@ describe("SetupPage", () => {
       expect(hint?.textContent).toContain("Name der App auf dem Handy");
     });
 
-    it("Aussehen speichern führt zum Abschluss, Zurück zur Zwei-Faktor-Auswahl", async () => {
+    it("Aussehen speichern führt zu den Nutzungsdaten, Zurück zur Zwei-Faktor-Auswahl", async () => {
       const backend = makeBackend();
       renderSetup();
       await toBranding();
       fireEvent.change(screen.getByLabelText("Produktname"), { target: { value: "Mein Deck" } });
       fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
-      await screen.findByText(/Schritt 6 von 6/);
+      await screen.findByText(/Schritt 6 von 7/);
       expect(backend.calls.find((c) => c.method === "PUT" && c.path === "/branding")?.body).toMatchObject({ product_name: "Mein Deck" });
       fireEvent.click(screen.getByRole("button", { name: "Zurück" }));
-      await screen.findByText(/Schritt 5 von 6/);
+      await screen.findByText(/Schritt 5 von 7/);
       fireEvent.click(screen.getByRole("button", { name: "Zurück" }));
-      await screen.findByText(/Schritt 4 von 6/);
+      await screen.findByText(/Schritt 4 von 7/);
     });
 
-    it("Aussehen überspringen führt ebenfalls zum Abschluss", async () => {
+    it("Aussehen überspringen führt ebenfalls zu den Nutzungsdaten", async () => {
       makeBackend();
       renderSetup();
       await toBranding();
       expect(screen.getByText(/jederzeit unter Einstellungen → Darstellung ändern/)).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Überspringen" }));
-      expect(await screen.findByText(/Schritt 6 von 6/)).toBeInTheDocument();
+      expect(await screen.findByText(/Schritt 6 von 7/)).toBeInTheDocument();
     });
 
     it("Abschluss: Hinweis auf „Erste Schritte“, Zwei-Faktor-Link falls übersprungen, Notfall-Befehl, dann ins Cockpit", async () => {
@@ -688,7 +787,8 @@ describe("SetupPage", () => {
       renderSetup();
       await toBranding();
       fireEvent.click(screen.getByRole("button", { name: "Überspringen" }));
-      await screen.findByText(/Schritt 6 von 6/);
+      fireEvent.click(await screen.findByRole("button", { name: "Weiter ohne Teilen" }));
+      await screen.findByText(/Schritt 7 von 7/);
 
       expect(screen.getByText(/Karte „Erste Schritte“/)).toBeInTheDocument();
       expect(await screen.findByRole("link", { name: /Zwei-Faktor jetzt einrichten/ })).toHaveAttribute("href", "/settings/account");
@@ -710,9 +810,10 @@ describe("SetupPage", () => {
       await toModules();
       fireEvent.click(screen.getByRole("button", { name: "Überspringen" }));
       fireEvent.click(await screen.findByRole("button", { name: "Weiter" }));
-      await screen.findByText(/Schritt 5 von 6/);
+      await screen.findByText(/Schritt 5 von 7/);
       fireEvent.click(screen.getByRole("button", { name: "Überspringen" }));
-      await screen.findByText(/Schritt 6 von 6/);
+      fireEvent.click(await screen.findByRole("button", { name: "Weiter ohne Teilen" }));
+      await screen.findByText(/Schritt 7 von 7/);
       await waitFor(() => expect(screen.getByTestId("setup-access")).toBeInTheDocument());
       expect(screen.queryByRole("link", { name: /Zwei-Faktor jetzt einrichten/ })).not.toBeInTheDocument();
     });
@@ -726,7 +827,7 @@ describe("SetupPage", () => {
       expect(sessionStorage.getItem("deck.setup.step")).toBe("timezone");
       await screen.findByTestId("setup-timezone");
       fireEvent.click(screen.getByRole("button", { name: "Überspringen" }));
-      await screen.findByText(/Schritt 3 von 6/);
+      await screen.findByText(/Schritt 3 von 7/);
       expect(sessionStorage.getItem("deck.setup.step")).toBe("modules");
     });
 
@@ -734,14 +835,14 @@ describe("SetupPage", () => {
       const backend = makeBackend({ bootstrapNeeded: false, refreshOk: true });
       sessionStorage.setItem("deck.setup.step", "modules");
       renderSetup();
-      expect(await screen.findByText(/Schritt 3 von 6/)).toBeInTheDocument();
+      expect(await screen.findByText(/Schritt 3 von 7/)).toBeInTheDocument();
       await screen.findByTestId("module-system");
       expect(screen.queryByLabelText(/^Einrichtungscode/)).not.toBeInTheDocument();
       expect(backend.count("POST", "/auth/refresh")).toBe(1);
       expect(useAuthStore.getState().status).toBe("authenticated");
       // Und von dort geht es normal weiter.
       fireEvent.click(screen.getByRole("button", { name: "Überspringen" }));
-      await screen.findByText(/Schritt 4 von 6/);
+      await screen.findByText(/Schritt 4 von 7/);
     });
 
     it("geht auf /login, wenn die Anmeldung abgelaufen ist, und vergisst den Schritt", async () => {
@@ -825,11 +926,11 @@ describe("Nodvard Dock", () => {
     renderSetup();
     await fillAccount();
     fireEvent.click(screen.getByRole("button", { name: "Konto anlegen" }));
-    await screen.findByText("Schritt 2 von 5 — Zeitzone");
+    await screen.findByText("Schritt 2 von 6: Zeitzone");
     fireEvent.click(await screen.findByRole("button", { name: "Überspringen" }));
 
     await screen.findByTestId("setup-totp");
-    expect(progress()).toBe("Schritt 3 von 5 — Zwei-Faktor-Anmeldung (optional)");
+    expect(progress()).toBe("Schritt 3 von 6: Zwei-Faktor-Anmeldung (optional)");
     expect(backend.count("POST", "/extensions/docker/enable")).toBe(1);
     fireEvent.click(await screen.findByRole("button", { name: "Zurück" }));
     await screen.findByTestId("setup-timezone");
@@ -960,7 +1061,7 @@ describe("Nodvard Dock", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Überspringen" }));
 
     await screen.findByTestId("setup-modules");
-    expect(progress()).toBe("Schritt 3 von 6 — Was willst du nutzen?");
+    expect(progress()).toBe("Schritt 3 von 7: Was willst du nutzen?");
     expect(await screen.findByText("Beim Starten des Moduls ist ein Fehler aufgetreten: kein Zugriff")).toBeInTheDocument();
   });
 });
@@ -1021,7 +1122,7 @@ describe("Sicherung einspielen im Assistenten", () => {
     expect(screen.getByText("Wo finde ich den Code?")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Zurück" }));
     expect(await screen.findByLabelText("Passwort bestätigen")).toBeInTheDocument();
-    expect(progress()).toBe("Schritt 1 von 6 — Administrator-Konto anlegen");
+    expect(progress()).toBe("Schritt 1 von 7: Administrator-Konto anlegen");
   });
 
   it("derselbe Ablauf über die Assistenten-Endpunkte: Code in jedem Aufruf, nie ein Konto, am Ende zur Anmeldung", async () => {

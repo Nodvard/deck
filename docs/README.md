@@ -6,20 +6,28 @@
 
 ## For users
 
+[Optional usage data](en/USAGE-DATA.md) · [Freiwillige Nutzungsdaten](18-NUTZUNGSDATEN.md): consent, exact fields, preview, local history, deletion and administrator configuration.
+
 | Document | Content |
 |---|---|
-| [en/dock/README.md](en/dock/README.md) · [Deutsch](dock/README.md) | Nodvard Dock: Docker edition, quick start, stacks from Git, image updates, templates and troubleshooting |
+| [en/SHIELD.md](en/SHIELD.md) · [Deutsch](18-SHIELD.md) | Shield: Fail2ban settings per server, exceptions, jails and approval |
+| [en/dock/README.md](en/dock/README.md) · [Deutsch](dock/README.md) | Nodvard Dock: Docker edition, quick start, stacks from Git, image updates, templates, FAQ and troubleshooting |
 | [en/FIRST-SETUP.md](en/FIRST-SETUP.md) · [Deutsch](11-ERST-EINRICHTUNG.md) | First setup step by step: quick start, setup assistant, first server, extensions, push notifications, backups, common stumbling blocks; appendix with users, two-factor, automation, updates, troubleshooting and rescue page |
 | [en/INSTALLATION.md](en/INSTALLATION.md) · [Deutsch](13-INSTALLATION.md) | Installation per platform: terminal, Portainer, Dockge, Synology, UGREEN, QNAP, Unraid, TrueNAS, OpenMediaVault, ZimaOS, Raspberry Pi, Proxmox, Docker Desktop |
 | [en/ROOT-RIGHTS.md](en/ROOT-RIGHTS.md) · [Deutsch](14-ROOT-RECHTE.md) | Root rights without a password, the docker group and the modules' helper scripts |
+| [en/18-SSH-HARDENING.md](en/18-SSH-HARDENING.md) · [Deutsch](18-SSH-HAERTUNG.md) | SSH hardening with Shield, key access, approval and automatic rollback |
 | [en/SYNOLOGY-DSM.md](en/SYNOLOGY-DSM.md) · [Deutsch](15-SYNOLOGY-DSM.md) | The Synology DSM module: account, several devices, notifications, Hyper Backup |
 | [en/BACKUP.md](en/BACKUP.md) · [Deutsch](16-SICHERUNG.md) | Backups in detail: NAS or NFS, opening a backup without Nodvard Deck, the backup scripts |
 | [en/WITHOUT-INTERFACE.md](en/WITHOUT-INTERFACE.md) · [Deutsch](17-OHNE-OBERFLAECHE.md) | Setting up servers through the API with a small helper script |
 | [en/PROXMOX-TOKEN.md](en/PROXMOX-TOKEN.md) · [Deutsch](10-PROXMOX-TOKEN.md) | Creating a Proxmox API token with limited rights |
 | [en/REVERSE-PROXY.md](en/REVERSE-PROXY.md) · [Deutsch](12-REVERSE-PROXY.md) | Running Nodvard Deck behind Nginx Proxy Manager, Traefik or Caddy: trusted proxy, HTTPS, real client addresses |
 | [en/TAILSCALE.md](en/TAILSCALE.md) · [Deutsch](13-TAILSCALE.md) | Connecting servers through Tailscale: installation, Docker connectivity, SSH access and troubleshooting |
+| [en/release-notes/0.13.0.md](en/release-notes/0.13.0.md) · [Deutsch](release-notes/0.13.0.md) | Release notes 0.13.0; also [0.12.1](en/release-notes/0.12.1.md) and [0.12.0](en/release-notes/0.12.0.md) |
+| [FEHLERSUCHE.md](FEHLERSUCHE.md) | Fehlersuche: Die 20 häufigsten Probleme bei Erst-Einrichtung und Betrieb |
+| [en/TROUBLESHOOTING.md](en/TROUBLESHOOTING.md) | Troubleshooting: 20 frequent problems during setup and operation |
 | [../deploy/README.md](../deploy/README.md) | Building the image, deployment, backup and restore, demo mode |
 | [../SECURITY.md](../SECURITY.md) | Reporting vulnerabilities, hardening notes |
+| [en/SBOM.md](en/SBOM.md) · [Deutsch](BAUSTEINLISTE.md) | Reading component lists, comparing image digests and verifying release provenance |
 
 ## For developers
 

@@ -13,24 +13,27 @@ import asyncssh
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 from nodvard_sdk import Actor, ActionRequest, GateOutcome, HostProvider, Risk
+from nodvard_sdk.errors import error_message
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from ...core import gate as gate_service
-from ...core import ssh
+from ...core import ssh, ssh_retry
 from ...core.error_text import describe_connection_error, is_expected_connection_error
-from ...core.metrics_history import resolve_metrics_provider
+from ...core.metrics_history import metrics_provider_owner, resolve_metrics_provider
 from ...core.schema_check import SchemaError, check_value
 from ...db.session import release_connection
 from ...ext.runtime import get_extension_runtime
-from ...models import Action, Host, HostCredential, HostGroup, KnownHostKey, User
+from ...models import Action, Host, HostCredential, HostGroup, HostMerge, KnownHostKey, User
 from ...services import audit as audit_service
 from ...services import extensions as extensions_service
 from ...services import hosts as hosts_service
 from ...services.actor_labels import load_user_labels, raw_actor
 from ...services.auth import user_has_permission
 from ..deps import CurrentUser, SessionDep, SettingsDep, require_permission
+from ..models import RequestModel
+from ..responses import error_responses
 from .actions import ActionOut, action_out, mark_running
 from .auth import confirm_stored_secret_change
 from .secrets import SecretConfirm
@@ -81,7 +84,7 @@ class ActionSpecOut(BaseModel):
         )
 
 
-class TriggerActionIn(BaseModel):
+class TriggerActionIn(RequestModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     reason: str = Field(min_length=1)
     correlation_id: str | None = None
@@ -94,6 +97,13 @@ class HostCredentialSummary(BaseModel):
     kind: str
     username: str
     port: int
+
+
+class ManualEntryOut(BaseModel):
+    id: str
+    name: str
+    display_name: str
+    address: str
 
 
 class HostOut(BaseModel):
@@ -116,6 +126,7 @@ class HostOut(BaseModel):
     nicht, dass die Anmeldung klappt (dafür `login_ok_at`)."""
     provider_ext_id: str | None
     provider_ref: str | None
+    manual_entry: ManualEntryOut | None = None
     created_at: datetime
     updated_at: datetime
     login_ok_at: datetime | None = None
@@ -144,6 +155,7 @@ class HostOut(BaseModel):
             category=host_category(host.kind),
             parent_label=_text_or_none(placement.get("parent_label")),
             power_state=_text_or_none(placement.get("power_state")),
+            manual_entry=placement.get("manual_entry"),
             gone_since=_time_or_none(placement.get("gone_since")),
             sudo_full_wanted=hosts_service.full_sudo_wanted(host),
             login_ok_at=hosts_service.login_confirmed_at(host, default),
@@ -235,7 +247,7 @@ def _validate_address(value: str) -> str:
     return address
 
 
-class HostCreate(BaseModel):
+class HostCreate(RequestModel):
     # Die Länge prüft der Validator (mit deutscher Meldung), kein `Field(max_length=...)`.
     name: str
     display_name: str = ""
@@ -260,7 +272,7 @@ class HostCreate(BaseModel):
         return _validate_tags(value) or []
 
 
-class HostUpdate(BaseModel):
+class HostUpdate(RequestModel):
     display_name: str | None = None
     address: str | None = None
     os_family: str | None = None
@@ -371,7 +383,7 @@ def _validate_ssh_key(value: str) -> str:
     return key
 
 
-class CredentialCreate(BaseModel):
+class CredentialCreate(RequestModel):
     kind: CredentialKind
     username: str = "root"
     port: int = 22
@@ -412,21 +424,25 @@ def _strip(value: object) -> object:
     return value.strip() if isinstance(value, str) else value
 
 
-class GroupCreate(BaseModel):
+class GroupCreate(RequestModel):
     name: str = Field(min_length=1, max_length=64)
     description: str = Field("", max_length=255)
 
     _strip_name = field_validator("name", mode="before")(_strip)
 
 
-class GroupUpdate(BaseModel):
+class GroupUpdate(RequestModel):
     name: str | None = Field(None, min_length=1, max_length=64)
     description: str | None = Field(None, max_length=255)
 
     _strip_name = field_validator("name", mode="before")(_strip)
 
 
-@router.get("/hosts", dependencies=[Depends(require_permission("hosts.read"))])
+@router.get(
+    "/hosts",
+    dependencies=[Depends(require_permission("hosts.read"))],
+    responses=error_responses(401, 403, 507),
+)
 async def list_hosts(
     session: SessionDep, tag: str | None = None, group: str | None = None, status_: str | None = None
 ) -> list[HostOut]:
@@ -434,7 +450,7 @@ async def list_hosts(
     return [HostOut.from_model(h) for h in hosts]
 
 
-@router.post("/hosts", status_code=status.HTTP_201_CREATED)
+@router.post("/hosts", status_code=status.HTTP_201_CREATED, responses=error_responses(401, 403, 409, 507))
 async def create_host(payload: HostCreate, session: SessionDep, user: WriteUser) -> HostOut:
     try:
         host = await hosts_service.create_host(
@@ -453,7 +469,11 @@ async def create_host(payload: HostCreate, session: SessionDep, user: WriteUser)
     return HostOut.from_model(host)
 
 
-@router.get("/hosts/{host_id}", dependencies=[Depends(require_permission("hosts.read"))])
+@router.get(
+    "/hosts/{host_id}",
+    dependencies=[Depends(require_permission("hosts.read"))],
+    responses=error_responses(401, 403, 404, 507),
+)
 async def get_host(host_id: str, session: SessionDep) -> HostOut:
     host = await session.get(Host, host_id)
     if host is None:
@@ -465,7 +485,35 @@ def _manual_tags(host: Host) -> list[str]:
     return sorted(t.tag for t in host.tags if t.managed_by_ext_id is None)
 
 
-@router.patch("/hosts/{host_id}", response_model=HostOut)
+@router.get(
+    "/hosts/{host_id}/ssh-retry",
+    dependencies=[Depends(require_permission("hosts.read"))],
+    responses=error_responses(401, 403, 404, 507),
+)
+async def get_ssh_retry(host_id: str, session: SessionDep) -> ssh_retry.RetryState:
+    if await session.get(Host, host_id) is None:
+        raise HTTPException(status_code=404, detail="Unbekannter Host.")
+    return await ssh_retry.load(session, host_id)
+
+
+@router.post(
+    "/hosts/{host_id}/ssh-retry",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=error_responses(401, 403, 404, 507),
+)
+async def reset_ssh_retry(host_id: str, session: SessionDep, user: WriteUser) -> None:
+    if await session.get(Host, host_id) is None:
+        raise HTTPException(status_code=404, detail="Unbekannter Host.")
+    await release_connection(session)
+    await ssh.get_ssh_pool().reset_auth_retry(host_id)
+    await _audit(session, user, "host.ssh_retry_reset", target_id=host_id)
+
+
+@router.patch(
+    "/hosts/{host_id}",
+    response_model=HostOut,
+    responses=error_responses(400, 401, 403, 404, 429, 502, 503, 507),
+)
 async def patch_host(
     host_id: str, payload: HostUpdate, request: Request, session: SessionDep, settings: SettingsDep, user: WriteUser,
 ) -> HostOut | JSONResponse:
@@ -507,7 +555,12 @@ async def patch_host(
     return HostOut.from_model(host)
 
 
-@router.delete("/hosts/{host_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+@router.delete(
+    "/hosts/{host_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    responses=error_responses(400, 401, 403, 404, 409, 429, 503, 507),
+)
 async def delete_host(
     host_id: str,
     request: Request,
@@ -550,7 +603,11 @@ class KnownHostKeyOut(BaseModel):
     sieht nur, wer `users.read` oder Aktionen freigeben darf, sonst steht hier `user/<id>` (wie bei den Aktionen)."""
 
 
-@router.get("/hosts/{host_id}/known-hosts", dependencies=[Depends(require_permission("hosts.read"))])
+@router.get(
+    "/hosts/{host_id}/known-hosts",
+    dependencies=[Depends(require_permission("hosts.read"))],
+    responses=error_responses(401, 403, 404, 507),
+)
 async def list_known_host_keys(host_id: str, session: SessionDep, user: CurrentUser) -> list[KnownHostKeyOut]:
     """Die gemerkten Server-Schlüssel (Fingerabdrücke) dieses Servers, Grundlage zum bewussten Vergessen eines
     geänderten Schlüssels (`DELETE .../known-hosts/{key_type}`)."""
@@ -575,7 +632,12 @@ async def list_known_host_keys(host_id: str, session: SessionDep, user: CurrentU
     ]
 
 
-@router.get("/hosts/{host_id}/status", dependencies=[Depends(require_permission("hosts.read"))])
+# API-Vertrag: Einzelabfrage über SSH oder HostProvider.host_status() für externe Clients.
+@router.get(
+    "/hosts/{host_id}/status",
+    dependencies=[Depends(require_permission("hosts.read"))],
+    responses=error_responses(401, 403, 404, 502, 503, 507),
+)
 async def get_host_status(host_id: str, session: SessionDep, settings: SettingsDep) -> HostStatusOut:
     """Prüft mit Zugangsdaten per kurzer SSH-Verbindung; ohne Zugangsdaten fragt es den `HostProvider` des Hosts
     (`host_status()`), falls einer registriert ist. Ohne beides bleibt der zuletzt gespeicherte Status."""
@@ -595,7 +657,7 @@ async def get_host_status(host_id: str, session: SessionDep, settings: SettingsD
                     live_status = await provider.host_status(host.provider_ref)
                 except Exception as exc:  # noqa: BLE001 - ein Provider-Fehler ist kein Server-Fehler, nur unbekannter Status
                     return HostStatusOut(
-                        status=host.status, last_seen_at=host.last_seen_at, checked_live=False, detail=str(exc)
+                        status=host.status, last_seen_at=host.last_seen_at, checked_live=False, detail=error_message(exc)
                     )
                 host.status = live_status.value
                 host.last_seen_at = utcnow()
@@ -635,11 +697,15 @@ async def get_host_status(host_id: str, session: SessionDep, settings: SettingsD
         if isinstance(exc, ssh.SshAuthError):
             hosts_service.clear_login_ok(host)  # Anmeldung abgelehnt: der frühere Beleg gilt nicht mehr
         await session.flush()
-        detail = str(exc) or "Der Server hat nicht rechtzeitig geantwortet."
+        detail = describe_connection_error(exc)
         return HostStatusOut(status=host.status, last_seen_at=host.last_seen_at, checked_live=True, detail=detail)
 
 
-@router.get("/hosts/{host_id}/metrics", dependencies=[Depends(require_permission("hosts.read"))])
+@router.get(
+    "/hosts/{host_id}/metrics",
+    dependencies=[Depends(require_permission("hosts.read"))],
+    responses=error_responses(401, 403, 404, 502, 503, 507),
+)
 async def get_host_metrics(host_id: str, session: SessionDep) -> HostMetricsOut:
     """Momentaufnahme der Messwerte eines Servers über seinen `MetricsProvider` (404 ohne Anbieter), keine Historie."""
     # Kein "proxmox" im Kern: der Endpunkt kennt nur das Protokoll, nie eine konkrete Extension.
@@ -656,7 +722,15 @@ async def get_host_metrics(host_id: str, session: SessionDep) -> HostMetricsOut:
     from ...db import utcnow
 
     try:
-        values = await provider.sample(sdk_host)
+        owner = metrics_provider_owner(provider)
+        if owner is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Kein eindeutiger MetricsProvider registriert.",
+            )
+        with gate_service.authorized_ssh(
+            host_id, operations=frozenset({"command"}), ext_id=owner,
+        ):
+            values = await provider.sample(sdk_host)
     except Exception as exc:  # noqa: BLE001 - nur "Server nicht erreichbar" wird zur sauberen Antwort, alles andere bleibt ein Fehler
         if not is_expected_connection_error(exc):
             raise
@@ -674,7 +748,11 @@ def _percent(used: float | None, total: float | None) -> float | None:
     return round(min(100.0, max(0.0, 100 * used / total)), 1)
 
 
-@router.get("/hosts/metrics/latest", dependencies=[Depends(require_permission("hosts.read"))])
+@router.get(
+    "/hosts/metrics/latest",
+    dependencies=[Depends(require_permission("hosts.read"))],
+    responses=error_responses(401, 403, 404, 502, 507),
+)
 async def get_hosts_latest_metrics(session: SessionDep) -> HostsLatestMetricsOut:
     """Letzte Messwerte ALLER Server in einer Abfrage, für die Auslastungs-Karten im Cockpit. Nur Server mit einem Wert
     der letzten `LATEST_WINDOW_S` Sekunden stehen drin, `stale` ab `STALE_AFTER_S`."""
@@ -685,11 +763,18 @@ async def get_hosts_latest_metrics(session: SessionDep) -> HostsLatestMetricsOut
     from ...core.metrics_history import LATEST_WINDOW_S, STALE_AFTER_S, get_metrics_collector
 
     host_ids = list((await session.execute(select(Host.id).where(Host.enabled.is_(True)))).scalars().all())
+    aliases = (await session.execute(select(HostMerge.source_id, HostMerge.host_id).where(HostMerge.host_id.in_(host_ids)))).all()
+    metric_ids = host_ids + [source_id for source_id, _ in aliases]
     now = int(_time.time())
     collector = get_metrics_collector()
-    found = await asyncio.to_thread(collector.store.latest, host_ids, now, max_age_s=LATEST_WINDOW_S)
-    for host_id, values in collector.current(host_ids, now, max_age_s=LATEST_WINDOW_S).items():
+    found = await asyncio.to_thread(collector.store.latest, metric_ids, now, max_age_s=LATEST_WINDOW_S)
+    for host_id, values in collector.current(metric_ids, now, max_age_s=LATEST_WINDOW_S).items():
         found.setdefault(host_id, values)
+    for source_id, host_id in aliases:
+        for metric, sample in found.pop(source_id, {}).items():
+            values = found.setdefault(host_id, {})
+            if metric not in values or sample[0] > values[metric][0]:
+                values[metric] = sample
     out: dict[str, HostLatestMetricsOut] = {}
     for host_id, values in found.items():
         at = max(ts for ts, _ in values.values())
@@ -717,7 +802,11 @@ class HostMetricsHistoryOut(BaseModel):
     max: dict[str, list[float | None]] = Field(default_factory=dict)
 
 
-@router.get("/hosts/{host_id}/metrics/history", dependencies=[Depends(require_permission("hosts.read"))])
+@router.get(
+    "/hosts/{host_id}/metrics/history",
+    dependencies=[Depends(require_permission("hosts.read"))],
+    responses=error_responses(401, 403, 404, 422, 502, 507),
+)
 async def get_host_metrics_history(host_id: str, session: SessionDep, range: str = "1h") -> HostMetricsHistoryOut:  # noqa: A002 - Query-Name
     """Verlauf für die Diagramme der Server-Seite: vom Anbieter (`MetricsProvider.history()`, z. B. Proxmox-RRD),
     sonst vom eigenen Sammler (`core/metrics_history.py`)."""
@@ -731,6 +820,7 @@ async def get_host_metrics_history(host_id: str, session: SessionDep, range: str
     if host is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
     sdk_host = hosts_service.host_to_sdk(host)
+    aliases = list((await session.execute(select(HostMerge.source_id).where(HostMerge.host_id == host.id))).scalars())
     await release_connection(session)
     provider = await resolve_metrics_provider(sdk_host, host.provider_ext_id)
     if provider is None:
@@ -740,11 +830,11 @@ async def get_host_metrics_history(host_id: str, session: SessionDep, range: str
         try:
             data = await history(sdk_host, range)
         except Exception as exc:  # noqa: BLE001 - Anbieter-Fehler ist kein Server-Fehler
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Verlauf nicht abrufbar: {str(exc) or type(exc).__name__}") from exc
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=error_message(exc, "Verlauf nicht abrufbar.")) from None
         return HostMetricsHistoryOut(range=range, source="provider", **data)
     collector = get_metrics_collector()
     data = await asyncio.to_thread(
-        collector.store.query, host.id, range, int(_time.time()),
+        collector.store.query_hosts, host.id, aliases, range, int(_time.time()),
         interval_s=max(collector.interval_s, 1), raw_retention_s=collector.raw_retention_s,
     )
     return HostMetricsHistoryOut(range=range, source="lattice", **data)
@@ -774,7 +864,11 @@ def _offered_for(spec: Any, host: Host) -> bool:  # noqa: ANN401 - nodvard_sdk.a
     return not wanted or bool({t.tag for t in host.tags} & set(wanted))
 
 
-@router.get("/hosts/{host_id}/actions", dependencies=[Depends(require_permission("hosts.read"))])
+@router.get(
+    "/hosts/{host_id}/actions",
+    dependencies=[Depends(require_permission("hosts.read"))],
+    responses=error_responses(401, 403, 404, 502, 507),
+)
 async def list_host_actions(host_id: str, session: SessionDep) -> list[ActionSpecOut]:
     host = await session.get(Host, host_id)
     if host is None:
@@ -809,7 +903,11 @@ class HostToolOut(BaseModel):
     order: int
 
 
-@router.get("/hosts/{host_id}/tools", dependencies=[Depends(require_permission("hosts.read"))])
+@router.get(
+    "/hosts/{host_id}/tools",
+    dependencies=[Depends(require_permission("hosts.read"))],
+    responses=error_responses(401, 403, 404, 507),
+)
 async def list_host_tools(host_id: str, session: SessionDep, user: CurrentUser) -> list[HostToolOut]:
     """Werkzeug-Kacheln der Server-Seite: was Extensions per `ctx.ui.register_host_tool()` für passende Hosts anbieten,
     gefiltert nach Host-Art, Tags, Herkunft und den Rechten des Nutzers."""
@@ -837,7 +935,10 @@ async def list_host_tools(host_id: str, session: SessionDep, user: CurrentUser) 
     return tools
 
 
-@router.post("/hosts/{host_id}/actions/{action_type}")
+@router.post(
+    "/hosts/{host_id}/actions/{action_type}",
+    responses={**error_responses(401, 403, 404, 422, 507), 202: {"model": ActionOut, "description": "Aktion angenommen."}},
+)
 async def trigger_host_action(
     host_id: str,
     action_type: str,
@@ -908,7 +1009,11 @@ async def trigger_host_action(
 
 
 # Antworten enthalten nur Metadaten, nie den Klartext (docs/03 §3, Invariante 1).
-@router.get("/hosts/{host_id}/credentials", dependencies=[Depends(require_permission("hosts.read"))])
+@router.get(
+    "/hosts/{host_id}/credentials",
+    dependencies=[Depends(require_permission("hosts.read"))],
+    responses=error_responses(401, 403, 507),
+)
 async def list_credentials(host_id: str, session: SessionDep) -> list[CredentialOut]:
     return [CredentialOut.from_model(c) for c in await hosts_service.list_credentials(session, host_id)]
 
@@ -916,6 +1021,7 @@ async def list_credentials(host_id: str, session: SessionDep) -> list[Credential
 @router.post(
     "/hosts/{host_id}/credentials",
     status_code=status.HTTP_201_CREATED,
+    responses=error_responses(401, 403, 404, 502, 507),
 )
 async def create_credential(
     host_id: str,
@@ -945,7 +1051,12 @@ async def create_credential(
     return CredentialOut.from_model(credential)
 
 
-@router.delete("/hosts/{host_id}/credentials/{credential_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+@router.delete(
+    "/hosts/{host_id}/credentials/{credential_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    responses=error_responses(400, 401, 403, 404, 429, 503, 507),
+)
 async def delete_credential(
     host_id: str,
     credential_id: str,
@@ -977,7 +1088,11 @@ async def delete_credential(
     return None
 
 
-@router.delete("/hosts/{host_id}/known-hosts/{key_type}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/hosts/{host_id}/known-hosts/{key_type}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=error_responses(401, 403, 404, 507),
+)
 async def clear_known_host_key(host_id: str, key_type: str, session: SessionDep, user: WriteUser) -> None:
     """Admin-Weg, eine per `HostKeyMismatch` sichtbar gewordene Änderung NACH manueller Prüfung erneut zuzulassen."""
     known = (
@@ -991,12 +1106,16 @@ async def clear_known_host_key(host_id: str, key_type: str, session: SessionDep,
     await _audit(session, user, "host.known_key_forgotten", target_id=host_id, detail=detail)
 
 
-@router.get("/host-groups", dependencies=[Depends(require_permission("hosts.read"))])
+@router.get(
+    "/host-groups",
+    dependencies=[Depends(require_permission("hosts.read"))],
+    responses=error_responses(401, 403, 404, 507),
+)
 async def list_groups(session: SessionDep) -> list[GroupOut]:
     return [GroupOut.from_model(g) for g in await hosts_service.list_groups(session)]
 
 
-@router.post("/host-groups", status_code=status.HTTP_201_CREATED)
+@router.post("/host-groups", status_code=status.HTTP_201_CREATED, responses=error_responses(401, 403, 404, 409, 507))
 async def create_group(payload: GroupCreate, session: SessionDep, user: WriteUser) -> GroupOut:
     try:
         group = await hosts_service.create_group(session, name=payload.name, description=payload.description)
@@ -1013,7 +1132,7 @@ async def _audit_group(session: SessionDep, user: User, group_id: str, change: s
     )
 
 
-@router.patch("/host-groups/{group_id}")
+@router.patch("/host-groups/{group_id}", responses=error_responses(401, 403, 404, 409, 507))
 async def patch_group(group_id: str, payload: GroupUpdate, session: SessionDep, user: WriteUser) -> GroupOut:
     existing = await session.get(HostGroup, group_id)
     old_name = existing.name if existing is not None else None
@@ -1033,7 +1152,11 @@ async def patch_group(group_id: str, payload: GroupUpdate, session: SessionDep, 
     return GroupOut.from_model(group)
 
 
-@router.delete("/host-groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/host-groups/{group_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=error_responses(401, 403, 404, 507),
+)
 async def delete_group(group_id: str, session: SessionDep, user: WriteUser) -> None:
     """Löscht nur die Gruppe und ihre Zuordnungen, nie die Server darin. Skripte, die die Gruppe als Ziel hatten, lösen
     sie danach zu einer leeren Liste auf."""
@@ -1044,7 +1167,11 @@ async def delete_group(group_id: str, session: SessionDep, user: WriteUser) -> N
     await _audit_group(session, user, group_id, "deleted", name=name)
 
 
-@router.post("/host-groups/{group_id}/members/{host_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/host-groups/{group_id}/members/{host_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=error_responses(401, 403, 404, 507),
+)
 async def add_group_member(group_id: str, host_id: str, session: SessionDep, user: WriteUser) -> None:
     try:
         added = await hosts_service.add_group_member(session, group_id, host_id)
@@ -1054,7 +1181,11 @@ async def add_group_member(group_id: str, host_id: str, session: SessionDep, use
         await _audit_group(session, user, group_id, "member_added", host_id=host_id)
 
 
-@router.delete("/host-groups/{group_id}/members/{host_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/host-groups/{group_id}/members/{host_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=error_responses(401, 403, 404, 507),
+)
 async def remove_group_member(group_id: str, host_id: str, session: SessionDep, user: WriteUser) -> None:
     if await hosts_service.remove_group_member(session, group_id, host_id):
         await _audit_group(session, user, group_id, "member_removed", host_id=host_id)

@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import delete, select
@@ -87,11 +89,15 @@ def load_keyring(settings: Settings) -> Keyring:
 def _save_keyring(path, keyring: Keyring) -> None:  # noqa: ANN001 - Path
     path.parent.mkdir(parents=True, exist_ok=True)
     raw = {str(version): key.decode("ascii") for version, key in keyring.items()}
-    path.write_text(json.dumps(raw), encoding="utf-8")
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            json.dump(raw, file)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def current_version(keyring: Keyring) -> int:

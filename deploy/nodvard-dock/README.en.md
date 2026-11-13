@@ -181,6 +181,23 @@ data migration when switching editions.
 
 ## Security and privacy at a glance
 
+Dock starts as `1000:1000`. Compose sets `read_only`, a tmpfs at `/tmp`, `cap_drop: ALL` and
+`no-new-privileges`. Port 8080 and management over SSH need no additional capabilities.
+A fresh `nodvard-dock-data` volume gets its permissions from the image. Bind mounts must belong to UID/GID 1000
+before starting. For existing installations with different ownership, create a backup, pull the new image and
+run this once with Dock stopped:
+
+```bash
+docker compose stop nodvard-dock
+docker compose run --rm --no-deps --user 0:0 --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --entrypoint /usr/local/bin/migrate-data nodvard-dock
+docker compose up -d nodvard-dock
+```
+
+Keep volume names and bind mounts, remove old root overrides before restarting, and apply the current Compose
+security settings. Only the migration needs `CHOWN` to change ownership and `DAC_OVERRIDE` to traverse protected
+folders. It does not follow links and changes only `/app/data` on its filesystem. No other container may use that
+folder during migration. On NAS shares without `chown` support, grant `1000:1000` access on the NAS.
+
 - **No telemetry by default:** Nodvard Dock sends no usage or crash data by default.
 - **By default, the only automatic outgoing connection** is the update search: once a day Nodvard Dock asks `ghcr.io` for a new
   version, and the registry sees your IP address and the time (can be turned off under Einstellungen → System → Updates).

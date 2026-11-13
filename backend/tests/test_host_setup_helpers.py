@@ -1,4 +1,4 @@
-"""Einrichtungsbefehl mit Hilfsskripten (`build_setup_script(..., helpers=...)`): Die Skripte der Module kommen base64-
+"""Einrichtungsbefehl mit Hilfsskripten (`build_setup_script(..., helpers=...)`): Die Skripte der Module kommen gzip- und base64-
 kodiert mit, werden auf dem Server gegen ihre sha256 geprüft und root-eigen abgelegt, jedes mit einer eigenen sudo-Regel
 nur für sich. Das alles nur, wenn jeder Ordner bis `/` root gehört und der Benutzer dort nicht schreiben kann. Was
 scheitert, gibt einen Hinweis; die übrige Einrichtung (volle Regel, Schlüssel) läuft weiter.
@@ -8,7 +8,9 @@ und `install`."""
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import random
 import shlex
 import shutil
 import subprocess
@@ -244,16 +246,17 @@ def test_a_folder_another_group_may_write_skips_the_helpers_with_the_way_out(tmp
 
 
 @needs_sh
-def test_a_missing_tool_is_an_error_next_to_the_full_rule_when_a_helper_has_no_fallback(tmp_path):
+@pytest.mark.parametrize("missing", ["base64", "gzip"])
+def test_a_missing_tool_is_an_error_next_to_the_full_rule_when_a_helper_has_no_fallback(tmp_path, missing):
     bin_dir, _, helper_dir, captured = _helper_sandbox(tmp_path)
-    # Alle Werkzeuge außer base64, die Attrappen gehen vor.
+    # Alle Werkzeuge außer dem fehlenden, die Attrappen gehen vor.
     only = tmp_path / "only"
     only.mkdir()
     for tool in bin_dir.iterdir():
         (only / tool.name).symlink_to(tool)
     for folder in (Path("/usr/bin"), Path("/bin")):
         for tool in folder.iterdir() if folder.is_dir() else ():
-            if tool.name != "base64" and not (only / tool.name).exists() and not (only / tool.name).is_symlink():
+            if tool.name != missing and not (only / tool.name).exists() and not (only / tool.name).is_symlink():
                 (only / tool.name).symlink_to(tool)
     docker = RootHelperFile(**{**_helper("docker").__dict__, "sudo_fallback": False})
     done = subprocess.run(
@@ -261,7 +264,7 @@ def test_a_missing_tool_is_an_error_next_to_the_full_rule_when_a_helper_has_no_f
         env={"PATH": str(only), "LC_ALL": "C.UTF-8"}, timeout=30, check=False,
     )
     assert done.returncode == 1, done.stdout + done.stderr
-    assert "FEHLER: base64, sha256sum oder stat fehlt hier, die Hilfsskripte wurden übersprungen." in done.stdout
+    assert "FEHLER: base64, gzip, sha256sum oder stat fehlt hier, die Hilfsskripte wurden übersprungen." in done.stdout
     assert (captured / "nodvard-deck").exists()
 
 
@@ -365,10 +368,14 @@ def test_temp_files_are_removed(tmp_path):
     assert list(tmpdir.iterdir()) == []
 
 
-def test_helpers_only_come_with_sudo_and_never_for_root():
+def test_helpers_require_sudo_except_for_root():
     for user, sudo in ((USER, False), ("root", True), ("root", False)):
         script, _ = build_setup_script(user, KEY, sudo=sudo, helpers=[SHIELD])
-        assert "Hilfsskript" not in script and "base64" not in script, (user, sudo)
+        if user == "root":
+            assert "HS shield-root" in script and "base64" in script
+            assert "visudo" not in script and "/etc/sudoers.d/" not in script
+        else:
+            assert "Hilfsskript" not in script and "base64" not in script
 
 
 def test_with_helpers_the_script_keeps_its_shape():
@@ -409,7 +416,9 @@ def test_a_helper_twice_or_a_strange_folder_is_refused():
 
 
 def test_a_command_that_would_be_too_long_is_refused():
-    big = [_helper(f"modul-{i}", body="#" * 16000 + "\n") for i in range(6)]
+    # Zufälliger Text lässt sich nicht weiter komprimieren, die Skripte bleiben im Befehl so groß, wie sie sind.
+    noise = random.Random(7)
+    big = [_helper(f"modul-{i}", body="# " + base64.b64encode(noise.randbytes(12000)).decode() + "\n") for i in range(10)]
     with pytest.raises(SetupError, match="zu lang"):
         build_setup_script(USER, KEY, sudo=True, helpers=big)
 

@@ -16,6 +16,8 @@ const UNUSED_NET = "2".repeat(64);
 const ROLLBACK = "sha256:" + "e".repeat(64);
 const IMAGES = {
   host_id: "h1",
+  total_size_bytes: 423_560_000,
+  unknown_size_count: 1,
   images: [
     { id: ROLLBACK, short_id: "eeeeeeeeeeee", names: ["nodvard-deck:previous"], size_bytes: 410_000_000, created_at: null,
       used_by: [], in_use: false, dangling: false, removable: false, rollback: true },
@@ -108,6 +110,40 @@ const LINKED = {
 };
 
 describe("Netze anlegen und verbinden", () => {
+  it.each<[string, string | null, string]>([
+    ["none", "null", "ohne Netz"],
+    ["unbekannt", null, "Treiber unbekannt"],
+    ["bridge", "bridge", ""],
+    ["host", "host", ""],
+    ["eigenes-netz", "bridge", "bridge"],
+    ["eigenes-netz", "macvlan", "macvlan"],
+  ])("zeigt den Treiber von %s ohne Dopplung", async (name, driver, expected) => {
+    const network = { ...NETWORKS.networks[0], name, driver, builtin: ["bridge", "host", "none"].includes(name) };
+    vi.stubGlobal("fetch", resourceFetch([], {
+      "/networks": () => Response.json({ ...NETWORKS, networks: [network] }),
+    }));
+    render(<ResourceList hostId="h1" kind="networks" />);
+    const row = await screen.findByTestId(`resource-${network.id}`);
+    expect(row.querySelectorAll("p")[1]).toHaveTextContent(new RegExp(`^${expected}$`));
+  });
+
+  it("behält Treiber, Stack und internen Hinweis für eigene Netze", async () => {
+    const network = { ...NETWORKS.networks[1], compose_project: "demo" };
+    vi.stubGlobal("fetch", resourceFetch([], {
+      "/networks": () => Response.json({ ...NETWORKS, networks: [network] }),
+    }));
+    render(<ResourceList hostId="h1" kind="networks" />);
+    const row = await screen.findByTestId(`resource-${network.id}`);
+    expect(within(row).getByText("bridge · Stack demo · nur intern")).toBeInTheDocument();
+  });
+
+  it("nennt den Knopf zum Verbinden von Containern", async () => {
+    vi.stubGlobal("fetch", resourceFetch([]));
+    render(<ResourceList hostId="h1" kind="networks" />);
+    const button = await screen.findByRole("button", { name: "Container verbinden: ungenutzt" });
+    expect(button).toHaveTextContent(/^Container verbinden$/);
+  });
+
   it("zeigt den Fehler einer automatisch ausgeführten Netzanlage im Formular", async () => {
     const calls: Call[] = [];
     vi.stubGlobal("fetch", resourceFetch(calls, {
@@ -151,7 +187,7 @@ describe("Netze anlegen und verbinden", () => {
         }));
         const { unmount } = render(<ResourceList hostId="h1" kind="networks" />);
         const connect = label === "Verbinden";
-        const toggle = `Container: ${connect ? "ungenutzt" : "bridge"}`;
+        const toggle = `Container verbinden: ${connect ? "ungenutzt" : "bridge"}`;
         fireEvent.click(await screen.findByRole("button", { name: toggle }));
         if (connect) fireEvent.change(screen.getByRole("combobox"), { target: { value: "web" } });
         fireEvent.click(screen.getByRole("button", { name: connect ? "Verbinden" : "Trennen: alt" }));
@@ -178,6 +214,7 @@ describe("Netze anlegen und verbinden", () => {
     vi.stubGlobal("fetch", resourceFetch(calls));
     render(<ResourceList hostId="h1" kind="networks" />);
     fireEvent.click(await screen.findByRole("button", { name: "Netz anlegen" }));
+    expect(screen.getByTestId("network-create")).toHaveClass("max-w-xl");
     const name = screen.getByRole("textbox", { name: "Name des Netzes" });
     fireEvent.change(name, { target: { value: "host" } });
     expect(screen.getByText(/nicht bridge, host, none oder default/)).toBeInTheDocument();
@@ -263,7 +300,7 @@ describe("Netze anlegen und verbinden", () => {
     const calls: Call[] = [];
     vi.stubGlobal("fetch", resourceFetch(calls, { "/networks": () => Response.json(LINKED) }));
     render(<ResourceList hostId="h1" kind="networks" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Container: ungenutzt" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Container verbinden: ungenutzt" }));
     const panel = screen.getByTestId("network-links-ungenutzt");
     expect(panel).toHaveTextContent("An diesem Netz hängt noch kein Container.");
     expect(within(panel).getByRole("button", { name: "Verbinden" })).toBeDisabled();
@@ -277,7 +314,7 @@ describe("Netze anlegen und verbinden", () => {
       .toEqual(expect.objectContaining({ payload: { network: UNUSED_NET, container: "web" } }));
 
     await screen.findByRole("status");
-    fireEvent.click(await screen.findByRole("button", { name: "Container: bridge" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Container verbinden: bridge" }));
     fireEvent.click(within(screen.getByTestId("network-links-bridge")).getByRole("button", { name: "Trennen: alt" }));
     await waitFor(() => expect(calls.some((c) => c.url.endsWith("/actions/docker.network_disconnect"))).toBe(true));
     const second = vi.mocked(window.__nodvardDeck!.confirmDialog).mock.calls[1][0];
@@ -293,9 +330,9 @@ describe("Netze anlegen und verbinden", () => {
     vi.stubGlobal("fetch", resourceFetch(calls, { "/networks": () => Response.json(LINKED) }));
     render(<ResourceList hostId="h1" kind="networks" />);
     await screen.findByTestId(`resource-${"3".repeat(64)}`);
-    expect(screen.queryByRole("button", { name: "Container: host" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Container: ingress" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Container: bridge" }));
+    expect(screen.queryByRole("button", { name: "Container verbinden: host" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Container verbinden: ingress" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Container verbinden: bridge" }));
     fireEvent.click(screen.getByRole("button", { name: "Trennen: alt" }));
     await waitFor(() => expect(window.__nodvardDeck?.confirmDialog).toHaveBeenCalled());
     expect(calls.some((c) => c.method === "POST")).toBe(false);
@@ -305,7 +342,7 @@ describe("Netze anlegen und verbinden", () => {
     const calls: Call[] = [];
     vi.stubGlobal("fetch", resourceFetch(calls, { "/networks": () => Response.json(LINKED) }));
     render(<ResourceList hostId="h1" kind="networks" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Container: dock" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Container verbinden: dock" }));
     const panel = screen.getByTestId("network-links-dock");
     expect(panel).toHaveTextContent("nodvard-dock (Stack nodvard-dock) – Nodvard Deck selbst, bleibt verbunden");
     expect(within(panel).queryByRole("button", { name: "Trennen: nodvard-dock" })).toBeNull();
@@ -319,7 +356,7 @@ describe("Netze anlegen und verbinden", () => {
   it("sagt ohne Container, dass es keine gibt, statt alle für verbunden zu halten", async () => {
     vi.stubGlobal("fetch", resourceFetch([], { "/networks": () => Response.json({ ...NETWORKS, containers: [] }) }));
     render(<ResourceList hostId="h1" kind="networks" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Container: ungenutzt" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Container verbinden: ungenutzt" }));
     const panel = screen.getByTestId("network-links-ungenutzt");
     expect(panel).toHaveTextContent("Auf diesem Server gibt es keine Container.");
     expect(panel).not.toHaveTextContent("hängen schon an diesem Netz");
@@ -348,7 +385,7 @@ describe("Netze anlegen und verbinden", () => {
       "/approve": () => Response.json({ id: "a1", status: "denied", result: null }),
     }));
     render(<ResourceList hostId="h1" kind="networks" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Container: bridge" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Container verbinden: bridge" }));
     fireEvent.click(screen.getByRole("button", { name: "Trennen: alt" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Trennen:");
     expect(screen.getByTestId("network-links-bridge")).toBeInTheDocument();
@@ -364,10 +401,10 @@ describe("Netze anlegen und verbinden", () => {
       }));
       setDeck((p) => !p.startsWith("actions.approve"));
       render(<ResourceList hostId="h1" kind="networks" />);
-      fireEvent.click(await screen.findByRole("button", { name: "Container: bridge" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Container verbinden: bridge" }));
       fireEvent.click(screen.getByRole("button", { name: "Trennen: alt" }));
       await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Trennen: vorgeschlagen"));
-      fireEvent.click(await screen.findByRole("button", { name: "Container: bridge" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Container verbinden: bridge" }));
       expect(within(screen.getByTestId("network-links-bridge")).getByText("wartet auf Freigabe")).toBeInTheDocument();
       status = "denied";
       await vi.advanceTimersByTimeAsync(3100);
@@ -401,7 +438,7 @@ describe("Netze anlegen und verbinden", () => {
         }));
         render(<ResourceList hostId="h1" kind="networks" />);
         const connect = label === "Verbinden";
-        fireEvent.click(await screen.findByRole("button", { name: `Container: ${connect ? "ungenutzt" : "bridge"}` }));
+        fireEvent.click(await screen.findByRole("button", { name: `Container verbinden: ${connect ? "ungenutzt" : "bridge"}` }));
         if (connect) fireEvent.change(screen.getByRole("combobox"), { target: { value: "web" } });
         fireEvent.click(screen.getByRole("button", { name: connect ? "Verbinden" : "Trennen: alt" }));
         await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(`${label}: vorgeschlagen`));
@@ -430,7 +467,7 @@ describe("Netze anlegen und verbinden", () => {
     }));
     setDeck((p) => !p.startsWith("actions.approve"));
     render(<ResourceList hostId="h1" kind="networks" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Container: bridge" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Container verbinden: bridge" }));
     fireEvent.click(screen.getByRole("button", { name: "Trennen: alt" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Fehler: Gate nicht erreichbar");
     expect(await screen.findByTestId("network-links-bridge")).toBeInTheDocument();
@@ -438,7 +475,7 @@ describe("Netze anlegen und verbinden", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Trennen: alt" }));
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Trennen: vorgeschlagen"));
     await waitFor(() => expect(screen.queryByTestId("network-links-bridge")).toBeNull());
-    fireEvent.click(await screen.findByRole("button", { name: "Container: bridge" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Container verbinden: bridge" }));
     expect(within(screen.getByTestId("network-links-bridge")).getByText("wartet auf Freigabe")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Trennen: alt" })).toBeNull();
   });
@@ -449,7 +486,125 @@ describe("Netze anlegen und verbinden", () => {
     render(<ResourceList hostId="h1" kind="networks" />);
     await screen.findByTestId("resources-networks");
     expect(screen.queryByRole("button", { name: "Netz anlegen" })).toBeNull();
-    expect(screen.queryByRole("button", { name: /^Container:/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Container verbinden:/ })).toBeNull();
+  });
+});
+
+describe("Images aufräumen", () => {
+  const label = "Ungenutzte Images aufräumen";
+  const output = "2 Images entfernt. Freigegeben: 6.79MB.";
+  const empty = { ...IMAGES, images: [], total_size_bytes: 0, unknown_size_count: 0 };
+
+  it.each([
+    [IMAGES, "Gesamtgröße: 404 MB (teilweise unbekannt)"],
+    [{ ...IMAGES, unknown_size_count: 0 }, "Gesamtgröße: 404 MB"],
+    [{ ...IMAGES, total_size_bytes: null, unknown_size_count: 4 }, "Gesamtgröße unbekannt"],
+    [empty, "Gesamtgröße: 0 B"],
+  ])("zeigt die Gesamtgröße und kennzeichnet fehlende Größen", async (body, expected) => {
+    vi.stubGlobal("fetch", resourceFetch([], { "/images": () => Response.json(body) }));
+    render(<ResourceList hostId="h1" kind="images" />);
+    expect(await screen.findByText(expected)).toBeInTheDocument();
+  });
+
+  it("räumt nach Rückfrage über die Freigabe auf und zeigt Anzahl, Platz und neue Größe", async () => {
+    const calls: Call[] = [];
+    let cleaned = false;
+    vi.stubGlobal("fetch", resourceFetch(calls, {
+      "/images": () => Response.json(cleaned ? empty : IMAGES),
+      "/actions/docker.prune_images": () => Response.json({ id: "a1", status: "proposed", risk: "low" }, { status: 202 }),
+      "/actions/a1/approve": () => {
+        cleaned = true;
+        return Response.json({ id: "a1", status: "succeeded", result: { output } });
+      },
+    }));
+    render(<ResourceList hostId="h1" kind="images" />);
+    fireEvent.click(await screen.findByRole("button", { name: label }));
+    expect(await screen.findByRole("status")).toHaveTextContent(`${label}: ${output}`);
+    expect(window.__nodvardDeck?.confirmDialog).toHaveBeenCalledWith(
+      expect.stringMatching(/ohne Namen.*kein Container.*gestoppter.*Benannte Images/),
+      expect.objectContaining({ title: label, danger: true, confirmLabel: "Aufräumen" }),
+    );
+    expect(calls.find((c) => c.url.endsWith("/actions/docker.prune_images"))).toEqual({
+      url: "/api/v1/hosts/h1/actions/docker.prune_images", method: "POST",
+      body: { payload: {}, reason: "Ungenutzte Images über die Docker-Seite aufräumen." },
+    });
+    expect(calls.filter((c) => c.url.endsWith("/actions/a1/approve"))).toHaveLength(1);
+    expect(await screen.findByText("Gesamtgröße: 0 B")).toBeInTheDocument();
+    expect(calls.filter((c) => c.url.endsWith("/images"))).toHaveLength(2);
+  });
+
+  it("schickt nach Abbrechen keine Aktion", async () => {
+    setDeck(() => true, false);
+    const calls: Call[] = [];
+    vi.stubGlobal("fetch", resourceFetch(calls));
+    render(<ResourceList hostId="h1" kind="images" />);
+    const button = await screen.findByRole("button", { name: label });
+    fireEvent.click(button);
+    await waitFor(() => expect(window.__nodvardDeck?.confirmDialog).toHaveBeenCalled());
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    expect(button).toBeEnabled();
+  });
+
+  it("zeigt die Gesamtgröße ohne Ausführungsrecht und keinen Aufräumen-Knopf", async () => {
+    setDeck((p) => p !== "hosts.execute");
+    vi.stubGlobal("fetch", resourceFetch([]));
+    render(<ResourceList hostId="h1" kind="images" />);
+    await screen.findByText("Gesamtgröße: 404 MB (teilweise unbekannt)");
+    expect(screen.queryByRole("button", { name: label })).toBeNull();
+  });
+
+  it.each<[ActionState, string]>([
+    [{ status: "succeeded", result: { output } }, output],
+    [{ status: "failed", result: { error: "Docker antwortet nicht." } }, "Fehlgeschlagen: Docker antwortet nicht."],
+    [{ status: "denied", gate_decision: { rule: "user:reject", user_reason: "Später aufräumen." } }, "Abgelehnt: Später aufräumen."],
+  ])("verhindert doppelte Vorschläge und zeigt nach fremder Freigabe das Ergebnis", async (outcome, expected) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      setDeck((p) => !p.startsWith("actions.approve"));
+      let settled = false;
+      const calls: Call[] = [];
+      vi.stubGlobal("fetch", resourceFetch(calls, {
+        "/actions/a1": () => Response.json(settled ? outcome : { id: "a1", status: "proposed" }),
+      }));
+      render(<ResourceList hostId="h1" kind="images" />);
+      const button = await screen.findByRole("button", { name: label });
+      fireEvent.click(button);
+      expect(await screen.findByRole("status")).toHaveTextContent("Freigabe durch einen Admin nötig");
+      expect(button).toBeDisabled();
+      fireEvent.click(button);
+      expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
+      expect(calls.some((c) => c.url.endsWith("/approve"))).toBe(false);
+      expect(calls.filter((c) => c.url.endsWith("/images"))).toHaveLength(1);
+      settled = true;
+      await act(async () => { await vi.advanceTimersByTimeAsync(3100); });
+      expect(screen.getByRole("status")).toHaveTextContent(`${label}: ${expected}`);
+      expect(screen.getByRole("status")).not.toHaveTextContent("Freigabe durch einen Admin nötig");
+      expect(button).toBeEnabled();
+      expect(calls.filter((c) => c.url.endsWith("/images"))).toHaveLength(2);
+      await act(async () => { await vi.advanceTimersByTimeAsync(3100); });
+      expect(calls.filter((c) => c.url.endsWith("/actions/a1"))).toHaveLength(1);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it("sperrt den Knopf während der Ausführung und zeigt einen Fehler der Anfrage", async () => {
+    let finish!: (response: Response) => void;
+    const calls: Call[] = [];
+    vi.stubGlobal("fetch", resourceFetch(calls, {
+      "/actions/docker.prune_images": () => new Promise<Response>((resolve) => { finish = resolve; }),
+    }));
+    render(<ResourceList hostId="h1" kind="images" />);
+    const button = await screen.findByRole("button", { name: label });
+    fireEvent.click(button);
+    await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    await act(async () => { finish(Response.json({ detail: "Server nicht erreichbar." }, { status: 502 })); });
+    expect(screen.getByRole("status")).toHaveTextContent("Fehler: Server nicht erreichbar.");
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
+    expect(button).toBeEnabled();
   });
 });
 
@@ -461,6 +616,7 @@ describe("Image holen", () => {
     }));
     render(<ResourceList hostId="h1" kind="images" />);
     fireEvent.click(await screen.findByRole("button", { name: "Image holen" }));
+    expect(screen.getByTestId("image-pull")).toHaveClass("max-w-xl");
     const form = within(screen.getByTestId("image-pull"));
     const input = form.getByRole("textbox", { name: "Name des Images" });
     fireEvent.change(input, { target: { value: "-a" } });
@@ -649,11 +805,11 @@ describe("Abschlüsse ausstehender Ressourcenaktionen", () => {
           }
         }
         if (scenario !== "Anlegen") {
-          fireEvent.click(await screen.findByRole("button", { name: "Container: ungenutzt" }));
+          fireEvent.click(await screen.findByRole("button", { name: "Container verbinden: ungenutzt" }));
           fireEvent.change(screen.getByRole("combobox"), { target: { value: "web" } });
           fireEvent.click(screen.getByRole("button", { name: "Verbinden" }));
           await waitFor(() => expect(screen.queryByTestId("network-links-ungenutzt")).toBeNull());
-          fireEvent.click(await screen.findByRole("button", { name: "Container: bridge" }));
+          fireEvent.click(await screen.findByRole("button", { name: "Container verbinden: bridge" }));
           fireEvent.click(screen.getByRole("button", { name: "Trennen: alt" }));
           await waitFor(() => expect(screen.queryByTestId("network-links-bridge")).toBeNull());
           expected.push("Verbinden: web verbunden.", "Trennen: Abgelehnt: alt bleibt verbunden.");
@@ -708,7 +864,7 @@ describe("Ergebnismeldungen beim Neuladen", () => {
         } else if (label === "Netz löschen") {
           fireEvent.click(screen.getByRole("button", { name: "Netz löschen: ungenutzt" }));
         } else {
-          fireEvent.click(screen.getByRole("button", { name: `Container: ${label === "Verbinden" ? "ungenutzt" : "bridge"}` }));
+          fireEvent.click(screen.getByRole("button", { name: `Container verbinden: ${label === "Verbinden" ? "ungenutzt" : "bridge"}` }));
           if (label === "Verbinden") fireEvent.change(screen.getByRole("combobox"), { target: { value: "web" } });
           fireEvent.click(screen.getByRole("button", { name: label === "Verbinden" ? "Verbinden" : "Trennen: alt" }));
         }
@@ -850,7 +1006,7 @@ describe("ResourceList", () => {
     expect(row).toHaveClass("rounded-lg", "sm:border-0");
     const buttons = within(row).getByTestId(`resource-buttons-${UNUSED_NET}`);
     expect(buttons).toHaveClass("flex", "sm:contents");
-    expect(within(buttons).getByRole("button", { name: "Container: ungenutzt" })).toBeInTheDocument();
+    expect(within(buttons).getByRole("button", { name: "Container verbinden: ungenutzt" })).toBeInTheDocument();
     expect(within(buttons).getByRole("button", { name: "Netz löschen: ungenutzt" })).toBeInTheDocument();
     expect(screen.getByTestId(`resource-buttons-${"3".repeat(64)}`)).toHaveClass("hidden", "sm:contents");
   });
@@ -883,7 +1039,7 @@ describe("ResourceList", () => {
     const bridge = await screen.findByTestId(`resource-${"1".repeat(64)}`);
     expect(bridge).toHaveTextContent("eingebaut");
     expect(within(bridge).queryByRole("button", { name: /löschen/ })).toBeNull();
-    expect(within(bridge).getByRole("button", { name: "Container: bridge" })).toBeInTheDocument();
+    expect(within(bridge).getByRole("button", { name: "Container verbinden: bridge" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Netz löschen: ungenutzt" })).toBeInTheDocument();
     unmount();
 
@@ -1078,6 +1234,6 @@ it("Dock kennzeichnet seine eigene Netzwerkverbindung", async () => {
   window.__nodvardDeck.getProductName = () => "Nodvard Dock";
   vi.stubGlobal("fetch", resourceFetch([], { "/networks": () => Response.json(LINKED) }));
   render(<ResourceList hostId="h1" kind="networks" />);
-  fireEvent.click(await screen.findByRole("button", { name: "Container: dock" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Container verbinden: dock" }));
   expect(screen.getByTestId("network-links-dock")).toHaveTextContent("Nodvard Dock selbst, bleibt verbunden");
 });

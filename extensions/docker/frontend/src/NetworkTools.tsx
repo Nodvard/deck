@@ -55,7 +55,7 @@ export function NetworkCreate({ hostId, onDone }: { hostId: string; onDone: (mes
 
   if (!open) return <div className="mb-2"><Button small onClick={() => setOpen(true)}>Netz anlegen</Button></div>;
   return (
-    <div className="mb-3 flex flex-col gap-2 bg-black/20 p-2 text-xs panel" data-testid="network-create">
+    <div className="mb-3 flex max-w-xl flex-col gap-2 bg-black/20 p-2 text-xs panel" data-testid="network-create">
       <label className="flex flex-col gap-1">
         <span>Name des Netzes</span>
         <input aria-label="Name des Netzes" value={name} maxLength={63} onChange={(e) => setName(e.target.value.trim())} placeholder="zum Beispiel intern"

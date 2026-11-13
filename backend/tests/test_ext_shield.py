@@ -155,6 +155,45 @@ async def _setup_shield(client, db_session, test_settings, ollama_url: str) -> s
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("permissions,expected", [
+    (["soc.manage"], 403),
+    (["hosts.execute"], 403),
+    (["soc.manage", "hosts.execute"], 400),
+])
+async def test_activation_mounts_ssh_hardening_with_both_permissions(
+    client, db_session, test_settings, mock_ollama, monkeypatch, permissions, expected,
+):
+    from nodvard_deck.api.deps import get_current_user
+    from nodvard_deck.main import app
+    from nodvard_deck.models import Role, RolePermission, User
+
+    ollama_url, _ = mock_ollama
+    token = await _setup_shield(client, db_session, test_settings, ollama_url)
+    headers = _auth_header(token)
+    history = await client.get("/api/v1/ext/shield/history", headers=headers)
+    assert history.status_code == 200, history.text
+
+    user = User(
+        id="shield-user", username="schutz", is_owner=False,
+        roles=[Role(name="schutz", permissions=[
+            RolePermission(permission=p) for p in ["soc.read", *permissions]
+        ])],
+    )
+    monkeypatch.setitem(app.dependency_overrides, get_current_user, lambda: user)
+    path = "/api/v1/ext/shield/defender/hosts/missing/ssh-hardening"
+    state = await client.get(path)
+    assert state.status_code == 400, state.text
+    assert state.json()["detail"] == "Kein verwalteter Linux-Server mit SSH-Zugang."
+    change = await client.post(path, json={"mode": "on"})
+    assert change.status_code == expected, change.text
+    if expected == 400:
+        assert change.json()["detail"] == state.json()["detail"]
+    else:
+        missing = "hosts.execute" if "hosts.execute" not in permissions else "soc.manage"
+        assert change.json()["detail"] == f"Berechtigung '{missing}' fehlt."
+
+
+@pytest.mark.asyncio
 async def test_ai_models_route_uses_only_saved_addresses(client, db_session, test_settings, mock_ollama):
     """Auswahlliste "KI-Modell": der Mock kennt keine Modelle -> Hinweis, kein Fehlerstatus.
     Sicherheits-Review: eine mitgeschickte Adresse (`url`) wird ignoriert -- die Route fragt nur
@@ -785,6 +824,29 @@ async def _record_incident(client, token, state, *, host_name: str, target: str,
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("offset", [-1, 2**63, 10**100])
+async def test_history_rejects_offset_outside_sqlite_range(client, db_session, test_settings, mock_ollama, offset):
+    ollama_url, _state = mock_ollama
+    token = await _setup_shield(client, db_session, test_settings, ollama_url)
+    response = await client.get(
+        "/api/v1/ext/shield/history", params={"offset": str(offset)}, headers=_auth_header(token)
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"][0]["loc"] == ["query", "offset"]
+
+
+@pytest.mark.asyncio
+async def test_history_accepts_largest_sqlite_offset(client, db_session, test_settings, mock_ollama):
+    ollama_url, _state = mock_ollama
+    token = await _setup_shield(client, db_session, test_settings, ollama_url)
+    response = await client.get(
+        "/api/v1/ext/shield/history", params={"offset": str(2**63 - 1)}, headers=_auth_header(token)
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {"items": [], "total": 0, "hosts": []}
+
+
+@pytest.mark.asyncio
 async def test_history_survives_a_restart_of_the_extension(client, db_session, test_settings, mock_ollama):
     """Der eigentliche Fund: die Historie lebte in einer deque im Prozess -- nach jedem
     Neustart/Deploy war die SOC-Seite leer. Jetzt: Extension neu laden (neue Instanz,
@@ -1333,9 +1395,9 @@ async def test_report_is_still_sent_when_the_ai_call_itself_raises(
 
 
 @pytest.mark.asyncio
-async def test_without_any_ai_server_nothing_looks_broken(client, db_session, test_settings):
-    """Ohne Ollama (die KI ist optional): die Statistik sagt „nicht eingerichtet“ (kein Fehler), und ein
-    abgestürzter Container wird gemeldet, ohne bei jedem Vorfall „KI nicht erreichbar“ zu behaupten."""
+@pytest.mark.parametrize("provider", ["ollama", "openai_compat"])
+async def test_without_any_ai_server_nothing_looks_broken(client, db_session, test_settings, provider):
+    """Ohne KI-Server bleibt die Meldung eines Container-Absturzes verständlich."""
     from nodvard_sdk.capabilities import NotificationChannel
 
     test_settings.extensions_dir = REPO_EXTENSIONS_DIR
@@ -1343,7 +1405,13 @@ async def test_without_any_ai_server_nothing_looks_broken(client, db_session, te
     token = await _bootstrap_owner(client)
     enabled = await client.post("/api/v1/extensions/shield/enable", headers=_auth_header(token))
     assert enabled.status_code == 200, enabled.text
-    from nodvard_deck_ext_shield.ollama import NO_AI_TEXT  # erst nach dem Einschalten importierbar
+    if provider == "ollama":
+        from nodvard_deck_ext_shield.ollama import NO_AI_TEXT
+    else:
+        from nodvard_deck_ext_shield.openai_compat import NO_AI_TEXT
+    record = await db_session.get(ExtensionRecord, "shield")
+    record.settings = {"ai_provider": provider}
+    await db_session.flush()
 
     channel = _RecordingChannel()
     get_extension_runtime().capabilities.provide("test-ext", NotificationChannel, channel)
@@ -1361,7 +1429,7 @@ async def test_without_any_ai_server_nothing_looks_broken(client, db_session, te
     assert "Nodvard KI ist nicht eingerichtet" not in body and "KI nicht erreichbar" not in body
     assert body.startswith("Ursache laut System") and body == body.strip() and "\n\n\n" not in body
     incidents = (await client.get("/api/v1/ext/shield/incidents", headers=_auth_header(token))).json()
-    assert NO_AI_TEXT in str(incidents)
+    assert NO_AI_TEXT in str(incidents) and NO_AI_TEXT not in body
 
 
 @pytest.mark.asyncio
@@ -2184,7 +2252,7 @@ async def test_repeated_crash_in_the_open_batch_is_counted_not_queued_twice(
     host_id = await _queue_crash(client, token, loaded.instance, host_name="docker", target="db")
     # Ruhezeit leeren: der Batch selbst muss das Zusammenfassen leisten, nicht die Ruhezeit.
     loaded.instance._store._cooldowns.clear()
-    await loaded.instance._on_transition(_crash_transition(host_id, "Docker", "DB"))  # Gross-/Kleinschreibung egal
+    await loaded.instance._on_transition(_crash_transition(host_id, "Docker", "db"))
     assert loaded.instance._store.pending_count() == 1
     assert loaded.instance._store.take_batch()[0].details["occurrences"] == 2
 
@@ -2693,3 +2761,264 @@ def test_container_watch_links_lead_to_the_proposal_or_the_watch_tab():
     assert links["path"] == "/actions?action=01a1-2fd8"
     assert [a["label"] for a in links["actions"]] == ["Aktion öffnen", "Container-Wache"]
     assert container_watch_links("a/b?c")["path"] == "/actions?action=a%2Fb%3Fc"
+
+
+async def test_ssh_hardening_is_registered_with_gate_and_protected_routes(client, db_session, test_settings, mock_ollama):
+    from nodvard_sdk import ActionExecutor
+
+    token = await _setup_shield(client, db_session, test_settings, mock_ollama[0])
+    runtime = get_extension_runtime()
+    action = runtime.actions.get("shield.ssh_hardening")
+    assert action is not None and action[0] == "shield"
+    assert action[1].host_bound is False and action[1].command_field == "command"
+    assert any("shield.ssh_hardening" in executor.action_types for executor in runtime.capabilities.query(ActionExecutor))
+    path = "/api/v1/ext/shield/defender/hosts/missing/ssh-hardening"
+    assert (await client.get(path)).status_code == 401
+    assert (await client.post(path, json={"mode": "on"})).status_code == 401
+    assert (await client.get(path, headers=_auth_header(token))).status_code == 400
+    assert (await client.post(path, json={"mode": "on"}, headers=_auth_header(token))).status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_ai_connection_test_uses_saved_provider_and_extension_permission(client, db_session, test_settings, mock_ollama):
+    import json
+
+    import httpx
+
+    from nodvard_deck.ext.runtime import get_extension_runtime
+
+    ollama_url, _state = mock_ollama
+    owner = await _setup_shield(client, db_session, test_settings, ollama_url)
+    reader = await _token_with(client, db_session, "ki-leser", "soc.read")
+    editor = await _token_with(client, db_session, "ki-einrichter", "extensions.manage")
+    record = await db_session.get(ExtensionRecord, "shield")
+    record.settings = {"ai_provider": "openai_compat", "openai_compat_url": "https://primary.test/v1",
+                       "openai_compat_model": "haupt", "openai_compat_failover_url": "https://fallback.test",
+                       "openai_compat_failover_model": "ersatz"}
+    await db_session.flush()
+    ctx = get_extension_runtime().loaded["shield"].ctx
+    key = "test" + "-token"
+    await ctx.secrets.create(label="shield-openai-compat-key", kind="generic", value=key)
+    calls = []
+
+    def answer(request):
+        calls.append(request)
+        body = {"data": [{"id": "haupt"}, {"id": key}]} if request.method == "GET" else {
+            "choices": [{"message": {"content": f"Alles gut. {key}"}}]}
+        return httpx.Response(200, json=body)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
+        ctx.http._client = http
+        path = "/api/v1/ext/shield/ai/test"
+        assert (await client.post(path)).status_code == 401
+        assert (await client.post(path, headers=_auth_header(reader))).status_code == 403
+        assert calls == []
+        invalid = await client.post(path, params={"which": "https://other.test"}, headers=_auth_header(editor))
+        assert invalid.status_code == 422 and calls == []
+        result = await client.post(path, params={"url": "https://other.test"}, headers=_auth_header(editor))
+        assert result.status_code == 200 and result.json()["ok"] is True
+        assert calls[0].url.host == "primary.test" and calls[0].url.path == "/v1/chat/completions"
+        assert json.loads(calls[0].content)["max_tokens"] == 8
+        assert result.json()["models"] == [{"value": "haupt", "label": "haupt"}]
+        assert key not in result.text
+        calls.clear()
+        fallback = await client.post(path, params={"which": "failover"}, headers=_auth_header(editor))
+        assert fallback.json()["model"] == "ersatz" and calls[0].url.host == "fallback.test"
+        calls.clear()
+        chat = await client.post("/api/v1/ext/shield/chat", json={"message": "Hallo"}, headers=_auth_header(owner))
+        assert chat.status_code == 200 and key not in chat.text
+        stats = await client.get("/api/v1/ext/shield/stats", headers=_auth_header(reader))
+        assert stats.status_code == 200 and stats.json()["ai_configured"] is True
+        assert calls[-1].method == "POST"
+    audit = await client.get("/api/v1/audit", headers=_auth_header(owner))
+    assert audit.status_code == 200 and key not in audit.text
+
+
+@pytest.mark.asyncio
+async def test_ai_models_can_select_saved_inactive_provider(client, db_session, test_settings, mock_ollama):
+    import httpx
+
+    from nodvard_deck.ext.runtime import get_extension_runtime
+
+    ollama_url, _state = mock_ollama
+    owner = await _setup_shield(client, db_session, test_settings, ollama_url)
+    record = await db_session.get(ExtensionRecord, "shield")
+    record.settings = {"ollama_url": ollama_url, "openai_compat_url": "https://primary.test"}
+    await db_session.flush()
+    calls = []
+
+    def answer(request):
+        calls.append(str(request.url))
+        return httpx.Response(200, json={"data": [{"id": "modell"}]})
+
+    ctx = get_extension_runtime().loaded["shield"].ctx
+    async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
+        ctx.http._client = http
+        result = await client.get("/api/v1/ext/shield/ai/models", params={"provider": "openai_compat"}, headers=_auth_header(owner))
+        assert result.json() == {"options": [{"value": "modell", "label": "modell"}], "error": None}
+        invalid = await client.get("/api/v1/ext/shield/ai/models", params={"provider": "unknown"}, headers=_auth_header(owner))
+        assert invalid.status_code == 422
+    assert calls == ["https://primary.test/v1/models"]
+
+
+@pytest.mark.asyncio
+async def test_extension_manager_can_test_ollama(client, db_session, test_settings, mock_ollama):
+    ollama_url, _state = mock_ollama
+    await _setup_shield(client, db_session, test_settings, ollama_url)
+    manager = await _token_with(client, db_session, "modulverwalter", "extensions.manage")
+    result = await client.post("/api/v1/ext/shield/ai/test", headers=_auth_header(manager))
+    assert result.status_code == 200, result.text
+    assert result.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_model_connection_test_rate_limit(client, db_session, test_settings, mock_ollama, monkeypatch):
+    from nodvard_deck.core import rate_limit
+
+    ollama_url, state = mock_ollama
+    await _setup_shield(client, db_session, test_settings, ollama_url)
+    manager = await _token_with(client, db_session, "modulverwalter", "extensions.manage")
+    other = await _token_with(client, db_session, "anderer-verwalter", "extensions.manage")
+    record = await db_session.get(ExtensionRecord, "shield")
+    record.settings = {"ollama_url": ollama_url, "ollama_failover_url": ollama_url}
+    await db_session.flush()
+    now = [1000.0]
+    monkeypatch.setattr(rate_limit, "_now", lambda: now[0])
+    path = "/api/v1/ext/shield/ai/test"
+    headers = _auth_header(manager)
+    for i in range(10):
+        result = await client.post(path, params={"which": "primary" if i % 2 == 0 else "failover"}, headers=headers)
+        assert result.status_code == 200 and result.json()["ok"] is True, result.text
+    assert len(state["calls"]) == 10
+
+    blocked = await client.post(path, headers=headers)
+    assert blocked.status_code == 429, blocked.text
+    assert blocked.headers["Retry-After"] == "60"
+    assert len(state["calls"]) == 10
+    result = await client.post(path, headers=_auth_header(other))
+    assert result.status_code == 200 and result.json()["ok"] is True, result.text
+    assert len(state["calls"]) == 11
+
+    now[0] += 60
+    result = await client.post(path, headers=headers)
+    assert result.status_code == 200 and result.json()["ok"] is True, result.text
+    assert len(state["calls"]) == 12
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("core_first", [False, True])
+async def test_model_connection_tests_share_core_rate_limit(
+    client, db_session, test_settings, mock_ollama, monkeypatch, core_first,
+):
+    from nodvard_deck.core import rate_limit
+
+    ollama_url, state = mock_ollama
+    await _setup_shield(client, db_session, test_settings, ollama_url)
+    manager = await _token_with(client, db_session, "modulverwalter", "extensions.manage")
+    monkeypatch.setattr(rate_limit, "_now", lambda: 1000.0)
+    model_path = "/api/v1/ext/shield/ai/test"
+    core_path = "/api/v1/extensions/shield/test"
+    headers = _auth_header(manager)
+    paths = [core_path] + [model_path] * 9 if core_first else [model_path] * 9 + [core_path]
+    for path in paths:
+        result = await client.post(path, headers=headers)
+        assert result.status_code == 200 and result.json()["ok"] is True, result.text
+    calls = len(state["calls"])
+    for path in (model_path, core_path):
+        blocked = await client.post(path, headers=headers)
+        assert blocked.status_code == 429, blocked.text
+        assert blocked.headers["Retry-After"] == "60"
+    assert len(state["calls"]) == calls
+
+
+@pytest.mark.asyncio
+async def test_stats_reuses_model_health(client, db_session, test_settings, mock_ollama):
+    import httpx
+
+    ollama_url, _state = mock_ollama
+    owner = await _setup_shield(client, db_session, test_settings, ollama_url)
+    record = await db_session.get(ExtensionRecord, "shield")
+    record.settings = {"ai_provider": "openai_compat", "openai_compat_url": "https://primary.test",
+                       "openai_compat_model": "haupt"}
+    await db_session.flush()
+    calls = []
+
+    def answer(request):
+        calls.append(request)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
+
+    ctx = get_extension_runtime().loaded["shield"].ctx
+    async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
+        ctx.http._client = http
+        for _ in range(3):
+            response = await client.get("/api/v1/ext/shield/stats", headers=_auth_header(owner))
+            assert response.status_code == 200 and response.json()["ai_healthy"] is True
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_model_test_replaces_saved_success(client, db_session, test_settings, mock_ollama):
+    import httpx
+
+    ollama_url, _state = mock_ollama
+    owner = await _setup_shield(client, db_session, test_settings, ollama_url)
+    record = await db_session.get(ExtensionRecord, "shield")
+    record.settings = {"ai_provider": "openai_compat", "openai_compat_url": "https://primary.test",
+                       "openai_compat_model": "haupt"}
+    await db_session.flush()
+    status = [200]
+
+    def answer(request):
+        body = {"data": []} if request.method == "GET" else {"choices": [{"message": {"content": "OK"}}]}
+        return httpx.Response(status[0], json=body)
+
+    ctx = get_extension_runtime().loaded["shield"].ctx
+    async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
+        ctx.http._client = http
+        success = await client.post("/api/v1/ext/shield/ai/test", headers=_auth_header(owner))
+        assert success.status_code == 200 and success.json()["ok"] is True
+        modules = await client.get("/api/v1/extensions", headers=_auth_header(owner))
+        module = next(item for item in modules.json() if item["id"] == "shield")
+        assert module["last_test"]["ok"] is True and module["needs_setup"] is False
+        status[0] = 401
+        failure = await client.post("/api/v1/ext/shield/ai/test", headers=_auth_header(owner))
+        assert failure.status_code == 200 and failure.json()["ok"] is False
+
+    settings = await client.get("/api/v1/extensions/shield/settings", headers=_auth_header(owner))
+    assert settings.status_code == 200 and settings.json()["values"] == record.settings
+    modules = await client.get("/api/v1/extensions", headers=_auth_header(owner))
+    module = next(item for item in modules.json() if item["id"] == "shield")
+    assert module["last_test"]["ok"] is False
+    assert module["last_test"]["message"] == failure.json()["message"]
+    assert module["needs_setup"] is True
+    assert any("Verbindungstest ist fehlgeschlagen" in reason for reason in module["setup_reasons"])
+    audit = await client.get("/api/v1/audit", params={"action": "extension.test"}, headers=_auth_header(owner))
+    assert audit.status_code == 200
+    rows = [row for row in audit.json() if row["target_id"] == "shield"]
+    assert sorted(row["outcome"] for row in rows) == ["failure", "success"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("known", [False, True])
+@pytest.mark.parametrize("method", ["save_test_result", "check_test_limit"])
+async def test_model_test_helpers_require_known_module_manager(
+    client, db_session, test_settings, mock_ollama, known, method,
+):
+    from nodvard_deck.core import known_actors
+    from nodvard_deck.models import User
+    from nodvard_deck.services import extension_setup
+    from nodvard_sdk import Actor
+    from nodvard_sdk.errors import PermissionDenied
+    from sqlalchemy import select
+
+    ollama_url, _state = mock_ollama
+    await _setup_shield(client, db_session, test_settings, ollama_url)
+    await _token_with(client, db_session, "statusleser", "soc.read")
+    name = "statusleser" if known else "owner1"
+    user = (await db_session.execute(select(User).where(User.username == name))).scalar_one()
+    ctx = get_extension_runtime().loaded["shield"].ctx
+    actors = [("user", user.id)] if known else []
+    values = {"ok": True, "message": "OK"} if method == "save_test_result" else {}
+    with known_actors.known_while(actors), pytest.raises(PermissionDenied):
+        await getattr(ctx.settings, method)(actor=Actor.user(user.id, name), **values)
+    assert await extension_setup.load_last_tests(db_session) == {}

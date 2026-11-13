@@ -7,8 +7,8 @@ import { TerminalPage, terminalSocketUrl } from "./TerminalPage";
 
 /**
  * xterm.js und WebSocket sind Test-Doubles (jsdom hat weder Canvas noch echte
- * Sockets). Geprueft wird der Vertrag der Seite gegen die bestehende Terminal-API:
- * Ticket holen, WS-Bruecke oeffnen, Bytes in beide Richtungen, Resize als
+ * Sockets). Geprüft wird der Vertrag der Seite gegen die bestehende Terminal-API:
+ * Ticket holen, WS-Brücke öffnen, Bytes in beide Richtungen, Resize als
  * JSON-Steuerframe, Tabs bleiben beim Umschalten verbunden. Die echte Kette (SSH ->
  * WS) ist Backend-seitig bewiesen (test_terminal_api.py) und live im Browser.
  */
@@ -148,7 +148,7 @@ describe("TerminalPage", () => {
     expect(screen.getByRole("link", { name: "Server hinzufügen" })).toHaveAttribute("href", "/settings/hosts");
   });
 
-  it("Zugänge da, aber kein Terminal: das Modul ist aus – Link zu den Erweiterungen nur mit extensions.manage", async () => {
+  it("Zugänge da, aber kein Terminal: das Modul ist aus, Link zu den Erweiterungen nur mit extensions.manage", async () => {
     const withAccess = HOSTS.map((h) => ({ ...h, credential: { kind: "ssh_key" } }));
     vi.stubGlobal("fetch", mockFetch([], { terminal: [], console: [] }, withAccess));
     renderPage();
@@ -171,7 +171,7 @@ describe("TerminalPage", () => {
     expect(screen.queryByTestId("terminal-empty")).toBeNull();
   });
 
-  it("bietet nur Hosts mit Terminal an, Konsole zusaetzlich wo verfuegbar", async () => {
+  it("bietet nur Hosts mit Terminal an, Konsole zusätzlich wo verfügbar", async () => {
     vi.stubGlobal("fetch", mockFetch([]));
     renderPage();
     await screen.findByText("Raspberry Pi");
@@ -220,7 +220,7 @@ describe("TerminalPage", () => {
     expect(screen.getByRole("img", { name: "nicht mehr vorhanden" })).toBeInTheDocument();
   });
 
-  it("oeffnet eine echte Sitzung: Ticket mit Terminalgroesse, Bytes hin und zurueck, Resize als Steuerframe", async () => {
+  it("öffnet eine echte Sitzung: Ticket mit Terminalgröße, Bytes hin und zurück, Resize als Steuerframe", async () => {
     const sessions: unknown[] = [];
     vi.stubGlobal("fetch", mockFetch(sessions));
     renderPage();
@@ -248,7 +248,7 @@ describe("TerminalPage", () => {
     expect(screen.getByRole("button", { name: "Neu verbinden" })).toBeTruthy();
   });
 
-  it("mehrere Tabs: Umschalten laesst die andere Sitzung offen, Schliessen beendet nur die eigene", async () => {
+  it("mehrere Tabs: Umschalten lässt die andere Sitzung offen, Schließen beendet nur die eigene", async () => {
     vi.stubGlobal("fetch", mockFetch([]));
     renderPage();
     const openButtons = await screen.findAllByRole("button", { name: "Terminal öffnen" });
@@ -339,10 +339,10 @@ describe("TerminalPage", () => {
     // jsdom wertet keine Media Queries aus, daher die Klassen.
     expect(list).toHaveClass("max-h-[60dvh]", "overflow-auto", "sm:max-h-48", "lg:max-h-none");
     expect(list).not.toHaveClass("max-h-48");
-    expect(screen.getByTestId("terminal-hint")).toHaveTextContent("Einen Server wählen – jede Sitzung öffnet sich als eigener Tab.");
+    expect(screen.getByTestId("terminal-hint")).toHaveTextContent("Einen Server wählen, jede Sitzung öffnet sich als eigener Tab.");
   });
 
-  it("?host=<id> oeffnet direkt einen Tab", async () => {
+  it("?host=<id> öffnet direkt einen Tab", async () => {
     const sessions: unknown[] = [];
     vi.stubGlobal("fetch", mockFetch(sessions));
     renderPage("/terminal?host=h-vm");
@@ -351,7 +351,7 @@ describe("TerminalPage", () => {
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["win-game"]);
   });
 
-  it("?host=…&scope=container&ref=… oeffnet eine Shell im Container, auch ohne Terminal auf dem Server selbst", async () => {
+  it("?host=…&scope=container&ref=… öffnet eine Shell im Container, auch ohne Terminal auf dem Server selbst", async () => {
     const sessions: unknown[] = [];
     vi.stubGlobal("fetch", mockFetch(sessions, { terminal: [], console: [] }, HOSTS.map((h) => ({ ...h, credential: { kind: "ssh_key" } }))));
     renderPage("/terminal?host=h-pi&scope=container&ref=nginx");
@@ -365,7 +365,7 @@ describe("TerminalPage", () => {
     "/terminal?host=h-pi&scope=container",
     "/terminal?host=h-pi&ref=nginx",
     "/terminal?host=h-pi&scope=Container&ref=nginx",
-  ])("ein ungueltiger oder halber Link %s oeffnet gar nichts -- nie die Shell des Servers", async (path) => {
+  ])("ein ungültiger oder halber Link %s öffnet gar nichts -- nie die Shell des Servers", async (path) => {
     const sessions: unknown[] = [];
     vi.stubGlobal("fetch", mockFetch(sessions));
     renderPage(path);

@@ -250,7 +250,7 @@ def test_only_valid_package_names_count_as_phased():
 def test_the_phasing_check_only_simulates_in_english_without_root():
     up = _updates()
     cmd = up.PHASING_COMMAND
-    runs = re.findall(r"LC_ALL=C apt-get (.*?) 2>/dev/null", cmd)
+    runs = re.findall(r"LC_ALL=C apt-get (.*?) 2>&1", cmd)
     assert runs == ["-s upgrade --with-new-pkgs",
                     "-s -o APT::Get::Always-Include-Phased-Updates=true upgrade --with-new-pkgs"]
     assert cmd.count("apt-get") == len(runs) + 1  # dazu nur `command -v apt-get`

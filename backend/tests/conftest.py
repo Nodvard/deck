@@ -7,6 +7,7 @@ Kein Netzwerk, kein SSH, kein Ollama, keine geteilte Datei zwischen Tests.
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -274,6 +275,8 @@ async def client(db_session: AsyncSession, test_settings) -> AsyncIterator[Async
     # in `app.router.routes` einfuegen -- ohne dieses Snapshot/Restore wuerde eine in
     # EINEM Test aktivierte Extension in JEDEM folgenden Test weiter gemountet sein.
     original_routes = list(app.router.routes)
+    # Ein lokaler Frontend-Build darf die zusätzlich eingebundenen Testrouten nicht abfangen.
+    app.router.routes[:] = [route for route in original_routes if getattr(route, "name", None) != "frontend"]
     reset_extension_runtime()
 
     # `raise_app_exceptions=False`: httpx' Default lässt eine unbehandelte Exception
@@ -597,6 +600,28 @@ async def _fake_powershell(process) -> None:  # noqa: ANN001
     process.exit(code)
 
 
+def _stdin_probe_command(wrapper: str, payload: bytes) -> str:
+    """Nur vollständige, bekannte Testbefehle aus der POSIX-Hülle annehmen."""
+    match = re.search(r"@@nodvard-ende-[0-9a-f]{32}", wrapper)
+    if match is None:
+        raise ValueError("Unbekannte Testhülle")
+    mark = match.group()
+    expected = (
+        f"__nd=$(cat) || __nd=; case $__nd in {mark}*{mark}) ;; "
+        "*) echo 'Nodvard Deck: Befehl kam nicht vollständig an.' >&2; exit 125;; esac; "
+        f'exec </dev/null; __nd=${{__nd#{mark}}}; eval "unset __nd; ${{__nd%{mark}}}"'
+    )
+    boundary = mark.encode()
+    if wrapper != expected or len(payload) < 2 * len(boundary):
+        raise ValueError("Unbekannte oder unvollständige Testhülle")
+    if not payload.startswith(boundary) or not payload.endswith(boundary):
+        raise ValueError("Unvollständige Testeingabe")
+    command = payload[len(boundary):-len(boundary)].decode("utf-8")
+    if "\x00" in command or command not in FAKE_PROBE:
+        raise ValueError("Unbekannter Testbefehl")
+    return command
+
+
 async def _handle_ssh_process(process) -> None:  # noqa: ANN001 - asyncssh.SSHServerProcess
     """Live gefunden: Client und Server MUESSEN sich auf dasselbe Encoding einigen
     (hier ueberall rohe Bytes, `encoding=None` bei `asyncssh.listen()` unten) --
@@ -605,8 +630,20 @@ async def _handle_ssh_process(process) -> None:  # noqa: ANN001 - asyncssh.SSHSe
     (core/ssh.py `run()` hat denselben Fund dokumentiert). `drain()` vor `exit()`,
     weil `exit()` den Kanal sofort schliesst -- ohne Drain kann der zuvor
     geschriebene Puffer noch unversendet sein."""
-    if process.command in FAKE_PROBE:
-        exit_code, out, err = FAKE_PROBE[process.command]
+    command = process.command
+    if command and command.startswith("__nd=$(cat) || __nd=; case $__nd in "):
+        payload = await process.stdin.read()
+        try:
+            command = _stdin_probe_command(command, payload)
+        except ValueError:
+            process.stderr.write(b"Unbekannte oder unvollstaendige Testeingabe\n")
+            await process.stderr.drain()
+            process.exit(125)
+            return
+    if command in FAKE_PROBE:
+        if " -f - " in command:
+            await process.stdin.read()
+        exit_code, out, err = FAKE_PROBE[command]
         if out:
             process.stdout.write(out.encode())
         if err:

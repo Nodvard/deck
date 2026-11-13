@@ -7,10 +7,13 @@ import dataclasses
 import importlib
 import json
 import re
+import shlex
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from docker_stack_fakes import EXT_DIR, HASHES, FakeExec, FakeSettings, docker_on, result, row  # noqa: F401 - Fixtures
@@ -213,6 +216,19 @@ def test_rollback_names_and_commands():
         su.cmd_container_images(["a;b"])
     with pytest.raises(ValueError):
         su.cmd_image_id("$(id)")
+
+
+@pytest.mark.parametrize("volume", ["shop_data", "shop-cache.2", "a" * 64])
+def test_volume_users_command(volume):
+    assert _mods().stack_update.cmd_volume_users(volume) == [
+        "docker", "ps", "--filter", f"volume={volume}", "--format", "{{.Names}}",
+    ]
+
+
+@pytest.mark.parametrize("volume", ["", "--all", "a b", "a;b", "$(id)", "../data", "data\n", "a" * 256])
+def test_volume_users_command_rejects_bad_names(volume):
+    with pytest.raises(ValueError, match="Ungültiger Volume-Name"):
+        _mods().stack_update.cmd_volume_users(volume)
 
 
 def test_reading_the_containers():
@@ -914,6 +930,26 @@ def test_backup_commands():
     assert sb.restore_hint() == "Zurückspielen geht im Reiter Stacks unter „Sicherungen“."
 
 
+@pytest.mark.parametrize(("path", "expected"), [
+    ("/", "/"), ("/home/nodvard/", "/home/nodvard"),
+])
+def test_the_free_space_command_accepts_a_trailing_slash(path, expected):
+    assert _mods().stack_backup.cmd_free_space(path) == ["df", "-Pk", expected]
+
+
+@pytest.mark.asyncio
+async def test_backup_reads_a_home_with_a_trailing_slash(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch)
+    sftp = env.fake.sftp_server
+    monkeypatch.setattr(sftp, "realpath", AsyncMock(return_value="/home/deck/"))
+    assert await env.update.volumes.home(env.host) == ("/home/deck", "1000:1000")
+    plan = await env.update.volumes.plan(env.host, "shop", ["shop_data"])
+    assert plan["error"] is None
+    assert ["df", "-Pk", "/home/deck"] in env.docker.calls
+    done = await env.executor.execute(_request(backup=True))
+    assert done.success is True, done.error
+
+
 def test_the_free_space_command_needs_a_plain_path():
     sb = _mods().stack_backup
     assert sb.cmd_free_space("/home/deck") == ["df", "-Pk", "/home/deck"]
@@ -931,6 +967,28 @@ def test_stop_and_start_take_only_plain_service_names():
         for bad in ([], ["web;id"], ["--all"], ["web", ""]):
             with pytest.raises(ValueError, match=re.escape(f"Ungültige Dienste: {bad!r}")):
                 command(stack, bad)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("home", "base"), [
+    ("/", "/nodvard-sicherungen/shop"),
+    ("/home/nodvard/", "/home/nodvard/nodvard-sicherungen/shop"),
+])
+async def test_backup_paths_with_a_trailing_slash(tmp_path, monkeypatch, home, base):
+    env = await _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(env.update.volumes, "home", lambda host: _async((home, "1000:1000")))
+    sftp = env.docker.fake.sftp_server
+    sftp.dirs.update((home, home.rstrip("/")))
+    plan = await env.update.volumes.plan(env.host, "shop", ["shop_data"])
+    assert plan["error"] is None
+    assert plan["folder"] == f"{base}/"
+    done = await env.executor.execute(_request(backup=True))
+    assert done.success is True, done.error
+    assert base in sftp.dirs
+    archives = [c for c in env.docker.calls if c[:2] == ["docker", "run"]]
+    folder = next(arg.removesuffix(":/backup") for arg in archives[0] if arg.endswith(":/backup"))
+    assert folder.startswith(f"{base}/") and folder in sftp.dirs
+    assert f"{folder}/inhalt.json" in sftp.files
 
 
 @pytest.mark.asyncio
@@ -1280,6 +1338,48 @@ async def test_a_cancel_after_stopping_starts_the_services_again(tmp_path, monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("answer", [result("outside\n"), result(stderr="Docker nicht erreichbar", code=1), ConnectionError("weg")])
+async def test_hostwide_volume_users_block_the_archive(tmp_path, monkeypatch, answer):
+    env = await _setup(tmp_path, monkeypatch)
+    original = env.fake.run_argv
+    checked = []
+
+    async def run_argv(host, argv, **kwargs):
+        if argv[:3] == ["docker", "ps", "--filter"]:
+            assert argv == ["docker", "ps", "--filter", "volume=shop_data", "--format", "{{.Names}}"]
+            assert any("stop" in call for call in env.docker.calls)
+            checked.append(argv)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+        return await original(host, argv, **kwargs)
+
+    monkeypatch.setattr(env.fake, "run_argv", run_argv)
+    done = await env.executor.execute(_request(backup=True))
+    assert not done.success and "shop_data" in done.error
+    assert checked and any("start" in call for call in env.docker.calls)
+    assert not any(call[:2] == ["docker", "run"] or "up" in call for call in env.docker.calls)
+    assert _stamp_folders(env) == [] and env.docker.pending() == []
+
+
+@pytest.mark.asyncio
+async def test_a_bad_volume_name_stops_the_backup_and_starts_the_services_again(tmp_path, monkeypatch):
+    env = await _setup(tmp_path, monkeypatch)
+    su = _mods().stack_update
+
+    def bad_name(volume):
+        assert any("stop" in call for call in env.docker.calls)
+        raise ValueError(f"Ungültiger Volume-Name: {volume!r}")
+
+    monkeypatch.setattr(su, "cmd_volume_users", bad_name)
+    done = await env.executor.execute(_request(backup=True))
+    assert not done.success and "Die Nutzer von Volume shop_data ließen sich nicht prüfen: Ungültiger Volume-Name" in done.error
+    assert any("start" in call for call in env.docker.calls)
+    assert not any(call[:2] == ["docker", "run"] or "up" in call for call in env.docker.calls)
+    assert _stamp_folders(env) == [] and env.docker.pending() == []
+
+
+@pytest.mark.asyncio
 async def test_a_volume_another_running_service_writes_to_is_not_backed_up(tmp_path, monkeypatch):
     env = await _setup(tmp_path, monkeypatch)
     env.docker.mounts["worker"] = ["shop_data"]
@@ -1457,6 +1557,496 @@ async def test_an_abort_while_cleaning_up_after_a_failure_still_logs_what_is_lef
     await asyncio.wait_for(asyncio.gather(*env.executor._cleanups), 5)
     [folder] = _stamp_folders(env)
     assert f"docker_stack_backup_left_after_abort folder={folder} packed=shop_data packing=shop_more" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("packing", "cancellations", "shutdown"), [
+    ("failed", 1, False), ("failed", 3, False), ("cancelled", 2, False), ("raised", 2, False),
+    ("failed", 1, True), ("failed", 3, True), ("cancelled", 2, True), ("raised", 2, True),
+])
+async def test_backup_cleanup_keeps_gate_until_restart_finishes(db_session, tmp_path, monkeypatch, packing, cancellations, shutdown):
+    from docker_stack_fakes import FakeSftp
+    from nodvard_deck.core import gate, ssh
+    from nodvard_deck.ext import runtime as runtime_module
+    from nodvard_deck.ext.context import ExecHandle, _PermissionChecker
+    from nodvard_sdk import ActionResult, GateOutcome, Host
+    from nodvard_sdk.capabilities import ActionExecutor
+    from nodvard_sdk.errors import ActionBlocked
+    from nodvard_deck_ext_docker import commands, resources
+
+    m = _mods()
+    host = Host(id="h1", name="server", display_name="server", address="192.0.2.1")
+    other = host.model_copy(update={"id": "other-host"})
+    handle = ExecHandle(_PermissionChecker("docker", ["hosts.execute"]), settings=None)
+    handle._connection = AsyncMock(return_value=object())
+    sftp = FakeSftp({})
+    sftp.exit, sftp.wait_closed = Mock(), AsyncMock()
+    monkeypatch.setattr(ssh, "start_sftp", AsyncMock(return_value=sftp))
+    ctx = SimpleNamespace(exec=handle)
+    volumes = m.stack_backup.VolumeBackup(ctx, resources.DockerResources(ctx))
+    update = m.stack_update.StackUpdate(ctx, None, None, None, m.stack_update.StackBackups(tmp_path), volumes)
+    executor = m.stack_update.DockerStackUpdateExecutor(ctx, update, None)
+    stack = m.stacks.Stack("shop", [], FOLDER, (f"{FOLDER}/compose.yaml",), (), "compose")
+    archive_entered, cleaning, resume, late = (asyncio.Event() for _ in range(4))
+    order, background = [], []
+    stop = m.stack_backup.cmd_stop_services(stack, ["web"])
+    start = m.stack_backup.cmd_start_services(stack, ["web"])
+    remove = sftp.remove
+
+    async def remove_archive(path):
+        await remove(path)
+        if path.endswith(m.stack_backup.PART_SUFFIX):
+            order.append("archive-removed")
+
+    sftp.remove = remove_archive
+
+    async def transport(conn, command, **kwargs):
+        if command == commands.system_df_verbose():
+            return 0, json.dumps({"Volumes": [{"Name": "shop_data", "Size": "1MB", "Links": "1"}]}), ""
+        if command == commands.networks():
+            return 0, "", ""
+        argv = shlex.split(command)
+        if argv[:2] == ["df", "-Pk"]:
+            return 0, "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 10000 1 9999 1% /\n", ""
+        if argv[:3] == ["docker", "image", "inspect"]:
+            return 0, OLD + "\n", ""
+        if argv == stop:
+            order.append("services-stopped")
+            return 0, "", ""
+        if argv == m.stack_update.cmd_volume_users("shop_data"):
+            assert order == ["services-stopped"]  # erst nach dem Stoppen gefragt; danach nutzt das Volume niemand mehr
+            return 0, "", ""
+        if argv[:2] == ["docker", "run"]:
+            folder = next(a.removesuffix(":/backup") for a in argv if a.endswith(":/backup"))
+            sftp.files[f"{folder}/shop_data{m.stack_backup.PART_SUFFIX}"] = b"halb"
+            archive_entered.set()
+            if packing == "cancelled":
+                await asyncio.Event().wait()
+            order.append("packing-failed")
+            if packing == "raised":
+                raise RuntimeError("Packen gescheitert")
+            return 1, "", "Packen gescheitert"
+        if argv[:3] == ["docker", "rm", "-f"]:
+            order.append("cleanup-entered")
+            cleaning.set()
+            await resume.wait()
+            with pytest.raises(ActionBlocked):
+                await handle.run(other, "true")
+            return 0, "", ""
+        if argv == start:
+            order.append("services-started")
+            return 0, "", ""
+        raise AssertionError(command)
+
+    monkeypatch.setattr(ssh, "run", transport)
+
+    async def inherited():
+        await late.wait()
+        with pytest.raises(ActionBlocked):
+            await handle.run(host, "true")
+
+    class Executor:
+        action_types = executor.action_types
+
+        async def execute(self, request):
+            background.append(asyncio.create_task(inherited()))
+            try:
+                await executor.save_volumes(host, stack, ["web"], ["shop_data"], time.monotonic())
+                return ActionResult(success=True)
+            finally:
+                order.append("executor-ended")
+
+    runtime = runtime_module.ExtensionRuntime()
+    runtime.capabilities.provide("docker", ActionExecutor, Executor())
+    monkeypatch.setattr(runtime_module, "_runtime", runtime)
+    decision = await gate.propose(db_session, ext_id="docker", command_field=None, request=_request(backup=True))
+    assert decision.outcome == GateOutcome.REQUIRE_CONFIRMATION
+    action, moved = await gate.approve(db_session, decision.action_id, user_id="u1", wait_s=0)
+    assert moved
+    task = gate._running[action.id]
+    try:
+        await asyncio.wait_for(archive_entered.wait(), 5)
+        if packing == "cancelled":
+            order.append("packing-cancelled")
+            task.cancel()
+        await asyncio.wait_for(cleaning.wait(), 5)
+        for i in range(cancellations):
+            order.append(f"cancel-{i}")
+            if shutdown and i == 0:
+                await gate.shutdown_running(timeout=0)
+                assert not gate.is_running(action.id)
+            else:
+                task.cancel()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+        assert not task.done()
+        assert executor._cleanups
+        with pytest.raises(ActionBlocked):
+            await handle.run(host, "true")
+        resume.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), 5)
+        await asyncio.wait_for(asyncio.gather(*executor._cleanups), 5)
+        assert order[:3] == ["services-stopped", "packing-cancelled" if packing == "cancelled" else "packing-failed", "cleanup-entered"]
+        assert order.index(f"cancel-{cancellations - 1}") < order.index("archive-removed") < order.index("services-started") < order.index("executor-ended")
+        assert not sftp.files
+        assert not any(path.startswith(STAMP_ROOT) for path in sftp.dirs)
+        with pytest.raises(ActionBlocked):
+            await handle.run(host, "true")
+        await db_session.refresh(action)
+        assert action.status == "failed" and action.result["error"] == gate.CANCELLED_ERROR
+    finally:
+        resume.set()
+        await asyncio.gather(task, *executor._cleanups, return_exceptions=True)
+        late.set()
+        await asyncio.gather(*background)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interruption", ["cancel", "timeout", "shutdown"])
+async def test_successful_backup_restarts_through_gate_after_two_cancellations(db_session, tmp_path, monkeypatch, interruption):
+    from docker_stack_fakes import FakeSftp
+    from nodvard_deck.core import gate, ssh
+    from nodvard_deck.ext import runtime as runtime_module
+    from nodvard_deck.ext.context import ExecHandle, _PermissionChecker
+    from nodvard_deck_ext_docker import commands, git_apply, resources
+    from nodvard_sdk import Host
+    from nodvard_sdk.capabilities import ActionExecutor
+    from nodvard_sdk.errors import ActionBlocked
+
+    m = _mods()
+    host = Host(id="h1", name="server", display_name="Server", address="192.0.2.1")
+    handle = ExecHandle(_PermissionChecker("docker", ["hosts.execute"]), settings=None)
+    handle._connection = AsyncMock(return_value=object())
+    sftp = FakeSftp({})
+    sftp.exit, sftp.wait_closed = Mock(), AsyncMock()
+    monkeypatch.setattr(ssh, "start_sftp", AsyncMock(return_value=sftp))
+    ctx = SimpleNamespace(exec=handle)
+    volumes = m.stack_backup.VolumeBackup(ctx, resources.DockerResources(ctx))
+    update = m.stack_update.StackUpdate(ctx, None, None, None, m.stack_update.StackBackups(tmp_path), volumes)
+    saver = m.stack_update.DockerStackUpdateExecutor(ctx, update, None)
+    choice = {"volumes": ["shop_data"], "services": ["web"]}
+    apply = SimpleNamespace(ctx=ctx, actions=None, saver=saver, backup_choice=AsyncMock(return_value=(["shop_data"], ["web"])))
+    executor = git_apply.DockerStackGitApplyExecutor(apply)
+    stack = m.stacks.Stack("shop", [], FOLDER, (f"{FOLDER}/compose.yaml",), (), "compose")
+    saved, restarting, resume, late = (asyncio.Event() for _ in range(4))
+    order, background, restarts = [], [], []
+    stopped = set()
+
+    async def transport(conn, command, **kwargs):
+        if command == commands.system_df_verbose():
+            return 0, json.dumps({"Volumes": [{"Name": "shop_data", "Size": "1MB", "Links": "1"}]}), ""
+        if command == commands.networks():
+            return 0, "", ""
+        argv = shlex.split(command)
+        if argv[:2] == ["df", "-Pk"]:
+            return 0, "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 10000 1 9999 1% /\n", ""
+        if argv[:3] == ["docker", "image", "inspect"]:
+            return 0, OLD + "\n", ""
+        if argv == m.stack_backup.cmd_stop_services(stack, ["web"]):
+            stopped.add("web")
+            order.append("stopped")
+            return 0, "", ""
+        if argv == m.stack_update.cmd_volume_users("shop_data"):
+            assert stopped == {"web"}  # erst nach dem Stoppen gefragt; danach nutzt das Volume niemand mehr
+            return 0, "", ""
+        if argv[:2] == ["docker", "run"]:
+            folder = next(a.removesuffix(":/backup") for a in argv if a.endswith(":/backup"))
+            sftp.files[f"{folder}/shop_data.tar.gz"] = b"archive"
+            order.append("saved")
+            return 0, "", ""
+        if argv == git_apply.cmd_all_services(stack):
+            restarts.append(asyncio.current_task())
+            restarting.set()
+            await resume.wait()
+            with pytest.raises(ActionBlocked):
+                await handle.run(host.model_copy(update={"id": "other-host"}), "true")
+            return 0, "web\n", ""
+        if argv == m.stack_backup.cmd_start_services(stack, ["web"]):
+            stopped.remove("web")
+            order.append("started")
+            return 0, "", ""
+        raise AssertionError(command)
+
+    async def put(*args):
+        saved.set()
+        await asyncio.Event().wait()
+
+    async def inherited():
+        await late.wait()
+        with pytest.raises(ActionBlocked):
+            await handle.run(host, "true")
+
+    class Executor:
+        action_types = executor.action_types
+
+        async def execute(self, request):
+            background.append(asyncio.create_task(inherited()))
+            return await executor._run(host, stack, {"backup": choice}, {})
+
+    monkeypatch.setattr(ssh, "run", transport)
+    monkeypatch.setattr(executor, "_stale", AsyncMock(return_value=None))
+    monkeypatch.setattr(executor, "_put", put)
+    if interruption == "timeout":
+        monkeypatch.setattr(gate, "EXECUTE_TIMEOUT_S", 1)
+    runtime = runtime_module.ExtensionRuntime()
+    runtime.capabilities.provide("docker", ActionExecutor, Executor())
+    monkeypatch.setattr(runtime_module, "_runtime", runtime)
+    decision = await gate.propose(
+        db_session, ext_id="docker", command_field=None, request=_request(action=git_apply.APPLY_ACTION),
+    )
+    action, moved = await gate.approve(db_session, decision.action_id, user_id="u1", wait_s=0)
+    assert moved
+    task = gate._running[action.id]
+    shutdown = None
+    try:
+        await asyncio.wait_for(saved.wait(), 5)
+        assert order == ["stopped", "saved"] and stopped == {"web"}
+        if interruption != "timeout":
+            task.cancel()
+        await asyncio.wait_for(restarting.wait(), 5)
+        if interruption in {"timeout", "shutdown"}:
+            await gate.shutdown_running(timeout=0)
+            assert not gate.is_running(action.id)
+            shutdown = asyncio.create_task(gate.shutdown_running())
+        else:
+            task.cancel()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert not task.done()
+        if shutdown is not None:
+            assert not shutdown.done()
+        with pytest.raises(ActionBlocked):
+            await handle.run(host, "true")
+        resume.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), 5)
+        if shutdown is not None:
+            await asyncio.wait_for(shutdown, 5)
+        assert order == ["stopped", "saved", "started"] and not stopped
+        assert len([p for p in sftp.files if p.endswith("/shop_data.tar.gz")]) == 1
+        await db_session.refresh(action)
+        assert action.status == "failed" and action.result["error"] == gate.CANCELLED_ERROR
+        late.set()
+        await asyncio.gather(*background)
+        assert not gate._cleanups
+    finally:
+        resume.set()
+        late.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, *restarts, *background, *([shutdown] if shutdown is not None else []), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_cleanup_deadline_does_not_wait_for_a_stuck_task(monkeypatch, caplog, cancelled):
+    module = _mods().stack_update
+    monkeypatch.setattr(module, "CLEANUP_TIMEOUT_S", 0.05, raising=False)
+    entered, stopped, resume = (asyncio.Event() for _ in range(3))
+
+    async def stuck():
+        entered.set()
+        try:
+            await resume.wait()
+        except asyncio.CancelledError:
+            stopped.set()
+            await resume.wait()
+
+    cleanup = asyncio.create_task(stuck())
+    waiter = asyncio.create_task(module._wait_for_cleanup(cleanup))
+    cancellations = []
+
+    async def cancel_repeatedly():
+        while not waiter.done():
+            await asyncio.sleep(0.01)
+            waiter.cancel()
+
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        if cancelled:
+            cancellations.append(asyncio.create_task(cancel_repeatedly()))
+        done, _ = await asyncio.wait({waiter}, timeout=1)
+        assert waiter in done
+        with pytest.raises(asyncio.CancelledError if cancelled else TimeoutError):
+            await waiter
+        await asyncio.wait_for(stopped.wait(), 1)
+        assert not cleanup.done()
+        assert "docker_clean_up_timed_out" in caplog.text
+    finally:
+        for task in cancellations:
+            task.cancel()
+        resume.set()
+        waiter.cancel()
+        await asyncio.gather(waiter, cleanup, *cancellations, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_completed_backup_restarts_after_two_cancels_through_gate(db_session, tmp_path, monkeypatch):
+    from nodvard_deck.core import gate, ssh
+    from nodvard_deck.ext.context import ExecHandle, _PermissionChecker
+    from nodvard_sdk import GateOutcome, Host
+    from nodvard_sdk.errors import ActionBlocked
+
+    env = await _setup(tmp_path, monkeypatch)
+    host = Host(id="h1", name="server", display_name="server", address="192.0.2.1", tags=["docker"])
+    ctx = env.executor._ctx
+    ctx.hosts.get = AsyncMock(return_value=host)
+    handle = ExecHandle(_PermissionChecker("docker", ["hosts.read", "hosts.execute"]), settings=None)
+    handle._connection = AsyncMock(return_value=object())
+    ctx.exec = handle
+    sftp = env.fake.sftp_server
+    sftp.exit, sftp.wait_closed = Mock(), AsyncMock()
+    monkeypatch.setattr(ssh, "start_sftp", AsyncMock(return_value=sftp))
+    finishing, restarting, resume = (asyncio.Event() for _ in range(3))
+    restarts = []
+    start = env.m.stack_backup.cmd_start_services(env.stack, ["web"])
+    stop = env.m.stack_backup.cmd_stop_services(env.stack, ["web"])
+
+    async def transport(conn, command, **kwargs):
+        argv = shlex.split(command)
+        if argv == env.m.stack_update.cmd_tag(env.m.stack_update.rollback_ref("shop", "web", "pending"), _previous(env)):
+            finishing.set()
+            await asyncio.Event().wait()
+        if argv == stop:
+            env.docker.stopped.add("web")
+        if argv == start:
+            env.docker.stopped.remove("web")
+        if argv[:2] == ["docker", "run"]:
+            _archive_file(env, argv)
+        if command.startswith("docker ps -a --filter") or " hashes" in command or "config --quiet" in command:
+            reply = await env.fake.run(host, command, timeout_s=kwargs["timeout_s"])
+        else:
+            reply = await env.fake.run_argv(host, argv, timeout_s=kwargs["timeout_s"], stdin=kwargs.get("stdin"))
+        return reply.exit_code, reply.stdout, reply.stderr
+
+    start_again = env.executor.start_again
+
+    async def delayed_start(*args):
+        restarts.append(asyncio.current_task())
+        restarting.set()
+        await resume.wait()
+        return await start_again(*args)
+
+    monkeypatch.setattr(ssh, "run", transport)
+    monkeypatch.setattr(env.executor, "start_again", delayed_start)
+    monkeypatch.setattr(gate, "find_executor", AsyncMock(return_value=env.executor))
+    decision = await gate.propose(db_session, ext_id="docker", command_field=None, request=_request(backup=True))
+    assert decision.outcome == GateOutcome.REQUIRE_CONFIRMATION
+    action, moved = await gate.approve(db_session, decision.action_id, user_id="u1", wait_s=0)
+    assert moved
+    task = gate._running[action.id]
+    try:
+        await asyncio.wait_for(finishing.wait(), 5)
+        [folder] = _stamp_folders(env)
+        archive = f"{folder}/shop_data.tar.gz"
+        assert sftp.files[archive] == b"fertig"
+        assert env.docker.stopped == {"web"}
+        task.cancel()
+        await asyncio.wait_for(restarting.wait(), 5)
+        task.cancel()
+        done, _ = await asyncio.wait({task}, timeout=0.05)
+        assert task not in done
+        assert restarts[0] in env.executor._cleanups
+        assert env.update.actions.locks.held("h1", "shop") is not None
+        resume.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), 5)
+        assert not env.docker.stopped
+        assert sftp.files[archive] == b"fertig"
+        assert env.docker.pending() == []
+        assert env.update.actions.locks.held("h1", "shop") is None
+        with pytest.raises(ActionBlocked):
+            await handle.run(host, "true")
+        await db_session.refresh(action)
+        assert action.status == "failed" and action.result["error"] == gate.CANCELLED_ERROR
+    finally:
+        resume.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, *restarts, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["remove", "rmdir"])
+async def test_stuck_sftp_cleanup_still_restarts_services(db_session, tmp_path, monkeypatch, operation):
+    from nodvard_deck.core import gate
+
+    env = await _setup(tmp_path, monkeypatch)
+    _archive_breaks(env, TimeoutError())
+    monkeypatch.setattr(env.m.stack_update, "READ_TIMEOUT_S", 0.02)
+    monkeypatch.setattr(gate, "find_executor", AsyncMock(return_value=env.executor))
+    sftp = env.fake.sftp_server
+    original = getattr(sftp, operation)
+    entered, resume = asyncio.Event(), asyncio.Event()
+
+    async def stuck(path):
+        if operation == "rmdir" or path.endswith(".part"):
+            entered.set()
+            await resume.wait()
+        return await original(path)
+
+    monkeypatch.setattr(sftp, operation, stuck)
+    decision = await gate.propose(db_session, ext_id="docker", command_field=None, request=_request(backup=True))
+    action, moved = await gate.approve(db_session, decision.action_id, user_id="u1", wait_s=0)
+    assert moved
+    task = gate._running[action.id]
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        done, _ = await asyncio.wait({task}, timeout=1)
+        assert task in done
+        await task
+        await db_session.refresh(action)
+        assert action.status == "failed" and STAMP_ROOT in action.result["error"]
+        assert any("start" in call for call in env.docker.calls)
+        assert not any("up" in call for call in env.docker.calls)
+        assert env.update.actions.locks.held("h1", "shop") is None
+    finally:
+        resume.set()
+        await asyncio.gather(task, *env.executor._cleanups, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_deadline_finishes_gate_and_releases_stack(db_session, tmp_path, monkeypatch, caplog):
+    from nodvard_deck.core import gate
+
+    env = await _setup(tmp_path, monkeypatch)
+    _archive_breaks(env, TimeoutError())
+    monkeypatch.setattr(env.m.stack_update, "CLEANUP_TIMEOUT_S", 0.05, raising=False)
+    monkeypatch.setattr(gate, "find_executor", AsyncMock(return_value=env.executor))
+    timeout, deadlines = asyncio.timeout, []
+    entered, resume = asyncio.Event(), asyncio.Event()
+
+    def capture_timeout(delay):
+        deadline = timeout(delay)
+        if delay == gate.EXECUTE_TIMEOUT_S:
+            deadlines.append(deadline)
+        return deadline
+
+    async def stuck(path):
+        entered.set()
+        await resume.wait()
+
+    monkeypatch.setattr(gate.asyncio, "timeout", capture_timeout)
+    monkeypatch.setattr(env.fake.sftp_server, "remove", stuck)
+    decision = await gate.propose(db_session, ext_id="docker", command_field=None, request=_request(backup=True))
+    action, moved = await gate.approve(db_session, decision.action_id, user_id="u1", wait_s=0)
+    assert moved
+    task = gate._running[action.id]
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        assert env.update.actions.locks.held("h1", "shop") is not None
+        deadlines[0].reschedule(asyncio.get_running_loop().time())
+        done, _ = await asyncio.wait({task}, timeout=1)
+        assert task in done
+        await task
+        await db_session.refresh(action)
+        assert action.status == "failed" and action.result["error"] == gate.EXECUTE_TIMEOUT_ERROR
+        assert env.update.actions.locks.held("h1", "shop") is None
+        assert "docker_clean_up_timed_out" in caplog.text and STAMP_ROOT in caplog.text and "shop" in caplog.text
+    finally:
+        resume.set()
+        await asyncio.gather(task, *env.executor._cleanups, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -1810,7 +2400,8 @@ async def test_the_route_says_when_the_server_cannot_be_read(client, docker_on, 
     monkeypatch.setattr(docker_on.handle, "run_argv", lost, raising=False)
     plan = await client.get(_url(docker_on), headers=docker_on.owner)
     assert plan.status_code == 502
-    assert plan.json()["detail"].startswith("Server nicht erreichbar: Docker auf dem Server ließ sich nicht abfragen (")
+    assert re.fullmatch(r"Server nicht erreichbar\. Fehlerkennung: [0-9a-f]{32}\.", plan.json()["detail"])
+    assert "Docker auf dem Server" not in plan.text
 
 
 @pytest.mark.asyncio

@@ -14,7 +14,7 @@ function Where() {
   return <p data-testid="where">{location.pathname + location.search + location.hash}</p>;
 }
 
-/** Wie router.tsx: /login oeffentlich, alles andere hinter RequireAuth. */
+/** Wie router.tsx: /login öffentlich, alles andere hinter RequireAuth. */
 function renderApp(entry: string) {
   return render(
     <MemoryRouter initialEntries={[entry]}>
@@ -81,8 +81,8 @@ describe("RequireAuth -> Anmeldung -> zurück zur Ziel-Adresse", () => {
 
 /**
  * Seiten wie Nodvard Shield schreiben Reiter und Filter per replaceState in die Adresszeile,
- * am Router vorbei. Nach abgelaufener Sitzung muss die Anmeldung dorthin zurueckfuehren,
- * wo man wirklich war -- nicht auf die (aeltere) Adresse der letzten Router-Navigation.
+ * am Router vorbei. Nach abgelaufener Sitzung muss die Anmeldung dorthin zurückführen,
+ * wo man wirklich war -- nicht auf die (ältere) Adresse der letzten Router-Navigation.
  */
 describe("RequireAuth -- Rückkehradresse aus der Adresszeile", () => {
   function FromProbe() {
@@ -114,10 +114,10 @@ describe("RequireAuth -- Rückkehradresse aus der Adresszeile", () => {
 });
 
 /**
- * Erster Aufruf der Seite (Reload, ntfy-Link), waehrend die API nicht antwortet (index.html
- * ist da, z. B. aus dem Cache; laeuft der Container gar nicht, zeigt der Browser seine
+ * Erster Aufruf der Seite (Reload, ntfy-Link), während die API nicht antwortet (index.html
+ * ist da, z. B. aus dem Cache; läuft der Container gar nicht, zeigt der Browser seine
  * eigene Fehlerseite): der stille Refresh scheitert an 502/503/504 oder einer abgelehnten
- * Verbindung. Das sagt nichts ueber das Cookie -- nicht auf den Login werfen, sondern
+ * Verbindung. Das sagt nichts über das Cookie -- nicht auf den Login werfen, sondern
  * warten und es von selbst noch einmal versuchen.
  */
 describe("RequireAuth -- Server beim ersten Laden nicht erreichbar", () => {
@@ -157,7 +157,7 @@ describe("RequireAuth -- Server beim ersten Laden nicht erreichbar", () => {
     await tick(0);
 
     expect(refreshCalls).toBe(1);
-    expect(screen.getByRole("status")).toHaveTextContent("Server nicht erreichbar – neuer Versuch …");
+    expect(screen.getByRole("status")).toHaveTextContent("Server nicht erreichbar, neuer Versuch …");
     expect(screen.queryByLabelText("Benutzername")).not.toBeInTheDocument();
     expect(screen.queryByTestId("where")).not.toBeInTheDocument();
     expect(useAuthStore.getState().status).toBe("unknown");
@@ -168,7 +168,7 @@ describe("RequireAuth -- Server beim ersten Laden nicht erreichbar", () => {
     await tick(1);
     expect(refreshCalls).toBe(2);
 
-    // Dieselbe Adresse wie angefordert, kein Umweg ueber den Login.
+    // Dieselbe Adresse wie angefordert, kein Umweg über den Login.
     expect(screen.getByTestId("where").textContent).toBe("/ext/shield/soc?tab=guard");
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(useAuthStore.getState().status).toBe("authenticated");
@@ -199,7 +199,7 @@ describe("RequireAuth -- Server beim ersten Laden nicht erreichbar", () => {
     renderApp("/");
     await tick(0);
 
-    expect(screen.getByRole("status")).toHaveTextContent("Server nicht erreichbar – neuer Versuch …");
+    expect(screen.getByRole("status")).toHaveTextContent("Server nicht erreichbar, neuer Versuch …");
     expect(screen.getByRole("status")).not.toHaveTextContent("Server meldet");
   });
 
@@ -235,7 +235,7 @@ describe("RequireAuth -- Server beim ersten Laden nicht erreichbar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Jetzt erneut versuchen" }));
     await tick(0);
 
-    // Kein Warten auf den naechsten Takt: sofort erneuert, Seite erscheint.
+    // Kein Warten auf den nächsten Takt: sofort erneuert, Seite erscheint.
     expect(refreshCalls).toBe(4);
     expect(screen.getByTestId("where").textContent).toBe("/");
     expect(useAuthStore.getState().status).toBe("authenticated");

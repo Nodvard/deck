@@ -1,5 +1,6 @@
+import { cardTable } from "../../test/mobileLayout";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -78,3 +79,13 @@ describe("Protokoll-Tabelle", () => {
     expect(names.filter((t) => /^[a-z_]+\.[a-z_.0-9]+$/.test(t ?? ""))).toEqual([]);
   });
 });
+
+it("390 px: Audit-Einträge und Einzelheiten bleiben in Karten", async () => {
+  entries = [entry("mobil", "login.succeeded", { target_id: "server-".repeat(20), reason: "Bestätigter Zugriff" })];
+  renderAudit();
+  const cell = await screen.findByText(auditActionLabel("login.succeeded")!);
+  const table = cell.closest("table")!;
+  fireEvent.click(cell);
+  await waitFor(() => expect(screen.getByText("Bestätigter Zugriff")).toBeInTheDocument());
+  await cardTable(table, ["Zeitpunkt", "Vorgang", "Wer", "Ziel", "Ergebnis"]);
+}, 30000);

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Wächter für die Umbenennungen Lattice -> Nodvard Deck, `nexus-soc` -> `shield` und `service-matrix` -> `docker`.
+"""Wächter für alte Produkt-, Shield- und Docker-Namen.
 
-Das Projekt hieß `lattice` (Python-Pakete `lattice` und `lattice_sdk`). Seit der Umbenennung heißen sie
-`nodvard_deck` und `nodvard_sdk`; die alten Pakete gibt es nicht mehr, eine Erweiterung, die sie noch importiert,
+Die Python-Pakete heißen `nodvard_deck` und `nodvard_sdk`; eine Erweiterung, die noch entfernte Pakete importiert,
 bekommt einen klaren Grund (`backend/src/nodvard_deck/ext/old_names.py`). Dieser Wächter sorgt dafür, dass im eigenen
 Code niemand versehentlich wieder den alten Namen benutzt.
 
@@ -276,8 +275,8 @@ KEPT_SHIELD: tuple[Kept, ...] = (
         "(wie bei `lattice.db`).",
         [_SHIELD_SRC, _SHIELD_OWN_TESTS, *_f("backend/tests/test_migrate.py", "backend/tests/test_shield_legacy_ids.py")]),
     _ks("Shield: Aktionsarten",
-        r"nexus_soc\\?\.(?:restore|delete|install|upgrade|reboot|ban|\*)|ACTION_PREFIX\s*==?\s*\"nexus_soc\"",
-        "Die Aktionsarten `nexus_soc.{restore,delete,install,upgrade,reboot,ban}` stehen in gespeicherten Vorschlaegen und Freigaben, "
+        r"nexus_soc\\?\.(?:restore|delete|install|upgrade|reboot|ban|fail2ban_config|\*)|ACTION_PREFIX\s*==?\s*\"nexus_soc\"",
+        "Die Aktionsarten `nexus_soc.{restore,delete,install,upgrade,reboot,ban,fail2ban_config}` stehen in gespeicherten Vorschlaegen und Freigaben, "
         "und das Gate findet den Ausfuehrer nur ueber die Art. So bleiben offene Vorschlaege ueber das Update und einen Rueckweg "
         "ausfuehrbar; die Oberflaeche zeigt das Label der `ActionSpec` statt der Art. Der Name steht an einer Stelle (`ACTION_PREFIX` in "
         "`ids.py`), Tests nennen ihn als Eingabe und Erwartung.",
@@ -325,11 +324,6 @@ KEPT_SHIELD: tuple[Kept, ...] = (
         "Das Manifest nennt die alte Kennung als `legacy_ids`: Darueber findet der Kern die Registry-Zeile einer bestehenden "
         "Installation (dort liegen die Einstellungen), haengt die alten Adressen als veraltet ein und kennt die Tabellen-Praefixe.",
         [*_f("extensions/shield/extension.toml")]),
-    _ks("Shield: Herkunft der Kennung",
-        r"nexus-soc(?![\w-])",
-        "In `ids.py` und `ids.ts` steht, wie die Erweiterung bis 0.6 hiess: die eine Stelle, an der die Herkunft der Kennung "
-        "festgehalten ist. Andere Kommentare verweisen darauf.",
-        [*_f("extensions/shield/src/nodvard_deck_ext_shield/ids.py", "extensions/shield/frontend/src/ids.ts")]),
     _ks("Shield: alte Kennung als Wert in den Alias-Tests",
         r"nexus-soc(?![\w-])",
         "Gespeicherte Daten einer Installation mit 0.6 tragen die alte Kennung (Meldungen `source_ext_id`, Protokoll `actor_id`, "
@@ -391,7 +385,7 @@ def read_text(path: Path) -> str | None:
 class Finding:
     path: str
     line: int
-    rule: str  # "import" | "modul" | "klasse" | "name" (lattice), "shield-paket" | "shield-adresse" | "shield-name" (Regel 3)
+    rule: str  # "import" | "modul" | "klasse" | "name" (alte Produktnamen), "shield-paket" | "shield-adresse" | "shield-name" (Regel 3)
     text: str
     kept: str = ""  # Name der Positivliste, wenn erlaubt (nur --list)
 
@@ -467,16 +461,16 @@ def check_docker_text(rel: str, text: str) -> list[Finding]:
 
 
 def find_violations(root: Path = REPO_ROOT, files: list[str] | None = None) -> list[Finding]:
-    """Alle Verstöße gegen Regel 1 und 2 (`lattice`), Regel 3 (alte Shield-Kennung) und Regel 4 (alte Docker-Kennung)."""
+    """Alle Verstöße gegen die Regeln für alte Produkt-, Shield- und Docker-Namen."""
     out: list[Finding] = []
     for rel in files if files is not None else tracked_files(root):
-        check_lattice, check_shield = not is_exempt(rel), not is_shield_exempt(rel)
-        if not (check_lattice or check_shield):
+        check_product_names, check_shield = not is_exempt(rel), not is_shield_exempt(rel)
+        if not (check_product_names or check_shield):
             continue
         text = read_text(root / rel)
         if text is None:
             continue
-        if check_lattice:
+        if check_product_names:
             out += check_text(rel, text)
         if check_shield:
             out += check_shield_text(rel, text)
@@ -488,14 +482,14 @@ def list_kept(root: Path = REPO_ROOT) -> list[Finding]:
     """Alle erlaubten Vorkommen (Übersicht für `--list`): Regel 2 mit Art "bleibt", Regel 3 mit Art "shield-bleibt"."""
     out: list[Finding] = []
     for rel in tracked_files(root):
-        check_lattice, check_shield = not is_exempt(rel), not is_shield_exempt(rel)
-        if not (check_lattice or check_shield):
+        check_product_names, check_shield = not is_exempt(rel), not is_shield_exempt(rel)
+        if not (check_product_names or check_shield):
             continue
         text = read_text(root / rel)
         if text is None:
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
-            if check_lattice and TOKEN_RE.search(line):
+            if check_product_names and TOKEN_RE.search(line):
                 names = kept_names_in(line, rel)
                 if names:
                     out.append(Finding(rel, lineno, "bleibt", line, kept=", ".join(names)))
@@ -521,7 +515,7 @@ def main(argv: list[str] | None = None) -> int:
         for item in kept:
             print(f"{item.path}:{item.line}: [{item.kept}] {item.text.strip()[:160]}")
         print(f"\n{len(kept)} erlaubte Vorkommen.\n")
-    lattice_findings = [f for f in findings if not f.rule.startswith(("shield-", "docker-"))]
+    product_name_findings = [f for f in findings if not f.rule.startswith(("shield-", "docker-"))]
     shield_findings = [f for f in findings if f.rule.startswith("shield-")]
     docker_findings = [f for f in findings if f.rule.startswith("docker-")]
     if not findings:
@@ -530,12 +524,12 @@ def main(argv: list[str] | None = None) -> int:
         print("OK: Das alte Paket und die alten Adressen der Docker-Kennung `service-matrix` kommen außerhalb der Alias-Tests nicht vor.")
         return 0
 
-    if lattice_findings:
+    if product_name_findings:
         print("Der alte Name `lattice` ist (wieder) im Code:\n")
-        for item in lattice_findings:
+        for item in product_name_findings:
             print(f"  {item}")
         print(
-            f"\n{len(lattice_findings)} Fund(e). Der Kern heisst `nodvard_deck`, das SDK `nodvard_sdk` (`NodvardExtension`, `NodvardError`). "
+            f"\n{len(product_name_findings)} Fund(e). Der Kern heißt `nodvard_deck`, das SDK `nodvard_sdk` (`NodvardExtension`, `NodvardError`). "
             "Gehoert der Name wirklich zu den bewusst belassenen (Daten, Namen auf fremden Rechnern, Frontend-Vertrag), "
             "gehoert er mit Begruendung in KEPT_NAMES in scripts/check_legacy_names.py.\n"
         )

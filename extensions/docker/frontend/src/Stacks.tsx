@@ -7,6 +7,7 @@ import { authedFetch, errorText } from "../../../_shared/frontend/src/api";
 import { deck } from "../../../_shared/frontend/src/deck";
 import { formatBytes } from "../../../_shared/frontend/src/format";
 import { LoadError, errorMessage, fetchJson } from "../../../_shared/frontend/src/loadError";
+import { MoreMenu, type MenuItem } from "../../../_shared/frontend/src/menu";
 import { Badge, Button, type Tone } from "../../../_shared/frontend/src/ui";
 
 import { BackupsPanel } from "./Backups";
@@ -17,6 +18,7 @@ import { HostSection } from "./Resources";
 import { NewStack } from "./NewStack";
 import { SaveTemplate } from "./OwnTemplates";
 import { JSON_HEADERS, StackEditor, withResult } from "./StackEditor";
+import { StackStopDialog } from "./StackStopDialog";
 
 interface StackContainer { name: string; service: string | null; state: string; status: string }
 interface Changes { changed: string[]; added: string[]; removed: string[] }
@@ -378,13 +380,17 @@ function backupDate(plan: UpdatePlan): string | null {
   return new Date(Math.max(...dates.map((d) => d.getTime()))).toLocaleDateString("de-DE");
 }
 
-function UpdatePanel({ hostId, project, onDone }: { hostId: string; project: string; onDone: (message: string, warn?: boolean) => void }): JSX.Element {
+function UpdatePanel({ hostId, project, onDone, onPull, busyAction }: {
+  hostId: string; project: string; onDone: (message: string, warn?: boolean) => void; onPull: () => void; busyAction: string | null;
+}): JSX.Element {
   const [plan, setPlan] = useState<UpdatePlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [chosen, setChosen] = useState<string[]>([]);
   const [saveVolumes, setSaveVolumes] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [sending, setSending] = useState(false);
+  const busy = sending || busyAction !== null;
+  const pulling = busyAction === `${project}:pull`;
   const [reload, setReload] = useState(0);
   const base = `/ext/docker/hosts/${encodeURIComponent(hostId)}/stacks/${encodeURIComponent(project)}`;
 
@@ -404,7 +410,7 @@ function UpdatePanel({ hostId, project, onDone }: { hostId: string; project: str
 
   async function send(path: "update" | "rollback", services: string[], question: string, label: string, backup = false) {
     if (!(await deck().confirmDialog(question, { confirmLabel: label }))) return;
-    setBusy(true);
+    setSending(true);
     setFailed(null);
     let submitted = false;
     try {
@@ -424,12 +430,18 @@ function UpdatePanel({ hostId, project, onDone }: { hostId: string; project: str
     } catch (err) {
       setFailed(submitted ? `Das Ergebnis ließ sich nicht abrufen (${errorMessage(err)}). Wie es ausging, steht unter „Aktionen“.` : errorMessage(err));
     } finally {
-      setBusy(false);
+      setSending(false);
     }
   }
 
-  if (error) return <LoadError what="Die Übersicht" error={error} onRetry={() => setReload((n) => n + 1)} compact />;
-  if (!plan) return <p className="text-xs opacity-60">Lade die Übersicht …</p>;
+  const pull = (
+    <div className="flex flex-col items-start gap-1 text-xs">
+      <Button small disabled={busy} onClick={onPull}>{pulling ? "…" : "Images holen"}</Button>
+      <p className="opacity-70">Images holen lädt nur die Images herunter. Die Container laufen weiter; neu erstellt werden sie erst beim nächsten Anwenden.</p>
+    </div>
+  );
+  if (error) return <div className="flex flex-col gap-2">{pull}<LoadError what="Die Übersicht" error={error} onRetry={() => setReload((n) => n + 1)} compact /></div>;
+  if (!plan) return <div className="flex flex-col gap-2">{pull}<p className="text-xs opacity-60">Lade die Übersicht …</p></div>;
   const together = withSharers(plan, chosen);
   const sharers = together.filter((s) => !chosen.includes(s));
   const stored = plan.services.filter((s) => together.includes(s.service) && s.data_store).map((s) => s.service);
@@ -447,6 +459,7 @@ function UpdatePanel({ hostId, project, onDone }: { hostId: string; project: str
   const withBackup = saveVolumes && canSave;
   return (
     <div className="flex flex-col gap-2 text-xs" data-testid={`update-${project}`}>
+      {pull}
       <p className="opacity-70">
         Das Update holt die neuen Images, behält die alten als Sicherung und erstellt nur die gewählten Dienste neu. Startet einer danach nicht,
         geht es von selbst zur alten Version zurück, außer bei Datenbanken und anderen Datenspeichern.
@@ -525,28 +538,18 @@ function UpdatePanel({ hostId, project, onDone }: { hostId: string; project: str
 }
 
 /** Die Stack-Aktionen über das Gate; nur für übernommene Stacks. */
-const VERBS: { type: string; label: string; question: (project: string) => string; confirm: string; when: (s: StackOut) => boolean }[] = [
-  {
-    type: "docker.stack_up", label: "Anwenden", question: (p) => `Stack „${p}“ anwenden?`,
+const VERBS = {
+  up: {
+    label: "Anwenden", question: (p: string) => `Stack „${p}“ anwenden?`,
     confirm: "Der Stack startet nach seiner Compose-Datei. Geänderte Dienste werden dabei neu erstellt und sind kurz nicht erreichbar.",
-    when: () => true,
   },
-  {
-    type: "docker.stack_stop", label: "Stoppen", question: (p) => `Stack „${p}“ stoppen?`,
-    confirm: "Alle Container des Stacks werden gestoppt. Seine Dienste sind nicht erreichbar, bis du ihn wieder anwendest.",
-    when: (s) => s.running > 0,
-  },
-  {
-    type: "docker.stack_down", label: "Herunterfahren", question: (p) => `Stack „${p}“ herunterfahren?`,
-    confirm: "Container und Netze des Stacks werden gelöscht. Was nur im Container lag und nicht in einem Volume oder Ordner, ist danach weg. Die Volumes bleiben, und „Anwenden“ legt die Container neu an.",
-    when: (s) => s.total > 0,
-  },
-  {
-    type: "docker.stack_pull", label: "Images holen", question: (p) => `Images für den Stack „${p}“ neu holen?`,
+  stop: { label: "Stoppen" },
+  down: { label: "Herunterfahren" },
+  pull: {
+    label: "Images holen", question: (p: string) => `Images für den Stack „${p}“ neu holen?`,
     confirm: "Die Images des Stacks werden neu heruntergeladen. Die Container laufen dabei weiter; neu erstellt werden sie erst beim nächsten „Anwenden“.",
-    when: () => true,
   },
-];
+};
 
 function usageText(usage: Usage | undefined, measured: boolean, running: number): string {
   if (!running) return "";
@@ -568,6 +571,7 @@ export function StackList({ hostId }: { hostId: string }): JSX.Element {
   const [busy, setBusy] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const [creating, setCreating] = useState(false);
+  const [stopping, setStopping] = useState<StackOut | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -599,13 +603,13 @@ export function StackList({ hostId }: { hostId: string }): JSX.Element {
     setOpen(open?.project === project && open.panel === panel ? null : { project, panel });
   }
 
-  async function act(stack: StackOut, verb: (typeof VERBS)[number]) {
-    const ok = await deck().confirmDialog(`${verb.question(stack.project)} ${verb.confirm}`, { confirmLabel: verb.label });
-    if (!ok) return;
-    setBusy(`${stack.project}:${verb.type}`);
+  async function act(stack: StackOut, type: keyof typeof VERBS) {
+    const verb = VERBS[type];
+    if ("confirm" in verb && !(await deck().confirmDialog(`${verb.question(stack.project)} ${verb.confirm}`, { confirmLabel: verb.label }))) return;
+    setBusy(`${stack.project}:${type}`);
     note(null);
     try {
-      const result = await hostAction(hostId, verb.type, `Stack „${stack.project}“ über die Docker-Seite: ${verb.label}.`, undefined, { project: stack.project });
+      const result = await hostAction(hostId, `docker.stack_${type}`, `Stack „${stack.project}“ über die Docker-Seite: ${verb.label}.`, undefined, { project: stack.project });
       const named = result.text.startsWith(`Stack „${stack.project}“`);
       note(named ? result.text : `Stack „${stack.project}“, ${verb.label}: ${result.text}`);
       setReload((n) => n + 1);
@@ -666,12 +670,23 @@ export function StackList({ hostId }: { hostId: string }): JSX.Element {
             ...(stack.working_dir && stack.source === "compose" ? [stack.working_dir] : []),
             usageText(usage[stack.project], measured, stack.running),
           ].filter(Boolean);
+          const more: MenuItem[] = [];
+          if (stack.source === "compose") more.push({ id: "file", label: "Datei ansehen", run: () => void toggle(stack.project, "file") });
+          if (stack.adopted && !stack.is_self) {
+            more.push({ id: "git", label: "Aus Git", run: () => void toggle(stack.project, "git") });
+            if (stack.total > 0) more.push({ id: "stop", label: "Stoppen", disabled: busy !== null, run: () => setStopping(stack) });
+          }
+          if (stack.adopted || stack.adoption_note) more.push({ id: "release", label: "Übernahme aufheben", run: () => void release(stack) });
+          if (stack.adopted && !stack.is_self) {
+            more.push({ id: "backups", label: "Sicherungen", run: () => void toggle(stack.project, "backups") });
+            more.push({ id: "delete", label: "Löschen", danger: true, run: () => void toggle(stack.project, "delete") });
+          }
           return (
             <li key={stack.project} className={CARD_ITEM} data-testid={`stack-${stack.project}`}>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <div className="min-w-[16rem] flex-1 max-md:min-w-0 max-md:basis-full">
                   <p className="flex flex-wrap items-center gap-1.5 break-words">
-                    <span className="font-medium">{stack.project}</span>
+                    <span className="min-w-0 break-words font-medium">{stack.project}</span>
                     <Badge tone={state.tone}>{state.label}</Badge>
                     {stack.problems > 0 && <Badge tone="bad">{stack.problems === 1 ? "1 Container mit Problemen" : `${stack.problems} Container mit Problemen`}</Badge>}
                     {stack.is_self && <Badge>{productText("Nodvard Deck")}</Badge>}
@@ -691,20 +706,15 @@ export function StackList({ hostId }: { hostId: string }): JSX.Element {
                   {productText(SOURCE_NOTE[stack.source]) && <p className="text-xs opacity-70">{productText(SOURCE_NOTE[stack.source])}</p>}
                   {stack.adoption_note && <p className="text-xs text-amber-300">{stack.adoption_note}</p>}
                 </div>
-                <div className="flex min-w-0 max-w-full flex-wrap gap-1.5">
-                  {stack.source === "compose" && (
-                    <Button small pressed={open?.project === stack.project && open.panel === "file"} onClick={() => void toggle(stack.project, "file")}>
-                      Datei ansehen
+                <div className="flex min-w-0 max-w-full flex-wrap justify-end gap-1.5 max-md:w-full">
+                  {stack.adopted && !stack.is_self && (
+                    <Button small disabled={busy !== null} onClick={() => void act(stack, "up")} ariaLabel={`Anwenden: ${stack.project}`}>
+                      {busy === `${stack.project}:up` ? "…" : "Anwenden"}
                     </Button>
                   )}
                   {stack.adopted && !stack.is_self && (
                     <Button small pressed={open?.project === stack.project && open.panel === "edit"} onClick={() => void toggle(stack.project, "edit")}>
                       Bearbeiten
-                    </Button>
-                  )}
-                  {stack.adopted && !stack.is_self && (
-                    <Button small pressed={open?.project === stack.project && open.panel === "git"} onClick={() => void toggle(stack.project, "git")}>
-                      Aus Git
                     </Button>
                   )}
                   {stack.source === "compose" && !stack.adopted && stack.total > 0 && (
@@ -717,31 +727,12 @@ export function StackList({ hostId }: { hostId: string }): JSX.Element {
                       Von Portainer übernehmen
                     </Button>
                   )}
-                  {stack.adopted && VERBS.filter((verb) => verb.when(stack)).map((verb) => (
-                    <Button key={verb.type} small disabled={busy !== null} onClick={() => void act(stack, verb)}
-                      ariaLabel={`${verb.label}: ${stack.project}`}>
-                      {busy === `${stack.project}:${verb.type}` ? "…" : verb.label}
-                    </Button>
-                  ))}
-                  {(stack.adopted || stack.adoption_note) && (
-                    <Button small onClick={() => void release(stack)}>Übernahme aufheben</Button>
-                  )}
-                  {stack.adopted && !stack.is_self && stack.total > 0 && (
+                  {stack.adopted && !stack.is_self && (
                     <Button small pressed={open?.project === stack.project && open.panel === "update"} onClick={() => void toggle(stack.project, "update")}>
                       Update
                     </Button>
                   )}
-                  {stack.adopted && !stack.is_self && (
-                    <Button small pressed={open?.project === stack.project && open.panel === "backups"} onClick={() => void toggle(stack.project, "backups")}>
-                      Sicherungen
-                    </Button>
-                  )}
-                  {stack.adopted && !stack.is_self && (
-                    <Button small variant="danger" pressed={open?.project === stack.project && open.panel === "delete"}
-                      onClick={() => void toggle(stack.project, "delete")}>
-                      Löschen
-                    </Button>
-                  )}
+                  {more.length > 0 && <MoreMenu items={more} small align="right" title={`Weitere Aktionen für ${stack.project}`} testId={`stack-more-${stack.project}`} />}
                 </div>
               </div>
               {open?.project === stack.project && (
@@ -752,7 +743,8 @@ export function StackList({ hostId }: { hostId: string }): JSX.Element {
                     <StackEditor hostId={hostId} project={stack.project} onDirty={markDirty}
                       onClose={(text) => { editorDirty.current = false; setOpen(null); if (text) { note(text); setReload((n) => n + 1); } }} />
                   ) : open.panel === "update" ? (
-                    <UpdatePanel hostId={hostId} project={stack.project} onDone={(text, warn) => { setOpen(null); note(text, warn); setReload((n) => n + 1); }} />
+                    <UpdatePanel hostId={hostId} project={stack.project} onPull={() => void act(stack, "pull")} busyAction={busy}
+                      onDone={(text, warn) => { setOpen(null); note(text, warn); setReload((n) => n + 1); }} />
                   ) : open.panel === "portainer" ? (
                     <PortainerPanel hostId={hostId} project={stack.project} onDone={(text, warn) => { setOpen(null); note(text, warn); setReload((n) => n + 1); }} />
                   ) : open.panel === "backups" ? (
@@ -770,6 +762,8 @@ export function StackList({ hostId }: { hostId: string }): JSX.Element {
           );
         })}
       </ul>
+      {stopping && <StackStopDialog stack={stopping} onClose={() => setStopping(null)}
+        onStop={(verb) => { setStopping(null); void act(stopping, verb); }} />}
     </div>
   );
 }

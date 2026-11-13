@@ -13,7 +13,7 @@ import { useBrandingStore } from "../src/state/branding";
 import { useEditionStore } from "../src/state/edition";
 import { AboutSettings } from "../src/routes/settings/AboutSettings";
 import { SettingsLayout } from "../src/routes/settings/SettingsLayout";
-import { assertExcludedModuleApis } from "./dockModules.mjs";
+import { assertExcludedModuleApis, assertBlockedDeckRoutes, assertDockerRoutes } from "./dockModules.mjs";
 
 const base = process.env.DOCK_SMOKE_URL;
 const extensionsRoot = resolve(process.cwd(), "../extensions");
@@ -40,8 +40,8 @@ it.skipIf(!base)("prüft das mit EDITION=dock gebaute Image und seine Oberfläch
       }
     }
     await assertExcludedModuleApis((path: string) => fetch(path, { headers }));
-    expect((await fetch("/api/v1/extensions/docker/frontend/index.js", { headers })).status).toBe(200);
-    expect((await fetch("/api/v1/ext/docker/widgets/matrix", { headers })).status).toBe(200);
+    await assertBlockedDeckRoutes((path: string) => fetch(path, { headers }));
+    await assertDockerRoutes((path: string) => fetch(path, { headers }));
 
     await useEditionStore.getState().load();
     await useBrandingStore.getState().load();

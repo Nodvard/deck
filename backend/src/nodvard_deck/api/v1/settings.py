@@ -24,6 +24,8 @@ from ...services import reachability as reachability_service
 from ...services import settings as settings_service
 from ...services import update_check as update_check_service
 from ..deps import CurrentUser, SessionDep, SettingsDep, require_permission
+from ..models import RequestModel
+from ..responses import error_responses
 from ..errors import CodedHTTPException
 from .auth import TotpMissing, confirm_current_password, confirm_current_totp
 
@@ -134,7 +136,7 @@ def _validate_maintenance_windows(value: list) -> None:
             raise HTTPException(status_code=422, detail=f"maintenance.windows: ungültiger Cron-Ausdruck: {exc}") from exc
 
 
-class SettingIn(BaseModel):
+class SettingIn(RequestModel):
     value: Any
     current_password: str = Field(default="", max_length=1024)
     """Nur für `autonomy.mode`, `autonomy.max_risk`, `ssh.confirm_new_host_keys` und
@@ -143,7 +145,7 @@ class SettingIn(BaseModel):
     """Dazu der Code aus der App, wenn der Inhaber Zwei-Faktor an hat (sonst 403 mit `code: "totp_missing"`)."""
 
 
-class AutonomyIn(BaseModel):
+class AutonomyIn(RequestModel):
     """Modus und Risikostufe der Selbstständigkeit in einem Schritt, mit einer Bestätigung (ein Code gilt nur einmal)."""
 
     mode: str = Field(max_length=32)
@@ -247,7 +249,7 @@ async def _current(key: str, session: AsyncSession, settings: Settings) -> Any:
     return stored if stored is not None else await _default_for(key, session, settings)
 
 
-@router.get("")
+@router.get("", responses=error_responses(401, 403, 507))
 async def list_settings(session: SessionDep, settings: SettingsDep) -> list[SettingOut]:
     stored = await settings_service.list_global(session)
     out: list[SettingOut] = []
@@ -264,7 +266,7 @@ async def list_settings(session: SessionDep, settings: SettingsDep) -> list[Sett
     return out
 
 
-@router.get("/notification-types")
+@router.get("/notification-types", responses=error_responses(401, 403, 507))
 async def list_notification_types(settings: SettingsDep) -> list[notification_types.NotificationTypeOut]:
     return [notification_types.NotificationTypeOut(id=key, label=label)
             for key, label in notification_types.catalog(settings.extensions_dir).items()]
@@ -335,7 +337,7 @@ async def _log_change(session: AsyncSession, user: User, key: str, previous: Any
     )
 
 
-@router.put("/autonomy")
+@router.put("/autonomy", responses=error_responses(400, 401, 403, 422, 429, 503, 507))
 async def put_autonomy(
     payload: AutonomyIn, request: Request, session: SessionDep, settings: SettingsDep, user: CurrentUser
 ) -> AutonomyOut:
@@ -359,7 +361,7 @@ async def put_autonomy(
     return AutonomyOut(mode=payload.mode, max_risk=payload.max_risk)
 
 
-@router.put("/{key}")
+@router.put("/{key}", responses=error_responses(400, 401, 403, 409, 422, 429, 503, 507))
 async def put_setting(
     key: Literal[
         "autonomy.mode", "autonomy.max_risk", "security.deny_patterns", "maintenance.windows",

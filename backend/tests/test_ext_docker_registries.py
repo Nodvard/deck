@@ -76,12 +76,12 @@ async def _async(value):
     return value
 
 
-def _request(action="docker.registry_login", registry="ghcr", address="ghcr.io", actor="user", host="h1", username="nico"):
+def _request(action="docker.registry_login", registry="ghcr", address="ghcr.io", actor="user", host="h1", username="nico", risk=None):
     from nodvard_sdk.actions import ActionRequest
     from nodvard_sdk.types import Actor, Risk
 
     payload = {"registry": registry, "address": address, **({} if username is None else {"username": username})}
-    return ActionRequest(action_type=action, host_ref=host, risk=Risk.MEDIUM, proposed_by=Actor(type=actor, id="u1"), reason="Test",
+    return ActionRequest(action_type=action, host_ref=host, risk=risk or (Risk.HIGH if action.endswith('login') else Risk.LOW), proposed_by=Actor(type=actor, id="u1"), reason="Test",
                          payload=payload)
 
 
@@ -363,6 +363,23 @@ class _Stale:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("level", ["low", "medium"])
+async def test_a_login_proposed_below_high_risk_is_refused(level):
+    from nodvard_sdk.types import Risk
+
+    r = _mod()
+    ctx = _ctx()
+    seen = _recording(ctx.exec)
+    done = await r.DockerRegistryExecutor(ctx, _Stale(r.Registry("ghcr", "ghcr.io", "nico"))).execute(_request(risk=Risk(level)))
+    assert done.success is False and seen == [] and "hohes Risiko" in done.error
+
+
+def test_the_login_confirmation_names_the_stored_password():
+    spec = next(s for s in _mod().login_spec() if s.action_type == "docker.registry_login")
+    assert "Docker-Konfiguration des Servers" in spec.confirm_text
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["docker.registry_login", "docker.registry_logout"])
 @pytest.mark.parametrize(("address", "username"), [("ghcr.io", "a b"), ("https://ghcr.io", "deck"), ("-H", "nico")],
                          ids=["benutzer", "adresse", "option"])
@@ -507,7 +524,7 @@ async def test_login_through_the_gate(client, docker_on, monkeypatch):
     assert state.status_code == 200 and state.json()["registries"][0] == {
         "name": "ghcr", "address": "ghcr.io", "username": "nico", "logged_in": False, "secret_set": True}
     proposed = await client.post(f"{base}/ghcr/login", headers=docker_on.owner)
-    assert proposed.status_code == 202 and proposed.json()["risk"] == "medium" and seen == []
+    assert proposed.status_code == 202 and proposed.json()["risk"] == "high" and seen == []
     approved = await client.post(f"/api/v1/actions/{proposed.json()['action_id']}/approve", headers=docker_on.owner)
     assert approved.status_code == 200 and approved.json()["status"] == "succeeded", approved.text
     assert seen == [(["docker", "login", "--username=nico", "--password-stdin", "ghcr.io"], PASSWORD.encode() + b"\n")]
@@ -573,3 +590,15 @@ async def test_not_offered_on_the_server_page_and_only_with_hosts_execute(client
     for method, url in (("get", base), ("post", f"{base}/ghcr/login"), ("post", f"{base}/ghcr/logout")):
         assert (await getattr(client, method)(url)).status_code == 401
         assert (await getattr(client, method)(url, headers=docker_on.viewer)).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_an_operator_without_secrets_read_cannot_propose_a_login(client, db_session, docker_on):
+    from docker_stack_fakes import login
+
+    await _with_registry(client, docker_on)
+    operator = await login(client, db_session, "operator1", "operator")
+    base = f"/api/v1/ext/docker/hosts/{docker_on.host}/registries"
+    refused = await client.post(f"{base}/ghcr/login", headers=operator)
+    assert refused.status_code == 403 and "secrets.read" in refused.text
+    assert (await client.post(f"{base}/ghcr/logout", headers=operator)).status_code == 202

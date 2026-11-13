@@ -109,7 +109,8 @@ class Guard:
             settings = await self._settings()
             files = settings.get("guard_watch_files") or ix.DEFAULT_WATCH_FILES
             try:
-                res = await self._ctx.exec.run(host, guard_as_root(files), timeout_s=GUARD_TIMEOUT)
+                with self._ctx.exec.read_access(host):
+                    res = await self._ctx.exec.run(host, guard_as_root(files), timeout_s=GUARD_TIMEOUT)
                 output = res.stdout or ""
                 # Abgeschnitten sähen die fehlenden Dateien wie gelöscht aus.
                 error = None if ix.guard_complete(output) else GUARD_INCOMPLETE
@@ -333,6 +334,7 @@ class Guard:
                        "span": list(p.span) if p.span else None,
                        "new": not ix.port_is_known(p, known_ports, dynamic_min=snap.dynamic_min)} for p in snap.ports],
             "ssh_port": snap.sshd.get("port"),
+            "ssh_error": snap.sshd_error,
             # None = nicht lesbar (ohne root liefert `sshd -T` nichts), nicht "keine Auffälligkeiten".
             "ssh_findings": [{"key": f.key, "value": f.value, "severity": f.severity, "text": f.text, "advice": f.advice}
                              for f in snap.ssh_findings] if snap.sshd else None,
@@ -486,8 +488,9 @@ class Guard:
         name = host.display_name or host.name
         settings = await self._settings()
         try:
-            res = await self._ctx.exec.run(host, guard_as_root(settings.get("guard_watch_files") or None),
-                                           timeout_s=GUARD_TIMEOUT)
+            with self._ctx.exec.read_access(host):
+                res = await self._ctx.exec.run(host, guard_as_root(settings.get("guard_watch_files") or None),
+                                               timeout_s=GUARD_TIMEOUT)
         except Exception as exc:
             raise GuardUnavailable(f"{name} ist gerade nicht erreichbar ({_describe(exc)}). {ACK_RETRY}") from exc
         output = res.stdout or ""

@@ -47,6 +47,15 @@ def _running(request, monkeypatch, _ext_docker_on_path):
 
     monkeypatch.setattr(ac, "check_running", check_running)
 
+    async def check_stability(self, host, stack, done, duration_ms, restarted, **kwargs):
+        from nodvard_sdk.actions import ActionResult
+
+        text = "Prüfung danach: läuft stabil" if kwargs.get("only_restarted") else "Dienste laufen stabil."
+        return ActionResult(success=True, exit_code=0, output=f"{done}\n{text}", duration_ms=duration_ms)
+
+    ga = importlib.import_module("nodvard_deck_ext_docker.git_apply")
+    monkeypatch.setattr(ga.DockerStackGitApplyExecutor, "_check_stability", check_stability)
+
 
 def _ga():
     from nodvard_deck_ext_docker import git_apply
@@ -238,6 +247,158 @@ async def test_an_env_on_the_server_is_never_replaced_a_new_one_is_private(clien
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("declaration", [
+    b"    env_file: ./config/vars.txt\n",
+    b"    env_file: [./config/vars.txt]\n",
+    b"    env_file:\n      - path: ./config/vars.txt\n        required: false\n",
+    b"    env_file: //opt/stacks/shop/config/vars.txt\n",
+    b"    env_file:\n      - path: //opt/stacks/shop/config/vars.txt\n        required: false\n",
+])
+@pytest.mark.parametrize("referenced_in", ["server", "repository", "both"])
+@pytest.mark.parametrize("exists", [True, False])
+async def test_service_env_files_are_kept_or_created_private(client, docker_on, tmp_path, declaration, referenced_in, exists):
+    files, sftp = docker_on.exec.files, docker_on.exec.sftp_server
+    path = f"{FOLDER}/config/vars.txt"
+    sftp.dirs.add(f"{FOLDER}/config")
+    files[COMPOSE_PATH] = COMPOSE + (declaration if referenced_in != "repository" else b"")
+    if exists:
+        files[path], sftp.modes[path] = b"VALUE=server\n", 0o100640
+    compose = NEW + (declaration if referenced_in != "server" else b"")
+    url, commit = await _source(client, docker_on, tmp_path, {"compose.yaml": compose, "config": {"vars.txt": b"VALUE=repository\n"}})
+    preview = await client.post(f"{url}/fetch", headers=docker_on.owner)
+    assert preview.status_code == 200, preview.text
+    proposed = await client.post(f"{url}/apply", headers=docker_on.owner, json={"commit": commit})
+    approved = await _approve(client, docker_on, proposed)
+    assert approved["status"] == "succeeded", approved
+    assert files[path] == (b"VALUE=server\n" if exists else b"VALUE=repository\n")
+    assert sftp.modes[path] & 0o777 == (0o640 if exists else 0o600)
+    shown = next(f for f in preview.json()["files"] if f["server_path"] == path)
+    assert shown["env"] is True
+    assert shown["state"] == ("changed" if exists else "new")
+    if referenced_in != "server":
+        shown = (await client.post(f"{url}/fetch", headers=docker_on.owner)).json()
+        assert shown["unchanged"] is True
+        refused = await client.post(f"{url}/apply", headers=docker_on.owner, json={"commit": commit})
+        assert refused.status_code == 409 and "schon genau dieser Stand" in refused.json()["detail"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["fetch", "apply"])
+async def test_server_compose_is_read_in_a_worker(client, docker_on, tmp_path, monkeypatch, operation):
+    import yaml
+    from nodvard_deck_ext_docker import git_source
+
+    merges = ["x-merge-0: &m0 {K: v}\n"]
+    merges += [f"x-merge-{i}: &m{i} {{<<: [*m{i - 1}, *m{i - 1}]}}\n" for i in range(1, 13)]
+    docker_on.exec.files[COMPOSE_PATH] = "".join(merges).encode() + COMPOSE + b"    env_file: vars.txt\n"
+    url, commit = await _source(client, docker_on, tmp_path, {"compose.yaml": NEW, "vars.txt": b"VALUE=repository\n"})
+    git = _git(docker_on)
+    fetch, load = git.run_fetch, yaml.load
+    parsed = []
+
+    async def run(request, limits):
+        if request.get("mode") == "env_files":
+            return await git_source.run_worker(request, limits)
+        return await fetch(request, limits)
+
+    def record(text, *args, **kwargs):
+        if "x-merge-0" in text:
+            parsed.append(text)
+        return load(text, *args, **kwargs)
+
+    git.run_fetch = run
+    monkeypatch.setattr(yaml, "load", record)
+    answer = await client.post(f"{url}/{operation}", headers=docker_on.owner,
+                               **({"json": {"commit": commit}} if operation == "apply" else {}))
+    assert answer.status_code == (202 if operation == "apply" else 200), answer.text
+    if operation == "fetch":
+        assert answer.json()["ok"] is True
+        assert next(f for f in answer.json()["files"] if f["path"] == "vars.txt")["env"] is True
+    assert parsed == []
+
+
+@pytest.mark.asyncio
+async def test_invalid_server_compose_stops_apply_before_env_files_are_overwritten(client, docker_on, tmp_path):
+    files = docker_on.exec.files
+    files[COMPOSE_PATH] = COMPOSE + b"    env_file: vars.txt\n"
+    files[f"{FOLDER}/vars.txt"] = b"VALUE=server\n"
+    url, commit = await _source(client, docker_on, tmp_path, {"compose.yaml": NEW, "vars.txt": b"VALUE=repository\n"})
+    files[COMPOSE_PATH] += b"x-broken: [\n"
+    before = dict(files)
+
+    proposed = await client.post(f"{url}/apply", headers=docker_on.owner, json={"commit": commit})
+    assert proposed.status_code == 409, proposed.text
+    assert "Compose-Datei lässt sich nicht auswerten" in proposed.json()["detail"]
+    preview = await client.post(f"{url}/fetch", headers=docker_on.owner)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["ok"] is False and preview.json()["unchanged"] is False
+    assert any("Compose-Datei lässt sich nicht auswerten" in p for p in preview.json()["problems"])
+    assert files == before
+    assert not docker_on.exec.sftp_server.seen_modes
+
+
+@pytest.mark.asyncio
+async def test_service_env_files_missing_from_the_repository_are_not_removed(client, docker_on, tmp_path):
+    path = f"{FOLDER}/vars.txt"
+    compose = NEW + b"    env_file: vars.txt\n"
+    url, first = await _source(client, docker_on, tmp_path, {"compose.yaml": compose, "vars.txt": b"VALUE=repository\n"})
+    assert (await _apply(client, docker_on, url, first))["status"] == "succeeded"
+    second = _commit(tmp_path / "origin", {"shop": {"compose.yaml": NEW}})
+    proposed = await client.post(f"{url}/apply", headers=docker_on.owner, json={"commit": second})
+    assert (await _approve(client, docker_on, proposed))["status"] == "succeeded"
+    assert docker_on.exec.files[path] == b"VALUE=repository\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("declaration", [
+    b"    env_file: '${ENV_FILE:-vars.txt}'\n",
+    b"    env_file: [$ENV_FILE]\n",
+    b"    env_file:\n      - path: '${ENV_FILE:-vars.txt}'\n        required: false\n",
+])
+@pytest.mark.parametrize("referenced_in", ["server", "repository"])
+async def test_variable_env_paths_are_refused(client, docker_on, tmp_path, monkeypatch, declaration, referenced_in):
+    monkeypatch.delenv("ENV_FILE", raising=False)
+    files = docker_on.exec.files
+    files[COMPOSE_PATH] = COMPOSE + (declaration if referenced_in == "server" else b"")
+    files[f"{FOLDER}/vars.txt"] = b"VALUE=server\n"
+    compose = NEW + (declaration if referenced_in == "repository" else b"")
+    url, commit = await _source(client, docker_on, tmp_path, {"compose.yaml": compose, "vars.txt": b"VALUE=repository\n"})
+    before = dict(files)
+    proposed = await client.post(f"{url}/apply", headers=docker_on.owner, json={"commit": commit})
+    assert proposed.status_code == 409 and "Pfad einer Umgebungsdatei enthält Variablen" in proposed.json()["detail"], proposed.text
+    preview = await client.post(f"{url}/fetch", headers=docker_on.owner)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["ok"] is False and preview.json()["unchanged"] is False
+    assert any("Pfad einer Umgebungsdatei enthält Variablen" in p for p in preview.json()["problems"])
+    assert files == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("compose", [
+    NEW + b"    extends: {file: base.yaml, service: web}\n",
+    b"include: [base.yaml]\n" + NEW,
+    b"include:\n  - path: base.yaml\n" + NEW,
+])
+@pytest.mark.parametrize("referenced_in", ["server", "repository"])
+async def test_env_files_from_other_compose_files_are_refused(client, docker_on, tmp_path, compose, referenced_in):
+    files = docker_on.exec.files
+    files[COMPOSE_PATH] = compose if referenced_in == "server" else COMPOSE
+    files[f"{FOLDER}/base.yaml"] = COMPOSE + b"    env_file: vars.txt\n"
+    files[f"{FOLDER}/vars.txt"] = b"VALUE=server\n"
+    entries = {"compose.yaml": compose if referenced_in == "repository" else NEW,
+               "base.yaml": files[f"{FOLDER}/base.yaml"], "vars.txt": b"VALUE=repository\n"}
+    url, commit = await _source(client, docker_on, tmp_path, entries)
+    before = dict(files)
+    proposed = await client.post(f"{url}/apply", headers=docker_on.owner, json={"commit": commit})
+    assert proposed.status_code == 409 and "weitere Compose-Dateien" in proposed.json()["detail"], proposed.text
+    preview = await client.post(f"{url}/fetch", headers=docker_on.owner)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["ok"] is False and preview.json()["unchanged"] is False
+    assert any("weitere Compose-Dateien" in p for p in preview.json()["problems"])
+    assert files == before
+
+
+@pytest.mark.asyncio
 async def test_risky_settings_lead_the_approval_and_unseen_ones_stop_it(client, docker_on, tmp_path):
     risky = (COMPOSE + b"    privileged: true\n    volumes: [./data:/data, /etc:/host-etc:ro]\n")
     docker_on.exec.config = result(stderr="env file /opt/stacks/shop/app.env not found\n", code=1)
@@ -250,6 +411,33 @@ async def test_risky_settings_lead_the_approval_and_unseen_ones_stop_it(client, 
     approved = await _approve(client, docker_on, proposed)
     assert approved["status"] == "failed" and "nicht in der Freigabe standen: „web“ teilt das Netz" in approved["result"]["error"]
     assert "alte Stand steht wieder" in approved["result"]["error"] and docker_on.exec.files[COMPOSE_PATH] != risky
+
+
+@pytest.mark.asyncio
+async def test_a_path_from_a_variable_is_named_in_the_approval_and_may_resolve_outside(client, docker_on, tmp_path):
+    compose = COMPOSE + b"    volumes: ['${DATA}/x:/data']\n"
+    docker_on.exec.config = result(stderr="env file /opt/stacks/shop/app.env not found\n", code=1)
+    url, commit = await _source(client, docker_on, tmp_path, {"compose.yaml": compose})
+    proposed = await client.post(f"{url}/apply", headers=docker_on.owner, json={"commit": commit})
+    action = (await client.get(f"/api/v1/actions/{proposed.json()['action_id']}", headers=docker_on.owner)).json()
+    assert [line for line in action["payload"]["risky"] if "Pfad mit Variable" in line], action["payload"]["risky"]
+    resolved = {"services": {"web": {"image": "busybox:1.37", "volumes": [{"type": "bind", "source": "/opt/appdata/x", "target": "/data"}]}}}
+    docker_on.exec.config = result(json.dumps({"name": "shop", **resolved}))
+    assert (await _approve(client, docker_on, proposed))["status"] == "succeeded"
+
+
+def test_the_preview_matches_what_compose_reports_after_writing():
+    ga = _ga()
+    folder = "/opt/stacks/shop"
+
+    def view(text):
+        return ga.static_view(text.encode(), folder, [], "shop")[0]
+
+    assert view('version: "3.8"\nservices:\n  web:\n    image: x\n') == []
+    own = view("services:\n  web:\n    image: x\nvolumes:\n  d:\n    name: fremd\n")
+    assert own == ["Das Volume „d“ heißt auf dem Server „fremd“ und gehört damit nicht zu diesem Stack."]
+    home = view("services:\n  web:\n    image: x\n    volumes: ['~/h:/h']\n")
+    assert len(home) == 1 and "Pfad mit Variable" in home[0] and "~/h" in home[0]
 
 
 @pytest.mark.asyncio
@@ -762,12 +950,15 @@ async def test_the_restart_executor_checks_the_names_itself(client, docker_on, t
 
 
 @pytest.mark.asyncio
-async def test_before_the_approval_compose_never_sees_content_from_the_repository(client, docker_on, tmp_path):
-    compose = b"include:\n  - git@git.example.org:team/common.git\n" + NEW
+@pytest.mark.parametrize(("compose", "expected"), [
+    (NEW, 202),
+    (b"include:\n  - git@git.example.org:team/common.git\n" + NEW, 409),
+])
+async def test_before_the_approval_compose_never_sees_content_from_the_repository(client, docker_on, tmp_path, compose, expected):
     url, commit = await _source(client, docker_on, tmp_path, {"compose.yaml": compose, "a.txt": b"a\n"})
     before = len(docker_on.exec.argv_calls), len(docker_on.exec.calls)
     proposed = await client.post(f"{url}/apply", headers=docker_on.owner, json={"commit": commit})
-    assert proposed.status_code == 202, proposed.text
+    assert proposed.status_code == expected, proposed.text
     called = [*docker_on.exec.argv_calls[before[0]:], *docker_on.exec.calls[before[1]:]]
     assert not [call for call in called if (isinstance(call, list) and "compose" in call) or "docker compose" in str(call)], called
     assert docker_on.exec.stdin == [], "auch nichts über die Standardeingabe"
@@ -1033,23 +1224,25 @@ def _running_before(docker_on, monkeypatch, up: dict[str, tuple[str, ...]]):
     from nodvard_deck_ext_docker.stack_update import Running
 
     async def running(host, stack):
-        return {service: Running(service, f"shop-{service}-1", "busybox:1.37", "sha256:" + "a" * 64, (f"shop-{service}-1",),
+        return {service: Running(service, f"shop-{service}-1", "busybox:1.37", "sha256:" + "a" * 64, names or (f"shop-{service}-1",),
                                  running=bool(names), up=names) for service, names in up.items()}
 
     monkeypatch.setattr(_instance(docker_on)._git_apply.update, "running", running)
 
 
 def _check_says(monkeypatch, verdict):
-    import importlib
+    from nodvard_sdk.actions import ActionResult
 
-    ac = importlib.import_module("nodvard_deck_ext_docker.after_check")
     checked = []
 
-    async def check_running(ctx, host, refs, **_):
-        checked.append(refs)
-        return verdict, None
+    async def check_stability(self, host, stack, done, duration_ms, services, *, only_restarted=False, containers=None):
+        assert only_restarted is True
+        checked.append(list(containers))
+        line = f"Prüfung danach: {verdict.text}"
+        return ActionResult(success=verdict.ok, exit_code=0, output=f"{done}\n{line}" if verdict.ok else done,
+                            error=None if verdict.ok else line, detail={"check": {"ok": verdict.ok, "text": verdict.text}})
 
-    monkeypatch.setattr(ac, "check_running", check_running)
+    monkeypatch.setattr(_ga().DockerStackGitApplyExecutor, "_check_stability", check_stability)
     return checked
 
 

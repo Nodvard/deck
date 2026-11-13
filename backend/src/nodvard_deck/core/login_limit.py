@@ -18,6 +18,10 @@ MAX_FAILURES_PER_USER = 10
 """Fehlversuche je (IP, Benutzername) im Fenster, danach 429."""
 MAX_FAILURES_PER_IP = 30
 """Fehlversuche je IP über alle Benutzernamen im Fenster, danach 429; bremst das Durchprobieren vieler Namen."""
+MAX_PASSWORD_FAILURES_PER_NAME = 30
+"""Passwortversuche je Benutzername im Fenster aus fremden Netzen (`is_foreign`), alle Adressen zusammen, danach 429
+für fremde Netze. Aus den `LOCAL_NETWORKS` zählt und gilt sie nicht, sonst sperrte jeder mit ein paar Adressen den
+Besitzer auch im Heimnetz aus."""
 MAX_MFA_FAILURES = 5
 """Falsche 2FA-Codes je `mfa_token`, danach ist es verbraucht; sie zählen auch je IP und Benutzername, sonst ließe
 sich mit immer neuen Token weiter raten."""
@@ -78,6 +82,7 @@ SCOPE_USER = "user"
 SCOPE_IP = "ip"
 SCOPE_ACCOUNT = "account"
 SCOPE_NAME = "name"
+SCOPE_PASSWORD = "password"
 
 
 def _now() -> float:
@@ -153,8 +158,11 @@ class Attempt:
     account: str | None = None
     bucket: str = ""
     """Wofür gezählt wird (`ip_bucket`)."""
+    address_bucket: str | None = None
     braked: bool = False
     """Zählt für die Bremse je Benutzername."""
+    password_login: bool = False
+    """Zählt für die Passwortgrenze über alle Adressen (nur aus fremden Netzen)."""
     name_net_before: tuple[float, int] | None = None
     """Stand des Netzes in der Bremse vor diesem Versuch, damit `release` ihn zurücknehmen kann."""
 
@@ -176,6 +184,8 @@ _by_account: dict[str, deque[float]] = {}
 """Konto -> Zeitpunkte der 2FA-Versuche (länger als `WINDOW_SECONDS` aufgehoben)."""
 _by_name: dict[int, deque[float]] = {}
 """Platz des Benutzernamens (`_name_slot`) -> Zeitpunkte der gebremsten Anmeldeversuche (höchstens `_NAME_KEEP`)."""
+_by_password_name: dict[int, deque[float]] = {}
+"""Platz des Benutzernamens -> Passwortversuche im kurzen Fenster, unabhängig von der Adresse."""
 _name_nets: dict[tuple[int, str], tuple[float, int]] = {}
 """(Platz, Netz) -> (letzter Versuch, Zahl der Versuche) aus diesem Netz; die Wartezeit hängt nur daran, damit Versuche
 von anderswo niemanden aussperren."""
@@ -195,6 +205,7 @@ def reset() -> None:
         _mfa.clear()
         _by_account.clear()
         _by_name.clear()
+        _by_password_name.clear()
         _name_nets.clear()
         _mfa_used.clear()
         _totp_steps.clear()
@@ -293,6 +304,7 @@ def _sweep(now: float) -> None:
         | {(SCOPE_IP, k) for k in _by_ip}
         | {(SCOPE_ACCOUNT, k) for k in _by_account}
         | {(SCOPE_NAME, k) for k in _by_name}
+        | {(SCOPE_PASSWORD, k) for k in _by_password_name}
     )
 
 
@@ -307,14 +319,20 @@ def begin(
     mfa_token: str | None = None,
     account: str | None = None,
     brake_name: bool = False,
+    password_login: bool = False,
+    address: str | None = None,
 ) -> Attempt:
     """Vor der Passwort-/Code-Prüfung aufrufen: wirft `MfaTokenUsed`, `MfaExhausted` oder `Locked`, sonst zählt der
-    Versuch sofort. `brake_name` nur bei der Anmeldung aus einem fremden Netz."""
+    Versuch sofort. `brake_name` nur bei der Anmeldung aus einem fremden Netz; `password_login` wirkt nur dort."""
     # `ip` ist `request.client.host`. Hinter einem Reverse-Proxy ist das die echte Adresse nur, wenn der Proxy unter
     # `system.trusted_proxies` steht (`api/proxy_headers.py`); sonst teilen sich alle Anfragen die Grenze je IP.
     ip = ip or _UNKNOWN_IP
     bucket = ip_bucket(ip)
+    address_bucket = ip_bucket(address) if address is not None else None
     user_key = (bucket, username)
+    # Die Grenze über alle Adressen gilt wie die Bremse je Name nur für fremde Netze: Raten aus dem Internet darf das
+    # Konto nicht für das Heimnetz oder VPN sperren. Dort bleiben die Grenzen je Adresse.
+    password_login = password_login and is_foreign(ip)
     with _lock:
         now = _now()
         mfa_key = None
@@ -329,6 +347,11 @@ def begin(
         ip_dq = _pruned(_by_ip, bucket, now)
         wait_user = _retry_after(user_dq, MAX_FAILURES_PER_USER, now)
         wait_ip = _retry_after(ip_dq, MAX_FAILURES_PER_IP, now)
+        if address_bucket is not None and address_bucket != bucket:
+            wait_address = _retry_after(_pruned(_by_ip, address_bucket, now), MAX_FAILURES_PER_IP, now)
+            if not wait_address:
+                _announced.discard((SCOPE_IP, address_bucket))
+            wait_ip = max(wait_ip, wait_address)
         wait_account = 0
         if account is not None:
             account_dq = _pruned(_by_account, account, now, ACCOUNT_DAY_SECONDS)
@@ -336,7 +359,13 @@ def begin(
             if not wait_account:
                 _announced.discard((SCOPE_ACCOUNT, account))
         wait_name = 0
-        slot = _name_slot(username) if brake_name else 0
+        wait_password = 0
+        slot = _name_slot(username) if brake_name or password_login else 0
+        if password_login:
+            password_dq = _pruned(_by_password_name, slot, now)
+            wait_password = _retry_after(password_dq, MAX_PASSWORD_FAILURES_PER_NAME, now)
+            if not wait_password:
+                _announced.discard((SCOPE_PASSWORD, slot))
         net = None
         if brake_name:
             name_dq = _pruned(_by_name, slot, now, NAME_WINDOW_SECONDS)
@@ -348,13 +377,17 @@ def begin(
             _announced.discard((SCOPE_USER, *user_key))
         if not wait_ip:
             _announced.discard((SCOPE_IP, bucket))
-        if wait_user or wait_ip or wait_account or wait_name:
-            raise Locked(max(wait_user, wait_ip, wait_account, wait_name))
+        if wait_user or wait_ip or wait_account or wait_name or wait_password:
+            raise Locked(max(wait_user, wait_ip, wait_account, wait_name, wait_password))
 
         # Schon beim Start zählen, nicht erst beim Scheitern: Sonst kämen viele gleichzeitige Anfragen alle an der
         # Prüfung vorbei, bevor der erste Fehlschlag eingetragen ist.
         _by_user.setdefault(user_key, deque()).append(now)
         _by_ip.setdefault(bucket, deque()).append(now)
+        if address_bucket is not None and address_bucket != bucket:
+            _by_ip.setdefault(address_bucket, deque()).append(now)
+        if password_login:
+            _by_password_name.setdefault(slot, deque(maxlen=MAX_PASSWORD_FAILURES_PER_NAME)).append(now)
         if account is not None:
             _by_account.setdefault(account, deque()).append(now)
         if brake_name:
@@ -376,7 +409,9 @@ def begin(
             mfa_key=mfa_key,
             account=account,
             bucket=bucket,
+            address_bucket=address_bucket,
             braked=brake_name,
+            password_login=password_login,
             name_net_before=net,
         )
 
@@ -394,11 +429,14 @@ def failed(attempt: Attempt) -> list[str]:
             (SCOPE_USER, _by_user, (attempt.bucket, attempt.username), MAX_FAILURES_PER_USER),
             (SCOPE_IP, _by_ip, attempt.bucket, MAX_FAILURES_PER_IP),
         )
+        if attempt.address_bucket is not None and attempt.address_bucket != attempt.bucket:
+            checks += ((SCOPE_IP, _by_ip, attempt.address_bucket, MAX_FAILURES_PER_IP),)
         for scope, store, key, limit in checks:
             marker = (scope, *key) if isinstance(key, tuple) else (scope, key)
             if len(_pruned(store, key, now)) >= limit and marker not in _announced:
                 _announced.add(marker)
-                started.append(scope)
+                if scope not in started:  # Konto- und Adressgrenze sind beide „ip“: im Audit nur einmal nennen
+                    started.append(scope)
         if attempt.account is not None:
             marker = (SCOPE_ACCOUNT, attempt.account)
             dq = _pruned(_by_account, attempt.account, now, ACCOUNT_DAY_SECONDS)
@@ -412,6 +450,13 @@ def failed(attempt: Attempt) -> list[str]:
             if len(dq) >= NAME_FREE_FAILURES and marker not in _announced:
                 _announced.add(marker)
                 started.append(SCOPE_NAME)
+        if attempt.password_login:
+            slot = _name_slot(attempt.username)
+            marker = (SCOPE_PASSWORD, slot)
+            dq = _pruned(_by_password_name, slot, now)
+            if _retry_after(dq, MAX_PASSWORD_FAILURES_PER_NAME, now) and marker not in _announced:
+                _announced.add(marker)
+                started.append(SCOPE_PASSWORD)
     return started
 
 
@@ -436,8 +481,12 @@ def release(attempt: Attempt) -> None:
     with _lock:
         _discard(_by_user.get((attempt.bucket, attempt.username)), attempt.ts)
         _discard(_by_ip.get(attempt.bucket), attempt.ts)
+        if attempt.address_bucket is not None and attempt.address_bucket != attempt.bucket:
+            _discard(_by_ip.get(attempt.address_bucket), attempt.ts)
         if attempt.account is not None:
             _discard(_by_account.get(attempt.account), attempt.ts)
+        if attempt.password_login:
+            _discard(_by_password_name.get(_name_slot(attempt.username)), attempt.ts)
         if attempt.braked:
             slot = _name_slot(attempt.username)
             _discard(_by_name.get(slot), attempt.ts)
@@ -451,9 +500,13 @@ def succeeded(attempt: Attempt) -> None:
         _by_user.pop((attempt.bucket, attempt.username), None)
         _announced.discard((SCOPE_USER, attempt.bucket, attempt.username))
         _discard(_by_ip.get(attempt.bucket), attempt.ts)
+        if attempt.address_bucket is not None and attempt.address_bucket != attempt.bucket:
+            _discard(_by_ip.get(attempt.address_bucket), attempt.ts)
         if attempt.account is not None:
             _discard(_by_account.get(attempt.account), attempt.ts)
         slot = _name_slot(attempt.username)
+        if attempt.password_login:
+            _discard(_by_password_name.get(slot), attempt.ts)
         if attempt.braked:
             _discard(_by_name.get(slot), attempt.ts)
         # Auch nach dem Code-Schritt, der selbst nicht gebremst wird: Erst er schließt eine Anmeldung mit Zwei-Faktor ab.

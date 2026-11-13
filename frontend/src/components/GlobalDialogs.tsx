@@ -1,12 +1,4 @@
-/**
- * Die tatsächliche UI zu state/dialogs.ts -- genau EINMAL in AppShell.tsx gemountet,
- * siehe dortigen Docstring für die Begründung (Singleton statt Hook pro Aufrufer).
- *
- * Bewusst zwei getrennte `Dialog.Root`s (Confirm/Prompt) statt eines gemeinsamen --
- * beide können unabhängig offen sein (in der Praxis nie gleichzeitig, aber nichts
- * erzwingt das), und die JSX bleibt so einfacher als mit einer Union aus zwei
- * Payload-Formen in einem Root.
- */
+/** Globale Confirm- und Prompt-Dialoge, einmal in AppShell eingebunden und unabhängig voneinander geöffnet. */
 import * as Dialog from "@radix-ui/react-dialog";
 import { useState, type FormEvent } from "react";
 
@@ -25,7 +17,7 @@ export function GlobalDialogs() {
       <Dialog.Root open={confirmPending !== null} onOpenChange={(open) => { if (!open) settleConfirm(false); }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-40 bg-scrim/60" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-[var(--color-surface)] p-4 shadow-xl">
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-full max-w-[min(100vw-2rem,24rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-[var(--color-surface)] p-4 shadow-xl">
             <Dialog.Title className="mb-2 text-base font-semibold">
               {confirmPending?.options.title ?? "Bestätigen"}
             </Dialog.Title>
@@ -100,7 +92,7 @@ function IdentityDialogContent({
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/60" />
         <Dialog.Content
           data-testid="identity-dialog"
-          className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-[var(--color-surface)] p-4 shadow-xl"
+          className="fixed left-1/2 top-1/2 z-50 w-full max-w-[min(100vw-2rem,24rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-[var(--color-surface)] p-4 shadow-xl"
         >
           <Dialog.Title className="mb-2 text-base font-semibold">Bestätigen</Dialog.Title>
           <Dialog.Description className="mb-3 text-sm opacity-80">{message}</Dialog.Description>
@@ -166,7 +158,7 @@ function PromptDialogContent({
     <Dialog.Root open={open} onOpenChange={(next) => { if (!next) onCancel(); }}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-scrim/60" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-[var(--color-surface)] p-4 shadow-xl">
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-full max-w-[min(100vw-2rem,24rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-[var(--color-surface)] p-4 shadow-xl">
           <Dialog.Title className="mb-3 text-base font-semibold">{message}</Dialog.Title>
           <form onSubmit={submit}>
             <input

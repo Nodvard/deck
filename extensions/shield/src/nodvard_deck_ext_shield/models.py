@@ -1,4 +1,4 @@
-"""Tabellen der Erweiterung (eigene `Base`, Präfix `ext_nexus_soc_`); Spalten stehen 1:1 in den Migrationen."""
+"""Tabellen der Erweiterung mit eigener Base und den Spalten ihrer Migrationen."""
 
 from __future__ import annotations
 
@@ -169,3 +169,14 @@ class SecurityEventRecord(Base):
     detail: Mapped[dict[str, Any]] = mapped_column(JSON(), default=dict)
     acknowledged: Mapped[bool] = mapped_column(Boolean(), default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+
+
+class WeeklyReportRecord(Base):
+    __tablename__ = "ext_shield_weekly_reports"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    period_start: Mapped[datetime] = mapped_column(UTCDateTime)
+    period_end: Mapped[datetime] = mapped_column(UTCDateTime)
+    data: Mapped[dict[str, Any]] = mapped_column(JSON())
+    notified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)

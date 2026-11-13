@@ -3,6 +3,7 @@ Stand einmal je Commit. Geholt und eingespielt wird dabei nichts, das bleibt bei
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 import json
 import logging
@@ -94,14 +95,15 @@ class GitWatch:
             return None
         return self._shown(host_id, project, entry)
 
-    async def _look(self, host_id: str, project: str, source: Source, entry: dict[str, Any]) -> dict[str, Any]:
+    async def _look(self, host_id: str, project: str, source: Source, entry: dict[str, Any], *,
+                    scheduled: bool = False) -> dict[str, Any]:
         """Ein neuer Eintrag nach einer Abfrage; bei einem Problem bleibt der zuletzt gesehene Commit stehen."""
         kept = entry if self._belongs(entry, source) else {}
         fresh: dict[str, Any] = {"url": source.url, "ref": source.ref, "checked_at": _now(),
                                  "remote": kept.get("remote"), "ref_kind": kept.get("ref_kind")}
         try:
             known = tuple(c for c in (kept.get("remote"), self._applied(host_id, project)) if isinstance(c, str))
-            fresh["remote"], fresh["ref_kind"] = await self._git.head(host_id, project, source, known)
+            fresh["remote"], fresh["ref_kind"] = await self._git.head(host_id, project, source, known, scheduled=scheduled)
             fresh["problem"] = None
         except GitProblem as exc:
             fresh["problem"] = str(exc)
@@ -145,9 +147,11 @@ class GitWatch:
             for host_id, project, source in self._git.sources.all():
                 if self._git.is_adopted(host_id, project):
                     looked.append((host_id, project, source, await self._look(host_id, project, source,
-                                                                               snapshot.get(host_id, {}).get(project, {}))))
+                                                                               snapshot.get(host_id, {}).get(project, {}),
+                                                                               scheduled=True)))
             news: list[tuple[str, str, str]] = []
             failing: list[tuple[str, str, str]] = []
+            problems = 0
             async with self._lock:
                 current = self._read()
                 data: dict[str, dict[str, dict[str, Any]]] = {}
@@ -155,6 +159,8 @@ class GitWatch:
                     if self._git.sources.get(host_id, project) != source:
                         continue
                     before = current.get(host_id, {}).get(project, {})
+                    if self._belongs(before, source) and before != snapshot.get(host_id, {}).get(project, {}):
+                        entry = dict(before)
                     self._carry(entry, before if self._belongs(before, source) else {})
                     if entry["problem"] is None:
                         entry["failures"], entry["warned"] = 0, False
@@ -162,6 +168,7 @@ class GitWatch:
                         if applied is not None and entry["remote"] != applied and entry["remote"] != entry["notified"]:
                             news.append((host_id, project, entry["remote"]))
                     else:
+                        problems += 1
                         entry["failures"] = int(entry.get("failures") or 0) + 1
                         if entry["failures"] >= FAILURES_BEFORE_WARNING and not entry.get("warned"):
                             failing.append((host_id, project, entry["problem"]))
@@ -172,7 +179,6 @@ class GitWatch:
                 await self._mark("notified", news)
             if failing and await self._warn(failing):
                 await self._mark("warned", failing)
-        problems = sum(entry["problem"] is not None for *_, entry in looked)
         return {"stacks": sum(len(p) for p in data.values()), "new": len(news) if saved else 0, "problems": problems, "saved": saved}
 
     async def _mark(self, key: str, items: list[tuple[str, str, str]]) -> None:
@@ -277,14 +283,22 @@ def watch_routes(watch: GitWatch, docker_host: Callable[[str], Awaitable[Any]]) 
         if not PROJECT_RE.match(project):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ungültiger Stack-Name.")
 
-    @router.get("/hosts/{host_id}/stacks/{project}/git/watch")
+    @router.get(
+        "/hosts/{host_id}/stacks/{project}/git/watch",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400,)},
+    )
     async def get_watch(host_id: str, project: str) -> dict:
         """Zuletzt gesehener Stand im Repository, nur aus dem Speicher von Deck."""
         _project(project)
         host = await docker_host(host_id)
         return {"watch": watch.state(host.id, project)}
 
-    @router.post("/hosts/{host_id}/stacks/{project}/git/check")
+    @router.post(
+        "/hosts/{host_id}/stacks/{project}/git/check",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409,)},
+    )
     async def check_now(host_id: str, project: str) -> dict:
         """Fragt jetzt nur den neuesten Commit ab; lädt keine Dateien und ändert nichts am Server."""
         _project(project)

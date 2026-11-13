@@ -5,6 +5,8 @@
  */
 import { create } from "zustand";
 
+import { useAuthStore } from "./auth";
+
 export interface ConfirmOptions {
   title?: string;
   danger?: boolean;
@@ -46,6 +48,8 @@ interface DialogsState {
   settleConfirm: (value: boolean) => void;
   settlePrompt: (value: string | null) => void;
   settleIdentity: (value: IdentityConfirmation | null) => void;
+  /** Alle offenen Dialoge als abgebrochen auflösen. */
+  cancelAll: () => void;
 }
 
 export const useDialogsStore = create<DialogsState>((set, get) => ({
@@ -87,7 +91,22 @@ export const useDialogsStore = create<DialogsState>((set, get) => ({
     get().identityPending?.resolve(value);
     set({ identityPending: null });
   },
+
+  cancelAll: () => {
+    const { confirmPending, promptPending, identityPending } = get();
+    confirmPending?.resolve(false);
+    promptPending?.resolve(null);
+    identityPending?.resolve(null);
+    set({ confirmPending: null, promptPending: null, identityPending: null });
+  },
 }));
+
+// Endet die Sitzung oder ist ein anderes Konto angemeldet, gilt ein offener Dialog als abgebrochen: Seine Bestätigung
+// liefe sonst mit Token und Rechten des neuen Kontos weiter.
+useAuthStore.subscribe((state, prev) => {
+  if (prev.user === null || (state.status === "authenticated" && state.user?.id === prev.user.id)) return;
+  useDialogsStore.getState().cancelAll();
+});
 
 /** Ersatz für `window.confirm(message)`: `await confirmDialog("...")`. */
 export function confirmDialog(message: string, options: ConfirmOptions = {}): Promise<boolean> {

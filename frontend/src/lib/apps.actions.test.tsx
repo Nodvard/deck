@@ -1,7 +1,4 @@
-/**
- * `useAppActions`: nach dem Speichern aendert sich die Uebersicht sofort (der Zwischenspeicher von `["overview"]`),
- * und der Aufruf wartet nicht auf das Neuladen -- das dauert bei einem haengenden Server bis zu 12 Sekunden.
- */
+/** Speichern aktualisiert den Overview-Cache sofort und wartet nicht auf das Neuladen. */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -46,7 +43,7 @@ beforeEach(() => {
       body: typeof init?.body === "string" ? JSON.parse(init.body) : null,
     };
     calls.push(call);
-    // Die Uebersicht laedt "ewig": ein Server antwortet nicht.
+    // Die Übersicht lädt "ewig": ein Server antwortet nicht.
     if (call.method === "GET" && call.url === "/overview") return new Promise<Response>(() => {});
     return respond(call);
   }));
@@ -55,7 +52,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 function setup() {
   const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
-  // Wie im Cockpit: jemand beobachtet die Uebersicht (sonst gaebe es nichts neu zu laden).
+  // Wie im Cockpit: jemand beobachtet die Übersicht (sonst gäbe es nichts neu zu laden).
   renderHook(() => useOverview(), { wrapper });
   return renderHook(() => useAppActions(), { wrapper }).result;
 }

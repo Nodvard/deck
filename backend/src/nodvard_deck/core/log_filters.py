@@ -1,4 +1,4 @@
-"""Filter für das Zugriffsprotokoll von uvicorn (`uvicorn.access`): entfernt das Download-Ticket aus der Adresse."""
+"""Entfernt Download- und WebSocket-Tickets aus den Uvicorn-Protokollen."""
 
 from __future__ import annotations
 
@@ -12,32 +12,32 @@ REDACTED = "…"
 # Anmelde-Header); in weitergegebenen Container-Protokollen stünde ein gültiger Download-Link. Der Filter deckt den
 # Download-Aufruf und die alte Status-Adresse ab, unabhängig vom Präfix (hinter einem Proxy kann `/api/v1` anders heißen).
 _TICKET_PATH = re.compile(r"^(?P<head>[^?#]*/system/backups/download/)(?P<ticket>[^/?#]+)(?P<rest>/[^?#]*)?(?:[?#].*)?$")
+_WS_TICKET_PATH = re.compile(r"^(?P<head>[^?#]*/ws/(?:terminal|console)/)[^/?#]+(?:[?#].*)?$")
 
 
 def redact_path(path: str) -> str:
-    """Ersetzt das Ticket in einer Download-Adresse durch `…`, andere Adressen bleiben gleich."""
+    """Ersetzt Einmal-Tickets durch `…`."""
     match = _TICKET_PATH.match(path)
     if match is None:
-        return path
+        match = _WS_TICKET_PATH.match(path)
+        return f"{match['head']}{REDACTED}" if match else path
     return f"{match['head']}{REDACTED}{match['rest'] or ''}"
 
 
 class TicketRedactFilter(logging.Filter):
-    """Kürzt Download-Tickets in Zeilen des Zugriffsprotokolls (Argumente wie bei uvicorn:
-    `(client, methode, adresse, http_version, status)`)."""
+    """Kürzt Tickets in den Adressargumenten von Uvicorn."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         args = record.args
-        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
-            redacted = redact_path(args[2])
-            if redacted != args[2]:
-                record.args = (*args[:2], redacted, *args[3:])
+        if isinstance(args, tuple):
+            record.args = tuple(redact_path(value) if isinstance(value, str) else value for value in args)
         return True
 
 
 def install_access_log_filters() -> None:
     """Idempotent; der Filter hängt am Logger selbst und gilt für jeden Handler, auch für eine eigene Logging-Konfiguration.
     Aufruf beim Erzeugen der App und beim Start: uvicorn richtet sein Logging vor dem Import der App ein."""
-    logger = logging.getLogger(ACCESS_LOGGER)
-    if not any(isinstance(f, TicketRedactFilter) for f in logger.filters):
-        logger.addFilter(TicketRedactFilter())
+    for name in (ACCESS_LOGGER, "uvicorn.error"):
+        logger = logging.getLogger(name)
+        if not any(isinstance(f, TicketRedactFilter) for f in logger.filters):
+            logger.addFilter(TicketRedactFilter())

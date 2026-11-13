@@ -14,6 +14,22 @@ from nodvard_deck.core.metrics_history import ROLLUP_S, MetricsCollector, Metric
 T0 = 1_760_000_000 - 1_760_000_000 % ROLLUP_S  # auf ein 5-Minuten-Fenster ausgerichtet
 
 
+@pytest.mark.parametrize("range_name", ["1h", "24h"])
+def test_linked_history_fills_gaps_without_overwriting_manual_samples(tmp_path, range_name):
+    store = MetricsStore(tmp_path / "m.db")
+    store.insert("hand", T0, {"cpu_percent": 10.0})
+    store.insert("source", T0, {"cpu_percent": 99.0, "root_used_bytes": 25.0})
+    store.insert("source", T0 + ROLLUP_S, {"cpu_percent": 20.0})
+    now = T0 + 2 * ROLLUP_S
+    store.maintain(now, raw_retention_s=3600, rollup_retention_s=86400)
+    result = store.query_hosts("hand", ["source"], range_name, now, interval_s=30, raw_retention_s=3600)
+    assert [v for v in result["series"]["cpu_percent"] if v is not None] == [10.0, 20.0]
+    assert [v for v in result["max"]["cpu_percent"] if v is not None] == [10.0, 20.0]
+    assert 25.0 in result["series"]["root_used_bytes"]
+    assert 99.0 in store.query("source", range_name, now, interval_s=30, raw_retention_s=3600)["series"]["cpu_percent"]
+    store.close()
+
+
 def test_raw_query_returns_a_shared_time_axis_with_gaps(tmp_path):
     store = MetricsStore(tmp_path / "m.db")
     store.insert("h1", T0 + 30, {"cpu_percent": 10.0, "mem_used_bytes": 100.0})
@@ -318,3 +334,57 @@ async def test_without_sample_many_each_host_is_asked_and_a_failure_is_a_gap(his
     assert await collector.collect_once() == 0
     assert collector.current(ids, int(time.time()), max_age_s=600) == {}
     reset_metrics_collector()
+
+
+@pytest.mark.asyncio
+async def test_stored_sample_authorizes_only_its_host_provider_and_commands(history_env, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from nodvard_deck.core import gate, metrics_history
+    from nodvard_sdk.errors import ActionBlocked
+
+    class Provider(_SshLike):
+        async def sample(self, host):
+            gate.require_execution(host.id, ext_id="system")
+            for host_id, ext_id, operation in (
+                ("other-host", "system", "command"),
+                (host.id, "other-provider", "command"),
+                (host.id, "system", "shell"),
+                (host.id, "system", "sftp"),
+            ):
+                with pytest.raises(ActionBlocked):
+                    gate.require_execution(host_id, ext_id=ext_id, operation=operation)
+            return await super().sample(host)
+
+    provider = Provider()
+    collector, _, ids = await history_env(provider, ["server-a", "server-b"])
+    resolve = AsyncMock(wraps=metrics_history.resolve_metrics_provider)
+    monkeypatch.setattr(metrics_history, "resolve_metrics_provider", resolve)
+
+    assert await collector.collect_once() == 2
+    assert provider.calls == 2
+    assert resolve.await_count == 2
+    assert set(collector.store.latest(ids, int(time.time()), max_age_s=600)) == set(ids)
+    for host_id in ids:
+        with pytest.raises(ActionBlocked):
+            gate.require_execution(host_id, ext_id="system")
+
+
+@pytest.mark.asyncio
+async def test_stored_sample_respects_configured_timeout(history_env):
+    cancelled = asyncio.Event()
+
+    class Provider(_SshLike):
+        async def sample(self, host):
+            try:
+                await asyncio.sleep(5)
+                return await super().sample(host)
+            finally:
+                cancelled.set()
+
+    collector, _, ids = await history_env(Provider(), ["server-a"])
+    collector.sample_timeout_s = 0.05
+
+    assert await collector.collect_once() == 0
+    assert cancelled.is_set()
+    assert collector.store.latest(ids, int(time.time()), max_age_s=600) == {}

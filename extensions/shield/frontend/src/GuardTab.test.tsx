@@ -82,6 +82,37 @@ beforeEach(() => {
 });
 
 describe("Einbruchschutz", () => {
+  it("bindet die Einstellungskarte beim Server ein und lädt ihre Werte erst beim Öffnen", async () => {
+    const calls: Call[] = [];
+    vi.stubGlobal("fetch", mockFetch(calls));
+    render(<GuardTab canManage />);
+    const host = within(await screen.findByTestId("guard-h-pve2"));
+    expect(host.getByRole("button", { name: "Fail2ban-Einstellungen" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("guard-h-pi")).queryByRole("button", { name: "Fail2ban-Einstellungen" })).toBeNull();
+    expect(calls.filter((c) => c.url.endsWith("/fail2ban"))).toEqual([]);
+  });
+
+  it("zeigt SSH-Härtung und Fail2ban-Einstellungen gemeinsam beim Server", async () => {
+    const fallback = mockFetch([]);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const json = (data: unknown) => new Response(JSON.stringify(data), { status: 200 });
+      if (url.endsWith("/credentials")) return json([
+        { id: "key-1", kind: "ssh_key", username: "deck", port: 22, is_default: true },
+      ]);
+      if (url.includes("/ssh-hardening?")) return json({ has_key: true, authorized: true, hardened: false, managed: false, root: false, warning: null });
+      if (url.endsWith("/fail2ban")) return json({ bantime: 600, findtime: 900, maxretry: 5, ignoreip: [], jails: ["sshd"], available_jails: ["sshd"] });
+      return fallback(input, init);
+    }));
+    render(<GuardTab canManage />);
+    const host = within(await screen.findByTestId("guard-h-pve2"));
+    await waitFor(() => expect(host.getByRole("button", { name: "SSH härten" })).toBeEnabled());
+    fireEvent.click(host.getByRole("button", { name: "Fail2ban-Einstellungen" }));
+    expect(await host.findByLabelText("Sperrdauer (Sekunden)")).toHaveValue(600);
+    expect(host.getByRole("button", { name: "SSH härten" })).toBeEnabled();
+    expect(host.getByRole("button", { name: "Einstellungen übernehmen" })).toBeEnabled();
+  });
+
   it("ohne Server: Hinweis mit Link zu „Server & Zugänge“ (nur mit dem Recht dafür)", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
@@ -155,6 +186,25 @@ describe("Einbruchschutz", () => {
     const noSshd = within(screen.getByTestId("sshd-h-nosshd"));
     expect(noSshd.getByText("SSH-Einstellungen konnten nicht gelesen werden.")).toBeInTheDocument();
     expect(noSshd.queryByText(/Sicher eingestellt/)).toBeNull();
+  });
+
+  it.each([true, false])("zeigt den Grund für unlesbare SSH-Einstellungen mit root=%s", async (is_root) => {
+    const base = OVERVIEW.hosts[1];
+    const reason = "sshd: no hostkeys available -- exiting.";
+    const overview: GuardOverview = {
+      ...OVERVIEW,
+      hosts: [{ ...base, view: { ...base.view!, is_root, ssh_findings: null, ssh_error: reason } }],
+    };
+    const fallback = mockFetch([]);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      return url.endsWith("/defender/guard") ? new Response(JSON.stringify(overview), { status: 200 }) : fallback(input, init);
+    }));
+    render(<GuardTab canManage />);
+
+    const sshd = within(await screen.findByTestId("sshd-h-pi"));
+    expect(sshd.getByText(`SSH-Einstellungen konnten nicht gelesen werden: ${reason}`)).toBeInTheDocument();
+    expect(sshd.queryByText(/Sicher eingestellt/)).toBeNull();
   });
 
   it("zeigt einen ohne root nicht lesbaren Fail2ban-Zustand nicht als gestoppt", async () => {

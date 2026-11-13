@@ -36,6 +36,23 @@ def _compose() -> dict:
     return yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
 
 
+@pytest.mark.parametrize(("filename", "service"), [
+    ("compose.standalone.yml", "nodvard-deck"),
+    ("compose.standalone-mit-helfer.yml", "nodvard-deck"),
+    ("nodvard-dock/compose.yml", "nodvard-dock"),
+])
+def test_hardened_compose_keeps_the_optional_setup_code(filename, service):
+    yaml = pytest.importorskip("yaml")
+    data = yaml.safe_load((ROOT / "deploy" / filename).read_text(encoding="utf-8"))
+    app = data["services"][service]
+    assert app["user"] == "1000:1000"
+    assert app["read_only"] is True
+    assert app["tmpfs"] == ["/tmp:rw,noexec,nosuid,nodev,mode=1777"]
+    assert app["security_opt"] == ["no-new-privileges:true"]
+    assert app["cap_drop"] == ["ALL"]
+    assert app["environment"]["NODVARD_DECK_SETUP_CODE"] == "${NODVARD_DECK_SETUP_CODE:-}"
+
+
 def test_compose_structure_keeps_volume_and_names():
     data = _compose()
     assert data["name"] == "deploy", "Projektname fest, sonst aendert sich der Volume-Name"
@@ -96,3 +113,29 @@ def test_compose_healthcheck_start_period_covers_a_slow_migration():
     check = service["healthcheck"]
     assert check["start_period"] == "300s", "wie im Dockerfile: eine lange Migration samt Kopie gilt nicht als 'unhealthy'"
     assert "/api/v1/health" in " ".join(check["test"])
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="docker wird gebraucht")
+@pytest.mark.parametrize(("filename", "service"), [
+    ("docker-compose.yml", "nodvard-deck"),
+    ("compose.standalone.yml", "nodvard-deck"),
+    ("compose.standalone-mit-helfer.yml", "nodvard-deck"),
+    ("nodvard-dock/compose.yml", "nodvard-dock"),
+])
+@pytest.mark.parametrize("code", [None, "", "mein-eigener-code-7392"], ids=["nicht-gesetzt", "leer", "vorgegeben"])
+def test_setup_code_is_optional_and_passed_from_dotenv(tmp_path, filename, service, code):
+    if subprocess.run(["docker", "compose", "version"], capture_output=True, check=False).returncode != 0:
+        pytest.skip("docker compose fehlt")
+    shutil.copy(ROOT / "deploy" / filename, tmp_path / "compose.yml")
+    if code is not None:
+        (tmp_path / ".env").write_text(f"NODVARD_DECK_SETUP_CODE={code}\n", encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "NODVARD_", "LATTICE_"))}
+    result = subprocess.run(
+        ["docker", "compose", "config", "--format", "json"],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    services = json.loads(result.stdout)["services"]
+    assert services[service]["environment"]["NODVARD_DECK_SETUP_CODE"] == (code or "")
+    if "updater" in services:
+        assert "NODVARD_DECK_SETUP_CODE" not in services["updater"].get("environment", {})

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import posixpath
 import re
 from typing import Any
 
@@ -38,8 +39,12 @@ _OWNER_RE = re.compile(r"^[0-9]{1,10}:[0-9]{1,10}\Z")
 _SERVICE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
 
+def backup_path(home: str, *parts: str) -> str:
+    return posixpath.join(home.rstrip("/") or "/", BACKUP_ROOT, *parts)
+
+
 def backup_folder(home: str, project: str, stamp: str) -> str:
-    folder = f"{home.rstrip('/')}/{BACKUP_ROOT}/{project}/{stamp}"
+    folder = backup_path(home, project, stamp)
     if not PROJECT_RE.match(project) or not _STAMP_RE.match(stamp) or not _valid_path(folder) or ":" in folder:
         raise ValueError(f"Ungültiger Ordner für Sicherungen: {folder!r}")
     return folder
@@ -47,6 +52,8 @@ def backup_folder(home: str, project: str, stamp: str) -> str:
 
 def cmd_free_space(path: str) -> list[str]:
     """Freier Platz unter `path` in KB, in der festen POSIX-Form von `df`."""
+    if path:
+        path = path.rstrip("/") or "/"
     if not _valid_path(path):
         raise ValueError(f"Ungültiger Pfad: {path!r}")
     return ["df", "-Pk", path]
@@ -137,6 +144,8 @@ class VolumeBackup:
         try:
             async with self._ctx.exec.sftp(host) as sftp:
                 home = str(await sftp.realpath("."))
+                if home:
+                    home = home.rstrip("/") or "/"
                 attrs = await sftp.stat(home)
         except Exception:  # noqa: BLE001 - dann gibt es keine Sicherung
             return None
@@ -156,7 +165,7 @@ class VolumeBackup:
             out["error"] = "Der Heimatordner des Zugangs von Nodvard Deck ließ sich nicht lesen."
             return out
         home, _ = found
-        out["folder"] = f"{home}/{BACKUP_ROOT}/{project}/"
+        out["folder"] = f"{backup_path(home, project)}/"
         self._resources.forget(host.id)
         try:
             known = {v["name"]: v.get("size_bytes") for v in (await self._resources.snapshot(host)).volumes}

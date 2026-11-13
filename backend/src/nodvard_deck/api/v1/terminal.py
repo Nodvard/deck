@@ -14,6 +14,7 @@ from nodvard_sdk.capabilities import ScopedTerminalTarget, TerminalTarget
 from pydantic import BaseModel, Field, model_validator
 
 from ...config import Settings, get_settings
+from ...core import gate
 from ...core.error_text import describe_connection_error, is_expected_connection_error
 from ...core.terminal_sessions import get_terminal_session_registry
 from ...db.session import session_scope
@@ -25,6 +26,8 @@ from ...services import session_guard
 from ...services.hosts import host_to_sdk
 from ...edition import of
 from ..deps import CurrentSessionId, CurrentUser, SessionDep, SettingsDep, require_permission
+from ..models import RequestModel
+from ..responses import error_responses
 
 # Eigener Socket statt Multiplex-Hub: Eingaben sind latenzkritisch, Ausgaben binär und groß,
 # das würde dessen Steuerkanal verstopfen.
@@ -32,7 +35,7 @@ router = APIRouter(tags=["terminal"])
 logger = logging.getLogger("nodvard_deck.terminal")
 
 
-class TerminalSessionCreate(BaseModel):
+class TerminalSessionCreate(RequestModel):
     host_id: str
     cols: int = 80
     rows: int = 24
@@ -55,7 +58,11 @@ class TerminalSessionOut(BaseModel):
     ws_url: str
 
 
-@router.post("/terminal/sessions", dependencies=[Depends(require_permission("hosts.execute"))])
+@router.post(
+    "/terminal/sessions",
+    dependencies=[Depends(require_permission("hosts.execute"))],
+    responses=error_responses(401, 403, 404, 507),
+)
 async def create_terminal_session(
     payload: TerminalSessionCreate, session: SessionDep, user: CurrentUser, login_id: CurrentSessionId, settings: SettingsDep
 ) -> TerminalSessionOut:
@@ -94,7 +101,11 @@ async def _find_scoped_target(host, scope: str, ref: str):  # noqa: ANN001, ANN2
     return None
 
 
-@router.get("/terminal/hosts", dependencies=[Depends(require_permission("hosts.read"))])
+@router.get(
+    "/terminal/hosts",
+    dependencies=[Depends(require_permission("hosts.read"))],
+    responses=error_responses(401, 403, 404, 507),
+)
 async def list_terminal_hosts(session: SessionDep) -> list[str]:
     """IDs aller Hosts, für die gerade ein Anbieter eine Terminal-Sitzung öffnen kann (heute: Hosts mit
     SSH-Zugangsdaten), damit die Terminal-Seite nur diese anbietet."""
@@ -198,7 +209,8 @@ async def terminal_ws(
         opening = target.open(sdk_host, user=None, cols=ticket.cols, rows=ticket.rows)
 
     try:
-        term_session = await opening
+        with gate.authorized_ssh(ticket.host_id, operations=frozenset({"command", "shell"})):
+            term_session = await opening
     except Exception as exc:  # noqa: BLE001 - dem Client sichtbar machen, nicht den Server crashen
         # Nie ein leerer Grund: `str(TimeoutError())` ist leer, die Seite zeigte dann nichts.
         reason = describe_connection_error(exc, address=sdk_host.address)
@@ -207,7 +219,7 @@ async def terminal_ws(
             # `deploy_pi.sh` wertet "Traceback" im Protokoll als gescheiterten Start).
             logger.info("terminal_open_failed host=%s reason=%s", ticket.host_id, reason)
         else:
-            logger.exception("terminal_open_failed host=%s", ticket.host_id)
+            logger.warning("terminal_open_failed host=%s reason=%s", ticket.host_id, reason)
         await _audit(ticket, "terminal.open", "failure", reason=reason[:500])
         # Der Grund als Text vor dem Close-Frame: die Seite zeigt ihn an, statt nur "Verbindung getrennt (4500)".
         try:

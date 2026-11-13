@@ -3,6 +3,7 @@ Synology und meldet Probleme (nur lesend)."""
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -109,7 +110,11 @@ class Extension(NodvardExtension):
 
         router = APIRouter()
 
-        @router.get("/overview", response_model=Overview)
+        @router.get(
+            "/overview", response_model=Overview,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def overview(refresh: bool = False, device: str | None = None) -> Overview:
             # Ohne `device` gilt das erste Gerät. `refresh=true` überspringt den Zwischenspeicher, nicht die Pause
             # nach einer abgelehnten Anmeldung. Probleme stehen in `state` und in den Hinweisen je Teil, nicht im Statuscode.

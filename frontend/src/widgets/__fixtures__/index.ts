@@ -1,3 +1,5 @@
+import type { View } from "../types";
+
 import * as actions from "./actions";
 import * as chart from "./chart";
 import * as gauge from "./gauge";
@@ -8,20 +10,26 @@ import * as statFixture from "./stat";
 import * as statusGrid from "./status_grid";
 import * as table from "./table";
 
-/**
- * Ein Eintrag pro View-Kind (docs/02-EXTENSION-API.md nennt genau diese neun): WidgetRenderers.test.tsx iteriert diese
- * Liste und prüft ihre Länge mit, damit ein zehntes Widget-Kind ohne Fixture sofort auffällt.
- */
-export const fixtures = [
-  { name: "stat", ...statFixture },
-  { name: "list", ...list },
-  { name: "table", ...table },
-  { name: "chart", ...chart },
-  { name: "status_grid", ...statusGrid },
-  { name: "gauge", ...gauge },
-  { name: "markdown", ...markdown, expectNotContains: markdown.expectNotContains },
-  { name: "actions", ...actions },
-  { name: "log", ...log },
-] as const;
+type FixturesByKind = {
+  [Kind in View["kind"]]: {
+    name: Kind;
+    view: Extract<View, { kind: Kind }>;
+    data: unknown;
+    expectContains: readonly string[];
+    expectNotContains?: readonly string[];
+  };
+};
 
-export const VIEW_KIND_COUNT = 9;
+const fixturesByKind = {
+  stat: { name: "stat", ...statFixture },
+  list: { name: "list", ...list },
+  table: { name: "table", ...table },
+  chart: { name: "chart", ...chart },
+  status_grid: { name: "status_grid", ...statusGrid },
+  gauge: { name: "gauge", ...gauge },
+  markdown: { name: "markdown", ...markdown, expectNotContains: markdown.expectNotContains },
+  actions: { name: "actions", ...actions },
+  log: { name: "log", ...log },
+} satisfies FixturesByKind;
+
+export const fixtures = Object.values(fixturesByKind);

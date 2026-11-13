@@ -19,6 +19,7 @@ function mockFetch() {
     const method = init?.method ?? "GET";
     const json = (data: unknown) => new Response(JSON.stringify(data), { status: 200 });
     if (url.includes("/defender/overview")) return json(OVERVIEW);
+    if (url.endsWith("/defender/checks")) return json({ hosts: [] });
     if (url.endsWith("/defender/updates")) {
       return json({
         hosts: [], runs: [], summary: { hosts: 1, checked: 1, up_to_date: 1, packages: 0, security: 0, reboot: 0 },

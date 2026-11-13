@@ -34,6 +34,33 @@ function Harness({ schema, initial = {}, onValues }: { schema: JsonSchema; initi
   return <SchemaFields schema={schema} values={values} onChange={(v) => { setValues(v); onValues?.(v); }} />;
 }
 
+describe("Bedingte Felder", () => {
+  const schema: JsonSchema = {
+    properties: {
+      provider: { type: "string", title: "Anbieter", default: "local", enum: ["local", "remote"] },
+      local: { type: "string", title: "Lokale Adresse", "x-visible-when": { provider: "local" } },
+      remote: { type: "string", title: "Andere Adresse", pattern: "^https://", "x-network-warning": true, "x-visible-when": { provider: "remote" } },
+    },
+  };
+
+  it("nutzt den Standardanbieter und erhält Werte beim Wechsel", () => {
+    const seen = vi.fn();
+    render(<Harness schema={schema} initial={{ local: "http://127.0.0.1", remote: "https://api.invalid" }} onValues={seen} />);
+    expect(screen.getByLabelText("Lokale Adresse")).toHaveValue("http://127.0.0.1");
+    expect(screen.queryByLabelText("Andere Adresse")).toBeNull();
+    expect(screen.queryByText("Daten verlassen dein Netz")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Anbieter"), { target: { value: "remote" } });
+    expect(screen.getByLabelText("Andere Adresse")).toHaveValue("https://api.invalid");
+    expect(screen.getByText("Daten verlassen dein Netz")).toBeInTheDocument();
+    expect(seen.mock.lastCall?.[0].local).toBe("http://127.0.0.1");
+  });
+
+  it("prüft nur sichtbare Felder", () => {
+    expect(validateValues(schema, { remote: "ungültig" })).toEqual([]);
+    expect(validateValues(schema, { provider: "remote", remote: "ungültig" })).toEqual(["Andere Adresse: Das Format stimmt nicht."]);
+  });
+});
+
 describe("Server- und Markierungs-Auswahl", () => {
   it("host-tag: Markierungen mit Anzahl als Auswahlliste, leerer Eintrag = alle", async () => {
     mockFetch(() => json(HOSTS));

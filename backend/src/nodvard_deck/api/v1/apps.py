@@ -20,6 +20,8 @@ from ...models import CustomApp, User
 from ...services import audit as audit_service
 from ...services import custom_apps as apps_service
 from ..deps import CurrentUser, SessionDep, require_permission
+from ..models import RequestModel
+from ..responses import error_responses
 
 # Lesen braucht `hosts.read` (wie die erkannten Apps im Cockpit). Schreiben braucht `apps.write`: Ein Link auf der
 # Startseite ist für jeden Nutzer ein Klick-Ziel, das passt weder zu `hosts.write` (viel mehr Macht) noch zu
@@ -69,7 +71,7 @@ def _check_sort(value: int | None) -> int | None:
     return value
 
 
-class AppCreate(BaseModel):
+class AppCreate(RequestModel):
     # Die Längen prüft `services.custom_apps` (mit deutscher Meldung), kein `Field(max_length=...)`.
     name: str
     url: str
@@ -117,7 +119,7 @@ class AppCreate(BaseModel):
         return _check_sort(value)
 
 
-class AppPatch(BaseModel):
+class AppPatch(RequestModel):
     """Nur die genannten Felder ändern. `icon`, `color`, `group` und `host_id` lassen sich mit `null` leeren."""
 
     name: str | None = None
@@ -177,7 +179,7 @@ ORDER_SLACK = 50
 (Beispieldaten, zwei gleichzeitige Anlegen). Jede genannte ID muss ohnehin eine vorhandene, nur einmal genannte App sein."""
 
 
-class AppOrder(BaseModel):
+class AppOrder(RequestModel):
     ids: list[str]
     """Die Apps in der gewünschten Reihenfolge; nicht genannte kommen dahinter."""
 
@@ -207,7 +209,11 @@ def _http(exc: apps_service.AppServiceError) -> HTTPException:
     return HTTPException(status_code=422, detail=str(exc))
 
 
-@router.get("", dependencies=[Depends(require_permission("hosts.read"))])
+@router.get(
+    "",
+    dependencies=[Depends(require_permission("hosts.read"))],
+    responses=error_responses(401, 403, 404, 507),
+)
 async def list_apps(session: SessionDep) -> list[CustomAppOut]:
     return await _out(session, await apps_service.list_apps(session))
 
@@ -304,7 +310,11 @@ async def _from_services() -> tuple[list[AppSuggestionOut], str | None]:
     return out, None
 
 
-@router.get("/suggestions", dependencies=[Depends(require_permission("apps.write"))])
+@router.get(
+    "/suggestions",
+    dependencies=[Depends(require_permission("apps.write"))],
+    responses=error_responses(401, 403, 404, 502, 507),
+)
 async def app_suggestions(session: SessionDep) -> AppSuggestionsOut:
     """Vorschläge für neue App-Kacheln: Proxy-Hosts, erkannte Dienste (mit `service_id`) und alles, was eine
     Erweiterung als `AppSuggestionProvider` nennt. Geprüft wie eine von Hand angelegte App; Adressen, die es schon gibt,
@@ -332,7 +342,12 @@ async def app_suggestions(session: SessionDep) -> AppSuggestionsOut:
     return AppSuggestionsOut(suggestions=suggestions[:MAX_SUGGESTIONS], errors=errors)
 
 
-@router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("apps.write"))])
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("apps.write"))],
+    responses=error_responses(401, 403, 404, 409, 422, 507),
+)
 async def create_app(payload: AppCreate, session: SessionDep, user: CurrentUser) -> CustomAppOut:
     try:
         app = await apps_service.create_app(
@@ -349,7 +364,11 @@ async def create_app(payload: AppCreate, session: SessionDep, user: CurrentUser)
     return (await _out(session, [app]))[0]
 
 
-@router.put("/order", dependencies=[Depends(require_permission("apps.write"))])
+@router.put(
+    "/order",
+    dependencies=[Depends(require_permission("apps.write"))],
+    responses=error_responses(401, 403, 404, 409, 422, 507),
+)
 async def reorder_apps(payload: AppOrder, session: SessionDep, user: CurrentUser) -> list[CustomAppOut]:
     try:
         ordered = await apps_service.reorder(session, payload.ids)
@@ -359,7 +378,11 @@ async def reorder_apps(payload: AppOrder, session: SessionDep, user: CurrentUser
     return await _out(session, ordered)
 
 
-@router.patch("/{app_id}", dependencies=[Depends(require_permission("apps.write"))])
+@router.patch(
+    "/{app_id}",
+    dependencies=[Depends(require_permission("apps.write"))],
+    responses=error_responses(401, 403, 404, 409, 422, 507),
+)
 async def update_app(app_id: str, payload: AppPatch, session: SessionDep, user: CurrentUser) -> CustomAppOut:
     changes = {field: getattr(payload, field) for field in payload.model_fields_set}
     try:
@@ -372,7 +395,12 @@ async def update_app(app_id: str, payload: AppPatch, session: SessionDep, user: 
     return (await _out(session, [app]))[0]
 
 
-@router.delete("/{app_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("apps.write"))])
+@router.delete(
+    "/{app_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("apps.write"))],
+    responses=error_responses(401, 403, 404, 409, 422, 507),
+)
 async def delete_app(app_id: str, session: SessionDep, user: CurrentUser) -> Response:
     try:
         app = await apps_service.get_app(session, app_id)

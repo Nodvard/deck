@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ssl
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,7 +11,7 @@ from fastapi import status as http_status
 from fastapi.responses import JSONResponse
 from nodvard_sdk import Actor, PeerCertificate, same_target, sha256_fingerprint
 from nodvard_sdk.errors import PermissionDenied
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
@@ -92,6 +93,8 @@ def _certificate_out(cert: PeerCertificate, stored: str | None, *, invalid: bool
 
 
 class CertificateConfirmIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     sha256: str = Field(max_length=MAX_INPUT)
     """Der Fingerabdruck, den die Person mit dem beim Server verglichen hat."""
 
@@ -116,7 +119,11 @@ def build_certificate_router(ctx: ExtensionContext) -> APIRouter:
         cert = await read_certificate(ctx, str(conn.get("base_url") or ""))
         return _certificate_out(cert, stored, invalid=invalid)
 
-    @router.post("/connections/{name}/certificate")
+    @router.post(
+        "/connections/{name}/certificate",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 409)},
+    )
     async def confirm_certificate(
         name: str, payload: CertificateConfirmIn, actor: Actor = Depends(ctx.api.current_actor),  # noqa: B008
     ) -> Any:

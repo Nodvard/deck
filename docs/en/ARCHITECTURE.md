@@ -234,7 +234,10 @@ the app's API and WebSockets only at its own address; images may additionally be
 (`img-src 'self' data: blob:`), frames
 only `blob:` (the PDF preview in Documents, „Dokumente“). The CSP is enforced without wildcards or `unsafe-inline`: Dynamic styles and xterm stylesheets
 use a fresh nonce per non-cacheable HTML response, style attributes are blocked, and fonts come only from the app itself;
-`NODVARD_DECK_CSP_LEGACY=1` restores the previous style policy in an emergency and logs a warning.
+the deprecated setting `NODVARD_DECK_CSP_LEGACY=1` is ignored with a warning and can be removed.
+The strict policy also applies to existing configurations.
+A local Vite correction sets xterm's truecolor and contrast colors through CSSOM instead of style attributes.
+If that library code changes in an update, the build fails for a new review.
 JSON responses without rules of their own get `default-src 'none'`. What this means for extension bundles is described in the
 [Extension interface](EXTENSION-API.md#loading-the-frontend-bundle). Links from extension
 data (app tiles, command palette, widgets, extension pages) are accepted by the UI only with `http:` or

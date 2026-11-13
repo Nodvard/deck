@@ -116,13 +116,13 @@ export function ActionButton({ action, row, extId, onDone }: { action: WidgetAct
         const actionId = result.id ?? result.action_id;
         const risk = result.risk;
         if (actionId && risk && useAuthStore.getState().hasPermission(`actions.approve:${risk}`)) {
-          // approve liefert das Ergebnis mit -- es wurde bisher verworfen.
+          // Die Freigabe liefert auch das Ausführungsergebnis.
           const approved = await settle(await api.post<ProposeResult>(`/actions/${actionId}/approve`), actionId);
           if (approved?.status && DIRECT_FAILURE.has(approved.status)) {
             setError(await failureText({ ...approved, id: approved.id ?? actionId }));
           }
         } else {
-          setNotice(`"${action.label}" vorgeschlagen – Freigabe durch einen Admin nötig, siehe "Aktionen".`);
+          setNotice(`"${action.label}" vorgeschlagen, Freigabe durch einen Admin nötig, siehe "Aktionen".`);
         }
       } else if (result && isActionRunning(result.status) && (result.id ?? result.action_id)) {
         const final = await settle(result, result.id ?? result.action_id);

@@ -10,7 +10,8 @@ import logging
 import secrets
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from contextlib import nullcontext
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -134,11 +135,15 @@ def _target_from_json(data: Any) -> ComposeTarget:
         raise ValueError("kein Ziel")
     if not isinstance(data.get("config_files"), list) or not isinstance(data.get("env_files") or [], list):
         raise ValueError("Ziel: Dateilisten sind keine Listen")
+    names = data.get("env_names", [])
+    if not ia.valid_env_names(names):
+        raise ValueError("Ungültige Variablennamen.")
     try:
         t = ComposeTarget(
             container=data["container"], container_id=data["container_id"], image=data["image"], image_id=data["image_id"],
             project=data["project"], service=data["service"], working_dir=data["working_dir"],
             config_files=tuple(data["config_files"]), env_files=tuple(data.get("env_files") or ()), config_hash=data.get("config_hash"),
+            env_names=tuple(names),
         )
     except (KeyError, TypeError) as exc:
         raise ValueError("Ziel unvollständig") from exc
@@ -238,9 +243,10 @@ class ImageApplier:
     """`hints()` und `plan()` lesen nur, `apply()` ist die Gate-Aktion `container.image_update`: Der Lauf startet
     entkoppelt auf dem Host, das Dashboard fragt nach, prüft den Start, bewertet neu und meldet."""
 
-    def __init__(self, ctx: ExtensionContext, images: ImageUpdateService) -> None:
+    def __init__(self, ctx: ExtensionContext, images: ImageUpdateService, adopted: Any = None) -> None:
         self._ctx = ctx
         self._images = images
+        self._adopted = adopted
         self._busy: dict[str, str] = {}
         """`host_id:projekt` -> Container, für den dort gerade ein Update läuft."""
         self.stack_busy: Callable[[str, str], str | None] | None = None
@@ -302,6 +308,9 @@ class ImageApplier:
         if isinstance(found, NotUpdatable):
             return found
         t = found
+        entry = self._adopted.for_host(host.id).get(t.project) if self._adopted is not None else None
+        if entry is not None and (entry.working_dir, entry.config_files, entry.env_files) == (t.working_dir, t.config_files, t.env_files):
+            t = replace(t, env_names=entry.env_names)
         if str(info.get("state") or "") != "running":
             return NotUpdatable("not_running", "Container läuft nicht.")
 
@@ -638,7 +647,7 @@ class ImageApplier:
             and not ia.is_data_store(t.image, t.service)
             and await self._auto_rollback_enabled()
         ):
-            back = await self._auto_rollback(host, t, rollback_ref, run_id, app_key)
+            back = await self._auto_rollback(host, t, rollback_ref, run_id, app_key, resumed=resumed)
             message = f"{message.rstrip('.')}. {back['text']}"
             if public_message is not None:  # die öffentliche Fassung bekommt denselben (festen) Satz dazu
                 public_message = f"{public_message.rstrip('.')}. {back['text']}"
@@ -727,7 +736,8 @@ class ImageApplier:
         step: str | None = None
         while True:
             try:
-                res = await self._ctx.exec.run(host, command, timeout_s=POLL_TIMEOUT_S)
+                with self._ctx.exec.read_access(host):
+                    res = await self._ctx.exec.run(host, command, timeout_s=POLL_TIMEOUT_S)
             except Exception as exc:  # noqa: BLE001 - Verbindung weg: weiter nachfragen
                 last_error = _describe(exc)
             else:
@@ -761,13 +771,15 @@ class ImageApplier:
             await asyncio.sleep(POLL_INTERVAL_S)
 
     async def _read_state(self, host: Any, t: ComposeTarget, rollback_ref: str) -> ia.Snapshot:
-        res = await self._ctx.exec.run(host, ia.cmd_verify(t, rollback_ref), timeout_s=VERIFY_CALL_TIMEOUT_S)
+        with self._ctx.exec.read_access(host):
+            res = await self._ctx.exec.run(host, ia.cmd_verify(t, rollback_ref), timeout_s=VERIFY_CALL_TIMEOUT_S)
         return ia.parse_verify(scrub_compose_output((res.stdout or "") + (res.stderr or "")))
 
     async def _rollback_started(self, host: Any, run_id: str) -> bool:
         """Gibt es auf dem Host schon einen Rückweg zu diesem Update (nach einem Neustart des Dashboards)?"""
         try:
-            res = await self._ctx.exec.run(host, dt.poll_command(rollback_run_id(run_id)), timeout_s=POLL_TIMEOUT_S)
+            with self._ctx.exec.read_access(host):
+                res = await self._ctx.exec.run(host, dt.poll_command(rollback_run_id(run_id)), timeout_s=POLL_TIMEOUT_S)
         except Exception:  # noqa: BLE001 - im Zweifel: keiner (dann wie gewohnt prüfen)
             return False
         return dt.parse_poll((res.stdout or "") + (res.stderr or "")).state in ("running", "done", "lost")
@@ -778,7 +790,9 @@ class ImageApplier:
         except Exception:  # noqa: BLE001 - im Zweifel wie die Vorgabe
             return True
 
-    async def _auto_rollback(self, host: Any, t: ComposeTarget, rollback_ref: str, run_id: str, app_key: str) -> dict[str, Any]:
+    async def _auto_rollback(
+        self, host: Any, t: ComposeTarget, rollback_ref: str, run_id: str, app_key: str, *, resumed: bool = False,
+    ) -> dict[str, Any]:
         """Zurück auf das Sicherungs-Image (entkoppelt wie das Update) und prüfen, ob die alte Version wieder ruhig läuft.
         Die Lauf-ID hängt fest am Update: nach einem Neustart des Dashboards startet kein zweiter Rückweg, sondern der
         laufende wird weiter abgefragt. Wirft nie (außer beim Herunterfahren)."""
@@ -786,9 +800,10 @@ class ImageApplier:
         self._set_phase(app_key, "rollback")
         try:
             for attempt in range(ROLLBACK_LAUNCH_TRIES):
-                outcome = await self._launch_and_wait(
-                    host, back_id, ia.rollback_script(t, rollback_ref), app_key, t.project, deadline_s=ROLLBACK_DEADLINE_S,
-                )
+                with self._ctx.exec.read_access(host) if resumed else nullcontext():
+                    outcome = await self._launch_and_wait(
+                        host, back_id, ia.rollback_script(t, rollback_ref), app_key, t.project, deadline_s=ROLLBACK_DEADLINE_S,
+                    )
                 # Die Sperre des Projekts gibt das Update erst kurz nach seinem Rückgabecode frei.
                 if not (outcome.state == "not_started" and outcome.message == BUSY_MESSAGE) or attempt == ROLLBACK_LAUNCH_TRIES - 1:
                     break

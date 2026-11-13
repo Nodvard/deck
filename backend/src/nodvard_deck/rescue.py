@@ -283,6 +283,7 @@ class Rescue:
 
     def try_code(self, ip: str, candidate: object, *, now: float | None = None) -> tuple[str, Any]:
         """-> ("ok", Sitzungstoken) | ("wrong", None) | ("locked", Sekunden bis zum nächsten Versuch)."""
+        ip = _sender((ip, 0))[0]
         now = time.monotonic() if now is None else now
         expected = normalize(self._code).encode()
         # Der Code wird immer geprüft, auch während einer Sperre (mit `compare_digest`, vor jeder Auskunft über die
@@ -611,10 +612,12 @@ _SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
-    # Nicht `no-referrer`: Browser schicken dann bei einem Formular `Origin: null`, und die Prüfung von `Origin` unten würde
-    # jede Eingabe abweisen. `same-origin` schickt den Ursprung nur an die eigene Seite und sonst nichts.
+    # HTTPS endet am Proxy; über HTTP ignoriert der Browser HSTS.
+    "Strict-Transport-Security": "max-age=31536000",
+    # Mit `no-referrer` schicken Browser bei eigenen Formularen `Origin: null`.
     "Referrer-Policy": "same-origin",
     "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Embedder-Policy": "require-corp",
     "Cross-Origin-Resource-Policy": "same-origin",
     "Permissions-Policy": (
         "accelerometer=(), bluetooth=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), hid=(), "

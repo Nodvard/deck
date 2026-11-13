@@ -108,6 +108,48 @@ async def test_list_and_get_actions(client, db_session):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("offset", [2**63, 10**100])
+async def test_list_rejects_offset_outside_sqlite_range(client, db_session, offset):
+    await _create_user_with_role(db_session, username="gast", password="whatever123", role="viewer")
+    token = await _login(client, "gast", "whatever123")
+    await _make_action(db_session)
+
+    response = await client.get(
+        "/api/v1/actions", params={"offset": str(offset)}, headers=_auth_header(token)
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"][0]["loc"] == ["query", "offset"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("offset, expected_count", [(0, 1), (1, 0), (2**63 - 1, 0)])
+async def test_list_accepts_offset_within_sqlite_range(client, db_session, offset, expected_count):
+    token = await _bootstrap_owner(client)
+    action = await _make_action(db_session)
+
+    response = await client.get(
+        "/api/v1/actions", params={"offset": str(offset), "limit": 1}, headers=_auth_header(token)
+    )
+    assert response.status_code == 200, response.text
+    assert [row["id"] for row in response.json()] == [action.id] * expected_count
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["status_", "action_type", "host_id"])
+@pytest.mark.parametrize(
+    "value", ["", "unknown' OR 1=1 --", "\x00", "x" * 8192, "\ufffd"],
+    ids=["empty", "sql", "nul", "long", "unicode"],
+)
+async def test_list_unmatched_filters_return_no_actions(client, db_session, field, value):
+    token = await _bootstrap_owner(client)
+    await _make_action(db_session)
+
+    response = await client.get("/api/v1/actions", params={field: value}, headers=_auth_header(token))
+    assert response.status_code == 200, response.text
+    assert response.json() == []
+
+
+@pytest.mark.asyncio
 async def test_operator_can_approve_low_risk_but_not_high_risk(client, db_session):
     get_extension_runtime().capabilities.provide("terminal", ActionExecutor, _FakeExecutor())
     await _create_user_with_role(db_session, username="op1", password="whatever123", role="operator")
@@ -618,7 +660,10 @@ async def test_slow_approve_failure_ends_in_failed_with_reason(client, file_db, 
     assert await gate.wait_for_action(action.id, 5) is True
     done = (await client.get(f"/api/v1/actions/{action.id}", headers=_auth_header(token))).json()
     assert done["status"] == "failed"
-    assert done["result"]["error"] == "Paketquelle nicht erreichbar"
+    import re
+
+    assert re.fullmatch(r"Die Anfrage ist fehlgeschlagen\. Fehlerkennung: [0-9a-f]{32}\.", done["result"]["error"])
+    assert "Paketquelle" not in done["result"]["error"]  # Text der Ausnahme kommt nur ins Protokoll, nie zum Nutzer
 
 
 @pytest.mark.asyncio

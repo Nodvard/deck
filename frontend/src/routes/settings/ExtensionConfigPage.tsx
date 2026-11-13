@@ -16,7 +16,7 @@ import { sameTarget } from "../../lib/targetAddress";
 import { confirmDialog } from "../../state/dialogs";
 import { useEdition } from "../../state/edition";
 import { QrLinkCard } from "./QrLinkCard";
-import { SchemaFields, validateValues, type JsonSchema } from "./SchemaForm";
+import { SchemaFields, schemaVisible, validateValues, type JsonSchema } from "./SchemaForm";
 import { Badge, Button, Card, ExtensionStateBadge, NoticeLine, errorText, inputClass, type Notice } from "./ui";
 
 interface SecretSlot {
@@ -32,6 +32,10 @@ interface TestResultData {
   ok: boolean;
   message: string;
   details?: { name: string; ok: boolean; message: string }[] | null;
+  latency_ms?: number;
+  model?: string;
+  models?: { value: string; label: string }[];
+  models_error?: string | null;
 }
 
 interface ExtSettings {
@@ -62,7 +66,8 @@ interface ExtInfo {
 function changedValues(schema: JsonSchema | null, saved: Record<string, unknown>, current: Record<string, unknown>) {
   const out: Record<string, unknown> = {};
   for (const key of new Set([...Object.keys(saved), ...Object.keys(current)])) {
-    if (schema?.properties?.[key]?.["x-hidden"]) continue;
+    const field = schema?.properties?.[key];
+    if (field?.["x-hidden"] || schema && !schemaVisible(field?.["x-visible-when"], schema, current)) continue;
     if (JSON.stringify(saved[key]) === JSON.stringify(current[key])) continue;
     out[key] = current[key] === undefined ? null : current[key];
   }
@@ -73,6 +78,7 @@ interface SecretSpec {
   label: string;
   per_item?: string;
   "x-secret-bound-to"?: string[];
+  "x-visible-when"?: Record<string, unknown>;
 }
 
 function pathValue(values: unknown, path: string): unknown {
@@ -117,6 +123,7 @@ function pendingSecretClears(schema: (JsonSchema & { "x-secrets"?: unknown }) | 
   const out = new Map<string, ClearReason>();
   const specs = Array.isArray(schema?.["x-secrets"]) ? (schema["x-secrets"] as SecretSpec[]) : [];
   for (const spec of specs) {
+    if (schema && !schemaVisible(spec["x-visible-when"], schema, current)) continue;
     const bound = (spec["x-secret-bound-to"] ?? []).filter((p) => typeof p === "string" && p);
     if (bound.length === 0) continue;
     if (spec.per_item) {
@@ -328,6 +335,7 @@ export function ExtensionConfigPage(): JSX.Element {
             extId={extId}
             slots={data.secrets}
             schema={data.schema}
+            values={values}
             state={info?.state ?? "enabled"}
             dirty={dirty}
             pendingClears={pendingClears}
@@ -362,11 +370,12 @@ function SetupBanner({ reasons }: { reasons: string[] }) {
 }
 
 function ConnectionCard({
-  extId, slots, schema, state, dirty, pendingClears, noTarget, lastTest, onSecretChanged, onTested,
+  extId, slots, schema, values, state, dirty, pendingClears, noTarget, lastTest, onSecretChanged, onTested,
 }: {
   extId: string;
   slots: SecretSlot[];
   schema: JsonSchema;
+  values: Record<string, unknown>;
   state: string;
   dirty: boolean;
   pendingClears: Map<string, ClearReason>;
@@ -379,15 +388,27 @@ function ConnectionCard({
   const [running, setRunning] = useState<"connection" | "message" | null>(null);
   const [result, setResult] = useState<TestResultData | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  const shown = result ?? (lastTest && !failure ? { ok: lastTest.ok, message: lastTest.message, details: null, earlier: true } : null);
-  const blocked = state !== "enabled" ? "Erst die Erweiterung einschalten, dann lässt sich testen." : dirty ? "Erst speichern, dann testen – getestet wird der gespeicherte Stand." : null;
+  const [target, setTarget] = useState("primary");
+  const testUrl = schema["x-connection-test-url"];
+  const targets = schema["x-connection-test-targets"] ?? [];
+  const validTestUrl = !testUrl || (testUrl.startsWith(`/ext/${encodeURIComponent(extId)}/`) && !/[\\%?#\s\u0000-\u001f\u007f]/.test(testUrl) && !testUrl.split("/").some((part) => part === "." || part === ".."));
+  const specs = (schema as JsonSchema & { "x-secrets"?: SecretSpec[] })["x-secrets"] ?? [];
+  const visibleSlots = uniqueSlots(slots).filter((slot) => {
+    const spec = specs.find((entry) => entry.label.replace("{name}", slot.item ?? "") === slot.label);
+    return schemaVisible(spec?.["x-visible-when"], schema, values);
+  });
+  useEffect(() => { setResult(null); setFailure(null); }, [values, slots]);
+  const shown = dirty ? null : result ?? (lastTest && !failure ? { ok: lastTest.ok, message: lastTest.message, details: null, earlier: true } : null);
+  const blocked = state !== "enabled" ? "Erst die Erweiterung einschalten, dann lässt sich testen." : dirty ? "Erst speichern, dann testen: Getestet wird der gespeicherte Stand." : !validTestUrl ? "Die Testadresse der Erweiterung ist ungültig." : null;
 
   async function run(mode: "connection" | "message") {
     setRunning(mode);
     setResult(null);
     setFailure(null);
     try {
-      setResult(await api.post<TestResultData>(`/extensions/${extId}/test`, { mode }));
+      if (!validTestUrl) return;
+      const path = mode === "connection" && testUrl ? `${testUrl}?which=${encodeURIComponent(target)}` : `/extensions/${extId}/test`;
+      setResult(await api.post<TestResultData>(path, testUrl && mode === "connection" ? undefined : { mode }));
       onTested();
     } catch (err) {
       setFailure(errorText(err));
@@ -399,11 +420,11 @@ function ConnectionCard({
   return (
     <Card
       title="Verbindung"
-      description={slots.length > 0 ? "Zugangsdaten werden verschlüsselt gespeichert und nie wieder angezeigt. Zum Ändern einfach ersetzen." : "Prüft, ob die gespeicherten Einstellungen funktionieren."}
+      description={visibleSlots.length > 0 ? "Zugangsdaten werden verschlüsselt gespeichert und nie wieder angezeigt. Zum Ändern einfach ersetzen." : "Prüft, ob die gespeicherten Einstellungen funktionieren."}
     >
-      {slots.length > 0 && (
+      {visibleSlots.length > 0 && (
         <div className="divide-y divide-white/[0.06]">
-          {uniqueSlots(slots).map((slot) => (
+          {visibleSlots.map((slot) => (
             <SecretRow
               key={slot.label}
               extId={extId}
@@ -414,8 +435,17 @@ function ConnectionCard({
           ))}
         </div>
       )}
-      <div className={slots.length > 0 ? "mt-4 border-t border-white/[0.06] pt-4" : ""}>
+      <div className={visibleSlots.length > 0 ? "mt-4 border-t border-white/[0.06] pt-4" : ""}>
+        {testUrl && <p className="mb-2 text-xs text-white/50">Der Test sendet eine kurze Anfrage mit den gespeicherten Einstellungen. Die Modellliste wird separat geladen.</p>}
         <div className="flex flex-wrap items-center gap-2">
+          {testUrl && targets.length > 0 && (
+            <label className="text-xs text-white/60">
+              <span className="mr-2">Server für den Test</span>
+              <select className={`${inputClass} w-auto`} value={target} disabled={running !== null} onChange={(e) => { setTarget(e.target.value); setResult(null); setFailure(null); }}>
+                {targets.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+              </select>
+            </label>
+          )}
           <Button variant="primary" busy={running === "connection"} disabled={blocked !== null || running !== null} onClick={() => void run("connection")}>
             <Zap size={14} /> Verbindung testen
           </Button>
@@ -428,14 +458,14 @@ function ConnectionCard({
         </div>
         {failure && <TestResultBox ok={false} message={failure} />}
         {shown && !failure && (
-          <TestResultBox ok={shown.ok} message={shown.message} details={shown.details ?? undefined} earlier={"earlier" in shown} />
+          <TestResultBox {...shown} details={shown.details ?? undefined} earlier={"earlier" in shown} />
         )}
       </div>
     </Card>
   );
 }
 
-function TestResultBox({ ok, message, details, earlier }: { ok: boolean; message: string; details?: { name: string; ok: boolean; message: string }[]; earlier?: boolean }) {
+function TestResultBox({ ok, message, details, earlier, latency_ms, model, models, models_error }: Omit<TestResultData, "details"> & { details?: TestResultData["details"]; earlier?: boolean }) {
   return (
     <div
       role={ok ? "status" : "alert"}
@@ -446,6 +476,9 @@ function TestResultBox({ ok, message, details, earlier }: { ok: boolean; message
         {ok ? <CheckCircle2 size={16} className="mt-0.5 flex-none" /> : <XCircle size={16} className="mt-0.5 flex-none" />}
         <span>{earlier && <span className="mr-1 text-xs opacity-70">Letzter Test:</span>}{message}</span>
       </p>
+      {latency_ms !== undefined && <p className="mt-1 text-xs">Antwortzeit: {Math.round(latency_ms)} ms{model ? ` · Modell: ${model}` : ""}</p>}
+      {models && models.length > 0 && <p className="mt-2 text-xs">Verfügbare Modelle: {models.map((item) => item.label).join(", ")}</p>}
+      {models_error && <p className="mt-2 text-xs">Modellliste nicht verfügbar: {models_error}</p>}
       {details && details.length > 0 && (
         <ul className="mt-2 space-y-1 border-t border-white/10 pt-2 text-[13px]">
           {details.map((d) => (

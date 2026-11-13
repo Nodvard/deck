@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from ...changelog import Entry, get_changelog
 from ...edition import of
 from ...version import __version__
+from ..responses import error_responses
 from ..deps import CurrentUser, SettingsDep
 
 router = APIRouter(prefix="/app", tags=["app"])
@@ -47,7 +48,7 @@ def _entry_out(entry: Entry) -> ChangelogEntryOut:
     return ChangelogEntryOut(kind=entry.kind, text=entry.text, prs=list(entry.prs))  # type: ignore[arg-type]
 
 
-@router.get("/changelog", name="read_changelog")
+@router.get("/changelog", name="read_changelog", responses=error_responses(401, 403, 507))
 async def changelog_response(_user: CurrentUser, settings: SettingsDep, include_documentation: bool = False) -> ChangelogOut:
     response = await read_changelog(_user, settings)
     if not include_documentation:

@@ -9,7 +9,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import event, select
 
-from nodvard_deck.core import security
+from nodvard_deck.core import rate_limit, security
 from nodvard_deck.db import new_id, utcnow
 from nodvard_deck.models import AuditEntry, RefreshToken, User
 from nodvard_deck.services import auth as auth_service
@@ -171,7 +171,10 @@ async def test_long_chains_are_followed(client):
 
 
 @pytest.mark.asyncio
-async def test_logout_reaches_the_end_of_a_chain_turned_far_beyond_the_check_limit(client):
+async def test_logout_reaches_the_end_of_a_chain_turned_far_beyond_the_check_limit(client, monkeypatch):
+    # Die Kontogrenze für Refreshs (30 je Minute) bleibt, die Testuhr verteilt die Rotationen auf mehrere Minuten.
+    clock = itertools.count(1000.0, 3.0)
+    monkeypatch.setattr(rate_limit, "_now", lambda: next(clock))
     await _bootstrap(client)
     first = latest = await _app_login(client)
     for _ in range(auth_service.SESSION_CHAIN_MAX_HOPS + 10):

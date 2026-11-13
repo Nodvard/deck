@@ -852,6 +852,40 @@ async def test_widget_data_endpoint_returns_the_wrapped_envelope(client, db_sess
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("connected", [False, True])
+async def test_empty_backups_have_no_success_badge(client, db_session, test_settings, mock_backup_api, connected):
+    from nodvard_deck.api.v1 import overview as overview_api
+
+    base_url, state = mock_backup_api
+    state["jobs"] = []
+    connections = [{"name": "primary", "base_url": base_url, "token_id": _TOKEN_ID}] if connected else []
+    token = await _setup_backups_connections(client, db_session, test_settings, connections)
+    headers = _auth_header(token)
+
+    jobs = await client.get("/api/v1/ext/backups/jobs", headers=headers)
+    assert jobs.status_code == 200, jobs.text
+    assert jobs.json() == []
+    widget = await client.get("/api/v1/ext/backups/widgets/summary", headers=headers)
+    assert widget.status_code == 200, widget.text
+    assert widget.json()["data"] == []
+
+    overview_api.reset_cache()
+    try:
+        overview = await client.get("/api/v1/overview", headers=headers)
+        assert overview.status_code == 200, overview.text
+        assert overview.json()["backups"] == {
+            "total": 0, "ok": 0, "failed": 0, "running": 0, "unknown": 0,
+            "failed_names": [], "unreachable_names": [],
+        }
+    finally:
+        overview_api.reset_cache()
+
+    widgets = (await client.get("/api/v1/widgets", headers=headers)).json()
+    spec = next(w for w in widgets if w["ext_id"] == "backups")
+    assert spec["view"]["empty_text"] == "Keine Sicherungsjobs gefunden"
+
+
+@pytest.mark.asyncio
 async def test_health_does_not_hide_one_broken_connection_behind_a_working_one(
     client, db_session, test_settings, mock_backup_api
 ):

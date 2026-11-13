@@ -27,6 +27,7 @@ from ...ext.runtime import get_extension_runtime
 from ...models import Action, Notification
 from ...services import custom_apps as custom_apps_service
 from ...services import helper_hints as helper_hints_service
+from ..responses import error_responses
 from ..deps import CurrentUser, SessionDep, require_permission
 from .host_access import root_helpers_for, root_needs_helpers_only
 
@@ -299,7 +300,11 @@ def reset_cache() -> None:
     _cache.update(at=0.0, value=None)
 
 
-@router.get("", dependencies=[Depends(require_permission("hosts.read"))])
+@router.get(
+    "",
+    dependencies=[Depends(require_permission("hosts.read"))],
+    responses=error_responses(401, 403, 404, 507),
+)
 async def overview(session: SessionDep, user: CurrentUser) -> OverviewOut:
     expensive = await _expensive_part()
     pending = (await session.execute(select(func.count()).select_from(Action).where(Action.status == "proposed"))).scalar_one()

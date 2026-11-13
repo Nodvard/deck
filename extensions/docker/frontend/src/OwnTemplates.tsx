@@ -1,5 +1,6 @@
 /** Eigene Vorlagen für „Neuer Stack“: nur die Compose-Datei, ohne .env und ohne feste Passwörter. */
 import { useState } from "react";
+import { parseDocument, visit } from "yaml";
 
 import { errorMessage, fetchJson } from "../../../_shared/frontend/src/loadError";
 import { Button } from "../../../_shared/frontend/src/ui";
@@ -16,14 +17,21 @@ const SAVE_NOTE =
   "Gespeichert wird nur diese Compose-Datei, keine .env. Feste Passwörter, Tokens und Schlüssel werden abgelehnt, soweit sie sich erkennen " +
   "lassen. Eigene Vorlagen sehen alle, die Stacks anlegen dürfen.";
 
-/**
- * Variablen ohne Vorgabe, die der Stack aus einer .env braucht; `required` sind die mit `:?`, ohne die schon das Anlegen
- * scheitert. `$$NAME` wertet erst der Container aus.
- */
+/** Variablen ohne Vorgabe und Pflichtvariablen; `$$` wertet erst der Container aus. */
 export function neededValues(compose: string): { open: string[]; required: string[] } {
-  const required = new Set([...compose.matchAll(/(?<!\$)\$\{([A-Za-z_][A-Za-z0-9_]*):?\?/g)].map((m) => m[1]));
-  const names = [...compose.matchAll(/(?<!\$)\$\{([A-Za-z_][A-Za-z0-9_]*)(?![A-Za-z0-9_]|:?-)|(?<!\$)\$([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1] ?? m[2]);
-  return { open: [...new Set(names)].filter((n) => !required.has(n)), required: [...required] };
+  const names = new Set<string>(), required = new Set<string>();
+  visit(parseDocument(compose, { prettyErrors: false }), {
+    Scalar(key, node) {
+      if (key === "key" || typeof node.value !== "string") return;
+      for (const match of node.value.matchAll(/\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-+?]|(?=\}))|\$([A-Za-z_][A-Za-z0-9_]*)/g)) {
+        const name = match[1] ?? match[3], operator = match[2] ?? "";
+        if (!name || /[-+]/.test(operator)) continue;
+        names.add(name);
+        if (operator.includes("?")) required.add(name);
+      }
+    },
+  });
+  return { open: [...names].filter((n) => !required.has(n)), required: [...required] };
 }
 
 /** Vorschlag für den Namen eines Stacks aus dem Namen der Vorlage; leer, wenn sich keiner bilden lässt. */
@@ -74,8 +82,8 @@ export function SaveTemplate({ compose, current, suggested, onSaved, onCancel }:
       </label>
       {problem && <p className="break-words text-red-400" role="alert">{problem}</p>}
       <div className="flex flex-wrap gap-1.5">
-        {current && <Button small variant="primary" disabled={!ready} onClick={() => void save(true)}>Vorlage „{current.name}“ ersetzen</Button>}
-        <Button small variant={current ? "secondary" : "primary"} disabled={!ready} onClick={() => void save(false)}>
+        {current && <Button small disabled={!ready} onClick={() => void save(true)}>Vorlage „{current.name}“ ersetzen</Button>}
+        <Button small disabled={!ready} onClick={() => void save(false)}>
           {current ? "Als neue Vorlage speichern" : "Vorlage speichern"}
         </Button>
         <Button small disabled={busy} onClick={onCancel}>Abbrechen</Button>

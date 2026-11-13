@@ -1,3 +1,4 @@
+import { cardTable } from "../../../../frontend/src/test/mobileLayout";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
@@ -621,6 +622,22 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
     });
   }
 
+  it("390 px: Gäste, Pools, Pakete und Aufgaben sind Karten", async () => {
+    vi.stubGlobal("fetch", richFetch([]));
+    render(<ProxmoxNodePage />);
+    const guest = await screen.findByText("docker");
+    await cardTable(guest.closest("table")!, []);
+    fireEvent.click(screen.getByRole("tab", { name: /Speicher/ }));
+    await cardTable((await screen.findByTestId("pool-local")).closest("table")!, ["Inhalt", "Belegung"]);
+    fireEvent.click(screen.getByRole("tab", { name: /Updates/ }));
+    const packages = await screen.findByText(/Pakete anzeigen/);
+    packages.closest("details")!.open = true;
+    await cardTable(packages.closest("details")!.querySelector("table")!, ["Version", "Beschreibung"]);
+    fireEvent.click(screen.getByRole("tab", { name: /Aufgaben/ }));
+    const task = await screen.findByTestId("task-UPID:pve2:4");
+    await cardTable(task.closest("table")!, ["Zeit", "Aufgabe", "Benutzer", "Status", "Dauer"]);
+  }, 30000);
+
   it("zeigt Knoten (kind=hypervisor) -- vorher fehlten sie komplett", async () => {
     vi.stubGlobal("fetch", richFetch([]));
     render(<ProxmoxNodePage />);
@@ -1161,3 +1178,12 @@ describe("ProxmoxNodePage ohne Server", () => {
   });
 });
 
+
+it("390 px: Verbindungsaktionen umbrechen in der Karte", async () => {
+  vi.stubGlobal("fetch", mockFetch({ connections: [{ name: "pve2", base_url: "https://" + "proxmox".repeat(24) + ".test:8006", enabled: true, has_token: true }] }));
+  render(<ProxmoxNodePage />);
+  fireEvent.click(await screen.findByRole("tab", { name: /Verbindungen/ }));
+  const button = await screen.findByRole("button", { name: "Alte Tokens" });
+  expect(button.parentElement).toHaveClass("flex-wrap");
+  await cardTable(button.closest("table")!, ["Adresse", "Zertifikat", "Token", "Aktiv"]);
+}, 30000);

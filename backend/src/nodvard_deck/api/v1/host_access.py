@@ -29,6 +29,8 @@ from ...services import hosts as hosts_service
 from ...services.host_check import ConnectionCheckOut
 from ...services.host_setup import GROUP_RE, SetupError
 from ..deps import SessionDep, SettingsDep, require_permission
+from ..models import RequestModel
+from ..responses import error_responses
 from ..errors import CodedHTTPException
 from .auth import confirm_stored_secret_change
 from .hosts import (
@@ -135,7 +137,11 @@ def valid_group(name: str | None, ext_id: str | None = None) -> str | None:
     return name
 
 
-@router.get("/hosts/{host_id}/requirements", dependencies=[Depends(require_permission("hosts.read"))])
+@router.get(
+    "/hosts/{host_id}/requirements",
+    dependencies=[Depends(require_permission("hosts.read"))],
+    responses=error_responses(401, 403, 404, 507),
+)
 async def list_host_requirements(host_id: str, session: SessionDep) -> list[HostRequirementOut]:
     """Was Extensions auf diesem Server brauchen: root ohne Passwort, eine Gruppe (z. B. für Container), ein lesender
     Prüfbefehl. Grundlage des Einrichtungsbefehls."""
@@ -150,7 +156,7 @@ async def list_host_requirements(host_id: str, session: SessionDep) -> list[Host
     ]
 
 
-class GenerateKeyIn(BaseModel):
+class GenerateKeyIn(RequestModel):
     # Die Oberfläche nennt neue Zugänge „nodvard“ und schickt den Namen immer mit. Der API-Standard bleibt bewusst
     # „lattice“: ältere Aufrufer (auch die App) schicken oft keinen Namen, ein anderer Standard änderte für sie still
     # den Benutzer auf dem Server. Ändern nur nach angekündigter Übergangszeit (docs/04-API.md, „Kompatibilität“).
@@ -176,7 +182,11 @@ class GeneratedKeyOut(BaseModel):
     """`SHA256:...` wie bei `ssh-keygen -l`."""
 
 
-@router.post("/hosts/{host_id}/credentials/generate-key", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/hosts/{host_id}/credentials/generate-key",
+    status_code=status.HTTP_201_CREATED,
+    responses=error_responses(401, 403, 404, 429, 502, 503, 507),
+)
 async def generate_key(
     host_id: str, payload: GenerateKeyIn, request: Request, session: SessionDep, settings: SettingsDep, user: WriteUser
 ) -> GeneratedKeyOut:
@@ -314,8 +324,12 @@ async def _prepare_setup(
         wanted = []
     needs_root = any(spec.needs_root for _ext_id, spec in matching_requirements(host))
     use_sudo = sudo and not is_root and (full_sudo or needs_root)
-    helpers = root_helpers_for(host) if use_sudo else []
-    use_full = use_sudo and (full_sudo or not helpers or not root_needs_helpers_only(host))
+    helpers = root_helpers_for(host) if use_sudo or is_root else []
+    if not of(settings).choose_modules and not helpers:
+        use_sudo = False  # kein Hilfsskript: Dock fällt nie auf die volle Regel zurück
+    use_full = use_sudo and (
+        full_sudo or (of(settings).choose_modules and (not helpers or not root_needs_helpers_only(host)))
+    )
     if drop_full_rule:
         refusal = _drop_refusal(
             is_root=is_root, sudo=sudo, full_sudo=full_sudo, use_sudo=use_sudo, use_full=use_full,
@@ -389,7 +403,7 @@ def _notes(prepared: _PreparedSetup, settings: Settings) -> list[str]:
     return notes
 
 
-@router.get("/hosts/{host_id}/credentials/{credential_id}/setup")
+@router.get("/hosts/{host_id}/credentials/{credential_id}/setup", responses=error_responses(401, 403, 404, 422, 507))
 async def credential_setup(
     host_id: str,
     credential_id: str,
@@ -422,7 +436,7 @@ _LOGIN_USER_ERROR = (
 )
 
 
-class SetupWithPasswordIn(BaseModel):
+class SetupWithPasswordIn(RequestModel):
     login_user: str = "root"
     """Das Konto für die EINE Anmeldung (root oder ein Konto mit sudo), nicht der Benutzer des Zugangs."""
     password: SecretStr
@@ -493,6 +507,7 @@ _SETUP_FAILURE_STATUS = {"sudo_failed": 400, "helpers_blocked": 409}
 @router.post(
     "/hosts/{host_id}/credentials/{credential_id}/setup-with-password",
     dependencies=[Depends(require_permission("hosts.execute"))],
+    responses=error_responses(400, 401, 403, 404, 409, 422, 429, 502, 504, 507),
 )
 async def credential_setup_with_password(
     host_id: str,
@@ -615,14 +630,18 @@ class MakeDefaultOut(CredentialOut):
     """Hinweis, wenn der alte Zugang gelöscht wurde: sein öffentlicher Schlüssel steht weiter auf dem Server."""
 
 
-class MakeDefaultIn(BaseModel):
+class MakeDefaultIn(RequestModel):
     delete_previous: bool = False
     """Den bisherigen Standard-Zugang samt Geheimnis gleich mitlöschen (nur mit `current_password`, siehe unten)."""
     current_password: str = Field(default="", max_length=1024)
     totp_code: str = Field(default="", max_length=64)
 
 
-@router.post("/hosts/{host_id}/credentials/{credential_id}/make-default", response_model=MakeDefaultOut)
+@router.post(
+    "/hosts/{host_id}/credentials/{credential_id}/make-default",
+    response_model=MakeDefaultOut,
+    responses=error_responses(400, 401, 403, 404, 409, 429, 502, 503, 507),
+)
 async def make_default(
     host_id: str,
     credential_id: str,
@@ -701,13 +720,13 @@ async def make_default(
 _SSH_KINDS = _SSH_CREDENTIAL_KINDS
 
 
-class CheckIn(BaseModel):
+class CheckIn(RequestModel):
     credential_id: str | None = None
     """Mit welchem Zugang geprüft wird; ohne Angabe der Standard-Zugang (ohne Zugang: nur Erreichbarkeit und
     Server-Schlüssel)."""
 
 
-@router.post("/hosts/{host_id}/check")
+@router.post("/hosts/{host_id}/check", responses=error_responses(401, 403, 404, 422, 429, 502, 503, 507))
 async def check_connection(
     host_id: str, session: SessionDep, settings: SettingsDep, user: WriteUser, payload: CheckIn | None = None
 ) -> ConnectionCheckOut:
@@ -741,7 +760,7 @@ async def check_connection(
     return result
 
 
-class PinKeyIn(BaseModel):
+class PinKeyIn(RequestModel):
     key_type: str = Field(min_length=1, max_length=32)
     fingerprint: str = Field(min_length=1, max_length=128)
     credential_id: str | None = None
@@ -753,6 +772,7 @@ class PinKeyIn(BaseModel):
     "/hosts/{host_id}/helper-hint/dismiss",
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_permission("hosts.write"))],
+    responses=error_responses(401, 403, 404, 507),
 )
 async def dismiss_helper_hint(host_id: str, session: SessionDep) -> None:
     """Blendet den Hinweis „Server neu einrichten“ in der Übersicht für diesen Server aus, bis sich die fehlenden oder
@@ -761,7 +781,11 @@ async def dismiss_helper_hint(host_id: str, session: SessionDep) -> None:
     await helper_hints_service.dismiss(session, host_id)
 
 
-@router.post("/hosts/{host_id}/known-hosts", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/hosts/{host_id}/known-hosts",
+    status_code=status.HTTP_201_CREATED,
+    responses=error_responses(401, 403, 404, 409, 422, 507),
+)
 async def pin_known_host_key(host_id: str, payload: PinKeyIn, session: SessionDep, user: WriteUser) -> KnownHostKeyOut:
     """Merkt den Server-Schlüssel, den „Verbindung prüfen“ gerade gezeigt hat. Typ, Fingerabdruck, Adresse und Port
     müssen der letzten Prüfung (höchstens 15 Minuten her) entsprechen; ein gezeigter Schlüssel gilt nur einmal.

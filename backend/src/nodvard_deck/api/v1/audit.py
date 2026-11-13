@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from ...core.action_output import OUTPUT_PERMISSION, hide_audit_detail
 from ...services import audit as audit_service
 from ...services.auth import user_has_permission
+from ..responses import error_responses, file_responses
 from ..deps import CurrentUser, SessionDep, require_permission
 
 router = APIRouter(
@@ -69,7 +70,7 @@ async def _for_viewer(session, user, entries):
     return await audit_service.hide_typed_names(session, entries, keep_traces=user.is_owner)
 
 
-@router.get("")
+@router.get("", responses=error_responses(401, 403, 507))
 async def list_audit(
     session: SessionDep,
     user: CurrentUser,
@@ -83,7 +84,7 @@ async def list_audit(
     until: datetime | None = None,
     exclude_action: list[str] = Query(default=[]),
     limit: int = Query(100, ge=1, le=1000),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=9223372036854775807),
 ) -> list[AuditEntryOut]:
     entries = await audit_service.list_entries(
         session,
@@ -104,7 +105,14 @@ async def list_audit(
     return [AuditEntryOut.from_model(e, show_output=show_output) for e in entries]
 
 
-@router.get("/export")
+@router.get(
+    "/export",
+    response_class=Response,
+    responses={
+        **error_responses(401, 403, 507),
+        **file_responses("application/x-ndjson"),
+    },
+)
 async def export_audit(
     session: SessionDep,
     user: CurrentUser,

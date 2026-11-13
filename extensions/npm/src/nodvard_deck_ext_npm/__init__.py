@@ -5,6 +5,7 @@ Das Passwort liegt nur im Tresor; keine Route gibt es zurück, keine Meldung ent
 
 from __future__ import annotations
 
+from http import HTTPStatus
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
@@ -121,11 +122,19 @@ class Extension(NodvardExtension):
                 f"Proxy-Host „{name}“ über Nodvard Deck {verb}.", f"npm-host:{host_id}", actor,
             )
 
-        @act_router.post("/hosts/{host_id}/enable")
+        @act_router.post(
+            "/hosts/{host_id}/enable",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 409, 502,)},
+        )
         async def enable_host(host_id: int = Path(ge=1, le=MAX_HOST_ID), actor: Actor = Depends(ctx.api.current_actor)) -> dict[str, Any]:  # noqa: B008
             return await _set_host(host_id, True, actor)
 
-        @act_router.post("/hosts/{host_id}/disable")
+        @act_router.post(
+            "/hosts/{host_id}/disable",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 409, 502,)},
+        )
         async def disable_host(host_id: int = Path(ge=1, le=MAX_HOST_ID), actor: Actor = Depends(ctx.api.current_actor)) -> dict[str, Any]:  # noqa: B008
             return await _set_host(host_id, False, actor)
 

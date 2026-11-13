@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from exec_gate_helpers import ReadingExec
 from docker_stack_fakes import EXT_DIR
 from test_ext_docker import _FakeCtx, _FakeExecResult, _FakeHost, _ps_line
 
@@ -80,8 +81,9 @@ def test_parse_port_bindings_skips_what_is_not_a_usable_binding():
     assert _caps().parse_port_bindings(stdout) == {ID_STOP: [], ID_NEW: [8081, 65535]}
 
 
-class _CountingExec:
+class _CountingExec(ReadingExec):
     def __init__(self, ps: str, inspect: str) -> None:
+        super().__init__(ext_id="docker")
         self.ps = ps
         self.inspect = inspect
         self.commands: list[str] = []

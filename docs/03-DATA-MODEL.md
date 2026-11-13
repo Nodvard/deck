@@ -240,7 +240,7 @@ für **alle** Extensions, weil es im Kern sitzt.
 ### `extensions`
 | Spalte | Anmerkung |
 |---|---|
-| id | = Manifest-ID, PK. Nach einer Umbenennung (`legacy_ids`, [02 §1](02-EXTENSION-API.md#erweiterung-umbenennen-legacy_ids)) bleibt die Zeile unter der alten Kennung (**Speicher-Kennung**), z. B. `nexus-soc` für Nodvard Shield auf Installationen von vor 0.7; neue Installationen legen die Zeile mit der neuen Kennung an |
+| id | = Manifest-ID, PK. Neue Installationen nutzen die heutige Kennung, z. B. `shield` für Nodvard Shield. Nach einer Umbenennung (`legacy_ids`, [02 §1](02-EXTENSION-API.md#erweiterung-umbenennen-legacy_ids)) bleibt eine bestehende Zeile unter ihrer **Speicher-Kennung** erhalten (bei Nodvard Shield vor 0.7: `nexus-soc`); Begründung und Ausbauziel stehen in der [Inventur](ALTE-NAMEN.md) |
 | version, api_version | |
 | state | `enabled` \| `disabled` \| `error` \| `incompatible` \| `uninstalling` |
 | source | `bundled` \| `local` \| `pip` \| `marketplace` |
@@ -337,11 +337,14 @@ hosts.reachability.interval_minutes                hosts.reachability.state
 ssh.confirm_new_host_keys  ssh.host_key_confirm_required
 demo.seeded_ids
 ui.custom_css              ui.theme                ui.first_steps_dismissed
-ui.design_notice_dismissed
+ui.design_notice_dismissed  ui.totp_setup_skipped   ui.totp_reminder_dismissed
 ```
 
-`ui.theme`, `ui.first_steps_dismissed` und `ui.design_notice_dismissed` gelten je Benutzer (`scope = 'user'`), `ui.custom_css`
-(das eigene CSS der Admins) global. `demo.seeded_ids` merkt die Zeilen der Beispieldaten (siehe docs/00-DECISIONS.md D-10).
+`ui.theme`, `ui.first_steps_dismissed`, `ui.design_notice_dismissed`, `ui.totp_setup_skipped` und
+`ui.totp_reminder_dismissed` gelten je Benutzer (`scope = 'user'`), `ui.custom_css` (das eigene CSS der Admins) global.
+Die Zwei-Faktor-Erinnerung beginnt nach dem Überspringen im Assistenten und bleibt bis zum bewussten Ausblenden
+oder zur erfolgreichen Aktivierung bestehen. `demo.seeded_ids` merkt die Zeilen der Beispieldaten
+(siehe docs/00-DECISIONS.md D-10).
 `system.update_check.*` und `system.trusted_proxies` sind über `PUT /settings/{key}` setzbar, siehe docs/04-API.md
 §3 „Einstellungen“.
 

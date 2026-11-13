@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 import json
 import logging
@@ -10,7 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
+from nodvard_sdk.errors import error_message
 from nodvard_sdk import (
     Actor,
     ExtensionContext,
@@ -24,7 +26,7 @@ from nodvard_sdk import (
     StatusGridView,
     WidgetSpec,
 )
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import commands
 from .capabilities import (
@@ -79,6 +81,8 @@ log = logging.getLogger("nodvard_deck.ext.docker")
 
 
 class _TileUrlIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     url: str | None = Field(..., max_length=MAX_URL_LENGTH)
     """Eigene Adresse der Kachel; leer oder `null` nimmt wieder die erkannte. Pflichtfeld: `{}` ist kein Zurücksetzen."""
 
@@ -89,6 +93,8 @@ class _TileUrlIn(BaseModel):
 
 
 class _ApplyIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     plan_id: str = Field(pattern=r"^[0-9a-f]{16}$")
     """Die Kennung der Übersicht, die der Nutzer gesehen hat (`GET .../image-update/plan`)."""
 
@@ -178,17 +184,18 @@ class Extension(NodvardExtension):
         self._ctx = ctx
         self._catalog = DockerServiceCatalog(ctx)
         self._images = ImageUpdateService(ctx)
-        self._applier = ImageApplier(ctx, self._images)
+        adopted = AdoptedStacks(Path(str(ctx.data_dir)))
+        self._applier = ImageApplier(ctx, self._images, adopted)
         self._images.apply_hints = self._applier.hints
         ctx.capabilities.provide(self._catalog)
         ctx.capabilities.provide(DockerFilePlaces(ctx, self._catalog))
         ctx.capabilities.provide(DockerContainerExecutor(ctx))
         # Eine Sperre je Stack für alle, die ein Compose-Projekt ändern, auch für den Neustart.
         self._locks = StackLocks()
-        ctx.capabilities.provide(DockerMaintenanceExecutor(ctx, self._locks))
+        self._resources = DockerResources(ctx)
+        ctx.capabilities.provide(DockerMaintenanceExecutor(ctx, self._locks, self._resources))
         ctx.capabilities.provide(ImageUpdateExecutor(self._applier))
         ctx.capabilities.provide(ContainerShell(ctx))
-        self._resources = DockerResources(ctx)
         ctx.capabilities.provide(DockerResourceExecutor(ctx, self._resources))
         ctx.capabilities.provide(DockerImagePullExecutor(ctx, self._resources))
         ctx.capabilities.provide(DockerNetworkExecutor(ctx, self._resources))
@@ -234,24 +241,32 @@ class Extension(NodvardExtension):
 
         router = APIRouter()
 
-        @router.get("/widgets/matrix")
+        @router.get(
+            "/widgets/matrix",
+        )
         async def matrix_widget_data() -> dict:
             return {"data": await self._catalog.list_services(), "meta": {}}
 
-        @router.get("/stats")
+        @router.get(
+            "/stats",
+        )
         async def container_stats() -> dict:
             """CPU/RAM je laufendem Container, Neustarts je Container und je Host CPU-Zahl und Arbeitsspeicher, getrennt von
             der Liste (dauert ein paar Sekunden, siehe `DockerServiceCatalog.measure()`)."""
             return await self._catalog.measure()
 
-        @router.get("/hosts")
+        @router.get(
+            "/hosts",
+        )
         async def docker_hosts() -> dict:
             """Die Server mit Docker-Markierung, auch ohne Container; nur aus der Datenbank. `mode`: `operate` für „Nur
             bedienen“, sonst `full`."""
             await self._images.docker_hosts()  # räumt entfernte Hosts aus dem Stand der Image-Prüfung
             return {"hosts": [{"id": h.id, "name": h.name, "mode": "operate" if operate else "full"} for h, operate in await operate_hosts(ctx)]}
 
-        @router.get("/image-updates")
+        @router.get(
+            "/image-updates",
+        )
         async def image_updates() -> dict:
             """Letzter Stand der Image-Prüfung je Host und Container (nur Speicher, kein Zugriff auf die Hosts; die Prüfung
             löst der POST darunter aus). Dazu `applying`/`applied`: laufende und zuletzt beendete Updates."""
@@ -283,7 +298,11 @@ class Extension(NodvardExtension):
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=operate_refused(operate_tags(settings)[0]))
             return host
 
-        @logs_router.post("/image-updates/check", status_code=status.HTTP_202_ACCEPTED)
+        @logs_router.post(
+            "/image-updates/check", status_code=status.HTTP_202_ACCEPTED,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 409,)},
+        )
         async def image_updates_check(host_id: str | None = None, force: bool = False) -> dict:
             """Startet die Prüfung im Hintergrund (alle Docker-Hosts oder nur `host_id`) und antwortet sofort mit dem Stand
             (`hosts[..].checking`). Lesend, aber sie öffnet SSH-Verbindungen und fragt Registries, deshalb `hosts.execute`
@@ -292,7 +311,11 @@ class Extension(NodvardExtension):
             self._images.start(hosts, force=force)
             return self._snapshot()
 
-        @logs_router.get("/containers/{host_id}/{container}/image-update/plan")
+        @logs_router.get(
+            "/containers/{host_id}/{container}/image-update/plan",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (400, 404, 409, 502,)},
+        )
         async def image_update_plan(host_id: str, container: str) -> dict:
             """Die Übersicht vor dem Einspielen, nur lesend: was passiert, welcher Befehl läuft, was ist betroffen, welche
             Warnungen es gibt. `ok: false` mit Grund, wenn sich der Container so nicht aktualisieren lässt."""
@@ -303,13 +326,17 @@ class Extension(NodvardExtension):
                 plan = await self._applier.plan(host, container)
             except Exception as exc:  # noqa: BLE001 - dem Nutzer zeigen, nicht als 500 verstecken
                 raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Host nicht erreichbar: {str(exc) or type(exc).__name__}"
+                    status_code=status.HTTP_502_BAD_GATEWAY, detail=error_message(exc, "Host nicht erreichbar.")
                 ) from exc
             if isinstance(plan, NotUpdatable):
                 return {"ok": False, "kind": plan.kind, "reason": plan.why}
             return plan.as_response()
 
-        @logs_router.post("/containers/{host_id}/{container}/image-update", status_code=status.HTTP_202_ACCEPTED)
+        @logs_router.post(
+            "/containers/{host_id}/{container}/image-update", status_code=status.HTTP_202_ACCEPTED,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (400, 404, 409, 502,)},
+        )
         async def image_update_apply(host_id: str, container: str, body: _ApplyIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
             """Schlägt das Einspielen vor (Gate-Aktion `container.image_update`), und zwar für genau die Übersicht, die der
             Nutzer gesehen hat (`plan_id`). Hat sich der Stand seitdem geändert, 409 mit der Aufforderung, neu zu laden."""
@@ -320,7 +347,7 @@ class Extension(NodvardExtension):
                 plan = await self._applier.plan(host, container)
             except Exception as exc:  # noqa: BLE001
                 raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Host nicht erreichbar: {str(exc) or type(exc).__name__}"
+                    status_code=status.HTTP_502_BAD_GATEWAY, detail=error_message(exc, "Host nicht erreichbar.")
                 ) from exc
             if isinstance(plan, NotUpdatable):
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=plan.why)
@@ -328,7 +355,11 @@ class Extension(NodvardExtension):
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Der Stand hat sich geändert – bitte den Plan neu laden.")
             return await self._applier.propose(host, plan, actor)
 
-        @logs_router.get("/containers/{host_id}/{container}/inspect")
+        @logs_router.get(
+            "/containers/{host_id}/{container}/inspect",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (400, 404, 502,)},
+        )
         async def container_inspect(host_id: str, container: str) -> dict:
             """Details wie in Portainer: Image, Neustart-Regel, Ports, Mounts, Netze,
             Compose-Projekt, Namen der Umgebungsvariablen (nie ihre Werte)."""
@@ -337,7 +368,9 @@ class Extension(NodvardExtension):
             host = await _docker_host(host_id)
             result = await ctx.exec.run(host, commands.inspect_container(container), timeout_s=20)
             if result.exit_code != 0:
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=result.stderr.strip() or "docker inspect fehlgeschlagen")
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=error_message(
+                    RuntimeError(result.stderr), "Containerdetails konnten nicht geladen werden.",
+                ))
             # Auch eine Antwort in anderer Form, etwa ein Objekt statt einer Liste, ist ein Fehler auf dem Server; das Log zeigt, woran es lag.
             try:
                 return summarize_inspect(json.loads(result.stdout)[0])
@@ -345,20 +378,30 @@ class Extension(NodvardExtension):
                 log.warning("docker_inspect_unreadable host=%s container=%s", host.id, container, exc_info=True)
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unerwartete Antwort von docker inspect.") from exc
 
-        @logs_router.get("/hosts/{host_id}/docker")
+        @logs_router.get(
+            "/hosts/{host_id}/docker",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 409, 502,)},
+        )
         async def docker_storage(host_id: str) -> dict:
             """Belegung (Images, Container, Volumes, Build-Cache) und Images des Hosts, wie `docker system df` sie zeigt."""
             host = await _full_docker_host(host_id)
             df = await ctx.exec.run(host, commands.system_df(), timeout_s=60)
             images = await ctx.exec.run(host, commands.images(), timeout_s=30)
             if df.exit_code != 0:
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=df.stderr.strip() or "docker system df fehlgeschlagen")
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=error_message(
+                    RuntimeError(df.stderr), "Speicherbelegung konnte nicht geladen werden.",
+                ))
             return {
                 "disk": parse_system_df(df.stdout),
                 "images": parse_images(images.stdout) if images.exit_code == 0 else [],
             }
 
-        @logs_router.get("/containers/{host_id}/{container}/logs")
+        @logs_router.get(
+            "/containers/{host_id}/{container}/logs", response_class=Response,
+            responses={**{code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (400, 404, 502,)}, 200: {"description": "Container-Logs.", "content": {"text/plain": {"schema": {"type": "string"}}}}},
+        )
         async def container_logs(
             host_id: str,
             container: str,
@@ -383,7 +426,7 @@ class Extension(NodvardExtension):
             except Exception as exc:  # noqa: BLE001 - dem Nutzer zeigen, nicht als 500 verstecken
                 await stack.aclose()
                 raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Logs nicht abrufbar: {exc}"
+                    status_code=status.HTTP_502_BAD_GATEWAY, detail=error_message(exc, "Logs nicht abrufbar.")
                 ) from exc
 
             async def _body():  # noqa: ANN202
@@ -400,10 +443,10 @@ class Extension(NodvardExtension):
                 media_type="text/plain; charset=utf-8",
                 # Kein Zwischenpuffern durch einen vorgeschalteten Proxy (nginx/NPM),
                 # sonst kommen "Live"-Logs in Klumpen an.
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
             )
 
-        ctx.api.include_router(logs_router, permission="hosts.execute")
+        ctx.api.include_router(logs_router, permission="hosts.execute", ssh_preflight=True)
 
         resources_router = APIRouter()
 
@@ -414,17 +457,35 @@ class Extension(NodvardExtension):
             except ResourceProblem as exc:
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
-        @resources_router.get("/hosts/{host_id}/images")
+        @resources_router.get(
+            "/hosts/{host_id}/images",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 409, 502,)},
+        )
         async def list_images(host_id: str) -> dict:
             """Images des Servers mit Größe, Namen und den Containern, die sie nutzen."""
-            return {"host_id": host_id, "images": (await _resources(host_id)).images}
+            images = (await _resources(host_id)).images
+            sizes = [i["size_bytes"] for i in images if i["size_bytes"] is not None]
+            return {
+                "host_id": host_id, "images": images,
+                "total_size_bytes": sum(sizes) if sizes or not images else None,
+                "unknown_size_count": len(images) - len(sizes),
+            }
 
-        @resources_router.get("/hosts/{host_id}/volumes")
+        @resources_router.get(
+            "/hosts/{host_id}/volumes",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 409, 502,)},
+        )
         async def list_volumes(host_id: str) -> dict:
             """Volumes des Servers mit Größe und den Containern, die sie nutzen; Werte nie, nur Namen."""
             return {"host_id": host_id, "volumes": (await _resources(host_id)).volumes}
 
-        @resources_router.get("/hosts/{host_id}/networks")
+        @resources_router.get(
+            "/hosts/{host_id}/networks",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (400, 404, 409, 413, 422, 502, 503,)},
+        )
         async def list_networks(host_id: str) -> dict:
             """Netze des Servers mit den Containern daran, dazu alle Container; `error`, wenn nur die Netze nicht lesbar waren."""
             snapshot = await _resources(host_id)
@@ -433,7 +494,6 @@ class Extension(NodvardExtension):
         # Lesend, aber jeder Abruf öffnet SSH und lässt Docker den Speicher zählen, deshalb wie `/hosts/{id}/docker`.
         ctx.api.include_router(resources_router, permission="hosts.execute")
         # Die Dateien liest SFTP mit den Zugangsdaten des Servers, wie im Dateimanager des Kerns.
-        adopted = AdoptedStacks(Path(str(ctx.data_dir)))
         stacks = DockerStacks(ctx, adopted)
         stack_executor = DockerStackExecutor(ctx, stacks, adopted, self._locks)
         stack_executor.locks.outside = self._applier.project_busy
@@ -442,8 +502,8 @@ class Extension(NodvardExtension):
         editor = StackEditor(ctx, stack_executor, Path(str(ctx.data_dir)))
         ctx.capabilities.provide(DockerStackSaveExecutor(ctx, editor, stack_executor))
         ctx.api.include_router(stack_routes(stacks, _full_docker_host), permission="hosts.execute")
-        ctx.api.include_router(adopt_routes(ctx, stacks, adopted, _full_docker_host), permission="hosts.execute")
-        ctx.api.include_router(editor_routes(editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
+        ctx.api.include_router(adopt_routes(ctx, stacks, adopted, _full_docker_host), permission="hosts.execute", ssh_preflight=True)
+        ctx.api.include_router(editor_routes(editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute", ssh_preflight=True)
         # Ordner für neue Stacks und eigene Kachel-Adressen schreiben beide das ganze Einstellungsdokument.
         settings_lock = asyncio.Lock()
         new = NewStacks(ctx, editor, stacks, adopted, settings_lock)
@@ -451,32 +511,34 @@ class Extension(NodvardExtension):
         ctx.capabilities.provide(create_executor)
         move = PortainerMove(ctx, stacks, adopted, new)
         ctx.capabilities.provide(DockerPortainerMoveExecutor(ctx, move, create_executor, adopted, stack_executor))
-        ctx.api.include_router(move_routes(move, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
+        ctx.api.include_router(move_routes(move, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute", ssh_preflight=True)
         convert = ContainerToStack(ctx, new, adopted, stacks)
         ctx.capabilities.provide(DockerContainerToStackExecutor(ctx, convert, create_executor, adopted, stack_executor))
-        ctx.api.include_router(convert_routes(convert, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
+        ctx.api.include_router(convert_routes(convert, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute", ssh_preflight=True)
         known_registries = Registries(ctx)
         ctx.capabilities.provide(DockerRegistryExecutor(ctx, known_registries))
-        ctx.api.include_router(registry_routes(known_registries, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
-        ctx.api.include_router(new_routes(new, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
+        ctx.api.include_router(registry_routes(known_registries, editor, _full_docker_host, ctx.api.current_actor, ctx.api.require_permission), permission="hosts.execute")
+        ctx.api.include_router(new_routes(new, _full_docker_host, ctx.api.current_actor), permission="hosts.execute", ssh_preflight=True)
         ctx.api.include_router(template_routes(), permission="hosts.execute")
         ctx.api.include_router(own_template_routes(OwnTemplates(Path(str(ctx.data_dir)))), permission="hosts.execute")
         update = StackUpdate(ctx, stacks, self._images, stack_executor, StackBackups(Path(str(ctx.data_dir))), VolumeBackup(ctx, self._resources))
         update_executor = DockerStackUpdateExecutor(ctx, update, self._images)
         ctx.capabilities.provide(update_executor)
-        ctx.api.include_router(update_routes(update, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
+        ctx.api.include_router(update_routes(update, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute", ssh_preflight=True)
         restore = StackRestore(ctx, update, self._resources)
         ctx.capabilities.provide(DockerStackRestoreExecutor(ctx, restore))
-        ctx.api.include_router(restore_routes(restore, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
+        ctx.api.include_router(restore_routes(restore, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute", ssh_preflight=True)
         delete = StackDelete(ctx, stacks, adopted, new, stack_executor)
         ctx.capabilities.provide(DockerStackDeleteExecutor(ctx, delete, adopted, update_executor.drop_backups))
-        ctx.api.include_router(delete_routes(delete, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
+        ctx.api.include_router(delete_routes(delete, editor, _full_docker_host, ctx.api.current_actor), permission="hosts.execute", ssh_preflight=True)
         self._git = git = GitStacks(ctx, stack_executor, adopted, Path(str(ctx.data_dir)))
         adopted.on_remove = git.forget
-        ctx.api.include_router(git_routes(git, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
+        git_router, git_source_router = git_routes(git, _full_docker_host, ctx.api.current_actor)
+        ctx.api.include_router(git_router, permission="hosts.execute", ssh_preflight=True)
+        ctx.api.include_router(git_source_router, permission="extensions.manage")
         self._git_apply = git_apply = GitApply(ctx, git, stack_executor, Path(str(ctx.data_dir)), update, update_executor)
         ctx.capabilities.provide(DockerStackGitApplyExecutor(git_apply))
-        ctx.api.include_router(apply_routes(git_apply, _full_docker_host, ctx.api.current_actor), permission="hosts.execute")
+        ctx.api.include_router(apply_routes(git_apply, _full_docker_host, ctx.api.current_actor), permission="hosts.execute", ssh_preflight=True)
         self._git_watch = watch = GitWatch(ctx, git, lambda host_id, project: git_apply.state.written(host_id, project)[0], Path(str(ctx.data_dir)))
         ctx.api.include_router(watch_routes(watch, _full_docker_host), permission="hosts.execute")
 
@@ -490,7 +552,11 @@ class Extension(NodvardExtension):
 
         apps_router = APIRouter()
 
-        @apps_router.put("/containers/{host_id}/{container}/url")
+        @apps_router.put(
+            "/containers/{host_id}/{container}/url",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (400, 404, 409,)},
+        )
         async def set_tile_url(host_id: str, container: str, body: _TileUrlIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
             """Eigene Adresse für die Kachel eines Containers (z. B. wenn die erkannte nicht stimmt). Bleibt gespeichert,
             auch wenn der Container neu erstellt wird (gleicher Name); `url: null` nimmt wieder die erkannte. Wie das

@@ -76,7 +76,7 @@ function mockBackgroundFetch(pollStatuses: Record<string, unknown>[], counters: 
 }
 
 describe("ActionsPage", () => {
-  it("zeigt wartende Aktionen mit aufgeloestem Host-Namen", async () => {
+  it("zeigt wartende Aktionen mit aufgelöstem Host-Namen", async () => {
     useAuthStore.setState({ accessToken: "tok", status: "authenticated", mfaToken: null, user: { id: "u1", username: "admin", display_name: null, email: null, is_owner: true, locale: "de", permissions: [] } });
     vi.stubGlobal("fetch", mockFetch());
     render(<ActionsPage />);
@@ -108,6 +108,34 @@ describe("ActionsPage", () => {
     expect(command.textContent).toBe("echo harmlos ⟦U+202E⟧txt.sh⟦U+200B⟧⟦U+000D⟧rm -rf /srv");
     expect(command.textContent).not.toContain("\u202E");
     expect(command.textContent).not.toContain("\r");
+  });
+
+  it("lädt bei einer Compose-Änderung den Unterschied erst auf Klick", async () => {
+    loginAsAdmin();
+    const save = { ...PROPOSED_ACTION, action_type: "docker.stack_save", ext_id: "docker", payload: { host_id: "h1", project: "shop" } };
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      calls.push(url);
+      if (url.includes("save-proposals/a1")) return new Response(JSON.stringify({ content: "services: {}", diff: "+  neu: 1" }), { status: 200 });
+      if (url.includes("/api/v1/hosts")) return new Response(JSON.stringify(HOSTS), { status: 200 });
+      return new Response(JSON.stringify([save]), { status: 200 });
+    }));
+    render(<ActionsPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Änderung ansehen" }));
+    expect((await screen.findByTestId("proposal-a1")).textContent).toContain("+  neu: 1");
+    expect(calls.some((c) => c.endsWith("/api/v1/ext/docker/hosts/h1/stacks/shop/save-proposals/a1"))).toBe(true);
+  });
+
+  it("zeigt die Compose-Änderung nicht, wenn man weder freigeben darf noch selbst vorgeschlagen hat", async () => {
+    useAuthStore.setState({ accessToken: "tok", status: "authenticated", mfaToken: null, user: { id: "u3", username: "gast", display_name: null, email: null, is_owner: false, locale: "de", permissions: ["hosts.read"] } });
+    const save = { ...PROPOSED_ACTION, action_type: "docker.stack_save", ext_id: "docker", payload: { host_id: "h1", project: "shop" } };
+    vi.stubGlobal("fetch", mockFetch(undefined, [save]));
+    render(<ActionsPage />);
+
+    await screen.findByText("Testabschaltung");
+    expect(screen.queryByRole("button", { name: "Änderung ansehen" })).toBeNull();
   });
 
   it("zeigt Nutzern ohne Server-Rechte einen Hinweis statt des Befehls", async () => {
@@ -225,7 +253,7 @@ describe("ActionsPage", () => {
     await waitFor(() => expect(approveCalled).toBe(true));
   });
 
-  it("deaktiviert Bestätigen/Ablehnen/Verwerfen ohne die noetige Berechtigung", async () => {
+  it("deaktiviert Bestätigen/Ablehnen/Verwerfen ohne die nötige Berechtigung", async () => {
     useAuthStore.setState({ accessToken: "tok", status: "authenticated", mfaToken: null, user: { id: "u2", username: "operator", display_name: null, email: null, is_owner: false, locale: "de", permissions: ["hosts.read"] } });
     vi.stubGlobal("fetch", mockFetch());
     render(<ActionsPage />);
@@ -431,7 +459,7 @@ describe("ActionsPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Bestätigen" }));
 
     expect(await screen.findByText(/vm\.stop: Läuft im Hintergrund/)).toBeInTheDocument();
-    // Der Knopf ist schon wieder frei, die Aktion laeuft weiter.
+    // Der Knopf ist schon wieder frei, die Aktion läuft weiter.
     await waitFor(() => expect(screen.getByRole("button", { name: "Bestätigen" })).not.toBeDisabled());
     expect(counters.polls).toBe(0);
 
@@ -486,8 +514,8 @@ describe("ActionsPage", () => {
   });
 
   it("fragt nicht nach, wenn die Seite schon vor der Antwort der Freigabe verlassen wurde", async () => {
-    // Kein behobener Fehler: hier entsteht der Abbruch-Controller schon beim Einhaengen.
-    // Der Test haelt nur fest, dass das so bleibt (Schutz gegen Rueckschritte).
+    // Kein behobener Fehler: hier entsteht der Abbruch-Controller schon beim Einhängen.
+    // Der Test hält nur fest, dass das so bleibt (Schutz gegen Rückschritte).
     vi.useFakeTimers({ shouldAdvanceTime: true });
     loginAsAdmin();
     const counters = { polls: 0, lists: 0 };
@@ -561,7 +589,7 @@ describe("ActionsPage", () => {
     const A = { ...PROPOSED_ACTION, id: "a1", ext_id: "shield", action_type: "updates.apply", reason: "Updates", gate_decision: {}, result: {} };
     const B = { ...PROPOSED_ACTION, id: "a2", action_type: "container.restart", reason: "Neustart", gate_decision: {}, result: {} };
 
-    /** Freigabe von A haengt, bis der Test sie mit `releaseA` beantwortet; B scheitert sofort. */
+    /** Freigabe von A hängt, bis der Test sie mit `releaseA` beantwortet; B scheitert sofort. */
     function mockTwoFetch(a: Record<string, unknown> = A, b: Record<string, unknown> = B) {
       const state = { releaseA: (_res: Response) => {} };
       const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1102,7 +1130,7 @@ describe("ActionsPage: Namen statt Kennungen", () => {
     render(<><ActionsPage /><GlobalDialogs /></>);
 
     fireEvent.click(await screen.findByRole("button", { name: "Ablehnen" }));
-    expect(await screen.findByRole("dialog")).toHaveTextContent('Ablehnen von "Updates einspielen" – Begründung:');
+    expect(await screen.findByRole("dialog")).toHaveTextContent('Ablehnen von "Updates einspielen", Begründung:');
     fireEvent.click(screen.getByRole("button", { name: "Abbrechen" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
@@ -1210,8 +1238,8 @@ describe("Restzeit und Risiko auf Deutsch", () => {
     expect(expiryText("2026-10-08T15:59:00Z", now)).toEqual({ text: "läuft ab in 5 Std.", soon: false });
     expect(expiryText("2026-10-11T10:00:00Z", now)).toEqual({ text: "läuft ab in 3 Tagen", soon: false });
     expect(expiryText("2026-10-08T10:00:30Z", now)).toEqual({ text: "läuft gleich ab", soon: true });
-    expect(expiryText("2026-10-08T10:00:00Z", now)).toEqual({ text: "abgelaufen – kann nicht mehr bestätigt werden", soon: true });
-    expect(expiryText("2026-10-08T09:00:00Z", now)).toEqual({ text: "abgelaufen – kann nicht mehr bestätigt werden", soon: true });
+    expect(expiryText("2026-10-08T10:00:00Z", now)).toEqual({ text: "abgelaufen, kann nicht mehr bestätigt werden", soon: true });
+    expect(expiryText("2026-10-08T09:00:00Z", now)).toEqual({ text: "abgelaufen, kann nicht mehr bestätigt werden", soon: true });
     expect(expiryText(null, now)).toBeNull();
     expect(expiryText("kaputt", now)).toBeNull();
   });

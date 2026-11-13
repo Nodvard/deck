@@ -1,3 +1,4 @@
+import { CARD_BODY, CARD_CELL, CARD_CELL_PLAIN, CARD_HEAD, CARD_ROW, CARD_TABLE } from "../../../_shared/frontend/src/cardTable";
 /**
  * Proxmox-Seite (PageSpec `component="ProxmoxNodePage"`) über generische Kern-Endpunkte (`/hosts`, `/hosts/{id}/metrics`,
  * `/hosts/{id}/actions/{type}`), gruppiert nach `provider_ref = "<connection>/<kind>/<node>/<vmid>"`. Einen Vorschlag
@@ -332,15 +333,15 @@ function UpdatesSection({ nodes, shieldHref }: { nodes: NodeUpdates[]; shieldHre
             {n.packages.length > 0 && (
               <details className="mt-1">
                 <summary className="cursor-pointer text-xs opacity-70">Pakete anzeigen ({n.packages.length})</summary>
-                <table className="mt-1 w-full text-xs">
-                  <tbody className="divide-y divide-white/5">
+                <table role="table" className={`${CARD_TABLE} text-left mt-1 w-full text-xs`}>
+                  <tbody role="rowgroup" className={CARD_BODY}>
                     {n.packages.map((pkg) => (
-                      <tr key={pkg.package}>
-                        <td className="py-0.5 pr-2 font-mono">{pkg.package}</td>
-                        <td className="py-0.5 pr-2 whitespace-nowrap font-mono">
+                      <tr role="row" className={CARD_ROW} key={pkg.package}>
+                        <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-0.5 sm:pr-2 font-mono`}>{pkg.package}</td>
+                        <td data-label="Version" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-0.5 sm:pr-2 sm:whitespace-nowrap font-mono`}>
                           {pkg.new_package ? `neu: ${pkg.version}` : `${pkg.old_version} → ${pkg.version}`}
                         </td>
-                        <td className="py-0.5 opacity-60">{pkg.title}</td>
+                        <td data-label="Beschreibung" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-0.5 opacity-60`}>{pkg.title}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -396,25 +397,25 @@ function UnreachableHint({
 function StorageSection({ pools, focusNode = null }: { pools: StoragePool[]; focusNode?: string | null }): JSX.Element {
   return (
     <div>
-      <table className="w-full text-sm">
-        <thead>
+      <table role="table" className={`${CARD_TABLE} text-left`}>
+        <thead role="rowgroup" className={CARD_HEAD}>
           <tr className="border-b border-white/10 text-left text-xs opacity-60">
             <th className="py-1 w-1/5">Pool</th>
             <th className="py-1">Inhalt</th>
             <th className="py-1 w-1/3">Belegung</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-white/5">
+        <tbody role="rowgroup" className={CARD_BODY}>
           {pools.map((pool) => (
-            <tr key={pool.id} data-testid={`pool-${pool.storage}`} className={focusNode && pool.node === focusNode ? FOCUS_CLASS : undefined}>
-              <td className="py-1.5 align-top">
+            <tr role="row" key={pool.id} data-testid={`pool-${pool.storage}`} className={`${CARD_ROW} ${focusNode && pool.node === focusNode ? FOCUS_CLASS : ""}`}>
+              <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 align-top`}>
                 <span className="font-medium">{pool.storage}</span>
                 <span className="block text-xs opacity-60">
                   {pool.type}
                   {pool.shared ? " · geteilt" : ""}
                 </span>
               </td>
-              <td className="py-1.5 align-top text-xs">
+              <td data-label="Inhalt" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 align-top text-xs`}>
                 <span className="opacity-70">{pool.content_labels.join(", ")}</span>
                 {(pool.volumes ?? []).length > 0 && (
                   <span className="block">
@@ -430,7 +431,7 @@ function StorageSection({ pools, focusNode = null }: { pools: StoragePool[]; foc
                   </span>
                 )}
               </td>
-              <td className="py-1.5 align-top text-xs">
+              <td data-label="Belegung" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 align-top text-xs`}>
                 <div className="h-1.5 w-full overflow-hidden rounded bg-white/10" role="progressbar" aria-valuenow={pool.used_percent ?? 0} aria-valuemin={0} aria-valuemax={100}>
                   <div className={`h-full ${BAR_TONE[pool.tone] ?? BAR_TONE.neutral}`} ref={styleRef({ width: `${Math.min(100, pool.used_percent ?? 0)}%` })} />
                 </div>
@@ -494,19 +495,19 @@ function TaskRow({ task }: { task: TaskOut }): JSX.Element {
   const statusText = task.running ? "läuft" : task.ok ? "OK" : task.status ?? "Fehler";
   return (
     <>
-      <tr className="cursor-pointer hover:bg-white/5" onClick={() => void toggle()} data-testid={`task-${task.upid}`}>
-        <td className="py-1 whitespace-nowrap opacity-70">{task.starttime ? new Date(task.starttime * 1000).toLocaleString("de-DE") : ""}</td>
-        <td className="py-1">
+      <tr role="row" className={`${CARD_ROW} cursor-pointer hover:bg-white/5`} onClick={() => void toggle()} data-testid={`task-${task.upid}`}>
+        <td data-label="Zeit" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:whitespace-nowrap opacity-70`}>{task.starttime ? new Date(task.starttime * 1000).toLocaleString("de-DE") : ""}</td>
+        <td data-label="Aufgabe" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1`}>
           {task.type_label}
           {task.guest_name ? ` · ${task.guest_name}` : task.guest_id ? ` · ${task.guest_id}` : ""}
         </td>
-        <td className="py-1 opacity-70">{task.user}</td>
-        <td className={`py-1 break-words ${statusClass}`}>{statusText}</td>
-        <td className="py-1 whitespace-nowrap opacity-70">{formatDuration(task.duration_s)}</td>
+        <td data-label="Benutzer" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 opacity-70`}>{task.user}</td>
+        <td data-label="Status" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 break-words ${statusClass}`}>{statusText}</td>
+        <td data-label="Dauer" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:whitespace-nowrap opacity-70`}>{formatDuration(task.duration_s)}</td>
       </tr>
       {open && (
-        <tr>
-          <td colSpan={5} className="bg-black/30 p-2">
+        <tr role="row" className={CARD_ROW}>
+          <td role="cell" colSpan={5} className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] bg-black/30 sm:p-2`}>
             {error && <p className="text-red-400">{error}</p>}
             {!error && !lines && <p className="opacity-60">Lade Protokoll …</p>}
             {lines && <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px]">{lines.join("\n") || "(leer)"}</pre>}
@@ -523,11 +524,10 @@ function TaskRow({ task }: { task: TaskOut }): JSX.Element {
  */
 function TasksTable({ tasks }: { tasks: TaskOut[] }): JSX.Element {
   if (tasks.length === 0) return <p className="text-xs opacity-60">Keine Aufgaben in letzter Zeit.</p>;
-  // Am Handy ist die Tabelle breiter als der Bildschirm: sie scrollt für sich, die Seite bleibt stehen.
   return (
     <div className="overflow-x-auto">
-    <table className="w-full min-w-[32rem] text-xs">
-      <thead>
+    <table role="table" className={`${CARD_TABLE} text-left  text-xs`}>
+      <thead role="rowgroup" className={CARD_HEAD}>
         <tr className="border-b border-white/10 text-left opacity-60">
           <th className="py-1">Zeit</th>
           <th className="py-1">Aufgabe</th>
@@ -536,7 +536,7 @@ function TasksTable({ tasks }: { tasks: TaskOut[] }): JSX.Element {
           <th className="py-1">Dauer</th>
         </tr>
       </thead>
-      <tbody className="divide-y divide-white/5">
+      <tbody role="rowgroup" className={CARD_BODY}>
         {tasks.map((task) => (
           <TaskRow key={task.upid} task={task} />
         ))}
@@ -1254,8 +1254,8 @@ function ConnectionsPanel({
           <p className="mb-2 text-xs opacity-60">Noch keine Verbindung konfiguriert.</p>
         )}
         {connections && connections.length > 0 && (
-          <table className="mb-3 w-full text-xs">
-            <thead>
+          <table role="table" className={`${CARD_TABLE} text-left mb-3 w-full text-xs`}>
+            <thead role="rowgroup" className={CARD_HEAD}>
               <tr className="border-b border-white/10 text-left opacity-60">
                 <th className="py-1 w-1/6">Name</th>
                 <th className="py-1 w-1/3">Adresse</th>
@@ -1265,14 +1265,14 @@ function ConnectionsPanel({
                 <th className="py-1 whitespace-nowrap">Aktionen</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody role="rowgroup" className={CARD_BODY}>
               {connections.map((c) => (
-                <tr key={c.name}>
-                  <td className="py-1.5 break-words">{c.name}</td>
-                  <td className="py-1.5 break-all opacity-70">{c.base_url}</td>
-                  <td className="py-1.5 whitespace-nowrap"><CertificateStatus connection={c} /></td>
-                  <td className="py-1.5 whitespace-nowrap">{c.has_token ? "gesetzt" : <span className="text-amber-400">fehlt</span>}</td>
-                  <td className="py-1.5">
+                <tr role="row" className={CARD_ROW} key={c.name}>
+                  <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 break-words`}>{c.name}</td>
+                  <td data-label="Adresse" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 break-all opacity-70`}>{c.base_url}</td>
+                  <td data-label="Zertifikat" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 sm:whitespace-nowrap`}><CertificateStatus connection={c} /></td>
+                  <td data-label="Token" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 sm:whitespace-nowrap`}>{c.has_token ? "gesetzt" : <span className="text-amber-400">fehlt</span>}</td>
+                  <td data-label="Aktiv" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`}>
                     <button
                       type="button"
                       disabled={pending === `toggle:${c.name}`}
@@ -1282,8 +1282,8 @@ function ConnectionsPanel({
                       {c.enabled ? "aktiv" : "deaktiviert"}
                     </button>
                   </td>
-                  <td className="py-1.5">
-                    <div className="flex gap-1.5">
+                  <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`}>
+                    <div className="flex flex-wrap gap-1.5">
                       <button
                         type="button"
                         disabled={pending === `token:${c.name}`}
@@ -1709,8 +1709,8 @@ export function ProxmoxNodePage(): JSX.Element {
                     />
                   ))}
 
-                <table className="w-full text-sm">
-                  <thead>
+                <table role="table" className={`${CARD_TABLE} text-left`}>
+                  <thead role="rowgroup" className={CARD_HEAD}>
                     <tr className="border-b border-white/10 text-left text-xs opacity-60">
                       <th className="py-1 w-6" />
                       <th className="py-1 sm:w-1/2">Name</th>
@@ -1718,7 +1718,7 @@ export function ProxmoxNodePage(): JSX.Element {
                       <th className="py-1 text-right">Aktionen</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-white/5">
+                  <tbody role="rowgroup" className={CARD_BODY}>
                     {guests
                       .filter((g) => parseProviderRef(g.provider_ref).connection === connection)
                       .map((host) => {
@@ -1730,8 +1730,8 @@ export function ProxmoxNodePage(): JSX.Element {
                         const isBusy = (type: string) => pending.has(`${host.id}:${type}`);
                         return (
                           <Fragment key={host.id}>
-                            <tr id={`host-${host.id}`} className={host.id === focusHost ? FOCUS_CLASS : undefined}>
-                              <td className="py-1.5 align-top">
+                            <tr role="row" id={`host-${host.id}`} className={`${CARD_ROW} ${host.id === focusHost ? FOCUS_CLASS : ""}`}>
+                              <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 align-top`}>
                                 <button
                                   type="button"
                                   onClick={() => setExpanded(isExpanded ? null : host.id)}
@@ -1741,7 +1741,7 @@ export function ProxmoxNodePage(): JSX.Element {
                                   {isExpanded ? "▾" : "▸"}
                                 </button>
                               </td>
-                              <td className="py-1.5 break-words">
+                              <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 break-words`}>
                                 <span className="font-medium">{host.display_name}</span>
                                 <span className="block text-xs opacity-60">
                                   {KIND_LABEL[host.kind ?? ""] ?? host.kind} · {node}
@@ -1749,9 +1749,9 @@ export function ProxmoxNodePage(): JSX.Element {
                                 {/* Am Handy fehlt die Spalte „Status“: dort steht er unter dem Namen. */}
                                 <span className={`block text-xs sm:hidden ${STATUS_TONE[host.status] ?? ""}`}>{HOST_STATUS_LABEL[host.status] ?? host.status}</span>
                               </td>
-                              <td className={`hidden py-1.5 whitespace-nowrap sm:table-cell ${STATUS_TONE[host.status] ?? ""}`}>{HOST_STATUS_LABEL[host.status] ?? host.status}</td>
-                              <td className="py-1.5">
-                                <div className="flex flex-wrap justify-end gap-1.5">
+                              <td data-label="Status" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] hidden sm:py-1.5 sm:whitespace-nowrap sm:table-cell ${STATUS_TONE[host.status] ?? ""}`}>{HOST_STATUS_LABEL[host.status] ?? host.status}</td>
+                              <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`}>
+                                <div className="flex flex-wrap gap-1.5 sm:justify-end">
                                   {/* Konsole: Bildschirm direkt in Nodvard Deck (Kern-Seite /console/:hostId) ohne
                                       Proxmox-Login, im neuen Tab. Eine gestoppte VM hat keinen Bildschirm, Proxmox
                                       würde den Aufruf ablehnen. */}
@@ -1804,9 +1804,9 @@ export function ProxmoxNodePage(): JSX.Element {
                               </td>
                             </tr>
                             {isExpanded && (
-                              <tr>
-                                <td />
-                                <td colSpan={3} className="bg-black/20 py-2">
+                              <tr role="row" className={CARD_ROW}>
+                                <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere]`} />
+                                <td role="cell" colSpan={3} className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] bg-black/20 sm:py-2`}>
                                   <MetricsPanel hostId={host.id} />
                                   <GuestDetailsPanel hostId={host.id} />
                                   <p className="mt-2 mb-1 text-xs font-medium opacity-60">Snapshots</p>

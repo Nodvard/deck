@@ -1,3 +1,4 @@
+import { cardTable } from "../../../../frontend/src/test/mobileLayout";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
@@ -56,6 +57,40 @@ beforeEach(() => {
     promptDialog: vi.fn().mockResolvedValue(null),
     hasPermission,
   };
+});
+
+describe("BackupsPage Zusammenfassung", () => {
+  it.each([{ connections: [] }, { connections: [{ name: "pve1", base_url: "https://pve1:8006", enabled: true, has_token: true }] }])(
+    "zeigt ohne Sicherungsjobs einen neutralen Leerzustand bei Verbindungen %j",
+    async ({ connections }) => {
+      vi.stubGlobal("fetch", mockFetch({ jobs: [], connections }));
+      render(<BackupsPage />);
+
+      const empty = await screen.findByText("Keine Sicherungsjobs gefunden");
+      expect(empty).toHaveClass("opacity-60");
+      expect(document.body).not.toHaveTextContent("alle zuletzt erfolgreich");
+      expect(document.body).not.toHaveTextContent("0 Job");
+      expect(document.querySelector(".text-emerald-300")).toBeNull();
+    },
+  );
+
+  it.each([1, 2])("zeigt %i erfolgreiche Sicherungsjobs mit passendem Plural", async (count) => {
+    const jobs = Array.from({ length: count }, (_, i) => ({ ...JOBS[0], job_ref: `job-${i}`, last_status: "ok" }));
+    vi.stubGlobal("fetch", mockFetch({ jobs }));
+    render(<BackupsPage />);
+
+    expect(await screen.findByText(`${count} ${count === 1 ? "Sicherungsjob" : "Sicherungsjobs"}: alle zuletzt erfolgreich`)).toBeInTheDocument();
+    expect(screen.queryByText("Keine Sicherungsjobs gefunden")).toBeNull();
+  });
+
+  it("zeigt bei ausschließlich unerreichbaren Verbindungen keinen Leerzustand oder Erfolg", async () => {
+    vi.stubGlobal("fetch", mockFetch({ jobs: [{ ...JOBS[0], last_status: "unreachable", error: "Zeitüberschreitung" }] }));
+    render(<BackupsPage />);
+
+    expect(await screen.findByTestId("unreachable")).toHaveTextContent("nicht erreichbar");
+    expect(screen.queryByText("Keine Sicherungsjobs gefunden")).toBeNull();
+    expect(document.body).not.toHaveTextContent("alle zuletzt erfolgreich");
+  });
 });
 
 describe("BackupsPage retry()", () => {
@@ -525,7 +560,7 @@ describe("BackupsPage ConnectionsPanel", () => {
     expect(note.textContent).toContain("Verbindung „pve1“ nicht erreichbar");
     expect(note.textContent).toContain("All connection attempts failed");
     expect(screen.getAllByRole("button", { name: "Erneut versuchen" })).toHaveLength(1);
-    expect(screen.getByText(/^1 Job\(s\)/)).toBeInTheDocument();
+    expect(screen.getByText("1 Sicherungsjob: 1 ohne bestätigtes erfolgreiches Backup")).toBeInTheDocument();
     expect(screen.getByText("(100)")).toBeInTheDocument();
   });
 
@@ -574,3 +609,16 @@ describe("BackupsPage ConnectionsPanel", () => {
     expect(form.textContent).toContain("Bisher galt die Aufbewahrung des Speichers");
   });
 });
+
+it("390 px: Verbindungen und Sicherungsjobs sind Karten", async () => {
+  const connection = { name: "pve2", base_url: "https://" + "server".repeat(24) + ".test:8006", enabled: true, has_token: true };
+  vi.stubGlobal("fetch", mockFetch({ connections: [connection] }));
+  render(<BackupsPage />);
+  await screen.findByRole("button", { name: "Erneut versuchen" });
+  const details = screen.getByText("Verbindungen verwalten").closest("details")!;
+  details.open = true;
+  await cardTable(details.querySelector("table")!, ["Adresse", "Zertifikat", "Token", "Aktiv"]);
+  const jobTable = screen.getByRole("button", { name: "Erneut versuchen" }).closest("table")!;
+  expect(within(jobTable).getByRole("button", { name: "Job bearbeiten" }).parentElement).toHaveClass("flex-wrap");
+  await cardTable(jobTable, ["Storage", "Zeitplan", "Letzter Status", "Letzter Lauf", "Vorhanden"]);
+}, 30000);

@@ -1,18 +1,13 @@
-/**
- * Karte „Updates“ (Einstellungen, System): ob es eine neuere Version gibt und wie man sie einspielt. Die Suche läuft
- * über `/system/updates` (höchstens einmal pro Minute), der Knopf „Jetzt aktualisieren“ über den Update-Helfer
- * (`applyBlock`), für alle ohne Helfer gibt es Anleitungen je Umgebung.
- */
+/** Update-Suche mit Anleitungen je Umgebung und Einspielen über den verfügbaren Update-Helfer. */
 import { ArrowUpCircle, CheckCircle2, ExternalLink, Info, RefreshCw, ShieldAlert, WifiOff } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { api } from "../../lib/api";
 import { formatWhen } from "../../lib/backups";
-import { requestUpdate, tagFitsVersion, useUpdateHelper, type HelperView } from "../../lib/updater";
+import { helperSignsRequests, requestUpdate, tagFitsVersion, useUpdateHelper, type HelperView } from "../../lib/updater";
 import { useAuthStore } from "../../state/auth";
 import { DECK_EDITION, useEdition } from "../../state/edition";
 import type { PreUpdateCopy } from "./UpdateCopiesCard";
-import { OWNER_ONLY_HINT, OwnerConfirm, type OwnerProof } from "./OwnerConfirm";
 import { ConfirmForm, FollowPanel, HelperStatusLine, LastResultLine, formatUnix, useHelperView } from "./UpdateHelper";
 import { Button, Card, NoticeLine, Toggle, errorText, inputClass, type Notice } from "./ui";
 import { HELPER_CODE_TEXTS } from "./updaterTexts";
@@ -22,7 +17,7 @@ export interface UpdateStatus {
   latest: string | null;
   latest_digest?: string | null;
   available: boolean;
-  /** Der Inhaber hat zugestimmt, dass Deck Sicherheitsupdates selbst einspielt (wirkt erst mit signierten Anforderungen). */
+  /** Gespeicherte Zustimmung zum selbstständigen Einspielen von Sicherheitsupdates, wirksam ab Version 1.0. */
   auto_security?: boolean;
   /** Arten bis `latest`: `sicherheit`, `behoben`, `verbessert`, `neu`, `dokumentation`.
    * In Image-Annotationen wird Dokumentation für ältere Deck-Versionen als `verbessert` veröffentlicht. */
@@ -115,65 +110,6 @@ function UpdateKinds({ kinds = [], complete = false }: { kinds?: string[]; compl
   );
 }
 
-export const KEY_AUTO_SECURITY = "system.update_check.auto_security";
-
-/** Zustimmung zum Einspielen ohne Klick. Sie wird schon gespeichert, wirkt aber erst mit signierten Anforderungen. */
-function AutoSecuritySwitch({
-  enabled,
-  locked,
-  confirmLocked,
-  onSaved,
-}: {
-  enabled: boolean;
-  locked: boolean;
-  confirmLocked: boolean;
-  onSaved: (value: boolean) => void;
-}) {
-  const isOwner = useAuthStore((s) => Boolean(s.user?.is_owner));
-  const [wanted, setWanted] = useState<boolean | null>(null);
-
-  async function send(proof: OwnerProof) {
-    await api.put(`/settings/${KEY_AUTO_SECURITY}`, { value: wanted, ...proof });
-  }
-
-  return (
-    <div>
-      <div className="flex items-start gap-3">
-        <Toggle
-          checked={wanted ?? enabled}
-          disabled={!isOwner || wanted !== null || locked}
-          label="Sicherheitsupdates selbst einspielen"
-          onChange={setWanted}
-        />
-        <div className="text-sm">
-          <p>Sicherheitsupdates selbst einspielen</p>
-          <p className="mt-0.5 text-xs text-white/45">
-            Noch nicht in dieser Version: Bis jetzt spielt Nodvard Deck kein Update von selbst ein. Findet die Update-Suche (die tägliche
-            oben oder „Jetzt suchen“) ein Sicherheitsupdate, meldet Deck das rot, mit eingerichtetem Meldungskanal auch als Push. Mit
-            Version 1.0 spielt es dann, wenn du hier zustimmst, Sicherheitsupdates derselben Reihe (etwa 1.0.1 auf 1.0.2) selbst ein, nur
-            im Kanal „Nur fertige Versionen“ und nur mit Update-Helfer.
-          </p>
-          {enabled && wanted === null && (
-            <p className="mt-1 text-xs text-amber-200/80">Zugestimmt. Bis Version 1.0 bleibt es beim Melden, einspielen musst du noch selbst.</p>
-          )}
-          {!isOwner && <p className="mt-1 text-xs text-white/55">{OWNER_ONLY_HINT}</p>}
-        </div>
-      </div>
-      {wanted !== null && (
-        <OwnerConfirm
-          disabled={confirmLocked}
-          send={send}
-          onDone={() => {
-            onSaved(wanted);
-            setWanted(null);
-          }}
-          onCancel={() => setWanted(null)}
-        />
-      )}
-    </div>
-  );
-}
-
 /** `0.6.0-rc1` -> `0.6` (die Reihe, die release.yml als Tag mit veröffentlicht). */
 function seriesOf(version: string): string {
   return version.split("-")[0].split(".").slice(0, 2).join(".");
@@ -238,7 +174,7 @@ export function guides(
       steps: [
         <>Im Ordner mit der Compose-Datei ein Terminal öffnen. {pinned(imageField)}</>,
         <>Neue Version holen: <Cmd>{compose("pull")}</Cmd></>,
-        <>Neu starten: <Cmd>{compose("up -d")}</Cmd> – nach etwa einer Minute ist das Dashboard wieder da.</>,
+        <>Neu starten: <Cmd>{compose("up -d")}</Cmd>. Nach etwa einer Minute ist das Dashboard wieder da.</>,
       ],
       note: fileHint,
       back: composeBack,
@@ -288,7 +224,7 @@ export function guides(
       steps: [
         <>Oben den Reiter „Docker“ öffnen.</>,
         <>Unten „Check for Updates“ klicken.</>,
-        <>Bei {product} erscheint „apply update“ – anklicken und mit „Apply update“ bestätigen.</>,
+        <>Bei {product} erscheint „apply update“. Anklicken und mit „Apply update“ bestätigen.</>,
       ],
       note: pinned(<>„Repository“ (Container bearbeiten: „Edit“, danach „Apply“)</>),
       back: (
@@ -307,7 +243,7 @@ export function guides(
       ],
       back: (
         <>
-          Auf dem Pi im Deploy-Ordner <Cmd>bash pi_switch.sh rollback</Cmd> ausführen – das holt das vorige Image zurück.
+          Auf dem Pi im Deploy-Ordner <Cmd>bash pi_switch.sh rollback</Cmd> ausführen. Das holt das vorige Image zurück.
         </>
       ),
     },
@@ -350,6 +286,12 @@ export function applyBlock(status: UpdateStatus, view: HelperView | null, isOwne
     };
   }
   if (!isOwner) return { ok: false, why: "Per Knopf aktualisieren kann nur der Inhaber dieser Installation (Owner)." };
+  if (!helperSignsRequests(view)) {
+    return {
+      ok: false,
+      why: "Dein Update-Helfer ist zu alt: Er nimmt nur Anforderungen mit Signatur an, und Nodvard Deck schickt sie jetzt immer signiert. Hol die aktuelle Version des Helfers (Anleitung: deploy/README.md, Abschnitt „Update-Helfer“), richte den Schlüssel ein und lies den Abschnitt „Schlüssel für Update-Anforderungen“.",
+    };
+  }
   if (view.request_options?.includes("digest") && !status.latest_digest) {
     return { ok: false, why: "Bei der letzten Update-Suche kam keine Prüfsumme für diese Version an. Such erneut nach Updates." };
   }
@@ -376,7 +318,7 @@ export function formatKeyId(keyId: string): string {
 
 /** Wer die Freigabe prüft: der Helfer selbst (`v: 2`) oder, bei einem älteren Helfer, noch niemand. */
 function SignatureLine({ status, view }: { status: UpdateStatus; view: HelperView }) {
-  if (view.request_versions?.includes(2)) {
+  if (helperSignsRequests(view) && view.request_versions?.includes(3)) {
     const key = status.approved_key ? ` (Schlüssel ${formatKeyId(status.approved_key)})` : "";
     return (
       <p className="text-xs text-white/55" data-testid="helper-signed">
@@ -477,20 +419,15 @@ export function UpdatesCard(): JSX.Element {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
-  const autoSecurityRevision = useRef(0);
   const channelRevision = useRef(0);
   const [notice, setNotice] = useState<Notice>(null);
   const [tab, setTab] = useState<GuideId | null>(null);
-  const helperView = useUpdateHelper((s) => s.view);
-  const helperFollow = useUpdateHelper((s) => s.follow);
-  const isOwner = useAuthStore((s) => Boolean(s.user?.is_owner));
 
   useEffect(() => {
     let alive = true;
-    const revision = autoSecurityRevision.current;
     const channel = channelRevision.current;
     api.get<UpdateStatus>("/system/updates")
-      .then((s) => alive && receiveStatus(s, revision, channel))
+      .then((s) => alive && receiveStatus(s, channel))
       .catch((err: unknown) => alive && setLoadError(errorText(err)));
     // Nur eine Zugabe für die Anleitungen (Datenbank, Version von vorher): scheitert das, bleibt es still.
     api.get<SystemInfo>("/system/info")
@@ -501,21 +438,17 @@ export function UpdatesCard(): JSX.Element {
     };
   }, []);
 
-  function receiveStatus(loaded: UpdateStatus, revision: number, channel: number) {
-    setStatus((s) => {
-      if (channel !== channelRevision.current) return s;
-      return revision === autoSecurityRevision.current ? loaded : { ...loaded, auto_security: s?.auto_security };
-    });
+  function receiveStatus(loaded: UpdateStatus, channel: number) {
+    if (channel === channelRevision.current) setStatus(loaded);
   }
 
   async function checkNow() {
-    const revision = autoSecurityRevision.current;
     const channel = channelRevision.current;
     setBusy(true);
     setNotice(null);
     try {
       const checked = await api.post<UpdateStatus>("/system/updates/check");
-      receiveStatus(checked, revision, channel);
+      receiveStatus(checked, channel);
     } catch (err) {
       setNotice({ kind: "error", text: errorText(err) });
     } finally {
@@ -525,7 +458,6 @@ export function UpdatesCard(): JSX.Element {
 
   async function save(key: "enabled" | "channel", value: boolean | string) {
     if (!status) return;
-    const revision = autoSecurityRevision.current;
     const channel = key === "channel" ? ++channelRevision.current : channelRevision.current;
     setSaving(true);
     setNotice(null);
@@ -533,7 +465,7 @@ export function UpdatesCard(): JSX.Element {
       await api.put(`/settings/system.update_check.${key}`, { value });
       if (key === "channel") {
         // Der Kanal ändert, welche Version als neueste gilt: Stand neu laden (ohne Netz).
-        receiveStatus(await api.get<UpdateStatus>("/system/updates"), revision, channel);
+        receiveStatus(await api.get<UpdateStatus>("/system/updates"), channel);
       } else {
         setStatus((s) => (s ? { ...s, enabled: value as boolean } : s));
       }
@@ -573,7 +505,7 @@ export function UpdatesCard(): JSX.Element {
     <Card
       title="Updates"
       description={`Ob es eine neuere Version von ${edition.product_name} gibt und wie du sie einspielst.`}
-      footer={
+      actions={
         <Button variant="primary" busy={busy} disabled={saving} onClick={() => void checkNow()}>
           <RefreshCw size={14} /> Jetzt suchen
         </Button>
@@ -585,7 +517,7 @@ export function UpdatesCard(): JSX.Element {
         <dt className="text-white/55">Installiert</dt>
         <dd>Version {status.current}</dd>
         <dt className="text-white/55">Neueste Version</dt>
-        <dd>{status.latest ? `Version ${status.latest}` : nothingFound ? "keine gefunden" : "noch nicht geprüft"}</dd>
+        <dd>{status.latest ? `Version ${status.latest}` : status.error ? "Prüfung fehlgeschlagen" : nothingFound ? "keine gefunden" : "noch nicht geprüft"}</dd>
         <dt className="text-white/55">Zuletzt geprüft</dt>
         <dd>{formatWhen(status.checked_at)}</dd>
       </dl>
@@ -636,7 +568,7 @@ export function UpdatesCard(): JSX.Element {
         <p className="mt-4 text-xs text-white/55">
           {edition.repo_tools ? (
             <>
-              Dieses Dashboard läuft mit einem selbst gebauten Image. Aktualisiere es auf demselben Weg, auf dem du es gebaut hast – auf einem Raspberry
+              Dieses Dashboard läuft mit einem selbst gebauten Image. Aktualisiere es auf demselben Weg, auf dem du es gebaut hast, auf einem Raspberry
               Pi z. B. mit <Cmd>scripts/deploy_pi.sh</Cmd>. Die anderen Anleitungen gelten für das fertige Image <Cmd>{status.official_image_name}</Cmd>.
             </>
           ) : (
@@ -682,15 +614,9 @@ export function UpdatesCard(): JSX.Element {
               </select>
             </label>
             {edition.repo_tools && (
-              <AutoSecuritySwitch
-                enabled={status.auto_security === true}
-                locked={locked}
-                confirmLocked={saving}
-                onSaved={(value) => {
-                  autoSecurityRevision.current += 1;
-                  setStatus((s) => (s ? { ...s, auto_security: value } : s));
-                }}
-              />
+              <p className="text-xs text-white/45">
+                Sicherheitsupdates werden bis Version 1.0 nur gemeldet. Einspielen musst du sie selbst.
+              </p>
             )}
           </div>
         ) : (
@@ -701,7 +627,8 @@ export function UpdatesCard(): JSX.Element {
         )}
       </div>
 
-      <ManualGuide collapsed={manualGuideFolded(status, helperView, Boolean(helperFollow), isOwner)}>
+      <details className="mt-5 border-t border-white/[0.06] pt-4" data-testid="manual-update-guide">
+        <summary className="mb-2 cursor-pointer text-sm font-semibold">Von Hand aktualisieren</summary>
         <div role="tablist" aria-label="Anleitung für" className="mb-3 flex flex-wrap gap-1">
           {all.map((g) => (
             <button
@@ -744,7 +671,7 @@ export function UpdatesCard(): JSX.Element {
               <>
                 Hat die neue Version noch nie richtig gestartet, spielt die alte die Kopie von selbst wieder ein. Lief die neue Version schon und hat
                 sie dabei die Datenbank umgebaut, zeigt die alte eine Notseite: Dort mit dem Notfallcode (steht im Protokoll des Containers) „Stand vor
-                dem Update wiederherstellen“ wählen – was seit dem Update geändert wurde, geht dabei verloren. Beides klappt erst ab einer Version,
+                dem Update wiederherstellen“ wählen. Was seit dem Update geändert wurde, geht dabei verloren. Beides klappt erst ab einer Version,
                 die diese Kopien schon anlegt. Oder wieder auf die neue Version wechseln.
               </>
             ) : (
@@ -752,33 +679,7 @@ export function UpdatesCard(): JSX.Element {
             )}
           </p>
         </div>
-      </ManualGuide>
+      </details>
     </Card>
-  );
-}
-
-/** Die Anleitung von Hand wird nur eingeklappt, wenn der Helfer das Update übernimmt (Knopf da oder Vorgang läuft). */
-export function manualGuideFolded(
-  status: UpdateStatus, view: HelperView | null, following: boolean, isOwner: boolean,
-): boolean {
-  if (!view || !status.official_image) return false;
-  return following || view.state === "busy" || applyBlock(status, view, isOwner).ok;
-}
-
-/** Anleitung für Updates von Hand, eingeklappt, wenn der Knopf oben der Weg ist. */
-function ManualGuide({ collapsed, children }: { collapsed: boolean; children: ReactNode }): JSX.Element {
-  if (!collapsed) {
-    return (
-      <div className="mt-5 border-t border-white/[0.06] pt-4">
-        <h4 className="mb-2 text-sm font-semibold">So spielst du ein Update ein</h4>
-        {children}
-      </div>
-    );
-  }
-  return (
-    <details className="mt-5 border-t border-white/[0.06] pt-4" data-testid="manual-update-guide">
-      <summary className="mb-2 cursor-pointer text-sm font-semibold">Von Hand aktualisieren (ohne Update-Helfer)</summary>
-      {children}
-    </details>
   );
 }

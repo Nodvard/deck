@@ -202,10 +202,14 @@ async def test_open_failure_is_reported_and_audited(running_app, db_session):
     token = await _bootstrap_owner(http_base)
     resp = await _open(http_base, token, host.id)
     assert resp.status_code == 502
-    assert "VM.Console" in resp.json()["detail"]
+    import re
+
+    assert re.fullmatch(r"Konsole konnte nicht geöffnet werden\. Fehlerkennung: [0-9a-f]{32}\.", resp.json()["detail"])
+    assert "VM.Console" not in resp.text
 
     entries = (await db_session.execute(select(AuditEntry).where(AuditEntry.action == "console.open"))).scalars().all()
     assert [e.outcome for e in entries] == ["failure"]
+    assert entries[0].reason == resp.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -327,3 +331,108 @@ async def test_console_ticket_of_a_deactivated_account_is_refused(running_app, d
             break
         await asyncio.sleep(0.02)
     assert target.opened[0].closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("access", ["allowed", "revoked", "error"])
+async def test_console_waits_for_access_check(running_app, db_session, monkeypatch, access):
+    import websockets
+    from websockets.exceptions import ConnectionClosed
+
+    from nodvard_deck.services.session_guard import SessionWatch
+
+    http_base, ws_base = running_app
+    host = await hosts_service.create_host(db_session, name="vm-1", address="10.0.0.5")
+    await db_session.commit()
+    target = _FakeConsoleTarget({host.id})
+    get_extension_runtime().capabilities.provide("fake-hv", ConsoleTarget, target)
+    owner_token = await _bootstrap_owner(http_base)
+    user_id, token = await _operator_login(http_base, owner_token)
+    created = await _open(http_base, token, host.id)
+    assert created.status_code == 200, created.text
+    await db_session.commit()
+    if access == "revoked":
+        async with AsyncClient(base_url=http_base) as ac:
+            response = await ac.patch(
+                f"/api/v1/users/{user_id}", json={"role_ids": []},
+                headers={"Authorization": f"Bearer {owner_token}"},
+            )
+        assert response.status_code == 200, response.text
+        await db_session.commit()
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original = SessionWatch.ended_reason
+
+    async def check(self, session, **kwargs):
+        entered.set()
+        await release.wait()
+        if access == "error":
+            raise RuntimeError("Datenbank nicht erreichbar")
+        return await original(self, session, **kwargs)
+
+    monkeypatch.setattr(SessionWatch, "ended_reason", check)
+    async with websockets.connect(f"{ws_base}{created.json()['ws_url']}") as ws:
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            await ws.send(b"eingabe")
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(ws.recv(), timeout=0.1)
+            assert target.opened[0].written == []
+        finally:
+            release.set()
+
+        if access == "allowed":
+            assert await asyncio.wait_for(ws.recv(), timeout=5) == b"RFB 003.008\n"
+            assert await asyncio.wait_for(ws.recv(), timeout=5) == b"echo:eingabe"
+        else:
+            with pytest.raises(ConnectionClosed) as closed:
+                await asyncio.wait_for(ws.recv(), timeout=5)
+            assert closed.value.rcvd.code == (4401 if access == "revoked" else 4500)
+            assert target.opened[0].written == []
+
+    for _ in range(100):
+        if target.opened[0].closed:
+            break
+        await asyncio.sleep(0.02)
+    assert target.opened[0].closed
+
+
+@pytest.mark.asyncio
+async def test_console_closes_when_recheck_fails(running_app, db_session, monkeypatch):
+    import websockets
+    from websockets.exceptions import ConnectionClosed
+
+    from nodvard_deck.services.session_guard import SessionWatch
+
+    http_base, ws_base = running_app
+    host = await hosts_service.create_host(db_session, name="vm-1", address="10.0.0.5")
+    await db_session.commit()
+    target = _FakeConsoleTarget({host.id})
+    get_extension_runtime().capabilities.provide("fake-hv", ConsoleTarget, target)
+    token = await _bootstrap_owner(http_base)
+    created = await _open(http_base, token, host.id)
+    assert created.status_code == 200, created.text
+    await db_session.commit()
+    fail = asyncio.Event()
+    original = SessionWatch.ended_reason
+    checked = False
+
+    async def check(self, session, **kwargs):
+        nonlocal checked
+        if checked:
+            await fail.wait()
+            raise RuntimeError("Datenbank nicht erreichbar")
+        checked = True
+        return await original(self, session, **kwargs)
+
+    monkeypatch.setattr(SessionWatch, "ended_reason", check)
+    async with websockets.connect(f"{ws_base}{created.json()['ws_url']}") as ws:
+        try:
+            assert await asyncio.wait_for(ws.recv(), timeout=5) == b"RFB 003.008\n"
+        finally:
+            fail.set()
+        with pytest.raises(ConnectionClosed) as closed:
+            await asyncio.wait_for(ws.recv(), timeout=5)
+        assert closed.value.rcvd.code == 4500
+        assert target.opened[0].closed

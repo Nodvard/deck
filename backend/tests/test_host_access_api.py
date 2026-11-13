@@ -720,3 +720,17 @@ async def test_make_default_needs_write_permission_and_matching_credential(clien
         tok = await _role_token(client, db_session, role, f"m-{role}")
         assert (await client.post(_default_url(host["id"], new["id"]), headers=_auth(tok))).status_code == 403
     assert (await client.get(f"/api/v1/hosts/{host['id']}", headers=_auth(token))).json()["credential"]["id"] == old["id"]
+
+
+@pytest.mark.asyncio
+async def test_dock_fallback_never_writes_the_full_sudo_rule(client, test_settings, monkeypatch):
+    monkeypatch.setattr(test_settings, "edition", "dock")
+    token = await _bootstrap_owner(client)
+    host, gen = await _docker_host_with_key(client, token)
+    cid = gen["credential"]["id"]
+
+    r = await client.get(_setup_url(host["id"], cid), params={"sudo": "true", "groups": "docker"}, headers=_auth(token))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["sudo"], body["full_sudo"], body["helpers"]) == (False, False, [])
+    assert "NOPASSWD" not in body["script"] and "sudoers" not in body["script"]

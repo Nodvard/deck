@@ -51,6 +51,7 @@ KINDS: dict[str, str] = {
     "sdk_parameter_entfernt": "SDK: Parameter / Feld entfernt oder umbenannt",
     "sdk_parameter_pflicht": "SDK: neuer Parameter ohne Vorgabewert",
     "sdk_art_geaendert": "SDK: Art geändert (z. B. Klasse wird Funktion)",
+    "sdk_verhalten_geaendert": "SDK: Laufzeitverhalten geändert",
 }
 
 
@@ -113,6 +114,7 @@ def schema_node(
     fields: dict[str, Any] = {}
     required = set(schema.get("required", []))
     items: dict[str, Any] | None = None
+    closed_object = schema.get("additionalProperties") is False
 
     def add_fields(src: dict[str, Any], req: set[str]) -> None:
         for name, sub in (src.get("properties") or {}).items():
@@ -126,6 +128,7 @@ def schema_node(
     alternatives = list(schema.get("anyOf", [])) + list(schema.get("oneOf", []))
     for alt in alternatives:
         sub = schema_node(alt, doc, track_required=track_required, depth=depth + 1, seen=seen)
+        closed_object |= sub.get("additional_properties") is False
         types |= set(sub["type"].split("|"))
         for name, child in sub.get("fields", {}).items():
             # In einer Vereinigung ist ein Feld nie sicher vorhanden.
@@ -166,6 +169,8 @@ def schema_node(
         node["fields"] = dict(sorted(fields.items()))
     if items is not None:
         node["items"] = items
+    if track_required and closed_object:
+        node["additional_properties"] = False
     return node
 
 
@@ -217,6 +222,10 @@ def build_api_snapshot(doc: dict[str, Any]) -> dict[str, Any]:
                     schema_node(content[ctype].get("schema", {}), doc, track_required=False) if ctype else None
                 )
             entry["responses"] = responses
+            entry["response_content_types"] = {
+                str(status): sorted(_resolve(resp, doc).get("content") or {})
+                for status, resp in sorted((op.get("responses") or {}).items())
+            }
             endpoints[f"{method.upper()} {path}"] = entry
     return {"format": FORMAT_VERSION, "endpoints": endpoints}
 
@@ -543,12 +552,11 @@ def stale_message(label: str, old: dict[str, Any], new: dict[str, Any], section:
 # --------------------------------------------------------------------------- Echte App
 
 
-async def collect_openapi(app: Any, session: Any, settings: Any, extensions_dir: Path) -> dict[str, Any]:
-    """`app.openapi()` MIT allen mitgelieferten Extensions. Extension-Routen haengen erst
-    nach `enable_extension()` an der App (services/extensions.py) -- ohne dieses Laden
-    fehlt ein grosser Teil von /api/v1/ext/... im Schema. Schlaegt das Laden einer
-    Extension fehl, bricht das hier laut ab: ein Schnappschuss ohne sie waere still
-    unvollstaendig und wuerde je nach Umgebung anders aussehen."""
+async def collect_openapi(
+    app: Any, session: Any, settings: Any, extensions_dir: Path, *, routes: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Erfasst das OpenAPI-Schema und wirksame Routen aller mitgelieferten Erweiterungen."""
+    from fastapi.routing import APIRoute, iter_route_contexts
     from nodvard_deck.services import extensions as svc
 
     settings.extensions_dir = extensions_dir
@@ -566,6 +574,8 @@ async def collect_openapi(app: Any, session: Any, settings: Any, extensions_dir:
             raise RuntimeError("Extensions für den API-Vertrag nicht ladbar: " + "; ".join(failed))
         app.openapi_schema = None
         doc = app.openapi()
+        if routes is not None:
+            routes.extend(route for route in iter_route_contexts(app.routes) if isinstance(route.original_route, APIRoute))
         app.openapi_schema = None
         return doc
     finally:

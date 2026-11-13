@@ -1,5 +1,4 @@
-"""Dauerhafte, durchsuchbare Vorfalls-Historie in der Tabelle `ext_nexus_soc_incidents` (models.py),
-neueste zuerst, mit `limit`/`offset` und Gesamtzahl für die Seitennavigation."""
+"""Dauerhafte, durchsuchbare Vorfalls-Historie mit Seitennavigation, neueste zuerst."""
 
 from __future__ import annotations
 
@@ -134,7 +133,7 @@ class IncidentRepository:
                     select(IncidentRecord)
                     .where(
                         func.lower(IncidentRecord.host_name) == host_name.lower(),
-                        func.lower(IncidentRecord.target) == target.lower(),
+                        IncidentRecord.target == target,
                         IncidentRecord.is_crash == is_crash,
                         IncidentRecord.created_at >= since,
                         unhandled,
@@ -174,7 +173,7 @@ class IncidentRepository:
                 await session.execute(
                     select(IncidentRecord).where(
                         func.lower(IncidentRecord.host_name) == host_name.lower(),
-                        func.lower(IncidentRecord.target) == target.lower(),
+                        IncidentRecord.target == target,
                         IncidentRecord.status.in_(("open", "proposed", "reviewed")),
                     )
                 )
@@ -224,7 +223,7 @@ class IncidentRepository:
                     select(IncidentRecord)
                     .where(
                         func.lower(IncidentRecord.host_name) == host_name.lower(),
-                        func.lower(IncidentRecord.target) == target.lower(),
+                        IncidentRecord.target == target,
                         IncidentRecord.is_crash == is_crash,
                         IncidentRecord.created_at >= since,
                     )
@@ -263,7 +262,7 @@ class IncidentRepository:
                     select(IncidentRecord)
                     .where(
                         func.lower(IncidentRecord.host_name) == host_name.lower(),
-                        func.lower(IncidentRecord.target) == target.lower(),
+                        IncidentRecord.target == target,
                         IncidentRecord.status == "resolved",
                         IncidentRecord.status_changed_at >= datetime.fromtimestamp(since, UTC),
                     )
@@ -282,7 +281,7 @@ class IncidentRepository:
                     select(IncidentRecord)
                     .where(
                         func.lower(IncidentRecord.host_name) == host_name.lower(),
-                        func.lower(IncidentRecord.target) == target.lower(),
+                        IncidentRecord.target == target,
                         IncidentRecord.action_id.is_not(None),
                     )
                     .order_by(IncidentRecord.created_at.desc(), IncidentRecord.id.desc())

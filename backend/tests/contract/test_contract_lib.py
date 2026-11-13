@@ -32,6 +32,26 @@ def obj(props: dict, required: list[str] | None = None) -> dict:
 S, I = {"type": "string"}, {"type": "integer"}
 
 
+def test_vertrag_erfasst_fehlerstatus_und_medientypen():
+    operation = op(response=S)
+    operation["responses"]["403"] = {"description": "Verboten", "content": {"application/json": {}}}
+    operation["responses"]["304"] = {"description": "Unverändert"}
+    operation["responses"]["200"]["content"]["text/plain"] = {"schema": S}
+    endpoint = cl.build_api_snapshot(doc({"/probe": {"get": operation}}))["endpoints"]["GET /probe"]
+    assert endpoint["response_content_types"] == {
+        "200": ["application/json", "text/plain"], "304": [], "403": ["application/json"],
+    }
+
+
+@pytest.mark.parametrize("nullable", [False, True])
+def test_vertrag_erfasst_geschlossene_eingabeobjekte(nullable):
+    body = {**obj({"name": S}), "additionalProperties": False}
+    if nullable:
+        body = {"anyOf": [body, {"type": "null"}]}
+    endpoint = cl.build_api_snapshot(doc({"/probe": {"post": op(body=body)}}))["endpoints"]["POST /probe"]
+    assert endpoint["body"]["schema"]["additional_properties"] is False
+
+
 def arts(old: dict, new: dict) -> set[tuple[str, str]]:
     a = cl.build_api_snapshot(old)
     b = cl.build_api_snapshot(new)

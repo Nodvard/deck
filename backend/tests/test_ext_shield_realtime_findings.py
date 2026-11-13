@@ -15,6 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from exec_gate_helpers import ReadingExec
 from shield_helper_kit import EXT_DIR, SH, helper_copy, stubs
 
 needs_sh = pytest.mark.skipif(sys.platform == "win32" or shutil.which("sh") is None, reason="braucht eine echte POSIX-Shell")
@@ -257,7 +258,7 @@ class _Ctx:
         self.settings_value = {"auto_quarantine": True, "watch_paths": ["/tmp", "/home"]}
         self.settings = SimpleNamespace(get=self._settings)
         self.hosts = SimpleNamespace(list=self._list, get=self._get)
-        self.exec = SimpleNamespace(run=self._run)
+        self.exec = ReadingExec(ext_id="shield", run=self._run)
         self.db = SimpleNamespace(session=self._session)
         self.audit = SimpleNamespace(log=self._audit)
         self.notify = SimpleNamespace(send=self._notify)

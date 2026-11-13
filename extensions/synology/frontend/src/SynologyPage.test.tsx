@@ -1,3 +1,4 @@
+import { cardTable } from "../../../../frontend/src/test/mobileLayout";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -957,3 +958,15 @@ describe("Mehrere Geräte", () => {
     expect(tab.querySelector("b")).toBeNull();
   });
 });
+
+it("390 px: Pools, Volumes, Platten und Sicherungen sind Karten", async () => {
+  answer = () => ok(overview({ pools: [pool1], backups: [task1] }));
+  render(<SynologyPage />);
+  await screen.findByTestId("backup");
+  for (const [id, labels] of [
+    ["pools", ["RAID", "Zustand", "Festplatten", "Volumes", "Größe"]],
+    ["volumes", ["Status", "Belegung"]],
+    ["disks", ["Modell", "Status", "Temperatur", "SMART"]],
+    ["backups", ["Ergebnis", "Letzter Lauf", "Nächster Lauf"]],
+  ] as const) await cardTable(screen.getByTestId(id), [...labels]);
+}, 30000);

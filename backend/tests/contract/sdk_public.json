@@ -73,6 +73,7 @@
     "confirm_text": false,
     "default_risk": false,
     "description": false,
+    "fingerprint_exclude_fields": false,
     "host_bound": false,
     "host_tags": false,
     "icon": false,
@@ -329,6 +330,7 @@
     "author": false,
     "category": false,
     "description": false,
+    "editions": false,
     "enable_on": false,
     "entrypoint": true,
     "frontend": false,
@@ -952,6 +954,7 @@
     "confirm_text": false,
     "default_risk": false,
     "description": false,
+    "fingerprint_exclude_fields": false,
     "host_bound": false,
     "host_tags": false,
     "icon": false,
@@ -1255,6 +1258,10 @@
      "correlation_id": false,
      "limit": false
     },
+    "may_decide": {
+     "action_id": true,
+     "actor": true
+    },
     "propose": {
      "request": true,
      "wait_s": false
@@ -1279,7 +1286,12 @@
      "prefix": false,
      "public": false,
      "router": true,
+     "ssh_preflight": false,
+     "ssh_read": false,
      "tags": false
+    },
+    "require_permission": {
+     "permission": true
     }
    }
   },
@@ -1361,6 +1373,10 @@
      "host": true,
      "rows": true
     },
+    "read_access": {
+     "host": true,
+     "timeout_s": false
+    },
     "run": {
      "command": true,
      "host": true,
@@ -1377,6 +1393,11 @@
     },
     "sftp": {
      "host": true
+    },
+    "ssh_session": {
+     "credential_id": false,
+     "host": true,
+     "key_credential_id": false
     },
     "stream": {
      "command": true,
@@ -1525,6 +1546,9 @@
   "nodvard_sdk.context.SettingsHandle": {
    "art": "klasse",
    "methoden": {
+    "check_test_limit": {
+     "actor": true
+    },
     "core": {
      "key": true
     },
@@ -1532,9 +1556,25 @@
      "schema": true
     },
     "get": {},
+    "save_test_result": {
+     "actor": true,
+     "kind": false,
+     "message": true,
+     "ok": true
+    },
     "set": {
      "values": true
     }
+   }
+  },
+  "nodvard_sdk.context.SshSession": {
+   "art": "klasse",
+   "methoden": {
+    "run": {
+     "command": true,
+     "timeout_s": false
+    },
+    "verify_key": {}
    }
   },
   "nodvard_sdk.context.UiHandle": {
@@ -1646,6 +1686,13 @@
   "nodvard_sdk.errors.SecretUnavailable": {
    "art": "klasse"
   },
+  "nodvard_sdk.errors.error_message": {
+   "art": "funktion",
+   "params": {
+    "exc": true,
+    "message": false
+   }
+  },
   "nodvard_sdk.extension.NodvardExtension": {
    "art": "klasse",
    "methoden": {
@@ -1719,6 +1766,7 @@
     "author": false,
     "category": false,
     "description": false,
+    "editions": false,
     "enable_on": false,
     "entrypoint": true,
     "frontend": false,

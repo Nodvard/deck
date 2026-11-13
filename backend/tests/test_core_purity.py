@@ -3,7 +3,7 @@
 Geprueft werden die Sperrliste (Woerter wie Proxmox oder Ollama), das Wort "Shield" (mit den belegten Ausnahmen
 `asyncio.shield(` und Icon-Namen wie "shield-check") und der Paket-Praefix `nodvard_deck_ext_` der Extensions. Die Beispiele
 laufen gegen `check_file()` mit kleinen Dateien im tmp-Ordner; der echte Kern ist sauber, und die Ausnahmen darin sind genau die
-bekannten drei.
+bekannten vier.
 """
 
 from __future__ import annotations
@@ -47,8 +47,7 @@ def test_the_script_exits_with_zero_on_the_core():
 
 
 def test_the_exceptions_for_shield_in_the_core_are_exactly_the_known_ones():
-    """Jede Zeile im Kern (ohne Kommentare und Docstrings), in der `shield` ausgenommen wird, ist eine der drei bekannten Stellen.
-    Kommt eine vierte dazu, muss jemand sie ansehen und hier eintragen."""
+    """Die erlaubten Vorkommen von `shield` im Kern bleiben vollständig erfasst."""
     exempted: dict[str, list[str]] = {}
     for path in sorted(CORE_ROOT.rglob("*.py")):
         code = purity._code_only(path.read_text(encoding="utf-8"))
@@ -56,7 +55,8 @@ def test_the_exceptions_for_shield_in_the_core_are_exactly_the_known_ones():
             stripped = purity._strip_comments(line)
             if re.search(r"\bshield\b(?=[-(])", stripped, re.IGNORECASE):
                 exempted.setdefault(path.relative_to(CORE_ROOT).as_posix(), []).append(stripped.strip())
-    assert sorted(exempted) == ["core/demo_seed.py", "services/custom_apps.py", "services/restore.py"], exempted
+    assert sorted(exempted) == ["core/demo_seed.py", "core/gate.py", "services/custom_apps.py", "services/restore.py"], exempted
+    assert exempted["core/gate.py"] == ["res = await asyncio.shield(task)"]
     assert "asyncio.shield(" in exempted["services/restore.py"][0]
     assert '"shield-check"' in exempted["core/demo_seed.py"][0]
     assert '"shield-check"' in exempted["services/custom_apps.py"][0]

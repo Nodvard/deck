@@ -1,3 +1,4 @@
+import { cardTable } from "../../../../frontend/src/test/mobileLayout";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
@@ -45,7 +46,7 @@ const LIVE: LiveData = {
   ],
   filesystems: [{ device: "/dev/sda2", fstype: "ext4", mount: "/", size: 250e9, used: 80e9, available: 150e9, percent: 34.8 }],
   processes: [
-    { pid: 812, name: "python3 (lattice)", user: "lattice", cpu_percent: 12.5, mem_bytes: 100e6 },
+    { pid: 812, name: "python3 (nodvard_deck)", user: "nodvard", cpu_percent: 12.5, mem_bytes: 100e6 },
     { pid: 900, name: "pihole-FTL", user: "pihole", cpu_percent: 1.5, mem_bytes: 300e6 },
   ],
   process_count: 212,
@@ -305,7 +306,7 @@ describe("SystemPage", () => {
   it("ein Server ohne SSH-Zugang steht in der Auswahl mit dem Hinweis dazu", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([
       { id: "h-nas", display_name: "NAS", address: "192.168.1.20", os_family: "linux", status: "unknown", credential: null },
-      { id: "h-pi", display_name: "Raspberry Pi", address: "192.168.1.72", os_family: "linux", status: "up", credential: { id: "c1", kind: "ssh_key", username: "lattice", port: 22 } },
+      { id: "h-pi", display_name: "Raspberry Pi", address: "192.168.1.72", os_family: "linux", status: "up", credential: { id: "c1", kind: "ssh_key", username: "nodvard", port: 22 } },
     ]), { status: 200 })));
     render(<SystemPage />);
     const nas = await screen.findByRole("button", { name: /NAS/ });
@@ -358,7 +359,7 @@ describe("SystemPage", () => {
       expect(screen.getByTestId("live-network").textContent).not.toContain("docker0");
       fireEvent.click(screen.getByLabelText(/virtuelle Schnittstellen zeigen/));
       expect(screen.getByTestId("live-network").textContent).toContain("docker0");
-      // Sortierung nach RAM: pihole-FTL (300 MB) vor lattice (100 MB).
+      // Sortierung nach RAM: pihole-FTL (300 MB) vor Nodvard Deck (100 MB).
       fireEvent.click(screen.getByRole("button", { name: "nach RAM" }));
       const rows = screen.getByTestId("processes").querySelectorAll("tbody tr");
       expect(rows[0].textContent).toContain("pihole-FTL");
@@ -594,3 +595,19 @@ describe("Dienst neu starten", () => {
     }
   });
 });
+
+it("390 px: Live-Messwerte und Dateisysteme sind Karten", async () => {
+  window.history.replaceState({}, "", "/ext/system/system?host=h-pi");
+  vi.stubGlobal("fetch", mockFetch([]));
+  render(<SystemPage />);
+  await screen.findByTestId("live-network");
+  for (const [id, labels] of [
+    ["sensors", ["Quelle", "Wert"]],
+    ["live-disks", ["Lesen", "Schreiben", "IOPS l/s", "Aktiv"]],
+    ["live-network", ["Status", "Empfangen", "Gesendet", "Gesamt ↓ / ↑", "Fehler / verworfen"]],
+    ["live-filesystems", ["Gerät", "Belegung", "Verwendet"]],
+    ["processes", ["Name", "Benutzer", "CPU", "RAM"]],
+  ] as const) await cardTable(screen.getByTestId(id), [...labels]);
+  fireEvent.click(screen.getByRole("tab", { name: "Zustand & Updates" }));
+  await cardTable(await screen.findByTestId("disks"), ["Gerät", "Belegung", "Frei"]);
+}, 30000);

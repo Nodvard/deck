@@ -1,10 +1,4 @@
-/**
- * „+ App hinzufügen“ / „App bearbeiten“: Formular im Dialog (Name, Adresse, Symbol, Farbe, Gruppe, Server,
- * Tab-Verhalten). Prüft beim Speichern mit denselben Regeln wie das Backend (lib/apps.ts) und zeigt Fehler am
- * Feld; was der Server trotzdem ablehnt (422), landet ebenfalls am passenden Feld.
- *
- * Symbol: nur aus der festen Auswahl (lib/appIcons.ts) oder ein einzelnes Emoji -- keine Bild-Adressen.
- */
+/** App-Formular mit denselben Feldregeln wie das Backend und feldbezogenen Fehlermeldungen. */
 import { styleRef } from "../../../extensions/_shared/frontend/src/csp";
 import * as Dialog from "@radix-ui/react-dialog";
 import { type FormEvent, useEffect, useRef, useState } from "react";
@@ -126,14 +120,14 @@ export function AppDialog({
         <Dialog.Overlay className="fixed inset-0 z-40 bg-scrim/60" />
         <Dialog.Content
           onCloseAutoFocus={onCloseAutoFocus}
-          className="fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-white/10 bg-[var(--color-surface)] shadow-xl"
+          className="fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100dvh-2rem)] w-full max-w-[min(100vw-2rem,32rem)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-white/10 bg-[var(--color-surface)] shadow-xl"
         >
           <form ref={form} onSubmit={(e) => void submit(e)} noValidate className="flex min-h-0 flex-1 flex-col" data-testid="app-form">
             <div className="min-h-0 flex-1 overflow-y-auto p-4" data-testid="app-form-body">
               <Dialog.Title className="text-lg font-semibold">{app ? "App bearbeiten" : "App hinzufügen"}</Dialog.Title>
               <Dialog.Description className="mb-4 mt-1 text-sm text-white/60">
                 Eine Kachel mit einem Link im Cockpit, zum Beispiel für deinen Router, die NAS-Oberfläche oder Pi-hole.
-                Nodvard Deck ruft die Adresse nicht selbst auf – sie ist nur ein Link für dich und alle anderen Benutzer.
+                Nodvard Deck ruft die Adresse nicht selbst auf, sie ist nur ein Link für dich und alle anderen Benutzer.
               </Dialog.Description>
 
               <div className="space-y-4">

@@ -74,7 +74,10 @@ async def test_other_extensions_bind_their_secrets_to_the_address(test_settings)
         "nextcloud": {"nextcloud-app-password": ["base_url"], "nextcloud-serverinfo-token": ["base_url"]},
         "npm": {"network-npm-password": ["url"]},
         "pihole": {"network-pihole-password": ["url"]},
-        "shield": {"nexus-soc-ollama-key": ["ollama_url", "ollama_failover_url"]},
+        "shield": {
+            "nexus-soc-ollama-key": ["ollama_url", "ollama_failover_url"],
+            "shield-openai-compat-key": ["openai_compat_url", "openai_compat_failover_url"],
+        },
         "backups": {"backups-token:{name}": ["base_url"]},
         "proxmox": {"proxmox-token:{name}": ["base_url"]},
         # Die Adresse eines weiteren Kanals ist selbst das Ziel: nichts, woran das Geheimnis haengen muesste.

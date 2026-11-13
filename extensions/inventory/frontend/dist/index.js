@@ -77,7 +77,7 @@ function deck() {
 }
 
 // ../../_shared/frontend/src/api.ts
-var SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar \u2013 bitte gleich noch einmal versuchen.";
+var SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar, bitte gleich noch einmal versuchen.";
 var ServerUnavailableError = class extends Error {
   status;
   constructor(answer) {
@@ -241,7 +241,7 @@ function Card({ title, description, actions, children, className = "", padded = 
   ] });
 }
 var BUTTON_STYLES = {
-  primary: "accent-gradient text-on-accent hover:bg-accent-strong",
+  primary: "border border-transparent accent-gradient text-on-accent hover:bg-accent-strong",
   secondary: "border border-white/10 bg-white/[0.06] text-white hover:bg-white/[0.12]",
   danger: "border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25",
   ghost: "text-white/60 hover:bg-white/[0.06] hover:text-white"
@@ -2189,11 +2189,11 @@ function InventoryPage() {
                     ] })
                   ] })
                 ] }),
-                (item.purchase_price_cents != null || item.warranty_until) && /* @__PURE__ */ jsxs4("p", { className: "ml-10 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs sm:hidden", "data-testid": `price-mobile-${item.id}`, children: [
+                (item.purchase_price_cents != null || item.warranty_until) && /* @__PURE__ */ jsxs4("p", { className: "ml-0 sm:ml-10 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs sm:hidden", "data-testid": `price-mobile-${item.id}`, children: [
                   /* @__PURE__ */ jsx6("span", { className: "tabular-nums", children: formatPrice(item.purchase_price_cents) }),
                   item.warranty_until && /* @__PURE__ */ jsx6(Badge, { tone: WARRANTY_BADGE[ws].tone, children: WARRANTY_BADGE[ws].label(item.warranty_until) })
                 ] }),
-                isExpanded && /* @__PURE__ */ jsxs4("div", { className: "ml-10 mt-3 rounded-lg border border-white/[0.06] bg-black/15 p-4 text-sm", children: [
+                isExpanded && /* @__PURE__ */ jsxs4("div", { className: "ml-0 sm:ml-10 mt-3 rounded-lg border border-white/[0.06] bg-black/15 p-4 text-sm", children: [
                   item.description && /* @__PURE__ */ jsx6("p", { className: "mb-3 text-white/80", children: item.description }),
                   /* @__PURE__ */ jsxs4("dl", { className: "mb-4 grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4", children: [
                     /* @__PURE__ */ jsxs4("div", { children: [

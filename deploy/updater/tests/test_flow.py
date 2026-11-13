@@ -948,6 +948,36 @@ def test_rollback_pulls_a_missing_image_by_digest(lab):
     assert lab.only_deck()["Image"] == lab.old_image
 
 
+@pytest.mark.parametrize("pruned", [False, True])
+def test_update_and_rollback_keep_the_explicit_user_without_capabilities(lab, pruned):
+    lab.world.images[lab.old_image]["Config"]["User"] = ""
+    lab.world.registry[lab.old_digest]["Config"]["User"] = ""
+    lab.target["Config"]["User"] = "1000:1000"
+    lab.target["HostConfig"]["CapDrop"] = ["ALL"]
+    lab.target["HostConfig"]["SecurityOpt"] = ["no-new-privileges:true"]
+    newer, digest = lab.release("0.7.1")
+    lab.world.registry[digest]["Config"]["User"] = "1000:1000"
+
+    assert outcome_of(lab.run()) == ("applied", None)
+    installed = lab.only_deck()
+    assert installed["Image"] == newer
+    assert installed["Config"]["User"] == "1000:1000"
+    assert installed["HostConfig"]["CapDrop"] == ["ALL"]
+    lab.assert_healthy(installed)
+
+    if pruned:
+        assert lab.old_image in lab.world.prune_all()
+    lab.clock.t += policy.ACTION_INTERVAL_S
+    assert outcome_of(lab.run("rollback", "0.7.0")) == ("reverted", None)
+    restored = lab.only_deck()
+    assert restored["Image"] == lab.old_image
+    assert restored["Config"]["User"] == "1000:1000"
+    assert restored["HostConfig"]["CapDrop"] == ["ALL"]
+    assert restored["HostConfig"]["SecurityOpt"] == ["no-new-privileges:true"]
+    assert LiveWorld.mount_origin(restored, "/app/data") == lab.world.data_origin
+    lab.assert_healthy(restored)
+
+
 def test_rollback_refuses_an_image_that_is_not_the_one_in_the_slot(lab):
     _updated(lab)
     lab.world.prune_all()

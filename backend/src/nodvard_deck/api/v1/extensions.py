@@ -17,6 +17,8 @@ from ...services import extensions as extensions_service
 from ...services.auth import user_has_permission
 from ...version import __version__
 from ..deps import CurrentUser, SessionDep, SettingsDep, require_permission
+from ..models import RequestModel
+from ..responses import error_responses, file_responses
 
 router = APIRouter(prefix="/extensions", tags=["extensions"])
 
@@ -196,7 +198,7 @@ async def _audit_toggle(session, user: User, action: str, ext_id: str, record: E
     )
 
 
-@router.get("")
+@router.get("", responses=error_responses(401, 403, 404, 507))
 async def list_extensions(session: SessionDep, user: CurrentUser, settings: SettingsDep) -> list[ExtensionOut]:
     """Alle Erweiterungen der Registry, je einmal unter ihrer heutigen Kennung. Ein verwaister Zwilling
     (Zeile einer alten Kennung, die die umbenannte Erweiterung nicht nutzt) fehlt."""
@@ -208,7 +210,7 @@ async def list_extensions(session: SessionDep, user: CurrentUser, settings: Sett
     return sorted(items, key=lambda item: item.id)
 
 
-@router.get("/{ext_id}")
+@router.get("/{ext_id}", responses=error_responses(401, 403, 404, 409, 507))
 async def get_extension(ext_id: str, session: SessionDep, user: CurrentUser, settings: SettingsDep) -> ExtensionOut:
     """Auch über eine alte Kennung (`legacy_ids`); die Antwort nennt die heutige in `id`."""
     if not of(settings).choose_modules and get_extension_runtime().canonical(ext_id) not in get_extension_runtime().discovered:
@@ -217,7 +219,11 @@ async def get_extension(ext_id: str, session: SessionDep, user: CurrentUser, set
     return (await _with_setup(session, [record], user))[0]
 
 
-@router.post("/{ext_id}/enable", dependencies=[Depends(require_permission("extensions.manage"))])
+@router.post(
+    "/{ext_id}/enable",
+    dependencies=[Depends(require_permission("extensions.manage"))],
+    responses=error_responses(401, 403, 404, 409, 507),
+)
 async def enable_extension(
     ext_id: str, request: Request, session: SessionDep, settings: SettingsDep, user: CurrentUser
 ) -> ExtensionOut:
@@ -236,7 +242,7 @@ async def enable_extension(
     return ExtensionOut.from_model(record)
 
 
-class TakeoverIn(BaseModel):
+class TakeoverIn(RequestModel):
     old_id: str
 
 
@@ -249,7 +255,11 @@ class TakeoverOut(BaseModel):
     """Diese Rechte hatte die alte Erweiterung nicht."""
 
 
-@router.post("/{ext_id}/takeover", dependencies=[Depends(require_permission("extensions.manage"))])
+@router.post(
+    "/{ext_id}/takeover",
+    dependencies=[Depends(require_permission("extensions.manage"))],
+    responses=error_responses(401, 403, 404, 409, 507),
+)
 async def allow_takeover(ext_id: str, payload: TakeoverIn, session: SessionDep, user: CurrentUser) -> TakeoverOut:
     """Erlaubt der wartenden Erweiterung `ext_id`, die gespeicherten Daten unter `old_id` zu übernehmen, ab dem nächsten
     Start. 404, wenn sie nicht darauf wartet; 409, wenn `old_id` schon einer anderen gehört."""
@@ -262,7 +272,15 @@ async def allow_takeover(ext_id: str, payload: TakeoverIn, session: SessionDep, 
     return TakeoverOut(switched_off=bool(extra), extra_permissions=extra)
 
 
-@router.get("/{ext_id}/frontend/index.js")
+@router.get(
+    "/{ext_id}/frontend/index.js",
+    response_class=Response,
+    responses={
+        **error_responses(400, 404, 416),
+        **file_responses("application/javascript", ranges=True),
+        304: {"description": "Unverändert."},
+    },
+)
 async def get_extension_frontend_bundle(ext_id: str, request: Request) -> Response:
     """Öffentlich wie das Kern-Frontend (ein Bundle ist nur Code, keine Nutzerdaten) und unabhängig vom Ladezustand der
     Erweiterung. Auch über eine alte Kennung (`legacy_ids`): offene Tabs mit altem Stand laden so das heutige Bundle."""
@@ -297,7 +315,11 @@ async def get_extension_frontend_bundle(ext_id: str, request: Request) -> Respon
     return response
 
 
-@router.post("/{ext_id}/disable", dependencies=[Depends(require_permission("extensions.manage"))])
+@router.post(
+    "/{ext_id}/disable",
+    dependencies=[Depends(require_permission("extensions.manage"))],
+    responses=error_responses(401, 403, 404, 409, 507),
+)
 async def disable_extension(ext_id: str, request: Request, session: SessionDep, user: CurrentUser) -> ExtensionOut:
     canonical, _ = await resolve_extension(session, ext_id, change=True)
     await extensions_service.disable_extension(request.app, session, canonical)

@@ -91,24 +91,65 @@ async def test_me_reports_the_dashboard_timezone_to_every_user(client):
 async def test_preferences_are_per_user_and_validated(client):
     """„Erste Schritte“ ausblenden: eine Einstellung je Benutzer, nicht je Browser."""
     owner = await _login(client)
-    assert (await client.get("/api/v1/me/preferences", headers=owner)).json() == {"first_steps_dismissed": False, "theme": "simple", "design_notice_dismissed": True}
+    assert (await client.get("/api/v1/me/preferences", headers=owner)).json() == {"first_steps_dismissed": False, "theme": "simple", "design_notice_dismissed": True, "totp_setup_skipped": False, "totp_reminder_dismissed": False}
 
     r = await client.patch("/api/v1/me/preferences", json={"first_steps_dismissed": True}, headers=owner)
     assert r.status_code == 200, r.text
-    assert r.json() == {"first_steps_dismissed": True, "theme": "simple", "design_notice_dismissed": True}
-    assert (await client.get("/api/v1/me/preferences", headers=owner)).json() == {"first_steps_dismissed": True, "theme": "simple", "design_notice_dismissed": True}
+    assert r.json() == {"first_steps_dismissed": True, "theme": "simple", "design_notice_dismissed": True, "totp_setup_skipped": False, "totp_reminder_dismissed": False}
+    assert (await client.get("/api/v1/me/preferences", headers=owner)).json() == {"first_steps_dismissed": True, "theme": "simple", "design_notice_dismissed": True, "totp_setup_skipped": False, "totp_reminder_dismissed": False}
 
     # Ein anderer Benutzer sieht seine eigene, noch unberuehrte Einstellung.
     await client.post("/api/v1/users", json={"username": "zweiter", "password": "correct-horse-battery"}, headers=owner)
     login = await client.post("/api/v1/auth/login", json={"username": "zweiter", "password": "correct-horse-battery"})
     other = {"Authorization": f"Bearer {login.json()['access_token']}"}
-    assert (await client.get("/api/v1/me/preferences", headers=other)).json() == {"first_steps_dismissed": False, "theme": "simple", "design_notice_dismissed": True}
+    assert (await client.get("/api/v1/me/preferences", headers=other)).json() == {"first_steps_dismissed": False, "theme": "simple", "design_notice_dismissed": True, "totp_setup_skipped": False, "totp_reminder_dismissed": False}
 
     # Wieder einblenden; ein leerer Aufruf aendert nichts; falsche Werte werden abgelehnt.
-    assert (await client.patch("/api/v1/me/preferences", json={}, headers=owner)).json() == {"first_steps_dismissed": True, "theme": "simple", "design_notice_dismissed": True}
-    assert (await client.patch("/api/v1/me/preferences", json={"first_steps_dismissed": False}, headers=owner)).json() == {"first_steps_dismissed": False, "theme": "simple", "design_notice_dismissed": True}
+    assert (await client.patch("/api/v1/me/preferences", json={}, headers=owner)).json() == {"first_steps_dismissed": True, "theme": "simple", "design_notice_dismissed": True, "totp_setup_skipped": False, "totp_reminder_dismissed": False}
+    assert (await client.patch("/api/v1/me/preferences", json={"first_steps_dismissed": False}, headers=owner)).json() == {"first_steps_dismissed": False, "theme": "simple", "design_notice_dismissed": True, "totp_setup_skipped": False, "totp_reminder_dismissed": False}
     assert (await client.patch("/api/v1/me/preferences", json={"first_steps_dismissed": "ja bitte"}, headers=owner)).status_code == 422
     assert (await client.get("/api/v1/me/preferences")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_totp_reminder_persists_for_the_account_and_stays_dismissed(client):
+    owner = await _login(client)
+    skipped = await client.patch("/api/v1/me/preferences", json={"totp_setup_skipped": True}, headers=owner)
+    assert skipped.status_code == 200, skipped.text
+    assert skipped.json()["totp_setup_skipped"] is True
+    assert skipped.json()["totp_reminder_dismissed"] is False
+
+    # Eine andere Anmeldung desselben Kontos sieht dieselbe Erinnerung.
+    login = await client.post("/api/v1/auth/login", json={"username": "owner1", "password": "correct-horse-battery"})
+    second_session = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    assert (await client.get("/api/v1/me/preferences", headers=second_session)).json()["totp_setup_skipped"] is True
+    dismissed = await client.patch("/api/v1/me/preferences", json={"totp_reminder_dismissed": True}, headers=second_session)
+    assert dismissed.status_code == 200, dismissed.text
+    assert dismissed.json()["totp_reminder_dismissed"] is True
+    assert (await client.get("/api/v1/me/preferences", headers=owner)).json()["totp_reminder_dismissed"] is True
+
+    # Erneutes Überspringen und andere Einstellungen machen das bewusste Ausblenden nicht rückgängig.
+    changed = await client.patch(
+        "/api/v1/me/preferences", json={"totp_setup_skipped": True, "theme": "classic"}, headers=owner
+    )
+    assert changed.json()["totp_reminder_dismissed"] is True
+    assert changed.json()["totp_setup_skipped"] is True
+
+    await client.post("/api/v1/users", json={"username": "zweiter", "password": "correct-horse-battery"}, headers=owner)
+    login = await client.post("/api/v1/auth/login", json={"username": "zweiter", "password": "correct-horse-battery"})
+    other = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    untouched = (await client.get("/api/v1/me/preferences", headers=other)).json()
+    assert untouched["totp_setup_skipped"] is False
+    assert untouched["totp_reminder_dismissed"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["totp_setup_skipped", "totp_reminder_dismissed"])
+async def test_totp_reminder_preferences_reject_invalid_values(client, field):
+    owner = await _login(client)
+    response = await client.patch("/api/v1/me/preferences", json={field: "ja bitte"}, headers=owner)
+    assert response.status_code == 422
+    assert (await client.get("/api/v1/me/preferences", headers=owner)).json()[field] is False
 
 
 @pytest.mark.asyncio
@@ -117,7 +158,7 @@ async def test_theme_is_per_user(client, db_session):
 
     owner = await _login(client)
     r = await client.patch("/api/v1/me/preferences", json={"theme": "classic"}, headers=owner)
-    assert r.json() == {"first_steps_dismissed": False, "theme": "classic", "design_notice_dismissed": True}
+    assert r.json() == {"first_steps_dismissed": False, "theme": "classic", "design_notice_dismissed": True, "totp_setup_skipped": False, "totp_reminder_dismissed": False}
     assert (await client.patch("/api/v1/me/preferences", json={"first_steps_dismissed": True}, headers=owner)).json()["theme"] == "classic"
     assert (await client.patch("/api/v1/me/preferences", json={"theme": "neon"}, headers=owner)).status_code == 422
 
@@ -142,7 +183,7 @@ async def test_original_theme_and_design_notice(client, db_session):
     owner = await _login(client)
     # Das Theme „Bisher“ ist wählbar.
     r = await client.patch("/api/v1/me/preferences", json={"theme": "original"}, headers=owner)
-    assert r.json() == {"first_steps_dismissed": False, "theme": "original", "design_notice_dismissed": True}
+    assert r.json() == {"first_steps_dismissed": False, "theme": "original", "design_notice_dismissed": True, "totp_setup_skipped": False, "totp_reminder_dismissed": False}
 
     # Neue Konten kennen das alte Aussehen nicht und bekommen den Hinweis nie, auch nicht das erste.
     await client.post("/api/v1/users", json={"username": "zweiter", "password": "correct-horse-battery"}, headers=owner)
@@ -156,7 +197,7 @@ async def test_original_theme_and_design_notice(client, db_session):
     await db_session.commit()
     assert (await client.get("/api/v1/me/preferences", headers=owner)).json()["design_notice_dismissed"] is False
     r = await client.patch("/api/v1/me/preferences", json={"design_notice_dismissed": True}, headers=owner)
-    assert r.json() == {"first_steps_dismissed": False, "theme": "original", "design_notice_dismissed": True}
+    assert r.json() == {"first_steps_dismissed": False, "theme": "original", "design_notice_dismissed": True, "totp_setup_skipped": False, "totp_reminder_dismissed": False}
     assert (await client.get("/api/v1/me/preferences", headers=owner)).json()["design_notice_dismissed"] is True
     assert (await client.patch("/api/v1/me/preferences", json={"design_notice_dismissed": "ja"}, headers=owner)).status_code == 422
     # Das andere Konto bleibt davon unberührt.

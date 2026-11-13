@@ -1135,6 +1135,35 @@ def test_new_image_values_apply_in_the_clone():
     assert config["Healthcheck"]["Interval"] == 10_000_000_000             # die Zeiten kommen aus dem neuen Image
 
 
+@pytest.mark.parametrize("old_user", [None, "", "0", "root", "0:0", "root:root"])
+@pytest.mark.parametrize("container_user", ["", "0", "root", "0:0", "root:root"])
+def test_update_from_root_uses_the_new_image_user_and_keeps_data(old_user, container_user):
+    old = container(**{"Config.User": container_user})
+    plan = build(old, image_config(User=old_user))
+    assert "User" not in plan.body
+    image = new_image(User="1000:1000")
+    new = simulate_create(plan, image, old=old)
+    assert new["Config"]["User"] == "1000:1000"
+    assert clone.mount_map(new) == clone.mount_map(old)
+    clone.verify(old, new, plan, new_image=image, new_image_id=NEW_IMAGE)
+    new["Config"]["User"] = "0"
+    assert refusal(clone.verify, old, new, plan, new_image=image, new_image_id=NEW_IMAGE).code == policy.CLONE_MISMATCH
+
+
+def test_update_keeps_container_hardening():
+    old = container(**{
+        "Config.User": "1000:1000", "HostConfig.ReadonlyRootfs": True,
+        "HostConfig.Tmpfs": {"/tmp": "rw,noexec,nosuid,nodev,mode=1777"},
+        "HostConfig.CapDrop": ["ALL"], "HostConfig.SecurityOpt": ["no-new-privileges:true"],
+    })
+    plan = build(old, image_config(User="1000:1000"))
+    image = new_image(User="1000:1000")
+    new = simulate_create(plan, image, old=old)
+    for key in ("ReadonlyRootfs", "Tmpfs", "CapDrop", "SecurityOpt"):
+        assert new["HostConfig"][key] == old["HostConfig"][key]
+    clone.verify(old, new, plan, new_image=image, new_image_id=NEW_IMAGE)
+
+
 def test_new_anonymous_volume_from_the_new_image_is_allowed_but_nothing_else():
     old = container()
     plan = build(old)

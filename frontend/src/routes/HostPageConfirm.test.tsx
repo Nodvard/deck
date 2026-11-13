@@ -10,11 +10,11 @@ import { useDialogsStore } from "../state/dialogs";
 import { HostPage } from "./HostPage";
 
 /**
- * Wie im echten Router: eine Route fuer alle Server, der globale Dialog (`GlobalDialogs`)
- * haengt ausserhalb und bleibt bei einem Serverwechsel offen -- anders als `HostPage.test.tsx`
+ * Wie im echten Router: eine Route für alle Server, der globale Dialog (`GlobalDialogs`)
+ * hängt außerhalb und bleibt bei einem Serverwechsel offen -- anders als `HostPage.test.tsx`
  * hier mit dem ECHTEN Dialog-Zustand statt einer Attrappe.
  */
-describe("HostPage: offene Rueckfrage beim Serverwechsel", () => {
+describe("HostPage: offene Rückfrage beim Serverwechsel", () => {
   const posts: string[] = [];
 
   beforeEach(() => {
@@ -36,7 +36,7 @@ describe("HostPage: offene Rueckfrage beim Serverwechsel", () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
-  it("nach dem Wechsel zu einem anderen Server bestaetigt: keine Aktion auf dem alten Server", async () => {
+  it("nach dem Wechsel zu einem anderen Server bestätigt: keine Aktion auf dem alten Server", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>

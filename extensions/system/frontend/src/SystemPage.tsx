@@ -1,3 +1,4 @@
+import { CARD_BODY, CARD_CELL, CARD_CELL_PLAIN, CARD_HEAD, CARD_ROW, CARD_TABLE } from "../../../_shared/frontend/src/cardTable";
 /**
  * Seite „Server-Zustand“ (Modul-Kennung `system`): Zustand eines Linux-Servers mit Betriebssystem, Auslastung, Platten,
  * fehlgeschlagenen Diensten und Updates. Erreichbar über die Kachel „Server-Zustand“ auf der Server-Seite (`?host=`)
@@ -7,7 +8,7 @@ import { styleRef } from "../../../_shared/frontend/src/csp";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { isActionRunning, runAction, RUNNING_IN_BACKGROUND } from "../../../_shared/frontend/src/actions";
-import { authedFetch, errorFromBody } from "../../../_shared/frontend/src/api";
+import { authedFetch } from "../../../_shared/frontend/src/api";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { SettingsLink } from "../../../_shared/frontend/src/links";
 import { HostPicker, tileFromHost, type HostTile } from "../../../_shared/frontend/src/HostPicker";
@@ -18,6 +19,7 @@ import { deck } from "../../../_shared/frontend/src/deck";
 import { formatBytes, formatUptime } from "./format";
 import { type LiveData, LiveView } from "./LiveView";
 import { TempLimit } from "./TempLimit";
+import { fetchSystem, SystemQueryError } from "./systemQuery";
 
 interface HostOut {
   id: string;
@@ -38,6 +40,7 @@ interface HostOut {
 /** Eine Zeile des Widgets "Server-Zustand" (`/ext/system/widgets/health`). */
 interface HealthRow {
   host_id: string;
+  reachable?: boolean;
   summary: string;
   tone: string;
   cpu_percent?: number | null;
@@ -172,22 +175,22 @@ function InfoView({ info, canRestart, busyUnit, onRestart, onTempLimitChanged }:
       )}
 
       <h3 className="mb-2 text-sm font-semibold opacity-70">Dateisysteme</h3>
-      <table className="mb-6 w-full text-sm" data-testid="disks">
-        <thead>
+      <table role="table" className={`${CARD_TABLE} text-left mb-6 w-full text-sm`} data-testid="disks">
+        <thead role="rowgroup" className={CARD_HEAD}>
           <tr className="border-b border-white/10 text-left text-xs opacity-60">
             <th className="py-1">Einhängepunkt</th><th className="py-1">Gerät</th><th className="py-1 w-1/3">Belegung</th><th className="py-1">Frei</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-white/5">
+        <tbody role="rowgroup" className={CARD_BODY}>
           {info.disks.map((d) => (
-            <tr key={`${d.device}${d.mount}`}>
-              <td className="py-1.5 break-words">{d.mount}</td>
-              <td className="py-1.5 break-words opacity-70">{d.device} · {d.fstype}</td>
-              <td className="py-1.5 pr-4">
+            <tr role="row" className={CARD_ROW} key={`${d.device}${d.mount}`}>
+              <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 break-words`}>{d.mount}</td>
+              <td data-label="Gerät" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 break-words opacity-70`}>{d.device} · {d.fstype}</td>
+              <td data-label="Belegung" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 sm:pr-4`}>
                 <div className={`mb-0.5 text-xs ${TONE_TEXT[d.tone] ?? ""}`}>{d.percent.toFixed(0)} % von {formatBytes(d.size)}</div>
                 <Bar percent={d.percent} tone={d.tone} />
               </td>
-              <td className="py-1.5 whitespace-nowrap opacity-80">{formatBytes(d.available)}</td>
+              <td data-label="Frei" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 sm:whitespace-nowrap opacity-80`}>{formatBytes(d.available)}</td>
             </tr>
           ))}
         </tbody>
@@ -249,6 +252,7 @@ export function SystemPage(): JSX.Element {
   // Zustand je Server für die Kacheln der Auswahl (Widget „Server-Zustand“, 5 min zwischengespeichert): Auslastung
   // und der wichtigste Befund. Nicht zwingend, die Auswahl geht auch ohne.
   const [health, setHealth] = useState<Record<string, HealthRow>>({});
+  const [connections, setConnections] = useState<Record<string, boolean>>({});
   const [info, setInfo] = useState<SystemInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -258,18 +262,31 @@ export function SystemPage(): JSX.Element {
   const [message, setMessage] = useState<Message | null>(null);
   const unmountSignal = useUnmountSignal();
   const canRestart = deck().hasPermission("hosts.execute");
+  const requests = useRef<Record<string, number>>({});
   const hostIdRef = useRef(hostId);
   const tabRef = useRef(tab);
   hostIdRef.current = hostId;
   tabRef.current = tab;
   const busyUnit = busy && busy.hostId === hostId ? busy.unit : null;
 
-  const fetchLive = useCallback(async (id: string): Promise<LiveData> => {
-    const res = await authedFetch(`/ext/system/hosts/${id}/live`);
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(errorFromBody(body, res.status));
-    return body as LiveData;
+  const query = useCallback(async <T,>(id: string, view: "live" | "info"): Promise<T> => {
+    const request = (requests.current[id] ?? 0) + 1;
+    requests.current[id] = request;
+    try {
+      const body = await fetchSystem<T>(id, view);
+      if (requests.current[id] === request) {
+        setConnections((current) => current[id] === true ? current : { ...current, [id]: true });
+      }
+      return body;
+    } catch (err) {
+      if (requests.current[id] === request && err instanceof SystemQueryError && err.status === 502) {
+        setConnections((current) => current[id] === false ? current : { ...current, [id]: false });
+      }
+      throw err;
+    }
   }, []);
+
+  const fetchLive = useCallback((id: string) => query<LiveData>(id, "live"), [query]);
 
   const loadHosts = useCallback(() => {
     setHosts(null);
@@ -296,11 +313,9 @@ export function SystemPage(): JSX.Element {
     setLoading(true);
     setError(null);
     try {
-      const res = await authedFetch(`/ext/system/hosts/${id}/info`);
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(errorFromBody(body, res.status));
+      const body = await query<SystemInfo>(id, "info");
       // Antwort eines Servers, den man inzwischen verlassen hat: verwerfen.
-      if (hostIdRef.current === id) setInfo(body as SystemInfo);
+      if (hostIdRef.current === id) setInfo(body);
     } catch (err) {
       if (hostIdRef.current === id) {
         setInfo(null);
@@ -309,7 +324,7 @@ export function SystemPage(): JSX.Element {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [query]);
 
   useEffect(() => {
     setInfo(null);
@@ -317,14 +332,20 @@ export function SystemPage(): JSX.Element {
   }, [hostId, tab, load]);
 
   const hostName = info?.host.name ?? (hosts ?? []).find((h) => h.id === hostId)?.display_name;
-  // Kacheln der Server-Auswahl: Name, Adresse, System, Status aus der Serverliste des Kerns.
+  // Ein Befund kann kritisch sein, obwohl die SSH-Abfrage erfolgreich war.
   const tiles = useMemo<HostTile[] | null>(
-    () => hosts === null ? null : hosts.map((h) => ({
-      ...tileFromHost(h),
-      ...tileState(health[h.id]),
-      ...(h.credential === null ? { hint: "ohne SSH-Zugang" } : {}),
-    })),
-    [hosts, health],
+    () => hosts === null ? null : hosts.map((h) => {
+      const row = health[h.id];
+      const reachable = connections[h.id] ?? row?.reachable;
+      return {
+        ...tileFromHost(h),
+        ...tileState(row),
+        ...(connections[h.id] === false ? { extra: null, hint: "SSH-Abfrage fehlgeschlagen" } : {}),
+        status: h.credential === null ? "no_access" : reachable === undefined ? "unknown" : reachable ? "up" : "down",
+        ...(h.credential === null ? { hint: "ohne SSH-Zugang", extra: null } : {}),
+      };
+    }),
+    [hosts, health, connections],
   );
 
   useEffect(() => { setMessage(null); }, [hostId]);

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from nodvard_sdk import max_body_bytes
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from ... import edition
 from ...branding import (
@@ -17,6 +17,7 @@ from ...branding import (
     MAX_FAVICON_BYTES,
     MAX_LOGO_BYTES,
     Branding,
+    BrandingColors,
     clean_support_url,
     image_matches_type,
     is_local_image_url,
@@ -36,6 +37,8 @@ from ...custom_css import (
 from ...services import audit as audit_service
 from ...svg_safe import UnsafeSvg, check_svg
 from ..deps import CurrentUser, SessionDep, SettingsDep, require_permission
+from ..models import RequestModel
+from ..responses import error_responses
 
 router = APIRouter(
     prefix="/branding",
@@ -44,8 +47,16 @@ router = APIRouter(
 )
 
 
-@router.put("", response_model=Branding)
-async def put_branding(payload: Branding, session: SessionDep, settings: SettingsDep, user: CurrentUser) -> Branding:
+class BrandingColorsIn(BrandingColors, RequestModel):
+    pass
+
+
+class BrandingIn(Branding, RequestModel):
+    colors: BrandingColorsIn = Field(default_factory=BrandingColorsIn)
+
+
+@router.put("", response_model=Branding, responses=error_responses(401, 403, 422, 507))
+async def put_branding(payload: BrandingIn, session: SessionDep, settings: SettingsDep, user: CurrentUser) -> Branding:
     if payload.support_url is not None and payload.support_url.strip():
         cleaned = clean_support_url(payload.support_url)
         if cleaned is None:
@@ -108,7 +119,7 @@ async def _read_image(request: Request, types: dict[str, str], max_bytes: int, l
     return content, extension
 
 
-@router.post("/logo", response_model=Branding)
+@router.post("/logo", response_model=Branding, responses=error_responses(401, 403, 413, 415, 422, 507))
 @max_body_bytes(MAX_LOGO_BYTES)
 async def upload_logo(request: Request, session: SessionDep, settings: SettingsDep, user: CurrentUser) -> Branding:
     content, extension = await _read_image(request, LOGO_CONTENT_TYPES, MAX_LOGO_BYTES, "Logo")
@@ -120,7 +131,7 @@ async def upload_logo(request: Request, session: SessionDep, settings: SettingsD
     return await load_branding(session, edition.of(settings))
 
 
-@router.post("/favicon", response_model=Branding)
+@router.post("/favicon", response_model=Branding, responses=error_responses(401, 403, 413, 415, 422, 507))
 async def upload_favicon(request: Request, session: SessionDep, settings: SettingsDep, user: CurrentUser) -> Branding:
     """Symbol im Browser-Tab (PNG, ICO oder SVG, max. 512 KB). Ersetzt die frühere freie Adresse, weil die Seite
     Bilder nur noch von diesem Server lädt. Kein eigenes `max_body_bytes`: Die allgemeine Grenze (1 MiB) liegt
@@ -134,17 +145,17 @@ async def upload_favicon(request: Request, session: SessionDep, settings: Settin
     return await load_branding(session, edition.of(settings))
 
 
-class CustomCss(BaseModel):
+class CustomCss(RequestModel):
     css: str = Field(default="", max_length=MAX_CSS_BYTES)
     """Eigenes CSS für alle Nutzer. Erlaubt sind eingebettete Bilder (`data:`) und Pfade auf diesem Server, kein `@import`."""
 
 
-@router.get("/custom-css", response_model=CustomCss)
+@router.get("/custom-css", response_model=CustomCss, responses=error_responses(401, 403, 507))
 async def get_custom_css(session: SessionDep) -> CustomCss:
     return CustomCss(css=await load_custom_css(session))
 
 
-@router.put("/custom-css", response_model=CustomCss)
+@router.put("/custom-css", response_model=CustomCss, responses=error_responses(401, 403, 422, 507))
 async def put_custom_css(payload: CustomCss, session: SessionDep, user: CurrentUser) -> CustomCss:
     """Speichert das eigene CSS; 422 mit einem Satz, wenn es etwas von außen laden würde oder größer als 64 KB ist."""
     try:

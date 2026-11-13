@@ -46,8 +46,11 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     outputs:
       newest: ${{ steps.newest.outputs.newest }}
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
@@ -133,12 +136,15 @@ jobs:
             org.opencontainers.image.version=${{ env.VERSION }}
 
       - name: Bauen und veroeffentlichen
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
         with:
           context: .
           file: deploy/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          sbom: true
+          provenance: mode=max
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.kinds.outputs.annotation }}
@@ -153,6 +159,44 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Herkunft signieren
+        id: attest
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # v3.0.0
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Syft laden
+        id: syft
+        uses: anchore/sbom-action/download-syft@f8bdd1d8ac5e901a77a92f111440fdb1b593736b  # v0.20.6
+        with:
+          syft-version: v1.33.0
+
+      - name: Bausteinlisten erzeugen
+        env:
+          IMAGE: ${{ env.IMAGE_NAME }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SYFT: ${{ steps.syft.outputs.cmd }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          out="$RUNNER_TEMP/sbom"
+          mkdir -p "$out"
+          for arch in amd64 arm64; do
+            "$SYFT" "registry:$IMAGE@$DIGEST" --platform "linux/$arch" \
+              -o "spdx-json=$out/deck-linux-$arch.spdx.json" \
+              -o "cyclonedx-json=$out/deck-linux-$arch.cdx.json"
+          done
+          cp "$BUNDLE" "$out/deck.sigstore.json"
+
+      - name: Bausteinlisten ablegen
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: release-sbom-deck
+          path: ${{ runner.temp }}/sbom/*
+          if-no-files-found: error
+          overwrite: true
+
   # Image des Update-Helfers (deploy/updater), Name: IMAGE_NAME mit "-updater". Erst nach dem Dashboard-Image (`needs`):
   # So gibt es keinen Helfer zu einem Tag, das der Schritt "Tag passt zu version.py" oben abgelehnt hat.
   # Getaggt mit der genauen Version und mit "1" (alle Helfer mit derselben Schnittstelle; das nimmt
@@ -164,6 +208,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
@@ -240,10 +286,50 @@ jobs:
           file: deploy/updater/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          sbom: true
+          provenance: mode=max
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ env.VERSION }}
+
+      - name: Herkunft signieren
+        id: attest
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # v3.0.0
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}-updater
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Syft laden
+        id: syft
+        uses: anchore/sbom-action/download-syft@f8bdd1d8ac5e901a77a92f111440fdb1b593736b  # v0.20.6
+        with:
+          syft-version: v1.33.0
+
+      - name: Bausteinlisten erzeugen
+        env:
+          IMAGE: ${{ env.IMAGE_NAME }}-updater
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SYFT: ${{ steps.syft.outputs.cmd }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          out="$RUNNER_TEMP/sbom"
+          mkdir -p "$out"
+          for arch in amd64 arm64; do
+            "$SYFT" "registry:$IMAGE@$DIGEST" --platform "linux/$arch" \
+              -o "spdx-json=$out/updater-linux-$arch.spdx.json" \
+              -o "cyclonedx-json=$out/updater-linux-$arch.cdx.json"
+          done
+          cp "$BUNDLE" "$out/updater.sigstore.json"
+
+      - name: Bausteinlisten ablegen
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: release-sbom-updater
+          path: ${{ runner.temp }}/sbom/*
+          if-no-files-found: error
+          overwrite: true
 
       # Genau das veroeffentlichte Image (per Digest) so starten wie im Betrieb: ohne Netz, nur lesbar, ohne Rechte,
       # mit der Prozessgrenze der Compose-Datei. Die Speichergrenze prueft nur der CI-Job `updater` (ohne Emulator):
@@ -278,6 +364,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
@@ -322,6 +412,8 @@ jobs:
           file: deploy/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          sbom: true
+          provenance: mode=max
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
@@ -333,6 +425,44 @@ jobs:
             type=gha
             type=gha,scope=dock
           cache-to: type=gha,scope=dock,mode=max
+
+      - name: Herkunft signieren
+        id: attest
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # v3.0.0
+        with:
+          subject-name: ${{ env.DOCK_IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Syft laden
+        id: syft
+        uses: anchore/sbom-action/download-syft@f8bdd1d8ac5e901a77a92f111440fdb1b593736b  # v0.20.6
+        with:
+          syft-version: v1.33.0
+
+      - name: Bausteinlisten erzeugen
+        env:
+          IMAGE: ${{ env.DOCK_IMAGE_NAME }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SYFT: ${{ steps.syft.outputs.cmd }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          out="$RUNNER_TEMP/sbom"
+          mkdir -p "$out"
+          for arch in amd64 arm64; do
+            "$SYFT" "registry:$IMAGE@$DIGEST" --platform "linux/$arch" \
+              -o "spdx-json=$out/dock-linux-$arch.spdx.json" \
+              -o "cyclonedx-json=$out/dock-linux-$arch.cdx.json"
+          done
+          cp "$BUNDLE" "$out/dock.sigstore.json"
+
+      - name: Bausteinlisten ablegen
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: release-sbom-dock
+          path: ${{ runner.temp }}/sbom/*
+          if-no-files-found: error
+          overwrite: true
 
       # Wie im CI-Job `dock-image`: nur das Modul docker, kein Tesseract. Ein einziger Aufruf je Plattform, damit ein
       # gescheiterter Start nicht als "kein Tesseract" durchgeht. Image und Digest kommen über die Umgebung.
@@ -368,7 +498,7 @@ jobs:
   # (`persist-credentials: false`). Titel und Text eines neuen Entwurfs kommen aus docs/release-notes/<version>.md im
   # Tag.
   helper-release:
-    needs: updater-image
+    needs: [image, updater-image, dock-image]
     if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     permissions:
@@ -383,13 +513,33 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: echo "VERSION=${REF_NAME#v}" >> "$GITHUB_ENV"
 
+      - name: Bausteinlisten holen
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          pattern: release-sbom-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/sbom
+
       - name: Dateien fürs Release
         env:
           IMAGE: ${{ env.IMAGE_NAME }}-updater
           DIGEST: ${{ needs.updater-image.outputs.digest }}
+          DECK_IMAGE: ${{ env.IMAGE_NAME }}
+          DECK_DIGEST: ${{ needs.image.outputs.digest }}
+          DOCK_IMAGE: ${{ env.DOCK_IMAGE_NAME }}
+          DOCK_DIGEST: ${{ needs.dock-image.outputs.digest }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           [ -f "docs/release-notes/$VERSION.md" ] || echo "::warning::docs/release-notes/$VERSION.md fehlt im Tag: Ein neuer Entwurf bekommt nur Titel und Digest."
-          python3 scripts/release_helper_assets.py files --version "$VERSION" --image "$IMAGE" --digest "$DIGEST" --out "$RUNNER_TEMP/release"
+          python3 scripts/release_helper_assets.py files --version "$VERSION" --image "$IMAGE" --digest "$DIGEST" --out "$RUNNER_TEMP/release" \
+            --deck-image "$DECK_IMAGE" --deck-digest "$DECK_DIGEST" --dock-image "$DOCK_IMAGE" --dock-digest "$DOCK_DIGEST" --repository "$REPOSITORY"
+          for name in deck dock updater; do
+            for arch in amd64 arm64; do
+              test -s "$RUNNER_TEMP/sbom/$name-linux-$arch.spdx.json"
+              test -s "$RUNNER_TEMP/sbom/$name-linux-$arch.cdx.json"
+            done
+            test -s "$RUNNER_TEMP/sbom/$name.sigstore.json"
+          done
 
       # Gibt es zum Tag schon einen Entwurf oder ein Release (von Hand vorbereitet oder ein zweiter Lauf), bleiben Titel,
       # Status und Text bis auf den Abschnitt mit dem Digest; `gh release view` findet auch Entwürfe.
@@ -402,11 +552,11 @@ jobs:
           out="$RUNNER_TEMP/release"
           if gh release view "$TAG" --json body --jq .body > "$out/current.md" 2> "$out/view.err"; then
             python3 scripts/release_helper_assets.py merge --existing "$out/current.md" --section "$out/helper-digest.md" --out "$out/release-notes.md"
-            gh release upload "$TAG" "$out/compose.standalone-mit-helfer.yml" --clobber
+            gh release upload "$TAG" "$out/compose.standalone-mit-helfer.yml" "$RUNNER_TEMP"/sbom/*.json --clobber
             gh release edit "$TAG" --notes-file "$out/release-notes.md"
             echo "::notice::$TAG ergänzt: Datei angehängt, Abschnitt mit dem Digest gesetzt. Titel, übriger Text und Status bleiben."
           elif grep -q "release not found" "$out/view.err"; then
-            gh release create "$TAG" --draft --verify-tag --title "$(cat "$out/release-title.txt")" --notes-file "$out/release-notes.md" "$out/compose.standalone-mit-helfer.yml"
+            gh release create "$TAG" --draft --verify-tag --title "$(cat "$out/release-title.txt")" --notes-file "$out/release-notes.md" "$out/compose.standalone-mit-helfer.yml" "$RUNNER_TEMP"/sbom/*.json
             echo "::notice::Entwurf für $TAG angelegt. Veröffentlichen: auf GitHub unter Releases den Entwurf prüfen, dann „Publish release“."
           else
             cat "$out/view.err" >&2

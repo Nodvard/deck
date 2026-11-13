@@ -1,3 +1,4 @@
+import { CARD_BODY, CARD_CELL, CARD_CELL_PLAIN, CARD_HEAD, CARD_ROW, CARD_TABLE } from "../../components/cardTable";
 import { styleRef } from "../../../../extensions/_shared/frontend/src/csp";
 import { renderTemplate, resolvePath } from "../template";
 import type { TableView as TableViewSpec } from "../types";
@@ -5,8 +6,8 @@ import { ActionButton } from "./ActionButton";
 
 const ALIGN_CLASS: Record<"left" | "right" | "center", string> = {
   left: "text-left",
-  right: "text-right",
-  center: "text-center",
+  right: "text-left sm:text-right",
+  center: "text-left sm:text-center",
 };
 
 export function TableView({
@@ -22,8 +23,8 @@ export function TableView({
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
+      <table role="table" className={`${CARD_TABLE} text-left`}>
+        <thead role="rowgroup" className={CARD_HEAD}>
           <tr className="border-b border-white/10 text-xs opacity-60">
             {view.columns.map((col) => (
               <th key={col.field} className={`px-2 py-1 font-medium ${ALIGN_CLASS[col.align]}`} ref={styleRef(col.width ? { width: col.width } : undefined)}>
@@ -33,19 +34,21 @@ export function TableView({
             {view.row_actions.length > 0 && <th className="px-2 py-1" />}
           </tr>
         </thead>
-        <tbody className="divide-y divide-white/5">
+        <tbody role="rowgroup" className={CARD_BODY}>
           {rows.map((row, idx) => (
-            <tr key={idx} data-fit-row>
+            <tr role="row" className={CARD_ROW} key={idx} data-fit-row>
               {view.columns.map((col) => (
-                <td key={col.field} className={`px-2 py-1 ${ALIGN_CLASS[col.align]}`}>
+                <td role="cell" data-label={col.label} key={col.field} className={`${CARD_CELL} min-w-0 py-1 [overflow-wrap:anywhere] sm:px-2 ${ALIGN_CLASS[col.align]}`}>
                   {col.template ? renderTemplate(col.template, row) : String(resolvePath(row, col.field) ?? "")}
                 </td>
               ))}
               {view.row_actions.length > 0 && (
-                <td className="flex justify-end gap-2 px-2 py-1">
-                  {view.row_actions.map((action) => (
-                    <ActionButton key={action.id} action={action} row={row} extId={extId} onDone={onAction} />
-                  ))}
+                <td role="cell" className={`${CARD_CELL_PLAIN} py-1 sm:px-2`}>
+                  <div className="flex flex-wrap gap-2 sm:justify-end">
+                    {view.row_actions.map((action) => (
+                      <ActionButton key={action.id} action={action} row={row} extId={extId} onDone={onAction} />
+                    ))}
+                  </div>
                 </td>
               )}
             </tr>

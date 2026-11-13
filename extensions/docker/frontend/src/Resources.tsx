@@ -78,6 +78,8 @@ const TEXT: Record<ResourceKind, KindText> = {
 };
 
 const size = (bytes: number | null) => (bytes == null ? "Größe unbekannt" : formatBytes(bytes));
+const PRUNE_KEY = "aufräumen:images";
+const PRUNE_LABEL = "Ungenutzte Images aufräumen";
 
 /** `2026-09-01 10:00:00 +0200 CEST` als `1.9.2026`. */
 function day(text: string): string {
@@ -113,9 +115,10 @@ function volumeRow(v: VolumeOut): Row {
 }
 
 function networkRow(n: NetworkOut): Row {
+  const driver = n.driver === "null" ? "ohne Netz" : n.driver ?? "Treiber unbekannt";
   return {
     key: n.id, title: n.name, muted: n.builtin,
-    facts: [n.driver ?? "?", ...(n.compose_project ? [`Stack ${n.compose_project}`] : []), ...(n.internal ? ["nur intern"] : [])],
+    facts: [...(driver !== n.name ? [driver] : []), ...(n.compose_project ? [`Stack ${n.compose_project}`] : []), ...(n.internal ? ["nur intern"] : [])],
     builtin: n.builtin, usedBy: n.used_by, inUse: n.in_use || n.builtin, removable: n.removable, payload: { network: n.id },
     linkable: linkable(n.name, n.driver),
   };
@@ -147,6 +150,8 @@ export function ResourceList({ hostId, kind }: { hostId: string; kind: ResourceK
   const [reload, setReload] = useState(0);
   const [containers, setContainers] = useState<HostContainer[]>([]);
   const [links, setLinks] = useState<string | null>(null);
+  const [totalSize, setTotalSize] = useState<number | null>(null);
+  const [unknownSizes, setUnknownSizes] = useState(0);
   const text = TEXT[kind];
 
   function setMessage(key: string, message: string | null) {
@@ -160,7 +165,8 @@ export function ResourceList({ hostId, kind }: { hostId: string; kind: ResourceK
 
   const waiting = usePendingActions((completed) => {
     for (const [key, action] of completed) {
-      const label = key.startsWith("anlegen:") ? "Netz anlegen" : key.startsWith("holen:") ? "Image holen" : text.label;
+      const label = key === PRUNE_KEY ? PRUNE_LABEL
+        : key.startsWith("anlegen:") ? "Netz anlegen" : key.startsWith("holen:") ? "Image holen" : text.label;
       const outcome = action
         ? (action.status === "succeeded" && action.result?.output) || describeActionOutcome(action).text
         : "Aktion nicht mehr verfügbar.";
@@ -189,6 +195,8 @@ export function ResourceList({ hostId, kind }: { hostId: string; kind: ResourceK
         else {
           setRows(toRows(kind, body));
           setContainers((body.containers ?? []) as HostContainer[]);
+          setTotalSize(typeof body.total_size_bytes === "number" ? body.total_size_bytes : null);
+          setUnknownSizes(typeof body.unknown_size_count === "number" ? body.unknown_size_count : 0);
         }
       })
       .catch((err: unknown) => { if (!controller.signal.aborted) setError(errorMessage(err)); });
@@ -207,6 +215,26 @@ export function ResourceList({ hostId, kind }: { hostId: string; kind: ResourceK
       setReload((n) => n + 1);
     } catch (err) {
       setMessage(row.key, `Fehler: ${errorMessage(err)}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function pruneImages() {
+    setBusy(PRUNE_KEY);
+    try {
+      const ok = await deck().confirmDialog(
+        "Images ohne Namen löschen, die kein Container nutzt, auch kein gestoppter? Benannte Images bleiben erhalten. Selbst gebaute Images ohne Namen musst du bei Bedarf neu bauen.",
+        { title: PRUNE_LABEL, danger: true, confirmLabel: "Aufräumen" },
+      );
+      if (!ok) return;
+      setMessage(PRUNE_KEY, null);
+      const result = await hostAction(hostId, "docker.prune_images", "Ungenutzte Images über die Docker-Seite aufräumen.", unmountSignal());
+      setMessage(PRUNE_KEY, `${PRUNE_LABEL}: ${result.text}`);
+      if (result.waiting) waiting.add(PRUNE_KEY, result.actionId);
+      else setReload((n) => n + 1);
+    } catch (err) {
+      setMessage(PRUNE_KEY, `Fehler: ${errorMessage(err)}`);
     } finally {
       setBusy(null);
     }
@@ -231,6 +259,14 @@ export function ResourceList({ hostId, kind }: { hostId: string; kind: ResourceK
       ) : (
         <>
           <p className="mb-2 text-xs opacity-60">{text.hint}</p>
+          {kind === "images" && (
+            <div className="mb-3 flex flex-wrap items-center gap-3">
+              <p className="text-sm">{totalSize === null ? "Gesamtgröße unbekannt" : `Gesamtgröße: ${formatBytes(totalSize)}${unknownSizes ? " (teilweise unbekannt)" : ""}`}</p>
+              {canRemove && <Button small variant="danger" disabled={busy !== null || waiting.keys.has(PRUNE_KEY)} onClick={() => void pruneImages()}>
+                {PRUNE_LABEL}
+              </Button>}
+            </div>
+          )}
           {kind === "images" && canRemove && <ImagePull hostId={hostId} onDone={started} />}
           {kind === "networks" && canRemove && <NetworkCreate hostId={hostId} onDone={started} />}
           {rows.length === 0 && <p className="text-sm opacity-70">{text.empty}</p>}
@@ -248,8 +284,8 @@ export function ResourceList({ hostId, kind }: { hostId: string; kind: ResourceK
                 {/* Unter sm stehen die Knöpfe in einer eigenen Zeile. */}
                 <div className={`${buttons(row) ? "flex" : "hidden"} flex-wrap items-center gap-1.5 sm:contents`} data-testid={`resource-buttons-${row.key}`}>
                   {kind === "networks" && canRemove && row.linkable && (
-                    <Button small pressed={links === row.key} onClick={() => setLinks(links === row.key ? null : row.key)} ariaLabel={`Container: ${row.title}`}>
-                      Container
+                    <Button small pressed={links === row.key} onClick={() => setLinks(links === row.key ? null : row.key)} ariaLabel={`Container verbinden: ${row.title}`}>
+                      Container verbinden
                     </Button>
                   )}
                   {canRemove && (

@@ -47,6 +47,11 @@ def test_the_words_run_in_the_stack_folder(action, verb):
     assert stack_actions.cmd_verb(_stack(), action) == ["sh", "-c", IN_FOLDER, "sh", FOLDER, *COMPOSE, *verb]
 
 
+def test_ps_includes_stopped_containers_in_the_stack_folder():
+    _, stack_actions, _ = _mods()
+    assert stack_actions.cmd_ps(_stack()) == ["sh", "-c", IN_FOLDER, "sh", FOLDER, *COMPOSE, "ps", "--all", "--format", "json"]
+
+
 def test_down_never_removes_volumes():
     _, stack_actions, _ = _mods()
     assert all("-v" not in verb and "--volumes" not in verb for verb in stack_actions.VERBS.values())

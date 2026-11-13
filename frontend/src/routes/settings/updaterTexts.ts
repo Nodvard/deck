@@ -137,16 +137,16 @@ export const HELPER_CODE_TEXTS: Record<string, string> = {
   not_implemented:
     "Diese Aktion kennt der Update-Helfer in seiner Version noch nicht. Hol die aktuelle Version. " + HELPER_UPDATE_STEPS,
   signature_required:
-    "Dein Update-Helfer spielt nur noch Updates mit Freigabe ein, diese Version von Nodvard Deck schickt aber keine mit. Aktualisiere Nodvard Deck einmal von Hand nach der Anleitung unter „Updates“, danach geht es wieder per Knopf.",
+    "Der Update-Helfer nimmt nur Anforderungen mit Signatur an. Entweder ist der Helfer zu alt, oder der Schlüssel dieser Installation fehlt oder ist ungültig. Hol die aktuelle Version des Helfers und richte den Schlüssel ein (deploy/README.md, Abschnitt „Schlüssel für Update-Anforderungen“). Bis dahin geht es nach der Anleitung unter „Updates“ von Hand.",
   unknown_key:
-    "Die Freigabe für dieses Update ist mit einem Schlüssel signiert, den dein Update-Helfer nicht kennt. Hol die aktuelle Version des Helfers. " +
+    "Der Update-Helfer kennt den Schlüssel nicht, mit dem etwas signiert ist. Entweder fehlt der Schlüssel dieser Installation im Helfer (deploy/README.md, Abschnitt „Schlüssel für Update-Anforderungen“), oder die Freigabe stammt von einem Schlüssel, den nur ein neuerer Helfer kennt. " +
     HELPER_UPDATE_STEPS,
   grant_mismatch:
     "Die Freigabe gehört zu einer anderen Version oder einem anderen Image als dieses Update. Such erneut nach Updates und versuch es dann noch einmal.",
   grant_expired:
     "Die Freigabe für dieses Update ist abgelaufen, oder die Uhr des Servers geht falsch. Prüf die Uhrzeit, such erneut nach Updates und versuch es dann noch einmal.",
   bad_signature:
-    "Die Signatur der Freigabe stimmt nicht, sie wurde vielleicht unterwegs verändert. Der Update-Helfer hat deshalb nichts eingespielt. Such erneut nach Updates; klappt es wieder nicht, aktualisiere von Hand nach der Anleitung unter „Updates“.",
+    "Eine Signatur stimmt nicht (die der Freigabe oder die der Anforderung), sie wurde vielleicht unterwegs verändert, oder der Schlüssel dieser Installation passt nicht zu dem im Helfer. Der Update-Helfer hat deshalb nichts eingespielt. Such erneut nach Updates; klappt es wieder nicht, aktualisiere von Hand nach der Anleitung unter „Updates“.",
 
   // Ablauf
   create_failed: "Der Container für die neue Version ließ sich nicht anlegen. Einzelheiten zeigt „docker compose logs updater“.",

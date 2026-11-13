@@ -66,6 +66,7 @@ function sizeOf(plan: VolumePlan): string {
 const WAITING = "Zum Einspielen vorgeschlagen. Es fehlt noch die Freigabe durch einen Admin, siehe „Aktionen“.";
 const WAITING_BACK = "Zum Zurückholen vorgeschlagen. Es fehlt noch die Freigabe durch einen Admin, siehe „Aktionen“.";
 const WAITING_RESTART = "Zum Neustart vorgeschlagen. Es fehlt noch die Freigabe durch einen Admin, siehe „Aktionen“.";
+const SOURCE_PERMISSION = "Die Quelle dürfen nur Administratoren ändern.";
 
 function when(iso: string): string {
   const date = new Date(iso);
@@ -141,6 +142,7 @@ function WatchLine({ watch }: { watch: Watch }): JSX.Element {
 export function GitSourcePanel({ hostId, project, onDone }: {
   hostId: string; project: string; onDone: (message: string, warn?: boolean) => void;
 }): JSX.Element {
+  const canManage = deck().hasPermission("extensions.manage");
   const [state, setState] = useState<GitOut | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
@@ -199,6 +201,7 @@ export function GitSourcePanel({ hostId, project, onDone }: {
     setFailed(null);
     try {
       const res = await authedFetch(kind === "fetch" ? `${url}/fetch` : url, init);
+      if (kind === "save" && res.status === 403) throw new Error(SOURCE_PERMISSION);
       if (!res.ok) throw new Error(await errorText(res));
       return await res.json();
     } catch (err) {
@@ -210,6 +213,7 @@ export function GitSourcePanel({ hostId, project, onDone }: {
   }
 
   async function save() {
+    if (!canManage) return;
     const body = { url: draft.url.trim(), ref: draft.ref.trim() || "main", path: draft.path.trim(), access: draft.access || null };
     const saved = (await send("save", { method: "PUT", body: JSON.stringify(body), headers: JSON_HEADERS })) as { source: Source } | null;
     if (!saved || !state) return;
@@ -351,25 +355,26 @@ export function GitSourcePanel({ hostId, project, onDone }: {
   return (
     <div className="flex flex-col gap-2 text-xs" data-testid={`git-${project}`}>
       <p className="opacity-70">{productText(INTRO)}</p>
+      {!canManage && <p className="text-amber-300">{SOURCE_PERMISSION}</p>}
       <label className="flex flex-col gap-1">
         <span>Adresse des Repositorys</span>
-        <input aria-label="Adresse des Repositorys" value={draft.url} placeholder="https://github.com/name/repo"
+        <input aria-label="Adresse des Repositorys" disabled={!canManage} value={draft.url} placeholder="https://github.com/name/repo"
           onChange={(e) => setDraft({ ...draft, url: e.target.value })} className={`${FIELD} font-mono`} />
       </label>
       <div className="flex flex-wrap gap-2">
         <label className="flex min-w-[8rem] flex-1 flex-col gap-1">
           <span>Branch oder Tag</span>
-          <input aria-label="Branch oder Tag" value={draft.ref} onChange={(e) => setDraft({ ...draft, ref: e.target.value })} className={`${FIELD} font-mono`} />
+          <input aria-label="Branch oder Tag" disabled={!canManage} value={draft.ref} onChange={(e) => setDraft({ ...draft, ref: e.target.value })} className={`${FIELD} font-mono`} />
         </label>
         <label className="flex min-w-[12rem] flex-[2] flex-col gap-1">
           <span>Compose-Datei im Repository</span>
-          <input aria-label="Compose-Datei im Repository" value={draft.path} placeholder="shop/compose.yaml"
+          <input aria-label="Compose-Datei im Repository" disabled={!canManage} value={draft.path} placeholder="shop/compose.yaml"
             onChange={(e) => setDraft({ ...draft, path: e.target.value })} className={`${FIELD} font-mono`} />
         </label>
       </div>
       <label className="flex flex-col gap-1">
         <span>Zugang</span>
-        <select aria-label="Zugang" value={draft.access} onChange={(e) => setDraft({ ...draft, access: e.target.value })} className={FIELD}>
+        <select aria-label="Zugang" disabled={!canManage} value={draft.access} onChange={(e) => setDraft({ ...draft, access: e.target.value })} className={FIELD}>
           <option value="">Öffentlich, ohne Anmeldung</option>
           {state.accesses.map((a) => <option key={a.name} value={a.name}>{a.name} ({a.host})</option>)}
           {draft.access && !state.accesses.some((a) => a.name === draft.access) && (
@@ -377,14 +382,14 @@ export function GitSourcePanel({ hostId, project, onDone }: {
           )}
         </select>
       </label>
-      {state.accesses.length === 0 && (
+      {canManage && state.accesses.length === 0 && (
         <p className="opacity-70">Für ein privates Repository trägst du zuerst einen Zugang mit Token ein: Einstellungen → Erweiterungen → Docker, unter „Erweitert“ bei „Git-Zugänge“.</p>
       )}
       <p className="opacity-70">
         Abgeglichen wird der Ordner, in dem die Compose-Datei im Repository liegt, mit dem Ordner des Stacks; die Compose-Datei selbst mit der des Stacks.
       </p>
       <div className="flex flex-wrap gap-1.5">
-        <Button small variant="primary" disabled={busy !== null || !draft.url.trim() || !draft.path.trim() || !dirty} onClick={() => void save()}>
+        <Button small variant="primary" disabled={!canManage || busy !== null || !draft.url.trim() || !draft.path.trim() || !dirty} onClick={() => void save()}>
           {busy === "save" ? "…" : source ? "Speichern und holen" : "Eintragen und holen"}
         </Button>
         {source && !dirty && (

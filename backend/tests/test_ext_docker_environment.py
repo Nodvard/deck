@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from exec_gate_helpers import ReadingExec
 
 EXT_SRC = Path(__file__).resolve().parents[2] / "extensions" / "docker" / "src"
 
@@ -125,7 +126,7 @@ class _Ctx:
             async def list(self, *, tag: str | None = None) -> list[_Host]:
                 return [_Host("lxc"), _Host("down")]
 
-        class _Exec:
+        class _Exec(ReadingExec):
             async def run(self, host, command: str, *, timeout_s: int = 60):
                 ctx.calls.append((host.id, command))
                 answer = ctx.answers.get((host.id, _kind(command)))
@@ -135,7 +136,7 @@ class _Ctx:
 
         self.settings = _Settings()
         self.hosts = _Hosts()
-        self.exec = _Exec()
+        self.exec = _Exec(ext_id="docker")
 
 
 @pytest.mark.asyncio

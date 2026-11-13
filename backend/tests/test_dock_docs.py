@@ -10,7 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 GUIDES = (ROOT / "docs/dock", ROOT / "docs/en/dock")
-TOPICS = ("stacks-from-git.md", "image-updates.md", "templates.md", "troubleshooting.md")
+TOPICS = ("stacks-from-git.md", "image-updates.md", "templates.md", "troubleshooting.md", "FAQ.md")
 DOCKER = ROOT / "extensions/docker/src/nodvard_deck_ext_docker"
 
 

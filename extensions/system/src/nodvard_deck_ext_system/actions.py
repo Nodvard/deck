@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 import hashlib
 import pathlib
@@ -15,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 from nodvard_sdk import ActionResult, Actor, DryRunReport, Risk, root_helper_path
 from nodvard_sdk.actions import REQUEST_WAIT_S, ActionRequest, ActionSpec
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext, Host
@@ -45,9 +46,8 @@ MAX_HOST_ID_LEN = 64
 DENY_SSH = (frozenset({"ssh", "sshd"}), ("sshd-", "ssh-"))
 DENY_SYSTEM = (frozenset({"dbus", "dbus-broker"}), ("systemd-", "dbus-"))
 DENY_NETWORK = (frozenset({"networking", "networkmanager", "dhcpcd", "wpa_supplicant"}), ())
-# Das Dashboard selbst (systemd-Dienst "lattice…" oder "nodvard-deck…") ist auf jedem Server gesperrt, weil ein Neustart
-# mitten in der Aktion die Oberfläche abschaltet. Der blanke Name "nodvard" ist nur als Tippvariante gesperrt, nicht als
-# Präfix: Andere Nodvard-Dienste (etwa "nodvard-link") bleiben neu startbar.
+# Dashboard-Dienste mit aktuellem oder älterem Namen bleiben gesperrt, weil ihr Neustart die Oberfläche abschaltet.
+# "nodvard" ist nur als ganzer Name gesperrt, damit andere Nodvard-Dienste neu startbar bleiben.
 DENY_DASHBOARD = (frozenset({"nodvard"}), ("lattice", "nodvard-deck"))
 # Server-Markierungen (Tags), die einen Server als Dashboard-Rechner kennzeichnen.
 DASHBOARD_HOST_TAGS = ("dashboard", "lattice", "nodvard-deck")
@@ -467,6 +467,8 @@ class SystemActionExecutor:
 
 
 class _RestartIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     unit: str
 
 
@@ -475,7 +477,11 @@ def build_action_router(ctx: ExtensionContext) -> APIRouter:
     die Ablehnung sofort sehen) und schlägt dann ans Gate vor."""
     router = APIRouter()
 
-    @router.post("/hosts/{host_id}/services/restart")
+    @router.post(
+        "/hosts/{host_id}/services/restart",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409, 422,)},
+    )
     async def restart_service(
         payload: _RestartIn,
         host_id: str = Path(min_length=1, max_length=MAX_HOST_ID_LEN),

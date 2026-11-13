@@ -1,13 +1,4 @@
-/**
- * Server-Seite (ähnlich wie in Plesk): alles zu EINEM Host an einer Stelle -- Zustand,
- * Schnellzugriff (Konsole/Terminal), Aktionen, Live-Auslastung, Werkzeuge &
- * Einstellungen, Dienste, Meldungen.
- *
- * Herstellerneutral: die Werkzeug-Kacheln kommen aus `GET /hosts/{id}/tools`
- * (Extensions melden sie per `ctx.ui.register_host_tool()` an), die Aktionen aus
- * `GET /hosts/{id}/actions` -- Aktionen mit Pflichtfeldern (`params_schema.required`)
- * bekommen ein kleines Formular statt eines Knopfs, der ins Leere liefe.
- */
+/** Server-Ansicht mit Zustand, Zugriff, Messwerten und den Aktionen sowie Werkzeugen der Erweiterungen. */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Monitor, Pencil, Server, SquareTerminal } from "lucide-react";
 import { useRef, useState } from "react";
@@ -191,7 +182,7 @@ function ActionControl({ hostId, spec, onStart, onDone }: { hostId: string; spec
         report(await settle(approved, action.id, say));
       } else if (action.status === "proposed") {
         closeForm();
-        say({ tone: "pending", text: `${spec.label}: vorgeschlagen – Freigabe unter „Aktionen“ nötig.` });
+        say({ tone: "pending", text: `${spec.label}: vorgeschlagen, Freigabe unter „Aktionen“ nötig.` });
       } else {
         closeForm();
         report(await settle(action, action.id, say));
@@ -202,7 +193,7 @@ function ActionControl({ hostId, spec, onStart, onDone }: { hostId: string; spec
       if (err instanceof ActionWaitTimeout) say({ tone: "pending", text: `${spec.label}: ${GAVE_UP_WAITING_TEXT}` });
       // Gate-Sperre (Sperrliste, Flap-Schutz): 403 mit ActionOut als Body.
       else if (err instanceof ApiError && isActionOutcomeSource(err.detail)) report(err.detail);
-      else say({ tone: "error", text: `${spec.label}: Fehler – ${err instanceof Error ? err.message : String(err)}` });
+      else say({ tone: "error", text: `${spec.label}: Fehler, ${err instanceof Error ? err.message : String(err)}` });
     } finally {
       setBusy(false);
     }

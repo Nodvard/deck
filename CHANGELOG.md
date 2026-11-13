@@ -10,6 +10,15 @@ shown inside Nodvard Deck under *Settings → About Nodvard Deck*. This file is 
 
 ## [Unreleased]
 
+### Security
+
+- The release signing tool rejects redirects from ghcr.io so registry credentials cannot reach another destination.
+- Image builds run the Debian upgrade again when `APT_REFRESH` changes, so each release picks up current Debian security updates.
+
+### Fixed
+
+- Nodvard Dock answers HEAD on released GET routes, including `/api/v1/health`.
+
 ## [0.13.0] – 2026-11-05
 
 Docker expansion, a phone-friendly interface and stricter security. Nodvard Dock ships as its own Docker-only edition.
@@ -61,6 +70,20 @@ Docker expansion, a phone-friendly interface and stricter security. Nodvard Dock
   memory; CPU clock with average, minimum and maximum; service
   pages with buttons instead of links; collapsed time zone list; shorter setup command; immutable systems such as
   Bazzite get instructions instead of an error; new guides for first setup, Tailscale and Nodvard Dock.
+
+## [0.12.1] (2026-11-02)
+
+### Upgrade notes
+
+- New SSH host keys require confirmation, including on existing installations. For an unknown server, select
+  "Verbindung prüfen" (check connection) and confirm its fingerprint. Already known servers keep working.
+
+### Fixed
+
+- The update centre distinguishes held-back and locked packages from installable updates and explains the next step.
+- Security updates leave held-back, locked and phased packages untouched, never remove other packages and check the
+  server again before installation.
+- Ubuntu phasing shows an explicit status when its check is pending or unavailable.
 
 ## [0.12.0] – 2026-10-31
 

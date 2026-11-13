@@ -184,7 +184,7 @@ class _FakeConn:
 
 
 @pytest.mark.asyncio
-async def test_pool_hanging_connect_does_not_block_other_hosts(monkeypatch):
+async def test_pool_hanging_connect_does_not_block_other_hosts(monkeypatch, db_session):
     """Ein nicht erreichbarer Host (connect haengt bis zum Timeout) darf
     Verbindungen zu anderen Hosts nicht aufhalten -- weder einen neuen Aufbau noch
     den Abruf einer schon gepoolten, lebenden Verbindung."""
@@ -205,13 +205,13 @@ async def test_pool_hanging_connect_does_not_block_other_hosts(monkeypatch):
     target_b = _target("10.0.0.2", 22, "u", "p", host_id="host-b")
     target_c = _target("10.0.0.3", 22, "u", "p", host_id="host-c")
 
-    pooled_c = await pool.get(None, target_c, credential_id="cred")
-    hanging = asyncio.create_task(pool.get(None, target_a, credential_id="cred"))
+    pooled_c = await pool.get(db_session, target_c, credential_id="cred")
+    hanging = asyncio.create_task(pool.get(db_session, target_a, credential_id="cred"))
     await asyncio.sleep(0)  # host-a steckt jetzt im Verbindungsaufbau
     try:
-        conn_b = await asyncio.wait_for(pool.get(None, target_b, credential_id="cred"), timeout=3.0)
+        conn_b = await asyncio.wait_for(pool.get(db_session, target_b, credential_id="cred"), timeout=3.0)
         assert isinstance(conn_b, _FakeConn)
-        again_c = await asyncio.wait_for(pool.get(None, target_c, credential_id="cred"), timeout=3.0)
+        again_c = await asyncio.wait_for(pool.get(db_session, target_c, credential_id="cred"), timeout=3.0)
         assert again_c is pooled_c
         assert not hanging.done()
     finally:
@@ -221,7 +221,7 @@ async def test_pool_hanging_connect_does_not_block_other_hosts(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pool_parallel_gets_for_same_host_connect_only_once(monkeypatch):
+async def test_pool_parallel_gets_for_same_host_connect_only_once(monkeypatch, db_session):
     """Die Sperre je Schluessel verhindert weiterhin doppelte Verbindungen, wenn zwei
     Aufrufer gleichzeitig denselben Host anfragen."""
     import asyncio
@@ -238,8 +238,8 @@ async def test_pool_parallel_gets_for_same_host_connect_only_once(monkeypatch):
     pool = ssh.SshPool()
     target = _target("10.0.0.1", 22, "u", "p", host_id="host-a")
 
-    first = asyncio.create_task(pool.get(None, target, credential_id="cred"))
-    second = asyncio.create_task(pool.get(None, target, credential_id="cred"))
+    first = asyncio.create_task(pool.get(db_session, target, credential_id="cred"))
+    second = asyncio.create_task(pool.get(db_session, target, credential_id="cred"))
     await asyncio.sleep(0)
     release.set()
     conn1, conn2 = await asyncio.gather(first, second)
@@ -341,28 +341,28 @@ def _patch_fake_connect(monkeypatch, *, release=None, created=None):
 
 
 @pytest.mark.asyncio
-async def test_pool_drop_host_closes_only_that_hosts_connections(monkeypatch):
+async def test_pool_drop_host_closes_only_that_hosts_connections(monkeypatch, db_session):
     created: list[_FakeConn] = []
     _patch_fake_connect(monkeypatch, created=created)
     pool = ssh.SshPool()
-    a1 = await pool.get(None, _target("10.0.0.1", 22, "u", "p", host_id="host-a"), credential_id="c1")
-    a2 = await pool.get(None, _target("10.0.0.1", 22, "u", "p", host_id="host-a"), credential_id="c2")
-    b = await pool.get(None, _target("10.0.0.2", 22, "u", "p", host_id="host-b"), credential_id="c1")
+    a1 = await pool.get(db_session, _target("10.0.0.1", 22, "u", "p", host_id="host-a"), credential_id="c1")
+    a2 = await pool.get(db_session, _target("10.0.0.1", 22, "u", "p", host_id="host-a"), credential_id="c2")
+    b = await pool.get(db_session, _target("10.0.0.2", 22, "u", "p", host_id="host-b"), credential_id="c1")
 
     await pool.drop_host("host-a")
 
     assert a1.closed and a2.closed
     assert not b.closed
     # Der naechste Zugriff verbindet neu; der andere Host bleibt gepoolt.
-    a_new = await pool.get(None, _target("10.0.0.1", 22, "u", "p", host_id="host-a"), credential_id="c1")
+    a_new = await pool.get(db_session, _target("10.0.0.1", 22, "u", "p", host_id="host-a"), credential_id="c1")
     assert a_new is not a1 and not a_new.closed
-    assert await pool.get(None, _target("10.0.0.2", 22, "u", "p", host_id="host-b"), credential_id="c1") is b
+    assert await pool.get(db_session, _target("10.0.0.2", 22, "u", "p", host_id="host-b"), credential_id="c1") is b
     await pool.drop_host("unbekannt")  # kein Fehler
     await pool.close_all()
 
 
 @pytest.mark.asyncio
-async def test_pool_drop_host_during_connect_discards_the_new_connection(monkeypatch):
+async def test_pool_drop_host_during_connect_discards_the_new_connection(monkeypatch, db_session):
     """Ein Aufbau, der beim Verwerfen noch laeuft, wuerde sonst mit den ALTEN
     Verbindungsdaten (alte Adresse, geloeschter Zugang) wieder im Pool landen."""
     import asyncio
@@ -373,7 +373,7 @@ async def test_pool_drop_host_during_connect_discards_the_new_connection(monkeyp
     pool = ssh.SshPool()
     target = _target("10.0.0.1", 22, "u", "p", host_id="host-a")
 
-    pending = asyncio.create_task(pool.get(None, target, credential_id="c1"))
+    pending = asyncio.create_task(pool.get(db_session, target, credential_id="c1"))
     await asyncio.sleep(0)
     await pool.drop_host("host-a")
     release.set()
@@ -381,24 +381,24 @@ async def test_pool_drop_host_during_connect_discards_the_new_connection(monkeyp
         await pending
     assert created and created[0].closed
     # Der Pool ist danach nicht vergiftet.
-    conn = await pool.get(None, target, credential_id="c1")
+    conn = await pool.get(db_session, target, credential_id="c1")
     assert not conn.closed
     await pool.close_all()
 
 
 @pytest.mark.asyncio
-async def test_pool_retire_host_keeps_old_connection_for_the_grace_period(monkeypatch):
+async def test_pool_retire_host_keeps_old_connection_for_the_grace_period(monkeypatch, db_session):
     import asyncio
 
     created: list[_FakeConn] = []
     _patch_fake_connect(monkeypatch, created=created)
     pool = ssh.SshPool()
     target = _target("10.0.0.1", 22, "u", "p", host_id="host-a")
-    old = await pool.get(None, target, credential_id="c1")
+    old = await pool.get(db_session, target, credential_id="c1")
 
     pool.retire_host("host-a", grace_s=0.1)
 
-    fresh = await pool.get(None, target, credential_id="c1")
+    fresh = await pool.get(db_session, target, credential_id="c1")
     assert fresh is not old
     assert not old.closed  # laeuft weiter (z. B. ein `docker logs -f`)
     await asyncio.sleep(0.25)
@@ -408,11 +408,11 @@ async def test_pool_retire_host_keeps_old_connection_for_the_grace_period(monkey
 
 
 @pytest.mark.asyncio
-async def test_pool_drop_host_and_close_all_also_close_retired_connections(monkeypatch):
+async def test_pool_drop_host_and_close_all_also_close_retired_connections(monkeypatch, db_session):
     _patch_fake_connect(monkeypatch)
     pool = ssh.SshPool()
-    a = await pool.get(None, _target("10.0.0.1", 22, "u", "p", host_id="host-a"), credential_id="c1")
-    b = await pool.get(None, _target("10.0.0.2", 22, "u", "p", host_id="host-b"), credential_id="c1")
+    a = await pool.get(db_session, _target("10.0.0.1", 22, "u", "p", host_id="host-a"), credential_id="c1")
+    b = await pool.get(db_session, _target("10.0.0.2", 22, "u", "p", host_id="host-b"), credential_id="c1")
     pool.retire_host("host-a", grace_s=900)
     pool.retire_host("host-b", grace_s=900)
     assert not a.closed and not b.closed
@@ -437,7 +437,7 @@ async def test_pool_drop_host_closes_a_real_connection(local_ssh_server, db_sess
 
 
 @pytest.mark.asyncio
-async def test_pool_rejects_a_stale_target_generation_even_when_waiting_for_the_lock(monkeypatch):
+async def test_pool_rejects_a_stale_target_generation_even_when_waiting_for_the_lock(monkeypatch, db_session):
     """Ein Wartender, dessen Ziel VOR einem drop_host() gelesen wurde, darf nach dem Warten
     nicht mit den alten Daten verbinden."""
     import asyncio
@@ -449,9 +449,9 @@ async def test_pool_rejects_a_stale_target_generation_even_when_waiting_for_the_
     base = _target("10.0.0.1", 22, "u", "p", host_id="host-a")
     stale = ssh.ConnectionTarget(**{**base.__dict__, "generation": pool.generation("host-a")})
 
-    first = asyncio.create_task(pool.get(None, stale, credential_id="c1"))
+    first = asyncio.create_task(pool.get(db_session, stale, credential_id="c1"))
     await asyncio.sleep(0)
-    waiter = asyncio.create_task(pool.get(None, stale, credential_id="c1"))
+    waiter = asyncio.create_task(pool.get(db_session, stale, credential_id="c1"))
     await asyncio.sleep(0)
     await pool.drop_host("host-a")
     release.set()
@@ -462,23 +462,23 @@ async def test_pool_rejects_a_stale_target_generation_even_when_waiting_for_the_
     assert len(created) == 1  # der Wartende hat gar nicht erst verbunden
     # Ein frisch gelesenes Ziel geht wieder.
     fresh = ssh.ConnectionTarget(**{**base.__dict__, "generation": pool.generation("host-a")})
-    assert not (await pool.get(None, fresh, credential_id="c1")).closed
+    assert not (await pool.get(db_session, fresh, credential_id="c1")).closed
     await pool.close_all()
 
 
 @pytest.mark.asyncio
-async def test_pool_rejects_a_target_read_before_the_drop_even_without_any_waiting(monkeypatch):
+async def test_pool_rejects_a_target_read_before_the_drop_even_without_any_waiting(monkeypatch, db_session):
     _patch_fake_connect(monkeypatch)
     pool = ssh.SshPool()
     base = _target("10.0.0.1", 22, "u", "p", host_id="host-a")
     old = ssh.ConnectionTarget(**{**base.__dict__, "generation": pool.generation("host-a")})
     await pool.drop_host("host-a")
     with pytest.raises(ssh.SshTargetChanged):
-        await pool.get(None, old, credential_id="c1")
+        await pool.get(db_session, old, credential_id="c1")
 
 
 @pytest.mark.asyncio
-async def test_pool_drop_host_keeps_locks_and_closes_connections_in_parallel(monkeypatch):
+async def test_pool_drop_host_keeps_locks_and_closes_connections_in_parallel(monkeypatch, db_session):
     import asyncio
     import time
 
@@ -493,7 +493,7 @@ async def test_pool_drop_host_keeps_locks_and_closes_connections_in_parallel(mon
     pool = ssh.SshPool()
     target = _target("10.0.0.1", 22, "u", "p", host_id="host-a")
     for cred in ("c1", "c2", "c3"):
-        await pool.get(None, target, credential_id=cred)
+        await pool.get(db_session, target, credential_id=cred)
     locks_before = dict(pool._locks)
     started = time.monotonic()
     await pool.drop_host("host-a")
@@ -596,6 +596,33 @@ async def test_failed_login_carries_the_verified_server_key_and_is_an_auth_error
         await ssh.connect(db_session, _target(host, port, username, "falsches-passwort"))
     assert excinfo.value.key_type == "ssh-ed25519" and excinfo.value.fingerprint.startswith("SHA256:")
     assert isinstance(excinfo.value, ssh.SshError)
+    for text in ("Zugang abgelehnt", "Schlüssel", "2FA", "fail2ban", "Duo"):
+        assert text in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_pool_stops_real_login_attempts_and_recovers_after_the_pause(
+    local_ssh_server, db_session, ssh_server_stats, monkeypatch
+):
+    from nodvard_deck.core import ssh_retry
+
+    host, port, username, password, _ = local_ssh_server
+    pool = ssh.SshPool()
+    for _ in range(8):
+        with pytest.raises(ssh.SshAuthError):
+            await pool.get(db_session, _target(host, port, username, "wrong"), credential_id="c1")
+        await db_session.rollback()
+    assert ssh_server_stats["password_tries"] == 3
+    state = await ssh_retry.load(db_session, "host-1")
+    monkeypatch.setattr(ssh_retry.time, "time", lambda: state.retry_at)
+    try:
+        conn = await pool.get(db_session, _target(host, port, username, password), credential_id="c1")
+        assert not conn.is_closed()
+        await db_session.commit()
+        assert await ssh_retry.load(db_session, "host-1") == ssh_retry.RetryState()
+        assert ssh_server_stats["password_tries"] == 4
+    finally:
+        await pool.close_all()
 
 
 # ---------------------------------------------------------------------------

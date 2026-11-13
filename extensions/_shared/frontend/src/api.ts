@@ -6,7 +6,7 @@
 import { deck } from "./deck";
 
 /** Wie `SERVER_UNAVAILABLE_TEXT` im Kern (frontend/src/state/auth.ts). */
-export const SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.";
+export const SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar, bitte gleich noch einmal versuchen.";
 
 /**
  * `authedFetch` wirft das ohne brauchbare Antwort: Netzwerkfehler, 502/503/504 ohne eigenen Grund (Proxy) oder der Kern

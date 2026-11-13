@@ -1,7 +1,7 @@
 # 01: Architektur
 
-> Hinweis: Das Produkt heißt **Nodvard Deck**, im Code `nodvard_deck`. Früher hieß es „Lattice“;
-> welche alten Namen weiter gelten und welche bewusst bleiben, steht in [§ Alte und neue Namen](#alte-und-neue-namen).
+> Das Produkt heißt **Nodvard Deck**, im Code `nodvard_deck`. Technische Namen, die bestehende Installationen
+> weiter benötigen, stehen in [§ Alte und neue Namen](#alte-und-neue-namen) und in der [Inventur](ALTE-NAMEN.md).
 
 ## 1. Die drei Schichten
 
@@ -234,7 +234,10 @@ und WebSockets nur an der eigenen Adresse;
 Bilder dürfen zusätzlich `data:` und `blob:` sein (`img-src 'self' data: blob:`), Rahmen nur `blob:` (die
 PDF-Vorschau in Dokumente). Die CSP wird ohne Wildcards und ohne `unsafe-inline` erzwungen: Dynamische Stile und
 xterm-Stylesheets erhalten eine frische Nonce je nicht cachebarer HTML-Antwort, Stilattribute sind gesperrt, Schriften
-kommen nur vom eigenen Server; `NODVARD_DECK_CSP_LEGACY=1` aktiviert im Notfall die bisherige Stilfreigabe mit Logwarnung.
+kommen nur vom eigenen Server. Die veraltete Einstellung `NODVARD_DECK_CSP_LEGACY=1` wird mit Logwarnung ignoriert
+und kann entfernt werden; die strikte Inhaltsrichtlinie gilt auch für bestehende Konfigurationen.
+Eine lokale Vite-Korrektur setzt xterms Truecolor- und Kontrastfarben über CSSOM statt über Stilattribute.
+Ändert sich diese Bibliotheksstelle bei einem Update, bricht der Build zur erneuten Prüfung ab.
 JSON-Antworten ohne eigene Regeln bekommen
 `default-src 'none'`. Was das für Erweiterungs-Bundles heißt, steht in
 [02-EXTENSION-API.md](02-EXTENSION-API.md) unter „Frontend-Bundle laden“. Links aus Daten von
@@ -271,14 +274,19 @@ hat in einem Ein-Administrator-Homelab einen Nutzen, der die Komplexität rechtf
 
 ## Alte und neue Namen
 
-Das Projekt hieß früher „Lattice“. Die technischen Namen sind auf **Nodvard Deck** umgestellt.
-Damit bestehende Installationen, alte Browser-Tabs und Erweiterungen von Dritten weiterlaufen,
-gelten viele alte Namen **parallel** weiter; einige bleiben **bewusst** ganz stehen. Der Wächter
+Die technischen Namen von **Nodvard Deck** und **Nodvard Shield** sind umgestellt.
+Für bestehende Installationen und Erweiterungen von Dritten gelten notwendige alte Kennungen
+weiter. Entfernte Schnittstellen stehen getrennt darunter, damit sie nicht versehentlich neu genutzt werden. Der Wächter
 `scripts/check_legacy_names.py` (läuft als Test) sorgt dafür, dass kein alter Name neu eingeführt
-wird. Er hat zwei Positivlisten, beide mit Begründung je Eintrag: `KEPT_NAMES` für „Lattice“ und
+wird. Er hat zwei Positivlisten, beide mit Begründung je Eintrag: `KEPT_NAMES` für alte Deck-Namen und
 `KEPT_SHIELD` für die alte Kennung von Nodvard Shield (dort nennt jeder Eintrag zusätzlich die Dateien, in denen er
 gilt; ein Test prüft, dass jede Angabe noch gebraucht wird). Diese beiden Listen sind maßgeblich. Für die alte Kennung
 des Moduls Docker braucht es keine Liste: Die Prüfung auf alte Namen verbietet nur das alte Paket und die alten Adressen.
+
+Die [zeilengenaue Inventur](ALTE-NAMEN.md) hält notwendige Kompatibilität (A), bereinigte Texte (B)
+und entfernte tote Logik (C) fest. A bleibt in dieser Bereinigung unverändert. Die Ausbauziele 1.0 und 1.1
+setzen eine eigene Migration mit geprüftem Rückweg voraus; die zugesagte API-Kompatibilität
+([04 §7](04-API.md#7-kompatibilität)) gilt dabei weiter. Alte API-Adressen bleiben in allen 1.x erreichbar.
 
 **Umbenannt: der alte Name funktioniert weiter (Übergang):**
 
@@ -313,8 +321,8 @@ des Moduls Docker braucht es keine Liste: Die Prüfung auf alte Namen verbietet 
 
 ### Nodvard Shield: `nexus-soc` → `shield` (seit 0.7)
 
-Die Erweiterung **Nodvard Shield** (bis 0.6 „Nexus SOC“) hatte die technische Kennung `nexus-soc`. Seit 0.7
-heißt sie `shield`, im Manifest steht `legacy_ids = ["nexus-soc"]` (Mechanik:
+Die Erweiterung **Nodvard Shield** heißt technisch seit 0.7 `shield`. Für bestehende Installationen
+steht im Manifest `legacy_ids = ["nexus-soc"]` (Mechanik:
 [02 „Erweiterung umbenennen“](02-EXTENSION-API.md#erweiterung-umbenennen-legacy_ids)). Es gibt **keine Migration**:
 Gespeichertes wird weder kopiert noch umbenannt, ein Rückweg aufs alte Image findet alles unverändert vor.
 

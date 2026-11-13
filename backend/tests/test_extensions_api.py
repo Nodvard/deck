@@ -65,14 +65,62 @@ async def test_capabilities_is_public_and_starts_without_extensions(client):
 
 @pytest.mark.asyncio
 async def test_capabilities_reports_demo_mode_feature_flag(client, test_settings):
-    """LATTICE_DEMO_MODE ist verdrahtet: `feature_flags` war seit seiner Einfuehrung immer `{}` -- kein
-    Aufrufer brauchte es. `demo_mode` ist der erste echte Verbraucher."""
     off = await client.get("/api/v1/capabilities")
-    assert off.json()["feature_flags"] == {"demo_mode": False}
+    assert off.json()["feature_flags"] == {"demo_mode": False, "terminal": False, "files": False}
 
     test_settings.demo_mode = True
     on = await client.get("/api/v1/capabilities")
-    assert on.json()["feature_flags"] == {"demo_mode": True}
+    assert on.json()["feature_flags"] == {"demo_mode": True, "terminal": False, "files": False}
+
+
+@pytest.mark.asyncio
+async def test_capabilities_follow_terminal_and_file_providers(client, db_session, test_settings):
+    token = await _bootstrap_owner(client)
+    headers = _auth_header(token)
+    test_settings.extensions_dir = REPO_EXTENSIONS_DIR
+    await extensions_service.discover_and_sync(db_session, test_settings)
+
+    async def flags():
+        response = await client.get("/api/v1/capabilities")
+        assert response.status_code == 200
+        return response.json()["feature_flags"]
+
+    async def toggle(ext_id, action):
+        response = await client.post(f"/api/v1/extensions/{ext_id}/{action}", headers=headers)
+        assert response.status_code == 200, response.text
+        assert response.json()["state"] == ("enabled" if action == "enable" else "disabled")
+
+    assert await flags() == {"demo_mode": False, "terminal": False, "files": False}
+    await toggle("terminal", "enable")
+    assert await flags() == {"demo_mode": False, "terminal": True, "files": True}
+
+    await toggle("nextcloud", "enable")
+    await toggle("terminal", "disable")
+    assert await flags() == {"demo_mode": False, "terminal": False, "files": True}
+
+    await toggle("nextcloud", "disable")
+    assert await flags() == {"demo_mode": False, "terminal": False, "files": False}
+
+    await toggle("terminal", "enable")
+    assert await flags() == {"demo_mode": False, "terminal": True, "files": True}
+    await toggle("terminal", "disable")
+
+
+@pytest.mark.asyncio
+async def test_capabilities_recognize_other_terminal_providers(client):
+    from nodvard_sdk.capabilities import TerminalTarget
+
+    from nodvard_deck.ext.runtime import get_extension_runtime
+
+    registry = get_extension_runtime().capabilities
+    registry.provide("custom-shell", TerminalTarget, object())
+    response = await client.get("/api/v1/capabilities")
+    assert response.json()["feature_flags"]["terminal"] is True
+    assert response.json()["feature_flags"]["files"] is False
+
+    registry.clear_extension("custom-shell")
+    response = await client.get("/api/v1/capabilities")
+    assert response.json()["feature_flags"]["terminal"] is False
 
 
 @pytest.mark.asyncio

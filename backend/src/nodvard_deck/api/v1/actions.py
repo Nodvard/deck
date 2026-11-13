@@ -18,6 +18,8 @@ from ...models import Action, User
 from ...services.actor_labels import ActorLabels, load_actor_labels, raw_actor
 from ...services.auth import user_has_permission
 from ..deps import CurrentUser, SessionDep, require_permission
+from ..models import RequestModel
+from ..responses import error_responses
 
 # Lesen braucht `hosts.read` (ein Vorschlag ist immer hostbezogen). Entscheiden braucht `actions.approve:<risiko>`,
 # je Zeile geprüft, weil die Dependency den Scope vor dem Laden der Zeile nicht kennen kann.
@@ -136,7 +138,7 @@ async def action_outs(session: AsyncSession, actions: list[Action], viewer: User
     ]
 
 
-class RejectIn(BaseModel):
+class RejectIn(RequestModel):
     reason: str = Field(min_length=1)
 
 
@@ -150,7 +152,7 @@ def _require_decision_permission(user, action: Action) -> None:
         )
 
 
-@router.get("")
+@router.get("", responses=error_responses(401, 403, 507))
 async def list_actions(
     session: SessionDep,
     user: CurrentUser,
@@ -158,7 +160,7 @@ async def list_actions(
     action_type: str | None = None,
     host_id: str | None = None,
     limit: int = Query(100, ge=1, le=1000),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=9223372036854775807),
 ) -> list[ActionOut]:
     stmt = select(Action).order_by(Action.created_at.desc())
     if status_ is not None:
@@ -172,7 +174,7 @@ async def list_actions(
     return await action_outs(session, list(rows), user)
 
 
-@router.get("/{action_id}")
+@router.get("/{action_id}", responses=error_responses(401, 403, 404, 507))
 async def get_action(action_id: str, session: SessionDep, user: CurrentUser) -> ActionOut:
     action = await session.get(Action, action_id)
     if action is None:
@@ -192,7 +194,10 @@ def mark_running(response: Response, action: Action) -> None:
         response.headers["Retry-After"] = "3"
 
 
-@router.post("/{action_id}/approve")
+@router.post(
+    "/{action_id}/approve",
+    responses={**error_responses(401, 403, 404, 409, 507), 202: {"model": ActionOut, "description": "Aktion läuft."}},
+)
 async def approve_action(
     action_id: str,
     session: SessionDep,
@@ -226,7 +231,7 @@ async def approve_action(
     return await action_out(session, result, user)
 
 
-@router.post("/{action_id}/reject")
+@router.post("/{action_id}/reject", responses=error_responses(401, 403, 404, 409, 507))
 async def reject_action(action_id: str, payload: RejectIn, session: SessionDep, user: CurrentUser) -> ActionOut:
     action = await session.get(Action, action_id)
     if action is None:
@@ -243,7 +248,7 @@ async def reject_action(action_id: str, payload: RejectIn, session: SessionDep, 
     return await action_out(session, result, user)
 
 
-@router.post("/{action_id}/dismiss")
+@router.post("/{action_id}/dismiss", responses=error_responses(401, 403, 404, 409, 507))
 async def dismiss_action(action_id: str, session: SessionDep, user: CurrentUser) -> ActionOut:
     action = await session.get(Action, action_id)
     if action is None:

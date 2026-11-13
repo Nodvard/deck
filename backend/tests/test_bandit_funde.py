@@ -44,7 +44,35 @@ def test_every_nosec_names_the_check_and_only_the_known_false_alarms():
     for path, number, line in found:
         codes = re.findall(r"#\s*nosec\s+(B\d{3}(?:\s*,\s*B\d{3})*)", line)
         assert codes, f"{path}:{number}: nosec ohne Kennung"
-        assert set(re.findall(r"B\d{3}", codes[0])) <= {"B104", "B108"}, f"{path}:{number}: {line.strip()}"
+        allowed = {"B104", "B108"}
+        if path.endswith("git_fetch.py") and "Loader=_ComposeLoader" in line:
+            allowed = allowed | {"B506"}  # genau diese Stelle, siehe test_compose_loader_is_a_safe_loader
+        assert set(re.findall(r"B\d{3}", codes[0])) <= allowed, f"{path}:{number}: {line.strip()}"
+
+
+@pytest.mark.parametrize(
+    "filename, marker, code",
+    [
+        ("container_to_stack.py", "if host_ip in (", "B104"),
+        ("new_stack.py", "_SHARED_ROOTS =", "B108"),
+        ("git_fetch.py", "return yaml.load(text.decode", "B506"),
+    ],
+)
+def test_docker_comparison_values_have_documented_bandit_exceptions(filename, marker, code):
+    path = ROOT / "extensions" / "docker" / "src" / "nodvard_deck_ext_docker" / filename
+    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip().startswith(marker)]
+    assert len(lines) == 1
+    assert re.search(rf"#\s*nosec\s+{code}\s+-\s+\S", lines[0]), f"{path}: begründete Ausnahme fehlt"
+
+
+def test_compose_loader_is_a_safe_loader(monkeypatch):
+    # Begründung der Ausnahme B506 in git_fetch.py: Der Loader baut nur Daten, keine Objekte.
+    import yaml
+
+    monkeypatch.syspath_prepend(str(ROOT / "extensions" / "docker" / "src"))
+    from nodvard_deck_ext_docker.git_fetch import _ComposeLoader
+
+    assert issubclass(_ComposeLoader, yaml.SafeLoader)
 
 
 def test_the_rescue_page_listens_only_locally_without_an_address():

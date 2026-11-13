@@ -51,6 +51,7 @@ READ_TIMEOUT_S = 60
 MAX_REDIRECTS = 5
 MAX_PROBLEMS = 20
 MAX_WARNINGS = 40
+MAX_STORAGE_BYTES = 500 * 1024 * 1024
 _GITLINK = 0o160000
 MEMORY = "Holen brauchte mehr Speicher, als Deck dafür hergibt. Ist das Repository ungewöhnlich groß?"
 _NAME_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._+@=-][A-Za-z0-9._+@= -]{0,254}\Z")
@@ -558,7 +559,41 @@ def _bind_source(volume: Any) -> Any:
 
 def load_compose(text: bytes) -> Any:
     """Die Compose-Datei als Daten; Markierungen wie `!reset` werden gelesen, nie ausgeführt."""
-    return yaml.load(text.decode("utf-8"), Loader=_ComposeLoader)
+    # _ComposeLoader erbt von SafeLoader und baut nur Daten, keine Objekte.
+    return yaml.load(text.decode("utf-8"), Loader=_ComposeLoader)  # nosec B506 - Grund: _ComposeLoader erbt von yaml.SafeLoader, baut nur Daten
+
+
+ENV_INCLUDES = ("Die Compose-Datei bindet weitere Compose-Dateien ein. Deck kann deren Umgebungsdateien vor dem Einspielen "
+                "nicht sicher bestimmen. Führe die Einstellungen zuerst in einer Compose-Datei zusammen.")
+
+
+def service_env_files(folder: str, *composes: bytes) -> set[str]:
+    """Umgebungsdateien der Dienste, relativ zum Ordner der Compose-Datei aufgelöst."""
+    found: set[str] = set()
+    for compose in composes:
+        try:
+            config = load_compose(compose)
+        except (ValueError, yaml.YAMLError, RecursionError) as exc:
+            raise GitProblem("Die Compose-Datei lässt sich nicht auswerten. Deck kann die betroffenen Umgebungsdateien vor dem "
+                             "Einspielen nicht sicher bestimmen. Korrigiere zuerst die Compose-Datei.") from exc
+        if isinstance(config, dict) and config.get("include"):
+            raise GitProblem(ENV_INCLUDES)
+        services = config.get("services") if isinstance(config, dict) else None
+        if not isinstance(services, dict):
+            continue
+        for service in services.values():
+            if not isinstance(service, dict):
+                continue
+            extends = service.get("extends")
+            if isinstance(extends, dict) and extends.get("file"):
+                raise GitProblem(ENV_INCLUDES)
+            for path in _paths(service.get("env_file") or [], "path"):
+                if isinstance(path, str) and path:
+                    if "$" in path:
+                        raise GitProblem("Der Pfad einer Umgebungsdatei enthält Variablen. Deck kann die betroffenen Dateien vor dem "
+                                         "Einspielen nicht sicher bestimmen. Trage den Pfad in der Compose-Datei ohne Variablen ein.")
+                    found.add(posixpath.normpath(posixpath.join(folder, path)))
+    return found
 
 
 def compose_warnings(text: bytes) -> tuple[list[str], str | None]:
@@ -638,6 +673,27 @@ def _swap(store: Path, fresh_dir: Path) -> None:
     shutil.rmtree(aside, ignore_errors=True)
 
 
+def _check_storage(store: Path) -> None:
+    """Zählt alle gespeicherten Repositorys samt neuem Stand, ohne den zu ersetzenden alten Stand."""
+    total = 0
+    for folder in store.parent.iterdir():
+        if folder == store:
+            continue
+        with contextlib.suppress(FileNotFoundError):
+            for path in folder.rglob("*"):
+                try:
+                    info = path.lstat()
+                except FileNotFoundError:
+                    continue
+                if statmod.S_ISREG(info.st_mode):
+                    total += info.st_size
+                    if total > MAX_STORAGE_BYTES:
+                        raise GitProblem(
+                            f"Die Speichergrenze von {_mb(MAX_STORAGE_BYTES)} für Repositorys ist erreicht. "
+                            "Entferne eine nicht mehr benötigte Git-Quelle und versuch es erneut."
+                        )
+
+
 def clean_leftovers(store: Path) -> None:
     """Halbe Speicher eines abgebrochenen Holens neben dem Speicher."""
     for path in store.parent.glob(f"{store.name}.*"):
@@ -678,6 +734,8 @@ def _fetch_into(url: str, ref: str, path: str, store: Path, credentials: tuple[s
             if new:
                 raise
             raise _StoreDamaged from exc
+        if new:
+            _check_storage(store)
     except BaseException:
         fresh.close()
         shutil.rmtree(fresh_dir, ignore_errors=True)
@@ -776,6 +834,11 @@ def handle(request: dict[str, Any], client_for: Callable[..., tuple[Any, str]] |
     credentials = tuple(request["credentials"]) if request.get("credentials") else None
     client_for = client_for or functools.partial(http_client, allow_private=request.get("allow_private") is True)
     try:
+        if request.get("mode") == "env_files":
+            composes = [base64.b64decode(c, validate=True) for c in request["composes"]]
+            if any(len(compose) > limits.compose_bytes for compose in composes):
+                raise GitProblem(f"Die Compose-Datei ist größer als {limits.compose_bytes // 1024} KB.")
+            return {"ok": True, "env_files": sorted(service_env_files(request["folder"], *composes))}
         if request.get("mode") == "head":
             known = [k for k in request.get("known") or [] if isinstance(k, str) and _SHA_RE.match(k)]
             commit, kind = head(request["url"], request["ref"], credentials, client_for, limits, known)  # type: ignore[arg-type]

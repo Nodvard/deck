@@ -1,3 +1,4 @@
+import { mobileLayout } from "../../../../frontend/src/test/mobileLayout";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
@@ -129,3 +130,12 @@ it("Dock erklärt den Speicherort der Registry-Anmeldung", async () => {
   render(<RegistryList hostId="h1" />);
   expect(await screen.findByText(/Zugangs von Nodvard Dock/)).toBeInTheDocument();
 });
+
+it("390 px: Registries haben Karten und eigene Aktionszeilen", async () => {
+  serve({ "/registries": () => Response.json({ ...STATE, registries: [{ ...STATE.registries[0], address: "registry." + "lang".repeat(40) + ".test", logged_in: null }] }) });
+  render(<RegistryList hostId="h1" />);
+  const row = await screen.findByTestId("registry-ghcr");
+  expect(row).toHaveClass("rounded-lg", "border", "p-3");
+  expect(row.firstElementChild).toHaveClass("flex-col", "sm:flex-row");
+  await mobileLayout(row.parentElement!);
+}, 30000);

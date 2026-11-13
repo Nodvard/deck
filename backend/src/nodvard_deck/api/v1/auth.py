@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from nodvard_sdk import max_body_bytes
-from pydantic import BaseModel, Field, field_validator
+from pydantic import Field, field_validator
 from starlette.background import BackgroundTask
 
 from ...config import Settings, get_settings
@@ -20,6 +20,8 @@ from ...services import audit as audit_service
 from ...services import auth as auth_service
 from ...services import restore as restore_service
 from ..deps import SessionDep, SettingsDep
+from ..models import RequestModel
+from ..responses import error_responses
 from ..errors import CodedHTTPException
 from ..proxy_headers import SCOPE_KEY as FORWARDING_SCOPE_KEY
 from ..proxy_headers import Forwarding, is_insecure_connection
@@ -42,7 +44,7 @@ COOKIE_PATH = "/api/v1/auth"
 ClientType = Literal["web", "android", "cli"]
 
 
-class BootstrapRequest(BaseModel):
+class BootstrapRequest(RequestModel):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=8, max_length=255)
     setup_code: str = Field(default="", max_length=64)
@@ -54,24 +56,24 @@ class BootstrapRequest(BaseModel):
         return auth_service.validate_new_username(value)
 
 
-class LoginRequest(BaseModel):
+class LoginRequest(RequestModel):
     username: str
     password: str
     client_type: ClientType = "web"
 
 
-class MfaRequest(BaseModel):
+class MfaRequest(RequestModel):
     mfa_token: str
     code: str = Field(min_length=6, max_length=32)
     """Sechsstelliger Authenticator-Code oder Wiederherstellungs-Code (`ABCDE-FGHJK`, Schreibweise egal)."""
 
 
-class RefreshRequest(BaseModel):
+class RefreshRequest(RequestModel):
     refresh_token: str | None = None
     """Nur für Android/CLI nötig, Web schickt den Cookie automatisch mit."""
 
 
-class LogoutRequest(BaseModel):
+class LogoutRequest(RequestModel):
     refresh_token: str | None = None
 
 
@@ -243,7 +245,7 @@ async def confirm_stored_secret_change(
     return await confirm_password_and_code(request, session, settings, user, password, code, action)
 
 
-@router.get("/bootstrap")
+@router.get("/bootstrap", responses=error_responses(507))
 async def bootstrap_status(request: Request, session: SessionDep, settings: SettingsDep) -> dict:
     """Ob die Erstinbetriebnahme noch offen ist (`needed`), ohne Anmeldung erreichbar; ohne Konto zusätzlich `restore`
     mit dem Ergebnis einer fehlgeschlagenen Wiederherstellung aus dem Assistenten."""
@@ -256,7 +258,7 @@ async def bootstrap_status(request: Request, session: SessionDep, settings: Sett
     return body
 
 
-@router.post("/bootstrap", status_code=status.HTTP_201_CREATED)
+@router.post("/bootstrap", status_code=status.HTTP_201_CREATED, responses=error_responses(403, 409, 429, 503, 507))
 async def bootstrap(
     payload: BootstrapRequest, request: Request, session: SessionDep, settings: SettingsDep
 ) -> dict:
@@ -304,7 +306,13 @@ async def bootstrap(
     return {"id": user.id, "username": user.username, "is_owner": user.is_owner}
 
 
-@router.post("/login")
+@router.post(
+    "/login",
+    responses={
+        **error_responses(401, 429, 503, 507),
+        202: {"description": "Zwei-Faktor-Anmeldung erforderlich.", "content": {"application/json": {"schema": {"type": "object"}}}},
+    },
+)
 async def login(
     payload: LoginRequest, request: Request, session: SessionDep, settings: SettingsDep
 ) -> Response:
@@ -339,7 +347,7 @@ async def login(
     return _tokens_response(tokens, secure=_cookie_secure(request, settings))
 
 
-@router.post("/mfa")
+@router.post("/mfa", responses=error_responses(401, 429, 503, 507))
 async def mfa(
     payload: MfaRequest, request: Request, session: SessionDep, settings: SettingsDep
 ) -> Response:
@@ -359,7 +367,7 @@ async def mfa(
     return _tokens_response(tokens, secure=_cookie_secure(request, settings))
 
 
-@router.post("/refresh")
+@router.post("/refresh", responses=error_responses(400, 401, 429, 507))
 async def refresh(
     payload: RefreshRequest, request: Request, session: SessionDep, settings: SettingsDep
 ) -> Response:
@@ -370,14 +378,16 @@ async def refresh(
             detail="Kein Refresh-Token angegeben (weder Cookie noch Body).",
         )
     try:
-        tokens = await auth_service.refresh_access_token(session, settings, raw_refresh_token=raw_token)
+        tokens = await auth_service.refresh_access_token(session, settings, raw_refresh_token=raw_token, ip=_client_ip(request))
+    except auth_service.TooManyAttempts as exc:
+        raise _too_many_attempts(exc) from exc
     except auth_service.InvalidCredentials as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
     return _tokens_response(tokens, secure=_cookie_secure(request, settings))
 
 
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, responses=error_responses(507))
 async def logout(
     payload: LogoutRequest, request: Request, session: SessionDep, settings: SettingsDep
 ) -> Response:
@@ -424,7 +434,11 @@ def _setup_scope(request: Request) -> restore_service.Scope:
     return restore_service.Scope("bootstrap", ip=_client_ip(request))
 
 
-@bootstrap_restore_router.put("/restore/upload", status_code=status.HTTP_201_CREATED)
+@bootstrap_restore_router.put(
+    "/restore/upload",
+    status_code=status.HTTP_201_CREATED,
+    responses=error_responses(400, 403, 404, 409, 413, 415, 422, 429, 507),
+)
 @max_body_bytes(lambda: get_settings().restore_max_upload_bytes)
 async def bootstrap_restore_upload(request: Request, session: SessionDep, settings: SettingsDep) -> JSONResponse:
     """Wie `PUT /system/restore/upload`, aber im Assistenten: Einrichtungscode statt Owner."""
@@ -435,7 +449,10 @@ async def bootstrap_restore_upload(request: Request, session: SessionDep, settin
     return JSONResponse(view, status_code=status.HTTP_201_CREATED, headers={"Cache-Control": "no-store"})
 
 
-@bootstrap_restore_router.post("/restore/{restore_id}/inspect")
+@bootstrap_restore_router.post(
+    "/restore/{restore_id}/inspect",
+    responses=error_responses(400, 403, 404, 409, 413, 422, 429, 507),
+)
 async def bootstrap_restore_inspect(
     restore_id: str, payload: RestoreInspectIn, request: Request, session: SessionDep, settings: SettingsDep
 ) -> JSONResponse:
@@ -443,7 +460,10 @@ async def bootstrap_restore_inspect(
     return JSONResponse(view, headers={"Cache-Control": "no-store"})
 
 
-@bootstrap_restore_router.post("/restore/{restore_id}/schedule")
+@bootstrap_restore_router.post(
+    "/restore/{restore_id}/schedule",
+    responses=error_responses(400, 403, 404, 409, 413, 422, 429, 507),
+)
 async def bootstrap_restore_schedule(
     restore_id: str, payload: RestoreScheduleIn, request: Request, session: SessionDep, settings: SettingsDep
 ) -> JSONResponse:
@@ -451,12 +471,20 @@ async def bootstrap_restore_schedule(
     return JSONResponse(pending, headers={"Cache-Control": "no-store"})
 
 
-@bootstrap_restore_router.delete("/restore/pending", status_code=status.HTTP_204_NO_CONTENT)
+@bootstrap_restore_router.delete(
+    "/restore/pending",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=error_responses(400, 403, 404, 409, 413, 422, 429, 507),
+)
 async def bootstrap_restore_cancel(request: Request, session: SessionDep, settings: SettingsDep) -> None:
     await do_cancel(session, settings, _setup_scope(request))
 
 
-@bootstrap_restore_router.post("/restart", status_code=status.HTTP_202_ACCEPTED)
+@bootstrap_restore_router.post(
+    "/restart",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses=error_responses(400, 403, 404, 409, 413, 422, 429, 507),
+)
 async def bootstrap_restart(request: Request, session: SessionDep, settings: SettingsDep) -> dict:
     """Startet Nodvard Deck neu (Rückgabewert 75), damit eine vorgemerkte Wiederherstellung eingespielt wird.
     Nur mit Einrichtungscode, nur ohne Konto und nur, wenn etwas vorgemerkt ist."""

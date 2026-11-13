@@ -7,7 +7,7 @@ import errno
 import socket
 
 import asyncssh
-from nodvard_sdk.errors import HostUnreachable
+from nodvard_sdk.errors import HostUnreachable, error_message
 
 _NO_ROUTE = frozenset({errno.ENETUNREACH, errno.EHOSTUNREACH, errno.ENETDOWN, errno.EHOSTDOWN})
 
@@ -22,9 +22,7 @@ def _where(address: str | None, port: int | None) -> str:
 def describe_connection_error(
     exc: BaseException, *, address: str | None = None, port: int | None = None, network: bool = False
 ) -> str:
-    """Deutscher Satz zu einem Verbindungsfehler, nie leer (`str(TimeoutError())` ist es, andere Texte sind englisch).
-    `network=True`: `exc` entstand beim Verbindungsaufbau, dann ist auch ein sonst unbekannter `OSError` ein Netzfehler
-    ("Multiple exceptions: ..." bei mehreren Adressen) und sein Text bleibt als Zusatz stehen, er nennt nur Adressen."""
+    """Verständlicher Verbindungsfehler; `network=True` kennzeichnet Fehler beim Verbindungsaufbau."""
     text = str(exc).strip()
     if getattr(exc, "readable", False) and text:
         return text
@@ -36,20 +34,12 @@ def describe_connection_error(
     if isinstance(exc, socket.gaierror):
         return f"Den Namen {address} kennt das Netz nicht." if address else "Der Servername ist dem Netz unbekannt."
     if isinstance(exc, (asyncssh.ConnectionLost, asyncssh.DisconnectError, ConnectionError)):
-        # Der Originaltext (oft englisch, bei einer eigenen Quelle auch mal deutsch) bleibt als Zusatz stehen.
-        return f"Die Verbindung zum Server ist abgebrochen ({text})." if text else "Die Verbindung zum Server ist abgebrochen."
+        return error_message(exc, "Die Verbindung zum Server ist abgebrochen.")
     if isinstance(exc, OSError) and exc.errno in _NO_ROUTE:
         return f"Kein Weg zum Server{_where(address, port)}. Stimmt die Adresse, und ist er im selben Netz?"
     if isinstance(exc, OSError) and network:
-        where = _where(address, port)
-        return f"Keine Verbindung zum Server{where}: {text}" if text else f"Keine Verbindung zum Server{where}."
-    if isinstance(exc, OSError):
-        # Ein Dateifehler (PermissionError o. Ä.) hat mit dem Netz nichts zu tun, sein Text nennt Pfade des Servers
-        # ("[Errno 13] Permission denied: /app/data/..."): Die Person bekommt nur den Namen der Ausnahme, der volle Text
-        # steht im Protokoll.
-        return type(exc).__name__
-    # Alles andere: der eigene Text, sonst der Name der Ausnahme.
-    return text or type(exc).__name__
+        return error_message(exc, "Keine Verbindung zum Server.")
+    return error_message(exc)
 
 
 def is_expected_connection_error(exc: BaseException) -> bool:

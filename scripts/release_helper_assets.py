@@ -27,6 +27,7 @@ _NUM = r"(0|[1-9][0-9]{0,8})"
 VERSION_RE = re.compile(rf"{_NUM}\.{_NUM}\.{_NUM}", re.ASCII)
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}", re.ASCII)
 IMAGE_RE = re.compile(r"[a-z0-9]+(\.[a-z0-9-]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+", re.ASCII)
+REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", re.ASCII)
 
 
 class AssetError(Exception):
@@ -47,8 +48,9 @@ def pin_compose(text: str, image: str, digest: str) -> str:
     return "".join(lines)
 
 
-def section(version: str, image: str, digest: str) -> str:
-    return (
+def section(version: str, image: str, digest: str, *, images: tuple[tuple[str, str, str], ...] = (),
+            repository: str = "nodvard/deck") -> str:
+    part = (
         f"{MARKER}\n"
         "## Update-Helfer / Update helper\n\n"
         f"`{image}@{digest}` (Version {version})\n\n"
@@ -56,8 +58,22 @@ def section(version: str, image: str, digest: str) -> str:
         f"`docker buildx imagetools inspect {image}:{version}` (Zeile „Digest“).\n\n"
         f"The file `{COMPOSE_NAME}` attached to this release pins exactly this helper. Compare the digest with "
         f"`docker buildx imagetools inspect {image}:{version}` (line “Digest”).\n"
-        f"{MARKER_END}\n"
     )
+    if images:
+        part += "\n## Bausteinlisten und Herkunft / Components and provenance\n\n"
+        part += "SPDX-JSON und CycloneDX: `<deck|dock|updater>-linux-<amd64|arm64>.spdx.json` / `.cdx.json`.\n\n"
+        part += "| Image | Digest | SLSA-Attestation |\n|---|---|---|\n"
+        for name, source, sha in (*images, ("updater", image, digest)):
+            url = f"https://github.com/{repository}/releases/download/v{version}/{name}.sigstore.json"
+            part += f"| {name} | `{source}@{sha}` | [{name}.sigstore.json]({url}) |\n"
+        part += "\nHerkunft lesen und prüfen / Inspect and verify provenance:\n\n```bash\n"
+        for _, source, sha in (*images, ("updater", image, digest)):
+            part += f"docker buildx imagetools inspect {source}@{sha} --format '{{{{ json .Provenance }}}}'\n"
+            part += (f"gh attestation verify oci://{source}@{sha} --repo {repository} "
+                     f"--signer-workflow {repository}/.github/workflows/release.yml --source-ref refs/tags/v{version}\n")
+        part += ("```\n\nBuildx hängt SBOM und SLSA-Provenance zusätzlich an jedes Image. "
+                 "Buildx also attaches SBOM and SLSA provenance to each image.\n")
+    return part + f"{MARKER_END}\n"
 
 
 def notes(version: str, part: str, notes_dir: Path = NOTES_DIR) -> tuple[str, str]:
@@ -99,10 +115,15 @@ def _check(version: str, image: str, digest: str) -> None:
         raise AssetError(f"Kein Digest der Form sha256:<64 Hex-Zeichen>: {digest!r}.")
 
 
-def write_files(version: str, image: str, digest: str, out: Path) -> None:
+def write_files(version: str, image: str, digest: str, out: Path, *,
+                images: tuple[tuple[str, str, str], ...] = (), repository: str = "nodvard/deck") -> None:
     _check(version, image, digest)
+    for _, source, sha in images:
+        _check(version, source, sha)
+    if REPOSITORY_RE.fullmatch(repository) is None:
+        raise AssetError(f"Kein GitHub-Repository: {repository!r}.")
     pinned = pin_compose(COMPOSE.read_text(encoding="utf-8"), image, digest)
-    part = section(version, image, digest)
+    part = section(version, image, digest, images=images, repository=repository)
     title, body = notes(version, part)
     out.mkdir(parents=True, exist_ok=True)
     (out / COMPOSE_NAME).write_text(pinned, encoding="utf-8")
@@ -128,6 +149,11 @@ def main(argv: list[str] | None = None) -> int:
     files.add_argument("--image", required=True)
     files.add_argument("--digest", required=True)
     files.add_argument("--out", required=True, type=Path)
+    files.add_argument("--deck-image")
+    files.add_argument("--deck-digest")
+    files.add_argument("--dock-image")
+    files.add_argument("--dock-digest")
+    files.add_argument("--repository", default="nodvard/deck")
     combine = commands.add_parser("merge")
     combine.add_argument("--existing", required=True, type=Path)
     combine.add_argument("--section", required=True, type=Path)
@@ -135,7 +161,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "files":
-            write_files(args.version, args.image, args.digest, args.out)
+            images = []
+            for name in ("deck", "dock"):
+                image, digest = getattr(args, f"{name}_image"), getattr(args, f"{name}_digest")
+                if image is not None or digest is not None:
+                    if not image or not digest:
+                        raise AssetError(f"Für {name} fehlen Image oder Digest.")
+                    images.append((name, image, digest))
+            write_files(args.version, args.image, args.digest, args.out, images=tuple(images), repository=args.repository)
         else:
             part = args.section.read_text(encoding="utf-8")
             if not (part.startswith(MARKER) and part.rstrip("\n").endswith(MARKER_END)):

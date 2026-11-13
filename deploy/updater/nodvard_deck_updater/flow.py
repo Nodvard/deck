@@ -798,6 +798,9 @@ class Flow:
         assert found is not None and journal is not None and journal.new is not None
         run.plan = clone.build(found.container, found.image, new_image_id=journal.new.image_id,
                                api_version=self._engine.api_version or API_MIN, network_drivers=found.network_drivers)
+        user = found.container["Config"].get("User")
+        if run.action == "rollback" and user:
+            run.plan.body["User"] = user
 
     def _count(self, run: _Run) -> None:
         """Ab hier ändert sich etwas: die Aktion zählt für die Grenze, gespeichert vor der ersten Änderung."""

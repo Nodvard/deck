@@ -5,7 +5,8 @@
 #
 #   docker buildx build -f deploy/Dockerfile --platform linux/amd64,linux/arm64 -t nodvard-deck:latest .
 #
-# Nur einige Module (z. B. für ein Einzelprodukt), durch Kommas getrennt; ohne Angabe kommen alle mit:
+# Nur einige Module (z. B. für ein Einzelprodukt), durch Kommas getrennt; ohne Angabe kommen die Standardmodule mit:
+# network und hello-world bleiben im Quellbaum für eigene Builds und SDK-Beispiele.
 #
 #   docker buildx build -f deploy/Dockerfile --build-arg NODVARD_DECK_EXTENSIONS=docker -t nodvard-docker:test .
 #
@@ -67,6 +68,8 @@ WORKDIR /app
 # absichern -- das bringt seine eigenen ENV-Werte mit -- und bei jedem Start die Warnung
 # "alte Namen" auslösen.
 ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HOME=/app \
     PIP_NO_CACHE_DIR=1 \
     NODVARD_DECK_ENV=prod \
     NODVARD_DECK_LOG_JSON=true \
@@ -78,12 +81,18 @@ ENV PYTHONUNBUFFERED=1 \
 # bleibt trotzdem nutzbar, siehe ocr.py/__init__.py::_run_ocr()s Fehler-Isolation,
 # nur eben ohne erkannten Text). `-deu` zusätzlich zu `-eng`, Homelab-Kontext ist
 # deutschsprachig (siehe ocr.py::_OCR_LANGS_PRIMARY).
-# Nur, wenn das Modul documents mitkommt (ohne Angabe kommen alle Module mit). Vor den
+# Nur, wenn das Modul documents mitkommt (ohne Angabe kommen die Standardmodule mit). Vor den
 # pip-Schritten, damit eine Änderung am Backend apt nicht jedes Mal neu laufen lässt.
 ARG NODVARD_DECK_EXTENSIONS=""
-# Ein neuer Wert holt die Pakete frisch: Sonst bliebe diese Schicht samt ihrem Stand der Debian-Sicherheitsupdates im
-# Build-Cache, bis sich das Basis-Image ändert. Der Release-Job setzt die Nummer seines Laufs.
+# Ein neuer Wert holt die Pakete frisch, wenn der erste Befehl ihn liest. Sonst bliebe diese Schicht samt ihrem Stand
+# der Debian-Sicherheitsupdates im Build-Cache, bis sich das Basis-Image ändert. Der Release-Job setzt die Nummer
+# seines Laufs.
+# Der erste Schritt spielt alle Debian-Sicherheitsupdates der Basis-Pakete ein (z. B. zlib1g), auch wenn das
+# Basis-Image noch den alten Stand hat; der zweite holt die Pakete für documents nur, wenn das Modul mitkommt.
 ARG APT_REFRESH=""
+RUN echo "${APT_REFRESH}" >/dev/null \
+    && apt-get update && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 RUN case ",${NODVARD_DECK_EXTENSIONS:-documents}," in \
       *,documents,*) apt-get update && apt-get install --no-install-recommends -y \
           tesseract-ocr tesseract-ocr-deu \
@@ -135,9 +144,7 @@ RUN mkdir -p /app/data \
     && chmod 700 /app/data
 # Docker initialisiert ein frisches BENANNTES Volume aus dem Inhalt (inkl. Ownership)
 # des Image-Pfads, an dem es zum ersten Mal gemountet wird -- deshalb reicht dieses
-# `chown` VOR `VOLUME` für den Normalfall. Ein Bind-Mount von einem Host-Verzeichnis
-# bringt seine eigene Ownership mit; die setzt deploy/entrypoint.sh beim Start selbst
-# (siehe dort).
+# `chown` VOR `VOLUME` für den Normalfall. Bestehende Datenordner übernimmt der Entrypoint.
 VOLUME /app/data
 
 # Ohne diesen Entrypoint startet uvicorn gegen ein unmigriertes Volume und stirbt sofort mit
@@ -155,14 +162,9 @@ VOLUME /app/data
 COPY deploy/entrypoint.sh /entrypoint.sh
 RUN chmod 755 /entrypoint.sh
 
-# Bewusst KEIN `USER lattice` mehr: Der Container startet als root, damit der Entrypoint dem
-# Datenordner /app/data die richtigen Besitzrechte geben kann (eingebundene NAS-/Host-Ordner
-# gehören oft root oder einem anderen Benutzer). Er wechselt mit `setpriv` zu `lattice`, BEVOR
-# Migration und Anwendung starten -- beide laufen nie als root (Einzelheiten in entrypoint.sh).
-# Läuft der Container mit `user:` (Compose) oder unter Kubernetes schon als Nicht-root,
-# bleibt alles wie früher. Bauzeit-Prüfung: Fehlt setpriv im Basis-Image, scheitert schon der
-# Build und nicht erst der Start beim Nutzer.
+# Der Entrypoint gibt vor Migration und Anwendung die Rechte ab.
 RUN setpriv --reuid=1000 --regid=1000 --clear-groups --no-new-privs true
+COPY --chmod=755 deploy/migrate-data.sh /usr/local/bin/migrate-data
 
 # Herkunft des Images: `.github/workflows/release.yml` setzt `VERSION` (z. B. 0.6.0 oder 0.6.0-rc1) und
 # `IMAGE` (ghcr.io/nodvard/deck, ohne Tag). Daran erkennt "Nach Updates suchen", ob das offizielle Image
@@ -179,14 +181,13 @@ ARG IMAGE=""
 ARG EDITION=""
 RUN python -m nodvard_deck.image_info /app/image-info.json
 
+USER 0:0
 EXPOSE 8080
 
 # `--start-period=300s`: vor dem Start der Anwendung läuft die Migration samt Kopie der Datenbank (`nodvard_deck.boot`);
 # bei einer großen Datenbank auf einem Pi dauert das Minuten. Während der Karenzzeit zählen Fehlschläge nicht,
 # der Container gilt nicht als "unhealthy". Die Notseite antwortet mit 503, der Check schlägt dann an.
-# Der Check läuft als root (das Image hat bewusst kein `USER`, siehe oben). `python -I` (isoliert) nimmt den
-# aktuellen Ordner nicht in den Suchpfad auf und ignoriert PYTHON*-Umgebungsvariablen und das Benutzerverzeichnis
-# für Pakete: so kann nichts, was jemand neben das Programm legt, mit root-Rechten geladen werden.
+# Der Check läuft mit dem Startbenutzer des Containers.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=300s --retries=3 \
     CMD python -I -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health', timeout=2)" || exit 1
 

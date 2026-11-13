@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from fastapi import HTTPException, Request, status
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field, model_validator
 from starlette.requests import ClientDisconnect
 
 from ...config import Settings
@@ -19,11 +19,12 @@ from ...core.backup.errors import BackupError
 from ...services import backups as backups_service
 from ...services import restore as restore_service
 from ...services.restore import Scope
+from ..models import RequestModel
 
 OCTET_STREAM = "application/octet-stream"
 
 
-class RestoreInspectIn(BaseModel):
+class RestoreInspectIn(RequestModel):
     """Genau eines von beiden: das Sicherungspasswort bzw. Einmal-Passwort der Datei, oder der
     Wiederherstellungsschlüssel (`AGE-SECRET-KEY-1...`)."""
 
@@ -43,7 +44,7 @@ class RestoreInspectIn(BaseModel):
         return self.password or ""
 
 
-class RestoreScheduleIn(BaseModel):
+class RestoreScheduleIn(RequestModel):
     sign_out_all: bool = True
     """Alle Anmeldungen beenden (Standard). Sonst würden Sitzungen aus der Zeit der Sicherung wieder gelten."""
 

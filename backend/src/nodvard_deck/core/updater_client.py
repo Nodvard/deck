@@ -5,6 +5,7 @@ Nur die Leitung, keine Entscheidung (verbindlich entscheidet der Helfer); import
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import math
 import os
@@ -16,7 +17,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import updates
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from . import updater_signing, updates
 
 # ---------------------------------------------------------------------------
 # Protokoll (gleich dem Helfer)
@@ -36,6 +39,9 @@ REQUEST_VERSION = 1
 """Version der Anforderung (Feld `v`) ohne Freigabe; der Rückweg bleibt immer dabei."""
 SIGNED_REQUEST_VERSION = 2
 """Ein Update mit Freigabe und Signatur; nur an einen Helfer, der `2` in `request_versions` nennt."""
+AUTHENTICATED_REQUEST_VERSION = 3
+"""Update oder Rückweg, signiert mit dem Schlüssel der Installation; ein neuer Helfer führt nur diese aus."""
+REQUEST_DOMAIN = b"nodvard-deck-update-request-v1\0"
 
 STATUS_NAME = "status.json"
 REQUESTS_DIR = "requests"
@@ -432,9 +438,9 @@ def pending_requests(updater_dir: Path, *, expected_uid: int | None = None) -> l
 
 
 def encode_request(*, request_id: str, action: str, version: str, created_at: int, digest: str | None = None,
-                   grant: dict[str, Any] | None = None) -> bytes:
-    """Die Anforderung als kompaktes ASCII-JSON: die fünf Schlüssel, bei einem Update auf Wunsch dazu `digest`, mit
-    einer Freigabe (`{"grant": ..., "sig": ...}` aus der Update-Suche) als `v: 2`."""
+                   grant: dict[str, Any] | None = None, signing_key: Ed25519PrivateKey | None = None) -> bytes:
+    """Kompaktes ASCII-JSON: mit Freigabe als `v: 2`, mit Installationsschlüssel als signiertes `v: 3` (Update mit
+    Freigabe, Rückweg ohne)."""
     if not is_request_id(request_id) or action not in ACTIONS or not is_version(version) or not _int(created_at):
         raise ValueError("ungueltige Anforderung")
     if digest is not None and (action != "update" or not isinstance(digest, str) or not DIGEST_RE.fullmatch(digest)):
@@ -448,6 +454,13 @@ def encode_request(*, request_id: str, action: str, version: str, created_at: in
                                                          digest=digest):
             raise ValueError("Freigabe passt nicht")
         body.update(v=SIGNED_REQUEST_VERSION, grant=grant["grant"], sig=grant["sig"])
+    if signing_key is not None:
+        if (action == "update") != (grant is not None):
+            raise ValueError("Freigabe fehlt" if action == "update" else "Rueckweg ohne Freigabe")
+        body.update(v=AUTHENTICATED_REQUEST_VERSION,
+                    request_key_id=hashlib.sha256(updater_signing.public_key(signing_key)).hexdigest()[:16])
+        signed = json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
+        body["request_sig"] = signing_key.sign(REQUEST_DOMAIN + signed).hex()
     data = json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
     if len(data) > REQUEST_MAX_BYTES:
         raise ValueError("Anforderung zu gross")
@@ -464,6 +477,7 @@ def write_request(
     expected_uid: int | None = None,
     digest: str | None = None,
     grant: dict[str, Any] | None = None,
+    signing_key: Ed25519PrivateKey | None = None,
 ) -> dict[str, Any]:
     """Schreibt eine Anforderung atomar mit Modus 0644 und gibt sie zurück; nur Owner-Code ruft das auf.
 
@@ -473,7 +487,7 @@ def write_request(
     request_id = request_id or str(uuid.uuid4())
     created_at = int(time.time() if now is None else now)
     data = encode_request(request_id=request_id, action=action, version=version, created_at=created_at, digest=digest,
-                          grant=grant)
+                          grant=grant, signing_key=signing_key)
     uid = _expected_uid(expected_uid)
     root_fd = _open_root(Path(updater_dir), uid)
     try:

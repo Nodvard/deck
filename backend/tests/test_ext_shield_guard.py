@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from exec_gate_helpers import ReadingExec
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "extensions" / "shield" / "src"))
 
@@ -213,7 +214,7 @@ def test_ban_route_refuses_injected_addresses_before_proposing():
         proposed.append(req)
         return SimpleNamespace(action_id="a1", status=SimpleNamespace(value="proposed"))
 
-    ctx = SimpleNamespace(api=SimpleNamespace(current_actor=lambda: Actor.user("u1", "anna")), hosts=SimpleNamespace(get=_get),
+    ctx = SimpleNamespace(api=SimpleNamespace(current_actor=lambda: Actor.user("u1", "anna"), require_permission=lambda permission: lambda: None), hosts=SimpleNamespace(get=_get),
                           actions=SimpleNamespace(propose=_propose))
     _, manage = build_routers(ctx, SimpleNamespace())
     app = FastAPI()
@@ -339,7 +340,7 @@ class _Ctx:
         self._host = Host(id="h1", name="pve2", display_name="pve2", address="10.0.0.2")
         self.settings = SimpleNamespace(get=self._settings)
         self.hosts = SimpleNamespace(list=self._list, get=self._get)
-        self.exec = SimpleNamespace(run=self._run)
+        self.exec = ReadingExec(ext_id="shield", run=self._run)
         self.db = SimpleNamespace(session=self._session)
         self.audit = SimpleNamespace(log=self._audit)
         self.notify = SimpleNamespace(send=self._notify)
@@ -738,7 +739,7 @@ def test_acknowledge_routes_say_what_stays_open():
         hosts_asked.append(host_id)
         return 3, 1
 
-    ctx = SimpleNamespace(api=SimpleNamespace(current_actor=lambda: Actor.user("u1", "anna")))
+    ctx = SimpleNamespace(api=SimpleNamespace(current_actor=lambda: Actor.user("u1", "anna"), require_permission=lambda permission: lambda: None))
     guard = SimpleNamespace(acknowledge=acknowledge, acknowledge_all=acknowledge_all)
     _, manage = build_routers(ctx, SimpleNamespace(), guard=guard)
     app = FastAPI()
@@ -846,7 +847,7 @@ def test_security_widget_combines_updates_and_guard():
         async def list_events(self, limit=4):
             return [{"title": "Neuer offener Port: 4444/tcp (nc)", "host_name": "pve2", "kind_label": "Neuer offener Port", "severity": "warning"}]
 
-    ctx = SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None))
+    ctx = SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None, require_permission=lambda permission: lambda: None))
     read, _ = build_routers(ctx, object(), _Upd(), _Guard())
     app = FastAPI()
     app.include_router(read)

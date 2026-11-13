@@ -55,6 +55,10 @@ def _check_components(root: Path, target: Path, *, create: bool) -> None:
             raise TargetNotAllowed(f"{current} ist kein Ordner.")
 
 
+class TargetNotWritable(TargetNotAllowed):
+    """Der Sicherungsordner erlaubt keinen Schreibzugriff."""
+
+
 def _not_writable(target: Path) -> str:
     text = f"In {target} darf Nodvard Deck nicht schreiben."
     if not hasattr(os, "getuid"):
@@ -111,7 +115,7 @@ def resolve_target(raw: str | None, data_dir: Path, *, create: bool = True) -> P
     if os.path.realpath(target) != str(target):
         raise TargetNotAllowed(f"{target} zeigt über eine Verknüpfung woandershin.")
     if not os.access(target, os.W_OK | os.X_OK):
-        raise TargetNotAllowed(_not_writable(target), summary=f"In {target} darf Nodvard Deck nicht schreiben.")
+        raise TargetNotWritable(_not_writable(target), summary=f"In {target} darf Nodvard Deck nicht schreiben.")
     if target == default:
         with contextlib.suppress(OSError):
             os.chmod(target, DIR_MODE)

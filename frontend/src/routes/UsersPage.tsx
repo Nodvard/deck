@@ -1,8 +1,4 @@
-/**
- * Benutzerverwaltung unter Einstellungen -> Benutzer (`/settings/users`): Konten
- * anlegen, bearbeiten (Name, E-Mail, Rollen, Passwort zurücksetzen), sperren und
- * entfernen. Ruft die `users.py`-API (backend/src/nodvard_deck/api/v1/users.py).
- */
+/** Konten unter /settings/users anlegen, bearbeiten, sperren und entfernen. */
 import { Pencil, Plus, UserPlus } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -336,7 +332,7 @@ export function UsersPage(): JSX.Element {
                   </div>
                 </div>
                 {canWrite && (
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <Button onClick={() => setEditingId(editingId === user.id ? null : user.id)}><Pencil size={13} /> Bearbeiten</Button>
                     {user.totp_enabled && !user.is_owner && user.id !== currentUserId && (
                       <Button onClick={() => { closeReset(); setResetTarget(user); }}>Zwei-Faktor zurücksetzen</Button>

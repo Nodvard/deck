@@ -107,17 +107,16 @@ def _pretty(normalized: str) -> str:
 
 
 def banner(code: str, product: str = "Nodvard Deck") -> str:
-    """Auffälliger Protokoll-Block für den Start (Code zusätzlich allein in einer Zeile); die Zeile
-    `Einrichtungscode: ...` bleibt unverändert, weil Doku und `grep` sich darauf verlassen."""
-    line = "=" * 64
-    return (
-        f"\n{line}\n"
-        f"  {product} – Ersteinrichtung\n"
-        f"  Einrichtungscode: {code} – im Browser eingeben\n"
-        "\n"
-        f"      {code}\n"
-        "\n"
-        "  (Es gibt noch kein Konto. Ohne diesen Code kann niemand das erste\n"
-        "   Konto anlegen. Er verschwindet, sobald die Einrichtung fertig ist.)\n"
-        f"{line}\n"
-    )
+    """Umrahmte Box im Protokoll; `Einrichtungscode: ...` bleibt für die Filter in der Anleitung erhalten."""
+    rows = [
+        f"{product}: Ersteinrichtung",
+        f"Einrichtungscode: {code} (im Browser eingeben)",
+        "",
+        code,
+        "",
+        "Es gibt noch kein Konto. Ohne diesen Code kann niemand das erste",
+        "Konto anlegen. Nach der Einrichtung ist der Code wirkungslos.",
+    ]
+    width = max(map(len, rows))
+    frame = "+" + "=" * (width + 2) + "+"
+    return "\n" + "\n".join([frame, *(f"| {row.ljust(width)} |" for row in rows), frame]) + "\n"

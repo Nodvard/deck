@@ -612,7 +612,7 @@ async def test_every_other_host_route_says_why_on_an_operate_host(client, db_ses
     monkeypatch.setattr(docker_on.handle, "run", run)
     monkeypatch.setattr(docker_on.handle, "run_argv", run_argv, raising=False)
     monkeypatch.setattr(docker_on.handle, "sftp", sftp)
-    values = {"host_id": host.id, "container": "web", "project": "shop", "entry_id": "1", "name": "hub", "stamp": "20261016-120000"}
+    values = {"host_id": host.id, "container": "web", "project": "shop", "entry_id": "1", "name": "hub", "stamp": "20261016-120000", "action_id": "a1"}
     seen = set()
     for route in _routes(get_extension_runtime().loaded["docker"].router.routes):
         if "{host_id}" not in route.path:
@@ -652,14 +652,16 @@ def test_the_script_ignores_docker_settings_from_the_environment(tmp_path):
 @pytest.mark.skipif(sys.platform == "win32" or shutil.which("docker") is None, reason="braucht die Docker-CLI unter Linux")
 def test_a_context_of_root_does_not_change_the_daemon(tmp_path):
     shells = _shells()
+    docker_cli = shutil.which("docker")
+    assert docker_cli is not None
     home = tmp_path / "root"
     home.mkdir()
     cli = {"PATH": "/usr/bin:/bin", "HOME": str(home)}
     for args in (["context", "create", "fremd", "--docker", "host=tcp://127.0.0.1:1"], ["context", "use", "fremd"]):
-        assert subprocess.run(["docker", *args], capture_output=True, timeout=30, check=False, env=cli).returncode == 0
+        assert subprocess.run([docker_cli, *args], capture_output=True, timeout=30, check=False, env=cli).returncode == 0
     copy = tmp_path / "docker-root.sh"
     copy.write_text(SCRIPT.read_text(encoding="ascii")
-                    .replace("PATH=/usr/sbin:/usr/bin:/sbin:/bin", f"PATH={shutil.which('docker').rsplit('/', 1)[0]}:/usr/bin:/bin")
+                    .replace("PATH=/usr/sbin:/usr/bin:/sbin:/bin", f"PATH={docker_cli.rsplit('/', 1)[0]}:/usr/bin:/bin")
                     .replace("HOME=/root", f"HOME={home}"), encoding="ascii")
     for shell in shells:
         done = subprocess.run([shell, str(copy), "ps"], capture_output=True, text=True, timeout=30, check=False, env={})

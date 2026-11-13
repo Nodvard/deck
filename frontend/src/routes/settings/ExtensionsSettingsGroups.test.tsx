@@ -1,3 +1,4 @@
+import { mobileLayout } from "../../test/mobileLayout";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -99,3 +100,10 @@ describe("Einstellungen → Erweiterungen: Gruppen", () => {
     expect(screen.queryByText("Für Entwickler")).toBeNull();
   });
 });
+
+it("390 px: Erweiterungen stapeln Beschreibung und Aktionen", async () => {
+  renderList();
+  const row = await screen.findByTestId("ext-system");
+  expect(row).toHaveClass("flex-col", "sm:flex-row", "items-start", "sm:items-center");
+  await mobileLayout(row);
+}, 30000);

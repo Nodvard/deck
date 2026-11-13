@@ -104,9 +104,7 @@ def canonical_repo(repo: str) -> str:
 
 
 def is_official_hub_repo(repo: str) -> bool:
-    """Docker Hub ohne Namespace und ohne eigene Registry, also ein offizielles `library/`-Image
-    (`lattice`, `library/lattice`, `docker.io/library/lattice`). Nach `canonical_repo` bleibt dann kein Schrägstrich
-    übrig; `someuser/lattice`, `ghcr.io/x` und `registry.local:5000/x` behalten ihren."""
+    """Erkennt offizielle Docker-Hub-Images wie `nginx`, `library/nginx` und `docker.io/library/nginx`."""
     return "/" not in canonical_repo(repo)
 
 
@@ -495,7 +493,8 @@ class ImageUpdateService:
 
     async def _exec(self, host: Any, command: str, timeout_s: int) -> Any:
         try:
-            return await self._ctx.exec.run(host, command, timeout_s=timeout_s)
+            with self._ctx.exec.read_access(host, timeout_s=timeout_s):
+                return await self._ctx.exec.run(host, command, timeout_s=timeout_s)
         except Exception as exc:
             raise HostProblem(f"Nicht erreichbar: {exc}") from exc
 
@@ -542,7 +541,8 @@ class ImageUpdateService:
         if not names:
             return
         try:
-            hints = await self.apply_hints(host, names)
+            with self._ctx.exec.read_access(host):
+                hints = await self.apply_hints(host, names)
         except Exception:  # noqa: BLE001 - die Prüfung selbst ist wichtiger als der Hinweis
             log.exception("image_updates_apply_hints_failed host=%s", host.id)
             return

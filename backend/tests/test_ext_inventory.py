@@ -215,6 +215,23 @@ async def test_items_search_and_filter(client, db_session, test_settings):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("content_type", ["image/png", "image/jpeg", "image/webp"])
+@pytest.mark.parametrize("content", [b"", b"<html><script>document.cookie</script></html>"])
+async def test_image_upload_checks_the_content_type(client, db_session, test_settings, content_type, content):
+    token = await _enable_inventory(client, db_session, test_settings)
+    headers = _auth_header(token)
+    item = await client.post("/api/v1/ext/inventory/items", json={"name": "Kamera"}, headers=headers)
+    item_id = item.json()["id"]
+    response = await client.post(
+        f"/api/v1/ext/inventory/items/{item_id}/images", content=content,
+        headers={**headers, "Content-Type": content_type},
+    )
+    assert response.status_code == 422
+    stored = await client.get(f"/api/v1/ext/inventory/items/{item_id}", headers=headers)
+    assert stored.json()["images"] == []
+
+
+@pytest.mark.asyncio
 async def test_item_image_upload_serve_and_delete_round_trip(client, db_session, test_settings):
     token = await _enable_inventory(client, db_session, test_settings)
     headers = _auth_header(token)
@@ -269,7 +286,7 @@ async def test_an_image_row_from_a_forged_backup_cannot_reach_out(client, db_ses
     item = await client.post("/api/v1/ext/inventory/items", json={"name": "Kamera"}, headers=headers)
     item_id = item.json()["id"]
     uploaded = await client.post(
-        f"/api/v1/ext/inventory/items/{item_id}/images", content=b"\x89PNG-bild", headers={**headers, "Content-Type": "image/png"},
+        f"/api/v1/ext/inventory/items/{item_id}/images", content=b"\x89PNG\r\n\x1a\n-bild", headers={**headers, "Content-Type": "image/png"},
     )
     image_id = uploaded.json()["id"]
     secret = test_settings.ext_data_dir / "geheim.txt"
@@ -290,7 +307,7 @@ async def _image(client, headers) -> tuple[str, str]:
     item = await client.post("/api/v1/ext/inventory/items", json={"name": "Kamera"}, headers=headers)
     item_id = item.json()["id"]
     uploaded = await client.post(
-        f"/api/v1/ext/inventory/items/{item_id}/images", content=b"\x89PNG-bild", headers={**headers, "Content-Type": "image/png"},
+        f"/api/v1/ext/inventory/items/{item_id}/images", content=b"\x89PNG\r\n\x1a\n-bild", headers={**headers, "Content-Type": "image/png"},
     )
     return item_id, uploaded.json()["id"]
 
@@ -365,7 +382,7 @@ async def test_an_images_folder_that_is_a_link_keeps_working(client, db_session,
     assert len(list(elsewhere.iterdir())) == 1
 
     served = await client.get(f"/api/v1/ext/inventory/items/{item_id}/images/{image_id}", headers=headers)
-    assert (served.status_code, served.content) == (200, b"\x89PNG-bild")
+    assert (served.status_code, served.content) == (200, b"\x89PNG\r\n\x1a\n-bild")
     assert (await client.delete(f"/api/v1/ext/inventory/items/{item_id}/images/{image_id}", headers=headers)).status_code == 204
     assert list(elsewhere.iterdir()) == []
 
@@ -397,7 +414,7 @@ async def test_deleting_an_item_removes_its_image_file_from_disk(client, db_sess
 
     uploaded = await client.post(
         f"/api/v1/ext/inventory/items/{item_id}/images",
-        content=b"bild-inhalt", headers={**headers, "Content-Type": "image/png"},
+        content=b"\x89PNG\r\n\x1a\nbild-inhalt", headers={**headers, "Content-Type": "image/png"},
     )
     assert uploaded.status_code == 201
 

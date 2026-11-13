@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from exec_gate_helpers import ReadingExec
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "extensions" / "shield" / "src"))
 
@@ -94,12 +95,12 @@ class _Ctx:
         self._host = Host(id="h1", name="docker-vm", display_name="Docker-VM", address="192.168.2.20")
         self.settings = SimpleNamespace(get=self._settings)
         self.hosts = SimpleNamespace(list=self._list, get=self._get)
-        self.exec = SimpleNamespace(run=self._run)
+        self.exec = ReadingExec(ext_id="shield", run=self._run)
         self.db = SimpleNamespace(session=self._session)
         self.audit = SimpleNamespace(log=self._audit)
         self.notify = SimpleNamespace(send=self._notify)
         self.ws = SimpleNamespace(broadcast=self._ws)
-        self.api = SimpleNamespace(current_actor=lambda: None)
+        self.api = SimpleNamespace(current_actor=lambda: None, require_permission=lambda permission: lambda: None)
 
     async def _settings(self):
         return {}
@@ -383,7 +384,8 @@ async def test_on_start_loads_running_audits_before_the_first_request(clock):
 
     def _spawn(coro, name=None):
         spawned.append(name)
-        coro.close()
+        if asyncio.iscoroutine(coro):
+            coro.close()
 
     ctx.spawn = _spawn
     ctx.requirements = []

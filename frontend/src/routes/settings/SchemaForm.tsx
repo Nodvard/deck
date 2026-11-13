@@ -7,6 +7,7 @@ import { ChevronDown, ChevronRight, Dices, Plus, Trash2, X } from "lucide-react"
 import { useState } from "react";
 
 import { SchedulePicker } from "../../../../extensions/_shared/frontend/src/SchedulePicker";
+import { leavesLocalNetwork } from "../../lib/networkTarget";
 import { HostWidget, RemoteSelect } from "./SchemaWidgets";
 import { Button, Toggle, inputClass } from "./ui";
 
@@ -21,6 +22,8 @@ export interface JsonSchema {
   items?: JsonSchema;
   "x-advanced"?: boolean;
   "x-hidden"?: boolean;
+  "x-visible-when"?: Record<string, unknown>;
+  "x-network-warning"?: boolean;
   "x-item-title"?: string;
   "x-enum-labels"?: Record<string, string>;
   /** Gelber Hinweis unter der Überschrift, etwa wenn das Feld Schutz abschaltet. */
@@ -46,6 +49,8 @@ export interface JsonSchema {
   maximum?: number;
   /** Kopfebene: die Erweiterung kann Nachrichten senden -> Knopf "Testnachricht senden". */
   "x-test-message"?: boolean;
+  "x-connection-test-url"?: string;
+  "x-connection-test-targets"?: { value: string; label: string }[];
   /** Textfeld: Knopf, der `prefix` plus `length` zufällige Zeichen (a-z, 0-9) einsetzt; das Ergebnis muss zum
    * `pattern` passen. */
   "x-generate"?: { label?: string; prefix?: string; length?: number };
@@ -53,11 +58,13 @@ export interface JsonSchema {
   "x-qr-url"?: string;
 }
 
-function FieldWarning({ schema }: { schema: JsonSchema }) {
-  if (!schema["x-warning"]) return null;
+function FieldWarning({ schema, value }: { schema: JsonSchema; value?: unknown }) {
+  const networkWarning = schema["x-network-warning"] && leavesLocalNetwork(value);
+  if (!schema["x-warning"] && !networkWarning) return null;
   return (
     <p role="note" className="mt-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
       {schema["x-warning"]}
+      {networkWarning && <span className="block">Daten verlassen dein Netz</span>}
     </p>
   );
 }
@@ -114,7 +121,7 @@ function fieldError(schema: JsonSchema, value: unknown): string | null {
 export function validateValues(schema: JsonSchema, values: Values, prefix = ""): string[] {
   const out: string[] = [];
   for (const [key, sub] of Object.entries(schema.properties ?? {})) {
-    if (sub["x-hidden"]) continue;
+    if (sub["x-hidden"] || !schemaVisible(sub["x-visible-when"], schema, values)) continue;
     const value = values[key];
     const name = `${prefix}${labelOf(key, sub)}`;
     const message = fieldError(sub, value);
@@ -171,6 +178,12 @@ export function generateText(schema: JsonSchema): string | null {
 
 type Values = Record<string, unknown>;
 
+export function schemaVisible(condition: Record<string, unknown> | undefined, schema: JsonSchema, values: Values): boolean {
+  return Object.entries(condition ?? {}).every(([key, expected]) =>
+    (values[key] ?? schema.properties?.[key]?.default) === expected,
+  );
+}
+
 function labelOf(key: string, schema: JsonSchema): string {
   return schema.title ?? key.replace(/_/g, " ");
 }
@@ -184,7 +197,7 @@ export function SchemaFields({
   idPrefix?: string;
 }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const entries = Object.entries(schema.properties ?? {}).filter(([, s]) => !s["x-hidden"]);
+  const entries = Object.entries(schema.properties ?? {}).filter(([, s]) => !s["x-hidden"] && schemaVisible(s["x-visible-when"], schema, values));
   const basic = entries.filter(([, s]) => !s["x-advanced"]);
   const advanced = entries.filter(([, s]) => s["x-advanced"]);
   const required = new Set(schema.required ?? []);
@@ -244,7 +257,7 @@ function FieldFor({
         {required && <span className="ml-0.5 text-[var(--color-accent)]" title="Pflichtfeld">*</span>}
       </label>
       {schema.description && <p className="mt-0.5 text-xs text-white/45">{schema.description}</p>}
-      <FieldWarning schema={schema} />
+      <FieldWarning schema={schema} value={value ?? schema.default} />
     </div>
   );
   const fallback = schema.default;

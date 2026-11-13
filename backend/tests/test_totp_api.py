@@ -100,6 +100,42 @@ async def test_totp_full_lifecycle(client):
 
 
 @pytest.mark.asyncio
+async def test_totp_activation_permanently_completes_the_setup_reminder(client):
+    token = await _bootstrap_and_login(client)
+    headers = _auth_header(token)
+    await client.patch("/api/v1/me/preferences", json={"totp_setup_skipped": True}, headers=headers)
+
+    setup = await client.post(
+        "/api/v1/me/totp/setup", json={"current_password": "correct-horse-battery"}, headers=headers
+    )
+    assert setup.status_code == 200, setup.text
+    assert (await client.get("/api/v1/me/preferences", headers=headers)).json()["totp_reminder_dismissed"] is False
+
+    # Ein begonnener oder falsch bestätigter Versuch reicht noch nicht.
+    wrong = await client.post("/api/v1/me/totp/confirm", json={"code": "abcdef"}, headers=headers)
+    assert wrong.status_code == 400, wrong.text
+    assert (await client.get("/api/v1/me/preferences", headers=headers)).json()["totp_reminder_dismissed"] is False
+
+    confirm = await client.post(
+        "/api/v1/me/totp/confirm", json={"code": setup_confirm_code(setup.json()["secret"])}, headers=headers
+    )
+    assert confirm.status_code == 200, confirm.text
+    assert (await client.get("/api/v1/me", headers=headers)).json()["totp_enabled"] is True
+    completed = (await client.get("/api/v1/me/preferences", headers=headers)).json()
+    assert completed["totp_setup_skipped"] is True
+    assert completed["totp_reminder_dismissed"] is True
+
+    disable = await client.request(
+        "DELETE", "/api/v1/me/totp",
+        json={"current_password": "correct-horse-battery", "totp_code": confirm.json()["recovery_codes"][0]},
+        headers=headers,
+    )
+    assert disable.status_code == 204, disable.text
+    assert (await client.get("/api/v1/me", headers=headers)).json()["totp_enabled"] is False
+    assert (await client.get("/api/v1/me/preferences", headers=headers)).json()["totp_reminder_dismissed"] is True
+
+
+@pytest.mark.asyncio
 async def test_mfa_token_cannot_be_used_as_access_token(client):
     """Der `typ`-Claim (docs/00 D-07-Praezisierung) verhindert, dass ein kurzlebiges
     MFA-Zwischentoken faelschlich als Bearer-Access-Token akzeptiert wird."""

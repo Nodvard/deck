@@ -70,13 +70,13 @@ describe("apiFetch Fehlermeldungen", () => {
 });
 
 /**
- * Waehrend der Container nach einem Deploy neu startet, ist das Token meist noch gueltig:
+ * Während der Container nach einem Deploy neu startet, ist das Token meist noch gültig:
  * normale Anfragen bekommen dann gar keine Antwort (TypeError von fetch) oder eine
- * Fehlerseite vom Proxy (502/503/504) -- beides soll die verstaendliche Meldung zeigen
+ * Fehlerseite vom Proxy (502/503/504) -- beides soll die verständliche Meldung zeigen
  * statt "Failed to fetch" oder "HTTP 502".
  */
 describe("apiFetch ohne Antwort des Servers", () => {
-  const UNAVAILABLE = "Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.";
+  const UNAVAILABLE = "Server gerade nicht erreichbar, bitte gleich noch einmal versuchen.";
 
   it("Netzwerkfehler: ApiError 503 mit klarer Meldung, weiter angemeldet", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("Failed to fetch"); }));
@@ -136,11 +136,11 @@ describe("apiFetch ohne Antwort des Servers", () => {
 /**
  * Nach einem Deploy startet der Container neu: das Token ist abgelaufen (401), aber der
  * Refresh bekommt 502/503 oder gar keine Verbindung. Das darf nicht abmelden -- nur die
- * laufende Anfrage scheitert, mit einer verstaendlichen Meldung.
+ * laufende Anfrage scheitert, mit einer verständlichen Meldung.
  */
 describe("apiFetch bei 401 und nicht erreichbarem Server", () => {
   const USER = { id: "u1", username: "nico", display_name: null, email: null, is_owner: true, locale: "de", permissions: ["*"] };
-  const UNAVAILABLE = "Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.";
+  const UNAVAILABLE = "Server gerade nicht erreichbar, bitte gleich noch einmal versuchen.";
 
   function stubApi(refresh: () => Response | Promise<Response>) {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -234,7 +234,7 @@ describe("apiFetch bei 401 und nicht erreichbarem Server", () => {
  */
 describe("apiFetchResponse (rohe Antwort, Erneuerung bei 401)", () => {
   const USER = { id: "u1", username: "nico", display_name: null, email: null, is_owner: true, locale: "de", permissions: ["*"] };
-  const UNAVAILABLE = "Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.";
+  const UNAVAILABLE = "Server gerade nicht erreichbar, bitte gleich noch einmal versuchen.";
 
   /** Alles ausser /auth/refresh antwortet 401, solange das Token nicht "tok-neu" ist. */
   function stubExpiredToken(refresh: () => Response | Promise<Response>) {
@@ -336,7 +336,7 @@ describe("refreshAfterUnauthorized", () => {
     const err = await thrown(refreshAfterUnauthorized());
 
     expect(err.status).toBe(503);
-    expect(err.message).toBe("Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.");
+    expect(err.message).toBe("Server gerade nicht erreichbar, bitte gleich noch einmal versuchen.");
   });
 });
 
@@ -344,6 +344,6 @@ describe("apiErrorFromBody", () => {
   it("Text aus detail, sonst HTTP <Status>, Fehlerseite vom Proxy als nicht erreichbar", () => {
     expect(apiErrorFromBody(413, JSON.stringify({ detail: "Datei zu groß." })).message).toBe("Datei zu groß.");
     expect(apiErrorFromBody(500, "").message).toBe("HTTP 500");
-    expect(apiErrorFromBody(502, "<html>Bad Gateway</html>").message).toBe("Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.");
+    expect(apiErrorFromBody(502, "<html>Bad Gateway</html>").message).toBe("Server gerade nicht erreichbar, bitte gleich noch einmal versuchen.");
   });
 });

@@ -1,5 +1,4 @@
-"""Dauerhafte Warteschlange (`ext_nexus_soc_incident_queue`), die den Batch aus `incidents.py` über einen Neustart
-rettet: Ein Vorfall steht ab dem Erkennen als "offen" darin, `load_open()` holt beim Start den Rest."""
+"""Dauerhafte Warteschlange, aus der `load_open()` offene Vorfälle nach einem Neustart wieder lädt."""
 
 from __future__ import annotations
 

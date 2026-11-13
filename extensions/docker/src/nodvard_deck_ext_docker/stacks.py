@@ -3,6 +3,7 @@ etwas ändern würde, weil die Prüfsumme eines Dienstes in der Datei nicht mehr
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import contextlib
 import hashlib
 import json
@@ -19,6 +20,7 @@ from fastapi import APIRouter, HTTPException, status
 from . import commands
 from .capabilities import is_own_container, parse_stats_line
 from .compose_errors import scrub_compose_output
+from .env_values import with_saved_env
 from .image_apply import (
     LABEL_CONFIG_FILES,
     LABEL_ENV_FILE,
@@ -91,6 +93,9 @@ class Stack:
     """Die Compose-Version, mit der die Container angelegt wurden."""
     portainer_files: tuple[str, ...] = ()
     """Bei `portainer`: die Dateien, wie Portainer sie in seinem eigenen Speicher nennt."""
+    env_names: tuple[str, ...] = ()
+    known_files: tuple[str, ...] = ()
+    """Absolute Dateipfade für den Löschschutz bei fehlendem Arbeitsordner."""
 
 
 def cmd_list(project: str | None = None) -> str:
@@ -115,7 +120,7 @@ def compose_argv(stack: Stack, *args: str, stdin_index: int | None = None) -> li
         argv += ["-f", "-" if index == stdin_index else path]
     for path in stack.env_files:
         argv += ["--env-file", path]
-    return argv + list(args)
+    return with_saved_env(argv + list(args), stack.env_names)
 
 
 def cmd_hashes(stacks: list[Stack], marker: str) -> str:
@@ -163,6 +168,9 @@ def _stack(project: str, rows: list[dict[str, str]]) -> Stack:
     version = first.get("version", "")
     if working_dir.startswith(PORTAINER_PREFIX) or any(f.startswith(PORTAINER_PREFIX) for f in raw_files.split(",")):
         return Stack(project, members, working_dir, None, (), "portainer", version, tuple(f for f in raw_files.split(",") if f))
+    if not working_dir:
+        known_files = tuple(path for raw in (raw_files, raw_env) for path in raw.split(",") if _valid_path(path))
+        return Stack(project, members, working_dir, None, (), "unknown", version, known_files=known_files)
     files = _split_files(raw_files, working_dir) if raw_files and _valid_path(working_dir) else None
     env_files = _split_files(raw_env, working_dir) if raw_env else ()
     if files is None or env_files is None or not 1 <= len(files) <= MAX_FILES or len(env_files) > MAX_FILES:
@@ -312,7 +320,13 @@ class DockerStacks:
         result = await self._exec(host, cmd_list(project), LIST_TIMEOUT_S)
         if result.exit_code != 0:
             raise StackProblem(_first_line(result.stderr) or f"docker ps endete mit {result.exit_code}.")
-        return parse_members(result.stdout)
+        stacks = parse_members(result.stdout)
+        adopted = self._adopted.for_host(host.id) if self._adopted is not None else {}
+        for stack in stacks:
+            entry = adopted.get(stack.project)
+            if entry is not None and entry.note(stack) is None:
+                stack.env_names = entry.env_names
+        return stacks
 
     async def overview(self, host: Any) -> dict[str, Any]:
         stacks = await self.stacks(host)
@@ -582,17 +596,29 @@ def stack_routes(stacks: DockerStacks, docker_host: Callable[[str], Awaitable[An
         except StackProblem as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
-    @router.get("/hosts/{host_id}/stacks")
+    @router.get(
+        "/hosts/{host_id}/stacks",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (502,)},
+    )
     async def list_stacks(host_id: str) -> dict:
         """Alle Compose-Projekte des Servers mit Zustand und dem Hinweis, ob die Datei seit dem letzten Anwenden geändert wurde."""
         return {"host_id": host_id, **await _guarded(host_id, stacks.overview)}
 
-    @router.get("/hosts/{host_id}/stacks/usage")
+    @router.get(
+        "/hosts/{host_id}/stacks/usage",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (502,)},
+    )
     async def stack_usage(host_id: str) -> dict:
         """CPU und Arbeitsspeicher je Stack; dauert ein paar Sekunden, deshalb getrennt von der Liste."""
         return {"host_id": host_id, "usage": await _guarded(host_id, stacks.usage)}
 
-    @router.get("/hosts/{host_id}/stacks/{project}/file")
+    @router.get(
+        "/hosts/{host_id}/stacks/{project}/file",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 502,)},
+    )
     async def stack_file(host_id: str, project: str) -> dict:
         """Die Compose-Dateien eines Stacks zum Ansehen, dazu die Namen aus seiner `.env` (ohne Werte)."""
         if not PROJECT_RE.match(project):

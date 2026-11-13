@@ -152,6 +152,21 @@ class MetricsStore:
                 ).fetchall()
         return columnar(((m, ts, avg, mx) for m, ts, avg, mx in rows), step=step, since=since, now=now)
 
+    def query_hosts(
+        self, host_id: str, aliases: Iterable[str], range_name: str, now: int, *, interval_s: int, raw_retention_s: int,
+    ) -> dict[str, Any]:
+        result = self.query(host_id, range_name, now, interval_s=interval_s, raw_retention_s=raw_retention_s)
+        for alias in aliases:
+            data = self.query(alias, range_name, now, interval_s=interval_s, raw_retention_s=raw_retention_s)
+            for metric, values in data["series"].items():
+                series = result["series"].setdefault(metric, [None] * len(values))
+                peaks = result["max"].setdefault(metric, [None] * len(values))
+                for index, value in enumerate(values):
+                    if series[index] is None:
+                        series[index] = value
+                        peaks[index] = data["max"][metric][index]
+        return result
+
 
 def columnar(rows: Iterable[tuple[str, int, float, float | None]], *, step: int, since: int, now: int) -> dict[str, Any]:
     """Macht aus `(metric, bucket_ts, avg, max)` eine gemeinsame Zeitachse mit einer Werteliste je Metrik; Lücken
@@ -206,10 +221,12 @@ class MetricsCollector:
             await asyncio.sleep(max(1.0, self.interval_s - (time.monotonic() - started)))
 
     async def collect_once(self) -> int:
+        from sqlalchemy import select
+
         from ..db.session import session_scope
         from ..models import Host
         from ..services import hosts as hosts_service
-        from sqlalchemy import select
+        from . import gate
 
         async with session_scope() as session:
             hosts = (await session.execute(select(Host).where(Host.enabled.is_(True)))).scalars().all()
@@ -233,7 +250,11 @@ class MetricsCollector:
         async def _one(host_id: str, sdk_host: Any, provider: Any) -> bool:
             async with semaphore:
                 try:
-                    values = await asyncio.wait_for(provider.sample(sdk_host), timeout=self.sample_timeout_s)
+                    owner = metrics_provider_owner(provider)
+                    if owner is None:
+                        raise ValueError("Kein eindeutiger MetricsProvider registriert.")
+                    with gate.authorized_ssh(host_id, operations=frozenset({"command"}), ext_id=owner):
+                        values = await asyncio.wait_for(provider.sample(sdk_host), timeout=self.sample_timeout_s)
                 except Exception as exc:  # noqa: BLE001 - Lücke statt Absturz
                     logger.info("metrics_sample_failed host=%s error=%s", host_id, str(exc) or type(exc).__name__)
                     return False
@@ -307,6 +328,18 @@ class MetricsCollector:
         return found
 
 
+def metrics_provider_owner(provider: Any) -> str | None:
+    from nodvard_sdk.capabilities import MetricsProvider
+
+    from ..ext.runtime import get_extension_runtime
+
+    owners = {
+        ext_id for ext_id, impl in get_extension_runtime().capabilities.query_named(MetricsProvider)
+        if impl is provider
+    }
+    return owners.pop() if len(owners) == 1 else None
+
+
 async def resolve_metrics_provider(sdk_host: Any, provider_ext_id: str | None) -> Any | None:
     """Eigener Anbieter des Hosts (`provider_ext_id`), sonst ein allgemeiner, der ihn messen kann (`supports`)."""
     from nodvard_sdk.capabilities import MetricsProvider
@@ -314,6 +347,11 @@ async def resolve_metrics_provider(sdk_host: Any, provider_ext_id: str | None) -
     from ..ext.runtime import get_extension_runtime
 
     runtime = get_extension_runtime()
+    if sdk_host.metadata.get("manual_entry"):
+        for candidate in runtime.capabilities.query(MetricsProvider):
+            supports = getattr(candidate, "supports", None)
+            if supports is not None and await supports(sdk_host):
+                return candidate
     if provider_ext_id:
         provider = runtime.capabilities.provided_by(MetricsProvider, provider_ext_id)
         if provider is not None:

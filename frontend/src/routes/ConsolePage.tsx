@@ -1,21 +1,5 @@
-/**
- * Grafische Konsole einer VM/eines Containers -- damit dafür niemand in die Proxmox-
- * Oberfläche wechseln muss. Kern-Seite ohne PageSpec wie Dateien/
- * Aktionen: sie kennt keinen Hypervisor, nur `POST /console/sessions` (die
- * `ConsoleTarget`-Capability dahinter liefert z. B. die proxmox-Extension).
- *
- * Ablauf: `POST /console/sessions` öffnet die Konsole serverseitig und liefert URL +
- * Einmal-Kennwort; noVNC öffnet danach selbst den WebSocket zu Nodvard Deck (nie direkt
- * zum Hypervisor) und authentifiziert sich per RFB mit dem Einmal-Kennwort. Der
- * Browser sieht damit weder einen Proxmox-Login noch das API-Token.
- *
- * noVNC wird erst hier dynamisch geladen: das Paket nutzt Top-Level-`await` und ist
- * groß, das Haupt-Bundle soll dafür nicht zahlen.
- *
- * "Text senden": QEMUs VNC kennt keine Zwischenablage -- der Dialog tippt Text als
- * Tastendrücke, passend zum Tastaturlayout des GASTS (lib/keyboardLayouts.ts).
- * Zeilenumbrüche drücken Enter nur, wenn das ausdrücklich angehakt ist.
- */
+/** Konsole über Nodvard Deck und ein Einmal-Kennwort öffnen; Zugangsdaten des Hypervisors bleiben auf dem Server.
+ * noVNC wird bei Bedarf geladen; „Text senden“ nutzt Tastendrücke im Layout des Gasts und Enter nur nach Freigabe. */
 import * as Dialog from "@radix-ui/react-dialog";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -88,7 +72,7 @@ function TypeTextDialog({ open, onOpenChange, rfb }: { open: boolean; onOpenChan
     if (unsupported.length > 0) {
       setError(
         unsupported.includes("↵") && unsupported.length === 1
-          ? "Der Text enthält Zeilenumbrüche – „Zeilenumbruch = Enter“ anhaken oder entfernen."
+          ? "Der Text enthält Zeilenumbrüche, „Zeilenumbruch = Enter“ anhaken oder entfernen."
           : `Nicht tippbar im Layout ${LAYOUT_LABEL[layout]}: ${unsupported.join(" ")}`,
       );
       return;
@@ -115,10 +99,10 @@ function TypeTextDialog({ open, onOpenChange, rfb }: { open: boolean; onOpenChan
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-scrim/60" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-[var(--color-surface)] p-4 shadow-xl">
+        <Dialog.Content className="fixed left-1/2 top-1/2 w-full max-w-[min(100vw-2rem,32rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-[var(--color-surface)] p-4 shadow-xl">
           <Dialog.Title className="mb-1 text-lg font-semibold">Text senden</Dialog.Title>
           <Dialog.Description className="mb-3 text-sm opacity-70">
-            Wird als Tastendrücke in die Konsole getippt – es gibt dort keine Zwischenablage. Das Layout muss zu dem im Gast passen.
+            Wird als Tastendrücke in die Konsole getippt, es gibt dort keine Zwischenablage. Das Layout muss zu dem im Gast passen.
           </Dialog.Description>
           <textarea
             value={text}

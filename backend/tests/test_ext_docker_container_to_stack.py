@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
 import hashlib
 import json
+import shlex
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 import yaml
@@ -41,7 +44,7 @@ PLAIN_COMPOSE = (
     'services:\n  plaintest:\n    image: "busybox:1.37"\n    container_name: plaintest\n    restart: unless-stopped\n    hostname: meinhost\n'
     '    command:\n    - sleep\n    - "3600"\n    env_file:\n    - container.env\n    labels:\n      meine.marke: "1"\n    ports:\n'
     '    - "127.0.0.1:8443:443"\n    - "8099:80"\n    volumes:\n    - "plaindaten:/data"\n    - "/srv/daten:/host:ro"\n'
-    '    network_mode: bridge\nvolumes:\n  plaindaten:\n    external: true\n'
+    '    network_mode: bridge\n    ipc: private\nvolumes:\n  plaindaten:\n    external: true\n'
 )
 
 
@@ -71,6 +74,13 @@ def _convert(data, image=IMAGE, **daemon):
     return _m().c2s.convert(data, image, **{**DAEMON, **daemon})
 
 
+@pytest.mark.parametrize("mode", ["host", "private", "shareable"])
+def test_ipc_mode_is_preserved(mode):
+    converted = _convert(_sample(IpcMode=mode))
+    assert not converted.refused
+    assert yaml.safe_load(converted.compose)["services"]["plaintest"]["ipc"] == mode
+
+
 def test_a_plain_container_becomes_this_file():
     out = _convert(_sample())
     assert (out.project, out.service, out.refused) == ("plaintest", "plaintest", [])
@@ -86,7 +96,7 @@ def test_more_settings_are_carried_over():
         "image": "busybox:1.37", "container_name": "plain2", "user": "1000:1000", "working_dir": "/tmp", "entrypoint": ["sh"],
         "command": ["-c", "sleep 3600"], "stop_grace_period": "20s", "healthcheck": {"test": ["CMD-SHELL", "true"], "interval": "30s"},
         "tmpfs": ["/run:size=10m"], "networks": {"plainnetz": {"aliases": ["alias2"]}}, "init": True, "cap_add": ["CAP_NET_ADMIN"],
-        "extra_hosts": ["meinhost:10.0.0.5"], "dns": ["9.9.9.9"], "mem_limit": 268435456, "cpus": 0.5,
+        "extra_hosts": ["meinhost:10.0.0.5"], "dns": ["9.9.9.9"], "mem_limit": 268435456, "cpus": 0.5, "ipc": "private",
     }
     assert yaml.safe_load(out.compose)["networks"] == {"plainnetz": {"external": True}}
     assert "memswap_limit" not in service, "das Doppelte von --memory setzt Docker selbst"
@@ -360,6 +370,19 @@ def _request(plan, *, risk="high", actor="user", container="plaintest"):
     return ActionRequest(action_type="docker.container_to_stack", host_ref="h1", risk=Risk(risk), proposed_by=Actor(type=actor, id="u1"),
                          reason="Test", payload={"container": container, "id": plan["id"], "folder": plan["folder"],
                                                  "compose_sha256": hashlib.sha256((plan["compose"] or "").encode()).hexdigest()})
+
+
+@pytest.mark.asyncio
+async def test_changed_root_after_approval_stops_conversion(env, monkeypatch):
+    e = env()
+    plan = await e.conv.plan(e.host, "plaintest")
+    roots = iter([ROOT, "/srv/stacks"])
+    monkeypatch.setattr(e.conv.new, "root", lambda host_id: _async(next(roots)))
+    before = dict(e.sftp.files), set(e.sftp.dirs)
+    done = await e.executor.execute(_request(plan))
+    assert not done.success and done.error == "Der Zielordner hat sich inzwischen geändert. Bitte noch einmal umwandeln."
+    assert next(roots, None) is None  # execute prüft den Plan neu (ROOT) und liest den Ordner danach noch einmal (/srv/stacks)
+    assert (e.sftp.files, e.sftp.dirs) == before and e.calls == []
 
 
 @pytest.mark.asyncio
@@ -737,6 +760,105 @@ async def test_a_stack_that_does_not_run_brings_the_old_container_back(env):
     assert e.calls[2:] == [["up"], ["down"], ["docker", "rename", cid, "plaintest"], ["docker", "start", cid]]
     assert not [p for p in e.sftp.files if p.startswith(f"{ROOT}/plaintest")] and f"{ROOT}/plaintest" not in e.sftp.dirs
     assert e.store.for_host("h1") == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("abort", ["cancel", "shutdown", "timeout"])
+@pytest.mark.parametrize("at", ["check", "stop", "up"])
+async def test_rollback_keeps_gate_until_old_container_runs(env, db_session, monkeypatch, abort, at):
+    from nodvard_deck.core import gate, ssh
+    from nodvard_deck.ext.context import ExecHandle, _PermissionChecker
+    from nodvard_sdk import GateOutcome
+    from nodvard_sdk.errors import ActionBlocked
+
+    e = env(verdict=False)
+    plan = await e.conv.plan(e.host, "plaintest")
+    started, back, resume = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    contexts, cleanups, deadlines = [], [], []
+    handle = ExecHandle(_PermissionChecker("docker", ["hosts.execute"]), settings=None)
+    handle._connection = AsyncMock(return_value=object())
+    e.sftp.exit, e.sftp.wait_closed = Mock(), AsyncMock()
+    e.host.os_family = "linux"
+    e.executor._ctx.exec = handle
+    timeout = asyncio.timeout
+
+    def deadline(delay):
+        limit = timeout(delay)
+        deadlines.append(limit)
+        return limit
+
+    async def transport(conn, command, *, stdin=None, timeout_s=60, **kwargs):
+        if command.startswith("docker ps -a --filter label=com.docker.compose.project"):
+            answer = await e.fake.run(e.host, command, timeout_s=timeout_s)
+        else:
+            argv = shlex.split(command)
+            if (at == "stop" and argv[1:2] == ["stop"]) or (at == "up" and argv[-2:] == ["up", "-d"]):
+                started.set()
+                await asyncio.Event().wait()
+            if argv[-1:] == ["down"] or (at == "stop" and argv[1:2] == ["rename"] and argv[-1] == "plaintest"):
+                contexts.append(contextvars.copy_context())
+                cleanups.append(asyncio.current_task())
+                back.set()
+                await resume.wait()
+            answer = await e.fake.run_argv(e.host, argv, stdin=stdin, timeout_s=timeout_s)
+        return answer.exit_code, answer.stdout, answer.stderr
+
+    monkeypatch.setattr(ssh, "run", transport)
+    monkeypatch.setattr(ssh, "start_sftp", AsyncMock(return_value=e.sftp))
+    monkeypatch.setattr(gate.asyncio, "timeout", deadline)
+    monkeypatch.setattr(gate, "find_executor", AsyncMock(return_value=e.executor))
+    decision = await gate.propose(db_session, ext_id="docker", command_field=None, request=_request(plan))
+    assert decision.outcome == GateOutcome.REQUIRE_CONFIRMATION
+    action, moved = await gate.approve(db_session, decision.action_id, user_id="u1", wait_s=0)
+    assert moved
+    task = gate._running[action.id]
+    try:
+        if at != "check":
+            await asyncio.wait_for(started.wait(), 5)
+            if abort == "timeout":
+                await gate.shutdown_running(timeout=0)
+            else:
+                task.cancel()
+        await asyncio.wait_for(back.wait(), 5)
+        if abort == "timeout":
+            deadlines[0].reschedule(asyncio.get_running_loop().time())
+        elif abort == "shutdown":
+            await gate.shutdown_running(timeout=0)
+        else:
+            task.cancel()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        if abort == "shutdown":
+            for _ in range(2):
+                task.cancel()
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+        assert not task.done()
+        contexts[0].run(gate.require_execution, e.host.id, ext_id="docker")
+        assert e.actions.locks.held("h1", "plaintest") is not None
+        with pytest.raises(ActionBlocked):
+            contexts[0].run(gate.require_execution, "other-host", ext_id="docker")
+        resume.set()
+        timed_out = abort == "timeout" and at == "check"
+        if timed_out:
+            await asyncio.wait_for(asyncio.shield(task), 5)
+        else:
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(asyncio.shield(task), 5)
+        cid = "c" * 64
+        tail = [["down"], ["docker", "rename", cid, "plaintest"], ["docker", "start", cid]]
+        assert e.calls[-2:] == tail[1:] if at == "stop" else e.calls[-3:] == tail
+        assert f"{ROOT}/plaintest" not in e.sftp.dirs and e.store.for_host("h1") == {}
+        assert not [p for p in e.sftp.files if p.startswith(f"{ROOT}/plaintest")]
+        assert e.actions.locks.held("h1", "plaintest") is None
+        with pytest.raises(ActionBlocked):
+            contexts[0].run(gate.require_execution, e.host.id, ext_id="docker")
+        await db_session.refresh(action)
+        error = gate.EXECUTE_TIMEOUT_ERROR if timed_out else gate.CANCELLED_ERROR
+        assert action.status == "failed" and action.result["error"] == error
+    finally:
+        resume.set()
+        await asyncio.gather(task, *cleanups, return_exceptions=True)
 
 
 @pytest.mark.asyncio

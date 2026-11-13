@@ -4,6 +4,7 @@ Das Passwort liegt nur im Tresor; keine Route gibt es zurück, keine Meldung ent
 
 from __future__ import annotations
 
+from http import HTTPStatus
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -22,7 +23,7 @@ from nodvard_sdk import (
     WidgetSpec,
 )
 from nodvard_sdk.actions import REQUEST_WAIT_S, ActionRequest
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from .actions import (
     ACTION_SPECS,
@@ -45,10 +46,14 @@ _CORRELATION = "pihole"
 
 
 class _PauseIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     minutes: int
 
 
 class _DomainIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     list: Literal["allow", "deny"]
     domain: str
 
@@ -97,7 +102,11 @@ class Extension(NodvardExtension):
         # Ändern nur als Vorschlag ans Aktions-Gate; ausgeführt wird erst nach der Freigabe.
         act_router = APIRouter()
 
-        @act_router.post("/pause")
+        @act_router.post(
+            "/pause",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409, 422,)},
+        )
         async def pause_blocking(payload: _PauseIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict[str, Any]:  # noqa: B008
             if payload.minutes not in PAUSE_MINUTES:
                 raise HTTPException(status_code=422, detail="Pausieren geht nur für 5, 15 oder 60 Minuten.")
@@ -107,17 +116,29 @@ class Extension(NodvardExtension):
                 f"Pi-hole-Blockierung über Nodvard Deck für {pause_text(payload.minutes)} pausiert.", actor,
             )
 
-        @act_router.post("/resume")
+        @act_router.post(
+            "/resume",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409,)},
+        )
         async def resume_blocking(actor: Actor = Depends(ctx.api.current_actor)) -> dict[str, Any]:  # noqa: B008
             await _require_pihole()
             return await _propose(PIHOLE_RESUME, {}, Risk.LOW, "Pi-hole-Blockierung über Nodvard Deck fortgesetzt.", actor)
 
-        @act_router.post("/gravity")
+        @act_router.post(
+            "/gravity",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409,)},
+        )
         async def update_gravity(actor: Actor = Depends(ctx.api.current_actor)) -> dict[str, Any]:  # noqa: B008
             await _require_pihole()
             return await _propose(GRAVITY_UPDATE, {}, Risk.LOW, "Pi-hole-Sperrlisten über Nodvard Deck neu geladen.", actor)
 
-        @act_router.post("/domains")
+        @act_router.post(
+            "/domains",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409, 422,)},
+        )
         async def add_domain(payload: _DomainIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict[str, Any]:  # noqa: B008
             try:
                 domain = normalize_domain(payload.domain)

@@ -6,6 +6,11 @@ davon sie erfüllt, und der Kern benutzt sie generisch.
 Dieses Dokument ist die Spezifikation. Der zugehörige, importierbare Vertrag liegt in
 `sdk/python/nodvard_sdk/`.
 
+Das ausführbare SDK-Beispiel [hello-world](../extensions/hello-world/extension.toml) bleibt im Quellbaum als Vorlage
+für eigene Erweiterungen und für die Integrationstests. Es wird nicht im Standardimage mitgeliefert.
+Für einen eigenen Build lässt es sich ausdrücklich in `NODVARD_DECK_EXTENSIONS` wählen,
+siehe [Modulauswahl beim Bauen](../deploy/README.md#bauen).
+
 ---
 
 ## 1. Anatomie einer Extension
@@ -51,6 +56,7 @@ enable_on   = ["host_credential"]         # optional: siehe unten
 category    = "security"                  # optional: Gruppe in der Modul-Auswahl des Einrichtungsassistenten
 sort_order  = 10                          # optional: Reihenfolge in der Gruppe (Standard 100)
 stage       = "beta"                      # optional: Reifegrad, "stable" (Standard) oder "beta"
+editions    = ["dock"]                    # optional: feste Ausgaben, in denen das Modul mitläuft
 
 # Was die Extension vom Kern verlangt. Der Admin bestätigt das bei der Installation.
 # Der Kern erzwingt es bei JEDEM ctx-Aufruf.
@@ -69,7 +75,7 @@ schema = "settings.schema.json"
 ```
 
 **Paketname (`entrypoint`):** Die Python-Pakete der mitgelieferten Erweiterungen heißen
-`nodvard_deck_ext_<id>` (Bindestriche der ID werden zu `_`, aus `hello-world` wird `nodvard_deck_ext_hello_world`) und
+`nodvard_deck_ext_<id>` (Bindestriche der ID werden zu `_`, aus `home-assistant` wird `nodvard_deck_ext_home_assistant`) und
 liegen unter `extensions/<id>/src/`. Das ist die Konvention für neue Erweiterungen, der Kern
 erzwingt sie nicht: Er importiert genau das Modul, das `entrypoint` nennt, und liest das Manifest
 bei jedem Start frisch von der Platte. **Erweiterungen von Dritten mit der alten Konvention
@@ -109,6 +115,11 @@ wird **nur, wenn niemand die Erweiterung je bewusst ein- oder ausgeschaltet hat*
 Nutzer, der sie ausgeschaltet hat, bleibt unangetastet. Das Protokoll hält
 `extension.auto_enabled` fest. Bei Installationen, die es schon vor dieser Funktion gab, bleiben
 bereits angelegte Erweiterungen unberührt; nur neu hinzugekommene zählen als „unberührt“.
+
+**`editions` (optional):** Feste Ausgaben, in denen das Modul mitläuft (heute `dock` für Nodvard Dock). Eine feste
+Ausgabe bedient nur Module, die sie hier nennen: Einstellungen, Test, Oberfläche und die Routen unter
+`/api/v1/ext/<id>/`. Der Kern kennt dafür keine Erweiterung beim Namen, er liest nur diese Kennzeichnung. Leer = nur im
+frei wählbaren Nodvard Deck.
 
 **Gesperrte Kennungen:** `core` gehört dem Kern, er trägt sie als `ext_id` der Aktionen, die jemand in der
 Oberfläche startet. Steht sie als `id`, in `legacy_ids` oder in `adopts.from`, lädt die Erweiterung nicht (Liste:
@@ -453,6 +464,58 @@ permission-geprüft und schreibt bei Bedarf ins Audit-Log.
 Nicht am Kontext und bewusst nicht verfügbar: direkter Zugriff auf Kern-Tabellen, das
 `asyncio`-Loop-Objekt, andere Extensions (nur über `ctx.events` und deklarierte
 `requires` + `ctx.capabilities.query()`).
+
+### SSH und Freigabe
+
+`ctx.exec.run()`, `run_argv()`, `stream()`, `stream_argv()`, `open_shell()` und `sftp()`
+verlangen neben `hosts.execute` einen passenden Freigabekontext. Fehlt er, wirft der
+Aufruf vor dem Verbindungsaufbau `ActionBlocked` aus `nodvard_sdk.errors` mit
+`rule == "action_gate"`. Das ist kein Verbindungsfehler: nicht als „Server nicht
+erreichbar“ abfangen. Änderungen mit `ctx.actions.propose()` vorschlagen und erst
+im registrierten `ActionExecutor.execute()` ausführen.
+
+Drei Kontexte erlauben SSH-Befehle:
+
+| Kontext | Gültigkeit und Grenzen |
+|---|---|
+| Laufende Aktion | Das Gate setzt die Freigabe während `ActionExecutor.execute()`. Sie gilt nur für einen gesetzten `host_ref` und endet mit der Ausführung, auch bei Fehlern. Ohne Host-Bezug gibt es keinen SSH-Zugriff. Ein Lesekontext innerhalb der Aktion begrenzt zusätzlich Server, Erweiterung, Zugriffsart und Dauer; er kann den Aktionshost nicht übersteuern. |
+| Geschützte Route | `GET` und `HEAD` erhalten bei `permission="hosts.read"` oder `permission="hosts.execute"` einen Befehlskontext. `ssh_read=True` erlaubt das auch mit einer anderen ausdrücklich gesetzten Berechtigung. `host_id` muss im Pfad oder Query eindeutig angegeben sein. Widersprüchliche oder mehrfach gesetzte Query-Werte werden abgewiesen. Ohne Host-Angabe gibt es keinen automatischen SSH-Kontext. `ssh_preflight=True` verlangt `permission="hosts.execute"` und erlaubt Vorprüfungen auch in `POST` und anderen Methoden. Der Kontext endet mit der Anfrage. |
+| Ausdrücklicher Lesekontext | `with ctx.exec.read_access(host, timeout_s=30):` verlangt `hosts.read` und `hosts.execute`. Er gilt nur für diese Erweiterung und diesen Server, mit `0 < timeout_s <= 60`, und endet spätestens beim Verlassen des Blocks. |
+
+Geplante und manuell ausgelöste Jobs sowie Sammelabfragen öffnen für jeden Server
+einen eigenen `read_access`-Block. `ctx.scheduler.register_job()` erteilt keine SSH-Freigabe.
+
+Die beiden Lesekontexte erlauben `run`, `run_argv`, `stream` und `stream_argv`, aber
+kein `open_shell`. Nur der Routenkontext mit `hosts.execute` erlaubt zusätzlich
+lesendes `sftp`; Schreiben, Umbenennen und Löschen bleiben dort gesperrt, auch
+über geöffnete Dateien. Eine laufende Aktion erlaubt Shell und schreibendes SFTP.
+Web-Terminal und Dateimanager erhalten ihre gesonderten Berechtigungen vom Kern.
+Manifest-Berechtigungen und Sperrmuster für Befehle gelten weiterhin.
+
+**Grenze:** Ein Lesekontext prüft nicht, ob ein Shell-Befehl tatsächlich nur liest.
+Das Gate schützt vor versehentlichen direkten Änderungen aus gewöhnlichen POST-Routen
+und Hintergrundaufgaben ohne Kontext. Es ist keine Sicherheitsgrenze gegen eine
+Erweiterung, die über GET, einen Job oder `read_access` absichtlich Änderungen ausführt.
+Shield nutzt `read_access` auch für Quarantäne sowie Start und Abbruch von Lynis;
+Docker nutzt es nach einem Neustart für den automatischen Rückweg auf das alte Image.
+Die automatischen Updates von Shield laufen im Job-Kontext ebenfalls ohne einzelne
+Aktionsfreigabe. Diese Abläufe sind durch den Namen „Lesekontext“ nicht schreibgeschützt.
+
+**Migration für Erweiterungsautoren:** `ctx.spawn` und Ereignis-Handler bekommen
+keine eigene SSH-Freigabe. Ein geerbter Kontext wird mit seinem Ursprungsaufruf
+ungültig, auch wenn die Hintergrundaufgabe weiterläuft. Für kurze Leseabfragen
+einen eigenen Block öffnen, für Änderungen eine Aktion vorschlagen:
+
+```python
+with ctx.exec.read_access(host, timeout_s=30):
+    result = await ctx.exec.run_argv(host, ["uname", "-r"])
+```
+
+Die Frist begrenzt neue Aufrufe; sie bricht einen bereits gestarteten SSH-Befehl
+nicht ab. Dessen Laufzeit begrenzt `timeout_s` an `run()` oder `run_argv()`.
+Ältere Kerne verlangten diesen Freigabekontext nicht. Die Laufzeitänderung ist in
+`backend/tests/contract/breaking_exceptions.toml` verzeichnet; der SDK-Schnappschuss
+allein erkennt sie nicht.
 
 ### Routen und Anmeldung
 
@@ -1040,6 +1103,14 @@ WebSockets, Bilder und Schriften gehen nur an den eigenen Server (`default-src '
 `blob:`); Daten fremder Dienste holt das Backend der Erweiterung. Was dagegen verstößt, blockiert der Browser und nennt
 den Grund in der Konsole.
 
+Stile folgen `style-src 'self' 'nonce-…'` und `style-src-attr 'none'`. Verwende Klassen für feste Werte;
+dynamische Maße und Farben setzt `ref={styleRef({ width: percent + "%" })}` aus
+`extensions/_shared/frontend/src/csp.ts` in ein Stylesheet mit der aktuellen Nonce. `createStyle()` aus demselben
+Modul erzeugt freigegebene `<style>`-Elemente. Die Nonce stammt aus der HTML-Antwort und darf nicht fest im Bundle stehen.
+Bibliotheken dürfen keine Stilattribute per `setAttribute("style", …)` oder HTML einfügen. Direkte Zuweisungen an
+einzelne CSSOM-Eigenschaften sind erlaubt. `npm run test:csp` prüft echte Komponenten in Chromium unter der CSP;
+jsdom erzwingt diese Regeln nicht.
+
 **Namen im Frontend-Vertrag.** Bundles hängen an `window.__nodvardDeck` (das UI-Kit liest es über `deck()` aus
 `extensions/_shared/frontend/src/deck.ts`), an den Ereignissen `nodvard-deck:navigate` und `nodvard-deck:timezone`,
 an der CSS-Klasse `nodvard-deck-focus` und am TypeScript-Typ `NodvardDeckTokenRefreshResult`. Die alten Namen aus der
@@ -1081,8 +1152,8 @@ export { SocPage } from "./SocPage";
 export { IncidentFeed } from "./IncidentFeed";
 ```
 
-Ein echtes, minimales Beispiel steht in `extensions/hello-world/frontend/src/`: eine Seite
-(`HelloPage.tsx`, mit `authedFetch` und dem UI-Kit), gebaut mit `extensions/hello-world/frontend/build.mjs`.
+Ein echtes, minimales Beispiel zeigt [HelloPage.tsx](../extensions/hello-world/frontend/src/HelloPage.tsx),
+mit `authedFetch` und dem UI-Kit. [build.mjs](../extensions/hello-world/frontend/build.mjs) baut die Seite.
 
 ### UI-Kit und Modul-Regel
 
@@ -1216,8 +1287,8 @@ Unterstützte Systeme: Auf unveränderlichen rpm-ostree-Systemen wie Bazzite und
 | Ollama-Chat | `ConnectorType("ollama")` + `AIProvider`-Capability |
 | Freitext-Chat-UI | `register_page("soc")`, Streaming über `ctx.ws` |
 | Incident-Queue/Batching | eigene Tabellen `ext_nexus_soc_incidents`, Hintergrundtask via `ctx.spawn` |
-| Docker-Watcher (8 s) | `ctx.spawn` + `ctx.exec.run()` gegen Hosts mit Tag `docker` |
-| Remediation | `ctx.actions.propose(...)` — **nie** `ctx.exec` direkt. Aus KI-Text entsteht nur der Neustart eines abgestürzten Containers (`shell.exec`, den Befehl baut die Extension selbst), alles andere bleibt Text |
+| Docker-Watcher (8 s) | `ctx.spawn` + `ctx.exec.run()` innerhalb von `ctx.exec.read_access(host)` gegen Hosts mit Tag `docker` |
+| Remediation | `ctx.actions.propose(...)`; SSH-Befehle erst in `ActionExecutor.execute()`. Die automatische Fehlerbehebung schlägt nur den Neustart eines abgestürzten Containers vor (`shell.exec`); den Befehl baut die Erweiterung selbst |
 | Sperrliste / Anti-Flapping | Kern-Gate; Extension liefert nur zusätzliche Muster |
 | Begründungspflicht | `ActionRequest.reason` ist Pflichtfeld |
 | Zwei Betriebsmodi | Kern-Einstellung `autonomy.mode`, nicht Extension-Code |

@@ -1,6 +1,6 @@
 """deploy/entrypoint.sh: Besitzrechte am Datenordner und Wechsel vom Benutzer root zu `lattice`.
 
-Startet der Container als root (so liefert ihn das Image aus), setzt das Skript die Besitzrechte an
+Startet der Container als root, setzt das Skript die Besitzrechte an
 /app/data auf den Benutzer `lattice` und startet die Anwendung erst danach als dieser Benutzer.
 Laeuft der Container schon als Nicht-root (`user:` in Compose, Kubernetes), aendert sich nichts.
 
@@ -12,6 +12,7 @@ eigener Test. Ein letzter Test nimmt die echten Programme, wenn der Test als roo
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -207,6 +208,40 @@ def test_as_non_root_nothing_changes(setup):
 
 
 @needs_sh
+def test_data_migration_changes_only_ownership_inside_the_data_folder(setup):
+    source = (ROOT / "deploy/migrate-data.sh").read_text(encoding="utf-8")
+    _executable(setup.script, source.replace("/app/data", str(setup.data)))
+    result = setup.run(uid=0)
+    assert result.returncode == 0, result.stderr
+    calls = setup.lines("chown")
+    if os.getuid() != 1000 or os.getgid() != 1000:
+        assert calls
+        assert str(setup.data / "lattice.db") in " ".join(calls)
+    for call in calls:
+        assert call.startswith("-h 1000:1000 ")
+        assert str(setup.outside) not in call
+        assert all(path == str(setup.data) or path.startswith(str(setup.data) + "/") for path in call.split()[2:])
+    assert setup.lines("steps") == []
+    assert (setup.data / "lattice.db").read_text(encoding="utf-8") == "db"
+
+
+@needs_sh
+@pytest.mark.parametrize("invalid", ["non-root", "missing", "symlink"])
+def test_data_migration_refuses_invalid_targets(setup, invalid):
+    source = (ROOT / "deploy/migrate-data.sh").read_text(encoding="utf-8")
+    data = setup.data
+    if invalid == "missing":
+        data = setup.tmp / "missing"
+    elif invalid == "symlink":
+        data = setup.data / "link-nach-draussen"
+    _executable(setup.script, source.replace("/app/data", str(data)))
+    result = setup.run(uid=1000 if invalid == "non-root" else 0)
+    assert result.returncode != 0
+    assert setup.lines("chown") == []
+    assert setup.lines("steps") == []
+
+
+@needs_sh
 def test_already_owned_files_are_not_touched_again(setup):
     if os.getuid() == 0:
         for path in [setup.data, *setup.data.rglob("*")]:
@@ -223,9 +258,11 @@ def test_already_owned_files_are_not_touched_again(setup):
 def test_image_user_numbers_fall_back_to_1000_and_never_to_root(setup):
     result = setup.run(uid=0, STUB_NO_IMAGE_USER="1")
     assert result.returncode == 0, result.stderr
-    if os.getuid() != 1000 or os.getgid() != 1000:
-        assert setup.lines("chown")
-    assert all(c.startswith("-h 1000:1000 ") for c in setup.lines("chown"))
+    chown_calls = setup.lines("chown")
+    assert all(c.startswith("-h 1000:1000 ") for c in chown_calls)
+    if (os.getuid(), os.getgid()) != (1000, 1000):
+        assert chown_calls
+    assert any("--reuid=1000 --regid=1000" in call for call in setup.lines("setpriv"))
     assert setup.lines("steps")[-1] == "app uid=1000 --port 8080"
     root_result = setup.run(uid=0, STUB_IMG_UID="0")
     assert root_result.returncode != 0 and "app uid=0" not in "".join(setup.lines("steps"))
@@ -400,6 +437,7 @@ def test_script_text_keeps_the_safety_properties():
 
 
 @needs_sh
+@pytest.mark.needs_root
 @pytest.mark.skipif(os.getuid() != 0 or shutil.which("setpriv") is None or shutil.which("find") is None, reason="braucht root und echtes setpriv")
 def test_with_the_real_programs_as_root():
     # Nicht tmp_path: dessen Ordner sind 0700 (nur root), der Benutzer 1000 kaeme nicht hinein.
@@ -431,12 +469,63 @@ def _real_programs_as_root(setup: Setup) -> None:
     assert steps and "Uid: 1000 1000 1000 1000" in steps[-1] and "NoNewPrivs: 1" in steps[-1]
 
 
-def test_dockerfile_hands_over_to_the_entrypoint_and_checks_setpriv_at_build_time():
+def test_dockerfile_starts_as_root_and_hands_over_to_the_image_user():
     text = DOCKERFILE.read_text(encoding="utf-8")
     code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
-    assert "\nUSER " not in code, "kein USER: das Skript startet als root, gibt die Rechte ab und startet dann die Anwendung"
+    assert re.findall(r"^USER (.+)$", code, re.MULTILINE) == ["0:0"]
+    assert code.index("USER 0:0") < code.index("HEALTHCHECK")
     assert "setpriv" in code, "Bauzeit-Pruefung: fehlt setpriv im Basis-Image, schlaegt schon der Build fehl"
     assert 'ENTRYPOINT ["/entrypoint.sh"]' in code
+
+
+@needs_sh
+@pytest.mark.needs_root
+@pytest.mark.skipif(getattr(os, "getuid", lambda: -1)() != 0 or shutil.which("setpriv") is None,
+                    reason="braucht root und echtes setpriv")
+@pytest.mark.parametrize("hardened", [False, True], ids=["image", "compose-uid-1000"])
+@pytest.mark.parametrize(("edition", "service"), [("deck", "nodvard-deck"), ("dock", "nodvard-dock")])
+def test_update_with_a_root_owned_data_folder(hardened, edition, service):
+    base = Path(tempfile.mkdtemp(prefix="entrypoint-update-"))
+    base.chmod(0o755)
+    try:
+        setup = Setup(base)
+        (setup.app / "image-info.json").write_text(json.dumps({"edition": edition}), encoding="utf-8")
+        setup.data.chmod(0o755)
+        assert setup.data.stat().st_uid == 0 and _mode(setup.data) == 0o755
+        for name in ("id", "chown", "setpriv"):
+            (setup.bin / name).unlink()
+        probe = ('#!/bin/sh\nset -eu\ntest "$(id -u):$(id -g)" = "1000:1000"\n'
+                 'grep -q "^NoNewPrivs:[[:space:]]*1$" /proc/self/status\n')
+        lookup = f'#!/bin/sh\nif [ "$1" = "-c" ]; then exec "{sys.executable}" "$@"; fi\n'
+        _executable(setup.bin / "python", lookup + probe + f'echo boot >> "{setup.data}/lattice.db"\n')
+        _executable(setup.bin / "app", probe + f'echo app > "{setup.data}/started"\n')
+        [image_user] = re.findall(r"^USER (.+)$", DOCKERFILE.read_text(encoding="utf-8"), re.MULTILINE)
+        uid, gid = ("1000", "1000") if hardened else image_user.split(":")
+        result = subprocess.run(
+            ["setpriv", f"--reuid={uid}", f"--regid={gid}", "--clear-groups", "--no-new-privs",
+             "sh", str(setup.script), "app"],
+            env={**os.environ, "PATH": f"{setup.bin}{os.pathsep}{os.environ['PATH']}",
+                 "PYTHONPATH": str(ROOT / "backend/src"), "PYTHONDONTWRITEBYTECODE": "1"},
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+        if hardened:
+            assert result.returncode == 1, result.stderr
+            assert "FEHLER:" in result.stderr and "nicht beschreibbar" in result.stderr
+            assert f"docker compose stop {service}" in result.stderr
+            assert "docker compose run --rm --no-deps --user 0:0 --cap-add CHOWN --cap-add DAC_OVERRIDE " \
+                   f"--entrypoint /usr/local/bin/migrate-data {service}" in result.stderr
+            assert f"docker compose up -d {service}" in result.stderr
+            assert (setup.data / "lattice.db").read_text(encoding="utf-8") == "db"
+            assert not (setup.data / "started").exists()
+        else:
+            assert result.returncode == 0, result.stderr
+            assert (setup.data / "lattice.db").read_text(encoding="utf-8") == "dbboot\n"
+            assert (setup.data / "started").read_text(encoding="utf-8") == "app\n"
+            assert (setup.data.stat().st_uid, setup.data.stat().st_gid) == (1000, 1000)
+            assert _mode(setup.data) == 0o700
+            assert (setup.outside / "wichtig.txt").stat().st_uid == 0
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def test_dockerfile_healthcheck_waits_long_enough_for_a_slow_migration_but_not_forever():

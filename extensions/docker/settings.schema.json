@@ -179,7 +179,7 @@
       ],
       "per_item": "registries",
       "title": "Passwort oder Token",
-      "description": "Am besten ein Token nur zum Lesen von Paketen, z. B. bei GitHub ein „Personal access token“ mit read:packages."
+      "description": "Am besten ein Token nur zum Lesen von Paketen, z. B. bei GitHub ein „Personal access token“ mit read:packages. Wer sich damit auf einem Server anmeldet, legt es dort in der Docker-Konfiguration ab; wer diesen Server bedient, kann es lesen."
     },
     {
       "label": "docker-git-token:{name}",

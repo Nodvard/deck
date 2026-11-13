@@ -29,7 +29,7 @@ describe("previewKind", () => {
     expect(previewKind(entry("index.html"))).toBe("text");
     expect(previewKind(entry("foto.JPG"))).toBe("image");
     expect(previewKind(entry("riesig.png", 50 * 1024 * 1024))).toBeNull();
-    for (const name of ["logo.svg", "handbuch.pdf", "backup.tar.gz", "programm", "lattice.db"]) {
+    for (const name of ["logo.svg", "handbuch.pdf", "backup.tar.gz", "programm", "daten.db"]) {
       expect(previewKind(entry(name))).toBeNull();
     }
   });
@@ -88,6 +88,55 @@ describe("FilePreview", () => {
     expect(document.querySelector("script")).toBeNull();
     expect(new Headers(seen[0].headers).get("Range")).toBe(`bytes=0-${TEXT_LIMIT - 1}`);
     expect(screen.queryByText(/Nur der Anfang/)).toBeNull();
+  });
+
+  it.each([0, null, 100])("lädt leere Textdateien nach 416 ohne Bereich erneut (Größe %s)", async (size) => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: "Dateibereich nicht verfügbar." }), {
+        status: 416, headers: { "Content-Range": "bytes */0" },
+      }))
+      .mockResolvedValueOnce(new Response(""));
+    vi.stubGlobal("fetch", fetchMock);
+    const view = render(<FilePreview sourceId="ssh-sftp:pve2" entry={entry("leer.txt", size)} kind="text" onClose={() => {}} onDownload={() => {}} />);
+
+    expect((await screen.findByTestId("file-preview-text")).textContent).toBe("");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(/Nur der Anfang/)).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [firstPath, firstInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [retryPath, retryInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(firstPath).toBe("/api/v1/files/ssh-sftp%3Apve2/download?path=%2Fetc%2Fleer.txt");
+    expect(retryPath).toBe(firstPath);
+    expect(new Headers(firstInit.headers).get("Range")).toBe(`bytes=0-${TEXT_LIMIT - 1}`);
+    expect(new Headers(retryInit.headers).has("Range")).toBe(false);
+    expect(new Headers(retryInit.headers).get("Authorization")).toBe("Bearer tok");
+    expect(retryInit.signal).toBe(firstInit.signal);
+    view.unmount();
+    expect(retryInit.signal?.aborted).toBe(true);
+  });
+
+  it.each(["bytes */10", null])("zeigt andere Bereichsfehler ohne erneuten Abruf (%s)", async (contentRange) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: "Dateibereich nicht verfügbar." }), {
+      status: 416, headers: contentRange ? { "Content-Range": contentRange } : {},
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<FilePreview sourceId="ssh-sftp:pve2" entry={entry("leer.txt", 0)} kind="text" onClose={() => {}} onDownload={() => {}} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Dateibereich nicht verfügbar.");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("file-preview-text")).toBeNull();
+  });
+
+  it("zeigt einen Fehler beim erneuten Abruf und wiederholt ihn nicht", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ detail: "Dateibereich nicht verfügbar." }), {
+      status: 416, headers: { "Content-Range": "bytes */0" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<FilePreview sourceId="ssh-sftp:pve2" entry={entry("leer.txt", 0)} kind="text" onClose={() => {}} onDownload={() => {}} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Dateibereich nicht verfügbar.");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId("file-preview-text")).toBeNull();
   });
 
   it("sagt, wenn nur der Anfang zu sehen ist", async () => {

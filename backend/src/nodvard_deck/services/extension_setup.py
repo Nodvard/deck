@@ -225,6 +225,19 @@ async def clear_last_test(session: AsyncSession, ext_id: str) -> None:
     await session.flush()
 
 
+async def record_test(
+    session: AsyncSession, ext_id: str, *, ok: bool, message: str, actor_id: str, mode: str, kind: str,
+) -> None:
+    from . import audit
+
+    await save_last_test(session, ext_id, ok=ok, message=message)
+    await audit.log(
+        session, actor_type="user", actor_id=actor_id, action="extension.test",
+        outcome="success" if ok else "failure", target_type="extension", target_id=ext_id,
+        detail={"mode": mode, "result": kind},
+    )
+
+
 async def load_last_tests(session: AsyncSession) -> dict[str, dict[str, Any]]:
     """Alle gespeicherten Testergebnisse, je Speicher-Kennung (`ExtensionRecord.id`)."""
     rows = (await session.execute(select(Setting).where(Setting.key.like(f"{TEST_KEY_PREFIX}%")))).scalars().all()

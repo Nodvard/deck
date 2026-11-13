@@ -14,9 +14,10 @@
      nach jedem Vorgang sofort), und einen abgelaufenen Rückweg-Slot aufräumen (`Flow.drop_expired_slot`).
   4. Kanal lesen (`Channel.poll`), Anforderungen prüfen und ausführen, Status schreiben.
 
-* **Eine Anforderung** durchläuft: Format und bei `v: 2` die Freigabe ohne die Signatur (`policy.read_request`), die
+* **Eine Anforderung** durchläuft: Format und bei Updates die Freigabe ohne die Signatur (`policy.read_request`), die
   Grenzen aus `/state` (`StateStore.check`: Wiederholung derselben ID, Sperre nach kaputtem Zustand, eine Aktion je
-  10 min, 24 h gesperrte Version), bei `v: 2` die Signatur (`policy.check_signature`, höchstens eine je Runde, weitere
+  10 min, 24 h gesperrte Version), nur `v: 3` (`policy.require_authenticated`), die Signaturen (bei Updates Freigabe und
+  Installationssignatur, beim Rückweg die Installationssignatur; höchstens eine Anforderung je Runde, weitere
   bekommen `busy`). Dann wird die ID gemerkt und gespeichert (auch für abgelehnte), dann: kein laufender Vorgang, eine
   frische Vorprüfung (höchstens eine je Runde), Tag und Version bzw. der Rückweg-Slot. Erst dann führt `Flow.run` sie
   aus (Update oder Rückweg).
@@ -161,7 +162,7 @@ class Helper:
         self._flow_in_round = False
         """In dieser Runde lief schon ein Ablauf: weitere Anforderungen derselben Runde bekommen `busy`."""
         self._signature_in_round = False
-        """In dieser Runde wurde schon eine Signatur nachgerechnet: weitere mit `v: 2` bekommen `busy`."""
+        """In dieser Runde wurde schon eine Signatur nachgerechnet: weitere Anforderungen bekommen `busy`."""
         self._results_dirty = False
         """Ein Ergebnis steht schon in `self._state`, aber noch nicht in `state.json`."""
         self._recover_waits = False
@@ -438,6 +439,7 @@ class Helper:
         try:
             request = policy.read_request(item.raw, now=now, file_id=item.id, keys=self._trusted_keys,
                                           repository=self._repository)
+            policy.require_authenticated(request)
         except Refusal as exc:
             self._refuse(item.id, _guess_action(item.raw), None, None, exc.code)
             return
@@ -454,7 +456,7 @@ class Helper:
             self._refuse(request.id, request.action, known_version, to_version, exc.code)
             self._remember(state, request, now)
             return
-        if request.v == 2 and not self._check_signature(request, known_version):
+        if not self._check_signature(request, known_version):
             return
         if not self._remember(state, request, now):
             self._refuse(request.id, request.action, known_version, to_version, policy.STATE_UNSAFE)
@@ -495,7 +497,9 @@ class Helper:
         self._signature_in_round = True
         if code is None:
             try:
-                policy.check_signature(request, keys=self._trusted_keys)
+                if request.grant is not None:
+                    policy.check_signature(request, keys=self._trusted_keys)
+                policy.check_request_signature(request, self._store.request_public_key())
             except Refusal as exc:
                 code = exc.code
         if code is not None:
@@ -712,9 +716,14 @@ def selftest() -> int:
 
 
 def _selftest_request() -> bool:
-    raw = policy.dumps({"v": 1, "id": "6f1c2b0e-9a4d-4c1e-8f00-1b2c3d4e5f60", "action": "update",
+    raw = policy.dumps({"v": 1, "id": "6f1c2b0e-9a4d-4c1e-8f00-1b2c3d4e5f60", "action": "rollback",
                         "version": "0.7.1", "created_at": 1790812345})
-    ok = policy.parse_request(raw, now=1790812400).version == "0.7.1"
+    unsigned = policy.parse_request(raw, now=1790812400)
+    try:
+        policy.require_authenticated(unsigned)  # gelesen ja, ausgeführt nie
+        return False
+    except Refusal as exc:
+        ok = unsigned.version == "0.7.1" and exc.code == policy.SIGNATURE_REQUIRED
     try:
         policy.parse_request(b'{"v": 1, "v": 1}', now=1790812400)
     except Refusal as exc:
@@ -730,6 +739,16 @@ _SELFTEST_SIG = (
     "6927b02889f7d27e27efaf41878ec91d5d0dcd4a31fa3b86c507377934e015c7"
     "cc9168016ad8d88fa206d3a2b7c2374662637b9cc90dc62efd9c88d88d2f5b06"
 )
+
+_SELFTEST_REQUEST_SIG = (
+    "06a2e5fdbeb1952ffbfafceebe33d49f3f4899b75cb88266044980c6f0d2b8ae"
+    "bfaa63cf099e3bbaa9f8a545446847b8119d9cb88e3b611fcf3ba33cf2308c00"
+)
+_SELFTEST_ROLLBACK_SIG = (
+    "bb65e582d39fc4f6cbf6a8b60858a9d79939dd47deb32c4a378e1a5a05397aa5"
+    "e9a8d037c83c92c7c40e58046bdf7d892a621c18ae6eb5309c17497880426b06"
+)
+"""Installationssignaturen mit dem geheimen Schlüssel aus RFC 8032, Test 1 (Update und Rückweg)."""
 
 
 def _selftest_signed_request() -> bool:
@@ -748,7 +767,28 @@ def _selftest_signed_request() -> bool:
         except Refusal as exc:
             refused.append(exc.code)
     accepted = policy.parse_request(raw, now=1790812400, keys=keys).v == 2
-    return accepted and refused == [policy.BAD_SIGNATURE, policy.UNKNOWN_KEY]
+    request.update(v=3, request_key_id=_SELFTEST_KEY.key_id, request_sig=_SELFTEST_REQUEST_SIG)
+    authenticated = policy.parse_request(policy.dumps(request), now=1790812400, keys=keys)
+    policy.check_request_signature(authenticated, _SELFTEST_KEY.public)
+    request["created_at"] += 1
+    changed = policy.read_request(policy.dumps(request), now=1790812400, keys=keys)
+    try:
+        policy.check_request_signature(changed, _SELFTEST_KEY.public)
+        return False
+    except Refusal as exc:
+        refused.append(exc.code)
+    rollback = {"v": 3, "id": request["id"], "action": "rollback", "version": "0.7.0", "created_at": 1790812345,
+                "request_key_id": _SELFTEST_KEY.key_id, "request_sig": _SELFTEST_ROLLBACK_SIG}
+    policy.check_request_signature(policy.parse_request(policy.dumps(rollback), now=1790812400), _SELFTEST_KEY.public)
+    rollback["version"] = "0.6.9"
+    try:
+        policy.check_request_signature(policy.parse_request(policy.dumps(rollback), now=1790812400),
+                                       _SELFTEST_KEY.public)
+        return False
+    except Refusal as exc:
+        refused.append(exc.code)
+    return accepted and refused == [policy.BAD_SIGNATURE, policy.UNKNOWN_KEY, policy.BAD_SIGNATURE,
+                                    policy.BAD_SIGNATURE]
 
 
 def _selftest_status() -> bool:

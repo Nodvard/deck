@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 import logging
 import math
@@ -1764,7 +1765,11 @@ def register(ctx: ExtensionContext, connectors_factory: ConnectorsFactory) -> No
 
     router = APIRouter()
 
-    @router.get("/restore/backups")
+    @router.get(
+        "/restore/backups",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (404,)},
+    )
     async def restore_backups(
         connection: str = Query(...), vmid: str = Query(...), kind: str | None = Query(None),
     ) -> dict[str, Any]:
@@ -1774,7 +1779,11 @@ def register(ctx: ExtensionContext, connectors_factory: ConnectorsFactory) -> No
         except RestoreError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
 
-    @router.get("/restore/options")
+    @router.get(
+        "/restore/options",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (404,)},
+    )
     async def restore_choices(connection: str = Query(...), volid: str = Query(...)) -> dict[str, Any]:
         """Knoten, passende Speicher mit Platz, freie Nummer und Name als Vorschlag (nur lesend)."""
         try:
@@ -1782,7 +1791,11 @@ def register(ctx: ExtensionContext, connectors_factory: ConnectorsFactory) -> No
         except RestoreError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
 
-    @router.post("/restore")
+    @router.post(
+        "/restore",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (404,)},
+    )
     async def propose_restore(
         values: dict[str, Any] = Body(...), actor: Actor = Depends(ctx.api.current_actor),
     ) -> dict[str, Any]:

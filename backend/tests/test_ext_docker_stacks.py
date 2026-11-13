@@ -78,6 +78,22 @@ def test_portainer_old_and_odd_stacks_get_no_files():
     assert "kaputt" not in stacks
 
 
+@pytest.mark.parametrize("working_dir", [None, ""])
+@pytest.mark.parametrize(("config_files", "env_files", "known_files"), [
+    ("/opt/stacks/shop/other.yaml", "", ("/opt/stacks/shop/other.yaml",)),
+    ("", "/opt/stacks/shop/other.env", ("/opt/stacks/shop/other.env",)),
+    ("other.yaml,/opt/stacks/shop/extra.yaml", "./other.env,/opt/stacks/shop/other.env",
+     ("/opt/stacks/shop/extra.yaml", "/opt/stacks/shop/other.env")),
+])
+def test_missing_working_dir_keeps_absolute_file_references(working_dir, config_files, env_files, known_files):
+    st = _st()
+    stack = st.parse_members(ps(row(working_dir=working_dir, config_files=config_files, env_files=env_files)))[0]
+    assert stack.known_files == known_files
+    assert (stack.working_dir, stack.files, stack.env_files, stack.source) == ("", None, (), "unknown")
+    with pytest.raises(ValueError, match="Stack ohne gültige Angaben"):
+        st.compose_argv(stack, "up", "-d")
+
+
 def test_hashes_show_what_compose_up_would_change():
     st = _st()
     stacks = {s.project: s for s in st.parse_members(PS)}

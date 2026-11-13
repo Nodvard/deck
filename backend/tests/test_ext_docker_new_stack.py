@@ -252,6 +252,20 @@ async def test_risky_files_need_high(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_the_check_resolves_links_before_judging_a_data_folder(tmp_path):
+    env = _setup(tmp_path)
+    config = {"name": "neu", "services": {"app": {"image": "x", "volumes": [{"type": "bind", "source": "/srv/link/x", "target": "/x"}]}}}
+    env.fake.config = result(json.dumps(config))
+    stack = env.mod.new_stack("neu", ROOT)
+    host = SimpleNamespace(id="h1")
+    assert (await env.new.check(host, stack, ROOT, b"services: {}")).warnings == ()
+    env.fake.real_paths["/srv/link/x"] = "/"
+    checked = await env.new.check(host, stack, ROOT, b"services: {}")
+    assert checked.warnings == ("„app“ bindet / vom Server ein.",)
+    assert ["realpath", "-m", "--", "/srv/link/x"] in env.fake.argv_calls
+
+
+@pytest.mark.asyncio
 async def test_a_failed_write_removes_folder_and_file(tmp_path):
     env = _setup(tmp_path)
     original = env.sftp._writer
@@ -1098,3 +1112,305 @@ async def test_a_file_of_exactly_the_byte_limit_is_accepted(client, docker_on):
     proposed = await client.post(_url(docker_on, "new-stack"), json={"name": "neu", "content": content}, headers=docker_on.owner)
     assert proposed.status_code == 202, proposed.text
     assert len(await _creations(client, docker_on.owner)) == 1
+
+
+@pytest.mark.asyncio
+async def test_values_go_to_the_stack_env_after_approval(client, docker_on):
+    values = {"DB_PASSWORD": "test-secret-value", "TZ": "Europe/Berlin"}
+    body = {"name": "neu", "content": CONTENT.decode(), "env": values}
+    checked = await client.post(_url(docker_on, "new-stack/check"), json=body, headers=docker_on.owner)
+    assert checked.status_code == 200, checked.text
+    proposed = await client.post(_url(docker_on, "new-stack"), json=body, headers=docker_on.owner)
+    assert proposed.status_code == 202, proposed.text
+    assert FOLDER not in docker_on.exec.sftp_server.dirs
+    action_url = f"/api/v1/actions/{proposed.json()['action_id']}"
+    action = await client.get(action_url, headers=docker_on.owner)
+    assert values["DB_PASSWORD"] not in action.text
+    approved = await client.post(f"{action_url}/approve", headers=docker_on.owner)
+    assert approved.json()["status"] == "succeeded", approved.text
+    assert docker_on.exec.files[f"{FOLDER}/.env"] == b'DB_PASSWORD="test-secret-value"\nTZ="Europe/Berlin"\n'
+    assert docker_on.exec.sftp_server.modes[f"{FOLDER}/.env"] & 0o777 == 0o600
+    assert docker_on.exec.files[PATH] == CONTENT
+
+
+def _env_request(env, values, *, start=False):
+    content = json.dumps({"compose": CONTENT.decode(), "env": values}, ensure_ascii=False).encode()
+    return _request(env, content=content, with_env=True, start=start)
+
+
+@pytest.mark.asyncio
+async def test_saved_env_names_survive_a_restart_and_cover_stack_commands(tmp_path):
+    env = _setup(tmp_path)
+    values = {"PWD": "/srv/daten", "PATH": "kein Suchpfad", "DB_PASSWORD": "test-secret"}
+    assert (await env.create.execute(_env_request(env, values))).success
+    adopt, editor, _, actions, stacks = _mods()
+    store = adopt.AdoptedStacks(tmp_path)
+    stack = store.for_host("h1")["neu"].stack("neu")
+    assert stack.env_names == tuple(values)
+    assert "test-secret" not in (tmp_path / adopt.STORE_FILE).read_text()
+    for command in [*(actions.cmd_verb(stack, verb) for verb in actions.VERBS), actions.cmd_services(stack), editor.cmd_check(stack, 0)]:
+        assert "-u PWD" in command[7] and "-u PATH" in command[7]
+    env.fake.rows = [{**env.fake.rows[0], "project": "neu", "working_dir": FOLDER, "config_files": PATH, "env_files": ""}]
+    reader = stacks.DockerStacks(env.ctx, store)
+    listed = await reader.stacks(SimpleNamespace(id="h1"), "neu")
+    assert listed[0].env_names == tuple(values)
+    assert "-u PWD" in stacks.cmd_hashes(listed, "0123456789abcdef")
+    env.fake.rows[0]["working_dir"] = "/srv/anderer-ordner"
+    assert (await reader.stacks(SimpleNamespace(id="h1"), "neu"))[0].env_names == ()
+    plain = env.mod.new_stack("neu", ROOT)
+    assert stacks.compose_argv(plain, "config")[0] == "docker"
+    for names in (None, "PWD", ["PWD;id"], ["1NAME"], ["A"] * 101):
+        assert adopt._entry({**store.for_host("h1")["neu"].to_json(), "env_names": names}) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="braucht eine POSIX-Shell")
+@pytest.mark.parametrize("pwd", [None, "/srv/daten", "/"])
+async def test_new_check_keeps_pwd_without_root_with_real_compose(tmp_path, pwd):
+    import os
+    import shutil
+    import subprocess
+
+    if not shutil.which("docker"):
+        pytest.skip("Docker Compose fehlt")
+    version = await asyncio.to_thread(subprocess.run, ["docker", "compose", "version"], check=False, capture_output=True)
+    if version.returncode:
+        pytest.skip("Docker Compose fehlt")
+    env = _setup(tmp_path / "daten")
+    root = str(tmp_path / "neue stacks")
+    stack = env.mod.new_stack("neu", root)
+    values = {"DB_PASSWORD": "test-secret"}
+    if pwd is not None:
+        values["PWD"] = pwd
+    compose = b'services:\n  app:\n    image: busybox\n    volumes:\n      - "${PWD}:/data"\n    environment:\n      DB_PASSWORD: ${DB_PASSWORD}\n'
+    calls = []
+
+    async def run(host, argv, *, stdin=None, **kwargs):
+        checked = await asyncio.to_thread(subprocess.run, argv, input=stdin, capture_output=True, check=False, timeout=30,
+                                          env={**os.environ, "PWD": "/wrong", "DB_PASSWORD": "wrong-host-value"})
+        if argv[:1] != ["realpath"]:
+            calls.append((argv[4], checked.returncode))
+        return result(checked.stdout.decode(), checked.stderr.decode(), checked.returncode)
+
+    env.fake.run_argv = run
+    checked = await env.new.check(SimpleNamespace(id="h1"), stack, root, compose, values)
+    assert calls == [(root, 97), ("/", 0)]
+    assert checked.problem is None
+    service = checked.config["services"]["app"]
+    # Eine eingegebene Variable `PWD` liest Compose nicht (nur aus der Umgebung): Es bleibt beim Stack-Ordner.
+    assert service["volumes"][0]["source"] == stack.working_dir
+    assert service["environment"]["DB_PASSWORD"] == "test-secret"
+    assert not checked.warnings
+    assert not (tmp_path / "neue stacks").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="braucht eine POSIX-Shell")
+@pytest.mark.parametrize("values", [{}, {"PWD": ""}, {"PWD": "/srv/daten", "DB_PASSWORD": "test-secret"}, {"PATH": "kein Suchpfad"}])
+async def test_create_then_apply_uses_the_same_values_with_real_compose(tmp_path, values):
+    import os
+    import shutil
+    import subprocess
+
+    from nodvard_deck_ext_docker.env_values import env_file
+
+    if not shutil.which("docker"):
+        pytest.skip("Docker Compose fehlt")
+    version = await asyncio.to_thread(subprocess.run, ["docker", "compose", "version"], check=False, capture_output=True)
+    if version.returncode:
+        pytest.skip("Docker Compose fehlt")
+    env = _setup(tmp_path / "daten")
+    folder = tmp_path / "server" / "neu"
+    folder.mkdir(parents=True)
+    compose = b'services:\n  app:\n    image: busybox\n    volumes:\n      - "${PWD}/data:/data"\n    environment:\n      DB_PASSWORD: ${DB_PASSWORD}\n'
+    content = json.dumps({"compose": compose.decode(), "env": values}).encode()
+    seen = []
+
+    async def run(host, argv, *, stdin=None, **kwargs):
+        for path, data in env.fake.files.items():
+            if path.startswith(FOLDER + "/"):
+                (folder / path.removeprefix(FOLDER + "/")).write_bytes(data)
+        if argv[:1] == ["realpath"]:
+            return result("".join(f"{path}\n" for path in argv[3:]))
+        argv = [arg.replace(FOLDER, str(folder)).replace(ROOT, str(folder.parent)) for arg in argv]
+        if argv[-2:] == ["up", "-d"]:
+            argv[-2:] = ["config", "--format", "json"]
+        checked = await asyncio.to_thread(subprocess.run, argv, input=stdin, capture_output=True, check=False, timeout=30,
+                                          env={**os.environ, "PWD": "/wrong", "DB_PASSWORD": "wrong-host-value"})
+        if checked.returncode == 0 and argv[-3:] == ["config", "--format", "json"]:
+            seen.append(json.loads(checked.stdout)["services"]["app"])
+        # Der Server kennt den Ordner unter FOLDER, nicht unter dem Ordner des Tests.
+        return result(checked.stdout.decode().replace(str(folder), FOLDER), checked.stderr.decode(), checked.returncode)
+
+    env.fake.run_argv = run
+    checked = await env.new.check(SimpleNamespace(id="h1"), env.mod.new_stack("neu", str(folder.parent)), str(folder.parent), compose, values)
+    assert checked.problem is None
+    request = _request(env, content=content, with_env=True, start=True)
+    assert (await env.create.execute(request)).success
+    adopt, _, _, actions, stacks = _mods()
+    store = adopt.AdoptedStacks(tmp_path / "daten")
+    executor = actions.DockerStackExecutor(env.ctx, stacks.DockerStacks(env.ctx, store), store)
+    done = await executor.execute(request.model_copy(update={"action_type": "docker.stack_up", "payload": {"project": "neu"}}))
+    assert done.success, done.error
+    assert len(seen) == 4
+    # Wie von Hand im Ordner gestartet: `${PWD}` ist der Stack-Ordner, auch mit einer eingegebenen Variable `PWD`.
+    expected = str(folder) + "/data"
+    assert [service["volumes"][0]["source"] for service in seen] == [expected] * 4
+    assert [service["environment"]["DB_PASSWORD"] for service in seen] == [values.get("DB_PASSWORD", "wrong-host-value")] * 4
+    assert env.fake.files.get(f"{FOLDER}/.env") == (env_file(values) if values else None)
+
+
+@pytest.mark.asyncio
+async def test_env_is_written_before_the_check_and_removed_on_failure(tmp_path):
+    env = _setup(tmp_path)
+    original = env.fake.run_argv
+
+    async def run(host, argv, **kwargs):
+        assert env.fake.files[f"{FOLDER}/.env"] == b'DB_PASSWORD="test-secret"\n'
+        return await original(host, argv, **kwargs)
+
+    env.fake.run_argv = run
+    env.fake.config = result(stderr="invalid value test-secret in -: app\n", code=1)
+    done = await env.create.execute(_env_request(env, {"DB_PASSWORD": "test-secret"}))
+    assert not done.success and "test-secret" not in done.error
+    assert FOLDER not in env.sftp.dirs and f"{FOLDER}/.env" not in env.fake.files
+    assert env.store.for_host("h1") == {}
+
+
+@pytest.mark.asyncio
+async def test_env_without_private_permissions_stops_before_writing(tmp_path, monkeypatch):
+    env = _setup(tmp_path)
+    original = env.sftp.stat
+
+    async def stat(path):
+        attrs = await original(path)
+        if path.endswith("/.env"):
+            attrs.permissions = 0o100644
+        return attrs
+
+    monkeypatch.setattr(env.sftp, "stat", stat)
+    done = await env.create.execute(_env_request(env, {"DB_PASSWORD": "test-secret"}))
+    assert not done.success and done.error.startswith(".env wäre für andere auf dem Server lesbar")
+    assert not env.sftp.seen_modes and FOLDER not in env.sftp.dirs
+
+
+@pytest.mark.asyncio
+async def test_env_draft_is_bound_to_its_hash_and_cleaned(tmp_path):
+    env = _setup(tmp_path)
+    request = _env_request(env, {"DB_PASSWORD": "test-secret"})
+    request.payload["sha256"] = _sha(CONTENT)
+    refused = await env.create.execute(request)
+    assert not refused.success and "Entwurf ist abgelaufen oder passt nicht" in refused.error
+    assert FOLDER not in env.sftp.dirs and env.editor.drafts.get(request.payload["draft"]) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("values", [{"BAD-NAME": "x"}, {"1NAME": "x"}, {"A": "secret\x00value"}, {"A": "x" * (256 * 1024)}])
+async def test_invalid_env_values_are_rejected_without_echoing(client, docker_on, values):
+    answer = await client.post(_url(docker_on, "new-stack/check"), json={"name": "neu", "content": CONTENT.decode(), "env": values}, headers=docker_on.owner)
+    assert answer.status_code == 400, answer.text
+    assert "secret" not in answer.text and FOLDER not in docker_on.exec.sftp_server.dirs
+
+
+@pytest.mark.asyncio
+async def test_check_hides_env_values_in_errors_and_risk_warnings(client, docker_on):
+    body = {"name": "neu", "content": CONTENT.decode(), "env": {"DB_PASSWORD": "test-secret"}}
+    docker_on.exec.config = result(stderr="invalid value test-secret in -: app\n", code=1)
+    checked = await client.post(_url(docker_on, "new-stack/check"), json=body, headers=docker_on.owner)
+    assert checked.status_code == 200 and not checked.json()["ok"] and "test-secret" not in checked.text
+    docker_on.exec.config = result(json.dumps({"services": {"app": {"provider": {"type": "test-secret"}}}}))
+    proposed = await client.post(_url(docker_on, "new-stack"), json=body, headers=docker_on.owner)
+    assert proposed.status_code == 202 and proposed.json()["risk"] == "high"
+    action = await client.get(f"/api/v1/actions/{proposed.json()['action_id']}", headers=docker_on.owner)
+    assert "test-secret" not in action.text
+    assert all("test-secret" not in word for argv in docker_on.exec.argv_calls for word in argv)
+
+
+@pytest.mark.asyncio
+async def test_start_hides_env_values_in_errors_and_output(tmp_path):
+    env = _setup(tmp_path)
+    env.fake.verb = result(stderr="bad test-secret-value\n", code=1)
+    done = await env.create.execute(_env_request(env, {"DB_PASSWORD": "test-secret-value"}, start=True))
+    assert not done.success and "test-secret-value" not in done.model_dump_json()
+    assert all("test-secret-value" not in word for argv in env.fake.argv_calls for word in argv)
+    assert env.fake.files[f"{FOLDER}/.env"] == b'DB_PASSWORD="test-secret-value"\n'
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="braucht eine POSIX-Shell")
+def test_env_roundtrip_with_real_compose_and_host_overrides(tmp_path):
+    import os
+    import shutil
+    import subprocess
+
+    from nodvard_deck_ext_docker.env_values import cmd_with_env, env_file, env_stdin
+
+    if not shutil.which("docker") or subprocess.run(["docker", "compose", "version"], check=False, capture_output=True).returncode:
+        pytest.skip("Docker Compose fehlt")
+    values = {"DB_PASSWORD": "ümlaut '\"$NAME'\\\nzweite Zeile", "PLAIN": " # Wert ", "PATH": "kein Suchpfad", "LD_PRELOAD": "keine Bibliothek"}
+    compose = json.dumps({"services": {"app": {"image": "busybox", "environment": {name: "${" + name + ":?fehlt}" for name in values}}}}).encode()
+    argv = cmd_with_env(["docker", "compose", "-p", "test", "-f", "-", "config", "--format", "json"], values)
+    data = env_stdin(values, compose)
+    shell_env = {**os.environ, "TMPDIR": str(tmp_path), "DB_PASSWORD": "falscher Hostwert", "PLAIN": "falsch"}
+    checked = subprocess.run(argv, input=data, check=False, capture_output=True, env=shell_env, timeout=30)
+    assert checked.returncode == 0, checked.stderr.decode()
+    actual = json.loads(checked.stdout)["services"]["app"]["environment"]
+    assert actual == {name: value.replace("$", "$$") for name, value in values.items()}
+    assert not list(tmp_path.iterdir()), "die private Prüfdatei bleibt nicht stehen"
+    (tmp_path / ".env").write_bytes(env_file(values))
+    (tmp_path / "compose.yaml").write_bytes(compose)
+    argv = cmd_with_env(["docker", "compose", "-p", "test", "config", "--format", "json"], values)
+    data = env_stdin(values, saved=True)
+    saved = subprocess.run(argv, input=data, cwd=tmp_path, check=False, capture_output=True, timeout=30, env=shell_env)
+    assert saved.returncode == 0, saved.stderr.decode()
+    assert json.loads(saved.stdout)["services"]["app"]["environment"] == actual
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="braucht eine POSIX-Shell")
+def test_env_wrapper_cannot_run_shell_text_and_cleans_up(tmp_path):
+    import os
+    import subprocess
+
+    from nodvard_deck_ext_docker.env_values import cmd_with_env, env_stdin
+
+    marker = tmp_path / "unwanted"
+    values = {"DB_PASSWORD": f"'\n$(touch {marker})\n'", "LD_PRELOAD": "/bad/library"}
+    argv = cmd_with_env(["docker", "compose", "config"], values)
+    data = env_stdin(values)
+    missing_docker = tmp_path / "bin"
+    missing_docker.mkdir()
+    (missing_docker / "docker").write_text("#!/bin/sh\nexit 4\n")
+    (missing_docker / "docker").chmod(0o755)
+    checked = subprocess.run(argv, input=data, check=False, capture_output=True, timeout=30,
+                             env={**os.environ, "PATH": f"{missing_docker}:{os.environ['PATH']}", "TMPDIR": str(tmp_path)})
+    assert checked.returncode == 4 and not marker.exists()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["bin"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="braucht POSIX-Rechte")
+async def test_real_sftp_writes_the_env_privately(tmp_path, real_sftp):
+    env = _setup(tmp_path / "daten")
+    env.fake.sftp = real_sftp.sftp
+    assert (await env.create.execute(_env_request(env, {"DB_PASSWORD": "test-secret"}))).success
+    path = real_sftp.root / "opt/stacks/neu/.env"
+    assert path.read_bytes() == b'DB_PASSWORD="test-secret"\n'
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="braucht eine POSIX-Shell")
+def test_start_reads_the_stack_env_without_a_temporary_path(tmp_path):
+    import os
+    import subprocess
+
+    from nodvard_deck_ext_docker.env_values import cmd_with_env, env_stdin
+
+    fake_docker = tmp_path / "docker"
+    fake_docker.write_text("#!/bin/sh\nprintf '%s\\n' \"${DB_PASSWORD-unset}\" \"$@\"\n")
+    fake_docker.chmod(0o755)
+    values = {"DB_PASSWORD": "test-secret"}
+    argv = cmd_with_env(["docker", "compose", "up", "-d"], values)
+    script = env_stdin(values, saved=True)
+    checked = subprocess.run(argv, input=script, check=False, capture_output=True, timeout=30,
+                             env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "DB_PASSWORD": "wrong-host-value"})
+    assert checked.returncode == 0 and checked.stdout.splitlines() == [b"unset", b"compose", b"up", b"-d"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["docker"]

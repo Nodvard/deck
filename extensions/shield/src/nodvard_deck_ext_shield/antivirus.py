@@ -1199,12 +1199,16 @@ def _outside_quarantine(consequence: str) -> str:
 def delete_command(quarantine_path: str) -> str:
     if not _in_quarantine(quarantine_path):
         raise ValueError(_outside_quarantine("löscht Nodvard Shield sie nicht"))
-    return f"rm -f {_q(quarantine_path)} {_q(origin_record(quarantine_path))}; echo ok"
+    return f"rm -f {_q(quarantine_path)} {_q(origin_record(quarantine_path))} && echo ok"
 
 
 # Das Hilfsskript ist reines ASCII und gibt statt eines Satzes `@@msg=<kennung>` aus (bei `restore_stuck` mit dem Ort
 # dahinter); `helper_text` setzt denselben Satz ein, den der eigene Befehl des Moduls ausgibt.
 HELPER_MESSAGES = {
+    "fail2ban_conflict": "Die wirksamen Fail2ban-Einstellungen weichen vom freigegebenen Auftrag ab. "
+                         "Bitte vorrangige Jail-Einstellungen am Server prüfen. Die Datei wurde zurückgesetzt.",
+    "fail2ban_unprotected": "Die wirksame Fail2ban-Konfiguration schützt die Deck-Verbindung nicht in jedem aktiven Jail. "
+                            "Bitte vorrangige Jail-Einstellungen am Server prüfen. Die Datei wurde zurückgesetzt.",
     "gone": "Datei nicht mehr vorhanden",
     "path_link": PATH_LINK_REFUSED,
     "symlink": SYMLINK_REFUSED,
@@ -1231,7 +1235,7 @@ HELPER_MESSAGES = {
     "realtime_no_systemd": REALTIME_NO_SYSTEMD,
     "realtime_not_started": REALTIME_NOT_STARTED,
 }
-_HELPER_MSG_RE = re.compile(r"^@@msg=([a-z_]+)(?: (.*))?$")
+_HELPER_MSG_RE = re.compile(r"^@@msg=([a-z0-9_]+)(?: (.*))?$")
 
 
 def helper_text(output: str) -> str:
@@ -1363,8 +1367,10 @@ INSTALL_COMMANDS = {
         "elif command -v apk >/dev/null; then apk add fail2ban; "
         "else echo 'Kein bekannter Paketmanager'; exit 2; fi; "
         # Debian 12 hat kein /var/log/auth.log mehr; ohne systemd-Backend startet der sshd-Jail nicht.
-        "if [ ! -f /etc/fail2ban/jail.local ]; then printf '[DEFAULT]\\nbackend = systemd\\n\\n[sshd]\\nenabled = true\\n' > /etc/fail2ban/jail.local; fi; "
-        "systemctl enable --now fail2ban 2>/dev/null; systemctl restart fail2ban 2>/dev/null; fail2ban-client ping"
+        "if [ ! -f /etc/fail2ban/jail.d/nodvard.local ]; then mkdir -p /etc/fail2ban/jail.d; "
+        "printf '[sshd]\\nenabled = true\\nbackend = systemd\\n' > /etc/fail2ban/jail.d/nodvard.local; fi; "
+        "fail2ban-client -t || exit 1; systemctl enable --now fail2ban 2>/dev/null; "
+        "fail2ban-client reload || exit $?; fail2ban-client ping"
     ),
     "unattended": (
         "command -v apt-get >/dev/null || { echo 'Nur für Debian/Ubuntu (apt)'; exit 2; }; "

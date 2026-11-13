@@ -5,6 +5,7 @@ Reine Funktionen ohne I/O; mit Passwort führt das Dashboard das Skript selbst a
 from __future__ import annotations
 
 import base64
+import gzip
 import hashlib
 import re
 import shlex
@@ -67,7 +68,7 @@ _KEY_OPTIONS = (
     f'DB=1; KO="{DROPBEAR_KEY_OPTIONS}"; break;; esac; done'
 )
 # KM: KL ist eine eigene alte Zeile, also `restrict,pty $K` oder derselbe Schlüssel mit einem anderen eigenen Kommentar
-# (älteres `lattice@…`, Server umbenannt); nur die erste bekommt `$KO` statt `restrict,pty`. KN: KL ist der Schlüssel
+# (etwa nach Umbenennen des Servers); nur die erste bekommt `$KO` statt `restrict,pty`. KN: KL ist der Schlüssel
 # ohne Optionen (etwa von Hand eingetragen); jede solche Zeile bekommt `$KO` davor. Leerraum ist wie bei sshd nur
 # Leerzeichen und Tab (KZ), am Ende darf ein CR (KQ) einer Windows-Zeile stehen.
 # KF <KM|KN> [Aufruf]: schreibt die Datei mit den so geänderten Zeilen neu, alle anderen bleiben Byte für Byte; die Länge
@@ -184,9 +185,8 @@ def _dq(value: str) -> str:
 
 
 def key_comment(host_name: str) -> str:
-    """Kommentar des erzeugten Schlüssels: `nodvard@<Kurzname>`, auf sichere Zeichen reduziert (entdeckte Server können
-    beliebige Namen tragen). Alte Einträge mit `lattice@<Kurzname>` erkennt der Befehl trotzdem, weil er nur nach Art und
-    Schlüsseltext sucht (`build_setup_script`)."""
+    """Kommentar `nodvard@<Kurzname>`, auf sichere Zeichen reduziert; vorhandene Schlüssel erkennt
+    `build_setup_script` unabhängig vom Kommentar an Art und Schlüsseltext."""
     return "nodvard@" + re.sub(r"[^A-Za-z0-9_.-]", "-", host_name)[:64]
 
 
@@ -273,13 +273,14 @@ def _full_rights_help(helpers: Sequence[RootHelperFile]) -> str:
     return f"{head}: {_join(stuck)} {tail}."
 
 
-def _helper_functions(helper_dir: str, helpers: Sequence[RootHelperFile]) -> list[str]:
+def _helper_functions(helper_dir: str, helpers: Sequence[RootHelperFile], *, sudo: bool = True) -> list[str]:
     """`D` und die Funktionen für die Hilfsskripte. Ein Skript bekommt seine Regel nur, wenn es und jeder Ordner bis `/`
     root gehören und weder andere noch der Benutzer selbst dort schreiben können (`W`): Sonst könnte er das Skript tauschen
     und wäre über die Regel root."""
     rescue = _full_rights_help(helpers)
     link_help = f". {rescue}" if rescue else "; hier hilft nur „Volle Rechte“."
-    return [
+    writable = '! R test -w "$1" 2>/dev/null || return 1; ' if sudo else ""
+    lines = [
         f'D="{_dq(helper_dir)}"; HX=; HN=; WL=FEHLER',
         # WA: für die Meldung der erste benannte ACL-Eintrag außer root, der schreiben darf (AN).
         (
@@ -292,7 +293,7 @@ def _helper_functions(helper_dir: str, helpers: Sequence[RootHelperFile]) -> lis
         # sind die Gruppenbits die Maske: Ohne w darin schreibt auch kein benannter Eintrag.
         (
             'W() { [ ! -L "$1" ] && [ "$(stat -c %u "$1" 2>/dev/null)" = 0 ] || return 1; '
-            '! R test -w "$1" 2>/dev/null || return 1; M=$(stat -c %a "$1" 2>/dev/null) || return 1; '
+            f'{writable}M=$(stat -c %a "$1" 2>/dev/null) || return 1; '
             'case "$M" in ""|*[2367]|*[2367]?) return 1;; esac; return 0; }'
         ),
         'WD() { P="$1"; while :; do W "$P" || return 1; [ "$P" = / ] && return 0; P=$(dirname "$P"); done; }',
@@ -321,9 +322,13 @@ def _helper_functions(helper_dir: str, helpers: Sequence[RootHelperFile]) -> lis
             'Gruppe $(stat -c %G "$1" 2>/dev/null)). Abhilfe als root: chmod go-w $1 (bei einer ACL vorher: setfacl -b $1)"; fi; }'
         ),
         (
-            'HS() { Y=$(mktemp) || return 1; if printf %s "$3" | base64 -d > "$Y" 2>/dev/null && [ "$(sha256sum "$Y" | cut -d" " -f1)" = "$2" ] '
+            'HS() { Y=$(mktemp) || return 1; if printf %s "$3" | base64 -d 2>/dev/null | gzip -dc > "$Y" 2>/dev/null && [ "$(sha256sum "$Y" | cut -d" " -f1)" = "$2" ] '
             '&& install -m 0755 -o root -g root "$Y" "$D/$1" && W "$D/$1"; then rm -f "$Y"; return 0; fi; rm -f "$Y"; return 1; }'
         ),
+    ]
+    if not sudo:
+        return lines
+    lines += [
         # HW: schreibt die Regel für Skript $1 nach $2, davor die Prüfsumme $3 (leer: ohne). Kennt visudo die Form nicht
         # (sudo vor 1.8.7, sudo-rs), gilt sie ohne (HQ).
         (
@@ -347,6 +352,7 @@ def _helper_functions(helper_dir: str, helpers: Sequence[RootHelperFile]) -> lis
             '[ $? = 1 ] || return 0; HQ=1; HW "$1" "$2" ""; }'
         ),
     ]
+    return lines
 
 
 def _helper_precheck(helpers: Sequence[RootHelperFile]) -> list[str]:
@@ -362,8 +368,8 @@ def _helper_precheck(helpers: Sequence[RootHelperFile]) -> list[str]:
         # die Vorprüfung ab, statt ihn wie `install -d` später still zu reparieren: So ändert der Befehl nichts.
         (
             'if ! command -v visudo >/dev/null; then echo "FEHLER: sudo ist nicht installiert (als root: apt install sudo)."; HB=1; '
-            'elif ! command -v base64 >/dev/null || ! command -v sha256sum >/dev/null || ! command -v stat >/dev/null; then '
-            'echo "FEHLER: base64, sha256sum oder stat fehlt hier. Sie gehören zu den coreutils, bitte nachinstallieren."; HB=2; '
+            'elif ! command -v base64 >/dev/null || ! command -v gzip >/dev/null || ! command -v sha256sum >/dev/null || ! command -v stat >/dev/null; then '
+            'echo "FEHLER: base64, gzip, sha256sum oder stat fehlt hier. Bitte nachinstallieren (coreutils, gzip)."; HB=2; '
             'elif ! WD "$(dirname "$D")"; then WM "$P"; HB=2; '
             'elif { [ -e "$D" ] || [ -L "$D" ]; } && { [ ! -d "$D" ] || ! W "$D"; }; then WM "$D"; HB=2; fi'
         ),
@@ -385,18 +391,18 @@ def _skipped_with_full_rule(helpers: Sequence[RootHelperFile]) -> str:
     return f", {_join(rescued)} {'nutzt' if len(rescued) == 1 else 'nutzen'} die volle sudo-Regel, {lost}"
 
 
-def _helper_lines(helpers: Sequence[RootHelperFile], *, strict: bool = False) -> list[str]:
+def _helper_lines(helpers: Sequence[RootHelperFile], *, strict: bool = False, sudo: bool = True) -> list[str]:
     """Hilfsskripte der Module, base64-kodiert und gegen ihre sha256 geprüft, samt je einer eigenen sudo-Regel. Ein
     Fehlschlag ist neben der vollen Regel nur ein Hinweis (das Modul nimmt dann sie), ohne sie (`strict`) oder bei einem
     Modul ohne `sudo_fallback` ein Fehler."""
     every = strict or not all(helper.sudo_fallback for helper in helpers)
     level, fail = ("FEHLER", " F=1;") if every else ("Hinweis", "")
     skipped = "" if strict else _skipped_with_full_rule(helpers)
+    start = 'if ! command -v visudo >/dev/null; then HX=1; elif ' if sudo else 'if '
     lines = [
         (
-            'if ! command -v visudo >/dev/null; then HX=1; '
-            'elif ! command -v base64 >/dev/null || ! command -v sha256sum >/dev/null || ! command -v stat >/dev/null; then '
-            f'echo "{level}: base64, sha256sum oder stat fehlt hier, die Hilfsskripte wurden übersprungen.";{fail} HX=1; '
+            f'{start}! command -v base64 >/dev/null || ! command -v gzip >/dev/null || ! command -v sha256sum >/dev/null || ! command -v stat >/dev/null; then '
+            f'echo "{level}: base64, gzip, sha256sum oder stat fehlt hier, die Hilfsskripte wurden übersprungen.";{fail} HX=1; '
             f'elif ! WD "$(dirname "$D")"; then WL={level}; WM "$P"; HX=2; '
             f'elif [ -L "$D" ] || ! install -d -m 0755 -o root -g root "$D" || ! W "$D"; then WL={level}; WM "$D"; HX=2; fi; '
             f'[ "$HX" != 2 ] || {{ echo "{level}: Deshalb wurden die Hilfsskripte übersprungen{skipped}.";{fail} }}'
@@ -404,21 +410,29 @@ def _helper_lines(helpers: Sequence[RootHelperFile], *, strict: bool = False) ->
     ]
     for helper in sorted(helpers, key=lambda h: h.ext_id):
         name = f"{helper.ext_id}-root"
-        blob = base64.b64encode(helper.text.encode("ascii")).decode("ascii")
+        # mtime=0: gleicher Text, gleicher Befehl. Die Prüfsumme gilt weiter für den entpackten Text.
+        blob = base64.b64encode(gzip.compress(helper.text.encode("ascii"), 9, mtime=0)).decode("ascii")
         own, own_fail = ("FEHLER", " F=1;") if strict or not helper.sudo_fallback else ("Hinweis", "")
-        done = f"Hilfsskript {name} (Version {helper.version}) eingerichtet, mit eigener sudo-Regel"
-        lines.append(
+        done = f"Hilfsskript {name} (Version {helper.version}) eingerichtet"
+        line = (
             f'if [ -z "$HX" ]; then if ! HS {name} {helper.sha256} "{blob}"; '
             f'then echo "{own}: Das Hilfsskript {name} wurde nicht eingerichtet: Die Datei ließ sich nicht prüfen oder nicht sicher ablegen.";{own_fail} '
-            f'elif ! HR {name} "{helper_sudoers_file(helper.ext_id)}" {helper.sha256}; '
-            f'then echo "{own}: Das Hilfsskript {name} wurde nicht eingerichtet: Seine sudo-Regel hat die Prüfung mit visudo nicht bestanden.";{own_fail} '
-            f'elif [ -z "$HQ" ]; then echo "{done}."; else HN=1; echo "{done} ohne Prüfsumme."; fi; fi'
         )
+        if sudo:
+            done += ", mit eigener sudo-Regel"
+            line += (
+                f'elif ! HR {name} "{helper_sudoers_file(helper.ext_id)}" {helper.sha256}; '
+                f'then echo "{own}: Das Hilfsskript {name} wurde nicht eingerichtet: Seine sudo-Regel hat die Prüfung mit visudo nicht bestanden.";{own_fail} '
+                f'elif [ -z "$HQ" ]; then echo "{done}."; else HN=1; echo "{done} ohne Prüfsumme."; fi; fi'
+            )
+        else:
+            line += f'else echo "{done}."; fi; fi'
+        lines.append(line)
     return lines
 
 
 FULL_RULE_REMOVED = "Die volle sudo-Regel {name} wurde entfernt."
-"""Zeile je entfernter Datei (`nodvard-<Benutzer>` oder `lattice-<Benutzer>`); `setup_report` liest sie."""
+"""Zeile je entfernter voller sudo-Regel; `setup_report` liest sie."""
 
 
 def _drop_full_rule_lines(helpers: Sequence[RootHelperFile]) -> list[str]:
@@ -495,8 +509,8 @@ def build_setup_script(
     helpers: Sequence[RootHelperFile] = (), helper_dir: str = ROOT_HELPER_DIR, report_state: bool = False,
     full_sudo: bool = True, drop_full_rule: bool = False,
 ) -> tuple[str, str]:
-    """`(skript, einzeiler)`: das Skript zum Lesen und dasselbe als Argument für `sh -c`. Gruppen, sudo und Hilfsskripte
-    gelten nur ohne root; `full_sudo=False` heißt nur die Regeln der Hilfsskripte, `drop_full_rule` nimmt dazu die volle
+    """`(skript, einzeiler)`: das Skript zum Lesen und dasselbe als Argument für `sh -c`. Gruppen und sudo gelten nur
+    ohne root; `full_sudo=False` heißt nur die Regeln der Hilfsskripte, `drop_full_rule` nimmt dazu die volle
     zurück, `report_state` meldet den Stand der Dateien für `setup_report`. Ungültiges ergibt `SetupError`."""
     user = _check_user(user)
     key = _check_public_key(public_key)
@@ -511,12 +525,12 @@ def build_setup_script(
         raise SetupError("Ohne Hilfsskripte gibt es keine engere sudo-Regel.")
     if drop_full_rule and not narrow:
         raise SetupError("Die volle sudo-Regel lässt sich nur zusammen mit den Regeln der Hilfsskripte entfernen.")
-    with_helpers = sudo and not is_root and bool(helpers)
+    with_helpers = (sudo or is_root) and bool(helpers)
     if with_helpers:
         _check_helpers(helpers, helper_dir)
 
     # `B` = Art und Schlüsseltext ohne Kommentar: Ein schon eingetragener Schlüssel wird auch dann erkannt, wenn er mit
-    # einem anderen Kommentar (z. B. `lattice@...`) auf dem Server steht.
+    # einem anderen Kommentar auf dem Server steht.
     lines = ["set -e", f"U={shlex.quote(user)}", f'K="{_dq(key)}"', 'B=$(echo "$K" | cut -d" " -f1,2)']
     if not is_root:
         lines.append(
@@ -524,7 +538,7 @@ def build_setup_script(
             'else su -s /bin/sh "$U" -c "exec \\"\\$@\\"" -- sh "$@"; fi; }'
         )
     if with_helpers:
-        lines += _helper_functions(helper_dir, helpers)
+        lines += _helper_functions(helper_dir, helpers, sudo=not is_root)
     if narrow:
         lines += _helper_precheck(helpers)
     if report_state:
@@ -585,13 +599,13 @@ def build_setup_script(
                 f'else echo "Hinweis: Gruppe {group} gibt es hier nicht – übersprungen."; fi'
             )
         if narrow:
-            # Nur die Regeln der Hilfsskripte: Eine vorhandene volle Regel (nodvard- oder lattice-<Benutzer>) nimmt nur
+            # Nur die Regeln der Hilfsskripte: Eine vorhandene volle Regel nimmt nur
             # `drop_full_rule` zurück, nach allen Regeln der Skripte.
             # Dass visudo da ist, hat die Vorprüfung schon festgestellt.
             lines.append(_VISUDO_FUNCTIONS)
             lines.append(f'VP=; visudo -c -q >/dev/null 2>&1 && VP=1; [ -n "$VP" ] || {{ {_VISUDO_PRE_ERROR} }}')
         elif sudo:
-            # Neue Regel: /etc/sudoers.d/nodvard-<Benutzer>. Eine alte Regel lattice-<Benutzer> wird erst nach
+            # Neue Regel: /etc/sudoers.d/nodvard-<Benutzer>. Eine alte Regel wird erst nach
             # erfolgreicher Prüfung der neuen entfernt, und nur, wenn sie Byte für Byte die Regel ist, die dieser Befehl
             # selbst angelegt hat (`cmp` gegen die neue Datei); alles andere bleibt stehen (Hinweis).
             # Geprüft wird jede eigene Datei für sich (VC). Die ganze Konfiguration (`visudo -c`) muss danach nur dann
@@ -617,13 +631,13 @@ def build_setup_script(
                 'else echo "Hinweis: sudo ist nicht installiert (als root: apt install sudo)."; fi'
             )
     if with_helpers:
-        lines += _helper_lines(helpers, strict=narrow)
+        lines += _helper_lines(helpers, strict=narrow or is_root, sudo=not is_root)
         lines.append(f'[ -z "$HN" ] || echo "{PLAIN_RULE}"')
     if drop_full_rule:
         lines += _drop_full_rule_lines(helpers)
     if report_state:
         lines.append(f'for f in {" ".join(SETUP_ACCOUNT_FILES)} "$H/.ssh/authorized_keys"; do ST after "$f"; done')
-    if sudo and not is_root:
+    if (sudo and not is_root) or with_helpers:
         lines.append('[ -z "$F" ] || { echo "Nicht alles hat geklappt – bitte die Meldungen oben lesen."; exit 1; }')
     lines.append('echo "Fertig. Jetzt im Dashboard „Verbindung prüfen“ drücken."')
 
@@ -943,8 +957,8 @@ _STATE_LINE_RE = re.compile(
 )
 _KEYS_PATH_RE = re.compile(r"(?:/[A-Za-z0-9_][A-Za-z0-9_.-]*)+/\.ssh/authorized_keys")
 _HELPER_DONE_RE = re.compile(
-    r"Hilfsskript ([a-z][a-z0-9-]{1,63})-root \(Version \d{1,4}\) eingerichtet, "
-    r"mit eigener sudo-Regel( ohne Prüfsumme)?\."
+    r"Hilfsskript ([a-z][a-z0-9-]{1,63})-root \(Version \d{1,4}\) eingerichtet"
+    r"(?:, mit eigener sudo-Regel( ohne Prüfsumme)?)?\."
 )
 
 

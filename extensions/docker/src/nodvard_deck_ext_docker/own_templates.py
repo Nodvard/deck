@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 import json
 import logging
@@ -406,7 +407,11 @@ def own_template_routes(store: OwnTemplates) -> APIRouter:
         except StoreProblem as exc:
             raise _unavailable(exc) from None
 
-    @router.get("/own-templates")
+    @router.get(
+        "/own-templates",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (503,)},
+    )
     async def own_templates() -> dict[str, Any]:
         """Die eigenen Vorlagen nach Namen sortiert, ohne Compose-Datei; `problem` nennt eine beschädigte Datei."""
         try:
@@ -416,7 +421,11 @@ def own_template_routes(store: OwnTemplates) -> APIRouter:
         except StoreProblem as exc:
             raise _unavailable(exc) from None
 
-    @router.get("/own-templates/{template_id}")
+    @router.get(
+        "/own-templates/{template_id}",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (404, 503,)},
+    )
     async def own_template(template_id: str) -> dict[str, Any]:
         """Eine eigene Vorlage mit Compose-Datei."""
         try:
@@ -427,17 +436,29 @@ def own_template_routes(store: OwnTemplates) -> APIRouter:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=gone)
         return asdict(found)
 
-    @router.post("/own-templates", status_code=status.HTTP_201_CREATED)
+    @router.post(
+        "/own-templates", status_code=status.HTTP_201_CREATED,
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409, 413, 503,)},
+    )
     async def create_own_template(body: TemplateIn) -> dict[str, Any]:
         """Eine Compose-Datei als neue eigene Vorlage speichern."""
         return await _save(None, body)
 
-    @router.put("/own-templates/{template_id}")
+    @router.put(
+        "/own-templates/{template_id}",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 404, 409, 413, 503,)},
+    )
     async def update_own_template(template_id: str, body: TemplateIn) -> dict[str, Any]:
         """Name, Beschreibung und Compose-Datei einer eigenen Vorlage ersetzen."""
         return await _save(_known(template_id), body)
 
-    @router.delete("/own-templates/{template_id}")
+    @router.delete(
+        "/own-templates/{template_id}",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (404, 503,)},
+    )
     async def delete_own_template(template_id: str) -> dict[str, bool]:
         """Eine eigene Vorlage löschen; Stacks, die daraus angelegt wurden, bleiben, wie sie sind."""
         try:

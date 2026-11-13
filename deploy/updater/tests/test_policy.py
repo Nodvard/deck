@@ -39,6 +39,10 @@ def request_bytes(**over) -> bytes:
 
 
 def make_request(**over) -> policy.Request:
+    if over.get("action", "update") == "update":
+        return policy.parse_request(signed_bytes(grant_doc(version=over.get("version", "0.7.1"),
+                                                          digest=over.get("digest", DIGEST)), **over),
+                                    now=NOW, file_id=over.get("id", RID), keys=(KEY,))
     return policy.parse_request(request_bytes(**over), now=NOW, file_id=over.get("id", RID))
 
 
@@ -253,13 +257,13 @@ def test_the_vector_key_is_never_trusted():
 
 
 def test_request_without_file_id_only_checks_the_content():
-    assert policy.parse_request(request_bytes(id=RID2), now=NOW).id == RID2
+    assert policy.parse_request(signed_bytes(id=RID2), now=NOW, keys=(KEY,)).id == RID2
 
 
 def test_exactly_4096_bytes_is_allowed_4097_is_not():
-    base = request_bytes()
+    base = signed_bytes()
     padded = base[:-1] + b" " * (4096 - len(base)) + b"}"
-    assert len(padded) == 4096 and policy.parse_request(padded, now=NOW).id == RID
+    assert len(padded) == 4096 and policy.parse_request(padded, now=NOW, keys=(KEY,)).id == RID
     assert code_of(policy.parse_request, padded[:-1] + b" }", now=NOW) == "bad_request"
 
 
@@ -446,26 +450,46 @@ def test_cheap_checks_come_before_the_signature(monkeypatch):
     assert signed_code(signed_bytes(sig="0" * 128)) == policy.BAD_SIGNATURE and len(calls) == 1
 
 
-def test_the_rollback_stays_unsigned_and_a_signed_one_is_refused():
-    assert make_request(action="rollback", version="0.6.0").v == 1
+def rollback_bytes(*, seed: bytes = OTHER_SEED, **over) -> bytes:
+    doc = {"v": 3, "id": RID, "action": "rollback", "version": "0.6.0", "created_at": NOW,
+           "request_key_id": trust.key_id(public_key(seed))}
+    doc["request_sig"] = sign(seed, policy.REQUEST_DOMAIN + policy.dumps(doc)).hex()
+    doc.update(over)
+    return json.dumps(doc).encode()
+
+
+def test_only_a_rollback_with_the_installation_signature_is_executed():
+    unsigned = make_request(action="rollback", version="0.6.0")
+    assert code_of(policy.require_authenticated, unsigned) == policy.SIGNATURE_REQUIRED
+    assert code_of(policy.check_request_signature, unsigned, public_key(OTHER_SEED)) == policy.SIGNATURE_REQUIRED
+    request = policy.parse_request(rollback_bytes(), now=NOW, keys=())
+    assert (request.v, request.action, request.grant, request.digest) == (3, "rollback", None, None)
+    assert policy.require_authenticated(request) is None
+    assert policy.check_request_signature(request, public_key(OTHER_SEED)) is None
+    assert code_of(policy.check_request_signature, request, public_key(SEED)) == policy.UNKNOWN_KEY
+    forged = policy.parse_request(rollback_bytes(version="0.6.1"), now=NOW, keys=())
+    assert code_of(policy.check_request_signature, forged, public_key(OTHER_SEED)) == policy.BAD_SIGNATURE
+
+
+def test_a_rollback_with_release_fields_is_refused():
     assert signed_code(signed_bytes(action="rollback")) == policy.BAD_REQUEST
+    assert code_of(policy.parse_request, rollback_bytes(digest=DIGEST), now=NOW) == policy.BAD_REQUEST
+    assert code_of(policy.parse_request, rollback_bytes(request_sig="0" * 127), now=NOW) == policy.BAD_REQUEST
 
 
-def test_an_unsigned_update_is_still_accepted_until_the_signature_is_required(monkeypatch):
-    assert policy.UPDATE_REQUIRES_SIGNATURE is False
-    assert make_request().v == 1
-    monkeypatch.setattr(policy, "UPDATE_REQUIRES_SIGNATURE", True)
-    assert code_of(make_request) == policy.SIGNATURE_REQUIRED
-    assert code_of(make_request, digest=DIGEST) == policy.SIGNATURE_REQUIRED
+def test_an_unsigned_update_is_refused():
+    assert policy.UPDATE_REQUIRES_SIGNATURE is True
+    assert code_of(policy.parse_request, request_bytes(), now=NOW) == policy.SIGNATURE_REQUIRED
+    assert code_of(policy.parse_request, request_bytes(digest=DIGEST), now=NOW) == policy.SIGNATURE_REQUIRED
     assert make_request(action="rollback", version="0.6.0").v == 1
     assert signed_code(signed_bytes()) is None
 
 
 def test_the_grant_checks_are_only_for_signed_requests():
     with pytest.raises(ValueError):
-        policy.check_grant(make_request(), now=NOW, keys=(KEY,))
+        policy.check_grant(make_request(action="rollback"), now=NOW, keys=(KEY,))
     with pytest.raises(ValueError):
-        policy.check_signature(make_request(), keys=(KEY,))
+        policy.check_signature(make_request(action="rollback"), keys=(KEY,))
 
 
 def test_loads_strict_rejects_duplicates_at_every_level():

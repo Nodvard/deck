@@ -283,6 +283,20 @@ def _stubs(base: Path, scripts: dict[str, str]) -> Path:
     return bin_dir
 
 
+@pytest.mark.parametrize("code", [1, 73])
+def test_delete_reports_rm_failure(tmp_path, monkeypatch, code):
+    av = _av()
+    _quarantined(tmp_path, monkeypatch)
+    qpath = tmp_path / "q" / "f1_evil.sh"
+    monkeypatch.setattr(av, "QUARANTINE_DIR", str(qpath.parent))
+    bin_dir = _stubs(tmp_path, {"rm": f"exit {code}\n"})
+    helper = _helper(tmp_path, path=f"{bin_dir}:/usr/bin:/bin")
+
+    assert _run_new(helper, *av.delete_args(str(qpath))) == (code, "")
+    assert qpath.exists()
+    assert (qpath.parent / ".herkunft" / qpath.name).exists()
+
+
 @pytest.mark.parametrize(("ip", "unban"), [("203.0.113.9", False), ("2001:db8::1", True)])
 def test_ban_behaves_like_the_old_command(tmp_path, ip, unban):
     from nodvard_deck_ext_shield import intrusion as ix
@@ -322,25 +336,62 @@ def test_install_behaves_like_the_old_command(tmp_path, package, tools):
 
 @pytest.mark.parametrize("manager", ["apt-get", "dnf", "apk"])
 def test_install_fail2ban_behaves_like_the_old_command(tmp_path, manager):
-    """`jail.local` liegt in beiden Fassungen unter `tmp_path` statt unter /etc."""
+    """Nur die eigene Datei wird geschrieben, die übrige Konfiguration bleibt erhalten."""
     av = _av()
-    jail = tmp_path / "jail.local"
+    etc = tmp_path / "etc"
+    directory = etc / "fail2ban" / "jail.d"
+    directory.mkdir(parents=True)
+    local = etc / "fail2ban" / "jail.local"
+    local.write_text("[sshd]\nmaxretry = 9\n")
+    conf = etc / "fail2ban" / "jail.conf"
+    conf.write_text("[DEFAULT]\nbantime = 900\n")
+    jail = directory / "nodvard.local"
     tools = {
         manager: f'echo "{manager} $* $DEBIAN_FRONTEND"\n',
         "systemctl": 'echo "systemctl $*"\n',
         "fail2ban-client": 'echo "fail2ban-client $*"\n',
     }
     bin_dir = _stubs(tmp_path, tools)
-    etc_jail = "/etc/fail2ban/jail.local"
-    old = _run_old(av.INSTALL_COMMANDS["fail2ban"].replace(etc_jail, str(jail)), env_path=str(bin_dir))
+    for name in ("mkdir", "sh"):
+        (bin_dir / name).symlink_to(shutil.which(name))
+    old = _run_old(av.INSTALL_COMMANDS["fail2ban"].replace("/etc/fail2ban", str(etc / "fail2ban")), env_path=str(bin_dir))
     old_jail = jail.read_text()
     jail.unlink()
     helper = _helper(tmp_path, path=str(bin_dir))
-    helper.write_text(helper.read_text().replace(etc_jail, str(jail)))
+    helper.write_text(re.sub(r"(?m)^ETCDIR=.*$", f"ETCDIR={etc}", helper.read_text()))
     new = _run_new(helper, "install", "fail2ban")
     assert new == old
     assert f"{manager} " in new[1] and "fail2ban-client ping" in new[1]
-    assert jail.read_text() == old_jail == "[DEFAULT]\nbackend = systemd\n\n[sshd]\nenabled = true\n"
+    assert jail.read_text() == old_jail == "[sshd]\nenabled = true\nbackend = systemd\n"
+    assert new[1].index("fail2ban-client -t") < new[1].index("fail2ban-client reload")
+    assert local.read_text() == "[sshd]\nmaxretry = 9\n"
+    assert conf.read_text() == "[DEFAULT]\nbantime = 900\n"
+
+
+@pytest.mark.parametrize("route", ["direct", "helper"])
+@pytest.mark.parametrize("reload_code", [1, 7])
+def test_install_fail2ban_stops_on_reload_failure(tmp_path, route, reload_code):
+    av = _av()
+    etc = tmp_path / "etc"
+    directory = etc / "fail2ban" / "jail.d"
+    directory.mkdir(parents=True)
+    (directory / "nodvard.local").write_text("[sshd]\nenabled = true\nbackend = systemd\n")
+    bin_dir = _stubs(tmp_path, {
+        "dnf": 'echo "dnf $*"\n',
+        "systemctl": 'echo "systemctl $*"\n',
+        "fail2ban-client": f'echo "fail2ban-client $*"\nif [ "$1" = reload ]; then exit {reload_code}; fi\nexit 0\n',
+    })
+    if route == "direct":
+        command = av.INSTALL_COMMANDS["fail2ban"].replace("/etc/fail2ban", str(etc / "fail2ban"))
+        code, output = _run_old(command, env_path=str(bin_dir))
+    else:
+        helper = _helper(tmp_path, path=str(bin_dir))
+        helper.write_text(re.sub(r"(?m)^ETCDIR=.*$", f"ETCDIR={etc}", helper.read_text()))
+        code, output = _run_new(helper, "install", "fail2ban")
+    assert code == reload_code
+    assert output.splitlines() == [
+        "dnf install -y fail2ban", "fail2ban-client -t", "systemctl enable --now fail2ban", "fail2ban-client reload",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -366,7 +417,7 @@ def test_helper_text_puts_back_the_sentences_of_the_module():
     assert av.helper_text("x\n@@msg=restore_stuck /srv/a b\n") == f"x\n{av.RESTORE_STUCK} /srv/a b\n"
     assert av.helper_text("@@msg=unbekannt\n@@mode=640\n") == "@@msg=unbekannt\n@@mode=640\n"
     assert set(av.HELPER_MESSAGES) >= {
-        m for m in re.findall(r"@@msg=([a-z_]+)", SCRIPT.read_text(encoding="ascii"))
+        m for m in re.findall(r"@@msg=([a-z0-9_]+)", SCRIPT.read_text(encoding="ascii"))
     }, "jede Kennung im Skript hat ihren Satz"
 
 
@@ -843,7 +894,7 @@ _NOT_ROOT = pytest.mark.skipif(os.geteuid() != 0 if hasattr(os, "geteuid") else 
 
 
 @pytest.mark.parametrize(
-    "kind", ["q_link", "q_open", "herkunft_link", "pruefen_file", pytest.param("q_foreign", marks=_NOT_ROOT)],
+    "kind", ["q_link", "q_open", "herkunft_link", "pruefen_file", pytest.param("q_foreign", marks=[pytest.mark.needs_root, _NOT_ROOT])],
 )
 def test_quarantine_takes_only_folders_of_root_alone(tmp_path, monkeypatch, kind):
     """Wie LOCKDIR beim Scan: Verknüpfung, fremder Besitzer oder andere Rechte als 700 → nichts verschoben, nichts
@@ -868,7 +919,7 @@ def test_quarantine_takes_only_folders_of_root_alone(tmp_path, monkeypatch, kind
 
 
 @pytest.mark.parametrize("way", ["neu", "alt"])
-@pytest.mark.parametrize("kind", ["q_open", "herkunft_open", "herkunft_link", pytest.param("herkunft_foreign", marks=_NOT_ROOT)])
+@pytest.mark.parametrize("kind", ["q_open", "herkunft_open", "herkunft_link", pytest.param("herkunft_foreign", marks=[pytest.mark.needs_root, _NOT_ROOT])])
 def test_restore_trusts_the_record_only_in_folders_of_root_alone(tmp_path, monkeypatch, kind, way):
     """Ort und Rechte kommen aus der Ablage; die zählt nur, wenn außer root niemand sie anlegen oder ändern kann."""
     av = _av()

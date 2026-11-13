@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCES = [ROOT / "backend" / "src" / "nodvard_deck" / "api", *sorted((ROOT / "extensions").glob("*/src"))]
 _ROUTE_METHODS = {"get", "post", "put", "patch", "delete"}
 MAX_LIMIT = 1000
+MAX_OFFSET = 9223372036854775807
 
 
 def _is_route(func: ast.AsyncFunctionDef | ast.FunctionDef) -> bool:
@@ -54,9 +55,12 @@ def test_every_limit_of_a_route_is_bounded():
         assert 1 <= bounds.get("le", MAX_LIMIT + 1) <= MAX_LIMIT, f"{where}: limit braucht Query(le<={MAX_LIMIT})"
 
 
-def test_every_offset_of_a_route_is_not_negative():
-    for where, bounds in _route_params("offset"):
+def test_every_offset_of_a_route_is_bounded():
+    found = _route_params("offset")
+    assert len(found) >= 4, "die Suche findet die Endpunkte"
+    for where, bounds in found:
         assert bounds.get("ge") == 0, f"{where}: offset braucht Query(ge=0)"
+        assert 0 <= bounds.get("le", MAX_OFFSET + 1) <= MAX_OFFSET, f"{where}: offset braucht Query(le<={MAX_OFFSET})"
 
 
 @pytest.mark.asyncio

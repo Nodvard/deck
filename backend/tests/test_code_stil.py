@@ -36,14 +36,11 @@ ALLOWED: dict[str, str] = {
     "frontend/src/components/AppDialog.test.tsx": "Testdaten: Nutzer wählen Emojis als App-Symbol",
     "frontend/src/components/AppDialog.tsx": "Oberfläche: Beispiel-Emoji im Eingabefeld für das App-Symbol",
     "frontend/src/components/AppsSection.test.tsx": "Testdaten: Nutzer wählen Emojis als App-Symbol",
-    "frontend/src/components/FolderPickerDialog.tsx": "Oberfläche: Ordner-Symbol im Ordner-Auswahl-Dialog",
     "frontend/src/lib/apps.test.ts": "Testdaten: Nutzer wählen Emojis als App-Symbol",
     "frontend/src/lib/keyboardLayouts.test.ts": "Testdaten: Emoji, das sich nicht tippen lässt",
     "frontend/src/lib/restore.test.ts": "Testdaten: Emoji im Passwort (Kopfzeile bei der Wiederherstellung)",
     "frontend/src/preview/fixtures.ts": "Testdaten der Design-Vorschau: App-Symbol",
     "frontend/src/routes/Cockpit.test.tsx": "Testdaten: Warnzeichen im Namen eines nicht erreichbaren Servers",
-    "frontend/src/routes/FilesPage.test.tsx": "Testdaten: Ordner-Symbol vor dem Namen in der Dateiliste",
-    "frontend/src/routes/FilesPage.tsx": "Oberfläche: Ordner- und Link-Symbol in der Dateiliste",
 }
 
 

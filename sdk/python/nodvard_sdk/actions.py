@@ -57,6 +57,9 @@ class ActionSpec(BaseModel):
     """Payload-Feld, das die Sperrlisten-Prüfung des Gates untersucht. Pflicht, wenn der Payload einen auszuführenden
     Befehl enthält (z. B. "command"): Das Gate rät nicht und prüft auch nicht den ganzen Payload."""
 
+    fingerprint_exclude_fields: list[str] = Field(default_factory=list)
+    """Payload-Felder, die bei der Wiederholungssperre nicht zählen, etwa einmalige Bestätigungstoken."""
+
 
 # Die Extension prüft, ob die Freigabe noch zum Vorschlag passt (bei Skripten: Inhalt, Parameter, Ziel, Zeitplan,
 # Zielserver und Konto unverändert). Das Gate prüft danach selbst, ob `granted_by_user_id` noch aktiv ist und

@@ -668,6 +668,57 @@ async def test_proxmox_discovery_creates_node_and_vm_hosts_with_tags(client, db_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("node_address", ["PVE1.", "127.0.0.1"])
+async def test_discovery_assigns_manual_node_and_guest_without_merging_placeholder_ips(
+    client, db_session, test_settings, mock_proxmox, node_address,
+):
+    from nodvard_deck.services import hosts as hosts_service
+
+    base_url, state = mock_proxmox
+    state["guest_agent"]["100"] = [_agent_iface("eth0", "192.0.2.20")]
+    token = await _setup_proxmox(client, db_session, test_settings, base_url)
+    node = await hosts_service.create_host(db_session, name="mein-knoten", address=node_address)
+    guest = await hosts_service.create_host(db_session, name="meine-vm", address="192.0.2.20", tags=["wichtig"])
+    node_id, guest_id = node.id, guest.id
+    await db_session.commit()
+    await _run_discovery()
+    db_session.expire_all()  # die Zuordnung lief in der Sitzung des Abgleichs
+    listed = (await client.get("/api/v1/hosts", headers=_auth_header(token))).json()
+    assert len(listed) == 3
+    by_kind = {row["kind"]: row for row in listed}
+    assert by_kind["hypervisor"]["id"] == node_id
+    assert by_kind["vm"]["id"] == guest_id
+    assert by_kind["vm"]["manual_entry"]["name"] == "meine-vm"
+    assert set(by_kind["vm"]["tags"]) == {"wichtig", "proxmox", "vm"}
+    assert by_kind["lxc"]["manual_entry"] is None
+    state["guest_agent"].clear()
+    await _run_discovery()
+    db_session.expire_all()
+    again = (await client.get("/api/v1/hosts", headers=_auth_header(token))).json()
+    assert len(again) == 3
+    assert next(row for row in again if row["id"] == guest_id)["address"] == "192.0.2.20"
+
+
+@pytest.mark.asyncio
+async def test_manual_host_matches_a_stopped_guest_using_its_last_known_address(
+    client, db_session, test_settings, mock_proxmox,
+):
+    from nodvard_deck.services import hosts as hosts_service
+
+    base_url, state = mock_proxmox
+    state["guest_agent"]["100"] = [_agent_iface("eth0", "192.0.2.20")]
+    await _setup_proxmox(client, db_session, test_settings, base_url)
+    await _run_discovery()
+    state["vms"]["100"]["status"] = "stopped"
+    state["guest_agent"].clear()
+    await _run_discovery()
+    host = await hosts_service.create_host(db_session, name="meine-vm", address="192.0.2.20")
+    assert host.provider_ref == "primary/qemu/pve1/100"
+    assert host.status == "down" and host.host_metadata["power_state"] == "stopped"
+    assert len(await hosts_service.list_hosts(db_session)) == 3
+
+
+@pytest.mark.asyncio
 async def test_discovery_reports_the_node_and_whether_a_guest_is_switched_off(client, db_session, test_settings, mock_proxmox):
     """Gäste kennen ihren Knoten („LXC auf pve1“) und ob sie aus sind: Ein gestoppter Gast ist ausgeschaltet, nicht
     gestört, und eine pausierte VM meldet `status: running` mit `qmpstatus: paused`."""

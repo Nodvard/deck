@@ -79,9 +79,16 @@ async def wait_settled(
 
 def cmd_state(refs: list[str]) -> str:
     """Zustand dieser Container (Namen oder volle IDs), eine JSON-Zeile je Container (Format wie beim Image-Update)."""
+    return shlex.join(cmd_state_argv(refs))
+
+
+def cmd_state_argv(refs: list[str], *, oneoff: bool = False) -> list[str]:
     if not refs or not all(_ID_RE.match(r) for r in refs):
         raise ValueError(f"Ungültige Container: {refs!r}")
-    return f"docker container inspect --format {shlex.quote(ia.VERIFY_FORMAT)} " + " ".join(shlex.quote(r) for r in refs)
+    fmt = ia.VERIFY_FORMAT
+    if oneoff:
+        fmt = fmt[:-1] + ',"oneoff":{{json (index .Config.Labels "' + ia.LABEL_ONEOFF + '")}}}'
+    return ["docker", "container", "inspect", "--format", fmt, *refs]
 
 
 def cmd_stack_running(project: str) -> str:

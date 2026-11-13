@@ -385,20 +385,22 @@ def test_a_file_where_the_helper_folder_belongs_stops_it(tmp_path):
 
 
 @needs_sh
-def test_missing_tools_stop_it_and_full_rights_would_help(tmp_path):
+@pytest.mark.parametrize("missing", ["base64", "gzip"])
+def test_missing_tools_stop_it_and_full_rights_would_help(tmp_path, missing):
     bin_dir, log, helper_dir, captured = _helper_sandbox(tmp_path)
     only = tmp_path / "only"
     only.mkdir()
     for tool in bin_dir.iterdir():
         (only / tool.name).symlink_to(tool)
-    for tool in ("cut", "dirname", "sha256sum"):
+    # Bei fehlendem gzip ist alles andere da: Der schmale Befehl muss trotzdem vor der ersten Änderung enden.
+    for tool in ("cut", "dirname", "sha256sum", *(("base64",) if missing == "gzip" else ())):
         (only / tool).symlink_to(shutil.which(tool))
     done = subprocess.run(
         [shutil.which("sh"), "-c", _narrow(helper_dir, DOCKER)], capture_output=True, text=True,
         env={"PATH": str(only), "LC_ALL": "C.UTF-8"}, timeout=30, check=False,
     )
     _assert_blocked(done, log, captured, tmp_path)
-    assert "FEHLER: base64, sha256sum oder stat fehlt hier." in done.stdout
+    assert "FEHLER: base64, gzip, sha256sum oder stat fehlt hier." in done.stdout
 
 
 def test_the_lines_stay_readable_for_a_long_group_name():

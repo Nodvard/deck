@@ -45,7 +45,7 @@ describe("HostHistory", () => {
     const calls: string[] = [];
     renderHistory(calls);
     const cpu = await screen.findByTestId("chart-CPU");
-    // aktuell 50, min 10, Mittel 30 (Luecke zaehlt nicht), max 50
+    // aktuell 50, min 10, Mittel 30 (Lücke zählt nicht), max 50
     expect(cpu.querySelector("tbody")?.textContent).toBe("Auslastung50 %10 %30 %50 %");
     expect(screen.getByTestId("chart-Arbeitsspeicher")).toBeInTheDocument();
     expect(screen.getByTestId("chart-Temperatur")).toBeInTheDocument();
@@ -70,10 +70,10 @@ describe("HostHistory", () => {
   });
 
   describe("ohne Messwerte", () => {
-    it("Server online: Kurven kommen gleich, mit Gedankenstrich statt „--“", async () => {
+    it("Server online: Hinweis auf die ersten Messwerte", async () => {
       renderHistory([], 200, { host: { status: "up", last_seen_at: "2026-10-01T10:00:00Z" }, canCheck: true }, true);
       const text = (await screen.findByText(/Noch keine Messwerte\./)).textContent ?? "";
-      expect(text).toContain("alle 30 Sekunden – in ein paar Minuten erscheinen die ersten Kurven");
+      expect(text).toContain("alle 30 Sekunden, in ein paar Minuten erscheinen die ersten Kurven");
       expect(text).not.toContain("--");
       expect(screen.queryByTestId("history-no-connection")).toBeNull();
     });
@@ -97,7 +97,7 @@ describe("HostHistory", () => {
     it("Server hat nie geantwortet: klarer Hinweis auf den Zugang statt „in ein paar Minuten“", async () => {
       renderHistory([], 200, { host: { status: "down", last_seen_at: null }, canCheck: true }, true);
       const note = await screen.findByTestId("history-no-connection");
-      expect(note.textContent).toContain("Noch keine Verbindung – prüfe zuerst den Zugang.");
+      expect(note.textContent).toContain("Noch keine Verbindung, prüfe zuerst den Zugang.");
       expect(note.textContent).not.toContain("in ein paar Minuten");
       expect(screen.getByRole("link", { name: "Zum Zugang" })).toHaveAttribute("href", "#zugang");
     });
@@ -170,7 +170,7 @@ describe("HostHistory", () => {
     });
   });
 
-  it("Statistik ignoriert Luecken", () => {
+  it("Statistik ignoriert Lücken", () => {
     expect(stats([null, 2, null, 4])).toEqual({ current: 4, min: 2, avg: 3, max: 4 });
     expect(stats([null, null])).toEqual({ current: null, min: null, avg: null, max: null });
   });

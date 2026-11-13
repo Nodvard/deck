@@ -16,6 +16,8 @@ from ...services.backups import JOB_KEY as BACKUP_JOB_KEY
 from ...services.reachability import JOB_KEY as REACHABILITY_JOB_KEY
 from ...services.update_check import JOB_KEY as UPDATE_CHECK_JOB_KEY
 from ..deps import SessionDep, require_permission
+from ..models import RequestModel
+from ..responses import error_responses
 
 # `jobs.read` liest, `jobs.run` löst aus und bricht ab, `jobs.write` ändert oder löscht den Zeitplan selbst und hat
 # bewusst nur der Admin (über `"*"`). Es gibt kein `POST /jobs`: ein Job braucht immer eine Erweiterung (oder den Kern),
@@ -70,7 +72,7 @@ class JobOut(BaseModel):
         )
 
 
-class JobPatch(BaseModel):
+class JobPatch(RequestModel):
     enabled: bool | None = None
 
 
@@ -96,13 +98,17 @@ class RunOut(BaseModel):
         )
 
 
-@router.get("/jobs", dependencies=[Depends(require_permission("jobs.read"))])
+@router.get("/jobs", dependencies=[Depends(require_permission("jobs.read"))], responses=error_responses(401, 403, 507))
 async def list_jobs(session: SessionDep, ext_id: str | None = None, enabled: bool | None = None) -> list[JobOut]:
     rows = await jobs_service.list_jobs(session, ext_id=ext_id, enabled=enabled)
     return [JobOut.from_model(j) for j in rows]
 
 
-@router.get("/jobs/{job_id}", dependencies=[Depends(require_permission("jobs.read"))])
+@router.get(
+    "/jobs/{job_id}",
+    dependencies=[Depends(require_permission("jobs.read"))],
+    responses=error_responses(401, 403, 404, 507),
+)
 async def get_job(job_id: str, session: SessionDep) -> JobOut:
     job = await jobs_service.get_job(session, job_id)
     if job is None:
@@ -110,7 +116,11 @@ async def get_job(job_id: str, session: SessionDep) -> JobOut:
     return JobOut.from_model(job)
 
 
-@router.patch("/jobs/{job_id}", dependencies=[Depends(require_permission("jobs.write"))])
+@router.patch(
+    "/jobs/{job_id}",
+    dependencies=[Depends(require_permission("jobs.write"))],
+    responses=error_responses(401, 403, 404, 409, 507),
+)
 async def patch_job(job_id: str, payload: JobPatch, session: SessionDep) -> JobOut:
     """Schaltet einen Job an oder aus. Ein erneutes Laden der Erweiterung (Upsert in `register_job()`) setzt `enabled`
     wieder auf das, was sie selbst deklariert: eine manuelle Pause überlebt keinen Reload."""
@@ -142,7 +152,12 @@ async def patch_job(job_id: str, payload: JobPatch, session: SessionDep) -> JobO
     return JobOut.from_model(job)
 
 
-@router.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("jobs.write"))])
+@router.delete(
+    "/jobs/{job_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("jobs.write"))],
+    responses=error_responses(401, 403, 404, 409, 507),
+)
 async def delete_job(job_id: str, session: SessionDep) -> None:
     job = await jobs_service.get_job(session, job_id)
     if job is None:
@@ -153,7 +168,11 @@ async def delete_job(job_id: str, session: SessionDep) -> None:
     await session.flush()
 
 
-@router.post("/jobs/{job_id}/run", dependencies=[Depends(require_permission("jobs.run"))])
+@router.post(
+    "/jobs/{job_id}/run",
+    dependencies=[Depends(require_permission("jobs.run"))],
+    responses=error_responses(401, 403, 404, 409, 507),
+)
 async def run_job_now(job_id: str, session: SessionDep) -> RunOut:
     job = await jobs_service.get_job(session, job_id)
     if job is None:
@@ -185,7 +204,11 @@ async def run_job_now(job_id: str, session: SessionDep) -> RunOut:
     return RunOut.from_model(run)
 
 
-@router.get("/jobs/{job_id}/runs", dependencies=[Depends(require_permission("jobs.read"))])
+@router.get(
+    "/jobs/{job_id}/runs",
+    dependencies=[Depends(require_permission("jobs.read"))],
+    responses=error_responses(401, 403, 507),
+)
 async def list_job_runs(
     job_id: str, session: SessionDep, limit: int = Query(100, ge=1, le=1000)
 ) -> list[RunOut]:
@@ -193,7 +216,12 @@ async def list_job_runs(
     return [RunOut.from_model(r) for r in rows]
 
 
-@router.get("/runs/{run_id}", dependencies=[Depends(require_permission("jobs.read"))])
+# API-Vertrag: Laufdetails für Clients mit einer run_id.
+@router.get(
+    "/runs/{run_id}",
+    dependencies=[Depends(require_permission("jobs.read"))],
+    responses=error_responses(401, 403, 404, 507),
+)
 async def get_run(run_id: str, session: SessionDep) -> RunOut:
     run = await jobs_service.get_run(session, run_id)
     if run is None:
@@ -201,7 +229,12 @@ async def get_run(run_id: str, session: SessionDep) -> RunOut:
     return RunOut.from_model(run)
 
 
-@router.get("/runs/{run_id}/output", dependencies=[Depends(require_permission("jobs.read"))])
+# API-Vertrag: Protokollabruf für Clients mit einer run_id.
+@router.get(
+    "/runs/{run_id}/output",
+    dependencies=[Depends(require_permission("jobs.read"))],
+    responses=error_responses(401, 403, 404, 507),
+)
 async def get_run_output(run_id: str, session: SessionDep) -> dict[str, str]:
     run = await jobs_service.get_run(session, run_id)
     if run is None:
@@ -209,7 +242,12 @@ async def get_run_output(run_id: str, session: SessionDep) -> dict[str, str]:
     return {"output": jobs_service.read_run_output(get_scheduler_service().runs_dir, run.output_ref)}
 
 
-@router.post("/runs/{run_id}/cancel", dependencies=[Depends(require_permission("jobs.run"))])
+# API-Vertrag: Laufabbruch für Clients mit einer run_id.
+@router.post(
+    "/runs/{run_id}/cancel",
+    dependencies=[Depends(require_permission("jobs.run"))],
+    responses=error_responses(401, 403, 404, 409, 507),
+)
 async def cancel_run(run_id: str, session: SessionDep) -> dict[str, bool]:
     run = await jobs_service.get_run(session, run_id)
     if run is None:

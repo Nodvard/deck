@@ -10,6 +10,7 @@ from pydantic import Field
 
 from ...ext.runtime import get_extension_runtime
 from ...services.auth import user_has_permission
+from ..responses import error_responses
 from ..deps import CurrentUser
 
 from fastapi import APIRouter
@@ -57,7 +58,7 @@ def _view_for(user, view: dict) -> dict:
     return view
 
 
-@router.get("/pages")
+@router.get("/pages", responses=error_responses(401, 403, 507))
 async def list_pages(user: CurrentUser) -> list[PageOut]:
     runtime = get_extension_runtime()
     return [
@@ -67,7 +68,7 @@ async def list_pages(user: CurrentUser) -> list[PageOut]:
     ]
 
 
-@router.get("/widgets")
+@router.get("/widgets", responses=error_responses(401, 403, 507))
 async def list_widgets(user: CurrentUser) -> list[WidgetOut]:
     runtime = get_extension_runtime()
     widgets = []

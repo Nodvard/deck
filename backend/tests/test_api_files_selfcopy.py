@@ -15,7 +15,8 @@ import sys
 from pathlib import Path, PurePosixPath
 
 import pytest
-from nodvard_deck.api.v1.files import _is_same_file
+from nodvard_deck.api.v1.files import _authorized_source, _is_same_file
+from nodvard_deck.core import gate
 from nodvard_deck.ext.context import build_context
 from nodvard_deck.ext.runtime import (
     ExtensionRuntime,
@@ -27,6 +28,7 @@ from nodvard_deck.models import JobRun
 from nodvard_deck.services import hosts as hosts_service
 from nodvard_sdk import ExtensionManifest
 from nodvard_sdk.capabilities import FileSourceProvider
+from nodvard_sdk.errors import ActionBlocked
 
 TERMINAL_SRC = Path(__file__).resolve().parents[2] / "extensions" / "terminal" / "src"
 CONTENT = b"wichtiger Inhalt " * 6000  # ~100 KB, mehrere Pakete
@@ -73,7 +75,10 @@ async def _make_host(db_session, settings, server, name):
 
 async def _sources(db_session, settings, server, tmp_path, count=1):
     extension = await _terminal_ctx(tmp_path, settings)
-    return [extension.file_source_for((await _make_host(db_session, settings, server, f"pve{i}")).id) for i in range(count)]
+    return [
+        _authorized_source(extension.file_source_for((await _make_host(db_session, settings, server, f"pve{i}")).id))
+        for i in range(count)
+    ]
 
 
 def _stream(*chunks: bytes, then: Exception | None = None):
@@ -88,6 +93,36 @@ def _stream(*chunks: bytes, then: Exception | None = None):
 
 def _temp_files(root: Path) -> list[Path]:
     return [p for p in root.rglob("*") if "nodvard-tmp" in p.name or "nodvard-old" in p.name]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["read", "write"])
+@pytest.mark.parametrize("access", ["missing", "hostless", "host", "extension", "operation"])
+async def test_raw_file_source_requires_matching_access(
+    local_ssh_server, db_session, tmp_path, test_settings, ssh_server_stats, operation, access
+):
+    from contextlib import nullcontext
+
+    extension = await _terminal_ctx(tmp_path, test_settings)
+    host = await _make_host(db_session, test_settings, local_ssh_server, "pve")
+    source = extension.file_source_for(host.id)
+    root = local_ssh_server[4]
+    (root / "ziel.txt").write_bytes(b"bleibt")
+    before = ssh_server_stats["begin_auth"]
+    context = nullcontext() if access == "missing" else gate.authorized_ssh(
+        None if access == "hostless" else "other-host" if access == "host" else host.id,
+        ext_id="system" if access == "extension" else "terminal",
+        operations=frozenset({"command"} if access == "operation" else {"sftp"}),
+    )
+    with context, pytest.raises(ActionBlocked):
+        if operation == "read":
+            await source.file_identity(PurePosixPath("ziel.txt"))
+        else:
+            await source.open_write(PurePosixPath("ziel.txt"), _stream(b"neu"))
+
+    assert ssh_server_stats["begin_auth"] == before
+    assert (root / "ziel.txt").read_bytes() == b"bleibt"
+    assert _temp_files(root) == []
 
 
 # --- open_write: erst fertig schreiben, dann ersetzen -----------------------------------------------

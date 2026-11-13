@@ -185,6 +185,7 @@ esac
 def test_with_a_fitting_helper_only_the_helper_runs(tmp_path):
     av = _av()
     bin_dir, log = _routing_world(tmp_path, helper_version=2, full_rule=False)
+    _stub(bin_dir / "apt-get", "exit 0\n")
     done = _sh(av.via_helper(["refresh-packages"], "echo alt", version=2, required=True), bin_dir)
     assert done.returncode == 0 and "alt" not in done.stdout
     assert log.read_text().splitlines() == [f"sudo -n {av.HELPER} version", f"sudo -n {av.HELPER} refresh-packages"]
@@ -398,6 +399,67 @@ def test_guard_gives_the_same_output_as_the_old_command(tmp_path):
 
 
 @needs_sh
+@pytest.mark.parametrize("lowercase", [False, True], ids=["camelcase", "kleinbuchstaben"])
+def test_guard_reads_sshd_config(tmp_path, lowercase):
+    ix = _ix()
+    bin_dir, patterns = _guard_world(tmp_path)
+    config = (
+        "Port 2222\nPermitRootLogin yes\nPasswordAuthentication yes\nPermitEmptyPasswords no\n"
+        "PubkeyAuthentication yes\nMaxAuthTries 3\nX11Forwarding no\nKbdInteractiveAuthentication no\nUsePAM yes\n"
+    )
+    if lowercase:
+        config = config.lower()
+    _stub(bin_dir / "sshd", f"cat <<'EOF'\n{config}EOF\nprintf 'sshd: warning\\n' >&2\n")
+    helper = _helper_copy(tmp_path, bin_dir)
+    for done in (_sh(ix.guard_command(patterns), bin_dir), _helper(helper, bin_dir, *ix.guard_args(patterns))):
+        assert done.returncode == 0, done.stderr
+        snap = ix.parse_guard(done.stdout)
+        assert snap.sshd == {
+            "port": "2222", "permitrootlogin": "yes", "passwordauthentication": "yes", "permitemptypasswords": "no",
+            "pubkeyauthentication": "yes", "maxauthtries": "3", "x11forwarding": "no", "kbdinteractiveauthentication": "no",
+        }
+        assert [f.key for f in snap.ssh_findings] == ["permitrootlogin", "passwordauthentication"]
+        assert snap.sshd_error is None
+        assert ix.guard_complete(done.stdout)
+
+
+@needs_sh
+def test_guard_keeps_sshd_stderr_separate(tmp_path):
+    ix = _ix()
+    bin_dir, patterns = _guard_world(tmp_path)
+    _stub(bin_dir / "id", "echo 0\n")
+    _stub(bin_dir / "sshd", "printf 'sshd: no hostkeys available -- exiting.\nPort 2222\n@@uid\n1000\n' >&2\nexit 1\n")
+    helper = _helper_copy(tmp_path, bin_dir)
+    helper.write_text(helper.read_text().replace("/usr/sbin/sshd -T", "sshd -T"))
+    command = ix.guard_command(patterns).replace("/usr/sbin/sshd -T", "sshd -T")
+    for done in (_sh(command, bin_dir), _helper(helper, bin_dir, *ix.guard_args(patterns))):
+        assert done.returncode == 0, done.stderr
+        snap = ix.parse_guard(done.stdout)
+        assert snap.sshd == {} and snap.ssh_findings == []
+        assert "sshd: no hostkeys available -- exiting." in snap.sshd_error
+        assert snap.is_root
+        assert ix.guard_complete(done.stdout)
+
+
+@pytest.mark.parametrize("config", ["", "port 22\n"])
+def test_sshd_error_reaches_the_view(config):
+    from nodvard_deck_ext_shield.guard import Guard
+
+    reason = "sshd: no hostkeys available -- exiting."
+    snap = _ix().parse_guard(f"@@sshd\n{config}@@sshderror\n!{reason}\n!second line\n@@end\n")
+    expected = None if config else f"{reason} second line"
+    assert snap.sshd_error == expected
+    view = Guard(None, None)._view(snap, {}, {}, {})
+    assert view["ssh_error"] == expected
+    assert view["ssh_findings"] == ([] if config else None)
+
+
+def test_sshd_error_is_short():
+    snap = _ix().parse_guard("@@sshderror\n!" + "x" * 500 + "\n@@end\n")
+    assert snap.sshd_error == "x" * 300
+
+
+@needs_sh
 def test_guard_with_the_default_lists_gives_the_same_output(tmp_path):
     """Die echten Standardlisten (Systemdateien, Programme mit dpkg-Abgleich), so wie sie auf dem Server laufen."""
     ix = _ix()
@@ -477,3 +539,100 @@ def test_refresh_packages_gives_the_same_output_as_the_old_command(tmp_path):
     assert new.returncode == 0, new.stderr
     assert new.stdout == old.stdout == "E: kaputt\nW: Warnung\nErr:2 y\n"
     assert _helper(helper, bin_dir, "refresh-packages", "x").returncode == 64
+
+
+@needs_sh
+@pytest.mark.parametrize("line", ["dpkg: error: failed to read package database", "open: Permission denied", "command timed out"])
+def test_refresh_helper_preserves_failure_code_and_diagnostic(tmp_path, line):
+    from nodvard_deck_ext_shield import updates as up
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _stub(bin_dir / "apt-get", f"echo '{line}' >&2\nexit 100\n")
+    helper = _helper_copy(tmp_path, bin_dir)
+    old = _sh(up.REFRESH_COMMAND, bin_dir)
+    new = _helper(helper, bin_dir, "refresh-packages")
+    assert new.returncode == old.returncode == 100
+    assert new.stdout == old.stdout == f"{line}\n"
+
+
+@needs_sh
+@pytest.mark.parametrize("code", [0, 100])
+def test_refresh_output_is_bounded_and_hides_credentials(tmp_path, code):
+    from nodvard_deck_ext_shield import updates as up
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    line = "E: Failed to fetch https://user:" "secret@mirror.example/InRelease " + "x" * 2000
+    _stub(bin_dir / "apt-get", f"i=0; while [ $i -lt 60 ]; do echo '{line}' >&2; i=$((i + 1)); done\nexit {code}\n")
+    helper = _helper_copy(tmp_path, bin_dir)
+    old = _sh(up.REFRESH_COMMAND, bin_dir)
+    new = _helper(helper, bin_dir, "refresh-packages")
+    assert new.returncode == old.returncode == code
+    assert new.stdout == old.stdout
+    assert len(new.stdout.splitlines()) == 20
+    assert all(len(line) <= 500 for line in new.stdout.splitlines())
+    assert "https://mirror.example/InRelease" in new.stdout
+    assert "user" not in new.stdout and "secret" not in new.stdout
+    command = f"{up.REFRESH_COMMAND}; echo @@end"
+    assert _sh(command, bin_dir).stdout.endswith("@@end\n")
+
+
+@needs_sh
+def test_refresh_helper_sets_c_locale(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _stub(bin_dir / "apt-get", 'printf "%s\\n" "$LC_ALL"\nexit 100\n')
+    helper = _helper_copy(tmp_path, bin_dir)
+    result = subprocess.run([SH, str(helper), "refresh-packages"], capture_output=True, text=True, timeout=60,
+                            check=False, env={**_env(bin_dir), "LC_ALL": "POSIX"})
+    assert result.returncode == 100 and result.stdout == "C\n"
+
+
+def _refresh_world(tmp_path, tool, body):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in ("grep", "sed", "head", "tail", "cut", "awk"):
+        (bin_dir / name).symlink_to(shutil.which(name))
+    _stub(bin_dir / tool, body)
+    helper = Path(_av().HELPER)
+    helper.write_text(SCRIPT.read_text(encoding="ascii").replace(FIXED_PATH, f"PATH={bin_dir}"))
+    return helper, {"PATH": str(bin_dir), "LC_ALL": "C"}
+
+
+@needs_sh
+@pytest.mark.parametrize(("manager", "tool", "line", "package", "code"), [
+    ("apt", "apt-get", "E: Failed to fetch https://mirror.example/InRelease", "openssl/stable 3.0.14 amd64", 100),
+    ("dnf", "dnf", "Error: Failed to download metadata for repo 'updates'", "openssl.x86_64 3.0.14 updates", 1),
+    ("apk", "apk", "ERROR: https://mirror.example/alpine: temporary error", "openssl-3.0.13-r0 < 3.0.14-r0", 1),
+])
+def test_refresh_keeps_late_source_errors_and_readable_packages(tmp_path, manager, tool, line, package, code):
+    from nodvard_deck_ext_shield import updates as up
+
+    body = ("i=0; while [ $i -lt 40 ]; do echo progress; i=$((i + 1)); done\n"
+            f'echo "{line}"\nexit {code}\n')
+    helper, env = _refresh_world(tmp_path, tool, body)
+    for args in ([SH, "-c", up.REFRESH_COMMAND], [SH, str(helper), "refresh-packages"]):
+        result = subprocess.run(args, capture_output=True, text=True, timeout=15, check=False, env=env)
+        assert result.returncode == code
+        assert line in result.stdout and len(result.stdout.splitlines()) <= 20
+        status = up.parse_status(f"@@pm\n{manager}\n@@refresh\n{result.stdout}rc refresh {result.returncode}\n"
+                                 f"@@list\n{package}\nrc list 0\n@@end\n")
+        assert status.error is None and status.refresh_error
+        assert [p.name for p in status.packages] == ["openssl"]
+
+
+@needs_sh
+def test_failed_apt_refresh_filters_progress_but_keeps_diagnostics(tmp_path):
+    from nodvard_deck_ext_shield import updates as up
+
+    body = ("echo 'W: Failed to fetch https://mirror.example/InRelease'\n"
+            "echo 'open: Permission denied'\n"
+            "i=0; while [ $i -lt 40 ]; do echo \"Hit:$i https://mirror.example stable InRelease\"; i=$((i + 1)); done\n"
+            "exit 100\n")
+    helper, env = _refresh_world(tmp_path, "apt-get", body)
+    for args in ([SH, "-c", up.REFRESH_COMMAND], [SH, str(helper), "refresh-packages"]):
+        result = subprocess.run(args, capture_output=True, text=True, timeout=15, check=False, env=env)
+        assert result.returncode == 100
+        assert result.stdout == "W: Failed to fetch https://mirror.example/InRelease\nopen: Permission denied\n"
+        assert up.status_error_kind(result.stdout) == "permission"

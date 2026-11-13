@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
+import shlex
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from docker_stack_fakes import EXT_DIR, FakeExec, docker_on, ps, result, row  # noqa: F401 - Fixtures
@@ -126,6 +129,35 @@ def _request(plan, *, risk="high", actor="user", project="kuma"):
 
     return ActionRequest(action_type="docker.stack_from_portainer", host_ref="h1", risk=Risk(risk), proposed_by=Actor(type=actor, id="u1"),
                          reason="Test", payload={"project": project, "folder": plan["folder"], "portainer_id": plan["portainer_id"]})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["image", "path"])
+async def test_resolved_values_are_scrubbed_in_refusals(env, field):
+    secret = "test-wert-123"
+    e = env(files={"docker-compose.yml": COMPOSE, "stack.env": f"TOKEN={secret}\n"})
+    service = {"image": f"nginx:{secret}"} if field == "image" else {
+        "image": IMAGE, "volumes": [{"type": "bind", "source": f"{FOLDER}/{secret}", "target": "/data"}],
+    }
+    e.fake.config = result(json.dumps({"services": {"app": service}}))
+    done = await e.executor.execute(_request(await e.move.plan(e.host, "kuma")))
+    assert not done.success and done.error
+    assert secret not in done.error and "…" in done.error
+    assert FOLDER not in e.sftp.dirs
+
+
+@pytest.mark.asyncio
+async def test_changed_root_after_approval_stops_the_move(env, monkeypatch):
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    roots = iter([ROOT, "/srv/stacks"])
+    monkeypatch.setattr(e.move.new, "root", lambda host_id: _async(next(roots)))
+    before = dict(e.sftp.files), set(e.sftp.dirs)
+    done = await e.executor.execute(_request(plan))
+    assert not done.success and done.error == "Der Zielordner hat sich inzwischen geändert. Bitte noch einmal umziehen."
+    assert next(roots, None) is None  # execute prüft den Plan neu (ROOT) und liest den Ordner danach noch einmal (/srv/stacks)
+    assert (e.sftp.files, e.sftp.dirs) == before
+    assert not any("--force-recreate" in call for call in e.fake.argv_calls)
 
 
 def test_commands():
@@ -1106,12 +1138,17 @@ def test_many_large_substituted_values_stay_small():
 
 
 @pytest.mark.asyncio
-async def test_its_own_refusal_keeps_the_image_names_from_stack_env(env):
+async def test_its_own_refusal_scrubs_the_image_names_from_stack_env(env):
     e = env(files={"docker-compose.yml": COMPOSE, "stack.env": f"IMG={IMAGE}\n"})
     e.fake.rows = [_portainer_row(ref="louislam/uptime-kuma:1.23.16")]
     e.fake.config = result(json.dumps({"services": {"app": {"image": IMAGE}}}))
     done = await e.executor.execute(_request(await e.move.plan(e.host, "kuma")))
-    assert f"steht darin das Image {IMAGE}, der Container läuft aber mit louislam/uptime-kuma:1.23.16." in done.error, done.error
+    assert not done.success and done.error
+    assert IMAGE not in done.error
+    assert "Für „app“ steht darin das Image …, der Container läuft aber mit …/…:1.23.16." in done.error, done.error
+    assert "Prüfe den Stack in Portainer" in done.error and "Am Stack hat sich nichts geändert." in done.error
+    assert FOLDER not in e.sftp.dirs and "kuma" not in e.store.for_host("h1")
+    assert not any("--force-recreate" in call for call in e.fake.argv_calls)
 
 
 @pytest.mark.asyncio
@@ -1141,6 +1178,187 @@ async def test_a_cancel_while_removing_a_refused_folder_still_removes_it(env, mo
         await task
     await asyncio.wait_for(asyncio.gather(*e.executor._cleanups), 5)
     assert FOLDER not in e.sftp.dirs and removed.is_set() and "left_after_abort" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("cause", "cancellations", "shutdown"), [
+    ("refused", 1, False), ("refused", 3, True),
+    ("raised", 1, False), ("raised", 3, True),
+    ("cancelled", 1, False), ("cancelled", 3, True),
+])
+async def test_cleanup_keeps_gate_until_sftp_finishes(env, db_session, monkeypatch, caplog, cause, cancellations, shutdown):
+    from nodvard_deck.core import gate, ssh
+    from nodvard_deck.ext.context import ExecHandle, _PermissionChecker
+    from nodvard_deck_ext_docker.operate import OperateContext
+    from nodvard_sdk import GateOutcome
+    from nodvard_sdk.errors import ActionBlocked
+
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    laid_out, cleaning, resume = (asyncio.Event() for _ in range(3))
+    contexts = []
+    handle = ExecHandle(_PermissionChecker("docker", ["hosts.execute"]), settings=None)
+    handle._connection = AsyncMock(return_value=object())
+    e.sftp.exit, e.sftp.wait_closed = Mock(), AsyncMock()
+    e.host.os_family = "linux"
+    ctx = e.executor._ctx
+    ctx.exec = handle
+    e.executor._ctx = OperateContext(ctx)
+    lay_out = e.executor._create.lay_out
+
+    async def transport(conn, command, *, stdin=None, timeout_s=60, **kwargs):
+        if command.startswith("docker ps -a --filter label=com.docker.compose.project"):
+            answer = await e.fake.run(e.host, command, timeout_s=timeout_s)
+        else:
+            answer = await e.fake.run_argv(e.host, shlex.split(command), stdin=stdin, timeout_s=timeout_s)
+        return answer.exit_code, answer.stdout, answer.stderr
+
+    async def settings():
+        if asyncio.current_task() in e.executor._cleanups:
+            contexts.append(contextvars.copy_context())
+            cleaning.set()
+            await resume.wait()
+            with pytest.raises(ActionBlocked):
+                async with handle.sftp(SimpleNamespace(id="other-host")):
+                    pass
+        return {}
+
+    async def layout(*args, **kwargs):
+        problem = await lay_out(*args, **kwargs)
+        laid_out.set()
+        if cause == "raised":
+            raise RuntimeError("kaputt")
+        if cause == "cancelled":
+            await asyncio.Event().wait()
+        return problem
+
+    monkeypatch.setattr(ssh, "run", transport)
+    monkeypatch.setattr(ssh, "start_sftp", AsyncMock(return_value=e.sftp))
+    monkeypatch.setattr(ctx.settings, "get", settings)
+    monkeypatch.setattr(e.executor._create, "lay_out", layout)
+    monkeypatch.setattr(e.executor, "_still_matching", AsyncMock(return_value="Der Stack hat sich geändert."))
+    monkeypatch.setattr(gate, "find_executor", AsyncMock(return_value=e.executor))
+    decision = await gate.propose(db_session, ext_id="docker", command_field=None, request=_request(plan))
+    assert decision.outcome == GateOutcome.REQUIRE_CONFIRMATION
+    action, moved = await gate.approve(db_session, decision.action_id, user_id="u1", wait_s=0)
+    assert moved
+    task = gate._running[action.id]
+    try:
+        await asyncio.wait_for(laid_out.wait(), 5)
+        if cause == "cancelled":
+            task.cancel()
+        await asyncio.wait_for(cleaning.wait(), 5)
+        assert f"{FOLDER}/compose.yaml" in e.sftp.files and f"{FOLDER}/.env" in e.sftp.files
+        for i in range(cancellations):
+            if shutdown and i == 0:
+                await gate.shutdown_running(timeout=0)
+            else:
+                task.cancel()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+        assert not task.done()
+        contexts[0].run(gate.require_execution, e.host.id, operation="sftp", ext_id="docker")
+        resume.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), 5)
+        await asyncio.wait_for(asyncio.gather(*e.executor._cleanups), 5)
+        assert FOLDER not in e.sftp.dirs and not [p for p in e.sftp.files if p.startswith(FOLDER)]
+        assert "kuma" not in e.store.for_host("h1") and not _rolled(e.fake.argv_calls)
+        assert e.actions.locks.held("h1", "kuma") is None
+        assert "clean_up_failed" not in caplog.text and "left_after_abort" not in caplog.text
+        with pytest.raises(ActionBlocked):
+            contexts[0].run(gate.require_execution, e.host.id, operation="sftp", ext_id="docker")
+        await db_session.refresh(action)
+        assert action.status == "failed" and action.result["error"] == gate.CANCELLED_ERROR
+    finally:
+        resume.set()
+        await asyncio.gather(task, *e.executor._cleanups, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gate_timeout", [False, True], ids=["cleanup", "gate"])
+async def test_stalled_sftp_cleanup_releases_gate(env, db_session, monkeypatch, caplog, gate_timeout):
+    from nodvard_deck.core import gate, ssh
+    from nodvard_deck.ext.context import ExecHandle, _PermissionChecker
+    from nodvard_deck_ext_docker import stack_update
+    from nodvard_deck_ext_docker.operate import OperateContext
+    from nodvard_sdk import GateOutcome
+    from nodvard_sdk.errors import ActionBlocked
+
+    e = env()
+    plan = await e.move.plan(e.host, "kuma")
+    e.fake.config = result(json.dumps({"services": {"app": {"image": IMAGE}}}))
+    cleaning, cancelled, resume = (asyncio.Event() for _ in range(3))
+    contexts, deadlines = [], []
+    handle = ExecHandle(_PermissionChecker("docker", ["hosts.execute"]), settings=None)
+    handle._connection = AsyncMock(return_value=object())
+    e.sftp.exit, e.sftp.wait_closed = Mock(), AsyncMock()
+    e.host.os_family = "linux"
+    ctx = e.executor._ctx
+    ctx.exec = handle
+    e.executor._ctx = OperateContext(ctx)
+    remove, timeout = e.sftp.remove, asyncio.timeout
+
+    def deadline(delay):
+        limit = timeout(delay)
+        deadlines.append(limit)
+        return limit
+
+    async def transport(conn, command, *, stdin=None, timeout_s=60, **kwargs):
+        if command.startswith("docker ps -a --filter label=com.docker.compose.project"):
+            answer = await e.fake.run(e.host, command, timeout_s=timeout_s)
+        else:
+            answer = await e.fake.run_argv(e.host, shlex.split(command), stdin=stdin, timeout_s=timeout_s)
+        return answer.exit_code, answer.stdout, answer.stderr
+
+    async def slow_remove(path):
+        contexts.append(contextvars.copy_context())
+        cleaning.set()
+        try:
+            await resume.wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            await resume.wait()
+            raise
+        await remove(path)
+
+    monkeypatch.setattr(ssh, "run", transport)
+    monkeypatch.setattr(ssh, "start_sftp", AsyncMock(return_value=e.sftp))
+    monkeypatch.setattr(e.sftp, "remove", slow_remove)
+    monkeypatch.setattr(e.executor, "_still_matching", AsyncMock(return_value="Der Stack hat sich geändert."))
+    monkeypatch.setattr(stack_update, "CLEANUP_TIMEOUT_S", 0.2, raising=False)
+    monkeypatch.setattr(gate.asyncio, "timeout", deadline)
+    monkeypatch.setattr(gate, "find_executor", AsyncMock(return_value=e.executor))
+    decision = await gate.propose(db_session, ext_id="docker", command_field=None, request=_request(plan))
+    assert decision.outcome == GateOutcome.REQUIRE_CONFIRMATION
+    action, moved = await gate.approve(db_session, decision.action_id, user_id="u1", wait_s=0)
+    assert moved
+    task = gate._running[action.id]
+    try:
+        await asyncio.wait_for(cleaning.wait(), 5)
+        contexts[0].run(gate.require_execution, e.host.id, operation="sftp", ext_id="docker")
+        assert e.actions.locks.held("h1", "kuma") is not None
+        if gate_timeout:
+            deadlines[0].reschedule(asyncio.get_running_loop().time())
+        await asyncio.wait_for(asyncio.shield(task), 5)
+        await asyncio.wait_for(cancelled.wait(), 5)
+        assert e.executor._cleanups and not any(cleanup.done() for cleanup in e.executor._cleanups)
+        assert e.actions.locks.held("h1", "kuma") is None
+        assert FOLDER in e.sftp.dirs and f"{FOLDER}/.env" in e.sftp.files
+        assert "kuma" not in e.store.for_host("h1") and not _rolled(e.fake.argv_calls)
+        assert f"docker_clean_up_timed_out remaining=Prüfe den Stack „kuma“ und die Dateien in {FOLDER}." in caplog.text
+        with pytest.raises(ActionBlocked):
+            contexts[0].run(gate.require_execution, e.host.id, operation="sftp", ext_id="docker")
+        await db_session.refresh(action)
+        assert action.status == "failed"
+        if gate_timeout:
+            assert action.result["error"] == gate.EXECUTE_TIMEOUT_ERROR
+        else:
+            assert "Das Aufräumen hat zu lange gedauert" in action.result["error"]
+            assert FOLDER in action.result["error"] and "kuma" in action.result["error"]
+    finally:
+        resume.set()
+        await asyncio.gather(task, *e.executor._cleanups, return_exceptions=True)
 
 
 @pytest.mark.asyncio

@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from nodvard_sdk import Actor
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import antivirus as av
 from .ids import EXT_ID, LOGGER
@@ -164,7 +165,8 @@ async def find_templates(ctx: ExtensionContext, defender: Defender) -> dict[str,
     async def one(host: Host) -> tuple[Host, tuple[list[tuple[str, str]], bool] | None]:
         async with gate:
             try:
-                result = await ctx.exec.run(host, detect_command(), timeout_s=DETECT_TIMEOUT_S)
+                with ctx.exec.read_access(host):
+                    result = await ctx.exec.run(host, detect_command(), timeout_s=DETECT_TIMEOUT_S)
             except Exception:  # noqa: BLE001 - ein nicht erreichbarer Server kostet nur seine Vorschläge
                 _log.info("shield_watch_templates_failed host=%s", host.id, exc_info=True)
                 return host, None
@@ -194,6 +196,8 @@ async def find_templates(ctx: ExtensionContext, defender: Defender) -> dict[str,
 
 
 class _WatchPathIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     path: str = Field(min_length=1, max_length=255)
 
 
@@ -209,7 +213,11 @@ def build_routers(ctx: ExtensionContext, defender: Defender) -> tuple[APIRouter,
     async def watch_templates() -> dict:
         return await find_templates(ctx, defender)
 
-    @change.post("/defender/watch-paths")
+    @change.post(
+        "/defender/watch-paths",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 409)},
+    )
     async def add_watch_path(payload: _WatchPathIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict:  # noqa: B008
         folder = clean_path(payload.path)
         if folder is None:

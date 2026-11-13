@@ -1,5 +1,6 @@
 [extension]
 id          = "docker"
+# API-Vertrag: Alte Extension-Adressen bleiben in 1.x erreichbar.
 legacy_ids  = ["service-matrix"]
 name        = "Docker"
 version     = "0.1.0"
@@ -9,6 +10,7 @@ description = "Findet Docker-Container auf markierten Servern und zeigt sie als 
 icon        = "layout-grid"
 category    = "servers"
 sort_order  = 30
+editions    = ["dock"]                 # fest eingebaut in Nodvard Dock
 entrypoint  = "nodvard_deck_ext_docker:Extension"
 frontend    = "frontend/dist/index.js"
 # Hilfsskript für Server im Modus „Nur bedienen“ (inline, Regeln in nodvard_sdk.RootHelperSpec).

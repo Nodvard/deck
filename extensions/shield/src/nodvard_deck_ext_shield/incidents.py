@@ -34,16 +34,16 @@ class IncidentStore:
         self._cooldowns: dict[tuple[str, str], float] = {}
 
     def is_in_cooldown(self, host_key: str, target: str, *, cooldown_s: float) -> bool:
-        key = (host_key.lower(), target.lower())
+        key = (host_key.lower(), target)
         last = self._cooldowns.get(key)
         return last is not None and (time.time() - last) < cooldown_s
 
     def merge_pending(self, host_name: str, target: str, *, is_crash: bool, seen_at: float) -> Incident | None:
         """Steht derselbe Container (gleicher Host und Name, gleiche Art) schon im offenen Batch?
         Dann zählt dort das neue Auftreten mit, es entsteht kein zweiter Vorfall."""
-        key = (host_name.lower(), target.lower())
+        key = (host_name.lower(), target)
         for incident in self._pending:
-            if (incident.host_name.lower(), incident.target.lower()) == key and bool(
+            if (incident.host_name.lower(), incident.target) == key and bool(
                 incident.details.get("is_crash")
             ) == is_crash:
                 incident.details["occurrences"] = int(incident.details.get("occurrences") or 1) + 1
@@ -54,7 +54,7 @@ class IncidentStore:
     def enqueue(self, incident: Incident) -> bool:
         """Merkt den Cooldown und hängt an. `True`, wenn der Batch vorher leer war: Nur dann startet der Aufrufer
         den Flush-Timer; bei jedem Ereignis neu gestartet, käme der Flush unter Dauerlast nie."""
-        key = (incident.host_name.lower(), incident.target.lower())
+        key = (incident.host_name.lower(), incident.target)
         self._cooldowns[key] = time.time()
         is_first = len(self._pending) == 0
         self._pending.append(incident)
@@ -65,7 +65,7 @@ class IncidentStore:
         nochmal gemeldet wird. `True`, wenn danach ein Flush-Timer nötig ist."""
         is_first = len(self._pending) == 0
         for incident in incidents:
-            self._cooldowns[(incident.host_name.lower(), incident.target.lower())] = time.time()
+            self._cooldowns[(incident.host_name.lower(), incident.target)] = time.time()
             self._pending.append(incident)
         return bool(incidents) and is_first
 

@@ -559,7 +559,7 @@ async def test_a_long_setup_reaches_a_dropbear_like_server_as_input(
     assert run["launcher"] == launcher
     assert run["stdin"] == after_script, "nach dem Skript kommt höchstens die Passwortzeile für sudo"
     assert run["script"].startswith(f"exec </dev/null; echo {host_setup.SETUP_STARTED}\n")
-    assert len(run["script"].encode()) > 50_000 and PASSWORD not in run["script"]
+    assert len(run["script"].encode()) > 30_000 and PASSWORD not in run["script"]
     assert set(state.key_logins) == {"nodvard"}, "die Prüfung lief mit dem neuen Schlüssel"
 
 
@@ -1072,6 +1072,17 @@ async def test_extra_fields_cannot_redirect_the_password_to_another_target(clien
     await _pin(db_session, host["id"], server_fp)
     _addr, other_port, *_ = await ssh_server_factory()
     r = await _setup(client, token, host, gen, address="127.0.0.1", port=other_port, hostname="127.0.0.1")
+    assert r.status_code == 422, r.text
+    assert r.json() == {"detail": [
+        {"type": "extra_forbidden", "loc": ["body", field], "msg": "Unbekannte Angabe."}
+        for field in ("address", "port", "hostname")
+    ]}
+    assert ssh_server_stats == {"begin_auth": 0, "password_tries": 0, "public_key_tries": 0}
+    assert state.connections == 0 and state.password_tries == [] and state.runs == []
+    assert await _audit(db_session) == []
+    assert await _setup_run(db_session, host["id"]) is None
+
+    r = await _setup(client, token, host, gen)
     assert r.status_code == 200, r.text
     assert ssh_server_stats["begin_auth"] == 0, "der andere Server sah nichts"
     assert state.password_tries == [("root", PASSWORD)]

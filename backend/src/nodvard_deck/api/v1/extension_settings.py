@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from ... import edition
 from ...branding import load_branding
-from ...core import rate_limit, vault
+from ...core import vault
 from ...core.cron import cron_trigger
 from ...core.schema_check import PATTERN_MAX_LENGTH as _PATTERN_MAX_LENGTH
 from ...edition import display_text
@@ -27,6 +27,8 @@ from ...services import audit as audit_service
 from ...services import extension_setup, extension_test
 from ...services import extensions as extensions_service
 from ..deps import CurrentUser, SessionDep, SettingsDep, require_permission
+from ..models import RequestModel
+from ..responses import error_responses
 from .auth import confirm_stored_secret_change
 from .extensions import resolve_extension
 from .secrets import SecretConfirm
@@ -70,7 +72,7 @@ class SecretIn(SecretConfirm):
     value: str = Field(min_length=1, max_length=4096)
 
 
-class TestIn(BaseModel):
+class TestIn(RequestModel):
     __test__ = False  # kein pytest-Testfall, nur ein Name
 
     mode: Literal["connection", "message"] = "connection"
@@ -92,12 +94,6 @@ class TestOut(BaseModel):
     message: str
     details: list[TestDetailOut] | None = None
     """Bei Erweiterungen mit mehreren Verbindungen: das Ergebnis je Verbindung."""
-
-
-# Höchstens 10 Tests je Minute und Nutzer, ein Test ruft echte Server an.
-_TEST_LIMIT = 10
-_TEST_WINDOW_S = 60
-_test_window = rate_limit.SlidingWindow(_TEST_LIMIT, _TEST_WINDOW_S)
 
 
 def schema_for(ext_id: str) -> dict[str, Any] | None:
@@ -239,13 +235,23 @@ async def _settings_out(
     return ExtensionSettingsOut(schema=schema, values=values, secrets=slots, secrets_cleared=secrets_cleared or [])
 
 
-@router.get("/{ext_id}/settings", response_model=ExtensionSettingsOut, response_model_by_alias=True)
+@router.get(
+    "/{ext_id}/settings",
+    response_model=ExtensionSettingsOut,
+    response_model_by_alias=True,
+    responses=error_responses(401, 403, 404, 409, 507),
+)
 async def get_extension_settings(ext_id: str, session: SessionDep, settings: SettingsDep) -> ExtensionSettingsOut:
     ext_id, record = await _record(session, ext_id)
     return await _settings_out(session, ext_id, dict(record.settings or {}), settings=settings)
 
 
-@router.put("/{ext_id}/settings", response_model=ExtensionSettingsOut, response_model_by_alias=True)
+@router.put(
+    "/{ext_id}/settings",
+    response_model=ExtensionSettingsOut,
+    response_model_by_alias=True,
+    responses=error_responses(400, 401, 403, 404, 409, 422, 429, 503, 507),
+)
 async def put_extension_settings(
     ext_id: str, payload: ExtensionSettingsIn, request: Request, session: SessionDep, settings: SettingsDep,
     user: CurrentUser,
@@ -318,7 +324,12 @@ async def put_extension_settings(
     return await _settings_out(session, ext_id, merged, cleared, settings=settings)
 
 
-@router.put("/{ext_id}/secrets", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+@router.put(
+    "/{ext_id}/secrets",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    responses=error_responses(400, 401, 403, 404, 409, 422, 429, 503, 507),
+)
 async def put_extension_secret(
     ext_id: str, payload: SecretIn, request: Request, session: SessionDep, settings: SettingsDep, user: CurrentUser
 ) -> JSONResponse | None:
@@ -370,7 +381,12 @@ async def put_extension_secret(
     return None
 
 
-@router.delete("/{ext_id}/secrets", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+@router.delete(
+    "/{ext_id}/secrets",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    responses=error_responses(400, 401, 403, 404, 409, 422, 429, 503, 507),
+)
 async def delete_extension_secret(
     ext_id: str,
     label: str,
@@ -423,7 +439,11 @@ async def _known_secret_values(session, settings, ext_id: str, values: dict[str,
     return out
 
 
-@router.post("/{ext_id}/test", response_model=TestOut)
+@router.post(
+    "/{ext_id}/test",
+    response_model=TestOut,
+    responses=error_responses(401, 403, 404, 409, 422, 429, 503, 507),
+)
 async def test_extension(
     ext_id: str,
     session: SessionDep,
@@ -445,13 +465,7 @@ async def test_extension(
     if payload.mode == "message" and channel is None:
         raise HTTPException(status_code=422, detail="Diese Erweiterung kann keine Nachrichten senden.")
 
-    wait = _test_window.hit(user.id)
-    if wait:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Zu viele Tests hintereinander. Bitte in {rate_limit.wait_text(wait)} erneut versuchen.",
-            headers={"Retry-After": str(wait)},
-        )
+    extension_test.check_rate_limit(user.id)
 
     values = dict(record.settings or {})
     schema = schema_for(ext_id)
@@ -467,11 +481,9 @@ async def test_extension(
         )
     del secrets  # nach dem Schwärzen nicht länger als nötig im Speicher halten
 
-    await extension_setup.save_last_test(session, ext_id, ok=outcome.ok, message=outcome.message)
-    await audit_service.log(
-        session, actor_type="user", actor_id=user.id, action="extension.test",
-        outcome="success" if outcome.ok else "failure", target_type="extension", target_id=ext_id,
-        detail={"mode": payload.mode, "result": outcome.kind},
+    await extension_setup.record_test(
+        session, ext_id, ok=outcome.ok, message=outcome.message, actor_id=user.id,
+        mode=payload.mode, kind=outcome.kind,
     )
     return TestOut(
         ok=outcome.ok,

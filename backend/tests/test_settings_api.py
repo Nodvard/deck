@@ -206,13 +206,20 @@ async def test_list_settings_survives_saved_branding(client):
 
 def test_gate_errors_are_never_blank():
     import asyncio
+    import re
 
     from nodvard_deck.core.gate import describe_error
 
-    assert describe_error(asyncio.TimeoutError()).startswith("Zeitüberschreitung")
-    assert "nicht erreichbar" in describe_error(ConnectionResetError())
-    assert describe_error(RuntimeError("kaputt")) == "kaputt"
-    assert describe_error(KeyError()) == "KeyError"
+    cases = [
+        (asyncio.TimeoutError(), "Zeitüberschreitung. Der Befehl hat zu lange gebraucht."),
+        (ConnectionResetError(), "Die Anfrage ist fehlgeschlagen."),
+        (RuntimeError("kaputt"), "Die Anfrage ist fehlgeschlagen."),
+        (KeyError(), "Die Anfrage ist fehlgeschlagen."),
+    ]
+    for error, message in cases:
+        detail = describe_error(error)
+        assert re.fullmatch(re.escape(message) + r" Fehlerkennung: [0-9a-f]{32}\.", detail)
+        assert "kaputt" not in detail
 
 
 @pytest.mark.asyncio

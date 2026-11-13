@@ -1,43 +1,6 @@
-/**
- * Der Kern-Dateimanager (docs/04-API.md Paragraph 3 "Dateien") -- eine CORE-Seite
- * wie DashboardPage.tsx, KEINE
- * Extension-Seite: der Explorer selbst kennt keine Quelle namentlich, er rendert
- * generisch ueber `GET /files/sources` (gespeist aus `FileSourceProvider`-
- * Implementierungen der terminal- und nextcloud-Extension).
- *
- * Rename/Remove/Mkdir gehen ueber `promptDialog()`/
- * `confirmDialog()` (state/dialogs.ts, echte Radix-Dialoge) statt `window.prompt()`/
- * `confirm()` -- ersetzt die fruehere Pragmatik (ScriptsPage.tsx's `<textarea>` statt
- * CodeMirror gilt als bewusste Vereinfachung weiterhin, das war ein anderer Tausch).
- *
- * **Kopieren zwischen Quellen per echtem HTML5-Drag&Drop**, ersetzt
- * den frueheren "Kopieren"-Button + zwei `window.prompt()`s -- genau der Weg, den
- * `nodvard_sdk.capabilities.FileSource`s eigener Docstring immer schon nannte
- * ("Drag & Drop zwischen Quellen (open_read(A) -> open_write(B), serverseitig)").
- * Serverseitig unveraendert derselbe `POST /files/transfer`.
- *
- * Drop-Ziele: ein Ordner in der aktuellen Liste (Ziel = dieser Ordner) oder ein
- * Breadcrumb (Ziel = dieser uebergeordnete Pfad) kopieren sofort. Eine Quelle in der
- * Seitenleiste oeffnet den `FolderPickerDialog`
- * (sonst bliebe nur deren Wurzel `/` -- ohne zweites Panel gab es keinen Weg, einen
- * tieferen Zielordner einer ANDEREN Quelle zu waehlen). Derselbe Dialog steckt hinter
- * "Kopieren nach …" je Datei und kann auch VERSCHIEBEN: erst kopieren, das Original
- * erst loeschen, wenn der Transfer-Lauf `succeeded` meldet -- nie vorher.
- *
- * **Nur Dateien sind Zugriffs-Quelle fuer den Zug** (`entry.is_dir` ist NICHT
- * `draggable`) -- `open_read()`/`open_write()` sind Einzeldatei-Streams (siehe
- * SDK-Protokoll), ein Ordner-Transfer wuerde je nach Connector entweder hart
- * fehlschlagen (SFTP: "ist ein Verzeichnis") oder still STILLE FALSCHE DATEN
- * schreiben (WebDAV: `GET` auf eine Kollektion liefert eine HTML-Liste statt eines
- * Fehlers, die als "Dateiinhalt" durchgereicht wuerde) -- der alte Button hatte
- * dieses Risiko nie ausgeschlossen, es wurde beim Umbau bewusst mitgefixt.
- *
- * **Adresse:** `/files?source=<Quelle>&path=<Ordner>` oeffnet genau diesen Ordner, `/files?host=<Server>[&path=<Ordner>]`
- * die Dateiquelle dieses Servers (die erste, wenn es mehrere gibt). Die Seite schreibt die Adresse beim Klicken mit
- * (`replace`, kein neuer Verlaufseintrag), damit Neuladen, Zurueck und Teilen funktionieren. Unbekannte oder ungueltige
- * Werte ergeben den normalen Start mit einem Hinweis, nie einen Fehler. Zu einer Server-Quelle zeigt die Seitenleiste
- * "Wichtige Orte" (`GET /files/places`).
- */
+/** Dateimanager für registrierte Quellen: Ordner und Breadcrumbs sind direkte Kopierziele, andere Quellen nutzen die Ordnerauswahl.
+ * Nur lesbare Einzeldateien sind übertragbar; Verschieben löscht das Original erst nach erfolgreichem Transfer mit Größenprüfung.
+ * source/path oder host/path in der Adresse wählen den Ordner; ungültige Werte zeigen den Start mit Hinweis. */
 import { styleRef } from "../../../extensions/_shared/frontend/src/csp";
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -76,7 +39,7 @@ function readLocation(params: URLSearchParams): { source: string | null; host: s
   return { source: params.get("source"), host: params.get("host"), path: params.get("path") };
 }
 
-/** Ein Ordner aus der Adresse zaehlt nur, wenn er absolut ist; ob es ihn gibt, sagt die Quelle beim Oeffnen. */
+/** Ein Ordner aus der Adresse zählt nur, wenn er absolut ist; ob es ihn gibt, sagt die Quelle beim Öffnen. */
 function isAbsolutePath(path: string): boolean {
   return path.startsWith("/") && !path.includes("\0");
 }
@@ -92,7 +55,7 @@ interface FileEntryOut {
   modified_at: string | null;
   mime: string | null;
   /** Von der Quelle mitgegeben; die SFTP-Quelle markiert Links mit `symlink`, Links ins
-   * Leere zusaetzlich mit `broken`. */
+   * Leere zusätzlich mit `broken`. */
   metadata?: { symlink?: boolean; broken?: boolean };
 }
 
@@ -105,8 +68,7 @@ function joinPath(base: string, name: string): string {
   return base === "/" ? `/${name}` : `${base}/${name}`;
 }
 
-/** Ein Link ins Leere hat kein lesbares Ziel: kein Download, keine Kopie, kein Ziehen
- * (das endete beim Laden mit einem 502) -- nur Umbenennen/Löschen bleiben sinnvoll. */
+/** Links ins Leere lassen sich nur umbenennen oder löschen, da ihr Ziel nicht lesbar ist. */
 function isBrokenLink(entry: FileEntryOut): boolean {
   return entry.metadata?.symlink === true && entry.metadata?.broken === true;
 }
@@ -120,7 +82,7 @@ function canTransfer(entry: FileEntryOut): boolean {
 function LinkMark(): JSX.Element {
   return (
     <span role="img" aria-label="Link" title="Link (verweist auf ein anderes Ziel)" className="ml-1.5 opacity-70">
-      🔗
+      Link
     </span>
   );
 }
@@ -133,14 +95,7 @@ function formatSize(size: number | null): string {
   return `${(size / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
-/**
- * Ein Versuch, die Datei hochzuladen. `fetch()` kann Upload-
- * Fortschritt fuer den Request-Body nicht melden (kein `onprogress` fuer den
- * Request, nur `ReadableStream`-Tricks mit duenner Browser-Unterstuetzung) --
- * `XMLHttpRequest.upload.onprogress` ist dafuer der etablierte Weg, deshalb hier
- * bewusst XHR statt `fetch()`, nur fuer diesen einen Aufruf. Das Token wird bei jedem
- * Versuch frisch aus dem Store gelesen.
- */
+/** XMLHttpRequest meldet Upload-Fortschritt; jeder Versuch liest das aktuelle Token aus dem Store. */
 function sendUpload(
   sourceId: string,
   dirPath: string,
@@ -163,7 +118,7 @@ function sendUpload(
 }
 
 /**
- * Hochladen mit Fortschritt. Kommt ein 401 zurueck (Anmeldung abgelaufen, z. B. nach einer
+ * Hochladen mit Fortschritt. Kommt ein 401 zurück (Anmeldung abgelaufen, z. B. nach einer
  * langen Pause), wird wie bei `apiFetch` einmal still erneuert und der Upload EINMAL
  * wiederholt -- der Fortschritt beginnt dann bei 0. Bei anderen Fehlern gibt es keinen
  * zweiten Versuch.
@@ -233,7 +188,7 @@ export function FilesPage(): JSX.Element {
     loadSources();
   }, [loadSources]);
 
-  // Quelle und Ordner aus der Adresse uebernehmen (sobald die Quellen da sind, und wenn von aussen eine neue Adresse
+  // Quelle und Ordner aus der Adresse übernehmen (sobald die Quellen da sind, und wenn von aussen eine neue Adresse
   // kommt, etwa ein Link von der Server-Seite). Ohne Angabe: die erste Quelle, wie immer.
   useEffect(() => {
     if (!sources || addressKey === writtenAddress.current) return;
@@ -265,7 +220,7 @@ export function FilesPage(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reagiert nur auf neue Quellen und eine neue Adresse
   }, [sources, addressKey]);
 
-  // Die Adresse mitfuehren (`replace`: kein neuer Verlaufseintrag pro Klick im Explorer).
+  // Die Adresse mitführen (`replace`: kein neuer Verlaufseintrag pro Klick im Explorer).
   useEffect(() => {
     if (!sourceId) return;
     const next = new URLSearchParams({ source: sourceId, path }).toString();
@@ -274,7 +229,7 @@ export function FilesPage(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- schreibt nur, wenn sich Quelle oder Ordner aendern
   }, [sourceId, path]);
 
-  // Wichtige Orte des Servers hinter der gewaehlten Quelle; einmal je Server, ein Fehler heisst einfach: keine Orte.
+  // Wichtige Orte des Servers hinter der gewählten Quelle; einmal je Server, ein Fehler heisst einfach: keine Orte.
   useEffect(() => {
     if (!placeHostId || placeHostId in placesByHost) return;
     let cancelled = false;
@@ -289,13 +244,21 @@ export function FilesPage(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `placesByHost` ist nur der Zwischenspeicher
   }, [placeHostId]);
 
+  // Nur die zuletzt angeforderte Liste zählt: Eine verspätete Antwort einer anderen Quelle oder eines anderen Ordners
+  // zeigte sonst deren Pfade, und Umbenennen oder Löschen träfe sie auf der jetzt gewählten Quelle.
+  const listRequest = useRef(0);
   const loadDir = useCallback((sid: string, p: string) => {
+    const request = ++listRequest.current;
     setError(null);
     setEntries(null);
     api
       .get<{ items: FileEntryOut[] }>(`/files/${encodeURIComponent(sid)}/list?path=${encodeURIComponent(p)}`)
-      .then((res) => setEntries(res.items))
-      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : String(err)));
+      .then((res) => {
+        if (request === listRequest.current) setEntries(res.items);
+      })
+      .catch((err: unknown) => {
+        if (request === listRequest.current) setError(err instanceof ApiError ? err.message : String(err));
+      });
   }, []);
 
   useEffect(() => {
@@ -310,8 +273,8 @@ export function FilesPage(): JSX.Element {
       if (pendingMove && pendingMove.runId === transferRunId) {
         const move = pendingMove;
         setPendingMove(null);
-        // Das Original nur loeschen, wenn genau so viele Bytes angekommen sind, wie die Quelle beim
-        // Anzeigen hatte -- sonst waere nach einer leeren oder halben Kopie alles weg.
+        // Das Original nur löschen, wenn genau so viele Bytes angekommen sind, wie die Quelle beim
+        // Anzeigen hatte -- sonst wäre nach einer leeren oder halben Kopie alles weg.
         if (move.size === null || data.bytes !== move.size) {
           setMessage(
             move.size === null
@@ -463,7 +426,7 @@ export function FilesPage(): JSX.Element {
   ) {
     const destPath = joinPath(targetDirPath, dragged.name);
     if (dragged.sourceId === targetSourceId && destPath === dragged.path) {
-      setMessage("Ziel ist identisch mit der Quelle – nichts zu tun.");
+      setMessage("Ziel ist identisch mit der Quelle, nichts zu tun.");
       return;
     }
     try {
@@ -492,7 +455,7 @@ export function FilesPage(): JSX.Element {
     if (dragged) await startTransfer(dragged, targetSourceId, targetDirPath);
   }
 
-  /** Ablegen auf eine Quelle in der Seitenleiste: Zielordner im Dialog waehlen,
+  /** Ablegen auf eine Quelle in der Seitenleiste: Zielordner im Dialog wählen,
    * statt blind in deren Wurzel zu kopieren. */
   function handleSourceDrop(e: DragEvent, targetSourceId: string) {
     const dragged = readDragged(e);
@@ -515,7 +478,7 @@ export function FilesPage(): JSX.Element {
   }
 
   return (
-    // Handy: Quellen ueber der Liste statt fest 192 px daneben.
+    // Handy: Quellen über der Liste statt fest 192 px daneben.
     <div className="flex h-full flex-col gap-4 p-4 sm:p-6 lg:flex-row">
       <div className={`w-full shrink-0 ${sources?.length === 0 ? "lg:max-w-xl" : "lg:w-48"}`}>
         <h2 className="mb-2 text-lg font-semibold">Dateien</h2>
@@ -671,7 +634,7 @@ export function FilesPage(): JSX.Element {
             <div className="mb-1 flex items-center justify-between">
               <h3 className="text-sm font-semibold opacity-80">Suchergebnisse für '{query}'</h3>
               <button type="button" onClick={() => setSearchHits(null)} className="text-xs opacity-60 hover:opacity-100">
-                schliessen
+                schließen
               </button>
             </div>
             <ul className="text-sm">
@@ -732,7 +695,7 @@ export function FilesPage(): JSX.Element {
                     <td role="cell" className={`${CARD_CELL_PLAIN} py-1.5 break-words`}>
                       {entry.is_dir ? (
                         <button type="button" className="hover:underline" onClick={() => setPath(entry.path)}>
-                          📁 {entry.name}
+                          {entry.name}
                         </button>
                       ) : (
                         <span>{isBrokenLink(entry) ? "" : "⠿ "}{entry.name}</span>

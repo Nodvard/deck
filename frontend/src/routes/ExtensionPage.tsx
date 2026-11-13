@@ -4,7 +4,7 @@ import { Link, Navigate, useLocation, useParams } from "react-router-dom";
 
 import { BetaPageNotice, isBeta } from "../components/BetaBadge";
 import { api } from "../lib/api";
-import { usePages } from "../lib/catalog";
+import { refreshExtensionQueries, usePages } from "../lib/catalog";
 import { dispatchDeckEvent, findDeck } from "../lib/deckGlobal";
 import { extensionErrorText } from "../lib/extensionError";
 import { useExtensionLabel } from "../lib/extensionNames";
@@ -39,7 +39,7 @@ function PageMissing({ extId }: { extId: string | undefined }) {
       } else {
         setSwitchedOn(true);
       }
-      for (const key of ["extensions", "pages", "widgets", "capabilities"]) void queryClient.invalidateQueries({ queryKey: [key] });
+      await refreshExtensionQueries(queryClient);
     } catch (err) {
       setError(errorText(err));
     } finally {

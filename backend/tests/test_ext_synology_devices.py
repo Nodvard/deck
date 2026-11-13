@@ -5,13 +5,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
 import httpx
 import pytest
+from nodvard_deck.core import vault
+from nodvard_deck.ext.runtime import get_extension_runtime
+from nodvard_deck.models import ExtensionRecord, Secret
+from nodvard_deck.services import extensions as extensions_service
 from sqlalchemy import select
 from test_ext_synology import (  # noqa: F401 - Fixture _synology_on_path
     API,
@@ -33,11 +36,9 @@ from test_ext_synology import (  # noqa: F401 - Fixture _synology_on_path
     syn_service,
     syn_watch,
 )
-
-from nodvard_deck.core import vault
-from nodvard_deck.ext.runtime import get_extension_runtime
-from nodvard_deck.models import ExtensionRecord, Secret
-from nodvard_deck.services import extensions as extensions_service
+from test_ext_synology import (
+    synology_clock as synology_clock,  # noqa: PLC0414 - Fixture für pytest importieren
+)
 
 DS920 = "https://ds920.test:5001"
 DS415 = "https://ds415.test:5001"
@@ -334,18 +335,31 @@ async def test_testing_the_connection_lifts_every_pause_and_names_each_device(cl
 
 
 @pytest.mark.asyncio
-async def test_a_slow_device_does_not_take_the_test_result_of_the_others_with_it(client, db_session, test_settings, monkeypatch):
-    from nodvard_deck.services import extension_test
-
+async def test_a_slow_device_does_not_take_the_test_result_of_the_others_with_it(
+    client, db_session, test_settings, synology_clock,
+):
     headers, fakes = await _setup_two(client, db_session, test_settings)
+    healthy_done = asyncio.Event()
+    cancelled = False
+
+    async def healthy(request: httpx.Request) -> None:
+        if FakeDsm.params(request).get("api") == "SYNO.DSM.Info":
+            # Die erfolgreiche Antwort wird noch in diesem Loop-Durchlauf gelesen.
+            synology_clock.loop.call_soon(healthy_done.set)
 
     async def hang(request: httpx.Request) -> None:
-        await asyncio.sleep(300)
+        nonlocal cancelled
+        await healthy_done.wait()
+        try:
+            await synology_clock.expire_after(syn_service.TEST_DEVICE_TIMEOUT_S)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
 
+    fakes[DS920].before = healthy
     fakes[DS415].before = hang
-    monkeypatch.setattr(extension_test, "TEST_TIMEOUT_S", 2.0)
-    monkeypatch.setattr("nodvard_deck_ext_synology.service.TEST_DEVICE_TIMEOUT_S", 0.5)
     res = await client.post(f"/api/v1/extensions/{EXT}/test", json={"mode": "connection"}, headers=headers)
+    assert cancelled, "die Gerätefrist muss die laufende Anfrage abbrechen"
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["ok"] is False and body["details"], body
@@ -355,21 +369,35 @@ async def test_a_slow_device_does_not_take_the_test_result_of_the_others_with_it
 
 
 @pytest.mark.asyncio
-async def test_logging_out_before_the_test_is_kept_short(client, db_session, test_settings, monkeypatch):
+async def test_logging_out_before_the_test_is_kept_short(client, db_session, test_settings, synology_clock):
     headers, fakes = await _setup_two(client, db_session, test_settings)
     await _devices(client, headers)
+    started: set[str] = set()
+    cancelled: set[str] = set()
+    reply = asyncio.Event()
 
     async def hang_on_logout(request: httpx.Request) -> None:
-        if FakeDsm.params(request).get("method") == "logout":
-            await asyncio.sleep(300)
+        if FakeDsm.params(request).get("method") != "logout":
+            return
+        host = request.url.host
+        started.add(host)
+        try:
+            if len(started) == len(fakes):
+                try:
+                    await synology_clock.expire_after(syn_service.TEST_LOGOUT_TIMEOUT_S)
+                finally:
+                    reply.set()
+            else:
+                await reply.wait()
+        except asyncio.CancelledError:
+            cancelled.add(host)
+            raise
 
     for fake in fakes.values():
         fake.before = hang_on_logout
-    monkeypatch.setattr("nodvard_deck_ext_synology.service.TEST_LOGOUT_TIMEOUT_S", 0.2)
-    started = time.monotonic()
     health = await _health()
+    assert started == cancelled == {urlsplit(url).hostname for url in fakes}, "beide Abmeldungen müssen an der Frist abbrechen"
     assert health.healthy is True, health.message
-    assert time.monotonic() - started < 2.0
 
 
 @pytest.mark.asyncio

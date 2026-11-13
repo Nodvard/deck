@@ -4,6 +4,7 @@ wirklich -- und bleibt er laufen?"""
 from __future__ import annotations
 
 import json
+import shlex
 import sys
 from types import SimpleNamespace
 
@@ -158,6 +159,24 @@ def test_state_commands_only_take_names_and_ids():
             ac.cmd_state(bad)
     with pytest.raises(ValueError):
         ac.cmd_stack_running("x; reboot")
+
+
+@pytest.mark.parametrize("oneoff", [False, True])
+def test_state_argv(oneoff):
+    ac = _ac()
+    refs = ["web.1", "worker-2", ID_A]
+    fmt = _ia().VERIFY_FORMAT
+    assert ac.cmd_state(refs) == shlex.join(["docker", "container", "inspect", "--format", fmt, *refs])
+    if oneoff:
+        fmt = fmt[:-1] + ',"oneoff":{{json (index .Config.Labels "com.docker.compose.oneoff")}}}'
+    assert ac.cmd_state_argv(refs, oneoff=oneoff) == ["docker", "container", "inspect", "--format", fmt, *refs]
+
+
+@pytest.mark.parametrize("oneoff", [False, True])
+@pytest.mark.parametrize("refs", [[], ["-f"], ["a b"], ["web\n"], ["web", "x; reboot"], ["$(id)"], ["a" * 256]])
+def test_state_argv_checks_refs(refs, oneoff):
+    with pytest.raises(ValueError):
+        _ac().cmd_state_argv(refs, oneoff=oneoff)
 
 
 class _Exec:

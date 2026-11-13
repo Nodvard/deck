@@ -267,9 +267,40 @@ def test_odd_scan_writes_only_into_its_own_files(tmp_path):
                               text=True, timeout=30, check=False)
         assert done.returncode == 64, args
     assert out.read_text() == rc.read_text() == (tmp_path / "ziel").read_text() == ""
+    env = {"PATH": "/usr/bin:/bin", "ODD_SCAN_OUT": str(out), "ODD_SCAN_RC": str(rc)}
     done = subprocess.run([SH, str(helper), "odd-scan", str(out), str(rc), "/b/evil", "/b/gut"], capture_output=True, text=True,
-                          timeout=30, check=False)
+                          timeout=30, check=False, env=env)
     assert done.returncode == 0 and rc.read_text() == "1 2\n" and "file:/b/evil\n" in out.read_text()
+
+
+@needs_sh
+def test_odd_scan_refuses_files_of_another_run(tmp_path):
+    bin_dir = stubs(tmp_path, {"clamscan": CLAMSCAN})
+    helper = helper_copy(tmp_path, path=f"{bin_dir}:/usr/bin:/bin", sdmark=tmp_path / "sd")
+    run = tmp_path / "run"
+    own_out, own_rc = run / "tmp.AAAAAAAAAA", run / "tmp.BBBBBBBBBB"
+    other_out, other_rc = run / "tmp.CCCCCCCCCC", run / "tmp.DDDDDDDDDD"
+    for f in (own_out, own_rc, other_out, other_rc):
+        f.write_text("")
+    for env in ({}, {"ODD_SCAN_OUT": str(own_out), "ODD_SCAN_RC": str(own_rc)}):
+        done = subprocess.run([SH, str(helper), "odd-scan", str(other_out), str(other_rc), "/b/evil"], capture_output=True,
+                              text=True, timeout=30, check=False, env={"PATH": "/usr/bin:/bin", **env})
+        assert done.returncode == 64, env
+    assert other_out.read_text() == other_rc.read_text() == ""
+
+
+@needs_sh
+def test_the_watch_aborts_on_a_result_line_that_is_not_numbers(tmp_path):
+    find = 'echo "0 1 x" >>"$ODD_SCAN_RC"\n'
+    base = tmp_path / "w"
+    bin_dir = stubs(base, {"clamscan": CLAMSCAN, "find": find})
+    helper = helper_copy(base, path=f"{bin_dir}:/usr/bin:/bin", sdmark=base / "sd")
+    tree = _tree(tmp_path)
+    args = _av().watch_helper_args([str(tree / "b")], minutes=10, max_filesize_mb=50, use_clamd=False, mark=MARK,
+                                   skip_folders=[], limit_s=300)
+    _, out = run_sh([SH, str(helper), *args], "/nicht-da")
+    assert "Unusual file names" not in out and MARK + "0" not in out and MARK + "1" not in out
+    assert list((base / "run").iterdir()) == []
 
 
 def test_the_dashboard_passes_the_same_settings():

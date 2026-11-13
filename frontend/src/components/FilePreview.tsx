@@ -120,7 +120,10 @@ export function FilePreview({
       ? { headers: { Range: `bytes=0-${TEXT_LIMIT - 1}` }, signal: controller.signal }
       : { signal: controller.signal };
     (async () => {
-      const res = await apiFetchResponse(path, init);
+      let res = await apiFetchResponse(path, init);
+      if (kind === "text" && res.status === 416 && res.headers.get("Content-Range") === "bytes */0") {
+        res = await apiFetchResponse(path, { signal: controller.signal });
+      }
       if (!res.ok) throw await apiErrorFromResponse(res);
       const { bytes, more } = await readHead(res, kind === "image" ? IMAGE_LIMIT : TEXT_LIMIT);
       if (!active) return;

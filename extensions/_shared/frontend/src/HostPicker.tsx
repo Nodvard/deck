@@ -73,6 +73,7 @@ export function statusTone(status?: string | null, powerState?: string | null, g
   if (isGone({ gone_since: goneSince })) return { tone: "off", label: "nicht mehr vorhanden" };
   if (isSwitchedOff({ power_state: powerState })) return { tone: "off", label: "aus" };
   const s = (status ?? "").toLowerCase();
+  if (s === "no_access") return { tone: "unknown", label: "kein Zugang" };
   if (["up", "online", "running", "ok", "reachable"].includes(s)) return { tone: "ok", label: "erreichbar" };
   if (["down", "offline", "stopped", "unreachable", "error"].includes(s)) return { tone: "bad", label: "nicht erreichbar" };
   return { tone: "unknown", label: "Status unbekannt" };

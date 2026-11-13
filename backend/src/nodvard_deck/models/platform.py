@@ -55,7 +55,7 @@ class Job(Base, IdMixin, TimestampMixin):
     __tablename__ = "jobs"
     __table_args__ = (Index("uq_jobs_ext_key", "ext_id", "ext_job_key", unique=True),)
 
-    ext_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    ext_id: Mapped[str | None] = mapped_column(String(64))
     ext_job_key: Mapped[str | None] = mapped_column(String(128))
     """Stabiler Schlüssel aus `JobSpec.id` (von der Extension gewählt, nicht die generierte `Job.id`).
     `ctx.scheduler.trigger()` adressiert darüber, denn die Extension kennt ihre UUID nie. Eindeutig je `ext_id`,
@@ -102,6 +102,7 @@ class JobRun(Base, IdMixin):
 
 class Notification(Base, IdMixin):
     __tablename__ = "notifications"
+    __table_args__ = (Index("ix_notifications_read_at_ts", "read_at", "ts"),)
 
     ts: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
     severity: Mapped[str] = mapped_column(String(16), default="info")

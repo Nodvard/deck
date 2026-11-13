@@ -7,7 +7,7 @@ import { refreshAfterMs, retryDelayMs, tokenLifetimeMs, useProactiveTokenRefresh
 const USER = { id: "u1", username: "nico", display_name: "Nico", email: null, is_owner: true, locale: "de", permissions: ["*"] };
 const MIN = 60_000;
 
-/** JWT wie core/security.py::create_jwt (nur der Inhalt zaehlt, die Signatur prueft der Client nie). */
+/** JWT wie core/security.py::create_jwt (nur der Inhalt zählt, die Signatur prüft der Client nie). */
 function jwt(claims: Record<string, unknown>): string {
   const b64 = (value: unknown) => btoa(JSON.stringify(value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   return `${b64({ alg: "HS256", typ: "JWT" })}.${b64(claims)}.signatur`;
@@ -165,7 +165,7 @@ describe("useProactiveTokenRefresh", () => {
     expect(useAuthStore.getState().accessToken).toBe(serverToken(300));
     expect(useAuthStore.getState().status).toBe("authenticated");
 
-    // Erfolg setzt den Takt zurueck: naechster Versuch wieder regulaer nach 13 min, keine Wiederholungen.
+    // Erfolg setzt den Takt zurück: nächster Versuch wieder regulär nach 13 min, keine Wiederholungen.
     await vi.advanceTimersByTimeAsync(13 * MIN - 1000);
     expect(refreshCalls).toBe(7);
     await vi.advanceTimersByTimeAsync(1000);
@@ -203,7 +203,7 @@ describe("useProactiveTokenRefresh", () => {
     expect(refreshCalls).toBe(1);
     expect(useAuthStore.getState().status).toBe("authenticated");
 
-    // Zurueck im Tab, Server immer noch weg: sofort ein Versuch, danach die naechste Pause (15 s).
+    // Zurück im Tab, Server immer noch weg: sofort ein Versuch, danach die nächste Pause (15 s).
     setVisibility("visible");
     await vi.advanceTimersByTimeAsync(0);
     expect(refreshCalls).toBe(2);
@@ -212,7 +212,7 @@ describe("useProactiveTokenRefresh", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(refreshCalls).toBe(3);
 
-    // Tab-Wechsel waehrend eine Wiederholung ansteht: kein zweiter Timer daneben.
+    // Tab-Wechsel während eine Wiederholung ansteht: kein zweiter Timer daneben.
     up = true;
     setVisibility("hidden");
     setVisibility("visible");

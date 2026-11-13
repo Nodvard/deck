@@ -30,6 +30,7 @@ permissions = [
 from = "network"
 settings = "npm"
 widgets = { certificates = "certificates" }
+# API-Vertrag: Übernommene Adressen bleiben in 1.x erreichbar.
 routes = { "/npm" = "/summary", "/npm/address-check" = "/address-check", "/widgets/certificates" = "/widgets/certificates", "/npm/hosts/{host_id}/enable" = "/hosts/{host_id}/enable", "/npm/hosts/{host_id}/disable" = "/hosts/{host_id}/disable" }
 secrets = ["network-npm-password"]
 

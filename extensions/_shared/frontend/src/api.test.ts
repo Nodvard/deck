@@ -155,7 +155,7 @@ describe("authedFetch", () => {
 
     const caught = await authedFetch("/hosts").catch((err: unknown) => err);
     expect(caught).toBeInstanceOf(ServerUnavailableError);
-    expect((caught as Error).message).toBe("Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.");
+    expect((caught as Error).message).toBe("Server gerade nicht erreichbar, bitte gleich noch einmal versuchen.");
     expect(refresh).not.toHaveBeenCalled();
   });
 

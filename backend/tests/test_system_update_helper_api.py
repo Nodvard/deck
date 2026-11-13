@@ -15,7 +15,7 @@ from pathlib import Path
 import pyotp
 import pytest
 import pytest_asyncio
-from nodvard_deck.core import bootstate, updater_client, updates
+from nodvard_deck.core import bootstate, updater_client, updater_signing, updates
 from nodvard_deck.core.backup import premigrate
 from nodvard_deck.models import AuditEntry, Notification
 from nodvard_deck.services import update_helper
@@ -27,9 +27,11 @@ from updater_helpers import (
     REQUEST_ID,
     make_channel,
     result,
-    status_doc,
     vectors,
     write_status,
+)
+from updater_helpers import (
+    status_doc as old_status_doc,
 )
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Kanal nur unter POSIX (dir_fd, O_NOFOLLOW)")
@@ -44,6 +46,10 @@ def _isolated(monkeypatch):
     update_helper.reset_for_tests()
     yield
     update_helper.reset_for_tests()
+
+
+def status_doc(**changes):
+    return old_status_doc(**{"request_versions": [1, 2, 3], **changes})
 
 
 CHECKED = "sha256:" + "4f" * 32
@@ -66,6 +72,7 @@ def channel(test_settings) -> Path:
         "channel": "stable", "latest": "0.7.1", "latest_digest": CHECKED, "grant": {"grant": grant_doc(), "sig": SIG},
         "checked_at": "2026-10-01T03:00:00+00:00", "attempted_at": "2026-10-01T03:00:00+00:00", "error": None,
     })
+    updater_signing.prepare_key(test_settings.data_dir)
     root = make_channel(test_settings.updater_dir)
     write_status(root, status_doc())
     return root
@@ -185,19 +192,27 @@ async def test_the_check_answers_with_the_state_of_the_helper_too(client, channe
 # ---------------------------------------------------------------------------
 
 
-async def test_apply_writes_one_request_and_answers_202(client, db_session, channel):
+async def test_apply_writes_one_request_and_answers_202(client, db_session, channel, test_settings):
     owner = await _owner(client)
     r = await client.post("/api/v1/system/updates/apply", json=apply_body(), headers=owner)
     assert r.status_code == 202, r.text
     body = r.json()
     assert body["action"] == "update" and body["from"] == "0.7.0" and body["to"] == "0.7.1"
     written = take_requests(channel)
-    assert written == [{"v": 1, "id": body["request_id"], "action": "update", "version": "0.7.1",
-                        "created_at": written[0]["created_at"]}]
+    assert len(written) == 1
+    request = written[0]
+    assert request == {"v": 3, "id": body["request_id"], "action": "update", "version": "0.7.1",
+                       "created_at": request["created_at"], "digest": CHECKED, "grant": grant_doc(
+                           issued_at=request["grant"]["issued_at"], expires_at=request["grant"]["expires_at"]),
+                       "sig": SIG, "request_key_id": request["request_key_id"], "request_sig": request["request_sig"]}
+    key = updater_signing.load_key(test_settings.data_dir)
+    unsigned = {k: v for k, v in request.items() if k != "request_sig"}
+    signed = json.dumps(unsigned, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
+    key.public_key().verify(bytes.fromhex(request["request_sig"]), updater_client.REQUEST_DOMAIN + signed)
     entries = await _audit(db_session)
     assert [(e.action, e.outcome) for e in entries] == [("system.update.requested", "success")]
-    assert entries[0].detail == {"request_id": body["request_id"], "from": "0.7.0", "to": "0.7.1", "digest": None,
-                                 "signed": False}
+    assert entries[0].detail == {"request_id": body["request_id"], "from": "0.7.0", "to": "0.7.1", "digest": CHECKED,
+                                 "signed": True}
     view = (await client.get("/api/v1/system/updates/helper", headers=owner)).json()
     assert view["pending"]["id"] == body["request_id"] and view["pending"]["to"] == "0.7.1"
 
@@ -215,13 +230,13 @@ async def test_apply_pins_the_digest_from_the_update_check_when_the_helper_can(c
     assert (await _audit(db_session))[0].detail["digest"] == CHECKED
 
 
-async def test_an_older_helper_gets_no_digest_even_when_the_update_check_found_one(client, channel):
+async def test_the_release_digest_is_sent_without_the_digest_option(client, channel):
     owner = await _owner(client)
     r = await client.post("/api/v1/system/updates/apply", json=apply_body(), headers=owner)
     assert r.status_code == 202, r.text
-    assert r.json()["digest"] is None
+    assert r.json()["digest"] == CHECKED and r.json()["signed"] is True
     [written] = take_requests(channel)
-    assert "digest" not in written and written["version"] == "0.7.1"
+    assert written["digest"] == CHECKED and written["v"] == 3
 
 
 async def test_apply_without_a_checked_digest_is_refused_when_the_helper_could_pin_it(client, db_session, channel,
@@ -240,29 +255,30 @@ async def test_apply_without_a_checked_digest_is_refused_when_the_helper_could_p
 
 async def test_a_helper_that_checks_signatures_gets_the_grant(client, db_session, channel):
     owner = await _owner(client)
-    write_status(channel, status_doc(request_versions=[1, 2], request_options=["digest"]))
+    write_status(channel, status_doc(request_versions=[1, 2, 3], request_options=["digest"]))
     view = (await client.get("/api/v1/system/updates/helper", headers=owner)).json()
-    assert view["request_versions"] == [1, 2]
+    assert view["request_versions"] == [1, 2, 3]
     checked = (await client.get("/api/v1/system/updates", headers=owner)).json()
     assert checked["approved"] is True and checked["approved_key"] == "21fe31dfa154a261"
     r = await client.post("/api/v1/system/updates/apply", json=apply_body(), headers=owner)
     assert r.status_code == 202, r.text
     assert r.json()["signed"] is True and r.json()["digest"] == CHECKED
     [written] = take_requests(channel)
-    assert written == {"v": 2, "id": r.json()["request_id"], "action": "update", "version": "0.7.1",
+    assert written == {"v": 3, "id": r.json()["request_id"], "action": "update", "version": "0.7.1",
                        "created_at": written["created_at"], "digest": CHECKED, "grant": grant_doc(
                            issued_at=written["grant"]["issued_at"], expires_at=written["grant"]["expires_at"]),
-                       "sig": SIG}
+                       "sig": SIG, "request_key_id": written["request_key_id"],
+                       "request_sig": written["request_sig"]}
     assert (await _audit(db_session))[0].detail["signed"] is True
 
 
-async def test_a_helper_with_v2_but_without_the_digest_option_still_gets_the_grant(client, channel):
+async def test_a_helper_with_v3_but_without_the_digest_option_still_gets_the_grant(client, channel):
     owner = await _owner(client)
-    write_status(channel, status_doc(request_versions=[1, 2]))
+    write_status(channel, status_doc(request_versions=[1, 2, 3]))
     r = await client.post("/api/v1/system/updates/apply", json=apply_body(), headers=owner)
     assert r.status_code == 202, r.text
     [written] = take_requests(channel)
-    assert written["v"] == 2 and written["digest"] == CHECKED == written["grant"]["digest"]
+    assert written["v"] == 3 and written["digest"] == CHECKED == written["grant"]["digest"]
 
 
 async def test_without_a_digest_the_answer_names_the_digest_not_the_approval(client, channel, test_settings):
@@ -273,24 +289,52 @@ async def test_without_a_digest_the_answer_names_the_digest_not_the_approval(cli
     assert r.status_code == 409 and r.json()["code"] == "no_digest"
 
 
-async def test_the_rollback_stays_unsigned_with_a_helper_that_checks_signatures(client, channel, test_settings):
+async def test_the_rollback_is_signed_with_the_installation_key(client, channel, test_settings):
     owner = await _owner(client)
     _ready_for_rollback(channel, test_settings, migrated=False)
     doc = json.loads((channel / "status.json").read_text())
-    write_status(channel, {**doc, "request_versions": [1, 2], "request_options": ["digest"]})
+    write_status(channel, {**doc, "request_versions": [1, 2, 3], "request_options": ["digest"]})
     r = await client.post("/api/v1/system/updates/rollback", json={"current_password": OWNER_PW}, headers=owner)
     assert r.status_code == 202, r.text
     [written] = take_requests(channel)
-    assert written["v"] == 1 and written["action"] == "rollback" and "grant" not in written
+    assert written == {"v": 3, "id": r.json()["request_id"], "action": "rollback", "version": "0.7.0",
+                       "created_at": written["created_at"], "request_key_id": written["request_key_id"],
+                       "request_sig": written["request_sig"]}
+    key = updater_signing.load_key(test_settings.data_dir)
+    unsigned = {k: v for k, v in written.items() if k != "request_sig"}
+    signed = json.dumps(unsigned, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
+    key.public_key().verify(bytes.fromhex(written["request_sig"]), updater_client.REQUEST_DOMAIN + signed)
 
 
-async def test_an_older_helper_still_gets_an_unsigned_request(client, channel):
+@pytest.mark.parametrize("versions", [[1], [1, 2]])
+async def test_an_older_helper_gets_no_rollback_request(client, channel, test_settings, versions):
     owner = await _owner(client)
-    write_status(channel, status_doc(request_options=["digest"]))
+    _ready_for_rollback(channel, test_settings, migrated=True)
+    doc = json.loads((channel / "status.json").read_text())
+    write_status(channel, {**doc, "request_versions": versions})
+    r = await client.post("/api/v1/system/updates/rollback", json={"current_password": OWNER_PW, "accept_data_loss": True},
+                          headers=owner)
+    assert r.status_code == 409 and r.json()["code"] == "signature_required"
+    assert requests_in(channel) == [] and bootstate.read_rollback(test_settings.data_dir) is None
+
+
+async def test_a_rollback_without_the_installation_key_writes_nothing(client, channel, test_settings):
+    owner = await _owner(client)
+    _ready_for_rollback(channel, test_settings, migrated=True)
+    (test_settings.data_dir / updater_signing.KEY_NAME).unlink()
+    r = await client.post("/api/v1/system/updates/rollback", json={"current_password": OWNER_PW, "accept_data_loss": True},
+                          headers=owner)
+    assert r.status_code == 409 and r.json()["code"] == "signature_required"
+    assert requests_in(channel) == [] and bootstate.read_rollback(test_settings.data_dir) is None
+
+
+@pytest.mark.parametrize("versions", [[1], [1, 2]])
+async def test_an_older_helper_gets_no_update_request(client, channel, versions):
+    owner = await _owner(client)
+    write_status(channel, status_doc(request_versions=versions, request_options=["digest"]))
     r = await client.post("/api/v1/system/updates/apply", json=apply_body(), headers=owner)
-    assert r.status_code == 202 and r.json()["signed"] is False
-    [written] = take_requests(channel)
-    assert written["v"] == 1 and "grant" not in written and written["digest"] == CHECKED
+    assert r.status_code == 409 and r.json()["code"] == "signature_required"
+    assert requests_in(channel) == []
 
 
 @pytest.mark.parametrize("grant", [None, {"grant": grant_doc(version="0.7.0"), "sig": SIG},
@@ -299,7 +343,7 @@ async def test_an_older_helper_still_gets_an_unsigned_request(client, channel):
                          ids=["none", "version", "digest", "expired"])
 async def test_without_a_fitting_grant_there_is_no_update_by_button(client, db_session, channel, test_settings, grant):
     owner = await _owner(client)
-    write_status(channel, status_doc(request_versions=[1, 2], request_options=["digest"]))
+    write_status(channel, status_doc(request_versions=[1, 2, 3], request_options=["digest"]))
     cache = updates.load_cache(test_settings.data_dir)
     updates.save_cache(test_settings.data_dir, {**cache, "grant": grant})
     assert (await client.get("/api/v1/system/updates", headers=owner)).json()["approved"] is False

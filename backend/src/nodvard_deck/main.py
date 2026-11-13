@@ -28,9 +28,11 @@ from starlette.responses import Response
 from starlette.types import Scope
 
 from .api import api_v1_router
+from .api.methods import ApiMethodsMiddleware
+from .api.responses import describe_required_headers
 from .api.body_limit import BodyLimitMiddleware
-from .api.errors import install_coded_error_handler, install_validation_error_handler
-from .api.edition import unavailable_route
+from .api.errors import ErrorMiddleware, install_coded_error_handler, install_validation_error_handler
+from .api.edition import dock_route_allowed
 from .api.proxy_headers import ProxyHeadersMiddleware
 from .api.security_headers import SecurityHeadersMiddleware
 from .config import get_settings
@@ -54,6 +56,7 @@ from .services.extensions import discover_and_sync, load_enabled_from_registry
 from .services.jobs import mark_interrupted_on_boot
 from .services.restore import record_result as record_restore_result
 from .version import __version__
+from .telemetry import service as telemetry_service
 
 _event_logger = logging.getLogger("nodvard_deck.events")
 _demo_logger = logging.getLogger("nodvard_deck.demo")
@@ -72,10 +75,6 @@ SPA_CSP = (
     "frame-src blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
 )
 """Bilder aus Uploads und Blob-Vorschauen; Frames nur für die PDF-Vorschau in Dokumente."""
-LEGACY_SPA_CSP = (
-    "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; "
-    "frame-src blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
-)
 
 
 def _socket_source(scope: Scope) -> str:
@@ -137,9 +136,11 @@ def _script_policy(html: str) -> str:
 class _SpaStaticFiles(StaticFiles):
     def __init__(self, *args, csp_legacy: bool = False, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.csp_legacy = csp_legacy
         if csp_legacy:
-            _boot_logger.warning("NODVARD_DECK_CSP_LEGACY ist aktiv: Die gelockerte CSP erlaubt eingebettete Stile.")
+            _boot_logger.warning(
+                "NODVARD_DECK_CSP_LEGACY wird ignoriert: Die Inhaltsrichtlinie bleibt strikt. "
+                "Entferne die veraltete Einstellung."
+            )
 
     def file_response(
         self, full_path: str | os.PathLike[str], stat_result: os.stat_result, scope: Scope, status_code: int = 200
@@ -151,9 +152,7 @@ class _SpaStaticFiles(StaticFiles):
                 meta = f'<meta name="csp-nonce" content="{nonce}">'
                 html = html.replace("<head>", f"<head>{meta}", 1) if "<head>" in html else meta + html
             html = html.replace("__DECK_CSP_NONCE__", nonce)
-            policy = LEGACY_SPA_CSP if self.csp_legacy else SPA_CSP
-            if not self.csp_legacy:
-                policy = policy.replace("__DECK_CSP_NONCE__", nonce).replace("__DECK_CSP_SOCKET__", _socket_source(scope))
+            policy = SPA_CSP.replace("__DECK_CSP_NONCE__", nonce).replace("__DECK_CSP_SOCKET__", _socket_source(scope))
             policy = f"{policy}; {_script_policy(html)}"
             content = html.encode("utf-8")
             return Response(
@@ -363,8 +362,10 @@ async def _lifespan_body(app: FastAPI):
 
     retry_mark = None if await _mark_started_ok(settings) else asyncio.create_task(_keep_marking_started_ok(settings))
 
+    telemetry_task = asyncio.create_task(telemetry_service.run_daily())
     yield
 
+    await telemetry_service.stop(telemetry_task)
     await update_helper.stop_follow_up(helper_follow_up)
     if retry_mark is not None:
         retry_mark.cancel()
@@ -400,16 +401,23 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json" if docs_public else None,
     )
     app.include_router(api_v1_router)
+    describe_required_headers(app)
+    app.add_middleware(ApiMethodsMiddleware, router=app.router)
     if not of(settings).choose_modules:
         original_openapi = app.openapi
 
         def edition_openapi() -> dict:
             schema = original_openapi()
-            return {**schema, "paths": {path: spec for path, spec in schema["paths"].items() if not unavailable_route(path)}}
+            paths = {
+                path: {method: spec for method, spec in methods.items() if dock_route_allowed(path, method.upper())}
+                for path, methods in schema["paths"].items()
+            }
+            return {**schema, "paths": {path: methods for path, methods in paths.items() if methods}}
 
         app.openapi = edition_openapi
     install_validation_error_handler(app)
     install_coded_error_handler(app)
+    app.add_middleware(ErrorMiddleware)
     app.add_middleware(BodyLimitMiddleware, max_body_bytes=settings.max_body_bytes)
     # Nach der Größen-Grenze eingehängt, also weiter außen: Auch ihre 413 bekommt die Sicherheits-Kopfzeilen.
     app.add_middleware(SecurityHeadersMiddleware)
@@ -482,7 +490,7 @@ def create_app() -> FastAPI:
     # `ext.runtime.mount_router()` fügt neue Routen immer an dieser Stelle ein, nie ans Ende von app.router.routes.
     app.state.ext_mount_index = len(app.router.routes)
 
-    frontend_dist = settings.data_dir.parent / "frontend" / "dist"
+    frontend_dist = settings.frontend_dist
     if frontend_dist.is_dir():
         # Produktionsauslieferung: ein Port, ein Dienst. Im Entwicklungsbetrieb läuft das Frontend über `npm run dev`
         # mit Proxy auf :8080, dann existiert `frontend/dist` noch nicht und das wird übersprungen.

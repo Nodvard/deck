@@ -102,6 +102,41 @@ describe("waitForAction", () => {
     expect(await caught).toBeInstanceOf(ActionWaitTimeout);
   });
 
+  it("eine hängende Antwort hält weder Frist noch Abbruch auf", async () => {
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1;
+      // Wie ein Browser: Die Anfrage endet erst, wenn ihr Signal abbricht.
+      return new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("Abgebrochen", "AbortError")));
+      });
+    }));
+    const timedOut = waitForAction("a1", { maxMs: 10_000 }).catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(await timedOut).toBeInstanceOf(ActionWaitTimeout);
+
+    const controller = new AbortController();
+    const aborted = waitForAction("a1", { signal: controller.signal }).catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(3000);
+    const before = calls;
+    controller.abort();
+    expect(isAbortError(await aborted)).toBe(true);
+    expect(calls).toBe(before);
+  });
+
+  it("eine Antwort ohne Ende des Inhalts zählt nach ihrer Frist wie ein Aussetzer", async () => {
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) return new Response(new ReadableStream({ start() {} }), { status: 200 });
+      return new Response(JSON.stringify({ id: "a1", status: "succeeded" }), { status: 200 });
+    }));
+    const done = waitForAction<{ status: string }>("a1");
+    await vi.advanceTimersByTimeAsync(3000 + 30_000 + 3000);
+    await expect(done).resolves.toMatchObject({ status: "succeeded" });
+    expect(calls).toBe(2);
+  });
+
   it("hört beim Abbrechen (Seite verlassen) auf zu fragen", async () => {
     const urls = stubSteps([{ status: 200, body: { id: "a1", status: "executing" } }]);
     const controller = new AbortController();

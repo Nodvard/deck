@@ -432,10 +432,36 @@ async def test_the_lists_through_the_core(client, docker_on):
     networks = await client.get(f"{base}/networks", headers=docker_on.headers)
     assert images.status_code == volumes.status_code == networks.status_code == 200
     assert {i["id"] for i in images.json()["images"]} == {BUSYBOX, OWN_BUILD}
+    assert images.json()["total_size_bytes"] == 13_560_000
+    assert images.json()["unknown_size_count"] == 0
     assert {v["name"] for v in volumes.json()["volumes"]} == {"daten", "leer", "demo_appdaten", ANONYMOUS}
     assert networks.json()["error"] is None and len(networks.json()["networks"]) == 6
     assert len(docker_on.exec.calls) == 2, "ein Abruf für alle drei Listen"
     assert (await client.get(f"/api/v1/ext/docker/hosts/{docker_on.other}/images", headers=docker_on.headers)).status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sizes, total, unknown", [
+    (["6.79MB", "6.77MB"], 13_560_000, 0),
+    (["N/A", "6.77MB"], 6_770_000, 1),
+    (["N/A", "N/A"], None, 2),
+    (["0B", "0B"], 0, 0),
+    ([], 0, 0),
+])
+async def test_image_totals_count_each_id_once(client, docker_on, sizes, total, unknown):
+    from nodvard_deck_ext_docker import commands
+
+    df = copy.deepcopy(DF)
+    df["Images"] = [{**row, "Size": size} for row, size in zip(df["Images"], sizes)]
+    if df["Images"]:
+        df["Images"].append({**df["Images"][0], "Tag": "latest"})
+    docker_on.exec.answers[commands.system_df_verbose()] = _result(json.dumps(df))
+    response = await client.get(f"/api/v1/ext/docker/hosts/{docker_on.host}/images", headers=docker_on.headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["images"]) == len(sizes)
+    assert body["total_size_bytes"] == total
+    assert body["unknown_size_count"] == unknown
 
 
 @pytest.mark.asyncio

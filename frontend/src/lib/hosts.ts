@@ -186,7 +186,7 @@ export function loginOutcome(result: ConnectionCheck): "ok" | "fail" | null {
   return item.status === "ok" ? "ok" : "fail";
 }
 
-/** „Schlüssel · lattice“: die kurze Beschriftung eines Zugangs. */
+/** Die kurze Beschriftung eines Zugangs, etwa „Schlüssel · nodvard“. */
 export function accessLabel(credential: Pick<HostCredentialSummary, "kind" | "username">): string {
   return `${CREDENTIAL_KIND_LABEL[credential.kind] ?? credential.kind} · ${credential.username}`;
 }

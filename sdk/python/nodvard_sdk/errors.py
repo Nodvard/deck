@@ -3,8 +3,23 @@
 from __future__ import annotations
 
 import functools
+import logging
 import ssl
+import traceback
+import uuid
 from typing import Any
+
+
+def error_message(exc: BaseException, message: str = "Die Anfrage ist fehlgeschlagen.") -> str:
+    reference = uuid.uuid4().hex
+    stack = traceback.extract_tb(exc.__traceback__)
+    if not stack:
+        stack = traceback.extract_stack()[:-1]
+    frames = " | ".join(f"{frame.filename}:{frame.lineno} in {frame.name}" for frame in stack)
+    logging.getLogger("nodvard_deck.errors").error(
+        "request_failed id=%s type=%s frames=%s", reference, type(exc).__name__, frames,
+    )
+    return f"{message} Fehlerkennung: {reference}."
 
 
 class NodvardError(Exception):

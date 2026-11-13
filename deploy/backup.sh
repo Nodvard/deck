@@ -55,7 +55,7 @@
 # ohne sudo (z. B. aus der root-Crontab) bekommt sie der Besitzer des Zielordners, wenn der nicht root ist:
 # er kann dort ohnehin Dateien löschen und ersetzen, und kann sie z. B. per scp mit seinem Konto abholen.
 #
-# Dienstname in Compose: `nodvard-deck` (früher `lattice`); das Volume heißt weiter
+# Dienstname in Compose: `nodvard-deck`; das Volume heißt weiter
 # `deploy_lattice_data`. Ältere Sicherungen (`lattice-backup-*.tar.gz`) sind einfache
 # tar.gz des Datenordners und lassen sich mit restore.sh unverändert einspielen.
 #

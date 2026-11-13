@@ -1,12 +1,17 @@
 # Server über Tailscale an Nodvard Deck anbinden
 
-> English summary: [en/TAILSCALE.md](en/TAILSCALE.md)
+> English version: [en/TAILSCALE.md](en/TAILSCALE.md)
 
 Mit Tailscale verbindest du den Rechner von Nodvard Deck und deine Server über ein verschlüsseltes VPN.
 Die Geräte gehören zu deinem Tailscale-Netz, dem „Tailnet“. Du brauchst dafür keine öffentliche IPv4-Adresse
 zuhause und normalerweise keine Portfreigabe im Router. Auch hinter DS-Lite oder CGNAT sind Verbindungen möglich;
 wenn keine direkte Verbindung zustande kommt, kann Tailscale verschlüsselte Verbindungen über Relays vermitteln.
 Siehe [Tailscale zu Verbindungen und Firewall](https://tailscale.com/docs/reference/faq/firewall-ports).
+
+Die folgenden Schritte verbinden einen **Linux-Server** über seinen normalen SSH-Dienst mit Deck.
+Tailscale stellt den Netzwerkweg bereit, Deck verwendet weiterhin Benutzer und SSH-Schlüssel.
+Eine Aktivierung von Tailscale SSH mit `tailscale up --ssh` ist dafür nicht nötig.
+Alle Namen mit `example.ts.net` sind Platzhalter. Ersetze sie durch die Namen aus deiner Tailscale-Verwaltung.
 
 ## 1. Tailscale installieren und anmelden
 
@@ -47,7 +52,20 @@ und starte ihn wieder. Installiere Tailscale anschließend im LXC-Container.
 Für ältere Proxmox-Versionen beschreibt die [LXC-Anleitung von Tailscale](https://tailscale.com/docs/features/containers/lxc/lxc-unprivileged)
 die passende Konfiguration. Die Freigabe betrifft den LXC-Container, in dem Tailscale läuft.
 
-## 2. Verbindung aus dem Deck-Container prüfen
+## 2. MagicDNS und Verbindung aus dem Deck-Container prüfen
+
+1. Öffne in der Tailscale-Verwaltung **DNS** und aktiviere
+   [MagicDNS](https://tailscale.com/docs/features/magicdns), falls es noch ausgeschaltet ist.
+2. Kopiere den vollständigen MagicDNS-Namen des **Zielservers** aus der Geräteübersicht, zum Beispiel
+   `server.example.ts.net`. Verwende den Namen des Servers, nicht den des Deck-Hosts.
+3. Prüfe auf dem Deck-Host, ob der Server im Tailnet erreichbar ist:
+
+   ```bash
+   tailscale ping server.example.ts.net
+   ```
+
+   Das prüft den Tailscale-Weg. Ob der SSH-Dienst erreichbar ist und der Container den Namen auflösen kann,
+   prüfst du getrennt mit den folgenden Befehlen.
 
 Die mitgelieferten Dateien [compose.standalone.yml](../deploy/compose.standalone.yml),
 [compose.standalone-mit-helfer.yml](../deploy/compose.standalone-mit-helfer.yml) und
@@ -60,12 +78,18 @@ Tailscale-Server erreicht, müssen die Route und die Firewall auf dem Host diese
 Dass Tailscale auf dem Host läuft, bestätigt allein noch nicht die Erreichbarkeit aus dem Container.
 Siehe [Docker zu Bridge-Netzen](https://docs.docker.com/engine/network/drivers/bridge/).
 
-Prüfe deshalb direkt aus dem laufenden Deck-Container, ob der SSH-Port des Servers erreichbar ist.
-Führe den Befehl im Ordner deiner Compose-Datei aus. Ersetze `100.100.10.20` durch die Tailscale-Adresse
-des Servers und `22` durch dessen SSH-Port, falls er abweicht:
+Prüfe deshalb direkt aus dem laufenden Deck-Container zuerst die Namensauflösung und dann den SSH-Port.
+Führe die Befehle im Ordner deiner Compose-Datei aus. Ersetze `server.example.ts.net` durch den vollständigen
+MagicDNS-Namen des Servers und `22` durch dessen SSH-Port, falls er abweicht:
 
 ```bash
-docker compose exec -T nodvard-deck python -c "import socket; socket.create_connection(('100.100.10.20', 22), timeout=5).close(); print('SSH-Port erreichbar')"
+docker compose exec -T nodvard-deck python -c "import socket; print(socket.getaddrinfo('server.example.ts.net', 22, type=socket.SOCK_STREAM))"
+```
+
+Bei Erfolg erscheinen die aufgelösten Adressen. Prüfe danach den Port:
+
+```bash
+docker compose exec -T nodvard-deck python -c "import socket; socket.create_connection(('server.example.ts.net', 22), timeout=5).close(); print('SSH-Port erreichbar')"
 ```
 
 Bei Erfolg erscheint „SSH-Port erreichbar“. Das prüft die Netzwerkverbindung, die SSH-Anmeldung kommt im nächsten
@@ -73,29 +97,75 @@ Schritt. Bei einem Fehler prüfe zuerst mit `tailscale status` auf dem Host, ob 
 Prüfe danach die Tailscale-Zugriffsregeln, den SSH-Dienst auf dem Zielserver sowie Routing und Firewall des Hosts.
 Ein erfolgreicher Test auf dem Host ersetzt den Test aus dem Container nicht.
 
+Scheitert nur die Namensauflösung, wiederhole den Porttest mit der tatsächlichen Tailscale-IP des Servers.
+Führe dazu `tailscale ip -4` **auf dem Zielserver** aus. Funktioniert die IP, prüfe MagicDNS und die
+DNS-Einstellungen des Containers.
+Du kannst die IP vorübergehend auch als Adresse in Deck eintragen. Verwende den MagicDNS-Namen erst,
+wenn dessen Auflösung im Container klappt. Bei `docker run` lautet der Aufruf stattdessen
+`docker exec <Containername> python -c "…"`, mit demselben Python-Code.
+
 ## 3. Server in Deck anlegen
 
-1. Öffne **Einstellungen → Server & Zugänge** und drücke **Server hinzufügen**.
-2. Trage als **Adresse** die Tailscale-IP des Servers ein, zum Beispiel `100.100.10.20`.
-3. Richte den SSH-Zugang mit Benutzer, Port und SSH-Schlüssel wie gewohnt ein. Auf dem Server muss der passende
-   öffentliche Schlüssel für diesen Benutzer hinterlegt sein.
-4. Drücke **Verbindung prüfen**. Vergleiche bei einem neuen Server den angezeigten Fingerabdruck mit dem
-   Server-Schlüssel, bevor du ihn bestätigst.
+### Serveradresse eintragen
 
-Die einzelnen Schritte für Schlüssel und Einrichtungsbefehl stehen in der
-[Erst-Einrichtung, Abschnitt 5](11-ERST-EINRICHTUNG.md#5-server-und-ssh-zugang).
-Tailscale stellt hier den Netzwerkweg bereit. Deck braucht weiterhin seinen normalen SSH-Zugang.
+1. Öffne als Inhaber oder Administrator **Einstellungen → Server & Zugänge** und drücke **Server hinzufügen**.
+2. Fülle **Kurzname** mit einem Namen wie `server` und bei Bedarf **Anzeigename** aus.
+3. Trage unter **Adresse (IP oder Name)** den geprüften MagicDNS-Namen ein: `server.example.ts.net`.
+   Verwende nur den Namen, ohne `http://`, `https://`, Benutzer, Pfad oder `:22`. Den SSH-Port gibst du später
+   beim Zugang an.
+4. Wähle **Linux** als **Betriebssystem** und drücke **Anlegen**. Die Seite des Servers öffnet sich.
 
-Du kannst auch einen [MagicDNS-Namen](https://tailscale.com/docs/features/magicdns) als Adresse verwenden,
-wenn er **im Deck-Container** aufgelöst werden kann. Verwende dafür den vollständigen Namen aus der
-Tailscale-Verwaltung. Dass der Name auf dem Host funktioniert, reicht nicht als Prüfung für den Container.
-Funktioniert die IP-Adresse, der Name aber nicht, verwende zunächst die IP-Adresse und prüfe die
-DNS-Einstellungen des Containers.
+### SSH-Schlüssel hinterlegen
+
+1. Wähle in der Karte **SSH-Zugang** den Weg **SSH-Schlüssel erzeugen**.
+2. Gib den **Benutzer auf dem Server** an, zum Beispiel `nodvard`, und den **SSH-Port**, normalerweise `22`.
+3. Drücke **Schlüssel erzeugen**. Deck speichert den privaten Schlüssel verschlüsselt und zeigt den
+   **Einrichtungsbefehl** für den Server.
+4. Melde dich über einen vorhandenen administrativen Zugang oder die Serverkonsole am **Zielserver** an.
+   Kopiere den Einrichtungsbefehl aus Deck und führe ihn dort aus. Er läuft als root oder über `sudo`, legt bei
+   Bedarf den Benutzer an und hinterlegt dessen öffentlichen Schlüssel in `~/.ssh/authorized_keys`.
+   Prüfe vorher die angebotenen Optionen für Root-Rechte und die Gruppe docker. Einzelheiten stehen in der
+   [Erst-Einrichtung zum Einrichtungsbefehl](11-ERST-EINRICHTUNG.md#33-einrichtungsbefehl-auf-dem-server-ausführen).
+
+Wenn du schon einen Schlüssel verwenden möchtest, wähle stattdessen **Eigenen Schlüssel einfügen**.
+Trage Benutzer und Port ein und füge den vollständigen **privaten Schlüssel ohne Passphrase** ein,
+nicht die `.pub`-Datei. Führe danach ebenfalls den angezeigten Einrichtungsbefehl auf dem Zielserver aus,
+damit der passende öffentliche Schlüssel beim richtigen Benutzer hinterlegt ist.
+
+Deck liest weder `~/.ssh` noch `ssh_config` des Deck-Hosts und verwendet dessen `ssh-agent` nicht.
+Ein funktionierender SSH-Aufruf auf dem Host richtet den Zugang in Deck deshalb noch nicht ein.
+
+### Verbindung und Server-Schlüssel prüfen
+
+1. Drücke auf der Serverseite **Verbindung prüfen**.
+2. Bei einem unbekannten Server-Schlüssel hält die Prüfung an und zeigt den Fingerabdruck.
+   Führe den angezeigten Vergleichsbefehl über die Serverkonsole oder einen bereits geprüften Zugang aus,
+   zum Beispiel für den Ed25519-Schlüssel:
+
+   ```bash
+   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+   ```
+
+3. Vergleiche den Fingerabdruck und bestätige ihn in Deck nur bei Übereinstimmung. Danach läuft die Prüfung weiter.
+4. Prüfe, ob **Anmeldung** erfolgreich ist. Hinweise auf fehlende Root-Rechte oder Rechte für Erweiterungen
+   hängen davon ab, was du auf diesem Server nutzen möchtest.
+
+Meldet Deck einen **geänderten** Server-Schlüssel, kläre zuerst die Ursache. Nach einer bestätigten
+Neuinstallation kannst du den alten Eintrag in der Karte **Server-Schlüssel → Vergessen** entfernen und erneut
+prüfen. Eine unerwartete Änderung solltest du nicht übergehen.
+
+Alle Zugangswege und Rechte beschreibt die
+[Erst-Einrichtung, Abschnitt 3](11-ERST-EINRICHTUNG.md#3-den-ersten-server-verbinden).
 
 ## 4. Zugriff und Anmeldung
 
 - Beschränke in der Tailscale-Verwaltung den Zugriff vom Deck-Rechner auf die benötigten Server und Ports.
   Tailscale beschreibt das unter [Zugriffskontrolle](https://tailscale.com/docs/features/access-control).
+- Erlaube in den Tailscale-Zugriffsregeln den SSH-Port des Zielservers vom Deck-Host aus, normalerweise TCP `22`.
+  Auch die lokale Firewall des Zielservers muss diesen Verkehr über Tailscale zulassen, und der SSH-Dienst
+  muss auf einer über Tailscale erreichbaren Adresse lauschen. Auf Linux ist die Tailscale-Schnittstelle
+  üblicherweise `tailscale0`. Auf dem Deck-Host muss zusätzlich die Weiterleitung aus dem Docker-Netz ins
+  Tailnet erlaubt sein. Für diesen Weg brauchst du keine öffentliche Freigabe des SSH-Ports am Router.
 - Für die Verbindung zu deinen Servern brauchst du keine Exit Node. Ein
   [Subnet Router](https://tailscale.com/docs/features/subnet-routers) ist eine Alternative, wenn du nicht auf jedem
   Zielgerät Tailscale installieren möchtest. Dafür müssen Routen und Zugriffsregeln eingerichtet sein; in Deck
@@ -124,9 +194,11 @@ und [dem Proxy-Hinweis](../backend/src/nodvard_deck/core/untrusted_proxies.py).
 | Was du siehst | Was du prüfen kannst |
 |---|---|
 | Der Host erreicht den Server, der Test aus dem Deck-Container scheitert | Weiterleitung vom Docker-Netz zum Tailscale-Netz, Routen und Firewall des Hosts |
-| Der SSH-Port ist nicht erreichbar | Tailscale-Anmeldung beider Geräte, Zugriffsregeln, SSH-Port und Firewall des Zielservers |
-| Die IP-Adresse funktioniert, der MagicDNS-Name nicht | MagicDNS und Namensauflösung im Deck-Container; zunächst die IP-Adresse verwenden |
-| Der Port ist erreichbar, „Verbindung prüfen“ scheitert | SSH-Benutzer, Schlüssel, Port und Bestätigung des Server-Schlüssels in Deck |
+| `Name or service not known`, `Temporary failure in name resolution` oder die IP funktioniert, der MagicDNS-Name nicht | MagicDNS in der Tailscale-Verwaltung, vollständigen Namen und DNS im Container prüfen; vorübergehend die tatsächliche Tailscale-IP verwenden |
+| `Connection timed out` oder der SSH-Port ist nicht erreichbar | Tailscale-Anmeldung beider Geräte, Zugriffsregeln für TCP und den SSH-Port, Routing und Firewalls prüfen |
+| `Connection refused` | Adresse und Port prüfen; läuft der normale SSH-Dienst und lauscht er auf einer über Tailscale erreichbaren Adresse? |
+| Der Port ist erreichbar, aber „Der Server hat den Schlüssel nicht akzeptiert“ erscheint | Benutzer und Zugang in Deck prüfen; Einrichtungsbefehl auf dem Zielserver ausführen und passenden öffentlichen Schlüssel beim richtigen Benutzer hinterlegen |
+| Die Prüfung hält beim Server-Schlüssel an | Fingerabdruck unabhängig auf dem Server vergleichen und bei Übereinstimmung bestätigen; bei einer Änderung zuerst die Ursache klären |
 | Eine bisher funktionierende Verbindung fällt aus | `tailscale status`, Anmeldung und Ablauf des Geräteschlüssels prüfen |
 
 Eine pauschale Freigabe von UDP-Port 41641 ist nicht nötig. Wenn direkte Verbindungen nicht möglich sind, kann

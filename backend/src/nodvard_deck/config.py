@@ -237,10 +237,23 @@ class Settings(BaseSettings):
     Anmeldung, `api_docs_public`); gesetzt wird es nur in der Entwicklung (`.env` aus `.env.example`, Tests)."""
     log_json: bool = False
     csp_legacy: bool = False
-    """NODVARD_DECK_CSP_LEGACY=1 erlaubt im Notfall wieder eingebettete Stile und erzeugt eine Logwarnung."""
+    """Veraltet: NODVARD_DECK_CSP_LEGACY wird für bestehende Konfigurationen akzeptiert, aber mit Logwarnung ignoriert.
+    Die Inhaltsrichtlinie bleibt strikt."""
+
+    telemetry_url: str = ""
+    """Empfänger-Basisadresse, z. B. https://telemetrie.example.invalid. Leer bedeutet kein Versand."""
+    telemetry_privacy_ready: bool = False
+    """Erst nach Veröffentlichung der Datenschutzerklärung freigeben."""
+    telemetry_installation: str = "sonstiges"
+    """Installationsart aus der festen Liste des Berichts, keine automatische Hardware-Erkennung."""
+    telemetrie: str = "an"
+    """`NODVARD_TELEMETRIE=aus` oder `NODVARD_DECK_TELEMETRIE=aus` sperrt den Versand."""
 
     data_dir: Path = Path("./data")
     """Alles Zustandsbehaftete lebt hier: Datenbank, Master-Key, Extension-Daten, Protokolle der Läufe."""
+
+    frontend_dist: Path = Path("./frontend/dist")
+    """Gebautes Frontend, relativ zum Arbeitsverzeichnis oder als absoluter Pfad."""
 
     updater_dir: Path = Path("/app/updater")
     """Kanal zum Update-Helfer (`core.updater_client`): ein eigenes Volume, das der Helfer einrichtet und das root gehört.
@@ -288,9 +301,8 @@ class Settings(BaseSettings):
     dessen X-Forwarded-Proto, sobald er unter `system.trusted_proxies` steht; NODVARD_DECK_COOKIE_SECURE=1/0 erzwingt es."""
 
     setup_code: str | None = None
-    """LATTICE_SETUP_CODE: Einrichtungscode für die Erstinbetriebnahme vorgeben (mindestens 8 Zeichen). Leer = das
-    Dashboard würfelt einen und schreibt ihn bei jedem Start ins Protokoll, bis das erste Konto angelegt ist
-    (core/setup_code.py)."""
+    """NODVARD_DECK_SETUP_CODE: Einrichtungscode vorgeben (mindestens 8 ASCII-Buchstaben oder Ziffern).
+    Leer oder zu kurz = zufälliger Code. Nur ohne Konto wirksam; danach ignoriert, mit Hinweis im Protokoll."""
 
     demo_mode: bool = False
     """NODVARD_DECK_DEMO_MODE=1 speist Fake-Daten statt echter Connectoren."""

@@ -120,6 +120,38 @@ describe("Stand im Repository", () => {
 });
 
 describe("Stack aus Git", () => {
+  it.each([null, SOURCE])("sperrt die Quelle ohne Verwaltungsrecht: %j", async (source) => {
+    window.__nodvardDeck.hasPermission = vi.fn((permission) => permission !== "extensions.manage");
+    serve({ source, accesses: [{ name: "team", host: "github.com" }], layout_problem: null });
+    render(<GitSourcePanel hostId="h1" project="shop" onDone={vi.fn()} />);
+    expect(await screen.findByText("Die Quelle dürfen nur Administratoren ändern.")).toBeInTheDocument();
+    for (const label of ["Adresse des Repositorys", "Branch oder Tag", "Compose-Datei im Repository", "Zugang"]) {
+      expect(screen.getByLabelText(label)).toBeDisabled();
+    }
+    const save = screen.getByRole("button", { name: source ? "Speichern und holen" : "Eintragen und holen" });
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(requests.some((r) => r.method === "PUT")).toBe(false);
+    if (source) {
+      fireEvent.click(screen.getByRole("button", { name: "Holen und ansehen" }));
+      expect(await screen.findByTestId("git-preview")).toBeInTheDocument();
+      expect(requests.some((r) => r.method === "POST" && r.url.endsWith("/git/fetch"))).toBe(true);
+    } else {
+      expect(screen.queryByRole("button", { name: "Holen und ansehen" })).toBeNull();
+    }
+  });
+
+  it("erklärt ein beim Speichern fehlendes Verwaltungsrecht", async () => {
+    serve({ source: SOURCE, accesses: [], layout_problem: null }, {
+      "PUT /git": () => Response.json({ detail: "Berechtigung 'extensions.manage' fehlt." }, { status: 403 }),
+    });
+    render(<GitSourcePanel hostId="h1" project="shop" onDone={vi.fn()} />);
+    fireEvent.change(await screen.findByLabelText("Branch oder Tag"), { target: { value: "stable" } });
+    fireEvent.click(screen.getByRole("button", { name: "Speichern und holen" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("Die Quelle dürfen nur Administratoren ändern.");
+    expect(requests.some((r) => r.url.endsWith("/git/fetch"))).toBe(false);
+  });
+
   it("trägt eine Quelle ein und zeigt danach den geholten Stand", async () => {
     serve({ source: null, accesses: [{ name: "github", host: "github.com" }], layout_problem: null });
     render(<GitSourcePanel hostId="h1" project="shop" onDone={vi.fn()} />);

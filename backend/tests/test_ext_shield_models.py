@@ -24,14 +24,12 @@ def _soc_on_path():
             del sys.modules[name]
 
 
-class _Resp:
+class _Resp(httpx.Response):
     def __init__(self, status=200, body=None):
-        self.status_code, self._body = status, body
-
-    def json(self):
-        if isinstance(self._body, Exception):
-            raise self._body
-        return self._body
+        if isinstance(body, Exception):
+            super().__init__(status, text="kein json")
+        else:
+            super().__init__(status, json=body)
 
 
 def _ctx(resp=None, exc=None, saved_url=None, calls=None, settings=None, key=None):
@@ -41,6 +39,14 @@ def _ctx(resp=None, exc=None, saved_url=None, calls=None, settings=None, key=Non
         if exc:
             raise exc
         return resp
+
+    @asynccontextmanager
+    async def stream(method, url, **kwargs):
+        response = await get(url, **kwargs)
+        try:
+            yield response
+        finally:
+            await response.aclose()
 
     async def settings_get():
         if settings is not None:
@@ -58,7 +64,7 @@ def _ctx(resp=None, exc=None, saved_url=None, calls=None, settings=None, key=Non
         yield key
 
     return SimpleNamespace(
-        http=SimpleNamespace(get=get), settings=SimpleNamespace(get=settings_get),
+        http=SimpleNamespace(get=get, post=get, stream=stream), settings=SimpleNamespace(get=settings_get),
         secrets=SimpleNamespace(exists=exists, get_handle=get_handle), vault_use=vault_use,
     )
 
@@ -97,7 +103,7 @@ async def test_key_is_sent_only_to_a_saved_address():
     calls: list = []
     await list_models(_ctx(_Resp(200, {"models": []}), saved_url="http://ki:11434", calls=calls, key="GEHEIM-KEY"), "primary")
     assert calls[0][0] == "http://ki:11434/api/tags"
-    assert calls[0][1]["headers"] == {"Authorization": "Bearer GEHEIM-KEY"}
+    assert calls[0][1]["headers"] == {"Authorization": "Bearer GEHEIM-KEY", "Accept-Encoding": "identity"}
 
     calls.clear()
     out = await list_models(_ctx(_Resp(200, {"models": []}), settings={}, calls=calls, key="GEHEIM-KEY"), "primary")
@@ -150,17 +156,9 @@ DEEP_JSON = "[" * 100_000 + "]" * 100_000  # so tief verschachtelt, dass `json.l
 REDIRECT_TO = "http://anderswo.example:8080/falle"
 
 
-class _JsonResp(_Resp):
-    """Antwort wie von httpx: `json()` parst den Text wirklich; eine Weiterleitung traegt ihr Ziel im Kopf `location`."""
-
+class _JsonResp(httpx.Response):
     def __init__(self, status=200, text="", headers=None):
-        super().__init__(status)
-        self.text, self.headers = text, headers or {}
-
-    def json(self):
-        import json
-
-        return json.loads(self.text)
+        super().__init__(status, text=text, headers=headers)
 
 
 @pytest.mark.asyncio
@@ -195,13 +193,7 @@ async def test_entries_that_are_no_objects_are_skipped():
 def _provider(resp=None, exc=None, *, url="http://ki:11434", failover=None):
     from nodvard_deck_ext_shield.ollama import OllamaProvider
 
-    async def request(url, **kwargs):  # noqa: ANN003
-        if exc:
-            raise exc
-        return resp
-
     ctx = _ctx(resp, exc, settings={"ollama_url": url, **({"ollama_failover_url": failover} if failover else {})})
-    ctx.http = SimpleNamespace(get=request, post=request)
     return OllamaProvider(ctx)
 
 

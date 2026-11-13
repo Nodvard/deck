@@ -84,9 +84,9 @@ def test_zeitueberschreitung_hat_einen_grund_obwohl_die_ausnahme_keinen_text_hat
     [
         (ConnectionRefusedError(), "Der Server lehnt die Verbindung ab (192.168.2.10:22)"),
         (socket.gaierror(-2, "Name or service not known"), "Den Namen 192.168.2.10 kennt das Netz nicht."),
-        (ConnectionResetError("Connection reset by peer"), "Die Verbindung zum Server ist abgebrochen (Connection reset by peer)."),
+        (ConnectionResetError("Connection reset by peer"), "Die Verbindung zum Server ist abgebrochen. Fehlerkennung:"),
         (ConnectionResetError(), "Die Verbindung zum Server ist abgebrochen."),
-        (asyncssh.ConnectionLost("Connection lost"), "Die Verbindung zum Server ist abgebrochen (Connection lost)."),
+        (asyncssh.ConnectionLost("Connection lost"), "Die Verbindung zum Server ist abgebrochen. Fehlerkennung:"),
         (OSError(errno.EHOSTUNREACH, "No route to host"), "Kein Weg zum Server (192.168.2.10:22)"),
         (OSError(errno.ENETUNREACH, "Network is unreachable"), "Kein Weg zum Server (192.168.2.10:22)"),
         (OSError(errno.EHOSTDOWN, "Host is down"), "Kein Weg zum Server (192.168.2.10:22)"),
@@ -96,25 +96,24 @@ def test_verbindungsfehler_auf_deutsch(exc, expected):
     assert describe_connection_error(exc, address="192.168.2.10", port=22).startswith(expected)
 
 
-def test_text_ist_nie_leer_und_fremde_fehler_behalten_ihren_text():
-    assert describe_connection_error(RuntimeError("kaputt")) == "kaputt"
-    assert describe_connection_error(RuntimeError()) == "RuntimeError"
+def test_fremde_fehler_zeigen_nur_eine_fehlerkennung():
+    import re
+
+    for exc in (RuntimeError("kaputt"), RuntimeError()):
+        assert re.fullmatch(r"Die Anfrage ist fehlgeschlagen\. Fehlerkennung: [0-9a-f]{32}\.", describe_connection_error(exc))
     # Kein Netzfehler: nicht als "Verbindung" ausgeben, und der Text mit dem Pfad des Servers bleibt weg.
-    assert describe_connection_error(PermissionError(errno.EACCES, "Permission denied", "/app/data/lattice.db")) == "PermissionError"
-    assert describe_connection_error(OSError(errno.ENOSPC, "No space left on device")) == "OSError"
+    for error in (PermissionError(errno.EACCES, "Permission denied", "/app/data/lattice.db"), OSError(errno.ENOSPC, "No space left on device")):
+        assert re.fullmatch(r"Die Anfrage ist fehlgeschlagen\. Fehlerkennung: [0-9a-f]{32}\.", describe_connection_error(error))
 
 
-def test_unbekannter_oserror_beim_verbindungsaufbau_behaelt_seinen_text():
-    """Beim Verbindungsaufbau (`network=True`) ist jeder `OSError` ein Netzfehler: statt nur "OSError" bleibt
-    sein Text stehen (er nennt Adressen, keine Pfade). Ohne den Hinweis bleibt es beim Namen der Ausnahme."""
+def test_unbekannter_oserror_beim_verbindungsaufbau_zeigt_nur_eine_fehlerkennung():
+    import re
+
     exc = OSError(errno.EADDRNOTAVAIL, "Cannot assign requested address")
-    assert describe_connection_error(exc, address="192.168.2.10", port=22, network=True) == (
-        "Keine Verbindung zum Server (192.168.2.10:22): [Errno 99] Cannot assign requested address"
-    )
-    assert describe_connection_error(OSError(), address="192.168.2.10", port=22, network=True) == (
-        "Keine Verbindung zum Server (192.168.2.10:22)."
-    )
-    assert describe_connection_error(exc, address="192.168.2.10", port=22) == "OSError"
+    for error in (exc, OSError()):
+        text = describe_connection_error(error, address="192.168.2.10", port=22, network=True)
+        assert re.fullmatch(r"Keine Verbindung zum Server\. Fehlerkennung: [0-9a-f]{32}\.", text)
+    assert re.fullmatch(r"Die Anfrage ist fehlgeschlagen\. Fehlerkennung: [0-9a-f]{32}\.", describe_connection_error(exc))
 
 
 def test_fertige_deutsche_saetze_kommen_unveraendert_durch():
@@ -192,8 +191,9 @@ async def test_connect_abgelehnt_ist_ein_ssh_fehler_mit_grund(db_session):
 
 @pytest.mark.asyncio
 async def test_connect_mit_mehreren_gescheiterten_adressen_nennt_den_grund(db_session, monkeypatch):
-    """Zeigt ein Name auf mehrere Adressen und scheitern alle verschieden, wirft asyncio einen `OSError` ohne
-    Nummer ("Multiple exceptions: ..."). Der Grund muss trotzdem dastehen, nicht nur "OSError"."""
+    """Bei mehreren gescheiterten Adressen bleiben rohe Verbindungsdetails verborgen."""
+    import re
+
     text = "Multiple exceptions: [Errno 111] Connect call failed ('192.168.2.10', 22), [Errno 101] Network is unreachable"
 
     async def _fails(**kwargs):
@@ -202,7 +202,8 @@ async def test_connect_mit_mehreren_gescheiterten_adressen_nennt_den_grund(db_se
     monkeypatch.setattr(ssh.asyncssh, "connect", _fails)
     with pytest.raises(ssh.SshUnreachable) as caught:
         await ssh.connect(db_session, _target(22), connect_timeout_s=1.0)
-    assert str(caught.value) == f"Keine Verbindung zum Server (127.0.0.1:22): {text}"
+    assert re.fullmatch(r"Keine Verbindung zum Server\. Fehlerkennung: [0-9a-f]{32}\.", str(caught.value))
+    assert text not in str(caught.value)
     assert is_expected_connection_error(caught.value)
 
 
@@ -295,17 +296,31 @@ def _webdav_error() -> BaseException:
 @pytest.mark.parametrize("path", ["list?path=/", "stat?path=/x", "info"])
 @pytest.mark.parametrize("make_error", [lambda: _QuellFehler("PROPFIND / -> [Errno 111] Connection refused"), _webdav_error])
 async def test_dateien_fehler_der_quelle_ohne_traceback_im_protokoll(client, caplog, path, make_error):
-    """Nextcloud aus oder 401/404: ein erwartbarer Fehler der Quelle, kein Programmfehler. Ein Traceback
-    im Protokoll liesse `deploy_pi.sh` einen gesunden Start als gescheitert melden."""
-    get_extension_runtime().capabilities.provide("fake-ext", FileSourceProvider, _Provider(_SleepingFileSource(make_error())))
+    """Quellfehler bleiben ohne Traceback im Protokoll."""
+    import re
+
+    error = make_error()
+    get_extension_runtime().capabilities.provide("fake-ext", FileSourceProvider, _Provider(_SleepingFileSource(error)))
     token = await _owner_token(client)
     with caplog.at_level(logging.DEBUG):
         res = await client.get(f"/api/v1/files/schlaeft/{path}", headers={"Authorization": f"Bearer {token}"})
     assert res.status_code == 502
     detail = res.json()["detail"]
-    assert detail.startswith("Zugriff auf die Quelle fehlgeschlagen: PROPFIND / -> ")
+    assert detail.startswith("Zugriff auf die Quelle fehlgeschlagen: ")
+    reason = detail.removeprefix("Zugriff auf die Quelle fehlgeschlagen: ")
+    if isinstance(error, _QuellFehler):
+        match = re.fullmatch(r"Die Anfrage ist fehlgeschlagen\. Fehlerkennung: ([0-9a-f]{32})\.", reason)
+        assert match, detail
+        assert f"request_failed id={match[1]} type=_QuellFehler " in caplog.text
+        for hidden in ("PROPFIND", "[Errno 111]", "Connection refused"):
+            assert hidden not in res.text
+            assert hidden not in caplog.text
+    else:
+        assert reason == str(error)
     assert _tracebacks(caplog) == []
-    assert any(r.getMessage().startswith("file_source_failed") for r in caplog.records)
+    records = [r for r in caplog.records if r.getMessage().startswith("file_source_failed")]
+    assert len(records) == 1
+    assert records[0].getMessage() == f"file_source_failed type={type(error).__name__} reason={reason}"
 
 
 class _FailingHttp:
@@ -379,19 +394,31 @@ async def test_dateien_nextcloud_zeitueberschreitung_kommt_als_satz_im_dateimana
 
 
 @pytest.mark.asyncio
-async def test_dateien_dateifehler_der_quelle_zeigt_den_pfad_nicht_steht_aber_im_protokoll(client, caplog):
+async def test_dateien_dateifehler_der_quelle_verbirgt_text_und_pfad(client, caplog):
+    import re
+
     error = PermissionError(errno.EACCES, "Permission denied", "/app/data/lattice.db")
     get_extension_runtime().capabilities.provide("fake-ext", FileSourceProvider, _Provider(_SleepingFileSource(error)))
     token = await _owner_token(client)
     with caplog.at_level(logging.DEBUG):
         res = await client.get("/api/v1/files/schlaeft/list?path=/", headers={"Authorization": f"Bearer {token}"})
     assert res.status_code == 502
-    assert res.json()["detail"] == "Zugriff auf die Quelle fehlgeschlagen: PermissionError"
-    # Im Protokoll (nur fuer Admins) steht der volle Text -- als WARNUNG, nicht als erwartbarer Ausfall.
+    detail = res.json()["detail"]
+    match = re.fullmatch(
+        r"Zugriff auf die Quelle fehlgeschlagen: Die Anfrage ist fehlgeschlagen\. Fehlerkennung: ([0-9a-f]{32})\.",
+        detail,
+    )
+    assert match, detail
+    assert f"request_failed id={match[1]} type=PermissionError " in caplog.text
     records = [r for r in caplog.records if r.getMessage().startswith("file_source_failed")]
     assert len(records) == 1
     assert records[0].levelno == logging.WARNING
-    assert "/app/data/lattice.db" in records[0].getMessage()
+    reason = detail.removeprefix("Zugriff auf die Quelle fehlgeschlagen: ")
+    assert records[0].getMessage() == f"file_source_failed type=PermissionError reason={reason}"
+    assert _tracebacks(caplog) == []
+    for hidden in ("Permission denied", "/app/data/lattice.db"):
+        assert hidden not in res.text
+        assert hidden not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -425,7 +452,9 @@ async def test_dateien_echter_fehler_bleibt_mit_traceback_im_protokoll(client, c
     with caplog.at_level(logging.DEBUG):
         res = await client.get("/api/v1/files/search?q=x", headers={"Authorization": f"Bearer {token}"})
     assert res.status_code == 200
-    assert len(_tracebacks(caplog)) == 1
+    assert _tracebacks(caplog) == []
+    assert "Fehlerkennung:" in caplog.text
+    assert "kaputt" not in caplog.text
 
 
 # --- Messwerte: Erweiterung, die per SSH misst -------------------------------------------------------
@@ -517,7 +546,18 @@ async def test_unbehandelter_verbindungsfehler_wird_502_statt_500_mit_traceback(
         app.router.routes.remove(route)
     assert res.status_code == 502
     assert res.json()["detail"]
-    assert res.json()["detail"] == describe_connection_error(error)
+    if isinstance(error, (asyncssh.ConnectionLost, HostUnreachable)):
+        import re
+
+        message = "Die Verbindung zum Server ist abgebrochen." if isinstance(error, asyncssh.ConnectionLost) else "Die Anfrage ist fehlgeschlagen."
+        match = re.fullmatch(rf"{re.escape(message)} Fehlerkennung: ([0-9a-f]{{32}})\.", res.json()["detail"])
+        assert match is not None
+        records = [r for r in caplog.records if r.name == "nodvard_deck.errors"]
+        assert len(records) == 1
+        assert records[0].getMessage().startswith(f"request_failed id={match[1]} type={type(error).__name__} frames=")
+        assert str(error) not in res.text
+    else:
+        assert res.json()["detail"] == describe_connection_error(error)
     assert _tracebacks(caplog) == []
 
 
@@ -590,4 +630,24 @@ async def test_terminal_zu_geschlossenem_port_sagt_warum(running_app, db_session
     assert code == 4500
     error = json.loads(next(m for m in messages if isinstance(m, str)))
     assert error["message"].startswith(f"Der Server lehnt die Verbindung ab (127.0.0.1:{port})")
+    assert _tracebacks(caplog) == []
+
+
+async def test_terminal_open_error_hides_values_in_message_and_log(running_app, db_session, test_settings, monkeypatch, caplog):
+    import json
+    import re
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from nodvard_deck.api.v1 import terminal
+
+    target = SimpleNamespace(open=AsyncMock(side_effect=RuntimeError("vertraulich-terminal /srv/private/key")))
+    monkeypatch.setattr(terminal, "_find_terminal_target", AsyncMock(return_value=target))
+    ws_url = await _terminal_ticket(running_app, db_session, test_settings, port=22)
+    messages, code = await _read_until_closed(ws_url)
+    assert code == 4500
+    error = json.loads(next(m for m in messages if isinstance(m, str)))
+    match = re.search(r"Fehlerkennung: ([0-9a-f]{32})\.", error["message"])
+    assert match and match[1] in caplog.text
+    assert "vertraulich-terminal" not in error["message"] + caplog.text
+    assert "/srv/private" not in error["message"]
     assert _tracebacks(caplog) == []

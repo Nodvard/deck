@@ -1,27 +1,31 @@
 """Sicherheits-Kopfzeilen (`api/security_headers.py`): Jede Antwort von Deck verbietet fremde Rahmen, das Raten des
-Dateityps, den Pfad im Referrer an fremde Seiten, fremde Fenster mit Griff auf Deck, Einbinden von fremden Seiten außer
-bei den öffentlichen Symbolen und Geräte wie die Kamera. Eine eigene CSP einer Route bleibt stehen und bekommt nur
+Dateityps, den Pfad im Referrer an fremde Seiten, fremde Fenster mit Griff auf Deck, Einbinden von fremden Seiten
+und Geräte wie die Kamera. Eine eigene CSP einer Route bleibt stehen und bekommt nur
 `frame-ancestors 'none'` dazu."""
 
 from __future__ import annotations
 
+import logging
+import re
 from pathlib import Path
 
 import pytest
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from fastapi.testclient import TestClient
-
 from nodvard_deck.api.security_headers import (
     CSP_HEADER,
     FIXED_HEADERS,
     PERMISSIONS_POLICY,
     SecurityHeadersMiddleware,
-    resource_policy,
     secure_headers,
     with_frame_ancestors,
 )
-from nodvard_deck.branding import UNTRUSTED_FILE_HEADERS
+from nodvard_deck.branding import (
+    UNTRUSTED_FILE_HEADERS,
+    save_favicon_file,
+    save_logo_file,
+)
 from nodvard_deck.main import _SpaStaticFiles
 
 FRAME_ANCESTORS = "frame-ancestors 'none'"
@@ -32,12 +36,13 @@ BLOCKED_DEVICES = (
 )
 
 
-def _assert_fixed_headers(headers, resources: str = "same-origin") -> None:
+def _assert_fixed_headers(headers, *, resource_policy="same-origin") -> None:
     assert headers.get_list("x-frame-options") == ["DENY"]
     assert headers.get_list("x-content-type-options") == ["nosniff"]
     assert headers.get_list("referrer-policy") == ["same-origin"]
     assert headers.get_list("cross-origin-opener-policy") == ["same-origin"]
-    assert headers.get_list("cross-origin-resource-policy") == [resources]
+    assert headers.get_list("cross-origin-embedder-policy") == ["require-corp"]
+    assert headers.get_list("cross-origin-resource-policy") == [resource_policy]
     [devices] = headers.get_list("permissions-policy")
     assert devices.split(", ") == [f"{name}=()" for name in BLOCKED_DEVICES]
 
@@ -56,7 +61,7 @@ async def test_every_kind_of_answer_of_the_real_app_carries_the_headers(client):
         "ok": 200, "nicht angemeldet": 401, "unbekannt": 404, "falsche Eingabe": 422, "zu groß": 413,
     }
     for name, res in answers.items():
-        _assert_fixed_headers(res.headers, resources="cross-origin" if name == "ok" else "same-origin")
+        _assert_fixed_headers(res.headers, resource_policy="cross-origin" if name == "ok" else "same-origin")
         assert res.headers.get_list("content-security-policy") == [f"default-src 'none'; {FRAME_ANCESTORS}"], name
         assert res.headers.get_list("cache-control") == ["no-store"], name
 
@@ -133,6 +138,7 @@ def _app() -> FastAPI:
                 "X-Frame-Options": "SAMEORIGIN",
                 "Referrer-Policy": "unsafe-url",
                 "Cross-Origin-Opener-Policy": "unsafe-none",
+                "Cross-Origin-Embedder-Policy": "unsafe-none",
                 "Cross-Origin-Resource-Policy": "cross-origin",
                 "Permissions-Policy": "camera=*",
             },
@@ -190,13 +196,45 @@ def test_a_route_cannot_loosen_the_headers():
     assert res.headers.get_list("content-security-policy") == [f"default-src 'none'; {FRAME_ANCESTORS}"]
 
 
+@pytest.mark.parametrize("policy", [b"unsafe-url", b"strict-origin-when-cross-origin", b"no-referrer"])
+@pytest.mark.parametrize("https", [False, True])
+def test_referrer_policy_keeps_the_origin_on_the_own_site(policy: bytes, https: bool):
+    headers = secure_headers([
+        (b"Referrer-Policy", policy),
+        (b"referrer-policy", b"origin"),
+    ], https=https)
+    assert [value for name, value in headers if name.lower() == b"referrer-policy"] == [b"same-origin"]
+
+
+@pytest.mark.parametrize("value", [b"", b"unsafe-none", b"invalid", b"credentialless", b"require-corp"])
+def test_embedder_policy_is_set_once_despite_route_headers(value: bytes):
+    headers = secure_headers([
+        (b"Cross-Origin-Embedder-Policy", value),
+        (b"cross-origin-embedder-policy", b"unsafe-none"),
+    ])
+    assert [v for name, v in headers if name.lower() == b"cross-origin-embedder-policy"] == [b"require-corp"]
+
+
 @pytest.mark.asyncio
-async def test_only_the_public_icons_and_health_may_be_embedded_by_other_sites(client):
-    for path in ("/api/v1/app/icon-192.png", "/api/v1/app/icon-512-maskable.png", "/api/v1/branding/logo",
-                 "/api/v1/branding/favicon", "/api/v1/health"):
-        _assert_fixed_headers((await client.get(path)).headers, resources="cross-origin")
-    for path in ("/api/v1/branding", "/api/v1/app/manifest.webmanifest", "/api/v1/branding/custom.css"):
+async def test_only_public_images_can_be_embedded_on_other_sites(client, test_settings):
+    image = b'<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16"/></svg>'
+    save_logo_file(test_settings.data_dir, image, "svg")
+    save_favicon_file(test_settings.data_dir, image, "svg")
+    paths = ["/api/v1/branding/logo", "/api/v1/branding/favicon"]
+    paths += [f"/api/v1/app/icon-{size}{variant}.png" for size in (180, 192, 512) for variant in ("", "-maskable")]
+    for path in paths:
+        response = await client.get(path, headers={"Origin": "https://start.example"})
+        assert response.status_code == 200, path
+        assert response.headers["content-type"].startswith("image/"), path
+        _assert_fixed_headers(response.headers, resource_policy="cross-origin")
+    _assert_fixed_headers((await client.get("/api/v1/health")).headers, resource_policy="cross-origin")
+    for path in ("/api/v1/me", "/api/v1/branding", "/api/v1/app/manifest.webmanifest",
+                 "/api/v1/branding/custom.css"):
         _assert_fixed_headers((await client.get(path)).headers)
+    for path in ("/api/v1/branding/logo", "/api/v1/branding/favicon"):
+        response = await client.post(path, content=image, headers={"Content-Type": "image/svg+xml"})
+        assert response.status_code == 401
+        _assert_fixed_headers(response.headers)
 
 
 @pytest.mark.parametrize(("path", "expected"), [
@@ -204,6 +242,10 @@ async def test_only_the_public_icons_and_health_may_be_embedded_by_other_sites(c
     ("/api/v1/app/icon-180.png", b"cross-origin"),
     ("/api/v1/app/icon-512-maskable.png", b"cross-origin"),
     ("/api/v1/health", b"cross-origin"),
+    ("/api/v1/health/x", b"same-origin"),
+    ("/api/v1/healthz", b"same-origin"),
+    ("/api/v1/me", b"same-origin"),
+    ("/api/v1/app/icon-999.png", b"same-origin"),
     ("/api/v1/app/icon-x/../../index.html", b"same-origin"),
     ("/api/v1/app/icon-180.png.html", b"same-origin"),
     ("/api/v1/app/icon-\u0661\u0668\u0660.png", b"same-origin"),
@@ -214,7 +256,7 @@ async def test_only_the_public_icons_and_health_may_be_embedded_by_other_sites(c
     ("/", b"same-origin"),
 ])
 def test_resource_policy(path: str, expected: bytes):
-    assert resource_policy(path) == expected
+    assert dict(secure_headers([], path))[b"cross-origin-resource-policy"] == expected
 
 
 def test_uploaded_files_keep_their_sandbox_and_nosniff_is_not_doubled():
@@ -268,8 +310,89 @@ def test_the_rescue_page_sends_the_same_headers():
     from nodvard_deck.rescue import _SECURITY_HEADERS
 
     rescue = {name.lower(): value for name, value in _SECURITY_HEADERS.items()}
+    assert rescue["cross-origin-embedder-policy"] == "require-corp"
     for name, value in FIXED_HEADERS.items():
         assert rescue[name.decode()] == value.decode()
     assert rescue["cross-origin-resource-policy"] == "same-origin"
     assert rescue["permissions-policy"] == PERMISSIONS_POLICY.decode()
     assert FRAME_ANCESTORS in rescue["content-security-policy"]
+
+
+@pytest.mark.parametrize(("url", "trusted", "proto", "https"), [
+    ("http://deck.local", False, None, False),
+    ("https://deck.local", False, None, True),
+    ("http://deck.local", False, "https", False),
+    ("http://deck.local", True, "https", True),
+    ("http://deck.local", True, "http", False),
+    ("http://deck.local", True, "invalid", False),
+    ("http://deck.local", True, "https, http", False),
+    ("http://deck.local", True, "http, https", True),
+])
+@pytest.mark.parametrize("path", ["/api/v1/health", "/api/v1/me", "/api/v1/gibt-es-nicht"])
+async def test_hsts_uses_the_checked_connection(client, url, trusted, proto, https, path):
+    from nodvard_deck.core import trusted_proxies
+
+    trusted_proxies.apply(["127.0.0.1"] if trusted else [])
+    headers = {"X-Forwarded-Proto": proto} if proto else {}
+    response = await client.get(url + path, headers=headers)
+    assert response.headers.get_list("strict-transport-security") == (["max-age=31536000"] if https else [])
+    policy = "cross-origin" if path == "/api/v1/health" else "same-origin"
+    _assert_fixed_headers(response.headers, resource_policy=policy)
+    assert response.headers.get_list("cache-control") == ["no-store"]
+
+
+@pytest.mark.parametrize("https", [False, True])
+def test_routes_cannot_set_hsts_on_http_or_duplicate_it(https):
+    headers = secure_headers([
+        (b"Strict-Transport-Security", b"max-age=0"),
+        (b"strict-transport-security", b"max-age=1; includeSubDomains"),
+    ], https=https)
+    assert [value for name, value in headers if name.lower() == b"strict-transport-security"] == (
+        [b"max-age=31536000"] if https else []
+    )
+
+
+@pytest.mark.parametrize("scheme", ["http", "https"])
+@pytest.mark.parametrize("frontend_built", [False, True])
+@pytest.mark.parametrize(("method", "path"), [
+    ("GET", "/api/v1/header-error"), ("POST", "/api/v1/app/icon-192.png"),
+])
+def test_unhandled_server_errors_also_get_the_headers(
+    tmp_path, test_settings, monkeypatch, caplog, scheme, frontend_built, method, path,
+):
+    from nodvard_deck import config
+    from nodvard_deck.main import create_app
+
+    test_settings.data_dir = tmp_path / "data"
+    # Nie `./frontend/dist` des Arbeitsordners: ob dort gebaut wurde, darf das Ergebnis nicht ändern.
+    test_settings.frontend_dist = dist = tmp_path / "frontend" / "dist"
+    monkeypatch.setattr(config, "_settings", test_settings)
+    if frontend_built:
+        dist.mkdir(parents=True)
+        (dist / "index.html").write_text("<html>App-Shell</html>", encoding="utf-8")
+    app = create_app()
+
+    @app.api_route(path, methods=[method])
+    async def error():
+        raise RuntimeError("test")
+
+    app.router.routes.insert(app.state.ext_mount_index, app.router.routes.pop())
+    client = TestClient(app, raise_server_exceptions=False)
+    shell = client.get("/settings")
+    assert shell.status_code == (200 if frontend_built else 404)
+    if frontend_built:
+        assert "App-Shell" in shell.text
+    with caplog.at_level(logging.ERROR, logger="nodvard_deck.errors"):
+        response = client.request(method, f"{scheme}://deck.local{path}")
+    assert response.status_code == 500
+    match = re.search(r"Fehlerkennung: ([0-9a-f]{32})\.", response.json()["detail"])
+    assert match is not None
+    assert any(f"request_failed id={match[1]} type=RuntimeError " in record.getMessage() for record in caplog.records)
+    assert "test" not in response.text
+    if scheme == "https":
+        assert response.headers.get_list("strict-transport-security") == ["max-age=31536000"]
+    _assert_fixed_headers(response.headers)
+    assert response.headers.get_list("cache-control") == ["no-store"]
+    assert response.headers.get_list("strict-transport-security") == (
+        ["max-age=31536000"] if scheme == "https" else []
+    )

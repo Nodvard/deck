@@ -70,17 +70,22 @@ export function LogPanel({ entry, onClose }: { entry: LogTarget; onClose: () => 
   const [search, setSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [ended, setEnded] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const boxRef = useRef<HTMLPreElement | null>(null);
   const chosen = LOG_RANGES.find((r) => r.value === range) ?? LOG_RANGES[1];
 
   useEffect(() => {
     if (!running || !entry.host_id || !entry.container) return;
     const controller = new AbortController();
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let retries = 0;
     setLines([]);
     setError(null);
     setEnded(false);
+    setRetrying(false);
 
-    (async () => {
+    const connect = async () => {
+      let retryable = true;
       try {
         const params = new URLSearchParams({ tail: String(chosen.tail) });
         if (chosen.since) params.set("since", chosen.since);
@@ -88,33 +93,60 @@ export function LogPanel({ entry, onClose }: { entry: LogTarget; onClose: () => 
           `/ext/docker/containers/${entry.host_id}/${encodeURIComponent(entry.container!)}/logs?${params}`,
           { signal: controller.signal },
         );
-        if (!res.ok || !res.body) throw new Error(await errorText(res));
+        if (controller.signal.aborted) return;
+        if (!res.ok || !res.body) {
+          retryable = res.status >= 500;
+          throw new Error(await errorText(res));
+        }
+        setError(null);
+        setEnded(false);
+        setRetrying(false);
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let rest = "";
+        let first = true;
+        const append = (added: string[]) => {
+          const replace = first;
+          first = false;
+          setLines((prev) => {
+            const next = replace ? added : prev.concat(added);
+            return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
+          });
+        };
         for (;;) {
           const { value, done } = await reader.read();
+          if (controller.signal.aborted) return;
           if (done) break;
           rest += decoder.decode(value, { stream: true });
           const parts = rest.split("\n");
           rest = parts.pop() ?? "";
           if (parts.length > 0) {
-            const clean = parts.map((l) => l.replace(ANSI_RE, ""));
-            setLines((prev) => {
-              const next = prev.concat(clean);
-              return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
-            });
+            append(parts.map((l) => l.replace(ANSI_RE, "")));
           }
         }
-        if (rest) setLines((prev) => prev.concat(rest.replace(ANSI_RE, "")));
+        if (rest) append([rest.replace(ANSI_RE, "")]);
+        retryable = !chosen.since;
         setEnded(true);
       } catch (err) {
         if (controller.signal.aborted) return;
         setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!controller.signal.aborted) {
+          const again = retryable && retries < 3;
+          setRetrying(again);
+          if (again) {
+            retries += 1;
+            retry = setTimeout(() => void connect(), 3000);
+          }
+        }
       }
-    })();
+    };
+    void connect();
 
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      clearTimeout(retry);
+    };
   }, [entry.host_id, entry.container, chosen, running]);
 
   useEffect(() => {
@@ -129,8 +161,8 @@ export function LogPanel({ entry, onClose }: { entry: LogTarget; onClose: () => 
     <div className="flex flex-col gap-2" data-testid="log-panel">
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="font-medium">Logs: {entry.name}</span>
-        <span className={`rounded-full px-2 py-0.5 ${running && !ended && !error ? "bg-emerald-500/20 text-emerald-300" : "bg-white/10 opacity-70"}`}>
-          {error ? "Fehler" : !running ? "angehalten" : ended ? "beendet" : "live"}
+        <span className={`rounded-full px-2 py-0.5 ${running && !ended && !error && !retrying ? "bg-emerald-500/20 text-emerald-300" : "bg-white/10 opacity-70"}`}>
+          {!running ? "angehalten" : retrying ? "verbindet erneut" : error ? "Fehler" : ended ? "beendet" : "live"}
         </span>
         <select value={range} onChange={(e) => setRange(e.target.value)} aria-label="Zeitraum" className={FIELD}>
           {LOG_RANGES.map((r) => (

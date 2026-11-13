@@ -3,15 +3,20 @@ Hängt nur am Recht `hosts.execute`, auch wenn die Erweiterung "Terminal" aus is
 
 from __future__ import annotations
 
+import re
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Any
 
 from . import commands
 from .capabilities import is_own_container
 from .commands import CONTAINER_NAME_RE
+from .image_apply import is_self_image
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
+
+
+FULL_ID_RE = re.compile(r"^[0-9a-f]{64}\Z")
 
 
 class ShellRefused(RuntimeError):
@@ -64,15 +69,23 @@ class ContainerShell:
         return tag in host.tags
 
     async def open_in(self, host: Any, ref: str, *, cols: int, rows: int) -> _ShellSession:
-        command = commands.shell(ref)
-        # Nie in den Container von Nodvard Deck selbst: darin liegen Datenbank und Tresor-Schlüssel (wie Stoppen und
-        # Löschen geht das nur direkt auf dem Host).
-        inspected = await self._ctx.exec.run(host, commands.container_full_id(ref), timeout_s=15)
-        if inspected.exit_code == 0 and is_own_container(inspected.stdout.strip()):
+        # Nie in den Container von Nodvard Deck selbst: darin liegen Datenbank und Tresor-Schlüssel. Kann das nicht
+        # geprüft werden, gibt es keine Konsole.
+        inspected = await self._ctx.exec.run(host, commands.container_id_image(ref), timeout_s=15)
+        lines = inspected.stdout.strip().splitlines()
+        container_id, _, image = lines[0].partition("|") if len(lines) == 1 else ("", "", "")
+        if inspected.exit_code != 0 or not FULL_ID_RE.match(container_id):
+            raise ShellRefused(
+                f"Ob „{ref}“ der Container von Nodvard Deck selbst ist, ließ sich nicht prüfen. "
+                "Darum gibt es hier keine Konsole darin. Versuche es später noch einmal."
+            )
+        if is_own_container(container_id) or is_self_image(image):
             raise ShellRefused(
                 f"„{ref}“ ist der Container von Nodvard Deck selbst. Eine Konsole darin gibt es hier nicht "
                 "(Datenbank und Tresor-Schlüssel liegen darin) – nur direkt auf dem Server."
             )
+        # Über die geprüfte ID, damit ein umbenannter Container nicht dazwischenkommt.
+        command = commands.shell(container_id)
         stack = AsyncExitStack()
         try:
             process = await stack.enter_async_context(self._ctx.exec.open_shell(host, cols=cols, rows=rows, command=command))

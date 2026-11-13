@@ -105,6 +105,33 @@ def _synology_on_path(monkeypatch):
             del sys.modules[name]
 
 
+class _DeadlineClock:
+    """Nur die Loop-Uhr ist angehalten; fällige Timer und Abbrüche bleiben echt."""
+
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self.loop = loop
+        self.now = loop.time()
+
+    async def expire_after(self, seconds: float) -> None:
+        self.now += seconds
+        reply = asyncio.Event()
+        # Die Antwort kommt nach den jetzt fälligen Timern. Fehlt die Frist im
+        # Produktivcode, antwortet die Attrappe und die Abbruchprüfung schlägt fehl.
+        fallback = self.loop.call_later(0, reply.set)
+        try:
+            await reply.wait()
+        finally:
+            fallback.cancel()
+
+
+@pytest.fixture
+async def synology_clock(monkeypatch):
+    clock = _DeadlineClock(asyncio.get_running_loop())
+    with monkeypatch.context() as patch:
+        patch.setattr(clock.loop, "time", lambda: clock.now)
+        yield clock
+
+
 def _storage(body: Any) -> Any:
     found = parse.parse_storage(body)
     assert found is not None
@@ -459,13 +486,22 @@ async def test_transport_passes_the_tls_choice_and_the_form_and_never_sends_a_sh
 
 
 @pytest.mark.asyncio
-async def test_transport_gives_up_after_the_total_time_limit():
+async def test_transport_gives_up_after_the_total_time_limit(synology_clock):
+    cancelled = False
+    total_timeout_s = 0.05
+
     async def slow(request: httpx.Request) -> httpx.Response:
-        await asyncio.sleep(5)
+        nonlocal cancelled
+        try:
+            await synology_clock.expire_after(total_timeout_s)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         return httpx.Response(200)
 
     with pytest.raises(transport.Unreachable) as caught:
-        await transport.send(_Http(slow), "GET", f"{BASE}/webapi/x", total_timeout_s=0.05)
+        await transport.send(_Http(slow), "GET", f"{BASE}/webapi/x", total_timeout_s=total_timeout_s)
+    assert cancelled, "die Gesamtfrist muss die laufende Anfrage abbrechen"
     assert "Zeitüberschreitung" in str(caught.value)
 
 
@@ -1460,6 +1496,75 @@ async def test_the_server_vanishing_after_the_login_is_unreachable(client, db_se
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("restart", [False, True], ids=["sitzung-bleibt", "dsm-neustart"])
+@pytest.mark.parametrize(
+    ("fault", "state", "fragment"),
+    [
+        ("abbruch", "unreachable", "nicht erreichbar"),
+        ("zeitüberschreitung", "unreachable", "Zeitüberschreitung"),
+        ("falsche-antwort", "error", "nicht das erwartete Format"),
+        ("leere-antwort", "error", "nicht das erwartete Format"),
+    ],
+)
+async def test_wackeltest_recovers_after_failed_reads_without_resetting_the_extension(
+    client, db_session, test_settings, caplog, monkeypatch, fault, state, fragment, restart,
+):
+    """Nach einem Ausfall ersetzen Seite und Kacheln den Fehler beim nächsten Abruf durch frische Daten."""
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    now = [5000.0]
+    monkeypatch.setattr(_service(), "_clock", lambda: now[0])
+    first = await _overview(client, headers)
+    assert first["state"] == "ok" and first["system"] and first["load"] and first["volumes"]
+    assert fake.logins == 1
+
+    def interrupted(request: httpx.Request) -> httpx.Response:
+        if fault == "abbruch":
+            raise httpx.ReadError("Connection reset by peer", request=request)
+        if fault == "zeitüberschreitung":
+            raise httpx.ReadTimeout("timed out", request=request)
+        if fault == "falsche-antwort":
+            return httpx.Response(200, text="<html>Wartungsseite</html>")
+        return httpx.Response(200, content=b"")
+
+    fake.overrides.update({api: interrupted for api in DATA_CALLS})
+    before = len(fake.requests)
+    now[0] += syn_service.CACHE_TTL_S + 1
+    failed = await _overview(client, headers)
+    assert failed["state"] == state and fragment in failed["message"]
+    assert all(failed[key] is None for key in ("system", "load", "volumes", "disks", "update", "backups"))
+    assert len(fake.requests) == before + len(DATA_CALLS), "die bestehende Sitzung wird beim Lesen unterbrochen"
+    assert fake.logins == 1
+    before = len(fake.requests)
+    for kind in ("status", "volumes", "backups"):
+        widget = await _widget(client, headers, kind)
+        assert widget["meta"]["state"] == "error"
+        assert len(widget["data"]) == 1 and widget["data"][0]["subtitle"] == failed["message"]
+    assert await _overview(client, headers) == failed
+    assert len(fake.requests) == before, "Seite und Kacheln teilen auch das Fehlerergebnis"
+
+    fake.overrides.clear()
+    if restart:
+        fake.expire_sessions()
+    fake.data["SYNO.DSM.Info"]["uptime"] = 120
+    fake.data["SYNO.Core.System.Utilization"]["memory"]["real_usage"] = 23
+    now[0] += syn_service.CACHE_TTL_S + 1
+    recovered = await _overview(client, headers)
+    assert recovered["state"] == "ok" and recovered["message"] is None
+    assert recovered["system"]["uptime_seconds"] == 120
+    assert recovered["load"]["ram_percent"] == 23
+    assert recovered["volumes"] == first["volumes"] and recovered["update"] == first["update"]
+    assert all(recovered[key] is None for key in ("system_note", "load_note", "storage_note", "update_note"))
+    assert fake.logins == 1 + int(restart), "nach einem Neustart genügt eine gemeinsame neue Anmeldung"
+    before = len(fake.requests)
+    for kind in ("status", "volumes", "backups"):
+        assert (await _widget(client, headers, kind))["meta"]["state"] == "ok"
+    assert len(fake.requests) == before
+    assert "Traceback" not in caplog.text
+    _no_secret_in(fake, json.dumps(first), json.dumps(failed), json.dumps(recovered), caplog.text)
+
+
+@pytest.mark.asyncio
 async def test_a_text_that_quotes_the_password_or_the_session_never_reaches_the_user(client, db_session, test_settings, caplog):
     caplog.set_level(logging.DEBUG)
     headers, fake = await _enable(client, db_session, test_settings)
@@ -1895,20 +2000,28 @@ async def test_stopping_the_extension_logs_the_session_out_once_and_never_fails(
 
 
 @pytest.mark.asyncio
-async def test_logging_out_gives_up_quickly_and_sends_nothing_without_a_session():
+async def test_logging_out_gives_up_quickly_and_sends_nothing_without_a_session(synology_clock):
     box = syn_client.SessionBox()
     seen: list[httpx.Request] = []
+    cancelled = False
+    timeout_s = 0.05
 
     async def hang(request: httpx.Request) -> httpx.Response:
+        nonlocal cancelled
         seen.append(request)
-        await asyncio.sleep(60)
+        try:
+            await synology_clock.expire_after(timeout_s)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         return httpx.Response(200)
 
-    await syn_client.logout(_Http(hang), box, timeout_s=0.05)
+    await syn_client.logout(_Http(hang), box, timeout_s=timeout_s)
     assert seen == []
     box.sid = "abcdEFGH1234"
     box.target = syn_client.Target(BASE, False, parse.ApiInfo("entry.cgi", 1, 7))
-    await asyncio.wait_for(syn_client.logout(_Http(hang), box, timeout_s=0.05), 5)
+    await syn_client.logout(_Http(hang), box, timeout_s=timeout_s)
+    assert cancelled, "die Abmeldung muss an ihrer Frist abgebrochen werden"
     assert [r.method for r in seen] == ["GET"] and "_sid=abcdEFGH1234" in str(seen[0].url)
     assert box.sid is None
 
@@ -2294,26 +2407,46 @@ async def test_every_task_is_asked_four_at_a_time(client, db_session, test_setti
     assert body["backup_note"] is None
 
 
-def _slow_after(fake: FakeDsm, fast: int) -> None:
-    """Antwortet auf die Stände der ersten `fast` Aufgaben sofort, auf alle anderen erst nach Minuten."""
+def _slow_after(fake: FakeDsm, fast: int, clock: _DeadlineClock) -> set[str]:
+    """Erste Stände sofort; weitere Anfragen bleiben bis zum Ablauf der echten Frist offen."""
+    blocked: set[str] = set()
+    cancelled: set[str] = set()
+    reply = asyncio.Event()
 
     async def slow_status(request: httpx.Request) -> None:
         params = FakeDsm.params(request)
-        if params.get("method") == "status" and int(params["task_id"]) > fast:
-            await asyncio.sleep(300)
+        if params.get("method") != "status" or int(params["task_id"]) <= fast:
+            return
+        task_id = params["task_id"]
+        blocked.add(task_id)
+        try:
+            # Erst die volle Gruppe blockieren, damit die Uhr keine noch nicht
+            # begonnene Anfrage überholt. Weitere Aufgaben warten am Semaphore.
+            if len(blocked) == min(4, len(fake.backups) - fast):
+                try:
+                    await clock.expire_after(syn_client.BACKUP_TIMEOUT_S)
+                finally:
+                    reply.set()
+            else:
+                await reply.wait()
+        except asyncio.CancelledError:
+            cancelled.add(task_id)
+            raise
 
     fake.before = slow_status
+    return cancelled
 
 
 @pytest.mark.asyncio
-async def test_slow_tasks_hit_their_own_time_limit_and_the_rest_of_the_page_stays(client, db_session, test_settings, monkeypatch):
+async def test_slow_tasks_hit_their_own_time_limit_and_the_rest_of_the_page_stays(
+    client, db_session, test_settings, synology_clock,
+):
     headers, fake = await _enable(client, db_session, test_settings)
     fake.install_hyper_backup({str(i): (f"Aufgabe {i}", OK_TASK) for i in range(1, 13)})
-    _slow_after(fake, 4)
-    monkeypatch.setattr("nodvard_deck_ext_synology.client.BACKUP_TIMEOUT_S", 0.5)
-    monkeypatch.setattr("nodvard_deck_ext_synology.service.CONNECTION_TIMEOUT_S", 3.0)
+    cancelled = _slow_after(fake, 4, synology_clock)
     await _configure(client, headers)
     body = await _overview(client, headers)
+    assert cancelled == {"5", "6", "7", "8"}, "die Frist muss alle laufenden Statusanfragen abbrechen"
     assert body["state"] == "ok", body["message"]
     assert body["volumes"] and body["system"] and body["update"] and body["storage_note"] is None
     assert [t["result_label"] for t in body["backups"]] == ["Erfolgreich"] * 4 + ["Stand unbekannt"] * 8
@@ -2322,20 +2455,25 @@ async def test_slow_tasks_hit_their_own_time_limit_and_the_rest_of_the_page_stay
 
 @pytest.mark.asyncio
 async def test_a_slow_task_list_uses_up_the_same_time_limit_and_the_rest_of_the_page_stays(
-    client, db_session, test_settings, monkeypatch,
+    client, db_session, test_settings, synology_clock,
 ):
     headers, fake = await _enable(client, db_session, test_settings)
     fake.install_hyper_backup({"1": ("Nacht", OK_TASK)})
+    cancelled = False
 
     async def slow_list(request: httpx.Request) -> None:
+        nonlocal cancelled
         if FakeDsm.params(request).get("method") == "list":
-            await asyncio.sleep(300)
+            try:
+                await synology_clock.expire_after(syn_client.BACKUP_TIMEOUT_S)
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
 
     fake.before = slow_list
-    monkeypatch.setattr("nodvard_deck_ext_synology.client.BACKUP_TIMEOUT_S", 0.5)
-    monkeypatch.setattr("nodvard_deck_ext_synology.service.CONNECTION_TIMEOUT_S", 3.0)
     await _configure(client, headers)
     body = await _overview(client, headers)
+    assert cancelled, "die Frist muss die laufende Listenabfrage abbrechen"
     assert body["state"] == "ok", body["message"]
     assert body["volumes"] and body["system"] and body["update"] and body["storage_note"] is None
     assert body["backups"] is None
@@ -2377,6 +2515,14 @@ async def test_the_time_limit_for_hyper_backup_already_runs_while_connecting(cli
     assert body["volumes"] and body["system"] and body["update"]
     assert body["backups"] is None
     assert body["backup_note"]["message"].startswith("Hyper Backup hat nicht rechtzeitig geantwortet.")
+
+    # Der Abbruch darf weder die Sitzung noch die nächste Abfrage blockieren.
+    fake.before = None
+    recovered = await _overview(client, headers, "?refresh=true")
+    assert recovered["state"] == "ok" and recovered["system"] and recovered["volumes"]
+    assert recovered["backup_note"] is None and recovered["backups"][0]["name"] == "Nacht"
+    assert fake.logins == 1
+    assert (await _widget(client, headers, "backups"))["meta"]["state"] == "ok"
 
 
 @pytest.mark.asyncio
@@ -2906,19 +3052,18 @@ async def test_the_integrity_check_of_hyper_backup_is_no_alarm_and_no_all_clear(
 
 
 @pytest.mark.asyncio
-async def test_a_task_cut_off_by_the_time_limit_is_no_all_clear(client, db_session, test_settings, monkeypatch):
+async def test_a_task_cut_off_by_the_time_limit_is_no_all_clear(client, db_session, test_settings, synology_clock):
     headers, fake = await _enable(client, db_session, test_settings)
     fake.data["SYNO.Core.Upgrade.Server"] = {"update": {"available": False}}
     fake.install_hyper_backup({"1": ("Nacht", {**OK_TASK, "last_bkp_result": "failed"})})
     await _configure(client, headers)
     assert (await _watch())["notified"] == 1
 
-    _slow_after(fake, 0)
-    monkeypatch.setattr("nodvard_deck_ext_synology.client.BACKUP_TIMEOUT_S", 0.2)
-    monkeypatch.setattr("nodvard_deck_ext_synology.service.CONNECTION_TIMEOUT_S", 3.0)
+    cancelled = _slow_after(fake, 0, synology_clock)
     fake.backups["1"]["status"] = OK_TASK
     await _service().clear()
     assert await _watch() == {"checked": 0, "notified": 0}, "Stand nicht rechtzeitig da: keine Entwarnung"
+    assert cancelled == {"1"}, "die Frist muss die laufende Statusanfrage abbrechen"
     fake.before = None
     await _service().clear()
     assert (await _watch())["notified"] == 1

@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from exec_gate_helpers import execute_approved
 from nodvard_deck.core import gate, ssh
 from nodvard_deck.core.error_text import (
     describe_connection_error,
@@ -35,6 +36,7 @@ NOT_SSH = {
     "self._actions": "DockerStackExecutor.run, eigene Methode des Docker-Moduls",
     "self._inner": "OperateExec des Docker-Moduls (Nur bedienen), leitet an ctx.exec weiter",
     "_Scanner()": "Prüfung des eigenen CSS",
+    "deck_ssh": "SshSession aus ctx.exec.ssh_session; run() ruft core/ssh.run (siehe test_ssh_session_run_sends_only_through_core_ssh)",
 }
 """Empfänger der `CHANNEL_METHODS`, die keine SSH-Verbindung sind. Ein neuer Empfänger macht den Wächter rot und kommt
 nur mit Grund hierher, einer, den es im Code nicht mehr gibt, ebenso."""
@@ -159,7 +161,7 @@ def _host(os_family: str = "linux") -> SdkHost:
 
 
 @pytest.mark.asyncio
-async def test_extensions_get_the_refusal_as_a_plain_sentence(handle):
+async def test_extensions_get_the_refusal_as_a_plain_sentence(handle, db_session):
     exec_handle, conn = handle
     long_word = "x" * 9000
     attempts = [
@@ -170,7 +172,7 @@ async def test_extensions_get_the_refusal_as_a_plain_sentence(handle):
     ]
     for attempt in attempts:
         with pytest.raises(ssh.CommandTooLong) as raised:
-            await attempt()
+            await execute_approved(db_session, attempt, host_id="h1")
         text = str(raised.value)
         assert text.startswith("Der Befehl ist mit 90") and "Dropbear" in text
         assert describe_connection_error(raised.value) == text
@@ -180,14 +182,17 @@ async def test_extensions_get_the_refusal_as_a_plain_sentence(handle):
 
 
 @pytest.mark.asyncio
-async def test_a_windows_server_still_gets_long_command_lines(handle):
+async def test_a_windows_server_still_gets_long_command_lines(handle, db_session):
     exec_handle, conn = handle
     command = "Write-Output " + "x" * 9000
-    await exec_handle.run_argv(_host("windows"), ["cmd", command], stdin="daten")
-    async with exec_handle.stream(_host("windows"), command):
-        pass
-    async with exec_handle.open_shell(_host("windows"), cols=80, rows=24, command=command):
-        pass
+    async def execute():
+        await exec_handle.run_argv(_host("windows"), ["cmd", command], stdin="daten")
+        async with exec_handle.stream(_host("windows"), command):
+            pass
+        async with exec_handle.open_shell(_host("windows"), cols=80, rows=24, command=command):
+            pass
+
+    await execute_approved(db_session, execute, host_id="h1")
     assert len(conn.runs) == 1 and len(conn.runs[0][0]) > 9000
     assert [args for args, _ in conn.processes] == [(command,), (command,)]
 
@@ -291,3 +296,25 @@ def test_commands_reach_a_server_only_through_core_ssh():
     found = {rel: lines for rel, source in sources.items() if rel not in SENDERS and (lines := _ssh_sends(source))}
     assert found == {}
     assert all(_ssh_sends(sources[sender]) for sender in SENDERS)
+
+
+def test_ssh_session_run_sends_only_through_core_ssh():
+    """`deck_ssh` steht in NOT_SSH, weil `SshSession.run` den Befehl an `core/ssh.run` gibt.
+    Diese Wache haelt den Grund wahr: wuerde `run()` an core/ssh vorbei senden, wird sie rot."""
+    source = _sources()["backend/src/nodvard_deck/ext/context.py"]
+    tree = ast.parse(source)
+    run_method = next(
+        (item
+         for cls in ast.walk(tree)
+         if isinstance(cls, ast.ClassDef) and cls.name == "SshSession"
+         for item in cls.body
+         if isinstance(item, ast.AsyncFunctionDef) and item.name == "run"),
+        None,
+    )
+    assert run_method is not None, "SshSession.run nicht gefunden"
+    sends = [
+        _receiver(node.func.value)
+        for node in ast.walk(run_method)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in CHANNEL_METHODS
+    ]
+    assert sends == ["ssh"], sends

@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 from nodvard_sdk import ExtensionManifest, HostRequirementSpec, HostToolSpec, PageSpec, WidgetSpec
 from nodvard_sdk.actions import ActionSpec
 from starlette.routing import BaseRoute
@@ -200,6 +200,12 @@ class SupervisedTask:
                     "ext_task_crashed ext_id=%s name=%s crash_count=%d",
                     self.ext_id, self.name, self.crash_count,
                 )
+                if self.restart and not self.can_restart:
+                    logger.warning(
+                        "ext_task_not_restarted ext_id=%s name=%s: eine fertige Coroutine startet nicht neu, "
+                        "für Neustarts eine Fabrik an ctx.spawn() übergeben",
+                        self.ext_id, self.name,
+                    )
                 if not self.restart or not self.can_restart:
                     return
                 await asyncio.sleep(self.restart_delay_s)
@@ -298,12 +304,15 @@ class ExtensionRuntime:
         """Montiert den Router unter /api/v1/ext/<id>/... und gibt die neuen Routen für `unmount_router` zurück.
 
         `deprecated=True` markiert sie im OpenAPI-Schema als veraltet (alte Adressen einer umbenannten Erweiterung)."""
+        from ..api.edition import require_edition_route
+        from ..api.responses import API_RESPONSES
+
         # Ein Scratch-Router erzeugt die präfixierten Routen, ohne sie ans Ende von `app.router.routes` zu hängen.
         # FastAPI backt `dependency_overrides_provider` beim Einbinden in jede Route ein; ohne die Zuweisung
         # ignorierten Extension-Routen `app.dependency_overrides` und liefen in Tests gegen die echte DB.
-        scratch = APIRouter()
+        scratch = APIRouter(dependencies=[Depends(require_edition_route)])
         scratch.dependency_overrides_provider = app
-        scratch.include_router(router, prefix=f"/api/v1/ext/{ext_id}", deprecated=deprecated)
+        scratch.include_router(router, prefix=f"/api/v1/ext/{ext_id}", deprecated=deprecated, responses=API_RESPONSES)
         new_routes = list(scratch.routes)
         # Vor den StaticFiles-Catch-all auf "/", den main.py später anhängt, sonst fängt er alle Extension-Anfragen ab.
         index = getattr(app.state, "ext_mount_index", len(app.router.routes))

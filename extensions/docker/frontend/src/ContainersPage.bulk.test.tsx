@@ -11,7 +11,7 @@ const SERVICES = [
   row("docker", "h1", "redis"),
   row("docker", "h1", "postgres"),
   row("docker", "h1", "worker", { state: "exited" }),
-  row("docker", "h1", "lattice-1", { is_self: true }),
+  row("docker", "h1", "nodvard-deck-1", { is_self: true }),
   row("docker-zwei", "h2", "solo"),
 ];
 const UPDATE: ImageResult = {
@@ -95,7 +95,7 @@ describe("ContainersPage -- Alle Updates vorschlagen", () => {
       data: {
         ...ALL,
         "h1:worker": UPDATE, // gestoppt
-        "h1:lattice-1": UPDATE, // Nodvard Deck selbst
+        "h1:nodvard-deck-1": UPDATE, // Nodvard Deck selbst
         "h2:solo": UPDATE,
       },
     });
@@ -129,7 +129,7 @@ describe("ContainersPage -- Alle Updates vorschlagen", () => {
     expect(message).toContain("nginx");
     expect(message).toContain("redis");
     expect(message).toContain("postgres");
-    expect(message).not.toContain("lattice-1");
+    expect(message).not.toContain("nodvard-deck-1");
     expect(message).toContain("Aktionen");
     await waitFor(() => expect(screen.getByRole("button", { name: "Alle Updates vorschlagen (3)" })).not.toBeDisabled());
     expect(posts(calls)).toEqual([]);

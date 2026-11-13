@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import functools
 import hashlib
 import hmac
@@ -16,7 +17,7 @@ import shlex
 import ssl
 import unicodedata
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -25,6 +26,8 @@ from urllib.parse import urlsplit
 
 import asyncssh
 import httpx
+from asyncssh.misc import async_context_manager
+from fastapi import Request
 from nodvard_sdk import (
     Actor,
     ConnectorType,
@@ -57,13 +60,15 @@ from ..core import known_actors, rbac, ssh, vault
 from ..core.events import get_event_bus
 from ..db.base import refresh_relationships, utcnow
 from ..db.session import get_engine, session_scope
-from ..models import Action, Host, HostTag, NotificationDelivery, Secret, Setting, User
+from ..models import Action, Host, HostMerge, HostTag, NotificationDelivery, Secret, Setting, User
 from ..services import audit as audit_service
 from ..services.hosts import host_to_sdk as _host_to_sdk
 from .runtime import ExtensionRuntime, LoadedExtension, SpawnTarget, SupervisedTask
 from .tables import GUARD_OPTION, TableGuard, validate_table_prefix
 
 logger = logging.getLogger("nodvard_deck.ext")
+
+_SFTP_CLOSE_TIMEOUT_S = 2.0
 
 PUBLIC_ROUTES_PERMISSION = "api.public"
 """Manifest-Berechtigung für `ctx.api.include_router(..., public=True)`."""
@@ -72,7 +77,7 @@ PUBLIC_ROUTES_PERMISSION = "api.public"
 class _PermissionChecker:
     def __init__(self, ext_id: str, granted_permissions: list[str]) -> None:
         self.ext_id = ext_id
-        self._granted = granted_permissions
+        self._granted = tuple(granted_permissions)
 
     def allows(self, permission: str) -> bool:
         return rbac.has_permission(self._granted, permission)
@@ -86,8 +91,9 @@ class ApiHandle:
     """Hängt die Routen einer Erweiterung unter `/api/v1/ext/<id>/...` ein; jede Route verlangt Anmeldung, außer
     mit `public=True`."""
 
-    def __init__(self, loaded: LoadedExtension) -> None:
+    def __init__(self, loaded: LoadedExtension, perm: _PermissionChecker) -> None:
         self._loaded = loaded
+        self._perm = perm
         # Router mit Anmeldepflicht; `check_routes` prüft sie nach setup() erneut, weil eine Erweiterung nach
         # include_router() weitere Routen anhängen kann.
         self._guarded: list[Any] = []
@@ -125,6 +131,12 @@ class ApiHandle:
 
         return _current_actor
 
+    def require_permission(self, permission: str) -> Any:
+        """FastAPI-Dependency für eine Berechtigung des angemeldeten Nutzers."""
+        from ..api.deps import require_permission
+
+        return require_permission(permission)
+
     def include_router(
         self,
         router: Any,
@@ -133,6 +145,8 @@ class ApiHandle:
         tags: list[str] | None = None,
         permission: str | None = None,
         public: bool = False,
+        ssh_preflight: bool = False,
+        ssh_read: bool = False,
     ) -> None:
         """Registriert den Router (montiert wird erst nach setup()); `permission` verlangt Anmeldung und Recht,
         `public=True` nichts."""
@@ -141,6 +155,14 @@ class ApiHandle:
         # Grenze: Der Host prüft nach `setup()` und `on_start()` (`check_routes`) und lehnt WebSocket,
         # `add_route()` und `mount()` ab; Routen, die später (etwa aus einem Hintergrundtask) an einen montierten Router
         # kommen, sieht er nicht, sie müssen sich selbst absichern.
+        if ssh_preflight and (public or permission != "hosts.execute"):
+            from nodvard_sdk.errors import InvalidRegistration
+
+            raise InvalidRegistration("SSH-Vorprüfungen brauchen permission='hosts.execute'.")
+        if ssh_read and (public or permission is None):
+            from nodvard_sdk.errors import InvalidRegistration
+
+            raise InvalidRegistration("SSH-Lesezugriffe brauchen eine geschützte Route mit Berechtigung.")
         if public and permission is not None:
             from nodvard_sdk.errors import InvalidRegistration
 
@@ -148,8 +170,8 @@ class ApiHandle:
                 f"Extension '{self._loaded.manifest.id}': include_router(public=True) "
                 f"verträgt sich nicht mit permission='{permission}'."
             )
-        if public and not rbac.has_permission(self._loaded.granted_permissions, PUBLIC_ROUTES_PERMISSION):
-            raise PermissionDenied(self._loaded.manifest.id, PUBLIC_ROUTES_PERMISSION)
+        if public:
+            self._perm.require(PUBLIC_ROUTES_PERMISSION)
         if self._loaded.router is None:
             from fastapi import APIRouter
 
@@ -171,6 +193,33 @@ class ApiHandle:
             from ..api.deps import require_permission
 
             dependencies.append(Depends(require_permission(permission)))
+            if permission in ("hosts.read", "hosts.execute") or ssh_read:
+                from ..core import gate
+
+                async def _read_access(request: Request):
+                    if request.method in ("GET", "HEAD") or ssh_preflight:
+                        from fastapi import HTTPException
+
+                        path_host = request.path_params.get("host_id")
+                        query_hosts = request.query_params.getlist("host_id")
+                        hosts = ([path_host] if path_host is not None else []) + query_hosts
+                        if hosts and (len(query_hosts) > 1 or len(set(hosts)) != 1 or not hosts[0].strip()):
+                            raise HTTPException(status_code=400, detail="Der Server muss eindeutig angegeben sein.")
+                        if not hosts:
+                            yield
+                            return
+                        operations = {"command"}
+                        if permission == "hosts.execute":
+                            operations.add("sftp_read")
+                        with gate.authorized_ssh(
+                            hosts[0], operations=frozenset(operations),
+                            ext_id=self._loaded.manifest.id,
+                        ):
+                            yield
+                    else:
+                        yield
+
+                dependencies.append(Depends(_read_access))
         else:
             from fastapi import Depends
 
@@ -180,7 +229,12 @@ class ApiHandle:
         if not public:
             self._guarded.append(router)
             self.check_routes()
-        self._loaded.router.include_router(router, prefix=prefix, tags=tags, dependencies=dependencies)
+        from ..api.responses import error_responses
+
+        responses = {} if public else error_responses(401, 403, 507)
+        self._loaded.router.include_router(
+            router, prefix=prefix, tags=tags, dependencies=dependencies, responses=responses,
+        )
         self.included.append((router, prefix, dependencies))
 
 
@@ -251,7 +305,36 @@ class CapabilitiesHandle:
         """Nur Capabilities von Extensions, die in `requires` deklariert sind (docs/02 §2); alte Kennungen in
         `requires` gelten weiter."""
         allowed = self._allowed | {self._runtime.canonical(ext_id) for ext_id in self._allowed}
+        from nodvard_sdk.capabilities import ServiceCatalog
+
+        if protocol is ServiceCatalog:
+            return [
+                _DelegatedServiceCatalog(impl, self._ext_id, provider_id)
+                for provider_id, impl in self._runtime.capabilities.query_named(protocol)
+                if provider_id in allowed
+            ]
         return self._runtime.capabilities.query(protocol, allowed_ext_ids=allowed)
+
+
+class _DelegatedServiceCatalog:
+    def __init__(self, implementation: Any, consumer_ext_id: str, provider_ext_id: str) -> None:
+        self._implementation = implementation
+        self._consumer_ext_id = consumer_ext_id
+        self._provider_ext_id = provider_ext_id
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, _DelegatedServiceCatalog):
+            other = other._implementation
+        return self._implementation == other
+
+    def __hash__(self) -> int:
+        return hash(self._implementation)
+
+    async def list_services(self) -> list[dict[str, Any]]:
+        from ..core import gate
+
+        with gate.delegated_ssh_read(self._consumer_ext_id, self._provider_ext_id):
+            return await self._implementation.list_services()
 
 
 class HostsHandle:
@@ -272,6 +355,10 @@ class HostsHandle:
         self._perm.require("hosts.read")
         async with session_scope() as session:
             host = await session.get(Host, host_id)
+            if host is None:
+                merged = await session.get(HostMerge, host_id)
+                if merged is not None:
+                    host = await session.get(Host, merged.host_id)
             return _host_to_sdk(host) if host else None
 
     async def by_name(self, name: str) -> SdkHost | None:
@@ -313,11 +400,13 @@ class HostsHandle:
                         host.tags.append(HostTag(tag=tag, managed_by_ext_id=self._ext_id))
                     await session.flush()
                 else:
-                    host.display_name = dh.display_name or host.display_name
+                    manual_entry = (host.host_metadata or {}).get("manual_entry")
+                    if not manual_entry:
+                        host.display_name = dh.display_name or host.display_name
                     # Proxmox kennt die Gast-IP einer VM oder eines LXC nicht und liefert als Platzhalter die Adresse
                     # der API; ein unbedingtes Überschreiben setzte bei jedem Abgleich eine von Hand korrigierte Gast-IP
                     # darauf zurück. Eine vom Gast gemeldete Adresse (`address_verified`) gilt immer.
-                    if host.kind not in ("vm", "lxc") or dh.address_verified:
+                    if not manual_entry and (host.kind not in ("vm", "lxc") or dh.address_verified):
                         if host.address != dh.address:
                             # Wie bei einer Änderung von Hand; bei Gästen (Adresse vom Gast, wechselt per DHCP) mit
                             # `spare_pinned`, Gründe in `forget_address_bound_access`.
@@ -337,7 +426,9 @@ class HostsHandle:
                                     },
                                 )
                         host.address = dh.address
-                    host.status = dh.status.value
+                    # Wartung setzt der Mensch, nicht der Anbieter: wie bei `set_status` bleibt sie stehen.
+                    if host.status != HostStatus.MAINTENANCE.value:
+                        host.status = dh.status.value
                     # Was dem Kern gehört (Beleg der letzten SSH-Anmeldung, letzte eigene Einrichtung) behalten.
                     from ..services.hosts import CORE_METADATA_KEYS
 
@@ -360,6 +451,11 @@ class HostsHandle:
                         host.tags.append(HostTag(tag=tag_str, managed_by_ext_id=self._ext_id))
                     await session.flush()
                 out.append(_host_to_sdk(host))
+            from ..services.host_merge import merge_discovered
+
+            merged = await merge_discovered(session)
+            if merged:
+                out = [_host_to_sdk(await session.get(Host, merged.get(host.id, host.id))) for host in out]
         return out
 
     async def mark_gone(self, provider_refs: list[str]) -> int:
@@ -436,6 +532,51 @@ def _join_argv(argv: Sequence[str]) -> str:
     return shlex.join(words)
 
 
+class SshSession:
+    def __init__(
+        self, handle: Any, conn: Any, target: ssh.ConnectionTarget, timeout_s: float, *,
+        credential_id: str | None = None, key_target: ssh.ConnectionTarget | None = None,
+        key_credential_id: str | None = None,
+    ) -> None:
+        self._handle, self._conn, self._target = handle, conn, key_target or target
+        self._timeout_s = timeout_s
+        self.username = target.username
+        self.credential_id = credential_id
+        self.key_credential_id = key_credential_id if key_target is not None else (
+            credential_id if target.kind == "ssh_key" else None
+        )
+        self.public_key = (
+            " ".join(asyncssh.import_private_key(target.secret_value).export_public_key().decode().split()[:2])
+            if target.kind == "ssh_key" else None
+        )
+        self.key_public_key = (
+            " ".join(asyncssh.import_private_key(self._target.secret_value).export_public_key().decode().split()[:2])
+            if self._target.kind == "ssh_key" else None
+        )
+
+    def _require_execution(self) -> None:
+        from ..core import gate
+
+        self._handle._perm.require("hosts.execute")
+        gate.require_execution(self._target.host_id, ext_id=self._handle._perm.ext_id)
+
+    async def run(self, command: str, *, timeout_s: int = 30) -> ExecResult:
+        self._require_execution()
+        await self._handle._reject_denied(command)
+        code, out, err = await ssh.run(self._conn, command, timeout_s=timeout_s)
+        return ExecResult(exit_code=code, stdout=out, stderr=err, duration_ms=0)
+
+    async def verify_key(self) -> None:
+        self._require_execution()
+        conn = await ssh.connect(None, self._target, connect_timeout_s=self._timeout_s, tofu=False, key_only=True)
+        try:
+            code, _, _ = await ssh.run(conn, "true", timeout_s=15)
+            if code != 0:
+                raise ssh.SshAuthError("Die SSH-Gegenprobe ist fehlgeschlagen.")
+        finally:
+            await ssh._close_quietly(conn)
+
+
 class ExecHandle:
     """Der gemeinsame SSH-Layer (`core/ssh.py`) für Extensions; der Klartext der Zugangsdaten lebt nur im
     Aufrufrahmen."""
@@ -444,7 +585,24 @@ class ExecHandle:
         self._perm = perm
         self._settings = settings
 
-    async def _resolve(self, host: SdkHost) -> tuple[ssh.ConnectionTarget, str, Any]:
+    @contextlib.contextmanager
+    def read_access(self, host: SdkHost, *, timeout_s: float = 30.0) -> Iterator[None]:
+        """Begrenzt Leseabfragen im Hintergrund auf diesen Server und höchstens 60 Sekunden."""
+        from ..core import gate
+
+        self._perm.require("hosts.read")
+        self._perm.require("hosts.execute")
+        if not 0 < timeout_s <= 60:
+            raise ValueError("Ein Lesekontext darf höchstens 60 Sekunden gelten.")
+        with gate.authorized_ssh(
+            host.id, operations=frozenset({"command"}), ext_id=self._perm.ext_id, timeout_s=timeout_s,
+        ):
+            yield
+
+    async def _resolve(
+        self, host: SdkHost, *, credential_id: str | None = None,
+    ) -> tuple[ssh.ConnectionTarget, str, Any]:
+        from ..models import HostCredential
         from ..services import hosts as hosts_service
 
         settings = self._settings
@@ -452,7 +610,14 @@ class ExecHandle:
             db_host = await session.get(Host, host.id)
             if db_host is None:
                 raise HostUnreachable(f"Host '{host.id}' existiert nicht (mehr).")
-            credential = await hosts_service.default_credential(session, host.id)
+            credential = (
+                await session.get(HostCredential, credential_id) if credential_id is not None
+                else await hosts_service.default_credential(session, host.id)
+            )
+            if credential_id is not None and (
+                credential is None or credential.host_id != host.id or credential.kind not in {"ssh_key", "ssh_password"}
+            ):
+                raise HostUnreachable("Der gewählte SSH-Zugang gehört nicht zu diesem Server oder existiert nicht mehr.")
             if credential is None:
                 # Typisch für einen von Hand angelegten Server, der schon getaggt, aber noch ohne SSH-Zugang ist.
                 raise HostUnreachable(
@@ -490,16 +655,48 @@ class ExecHandle:
                     hosts_service.clear_login_ok(db_host)
             raise
 
+    @asynccontextmanager
+    async def ssh_session(
+        self, host: SdkHost, *, credential_id: str | None = None, key_credential_id: str | None = None,
+    ) -> AsyncIterator[SshSession]:
+        from ..core import gate
+
+        self._perm.require("hosts.execute")
+        gate.require_execution(host.id, ext_id=self._perm.ext_id)
+        target, resolved_id, settings = (
+            await self._resolve(host, credential_id=credential_id) if credential_id is not None
+            else await self._resolve(host)
+        )
+        key_target = None
+        if key_credential_id is not None:
+            key_target = target if key_credential_id == resolved_id else (
+                await self._resolve(host, credential_id=key_credential_id)
+            )[0]
+            if key_target.kind != "ssh_key":
+                raise ValueError("Als Ziel muss ein SSH-Schlüssel gewählt werden.")
+            if (key_target.username, key_target.port) != (target.username, target.port):
+                raise ValueError("SSH-Zugang und Zielschlüssel müssen denselben Benutzer und Port verwenden.")
+        conn = await ssh.get_ssh_pool().get(
+            None, target, credential_id=resolved_id, connect_timeout_s=settings.ssh_connect_timeout_s,
+        )
+        yield SshSession(
+            self, conn, target, settings.ssh_connect_timeout_s, credential_id=resolved_id,
+            key_target=key_target, key_credential_id=key_credential_id,
+        )
+
     async def run(
         self, host: SdkHost, command: str, *, timeout_s: int = 60, user: str | None = None,
         log_command: str | None = None,
     ) -> ExecResult:
-        """Für lesende Kommandos ohne Nebenwirkung (ändernde Aktionen gehen über `ctx.actions.propose()`);
-        `log_command` maskiert die Audit-Zeile."""
-        # Extensions sind vertrauenswürdiger Code, keine Sandbox (docs/01 §7), und `run()` ist nur per Konvention auf
-        # lesende Kommandos beschränkt. Deshalb läuft jedes Kommando vor der Verbindung durch die Sperrliste: ohne
-        # Action-Zeile (niemand könnte bestätigen), aber mit Audit-Zeile.
+        """Führt eine autorisierte Leseabfrage oder freigegebene Aktion aus; `log_command` maskiert die Audit-Zeile."""
         self._perm.require("hosts.execute")
+        if user is not None:
+            # Befehle laufen immer mit dem hinterlegten Zugang. Still als dieser statt als `user` zu laufen, könnte
+            # root sein, wo der Aufrufer bewusst einen schwächeren Benutzer wollte.
+            raise ValueError(
+                f"ctx.exec.run: Ein eigener Benutzer ('{user}') wird nicht unterstützt, Befehle laufen mit dem "
+                "hinterlegten Zugang des Servers."
+            )
         return await self._run(host, command, timeout_s=timeout_s, log_command=log_command, stdin=None)
 
     async def run_argv(
@@ -521,7 +718,10 @@ class ExecHandle:
     async def _run(
         self, host: SdkHost, command: str, *, timeout_s: int, log_command: str | None, stdin: bytes | None,
     ) -> ExecResult:
+        from ..core import gate
+
         await self._reject_denied(command, log_command=log_command)
+        gate.require_execution(host.id, ext_id=self._perm.ext_id)
 
         import time
 
@@ -541,8 +741,7 @@ class ExecHandle:
         matched = deny_patterns.match_deny_patterns(command)
         if matched is None:
             return
-        from nodvard_sdk.errors import ActionBlocked
-
+        from ..core import gate
         from ..services import audit as audit_service
 
         async with session_scope() as session:
@@ -555,7 +754,7 @@ class ExecHandle:
                     "rule": f"deny_pattern:{matched.id}",
                 },
             )
-        raise ActionBlocked(f"deny_pattern:{matched.id}", matched.description)
+        raise gate.blocked(f"deny_pattern:{matched.id}", matched.description)
 
     def stream(self, host: SdkHost, command: str) -> Any:
         """Wie `run()` (Berechtigung und Sperrliste beim Betreten geprüft), aber mit laufender Ausgabe; beim
@@ -564,7 +763,10 @@ class ExecHandle:
 
         @asynccontextmanager
         async def _cm():
+            from ..core import gate
+
             await self._reject_denied(command)
+            gate.require_execution(host.id, ext_id=self._perm.ext_id)
             conn = await self._connection(host)
             async with ssh.open_command_stream(conn, command, posix_shell=host.os_family != "windows") as process:
 
@@ -592,8 +794,11 @@ class ExecHandle:
 
         @asynccontextmanager
         async def _cm():
+            from ..core import gate
+
             if command is not None:
                 await self._reject_denied(command)
+            gate.require_execution(host.id, operation="shell", ext_id=self._perm.ext_id)
             conn = await self._connection(host)
             async with ssh.open_shell(
                 conn, cols=cols, rows=rows, command=command, posix_shell=host.os_family != "windows"
@@ -607,15 +812,84 @@ class ExecHandle:
 
         @asynccontextmanager
         async def _cm():
+            from nodvard_sdk.errors import ActionBlocked
+
+            from ..core import gate
+
+            read_only = False
+            try:
+                gate.require_execution(host.id, operation="sftp", ext_id=self._perm.ext_id)
+            except ActionBlocked:
+                gate.require_execution(host.id, operation="sftp_read", ext_id=self._perm.ext_id)
+                read_only = True
             conn = await self._connection(host)
             sftp_client = await ssh.start_sftp(conn)
             try:
-                yield sftp_client
+                yield _ReadOnlySftp(sftp_client) if read_only else sftp_client
             finally:
                 sftp_client.exit()
-                await sftp_client.wait_closed()
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(sftp_client.wait_closed(), timeout=_SFTP_CLOSE_TIMEOUT_S)
 
         return _cm()
+
+
+class _ReadOnlySftp:
+    """Begrenzt SFTP-Vorprüfungen auf Dateiinhalte, Pfade und Dateiattribute."""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    async def realpath(self, path: str) -> Any:
+        return await self._client.realpath(path)
+
+    async def stat(self, path: str) -> Any:
+        return await self._client.stat(path)
+
+    async def lstat(self, path: str) -> Any:
+        return await self._client.lstat(path)
+
+    async def listdir(self, path: str) -> Any:
+        return await self._client.listdir(path)
+
+    def open(self, path: str, mode: str = "r") -> Any:
+        from ..core import gate
+
+        if mode not in ("r", "rb"):
+            raise gate.blocked("action_gate", "Dieser SFTP-Zugriff erlaubt nur das Lesen von Dateien.")
+        return self._open(path, mode)
+
+    @async_context_manager
+    async def _open(self, path: str, mode: str) -> Any:
+        return _ReadOnlySftpFile(await self._client.open(path, mode))
+
+
+class _ReadOnlySftpFile:
+    """Gibt von einem geöffneten SFTP-Dateihandle nur lesende Methoden weiter."""
+
+    def __init__(self, handle: Any) -> None:
+        self._handle = handle
+
+    async def __aenter__(self) -> _ReadOnlySftpFile:
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        await self.close()
+
+    async def read(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._handle.read(*args, **kwargs)
+
+    async def seek(self, *args: Any, **kwargs: Any) -> int:
+        return await self._handle.seek(*args, **kwargs)
+
+    async def tell(self) -> int:
+        return await self._handle.tell()
+
+    async def stat(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._handle.stat(*args, **kwargs)
+
+    async def close(self) -> None:
+        await self._handle.close()
 
 
 async def _is_login_secret(session: Any, secret: Secret) -> bool:
@@ -769,10 +1043,40 @@ class SettingsHandle:
         self._ext_id = ext_id
         # Die Registry-Zeile, in der die Einstellungen liegen (siehe `LoadedExtension.store_id`).
         self._store_id = store_id or ext_id
-        self._notifying = False
+        # Ein set() aus dem Hook (gleicher Task oder dessen Kinder) löst ihn nicht erneut aus; unabhängige Änderungen
+        # anderer Aufrufer warten, bis der laufende Hook fertig ist, und bekommen dann ihren eigenen.
+        self._in_hook: contextvars.ContextVar[bool] = contextvars.ContextVar(f"settings_hook_{ext_id}", default=False)
+        self._hook_lock = asyncio.Lock()
 
     def declare(self, schema: dict[str, Any]) -> None:
         self._loaded.settings_schema = schema
+
+    async def check_test_limit(self, *, actor: Actor) -> None:
+        from ..services import extension_test
+        from ..services.auth import user_has_permission
+
+        if not known_actors.is_known(str(getattr(actor.type, "value", actor.type)), actor.id):
+            raise PermissionDenied(self._ext_id, "extensions.manage")
+        async with session_scope() as session:
+            user = await session.get(User, actor.id)
+            if user is None or not user_has_permission(user, "extensions.manage"):
+                raise PermissionDenied(self._ext_id, "extensions.manage")
+        extension_test.check_rate_limit(actor.id)
+
+    async def save_test_result(self, *, ok: bool, message: str, actor: Actor, kind: str = "ok") -> None:
+        from ..services import extension_setup
+        from ..services.auth import user_has_permission
+
+        if not known_actors.is_known(str(getattr(actor.type, "value", actor.type)), actor.id):
+            raise PermissionDenied(self._ext_id, "extensions.manage")
+        async with session_scope() as session:
+            user = await session.get(User, actor.id)
+            if user is None or not user_has_permission(user, "extensions.manage"):
+                raise PermissionDenied(self._ext_id, "extensions.manage")
+            await extension_setup.record_test(
+                session, self._ext_id, ok=ok, message=message, actor_id=actor.id,
+                mode="connection", kind=kind,
+            )
 
     async def get(self) -> dict[str, Any]:
         from ..services.extensions import get_record
@@ -794,17 +1098,18 @@ class SettingsHandle:
         # Erst nach dem Commit, damit der Hook per get() die neuen Werte liest. Ein set() aus dem Hook löst ihn nicht
         # erneut aus, und ein Fehler im Hook lässt das gespeicherte set() nicht nachträglich scheitern.
         hook = getattr(self._loaded.instance, "on_settings_changed", None)
-        if hook is None or self._notifying:
+        if hook is None or self._in_hook.get():
             return
-        self._notifying = True
-        try:
-            # Wie beim Einschalten: Der Hook läuft nicht im Namen dessen, der speichert.
-            with known_actors.known_while(()):
-                await hook(self._loaded.ctx, dict(values))
-        except Exception:
-            logger.exception("on_settings_changed von %s ist fehlgeschlagen", self._ext_id)
-        finally:
-            self._notifying = False
+        async with self._hook_lock:
+            token = self._in_hook.set(True)
+            try:
+                # Wie beim Einschalten: Der Hook läuft nicht im Namen dessen, der speichert.
+                with known_actors.known_while(()):
+                    await hook(self._loaded.ctx, dict(values))
+            except Exception:
+                logger.exception("on_settings_changed von %s ist fehlgeschlagen", self._ext_id)
+            finally:
+                self._in_hook.reset(token)
 
     async def core(self, key: str) -> Any:
         if key not in CORE_SETTINGS_FOR_EXTENSIONS:
@@ -835,8 +1140,8 @@ class SchedulerHandle:
         self._store_id = store_id or ext_id
 
     async def register_job(self, spec: JobSpec) -> None:
-        from ..services import jobs as jobs_service
         from ..core.scheduler import get_scheduler_service
+        from ..services import jobs as jobs_service
 
         self._perm.require("schedule.register")
         async with session_scope() as session:
@@ -1105,6 +1410,7 @@ class ActionsHandle:
                 ext_id=self._ext_id,
                 request=request,
                 command_field=spec.command_field if spec is not None else None,
+                fingerprint_exclude_fields=spec.fingerprint_exclude_fields if spec is not None else (),
                 wait_s=wait_s,
             )
 
@@ -1170,6 +1476,19 @@ class ActionsHandle:
             labels = await load_actor_labels(session, own, viewer=None)
         out.update({row.id: labels.proposed_by(row) for row in own})
         return out
+
+    async def may_decide(self, actor: Actor, action_id: str) -> bool:
+        """Ob `actor` die eigene Aktion freigeben dürfte; dieselbe Prüfung wie die Freigabe-Route, fremde Aktionen nie."""
+        from ..services.auth import user_has_permission
+
+        if str(getattr(actor.type, "value", actor.type)) != "user":
+            return False
+        async with session_scope() as session:
+            row = await session.get(Action, action_id)
+            if row is None or row.ext_id not in self._own_ids:
+                return False
+            user = await session.get(User, str(actor.id))
+            return user is not None and user.is_active and user_has_permission(user, f"actions.approve:{row.risk}")
 
     async def result(self, action_id: str) -> Action | None:
         """Nur eigene Aktionen; ein erratenes fremdes `action_id` wäre ein Informationsleck."""
@@ -1554,8 +1873,9 @@ class HttpHandle:
             else:
                 ssl_context = ssl.create_default_context()
 
-        # `max_size=None`: Ein Bildschirm-Update ist ein einzelner großer Frame, das Standardlimit (1 MiB) bräche eine
-        # Konsole mit hoher Auflösung mitten in der Sitzung ab. `compression=None`: RFB-Rahmen sind schon kodiert,
+        # `max_size`: Ein Bildschirm-Update ist ein einzelner großer Frame, das Standardlimit (1 MiB) bräche eine
+        # Konsole mit hoher Auflösung mitten in der Sitzung ab; ganz ohne Grenze könnte ein übernommener Server den
+        # Speicher des ganzen Prozesses füllen (siehe `WEBSOCKET_MAX_MESSAGE_BYTES`). `compression=None`: RFB-Rahmen sind schon kodiert,
         # permessage-deflate kostet nur CPU. `proxy=None`: Seit websockets 15 nutzt `connect()` sonst `HTTP_PROXY`,
         # `WS_PROXY` und Co., und die Verbindung samt Zugangs-Header ginge an eine Stelle, die die Erweiterung nie
         # freigegeben bekam (deshalb `websockets>=15` in `backend/pyproject.toml`; ältere scheiterten mit `TypeError`).
@@ -1566,7 +1886,7 @@ class HttpHandle:
             subprotocols=subprotocols,  # type: ignore[arg-type]
             ssl=ssl_context,
             open_timeout=open_timeout_s,
-            max_size=None,
+            max_size=WEBSOCKET_MAX_MESSAGE_BYTES,
             compression=None,
             proxy=None,
         )
@@ -1580,6 +1900,11 @@ class HttpHandle:
             await client.aclose()
         if self._closing:
             await asyncio.gather(*self._closing, return_exceptions=True)
+
+
+WEBSOCKET_MAX_MESSAGE_BYTES = 64 * 1024 * 1024
+"""Größte Nachricht einer ausgehenden WebSocket-Verbindung (`ctx.http.websocket`): ein unkomprimiertes Bild in 4K
+(etwa 32 MiB) passt, eine größere beendet die Verbindung, statt den Speicher zu füllen."""
 
 
 class DbHandle:
@@ -1636,6 +1961,7 @@ class Context:
     http: HttpHandle
     logger: Any
     _loaded: LoadedExtension
+    _perm: _PermissionChecker
     _app_settings: Any
     """Die beim Laden aktiven `Settings`, nicht `config.get_settings()` (das ignorierte die des laufenden Hosts)."""
 
@@ -1690,7 +2016,7 @@ def build_context(
         ext_id=manifest.id,
         version=manifest.version,
         data_dir=PurePosixPath(str(ext_data_dir)),
-        api=ApiHandle(loaded),
+        api=ApiHandle(loaded, perm),
         ui=UiHandle(runtime, manifest.id),
         connectors=ConnectorsHandle(manifest.id, own_ids=[store, *manifest.legacy_ids]),
         capabilities=CapabilitiesHandle(runtime, manifest.id, manifest.requires),
@@ -1708,5 +2034,6 @@ def build_context(
         http=HttpHandle(perm, granted_permissions),
         logger=logging.getLogger(f"nodvard_deck.ext.{manifest.id}"),
         _loaded=loaded,
+        _perm=perm,
         _app_settings=settings,
     )

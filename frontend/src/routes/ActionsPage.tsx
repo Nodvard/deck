@@ -1,19 +1,9 @@
-/**
- * Aktionen-Seite: die Oberflaeche zum Propose+Confirm-Gate (docs/00-DECISIONS.md,
- * core/gate.py) ueber `GET/POST /actions*` (Liste, Details, approve/reject/dismiss).
- * Bei `autonomy.mode=propose` (Default) landet JEDE Aktion -- ob von Nodvard Shield
- * vorgeschlagen oder von einem Nutzer ueber eine Extension-Seite ausgeloest -- als
- * `status=proposed` in der `actions`-Tabelle und bliebe ohne diese Seite dort
- * liegen: hier wird sie bestaetigt oder abgelehnt.
- *
- * Core-Seite wie DashboardPage.tsx/FilesPage.tsx, keine Extension-Seite: die
- * `actions`-Tabelle ist kernseitig (docs/03 §1), unabhaengig davon, welche
- * Extension einen Vorschlag erzeugt hat.
- */
+/** Kernweite Vorschläge über /actions bestätigen, ablehnen oder verwerfen. */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useInRouterContext, useLocation } from "react-router-dom";
 
 import { LoadError } from "../components/LoadError";
+import { SAVE_ACTION_TYPE, SaveProposalView } from "../components/SaveProposalView";
 import { CARD_BODY, CARD_CELL, CARD_CELL_PLAIN, CARD_HEAD, CARD_ROW, CARD_TABLE } from "../components/cardTable";
 import { actionReason, describeActionOutcome, OUTCOME_TEXT_CLASS, OUTPUT_HIDDEN_HINT, type ActionOutcome } from "../lib/actionOutcome";
 import {
@@ -54,8 +44,8 @@ interface ActionOut {
   approved_by_user_id?: string | null;
   approved_by_label?: string | null;
   reason: string;
-  // Ergebnis der Ausfuehrung und Gate-Entscheidung (api/v1/actions.py ActionOut) --
-  // ohne diese Felder koennte die Seite keinen Fehlergrund zeigen.
+  // Ergebnis der Ausführung und Gate-Entscheidung (api/v1/actions.py ActionOut) --
+  // ohne diese Felder könnte die Seite keinen Fehlergrund zeigen.
   gate_decision: { rule?: string | null; detail?: string | null; user_reason?: string | null };
   result: { success?: boolean; error?: string | null };
   /** Ausgabe und Fehlertext fehlen, weil dem Nutzer die Server-Rechte fehlen. */
@@ -127,7 +117,7 @@ export function expiryText(expiresAt: string | null | undefined, nowMs: number):
   if (Number.isNaN(at)) return null;
   // Der Ablauf-Job räumt nur stündlich auf: bis dahin steht ein abgelaufener Vorschlag noch als offen da,
   // bestätigen lehnt der Kern aber schon ab.
-  if (at <= nowMs) return { text: "abgelaufen – kann nicht mehr bestätigt werden", soon: true };
+  if (at <= nowMs) return { text: "abgelaufen, kann nicht mehr bestätigt werden", soon: true };
   const minutes = Math.floor((at - nowMs) / 60000);
   if (minutes < 1) return { text: "läuft gleich ab", soon: true };
   if (minutes < 60) return { text: `läuft ab in ${minutes} Min.`, soon: true };
@@ -166,9 +156,9 @@ function errorMessage(err: unknown): ActionOutcome {
   return { tone: "error", text: `Fehler: ${err instanceof ApiError ? err.message : String(err)}` };
 }
 
-/** Sammel-Freigabe: Ergebnis je Aktion, gesammelt fuer die Zusammenfassung. */
+/** Sammel-Freigabe: Ergebnis je Aktion, gesammelt für die Zusammenfassung. */
 interface BulkTally {
-  /** Laeuft noch im Hintergrund (202 bzw. schon von woanders bestaetigt) -- wird nachgefragt. */
+  /** Läuft noch im Hintergrund (202 bzw. schon von woanders bestätigt) -- wird nachgefragt. */
   running: ActionOut[];
   /** Schon fertig gemeldet und erfolgreich. */
   done: number;
@@ -210,10 +200,10 @@ function summarizeFinished(finished: ActionOut[]): { text: string; failed: boole
   return { text: parts.join(", "), failed: failed.length > 0 };
 }
 
-/** So viele spaete Fehlschlaege aelterer Freigaben stehen hoechstens da. */
+/** So viele späte Fehlschläge älterer Freigaben stehen höchstens da. */
 const MAX_LATE_ERRORS = 5;
 
-/** Die Seite folgt der Adresse (`?action=`), auch wenn sich die Abfrage bei offener Seite aendert (Klick auf eine
+/** Die Seite folgt der Adresse (`?action=`), auch wenn sich die Abfrage bei offener Seite ändert (Klick auf eine
  * Meldung). Ohne Router (Tests, Vorschau) liest sie die Adresse des Fensters. */
 export function ActionsPage(): JSX.Element {
   return useInRouterContext() ? <RoutedActionsPage /> : <ActionsContent />;
@@ -226,6 +216,7 @@ function RoutedActionsPage(): JSX.Element {
 
 function ActionsContent({ search }: { search?: string }): JSX.Element {
   const hasPermission = useAuthStore((s) => s.hasPermission);
+  const me = useAuthStore((s) => s.user);
   const [statusFilter, setStatusFilter] = useState("proposed");
   const [actions, setActions] = useState<ActionOut[] | null>(null);
   // Die Restzeit offener Vorschläge läuft mit, auch wenn die Seite lange offen bleibt.
@@ -236,12 +227,12 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
   }, []);
   const [hostNames, setHostNames] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
-  // Mehrere Freigaben koennen gleichzeitig laufen (die Antwort dauert bis zu 20 s) --
-  // jede Zeile ist nur solange gesperrt, wie ihre eigene Anfrage laeuft.
+  // Mehrere Freigaben können gleichzeitig laufen (die Antwort dauert bis zu 20 s) --
+  // jede Zeile ist nur solange gesperrt, wie ihre eigene Anfrage läuft.
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(new Set());
   const [message, setMessage] = useState<ActionOutcome | null>(null);
-  // Fehlschlaege aelterer Freigaben, die erst nach dem Start einer neueren ankamen: sie
-  // duerfen die neuere Meldung nicht ersetzen, aber auch nicht verschwinden -- im
+  // Fehlschläge älterer Freigaben, die erst nach dem Start einer neueren ankamen: sie
+  // dürfen die neuere Meldung nicht ersetzen, aber auch nicht verschwinden -- im
   // Standardfilter ist die fehlgeschlagene Zeile nach dem Neuladen schon weg.
   const [lateErrors, setLateErrors] = useState<ActionOutcome[]>([]);
   // Sammel-Freigabe. `bulkRunning` (Ref) sperrt einen zweiten Klick sofort,
@@ -249,8 +240,8 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const bulkRunning = useRef(false);
-  // Zaehlt jede neue Meldungs-Runde: ein spaet eintreffendes Ergebnis einer aelteren
-  // Freigabe darf die neuere Meldung nicht ueberschreiben.
+  // Zählt jede neue Meldungs-Runde: ein spät eintreffendes Ergebnis einer älteren
+  // Freigabe darf die neuere Meldung nicht überschreiben.
   const messageSeq = useRef(0);
   // Laufende Nachfragen zu Aktionen im Hintergrund enden mit der Seite.
   const pollAbort = useRef<AbortController | null>(null);
@@ -287,7 +278,7 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
         })
         .catch((err: unknown) => {
           // Nur "gibt es nicht" oder "darfst du nicht sehen" heisst: die Aktion ist weg. Ein Netz- oder Serverfehler
-          // laesst die zuletzt geladene Zeile stehen und sagt, was los ist.
+          // lässt die zuletzt geladene Zeile stehen und sagt, was los ist.
           if (err instanceof ApiError && (err.status === 404 || err.status === 403)) {
             setFocused(null);
             setFocusMissing(true);
@@ -378,7 +369,7 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
     return hostNames[hostId] ?? hostId;
   }
 
-  /** Beginnt eine neue Meldungs-Runde und liefert ihre Nummer fuer `showMessage`. */
+  /** Beginnt eine neue Meldungs-Runde und liefert ihre Nummer für `showMessage`. */
   function clearMessage(): number {
     messageSeq.current += 1;
     setMessage(null);
@@ -387,9 +378,9 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
   }
 
   /** Zeigt die Meldung nur, wenn seit `seq` keine neuere Runde begonnen hat -- die
-   * Antwort einer aelteren Freigabe kommt oft erst nach der einer neueren an. Ein
-   * Fehlschlag einer aelteren Runde wird trotzdem gezeigt (zusaetzlich, mit dem Namen der
-   * Aktion); nur Erfolge und Zwischenstaende einer aelteren Runde fallen still weg. */
+   * Antwort einer älteren Freigabe kommt oft erst nach der einer neueren an. Ein
+   * Fehlschlag einer älteren Runde wird trotzdem gezeigt (zusätzlich, mit dem Namen der
+   * Aktion); nur Erfolge und Zwischenstände einer älteren Runde fallen still weg. */
   function showMessage(seq: number, next: ActionOutcome, action?: ActionOut) {
     if (seq === messageSeq.current) {
       setMessage(next);
@@ -400,7 +391,7 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
     setLateErrors((prev) => (prev.some((e) => e.text === text) ? prev : [...prev, { tone: "error" as const, text }].slice(-MAX_LATE_ERRORS)));
   }
 
-  /** Die Befehle der Aktionen, damit die Rueckfrage zeigt, was wirklich laeuft. */
+  /** Die Befehle der Aktionen, damit die Rückfrage zeigt, was wirklich läuft. */
   function describeCommands(batch: ActionOut[]): string {
     const lines = batch.flatMap((a) => {
       const command = commandOf(a);
@@ -411,7 +402,7 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
     return lines.length > 0 ? `\n\nBefehle:\n${lines.join("\n\n")}` : "";
   }
 
-  /** Kurze Aufzaehlung fuer die Rueckfrage: Typ x Anzahl und betroffene Server. */
+  /** Kurze Aufzählung für die Rückfrage: Typ x Anzahl und betroffene Server. */
   function describeBatch(batch: ActionOut[]): string {
     const types = new Map<string, number>();
     const hosts = new Set<string>();
@@ -431,8 +422,8 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
     showMessage(seq, { tone: outcome.tone, text: `${actionLabel(action)}: ${outcome.text}` }, action);
   }
 
-  /** Die Aktion laeuft noch im Hintergrund -- nachfragen, bis sie fertig
-   * ist, dann das Ergebnis melden. Die Knoepfe sind in der Zeit schon wieder frei. */
+  /** Die Aktion läuft noch im Hintergrund -- nachfragen, bis sie fertig
+   * ist, dann das Ergebnis melden. Die Knöpfe sind in der Zeit schon wieder frei. */
   async function follow(seq: number, action: ActionOut) {
     try {
       const res = await waitForAction<ActionOut>(action.id, { signal: pollAbort.current?.signal });
@@ -461,7 +452,7 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && /jetzt: '(approved|executing)'/.test(err.message)) {
-        // Schon anderswo bestaetigt (zweiter Klick, anderer Tab) und laeuft noch --
+        // Schon anderswo bestätigt (zweiter Klick, anderer Tab) und läuft noch --
         // kein Fehler, sondern dasselbe wie ein 202: nachfragen bis zum Ergebnis.
         showMessage(seq, { tone: "pending", text: `${actionLabel(action)}: Wurde schon bestätigt. ${RUNNING_IN_BACKGROUND_TEXT}` });
         void follow(seq, action);
@@ -470,14 +461,14 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
       }
     } finally {
       // Auch nach einem Fehler neu laden: bei 409 (inzwischen abgelaufen/entschieden)
-      // blieb sonst die veraltete Zeile mit aktiven Knoepfen stehen.
+      // blieb sonst die veraltete Zeile mit aktiven Knöpfen stehen.
       load();
       markBusy(action.id, false);
     }
   }
 
   async function reject(action: ActionOut) {
-    const reason = await promptDialog(`Ablehnen von "${actionLabel(action)}" – Begründung:`);
+    const reason = await promptDialog(`Ablehnen von "${actionLabel(action)}", Begründung:`);
     if (!reason) return;
     markBusy(action.id, true);
     const seq = clearMessage();
@@ -508,9 +499,9 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
     }
   }
 
-  /** Jede ausgewaehlte Aktion einzeln freigeben -- jede geht durch das Gate
-   * und ihre eigene Rechtepruefung. `?wait=0`: die API wartet nicht auf das Ergebnis,
-   * sonst haengt der Sammelklick bis zu 20 s pro Aktion. */
+  /** Jede ausgewählte Aktion einzeln freigeben -- jede geht durch das Gate
+   * und ihre eigene Rechteprüfung. `?wait=0`: die API wartet nicht auf das Ergebnis,
+   * sonst hängt der Sammelklick bis zu 20 s pro Aktion. */
   async function approveSelected() {
     if (bulkRunning.current || approvable.length === 0) return;
     const batch = approvable;
@@ -533,7 +524,7 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
           else tally.failed.push(actionReason(res) ?? describeActionOutcome(res).text);
         } catch (err) {
           if (err instanceof ApiError && err.status === 409 && /jetzt: '(approved|executing)'/.test(err.message)) {
-            tally.running.push(action); // schon anderswo bestaetigt -- wie ein 202
+            tally.running.push(action); // schon anderswo bestätigt -- wie ein 202
           } else if (err instanceof ApiError && err.status === 409) {
             tally.stale += 1;
           } else if (err instanceof ApiError && err.status === 403) {
@@ -559,7 +550,7 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
     }
   }
 
-  /** Wie `follow()`, nur fuer mehrere: erst wenn alle fertig sind, steht das Ergebnis da. */
+  /** Wie `follow()`, nur für mehrere: erst wenn alle fertig sind, steht das Ergebnis da. */
   async function followBatch(running: ActionOut[], head: string) {
     const signal = pollAbort.current?.signal;
     const seq = messageSeq.current;
@@ -573,8 +564,8 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
       else gaveUp += 1;
     }
     const { text, failed } = summarizeFinished(finished);
-    const tail = [text, gaveUp > 0 ? `${gaveUp} laufen noch – ${GAVE_UP_WAITING_TEXT}` : ""].filter(Boolean).join(", ");
-    // Eine neuere Meldung gibt es schon: ein Erfolg faellt still weg, ein Fehlschlag kommt dazu.
+    const tail = [text, gaveUp > 0 ? `${gaveUp} laufen noch, ${GAVE_UP_WAITING_TEXT}` : ""].filter(Boolean).join(", ");
+    // Eine neuere Meldung gibt es schon: ein Erfolg fällt still weg, ein Fehlschlag kommt dazu.
     showMessage(seq, { tone: failed || gaveUp > 0 ? "error" : "success", text: `${head}. Ergebnis: ${tail}` });
   }
 
@@ -673,7 +664,7 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
 
       {hasSingleOnly && (
         <p className="mb-3 text-xs opacity-70">
-          Aktionen mit hohem oder kritischem Risiko gibt „Ausgewählte freigeben“ nicht mit frei. Bestätige sie einzeln – so siehst du jeden Befehl, bevor er läuft.
+          Aktionen mit hohem oder kritischem Risiko gibt „Ausgewählte freigeben“ nicht mit frei. Bestätige sie einzeln, so siehst du jeden Befehl, bevor er läuft.
         </p>
       )}
 
@@ -756,6 +747,10 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
                         </pre>
                       ) : (
                         a.payload_hidden && <p className="mt-1 max-w-xs break-words text-xs opacity-70">{COMMAND_HIDDEN_HINT}</p>
+                      )}
+                      {a.action_type === SAVE_ACTION_TYPE && a.status === "proposed" && a.host_id && typeof a.payload?.project === "string"
+                        && (canDecide || (a.proposed_by_type === "user" && a.proposed_by_id === me?.id)) && (
+                        <SaveProposalView hostId={a.host_id} project={a.payload.project} actionId={a.id} />
                       )}
                     </td>
                     <td role="cell" data-label="Server" className={`${CARD_CELL} py-1.5`}>{hostLabel(a.host_id)}</td>

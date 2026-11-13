@@ -51,6 +51,48 @@ art = "sdk_name_entfernt"
 begruendung = "Alter Klassenname von `NodvardError`, fällt mit dem Paket `lattice_sdk` weg (siehe dort)."
 
 [[ausnahmen]]
+pfad = "nodvard_sdk.context.ExecHandle"
+methode = "SDK"
+art = "sdk_verhalten_geaendert"
+ziel = "run"
+begruendung = "SSH verlangt zusätzlich zu hosts.execute einen passenden Freigabekontext und wirft sonst vor dem Verbindungsaufbau ActionBlocked mit action_gate. Ungeprüfte direkte Aufrufe als Übergang würden versehentliche Änderungen weiter zulassen. Änderungen gehören in ActionExecutor.execute mit eindeutigem host_ref, Hintergrundabfragen und Jobs in read_access je Host. Routen erhalten nur mit eindeutigem host_id im Pfad oder Query einen Kontext. Diese Kontexte prüfen den Befehlsinhalt nicht auf Schreibzugriffe."
+
+[[ausnahmen]]
+pfad = "nodvard_sdk.context.ExecHandle"
+methode = "SDK"
+art = "sdk_verhalten_geaendert"
+ziel = "run_argv"
+begruendung = "Wie run: Ohne Freigabekontext endet der Aufruf mit ActionBlocked(action_gate); argv-Quoting ersetzt keine Freigabe. Eine Übergangsausnahme würde direkte Änderungen weiter zulassen."
+
+[[ausnahmen]]
+pfad = "nodvard_sdk.context.ExecHandle"
+methode = "SDK"
+art = "sdk_verhalten_geaendert"
+ziel = "stream"
+begruendung = "Wie run: Der Freigabekontext wird beim Betreten des Streams verlangt, sonst ActionBlocked(action_gate). Eine Übergangsausnahme würde direkte Änderungen weiter zulassen."
+
+[[ausnahmen]]
+pfad = "nodvard_sdk.context.ExecHandle"
+methode = "SDK"
+art = "sdk_verhalten_geaendert"
+ziel = "stream_argv"
+begruendung = "Wie stream: Der Freigabekontext wird beim Betreten geprüft, unabhängig vom argv-Quoting. Eine Übergangsausnahme würde direkte Änderungen weiter zulassen."
+
+[[ausnahmen]]
+pfad = "nodvard_sdk.context.ExecHandle"
+methode = "SDK"
+art = "sdk_verhalten_geaendert"
+ziel = "open_shell"
+begruendung = "Shells verlangen beim Betreten eine laufende Aktion oder eine gesonderte Shell-Freigabe des Kerns; Lesekontexte genügen nicht. Sonst ActionBlocked(action_gate). Eine Übergangsausnahme würde beliebige direkte Änderungen weiter zulassen."
+
+[[ausnahmen]]
+pfad = "nodvard_sdk.context.ExecHandle"
+methode = "SDK"
+art = "sdk_verhalten_geaendert"
+ziel = "sftp"
+begruendung = "SFTP verlangt beim Betreten eine Aktion oder eine gesonderte SFTP-Freigabe des Kerns; geschützte Routen mit hosts.execute erlauben nur Lesen. Sonst ActionBlocked(action_gate). Eine Übergangsausnahme würde direkte Dateiänderungen weiter zulassen."
+
+[[ausnahmen]]
 pfad = "nodvard_sdk.errors.LatticeError"
 methode = "SDK"
 art = "sdk_name_entfernt"

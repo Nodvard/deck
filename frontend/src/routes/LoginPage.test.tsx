@@ -7,7 +7,7 @@ import { useBrandingStore } from "../state/branding";
 import { DECK_EDITION, useEditionStore } from "../state/edition";
 import { LoginPage } from "./LoginPage";
 
-// Einzelne Tests ersetzen login/submitMfa im Store -- vor jedem Test die echten zurueck.
+// Einzelne Tests ersetzen login/submitMfa im Store -- vor jedem Test die echten zurück.
 const { login: realLogin, submitMfa: realSubmitMfa } = useAuthStore.getState();
 
 function renderLogin(fetchImpl?: (input: RequestInfo | URL) => Promise<Response>) {
@@ -239,7 +239,7 @@ describe("LoginPage", () => {
     fireEvent.change(screen.getByLabelText("Passwort"), { target: { value: "geheim" } });
     fireEvent.click(screen.getByRole("button", { name: "Anmelden" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Server nicht erreichbar – bitte gleich noch einmal versuchen.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Server nicht erreichbar, bitte gleich noch einmal versuchen.");
     expect(screen.getByRole("button", { name: "Anmelden" })).toBeEnabled();
   });
 
@@ -249,7 +249,7 @@ describe("LoginPage", () => {
     fireEvent.change(screen.getByLabelText("Sechsstelliger Code"), { target: { value: "123456" } });
     fireEvent.click(screen.getByRole("button", { name: "Bestätigen" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Server nicht erreichbar – bitte gleich noch einmal versuchen.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Server nicht erreichbar, bitte gleich noch einmal versuchen.");
     expect(screen.getByRole("button", { name: "Bestätigen" })).toBeEnabled();
     expect(useAuthStore.getState().mfaToken).toBe("mfa");
   });

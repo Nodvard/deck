@@ -35,11 +35,11 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install --no-install-recommends -y tesseract-ocr tesseract-ocr-deu
       - run: pip install -c deploy/constraints.txt -e sdk/python -e "backend[dev]"
       - run: pytest sdk/python/tests backend/tests
-      # Sicherungen mit fremden Dateibesitzern, Einrichtung unter BusyBox und die Scansperre von Shield brauchen root.
+      # Sicherungen mit fremden Dateibesitzern, Einrichtung unter BusyBox, die Scansperre und Besitzer-Prüfungen von Shield, der Rechte-Abwurf im Entrypoint und die Statusdatei eines fremden Besitzers im Update-Helfer brauchen root.
       # Im normalen Lauf werden diese Fälle übersprungen. Hier laufen sie als root, mit Grund für weitere Skips (-rs).
       # backup.sh und restore.sh laufen aus einer Kopie im Temp-Ordner. Kein Cache und kein Bytecode, damit nichts
       # root-Eigenes im Checkout liegen bleibt.
-      - run: sudo -E env "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -rs -p no:cacheprovider -m needs_root backend/tests/test_deploy_switch.py backend/tests/test_host_setup_script.py backend/tests/test_ext_shield_root_helper_scan.py
+      - run: sudo -E env "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -rs -p no:cacheprovider -m needs_root backend/tests/test_deploy_switch.py backend/tests/test_host_setup_script.py backend/tests/test_ext_shield_root_helper_scan.py backend/tests/test_deploy_entrypoint.py backend/tests/test_ext_shield_root_helper_actions.py backend/tests/test_ext_shield_antivirus.py backend/tests/test_updater_client.py
       # Update-Helfer (deploy/updater): nur Standardbibliothek, ohne Installation und ohne Backend-conftest -- eigener Aufruf.
       - run: python -m pytest deploy/updater/tests
       # Dieselben Tests noch einmal als root (der Runner hat sudo ohne Passwort): nur dann koennen Dateien einem anderen
@@ -202,6 +202,8 @@ jobs:
       - run: npm run test:csp:install -- --with-deps
         working-directory: frontend
       - run: npm run test:csp
+        working-directory: frontend
+      - run: npm run test:mobile
         working-directory: frontend
       - run: npm run build
         working-directory: frontend

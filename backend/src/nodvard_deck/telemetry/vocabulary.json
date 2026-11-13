@@ -1,0 +1,4 @@
+{
+  "installation": ["docker", "pi", "sonstiges"],
+  "module": ["backups", "docker", "documents", "gameserver", "hello-world", "home-assistant", "inventory", "jellyfin", "network", "nextcloud", "npm", "ntfy", "pihole", "plex", "proxmox", "qbittorrent", "scripts", "shield", "synology", "system", "terminal", "uptime-kuma", "vaultwarden"]
+}

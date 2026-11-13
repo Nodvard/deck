@@ -120,6 +120,10 @@ def images() -> str:
     return _docker("images", "--format", "{{json .}}")
 
 
+def image_ids() -> str:
+    return _docker("image", "ls", "-a", "-q", "--no-trunc")
+
+
 def inspect_container(name: str) -> str:
     return _docker("inspect", "--type", "container", _name(name))
 
@@ -130,6 +134,10 @@ def container_id(name: str) -> str:
 
 def container_full_id(name: str) -> str:
     return _docker("inspect", "--type", "container", "-f", "{{.Id}}", _name(name))
+
+
+def container_id_image(name: str) -> str:
+    return _docker("inspect", "--type", "container", "-f", "{{.Id}}|{{.Config.Image}}", _name(name))
 
 
 def container_id_state(name: str) -> str:

@@ -20,6 +20,7 @@ import textwrap
 import threading
 import time
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -68,6 +69,8 @@ class Setup:
         (self.root / "requests").mkdir()
         (self.root / "requests").chmod(0o1777)
         self.state_dir = self.lab.state_dir
+        (self.state_dir / "request-key.pub").write_text(public_key(OTHER_SEED).hex(), encoding="ascii")
+        (self.state_dir / "request-key.pub").chmod(0o600)
         self.world = self.lab.world
         self.fake = self.lab.fake
         self.clock = self.lab.clock
@@ -112,21 +115,50 @@ class Setup:
     def request(self, action="update", version="0.7.1", *, rid=None, created_at=None, raw=None) -> str:
         rid = rid or str(uuid.uuid4())
         created_at = int(self.clock.t) if created_at is None else created_at
+        if raw is None and action == "update":
+            tag = self.target["Config"]["Image"].removeprefix(policy.REPOSITORY).lstrip(":") or "latest"
+            digest = self.world.tags.get(tag, "sha256:" + "4f" * 32)
+            return self.signed_request(version, digest=digest, rid=rid, created_at=created_at)
+        if raw is None and action == "rollback":
+            return self.signed_rollback(version, rid=rid, created_at=created_at)
         data = raw if raw is not None else json.dumps(
             {"v": 1, "id": rid, "action": action, "version": version, "created_at": created_at}).encode()
         (self.root / "requests" / f"{rid}.json").write_bytes(data)
         return rid
 
     def signed_request(self, version="0.7.1", *, digest, rid=None, created_at=None, seed=SEED, grant=None,
-                       sig=None) -> str:
+                       sig=None, request_seed=OTHER_SEED) -> str:
         now = int(self.clock.t) if created_at is None else created_at
         doc = {"fmt": 1, "repo": policy.REPOSITORY, "version": version, "digest": digest,
                "key_id": trust.key_id(public_key(seed)), "issued_at": now - 60, "expires_at": now + 86400,
                **(grant or {})}
         rid = rid or str(uuid.uuid4())
-        request = {"v": 2, "id": rid, "action": "update", "version": version, "created_at": now, "digest": digest,
+        request = {"v": 3, "id": rid, "action": "update", "version": version, "created_at": now, "digest": digest,
                    "grant": doc, "sig": sig or sign(seed, policy.dumps(doc)).hex()}
+        request["request_key_id"] = trust.key_id(public_key(request_seed))
+        request["request_sig"] = sign(request_seed, policy.REQUEST_DOMAIN + policy.dumps(request)).hex()
         return self.request(rid=rid, raw=json.dumps(request).encode())
+
+    def signed_rollback(self, version="0.7.0", *, rid=None, created_at=None, request_seed=OTHER_SEED,
+                        request_sig=None) -> str:
+        """Ein Rückweg mit `v: 3`, signiert mit dem Installationsschlüssel (`request_seed`)."""
+        rid = rid or str(uuid.uuid4())
+        now = int(self.clock.t) if created_at is None else created_at
+        request = {"v": 3, "id": rid, "action": "rollback", "version": version, "created_at": now,
+                   "request_key_id": trust.key_id(public_key(request_seed))}
+        request["request_sig"] = request_sig or sign(request_seed, policy.REQUEST_DOMAIN + policy.dumps(request)).hex()
+        return self.request(rid=rid, raw=json.dumps(request).encode())
+
+    def unlimited_signatures(self, monkeypatch) -> None:
+        """Hebt nur die Grenze „eine Signatur je Runde“ auf (gerechnet wird weiter), damit ein Test die Grenzen
+        dahinter (ein Ablauf, eine Vorprüfung je Runde) mit mehreren gültigen Anforderungen sieht."""
+        check = self.helper._check_signature
+
+        def every_time(*args):
+            self.helper._signature_in_round = False
+            return check(*args)
+
+        monkeypatch.setattr(self.helper, "_check_signature", every_time)
 
     def pending(self) -> list[str]:
         return sorted(p.name for p in (self.root / "requests").iterdir())
@@ -219,7 +251,7 @@ def test_start_writes_a_ready_status(env):
     env.start()
     status = env.status()
     assert status["proto"] == policy.PROTOCOL and status["helper_version"] == __version__
-    assert status["request_versions"] == [1, 2] and status["request_options"] == ["digest"]
+    assert status["request_versions"] == [1, 2, 3] and status["request_options"] == ["digest"]
     assert (status["state"], status["ready"], status["reason"]) == ("idle", True, None)
     assert status["target"] == {"current_version": "0.7.0", "floating_tag": "latest", "pinned": False}
     assert status["heartbeat_at"] == NOW and status["busy"] is None and status["previous"] is None
@@ -758,7 +790,7 @@ def test_with_the_project_keys_a_test_grant_counts_for_nothing(env):
     env.trusted_keys = None
     env.restart()
     env.start()
-    assert env.status()["request_versions"] == [1, 2]
+    assert env.status()["request_versions"] == [1, 2, 3]
     rid = env.signed_request(digest=digest)
     env.tick(NOW + 5)
     assert env.outcome(rid) == ("refused", policy.UNKNOWN_KEY)
@@ -801,11 +833,13 @@ def test_a_valid_grant_for_an_older_version_brings_nothing_back(env):
     assert env.world.mutations == []
 
 
-def test_once_required_an_unsigned_update_is_refused(env, monkeypatch):
-    monkeypatch.setattr(policy, "UPDATE_REQUIRES_SIGNATURE", True)
+def test_once_required_an_unsigned_update_is_refused(env):
+    assert policy.UPDATE_REQUIRES_SIGNATURE is True
     _image, digest = env.lab.release("0.7.1")
     env.start()
-    unsigned = env.request()
+    unsigned = str(uuid.uuid4())
+    env.request(rid=unsigned, raw=policy.dumps({"v": 1, "id": unsigned, "action": "update", "version": "0.7.1",
+                                              "created_at": NOW}))
     with_digest = str(uuid.uuid4())
     env.request(rid=with_digest, raw=json.dumps({"v": 1, "id": with_digest, "action": "update", "version": "0.7.1",
                                                  "created_at": NOW, "digest": digest}).encode())
@@ -818,14 +852,29 @@ def test_once_required_an_unsigned_update_is_refused(env, monkeypatch):
     assert env.outcome(signed) == ("applied", None)
 
 
-def test_at_most_one_flow_per_round(env):
-    # Zwei gültige Anforderungen in einer Runde: Die erste läuft (und scheitert hier an der Registry, das zählt nicht
-    # für die Grenze), die zweite bekommt `busy` statt eines zweiten Ablaufs gleich hinterher.
+def test_at_most_one_flow_per_round(env, monkeypatch):
     env.start()
-    first, second = env.request(), env.request()
+    env.unlimited_signatures(monkeypatch)
+    first, second = env.request(), env.request("rollback", "0.7.0")
+    poll = env.channel.poll
+
+    def ordered_poll(**kwargs):
+        result = poll(**kwargs)
+        return replace(result, items=tuple(sorted(result.items, key=lambda item: item.id != first)))
+
+    monkeypatch.setattr(env.channel, "poll", ordered_poll)
+    calls = []
+    execute = env.helper._execute
+
+    def counted(*args):
+        calls.append(args[1].id)
+        return execute(*args)
+
+    monkeypatch.setattr(env.helper, "_execute", counted)
     env.tick(NOW + 5)
-    assert sorted([env.outcome(first), env.outcome(second)]) == [
-        ("refused", policy.BUSY), ("refused", policy.PULL_FAILED)]
+    assert env.outcome(first) == ("refused", policy.PULL_FAILED)
+    assert env.outcome(second) == ("refused", policy.BUSY)
+    assert calls == [first]
     assert len(env.fake.calls("GET", r"/distribution/.+")) == 1
     assert saved_state(env)["actions"] == []
 
@@ -852,21 +901,23 @@ def test_rollback_on_request_goes_back_once(env):
     assert env.outcome(again) == ("refused", policy.BLOCKED_VERSION)  # 24 h kein Update auf die verlassene Version
 
 
-def test_requests_get_a_fresh_preflight_but_only_one_per_round(env):
+def test_requests_get_a_fresh_preflight_but_only_one_per_round(env, monkeypatch):
     env.start()
 
     def lists():
         return len(env.fake.calls("GET", "/containers/json"))
 
+    env.unlimited_signatures(monkeypatch)
     before = lists()
-    env.request("update", "0.7.0")
+    first = env.request("rollback", "0.7.0")
     env.tick(NOW + 5)
+    assert env.outcome(first) == ("refused", policy.NO_PREVIOUS)
     after_one = lists()
-    assert after_one > before
-    for _ in range(10):
-        env.request("update", "0.7.0")
+    assert after_one - before == 2
+    requests = [env.request("rollback", "0.7.0") for _ in range(10)]
     env.tick(NOW + 10)
-    assert lists() - after_one == after_one - before  # zehn Anforderungen: eine Vorprüfung
+    assert lists() - after_one == 2
+    assert all(env.outcome(rid) == ("refused", policy.NO_PREVIOUS) for rid in requests)
 
 
 @pytest.mark.parametrize(("action", "version", "expected"), [

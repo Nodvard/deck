@@ -2,12 +2,13 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 import { kitDedupe, kitFsAllow } from "./kit.resolve";
+import { xtermCsp } from "./xterm.csp";
 
 // Proxy auf :8080 im Entwicklungsbetrieb (docs/00-DECISIONS.md D-03: das Frontend wird
 // im Produktivbetrieb vom Backend als StaticFiles ausgeliefert -- ein Port, ein Dienst.
 // Im Dev-Modus laufen zwei Server, deshalb der Proxy statt CORS-Konfiguration).
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), xtermCsp()],
   // Kern-Seiten nutzen das UI-Kit (extensions/_shared) direkt, wie die Erweiterungen (kit.resolve.ts).
   resolve: { dedupe: kitDedupe },
   // Kennung dieses Builds: haengt an den Extension-Bundles, damit der Browser nach
@@ -17,7 +18,7 @@ export default defineConfig({
   // WebCodecs-Pruefung) -- Vites Default-Ziel (es2020) kann das nicht ausgeben und
   // bricht den Build ab. es2022 koennen alle Browser, die Lattice ohnehin braucht.
   build: { target: "es2022" },
-  optimizeDeps: { esbuildOptions: { target: "es2022" } },
+  optimizeDeps: { exclude: ["@xterm/xterm"], esbuildOptions: { target: "es2022" } },
   server: {
     fs: { allow: kitFsAllow },
     proxy: {

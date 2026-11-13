@@ -7,7 +7,10 @@ import importlib.util
 import json
 import stat
 import sys
+from email.message import Message
+from io import BytesIO
 from pathlib import Path
+from urllib.response import addinfourl
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -82,26 +85,21 @@ def test_the_helper_check_stops_a_bad_digest(tool, key):
 def _fake_registry(monkeypatch, tool, manifest: bytes, header: str | None):
     asked = []
 
-    class Answer:
-        def __init__(self, body: bytes, headers: dict[str, str]):
-            self.body, self.headers = body, headers
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-        def read(self, limit):
-            return self.body[:limit]
-
-    def urlopen(request, timeout):
+    def respond(handler, request):
         asked.append((request.full_url, dict(request.header_items())))
+        headers = Message()
         if request.full_url.startswith("https://ghcr.io/token?"):
-            return Answer(b'{"token": "anon"}', {})
-        return Answer(manifest, {} if header is None else {"Docker-Content-Digest": header})
+            body = b'{"token": "anon"}'
+        else:
+            body = manifest
+            if header is not None:
+                headers["Docker-Content-Digest"] = header
+        response = addinfourl(BytesIO(body), headers, request.full_url, 200)
+        response.msg = "OK"
+        return response
 
-    monkeypatch.setattr(tool.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(tool.urllib.request, "getproxies", lambda: {})
+    monkeypatch.setattr(tool.urllib.request.HTTPSHandler, "https_open", respond)
     return asked
 
 
@@ -252,11 +250,12 @@ def test_without_a_valid_expected_digest_nothing_is_asked(tool, monkeypatch, tmp
 
 
 def test_no_answer_from_ghcr_signs_nothing(tool, monkeypatch, tmp_path, capsys):
-    def unreachable(request, timeout):
+    def unreachable(handler, request):
         raise OSError("Netz weg")
 
     tool.make_keys(tmp_path / "keys", PASSWORD)
-    monkeypatch.setattr(tool.urllib.request, "urlopen", unreachable)
+    monkeypatch.setattr(tool.urllib.request, "getproxies", lambda: {})
+    monkeypatch.setattr(tool.urllib.request.HTTPSHandler, "https_open", unreachable)
     monkeypatch.setattr(tool, "_password", lambda prompt, **kw: pytest.fail("kein Passwort ohne Digest"))
     code = tool.main(["sign", "v0.12.0", "--key", str(tmp_path / "keys" / "release-ed25519-current.pem"),
                       "--out", str(tmp_path / "out"), "--expect-digest", INDEX_DIGEST])
@@ -269,3 +268,76 @@ def test_trust_registry_signs_what_ghcr_delivers_with_a_warning(tool, monkeypatc
     assert code == 0
     assert f"Ohne Vergleich: ghcr.io liefert für 0.12.0 {INDEX_DIGEST}" in capsys.readouterr().err
     assert json.loads((out / tool.GRANT_NAME).read_bytes())["digest"] == INDEX_DIGEST
+
+
+def test_attestation_check_is_optional(tool, monkeypatch, tmp_path):
+    monkeypatch.setattr(tool.subprocess, "run", lambda *a, **kw: pytest.fail("keine Herkunftsprüfung ohne Schalter"))
+    code, _, prompts, out = _sign_cli(tool, monkeypatch, tmp_path, "--expect-digest", INDEX_DIGEST)
+    assert code == 0 and len(prompts) == 1
+    assert json.loads((out / tool.GRANT_NAME).read_bytes())["digest"] == INDEX_DIGEST
+
+
+def test_attestation_check_uses_the_digest_workflow_and_tag(tool, monkeypatch, tmp_path, capsys):
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        assert kwargs["timeout"] == 60 and kwargs["capture_output"] is True
+        return tool.subprocess.CompletedProcess(command, 0, stdout="verified\n", stderr="")
+
+    monkeypatch.setattr(tool.subprocess, "run", run)
+    code, _, prompts, out = _sign_cli(tool, monkeypatch, tmp_path, "--expect-digest", INDEX_DIGEST, "--verify-attestation")
+    assert code == 0 and len(prompts) == 1
+    assert calls == [
+        ["gh", "attestation", "verify", "--help"],
+        ["gh", "attestation", "verify", f"oci://ghcr.io/nodvard/deck@{INDEX_DIGEST}", "--repo", "nodvard/deck",
+         "--signer-workflow", "nodvard/deck/.github/workflows/release.yml", "--source-ref", "refs/tags/v0.12.0",
+         "--deny-self-hosted-runners"],
+    ]
+    assert "Herkunft geprüft:" in capsys.readouterr().out
+    assert json.loads((out / tool.GRANT_NAME).read_bytes())["digest"] == INDEX_DIGEST
+
+
+@pytest.mark.parametrize("missing", [True, False], ids=["gh-fehlt", "alter-gh-befehl"])
+def test_missing_attestation_command_signs_nothing_and_asks_no_password(tool, monkeypatch, tmp_path, capsys, missing):
+    def run(command, **kwargs):
+        assert command == ["gh", "attestation", "verify", "--help"]
+        if missing:
+            raise FileNotFoundError("gh")
+        return tool.subprocess.CompletedProcess(command, 1, stdout="", stderr="unknown command")
+
+    monkeypatch.setattr(tool.subprocess, "run", run)
+    code, _, prompts, out = _sign_cli(tool, monkeypatch, tmp_path, "--expect-digest", INDEX_DIGEST, "--verify-attestation")
+    assert code == 1 and prompts == [] and not out.exists()
+    assert "Nichts signiert" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("failure", ["rejected", "timeout", "oserror"])
+def test_failed_attestation_check_signs_nothing_and_asks_no_password(tool, monkeypatch, tmp_path, capsys, failure):
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        if command[-1] == "--help":
+            return tool.subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if failure == "timeout":
+            raise tool.subprocess.TimeoutExpired(command, 60)
+        if failure == "oserror":
+            raise OSError("Zugriff verweigert")
+        return tool.subprocess.CompletedProcess(command, 1, stdout="prüfen\n", stderr="wrong identity")
+
+    monkeypatch.setattr(tool.subprocess, "run", run)
+    code, _, prompts, out = _sign_cli(tool, monkeypatch, tmp_path, "--expect-digest", INDEX_DIGEST,
+                                    "--verify-attestation", "--upload")
+    assert code == 1 and prompts == [] and not out.exists()
+    assert len(calls) == 2 and all(c[:3] == ["gh", "attestation", "verify"] for c in calls)
+    err = capsys.readouterr().err
+    assert "Nichts signiert" in err
+    if failure == "rejected":
+        assert "wrong identity" in err
+
+
+def test_digest_mismatch_stops_before_attestation_check(tool, monkeypatch, tmp_path):
+    monkeypatch.setattr(tool.subprocess, "run", lambda *a, **kw: pytest.fail("erst Digest vergleichen"))
+    code, _, prompts, out = _sign_cli(tool, monkeypatch, tmp_path, "--expect-digest", DIGEST, "--verify-attestation")
+    assert code == 1 and prompts == [] and not out.exists()

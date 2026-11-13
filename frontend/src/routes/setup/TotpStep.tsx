@@ -4,7 +4,8 @@
  * `RecoveryCodesPanel`). Läuft Zwei-Faktor schon, lassen sich die Codes später unter „Mein Konto“ neu erzeugen.
  */
 import { ShieldCheck } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { api } from "../../lib/api";
 import { useEdition } from "../../state/edition";
@@ -23,14 +24,16 @@ export function TotpStep({ username, onBack, onNext }: { username: string; onBac
   const [codes, setCodes] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
+  const mounted = useRef(false);
 
   useEffect(() => {
+    mounted.current = true;
     let alive = true;
     api
       .get<{ totp_enabled?: boolean }>("/me")
       .then((me) => alive && setEnabled(Boolean(me.totp_enabled)))
       .catch(() => alive && setEnabled(false));
-    return () => { alive = false; };
+    return () => { alive = false; mounted.current = false; };
   }, []);
 
   // Die Codes sieht man nur jetzt: vor dem Neuladen oder Schließen warnen.
@@ -71,7 +74,19 @@ export function TotpStep({ username, onBack, onNext }: { username: string; onBac
   }
 
   // Ein schon angelegter, unbestätigter Schlüssel zählt nicht; „Mein Konto“ legt später einen neuen an.
-  const later = () => onNext(false);
+  async function later() {
+    if (busy) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      await api.patch("/me/preferences", { totp_setup_skipped: true });
+      if (mounted.current) onNext(false);
+    } catch {
+      if (mounted.current) setNotice({ kind: "error", text: "Die Erinnerung konnte nicht gespeichert werden. Bitte versuche es erneut." });
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  }
 
   if (enabled === null) return <p className="text-sm text-white/50">Lade …</p>;
 
@@ -111,20 +126,26 @@ export function TotpStep({ username, onBack, onNext }: { username: string; onBac
       {setup ? (
         <TotpEnroll
           setup={setup} busy={busy} onConfirm={(digits) => void confirm(digits)} onCancel={() => setSetup(null)} cancelLabel="Zurück"
-          onLater={later}
+          onLater={() => void later()}
         />
       ) : asking ? (
         <TotpPasswordForm
           busy={busy} onSubmit={(password) => void start(password)} onCancel={() => { setAsking(false); setNotice(null); }}
-          cancelLabel="Zurück" onLater={later}
+          cancelLabel="Zurück" onLater={() => void later()}
         />
       ) : (
         <StepNav onBack={onBack}>
-          <Button onClick={later}>Später einrichten</Button>
-          <Button variant="primary" onClick={() => setAsking(true)}>Jetzt einrichten</Button>
+          <Button busy={busy} onClick={() => void later()}>Später einrichten</Button>
+          <Button variant="primary" disabled={busy} onClick={() => setAsking(true)}>Jetzt einrichten</Button>
         </StepNav>
       )}
-      <p className="mt-3 text-xs text-white/50">Du kannst das jederzeit unter Einstellungen → Mein Konto nachholen.</p>
+      <p className="mt-3 text-xs text-white/50">
+        Du kannst das jederzeit unter{" "}
+        <Link to="/settings/account" className="text-[var(--color-accent)] underline-offset-2 hover:underline">
+          Einstellungen → Mein Konto
+        </Link>{" "}
+        nachholen. Auf der Übersicht erinnern wir dich daran, bis du Zwei-Faktor aktivierst oder den Hinweis ausblendest.
+      </p>
     </div>
   );
 }

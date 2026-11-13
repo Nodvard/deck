@@ -9,6 +9,7 @@ core/vault.py) an den `db_session`-Fixture-Engine gebunden ist -- deshalb reicht
 from __future__ import annotations
 
 import pytest
+from exec_gate_helpers import execute_approved
 from nodvard_sdk import Actor, ActorType, DiscoveredHost, HostStatus, Notification
 from nodvard_sdk.actions import REQUEST_WAIT_S, ActionRequest, ActionSpec
 from nodvard_sdk.errors import PermissionDenied
@@ -81,6 +82,65 @@ def test_permission_checker_respects_suffix_wildcard():
     checker.require("secrets.read:hello-world-demo")
     with pytest.raises(PermissionDenied):
         checker.require("secrets.read:other-label")
+
+
+def test_permission_checker_keeps_the_initial_permissions():
+    granted = ["secrets.read:demo-*"]
+    checker = _PermissionChecker("ext-1", granted)
+    granted[:] = ["*"]
+
+    checker.require("secrets.read:demo-token")
+    with pytest.raises(PermissionDenied):
+        checker.require("secrets.read:fremd-token")
+    granted.clear()
+    checker.require("secrets.read:demo-token")
+
+
+@pytest.mark.parametrize("replace", [False, True])
+def test_public_routes_ignore_permissions_added_through_loaded(tmp_path, replace):
+    from fastapi import APIRouter
+
+    _, _, ctx = _build(tmp_path)
+    if replace:
+        ctx._loaded.granted_permissions = ["api.public"]
+    else:
+        ctx._loaded.granted_permissions.append("api.public")
+
+    router = APIRouter()
+    router.add_api_route("/probe", lambda: {"ok": True})
+    with pytest.raises(PermissionDenied) as denied:
+        ctx.api.include_router(router, public=True)
+    assert denied.value.permission == "api.public"
+    assert ctx._loaded.router is None
+    assert ctx.api.public_prefixes == []
+
+
+@pytest.mark.parametrize("allow_public", [False, True])
+def test_public_routes_use_the_context_permissions(tmp_path, allow_public):
+    from fastapi import APIRouter
+
+    manifest = _manifest()
+    loaded = LoadedExtension(
+        manifest=manifest, instance=None, ctx=None,
+        granted_permissions=[] if allow_public else ["api.public"],
+    )
+    ctx = build_context(
+        ExtensionRuntime(), loaded, manifest, ["api.public"] if allow_public else [],
+        tmp_path / "data", _isolated_settings(tmp_path),
+    )
+    router = APIRouter()
+    router.add_api_route("/probe", lambda: {"ok": True})
+
+    if allow_public:
+        ctx.api.include_router(router, public=True)
+        assert loaded.router is not None
+        assert ctx.api.public_prefixes == [manifest.api_prefix]
+    else:
+        with pytest.raises(PermissionDenied) as denied:
+            ctx.api.include_router(router, public=True)
+        assert denied.value.permission == "api.public"
+        assert loaded.router is None
+        assert ctx.api.public_prefixes == []
 
 
 @pytest.mark.asyncio
@@ -260,7 +320,9 @@ async def test_exec_handle_checks_permission_before_resolving_host(tmp_path, db_
     _, _, ctx2 = _build(tmp_path, permissions=["hosts.execute"])
     unknown_host = SdkHost(id="does-not-exist", name="x", display_name="x", address="1.2.3.4")
     with pytest.raises(HostUnreachable):
-        await ctx2.exec.run(host=unknown_host, command="echo hi")
+        await execute_approved(
+            db_session, lambda: ctx2.exec.run(host=unknown_host, command="echo hi"), host_id=unknown_host.id
+        )
 
 
 @pytest.mark.asyncio
@@ -277,10 +339,26 @@ async def test_exec_without_ssh_login_names_the_server_and_the_next_step(tmp_pat
     await db_session.commit()
     _, _, ctx = _build(tmp_path, permissions=["hosts.execute"])
     with pytest.raises(HostUnreachable) as raised:
-        await ctx.exec.run(host=host_to_sdk(host), command="true")
+        await execute_approved(
+            db_session, lambda: ctx.exec.run(host=host_to_sdk(host), command="true"), host_id=host.id
+        )
     text = str(raised.value)
     assert "Mein NAS" in text and "SSH-Zugang" in text and "Server & Zugänge" in text
     assert host.id not in text
+
+
+@pytest.mark.asyncio
+async def test_exec_handle_run_refuses_a_user_it_would_ignore(tmp_path, db_session, monkeypatch):
+    """`user=` wurde bisher stillschweigend übergangen; jetzt scheitert der Aufruf, bevor eine Verbindung entsteht."""
+    from nodvard_deck.ext.context import ExecHandle
+
+    async def _no_connection(*_args, **_kwargs):
+        raise AssertionError("keine Verbindung erwartet")
+
+    monkeypatch.setattr(ExecHandle, "_run", _no_connection)
+    _, _, ctx = _build(tmp_path, permissions=["hosts.execute"])
+    with pytest.raises(ValueError, match="backup"):
+        await ctx.exec.run(host=None, command="id -un", user="backup")
 
 
 @pytest.mark.asyncio
@@ -575,6 +653,28 @@ async def test_secrets_and_vault_use_roundtrip_through_context(tmp_path, db_sess
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("permission", ["secrets.read:fremd-token", "*"])
+@pytest.mark.parametrize("access", ["get_handle", "vault_use"])
+async def test_foreign_secret_ignores_permissions_added_through_loaded(tmp_path, db_session, permission, access):
+    from nodvard_deck.core import vault
+
+    _, _, ctx = _build(tmp_path, permissions=["secrets.read:demo-*"])
+    foreign = await _foreign_secret(db_session, tmp_path, label="fremd-token", owner="andere-ext")
+    own = await ctx.secrets.create(label="demo-token", kind="generic", value="eigen")
+    ctx._loaded.granted_permissions.append(permission)
+
+    with pytest.raises(PermissionDenied) as denied:
+        if access == "get_handle":
+            await ctx.secrets.get_handle(foreign.label)
+        else:
+            async with ctx.vault_use(vault.SecretHandle(id=foreign.id, label=foreign.label, kind=foreign.kind)):
+                pass
+    assert denied.value.permission == "secrets.read:fremd-token"
+    async with ctx.vault_use(own) as value:
+        assert value == "eigen"
+
+
+@pytest.mark.asyncio
 async def test_exists_needs_the_right_to_read_the_label(tmp_path, db_session):
     _, _, ctx = _build(tmp_path, permissions=["secrets.read:demo-*"])
     await _foreign_secret(db_session, tmp_path, label="fremd-token", owner="andere-ext")
@@ -833,6 +933,36 @@ async def test_settings_set_calls_on_settings_changed_after_commit(tmp_path, db_
     loaded.instance = _Broken()
     await ctx.settings.set({"docker_host_tag": "x"})
     assert await ctx.settings.get() == {"docker_host_tag": "x"}
+
+
+@pytest.mark.asyncio
+async def test_parallel_settings_changes_each_get_their_hook(tmp_path, db_session):
+    """Speichert B, während der Hook von A noch läuft, bekommt B danach seinen eigenen Hook mit den B-Werten."""
+    import asyncio
+
+    db_session.add(ExtensionRecord(id="test-ext", version="0.1.0", api_version="0.1", state="enabled"))
+    await db_session.commit()
+    _, loaded, ctx = _build(tmp_path, permissions=[])
+    seen: list[dict] = []
+    first_entered = asyncio.Event()
+    release_first = asyncio.Event()
+
+    class _Ext:
+        async def on_settings_changed(self, hook_ctx, values):
+            seen.append(values)
+            if values == {"wert": "a"}:
+                first_entered.set()
+                await release_first.wait()
+
+    loaded.instance = _Ext()
+    first = asyncio.create_task(ctx.settings.set({"wert": "a"}))
+    await asyncio.wait_for(first_entered.wait(), timeout=5)
+    second = asyncio.create_task(ctx.settings.set({"wert": "b"}))
+    await asyncio.sleep(0.05)
+    release_first.set()
+    await asyncio.wait_for(asyncio.gather(first, second), timeout=5)
+    assert seen == [{"wert": "a"}, {"wert": "b"}]
+    assert await ctx.settings.get() == {"wert": "b"}
 
 
 @pytest.mark.asyncio
@@ -2178,6 +2308,26 @@ async def test_mark_gone_touches_only_own_hosts_and_needs_write(tmp_path, db_ses
 
 
 @pytest.mark.asyncio
+async def test_upsert_discovered_keeps_a_host_in_maintenance(tmp_path, db_session):
+    """Ein erneuter Abgleich mit `status=up` hebt die von Hand gesetzte Wartung nicht auf."""
+    from nodvard_deck.models import Host
+
+    _, _, ctx = _build(tmp_path, permissions=["hosts.read", "hosts.write"])
+    created = await ctx.hosts.upsert_discovered(
+        [DiscoveredHost(provider_ref="lxc/202", name="wartung", address="10.0.0.20", status=HostStatus.UP)]
+    )
+    (await db_session.get(Host, created[0].id)).status = "maintenance"
+    await db_session.commit()
+
+    again = await ctx.hosts.upsert_discovered(
+        [DiscoveredHost(provider_ref="lxc/202", name="wartung", address="10.0.0.20", status=HostStatus.UP)]
+    )
+    db_session.expire_all()
+    assert (await db_session.get(Host, created[0].id)).status == "maintenance"
+    assert again[0].status == HostStatus.MAINTENANCE
+
+
+@pytest.mark.asyncio
 async def test_set_status_touches_only_own_hosts_outside_maintenance_and_gone(tmp_path, db_session):
     from nodvard_deck.models import Host
 
@@ -2509,6 +2659,8 @@ async def test_the_user_of_a_real_request_is_the_actor(client, tmp_path, db_sess
     login = await client.post("/api/v1/auth/login", json={"username": "owner1", "password": "correct-horse-battery"})
     before = list(app.router.routes)
     app.include_router(router, prefix="/api/v1/test-known-actors")
+    # Der SPA-Catch-all muss auch nach einem Frontend-Build hinter der Testroute bleiben.
+    app.router.routes.insert(app.state.ext_mount_index, app.router.routes.pop())
     try:
         # Eigener Task wie bei uvicorn, das jede Anfrage in einem eigenen Task startet.
         answer = await asyncio.create_task(client.post(
@@ -2717,3 +2869,30 @@ async def test_action_executed_carries_the_payload_only_for_those_who_may_see_it
     assert ("payload" in executed.payload) is sees_payload
     assert executed.payload["outcome"] == "success" and executed.payload["host_id"] == "h1"
     assert other.payload == {"payload": {"x": 1}}
+
+
+@pytest.mark.asyncio
+async def test_http_handle_websocket_limits_the_message_size(monkeypatch):
+    """Eine zu große Nachricht des Gegenübers beendet die Verbindung, statt sie unbegrenzt zu puffern."""
+    import websockets
+    from nodvard_deck.ext import context as ext_context
+    from nodvard_deck.ext.context import HttpHandle
+
+    async def flood(conn):
+        await conn.send(b"x" * 4096)
+        await conn.wait_closed()
+
+    _clear_proxy_environment(monkeypatch)
+    monkeypatch.setattr(ext_context, "WEBSOCKET_MAX_MESSAGE_BYTES", 1024)
+    async with websockets.serve(flood, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        handle = HttpHandle(_PermissionChecker("ext-1", ["net.outbound"]), ["net.outbound"])
+        async with handle.websocket(f"ws://127.0.0.1:{port}/x") as ws:
+            with pytest.raises(websockets.ConnectionClosedError):
+                await ws.recv()
+
+
+def test_http_handle_websocket_limit_fits_a_large_console_frame():
+    from nodvard_deck.ext.context import WEBSOCKET_MAX_MESSAGE_BYTES
+
+    assert 3840 * 2160 * 4 < WEBSOCKET_MAX_MESSAGE_BYTES < 1024**3

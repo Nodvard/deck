@@ -189,11 +189,11 @@ def test_poll_before_setup_is_refused(root, uid):
 
 
 def test_valid_request_is_read_and_removed(ch, root):
-    data = request_doc()
+    data = request_doc(action="rollback", version="0.7.0")  # nur das Format; Signaturen prüft der Helfer danach
     put(root, f"{RID}.json", data)
     result = poll(ch)
     assert result.items == (channel.Incoming(id=RID, raw=data),)
-    assert policy.parse_request(result.items[0].raw, now=NOW, file_id=RID).version == "0.7.1"
+    assert policy.parse_request(result.items[0].raw, now=NOW, file_id=RID).version == "0.7.0"
     assert os.listdir(requests_dir(root)) == []
 
 

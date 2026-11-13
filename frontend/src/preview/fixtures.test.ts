@@ -61,6 +61,11 @@ describe("Vorschau: Übersicht und Modulseiten erzählen dieselben Daten", () =>
 });
 
 describe("Vorschau: Module", () => {
+  it("Backup-Widget zeigt den Leertext der Anwendung", () => {
+    const widget = rows("/api/v1/widgets").find((w) => w.ext_id === "backups" && w.id === "summary");
+    expect(widget?.view).toMatchObject({ kind: "list", empty_text: "Keine Sicherungsjobs gefunden" });
+  });
+
   it("jedes Modul zeigt seine Beschreibung aus der extension.toml, keinen Platzhalter", () => {
     const modules = rows("/api/v1/extensions");
     expect(modules.length).toBeGreaterThan(5);

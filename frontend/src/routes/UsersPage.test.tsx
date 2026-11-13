@@ -1,3 +1,4 @@
+import { mobileLayout } from "../test/mobileLayout";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -30,7 +31,7 @@ function mockFetch(overrides: {
     if (url.endsWith("/api/v1/me") && method === "GET" && overrides.meTotp !== undefined) {
       return new Response(JSON.stringify({ id: "user-owner", username: "owner1", totp_enabled: overrides.meTotp }), { status: 200 });
     }
-    // Vorgegebene Antworten fuer Aenderungen (z. B. 403 totp_missing), der Reihe nach.
+    // Vorgegebene Antworten für Aenderungen (z. B. 403 totp_missing), der Reihe nach.
     if (method !== "GET" && overrides.answers?.length) return overrides.answers.shift()!;
     if (url.endsWith("/api/v1/users") && method === "GET") {
       return new Response(JSON.stringify(overrides.users ?? USERS), { status: 200 });
@@ -95,7 +96,7 @@ describe("UsersPage", () => {
     }
   });
 
-  it("zeigt geladene Nutzer mit Rollen, Owner-Badge und ohne Loeschen-Knopf fuer sich selbst", async () => {
+  it("zeigt geladene Nutzer mit Rollen, Owner-Badge und ohne Löschen-Knopf für sich selbst", async () => {
     vi.stubGlobal("fetch", mockFetch());
     renderPage();
 
@@ -123,7 +124,7 @@ describe("UsersPage", () => {
     expect(roleLabel({ name: "buchhaltung", is_builtin: false })).toBe("buchhaltung");
   });
 
-  it("sagt beim Bediener deutlich, dass er Befehle auf Servern ausfuehren kann (mit sudo-Regel: volle Rechte)", async () => {
+  it("sagt beim Bediener deutlich, dass er Befehle auf Servern ausführen kann (mit sudo-Regel: volle Rechte)", async () => {
     vi.stubGlobal("fetch", mockFetch());
     renderPage();
     await screen.findByText("owner1");
@@ -137,7 +138,7 @@ describe("UsersPage", () => {
     expect(screen.getByLabelText("Betrachter").closest("label")!.textContent).not.toContain("Befehle");
   });
 
-  it("legt einen neuen Nutzer mit Rolle ueber das Formular an", async () => {
+  it("legt einen neuen Nutzer mit Rolle über das Formular an", async () => {
     let created: unknown = null;
     vi.stubGlobal("fetch", mockFetch({ onCreate: (body) => (created = body) }));
     renderPage();
@@ -260,7 +261,7 @@ describe("UsersPage", () => {
     expect(await screen.findByText(msg)).toBeInTheDocument();
   });
 
-  it("aendert die Rollen eines Nutzers", async () => {
+  it("ändert die Rollen eines Nutzers", async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal("fetch", fetchMock);
     renderPage();
@@ -279,7 +280,7 @@ describe("UsersPage", () => {
     );
   });
 
-  it("deaktiviert einen Nutzer, aber zeigt keinen Deaktivieren-Knopf fuer den Owner", async () => {
+  it("deaktiviert einen Nutzer, aber zeigt keinen Deaktivieren-Knopf für den Owner", async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal("fetch", fetchMock);
     renderPage();
@@ -299,7 +300,7 @@ describe("UsersPage", () => {
     );
   });
 
-  it("fragt vor dem Entfernen eines Nutzers ueber den echten Dialog nach", async () => {
+  it("fragt vor dem Entfernen eines Nutzers über den echten Dialog nach", async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal("fetch", fetchMock);
     renderPage();
@@ -475,3 +476,11 @@ describe("UsersPage", () => {
     expect(onPatch.mock.calls[0][1]).toEqual({ role_ids: ["role-viewer", "role-admin"], current_password: "admin-passwort" });
   });
 });
+
+it("390 px: Benutzeraktionen dürfen umbrechen", async () => {
+  vi.stubGlobal("fetch", mockFetch({ users: [{ ...USERS[1], totp_enabled: true }] }));
+  renderPage();
+  const button = await screen.findByRole("button", { name: "Zwei-Faktor zurücksetzen" });
+  expect(button.parentElement).toHaveClass("flex-wrap");
+  await mobileLayout(button.closest("li") ?? button.parentElement!);
+}, 30000);

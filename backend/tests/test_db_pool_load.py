@@ -57,6 +57,8 @@ async def test_25_slow_widgets_wait_together_without_holding_a_connection(client
         return {"ok": True}
 
     app.include_router(router)
+    # Der SPA-Catch-all muss auch nach einem Frontend-Build hinter der Testroute bleiben.
+    app.router.routes.insert(app.state.ext_mount_index, app.router.routes.pop())
     headers = {"Authorization": f"Bearer {await _owner_token(client)}"}
 
     responses = await asyncio.gather(*(client.get("/api/v1/test-slow-widget", headers=headers) for _ in range(WIDGETS)))

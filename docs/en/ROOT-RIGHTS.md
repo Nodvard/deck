@@ -43,7 +43,8 @@ a password (Nodvard Deck then runs the same command).
     "Deine wichtigsten Baustellen" lists at most five findings with the biggest effect on the servers shown. The logs
     are kept on the server under `/var/lib/nodvard-shield-audit/`. Scans and the
     real-time guard never run at the same time on a server; for this lock Shield creates a small folder there:
-    `/run/nodvard-shield` (as root) or `~/.nodvard-shield`. A file only goes into quarantine if ClamAV itself reports
+    `/run/nodvard-shield` (as root) or `~/.nodvard-shield`. Quarantine currently lives under `/var/lib/nexus-quarantine/`.
+    A file only goes into quarantine if ClamAV itself reports
     it again while it is moved, first where it is and then in a check folder only root can write to; this applies with
     and without the helper script. If ClamAV is missing or does not answer, the file stays where it is. A restore only
     puts the file back where Shield recorded it on the server when moving it, with the permissions it had (special ones
@@ -65,9 +66,10 @@ a password (Nodvard Deck then runs the same command).
     (ohne Abzug)“ (not checked recently, no deduction).
   - **Update center:** apply updates and reboot. Reloading the package lists before the check needs root – without
     it, you stay at the most recently loaded state. Updates run in the background on the server (with systemd as
-    `lattice-upgrade-…`, an
-    [old name that stays](FIRST-SETUP.md#m-old-names-on-older-installations), otherwise via `setsid`) and keep running even if the connection drops or the dashboard
-    restarts. The log of every run is kept for 30 days under `/var/lib/nexus-updates/`. The dashboard waits 45
+    `lattice-upgrade-…`, otherwise via `setsid`) and keep running even if the connection drops or the dashboard
+    restarts. The log of every run is kept for 30 days under `/var/lib/nexus-updates/`. The current code also uses
+    these technical names for updates and quarantine. The [transition overview until 1.0](FIRST-SETUP.md#m-old-names-on-older-installations)
+    explains why; do not rename them by hand. The dashboard waits 45
     minutes for the result; if a run takes longer, it initially shows as "No response" („Keine Rückmeldung“) (it is
     never terminated), but the dashboard keeps asking for up to about 3 hours, then corrects the entry and reports the
     result by push. If the dashboard restarts during that time, the entry stays as it is – then look in the log on the

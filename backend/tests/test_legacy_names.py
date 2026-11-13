@@ -45,6 +45,25 @@ def test_the_script_exits_with_zero_on_the_repository():
     assert result.stdout.startswith("OK")
 
 
+def test_api_retention_tests_use_allowed_names():
+    files = [
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in (REPO_ROOT / "backend/tests/contract").glob("test_api_retention*.py")
+    ]
+    assert files
+    findings = guard.find_violations(files=files)
+    assert not findings, "\n".join(str(finding) for finding in findings)
+
+
+def test_unreleased_changelog_uses_allowed_names():
+    files = [
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in (REPO_ROOT / "backend/src/nodvard_deck/changelog/unreleased").glob("*.toml")
+    ]
+    findings = guard.find_violations(files=files)
+    assert not findings, "\n".join(str(finding) for finding in findings)
+
+
 def test_the_old_package_folders_stay_empty():
     """Eine Datei, die aus einem älteren Zweig im alten Pfad landet, würde still weder gelesen noch ins Wheel gepackt.
 
@@ -391,6 +410,17 @@ def test_a_new_use_of_the_old_shield_name_is_found(line):
 @pytest.mark.parametrize(
     ("line", "rel"),
     [
+        ("Die Erweiterung hieß bis 0.6 `nexus-soc` (`legacy_ids` im Manifest).", "extensions/shield/src/nodvard_deck_ext_shield/ids.py"),
+        ("/** Kennung von Nodvard Shield (bis 0.6 `nexus-soc`). */", "extensions/shield/frontend/src/ids.ts"),
+    ],
+)
+def test_renamed_identifiers_do_not_allow_the_old_comment(line, rel):
+    assert shield_kinds(line, rel) == ["shield-name"], (line, rel)
+
+
+@pytest.mark.parametrize(
+    ("line", "rel"),
+    [
         # Tabellen und Indizes
         ('__tablename__ = "ext_nexus_soc_scans"', "extensions/shield/src/nodvard_deck_ext_shield/models.py"),
         ("Index('ix_ext_nexus_soc_scans_host_id', 'host_id')", "extensions/shield/src/nodvard_deck_ext_shield/models.py"),
@@ -415,10 +445,8 @@ def test_a_new_use_of_the_old_shield_name_is_found(line):
         ("expect(screen.queryByText(/\\/var\\/lib\\/nexus-quarantine/)).toBeNull();", "extensions/shield/frontend/src/SocPage.test.tsx"),
         # alte feste Scan-Marke
         ('old = "/tmp/x@@nexus-rc=0: Win.Test FOUND"', "backend/tests/test_ext_shield_antivirus.py"),
-        # Manifest, Herkunft, Alembic
+        # Manifest, Alembic
         ('legacy_ids  = ["nexus-soc"]', "extensions/shield/extension.toml"),
-        ("Die Erweiterung hiess bis 0.6 `nexus-soc` (`legacy_ids` im Manifest).", "extensions/shield/src/nodvard_deck_ext_shield/ids.py"),
-        ("/** Kennung von Nodvard Shield (bis 0.6 `nexus-soc`). */", "extensions/shield/frontend/src/ids.ts"),
         ('assert labels == {"documents", "inventory", "nexus-soc"}', "backend/tests/contract/test_alembic_revisions.py"),
         ('VERSCHOBEN = {"extensions/nexus-soc/": "extensions/shield/"}', "backend/tests/contract/test_alembic_revisions.py"),
         # alte Kennung als Wert in den Tests

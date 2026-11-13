@@ -83,7 +83,6 @@ The screenshots show sample data (the interface is in German for now).
 | Nodvard Shield | Security: antivirus (ClamAV), hardening audits (Lynis), update center, intrusion detection, file integrity monitoring, container watcher |
 | Pi-hole (beta) | Statistics, pause and resume blocking, reload block lists, block or allow domains |
 | Nginx Proxy Manager (beta) | Switch proxy hosts on and off, certificate expiry, address check against the containers |
-| Network (beta) | Only a signpost to Pi-hole and Nginx Proxy Manager now; can stay switched off |
 | Scripts | Versioned script repository, run on one or many servers, scheduled, optionally without a click, as long as nothing changes |
 | Push-Nachrichten | Push notifications via ntfy and other channels |
 
@@ -110,6 +109,10 @@ servers by hand; load, Docker containers, updates and security all work over SSH
 
 Extensions are built against a documented SDK, so you can write your own:
 see [docs/en/EXTENSION-API.md](docs/en/EXTENSION-API.md).
+The executable `hello-world` example remains documented there as a template and is not included in the standard image.
+The former [Network signpost](extensions/network/extension.toml) to Pi-hole and Nginx Proxy Manager also remains
+in the source tree for custom builds, but is no longer part of the standard image.
+Before updating, switch both modules off if they are still active: [build notes](deploy/README.md#bauen).
 
 ## Quick start in 5 minutes
 
@@ -238,7 +241,9 @@ has to be downloaded first.
 
 </details>
 
-**Further ways**, each step by step in
+### Further ways
+
+Each step by step in
 [docs/en/INSTALLATION.md, installation per platform](docs/en/INSTALLATION.md):
 
 - **In a terminal:** a single `docker run` command, Podman
@@ -255,31 +260,18 @@ The full step-by-step guide (setup code, SSH access, Proxmox token, push notific
 backups of Nodvard Deck itself, emergency commands) is in
 [docs/en/FIRST-SETUP.md](docs/en/FIRST-SETUP.md).
 
-### Further ways
-
-For these ways, Docker or Podman alone is enough in some cases. Each one is described step by step in
-[docs/en/FIRST-SETUP.md, section 1.1](docs/en/FIRST-SETUP.md#11-installation-without-the-repo):
-
-- **In a terminal:** a single `docker run` command, Podman
-  ([guide](docs/en/FIRST-SETUP.md#in-a-terminal))
-- **With a web interface:** Portainer (from the repository or with the web editor) and Dockge
-  ([guide](docs/en/FIRST-SETUP.md#with-a-web-interface)). In Portainer's web editor, paste the **content** of the
-  Compose file, not the commands from the quick start; otherwise Portainer reports "top-level object must be a
-  mapping".
-- **On a NAS:** Synology, UGREEN, QNAP, Unraid, TrueNAS SCALE, OpenMediaVault, ZimaOS and CasaOS
-  ([guide](docs/en/FIRST-SETUP.md#on-a-nas))
-- **On particular machines:** Raspberry Pi, Proxmox (VM or LXC container) and Docker Desktop for trying it out
-  ([guide](docs/en/FIRST-SETUP.md#raspberry-pi-proxmox-and-docker-desktop))
-
 **Building from source** (developers): clone the repository, then run `docker compose build --pull && docker compose up -d`
 in `deploy/`. Build, deployment and backup/restore details: [deploy/README.md](deploy/README.md).
 
 ## Security and privacy at a glance
 
-- **No telemetry:** The supplied code contains no reporting of usage or crash data to Nodvard or an analytics
+- **No telemetry:** Without consent, Deck sends no usage or crash data to Nodvard or an analytics
   service. Network connections serve the functions listed below; see the
   [backend dependencies](backend/pyproject.toml), [frontend dependencies](frontend/package.json),
   [frontend entry point](frontend/src/main.tsx) and the connection implementations linked below.
+- **Optional usage data:** Three independently selectable stages, off by default. Nothing is sent without consent.
+  Settings → Usage data offers a real JSON preview, local history and a deletion button. Sharing stays locked until
+  a receiver and privacy release are configured ([details](docs/en/USAGE-DATA.md), [data format](docs/04-API.md#nutzungsdaten)).
 - **Deck itself checks for updates:** once a day Nodvard Deck queries `ghcr.io` for a new
   version. It also fetches the release approval and signature from `github.com`, with possible redirects to
   `objects.githubusercontent.com` or `release-assets.githubusercontent.com`. These servers see your IP address and
@@ -358,7 +350,7 @@ with broad privileges. User roles in Deck restrict access to pages and actions
 | [Uptime Kuma](extensions/uptime-kuma/extension.toml) | API key for reading monitors; optional public status page for history. |
 | [Vaultwarden](extensions/vaultwarden/extension.toml) | Public status and configuration queries, no admin token and no access to passwords. |
 | [Push notifications](extensions/ntfy/extension.toml) | Write access to the configured topic, channel or room, using a token or webhook depending on the service. |
-| [Documents](extensions/documents/extension.toml), [Network](extensions/network/extension.toml), [Hello World](extensions/hello-world/extension.toml) | No additional target server credentials; Documents stores and processes files locally, Network links to network modules, Hello World is an SDK example. |
+| [Documents](extensions/documents/extension.toml) | No additional target server credentials; stores and processes files locally. |
 
 API credentials are described in the `settings.schema.json` next to each manifest; SSH rights and helpers are
 explained in [root rights](docs/en/ROOT-RIGHTS.md) and the
@@ -419,16 +411,16 @@ Nodvard Deck is a private, noncommercial project.
 
 ## Deck or Dock?
 
-- **Nodvard Deck** is the whole dashboard with all modules: servers, Proxmox, Docker, backups, security and more.
+- **Nodvard Deck** is the whole dashboard with its standard modules: servers, Proxmox, Docker, backups, security and more.
 - **[Nodvard Dock](deploy/nodvard-dock/README.en.md)** is the Docker edition of Deck without server modules.
   Pick Dock if you only need containers and stacks: [quick start and documentation](docs/en/dock/README.md).
 
 ## License
 
 Nodvard Deck is licensed under the **PolyForm Noncommercial License 1.0.0**, see
-[LICENSE](LICENSE). In short (only the license text is binding): you may use Nodvard Deck for personal
-and other noncommercial purposes, read the source code and adapt it for yourself. Commercial use,
-for example inside a company or as a paid service, is not permitted without separate permission.
+[LICENSE](LICENSE). In short (the license and additional permission are binding): you may use Nodvard Deck for personal
+and other noncommercial purposes, read the source code and adapt it for yourself. Companies have
+[additional permission for evaluation](LICENSE-ZUSATZ.md). Other commercial use, for example as a paid service, requires separate permission.
 Inquiries: **kontakt@nodvard.com**.
 The source code is available to read.
 Licenses of bundled third-party libraries are listed in [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES).

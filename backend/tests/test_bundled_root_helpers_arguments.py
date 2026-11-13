@@ -111,6 +111,8 @@ CASES: list[tuple[str, tuple[str, ...]]] = [
     ("shield", ("upgrade-start", RID_UPGRADE, "apt", "security", "plain", "$(id)")),
     ("shield", ("upgrade-start", RID_UPGRADE, "apt", "security", "plain", "a b")),
     ("shield", ("upgrade-start", RID_UPGRADE, "apt", "security", "plain", "-y")),
+    ("shield", ("upgrade-start", RID_UPGRADE, "apt", "security", "plain", "ca-certificates-")),
+    ("shield", ("upgrade-start", RID_UPGRADE, "apt", "security", "plain", "libc6", "openssl-")),
     ("shield", ("upgrade-start", RID_UPGRADE, "apt", "all", "plain", "extra")),
     ("shield", ("upgrade-start", "upd_0123", "apt", "all", "plain")),
     ("shield", ("upgrade-start", "upd_0123456789ABCDEF", "apt", "all", "plain")),

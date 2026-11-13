@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from exec_gate_helpers import execute_approved
 from nodvard_deck.core import ssh
 from nodvard_sdk import Host as SdkHost
 
@@ -117,7 +118,9 @@ def test_every_end_mark_is_new_and_only_hex():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("os_family,posix", [("linux", True), ("windows", False)])
-async def test_exec_handle_tells_the_ssh_layer_whether_the_server_has_a_posix_shell(monkeypatch, os_family, posix):
+async def test_exec_handle_tells_the_ssh_layer_whether_the_server_has_a_posix_shell(
+    monkeypatch, os_family, posix, db_session,
+):
     from nodvard_deck.ext import context
 
     seen: dict = {}
@@ -133,8 +136,91 @@ async def test_exec_handle_tells_the_ssh_layer_whether_the_server_has_a_posix_sh
     monkeypatch.setattr(ssh, "run", run)
     handle = context.ExecHandle(context._PermissionChecker("test-ext", ["hosts.execute"]), settings=None)
     host = SdkHost(id="h1", name="h1", display_name="h1", address="192.0.2.1", os_family=os_family)
-    await handle.run(host, "true")
+    await execute_approved(db_session, lambda: handle.run(host, "true"), host_id=host.id)
     assert (seen["conn"], seen["command"], seen["posix_shell"]) == ("verbindung", "true", posix)
+
+
+# ---------------------------------------------------------------------------
+# Der lokale SSH-Testserver
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_probe_server_reads_compose_input_before_replying(local_ssh_server, db_session, fake_probe):
+    host, port, username, password, _ = local_ssh_server
+    target = ssh.ConnectionTarget(
+        host_id="compose-input", address=host, port=port, username=username,
+        kind="ssh_password", secret_value=password,
+    )
+    command = "docker compose -f - config --format json"
+    fake_probe[command] = (0, '{"services": {}}\n', "")
+    conn = await ssh.connect(db_session, target)
+    try:
+        assert await ssh.run(conn, command, stdin=b"# Entwurf\n" * 100_000, timeout_s=5) == fake_probe[command]
+    finally:
+        conn.close()
+        await conn.wait_closed()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [0, 7])
+async def test_probe_server_receives_long_command_over_stdin(local_ssh_server, db_session, fake_probe, code):
+    host, port, username, password, _ = local_ssh_server
+    target = ssh.ConnectionTarget(
+        host_id="stdin-probe", address=host, port=port, username=username,
+        kind="ssh_password", secret_value=password,
+    )
+    command = "echo 'grüße'\n" + "#" * 9000 + "\n"
+    fake_probe[command] = (code, "bekannte Ausgabe\n", "bekannter Hinweis\n")
+    conn = await ssh.connect(db_session, target)
+    try:
+        assert await ssh.run(conn, command, timeout_s=5) == fake_probe[command]
+    finally:
+        conn.close()
+        await conn.wait_closed()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", [
+    "empty", "missing_start", "missing_end", "wrong_mark", "extra_bytes",
+    "unknown", "invalid_utf8", "nul", "changed_wrapper",
+])
+async def test_probe_server_rejects_invalid_stdin(local_ssh_server, db_session, fake_probe, case):
+    host, port, username, password, _ = local_ssh_server
+    target = ssh.ConnectionTarget(
+        host_id="stdin-probe", address=host, port=port, username=username,
+        kind="ssh_password", secret_value=password,
+    )
+    command = "echo 'bekannt'\n" + "#" * 9000
+    fake_probe[command] = (0, "bekannte Ausgabe\n", "")
+    wrapped, payload = ssh.stdin_command(command)
+    mark = WRAPPED_RE.fullmatch(payload).group(1)
+    if case == "empty":
+        payload = b""
+    elif case == "missing_start":
+        payload = payload[1:]
+    elif case == "missing_end":
+        payload = payload[:-1]
+    elif case == "wrong_mark":
+        payload = payload[:-len(mark)] + ssh.end_mark().encode()
+    elif case == "extra_bytes":
+        payload += b"x"
+    elif case == "unknown":
+        payload = mark + b"echo unbekannt" + mark
+    elif case == "invalid_utf8":
+        payload = mark + b"\xff" + mark
+    elif case == "nul":
+        payload = mark + command.encode() + b"\x00" + mark
+    elif case == "changed_wrapper":
+        wrapped += "; echo unerwartet"
+    conn = await ssh.connect(db_session, target)
+    try:
+        code, out, _ = await ssh.run(conn, wrapped, stdin=payload, timeout_s=5)
+        assert code != 0
+        assert out == ""
+    finally:
+        conn.close()
+        await conn.wait_closed()
 
 
 # ---------------------------------------------------------------------------

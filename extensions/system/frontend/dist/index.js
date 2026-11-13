@@ -1,3 +1,11 @@
+// ../../_shared/frontend/src/cardTable.ts
+var CARD_TABLE = "block w-full text-sm sm:table";
+var CARD_HEAD = "hidden sm:table-header-group";
+var CARD_BODY = "block sm:table-row-group sm:divide-y sm:divide-white/5";
+var CARD_ROW = "relative mb-3 flex flex-col rounded-lg border border-white/10 p-3 sm:static sm:mb-0 sm:table-row sm:rounded-none sm:border-0 sm:p-0";
+var CARD_CELL_PLAIN = "block empty:hidden sm:table-cell sm:empty:table-cell";
+var CARD_CELL = `${CARD_CELL_PLAIN} before:mb-0.5 before:block before:text-xs before:opacity-60 before:content-[attr(data-label)] sm:before:hidden`;
+
 // ../../_shared/frontend/src/csp.ts
 function cspNonce() {
   return document.querySelector('meta[name="csp-nonce"]')?.content ?? "";
@@ -65,7 +73,7 @@ function styleRef(values, ref) {
 }
 
 // src/SystemPage.tsx
-import { useCallback as useCallback3, useEffect as useEffect7, useMemo as useMemo3, useRef as useRef4, useState as useState6 } from "react";
+import { useCallback as useCallback3, useEffect as useEffect7, useMemo as useMemo3, useRef as useRef3, useState as useState6 } from "react";
 
 // ../../../frontend/src/lib/deckGlobal.ts
 var EVENT_PREFIX = "nodvard-deck:";
@@ -81,7 +89,7 @@ function deckEventName(event) {
 }
 
 // ../../_shared/frontend/src/api.ts
-var SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar \u2013 bitte gleich noch einmal versuchen.";
+var SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar, bitte gleich noch einmal versuchen.";
 var ServerUnavailableError = class extends Error {
   status;
   constructor(answer) {
@@ -353,7 +361,7 @@ function Icon({ name, size = 16, className = "" }) {
   );
 }
 var BUTTON_STYLES = {
-  primary: "accent-gradient text-on-accent hover:bg-accent-strong",
+  primary: "border border-transparent accent-gradient text-on-accent hover:bg-accent-strong",
   secondary: "border border-white/10 bg-white/[0.06] text-white hover:bg-white/[0.12]",
   danger: "border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25",
   ghost: "text-white/60 hover:bg-white/[0.06] hover:text-white"
@@ -539,6 +547,7 @@ function statusTone(status, powerState, goneSince) {
   if (isGone({ gone_since: goneSince })) return { tone: "off", label: "nicht mehr vorhanden" };
   if (isSwitchedOff({ power_state: powerState })) return { tone: "off", label: "aus" };
   const s = (status ?? "").toLowerCase();
+  if (s === "no_access") return { tone: "unknown", label: "kein Zugang" };
   if (["up", "online", "running", "ok", "reachable"].includes(s)) return { tone: "ok", label: "erreichbar" };
   if (["down", "offline", "stopped", "unreachable", "error"].includes(s)) return { tone: "bad", label: "nicht erreichbar" };
   return { tone: "unknown", label: "Status unbekannt" };
@@ -756,7 +765,7 @@ function formatUptime(seconds) {
 }
 
 // src/LiveView.tsx
-import { useEffect as useEffect6, useRef as useRef3, useState as useState5 } from "react";
+import { useEffect as useEffect6, useState as useState5 } from "react";
 
 // src/TempLimit.tsx
 import { useCallback as useCallback2, useEffect as useEffect5, useState as useState4 } from "react";
@@ -856,6 +865,27 @@ function TempLimit({ hostId, onChanged }) {
   ] });
 }
 
+// src/systemQuery.ts
+var SystemQueryError = class extends Error {
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+  }
+  status;
+};
+async function fetchSystem(id, view) {
+  const res = await authedFetch(`/ext/system/hosts/${id}/${view}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new SystemQueryError(errorFromBody(body, res.status), res.status);
+  }
+  try {
+    return await res.json();
+  } catch {
+    throw new Error(UNREADABLE_ANSWER_TEXT);
+  }
+}
+
 // src/LiveView.tsx
 import { Fragment as Fragment4, jsx as jsx7, jsxs as jsxs6 } from "react/jsx-runtime";
 var POLL_MS = 3e3;
@@ -919,18 +949,21 @@ function LiveView({ hostId, fetchLive }) {
   const [history, setHistory] = useState5(EMPTY_HISTORY);
   const [procSort, setProcSort] = useState5("cpu");
   const [showVirtual, setShowVirtual] = useState5(false);
-  const busy = useRef3(false);
   useEffect6(() => {
     setData(null);
     setError(null);
     setHistory(EMPTY_HISTORY);
+    setUpdatedAt(null);
+    setPaused(false);
   }, [hostId]);
   useEffect6(() => {
     if (paused) return;
     let cancelled = false;
+    let busy = false;
+    let failed = false;
     async function tick() {
-      if (busy.current || typeof document !== "undefined" && document.hidden) return;
-      busy.current = true;
+      if (busy || failed || typeof document !== "undefined" && document.hidden) return;
+      busy = true;
       try {
         const live = await fetchLive(hostId);
         if (cancelled) return;
@@ -947,9 +980,13 @@ function LiveView({ hostId, fetchLive }) {
           temp: push(h.temp, live.temperatures.length ? Math.max(...live.temperatures.map((t) => t.celsius)) : void 0)
         }));
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) {
+          failed = true;
+          setError(err instanceof Error ? err : new Error(String(err)));
+          setPaused(true);
+        }
       } finally {
-        busy.current = false;
+        busy = false;
       }
     }
     void tick();
@@ -960,14 +997,23 @@ function LiveView({ hostId, fetchLive }) {
     };
   }, [hostId, paused, fetchLive]);
   const controls = /* @__PURE__ */ jsxs6("div", { className: "mb-3 flex flex-wrap items-center gap-3 text-xs", children: [
-    /* @__PURE__ */ jsx7("button", { type: "button", onClick: () => setPaused((p) => !p), className: "rounded bg-white/10 px-2 py-1 hover:bg-white/20", children: paused ? "Fortsetzen" : "Pausieren" }),
+    /* @__PURE__ */ jsx7("button", { type: "button", onClick: () => {
+      setError(null);
+      setPaused((p) => !p);
+    }, className: "rounded bg-white/10 px-2 py-1 hover:bg-white/20", children: error ? "Erneut versuchen" : paused ? "Fortsetzen" : "Pausieren" }),
     /* @__PURE__ */ jsxs6("span", { className: "opacity-50", children: [
       paused ? "angehalten" : "aktualisiert alle 3 s",
       updatedAt ? ` \xB7 Stand ${updatedAt.toLocaleTimeString("de-DE")}` : ""
     ] }),
-    error && /* @__PURE__ */ jsxs6("span", { className: "text-red-400", children: [
-      "Fehler: ",
-      error
+    error && /* @__PURE__ */ jsxs6("div", { role: "alert", className: "w-full space-y-2 text-red-400", children: [
+      /* @__PURE__ */ jsxs6("p", { children: [
+        "Live-Abfrage angehalten: ",
+        error.message
+      ] }),
+      error instanceof SystemQueryError && (error.status === 409 || error.status === 502) ? /* @__PURE__ */ jsxs6(Fragment4, { children: [
+        /* @__PURE__ */ jsx7("p", { children: "Pr\xFCfe den SSH-Zugang unter Einstellungen \u2192 Server & Zug\xE4nge und versuche es danach erneut." }),
+        /* @__PURE__ */ jsx7(SettingsLink, { to: "/settings/hosts", permission: "hosts.write", variant: "secondary", children: "Server & Zug\xE4nge \xF6ffnen" })
+      ] }) : /* @__PURE__ */ jsx7("p", { children: "Versuche die Abfrage erneut." })
     ] })
   ] });
   if (!data) {
@@ -1086,19 +1132,19 @@ function LiveView({ hostId, fetchLive }) {
         ] }) : /* @__PURE__ */ jsx7("p", { className: "mt-3 text-xs opacity-50", children: "Kein Swap eingerichtet." })
       ] }) : /* @__PURE__ */ jsx7("p", { className: "text-sm opacity-50", children: "Keine Angaben." }) }),
       /* @__PURE__ */ jsxs6(Section, { title: "Sensoren", children: [
-        data.temperatures.length === 0 && data.fans.length === 0 ? /* @__PURE__ */ jsx7("p", { className: "text-sm opacity-50", children: "Dieser Server meldet keine Sensoren (bei VMs normal)." }) : /* @__PURE__ */ jsx7("table", { className: "w-full text-sm", "data-testid": "sensors", children: /* @__PURE__ */ jsxs6("tbody", { className: "divide-y divide-white/5", children: [
-          data.temperatures.map((t) => /* @__PURE__ */ jsxs6("tr", { children: [
-            /* @__PURE__ */ jsx7("td", { className: "py-1 opacity-70", children: t.label }),
-            /* @__PURE__ */ jsx7("td", { className: "py-1 text-xs opacity-40", children: t.source }),
-            /* @__PURE__ */ jsxs6("td", { className: `py-1 text-right font-semibold tabular-nums ${tempTone(t.celsius)}`, children: [
+        data.temperatures.length === 0 && data.fans.length === 0 ? /* @__PURE__ */ jsx7("p", { className: "text-sm opacity-50", children: "Dieser Server meldet keine Sensoren (bei VMs normal)." }) : /* @__PURE__ */ jsx7("table", { role: "table", className: `${CARD_TABLE} text-left`, "data-testid": "sensors", children: /* @__PURE__ */ jsxs6("tbody", { role: "rowgroup", className: CARD_BODY, children: [
+          data.temperatures.map((t) => /* @__PURE__ */ jsxs6("tr", { role: "row", className: CARD_ROW, children: [
+            /* @__PURE__ */ jsx7("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 opacity-70`, children: t.label }),
+            /* @__PURE__ */ jsx7("td", { "data-label": "Quelle", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 text-xs opacity-40`, children: t.source }),
+            /* @__PURE__ */ jsxs6("td", { "data-label": "Wert", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right font-semibold tabular-nums ${tempTone(t.celsius)}`, children: [
               t.celsius.toFixed(1),
               " \xB0C"
             ] })
           ] }, `${t.source}-${t.label}`)),
-          data.fans.map((f) => /* @__PURE__ */ jsxs6("tr", { children: [
-            /* @__PURE__ */ jsx7("td", { className: "py-1 opacity-70", children: f.label }),
-            /* @__PURE__ */ jsx7("td", { className: "py-1 text-xs opacity-40", children: "L\xFCfter" }),
-            /* @__PURE__ */ jsxs6("td", { className: "py-1 text-right font-semibold tabular-nums", children: [
+          data.fans.map((f) => /* @__PURE__ */ jsxs6("tr", { role: "row", className: CARD_ROW, children: [
+            /* @__PURE__ */ jsx7("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 opacity-70`, children: f.label }),
+            /* @__PURE__ */ jsx7("td", { "data-label": "Quelle", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 text-xs opacity-40`, children: "L\xFCfter" }),
+            /* @__PURE__ */ jsxs6("td", { "data-label": "Wert", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right font-semibold tabular-nums`, children: [
               f.rpm,
               " U/min"
             ] })
@@ -1106,24 +1152,24 @@ function LiveView({ hostId, fetchLive }) {
         ] }) }),
         data.temperatures.length > 0 && /* @__PURE__ */ jsx7("div", { className: "mt-3 border-t border-white/5 pt-3", children: /* @__PURE__ */ jsx7(TempLimit, { hostId }) })
       ] }),
-      /* @__PURE__ */ jsx7(Section, { title: "Datentr\xE4ger", children: data.disks.length === 0 ? /* @__PURE__ */ jsx7("p", { className: "text-sm opacity-50", children: "Keine physischen Datentr\xE4ger erkannt." }) : /* @__PURE__ */ jsxs6("table", { className: "w-full text-sm", "data-testid": "live-disks", children: [
-        /* @__PURE__ */ jsx7("thead", { children: /* @__PURE__ */ jsxs6("tr", { className: "text-left text-xs opacity-50", children: [
+      /* @__PURE__ */ jsx7(Section, { title: "Datentr\xE4ger", children: data.disks.length === 0 ? /* @__PURE__ */ jsx7("p", { className: "text-sm opacity-50", children: "Keine physischen Datentr\xE4ger erkannt." }) : /* @__PURE__ */ jsxs6("table", { role: "table", className: `${CARD_TABLE} text-left`, "data-testid": "live-disks", children: [
+        /* @__PURE__ */ jsx7("thead", { role: "rowgroup", className: CARD_HEAD, children: /* @__PURE__ */ jsxs6("tr", { className: "text-left text-xs opacity-50", children: [
           /* @__PURE__ */ jsx7("th", { className: "py-1 font-normal", children: "Ger\xE4t" }),
           /* @__PURE__ */ jsx7("th", { className: "py-1 text-right font-normal", children: "Lesen" }),
           /* @__PURE__ */ jsx7("th", { className: "py-1 text-right font-normal", children: "Schreiben" }),
           /* @__PURE__ */ jsx7("th", { className: "py-1 text-right font-normal", children: "IOPS l/s" }),
           /* @__PURE__ */ jsx7("th", { className: "w-28 py-1 pl-3 font-normal", children: "Aktiv" })
         ] }) }),
-        /* @__PURE__ */ jsx7("tbody", { className: "divide-y divide-white/5", children: data.disks.map((d) => /* @__PURE__ */ jsxs6("tr", { children: [
-          /* @__PURE__ */ jsx7("td", { className: "py-1 font-mono text-xs", children: d.name }),
-          /* @__PURE__ */ jsx7("td", { className: "py-1 text-right tabular-nums", children: rate(d.read_bps) }),
-          /* @__PURE__ */ jsx7("td", { className: "py-1 text-right tabular-nums", children: rate(d.write_bps) }),
-          /* @__PURE__ */ jsxs6("td", { className: "py-1 text-right tabular-nums", children: [
+        /* @__PURE__ */ jsx7("tbody", { role: "rowgroup", className: CARD_BODY, children: data.disks.map((d) => /* @__PURE__ */ jsxs6("tr", { role: "row", className: CARD_ROW, children: [
+          /* @__PURE__ */ jsx7("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 font-mono text-xs`, children: d.name }),
+          /* @__PURE__ */ jsx7("td", { "data-label": "Lesen", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right tabular-nums`, children: rate(d.read_bps) }),
+          /* @__PURE__ */ jsx7("td", { "data-label": "Schreiben", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right tabular-nums`, children: rate(d.write_bps) }),
+          /* @__PURE__ */ jsxs6("td", { "data-label": "IOPS l/s", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right tabular-nums`, children: [
             d.read_iops.toFixed(0),
             " / ",
             d.write_iops.toFixed(0)
           ] }),
-          /* @__PURE__ */ jsx7("td", { className: "py-1 pl-3", children: /* @__PURE__ */ jsxs6("div", { className: "flex items-center gap-2", children: [
+          /* @__PURE__ */ jsx7("td", { "data-label": "Aktiv", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:pl-3`, children: /* @__PURE__ */ jsxs6("div", { className: "flex items-center gap-2", children: [
             /* @__PURE__ */ jsx7(Meter, { percent: d.busy_percent }),
             /* @__PURE__ */ jsx7("span", { className: "w-14 whitespace-nowrap text-right text-xs tabular-nums", children: pct(d.busy_percent) })
           ] }) })
@@ -1138,8 +1184,8 @@ function LiveView({ hostId, fetchLive }) {
           /* @__PURE__ */ jsx7("input", { type: "checkbox", checked: showVirtual, onChange: (e) => setShowVirtual(e.target.checked) }),
           " virtuelle Schnittstellen zeigen"
         ] }) : void 0,
-        children: /* @__PURE__ */ jsxs6("table", { className: "w-full text-sm", "data-testid": "live-network", children: [
-          /* @__PURE__ */ jsx7("thead", { children: /* @__PURE__ */ jsxs6("tr", { className: "text-left text-xs opacity-50", children: [
+        children: /* @__PURE__ */ jsxs6("table", { role: "table", className: `${CARD_TABLE} text-left`, "data-testid": "live-network", children: [
+          /* @__PURE__ */ jsx7("thead", { role: "rowgroup", className: CARD_HEAD, children: /* @__PURE__ */ jsxs6("tr", { className: "text-left text-xs opacity-50", children: [
             /* @__PURE__ */ jsx7("th", { className: "py-1 font-normal", children: "Schnittstelle" }),
             /* @__PURE__ */ jsx7("th", { className: "py-1 font-normal", children: "Status" }),
             /* @__PURE__ */ jsx7("th", { className: "py-1 text-right font-normal", children: "Empfangen" }),
@@ -1147,20 +1193,20 @@ function LiveView({ hostId, fetchLive }) {
             /* @__PURE__ */ jsx7("th", { className: "py-1 text-right font-normal", children: "Gesamt \u2193 / \u2191" }),
             /* @__PURE__ */ jsx7("th", { className: "py-1 text-right font-normal", title: "\xDCbertragungsfehler / vom System verworfene Pakete", children: "Fehler / verworfen" })
           ] }) }),
-          /* @__PURE__ */ jsx7("tbody", { className: "divide-y divide-white/5", children: nics.map((n) => /* @__PURE__ */ jsxs6("tr", { className: n.virtual ? "opacity-60" : "", children: [
-            /* @__PURE__ */ jsx7("td", { className: "py-1 font-mono text-xs", children: n.name }),
-            /* @__PURE__ */ jsxs6("td", { className: "py-1 text-xs", children: [
+          /* @__PURE__ */ jsx7("tbody", { role: "rowgroup", className: CARD_BODY, children: nics.map((n) => /* @__PURE__ */ jsxs6("tr", { role: "row", className: `${CARD_ROW} ${n.virtual ? "opacity-60" : ""}`, children: [
+            /* @__PURE__ */ jsx7("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 font-mono text-xs`, children: n.name }),
+            /* @__PURE__ */ jsxs6("td", { "data-label": "Status", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 text-xs`, children: [
               n.state === "up" ? "verbunden" : n.state ?? "?",
               n.speed_mbps ? ` \xB7 ${n.speed_mbps >= 1e3 ? `${n.speed_mbps / 1e3} Gbit/s` : `${n.speed_mbps} Mbit/s`}` : ""
             ] }),
-            /* @__PURE__ */ jsx7("td", { className: "py-1 text-right tabular-nums", children: rate(n.rx_bps) }),
-            /* @__PURE__ */ jsx7("td", { className: "py-1 text-right tabular-nums", children: rate(n.tx_bps) }),
-            /* @__PURE__ */ jsxs6("td", { className: "py-1 text-right text-xs tabular-nums opacity-70", children: [
+            /* @__PURE__ */ jsx7("td", { "data-label": "Empfangen", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right tabular-nums`, children: rate(n.rx_bps) }),
+            /* @__PURE__ */ jsx7("td", { "data-label": "Gesendet", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right tabular-nums`, children: rate(n.tx_bps) }),
+            /* @__PURE__ */ jsxs6("td", { "data-label": "Gesamt \u2193 / \u2191", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right text-xs tabular-nums opacity-70`, children: [
               formatBytes(n.rx_total),
               " / ",
               formatBytes(n.tx_total)
             ] }),
-            /* @__PURE__ */ jsxs6("td", { className: "py-1 text-right text-xs tabular-nums", children: [
+            /* @__PURE__ */ jsxs6("td", { "data-label": "Fehler / verworfen", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right text-xs tabular-nums`, children: [
               /* @__PURE__ */ jsx7("span", { className: n.errors > 0 ? "text-amber-300" : "opacity-50", children: n.errors }),
               /* @__PURE__ */ jsxs6("span", { className: "opacity-40", children: [
                 " / ",
@@ -1171,15 +1217,15 @@ function LiveView({ hostId, fetchLive }) {
         ] })
       }
     ),
-    /* @__PURE__ */ jsx7(Section, { title: "Dateisysteme", children: /* @__PURE__ */ jsx7("table", { className: "w-full text-sm", "data-testid": "live-filesystems", children: /* @__PURE__ */ jsx7("tbody", { className: "divide-y divide-white/5", children: data.filesystems.map((f) => /* @__PURE__ */ jsxs6("tr", { children: [
-      /* @__PURE__ */ jsx7("td", { className: "py-1 font-mono text-xs", children: f.mount }),
-      /* @__PURE__ */ jsxs6("td", { className: "py-1 text-xs opacity-50", children: [
+    /* @__PURE__ */ jsx7(Section, { title: "Dateisysteme", children: /* @__PURE__ */ jsx7("table", { role: "table", className: `${CARD_TABLE} text-left`, "data-testid": "live-filesystems", children: /* @__PURE__ */ jsx7("tbody", { role: "rowgroup", className: CARD_BODY, children: data.filesystems.map((f) => /* @__PURE__ */ jsxs6("tr", { role: "row", className: CARD_ROW, children: [
+      /* @__PURE__ */ jsx7("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 font-mono text-xs`, children: f.mount }),
+      /* @__PURE__ */ jsxs6("td", { "data-label": "Ger\xE4t", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 text-xs opacity-50`, children: [
         f.device,
         " \xB7 ",
         f.fstype
       ] }),
-      /* @__PURE__ */ jsx7("td", { className: "w-48 py-1", children: /* @__PURE__ */ jsx7(Meter, { percent: f.percent }) }),
-      /* @__PURE__ */ jsxs6("td", { className: "py-1 pl-3 text-right text-xs tabular-nums", children: [
+      /* @__PURE__ */ jsx7("td", { "data-label": "Belegung", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] w-full sm:w-48 sm:py-1`, children: /* @__PURE__ */ jsx7(Meter, { percent: f.percent }) }),
+      /* @__PURE__ */ jsxs6("td", { "data-label": "Verwendet", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:pl-3 sm:text-right text-xs tabular-nums`, children: [
         formatBytes(f.used),
         " / ",
         formatBytes(f.size),
@@ -1197,23 +1243,23 @@ function LiveView({ hostId, fetchLive }) {
           /* @__PURE__ */ jsx7("button", { type: "button", "aria-pressed": procSort === "mem", onClick: () => setProcSort("mem"), className: `rounded px-2 py-0.5 ${procSort === "mem" ? "bg-white/15" : "opacity-60 hover:opacity-100"}`, children: "nach RAM" })
         ] }),
         children: [
-          /* @__PURE__ */ jsxs6("table", { className: "w-full text-sm", "data-testid": "processes", children: [
-            /* @__PURE__ */ jsx7("thead", { children: /* @__PURE__ */ jsxs6("tr", { className: "text-left text-xs opacity-50", children: [
+          /* @__PURE__ */ jsxs6("table", { role: "table", className: `${CARD_TABLE} text-left`, "data-testid": "processes", children: [
+            /* @__PURE__ */ jsx7("thead", { role: "rowgroup", className: CARD_HEAD, children: /* @__PURE__ */ jsxs6("tr", { className: "text-left text-xs opacity-50", children: [
               /* @__PURE__ */ jsx7("th", { className: "py-1 font-normal", children: "PID" }),
               /* @__PURE__ */ jsx7("th", { className: "py-1 font-normal", children: "Name" }),
               /* @__PURE__ */ jsx7("th", { className: "py-1 font-normal", children: "Benutzer" }),
               /* @__PURE__ */ jsx7("th", { className: "py-1 text-right font-normal", children: "CPU" }),
               /* @__PURE__ */ jsx7("th", { className: "py-1 text-right font-normal", children: "RAM" })
             ] }) }),
-            /* @__PURE__ */ jsx7("tbody", { className: "divide-y divide-white/5", children: procs.slice(0, 15).map((p) => /* @__PURE__ */ jsxs6("tr", { children: [
-              /* @__PURE__ */ jsx7("td", { className: "py-1 font-mono text-xs opacity-60", children: p.pid }),
-              /* @__PURE__ */ jsx7("td", { className: "py-1", children: p.name }),
-              /* @__PURE__ */ jsx7("td", { className: "py-1 text-xs opacity-60", children: p.user ?? "?" }),
-              /* @__PURE__ */ jsxs6("td", { className: "py-1 text-right tabular-nums", children: [
+            /* @__PURE__ */ jsx7("tbody", { role: "rowgroup", className: CARD_BODY, children: procs.slice(0, 15).map((p) => /* @__PURE__ */ jsxs6("tr", { role: "row", className: CARD_ROW, children: [
+              /* @__PURE__ */ jsx7("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 font-mono text-xs opacity-60`, children: p.pid }),
+              /* @__PURE__ */ jsx7("td", { "data-label": "Name", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1`, children: p.name }),
+              /* @__PURE__ */ jsx7("td", { "data-label": "Benutzer", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 text-xs opacity-60`, children: p.user ?? "?" }),
+              /* @__PURE__ */ jsxs6("td", { "data-label": "CPU", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right tabular-nums`, children: [
                 p.cpu_percent.toFixed(1),
                 " %"
               ] }),
-              /* @__PURE__ */ jsx7("td", { className: "py-1 text-right tabular-nums", children: formatBytes(p.mem_bytes) })
+              /* @__PURE__ */ jsx7("td", { "data-label": "RAM", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1 sm:text-right tabular-nums`, children: formatBytes(p.mem_bytes) })
             ] }, p.pid)) })
           ] }),
           /* @__PURE__ */ jsxs6("p", { className: "mt-2 text-[11px] opacity-40", children: [
@@ -1284,21 +1330,21 @@ function InfoView({ info, canRestart, busyUnit, onRestart, onTempLimitChanged })
     ] }),
     info.temperature_c != null && /* @__PURE__ */ jsx8("div", { className: "panel mb-6 p-3", children: /* @__PURE__ */ jsx8(TempLimit, { hostId: info.host.id, onChanged: onTempLimitChanged }) }),
     /* @__PURE__ */ jsx8("h3", { className: "mb-2 text-sm font-semibold opacity-70", children: "Dateisysteme" }),
-    /* @__PURE__ */ jsxs7("table", { className: "mb-6 w-full text-sm", "data-testid": "disks", children: [
-      /* @__PURE__ */ jsx8("thead", { children: /* @__PURE__ */ jsxs7("tr", { className: "border-b border-white/10 text-left text-xs opacity-60", children: [
+    /* @__PURE__ */ jsxs7("table", { role: "table", className: `${CARD_TABLE} text-left mb-6 w-full text-sm`, "data-testid": "disks", children: [
+      /* @__PURE__ */ jsx8("thead", { role: "rowgroup", className: CARD_HEAD, children: /* @__PURE__ */ jsxs7("tr", { className: "border-b border-white/10 text-left text-xs opacity-60", children: [
         /* @__PURE__ */ jsx8("th", { className: "py-1", children: "Einh\xE4ngepunkt" }),
         /* @__PURE__ */ jsx8("th", { className: "py-1", children: "Ger\xE4t" }),
         /* @__PURE__ */ jsx8("th", { className: "py-1 w-1/3", children: "Belegung" }),
         /* @__PURE__ */ jsx8("th", { className: "py-1", children: "Frei" })
       ] }) }),
-      /* @__PURE__ */ jsx8("tbody", { className: "divide-y divide-white/5", children: info.disks.map((d) => /* @__PURE__ */ jsxs7("tr", { children: [
-        /* @__PURE__ */ jsx8("td", { className: "py-1.5 break-words", children: d.mount }),
-        /* @__PURE__ */ jsxs7("td", { className: "py-1.5 break-words opacity-70", children: [
+      /* @__PURE__ */ jsx8("tbody", { role: "rowgroup", className: CARD_BODY, children: info.disks.map((d) => /* @__PURE__ */ jsxs7("tr", { role: "row", className: CARD_ROW, children: [
+        /* @__PURE__ */ jsx8("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 break-words`, children: d.mount }),
+        /* @__PURE__ */ jsxs7("td", { "data-label": "Ger\xE4t", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 break-words opacity-70`, children: [
           d.device,
           " \xB7 ",
           d.fstype
         ] }),
-        /* @__PURE__ */ jsxs7("td", { className: "py-1.5 pr-4", children: [
+        /* @__PURE__ */ jsxs7("td", { "data-label": "Belegung", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 sm:pr-4`, children: [
           /* @__PURE__ */ jsxs7("div", { className: `mb-0.5 text-xs ${TONE_TEXT[d.tone] ?? ""}`, children: [
             d.percent.toFixed(0),
             " % von ",
@@ -1306,7 +1352,7 @@ function InfoView({ info, canRestart, busyUnit, onRestart, onTempLimitChanged })
           ] }),
           /* @__PURE__ */ jsx8(Bar, { percent: d.percent, tone: d.tone })
         ] }),
-        /* @__PURE__ */ jsx8("td", { className: "py-1.5 whitespace-nowrap opacity-80", children: formatBytes(d.available) })
+        /* @__PURE__ */ jsx8("td", { "data-label": "Frei", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 sm:whitespace-nowrap opacity-80`, children: formatBytes(d.available) })
       ] }, `${d.device}${d.mount}`)) })
     ] }),
     /* @__PURE__ */ jsxs7("div", { className: "grid gap-6 lg:grid-cols-2", children: [
@@ -1342,6 +1388,7 @@ function SystemPage() {
   const [hosts, setHosts] = useState6(null);
   const [hostsError, setHostsError] = useState6(null);
   const [health, setHealth] = useState6({});
+  const [connections, setConnections] = useState6({});
   const [info, setInfo] = useState6(null);
   const [error, setError] = useState6(null);
   const [loading, setLoading] = useState6(false);
@@ -1350,17 +1397,29 @@ function SystemPage() {
   const [message, setMessage] = useState6(null);
   const unmountSignal = useUnmountSignal();
   const canRestart = deck().hasPermission("hosts.execute");
-  const hostIdRef = useRef4(hostId);
-  const tabRef = useRef4(tab);
+  const requests = useRef3({});
+  const hostIdRef = useRef3(hostId);
+  const tabRef = useRef3(tab);
   hostIdRef.current = hostId;
   tabRef.current = tab;
   const busyUnit = busy && busy.hostId === hostId ? busy.unit : null;
-  const fetchLive = useCallback3(async (id) => {
-    const res = await authedFetch(`/ext/system/hosts/${id}/live`);
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(errorFromBody(body, res.status));
-    return body;
+  const query = useCallback3(async (id, view) => {
+    const request = (requests.current[id] ?? 0) + 1;
+    requests.current[id] = request;
+    try {
+      const body = await fetchSystem(id, view);
+      if (requests.current[id] === request) {
+        setConnections((current) => current[id] === true ? current : { ...current, [id]: true });
+      }
+      return body;
+    } catch (err) {
+      if (requests.current[id] === request && err instanceof SystemQueryError && err.status === 502) {
+        setConnections((current) => current[id] === false ? current : { ...current, [id]: false });
+      }
+      throw err;
+    }
   }, []);
+  const fetchLive = useCallback3((id) => query(id, "live"), [query]);
   const loadHosts = useCallback3(() => {
     setHosts(null);
     setHostsError(null);
@@ -1379,9 +1438,7 @@ function SystemPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await authedFetch(`/ext/system/hosts/${id}/info`);
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(errorFromBody(body, res.status));
+      const body = await query(id, "info");
       if (hostIdRef.current === id) setInfo(body);
     } catch (err) {
       if (hostIdRef.current === id) {
@@ -1391,19 +1448,25 @@ function SystemPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [query]);
   useEffect7(() => {
     setInfo(null);
     if (hostId && tab === "info") void load(hostId);
   }, [hostId, tab, load]);
   const hostName = info?.host.name ?? (hosts ?? []).find((h) => h.id === hostId)?.display_name;
   const tiles = useMemo3(
-    () => hosts === null ? null : hosts.map((h) => ({
-      ...tileFromHost(h),
-      ...tileState(health[h.id]),
-      ...h.credential === null ? { hint: "ohne SSH-Zugang" } : {}
-    })),
-    [hosts, health]
+    () => hosts === null ? null : hosts.map((h) => {
+      const row = health[h.id];
+      const reachable = connections[h.id] ?? row?.reachable;
+      return {
+        ...tileFromHost(h),
+        ...tileState(row),
+        ...connections[h.id] === false ? { extra: null, hint: "SSH-Abfrage fehlgeschlagen" } : {},
+        status: h.credential === null ? "no_access" : reachable === void 0 ? "unknown" : reachable ? "up" : "down",
+        ...h.credential === null ? { hint: "ohne SSH-Zugang", extra: null } : {}
+      };
+    }),
+    [hosts, health, connections]
   );
   useEffect7(() => {
     setMessage(null);

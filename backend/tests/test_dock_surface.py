@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from nodvard_deck.models import ExtensionRecord
 from test_edition import _owner
@@ -26,8 +28,8 @@ async def test_dock_cannot_disable_fixed_modules(client, db_session, test_settin
     await db_session.flush()
     owner = await _owner(client)
     response = await client.post("/api/v1/extensions/docker/disable", headers=owner)
-    assert response.status_code == 409
-    assert response.json()["detail"] == "Die Module stehen in dieser Ausgabe fest."
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Diese Funktion ist in dieser Ausgabe nicht verfügbar."
     assert record.state == "enabled"
 
 
@@ -35,7 +37,7 @@ async def test_dock_does_not_offer_module_takeovers(client, test_settings, monke
     monkeypatch.setattr(test_settings, "edition", "dock")
     owner = await _owner(client)
     response = await client.post("/api/v1/extensions/other/takeover", json={"old_id": "docker"}, headers=owner)
-    assert response.status_code == 409
+    assert response.status_code == 404
 
 
 async def test_dock_does_not_list_missing_modules(client, db_session, test_settings, monkeypatch):
@@ -72,7 +74,7 @@ async def test_dock_settings_name_the_product_without_changing_values(client, db
     from nodvard_deck.ext.runtime import get_extension_runtime
 
     monkeypatch.setattr(test_settings, "edition", "dock")
-    get_extension_runtime().discovered["docker"] = object()
+    monkeypatch.setitem(get_extension_runtime().discovered, "docker", SimpleNamespace(manifest=SimpleNamespace(editions=["dock"])))
     monkeypatch.setattr(extension_settings, "schema_for", lambda _: {
         "type": "object", "properties": {"label": {"type": "string", "description": "Nodvard Deck prüft die Images. Deck verwaltet die Server."}},
     })

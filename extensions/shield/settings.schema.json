@@ -1,6 +1,40 @@
 {
   "type": "object",
+  "x-connection-test-url": "/ext/shield/ai/test",
+  "x-connection-test-targets": [{"value": "primary", "label": "Hauptserver"}, {"value": "failover", "label": "Ersatzserver"}],
   "properties": {
+    "checks_enabled": {
+      "type": "boolean",
+      "default": true,
+      "title": "CVE-Abgleich und Außenprüfung nach Zeitplan",
+      "description": "Prüft installierte Pakete auf bekannte Sicherheitslücken sowie Ports und HTTPS-Zertifikate. Ändert nichts am Server."
+    },
+    "checks_cron": {
+      "type": "string",
+      "default": "30 6 * * *",
+      "title": "Zeitpunkt für CVE-Abgleich und Außenprüfung",
+      "description": "Standard: täglich um 06:30 Uhr in der Zeitzone dieser Installation.",
+      "x-widget": "schedule"
+    },
+    "external_checks_enabled": {
+      "type": "boolean",
+      "default": true,
+      "title": "Außenprüfung erlauben",
+      "description": "Deck prüft aus dem Heimnetz, nicht aus dem Internet, eine begrenzte Auswahl von TCP-Ports und bekannte HTTPS-Dienste. Zusätzlich je Server abschaltbar. Ausgeschaltet werden auch bei manuellen Prüfungen keine Verbindungen für die Außenprüfung aufgebaut."
+    },
+    "weekly_report_enabled": {
+      "type": "boolean",
+      "default": true,
+      "title": "Wochenbericht",
+      "description": "Speichert einmal pro Woche einen Bericht aus vorhandenen Shield-Daten und sendet eine Kurzfassung über deine Meldungskanäle."
+    },
+    "weekly_report_cron": {
+      "type": "string",
+      "default": "0 8 * * 1",
+      "title": "Zeitpunkt für den Wochenbericht",
+      "description": "Standard: Montag um 08:00 Uhr in der Zeitzone dieser Installation. Der Bericht erscheint höchstens einmal pro Kalenderwoche.",
+      "x-widget": "schedule"
+    },
     "auto_quarantine": {
       "type": "boolean",
       "default": true,
@@ -326,27 +360,52 @@
       "x-widget": "host-tag",
       "x-empty-label": "alle Server"
     },
+    "ai_provider": {
+      "type": "string",
+      "default": "ollama",
+      "enum": [
+        "ollama",
+        "openai_compat"
+      ],
+      "x-enum-labels": {
+        "ollama": "Ollama (lokal)",
+        "openai_compat": "OpenAI-kompatibel"
+      },
+      "title": "Nodvard KI: Anbieter",
+      "description": "Ollama nutzt deinen lokalen Server. OpenAI-kompatible Anbieter können lokal oder außerhalb deines Netzes laufen."
+    },
     "ollama_url": {
       "type": "string",
       "title": "Nodvard KI: Server (Ollama)",
       "description": "Adresse deines Ollama-Servers für Nodvard KI, z. B. http://192.168.2.42:11434",
       "pattern": "^https?://\\S+$",
-      "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten."
+      "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten.",
+      "x-visible-when": {
+        "ai_provider": "ollama"
+      },
+      "x-network-warning": true
     },
     "ollama_model": {
       "type": "string",
       "default": "qwen2.5:7b",
       "title": "Nodvard KI: Modell",
-      "description": "Name des Modells auf dem Ollama-Server. Die Liste kommt vom gespeicherten Server – nach einer neuen Adresse erst speichern, dann neu laden.",
+      "description": "Name des Modells auf dem gespeicherten Ollama-Server. Nach einer neuen Adresse zuerst speichern, dann die Liste neu laden.",
       "x-widget": "remote-select",
-      "x-options-url": "/ext/shield/ai/models?which=primary"
+      "x-options-url": "/ext/shield/ai/models?which=primary&provider=ollama",
+      "x-visible-when": {
+        "ai_provider": "ollama"
+      }
     },
     "ollama_failover_url": {
       "type": "string",
       "title": "Nodvard KI: Ersatz-Server (optional)",
       "description": "Wird nur gefragt, wenn der erste Server nicht antwortet.",
       "pattern": "^https?://\\S+$",
-      "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten."
+      "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten.",
+      "x-visible-when": {
+        "ai_provider": "ollama"
+      },
+      "x-network-warning": true
     },
     "ollama_failover_model": {
       "type": "string",
@@ -354,7 +413,52 @@
       "title": "Nodvard KI: Ersatz-Modell",
       "description": "Meist ein kleineres, schnelleres Modell.",
       "x-widget": "remote-select",
-      "x-options-url": "/ext/shield/ai/models?which=failover"
+      "x-options-url": "/ext/shield/ai/models?which=failover&provider=ollama",
+      "x-visible-when": {
+        "ai_provider": "ollama"
+      }
+    },
+    "openai_compat_url": {
+      "type": "string",
+      "pattern": "^https?://\\S+$",
+      "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten.",
+      "x-visible-when": {
+        "ai_provider": "openai_compat"
+      },
+      "x-network-warning": true,
+      "title": "Nodvard KI: Basis-URL (OpenAI-kompatibel)",
+      "description": "Zum Beispiel http://127.0.0.1:8080/v1. Trage nur die Basis-URL ohne Zugangsdaten ein."
+    },
+    "openai_compat_model": {
+      "type": "string",
+      "title": "Nodvard KI: Modell",
+      "description": "Genauer Modellname beim Anbieter. Nach einer neuen Adresse zuerst speichern, dann die Liste neu laden.",
+      "x-visible-when": {
+        "ai_provider": "openai_compat"
+      },
+      "x-widget": "remote-select",
+      "x-options-url": "/ext/shield/ai/models?which=primary&provider=openai_compat"
+    },
+    "openai_compat_failover_url": {
+      "type": "string",
+      "pattern": "^https?://\\S+$",
+      "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten.",
+      "x-visible-when": {
+        "ai_provider": "openai_compat"
+      },
+      "x-network-warning": true,
+      "title": "Nodvard KI: Ersatz-Server (optional)",
+      "description": "Wird genutzt, wenn das Hauptmodell ausfällt. Beide Server verwenden denselben API-Schlüssel."
+    },
+    "openai_compat_failover_model": {
+      "type": "string",
+      "title": "Nodvard KI: Ersatz-Modell",
+      "description": "Modell auf dem Ersatz-Server.",
+      "x-visible-when": {
+        "ai_provider": "openai_compat"
+      },
+      "x-widget": "remote-select",
+      "x-options-url": "/ext/shield/ai/models?which=failover&provider=openai_compat"
     },
     "docker_host_tag": {
       "type": "string",
@@ -416,9 +520,28 @@
   "x-secrets": [
     {
       "label": "nexus-soc-ollama-key",
-      "x-secret-bound-to": ["ollama_url", "ollama_failover_url"],
+      "x-secret-bound-to": [
+        "ollama_url",
+        "ollama_failover_url"
+      ],
       "title": "Nodvard KI: API-Schlüssel des Servers (optional)",
       "description": "Nur nötig, wenn dein Ollama-Server hinter einer Anmeldung liegt.",
+      "optional": true,
+      "x-visible-when": {
+        "ai_provider": "ollama"
+      }
+    },
+    {
+      "label": "shield-openai-compat-key",
+      "x-secret-bound-to": [
+        "openai_compat_url",
+        "openai_compat_failover_url"
+      ],
+      "x-visible-when": {
+        "ai_provider": "openai_compat"
+      },
+      "title": "Nodvard KI: API-Schlüssel (OpenAI-kompatibel, optional)",
+      "description": "Im Tresor gespeichert. Haupt- und Ersatz-Server verwenden denselben Schlüssel.",
       "optional": true
     }
   ]

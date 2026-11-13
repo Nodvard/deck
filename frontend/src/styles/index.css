@@ -176,9 +176,9 @@
   --surface-hover-shadow: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 16px 36px -18px color-mix(in srgb, var(--color-accent) 45%, black);
   --surface-hover-transform: translateY(-1px);
   --accent-image: linear-gradient(135deg, var(--color-accent), var(--color-accent-strong));
-  /* Der Verlauf deckt `hover:bg-accent-strong` ab; bis 0.8 hellten die Knöpfe beim Darüberfahren um 10 % auf. */
+  /* Der Verlauf überdeckt die Hover-Farbe; der Filter hellt den ganzen Knopf auf. */
   --accent-hover-filter: brightness(1.1);
-  /* Ring um die Status-Punkte wie bis 0.8 (ohne das frühere Pulsieren). */
+  /* Statische Ringe markieren die Status-Punkte. */
   --status-ok-ring: 0 0 0 3px color-mix(in srgb, var(--color-ok) 15%, transparent);
   --status-bad-ring: 0 0 0 3px color-mix(in srgb, var(--color-bad) 18%, transparent);
   --nav-active-image: linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 22%, transparent), transparent 85%);

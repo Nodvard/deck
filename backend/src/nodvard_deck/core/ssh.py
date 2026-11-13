@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -14,7 +15,9 @@ from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from ..db.session import release_connection, session_scope
 from ..models import KnownHostKey, Setting
+from . import ssh_retry
 from .error_text import describe_connection_error
 
 KEEPALIVE_INTERVAL_S = 15.0
@@ -43,6 +46,16 @@ class SshTimeout(SshUnreachable, TimeoutError):
 
 class SshAuthError(SshError):
     """Der Server hat die Anmeldung abgelehnt (sein Schlüssel war schon geprüft)."""
+
+
+class SshAuthPaused(SshAuthError):
+    pass
+
+
+AUTH_DENIED = (
+    "Zugang abgelehnt. Mögliche Ursachen: falscher oder fehlender Schlüssel, "
+    "falsches Passwort, Zwei-Faktor-Anmeldung (2FA), Sperre durch fail2ban oder Duo."
+)
 
 
 class HostKeyUnknown(SshError):
@@ -210,19 +223,29 @@ async def load_known_fingerprints(session: AsyncSession, host_id: str) -> dict[s
     return await _known_fingerprints(session, host_id)
 
 
-async def connect(
-    session: AsyncSession, target: ConnectionTarget, *, connect_timeout_s: float = 10.0, tofu: bool = True
-) -> asyncssh.SSHClientConnection:
-    """Baut eine einzelne, gepinnte Verbindung auf; ohne TOFU scheitert ein ungemerkter Schlüssel, bevor
-    Anmeldedaten gesendet werden."""
+async def _load_host_key_policy(
+    session: AsyncSession, target: ConnectionTarget, *, tofu: bool,
+) -> tuple[dict[str, str], bool]:
     allow_tofu = tofu and target.allow_tofu
-    # Vor dem Connect laden: asyncssh fragt den Schlüssel synchron im Handshake ab, ein `await` ist dort nicht möglich.
-    # Ein neu gesehener Typ wird deshalb erst nach dem Connect gespeichert.
     known = await _known_fingerprints(session, target.host_id)
     if allow_tofu and not known and await host_key_confirm_pending(session, target.host_id):
         # `target` kann von kurz vor "Schlüssel vergessen" stammen. Den Merker erst nach den gemerkten Schlüsseln lesen:
         # ist der Schlüssel weg, ist der Merker (selber Commit) auch schon zu sehen.
         allow_tofu = False
+    return known, allow_tofu
+
+
+async def connect(
+    session: AsyncSession | None, target: ConnectionTarget, *, connect_timeout_s: float = 10.0, tofu: bool = True,
+    key_only: bool = False,
+) -> asyncssh.SSHClientConnection:
+    """Baut eine gepinnte Verbindung auf; ohne TOFU scheitert ein unbekannter Schlüssel vor der Anmeldung.
+    Mit `session=None` liegen DB-Zugriffe außerhalb des Netzaufrufs."""
+    if session is None:
+        async with session_scope() as read_session:
+            known, allow_tofu = await _load_host_key_policy(read_session, target, tofu=tofu)
+    else:
+        known, allow_tofu = await _load_host_key_policy(session, target, tofu=tofu)
     holder: list[_PinningClient] = []
 
     def _client_factory() -> asyncssh.SSHClient:
@@ -255,9 +278,19 @@ async def connect(
     else:
         raise SshError(f"Unbekannte Credential-Art {target.kind!r} für SSH.")
 
+    if key_only:
+        if target.kind != "ssh_key":
+            raise SshAuthError("Für die Gegenprobe fehlt ein SSH-Schlüssel.")
+        connect_kwargs.update(preferred_auth="publickey", password_auth=False, kbdint_auth=False)
+
     try:
         conn = await asyncssh.connect(**connect_kwargs)
     except (OSError, asyncio.TimeoutError) as exc:
+        if isinstance(exc, TimeoutError):
+            from ..telemetry.codes import ErrorCode
+            from ..telemetry.service import record_error
+
+            await record_error(ErrorCode.SSH_TIMEOUT)
         # Netzfehler: nicht erreichbar, abgelehnt, Name unbekannt, Zeitlimit. Ein `TimeoutError()` hat keinen Text,
         # ohne diese Umwandlung stünde nirgends, warum es nicht geht.
         error_type = SshTimeout if isinstance(exc, TimeoutError) else SshUnreachable
@@ -273,7 +306,10 @@ async def connect(
             client = holder[0]
             raise HostKeyUnknown(target.host_id, client.offered_type, client.offered_fingerprint) from exc
         error_class = SshAuthError if isinstance(exc, asyncssh.PermissionDenied) else SshError
-        error = error_class(f"Verbindung zu {target.address}:{target.port} fehlgeschlagen: {exc}")
+        error = error_class(
+            AUTH_DENIED if error_class is SshAuthError
+            else f"Verbindung zu {target.address}:{target.port} fehlgeschlagen: {exc}"
+        )
         if holder:
             # Schlüsseltausch war durch, sonst wäre `offered_*` leer oder der Schlüssel abgelehnt.
             error.key_type = holder[0].offered_type
@@ -282,7 +318,29 @@ async def connect(
 
     client = holder[0]
     if client.offered_type is not None and client.offered_type not in known:
-        await _remember_fingerprint(session, target.host_id, client.offered_type, client.offered_fingerprint or "")
+        if session is None:
+            try:
+                async with session_scope() as write_session:
+                    if target.generation is not None and get_ssh_pool().generation(target.host_id) != target.generation:
+                        raise SshTargetChanged(_TARGET_CHANGED_TEXT)
+                    current, still_allowed = await _load_host_key_policy(write_session, target, tofu=tofu)
+                    expected = current.get(client.offered_type)
+                    if current and expected != client.offered_fingerprint:
+                        raise HostKeyMismatch(
+                            target.host_id, client.offered_type, expected or _known_summary(current),
+                            client.offered_fingerprint,
+                        )
+                    if expected is None:
+                        if not still_allowed:
+                            raise HostKeyUnknown(target.host_id, client.offered_type, client.offered_fingerprint)
+                        await _remember_fingerprint(
+                            write_session, target.host_id, client.offered_type, client.offered_fingerprint or "",
+                        )
+            except BaseException:
+                await _close_quietly(conn)
+                raise
+        else:
+            await _remember_fingerprint(session, target.host_id, client.offered_type, client.offered_fingerprint or "")
 
     return conn
 
@@ -365,6 +423,16 @@ _TARGET_CHANGED_TEXT = (
 )
 
 
+async def _store_retry(session: AsyncSession | None, host_id: str, state: ssh_retry.RetryState) -> None:
+    """Schreibt den Fehlerstand in eigener, kurzer Transaktion. Die des Aufrufers wird vorher abgeschlossen: Sie kann
+    schon schreiben (Umschlüsseln beim Lesen des Zugangs, neu gemerkter Server-Schlüssel) und hielte sonst die
+    SQLite-Sperre, auf die `save()` wartet, oder danach während des nächsten SSH-Befehls. Ohne Sitzung (`None`) gibt
+    es nichts abzuschließen."""
+    if session is not None:
+        await release_connection(session)
+    await ssh_retry.save(host_id, state)
+
+
 class SshPool:
     """Ein Verbindungspool je (Host, Zugangsdaten); tote Verbindungen werden bei der nächsten Anfrage ersetzt."""
 
@@ -373,6 +441,7 @@ class SshPool:
         # Eine Sperre je (Host, Zugangsdaten): ein nicht erreichbarer Host hält seine bis zum Connect-Timeout,
         # das darf Verbindungen zu anderen Hosts nicht aufhalten.
         self._locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._auth_locks: dict[str, asyncio.Lock] = {}
         # Steigt bei jedem drop_host(): ein Aufbau mit den alten Daten (alte Adresse, gelöschter Zugang) darf nicht
         # mehr im Pool landen.
         self._generation: dict[str, int] = {}
@@ -380,7 +449,7 @@ class SshPool:
 
     async def get(
         self,
-        session: AsyncSession,
+        session: AsyncSession | None,
         target: ConnectionTarget,
         *,
         credential_id: str,
@@ -395,20 +464,37 @@ class SshPool:
         generation = target.generation if target.generation is not None else self._generation.get(target.host_id, 0)
         # `setdefault` ohne `await` ist im Event-Loop atomar und braucht keine eigene Sperre.
         lock = self._locks.setdefault(key, asyncio.Lock())
-        async with lock:
+        async with lock, self._auth_locks.setdefault(target.host_id, asyncio.Lock()):
             # Erneut prüfen: ein paralleler Aufrufer kann die Verbindung inzwischen aufgebaut haben.
             conn = self._connections.get(key)
             if conn is not None and not conn.is_closed():
                 return conn
             if self._generation.get(target.host_id, 0) != generation:
                 raise SshTargetChanged(_TARGET_CHANGED_TEXT)  # schon vor dem Aufbau veraltet
-            conn = await connect(session, target, connect_timeout_s=connect_timeout_s)
+            async with session_scope() as retry_session:
+                retry = await ssh_retry.load(retry_session, target.host_id)
+            if retry.retry_at > time.time():
+                raise SshAuthPaused(
+                    f"{AUTH_DENIED} Automatische Anmeldungen pausieren. "
+                    "Unter Server & Zugänge kannst du „Jetzt erneut prüfen“ wählen."
+                )
+            try:
+                conn = await connect(session, target, connect_timeout_s=connect_timeout_s)
+            except SshAuthError:
+                await _store_retry(session, target.host_id, retry.failed())
+                raise
+            if retry.failures:
+                await _store_retry(session, target.host_id, ssh_retry.RetryState())
             if self._generation.get(target.host_id, 0) != generation:
                 # drop_host() lief während des Aufbaus: `target` kann veraltet sein, nicht poolen und nicht herausgeben.
                 await _close_quietly(conn)
                 raise SshTargetChanged(_TARGET_CHANGED_TEXT)
             self._connections[key] = conn
             return conn
+
+    async def reset_auth_retry(self, host_id: str) -> None:
+        async with self._auth_locks.setdefault(host_id, asyncio.Lock()):
+            await ssh_retry.save(host_id, ssh_retry.RetryState())
 
     def generation(self, host_id: str) -> int:
         """Stand des Zählers, der bei jedem `drop_host()` steigt (siehe `ConnectionTarget.generation`)."""

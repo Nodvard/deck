@@ -17,6 +17,7 @@ from nodvard_sdk.types import Risk
 from .capabilities import CONTAINER_NAME_RE
 from .compose_errors import UNSET_VAR_RE, scrub_compose_output
 from .detached import busy_check_command
+from .env_values import valid_env_names, with_saved_env
 from .image_updates import _IMAGE_ID_RE, canonical_repo, classify_registry_error, is_valid_ref, split_ref
 
 # --- Etiketten und strenge Prüfung ------------------------------------------------------
@@ -81,6 +82,7 @@ class ComposeTarget:
     config_files: tuple[str, ...]
     env_files: tuple[str, ...]
     config_hash: str | None
+    env_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,8 @@ def check_target(t: ComposeTarget) -> None:
         raise ValueError("Ungültige Compose-Dateien.")
     if len(t.env_files) > MAX_FILES or not all(_valid_path(f) for f in t.env_files):
         raise ValueError("Ungültige env-Dateien.")
+    if not valid_env_names(t.env_names):
+        raise ValueError("Ungültige Variablennamen.")
 
 
 # --- Erkennen: lässt sich der Container so aktualisieren? -------------------------------
@@ -228,9 +232,7 @@ def classify(info: dict[str, Any], *, own: bool) -> ComposeTarget | NotUpdatable
     image = str(info.get("image") or "")
     name = str(info.get("name") or "").lstrip("/")
 
-    # 1. Das Dashboard selbst nie über sich selbst aktualisieren: Bildname `lattice` (alt), `nodvard-deck` (neu), `nodvard`
-    # (Tippvariante), `<registry>/nodvard/deck`, `<registry>/nodvard/dock` und `nodvard-dock` (Nodvard Dock); sein Helfer
-    # `<registry>/nodvard/deck-updater` auch an seinem Label.
+    # Dashboard, Nodvard Dock und Update-Helfer bleiben über aktuelle und ältere Image-Namen gesperrt.
     if own or is_self_image(image) or is_helper_labels(labels):
         return _why("self", self_why(image, labels))
     # 2. Swarm.
@@ -312,7 +314,10 @@ def compose_argv(t: ComposeTarget, *args: str) -> list[str]:
         argv += ["-f", f]
     for e in t.env_files:
         argv += ["--env-file", e]
-    return argv + list(args)
+    argv = with_saved_env(argv + list(args), t.env_names)
+    if t.env_names:
+        return ["sh", "-c", 'cd -- "$1" || exit 1; shift; exec "$@"', "sh", t.working_dir, *argv]
+    return argv
 
 
 def pull_command(t: ComposeTarget) -> str:
@@ -331,9 +336,7 @@ def display_command(t: ComposeTarget) -> str:
 
 
 def rollback_ref(container: str) -> str:
-    """`lattice-rollback/<name>-<kurzer Hash>:previous`, der Name des Sicherungs-Images.
-
-    Der Hash des echten Containernamens hindert `foo_bar`, `foo-bar` und `Foo.Bar` daran, dasselbe Image zu teilen."""
+    """Sicherungsname mit Hash, damit `foo_bar`, `foo-bar` und `Foo.Bar` unterschiedliche Images behalten."""
     slug = re.sub(r"[^a-z0-9]+", "-", container.lower()).strip("-")[:60].strip("-") or "container"
     ref = f"lattice-rollback/{slug}-{hashlib.sha256(container.encode()).hexdigest()[:8]}:previous"
     if not is_valid_ref(ref):
@@ -667,7 +670,7 @@ class Snapshot:
     tag_image_id: str | None
     """Die Image-ID, auf die der Image-Name jetzt zeigt."""
     rollback_image_id: str | None = None
-    """Die Image-ID des Sicherungs-Images (`lattice-rollback/...`), falls es existiert."""
+    """Die Image-ID des Sicherungs-Images, falls es existiert."""
 
 
 def parse_verify(text: str) -> Snapshot:

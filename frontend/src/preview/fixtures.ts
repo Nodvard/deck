@@ -1,8 +1,5 @@
 /// <reference types="vite/client" />
-/**
- * Testdaten fuer die Design-Vorschau -- typische Homelab-Beispieldaten (Hosts, IPs,
- * Auslastung, Container), frei erfunden. Nur fuer preview.html.
- */
+/** Frei erfundene Homelab-Daten für preview.html. */
 const page = (ext_id: string, id: string, path: string, title: string, icon: string, nav_section: string, nav_order: number) => ({
   ext_id, id, path, title, icon, nav_section, nav_order, permissions: [], component: "X", mobile: "widgets", show_in_nav: true,
 });
@@ -39,18 +36,18 @@ const host = (
 });
 
 const KEY_ROOT: PreviewCredential = { kind: "ssh_key", username: "root", port: 22 };
-const KEY_OLD_USER: PreviewCredential = { kind: "ssh_key", username: "lattice", port: 22 };
+const KEY_SSH: PreviewCredential = { kind: "ssh_key", username: "nodvard", port: 22 };
 
 const HOSTS = [
   host("n-pve2", "pve2", "192.168.2.11", "hypervisor", "up", { credential: KEY_ROOT }),
   host("n-pve1", "pve1", "192.168.2.12", "hypervisor", "up", { credential: KEY_ROOT }),
-  host("g-docker", "docker", "192.168.2.21", "vm", "running", { credential: KEY_OLD_USER }),
+  host("g-docker", "docker", "192.168.2.21", "vm", "running", { credential: KEY_SSH }),
   host("g-monitoring", "monitoring", "192.168.2.22", "vm", "running", { credential: { kind: "ssh_password", username: "admin", port: 22 } }),
   host("g-ki", "ki-server", "192.168.2.43", "vm", "running"),
   host("g-valheim", "game-win", "192.168.2.24", "vm", "running", { os_family: "windows" }),
   host("g-dmini", "docker-lxc", "192.168.2.25", "lxc", "running"),
   host("g-bastion", "bastion", "192.168.2.26", "lxc", "down"),
-  host("h-pi", "Heimserver", "192.168.2.31", null, "up", { name: "heimserver", provider_ext_id: null, credential: KEY_OLD_USER }),
+  host("h-pi", "Heimserver", "192.168.2.31", null, "up", { name: "heimserver", provider_ext_id: null, credential: KEY_SSH }),
 ];
 
 const HOST_ID_BY_NAME: Record<string, string> = Object.fromEntries(HOSTS.map((h) => [h.display_name, h.id]));
@@ -212,7 +209,7 @@ const listItem = (title: string, subtitle: string | null, badge: object | null, 
 /** Alle echten Widgets (Specs wie in den Extensions registriert), Daten wie live. */
 const WIDGETS = [
   w("backups", "summary", "Backup-Center", "database-backup", "widgets/summary", {
-    kind: "list", empty_text: "Keine Backup-Jobs konfiguriert", max_items: null,
+    kind: "list", empty_text: "Keine Sicherungsjobs gefunden", max_items: null,
     item: listItem("{{ name }}", "{{ storage }} · {{ connection }}", { text: "{{ last_status_label }}", tone: "{{ tone }}" }, [
       { id: "retry", label: "Erneut versuchen", endpoint: "jobs/{{ job_ref }}/retry", method: "POST", confirm: true, confirm_text: "?", style: "danger", permissions: [], show_if: "{{ can_retry }}", payload: null },
       { id: "backup_now", label: "Jetzt sichern", endpoint: "jobs/{{ job_ref }}/retry", method: "POST", confirm: true, confirm_text: "?", style: "secondary", permissions: [], show_if: "{{ can_backup_now }}", payload: null },
@@ -342,8 +339,8 @@ const GAMESERVER = {
   config: { profile: "valheim-windows", values: {} },
 };
 
-/** Deterministischer Beispiel-Verlauf fuer die Design-Vorschau (kein Zufall, damit
- * Screenshots vergleichbar bleiben): Tagesgang + ein Lastspitzen-Ereignis + eine Luecke. */
+/** Deterministischer Beispiel-Verlauf für die Design-Vorschau (kein Zufall, damit
+ * Screenshots vergleichbar bleiben): Tagesgang + ein Lastspitzen-Ereignis + eine Lücke. */
 function metricsHistory(hostId: string, range: string): object {
   const seconds: Record<string, number> = { "1h": 3600, "6h": 21600, "24h": 86400, "7d": 604800, "30d": 2592000 };
   const span = seconds[range] ?? 3600;
@@ -383,8 +380,8 @@ function metricsHistory(hostId: string, range: string): object {
 
 let liveTick = 0;
 
-/** Live-Ansicht der system-Extension (Pi): pro Aufruf leicht veraenderte Werte, damit die
- * pve1-Verlaeufe in der Vorschau wie echt wandern -- deterministisch ueber den Zaehler. */
+/** Live-Ansicht der system-Extension (Pi): pro Aufruf leicht veränderte Werte, damit die
+ * pve1-Verläufe in der Vorschau wie echt wandern -- deterministisch über den Zähler. */
 function previewLive(): object {
   liveTick += 1;
   const w = (k: number) => Math.sin(liveTick / k);
@@ -430,7 +427,7 @@ function previewLive(): object {
   };
 }
 
-/** Aktionen-Seite, echtes ActionOut-Format (api/v1/actions.py). Nutzer-Vorschlaege tragen
+/** Aktionen-Seite, echtes ActionOut-Format (api/v1/actions.py). Nutzer-Vorschläge tragen
  * die UUID des Nutzers in proposed_by_id; angezeigt wird proposed_by_label. */
 function actionRow(id: string, fields: Record<string, unknown>) {
   return {
@@ -445,7 +442,7 @@ const ACTIONS = [
   actionRow("act-1", { reason: "Sicherheitsupdates einspielen (12 Pakete, davon 3 Sicherheit)" }),
   actionRow("act-2", {
     action_type: "container.restart", host_id: "g-docker", proposed_by_type: "extension", proposed_by_id: "shield",
-    proposed_by_label: "Nodvard Shield", reason: "KI-Container-Wache: „clamav“ ist abgestürzt (Exit 137)",
+    proposed_by_label: "Nodvard Shield", reason: "Container-Wache: „clamav“ ist abgestürzt (Exit 137)",
     created_at: new Date(Date.now() - 30 * 60_000).toISOString(), expires_at: new Date(Date.now() + 6 * 3600_000).toISOString(),
   }),
   actionRow("act-3", {
@@ -506,7 +503,7 @@ const CHANGELOG = {
   ],
 };
 
-/** Was „Verbindung pruefen“ in der Vorschau antwortet: `?scenario=new|changed|error` in der Adresse. */
+/** Was „Verbindung prüfen“ in der Vorschau antwortet: `?scenario=new|changed|error` in der Adresse. */
 export const previewState: {
   scenario: "ok" | "new" | "changed" | "error";
   /** `?scenario=empty`: frische Installation ohne Server, Module und Widgets. */
@@ -524,13 +521,13 @@ export const previewState: {
   ohneProxmox: boolean;
   /** `?scenario=ohne-proxmox-min`: wie oben, aber auch Server-Zustand, Docker & Co. aus (nur Terminal/Dateien). */
   ohneProxmoxMin: boolean;
-  /** `?scenario=keine-apps`: Server da, aber weder erkannte Dienste noch eigene Apps (kein Modul fuer Container) -- der Leerzustand von „Apps“. */
+  /** `?scenario=keine-apps`: Server da, aber weder erkannte Dienste noch eigene Apps (kein Modul für Container) -- der Leerzustand von „Apps“. */
   noApps: boolean;
-  /** Eigene Apps („+ App hinzufuegen“), die Anlegen/Aendern/Loeschen in der Vorschau und in Tests veraendern; `null` = Ausgangsstand (siehe `customApps()`). */
+  /** Eigene Apps („+ App hinzufügen“), die Anlegen/Ändern/Löschen in der Vorschau und in Tests verändern; `null` = Ausgangsstand (siehe `customApps()`). */
   customApps: PreviewApp[] | null;
   /** ?scenario=lange-namen: sehr lange Namen und Adressen ohne Leerzeichen (Apps, Vorschläge). */
   longNames?: boolean;
-  /** Update-Helfer (Einstellungen -> System): `?scenario=helfer-<zustand>`, siehe `HELPER_SCENARIOS`; leer = kein Helfer erwähnt (wie bisher). */
+  /** Update-Helfer (Einstellungen -> System): `?scenario=helfer-<zustand>`, siehe `HELPER_SCENARIOS`; leer = kein Helfer erwähnt. */
   helper: HelperScenario | "";
   /** `?theme=classic|simple|pro|original`: Theme der Vorschau. */
   theme: string;
@@ -549,7 +546,7 @@ const previewApp = (id: string, name: string, url: string, icon: string | null, 
   id, name, url, icon, color: extra.color ?? null, group, open_in_new_tab: extra.tab ?? true, host_id: extra.host_id ?? null, sort_order: 0,
 });
 
-/** Ausgangsstand eigener Apps: ein typisches Homelab, das kein Docker-Modul fuer Router und Co. hat. */
+/** Ausgangsstand eigener Apps: ein typisches Homelab, das kein Docker-Modul für Router und Co. hat. */
 function initialCustomApps(): PreviewApp[] {
   if (previewState.noHosts || previewState.noApps) return [];
   return [
@@ -585,7 +582,7 @@ function withApps<T extends { services: Record<string, unknown>[] }>(base: T, cu
   return { ...base, services, services_running: previewState.noApps ? 0 : (base as { services_running?: number }).services_running, apps: [...custom, ...detected] };
 }
 
-/** Schreibaufrufe auf `/apps` (Anlegen, Aendern, Loeschen, Reihenfolge) -- wirken auf `customApps()`. */
+/** Schreibaufrufe auf `/apps` (Anlegen, Ändern, Löschen, Reihenfolge) -- wirken auf `customApps()`. */
 function appRoutes(p: string, method: string, body: unknown): { handled: boolean; value?: unknown } {
   const list = customApps();
   const fields = (body ?? {}) as Partial<PreviewApp>;
@@ -627,7 +624,7 @@ const DEMO_APPS = [
   { ...appTile(previewApp("da3", "Beispiel-Pi-hole", "http://192.0.2.12/admin", "shield-check", "Netzwerk", { host_id: "demo-heimserver" })), host: "Beispiel-Heimserver", sort_order: 2 },
 ];
 
-/** Beispieldaten wie das Backend sie anlegt (core/demo_seed.py): fuenf Server ohne Zugang, Adressen aus 192.0.2.0/24. */
+/** Beispieldaten wie das Backend sie anlegt (core/demo_seed.py): fünf Server ohne Zugang, Adressen aus 192.0.2.0/24. */
 const demoHost = (id: string, display_name: string, address: string, status: string, tags: string[]) => ({
   ...host(id, display_name, address, null, status, { name: id, provider_ext_id: null }),
   tags, last_seen_at: status === "up" ? new Date().toISOString() : null,
@@ -656,15 +653,15 @@ const SETUP_MODULES = [
   {"id": "backups", "name": "Proxmox-Backups", "description": "Zeigt alle Proxmox-Backups auf einen Blick, warnt bei fehlgeschlagenen oder fehlenden Sicherungen und bei knappem Speicher. Backup-Jobs lassen sich anlegen, ändern und neu starten.", "icon": "database-backup", "category": "servers", "sort_order": 50},
   {"id": "documents", "name": "Dokumente", "description": "Dokumentenarchiv mit Texterkennung: PDFs und Scans hochladen, automatisch verschlagworten lassen und per Volltextsuche wiederfinden.", "icon": "file-text", "category": "tools", "sort_order": 20},
   {"id": "gameserver", "name": "Gameserver", "description": "Gameserver starten und stoppen und den aktuellen Beitritts-Code anzeigen (z. B. Valheim). Server werden über eine Markierung (Tag) erkannt.", "icon": "gamepad-2", "category": "servers", "sort_order": 60, "stage": "beta"},
-  {"id": "hello-world", "name": "Hello World", "description": "Beispiel-Erweiterung für Nodvard Deck, gedacht für Entwickler. Zeigt, wie eigene Seiten, Kacheln und Aufgaben eingebunden werden – im Alltag nicht nötig.", "icon": "sparkles", "category": "example", "sort_order": 10},
+  {"id": "hello-world", "name": "Hello World", "description": "Beispiel-Erweiterung für Nodvard Deck, gedacht für Entwickler. Zeigt, wie eigene Seiten, Kacheln und Aufgaben eingebunden werden, im Alltag nicht nötig.", "icon": "sparkles", "category": "example", "sort_order": 10},
   {"id": "inventory", "name": "Inventar", "description": "Inventar für Geräte und Gegenstände: Standorte, Kategorien, Kaufpreis, Garantie mit Ablaufwarnung, Fotos und CSV-Export.", "icon": "package", "category": "tools", "sort_order": 30},
   {"id": "network", "name": "Netzwerk", "description": "Wegweiser: Pi-hole und Nginx Proxy Manager sind jetzt eigene Module. Dieses Modul kann ausgeschaltet bleiben.", "icon": "activity", "category": "servers", "sort_order": 70, "stage": "beta"},
   {"id": "nextcloud", "name": "Nextcloud", "description": "Bindet deine Nextcloud in den Dateimanager von Nodvard Deck ein: Dateien ansehen, hoch- und herunterladen und zwischen Servern kopieren.", "icon": "cloud", "category": "connections", "sort_order": 20},
-  {"id": "shield", "name": "Nodvard Shield", "description": "Virenschutz für alle Server: ClamAV-Scans mit Zeitplan, Echtzeit-Wächter, Quarantäne, Lynis-Härtungsaudits – dazu die KI-Container-Wache (Nodvard KI), die abgestürzte Docker-Container erkennt und Lösungen vorschlägt.", "icon": "shield-alert", "category": "security", "sort_order": 10},
+  {"id": "shield", "name": "Nodvard Shield", "description": "Virenschutz für alle Server: ClamAV-Scans mit Zeitplan, Echtzeit-Wächter, Quarantäne, Lynis-Härtungsaudits, dazu die Container-Wache, die abgestürzte Docker-Container erkennt und Lösungen vorschlägt.", "icon": "shield-alert", "category": "security", "sort_order": 10},
   {"id": "ntfy", "name": "ntfy-Benachrichtigungen", "description": "Schickt Meldungen von Nodvard Deck als Push-Nachricht aufs Handy über ntfy (ntfy.sh oder eigener Server).", "icon": "bell", "category": "connections", "sort_order": 10},
   {"id": "proxmox", "name": "Proxmox VE", "description": "Liest deine Proxmox-Server mit allen VMs und Containern in Nodvard Deck ein: Auslastung, Start/Stopp/Neustart, Snapshots, Konsole und Speicher-Übersicht.", "icon": "server", "category": "servers", "sort_order": 40},
-  {"id": "scripts", "name": "Skripte", "description": "Eigene Skripte zentral verwalten, versionieren und auf einem, mehreren oder allen Servern ausführen – sofort oder nach Zeitplan.", "icon": "terminal-square", "category": "tools", "sort_order": 10},
-  {"id": "docker", "name": "Docker", "description": "Findet Docker-Container auf markierten Servern und zeigt sie als Kacheln mit Status. Container lassen sich starten, stoppen und neu starten. Auf Wunsch zeigt das Modul, für welche Container es neuere Images gibt – und spielt sie bei Compose-Diensten auf Knopfdruck ein.", "icon": "layout-grid", "category": "servers", "sort_order": 30},
+  {"id": "scripts", "name": "Skripte", "description": "Eigene Skripte zentral verwalten, versionieren und auf einem, mehreren oder allen Servern ausführen, sofort oder nach Zeitplan.", "icon": "terminal-square", "category": "tools", "sort_order": 10},
+  {"id": "docker", "name": "Docker", "description": "Findet Docker-Container auf markierten Servern und zeigt sie als Kacheln mit Status. Container lassen sich starten, stoppen und neu starten. Auf Wunsch zeigt das Modul, für welche Container es neuere Images gibt, und spielt sie bei Compose-Diensten auf Knopfdruck ein.", "icon": "layout-grid", "category": "servers", "sort_order": 30},
   {"id": "system", "name": "Server-Zustand", "description": "Zustand eines Linux-Servers auf einer Seite: Auslastung live und im Verlauf, Temperaturen, Speicherplatz, Dienste (mit Neustart über die Freigabe), Updates und Prozesse.", "icon": "cpu", "category": "servers", "sort_order": 10},
   {"id": "terminal", "name": "Terminal", "description": "Web-Terminal und Dateizugriff per SSH direkt im Browser, mit mehreren Sitzungen gleichzeitig.", "icon": "terminal", "category": "servers", "sort_order": 20},
 ];
@@ -715,13 +712,13 @@ function setupRoutes(p: string, method: string, body?: unknown): { handled: bool
 const PI_FINGERPRINT = "SHA256:q3Zc1oB0m7uVxk9sYtEw2nPjR4dLhGfA8yKcVbNzXe0";
 const OLD_FINGERPRINT = "SHA256:Zk4n8WcP1xR7aYdT5uLoH2vJmQe9sBgF3iNbXtCyU6A";
 
-/** Frische Installation: nichts da, was das Cockpit zeigen koennte. */
+/** Frische Installation: nichts da, was das Cockpit zeigen könnte. */
 const EMPTY_OVERVIEW = {
   services: [], services_running: 0, backups: null, pending_actions: 0, unread_notifications: 0, attention: [], errors: [],
   generated_at: Date.now() / 1000,
 };
 
-/** Push-Erweiterung: eigene Zeile, sie hat in der Vorschau keine eigene Seite im Menue. */
+/** Push-Erweiterung: eigene Zeile, sie hat in der Vorschau keine eigene Seite im Menü. */
 /** Gruppe und Reihenfolge der Module in den Listen (wie im Manifest: `category`, `sort_order`). */
 const MODULE_META: Record<string, { category: string; sort_order: number; stage?: string }> = {
   system: { category: "servers", sort_order: 10 }, terminal: { category: "servers", sort_order: 20 },
@@ -809,7 +806,7 @@ function checkResult(hostId: string) {
       host_key: { status: "changed", key_type: "ssh-ed25519", fingerprint: PI_FINGERPRINT, expected: OLD_FINGERPRINT },
       items: [
         reachable,
-        { id: "host_key", label: "Server-Schlüssel", status: "fail", detail: `Achtung: Der Server meldet einen anderen Schlüssel als bisher. Bisher ${OLD_FINGERPRINT}, jetzt ${PI_FINGERPRINT} (ssh-ed25519).`, hint: "Das passiert nach einer Neuinstallation – oder wenn sich jemand dazwischenschaltet. Nur wenn du den Server neu aufgesetzt hast: gemerkten Schlüssel vergessen, erneut prüfen und den neuen Fingerabdruck bestätigen." },
+        { id: "host_key", label: "Server-Schlüssel", status: "fail", detail: `Achtung: Der Server meldet einen anderen Schlüssel als bisher. Bisher ${OLD_FINGERPRINT}, jetzt ${PI_FINGERPRINT} (ssh-ed25519).`, hint: "Das passiert nach einer Neuinstallation oder wenn sich jemand dazwischenschaltet. Nur wenn du den Server neu aufgesetzt hast: gemerkten Schlüssel vergessen, erneut prüfen und den neuen Fingerabdruck bestätigen." },
       ],
     };
   }
@@ -920,7 +917,7 @@ function helperBase() {
   return {
     present: true, reason: null, ready: true, ready_reason: null, state: "idle", helper_version: "0.7.0", heartbeat_at: nowS() - 12,
     target: { current_version: "0.7.0", floating_tag: "latest", pinned: false }, busy: null, previous: null, last_result: null, pending: null,
-    request_versions: [1, 2],
+    request_versions: [1, 2, 3],
   };
 }
 
@@ -1221,7 +1218,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
     return { removed_hosts: DEMO_HOSTS.length, kept_hosts: 0, removed_notifications: DEMO_NOTIFICATIONS.length, layout_restored: false, removed_apps: DEMO_APPS.length, kept_apps: 0 };
   }
   if (previewState.demo) {
-    // Beispieldaten: Server, Meldungen und Uebersicht aus dem Seed; der Rest bleibt wie sonst.
+    // Beispieldaten: Server, Meldungen und Übersicht aus dem Seed; der Rest bleibt wie sonst.
     if (p === "/hosts" && method === "GET") return DEMO_HOSTS;
     const demoHostRoute = p.match(/^\/hosts\/(demo-[^/?]+)$/);
     if (demoHostRoute) return DEMO_HOSTS.find((h) => h.id === demoHostRoute[1]);
@@ -1264,7 +1261,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
     access_token: "preview", expires_in: 900,
     user: { id: "u1", username: "admin", display_name: "Admin", email: null, is_owner: true, locale: "de", permissions: ["*"] },
   };
-  // Die Shell erneuert das Token vorab (lib/tokenRefresh.ts) -- sonst waere die Vorschau
+  // Die Shell erneuert das Token vorab (lib/tokenRefresh.ts) -- sonst wäre die Vorschau
   // nach 13 min abgemeldet. Format wie api/v1/auth.py::_tokens_response (Web: ohne refresh_token).
   if (p === "/auth/refresh" && method === "POST") return {
     access_token: "preview", expires_in: 900,
@@ -1310,7 +1307,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
     { id: "apt-updates", name: "Sicherheitsupdates", description: "", content: "#!/bin/sh\napt-get update && apt-get -y upgrade\n", params_schema: {}, target: { kind: "host", host_id: "h-pi" }, schedule: "0 3 * * 0", enabled: false, job_id: "script-apt" },
   ];
   if (p === "/ext/scripts/scripts/lynis-audit/runs") return [
-    { action_id: "a1", status: "failed", host_id: "h-pve1", host_name: "Proxmox-Knoten pve1", proposed_by: "extension/scripts", created_at: "2026-09-25T23:00:00Z", finished_at: null, exit_code: null, output: "", error: "Zeitüberschreitung – der Befehl hat zu lange gebraucht.", duration_ms: null },
+    { action_id: "a1", status: "failed", host_id: "h-pve1", host_name: "Proxmox-Knoten pve1", proposed_by: "extension/scripts", created_at: "2026-09-25T23:00:00Z", finished_at: null, exit_code: null, output: "", error: "Zeitüberschreitung, der Befehl hat zu lange gebraucht.", duration_ms: null },
     { action_id: "a2", status: "succeeded", host_id: "h-pve2", host_name: "Proxmox-Knoten pve2", proposed_by: "extension/scripts", created_at: "2026-09-25T23:00:00Z", finished_at: null, exit_code: 0, output: "warning[]=SSH-7408\nhardening_index=68", error: "", duration_ms: 31900 },
   ];
   if (p.startsWith("/ext/scripts/scripts/lynis-audit/history")) return [{ sha: "a1b2c3d4e5", message: "scripts: Lynis-Sicherheitsaudit als Erststand angelegt", commit_time: 1758700000 }];
@@ -1346,7 +1343,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
             packages: ["libcamera-ipa", "librpicam-app1", "rpicam-apps-core"].map((name) => ({ name, new_version: "1.9.1-1", current_version: "1.9.0-1", repo: "stable", security: false, kept_back: true })),
           }) },
         { host_id: "h-pve1", host_name: "Proxmox-Knoten pve1", host_status: "down", checking: false, busy: null, last_run: null,
-          status: { ...st(0, 0), manager: null, error: "Zeitüberschreitung – der Vorgang hat zu lange gebraucht." } },
+          status: { ...st(0, 0), manager: null, error: "Zeitüberschreitung, der Vorgang hat zu lange gebraucht." } },
       ],
       summary: { hosts: 5, checked: 4, up_to_date: 1, packages: 11, security: 2, installable: 8, installable_security: 2, reboot: 1, errors: 1,
         not_installable: { phased: 0, kept_back: 3, held: 0 }, not_installable_security: { phased: 0, kept_back: 0, held: 0 } },
@@ -1401,7 +1398,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
       { host_id: "h-pve1", host_name: "Proxmox-Knoten pve1", host_status: "down", reachable: false, error: "Zeitüberschreitung", clamav_installed: false, lynis_installed: false, last_scan: null, last_audit: null, scanning: false, auditing: false },
     ],
     summary: { hosts: 4, protected: 2, open_threats: 1, quarantined: 2, neutralized_total: 3, findings_30d: 3, avg_hardening: 67, score: 58, stale_signatures: 1 },
-    attention: [{ kind: "signatures", tone: "warn", host_id: "h-pve2", host_name: "Proxmox-Knoten pve2", title: "Proxmox-Knoten pve2: Virensignaturen sind 6 Wochen alt", hint: "Mit alten Signaturen erkennt ClamAV neue Schadprogramme nicht. Signaturen aktualisieren – dabei wird auch das automatische Update eingeschaltet.", action_label: "Signaturen aktualisieren" }],
+    attention: [{ kind: "signatures", tone: "warn", host_id: "h-pve2", host_name: "Proxmox-Knoten pve2", title: "Proxmox-Knoten pve2: Virensignaturen sind 6 Wochen alt", hint: "Mit alten Signaturen erkennt ClamAV neue Schadprogramme nicht. Signaturen aktualisieren. Dabei wird auch das automatische Update eingeschaltet.", action_label: "Signaturen aktualisieren" }],
     config: { auto_quarantine: true, realtime_enabled: true, watch_interval_min: 10, quick_scan_cron: "0 2 * * *", deep_scan_cron: "30 3 * * 0", audit_cron: "0 1 * * *" },
   };
   // Shield-Reiter Quarantäne, Scans, Härtung und Container-Wache: dieselben Zahlen wie die Übersicht oben (1 offener Fund,
@@ -1436,7 +1433,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
       scan("sc-5", "h-pve2", "quick", "infected", 83, 50311, 1),
       scan("sc-4", "h-pi", "quick", "clean", 90, 14210),
       ...(p.includes("include_watch=true") ? [scan("sc-3", "h-pi", "watch", "clean", 12, 312)] : []),
-      scan("sc-2", "h-pve2", "quick", "error", 60 * 26, null, 0, "Zeitüberschreitung nach 2 Stunden – der Scan wurde auf dem Server beendet."),
+      scan("sc-2", "h-pve2", "quick", "error", 60 * 26, null, 0, "Zeitüberschreitung nach 2 Stunden, der Scan wurde auf dem Server beendet."),
       scan("sc-1", "h-pi", "deep", "clean", 60 * 24 * 4, 182340),
     ];
   }
@@ -1464,7 +1461,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
         ai_summary: "Der Container wurde von außen beendet (Exit 137 ohne Speichermangel). Ein Neustart ist vermutlich harmlos.", action_id: "a-inc-3", is_crash: true, occurrences: 2, last_seen: t - 900 },
       { id: "inc-2", host_name: "docker", target: "nextcloud-app", message: "Container 'nextcloud-app' neu gestartet (Exit 1)", created_at: t - 86400, status: "resolved",
         status_changed_at: t - 82000, ai_summary: "Die App startete nicht, weil die Datenbank noch nicht bereit war.", action_id: null, is_crash: true,
-        auto_resolved: "Läuft wieder seit gestern – von selbst erledigt." },
+        auto_resolved: "Läuft wieder seit gestern, von selbst erledigt." },
       { id: "inc-1", host_name: "Heimserver", target: "pihole", message: "Container 'pihole' beendet (Exit 0)", created_at: t - 86400 * 3, status: "dismissed",
         status_changed_at: t - 86400 * 3 + 600, ai_summary: null, action_id: null, is_crash: false },
     ];
@@ -1501,7 +1498,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   };
   if (p === "/extensions/shield/settings") return {
     schema: SHIELD_SCHEMA, values: { ollama_url: "http://192.168.2.43:11434" },
-    secrets: [{ label: "nexus-soc-ollama-key", title: "Nodvard KI: API-Schlüssel des Servers (optional)", description: null, item: null, is_set: false }],
+    secrets: [{ label: "nexus-soc-ollama-key", title: "Container-Wache: API-Schlüssel des Servers (optional)", description: null, item: null, is_set: false }],
   };
   if (p.startsWith("/extensions/") && p.split("/").length === 3) {
     const id = p.split("/")[2];
@@ -1553,7 +1550,10 @@ export function respond(path: string, method: string, body?: unknown): unknown {
     };
   }
   if (p === "/pages") return previewState.noHosts ? [] : PAGES;
-  if (p === "/capabilities") return { api_version: "0.1.0", view_types: [], extensions: [], feature_flags: {} };
+  if (p === "/capabilities") return {
+    api_version: "0.1.0", view_types: [], extensions: [],
+    feature_flags: { terminal: !previewState.noHosts, files: !previewState.noHosts },
+  };
   if (p === "/widgets") return previewState.noHosts ? [] : WIDGETS;
   if (p === "/hosts" && previewState.start) return [{ ...HOSTS.find((h) => h.id === "h-pi")!, credential: null, status: "unknown" }];
   if (p === "/hosts") return HOSTS;
@@ -1610,7 +1610,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   return undefined;
 }
 
-/** Meldungen fuer die Glocken-Schnellansicht (relativ zu "jetzt", damit "vor 5 min" stimmt). */
+/** Meldungen für die Glocken-Schnellansicht (relativ zu "jetzt", damit "vor 5 min" stimmt). */
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 const NOTIFICATIONS = [
   { id: "n1", ts: minutesAgo(5), severity: "warning", title: "Speicher local-lvm auf pve2 fast voll: 95 %", body: "", source_ext_id: "proxmox", correlation_id: null, read_at: null, payload: { path: "/ext/proxmox/nodes?tab=storage&host=n-pve2" } },
@@ -1621,7 +1621,7 @@ const NOTIFICATIONS = [
 ];
 
 const PROXMOX_SCHEMA = {"type": "object", "properties": {"connections": {"type": "array", "title": "Proxmox-Server", "description": "Ein Eintrag je Proxmox-Server oder -Cluster. Knoten, VMs und Container werden automatisch eingelesen.", "x-item-title": "Server", "items": {"type": "object", "properties": {"name": {"type": "string", "title": "Kurzname", "description": "Eindeutig und ohne Leerzeichen, z. B. „pve2“ oder „pve1“. Nach dem ersten Einlesen nicht mehr ändern."}, "base_url": {"type": "string", "title": "Adresse", "description": "z. B. https://192.168.2.11:8006"}, "token_id": {"type": "string", "title": "API-Token-ID", "description": "Format benutzer@realm!tokenname, z. B. nodvard@pve!dashboard. Erstellen unter Rechenzentrum → Rechte → API-Token."}, "tls_insecure_skip_verify": {"type": "boolean", "default": false, "title": "Selbstsigniertes Zertifikat erlauben", "description": "Nur im eigenen Netz aktivieren. Nötig für das Standardzertifikat von Proxmox."}}, "required": ["name", "base_url", "token_id"]}}}, "required": ["connections"], "x-secrets": [{"label": "proxmox-token:{name}", "per_item": "connections", "title": "API-Token-Geheimnis", "description": "Der geheime Wert, den Proxmox beim Anlegen des Tokens einmalig anzeigt."}]};
-const SHIELD_SCHEMA = {"type": "object", "properties": {"ollama_url": {"type": "string", "title": "Nodvard KI: Server (Ollama)", "description": "Adresse deines Ollama-Servers für Nodvard KI, z. B. http://192.168.2.43:11434"}, "ollama_model": {"type": "string", "default": "qwen2.5:7b", "title": "Nodvard KI: Modell", "description": "Name des Modells auf dem Ollama-Server."}, "ollama_failover_url": {"type": "string", "title": "Nodvard KI: Ersatz-Server (optional)", "description": "Wird nur gefragt, wenn der erste Server nicht antwortet."}, "ollama_failover_model": {"type": "string", "default": "qwen2.5:0.5b", "title": "Nodvard KI: Ersatz-Modell", "description": "Meist ein kleineres, schnelleres Modell."}, "docker_host_tag": {"type": "string", "default": "docker", "title": "Überwachte Server", "description": "Server mit dieser Markierung (Tag) werden auf abgestürzte Container überwacht."}, "incident_batch_delay_s": {"type": "number", "default": 300, "title": "Sammelzeit (Sekunden)", "description": "So lange werden Vorfälle gesammelt, bevor die KI eine Einschätzung abgibt.", "x-advanced": true}, "host_target_cooldown_s": {"type": "number", "default": 1800, "title": "Ruhezeit je Container (Sekunden)", "description": "Mindestabstand, bevor derselbe Container erneut als Vorfall gemeldet wird.", "x-advanced": true}, "suppressed_hosts": {"type": "array", "items": {"type": "string"}, "title": "Ignorierte Server", "description": "Vorfälle dieser Server werden nie gemeldet, z. B. absichtlich pausierte Systeme.", "x-advanced": true}, "forbidden_host_keywords": {"type": "array", "items": {"type": "string"}, "default": ["pve", "proxmox", "host", "server", "node", "router", "gateway", "nas"], "title": "Schutzwörter", "description": "Schlägt die KI einen Container vor, dessen Name eines dieser Wörter enthält, wird der Vorschlag verworfen (Schutz davor, einen ganzen Server statt eines Containers neu zu starten). Die Vorgabe ist nur ein allgemeiner Startwert; ergänze hier die Namen deiner eigenen Server.", "x-advanced": true}}, "required": ["ollama_url"], "x-secrets": [{"label": "nexus-soc-ollama-key", "title": "Nodvard KI: API-Schlüssel des Servers (optional)", "description": "Nur nötig, wenn dein Ollama-Server hinter einer Anmeldung liegt."}]};
+const SHIELD_SCHEMA = {"type": "object", "properties": {"ollama_url": {"type": "string", "title": "Container-Wache: Server (Ollama)", "description": "Adresse deines Ollama-Servers für die Container-Wache, z. B. http://192.168.2.43:11434"}, "ollama_model": {"type": "string", "default": "qwen2.5:7b", "title": "Container-Wache: Modell", "description": "Name des Modells auf dem Ollama-Server."}, "ollama_failover_url": {"type": "string", "title": "Container-Wache: Ersatz-Server (optional)", "description": "Wird nur gefragt, wenn der erste Server nicht antwortet."}, "ollama_failover_model": {"type": "string", "default": "qwen2.5:0.5b", "title": "Container-Wache: Ersatz-Modell", "description": "Meist ein kleineres, schnelleres Modell."}, "docker_host_tag": {"type": "string", "default": "docker", "title": "Überwachte Server", "description": "Server mit dieser Markierung (Tag) werden auf abgestürzte Container überwacht."}, "incident_batch_delay_s": {"type": "number", "default": 300, "title": "Sammelzeit (Sekunden)", "description": "So lange werden Vorfälle gesammelt, bevor die Vorfälle eingeschätzt werden.", "x-advanced": true}, "host_target_cooldown_s": {"type": "number", "default": 1800, "title": "Ruhezeit je Container (Sekunden)", "description": "Mindestabstand, bevor derselbe Container erneut als Vorfall gemeldet wird.", "x-advanced": true}, "suppressed_hosts": {"type": "array", "items": {"type": "string"}, "title": "Ignorierte Server", "description": "Vorfälle dieser Server werden nie gemeldet, z. B. absichtlich pausierte Systeme.", "x-advanced": true}, "forbidden_host_keywords": {"type": "array", "items": {"type": "string"}, "default": ["pve", "proxmox", "host", "server", "node", "router", "gateway", "nas"], "title": "Schutzwörter", "description": "Wird ein Container vorgeschlagen, dessen Name eines dieser Wörter enthält, wird der Vorschlag verworfen (Schutz davor, einen ganzen Server statt eines Containers neu zu starten). Die Vorgabe ist nur ein allgemeiner Startwert; ergänze hier die Namen deiner eigenen Server.", "x-advanced": true}}, "required": ["ollama_url"], "x-secrets": [{"label": "nexus-soc-ollama-key", "title": "Container-Wache: API-Schlüssel des Servers (optional)", "description": "Nur nötig, wenn dein Ollama-Server hinter einer Anmeldung liegt."}]};
 
 // ---------------------------------------------------------------------------
 // Szenario „ohne Proxmox“ (`?scenario=ohne-proxmox`, `…-min`): eine Installation ganz ohne Proxmox.
@@ -1700,8 +1700,8 @@ export function applyOhneProxmox(min: boolean, many = false): void {
     tags: (extra.tags ?? []) as never[], last_seen_at: (status === "up" ? new Date(Date.now() - 3 * 86_400_000).toISOString() : null) as never,
   });
   HOSTS.splice(0, HOSTS.length,
-    mk("m-pi", "Heimserver", "192.168.2.31", "up", { cred: KEY_OLD_USER, tags: ["docker"] }),
-    mk("m-deb", "Debian-VM", "192.168.2.40", "unknown", { cred: KEY_OLD_USER, tags: ["docker"] }),
+    mk("m-pi", "Heimserver", "192.168.2.31", "up", { cred: KEY_SSH, tags: ["docker"] }),
+    mk("m-deb", "Debian-VM", "192.168.2.40", "unknown", { cred: KEY_SSH, tags: ["docker"] }),
     mk("m-nas", "NAS", "192.168.2.20", "unknown", { cred: KEY_PW }),
     mk("m-win", "Spiele-PC", "192.168.2.50", "unknown", { os: "windows", cred: KEY_PW, tags: ["gameserver"] }),
   );
@@ -1784,7 +1784,7 @@ function addManyServers(): void {
     const offline = i === 5 || i === 17;
     HOSTS.push({
       ...host(id, name, `192.168.2.${100 + i}`, null, offline ? "down" : "up", {
-        name, provider_ext_id: null, os_family: windows ? "windows" : "linux", credential: KEY_OLD_USER,
+        name, provider_ext_id: null, os_family: windows ? "windows" : "linux", credential: KEY_SSH,
       }),
       tags: [] as never[], last_seen_at: new Date(Date.now() - 60_000).toISOString() as never,
     });

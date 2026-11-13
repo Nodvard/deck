@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,7 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
+from exec_gate_helpers import ReadingExec
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "extensions" / "shield" / "src"))
 
@@ -122,6 +124,13 @@ def test_upgrade_commands_are_safe_and_security_only_names_packages():
         assert match_deny_patterns(cmd) is None, cmd
     with pytest.raises(ValueError):
         up.upgrade_command("apt", "security", [])
+
+
+def test_package_names_ending_in_a_minus_are_dropped():
+    sec = up.upgrade_command("apt", "security", ["openssl", "ca-certificates-", "libc6-"])
+    assert "install --only-upgrade openssl" in sec and "certificates" not in sec and "libc6" not in sec
+    with pytest.raises(ValueError):
+        up.upgrade_command("apt", "security", ["ca-certificates-"])
 
 
 # --- "Alle Updates" als dist-upgrade (Einstellung, Standard aus) --------------
@@ -375,7 +384,7 @@ async def test_the_automatic_run_leaves_a_server_with_only_kept_back_updates_alo
             return SimpleNamespace(exit_code=0, stdout=KEPT_ONLY_STATUS, stderr="", duration_ms=5)
         return await ok_run(host, command, timeout_s)
 
-    ctx.exec = SimpleNamespace(run=kept_only)
+    ctx.exec = ReadingExec(ext_id="shield", run=kept_only)
     await UpdateCenter(ctx, Defender(ctx)).auto_update()
     assert not any("@@launch" in c for c in ctx.commands)
     assert "Raspberry Pi: 3 zurückgehalten, nichts eingespielt" in ctx.notes[-1].body
@@ -387,7 +396,7 @@ async def test_the_automatic_run_leaves_a_server_with_only_kept_back_updates_alo
             return SimpleNamespace(exit_code=0, stdout=phased_only, stderr="", duration_ms=5)
         return await ok_run(host, command, timeout_s)
 
-    ctx.exec = SimpleNamespace(run=phased)
+    ctx.exec = ReadingExec(ext_id="shield", run=phased)
     await UpdateCenter(ctx, Defender(ctx)).auto_update()
     assert "Raspberry Pi: 3 durch Phasing verzögert, nichts eingespielt" in ctx.notes[-1].body
 
@@ -402,7 +411,7 @@ async def test_the_automatic_run_leaves_a_server_with_only_kept_back_updates_alo
 
     ctx._settings_value = {**ctx._settings_value, "auto_updates_mode": "security"}
     ctx.commands.clear()
-    ctx.exec = SimpleNamespace(run=unknown)
+    ctx.exec = ReadingExec(ext_id="shield", run=unknown)
     await UpdateCenter(ctx, Defender(ctx)).auto_update()
     assert not any("@@launch" in c for c in ctx.commands)
     assert "Raspberry Pi: nichts eingespielt, apt konnte die Probe-Installation nicht durchrechnen" in ctx.notes[-1].body
@@ -440,7 +449,7 @@ async def test_before_a_security_run_the_server_is_checked_again():
         ctx.commands.append(command)
         return SimpleNamespace(exit_code=0, stdout=KEPT_ONLY_STATUS, stderr="", duration_ms=5)
 
-    ctx.exec = SimpleNamespace(run=now_kept_back)
+    ctx.exec = ReadingExec(ext_id="shield", run=now_kept_back)
     assert await center.blocked_packages(ctx._host) == dict.fromkeys(
         ("libcamera-ipa", "librpicam-app1", "rpicam-apps-core"), "zurückgehalten")
     assert ctx.commands == [up.status_command(refresh=True)]  # Paketlisten frisch, wie beim Lauf selbst
@@ -450,13 +459,13 @@ async def test_before_a_security_run_the_server_is_checked_again():
     async def now_phased(host, command, timeout_s=60):
         return SimpleNamespace(exit_code=0, stdout=phased_only, stderr="", duration_ms=5)
 
-    ctx.exec = SimpleNamespace(run=now_phased)
+    ctx.exec = ReadingExec(ext_id="shield", run=now_phased)
     assert (await center.blocked_packages(ctx._host))["libcamera-ipa"] == "durch Phasing verzögert"
 
     async def runs_fail(host, command, timeout_s=60):
         return SimpleNamespace(exit_code=0, stdout=KEPT_ONLY_STATUS.replace("rc all 0", "rc all 100"), stderr="", duration_ms=5)
 
-    ctx.exec = SimpleNamespace(run=runs_fail)
+    ctx.exec = ReadingExec(ext_id="shield", run=runs_fail)
     with pytest.raises(ValueError, match="Probe-Installation"):
         await center.blocked_packages(ctx._host)
 
@@ -470,7 +479,7 @@ async def test_before_a_security_run_the_server_is_checked_again():
     async def unreachable(host, command, timeout_s=60):
         raise OSError("Verbindung abgelehnt")
 
-    ctx.exec = SimpleNamespace(run=unreachable)
+    ctx.exec = ReadingExec(ext_id="shield", run=unreachable)
     with pytest.raises(ValueError, match="Verbindung abgelehnt"):
         await center.blocked_packages(ctx._host)
     await engine.dispose()
@@ -489,7 +498,7 @@ async def test_on_proxmox_with_dist_upgrade_held_back_updates_count_as_installab
     async def run(host, command, timeout_s=60):
         return SimpleNamespace(exit_code=0, stdout=status["text"], stderr="", duration_ms=5)
 
-    ctx.exec = SimpleNamespace(run=run)
+    ctx.exec = ReadingExec(ext_id="shield", run=run)
     center = UpdateCenter(ctx, Defender(ctx))
     await center.check_host(ctx._host)
     o = await center.overview()
@@ -671,7 +680,7 @@ class _Ctx:
         self.core_settings: dict[str, object] = {"system.timezone": "Europe/Berlin"}
         self.settings = SimpleNamespace(get=self._settings, core=self._core_setting)
         self.hosts = SimpleNamespace(list=self._list, get=self._get)
-        self.exec = SimpleNamespace(run=self._run)
+        self.exec = ReadingExec(ext_id="shield", run=self._run)
         self.db = SimpleNamespace(session=self._session)
         self.audit = SimpleNamespace(log=self._audit)
         self.notify = SimpleNamespace(send=self._notify)
@@ -794,7 +803,7 @@ async def test_server_without_a_known_package_manager_is_unsupported_not_failed(
         ctx.commands.append(command)
         return SimpleNamespace(exit_code=0, stdout="@@pm\nnone\n@@end\n", stderr="", duration_ms=5)
 
-    ctx.exec = SimpleNamespace(run=nas)
+    ctx.exec = ReadingExec(ext_id="shield", run=nas)
     center = UpdateCenter(ctx, Defender(ctx))
     [st] = await center.check([ctx._host])
     assert st["unsupported"] is True and st["manager"] is None
@@ -823,7 +832,7 @@ async def test_a_server_that_turns_out_to_have_no_known_package_manager_replaces
     async def nas(host, command, timeout_s=60):
         return SimpleNamespace(exit_code=0, stdout="@@pm\nnone\n@@end\n", stderr="", duration_ms=5)
 
-    ctx.exec = SimpleNamespace(run=nas)
+    ctx.exec = ReadingExec(ext_id="shield", run=nas)
     st = await center.check_host(ctx._host)
     assert st["unsupported"] is True and st["manager"] is None and st["count"] == 0 and st["checked_at"]
     await engine.dispose()
@@ -859,6 +868,82 @@ async def test_auto_update_runs_only_on_tagged_hosts_and_reports():
     ctx2 = _Ctx(sm, {"auto_updates_enabled": True, "auto_updates_host_tag": "gibt-es-nicht"})
     assert (await UpdateCenter(ctx2, Defender(ctx2)).auto_update())["hosts"] == 0
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dashboard", [False, True])
+async def test_registered_auto_update_authorizes_only_enabled_host_commands(monkeypatch, dashboard):
+    from contextvars import copy_context
+    from unittest.mock import AsyncMock, Mock
+
+    from nodvard_deck.core import gate, ssh
+    from nodvard_deck.ext.context import ExecHandle, _PermissionChecker
+    from nodvard_sdk.errors import ActionBlocked
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.defender_api import register_jobs
+    from nodvard_deck_ext_shield.patching import AUTO_UPDATES_OFF, UpdateCenter, reboot_as_root
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, {"auto_reboot": True, "auto_updates_host_tag": "auto-update"})
+    if dashboard:
+        ctx._host.tags.append("dashboard")
+    handle = ExecHandle(_PermissionChecker("shield", ["hosts.read", "hosts.execute"]), settings=None)
+    handle._connection = AsyncMock(side_effect=lambda host: host)
+    ctx.exec = handle
+    contexts = []
+
+    async def transport(host, command, **kwargs):
+        if "@@launch" in command or "shutdown" in command:
+            contexts.append(copy_context())
+            for host_id, ext_id, operation in (
+                ("other-host", "shield", "command"), (host.id, "docker", "command"), (host.id, "shield", "sftp"),
+            ):
+                with pytest.raises(ActionBlocked):
+                    gate.require_execution(host_id, ext_id=ext_id, operation=operation)
+        reply = await ctx._run(host, command, timeout_s=kwargs["timeout_s"])
+        if "docker inspect" in command:
+            reply.stdout = "@@other\n"
+        if "@@pm" in command:
+            reply.stdout = reply.stdout.replace("@@reboot\nno", "@@reboot\nyes")
+        return reply.exit_code, reply.stdout, reply.stderr
+
+    monkeypatch.setattr(ssh, "run", transport)
+    center = UpdateCenter(ctx, Defender(ctx))
+    monkeypatch.setattr(center, "schedule_catch_up", Mock())
+    monkeypatch.setattr(center, "_recheck_after_reboot", Mock())
+    jobs = []
+    ctx.scheduler = SimpleNamespace(register_job=AsyncMock(side_effect=jobs.append), validate_schedule=Mock())
+    try:
+        await register_jobs(ctx, center._defender, center)
+        job = next(job for job in jobs if job.id == "defender-updates-auto")
+        for enabled in (None, False):
+            if enabled is not None:
+                ctx._settings_value["auto_updates_enabled"] = enabled
+            assert await job.handler() == {"hosts": 0, "failed": 0, "skipped": AUTO_UPDATES_OFF}
+            assert ctx.commands == []
+            with pytest.raises(ActionBlocked):
+                await handle.run(ctx._host, reboot_as_root(up.REBOOT_COMMAND))
+
+        ctx._settings_value["auto_updates_enabled"] = True
+        await register_jobs(ctx, center._defender, center)
+        job = next(job for job in reversed(jobs) if job.id == "defender-updates-auto")
+        assert job.enabled
+        assert await job.handler() == {"hosts": 1, "failed": 0}
+        assert [(a["action"], a["outcome"]) for a in ctx.audits] == [
+            ("shield.updates_security", "success"), ("shield.updates_reboot", "success"),
+        ]
+        assert len(contexts) == 2
+        for context in contexts:
+            with pytest.raises(ActionBlocked):
+                context.run(gate.require_execution, ctx._host.id, ext_id="shield")
+        ctx._settings_value["auto_updates_enabled"] = False
+        commands = list(ctx.commands)
+        assert await job.handler() == {"hosts": 0, "failed": 0, "skipped": AUTO_UPDATES_OFF}
+        assert ctx.commands == commands
+        with pytest.raises(ActionBlocked):
+            await handle.run(ctx._host, reboot_as_root(up.REBOOT_COMMAND))
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -969,7 +1054,8 @@ async def test_runs_left_over_from_a_restart_are_marked_as_aborted_on_start():
 
     def _spawn(coro, name=None):
         spawned.append(name)
-        coro.close()  # Hintergrund-Schleifen interessieren hier nicht
+        if asyncio.iscoroutine(coro):
+            coro.close()  # Hintergrund-Schleifen interessieren hier nicht
 
     ctx.spawn = _spawn
     started = datetime(2026, 9, 28, 3, 30, tzinfo=UTC)
@@ -1176,7 +1262,7 @@ async def test_daily_report_keeps_naming_a_server_that_is_down_after_one_good_ch
     async def down(host, command, timeout_s=60):
         raise ConnectionError("Server nicht erreichbar")
 
-    ctx.exec = SimpleNamespace(run=down)
+    ctx.exec = ReadingExec(ext_id="shield", run=down)
     for day in (2, 3, 4):  # drei Tage in Folge nicht erreichbar
         clock["t"] = _berlin(6, day=day)
         res = await center.scheduled_check()
@@ -1220,7 +1306,7 @@ async def test_a_failed_check_keeps_the_time_of_the_last_success_and_names_the_a
     async def down(host, command, timeout_s=60):
         raise ConnectionError("Server nicht erreichbar")
 
-    ctx.exec = SimpleNamespace(run=down)
+    ctx.exec = ReadingExec(ext_id="shield", run=down)
     clock["t"] += 3 * 3600
     failed = await center.check_host(ctx._host)
     assert "Server nicht erreichbar" in failed["error"]
@@ -1232,7 +1318,7 @@ async def test_a_failed_check_keeps_the_time_of_the_last_success_and_names_the_a
     again = await center.check_host(ctx._host)
     assert again["checked_at"] == 1_000_000.0 and again["attempted_at"] == 1_000_000.0 + 4 * 3600 and again["count"] == 3
 
-    ctx.exec = SimpleNamespace(run=ok_run)
+    ctx.exec = ReadingExec(ext_id="shield", run=ok_run)
     clock["t"] += 3600
     back = await center.check_host(ctx._host)
     assert back["error"] is None and back["checked_at"] == back["attempted_at"] == 1_000_000.0 + 5 * 3600
@@ -1253,7 +1339,7 @@ async def test_a_server_that_never_got_a_good_check_has_no_success_time():
     async def down(host, command, timeout_s=60):
         raise ConnectionError("keine Verbindung")
 
-    ctx.exec = SimpleNamespace(run=down)
+    ctx.exec = ReadingExec(ext_id="shield", run=down)
     st = await UpdateCenter(ctx, Defender(ctx)).check_host(ctx._host)
     assert st["checked_at"] is None and st["attempted_at"] and st["error"]
     await engine.dispose()
@@ -1280,7 +1366,7 @@ async def test_an_older_state_without_the_phasing_check_gets_it_with_the_next_ch
     async def ubuntu(host, command, timeout_s=60):
         return SimpleNamespace(exit_code=0, stdout=recording, stderr="", duration_ms=5)
 
-    ctx.exec = SimpleNamespace(run=ubuntu)
+    ctx.exec = ReadingExec(ext_id="shield", run=ubuntu)
     await center.check_host(ctx._host)
     shown = (await center.overview())["hosts"][0]["status"]
     assert (shown["phasing"], shown["phased_count"], shown["count"]) == ("checked", 4, 9)
@@ -1557,7 +1643,7 @@ async def test_catch_up_leaves_servers_alone_that_the_running_daily_check_still_
                 await gate.wait()
         return await plain(host, command, timeout_s)
 
-    ctx.exec = SimpleNamespace(run=slow)
+    ctx.exec = ReadingExec(ext_id="shield", run=slow)
     daily = asyncio.ensure_future(center.scheduled_check())
     for _ in range(50):
         if seen:
@@ -2555,7 +2641,7 @@ async def test_the_check_notes_docker_packages_and_whether_deck_runs_on_that_ser
             return SimpleNamespace(exit_code=0, stdout=status["text"], stderr="", duration_ms=5)
         return SimpleNamespace(exit_code=0, stdout="", stderr="", duration_ms=5)
 
-    ctx.exec = SimpleNamespace(run=run)
+    ctx.exec = ReadingExec(ext_id="shield", run=run)
     center = UpdateCenter(ctx, Defender(ctx))
 
     plain = await center.check_host(ctx._host)
@@ -2590,8 +2676,59 @@ async def test_a_server_marked_as_dashboard_host_needs_no_probe():
         ctx.commands.append(command)
         return SimpleNamespace(exit_code=0, stdout=DOCKER_STATUS if "@@pm" in command else "", stderr="", duration_ms=5)
 
-    ctx.exec = SimpleNamespace(run=run)
+    ctx.exec = ReadingExec(ext_id="shield", run=run)
     st = await UpdateCenter(ctx, Defender(ctx)).check_host(ctx._host)
     assert st["deck_host"] is True
     assert not any("docker inspect" in c for c in ctx.commands)
     await engine.dispose()
+
+
+_HELPER_SCRIPT = Path(__file__).resolve().parents[2] / "extensions/shield/root-helper/shield-root.sh"
+
+
+def _refresh_awk(source: str) -> str:
+    """Das awk-Programm aus dem apt-Zweig von `refresh-packages` bzw. `REFRESH_COMMAND`."""
+    m = re.search(r"awk -v failed=\"\$refresh_rc\" '([^']*)'", source)
+    assert m, "awk-Programm im apt-Zweig nicht gefunden"
+    return m.group(1)
+
+
+@pytest.mark.skipif(not shutil.which("awk"), reason="braucht awk")
+@pytest.mark.parametrize("source", ["helper", "command"])
+def test_refresh_awk_program_keeps_errors_and_drops_progress(source):
+    text = _HELPER_SCRIPT.read_text(encoding="utf-8") if source == "helper" else up.REFRESH_COMMAND
+    program = _refresh_awk(text)
+    sample = ("Hit:1 http://deb.debian.org/debian bookworm InRelease\nGet:2 http://x/y z\nIgn:3 http://x/y z\n"
+              "Err:4 https://user:" "geheim@repo.example/debian bookworm InRelease\n  401  Unauthorized\n"
+              "W: Some index files failed to download.\nE: Fehler\nReading package lists...\n")
+    for failed, expected in [
+        ("100", ["Err:4 https://user:" "geheim@repo.example/debian bookworm InRelease", "  401  Unauthorized",
+                 "W: Some index files failed to download.", "E: Fehler", "Reading package lists..."]),
+        ("0", ["Err:4 https://user:" "geheim@repo.example/debian bookworm InRelease",
+               "W: Some index files failed to download.", "E: Fehler"]),
+    ]:
+        out = subprocess.run(["awk", "-v", f"failed={failed}", program], input=sample, capture_output=True,
+                             text=True, timeout=10, check=False)
+        assert out.returncode == 0 and not out.stderr, out.stderr
+        assert out.stdout.splitlines() == expected
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
+def test_failed_phasing_run_hides_credentials_and_is_bounded(tmp_path):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    lines = "\n".join(["E: Failed to fetch https://user:" "geheim@repo.example/debian/dists/x  401  Unauthorized"]
+                      + [f"E: Fehler {i} " + "x" * 800 for i in range(40)])
+    (bindir / "apt-get").write_text(f"#!/bin/sh\ncat >&2 <<'X'\n{lines}\nX\nexit 100\n")
+    (bindir / "apt-get").chmod(0o755)
+    out = subprocess.run(["sh", "-c", up.PHASING_COMMAND], capture_output=True, text=True, timeout=30, check=False,
+                         env={"PATH": f"{bindir}:/usr/bin:/bin"})
+    assert out.returncode == 0, out.stderr
+    assert "geheim" not in out.stdout and "user:" not in out.stdout
+    assert "E: Failed to fetch https://repo.example/debian/dists/x  401  Unauthorized" in out.stdout
+    got = out.stdout.splitlines()
+    assert got[:2] == ["@@phasing", "rc inst 100"] and "rc all 100" in got
+    assert len(got) == 3 + 2 * 20
+    assert all(len(line) <= 500 for line in got)
+    # Eine Quellenzeile zählt auch hier nicht als Rechtefehler des Servers.
+    assert up.status_error_kind("@@phasing\nE: Failed to fetch http://repo.example/x  Permission denied\n") is None

@@ -17,6 +17,7 @@ from typing import Any
 
 from fastapi import APIRouter, FastAPI
 from nodvard_sdk import AdoptSpec, ExtensionManifest, is_compatible
+from nodvard_sdk.errors import error_message
 from nodvard_sdk.version import API_VERSION as SDK_API_VERSION
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +29,7 @@ from ..config import Settings
 from ..core import known_actors, rbac
 from ..core.events import get_event_bus
 from ..db import utcnow
+from ..edition import of as edition_of
 from ..ext.context import build_context
 from ..ext.discovery import LEGACY_BLOCKING_PERMISSIONS, DiscoveredExtension, discover_all, resolve_legacy
 from ..ext.old_names import old_import_error
@@ -124,6 +126,8 @@ async def auto_enable_for(
             if await session.get(Setting, (UNTOUCHED_KEY_PREFIX + record.id, "global", "")) is None:
                 continue
             ext_id = runtime.canonical(record.id)
+            if not _allowed_in_edition(runtime, settings, ext_id):
+                continue
             found = runtime.discovered.get(ext_id)
             if found is None or not found.ok:
                 # Fehlt gerade (etwa nach Rückweg aufs alte Image): nichts anfassen, der Anlass gilt später wieder.
@@ -584,11 +588,24 @@ async def enable_extension(
         await _announce_current(session)
 
 
+def _allowed_in_edition(runtime: ExtensionRuntime, settings: Settings, ext_id: str) -> bool:
+    """In einer festen Ausgabe laufen nur Module, die ihr Manifest dafür nennt (`editions`)."""
+    edition = edition_of(settings)
+    if edition.choose_modules:
+        return True
+    manifest = getattr(runtime.discovered.get(ext_id), "manifest", None)
+    return edition.id in (getattr(manifest, "editions", None) or ())
+
+
 async def _enable_extension(
     app: FastAPI, session: AsyncSession, settings: Settings, ext_id: str, *, at_boot: bool
 ) -> None:
     runtime = get_extension_runtime()
     ext_id = runtime.canonical(ext_id)
+    if not _allowed_in_edition(runtime, settings, ext_id):
+        if at_boot:
+            return
+        raise ExtensionLoadError(f"Extension '{ext_id}' ist in dieser Ausgabe nicht verfügbar.")
     if ext_id in runtime.loaded:
         existing = await get_record(session, ext_id)
         if existing is None or existing.state != "error":
@@ -663,7 +680,7 @@ async def _enable_extension(
         instance = extension_cls()
     except Exception as exc:  # noqa: BLE001 - Fehler-Isolation
         record.state = "error"
-        record.last_error = old_import_error(exc) or f"Import von '{manifest.entrypoint}' fehlgeschlagen: {exc}"
+        record.last_error = old_import_error(exc) or error_message(exc, "Import der Erweiterung fehlgeschlagen.")
         record.last_error_at = utcnow()
         return
 
@@ -685,7 +702,7 @@ async def _enable_extension(
         ctx.api.check_routes()
     except Exception as exc:  # noqa: BLE001
         record.state = "error"
-        record.last_error = f"setup() fehlgeschlagen: {exc}"
+        record.last_error = error_message(exc, "setup() fehlgeschlagen.")
         record.last_error_at = utcnow()
         # Was setup() schon angemeldet hat (Abos, Aufgaben, Seiten ...), kennt `runtime.loaded` nicht, und
         # `_unload_extension` fasst es nie an; ohne Aufräumen liefe nach dem erneuten Einschalten alles doppelt.
@@ -717,7 +734,7 @@ async def _enable_extension(
         ctx.api.check_routes()
     except Exception as exc:  # noqa: BLE001
         record.state = "error"
-        record.last_error = f"on_start() hat Routen angehängt, die keine Anmeldung prüfen: {exc}"
+        record.last_error = error_message(exc, "on_start() hat Routen ohne Anmeldeprüfung angehängt.")
         record.last_error_at = utcnow()
         try:
             with known_actors.known_while(()):
@@ -735,7 +752,7 @@ async def _enable_extension(
         # unsichtbar); die Extension bleibt in `runtime.loaded`, damit disable() sie entfernen kann.
         runtime.loaded[manifest.id] = loaded
         record.state = "error"
-        record.last_error = f"on_start() fehlgeschlagen: {start_error}"
+        record.last_error = error_message(start_error, "on_start() fehlgeschlagen.")
         record.last_error_at = utcnow()
         return
 
@@ -765,6 +782,7 @@ def _path_shape(path: str) -> str:
 def _served_by(runtime: ExtensionRuntime, ext_id: str) -> set[str]:
     from fastapi.routing import APIRoute
 
+
     loaded = runtime.loaded.get(ext_id)
     if loaded is None or loaded.ctx is None:
         return set()
@@ -778,6 +796,7 @@ def _served_by(runtime: ExtensionRuntime, ext_id: str) -> set[str]:
 
 def _adopted_router(included: Iterable[tuple[APIRouter, str, list]], routes: dict[str, str]) -> tuple[APIRouter, list[str]]:
     from fastapi.routing import APIRoute
+    from ..api.responses import error_responses
 
     out = APIRouter()
     found: set[str] = set()
@@ -794,7 +813,8 @@ def _adopted_router(included: Iterable[tuple[APIRouter, str, list]], routes: dic
                     part.routes.append(clone)
                     found.add(old)
         if part.routes:
-            out.include_router(part, dependencies=dependencies)
+            responses = error_responses(401, 403, 507) if dependencies else {}
+            out.include_router(part, dependencies=dependencies, responses=responses)
     return out, [old for old in routes if old not in found]
 
 
@@ -862,8 +882,7 @@ async def notify_secret_changed(session: AsyncSession, labels: Iterable[str]) ->
     calls = []
     for loaded in list(get_extension_runtime().loaded.values()):
         hook = getattr(loaded.instance, "on_secret_changed", None)
-        granted = loaded.granted_permissions
-        readable = [label for label in labels if rbac.has_permission(granted, f"secrets.read:{label}")]
+        readable = [label for label in labels if loaded.ctx._perm.allows(f"secrets.read:{label}")]
         if hook is not None and readable:
             calls.append(_tell_secret_changed(loaded, hook, readable))
     await asyncio.gather(*calls)

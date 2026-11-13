@@ -22,17 +22,20 @@ docker compose up -d
 ```
 
 Port ändern: Umgebungsvariable `NODVARD_DECK_PORT` (sonst 8080; der alte Name `LATTICE_PORT` gilt nur noch in
-dieser Version). Die Daten liegen im Volume `nodvard-deck-data`; ein eingebundener Ordner (`./daten:/app/data`) geht auch, weil der Entrypoint die
-Besitzrechte selbst setzt (siehe unten). Das Image entsteht bei jedem Tag `v*` durch
+dieser Version). Die Daten liegen im Volume `nodvard-deck-data`; mit `user: "1000:1000"` muss ein eingebundener
+Ordner (`./daten:/app/data`) vor dem Start UID/GID `1000:1000` gehören. Das Image entsteht bei jedem Tag `v*` durch
 `.github/workflows/release.yml` (Tags `:<version>`, `:<major>.<minor>`, `:latest`).
 
-**Benutzerwechsel im Container:** Das Image startet als root. `entrypoint.sh` setzt dann die Besitzrechte an
-`/app/data` (nur dort, ohne Links zu folgen, nur das, was nicht schon `lattice` gehört) und startet sich
-per `setpriv` als Benutzer `lattice` (UID 1000) neu – Migration und Anwendung laufen nie als root. Läuft der
-Container schon als Nicht-root (`user: "1000:1000"`, Kubernetes), ändert sich nichts; dann muss der Ordner
-diesem Benutzer gehören. `docker compose exec` läuft als root; `python -m nodvard_deck.admin` wechselt selbst zum
-Besitzer des Datenordners. Hilfscontainer mit `--entrypoint` (`backup.sh`, `restore.sh`) laufen mit
-`--user 1000:1000`.
+**Benutzer im Container:** Das Image startet als root, übernimmt vorhandene Daten für UID/GID 1000 und wechselt
+vor Migration und Anwendung zu `1000:1000`. Die Compose-Dateien setzen ausdrücklich `user: "1000:1000"`,
+`read_only`, `/tmp` als tmpfs, `no-new-privileges` und
+`cap_drop: ALL`. Frische Volumes bekommen die passenden Rechte aus dem Image. Bestehende Datenordner mit
+abweichenden Besitzrechten vor dem Update einmalig mit `/usr/local/bin/migrate-data` umstellen:
+[Anleitung und Compose-Beispiel](../docs/11-ERST-EINRICHTUNG.md#a1-daten-speicher-oder-eigener-ordner).
+Hilfscontainer für Sicherungen und Wiederherstellungen laufen ebenfalls mit `--user 1000:1000`.
+Ist `/app/data` nicht beschreibbar, bricht der Entrypoint mit einer Fehlermeldung und den Befehlen zur Umstellung ab.
+Ohne `user:` läuft der Check als root, ebenso `docker compose exec`; für Verwaltungsbefehle dann
+`docker compose exec --user 1000:1000` verwenden. Der Healthcheck startet Python mit `-I`.
 
 **Dateirechte:** Was `entrypoint.sh` startet (Migration, Anwendung, Notseite), legt neue Dateien und Ordner nur für
 den Besitzer an (`umask 077`); `python -m nodvard_deck.admin` und `python -m nodvard_deck.boot` tun das auch ohne den
@@ -43,11 +46,10 @@ UID 1000 und root lesbar: Backup-Werkzeuge oder Dateimanager, die als anderer Be
 Unterstützt der Speicher keine Rechte (manche NAS-Freigaben), läuft der Start weiter, im Protokoll steht höchstens
 eine Warnung. Code, Erweiterungen und Oberfläche unter `/app` gehören root und sind für `lattice` nur lesbar; unter
 `/app` darf `lattice` nur in `/app/data` schreiben. So kann ein Prozess als `lattice` in den Code unter `/app` nichts
-einschleusen, das später als root startet (Healthcheck, `docker compose exec`).
+einschleusen.
 
-**Zusatzgruppen (`group_add:`):** Durch den Benutzerwechsel (`--clear-groups`) gelten sie nicht mehr. Wer sie braucht
-(z. B. eine Gruppe, die einen NAS-Ordner freigibt), startet den Container selbst als Nicht-root und setzt beides
-zusammen: `user: "1000:1000"` und `group_add: [...]`; der Datenordner muss dann diesem Benutzer gehören.
+**Zusatzgruppen (`group_add:`):** Sie bleiben beim direkten Start als UID 1000 erhalten. Der Datenordner muss
+diesem Benutzer gehören. Beim Start als root leert der Benutzerwechsel die Zusatzgruppen.
 
 ## Bauen
 
@@ -76,11 +78,20 @@ Nur einige Module ins Image nehmen (etwa für ein Einzelprodukt), durch Kommas g
 docker build --pull -f deploy/Dockerfile --build-arg NODVARD_DECK_EXTENSIONS=docker -t nodvard-docker:test .
 ```
 
-Ohne Angabe kommen alle Module mit, wie bisher. Ein unbekannter Name oder eine Liste ohne Modul bricht den Build ab.
+Ohne Angabe kommen alle Module außer `network` und `hello-world` mit. Der Netzwerk-Wegweiser und das SDK-Beispiel
+bleiben im Quellbaum und lassen sich für einen eigenen Build ausdrücklich in der Liste wählen.
+Ein unbekannter Name oder eine Liste ohne Modul bricht den Build ab.
 Tesseract (Texterkennung für Dokumente) kommt nur mit, wenn das Modul `documents` dabei ist; die Python-Pakete des Kerns
 bleiben in jedem Image dieselben. Braucht ein Modul ein anderes (etwa `npm` das Modul `docker`), nimm beide in die Liste,
-sonst fehlt ihm im Image der Partner. Ein Image mit weniger Modulen gehört zu einem eigenen Datenvolume: Mit den Daten
-eines Images, in dem mehr Module waren, startet es nicht und zeigt nur die Notseite.
+sonst fehlt ihm im Image der Partner. Ein Image mit weniger Modulen gehört zu einem eigenen Datenvolume:
+Fehlen zuvor genutzte Module mit eigenen Datenbanktabellen, kann der Start auf der Notseite enden.
+
+**Vor dem Update einer älteren Installation:** Schalte `network` und `hello-world` unter Einstellungen → Erweiterungen
+aus, falls sie noch aktiv sind. Die Prüfung beim Ausrollen über `scripts/deploy_pi.sh` meldet sonst ein fehlendes Modul
+und nimmt das Update zurück.
+Beide Module haben keine eigenen Datenbanktabellen; ihre Entfernung verhindert den Start nicht.
+Pi-hole und Nginx Proxy Manager bleiben als eigene Module verfügbar. Wer den Netzwerk-Wegweiser behalten möchte,
+kann ihn in einem eigenen Build mit auswählen und weiterhin ein- und ausschalten.
 
 Laufzeitdaten gelangen nicht ins Image: `.dockerignore` schließt in jedem Unterordner (z. B. ein `backend/data/` nach
 einem Start aus `backend/`) Datenordner `data/`, Datenbanken (`*.db`, `*.sqlite`), Sicherungen (`*.ndbak`), Schlüssel
@@ -344,7 +355,7 @@ oder mehr als 200 000 Dateien (`…_MAX_ENTRIES`) wird abgelehnt; entpackt dürf
 (`…_MAX_UNPACKED_BYTES`) und nie mehr als der freie Platz sein. Zusätzlich verlangt das Verschieben, dass der
 Datenordner (Datenbank, Schlüssel, `ext`, `branding`, `runs`) auf **einem** Laufwerk liegt (`rename`).
 
-Der Dienst heißt in Compose `nodvard-deck` (vor 0.6 `lattice`). Für einen Stand von vor 0.6 (Container
+Der Dienst heißt in Compose `nodvard-deck`. Für einen Stand von vor 0.6 (Container
 `deploy-lattice-1`) gibt es kein passendes `backup.sh` mehr; dort wird von Hand gesichert, bei angehaltenem Dienst:
 `docker stop deploy-lattice-1 && docker run --rm --user 1000:1000 -v deploy_lattice_data:/data -v "$PWD":/backup --entrypoint tar lattice:latest czf /backup/vorher.tar.gz -C /data . ; docker start deploy-lattice-1`
 
@@ -415,8 +426,8 @@ Betrieb:
 ```bash
 # Das Image hat keine sqlite3-Kommandozeile (python:3.12-slim), Pythons sqlite3-Modul reicht:
 docker compose exec -u lattice nodvard-deck python -c "import sqlite3; s=sqlite3.connect('/app/data/lattice.db'); d=sqlite3.connect('/app/data/_snapshot.db'); s.backup(d); d.close(); s.close()"
-docker compose cp nodvard-deck:/app/data/_snapshot.db ./lattice-db-snapshot.db
-chmod 600 ./lattice-db-snapshot.db   # die Kopie enthält die ganze Datenbank, nur für dich lesbar
+docker compose cp nodvard-deck:/app/data/_snapshot.db ./nodvard-deck-db-snapshot.db
+chmod 600 ./nodvard-deck-db-snapshot.db   # die Kopie enthält die ganze Datenbank, nur für dich lesbar
 docker compose exec -u lattice nodvard-deck rm /app/data/_snapshot.db
 ```
 
@@ -523,7 +534,8 @@ vorgemerkte Wiederherstellung einspielen, **Kopie der Datenbank anlegen, wenn ei
 - **Sperre:** Die laufende Anwendung hält `/app/data/.boot/app.lock`. Ein zweiter Container mit demselben Datenordner (z. B. `docker compose run nodvard-deck …` neben dem laufenden Dienst)
   ändert deshalb nichts: `boot` beendet sich mit Code 75. Für Wartungsbefehle lieber `docker compose exec`, oder `run --entrypoint …` bei gestoppter Anwendung (so machen es `backup.sh` und `restore.sh`).
 - **Healthcheck:** `--start-period` ist **300 s** (Image und beide Compose-Dateien), damit eine lange Migration samt Kopie nicht als „unhealthy“ gilt.
-  Ohne `user:` läuft der Check als root; deshalb ruft er `python -I` auf (isoliert: ohne den aktuellen Ordner im Suchpfad, ohne `PYTHON*`-Variablen und
+  Der Check läuft als Startbenutzer des Containers: ohne `user:` als root (`USER 0:0` im Dockerfile), mit `user: "1000:1000"` als UID 1000.
+  Er ruft `python -I` auf (isoliert: ohne den aktuellen Ordner im Suchpfad, ohne `PYTHON*`-Variablen und
   ohne Pakete aus dem Benutzerverzeichnis). Eine eigene Compose-Datei mit eigenem `healthcheck:` sollte das `-I` übernehmen.
 - **Alter Stand einer Wiederherstellung oder eines Rückwegs** (`restore/replaced-…`, kann Konten und Schlüssel im Klartext enthalten): wird **nach 30 Tagen automatisch gelöscht**; die Oberfläche nennt den Tag und kann ihn früher löschen.
 
@@ -561,10 +573,11 @@ haben die Datei noch nicht: Meldet `curl` unten 404, nimm die aus dem Repository
   (`ghcr.io/nodvard/deck:latest` oder eine Reihe wie `:0.7`). Die Docker-Engine lädt die neue Version selbst, der Helfer
   hat kein Netz. Geladen wird genau das Image, das die Update-Suche gefunden hat (per Digest). Zeigt das Tag in der
   Registry inzwischen auf etwas anderes, lädt er nichts und bittet, erneut nach Updates zu suchen.
-- Freigabe prüfen: Jede fertige Version bekommt am Release eine Freigabe (`freigabe.json`), die Nico mit seinem
+- Freigabe prüfen: Jede fertige Version bekommt am Release eine Freigabe (`freigabe.json`), die der Projektinhaber mit seinem
   Schlüssel signiert. Das Dashboard bietet ein Update per Knopf nur mit Freigabe an und schickt sie mit; der Helfer
   prüft die Signatur mit den Schlüsseln, die fest in ihm stehen, und lehnt eine gefälschte oder fremde Freigabe ab.
-  Ein älterer Helfer kennt die Freigabe noch nicht; die Karte „Updates“ sagt dann, dass du ihn erneuern solltest.
+  Jede Anforderung, Update wie Rückweg, trägt zusätzlich eine eigene Ed25519-Signatur der Installation. Ein älterer
+  Helfer bekommt keine Anforderung mehr; aktualisiere ihn zuerst von Hand.
 - Startet die neue Version nicht (beendet sich, startet immer wieder neu, zeigt die Notseite oder ist nach 15 Minuten
   nicht bereit), schaltet er von selbst auf die alte Version zurück.
 - Rückweg per Knopf auf die Version davor: einmal, 7 Tage lang. Hat die neue Version die Datenbank umgebaut, gehen die
@@ -580,9 +593,9 @@ haben die Datei noch nicht: Meldet `curl` unten 404, nimm die aus dem Repository
   Knopf fehlt.
 - Ziele erst ab Version 0.7.0: Das erste Update per Knopf geht von 0.7.0 auf die Version danach.
 - Sich selbst aktualisieren: Das machst du von Hand (siehe unten).
-- Die Freigabe ist noch nicht Pflicht: Ein älteres Dashboard, das keine mitschickt, bekommt ein Update weiter ohne
-  sie. Pflicht wird sie mit Version 1.0. Der Rückweg kommt ohne Freigabe aus, er setzt nur die Version davor wieder ein,
-  die der Helfer selbst gesichert hat.
+- Anforderung und Release-Freigabe müssen gültig signiert sein. Ohne hinterlegte Schlüssel, bei fehlenden,
+  gefälschten oder abgelaufenen Signaturen ändert der Helfer nichts. Der Rückweg kommt ohne Freigabe aus, er setzt nur
+  die Version davor wieder ein, die der Helfer selbst gesichert hat; signiert sein muss er trotzdem.
 
 **Voraussetzungen**
 - Nodvard Deck ab 0.7.0, installiert wie unter „Installation ohne das Repo“.
@@ -647,6 +660,49 @@ GitHub-Container-Registry (`ghcr.io/nodvard/deck`, `ghcr.io/nodvard/deck-updater
 **Public** gestellt werden (Paket → „Package settings“ → „Change visibility“). Neue Pakete sind dort oft erst privat: Dann
 kann ein fremder Rechner die Images nicht ziehen, und die Update-Suche bekommt kein anonymes Token. Nach dem ersten
 Release mit dem Helfer also bei `deck-updater` nachsehen.
+
+### Schlüssel für Update-Anforderungen
+
+Vor dem ersten Update mit diesem Helfer den Schlüssel der Installation hinterlegen. Beim Wechsel von einem älteren
+Stand zuerst Deck und Helfer von Hand aktualisieren. Die folgenden Befehle laufen in Bash auf dem Docker-Rechner, im Ordner der
+Compose-Datei:
+
+```bash
+docker compose exec -T --user 1000:1000 nodvard-deck python -m nodvard_deck.core.updater_signing > deck-update.pub
+chmod 600 deck-update.pub
+docker compose cp deck-update.pub updater:/state/request-key.pub
+docker compose exec -T updater python -c 'import os; os.chmod("/state/request-key.pub", 0o600)'
+```
+
+Bei einer eigenen Container-UID diese statt `1000:1000` verwenden. Der erste Befehl erzeugt einmalig
+`updater-ed25519.key` im Datenordner mit Modus 0600 und gibt nur den öffentlichen Schlüssel aus. Erneutes Aufrufen
+behält den vorhandenen Schlüssel. Die Datei `request-key.pub` muss im Helfer root gehören und Modus 0600 haben;
+Der letzte Befehl setzt diese Rechte auch bei einer Kopie von einem Windows-Rechner. Den Schlüssel nur über diesen administrativen
+Weg hinterlegen, nie aus einer Update-Anforderung oder aus dem gemeinsamen Kanal übernehmen.
+
+Deck signiert damit jede Anforderung einschließlich ID, Zeitpunkt und Version, bei einem Update auch Digest und
+Release-Freigabe. Auch der Rückweg ist signiert, weil er die Version davor zurückholt und dabei die Datenbank
+zurücknehmen kann; unsignierte Anforderungen (`v: 1`) führt der Helfer nicht mehr aus.
+Der Helfer prüft die Signatur gegen `/state/request-key.pub` und die Release-Signatur gegen seine eingebauten
+öffentlichen Schlüssel. Fehlt eine Prüfung oder scheitert sie, wird nichts eingespielt. Anforderungen gelten
+höchstens 600 Sekunden, verarbeitete IDs bleiben eine Stunde gesperrt. Der Helfer prüft die Signaturen
+höchstens einer Anforderung je Runde. Ein gestohlener Installationsschlüssel kann keine Release-Freigabe ersetzen.
+
+Die Signatur schützt nur gegen fremde Schreiber im gemeinsamen Kanal (`requests/` ist für alle beschreibbar): Wer
+nur dort schreiben kann, bringt keine Anforderung durch. Gegen eine Übernahme des Decks selbst schützt sie nicht,
+denn wer im Deck-Container Code ausführt, kann mit dessen Schlüssel signieren. Die Grenze bleibt dann die
+Release-Freigabe: Ein Update gibt es nur auf eine freigegebene Version, ein Rückweg nur auf die Version davor im
+Rückweg-Slot des Helfers.
+
+Zum Wechsel zuerst laufende Updates beenden lassen. Den privaten Schlüssel im Datenordner sicher weglegen,
+`updater-ed25519.key` dort entfernen und die obigen Befehle erneut ausführen. Erst wenn der neue öffentliche
+Schlüssel im Helfer steht, funktionieren neue Update-Anforderungen. Anforderungen mit dem alten Schlüssel werden
+dann abgelehnt. Nach dem Zurückspielen einer Sicherung den öffentlichen Schlüssel erneut abgleichen. Ein Verlust
+des Schlüssels erfordert denselben Wechsel. Der Helfer liest den öffentlichen Schlüssel für jede Anforderung neu.
+
+Die privaten Schlüssel für Release-Freigaben verwaltet der Projektinhaber getrennt und offline. Sie gehören nicht
+auf diesen Rechner. [Freigaben und Schlüsselwechsel](../docs/VEROEFFENTLICHEN.md#offline-schlüssel-und-schlüsselwechsel)
+beschreibt den Ablauf für Veröffentlichungen und den Austausch der fest eingebauten Schlüssel.
 
 ## Demo-Modus
 

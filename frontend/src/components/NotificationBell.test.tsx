@@ -187,6 +187,20 @@ describe("NotificationBell", () => {
     expect(screen.getByTestId("where").textContent).toBe("/notifications");
   });
 
+  it("„Alle als gelesen“ scheitert: Meldung im Fenster statt unbehandelter Ablehnung", async () => {
+    const inner = mockFetch();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/notifications/read-all")) {
+        return new Response(JSON.stringify({ detail: "Datenbank gesperrt." }), { status: 500 });
+      }
+      return inner(input, init);
+    }));
+    renderBell(2);
+    fireEvent.click(bell());
+    fireEvent.click(await screen.findByRole("button", { name: "Alle als gelesen" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("Nicht als gelesen markiert: Datenbank gesperrt.");
+  });
+
   it("„Alle als gelesen“ ruft read-all auf und fehlt, wenn nichts ungelesen ist", async () => {
     const { unmount } = renderBell(2);
     fireEvent.click(bell());

@@ -323,7 +323,8 @@ async def _read_host(ctx: "ExtensionContext", host: Any, sem: asyncio.Semaphore)
         try:
             # Das äußere Zeitlimit (40 s) liegt über dem des SSH-Aufrufs (30 s), damit auch ein hängender
             # Verbindungsaufbau endet.
-            result = await asyncio.wait_for(ctx.exec.run(host, WARN_SCRIPT, timeout_s=30), timeout=40)
+            with ctx.exec.read_access(host, timeout_s=40):
+                result = await asyncio.wait_for(ctx.exec.run(host, WARN_SCRIPT, timeout_s=30), timeout=40)
         except Exception as exc:  # noqa: BLE001 - ein Host darf die anderen nicht aufhalten
             ctx.logger.info("system-Warnungen: %s nicht erreichbar, übersprungen (%s)", host.name, str(exc) or type(exc).__name__)
             return None

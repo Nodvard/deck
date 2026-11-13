@@ -8,7 +8,7 @@ IFS='
 '
 umask 022
 
-HELPER_VERSION=18
+HELPER_VERSION=26
 QDIR=/var/lib/nexus-quarantine
 JOBDIR=/var/lib/nexus-updates
 SELF=/usr/local/lib/nodvard-deck/shield-root
@@ -94,8 +94,12 @@ guard() {
 		echo none
 	fi
 	echo @@sshd
-	(sshd -T 2>/dev/null || /usr/sbin/sshd -T 2>/dev/null) | grep -E \
-		'^(port|permitrootlogin|passwordauthentication|permitemptypasswords|pubkeyauthentication|maxauthtries|x11forwarding|kbdinteractiveauthentication) '
+	{
+		sshd_error=$({ (sshd -T || /usr/sbin/sshd -T) | grep -iE \
+			'^(port|permitrootlogin|passwordauthentication|permitemptypasswords|pubkeyauthentication|maxauthtries|x11forwarding|kbdinteractiveauthentication) '; } 2>&1 1>&3)
+		echo @@sshderror
+		printf '%s\n' "$sshd_error" | sed 's/^/!/'
+	} 3>&1
 	echo @@range
 	cat /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null
 	echo @@ports
@@ -147,16 +151,36 @@ detect_templates() {
 	echo @@end
 }
 
+package_inventory() {
+	[ "$#" -eq 0 ] || die "package-inventory erwartet keine Argumente"
+	echo @@os
+	cat "$ETCDIR/os-release"
+	echo @@packages
+	if command -v dpkg-query >/dev/null 2>&1; then
+		dpkg-query -W -f='${db:Status-Abbrev}\t${binary:Package}\t${Version}\t${source:Package}\t${source:Version}\t${Architecture}\n'
+	elif command -v rpm >/dev/null 2>&1; then
+		rpm -qa --qf 'ii \t%{NAME}\t%{EPOCHNUM}:%{VERSION}-%{RELEASE}\t%{SOURCERPM}\t%{EPOCHNUM}:%{VERSION}-%{RELEASE}\t%{ARCH}\t%{RSAHEADER:pgpsig}\n'
+	else
+		echo @@unsupported
+	fi
+	echo @@end
+}
+
 refresh_packages() {
 	[ "$#" -eq 0 ] || die "refresh-packages erwartet keine Argumente"
 	set +eu
+	refresh_rc=0
+	refresh_out=
 	if command -v apt-get >/dev/null 2>&1; then
-		apt-get update -qq 2>&1 | grep -E '^(E|Err|W):' | head -n 20
+		refresh_out=$(apt-get update -qq 2>&1) || refresh_rc=$?
+		refresh_out=$(printf '%s\n' "$refresh_out" | awk -v failed="$refresh_rc" '/^(E|Err|W):/ || (failed && !/^(Hit|Get|Ign):/)')
 	elif command -v dnf >/dev/null 2>&1; then
-		dnf -q makecache 2>&1 | tail -n 5
+		refresh_out=$(dnf -q makecache 2>&1) || refresh_rc=$?
 	elif command -v apk >/dev/null 2>&1; then
-		apk update -q 2>&1 | tail -n 5
+		refresh_out=$(apk update -q 2>&1) || refresh_rc=$?
 	fi
+	printf '%s\n' "$refresh_out" | sed -E 's#(https?://)[^/[:space:]]*@#\1#g' | tail -n 20 | cut -c 1-500
+	return "$refresh_rc"
 }
 
 check_qname() {
@@ -352,9 +376,7 @@ quarantine_state() {
 delete() {
 	[ "$#" -eq 1 ] || die "delete erwartet einen Namen"
 	check_qname "$1"
-	set +e
-	rm -f "$QDIR/$1" "$QDIR/.herkunft/$1"
-	echo ok
+	rm -f "$QDIR/$1" "$QDIR/.herkunft/$1" && echo ok
 }
 
 fail2ban_set() {
@@ -370,6 +392,140 @@ fail2ban_set() {
 	esac
 	[ "${#2}" -le 64 ] || die "ungueltiger Jail-Name"
 	fail2ban-client set "$2" "$action" "$1"
+}
+
+fail2ban_jails() {
+	printf 'sshd\n'
+	for f in "$ETCDIR"/fail2ban/jail.conf "$ETCDIR"/fail2ban/jail.local "$ETCDIR"/fail2ban/jail.d/*.conf "$ETCDIR"/fail2ban/jail.d/*.local; do
+		[ -f "$f" ] || continue
+		sed -n 's/^[[:space:]]*\[\([A-Za-z0-9][A-Za-z0-9_.-]*\)\][[:space:]]*$/\1/p' "$f"
+	done | grep -viE '^(DEFAULT|INCLUDES|logtarget|loglevel|syslogsocket|allowipv6|dbfile|dbpurgeage|dbmaxmatches|thread)$' | sort -u
+}
+
+fail2ban_config_read() {
+	[ "$#" -eq 0 ] || die "fail2ban-config-read erwartet keine Argumente"
+	runtime=1
+	for key in bantime findtime maxretry ignoreip; do
+		printf '@@%s\n' "$key"
+		if value=$(fail2ban-client get sshd "$key" 2>/dev/null); then
+			printf '%s\n' "$value"
+		else
+			runtime=0
+			case $key in
+				bantime | findtime) echo 600 ;;
+				maxretry) echo 5 ;;
+				ignoreip) echo '127.0.0.1/8 ::1' ;;
+			esac
+		fi
+	done
+	echo @@available
+	fail2ban_jails
+	echo @@status
+	fail2ban-client status 2>/dev/null || runtime=0
+	echo @@runtime
+	echo "$runtime"
+	echo @@managed
+	if [ -f "$ETCDIR/fail2ban/jail.d/nodvard.local" ]; then cat "$ETCDIR/fail2ban/jail.d/nodvard.local"; fi
+}
+
+lockdir_safe() {
+	mkdir -m 700 "$LOCKDIR" 2>/dev/null || true
+	[ -d "$LOCKDIR" ] && [ ! -L "$LOCKDIR" ] || return 1
+	case "$(stat -c %u:%a "$LOCKDIR" 2>/dev/null)" in "$(id -u):700" | "$(id -u):2700") ;; *) return 1 ;; esac
+}
+
+fail2ban_config_write() {
+	[ "$#" -eq 2 ] || die "fail2ban-config-write erwartet SSH-Adresse und Inhalt"
+	case $1 in '' | *[!0-9A-Fa-f:.]*) die "ungueltige SSH-Adresse" ;; esac
+	[ "${#1}" -le 45 ] && [ "${#2}" -le 65536 ] || die "Konfiguration zu lang"
+	printf '%s\n' "$2" | awk -v peer="$1" '
+		function complete() {
+			if (jail == "") return 1
+			return seen["enabled"] && (!on || (seen["bantime"] && seen["findtime"] && seen["maxretry"] && seen["ignoreip"]))
+		}
+		/^$/ { next }
+		/^\[[A-Za-z0-9][A-Za-z0-9_.-]*\]$/ {
+			if (!complete()) exit 1
+			jail=substr($0, 2, length($0)-2)
+			if (length(jail)>64 || used[jail]++) exit 1
+			delete seen; on=0; next
+		}
+		/^(enabled|bantime|findtime|maxretry|ignoreip|backend) = / {
+			if (jail == "" || seen[$1]++) exit 1
+			key=$1; value=substr($0, length(key)+4)
+			if (key == "enabled") {
+				if (value != "true" && value != "false") exit 1
+				on=(value == "true"); if (jail == "sshd" && on) ssh=1
+			} else if (key == "backend") {
+				if (jail != "sshd" || value != "systemd") exit 1
+			} else if (key == "ignoreip") {
+				if (value !~ /^[0-9A-Fa-f:./ ]+$/) exit 1
+				n=split(value, ips, " "); found=0
+				for (i=1; i<=n; i++) { if (length(ips[i])>49) exit 1; if (ips[i]==peer) found=1 }
+				if (!found) exit 1
+			} else {
+				if (value !~ /^[0-9]+$/ || length(value)>8 || value+0<1 || value+0>(key=="maxretry" ? 1000 : 31536000)) exit 1
+			}
+			next
+		}
+		{ exit 1 }
+		END { if (!ssh || !complete()) exit 1 }
+	' || die "ungueltiger Inhalt"
+	known=$(fail2ban_jails)
+	for jail in $(printf '%s\n' "$2" | sed -n 's/^\[\(.*\)\]$/\1/p'); do
+		printf '%s\n' "$known" | grep -Fxq "$jail" || die "unbekannter Jail"
+	done
+	dir=$ETCDIR/fail2ban/jail.d
+	[ ! -L "$dir" ] && [ ! -L "$dir/nodvard.local" ] || die "Konfiguration ist ein Link"
+	[ -d "$dir" ] || mkdir -p "$dir"
+	lockdir_safe || die "unsicherer Sperrordner"
+	exec 9> "$LOCKDIR/fail2ban-config.lock"
+	flock -x 9
+	target=$dir/nodvard.local
+	tmp=$(mktemp "$dir/.nodvard.XXXXXX")
+	backup=$(mktemp "$dir/.nodvard-backup.XXXXXX")
+	had=0
+	if [ -e "$target" ]; then cp -p "$target" "$backup"; had=1; fi
+	committed=0
+	trap 'if [ "$committed" -eq 0 ]; then if [ "$had" -eq 1 ]; then mv -f "$backup" "$target"; else rm -f "$target"; fi; fi; rm -f "$tmp" "$backup"' EXIT
+	trap 'exit 1' HUP INT TERM
+	printf '%s\n' "$2" > "$tmp"
+	chmod 644 "$tmp"
+	mv -f "$tmp" "$target"
+	fail2ban-client -t
+	dump=$(fail2ban-client -d)
+	printf '%s\n' "$dump" | awk -v peer="$1" '
+		{ gsub(/[][\047,]/, " ") }
+		$1 == "add" { active[$2]=1 }
+		$1 == "set" && $3 == "addignoreip" { for (i=4; i<=NF; i++) if ($i==peer) protected[$2]=1 }
+		END { if (!active["sshd"]) exit 1; for (j in active) if (!protected[j]) exit 1 }
+	' || { echo @@msg=fail2ban_unprotected; exit 1; }
+	printf '%s\n' "$dump" | awk '
+		NR == FNR {
+			if ($0 ~ /^\[/) jail=substr($0, 2, length($0)-2)
+			if ($1 == "enabled") enabled[jail]=($3 == "true")
+			if ($1 ~ /^(bantime|findtime|maxretry)$/) wanted[jail, $1]=$3
+			if ($1 == "ignoreip") for (i=3; i<=NF; i++) wanted_ignore[jail, $i]=1
+			next
+		}
+		{ gsub(/[][\047,]/, " ") }
+		$1 == "add" { active[$2]=1 }
+		$1 == "set" && $3 ~ /^(bantime|findtime|maxretry)$/ { effective[$2, $3]=$4 }
+		$1 == "set" && $3 == "addignoreip" { for (i=4; i<=NF; i++) effective_ignore[$2, $i]=1 }
+		END {
+			for (ip in wanted_ignore) if (!(ip in effective_ignore)) exit 1
+			for (ip in effective_ignore) if (!(ip in wanted_ignore)) exit 1
+			for (j in enabled) if (enabled[j] != (j in active)) exit 1
+			for (j in active) {
+				if (!enabled[j]) exit 1
+				n=split("bantime findtime maxretry", keys, " ")
+				for (i=1; i<=n; i++) if (effective[j, keys[i]] != wanted[j, keys[i]]) exit 1
+			}
+		}
+	' "$target" - || { echo @@msg=fail2ban_conflict; exit 1; }
+	fail2ban-client reload
+	committed=1
+	echo ok
 }
 
 pkg_install() {
@@ -400,11 +556,13 @@ install_package() {
 			;;
 		fail2ban)
 			pkg_install fail2ban fail2ban fail2ban
-			if [ ! -f /etc/fail2ban/jail.local ]; then
-				printf '[DEFAULT]\nbackend = systemd\n\n[sshd]\nenabled = true\n' > /etc/fail2ban/jail.local
+			if [ ! -f "$ETCDIR/fail2ban/jail.d/nodvard.local" ]; then
+				mkdir -p "$ETCDIR/fail2ban/jail.d"
+				printf '[sshd]\nenabled = true\nbackend = systemd\n' > "$ETCDIR/fail2ban/jail.d/nodvard.local"
 			fi
+			fail2ban-client -t || exit 1
 			systemctl enable --now fail2ban 2>/dev/null
-			systemctl restart fail2ban 2>/dev/null
+			fail2ban-client reload || exit $?
 			fail2ban-client ping
 			;;
 		unattended)
@@ -487,7 +645,7 @@ check_upgrade() {
 			*) die "ungueltiger Paketname" ;;
 		esac
 		case $p in
-			*[!A-Za-z0-9+._:~-]*) die "ungueltiger Paketname" ;;
+			*[!A-Za-z0-9+._:~-]* | *-) die "ungueltiger Paketname" ;;
 		esac
 	done
 }
@@ -781,9 +939,7 @@ guarded() {
 	F=
 	case "$(flock --version 2>/dev/null)" in
 		*util-linux*)
-			mkdir -m 700 "$D" 2>/dev/null
-			if [ -d "$D" ] && [ ! -L "$D" ] &&
-				case "$(stat -c %u:%a "$D" 2>/dev/null)" in "$(id -u):700" | "$(id -u):2700") true ;; *) false ;; esac &&
+			if lockdir_safe &&
 				(: >>"$D/$N") 2>/dev/null; then
 				F="$D/$N"
 			fi
@@ -899,6 +1055,7 @@ watch_run() {
 	K=$(mktemp -p "$TMPRUN" 2>/dev/null || mktemp)
 	LONG=$(printf '%01023d' 0 | tr 0 '?')
 	LONG="$LONG*"
+	export ODD_SCAN_OUT=$X ODD_SCAN_RC=$Y
 	n=$#
 	set -- "$@" -H
 	i=0
@@ -958,7 +1115,13 @@ watch_run() {
 	fi
 	T=0
 	while read -r r n; do
-		T=$((T + ${n:-0}))
+		case $r:$n in
+			*[!0-9:]* | : | :* | *:)
+				rm -f "$L" "$X" "$Y" "$K"
+				die "ungueltige Ergebnisdatei"
+				;;
+		esac
+		T=$((T + n))
 		case "$r" in
 			0) ;;
 			1) [ "$R" -eq 127 ] || R=1 ;;
@@ -974,6 +1137,7 @@ watch_run() {
 
 odd_scan() {
 	[ "$#" -ge 3 ] || die "odd-scan erwartet zwei Dateien und Pfade"
+	[ "$1" = "${ODD_SCAN_OUT:-}" ] && [ "$2" = "${ODD_SCAN_RC:-}" ] || die "ungueltige Datei"
 	for f in "$1" "$2"; do
 		case $f in
 			"$TMPRUN"/tmp.??????????) ;;
@@ -1140,11 +1304,224 @@ realtime_confirm() {
 	echo "@@rc=$?"
 }
 
+ssh_reload() {
+	if [ -d "$SDMARK" ]; then
+		systemctl reload sshd 2>/dev/null || systemctl reload ssh
+	else
+		service sshd reload 2>/dev/null || service ssh reload
+	fi
+}
+
+ssh_effective() {
+	sshd -T -ddd > "$ssh_state/effective" 2> "$ssh_state/trace" || return 1
+	grep -q '^debug[123]:' "$ssh_state/trace" || return 1
+	# Match braucht die Daten jeder Verbindung.
+	if grep -qi "^debug3: checking syntax for 'Match[[:space:]]" "$ssh_state/trace"; then return 1; fi
+	grep -qx 'passwordauthentication no' "$ssh_state/effective" &&
+	grep -qx 'kbdinteractiveauthentication no' "$ssh_state/effective" &&
+	grep -qx 'maxauthtries 3' "$ssh_state/effective" &&
+	grep -qxE "permitrootlogin $ssh_root" "$ssh_state/effective"
+}
+
+# Stehen Keys fuer root in authorized_keys, bleibt root mit Key erlaubt (sonst ausgesperrt).
+ssh_root_keys() {
+	ssh_root_home=$(getent passwd root | cut -d: -f6)
+	case $ssh_root_home in /*) ;; *) return 1 ;; esac
+	for ssh_keys in "$ssh_root_home/.ssh/authorized_keys" "$ssh_root_home/.ssh/authorized_keys2"; do
+		[ -f "$ssh_keys" ] || continue
+		grep -Eq '^[^#]*(^|[[:space:]])(ssh-(ed25519|rsa|dss)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed25519|ecdsa-sha2-nistp256)@openssh\.com)(-cert-v01@openssh\.com)?[[:space:]]+[A-Za-z0-9+/]' "$ssh_keys" && return 0
+	done
+	return 1
+}
+
+# Zwei-Faktor per PAM oder AuthenticationMethods: KbdInteractiveAuthentication no wuerde Schluessel plus Code brechen.
+ssh_two_factor() {
+	grep -rqsEi '^[[:space:]]*AuthenticationMethods[[:space:]].*keyboard-interactive' "$ETCDIR/ssh/sshd_config" "$ETCDIR/ssh/sshd_config.d" && return 0
+	grep -qsE '^[^#]*pam_(google_authenticator|oath|duo|yubico|radius_auth)' "$ETCDIR/pam.d/sshd"
+}
+
+ssh_remove() {
+	ssh_backup=
+	if [ -f "$ssh_conf" ]; then
+		ssh_backup=$(mktemp "$ssh_state/ssh-conf.XXXXXX") || return 1
+		if ! cp -p "$ssh_conf" "$ssh_backup"; then
+			rm -f "$ssh_backup"
+			return 1
+		fi
+	fi
+	if ! rm -f "$ssh_conf"; then
+		[ -z "$ssh_backup" ] || rm -f "$ssh_backup"
+		return 1
+	fi
+	if sshd -t && ssh_reload; then
+		[ -z "$ssh_backup" ] || rm -f "$ssh_backup"
+		return 0
+	fi
+	[ -z "$ssh_backup" ] || mv -f "$ssh_backup" "$ssh_conf"
+	return 1
+}
+
+# Unbestaetigter Zustand ueberlebt einen Neustart: Marke unter /etc und (mit systemd) eine Einheit, die vor sshd zuruecknimmt.
+ssh_pending_set() {
+	printf '%s\n' "$1" > "$ssh_state/pending"
+	printf '%s\n' "$1" > "$ssh_mark"
+	if [ -d "$SDMARK" ]; then
+		mkdir -p "$ssh_unit_dir/multi-user.target.wants" || return 0
+		printf '[Unit]\nDescription=Nodvard Shield: unbestaetigte SSH-Haertung zuruecknehmen\nBefore=ssh.service sshd.service\n\n[Service]\nType=oneshot\nExecStart=%s ssh-hardening boot-revert root\n\n[Install]\nWantedBy=multi-user.target\n' "$SELF" > "$ssh_unit_dir/nodvard-ssh-revert.service"
+		ln -sf "../nodvard-ssh-revert.service" "$ssh_unit_dir/multi-user.target.wants/nodvard-ssh-revert.service"
+	fi
+}
+
+ssh_pending_clear() {
+	rm -f "$ssh_state/pending" "$ssh_mark" "$ssh_unit_dir/nodvard-ssh-revert.service" "$ssh_unit_dir/multi-user.target.wants/nodvard-ssh-revert.service"
+}
+
+# Eigene Einheit, damit das Sitzungsende (KillUserProcesses, use_pty) den Rueckweg nicht mitnimmt.
+ssh_expire_start() {
+	if [ -d "$SDMARK" ] && command -v systemd-run >/dev/null 2>&1 &&
+		systemd-run --unit="nodvard-ssh-expire-$1" --collect --quiet /bin/sh "$SELF" ssh-hardening expire "$ssh_user" "$1" </dev/null >/dev/null 2>&1 9>&-; then
+		return 0
+	fi
+	if command -v setsid >/dev/null 2>&1; then
+		nohup setsid "$SELF" ssh-hardening expire "$ssh_user" "$1" </dev/null >/dev/null 2>&1 9>&- &
+	else
+		nohup "$SELF" ssh-hardening expire "$ssh_user" "$1" </dev/null >/dev/null 2>&1 9>&- &
+	fi
+}
+
+ssh_hardening() {
+	[ "$#" -ge 2 ] || die "ssh-hardening: operation user"
+	ssh_op=$1
+	ssh_user=$2
+	shift 2
+	case $ssh_user in '' | -* | *[!a-zA-Z0-9_.-]*) die "invalid user" ;; esac
+	[ -z "${SUDO_USER:-}" ] || [ "$SUDO_USER" = root ] || [ "$SUDO_USER" = "$ssh_user" ] || die "wrong user"
+	case $ssh_op in
+		status) [ "$#" -eq 0 ] || [ "$#" -eq 2 ] || die "status: optional public key" ;;
+		add-key) [ "$#" -eq 2 ] || die "add-key: public key" ;;
+		apply | confirm | rollback | expire)
+			[ "$#" -eq 1 ] || die "missing token"
+			case $1 in *[!0-9a-f]* | '') die "invalid token" ;; esac
+			[ "${#1}" -eq 32 ] || die "invalid token"
+			;;
+		off | boot-revert) [ "$#" -eq 0 ] || die "$ssh_op: no arguments" ;;
+		*) die "invalid operation" ;;
+	esac
+	if [ "$ssh_op" = expire ]; then
+		sleep 60
+	fi
+	ssh_dir=$ETCDIR/ssh/sshd_config.d
+	ssh_conf=$ssh_dir/nodvard-haertung.conf
+	ssh_state=$TMPRUN/nodvard-shield-ssh
+	ssh_mark=$ETCDIR/ssh/nodvard-haertung.pending
+	ssh_unit_dir=$ETCDIR/systemd/system
+	[ ! -L "$ETCDIR/ssh" ] && [ ! -L "$ssh_dir" ] && [ ! -L "$ssh_conf" ] && [ ! -L "$ssh_state" ] || die "unsafe path"
+	mkdir -p "$ssh_state"
+	chmod 700 "$ssh_state"
+	exec 9> "$ssh_state/lock"
+	flock -w 10 9 || die "busy"
+	if [ "$ssh_op" = boot-revert ]; then
+		# Nur wenn /run leer ist (Neustart), nie mitten im Bestaetigungsfenster.
+		if [ -f "$ssh_mark" ] && [ ! -f "$ssh_state/pending" ]; then
+			rm -f "$ssh_conf"
+			ssh_pending_clear
+		fi
+		return 0
+	fi
+	ssh_root_config=no
+	if [ "$ssh_user" = root ]; then
+		ssh_root_config=prohibit-password
+	elif [ "$ssh_op" = apply ]; then
+		! ssh_root_keys || ssh_root_config=prohibit-password
+	elif [ -f "$ssh_conf" ] && grep -qx 'PermitRootLogin prohibit-password' "$ssh_conf"; then
+		ssh_root_config=prohibit-password
+	fi
+	ssh_root=no
+	[ "$ssh_root_config" = no ] || ssh_root='(without-password|prohibit-password)'
+	if [ "$ssh_op" = status ] || [ "$ssh_op" = add-key ]; then
+		if [ "$#" -eq 2 ]; then
+			case $1 in ssh-ed25519 | ssh-rsa | ecdsa-sha2-nistp256 | ecdsa-sha2-nistp384 | ecdsa-sha2-nistp521) ;; *) die "invalid key type" ;; esac
+			case $2 in '' | *[!A-Za-z0-9+/=]*) die "invalid public key" ;; esac
+			[ "${#2}" -le 16384 ] || die "public key too long"
+			printf '%s %s\n' "$1" "$2" > "$ssh_state/key"
+			ssh-keygen -l -f "$ssh_state/key" >/dev/null || die "invalid public key"
+			ssh_home=$(getent passwd "$ssh_user" | cut -d: -f6)
+			case $ssh_home in /*) ;; *) die "missing home" ;; esac
+			runuser -u "$ssh_user" -- sh -s -- "$ssh_home" "$ssh_op" "$1" "$2" "$ssh_user" <<'SHIELD_AUTHORIZED_KEYS' || die "authorized_keys failed"
+				cd "$1" || exit 1
+				if [ "$2" = add-key ]; then
+					umask 077
+					[ ! -L .ssh ] || exit 1
+					[ "$5" = root ] || [ ! -L .ssh/authorized_keys ] || exit 1
+					mkdir -p .ssh && chmod 700 .ssh || exit 1
+					[ -e .ssh/authorized_keys ] || touch .ssh/authorized_keys || exit 1
+					[ -L .ssh/authorized_keys ] || chmod 600 .ssh/authorized_keys || exit 1
+				fi
+				if awk -v t="$3" -v k="$4" '!/^ *#/ {for(i=1;i<NF;i++) if($i == t && $(i+1) == k) found=1} END {exit !found}' .ssh/authorized_keys 2>/dev/null; then
+					echo "@@authorized=yes"
+				elif [ "$2" = add-key ]; then
+					printf "\n%s %s\n" "$3" "$4" >> .ssh/authorized_keys || exit 1
+					echo "@@authorized=yes"
+				else
+					echo "@@authorized=no"
+				fi
+SHIELD_AUTHORIZED_KEYS
+		fi
+		if [ -f "$ssh_conf" ] && [ ! -f "$ssh_state/pending" ] && [ ! -f "$ssh_mark" ] && ssh_effective; then echo '@@hardened=yes'; else echo '@@hardened=no'; fi
+		[ ! -f "$ssh_mark" ] || [ -f "$ssh_state/pending" ] || echo '@@unconfirmed=yes'
+		[ ! -f "$ssh_conf" ] || echo '@@managed=yes'
+		[ "$ssh_user" = root ] || ! ssh_root_keys || echo '@@root_keys=yes'
+		! ssh_two_factor || echo '@@two_factor=yes'
+		return
+	fi
+	case $ssh_op in
+		apply)
+			[ ! -e "$ssh_conf" ] && [ ! -e "$ssh_state/pending" ] || die "already configured or pending"
+			[ -x "$SELF" ] && { command -v nohup >/dev/null || { [ -d "$SDMARK" ] && command -v systemd-run >/dev/null; }; } || die "rollback unavailable"
+			sshd -t || { printf '%s\n' "shield-root: sshd rejects the current configuration, nothing changed" >&2; return 1; }
+			! ssh_two_factor || { printf '%s\n' "shield-root: two-factor login detected (PAM or AuthenticationMethods), nothing changed" >&2; return 1; }
+			mkdir -p "$ssh_dir"
+			ssh_pending_set "$1"
+			ssh_expire_start "$1"
+			printf 'PasswordAuthentication no\nPermitRootLogin %s\nKbdInteractiveAuthentication no\nMaxAuthTries 3\n' "$ssh_root_config" > "$ssh_conf"
+			if ! sshd -t || ! ssh_effective || ! ssh_reload; then
+				printf '%s\n' "shield-root: hardening not active (sshd_config.d is not read, another setting takes precedence, or reload failed)" >&2
+				ssh_remove && ssh_pending_clear
+				return 1
+			fi
+			echo '@@pending=yes'
+			;;
+		confirm)
+			[ -f "$ssh_state/pending" ] && [ "$(cat "$ssh_state/pending")" = "$1" ] || die "confirmation expired"
+			[ -f "$ssh_conf" ] && ssh_effective || die "configuration changed"
+			ssh_pending_clear
+			echo '@@hardened=yes'
+			;;
+		rollback | expire)
+			if [ -f "$ssh_state/pending" ] && [ "$(cat "$ssh_state/pending")" = "$1" ]; then
+				ssh_remove || return 1
+				ssh_pending_clear
+			elif [ "$ssh_op" = expire ]; then
+				return
+			elif [ -e "$ssh_conf" ]; then
+				die "rollback not confirmed"
+			fi
+			echo '@@rollback=yes'
+			;;
+		off)
+			ssh_remove || return 1
+			ssh_pending_clear
+			echo '@@hardened=no'
+			;;
+	esac
+}
+
 [ "$#" -ge 1 ] || die "Unterbefehl fehlt"
 command=$1
 shift
 
 case $command in
+	ssh-hardening) ssh_hardening "$@" ;;
 	version)
 		[ "$#" -eq 0 ] || die "version erwartet keine Argumente"
 		printf '%s\n' "$HELPER_VERSION"
@@ -1152,12 +1529,15 @@ case $command in
 	guard) guard "$@" ;;
 	detect-templates) detect_templates "$@" ;;
 	refresh-packages) refresh_packages "$@" ;;
+	package-inventory) package_inventory "$@" ;;
 	quarantine) quarantine "$@" ;;
 	restore) restore "$@" ;;
 	delete) delete "$@" ;;
 	quarantine-state) quarantine_state "$@" ;;
 	ban) fail2ban_set banip "$@" ;;
 	unban) fail2ban_set unbanip "$@" ;;
+	fail2ban-config-read) fail2ban_config_read "$@" ;;
+	fail2ban-config-write) fail2ban_config_write "$@" ;;
 	install) install_package "$@" ;;
 	reboot) reboot_host "$@" ;;
 	upgrade-start)

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 from docker_stack_fakes import EXT_DIR
+from exec_gate_helpers import ReadingExec
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -427,7 +428,7 @@ class Ctx:
             async def list(self, *, tag: str | None = None):
                 return host_objects
 
-        class _Exec:
+        class _Exec(ReadingExec):
             async def run(self, host, command: str, *, timeout_s: int = 60):
                 return await outer.docker[host.id].run(command)
 
@@ -435,7 +436,7 @@ class Ctx:
             async def send(self, notification) -> None:
                 outer.sent.append(notification)
 
-        self.settings, self.hosts, self.exec, self.notify = _Settings(), _Hosts(), _Exec(), _Notify()
+        self.settings, self.hosts, self.exec, self.notify = _Settings(), _Hosts(), _Exec(ext_id="docker"), _Notify()
         self.host_objects = host_objects
 
 

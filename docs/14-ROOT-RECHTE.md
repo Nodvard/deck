@@ -42,7 +42,8 @@ mit Passwort einrichtest (Nodvard Deck führt dann denselben Befehl aus).
     mit der größten Wirkung auf den angezeigten Servern, mit den Servern, auf denen sie vorkommen. Die Protokolle liegen auf dem Server unter
     `/var/lib/nodvard-shield-audit/`. Scans und Echtzeit-Wächter laufen auf einem Server nie
     gleichzeitig; für diese Sperre legt Shield dort einen kleinen Ordner an: `/run/nodvard-shield` (als
-    root) bzw. `~/.nodvard-shield`. In die Quarantäne kommt eine Datei nur, wenn ClamAV sie dabei selbst noch einmal
+    root) bzw. `~/.nodvard-shield`. Die Quarantäne liegt aktuell unter `/var/lib/nexus-quarantine/`.
+    In die Quarantäne kommt eine Datei nur, wenn ClamAV sie dabei selbst noch einmal
     als Fund meldet, erst an ihrem Ort und dann in einem Prüfordner, in den nur root schreibt; das gilt mit und ohne
     Hilfsskript. Fehlt ClamAV oder antwortet es nicht, bleibt die Datei, wo sie ist. Wiederhergestellt wird nur an den
     Ort und mit den Rechten, die Shield beim Verschieben auf dem Server hinterlegt hat (auch besondere wie `4755` oder
@@ -62,10 +63,11 @@ mit Passwort einrichtest (Nodvard Deck führt dann denselben Befehl aus).
     dann als Grund „zuletzt nicht geprüft (ohne Abzug)“ da.
   - **Update-Zentrale:** Updates einspielen und neu starten. Das Neuladen der Paketlisten vor der
     Prüfung braucht root – ohne bleibt es beim zuletzt geladenen Stand. Updates laufen auf dem
-    Server im Hintergrund (mit systemd als `lattice-upgrade-…`, ein
-    [alter Name, der bleibt](11-ERST-EINRICHTUNG.md#m-alte-namen-bei-älteren-installationen), sonst per `setsid`) und laufen
+    Server im Hintergrund (mit systemd als `lattice-upgrade-…`, sonst per `setsid`) und laufen
     weiter, auch wenn die Verbindung abreißt oder das Dashboard neu startet. Das Protokoll jedes
-    Laufs liegt 30 Tage unter `/var/lib/nexus-updates/`. Das Dashboard wartet 45 Minuten auf das
+    Laufs liegt 30 Tage unter `/var/lib/nexus-updates/`. Diese technischen Namen für Updates und Quarantäne verwendet
+    auch der aktuelle Code. Die [Übergangsübersicht bis 1.0](11-ERST-EINRICHTUNG.md#m-alte-namen-bei-älteren-installationen)
+    erklärt die Gründe; benenne sie nicht von Hand um. Das Dashboard wartet 45 Minuten auf das
     Ergebnis; dauert ein Lauf länger, steht er zunächst als „Keine Rückmeldung“ da (beendet wird
     er nie), das Dashboard fragt aber noch bis zu etwa 3 Stunden nach, berichtigt dann den Eintrag
     und meldet das Ergebnis per Push. Startet das Dashboard in dieser Zeit neu, bleibt der Eintrag

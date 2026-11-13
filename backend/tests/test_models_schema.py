@@ -17,7 +17,8 @@ async def test_schema_has_28_core_tables(db_session: AsyncSession) -> None:
 
     names = await db_session.connection()
     names = await names.run_sync(_table_names)
-    # 28 seit `secret_usages` (Tresor: wer ein Secret benutzt hat).
+    assert "secret_grants" not in names
+    assert "host_merges" in names
     assert len(names) == 28, names
 
 

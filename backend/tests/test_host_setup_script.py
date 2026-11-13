@@ -1699,7 +1699,7 @@ def test_the_real_setup_with_all_helpers_reaches_sudo_unchanged(tmp_path, shell)
     _stub(bin_dir / "sudo", f'IFS= read -r pw; mkdir "{seen}"; printf %s "$pw" > "{seen}/pw"; '
           f'printf "%s\\n" "$1" "$2" "$3" "$4" "$5" > "{seen}/args"; printf %s "$6" > "{seen}/script"\n')
     script, _ = build_setup_script("deck", KEY, sudo=True, helpers=list(_helpers().values()), report_state=True)
-    assert len(script.encode()) > 50_000
+    assert len(script.encode()) > 30_000  # die Skripte kommen komprimiert mit, weit über den Zeilenpuffern der Terminals
     done = _remote_long(tmp_path, shell, bin_dir, script)
     assert done.returncode == 0, done.stderr
     assert (seen / "args").read_text().split("\n")[:5] == ["-S", "-p", "", "sh", "-c"]

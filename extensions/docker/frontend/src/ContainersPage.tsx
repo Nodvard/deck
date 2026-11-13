@@ -887,6 +887,7 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
 
   // Server im Modus „Nur bedienen“ prüft Nodvard Deck nie auf neue Images.
   const scoped = (services ?? []).filter((s) => !hostFilter || hostIdOf(s) === hostFilter);
+  const dockerReachable = Object.entries(environments).some(([id, env]) => (!hostFilter || id === hostFilter) && env.docker_version);
   const operateServers = new Set(scoped.filter((s) => s.operate_only).map((s) => hostIdOf(s))).size;
   const imageSummary = summarizeImages(visibleImages, imagesChecking, operateServers);
 
@@ -987,6 +988,19 @@ function ContainerList({ tabs }: { tabs: ReactNode }): JSX.Element {
         </p>
       )}
       {(services ?? []).length === 0 && <NoContainers />}
+      {statsLoaded && !dockerReachable && scoped.length > 0 && scoped.every((s) => s.state === "error") && (
+        <EmptyState
+          icon="package"
+          title="Docker-Verbindung fehlgeschlagen"
+          text="Prüfe unter Server & Zugänge die Verbindung und ob der Docker-Dienst läuft. Versuche es anschließend erneut."
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button onClick={load}>Erneut versuchen</Button>
+              <SettingsLink to="/settings/hosts" permission="hosts.write">Server &amp; Zugänge öffnen</SettingsLink>
+            </div>
+          }
+        />
+      )}
       {(services ?? []).length > 0 && byHost.size === 0 && (
         <p className="mb-3 text-sm opacity-70" data-testid="no-match">
           {needle ? "Kein Container passt zu deiner Suche." : "Für diesen Filter gibt es keine Container."}

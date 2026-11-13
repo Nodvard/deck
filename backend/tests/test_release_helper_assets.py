@@ -86,6 +86,47 @@ def test_files_for_a_version_without_release_notes(tmp_path):
     assert assets.notes(VERSION, part, tmp_path) == (f"Nodvard Deck {VERSION}", part)
 
 
+def test_provenance_extends_the_helper_section_and_names_each_digest():
+    images = (("deck", "ghcr.io/nodvard/deck", "sha256:" + "12" * 32),
+              ("dock", "ghcr.io/nodvard/dock", "sha256:" + "34" * 32))
+    original = assets.section(VERSION, IMAGE, DIGEST)
+    part = assets.section(VERSION, IMAGE, DIGEST, images=images)
+    assert part.startswith(original.removesuffix(assets.MARKER_END + "\n"))
+    assert part.endswith(assets.MARKER_END + "\n")
+    assert part.count(assets.MARKER) == part.count(assets.MARKER_END) == 1
+    for name, source, digest in (*images, ("updater", IMAGE, DIGEST)):
+        assert f"`{source}@{digest}`" in part
+        assert f"https://github.com/nodvard/deck/releases/download/v{VERSION}/{name}.sigstore.json" in part
+        assert f"docker buildx imagetools inspect {source}@{digest} --format '{{{{ json .Provenance }}}}'" in part
+        assert f"gh attestation verify oci://{source}@{digest} --repo nodvard/deck" in part
+    assert f"--source-ref refs/tags/v{VERSION}" in part
+    assert assets.merge("Oben.\n\n" + original + "\nUnten.", part) == "Oben.\n\n" + part + "\nUnten."
+
+
+def test_cli_adds_deck_dock_and_repository_to_the_section(tmp_path):
+    assert assets.main(["files", "--version", VERSION, "--image", IMAGE, "--digest", DIGEST, "--out", str(tmp_path),
+                        "--deck-image", "ghcr.io/example/deck", "--deck-digest", DIGEST,
+                        "--dock-image", "ghcr.io/example/dock", "--dock-digest", DIGEST,
+                        "--repository", "example/deck"]) == 0
+    part = (tmp_path / assets.SECTION_NAME).read_text(encoding="utf-8")
+    assert "ghcr.io/example/deck@" in part and "ghcr.io/example/dock@" in part
+    assert "https://github.com/example/deck/releases/download/" in part
+    assert "--signer-workflow example/deck/.github/workflows/release.yml" in part
+
+
+@pytest.mark.parametrize("extra", [
+    ["--deck-image", "ghcr.io/nodvard/deck"],
+    ["--dock-digest", DIGEST],
+    ["--deck-image", "ghcr.io/nodvard/deck", "--deck-digest", "sha256:falsch"],
+    ["--dock-image", "ghcr.io/nodvard/dock:1", "--dock-digest", DIGEST],
+    ["--repository", "nodvard/deck\nanderes"],
+])
+def test_incomplete_or_invalid_provenance_input_writes_nothing(tmp_path, extra):
+    out = tmp_path / "out"
+    assert assets.main(["files", "--version", VERSION, "--image", IMAGE, "--digest", DIGEST, "--out", str(out), *extra]) == 1
+    assert not out.exists()
+
+
 def test_main_writes_all_four_files(tmp_path):
     out = tmp_path / "release"
     assert assets.main(["files", "--version", VERSION, "--image", IMAGE, "--digest", DIGEST, "--out", str(out)]) == 0

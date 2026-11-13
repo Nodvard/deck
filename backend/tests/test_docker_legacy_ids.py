@@ -55,11 +55,22 @@ def _old_image_folder(tmp_path: Path) -> Path:
     (target / "src" / "nodvard_deck_ext_docker").rename(target / "src" / OLD_PACKAGE)
     manifest = target / "extension.toml"
     text = manifest.read_text(encoding="utf-8")
-    text = text.replace('id          = "docker"\nlegacy_ids  = ["service-matrix"]\n', f'id          = "{OLD_ID}"\n')
+    text = text.replace('id          = "docker"\n', f'id          = "{OLD_ID}"\n')
+    text = text.replace('legacy_ids  = ["service-matrix"]\n', "")
     text = text.replace('"nodvard_deck_ext_docker:Extension"', f'"{OLD_PACKAGE}:Extension"')
     assert f'id          = "{OLD_ID}"' in text and "legacy_ids" not in text and OLD_PACKAGE in text
     manifest.write_text(text, encoding="utf-8")
     return root
+
+
+def test_old_image_manifest_has_no_aliases(tmp_path):
+    from nodvard_sdk import load_manifest
+
+    folder = _old_image_folder(tmp_path) / OLD_ID
+    manifest = load_manifest(folder / "extension.toml")
+    assert (manifest.id, manifest.legacy_ids) == (OLD_ID, [])
+    assert manifest.entrypoint == f"{OLD_PACKAGE}:Extension"
+    assert (folder / "src" / OLD_PACKAGE / "__init__.py").is_file()
 
 
 async def _owner_headers(client) -> dict[str, str]:

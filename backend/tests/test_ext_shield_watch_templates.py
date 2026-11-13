@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from exec_gate_helpers import ReadingExec
 from fastapi import FastAPI
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "extensions" / "shield" / "src"))
@@ -191,7 +192,7 @@ def _ctx(settings: dict, outputs: dict[str, str | Exception]) -> SimpleNamespace
         audit.append(kwargs)
 
     return SimpleNamespace(
-        settings=_Settings(settings), exec=SimpleNamespace(run=run), calls=calls, audit_entries=audit,
+        settings=_Settings(settings), exec=ReadingExec(ext_id="shield", run=run), calls=calls, audit_entries=audit,
         audit=SimpleNamespace(log=log), api=SimpleNamespace(current_actor=lambda: Actor.user("u1", "nico")),
     )
 

@@ -7,7 +7,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-from docker_stack_fakes import EXT_DIR, FakeExec, docker_on, ps, result, row  # noqa: F401 - Fixtures
+from docker_stack_fakes import EXT_DIR, FakeExec, docker_on, ps, real_sftp, result, row  # noqa: F401 - Fixtures
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -124,6 +124,150 @@ def _request(*, project="shop", remove_folder=False, folder=FOLDER, risk="high",
         action_type="docker.stack_delete", host_ref=host, risk=Risk(risk), proposed_by=Actor(type=actor, id="u1"), reason="Test",
         payload={"project": project, "remove_folder": remove_folder, "folder": folder},
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adopted", [False, True])
+@pytest.mark.parametrize("field", ["config_files", "env_files"])
+async def test_other_stack_configuration_keeps_the_folder(tmp_path, adopted, field):
+    env = await _setup(tmp_path)
+    other = row(project="other", name="other-web-1", working_dir="/opt/stacks/other",
+                config_files="/opt/stacks/other/compose.yaml")
+    other[field] = f"{FOLDER}/other.yaml" if field == "config_files" else f"{FOLDER}/other.env"
+    if adopted:
+        await env.store.add("h1", _mods().stacks.parse_members(ps(other))[0])
+    else:
+        env.fake.rows.append(other)
+    before = dict(env.sftp.files)
+    done = await env.executor.execute(_request(remove_folder=True))
+    assert not done.success and "Konfigurationsdateien" in done.error and "other" in done.error
+    assert env.sftp.files == before and RM not in env.fake.argv_calls
+    assert "shop" in env.store.for_host("h1")
+
+
+@pytest.mark.asyncio
+async def test_other_stack_without_working_dir_allows_folder_deletion(tmp_path):
+    env = await _setup(tmp_path)
+    other = row(project="other", name="other-web-1", working_dir="", config_files="", env_files="")
+    parsed = _mods().stacks.parse_members(ps(other))[0]
+    assert parsed.working_dir == "" and parsed.files is None
+    env.fake.rows.append(other)
+    assert await env.delete.folder_refusal(SimpleNamespace(id="h1"), _stack()) is None
+    done = await env.executor.execute(_request(remove_folder=True))
+    assert done.success, done.error
+    assert _changing(env) == [_take_down(), RM] and other in env.fake.rows
+    assert FOLDER not in env.sftp.dirs and "shop" not in env.store.for_host("h1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("working_dir", [None, ""])
+@pytest.mark.parametrize("field", ["config_files", "env_files"])
+@pytest.mark.parametrize("linked", [False, True])
+@pytest.mark.parametrize("after_down", [False, True])
+async def test_other_stack_labels_without_working_dir_keep_the_folder(tmp_path, working_dir, field, linked, after_down):
+    env = await _setup(tmp_path)
+    other = row(project="other", name="other-web-1", working_dir=working_dir, config_files="", env_files="")
+    path = f"{FOLDER}/other.yaml" if field == "config_files" else f"{FOLDER}/other.env"
+    other[field] = f"/srv/shared/{path.rsplit('/', 1)[1]}" if linked else path
+    env.sftp.files[path] = b"other"
+    if linked:
+        env.fake.links[other[field]] = path
+    if after_down:
+        assert await env.delete.folder_refusal(SimpleNamespace(id="h1"), _stack()) is None
+        original = env.fake.run_argv
+
+        async def appeared_meanwhile(host, argv, **kwargs):
+            answer = await original(host, argv, **kwargs)
+            if argv == _take_down():
+                env.fake.rows.append(other)
+            return answer
+
+        env.fake.run_argv = appeared_meanwhile
+    else:
+        env.fake.rows.append(other)
+    before = dict(env.sftp.files)
+    done = await env.executor.execute(_request(remove_folder=True))
+    suffix = ("Der Stack bleibt übernommen; ohne Ordner kannst du ihn noch einmal löschen." if after_down else
+              "Gelöscht wurde nichts.")
+    assert not done.success and done.error == (
+        f"Den Ordner {FOLDER} löscht Nodvard Deck nicht: Darin liegen noch Konfigurationsdateien des Stacks „other“. {suffix}"
+    )
+    assert done.output == ("Stack „shop“ heruntergefahren." if after_down else None)
+    assert env.sftp.files == before and FOLDER in env.sftp.dirs and "shop" in env.store.for_host("h1")
+    assert _changing(env) == ([_take_down()] if after_down else []) and other in env.fake.rows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["config_files", "env_files"])
+async def test_other_stack_labels_outside_the_folder_allow_deletion(tmp_path, field):
+    env = await _setup(tmp_path)
+    other = row(project="other", name="other-web-1", working_dir="", config_files="", env_files="")
+    other[field] = "/opt/stacks/other/compose.yaml" if field == "config_files" else "/opt/stacks/other/prod.env"
+    env.fake.rows.append(other)
+    done = await env.executor.execute(_request(remove_folder=True))
+    assert done.success, done.error
+    assert _changing(env) == [_take_down(), RM] and other in env.fake.rows
+    assert FOLDER not in env.sftp.dirs and "shop" not in env.store.for_host("h1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("working_dir", [None, ""])
+@pytest.mark.parametrize("field", [None, "files", "env_files"])
+async def test_missing_other_working_dir_still_checks_known_files(tmp_path, working_dir, field):
+    env = await _setup(tmp_path)
+    other = _stack(project="other", working_dir="/opt/stacks/other", config_files="/opt/stacks/other/compose.yaml")
+    other.working_dir = working_dir
+    if field is not None:
+        setattr(other, field, (f"{FOLDER}/other.yaml" if field == "files" else f"{FOLDER}/other.env",))
+    original = env.delete.stacks.stacks
+
+    async def stacks(host, project=None):
+        found = await original(host, project)
+        return [*found, other] if project is None else found
+
+    env.delete.stacks.stacks = stacks
+    refusal = await env.delete.folder_refusal(SimpleNamespace(id="h1"), _stack())
+    if field is None:
+        assert refusal is None
+        done = await env.executor.execute(_request(remove_folder=True))
+        assert done.success, done.error
+        assert _changing(env) == [_take_down(), RM]
+    else:
+        assert refusal == (f"Den Ordner {FOLDER} löscht Nodvard Deck nicht: "
+                           "Darin liegen noch Konfigurationsdateien des Stacks „other“.")
+        before = dict(env.sftp.files)
+        done = await env.executor.execute(_request(remove_folder=True))
+        assert not done.success and done.error == f"{refusal} Gelöscht wurde nichts."
+        assert env.sftp.files == before and _changing(env) == []
+        assert "shop" in env.store.for_host("h1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source", "working_dir", "config_files"),
+    [
+        ("portainer", "/data/compose/23", "/data/compose/23/docker-compose.yml"),
+        ("unknown", "/opt/stacks/other", ""),
+    ],
+)
+async def test_other_stack_without_known_files_keeps_the_folder(tmp_path, source, working_dir, config_files):
+    env = await _setup(tmp_path)
+    other = row(project="other", name="other-web-1", working_dir=working_dir, config_files=config_files)
+    parsed = _mods().stacks.parse_members(ps(other))[0]
+    assert parsed.source == source and parsed.files is None
+    env.fake.rows.append(other)
+    refusal = (f"Den Ordner {FOLDER} löscht Nodvard Deck nicht: "
+               "Die Konfigurationsdateien des Stacks „other“ ließen sich nicht prüfen.")
+    assert await env.delete.folder_refusal(SimpleNamespace(id="h1"), _stack()) == refusal
+    before = dict(env.sftp.files)
+    done = await env.executor.execute(_request(remove_folder=True))
+    assert not done.success and done.error == f"{refusal} Gelöscht wurde nichts."
+    assert env.sftp.files == before and _changing(env) == []
+    assert "shop" in env.store.for_host("h1")
+    done = await env.executor.execute(_request())
+    assert done.success, done.error
+    assert env.sftp.files == before and _changing(env) == [_take_down()]
+    assert other in env.fake.rows and "shop" not in env.store.for_host("h1")
 
 
 def test_commands():
@@ -311,6 +455,152 @@ def _realpath(env, mapping):
         return mapping.get(path, "/home/deck" if path == "." else path)
 
     env.sftp.realpath = realpath
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adopted", [False, True])
+@pytest.mark.parametrize("field", ["working_dir", "config_files", "env_files", "default_env"])
+@pytest.mark.parametrize("after_down", [False, True])
+async def test_other_stack_symlinks_keep_the_folder(tmp_path, adopted, field, after_down):
+    env = await _setup(tmp_path)
+    other = row(project="other", name="other-web-1", working_dir="/opt/stacks/other",
+                config_files="/opt/stacks/other/compose.yaml", env_files="")
+    if field == "default_env":
+        alias = "/opt/stacks/other/.env"
+        env.sftp.files[alias] = b"SHARED=1\n"
+    else:
+        alias = "/srv/shared" if field == "working_dir" else f"/srv/shared/other.{'yaml' if field == 'config_files' else 'env'}"
+        other[field] = alias
+    if adopted:
+        await env.store.add("h1", _mods().stacks.parse_members(ps(other))[0])
+    else:
+        env.fake.rows.append(other)
+    target = FOLDER if field == "working_dir" else f"{FOLDER}/{alias.rsplit('/', 1)[1]}"
+    reason = ("Darin liegt noch ein anderer Stack." if field == "working_dir" else
+              "Darin liegen noch Konfigurationsdateien des Stacks „other“.")
+    refusal = f"Den Ordner {FOLDER} löscht Nodvard Deck nicht: {reason}"
+    if after_down:
+        assert await env.delete.folder_refusal(SimpleNamespace(id="h1"), _stack()) is None
+        original = env.fake.run_argv
+
+        async def linked_meanwhile(host, argv, **kwargs):
+            answer = await original(host, argv, **kwargs)
+            if argv == _take_down():
+                _realpath(env, {alias: target})
+            return answer
+
+        env.fake.run_argv = linked_meanwhile
+    else:
+        _realpath(env, {alias: target})
+        assert await env.delete.folder_refusal(SimpleNamespace(id="h1"), _stack()) == refusal
+    before = dict(env.sftp.files)
+    done = await env.executor.execute(_request(remove_folder=True))
+    suffix = ("Der Stack bleibt übernommen; ohne Ordner kannst du ihn noch einmal löschen." if after_down else
+              "Gelöscht wurde nichts.")
+    assert not done.success and done.error == f"{refusal} {suffix}"
+    assert done.output == ("Stack „shop“ heruntergefahren." if after_down else None)
+    assert env.sftp.files == before and FOLDER in env.sftp.dirs and "shop" in env.store.for_host("h1")
+    assert _changing(env) == ([_take_down()] if after_down else [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("env_state", ["missing", "local", "overridden"])
+async def test_unused_other_default_env_allows_folder_deletion(tmp_path, env_state):
+    env = await _setup(tmp_path)
+    path = "/opt/stacks/other/.env"
+    other = row(project="other", name="other-web-1", working_dir="/opt/stacks/other",
+                config_files="/opt/stacks/other/compose.yaml", env_files="")
+    if env_state != "missing":
+        env.sftp.files[path] = b"SHARED=1\n"
+    if env_state == "overridden":
+        other["env_files"] = "/opt/stacks/other/prod.env"
+        env.fake.links[path] = f"{FOLDER}/shared.env"
+    env.fake.rows.append(other)
+    done = await env.executor.execute(_request(remove_folder=True))
+    assert done.success, done.error
+    assert _changing(env) == [_take_down(), RM] and other in env.fake.rows
+    assert FOLDER not in env.sftp.dirs and "shop" not in env.store.for_host("h1")
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_other_default_env_keeps_the_folder(tmp_path):
+    env = await _setup(tmp_path)
+    env.fake.rows.append(row(project="other", name="other-web-1", working_dir="/opt/stacks/other",
+                             config_files="/opt/stacks/other/compose.yaml", env_files=""))
+    original = env.sftp.lstat
+
+    async def lstat(path):
+        if path == "/opt/stacks/other/.env":
+            raise PermissionError("Keine Berechtigung")
+        return await original(path)
+
+    env.sftp.lstat = lstat
+    before = dict(env.sftp.files)
+    done = await env.executor.execute(_request(remove_folder=True))
+    assert not done.success and done.error == (
+        f"Den Ordner {FOLDER} löscht Nodvard Deck nicht: "
+        "Er ließ sich auf dem Server nicht prüfen (Keine Berechtigung). Gelöscht wurde nichts."
+    )
+    assert env.sftp.files == before and _changing(env) == []
+    assert FOLDER in env.sftp.dirs and "shop" in env.store.for_host("h1")
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_other_realpath_keeps_the_folder(tmp_path):
+    env = await _setup(tmp_path)
+    env.fake.rows.append(row(project="other", name="other-web-1", working_dir="/opt/stacks/other",
+                             config_files="/srv/shared/other.yaml"))
+    original = env.sftp.realpath
+
+    async def realpath(path):
+        if path == "/srv/shared/other.yaml":
+            raise PermissionError("Keine Berechtigung")
+        return await original(path)
+
+    env.sftp.realpath = realpath
+    done = await env.executor.execute(_request(remove_folder=True))
+    assert done.error == (f"Den Ordner {FOLDER} löscht Nodvard Deck nicht: "
+                          "Er ließ sich auf dem Server nicht prüfen (Keine Berechtigung). Gelöscht wurde nichts.")
+    assert _changing(env) == [] and FOLDER in env.sftp.dirs and "shop" in env.store.for_host("h1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="braucht Symlinks")
+@pytest.mark.parametrize("field", ["working_dir", "config_files", "env_files", "default_env"])
+async def test_real_sftp_other_stack_symlink_keeps_the_folder(tmp_path, real_sftp, field):
+    env = await _setup(tmp_path)
+    env.fake.sftp = real_sftp.sftp
+    env.fake.rows = [r for r in env.fake.rows if r["project"] == "shop"]
+    root = real_sftp.root
+    for path, content in (("proc/self/mountinfo", MOUNTINFO), ("etc/passwd", PASSWD),
+                          ("opt/stacks/other/compose.yaml", "services: {}\n")):
+        file = root / path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(content, encoding="utf-8")
+    real_sftp.file.write_bytes(b"services: {}\n")
+    (root / "srv").mkdir()
+    (root / "srv/shared").symlink_to("../opt/stacks/shop", target_is_directory=True)
+    other = row(project="other", name="other-web-1", working_dir="/opt/stacks/other",
+                config_files="/opt/stacks/other/compose.yaml", env_files="")
+    if field == "default_env":
+        alias = "/opt/stacks/other/.env"
+        (root / alias.lstrip("/")).symlink_to("../shop/.env")
+    else:
+        alias = "/srv/shared" if field == "working_dir" else f"/srv/shared/other.{'yaml' if field == 'config_files' else 'env'}"
+        other[field] = alias
+    if field != "working_dir":
+        real_sftp.file.with_name(alias.rsplit("/", 1)[1]).write_bytes(b"bleibt\n")
+    env.fake.rows.append(other)
+    reason = ("Darin liegt noch ein anderer Stack." if field == "working_dir" else
+              "Darin liegen noch Konfigurationsdateien des Stacks „other“.")
+    refusal = f"Den Ordner {FOLDER} löscht Nodvard Deck nicht: {reason}"
+    assert await env.delete.folder_refusal(SimpleNamespace(id="h1"), _stack()) == refusal
+    done = await env.executor.execute(_request(remove_folder=True))
+    assert not done.success and done.error == f"{refusal} Gelöscht wurde nichts."
+    assert _changing(env) == [] and real_sftp.file.read_bytes() == b"services: {}\n"
+    if field == "default_env":
+        assert (root / alias.lstrip("/")).read_bytes() == b"bleibt\n"
+    assert "shop" in env.store.for_host("h1")
 
 
 def _unreadable(path, mode):
@@ -639,6 +929,25 @@ async def test_delete_through_the_gate(client, docker_on):
     approved = await client.post(f"/api/v1/actions/{proposed.json()['action_id']}/approve", headers=docker_on.owner)
     assert approved.json()["status"] == "succeeded", approved.json()
     assert any(call[-2:] == ["down", "--remove-orphans"] for call in docker_on.exec.argv_calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config_files", ["/data/compose/23/docker-compose.yml", ""], ids=["portainer", "unknown"])
+async def test_other_stack_without_known_files_allows_the_preview(client, docker_on, config_files):  # noqa: F811
+    await _adopt(client, docker_on)
+    docker_on.exec.rows.append(row(project="other", name="other-web-1", working_dir="/opt/stacks/other", config_files=config_files))
+    check = await client.get(_url(docker_on), headers=docker_on.owner)
+    refusal = (f"Den Ordner {FOLDER} löscht Nodvard Deck nicht: "
+               "Die Konfigurationsdateien des Stacks „other“ ließen sich nicht prüfen.")
+    assert check.status_code == 200 and check.json() == {"folder": FOLDER, "folder_refusal": refusal}
+    refused = await client.post(_url(docker_on), json={"remove_folder": True}, headers=docker_on.owner)
+    assert refused.status_code == 409 and refused.json()["detail"] == refusal
+    assert _changing_calls(docker_on.exec.argv_calls) == []
+    proposed = await client.post(_url(docker_on), json={"remove_folder": False}, headers=docker_on.owner)
+    assert proposed.status_code == 202, proposed.text
+    approved = await client.post(f"/api/v1/actions/{proposed.json()['action_id']}/approve", headers=docker_on.owner)
+    assert approved.json()["status"] == "succeeded", approved.json()
+    assert FOLDER in docker_on.exec.sftp_server.dirs and RM not in docker_on.exec.argv_calls
 
 
 @pytest.mark.asyncio

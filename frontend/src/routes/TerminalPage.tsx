@@ -1,8 +1,4 @@
-/**
- * Eigenständige Terminal-Seite (Host wählen, echte SSH-Sitzung, mehrere Tabs). Sie kennt nur die Terminal-API
- * (`POST /terminal/sessions` + WebSocket-Brücke, `api/v1/terminal.py`), nicht den Anbieter dahinter. Tabs bleiben beim
- * Umschalten gemountet (sonst risse der Wechsel die SSH-Sitzung ab); xterm.js wird erst hier dynamisch geladen.
- */
+/** Terminal-Tabs bleiben beim Umschalten gemountet, damit SSH-Sitzungen offen bleiben; xterm.js wird bei Bedarf geladen. */
 import "@xterm/xterm/css/xterm.css";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -468,7 +464,7 @@ export function TerminalPage() {
           ))}
         </div>
         {tabs.length === 0 && (
-          <p className="text-sm opacity-60" data-testid="terminal-hint">{edition.choose_modules ? "Einen Server wählen – jede Sitzung öffnet sich als eigener Tab." : "Die Konsole öffnet sich über die Docker-Seite."}</p>
+          <p className="text-sm opacity-60" data-testid="terminal-hint">{edition.choose_modules ? "Einen Server wählen, jede Sitzung öffnet sich als eigener Tab." : "Die Konsole öffnet sich über die Docker-Seite."}</p>
         )}
         {tabs.map((t) => (
           <TerminalView

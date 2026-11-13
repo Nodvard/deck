@@ -63,6 +63,23 @@ beforeEach(() => {
 });
 
 describe("Einstellungen", () => {
+  it("zeigt Nutzungsdaten ausschließlich dem Inhaber", () => {
+    setUser(["*"], true);
+    const view = render(
+      <MemoryRouter initialEntries={["/settings/account"]}>
+        <Routes><Route path="/settings/*" element={<SettingsLayout />} /></Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("link", { name: /Nutzungsdaten/ })).toHaveAttribute("href", "/settings/telemetry");
+    view.unmount();
+    setUser(["*"], false);
+    render(
+      <MemoryRouter initialEntries={["/settings/account"]}>
+        <Routes><Route path="/settings/*" element={<SettingsLayout />} /></Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole("link", { name: /Nutzungsdaten/ })).not.toBeInTheDocument();
+  });
   it("zeigt nur die Bereiche, für die Rechte vorhanden sind", () => {
     setUser(["audit.read"]);
     render(

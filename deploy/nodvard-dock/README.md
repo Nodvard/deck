@@ -181,6 +181,24 @@ Datenübernahme beim Wechsel wird hier nicht vorausgesetzt.
 
 ## Sicherheit und Datenschutz auf einen Blick
 
+Dock startet als `1000:1000`. Die Compose-Datei setzt `read_only`, `/tmp` als tmpfs, `cap_drop: ALL` und
+`no-new-privileges`. Port 8080 und die Verwaltung über SSH brauchen keine zusätzlichen Capabilities.
+Ein neues Volume `nodvard-dock-data` erhält passende Rechte aus dem Image. Eigene Datenordner müssen vor dem
+Start UID/GID 1000 gehören. Für bestehende Installationen mit anderen Besitzrechten zuerst sichern, das neue
+Image laden und bei gestopptem Dock einmalig ausführen:
+
+```bash
+docker compose stop nodvard-dock
+docker compose run --rm --no-deps --user 0:0 --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --entrypoint /usr/local/bin/migrate-data nodvard-dock
+docker compose up -d nodvard-dock
+```
+
+Volume-Namen und Bind-Mounts dabei behalten, alte root-Vorgaben vor dem Neustart entfernen und die aktuellen
+Compose-Sicherheitsvorgaben übernehmen. Nur die Umstellung braucht `CHOWN` für den Besitzerwechsel und
+`DAC_OVERRIDE` zum Durchlaufen geschützter Ordner. Sie folgt keinen Links und ändert nur `/app/data` auf dessen
+Dateisystem. Währenddessen darf kein anderer Container den Datenordner verwenden. Bei NAS-Freigaben ohne
+`chown`-Unterstützung müssen die Rechte für `1000:1000` am NAS gesetzt werden.
+
 - **Keine Telemetrie als Voreinstellung:** Nodvard Dock schickt standardmäßig keine Nutzungs- oder Absturzdaten.
 - **Standardmäßig nach außen** geht nur die Update-Suche: Einmal am Tag fragt Nodvard Dock bei `ghcr.io` nach einer neuen
   Version, die Registry sieht dabei deine IP-Adresse und den Zeitpunkt (abschaltbar unter Einstellungen → System →

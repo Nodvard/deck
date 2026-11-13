@@ -1,7 +1,7 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { fixtures, VIEW_KIND_COUNT } from "./__fixtures__";
+import { fixtures } from "./__fixtures__";
 import {
   ActionsView,
   ChartView,
@@ -16,19 +16,16 @@ import {
 
 const NEEDS_EXT_CONTEXT = new Set(["list", "table", "actions"]);
 
-/**
- * Renderer-Konformitaetstest:
- * jedes der 9 View-Kinds (docs/02-EXTENSION-API.md §4) bekommt eine feste Fixture und
- * muss die erwarteten Textfragmente rendern. `VIEW_KIND_COUNT` haelt fest, dass hier
- * ALLE Kinds abgedeckt sind -- ein zehntes Kind ohne Fixture faellt sofort auf.
- */
-describe("Widget-Renderer-Konformitaet", () => {
-  it("deckt alle dokumentierten View-Kinds ab", () => {
-    expect(fixtures.length).toBe(VIEW_KIND_COUNT);
+// Die Fixture-Zuordnung deckt View["kind"] vollständig ab; hier werden die Renderer geprüft.
+describe("Widget-Renderer-Konformität", () => {
+  it("ordnet jeder Fixture die passende Anzeigeart zu", () => {
+    for (const fixture of fixtures) {
+      expect(fixture.view.kind).toBe(fixture.name);
+    }
   });
 
   for (const fixture of fixtures) {
-    it(`rendert "${fixture.name}" gemaess Fixture`, () => {
+    it(`rendert "${fixture.name}" gemäß Fixture`, () => {
       const extProps = NEEDS_EXT_CONTEXT.has(fixture.name) ? { extId: "hello-world", onAction: () => {} } : {};
 
       switch (fixture.name) {
@@ -60,7 +57,7 @@ describe("Widget-Renderer-Konformitaet", () => {
           render(<LogView view={fixture.view as never} data={fixture.data} />);
           break;
         default:
-          throw new Error(`Keine Renderer-Zuordnung fuer Fixture "${(fixture as { name: string }).name}"`);
+          throw new Error(`Keine Renderer-Zuordnung für Fixture "${(fixture as { name: string }).name}"`);
       }
 
       for (const text of fixture.expectContains) {
@@ -81,7 +78,7 @@ describe("Widget-Renderer-Konformitaet", () => {
  * auf Titeln plus eine an der VIEWPORT-Breite (`sm:grid-cols-3`) statt an der
  * Kartenbreite ausgerichtete Kachelzahl. jsdom misst kein Layout; diese Tests halten
  * deshalb den Vertrag fest, der den Fehler ausschliesst (kein Ellipsis-Abschneiden,
- * kein Viewport-Breakpoint im Kachelraster), damit er nicht still zurueckkehrt.
+ * kein Viewport-Breakpoint im Kachelraster), damit er nicht still zurückkehrt.
  */
 describe("Dashboard-Kacheln schneiden keine Namen ab", () => {
   const LONG = "ein-sehr-langer-container-name_ohne_leerzeichen_1234567890";
@@ -98,13 +95,11 @@ describe("Dashboard-Kacheln schneiden keine Namen ab", () => {
     const grid = container.firstElementChild as HTMLElement;
     expect(grid.className).not.toMatch(/\bsm:grid-cols-/);
     expect(grid.className).toContain("auto-fill");
-    // Live gefunden: ein fester 7.5rem-Mindest-Track ist breiter als die schmalste
-    // Karte (~114px Inhalt) -> waagerechter Scrollbalken IN der Karte. `min(.., 100%)`
-    // haelt eine einzelne Spalte immer innerhalb des Containers.
+    // Die Mindestbreite darf bei schmalen Karten nicht über den Container hinausragen.
     expect(grid.className).toContain("minmax(min(7.5rem,100%)");
   });
 
-  it("ListView: volle Titel, Badge/Knoepfe duerfen in eine eigene Zeile umbrechen", () => {
+  it("ListView: volle Titel, Badge/Knöpfe dürfen in eine eigene Zeile umbrechen", () => {
     const view = {
       kind: "list",
       item: { title: "{{ title }}", subtitle: "{{ sub }}", badge: { text: "{{ state }}", tone: "warn" }, actions: [] },
@@ -120,8 +115,7 @@ describe("Dashboard-Kacheln schneiden keine Namen ab", () => {
     expect(title!.className).not.toContain("truncate");
     const li = container.querySelector("li")!;
     expect(li.className).toContain("flex-wrap");
-    // Der Badge-/Knopf-Block muss selbst umbrechen koennen -- mit `shrink-0` blieb er
-    // in einer schmalen Karte breiter als die Karte (live gefunden: Mini-Scrollbalken).
+    // Auch der Badge-/Knopf-Block muss innerhalb schmaler Karten umbrechen.
     const actionBlock = li.lastElementChild as HTMLElement;
     expect(actionBlock.className).toContain("flex-wrap");
     expect(actionBlock.className).not.toContain("shrink-0");

@@ -9,7 +9,7 @@ import logging
 import httpx
 import pytest
 from nodvard_deck.core import rate_limit, updates
-from nodvard_deck.db.session import session_scope
+from nodvard_deck.db.session import get_engine, session_scope
 from nodvard_deck.ext.runtime import get_extension_runtime
 from nodvard_deck.models.platform import Notification, NotificationDelivery
 from nodvard_deck.services import notifications as notifications_service
@@ -104,6 +104,41 @@ async def test_a_security_update_is_reported_once_in_red(client, registry):
     assert notices[0]["payload"]["path"] == "/settings/system"
     await _check(client, owner)
     assert len(await _security_notices(client, owner)) == 1
+
+
+@pytest.mark.asyncio
+async def test_update_check_releases_connection_before_search(file_db, registry, test_settings, monkeypatch):
+    async with file_db() as session:
+        await settings_service.set_global(session, update_check.KEY_ENABLED, False)
+        await settings_service.set_global(session, update_check.KEY_AUTO_SECURITY, True)
+        await settings_service.set_global(session, update_check.KEY_CHANNEL, "beta")
+        await session.commit()
+
+    held = []
+    check = updates.check
+    notify = update_check.notify_security
+
+    async def search(*args, **kwargs):
+        held.append(get_engine().pool.checkedout())
+        return await check(*args, **kwargs)
+
+    async def notify_security(result):
+        held.append(get_engine().pool.checkedout())
+        await notify(result)
+
+    monkeypatch.setattr(updates, "check", search)
+    monkeypatch.setattr(update_check, "notify_security", notify_security)
+    async with file_db() as session:
+        result = await update_check.check_now(session, test_settings)
+        assert held == [0, 0]
+        assert not session.in_transaction()
+    assert result["enabled"] is False
+    assert result["auto_security"] is True
+    assert result["channel"] == "beta"
+    assert result["source"] == "live"
+    async with file_db() as session:
+        notice = await session.scalar(select(Notification).where(Notification.title == SECURITY_TITLE))
+        assert notice is not None
 
 
 @pytest.mark.asyncio

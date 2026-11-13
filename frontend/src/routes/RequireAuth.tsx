@@ -70,7 +70,7 @@ export function RequireAuth() {
     return unavailable ? (
       <div className="p-6 text-sm">
         {serverText === null ? (
-          <p role="status" className="opacity-60">Server nicht erreichbar – neuer Versuch …</p>
+          <p role="status" className="opacity-60">Server nicht erreichbar, neuer Versuch …</p>
         ) : (
           <>
             <p role="status">Server meldet: {serverText}</p>

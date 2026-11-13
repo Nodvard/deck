@@ -14,7 +14,7 @@ import { HostDetailSettings } from "./HostDetailSettings";
 
 vi.mock("../../state/dialogs", () => ({ confirmDialog: vi.fn(async () => true), promptDialog: vi.fn(async () => null) }));
 
-const ONE_LINER = "S=; [ \"$(id -u)\" = 0 ] || S=sudo; $S sh -c 'set -e; U=lattice'";
+const ONE_LINER = "S=; [ \"$(id -u)\" = 0 ] || S=sudo; $S sh -c 'set -e; U=nodvard'";
 
 const REQUIREMENTS = [
   { ext_id: "shield", id: "root", label: "Root-Rechte (Nodvard Shield)", check_command: null, ok_text: "", fail_hint: "", unix_group: null, needs_root: true, root_reason: "Updates einspielen, Quarantäne", order: 50 },
@@ -24,9 +24,9 @@ const REQUIREMENTS = [
 function setupFixture(call: Call) {
   const q = new URLSearchParams(call.query);
   return {
-    username: "lattice", public_key: "ssh-ed25519 AAAA lattice@bastel-pi", fingerprint: "SHA256:xyz",
+    username: "nodvard", public_key: "ssh-ed25519 AAAA nodvard@bastel-pi", fingerprint: "SHA256:xyz",
     one_liner: ONE_LINER + (q.get("sudo") === "true" ? " #sudo" : "") + (q.getAll("groups").length ? ` #${q.getAll("groups").join(",")}` : ""),
-    script: "set -e\nU=lattice", notes: ["Wer in der Gruppe docker ist oder sudo ohne Passwort darf, kann auf dem Server praktisch alles."],
+    script: "set -e\nU=nodvard", notes: ["Wer in der Gruppe docker ist oder sudo ohne Passwort darf, kann auf dem Server praktisch alles."],
     groups: q.getAll("groups"), sudo: q.get("sudo") === "true",
   };
 }
@@ -81,6 +81,18 @@ afterEach(() => {
 });
 
 describe("Server-Detail: SSH-Schlüssel erzeugen und Einzeiler kopieren", () => {
+  it("zeigt den zugeordneten Hand-Server mit seiner bisherigen Adresse", async () => {
+    mockHostsApi(routes({
+      "GET /hosts/h1": hostFixture({
+        provider_ext_id: "proxmox", kind: "vm",
+        manual_entry: { id: "h1", name: "datenbank", display_name: "Datenbank", address: "db.example.test" },
+      }),
+    }));
+    renderDetail();
+    expect(await screen.findByText(/Der Hand-Server „Datenbank“ \(db.example.test\) ist diesem Eintrag zugeordnet/)).toBeVisible();
+    expect(screen.getByText(/SSH-Zugänge, Markierungen und Verlauf bleiben erhalten/)).toBeVisible();
+  });
+
   it("nach „Server anlegen“ (?neu=1) ist das Formular zum Erzeugen schon offen, Vorgabe nodvard / 22", async () => {
     mockHostsApi(routes());
     renderDetail("/settings/hosts/h1?neu=1");
@@ -107,7 +119,7 @@ describe("Server-Detail: SSH-Schlüssel erzeugen und Einzeiler kopieren", () => 
       "GET /hosts/h1/credentials": () => creds,
       "POST /hosts/h1/credentials/generate-key": () => {
         creds = [credentialFixture()];
-        return { credential: credentialFixture(), public_key: "ssh-ed25519 AAAA lattice@bastel-pi", fingerprint: "SHA256:xyz" };
+        return { credential: credentialFixture(), public_key: "ssh-ed25519 AAAA nodvard@bastel-pi", fingerprint: "SHA256:xyz" };
       },
     }));
     renderDetail();
@@ -367,7 +379,7 @@ describe("Server-Detail: nur die Hilfsskripte oder volle Rechte", () => {
 });
 
 describe("Server-Detail: Verbindung prüfen", () => {
-  const withCred = () => routes({ "GET /hosts/h1": hostFixture({ credential: { id: "c1", kind: "ssh_key", username: "lattice", port: 22 } }), "GET /hosts/h1/credentials": [credentialFixture()] });
+  const withCred = () => routes({ "GET /hosts/h1": hostFixture({ credential: { id: "c1", kind: "ssh_key", username: "nodvard", port: 22 } }), "GET /hosts/h1/credentials": [credentialFixture()] });
 
   it("ok: zeigt jeden Punkt mit Symbol, Text und Hinweis, Befehle zum Kopieren", async () => {
     const calls = mockHostsApi({ ...withCred(), "POST /hosts/h1/check": checkFixture() });
@@ -376,7 +388,7 @@ describe("Server-Detail: Verbindung prüfen", () => {
     fireEvent.click(within(check).getByRole("button", { name: "Verbindung prüfen" }));
     const list = await within(check).findByRole("list", { name: "Ergebnis der Prüfung" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(5);
-    expect(within(list).getByText("Anmeldung als lattice")).toBeInTheDocument();
+    expect(within(list).getByText("Anmeldung als nodvard")).toBeInTheDocument();
     expect(within(list).getByText("sudo verlangt ein Passwort.")).toBeInTheDocument();
     expect(within(list).getAllByLabelText("in Ordnung")).toHaveLength(4);
     expect(within(list).getByLabelText("Hinweis")).toBeInTheDocument();
@@ -565,7 +577,7 @@ describe("Server-Detail: Zugang ersetzen (make-default)", () => {
   const OLD = credentialFixture({ id: "c1" });
   const NEW = credentialFixture({ id: "c2", is_default: false, created_at: "2026-10-01T10:00:00Z" });
   const both = () => routes({
-    "GET /hosts/h1": hostFixture({ credential: { id: "c1", kind: "ssh_key", username: "lattice", port: 22 } }),
+    "GET /hosts/h1": hostFixture({ credential: { id: "c1", kind: "ssh_key", username: "nodvard", port: 22 } }),
     "GET /hosts/h1/credentials": [OLD, NEW],
     "GET /hosts/h1/credentials/c2/setup": setupFixture,
   });
@@ -604,7 +616,7 @@ describe("Server-Detail: Zugang ersetzen (make-default)", () => {
     fireEvent.click(use);
     expect(await screen.findByText(/die Prüfung darf höchstens 10 Minuten her sein/)).toBeInTheDocument();
     // Beide Zugänge stehen weiter da.
-    expect(screen.getAllByText(/Anmeldung mit Schlüssel als lattice/)).toHaveLength(2);
+    expect(screen.getAllByText(/Anmeldung mit Schlüssel als nodvard/)).toHaveLength(2);
   });
 
   it("schlägt die Anmeldung mit dem neuen Zugang fehl, bleibt der Knopf gesperrt", async () => {
@@ -612,7 +624,7 @@ describe("Server-Detail: Zugang ersetzen (make-default)", () => {
       ...both(),
       "POST /hosts/h1/check": checkFixture({
         ok: false, credential_id: "c2",
-        items: [{ id: "login", label: "Anmeldung als lattice", status: "fail", detail: "Der Server hat den Schlüssel nicht akzeptiert.", hint: "Ist der Einrichtungsbefehl auf dem Server gelaufen? Stimmt der Benutzer?" }],
+        items: [{ id: "login", label: "Anmeldung als nodvard", status: "fail", detail: "Der Server hat den Schlüssel nicht akzeptiert.", hint: "Ist der Einrichtungsbefehl auf dem Server gelaufen? Stimmt der Benutzer?" }],
       }),
     });
     renderDetail();
@@ -628,7 +640,7 @@ describe("Server-Detail: Zugang ersetzen (make-default)", () => {
       "GET /hosts/h1/credentials": () => creds,
       "POST /hosts/h1/credentials/generate-key": () => {
         creds = [OLD, NEW];
-        return { credential: NEW, public_key: "ssh-ed25519 AAAA lattice@bastel-pi", fingerprint: "SHA256:xyz" };
+        return { credential: NEW, public_key: "ssh-ed25519 AAAA nodvard@bastel-pi", fingerprint: "SHA256:xyz" };
       },
     });
     renderDetail();
@@ -644,7 +656,7 @@ describe("Server-Detail: Zugang ersetzen (make-default)", () => {
 
   it("Zugang löschen: Rückfrage mit dem Text aus dem Design, dann DELETE", async () => {
     const calls = mockHostsApi(routes({
-      "GET /hosts/h1": hostFixture({ credential: { id: "c1", kind: "ssh_key", username: "lattice", port: 22 } }),
+      "GET /hosts/h1": hostFixture({ credential: { id: "c1", kind: "ssh_key", username: "nodvard", port: 22 } }),
       "GET /hosts/h1/credentials": [OLD],
       "DELETE /hosts/h1/credentials/c1": undefined,
     }));
@@ -652,7 +664,7 @@ describe("Server-Detail: Zugang ersetzen (make-default)", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Zugang löschen" }));
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/hosts/h1/credentials/c1")).toBe(true));
     expect(vi.mocked(confirmDialog).mock.calls[0][0]).toBe(
-      "SSH-Zugang für „Bastel-Pi“ löschen? Terminal, Updates und Überwachung erreichen den Server dann nicht mehr. Auf dem Server bleibt der Schlüssel eingetragen – bei Bedarf dort aus ~/.ssh/authorized_keys entfernen.",
+      "SSH-Zugang für „Bastel-Pi“ löschen? Terminal, Updates und Überwachung erreichen den Server dann nicht mehr. Auf dem Server bleibt der Schlüssel eingetragen, bei Bedarf dort aus ~/.ssh/authorized_keys entfernen.",
     );
     expect(vi.mocked(confirmDialog).mock.calls[0][1]).toMatchObject({ danger: true });
   });
@@ -732,10 +744,10 @@ describe("Server-Detail: Zugang ersetzen (make-default)", () => {
     expect(screen.queryByText("Zugang gespeichert. Prüfe jetzt die Verbindung.")).toBeNull();
   });
 
-  it("zeigt „Anmeldung mit Schlüssel als lattice, Port 22 – seit 30.09.2026“", async () => {
+  it("zeigt Benutzer, Port und Datum der letzten Anmeldung", async () => {
     mockHostsApi(routes({ "GET /hosts/h1/credentials": [OLD] }));
     renderDetail();
-    expect(await screen.findByText("Anmeldung mit Schlüssel als lattice, Port 22 – seit 30.09.2026")).toBeInTheDocument();
+    expect(await screen.findByText("Anmeldung mit Schlüssel als nodvard, Port 22, seit 30.09.2026")).toBeInTheDocument();
   });
 });
 
@@ -772,7 +784,7 @@ describe("Server-Detail: Eingaben werden nach dem Absenden gelöscht", () => {
     }));
     const { client } = renderDetail();
     fireEvent.click(await screen.findByRole("button", { name: "Eigenen Schlüssel einfügen" }));
-    fireEvent.change(screen.getByLabelText("Benutzer"), { target: { value: "lattice" } });
+    fireEvent.change(screen.getByLabelText("Benutzer"), { target: { value: "nodvard" } });
     fireEvent.change(screen.getByLabelText("Privater Schlüssel"), { target: { value: pasted } });
     fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
     expect(await screen.findByText("Das ist kein gültiger privater SSH-Schlüssel.")).toBeInTheDocument();
@@ -791,7 +803,7 @@ describe("Server-Detail: Eingaben werden nach dem Absenden gelöscht", () => {
     fireEvent.change(screen.getByLabelText("Benutzer"), { target: { value: "admin" } });
     fireEvent.change(screen.getByLabelText("Passwort"), { target: { value: "hunter2-geheim" } });
     fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
-    expect(await screen.findByText("Anmeldung mit Passwort als admin, Port 22 – seit 30.09.2026")).toBeInTheDocument();
+    expect(await screen.findByText("Anmeldung mit Passwort als admin, Port 22, seit 30.09.2026")).toBeInTheDocument();
     expect(screen.queryByLabelText("Passwort")).not.toBeInTheDocument();
     // Für Passwort-Zugänge gibt es keinen Einrichtungsbefehl.
     expect(screen.queryByRole("button", { name: "Einrichtungsbefehl zeigen" })).not.toBeInTheDocument();
@@ -838,10 +850,11 @@ describe("Server-Detail: bearbeiten und löschen", () => {
     }));
     renderDetail();
     fireEvent.click(await screen.findByRole("button", { name: "Bearbeiten" }));
-    expect(screen.getByLabelText("Markierungen")).toHaveValue("docker");
+    expect(screen.getByRole("checkbox", { name: "Docker verwalten" })).toBeChecked();
+    expect(screen.getByLabelText("Eigene Markierungen")).toHaveValue("");
     expect(screen.getByText(/Eine von Hand eingetragene Adresse bleibt stehen/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Adresse (IP oder Name)"), { target: { value: "192.168.2.99" } });
-    fireEvent.change(screen.getByLabelText("Markierungen"), { target: { value: "docker web" } });
+    fireEvent.change(screen.getByLabelText("Eigene Markierungen"), { target: { value: "web" } });
     fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
     await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
     expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ address: "192.168.2.99", tags: ["docker", "web"] });
@@ -855,7 +868,7 @@ describe("Server-Detail: bearbeiten und löschen", () => {
   });
 
   it("zeigt bei einem Schlüssel keine Passwort-Warnung", async () => {
-    mockHostsApi(routes({ "GET /hosts/h1": hostFixture({ credential: { id: "c1", kind: "ssh_key", username: "lattice", port: 22 } }) }));
+    mockHostsApi(routes({ "GET /hosts/h1": hostFixture({ credential: { id: "c1", kind: "ssh_key", username: "nodvard", port: 22 } }) }));
     renderDetail();
     fireEvent.click(await screen.findByRole("button", { name: "Bearbeiten" }));
     await screen.findByLabelText("Adresse (IP oder Name)");

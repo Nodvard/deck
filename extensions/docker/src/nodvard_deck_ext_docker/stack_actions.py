@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from nodvard_sdk.actions import ActionRequest, ActionResult, ActionSpec, DryRunReport
@@ -14,6 +15,7 @@ from nodvard_sdk.types import Risk
 from .adopt import AdoptedStacks
 from .capabilities import is_own_container
 from .compose_errors import scrub_compose_output
+from .env_values import cmd_with_env, env_stdin
 from .image_apply import PROJECT_RE, is_self_image
 from .locks import StackLocks, busy_text
 from .operate import still_full
@@ -91,6 +93,10 @@ def cmd_services(stack: Stack) -> list[str]:
 def cmd_all_services(stack: Stack) -> list[str]:
     """Alle Dienste der Datei, auch die mit Profil, gelesen im Ordner des Stacks."""
     return _in_folder(stack, "--profile", "*", "config", "--services")
+
+
+def cmd_ps(stack: Stack) -> list[str]:
+    return _in_folder(stack, "ps", "--all", "--format", "json")
 
 
 FAILURE_LIMIT = 300
@@ -200,12 +206,15 @@ class DockerStackExecutor:
                 return ActionResult(success=False, error=busy_text(busy))
             return await self.run(host, stack, req.action_type)
 
-    async def run(self, host: Any, stack: Stack, action_type: str) -> ActionResult:
+    async def run(self, host: Any, stack: Stack, action_type: str, env: dict[str, str] | None = None, *,
+                  check: Callable[[Any, Stack, str, int], Awaitable[ActionResult]] | None = None) -> ActionResult:
         """Führt ein Verb im Ordner des Stacks aus; nach `up` mit der Prüfung, ob die Dienste laufen."""
         timeout_s = TIMEOUT_S[action_type]
         started = time.monotonic()
         try:
-            result = await self._ctx.exec.run_argv(host, cmd_verb(stack, action_type), timeout_s=timeout_s)
+            result = await self._ctx.exec.run_argv(
+                host, cmd_with_env(cmd_verb(stack, action_type), env), stdin=env_stdin(env, saved=True), timeout_s=timeout_s,
+            )
         except Exception as exc:
             if not _connection_error(exc):
                 raise
@@ -225,13 +234,17 @@ class DockerStackExecutor:
                 success=False, exit_code=result.exit_code, error=reason, output=_short(stderr) or None, duration_ms=duration_ms,
             )
         if action_type == "docker.stack_up":
-            return await self._checked(host, stack, done, duration_ms)
+            if check is not None:
+                return await check(host, stack, done, duration_ms)
+            return await self._checked(host, stack, done, duration_ms, env)
         return ActionResult(success=True, exit_code=0, output=done, duration_ms=duration_ms)
 
-    async def _members(self, host: Any, stack: Stack) -> list[str] | str:
+    async def _members(self, host: Any, stack: Stack, env: dict[str, str] | None = None) -> list[str] | str:
         """Die Container der Dienste, die `up` startet, auch beendete; sonst der Grund, warum die Prüfung ausfällt."""
         try:
-            listed = await self._ctx.exec.run_argv(host, cmd_services(stack), timeout_s=SERVICES_TIMEOUT_S)
+            listed = await self._ctx.exec.run_argv(
+                host, cmd_with_env(cmd_services(stack), env), stdin=env_stdin(env, saved=True), timeout_s=SERVICES_TIMEOUT_S,
+            )
         except Exception as exc:
             if not _connection_error(exc):
                 raise
@@ -250,11 +263,11 @@ class DockerStackExecutor:
         refs = [m.id for s in found for m in s.members if m.service in services]
         return refs or "Prüfung danach übersprungen: Docker zeigt zu den Diensten der Datei keinen Container."
 
-    async def _checked(self, host: Any, stack: Stack, done: str, duration_ms: int) -> ActionResult:
+    async def _checked(self, host: Any, stack: Stack, done: str, duration_ms: int, env: dict[str, str] | None = None) -> ActionResult:
         """Nach dem Anwenden: Laufen die Container des Stacks und bleiben sie laufen?"""
         from . import after_check as ac  # spät: after_check braucht capabilities
 
-        refs = await self._members(host, stack)
+        refs = await self._members(host, stack, env)
         if isinstance(refs, str):
             return ActionResult(success=True, exit_code=0, output=f"{done}\n{refs}", duration_ms=duration_ms)
         verdict, _ = await ac.check_running(self._ctx, host, refs)

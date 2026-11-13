@@ -219,16 +219,42 @@ export interface Health {
 
 /** Eigenes Objekt, damit Tests Gesundheitsabfrage und Seitenwechsel ersetzen können. */
 export const restartProbe = {
-  async health(): Promise<Health | null> {
+  /** `null`, wenn keine (lesbare) Antwort kommt; nach `timeoutMs` bricht die Abfrage samt Lesen der Antwort ab. */
+  async health(timeoutMs = PROBE_TIMEOUT_MS): Promise<Health | null> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch("/api/v1/health", { cache: "no-store" });
+      const res = await fetch("/api/v1/health", { cache: "no-store", signal: controller.signal });
       if (!res.ok) return null;
       return (await res.json()) as Health;
     } catch {
       return null;
+    } finally {
+      clearTimeout(timer);
     }
   },
 };
+
+/** Höchstdauer einer einzelnen Gesundheitsabfrage. */
+const PROBE_TIMEOUT_MS = 10_000;
+
+/**
+ * Eine Abfrage mit Frist: Hängt sie, zählt sie wie ein Ausfall (`null`), und ein Abbruch durch den Aufrufer wartet
+ * nicht auf ihre Antwort. Doppelt zum Zeitlimit in `health()`, weil Tests und andere Abfragen es ersetzen können.
+ */
+function probeWithin(timeoutMs: number, signal?: AbortSignal): Promise<Health | null> {
+  return new Promise((resolve) => {
+    const done = (health: Health | null) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(health);
+    };
+    const onAbort = () => done(null);
+    const timer = setTimeout(() => done(null), timeoutMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    restartProbe.health(timeoutMs).then(done, () => done(null));
+  });
+}
 
 export const browserNavigation = {
   /** Harter Seitenwechsel: danach ist alles neu geladen (Anmeldung, Aussehen aus der eingespielten Sicherung). */
@@ -248,19 +274,26 @@ export const restartTiming = { pollMs: 2000, timeoutMs: 10 * 60 * 1000 };
 export async function waitForRestart(
   baselineUptime: number | null,
   {
-    signal, onTick, timeoutMs = restartTiming.timeoutMs, ready,
-  }: { signal?: AbortSignal; onTick?: (seconds: number) => void; timeoutMs?: number; ready?: (health: Health) => boolean } = {},
+    signal, onTick, timeoutMs = restartTiming.timeoutMs, ready, seen = { down: false },
+  }: {
+    signal?: AbortSignal;
+    onTick?: (seconds: number) => void;
+    timeoutMs?: number;
+    ready?: (health: Health) => boolean;
+    /** Merkt sich über mehrere Aufrufe („Weiter warten“), ob der Server schon einmal weg war. */
+    seen?: { down: boolean };
+  } = {},
 ): Promise<boolean> {
   const { pollMs } = restartTiming;
   const started = Date.now();
-  let sawDown = false;
   while (Date.now() - started < timeoutMs) {
     if (signal?.aborted) return false;
     await new Promise((resolve) => setTimeout(resolve, pollMs));
-    const health = await restartProbe.health();
+    const health = await probeWithin(Math.max(1, Math.min(PROBE_TIMEOUT_MS, timeoutMs - (Date.now() - started))), signal);
+    if (signal?.aborted) return false;
     onTick?.(Math.round((Date.now() - started) / 1000));
     if (health === null) {
-      sawDown = true;
+      seen.down = true;
       continue;
     }
     // Aufrufer, die den Ausfall selbst schon gesehen haben (Update-Helfer), entscheiden über `ready`: Jede gesunde
@@ -270,7 +303,7 @@ export async function waitForRestart(
       continue;
     }
     const restarted = baselineUptime !== null && typeof health.uptime_s === "number" && health.uptime_s < baselineUptime;
-    if (health.status === "ok" && (sawDown || restarted)) return true;
+    if (health.status === "ok" && (seen.down || restarted)) return true;
   }
   return false;
 }

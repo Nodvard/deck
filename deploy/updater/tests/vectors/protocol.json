@@ -3,7 +3,8 @@
  "proto": 1,
  "request_versions": [
   1,
-  2
+  2,
+  3
  ],
  "request_keys": [
   "action",

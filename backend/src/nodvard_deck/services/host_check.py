@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
-from ..core import rate_limit, ssh
+from ..core import rate_limit, ssh, ssh_retry
 from ..core.vault import VaultError
 from ..db import utcnow
 from ..ext.root_helpers import RootHelperFile
@@ -369,6 +369,10 @@ async def _run(
         # Neue Rechte (z. B. Gruppe docker) sollen für alle folgenden Verbindungen gelten, ohne ein
         # laufendes `docker logs -f` abzuschneiden.
         ssh.get_ssh_pool().retire_host(host.id)
+        if credential.is_default:
+            # Der Zugang der Hintergrundjobs klappt wieder: Deren Anmeldepause gilt nicht mehr. Die Verbindung ist
+            # schon zu, die Transaktion hält also nicht über das Netz.
+            await ssh_retry.clear(session, host.id)
     else:
         if credential is not None:
             _logins_ok.pop(credential.id, None)

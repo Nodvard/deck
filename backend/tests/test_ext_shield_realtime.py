@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from exec_gate_helpers import ReadingExec
 
 from nodvard_deck.core.deny_patterns import match_deny_patterns
 
@@ -230,8 +231,8 @@ class _Ctx:
         self.calls: list[str] = []
         self.settings = SimpleNamespace(get=self._settings)
         self.hosts = SimpleNamespace(list=self._list)
-        self.exec = SimpleNamespace(run=self._run)
-        self.api = SimpleNamespace(current_actor=lambda: None)
+        self.exec = ReadingExec(ext_id="shield", run=self._run)
+        self.api = SimpleNamespace(current_actor=lambda: None, require_permission=lambda permission: lambda: None)
 
     async def _settings(self):
         return {}

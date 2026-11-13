@@ -1,3 +1,4 @@
+import { CARD_BODY, CARD_CELL, CARD_CELL_PLAIN, CARD_HEAD, CARD_ROW, CARD_TABLE } from "../../../_shared/frontend/src/cardTable";
 /**
  * Backups-Seite (PageSpec `component="BackupsPage"`): jeder konfigurierte VZDump-Job pro VM als eigene Zeile mit
  * strukturiertem Status, damit ein fehlschlagender Job nicht unbemerkt bleibt. `retry()` legt über das Gate einen
@@ -492,8 +493,8 @@ function ConnectionsPanel(): JSX.Element {
           <p className="mb-2 text-xs opacity-60">Noch keine Verbindung konfiguriert.</p>
         )}
         {connections && connections.length > 0 && (
-          <table className="mb-3 w-full text-xs">
-            <thead>
+          <table role="table" className={`${CARD_TABLE} text-left mb-3 w-full text-xs`}>
+            <thead role="rowgroup" className={CARD_HEAD}>
               <tr className="border-b border-white/10 text-left opacity-60">
                 <th className="py-1">Name</th>
                 <th className="py-1">Adresse</th>
@@ -503,14 +504,14 @@ function ConnectionsPanel(): JSX.Element {
                 <th className="py-1">Aktionen</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody role="rowgroup" className={CARD_BODY}>
               {connections.map((c) => (
-                <tr key={c.name}>
-                  <td className="py-1.5">{c.name}</td>
-                  <td className="py-1.5 opacity-70">{c.base_url}</td>
-                  <td className="py-1.5 whitespace-nowrap"><CertificateStatus connection={c} /></td>
-                  <td className="py-1.5">{c.has_token ? "gesetzt" : <span className="text-amber-400">fehlt</span>}</td>
-                  <td className="py-1.5">
+                <tr role="row" className={CARD_ROW} key={c.name}>
+                  <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`}>{c.name}</td>
+                  <td data-label="Adresse" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 opacity-70`}>{c.base_url}</td>
+                  <td data-label="Zertifikat" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 sm:whitespace-nowrap`}><CertificateStatus connection={c} /></td>
+                  <td data-label="Token" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`}>{c.has_token ? "gesetzt" : <span className="text-amber-400">fehlt</span>}</td>
+                  <td data-label="Aktiv" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`}>
                     <button
                       type="button"
                       disabled={pending === `toggle:${c.name}`}
@@ -520,8 +521,8 @@ function ConnectionsPanel(): JSX.Element {
                       {c.enabled ? "aktiv" : "deaktiviert"}
                     </button>
                   </td>
-                  <td className="py-1.5">
-                    <div className="flex gap-1.5">
+                  <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`}>
+                    <div className="flex flex-wrap gap-1.5">
                       <button
                         type="button"
                         disabled={pending === `token:${c.name}`}
@@ -841,9 +842,9 @@ export function BackupsPage(): JSX.Element {
         Nodvard Deck selbst sicherst du unter Einstellungen → System.
       </p>
       <ConnectionsPanel />
-      {jobs && (jobs.length > 0 || unreachable.length === 0) && (
+      {jobs && jobs.length > 0 && (
         <p className="mb-4 text-sm opacity-70">
-          {jobs.length} Job(s) – {failing > 0 ? `${failing} ohne bestätigtes erfolgreiches Backup` : "alle zuletzt erfolgreich"}
+          {jobs.length} {jobs.length === 1 ? "Sicherungsjob" : "Sicherungsjobs"}: {failing > 0 ? `${failing} ohne bestätigtes erfolgreiches Backup` : "alle zuletzt erfolgreich"}
         </p>
       )}
       {inventoryError && (
@@ -867,7 +868,7 @@ export function BackupsPage(): JSX.Element {
       )}
       {message && <p className="mb-2 text-sm opacity-80">{message}</p>}
       {!jobs && !error && <p className="text-sm opacity-60">Lade …</p>}
-      {jobs && jobs.length === 0 && unreachable.length === 0 && <p className="text-sm opacity-60">Keine Backup-Jobs konfiguriert.</p>}
+      {jobs && jobs.length === 0 && unreachable.length === 0 && <p className="text-sm opacity-60">Keine Sicherungsjobs gefunden</p>}
       {hostFilter && jobs && (
         <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
           <span className="accent-soft flex items-center gap-1 rounded px-2 py-0.5" data-testid="host-filter">
@@ -883,8 +884,8 @@ export function BackupsPage(): JSX.Element {
       )}
 
       {visibleJobs && visibleJobs.length > 0 && (
-        <table className="w-full text-sm">
-          <thead>
+        <table role="table" className={`${CARD_TABLE} text-left`}>
+          <thead role="rowgroup" className={CARD_HEAD}>
             <tr className="border-b border-white/10 text-left text-xs opacity-60">
               <th className="py-1">VM</th>
               <th className="py-1">Storage</th>
@@ -895,28 +896,28 @@ export function BackupsPage(): JSX.Element {
               <th className="py-1">Aktionen</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/5">
+          <tbody role="rowgroup" className={CARD_BODY}>
             {visibleJobs.map((job) => (
               <Fragment key={job.job_ref}>
-                <tr>
-                  <td className="py-1.5">{job.name} <span className="opacity-50">({job.vmid})</span></td>
-                  <td className="py-1.5 opacity-70">{job.storage ?? "-"}</td>
-                  <td className="py-1.5 opacity-70">
+                <tr role="row" className={CARD_ROW}>
+                  <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`}>{job.name} <span className="opacity-50">({job.vmid})</span></td>
+                  <td data-label="Storage" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 opacity-70`}>{job.storage ?? "-"}</td>
+                  <td data-label="Zeitplan" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 opacity-70`}>
                     {job.schedule ?? "-"}
                     {job.next_run_at ? <div className="text-xs">nächster: {formatEpoch(job.next_run_at)}</div> : null}
                     {job.retention ? <div className="text-xs">behält: {job.retention}</div> : null}
                   </td>
-                  <td className="py-1.5">
+                  <td data-label="Letzter Status" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`}>
                     <span className={`rounded border px-1.5 py-0.5 text-xs ${STATUS_CLASS[job.last_status] ?? STATUS_CLASS.unknown}`}>
                       {STATUS_LABEL[job.last_status] ?? job.last_status}
                     </span>
                   </td>
-                  <td className="py-1.5 opacity-70">{formatEpoch(job.last_run_at)}</td>
-                  <td className="py-1.5 text-xs opacity-70" data-testid={`inventory-${job.job_ref}`}>
+                  <td data-label="Letzter Lauf" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 opacity-70`}>{formatEpoch(job.last_run_at)}</td>
+                  <td data-label="Vorhanden" role="cell" className={`${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 text-xs opacity-70`} data-testid={`inventory-${job.job_ref}`}>
                     {inventory ? inventoryText(inventory.get(`${job.connection}/${job.vmid}`)) : inventoryError ? "gerade nicht lesbar" : "…"}
                   </td>
-                  <td className="py-1.5">
-                    <div className="flex gap-1.5">
+                  <td role="cell" className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`}>
+                    <div className="flex flex-wrap gap-1.5">
                       <button type="button" onClick={() => void toggleHistory(job)} className="px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
                         {expanded === job.job_ref ? "Verlauf ausblenden" : "Verlauf"}
                       </button>
@@ -948,8 +949,8 @@ export function BackupsPage(): JSX.Element {
                   </td>
                 </tr>
                 {restoring === job.job_ref && (
-                  <tr>
-                    <td colSpan={7} className="bg-black/20 py-2">
+                  <tr role="row" className={CARD_ROW}>
+                    <td role="cell" colSpan={7} className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] bg-black/20 sm:py-2`}>
                       <RestoreCopyPanel target={{ connection: job.connection, vmid: job.vmid, name: job.name }} onDone={(text) => {
                         setRestoring(null);
                         if (text) setMessage(text);
@@ -958,8 +959,8 @@ export function BackupsPage(): JSX.Element {
                   </tr>
                 )}
                 {editing === job.job_ref && (
-                  <tr>
-                    <td colSpan={7} className="bg-black/20 py-2">
+                  <tr role="row" className={CARD_ROW}>
+                    <td role="cell" colSpan={7} className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] bg-black/20 sm:py-2`}>
                       <JobEditForm
                         job={job}
                         guests={(jobs ?? []).filter((j) => j.connection === job.connection && j.job_ref.split("--")[1] === job.job_ref.split("--")[1]).map((j) => j.name)}
@@ -975,8 +976,8 @@ export function BackupsPage(): JSX.Element {
                   </tr>
                 )}
                 {expanded === job.job_ref && (
-                  <tr>
-                    <td colSpan={7} className="bg-black/20 py-2">
+                  <tr role="row" className={CARD_ROW}>
+                    <td role="cell" colSpan={7} className={`${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] bg-black/20 sm:py-2`}>
                       {(job.last_status === "failed" || causeFor) && (
                         <FailureCause key={causeFor ?? "neuester"} jobRef={job.job_ref} upid={causeFor} />
                       )}

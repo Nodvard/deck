@@ -1,3 +1,4 @@
+import { cardTable } from "../../../../frontend/src/test/mobileLayout";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
@@ -156,6 +157,56 @@ describe("Update-Zentrale", () => {
     expect(screen.getByTestId("updates-overdue-h-missed").textContent).toContain("geplante Prüfung ist hier ausgeblieben");
     expect(screen.queryByTestId("updates-overdue-h-pi")).toBeNull();
     expect(screen.queryByTestId("updates-overdue-h-fail")).toBeNull();
+  });
+
+  it.each([
+    ["dpkg", "Die Paketverwaltung meldet einen dpkg-Fehler. Auf dem Server „sudo dpkg --configure -a“ ausführen, die dort angezeigten Fehler beheben und anschließend erneut prüfen."],
+    ["locked", "Die Paketverwaltung ist durch einen anderen Vorgang gesperrt. Bitte warten, bis dieser beendet ist, und anschließend erneut prüfen. Sperrdateien nicht löschen."],
+    ["permission", "Für die Paketprüfung fehlen Root-Rechte. Unter „Server & Zugänge“ den Server mit „Root-Rechte ohne Passwort“ neu einrichten und anschließend erneut prüfen."],
+    ["timeout", "Zeitüberschreitung bei der Paketprüfung. Die Verbindung zum Server und dessen Auslastung prüfen und anschließend erneut prüfen."],
+  ] as const)("zeigt bei %s den Grund mit nächstem Schritt und einen unbekannten Update-Stand", async (errorKind, errorText) => {
+    const host = {
+      ...DATA.hosts[1],
+      status: { ...DATA.hosts[1].status!, error: errorText, error_kind: errorKind, attempted_at: now },
+    };
+    const data = {
+      ...DATA, hosts: [host],
+      summary: { hosts: 1, checked: 0, up_to_date: 0, packages: 0, security: 0, reboot: 0, errors: 1 },
+    };
+    const calls: Call[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: input.toString(), method: init?.method ?? "GET", body: init?.body ? JSON.parse(init.body as string) : null });
+      return new Response(JSON.stringify(input.toString().endsWith("/check") ? { hosts: 1 } : data), { status: 200 });
+    }));
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-h-docker"));
+    expect(row.getByText("Prüfung fehlgeschlagen")).toBeInTheDocument();
+    expect(row.getByText(errorText)).toBeInTheDocument();
+    expect(row.getByText(/Stand stammt aus der letzten erfolgreichen Prüfung/)).toBeInTheDocument();
+    expect(row.queryByText("aktuell")).not.toBeInTheDocument();
+    expect(row.queryByText("nicht unterstützt")).not.toBeInTheDocument();
+    expect(screen.getAllByText("unbekannt")).toHaveLength(3);
+    expect(screen.getByText("1 Prüfung fehlgeschlagen")).toBeInTheDocument();
+    fireEvent.click(row.getByRole("button", { name: "docker prüfen" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && JSON.stringify(c.body) === JSON.stringify({ host_ids: ["h-docker"] }))).toBe(true));
+  });
+
+  it("bietet nach einem Prüfungsfehler keine veralteten Update-Vorschläge an", async () => {
+    const data = {
+      ...DATA, hosts: [{ ...DATA.hosts[0], status: { ...DATA.hosts[0].status!, error: "Die Paketverwaltung ist gesperrt. Nach Ende des laufenden Updates erneut prüfen." } }],
+      summary: { ...DATA.summary, hosts: 1, checked: 0, up_to_date: 0, packages: 0, security: 0, errors: 1 },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(data), { status: 200 })));
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-h-pi"));
+    expect(row.getByText("Prüfung fehlgeschlagen")).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "3 Pakete anzeigen" })).toBeInTheDocument();
+    expect(row.queryByRole("button", { name: "Alle einspielen" })).not.toBeInTheDocument();
+    expect(row.queryByRole("button", { name: "Sicherheitsupdates einspielen" })).not.toBeInTheDocument();
+    expect(row.queryByRole("button", { name: "Neu starten" })).not.toBeInTheDocument();
+    expect(row.queryByRole("button", { name: "Aufräumen" })).not.toBeInTheDocument();
+    expect(row.queryByRole("button", { name: "Einrichten" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Alle .*vorschlagen/ })).not.toBeInTheDocument();
   });
 
   it("spielt Sicherheitsupdates nach Rückfrage über das Gate ein", async () => {
@@ -1257,10 +1308,12 @@ describe("Updates, die „Alle einspielen“ nicht einspielt: zurückgehalten un
   });
 
   it("ein Fehler bei der Prüfung lässt den alten Stand mit seinen Gründen stehen", async () => {
-    stub(overview({ id: "pi", st: state(camera, { error: "Zeitüberschreitung – der Vorgang hat zu lange gebraucht." }) }));
+    stub(overview({ id: "pi", st: state(camera, { error: "Zeitüberschreitung. Die Prüfung erneut starten." }) }));
     render(<UpdatesTab canManage />);
     const row = within(await screen.findByTestId("updates-pi"));
-    expect(row.getByText("3 zurückgehalten")).toBeInTheDocument();
+    expect(row.getByText("Prüfung fehlgeschlagen")).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "braucht full-upgrade" })).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "3 Pakete anzeigen" })).toBeInTheDocument();
     expect(row.getByText(/Zeitüberschreitung/)).toBeInTheDocument();
   });
 
@@ -1276,3 +1329,11 @@ describe("Updates, die „Alle einspielen“ nicht einspielt: zurückgehalten un
     expect(row.getByRole("button", { name: "Phasing-Prüfung nicht verfügbar" })).toBeInTheDocument();
   });
 });
+
+it("390 px: Paketnamen und Versionen stehen in Karten", async () => {
+  vi.stubGlobal("fetch", mockFetch([]));
+  render(<UpdatesTab canManage />);
+  const row = within(await screen.findByTestId("updates-h-pi"));
+  fireEvent.click(row.getByText("3 Pakete anzeigen"));
+  await cardTable(row.getByRole("table"), ["installiert", "neu"]);
+}, 30000);

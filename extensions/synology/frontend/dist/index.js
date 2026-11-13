@@ -1,3 +1,11 @@
+// ../../_shared/frontend/src/cardTable.ts
+var CARD_TABLE = "block w-full text-sm sm:table";
+var CARD_HEAD = "hidden sm:table-header-group";
+var CARD_BODY = "block sm:table-row-group sm:divide-y sm:divide-white/5";
+var CARD_ROW = "relative mb-3 flex flex-col rounded-lg border border-white/10 p-3 sm:static sm:mb-0 sm:table-row sm:rounded-none sm:border-0 sm:p-0";
+var CARD_CELL_PLAIN = "block empty:hidden sm:table-cell sm:empty:table-cell";
+var CARD_CELL = `${CARD_CELL_PLAIN} before:mb-0.5 before:block before:text-xs before:opacity-60 before:content-[attr(data-label)] sm:before:hidden`;
+
 // ../../_shared/frontend/src/csp.ts
 function cspNonce() {
   return document.querySelector('meta[name="csp-nonce"]')?.content ?? "";
@@ -93,7 +101,7 @@ function deckEventName(event) {
 }
 
 // ../../_shared/frontend/src/api.ts
-var SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar \u2013 bitte gleich noch einmal versuchen.";
+var SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar, bitte gleich noch einmal versuchen.";
 var ServerUnavailableError = class extends Error {
   status;
   constructor(answer) {
@@ -253,7 +261,7 @@ function Card({ title, description, actions, children, className = "", padded = 
   ] });
 }
 var BUTTON_STYLES = {
-  primary: "accent-gradient text-on-accent hover:bg-accent-strong",
+  primary: "border border-transparent accent-gradient text-on-accent hover:bg-accent-strong",
   secondary: "border border-white/10 bg-white/[0.06] text-white hover:bg-white/[0.12]",
   danger: "border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25",
   ghost: "text-white/60 hover:bg-white/[0.06] hover:text-white"
@@ -507,8 +515,8 @@ function AttentionCard({ data }) {
 function PoolsCard({ data }) {
   const pools = data.pools;
   if (!pools || pools.length === 0) return null;
-  return /* @__PURE__ */ jsx4(Card, { title: "Speicherpools", padded: false, children: /* @__PURE__ */ jsx4("div", { className: "overflow-x-auto", children: /* @__PURE__ */ jsxs3("table", { "data-testid": "pools", className: "w-full text-sm", children: [
-    /* @__PURE__ */ jsx4("thead", { children: /* @__PURE__ */ jsxs3("tr", { className: "border-b border-white/10 text-left text-xs text-white/50", children: [
+  return /* @__PURE__ */ jsx4(Card, { title: "Speicherpools", padded: false, children: /* @__PURE__ */ jsx4("div", { className: "p-3 sm:overflow-x-auto sm:p-0", children: /* @__PURE__ */ jsxs3("table", { role: "table", "data-testid": "pools", className: `${CARD_TABLE} text-left`, children: [
+    /* @__PURE__ */ jsx4("thead", { role: "rowgroup", className: CARD_HEAD, children: /* @__PURE__ */ jsxs3("tr", { className: "border-b border-white/10 text-left text-xs text-white/50", children: [
       /* @__PURE__ */ jsx4("th", { className: "px-5 py-2 font-medium", children: "Name" }),
       /* @__PURE__ */ jsx4("th", { className: "px-3 py-2 font-medium", children: "RAID" }),
       /* @__PURE__ */ jsx4("th", { className: "px-3 py-2 font-medium", children: "Zustand" }),
@@ -516,16 +524,16 @@ function PoolsCard({ data }) {
       /* @__PURE__ */ jsx4("th", { className: "px-3 py-2 font-medium", children: "Volumes" }),
       /* @__PURE__ */ jsx4("th", { className: "px-5 py-2 font-medium", children: "Gr\xF6\xDFe" })
     ] }) }),
-    /* @__PURE__ */ jsx4("tbody", { className: "divide-y divide-white/[0.06]", children: pools.map((pool) => /* @__PURE__ */ jsxs3("tr", { "data-testid": "pool", children: [
-      /* @__PURE__ */ jsxs3("td", { className: "break-words px-5 py-2.5 align-top", children: [
+    /* @__PURE__ */ jsx4("tbody", { role: "rowgroup", className: CARD_BODY, children: pools.map((pool) => /* @__PURE__ */ jsxs3("tr", { role: "row", className: CARD_ROW, "data-testid": "pool", children: [
+      /* @__PURE__ */ jsxs3("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] break-words sm:px-5 sm:py-2.5 align-top`, children: [
         /* @__PURE__ */ jsx4("span", { className: "font-medium", children: pool.name }),
         pool.description && /* @__PURE__ */ jsx4("p", { className: "text-xs text-white/45", children: pool.description })
       ] }),
-      /* @__PURE__ */ jsx4("td", { className: "whitespace-nowrap px-3 py-2.5 align-top", children: pool.raid ?? "\u2013" }),
-      /* @__PURE__ */ jsx4("td", { className: "px-3 py-2.5 align-top", children: /* @__PURE__ */ jsx4(Badge, { tone: toneOf(pool.tone), children: pool.status_label }) }),
-      /* @__PURE__ */ jsx4("td", { className: "px-3 py-2.5 align-top tabular-nums", children: pool.disks ?? "\u2013" }),
-      /* @__PURE__ */ jsx4("td", { className: "break-words px-3 py-2.5 align-top text-white/70", children: pool.volumes.length > 0 ? pool.volumes.join(", ") : "\u2013" }),
-      /* @__PURE__ */ jsx4("td", { className: "whitespace-nowrap px-5 py-2.5 align-top tabular-nums", children: pool.total !== null ? sizeText(pool.total) : "\u2013" })
+      /* @__PURE__ */ jsx4("td", { "data-label": "RAID", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:whitespace-nowrap sm:px-3 sm:py-2.5 align-top`, children: pool.raid ?? "\u2013" }),
+      /* @__PURE__ */ jsx4("td", { "data-label": "Zustand", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-2.5 align-top`, children: /* @__PURE__ */ jsx4(Badge, { tone: toneOf(pool.tone), children: pool.status_label }) }),
+      /* @__PURE__ */ jsx4("td", { "data-label": "Festplatten", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-2.5 align-top tabular-nums`, children: pool.disks ?? "\u2013" }),
+      /* @__PURE__ */ jsx4("td", { "data-label": "Volumes", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] break-words sm:px-3 sm:py-2.5 align-top text-white/70`, children: pool.volumes.length > 0 ? pool.volumes.join(", ") : "\u2013" }),
+      /* @__PURE__ */ jsx4("td", { "data-label": "Gr\xF6\xDFe", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:whitespace-nowrap sm:px-5 sm:py-2.5 align-top tabular-nums`, children: pool.total !== null ? sizeText(pool.total) : "\u2013" })
     ] }, pool.id)) })
   ] }) }) });
 }
@@ -534,19 +542,19 @@ function VolumesCard({ data }) {
   return /* @__PURE__ */ jsxs3(Card, { title: "Volumes", padded: false, children: [
     data.storage_note && /* @__PURE__ */ jsx4("div", { className: "px-5 py-4", children: /* @__PURE__ */ jsx4(PartNote, { note: data.storage_note, testId: "note-storage" }) }),
     volumes && volumes.length === 0 && /* @__PURE__ */ jsx4("p", { "data-testid": "no-volumes", className: "px-5 py-4 text-sm text-white/50", children: "DSM meldet keine Volumes." }),
-    volumes && volumes.length > 0 && /* @__PURE__ */ jsx4("div", { className: "overflow-x-auto", children: /* @__PURE__ */ jsxs3("table", { "data-testid": "volumes", className: "w-full text-sm", children: [
-      /* @__PURE__ */ jsx4("thead", { children: /* @__PURE__ */ jsxs3("tr", { className: "border-b border-white/10 text-left text-xs text-white/50", children: [
+    volumes && volumes.length > 0 && /* @__PURE__ */ jsx4("div", { className: "p-3 sm:overflow-x-auto sm:p-0", children: /* @__PURE__ */ jsxs3("table", { role: "table", "data-testid": "volumes", className: `${CARD_TABLE} text-left`, children: [
+      /* @__PURE__ */ jsx4("thead", { role: "rowgroup", className: CARD_HEAD, children: /* @__PURE__ */ jsxs3("tr", { className: "border-b border-white/10 text-left text-xs text-white/50", children: [
         /* @__PURE__ */ jsx4("th", { className: "px-5 py-2 font-medium", children: "Name" }),
         /* @__PURE__ */ jsx4("th", { className: "px-3 py-2 font-medium", children: "Status" }),
         /* @__PURE__ */ jsx4("th", { className: "px-5 py-2 font-medium", children: "Belegung" })
       ] }) }),
-      /* @__PURE__ */ jsx4("tbody", { className: "divide-y divide-white/[0.06]", children: volumes.map((volume) => /* @__PURE__ */ jsxs3("tr", { "data-testid": "volume", children: [
-        /* @__PURE__ */ jsxs3("td", { className: "break-words px-5 py-2.5 align-top", children: [
+      /* @__PURE__ */ jsx4("tbody", { role: "rowgroup", className: CARD_BODY, children: volumes.map((volume) => /* @__PURE__ */ jsxs3("tr", { role: "row", className: CARD_ROW, "data-testid": "volume", children: [
+        /* @__PURE__ */ jsxs3("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] break-words sm:px-5 sm:py-2.5 align-top`, children: [
           /* @__PURE__ */ jsx4("span", { className: "font-medium", children: volume.name }),
           volume.fs_type && /* @__PURE__ */ jsx4("span", { className: "ml-2 text-xs text-white/45", children: volume.fs_type })
         ] }),
-        /* @__PURE__ */ jsx4("td", { className: "px-3 py-2.5 align-top", children: /* @__PURE__ */ jsx4(Badge, { tone: toneOf(volume.tone), children: volume.status_label }) }),
-        /* @__PURE__ */ jsx4("td", { className: "px-5 py-2.5 align-top", children: /* @__PURE__ */ jsx4(UsageBar, { volume }) })
+        /* @__PURE__ */ jsx4("td", { "data-label": "Status", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-2.5 align-top`, children: /* @__PURE__ */ jsx4(Badge, { tone: toneOf(volume.tone), children: volume.status_label }) }),
+        /* @__PURE__ */ jsx4("td", { "data-label": "Belegung", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-5 sm:py-2.5 align-top`, children: /* @__PURE__ */ jsx4(UsageBar, { volume }) })
       ] }, volume.id)) })
     ] }) })
   ] });
@@ -556,26 +564,26 @@ function DisksCard({ data }) {
   if (!disks) return null;
   return /* @__PURE__ */ jsxs3(Card, { title: "Festplatten", padded: false, children: [
     disks.length === 0 && /* @__PURE__ */ jsx4("p", { "data-testid": "no-disks", className: "px-5 py-4 text-sm text-white/50", children: "DSM meldet keine Festplatten." }),
-    disks.length > 0 && /* @__PURE__ */ jsx4("div", { className: "overflow-x-auto", children: /* @__PURE__ */ jsxs3("table", { "data-testid": "disks", className: "w-full text-sm", children: [
-      /* @__PURE__ */ jsx4("thead", { children: /* @__PURE__ */ jsxs3("tr", { className: "border-b border-white/10 text-left text-xs text-white/50", children: [
+    disks.length > 0 && /* @__PURE__ */ jsx4("div", { className: "p-3 sm:overflow-x-auto sm:p-0", children: /* @__PURE__ */ jsxs3("table", { role: "table", "data-testid": "disks", className: `${CARD_TABLE} text-left`, children: [
+      /* @__PURE__ */ jsx4("thead", { role: "rowgroup", className: CARD_HEAD, children: /* @__PURE__ */ jsxs3("tr", { className: "border-b border-white/10 text-left text-xs text-white/50", children: [
         /* @__PURE__ */ jsx4("th", { className: "px-5 py-2 font-medium", children: "Name" }),
         /* @__PURE__ */ jsx4("th", { className: "px-3 py-2 font-medium", children: "Modell" }),
         /* @__PURE__ */ jsx4("th", { className: "px-3 py-2 font-medium", children: "Status" }),
         /* @__PURE__ */ jsx4("th", { className: "whitespace-nowrap px-3 py-2 font-medium", children: "Temperatur" }),
         /* @__PURE__ */ jsx4("th", { className: "px-5 py-2 font-medium", children: "SMART" })
       ] }) }),
-      /* @__PURE__ */ jsx4("tbody", { className: "divide-y divide-white/[0.06]", children: disks.map((disk) => /* @__PURE__ */ jsxs3("tr", { "data-testid": "disk", children: [
-        /* @__PURE__ */ jsxs3("td", { className: "break-words px-5 py-2.5 align-top", children: [
+      /* @__PURE__ */ jsx4("tbody", { role: "rowgroup", className: CARD_BODY, children: disks.map((disk) => /* @__PURE__ */ jsxs3("tr", { role: "row", className: CARD_ROW, "data-testid": "disk", children: [
+        /* @__PURE__ */ jsxs3("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] break-words sm:px-5 sm:py-2.5 align-top`, children: [
           /* @__PURE__ */ jsx4("span", { className: "font-medium", children: disk.name }),
           disk.warning && /* @__PURE__ */ jsx4("p", { "data-testid": "disk-warning", className: "text-xs text-amber-300", children: disk.warning })
         ] }),
-        /* @__PURE__ */ jsx4("td", { className: "break-words px-3 py-2.5 align-top text-white/70", children: disk.model ?? "\u2013" }),
-        /* @__PURE__ */ jsx4("td", { className: "px-3 py-2.5 align-top", children: /* @__PURE__ */ jsx4(Badge, { tone: toneOf(disk.tone), children: disk.status_label }) }),
-        /* @__PURE__ */ jsx4("td", { className: "whitespace-nowrap px-3 py-2.5 align-top tabular-nums", children: disk.temp === null ? "\u2013" : disk.temp_warn === true ? /* @__PURE__ */ jsxs3("span", { className: "text-amber-300", title: "\xFCber der Grenze", children: [
+        /* @__PURE__ */ jsx4("td", { "data-label": "Modell", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] break-words sm:px-3 sm:py-2.5 align-top text-white/70`, children: disk.model ?? "\u2013" }),
+        /* @__PURE__ */ jsx4("td", { "data-label": "Status", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-2.5 align-top`, children: /* @__PURE__ */ jsx4(Badge, { tone: toneOf(disk.tone), children: disk.status_label }) }),
+        /* @__PURE__ */ jsx4("td", { "data-label": "Temperatur", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:whitespace-nowrap sm:px-3 sm:py-2.5 align-top tabular-nums`, children: disk.temp === null ? "\u2013" : disk.temp_warn === true ? /* @__PURE__ */ jsxs3("span", { className: "text-amber-300", title: "\xFCber der Grenze", children: [
           `${disk.temp} \xB0C`,
           /* @__PURE__ */ jsx4("span", { className: "sr-only", children: " (\xFCber der Grenze)" })
         ] }) : `${disk.temp} \xB0C` }),
-        /* @__PURE__ */ jsx4("td", { className: "px-5 py-2.5 align-top", children: disk.smart_label ? /* @__PURE__ */ jsx4(Badge, { tone: toneOf(disk.smart_tone), children: disk.smart_label }) : /* @__PURE__ */ jsx4("span", { className: "text-white/50", children: "\u2013" }) })
+        /* @__PURE__ */ jsx4("td", { "data-label": "SMART", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-5 sm:py-2.5 align-top`, children: disk.smart_label ? /* @__PURE__ */ jsx4(Badge, { tone: toneOf(disk.smart_tone), children: disk.smart_label }) : /* @__PURE__ */ jsx4("span", { className: "text-white/50", children: "\u2013" }) })
       ] }, disk.id)) })
     ] }) })
   ] });
@@ -588,21 +596,21 @@ function BackupsCard({ data }) {
     note && /* @__PURE__ */ jsx4("div", { className: "px-5 py-4", children: /* @__PURE__ */ jsx4(PartNote, { note, testId: "backup-note" }) }),
     backups && backups.length === 0 && /* @__PURE__ */ jsx4("p", { "data-testid": "no-backups", className: "px-5 py-4 text-sm text-white/50", children: "In Hyper Backup ist noch keine Sicherung eingerichtet." }),
     backups && backups.length > 0 && /* @__PURE__ */ jsxs3(Fragment2, { children: [
-      /* @__PURE__ */ jsx4("div", { className: "overflow-x-auto", children: /* @__PURE__ */ jsxs3("table", { "data-testid": "backups", className: "w-full text-sm", children: [
-        /* @__PURE__ */ jsx4("thead", { children: /* @__PURE__ */ jsxs3("tr", { className: "border-b border-white/10 text-left text-xs text-white/50", children: [
+      /* @__PURE__ */ jsx4("div", { className: "p-3 sm:overflow-x-auto sm:p-0", children: /* @__PURE__ */ jsxs3("table", { role: "table", "data-testid": "backups", className: `${CARD_TABLE} text-left`, children: [
+        /* @__PURE__ */ jsx4("thead", { role: "rowgroup", className: CARD_HEAD, children: /* @__PURE__ */ jsxs3("tr", { className: "border-b border-white/10 text-left text-xs text-white/50", children: [
           /* @__PURE__ */ jsx4("th", { className: "px-5 py-2 font-medium", children: "Aufgabe" }),
           /* @__PURE__ */ jsx4("th", { className: "px-3 py-2 font-medium", children: "Ergebnis" }),
           /* @__PURE__ */ jsx4("th", { className: "whitespace-nowrap px-3 py-2 font-medium", children: "Letzter Lauf" }),
           /* @__PURE__ */ jsx4("th", { className: "whitespace-nowrap px-5 py-2 font-medium", children: "N\xE4chster Lauf" })
         ] }) }),
-        /* @__PURE__ */ jsx4("tbody", { className: "divide-y divide-white/[0.06]", children: backups.map((task) => /* @__PURE__ */ jsxs3("tr", { "data-testid": "backup", children: [
-          /* @__PURE__ */ jsxs3("td", { className: "break-words px-5 py-2.5 align-top", children: [
+        /* @__PURE__ */ jsx4("tbody", { role: "rowgroup", className: CARD_BODY, children: backups.map((task) => /* @__PURE__ */ jsxs3("tr", { role: "row", className: CARD_ROW, "data-testid": "backup", children: [
+          /* @__PURE__ */ jsxs3("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] break-words sm:px-5 sm:py-2.5 align-top`, children: [
             /* @__PURE__ */ jsx4("span", { className: "font-medium", children: task.name }),
             task.problem && /* @__PURE__ */ jsx4("p", { "data-testid": "backup-problem", className: `text-xs ${TONE_TEXT[task.tone] ?? "text-white/60"}`, children: task.problem })
           ] }),
-          /* @__PURE__ */ jsx4("td", { className: "px-3 py-2.5 align-top", children: /* @__PURE__ */ jsx4(Badge, { tone: toneOf(task.tone), children: task.result_label }) }),
-          /* @__PURE__ */ jsx4("td", { className: "whitespace-nowrap px-3 py-2.5 align-top tabular-nums", children: dsmTime(task.last_run) ?? /* @__PURE__ */ jsx4("span", { className: "text-white/50", children: "\u2013" }) }),
-          /* @__PURE__ */ jsx4("td", { className: "whitespace-nowrap px-5 py-2.5 align-top tabular-nums", children: dsmTime(task.next_run) ?? /* @__PURE__ */ jsx4("span", { className: "text-white/50", children: "kein Zeitplan" }) })
+          /* @__PURE__ */ jsx4("td", { "data-label": "Ergebnis", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:px-3 sm:py-2.5 align-top`, children: /* @__PURE__ */ jsx4(Badge, { tone: toneOf(task.tone), children: task.result_label }) }),
+          /* @__PURE__ */ jsx4("td", { "data-label": "Letzter Lauf", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:whitespace-nowrap sm:px-3 sm:py-2.5 align-top tabular-nums`, children: dsmTime(task.last_run) ?? /* @__PURE__ */ jsx4("span", { className: "text-white/50", children: "\u2013" }) }),
+          /* @__PURE__ */ jsx4("td", { "data-label": "N\xE4chster Lauf", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] sm:whitespace-nowrap sm:px-5 sm:py-2.5 align-top tabular-nums`, children: dsmTime(task.next_run) ?? /* @__PURE__ */ jsx4("span", { className: "text-white/50", children: "kein Zeitplan" }) })
         ] }, task.id)) })
       ] }) }),
       /* @__PURE__ */ jsx4("p", { className: "border-t border-white/[0.06] px-5 py-2.5 text-xs text-white/45", children: "Zeiten in Ortszeit der Synology." })

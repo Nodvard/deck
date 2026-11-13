@@ -3,6 +3,7 @@ Compose-Datei, nur aus bekannten Feldern. Was Deck nicht sicher übersetzen kann
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 import contextlib
 import json
@@ -42,6 +43,7 @@ from .stack_actions import (
     cmd_verb,
     failure_line,
 )
+from .stack_update import _wait_for_cleanup
 from .stacks import DockerStacks
 
 CONVERT_ACTION = "docker.container_to_stack"
@@ -142,7 +144,7 @@ def _ports(bindings: Any, refused: list[str]) -> list[str]:
         suffix = "" if proto in ("", "tcp") else f"/{proto}"
         for entry in entries or [{}]:
             host_ip, host_port = (entry or {}).get("HostIp") or "", (entry or {}).get("HostPort") or ""
-            if host_ip in ("0.0.0.0", "::"):
+            if host_ip in ("0.0.0.0", "::"):  # nosec B104 - Vergleich mit bestehenden Docker-Bindungen
                 host_ip = ""
             if ":" in host_ip:
                 refused.append(f"Der Port {key} ist an die IPv6-Adresse {host_ip} gebunden.")
@@ -341,9 +343,9 @@ def convert(inspect: dict[str, Any], image: dict[str, Any], *, cgroup_v2: bool, 
     if host.get("CgroupnsMode") and host["CgroupnsMode"] != ("private" if cgroup_v2 else "host"):
         service["cgroup"] = host["CgroupnsMode"]
     ipc = host.get("IpcMode") or ""
-    if ipc == "host":
-        service["ipc"] = "host"
-    elif ipc not in ("", "private", "shareable"):
+    if ipc in ("host", "private", "shareable"):
+        service["ipc"] = ipc
+    elif ipc:
         refused.append(f"Der Container teilt den Speicherbereich (IpcMode {ipc}).")
     if host.get("ShmSize") and host["ShmSize"] != DEFAULT_SHM:
         service["shm_size"] = host["ShmSize"]
@@ -523,7 +525,9 @@ class ContainerToStack:
         return {
             "container": container, "id": facts.inspect.get("Id"), "project": converted.project,
             "folder": new_stack(converted.project, root).working_dir, "compose": converted.compose, "env_names": converted.env_names,
-            "refused": refused, "warnings": risky_settings(_long_binds(yaml.safe_load(converted.compose) or {})),
+            "refused": refused, "warnings": risky_settings(
+                _long_binds(yaml.safe_load(converted.compose) or {}), flag_external=False, roots=(new_stack(converted.project, root).working_dir,),
+            ),
         }
 
 
@@ -609,6 +613,8 @@ class DockerContainerToStackExecutor:
             return ActionResult(success=False, error="Der Container oder der Ordner hat sich inzwischen geändert. Bitte noch einmal umwandeln.")
         root = await self._convert.new.root(host.id)
         target = new_stack(converted.project, root)
+        if target.working_dir != payload.get("folder"):
+            return ActionResult(success=False, error="Der Zielordner hat sich inzwischen geändert. Bitte noch einmal umwandeln.")
         env_path = f"{target.working_dir}/{ENV_NAME}"
         extra = ((env_path, converted.env.encode()),) if converted.env else ()
         created: list[tuple[str, str]] = []
@@ -642,11 +648,21 @@ class DockerContainerToStackExecutor:
             if problem is not None or verdict is None or not verdict.ok:
                 reason = problem or (verdict.text if verdict else "Der neue Container ließ sich nicht prüfen.")
                 step = "back"
-                return await asyncio.shield(self._give_up(host, target, old_id, container, created, reason, converted))
+                cleanup = asyncio.create_task(self._give_up(host, target, old_id, container, created, reason, converted))
+                await _wait_for_cleanup(cleanup, remaining=(
+                    f"Der Container „{container}“ kann noch gestoppt sein oder „{container}{OLD_SUFFIX}“ heißen. "
+                    "Prüfe ihn und den neuen Stack im Docker-Modul."
+                ))
+                return cleanup.result()
             step = "done"
         except BaseException:
             if step in ("stop", "up"):
-                await asyncio.shield(self._abandon(host, target, old_id, container, created, up=step == "up", converted=converted))
+                cleanup = asyncio.create_task(self._abandon(host, target, old_id, container, created, up=step == "up", converted=converted))
+                await _wait_for_cleanup(cleanup, remaining=(
+                    f"Der Container „{container}“ kann noch gestoppt sein oder „{container}{OLD_SUFFIX}“ heißen. "
+                    "Prüfe ihn und den neuen Stack im Docker-Modul."
+                ))
+                cleanup.result()
             raise
         removed = await self._exec(host, cmd_remove_old(old_id), STOP_TIMEOUT_S)
         note = "" if removed is None else f" Der alte, gestoppte Container „{container}{OLD_SUFFIX}“ ließ sich nicht löschen ({removed}); lösche ihn im Reiter Container."
@@ -784,12 +800,20 @@ def convert_routes(convert_: ContainerToStack, editor: StackEditor, docker_host:
         host = await docker_host(host_id)
         return host, await convert_.plan(host, container)
 
-    @router.get("/hosts/{host_id}/containers/{container}/to-stack")
+    @router.get(
+        "/hosts/{host_id}/containers/{container}/to-stack",
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 502,)},
+    )
     async def convert_plan(host_id: str, container: str) -> dict:
         """Die Compose-Datei, die aus dem Container entstünde, ohne Werte der Variablen; dazu Gründe dagegen und Warnungen."""
         return (await _plan(host_id, container))[1]
 
-    @router.post("/hosts/{host_id}/containers/{container}/to-stack", status_code=status.HTTP_202_ACCEPTED)
+    @router.post(
+        "/hosts/{host_id}/containers/{container}/to-stack", status_code=status.HTTP_202_ACCEPTED,
+        responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                   for code in (400, 409, 502,)},
+    )
     async def convert_container(host_id: str, container: str, actor: Actor = Depends(current_actor)) -> dict:
         """Schlägt das Umwandeln vor (Gate-Aktion `docker.container_to_stack`, immer mit hohem Risiko)."""
         host, plan = await _plan(host_id, container)

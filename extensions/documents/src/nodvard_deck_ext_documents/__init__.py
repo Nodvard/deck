@@ -4,6 +4,7 @@ Eigene Tabellen mit eigenem Alembic-Zweig (`models.py`); die Dateien liegen auf 
 
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 import logging
 import re
@@ -31,11 +32,11 @@ from nodvard_sdk import (
     WidgetSpec,
     max_body_bytes,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 
-from .inbox import InboxError, fetch_inbox, find_source, normalize_folder
+from .inbox import InboxError, content_matches, fetch_inbox, find_source, normalize_folder
 from .models import Base, Document, DocumentItemLink, DocumentTag, Tag
 from .ocr import extract_text
 from .storage import (
@@ -56,6 +57,8 @@ INBOX_READY_CACHE_S = 60.0
 
 
 class TagIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     name: str
     match_keyword: str | None = None
 
@@ -68,6 +71,8 @@ class TagOut(BaseModel):
 
 
 class _RenameIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     original_filename: str
 
 
@@ -236,6 +241,8 @@ class Extension(NodvardExtension):
             """Legt ein Dokument an: Texterkennung, Datei auf die Platte, Stichwörter. Für das Hochladen und
             den Nextcloud-Ordner (`inbox.py`) derselbe Weg; `on_saved(session, id)` schreibt dort in derselben
             Transaktion mit, welche Datei übernommen ist."""
+            if not content_matches(content, content_type):
+                raise HTTPException(status_code=422, detail="Der Inhalt passt nicht zum Dokumenttyp.")
             extension = ALLOWED_CONTENT_TYPES[content_type]
             # OCR (bei mehrseitigen PDFs Sekunden) vor der Datenbank-Session und per `asyncio.to_thread`, weil `pytesseract`
             # blockierend einen Subprozess startet: so bleibt keine Transaktion über den langen Aufruf offen.
@@ -273,7 +280,11 @@ class Extension(NodvardExtension):
                 rows = (await session.execute(select(Tag).order_by(Tag.name))).scalars().all()
                 return [_tag_out(r) for r in rows]
 
-        @write_router.post("/tags", status_code=status.HTTP_201_CREATED)
+        @write_router.post(
+            "/tags", status_code=status.HTTP_201_CREATED,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409,)},
+        )
         async def create_tag(payload: TagIn) -> TagOut:
             async with ctx.db.session() as session:
                 existing = (
@@ -286,7 +297,11 @@ class Extension(NodvardExtension):
                 await session.flush()
                 return _tag_out(row)
 
-        @write_router.delete("/tags/{tag_id}", status_code=status.HTTP_204_NO_CONTENT)
+        @write_router.delete(
+            "/tags/{tag_id}", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def delete_tag(tag_id: str) -> None:
             async with ctx.db.session() as session:
                 row = await session.get(Tag, tag_id)
@@ -314,7 +329,11 @@ class Extension(NodvardExtension):
                 rows = (await session.execute(stmt)).scalars().all()
                 return [await _document_out(session, r) for r in rows]
 
-        @write_router.post("/documents", status_code=status.HTTP_201_CREATED)
+        @write_router.post(
+            "/documents", status_code=status.HTTP_201_CREATED,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (413, 415, 422,)},
+        )
         @max_body_bytes(MAX_DOCUMENT_BYTES)
         async def upload_document(filename: str, request: Request, item_id: str | None = None) -> DocumentOut:
             """Rohkörper-Upload wie `POST /branding/logo`; der Dateiname kommt als Query-Parameter `filename`.
@@ -336,7 +355,11 @@ class Extension(NodvardExtension):
 
             return await _store_document(content, content_type, filename, item_id)
 
-        @read_router.get("/documents/{document_id}")
+        @read_router.get(
+            "/documents/{document_id}",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def get_document(document_id: str) -> DocumentOut:
             async with ctx.db.session() as session:
                 row = await session.get(Document, document_id)
@@ -344,7 +367,14 @@ class Extension(NodvardExtension):
                     raise HTTPException(status_code=404, detail="Dokument nicht gefunden.")
                 return await _document_out(session, row)
 
-        @read_router.get("/documents/{document_id}/download")
+        @read_router.get(
+            "/documents/{document_id}/download", response_class=Response,
+            responses={**{code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)}, 200: {"description": "Dokumentdatei.", "content": {
+                media: {"schema": {"type": "string", "format": "binary"}}
+                for media in (*ALLOWED_CONTENT_TYPES, "application/octet-stream")
+            }}},
+        )
         async def download_document(document_id: str) -> Response:
             async with ctx.db.session() as session:
                 row = await session.get(Document, document_id)
@@ -364,7 +394,11 @@ class Extension(NodvardExtension):
                     },
                 )
 
-        @write_router.patch("/documents/{document_id}")
+        @write_router.patch(
+            "/documents/{document_id}",
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 422,)},
+        )
         async def rename_document(document_id: str, payload: _RenameIn) -> DocumentOut:
             """Anzeigename ändern (z. B. "scan_0042.pdf" -> "Stromrechnung 2026.pdf"); die Datei auf der Platte
             behält ihren internen Namen."""
@@ -380,7 +414,11 @@ class Extension(NodvardExtension):
                 await session.flush()
                 return await _document_out(session, row)
 
-        @write_router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+        @write_router.delete(
+            "/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def delete_document(document_id: str) -> None:
             async with ctx.db.session() as session:
                 row = await session.get(Document, document_id)
@@ -393,7 +431,11 @@ class Extension(NodvardExtension):
                 delete_document_file(ctx.data_dir, row.filename)
                 await session.delete(row)
 
-        @write_router.post("/documents/{document_id}/tags/{tag_id}", status_code=status.HTTP_204_NO_CONTENT)
+        @write_router.post(
+            "/documents/{document_id}/tags/{tag_id}", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404,)},
+        )
         async def attach_tag(document_id: str, tag_id: str) -> None:
             async with ctx.db.session() as session:
                 if await session.get(Document, document_id) is None:
@@ -411,7 +453,11 @@ class Extension(NodvardExtension):
                 if row is not None:
                     await session.delete(row)
 
-        @write_router.post("/documents/{document_id}/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+        @write_router.post(
+            "/documents/{document_id}/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (404, 422,)},
+        )
         async def link_item(document_id: str, item_id: str) -> None:
             """Dokument mit einem Gegenstand im Inventar verknüpfen (doppelt verknüpfen schadet nicht)."""
             _check_item_id(item_id)
@@ -509,7 +555,11 @@ class Extension(NodvardExtension):
                 last_run=inbox_state["last_run"], last_checked_at=inbox_state["last_checked_at"],
             )
 
-        @write_router.post("/inbox/fetch", status_code=status.HTTP_202_ACCEPTED)
+        @write_router.post(
+            "/inbox/fetch", status_code=status.HTTP_202_ACCEPTED,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409,)},
+        )
         async def inbox_fetch() -> InboxStatusOut:
             """Startet den Abruf im Hintergrund (die Texterkennung vieler PDFs kann Minuten dauern) und gibt den
             Stand zurück; fertig ist er, wenn `running` wieder `false` ist, das Ergebnis steht dann in `last_run`."""

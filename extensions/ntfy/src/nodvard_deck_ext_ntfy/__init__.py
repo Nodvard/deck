@@ -4,6 +4,7 @@ Die Kennung bleibt `ntfy` (Zustellprotokoll, Einstellungen), in der Oberfläche 
 """
 from __future__ import annotations
 
+from http import HTTPStatus
 import asyncio
 import logging
 from collections.abc import Awaitable, Mapping
@@ -21,7 +22,7 @@ from nodvard_sdk import (
     Severity,
 )
 from nodvard_sdk.errors import NotificationSkipped
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from .channels import NAME_PATTERN as CHANNEL_NAME
 from .channels import (
@@ -449,6 +450,8 @@ class _NtfyChannel:
 
 
 class _TokenIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     value: str
 
 
@@ -514,7 +517,11 @@ class Extension(NodvardExtension):
 
         router = APIRouter()
 
-        @router.post("/token", status_code=status.HTTP_204_NO_CONTENT)
+        @router.post(
+            "/token", status_code=status.HTTP_204_NO_CONTENT,
+            responses={code: {"description": HTTPStatus(code).phrase, "content": {"application/json": {}}}
+                       for code in (409,)},
+        )
         async def set_token(payload: _TokenIn) -> None:
             """Legt das optionale Zugriffstoken im Tresor ab."""
             # Nur Erstanlage; ersetzen und entfernen laufen über die Moduleinstellungen des Kerns, mit Passwort.

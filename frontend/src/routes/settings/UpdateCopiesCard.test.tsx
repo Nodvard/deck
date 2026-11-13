@@ -170,6 +170,16 @@ function setOwner() {
   useAuthStore.setState({ user: { id: "u1", username: "nico", display_name: "Nico", email: null, is_owner: true, locale: "de", permissions: ["*"] } });
 }
 
+describe("Karte Kopien vor Updates: Rückweg mit altem Helfer", () => {
+  it.each([[[1]], [[1, 2]]])("ein Helfer mit %j kann den signierten Rückweg nicht prüfen: kein Knopf, dafür der Grund", async (versions) => {
+    setOwner();
+    mockAll(helperView({ version: "0.7.0", until: future(), data_revert: false, data_since: null }, { request_versions: versions }));
+    render(<UpdateCopiesCard />);
+    expect(await screen.findByTestId("rollback-helper-old")).toHaveTextContent("zu alt");
+    expect(screen.queryByRole("button", { name: "Zurück zu Version 0.7.0" })).not.toBeInTheDocument();
+  });
+});
+
 describe("Karte Kopien vor Updates: Rückweg", () => {
   it("mit Daten: warnt mit dem Zeitpunkt, verlangt Häkchen und Passwort und folgt danach dem Rückweg", async () => {
     setOwner();

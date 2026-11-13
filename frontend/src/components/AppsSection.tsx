@@ -1,11 +1,4 @@
-/**
- * Bereich „Apps“ im Cockpit: eigene Kacheln („+ App hinzufügen“) und die automatisch erkannten Dienste in einem
- * Raster, mit Suche, Gruppen-Filter und -- nur mit dem Recht `apps.write` -- Knopf zum Hinzufügen und einem kleinen
- * Menü an jeder eigenen Kachel (Bearbeiten, nach vorn/hinten, Löschen).
- *
- * Wer nichts angelegt hat und nichts erkannt wird, sieht (mit Recht) einen Leerzustand mit dem Knopf; ohne Recht
- * bleibt der Bereich dann ganz weg (wie bisher ohne Dienste).
- */
+/** Eigene Apps und erkannte Dienste mit Suche und Gruppen; Bearbeiten setzt apps.write voraus. */
 import { Boxes, Plus, Search } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
@@ -24,7 +17,7 @@ import { AppDialog } from "./AppDialog";
 import { AppTile, CustomAppTile } from "./AppTile";
 import { EmptyState } from "./EmptyState";
 
-/** Aus der Kachel das Dienst-Objekt für `AppTile` (der erkannte Dienst sieht aus wie bisher). */
+/** Dienst-Objekt für AppTile aus der Kachel ableiten. */
 function asService(tile: AppTileOut) {
   return {
     id: tile.id, name: tile.name, host: tile.host, host_id: tile.host_id, state: tile.state, tone: tile.tone,
@@ -147,7 +140,7 @@ export function AppsSection({ apps: all, hosts, canWrite }: { apps: AppTileOut[]
           icon="boxes"
           testId="apps-empty"
           title="Noch keine Apps"
-          text="Leg Kacheln für das an, was du oft aufrufst – zum Beispiel Router, NAS-Oberfläche oder Pi-hole. Läuft dazu die Container-Erkennung, erscheinen deine Dienste hier außerdem von selbst."
+          text="Leg Kacheln für das an, was du oft aufrufst, zum Beispiel Router, NAS-Oberfläche oder Pi-hole. Läuft dazu die Container-Erkennung, erscheinen deine Dienste hier außerdem von selbst."
           action={addButton || undefined}
         />
       ) : (

@@ -23,11 +23,22 @@ services:
       dockerfile: deploy/Dockerfile
     image: nodvard-deck:latest
     restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=1777
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
     ports:
       - "8080:8080"
     environment:
       NODVARD_DECK_ENV: prod
       NODVARD_DECK_LOG_JSON: "true"
+      # Optional in .env vorgeben: mindestens 8 Buchstaben/Ziffern, nur solange noch kein Konto existiert.
+      # Leer: zufälliger Code in den Container-Logs. Nach der Einrichtung wird die Variable ignoriert.
+      NODVARD_DECK_SETUP_CODE: "${NODVARD_DECK_SETUP_CODE:-}"
       # Rückfall für `audit.retention_days` (docs/03 §9): gilt, solange unter Einstellungen,
       # System keine Aufbewahrungsdauer gesetzt ist. Die Zeitzone stellt man dort ebenfalls ein
       # (Vorgabe: NODVARD_DECK_TIMEZONE, sonst TZ, sonst Europe/Berlin).

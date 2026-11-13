@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
 from contextvars import ContextVar
 from pathlib import PurePosixPath
-from typing import Any, AsyncContextManager, Protocol, runtime_checkable
+from typing import Any, AsyncContextManager, ContextManager, Protocol, runtime_checkable
 
 from .actions import ActionRequest, ActionSpec, GateDecision
 from .types import (
@@ -38,6 +38,10 @@ class ApiHandle(Protocol):
     Audit-Log, gültig nur in dieser Anfrage und in daraus mit `asyncio.create_task` gestarteten Tasks (alle Ausnahmen in
     docs/02 §3, „Wer vorschlägt“)."""
 
+    def require_permission(self, permission: str) -> Any:
+        """FastAPI-Dependency für ein persönliches Recht; ohne Anmeldung 401, ohne Recht 403."""
+        ...
+
     # Ohne `permission` verlangt der Kern nur eine gültige Anmeldung (401 ohne Token), keine bestimmte Berechtigung.
     # Routen, die Daten zeigen oder etwas ändern, setzen deshalb `permission=` oder prüfen selbst.
     #
@@ -53,6 +57,8 @@ class ApiHandle(Protocol):
     #
     # Der Host prüft die Router nach `setup()` und `on_start()`. Was später zur Laufzeit an einen montierten Router
     # kommt (etwa aus einem Hintergrundtask), sieht er nicht: Solche Routen sichern sich selbst ab.
+    # `ssh_preflight=True` erlaubt lesende SSH-Vorprüfungen auch vor POST-Aktionen; verlangt `hosts.execute`.
+    # `ssh_read=True` erlaubt GET-/HEAD-Leseabfragen mit einer fachlichen Router-Berechtigung.
     def include_router(
         self,
         router: Any,
@@ -61,6 +67,8 @@ class ApiHandle(Protocol):
         tags: list[str] | None = None,
         permission: str | None = None,
         public: bool = False,
+        ssh_preflight: bool = False,
+        ssh_read: bool = False,
     ) -> None:
         """Montiert einen FastAPI-Router unter /api/v1/ext/<ext_id><prefix>. Mit `permission` übernimmt der Kern
         Bearer-Anmeldung und RBAC-Prüfung dieser Berechtigung für alle Routen des Routers, ohne sie verlangt er
@@ -145,6 +153,11 @@ class ActionsHandle(Protocol):
         correlation_id, z. B. die Läufe eines Skripts."""
         ...
 
+    async def may_decide(self, actor: Actor, action_id: str) -> bool:
+        """Ob `actor` (ein Mensch) die eigene Aktion `action_id` freigeben dürfte, nach derselben Regel wie die
+        Freigabe-Route (`actions.approve:<Stufe>`); für fremde oder unbekannte Aktionen immer `False`."""
+        ...
+
     async def waiting_count(self) -> int:
         """Wie viele Aktionen (aller Erweiterungen und des Kerns) auf eine Freigabe warten, dieselbe Zahl wie die Kachel
         „wartet auf Freigabe“; nur die Zahl, nichts über fremde Aktionen (etwa für einen Lagebericht über vergessene
@@ -179,7 +192,31 @@ class HostsHandle(Protocol):
         ...
 
 
+class SshSession(Protocol):
+    username: str
+    public_key: str | None
+    key_public_key: str | None
+    credential_id: str
+    key_credential_id: str | None
+
+    async def run(self, command: str, *, timeout_s: int = 30) -> ExecResult: ...
+    async def verify_key(self) -> None:
+        """Neue Verbindung mit dem gewählten Schlüssel und geprüftem Server-Schlüssel, ohne Passwort."""
+        ...
+
+
 class ExecHandle(Protocol):
+    def ssh_session(
+        self, host: Host, *, credential_id: str | None = None, key_credential_id: str | None = None,
+    ) -> AsyncContextManager[SshSession]:
+        """Hält Anmeldung und Zielschlüssel fest; Änderungen brauchen das Aktions-Gate."""
+        ...
+
+    def read_access(self, host: Host, *, timeout_s: float = 30.0) -> ContextManager[None]:
+        """Lesekontext für Hintergrundabfragen auf diesem Server, höchstens 60 Sekunden; braucht `hosts.read` und
+        `hosts.execute`. Erlaubt keine Shell oder SFTP-Schreibzugriffe."""
+        ...
+
     # `log_command` ist nur relevant, wenn die Sperrliste greift.
     async def run(
         self, host: Host, command: str, *, timeout_s: int = 60, user: str | None = None,
@@ -187,7 +224,8 @@ class ExecHandle(Protocol):
     ) -> ExecResult:
         """Nur für *lesende* Kommandos (Status, Logs, Inventar), Veränderndes geht über `ctx.actions.propose()`;
         `log_command` maskiert die Audit-Zeile, und über 8000 Byte geht `command` (außer an Windows-Server) über die
-        Standardeingabe der POSIX-Login-Shell."""
+        Standardeingabe der POSIX-Login-Shell. Befehle laufen mit dem hinterlegten Zugang; ein `user` wird mit
+        `ValueError` abgelehnt, statt still als anderer Benutzer zu laufen."""
         ...
 
     def stream(self, host: Host, command: str) -> AsyncContextManager[AsyncIterator[bytes]]:
@@ -260,6 +298,12 @@ class SettingsHandle(Protocol):
     def declare(self, schema: dict[str, Any]) -> None: ...
     async def get(self) -> dict[str, Any]: ...
     async def set(self, values: dict[str, Any]) -> None: ...
+    async def check_test_limit(self, *, actor: Actor) -> None:
+        """Begrenzt Verbindungstests auf zehn je Minute und angemeldetem Modulverwalter (HTTP 429)."""
+        ...
+    async def save_test_result(self, *, ok: bool, message: str, actor: Actor, kind: str = "ok") -> None:
+        """Speichert und protokolliert einen Verbindungstest für einen angemeldeten Modulverwalter."""
+        ...
     async def core(self, key: str) -> Any:
         """Liest eine freigegebene Kern-Einstellung, `system.timezone` oder `maintenance.windows`; jede andere wirft
         `PermissionDenied` (ältere Kerne lieferten jede)."""
@@ -288,7 +332,7 @@ class JobSpec(Protocol):
 
 
 class SchedulerHandle(Protocol):
-    def register_job(self, spec: JobSpec) -> None:
+    async def register_job(self, spec: JobSpec) -> None:
         """Ein Scheduler für alles: keine Cron-Einträge auf Hosts, sondern Jobs im Kern."""
         ...
 
@@ -469,14 +513,16 @@ class ExtensionContext(Protocol):
 
     def spawn(
         self,
-        coro: Coroutine[Any, Any, Any],
+        coro: Coroutine[Any, Any, Any] | Callable[[], Coroutine[Any, Any, Any]],
         *,
         name: str,
         restart: bool = True,
         restart_delay_s: float = 5.0,
     ) -> None:
-        """Überwachter Hintergrundtask statt `asyncio.create_task()`: Der Kern bricht ihn beim Stop sauber ab, startet
-        ihn nach einem Absturz neu und meldet wiederholte Abstürze als Extension-Gesundheitsproblem."""
+        """Überwachter Hintergrundtask statt `asyncio.create_task()`: Der Kern bricht ihn beim Stop sauber ab und meldet
+        wiederholte Abstürze als Extension-Gesundheitsproblem. Neu starten kann er ihn nach einem Absturz nur, wenn
+        `coro` eine Fabrik ist (`ctx.spawn(self._loop, ...)` statt `ctx.spawn(self._loop(), ...)`): Eine fertige
+        Coroutine lässt sich nicht zweimal abwarten, ihr Absturz wird nur geloggt."""
         ...
 
     def notify_sync(

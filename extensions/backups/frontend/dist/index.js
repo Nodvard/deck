@@ -1,3 +1,11 @@
+// ../../_shared/frontend/src/cardTable.ts
+var CARD_TABLE = "block w-full text-sm sm:table";
+var CARD_HEAD = "hidden sm:table-header-group";
+var CARD_BODY = "block sm:table-row-group sm:divide-y sm:divide-white/5";
+var CARD_ROW = "relative mb-3 flex flex-col rounded-lg border border-white/10 p-3 sm:static sm:mb-0 sm:table-row sm:rounded-none sm:border-0 sm:p-0";
+var CARD_CELL_PLAIN = "block empty:hidden sm:table-cell sm:empty:table-cell";
+var CARD_CELL = `${CARD_CELL_PLAIN} before:mb-0.5 before:block before:text-xs before:opacity-60 before:content-[attr(data-label)] sm:before:hidden`;
+
 // src/BackupsPage.tsx
 import { Fragment as Fragment4, useCallback as useCallback2, useEffect as useEffect6, useRef as useRef2, useState as useState5 } from "react";
 
@@ -15,7 +23,7 @@ function deckEventName(event) {
 }
 
 // ../../_shared/frontend/src/api.ts
-var SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar \u2013 bitte gleich noch einmal versuchen.";
+var SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar, bitte gleich noch einmal versuchen.";
 var ServerUnavailableError = class extends Error {
   status;
   constructor(answer) {
@@ -294,7 +302,7 @@ function Icon({ name, size = 16, className = "" }) {
   );
 }
 var BUTTON_STYLES = {
-  primary: "accent-gradient text-on-accent hover:bg-accent-strong",
+  primary: "border border-transparent accent-gradient text-on-accent hover:bg-accent-strong",
   secondary: "border border-white/10 bg-white/[0.06] text-white hover:bg-white/[0.12]",
   danger: "border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25",
   ghost: "text-white/60 hover:bg-white/[0.06] hover:text-white"
@@ -1224,8 +1232,8 @@ function ConnectionsPanel() {
     /* @__PURE__ */ jsxs6("div", { className: "mt-3", children: [
       message && /* @__PURE__ */ jsx6("p", { className: "mb-2 text-xs opacity-80", children: message }),
       connections && connections.length === 0 && /* @__PURE__ */ jsx6("p", { className: "mb-2 text-xs opacity-60", children: "Noch keine Verbindung konfiguriert." }),
-      connections && connections.length > 0 && /* @__PURE__ */ jsxs6("table", { className: "mb-3 w-full text-xs", children: [
-        /* @__PURE__ */ jsx6("thead", { children: /* @__PURE__ */ jsxs6("tr", { className: "border-b border-white/10 text-left opacity-60", children: [
+      connections && connections.length > 0 && /* @__PURE__ */ jsxs6("table", { role: "table", className: `${CARD_TABLE} text-left mb-3 w-full text-xs`, children: [
+        /* @__PURE__ */ jsx6("thead", { role: "rowgroup", className: CARD_HEAD, children: /* @__PURE__ */ jsxs6("tr", { className: "border-b border-white/10 text-left opacity-60", children: [
           /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Name" }),
           /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Adresse" }),
           /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Zertifikat" }),
@@ -1233,12 +1241,12 @@ function ConnectionsPanel() {
           /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Aktiv" }),
           /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Aktionen" })
         ] }) }),
-        /* @__PURE__ */ jsx6("tbody", { className: "divide-y divide-white/5", children: connections.map((c) => /* @__PURE__ */ jsxs6("tr", { children: [
-          /* @__PURE__ */ jsx6("td", { className: "py-1.5", children: c.name }),
-          /* @__PURE__ */ jsx6("td", { className: "py-1.5 opacity-70", children: c.base_url }),
-          /* @__PURE__ */ jsx6("td", { className: "py-1.5 whitespace-nowrap", children: /* @__PURE__ */ jsx6(CertificateStatus, { connection: c }) }),
-          /* @__PURE__ */ jsx6("td", { className: "py-1.5", children: c.has_token ? "gesetzt" : /* @__PURE__ */ jsx6("span", { className: "text-amber-400", children: "fehlt" }) }),
-          /* @__PURE__ */ jsx6("td", { className: "py-1.5", children: /* @__PURE__ */ jsx6(
+        /* @__PURE__ */ jsx6("tbody", { role: "rowgroup", className: CARD_BODY, children: connections.map((c) => /* @__PURE__ */ jsxs6("tr", { role: "row", className: CARD_ROW, children: [
+          /* @__PURE__ */ jsx6("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`, children: c.name }),
+          /* @__PURE__ */ jsx6("td", { "data-label": "Adresse", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 opacity-70`, children: c.base_url }),
+          /* @__PURE__ */ jsx6("td", { "data-label": "Zertifikat", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 sm:whitespace-nowrap`, children: /* @__PURE__ */ jsx6(CertificateStatus, { connection: c }) }),
+          /* @__PURE__ */ jsx6("td", { "data-label": "Token", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`, children: c.has_token ? "gesetzt" : /* @__PURE__ */ jsx6("span", { className: "text-amber-400", children: "fehlt" }) }),
+          /* @__PURE__ */ jsx6("td", { "data-label": "Aktiv", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`, children: /* @__PURE__ */ jsx6(
             "button",
             {
               type: "button",
@@ -1248,7 +1256,7 @@ function ConnectionsPanel() {
               children: c.enabled ? "aktiv" : "deaktiviert"
             }
           ) }),
-          /* @__PURE__ */ jsx6("td", { className: "py-1.5", children: /* @__PURE__ */ jsxs6("div", { className: "flex gap-1.5", children: [
+          /* @__PURE__ */ jsx6("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`, children: /* @__PURE__ */ jsxs6("div", { className: "flex flex-wrap gap-1.5", children: [
             /* @__PURE__ */ jsx6(
               "button",
               {
@@ -1540,9 +1548,11 @@ function BackupsPage() {
     /* @__PURE__ */ jsx6("h2", { className: "mb-1 font-semibold text-xl tracking-tight", children: "Proxmox-Backups" }),
     /* @__PURE__ */ jsx6("p", { className: "mb-3 text-sm opacity-70", "data-testid": "backups-scope", children: "Hier stehen die Backup-Jobs deiner Proxmox-Server. Ohne Proxmox brauchst du dieses Modul nicht und kannst es ausgeschaltet lassen. Nodvard Deck selbst sicherst du unter Einstellungen \u2192 System." }),
     /* @__PURE__ */ jsx6(ConnectionsPanel, {}),
-    jobs && (jobs.length > 0 || unreachable.length === 0) && /* @__PURE__ */ jsxs6("p", { className: "mb-4 text-sm opacity-70", children: [
+    jobs && jobs.length > 0 && /* @__PURE__ */ jsxs6("p", { className: "mb-4 text-sm opacity-70", children: [
       jobs.length,
-      " Job(s) \u2013 ",
+      " ",
+      jobs.length === 1 ? "Sicherungsjob" : "Sicherungsjobs",
+      ": ",
       failing > 0 ? `${failing} ohne best\xE4tigtes erfolgreiches Backup` : "alle zuletzt erfolgreich"
     ] }),
     inventoryError && /* @__PURE__ */ jsx6(LoadError, { what: "Die \xDCbersicht der vorhandenen Sicherungen", error: inventoryError, onRetry: reloadInventory }),
@@ -1570,7 +1580,7 @@ function BackupsPage() {
     ] }, u.connection)) }),
     message && /* @__PURE__ */ jsx6("p", { className: "mb-2 text-sm opacity-80", children: message }),
     !jobs && !error && /* @__PURE__ */ jsx6("p", { className: "text-sm opacity-60", children: "Lade \u2026" }),
-    jobs && jobs.length === 0 && unreachable.length === 0 && /* @__PURE__ */ jsx6("p", { className: "text-sm opacity-60", children: "Keine Backup-Jobs konfiguriert." }),
+    jobs && jobs.length === 0 && unreachable.length === 0 && /* @__PURE__ */ jsx6("p", { className: "text-sm opacity-60", children: "Keine Sicherungsjobs gefunden" }),
     hostFilter && jobs && /* @__PURE__ */ jsxs6("div", { className: "mb-2 flex flex-wrap items-center gap-2 text-xs", children: [
       /* @__PURE__ */ jsxs6("span", { className: "accent-soft flex items-center gap-1 rounded px-2 py-0.5", "data-testid": "host-filter", children: [
         "Nur ",
@@ -1579,8 +1589,8 @@ function BackupsPage() {
       ] }),
       visibleJobs?.length === 0 && /* @__PURE__ */ jsx6("span", { className: "text-amber-300", children: "Kein Backup-Job erfasst diesen Server \u2013 siehe \u201EOhne Backup\u201C oben." })
     ] }),
-    visibleJobs && visibleJobs.length > 0 && /* @__PURE__ */ jsxs6("table", { className: "w-full text-sm", children: [
-      /* @__PURE__ */ jsx6("thead", { children: /* @__PURE__ */ jsxs6("tr", { className: "border-b border-white/10 text-left text-xs opacity-60", children: [
+    visibleJobs && visibleJobs.length > 0 && /* @__PURE__ */ jsxs6("table", { role: "table", className: `${CARD_TABLE} text-left`, children: [
+      /* @__PURE__ */ jsx6("thead", { role: "rowgroup", className: CARD_HEAD, children: /* @__PURE__ */ jsxs6("tr", { className: "border-b border-white/10 text-left text-xs opacity-60", children: [
         /* @__PURE__ */ jsx6("th", { className: "py-1", children: "VM" }),
         /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Storage" }),
         /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Zeitplan" }),
@@ -1589,9 +1599,9 @@ function BackupsPage() {
         /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Vorhanden" }),
         /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Aktionen" })
       ] }) }),
-      /* @__PURE__ */ jsx6("tbody", { className: "divide-y divide-white/5", children: visibleJobs.map((job) => /* @__PURE__ */ jsxs6(Fragment4, { children: [
-        /* @__PURE__ */ jsxs6("tr", { children: [
-          /* @__PURE__ */ jsxs6("td", { className: "py-1.5", children: [
+      /* @__PURE__ */ jsx6("tbody", { role: "rowgroup", className: CARD_BODY, children: visibleJobs.map((job) => /* @__PURE__ */ jsxs6(Fragment4, { children: [
+        /* @__PURE__ */ jsxs6("tr", { role: "row", className: CARD_ROW, children: [
+          /* @__PURE__ */ jsxs6("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`, children: [
             job.name,
             " ",
             /* @__PURE__ */ jsxs6("span", { className: "opacity-50", children: [
@@ -1600,8 +1610,8 @@ function BackupsPage() {
               ")"
             ] })
           ] }),
-          /* @__PURE__ */ jsx6("td", { className: "py-1.5 opacity-70", children: job.storage ?? "-" }),
-          /* @__PURE__ */ jsxs6("td", { className: "py-1.5 opacity-70", children: [
+          /* @__PURE__ */ jsx6("td", { "data-label": "Storage", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 opacity-70`, children: job.storage ?? "-" }),
+          /* @__PURE__ */ jsxs6("td", { "data-label": "Zeitplan", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 opacity-70`, children: [
             job.schedule ?? "-",
             job.next_run_at ? /* @__PURE__ */ jsxs6("div", { className: "text-xs", children: [
               "n\xE4chster: ",
@@ -1612,10 +1622,10 @@ function BackupsPage() {
               job.retention
             ] }) : null
           ] }),
-          /* @__PURE__ */ jsx6("td", { className: "py-1.5", children: /* @__PURE__ */ jsx6("span", { className: `rounded border px-1.5 py-0.5 text-xs ${STATUS_CLASS[job.last_status] ?? STATUS_CLASS.unknown}`, children: STATUS_LABEL[job.last_status] ?? job.last_status }) }),
-          /* @__PURE__ */ jsx6("td", { className: "py-1.5 opacity-70", children: formatEpoch(job.last_run_at) }),
-          /* @__PURE__ */ jsx6("td", { className: "py-1.5 text-xs opacity-70", "data-testid": `inventory-${job.job_ref}`, children: inventory ? inventoryText(inventory.get(`${job.connection}/${job.vmid}`)) : inventoryError ? "gerade nicht lesbar" : "\u2026" }),
-          /* @__PURE__ */ jsx6("td", { className: "py-1.5", children: /* @__PURE__ */ jsxs6("div", { className: "flex gap-1.5", children: [
+          /* @__PURE__ */ jsx6("td", { "data-label": "Letzter Status", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`, children: /* @__PURE__ */ jsx6("span", { className: `rounded border px-1.5 py-0.5 text-xs ${STATUS_CLASS[job.last_status] ?? STATUS_CLASS.unknown}`, children: STATUS_LABEL[job.last_status] ?? job.last_status }) }),
+          /* @__PURE__ */ jsx6("td", { "data-label": "Letzter Lauf", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 opacity-70`, children: formatEpoch(job.last_run_at) }),
+          /* @__PURE__ */ jsx6("td", { "data-label": "Vorhanden", role: "cell", className: `${CARD_CELL} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5 text-xs opacity-70`, "data-testid": `inventory-${job.job_ref}`, children: inventory ? inventoryText(inventory.get(`${job.connection}/${job.vmid}`)) : inventoryError ? "gerade nicht lesbar" : "\u2026" }),
+          /* @__PURE__ */ jsx6("td", { role: "cell", className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] py-1 sm:py-1.5`, children: /* @__PURE__ */ jsxs6("div", { className: "flex flex-wrap gap-1.5", children: [
             /* @__PURE__ */ jsx6("button", { type: "button", onClick: () => void toggleHistory(job), className: "px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: expanded === job.job_ref ? "Verlauf ausblenden" : "Verlauf" }),
             job.last_status !== "running" && /* @__PURE__ */ jsx6(
               "button",
@@ -1647,11 +1657,11 @@ function BackupsPage() {
             )
           ] }) })
         ] }),
-        restoring === job.job_ref && /* @__PURE__ */ jsx6("tr", { children: /* @__PURE__ */ jsx6("td", { colSpan: 7, className: "bg-black/20 py-2", children: /* @__PURE__ */ jsx6(RestoreCopyPanel, { target: { connection: job.connection, vmid: job.vmid, name: job.name }, onDone: (text) => {
+        restoring === job.job_ref && /* @__PURE__ */ jsx6("tr", { role: "row", className: CARD_ROW, children: /* @__PURE__ */ jsx6("td", { role: "cell", colSpan: 7, className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] bg-black/20 sm:py-2`, children: /* @__PURE__ */ jsx6(RestoreCopyPanel, { target: { connection: job.connection, vmid: job.vmid, name: job.name }, onDone: (text) => {
           setRestoring(null);
           if (text) setMessage(text);
         } }) }) }),
-        editing === job.job_ref && /* @__PURE__ */ jsx6("tr", { children: /* @__PURE__ */ jsx6("td", { colSpan: 7, className: "bg-black/20 py-2", children: /* @__PURE__ */ jsx6(
+        editing === job.job_ref && /* @__PURE__ */ jsx6("tr", { role: "row", className: CARD_ROW, children: /* @__PURE__ */ jsx6("td", { role: "cell", colSpan: 7, className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] bg-black/20 sm:py-2`, children: /* @__PURE__ */ jsx6(
           JobEditForm,
           {
             job,
@@ -1665,7 +1675,7 @@ function BackupsPage() {
             }
           }
         ) }) }),
-        expanded === job.job_ref && /* @__PURE__ */ jsx6("tr", { children: /* @__PURE__ */ jsxs6("td", { colSpan: 7, className: "bg-black/20 py-2", children: [
+        expanded === job.job_ref && /* @__PURE__ */ jsx6("tr", { role: "row", className: CARD_ROW, children: /* @__PURE__ */ jsxs6("td", { role: "cell", colSpan: 7, className: `${CARD_CELL_PLAIN} min-w-0 [overflow-wrap:anywhere] bg-black/20 sm:py-2`, children: [
           (job.last_status === "failed" || causeFor) && /* @__PURE__ */ jsx6(FailureCause, { jobRef: job.job_ref, upid: causeFor }, causeFor ?? "neuester"),
           historyError && /* @__PURE__ */ jsx6(LoadError, { compact: true, what: "Die Liste der L\xE4ufe", error: historyError, onRetry: () => void loadHistory(job.job_ref) }),
           /* @__PURE__ */ jsxs6("ul", { className: "text-xs opacity-80", children: [

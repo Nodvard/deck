@@ -106,6 +106,25 @@ async def test_documents_page_is_registered_after_enabling(client, db_session, t
     assert "DocumentsPage" in bundle.text
 
 
+@pytest.mark.parametrize("content_type", ["image/png", "image/jpeg", "image/webp", "application/pdf"])
+@pytest.mark.parametrize("content", [b"", b"<html><script>alert(1)</script></html>"])
+async def test_upload_rejects_content_with_a_forged_document_type(client, db_session, test_settings, content_type, content):
+    token = await _enable_documents(client, db_session, test_settings)
+    headers = {**_auth_header(token), "Content-Type": content_type}
+    response = await client.post("/api/v1/ext/documents/documents?filename=test", headers=headers, content=content)
+    assert response.status_code == 422
+    assert (await client.get("/api/v1/ext/documents/documents", headers=_auth_header(token))).json() == []
+
+
+async def test_upload_rejects_a_valid_image_with_the_wrong_type(client, db_session, test_settings):
+    token = await _enable_documents(client, db_session, test_settings)
+    response = await client.post(
+        "/api/v1/ext/documents/documents?filename=test.jpg", content=_png_bytes("Test"),
+        headers={**_auth_header(token), "Content-Type": "image/jpeg"},
+    )
+    assert response.status_code == 422
+
+
 @pytest.mark.asyncio
 async def test_tag_crud_round_trip(client, db_session, test_settings):
     token = await _enable_documents(client, db_session, test_settings)

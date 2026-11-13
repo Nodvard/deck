@@ -66,6 +66,7 @@ class Extension(NodvardExtension):
 
         protected_router = APIRouter()
 
+        # API-Vertrag: SDK-Beispiel für include_router(permission=...).
         @protected_router.get("/protected-widget")
         async def protected_widget_data() -> dict:
             """Zeigt `ctx.api.include_router(..., permission=...)`: Anders als `/widgets/hello` (nur Anmeldung) verlangt
@@ -78,6 +79,7 @@ class Extension(NodvardExtension):
         # deshalb nur für Verwalter von Erweiterungen, nicht für jeden angemeldeten Nutzer.
         admin_router = APIRouter()
 
+        # API-Vertrag: SDK-Beispiel für notify.send() mit Wartungsfenster-Prüfung.
         @admin_router.post("/notify-test")
         async def notify_test(host_id: str | None = None) -> dict:
             """Löst `ctx.notify.send()` aus; `host_id` macht die Meldung für die Wartungsfenster-Prüfung sichtbar."""
@@ -93,6 +95,7 @@ class Extension(NodvardExtension):
             )
             return {"sent": True}
 
+        # API-Vertrag: SDK-Beispiel für vault_use() mit Audit-Eintrag trotz Fehler.
         @admin_router.post("/vault-use-and-fail")
         async def vault_use_and_fail() -> dict:
             # Materialisiert ein Geheimnis und scheitert absichtlich: der `secret.used`-Audit-Eintrag muss trotzdem bleiben.
@@ -152,7 +155,8 @@ class Extension(NodvardExtension):
                 await ctx.ws.broadcast("tick", {"count": self._tick_count})
                 await asyncio.sleep(2.0)
 
-        ctx.spawn(_tick(), name="hello-ticker")
+        # Die Funktion selbst, nicht `_tick()`: Nur so startet der Kern den Task nach einem Absturz neu.
+        ctx.spawn(_tick, name="hello-ticker")
         await ctx.audit.log(action="hello.started", outcome="success")
 
     async def on_stop(self, ctx: ExtensionContext) -> None:

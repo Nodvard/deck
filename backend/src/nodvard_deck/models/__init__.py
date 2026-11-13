@@ -10,6 +10,7 @@ from .infra import (
     Host,
     HostCredential,
     HostGroup,
+    HostMerge,
     HostTag,
     KnownHostKey,
     host_group_members,
@@ -25,13 +26,13 @@ from .platform import (
     NotificationDelivery,
     Setting,
 )
-from .security import Action, ActionFlapHistory, AuditEntry, Secret, SecretGrant, SecretUsage
+from .security import Action, ActionFlapHistory, AuditEntry, Secret, SecretUsage
 
 __all__ = [
     "Base",
     "User", "Role", "RolePermission", "RefreshToken", "RecoveryCode", "ApiToken", "user_roles",
-    "Host", "HostTag", "HostGroup", "HostCredential", "KnownHostKey", "host_group_members",
-    "Secret", "SecretGrant", "SecretUsage", "AuditEntry", "Action", "ActionFlapHistory",
+    "Host", "HostTag", "HostGroup", "HostMerge", "HostCredential", "KnownHostKey", "host_group_members",
+    "Secret", "SecretUsage", "AuditEntry", "Action", "ActionFlapHistory",
     "ExtensionRecord", "ConnectorInstance", "CustomApp", "Job", "JobRun",
     "Notification", "NotificationDelivery", "Setting", "DashboardLayout",
 ]

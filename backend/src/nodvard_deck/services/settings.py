@@ -17,6 +17,11 @@ DESIGN_NOTICE_KEY = "ui.design_notice_dismissed"
 """Je Benutzer: Hinweis „Deck hat ein neues Aussehen.“ erledigt. Neue Konten bekommen ihn gleich als erledigt, sie
 kennen das alte Aussehen nicht; wer es schon vor dem Update gab, hat den Wert nicht und sieht den Hinweis einmal."""
 
+TOTP_SETUP_SKIPPED_KEY = "ui.totp_setup_skipped"
+TOTP_REMINDER_DISMISSED_KEY = "ui.totp_reminder_dismissed"
+"""Die einmalige Erinnerung nach übersprungener Zwei-Faktor-Einrichtung ist erledigt, sobald sie bewusst
+ausgeblendet oder die Zwei-Faktor-Anmeldung erfolgreich eingeschaltet wurde."""
+
 
 async def get_global(session: AsyncSession, key: str, default: Any = None) -> Any:
     result = await session.execute(

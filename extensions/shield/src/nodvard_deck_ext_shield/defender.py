@@ -148,6 +148,7 @@ _log = logging.getLogger(LOGGER)
 
 # Scans und Update-Läufe leben als Hintergrund-Task im Prozess: Nach einem Neustart kommt ein abgebrochener Lauf nie zurück.
 ABORTED_BY_RESTART = "Abgebrochen – Dashboard wurde neu gestartet"
+ABORTED_BY_USER = "Abgebrochen. Der Scan auf dem Server kann noch laufen."
 
 
 # Grenzen wie in settings.schema.json. Ein älter gespeicherter Wert (0, -5, 5000) landete sonst im Befehl; über 1000 MB
@@ -294,8 +295,10 @@ class Defender:
             )
             return result.rowcount or 0
 
-    async def start_scans(self, hosts: list[Host], kind: str, *, paths: list[str] | None, trigger: str) -> list[str]:
-        """Legt je Server einen Scan an und startet ihn im Hintergrund; gibt die IDs zurück."""
+    async def start_scans(
+        self, hosts: list[Host], kind: str, *, paths: list[str] | None, trigger: str, wait: bool = False,
+    ) -> list[str]:
+        """Legt je Server einen Scan an; `wait=True` wartet bis zum gespeicherten Ergebnis."""
         settings = await self._settings()
         if paths is None:
             paths = {
@@ -322,20 +325,31 @@ class Defender:
                 ids.append(scan_id)
                 todo.append((host, scan_id))
         if todo:
-            asyncio.ensure_future(self._run_many(todo, kind, list(paths)))
+            if wait:
+                await self._run_many(todo, kind, list(paths))
+            else:
+                asyncio.ensure_future(self._run_many(todo, kind, list(paths)))
         return ids
 
     async def _run_many(self, todo: list[tuple[Host, str]], kind: str, paths: list[str]) -> None:
         sem = asyncio.Semaphore(MAX_PARALLEL)
 
         async def one(host: Host, scan_id: str) -> None:
-            async with sem:
-                try:
+            try:
+                async with sem:
                     await self._run_scan(host, scan_id, kind, paths)
-                finally:
-                    self._running.discard((host.id, kind))
+            finally:
+                self._running.discard((host.id, kind))
 
-        await asyncio.gather(*(one(h, s) for h, s in todo), return_exceptions=True)
+        try:
+            await asyncio.gather(*(one(h, s) for h, s in todo), return_exceptions=True)
+        except asyncio.CancelledError:
+            async with self._ctx.db.session() as session:
+                await session.execute(
+                    update(ScanRecord).where(ScanRecord.id.in_([s for _, s in todo]), ScanRecord.status == "running")
+                    .values(status="error", error=ABORTED_BY_USER, finished_at=_now())
+                )
+            raise
         await self._ctx.ws.broadcast("defender", {"scans": [s for _, s in todo]})
 
     @staticmethod
@@ -353,14 +367,14 @@ class Defender:
     async def _watch_minutes(self, host_id: str, scan_id: str, interval_min: int) -> int:
         """Fenster des Wächters in Minuten (`find -mmin`): ab Beginn des letzten wirklich gelaufenen Laufs plus 2,
         mindestens Intervall plus 2, höchstens `WATCH_MAX_WINDOW_MIN`. Ein Fehlerlauf zählt (sonst wüchse das Fenster
-        endlos), ein durch Neustart abgebrochener (`ABORTED_BY_RESTART`) oder blockierter (`WATCH_BLOCKED_MESSAGE`)
-        nicht."""
+        endlos), abgebrochene oder blockierte Läufe nicht."""
         base = interval_min + 2
         async with self._ctx.db.session() as session:
             last = (await session.execute(
                 select(ScanRecord.started_at)
                 .where(ScanRecord.host_id == host_id, ScanRecord.kind == "watch", ScanRecord.id != scan_id,
-                       or_(ScanRecord.error.is_(None), ScanRecord.error.not_in((ABORTED_BY_RESTART, WATCH_BLOCKED_MESSAGE))))
+                       or_(ScanRecord.error.is_(None), ScanRecord.error.not_in((
+                           ABORTED_BY_RESTART, ABORTED_BY_USER, WATCH_BLOCKED_MESSAGE))))
                 .order_by(ScanRecord.started_at.desc()).limit(1)
             )).scalar_one_or_none()
         if last is None:
@@ -404,7 +418,8 @@ class Defender:
             line = 0
         command = av.via_helper(["realtime-log", str(line)], rt.log_command(line), version=av.HELPER_REALTIME_LOG_VERSION)
         try:
-            res = await self._ctx.exec.run(host, command, timeout_s=STATUS_TIMEOUT)
+            with self._ctx.exec.read_access(host):
+                res = await self._ctx.exec.run(host, command, timeout_s=STATUS_TIMEOUT)
         except Exception as exc:  # noqa: BLE001 - wie bei einem Scan: der Fehler steht sichtbar am Lauf
             return av.ScanResult(status="error", error=_describe(exc, timeout_s=STATUS_TIMEOUT)), ""
         stdout = res.stdout or ""
@@ -458,7 +473,8 @@ class Defender:
             command = av.via_helper(["realtime-confirm", *batch], rt.confirm_command(batch),
                                     version=av.HELPER_REALTIME_LOG_VERSION)
             try:
-                res = await self._ctx.exec.run(host, command, timeout_s=SCAN_TIMEOUTS["watch"])
+                with self._ctx.exec.read_access(host):
+                    res = await self._ctx.exec.run(host, command, timeout_s=SCAN_TIMEOUTS["watch"])
             except Exception:  # noqa: BLE001 - dann gilt der Fund als nicht gegengeprüft
                 _log.warning("shield_realtime_confirm_failed host=%s", host.id, exc_info=True)
                 return None
@@ -499,7 +515,8 @@ class Defender:
         else:
             command = av.via_helper(args, command, version=av.HELPER_SCAN_VERSION, required=False)
         try:
-            result = await self._ctx.exec.run(host, command, timeout_s=limit)
+            with self._ctx.exec.read_access(host):
+                result = await self._ctx.exec.run(host, command, timeout_s=limit)
             output = (result.stdout or "") + (result.stderr or "")
             # Die Wurzeln sind genau die Pfade, die der Befehl gescannt hat: Funde außerhalb davon sind nie echt.
             parsed = av.parse_scan_output(output, mark, roots=paths, limit_s=limit)
@@ -665,7 +682,8 @@ class Defender:
                 av.quarantine_args(finding.path, qname), av.quarantine_command(finding.path, qname),
                 version=av.HELPER_QUARANTINE_VERSION,
             )
-            result = await self._ctx.exec.run(host, command, timeout_s=QUARANTINE_TIMEOUT)
+            with self._ctx.exec.read_access(host):
+                result = await self._ctx.exec.run(host, command, timeout_s=QUARANTINE_TIMEOUT)
             ok = result.exit_code == 0
             message = av.helper_text(result.stdout or result.stderr or "").strip()
             if av.NO_ROOT in message:
@@ -715,7 +733,8 @@ class Defender:
             while time.monotonic() < deadline:
                 await asyncio.sleep(QUARANTINE_FOLLOW_INTERVAL_S)
                 try:
-                    res = await self._ctx.exec.run(host, command, timeout_s=QUARANTINE_STATE_TIMEOUT)
+                    with self._ctx.exec.read_access(host):
+                        res = await self._ctx.exec.run(host, command, timeout_s=QUARANTINE_STATE_TIMEOUT)
                 except Exception:  # noqa: BLE001 - Server noch nicht wieder erreichbar: weiter nachsehen
                     _log.debug("shield_quarantine_follow_unreachable host=%s finding=%s", host.id, finding.id)
                     # Was eine frühere Abfrage sah, gilt ohne neue Antwort nicht mehr.
@@ -1017,7 +1036,8 @@ class Defender:
         unknown = aj.NOT_STARTED_MESSAGE
         reach_grace_s = None
         try:
-            res = await self._ctx.exec.run(host, launch, timeout_s=AUDIT_LAUNCH_TIMEOUT_S)
+            with self._ctx.exec.read_access(host):
+                res = await self._ctx.exec.run(host, launch, timeout_s=AUDIT_LAUNCH_TIMEOUT_S)
         except Exception as exc:  # noqa: BLE001
             # Der Start kann trotzdem geklappt haben (Verbindung erst danach weg): nachsehen. Meldet sich der Server
             # aber gar nicht mehr, nicht drei Stunden lang "läuft" zeigen.
@@ -1038,7 +1058,8 @@ class Defender:
     async def _poll_audit(self, host: Host, run_id: str) -> dt.Poll | av.LynisResult | None:
         """Eine Abfrage: der Stand (`dt.Poll`), ein den Lauf beendender Fehler (keine root-Rechte) oder None ohne Antwort."""
         try:
-            res = await self._ctx.exec.run(host, aj.poll_as_root(run_id), timeout_s=AUDIT_POLL_TIMEOUT_S)
+            with self._ctx.exec.read_access(host):
+                res = await self._ctx.exec.run(host, aj.poll_as_root(run_id), timeout_s=AUDIT_POLL_TIMEOUT_S)
         except Exception:  # noqa: BLE001 - Verbindung weg: weiter nachfragen
             return None
         out = (res.stdout or "") + (res.stderr or "")
@@ -1078,7 +1099,8 @@ class Defender:
     async def _stop_audit(self, host: Host, run_id: str) -> av.LynisResult:
         """Beendet einen Lauf über der Obergrenze auf dem Server (Lynis samt Unterprozessen, `audit_job.stop_command`)."""
         try:
-            res = await self._ctx.exec.run(host, aj.stop_as_root(run_id), timeout_s=AUDIT_STOP_TIMEOUT_S)
+            with self._ctx.exec.read_access(host):
+                res = await self._ctx.exec.run(host, aj.stop_as_root(run_id), timeout_s=AUDIT_STOP_TIMEOUT_S)
         except Exception as exc:  # noqa: BLE001
             return av.LynisResult(status="error", error=aj.unreachable_at_limit_message(_describe(exc), AUDIT_LIMIT_S))
         out = (res.stdout or "") + (res.stderr or "")
@@ -1142,7 +1164,8 @@ class Defender:
         if cached and not refresh and cached[0] > _now().timestamp() - 600:
             return cached[1]
         try:
-            res = await self._ctx.exec.run(host, av.STATUS_COMMAND, timeout_s=STATUS_TIMEOUT)
+            with self._ctx.exec.read_access(host):
+                res = await self._ctx.exec.run(host, av.STATUS_COMMAND, timeout_s=STATUS_TIMEOUT)
             st = av.parse_status(res.stdout or "")
             data = {
                 "reachable": True, "clamav_installed": st.clamav_installed, "clamav_version": st.clamav_version,
@@ -1168,7 +1191,8 @@ class Defender:
         if cached and not refresh and cached[0] > _now().timestamp() - 600:
             return cached[1]
         try:
-            res = await self._ctx.exec.run(host, rt.READINESS_COMMAND, timeout_s=STATUS_TIMEOUT)
+            with self._ctx.exec.read_access(host):
+                res = await self._ctx.exec.run(host, rt.READINESS_COMMAND, timeout_s=STATUS_TIMEOUT)
             data = {"reachable": True, **rt.readiness_dict(rt.parse_readiness(res.stdout or ""))}
         except Exception as exc:  # noqa: BLE001
             data = {"reachable": False, "possible": False, "error": _describe(exc, timeout_s=STATUS_TIMEOUT),

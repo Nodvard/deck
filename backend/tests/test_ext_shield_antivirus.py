@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from exec_gate_helpers import ReadingExec
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "extensions" / "shield" / "src"))
 
@@ -1806,7 +1807,7 @@ class _FakeCtx:
         host = Host(id="h1", name="pi", display_name="Raspberry Pi", address="10.0.0.2")
         self.settings = SimpleNamespace(get=self._settings)
         self.hosts = SimpleNamespace(list=self._list, get=self._get)
-        self.exec = SimpleNamespace(run=self._run)
+        self.exec = ReadingExec(ext_id="shield", run=self._run)
         self.db = SimpleNamespace(session=self._session)
         self.audit = SimpleNamespace(log=self._audit)
         self.notify = SimpleNamespace(send=self._notify)
@@ -2228,7 +2229,7 @@ def _widget_rows(defender) -> list[dict]:
 
     from nodvard_deck_ext_shield.defender_api import build_routers
 
-    read, _ = build_routers(SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None)), defender)
+    read, _ = build_routers(SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None, require_permission=lambda permission: lambda: None)), defender)
     app = FastAPI()
     app.include_router(read)
     return TestClient(app).get("/defender/widgets/protection").json()["data"]
@@ -2726,11 +2727,16 @@ async def test_never_two_scans_at_once_on_the_same_host(caplog):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell (Git-Bash-sh scheitert an Windows-Pfaden)")
-def test_as_root_runs_directly_or_via_sudo_and_reports_missing_rights():
+@pytest.mark.parametrize("access", ["root", "sudo"])
+def test_as_root_runs_directly_or_via_sudo_and_reports_missing_rights(access):
+    identity = "id() { echo 0; }; sudo() { return 1; }; " if access == "root" else (
+        'id() { echo 1000; }; sudo() { [ "$1" = -n ] || return 1; shift; echo @@sudo; "$@"; }; '
+    )
     wrapped = av.as_root("echo \"hallo $(id -u)\"; echo 'mit '\"'\"'quote'\"'\"")
-    out = subprocess.run(["sh", "-c", wrapped], capture_output=True, text=True)
+    out = subprocess.run(["sh", "-c", identity + wrapped], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     assert "hallo" in out.stdout and "mit 'quote'" in out.stdout
+    assert out.stdout.splitlines().count("@@sudo") == (0 if access == "root" else 2)
     # Ohne root und ohne sudo: Pflicht-Befehle brechen mit Hinweis ab, Scans laufen weiter.
     fake_id = "id() { echo 1000; }; sudo() { return 1; }; "
     strict = subprocess.run(["sh", "-c", fake_id + av.as_root("echo geheim")], capture_output=True, text=True)
@@ -2775,7 +2781,7 @@ def test_protection_widget_summarises_hosts():
                 ],
             }
 
-    ctx = SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None))
+    ctx = SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None, require_permission=lambda permission: lambda: None))
     read, _ = build_routers(ctx, _Def())
     app = FastAPI()
     app.include_router(read)
@@ -3048,7 +3054,7 @@ async def test_briefing_endpoint_refuses_a_second_click_while_one_is_running():
             await release.wait()
             return {"title": "T", "body": "B", "level": "info", "push": "sent"}
 
-    _, manage = build_routers(SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None)), _Def())
+    _, manage = build_routers(SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None, require_permission=lambda permission: lambda: None)), _Def())
     endpoint = next(r.endpoint for r in manage.routes if r.path == "/defender/briefing")
     first = asyncio.create_task(endpoint())
     await started.wait()
@@ -3071,7 +3077,7 @@ def test_protection_widget_without_servers_says_nothing_to_rate():
         async def overview(self):
             return {"summary": {"score": 0, "protected": 0, "hosts": 0, "quarantined": 0, "open_threats": 0}, "hosts": []}
 
-    read, _ = build_routers(SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None)), _Def())
+    read, _ = build_routers(SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None, require_permission=lambda permission: lambda: None)), _Def())
     app = FastAPI()
     app.include_router(read)
     rows = TestClient(app).get("/defender/widgets/protection").json()["data"]
@@ -3090,7 +3096,7 @@ def test_protection_widget_with_servers_but_none_checkable_asks_for_access():
         async def overview(self):
             return {"summary": {"score": 0, "protected": 0, "hosts": 0, "hosts_known": 2, "quarantined": 0, "open_threats": 0}, "hosts": []}
 
-    read, _ = build_routers(SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None)), _Def())
+    read, _ = build_routers(SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None, require_permission=lambda permission: lambda: None)), _Def())
     app = FastAPI()
     app.include_router(read)
     rows = TestClient(app).get("/defender/widgets/protection").json()["data"]
@@ -3111,7 +3117,7 @@ def test_protection_widget_names_every_requirement_for_a_checkable_server():
         async def overview(self):
             return {"summary": {"score": 0, "protected": 0, "hosts": 0, "hosts_known": 2, "quarantined": 0, "open_threats": 0}, "hosts": []}
 
-    read, _ = build_routers(SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None)), _Def())
+    read, _ = build_routers(SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None, require_permission=lambda permission: lambda: None)), _Def())
     app = FastAPI()
     app.include_router(read)
     subtitle = TestClient(app).get("/defender/widgets/protection").json()["data"][0]["subtitle"]
@@ -3132,7 +3138,7 @@ def test_protection_widget_shows_open_threats_when_no_server_is_checkable(hosts_
         async def overview(self):
             return {"summary": {"score": 0, "protected": 0, "hosts": 0, "hosts_known": hosts_known, "quarantined": 0, "open_threats": 3}, "hosts": []}
 
-    read, _ = build_routers(SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None)), _Def())
+    read, _ = build_routers(SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None, require_permission=lambda permission: lambda: None)), _Def())
     app = FastAPI()
     app.include_router(read)
     rows = TestClient(app).get("/defender/widgets/protection").json()["data"]
@@ -3975,10 +3981,49 @@ def test_the_server_stops_a_run_that_takes_too_long_and_says_so(tmp_path):
 
 @needs_lock_tools
 def test_a_run_that_ignores_term_is_killed_and_still_reported_as_too_long(tmp_path, monkeypatch):
-    monkeypatch.setattr(av, "KILL_AFTER_S", 1)
-    out, took = _guarded(tmp_path, f"trap '' TERM; echo los; sleep 30; echo \"{MARK}0\"", limit_s=4)
-    assert out.stdout.endswith("@@scan-timeout-0123456789abcdef\n") and took < 15, (out, took)
-    assert av.parse_scan_output(out.stdout, MARK).timed_out
+    import select
+    import signal
+
+    # GNU timeout erhält sonst SIGALRM nach zwei Sekunden und noch einmal eine Sekunde später.
+    # Unter Last kann schon der Start länger dauern. Beide Alarme erst nach der jeweiligen
+    # Bestätigung senden: Der Trap ist bereit, dann hat der Scan TERM tatsächlich überlebt.
+    monkeypatch.setattr(av, "server_timeout_s", lambda limit_s: 3600)
+    monkeypatch.setattr(av, "KILL_AFTER_S", 300)
+    inner = 'trap \'echo term\' TERM; echo ready "$PPID" "$$"; while :; do read -r ignored; done'
+    (tmp_path / "run").mkdir()
+    command = av.guard_command(inner, mark=MARK, limit_s=4, root_dir=str(tmp_path / "run" / "nodvard-shield"))
+    with subprocess.Popen(
+        ["/bin/sh", "-c", command], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, env=_guard_env(tmp_path), start_new_session=True,
+    ) as run:
+        finished = False
+        timeout_pid = None
+        try:
+            assert select.select([run.stdout], [], [], 30)[0], "Der Scan meldet sich nicht bereit."
+            ready, timeout_pid, scan_pid = run.stdout.readline().split()
+            assert ready == "ready" and int(timeout_pid) != run.pid
+            os.kill(int(timeout_pid), signal.SIGALRM)
+            assert select.select([run.stdout], [], [], 30)[0], "Der Scan bestätigt TERM nicht."
+            assert run.stdout.readline() == "term\n"
+            os.kill(int(scan_pid), 0)  # TERM hat den Scan nicht beendet.
+            os.kill(int(timeout_pid), signal.SIGALRM)
+            stdout, stderr = run.communicate(timeout=30)
+            finished = True
+        finally:
+            if not finished:
+                # timeout hat eine eigene Prozessgruppe, die äußere Shell eine weitere.
+                for group in (timeout_pid, run.pid):
+                    if group is not None:
+                        try:
+                            os.killpg(int(group), signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                run.communicate(timeout=30)
+
+    assert run.returncode == 0 and stdout == "@@scan-timeout-0123456789abcdef\n", (stdout, stderr)
+    assert av.parse_scan_output(stdout, MARK).timed_out
+    out, _ = _guarded(tmp_path)  # KILL hat auch die Scansperre freigegeben.
+    assert out.stdout == f"los\n{MARK}0\n", out
 
 
 @needs_lock_tools
@@ -4074,6 +4119,7 @@ def test_the_watch_under_the_guard_gives_the_same_result_as_before(tmp_path, cla
 
 
 @needs_lock_tools
+@pytest.mark.needs_root
 @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() != 0 or not shutil.which("setpriv"),
                     reason="braucht root und setpriv, um als normaler Benutzer zu laufen")
 def test_without_root_the_lock_lives_in_the_home_folder_of_the_user():
@@ -4323,6 +4369,72 @@ def test_a_watch_stopped_by_the_limit_leaves_no_temporary_files(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_cancelled_waiting_watch_keeps_the_last_scan_window(monkeypatch):
+    import asyncio
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from nodvard_deck_ext_shield import defender as df
+    from nodvard_deck_ext_shield.models import Base, ScanRecord
+
+    now = datetime(2026, 11, 8, 10, 0, tzinfo=UTC)
+    monkeypatch.setattr(df, "_now", lambda: now)
+    monkeypatch.setattr(df.av, "new_rc_mark", lambda: MARK)
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    ctx = _FakeCtx(async_sessionmaker(engine, expire_on_commit=False), {
+        "--file-list": f"Scanned files: 0\n{MARK}0\n",
+    })
+    defender = df.Defender(ctx)
+    hosts = [ctx._host.model_copy(update={"id": f"busy-{i}"}) for i in range(3)] + [ctx._host]
+    started = []
+    slots_full = asyncio.Event()
+
+    async def scan(host, *args):
+        started.append(host.id)
+        if len(started) == 3:
+            slots_full.set()
+        await asyncio.Event().wait()
+
+    try:
+        async with ctx.db.session() as session:
+            session.add(ScanRecord(
+                id="previous", host_id="h1", host_name="pi", kind="watch", paths=["/tmp"], trigger="schedule",
+                status="clean", infected=0, started_at=now,
+            ))
+        now = now.replace(minute=10)
+        with mock.patch.object(defender, "_scan_on_host", scan):
+            task = asyncio.create_task(defender.start_scans(hosts, "watch", paths=["/tmp"], trigger="schedule", wait=True))
+            try:
+                await asyncio.wait_for(slots_full.wait(), 5)
+                assert started == [host.id for host in hosts[:3]]
+                assert defender.is_running("h1", "watch")
+                now = now.replace(minute=11)
+            finally:
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+        async with ctx.db.session() as session:
+            row = (await session.execute(select(ScanRecord).where(
+                ScanRecord.host_id == "h1", ScanRecord.id != "previous",
+            ))).scalar_one()
+            assert row.status == "error" and row.error == "Abgebrochen. Der Scan auf dem Server kann noch laufen."
+            assert row.started_at == datetime(2026, 11, 8, 10, 10, tzinfo=UTC)
+            assert row.finished_at == datetime(2026, 11, 8, 10, 11, tzinfo=UTC)
+        assert not ctx.commands
+        now = now.replace(minute=20)
+        await defender.start_scans([ctx._host], "watch", paths=["/tmp"], trigger="schedule", wait=True)
+        assert len(ctx.commands) == 1
+        command = ctx.commands[0]
+        assert "-mmin -22 " in command and "-cmin -22 " in command
+        assert f"watch {MARK} 300 22 " in command
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_rows_without_a_scan_behind_them_do_not_count_for_the_window():
     """Ein Lauf, den ein Neustart des Dashboards abgebrochen hat, lieferte nie ein Ergebnis; die Meldung "Waechter konnte zu lange
     nicht pruefen" ist kein Lauf. Beide verschieben den Anfang des Fensters nicht, die Dateien aus dieser Zeit prueft der
@@ -4557,7 +4669,7 @@ def _scan_client():
             started.append(paths)
             return ["s1"]
 
-    _, manage = build_routers(SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None)), _Def())
+    _, manage = build_routers(SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None, require_permission=lambda permission: lambda: None)), _Def())
     app = FastAPI()
     app.include_router(manage)
     return TestClient(app), started
@@ -4643,7 +4755,7 @@ def test_reopen_route_answers_with_the_reason_and_logs_who_did_it():
     async def log(**kw):
         audits.append(kw)
 
-    ctx = SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None), audit=SimpleNamespace(log=log))
+    ctx = SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None, require_permission=lambda permission: lambda: None), audit=SimpleNamespace(log=log))
     _, manage = build_routers(ctx, _Def())
     app = FastAPI()
     app.include_router(manage)

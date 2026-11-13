@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 
 import { api } from "../../lib/api";
 import { formatSize, formatWhen } from "../../lib/backups";
-import { requestRollback, useUpdateHelper, type HelperPrevious, type HelperView } from "../../lib/updater";
+import { helperSignsRequests, requestRollback, useUpdateHelper, type HelperPrevious, type HelperView } from "../../lib/updater";
 import { useAuthStore } from "../../state/auth";
 import { useEdition, productText } from "../../state/edition";
 import { ConfirmForm, FollowPanel, formatUnix, useHelperView } from "./UpdateHelper";
@@ -56,7 +56,8 @@ function RollbackSection({ view, previous }: { view: HelperView; previous: Helpe
   // Karte warnt mit dem Zeitpunkt und verlangt das Häkchen (`accept_data_loss`). Unklar (`null`): kein Knopf,
   // der Server lehnte ihn ohnehin ab.
   const unclear = previous.data_revert === null;
-  const canRequest = isOwner && view.ready && !unclear;
+  const signs = helperSignsRequests(view);
+  const canRequest = isOwner && view.ready && !unclear && signs;
   return (
     <section className="mb-4 rounded-lg border border-white/10 bg-black/15 p-3" aria-labelledby="rollback-title" data-testid="rollback-section">
       <h4 id="rollback-title" className="flex items-center gap-2 text-sm font-semibold">
@@ -92,6 +93,11 @@ function RollbackSection({ view, previous }: { view: HelperView; previous: Helpe
       {!unclear && !isOwner && <p className="mt-2 text-xs text-white/45">Zurückschalten kann nur der Inhaber dieser Installation (Owner).</p>}
       {!unclear && isOwner && !view.ready && (
         <p className="mt-2 text-xs text-white/45">Zurück geht es, sobald der Update-Helfer bereit ist (siehe „Updates“).</p>
+      )}
+      {!unclear && isOwner && view.ready && !signs && (
+        <p className="mt-2 text-xs text-white/45" data-testid="rollback-helper-old">
+          Dein Update-Helfer ist zu alt für signierte Anforderungen. Hol seine aktuelle Version (deploy/README.md, Abschnitt „Update-Helfer“), dann geht es wieder per Knopf zurück.
+        </p>
       )}
       {canRequest && !confirming && (
         <div className="mt-3">

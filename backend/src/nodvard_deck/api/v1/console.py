@@ -9,6 +9,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from nodvard_sdk.capabilities import ConsoleTarget
+from nodvard_sdk.errors import error_message
 from pydantic import BaseModel
 
 from ...config import Settings, get_settings
@@ -22,11 +23,13 @@ from ...services import hosts as hosts_service
 from ...services import session_guard
 from ...services.hosts import host_to_sdk
 from ..deps import CurrentSessionId, CurrentUser, SessionDep, require_permission
+from ..models import RequestModel
+from ..responses import error_responses
 
 router = APIRouter(tags=["console"])
 
 
-class ConsoleSessionCreate(BaseModel):
+class ConsoleSessionCreate(RequestModel):
     host_id: str
 
 
@@ -50,7 +53,11 @@ async def _find_console_target(host: Any) -> Any | None:
     return None
 
 
-@router.get("/console/hosts", dependencies=[Depends(require_permission("hosts.read"))])
+@router.get(
+    "/console/hosts",
+    dependencies=[Depends(require_permission("hosts.read"))],
+    responses=error_responses(401, 403, 404, 507),
+)
 async def list_console_hosts(session: SessionDep) -> list[str]:
     """IDs aller Hosts, für die gerade ein Anbieter eine Konsole liefern kann; nur dort zeigt die Oberfläche den Knopf."""
     targets = get_extension_runtime().capabilities.query(ConsoleTarget)
@@ -63,7 +70,11 @@ async def list_console_hosts(session: SessionDep) -> list[str]:
     return result
 
 
-@router.post("/console/sessions", dependencies=[Depends(require_permission("hosts.execute"))])
+@router.post(
+    "/console/sessions",
+    dependencies=[Depends(require_permission("hosts.execute"))],
+    responses=error_responses(401, 403, 404, 502, 507),
+)
 async def create_console_session(
     payload: ConsoleSessionCreate,
     session: SessionDep,
@@ -90,13 +101,19 @@ async def create_console_session(
     try:
         console = await target.open_console(sdk_host)
     except Exception as exc:  # noqa: BLE001 - dem Nutzer sichtbar machen, nicht als 500 verstecken
+        text = str(exc).strip()
+        if getattr(exc, "readable", False) and text:
+            # Fertiger deutscher Satz der Erweiterung (z. B. ProxmoxApiError): bleibt für den Nutzer lesbar.
+            detail = f"Konsole konnte nicht geöffnet werden: {text}"[:500]
+        else:
+            detail = error_message(exc, "Konsole konnte nicht geöffnet werden.")
         await audit_service.log(
             session, actor_type="user", actor_id=user.id, action="console.open", outcome="failure",
-            target_type="host", target_id=host.id, reason=str(exc)[:500],
+            target_type="host", target_id=host.id, reason=detail,
         )
         await session.commit()
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Konsole konnte nicht geöffnet werden: {exc}"
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=detail,
         ) from exc
 
     await audit_service.log(
@@ -116,6 +133,7 @@ async def create_console_session(
 
 
 _WS_UNKNOWN_TICKET = 4404
+_WS_OPEN_FAILED = 4500
 _WS_ACCESS_ENDED = 4401
 """Konto deaktiviert, Berechtigung entzogen, Passwort geändert oder abgemeldet."""
 
@@ -141,23 +159,37 @@ async def console_ws(
         async with session_scope() as db_session:
             return await watch.ended_reason(db_session, permission="hosts.execute")
 
+    try:
+        close_code = _WS_ACCESS_ENDED if await _access_ended() is not None else None
+    except Exception:  # noqa: BLE001
+        close_code = _WS_OPEN_FAILED
+    if close_code is not None:
+        try:
+            await asyncio.wait_for(console.close(), timeout=5.0)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await websocket.close(code=close_code)
+        except Exception:  # noqa: BLE001
+            pass
+        return
+
     stop_watchdog = asyncio.Event()
 
-    async def _watchdog() -> bool:
-        """Beendet die Konsole, wenn Konto, Berechtigung oder Anmeldung nicht mehr gelten (die Prüfung beim Aufbau ist
-        bis zu 30 s alt). `True` = Zugriff beendet, `False` = anders gestoppt."""
+    async def _watchdog() -> int | None:
+        """Beendet die Konsole bei entzogenem Zugriff oder fehlgeschlagener Rechteprüfung."""
         # Wird nie abgebrochen, sondern über `stop_watchdog` gestoppt: eine mitten in der Datenbankabfrage
         # abgebrochene Aufgabe risse deren Verbindung mit.
         interval = max(0.05, settings.terminal_recheck_interval_s)
         while True:
             try:
                 if await _access_ended() is not None:
-                    return True
-            except Exception:  # noqa: BLE001 - ein Datenbank-Hänger beendet keine laufende Konsole
-                pass
+                    return _WS_ACCESS_ENDED
+            except Exception:  # noqa: BLE001
+                return _WS_OPEN_FAILED
             try:
                 await asyncio.wait_for(stop_watchdog.wait(), timeout=interval)
-                return False
+                return None
             except asyncio.TimeoutError:
                 pass
 
@@ -183,10 +215,11 @@ async def console_ws(
     reader = asyncio.ensure_future(_pump_host_to_client())
     writer = asyncio.ensure_future(_pump_client_to_host())
     watchdog = asyncio.ensure_future(_watchdog())
-    ended = False
+    close_code = 1000
     try:
         await asyncio.wait({reader, writer, watchdog}, return_when=asyncio.FIRST_COMPLETED)
-        ended = watchdog.done() and not watchdog.cancelled() and watchdog.exception() is None and watchdog.result()
+        if watchdog.done() and not watchdog.cancelled() and watchdog.exception() is None:
+            close_code = watchdog.result() or 1000
     finally:
         # Dieselbe Begrenzung wie in terminal.py: ein in `websocket.receive()` hängender Writer reagiert nicht immer
         # sofort auf `cancel()`, ohne Zeitlimit bliebe die Verbindung unbestimmt offen.
@@ -202,6 +235,6 @@ async def console_ws(
         except Exception:  # noqa: BLE001
             pass
         try:
-            await websocket.close(code=_WS_ACCESS_ENDED if ended else 1000)
+            await websocket.close(code=close_code)
         except Exception:  # noqa: BLE001 - möglicherweise schon zu
             pass

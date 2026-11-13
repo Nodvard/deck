@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
 import pytest
+from httpx import AsyncClient, RemoteProtocolError
 from nodvard_sdk import FileEntry, FileSourceCaps, Page, SourceInfo
 from nodvard_sdk.capabilities import FileSourceProvider
 
@@ -152,6 +153,30 @@ async def test_list_stat_download_roundtrip(client, db_session):
     assert download.content == b"hallo welt"
 
 
+@pytest.mark.parametrize("mime", ["text/html", "image/svg+xml", "application/pdf"])
+async def test_download_sandboxes_active_content(client, monkeypatch, mime):
+    source = _FakeFileSource()
+    name = "bericht\"\r\nX-Test: injected.html"
+    path = "/" + name
+    source.files[path] = b"<script>document.cookie</script>"
+
+    async def stat(p):
+        return FileEntry(name=name, path=str(p), is_dir=False, size=len(source.files[path]), mime=mime)
+
+    monkeypatch.setattr(source, "stat", stat)
+    _register(source)
+    token = await _bootstrap_owner(client)
+    response = await client.get("/api/v1/files/fake/download", params={"path": path}, headers=_auth_header(token))
+    assert response.status_code == 200
+    assert response.content == source.files[path]
+    assert response.headers["content-disposition"].startswith("attachment; filename*=UTF-8''")
+    assert "%0D%0A" in response.headers["content-disposition"]
+    assert "x-test" not in response.headers
+    assert "sandbox" in response.headers["content-security-policy"]
+    assert "default-src 'none'" in response.headers["content-security-policy"]
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
 @pytest.mark.asyncio
 async def test_download_honors_range_header_when_source_supports_it(client, db_session):
     source = _FakeFileSource("fake")
@@ -170,6 +195,74 @@ class _ReadableSourceError(Exception):
     """Wie `WebDavError`/`SshError`: der Text ist schon ein fertiger deutscher Satz."""
 
     readable = True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("range_header", "offset", "end"),
+    [("bytes=0-0", 0, 0), ("bytes=2-6", 2, 6), ("bytes=-3", 7, 9),
+     ("bytes=-100", 0, 9), ("bytes=4-", 4, 9), ("bytes=2-100", 2, 9)],
+)
+async def test_download_limits_range_and_closes_source(client, range_header, offset, end):
+    class Source(_FakeFileSource):
+        closed = False
+        read_chunks = 0
+
+        async def open_read(self, path, *, offset=0):
+            self.calls.append(("read", offset))
+            content = self.files[str(path)]
+            try:
+                for start in range(offset, len(content), 3):
+                    self.read_chunks += 1
+                    yield content[start:start + 3]
+            finally:
+                self.closed = True
+
+    source = Source()
+    _register(source)
+    token = await _bootstrap_owner(client)
+    response = await client.get(
+        "/api/v1/files/fake/download?path=/notes.txt",
+        headers={**_auth_header(token), "Range": range_header},
+    )
+    assert response.status_code == 206, response.text
+    assert response.content == source.files["/notes.txt"][offset:end + 1]
+    assert response.headers["content-range"] == f"bytes {offset}-{end}/10"
+    assert "content-length" not in response.headers
+    assert source.calls == [("read", offset)]
+    assert source.read_chunks == (end - offset + 3) // 3
+    assert source.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("range_header", ["bytes=10-", "bytes=4-2", "bytes=-0"])
+@pytest.mark.parametrize("content", [b"hallo welt", b""])
+async def test_download_rejects_unsatisfiable_range(client, range_header, content):
+    source = _FakeFileSource()
+    source.files["/notes.txt"] = content
+    _register(source)
+    token = await _bootstrap_owner(client)
+    response = await client.get(
+        "/api/v1/files/fake/download?path=/notes.txt",
+        headers={**_auth_header(token), "Range": range_header},
+    )
+    assert response.status_code == 416
+    assert response.headers["content-range"] == f"bytes */{len(content)}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("range_header", ["items=0-1", "bytes=0-1,4-5", "bytes=-", "bytes=abc"])
+async def test_download_ignores_unsupported_range(client, range_header):
+    source = _FakeFileSource()
+    _register(source)
+    token = await _bootstrap_owner(client)
+    response = await client.get(
+        "/api/v1/files/fake/download?path=/notes.txt",
+        headers={**_auth_header(token), "Range": range_header},
+    )
+    assert response.status_code == 200
+    assert response.content == source.files["/notes.txt"]
+    assert "content-range" not in response.headers
 
 
 class _StreamSource(_FakeFileSource):
@@ -191,6 +284,45 @@ class _StreamSource(_FakeFileSource):
                 yield chunk
         finally:
             self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_download_rejects_range_when_source_is_empty(client):
+    source = _StreamSource()
+    _register(source)
+    token = await _bootstrap_owner(client)
+    response = await client.get(
+        "/api/v1/files/fake/download?path=/notes.txt",
+        headers={**_auth_header(token), "Range": "bytes=2-6"},
+    )
+
+    assert response.status_code == 502, response.text
+    assert "Dateibereich nicht vollständig geliefert" in response.json()["detail"]
+    assert "content-range" not in response.headers
+    assert source.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunks", [[b""], [b"l"], [b"", b"l", b"lo"]])
+async def test_download_aborts_range_when_source_ends_early(running_app, chunks):
+    http_base, _ = running_app
+    source = _StreamSource(chunks=chunks)
+    _register(source)
+
+    async with AsyncClient(base_url=http_base, timeout=5) as client:
+        token = await _bootstrap_owner(client)
+        async with client.stream(
+            "GET",
+            "/api/v1/files/fake/download?path=/notes.txt",
+            headers={**_auth_header(token), "Range": "bytes=2-6"},
+        ) as response:
+            assert response.status_code == 206
+            assert response.headers["content-range"] == "bytes 2-6/10"
+            assert "content-length" not in response.headers
+            with pytest.raises(RemoteProtocolError):
+                await response.aread()
+
+    assert source.closed
 
 
 @pytest.mark.asyncio
@@ -371,12 +503,19 @@ async def test_source_exception_is_translated_to_a_clean_502(client, db_session)
     """`_call()` normalisiert JEDEN Fehler einer Quelle -- eine rohe
     `ConnectionError` (wie sie SFTP/WebDAV realistisch werfen koennten) darf nie als
     500 mit Stacktrace beim Client ankommen."""
+    import re
+
     _register(_BrokenFileSource("broken"))
     token = await _bootstrap_owner(client)
 
     res = await client.get("/api/v1/files/broken/stat?path=/notes.txt", headers=_auth_header(token))
     assert res.status_code == 502
-    assert "nicht erreichbar" in res.json()["detail"]
+    assert re.fullmatch(
+        r"Zugriff auf die Quelle fehlgeschlagen: Die Verbindung zum Server ist abgebrochen\. "
+        r"Fehlerkennung: [0-9a-f]{32}\.",
+        res.json()["detail"],
+    )
+    assert "Server nicht erreichbar" not in res.text
 
 
 @pytest.mark.asyncio
@@ -467,12 +606,14 @@ async def test_transfer_streams_between_two_distinct_sources_and_creates_a_job_r
 
 
 @pytest.mark.asyncio
-async def test_transfer_marks_run_as_failed_when_the_target_write_raises(client, db_session):
+@pytest.mark.parametrize("error_type", [ConnectionError, RuntimeError])
+async def test_transfer_marks_run_as_failed_when_the_target_write_raises(client, db_session, caplog, error_type):
     import asyncio
+    import re
 
     class _BrokenWriteSource(_FakeFileSource):
         async def open_write(self, path, stream, *, size=None):
-            raise ConnectionError("Ziel abgelehnt")
+            raise error_type("vertraulich-transfer /srv/private/target")
 
     src = _FakeFileSource("src")
     dst = _BrokenWriteSource("dst")
@@ -496,7 +637,9 @@ async def test_transfer_marks_run_as_failed_when_the_target_write_raises(client,
             break
         await asyncio.sleep(0.02)
     assert run.status == "failed"
-    assert "Ziel abgelehnt" in (run.error or "")
+    assert re.search(r"Fehlerkennung: [0-9a-f]{32}\.", run.error or "")
+    assert "vertraulich-transfer" not in (run.error or "") + caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
 
 
 @pytest.mark.asyncio

@@ -1,10 +1,4 @@
-/**
- * Metrik-Verlauf auf der Server-Seite: CPU, RAM, Last, Netz, Datenträger, Temperatur
- * über einen wählbaren Zeitraum (`GET /hosts/{id}/metrics/history`). Die Quelle
- * entscheidet der Kern: von einem Modul eingelesene Server (z. B. Proxmox) aus dessen eigenen Daten, alle anderen
- * aus dem Sammler von Nodvard Deck (alle 30 s). Es erscheinen nur Diagramme, für die der Host
- * tatsächlich Werte liefert.
- */
+/** Metrik-Verlauf aus /hosts/{id}/metrics/history; nur Diagramme mit Messwerten des Servers werden angezeigt. */
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
@@ -80,7 +74,7 @@ function EmptyHistory({ source, host, canCheck }: { source: HistoryOut["source"]
     return (
       <p className="text-sm text-white/60" data-testid="history-no-connection">
         {never
-          ? canCheck ? "Noch keine Verbindung – prüfe zuerst den Zugang." : "Noch keine Verbindung zu diesem Server. Sobald er antwortet, erscheinen hier die Kurven."
+          ? canCheck ? "Noch keine Verbindung, prüfe zuerst den Zugang." : "Noch keine Verbindung zu diesem Server. Sobald er antwortet, erscheinen hier die Kurven."
           : "Noch keine Messwerte, und der Server antwortet gerade nicht. Sobald er wieder da ist, erscheinen hier die Kurven."}
         {never && canCheck && (
           <>
@@ -95,7 +89,7 @@ function EmptyHistory({ source, host, canCheck }: { source: HistoryOut["source"]
     // Der SSH-Port antwortet, angemeldet hat sich Nodvard Deck aber nie: so kommen keine Kurven.
     return (
       <p className="text-sm text-white/60" data-testid="history-login-unproven">
-        Noch keine Messwerte. Der Server antwortet, aber die Anmeldung ist noch nicht bestätigt – prüfe zuerst den Zugang.
+        Noch keine Messwerte. Der Server antwortet, aber die Anmeldung ist noch nicht bestätigt, prüfe zuerst den Zugang.
         {canCheck && (
           <>
             {" "}
@@ -107,7 +101,7 @@ function EmptyHistory({ source, host, canCheck }: { source: HistoryOut["source"]
   }
   return (
     <p className="text-sm text-white/50">
-      Noch keine Messwerte. {source === "lattice" ? "Nodvard Deck misst diesen Server alle 30 Sekunden – in ein paar Minuten erscheinen die ersten Kurven." : ""}
+      Noch keine Messwerte. {source === "lattice" ? "Nodvard Deck misst diesen Server alle 30 Sekunden, in ein paar Minuten erscheinen die ersten Kurven." : ""}
     </p>
   );
 }

@@ -510,6 +510,28 @@ describe("Karte Sicherung", () => {
     expect(screen.queryByText(/nicht gesichert/)).not.toBeInTheDocument();
   });
 
+  it("laufende Sicherung: nach einem gescheiterten Abruf wird weiter nachgefragt, bis sie fertig ist", async () => {
+    const key = { key_id: "0123456789abcdef", created_at: null };
+    const answers = [
+      () => overview({ key, running: { kind: "manual", started_at: "2026-10-01T00:30:00Z" } }),
+      () => new Response(JSON.stringify({ detail: "Gerade nicht erreichbar." }), { status: 500 }),
+      () => overview({ key, last_run: { at: "2026-10-01T00:31:00Z", ok: true, trigger: "manual", name: ITEM.name, size: 1, error: null } }),
+    ];
+    mockApi({ "GET /system/backups": () => (answers.length > 1 ? answers.shift()! : answers[0])() });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<BackupCard />);
+      expect(await screen.findByText(/Eine Sicherung läuft gerade/)).toBeInTheDocument();
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(await screen.findByText("Gerade nicht erreichbar.")).toBeInTheDocument();
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(await screen.findByText("erfolgreich")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Jetzt sichern" })).toBeEnabled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("ohne Owner: nur ansehen", async () => {
     setUser(false, ["system.read"]);
     mockApi({ "GET /system/backups": () => overview({ key: { key_id: "0123456789abcdef", created_at: null }, backups: [ITEM] }) });

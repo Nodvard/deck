@@ -15,6 +15,7 @@ import {
 } from "../../../lib/hosts";
 import { Button, NoticeLine, type Notice } from "../ui";
 import { CopyButton } from "./CopyButton";
+import { SshRetryNotice } from "./SshRetryNotice";
 
 const ICON: Record<CheckStatus, ReactNode> = {
   ok: <CheckCircle2 size={18} className="text-emerald-300" aria-label="in Ordnung" />,
@@ -165,6 +166,8 @@ export function ConnectionCheck({
       setResult(out);
       onResult?.(out);
       await refreshHosts(queryClient);
+      // Eine erfolgreiche Anmeldung mit dem Standard-Zugang hebt die Anmeldepause auf.
+      await queryClient.invalidateQueries({ queryKey: ["ssh-retry", hostId] });
     } catch (err) {
       // 429: der Text kommt vom Server („Zu viele Prüfungen. Bitte in N Minuten ...“).
       setNotice({ kind: "error", text: err instanceof ApiError ? err.message : String(err) });
@@ -195,6 +198,7 @@ export function ConnectionCheck({
 
   return (
     <div>
+      <SshRetryNotice hostId={hostId} onRetry={run} />
       <div className="flex flex-wrap items-center gap-3">
         <Button variant={result ? "secondary" : "primary"} busy={busy} onClick={() => void run()}>
           {busy ? "Prüfe … (bis zu 30 Sekunden)" : buttonLabel}
